@@ -11,9 +11,9 @@
 //!   `image_index`. Present always waits on the semaphore that the matching
 //!   submit signaled, so a render-finished semaphore is never reused while a
 //!   present still holds it -- even when two acquires return the same index.
-//! - `MAX_FRAMES_IN_FLIGHT` fences for host pacing; `image_in_flight` tracks
-//!   which fence (if any) owns a given image so we don't overwrite an in-use
-//!   command buffer.
+//! - `MAX_FRAMES_IN_FLIGHT` fences for host pacing, rotated by `current_frame`.
+//! With 3 swapchain images and 2 frames in flight, at least one image is
+//! always free for acquire, so no per-image fence tracking is needed.
 
 use std::sync::Arc;
 
@@ -47,8 +47,6 @@ pub struct Swapchain {
     render_finished: Vec<vk::Semaphore>,
     /// Host pacing fences, one per frame-in-flight, rotated by `current_frame`.
     in_flight_fences: Vec<vk::Fence>,
-    /// Which fence currently owns each swapchain image (None if idle).
-    image_in_flight: Vec<Option<vk::Fence>>,
     /// Rotating frame index, advanced each present.
     current_frame: usize,
 }
@@ -113,7 +111,6 @@ impl Swapchain {
             image_available,
             render_finished,
             in_flight_fences,
-            image_in_flight: vec![None; n_images],
             current_frame: 0,
         })
     }
@@ -160,18 +157,18 @@ impl Swapchain {
         self.images = images;
         self.views = views;
         self.render_finished = new_render_finished;
-        self.image_in_flight = vec![None; self.images.len()];
         Ok(())
     }
 
-    /// Acquire the next image, returning `(image_index, image_available,
-    /// render_finished, fence)` -- the handles the caller should use when
-    /// submitting this frame's work and presenting it.
+    /// Acquire the next image, returning `(image_index, frame, image_available,
+    /// render_finished, fence)`.
     ///
-    /// We wait on the previous frame's fence (so its acquire semaphore is
-    /// consumed and safe to reuse), then acquire with it. After acquiring we
-    /// also wait on any fence that owns this specific image, so its command
-    /// buffer is not overwritten while pending.
+    /// Synchronization follows the vulkan-tutorial pattern: `MAX_FRAMES_IN_FLIGHT`
+    /// fences (rotated by `current_frame`) pace the CPU vs GPU. We wait on the
+    /// current frame's fence before acquiring, so its command buffer is done and
+    /// its acquire semaphore has been consumed by the prior submit. With 3
+    /// swapchain images and 2 frames in flight, at least one image is always
+    /// free, so acquire never blocks indefinitely.
     pub fn acquire_next_image(
         &mut self,
         device: &ash::Device,
@@ -181,6 +178,8 @@ impl Swapchain {
         let fence = self.in_flight_fences[frame];
 
         // Wait for the previous submission using this frame's fence, then reset.
+        // This ensures the frame's command buffer is no longer in use and its
+        // acquire semaphore has been consumed by the prior submit.
         unsafe { device.wait_for_fences(&[fence], true, u64::MAX) }
             .context("wait for in_flight fence")?;
         unsafe { device.reset_fences(&[fence]) }.context("reset in_flight fence")?;
@@ -197,13 +196,6 @@ impl Swapchain {
             vk::Result::ERROR_OUT_OF_DATE_KHR => anyhow!("swapchain out of date"),
             _ => anyhow!(e).context("acquire next image"),
         })?;
-
-        // Wait for any previous frame still using this image's resources.
-        if let Some(prev) = self.image_in_flight[image_index as usize].take() {
-            unsafe { device.wait_for_fences(&[prev], true, u64::MAX) }
-                .context("wait for image in_flight fence")?;
-        }
-        self.image_in_flight[image_index as usize] = Some(fence);
 
         let render_finished = self.render_finished[image_index as usize];
         Ok((image_index, frame, image_available, render_finished, fence))

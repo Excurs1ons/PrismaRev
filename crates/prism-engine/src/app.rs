@@ -97,6 +97,9 @@ impl ApplicationHandler for App {
             WindowEvent::Resized(_size) => {
                 self.needs_resize = true;
             }
+            WindowEvent::RedrawRequested => {
+                self.render_one_frame();
+            }
             _ => {}
         }
     }
@@ -110,21 +113,30 @@ impl ApplicationHandler for App {
             self.window = None;
             return;
         }
+        // Request the next redraw here (not inside RedrawRequested) so the
+        // event loop returns to the OS between frames. On Windows this lets
+        // the message pump process present-completion events, which is
+        // required for swapchain images to be recycled by acquire.
+        if let Some(window) = &self.window {
+            window.request_redraw();
+        }
+    }
+}
 
+impl App {
+    /// Render a single frame. Called from `RedrawRequested`.
+    fn render_one_frame(&mut self) {
         let elapsed = self.start.elapsed().as_secs_f32();
 
         if self.needs_resize {
             self.needs_resize = false;
             if let Some(renderer) = self.renderer.as_mut() {
-                match renderer.recreate_swapchain() {
-                    Ok(()) => {}
-                    Err(e) => {
-                        // Recreate failed (e.g. window mid-resize). Skip this
-                        // frame and retry on the next resize event rather than
-                        // rendering against a possibly-inconsistent state.
-                        log::debug!("swapchain recreate deferred: {e}");
-                        return;
-                    }
+                if let Err(e) = renderer.recreate_swapchain() {
+                    // Recreate failed (e.g. window mid-resize). Skip this
+                    // frame and retry on the next resize event rather than
+                    // rendering against a possibly-inconsistent state.
+                    log::debug!("swapchain recreate deferred: {e}");
+                    return;
                 }
             }
         }
@@ -140,6 +152,8 @@ impl ApplicationHandler for App {
                 log::error!("render frame failed: {e}");
             }
         }
+        // NOTE: do NOT request_redraw here; about_to_wait does that so the
+        // event loop gets a chance to run the OS message pump first.
     }
 }
 
