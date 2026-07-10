@@ -1,0 +1,17 @@
+[package]
+name = "prism-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Application layer and main loop for PrismaRev"
+
+[dependencies]
+prism-ecs = { path = "../prism-ecs" }
+prism-render = { path = "../prism-render" }
+ash = { workspace = true }
+ash-window = { workspace = true }
+raw-window-handle = { workspace = true }
+winit = { workspace = true }
+log = { workspace = true }
+env_logger = { workspace = true }
+anyhow = { workspace = true }

@@ -1,0 +1,10 @@
+# Hidden folders (.*)
+.*/
+
+# Rust build artifacts
+/target
+debug
+target
+
+# Lockfile is fine to keep for a binary/app; uncomment to ignore if desired
+# Cargo.lock

@@ -1,0 +1,52 @@
+[package]
+name = "prismarev"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "PrismaRev game engine"
+
+[[bin]]
+name = "prismarev"
+path = "src/main.rs"
+
+[dependencies]
+prism-engine = { path = "crates/prism-engine" }
+log = { workspace = true }
+env_logger = { workspace = true }
+anyhow = { workspace = true }
+
+[workspace]
+resolver = "2"
+members = [
+    "crates/prism-ecs",
+    "crates/prism-render",
+    "crates/prism-engine",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+# Vulkan
+ash = "0.38"
+ash-window = "0.13"
+raw-window-handle = "0.6"
+
+# Window / events
+winit = "0.30"
+
+# Logging
+log = "0.4"
+env_logger = "0.11"
+
+# Error handling
+anyhow = "1"
+
+[profile.dev]
+opt-level = 1          # ash/Vulkan has a lot of codegen; light opt keeps debug builds usable
+
+[profile.release]
+opt-level = 3
+lto = "thin"

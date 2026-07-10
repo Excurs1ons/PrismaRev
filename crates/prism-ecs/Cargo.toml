@@ -1,0 +1,9 @@
+[package]
+name = "prism-ecs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Minimal data-oriented ECS (Entity-Component-System) core for PrismaRev"
+
+[dependencies]
+log = { workspace = true }
