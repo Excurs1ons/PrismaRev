@@ -42,8 +42,13 @@ impl VulkanContext {
         use anyhow::Context as _;
         let entry = unsafe { ash::Entry::load() }.context("failed to load Vulkan loader")?;
 
-        let instance = create_instance(&entry, window_extensions)?;
-        let debug_messenger = setup_debug_messenger(&entry, &instance);
+        let enable_debug = cfg!(debug_assertions);
+        let instance = create_instance(&entry, window_extensions, enable_debug)?;
+        let debug_messenger = if enable_debug {
+            setup_debug_messenger(&entry, &instance)
+        } else {
+            None
+        };
 
         let physical_device = pick_physical_device(&instance)?;
         let physical_device_properties =
@@ -122,6 +127,7 @@ impl Drop for VulkanContext {
 fn create_instance(
     entry: &ash::Entry,
     window_extensions: &[&str],
+    enable_debug: bool,
 ) -> anyhow::Result<ash::Instance> {
     use anyhow::Context as _;
 
@@ -132,29 +138,41 @@ fn create_instance(
         .engine_version(vk::make_api_version(0, 0, 1, 0))
         .api_version(vk::API_VERSION_1_2);
 
-    // Instance extensions: surface + platform + debug utils (for object naming).
+    // Instance extensions: surface + platform. Debug utils only in debug builds
+    // (it's a debugging aid; the validation layer warns if enabled in release).
     let mut extension_names: Vec<CString> = window_extensions
         .iter()
         .map(|s| CString::new(*s).unwrap())
         .collect();
-    extension_names.push(vk::EXT_DEBUG_UTILS_NAME.into());
+    if enable_debug {
+        extension_names.push(vk::EXT_DEBUG_UTILS_NAME.into());
+    }
     let extension_ptrs: Vec<*const c_char> = extension_names.iter().map(|c| c.as_ptr()).collect();
 
-    let enabled_layers: Vec<CString> = VALIDATION_LAYERS
-        .iter()
-        .map(|s| CString::new(*s).unwrap())
-        .collect();
+    // Validation layers only in debug builds.
+    let enabled_layers: Vec<CString> = if enable_debug {
+        VALIDATION_LAYERS
+            .iter()
+            .map(|s| CString::new(*s).unwrap())
+            .collect()
+    } else {
+        Vec::new()
+    };
     let layer_ptrs: Vec<*const c_char> = enabled_layers.iter().map(|c| c.as_ptr()).collect();
 
-    // Let the validation layers know we want the best-practice diagnostics.
+    // Best-practice diagnostics (debug only). Declared outside the if so its
+    // borrow lives long enough for push_next + create_instance.
     let mut validation_features = vk::ValidationFeaturesEXT::default()
         .enabled_validation_features(&[vk::ValidationFeatureEnableEXT::BEST_PRACTICES]);
 
-    let create_info = vk::InstanceCreateInfo::default()
+    let mut create_info = vk::InstanceCreateInfo::default()
         .application_info(&app_info)
-        .enabled_layer_names(&layer_ptrs)
-        .enabled_extension_names(&extension_ptrs)
-        .push_next(&mut validation_features);
+        .enabled_extension_names(&extension_ptrs);
+    if enable_debug {
+        create_info = create_info
+            .enabled_layer_names(&layer_ptrs)
+            .push_next(&mut validation_features);
+    }
 
     let instance = unsafe { entry.create_instance(&create_info, None) }
         .context("failed to create Vulkan instance")?;
