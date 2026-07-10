@@ -1,5 +1,9 @@
 //! PrismaRev engine entry point.
 
+// In release builds, use the Windows GUI subsystem so no console window pops
+// up when double-clicking the exe. Debug builds keep the console for logs.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 use std::io::{IsTerminal, Write};
 
 fn main() -> anyhow::Result<()> {
