@@ -9,6 +9,8 @@ use std::os::raw::c_void;
 
 use ash::vk;
 
+use crate::capabilities::{self, RayTracingCaps};
+
 /// Validation layers requested on debug builds / when the loader is present.
 const VALIDATION_LAYERS: [&str; 1] = ["VK_LAYER_KHRONOS_validation"];
 
@@ -27,10 +29,17 @@ pub struct VulkanContext {
     pub physical_device_properties: vk::PhysicalDeviceProperties,
     pub physical_device_memory_properties: vk::PhysicalDeviceMemoryProperties,
 
+    /// Probed ray-tracing capabilities of the chosen physical device.
+    /// All fields are `false` on non-RT hardware; callers can branch freely.
+    pub rt_caps: RayTracingCaps,
+
+    /// Device extension names that were actually enabled (RT extensions are
+    /// conditional; the rest are always-on). Stored for later RT modules.
+    enabled_extensions: Vec<CString>,
+
     // Held for drop ordering / FFI lifetime.
     _debug_messenger: Option<vk::DebugUtilsMessengerEXT>,
     _enabled_layer_names: Vec<CString>,
-    _enabled_extension_names: Vec<CString>,
 }
 
 impl VulkanContext {
@@ -56,10 +65,16 @@ impl VulkanContext {
         let physical_device_memory_properties =
             unsafe { instance.get_physical_device_memory_properties(physical_device) };
 
+        // Probe ray-tracing capabilities *before* device creation so we can
+        // conditionally enable extensions and chain the right feature structs.
+        let rt_caps = unsafe { capabilities::probe(&instance, physical_device) };
+        log::info!("RT capabilities: {rt_caps}");
+
         let graphics_queue_family = pick_graphics_queue_family(&instance, physical_device)
             .context("no graphics-capable queue family found")?;
 
-        let device = create_device(&instance, physical_device, graphics_queue_family)?;
+        let (device, enabled_extensions) =
+            create_device(&instance, physical_device, graphics_queue_family, &rt_caps)?;
 
         let graphics_queue = unsafe { device.get_device_queue(graphics_queue_family, 0) };
 
@@ -72,9 +87,10 @@ impl VulkanContext {
             graphics_queue,
             physical_device_properties,
             physical_device_memory_properties,
+            rt_caps,
+            enabled_extensions,
             _debug_messenger: debug_messenger,
             _enabled_layer_names: Vec::new(),
-            _enabled_extension_names: Vec::new(),
         })
     }
 
@@ -103,6 +119,18 @@ impl VulkanContext {
         } else {
             None
         }
+    }
+
+    /// Names of the device extensions that were enabled at device creation.
+    /// Includes `VK_KHR_swapchain` plus any RT extensions the hardware
+    /// supports. Used by RT modules to decide which code path to take.
+    pub fn enabled_extension_names(&self) -> &[CString] {
+        &self.enabled_extensions
+    }
+
+    /// Convenience: was a specific device extension enabled?
+    pub fn has_extension(&self, name: &CStr) -> bool {
+        self.enabled_extensions.iter().any(|c| c.as_c_str() == name)
     }
 }
 
@@ -190,6 +218,9 @@ fn pick_physical_device(instance: &ash::Instance) -> anyhow::Result<vk::Physical
         .context("failed to enumerate physical devices")?;
 
     // Prefer a discrete GPU, fall back to anything with a graphics queue.
+    // Bonus points for ray-tracing support: if two GPUs tie on device type,
+    // the one with RT wins. RT is *not* required -- a non-RT GPU is still
+    // selected and simply renders via the raster path.
     let mut best = None;
     let mut best_score = -1i32;
     for device in devices {
@@ -231,33 +262,87 @@ fn create_device(
     instance: &ash::Instance,
     physical_device: vk::PhysicalDevice,
     graphics_queue_family: u32,
-) -> anyhow::Result<ash::Device> {
+    rt_caps: &RayTracingCaps,
+) -> anyhow::Result<(ash::Device, Vec<CString>)> {
     use anyhow::Context as _;
     let priorities = [1.0f32];
     let queue_create_infos = [vk::DeviceQueueCreateInfo::default()
         .queue_family_index(graphics_queue_family)
         .queue_priorities(&priorities)];
 
-    // Query the available features first (validation layer wants this) and
-    // enable the swapchain device extension so the swapchain fn pointers load.
-    let available_features =
-        unsafe { instance.get_physical_device_features(physical_device) };
-    let enabled_features = vk::PhysicalDeviceFeatures {
+    // Query the available legacy features (validation layer wants this) and
+    // mirror the ones we need into the Features2 chain.
+    let available_features = unsafe { instance.get_physical_device_features(physical_device) };
+    let legacy_features = vk::PhysicalDeviceFeatures {
         shader_clip_distance: available_features.shader_clip_distance,
         ..vk::PhysicalDeviceFeatures::default()
     };
 
-    let swapchain_name = ash::khr::swapchain::NAME;
-    let enabled_extensions: [*const c_char; 1] = [swapchain_name.as_ptr()];
+    // --- Build the extension list: swapchain (always) + RT (conditional) ---
+    let mut enabled_extensions: Vec<CString> = Vec::new();
+    enabled_extensions.push(ash::khr::swapchain::NAME.into());
+    for rt_ext in capabilities::rt_extension_names(rt_caps) {
+        enabled_extensions.push(rt_ext.into());
+    }
+    let extension_ptrs: Vec<*const c_char> =
+        enabled_extensions.iter().map(|c| c.as_ptr()).collect();
+
+    // --- Build the VkPhysicalDeviceFeatures2 pNext chain ---
+    // Each feature struct is declared out here so it outlives the create_info
+    // borrow (same pattern as validation_features in create_instance).
+    let mut vk12 = vk::PhysicalDeviceVulkan12Features::default();
+    let mut accel_features = vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default();
+    let mut rt_pipeline_features = vk::PhysicalDeviceRayTracingPipelineFeaturesKHR::default();
+    let mut ray_query_features = vk::PhysicalDeviceRayQueryFeaturesKHR::default();
+
+    // Layer 1: Vulkan 1.2 promoted features that RT depends on.
+    if rt_caps.buffer_device_address {
+        vk12.buffer_device_address = vk::TRUE;
+    }
+    if rt_caps.descriptor_indexing {
+        vk12.descriptor_indexing = vk::TRUE;
+    }
+    if rt_caps.timeline_semaphore {
+        vk12.timeline_semaphore = vk::TRUE;
+    }
+
+    let mut features2 = vk::PhysicalDeviceFeatures2::default()
+        .features(legacy_features)
+        .push_next(&mut vk12);
+
+    // Layer 2-4: RT features only when the caps say they're supported.
+    if rt_caps.acceleration_structure {
+        accel_features.acceleration_structure = vk::TRUE;
+        features2 = features2.push_next(&mut accel_features);
+    }
+    if rt_caps.ray_tracing_pipeline {
+        rt_pipeline_features.ray_tracing_pipeline = vk::TRUE;
+        features2 = features2.push_next(&mut rt_pipeline_features);
+    }
+    if rt_caps.ray_query {
+        ray_query_features.ray_query = vk::TRUE;
+        features2 = features2.push_next(&mut ray_query_features);
+    }
 
     let create_info = vk::DeviceCreateInfo::default()
         .queue_create_infos(&queue_create_infos)
-        .enabled_features(&enabled_features)
-        .enabled_extension_names(&enabled_extensions);
+        .enabled_extension_names(&extension_ptrs)
+        .push_next(&mut features2);
 
     let device = unsafe { instance.create_device(physical_device, &create_info, None) }
         .context("failed to create logical device")?;
-    Ok(device)
+
+    if rt_caps.any_ray_tracing() {
+        log::info!(
+            "device created with ray tracing: pipeline={} query={}",
+            rt_caps.has_rt_pipeline(),
+            rt_caps.has_ray_query()
+        );
+    } else {
+        log::info!("device created (no ray tracing support)");
+    }
+
+    Ok((device, enabled_extensions))
 }
 
 // ---------------------------------------------------------------------------
