@@ -486,7 +486,7 @@ mod tests {
         let mut world = World::new();
         let a = world.spawn();
         let b = world.spawn();
-        let c = world.spawn();
+        let _c = world.spawn();
         world.insert(a, Position(1.0, 0.0));
         world.insert(b, Position(2.0, 0.0));
         // c has no Position

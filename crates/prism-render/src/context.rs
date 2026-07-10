@@ -188,18 +188,11 @@ fn create_instance(
     };
     let layer_ptrs: Vec<*const c_char> = enabled_layers.iter().map(|c| c.as_ptr()).collect();
 
-    // Best-practice diagnostics (debug only). Declared outside the if so its
-    // borrow lives long enough for push_next + create_instance.
-    let mut validation_features = vk::ValidationFeaturesEXT::default()
-        .enabled_validation_features(&[vk::ValidationFeatureEnableEXT::BEST_PRACTICES]);
-
     let mut create_info = vk::InstanceCreateInfo::default()
         .application_info(&app_info)
         .enabled_extension_names(&extension_ptrs);
     if enable_debug {
-        create_info = create_info
-            .enabled_layer_names(&layer_ptrs)
-            .push_next(&mut validation_features);
+        create_info = create_info.enabled_layer_names(&layer_ptrs);
     }
 
     let instance = unsafe { entry.create_instance(&create_info, None) }
