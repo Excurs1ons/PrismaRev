@@ -12,7 +12,7 @@
 //!    and present.
 //!
 //! The camera UBO is updated once per frame via
-//! [`Renderer::set_view_proj`].
+//! [`Renderer::set_frame_data`].
 
 use std::sync::Arc;
 
@@ -21,10 +21,10 @@ use ash::vk;
 
 use crate::buffer;
 use crate::context::VulkanContext;
-use crate::descriptor::{CameraUBO, DescriptorLayout, DescriptorPool};
+use crate::descriptor::{DescriptorLayout, DescriptorPool, FrameUBO, FrameUBOData};
 use crate::mesh::{Mesh, Vertex};
 use crate::pipeline::GraphicsPipeline;
-use crate::render_pass::{Framebuffers, RenderPass};
+use crate::render_pass::{DepthImage, Framebuffers, RenderPass};
 use crate::shader;
 use crate::swapchain::Swapchain;
 
@@ -36,8 +36,8 @@ const FRAMES_IN_FLIGHT: usize = 2;
 // ---------------------------------------------------------------------------
 // Embedded SPIR-V (compiled offline from shaders/*.glsl via glslc)
 // ---------------------------------------------------------------------------
-const VERT_SPV: &[u8] = include_bytes!("../../../shaders/triangle.vert.spv");
-const FRAG_SPV: &[u8] = include_bytes!("../../../shaders/triangle.frag.spv");
+const VERT_SPV: &[u8] = include_bytes!("../../../shaders/mesh.vert.spv");
+const FRAG_SPV: &[u8] = include_bytes!("../../../shaders/mesh.frag.spv");
 
 // ---------------------------------------------------------------------------
 // Frame state
@@ -88,10 +88,11 @@ pub struct Renderer {
     // Pipeline resources
     render_pass: RenderPass,
     framebuffers: Framebuffers,
+    depth_images: Vec<DepthImage>,
     pipeline: GraphicsPipeline,
     descriptor_layout: DescriptorLayout,
     descriptor_pool: DescriptorPool,
-    camera_ubos: Vec<CameraUBO>,
+    frame_ubos: Vec<FrameUBO>,
 
     // Shader modules (kept alive until drop for safety)
     vert_module: vk::ShaderModule,
@@ -121,13 +122,28 @@ impl Renderer {
         let frag_module = shader::load_shader_module(&context.device, FRAG_SPV)
             .context("load fragment shader module")?;
 
+        // --- Depth images (one per swapchain image) ---
+        let depth_images: Vec<DepthImage> = swapchain
+            .views
+            .iter()
+            .map(|_| DepthImage::new(&context, swapchain.extent))
+            .collect::<anyhow::Result<Vec<_>>>()
+            .context("create depth images")?;
+        let depth_views: Vec<vk::ImageView> =
+            depth_images.iter().map(|d| d.view).collect();
+
         // --- Render pass & framebuffers ---
-        let render_pass =
-            RenderPass::new(&context.device, swapchain.format.format).context("create render pass")?;
+        let render_pass = RenderPass::new(
+            &context.device,
+            swapchain.format.format,
+            vk::Format::D32_SFLOAT,
+        )
+        .context("create render pass")?;
         let framebuffers = Framebuffers::new(
             &context.device,
             &render_pass,
             &swapchain.views,
+            &depth_views,
             swapchain.extent,
         )
         .context("create framebuffers")?;
@@ -142,12 +158,12 @@ impl Renderer {
             .allocate_sets(&context.device, &descriptor_layout, FRAMES_IN_FLIGHT as u32)
             .context("allocate descriptor sets")?;
 
-        // --- Camera UBOs (one per frame-in-flight) ---
-        let camera_ubos = descriptor_sets
+        // --- Frame UBOs (one per frame-in-flight) ---
+        let frame_ubos = descriptor_sets
             .into_iter()
-            .map(|set| CameraUBO::new(&context, set))
+            .map(|set| FrameUBO::new(&context, set))
             .collect::<anyhow::Result<Vec<_>>>()
-            .context("create camera UBOs")?;
+            .context("create frame UBOs")?;
 
         // --- Graphics pipeline ---
         let vert_stage = shader::shader_stage(vk::ShaderStageFlags::VERTEX, vert_module, c"main");
@@ -192,10 +208,11 @@ impl Renderer {
             command_buffers,
             render_pass,
             framebuffers,
+            depth_images,
             pipeline,
             descriptor_layout,
             descriptor_pool,
-            camera_ubos,
+            frame_ubos,
             vert_module,
             frag_module,
             current: None,
@@ -292,18 +309,33 @@ impl Renderer {
             .unwrap_or_default()
     }
 
-    /// Recreate the swapchain and framebuffers (e.g. after a window resize).
+    /// Recreate the swapchain, depth images, and framebuffers
+    /// (e.g. after a window resize).
     pub fn recreate_swapchain(&mut self) -> anyhow::Result<()> {
         if let Some(swapchain) = self.swapchain.as_mut() {
             swapchain.recreate(&self.context)?;
+            let extent = swapchain.extent;
+            let device = &self.context.device;
 
-            // Rebuild framebuffers for the new swapchain image views.
-            unsafe { self.framebuffers.destroy(&self.context.device) };
+            // Rebuild depth images for the new extent.
+            for mut depth in self.depth_images.drain(..) {
+                unsafe { depth.destroy(device) };
+            }
+            for _ in 0..swapchain.views.len() {
+                self.depth_images
+                    .push(DepthImage::new(&self.context, extent)?);
+            }
+
+            // Rebuild framebuffers for the new swapchain image + depth views.
+            unsafe { self.framebuffers.destroy(device) };
+            let depth_views: Vec<vk::ImageView> =
+                self.depth_images.iter().map(|d| d.view).collect();
             self.framebuffers = Framebuffers::new(
-                &self.context.device,
+                device,
                 &self.render_pass,
                 &swapchain.views,
-                swapchain.extent,
+                &depth_views,
+                extent,
             )
             .context("recreate framebuffers")?;
         }
@@ -341,12 +373,26 @@ impl Renderer {
                     if msg.contains("out of date") {
                         log::debug!("acquire reported out of date; recreating");
                         swapchain.recreate(&self.context)?;
+                        let extent = swapchain.extent;
+
+                        // Rebuild depth images.
+                        for mut depth in self.depth_images.drain(..) {
+                            unsafe { depth.destroy(device) };
+                        }
+                        for _ in 0..swapchain.views.len() {
+                            self.depth_images
+                                .push(DepthImage::new(&self.context, extent)?);
+                        }
+
                         unsafe { self.framebuffers.destroy(device) };
+                        let depth_views: Vec<vk::ImageView> =
+                            self.depth_images.iter().map(|d| d.view).collect();
                         self.framebuffers = Framebuffers::new(
                             device,
                             &self.render_pass,
                             &swapchain.views,
-                            swapchain.extent,
+                            &depth_views,
+                            extent,
                         )?;
                         return Ok(());
                     }
@@ -368,11 +414,19 @@ impl Renderer {
             .context("begin command buffer")?;
 
         // --- begin render pass ---
-        let clear_value = vk::ClearValue {
-            color: vk::ClearColorValue {
-                float32: clear_color,
+        let clear_values = [
+            vk::ClearValue {
+                color: vk::ClearColorValue {
+                    float32: clear_color,
+                },
             },
-        };
+            vk::ClearValue {
+                depth_stencil: vk::ClearDepthStencilValue {
+                    depth: 1.0,
+                    stencil: 0,
+                },
+            },
+        ];
         let render_pass_begin_info = vk::RenderPassBeginInfo::default()
             .render_pass(self.render_pass.handle)
             .framebuffer(self.framebuffers.get(image_index as usize))
@@ -380,7 +434,7 @@ impl Renderer {
                 offset: vk::Offset2D { x: 0, y: 0 },
                 extent: swapchain.extent,
             })
-            .clear_values(std::slice::from_ref(&clear_value));
+            .clear_values(&clear_values);
         unsafe {
             device.cmd_begin_render_pass(
                 command_buffer,
@@ -414,8 +468,8 @@ impl Renderer {
             );
         }
 
-        // Bind the per-frame descriptor set (camera UBO).
-        let descriptor_set = self.camera_ubos[frame_index].descriptor_set;
+        // Bind the per-frame descriptor set (frame UBO).
+        let descriptor_set = self.frame_ubos[frame_index].descriptor_set;
         unsafe {
             device.cmd_bind_descriptor_sets(
                 command_buffer,
@@ -491,17 +545,17 @@ impl Renderer {
         }
     }
 
-    /// Update the camera view-projection matrix for the current frame's UBO.
+    /// Update the frame UBO data (view-proj, camera pos, light data).
     ///
     /// Must be called between [`begin_frame`](Self::begin_frame) and
     /// [`end_frame`](Self::end_frame).
-    pub fn set_view_proj(&self, view_proj: &[[f32; 4]; 4]) -> anyhow::Result<()> {
+    pub fn set_frame_data(&self, data: &FrameUBOData) -> anyhow::Result<()> {
         let Some(ref frame) = self.current else {
-            anyhow::bail!("set_view_proj called outside begin_frame/end_frame");
+            anyhow::bail!("set_frame_data called outside begin_frame/end_frame");
         };
-        self.camera_ubos[frame.frame_index]
-            .update(&self.context.device, view_proj)
-            .context("update camera UBO")
+        self.frame_ubos[frame.frame_index]
+            .update(&self.context.device, data)
+            .context("update frame UBO")
     }
 
     /// Finish the current frame: end the render pass and command buffer,
@@ -571,12 +625,26 @@ impl Renderer {
         if out_of_date {
             log::debug!("present reported out of date; recreating");
             swapchain.recreate(&self.context)?;
+            let extent = swapchain.extent;
+
+            // Rebuild depth images.
+            for mut depth in self.depth_images.drain(..) {
+                unsafe { depth.destroy(device) };
+            }
+            for _ in 0..swapchain.views.len() {
+                self.depth_images
+                    .push(DepthImage::new(&self.context, extent)?);
+            }
+
             unsafe { self.framebuffers.destroy(device) };
+            let depth_views: Vec<vk::ImageView> =
+                self.depth_images.iter().map(|d| d.view).collect();
             self.framebuffers = Framebuffers::new(
                 device,
                 &self.render_pass,
                 &swapchain.views,
-                swapchain.extent,
+                &depth_views,
+                extent,
             )?;
         }
 
@@ -730,9 +798,14 @@ impl Drop for Renderer {
         let device = &self.context.device;
         unsafe { device.device_wait_idle().ok() };
 
-        // Destroy per-frame camera UBOs.
-        for mut ubo in self.camera_ubos.drain(..) {
+        // Destroy per-frame frame UBOs.
+        for mut ubo in self.frame_ubos.drain(..) {
             unsafe { ubo.destroy(device) };
+        }
+
+        // Destroy depth images.
+        for mut depth in self.depth_images.drain(..) {
+            unsafe { depth.destroy(device) };
         }
 
         // Destroy pipeline.

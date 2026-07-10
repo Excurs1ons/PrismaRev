@@ -2,7 +2,10 @@
 //! rendering integration.
 
 pub mod app;
+pub mod camera;
+pub mod camera_controller;
+pub mod input;
 pub mod render_system;
 
 pub use app::App;
-pub use render_system::{render_system, Camera, MeshHandle, Transform};
+pub use render_system::{render_system, MeshHandle, Transform};

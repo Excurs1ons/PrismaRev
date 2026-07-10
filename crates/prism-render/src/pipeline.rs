@@ -1,9 +1,10 @@
 //! Graphics pipeline creation.
 //!
 //! Builds a [`GraphicsPipeline`] for the standard PrismaRev forward-rendering
-//! path: vertex input (position + color), push constants for model transform,
-//! a single descriptor set for the camera UBO, no depth/stencil, no
-//! multisampling, one color attachment with alpha blending.
+//! path: vertex input (position + normal + color), push constants for model
+//! transform, a single descriptor set for the frame UBO, depth test +
+//! back-face culling, no multisampling, one color attachment with alpha
+//! blending.
 //!
 //! Viewport and scissor are dynamic so the pipeline does not need to be
 //! recreated on window resize.
@@ -74,7 +75,7 @@ impl GraphicsPipeline {
             .rasterizer_discard_enable(false)
             .polygon_mode(vk::PolygonMode::FILL)
             .line_width(1.0)
-            .cull_mode(vk::CullModeFlags::NONE)
+            .cull_mode(vk::CullModeFlags::BACK)
             .front_face(vk::FrontFace::CLOCKWISE)
             .depth_bias_enable(false);
 
@@ -83,10 +84,11 @@ impl GraphicsPipeline {
             .sample_shading_enable(false)
             .rasterization_samples(vk::SampleCountFlags::TYPE_1);
 
-        // --- Depth/stencil (none) ---
+        // --- Depth/stencil ---
         let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
-            .depth_test_enable(false)
-            .depth_write_enable(false);
+            .depth_test_enable(true)
+            .depth_write_enable(true)
+            .depth_compare_op(vk::CompareOp::LESS);
 
         // --- Color blend: one attachment with alpha blending ---
         let color_blend_attachment = vk::PipelineColorBlendAttachmentState::default()

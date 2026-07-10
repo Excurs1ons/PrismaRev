@@ -1,34 +1,136 @@
 //! Application main loop.
 //!
 //! Implements winit's [`ApplicationHandler`] trait. On startup it opens a
-//! window, builds a [`Renderer`], creates an ECS [`World`] with a test scene,
-//! and drives [`render_system`] each frame.
+//! window, builds a [`Renderer`], creates an ECS [`World`] with a test scene
+//! of three cubes, and drives [`render_system`] each frame.
+//!
+//! Input events are routed to [`InputState`], and [`OrbitCameraController`]
+//! reads the input state to update the [`OrbitCamera`] every frame.
 
 use std::sync::Arc;
 use std::time::Instant;
 
 use winit::application::ApplicationHandler;
-use winit::event::WindowEvent;
+use winit::event::{DeviceEvent, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::raw_window_handle::HasDisplayHandle;
 use winit::window::{Window, WindowId};
 
 use prism_ecs::World;
-use prism_render::{Mesh, Renderer, Vertex};
+use prism_render::{FrameUBOData, Mesh, Renderer, Vertex};
 
-use crate::render_system::{render_system, Camera, MeshHandle, Transform};
+use crate::camera::OrbitCamera;
+use crate::camera_controller::OrbitCameraController;
+use crate::input::InputState;
+use crate::render_system::{render_system, MeshHandle, Transform};
+
+// ---------------------------------------------------------------------------
+// Cube geometry (24 vertices, 36 indices)
+// ---------------------------------------------------------------------------
+
+fn cube_vertices() -> Vec<Vertex> {
+    // Each face: 4 corners with that face's normal, each gets a face color.
+    let colors: [[f32; 3]; 6] = [
+        [1.0, 0.2, 0.2], // front:  red
+        [0.2, 1.0, 0.2], // back:   green
+        [0.2, 0.2, 1.0], // right:  blue
+        [1.0, 1.0, 0.2], // left:   yellow
+        [0.2, 1.0, 1.0], // top:    cyan
+        [1.0, 0.2, 1.0], // bottom: magenta
+    ];
+    let (positions, normals): ([[f32; 3]; 24], [[f32; 3]; 24]) = (
+        [
+            [-0.5, -0.5,  0.5], [ 0.5, -0.5,  0.5], [ 0.5,  0.5,  0.5], [-0.5,  0.5,  0.5], // front
+            [-0.5,  0.5, -0.5], [ 0.5,  0.5, -0.5], [ 0.5, -0.5, -0.5], [-0.5, -0.5, -0.5], // back
+            [ 0.5, -0.5,  0.5], [ 0.5, -0.5, -0.5], [ 0.5,  0.5, -0.5], [ 0.5,  0.5,  0.5], // right
+            [-0.5, -0.5, -0.5], [-0.5, -0.5,  0.5], [-0.5,  0.5,  0.5], [-0.5,  0.5, -0.5], // left
+            [-0.5,  0.5,  0.5], [ 0.5,  0.5,  0.5], [ 0.5,  0.5, -0.5], [-0.5,  0.5, -0.5], // top
+            [-0.5, -0.5, -0.5], [ 0.5, -0.5, -0.5], [ 0.5, -0.5,  0.5], [-0.5, -0.5,  0.5], // bottom
+        ],
+        [
+            [ 0.0,  0.0,  1.0], [ 0.0,  0.0,  1.0], [ 0.0,  0.0,  1.0], [ 0.0,  0.0,  1.0],
+            [ 0.0,  0.0, -1.0], [ 0.0,  0.0, -1.0], [ 0.0,  0.0, -1.0], [ 0.0,  0.0, -1.0],
+            [ 1.0,  0.0,  0.0], [ 1.0,  0.0,  0.0], [ 1.0,  0.0,  0.0], [ 1.0,  0.0,  0.0],
+            [-1.0,  0.0,  0.0], [-1.0,  0.0,  0.0], [-1.0,  0.0,  0.0], [-1.0,  0.0,  0.0],
+            [ 0.0,  1.0,  0.0], [ 0.0,  1.0,  0.0], [ 0.0,  1.0,  0.0], [ 0.0,  1.0,  0.0],
+            [ 0.0, -1.0,  0.0], [ 0.0, -1.0,  0.0], [ 0.0, -1.0,  0.0], [ 0.0, -1.0,  0.0],
+        ],
+    );
+
+    let mut verts = Vec::with_capacity(24);
+    for face in 0..6 {
+        for corner in 0..4 {
+            let idx = face * 4 + corner;
+            verts.push(Vertex {
+                position: positions[idx],
+                normal: normals[idx],
+                color: colors[face],
+            });
+        }
+    }
+    verts
+}
+
+fn cube_indices() -> Vec<u32> {
+    let mut indices = Vec::with_capacity(36);
+    for face in 0..6 {
+        let base = (face * 4) as u32;
+        indices.extend_from_slice(&[base, base + 1, base + 2, base + 2, base + 3, base]);
+    }
+    indices
+}
+
+// ---------------------------------------------------------------------------
+// Sphere geometry (UV sphere)
+// ---------------------------------------------------------------------------
+
+fn sphere_mesh(sectors: u32, stacks: u32) -> (Vec<Vertex>, Vec<u32>) {
+    let r = 0.5;
+    let mut verts = Vec::new();
+    let mut indices = Vec::new();
+
+    for i in 0..=stacks {
+        let phi = i as f32 * std::f32::consts::PI / stacks as f32;
+        let (sp, cp) = phi.sin_cos();
+        for j in 0..=sectors {
+            let theta = j as f32 * 2.0 * std::f32::consts::PI / sectors as f32;
+            let (st, ct) = theta.sin_cos();
+            let pos = [r * sp * ct, r * cp, r * sp * st];
+            verts.push(Vertex {
+                position: pos,
+                normal: [pos[0] / r, pos[1] / r, pos[2] / r],
+                color: [0.85, 0.85, 0.85], // light gray
+            });
+        }
+    }
+
+    for i in 0..stacks {
+        for j in 0..sectors {
+            let first = i * (sectors + 1) + j;
+            let second = first + sectors + 1;
+            indices.extend_from_slice(&[first, first + 1, second]);
+            indices.extend_from_slice(&[first + 1, second + 1, second]);
+        }
+    }
+
+    (verts, indices)
+}
+
+// ---------------------------------------------------------------------------
+// App
+// ---------------------------------------------------------------------------
 
 pub struct App {
     window: Option<Arc<Window>>,
     renderer: Option<Renderer>,
     world: Option<World>,
     meshes: Vec<Mesh>,
-    /// Start of the run, used to animate the clear color.
-    start: Instant,
-    /// Set when the swapchain needs recreation before the next frame.
+    input_state: InputState,
+    camera: OrbitCamera,
+    camera_controller: OrbitCameraController,
     needs_resize: bool,
-    /// Frame counter, used to trigger a one-shot capture on frame 3.
     frame_count: u64,
+    start: Instant,
 }
 
 impl App {
@@ -38,9 +140,12 @@ impl App {
             renderer: None,
             world: None,
             meshes: Vec::new(),
-            start: Instant::now(),
+            input_state: InputState::new(),
+            camera: OrbitCamera::new(16.0 / 9.0),
+            camera_controller: OrbitCameraController::default(),
             needs_resize: false,
             frame_count: 0,
+            start: Instant::now(),
         }
     }
 
@@ -61,7 +166,7 @@ impl App {
                 .create_window(
                     Window::default_attributes()
                         .with_title("PrismaRev")
-                        .with_inner_size(winit::dpi::LogicalSize::new(1280, 720)),
+                        .with_inner_size(winit::dpi::LogicalSize::new(1600, 900)),
                 )
                 .expect("failed to create window"),
         );
@@ -82,71 +187,43 @@ impl App {
         let renderer = Renderer::new(extensions_ref, window.as_ref(), window.as_ref())
             .expect("failed to create renderer");
 
-        // --- Build test scene ---
+        // --- Build test scene: sphere + cubes ---
         let mut world = World::new();
 
-        // Three colored triangles at different positions.
-        let triangles: [([Vertex; 3], [f32; 3]); 3] = [
-            // Red triangle (left)
-            (
-                [
-                    Vertex { position: [-0.5, -0.5, 0.0], color: [1.0, 0.2, 0.2] },
-                    Vertex { position: [0.5, -0.5, 0.0], color: [1.0, 0.2, 0.2] },
-                    Vertex { position: [0.0, 0.5, 0.0], color: [1.0, 0.2, 0.2] },
-                ],
-                [-1.2, 0.0, 0.0],
-            ),
-            // Green triangle (center)
-            (
-                [
-                    Vertex { position: [-0.5, -0.5, 0.0], color: [0.2, 1.0, 0.2] },
-                    Vertex { position: [0.5, -0.5, 0.0], color: [0.2, 1.0, 0.2] },
-                    Vertex { position: [0.0, 0.5, 0.0], color: [0.2, 1.0, 0.2] },
-                ],
-                [0.0, 0.0, 0.0],
-            ),
-            // Blue triangle (right)
-            (
-                [
-                    Vertex { position: [-0.5, -0.5, 0.0], color: [0.2, 0.2, 1.0] },
-                    Vertex { position: [0.5, -0.5, 0.0], color: [0.2, 0.2, 1.0] },
-                    Vertex { position: [0.0, 0.5, 0.0], color: [0.2, 0.2, 1.0] },
-                ],
-                [1.2, 0.0, 0.0],
-            ),
+        // Create a cube mesh and a sphere mesh.
+        let cube_mesh = renderer
+            .create_mesh(&cube_vertices(), Some(&cube_indices()))
+            .expect("create cube mesh");
+        let (sphere_verts, sphere_idx) = sphere_mesh(32, 24);
+        let sphere_mesh = renderer
+            .create_mesh(&sphere_verts, Some(&sphere_idx))
+            .expect("create sphere mesh");
+
+        // Left: sphere, center/right: cubes.
+        let configs = [
+            ([-2.5, 0.0, 0.0], 0usize),
+            ([0.0, 0.0, 0.0], 1),
+            ([2.5, 0.0, 0.0], 1),
         ];
-
-        let mut meshes = Vec::new();
-        for (verts, _pos) in &triangles {
-            let mesh = renderer
-                .create_mesh(verts, None)
-                .expect("create triangle mesh");
-            meshes.push(mesh);
-        }
-
-        // Spawn three entities, each referencing its own mesh.
-        for (i, (_verts, pos)) in triangles.iter().enumerate() {
+        for &(pos, mesh_idx) in &configs {
             let entity = world.spawn();
             world.insert(
                 entity,
                 Transform {
-                    translation: *pos,
+                    translation: pos,
                     ..Default::default()
                 },
             );
-            world.insert(entity, MeshHandle(i));
+            world.insert(entity, MeshHandle(mesh_idx));
         }
 
-        // Camera resource.
-        let aspect = 1280.0 / 720.0;
-        let mut camera = Camera::perspective(aspect, std::f32::consts::FRAC_PI_4, 0.01, 100.0);
-        camera.look_at([0.0, 0.0, 3.0], [0.0, 0.0, 0.0], [0.0, 1.0, 0.0]);
-        world.insert_resource(camera);
-
         self.world = Some(world);
-        self.meshes = meshes;
+        self.meshes = vec![sphere_mesh, cube_mesh];
         self.window = Some(window);
         self.renderer = Some(renderer);
+
+        // Update camera aspect ratio to match initial window size.
+        self.camera = OrbitCamera::new(1600.0 / 900.0);
     }
 }
 
@@ -166,19 +243,57 @@ impl ApplicationHandler for App {
                 log::info!("close requested, exiting");
                 event_loop.exit();
             }
-            WindowEvent::Resized(_size) => {
+            WindowEvent::Resized(size) => {
                 self.needs_resize = true;
+                if size.width > 0 && size.height > 0 {
+                    let aspect = size.width as f32 / size.height as f32;
+                    self.camera = OrbitCamera::new(aspect);
+                }
             }
             WindowEvent::RedrawRequested => {
                 self.render_one_frame();
+            }
+            WindowEvent::MouseInput { state, button, .. } => {
+                self.input_state.handle_mouse_button(button.into(), state);
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                self.input_state.handle_mouse_move([position.x, position.y]);
+            }
+            WindowEvent::MouseWheel { delta, .. } => {
+                self.input_state.handle_scroll(delta);
+            }
+            WindowEvent::KeyboardInput {
+                event:
+                    winit::event::KeyEvent {
+                        physical_key,
+                        state,
+                        ..
+                    },
+                ..
+            } => {
+                self.input_state.handle_keyboard(physical_key, state);
             }
             _ => {}
         }
     }
 
+    fn device_event(
+        &mut self,
+        _event_loop: &ActiveEventLoop,
+        _device_id: winit::event::DeviceId,
+        event: DeviceEvent,
+    ) {
+        if let DeviceEvent::MouseMotion { delta } = event {
+            // Absolute mouse motion from raw device events.
+            // On some platforms (Linux/Windows raw input) CursorMoved may not
+            // fire reliably while a button is held; MouseMotion supplements it.
+            let pos = self.input_state.mouse_position();
+            self.input_state.handle_mouse_move([pos[0] + delta.0, pos[1] + delta.1]);
+        }
+    }
+
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         if event_loop.exiting() {
-            // Destroy meshes before the renderer (meshes need the device).
             for mut mesh in self.meshes.drain(..) {
                 if let Some(ref renderer) = self.renderer {
                     unsafe { mesh.destroy(&renderer.context().device) };
@@ -200,7 +315,7 @@ impl App {
         let frame = self.frame_count;
         self.frame_count += 1;
 
-        // Request a frame capture on frame 3 (let a few frames settle first).
+        // Request a frame capture on frame 3.
         if frame == 3 {
             if let Some(renderer) = self.renderer.as_mut() {
                 renderer.request_capture();
@@ -208,8 +323,7 @@ impl App {
             }
         }
 
-        let elapsed = self.start.elapsed().as_secs_f32();
-
+        // Handle pending resize.
         if self.needs_resize {
             self.needs_resize = false;
             if let Some(renderer) = self.renderer.as_mut() {
@@ -220,12 +334,41 @@ impl App {
             }
         }
 
-        // Animated clear color.
-        let t = elapsed;
-        let r = 0.5 + 0.5 * (t * 0.6).sin();
-        let g = 0.5 + 0.5 * (t * 0.9 + 2.0).sin();
-        let b = 0.5 + 0.5 * (t * 1.3 + 4.0).sin();
-        let clear_color = [r, g, b, 1.0];
+        // Update camera from input state (events populated by window_event).
+        self.camera_controller.update(&mut self.camera, &self.input_state);
+        // Clear transient input state for the next frame.
+        self.input_state.begin_frame();
+
+        // Animate cubes: rotate around Y axis.
+        let elapsed = self.start.elapsed().as_secs_f32();
+        if let Some(world) = self.world.as_mut() {
+            for (_, transform) in world.query_mut::<Transform>() {
+                let angle = elapsed * 0.5; // 0.5 rad/s ≈ 29°/s
+                let half = angle * 0.5;
+                transform.rotation = [0.0, half.sin(), 0.0, half.cos()];
+            }
+        }
+
+        // Build light data (directional).
+        // Light: 45° diagonal in XY plane (upper-left), Z=0.
+        let light_dir = [-1.0f32, 1.0, 0.0];
+        let light_dir_len = (light_dir[0] * light_dir[0] + light_dir[1] * light_dir[1] + light_dir[2] * light_dir[2]).sqrt();
+        let light_direction = [
+            light_dir[0] / light_dir_len,
+            light_dir[1] / light_dir_len,
+            light_dir[2] / light_dir_len,
+            1.0, // intensity
+        ];
+        let light_color = [1.0, 1.0, 1.0, 0.1]; // white, ambient factor 0.1
+
+        let light_data = FrameUBOData {
+            view_proj: [[0.0; 4]; 4], // placeholder, render_system fills it
+            camera_position: [0.0; 4], // placeholder
+            light_direction,
+            light_color,
+        };
+
+        let clear_color = [0.05, 0.05, 0.1, 1.0]; // dark blue-gray
 
         let (renderer, world, meshes) = match (
             self.renderer.as_mut(),
@@ -235,10 +378,9 @@ impl App {
             _ => return,
         };
 
-        let camera = world.get_resource::<Camera>();
-        render_system(renderer, world, meshes, clear_color, camera);
+        render_system(renderer, world, meshes, clear_color, &self.camera, &light_data);
 
-        // After the render system completes, check for captured pixel data.
+        // Check for captured pixel data.
         if let Some(pixels) = renderer.take_capture_data() {
             let extent = renderer.extent();
             let path = std::path::Path::new("frame_000.ppm");

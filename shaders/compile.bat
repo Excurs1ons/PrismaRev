@@ -13,18 +13,18 @@ if not exist "%GLSLC%" (
 
 echo Compiling shaders...
 
-"%GLSLC%" triangle.vert -o triangle.vert.spv
+"%GLSLC%" mesh.vert -o mesh.vert.spv
 if %ERRORLEVEL% neq 0 (
-    echo FAILED: triangle.vert
+    echo FAILED: mesh.vert
     exit /b %ERRORLEVEL%
 )
-echo   triangle.vert -^> triangle.vert.spv
+echo   mesh.vert -^> mesh.vert.spv
 
-"%GLSLC%" triangle.frag -o triangle.frag.spv
+"%GLSLC%" mesh.frag -o mesh.frag.spv
 if %ERRORLEVEL% neq 0 (
-    echo FAILED: triangle.frag
+    echo FAILED: mesh.frag
     exit /b %ERRORLEVEL%
 )
-echo   triangle.frag -^> triangle.frag.spv
+echo   mesh.frag -^> mesh.frag.spv
 
 echo All shaders compiled successfully.

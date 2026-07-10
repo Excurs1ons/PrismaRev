@@ -1,6 +1,6 @@
 //! Descriptor set layout, pool, and set management.
 //!
-//! The camera UBO lives at descriptor set 0, binding 0 (vertex stage).
+//! The frame UBO lives at descriptor set 0, binding 0 (vertex + fragment stage).
 //! Each frame gets its own descriptor set so we can update the UBO without
 //! pipeline stalls.
 
@@ -21,7 +21,7 @@ impl DescriptorLayout {
             .binding(0)
             .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
             .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::VERTEX)];
+            .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)];
 
         let create_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
         let layout = unsafe { device.create_descriptor_set_layout(&create_info, None) }
@@ -106,21 +106,31 @@ impl Drop for DescriptorPool {
     }
 }
 
+/// GPU data layout: 7 × vec4 = 112 bytes, std140 align.
+/// Mirrors GLSL `layout(binding = 0) uniform FrameUBO { ... }`.
+#[repr(C)]
+pub struct FrameUBOData {
+    pub view_proj:      [[f32; 4]; 4], // 64 bytes, offset   0
+    pub camera_position: [f32; 4],     // 16 bytes, offset  64
+    pub light_direction: [f32; 4],     // 16 bytes, offset  80 (w = intensity)
+    pub light_color:     [f32; 4],     // 16 bytes, offset  96 (w = ambient factor)
+}
+
 /// Per-frame UBO buffer and its descriptor set.
-pub struct CameraUBO {
+pub struct FrameUBO {
     pub buffer: vk::Buffer,
     pub memory: vk::DeviceMemory,
     pub size: vk::DeviceSize,
     pub descriptor_set: vk::DescriptorSet,
 }
 
-impl CameraUBO {
+impl FrameUBO {
     /// Create a UBO buffer and update the descriptor set to point to it.
     pub fn new(
         context: &VulkanContext,
         descriptor_set: vk::DescriptorSet,
     ) -> anyhow::Result<Self> {
-        let size = std::mem::size_of::<[[f32; 4]; 4]>() as vk::DeviceSize; // mat4
+        let size = std::mem::size_of::<FrameUBOData>() as vk::DeviceSize; // 112
 
         let (buffer, memory) = buffer::create_buffer(
             context,
@@ -128,7 +138,7 @@ impl CameraUBO {
             BufferUsage::UNIFORM_BUFFER,
             MemoryProperties::HOST_VISIBLE | MemoryProperties::HOST_COHERENT,
         )
-        .context("create camera UBO buffer")?;
+        .context("create frame UBO buffer")?;
 
         // Update descriptor set.
         let buffer_info = vk::DescriptorBufferInfo::default()
@@ -150,13 +160,13 @@ impl CameraUBO {
         })
     }
 
-    /// Upload a new view-projection matrix to the GPU.
-    pub fn update(&self, device: &ash::Device, view_proj: &[[f32; 4]; 4]) -> anyhow::Result<()> {
+    /// Upload new frame data to the GPU.
+    pub fn update(&self, device: &ash::Device, data: &FrameUBOData) -> anyhow::Result<()> {
         let ptr = unsafe { device.map_memory(self.memory, 0, self.size, vk::MemoryMapFlags::empty()) }
-            .context("map camera UBO memory")?;
+            .context("map frame UBO memory")?;
         unsafe {
             std::ptr::copy_nonoverlapping(
-                view_proj as *const _ as *const u8,
+                data as *const _ as *const u8,
                 ptr as *mut u8,
                 self.size as usize,
             );
@@ -166,7 +176,7 @@ impl CameraUBO {
     }
 }
 
-impl CameraUBO {
+impl FrameUBO {
     /// Destroy the UBO buffer and memory.
     ///
     /// # Safety
@@ -178,8 +188,8 @@ impl CameraUBO {
     }
 }
 
-impl Drop for CameraUBO {
+impl Drop for FrameUBO {
     fn drop(&mut self) {
-        log::warn!("CameraUBO dropped without explicit destroy; device may leak");
+        log::warn!("FrameUBO dropped without explicit destroy; device may leak");
     }
 }

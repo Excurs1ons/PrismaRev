@@ -1,8 +1,8 @@
 //! ECS-driven rendering system.
 //!
 //! Defines the ECS components and resources needed for the rendering pipeline
-//! and the [`render_system`] function that queries the ECS world each frame,
-//! updates the camera, and submits draw calls.
+//! and the [`render_system`] function that queries the ECS world each frame
+//! and submits draw calls.
 //!
 //! ## Components
 //!
@@ -10,15 +10,11 @@
 //! |-----------|-------------|
 //! | [`Transform`] | Translation + rotation + scale → model matrix |
 //! | [`MeshHandle`] | Index into an externally-owned mesh list |
-//!
-//! ## Resources
-//!
-//! | Resource | Description |
-//! |----------|-------------|
-//! | [`Camera`] | View-projection matrix for the active camera |
 
 use prism_ecs::World;
-use prism_render::{Mesh, Renderer};
+use prism_render::{FrameUBOData, Mesh, Renderer};
+
+use crate::camera::OrbitCamera;
 
 // ---------------------------------------------------------------------------
 // ECS Components
@@ -87,107 +83,16 @@ impl Transform {
 pub struct MeshHandle(pub usize);
 
 // ---------------------------------------------------------------------------
-// Resources
-// ---------------------------------------------------------------------------
-
-/// Active camera: view-projection matrix and a mutable position.
-#[derive(Debug, Clone)]
-pub struct Camera {
-    /// View-projection matrix (updated each frame by the render system).
-    pub view_proj: [[f32; 4]; 4],
-}
-
-impl Camera {
-    /// Create a perspective camera.
-    ///
-    /// Produces a column-major projection matrix suitable for Vulkan clip space
-    /// (Y inverted, Z in [0, 1]).
-    pub fn perspective(aspect: f32, fov_y_rad: f32, znear: f32, zfar: f32) -> Self {
-        let inv_tan = 1.0 / (fov_y_rad * 0.5).tan();
-        let mut proj = [[0.0f32; 4]; 4];
-        // Column-major: m[i][j] = column i, row j.
-        proj[0][0] = inv_tan / aspect;   // col0.x
-        proj[1][1] = -inv_tan;            // col1.y (flipped Y for Vulkan)
-        proj[2][2] = zfar / (znear - zfar); // col2.z
-        
-        // NOTE: For standard perspective clip space, W_clip = -Z_view.
-        // In column-major format, the W_clip term from Z_view comes from col2.w (proj[2][3]).
-        // The translation Z term comes from col3.z (proj[3][2]).
-        proj[2][3] = -1.0;                  // col2.w
-        proj[3][2] = znear * zfar / (znear - zfar); // col3.z
-
-        Self {
-            view_proj: proj,
-        }
-    }
-
-    /// Set the view matrix (look-at).
-    pub fn look_at(&mut self, eye: [f32; 3], target: [f32; 3], up: [f32; 3]) {
-        let fwd = [
-            target[0] - eye[0],
-            target[1] - eye[1],
-            target[2] - eye[2],
-        ];
-        let fwd_len = (fwd[0] * fwd[0] + fwd[1] * fwd[1] + fwd[2] * fwd[2]).sqrt();
-        let fwd = [fwd[0] / fwd_len, fwd[1] / fwd_len, fwd[2] / fwd_len];
-
-        let right = [
-            up[1] * fwd[2] - up[2] * fwd[1],
-            up[2] * fwd[0] - up[0] * fwd[2],
-            up[0] * fwd[1] - up[1] * fwd[0],
-        ];
-        let right_len = (right[0] * right[0] + right[1] * right[1] + right[2] * right[2]).sqrt();
-        let right = [right[0] / right_len, right[1] / right_len, right[2] / right_len];
-
-        let up = [
-            fwd[1] * right[2] - fwd[2] * right[1],
-            fwd[2] * right[0] - fwd[0] * right[2],
-            fwd[0] * right[1] - fwd[1] * right[0],
-        ];
-
-        // View matrix (column-major): m[i] = column i, m[i][j] = row j of column i.
-        //
-        // col 0 = [right.x, up.x, -fwd.x, 0]
-        // col 1 = [right.y, up.y, -fwd.y, 0]
-        // col 2 = [right.z, up.z, -fwd.z, 0]
-        // col 3 = [-(R·E), -(U·E), F·E, 1]
-        let view = [
-            [right[0],      up[0],      -fwd[0],      0.0],
-            [right[1],      up[1],      -fwd[1],      0.0],
-            [right[2],      up[2],      -fwd[2],      0.0],
-            [-(right[0] * eye[0] + right[1] * eye[1] + right[2] * eye[2]),
-             -(up[0] * eye[0] + up[1] * eye[1] + up[2] * eye[2]),
-             fwd[0] * eye[0] + fwd[1] * eye[1] + fwd[2] * eye[2],
-             1.0],
-        ];
-
-        // view_proj = perspective * view (column-major multiplication).
-        // In standard matrix multiplication C = A * B, C[col][row] is the dot product
-        // of A's row and B's column.
-        // Here, A = self.view_proj (perspective), B = view.
-        // C[i][j] = sum_k (A[k][j] * B[i][k]).
-        let mut vp = [[0.0f32; 4]; 4];
-        for i in 0..4 {
-            for j in 0..4 {
-                for k in 0..4 {
-                    vp[i][j] += self.view_proj[k][j] * view[i][k];
-                }
-            }
-        }
-        self.view_proj = vp;
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Render system
 // ---------------------------------------------------------------------------
 
 /// Run the ECS-driven rendering pipeline.
 ///
 /// 1. Calls [`Renderer::begin_frame`] to acquire and begin the render pass.
-/// 2. Queries the ECS `World` for entities with [`Transform`] + [`MeshHandle`].
-/// 3. Calls [`Renderer::draw_mesh`] for each entity (with its model matrix).
-/// 4. Calls [`Renderer::end_frame`] to submit and present.
+/// 2. Uploads frame UBO data (view-proj, camera pos, light).
+/// 3. Queries the ECS `World` for entities with [`Transform`] + [`MeshHandle`].
+/// 4. Calls [`Renderer::draw_mesh`] for each entity (with its model matrix).
+/// 5. Calls [`Renderer::end_frame`] to submit and present.
 ///
 /// `meshes` is the externally-owned mesh list indexed by [`MeshHandle`].
 pub fn render_system(
@@ -195,18 +100,25 @@ pub fn render_system(
     world: &World,
     meshes: &[Mesh],
     clear_color: [f32; 4],
-    camera: Option<&Camera>,
+    camera: &OrbitCamera,
+    light_data: &FrameUBOData,
 ) {
+    let aspect = renderer.extent().width as f32 / renderer.extent().height as f32;
+
     if let Err(e) = renderer.begin_frame(clear_color) {
         log::error!("renderer.begin_frame failed: {e}");
         return;
     }
 
-    // Update camera UBO.
-    if let Some(cam) = camera {
-        if let Err(e) = renderer.set_view_proj(&cam.view_proj) {
-            log::error!("renderer.set_view_proj failed: {e}");
-        }
+    // Build the full frame data from camera + light.
+    let frame_data = FrameUBOData {
+        view_proj: camera.view_proj(aspect),
+        camera_position: [camera.eye()[0], camera.eye()[1], camera.eye()[2], 0.0],
+        light_direction: light_data.light_direction,
+        light_color: light_data.light_color,
+    };
+    if let Err(e) = renderer.set_frame_data(&frame_data) {
+        log::error!("renderer.set_frame_data failed: {e}");
     }
 
     // Draw ECS entities with Mesh + Transform.

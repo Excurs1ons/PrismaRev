@@ -2,7 +2,7 @@
 //!
 //! A [`Mesh`] owns device-local vertex/index buffers and knows how to upload
 //! data through a staging buffer. The vertex format is interleaved
-//! `(position: [f32; 3], color: [f32; 3])` — see [`Vertex`].
+//! `(position: [f32; 3], normal: [f32; 3], color: [f32; 3])` — see [`Vertex`].
 
 use anyhow::Context as _;
 use ash::vk;
@@ -10,12 +10,13 @@ use ash::vk;
 use crate::buffer::{self, BufferUsage, MemoryProperties};
 use crate::context::VulkanContext;
 
-/// A single vertex: position + color (interleaved).
+/// A single vertex: position + normal + color (interleaved).
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub struct Vertex {
     pub position: [f32; 3],
-    pub color: [f32; 3],
+    pub normal:   [f32; 3],
+    pub color:    [f32; 3],
 }
 
 impl Vertex {
@@ -27,19 +28,24 @@ impl Vertex {
             .input_rate(vk::VertexInputRate::VERTEX)
     }
 
-    /// Attribute descriptions: position (location 0), color (location 1).
-    pub fn attribute_descriptions() -> [vk::VertexInputAttributeDescription; 2] {
+    /// Attribute descriptions: position (location 0), normal (location 1), color (location 2).
+    pub fn attribute_descriptions() -> [vk::VertexInputAttributeDescription; 3] {
         let position = vk::VertexInputAttributeDescription::default()
             .location(0)
             .binding(0)
             .format(vk::Format::R32G32B32_SFLOAT)
             .offset(0);
-        let color = vk::VertexInputAttributeDescription::default()
+        let normal = vk::VertexInputAttributeDescription::default()
             .location(1)
             .binding(0)
             .format(vk::Format::R32G32B32_SFLOAT)
             .offset(3 * std::mem::size_of::<f32>() as u32);
-        [position, color]
+        let color = vk::VertexInputAttributeDescription::default()
+            .location(2)
+            .binding(0)
+            .format(vk::Format::R32G32B32_SFLOAT)
+            .offset(6 * std::mem::size_of::<f32>() as u32);
+        [position, normal, color]
     }
 }
 
