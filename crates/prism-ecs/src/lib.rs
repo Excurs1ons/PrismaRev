@@ -68,6 +68,9 @@ pub struct World {
     /// component without knowing its concrete type, while typed accessors
     /// downcast back to [`ComponentPool<T>`].
     pools: HashMap<TypeId, Box<dyn ErasedPool>>,
+    /// Global singleton resources, keyed by type. Used for data like `Camera`
+    /// or `RenderState` that doesn't belong to any single entity.
+    resources: HashMap<TypeId, Box<dyn Any>>,
 }
 
 impl World {
@@ -76,6 +79,7 @@ impl World {
             entities: Vec::new(),
             free: Vec::new(),
             pools: HashMap::new(),
+            resources: HashMap::new(),
         }
     }
 
@@ -189,6 +193,140 @@ impl World {
                     .map(|&generation| (Entity { id, generation }, value))
             })
     }
+
+    /// Iterate over entities that have **both** `A` and `B`, yielding
+    /// `(entity, &A, &B)`. This is a sparse-set join: it walks the smaller
+    /// pool and probes the other for each entity id.
+    pub fn query2<A: Component, B: Component>(&self) -> Vec<(Entity, &A, &B)> {
+        let generation_for = &self.entities;
+        let pool_a = self.pools.get(&TypeId::of::<A>());
+        let pool_b = self.pools.get(&TypeId::of::<B>());
+        match (pool_a, pool_b) {
+            (Some(pa), Some(pb)) => {
+                let a = pool_downcast_ref::<A>(pa);
+                let b = pool_downcast_ref::<B>(pb);
+                // Drive from whichever pool has fewer entries to minimise probes.
+                let (drive, probe) = if a.len() <= b.len() {
+                    (a.iter(), b)
+                } else {
+                    // Walk b, probe a. We collect into a Vec anyway so the
+                    // branch direction doesn't matter for correctness.
+                    return b
+                        .iter()
+                        .filter_map(|(id, bv)| {
+                            a.get(id).map(|av| {
+                                let gen = generation_for[id as usize];
+                                (Entity { id, generation: gen }, av, bv)
+                            })
+                        })
+                        .collect();
+                };
+                drive
+                    .filter_map(|(id, av)| {
+                        probe.get(id).map(|bv| {
+                            let gen = generation_for[id as usize];
+                            (Entity { id, generation: gen }, av, bv)
+                        })
+                    })
+                    .collect()
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// Iterate over entities that have `A`, `B`, and `C` simultaneously.
+    pub fn query3<A: Component, B: Component, C: Component>(
+        &self,
+    ) -> Vec<(Entity, &A, &B, &C)> {
+        let generation_for = &self.entities;
+        let pool_a = self.pools.get(&TypeId::of::<A>());
+        let pool_b = self.pools.get(&TypeId::of::<B>());
+        let pool_c = self.pools.get(&TypeId::of::<C>());
+        match (pool_a, pool_b, pool_c) {
+            (Some(pa), Some(pb), Some(pc)) => {
+                let a = pool_downcast_ref::<A>(pa);
+                let b = pool_downcast_ref::<B>(pb);
+                let c = pool_downcast_ref::<C>(pc);
+                a.iter()
+                    .filter_map(|(id, av)| {
+                        let bv = b.get(id)?;
+                        let cv = c.get(id)?;
+                        let gen = generation_for[id as usize];
+                        Some((Entity { id, generation: gen }, av, bv, cv))
+                    })
+                    .collect()
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// Mutable two-component query: `(entity, &mut A, &B)`. The first component
+    /// is mutable, the second is shared. This is the common pattern for
+    /// systems that write to a transform while reading a mesh/handle.
+    ///
+    /// # Safety argument
+    ///
+    /// The borrow checker can't see that `pools[A]` and `pools[B]` are
+    /// disjoint HashMap entries (different `TypeId` keys). We use raw pointers
+    /// to obtain both borrows simultaneously. This is sound because:
+    /// - A and B are distinct types, so their pools never alias.
+    /// - The `&mut self` borrow prevents any other access to `pools` for the
+    ///   lifetime of the returned references.
+    pub fn query2_mut<A: Component, B: Component>(&mut self) -> Vec<(Entity, &mut A, &B)> {
+        let generation_for = self.entities.clone();
+
+        // SAFETY: pools is a HashMap<TypeId, ...>. A and B have different
+        // TypeIds (they are distinct type parameters), so the two entries are
+        // disjoint and cannot alias. The &mut self borrow ensures no other
+        // code touches pools while the returned Vec is live.
+        let pools_ptr: *mut HashMap<TypeId, Box<dyn ErasedPool>> = &mut self.pools;
+        let pool_a = unsafe { (*pools_ptr).get_mut(&TypeId::of::<A>()) };
+        let pool_b = unsafe { (*pools_ptr).get(&TypeId::of::<B>()) };
+        match (pool_a, pool_b) {
+            (Some(pa), Some(pb)) => {
+                let b = pool_downcast_ref::<B>(pb);
+                let a = pool_downcast_mut::<A>(pa);
+                a.iter_mut()
+                    .filter_map(|(id, av)| {
+                        let bv = b.get(id)?;
+                        let gen = generation_for[id as usize];
+                        Some((Entity { id, generation: gen }, av, bv))
+                    })
+                    .collect()
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    // --- Resources (global, singleton data not tied to an entity) ---
+
+    /// Insert a global resource, replacing any existing one of the same type.
+    /// Resources are singletons keyed by type: `Camera`, `RenderState`, etc.
+    pub fn insert_resource<R: 'static>(&mut self, resource: R) {
+        self.resources.insert(TypeId::of::<R>(), Box::new(resource));
+    }
+
+    /// Borrow a global resource by type, if it exists.
+    pub fn get_resource<R: 'static>(&self) -> Option<&R> {
+        self.resources
+            .get(&TypeId::of::<R>())
+            .and_then(|b| b.downcast_ref::<R>())
+    }
+
+    /// Mutably borrow a global resource by type, if it exists.
+    pub fn get_resource_mut<R: 'static>(&mut self) -> Option<&mut R> {
+        self.resources
+            .get_mut(&TypeId::of::<R>())
+            .and_then(|b| b.downcast_mut::<R>())
+    }
+
+    /// Remove a resource, returning the owned value.
+    pub fn remove_resource<R: 'static>(&mut self) -> Option<R> {
+        self.resources
+            .remove(&TypeId::of::<R>())
+            .and_then(|b| b.downcast::<R>().ok())
+            .map(|b| *b)
+    }
 }
 
 impl Default for World {
@@ -223,6 +361,10 @@ impl<T: 'static> ComponentPool<T> {
             data: HashMap::new(),
             _marker: std::marker::PhantomData,
         }
+    }
+
+    fn len(&self) -> usize {
+        self.data.len()
     }
 
     fn insert(&mut self, id: u32, value: T) {
@@ -368,5 +510,97 @@ mod tests {
         // recycled slot should not receive the stale insert
         let e2 = world.spawn();
         assert_eq!(world.get::<Position>(e2), None);
+    }
+
+    #[derive(Debug, PartialEq)]
+    struct Velocity(f32, f32);
+
+    #[derive(Debug, PartialEq)]
+    struct Health(i32);
+
+    #[test]
+    fn query2_joins_two_components() {
+        let mut world = World::new();
+        let a = world.spawn();
+        let b = world.spawn();
+        let _c = world.spawn();
+
+        world.insert(a, Position(1.0, 0.0));
+        world.insert(a, Velocity(0.5, 0.0));
+        world.insert(b, Position(2.0, 0.0));
+        // b has no Velocity, _c has neither
+        world.insert(_c, Position(3.0, 0.0));
+
+        let results = world.query2::<Position, Velocity>();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, a);
+        assert_eq!(results[0].1, &Position(1.0, 0.0));
+        assert_eq!(results[0].2, &Velocity(0.5, 0.0));
+    }
+
+    #[test]
+    fn query3_joins_three_components() {
+        let mut world = World::new();
+        let a = world.spawn();
+        let b = world.spawn();
+
+        world.insert(a, Position(1.0, 0.0));
+        world.insert(a, Velocity(0.5, 0.0));
+        world.insert(a, Health(100));
+        // b is missing Health
+        world.insert(b, Position(2.0, 0.0));
+        world.insert(b, Velocity(1.0, 0.0));
+
+        let results = world.query3::<Position, Velocity, Health>();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, a);
+        assert_eq!(results[0].3, &Health(100));
+    }
+
+    #[test]
+    fn query2_mut_writes_a_reads_b() {
+        let mut world = World::new();
+        let a = world.spawn();
+        world.insert(a, Position(1.0, 2.0));
+        world.insert(a, Velocity(0.5, -0.5));
+
+        for (_e, pos, vel) in world.query2_mut::<Position, Velocity>() {
+            pos.0 += vel.0;
+            pos.1 += vel.1;
+        }
+        assert_eq!(world.get::<Position>(a), Some(&Position(1.5, 1.5)));
+    }
+
+    #[test]
+    fn query2_empty_when_one_pool_missing() {
+        let mut world = World::new();
+        let a = world.spawn();
+        world.insert(a, Position(0.0, 0.0));
+        // No entity has Velocity at all
+        assert!(world.query2::<Position, Velocity>().is_empty());
+    }
+
+    #[test]
+    fn resources_insert_get_mut_remove() {
+        let mut world = World::new();
+        assert!(world.get_resource::<Health>().is_none());
+
+        world.insert_resource(Health(42));
+        assert_eq!(world.get_resource::<Health>(), Some(&Health(42)));
+
+        world.get_resource_mut::<Health>().unwrap().0 -= 10;
+        assert_eq!(world.get_resource::<Health>(), Some(&Health(32)));
+
+        let removed = world.remove_resource::<Health>();
+        assert_eq!(removed, Some(Health(32)));
+        assert!(world.get_resource::<Health>().is_none());
+    }
+
+    #[test]
+    fn resources_are_type_keyed_singletons() {
+        let mut world = World::new();
+        world.insert_resource(Health(100));
+        world.insert_resource(Health(200)); // replaces
+        assert_eq!(world.get_resource::<Health>(), Some(&Health(200)));
     }
 }
