@@ -152,8 +152,8 @@ pub fn render_system(
     let (display_aspect, surface_rotation) = renderer.orientation();
     log::debug!("render_system: display_aspect={:.4}", display_aspect);
     camera.set_aspect(display_aspect);
-    let mut view_proj = camera.view_proj();
-    view_proj = mat_mul(&surface_rotation, &view_proj);
+        let mut view_proj = camera.view_proj();
+        view_proj = mat_mul(&surface_rotation, &view_proj);
 
     // Build the full frame data from camera + light.
     let frame_data = FrameUBOData {

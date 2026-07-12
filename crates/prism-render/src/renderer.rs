@@ -401,7 +401,8 @@ impl Renderer {
 
         // Column-major CCW rotation about Z, applied in NDC clip space. This is
         // the inverse of the compositor's (clockwise) `current_transform`.
-        let (c, s) = angle.sin_cos();
+        // NOTE: `f32::sin_cos` returns `(sin, cos)` — bind `s` first.
+        let (s, c) = angle.sin_cos();
         let rotation = [
             [c, s, 0.0, 0.0],
             [-s, c, 0.0, 0.0],

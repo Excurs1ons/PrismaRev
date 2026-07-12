@@ -327,19 +327,10 @@ fn create_swapchain(
 
     let format = choose_surface_format(&formats);
     let extent = choose_extent(&capabilities);
-    // On desktop the presentation engine shows the swapchain image exactly as
-    // rendered — it never rotates a landscape window. Some desktop drivers
-    // still report a bogus `current_transform` (e.g. `ROTATE_90`); honoring it
-    // would make us pre-rotate the scene while the compositor does *not*
-    // counter-rotate, leaving the image rotated 90° on screen. So on non-Android
-    // we always request `IDENTITY` and render the window's natural orientation.
-    // Android reports a real compositor transform (portrait-native buffer →
-    // landscape screen) that we must honor so the scene comes out upright.
-    let pre_transform = if cfg!(target_os = "android") {
-        capabilities.current_transform
-    } else {
-        vk::SurfaceTransformFlagsKHR::IDENTITY
-    };
+    // Honor the presentation engine's current orientation. On a landscape app
+    // running on a portrait-native device this is `ROTATE_90`/`ROTATE_270`, so
+    // the compositor rotates the (portrait) swapchain buffer to landscape.
+    let pre_transform = capabilities.current_transform;
     let image_count = capabilities.min_image_count + 1;
     let image_count = if capabilities.max_image_count > 0 {
         image_count.min(capabilities.max_image_count)

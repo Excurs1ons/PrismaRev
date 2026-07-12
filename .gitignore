@@ -18,3 +18,6 @@ android/app/src/main/jniLibs/
 
 # Screenshot / debug capture artifacts
 *.png
+
+# Debug frame captures
+frame_*.ppm
