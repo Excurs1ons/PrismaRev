@@ -79,7 +79,6 @@ fn push_constant_range() -> vk::PushConstantRange {
 // ---------------------------------------------------------------------------
 
 pub struct Renderer {
-    pub(crate) context: Arc<VulkanContext>,
     swapchain: Option<Swapchain>,
     command_pool: vk::CommandPool,
     command_buffers: Vec<vk::CommandBuffer>,
@@ -90,7 +89,13 @@ pub struct Renderer {
     framebuffers: Framebuffers,
     depth_images: Vec<DepthImage>,
     pipeline: GraphicsPipeline,
+    // `descriptor_layout`/`descriptor_pool` are stored only to own the Vulkan
+    // objects their handles reference (the pipeline's layout, and the pools the
+    // frame UBOs' descriptor sets were allocated from). They are never read
+    // after creation — their only job is to be dropped in the correct order.
+    #[allow(dead_code)]
     descriptor_layout: DescriptorLayout,
+    #[allow(dead_code)]
     descriptor_pool: DescriptorPool,
     frame_ubos: Vec<FrameUBO>,
 
@@ -107,6 +112,11 @@ pub struct Renderer {
     // Frame capture (debugging)
     capture_next: bool,
     capture_data: Option<Vec<u8>>,
+
+    // Device context is declared LAST so it outlives every Vulkan resource
+    // above: Rust drops struct fields in declaration order, and each resource
+    // now frees itself via its own `Drop` using a cloned `ash::Device`.
+    pub(crate) context: Arc<VulkanContext>,
 }
 
 impl Renderer {
@@ -983,28 +993,19 @@ impl Drop for Renderer {
         let device = &self.context.device;
         unsafe { device.device_wait_idle().ok() };
 
-        // Destroy per-frame frame UBOs.
-        for mut ubo in self.frame_ubos.drain(..) {
-            unsafe { ubo.destroy(device) };
-        }
+        // Depth images, framebuffers, and the swapchain are not RAII (they have
+        // no `Drop`), so they are destroyed explicitly here. The pipeline,
+        // render pass, descriptor layout/pool, and frame UBOs free themselves
+        // via their own `Drop` impls when these fields are dropped after this
+        // method returns.
 
         // Destroy depth images.
         for mut depth in self.depth_images.drain(..) {
             unsafe { depth.destroy(device) };
         }
 
-        // Destroy pipeline.
-        unsafe { self.pipeline.destroy(device) };
-
         // Destroy framebuffers.
         unsafe { self.framebuffers.destroy(device) };
-
-        // Destroy render pass.
-        unsafe { self.render_pass.destroy(device) };
-
-        // Destroy descriptor pool & layout.
-        unsafe { self.descriptor_pool.destroy(device) };
-        unsafe { self.descriptor_layout.destroy(device) };
 
         // Destroy shader modules.
         unsafe { device.destroy_shader_module(self.vert_module, None) };

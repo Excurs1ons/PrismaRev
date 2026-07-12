@@ -16,6 +16,9 @@ use ash::vk;
 pub struct GraphicsPipeline {
     pub pipeline: vk::Pipeline,
     pub layout: vk::PipelineLayout,
+    /// Cloned device handle kept so [`Drop`] can free the pipeline without an
+    /// explicit `destroy` call (RAII).
+    device: ash::Device,
 }
 
 impl GraphicsPipeline {
@@ -127,24 +130,19 @@ impl GraphicsPipeline {
         .map_err(|(_, e)| e)
         .context("create graphics pipeline")?[0];
 
-        Ok(Self { pipeline, layout })
-    }
-}
-
-impl GraphicsPipeline {
-    /// Destroy the pipeline and its layout.
-    ///
-    /// # Safety
-    ///
-    /// `device` must be a valid `ash::Device` that created these resources.
-    pub unsafe fn destroy(&mut self, device: &ash::Device) {
-        unsafe { device.destroy_pipeline(self.pipeline, None) };
-        unsafe { device.destroy_pipeline_layout(self.layout, None) };
+        Ok(Self {
+            pipeline,
+            layout,
+            device: device.clone(),
+        })
     }
 }
 
 impl Drop for GraphicsPipeline {
     fn drop(&mut self) {
-        log::warn!("GraphicsPipeline dropped without explicit destroy; device may leak");
+        unsafe {
+            self.device.destroy_pipeline(self.pipeline, None);
+            self.device.destroy_pipeline_layout(self.layout, None);
+        }
     }
 }

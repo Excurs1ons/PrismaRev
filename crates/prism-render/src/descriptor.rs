@@ -13,6 +13,8 @@ use crate::context::VulkanContext;
 /// Layout for the camera UBO descriptor set (set = 0, binding = 0).
 pub struct DescriptorLayout {
     pub layout: vk::DescriptorSetLayout,
+    /// Cloned device handle kept so [`Drop`] can free the layout (RAII).
+    device: ash::Device,
 }
 
 impl DescriptorLayout {
@@ -26,7 +28,10 @@ impl DescriptorLayout {
         let create_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
         let layout = unsafe { device.create_descriptor_set_layout(&create_info, None) }
             .context("create descriptor set layout")?;
-        Ok(Self { layout })
+        Ok(Self {
+            layout,
+            device: device.clone(),
+        })
     }
 
     /// Create a pipeline layout array with just this layout (for convenience).
@@ -35,26 +40,17 @@ impl DescriptorLayout {
     }
 }
 
-impl DescriptorLayout {
-    /// Destroy the descriptor set layout.
-    ///
-    /// # Safety
-    ///
-    /// `device` must be a valid `ash::Device` that created this layout.
-    pub unsafe fn destroy(&mut self, device: &ash::Device) {
-        unsafe { device.destroy_descriptor_set_layout(self.layout, None) };
-    }
-}
-
 impl Drop for DescriptorLayout {
     fn drop(&mut self) {
-        log::warn!("DescriptorLayout dropped without explicit destroy");
+        unsafe { self.device.destroy_descriptor_set_layout(self.layout, None) };
     }
 }
 
 /// Descriptor pool sized for `max_frames` descriptor sets (each with 1 UBO).
 pub struct DescriptorPool {
     pub pool: vk::DescriptorPool,
+    /// Cloned device handle kept so [`Drop`] can free the pool (RAII).
+    device: ash::Device,
 }
 
 impl DescriptorPool {
@@ -69,7 +65,10 @@ impl DescriptorPool {
             .pool_sizes(&pool_sizes);
         let pool = unsafe { device.create_descriptor_pool(&create_info, None) }
             .context("create descriptor pool")?;
-        Ok(Self { pool })
+        Ok(Self {
+            pool,
+            device: device.clone(),
+        })
     }
 
     /// Allocate one descriptor set from the pool for each frame.
@@ -89,20 +88,9 @@ impl DescriptorPool {
     }
 }
 
-impl DescriptorPool {
-    /// Destroy the descriptor pool.
-    ///
-    /// # Safety
-    ///
-    /// `device` must be a valid `ash::Device` that created this pool.
-    pub unsafe fn destroy(&mut self, device: &ash::Device) {
-        unsafe { device.destroy_descriptor_pool(self.pool, None) };
-    }
-}
-
 impl Drop for DescriptorPool {
     fn drop(&mut self) {
-        log::warn!("DescriptorPool dropped without explicit destroy");
+        unsafe { self.device.destroy_descriptor_pool(self.pool, None) };
     }
 }
 
@@ -122,6 +110,8 @@ pub struct FrameUBO {
     pub memory: vk::DeviceMemory,
     pub size: vk::DeviceSize,
     pub descriptor_set: vk::DescriptorSet,
+    /// Cloned device handle kept so [`Drop`] can free the buffer + memory (RAII).
+    device: ash::Device,
 }
 
 impl FrameUBO {
@@ -157,6 +147,7 @@ impl FrameUBO {
             memory,
             size,
             descriptor_set,
+            device: context.device.clone(),
         })
     }
 
@@ -176,20 +167,11 @@ impl FrameUBO {
     }
 }
 
-impl FrameUBO {
-    /// Destroy the UBO buffer and memory.
-    ///
-    /// # Safety
-    ///
-    /// `device` must be a valid `ash::Device` that created these resources.
-    pub unsafe fn destroy(&mut self, device: &ash::Device) {
-        unsafe { device.destroy_buffer(self.buffer, None) };
-        unsafe { device.free_memory(self.memory, None) };
-    }
-}
-
 impl Drop for FrameUBO {
     fn drop(&mut self) {
-        log::warn!("FrameUBO dropped without explicit destroy; device may leak");
+        unsafe {
+            self.device.destroy_buffer(self.buffer, None);
+            self.device.free_memory(self.memory, None);
+        }
     }
 }

@@ -16,6 +16,8 @@ use crate::context::VulkanContext;
 /// - Depth:  UNDEFINED → DEPTH_STENCIL_ATTACHMENT_OPTIMAL (→ stays there)
 pub struct RenderPass {
     pub handle: vk::RenderPass,
+    /// Cloned device handle kept so [`Drop`] can free the render pass (RAII).
+    device: ash::Device,
 }
 
 impl RenderPass {
@@ -82,24 +84,16 @@ impl RenderPass {
         let handle = unsafe { device.create_render_pass(&create_info, None) }
             .context("create render pass")?;
 
-        Ok(Self { handle })
-    }
-}
-
-impl RenderPass {
-    /// Destroy the render pass.
-    ///
-    /// # Safety
-    ///
-    /// `device` must be a valid `ash::Device` that created this render pass.
-    pub unsafe fn destroy(&mut self, device: &ash::Device) {
-        unsafe { device.destroy_render_pass(self.handle, None) };
+        Ok(Self {
+            handle,
+            device: device.clone(),
+        })
     }
 }
 
 impl Drop for RenderPass {
     fn drop(&mut self) {
-        log::warn!("RenderPass dropped without explicit destroy; device may leak");
+        unsafe { self.device.destroy_render_pass(self.handle, None) };
     }
 }
 
