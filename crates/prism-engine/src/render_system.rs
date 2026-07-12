@@ -112,7 +112,7 @@ pub fn render_system(
     // the swapchain's `pre_transform`. On a rotated (e.g. Android landscape)
     // surface this keeps the scene upright and correctly proportioned.
     let (display_aspect, surface_rotation) = renderer.orientation();
-    log::info!("render_system: display_aspect={:.4}", display_aspect);
+    log::debug!("render_system: display_aspect={:.4}", display_aspect);
     let mut view_proj = camera.view_proj(display_aspect);
     view_proj = mat_mul(&surface_rotation, &view_proj);
 

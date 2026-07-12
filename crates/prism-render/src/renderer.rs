@@ -26,12 +26,11 @@ use crate::mesh::{Mesh, Vertex};
 use crate::pipeline::GraphicsPipeline;
 use crate::render_pass::{DepthImage, Framebuffers, RenderPass};
 use crate::shader;
-use crate::swapchain::Swapchain;
+use crate::swapchain::{Swapchain, FRAMES_IN_FLIGHT};
 
-/// Number of frames that may overlap on the GPU. Must match the swapchain's
-/// `MAX_FRAMES_IN_FLIGHT`; each frame gets its own command buffer so recording
-/// never collides with a pending submission.
-const FRAMES_IN_FLIGHT: usize = 2;
+// Number of frames that may overlap on the GPU. Defined once in `swapchain`
+// (`FRAMES_IN_FLIGHT`) and shared here; each frame gets its own command buffer
+// so recording never collides with a pending submission.
 
 // ---------------------------------------------------------------------------
 // Embedded SPIR-V (compiled offline from shaders/*.glsl via glslc)
@@ -370,7 +369,7 @@ impl Renderer {
             display_w as f32 / display_h as f32
         };
 
-        log::info!(
+        log::debug!(
             "orientation: extent={}x{} pre_transform={:?} transform_used={} \
              display={}x{} aspect={:.4} angle={:.4}",
             extent.width,
@@ -396,37 +395,48 @@ impl Renderer {
         (aspect, rotation)
     }
 
+    /// Rebuild the swapchain-dependent resources (depth images + framebuffers)
+    /// for the currently attached swapchain.
+    ///
+    /// Call this after the swapchain itself has been (re)created — on resize,
+    /// on acquire/present out-of-date, and on resume. This centralises the
+    /// logic that used to be copy-pasted in `recreate_swapchain`, `begin_frame`,
+    /// and `end_frame`.
+    fn rebuild_dependent_resources(&mut self) -> anyhow::Result<()> {
+        let device = &self.context.device;
+        let swapchain = self
+            .swapchain
+            .as_ref()
+            .context("rebuild_dependent_resources: no swapchain")?;
+        let extent = swapchain.extent;
+        let views = &swapchain.views;
+
+        // Depth images: one per swapchain image, sized to the new extent.
+        for mut depth in self.depth_images.drain(..) {
+            unsafe { depth.destroy(device) };
+        }
+        for _ in 0..views.len() {
+            self.depth_images
+                .push(DepthImage::new(&self.context, extent)?);
+        }
+
+        // Framebuffers for the new image + depth views.
+        unsafe { self.framebuffers.destroy(device) };
+        let depth_views: Vec<vk::ImageView> =
+            self.depth_images.iter().map(|d| d.view).collect();
+        self.framebuffers =
+            Framebuffers::new(device, &self.render_pass, views, &depth_views, extent)
+                .context("recreate framebuffers")?;
+        Ok(())
+    }
+
     /// Recreate the swapchain, depth images, and framebuffers
     /// (e.g. after a window resize).
     pub fn recreate_swapchain(&mut self) -> anyhow::Result<()> {
         if let Some(swapchain) = self.swapchain.as_mut() {
             swapchain.recreate(&self.context)?;
-            let extent = swapchain.extent;
-            let device = &self.context.device;
-
-            // Rebuild depth images for the new extent.
-            for mut depth in self.depth_images.drain(..) {
-                unsafe { depth.destroy(device) };
-            }
-            for _ in 0..swapchain.views.len() {
-                self.depth_images
-                    .push(DepthImage::new(&self.context, extent)?);
-            }
-
-            // Rebuild framebuffers for the new swapchain image + depth views.
-            unsafe { self.framebuffers.destroy(device) };
-            let depth_views: Vec<vk::ImageView> =
-                self.depth_images.iter().map(|d| d.view).collect();
-            self.framebuffers = Framebuffers::new(
-                device,
-                &self.render_pass,
-                &swapchain.views,
-                &depth_views,
-                extent,
-            )
-            .context("recreate framebuffers")?;
         }
-        Ok(())
+        self.rebuild_dependent_resources()
     }
 
     /// Whether a live swapchain is attached (i.e. we are not suspended).
@@ -565,41 +575,24 @@ impl Renderer {
     /// retry on the next frame).
     pub fn begin_frame(&mut self, clear_color: [f32; 4]) -> anyhow::Result<()> {
         let device = &self.context.device;
-        let swapchain = self
-            .swapchain
-            .as_mut()
-            .context("begin_frame called with no swapchain")?;
 
         // --- acquire ---
         let (image_index, frame_index, image_available, render_finished, fence) =
-            match swapchain.acquire_next_image(device) {
+            match self
+                .swapchain
+                .as_mut()
+                .context("begin_frame called with no swapchain")?
+                .acquire_next_image(device)
+            {
                 Ok(v) => v,
                 Err(e) => {
                     let msg = format!("{e}");
                     if msg.contains("out of date") {
                         log::debug!("acquire reported out of date; recreating");
-                        swapchain.recreate(&self.context)?;
-                        let extent = swapchain.extent;
-
-                        // Rebuild depth images.
-                        for mut depth in self.depth_images.drain(..) {
-                            unsafe { depth.destroy(device) };
+                        if let Some(swapchain) = self.swapchain.as_mut() {
+                            swapchain.recreate(&self.context)?;
                         }
-                        for _ in 0..swapchain.views.len() {
-                            self.depth_images
-                                .push(DepthImage::new(&self.context, extent)?);
-                        }
-
-                        unsafe { self.framebuffers.destroy(device) };
-                        let depth_views: Vec<vk::ImageView> =
-                            self.depth_images.iter().map(|d| d.view).collect();
-                        self.framebuffers = Framebuffers::new(
-                            device,
-                            &self.render_pass,
-                            &swapchain.views,
-                            &depth_views,
-                            extent,
-                        )?;
+                        self.rebuild_dependent_resources()?;
                         return Ok(());
                     }
                     return Err(e);
@@ -638,7 +631,7 @@ impl Renderer {
             .framebuffer(self.framebuffers.get(image_index as usize))
             .render_area(vk::Rect2D {
                 offset: vk::Offset2D { x: 0, y: 0 },
-                extent: swapchain.extent,
+                extent: self.extent(),
             })
             .clear_values(&clear_values);
         unsafe {
@@ -653,15 +646,15 @@ impl Renderer {
         let viewport = vk::Viewport::default()
             .x(0.0)
             .y(0.0)
-            .width(swapchain.extent.width as f32)
-            .height(swapchain.extent.height as f32)
+            .width(self.extent().width as f32)
+            .height(self.extent().height as f32)
             .min_depth(0.0)
             .max_depth(1.0);
         unsafe { device.cmd_set_viewport(command_buffer, 0, &[viewport]) };
 
         let scissor = vk::Rect2D::default()
             .offset(vk::Offset2D { x: 0, y: 0 })
-            .extent(swapchain.extent);
+            .extent(self.extent());
         unsafe { device.cmd_set_scissor(command_buffer, 0, &[scissor]) };
 
         // --- bind pipeline & descriptor set ---
@@ -778,8 +771,8 @@ impl Renderer {
             .current
             .take()
             .context("end_frame called without begin_frame")?;
-        let device = &self.context.device;
         let cmd = frame.command_buffer;
+        let device = &self.context.device;
 
         // --- end render pass ---
         unsafe { device.cmd_end_render_pass(cmd) };
@@ -822,39 +815,25 @@ impl Renderer {
         .context("queue submit")?;
 
         // --- present ---
-        let swapchain = self
+        let out_of_date = self
             .swapchain
             .as_mut()
-            .context("end_frame with no swapchain")?;
-        let out_of_date =
-            swapchain.present(self.context.graphics_queue, frame.image_index, frame.render_finished)?;
+            .context("end_frame with no swapchain")?
+            .present(
+                self.context.graphics_queue,
+                frame.image_index,
+                frame.render_finished,
+            )?;
         if out_of_date {
             log::debug!("present reported out of date; recreating");
-            swapchain.recreate(&self.context)?;
-            let extent = swapchain.extent;
-
-            // Rebuild depth images.
-            for mut depth in self.depth_images.drain(..) {
-                unsafe { depth.destroy(device) };
+            if let Some(swapchain) = self.swapchain.as_mut() {
+                swapchain.recreate(&self.context)?;
             }
-            for _ in 0..swapchain.views.len() {
-                self.depth_images
-                    .push(DepthImage::new(&self.context, extent)?);
-            }
-
-            unsafe { self.framebuffers.destroy(device) };
-            let depth_views: Vec<vk::ImageView> =
-                self.depth_images.iter().map(|d| d.view).collect();
-            self.framebuffers = Framebuffers::new(
-                device,
-                &self.render_pass,
-                &swapchain.views,
-                &depth_views,
-                extent,
-            )?;
+            self.rebuild_dependent_resources()?;
         }
 
         // --- read back captured data (after fence signals) ---
+        let device = &self.context.device;
         if let Some(CaptureReadback { buffer, memory, size }) = capture_readback {
             unsafe { device.wait_for_fences(&[frame.fence], true, u64::MAX) }
                 .context("wait for fence after capture")?;
@@ -873,7 +852,7 @@ impl Renderer {
             unsafe { device.destroy_buffer(buffer, None) };
             unsafe { device.free_memory(memory, None) };
 
-            log::info!("captured frame ({} bytes, {}x{})", pixels.len(), swapchain.extent.width, swapchain.extent.height);
+            log::info!("captured frame ({} bytes, {}x{})", pixels.len(), self.extent().width, self.extent().height);
             self.capture_data = Some(pixels);
         }
 

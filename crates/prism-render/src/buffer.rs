@@ -130,16 +130,22 @@ pub unsafe fn upload_to_buffer(
 
     let cmd_bufs = [cmd_buf];
     let submit_info = vk::SubmitInfo::default().command_buffers(&cmd_bufs);
+
+    // Submit with a dedicated fence so we only block on THIS transfer, not the
+    // entire graphics queue (queue_wait_idle would stall unrelated work).
+    let fence = unsafe { context.device.create_fence(&vk::FenceCreateInfo::default(), None) }
+        .context("create upload fence")?;
     unsafe {
         context
             .device
-            .queue_submit(graphics_queue, &[submit_info], vk::Fence::null())
+            .queue_submit(graphics_queue, &[submit_info], fence)
     }
     .context("submit staging copy")?;
 
-    // Wait for GPU to finish before cleaning up.
-    unsafe { context.device.queue_wait_idle(graphics_queue) }
-        .context("queue wait idle after staging copy")?;
+    // Wait only for this submission to finish before cleaning up.
+    unsafe { context.device.wait_for_fences(&[fence], true, u64::MAX) }
+        .context("wait for upload fence")?;
+    unsafe { context.device.destroy_fence(fence, None) };
     unsafe { context.device.free_command_buffers(command_pool, &[cmd_buf]) };
 
     // Clean up staging resources.

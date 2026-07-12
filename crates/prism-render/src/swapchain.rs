@@ -4,14 +4,14 @@
 //! synchronization primitives used to pace acquire vs. present.
 //!
 //! Synchronization model:
-//! - `MAX_FRAMES_IN_FLIGHT` **acquire semaphores** (`image_available`),
+//! - `FRAMES_IN_FLIGHT` **acquire semaphores** (`image_available`),
 //!   rotated by `current_frame`. An acquire semaphore is only reused once its
 //!   frame's fence has been waited on, so it is guaranteed unsignaled.
 //! - One **render-finished semaphore per swapchain image**, indexed by
 //!   `image_index`. Present always waits on the semaphore that the matching
 //!   submit signaled, so a render-finished semaphore is never reused while a
 //!   present still holds it -- even when two acquires return the same index.
-//! - `MAX_FRAMES_IN_FLIGHT` fences for host pacing, rotated by `current_frame`.
+//! - `FRAMES_IN_FLIGHT` fences for host pacing, rotated by `current_frame`.
 //!
 //! With 3 swapchain images and 2 frames in flight, at least one image is
 //! always free for acquire, so no per-image fence tracking is needed.
@@ -24,7 +24,7 @@ use ash::vk;
 use crate::context::VulkanContext;
 
 /// Maximum frames submitted to the GPU ahead of the host.
-const MAX_FRAMES_IN_FLIGHT: usize = 2;
+pub(crate) const FRAMES_IN_FLIGHT: usize = 2;
 
 /// The swapchain plus the surface it presents to.
 pub struct Swapchain {
@@ -87,7 +87,7 @@ impl Swapchain {
             create_swapchain(context, surface, vk::SwapchainKHR::null())?;
         let n_images = images.len();
         let sem_info = vk::SemaphoreCreateInfo::default();
-        let image_available = (0..MAX_FRAMES_IN_FLIGHT)
+        let image_available = (0..FRAMES_IN_FLIGHT)
             .map(|_| unsafe { context.device.create_semaphore(&sem_info, None) })
             .collect::<Result<Vec<_>, _>>()
             .context("create image_available semaphores")?;
@@ -97,7 +97,7 @@ impl Swapchain {
             .context("create render_finished semaphores")?;
 
         let fence_info = vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED);
-        let in_flight_fences = (0..MAX_FRAMES_IN_FLIGHT)
+        let in_flight_fences = (0..FRAMES_IN_FLIGHT)
             .map(|_| unsafe { context.device.create_fence(&fence_info, None) })
             .collect::<Result<Vec<_>, _>>()
             .context("create in_flight fences")?;
@@ -176,7 +176,7 @@ impl Swapchain {
     /// Acquire the next image, returning `(image_index, frame, image_available,
     /// render_finished, fence)`.
     ///
-    /// Synchronization follows the vulkan-tutorial pattern: `MAX_FRAMES_IN_FLIGHT`
+    /// Synchronization follows the vulkan-tutorial pattern: `FRAMES_IN_FLIGHT`
     /// fences (rotated by `current_frame`) pace the CPU vs GPU. We wait on the
     /// current frame's fence before acquiring, so its command buffer is done and
     /// its acquire semaphore has been consumed by the prior submit. With 3
@@ -241,7 +241,7 @@ impl Swapchain {
             Err(e) => return Err(anyhow!(e).context("queue present")),
         };
 
-        self.current_frame = (self.current_frame + 1) % MAX_FRAMES_IN_FLIGHT;
+        self.current_frame = (self.current_frame + 1) % FRAMES_IN_FLIGHT;
         Ok(out_of_date)
     }
 
