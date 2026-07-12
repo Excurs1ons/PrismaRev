@@ -28,6 +28,43 @@ use crate::render_system::{render_system, MeshHandle, MeshManager, Transform};
 // Cube geometry (24 vertices, 36 indices)
 // ---------------------------------------------------------------------------
 
+/// Build the default demo scene: a sphere on the left and two cubes on the
+/// center/right, each as an ECS entity referencing a GPU mesh via
+/// [`MeshHandle`]. Returns the populated world and the mesh owner.
+fn create_test_scene(renderer: &Renderer) -> (World, MeshManager) {
+    let cube_mesh = renderer
+        .create_mesh(&cube_vertices(), Some(&cube_indices()))
+        .expect("create cube mesh");
+    let (sphere_verts, sphere_idx) = sphere_mesh(32, 24);
+    let sphere_mesh = renderer
+        .create_mesh(&sphere_verts, Some(&sphere_idx))
+        .expect("create sphere mesh");
+
+    let mut world = World::new();
+    // Left: sphere, center/right: cubes.
+    let configs = [
+        ([-2.5, 0.0, 0.0], 0usize),
+        ([0.0, 0.0, 0.0], 1),
+        ([2.5, 0.0, 0.0], 1),
+    ];
+    for &(pos, mesh_idx) in &configs {
+        let entity = world.spawn();
+        world.insert(
+            entity,
+            Transform {
+                translation: pos,
+                ..Default::default()
+            },
+        );
+        world.insert(entity, MeshHandle(mesh_idx));
+    }
+
+    let mut mesh_manager = MeshManager::new();
+    mesh_manager.add(sphere_mesh);
+    mesh_manager.add(cube_mesh);
+    (world, mesh_manager)
+}
+
 fn cube_vertices() -> Vec<Vertex> {
     // Each face: 4 corners with that face's normal, each gets a face color.
     let colors: [[f32; 3]; 6] = [
@@ -190,38 +227,7 @@ impl App {
             .expect("failed to create renderer");
 
         // --- Build test scene: sphere + cubes ---
-        let mut world = World::new();
-
-        // Create a cube mesh and a sphere mesh.
-        let cube_mesh = renderer
-            .create_mesh(&cube_vertices(), Some(&cube_indices()))
-            .expect("create cube mesh");
-        let (sphere_verts, sphere_idx) = sphere_mesh(32, 24);
-        let sphere_mesh = renderer
-            .create_mesh(&sphere_verts, Some(&sphere_idx))
-            .expect("create sphere mesh");
-
-        // Left: sphere, center/right: cubes.
-        let configs = [
-            ([-2.5, 0.0, 0.0], 0usize),
-            ([0.0, 0.0, 0.0], 1),
-            ([2.5, 0.0, 0.0], 1),
-        ];
-        for &(pos, mesh_idx) in &configs {
-            let entity = world.spawn();
-            world.insert(
-                entity,
-                Transform {
-                    translation: pos,
-                    ..Default::default()
-                },
-            );
-            world.insert(entity, MeshHandle(mesh_idx));
-        }
-
-        let mut mesh_manager = MeshManager::new();
-        mesh_manager.add(sphere_mesh);
-        mesh_manager.add(cube_mesh);
+        let (world, mesh_manager) = create_test_scene(&renderer);
 
         self.world = Some(world);
         self.mesh_manager = mesh_manager;
