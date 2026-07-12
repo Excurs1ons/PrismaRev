@@ -8,3 +8,12 @@ target
 
 # Lockfile is fine to keep for a binary/app; uncomment to ignore if desired
 # Cargo.lock
+
+# Android Gradle build outputs
+android/.gradle/
+android/build/
+android/app/build/
+android/app/src/main/jniLibs/
+
+# Screenshot / debug capture artifacts
+*.png

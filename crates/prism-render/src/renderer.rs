@@ -85,7 +85,8 @@ pub struct Renderer {
     command_pool: vk::CommandPool,
     command_buffers: Vec<vk::CommandBuffer>,
 
-    // Pipeline resources
+    // Pipeline resources (render_pass + pipeline are format-dependent and must
+    // be rebuilt if the surface format changes across suspend/resume).
     render_pass: RenderPass,
     framebuffers: Framebuffers,
     depth_images: Vec<DepthImage>,
@@ -97,6 +98,9 @@ pub struct Renderer {
     // Shader modules (kept alive until drop for safety)
     vert_module: vk::ShaderModule,
     frag_module: vk::ShaderModule,
+
+    // The color format the current render_pass was created with.
+    color_format: vk::Format,
 
     // Active frame (None between frames)
     current: Option<FrameState>,
@@ -201,6 +205,7 @@ impl Renderer {
         let command_buffers = unsafe { context.device.allocate_command_buffers(&alloc_info) }
             .context("allocate command buffers")?;
 
+        let color_format = swapchain.format.format;
         Ok(Self {
             context,
             swapchain: Some(swapchain),
@@ -215,6 +220,7 @@ impl Renderer {
             frame_ubos,
             vert_module,
             frag_module,
+            color_format,
             current: None,
             capture_next: false,
             capture_data: None,
@@ -309,6 +315,87 @@ impl Renderer {
             .unwrap_or_default()
     }
 
+    /// Display-oriented rendering parameters for the current swapchain.
+    ///
+    /// The activity is locked to landscape (see `AndroidManifest.xml`), so the
+    /// on-screen image is *always* landscape regardless of how the driver
+    /// reports the swapchain buffer. Two cases:
+    ///
+    /// - **Landscape buffer** (`width >= height`): the buffer already matches
+    ///   the display. Use its aspect ratio directly and apply no rotation.
+    /// - **Portrait buffer** (`width < height`): the panel is portrait-native
+    ///   and the compositor rotates the buffer to landscape. Swap width/height
+    ///   for the aspect ratio and pre-rotate the view-projection in clip space
+    ///   so the compositor's rotation yields an upright image.
+    ///
+    /// Driving this off the **extent's shape** (not the `current_transform`
+    /// flag) is the Occam's-razor fix. Some drivers report
+    /// `current_transform = ROTATE_90` together with an *already-landscape*
+    /// `current_extent`; the old code keyed off the flag, swapped the
+    /// (already-landscape) dimensions → portrait aspect (clipped side objects),
+    /// *and* applied a spurious 90° rotation → a rotated image. Keying off the
+    /// shape also covers the inverse driver bug (`IDENTITY` with a portrait
+    /// extent), since a portrait buffer is rotated regardless of the flag.
+    ///
+    /// Returns `(aspect_ratio, clip_space_rotation)`, a column-major 4×4 matrix
+    /// to multiply *before* the view-projection (`final = rotation * view_proj`).
+    pub fn orientation(&self) -> (f32, [[f32; 4]; 4]) {
+        use vk::SurfaceTransformFlagsKHR as T;
+        let extent = self.extent();
+        let transform = self
+            .swapchain
+            .as_ref()
+            .map(|s| s.pre_transform())
+            .unwrap_or(T::IDENTITY);
+
+        // Landscape-locked app: decide rotation by the buffer's shape, not the
+        // (unreliable) transform flag.
+        let (display_w, display_h, angle, transform_used) = if extent.width >= extent.height {
+            // Buffer already landscape: use as-is, no pre-rotation needed.
+            (extent.width, extent.height, 0.0, "IDENTITY")
+        } else {
+            // Portrait-native buffer: compositor rotates it to landscape. Pick
+            // the matching clip-space rotation; fall back to ROTATE_90 when the
+            // driver reported IDENTITY on a portrait extent (driver bug).
+            if transform.contains(T::ROTATE_270) {
+                (extent.height, extent.width, -std::f32::consts::FRAC_PI_2, "ROTATE_270")
+            } else {
+                (extent.height, extent.width, std::f32::consts::FRAC_PI_2, "ROTATE_90")
+            }
+        };
+
+        let aspect = if display_h == 0 {
+            1.0
+        } else {
+            display_w as f32 / display_h as f32
+        };
+
+        log::info!(
+            "orientation: extent={}x{} pre_transform={:?} transform_used={} \
+             display={}x{} aspect={:.4} angle={:.4}",
+            extent.width,
+            extent.height,
+            self.swapchain.as_ref().map(|s| s.pre_transform()),
+            transform_used,
+            display_w,
+            display_h,
+            aspect,
+            angle,
+        );
+
+        // Column-major CCW rotation about Z, applied in NDC clip space. This is
+        // the inverse of the compositor's (clockwise) `current_transform`.
+        let (c, s) = angle.sin_cos();
+        let rotation = [
+            [c, s, 0.0, 0.0],
+            [-s, c, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ];
+
+        (aspect, rotation)
+    }
+
     /// Recreate the swapchain, depth images, and framebuffers
     /// (e.g. after a window resize).
     pub fn recreate_swapchain(&mut self) -> anyhow::Result<()> {
@@ -341,6 +428,125 @@ impl Renderer {
         }
         Ok(())
     }
+
+    /// Whether a live swapchain is attached (i.e. we are not suspended).
+    ///
+    /// While suspended, `begin_frame` would have no surface to present to;
+    /// callers should skip rendering until [`resume_surface`](Self::resume_surface)
+    /// succeeds.
+    pub fn has_swapchain(&self) -> bool {
+        self.swapchain.is_some()
+    }
+
+    /// Tear down all surface-dependent resources in response to the window's
+    /// surface becoming invalid (e.g. Android `onPause` / screen lock, where
+    /// the OS destroys the underlying `ANativeWindow`/`VkSurfaceKHR`).
+    ///
+    /// Drops the swapchain (surface + image views + per-image semaphores +
+    /// acquire/pacing semaphores + fences), the framebuffers, and the depth
+    /// images. The `VulkanContext` (instance/device/queue), command pool,
+    /// render pass, graphics pipeline, descriptor pool/layout, frame UBOs,
+    /// and shader modules are **retained** — they are device-bound and survive
+    /// across surface recreation.
+    ///
+    /// Any in-progress frame state (`self.current`) is discarded. After this,
+    /// [`has_swapchain`](Self::has_swapchain) returns `false` until
+    /// [`resume_surface`](Self::resume_surface) rebuilds them.
+    pub fn suspend_surface(&mut self) {
+        let device = &self.context.device;
+        // Ensure no GPU work is touching the resources we're about to drop.
+        unsafe { device.device_wait_idle() }.ok();
+
+        // Drop in-progress frame state (if any).
+        self.current = None;
+
+        // Surface-dependent resources.
+        for mut depth in self.depth_images.drain(..) {
+            unsafe { depth.destroy(device) };
+        }
+        unsafe { self.framebuffers.destroy(device) };
+        if let Some(mut swapchain) = self.swapchain.take() {
+            unsafe { swapchain.destroy(device) };
+        }
+        log::info!("renderer suspended: surface-dependent resources dropped, context retained");
+    }
+
+    /// Rebuild the surface-dependent resources after the window's surface has
+    /// been invalidated (counterpart to [`suspend_surface`](Self::suspend_surface)).
+    ///
+    /// Creates a fresh `VkSurfaceKHR` from the window, rebuilds the swapchain
+    /// + image views + per-image semaphores + depth images + framebuffers.
+    /// Device-bound resources (context, render pass, pipeline, descriptors,
+    /// UBOs, command pool, shaders) are reused.
+    ///
+    /// # Safety / contract
+    ///
+    /// `window` / `window_handle` must currently refer to a *live* window
+    /// whose underlying surface is valid (e.g. called from `resumed`, after
+    /// the OS has re-created the surface). Must not be called while a
+    /// swapchain is already attached — guard with [`has_swapchain`](Self::has_swapchain).
+    pub fn resume_surface(
+        &mut self,
+        window: &dyn raw_window_handle::HasDisplayHandle,
+        window_handle: &dyn raw_window_handle::HasWindowHandle,
+    ) -> anyhow::Result<()> {
+        if self.swapchain.is_some() {
+            log::debug!("resume_surface: swapchain already attached, nothing to do");
+            return Ok(());
+        }
+
+        let device = &self.context.device;
+        let swapchain = Swapchain::new(&self.context, window, window_handle)?;
+        let extent = swapchain.extent;
+
+        // Depth images: one per swapchain image, sized to the new extent.
+        let depth_images: Vec<DepthImage> = swapchain
+            .views
+            .iter()
+            .map(|_| DepthImage::new(&self.context, extent))
+            .collect::<anyhow::Result<Vec<_>>>()
+            .context("resume: create depth images")?;
+
+        // Verify the surface format didn't change (render_pass/pipeline are
+        // format-bound, not surface-bound). Same device → same format in
+        // practice; warn if it differs so we notice if this assumption breaks.
+        if swapchain.format.format != self.render_pass_color_format() {
+            log::warn!(
+                "resume_surface: surface format changed to {:?}; render_pass expects {:?}. \
+                 Scene may render incorrectly (rebuild of render_pass+pipeline not implemented).",
+                swapchain.format.format,
+                self.render_pass_color_format(),
+            );
+        }
+
+        // Rebuild framebuffers for the new image + depth views.
+        // (self.framebuffers was emptied by suspend_surface; destroy is idempotent.)
+        unsafe { self.framebuffers.destroy(device) };
+        let depth_views: Vec<vk::ImageView> =
+            depth_images.iter().map(|d| d.view).collect();
+        let framebuffers = Framebuffers::new(
+            device,
+            &self.render_pass,
+            &swapchain.views,
+            &depth_views,
+            extent,
+        )
+        .context("resume: create framebuffers")?;
+
+        self.depth_images = depth_images;
+        self.framebuffers = framebuffers;
+        self.swapchain = Some(swapchain);
+        log::info!("renderer resumed: surface + swapchain + depth + framebuffers rebuilt");
+        Ok(())
+    }
+
+    /// The color format the render pass was created against (for resume checks).
+    fn render_pass_color_format(&self) -> vk::Format {
+        // Stored at Renderer::new() time from the chosen surface format, so it
+        // stays correct across suspend/resume even when the swapchain is None.
+        self.color_format
+    }
+
 
     // -----------------------------------------------------------------------
     // Frame lifecycle

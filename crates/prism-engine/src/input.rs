@@ -152,6 +152,14 @@ impl InputState {
         self.mouse_position = position;
     }
 
+    /// Set the pointer position without accumulating delta.
+    ///
+    /// Call on touch-start so the first subsequent move produces a correct
+    /// delta instead of a jump from the last known position.
+    pub fn set_mouse_position(&mut self, position: [f64; 2]) {
+        self.mouse_position = position;
+    }
+
     pub fn handle_mouse_button(&mut self, button: MouseButton, state: ElementState) {
         match state {
             ElementState::Pressed => {

@@ -21,6 +21,7 @@ members = [
     "crates/prism-ecs",
     "crates/prism-render",
     "crates/prism-engine",
+    "crates/prism-android",
 ]
 
 [workspace.package]

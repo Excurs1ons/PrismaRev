@@ -1,0 +1,16 @@
+[package]
+name = "prism-android"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Android cdylib entry point for PrismaRev"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+prism-engine = { path = "../prism-engine" }
+winit = { workspace = true, features = ["android-game-activity"] }
+log = { workspace = true }
+anyhow = { workspace = true }
+android_logger = "0.14"

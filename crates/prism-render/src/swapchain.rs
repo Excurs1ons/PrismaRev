@@ -34,6 +34,10 @@ pub struct Swapchain {
 
     pub extent: vk::Extent2D,
     pub format: vk::SurfaceFormatKHR,
+    /// Transform the presentation engine applies to the swapchain image before
+    /// displaying it (e.g. `ROTATE_90` on a landscape app running on a
+    /// portrait-native device). Equal to `current_transform` at creation time.
+    pub pre_transform: vk::SurfaceTransformFlagsKHR,
 
     swapchain: vk::SwapchainKHR,
     swapchain_ext: ash::khr::swapchain::Device,
@@ -78,10 +82,9 @@ impl Swapchain {
         }
         .map_err(|e| anyhow!(e).context("create surface"))?;
 
-        let (format, extent, swapchain, images, views) =
+        let (format, extent, pre_transform, swapchain, images, views) =
             create_swapchain(context, surface, vk::SwapchainKHR::null())?;
         let n_images = images.len();
-
         let sem_info = vk::SemaphoreCreateInfo::default();
         let image_available = (0..MAX_FRAMES_IN_FLIGHT)
             .map(|_| unsafe { context.device.create_semaphore(&sem_info, None) })
@@ -104,6 +107,7 @@ impl Swapchain {
             _debug_utils: None,
             extent,
             format,
+            pre_transform,
             swapchain,
             swapchain_ext: ash::khr::swapchain::Device::new(&context.instance, &context.device),
             images,
@@ -113,6 +117,13 @@ impl Swapchain {
             in_flight_fences,
             current_frame: 0,
         })
+    }
+
+    /// Transform the presentation engine applies to the swapchain image.
+    /// Used by the renderer to pre-rotate the view-projection so the final
+    /// on-screen image is upright and correctly proportioned.
+    pub fn pre_transform(&self) -> vk::SurfaceTransformFlagsKHR {
+        self.pre_transform
     }
 
     /// Recreate the swapchain for a new window size. Waits for the device to
@@ -125,7 +136,7 @@ impl Swapchain {
         let old_swapchain = self.swapchain;
         // Build the new swapchain first, handing off the old one so the
         // implementation can retire it cleanly (avoids NATIVE_WINDOW_IN_USE).
-        let (format, extent, swapchain, images, views) =
+        let (format, extent, pre_transform, swapchain, images, views) =
             create_swapchain(context, self.surface, old_swapchain).map_err(|e| {
                 log::warn!("swapchain recreate failed, keeping old swapchain: {e}");
                 e
@@ -153,6 +164,7 @@ impl Swapchain {
 
         self.format = format;
         self.extent = extent;
+        self.pre_transform = pre_transform;
         self.swapchain = swapchain;
         self.images = images;
         self.views = views;
@@ -274,6 +286,7 @@ fn create_swapchain(
 ) -> anyhow::Result<(
     vk::SurfaceFormatKHR,
     vk::Extent2D,
+    vk::SurfaceTransformFlagsKHR,
     vk::SwapchainKHR,
     Vec<vk::Image>,
     Vec<vk::ImageView>,
@@ -292,6 +305,10 @@ fn create_swapchain(
 
     let format = choose_surface_format(&formats);
     let extent = choose_extent(&capabilities);
+    // Honor the presentation engine's current orientation. On a landscape app
+    // running on a portrait-native device this is `ROTATE_90`/`ROTATE_270`, so
+    // the compositor rotates the (portrait) swapchain buffer to landscape.
+    let pre_transform = capabilities.current_transform;
     let image_count = capabilities.min_image_count + 1;
     let image_count = if capabilities.max_image_count > 0 {
         image_count.min(capabilities.max_image_count)
@@ -310,7 +327,7 @@ fn create_swapchain(
         .image_usage(vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::TRANSFER_DST)
         .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
         .queue_family_indices(&queue_families)
-        .pre_transform(capabilities.current_transform)
+        .pre_transform(pre_transform)
         .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
         .present_mode(vk::PresentModeKHR::FIFO)
         .clipped(true)
@@ -328,7 +345,7 @@ fn create_swapchain(
         .map(|image| create_image_view(context, *image, format.format))
         .collect::<anyhow::Result<Vec<_>>>()?;
 
-    Ok((format, extent, swapchain, images, views))
+    Ok((format, extent, pre_transform, swapchain, images, views))
 }
 
 fn choose_surface_format(available: &[vk::SurfaceFormatKHR]) -> vk::SurfaceFormatKHR {

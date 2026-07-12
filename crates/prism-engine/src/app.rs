@@ -21,7 +21,7 @@ use prism_render::{FrameUBOData, Mesh, Renderer, Vertex};
 
 use crate::camera::OrbitCamera;
 use crate::camera_controller::OrbitCameraController;
-use crate::input::InputState;
+use crate::input::{InputState, MouseButton};
 use crate::render_system::{render_system, MeshHandle, Transform};
 
 // ---------------------------------------------------------------------------
@@ -149,9 +149,13 @@ impl App {
         }
     }
 
-    /// Create and run the application on a new event loop.
+    /// Create and run the application on a new event loop (desktop).
     pub fn run() -> anyhow::Result<()> {
-        let event_loop = EventLoop::new()?;
+        Self::run_on_event_loop(EventLoop::new()?)
+    }
+
+    /// Run the application on an existing event loop (used by Android).
+    pub fn run_on_event_loop(event_loop: EventLoop<()>) -> anyhow::Result<()> {
         let mut app = App::new();
         event_loop.run_app(&mut app)?;
         Ok(())
@@ -229,7 +233,45 @@ impl App {
 
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        self.ensure_window(event_loop);
+        if self.window.is_none() {
+            // First start (or after full teardown): build everything.
+            self.ensure_window(event_loop);
+            return;
+        }
+        // Window already exists → this is a resume after suspend (e.g. Android
+        // screen lock/unlock). The OS invalidated the VkSurfaceKHR while we
+        // were suspended; rebuild only the surface-dependent resources,
+        // reusing the VulkanContext, render pass, pipeline, descriptors, UBOs,
+        // command pool, and shaders.
+        let Some(renderer) = self.renderer.as_mut() else { return };
+        if renderer.has_swapchain() {
+            // Already live (e.g. desktop spurious resume); nothing to do.
+            return;
+        }
+        let Some(window) = self.window.as_ref() else { return };
+        match renderer.resume_surface(window.as_ref(), window.as_ref()) {
+            Ok(()) => {
+                log::info!("resume_surface ok; resuming rendering");
+                self.needs_resize = false; // resume already sized correctly
+            }
+            Err(e) => {
+                // Don't crash — rendering stays suspended; next resize/redraw
+                // will retry. Common during transitions.
+                log::warn!("resume_surface failed (will retry): {e}");
+            }
+        }
+    }
+
+    fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
+        // The window's surface is about to become invalid (Android onPause /
+        // screen lock). Drop surface-dependent resources now so we don't
+        // touch a dead VkSurfaceKHR on the next frame. Device-bound resources
+        // are retained by the renderer for fast resume.
+        if let Some(renderer) = self.renderer.as_mut() {
+            renderer.suspend_surface();
+        }
+        // NOTE: keep self.window — on Android the winit window handle remains
+        // valid across suspend; only the underlying surface needs rebuilding.
     }
 
     fn window_event(
@@ -245,6 +287,12 @@ impl ApplicationHandler for App {
             }
             WindowEvent::Resized(size) => {
                 self.needs_resize = true;
+                log::info!(
+                    "Resized: {}x{} aspect={:.4}",
+                    size.width,
+                    size.height,
+                    if size.height > 0 { size.width as f32 / size.height as f32 } else { 0.0 },
+                );
                 if size.width > 0 && size.height > 0 {
                     let aspect = size.width as f32 / size.height as f32;
                     self.camera = OrbitCamera::new(aspect);
@@ -261,6 +309,25 @@ impl ApplicationHandler for App {
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 self.input_state.handle_scroll(delta);
+            }
+            WindowEvent::Touch(touch) => {
+                // Map single-touch drag to a left mouse drag so the existing
+                // orbit controller works unchanged on touch devices.
+                let pos = [touch.location.x, touch.location.y];
+                match touch.phase {
+                    winit::event::TouchPhase::Started => {
+                        self.input_state.set_mouse_position(pos);
+                        self.input_state
+                            .handle_mouse_button(MouseButton::Left, winit::event::ElementState::Pressed);
+                    }
+                    winit::event::TouchPhase::Moved => {
+                        self.input_state.handle_mouse_move(pos);
+                    }
+                    winit::event::TouchPhase::Ended | winit::event::TouchPhase::Cancelled => {
+                        self.input_state
+                            .handle_mouse_button(MouseButton::Left, winit::event::ElementState::Released);
+                    }
+                }
             }
             WindowEvent::KeyboardInput {
                 event:
@@ -312,6 +379,12 @@ impl ApplicationHandler for App {
 
 impl App {
     fn render_one_frame(&mut self) {
+        // Skip rendering while the surface is suspended (no swapchain).
+        let Some(renderer) = self.renderer.as_mut() else { return };
+        if !renderer.has_swapchain() {
+            return;
+        }
+
         let frame = self.frame_count;
         self.frame_count += 1;
 

@@ -103,16 +103,22 @@ pub fn render_system(
     camera: &OrbitCamera,
     light_data: &FrameUBOData,
 ) {
-    let aspect = renderer.extent().width as f32 / renderer.extent().height as f32;
-
     if let Err(e) = renderer.begin_frame(clear_color) {
         log::error!("renderer.begin_frame failed: {e}");
         return;
     }
 
+    // Display-oriented aspect ratio + clip-space rotation that compensates for
+    // the swapchain's `pre_transform`. On a rotated (e.g. Android landscape)
+    // surface this keeps the scene upright and correctly proportioned.
+    let (display_aspect, surface_rotation) = renderer.orientation();
+    log::info!("render_system: display_aspect={:.4}", display_aspect);
+    let mut view_proj = camera.view_proj(display_aspect);
+    view_proj = mat_mul(&surface_rotation, &view_proj);
+
     // Build the full frame data from camera + light.
     let frame_data = FrameUBOData {
-        view_proj: camera.view_proj(aspect),
+        view_proj,
         camera_position: [camera.eye()[0], camera.eye()[1], camera.eye()[2], 0.0],
         light_direction: light_data.light_direction,
         light_color: light_data.light_color,
@@ -138,4 +144,22 @@ pub fn render_system(
     if let Err(e) = renderer.end_frame() {
         log::error!("renderer.end_frame failed: {e}");
     }
+}
+
+/// Column-major 4×4 matrix multiply: `out = a * b`.
+///
+/// Matrices follow the same `[[f32; 4]; 4]` column-major convention used
+/// elsewhere (`out[col][row]`), so this matches `OrbitCamera::view_proj`.
+fn mat_mul(a: &[[f32; 4]; 4], b: &[[f32; 4]; 4]) -> [[f32; 4]; 4] {
+    let mut out = [[0.0f32; 4]; 4];
+    for i in 0..4 {
+        for j in 0..4 {
+            let mut sum = 0.0f32;
+            for k in 0..4 {
+                sum += a[k][j] * b[i][k];
+            }
+            out[i][j] = sum;
+        }
+    }
+    out
 }
