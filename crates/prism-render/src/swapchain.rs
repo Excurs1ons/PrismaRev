@@ -12,6 +12,7 @@
 //!   submit signaled, so a render-finished semaphore is never reused while a
 //!   present still holds it -- even when two acquires return the same index.
 //! - `MAX_FRAMES_IN_FLIGHT` fences for host pacing, rotated by `current_frame`.
+//!
 //! With 3 swapchain images and 2 frames in flight, at least one image is
 //! always free for acquire, so no per-image fence tracking is needed.
 

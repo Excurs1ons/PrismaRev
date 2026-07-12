@@ -79,6 +79,7 @@ pub struct TouchEvent {
 }
 
 /// Per-frame input snapshot (ECS Resource).
+#[derive(Default)]
 pub struct InputState {
     // Persistent (accumulated across frames)
     keys_held: rustc_hash::FxHashSet<KeyCode>,
@@ -96,17 +97,7 @@ pub struct InputState {
 
 impl InputState {
     pub fn new() -> Self {
-        Self {
-            keys_held: rustc_hash::FxHashSet::default(),
-            mouse_buttons_held: rustc_hash::FxHashSet::default(),
-            mouse_position: [0.0; 2],
-            keys_just_pressed: Vec::new(),
-            keys_just_released: Vec::new(),
-            mouse_just_pressed: Vec::new(),
-            mouse_delta: [0.0; 2],
-            scroll_delta: 0.0,
-            touches: Vec::new(),
-        }
+        Self::default()
     }
 
     /// Call at the START of each frame to reset transient state.

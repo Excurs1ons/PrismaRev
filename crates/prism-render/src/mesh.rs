@@ -73,7 +73,7 @@ impl Mesh {
         vertices: &[Vertex],
         indices: Option<&[u32]>,
     ) -> anyhow::Result<Self> {
-        let vertex_size = (vertices.len() * std::mem::size_of::<Vertex>()) as vk::DeviceSize;
+        let vertex_size = std::mem::size_of_val(vertices) as vk::DeviceSize;
 
         // Vertex buffer (device-local).
         let (vertex_buffer, vertex_memory) = buffer::create_buffer(
@@ -87,7 +87,7 @@ impl Mesh {
         let vertex_bytes = unsafe {
             std::slice::from_raw_parts(
                 vertices.as_ptr() as *const u8,
-                vertices.len() * std::mem::size_of::<Vertex>(),
+                std::mem::size_of_val(vertices),
             )
         };
         unsafe {
@@ -104,7 +104,7 @@ impl Mesh {
 
         // Index buffer (optional).
         let (index_buffer, index_memory, index_count) = if let Some(indices) = indices {
-            let index_size = (indices.len() * std::mem::size_of::<u32>()) as vk::DeviceSize;
+            let index_size = std::mem::size_of_val(indices) as vk::DeviceSize;
             let (buf, mem) = buffer::create_buffer(
                 context,
                 index_size,
@@ -116,7 +116,7 @@ impl Mesh {
             let index_bytes = unsafe {
                 std::slice::from_raw_parts(
                     indices.as_ptr() as *const u8,
-                    indices.len() * std::mem::size_of::<u32>(),
+                    std::mem::size_of_val(indices),
                 )
             };
             unsafe {

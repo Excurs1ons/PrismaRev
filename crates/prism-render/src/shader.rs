@@ -16,14 +16,14 @@ pub fn load_shader_module(
     code: &[u8],
 ) -> anyhow::Result<vk::ShaderModule> {
     assert!(
-        code.len() % 4 == 0,
+        code.len().is_multiple_of(4),
         "SPIR-V bytecode length ({}) must be a multiple of 4",
         code.len()
     );
 
     // Align to u32. `include_bytes!` doesn't guarantee alignment, so we try
     // `align_to` first and fall back to a safe copy when misaligned.
-    let words: Vec<u32> = if code.as_ptr() as usize % 4 == 0 {
+    let words: Vec<u32> = if (code.as_ptr() as usize).is_multiple_of(4) {
         // Already aligned — reinterpret without copying.
         let words = unsafe {
             std::slice::from_raw_parts(code.as_ptr() as *const u32, code.len() / 4)

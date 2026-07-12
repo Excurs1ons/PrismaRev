@@ -1,5 +1,6 @@
-# Hidden folders (.*)
+# Hidden folders (.*) — but keep CI config tracked
 .*/
+!.github/
 
 # Rust build artifacts
 /target

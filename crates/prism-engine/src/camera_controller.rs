@@ -27,7 +27,7 @@ impl OrbitCameraController {
         let scroll = input.scroll_delta() as f32;
         if scroll.abs() > 0.0 {
             camera.distance *= 1.0 - scroll * self.scroll_sensitivity;
-            camera.distance = camera.distance.max(0.1).min(1000.0);
+            camera.distance = camera.distance.clamp(0.1, 1000.0);
         }
     }
 }

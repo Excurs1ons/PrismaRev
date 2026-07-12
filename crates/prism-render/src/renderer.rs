@@ -476,8 +476,8 @@ impl Renderer {
     ///
     /// Creates a fresh `VkSurfaceKHR` from the window, rebuilds the swapchain
     /// + image views + per-image semaphores + depth images + framebuffers.
-    /// Device-bound resources (context, render pass, pipeline, descriptors,
-    /// UBOs, command pool, shaders) are reused.
+    ///   Device-bound resources (context, render pass, pipeline, descriptors,
+    ///   UBOs, command pool, shaders) are reused.
     ///
     /// # Safety / contract
     ///

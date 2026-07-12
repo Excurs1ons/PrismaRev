@@ -292,8 +292,10 @@ mod tests {
     #[test]
     fn caps_any_ray_tracing_requires_accel_struct() {
         // RT pipeline alone (without accel struct) is not usable.
-        let mut caps = RayTracingCaps::default();
-        caps.ray_tracing_pipeline = true;
+        let mut caps = RayTracingCaps {
+            ray_tracing_pipeline: true,
+            ..Default::default()
+        };
         assert!(!caps.any_ray_tracing());
         assert!(!caps.has_rt_pipeline());
 
@@ -305,9 +307,11 @@ mod tests {
 
     #[test]
     fn caps_ray_query_independent_of_rt_pipeline() {
-        let mut caps = RayTracingCaps::default();
-        caps.acceleration_structure = true;
-        caps.ray_query = true;
+        let caps = RayTracingCaps {
+            acceleration_structure: true,
+            ray_query: true,
+            ..Default::default()
+        };
         assert!(caps.has_ray_query());
         assert!(!caps.has_rt_pipeline());
         assert!(caps.any_ray_tracing());
@@ -315,11 +319,13 @@ mod tests {
 
     #[test]
     fn caps_display_includes_sbt_when_rt_pipeline() {
-        let mut caps = RayTracingCaps::default();
-        caps.ray_tracing_pipeline = true;
-        caps.acceleration_structure = true;
-        caps.max_recursion_depth = 31;
-        caps.shader_group_handle_size = 32;
+        let caps = RayTracingCaps {
+            ray_tracing_pipeline: true,
+            acceleration_structure: true,
+            max_recursion_depth: 31,
+            shader_group_handle_size: 32,
+            ..Default::default()
+        };
         let s = format!("{caps}");
         assert!(s.contains("max_recursion=31"));
         assert!(s.contains("handle_size=32"));
@@ -327,10 +333,12 @@ mod tests {
 
     #[test]
     fn rt_extension_names_full_rt_pipeline() {
-        let mut caps = RayTracingCaps::default();
-        caps.acceleration_structure = true;
-        caps.ray_tracing_pipeline = true;
-        caps.ray_query = true;
+        let caps = RayTracingCaps {
+            acceleration_structure: true,
+            ray_tracing_pipeline: true,
+            ray_query: true,
+            ..Default::default()
+        };
         let names = rt_extension_names(&caps);
         // accel + deferred + rt_pipeline + pipeline_library + ray_query
         assert_eq!(names.len(), 5);
@@ -349,9 +357,11 @@ mod tests {
 
     #[test]
     fn rt_extension_names_ray_query_only() {
-        let mut caps = RayTracingCaps::default();
-        caps.acceleration_structure = true;
-        caps.ray_query = true;
+        let caps = RayTracingCaps {
+            acceleration_structure: true,
+            ray_query: true,
+            ..Default::default()
+        };
         let names = rt_extension_names(&caps);
         // accel + deferred + ray_query (no rt_pipeline, no pipeline_library)
         assert_eq!(names.len(), 3);

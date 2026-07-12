@@ -58,13 +58,13 @@ fn cube_vertices() -> Vec<Vertex> {
     );
 
     let mut verts = Vec::with_capacity(24);
-    for face in 0..6 {
+    for (face, &color) in colors.iter().enumerate() {
         for corner in 0..4 {
             let idx = face * 4 + corner;
             verts.push(Vertex {
                 position: positions[idx],
                 normal: normals[idx],
-                color: colors[face],
+                color,
             });
         }
     }
