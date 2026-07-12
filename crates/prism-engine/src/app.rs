@@ -450,22 +450,6 @@ impl App {
         };
 
         render_system(renderer, world, meshes, clear_color, &mut self.camera, &light_data);
-
-        // Check for captured pixel data.
-        if let Some(pixels) = renderer.take_capture_data() {
-            let extent = renderer.extent();
-            let path = std::path::Path::new("frame_000.ppm");
-            match Renderer::save_bgra_as_ppm(path, &pixels, extent.width, extent.height) {
-                Ok(bytes) => log::info!(
-                    "saved capture to {} ({} bytes, {}x{})",
-                    path.display(),
-                    bytes,
-                    extent.width,
-                    extent.height,
-                ),
-                Err(e) => log::error!("failed to save frame capture: {e}"),
-            }
-        }
     }
 }
 

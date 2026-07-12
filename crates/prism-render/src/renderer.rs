@@ -19,7 +19,6 @@ use std::sync::Arc;
 use anyhow::Context as _;
 use ash::vk;
 
-use crate::buffer;
 use crate::context::VulkanContext;
 use crate::descriptor::{DescriptorLayout, DescriptorPool, FrameUBO, FrameUBOData};
 use crate::mesh::{Mesh, Vertex};
@@ -51,13 +50,6 @@ struct FrameState {
     render_finished: vk::Semaphore,
     fence: vk::Fence,
     command_buffer: vk::CommandBuffer,
-}
-
-/// Temporary readback resources for a single frame-capture request.
-struct CaptureReadback {
-    buffer: vk::Buffer,
-    memory: vk::DeviceMemory,
-    size: vk::DeviceSize,
 }
 
 // ---------------------------------------------------------------------------
@@ -108,10 +100,6 @@ pub struct Renderer {
 
     // Active frame (None between frames)
     current: Option<FrameState>,
-
-    // Frame capture (debugging)
-    capture_next: bool,
-    capture_data: Option<Vec<u8>>,
 
     // Device context is declared LAST so it outlives every Vulkan resource
     // above: Rust drops struct fields in declaration order, and each resource
@@ -231,30 +219,12 @@ impl Renderer {
             frag_module,
             color_format,
             current: None,
-            capture_next: false,
-            capture_data: None,
         })
     }
 
     /// Reference to the device context.
     pub fn context(&self) -> &VulkanContext {
         &self.context
-    }
-
-    /// Request that the next frame be captured (BGRA 8-bit per channel).
-    /// After the next [`end_frame`](Self::end_frame), call
-    /// [`take_capture_data`](Self::take_capture_data) to retrieve the pixels.
-    pub fn request_capture(&mut self) {
-        self.capture_next = true;
-    }
-
-    /// Take the captured pixel data from the last captured frame.
-    /// Returns `None` if no capture has been performed since the last call.
-    ///
-    /// Format: BGRA 8-bit per channel, tightly packed, top-left origin
-    /// (same layout as the swapchain image).
-    pub fn take_capture_data(&mut self) -> Option<Vec<u8>> {
-        self.capture_data.take()
     }
 
     /// Create a GPU mesh from vertex (and optional index) data.
@@ -270,50 +240,6 @@ impl Renderer {
             vertices,
             indices,
         )
-    }
-
-    /// Save captured pixel data (BGRA 8bpc) as a PPM P6 image file.
-    ///
-    /// `path` is the file path to write (e.g. `"frame.ppm"`).
-    /// `pixels` must match `width * height * 4` bytes.
-    /// Returns the number of bytes written.
-    pub fn save_bgra_as_ppm(
-        path: &std::path::Path,
-        pixels: &[u8],
-        width: u32,
-        height: u32,
-    ) -> anyhow::Result<usize> {
-        use std::io::Write;
-
-        let expected = (width as usize) * (height as usize) * 4;
-        anyhow::ensure!(
-            pixels.len() == expected,
-            "pixel buffer size {0} != {expected} (expected {width}x{height}x4)",
-            pixels.len(),
-        );
-
-        let mut data = Vec::with_capacity(
-            // header ~25 bytes + RGB data (3 bytes per pixel)
-            (width as usize) * (height as usize) * 3 + 128,
-        );
-
-        // PPM P6 header.
-        write!(data, "P6\n{width} {height}\n255\n").context("write ppm header")?;
-
-        // Convert BGRA → RGB.
-        for chunk in pixels.chunks_exact(4) {
-            let b = chunk[0];
-            let g = chunk[1];
-            let r = chunk[2];
-            // skip a (chunk[3])
-            data.push(r);
-            data.push(g);
-            data.push(b);
-        }
-
-        std::fs::write(path, &data)
-            .with_context(|| format!("write ppm to {}", path.display()))?;
-        Ok(data.len())
     }
 
     /// Current swapchain extent (pixel size of the window).
@@ -778,10 +704,6 @@ impl Renderer {
     /// Finish the current frame: end the render pass and command buffer,
     /// submit to the graphics queue, and present.
     ///
-    /// If [`request_capture`](Self::request_capture) was called since the last
-    /// `end_frame`, the swapchain image is copied to a host-readable buffer
-    /// and [`take_capture_data`](Self::take_capture_data) will return the pixels.
-    ///
     /// Returns `Ok(true)` if the swapchain was reported out of date and should
     /// be recreated before the next frame.
     pub fn end_frame(&mut self) -> anyhow::Result<bool> {
@@ -794,24 +716,6 @@ impl Renderer {
 
         // --- end render pass ---
         unsafe { device.cmd_end_render_pass(cmd) };
-
-        // --- optional frame capture (inserted into the same command buffer) ---
-        //
-        // After the render pass the image is in PRESENT_SRC_KHR. We transition
-        // to TRANSFER_SRC_OPTIMAL, copy to a staging buffer, then transition
-        // back to PRESENT_SRC_KHR for presentation.
-        let capture_readback = if self.capture_next {
-            self.capture_next = false;
-            match self.insert_capture_readback(cmd, frame.image_index) {
-                Ok(cr) => Some(cr),
-                Err(e) => {
-                    log::error!("capture readback setup failed: {e}");
-                    None
-                }
-            }
-        } else {
-            None
-        };
 
         // --- end command buffer ---
         unsafe { device.end_command_buffer(cmd) }.context("end command buffer")?;
@@ -850,149 +754,7 @@ impl Renderer {
             self.rebuild_dependent_resources()?;
         }
 
-        // --- read back captured data (after fence signals) ---
-        let device = &self.context.device;
-        if let Some(CaptureReadback { buffer, memory, size }) = capture_readback {
-            unsafe { device.wait_for_fences(&[frame.fence], true, u64::MAX) }
-                .context("wait for fence after capture")?;
-
-            let ptr = unsafe {
-                device
-                    .map_memory(memory, 0, size, vk::MemoryMapFlags::empty())
-            }
-            .context("map capture readback memory")?;
-
-            let pixels =
-                unsafe { std::slice::from_raw_parts(ptr as *const u8, size as usize) }.to_vec();
-            unsafe { device.unmap_memory(memory) };
-
-            // Clean up temporary readback resources.
-            unsafe { device.destroy_buffer(buffer, None) };
-            unsafe { device.free_memory(memory, None) };
-
-            log::info!("captured frame ({} bytes, {}x{})", pixels.len(), self.extent().width, self.extent().height);
-            self.capture_data = Some(pixels);
-        }
-
         Ok(out_of_date)
-    }
-
-    /// Helper: inside the same command buffer, lay out the barrier + copy
-    /// needed to snapshot the swapchain image to a host-readable buffer.
-    fn insert_capture_readback(
-        &self,
-        cmd: vk::CommandBuffer,
-        image_index: u32,
-    ) -> anyhow::Result<CaptureReadback> {
-        let device = &self.context.device;
-        let swapchain = self
-            .swapchain
-            .as_ref()
-            .context("no swapchain for capture")?;
-        let extent = swapchain.extent;
-        let image = swapchain.images[image_index as usize];
-        let buffer_size =
-            (extent.width as u64) * (extent.height as u64) * 4; // BGRA 8bpc
-
-        // Create host-visible staging buffer for the raw pixel data.
-        let (buffer, memory) = buffer::create_buffer(
-            &self.context,
-            buffer_size,
-            vk::BufferUsageFlags::TRANSFER_DST,
-            buffer::MemoryProperties::HOST_VISIBLE | buffer::MemoryProperties::HOST_COHERENT,
-        )
-        .context("create capture staging buffer")?;
-
-        let subresource = vk::ImageSubresourceRange {
-            aspect_mask: vk::ImageAspectFlags::COLOR,
-            base_mip_level: 0,
-            level_count: 1,
-            base_array_layer: 0,
-            layer_count: 1,
-        };
-
-        // Transition PRESENT_SRC_KHR → TRANSFER_SRC_OPTIMAL.
-        //
-        // The render pass final_layout from COLOR_ATTACHMENT_OPTIMAL →
-        // PRESENT_SRC_KHR already made the color attachment writes available,
-        // so src_access_mask must be 0 when transitioning FROM PRESENT_SRC_KHR
-        // (the presentation engine's own access is invisible to Vulkan).
-        let barrier_to_transfer = vk::ImageMemoryBarrier::default()
-            .old_layout(vk::ImageLayout::PRESENT_SRC_KHR)
-            .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
-            .src_access_mask(vk::AccessFlags::empty())
-            .dst_access_mask(vk::AccessFlags::TRANSFER_READ)
-            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-            .image(image)
-            .subresource_range(subresource);
-        unsafe {
-            device.cmd_pipeline_barrier(
-                cmd,
-                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-                vk::PipelineStageFlags::TRANSFER,
-                vk::DependencyFlags::empty(),
-                &[],
-                &[],
-                &[barrier_to_transfer],
-            );
-        }
-
-        // Copy image → staging buffer.
-        let image_subresource = vk::ImageSubresourceLayers {
-            aspect_mask: vk::ImageAspectFlags::COLOR,
-            mip_level: 0,
-            base_array_layer: 0,
-            layer_count: 1,
-        };
-        let copy_region = vk::BufferImageCopy::default()
-            .buffer_offset(0)
-            .buffer_row_length(0) // tightly packed
-            .buffer_image_height(0)
-            .image_subresource(image_subresource)
-            .image_offset(vk::Offset3D { x: 0, y: 0, z: 0 })
-            .image_extent(vk::Extent3D {
-                width: extent.width,
-                height: extent.height,
-                depth: 1,
-            });
-        unsafe {
-            device.cmd_copy_image_to_buffer(
-                cmd,
-                image,
-                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-                buffer,
-                &[copy_region],
-            );
-        }
-
-        // Transition back to PRESENT_SRC_KHR.
-        let barrier_back = vk::ImageMemoryBarrier::default()
-            .old_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
-            .new_layout(vk::ImageLayout::PRESENT_SRC_KHR)
-            .src_access_mask(vk::AccessFlags::TRANSFER_READ)
-            .dst_access_mask(vk::AccessFlags::empty())
-            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-            .image(image)
-            .subresource_range(subresource);
-        unsafe {
-            device.cmd_pipeline_barrier(
-                cmd,
-                vk::PipelineStageFlags::TRANSFER,
-                vk::PipelineStageFlags::BOTTOM_OF_PIPE,
-                vk::DependencyFlags::empty(),
-                &[],
-                &[],
-                &[barrier_back],
-            );
-        }
-
-        Ok(CaptureReadback {
-            buffer,
-            memory,
-            size: buffer_size,
-        })
     }
 }
 
