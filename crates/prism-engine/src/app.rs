@@ -17,12 +17,12 @@ use winit::raw_window_handle::HasDisplayHandle;
 use winit::window::{Window, WindowId};
 
 use prism_ecs::World;
-use prism_render::{FrameUBOData, Mesh, Renderer, Vertex};
+use prism_render::{FrameUBOData, Renderer, Vertex};
 
 use crate::camera::OrbitCamera;
 use crate::camera_controller::OrbitCameraController;
 use crate::input::{InputState, MouseButton};
-use crate::render_system::{render_system, MeshHandle, Transform};
+use crate::render_system::{render_system, MeshHandle, MeshManager, Transform};
 
 // ---------------------------------------------------------------------------
 // Cube geometry (24 vertices, 36 indices)
@@ -124,7 +124,7 @@ pub struct App {
     window: Option<Arc<Window>>,
     renderer: Option<Renderer>,
     world: Option<World>,
-    meshes: Vec<Mesh>,
+    mesh_manager: MeshManager,
     input_state: InputState,
     camera: OrbitCamera,
     camera_controller: OrbitCameraController,
@@ -138,7 +138,7 @@ impl App {
             window: None,
             renderer: None,
             world: None,
-            meshes: Vec::new(),
+            mesh_manager: MeshManager::new(),
             input_state: InputState::new(),
             camera: OrbitCamera::new(16.0 / 9.0),
             camera_controller: OrbitCameraController::default(),
@@ -219,8 +219,12 @@ impl App {
             world.insert(entity, MeshHandle(mesh_idx));
         }
 
+        let mut mesh_manager = MeshManager::new();
+        mesh_manager.add(sphere_mesh);
+        mesh_manager.add(cube_mesh);
+
         self.world = Some(world);
-        self.meshes = vec![sphere_mesh, cube_mesh];
+        self.mesh_manager = mesh_manager;
         self.window = Some(window);
         self.renderer = Some(renderer);
 
@@ -359,7 +363,7 @@ impl ApplicationHandler for App {
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         if event_loop.exiting() {
-            for mut mesh in self.meshes.drain(..) {
+            for mut mesh in std::mem::take(&mut self.mesh_manager).into_meshes() {
                 if let Some(ref renderer) = self.renderer {
                     unsafe { mesh.destroy(&renderer.context().device) };
                 }
@@ -433,8 +437,9 @@ impl App {
         let (renderer, world, meshes) = match (
             self.renderer.as_mut(),
             self.world.as_ref(),
+            &self.mesh_manager,
         ) {
-            (Some(r), Some(w)) => (r, w, &self.meshes[..]),
+            (Some(r), Some(w), m) => (r, w, m),
             _ => return,
         };
 

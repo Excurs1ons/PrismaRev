@@ -82,6 +82,44 @@ impl Transform {
 #[derive(Debug, Clone, Copy)]
 pub struct MeshHandle(pub usize);
 
+/// Owns the GPU meshes and resolves [`MeshHandle`] indices to them.
+///
+/// Meshes are large GPU resources, so they live here (a single owner) rather
+/// than per-entity; entities only store a lightweight [`MeshHandle`].
+pub struct MeshManager {
+    meshes: Vec<Mesh>,
+}
+
+impl MeshManager {
+    /// Create an empty manager.
+    pub fn new() -> Self {
+        Self { meshes: Vec::new() }
+    }
+
+    /// Register a mesh, returning the handle entities should store.
+    pub fn add(&mut self, mesh: Mesh) -> MeshHandle {
+        let handle = MeshHandle(self.meshes.len());
+        self.meshes.push(mesh);
+        handle
+    }
+
+    /// Resolve a handle to its mesh, if still present.
+    pub fn get(&self, handle: MeshHandle) -> Option<&Mesh> {
+        self.meshes.get(handle.0)
+    }
+
+    /// Consume the manager, yielding the owned meshes (e.g. to destroy them).
+    pub fn into_meshes(self) -> Vec<Mesh> {
+        self.meshes
+    }
+}
+
+impl Default for MeshManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Render system
 // ---------------------------------------------------------------------------
@@ -94,11 +132,11 @@ pub struct MeshHandle(pub usize);
 /// 4. Calls [`Renderer::draw_mesh`] for each entity (with its model matrix).
 /// 5. Calls [`Renderer::end_frame`] to submit and present.
 ///
-/// `meshes` is the externally-owned mesh list indexed by [`MeshHandle`].
+/// `meshes` owns the GPU meshes indexed by the entities' [`MeshHandle`].
 pub fn render_system(
     renderer: &mut Renderer,
     world: &World,
-    meshes: &[Mesh],
+    meshes: &MeshManager,
     clear_color: [f32; 4],
     camera: &mut OrbitCamera,
     light_data: &FrameUBOData,
@@ -131,7 +169,7 @@ pub fn render_system(
     // Draw ECS entities with Mesh + Transform.
     let mut draw_count = 0;
     for (entity, handle, transform) in world.query2::<MeshHandle, Transform>() {
-        let Some(mesh) = meshes.get(handle.0) else {
+        let Some(mesh) = meshes.get(*handle) else {
             log::warn!("entity {entity:?} references invalid mesh handle {}", handle.0);
             continue;
         };

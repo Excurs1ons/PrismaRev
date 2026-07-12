@@ -8,4 +8,4 @@ pub mod input;
 pub mod render_system;
 
 pub use app::App;
-pub use render_system::{render_system, MeshHandle, Transform};
+pub use render_system::{render_system, MeshHandle, MeshManager, Transform};
