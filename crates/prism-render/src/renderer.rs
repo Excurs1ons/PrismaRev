@@ -337,14 +337,17 @@ impl Renderer {
     ///   for the aspect ratio and pre-rotate the view-projection in clip space
     ///   so the compositor's rotation yields an upright image.
     ///
-    /// Driving this off the **extent's shape** (not the `current_transform`
-    /// flag) is the Occam's-razor fix. Some drivers report
-    /// `current_transform = ROTATE_90` together with an *already-landscape*
-    /// `current_extent`; the old code keyed off the flag, swapped the
-    /// (already-landscape) dimensions → portrait aspect (clipped side objects),
-    /// *and* applied a spurious 90° rotation → a rotated image. Keying off the
-    /// shape also covers the inverse driver bug (`IDENTITY` with a portrait
-    /// extent), since a portrait buffer is rotated regardless of the flag.
+    /// The rotation is driven by the swapchain's `pre_transform` (the actual
+    /// compositor transform), not by the buffer's shape. On desktop
+    /// `pre_transform` is `IDENTITY`, so a landscape window is rendered as-is
+    /// with no rotation; on Android the compositor reports `ROTATE_90` (it
+    /// rotates the portrait-native buffer to the landscape screen), so we
+    /// pre-rotate the clip space by the inverse to keep the scene upright.
+    ///
+    /// The aspect ratio is swapped only when the buffer itself is portrait
+    /// (e.g. an Android device in its native orientation): a landscape-locked
+    /// app fits its landscape scene into the portrait buffer, and the
+    /// compositor's rotation brings it back to landscape on screen.
     ///
     /// Returns `(aspect_ratio, clip_space_rotation)`, a column-major 4×4 matrix
     /// to multiply *before* the view-projection (`final = rotation * view_proj`).
@@ -357,20 +360,24 @@ impl Renderer {
             .map(|s| s.pre_transform())
             .unwrap_or(T::IDENTITY);
 
-        // Landscape-locked app: decide rotation by the buffer's shape, not the
-        // (unreliable) transform flag.
-        let (display_w, display_h, angle, transform_used) = if extent.width >= extent.height {
-            // Buffer already landscape: use as-is, no pre-rotation needed.
-            (extent.width, extent.height, 0.0, "IDENTITY")
+        // A landscape-locked app always renders a landscape scene. When the
+        // buffer is portrait, swap the aspect so the landscape scene fits.
+        let portrait_buffer = extent.width < extent.height;
+        let (display_w, display_h) = if portrait_buffer {
+            (extent.height, extent.width)
         } else {
-            // Portrait-native buffer: compositor rotates it to landscape. Pick
-            // the matching clip-space rotation; fall back to ROTATE_90 when the
-            // driver reported IDENTITY on a portrait extent (driver bug).
-            if transform.contains(T::ROTATE_270) {
-                (extent.height, extent.width, -std::f32::consts::FRAC_PI_2, "ROTATE_270")
-            } else {
-                (extent.height, extent.width, std::f32::consts::FRAC_PI_2, "ROTATE_90")
-            }
+            (extent.width, extent.height)
+        };
+
+        // Pre-rotate by the inverse of the compositor's transform. This is what
+        // keeps a desktop window upright (IDENTITY → no rotation) while making
+        // an Android portrait buffer come out landscape after the compositor
+        // applies its ROTATE_90.
+        let angle = match transform {
+            T::ROTATE_90 => std::f32::consts::FRAC_PI_2,
+            T::ROTATE_270 => -std::f32::consts::FRAC_PI_2,
+            T::ROTATE_180 => std::f32::consts::PI,
+            _ => 0.0,
         };
 
         let aspect = if display_h == 0 {
@@ -380,12 +387,12 @@ impl Renderer {
         };
 
         log::debug!(
-            "orientation: extent={}x{} pre_transform={:?} transform_used={} \
+            "orientation: extent={}x{} pre_transform={:?} portrait_buffer={} \
              display={}x{} aspect={:.4} angle={:.4}",
             extent.width,
             extent.height,
-            self.swapchain.as_ref().map(|s| s.pre_transform()),
-            transform_used,
+            transform,
+            portrait_buffer,
             display_w,
             display_h,
             aspect,
