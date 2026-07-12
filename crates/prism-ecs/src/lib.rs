@@ -167,15 +167,15 @@ impl World {
 
     /// Iterate over all `(entity, &T)` pairs for a single component type.
     ///
-    /// Multi-component queries will be added in a later milestone; for now the
-    /// common case of "give me everything with X" is served directly.
+    /// Lazily walks the component's dense storage; the entity generation is
+    /// read directly from `self.entities` (no per-query clone).
     pub fn query<T: Component>(&self) -> impl Iterator<Item = (Entity, &T)> {
-        let generation_for = self.entities.clone();
+        let entities = &self.entities;
         let pool = self.pools.get(&TypeId::of::<T>());
         pool.into_iter()
             .flat_map(move |p| pool_downcast_ref::<T>(p).iter())
             .filter_map(move |(id, value)| {
-                generation_for
+                entities
                     .get(id as usize)
                     .map(|&generation| (Entity { id, generation }, value))
             })
@@ -183,119 +183,93 @@ impl World {
 
     /// Iterate over all `(entity, &mut T)` pairs for a single component type.
     pub fn query_mut<T: Component>(&mut self) -> impl Iterator<Item = (Entity, &mut T)> {
-        let generation_for = self.entities.clone();
+        let entities = &self.entities;
         let pool = self.pools.get_mut(&TypeId::of::<T>());
         pool.into_iter()
             .flat_map(move |p| pool_downcast_mut::<T>(p).iter_mut())
             .filter_map(move |(id, value)| {
-                generation_for
+                entities
                     .get(id as usize)
                     .map(|&generation| (Entity { id, generation }, value))
             })
     }
 
-    /// Iterate over entities that have **both** `A` and `B`, yielding
-    /// `(entity, &A, &B)`. This is a sparse-set join: it walks the smaller
-    /// pool and probes the other for each entity id.
-    pub fn query2<A: Component, B: Component>(&self) -> Vec<(Entity, &A, &B)> {
-        let generation_for = &self.entities;
-        let pool_a = self.pools.get(&TypeId::of::<A>());
-        let pool_b = self.pools.get(&TypeId::of::<B>());
-        match (pool_a, pool_b) {
-            (Some(pa), Some(pb)) => {
-                let a = pool_downcast_ref::<A>(pa);
-                let b = pool_downcast_ref::<B>(pb);
-                // Drive from whichever pool has fewer entries to minimise probes.
-                let (drive, probe) = if a.len() <= b.len() {
-                    (a.iter(), b)
-                } else {
-                    // Walk b, probe a. We collect into a Vec anyway so the
-                    // branch direction doesn't matter for correctness.
-                    return b
-                        .iter()
-                        .filter_map(|(id, bv)| {
-                            a.get(id).map(|av| {
-                                let gen = generation_for[id as usize];
-                                (Entity { id, generation: gen }, av, bv)
-                            })
-                        })
-                        .collect();
-                };
-                drive
-                    .filter_map(|(id, av)| {
-                        probe.get(id).map(|bv| {
-                            let gen = generation_for[id as usize];
-                            (Entity { id, generation: gen }, av, bv)
-                        })
+    /// Lazily iterate over entities that have **both** `A` and `B`, yielding
+    /// `(entity, &A, &B)`. This is a sparse-set join: it walks pool `A` and
+    /// probes pool `B` for each entity id, allocating nothing.
+    pub fn query2<A: Component, B: Component>(
+        &self,
+    ) -> impl Iterator<Item = (Entity, &A, &B)> {
+        let entities = &self.entities;
+        let pool_a = self.pools.get(&TypeId::of::<A>()).map(|p| pool_downcast_ref::<A>(p));
+        let pool_b = self.pools.get(&TypeId::of::<B>()).map(|p| pool_downcast_ref::<B>(p));
+        pool_a.into_iter().flat_map(move |a| {
+            pool_b.into_iter().flat_map(move |b| {
+                a.iter().filter_map(move |(id, av)| {
+                    b.get(id).map(|bv| {
+                        let generation = *entities.get(id as usize).unwrap_or(&0);
+                        (Entity { id, generation }, av, bv)
                     })
-                    .collect()
-            }
-            _ => Vec::new(),
-        }
+                })
+            })
+        })
     }
 
-    /// Iterate over entities that have `A`, `B`, and `C` simultaneously.
+    /// Lazily iterate over entities that have `A`, `B`, and `C` simultaneously.
     pub fn query3<A: Component, B: Component, C: Component>(
         &self,
-    ) -> Vec<(Entity, &A, &B, &C)> {
-        let generation_for = &self.entities;
-        let pool_a = self.pools.get(&TypeId::of::<A>());
-        let pool_b = self.pools.get(&TypeId::of::<B>());
-        let pool_c = self.pools.get(&TypeId::of::<C>());
-        match (pool_a, pool_b, pool_c) {
-            (Some(pa), Some(pb), Some(pc)) => {
-                let a = pool_downcast_ref::<A>(pa);
-                let b = pool_downcast_ref::<B>(pb);
-                let c = pool_downcast_ref::<C>(pc);
-                a.iter()
-                    .filter_map(|(id, av)| {
+    ) -> impl Iterator<Item = (Entity, &A, &B, &C)> {
+        let entities = &self.entities;
+        let pool_a = self.pools.get(&TypeId::of::<A>()).map(|p| pool_downcast_ref::<A>(p));
+        let pool_b = self.pools.get(&TypeId::of::<B>()).map(|p| pool_downcast_ref::<B>(p));
+        let pool_c = self.pools.get(&TypeId::of::<C>()).map(|p| pool_downcast_ref::<C>(p));
+        pool_a.into_iter().flat_map(move |a| {
+            pool_b.into_iter().flat_map(move |b| {
+                pool_c.into_iter().flat_map(move |c| {
+                    a.iter().filter_map(move |(id, av)| {
                         let bv = b.get(id)?;
                         let cv = c.get(id)?;
-                        let gen = generation_for[id as usize];
-                        Some((Entity { id, generation: gen }, av, bv, cv))
+                        let generation = *entities.get(id as usize).unwrap_or(&0);
+                        Some((Entity { id, generation }, av, bv, cv))
                     })
-                    .collect()
-            }
-            _ => Vec::new(),
-        }
+                })
+            })
+        })
     }
 
     /// Mutable two-component query: `(entity, &mut A, &B)`. The first component
     /// is mutable, the second is shared. This is the common pattern for
-    /// systems that write to a transform while reading a mesh/handle.
+    /// systems that write to a transform while reading a mesh/handle. Returns
+    /// a lazy iterator (no allocation).
     ///
     /// # Safety argument
     ///
     /// The borrow checker can't see that `pools[A]` and `pools[B]` are
-    /// disjoint HashMap entries (different `TypeId` keys). We use raw pointers
+    /// disjoint `HashMap` entries (different `TypeId` keys). We use raw pointers
     /// to obtain both borrows simultaneously. This is sound because:
     /// - A and B are distinct types, so their pools never alias.
     /// - The `&mut self` borrow prevents any other access to `pools` for the
     ///   lifetime of the returned references.
-    pub fn query2_mut<A: Component, B: Component>(&mut self) -> Vec<(Entity, &mut A, &B)> {
-        let generation_for = self.entities.clone();
-
-        // SAFETY: pools is a HashMap<TypeId, ...>. A and B have different
-        // TypeIds (they are distinct type parameters), so the two entries are
-        // disjoint and cannot alias. The &mut self borrow ensures no other
-        // code touches pools while the returned Vec is live.
+    pub fn query2_mut<A: Component, B: Component>(
+        &mut self,
+    ) -> Box<dyn Iterator<Item = (Entity, &mut A, &B)> + '_> {
+        let generation_for = &self.entities;
+        // SAFETY: see above. A and B have different TypeIds, so the two pool
+        // entries are disjoint and cannot alias.
         let pools_ptr: *mut HashMap<TypeId, Box<dyn ErasedPool>> = &mut self.pools;
-        let pool_a = unsafe { (*pools_ptr).get_mut(&TypeId::of::<A>()) };
-        let pool_b = unsafe { (*pools_ptr).get(&TypeId::of::<B>()) };
-        match (pool_a, pool_b) {
-            (Some(pa), Some(pb)) => {
-                let b = pool_downcast_ref::<B>(pb);
-                let a = pool_downcast_mut::<A>(pa);
-                a.iter_mut()
-                    .filter_map(|(id, av)| {
-                        let bv = b.get(id)?;
-                        let gen = generation_for[id as usize];
-                        Some((Entity { id, generation: gen }, av, bv))
-                    })
-                    .collect()
-            }
-            _ => Vec::new(),
-        }
+        let pool_a = unsafe { (*pools_ptr).get_mut(&TypeId::of::<A>()) }
+            .map(|pa| pool_downcast_mut::<A>(pa));
+        let pool_b = unsafe { (*pools_ptr).get(&TypeId::of::<B>()) }
+            .map(|pb| pool_downcast_ref::<B>(pb));
+        let (a, b) = match (pool_a, pool_b) {
+            (Some(a), Some(b)) => (a, b),
+            _ => return Box::new(std::iter::empty()),
+        };
+        Box::new(a.iter_mut().filter_map(move |(id, av)| {
+            let bv = b.get(id)?;
+            let generation = *generation_for.get(id as usize).unwrap_or(&0);
+            Some((Entity { id, generation }, av, bv))
+        }))
     }
 
     // --- Resources (global, singleton data not tied to an entity) ---
@@ -345,64 +319,99 @@ trait ErasedPool: Any {
     fn remove(&mut self, id: u32);
 }
 
-/// Sparse storage for one component type: entity id -> value.
+/// Sparse-set storage for one component type.
 ///
-/// Values are boxed as `dyn Any` so `ErasedPool::remove` can drop a component
-/// without knowing its concrete type. Typed access methods downcast back to
-/// `T` on demand.
+/// Components are stored contiguously in `dense` (cache-friendly, no per-
+/// component heap allocation or type erasure). `dense_entities[i]` is the
+/// entity id of `dense[i]`; `sparse[id]` maps entity id -> index in `dense`
+/// (`SPARSE_NONE` means "not present"). Iteration walks `dense` directly, so
+/// queries are allocation-free and cache-coherent.
 struct ComponentPool<T> {
-    data: HashMap<u32, Box<dyn Any>>,
-    _marker: std::marker::PhantomData<T>,
+    dense: Vec<T>,
+    dense_entities: Vec<u32>,
+    sparse: Vec<u32>,
 }
+
+/// Sentinel stored in `sparse` for entity ids that have no component.
+const SPARSE_NONE: u32 = u32::MAX;
 
 impl<T: 'static> ComponentPool<T> {
     fn new() -> Self {
         Self {
-            data: HashMap::new(),
-            _marker: std::marker::PhantomData,
+            dense: Vec::new(),
+            dense_entities: Vec::new(),
+            sparse: Vec::new(),
         }
     }
 
-    fn len(&self) -> usize {
-        self.data.len()
-    }
-
     fn insert(&mut self, id: u32, value: T) {
-        self.data.insert(id, Box::new(value));
+        if id as usize >= self.sparse.len() {
+            self.sparse.resize(id as usize + 1, SPARSE_NONE);
+        }
+        let idx = self.sparse[id as usize] as usize;
+        if idx < self.dense.len() {
+            // Already present: overwrite in place (no reordering).
+            self.dense[idx] = value;
+        } else {
+            self.sparse[id as usize] = self.dense.len() as u32;
+            self.dense.push(value);
+            self.dense_entities.push(id);
+        }
     }
 
     fn get(&self, id: u32) -> Option<&T> {
-        self.data.get(&id).and_then(|b| b.downcast_ref::<T>())
+        let idx = self.sparse.get(id as usize).copied()? as usize;
+        if idx < self.dense.len() {
+            Some(&self.dense[idx])
+        } else {
+            None
+        }
     }
 
     fn get_mut(&mut self, id: u32) -> Option<&mut T> {
-        self.data.get_mut(&id).and_then(|b| b.downcast_mut::<T>())
+        let idx = self.sparse.get(id as usize).copied()? as usize;
+        if idx < self.dense.len() {
+            Some(&mut self.dense[idx])
+        } else {
+            None
+        }
     }
 
-    /// Remove and return the typed value.
+    /// Remove and return the component for `id`, if present. Uses `swap_remove`
+    /// so `dense` stays contiguous; the moved-last entity's sparse entry is
+    /// patched to its new index.
     fn remove(&mut self, id: u32) -> Option<T> {
-        self.data
-            .remove(&id)
-            .and_then(|b| b.downcast::<T>().ok())
-            .map(|b| *b)
+        let idx = *self.sparse.get(id as usize)?;
+        if idx == SPARSE_NONE || idx as usize >= self.dense.len() {
+            return None;
+        }
+        let idx = idx as usize;
+        let last = self.dense.len() - 1;
+        let value = self.dense.swap_remove(idx);
+        self.dense_entities.swap_remove(idx);
+        if idx < last {
+            let moved_id = self.dense_entities[idx];
+            self.sparse[moved_id as usize] = idx as u32;
+        }
+        self.sparse[id as usize] = SPARSE_NONE;
+        Some(value)
     }
 
     fn iter(&self) -> impl Iterator<Item = (u32, &T)> {
-        self.data
-            .iter()
-            .filter_map(|(&id, b)| b.downcast_ref::<T>().map(|v| (id, v)))
+        self.dense_entities.iter().copied().zip(self.dense.iter())
     }
 
     fn iter_mut(&mut self) -> impl Iterator<Item = (u32, &mut T)> {
-        self.data
-            .iter_mut()
-            .filter_map(|(&id, b)| b.downcast_mut::<T>().map(|v| (id, v)))
+        self.dense_entities
+            .iter()
+            .copied()
+            .zip(self.dense.iter_mut())
     }
 }
 
 impl<T: 'static> ErasedPool for ComponentPool<T> {
     fn remove(&mut self, id: u32) {
-        self.data.remove(&id); // drops the boxed value
+        self.remove(id); // drops the value
     }
 }
 
@@ -531,7 +540,7 @@ mod tests {
         // b has no Velocity, _c has neither
         world.insert(_c, Position(3.0, 0.0));
 
-        let results = world.query2::<Position, Velocity>();
+        let results: Vec<_> = world.query2::<Position, Velocity>().collect();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].0, a);
         assert_eq!(results[0].1, &Position(1.0, 0.0));
@@ -551,7 +560,7 @@ mod tests {
         world.insert(b, Position(2.0, 0.0));
         world.insert(b, Velocity(1.0, 0.0));
 
-        let results = world.query3::<Position, Velocity, Health>();
+        let results: Vec<_> = world.query3::<Position, Velocity, Health>().collect();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].0, a);
         assert_eq!(results[0].3, &Health(100));
@@ -577,7 +586,7 @@ mod tests {
         let a = world.spawn();
         world.insert(a, Position(0.0, 0.0));
         // No entity has Velocity at all
-        assert!(world.query2::<Position, Velocity>().is_empty());
+        assert!(world.query2::<Position, Velocity>().next().is_none());
     }
 
     #[test]
