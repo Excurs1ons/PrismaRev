@@ -129,7 +129,6 @@ pub struct App {
     camera: OrbitCamera,
     camera_controller: OrbitCameraController,
     needs_resize: bool,
-    frame_count: u64,
     start: Instant,
 }
 
@@ -144,7 +143,6 @@ impl App {
             camera: OrbitCamera::new(16.0 / 9.0),
             camera_controller: OrbitCameraController::default(),
             needs_resize: false,
-            frame_count: 0,
             start: Instant::now(),
         }
     }
@@ -295,7 +293,7 @@ impl ApplicationHandler for App {
                 );
                 if size.width > 0 && size.height > 0 {
                     let aspect = size.width as f32 / size.height as f32;
-                    self.camera = OrbitCamera::new(aspect);
+                    self.camera.set_aspect(aspect);
                 }
             }
             WindowEvent::RedrawRequested => {
@@ -385,17 +383,6 @@ impl App {
             return;
         }
 
-        let frame = self.frame_count;
-        self.frame_count += 1;
-
-        // Request a frame capture on frame 3.
-        if frame == 3 {
-            if let Some(renderer) = self.renderer.as_mut() {
-                renderer.request_capture();
-                log::info!("requested frame capture on frame {frame}");
-            }
-        }
-
         // Handle pending resize.
         if self.needs_resize {
             self.needs_resize = false;
@@ -451,7 +438,7 @@ impl App {
             _ => return,
         };
 
-        render_system(renderer, world, meshes, clear_color, &self.camera, &light_data);
+        render_system(renderer, world, meshes, clear_color, &mut self.camera, &light_data);
 
         // Check for captured pixel data.
         if let Some(pixels) = renderer.take_capture_data() {

@@ -1,7 +1,7 @@
 # 3D Evolution — Architecture Design
 
 **Date:** 2026-07-11
-**Status:** Approved
+**Status:** ✅ Implemented (2026-07-12) — see README milestones M2 & M3.
 
 ## Overview
 

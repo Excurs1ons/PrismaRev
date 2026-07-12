@@ -40,6 +40,11 @@ pub struct Swapchain {
     /// portrait-native device). Equal to `current_transform` at creation time.
     pub pre_transform: vk::SurfaceTransformFlagsKHR,
 
+    /// Presentation mode used when (re)creating the swapchain. Defaults to
+    /// `MAILBOX` when supported (lower latency than `FIFO`), changeable via
+    /// [`Swapchain::set_present_mode`].
+    present_mode: vk::PresentModeKHR,
+
     swapchain: vk::SwapchainKHR,
     swapchain_ext: ash::khr::swapchain::Device,
 
@@ -83,8 +88,10 @@ impl Swapchain {
         }
         .map_err(|e| anyhow!(e).context("create surface"))?;
 
+        let present_mode = choose_present_mode(&surface_ext, context.physical_device, surface);
+
         let (format, extent, pre_transform, swapchain, images, views) =
-            create_swapchain(context, surface, vk::SwapchainKHR::null())?;
+            create_swapchain(context, surface, vk::SwapchainKHR::null(), present_mode)?;
         let n_images = images.len();
         let sem_info = vk::SemaphoreCreateInfo::default();
         let image_available = (0..FRAMES_IN_FLIGHT)
@@ -109,6 +116,7 @@ impl Swapchain {
             extent,
             format,
             pre_transform,
+            present_mode,
             swapchain,
             swapchain_ext: ash::khr::swapchain::Device::new(&context.instance, &context.device),
             images,
@@ -127,6 +135,18 @@ impl Swapchain {
         self.pre_transform
     }
 
+    /// Current presentation mode.
+    pub fn present_mode(&self) -> vk::PresentModeKHR {
+        self.present_mode
+    }
+
+    /// Change the presentation mode. Takes effect on the next
+    /// [`Swapchain::recreate`]. `MAILBOX` reduces latency but may not be
+    /// supported everywhere; `FIFO` is always available.
+    pub fn set_present_mode(&mut self, mode: vk::PresentModeKHR) {
+        self.present_mode = mode;
+    }
+
     /// Recreate the swapchain for a new window size. Waits for the device to
     /// be idle first. Transactional: if creating the new swapchain fails, the
     /// existing one (and its semaphores) are left intact so rendering can
@@ -138,7 +158,7 @@ impl Swapchain {
         // Build the new swapchain first, handing off the old one so the
         // implementation can retire it cleanly (avoids NATIVE_WINDOW_IN_USE).
         let (format, extent, pre_transform, swapchain, images, views) =
-            create_swapchain(context, self.surface, old_swapchain).map_err(|e| {
+            create_swapchain(context, self.surface, old_swapchain, self.present_mode).map_err(|e| {
                 log::warn!("swapchain recreate failed, keeping old swapchain: {e}");
                 e
             })?;
@@ -284,6 +304,7 @@ fn create_swapchain(
     context: &VulkanContext,
     surface: vk::SurfaceKHR,
     old_swapchain: vk::SwapchainKHR,
+    present_mode: vk::PresentModeKHR,
 ) -> anyhow::Result<(
     vk::SurfaceFormatKHR,
     vk::Extent2D,
@@ -330,7 +351,7 @@ fn create_swapchain(
         .queue_family_indices(&queue_families)
         .pre_transform(pre_transform)
         .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
-        .present_mode(vk::PresentModeKHR::FIFO)
+        .present_mode(present_mode)
         .clipped(true)
         .old_swapchain(old_swapchain);
 
@@ -359,6 +380,25 @@ fn choose_surface_format(available: &[vk::SurfaceFormatKHR]) -> vk::SurfaceForma
                 && f.color_space == vk::ColorSpaceKHR::SRGB_NONLINEAR
         })
         .unwrap_or_else(|| available[0])
+}
+
+/// Prefer `MAILBOX` (lowest latency that is always tear-free) when the surface
+/// supports it; otherwise fall back to `FIFO` (always supported).
+fn choose_present_mode(
+    surface_ext: &ash::khr::surface::Instance,
+    physical_device: vk::PhysicalDevice,
+    surface: vk::SurfaceKHR,
+) -> vk::PresentModeKHR {
+    let modes = unsafe {
+        surface_ext
+            .get_physical_device_surface_present_modes(physical_device, surface)
+            .unwrap_or_default()
+    };
+    if modes.contains(&vk::PresentModeKHR::MAILBOX) {
+        vk::PresentModeKHR::MAILBOX
+    } else {
+        vk::PresentModeKHR::FIFO
+    }
 }
 
 fn choose_extent(caps: &vk::SurfaceCapabilitiesKHR) -> vk::Extent2D {

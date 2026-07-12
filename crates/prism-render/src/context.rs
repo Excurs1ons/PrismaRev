@@ -39,7 +39,6 @@ pub struct VulkanContext {
 
     // Held for drop ordering / FFI lifetime.
     _debug_messenger: Option<vk::DebugUtilsMessengerEXT>,
-    _enabled_layer_names: Vec<CString>,
 }
 
 impl VulkanContext {
@@ -90,7 +89,6 @@ impl VulkanContext {
             rt_caps,
             enabled_extensions,
             _debug_messenger: debug_messenger,
-            _enabled_layer_names: Vec::new(),
         })
     }
 

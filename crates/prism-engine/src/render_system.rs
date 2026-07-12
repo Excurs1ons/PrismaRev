@@ -100,7 +100,7 @@ pub fn render_system(
     world: &World,
     meshes: &[Mesh],
     clear_color: [f32; 4],
-    camera: &OrbitCamera,
+    camera: &mut OrbitCamera,
     light_data: &FrameUBOData,
 ) {
     if let Err(e) = renderer.begin_frame(clear_color) {
@@ -113,7 +113,8 @@ pub fn render_system(
     // surface this keeps the scene upright and correctly proportioned.
     let (display_aspect, surface_rotation) = renderer.orientation();
     log::debug!("render_system: display_aspect={:.4}", display_aspect);
-    let mut view_proj = camera.view_proj(display_aspect);
+    camera.set_aspect(display_aspect);
+    let mut view_proj = camera.view_proj();
     view_proj = mat_mul(&surface_rotation, &view_proj);
 
     // Build the full frame data from camera + light.

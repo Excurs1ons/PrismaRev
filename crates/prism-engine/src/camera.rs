@@ -7,10 +7,14 @@ pub struct OrbitCamera {
     pub fov_y: f32,
     pub znear: f32,
     pub zfar: f32,
+    /// Current aspect ratio (width / height). Set at construction and updated
+    /// on resize / orientation change so [`OrbitCamera::view_proj`] needs no
+    /// per-call aspect argument.
+    pub aspect: f32,
 }
 
 impl OrbitCamera {
-    pub fn new(_aspect: f32) -> Self {
+    pub fn new(aspect: f32) -> Self {
         Self {
             target: [0.0; 3],
             distance: 5.0,
@@ -19,7 +23,14 @@ impl OrbitCamera {
             fov_y: std::f32::consts::FRAC_PI_4,
             znear: 0.01,
             zfar: 100.0,
+            aspect,
         }
+    }
+
+    /// Update the aspect ratio (e.g. on window resize or orientation change)
+    /// without disturbing the current orbit state.
+    pub fn set_aspect(&mut self, aspect: f32) {
+        self.aspect = aspect;
     }
 
     /// Eye position from spherical coords.
@@ -33,10 +44,10 @@ impl OrbitCamera {
         ]
     }
 
-    /// Column-major view-projection matrix.
-    pub fn view_proj(&self, aspect: f32) -> [[f32; 4]; 4] {
+    /// Column-major view-projection matrix, using the stored [`OrbitCamera::aspect`].
+    pub fn view_proj(&self) -> [[f32; 4]; 4] {
         let eye = self.eye();
-        let proj = self.perspective(aspect);
+        let proj = self.perspective();
         let view = self.look_at(eye);
         // view_proj = proj * view (column-major)
         let mut vp = [[0.0f32; 4]; 4];
@@ -50,10 +61,10 @@ impl OrbitCamera {
         vp
     }
 
-    fn perspective(&self, aspect: f32) -> [[f32; 4]; 4] {
+    fn perspective(&self) -> [[f32; 4]; 4] {
         let inv_tan = 1.0 / (self.fov_y * 0.5).tan();
         let mut p = [[0.0f32; 4]; 4];
-        p[0][0] = inv_tan / aspect;
+        p[0][0] = inv_tan / self.aspect;
         p[1][1] = -inv_tan;
         p[2][2] = self.zfar / (self.znear - self.zfar);
         // Column-major: p[col][row]
@@ -159,7 +170,7 @@ mod tests {
     #[test]
     fn perspective_y_flip_and_w_divide() {
         let cam = OrbitCamera::new(16.0 / 9.0);
-        let p = cam.perspective(16.0 / 9.0);
+        let p = cam.perspective();
         // p[1][1] should be negative (y-flip for Vulkan)
         assert!(p[1][1] < 0.0);
         // Column-major: p[2][3] = col2.w = -1 (w_clip = -z_view)
@@ -172,7 +183,7 @@ mod tests {
     #[test]
     fn view_proj_is_4x4() {
         let cam = OrbitCamera::new(16.0 / 9.0);
-        let vp = cam.view_proj(16.0 / 9.0);
+        let vp = cam.view_proj();
         assert_eq!(vp.len(), 4);
         for row in &vp {
             assert_eq!(row.len(), 4);
@@ -181,9 +192,11 @@ mod tests {
 
     #[test]
     fn aspect_ratio_affects_perspective() {
-        let cam = OrbitCamera::new(16.0 / 9.0);
-        let p_wide = cam.perspective(16.0 / 9.0);
-        let p_narrow = cam.perspective(4.0 / 3.0);
+        let mut cam = OrbitCamera::new(16.0 / 9.0);
+        cam.set_aspect(16.0 / 9.0);
+        let p_wide = cam.perspective();
+        cam.set_aspect(4.0 / 3.0);
+        let p_narrow = cam.perspective();
         // p[0][0] = inv_tan / aspect, so wider aspect → smaller p[0][0]
         assert!(p_wide[0][0] < p_narrow[0][0]);
     }
@@ -202,7 +215,7 @@ mod tests {
     #[test]
     fn view_proj_does_not_produce_nan() {
         let cam = OrbitCamera::new(16.0 / 9.0);
-        let vp = cam.view_proj(16.0 / 9.0);
+        let vp = cam.view_proj();
         for row in &vp {
             for val in row {
                 assert!(!val.is_nan(), "NaN in view-proj matrix");

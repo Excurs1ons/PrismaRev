@@ -7,16 +7,17 @@ systems are functions that query the world for data slices.
 
 ## Status
 
-**Milestone 1 — desktop Vulkan clear loop — is complete.** Running the binary opens a window
-whose framebuffer is cleared each frame to a time-varying color, proving the full
-acquire → record → submit → present pipeline works end to end. The ECS core is in place with a
-finalized API shape but is not yet wired into rendering.
+**Milestones 1–3 are complete.** The engine now runs a 3D forward-rendering pipeline: a desktop
+Vulkan window with a depth-buffered render pass and graphics pipeline (M2), plus ECS-driven
+rendering where `Transform` + `MeshHandle` components are queried each frame by `render_system`
+and drawn with an orbit camera and Blinn-Phong lighting (M3). The full
+acquire → record → submit → present pipeline works end to end.
 
 | Milestone | Goal | Status |
 |-----------|------|--------|
 | M1 | Desktop Vulkan window + clear loop | ✅ Done |
-| M2 | Render pass + graphics pipeline, first triangle | Planned |
-| M3 | ECS-driven rendering (Camera/Transform/Mesh + RenderSystem) | Planned |
+| M2 | Render pass + graphics pipeline, depth buffer, first mesh | ✅ Done |
+| M3 | ECS-driven rendering (Camera/Transform/Mesh + RenderSystem) | ✅ Done |
 | M4 | Android port (android-activity + APK packaging) | Planned |
 | M5 | Asset pipeline (shader compilation, textures) | Planned |
 

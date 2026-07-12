@@ -1,5 +1,7 @@
 # 3D Evolution Implementation Plan
 
+> **Status:** ✅ Implemented (2026-07-12) — corresponds to README milestones M2 & M3. Kept for historical reference; the source code is now the source of truth.
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Evolve PrismaRev from 2D flat-shaded triangles to a 3D forward-rendering pipeline with depth buffer, Blinn-Phong directional light, orbit camera, and data-oriented input system.
