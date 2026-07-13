@@ -94,14 +94,15 @@ impl Drop for DescriptorPool {
     }
 }
 
-/// GPU data layout: 7 × vec4 = 112 bytes, std140 align.
+/// GPU data layout: 8 × vec4 = 128 bytes, std140 align.
 /// Mirrors GLSL `layout(binding = 0) uniform FrameUBO { ... }`.
 #[repr(C)]
 pub struct FrameUBOData {
-    pub view_proj:      [[f32; 4]; 4], // 64 bytes, offset   0
-    pub camera_position: [f32; 4],     // 16 bytes, offset  64
-    pub light_direction: [f32; 4],     // 16 bytes, offset  80 (w = intensity)
-    pub light_color:     [f32; 4],     // 16 bytes, offset  96 (w = ambient factor)
+    pub view_proj:       [[f32; 4]; 4], // 64 bytes, offset   0
+    pub camera_position: [f32; 4],      // 16 bytes, offset  64
+    pub light_direction: [f32; 4],      // 16 bytes, offset  80 (w = intensity)
+    pub light_color:     [f32; 4],      // 16 bytes, offset  96 (w = ambient factor)
+    pub view:            [[f32; 4]; 4], // 64 bytes, offset 112 (world → view)
 }
 
 /// Per-frame UBO buffer and its descriptor set.
@@ -173,5 +174,24 @@ impl Drop for FrameUBO {
             self.device.destroy_buffer(self.buffer, None);
             self.device.free_memory(self.memory, None);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn frame_ubo_data_size_is_176() {
+        assert_eq!(std::mem::size_of::<FrameUBOData>(), 176);
+    }
+
+    #[test]
+    fn frame_ubo_data_offsets() {
+        assert_eq!(std::mem::offset_of!(FrameUBOData, view_proj), 0);
+        assert_eq!(std::mem::offset_of!(FrameUBOData, camera_position), 64);
+        assert_eq!(std::mem::offset_of!(FrameUBOData, light_direction), 80);
+        assert_eq!(std::mem::offset_of!(FrameUBOData, light_color), 96);
+        assert_eq!(std::mem::offset_of!(FrameUBOData, view), 112);
     }
 }

@@ -61,6 +61,11 @@ impl OrbitCamera {
         vp
     }
 
+    /// Column-major world → view matrix (used for view-space debug normals).
+    pub fn view(&self) -> [[f32; 4]; 4] {
+        self.look_at(self.eye())
+    }
+
     fn perspective(&self) -> [[f32; 4]; 4] {
         let inv_tan = 1.0 / (self.fov_y * 0.5).tan();
         let mut p = [[0.0f32; 4]; 4];
@@ -85,17 +90,21 @@ impl OrbitCamera {
         let fwd_len = (fwd[0] * fwd[0] + fwd[1] * fwd[1] + fwd[2] * fwd[2]).sqrt();
         let fwd = [fwd[0] / fwd_len, fwd[1] / fwd_len, fwd[2] / fwd_len];
         let up = [0.0, 1.0, 0.0];
+        // Right-handed basis: right = forward × up (NOT up × forward, which
+        // would negate the right vector and make the view matrix a reflection,
+        // mirroring the scene horizontally).
         let right = [
-            up[1] * fwd[2] - up[2] * fwd[1],
-            up[2] * fwd[0] - up[0] * fwd[2],
-            up[0] * fwd[1] - up[1] * fwd[0],
+            fwd[1] * up[2] - fwd[2] * up[1],
+            fwd[2] * up[0] - fwd[0] * up[2],
+            fwd[0] * up[1] - fwd[1] * up[0],
         ];
         let rl = (right[0] * right[0] + right[1] * right[1] + right[2] * right[2]).sqrt();
         let right = [right[0] / rl, right[1] / rl, right[2] / rl];
+        // Re-orthogonalize up against the (now correct) right: up = right × forward.
         let up = [
-            fwd[1] * right[2] - fwd[2] * right[1],
-            fwd[2] * right[0] - fwd[0] * right[2],
-            fwd[0] * right[1] - fwd[1] * right[0],
+            right[1] * fwd[2] - right[2] * fwd[1],
+            right[2] * fwd[0] - right[0] * fwd[2],
+            right[0] * fwd[1] - right[1] * fwd[0],
         ];
         // Column-major view matrix
         [

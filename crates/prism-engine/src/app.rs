@@ -13,16 +13,74 @@ use std::time::Instant;
 use winit::application::ApplicationHandler;
 use winit::event::{DeviceEvent, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
+use winit::keyboard::KeyCode;
 use winit::raw_window_handle::HasDisplayHandle;
 use winit::window::{Window, WindowId};
 
 use prism_ecs::World;
-use prism_render::{FrameUBOData, Renderer, Vertex};
+use prism_render::{DebugMode, FrameUBOData, NormalSpace, OverlayAction, Renderer, Vertex};
 
 use crate::camera::OrbitCamera;
 use crate::camera_controller::OrbitCameraController;
 use crate::input::{InputState, MouseButton};
-use crate::render_system::{render_system, MeshHandle, MeshManager, Transform};
+use crate::render_system::{render_system, MeshHandle, MeshManager, PbrMaterial, Transform};
+
+/// Locate and read the equirectangular HDR environment map for image-based
+/// lighting. Scans the `assets/` directory (and exe-relative variants) for any
+/// `*.hdr` file — so the resource can keep its own name (e.g.
+/// `valley_of_desolation_1k.hdr`) instead of being renamed. An explicit
+/// `env.hdr` is preferred if present; otherwise the first `.hdr` (in
+/// deterministic order) is used. Returns `None` if no file is found — the
+/// renderer then uses a procedural fallback environment.
+fn load_env_bytes() -> Option<Vec<u8>> {
+    use std::path::PathBuf;
+
+    let mut dirs: Vec<PathBuf> = vec![PathBuf::from("assets")];
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            dirs.push(dir.join("assets"));
+            dirs.push(dir.join("../../../assets"));
+        }
+    }
+
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    for dir in &dirs {
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let is_hdr = path
+                    .extension()
+                    .and_then(|s| s.to_str())
+                    .map(|s| s.eq_ignore_ascii_case("hdr"))
+                    .unwrap_or(false);
+                if is_hdr {
+                    candidates.push(path);
+                }
+            }
+        }
+    }
+
+    // Prefer an explicit "env.hdr"; otherwise use the first .hdr found.
+    candidates.sort();
+    if let Some(idx) = candidates
+        .iter()
+        .position(|p| p.file_name().map(|n| n.eq_ignore_ascii_case("env.hdr")).unwrap_or(false))
+    {
+        candidates.swap(0, idx);
+    }
+
+    for path in &candidates {
+        match std::fs::read(path) {
+            Ok(bytes) => {
+                log::info!("loaded environment map: {}", path.display());
+                return Some(bytes);
+            }
+            Err(e) => log::warn!("failed to read {}: {e}", path.display()),
+        }
+    }
+    log::info!("no environment map found in assets/; using procedural fallback");
+    None
+}
 
 // ---------------------------------------------------------------------------
 // Cube geometry (24 vertices, 36 indices)
@@ -41,13 +99,13 @@ fn create_test_scene(renderer: &Renderer) -> (World, MeshManager) {
         .expect("create sphere mesh");
 
     let mut world = World::new();
-    // Left: sphere, center/right: cubes.
+    // Left: sphere, center: PBR cube, right: cube.
     let configs = [
-        ([-2.5, 0.0, 0.0], 0usize),
-        ([0.0, 0.0, 0.0], 1),
-        ([2.5, 0.0, 0.0], 1),
+        ([-2.5, 0.0, 0.0], 0usize, false),
+        ([0.0, 0.0, 0.0], 1, true), // middle -> PBR + IBL
+        ([2.5, 0.0, 0.0], 1, false),
     ];
-    for &(pos, mesh_idx) in &configs {
+    for &(pos, mesh_idx, pbr) in &configs {
         let entity = world.spawn();
         world.insert(
             entity,
@@ -57,6 +115,9 @@ fn create_test_scene(renderer: &Renderer) -> (World, MeshManager) {
             },
         );
         world.insert(entity, MeshHandle(mesh_idx));
+        if pbr {
+            world.insert(entity, PbrMaterial::default());
+        }
     }
 
     let mut mesh_manager = MeshManager::new();
@@ -95,17 +156,43 @@ fn cube_vertices() -> Vec<Vertex> {
     );
 
     let mut verts = Vec::with_capacity(24);
+    // Per-corner UVs (planar mapping per face).
+    let uvs: [[f32; 2]; 4] = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
     for (face, &color) in colors.iter().enumerate() {
-        for corner in 0..4 {
+        let tangent = face_tangent(normals[face * 4]);
+        for (corner, &uv) in uvs.iter().enumerate() {
             let idx = face * 4 + corner;
             verts.push(Vertex {
                 position: positions[idx],
                 normal: normals[idx],
                 color,
+                uv,
+                tangent,
             });
         }
     }
     verts
+}
+
+/// Pick a stable tangent for a face given its normal (used for the PBR debug
+/// `Normal` (Tangent) view). Not strictly orthonormalized against the normal
+/// but sufficient for visualization.
+fn face_tangent(n: [f32; 3]) -> [f32; 3] {
+    let mut up = [0.0f32, 1.0, 0.0];
+    if (n[0] * n[0] + n[1] * n[1]).sqrt() < 1e-4 {
+        up = [1.0, 0.0, 0.0];
+    }
+    let t = [
+        up[1] * n[2] - up[2] * n[1],
+        up[2] * n[0] - up[0] * n[2],
+        up[0] * n[1] - up[1] * n[0],
+    ];
+    let len = (t[0] * t[0] + t[1] * t[1] + t[2] * t[2]).sqrt();
+    if len < 1e-6 {
+        [1.0, 0.0, 0.0]
+    } else {
+        [t[0] / len, t[1] / len, t[2] / len]
+    }
 }
 
 fn cube_indices() -> Vec<u32> {
@@ -133,10 +220,20 @@ fn sphere_mesh(sectors: u32, stacks: u32) -> (Vec<Vertex>, Vec<u32>) {
             let theta = j as f32 * 2.0 * std::f32::consts::PI / sectors as f32;
             let (st, ct) = theta.sin_cos();
             let pos = [r * sp * ct, r * cp, r * sp * st];
+            // Analytic tangent along increasing theta (u direction).
+            let mut tangent = [-sp * st, 0.0, sp * ct];
+            let tlen = (tangent[0] * tangent[0] + tangent[2] * tangent[2]).sqrt();
+            if tlen > 1e-6 {
+                tangent = [tangent[0] / tlen, 0.0, tangent[2] / tlen];
+            }
+            let u = theta / (2.0 * std::f32::consts::PI);
+            let v = phi / std::f32::consts::PI;
             verts.push(Vertex {
                 position: pos,
                 normal: [pos[0] / r, pos[1] / r, pos[2] / r],
                 color: [0.85, 0.85, 0.85], // light gray
+                uv: [u, v],
+                tangent,
             });
         }
     }
@@ -167,6 +264,15 @@ pub struct App {
     camera_controller: OrbitCameraController,
     needs_resize: bool,
     start: Instant,
+    /// Optional equirectangular HDR environment map bytes (`.hdr`), threaded
+    /// from the platform entry point into the renderer for image-based lighting.
+    env_bytes: Option<Vec<u8>>,
+    /// Currently selected PBR debug visualization mode.
+    debug_mode: DebugMode,
+    /// Coordinate space for the `Normal` debug mode.
+    normal_space: NormalSpace,
+    /// Whether the debug overlay UI is shown.
+    show_ui: bool,
 }
 
 impl App {
@@ -181,17 +287,32 @@ impl App {
             camera_controller: OrbitCameraController::default(),
             needs_resize: false,
             start: Instant::now(),
+            env_bytes: None,
+            debug_mode: DebugMode::Final,
+            normal_space: NormalSpace::World,
+            show_ui: true,
         }
     }
 
-    /// Create and run the application on a new event loop (desktop).
+    /// Create and run the application on a new event loop (desktop). Loads the
+    /// environment map from `assets/env.hdr` (if present) for IBL.
     pub fn run() -> anyhow::Result<()> {
-        Self::run_on_event_loop(EventLoop::new()?)
+        let env_bytes = load_env_bytes();
+        Self::run_on_event_loop_with_env(EventLoop::new()?, env_bytes)
     }
 
     /// Run the application on an existing event loop (used by Android).
     pub fn run_on_event_loop(event_loop: EventLoop<()>) -> anyhow::Result<()> {
+        Self::run_on_event_loop_with_env(event_loop, None)
+    }
+
+    /// Run on an existing event loop with an explicit environment map payload.
+    pub fn run_on_event_loop_with_env(
+        event_loop: EventLoop<()>,
+        env_bytes: Option<Vec<u8>>,
+    ) -> anyhow::Result<()> {
         let mut app = App::new();
+        app.env_bytes = env_bytes;
         event_loop.run_app(&mut app)?;
         Ok(())
     }
@@ -223,8 +344,13 @@ impl App {
             .collect();
         let extensions_ref: Vec<&str> = extensions.iter().map(|s| s.as_str()).collect();
 
-        let renderer = Renderer::new(extensions_ref, window.as_ref(), window.as_ref())
-            .expect("failed to create renderer");
+        let renderer = Renderer::new(
+            extensions_ref,
+            window.as_ref(),
+            window.as_ref(),
+            self.env_bytes.clone(),
+        )
+        .expect("failed to create renderer");
 
         // --- Build test scene: sphere + cubes ---
         let (world, mesh_manager) = create_test_scene(&renderer);
@@ -310,6 +436,23 @@ impl ApplicationHandler for App {
                 self.render_one_frame();
             }
             WindowEvent::MouseInput { state, button, .. } => {
+                // Left-click: try the debug overlay first; if it consumes the
+                // click, don't also start a camera drag.
+                if state == winit::event::ElementState::Pressed
+                    && button == winit::event::MouseButton::Left
+                {
+                    let pos = self.input_state.mouse_position();
+                    let ext = self.renderer.as_ref().map(|r| r.extent());
+                    log::info!(
+                        "MOUSE_DEBUG pos=({:.1},{:.1}) extent={:?}",
+                        pos[0],
+                        pos[1],
+                        ext.map(|e| (e.width, e.height)),
+                    );
+                    if self.handle_overlay_click(pos[0] as f32, pos[1] as f32) {
+                        return;
+                    }
+                }
                 self.input_state.handle_mouse_button(button.into(), state);
             }
             WindowEvent::CursorMoved { position, .. } => {
@@ -325,8 +468,25 @@ impl ApplicationHandler for App {
                 match touch.phase {
                     winit::event::TouchPhase::Started => {
                         self.input_state.set_mouse_position(pos);
-                        self.input_state
-                            .handle_mouse_button(MouseButton::Left, winit::event::ElementState::Pressed);
+                        let ext = self.renderer.as_ref().map(|r| r.extent());
+                        let orient = self.renderer.as_ref().map(|r| r.orientation());
+                        log::info!(
+                            "TOUCH_DEBUG touch.location=({:.1},{:.1}) extent={:?} \
+                             orientation_aspect={:.4} rotation={:?}",
+                            pos[0],
+                            pos[1],
+                            ext.map(|e| (e.width, e.height)),
+                            orient.map(|o| o.0).unwrap_or(1.0),
+                            orient.map(|o| o.1),
+                        );
+                        if self.handle_overlay_click(pos[0] as f32, pos[1] as f32) {
+                            // Consumed by the overlay; don't start a camera drag.
+                        } else {
+                            self.input_state.handle_mouse_button(
+                                MouseButton::Left,
+                                winit::event::ElementState::Pressed,
+                            );
+                        }
                     }
                     winit::event::TouchPhase::Moved => {
                         self.input_state.handle_mouse_move(pos);
@@ -346,6 +506,21 @@ impl ApplicationHandler for App {
                     },
                 ..
             } => {
+                if state == winit::event::ElementState::Pressed {
+                    if let winit::keyboard::PhysicalKey::Code(code) = physical_key {
+                        match code {
+                            KeyCode::Digit1 => self.debug_mode = DebugMode::Final,
+                            KeyCode::Digit2 => self.debug_mode = DebugMode::Albedo,
+                            KeyCode::Digit3 => self.debug_mode = DebugMode::Specular,
+                            KeyCode::Digit4 => self.debug_mode = DebugMode::Reflection,
+                            KeyCode::Digit5 => self.debug_mode = DebugMode::Ambient,
+                            KeyCode::Digit6 => self.debug_mode = DebugMode::Normal,
+                            KeyCode::KeyN => self.normal_space = self.normal_space.next(),
+                            KeyCode::KeyH => self.show_ui = !self.show_ui,
+                            _ => {}
+                        }
+                    }
+                }
                 self.input_state.handle_keyboard(physical_key, state);
             }
             _ => {}
@@ -386,6 +561,27 @@ impl ApplicationHandler for App {
 }
 
 impl App {
+    /// Hit-test a pointer against the debug overlay and apply the resulting
+    /// action. Returns `true` if the overlay consumed the click (so the caller
+    /// should not also treat it as a camera drag).
+    fn handle_overlay_click(&mut self, px: f32, py: f32) -> bool {
+        if !self.show_ui {
+            return false;
+        }
+        let action = self.renderer.as_ref().and_then(|r| r.hit_test_overlay(px, py));
+        match action {
+            Some(OverlayAction::SetMode(m)) => {
+                self.debug_mode = m;
+                true
+            }
+            Some(OverlayAction::CycleNormalSpace) => {
+                self.normal_space = self.normal_space.next();
+                true
+            }
+            None => false,
+        }
+    }
+
     fn render_one_frame(&mut self) {
         // Skip rendering while the surface is suspended (no swapchain).
         let Some(renderer) = self.renderer.as_mut() else { return };
@@ -436,6 +632,7 @@ impl App {
             camera_position: [0.0; 4], // placeholder
             light_direction,
             light_color,
+            view: [[0.0; 4]; 4], // placeholder, render_system fills it
         };
 
         let clear_color = [0.05, 0.05, 0.1, 1.0]; // dark blue-gray
@@ -449,7 +646,17 @@ impl App {
             _ => return,
         };
 
-        render_system(renderer, world, meshes, clear_color, &mut self.camera, &light_data);
+        render_system(
+            renderer,
+            world,
+            meshes,
+            clear_color,
+            &mut self.camera,
+            &light_data,
+            self.debug_mode as u32,
+            self.normal_space as u32,
+            self.show_ui,
+        );
     }
 }
 

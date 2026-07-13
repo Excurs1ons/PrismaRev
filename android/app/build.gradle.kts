@@ -44,3 +44,17 @@ dependencies {
     implementation("androidx.appcompat:appcompat:1.6.1")
     implementation("androidx.core:core-ktx:1.15.0")
 }
+
+// Sync user-provided environment/texture resources from the repo's top-level
+// assets/ directory into the APK assets so they are bundled and loadable at
+// runtime. The engine scans for *.hdr by name, so files keep their own names
+// (e.g. valley_of_desolation_1k.hdr) — no rename needed.
+val syncPrismaAssets by tasks.registering(Copy::class) {
+    from(rootDir.resolve("../assets"))
+    include("*.hdr", "*.exr", "*.png", "*.jpg", "*.jpeg", "*.ktx2", "*.env")
+    into(layout.projectDirectory.dir("src/main/assets"))
+}
+
+tasks.named("preBuild") {
+    dependsOn(syncPrismaAssets)
+}

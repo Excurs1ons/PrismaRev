@@ -21,7 +21,11 @@ use ash::vk;
 
 use crate::context::VulkanContext;
 use crate::descriptor::{DescriptorLayout, DescriptorPool, FrameUBO, FrameUBOData};
+use crate::gizmo::Gizmo;
+use crate::ibl::IblResources;
 use crate::mesh::{Mesh, Vertex};
+use crate::overlay::{Overlay, OverlayAction};
+use crate::pbr_push::{DebugMode, NormalSpace, PbrPushConstants};
 use crate::pipeline::GraphicsPipeline;
 use crate::render_pass::{DepthImage, Framebuffers, RenderPass};
 use crate::shader;
@@ -36,6 +40,7 @@ use crate::swapchain::{Swapchain, FRAMES_IN_FLIGHT};
 // ---------------------------------------------------------------------------
 const VERT_SPV: &[u8] = include_bytes!("../../../shaders/mesh.vert.spv");
 const FRAG_SPV: &[u8] = include_bytes!("../../../shaders/mesh.frag.spv");
+const PBR_FRAG_SPV: &[u8] = include_bytes!("../../../shaders/pbr.frag.spv");
 
 // ---------------------------------------------------------------------------
 // Frame state
@@ -81,6 +86,12 @@ pub struct Renderer {
     framebuffers: Framebuffers,
     depth_images: Vec<DepthImage>,
     pipeline: GraphicsPipeline,
+    /// PBR + IBL pipeline (mesh.vert + pbr.frag) for entities with `PbrMaterial`.
+    pbr_pipeline: GraphicsPipeline,
+    /// Image-based lighting resources (equirect env texture + descriptor set).
+    /// Declared before `context` so it is dropped (freeing its Vulkan objects)
+    /// while the device is still alive.
+    ibl: IblResources,
     // `descriptor_layout`/`descriptor_pool` are stored only to own the Vulkan
     // objects their handles reference (the pipeline's layout, and the pools the
     // frame UBOs' descriptor sets were allocated from). They are never read
@@ -90,6 +101,14 @@ pub struct Renderer {
     #[allow(dead_code)]
     descriptor_pool: DescriptorPool,
     frame_ubos: Vec<FrameUBO>,
+
+    /// In-app debug overlay (mode buttons + labels), drawn on top of the 3D
+    /// scene with depth test disabled.
+    overlay: Overlay,
+
+    /// World-space XYZ orientation gizmo, drawn on top of the 3D scene with
+    /// depth test disabled.
+    gizmo: Gizmo,
 
     // Shader modules (kept alive until drop for safety)
     vert_module: vk::ShaderModule,
@@ -113,6 +132,7 @@ impl Renderer {
         window_extensions: Vec<&str>,
         window: &dyn raw_window_handle::HasDisplayHandle,
         window_handle: &dyn raw_window_handle::HasWindowHandle,
+        env_bytes: Option<Vec<u8>>,
     ) -> anyhow::Result<Self> {
         let context = Arc::new(VulkanContext::new(&window_extensions)?);
         let swapchain = Swapchain::new(&context, window, window_handle)?;
@@ -166,7 +186,30 @@ impl Renderer {
             .collect::<anyhow::Result<Vec<_>>>()
             .context("create frame UBOs")?;
 
-        // --- Graphics pipeline ---
+        // --- Command pool & buffers (needed for IBL upload + per-frame draws) ---
+        let pool_info = vk::CommandPoolCreateInfo::default()
+            .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
+            .queue_family_index(context.graphics_queue_family);
+        let command_pool = unsafe { context.device.create_command_pool(&pool_info, None) }
+            .context("create command pool")?;
+
+        let alloc_info = vk::CommandBufferAllocateInfo::default()
+            .command_pool(command_pool)
+            .level(vk::CommandBufferLevel::PRIMARY)
+            .command_buffer_count(FRAMES_IN_FLIGHT as u32);
+        let command_buffers = unsafe { context.device.allocate_command_buffers(&alloc_info) }
+            .context("allocate command buffers")?;
+
+        // --- Image-based lighting (equirect env texture + descriptor set) ---
+        let ibl = IblResources::new(
+            context.clone(),
+            command_pool,
+            context.graphics_queue,
+            env_bytes,
+        )
+        .context("create IBL resources")?;
+
+        // --- Graphics pipeline (Blinn-Phong, set 0 = frame UBO) ---
         let vert_stage = shader::shader_stage(vk::ShaderStageFlags::VERTEX, vert_module, c"main");
         let frag_stage = shader::shader_stage(vk::ShaderStageFlags::FRAGMENT, frag_module, c"main");
         let shader_stages = [vert_stage, frag_stage];
@@ -188,19 +231,42 @@ impl Renderer {
         )
         .context("create graphics pipeline")?;
 
-        // --- Command pool & buffers ---
-        let pool_info = vk::CommandPoolCreateInfo::default()
-            .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
-            .queue_family_index(context.graphics_queue_family);
-        let command_pool = unsafe { context.device.create_command_pool(&pool_info, None) }
-            .context("create command pool")?;
+        // --- PBR pipeline (mesh.vert + pbr.frag): set 0 = frame UBO, set 1 = IBL ---
+        let pbr_frag_module = shader::load_shader_module(&context.device, PBR_FRAG_SPV)
+            .context("load pbr fragment shader module")?;
+        let pbr_frag_stage =
+            shader::shader_stage(vk::ShaderStageFlags::FRAGMENT, pbr_frag_module, c"main");
+        let pbr_shader_stages = [vert_stage, pbr_frag_stage];
 
-        let alloc_info = vk::CommandBufferAllocateInfo::default()
-            .command_pool(command_pool)
-            .level(vk::CommandBufferLevel::PRIMARY)
-            .command_buffer_count(FRAMES_IN_FLIGHT as u32);
-        let command_buffers = unsafe { context.device.allocate_command_buffers(&alloc_info) }
-            .context("allocate command buffers")?;
+        // model mat4 (64) + albedoMetallic vec4 (16) + roughness f32 (4) +
+        // debug_mode u32 (4) + normal_space u32 (4) = 92 bytes.
+        let pbr_push_constant_ranges = [vk::PushConstantRange::default()
+            .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
+            .offset(0)
+            .size(92)];
+
+        let pbr_set_layouts = [descriptor_layout.layout, ibl.descriptor_set_layout];
+        let pbr_pipeline = GraphicsPipeline::new(
+            &context.device,
+            &pbr_shader_stages,
+            std::slice::from_ref(&binding_desc),
+            &attr_descs,
+            &pbr_set_layouts,
+            &pbr_push_constant_ranges,
+            render_pass.handle,
+            0,
+        )
+        .context("create pbr graphics pipeline")?;
+
+        // Shader module is consumed at pipeline creation; safe to drop now.
+        unsafe { context.device.destroy_shader_module(pbr_frag_module, None) };
+
+        // --- Debug overlay (font atlas + 2D UI pipeline) ---
+        let overlay = Overlay::new(&context, command_pool, render_pass.handle)
+            .context("create debug overlay")?;
+
+        // --- World-space XYZ gizmo (always-on-top debug helper) ---
+        let gizmo = Gizmo::new(&context, render_pass.handle).context("create gizmo")?;
 
         let color_format = swapchain.format.format;
         Ok(Self {
@@ -212,9 +278,13 @@ impl Renderer {
             framebuffers,
             depth_images,
             pipeline,
+            pbr_pipeline,
+            ibl,
             descriptor_layout,
             descriptor_pool,
             frame_ubos,
+            overlay,
+            gizmo,
             vert_module,
             frag_module,
             color_format,
@@ -688,6 +758,95 @@ impl Renderer {
         }
     }
 
+    /// Record a PBR + IBL draw call for a mesh with the given model transform
+    /// and material parameters. Routes through the PBR pipeline (frame UBO at
+    /// set 0 + push constants for model/material).
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_mesh_pbr(
+        &self,
+        mesh: &Mesh,
+        model: &[[f32; 4]; 4],
+        albedo: [f32; 3],
+        metallic: f32,
+        roughness: f32,
+        debug_mode: u32,
+        normal_space: u32,
+    ) {
+        let Some(ref frame) = self.current else {
+            log::error!("draw_mesh_pbr called outside begin_frame/end_frame");
+            return;
+        };
+        let device = &self.context.device;
+        let cmd = frame.command_buffer;
+
+        // Bind PBR pipeline + its layout (frame UBO at set 0 + IBL at set 1).
+        unsafe {
+            device.cmd_bind_pipeline(
+                cmd,
+                vk::PipelineBindPoint::GRAPHICS,
+                self.pbr_pipeline.pipeline,
+            );
+            device.cmd_bind_descriptor_sets(
+                cmd,
+                vk::PipelineBindPoint::GRAPHICS,
+                self.pbr_pipeline.layout,
+                0,
+                &[self.frame_ubos[frame.frame_index].descriptor_set],
+                &[],
+            );
+            device.cmd_bind_descriptor_sets(
+                cmd,
+                vk::PipelineBindPoint::GRAPHICS,
+                self.pbr_pipeline.layout,
+                1,
+                &[self.ibl.descriptor_set],
+                &[],
+            );
+        }
+
+        // Push constants: model mat4 (64) + albedoMetallic vec4 (16) + roughness
+        // f32 (4) + debug_mode u32 (4) + normal_space u32 (4) = 92 bytes.
+        let pc = PbrPushConstants {
+            model: *model,
+            albedo_metallic: [albedo[0], albedo[1], albedo[2], metallic],
+            roughness,
+            debug_mode,
+            normal_space,
+        };
+        let pc_bytes = unsafe {
+            std::slice::from_raw_parts(
+                &pc as *const _ as *const u8,
+                std::mem::size_of::<PbrPushConstants>(),
+            )
+        };
+        unsafe {
+            device.cmd_push_constants(
+                cmd,
+                self.pbr_pipeline.layout,
+                vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+                0,
+                pc_bytes,
+            );
+        }
+
+        // Bind vertex buffer + draw (same geometry as draw_mesh).
+        let vertex_buffers = [mesh.vertex_buffer];
+        let offsets = [0u64];
+        unsafe {
+            device.cmd_bind_vertex_buffers(cmd, 0, &vertex_buffers, &offsets);
+        }
+        if let Some(index_buffer) = mesh.index_buffer {
+            unsafe {
+                device.cmd_bind_index_buffer(cmd, index_buffer, 0, vk::IndexType::UINT32);
+                device.cmd_draw_indexed(cmd, mesh.index_count, 1, 0, 0, 0);
+            }
+        } else {
+            unsafe {
+                device.cmd_draw(cmd, mesh.vertex_count, 1, 0, 0);
+            }
+        }
+    }
+
     /// Update the frame UBO data (view-proj, camera pos, light data).
     ///
     /// Must be called between [`begin_frame`](Self::begin_frame) and
@@ -699,6 +858,51 @@ impl Renderer {
         self.frame_ubos[frame.frame_index]
             .update(&self.context.device, data)
             .context("update frame UBO")
+    }
+
+    /// Draw the debug overlay on top of the 3D scene.
+    ///
+    /// Must be called between [`begin_frame`](Self::begin_frame) and
+    /// [`end_frame`](Self::end_frame), after the 3D draws. `debug_mode` /
+    /// `normal_space` are the `u32` discriminants; `show_ui` toggles the
+    /// overlay entirely.
+    pub fn draw_overlay(&self, debug_mode: u32, normal_space: u32, show_ui: bool) {
+        let Some(ref frame) = self.current else {
+            return;
+        };
+        let extent = self.extent();
+        let rotation = self.orientation().1;
+        self.overlay.draw(
+            frame.command_buffer,
+            extent.width,
+            extent.height,
+            DebugMode::from_u32(debug_mode),
+            NormalSpace::from_u32(normal_space),
+            show_ui,
+            &rotation,
+        );
+    }
+
+    /// Draw the world-space XYZ orientation gizmo on top of the 3D scene.
+    ///
+    /// Must be called between [`begin_frame`](Self::begin_frame) and
+    /// [`end_frame`](Self::end_frame), after the 3D draws. `view_proj` is the
+    /// same clip-space matrix used for the scene (including any
+    /// `surface_rotation`), so the gizmo tracks the scene's orientation.
+    pub fn draw_gizmo(&self, view_proj: &[[f32; 4]; 4]) {
+        let Some(ref frame) = self.current else {
+            return;
+        };
+        self.gizmo.draw(frame.command_buffer, view_proj);
+    }
+
+    /// Hit-test a pointer (pixels, top-left origin) against the overlay
+    /// buttons. Returns the action to apply, or `None` if nothing was hit.
+    pub fn hit_test_overlay(&self, px: f32, py: f32) -> Option<OverlayAction> {
+        let extent = self.extent();
+        let rotation = self.orientation().1;
+        self.overlay
+            .hit_test(px, py, extent.width, extent.height, &rotation)
     }
 
     /// Finish the current frame: end the render pass and command buffer,

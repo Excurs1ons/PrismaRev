@@ -78,6 +78,28 @@ impl Transform {
     }
 }
 
+/// PBR surface material, used to route an entity through the PBR + IBL
+/// pipeline instead of the default Blinn-Phong path.
+///
+/// `albedo` is the linear base color, `metallic` and `roughness` are in [0,1].
+#[derive(Debug, Clone)]
+pub struct PbrMaterial {
+    pub albedo: [f32; 3],
+    pub metallic: f32,
+    pub roughness: f32,
+}
+
+impl Default for PbrMaterial {
+    fn default() -> Self {
+        // Gold: fully metallic, moderately rough.
+        Self {
+            albedo: [1.0, 0.78, 0.34],
+            metallic: 1.0,
+            roughness: 0.3,
+        }
+    }
+}
+
 /// Index into an externally-owned list of GPU meshes.
 #[derive(Debug, Clone, Copy)]
 pub struct MeshHandle(pub usize);
@@ -133,6 +155,7 @@ impl Default for MeshManager {
 /// 5. Calls [`Renderer::end_frame`] to submit and present.
 ///
 /// `meshes` owns the GPU meshes indexed by the entities' [`MeshHandle`].
+#[allow(clippy::too_many_arguments)]
 pub fn render_system(
     renderer: &mut Renderer,
     world: &World,
@@ -140,6 +163,9 @@ pub fn render_system(
     clear_color: [f32; 4],
     camera: &mut OrbitCamera,
     light_data: &FrameUBOData,
+    debug_mode: u32,
+    normal_space: u32,
+    show_ui: bool,
 ) {
     if let Err(e) = renderer.begin_frame(clear_color) {
         log::error!("renderer.begin_frame failed: {e}");
@@ -161,6 +187,7 @@ pub fn render_system(
         camera_position: [camera.eye()[0], camera.eye()[1], camera.eye()[2], 0.0],
         light_direction: light_data.light_direction,
         light_color: light_data.light_color,
+        view: camera.view(),
     };
     if let Err(e) = renderer.set_frame_data(&frame_data) {
         log::error!("renderer.set_frame_data failed: {e}");
@@ -175,10 +202,28 @@ pub fn render_system(
         };
         let model = transform.to_model_matrix();
         log::debug!("drawing entity {entity:?} mesh={} pos={:?} z={}", handle.0, transform.translation, model[3][2]);
-        renderer.draw_mesh(mesh, &model);
+        if let Some(mat) = world.get::<PbrMaterial>(entity) {
+            renderer.draw_mesh_pbr(
+                mesh,
+                &model,
+                mat.albedo,
+                mat.metallic,
+                mat.roughness,
+                debug_mode,
+                normal_space,
+            );
+        } else {
+            renderer.draw_mesh(mesh, &model);
+        }
         draw_count += 1;
     }
     log::debug!("drew {draw_count} meshes");
+
+    // Draw the world-space XYZ gizmo on top of the 3D scene.
+    renderer.draw_gizmo(&view_proj);
+
+    // Draw the debug overlay on top of the 3D scene.
+    renderer.draw_overlay(debug_mode, normal_space, show_ui);
 
     if let Err(e) = renderer.end_frame() {
         log::error!("renderer.end_frame failed: {e}");

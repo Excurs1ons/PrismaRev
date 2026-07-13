@@ -2,7 +2,8 @@
 //!
 //! A [`Mesh`] owns device-local vertex/index buffers and knows how to upload
 //! data through a staging buffer. The vertex format is interleaved
-//! `(position: [f32; 3], normal: [f32; 3], color: [f32; 3])` — see [`Vertex`].
+//! `(position, normal, color, uv, tangent)` — see [`Vertex`]. `uv` + `tangent`
+//! support the PBR debug `Normal` (Tangent space) view.
 
 use anyhow::Context as _;
 use ash::vk;
@@ -10,13 +11,15 @@ use ash::vk;
 use crate::buffer::{self, BufferUsage, MemoryProperties};
 use crate::context::VulkanContext;
 
-/// A single vertex: position + normal + color (interleaved).
+/// A single vertex: position + normal + color + uv + tangent (interleaved).
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub struct Vertex {
     pub position: [f32; 3],
     pub normal:   [f32; 3],
     pub color:    [f32; 3],
+    pub uv:       [f32; 2],
+    pub tangent:  [f32; 3],
 }
 
 impl Vertex {
@@ -28,8 +31,10 @@ impl Vertex {
             .input_rate(vk::VertexInputRate::VERTEX)
     }
 
-    /// Attribute descriptions: position (location 0), normal (location 1), color (location 2).
-    pub fn attribute_descriptions() -> [vk::VertexInputAttributeDescription; 3] {
+    /// Attribute descriptions:
+    /// position (loc 0), normal (loc 1), color (loc 2), uv (loc 3), tangent (loc 4).
+    pub fn attribute_descriptions() -> [vk::VertexInputAttributeDescription; 5] {
+        let f = std::mem::size_of::<f32>() as u32;
         let position = vk::VertexInputAttributeDescription::default()
             .location(0)
             .binding(0)
@@ -39,13 +44,23 @@ impl Vertex {
             .location(1)
             .binding(0)
             .format(vk::Format::R32G32B32_SFLOAT)
-            .offset(3 * std::mem::size_of::<f32>() as u32);
+            .offset(3 * f);
         let color = vk::VertexInputAttributeDescription::default()
             .location(2)
             .binding(0)
             .format(vk::Format::R32G32B32_SFLOAT)
-            .offset(6 * std::mem::size_of::<f32>() as u32);
-        [position, normal, color]
+            .offset(6 * f);
+        let uv = vk::VertexInputAttributeDescription::default()
+            .location(3)
+            .binding(0)
+            .format(vk::Format::R32G32_SFLOAT)
+            .offset(9 * f);
+        let tangent = vk::VertexInputAttributeDescription::default()
+            .location(4)
+            .binding(0)
+            .format(vk::Format::R32G32B32_SFLOAT)
+            .offset(11 * f);
+        [position, normal, color, uv, tangent]
     }
 }
 
@@ -155,5 +170,32 @@ impl Mesh {
         if let Some(mem) = self.index_memory.take() {
             unsafe { device.free_memory(mem, None) };
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vertex_stride_is_56() {
+        assert_eq!(std::mem::size_of::<Vertex>(), 56);
+        assert_eq!(Vertex::binding_description().stride, 56);
+    }
+
+    #[test]
+    fn vertex_attribute_offsets() {
+        let attrs = Vertex::attribute_descriptions();
+        let f = std::mem::size_of::<f32>() as u32;
+        assert_eq!(attrs[0].location, 0);
+        assert_eq!(attrs[0].offset, 0);
+        assert_eq!(attrs[1].location, 1);
+        assert_eq!(attrs[1].offset, 3 * f);
+        assert_eq!(attrs[2].location, 2);
+        assert_eq!(attrs[2].offset, 6 * f);
+        assert_eq!(attrs[3].location, 3);
+        assert_eq!(attrs[3].offset, 9 * f);
+        assert_eq!(attrs[4].location, 4);
+        assert_eq!(attrs[4].offset, 11 * f);
     }
 }

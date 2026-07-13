@@ -21,9 +21,14 @@
 
 pub mod buffer;
 pub mod capabilities;
+pub mod hdr;
+pub mod ibl;
 pub mod context;
 pub mod descriptor;
+pub mod gizmo;
 pub mod mesh;
+pub mod overlay;
+pub mod pbr_push;
 pub mod pipeline;
 pub mod render_pass;
 pub mod renderer;
@@ -35,6 +40,9 @@ pub use capabilities::RayTracingCaps;
 pub use context::VulkanContext;
 pub use descriptor::{DescriptorLayout, DescriptorPool, FrameUBO, FrameUBOData};
 pub use mesh::{Mesh, Vertex};
+pub use gizmo::Gizmo;
+pub use overlay::{Overlay, OverlayAction, OverlayVertex};
+pub use pbr_push::{DebugMode, NormalSpace, PbrPushConstants};
 pub use pipeline::GraphicsPipeline;
 pub use render_pass::{DepthImage, Framebuffers, RenderPass};
 pub use renderer::Renderer;

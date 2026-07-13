@@ -79,7 +79,10 @@ impl GraphicsPipeline {
             .polygon_mode(vk::PolygonMode::FILL)
             .line_width(1.0)
             .cull_mode(vk::CullModeFlags::BACK)
-            .front_face(vk::FrontFace::CLOCKWISE)
+            // View matrix is now a proper rotation (det +1); the projection's
+            // y-flip (Vulkan NDC) is the single remaining reflection, so front
+            // faces wind counter-clockwise in clip space.
+            .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
             .depth_bias_enable(false);
 
         // --- Multisampling (none) ---
