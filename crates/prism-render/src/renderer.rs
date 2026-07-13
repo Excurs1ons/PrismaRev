@@ -900,9 +900,8 @@ impl Renderer {
     /// buttons. Returns the action to apply, or `None` if nothing was hit.
     pub fn hit_test_overlay(&self, px: f32, py: f32) -> Option<OverlayAction> {
         let extent = self.extent();
-        let rotation = self.orientation().1;
         self.overlay
-            .hit_test(px, py, extent.width, extent.height, &rotation)
+            .hit_test(px, py, extent.width, extent.height)
     }
 
     /// Finish the current frame: end the render pass and command buffer,

@@ -217,7 +217,6 @@ impl Drop for Gizmo {
 // ---------------------------------------------------------------------------
 
 /// Build the three axis arrows (shaft box + cone head) as a triangle list.
-#[allow(clippy::type_complexity)]
 fn generate_gizmo() -> Vec<GizmoVertex> {
     let mut v = Vec::new();
     let len = 1.5f32; // shaft length

@@ -90,7 +90,7 @@ impl Swapchain {
 
         let present_mode = choose_present_mode(&surface_ext, context.physical_device, surface);
 
-        let (format, extent, pre_transform, swapchain, images, views) =
+        let SwapchainOutput { format, extent, pre_transform, swapchain, images, views } =
             create_swapchain(context, surface, vk::SwapchainKHR::null(), present_mode)?;
         let n_images = images.len();
         let sem_info = vk::SemaphoreCreateInfo::default();
@@ -157,7 +157,7 @@ impl Swapchain {
         let old_swapchain = self.swapchain;
         // Build the new swapchain first, handing off the old one so the
         // implementation can retire it cleanly (avoids NATIVE_WINDOW_IN_USE).
-        let (format, extent, pre_transform, swapchain, images, views) =
+        let SwapchainOutput { format, extent, pre_transform, swapchain, images, views } =
             create_swapchain(context, self.surface, old_swapchain, self.present_mode).map_err(|e| {
                 log::warn!("swapchain recreate failed, keeping old swapchain: {e}");
                 e
@@ -299,20 +299,22 @@ impl Swapchain {
 // swapchain creation helpers
 // ---------------------------------------------------------------------------
 
-#[allow(clippy::type_complexity)]
+/// Result of creating or recreating a swapchain.
+struct SwapchainOutput {
+    format: vk::SurfaceFormatKHR,
+    extent: vk::Extent2D,
+    pre_transform: vk::SurfaceTransformFlagsKHR,
+    swapchain: vk::SwapchainKHR,
+    images: Vec<vk::Image>,
+    views: Vec<vk::ImageView>,
+}
+
 fn create_swapchain(
     context: &VulkanContext,
     surface: vk::SurfaceKHR,
     old_swapchain: vk::SwapchainKHR,
     present_mode: vk::PresentModeKHR,
-) -> anyhow::Result<(
-    vk::SurfaceFormatKHR,
-    vk::Extent2D,
-    vk::SurfaceTransformFlagsKHR,
-    vk::SwapchainKHR,
-    Vec<vk::Image>,
-    Vec<vk::ImageView>,
-)> {
+) -> anyhow::Result<SwapchainOutput> {
     let surface_ext = ash::khr::surface::Instance::new(&context.entry, &context.instance);
 
     let capabilities = unsafe {
@@ -367,7 +369,7 @@ fn create_swapchain(
         .map(|image| create_image_view(context, *image, format.format))
         .collect::<anyhow::Result<Vec<_>>>()?;
 
-    Ok((format, extent, pre_transform, swapchain, images, views))
+    Ok(SwapchainOutput { format, extent, pre_transform, swapchain, images, views })
 }
 
 fn choose_surface_format(available: &[vk::SurfaceFormatKHR]) -> vk::SurfaceFormatKHR {

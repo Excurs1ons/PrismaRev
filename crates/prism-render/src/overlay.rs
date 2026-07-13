@@ -529,30 +529,22 @@ impl Overlay {
     }
 
     /// Hit-test a pointer (screen-space pixels, top-left origin, y-down — the
-    /// same space the rects are defined in) against the buttons. The pointer is
-    /// mapped into clip space via the same presentation-flip compensation used
-    /// by the geometry (`screen_to_clip`) and back into screen space, then
-    /// compared directly against the screen-space rects. No `surface_rotation`
-    /// is applied (the HUD is screen-fixed) and no separate vertical-flip hack
-    /// is needed — both the rects and the pointer live in screen space.
+    /// same space the rects are defined in) against the overlay buttons.
+    /// Touch coordinates are already in screen space, and the rects are defined
+    /// in that same space, so they compare directly. (Only `draw` pre-rotates
+    /// by `surface_rotation` to counter the compositor's `pre_transform`; the
+    /// hit-test must not, or clicks would land on the visually rotated — not
+    /// the screen-space — buttons.)
     pub fn hit_test(
         &self,
         px: f32,
         py: f32,
         extent_w: u32,
         extent_h: u32,
-        _rotation: &[[f32; 4]; 4],
     ) -> Option<OverlayAction> {
-        // Pointer (screen space) -> clip (with presentation-flip compensation,
-        // identical to `screen_to_clip`) -> back to screen space.
-        let cx = px / extent_w as f32 * 2.0 - 1.0;
-        let cy = 1.0 - (extent_h as f32 - py) / extent_h as f32 * 2.0;
-        let px2 = (cx + 1.0) / 2.0 * extent_w as f32;
-        let py2 = extent_h as f32 - (1.0 - cy) / 2.0 * extent_h as f32;
-
         let rects = self.button_rects(extent_w, extent_h);
         for (i, r) in rects.iter().enumerate() {
-            if r.contains(px2, py2) {
+            if r.contains(px, py) {
                 return if i < 6 {
                     Some(OverlayAction::SetMode(DebugMode::ALL[i]))
                 } else {
@@ -593,12 +585,16 @@ impl Drop for Overlay {
 
 // --- Geometry helpers -------------------------------------------------------
 
-/// Map a **screen-space** pixel (top-left origin, y-down — same as the
-/// pointer) into clip space, compensating for the swapchain's vertical
-/// presentation flip. The framebuffer is presented upside-down, so a point at
-/// screen-top must land at framebuffer-bottom (clip y = -1) and vice-versa.
-/// This single flip keeps text upright and buttons where they are defined on
-/// screen, with no per-call hacks.
+/// Map a **screen-space** pixel (top-left origin, y-down — the same space the
+/// pointer reports and the overlay rects are defined in) into clip space.
+///
+/// The screen and the swapchain framebuffer share a top-left, y-down origin,
+/// so this is just the standard viewport inverse: screen-bottom maps to clip
+/// y = +1 (framebuffer bottom) and screen-top to clip y = -1. The compositor's
+/// `pre_transform` (e.g. ROTATE_90 on a landscape Android app) is handled
+/// separately by the caller: `draw` pre-rotates the resulting clip positions
+/// by `surface_rotation` so the HUD lands upright on screen, while `hit_test`
+/// leaves the pointer unrotated because it is already in screen space.
 fn screen_to_clip(px: f32, py: f32, ew: u32, eh: u32) -> [f32; 2] {
     [
         (px / ew as f32) * 2.0 - 1.0,

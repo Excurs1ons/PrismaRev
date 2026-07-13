@@ -133,7 +133,7 @@ impl World {
             .pools
             .entry(TypeId::of::<T>())
             .or_insert_with(|| Box::new(ComponentPool::<T>::new()));
-        pool_downcast_mut::<T>(pool).insert(entity.id, component);
+        pool_downcast_mut::<T>(pool.as_mut()).insert(entity.id, component);
     }
     /// Borrow a component, if present.
     pub fn get<T: Component>(&self, entity: Entity) -> Option<&T> {
@@ -142,7 +142,7 @@ impl World {
         }
         self.pools
             .get(&TypeId::of::<T>())
-            .and_then(|pool| pool_downcast_ref::<T>(pool).get(entity.id))
+            .and_then(|pool| pool_downcast_ref::<T>(pool.as_ref()).get(entity.id))
     }
 
     /// Mutably borrow a component, if present.
@@ -152,7 +152,7 @@ impl World {
         }
         self.pools
             .get_mut(&TypeId::of::<T>())
-            .and_then(|pool| pool_downcast_mut::<T>(pool).get_mut(entity.id))
+            .and_then(|pool| pool_downcast_mut::<T>(pool.as_mut()).get_mut(entity.id))
     }
 
     /// Remove a component type from `entity`, returning the owned value.
@@ -162,7 +162,7 @@ impl World {
         }
         self.pools
             .get_mut(&TypeId::of::<T>())
-            .and_then(|pool| pool_downcast_mut::<T>(pool).remove(entity.id))
+            .and_then(|pool| pool_downcast_mut::<T>(pool.as_mut()).remove(entity.id))
     }
 
     /// Iterate over all `(entity, &T)` pairs for a single component type.
@@ -173,7 +173,7 @@ impl World {
         let entities = &self.entities;
         let pool = self.pools.get(&TypeId::of::<T>());
         pool.into_iter()
-            .flat_map(move |p| pool_downcast_ref::<T>(p).iter())
+            .flat_map(move |p| pool_downcast_ref::<T>(p.as_ref()).iter())
             .filter_map(move |(id, value)| {
                 entities
                     .get(id as usize)
@@ -186,7 +186,7 @@ impl World {
         let entities = &self.entities;
         let pool = self.pools.get_mut(&TypeId::of::<T>());
         pool.into_iter()
-            .flat_map(move |p| pool_downcast_mut::<T>(p).iter_mut())
+            .flat_map(move |p| pool_downcast_mut::<T>(p.as_mut()).iter_mut())
             .filter_map(move |(id, value)| {
                 entities
                     .get(id as usize)
@@ -201,8 +201,8 @@ impl World {
         &self,
     ) -> impl Iterator<Item = (Entity, &A, &B)> {
         let entities = &self.entities;
-        let pool_a = self.pools.get(&TypeId::of::<A>()).map(|p| pool_downcast_ref::<A>(p));
-        let pool_b = self.pools.get(&TypeId::of::<B>()).map(|p| pool_downcast_ref::<B>(p));
+        let pool_a = self.pools.get(&TypeId::of::<A>()).map(|p| pool_downcast_ref::<A>(p.as_ref()));
+        let pool_b = self.pools.get(&TypeId::of::<B>()).map(|p| pool_downcast_ref::<B>(p.as_ref()));
         pool_a.into_iter().flat_map(move |a| {
             pool_b.into_iter().flat_map(move |b| {
                 a.iter().filter_map(move |(id, av)| {
@@ -220,9 +220,9 @@ impl World {
         &self,
     ) -> impl Iterator<Item = (Entity, &A, &B, &C)> {
         let entities = &self.entities;
-        let pool_a = self.pools.get(&TypeId::of::<A>()).map(|p| pool_downcast_ref::<A>(p));
-        let pool_b = self.pools.get(&TypeId::of::<B>()).map(|p| pool_downcast_ref::<B>(p));
-        let pool_c = self.pools.get(&TypeId::of::<C>()).map(|p| pool_downcast_ref::<C>(p));
+        let pool_a = self.pools.get(&TypeId::of::<A>()).map(|p| pool_downcast_ref::<A>(p.as_ref()));
+        let pool_b = self.pools.get(&TypeId::of::<B>()).map(|p| pool_downcast_ref::<B>(p.as_ref()));
+        let pool_c = self.pools.get(&TypeId::of::<C>()).map(|p| pool_downcast_ref::<C>(p.as_ref()));
         pool_a.into_iter().flat_map(move |a| {
             pool_b.into_iter().flat_map(move |b| {
                 pool_c.into_iter().flat_map(move |c| {
@@ -258,9 +258,9 @@ impl World {
         // entries are disjoint and cannot alias.
         let pools_ptr: *mut HashMap<TypeId, Box<dyn ErasedPool>> = &mut self.pools;
         let pool_a = unsafe { (*pools_ptr).get_mut(&TypeId::of::<A>()) }
-            .map(|pa| pool_downcast_mut::<A>(pa));
+            .map(|pa| pool_downcast_mut::<A>(pa.as_mut()));
         let pool_b = unsafe { (*pools_ptr).get(&TypeId::of::<B>()) }
-            .map(|pb| pool_downcast_ref::<B>(pb));
+            .map(|pb| pool_downcast_ref::<B>(pb.as_ref()));
         let (a, b) = match (pool_a, pool_b) {
             (Some(a), Some(b)) => (a, b),
             _ => return Box::new(std::iter::empty()),
@@ -417,16 +417,14 @@ impl<T: 'static> ErasedPool for ComponentPool<T> {
 
 // --- type-erasure helpers --------------------------------------------------
 
-#[allow(clippy::borrowed_box)] // Box<dyn ErasedPool> is the stored type; borrow is unavoidable.
-fn pool_downcast_ref<T: 'static>(pool: &Box<dyn ErasedPool>) -> &ComponentPool<T> {
-    let any: &dyn Any = pool.as_ref();
+fn pool_downcast_ref<T: 'static>(pool: &dyn ErasedPool) -> &ComponentPool<T> {
+    let any: &dyn Any = pool;
     any.downcast_ref::<ComponentPool<T>>()
         .expect("pool TypeId mismatch")
 }
 
-#[allow(clippy::borrowed_box)]
-fn pool_downcast_mut<T: 'static>(pool: &mut Box<dyn ErasedPool>) -> &mut ComponentPool<T> {
-    let any: &mut dyn Any = pool.as_mut();
+fn pool_downcast_mut<T: 'static>(pool: &mut dyn ErasedPool) -> &mut ComponentPool<T> {
+    let any: &mut dyn Any = pool;
     any.downcast_mut::<ComponentPool<T>>()
         .expect("pool TypeId mismatch")
 }
