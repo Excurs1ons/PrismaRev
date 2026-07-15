@@ -12,6 +12,9 @@ async function play() {
   error.value = "";
   try {
     await invoke("launch_game");
+    // 游戏 Activity 已启动,启动器转入后台;返回时必须可交互,
+    // 否则会一直停在"启动中…"且按钮 disabled(表现为无响应)。
+    launching.value = false;
   } catch (e) {
     error.value = `${e}`;
     launching.value = false;

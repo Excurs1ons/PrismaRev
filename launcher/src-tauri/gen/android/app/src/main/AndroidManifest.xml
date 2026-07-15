@@ -30,6 +30,7 @@
         <activity
             android:name="com.prismarev.MainActivity"
             android:exported="false"
+            android:process=":game"
             android:configChanges="orientation|keyboardHidden|screenSize"
             android:screenOrientation="landscape">
             <meta-data android:name="android.app.lib_name" android:value="prism_android" />
