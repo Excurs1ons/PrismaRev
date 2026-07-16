@@ -33,6 +33,10 @@ pub struct VulkanContext {
     /// All fields are `false` on non-RT hardware; callers can branch freely.
     pub rt_caps: RayTracingCaps,
 
+    /// Acceleration structure function pointers (loaded when the
+    /// `VK_KHR_acceleration_structure` extension is enabled; `None` otherwise).
+    pub acceleration_structure_fn: Option<ash::khr::acceleration_structure::Device>,
+
     /// Device extension names that were actually enabled (RT extensions are
     /// conditional; the rest are always-on). Stored for later RT modules.
     enabled_extensions: Vec<CString>,
@@ -77,6 +81,15 @@ impl VulkanContext {
 
         let graphics_queue = unsafe { device.get_device_queue(graphics_queue_family, 0) };
 
+        // Load RT extension function pointers if the extension was enabled.
+        let acceleration_structure_fn = if rt_caps.acceleration_structure {
+            Some(ash::khr::acceleration_structure::Device::new(
+                &instance, &device,
+            ))
+        } else {
+            None
+        };
+
         Ok(Self {
             entry,
             instance,
@@ -87,6 +100,7 @@ impl VulkanContext {
             physical_device_properties,
             physical_device_memory_properties,
             rt_caps,
+            acceleration_structure_fn,
             enabled_extensions,
             _debug_messenger: debug_messenger,
         })

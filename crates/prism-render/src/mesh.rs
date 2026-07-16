@@ -76,6 +76,27 @@ pub struct Mesh {
 }
 
 impl Mesh {
+    /// Device address of the vertex buffer (for acceleration structure builds).
+    /// Requires the buffer was created with `SHADER_DEVICE_ADDRESS` usage.
+    pub fn vertex_buffer_device_address(&self, device: &ash::Device) -> vk::DeviceAddress {
+        unsafe {
+            device.get_buffer_device_address(
+                &vk::BufferDeviceAddressInfo::default().buffer(self.vertex_buffer),
+            )
+        }
+    }
+
+    /// Device address of the index buffer (for acceleration structure builds).
+    /// Returns 0 if the mesh has no index buffer.
+    pub fn index_buffer_device_address(&self, device: &ash::Device) -> vk::DeviceAddress {
+        self.index_buffer
+            .map(|buf| unsafe {
+                device
+                    .get_buffer_device_address(&vk::BufferDeviceAddressInfo::default().buffer(buf))
+            })
+            .unwrap_or(0)
+    }
+
     /// Create a mesh from a slice of vertices and (optional) indices.
     ///
     /// Uploads data through a temporary staging buffer. The staging command
@@ -90,11 +111,16 @@ impl Mesh {
     ) -> anyhow::Result<Self> {
         let vertex_size = std::mem::size_of_val(vertices) as vk::DeviceSize;
 
-        // Vertex buffer (device-local).
+        // Vertex buffer (device-local). Include SHADER_DEVICE_ADDRESS +
+        // ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR so the same buffer can
+        // be used for BLAS builds without reallocation.
         let (vertex_buffer, vertex_memory) = buffer::create_buffer(
             context,
             vertex_size,
-            BufferUsage::VERTEX_BUFFER | BufferUsage::TRANSFER_DST,
+            BufferUsage::VERTEX_BUFFER
+                | BufferUsage::TRANSFER_DST
+                | BufferUsage::SHADER_DEVICE_ADDRESS
+                | BufferUsage::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
             MemoryProperties::DEVICE_LOCAL,
         )
         .context("create vertex buffer")?;
@@ -123,7 +149,10 @@ impl Mesh {
             let (buf, mem) = buffer::create_buffer(
                 context,
                 index_size,
-                BufferUsage::INDEX_BUFFER | BufferUsage::TRANSFER_DST,
+                BufferUsage::INDEX_BUFFER
+                    | BufferUsage::TRANSFER_DST
+                    | BufferUsage::SHADER_DEVICE_ADDRESS
+                    | BufferUsage::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
                 MemoryProperties::DEVICE_LOCAL,
             )
             .context("create index buffer")?;
