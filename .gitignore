@@ -21,3 +21,7 @@ android/app/src/main/jniLibs/
 
 # Debug frame captures
 frame_*.ppm
+
+# Prebuilt slang toolchain (downloaded by CI via curl; glibc binary, not used
+# on Termux). Never commit the 60+ MB release tree — it is fetched at build time.
+tools/slang/
