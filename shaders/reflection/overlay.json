@@ -1,0 +1,13 @@
+{
+  "parameters": [
+    {
+      "name": "fontTex",
+      "binding": { "kind": "descriptorTableSlot", "index": 0, "space": 0 },
+      "type": { "kind": "resource", "baseShape": "texture2D", "name": "Sampler2D" }
+    }
+  ],
+  "entryPoints": [
+    { "name": "vertexMain", "stage": "vertex", "parameters": [] },
+    { "name": "fragmentMain", "stage": "fragment", "parameters": [] }
+  ]
+}

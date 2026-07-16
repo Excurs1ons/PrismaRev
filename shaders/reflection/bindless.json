@@ -1,0 +1,22 @@
+{
+  "parameters": [
+    {
+      "name": "frame",
+      "binding": { "kind": "descriptorTableSlot", "index": 0, "space": 0 },
+      "type": { "kind": "constantBuffer", "name": "FrameUBO" }
+    },
+    {
+      "name": "bindlessCubes",
+      "binding": { "kind": "descriptorTableSlot", "index": 0, "space": 2 },
+      "type": { "kind": "resource", "baseShape": "textureCube", "name": "SamplerCube[]" }
+    },
+    {
+      "name": "pc",
+      "binding": { "kind": "pushConstantBuffer", "index": 0, "space": 0, "size": 96 },
+      "type": { "kind": "constantBuffer", "name": "PbrBindlessPush" }
+    }
+  ],
+  "entryPoints": [
+    { "name": "fragmentMain", "stage": "fragment", "parameters": [] }
+  ]
+}

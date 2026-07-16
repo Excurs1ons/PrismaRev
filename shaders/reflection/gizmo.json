@@ -1,0 +1,13 @@
+{
+  "parameters": [
+    {
+      "name": "push",
+      "binding": { "kind": "pushConstantBuffer", "index": 0, "space": 0, "size": 64 },
+      "type": { "kind": "constantBuffer", "name": "GizmoPush" }
+    }
+  ],
+  "entryPoints": [
+    { "name": "vertexMain", "stage": "vertex", "parameters": [] },
+    { "name": "fragmentMain", "stage": "fragment", "parameters": [] }
+  ]
+}

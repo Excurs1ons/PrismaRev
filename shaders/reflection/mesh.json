@@ -1,0 +1,18 @@
+{
+  "parameters": [
+    {
+      "name": "frame",
+      "binding": { "kind": "descriptorTableSlot", "index": 0, "space": 0 },
+      "type": { "kind": "constantBuffer", "name": "FrameUBO" }
+    },
+    {
+      "name": "push",
+      "binding": { "kind": "pushConstantBuffer", "index": 0, "space": 0, "size": 64 },
+      "type": { "kind": "constantBuffer", "name": "MeshPush" }
+    }
+  ],
+  "entryPoints": [
+    { "name": "vertexMain", "stage": "vertex", "parameters": [] },
+    { "name": "fragmentMain", "stage": "fragment", "parameters": [] }
+  ]
+}

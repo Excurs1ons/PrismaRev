@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+# Compile PrismaRev Slang shaders to SPIR-V + emit reflection JSON.
+#
+# This runs on a DESKTOP / CI host (Windows/Linux/macOS x86_64), NOT on the
+# Termux/aarch64 device — the official slangc prebuilts are glibc/MSVC binaries.
+# On Android the engine ships the pre-compiled .spv produced here.
+#
+# Output per stage:
+#   <name>.<stage>.spv          — SPIR-V for the Vulkan pipeline
+#   reflection/<name>.json      — slang reflection (drives Rust binding codegen)
+#
+# Requires `slangc` on PATH (from a Slang release), or set SLANGC=/path/to/slangc.
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SRC="$HERE/slang"
+OUT="$HERE"                      # .spv land next to the existing GLSL .spv
+REFL="$HERE/reflection"
+SLANGC="${SLANGC:-slangc}"
+PROFILE="${SLANG_PROFILE:-spirv_1_5}"
+
+if ! command -v "$SLANGC" >/dev/null 2>&1 && [ ! -x "$SLANGC" ]; then
+  echo "ERROR: slangc not found. Install a Slang release or set SLANGC=/path/to/slangc" >&2
+  echo "  e.g. tools/slang/bin/slangc (desktop only — glibc binary won't run under Termux)" >&2
+  exit 1
+fi
+
+mkdir -p "$REFL"
+
+# name : entry:stage pairs (space separated). stage = vert|frag.
+# Slang entry points are vertexMain / fragmentMain (see the [shader(...)] attrs).
+compile_stage() {
+  local name="$1" entry="$2" stage="$3"
+  local out_spv="$OUT/${name}.${stage}.spv"
+  echo "  $name :: $entry -> ${name}.${stage}.spv"
+  "$SLANGC" "$SRC/${name}.slang" \
+    -profile "$PROFILE" \
+    -target spirv \
+    -entry "$entry" \
+    -stage "$stage" \
+    -fvk-use-entrypoint-name \
+    -o "$out_spv"
+}
+
+emit_reflection() {
+  # One reflection JSON per module (covers all entry points + bindings).
+  local name="$1"; shift
+  local entries=()
+  while [ "$#" -gt 0 ]; do entries+=(-entry "$1" -stage "$2"); shift 2; done
+  echo "  reflect $name -> reflection/${name}.json"
+  "$SLANGC" "$SRC/${name}.slang" \
+    -profile "$PROFILE" \
+    -target spirv \
+    "${entries[@]}" \
+    -reflection-json "$REFL/${name}.json" \
+    -o /dev/null 2>/dev/null || \
+  "$SLANGC" "$SRC/${name}.slang" \
+    -profile "$PROFILE" \
+    -target spirv \
+    "${entries[@]}" \
+    -reflection-json "$REFL/${name}.json" \
+    -o "$REFL/${name}.tmp.spv"
+}
+
+echo "Compiling Slang shaders (slangc = $SLANGC, profile = $PROFILE)..."
+
+# mesh: vertex + fragment (Blinn-Phong)
+compile_stage mesh vertexMain vertex
+compile_stage mesh fragmentMain fragment
+emit_reflection mesh vertexMain vertex fragmentMain fragment
+
+# pbr: fragment only (reuses mesh.slang vertex stage at pipeline level)
+compile_stage pbr fragmentMain fragment
+emit_reflection pbr fragmentMain fragment
+
+# gizmo: vertex + fragment
+compile_stage gizmo vertexMain vertex
+compile_stage gizmo fragmentMain fragment
+emit_reflection gizmo vertexMain vertex fragmentMain fragment
+
+# overlay: vertex + fragment
+compile_stage overlay vertexMain vertex
+compile_stage overlay fragmentMain fragment
+emit_reflection overlay vertexMain vertex fragmentMain fragment
+
+echo "All Slang shaders compiled. SPIR-V in $OUT, reflection JSON in $REFL"

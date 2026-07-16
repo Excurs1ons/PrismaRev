@@ -1,0 +1,292 @@
+name: CI
+
+# Full-coverage build/verify pipeline for PrismaRev:
+#   - fmt + clippy (fast gate)
+#   - desktop Rust build + test (prism-ecs / prism-render / prism-engine)
+#   - xtask build + shader-binding codegen regression (no-drift check)
+#   - Slang shader compile (.slang -> .spv + reflection JSON) via slangc
+#   - Android cdylib cross-compile (prism-android, aarch64-linux-android)
+#   - Android APK assemble (Gradle + cargo-ndk)
+#
+# Design notes:
+#   * prism-android depends on android-activity, which only compiles for the
+#     aarch64-linux-android target — it is EXCLUDED from the desktop job and
+#     built only in the android jobs.
+#   * xtask is a workspace-excluded build tool; it is built/run from its own dir.
+#   * slangc is a glibc binary (no Termux); CI runs it on ubuntu-latest.
+
+on:
+  push:
+    branches: [master, dev]
+  pull_request:
+    branches: [master, dev]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  # Bump to force-refresh caches when toolchains change.
+  CACHE_VERSION: v1
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 1. Fast gate: formatting + lints. Fails early before heavier jobs run.
+  # ---------------------------------------------------------------------------
+  lint:
+    name: fmt + clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable + rustfmt + clippy)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ env.CACHE_VERSION }}-lint
+
+      - name: rustfmt --check
+        run: cargo fmt --all -- --check
+
+      # Desktop crates only (prism-android needs the NDK target).
+      - name: clippy (desktop crates)
+        run: >
+          cargo clippy
+          -p prism-ecs -p prism-render -p prism-engine -p prismarev
+          --all-targets -- -D warnings
+
+      # xtask is workspace-excluded, so --all/-p don't reach it. Check it here.
+      - name: fmt + clippy (xtask)
+        working-directory: xtask
+        run: |
+          cargo fmt -- --check
+          cargo clippy --all-targets -- -D warnings
+
+  # ---------------------------------------------------------------------------
+  # 2. Desktop build + test. The core correctness gate we can fully run in CI.
+  # ---------------------------------------------------------------------------
+  desktop:
+    name: desktop build + test
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      # ash links against the Vulkan loader at build time only for examples that
+      # create a device; the lib itself is loader-agnostic. Install the loader +
+      # headers so any test that touches vk symbols links cleanly.
+      - name: Install Vulkan loader + headers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libvulkan-dev vulkan-tools
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ env.CACHE_VERSION }}-desktop
+
+      - name: Build (desktop crates)
+        run: >
+          cargo build --locked
+          -p prism-ecs -p prism-render -p prism-engine -p prismarev
+
+      - name: Test (desktop crates)
+        run: >
+          cargo test --locked
+          -p prism-ecs -p prism-render -p prism-engine -p prismarev
+
+  # ---------------------------------------------------------------------------
+  # 3. Slang shaders: compile to SPIR-V + reflection, then verify the committed
+  #    Rust bindings match freshly-generated ones (drift guard).
+  # ---------------------------------------------------------------------------
+  shaders:
+    name: slang compile + binding drift
+    runs-on: ubuntu-latest
+    needs: lint
+    env:
+      SLANG_VERSION: "2026.13.1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ env.CACHE_VERSION }}-shaders
+
+      - name: Download slang ${{ env.SLANG_VERSION }} (linux-x86_64)
+        run: |
+          set -euo pipefail
+          url="https://github.com/shader-slang/slang/releases/download/v${SLANG_VERSION}/slang-${SLANG_VERSION}-linux-x86_64.tar.gz"
+          mkdir -p "$RUNNER_TEMP/slang"
+          curl -fsSL "$url" -o "$RUNNER_TEMP/slang.tar.gz"
+          tar xzf "$RUNNER_TEMP/slang.tar.gz" -C "$RUNNER_TEMP/slang"
+          echo "SLANGC=$RUNNER_TEMP/slang/bin/slangc" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$RUNNER_TEMP/slang/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+
+      - name: slangc version
+        run: "$SLANGC -v"
+
+      - name: Compile Slang shaders (.spv + reflection JSON)
+        run: bash shaders/compile.sh
+
+      - name: Regenerate Rust shader bindings from fresh reflection
+        run: |
+          cd xtask
+          cargo run --locked --bin shader-bindgen -- \
+            ../shaders/reflection ../crates/prism-render/src/shader_bindings.rs
+
+      - name: Fail if committed bindings / SPIR-V drift from source
+        run: |
+          # .spv are include_bytes!'d into the Rust build, so committed SPIR-V
+          # MUST match what slangc produces from the .slang sources. Same for
+          # the generated Rust bindings. Any drift means someone edited a
+          # shader without recompiling — fail loudly.
+          drift=0
+          if ! git diff --quiet -- crates/prism-render/src/shader_bindings.rs; then
+            echo "::error::shader_bindings.rs is out of date. Run shaders/compile.sh + xtask and commit."
+            git diff -- crates/prism-render/src/shader_bindings.rs
+            drift=1
+          fi
+          if ! git diff --quiet -- 'shaders/*.spv'; then
+            echo "::error::Committed .spv drift from .slang sources. Run shaders/compile.sh and commit."
+            git diff --stat -- 'shaders/*.spv'
+            drift=1
+          fi
+          if [ "$drift" -ne 0 ]; then exit 1; fi
+          echo "Shader bindings and SPIR-V are up to date."
+
+      - name: Upload compiled SPIR-V
+        uses: actions/upload-artifact@v4
+        with:
+          name: spirv
+          path: |
+            shaders/*.spv
+            shaders/reflection/*.json
+          if-no-files-found: warn
+
+  # ---------------------------------------------------------------------------
+  # 4. Android cdylib cross-compile (prism-android). Verifies the Android Rust
+  #    layer builds against the NDK — the piece that can't build on desktop.
+  # ---------------------------------------------------------------------------
+  android-rust:
+    name: android cdylib (aarch64)
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable + android target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Set up Android NDK
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: r27c
+          local-cache: true
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ env.CACHE_VERSION }}-android-rust
+
+      - name: Build prism-android cdylib (arm64-v8a, release)
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: >
+          cargo ndk -t arm64-v8a
+          -o android/app/src/main/jniLibs
+          build --release --locked -p prism-android
+
+      - name: Upload jniLibs (.so)
+        uses: actions/upload-artifact@v4
+        with:
+          name: jnilibs-arm64
+          path: android/app/src/main/jniLibs/**/*.so
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # 5. Full APK assemble. Depends on the cdylib + shaders being built so the
+  #    Rust .so and compiled SPIR-V are bundled. Runs on master/dev + dispatch.
+  # ---------------------------------------------------------------------------
+  android-apk:
+    name: android APK (assembleDebug)
+    runs-on: ubuntu-latest
+    needs: [android-rust]
+    if: github.event_name != 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable + android target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Set up Android NDK
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: r27c
+          local-cache: true
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ env.CACHE_VERSION }}-android-apk
+
+      - name: Download prebuilt jniLibs
+        uses: actions/download-artifact@v4
+        with:
+          name: jnilibs-arm64
+          path: android/app/src/main/jniLibs
+
+      - name: Ensure Gradle wrapper
+        working-directory: android
+        run: |
+          if [ ! -f gradlew ]; then
+            gradle wrapper --gradle-version 8.11.1
+          fi
+          chmod +x gradlew
+
+      - name: assembleDebug
+        working-directory: android
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: ./gradlew assembleDebug --stacktrace
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: prismarev-debug-apk
+          path: android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
