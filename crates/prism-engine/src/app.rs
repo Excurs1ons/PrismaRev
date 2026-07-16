@@ -62,10 +62,11 @@ fn load_env_bytes() -> Option<Vec<u8>> {
 
     // Prefer an explicit "env.hdr"; otherwise use the first .hdr found.
     candidates.sort();
-    if let Some(idx) = candidates
-        .iter()
-        .position(|p| p.file_name().map(|n| n.eq_ignore_ascii_case("env.hdr")).unwrap_or(false))
-    {
+    if let Some(idx) = candidates.iter().position(|p| {
+        p.file_name()
+            .map(|n| n.eq_ignore_ascii_case("env.hdr"))
+            .unwrap_or(false)
+    }) {
         candidates.swap(0, idx);
     }
 
@@ -138,20 +139,56 @@ fn cube_vertices() -> Vec<Vertex> {
     ];
     let (positions, normals): ([[f32; 3]; 24], [[f32; 3]; 24]) = (
         [
-            [-0.5, -0.5,  0.5], [ 0.5, -0.5,  0.5], [ 0.5,  0.5,  0.5], [-0.5,  0.5,  0.5], // front
-            [-0.5,  0.5, -0.5], [ 0.5,  0.5, -0.5], [ 0.5, -0.5, -0.5], [-0.5, -0.5, -0.5], // back
-            [ 0.5, -0.5,  0.5], [ 0.5, -0.5, -0.5], [ 0.5,  0.5, -0.5], [ 0.5,  0.5,  0.5], // right
-            [-0.5, -0.5, -0.5], [-0.5, -0.5,  0.5], [-0.5,  0.5,  0.5], [-0.5,  0.5, -0.5], // left
-            [-0.5,  0.5,  0.5], [ 0.5,  0.5,  0.5], [ 0.5,  0.5, -0.5], [-0.5,  0.5, -0.5], // top
-            [-0.5, -0.5, -0.5], [ 0.5, -0.5, -0.5], [ 0.5, -0.5,  0.5], [-0.5, -0.5,  0.5], // bottom
+            [-0.5, -0.5, 0.5],
+            [0.5, -0.5, 0.5],
+            [0.5, 0.5, 0.5],
+            [-0.5, 0.5, 0.5], // front
+            [-0.5, 0.5, -0.5],
+            [0.5, 0.5, -0.5],
+            [0.5, -0.5, -0.5],
+            [-0.5, -0.5, -0.5], // back
+            [0.5, -0.5, 0.5],
+            [0.5, -0.5, -0.5],
+            [0.5, 0.5, -0.5],
+            [0.5, 0.5, 0.5], // right
+            [-0.5, -0.5, -0.5],
+            [-0.5, -0.5, 0.5],
+            [-0.5, 0.5, 0.5],
+            [-0.5, 0.5, -0.5], // left
+            [-0.5, 0.5, 0.5],
+            [0.5, 0.5, 0.5],
+            [0.5, 0.5, -0.5],
+            [-0.5, 0.5, -0.5], // top
+            [-0.5, -0.5, -0.5],
+            [0.5, -0.5, -0.5],
+            [0.5, -0.5, 0.5],
+            [-0.5, -0.5, 0.5], // bottom
         ],
         [
-            [ 0.0,  0.0,  1.0], [ 0.0,  0.0,  1.0], [ 0.0,  0.0,  1.0], [ 0.0,  0.0,  1.0],
-            [ 0.0,  0.0, -1.0], [ 0.0,  0.0, -1.0], [ 0.0,  0.0, -1.0], [ 0.0,  0.0, -1.0],
-            [ 1.0,  0.0,  0.0], [ 1.0,  0.0,  0.0], [ 1.0,  0.0,  0.0], [ 1.0,  0.0,  0.0],
-            [-1.0,  0.0,  0.0], [-1.0,  0.0,  0.0], [-1.0,  0.0,  0.0], [-1.0,  0.0,  0.0],
-            [ 0.0,  1.0,  0.0], [ 0.0,  1.0,  0.0], [ 0.0,  1.0,  0.0], [ 0.0,  1.0,  0.0],
-            [ 0.0, -1.0,  0.0], [ 0.0, -1.0,  0.0], [ 0.0, -1.0,  0.0], [ 0.0, -1.0,  0.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, -1.0],
+            [0.0, 0.0, -1.0],
+            [0.0, 0.0, -1.0],
+            [0.0, 0.0, -1.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [-1.0, 0.0, 0.0],
+            [-1.0, 0.0, 0.0],
+            [-1.0, 0.0, 0.0],
+            [-1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, -1.0, 0.0],
+            [0.0, -1.0, 0.0],
+            [0.0, -1.0, 0.0],
+            [0.0, -1.0, 0.0],
         ],
     );
 
@@ -332,15 +369,16 @@ impl App {
         );
 
         // Instance extensions from the surface.
-        let display_handle = window
-            .display_handle()
-            .expect("get display handle")
-            .into();
+        let display_handle = window.display_handle().expect("get display handle").into();
         let ext_ptrs = ash_window::enumerate_required_extensions(display_handle)
             .expect("enumerate required extensions");
         let extensions: Vec<String> = ext_ptrs
             .iter()
-            .map(|p| unsafe { std::ffi::CStr::from_ptr(*p) }.to_string_lossy().into_owned())
+            .map(|p| {
+                unsafe { std::ffi::CStr::from_ptr(*p) }
+                    .to_string_lossy()
+                    .into_owned()
+            })
             .collect();
         let extensions_ref: Vec<&str> = extensions.iter().map(|s| s.as_str()).collect();
 
@@ -377,12 +415,16 @@ impl ApplicationHandler for App {
         // were suspended; rebuild only the surface-dependent resources,
         // reusing the VulkanContext, render pass, pipeline, descriptors, UBOs,
         // command pool, and shaders.
-        let Some(renderer) = self.renderer.as_mut() else { return };
+        let Some(renderer) = self.renderer.as_mut() else {
+            return;
+        };
         if renderer.has_swapchain() {
             // Already live (e.g. desktop spurious resume); nothing to do.
             return;
         }
-        let Some(window) = self.window.as_ref() else { return };
+        let Some(window) = self.window.as_ref() else {
+            return;
+        };
         match renderer.resume_surface(window.as_ref(), window.as_ref()) {
             Ok(()) => {
                 log::info!("resume_surface ok; resuming rendering");
@@ -425,7 +467,11 @@ impl ApplicationHandler for App {
                     "Resized: {}x{} aspect={:.4}",
                     size.width,
                     size.height,
-                    if size.height > 0 { size.width as f32 / size.height as f32 } else { 0.0 },
+                    if size.height > 0 {
+                        size.width as f32 / size.height as f32
+                    } else {
+                        0.0
+                    },
                 );
                 if size.width > 0 && size.height > 0 {
                     let aspect = size.width as f32 / size.height as f32;
@@ -492,8 +538,10 @@ impl ApplicationHandler for App {
                         self.input_state.handle_mouse_move(pos);
                     }
                     winit::event::TouchPhase::Ended | winit::event::TouchPhase::Cancelled => {
-                        self.input_state
-                            .handle_mouse_button(MouseButton::Left, winit::event::ElementState::Released);
+                        self.input_state.handle_mouse_button(
+                            MouseButton::Left,
+                            winit::event::ElementState::Released,
+                        );
                     }
                 }
             }
@@ -538,7 +586,8 @@ impl ApplicationHandler for App {
             // On some platforms (Linux/Windows raw input) CursorMoved may not
             // fire reliably while a button is held; MouseMotion supplements it.
             let pos = self.input_state.mouse_position();
-            self.input_state.handle_mouse_move([pos[0] + delta.0, pos[1] + delta.1]);
+            self.input_state
+                .handle_mouse_move([pos[0] + delta.0, pos[1] + delta.1]);
         }
     }
 
@@ -568,7 +617,10 @@ impl App {
         if !self.show_ui {
             return false;
         }
-        let action = self.renderer.as_ref().and_then(|r| r.hit_test_overlay(px, py));
+        let action = self
+            .renderer
+            .as_ref()
+            .and_then(|r| r.hit_test_overlay(px, py));
         match action {
             Some(OverlayAction::SetMode(m)) => {
                 self.debug_mode = m;
@@ -584,7 +636,9 @@ impl App {
 
     fn render_one_frame(&mut self) {
         // Skip rendering while the surface is suspended (no swapchain).
-        let Some(renderer) = self.renderer.as_mut() else { return };
+        let Some(renderer) = self.renderer.as_mut() else {
+            return;
+        };
         if !renderer.has_swapchain() {
             return;
         }
@@ -601,7 +655,8 @@ impl App {
         }
 
         // Update camera from input state (events populated by window_event).
-        self.camera_controller.update(&mut self.camera, &self.input_state);
+        self.camera_controller
+            .update(&mut self.camera, &self.input_state);
         // Clear transient input state for the next frame.
         self.input_state.begin_frame();
 
@@ -618,7 +673,10 @@ impl App {
         // Build light data (directional).
         // Light: 45° diagonal in XY plane (upper-left), Z=0.
         let light_dir = [-1.0f32, 1.0, 0.0];
-        let light_dir_len = (light_dir[0] * light_dir[0] + light_dir[1] * light_dir[1] + light_dir[2] * light_dir[2]).sqrt();
+        let light_dir_len = (light_dir[0] * light_dir[0]
+            + light_dir[1] * light_dir[1]
+            + light_dir[2] * light_dir[2])
+            .sqrt();
         let light_direction = [
             light_dir[0] / light_dir_len,
             light_dir[1] / light_dir_len,
@@ -628,7 +686,7 @@ impl App {
         let light_color = [1.0, 1.0, 1.0, 0.1]; // white, ambient factor 0.1
 
         let light_data = FrameUBOData {
-            view_proj: [[0.0; 4]; 4], // placeholder, render_system fills it
+            view_proj: [[0.0; 4]; 4],  // placeholder, render_system fills it
             camera_position: [0.0; 4], // placeholder
             light_direction,
             light_color,

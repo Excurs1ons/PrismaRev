@@ -41,24 +41,114 @@ const CELL_H: u32 = 8; // glyph + 1px bottom padding
 /// `(char, 7 rows × 5-bit patterns, bit 4 = leftmost column)`.
 const FONT: &[(char, [u8; 7])] = &[
     (' ', [0; 7]),
-    ('A', [0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001]),
-    ('B', [0b11110, 0b10001, 0b10001, 0b11110, 0b10001, 0b10001, 0b11110]),
-    ('C', [0b01110, 0b10001, 0b10000, 0b10000, 0b10000, 0b10001, 0b01110]),
-    ('D', [0b11110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b11110]),
-    ('E', [0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111]),
-    ('F', [0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b10000]),
-    ('I', [0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b11111]),
-    ('L', [0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111]),
-    ('M', [0b10001, 0b11011, 0b10101, 0b10101, 0b10001, 0b10001, 0b10001]),
-    ('N', [0b10001, 0b11001, 0b10101, 0b10011, 0b10001, 0b10001, 0b10001]),
-    ('O', [0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110]),
-    ('P', [0b11110, 0b10001, 0b10001, 0b11110, 0b10000, 0b10000, 0b10000]),
-    ('R', [0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001]),
-    ('S', [0b01111, 0b10000, 0b10000, 0b01110, 0b00001, 0b00001, 0b11110]),
-    ('T', [0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100]),
-    ('U', [0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110]),
-    ('V', [0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01010, 0b00100]),
-    ('W', [0b10001, 0b10001, 0b10001, 0b10101, 0b10101, 0b11011, 0b10001]),
+    (
+        'A',
+        [
+            0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001,
+        ],
+    ),
+    (
+        'B',
+        [
+            0b11110, 0b10001, 0b10001, 0b11110, 0b10001, 0b10001, 0b11110,
+        ],
+    ),
+    (
+        'C',
+        [
+            0b01110, 0b10001, 0b10000, 0b10000, 0b10000, 0b10001, 0b01110,
+        ],
+    ),
+    (
+        'D',
+        [
+            0b11110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b11110,
+        ],
+    ),
+    (
+        'E',
+        [
+            0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111,
+        ],
+    ),
+    (
+        'F',
+        [
+            0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b10000,
+        ],
+    ),
+    (
+        'I',
+        [
+            0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b11111,
+        ],
+    ),
+    (
+        'L',
+        [
+            0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111,
+        ],
+    ),
+    (
+        'M',
+        [
+            0b10001, 0b11011, 0b10101, 0b10101, 0b10001, 0b10001, 0b10001,
+        ],
+    ),
+    (
+        'N',
+        [
+            0b10001, 0b11001, 0b10101, 0b10011, 0b10001, 0b10001, 0b10001,
+        ],
+    ),
+    (
+        'O',
+        [
+            0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110,
+        ],
+    ),
+    (
+        'P',
+        [
+            0b11110, 0b10001, 0b10001, 0b11110, 0b10000, 0b10000, 0b10000,
+        ],
+    ),
+    (
+        'R',
+        [
+            0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001,
+        ],
+    ),
+    (
+        'S',
+        [
+            0b01111, 0b10000, 0b10000, 0b01110, 0b00001, 0b00001, 0b11110,
+        ],
+    ),
+    (
+        'T',
+        [
+            0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100,
+        ],
+    ),
+    (
+        'U',
+        [
+            0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110,
+        ],
+    ),
+    (
+        'V',
+        [
+            0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01010, 0b00100,
+        ],
+    ),
+    (
+        'W',
+        [
+            0b10001, 0b10001, 0b10001, 0b10101, 0b10101, 0b11011, 0b10001,
+        ],
+    ),
 ];
 
 fn glyph_index(c: char) -> Option<u32> {
@@ -165,15 +255,13 @@ impl Overlay {
         // --- Font descriptor set (combined image sampler) ---
         let desc_layout = unsafe {
             device.create_descriptor_set_layout(
-                &vk::DescriptorSetLayoutCreateInfo::default().bindings(
-                    std::slice::from_ref(
-                        &vk::DescriptorSetLayoutBinding::default()
-                            .binding(0)
-                            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                            .descriptor_count(1)
-                            .stage_flags(vk::ShaderStageFlags::FRAGMENT),
-                    ),
-                ),
+                &vk::DescriptorSetLayoutCreateInfo::default().bindings(std::slice::from_ref(
+                    &vk::DescriptorSetLayoutBinding::default()
+                        .binding(0)
+                        .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                        .descriptor_count(1)
+                        .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+                )),
                 None,
             )
         }
@@ -422,15 +510,7 @@ impl Overlay {
                 [0.85, 0.85, 0.9, 1.0]
             };
             push_text(
-                &mut verts,
-                label,
-                tx,
-                ty,
-                scale,
-                text_color,
-                extent_w,
-                extent_h,
-                self,
+                &mut verts, label, tx, ty, scale, text_color, extent_w, extent_h, self,
             );
         }
 
@@ -809,7 +889,10 @@ fn create_font_image(
     Ok((image, memory, view))
 }
 
-fn allocate_one_shot(device: &ash::Device, pool: vk::CommandPool) -> anyhow::Result<vk::CommandBuffer> {
+fn allocate_one_shot(
+    device: &ash::Device,
+    pool: vk::CommandPool,
+) -> anyhow::Result<vk::CommandBuffer> {
     let cmd = unsafe {
         device.allocate_command_buffers(
             &vk::CommandBufferAllocateInfo::default()

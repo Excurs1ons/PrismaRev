@@ -22,7 +22,11 @@ pub struct RenderPass {
 
 impl RenderPass {
     /// Create the render pass for the given swapchain image and depth formats.
-    pub fn new(device: &ash::Device, format: vk::Format, depth_format: vk::Format) -> anyhow::Result<Self> {
+    pub fn new(
+        device: &ash::Device,
+        format: vk::Format,
+        depth_format: vk::Format,
+    ) -> anyhow::Result<Self> {
         let color_attachment = vk::AttachmentDescription::default()
             .format(format)
             .samples(vk::SampleCountFlags::TYPE_1)
@@ -124,8 +128,8 @@ impl DepthImage {
             .usage(vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT)
             .sharing_mode(vk::SharingMode::EXCLUSIVE);
 
-        let image = unsafe { device.create_image(&image_info, None) }
-            .context("create depth image")?;
+        let image =
+            unsafe { device.create_image(&image_info, None) }.context("create depth image")?;
 
         let mem_reqs = unsafe { device.get_image_memory_requirements(image) };
         let mem_type = find_memory_type(
@@ -142,8 +146,7 @@ impl DepthImage {
         let memory = unsafe { device.allocate_memory(&alloc_info, None) }
             .context("allocate depth image memory")?;
 
-        unsafe { device.bind_image_memory(image, memory, 0) }
-            .context("bind depth image memory")?;
+        unsafe { device.bind_image_memory(image, memory, 0) }.context("bind depth image memory")?;
 
         let view_info = vk::ImageViewCreateInfo::default()
             .image(image)
@@ -160,7 +163,11 @@ impl DepthImage {
         let view = unsafe { device.create_image_view(&view_info, None) }
             .context("create depth image view")?;
 
-        Ok(Self { image, memory, view })
+        Ok(Self {
+            image,
+            memory,
+            view,
+        })
     }
 
     /// Destroy the depth image, its memory, and its view.

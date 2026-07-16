@@ -39,14 +39,18 @@ impl IblResources {
         // 1. Obtain linear RGBA float equirect data (decode file or synthesize).
         let (rgba_f32, width, height) = match env_bytes {
             Some(bytes) => {
-                let (data, w, h) = crate::hdr::load_rgbe(&bytes)
-                    .context("failed to decode environment .hdr")?;
+                let (data, w, h) =
+                    crate::hdr::load_rgbe(&bytes).context("failed to decode environment .hdr")?;
                 log::info!("IBL: loaded env map {}x{} from .hdr", w, h);
                 (data, w, h)
             }
             None => {
                 let (data, w, h) = procedural_equirect(512, 256);
-                log::info!("IBL: no env map provided; using procedural equirect {}x{}", w, h);
+                log::info!(
+                    "IBL: no env map provided; using procedural equirect {}x{}",
+                    w,
+                    h
+                );
                 (data, w, h)
             }
         };
@@ -69,7 +73,11 @@ impl IblResources {
         let image_info = vk::ImageCreateInfo {
             image_type: vk::ImageType::TYPE_2D,
             format: vk::Format::R16G16B16A16_SFLOAT,
-            extent: vk::Extent3D { width: FACE_SIZE, height: FACE_SIZE, depth: 1 },
+            extent: vk::Extent3D {
+                width: FACE_SIZE,
+                height: FACE_SIZE,
+                depth: 1,
+            },
             mip_levels,
             array_layers: 6,
             samples: vk::SampleCountFlags::TYPE_1,
@@ -130,7 +138,11 @@ impl IblResources {
                 layer_count: 6,
             },
             image_offset: vk::Offset3D { x: 0, y: 0, z: 0 },
-            image_extent: vk::Extent3D { width: FACE_SIZE, height: FACE_SIZE, depth: 1 },
+            image_extent: vk::Extent3D {
+                width: FACE_SIZE,
+                height: FACE_SIZE,
+                depth: 1,
+            },
         };
         unsafe {
             device.cmd_copy_buffer_to_image(
@@ -280,13 +292,15 @@ impl IblResources {
         // 6. Descriptor set (combined image sampler) for set=1 in the PBR layout.
         let descriptor_set_layout = unsafe {
             device.create_descriptor_set_layout(
-                &vk::DescriptorSetLayoutCreateInfo::default().bindings(&[vk::DescriptorSetLayoutBinding {
-                    binding: 0,
-                    descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-                    descriptor_count: 1,
-                    stage_flags: vk::ShaderStageFlags::FRAGMENT,
-                    ..Default::default()
-                }]),
+                &vk::DescriptorSetLayoutCreateInfo::default().bindings(&[
+                    vk::DescriptorSetLayoutBinding {
+                        binding: 0,
+                        descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+                        descriptor_count: 1,
+                        stage_flags: vk::ShaderStageFlags::FRAGMENT,
+                        ..Default::default()
+                    },
+                ]),
                 None,
             )
         }?;
@@ -343,6 +357,18 @@ impl IblResources {
     }
 }
 
+impl IblResources {
+    /// Cubemap image view (for registering into the bindless texture table).
+    pub fn image_view(&self) -> vk::ImageView {
+        self.image_view
+    }
+
+    /// Cubemap sampler (for registering into the bindless texture table).
+    pub fn sampler(&self) -> vk::Sampler {
+        self.sampler
+    }
+}
+
 impl Drop for IblResources {
     fn drop(&mut self) {
         unsafe {
@@ -352,8 +378,10 @@ impl Drop for IblResources {
             self.device.destroy_buffer(self.staging, None);
             self.device.free_memory(self.staging_memory, None);
             self.device.destroy_sampler(self.sampler, None);
-            self.device.destroy_descriptor_pool(self.descriptor_pool, None);
-            self.device.destroy_descriptor_set_layout(self.descriptor_set_layout, None);
+            self.device
+                .destroy_descriptor_pool(self.descriptor_pool, None);
+            self.device
+                .destroy_descriptor_set_layout(self.descriptor_set_layout, None);
         }
     }
 }
@@ -506,7 +534,10 @@ fn transition_image(
     };
 }
 
-fn allocate_temp_command_buffer(device: &ash::Device, pool: vk::CommandPool) -> anyhow::Result<vk::CommandBuffer> {
+fn allocate_temp_command_buffer(
+    device: &ash::Device,
+    pool: vk::CommandPool,
+) -> anyhow::Result<vk::CommandBuffer> {
     let cmd = unsafe {
         device.allocate_command_buffers(&vk::CommandBufferAllocateInfo {
             command_pool: pool,
@@ -518,7 +549,12 @@ fn allocate_temp_command_buffer(device: &ash::Device, pool: vk::CommandPool) -> 
     Ok(cmd)
 }
 
-fn submit_and_wait(device: &ash::Device, queue: vk::Queue, pool: vk::CommandPool, cmd: vk::CommandBuffer) {
+fn submit_and_wait(
+    device: &ash::Device,
+    queue: vk::Queue,
+    pool: vk::CommandPool,
+    cmd: vk::CommandBuffer,
+) {
     let cmd_arr = [cmd];
     let submit = vk::SubmitInfo::default().command_buffers(&cmd_arr);
     unsafe {
@@ -535,7 +571,9 @@ fn find_memory_type(
 ) -> u32 {
     for i in 0..props.memory_type_count {
         if (type_filter & (1 << i)) != 0
-            && props.memory_types[i as usize].property_flags.contains(flags)
+            && props.memory_types[i as usize]
+                .property_flags
+                .contains(flags)
         {
             return i;
         }
@@ -553,7 +591,11 @@ fn allocate_device_memory(
     mem_props: &vk::PhysicalDeviceMemoryProperties,
     req: vk::MemoryRequirements,
 ) -> anyhow::Result<vk::DeviceMemory> {
-    let mem_type = find_memory_type(mem_props, req.memory_type_bits, vk::MemoryPropertyFlags::DEVICE_LOCAL);
+    let mem_type = find_memory_type(
+        mem_props,
+        req.memory_type_bits,
+        vk::MemoryPropertyFlags::DEVICE_LOCAL,
+    );
     let memory = unsafe {
         device.allocate_memory(
             &vk::MemoryAllocateInfo {
@@ -621,11 +663,12 @@ fn f32_to_f16(x: f32) -> u16 {
         let shift = 14 - e;
         let half_mant = m >> shift;
         let rem = m & ((1 << shift) - 1);
-        let rounded = if rem > (1 << (shift - 1)) || (rem == (1 << (shift - 1)) && (half_mant & 1) != 0) {
-            half_mant + 1
-        } else {
-            half_mant
-        };
+        let rounded =
+            if rem > (1 << (shift - 1)) || (rem == (1 << (shift - 1)) && (half_mant & 1) != 0) {
+                half_mant + 1
+            } else {
+                half_mant
+            };
         return sign | (rounded as u16);
     }
     if e >= 31 {
@@ -664,7 +707,11 @@ fn procedural_equirect(width: u32, height: u32) -> (Vec<f32>, u32, u32) {
             ];
             let sun_dir = [-0.4, 0.7, 0.6];
             let d = dot3(dir, sun_dir);
-            let sun = if d > 0.985 { 6.0 * smoothstep(0.985, 1.0, d) } else { 0.0 };
+            let sun = if d > 0.985 {
+                6.0 * smoothstep(0.985, 1.0, d)
+            } else {
+                0.0
+            };
             let i = ((y * width + x) * 4) as usize;
             data[i] = sky[0] + sun;
             data[i + 1] = sky[1] + sun;

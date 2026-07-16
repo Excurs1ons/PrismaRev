@@ -92,6 +92,13 @@ pub struct Renderer {
     /// Declared before `context` so it is dropped (freeing its Vulkan objects)
     /// while the device is still alive.
     ibl: IblResources,
+    /// Bindless texture table (descriptor-indexing). Created only when the
+    /// physical device advertises the feature (see context.rs).
+    #[allow(dead_code)]
+    bindless: crate::bindless::BindlessTextureTable,
+    /// Handle of the IBL cubemap inside `bindless`.
+    #[allow(dead_code)]
+    ibl_bindless_handle: crate::bindless::TextureHandle,
     // `descriptor_layout`/`descriptor_pool` are stored only to own the Vulkan
     // objects their handles reference (the pipeline's layout, and the pools the
     // frame UBOs' descriptor sets were allocated from). They are never read
@@ -150,8 +157,7 @@ impl Renderer {
             .map(|_| DepthImage::new(&context, swapchain.extent))
             .collect::<anyhow::Result<Vec<_>>>()
             .context("create depth images")?;
-        let depth_views: Vec<vk::ImageView> =
-            depth_images.iter().map(|d| d.view).collect();
+        let depth_views: Vec<vk::ImageView> = depth_images.iter().map(|d| d.view).collect();
 
         // --- Render pass & framebuffers ---
         let render_pass = RenderPass::new(
@@ -172,9 +178,8 @@ impl Renderer {
         // --- Descriptor layout & pool ---
         let descriptor_layout =
             DescriptorLayout::new(&context.device).context("create descriptor layout")?;
-        let descriptor_pool =
-            DescriptorPool::new(&context.device, FRAMES_IN_FLIGHT as u32)
-                .context("create descriptor pool")?;
+        let descriptor_pool = DescriptorPool::new(&context.device, FRAMES_IN_FLIGHT as u32)
+            .context("create descriptor pool")?;
         let descriptor_sets = descriptor_pool
             .allocate_sets(&context.device, &descriptor_layout, FRAMES_IN_FLIGHT as u32)
             .context("allocate descriptor sets")?;
@@ -208,6 +213,21 @@ impl Renderer {
             env_bytes,
         )
         .context("create IBL resources")?;
+
+        // --- Bindless texture table (additive; see bindless.rs) ---
+        // Created only when the device advertised descriptor indexing. The IBL
+        // cubemap is registered so the PBR path can migrate to a push-constant
+        // handle. Capacity 1024 is plenty for the current asset set.
+        let mut bindless = crate::bindless::BindlessTextureTable::new(&context.device, 1024)
+            .context("create bindless texture table")?;
+        let ibl_bindless_handle = bindless
+            .register(ibl.image_view(), ibl.sampler())
+            .context("register IBL cubemap into bindless table")?;
+        log::info!(
+            "bindless: table capacity {} — IBL cubemap registered as handle {}",
+            bindless.capacity(),
+            ibl_bindless_handle.0
+        );
 
         // --- Graphics pipeline (Blinn-Phong, set 0 = frame UBO) ---
         let vert_stage = shader::shader_stage(vk::ShaderStageFlags::VERTEX, vert_module, c"main");
@@ -280,6 +300,8 @@ impl Renderer {
             pipeline,
             pbr_pipeline,
             ibl,
+            bindless,
+            ibl_bindless_handle,
             descriptor_layout,
             descriptor_pool,
             frame_ubos,
@@ -295,6 +317,24 @@ impl Renderer {
     /// Reference to the device context.
     pub fn context(&self) -> &VulkanContext {
         &self.context
+    }
+
+    /// The bindless texture table (descriptor-indexing). Use this to register
+    /// additional textures at runtime and obtain `u32` handles for shaders, and
+    /// to bind the table's descriptor set. See `bindless.rs` for the migration
+    /// path from per-resource descriptor sets.
+    pub fn bindless(&self) -> &crate::bindless::BindlessTextureTable {
+        &self.bindless
+    }
+
+    /// Mutable access to the bindless table for registering new textures.
+    pub fn bindless_mut(&mut self) -> &mut crate::bindless::BindlessTextureTable {
+        &mut self.bindless
+    }
+
+    /// Handle of the IBL cubemap inside the bindless table.
+    pub fn ibl_bindless_handle(&self) -> crate::bindless::TextureHandle {
+        self.ibl_bindless_handle
     }
 
     /// Create a GPU mesh from vertex (and optional index) data.
@@ -436,8 +476,7 @@ impl Renderer {
 
         // Framebuffers for the new image + depth views.
         unsafe { self.framebuffers.destroy(device) };
-        let depth_views: Vec<vk::ImageView> =
-            self.depth_images.iter().map(|d| d.view).collect();
+        let depth_views: Vec<vk::ImageView> = self.depth_images.iter().map(|d| d.view).collect();
         self.framebuffers =
             Framebuffers::new(device, &self.render_pass, views, &depth_views, extent)
                 .context("recreate framebuffers")?;
@@ -546,8 +585,7 @@ impl Renderer {
         // Rebuild framebuffers for the new image + depth views.
         // (self.framebuffers was emptied by suspend_surface; destroy is idempotent.)
         unsafe { self.framebuffers.destroy(device) };
-        let depth_views: Vec<vk::ImageView> =
-            depth_images.iter().map(|d| d.view).collect();
+        let depth_views: Vec<vk::ImageView> = depth_images.iter().map(|d| d.view).collect();
         let framebuffers = Framebuffers::new(
             device,
             &self.render_pass,
@@ -571,7 +609,6 @@ impl Renderer {
         self.color_format
     }
 
-
     // -----------------------------------------------------------------------
     // Frame lifecycle
     // -----------------------------------------------------------------------
@@ -591,27 +628,26 @@ impl Renderer {
         let device = &self.context.device;
 
         // --- acquire ---
-        let (image_index, frame_index, image_available, render_finished, fence) =
-            match self
-                .swapchain
-                .as_mut()
-                .context("begin_frame called with no swapchain")?
-                .acquire_next_image(device)
-            {
-                Ok(v) => v,
-                Err(e) => {
-                    let msg = format!("{e}");
-                    if msg.contains("out of date") {
-                        log::debug!("acquire reported out of date; recreating");
-                        if let Some(swapchain) = self.swapchain.as_mut() {
-                            swapchain.recreate(&self.context)?;
-                        }
-                        self.rebuild_dependent_resources()?;
-                        return Ok(());
+        let (image_index, frame_index, image_available, render_finished, fence) = match self
+            .swapchain
+            .as_mut()
+            .context("begin_frame called with no swapchain")?
+            .acquire_next_image(device)
+        {
+            Ok(v) => v,
+            Err(e) => {
+                let msg = format!("{e}");
+                if msg.contains("out of date") {
+                    log::debug!("acquire reported out of date; recreating");
+                    if let Some(swapchain) = self.swapchain.as_mut() {
+                        swapchain.recreate(&self.context)?;
                     }
-                    return Err(e);
+                    self.rebuild_dependent_resources()?;
+                    return Ok(());
                 }
-            };
+                return Err(e);
+            }
+        };
 
         let command_buffer = self.command_buffers[frame_index];
 
@@ -900,8 +936,7 @@ impl Renderer {
     /// buttons. Returns the action to apply, or `None` if nothing was hit.
     pub fn hit_test_overlay(&self, px: f32, py: f32) -> Option<OverlayAction> {
         let extent = self.extent();
-        self.overlay
-            .hit_test(px, py, extent.width, extent.height)
+        self.overlay.hit_test(px, py, extent.width, extent.height)
     }
 
     /// Finish the current frame: end the render pass and command buffer,
@@ -933,11 +968,8 @@ impl Renderer {
             .wait_dst_stage_mask(&wait_dst_stages)
             .command_buffers(&command_buffers)
             .signal_semaphores(&signal_semaphores);
-        unsafe {
-            device
-                .queue_submit(self.context.graphics_queue, &[submit_info], frame.fence)
-        }
-        .context("queue submit")?;
+        unsafe { device.queue_submit(self.context.graphics_queue, &[submit_info], frame.fence) }
+            .context("queue submit")?;
 
         // --- present ---
         let out_of_date = self

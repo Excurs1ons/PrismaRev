@@ -70,9 +70,24 @@ impl Transform {
         // NOTE: The scale applies to the basis vectors (columns).
         // For example, column 0 (the local X axis) is scaled entirely by `sx`.
         [
-            [sx * (1.0 - 2.0 * (yy + zz)), sx * 2.0 * (xy + wz), sx * 2.0 * (xz - wy), 0.0],
-            [sy * 2.0 * (xy - wz), sy * (1.0 - 2.0 * (xx + zz)), sy * 2.0 * (yz + wx), 0.0],
-            [sz * 2.0 * (xz + wy), sz * 2.0 * (yz - wx), sz * (1.0 - 2.0 * (xx + yy)), 0.0],
+            [
+                sx * (1.0 - 2.0 * (yy + zz)),
+                sx * 2.0 * (xy + wz),
+                sx * 2.0 * (xz - wy),
+                0.0,
+            ],
+            [
+                sy * 2.0 * (xy - wz),
+                sy * (1.0 - 2.0 * (xx + zz)),
+                sy * 2.0 * (yz + wx),
+                0.0,
+            ],
+            [
+                sz * 2.0 * (xz + wy),
+                sz * 2.0 * (yz - wx),
+                sz * (1.0 - 2.0 * (xx + yy)),
+                0.0,
+            ],
             [tx, ty, tz, 1.0],
         ]
     }
@@ -178,8 +193,8 @@ pub fn render_system(
     let (display_aspect, surface_rotation) = renderer.orientation();
     log::debug!("render_system: display_aspect={:.4}", display_aspect);
     camera.set_aspect(display_aspect);
-        let mut view_proj = camera.view_proj();
-        view_proj = mat_mul(&surface_rotation, &view_proj);
+    let mut view_proj = camera.view_proj();
+    view_proj = mat_mul(&surface_rotation, &view_proj);
 
     // Build the full frame data from camera + light.
     let frame_data = FrameUBOData {
@@ -197,11 +212,19 @@ pub fn render_system(
     let mut draw_count = 0;
     for (entity, handle, transform) in world.query2::<MeshHandle, Transform>() {
         let Some(mesh) = meshes.get(*handle) else {
-            log::warn!("entity {entity:?} references invalid mesh handle {}", handle.0);
+            log::warn!(
+                "entity {entity:?} references invalid mesh handle {}",
+                handle.0
+            );
             continue;
         };
         let model = transform.to_model_matrix();
-        log::debug!("drawing entity {entity:?} mesh={} pos={:?} z={}", handle.0, transform.translation, model[3][2]);
+        log::debug!(
+            "drawing entity {entity:?} mesh={} pos={:?} z={}",
+            handle.0,
+            transform.translation,
+            model[3][2]
+        );
         if let Some(mat) = world.get::<PbrMaterial>(entity) {
             renderer.draw_mesh_pbr(
                 mesh,

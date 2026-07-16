@@ -121,9 +121,11 @@ impl std::fmt::Display for RayTracingCaps {
 pub fn collect_extension_names(props: &[vk::ExtensionProperties]) -> HashSet<String> {
     props
         .iter()
-        .map(|p| unsafe { CStr::from_ptr(p.extension_name.as_ptr()) }
-            .to_string_lossy()
-            .into_owned())
+        .map(|p| {
+            unsafe { CStr::from_ptr(p.extension_name.as_ptr()) }
+                .to_string_lossy()
+                .into_owned()
+        })
         .collect()
 }
 
@@ -174,14 +176,19 @@ pub unsafe fn probe(
     };
     let available = collect_extension_names(&ext_props);
 
-    let has_accel_ext =
-        has_extension(&available, vk::KHR_ACCELERATION_STRUCTURE_NAME.to_str().unwrap());
-    let has_rt_pipeline_ext =
-        has_extension(&available, vk::KHR_RAY_TRACING_PIPELINE_NAME.to_str().unwrap());
-    let has_ray_query_ext =
-        has_extension(&available, vk::KHR_RAY_QUERY_NAME.to_str().unwrap());
-    let has_deferred_ext =
-        has_extension(&available, vk::KHR_DEFERRED_HOST_OPERATIONS_NAME.to_str().unwrap());
+    let has_accel_ext = has_extension(
+        &available,
+        vk::KHR_ACCELERATION_STRUCTURE_NAME.to_str().unwrap(),
+    );
+    let has_rt_pipeline_ext = has_extension(
+        &available,
+        vk::KHR_RAY_TRACING_PIPELINE_NAME.to_str().unwrap(),
+    );
+    let has_ray_query_ext = has_extension(&available, vk::KHR_RAY_QUERY_NAME.to_str().unwrap());
+    let has_deferred_ext = has_extension(
+        &available,
+        vk::KHR_DEFERRED_HOST_OPERATIONS_NAME.to_str().unwrap(),
+    );
 
     // --- feature chain: query what the driver actually supports ---
     // We chain Vulkan12Features + the three RT feature structs (when their
@@ -210,8 +217,7 @@ pub unsafe fn probe(
     let timeline_semaphore = vk12.timeline_semaphore == vk::TRUE;
 
     // Layer 2: acceleration structure (real only when ext + feature agree).
-    let acceleration_structure =
-        has_accel_ext && accel_features.acceleration_structure == vk::TRUE;
+    let acceleration_structure = has_accel_ext && accel_features.acceleration_structure == vk::TRUE;
     let deferred_host_operations = has_deferred_ext;
 
     // Layer 3/4: RT pipeline / ray query (independent of each other).

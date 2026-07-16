@@ -98,11 +98,11 @@ impl Drop for DescriptorPool {
 /// Mirrors GLSL `layout(binding = 0) uniform FrameUBO { ... }`.
 #[repr(C)]
 pub struct FrameUBOData {
-    pub view_proj:       [[f32; 4]; 4], // 64 bytes, offset   0
-    pub camera_position: [f32; 4],      // 16 bytes, offset  64
-    pub light_direction: [f32; 4],      // 16 bytes, offset  80 (w = intensity)
-    pub light_color:     [f32; 4],      // 16 bytes, offset  96 (w = ambient factor)
-    pub view:            [[f32; 4]; 4], // 64 bytes, offset 112 (world → view)
+    pub view_proj: [[f32; 4]; 4],  // 64 bytes, offset   0
+    pub camera_position: [f32; 4], // 16 bytes, offset  64
+    pub light_direction: [f32; 4], // 16 bytes, offset  80 (w = intensity)
+    pub light_color: [f32; 4],     // 16 bytes, offset  96 (w = ambient factor)
+    pub view: [[f32; 4]; 4],       // 64 bytes, offset 112 (world → view)
 }
 
 /// Per-frame UBO buffer and its descriptor set.
@@ -117,10 +117,7 @@ pub struct FrameUBO {
 
 impl FrameUBO {
     /// Create a UBO buffer and update the descriptor set to point to it.
-    pub fn new(
-        context: &VulkanContext,
-        descriptor_set: vk::DescriptorSet,
-    ) -> anyhow::Result<Self> {
+    pub fn new(context: &VulkanContext, descriptor_set: vk::DescriptorSet) -> anyhow::Result<Self> {
         let size = std::mem::size_of::<FrameUBOData>() as vk::DeviceSize; // 112
 
         let (buffer, memory) = buffer::create_buffer(
@@ -154,8 +151,9 @@ impl FrameUBO {
 
     /// Upload new frame data to the GPU.
     pub fn update(&self, device: &ash::Device, data: &FrameUBOData) -> anyhow::Result<()> {
-        let ptr = unsafe { device.map_memory(self.memory, 0, self.size, vk::MemoryMapFlags::empty()) }
-            .context("map frame UBO memory")?;
+        let ptr =
+            unsafe { device.map_memory(self.memory, 0, self.size, vk::MemoryMapFlags::empty()) }
+                .context("map frame UBO memory")?;
         unsafe {
             std::ptr::copy_nonoverlapping(
                 data as *const _ as *const u8,

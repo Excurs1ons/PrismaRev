@@ -11,10 +11,7 @@ use ash::vk;
 ///
 /// The byte slice does **not** need to be 4-byte aligned; a temporary copy is
 /// made if necessary.
-pub fn load_shader_module(
-    device: &ash::Device,
-    code: &[u8],
-) -> anyhow::Result<vk::ShaderModule> {
+pub fn load_shader_module(device: &ash::Device, code: &[u8]) -> anyhow::Result<vk::ShaderModule> {
     assert!(
         code.len().is_multiple_of(4),
         "SPIR-V bytecode length ({}) must be a multiple of 4",
@@ -25,9 +22,8 @@ pub fn load_shader_module(
     // `align_to` first and fall back to a safe copy when misaligned.
     let words: Vec<u32> = if (code.as_ptr() as usize).is_multiple_of(4) {
         // Already aligned — reinterpret without copying.
-        let words = unsafe {
-            std::slice::from_raw_parts(code.as_ptr() as *const u32, code.len() / 4)
-        };
+        let words =
+            unsafe { std::slice::from_raw_parts(code.as_ptr() as *const u32, code.len() / 4) };
         words.to_vec()
     } else {
         // Misaligned — copy byte-by-byte.

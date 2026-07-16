@@ -4,11 +4,34 @@ use winit::keyboard::{KeyCode as WinitKeyCode, PhysicalKey};
 /// Abstract key code (maps to winit PhysicalKey for keyboard).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum KeyCode {
-    KeyW, KeyA, KeyS, KeyD, KeyQ, KeyE,
-    Space, ShiftLeft, ShiftRight, ControlLeft, ControlRight,
-    Escape, Tab, Enter,
-    ArrowUp, ArrowDown, ArrowLeft, ArrowRight,
-    Digit0, Digit1, Digit2, Digit3, Digit4, Digit5, Digit6, Digit7, Digit8, Digit9,
+    KeyW,
+    KeyA,
+    KeyS,
+    KeyD,
+    KeyQ,
+    KeyE,
+    Space,
+    ShiftLeft,
+    ShiftRight,
+    ControlLeft,
+    ControlRight,
+    Escape,
+    Tab,
+    Enter,
+    ArrowUp,
+    ArrowDown,
+    ArrowLeft,
+    ArrowRight,
+    Digit0,
+    Digit1,
+    Digit2,
+    Digit3,
+    Digit4,
+    Digit5,
+    Digit6,
+    Digit7,
+    Digit8,
+    Digit9,
     Other(u32),
 }
 
@@ -54,7 +77,12 @@ impl From<PhysicalKey> for KeyCode {
 /// Mouse button abstraction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MouseButton {
-    Left, Right, Middle, Back, Forward, Other(u16),
+    Left,
+    Right,
+    Middle,
+    Back,
+    Forward,
+    Other(u16),
 }
 
 impl From<winit::event::MouseButton> for MouseButton {
@@ -111,14 +139,30 @@ impl InputState {
     }
 
     // --- Query helpers ---
-    pub fn key_held(&self, key: KeyCode) -> bool { self.keys_held.contains(&key) }
-    pub fn key_just_pressed(&self, key: KeyCode) -> bool { self.keys_just_pressed.contains(&key) }
-    pub fn key_just_released(&self, key: KeyCode) -> bool { self.keys_just_released.contains(&key) }
-    pub fn mouse_held(&self, button: MouseButton) -> bool { self.mouse_buttons_held.contains(&button) }
-    pub fn mouse_delta(&self) -> [f64; 2] { self.mouse_delta }
-    pub fn scroll_delta(&self) -> f64 { self.scroll_delta }
-    pub fn mouse_position(&self) -> [f64; 2] { self.mouse_position }
-    pub fn touches(&self) -> &[TouchEvent] { &self.touches }
+    pub fn key_held(&self, key: KeyCode) -> bool {
+        self.keys_held.contains(&key)
+    }
+    pub fn key_just_pressed(&self, key: KeyCode) -> bool {
+        self.keys_just_pressed.contains(&key)
+    }
+    pub fn key_just_released(&self, key: KeyCode) -> bool {
+        self.keys_just_released.contains(&key)
+    }
+    pub fn mouse_held(&self, button: MouseButton) -> bool {
+        self.mouse_buttons_held.contains(&button)
+    }
+    pub fn mouse_delta(&self) -> [f64; 2] {
+        self.mouse_delta
+    }
+    pub fn scroll_delta(&self) -> f64 {
+        self.scroll_delta
+    }
+    pub fn mouse_position(&self) -> [f64; 2] {
+        self.mouse_position
+    }
+    pub fn touches(&self) -> &[TouchEvent] {
+        &self.touches
+    }
 
     // --- Event handlers (called by App) ---
     pub fn handle_keyboard(&mut self, physical_key: PhysicalKey, state: ElementState) {
@@ -158,7 +202,9 @@ impl InputState {
                     self.mouse_just_pressed.push(button);
                 }
             }
-            ElementState::Released => { self.mouse_buttons_held.remove(&button); }
+            ElementState::Released => {
+                self.mouse_buttons_held.remove(&button);
+            }
         }
     }
 
@@ -170,7 +216,11 @@ impl InputState {
     }
 
     pub fn handle_touch(&mut self, id: u64, phase: TouchPhase, position: [f64; 2]) {
-        self.touches.push(TouchEvent { id, phase, position });
+        self.touches.push(TouchEvent {
+            id,
+            phase,
+            position,
+        });
     }
 }
 
@@ -178,7 +228,7 @@ impl InputState {
 mod tests {
     use super::*;
     use winit::event::{ElementState, MouseScrollDelta, TouchPhase};
-use winit::keyboard::{KeyCode as WinitKeyCode, NativeKeyCode, PhysicalKey};
+    use winit::keyboard::{KeyCode as WinitKeyCode, NativeKeyCode, PhysicalKey};
 
     fn phys(key: WinitKeyCode) -> PhysicalKey {
         PhysicalKey::Code(key)
@@ -259,7 +309,9 @@ use winit::keyboard::{KeyCode as WinitKeyCode, NativeKeyCode, PhysicalKey};
     #[test]
     fn scroll_pixel_delta() {
         let mut s = InputState::new();
-        s.handle_scroll(MouseScrollDelta::PixelDelta(winit::dpi::PhysicalPosition::new(0.0, 42.0)));
+        s.handle_scroll(MouseScrollDelta::PixelDelta(
+            winit::dpi::PhysicalPosition::new(0.0, 42.0),
+        ));
         assert!((s.scroll_delta() - 42.0).abs() < 1e-9);
     }
 
@@ -364,9 +416,18 @@ use winit::keyboard::{KeyCode as WinitKeyCode, NativeKeyCode, PhysicalKey};
 
     #[test]
     fn mouse_button_from_winit_all_mapped() {
-        assert_eq!(MouseButton::from(winit::event::MouseButton::Left), MouseButton::Left);
-        assert_eq!(MouseButton::from(winit::event::MouseButton::Right), MouseButton::Right);
-        assert_eq!(MouseButton::from(winit::event::MouseButton::Middle), MouseButton::Middle);
+        assert_eq!(
+            MouseButton::from(winit::event::MouseButton::Left),
+            MouseButton::Left
+        );
+        assert_eq!(
+            MouseButton::from(winit::event::MouseButton::Right),
+            MouseButton::Right
+        );
+        assert_eq!(
+            MouseButton::from(winit::event::MouseButton::Middle),
+            MouseButton::Middle
+        );
         let back = MouseButton::from(winit::event::MouseButton::Back);
         assert_eq!(back, MouseButton::Back);
     }

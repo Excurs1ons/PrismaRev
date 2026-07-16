@@ -9,7 +9,10 @@ pub struct OrbitCameraController {
 
 impl Default for OrbitCameraController {
     fn default() -> Self {
-        Self { sensitivity: 0.005, scroll_sensitivity: 0.1 }
+        Self {
+            sensitivity: 0.005,
+            scroll_sensitivity: 0.1,
+        }
     }
 }
 
@@ -19,7 +22,7 @@ impl OrbitCameraController {
         if input.mouse_held(MouseButton::Left) {
             let d = input.mouse_delta();
             camera.theta -= d[0] as f32 * self.sensitivity;
-            camera.phi   -= d[1] as f32 * self.sensitivity;
+            camera.phi -= d[1] as f32 * self.sensitivity;
             // Clamp elevation to avoid gimbal lock
             camera.phi = camera.phi.clamp(0.01, std::f32::consts::PI - 0.01);
         }

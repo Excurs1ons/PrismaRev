@@ -24,7 +24,9 @@ pub fn load_rgbe(bytes: &[u8]) -> anyhow::Result<(Vec<f32>, u32, u32)> {
         pos += line_end + 1;
         if line.first() == Some(&b'-') && line.starts_with(b"-Y") {
             // Format: "-Y <H> +X <W>"
-            let mut it = line.split(|&b| b == b' ' || b == b'\t').filter(|s| !s.is_empty());
+            let mut it = line
+                .split(|&b| b == b' ' || b == b'\t')
+                .filter(|s| !s.is_empty());
             while let Some(tok) = it.next() {
                 if tok == b"-Y" {
                     let h = it
@@ -53,16 +55,16 @@ pub fn load_rgbe(bytes: &[u8]) -> anyhow::Result<(Vec<f32>, u32, u32)> {
     let mut rgba = vec![0.0f32; (width * height * 4) as usize];
     let mut out = 0usize; // float index
 
-        for _y in 0..height as usize {
-            // Detect RLE: a scanline starts with the 2-byte marker 0x02 0x02,
-            // followed by the scanline width (little-endian u16).
-            let rle = bytes.get(pos..pos + 2) == Some(&[0x02, 0x02]);
-            if rle {
-                let marker_w = u16::from_be_bytes([bytes[pos + 2], bytes[pos + 3]]) as usize;
-                pos += 4;
-                if marker_w != width as usize {
-                    bail!("RLE scanline width mismatch: {} != {}", marker_w, width);
-                }
+    for _y in 0..height as usize {
+        // Detect RLE: a scanline starts with the 2-byte marker 0x02 0x02,
+        // followed by the scanline width (little-endian u16).
+        let rle = bytes.get(pos..pos + 2) == Some(&[0x02, 0x02]);
+        if rle {
+            let marker_w = u16::from_be_bytes([bytes[pos + 2], bytes[pos + 3]]) as usize;
+            pos += 4;
+            if marker_w != width as usize {
+                bail!("RLE scanline width mismatch: {} != {}", marker_w, width);
+            }
             // Each of the 4 channels is RLE-encoded across the whole scanline.
             for ch in 0..4usize {
                 let mut x = 0usize;
@@ -109,12 +111,7 @@ pub fn load_rgbe(bytes: &[u8]) -> anyhow::Result<(Vec<f32>, u32, u32)> {
         // Convert this scanline's RGBE → float RGB, set A = 1.
         for x in 0..width as usize {
             let base = out + x * 4;
-            let (r, g, b, e) = (
-                rgba[base],
-                rgba[base + 1],
-                rgba[base + 2],
-                rgba[base + 3],
-            );
+            let (r, g, b, e) = (rgba[base], rgba[base + 1], rgba[base + 2], rgba[base + 3]);
             let (rf, gf, bf) = rgbe_to_float(r, g, b, e);
             rgba[base] = rf;
             rgba[base + 1] = gf;
@@ -188,12 +185,9 @@ mod tests {
         let scanline = [
             0x02u8, 0x02, 0x00, 0x04, // RLE marker + width=4 (big-endian)
             // R literal: count=4, values 10,20,30,40
-            0x04, 0x0a, 0x14, 0x1e, 0x28,
-            // G literal: count=4, values 1,2,3,4
-            0x04, 0x01, 0x02, 0x03, 0x04,
-            // B literal: count=4, values 5,6,7,8
-            0x04, 0x05, 0x06, 0x07, 0x08,
-            // E literal: count=4, values 128,128,128,128
+            0x04, 0x0a, 0x14, 0x1e, 0x28, // G literal: count=4, values 1,2,3,4
+            0x04, 0x01, 0x02, 0x03, 0x04, // B literal: count=4, values 5,6,7,8
+            0x04, 0x05, 0x06, 0x07, 0x08, // E literal: count=4, values 128,128,128,128
             0x04, 0x80, 0x80, 0x80, 0x80,
         ];
         let mut data = header.to_vec();

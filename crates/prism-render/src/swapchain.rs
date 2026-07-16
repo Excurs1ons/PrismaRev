@@ -90,8 +90,14 @@ impl Swapchain {
 
         let present_mode = choose_present_mode(&surface_ext, context.physical_device, surface);
 
-        let SwapchainOutput { format, extent, pre_transform, swapchain, images, views } =
-            create_swapchain(context, surface, vk::SwapchainKHR::null(), present_mode)?;
+        let SwapchainOutput {
+            format,
+            extent,
+            pre_transform,
+            swapchain,
+            images,
+            views,
+        } = create_swapchain(context, surface, vk::SwapchainKHR::null(), present_mode)?;
         let n_images = images.len();
         let sem_info = vk::SemaphoreCreateInfo::default();
         let image_available = (0..FRAMES_IN_FLIGHT)
@@ -157,11 +163,19 @@ impl Swapchain {
         let old_swapchain = self.swapchain;
         // Build the new swapchain first, handing off the old one so the
         // implementation can retire it cleanly (avoids NATIVE_WINDOW_IN_USE).
-        let SwapchainOutput { format, extent, pre_transform, swapchain, images, views } =
-            create_swapchain(context, self.surface, old_swapchain, self.present_mode).map_err(|e| {
+        let SwapchainOutput {
+            format,
+            extent,
+            pre_transform,
+            swapchain,
+            images,
+            views,
+        } = create_swapchain(context, self.surface, old_swapchain, self.present_mode).map_err(
+            |e| {
                 log::warn!("swapchain recreate failed, keeping old swapchain: {e}");
                 e
-            })?;
+            },
+        )?;
 
         // Old views and per-image render-finished semaphores go with the old
         // swapchain; build replacements sized to the new image set.
@@ -361,15 +375,22 @@ fn create_swapchain(
     let swapchain = unsafe { swapchain_ext.create_swapchain(&create_info, None) }
         .context("create swapchain")?;
 
-    let images = unsafe { swapchain_ext.get_swapchain_images(swapchain) }
-        .context("get swapchain images")?;
+    let images =
+        unsafe { swapchain_ext.get_swapchain_images(swapchain) }.context("get swapchain images")?;
 
     let views = images
         .iter()
         .map(|image| create_image_view(context, *image, format.format))
         .collect::<anyhow::Result<Vec<_>>>()?;
 
-    Ok(SwapchainOutput { format, extent, pre_transform, swapchain, images, views })
+    Ok(SwapchainOutput {
+        format,
+        extent,
+        pre_transform,
+        swapchain,
+        images,
+        views,
+    })
 }
 
 fn choose_surface_format(available: &[vk::SurfaceFormatKHR]) -> vk::SurfaceFormatKHR {
@@ -410,8 +431,14 @@ fn choose_extent(caps: &vk::SurfaceCapabilitiesKHR) -> vk::Extent2D {
     // Fallback for some platforms (e.g. some Android configs) that report
     // 0xFFFFFFFF; clamp a minimal extent to the allowed range.
     vk::Extent2D {
-        width: caps.min_image_extent.width.clamp(1, caps.max_image_extent.width),
-        height: caps.min_image_extent.height.clamp(1, caps.max_image_extent.height),
+        width: caps
+            .min_image_extent
+            .width
+            .clamp(1, caps.max_image_extent.width),
+        height: caps
+            .min_image_extent
+            .height
+            .clamp(1, caps.max_image_extent.height),
     }
 }
 

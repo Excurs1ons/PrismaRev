@@ -116,6 +116,30 @@ pub struct PbrPushConstants {
     pub normal_space: u32,
 }
 
+/// Push constants for the **bindless** PBR draw call (see
+/// `shaders/slang/bindless.slang`). Identical to [`PbrPushConstants`] plus a
+/// `env_handle` — the index of the IBL cubemap inside the bindless texture
+/// table (`bindless::TextureHandle`). 96 bytes, within the 128-byte guarantee.
+///
+/// Layout:
+/// | field           | offset | size |
+/// |-----------------|--------|------|
+/// | model           | 0      | 64   |
+/// | albedo_metallic | 64     | 16   |
+/// | roughness       | 80     | 4    |
+/// | debug_mode      | 84     | 4    |
+/// | normal_space    | 88     | 4    |
+/// | env_handle      | 92     | 4    |
+#[repr(C)]
+pub struct PbrBindlessPushConstants {
+    pub model: [[f32; 4]; 4],
+    pub albedo_metallic: [f32; 4],
+    pub roughness: f32,
+    pub debug_mode: u32,
+    pub normal_space: u32,
+    pub env_handle: u32,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -123,6 +147,36 @@ mod tests {
     #[test]
     fn push_constant_size_is_92() {
         assert_eq!(std::mem::size_of::<PbrPushConstants>(), 92);
+    }
+
+    #[test]
+    fn bindless_push_constant_size_is_96() {
+        assert_eq!(std::mem::size_of::<PbrBindlessPushConstants>(), 96);
+    }
+
+    #[test]
+    fn bindless_push_constant_offsets() {
+        assert_eq!(std::mem::offset_of!(PbrBindlessPushConstants, model), 0);
+        assert_eq!(
+            std::mem::offset_of!(PbrBindlessPushConstants, albedo_metallic),
+            64
+        );
+        assert_eq!(
+            std::mem::offset_of!(PbrBindlessPushConstants, roughness),
+            80
+        );
+        assert_eq!(
+            std::mem::offset_of!(PbrBindlessPushConstants, debug_mode),
+            84
+        );
+        assert_eq!(
+            std::mem::offset_of!(PbrBindlessPushConstants, normal_space),
+            88
+        );
+        assert_eq!(
+            std::mem::offset_of!(PbrBindlessPushConstants, env_handle),
+            92
+        );
     }
 
     #[test]

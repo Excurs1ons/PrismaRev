@@ -60,12 +60,9 @@ impl GraphicsPipeline {
         // --- Viewport & scissor (dynamic) ---
         // State is set dynamically via cmd_set_viewport/cmd_set_scissor so the
         // pipeline does not need recreation when the window is resized.
-        let dynamic_states = [
-            vk::DynamicState::VIEWPORT,
-            vk::DynamicState::SCISSOR,
-        ];
-        let dynamic_state = vk::PipelineDynamicStateCreateInfo::default()
-            .dynamic_states(&dynamic_states);
+        let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
+        let dynamic_state =
+            vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
 
         // Dummy viewport state (required by the API, but overridden by dynamic).
         let viewport_state = vk::PipelineViewportStateCreateInfo::default()
@@ -127,8 +124,7 @@ impl GraphicsPipeline {
             .subpass(subpass);
 
         let pipeline = unsafe {
-            device
-                .create_graphics_pipelines(vk::PipelineCache::null(), &[pipeline_info], None)
+            device.create_graphics_pipelines(vk::PipelineCache::null(), &[pipeline_info], None)
         }
         .map_err(|(_, e)| e)
         .context("create graphics pipeline")?[0];

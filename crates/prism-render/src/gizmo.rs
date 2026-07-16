@@ -117,8 +117,9 @@ impl Gizmo {
         let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
         let dynamic_state =
             vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
-        let viewport_state =
-            vk::PipelineViewportStateCreateInfo::default().viewport_count(1).scissor_count(1);
+        let viewport_state = vk::PipelineViewportStateCreateInfo::default()
+            .viewport_count(1)
+            .scissor_count(1);
         let rasterizer = vk::PipelineRasterizationStateCreateInfo::default()
             .depth_clamp_enable(false)
             .rasterizer_discard_enable(false)
@@ -185,13 +186,7 @@ impl Gizmo {
                 view_proj as *const _ as *const u8,
                 size_of::<[[f32; 4]; 4]>(),
             );
-            device.cmd_push_constants(
-                cmd,
-                self.layout,
-                vk::ShaderStageFlags::VERTEX,
-                0,
-                pc,
-            );
+            device.cmd_push_constants(cmd, self.layout, vk::ShaderStageFlags::VERTEX, 0, pc);
             let buffers = [self.vertex_buffer];
             let offsets = [0u64];
             device.cmd_bind_vertex_buffers(cmd, 0, &buffers, &offsets);
@@ -226,10 +221,26 @@ fn generate_gizmo() -> Vec<GizmoVertex> {
     let segs = 20u32; // cone radial segments
 
     // (direction, perpendicular-1, perpendicular-2, color)
+    #[allow(clippy::type_complexity)]
     let axes: [([f32; 3], [f32; 3], [f32; 3], [f32; 3]); 3] = [
-        ([1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [1.0, 0.25, 0.25]),
-        ([0.0, 1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.3, 1.0, 0.3]),
-        ([0.0, 0.0, 1.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.3, 0.5, 1.0]),
+        (
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [1.0, 0.25, 0.25],
+        ),
+        (
+            [0.0, 1.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [0.3, 1.0, 0.3],
+        ),
+        (
+            [0.0, 0.0, 1.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.3, 0.5, 1.0],
+        ),
     ];
 
     for (dir, p1, p2, color) in axes {
@@ -239,13 +250,7 @@ fn generate_gizmo() -> Vec<GizmoVertex> {
     v
 }
 
-fn push_tri(
-    v: &mut Vec<GizmoVertex>,
-    a: [f32; 3],
-    b: [f32; 3],
-    c: [f32; 3],
-    color: [f32; 3],
-) {
+fn push_tri(v: &mut Vec<GizmoVertex>, a: [f32; 3], b: [f32; 3], c: [f32; 3], color: [f32; 3]) {
     v.push(GizmoVertex { pos: a, color });
     v.push(GizmoVertex { pos: b, color });
     v.push(GizmoVertex { pos: c, color });

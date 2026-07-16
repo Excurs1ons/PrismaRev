@@ -23,6 +23,10 @@ members = [
     "crates/prism-engine",
     "crates/prism-android",
 ]
+# xtask (Slang reflection -> Rust binding codegen) is a build-time tool run only
+# on desktop/CI hosts that have slangc. Excluded so it never enters the default
+# workspace build (keeps Termux/Android `cargo check` free of its deps).
+exclude = ["xtask"]
 
 [workspace.package]
 version = "0.1.0"

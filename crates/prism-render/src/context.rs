@@ -113,7 +113,10 @@ impl VulkanContext {
 
     fn debug_utils_instance(&self) -> Option<ash::ext::debug_utils::Instance> {
         if self._debug_messenger.is_some() {
-            Some(ash::ext::debug_utils::Instance::new(&self.entry, &self.instance))
+            Some(ash::ext::debug_utils::Instance::new(
+                &self.entry,
+                &self.instance,
+            ))
         } else {
             None
         }
@@ -292,6 +295,15 @@ fn create_device(
     }
     if rt_caps.descriptor_indexing {
         vk12.descriptor_indexing = vk::TRUE;
+        // Bindless (see bindless.rs): a runtime-sized, partially-bound,
+        // update-after-bind array of sampled images indexed by u32 handle.
+        // These sub-features are all part of Vulkan 1.2 descriptor indexing;
+        // enabling them here lets BindlessTextureTable allocate its set.
+        vk12.runtime_descriptor_array = vk::TRUE;
+        vk12.descriptor_binding_partially_bound = vk::TRUE;
+        vk12.descriptor_binding_sampled_image_update_after_bind = vk::TRUE;
+        vk12.descriptor_binding_variable_descriptor_count = vk::TRUE;
+        vk12.shader_sampled_image_array_non_uniform_indexing = vk::TRUE;
     }
     if rt_caps.timeline_semaphore {
         vk12.timeline_semaphore = vk::TRUE;
@@ -369,9 +381,10 @@ fn setup_debug_messenger(
         )
         .pfn_user_callback(Some(debug_callback));
 
-    Some(unsafe { ext.create_debug_utils_messenger(&create_info, None) }.expect(
-        "failed to create debug messenger despite layer being available",
-    ))
+    Some(
+        unsafe { ext.create_debug_utils_messenger(&create_info, None) }
+            .expect("failed to create debug messenger despite layer being available"),
+    )
 }
 
 unsafe extern "system" fn debug_callback(

@@ -30,8 +30,8 @@ pub fn create_buffer(
         .size(size)
         .usage(usage)
         .sharing_mode(vk::SharingMode::EXCLUSIVE);
-    let buffer = unsafe { context.device.create_buffer(&buffer_info, None) }
-        .context("create buffer")?;
+    let buffer =
+        unsafe { context.device.create_buffer(&buffer_info, None) }.context("create buffer")?;
 
     let mem_reqs = unsafe { context.device.get_buffer_memory_requirements(buffer) };
     let mem_type = find_memory_type(context, mem_reqs.memory_type_bits, properties)
@@ -59,7 +59,9 @@ pub fn find_memory_type(
     for i in 0..mem_props.memory_type_count {
         let i = i as usize;
         if (type_filter & (1 << i)) != 0
-            && mem_props.memory_types[i].property_flags.contains(properties)
+            && mem_props.memory_types[i]
+                .property_flags
+                .contains(properties)
         {
             return Some(i as u32);
         }
@@ -113,8 +115,8 @@ pub unsafe fn upload_to_buffer(
     let cmd_buf = unsafe { context.device.allocate_command_buffers(&alloc_info) }
         .context("allocate staging command buffer")?[0];
 
-    let begin_info = vk::CommandBufferBeginInfo::default()
-        .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+    let begin_info =
+        vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
     unsafe { context.device.begin_command_buffer(cmd_buf, &begin_info) }
         .context("begin staging command buffer")?;
 
@@ -125,16 +127,19 @@ pub unsafe fn upload_to_buffer(
             .cmd_copy_buffer(cmd_buf, staging_buffer, destination_buffer, &[copy_region]);
     }
 
-    unsafe { context.device.end_command_buffer(cmd_buf) }
-        .context("end staging command buffer")?;
+    unsafe { context.device.end_command_buffer(cmd_buf) }.context("end staging command buffer")?;
 
     let cmd_bufs = [cmd_buf];
     let submit_info = vk::SubmitInfo::default().command_buffers(&cmd_bufs);
 
     // Submit with a dedicated fence so we only block on THIS transfer, not the
     // entire graphics queue (queue_wait_idle would stall unrelated work).
-    let fence = unsafe { context.device.create_fence(&vk::FenceCreateInfo::default(), None) }
-        .context("create upload fence")?;
+    let fence = unsafe {
+        context
+            .device
+            .create_fence(&vk::FenceCreateInfo::default(), None)
+    }
+    .context("create upload fence")?;
     unsafe {
         context
             .device
@@ -146,7 +151,11 @@ pub unsafe fn upload_to_buffer(
     unsafe { context.device.wait_for_fences(&[fence], true, u64::MAX) }
         .context("wait for upload fence")?;
     unsafe { context.device.destroy_fence(fence, None) };
-    unsafe { context.device.free_command_buffers(command_pool, &[cmd_buf]) };
+    unsafe {
+        context
+            .device
+            .free_command_buffers(command_pool, &[cmd_buf])
+    };
 
     // Clean up staging resources.
     unsafe { context.device.destroy_buffer(staging_buffer, None) };

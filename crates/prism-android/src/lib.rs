@@ -32,7 +32,11 @@ fn android_main(app: AndroidApp) {
         let mut chosen: Option<std::ffi::CString> = None;
         if let Some(dir) = mgr.open_dir(c"") {
             for name in dir {
-                if name.to_string_lossy().to_ascii_lowercase().ends_with(".hdr") {
+                if name
+                    .to_string_lossy()
+                    .to_ascii_lowercase()
+                    .ends_with(".hdr")
+                {
                     chosen = Some(name);
                     break;
                 }
@@ -50,7 +54,10 @@ fn android_main(app: AndroidApp) {
                     None
                 }
                 Err(e) => {
-                    log::warn!("failed to read env asset {} ({e}); using procedural fallback", label);
+                    log::warn!(
+                        "failed to read env asset {} ({e}); using procedural fallback",
+                        label
+                    );
                     None
                 }
             })

@@ -16,10 +16,10 @@ use crate::context::VulkanContext;
 #[repr(C)]
 pub struct Vertex {
     pub position: [f32; 3],
-    pub normal:   [f32; 3],
-    pub color:    [f32; 3],
-    pub uv:       [f32; 2],
-    pub tangent:  [f32; 3],
+    pub normal: [f32; 3],
+    pub color: [f32; 3],
+    pub uv: [f32; 2],
+    pub tangent: [f32; 3],
 }
 
 impl Vertex {
@@ -135,7 +135,14 @@ impl Mesh {
                 )
             };
             unsafe {
-                buffer::upload_to_buffer(context, command_pool, graphics_queue, buf, index_size, index_bytes)
+                buffer::upload_to_buffer(
+                    context,
+                    command_pool,
+                    graphics_queue,
+                    buf,
+                    index_size,
+                    index_bytes,
+                )
             }
             .context("upload index data")?;
 

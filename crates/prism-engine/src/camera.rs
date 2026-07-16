@@ -2,8 +2,8 @@
 pub struct OrbitCamera {
     pub target: [f32; 3],
     pub distance: f32,
-    pub theta: f32,   // azimuth (rad), 0 = +Z direction
-    pub phi: f32,     // elevation (rad), π/2 = horizontal
+    pub theta: f32, // azimuth (rad), 0 = +Z direction
+    pub phi: f32,   // elevation (rad), π/2 = horizontal
     pub fov_y: f32,
     pub znear: f32,
     pub zfar: f32,
@@ -111,10 +111,12 @@ impl OrbitCamera {
             [right[0], up[0], -fwd[0], 0.0],
             [right[1], up[1], -fwd[1], 0.0],
             [right[2], up[2], -fwd[2], 0.0],
-            [-(right[0]*eye[0] + right[1]*eye[1] + right[2]*eye[2]),
-             -(up[0]*eye[0] + up[1]*eye[1] + up[2]*eye[2]),
-             fwd[0]*eye[0] + fwd[1]*eye[1] + fwd[2]*eye[2],
-             1.0],
+            [
+                -(right[0] * eye[0] + right[1] * eye[1] + right[2] * eye[2]),
+                -(up[0] * eye[0] + up[1] * eye[1] + up[2] * eye[2]),
+                fwd[0] * eye[0] + fwd[1] * eye[1] + fwd[2] * eye[2],
+                1.0,
+            ],
         ]
     }
 }

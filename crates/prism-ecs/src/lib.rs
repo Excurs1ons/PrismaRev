@@ -197,12 +197,16 @@ impl World {
     /// Lazily iterate over entities that have **both** `A` and `B`, yielding
     /// `(entity, &A, &B)`. This is a sparse-set join: it walks pool `A` and
     /// probes pool `B` for each entity id, allocating nothing.
-    pub fn query2<A: Component, B: Component>(
-        &self,
-    ) -> impl Iterator<Item = (Entity, &A, &B)> {
+    pub fn query2<A: Component, B: Component>(&self) -> impl Iterator<Item = (Entity, &A, &B)> {
         let entities = &self.entities;
-        let pool_a = self.pools.get(&TypeId::of::<A>()).map(|p| pool_downcast_ref::<A>(p.as_ref()));
-        let pool_b = self.pools.get(&TypeId::of::<B>()).map(|p| pool_downcast_ref::<B>(p.as_ref()));
+        let pool_a = self
+            .pools
+            .get(&TypeId::of::<A>())
+            .map(|p| pool_downcast_ref::<A>(p.as_ref()));
+        let pool_b = self
+            .pools
+            .get(&TypeId::of::<B>())
+            .map(|p| pool_downcast_ref::<B>(p.as_ref()));
         pool_a.into_iter().flat_map(move |a| {
             pool_b.into_iter().flat_map(move |b| {
                 a.iter().filter_map(move |(id, av)| {
@@ -220,9 +224,18 @@ impl World {
         &self,
     ) -> impl Iterator<Item = (Entity, &A, &B, &C)> {
         let entities = &self.entities;
-        let pool_a = self.pools.get(&TypeId::of::<A>()).map(|p| pool_downcast_ref::<A>(p.as_ref()));
-        let pool_b = self.pools.get(&TypeId::of::<B>()).map(|p| pool_downcast_ref::<B>(p.as_ref()));
-        let pool_c = self.pools.get(&TypeId::of::<C>()).map(|p| pool_downcast_ref::<C>(p.as_ref()));
+        let pool_a = self
+            .pools
+            .get(&TypeId::of::<A>())
+            .map(|p| pool_downcast_ref::<A>(p.as_ref()));
+        let pool_b = self
+            .pools
+            .get(&TypeId::of::<B>())
+            .map(|p| pool_downcast_ref::<B>(p.as_ref()));
+        let pool_c = self
+            .pools
+            .get(&TypeId::of::<C>())
+            .map(|p| pool_downcast_ref::<C>(p.as_ref()));
         pool_a.into_iter().flat_map(move |a| {
             pool_b.into_iter().flat_map(move |b| {
                 pool_c.into_iter().flat_map(move |c| {
