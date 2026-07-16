@@ -212,7 +212,7 @@ jobs:
         uses: nttld/setup-ndk@v1
         id: setup-ndk
         with:
-          ndk-version: r27c
+          ndk-version: r26d
           local-cache: true
 
       - name: Install cargo-ndk
@@ -268,7 +268,7 @@ jobs:
         uses: nttld/setup-ndk@v1
         id: setup-ndk
         with:
-          ndk-version: r27c
+          ndk-version: r26d
           local-cache: true
 
       - name: Install cargo-ndk
