@@ -27,12 +27,21 @@ fi
 
 mkdir -p "$REFL"
 
-# name : entry:stage pairs (space separated). stage = vert|frag.
+# name : entry:stage pairs (space separated). stage = vert|frag (matches the
+# .spv filenames the engine include_bytes!'s in renderer.rs / pbr_push.rs, e.g.
+# mesh.vert.spv / mesh.frag.spv).
 # Slang entry points are vertexMain / fragmentMain (see the [shader(...)] attrs).
 compile_stage() {
   local name="$1" entry="$2" stage="$3"
-  local out_spv="$OUT/${name}.${stage}.spv"
-  echo "  $name :: $entry -> ${name}.${stage}.spv"
+  # Map slang stage names (vertex/fragment) to the file extension the engine
+  # expects (vert/frag), so the generated .spv matches include_bytes! paths.
+  case "$stage" in
+    vertex)   ext=vert ;;
+    fragment) ext=frag ;;
+    *)        ext="$stage" ;;
+  esac
+  local out_spv="$OUT/${name}.${ext}.spv"
+  echo "  $name :: $entry -> ${name}.${ext}.spv"
   "$SLANGC" "$SRC/${name}.slang" \
     -profile "$PROFILE" \
     -target spirv \
