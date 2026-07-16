@@ -17,7 +17,8 @@
 //! | [`mesh`] | Vertex/index buffer mesh type |
 //! | [`pipeline`] | Graphics pipeline |
 //! | [`descriptor`] | Descriptor set layout, pool, UBO |
-//! | [`renderer`] | Frame recorder (acquire → draw → present) |
+//! | [`render_graph`] | Modular render-pass graph (new pipeline) |
+//! | [`passes`] | Individual render-pass implementations |
 
 pub mod bindless;
 pub mod buffer;
@@ -29,16 +30,22 @@ pub mod hdr;
 pub mod ibl;
 pub mod mesh;
 pub mod overlay;
+pub mod passes;
 pub mod pbr_push;
 pub mod pipeline;
+pub mod render_graph;
 pub mod render_pass;
-pub mod renderer;
 pub mod shader;
 /// Slang-reflection-generated binding constants (set/binding indices, entry
 /// point names, push-constant sizes). Regenerate with `xtask/shader-bindgen`
-/// after recompiling shaders on a host with slangc — see shaders/compile.sh.
+/// after recompiling shaders on a host with slangc - see shaders/compile.sh.
 pub mod shader_bindings;
 pub mod swapchain;
+
+// Legacy monolithic renderer — kept as reference in deprecated/.
+// Do not use in new code; use render_graph + passes instead.
+#[cfg(feature = "legacy_renderer")]
+pub mod deprecated;
 
 pub use buffer::create_buffer;
 pub use capabilities::RayTracingCaps;
@@ -50,6 +57,5 @@ pub use overlay::{Overlay, OverlayAction, OverlayVertex};
 pub use pbr_push::{DebugMode, NormalSpace, PbrBindlessPushConstants, PbrPushConstants};
 pub use pipeline::GraphicsPipeline;
 pub use render_pass::{DepthImage, Framebuffers, RenderPass};
-pub use renderer::Renderer;
 pub use shader::load_shader_module;
 pub use swapchain::Swapchain;

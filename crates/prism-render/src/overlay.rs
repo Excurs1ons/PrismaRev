@@ -12,6 +12,18 @@ use ash::vk;
 use crate::buffer::{self, BufferUsage, MemoryProperties};
 use crate::context::VulkanContext;
 use crate::pbr_push::{DebugMode, NormalSpace};
+
+/// Parameters for [`Overlay::draw`], grouped to avoid excessive positional
+/// arguments.
+pub struct OverlayDrawParams {
+    pub cmd: vk::CommandBuffer,
+    pub extent_w: u32,
+    pub extent_h: u32,
+    pub mode: DebugMode,
+    pub space: NormalSpace,
+    pub show_ui: bool,
+    pub rotation: [[f32; 4]; 4],
+}
 use crate::shader;
 
 const OVERLAY_VERT_SPV: &[u8] = include_bytes!("../../../shaders/overlay.vert.spv");
@@ -485,14 +497,16 @@ impl Overlay {
             };
             push_quad(
                 &mut verts,
-                r.x,
-                r.y,
-                r.x + r.w,
-                r.y + r.h,
-                white_uv,
-                bg,
-                extent_w,
-                extent_h,
+                &QuadParams {
+                    x0: r.x,
+                    y0: r.y,
+                    x1: r.x + r.w,
+                    y1: r.y + r.h,
+                    uv: white_uv,
+                    color: bg,
+                    ew: extent_w,
+                    eh: extent_h,
+                },
             );
 
             let label = if i < 6 {
@@ -510,7 +524,17 @@ impl Overlay {
                 [0.85, 0.85, 0.9, 1.0]
             };
             push_text(
-                &mut verts, label, tx, ty, scale, text_color, extent_w, extent_h, self,
+                &mut verts,
+                &TextParams {
+                    text: label,
+                    x: tx,
+                    y: ty,
+                    scale,
+                    color: text_color,
+                    ew: extent_w,
+                    eh: extent_h,
+                },
+                self,
             );
         }
 
@@ -519,13 +543,15 @@ impl Overlay {
         let status = format!("{}  {}", mode.label(), space.label());
         push_text(
             &mut verts,
-            &status,
-            12.0,
-            12.0,
-            2.0,
-            [1.0, 1.0, 1.0, 0.95],
-            extent_w,
-            extent_h,
+            &TextParams {
+                text: &status,
+                x: 12.0,
+                y: 12.0,
+                scale: 2.0,
+                color: [1.0, 1.0, 1.0, 0.95],
+                ew: extent_w,
+                eh: extent_h,
+            },
             self,
         );
 
@@ -545,21 +571,12 @@ impl Overlay {
     /// `end_frame` (after the 3D draws). `rotation` is the same clip-space
     /// `surface_rotation` applied to the 3D scene so the overlay stays aligned
     /// with it under the swapchain's `pre_transform` (e.g. on Android).
-    #[allow(clippy::too_many_arguments)]
-    pub fn draw(
-        &self,
-        cmd: vk::CommandBuffer,
-        extent_w: u32,
-        extent_h: u32,
-        mode: DebugMode,
-        space: NormalSpace,
-        show_ui: bool,
-        rotation: &[[f32; 4]; 4],
-    ) {
-        if !show_ui {
+    pub fn draw(&self, params: &OverlayDrawParams) {
+        if !params.show_ui {
             return;
         }
-        let (mut verts, _rects) = self.build_geometry(extent_w, extent_h, mode, space);
+        let (mut verts, _rects) =
+            self.build_geometry(params.extent_w, params.extent_h, params.mode, params.space);
         if verts.is_empty() {
             return;
         }
@@ -572,7 +589,7 @@ impl Overlay {
         // are defined in that same screen space, so they compare directly.
 
         for v in verts.iter_mut() {
-            v.pos = rotate_clip(v.pos, rotation);
+            v.pos = rotate_clip(v.pos, &params.rotation);
         }
 
         let size = (verts.len() * std::mem::size_of::<OverlayVertex>()) as vk::DeviceSize;
@@ -590,10 +607,13 @@ impl Overlay {
         }
 
         unsafe {
-            self.device
-                .cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.pipeline);
+            self.device.cmd_bind_pipeline(
+                params.cmd,
+                vk::PipelineBindPoint::GRAPHICS,
+                self.pipeline,
+            );
             self.device.cmd_bind_descriptor_sets(
-                cmd,
+                params.cmd,
                 vk::PipelineBindPoint::GRAPHICS,
                 self.layout,
                 0,
@@ -603,8 +623,9 @@ impl Overlay {
             let buffers = [self.vertex_buffer];
             let offsets = [0u64];
             self.device
-                .cmd_bind_vertex_buffers(cmd, 0, &buffers, &offsets);
-            self.device.cmd_draw(cmd, verts.len() as u32, 1, 0, 0);
+                .cmd_bind_vertex_buffers(params.cmd, 0, &buffers, &offsets);
+            self.device
+                .cmd_draw(params.cmd, verts.len() as u32, 1, 0, 0);
         }
     }
 
@@ -682,11 +703,8 @@ fn screen_to_clip(px: f32, py: f32, ew: u32, eh: u32) -> [f32; 2] {
     ]
 }
 
-/// Push a filled rectangle (screen-space pixel coords, top-left origin) as two
-/// triangles.
-#[allow(clippy::too_many_arguments)]
-fn push_quad(
-    verts: &mut Vec<OverlayVertex>,
+/// Rectangle geometry for [`push_quad`].
+struct QuadParams {
     x0: f32,
     y0: f32,
     x1: f32,
@@ -695,59 +713,76 @@ fn push_quad(
     color: [f32; 4],
     ew: u32,
     eh: u32,
-) {
-    let (uv_min, uv_max) = uv;
+}
+
+/// Push a filled rectangle (screen-space pixel coords, top-left origin) as two
+/// triangles.
+fn push_quad(verts: &mut Vec<OverlayVertex>, p: &QuadParams) {
+    let (uv_min, uv_max) = p.uv;
     let u0 = uv_min[0];
     let v0 = uv_min[1];
     let u1 = uv_max[0];
     let v1 = uv_max[1];
-    let p = |px: f32, py: f32| -> [f32; 2] { screen_to_clip(px, py, ew, eh) };
+    let to_clip = |px: f32, py: f32| -> [f32; 2] { screen_to_clip(px, py, p.ew, p.eh) };
     let tl = OverlayVertex {
-        pos: p(x0, y0),
+        pos: to_clip(p.x0, p.y0),
         uv: [u0, v0],
-        color,
+        color: p.color,
     };
     let tr = OverlayVertex {
-        pos: p(x1, y0),
+        pos: to_clip(p.x1, p.y0),
         uv: [u1, v0],
-        color,
+        color: p.color,
     };
     let bl = OverlayVertex {
-        pos: p(x0, y1),
+        pos: to_clip(p.x0, p.y1),
         uv: [u0, v1],
-        color,
+        color: p.color,
     };
     let br = OverlayVertex {
-        pos: p(x1, y1),
+        pos: to_clip(p.x1, p.y1),
         uv: [u1, v1],
-        color,
+        color: p.color,
     };
     verts.extend_from_slice(&[tl, tr, bl, tr, br, bl]);
 }
 
-/// Push a string as one quad per glyph (sampled from the atlas).
-#[allow(clippy::too_many_arguments)]
-fn push_text(
-    verts: &mut Vec<OverlayVertex>,
-    text: &str,
-    mut x: f32,
+/// Text rendering parameters for [`push_text`].
+struct TextParams<'a> {
+    text: &'a str,
+    x: f32,
     y: f32,
     scale: f32,
     color: [f32; 4],
     ew: u32,
     eh: u32,
-    overlay: &Overlay,
-) {
-    let cw = GLYPH_W as f32 * scale;
-    let ch = GLYPH_H as f32 * scale;
-    for ch_char in text.chars() {
+}
+
+/// Push a string as one quad per glyph (sampled from the atlas).
+fn push_text(verts: &mut Vec<OverlayVertex>, tp: &TextParams, overlay: &Overlay) {
+    let cw = GLYPH_W as f32 * tp.scale;
+    let ch = GLYPH_H as f32 * tp.scale;
+    let mut x = tp.x;
+    for ch_char in tp.text.chars() {
         if ch_char == ' ' {
             x += cw * 0.6;
             continue;
         }
         if let Some(gi) = glyph_index(ch_char) {
             let uv = overlay.cell_uv(gi);
-            push_quad(verts, x, y, x + cw, y + ch, uv, color, ew, eh);
+            push_quad(
+                verts,
+                &QuadParams {
+                    x0: x,
+                    y0: tp.y,
+                    x1: x + cw,
+                    y1: tp.y + ch,
+                    uv,
+                    color: tp.color,
+                    ew: tp.ew,
+                    eh: tp.eh,
+                },
+            );
         }
         x += cw;
     }

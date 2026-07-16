@@ -12,6 +12,21 @@
 use anyhow::Context as _;
 use ash::vk;
 
+/// Parameters for creating a [`GraphicsPipeline`].
+///
+/// Groups the previously-too-many individual arguments into a single struct
+/// so callers don't need to pass 8 positional parameters.
+pub struct PipelineDesc<'a> {
+    pub device: &'a ash::Device,
+    pub shader_stages: &'a [vk::PipelineShaderStageCreateInfo<'a>],
+    pub vertex_binding_desc: &'a [vk::VertexInputBindingDescription],
+    pub vertex_attr_descs: &'a [vk::VertexInputAttributeDescription],
+    pub descriptor_set_layouts: &'a [vk::DescriptorSetLayout],
+    pub push_constant_ranges: &'a [vk::PushConstantRange],
+    pub render_pass: vk::RenderPass,
+    pub subpass: u32,
+}
+
 /// A compiled graphics pipeline with its layout.
 pub struct GraphicsPipeline {
     pub pipeline: vk::Pipeline,
@@ -24,22 +39,19 @@ pub struct GraphicsPipeline {
 impl GraphicsPipeline {
     /// Create the graphics pipeline.
     ///
-    /// `shader_stages` must contain the vertex and fragment shader stage
-    /// infos. `render_pass` and `subpass` identify where this pipeline is
-    /// used. `descriptor_set_layouts` are the layouts for the pipeline's
-    /// descriptor sets. `push_constant_ranges` define the push constant
-    /// regions accessible from shader stages.
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        device: &ash::Device,
-        shader_stages: &[vk::PipelineShaderStageCreateInfo],
-        vertex_binding_desc: &[vk::VertexInputBindingDescription],
-        vertex_attr_descs: &[vk::VertexInputAttributeDescription],
-        descriptor_set_layouts: &[vk::DescriptorSetLayout],
-        push_constant_ranges: &[vk::PushConstantRange],
-        render_pass: vk::RenderPass,
-        subpass: u32,
-    ) -> anyhow::Result<Self> {
+    /// All parameters are provided via [`PipelineDesc`]. `render_pass` and
+    /// `subpass` identify where this pipeline is used. `descriptor_set_layouts`
+    /// are the layouts for the pipeline's descriptor sets. `push_constant_ranges`
+    /// define the push constant regions accessible from shader stages.
+    pub fn new(desc: &PipelineDesc) -> anyhow::Result<Self> {
+        let device = desc.device;
+        let shader_stages = desc.shader_stages;
+        let vertex_binding_desc = desc.vertex_binding_desc;
+        let vertex_attr_descs = desc.vertex_attr_descs;
+        let descriptor_set_layouts = desc.descriptor_set_layouts;
+        let push_constant_ranges = desc.push_constant_ranges;
+        let render_pass = desc.render_pass;
+        let subpass = desc.subpass;
         // --- Pipeline layout ---
         let layout_info = vk::PipelineLayoutCreateInfo::default()
             .set_layouts(descriptor_set_layouts)

@@ -221,8 +221,8 @@ fn generate_gizmo() -> Vec<GizmoVertex> {
     let segs = 20u32; // cone radial segments
 
     // (direction, perpendicular-1, perpendicular-2, color)
-    #[allow(clippy::type_complexity)]
-    let axes: [([f32; 3], [f32; 3], [f32; 3], [f32; 3]); 3] = [
+    type Axis = ([f32; 3], [f32; 3], [f32; 3], [f32; 3]);
+    let axes: [Axis; 3] = [
         (
             [1.0, 0.0, 0.0],
             [0.0, 1.0, 0.0],
@@ -244,8 +244,15 @@ fn generate_gizmo() -> Vec<GizmoVertex> {
     ];
 
     for (dir, p1, p2, color) in axes {
-        push_shaft(&mut v, dir, p1, p2, len, thick, color);
-        push_cone(&mut v, dir, p1, p2, len, head_len, head_r, color, segs);
+        let geo = AxisGeometry {
+            dir,
+            p1,
+            p2,
+            len,
+            color,
+        };
+        push_shaft(&mut v, &geo, thick);
+        push_cone(&mut v, &geo, head_len, head_r, segs);
     }
     v
 }
@@ -256,17 +263,24 @@ fn push_tri(v: &mut Vec<GizmoVertex>, a: [f32; 3], b: [f32; 3], c: [f32; 3], col
     v.push(GizmoVertex { pos: c, color });
 }
 
-/// Push a thin axis-aligned box from the origin to `dir * len`.
-#[allow(clippy::too_many_arguments)]
-fn push_shaft(
-    v: &mut Vec<GizmoVertex>,
+/// Geometry common to both shaft and cone: axis direction, two perpendicular
+/// vectors, length, and color. Extracted as a struct to avoid passing 6+
+/// positional arguments.
+struct AxisGeometry {
     dir: [f32; 3],
     p1: [f32; 3],
     p2: [f32; 3],
     len: f32,
-    t: f32,
     color: [f32; 3],
-) {
+}
+
+/// Push a thin axis-aligned box from the origin to `dir * len`.
+fn push_shaft(v: &mut Vec<GizmoVertex>, geo: &AxisGeometry, t: f32) {
+    let dir = geo.dir;
+    let p1 = geo.p1;
+    let p2 = geo.p2;
+    let len = geo.len;
+    let color = geo.color;
     let corner = |s: f32, a: f32, b: f32| -> [f32; 3] {
         [
             dir[0] * len * s + p1[0] * t * a + p2[0] * t * b,
@@ -304,18 +318,12 @@ fn push_shaft(
 }
 
 /// Push a cone (side + base cap) at the tip of the axis.
-#[allow(clippy::too_many_arguments)]
-fn push_cone(
-    v: &mut Vec<GizmoVertex>,
-    dir: [f32; 3],
-    p1: [f32; 3],
-    p2: [f32; 3],
-    len: f32,
-    head_len: f32,
-    head_r: f32,
-    color: [f32; 3],
-    segs: u32,
-) {
+fn push_cone(v: &mut Vec<GizmoVertex>, geo: &AxisGeometry, head_len: f32, head_r: f32, segs: u32) {
+    let dir = geo.dir;
+    let p1 = geo.p1;
+    let p2 = geo.p2;
+    let len = geo.len;
+    let color = geo.color;
     let apex = [
         dir[0] * (len + head_len),
         dir[1] * (len + head_len),

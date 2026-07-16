@@ -55,9 +55,6 @@ struct TypeInfo {
     kind: Option<String>,
     #[serde(default, rename = "baseShape")]
     base_shape: Option<String>,
-    #[serde(default)]
-    #[allow(dead_code)] // parsed from JSON for completeness; not used in codegen
-    name: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -80,11 +77,7 @@ struct ResolvedBinding {
 enum BindKind {
     UniformBuffer,
     CombinedImageSampler,
-    PushConstant {
-        size: u32,
-    },
-    #[allow(dead_code)] // retains the unhandled binding kind for diagnostics
-    Other(String),
+    PushConstant { size: u32 },
 }
 
 /// Fallback push-constant sizes for shaders whose slangc reflection omits the
