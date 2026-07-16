@@ -87,6 +87,26 @@ enum BindKind {
     Other(String),
 }
 
+/// Fallback push-constant sizes for shaders whose slangc reflection omits the
+/// `size` field on the `pushConstantBuffer` parameter (mesh/pbr/gizmo do;
+/// bindless includes it). These mirror the `#[repr(C)]` structs in
+/// `pbr_push.rs` — the source of truth is the Rust layout, verified by tests.
+const PUSH_SIZE_FALLBACK: &[(&str, u32)] = &[
+    ("mesh", 64),
+    ("pbr", 92),
+    ("gizmo", 64),
+    ("bindless", 96),
+    ("overlay", 0),
+];
+
+fn fallback_push_size(shader: &str) -> u32 {
+    PUSH_SIZE_FALLBACK
+        .iter()
+        .find(|(s, _)| *s == shader)
+        .map(|(_, sz)| *sz)
+        .unwrap_or(0)
+}
+
 impl BindKind {
     fn descriptor_type(&self) -> Option<&'static str> {
         match self {
@@ -99,6 +119,10 @@ impl BindKind {
 
 fn classify(p: &Parameter) -> Option<ResolvedBinding> {
     let b = p.binding.as_ref()?;
+    // Only emit descriptor-set slots and push-constant buffers. Slang also
+    // reflects vertex-shader `in` parameters (kind "vertexInput" / no
+    // descriptor binding) — those are not Vulkan descriptor bindings and must
+    // be skipped.
     let kind = match b.kind.as_str() {
         "pushConstantBuffer" | "pushConstant" => BindKind::PushConstant {
             size: b.size.unwrap_or(0),
@@ -120,7 +144,8 @@ fn classify(p: &Parameter) -> Option<ResolvedBinding> {
                 BindKind::UniformBuffer
             }
         }
-        other => BindKind::Other(other.to_string()),
+        // vertex inputs, stage inputs, etc. — not descriptor bindings
+        _ => return None,
     };
     Some(ResolvedBinding {
         name: p.name.clone(),
@@ -202,7 +227,10 @@ fn process_file(path: &Path, out: &mut String) -> Result<()> {
     for r in &resolved {
         match &r.kind {
             BindKind::PushConstant { size } => {
-                push_size = Some(push_size.unwrap_or(0).max(*size));
+                // Real slangc omits `size` for some shaders; fall back to the
+                // known Rust-side layout (see pbr_push.rs + its tests).
+                let sz = *size.max(&fallback_push_size(&shader));
+                push_size = Some(push_size.unwrap_or(0).max(sz));
             }
             _ => by_set.entry(r.set).or_default().push(r),
         }

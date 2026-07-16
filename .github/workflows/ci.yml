@@ -142,6 +142,19 @@ jobs:
       - name: Compile Slang shaders (.spv + reflection JSON)
         run: bash shaders/compile.sh
 
+      # Always upload the freshly compiled SPIR-V + reflection JSON (survives
+      # even if the drift check below fails), so the artifacts can be committed
+      # to the repo for hosts without slangc.
+      - name: Upload compiled SPIR-V + reflection (debug)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: spirv
+          path: |
+            shaders/*.spv
+            shaders/reflection/*.json
+          if-no-files-found: warn
+
       # Debug artifact: always upload the real slangc-produced reflection JSON
       # so the actual schema can be inspected (e.g. when the xtask parser needs
       # recalibration). Survives even if the drift check below fails.
@@ -178,15 +191,6 @@ jobs:
           fi
           if [ "$drift" -ne 0 ]; then exit 1; fi
           echo "Shader bindings and SPIR-V are up to date."
-
-      - name: Upload compiled SPIR-V
-        uses: actions/upload-artifact@v4
-        with:
-          name: spirv
-          path: |
-            shaders/*.spv
-            shaders/reflection/*.json
-          if-no-files-found: warn
 
   # ---------------------------------------------------------------------------
   # 4. Android cdylib cross-compile (prism-android). Verifies the Android Rust
