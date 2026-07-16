@@ -142,6 +142,17 @@ jobs:
       - name: Compile Slang shaders (.spv + reflection JSON)
         run: bash shaders/compile.sh
 
+      # Debug artifact: always upload the real slangc-produced reflection JSON
+      # so the actual schema can be inspected (e.g. when the xtask parser needs
+      # recalibration). Survives even if the drift check below fails.
+      - name: Upload real reflection JSON (debug)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: slang-reflection-real
+          path: shaders/reflection/*.json
+          if-no-files-found: warn
+
       - name: Regenerate Rust shader bindings from fresh reflection
         run: |
           cd xtask
