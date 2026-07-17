@@ -20,6 +20,7 @@ resolver = "2"
 members = [
     "crates/prism-ecs",
     "crates/prism-render",
+    "crates/prism-asset",
     "crates/prism-engine",
     "crates/prism-android",
 ]
@@ -48,6 +49,13 @@ env_logger = "0.11"
 
 # Error handling
 anyhow = "1"
+
+# Asset / scene loading
+# `gltf` crate version is the crate's release stream (1.4 = current), not the
+# glTF spec version — the crate loads glTF 2.0 regardless of its own version.
+gltf = "1.4"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+slotmap = "1.0"
 
 [profile.dev]
 opt-level = 1          # ash/Vulkan has a lot of codegen; light opt keeps debug builds usable

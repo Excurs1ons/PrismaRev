@@ -1,0 +1,13 @@
+[package]
+name = "prism-asset"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Scene, mesh, material, texture and instance storage for PrismaRev"
+
+[dependencies]
+gltf = { workspace = true }
+image = { workspace = true }
+slotmap = { workspace = true }
+anyhow = { workspace = true }
+log = { workspace = true }
