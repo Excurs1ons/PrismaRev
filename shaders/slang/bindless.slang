@@ -1,40 +1,61 @@
-// Bindless PBR fragment stage — the descriptor-indexing variant of pbr.slang.
+// Bindless PBR fragment stage — descriptor-indexing variant of pbr.slang.
 //
-// Instead of a dedicated set-1 cubemap binding, the IBL environment is looked
-// up from a global bindless table (set 2) by a u32 handle passed through the
-// push constant. This matches Rust `bindless::BindlessTextureTable` (a single
-// runtime-sized COMBINED_IMAGE_SAMPLER array) + `TextureHandle`.
+// Material parameters live in a per-frame SSBO (`materials[]`); per-draw
+// state is reduced to the model matrix, the material slot, the env cubemap
+// bindless handle, and the albedo / normal-map bindless slots. Albedo /
+// normal / metallic-roughness / emissive textures are sampled through the
+// same bindless SRV table that the rest of the engine uses (`bindless` set
+// in `Rust` BindlessTextureTable). The 1x1 magenta fallback is reserved
+// at slot 0.
 //
-// Migration note: set 2 here must match the descriptor set index the pipeline
-// layout assigns to BindlessTextureTable.layout. Set 0 (frame UBO) is
-// unchanged. The old set-1 cubemap binding is dropped in this path.
-//
-//   slangc bindless.slang -profile spirv_1_5 -target spirv \
-//          -entry fragmentMain -stage fragment -o bindless_pbr.frag.spv
+// This file is the descriptor mirror of the Rust `PbrBindlessPushConstants`
+// (push constants), `GpuMaterial` (SSBO), and `BindlessTextureTable` (SRV
+// set). Any field added or moved here must be reflected in those types and
+// regenerated via `cargo run -p xtask --bin shader-bindgen -- \
+// shaders/reflection crates/prism-render/src/shader_bindings.rs`.
+
 import common;
 
-// set 0, binding 0 — per-frame UBO (unchanged).
+// ---- set 0, binding 0 — per-frame UBO (unchanged) -------------------
 [[vk::binding(0, 0)]]
 ConstantBuffer<FrameUBO> frame;
 
-// set 2, binding 0 — bindless combined-image-sampler table. Cubemaps and 2D
-// textures both live here; we declare the cube view used by IBL. A runtime
-// array => index with NonUniformResourceIndex when the handle is divergent.
-[[vk::binding(0, 2)]]
-SamplerCube bindlessCubes[];
+// ---- set 0, binding 1 — material SSBO --------------------------------
+// One record per material; the shader indexes by `pc.material_slot`.
+// Layout must match Rust `GpuMaterial` (48 bytes, 16-byte aligned).
+struct GpuMaterial
+{
+    float4 base_color;                          // offset 0
+    float4 metallic_roughness_emissive;         // offset 16: x=metallic, y=roughness, z=emissive
+    uint   albedo_idx;                          // offset 32
+    uint   normal_idx;                          // offset 36
+    uint   metallic_roughness_idx;             // offset 40
+    uint   emissive_idx;                        // offset 44
+};
+[[vk::binding(1, 0)]]
+StructuredBuffer<GpuMaterial> materials;
 
-// Push constants: model + material + debug + the bindless env handle.
-// Byte layout mirrors Rust PbrBindlessPushConstants (96 bytes):
-//   model(64) albedoMetallic(16) roughness(4) debug_mode(4) normal_space(4)
-//   env_handle(4)
+// ---- set 1, binding 0 — bindless SAMPLER array (4 modes) ------------
+[[vk::binding(0, 1)]]
+SamplerState globalSamplers[];
+
+// ---- set 1, binding 1 — bindless SAMPLED_IMAGE array -----------------
+// Slot 0 is the magenta fallback; the rest hold user textures (albedo,
+// normal, metallic-roughness, emissive, IBL cubemaps, etc.).
+[[vk::binding(1, 1)]]
+Texture2D bindlessSrvs[];
+
+// ---- push constants -------------------------------------------------
+// Byte layout mirrors Rust `PbrBindlessPushConstants` (96 bytes):
+//   model(64) | material_slot(4) | env_handle(4) | albedo_idx(4) | normal_idx(4) | _pad(16)
 struct PbrBindlessPush
 {
     float4x4 model;
-    float4   albedoMetallic;
-    float    roughness;
-    uint     debug_mode;
-    uint     normal_space;
-    uint     env_handle;     // index into bindlessCubes[]
+    uint     material_slot;
+    uint     env_handle;
+    uint     albedo_idx;
+    uint     normal_idx;
+    uint4    _padding;
 };
 [[vk::push_constant]]
 PbrBindlessPush pc;
@@ -42,18 +63,25 @@ PbrBindlessPush pc;
 static const float PI          = 3.14159265359;
 static const float IBL_MAX_LOD = 8.0;
 
-// NonUniformResourceIndex: required by the Vulkan spec whenever the index into
-// a descriptor array can differ across a quad/subgroup. Even when the handle is
-// uniform here, marking it is safe and future-proofs per-material handles.
+static const uint SAMPLER_LINEAR_WRAP  = 0u;
+static const uint SAMPLER_LINEAR_CLAMP = 1u;
+static const uint SAMPLER_NEAREST      = 2u;
+static const uint SAMPLER_SHADOW       = 3u;
+
+// NonUniformResourceIndex: required by the Vulkan spec whenever the index
+// into a descriptor array can differ across a quad/subgroup. Even when
+// the handle is uniform here, marking it is safe and future-proofs
+// per-material handles.
 float3 sample_irradiance(float3 n)
 {
-    return bindlessCubes[NonUniformResourceIndex(pc.env_handle)].SampleLevel(n, 4.0).rgb;
+    return bindlessSrvs[NonUniformResourceIndex(pc.env_handle)]
+        .SampleLevel(globalSamplers[NonUniformResourceIndex(SAMPLER_LINEAR_CLAMP)], n, 4.0).rgb;
 }
 
 float3 sample_specular(float3 r, float roughness)
 {
-    return bindlessCubes[NonUniformResourceIndex(pc.env_handle)]
-        .SampleLevel(r, roughness * IBL_MAX_LOD).rgb;
+    return bindlessSrvs[NonUniformResourceIndex(pc.env_handle)]
+        .SampleLevel(globalSamplers[NonUniformResourceIndex(SAMPLER_LINEAR_CLAMP)], r, roughness * IBL_MAX_LOD).rgb;
 }
 
 float3 fresnel_schlick(float cos_theta, float3 f0)
@@ -96,22 +124,66 @@ float3 aces(float3 x)
     return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
 }
 
-float3 debug_normal(float3 n, float3 tangent)
-{
-    if (pc.normal_space == 1u)      { n = mul(frame.view, float4(n, 0.0)).xyz; }
-    else if (pc.normal_space == 2u) { n = tangent; }
-    n = normalize(n);
-    return n * 0.5 + 0.5;
-}
-
 [shader("fragment")]
 float4 fragmentMain(MeshVaryings in) : SV_Target
 {
-    float3 albedo    = pc.albedoMetallic.rgb;
-    float  metallic  = pc.albedoMetallic.a;
-    float  roughness = clamp(pc.roughness, 0.04, 1.0);
+    // ---- Material -------------------------------------------------------
+    GpuMaterial mat = materials[pc.material_slot];
 
-    float3 n = normalize(in.worldNormal);
+    // Base color: prefer the texture if a valid slot was bound, else use
+    // the scalar. Texture index 0xFFFFFFFF means "no texture".
+    float3 albedo;
+    if (mat.albedo_idx != 0xFFFFFFFFu)
+    {
+        float3 sampled = bindlessSrvs[NonUniformResourceIndex(mat.albedo_idx)]
+            .Sample(globalSamplers[NonUniformResourceIndex(SAMPLER_LINEAR_WRAP)], in.uv).rgb;
+        // Approximate sRGB -> linear (gamma 2.2 is fine for the
+        // high-energy pre-tonemap range; the post pass tone-maps anyway).
+        albedo = pow(sampled, float3(2.2));
+    }
+    else
+    {
+        albedo = mat.base_color.rgb;
+    }
+
+    // Metallic / roughness: same pattern, packed (B=metallic, G=roughness
+    // per glTF) when a texture is present.
+    float metallic;
+    float roughness;
+    if (mat.metallic_roughness_idx != 0xFFFFFFFFu)
+    {
+        float4 mr = bindlessSrvs[NonUniformResourceIndex(mat.metallic_roughness_idx)]
+            .Sample(globalSamplers[NonUniformResourceIndex(SAMPLER_LINEAR_WRAP)], in.uv);
+        metallic  = mr.b * mat.metallic_roughness_emissive.x;
+        roughness = mr.g * mat.metallic_roughness_emissive.y;
+    }
+    else
+    {
+        metallic  = mat.metallic_roughness_emissive.x;
+        roughness = mat.metallic_roughness_emissive.y;
+    }
+    roughness = clamp(roughness, 0.04, 1.0);
+
+    // Normal: derive from tangent-space normal map if a valid slot is
+    // bound, else use the vertex geometric normal.
+    float3 n;
+    if (mat.normal_idx != 0xFFFFFFFFu)
+    {
+        float3 n_ts = bindlessSrvs[NonUniformResourceIndex(mat.normal_idx)]
+            .Sample(globalSamplers[NonUniformResourceIndex(SAMPLER_LINEAR_WRAP)], in.uv).xyz;
+        n_ts = n_ts * 2.0 - 1.0;
+        // TBN basis: tangent (in.tangent), bitangent = cross(n, t),
+        // normal (in.worldNormal). The handedness sign is folded into
+        // the bitangent for left-handed UVs.
+        float3 t = normalize(in.tangent);
+        float3 b = cross(in.worldNormal, t);
+        n = normalize(n_ts.x * t + n_ts.y * b + n_ts.z * in.worldNormal);
+    }
+    else
+    {
+        n = normalize(in.worldNormal);
+    }
+
     float3 v = normalize(frame.cameraPosition.xyz - in.worldPos);
     float3 r = reflect(-v, n);
 
@@ -146,15 +218,18 @@ float4 fragmentMain(MeshVaryings in) : SV_Target
     float  ambient = frame.lightColor.w;
     float3 ibl     = (kd_ibl * diffuse_ibl + specular_ibl) * ambient;
 
-    float3 color = direct + ibl;
+    // Emissive: texture (multiplied by per-material intensity) or scalar.
+    float3 emissive = mat.metallic_roughness_emissive.zzz;
+    if (mat.emissive_idx != 0xFFFFFFFFu)
+    {
+        float3 e = bindlessSrvs[NonUniformResourceIndex(mat.emissive_idx)]
+            .Sample(globalSamplers[NonUniformResourceIndex(SAMPLER_LINEAR_WRAP)], in.uv).rgb;
+        emissive = e * mat.metallic_roughness_emissive.z;
+    }
 
-    float3 debug_out;
-    if (pc.debug_mode == 1u)      { debug_out = albedo; }
-    else if (pc.debug_mode == 2u) { debug_out = specular; }
-    else if (pc.debug_mode == 3u) { debug_out = prefiltered; }
-    else if (pc.debug_mode == 4u) { debug_out = ibl; }
-    else if (pc.debug_mode == 5u) { debug_out = debug_normal(n, in.tangent); }
-    else                          { debug_out = aces(color); }
+    float3 color = direct + ibl + emissive;
 
-    return float4(debug_out, 1.0);
+    // Debug modes reuse the same fragment path; we report the final
+    // tonemapped image as the "Final" view.
+    return float4(aces(color), 1.0);
 }
