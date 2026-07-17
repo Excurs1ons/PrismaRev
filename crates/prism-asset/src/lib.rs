@@ -14,7 +14,11 @@
 //! (HDR via `image` crate; first-version only Rgba8 is used by the renderer).
 
 pub mod handle;
+pub mod scene_store;
 pub mod types;
 
+mod gltf_loader;
+
 pub use handle::{InstanceHandle, MaterialHandle, MeshHandle, SceneHandle, TextureHandle};
+pub use scene_store::SceneStore;
 pub use types::{InstanceData, MaterialData, MeshData, TexFormat, TextureData};
