@@ -71,6 +71,19 @@ body {
   margin-left: 8px;
   font-size: 12px;
 }
+.topbar .brand .ver-tag {
+  margin-left: 10px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-family: var(--mono);
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  color: var(--accent);
+  background: rgba(95, 179, 255, 0.12);
+  border: 1px solid rgba(95, 179, 255, 0.4);
+  white-space: nowrap;
+}
 .topbar .menu-btn {
   display: none;
   background: var(--bg-soft);

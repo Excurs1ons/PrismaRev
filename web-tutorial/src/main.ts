@@ -41,7 +41,7 @@ function renderShell() {
   app.innerHTML = `
     <div class="topbar">
       <button class="menu-btn" id="menu-btn">☰</button>
-      <div class="brand">Prisma<span>Rev</span><small>从 Rust 到 Vulkan 引擎 · 交互式教学</small></div>
+      <div class="brand">Prisma<span>Rev</span><small>从 Rust 到 Vulkan 引擎 · 交互式教学</small><span class="ver-tag" title="教程基准 git 标签，对应源码快照">tutorial-v1</span></div>
       <div class="progress-wrap"><div class="progress-bar" id="progress-bar"></div></div>
       <div class="progress-label" id="progress-label">1 / ${CHAPTERS.length}</div>
     </div>
