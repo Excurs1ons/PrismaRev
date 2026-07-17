@@ -1,5 +1,8 @@
 # PrismaRev
 
+> **设计目标与架构原则见 [`docs/DESIGN.md`](docs/DESIGN.md)** —— 移动端 TBDR 优先、全平台统一的
+> 可扩展模块化渲染管线、运行时自动探测 Vulkan 能力与扩展。新增特性前请先对照。
+
 A from-scratch game engine in Rust, targeting **Vulkan** rendering with **Android** as a
 deployment platform. The architecture is **data-oriented (ECS)** rather than traditional OOP,
 which fits Rust's ownership model: entities are integer handles, components are plain data, and
