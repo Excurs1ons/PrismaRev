@@ -117,27 +117,34 @@ pub struct PbrPushConstants {
 }
 
 /// Push constants for the **bindless** PBR draw call (see
-/// `shaders/slang/bindless.slang`). Identical to [`PbrPushConstants`] plus a
-/// `env_handle` — the index of the IBL cubemap inside the bindless texture
-/// table (`bindless::TextureHandle`). 96 bytes, within the 128-byte guarantee.
+/// `shaders/slang/bindless.slang`).
+///
+/// Material parameters are no longer pushed per-draw — they live in the
+/// material SSBO (`RenderMaterialManager::buffer`) and are looked up by
+/// slot index. The draw only needs the model matrix, the material slot,
+/// the env cubemap bindless handle, and the albedo / normal-map bindless
+/// slots. Total 96 bytes, within the 128-byte Vulkan guarantee.
 ///
 /// Layout:
 /// | field           | offset | size |
 /// |-----------------|--------|------|
 /// | model           | 0      | 64   |
-/// | albedo_metallic | 64     | 16   |
-/// | roughness       | 80     | 4    |
-/// | debug_mode      | 84     | 4    |
-/// | normal_space    | 88     | 4    |
-/// | env_handle      | 92     | 4    |
+/// | material_slot   | 64     | 4    |
+/// | env_handle      | 68     | 4    |
+/// | albedo_idx      | 72     | 4    |
+/// | normal_idx      | 76     | 4    |
+/// | _padding        | 80     | 16   |
 #[repr(C)]
 pub struct PbrBindlessPushConstants {
     pub model: [[f32; 4]; 4],
-    pub albedo_metallic: [f32; 4],
-    pub roughness: f32,
-    pub debug_mode: u32,
-    pub normal_space: u32,
+    pub material_slot: u32,
     pub env_handle: u32,
+    pub albedo_idx: u32,
+    pub normal_idx: u32,
+    /// Explicit padding so the struct stays a multiple of 16 bytes; the
+    /// shader declares the push-constant block with the same alignment
+    /// and reads the same number of bytes.
+    pub _padding: [u32; 4],
 }
 
 #[cfg(test)]
@@ -158,24 +165,24 @@ mod tests {
     fn bindless_push_constant_offsets() {
         assert_eq!(std::mem::offset_of!(PbrBindlessPushConstants, model), 0);
         assert_eq!(
-            std::mem::offset_of!(PbrBindlessPushConstants, albedo_metallic),
+            std::mem::offset_of!(PbrBindlessPushConstants, material_slot),
             64
         );
         assert_eq!(
-            std::mem::offset_of!(PbrBindlessPushConstants, roughness),
-            80
-        );
-        assert_eq!(
-            std::mem::offset_of!(PbrBindlessPushConstants, debug_mode),
-            84
-        );
-        assert_eq!(
-            std::mem::offset_of!(PbrBindlessPushConstants, normal_space),
-            88
-        );
-        assert_eq!(
             std::mem::offset_of!(PbrBindlessPushConstants, env_handle),
-            92
+            68
+        );
+        assert_eq!(
+            std::mem::offset_of!(PbrBindlessPushConstants, albedo_idx),
+            72
+        );
+        assert_eq!(
+            std::mem::offset_of!(PbrBindlessPushConstants, normal_idx),
+            76
+        );
+        assert_eq!(
+            std::mem::offset_of!(PbrBindlessPushConstants, _padding),
+            80
         );
     }
 
