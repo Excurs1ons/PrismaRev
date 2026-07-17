@@ -134,4 +134,12 @@ echo "  reflect sharc_query -> reflection/sharc_query.json"
   -reflection-json "$REFL/sharc_query.json" \
   -o "$REFL/sharc_query.tmp.spv"
 
+# lighting: fragment (GBuffer + shadow + GI + IBL → HDR)
+compile_stage lighting fragmentMain fragment
+emit_reflection lighting fragmentMain fragment
+
+# post: fragment (ACES tone map → swapchain)
+compile_stage post fragmentMain fragment
+emit_reflection post fragmentMain fragment
+
 echo "All Slang shaders compiled. SPIR-V in $OUT, reflection JSON in $REFL"

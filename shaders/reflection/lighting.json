@@ -1,0 +1,13 @@
+{
+  "parameters": [
+    { "name": "frame", "binding": { "kind": "descriptorTableSlot", "index": 0 }, "type": { "kind": "constantBuffer" } },
+    { "name": "gbufferA", "binding": { "kind": "descriptorTableSlot", "index": 1 }, "type": { "kind": "resource", "baseShape": "texture2D" } },
+    { "name": "gbufferB", "binding": { "kind": "descriptorTableSlot", "index": 2 }, "type": { "kind": "resource", "baseShape": "texture2D" } },
+    { "name": "gbufferC", "binding": { "kind": "descriptorTableSlot", "index": 3 }, "type": { "kind": "resource", "baseShape": "texture2D" } },
+    { "name": "shadowMap", "binding": { "kind": "descriptorTableSlot", "index": 4 }, "type": { "kind": "resource", "baseShape": "texture2D" } },
+    { "name": "giRadiance", "binding": { "kind": "descriptorTableSlot", "index": 5 }, "type": { "kind": "resource", "baseShape": "texture2D" } },
+    { "name": "envCube", "binding": { "kind": "descriptorTableSlot", "index": 6 }, "type": { "kind": "resource", "baseShape": "textureCube" } },
+    { "name": "pc", "binding": { "kind": "pushConstantBuffer", "index": 0, "size": 32 }, "type": { "kind": "constantBuffer" } }
+  ],
+  "entryPoints": [{ "name": "fragmentMain", "stage": "fragment", "parameters": [] }]
+}

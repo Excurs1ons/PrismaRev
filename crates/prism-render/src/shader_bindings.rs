@@ -32,6 +32,32 @@ pub mod gizmo {
     pub const PUSH_CONSTANT_SIZE: u32 = 64;
 }
 
+pub mod lighting {
+    //! Bindings reflected from shaders/slang/lighting.slang
+
+    /// Entry point names (for VkPipelineShaderStageCreateInfo).
+    pub const ENTRY_FRAGMENT_MAIN: &str = "fragmentMain"; // stage: FRAGMENT
+
+    /// Push-constant block size in bytes (reflected).
+    pub const PUSH_CONSTANT_SIZE: u32 = 32;
+
+    // --- descriptor set 0 ---
+    pub const FRAME_SET: u32 = 0;
+    pub const FRAME_BINDING: u32 = 0; // UNIFORM_BUFFER
+    pub const GBUFFER_A_SET: u32 = 0;
+    pub const GBUFFER_A_BINDING: u32 = 1; // COMBINED_IMAGE_SAMPLER
+    pub const GBUFFER_B_SET: u32 = 0;
+    pub const GBUFFER_B_BINDING: u32 = 2; // COMBINED_IMAGE_SAMPLER
+    pub const GBUFFER_C_SET: u32 = 0;
+    pub const GBUFFER_C_BINDING: u32 = 3; // COMBINED_IMAGE_SAMPLER
+    pub const SHADOW_MAP_SET: u32 = 0;
+    pub const SHADOW_MAP_BINDING: u32 = 4; // COMBINED_IMAGE_SAMPLER
+    pub const GI_RADIANCE_SET: u32 = 0;
+    pub const GI_RADIANCE_BINDING: u32 = 5; // COMBINED_IMAGE_SAMPLER
+    pub const ENV_CUBE_SET: u32 = 0;
+    pub const ENV_CUBE_BINDING: u32 = 6; // COMBINED_IMAGE_SAMPLER
+}
+
 pub mod mesh {
     //! Bindings reflected from shaders/slang/mesh.slang
 
@@ -75,6 +101,22 @@ pub mod pbr {
     // --- descriptor set 1 ---
     pub const ENV_CUBE_SET: u32 = 1;
     pub const ENV_CUBE_BINDING: u32 = 0; // COMBINED_IMAGE_SAMPLER
+}
+
+pub mod post {
+    //! Bindings reflected from shaders/slang/post.slang
+
+    /// Entry point names (for VkPipelineShaderStageCreateInfo).
+    pub const ENTRY_FRAGMENT_MAIN: &str = "fragmentMain"; // stage: FRAGMENT
+
+    /// Push-constant block size in bytes (reflected).
+    pub const PUSH_CONSTANT_SIZE: u32 = 16;
+
+    // --- descriptor set 0 ---
+    pub const HDR_INPUT_SET: u32 = 0;
+    pub const HDR_INPUT_BINDING: u32 = 0; // COMBINED_IMAGE_SAMPLER
+    pub const HDR_SAMPLER_SET: u32 = 0;
+    pub const HDR_SAMPLER_BINDING: u32 = 1; // COMBINED_IMAGE_SAMPLER
 }
 
 pub mod shadow {
