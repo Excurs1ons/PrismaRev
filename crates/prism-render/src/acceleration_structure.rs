@@ -8,7 +8,6 @@
 
 use anyhow::Context as _;
 use ash::vk;
-use ash::vk::Handle as _;
 
 use crate::buffer::{self, BufferUsage, MemoryProperties};
 use crate::context::VulkanContext;
@@ -19,6 +18,7 @@ pub struct BlasEntry {
     pub handle: vk::AccelerationStructureKHR,
     pub device_address: vk::DeviceAddress,
     device: ash::Device,
+    as_fn: ash::khr::acceleration_structure::Device,
     buffer: vk::Buffer,
     memory: vk::DeviceMemory,
 }
@@ -50,22 +50,24 @@ impl BlasEntry {
 
         let geom = vk::AccelerationStructureGeometryKHR::default()
             .geometry_type(vk::GeometryTypeKHR::TRIANGLES)
-            .geometry(vk::AccelerationStructureGeometryTrianglesDataKHR {
-                vertex_format: vk::Format::R32G32B32_SFLOAT,
-                vertex_data: vk::DeviceOrHostAddressConstKHR {
-                    device_address: vertex_addr,
+            .geometry(vk::AccelerationStructureGeometryDataKHR {
+                triangles: vk::AccelerationStructureGeometryTrianglesDataKHR {
+                    vertex_format: vk::Format::R32G32B32_SFLOAT,
+                    vertex_data: vk::DeviceOrHostAddressConstKHR {
+                        device_address: vertex_addr,
+                    },
+                    vertex_stride: std::mem::size_of::<crate::mesh::Vertex>() as vk::DeviceSize,
+                    max_vertex: mesh.vertex_count.saturating_sub(1),
+                    index_type: if index_addr != 0 {
+                        vk::IndexType::UINT32
+                    } else {
+                        vk::IndexType::NONE_KHR
+                    },
+                    index_data: vk::DeviceOrHostAddressConstKHR {
+                        device_address: index_addr,
+                    },
+                    ..Default::default()
                 },
-                vertex_stride: std::mem::size_of::<crate::mesh::Vertex>() as vk::DeviceSize,
-                max_vertex: mesh.vertex_count.saturating_sub(1),
-                index_type: if index_addr != 0 {
-                    vk::IndexType::UINT32
-                } else {
-                    vk::IndexType::NONE_KHR
-                },
-                index_data: vk::DeviceOrHostAddressConstKHR {
-                    device_address: index_addr,
-                },
-                ..Default::default()
             });
 
         let build_info = vk::AccelerationStructureBuildGeometryInfoKHR::default()
@@ -76,7 +78,6 @@ impl BlasEntry {
         let mut size_info = vk::AccelerationStructureBuildSizesInfoKHR::default();
         unsafe {
             as_fn.get_acceleration_structure_build_sizes(
-                context.physical_device,
                 vk::AccelerationStructureBuildTypeKHR::DEVICE,
                 &build_info,
                 &[tri_count],
@@ -96,14 +97,12 @@ impl BlasEntry {
             .offset(0)
             .size(size_info.acceleration_structure_size)
             .ty(vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL);
-        let handle =
-            unsafe { as_fn.create_acceleration_structure(&create_info, None) }
-                .context("create BLAS")?;
+        let handle = unsafe { as_fn.create_acceleration_structure(&create_info, None) }
+            .context("create BLAS")?;
 
-        let addr_info = vk::AccelerationStructureDeviceAddressInfoKHR::default()
-            .acceleration_structure(handle);
-        let device_address =
-            unsafe { as_fn.get_acceleration_structure_device_address(&addr_info) };
+        let addr_info =
+            vk::AccelerationStructureDeviceAddressInfoKHR::default().acceleration_structure(handle);
+        let device_address = unsafe { as_fn.get_acceleration_structure_device_address(&addr_info) };
 
         let (scratch_buffer, scratch_memory) = buffer::create_buffer(
             context,
@@ -156,6 +155,7 @@ impl BlasEntry {
             handle,
             device_address,
             device: device.clone(),
+            as_fn: as_fn.clone(),
             buffer: as_buffer,
             memory: as_memory,
         })
@@ -164,12 +164,8 @@ impl BlasEntry {
 
 impl Drop for BlasEntry {
     fn drop(&mut self) {
-        let as_fn = ash::khr::acceleration_structure::Device::new(
-            &ash::Entry::linked(),
-            &self.device,
-        );
         unsafe {
-            as_fn.destroy_acceleration_structure(self.handle, None);
+            self.as_fn.destroy_acceleration_structure(self.handle, None);
             self.device.destroy_buffer(self.buffer, None);
             self.device.free_memory(self.memory, None);
         }
@@ -181,6 +177,7 @@ pub struct Tlas {
     pub handle: vk::AccelerationStructureKHR,
     pub device_address: vk::DeviceAddress,
     device: ash::Device,
+    as_fn: ash::khr::acceleration_structure::Device,
     buffer: vk::Buffer,
     memory: vk::DeviceMemory,
 }
@@ -235,15 +232,13 @@ impl Tlas {
                         inst.custom_index,
                         inst.mask,
                     ),
-                    instance_shader_binding_table_record_offset_and_flags:
-                        vk::Packed24_8::new(
-                            inst.instance_shader_binding_table_record_offset,
-                            (inst.flags.0) as u8,
-                        ),
-                    acceleration_structure_reference:
-                        vk::AccelerationStructureReferenceKHR {
-                            device_handle: blas_addr,
-                        },
+                    instance_shader_binding_table_record_offset_and_flags: vk::Packed24_8::new(
+                        inst.instance_shader_binding_table_record_offset,
+                        inst.flags.as_raw() as u8,
+                    ),
+                    acceleration_structure_reference: vk::AccelerationStructureReferenceKHR {
+                        device_handle: blas_addr,
+                    },
                 }
             })
             .collect();
@@ -271,11 +266,13 @@ impl Tlas {
 
         let geom = vk::AccelerationStructureGeometryKHR::default()
             .geometry_type(vk::GeometryTypeKHR::INSTANCES)
-            .geometry(vk::AccelerationStructureGeometryInstancesDataKHR {
-                data: vk::DeviceOrHostAddressConstKHR {
-                    device_address: instance_addr,
+            .geometry(vk::AccelerationStructureGeometryDataKHR {
+                instances: vk::AccelerationStructureGeometryInstancesDataKHR {
+                    data: vk::DeviceOrHostAddressConstKHR {
+                        device_address: instance_addr,
+                    },
+                    ..Default::default()
                 },
-                ..Default::default()
             });
 
         let build_info = vk::AccelerationStructureBuildGeometryInfoKHR::default()
@@ -286,7 +283,6 @@ impl Tlas {
         let mut size_info = vk::AccelerationStructureBuildSizesInfoKHR::default();
         unsafe {
             as_fn.get_acceleration_structure_build_sizes(
-                context.physical_device,
                 vk::AccelerationStructureBuildTypeKHR::DEVICE,
                 &build_info,
                 &[instances.len() as u32],
@@ -306,14 +302,12 @@ impl Tlas {
             .offset(0)
             .size(size_info.acceleration_structure_size)
             .ty(vk::AccelerationStructureTypeKHR::TOP_LEVEL);
-        let handle =
-            unsafe { as_fn.create_acceleration_structure(&create_info, None) }
-                .context("create TLAS")?;
+        let handle = unsafe { as_fn.create_acceleration_structure(&create_info, None) }
+            .context("create TLAS")?;
 
-        let addr_info = vk::AccelerationStructureDeviceAddressInfoKHR::default()
-            .acceleration_structure(handle);
-        let device_address =
-            unsafe { as_fn.get_acceleration_structure_device_address(&addr_info) };
+        let addr_info =
+            vk::AccelerationStructureDeviceAddressInfoKHR::default().acceleration_structure(handle);
+        let device_address = unsafe { as_fn.get_acceleration_structure_device_address(&addr_info) };
 
         let (scratch_buffer, scratch_memory) = buffer::create_buffer(
             context,
@@ -368,6 +362,7 @@ impl Tlas {
             handle,
             device_address,
             device: device.clone(),
+            as_fn: as_fn.clone(),
             buffer: as_buffer,
             memory: as_memory,
         })
@@ -376,10 +371,8 @@ impl Tlas {
 
 impl Drop for Tlas {
     fn drop(&mut self) {
-        let as_fn =
-            ash::khr::acceleration_structure::Device::new(&ash::Entry::linked(), &self.device);
         unsafe {
-            as_fn.destroy_acceleration_structure(self.handle, None);
+            self.as_fn.destroy_acceleration_structure(self.handle, None);
             self.device.destroy_buffer(self.buffer, None);
             self.device.free_memory(self.memory, None);
         }
@@ -410,8 +403,8 @@ fn submit_and_wait(
     let cmds = [cmd];
     let submit = vk::SubmitInfo::default().command_buffers(&cmds);
     unsafe {
-        device.queue_submit(queue, std::slice::from_ref(&submit), vk::Fence::null());
-        device.queue_wait_idle(queue);
+        let _result = device.queue_submit(queue, std::slice::from_ref(&submit), vk::Fence::null());
+        let _ = device.queue_wait_idle(queue);
         device.free_command_buffers(pool, &cmds);
     }
 }

@@ -20,6 +20,7 @@
 //! | [`render_graph`] | Modular render-pass graph (new pipeline) |
 //! | [`passes`] | Individual render-pass implementations |
 
+pub mod acceleration_structure;
 pub mod bindless;
 pub mod buffer;
 pub mod capabilities;
@@ -35,8 +36,6 @@ pub mod pbr_push;
 pub mod pipeline;
 pub mod render_graph;
 pub mod render_pass;
-// M3: acceleration structure module — disabled until ash 0.38 API is resolved.
-// pub mod acceleration_structure;
 pub mod shader;
 /// Slang-reflection-generated binding constants (set/binding indices, entry
 /// point names, push-constant sizes). Regenerate with `xtask/shader-bindgen`
