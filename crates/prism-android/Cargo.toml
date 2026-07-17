@@ -10,6 +10,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 prism-engine = { path = "../prism-engine" }
+prism-asset = { path = "../prism-asset" }
 winit = { workspace = true, features = ["android-game-activity"] }
 log = { workspace = true }
 anyhow = { workspace = true }

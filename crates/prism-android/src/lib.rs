@@ -64,11 +64,55 @@ fn android_main(app: AndroidApp) {
         })
     };
 
+    // P0 (commit 11): also try to load a pre-bundled glTF scene
+    // (`assets/scenes/cornell-box.glb`) from the APK. The glTF loader
+    // handles the `.glb` header and embedded images; missing file or
+    // parse error are non-fatal so the engine can fall back to the
+    // procedural demo on devices that don't ship a scene.
+    let scene_glb = {
+        let mgr = app.asset_manager();
+        let candidates = [c"scenes/cornell-box.glb", c"cornell-box.glb"];
+        let mut picked: Option<std::ffi::CString> = None;
+        for path in &candidates {
+            // `open` returns None for missing files; we use the
+            // presence of a valid buffer to decide whether the
+            // candidate exists. The first match wins.
+            if let Ok(mut asset) = mgr.open(path) {
+                if let Ok(buf) = asset.buffer() {
+                    if !buf.is_empty() {
+                        log::info!(
+                            "loaded glb asset {} ({} bytes)",
+                            path.to_string_lossy(),
+                            buf.len()
+                        );
+                        picked = Some(path.to_owned());
+                        break;
+                    }
+                }
+            }
+        }
+        picked.and_then(|path| {
+            mgr.open(&path).ok().and_then(|mut asset| {
+                match asset.buffer() {
+                    Ok(buf) if !buf.is_empty() => Some(buf.to_vec()),
+                    Ok(_) => {
+                        log::warn!("glb asset is empty; using procedural fallback");
+                        None
+                    }
+                    Err(e) => {
+                        log::warn!("failed to read glb asset ({e}); using procedural fallback");
+                        None
+                    }
+                }
+            })
+        })
+    };
+
     let event_loop = EventLoop::builder()
         .with_android_app(app)
         .build()
         .expect("failed to build Android event loop");
 
-    prism_engine::App::run_on_event_loop_with_env(event_loop, env_bytes)
-        .expect("App::run_on_event_loop_with_env failed");
+    prism_engine::App::run_on_event_loop_with_env_and_scene(event_loop, env_bytes, scene_glb)
+        .expect("App::run_on_event_loop_with_env_and_scene failed");
 }
