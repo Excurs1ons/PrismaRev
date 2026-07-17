@@ -38,7 +38,7 @@
                                 "kind": "scalar",
                                 "scalarType": "uint32"
                             },
-                            "binding": {"kind": "uniform", "offset": 0, "size": 4, "elementStride": 0}
+                            "binding": {"kind": "uniform", "offset": 0, "size": 4}
                         },
                         {
                             "name": "screenHeight",
@@ -46,7 +46,7 @@
                                 "kind": "scalar",
                                 "scalarType": "uint32"
                             },
-                            "binding": {"kind": "uniform", "offset": 4, "size": 4, "elementStride": 0}
+                            "binding": {"kind": "uniform", "offset": 4, "size": 4}
                         },
                         {
                             "name": "exposure",
@@ -54,7 +54,7 @@
                                 "kind": "scalar",
                                 "scalarType": "float32"
                             },
-                            "binding": {"kind": "uniform", "offset": 8, "size": 4, "elementStride": 0}
+                            "binding": {"kind": "uniform", "offset": 8, "size": 4}
                         },
                         {
                             "name": "_padding",
@@ -62,7 +62,7 @@
                                 "kind": "scalar",
                                 "scalarType": "float32"
                             },
-                            "binding": {"kind": "uniform", "offset": 12, "size": 4, "elementStride": 0}
+                            "binding": {"kind": "uniform", "offset": 12, "size": 4}
                         }
                     ]
                 },
@@ -80,7 +80,7 @@
                                     "kind": "scalar",
                                     "scalarType": "uint32"
                                 },
-                                "binding": {"kind": "uniform", "offset": 0, "size": 4, "elementStride": 0}
+                                "binding": {"kind": "uniform", "offset": 0, "size": 4}
                             },
                             {
                                 "name": "screenHeight",
@@ -88,7 +88,7 @@
                                     "kind": "scalar",
                                     "scalarType": "uint32"
                                 },
-                                "binding": {"kind": "uniform", "offset": 4, "size": 4, "elementStride": 0}
+                                "binding": {"kind": "uniform", "offset": 4, "size": 4}
                             },
                             {
                                 "name": "exposure",
@@ -96,7 +96,7 @@
                                     "kind": "scalar",
                                     "scalarType": "float32"
                                 },
-                                "binding": {"kind": "uniform", "offset": 8, "size": 4, "elementStride": 0}
+                                "binding": {"kind": "uniform", "offset": 8, "size": 4}
                             },
                             {
                                 "name": "_padding",
@@ -104,11 +104,11 @@
                                     "kind": "scalar",
                                     "scalarType": "float32"
                                 },
-                                "binding": {"kind": "uniform", "offset": 12, "size": 4, "elementStride": 0}
+                                "binding": {"kind": "uniform", "offset": 12, "size": 4}
                             }
                         ]
                     },
-                    "binding": {"kind": "uniform", "offset": 0, "size": 16, "elementStride": 0}
+                    "binding": {"kind": "uniform", "offset": 0, "size": 16}
                 }
             }
         }
@@ -241,6 +241,5 @@
                 }
             ]
         }
-    ],
-    "bindlessSpaceIndex": 1
+    ]
 }

@@ -6,7 +6,6 @@
             "type": {
                 "kind": "resource",
                 "baseShape": "texture2D",
-                "combined": true,
                 "resultType": {
                     "kind": "vector",
                     "elementCount": 4,
@@ -210,6 +209,5 @@
                 }
             ]
         }
-    ],
-    "bindlessSpaceIndex": 1
+    ]
 }

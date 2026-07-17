@@ -20,7 +20,7 @@
                                     "scalarType": "float32"
                                 }
                             },
-                            "binding": {"kind": "uniform", "offset": 0, "size": 64, "elementStride": 0}
+                            "binding": {"kind": "uniform", "offset": 0, "size": 64}
                         },
                         {
                             "name": "cameraPosition",
@@ -32,7 +32,7 @@
                                     "scalarType": "float32"
                                 }
                             },
-                            "binding": {"kind": "uniform", "offset": 64, "size": 16, "elementStride": 4}
+                            "binding": {"kind": "uniform", "offset": 64, "size": 16}
                         },
                         {
                             "name": "lightDirection",
@@ -44,7 +44,7 @@
                                     "scalarType": "float32"
                                 }
                             },
-                            "binding": {"kind": "uniform", "offset": 80, "size": 16, "elementStride": 4}
+                            "binding": {"kind": "uniform", "offset": 80, "size": 16}
                         },
                         {
                             "name": "lightColor",
@@ -56,7 +56,7 @@
                                     "scalarType": "float32"
                                 }
                             },
-                            "binding": {"kind": "uniform", "offset": 96, "size": 16, "elementStride": 4}
+                            "binding": {"kind": "uniform", "offset": 96, "size": 16}
                         },
                         {
                             "name": "view",
@@ -69,7 +69,7 @@
                                     "scalarType": "float32"
                                 }
                             },
-                            "binding": {"kind": "uniform", "offset": 112, "size": 64, "elementStride": 0}
+                            "binding": {"kind": "uniform", "offset": 112, "size": 64}
                         }
                     ]
                 },
@@ -92,7 +92,7 @@
                                         "scalarType": "float32"
                                     }
                                 },
-                                "binding": {"kind": "uniform", "offset": 0, "size": 64, "elementStride": 0}
+                                "binding": {"kind": "uniform", "offset": 0, "size": 64}
                             },
                             {
                                 "name": "cameraPosition",
@@ -104,7 +104,7 @@
                                         "scalarType": "float32"
                                     }
                                 },
-                                "binding": {"kind": "uniform", "offset": 64, "size": 16, "elementStride": 4}
+                                "binding": {"kind": "uniform", "offset": 64, "size": 16}
                             },
                             {
                                 "name": "lightDirection",
@@ -116,7 +116,7 @@
                                         "scalarType": "float32"
                                     }
                                 },
-                                "binding": {"kind": "uniform", "offset": 80, "size": 16, "elementStride": 4}
+                                "binding": {"kind": "uniform", "offset": 80, "size": 16}
                             },
                             {
                                 "name": "lightColor",
@@ -128,7 +128,7 @@
                                         "scalarType": "float32"
                                     }
                                 },
-                                "binding": {"kind": "uniform", "offset": 96, "size": 16, "elementStride": 4}
+                                "binding": {"kind": "uniform", "offset": 96, "size": 16}
                             },
                             {
                                 "name": "view",
@@ -141,11 +141,11 @@
                                         "scalarType": "float32"
                                     }
                                 },
-                                "binding": {"kind": "uniform", "offset": 112, "size": 64, "elementStride": 0}
+                                "binding": {"kind": "uniform", "offset": 112, "size": 64}
                             }
                         ]
                     },
-                    "binding": {"kind": "uniform", "offset": 0, "size": 176, "elementStride": 0}
+                    "binding": {"kind": "uniform", "offset": 0, "size": 176}
                 }
             }
         },
@@ -155,7 +155,6 @@
             "type": {
                 "kind": "resource",
                 "baseShape": "textureCube",
-                "combined": true,
                 "resultType": {
                     "kind": "vector",
                     "elementCount": 4,
@@ -186,7 +185,7 @@
                                     "scalarType": "float32"
                                 }
                             },
-                            "binding": {"kind": "uniform", "offset": 0, "size": 64, "elementStride": 0}
+                            "binding": {"kind": "uniform", "offset": 0, "size": 64}
                         },
                         {
                             "name": "albedoMetallic",
@@ -198,7 +197,7 @@
                                     "scalarType": "float32"
                                 }
                             },
-                            "binding": {"kind": "uniform", "offset": 64, "size": 16, "elementStride": 4}
+                            "binding": {"kind": "uniform", "offset": 64, "size": 16}
                         },
                         {
                             "name": "roughness",
@@ -206,7 +205,7 @@
                                 "kind": "scalar",
                                 "scalarType": "float32"
                             },
-                            "binding": {"kind": "uniform", "offset": 80, "size": 4, "elementStride": 0}
+                            "binding": {"kind": "uniform", "offset": 80, "size": 4}
                         },
                         {
                             "name": "debug_mode",
@@ -214,7 +213,7 @@
                                 "kind": "scalar",
                                 "scalarType": "uint32"
                             },
-                            "binding": {"kind": "uniform", "offset": 84, "size": 4, "elementStride": 0}
+                            "binding": {"kind": "uniform", "offset": 84, "size": 4}
                         },
                         {
                             "name": "normal_space",
@@ -222,7 +221,7 @@
                                 "kind": "scalar",
                                 "scalarType": "uint32"
                             },
-                            "binding": {"kind": "uniform", "offset": 88, "size": 4, "elementStride": 0}
+                            "binding": {"kind": "uniform", "offset": 88, "size": 4}
                         }
                     ]
                 },
@@ -245,7 +244,7 @@
                                         "scalarType": "float32"
                                     }
                                 },
-                                "binding": {"kind": "uniform", "offset": 0, "size": 64, "elementStride": 0}
+                                "binding": {"kind": "uniform", "offset": 0, "size": 64}
                             },
                             {
                                 "name": "albedoMetallic",
@@ -257,7 +256,7 @@
                                         "scalarType": "float32"
                                     }
                                 },
-                                "binding": {"kind": "uniform", "offset": 64, "size": 16, "elementStride": 4}
+                                "binding": {"kind": "uniform", "offset": 64, "size": 16}
                             },
                             {
                                 "name": "roughness",
@@ -265,7 +264,7 @@
                                     "kind": "scalar",
                                     "scalarType": "float32"
                                 },
-                                "binding": {"kind": "uniform", "offset": 80, "size": 4, "elementStride": 0}
+                                "binding": {"kind": "uniform", "offset": 80, "size": 4}
                             },
                             {
                                 "name": "debug_mode",
@@ -273,7 +272,7 @@
                                     "kind": "scalar",
                                     "scalarType": "uint32"
                                 },
-                                "binding": {"kind": "uniform", "offset": 84, "size": 4, "elementStride": 0}
+                                "binding": {"kind": "uniform", "offset": 84, "size": 4}
                             },
                             {
                                 "name": "normal_space",
@@ -281,11 +280,11 @@
                                     "kind": "scalar",
                                     "scalarType": "uint32"
                                 },
-                                "binding": {"kind": "uniform", "offset": 88, "size": 4, "elementStride": 0}
+                                "binding": {"kind": "uniform", "offset": 88, "size": 4}
                             }
                         ]
                     },
-                    "binding": {"kind": "uniform", "offset": 0, "size": 96, "elementStride": 0}
+                    "binding": {"kind": "uniform", "offset": 0, "size": 96}
                 }
             }
         }
@@ -418,6 +417,5 @@
                 }
             ]
         }
-    ],
-    "bindlessSpaceIndex": 2
+    ]
 }
