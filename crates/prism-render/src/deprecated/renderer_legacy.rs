@@ -1139,14 +1139,25 @@ impl Renderer {
 
 impl Drop for Renderer {
     fn drop(&mut self) {
-        let device = &self.context.device;
-        unsafe { device.device_wait_idle().ok() };
+        unsafe { self.context.device.device_wait_idle().ok() };
+
+        // Release the P0 scene managers' GPU resources (mesh buffers +
+        // device memory, bindless SRV slots, material SSBO). Their `Drop`
+        // is a no-op by contract, so if we don't free them here they leak
+        // and trip VUID-vkDestroyDevice-device-05137. This must run while
+        // `self.context` (and thus the `VkDevice`) is still alive — the
+        // managers are declared before `context`, so they would otherwise
+        // outlive it silently. `destroy_scene_managers` is idempotent (it
+        // drains its slot pools), so re-calling it after an explicit
+        // earlier call is safe.
+        self.destroy_scene_managers();
 
         // Depth images, framebuffers, and the swapchain are not RAII (they have
         // no `Drop`), so they are destroyed explicitly here. The pipeline,
         // render pass, descriptor layout/pool, and frame UBOs free themselves
         // via their own `Drop` impls when these fields are dropped after this
         // method returns.
+        let device = &self.context.device;
 
         // Destroy depth images.
         for mut depth in self.depth_images.drain(..) {
