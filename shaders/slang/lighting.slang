@@ -107,12 +107,18 @@ float4 fragmentMain(MeshVaryings in) : SV_Target
 
     float3 v = normalize(frame.cameraPosition.xyz - world_pos);
 
-    // Sample shadow map at half resolution (point sample via Load)
-    uint2 shadowCoord = uint2(float2(pixel) * float2(pc.shadowMapWidth, pc.shadowMapHeight) / float2(pc.screenWidth, pc.screenHeight));
+    // Sample shadow map at half resolution (point sample via Load).
+    // shadowMapWidth is the half-res width; half-res height = screenHeight/2.
+    uint2 shadowCoord = uint2(
+        uint(float(pixel.x) * float(pc.shadowMapWidth) / float(pc.screenWidth)),
+        pixel.y / 2);
     float shadow = shadowMap.Load(int3(shadowCoord, 0)).x;
 
-    // Sample GI at half resolution (point sample via Load)
-    uint2 giCoord = uint2(float2(pixel) * float2(pc.giMapWidth, pc.giMapHeight) / float2(pc.screenWidth, pc.screenHeight));
+    // Sample GI at half resolution (point sample via Load).
+    // giMapWidth is the half-res width; half-res height = screenHeight/2.
+    uint2 giCoord = uint2(
+        uint(float(pixel.x) * float(pc.giMapWidth) / float(pc.screenWidth)),
+        pixel.y / 2);
     float4 gi = giRadiance.Load(int3(giCoord, 0));
     float3 gi_radiance = gi.rgb;
 
