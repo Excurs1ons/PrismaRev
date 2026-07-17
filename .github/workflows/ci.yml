@@ -208,12 +208,13 @@ jobs:
         with:
           targets: aarch64-linux-android
 
-      - name: Set up Android NDK
-        uses: nttld/setup-ndk@v1
-        id: setup-ndk
-        with:
-          ndk-version: r25b
-          local-cache: true
+      - name: Set up Android NDK (runner-preinstalled)
+        run: |
+          # GitHub runners ship with NDK preinstalled. Find it and set env.
+          NDK_DIR=$(ls -d /usr/local/lib/android/sdk/ndk/*/ | head -1)
+          echo "ANDROID_NDK_HOME=${NDK_DIR}" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=${NDK_DIR}" >> "$GITHUB_ENV"
+          echo "Using NDK at ${NDK_DIR}"
 
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --locked
@@ -224,8 +225,6 @@ jobs:
           key: ${{ env.CACHE_VERSION }}-android-rust
 
       - name: Build prism-android cdylib (arm64-v8a, release)
-        env:
-          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
         run: >
           cargo ndk -t arm64-v8a
           -o android/app/src/main/jniLibs
@@ -264,12 +263,11 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Set up Android NDK
-        uses: nttld/setup-ndk@v1
-        id: setup-ndk
-        with:
-          ndk-version: r25b
-          local-cache: true
+      - name: Set up Android NDK (runner-preinstalled)
+        run: |
+          NDK_DIR=$(ls -d /usr/local/lib/android/sdk/ndk/*/ | head -1)
+          echo "ANDROID_NDK_HOME=${NDK_DIR}" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=${NDK_DIR}" >> "$GITHUB_ENV"
 
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --locked
@@ -295,8 +293,6 @@ jobs:
 
       - name: assembleDebug
         working-directory: android
-        env:
-          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
         run: ./gradlew assembleDebug --stacktrace
 
       - name: Upload APK

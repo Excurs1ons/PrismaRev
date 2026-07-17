@@ -14,7 +14,7 @@
 
 import common;
 import sharc.common;
-import sharc.buffers;
+// sharc.buffers is included by sharc.common; no separate import needed.
 
 // set 0, binding 0 — frame UBO
 [[vk::binding(0, 0)]]
