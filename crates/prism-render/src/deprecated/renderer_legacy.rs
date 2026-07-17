@@ -24,9 +24,9 @@ use crate::descriptor::{DescriptorLayout, DescriptorPool, FrameUBO, FrameUBOData
 use crate::gizmo::Gizmo;
 use crate::ibl::IblResources;
 use crate::mesh::{Mesh, Vertex};
-use crate::overlay::{Overlay, OverlayAction};
+use crate::overlay::{Overlay, OverlayAction, OverlayDrawParams};
 use crate::pbr_push::{DebugMode, NormalSpace, PbrPushConstants};
-use crate::pipeline::GraphicsPipeline;
+use crate::pipeline::{GraphicsPipeline, PipelineDesc};
 use crate::render_pass::{DepthImage, Framebuffers, RenderPass};
 use crate::shader;
 use crate::swapchain::{Swapchain, FRAMES_IN_FLIGHT};
@@ -38,9 +38,9 @@ use crate::swapchain::{Swapchain, FRAMES_IN_FLIGHT};
 // ---------------------------------------------------------------------------
 // Embedded SPIR-V (compiled offline from shaders/*.glsl via glslc)
 // ---------------------------------------------------------------------------
-const VERT_SPV: &[u8] = include_bytes!("../../../shaders/mesh.vert.spv");
-const FRAG_SPV: &[u8] = include_bytes!("../../../shaders/mesh.frag.spv");
-const PBR_FRAG_SPV: &[u8] = include_bytes!("../../../shaders/pbr.frag.spv");
+const VERT_SPV: &[u8] = include_bytes!("../../../../shaders/mesh.vert.spv");
+const FRAG_SPV: &[u8] = include_bytes!("../../../../shaders/mesh.frag.spv");
+const PBR_FRAG_SPV: &[u8] = include_bytes!("../../../../shaders/pbr.frag.spv");
 
 // ---------------------------------------------------------------------------
 // Frame state
@@ -221,7 +221,7 @@ impl Renderer {
         let mut bindless = crate::bindless::BindlessTextureTable::new(&context.device, 1024)
             .context("create bindless texture table")?;
         let ibl_bindless_handle = bindless
-            .register(ibl.image_view(), ibl.sampler())
+            .register(ibl.image_view())
             .context("register IBL cubemap into bindless table")?;
         log::info!(
             "bindless: table capacity {} — IBL cubemap registered as handle {}",
@@ -239,16 +239,16 @@ impl Renderer {
 
         let push_constant_ranges = [push_constant_range()];
 
-        let pipeline = GraphicsPipeline::new(
-            &context.device,
-            &shader_stages,
-            std::slice::from_ref(&binding_desc),
-            &attr_descs,
-            descriptor_layout.as_slice(),
-            &push_constant_ranges,
-            render_pass.handle,
-            0,
-        )
+        let pipeline = GraphicsPipeline::new(&PipelineDesc {
+            device: &context.device,
+            shader_stages: &shader_stages,
+            vertex_binding_desc: std::slice::from_ref(&binding_desc),
+            vertex_attr_descs: &attr_descs,
+            descriptor_set_layouts: descriptor_layout.as_slice(),
+            push_constant_ranges: &push_constant_ranges,
+            render_pass: render_pass.handle,
+            subpass: 0,
+        })
         .context("create graphics pipeline")?;
 
         // --- PBR pipeline (mesh.vert + pbr.frag): set 0 = frame UBO, set 1 = IBL ---
@@ -266,16 +266,16 @@ impl Renderer {
             .size(92)];
 
         let pbr_set_layouts = [descriptor_layout.layout, ibl.descriptor_set_layout];
-        let pbr_pipeline = GraphicsPipeline::new(
-            &context.device,
-            &pbr_shader_stages,
-            std::slice::from_ref(&binding_desc),
-            &attr_descs,
-            &pbr_set_layouts,
-            &pbr_push_constant_ranges,
-            render_pass.handle,
-            0,
-        )
+        let pbr_pipeline = GraphicsPipeline::new(&PipelineDesc {
+            device: &context.device,
+            shader_stages: &pbr_shader_stages,
+            vertex_binding_desc: std::slice::from_ref(&binding_desc),
+            vertex_attr_descs: &attr_descs,
+            descriptor_set_layouts: &pbr_set_layouts,
+            push_constant_ranges: &pbr_push_constant_ranges,
+            render_pass: render_pass.handle,
+            subpass: 0,
+        })
         .context("create pbr graphics pipeline")?;
 
         // Shader module is consumed at pipeline creation; safe to drop now.
@@ -908,15 +908,15 @@ impl Renderer {
         };
         let extent = self.extent();
         let rotation = self.orientation().1;
-        self.overlay.draw(
-            frame.command_buffer,
-            extent.width,
-            extent.height,
-            DebugMode::from_u32(debug_mode),
-            NormalSpace::from_u32(normal_space),
+        self.overlay.draw(&OverlayDrawParams {
+            cmd: frame.command_buffer,
+            extent_w: extent.width,
+            extent_h: extent.height,
+            mode: DebugMode::from_u32(debug_mode),
+            space: NormalSpace::from_u32(normal_space),
             show_ui,
-            &rotation,
-        );
+            rotation,
+        });
     }
 
     /// Draw the world-space XYZ orientation gizmo on top of the 3D scene.

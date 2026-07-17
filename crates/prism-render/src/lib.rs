@@ -45,8 +45,15 @@ pub mod swapchain;
 
 // Legacy monolithic renderer — kept as reference in deprecated/.
 // Do not use in new code; use render_graph + passes instead.
+//
+// When the `legacy_renderer` feature is enabled, the deprecated module is
+// compiled and `Renderer` is re-exported for backwards compatibility with
+// prism-engine (which still uses the legacy renderer).
 #[cfg(feature = "legacy_renderer")]
 pub mod deprecated;
+
+#[cfg(feature = "legacy_renderer")]
+pub use deprecated::renderer_legacy::Renderer;
 
 pub use buffer::create_buffer;
 pub use capabilities::RayTracingCaps;
