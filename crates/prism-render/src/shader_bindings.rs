@@ -98,3 +98,31 @@ pub mod shadow {
     pub const TLAS_SET: u32 = 0;
     pub const TLAS_BINDING: u32 = 4; // UNIFORM_BUFFER
 }
+
+pub mod sharc_query {
+    //! Bindings reflected from shaders/slang/sharc_query.slang
+
+    /// Entry point names (for VkPipelineShaderStageCreateInfo).
+    pub const ENTRY_COMPUTE_MAIN: &str = "computeMain"; // stage: COMPUTE
+
+    /// Push-constant block size in bytes (reflected).
+    pub const PUSH_CONSTANT_SIZE: u32 = 48;
+
+    // --- descriptor set 0 ---
+    pub const FRAME_SET: u32 = 0;
+    pub const FRAME_BINDING: u32 = 0; // UNIFORM_BUFFER
+    pub const GBUFFER_A_SET: u32 = 0;
+    pub const GBUFFER_A_BINDING: u32 = 1; // COMBINED_IMAGE_SAMPLER
+    pub const GBUFFER_B_SET: u32 = 0;
+    pub const GBUFFER_B_BINDING: u32 = 2; // COMBINED_IMAGE_SAMPLER
+    pub const GI_OUTPUT_SET: u32 = 0;
+    pub const GI_OUTPUT_BINDING: u32 = 3; // COMBINED_IMAGE_SAMPLER
+
+    // --- descriptor set 1 ---
+    pub const SHARC_HASH_ENTRIES_SET: u32 = 1;
+    pub const SHARC_HASH_ENTRIES_BINDING: u32 = 0; // UNIFORM_BUFFER
+    pub const SHARC_ACCUMULATION_SET: u32 = 1;
+    pub const SHARC_ACCUMULATION_BINDING: u32 = 1; // UNIFORM_BUFFER
+    pub const SHARC_RESOLVED_SET: u32 = 1;
+    pub const SHARC_RESOLVED_BINDING: u32 = 2; // UNIFORM_BUFFER
+}

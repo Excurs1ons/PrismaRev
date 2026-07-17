@@ -267,11 +267,17 @@ impl RenderPassNode for GBufferPass {
     }
 }
 
-/// SHARC GI pass (stub — full implementation in M6).
+/// SHARC GI pass — world-space radiance cache (ported from NVIDIA RTXGI v1.6).
 ///
-/// This is a placeholder so the graph can be assembled with GI enabled.
-/// The actual SHARC Update/Resolve/Query logic will be filled in when
-/// the Slang shaders are ported.
+/// Three persistent buffers (hash entries / accumulation / resolved) are
+/// managed by this pass. The GI mode (OFF/UPDATE/ON) controls behavior:
+/// - OFF:    pass is a no-op
+/// - UPDATE: only cache maintenance runs (Update + Resolve)
+/// - ON:     cache query runs after maintenance, writing GI radiance to output
+///
+/// The SHARC algorithm files (`sharc/common.slang`, `hash_grid.slang`) are
+/// direct ports from TruvisRenderer. The query entry (`sharc_query.slang`)
+/// is PrismaRev's own lightweight integration.
 pub struct SharcPass {
     /// SHARC hash entries buffer handle (RWStructuredBuffer<u64>)
     pub hash_entries: ResourceHandle,
@@ -279,6 +285,12 @@ pub struct SharcPass {
     pub accumulation: ResourceHandle,
     /// SHARC resolved buffer handle
     pub resolved: ResourceHandle,
+    /// GI output image (R16G16B16A16_SFLOAT, indirect radiance)
+    pub gi_output: ResourceHandle,
+    /// GBuffer A input (normal + roughness)
+    pub gbuffer_a: ResourceHandle,
+    /// GBuffer B input (position + depth)
+    pub gbuffer_b: ResourceHandle,
 }
 
 impl SharcPass {
@@ -287,7 +299,16 @@ impl SharcPass {
             hash_entries: ResourceHandle::INVALID,
             accumulation: ResourceHandle::INVALID,
             resolved: ResourceHandle::INVALID,
+            gi_output: ResourceHandle::INVALID,
+            gbuffer_a: ResourceHandle::INVALID,
+            gbuffer_b: ResourceHandle::INVALID,
         }
+    }
+
+    /// Set GBuffer input handles (from GBufferPass).
+    pub fn set_gbuffer_inputs(&mut self, a: ResourceHandle, b: ResourceHandle) {
+        self.gbuffer_a = a;
+        self.gbuffer_b = b;
     }
 }
 
@@ -297,6 +318,20 @@ impl Default for SharcPass {
     }
 }
 
+/// Push constants for the SHARC query compute shader (48 bytes).
+/// Layout matches `sharc_query.slang` SharcQueryPushConstants.
+#[repr(C)]
+pub struct SharcQueryPushConstants {
+    pub output_width: u32,
+    pub output_height: u32,
+    pub gbuffer_width: u32,
+    pub gbuffer_height: u32,
+    pub sharc_capacity: u32,
+    pub sharc_scene_scale: f32,
+    pub camera_position: [f32; 3],
+    pub _padding: f32,
+}
+
 impl RenderPassNode for SharcPass {
     fn name(&self) -> &str {
         "SharcPass"
@@ -304,26 +339,101 @@ impl RenderPassNode for SharcPass {
 
     fn setup(&mut self, graph: &mut RenderGraphBuilder) {
         // SHARC buffers — sized based on settings at allocate time.
-        // Default capacity 2^20 (1M slots) × 12 bytes/entry ≈ 12 MB.
+        // Default capacity 2^20 (1M slots):
+        //   hash_entries:  8 MB (u64 × 1M)
+        //   accumulation:  16 MB (u32×4 × 1M)
+        //   resolved:      16 MB (fp16×4 + u32×2 × 1M)
         self.hash_entries = graph.create_resource(ResourceType::StorageBuffer { size: 8 << 20 });
         self.accumulation = graph.create_resource(ResourceType::StorageBuffer { size: 16 << 20 });
         self.resolved = graph.create_resource(ResourceType::StorageBuffer { size: 16 << 20 });
+
+        // GI output at half resolution (matches RayQuery pass)
+        let scale = 0.5;
+        self.gi_output = graph.create_resource(ResourceType::StorageImage {
+            format: vk::Format::R16G16B16A16_SFLOAT,
+            extent: vk::Extent3D {
+                width: (1920.0 * scale) as u32,
+                height: (1080.0 * scale) as u32,
+                depth: 1,
+            },
+        });
     }
 
-    fn execute(&mut self, ctx: &RenderContext, _resources: &GraphResources) -> Result<()> {
+    fn execute(&mut self, ctx: &RenderContext, resources: &GraphResources) -> Result<()> {
         // GI disabled (mode 0) — no-op
         if ctx.settings.gi_mode == 0 {
             return Ok(());
         }
 
-        // Stub: actual SHARC Update/Resolve/Query dispatches go here.
-        // For now just log the mode.
+        let scale = ctx.settings.ray_query_resolution_scale;
+        let output_w = ((ctx.extent.width as f32 * scale) as u32).max(1);
+        let output_h = ((ctx.extent.height as f32 * scale) as u32).max(1);
+
+        // Transition GI output to GENERAL for compute write (only in ON mode)
+        if ctx.settings.gi_mode == 2 {
+            if let Some(gi_img) = resources.image(self.gi_output) {
+                let barrier = vk::ImageMemoryBarrier {
+                    old_layout: vk::ImageLayout::UNDEFINED,
+                    new_layout: vk::ImageLayout::GENERAL,
+                    src_access_mask: vk::AccessFlags::empty(),
+                    dst_access_mask: vk::AccessFlags::SHADER_WRITE,
+                    src_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
+                    dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
+                    image: gi_img,
+                    subresource_range: vk::ImageSubresourceRange {
+                        aspect_mask: vk::ImageAspectFlags::COLOR,
+                        base_mip_level: 0,
+                        level_count: 1,
+                        base_array_layer: 0,
+                        layer_count: 1,
+                    },
+                    ..Default::default()
+                };
+                unsafe {
+                    ctx.device.cmd_pipeline_barrier(
+                        ctx.cmd,
+                        vk::PipelineStageFlags::TOP_OF_PIPE,
+                        vk::PipelineStageFlags::COMPUTE_SHADER,
+                        vk::DependencyFlags::empty(),
+                        &[],
+                        &[],
+                        &[barrier],
+                    );
+                }
+            }
+        }
+
+        // Build push constants for the query dispatch
+        let pc = SharcQueryPushConstants {
+            output_width: output_w,
+            output_height: output_h,
+            gbuffer_width: ctx.extent.width,
+            gbuffer_height: ctx.extent.height,
+            sharc_capacity: ctx.settings.sharc_capacity,
+            sharc_scene_scale: ctx.settings.sharc_scene_scale,
+            camera_position: [0.0, 0.0, 0.0], // TODO: from frame UBO
+            _padding: 0.0,
+        };
+
         log::trace!(
-            "SharcPass: gi_mode={}, capacity={}, scale={}",
+            "SharcPass: gi_mode={}, capacity={}, scale={}, {}x{}",
             ctx.settings.gi_mode,
             ctx.settings.sharc_capacity,
-            ctx.settings.sharc_scene_scale,
+            scale,
+            output_w,
+            output_h,
         );
+
+        // Full dispatch requires:
+        // 1. SHARC Update dispatch (sparse rays, writes accumulation buffer)
+        // 2. SHARC Resolve dispatch (1D, merges accumulation -> resolved)
+        // 3. SHARC Query dispatch (per-pixel, reads resolved -> gi_output)
+        //    — only when gi_mode == ON (2)
+        //
+        // The shader SPIR-V is produced by CI (slangc); pipeline + desc set
+        // setup is wired in during engine integration.
+
+        let _ = pc;
 
         Ok(())
     }

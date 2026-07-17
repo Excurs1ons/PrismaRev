@@ -1,0 +1,47 @@
+{
+  "parameters": [
+    {
+      "name": "frame",
+      "binding": { "kind": "descriptorTableSlot", "index": 0, "space": 0 },
+      "type": { "kind": "constantBuffer" }
+    },
+    {
+      "name": "gbufferA",
+      "binding": { "kind": "descriptorTableSlot", "index": 1, "space": 0 },
+      "type": { "kind": "resource", "baseShape": "texture2D" }
+    },
+    {
+      "name": "gbufferB",
+      "binding": { "kind": "descriptorTableSlot", "index": 2, "space": 0 },
+      "type": { "kind": "resource", "baseShape": "texture2D" }
+    },
+    {
+      "name": "giOutput",
+      "binding": { "kind": "descriptorTableSlot", "index": 3, "space": 0 },
+      "type": { "kind": "resource", "baseShape": "rwTexture2D" }
+    },
+    {
+      "name": "sharc_hash_entries",
+      "binding": { "kind": "descriptorTableSlot", "index": 0, "space": 1 },
+      "type": { "kind": "resource", "baseShape": "structuredBuffer" }
+    },
+    {
+      "name": "sharc_accumulation",
+      "binding": { "kind": "descriptorTableSlot", "index": 1, "space": 1 },
+      "type": { "kind": "resource", "baseShape": "structuredBuffer" }
+    },
+    {
+      "name": "sharc_resolved",
+      "binding": { "kind": "descriptorTableSlot", "index": 2, "space": 1 },
+      "type": { "kind": "resource", "baseShape": "structuredBuffer" }
+    },
+    {
+      "name": "pc",
+      "binding": { "kind": "pushConstantBuffer", "index": 0, "size": 48 },
+      "type": { "kind": "constantBuffer" }
+    }
+  ],
+  "entryPoints": [
+    { "name": "computeMain", "stage": "compute", "parameters": [] }
+  ]
+}

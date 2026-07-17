@@ -112,4 +112,26 @@ echo "  reflect shadow -> reflection/shadow.json"
   -reflection-json "$REFL/shadow.json" \
   -o "$REFL/shadow.tmp.spv"
 
+# sharc_query: compute (SHARC GI cache lookup, half-res)
+SHARCQ_ENTRY="computeMain"
+SHARCQ_STAGE="compute"
+echo "  sharc_query :: ${SHARCQ_ENTRY} -> sharc_query.comp.spv"
+"$SLANGC" "$SRC/sharc_query.slang" \
+  -profile "$PROFILE" \
+  -target spirv \
+  -entry "$SHARCQ_ENTRY" \
+  -stage "$SHARCQ_STAGE" \
+  -I "$SRC" \
+  -fvk-use-entrypoint-name \
+  -o "$OUT/sharc_query.comp.spv"
+echo "  reflect sharc_query -> reflection/sharc_query.json"
+"$SLANGC" "$SRC/sharc_query.slang" \
+  -profile "$PROFILE" \
+  -target spirv \
+  -entry "$SHARCQ_ENTRY" \
+  -stage "$SHARCQ_STAGE" \
+  -I "$SRC" \
+  -reflection-json "$REFL/sharc_query.json" \
+  -o "$REFL/sharc_query.tmp.spv"
+
 echo "All Slang shaders compiled. SPIR-V in $OUT, reflection JSON in $REFL"

@@ -57,6 +57,7 @@ pub use mesh::{Mesh, Vertex};
 pub use overlay::{Overlay, OverlayAction, OverlayVertex};
 pub use passes::{
     GBufferPass, LightingPass, PostPass, RayQueryPass, ShadowPushConstants, SharcPass,
+    SharcQueryPushConstants,
 };
 pub use pbr_push::{DebugMode, NormalSpace, PbrBindlessPushConstants, PbrPushConstants};
 pub use pipeline::GraphicsPipeline;
