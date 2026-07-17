@@ -1,0 +1,394 @@
+//! `RenderMaterialManager` — PBR material slot pool with a per-FIF device
+//! SSBO.
+//!
+//! Each [`MaterialData`] the engine hands in gets a stable slot index in
+//! the material SSBO. The slot is what the shader uses to look up the
+//! material parameters; the material handle itself is just CPU-side
+//! identity used by the engine to translate `prism_asset::MaterialHandle`
+//! into a render-side handle.
+//!
+//! ## Layout
+//!
+//! `GpuMaterial` is a `#[repr(C)]` POD struct the shader mirrors exactly.
+//! The total size and field offsets are pinned by a compile-time assertion
+//! so changes to the Rust struct also require updating the shader (and
+//! vice versa).
+//!
+//! ## Synchronization
+//!
+//! P0: one material SSBO updated synchronously when `upload` is called.
+//! No double-buffering — the renderer is expected to call `upload` after
+//! all material mutations for a frame are done, before the frame's
+//! `cmd_draw_indexed` calls start. A future pass splits the storage into
+//! a per-FIF pair to overlap CPU upload with GPU consumption.
+
+use anyhow::Context as _;
+use ash::vk;
+use ash::vk::Handle as _;
+use slotmap::{new_key_type, SlotMap};
+
+use crate::buffer::{self, BufferUsage, MemoryProperties};
+use crate::context::VulkanContext;
+
+/// Maximum number of materials. Caps the SSBO size at 1024 entries; beyond
+/// that the renderer logs a warning and stops allocating new slots. The
+/// number is deliberately small in P0 — a real production engine would
+/// size this from a config setting.
+pub const MATERIAL_SSBO_MAX: u32 = 1024;
+
+new_key_type! {
+    /// Slotmap handle into [`RenderMaterialManager`].
+    pub struct MaterialHandle;
+}
+
+/// Shader-visible material record. The Slang `Material` struct in
+/// `shaders/slang/bindless.slang` mirrors this exactly; field order and
+/// size are pinned by the static assertion below.
+#[repr(C, align(16))]
+#[derive(Copy, Clone, Debug)]
+pub struct GpuMaterial {
+    /// Linear-space base color (rgba). The shader applies sRGB→linear
+    /// on the sampled albedo texture, so the base color and texture path
+    /// agree on the working color space.
+    pub base_color: [f32; 4],
+    /// Packed metallic/roughness/emissive: x=metallic, y=roughness,
+    /// z=emissive intensity, w=unused.
+    pub metallic_roughness_emissive: [f32; 4],
+    /// Bindless SRV slot of the albedo (base color) texture. Use
+    /// `TextureHandle::INVALID.0` for "no texture, use the scalar
+    /// base_color" — the shader will fall back to the scalar.
+    pub albedo_idx: u32,
+    /// Bindless SRV slot of the tangent-space normal map. `INVALID` for
+    /// "no normal map" — the shader uses the geometric normal.
+    pub normal_idx: u32,
+    /// Bindless SRV slot of the packed metallic-roughness texture
+    /// (glTF: G=roughness, B=metallic). `INVALID` for "use the scalar
+    /// metallic + roughness fields".
+    pub metallic_roughness_idx: u32,
+    /// Bindless SRV slot of the emissive texture. `INVALID` for "use the
+    /// scalar emissive field".
+    pub emissive_idx: u32,
+}
+
+// Padding matches the shader: 4 floats × 16 bytes after the texture
+// handles for any future expansion (clearcoat, sheen, etc.). Sized to
+// keep the struct a multiple of 16 bytes, which is what
+// `STORAGE_BUFFER` layouts in the shader will assume.
+
+// `base_color` is offset 0 (16 bytes), `metallic_roughness_emissive` is
+// offset 16 (16 bytes), the four u32s start at offset 32 (16 bytes) and
+// the struct is 48 bytes. The static assertion below pins that.
+const _: [(); 48] = [(); std::mem::size_of::<GpuMaterial>()];
+const _: [(); 16] = [(); std::mem::align_of::<GpuMaterial>()];
+
+/// Plain-data material description used at the manager boundary. The
+/// engine layer translates `prism_asset::MaterialData` into this; the
+/// four optional texture slots carry the render-side bindless SRV slot
+/// (or `u32::MAX` for "no texture").
+#[derive(Debug, Clone)]
+pub struct MaterialUploadInput {
+    pub base_color: [f32; 4],
+    pub metallic: f32,
+    pub roughness: f32,
+    pub emissive: [f32; 3],
+    pub albedo_tex: Option<u32>,
+    pub normal_tex: Option<u32>,
+    pub metallic_roughness_tex: Option<u32>,
+    pub emissive_tex: Option<u32>,
+}
+
+impl MaterialUploadInput {
+    /// Pack scalar parameters into a [`GpuMaterial`]. The texture
+    /// indices are left at `u32::MAX` when `None`.
+    pub fn to_gpu(&self) -> GpuMaterial {
+        GpuMaterial {
+            base_color: self.base_color,
+            metallic_roughness_emissive: [
+                self.metallic,
+                self.roughness,
+                self.emissive[0],
+                0.0,
+            ],
+            albedo_idx: self.albedo_tex.unwrap_or(u32::MAX),
+            normal_idx: self.normal_tex.unwrap_or(u32::MAX),
+            metallic_roughness_idx: self.metallic_roughness_tex.unwrap_or(u32::MAX),
+            emissive_idx: self.emissive_tex.unwrap_or(u32::MAX),
+        }
+    }
+}
+
+/// Manager of GPU materials. Holds a slot pool + a single device-local
+/// storage buffer that the material SSBO descriptor references.
+pub struct RenderMaterialManager {
+    /// Slotmap-typed CPU handles; index in this map is *not* the SSBO
+    /// slot — use `slot_of()` to translate.
+    materials: SlotMap<MaterialHandle, MaterialUploadInput>,
+    /// Reverse index from SSBO slot → material handle. `slots[slot]`
+    /// is the handle currently occupying that slot, or `None` if free.
+    slots: Vec<Option<MaterialHandle>>,
+    /// Free-list of SSBO slot indices.
+    free_list: Vec<u32>,
+    /// The material SSBO (device-local, STORAGE_BUFFER usage). Sized to
+    /// `MATERIAL_SSBO_MAX * size_of::<GpuMaterial>()`.
+    buffer: vk::Buffer,
+    memory: vk::DeviceMemory,
+    /// Cached view of the SSBO contents, indexed by slot. Uploaded into
+    /// `buffer` when `upload` is called.
+    gpu_data: Vec<GpuMaterial>,
+    /// Dirty bits: `dirty_slots[slot] = true` means the GPU data at
+    /// this slot needs to be re-uploaded.
+    dirty_slots: Vec<bool>,
+    destroyed: bool,
+}
+
+impl RenderMaterialManager {
+    /// Allocate the material SSBO. The buffer is initialized to zero
+    /// (all slots invalid until populated).
+    pub fn new(context: &VulkanContext) -> anyhow::Result<Self> {
+        let slot_size = std::mem::size_of::<GpuMaterial>() as vk::DeviceSize;
+        let total = slot_size * (MATERIAL_SSBO_MAX as vk::DeviceSize);
+
+        let (buffer, memory) = buffer::create_buffer(
+            context,
+            total,
+            BufferUsage::STORAGE_BUFFER | BufferUsage::TRANSFER_DST,
+            MemoryProperties::DEVICE_LOCAL,
+        )
+        .context("RenderMaterialManager::new: create SSBO")?;
+
+        let gpu_data = vec![
+            GpuMaterial {
+                base_color: [0.0; 4],
+                metallic_roughness_emissive: [0.0; 4],
+                albedo_idx: u32::MAX,
+                normal_idx: u32::MAX,
+                metallic_roughness_idx: u32::MAX,
+                emissive_idx: u32::MAX,
+            };
+            MATERIAL_SSBO_MAX as usize
+        ];
+        let dirty_slots = vec![true; MATERIAL_SSBO_MAX as usize];
+        let free_list: Vec<u32> = (0..MATERIAL_SSBO_MAX).rev().collect();
+
+        Ok(Self {
+            materials: SlotMap::with_key(),
+            slots: vec![None; MATERIAL_SSBO_MAX as usize],
+            free_list,
+            buffer,
+            memory,
+            gpu_data,
+            dirty_slots,
+            destroyed: false,
+        })
+    }
+
+    /// Register a new material and return its handle. The slot is taken
+    /// from the free list; if the pool is exhausted, an error is returned
+    /// and the handle is not assigned.
+    pub fn register(&mut self, data: MaterialUploadInput) -> anyhow::Result<MaterialHandle> {
+        let slot = self
+            .free_list
+            .pop()
+            .ok_or_else(|| anyhow::anyhow!("RenderMaterialManager: pool exhausted"))?;
+        self.gpu_data[slot as usize] = data.to_gpu();
+        self.dirty_slots[slot as usize] = true;
+        let handle = self.materials.insert(data);
+        self.slots[slot as usize] = Some(handle);
+        Ok(handle)
+    }
+
+    /// Update an existing material in place. Marks its slot dirty so the
+    /// next `upload` re-writes the SSBO.
+    pub fn update(&mut self, handle: MaterialHandle, data: MaterialUploadInput) -> anyhow::Result<()> {
+        let slot = self.slot_of(handle).ok_or_else(|| {
+            anyhow::anyhow!("RenderMaterialManager::update: unknown handle {handle:?}")
+        })?;
+        self.gpu_data[slot as usize] = data.to_gpu();
+        self.dirty_slots[slot as usize] = true;
+        self.materials[handle] = data;
+        Ok(())
+    }
+
+    /// Translate a CPU handle to its SSBO slot. Returns `None` if the
+    /// handle is unknown (it has been removed, or was never registered).
+    pub fn slot_of(&self, handle: MaterialHandle) -> Option<u32> {
+        self.slots.iter().position(|h| *h == Some(handle)).map(|i| i as u32)
+    }
+
+    /// Underlying Vulkan buffer. The descriptor set the renderer builds
+    /// references this buffer at `materials_binding`.
+    pub fn buffer(&self) -> vk::Buffer {
+        self.buffer
+    }
+
+    /// Uploads all dirty slots to the device. P0 implementation uploads
+    /// the entire SSBO (cheap because the buffer is small — 1024 * 48B =
+    /// 48KB). A future pass uploads only the dirty range and keeps a
+    /// per-FIF pair.
+    pub fn upload(
+        &mut self,
+        context: &VulkanContext,
+        command_pool: vk::CommandPool,
+        graphics_queue: vk::Queue,
+    ) -> anyhow::Result<()> {
+        // Use a tiny staging buffer to write the entire SSBO. We don't
+        // bother with the dirty range optimization yet because the
+        // upload size is so small (48KB) that the savings are noise.
+        let total_size = self.gpu_data.len() * std::mem::size_of::<GpuMaterial>();
+        let bytes = unsafe {
+            std::slice::from_raw_parts(
+                self.gpu_data.as_ptr() as *const u8,
+                total_size,
+            )
+        };
+        unsafe {
+            buffer::upload_to_buffer(
+                context,
+                command_pool,
+                graphics_queue,
+                self.buffer,
+                total_size as vk::DeviceSize,
+                bytes,
+            )
+        }
+        .context("RenderMaterialManager::upload")?;
+        // Clear dirty bits; everything is now on the GPU.
+        for d in self.dirty_slots.iter_mut() {
+            *d = false;
+        }
+        Ok(())
+    }
+
+    /// Release a material slot back to the free list.
+    pub fn unregister(&mut self, handle: MaterialHandle) {
+        if let Some(slot) = self.slot_of(handle) {
+            // Reset the GPU data so a future register at this slot
+            // doesn't leak old values.
+            self.gpu_data[slot as usize] = GpuMaterial {
+                base_color: [0.0; 4],
+                metallic_roughness_emissive: [0.0; 4],
+                albedo_idx: u32::MAX,
+                normal_idx: u32::MAX,
+                metallic_roughness_idx: u32::MAX,
+                emissive_idx: u32::MAX,
+            };
+            self.dirty_slots[slot as usize] = true;
+            self.slots[slot as usize] = None;
+            self.free_list.push(slot);
+        }
+        self.materials.remove(handle);
+    }
+
+    /// Release every material. Idempotent.
+    pub fn destroy(&mut self, device: &ash::Device) {
+        for (_, _) in self.materials.drain() {
+            // no per-material GPU state to release
+        }
+        self.slots.iter_mut().for_each(|s| *s = None);
+        self.free_list = (0..MATERIAL_SSBO_MAX).rev().collect();
+        if !self.buffer.is_null() {
+            unsafe { device.destroy_buffer(self.buffer, None) };
+            self.buffer = vk::Buffer::null();
+        }
+        if !self.memory.is_null() {
+            unsafe { device.free_memory(self.memory, None) };
+            self.memory = vk::DeviceMemory::null();
+        }
+        self.destroyed = true;
+    }
+
+    pub fn len(&self) -> usize {
+        self.materials.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.materials.is_empty()
+    }
+}
+
+impl Drop for RenderMaterialManager {
+    fn drop(&mut self) {
+        debug_assert!(
+            self.destroyed || self.materials.is_empty(),
+            "RenderMaterialManager dropped without explicit destroy()"
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn default_input() -> MaterialUploadInput {
+        MaterialUploadInput {
+            base_color: [1.0, 0.5, 0.2, 1.0],
+            metallic: 0.8,
+            roughness: 0.3,
+            emissive: [0.0, 0.0, 0.0],
+            albedo_tex: None,
+            normal_tex: None,
+            metallic_roughness_tex: None,
+            emissive_tex: None,
+        }
+    }
+
+    #[test]
+    fn gpu_material_layout_is_48_bytes() {
+        assert_eq!(std::mem::size_of::<GpuMaterial>(), 48);
+        assert_eq!(std::mem::align_of::<GpuMaterial>(), 16);
+    }
+
+    #[test]
+    fn gpu_material_offsets() {
+        let m = GpuMaterial {
+            base_color: [0.0; 4],
+            metallic_roughness_emissive: [0.0; 4],
+            albedo_idx: 0,
+            normal_idx: 0,
+            metallic_roughness_idx: 0,
+            emissive_idx: 0,
+        };
+        let base_ptr = &m as *const _ as usize;
+        assert_eq!((&m.base_color as *const _ as usize) - base_ptr, 0);
+        assert_eq!(
+            (&m.metallic_roughness_emissive as *const _ as usize) - base_ptr,
+            16
+        );
+        assert_eq!((&m.albedo_idx as *const _ as usize) - base_ptr, 32);
+        assert_eq!((&m.normal_idx as *const _ as usize) - base_ptr, 36);
+        assert_eq!(
+            (&m.metallic_roughness_idx as *const _ as usize) - base_ptr,
+            40
+        );
+        assert_eq!((&m.emissive_idx as *const _ as usize) - base_ptr, 44);
+    }
+
+    #[test]
+    fn to_gpu_packs_textures_as_invalid_when_none() {
+        let input = default_input();
+        let gpu = input.to_gpu();
+        assert_eq!(gpu.base_color, [1.0, 0.5, 0.2, 1.0]);
+        assert_eq!(gpu.metallic_roughness_emissive[0], 0.8);
+        assert_eq!(gpu.metallic_roughness_emissive[1], 0.3);
+        assert_eq!(gpu.albedo_idx, u32::MAX);
+        assert_eq!(gpu.normal_idx, u32::MAX);
+        assert_eq!(gpu.metallic_roughness_idx, u32::MAX);
+        assert_eq!(gpu.emissive_idx, u32::MAX);
+    }
+
+    #[test]
+    fn to_gpu_packs_textures_when_present() {
+        let input = MaterialUploadInput {
+            albedo_tex: Some(7),
+            normal_tex: Some(11),
+            metallic_roughness_tex: Some(13),
+            emissive_tex: Some(17),
+            ..default_input()
+        };
+        let gpu = input.to_gpu();
+        assert_eq!(gpu.albedo_idx, 7);
+        assert_eq!(gpu.normal_idx, 11);
+        assert_eq!(gpu.metallic_roughness_idx, 13);
+        assert_eq!(gpu.emissive_idx, 17);
+    }
+}

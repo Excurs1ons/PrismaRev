@@ -29,6 +29,7 @@ pub mod descriptor;
 pub mod gizmo;
 pub mod hdr;
 pub mod ibl;
+pub mod managers;
 pub mod mesh;
 pub mod overlay;
 pub mod passes;
