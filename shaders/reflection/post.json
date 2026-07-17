@@ -1,8 +1,246 @@
 {
-  "parameters": [
-    { "name": "hdrInput", "binding": { "kind": "descriptorTableSlot", "index": 0 }, "type": { "kind": "resource", "baseShape": "texture2D" } },
-    { "name": "hdrSampler", "binding": { "kind": "descriptorTableSlot", "index": 1 }, "type": { "kind": "resource", "baseShape": "sampler" } },
-    { "name": "pc", "binding": { "kind": "pushConstantBuffer", "index": 0, "size": 16 }, "type": { "kind": "constantBuffer" } }
-  ],
-  "entryPoints": [{ "name": "fragmentMain", "stage": "fragment", "parameters": [] }]
+    "parameters": [
+        {
+            "name": "hdrInput",
+            "binding": {"kind": "descriptorTableSlot", "index": 0},
+            "type": {
+                "kind": "resource",
+                "baseShape": "texture2D",
+                "resultType": {
+                    "kind": "vector",
+                    "elementCount": 4,
+                    "elementType": {
+                        "kind": "scalar",
+                        "scalarType": "float32"
+                    }
+                }
+            }
+        },
+        {
+            "name": "hdrSampler",
+            "binding": {"kind": "descriptorTableSlot", "index": 1},
+            "type": {
+                "kind": "samplerState"
+            }
+        },
+        {
+            "name": "pc",
+            "binding": {"kind": "pushConstantBuffer", "index": 0},
+            "type": {
+                "kind": "constantBuffer",
+                "elementType": {
+                    "kind": "struct",
+                    "name": "PostPushConstants",
+                    "fields": [
+                        {
+                            "name": "screenWidth",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "uint32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 0, "size": 4, "elementStride": 0}
+                        },
+                        {
+                            "name": "screenHeight",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "uint32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 4, "size": 4, "elementStride": 0}
+                        },
+                        {
+                            "name": "exposure",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "float32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 8, "size": 4, "elementStride": 0}
+                        },
+                        {
+                            "name": "_padding",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "float32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 12, "size": 4, "elementStride": 0}
+                        }
+                    ]
+                },
+                "containerVarLayout": {
+                    "binding": {"kind": "pushConstantBuffer", "index": 0}
+                },
+                "elementVarLayout": {
+                    "type": {
+                        "kind": "struct",
+                        "name": "PostPushConstants",
+                        "fields": [
+                            {
+                                "name": "screenWidth",
+                                "type": {
+                                    "kind": "scalar",
+                                    "scalarType": "uint32"
+                                },
+                                "binding": {"kind": "uniform", "offset": 0, "size": 4, "elementStride": 0}
+                            },
+                            {
+                                "name": "screenHeight",
+                                "type": {
+                                    "kind": "scalar",
+                                    "scalarType": "uint32"
+                                },
+                                "binding": {"kind": "uniform", "offset": 4, "size": 4, "elementStride": 0}
+                            },
+                            {
+                                "name": "exposure",
+                                "type": {
+                                    "kind": "scalar",
+                                    "scalarType": "float32"
+                                },
+                                "binding": {"kind": "uniform", "offset": 8, "size": 4, "elementStride": 0}
+                            },
+                            {
+                                "name": "_padding",
+                                "type": {
+                                    "kind": "scalar",
+                                    "scalarType": "float32"
+                                },
+                                "binding": {"kind": "uniform", "offset": 12, "size": 4, "elementStride": 0}
+                            }
+                        ]
+                    },
+                    "binding": {"kind": "uniform", "offset": 0, "size": 16, "elementStride": 0}
+                }
+            }
+        }
+    ],
+    "entryPoints": [
+        {
+            "name": "fragmentMain",
+            "stage": "fragment",
+            "parameters": [
+                {
+                    "name": "in",
+                    "stage": "fragment",
+                    "binding": {"kind": "varyingInput", "index": 0, "count": 5},
+                    "type": {
+                        "kind": "struct",
+                        "name": "MeshVaryings",
+                        "fields": [
+                            {
+                                "name": "clipPos",
+                                "type": {
+                                    "kind": "vector",
+                                    "elementCount": 4,
+                                    "elementType": {
+                                        "kind": "scalar",
+                                        "scalarType": "float32"
+                                    }
+                                },
+                                "semanticName": "SV_POSITION"
+                            },
+                            {
+                                "name": "color",
+                                "type": {
+                                    "kind": "vector",
+                                    "elementCount": 3,
+                                    "elementType": {
+                                        "kind": "scalar",
+                                        "scalarType": "float32"
+                                    }
+                                },
+                                "stage": "fragment",
+                                "binding": {"kind": "varyingInput", "index": 0},
+                                "semanticName": "COLOR"
+                            },
+                            {
+                                "name": "worldNormal",
+                                "type": {
+                                    "kind": "vector",
+                                    "elementCount": 3,
+                                    "elementType": {
+                                        "kind": "scalar",
+                                        "scalarType": "float32"
+                                    }
+                                },
+                                "stage": "fragment",
+                                "binding": {"kind": "varyingInput", "index": 1},
+                                "semanticName": "NORMAL"
+                            },
+                            {
+                                "name": "worldPos",
+                                "type": {
+                                    "kind": "vector",
+                                    "elementCount": 3,
+                                    "elementType": {
+                                        "kind": "scalar",
+                                        "scalarType": "float32"
+                                    }
+                                },
+                                "stage": "fragment",
+                                "binding": {"kind": "varyingInput", "index": 2},
+                                "semanticName": "TEXCOORD",
+                                "semanticIndex": 1
+                            },
+                            {
+                                "name": "uv",
+                                "type": {
+                                    "kind": "vector",
+                                    "elementCount": 2,
+                                    "elementType": {
+                                        "kind": "scalar",
+                                        "scalarType": "float32"
+                                    }
+                                },
+                                "stage": "fragment",
+                                "binding": {"kind": "varyingInput", "index": 3},
+                                "semanticName": "TEXCOORD"
+                            },
+                            {
+                                "name": "tangent",
+                                "type": {
+                                    "kind": "vector",
+                                    "elementCount": 3,
+                                    "elementType": {
+                                        "kind": "scalar",
+                                        "scalarType": "float32"
+                                    }
+                                },
+                                "stage": "fragment",
+                                "binding": {"kind": "varyingInput", "index": 4},
+                                "semanticName": "TANGENT"
+                            }
+                        ]
+                    }
+                }
+            ],
+            "result": {
+                "stage": "fragment",
+                "binding": {"kind": "varyingOutput", "index": 0},
+                "semanticName": "SV_TARGET",
+                "type": {
+                    "kind": "vector",
+                    "elementCount": 4,
+                    "elementType": {
+                        "kind": "scalar",
+                        "scalarType": "float32"
+                    }
+                }
+            },
+            "bindings": [
+                {
+                    "name": "hdrInput",
+                    "binding": {"kind": "descriptorTableSlot", "index": 0, "used": 1}
+                },
+                {
+                    "name": "hdrSampler",
+                    "binding": {"kind": "descriptorTableSlot", "index": 1, "used": 1}
+                },
+                {
+                    "name": "pc",
+                    "binding": {"kind": "pushConstantBuffer", "index": 0}
+                }
+            ]
+        }
+    ],
+    "bindlessSpaceIndex": 1
 }

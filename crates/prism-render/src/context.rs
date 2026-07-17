@@ -125,17 +125,6 @@ impl VulkanContext {
         }
     }
 
-    fn debug_utils_instance(&self) -> Option<ash::ext::debug_utils::Instance> {
-        if self._debug_messenger.is_some() {
-            Some(ash::ext::debug_utils::Instance::new(
-                &self.entry,
-                &self.instance,
-            ))
-        } else {
-            None
-        }
-    }
-
     /// Names of the device extensions that were enabled at device creation.
     /// Includes `VK_KHR_swapchain` plus any RT extensions the hardware
     /// supports. Used by RT modules to decide which code path to take.
@@ -152,10 +141,15 @@ impl VulkanContext {
 impl Drop for VulkanContext {
     fn drop(&mut self) {
         unsafe {
+            // Destroy the debug messenger *before* the instance. The old code
+            // guarded the destroy on `debug_utils_instance()`, which itself
+            // checks `self._debug_messenger.is_some()` -- but we `take()` the
+            // messenger first, so the guard saw `None` and the messenger leaked
+            // (VUID-vkDestroyInstance-instance-00629). Build the ext handle
+            // unconditionally; it's a no-op when the extension isn't enabled.
             if let Some(messenger) = self._debug_messenger.take() {
-                if let Some(ext) = self.debug_utils_instance() {
-                    ext.destroy_debug_utils_messenger(messenger, None);
-                }
+                let ext = ash::ext::debug_utils::Instance::new(&self.entry, &self.instance);
+                ext.destroy_debug_utils_messenger(messenger, None);
             }
             self.device.destroy_device(None);
             self.instance.destroy_instance(None);

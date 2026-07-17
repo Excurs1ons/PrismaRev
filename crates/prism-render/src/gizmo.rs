@@ -4,6 +4,7 @@
 //! Z = blue — so the viewer can read the world axes at a glance. Rendered with
 //! the depth test disabled, so it is never occluded by the 3D scene.
 
+use std::ffi::CString;
 use std::mem::size_of;
 
 use anyhow::Context as _;
@@ -89,10 +90,22 @@ impl Gizmo {
             crate::shader::load_shader_module(&device, GIZMO_VERT_SPV).context("gizmo vert")?;
         let frag_module =
             crate::shader::load_shader_module(&device, GIZMO_FRAG_SPV).context("gizmo frag")?;
-        let vert_stage =
-            crate::shader::shader_stage(vk::ShaderStageFlags::VERTEX, vert_module, c"main");
-        let frag_stage =
-            crate::shader::shader_stage(vk::ShaderStageFlags::FRAGMENT, frag_module, c"main");
+        // Entry-point names from Slang reflection (slangc keeps vertexMain /
+        // fragmentMain via -fvk-use-entrypoint-name; see shader_bindings).
+        let vert_entry =
+            CString::new(crate::shader_bindings::gizmo::ENTRY_VERTEX_MAIN).unwrap();
+        let frag_entry =
+            CString::new(crate::shader_bindings::gizmo::ENTRY_FRAGMENT_MAIN).unwrap();
+        let vert_stage = crate::shader::shader_stage(
+            vk::ShaderStageFlags::VERTEX,
+            vert_module,
+            vert_entry.as_c_str(),
+        );
+        let frag_stage = crate::shader::shader_stage(
+            vk::ShaderStageFlags::FRAGMENT,
+            frag_module,
+            frag_entry.as_c_str(),
+        );
         let shader_stages = [vert_stage, frag_stage];
 
         // --- Pipeline layout: push constant only (view_proj mat4) ---

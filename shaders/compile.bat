@@ -2,7 +2,7 @@
 REM Compile GLSL shaders to SPIR-V for PrismaRev
 REM Requires glslc from Vulkan SDK (https://vulkan.lunarg.com/)
 
-set VK_SDK=D:\VulkanSDK\1.4.321.1
+if "%VK_SDK%"=="" set VK_SDK=D:\VulkanSDK\1.4.350.0
 set GLSLC=%VK_SDK%\Bin\glslc.exe
 
 if not exist "%GLSLC%" (

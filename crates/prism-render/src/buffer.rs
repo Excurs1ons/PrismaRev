@@ -37,9 +37,22 @@ pub fn create_buffer(
     let mem_type = find_memory_type(context, mem_reqs.memory_type_bits, properties)
         .context("find suitable memory type for buffer")?;
 
-    let alloc_info = vk::MemoryAllocateInfo::default()
+    let mut alloc_info = vk::MemoryAllocateInfo::default()
         .allocation_size(mem_reqs.size)
         .memory_type_index(mem_type);
+
+    // Buffers created with SHADER_DEVICE_ADDRESS require the backing memory to
+    // be allocated with VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT (chained via
+    // VkMemoryAllocateFlagsInfo). The validation layer rejects the bind
+    // otherwise (VUID-vkBindBufferMemory-bufferDeviceAddress-03339). We chain
+    // the flags struct only when the usage requests device addressing, since
+    // the flag also forces allocation from a device-address-capable heap.
+    let mut flags_info = vk::MemoryAllocateFlagsInfo::default();
+    if usage.contains(vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS) {
+        flags_info = flags_info.flags(vk::MemoryAllocateFlags::DEVICE_ADDRESS);
+        alloc_info = alloc_info.push_next(&mut flags_info);
+    }
+
     let memory = unsafe { context.device.allocate_memory(&alloc_info, None) }
         .context("allocate buffer memory")?;
 

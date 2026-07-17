@@ -57,18 +57,19 @@ emit_reflection() {
   local entries=()
   while [ "$#" -gt 0 ]; do entries+=(-entry "$1" -stage "$2"); shift 2; done
   echo "  reflect $name -> reflection/${name}.json"
+  # slangc requires an SPIR-V output path even for reflection-only runs.
+  # Write to a throwaway file and delete it immediately so we don't leave
+  # .tmp.spv litter in reflection/ (which would pollute git status).
+  # (We can't use /dev/null: on Windows bash that maps to a literal "nul"
+  # path slangc can't open.)
+  local tmp="$REFL/${name}.tmp.spv"
   "$SLANGC" "$SRC/${name}.slang" \
     -profile "$PROFILE" \
     -target spirv \
     "${entries[@]}" \
     -reflection-json "$REFL/${name}.json" \
-    -o /dev/null 2>/dev/null || \
-  "$SLANGC" "$SRC/${name}.slang" \
-    -profile "$PROFILE" \
-    -target spirv \
-    "${entries[@]}" \
-    -reflection-json "$REFL/${name}.json" \
-    -o "$REFL/${name}.tmp.spv"
+    -o "$tmp"
+  rm -f "$tmp"
 }
 
 echo "Compiling Slang shaders (slangc = $SLANGC, profile = $PROFILE)..."
@@ -111,6 +112,7 @@ echo "  reflect shadow -> reflection/shadow.json"
   -stage "$SHADOW_STAGE" \
   -reflection-json "$REFL/shadow.json" \
   -o "$REFL/shadow.tmp.spv"
+rm -f "$REFL/shadow.tmp.spv"
 
 # sharc_query: compute (SHARC GI cache lookup, half-res)
 SHARCQ_ENTRY="computeMain"
@@ -133,6 +135,7 @@ echo "  reflect sharc_query -> reflection/sharc_query.json"
   -I "$SRC" \
   -reflection-json "$REFL/sharc_query.json" \
   -o "$REFL/sharc_query.tmp.spv"
+rm -f "$REFL/sharc_query.tmp.spv"
 
 # lighting: fragment (GBuffer + shadow + GI + IBL → HDR)
 compile_stage lighting fragmentMain fragment

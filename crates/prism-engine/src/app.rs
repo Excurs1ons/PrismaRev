@@ -593,6 +593,13 @@ impl ApplicationHandler for App {
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         if event_loop.exiting() {
+            // Wait for the GPU to finish any in-flight work (e.g. the last
+            // frame's command buffer) before destroying mesh buffers. Without
+            // this, vkDestroyBuffer is called on buffers still referenced by a
+            // submitted command buffer (VUID-vkDestroyBuffer-buffer-00922).
+            if let Some(renderer) = self.renderer.as_ref() {
+                unsafe { renderer.context().device.device_wait_idle().ok() };
+            }
             for mut mesh in std::mem::take(&mut self.mesh_manager).into_meshes() {
                 if let Some(ref renderer) = self.renderer {
                     unsafe { mesh.destroy(&renderer.context().device) };

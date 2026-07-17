@@ -133,11 +133,16 @@ pub struct BindlessTextureTable {
 }
 
 /// Descriptor set binding indices.
+///
+/// `SAMPLERS` is binding 0 (fixed-size array) and `SRV` is binding 1 (the
+/// runtime-sized, variable-count array). Vulkan requires
+/// `VARIABLE_DESCRIPTOR_COUNT` to be on the binding with the highest number, so
+/// the variable-count SRV array must come *after* the fixed sampler array.
 pub mod bindings {
-    /// `bindless_srvs[]` — runtime-sized SAMPLED_IMAGE array.
-    pub const SRV: u32 = 0;
-    /// `global_samplers[4]` — fixed SAMPLER array.
-    pub const SAMPLERS: u32 = 1;
+    /// `global_samplers[4]` - fixed SAMPLER array.
+    pub const SAMPLERS: u32 = 0;
+    /// `bindless_srvs[]` - runtime-sized SAMPLED_IMAGE array.
+    pub const SRV: u32 = 1;
 }
 
 impl BindlessTextureTable {
@@ -159,18 +164,11 @@ impl BindlessTextureTable {
         }
 
         // --- Descriptor set layout: two bindings ---
+        // Bindings are listed in ascending binding-number order so the binding
+        // flags (which must be in the same order as the bindings array) line up
+        // correctly. The variable-count SRV array is the highest binding.
         let bindings = [
-            // binding 0: SRV array (textures without samplers)
-            vk::DescriptorSetLayoutBinding::default()
-                .binding(bindings::SRV)
-                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-                .descriptor_count(capacity)
-                .stage_flags(
-                    vk::ShaderStageFlags::VERTEX
-                        | vk::ShaderStageFlags::FRAGMENT
-                        | vk::ShaderStageFlags::COMPUTE,
-                ),
-            // binding 1: global samplers (fixed count)
+            // binding 0: global samplers (fixed count)
             vk::DescriptorSetLayoutBinding::default()
                 .binding(bindings::SAMPLERS)
                 .descriptor_type(vk::DescriptorType::SAMPLER)
@@ -180,14 +178,26 @@ impl BindlessTextureTable {
                         | vk::ShaderStageFlags::FRAGMENT
                         | vk::ShaderStageFlags::COMPUTE,
                 ),
+            // binding 1: SRV array (textures without samplers)
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(bindings::SRV)
+                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                .descriptor_count(capacity)
+                .stage_flags(
+                    vk::ShaderStageFlags::VERTEX
+                        | vk::ShaderStageFlags::FRAGMENT
+                        | vk::ShaderStageFlags::COMPUTE,
+                ),
         ];
 
-        // Binding flags: SRV array gets bindless flags; samplers are immutable.
+        // Binding flags: samplers are immutable; the SRV array gets the bindless
+        // flags. VARIABLE_DESCRIPTOR_COUNT must be on the highest-numbered binding
+        // (binding 1 = SRV), which it now is.
         let binding_flags = [
+            vk::DescriptorBindingFlags::empty(),
             vk::DescriptorBindingFlags::PARTIALLY_BOUND
                 | vk::DescriptorBindingFlags::UPDATE_AFTER_BIND
                 | vk::DescriptorBindingFlags::VARIABLE_DESCRIPTOR_COUNT,
-            vk::DescriptorBindingFlags::empty(),
         ];
         let mut flags_info =
             vk::DescriptorSetLayoutBindingFlagsCreateInfo::default().binding_flags(&binding_flags);

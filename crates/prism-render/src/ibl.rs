@@ -119,11 +119,17 @@ impl IblResources {
         let cmd = allocate_temp_command_buffer(&device, command_pool)?;
         unsafe { device.begin_command_buffer(cmd, &vk::CommandBufferBeginInfo::default())? };
 
+        // Transition the ENTIRE mip chain (all levels, all 6 faces) from UNDEFINED
+        // to TRANSFER_DST_OPTIMAL up front. mip 0 is the copy destination; mips 1+
+        // are the blit destinations and must already be TRANSFER_DST_OPTIMAL when
+        // `cmd_blit_image` writes them - otherwise the validation layer (and some
+        // drivers) reject the blit because the destination is still UNDEFINED.
         transition_image(
             &device,
             cmd,
             image,
             0,
+            mip_levels,
             vk::ImageLayout::UNDEFINED,
             vk::ImageLayout::TRANSFER_DST_OPTIMAL,
         );
@@ -165,6 +171,7 @@ impl IblResources {
                 cmd,
                 image,
                 0,
+                1,
                 vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                 vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
             );
@@ -221,6 +228,7 @@ impl IblResources {
                     cmd,
                     image,
                     src_level,
+                    1,
                     vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
                     vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
                 );
@@ -231,6 +239,7 @@ impl IblResources {
                         cmd,
                         image,
                         mip,
+                        1,
                         vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                         vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
                     );
@@ -244,6 +253,7 @@ impl IblResources {
             cmd,
             image,
             mip_levels - 1,
+            1,
             vk::ImageLayout::TRANSFER_DST_OPTIMAL,
             vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
         );
@@ -473,7 +483,8 @@ fn transition_image(
     device: &ash::Device,
     cmd: vk::CommandBuffer,
     image: vk::Image,
-    mip: u32,
+    base_mip: u32,
+    level_count: u32,
     old_layout: vk::ImageLayout,
     new_layout: vk::ImageLayout,
 ) {
@@ -512,8 +523,8 @@ fn transition_image(
         image,
         subresource_range: vk::ImageSubresourceRange {
             aspect_mask: vk::ImageAspectFlags::COLOR,
-            base_mip_level: mip,
-            level_count: 1,
+            base_mip_level: base_mip,
+            level_count,
             base_array_layer: 0,
             layer_count: 6,
         },

@@ -1,47 +1,502 @@
 {
-  "parameters": [
-    {
-      "name": "frame",
-      "binding": { "kind": "descriptorTableSlot", "index": 0, "space": 0 },
-      "type": { "kind": "constantBuffer" }
-    },
-    {
-      "name": "gbufferA",
-      "binding": { "kind": "descriptorTableSlot", "index": 1, "space": 0 },
-      "type": { "kind": "resource", "baseShape": "texture2D" }
-    },
-    {
-      "name": "gbufferB",
-      "binding": { "kind": "descriptorTableSlot", "index": 2, "space": 0 },
-      "type": { "kind": "resource", "baseShape": "texture2D" }
-    },
-    {
-      "name": "giOutput",
-      "binding": { "kind": "descriptorTableSlot", "index": 3, "space": 0 },
-      "type": { "kind": "resource", "baseShape": "rwTexture2D" }
-    },
-    {
-      "name": "sharc_hash_entries",
-      "binding": { "kind": "descriptorTableSlot", "index": 0, "space": 1 },
-      "type": { "kind": "resource", "baseShape": "structuredBuffer" }
-    },
-    {
-      "name": "sharc_accumulation",
-      "binding": { "kind": "descriptorTableSlot", "index": 1, "space": 1 },
-      "type": { "kind": "resource", "baseShape": "structuredBuffer" }
-    },
-    {
-      "name": "sharc_resolved",
-      "binding": { "kind": "descriptorTableSlot", "index": 2, "space": 1 },
-      "type": { "kind": "resource", "baseShape": "structuredBuffer" }
-    },
-    {
-      "name": "pc",
-      "binding": { "kind": "pushConstantBuffer", "index": 0, "size": 48 },
-      "type": { "kind": "constantBuffer" }
-    }
-  ],
-  "entryPoints": [
-    { "name": "computeMain", "stage": "compute", "parameters": [] }
-  ]
+    "parameters": [
+        {
+            "name": "frame",
+            "binding": {"kind": "descriptorTableSlot", "index": 0},
+            "type": {
+                "kind": "constantBuffer",
+                "elementType": {
+                    "kind": "struct",
+                    "name": "FrameUBO",
+                    "fields": [
+                        {
+                            "name": "viewProj",
+                            "type": {
+                                "kind": "matrix",
+                                "rowCount": 4,
+                                "columnCount": 4,
+                                "elementType": {
+                                    "kind": "scalar",
+                                    "scalarType": "float32"
+                                }
+                            },
+                            "binding": {"kind": "uniform", "offset": 0, "size": 64, "elementStride": 0}
+                        },
+                        {
+                            "name": "cameraPosition",
+                            "type": {
+                                "kind": "vector",
+                                "elementCount": 4,
+                                "elementType": {
+                                    "kind": "scalar",
+                                    "scalarType": "float32"
+                                }
+                            },
+                            "binding": {"kind": "uniform", "offset": 64, "size": 16, "elementStride": 4}
+                        },
+                        {
+                            "name": "lightDirection",
+                            "type": {
+                                "kind": "vector",
+                                "elementCount": 4,
+                                "elementType": {
+                                    "kind": "scalar",
+                                    "scalarType": "float32"
+                                }
+                            },
+                            "binding": {"kind": "uniform", "offset": 80, "size": 16, "elementStride": 4}
+                        },
+                        {
+                            "name": "lightColor",
+                            "type": {
+                                "kind": "vector",
+                                "elementCount": 4,
+                                "elementType": {
+                                    "kind": "scalar",
+                                    "scalarType": "float32"
+                                }
+                            },
+                            "binding": {"kind": "uniform", "offset": 96, "size": 16, "elementStride": 4}
+                        },
+                        {
+                            "name": "view",
+                            "type": {
+                                "kind": "matrix",
+                                "rowCount": 4,
+                                "columnCount": 4,
+                                "elementType": {
+                                    "kind": "scalar",
+                                    "scalarType": "float32"
+                                }
+                            },
+                            "binding": {"kind": "uniform", "offset": 112, "size": 64, "elementStride": 0}
+                        }
+                    ]
+                },
+                "containerVarLayout": {
+                    "binding": {"kind": "descriptorTableSlot", "index": 0}
+                },
+                "elementVarLayout": {
+                    "type": {
+                        "kind": "struct",
+                        "name": "FrameUBO",
+                        "fields": [
+                            {
+                                "name": "viewProj",
+                                "type": {
+                                    "kind": "matrix",
+                                    "rowCount": 4,
+                                    "columnCount": 4,
+                                    "elementType": {
+                                        "kind": "scalar",
+                                        "scalarType": "float32"
+                                    }
+                                },
+                                "binding": {"kind": "uniform", "offset": 0, "size": 64, "elementStride": 0}
+                            },
+                            {
+                                "name": "cameraPosition",
+                                "type": {
+                                    "kind": "vector",
+                                    "elementCount": 4,
+                                    "elementType": {
+                                        "kind": "scalar",
+                                        "scalarType": "float32"
+                                    }
+                                },
+                                "binding": {"kind": "uniform", "offset": 64, "size": 16, "elementStride": 4}
+                            },
+                            {
+                                "name": "lightDirection",
+                                "type": {
+                                    "kind": "vector",
+                                    "elementCount": 4,
+                                    "elementType": {
+                                        "kind": "scalar",
+                                        "scalarType": "float32"
+                                    }
+                                },
+                                "binding": {"kind": "uniform", "offset": 80, "size": 16, "elementStride": 4}
+                            },
+                            {
+                                "name": "lightColor",
+                                "type": {
+                                    "kind": "vector",
+                                    "elementCount": 4,
+                                    "elementType": {
+                                        "kind": "scalar",
+                                        "scalarType": "float32"
+                                    }
+                                },
+                                "binding": {"kind": "uniform", "offset": 96, "size": 16, "elementStride": 4}
+                            },
+                            {
+                                "name": "view",
+                                "type": {
+                                    "kind": "matrix",
+                                    "rowCount": 4,
+                                    "columnCount": 4,
+                                    "elementType": {
+                                        "kind": "scalar",
+                                        "scalarType": "float32"
+                                    }
+                                },
+                                "binding": {"kind": "uniform", "offset": 112, "size": 64, "elementStride": 0}
+                            }
+                        ]
+                    },
+                    "binding": {"kind": "uniform", "offset": 0, "size": 176, "elementStride": 0}
+                }
+            }
+        },
+        {
+            "name": "gbufferA",
+            "binding": {"kind": "descriptorTableSlot", "index": 1},
+            "type": {
+                "kind": "resource",
+                "baseShape": "texture2D",
+                "resultType": {
+                    "kind": "vector",
+                    "elementCount": 4,
+                    "elementType": {
+                        "kind": "scalar",
+                        "scalarType": "float32"
+                    }
+                }
+            }
+        },
+        {
+            "name": "gbufferB",
+            "binding": {"kind": "descriptorTableSlot", "index": 2},
+            "type": {
+                "kind": "resource",
+                "baseShape": "texture2D",
+                "resultType": {
+                    "kind": "vector",
+                    "elementCount": 4,
+                    "elementType": {
+                        "kind": "scalar",
+                        "scalarType": "float32"
+                    }
+                }
+            }
+        },
+        {
+            "name": "giOutput",
+            "binding": {"kind": "descriptorTableSlot", "index": 3},
+            "type": {
+                "kind": "resource",
+                "baseShape": "texture2D",
+                "access": "readWrite",
+                "resultType": {
+                    "kind": "vector",
+                    "elementCount": 4,
+                    "elementType": {
+                        "kind": "scalar",
+                        "scalarType": "float32"
+                    }
+                }
+            }
+        },
+        {
+            "name": "sharc_hash_entries",
+            "binding": {"kind": "descriptorTableSlot", "space": 1, "index": 0},
+            "type": {
+                "kind": "resource",
+                "baseShape": "structuredBuffer",
+                "access": "readWrite",
+                "resultType": {
+                    "kind": "scalar",
+                    "scalarType": "uint64"
+                }
+            }
+        },
+        {
+            "name": "sharc_accumulation",
+            "binding": {"kind": "descriptorTableSlot", "space": 1, "index": 1},
+            "type": {
+                "kind": "resource",
+                "baseShape": "structuredBuffer",
+                "access": "readWrite",
+                "resultType": {
+                    "kind": "struct",
+                    "name": "SharcAccumulationData",
+                    "fields": [
+                        {
+                            "name": "data",
+                            "type": {
+                                "kind": "vector",
+                                "elementCount": 4,
+                                "elementType": {
+                                    "kind": "scalar",
+                                    "scalarType": "uint32"
+                                }
+                            },
+                            "binding": {"kind": "uniform", "offset": 0, "size": 16, "elementStride": 4}
+                        }
+                    ]
+                }
+            }
+        },
+        {
+            "name": "sharc_resolved",
+            "binding": {"kind": "descriptorTableSlot", "space": 1, "index": 2},
+            "type": {
+                "kind": "resource",
+                "baseShape": "structuredBuffer",
+                "access": "readWrite",
+                "resultType": {
+                    "kind": "struct",
+                    "name": "SharcPackedData",
+                    "fields": [
+                        {
+                            "name": "radianceData",
+                            "type": {
+                                "kind": "vector",
+                                "elementCount": 4,
+                                "elementType": {
+                                    "kind": "scalar",
+                                    "scalarType": "float16"
+                                }
+                            },
+                            "binding": {"kind": "uniform", "offset": 0, "size": 8, "elementStride": 2}
+                        },
+                        {
+                            "name": "sampleData",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "uint32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 8, "size": 4, "elementStride": 0}
+                        },
+                        {
+                            "name": "sampleDataExt",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "uint32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 12, "size": 4, "elementStride": 0}
+                        }
+                    ]
+                }
+            }
+        },
+        {
+            "name": "pc",
+            "binding": {"kind": "pushConstantBuffer", "index": 0},
+            "type": {
+                "kind": "constantBuffer",
+                "elementType": {
+                    "kind": "struct",
+                    "name": "SharcQueryPushConstants",
+                    "fields": [
+                        {
+                            "name": "outputWidth",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "uint32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 0, "size": 4, "elementStride": 0}
+                        },
+                        {
+                            "name": "outputHeight",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "uint32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 4, "size": 4, "elementStride": 0}
+                        },
+                        {
+                            "name": "gbufferWidth",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "uint32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 8, "size": 4, "elementStride": 0}
+                        },
+                        {
+                            "name": "gbufferHeight",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "uint32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 12, "size": 4, "elementStride": 0}
+                        },
+                        {
+                            "name": "sharcCapacity",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "uint32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 16, "size": 4, "elementStride": 0}
+                        },
+                        {
+                            "name": "sharcSceneScale",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "float32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 20, "size": 4, "elementStride": 0}
+                        },
+                        {
+                            "name": "cameraPosition",
+                            "type": {
+                                "kind": "vector",
+                                "elementCount": 3,
+                                "elementType": {
+                                    "kind": "scalar",
+                                    "scalarType": "float32"
+                                }
+                            },
+                            "binding": {"kind": "uniform", "offset": 32, "size": 12, "elementStride": 4}
+                        },
+                        {
+                            "name": "_padding",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "float32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 44, "size": 4, "elementStride": 0}
+                        }
+                    ]
+                },
+                "containerVarLayout": {
+                    "binding": {"kind": "pushConstantBuffer", "index": 0}
+                },
+                "elementVarLayout": {
+                    "type": {
+                        "kind": "struct",
+                        "name": "SharcQueryPushConstants",
+                        "fields": [
+                            {
+                                "name": "outputWidth",
+                                "type": {
+                                    "kind": "scalar",
+                                    "scalarType": "uint32"
+                                },
+                                "binding": {"kind": "uniform", "offset": 0, "size": 4, "elementStride": 0}
+                            },
+                            {
+                                "name": "outputHeight",
+                                "type": {
+                                    "kind": "scalar",
+                                    "scalarType": "uint32"
+                                },
+                                "binding": {"kind": "uniform", "offset": 4, "size": 4, "elementStride": 0}
+                            },
+                            {
+                                "name": "gbufferWidth",
+                                "type": {
+                                    "kind": "scalar",
+                                    "scalarType": "uint32"
+                                },
+                                "binding": {"kind": "uniform", "offset": 8, "size": 4, "elementStride": 0}
+                            },
+                            {
+                                "name": "gbufferHeight",
+                                "type": {
+                                    "kind": "scalar",
+                                    "scalarType": "uint32"
+                                },
+                                "binding": {"kind": "uniform", "offset": 12, "size": 4, "elementStride": 0}
+                            },
+                            {
+                                "name": "sharcCapacity",
+                                "type": {
+                                    "kind": "scalar",
+                                    "scalarType": "uint32"
+                                },
+                                "binding": {"kind": "uniform", "offset": 16, "size": 4, "elementStride": 0}
+                            },
+                            {
+                                "name": "sharcSceneScale",
+                                "type": {
+                                    "kind": "scalar",
+                                    "scalarType": "float32"
+                                },
+                                "binding": {"kind": "uniform", "offset": 20, "size": 4, "elementStride": 0}
+                            },
+                            {
+                                "name": "cameraPosition",
+                                "type": {
+                                    "kind": "vector",
+                                    "elementCount": 3,
+                                    "elementType": {
+                                        "kind": "scalar",
+                                        "scalarType": "float32"
+                                    }
+                                },
+                                "binding": {"kind": "uniform", "offset": 32, "size": 12, "elementStride": 4}
+                            },
+                            {
+                                "name": "_padding",
+                                "type": {
+                                    "kind": "scalar",
+                                    "scalarType": "float32"
+                                },
+                                "binding": {"kind": "uniform", "offset": 44, "size": 4, "elementStride": 0}
+                            }
+                        ]
+                    },
+                    "binding": {"kind": "uniform", "offset": 0, "size": 48, "elementStride": 0}
+                }
+            }
+        }
+    ],
+    "entryPoints": [
+        {
+            "name": "computeMain",
+            "stage": "compute",
+            "parameters": [
+                {
+                    "name": "dispatchID",
+                    "semanticName": "SV_DISPATCHTHREADID",
+                    "type": {
+                        "kind": "vector",
+                        "elementCount": 3,
+                        "elementType": {
+                            "kind": "scalar",
+                            "scalarType": "uint32"
+                        }
+                    }
+                }
+            ],
+            "threadGroupSize": [8, 8, 1],
+            "bindings": [
+                {
+                    "name": "frame",
+                    "binding": {"kind": "descriptorTableSlot", "index": 0, "used": 0}
+                },
+                {
+                    "name": "gbufferA",
+                    "binding": {"kind": "descriptorTableSlot", "index": 1, "used": 1}
+                },
+                {
+                    "name": "gbufferB",
+                    "binding": {"kind": "descriptorTableSlot", "index": 2, "used": 1}
+                },
+                {
+                    "name": "giOutput",
+                    "binding": {"kind": "descriptorTableSlot", "index": 3, "used": 1}
+                },
+                {
+                    "name": "sharc_hash_entries",
+                    "binding": {"kind": "descriptorTableSlot", "space": 1, "index": 0, "used": 1}
+                },
+                {
+                    "name": "sharc_accumulation",
+                    "binding": {"kind": "descriptorTableSlot", "space": 1, "index": 1, "used": 0}
+                },
+                {
+                    "name": "sharc_resolved",
+                    "binding": {"kind": "descriptorTableSlot", "space": 1, "index": 2, "used": 1}
+                },
+                {
+                    "name": "pc",
+                    "binding": {"kind": "pushConstantBuffer", "index": 0}
+                }
+            ]
+        }
+    ],
+    "bindlessSpaceIndex": 2
 }

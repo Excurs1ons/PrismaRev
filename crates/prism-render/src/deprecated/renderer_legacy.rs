@@ -14,6 +14,7 @@
 //! The camera UBO is updated once per frame via
 //! [`Renderer::set_frame_data`].
 
+use std::ffi::CString;
 use std::sync::Arc;
 
 use anyhow::Context as _;
@@ -230,8 +231,21 @@ impl Renderer {
         );
 
         // --- Graphics pipeline (Blinn-Phong, set 0 = frame UBO) ---
-        let vert_stage = shader::shader_stage(vk::ShaderStageFlags::VERTEX, vert_module, c"main");
-        let frag_stage = shader::shader_stage(vk::ShaderStageFlags::FRAGMENT, frag_module, c"main");
+        // Entry-point names come from the Slang reflection (shader_bindings),
+        // not hardcoded "main": the SPIR-V produced by slangc exposes the
+        // original Slang entry-point names (vertexMain/fragmentMain) because
+        // compile.sh passes -fvk-use-entrypoint-name.
+        let vert_entry =
+            CString::new(crate::shader_bindings::mesh::ENTRY_VERTEX_MAIN).unwrap();
+        let frag_entry =
+            CString::new(crate::shader_bindings::mesh::ENTRY_FRAGMENT_MAIN).unwrap();
+        let vert_stage =
+            shader::shader_stage(vk::ShaderStageFlags::VERTEX, vert_module, vert_entry.as_c_str());
+        let frag_stage = shader::shader_stage(
+            vk::ShaderStageFlags::FRAGMENT,
+            frag_module,
+            frag_entry.as_c_str(),
+        );
         let shader_stages = [vert_stage, frag_stage];
 
         let binding_desc = Vertex::binding_description();
@@ -254,8 +268,13 @@ impl Renderer {
         // --- PBR pipeline (mesh.vert + pbr.frag): set 0 = frame UBO, set 1 = IBL ---
         let pbr_frag_module = shader::load_shader_module(&context.device, PBR_FRAG_SPV)
             .context("load pbr fragment shader module")?;
-        let pbr_frag_stage =
-            shader::shader_stage(vk::ShaderStageFlags::FRAGMENT, pbr_frag_module, c"main");
+        let pbr_frag_entry =
+            CString::new(crate::shader_bindings::pbr::ENTRY_FRAGMENT_MAIN).unwrap();
+        let pbr_frag_stage = shader::shader_stage(
+            vk::ShaderStageFlags::FRAGMENT,
+            pbr_frag_module,
+            pbr_frag_entry.as_c_str(),
+        );
         let pbr_shader_stages = [vert_stage, pbr_frag_stage];
 
         // model mat4 (64) + albedoMetallic vec4 (16) + roughness f32 (4) +
