@@ -310,6 +310,14 @@ pub struct App {
     normal_space: NormalSpace,
     /// Whether the debug overlay UI is shown.
     show_ui: bool,
+    /// P0: CPU-side scene storage (meshes / materials / textures / instances)
+    /// populated either from a glTF file or from the procedural fallback.
+    /// The renderer's `Render*Manager`s consume this on `App::load_demo_scene`.
+    scene_store: prism_asset::SceneStore,
+    /// Set to `true` once `App::load_demo_scene` has run; subsequent
+    /// `resumed` callbacks reuse the registered resources instead of
+    /// re-creating them.
+    demo_objects_loaded: bool,
 }
 
 impl App {
@@ -328,6 +336,8 @@ impl App {
             debug_mode: DebugMode::Final,
             normal_space: NormalSpace::World,
             show_ui: true,
+            scene_store: prism_asset::SceneStore::new(),
+            demo_objects_loaded: false,
         }
     }
 
@@ -348,8 +358,28 @@ impl App {
         event_loop: EventLoop<()>,
         env_bytes: Option<Vec<u8>>,
     ) -> anyhow::Result<()> {
+        Self::run_on_event_loop_with_env_and_scene(event_loop, env_bytes, None)
+    }
+
+    /// Variant that also threads an in-memory glTF scene (the bytes
+    /// of a `.glb` or `.gltf` file) into the engine. Used by the
+    /// Android entry point, which reads the asset via `AssetManager::open`
+    /// before `winit` takes over. The scene is loaded into the
+    /// `SceneStore` immediately; `load_demo_scene` then uploads the
+    /// contents to the renderer on the first `resumed` callback.
+    pub fn run_on_event_loop_with_env_and_scene(
+        event_loop: EventLoop<()>,
+        env_bytes: Option<Vec<u8>>,
+        scene_glb: Option<Vec<u8>>,
+    ) -> anyhow::Result<()> {
         let mut app = App::new();
         app.env_bytes = env_bytes;
+        if let Some(bytes) = scene_glb {
+            match app.scene_store.load_gltf_bytes(&bytes, None) {
+                Ok(h) => log::info!("App: preloaded glTF scene {:?}", h),
+                Err(e) => log::warn!("App: failed to preload glTF scene: {e}"),
+            }
+        }
         event_loop.run_app(&mut app)?;
         Ok(())
     }
@@ -400,6 +430,154 @@ impl App {
 
         // Update camera aspect ratio to match initial window size.
         self.camera = OrbitCamera::new(1600.0 / 900.0);
+    }
+
+    // ---- P0: scene loading (commit 10) ---------------------------------
+    //
+    // `load_demo_scene` is the entry point that turns a `SceneStore`
+    // (either populated from a glTF file or from the procedural
+    // fallback) into a set of registered mesh / material / texture
+    // resources on the renderer's managers. It is idempotent — calling
+    // it twice is a no-op — so the winit `resumed` callback can invoke
+    // it on every (re)start without re-registering everything.
+    //
+    // The draw path that actually consumes the new manager state is
+    // wired up in a follow-up commit (commit 11) once the
+    // bindless-frag pipeline + descriptor-set layout is in place. P0
+    // is about getting the manager lifecycle + scene loading path
+    // covered.
+    pub fn load_demo_scene(&mut self, scene: prism_asset::SceneHandle) {
+        if self.demo_objects_loaded {
+            log::debug!("App::load_demo_scene: already loaded, skipping");
+            return;
+        }
+        let Some(renderer) = self.renderer.as_mut() else {
+            log::debug!("App::load_demo_scene: no renderer yet, deferring");
+            return;
+        };
+
+        // 1. Register every texture into the bindless SRV table.
+        let texture_data: Vec<_> = self
+            .scene_store
+            .textures()
+            .map(|(h, data)| (h, data.clone()))
+            .collect();
+        for (asset_h, data) in texture_data {
+            let input = prism_render::managers::TextureUploadInput {
+                width: data.width,
+                height: data.height,
+                format: match data.format {
+                    prism_asset::TexFormat::Rgba8 => {
+                        prism_render::managers::TextureFormat::Rgba8
+                    }
+                    prism_asset::TexFormat::Rgba16f => {
+                        log::warn!("Rgba16f texture not yet supported by render manager; skipping");
+                        continue;
+                    }
+                },
+                pixels: data.pixels.clone(),
+            };
+            // P0: only the slot is reserved; the renderer will wire
+            // the actual vk::ImageView in commit 11. The handle is
+            // not used until then, but the reservation is enough to
+            // assert capacity and surface pixel-buffer errors early.
+            if let Err(e) = renderer.register_texture(&input) {
+                log::warn!("register_texture failed: {e}");
+            }
+            // Keep the asset handle alive to avoid a stale-borrow
+            // warning; the asset handle is the input the material
+            // step below uses to resolve texture references.
+            let _ = asset_h;
+        }
+
+        // 2. Register every material with placeholder bindless slots
+        // (u32::MAX = "no texture"). Commit 11 fills the slots in
+        // once texture views are created.
+        let material_data: Vec<_> = self
+            .scene_store
+            .materials()
+            .map(|(h, data)| (h, data.clone()))
+            .collect();
+        for (asset_h, data) in material_data {
+            let input = prism_render::managers::MaterialUploadInput {
+                base_color: data.base_color,
+                metallic: data.metallic,
+                roughness: data.roughness,
+                emissive: data.emissive,
+                albedo_tex: data
+                    .albedo_tex
+                    .and_then(|h| self.scene_store.texture(h).map(|_| u32::MAX)),
+                normal_tex: data
+                    .normal_tex
+                    .and_then(|h| self.scene_store.texture(h).map(|_| u32::MAX)),
+                metallic_roughness_tex: data
+                    .metallic_roughness_tex
+                    .and_then(|h| self.scene_store.texture(h).map(|_| u32::MAX)),
+                emissive_tex: data
+                    .emissive_tex
+                    .and_then(|h| self.scene_store.texture(h).map(|_| u32::MAX)),
+            };
+            if let Err(e) = renderer.register_material(input) {
+                log::warn!("register_material failed: {e}");
+            }
+            let _ = asset_h;
+        }
+
+        // 3. Register every mesh (uploads vertex + index buffers).
+        let mesh_data: Vec<_> = self
+            .scene_store
+            .meshes()
+            .map(|(h, data)| (h, data.clone()))
+            .collect();
+        for (asset_h, data) in mesh_data {
+            let input = prism_render::managers::MeshUploadInput {
+                positions: data.positions.clone(),
+                normals: data.normals.clone(),
+                colors: vec![],
+                uvs: data.uvs.clone(),
+                tangents: data.tangents.clone(),
+                indices: data.indices.clone(),
+            };
+            if let Err(e) = renderer.register_mesh(&input) {
+                log::warn!("register_mesh failed: {e}");
+            }
+            let _ = asset_h;
+        }
+
+        // 4. Flush any pending material edits to the GPU.
+        if let Err(e) = renderer.flush_materials() {
+            log::warn!("flush_materials failed: {e}");
+        }
+
+        // The unused `scene` parameter is kept for future use (e.g. to
+        // bind the scene to specific instance groups).
+        let _ = scene;
+        self.demo_objects_loaded = true;
+        log::info!(
+            "App::load_demo_scene: registered {} mesh(es), {} material(s), {} texture(s)",
+            self.scene_store.meshes().count(),
+            self.scene_store.materials().count(),
+            self.scene_store.textures().count(),
+        );
+    }
+
+    /// Convenience: try to load a glTF scene from disk. On success the
+    /// scene is appended to the `SceneStore`; the caller is expected to
+    /// follow up with `load_demo_scene` to upload the contents to the
+    /// renderer. Returns `None` when the file is missing or the parse
+    /// fails — both are non-fatal so the demo can fall back to a
+    /// procedural scene.
+    pub fn try_load_gltf(&mut self, path: &std::path::Path) -> Option<prism_asset::SceneHandle> {
+        match self.scene_store.load_gltf(path) {
+            Ok(h) => {
+                log::info!("App::try_load_gltf: loaded {}", path.display());
+                Some(h)
+            }
+            Err(e) => {
+                log::warn!("App::try_load_gltf: {} (continuing with procedural fallback)", e);
+                None
+            }
+        }
     }
 }
 
