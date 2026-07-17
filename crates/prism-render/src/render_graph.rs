@@ -96,7 +96,7 @@ pub struct RenderSettings {
 impl Default for RenderSettings {
     fn default() -> Self {
         Self {
-            gbuffer_high_precision: false,   // bandwidth-first
+            gbuffer_high_precision: true,    // P0 default: world-space normal in GBuffer A needs Rgba16F (Plan §4.3)
             ray_tracing_enabled: false,      // off by default
             ray_query_resolution_scale: 0.5, // half-res default
             gi_mode: 0,                      // GI off
@@ -127,8 +127,10 @@ pub trait RenderPassNode: std::any::Any {
 
     /// Declare resource reads/writes. Called once during graph compilation.
     /// The pass should register its needs via `graph.create_resource(...)` /
-    /// `graph.read(...)` / `graph.write(...)`.
-    fn setup(&mut self, graph: &mut RenderGraphBuilder);
+    /// `graph.read(...)` / `graph.write(...)`. `settings` is the runtime
+    /// render configuration (e.g. `gbuffer_high_precision`) so the pass
+    /// can pick the right format for its attachments.
+    fn setup(&mut self, graph: &mut RenderGraphBuilder, settings: &RenderSettings);
 
     /// Record Vulkan commands into `ctx.cmd`.
     fn execute(&mut self, ctx: &RenderContext, resources: &GraphResources) -> Result<()>;
@@ -520,9 +522,11 @@ mod tests {
     }
 
     #[test]
-    fn settings_default_is_bandwidth_first() {
+    fn settings_default_is_high_precision_gbuffer() {
+        // P0 default flipped to `true`: world-space normals from normal
+        // maps need Rgba16F precision in GBuffer A. See Plan §4.3.
         let s = RenderSettings::default();
-        assert!(!s.gbuffer_high_precision);
+        assert!(s.gbuffer_high_precision);
         assert!(!s.ray_tracing_enabled);
         assert_eq!(s.ray_query_resolution_scale, 0.5);
         assert_eq!(s.gi_mode, 0);

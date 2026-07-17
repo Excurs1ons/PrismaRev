@@ -17,7 +17,8 @@ use anyhow::Result;
 use ash::vk;
 
 use crate::render_graph::{
-    GraphResources, RenderContext, RenderGraphBuilder, RenderPassNode, ResourceHandle, ResourceType,
+    GraphResources, RenderContext, RenderGraphBuilder, RenderPassNode, RenderSettings,
+    ResourceHandle, ResourceType,
 };
 
 /// GBuffer attachment handles — created in setup, used by later passes.
@@ -71,7 +72,7 @@ impl RenderPassNode for GBufferPass {
         "GBufferPass"
     }
 
-    fn setup(&mut self, graph: &mut RenderGraphBuilder) {
+    fn setup(&mut self, graph: &mut RenderGraphBuilder, settings: &RenderSettings) {
         // We don't know extent at setup time — use a placeholder that will
         // be resolved at allocation. For now, use a standard 1080p default;
         // the graph will be rebuilt on swapchain resize.
@@ -82,11 +83,15 @@ impl RenderPassNode for GBufferPass {
         let msaa = vk::SampleCountFlags::TYPE_1;
 
         // Create the three GBuffer layers + depth.
-        // The format for A/B depends on settings; we use a default here and
-        // the pass will use the correct format at execute time. A full impl
-        // would rebuild the graph when the setting changes.
+        // The format for the normal_roughness attachment is driven by
+        // `settings.gbuffer_high_precision`. The default path picks the
+        // matching `color_format` so a setting change does not silently
+        // desync the resource creation from the rest of the pass. The
+        // P0 path always allocates at the default (bandwidth-first)
+        // resolution; a future pass rebuilds the graph when the toggle
+        // changes mid-run.
         self.handles.normal_roughness = graph.create_resource(ResourceType::ColorAttachment {
-            format: vk::Format::A2B10G10R10_UNORM_PACK32,
+            format: Self::color_format(settings),
             extent: default_extent,
             sample_count: msaa,
         });
@@ -337,7 +342,7 @@ impl RenderPassNode for SharcPass {
         "SharcPass"
     }
 
-    fn setup(&mut self, graph: &mut RenderGraphBuilder) {
+    fn setup(&mut self, graph: &mut RenderGraphBuilder, _settings: &crate::render_graph::RenderSettings) {
         // SHARC buffers — sized based on settings at allocate time.
         // Default capacity 2^20 (1M slots):
         //   hash_entries:  8 MB (u64 × 1M)
@@ -508,7 +513,7 @@ impl RenderPassNode for RayQueryPass {
         "RayQueryPass"
     }
 
-    fn setup(&mut self, graph: &mut RenderGraphBuilder) {
+    fn setup(&mut self, graph: &mut RenderGraphBuilder, _settings: &crate::render_graph::RenderSettings) {
         let scale = 0.5; // half-res default
         let extent = vk::Extent2D {
             width: (1920.0 * scale) as u32,
@@ -640,7 +645,7 @@ impl RenderPassNode for LightingPass {
         "LightingPass"
     }
 
-    fn setup(&mut self, graph: &mut RenderGraphBuilder) {
+    fn setup(&mut self, graph: &mut RenderGraphBuilder, _settings: &crate::render_graph::RenderSettings) {
         self.hdr_output = graph.create_resource(ResourceType::ColorAttachment {
             format: vk::Format::R16G16B16A16_SFLOAT,
             extent: vk::Extent2D {
@@ -682,7 +687,7 @@ impl RenderPassNode for PostPass {
         "PostPass"
     }
 
-    fn setup(&mut self, graph: &mut RenderGraphBuilder) {
+    fn setup(&mut self, graph: &mut RenderGraphBuilder, _settings: &crate::render_graph::RenderSettings) {
         self.output = graph.create_resource(ResourceType::ColorAttachment {
             format: vk::Format::B8G8R8A8_UNORM, // swapchain format
             extent: vk::Extent2D {
