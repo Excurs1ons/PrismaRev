@@ -81,15 +81,25 @@ enum BindKind {
 }
 
 /// Fallback push-constant sizes for shaders whose slangc reflection omits the
-/// `size` field on the `pushConstantBuffer` parameter (mesh/pbr/gizmo do;
-/// bindless includes it). These mirror the `#[repr(C)]` structs in
-/// `pbr_push.rs` — the source of truth is the Rust layout, verified by tests.
+/// `size` field on the `pushConstantBuffer` parameter. Newer Slang releases
+/// (e.g. 2026.13.1) stopped emitting `size` on the parameter binding, so we
+/// keep the authoritative layout here. These mirror the `#[repr(C)]` structs in
+/// the engine (pbr_push.rs / passes.rs) — the source of truth is the Rust
+/// layout, verified by `size_of!` / `offset_of!` tests where the pass is live.
 const PUSH_SIZE_FALLBACK: &[(&str, u32)] = &[
     ("mesh", 64),
     ("pbr", 92),
     ("gizmo", 64),
     ("bindless", 96),
     ("overlay", 0),
+    // LightingPushConstants: 4×u32 + 4×f32 = 32 bytes.
+    ("lighting", 32),
+    // PostPushConstants: exposure + padding, padded to 16.
+    ("post", 16),
+    // ShadowPushConstants: verified by `shadow_push_constant_size_is_48` test.
+    ("shadow", 48),
+    // SharcQueryPushConstants: 7 fields padded to 48 (see passes.rs).
+    ("sharc_query", 48),
 ];
 
 fn fallback_push_size(shader: &str) -> u32 {
