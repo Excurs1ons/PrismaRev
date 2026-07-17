@@ -76,3 +76,25 @@ pub mod pbr {
     pub const ENV_CUBE_SET: u32 = 1;
     pub const ENV_CUBE_BINDING: u32 = 0; // COMBINED_IMAGE_SAMPLER
 }
+
+pub mod shadow {
+    //! Bindings reflected from shaders/slang/shadow.slang
+
+    /// Entry point names (for VkPipelineShaderStageCreateInfo).
+    pub const ENTRY_COMPUTE_MAIN: &str = "computeMain"; // stage: COMPUTE
+
+    /// Push-constant block size in bytes (reflected).
+    pub const PUSH_CONSTANT_SIZE: u32 = 48;
+
+    // --- descriptor set 0 ---
+    pub const FRAME_SET: u32 = 0;
+    pub const FRAME_BINDING: u32 = 0; // UNIFORM_BUFFER
+    pub const GBUFFER_A_SET: u32 = 0;
+    pub const GBUFFER_A_BINDING: u32 = 1; // COMBINED_IMAGE_SAMPLER
+    pub const GBUFFER_B_SET: u32 = 0;
+    pub const GBUFFER_B_BINDING: u32 = 2; // COMBINED_IMAGE_SAMPLER
+    pub const SHADOW_OUTPUT_SET: u32 = 0;
+    pub const SHADOW_OUTPUT_BINDING: u32 = 3; // COMBINED_IMAGE_SAMPLER
+    pub const TLAS_SET: u32 = 0;
+    pub const TLAS_BINDING: u32 = 4; // UNIFORM_BUFFER
+}

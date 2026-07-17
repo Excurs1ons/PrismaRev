@@ -92,4 +92,24 @@ compile_stage overlay vertexMain vertex
 compile_stage overlay fragmentMain fragment
 emit_reflection overlay vertexMain vertex fragmentMain fragment
 
+# shadow: compute (RayQuery inline shadow pass, half-res)
+SHADOW_ENTRY="computeMain"
+SHADOW_STAGE="compute"
+echo "  shadow :: ${SHADOW_ENTRY} -> shadow.comp.spv"
+"$SLANGC" "$SRC/shadow.slang" \
+  -profile "$PROFILE" \
+  -target spirv \
+  -entry "$SHADOW_ENTRY" \
+  -stage "$SHADOW_STAGE" \
+  -fvk-use-entrypoint-name \
+  -o "$OUT/shadow.comp.spv"
+echo "  reflect shadow -> reflection/shadow.json"
+"$SLANGC" "$SRC/shadow.slang" \
+  -profile "$PROFILE" \
+  -target spirv \
+  -entry "$SHADOW_ENTRY" \
+  -stage "$SHADOW_STAGE" \
+  -reflection-json "$REFL/shadow.json" \
+  -o "$REFL/shadow.tmp.spv"
+
 echo "All Slang shaders compiled. SPIR-V in $OUT, reflection JSON in $REFL"
