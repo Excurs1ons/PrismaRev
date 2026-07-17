@@ -100,6 +100,19 @@ pub struct Renderer {
     /// Handle of the IBL cubemap inside `bindless`.
     #[allow(dead_code)]
     ibl_bindless_handle: crate::bindless::TextureHandle,
+
+    // ---- P0 scene managers (commit 9) ----
+    // Each is constructed in `new` and explicitly destroyed in `destroy`
+    // (matching the rest of the renderer's lifecycle contract). They are
+    // declared after the legacy fields and before `context` so the drop
+    // order — fields are dropped in declaration order — releases the
+    // managers' GPU resources while the device is still alive.
+    #[allow(dead_code)]
+    mesh_manager: crate::managers::RenderMeshManager,
+    #[allow(dead_code)]
+    texture_manager: crate::managers::RenderTextureManager,
+    #[allow(dead_code)]
+    material_manager: crate::managers::RenderMaterialManager,
     // `descriptor_layout`/`descriptor_pool` are stored only to own the Vulkan
     // objects their handles reference (the pipeline's layout, and the pools the
     // frame UBOs' descriptor sets were allocated from). They are never read
@@ -307,6 +320,13 @@ impl Renderer {
         // --- World-space XYZ gizmo (always-on-top debug helper) ---
         let gizmo = Gizmo::new(&context, render_pass.handle).context("create gizmo")?;
 
+        // ---- P0 scene managers (commit 9) ----
+        let texture_manager = crate::managers::RenderTextureManager::new(&context, 1024)
+            .context("create RenderTextureManager")?;
+        let material_manager = crate::managers::RenderMaterialManager::new(&context)
+            .context("create RenderMaterialManager")?;
+        let mesh_manager = crate::managers::RenderMeshManager::new();
+
         let color_format = swapchain.format.format;
         Ok(Self {
             context,
@@ -324,6 +344,9 @@ impl Renderer {
             descriptor_layout,
             descriptor_pool,
             frame_ubos,
+            mesh_manager,
+            texture_manager,
+            material_manager,
             overlay,
             gizmo,
             vert_module,
@@ -369,6 +392,108 @@ impl Renderer {
             vertices,
             indices,
         )
+    }
+
+    // ---- P0 scene-manager entry points (commit 9) ----
+    //
+    // The renderer owns three managers (`mesh_manager`, `texture_manager`,
+    // `material_manager`) and exposes `&mut` accessors + a single
+    // `destroy` method that releases every resource in the correct order.
+    // The actual `draw_scene_pbr` (with descriptor-set binding and
+    // push-constant packing) lands in a follow-up commit because it
+    // requires building a new pipeline object that consumes
+    // `bindless.frag.spv` + the materials SSBO + the bindless set —
+    // ~150 lines of pipeline-desc wiring that the engine demo does not
+    // need to compile or boot. P0 is about getting the manager
+    // lifecycle in place; the draw path follows in commit 10.
+
+    /// Register a mesh from the `managers` input shape and return its
+    /// render-side handle. CPU-side `MeshManager` callers in
+    /// `prism-engine` should switch to this entry point.
+    pub fn register_mesh(
+        &mut self,
+        input: &crate::managers::MeshUploadInput,
+    ) -> anyhow::Result<crate::managers::MeshHandle> {
+        self.mesh_manager.register(
+            &self.context,
+            self.command_pool,
+            self.context.graphics_queue,
+            input,
+        )
+    }
+
+    /// Register a texture and return its render-side handle.
+    pub fn register_texture(
+        &mut self,
+        input: &crate::managers::TextureUploadInput,
+    ) -> anyhow::Result<crate::managers::AssetTextureHandle> {
+        self.texture_manager.reserve(input)
+    }
+
+    /// Register a material and return its render-side handle. The bindless
+    /// SRV slot for each `Option<u32>` is the value previously returned
+    /// from `register_texture` (or `u32::MAX` for "no texture").
+    pub fn register_material(
+        &mut self,
+        input: crate::managers::MaterialUploadInput,
+    ) -> anyhow::Result<crate::managers::MaterialHandle> {
+        self.material_manager.register(input)
+    }
+
+    /// Look up a texture's bindless SRV slot for the shader. Returns the
+    /// fallback slot for unknown handles so a misregistered draw still
+    /// samples a valid pixel.
+    pub fn texture_srv(
+        &self,
+        handle: crate::managers::AssetTextureHandle,
+    ) -> crate::bindless::TextureHandle {
+        self.texture_manager.get_srv(handle)
+    }
+
+    /// Look up a material's SSBO slot for the shader push-constant.
+    pub fn material_slot(
+        &self,
+        handle: crate::managers::MaterialHandle,
+    ) -> Option<u32> {
+        self.material_manager.slot_of(handle)
+    }
+
+    /// Upload any pending material edits to the GPU. Call once per frame
+    /// after all `register_material` / scene-load work is done, before
+    /// any draw call.
+    pub fn flush_materials(&mut self) -> anyhow::Result<()> {
+        self.material_manager.upload(
+            &self.context,
+            self.command_pool,
+            self.context.graphics_queue,
+        )
+    }
+
+    /// Read-only access to the mesh manager (so the engine can resolve a
+    /// handle to a `vk::Buffer` etc. when it needs to bind buffers for a
+    /// draw call). The draw-call wiring itself is in commit 10.
+    pub fn mesh_manager(&self) -> &crate::managers::RenderMeshManager {
+        &self.mesh_manager
+    }
+
+    /// Mutable access to the texture manager. Needed by the engine when
+    /// it wants to write a freshly-registered texture's `vk::ImageView`
+    /// into a specific bindless slot (used in commit 9's draw path).
+    pub fn texture_manager(&self) -> &crate::managers::RenderTextureManager {
+        &self.texture_manager
+    }
+
+    /// Release every P0 scene-manager resource. Safe to call multiple
+    /// times. After this call the renderer is still valid for legacy
+    /// draw calls (the legacy pipelines and the IBL bindless table are
+    /// untouched); only the three scene managers are reset.
+    pub fn destroy_scene_managers(&mut self) {
+        self.material_manager
+            .destroy(&self.context.device);
+        self.texture_manager.destroy();
+        // mesh_manager destroys buffers in a loop using `&ash::Device`,
+        // so it must run before the context itself goes out of scope.
+        self.mesh_manager.destroy(&self.context.device);
     }
 
     /// Current swapchain extent (pixel size of the window).
