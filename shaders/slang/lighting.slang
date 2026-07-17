@@ -88,7 +88,7 @@ float geometry_smith(float3 n, float3 v, float3 l, float roughness)
 [shader("fragment")]
 float4 fragmentMain(MeshVaryings in) : SV_Target
 {
-    uint2 pixel = uint2(in.screenPos.xy);
+    uint2 pixel = uint2(in.clipPos.xy);
 
     float4 gba = gbufferA.Load(int3(pixel, 0));
     float4 gbb = gbufferB.Load(int3(pixel, 0));
@@ -107,13 +107,13 @@ float4 fragmentMain(MeshVaryings in) : SV_Target
 
     float3 v = normalize(frame.cameraPosition.xyz - world_pos);
 
-    // Sample shadow map at half resolution
-    float2 shadowUv = (float2(pixel) + 0.5) / float2(pc.shadowMapWidth, pc.shadowMapHeight);
-    float shadow = shadowMap.Sample(sampler2D(shadowUv), 0).x; // approximate
+    // Sample shadow map at half resolution (point sample via Load)
+    uint2 shadowCoord = uint2(float2(pixel) * float2(pc.shadowMapWidth, pc.shadowMapHeight) / float2(pc.screenWidth, pc.screenHeight));
+    float shadow = shadowMap.Load(int3(shadowCoord, 0)).x;
 
-    // Sample GI at half resolution
-    float2 giUv = (float2(pixel) + 0.5) / float2(pc.giMapWidth, pc.giMapHeight);
-    float4 gi = giRadiance.Sample(sampler2D(giUv), 0);
+    // Sample GI at half resolution (point sample via Load)
+    uint2 giCoord = uint2(float2(pixel) * float2(pc.giMapWidth, pc.giMapHeight) / float2(pc.screenWidth, pc.screenHeight));
+    float4 gi = giRadiance.Load(int3(giCoord, 0));
     float3 gi_radiance = gi.rgb;
 
     // --- Direct lighting (PBR) ---

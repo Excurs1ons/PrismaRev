@@ -10,7 +10,9 @@
 //   slangc shadow.slang -profile spirv_1_5 -target spirv \
 //          -entry computeMain -stage compute -o shadow.comp.spv
 
-// set 0, binding 0 — frame UBO (camera + light)
+import common;
+
+// set 0, binding 0 - frame UBO (camera + light)
 [[vk::binding(0, 0)]]
 ConstantBuffer<FrameUBO> frame;
 
@@ -93,22 +95,22 @@ void computeMain(uint3 dispatchID : SV_DispatchThreadID)
            | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER
            | RAY_FLAG_CULL_BACK_FACING_TRIANGLES> rq;
 
+    RayDesc ray;
+    ray.Origin = origin;
+    ray.Direction = dir;
+    ray.TMin = 0.01;
+    ray.TMax = pc.lightRange;
+
     rq.TraceRayInline(
         tlas,          // acceleration structure
         RAY_FLAG_NONE, // additional flags
         0xFF,          // instance mask (all)
-        RayDesc(
-            dir,                 // direction
-            0.01,                // Tmin
-            pc.lightRange,       // Tmax
-            origin               // origin
-        )
+        ray
     );
 
     rq.Proceed();
 
-    bool shadowed = rq.CommittedStatus() == COMMITTED_TRIANGLE_HIT
-                 || rq.CommittedStatus() == COMMITTED_NOT_OPAQUE;
+    bool shadowed = rq.CommittedStatus() == COMMITTED_TRIANGLE_HIT;
 
     shadowOutput[dispatchID.xy] = shadowed ? 0.0 : 1.0;
 }
