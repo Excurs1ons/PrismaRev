@@ -17,6 +17,7 @@ use winit::keyboard::KeyCode;
 use winit::raw_window_handle::HasDisplayHandle;
 use winit::window::{Window, WindowId};
 
+
 use prism_ecs::World;
 use prism_render::{DebugMode, FrameUBOData, NormalSpace, OverlayAction, Renderer, Vertex};
 
@@ -24,6 +25,20 @@ use crate::camera::OrbitCamera;
 use crate::camera_controller::OrbitCameraController;
 use crate::input::{InputState, MouseButton};
 use crate::render_system::{render_system, MeshHandle, MeshManager, PbrMaterial, Transform};
+
+/// Parse a `key = "value"` TOML line (after the `key` prefix has been stripped)
+/// and return the unquoted string value. Handles optional surrounding
+/// whitespace and single or double quotes.
+fn split_toml_string(rest: &str) -> Option<String> {
+    // `rest` is what follows `name`/`path` on the line, e.g. ` = "sponza"`.
+    // Trim, drop the `=` and surrounding whitespace, then strip one pair of
+    // matching quotes (single or double).
+    let s = rest.trim();
+    let s = s.strip_prefix('=')?.trim();
+    let s = s.strip_prefix('"').or_else(|| s.strip_prefix('\''))?;
+    let s = s.strip_suffix('"').or_else(|| s.strip_suffix('\''))?;
+    Some(s.trim().to_string())
+}
 
 /// Locate and read the equirectangular HDR environment map for image-based
 /// lighting. Scans the `assets/` directory (and exe-relative variants) for any
@@ -318,6 +333,13 @@ pub struct App {
     /// `resumed` callbacks reuse the registered resources instead of
     /// re-creating them.
     demo_objects_loaded: bool,
+    /// Asset-handle → render-handle maps built by `load_demo_scene`, plus the
+    /// resolved draw list consumed by `Renderer::draw_scene_pbr`. These let
+    /// `render_one_frame` draw the CPU-side scene without re-registering.
+    mesh_map: std::collections::HashMap<prism_asset::MeshHandle, prism_render::managers::MeshHandle>,
+    mat_map: std::collections::HashMap<prism_asset::MaterialHandle, u32>,
+    tex_map: std::collections::HashMap<prism_asset::TextureHandle, u32>,
+    draw_items: Vec<prism_render::SceneDrawItem>,
 }
 
 impl App {
@@ -338,6 +360,10 @@ impl App {
             show_ui: true,
             scene_store: prism_asset::SceneStore::new(),
             demo_objects_loaded: false,
+            mesh_map: std::collections::HashMap::new(),
+            mat_map: std::collections::HashMap::new(),
+            tex_map: std::collections::HashMap::new(),
+            draw_items: Vec::new(),
         }
     }
 
@@ -430,6 +456,109 @@ impl App {
 
         // Update camera aspect ratio to match initial window size.
         self.camera = OrbitCamera::new(1600.0 / 900.0);
+
+        // Load a glTF scene from the asset manifest (if present + resolvable)
+        // and upload it to the renderer managers. Keeps the legacy cube demo
+        // running alongside it.
+        self.load_scene_from_manifest();
+    }
+
+    /// Read `assets/scenes.toml`, pick the first scene whose `path` exists on
+    /// disk, load it via the glTF loader, and register it into the renderer.
+    /// The manifest maps logical scene names to filesystem paths (which may be
+    /// absolute dev paths), so no large asset is committed and no path is
+    /// hardcoded in code.
+    fn load_scene_from_manifest(&mut self) {
+        let candidate_dirs = [
+            std::path::PathBuf::from("assets"),
+            std::path::PathBuf::from("crates/prism-engine/assets"),
+        ];
+
+        let cwd = std::env::current_dir()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| "<unknown>".into());
+        let manifest_path = candidate_dirs
+            .iter()
+            .map(|d| d.join("scenes.toml"))
+            .find(|p| p.exists());
+        let Some(manifest_path) = manifest_path else {
+            log::info!(
+                "no assets/scenes.toml found (cwd={}); using procedural demo only",
+                cwd
+            );
+            return;
+        };
+
+        let Ok(text) = std::fs::read_to_string(&manifest_path) else {
+            log::warn!("failed to read scene manifest {:?}", manifest_path);
+            return;
+        };
+        log::info!(
+            "scene manifest: {:?} (cwd={}, {} bytes)",
+            manifest_path,
+            cwd,
+            text.len()
+        );
+
+        // Minimal TOML parse for our fixed schema:
+        //   [[scenes]]
+        //   name = "..."
+        //   path = "..."
+        // (We avoid a serde/toml dependency for this one tiny file.)
+        let manifest_dir = manifest_path.parent().map(|p| p.to_path_buf());
+        let mut current_name: Option<String> = None;
+        let mut scenes: Vec<(String, std::path::PathBuf)> = Vec::new();
+        for raw_line in text.lines() {
+            let line = raw_line.trim();
+            if line.starts_with("[[scenes]]") {
+                current_name = None;
+                continue;
+            }
+            if let Some(rest) = line.strip_prefix("name") {
+                if let Some(v) = split_toml_string(rest) {
+                    current_name = Some(v);
+                }
+            } else if let Some(rest) = line.strip_prefix("path") {
+                if let Some(v) = split_toml_string(rest) {
+                    let path = std::path::PathBuf::from(&v);
+                    // Resolve relative paths against the manifest directory.
+                    let path = if path.is_absolute() {
+                        path
+                    } else {
+                        manifest_dir
+                            .as_ref()
+                            .map(|d| d.join(&path))
+                            .unwrap_or(path)
+                    };
+                    let name = current_name.clone().unwrap_or_else(|| "unnamed".into());
+                    scenes.push((name, path));
+                }
+            }
+        }
+
+        log::info!("scene manifest parsed: {} scene(s) listed", scenes.len());
+
+        for (name, path) in scenes {
+            let exists = path.exists();
+            log::info!(
+                "scene '{}' -> {:?} (exists={})",
+                name,
+                path,
+                exists
+            );
+            if !exists {
+                continue;
+            }
+            log::info!("loading scene '{}' from {:?}", name, path);
+            if let Some(scene) = self.try_load_gltf(&path) {
+                self.load_demo_scene(scene);
+                // Frame the camera for an architectural interior (Sponza-scale).
+                self.camera.target = [0.0, 2.5, 0.0];
+                self.camera.distance = 18.0;
+                return;
+            }
+        }
+        log::info!("no resolvable scene in manifest; using procedural demo only");
     }
 
     // ---- P0: scene loading (commit 10) ---------------------------------
@@ -455,80 +584,132 @@ impl App {
             log::debug!("App::load_demo_scene: no renderer yet, deferring");
             return;
         };
+        let t_total = std::time::Instant::now();
 
-        // 1. Register every texture into the bindless SRV table.
+        // 1. Upload every texture to the bindless SRV table. Record the
+        // asset texture handle -> bindless SRV slot so materials can resolve
+        // their texture references below.
+        //
+        // Mesh + texture uploads are batched into a single `BatchUploader`
+        // (one command buffer, one submit, one fence wait) instead of one
+        // submit+wait per resource. This is the dominant load-time win for
+        // Sponza (~880 round-trips -> 1).
+        let ctx = renderer.context_arc();
+        let mut uploader = match prism_render::batch::BatchUploader::new(&ctx, renderer.command_pool()) {
+            Ok(u) => u,
+            Err(e) => {
+                log::error!("load_demo_scene: BatchUploader::new failed: {e}");
+                return;
+            }
+        };
+        let t_tex = std::time::Instant::now();
         let texture_data: Vec<_> = self
             .scene_store
             .textures()
             .map(|(h, data)| (h, data.clone()))
             .collect();
+        let tex_count = texture_data.len();
         for (asset_h, data) in texture_data {
             let input = prism_render::managers::TextureUploadInput {
                 width: data.width,
                 height: data.height,
                 format: match data.format {
-                    prism_asset::TexFormat::Rgba8 => {
-                        prism_render::managers::TextureFormat::Rgba8
-                    }
+                    prism_asset::TexFormat::Rgba8 => prism_render::managers::TextureFormat::Rgba8,
                     prism_asset::TexFormat::Rgba16f => {
-                        log::warn!("Rgba16f texture not yet supported by render manager; skipping");
+                        log::warn!("Rgba16f texture not yet supported; skipping {:?}", asset_h);
                         continue;
                     }
                 },
                 pixels: data.pixels.clone(),
             };
-            // P0: only the slot is reserved; the renderer will wire
-            // the actual vk::ImageView in commit 11. The handle is
-            // not used until then, but the reservation is enough to
-            // assert capacity and surface pixel-buffer errors early.
-            if let Err(e) = renderer.register_texture(&input) {
-                log::warn!("register_texture failed: {e}");
+            match renderer.register_texture_into(&mut uploader, &input) {
+                Ok(handle) => {
+                    let slot = renderer.texture_srv(handle).0;
+                    self.tex_map.insert(asset_h, slot);
+                }
+                Err(e) => log::warn!("register_texture failed: {e}"),
             }
-            // Keep the asset handle alive to avoid a stale-borrow
-            // warning; the asset handle is the input the material
-            // step below uses to resolve texture references.
-            let _ = asset_h;
         }
+        log::info!("texture upload: {} textures, {}ms", tex_count, t_tex.elapsed().as_millis());
 
-        // 2. Register every material with placeholder bindless slots
-        // (u32::MAX = "no texture"). Commit 11 fills the slots in
-        // once texture views are created.
+        // 2. Register every material with real bindless texture slots.
+        // `albedo_tex` etc. are `Option<asset::TextureHandle>` → resolved to a
+        // bindless SRV slot, or `None` when the material has no such map.
+        let t_mat = std::time::Instant::now();
         let material_data: Vec<_> = self
             .scene_store
             .materials()
             .map(|(h, data)| (h, data.clone()))
             .collect();
+        let mat_count = material_data.len();
+        let mut mats_with_albedo = 0u32;
+        let mut mats_with_normal = 0u32;
         for (asset_h, data) in material_data {
+            let resolve = |opt: Option<prism_asset::TextureHandle>| -> Option<u32> {
+                opt.and_then(|h| self.tex_map.get(&h).copied())
+            };
+            let albedo_tex = resolve(data.albedo_tex);
+            let normal_tex = resolve(data.normal_tex);
+            if albedo_tex.is_some() {
+                mats_with_albedo += 1;
+            }
+            if normal_tex.is_some() {
+                mats_with_normal += 1;
+            }
+            // Log the first few materials in detail so we can see real base
+            // colors + resolved texture slots (catches "all textures unbound"
+            // or "base color is near-black" at a glance).
+            if self.mat_map.len() < 4 {
+                log::info!(
+                    "material[{}] {:?}: base_color={:?} metallic={:.3} roughness={:.3} \
+                     albedo_tex={:?} normal_tex={:?} mr_tex={:?} emissive_tex={:?}",
+                    self.mat_map.len(),
+                    data.name,
+                    data.base_color,
+                    data.metallic,
+                    data.roughness,
+                    albedo_tex,
+                    normal_tex,
+                    resolve(data.metallic_roughness_tex),
+                    resolve(data.emissive_tex),
+                );
+            }
             let input = prism_render::managers::MaterialUploadInput {
                 base_color: data.base_color,
                 metallic: data.metallic,
                 roughness: data.roughness,
                 emissive: data.emissive,
-                albedo_tex: data
-                    .albedo_tex
-                    .and_then(|h| self.scene_store.texture(h).map(|_| u32::MAX)),
-                normal_tex: data
-                    .normal_tex
-                    .and_then(|h| self.scene_store.texture(h).map(|_| u32::MAX)),
-                metallic_roughness_tex: data
-                    .metallic_roughness_tex
-                    .and_then(|h| self.scene_store.texture(h).map(|_| u32::MAX)),
-                emissive_tex: data
-                    .emissive_tex
-                    .and_then(|h| self.scene_store.texture(h).map(|_| u32::MAX)),
+                albedo_tex,
+                normal_tex,
+                metallic_roughness_tex: resolve(data.metallic_roughness_tex),
+                emissive_tex: resolve(data.emissive_tex),
             };
-            if let Err(e) = renderer.register_material(input) {
-                log::warn!("register_material failed: {e}");
+            match renderer.register_material(input) {
+                Ok(handle) => {
+                    if let Some(slot) = renderer.material_slot(handle) {
+                        self.mat_map.insert(asset_h, slot);
+                    }
+                }
+                Err(e) => log::warn!("register_material failed: {e}"),
             }
-            let _ = asset_h;
         }
+        log::info!(
+            "material register: {} materials ({} with albedo tex, {} with normal tex), {}ms",
+            mat_count,
+            mats_with_albedo,
+            mats_with_normal,
+            t_mat.elapsed().as_millis()
+        );
 
-        // 3. Register every mesh (uploads vertex + index buffers).
+        // 3. Upload every mesh (vertex + index buffers) and record the
+        // asset mesh handle → render mesh handle.
+        let t_mesh = std::time::Instant::now();
         let mesh_data: Vec<_> = self
             .scene_store
             .meshes()
             .map(|(h, data)| (h, data.clone()))
             .collect();
+        let mesh_count = mesh_data.len();
         for (asset_h, data) in mesh_data {
             let input = prism_render::managers::MeshUploadInput {
                 positions: data.positions.clone(),
@@ -538,27 +719,68 @@ impl App {
                 tangents: data.tangents.clone(),
                 indices: data.indices.clone(),
             };
-            if let Err(e) = renderer.register_mesh(&input) {
-                log::warn!("register_mesh failed: {e}");
+            match renderer.register_mesh_into(&mut uploader, &input) {
+                Ok(handle) => {
+                    self.mesh_map.insert(asset_h, handle);
+                }
+                Err(e) => log::warn!("register_mesh failed: {e}"),
             }
-            let _ = asset_h;
         }
+        log::info!("mesh upload: {} meshes, {}ms", mesh_count, t_mesh.elapsed().as_millis());
 
-        // 4. Flush any pending material edits to the GPU.
+        // Flush the entire batched upload (all textures + all meshes) with a
+        // single command-buffer submit + fence wait. This replaces ~880
+        // per-resource submit+wait round-trips with one.
+        let t_flush_upload = std::time::Instant::now();
+        if let Err(e) = uploader.finish(renderer.graphics_queue()) {
+            log::error!("load_demo_scene: BatchUploader::finish failed: {e}");
+        }
+        log::info!(
+            "batch upload submit+wait: {}ms",
+            t_flush_upload.elapsed().as_millis()
+        );
+
+        // 4. Flush material SSBO edits to the GPU (must run before draws).
+        let t_flush = std::time::Instant::now();
         if let Err(e) = renderer.flush_materials() {
             log::warn!("flush_materials failed: {e}");
         }
+        log::info!("flush materials: {}ms", t_flush.elapsed().as_millis());
 
-        // The unused `scene` parameter is kept for future use (e.g. to
-        // bind the scene to specific instance groups).
+        // 5. Build the resolved draw list from scene instances. Each instance
+        // references an asset mesh + material; both maps resolve them to the
+        // render-side handles the bindless pipeline needs.
+        let t_draw = std::time::Instant::now();
+        self.draw_items.clear();
+        for (_inst_h, inst) in self.scene_store.instances() {
+            let Some(&mesh) = self.mesh_map.get(&inst.mesh) else {
+                log::warn!("instance references unknown mesh; skipping");
+                continue;
+            };
+            let Some(&material_slot) = self.mat_map.get(&inst.material) else {
+                log::warn!("instance references unknown material; skipping");
+                continue;
+            };
+            self.draw_items.push(prism_render::SceneDrawItem {
+                mesh,
+                material_slot,
+                model: inst.transform,
+            });
+        }
+        log::info!("build draw list: {}ms", t_draw.elapsed().as_millis());
+
+        // The `scene` argument is retained for API symmetry; all instances in
+        // it are already reflected into `draw_items` above.
         let _ = scene;
         self.demo_objects_loaded = true;
         log::info!(
-            "App::load_demo_scene: registered {} mesh(es), {} material(s), {} texture(s)",
+            "App::load_demo_scene: registered {} mesh(es), {} material(s), {} texture(s); {} draw items",
             self.scene_store.meshes().count(),
             self.scene_store.materials().count(),
             self.scene_store.textures().count(),
+            self.draw_items.len(),
         );
+        log::info!("load_demo_scene total: {}ms", t_total.elapsed().as_millis());
     }
 
     /// Convenience: try to load a glTF scene from disk. On success the
@@ -568,13 +790,18 @@ impl App {
     /// fails — both are non-fatal so the demo can fall back to a
     /// procedural scene.
     pub fn try_load_gltf(&mut self, path: &std::path::Path) -> Option<prism_asset::SceneHandle> {
+        let t = std::time::Instant::now();
         match self.scene_store.load_gltf(path) {
             Ok(h) => {
+                log::info!("gltf parse+import: {}ms", t.elapsed().as_millis());
                 log::info!("App::try_load_gltf: loaded {}", path.display());
                 Some(h)
             }
             Err(e) => {
-                log::warn!("App::try_load_gltf: {} (continuing with procedural fallback)", e);
+                log::warn!(
+                    "App::try_load_gltf: {} (continuing with procedural fallback)\n  full error: {e:#}",
+                    path.display(),
+                );
                 None
             }
         }
@@ -667,7 +894,7 @@ impl ApplicationHandler for App {
                 {
                     let pos = self.input_state.mouse_position();
                     let ext = self.renderer.as_ref().map(|r| r.extent());
-                    log::info!(
+                    log::trace!(
                         "MOUSE_DEBUG pos=({:.1},{:.1}) extent={:?}",
                         pos[0],
                         pos[1],
@@ -866,9 +1093,9 @@ impl App {
             light_dir[0] / light_dir_len,
             light_dir[1] / light_dir_len,
             light_dir[2] / light_dir_len,
-            1.0, // intensity
+            1.5, // intensity (direct light radiance multiplier)
         ];
-        let light_color = [1.0, 1.0, 1.0, 0.1]; // white, ambient factor 0.1
+        let light_color = [1.0, 1.0, 1.0, 1.0]; // white; .w = IBL ambient factor
 
         let light_data = FrameUBOData {
             view_proj: [[0.0; 4]; 4],  // placeholder, render_system fills it
@@ -878,7 +1105,16 @@ impl App {
             view: [[0.0; 4]; 4], // placeholder, render_system fills it
         };
 
-        let clear_color = [0.05, 0.05, 0.1, 1.0]; // dark blue-gray
+        // Once a glTF scene has taken over, hide the procedural demo and use a
+        // neutral clear color so we can tell whether the scene is actually
+        // drawing (the old dark blue-gray looked identical to "nothing drew").
+        let scene_active = !self.draw_items.is_empty();
+        let draw_demo = !scene_active;
+        let clear_color = if scene_active {
+            [0.5, 0.5, 0.5, 1.0] // neutral gray: any unlit region reads as gray
+        } else {
+            [0.05, 0.05, 0.1, 1.0] // dark blue-gray for the demo
+        };
 
         let (renderer, world, meshes) = match (
             self.renderer.as_mut(),
@@ -899,6 +1135,8 @@ impl App {
             self.debug_mode as u32,
             self.normal_space as u32,
             self.show_ui,
+            &self.draw_items,
+            draw_demo,
         );
     }
 }

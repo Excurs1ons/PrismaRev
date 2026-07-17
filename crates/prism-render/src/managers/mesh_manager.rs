@@ -129,6 +129,28 @@ impl RenderMeshManager {
         Ok(handle)
     }
 
+    /// Like [`register`](Self::register) but records into a shared
+    /// [`BatchUploader`](crate::batch::BatchUploader) so many meshes can be
+    /// uploaded with a single submit + fence. The caller must finish the
+    /// uploader before drawing.
+    pub fn register_into(
+        &mut self,
+        context: &VulkanContext,
+        uploader: &mut crate::batch::BatchUploader<'_>,
+        input: &MeshUploadInput,
+    ) -> anyhow::Result<MeshHandle> {
+        let vertices = build_vertices(input);
+        let indices_opt: Option<&[u32]> = if input.indices.is_empty() {
+            None
+        } else {
+            Some(&input.indices)
+        };
+        let mesh = Mesh::new_into(context, uploader, &vertices, indices_opt)
+            .context("RenderMeshManager::register_into: Mesh::new_into failed")?;
+        let handle = self.meshes.insert(UploadedMesh { mesh });
+        Ok(handle)
+    }
+
     /// Read-only access to a registered mesh.
     pub fn get(&self, handle: MeshHandle) -> Option<&UploadedMesh> {
         self.meshes.get(handle)

@@ -1,0 +1,21 @@
+# Virtual scene-asset manifest.
+#
+# Maps a logical scene name to a filesystem path of a glTF model. The engine
+# loads the FIRST entry whose `path` exists on disk, so you can list several
+# (e.g. a portable relative path first, then an absolute dev path) and only
+# the available one is used. Edit `path` freely — it is never hardcoded in
+# code and the model itself is never committed (see .gitignore: assets/scenes/*).
+#
+# Sponza (NewSponza_Main by EPIC/arturisyty, CC0) — glTF 2.0 with external
+# .bin + 137 PNG textures. The glTF references textures via relative
+# `textures/...` paths resolved next to the .gltf, so the directory layout
+# must be preserved.
+
+[[scenes]]
+name = "sponza"
+path = "D:/Download/main_sponza/main_sponza/NewSponza_Main_glTF_003.gltf"
+
+# Example of a portable fallback (uncomment / adjust as needed):
+# [[scenes]]
+# name = "sponza-local"
+# path = "assets/scenes/sponza/NewSponza_Main_glTF_003.gltf"

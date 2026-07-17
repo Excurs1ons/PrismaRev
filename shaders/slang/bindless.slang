@@ -41,9 +41,17 @@ SamplerState globalSamplers[];
 
 // ---- set 1, binding 1 — bindless SAMPLED_IMAGE array -----------------
 // Slot 0 is the magenta fallback; the rest hold user textures (albedo,
-// normal, metallic-roughness, emissive, IBL cubemaps, etc.).
+// normal, metallic-roughness, emissive, etc.).
 [[vk::binding(1, 1)]]
 Texture2D bindlessSrvs[];
+
+// ---- set 2, binding 0 - IBL environment cubemap ----------------------
+// Combined image sampler pointing at the engine's environment cubemap
+// (`IblResources` in Rust). Shared with the legacy PBR path, which binds
+// the same descriptor set at set 1. Here it lives at set 2 so the bindless
+// table (samplers + 2D SRVs) can stay at set 1 untouched.
+[[vk::binding(0, 2)]]
+SamplerCube envCube;
 
 // ---- push constants -------------------------------------------------
 // Byte layout mirrors Rust `PbrBindlessPushConstants` (96 bytes):
@@ -72,16 +80,21 @@ static const uint SAMPLER_SHADOW       = 3u;
 // into a descriptor array can differ across a quad/subgroup. Even when
 // the handle is uniform here, marking it is safe and future-proofs
 // per-material handles.
+//
+// IBL: the engine's environment cubemap is bound at set 2 (SamplerCube
+// envCube), shared with the legacy PBR path. Diffuse irradiance is sampled
+// at a fixed mid mip (approximating a convolved irradiance map), specular
+// is sampled at a roughness-driven mip using the cubemap's mip chain as a
+// cheap prefiltered-env approximation. `pc.env_handle` is kept in the push
+// constant for a future bindless-cube-array path but is unused here.
 float3 sample_irradiance(float3 n)
 {
-    return bindlessSrvs[NonUniformResourceIndex(pc.env_handle)]
-        .SampleLevel(globalSamplers[NonUniformResourceIndex(SAMPLER_LINEAR_CLAMP)], n, 4.0).rgb;
+    return envCube.SampleLevel(n, 4.0).rgb;
 }
 
 float3 sample_specular(float3 r, float roughness)
 {
-    return bindlessSrvs[NonUniformResourceIndex(pc.env_handle)]
-        .SampleLevel(globalSamplers[NonUniformResourceIndex(SAMPLER_LINEAR_CLAMP)], r, roughness * IBL_MAX_LOD).rgb;
+    return envCube.SampleLevel(r, roughness * IBL_MAX_LOD).rgb;
 }
 
 float3 fresnel_schlick(float cos_theta, float3 f0)
@@ -135,11 +148,18 @@ float4 fragmentMain(MeshVaryings in) : SV_Target
     float3 albedo;
     if (mat.albedo_idx != 0xFFFFFFFFu)
     {
-        float3 sampled = bindlessSrvs[NonUniformResourceIndex(mat.albedo_idx)]
-            .Sample(globalSamplers[NonUniformResourceIndex(SAMPLER_LINEAR_WRAP)], in.uv).rgb;
+        float4 sampled = bindlessSrvs[NonUniformResourceIndex(mat.albedo_idx)]
+            .Sample(globalSamplers[NonUniformResourceIndex(SAMPLER_LINEAR_WRAP)], in.uv);
+        // Alpha-test for cut-out foliage / alpha-masked geometry (Sponza
+        // plants): discard texels below the threshold so they don't render
+        // as opaque quads. Opaque materials have alpha = 1 and pass through.
+        if (sampled.a < 0.5)
+        {
+            discard;
+        }
         // Approximate sRGB -> linear (gamma 2.2 is fine for the
         // high-energy pre-tonemap range; the post pass tone-maps anyway).
-        albedo = pow(sampled, float3(2.2));
+        albedo = pow(sampled.rgb, float3(2.2));
     }
     else
     {
@@ -208,15 +228,26 @@ float4 fragmentMain(MeshVaryings in) : SV_Target
     float3 f_ibl  = fresnel_schlick_roughness(max(dot(n, v), 0.0), f0, roughness);
     float3 kd_ibl = (float3(1.0) - f_ibl) * (1.0 - metallic);
 
-    float3 irradiance  = sample_irradiance(n);
-    float3 diffuse_ibl = irradiance * albedo;
-
-    float3 prefiltered  = sample_specular(r, roughness);
-    float2 brdf         = float2(1.0 - roughness, roughness);
-    float3 specular_ibl = prefiltered * (f_ibl * brdf.x + brdf.y);
-
+    // Image-based lighting. The env cubemap is NOT pre-convolved into a
+    // diffuse irradiance map, so sampling it raw tints everything with the
+    // sky color (blue). Until a real irradiance convolution is added, use a
+    // neutral hemispheric ambient bright enough to read albedo indoors:
+    // top-facing normals get a brighter sky term, bottom-facing a ground term.
+    // Specular IBL uses the same neutral constant (no env-cube sample) so no
+    // blue reflection splashes appear on rough surfaces.
     float  ambient = frame.lightColor.w;
-    float3 ibl     = (kd_ibl * diffuse_ibl + specular_ibl) * ambient;
+    float3 up       = float3(0.0, 1.0, 0.0);
+    float  hemi     = dot(n, up) * 0.5 + 0.5;          // 0..1
+    float3 sky_term = float3(0.50, 0.50, 0.50);
+    float3 gnd_term = float3(0.25, 0.25, 0.25);
+    float3 irradiance = lerp(gnd_term, sky_term, hemi);
+    float3 diffuse_ibl = irradiance * albedo;
+    // Specular IBL: neutral constant reflection scaled by roughness. No
+    // env-cube sample (would tint blue). Fresnel-roughness still gives
+    // metals/grazing a brighter sheen.
+    float2 brdf         = float2(1.0 - roughness, roughness);
+    float3 specular_ibl = irradiance * (f_ibl * brdf.x + brdf.y);
+    float3 ibl = (kd_ibl * diffuse_ibl + specular_ibl) * ambient;
 
     // Emissive: texture (multiplied by per-material intensity) or scalar.
     float3 emissive = mat.metallic_roughness_emissive.zzz;
@@ -229,7 +260,11 @@ float4 fragmentMain(MeshVaryings in) : SV_Target
 
     float3 color = direct + ibl + emissive;
 
-    // Debug modes reuse the same fragment path; we report the final
-    // tonemapped image as the "Final" view.
-    return float4(aces(color), 1.0);
+    // Reinhard tonemap (more predictable than ACES for tuning - no white
+    // crush in the mid range). Exposure scales the HDR color before the
+    // curve; 1.0 leaves it as-is.
+    float exposure = 1.2;
+    color = color * exposure;
+    color = color / (color + 1.0);
+    return float4(color, 1.0);
 }

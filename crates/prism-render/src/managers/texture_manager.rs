@@ -24,9 +24,12 @@
 //! one call), using the existing `buffer::create_buffer` + a small
 //! one-shot command buffer helper.
 
+use anyhow::Context as _;
+use ash::vk;
 use slotmap::{new_key_type, SlotMap};
 
 use crate::bindless::{BindlessTextureTable, TextureHandle};
+use crate::buffer::create_and_upload_image;
 use crate::context::VulkanContext;
 
 // Local handle. The engine layer translates `prism_asset::TextureHandle`
@@ -68,14 +71,20 @@ impl TextureFormat {
 }
 
 /// A handle into the texture manager plus the bindless SRV slot assigned
-/// to it. Constructed by the renderer after the underlying Vulkan
-/// resources have been created.
+/// to it. The GPU image / memory / view are owned by the manager and freed
+/// in `destroy`.
 pub struct UploadedTexture {
     pub srv: TextureHandle,
     /// Width/height are stored here so the renderer can build the image
     /// view info without keeping the input around.
     pub width: u32,
     pub height: u32,
+    pub mip_levels: u32,
+    /// Owned GPU objects. Kept so `destroy` can release them; the bindless
+    /// SRV descriptor merely references `view`.
+    pub image: vk::Image,
+    pub memory: vk::DeviceMemory,
+    pub view: vk::ImageView,
 }
 
 /// Manager of GPU textures. Owns the [`BindlessTextureTable`] and the
@@ -103,27 +112,49 @@ impl RenderTextureManager {
     /// The actual Vulkan image + view for the fallback is a real
     /// 1×1 R8G8B8A8_UNORM image, so a missing-texture shader branch
     /// still samples a sensible pixel.
-    pub fn new(context: &VulkanContext, user_capacity: u32) -> anyhow::Result<Self> {
+    pub fn new(
+        context: &VulkanContext,
+        command_pool: vk::CommandPool,
+        graphics_queue: vk::Queue,
+        user_capacity: u32,
+    ) -> anyhow::Result<Self> {
         let total = user_capacity + 1;
-        let bindless = BindlessTextureTable::new(&context.device, total)
+        let mut bindless = BindlessTextureTable::new(&context.device, total)
             .map_err(|e| anyhow::anyhow!("RenderTextureManager::new: bindless: {e}"))?;
 
-        // The fallback uses the same bindless slot the bindless table
-        // will hand out for the first `register` call. We hand-write
-        // slot 0 with a 1×1 magenta image view that the renderer
-        // supplies in commit 9; for now, we use the bindless default
-        // (which is an unbound slot — the bindless table's `set` field
-        // is allocated but the first slot is uninitialized, so a
-        // shader sampling it must check for INVALID).
-        //
-        // The current bindless API does not let us write to slot 0 from
-        // outside `register`, so commit 3 only reserves the slot. The
-        // actual magenta-fallback wiring is finalized in commit 9.
+        // Magenta fallback: 1×1 opaque magenta (R=1,G=0,B=1,A=1) in the
+        // engine's linear working space (the shader applies sRGB→linear on
+        // sampled albedo; the fallback is only a "missing texture" marker so
+        // its exact color space is irrelevant). Written into bindless slot 0.
+        let magenta = [255u8, 0, 255, 255];
+        let (fb_image, fb_memory, fb_view) = unsafe {
+            create_and_upload_image(context, command_pool, graphics_queue, 1, 1, &magenta, 1)
+        }
+        .context("RenderTextureManager::new: create magenta fallback")?;
+        bindless
+            .register_with_handle(0, fb_view)
+            .context("RenderTextureManager::new: register fallback in slot 0")?;
         let fallback_srv = TextureHandle(0);
+        // Keep the fallback GPU objects alive for the manager's lifetime.
+        let fallback_tex = UploadedTexture {
+            srv: fallback_srv,
+            width: 1,
+            height: 1,
+            mip_levels: 1,
+            image: fb_image,
+            memory: fb_memory,
+            view: fb_view,
+        };
+
+        let mut textures = SlotMap::with_key();
+        // Store the fallback under a dedicated key so `destroy` frees it.
+        // Its `srv` is fixed at slot 0 (register_with_handle advanced the
+        // table's `next` past 0), so user textures start at slot 1.
+        textures.insert(fallback_tex);
 
         Ok(Self {
             bindless,
-            textures: SlotMap::with_key(),
+            textures,
             fallback_srv,
             user_capacity,
             destroyed: false,
@@ -147,15 +178,16 @@ impl RenderTextureManager {
         &mut self.bindless
     }
 
-    /// Validate a CPU-side texture buffer and return the metadata the
-    /// renderer needs to upload it. The handle is reserved in the
-    /// slotmap; the actual GPU upload happens in commit 9 via the
-    /// `Renderer` which has access to a command pool and graphics queue.
-    ///
-    /// In P0 the body is intentionally minimal: it confirms the input
-    /// is well-formed and returns a handle. A later commit fills in
-    /// the image/view creation.
-    pub fn reserve(&mut self, input: &TextureUploadInput) -> anyhow::Result<AssetTextureHandle> {
+    /// Upload a CPU-side texture to a device-local image, register its view
+    /// in the bindless SRV table, and return a handle. The handle maps to
+    /// the bindless slot via [`get_srv`](Self::get_srv).
+    pub fn reserve(
+        &mut self,
+        context: &VulkanContext,
+        command_pool: vk::CommandPool,
+        graphics_queue: vk::Queue,
+        input: &TextureUploadInput,
+    ) -> anyhow::Result<AssetTextureHandle> {
         let expected =
             (input.width as usize) * (input.height as usize) * input.format.bytes_per_pixel();
         if input.pixels.len() != expected {
@@ -167,22 +199,89 @@ impl RenderTextureManager {
                 input.format.bytes_per_pixel()
             );
         }
-        if self.textures.len() as u32 >= self.user_capacity {
+        if self.textures.len() as u32 > self.user_capacity {
             anyhow::bail!(
                 "RenderTextureManager: user capacity {} exhausted",
                 self.user_capacity
             );
         }
-        // Slot 0 is the fallback. Real textures get slot 1, 2, ...
-        let srv_slot = (self.textures.len() as u32) + 1;
-        if srv_slot >= self.bindless.capacity() {
-            anyhow::bail!("RenderTextureManager: bindless slot table exhausted");
+
+        // Upload pixels → VkImage + VkImageView (transferDst + SAMPLED).
+        let mip_levels = if input.width <= 1 || input.height <= 1 {
+            1
+        } else {
+            (input.width.max(input.height) as f32).log2().floor() as u32 + 1
+        };
+        let (image, memory, view) = unsafe {
+            create_and_upload_image(context, command_pool, graphics_queue, input.width, input.height, &input.pixels, mip_levels)
         }
-        let srv = TextureHandle(srv_slot);
+        .context("RenderTextureManager::reserve: upload texture")?;
+
+        // Reserve the next bindless SRV slot (slot 0 is the magenta fallback,
+        // already taken, so this returns 1, 2, ...).
+        let srv = self
+            .bindless
+            .register(view)
+            .context("RenderTextureManager::reserve: register bindless SRV")?;
+
         let handle = self.textures.insert(UploadedTexture {
             srv,
             width: input.width,
             height: input.height,
+            mip_levels,
+            image,
+            memory,
+            view,
+        });
+        Ok(handle)
+    }
+
+    /// Like [`reserve`](Self::reserve) but records the image upload into a
+    /// shared [`BatchUploader`](crate::batch::BatchUploader) so many textures
+    /// can be uploaded with a single submit + fence. The caller must finish
+    /// the uploader before sampling the textures.
+    pub fn reserve_into(
+        &mut self,
+        _context: &VulkanContext,
+        uploader: &mut crate::batch::BatchUploader<'_>,
+        input: &TextureUploadInput,
+    ) -> anyhow::Result<AssetTextureHandle> {
+        let expected =
+            (input.width as usize) * (input.height as usize) * input.format.bytes_per_pixel();
+        if input.pixels.len() != expected {
+            anyhow::bail!(
+                "TextureUploadInput: pixel buffer size {} does not match {}x{}*{}",
+                input.pixels.len(),
+                input.width,
+                input.height,
+                input.format.bytes_per_pixel()
+            );
+        }
+        if self.textures.len() as u32 > self.user_capacity {
+            anyhow::bail!(
+                "RenderTextureManager: user capacity {} exhausted",
+                self.user_capacity
+            );
+        }
+
+        let mip_levels = crate::batch::mip_level_count(input.width, input.height);
+        let (image, memory, view) = uploader
+            .upload_image(input.width, input.height, mip_levels, &input.pixels)
+            .context("RenderTextureManager::reserve_into: upload texture")?;
+
+        let srv = self
+            .bindless
+            .register(view)
+            .context("RenderTextureManager::reserve_into: register bindless SRV")?;
+
+        let handle = self.textures.insert(UploadedTexture {
+            srv,
+            width: input.width,
+            height: input.height,
+            mip_levels,
+            image,
+            memory,
+            view,
         });
         Ok(handle)
     }
@@ -197,17 +296,29 @@ impl RenderTextureManager {
             .unwrap_or(self.fallback_srv)
     }
 
-    /// Drop a single entry. The underlying GPU view/image is released by
-    /// the renderer (which owns them in commit 9).
-    pub fn unregister(&mut self, handle: AssetTextureHandle) {
-        self.textures.remove(handle);
+    /// Drop a single entry and release its GPU image/memory/view.
+    pub fn unregister(&mut self, handle: AssetTextureHandle, device: &ash::Device) {
+        if let Some(tex) = self.textures.remove(handle) {
+            unsafe {
+                device.destroy_image_view(tex.view, None);
+                device.destroy_image(tex.image, None);
+                device.free_memory(tex.memory, None);
+            }
+        }
     }
 
-    /// Release every entry. The underlying bindless table is dropped
-    /// when this manager is dropped, which destroys the descriptor pool,
-    /// set, layout, and 4 samplers.
+    /// Release every entry (GPU image/memory/view + bindless slot). The
+    /// underlying bindless table is dropped when this manager is dropped,
+    /// which destroys the descriptor pool, set, layout, and 4 samplers.
     pub fn destroy(&mut self) {
-        self.textures.clear();
+        let device = self.bindless.device();
+        for (_, tex) in self.textures.drain() {
+            unsafe {
+                device.destroy_image_view(tex.view, None);
+                device.destroy_image(tex.image, None);
+                device.free_memory(tex.memory, None);
+            }
+        }
         self.destroyed = true;
     }
 

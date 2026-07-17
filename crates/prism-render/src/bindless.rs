@@ -69,6 +69,7 @@ impl SamplerType {
                 address_mode_u: vk::SamplerAddressMode::REPEAT,
                 address_mode_v: vk::SamplerAddressMode::REPEAT,
                 address_mode_w: vk::SamplerAddressMode::REPEAT,
+                max_lod: vk::LOD_CLAMP_NONE,
                 ..Default::default()
             },
             SamplerType::LinearClamp => vk::SamplerCreateInfo {
@@ -78,6 +79,7 @@ impl SamplerType {
                 address_mode_u: vk::SamplerAddressMode::CLAMP_TO_EDGE,
                 address_mode_v: vk::SamplerAddressMode::CLAMP_TO_EDGE,
                 address_mode_w: vk::SamplerAddressMode::CLAMP_TO_EDGE,
+                max_lod: vk::LOD_CLAMP_NONE,
                 ..Default::default()
             },
             SamplerType::Nearest => vk::SamplerCreateInfo {
@@ -336,6 +338,13 @@ impl BindlessTextureTable {
     /// Useful for code paths that still need a combined descriptor.
     pub fn sampler(&self, ty: SamplerType) -> vk::Sampler {
         self.samplers[ty as usize]
+    }
+
+    /// Borrow the `ash::Device` this table was created with. Used by owners
+    /// that need to free GPU resources (images/views) referenced by the
+    /// table's descriptors.
+    pub fn device(&self) -> &ash::Device {
+        &self.device
     }
 
     /// Number of registered texture views.

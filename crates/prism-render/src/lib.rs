@@ -21,6 +21,7 @@
 //! | [`passes`] | Individual render-pass implementations |
 
 pub mod acceleration_structure;
+pub mod batch;
 pub mod bindless;
 pub mod buffer;
 pub mod capabilities;
@@ -55,6 +56,8 @@ pub mod deprecated;
 
 #[cfg(feature = "legacy_renderer")]
 pub use deprecated::renderer_legacy::Renderer;
+#[cfg(feature = "legacy_renderer")]
+pub use deprecated::renderer_legacy::SceneDrawItem;
 
 pub use buffer::create_buffer;
 pub use capabilities::RayTracingCaps;

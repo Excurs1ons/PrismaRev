@@ -56,6 +56,7 @@ anyhow = "1"
 gltf = "1.4"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 slotmap = "1.0"
+rayon = "1.10"
 
 [profile.dev]
 opt-level = 1          # ash/Vulkan has a lot of codegen; light opt keeps debug builds usable

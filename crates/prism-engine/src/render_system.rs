@@ -12,7 +12,7 @@
 //! | [`MeshHandle`] | Index into an externally-owned mesh list |
 
 use prism_ecs::World;
-use prism_render::{FrameUBOData, Mesh, Renderer};
+use prism_render::{FrameUBOData, Mesh, Renderer, SceneDrawItem};
 
 use crate::camera::OrbitCamera;
 
@@ -165,11 +165,14 @@ impl Default for MeshManager {
 ///
 /// 1. Calls [`Renderer::begin_frame`] to acquire and begin the render pass.
 /// 2. Uploads frame UBO data (view-proj, camera pos, light).
-/// 3. Queries the ECS `World` for entities with [`Transform`] + [`MeshHandle`].
-/// 4. Calls [`Renderer::draw_mesh`] for each entity (with its model matrix).
+/// 3. When `draw_demo` is set, queries the ECS `World` for entities with
+///    [`Transform`] + [`MeshHandle`] and draws each via [`Renderer::draw_mesh`].
+/// 4. Draws the glTF scene (`scene_draw_items`) via the bindless PBR path.
 /// 5. Calls [`Renderer::end_frame`] to submit and present.
 ///
 /// `meshes` owns the GPU meshes indexed by the entities' [`MeshHandle`].
+/// `draw_demo` is false once a glTF scene has loaded, so the procedural demo
+/// and the loaded scene never overlap.
 #[allow(clippy::too_many_arguments)]
 pub fn render_system(
     renderer: &mut Renderer,
@@ -181,6 +184,8 @@ pub fn render_system(
     debug_mode: u32,
     normal_space: u32,
     show_ui: bool,
+    scene_draw_items: &[SceneDrawItem],
+    draw_demo: bool,
 ) {
     if let Err(e) = renderer.begin_frame(clear_color) {
         log::error!("renderer.begin_frame failed: {e}");
@@ -208,39 +213,49 @@ pub fn render_system(
         log::error!("renderer.set_frame_data failed: {e}");
     }
 
-    // Draw ECS entities with Mesh + Transform.
+    // Draw ECS entities with Mesh + Transform (procedural demo). Skipped once
+    // a glTF scene has taken over the viewport so the two never overlap.
     let mut draw_count = 0;
-    for (entity, handle, transform) in world.query2::<MeshHandle, Transform>() {
-        let Some(mesh) = meshes.get(*handle) else {
-            log::warn!(
-                "entity {entity:?} references invalid mesh handle {}",
-                handle.0
+    if draw_demo {
+        for (entity, handle, transform) in world.query2::<MeshHandle, Transform>() {
+            let Some(mesh) = meshes.get(*handle) else {
+                log::warn!(
+                    "entity {entity:?} references invalid mesh handle {}",
+                    handle.0
+                );
+                continue;
+            };
+            let model = transform.to_model_matrix();
+            log::debug!(
+                "drawing entity {entity:?} mesh={} pos={:?} z={}",
+                handle.0,
+                transform.translation,
+                model[3][2]
             );
-            continue;
-        };
-        let model = transform.to_model_matrix();
-        log::debug!(
-            "drawing entity {entity:?} mesh={} pos={:?} z={}",
-            handle.0,
-            transform.translation,
-            model[3][2]
-        );
-        if let Some(mat) = world.get::<PbrMaterial>(entity) {
-            renderer.draw_mesh_pbr(
-                mesh,
-                &model,
-                mat.albedo,
-                mat.metallic,
-                mat.roughness,
-                debug_mode,
-                normal_space,
-            );
-        } else {
-            renderer.draw_mesh(mesh, &model);
+            if let Some(mat) = world.get::<PbrMaterial>(entity) {
+                renderer.draw_mesh_pbr(
+                    mesh,
+                    &model,
+                    mat.albedo,
+                    mat.metallic,
+                    mat.roughness,
+                    debug_mode,
+                    normal_space,
+                );
+            } else {
+                renderer.draw_mesh(mesh, &model);
+            }
+            draw_count += 1;
         }
-        draw_count += 1;
     }
     log::debug!("drew {draw_count} meshes");
+
+    // Draw the glTF scene (Sponza) via the bindless PBR path, alongside the
+    // legacy ECS cube demo. No-ops when the scene did not load.
+    if !scene_draw_items.is_empty() {
+        log::debug!("drawing {} scene instances", scene_draw_items.len());
+        renderer.draw_scene_pbr(scene_draw_items);
+    }
 
     // Draw the world-space XYZ gizmo on top of the 3D scene.
     renderer.draw_gizmo(&view_proj);

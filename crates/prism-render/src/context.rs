@@ -283,6 +283,19 @@ fn create_device(
     // --- Build the extension list: swapchain (always) + RT (conditional) ---
     let mut enabled_extensions: Vec<CString> = Vec::new();
     enabled_extensions.push(ash::khr::swapchain::NAME.into());
+    // `cmd_pipeline_barrier2` / `ImageMemoryBarrier2` (used unconditionally in
+    // `buffer.rs` for texture uploads and mip generation) come from
+    // VK_KHR_synchronization2. We target a Vulkan 1.2 instance, where the core
+    // `vkCmdPipelineBarrier2` symbol is not exposed; only the `...KHR` variant is
+    // available once this extension is enabled. `buffer.rs` therefore drives the
+    // barrier through `ash::khr::synchronization2::Device`, which resolves the
+    // KHR entry point. The extension must be enabled here or that fails to load.
+    enabled_extensions.push(ash::khr::synchronization2::NAME.into());
+    // `cmd_blit_image2` (used by mip generation in `buffer.rs`) is a Vulkan 1.3
+    // core symbol not exposed on a 1.2 device; it is promoted from
+    // VK_KHR_copy_commands2. Enable the extension so the KHR entry point loads,
+    // and call it through `ash::khr::copy_commands2::Device` in `buffer.rs`.
+    enabled_extensions.push(ash::khr::copy_commands2::NAME.into());
     for rt_ext in capabilities::rt_extension_names(rt_caps) {
         enabled_extensions.push(rt_ext.into());
     }
@@ -296,6 +309,13 @@ fn create_device(
     let mut accel_features = vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default();
     let mut rt_pipeline_features = vk::PhysicalDeviceRayTracingPipelineFeaturesKHR::default();
     let mut ray_query_features = vk::PhysicalDeviceRayQueryFeaturesKHR::default();
+    // `synchronization2` is a Vulkan 1.3 promoted feature. On this 1.2 device
+    // it is only available via the VK_KHR_synchronization2 *feature* (not just
+    // the extension): enabling the extension exposes the entry points, but the
+    // feature bit must also be turned on or `vkCmdPipelineBarrier2KHR` is
+    // illegal. `buffer.rs` issues these barriers unconditionally for texture
+    // upload + mip generation.
+    let mut sync2_features = vk::PhysicalDeviceSynchronization2FeaturesKHR::default();
 
     // Layer 1: Vulkan 1.2 promoted features that RT depends on.
     if rt_caps.buffer_device_address {
@@ -317,9 +337,11 @@ fn create_device(
         vk12.timeline_semaphore = vk::TRUE;
     }
 
+    sync2_features.synchronization2 = vk::TRUE;
     let mut features2 = vk::PhysicalDeviceFeatures2::default()
         .features(legacy_features)
-        .push_next(&mut vk12);
+        .push_next(&mut vk12)
+        .push_next(&mut sync2_features);
 
     // Layer 2-4: RT features only when the caps say they're supported.
     if rt_caps.acceleration_structure {

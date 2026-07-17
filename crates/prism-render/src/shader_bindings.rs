@@ -15,10 +15,18 @@ pub mod bindless {
     // --- descriptor set 0 ---
     pub const FRAME_SET: u32 = 0;
     pub const FRAME_BINDING: u32 = 0; // UNIFORM_BUFFER
+    pub const MATERIALS_SET: u32 = 0;
+    pub const MATERIALS_BINDING: u32 = 1; // UNIFORM_BUFFER
+
+    // --- descriptor set 1 ---
+    pub const GLOBAL_SAMPLERS_SET: u32 = 1;
+    pub const GLOBAL_SAMPLERS_BINDING: u32 = 0; // UNIFORM_BUFFER
+    pub const BINDLESS_SRVS_SET: u32 = 1;
+    pub const BINDLESS_SRVS_BINDING: u32 = 1; // UNIFORM_BUFFER
 
     // --- descriptor set 2 ---
-    pub const BINDLESS_CUBES_SET: u32 = 2;
-    pub const BINDLESS_CUBES_BINDING: u32 = 0; // COMBINED_IMAGE_SAMPLER
+    pub const ENV_CUBE_SET: u32 = 2;
+    pub const ENV_CUBE_BINDING: u32 = 0; // COMBINED_IMAGE_SAMPLER
 }
 
 pub mod gizmo {

@@ -1,0 +1,3 @@
+# npm 依赖与构建产物不进版本库
+node_modules/
+dist/

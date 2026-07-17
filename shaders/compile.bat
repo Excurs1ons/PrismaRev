@@ -96,6 +96,14 @@ echo   post :: fragmentMain -^> post.frag.spv
 del /q "%REFL%\post.tmp.spv" 2>nul
 echo   reflect post -^> reflection\post.json
 
+REM bindless: fragment only (pairs with mesh.vert.spv from mesh.slang vertex
+REM at pipeline-build time to form the bindless PBR draw pipeline).
+%SLANGC% "%SRC%\bindless.slang"  -profile %PROFILE% -target spirv -entry fragmentMain -stage fragment -fvk-use-entrypoint-name -o bindless.frag.spv   || goto :fail
+echo   bindless :: fragmentMain -^> bindless.frag.spv
+%SLANGC% "%SRC%\bindless.slang"  -profile %PROFILE% -target spirv -entry fragmentMain -stage fragment -reflection-json "%REFL%\bindless.json" -o "%REFL%\bindless.tmp.spv"   || goto :fail
+del /q "%REFL%\bindless.tmp.spv" 2>nul
+echo   reflect bindless -^> reflection\bindless.json
+
 echo.
 echo All Slang shaders compiled successfully.
 popd

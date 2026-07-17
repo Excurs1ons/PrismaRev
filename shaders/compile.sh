@@ -145,4 +145,9 @@ emit_reflection lighting fragmentMain fragment
 compile_stage post fragmentMain fragment
 emit_reflection post fragmentMain fragment
 
+# bindless: fragment only. Pairs with mesh.vert.spv (from mesh.slang vertex)
+# at pipeline-build time to form the bindless PBR draw pipeline.
+compile_stage bindless fragmentMain fragment
+emit_reflection bindless fragmentMain fragment
+
 echo "All Slang shaders compiled. SPIR-V in $OUT, reflection JSON in $REFL"

@@ -26,7 +26,7 @@ use crate::gizmo::Gizmo;
 use crate::ibl::IblResources;
 use crate::mesh::{Mesh, Vertex};
 use crate::overlay::{Overlay, OverlayAction, OverlayDrawParams};
-use crate::pbr_push::{DebugMode, NormalSpace, PbrPushConstants};
+use crate::pbr_push::{DebugMode, NormalSpace, PbrBindlessPushConstants, PbrPushConstants};
 use crate::pipeline::{GraphicsPipeline, PipelineDesc};
 use crate::render_pass::{DepthImage, Framebuffers, RenderPass};
 use crate::shader;
@@ -42,6 +42,7 @@ use crate::swapchain::{Swapchain, FRAMES_IN_FLIGHT};
 const VERT_SPV: &[u8] = include_bytes!("../../../../shaders/mesh.vert.spv");
 const FRAG_SPV: &[u8] = include_bytes!("../../../../shaders/mesh.frag.spv");
 const PBR_FRAG_SPV: &[u8] = include_bytes!("../../../../shaders/pbr.frag.spv");
+const BINDLESS_FRAG_SPV: &[u8] = include_bytes!("../../../../shaders/bindless.frag.spv");
 
 // ---------------------------------------------------------------------------
 // Frame state
@@ -113,6 +114,20 @@ pub struct Renderer {
     texture_manager: crate::managers::RenderTextureManager,
     #[allow(dead_code)]
     material_manager: crate::managers::RenderMaterialManager,
+
+    // ---- Bindless PBR draw path (V5) ----
+    /// Pipeline for `draw_scene_pbr`: mesh.vert + bindless.frag. Set 0 =
+    /// combined frame UBO + materials SSBO; set 1 = bindless table.
+    bindless_pipeline: GraphicsPipeline,
+    /// Combined set-0 layout (frame UBO @0 + materials SSBO @1). Owned so it
+    /// outlives `bindless_pipeline` (which references it) and the descriptor
+    /// sets allocated from `bindless_pool`.
+    #[allow(dead_code)]
+    bindless_set0_layout: DescriptorLayout,
+    /// Pool + per-frame descriptor sets for the combined set 0.
+    #[allow(dead_code)]
+    bindless_pool: DescriptorPool,
+    bindless_frame_sets: Vec<vk::DescriptorSet>,
     // `descriptor_layout`/`descriptor_pool` are stored only to own the Vulkan
     // objects their handles reference (the pipeline's layout, and the pools the
     // frame UBOs' descriptor sets were allocated from). They are never read
@@ -145,6 +160,16 @@ pub struct Renderer {
     // above: Rust drops struct fields in declaration order, and each resource
     // now frees itself via its own `Drop` using a cloned `ash::Device`.
     pub(crate) context: Arc<VulkanContext>,
+}
+
+/// One resolved draw for the bindless PBR path. The engine pre-resolves
+/// asset handles into render-side mesh handles + material SSBO slots and
+/// hands the renderer this flat list (so the renderer stays free of
+/// `prism_asset` types).
+pub struct SceneDrawItem {
+    pub mesh: crate::managers::MeshHandle,
+    pub material_slot: u32,
+    pub model: [[f32; 4]; 4],
 }
 
 impl Renderer {
@@ -321,11 +346,94 @@ impl Renderer {
         let gizmo = Gizmo::new(&context, render_pass.handle).context("create gizmo")?;
 
         // ---- P0 scene managers (commit 9) ----
-        let texture_manager = crate::managers::RenderTextureManager::new(&context, 1024)
-            .context("create RenderTextureManager")?;
+        let texture_manager = crate::managers::RenderTextureManager::new(
+            &context,
+            command_pool,
+            context.graphics_queue,
+            1024,
+        )
+        .context("create RenderTextureManager")?;
         let material_manager = crate::managers::RenderMaterialManager::new(&context)
             .context("create RenderMaterialManager")?;
         let mesh_manager = crate::managers::RenderMeshManager::new();
+
+        // ---- Bindless PBR pipeline (V5) ----
+        // Combined set 0: frame UBO (b0) + materials SSBO (b1). One descriptor
+        // set per frame; binding 1 points at the material manager's SSBO.
+        let bindless_set0_layout =
+            DescriptorLayout::new_combined(&context.device).context("create bindless set0 layout")?;
+        let bindless_pool =
+            DescriptorPool::new_combined(&context.device, FRAMES_IN_FLIGHT as u32)
+                .context("create bindless descriptor pool")?;
+        let bindless_frame_sets = bindless_pool
+            .allocate_sets(&context.device, &bindless_set0_layout, FRAMES_IN_FLIGHT as u32)
+            .context("allocate bindless frame sets")?;
+        for (i, set) in bindless_frame_sets.iter().enumerate() {
+            let ubo_info = vk::DescriptorBufferInfo::default()
+                .buffer(frame_ubos[i].buffer)
+                .offset(0)
+                .range(std::mem::size_of::<FrameUBOData>() as vk::DeviceSize);
+            let ssbo_info = vk::DescriptorBufferInfo::default()
+                .buffer(material_manager.buffer())
+                .offset(0)
+                .range(vk::WHOLE_SIZE);
+            let writes = [
+                vk::WriteDescriptorSet::default()
+                    .dst_set(*set)
+                    .dst_binding(0)
+                    .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                    .buffer_info(std::slice::from_ref(&ubo_info)),
+                vk::WriteDescriptorSet::default()
+                    .dst_set(*set)
+                    .dst_binding(1)
+                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                    .buffer_info(std::slice::from_ref(&ssbo_info)),
+            ];
+            unsafe { context.device.update_descriptor_sets(&writes, &[]) };
+        }
+
+        let bindless_frag_module =
+            shader::load_shader_module(&context.device, BINDLESS_FRAG_SPV)
+                .context("load bindless fragment shader module")?;
+        let bindless_vert_entry =
+            CString::new(crate::shader_bindings::mesh::ENTRY_VERTEX_MAIN).unwrap();
+        let bindless_frag_entry =
+            CString::new(crate::shader_bindings::bindless::ENTRY_FRAGMENT_MAIN).unwrap();
+        let bindless_vert_stage =
+            shader::shader_stage(vk::ShaderStageFlags::VERTEX, vert_module, bindless_vert_entry.as_c_str());
+        let bindless_frag_stage = shader::shader_stage(
+            vk::ShaderStageFlags::FRAGMENT,
+            bindless_frag_module,
+            bindless_frag_entry.as_c_str(),
+        );
+        let bindless_shader_stages = [bindless_vert_stage, bindless_frag_stage];
+
+        // Push constants: PbrBindlessPushConstants (96 bytes).
+        let bindless_push = [vk::PushConstantRange::default()
+            .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
+            .offset(0)
+            .size(std::mem::size_of::<PbrBindlessPushConstants>() as u32)];
+
+        // Set 0 = combined frame UBO + materials SSBO; set 1 = bindless table
+        // (samplers + 2D SRVs); set 2 = IBL env cubemap (combined image
+        // sampler, shared with the legacy PBR pipeline's set 1).
+        let bindless_set_layouts = [
+            bindless_set0_layout.layout,
+            texture_manager.bindless().layout,
+            ibl.descriptor_set_layout,
+        ];
+        let bindless_pipeline = GraphicsPipeline::new(&PipelineDesc {
+            device: &context.device,
+            shader_stages: &bindless_shader_stages,
+            vertex_binding_desc: std::slice::from_ref(&binding_desc),
+            vertex_attr_descs: &attr_descs,
+            descriptor_set_layouts: &bindless_set_layouts,
+            push_constant_ranges: &bindless_push,
+            render_pass: render_pass.handle,
+            subpass: 0,
+        })
+        .context("create bindless graphics pipeline")?;
+        unsafe { context.device.destroy_shader_module(bindless_frag_module, None) };
 
         let color_format = swapchain.format.format;
         Ok(Self {
@@ -347,6 +455,10 @@ impl Renderer {
             mesh_manager,
             texture_manager,
             material_manager,
+            bindless_pipeline,
+            bindless_set0_layout,
+            bindless_pool,
+            bindless_frame_sets,
             overlay,
             gizmo,
             vert_module,
@@ -359,6 +471,48 @@ impl Renderer {
     /// Reference to the device context.
     pub fn context(&self) -> &VulkanContext {
         &self.context
+    }
+
+    /// Cloned `Arc` to the device context. Lets callers build a
+    /// [`BatchUploader`](crate::batch::BatchUploader) that does not borrow the
+    /// renderer, so they can still call `register_*_into` (which take
+    /// `&mut self`) on the renderer while the uploader is alive.
+    pub fn context_arc(&self) -> std::sync::Arc<VulkanContext> {
+        self.context.clone()
+    }
+
+    /// The command pool used for one-shot upload command buffers. Exposed so
+    /// the engine layer can build a [`BatchUploader`](crate::batch::BatchUploader)
+    /// that batches many mesh/texture uploads into a single submit.
+    pub fn command_pool(&self) -> vk::CommandPool {
+        self.command_pool
+    }
+
+    /// The graphics queue used to submit upload command buffers.
+    pub fn graphics_queue(&self) -> vk::Queue {
+        self.context.graphics_queue
+    }
+
+    /// Like [`register_texture`](Self::register_texture) but records the
+    /// upload into a shared [`BatchUploader`](crate::batch::BatchUploader).
+    pub fn register_texture_into(
+        &mut self,
+        uploader: &mut crate::batch::BatchUploader<'_>,
+        input: &crate::managers::TextureUploadInput,
+    ) -> anyhow::Result<crate::managers::AssetTextureHandle> {
+        self.texture_manager
+            .reserve_into(&self.context, uploader, input)
+    }
+
+    /// Like [`register_mesh`](Self::register_mesh) but records the upload
+    /// into a shared [`BatchUploader`](crate::batch::BatchUploader).
+    pub fn register_mesh_into(
+        &mut self,
+        uploader: &mut crate::batch::BatchUploader<'_>,
+        input: &crate::managers::MeshUploadInput,
+    ) -> anyhow::Result<crate::managers::MeshHandle> {
+        self.mesh_manager
+            .register_into(&self.context, uploader, input)
     }
 
     /// The bindless texture table (descriptor-indexing). Use this to register
@@ -427,7 +581,8 @@ impl Renderer {
         &mut self,
         input: &crate::managers::TextureUploadInput,
     ) -> anyhow::Result<crate::managers::AssetTextureHandle> {
-        self.texture_manager.reserve(input)
+        self.texture_manager
+            .reserve(&self.context, self.command_pool, self.context.graphics_queue, input)
     }
 
     /// Register a material and return its render-side handle. The bindless
@@ -1023,6 +1178,107 @@ impl Renderer {
         } else {
             unsafe {
                 device.cmd_draw(cmd, mesh.vertex_count, 1, 0, 0);
+            }
+        }
+    }
+
+    /// Draw an entire scene via the bindless PBR pipeline. Binds the pipeline
+    /// and descriptor sets once, then issues one indexed draw per item with
+    /// per-draw push constants (`PbrBindlessPushConstants`). Must be called
+    /// between `begin_frame` and `end_frame`.
+    pub fn draw_scene_pbr(&self, items: &[SceneDrawItem]) {
+        let Some(ref frame) = self.current else {
+            log::error!("draw_scene_pbr called outside begin_frame/end_frame");
+            return;
+        };
+        if items.is_empty() {
+            return;
+        }
+
+        let device = &self.context.device;
+        let cmd = frame.command_buffer;
+        let frame_index = frame.frame_index;
+
+        unsafe {
+            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.bindless_pipeline.pipeline);
+            // Set 0: combined frame UBO + materials SSBO (per-frame set).
+            device.cmd_bind_descriptor_sets(
+                cmd,
+                vk::PipelineBindPoint::GRAPHICS,
+                self.bindless_pipeline.layout,
+                0,
+                &[self.bindless_frame_sets[frame_index]],
+                &[],
+            );
+            // Set 1: bindless texture table (samplers + SRVs).
+            device.cmd_bind_descriptor_sets(
+                cmd,
+                vk::PipelineBindPoint::GRAPHICS,
+                self.bindless_pipeline.layout,
+                1,
+                &[self.texture_manager.bindless().set],
+                &[],
+            );
+            // Set 2: IBL environment cubemap (combined image sampler, shared
+            // with the legacy PBR path's set 1).
+            device.cmd_bind_descriptor_sets(
+                cmd,
+                vk::PipelineBindPoint::GRAPHICS,
+                self.bindless_pipeline.layout,
+                2,
+                &[self.ibl.descriptor_set],
+                &[],
+            );
+        }
+
+        for item in items {
+            let Some(uploaded) = self.mesh_manager.get(item.mesh) else {
+                log::warn!("draw_scene_pbr: missing mesh handle");
+                continue;
+            };
+            let mesh = &uploaded.mesh;
+
+            let pc = PbrBindlessPushConstants {
+                model: item.model,
+                material_slot: item.material_slot,
+                // IBL cubemap handle in the bindless table. The P0 bindless
+                // fragment does not sample it (2D-only SRV array); kept for
+                // the future cube-array path. 0 is the magenta fallback here.
+                env_handle: self.ibl_bindless_handle.0,
+                albedo_idx: u32::MAX,
+                normal_idx: u32::MAX,
+                _padding: [0; 4],
+            };
+            let pc_bytes = unsafe {
+                std::slice::from_raw_parts(
+                    &pc as *const _ as *const u8,
+                    std::mem::size_of::<PbrBindlessPushConstants>(),
+                )
+            };
+            unsafe {
+                device.cmd_push_constants(
+                    cmd,
+                    self.bindless_pipeline.layout,
+                    vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+                    0,
+                    pc_bytes,
+                );
+            }
+
+            let vertex_buffers = [mesh.vertex_buffer];
+            let offsets = [0u64];
+            unsafe {
+                device.cmd_bind_vertex_buffers(cmd, 0, &vertex_buffers, &offsets);
+            }
+            if let Some(index_buffer) = mesh.index_buffer {
+                unsafe {
+                    device.cmd_bind_index_buffer(cmd, index_buffer, 0, vk::IndexType::UINT32);
+                    device.cmd_draw_indexed(cmd, mesh.index_count, 1, 0, 0, 0);
+                }
+            } else {
+                unsafe {
+                    device.cmd_draw(cmd, mesh.vertex_count, 1, 0, 0);
+                }
             }
         }
     }

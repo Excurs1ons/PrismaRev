@@ -38,6 +38,34 @@ impl DescriptorLayout {
     pub fn as_slice(&self) -> &[vk::DescriptorSetLayout] {
         std::slice::from_ref(&self.layout)
     }
+
+    /// Combined set-0 layout for the bindless PBR path:
+    /// - binding 0: `FrameUBO` (UNIFORM_BUFFER, VERTEX | FRAGMENT)
+    /// - binding 1: materials `GpuMaterial` SSBO (STORAGE_BUFFER, FRAGMENT)
+    ///
+    /// The legacy pipeline only reads binding 0; the extra storage binding is
+    /// harmless there and required by the bindless pipeline.
+    pub fn new_combined(device: &ash::Device) -> anyhow::Result<Self> {
+        let bindings = [
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(0)
+                .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT),
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(1)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+        ];
+        let create_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
+        let layout = unsafe { device.create_descriptor_set_layout(&create_info, None) }
+            .context("create combined descriptor set layout")?;
+        Ok(Self {
+            layout,
+            device: device.clone(),
+        })
+    }
 }
 
 impl Drop for DescriptorLayout {
@@ -85,6 +113,30 @@ impl DescriptorPool {
         let sets = unsafe { device.allocate_descriptor_sets(&alloc_info) }
             .context("allocate descriptor sets")?;
         Ok(sets)
+    }
+
+    /// Pool sized for `max_frames` combined (UBO + storage-buffer) sets, one
+    /// per frame-in-flight, for the bindless PBR path.
+    pub fn new_combined(device: &ash::Device, max_frames: u32) -> anyhow::Result<Self> {
+        let pool_sizes = [
+            vk::DescriptorPoolSize {
+                ty: vk::DescriptorType::UNIFORM_BUFFER,
+                descriptor_count: max_frames,
+            },
+            vk::DescriptorPoolSize {
+                ty: vk::DescriptorType::STORAGE_BUFFER,
+                descriptor_count: max_frames,
+            },
+        ];
+        let create_info = vk::DescriptorPoolCreateInfo::default()
+            .max_sets(max_frames)
+            .pool_sizes(&pool_sizes);
+        let pool = unsafe { device.create_descriptor_pool(&create_info, None) }
+            .context("create combined descriptor pool")?;
+        Ok(Self {
+            pool,
+            device: device.clone(),
+        })
     }
 }
 

@@ -14,8 +14,13 @@ use ash::vk;
 
 /// Parameters for creating a [`GraphicsPipeline`].
 ///
-/// Groups the previously-too-many individual arguments into a single struct
+/// Groups the previously-too many individual arguments into a single struct
 /// so callers don't need to pass 8 positional parameters.
+///
+/// The optional raster/depth fields (`cull_mode`, `depth_bias_*`,
+/// `depth_write_enable`, `color_attachment_count`) default to the legacy
+/// behavior when `None`. Shadow-map pipelines set them to override culling,
+/// enable depth bias, and drop color output.
 pub struct PipelineDesc<'a> {
     pub device: &'a ash::Device,
     pub shader_stages: &'a [vk::PipelineShaderStageCreateInfo<'a>],
@@ -25,6 +30,22 @@ pub struct PipelineDesc<'a> {
     pub push_constant_ranges: &'a [vk::PushConstantRange],
     pub render_pass: vk::RenderPass,
     pub subpass: u32,
+    /// Override the cull mode (default `BACK`).
+    pub cull_mode: Option<vk::CullModeFlags>,
+    /// Enable depth bias (default `false`). Used by shadow pipelines to
+    /// avoid self-shadow acne.
+    pub depth_bias_enable: Option<bool>,
+    /// Depth bias constant factor (default 0). Only used when
+    /// `depth_bias_enable` is `Some(true)`.
+    pub depth_bias_constant_factor: Option<f32>,
+    /// Depth bias slope factor (default 0).
+    pub depth_bias_slope_factor: Option<f32>,
+    /// Override depth write enable (default `true`).
+    pub depth_write_enable: Option<bool>,
+    /// Number of color attachments the render pass subpass uses (default 1).
+    /// Set to `Some(0)` for a depth-only pipeline (e.g. shadow map): the
+    /// color blend state then carries zero attachments.
+    pub color_attachment_count: Option<u32>,
 }
 
 /// A compiled graphics pipeline with its layout.

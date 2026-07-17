@@ -11,3 +11,4 @@ image = { workspace = true }
 slotmap = { workspace = true }
 anyhow = { workspace = true }
 log = { workspace = true }
+rayon = { workspace = true }

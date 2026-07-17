@@ -190,6 +190,77 @@ impl Mesh {
         })
     }
 
+    /// Like [`new`](Self::new) but records the staging copies into a
+    /// [`BatchUploader`](crate::batch::BatchUploader) instead of submitting
+    /// its own command buffer + fence per upload. The caller is responsible
+    /// for finishing the uploader (which submits once and waits) before the
+    /// mesh is drawn.
+    pub fn new_into(
+        context: &VulkanContext,
+        uploader: &mut crate::batch::BatchUploader<'_>,
+        vertices: &[Vertex],
+        indices: Option<&[u32]>,
+    ) -> anyhow::Result<Self> {
+        let vertex_size = std::mem::size_of_val(vertices) as vk::DeviceSize;
+
+        let (vertex_buffer, vertex_memory) = buffer::create_buffer(
+            context,
+            vertex_size,
+            BufferUsage::VERTEX_BUFFER
+                | BufferUsage::TRANSFER_DST
+                | BufferUsage::SHADER_DEVICE_ADDRESS
+                | BufferUsage::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
+            MemoryProperties::DEVICE_LOCAL,
+        )
+        .context("create vertex buffer")?;
+
+        let vertex_bytes = unsafe {
+            std::slice::from_raw_parts(
+                vertices.as_ptr() as *const u8,
+                std::mem::size_of_val(vertices),
+            )
+        };
+        uploader
+            .upload_buffer(vertex_buffer, vertex_size, vertex_bytes)
+            .context("batch upload vertex data")?;
+
+        let (index_buffer, index_memory, index_count) = if let Some(indices) = indices {
+            let index_size = std::mem::size_of_val(indices) as vk::DeviceSize;
+            let (buf, mem) = buffer::create_buffer(
+                context,
+                index_size,
+                BufferUsage::INDEX_BUFFER
+                    | BufferUsage::TRANSFER_DST
+                    | BufferUsage::SHADER_DEVICE_ADDRESS
+                    | BufferUsage::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
+                MemoryProperties::DEVICE_LOCAL,
+            )
+            .context("create index buffer")?;
+
+            let index_bytes = unsafe {
+                std::slice::from_raw_parts(
+                    indices.as_ptr() as *const u8,
+                    std::mem::size_of_val(indices),
+                )
+            };
+            uploader
+                .upload_buffer(buf, index_size, index_bytes)
+                .context("batch upload index data")?;
+            (Some(buf), Some(mem), indices.len() as u32)
+        } else {
+            (None, None, 0)
+        };
+
+        Ok(Self {
+            vertex_buffer,
+            vertex_memory,
+            vertex_count: vertices.len() as u32,
+            index_buffer,
+            index_memory,
+            index_count,
+        })
+    }
+
     /// Destroy the GPU resources for this mesh.
     ///
     /// # Safety

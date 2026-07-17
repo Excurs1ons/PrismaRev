@@ -14,21 +14,117 @@
 //! CI without a device.
 
 use anyhow::{anyhow, Context, Result};
-use gltf::{image::Data as GltfImageData, mesh::Mode};
+use gltf::{buffer::Data as BufferData, image::Data as GltfImageData, mesh::Mode, Document, Gltf};
+use rayon::prelude::*;
 use std::path::Path;
 
 use crate::handle::{MaterialHandle, MeshHandle, SceneHandle, TextureHandle};
 use crate::scene_store::SceneStore;
 use crate::types::{InstanceData, MaterialData, MeshData, TexFormat, TextureData};
 
+/// Parallel replacement for `gltf::import_images`. The upstream function
+/// decodes every image serially on the calling thread, which dominates load
+/// time for large scenes (Sponza: 72 x 4K PNGs, ~15s). Here we collect each
+/// image's source as an owned description on the main thread (the `Source`
+/// enum borrows the document so it can't cross threads directly), then hand
+/// the owned descriptions to rayon for parallel decode.
+///
+/// All images are decoded to 8-bit RGBA and stored as `gltf::image::Data`
+/// with `Format::R8G8B8A8`, so the downstream `to_rgba8` takes its 4-channel
+/// fast path.
+fn import_images_parallel(
+    document: &Document,
+    base: Option<&Path>,
+    buffer_data: &[BufferData],
+) -> Result<Vec<GltfImageData>> {
+    use gltf::image::Source;
+
+    /// Owned description of where an image's encoded bytes come from, so the
+    /// rayon closure does not need to borrow the document or buffers.
+    enum OwnedSource {
+        /// External file: resolved absolute path.
+        Uri(std::path::PathBuf),
+        /// Embedded in a buffer view: the encoded bytes + MIME type.
+        Bytes(Vec<u8>, String),
+    }
+
+    let owned: Vec<OwnedSource> = document
+        .images()
+        .map(|image| match image.source() {
+            Source::Uri { uri, .. } => {
+                let path = base
+                    .map(|b| b.join(uri))
+                    .unwrap_or_else(|| std::path::PathBuf::from(uri));
+                OwnedSource::Uri(path)
+            }
+            Source::View { view, mime_type } => {
+                let buf = &buffer_data[view.buffer().index()];
+                let start = view.offset();
+                let end = start + view.length();
+                let bytes = buf.0[start..end].to_vec();
+                OwnedSource::Bytes(bytes, mime_type.to_string())
+            }
+        })
+        .collect();
+
+    owned
+        .par_iter()
+        .map(|src| {
+            let dyn_image = match src {
+                OwnedSource::Uri(path) => image::open(path)
+                    .with_context(|| format!("decode image {}", path.display()))?,
+                OwnedSource::Bytes(bytes, mime) => {
+                    let format = match mime.as_str() {
+                        "image/png" => image::ImageFormat::Png,
+                        "image/jpeg" => image::ImageFormat::Jpeg,
+                        _ => {
+                            // Fall back to guessing from the bytes.
+                            image::guess_format(bytes)?
+                        }
+                    };
+                    image::load_from_memory_with_format(bytes, format)
+                        .with_context(|| format!("decode embedded image ({})", mime))?
+                }
+            };
+            // Convert to 8-bit RGBA so the renderer always gets 4 channels.
+            let rgba = dyn_image.to_rgba8();
+            let (w, h) = rgba.dimensions();
+            Ok::<GltfImageData, anyhow::Error>(GltfImageData {
+                pixels: rgba.into_raw(),
+                format: gltf::image::Format::R8G8B8A8,
+                width: w,
+                height: h,
+            })
+        })
+        .collect()
+}
+
 /// Top-level entry: parse `bytes` and insert everything into `store`.
+///
+/// `base_dir` is the directory used to resolve external `.bin` buffer and
+/// texture URI references. It must be `Some` for `.gltf` files that reference
+/// external resources (the common case, e.g. Sponza); `None` is fine only for
+/// fully self-contained `.glb` files. We do NOT use `gltf::import_slice`
+/// because it always passes `base = None`, which makes any external reference
+/// fail with `ExternalReferenceInSliceImport`.
 pub(crate) fn load(
     store: &mut SceneStore,
     bytes: &[u8],
-    _base_dir: Option<&Path>,
+    base_dir: Option<&Path>,
 ) -> Result<SceneHandle> {
-    let (doc, buffers, images) = gltf::import_slice(bytes)
+    let gltf = Gltf::from_slice(bytes)
         .with_context(|| "failed to parse glTF bytes (need glTF 2.0 / .glb)")?;
+    let doc = &gltf.document;
+    let blob = gltf.blob.clone();
+    let buffers = gltf::import_buffers(doc, base_dir, blob)
+        .with_context(|| "failed to import glTF buffers (external .bin not found?)")?;
+    // Decode images in parallel. `gltf::import_images` decodes them serially
+    // on the calling thread, which is the dominant cost for large scenes
+    // (Sponza: 72 x 4K PNGs, ~15s). We collect each image's source as an
+    // owned description on the main thread, then rayon-decode them all.
+    let images = import_images_parallel(doc, base_dir, &buffers)
+        .with_context(|| "failed to import glTF images (external textures not found?)")?;
+    let (doc, buffers, images) = (doc.clone(), buffers, images);
 
     // ---- 1. Materials -------------------------------------------------
     // First pass: material parameters only, no texture refs yet — textures
