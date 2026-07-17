@@ -13,8 +13,11 @@
 //          -entry computeMain -stage compute -o sharc_query.comp.spv
 
 import common;
-import sharc.common;
-// sharc.buffers is included by sharc.common; no separate import needed.
+// Use #include (NOT `import sharc.common`) so the SHARC_GRID_* `#define` macros
+// from sharc/common.slang are visible in this translation unit. `import` is a
+// module boundary and does not forward preprocessor macros — that is what broke
+// CI with "undefined identifier SHARC_GRID_LOGARITHM_BASE".
+#include "sharc/common.slang"
 
 // set 0, binding 0 — frame UBO
 [[vk::binding(0, 0)]]
