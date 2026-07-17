@@ -12,11 +12,9 @@
 //   slangc sharc_query.slang -profile spirv_1_5 -target spirv \
 //          -entry computeMain -stage compute -o sharc_query.comp.spv
 
+import common;
 import sharc.common;
 import sharc.buffers;
-
-struct GBufferA { normal: float3; roughness: float; }
-struct GBufferB { world_pos: float3; linear_depth: float; }
 
 // set 0, binding 0 — frame UBO
 [[vk::binding(0, 0)]]

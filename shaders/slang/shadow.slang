@@ -10,9 +10,6 @@
 //   slangc shadow.slang -profile spirv_1_5 -target spirv \
 //          -entry computeMain -stage compute -o shadow.comp.spv
 
-struct GBufferA { normal: float3; roughness: float; }
-struct GBufferB { world_pos: float3; linear_depth: float; }
-
 // set 0, binding 0 — frame UBO (camera + light)
 [[vk::binding(0, 0)]]
 ConstantBuffer<FrameUBO> frame;
