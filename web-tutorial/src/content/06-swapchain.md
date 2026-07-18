@@ -28,7 +28,7 @@ Swapchain 是一组 `VkImage`（通常 2–3 张），由窗口系统/compositor
 
 ## 一帧的节奏：acquire → record → submit → present
 
-```rust
+```rust id=frame-loop
 // 1) 等待当前 frame 的 fence，确保它的命令缓冲已空闲
 unsafe { device.wait_for_fences(&[fence], true, u64::MAX) }?;
 

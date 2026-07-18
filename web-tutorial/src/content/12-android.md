@@ -17,7 +17,7 @@ prism-ecs / prism-render / prism-asset / prism-engine   ← 完全不变
 
 `prism-engine` 是纯 Rust 库；新增一个**极薄**的 `prism-android` crate（`crate-type = ["cdylib"]`）提供 Android 入口：
 
-```rust
+```rust id=android-main
 // prism-android 只做一件事：把 AndroidApp 交给引擎
 #[no_mangle]
 fn android_main(app: AndroidApp) {

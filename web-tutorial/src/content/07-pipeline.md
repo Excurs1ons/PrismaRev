@@ -20,7 +20,7 @@ let color_attachment = vk::AttachmentDescription::default()
 
 // 深度附件：同样清空，用于深度测试
 let depth_attachment = vk::AttachmentDescription::default()
-    .format(vk::Format::D16_UNORM)
+    .format(vk::Format::D32_SFLOAT)  // 引擎用 32-bit 浮点深度（见 render_pass.rs）
     .load_op(vk::AttachmentLoadOp::CLEAR)
     .store_op(vk::AttachmentStoreOp::DONT_CARE);
 ```

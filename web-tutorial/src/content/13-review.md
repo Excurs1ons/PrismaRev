@@ -34,6 +34,8 @@
 `prism-engine` 依赖 `prism-render` + `prism-ecs`；`prism-render` 依赖 `prism-ecs`（仅类型）；`prism-asset` 不依赖任何引擎 crate（纯数据）。**没有循环依赖**——这是架构健康的标志。
 :::
 
+![引擎架构总览图（待替换为真实架构图）](/assets/placeholder/arch.svg)
+
 ## 坐标约定（全引擎唯一真理）
 
 违反这套约定就是 bug。来自 `README.md`：

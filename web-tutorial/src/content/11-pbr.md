@@ -92,6 +92,8 @@ uint debug_mode;  // 0 Final,1 Albedo,2 Specular,3 Reflect,4 Ambient,5 Normal
 PBR + IBL 替换了 M3 的 Blinn-Phong，但**管线结构没变**：还是每帧算 `view_proj`、逐实体提交、逐片元光照。变化的是「光照模型」和「资源组织方式」（cubemap、SSBO、bindless 表）。这再次印证 ECS + 渲染系统的设计有多稳。
 :::
 
+![Sponza 场景渲染（待替换为引擎实际截图）](/assets/placeholder/sponza.svg)
+
 ## 动手练习
 
 :::exercise

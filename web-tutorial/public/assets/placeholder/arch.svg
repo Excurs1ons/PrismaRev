@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="320" viewBox="0 0 800 320">
+  <rect width="800" height="320" fill="#0b0e13"/>
+  <rect x="1" y="1" width="798" height="318" fill="none" stroke="#232c3a" stroke-width="2" stroke-dasharray="8 6"/>
+  <text x="400" y="140" fill="#58a6ff" font-family="monospace" font-size="22" text-anchor="middle" font-weight="bold">引擎架构总览图（占位）</text>
+  <text x="400" y="172" fill="#61718a" font-family="monospace" font-size="14" text-anchor="middle">architecture diagram · 待替换为真实架构图</text>
+  <text x="400" y="200" fill="#9fb0c2" font-family="monospace" font-size="12" text-anchor="middle">prism-ecs / prism-render / prism-asset / prism-engine / prism-android</text>
+</svg>

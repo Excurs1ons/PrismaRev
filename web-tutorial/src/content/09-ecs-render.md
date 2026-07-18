@@ -28,7 +28,7 @@ pub struct Transform {
 
 `OrbitCamera` 用球坐标（azimuth `theta`、elevation `phi`、距离 `distance`）围绕一个 `target` 旋转。它的 `view_proj()` 产出 `proj * view`（**列主序**，与 GLSL `m[col][row]` 对齐）：
 
-```rust
+```rust id=camera-vp
 pub struct OrbitCamera {
     pub target: [f32; 3],
     pub distance: f32,

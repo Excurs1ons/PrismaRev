@@ -6,6 +6,7 @@ import hljs from "highlight.js/lib/common";
 hljs.registerAliases(["glsl", "vert", "frag", "slang"], { languageName: "cpp" });
 
 // 自定义 fence 渲染：外层包裹带「语言标签 + 复制按钮」的工具条。
+// 支持扩展语法：```rust id=foo file=swapchain.rs
 function renderFence(
   tokens: any[],
   idx: number,
@@ -15,7 +16,13 @@ function renderFence(
 ): string {
   const token = tokens[idx];
   const info = token.info ? token.info.trim() : "";
-  const lang = info.split(/\s+/)[0] || "text";
+  const parts = info.split(/\s+/);
+  const lang = parts[0] || "text";
+  const attrMap: Record<string, string> = {};
+  for (const p of parts.slice(1)) {
+    const m = /^(\w+)=(.+)$/.exec(p);
+    if (m) attrMap[m[1]] = m[2];
+  }
   const code = token.content;
 
   let highlighted: string;
@@ -26,15 +33,27 @@ function renderFence(
     highlighted = hljs.highlightAuto(code).value;
   }
 
+  // 按行拆成 .line（带行号、可高亮），用于「代码逐行联动」。
+  const lines = highlighted.split("\n");
+  // 末尾若为空行则去掉（split 常多出一行）
+  if (lines.length > 1 && lines[lines.length - 1].trim() === "") lines.pop();
+  const linesHtml = lines
+    .map((l) => `<span class="line">${l || " "}</span>`)
+    .join("");
+
   const langLabel = lang.toUpperCase();
+  const blockId = attrMap.id ? ` id="cb-${attrMap.id}"` : "";
+  const fname = attrMap.file
+    ? `<span class="fname">${attrMap.file}</span>`
+    : "";
   // 用 data-code 存原始代码便于复制（避免 HTML 实体转义问题）。
   return (
-    `<div class="code-block">` +
-    `<div class="code-head"><span class="lang">${langLabel}</span>` +
+    `<div class="code-block"${blockId}>` +
+    `<div class="code-head"><span class="lang">${langLabel}</span>${fname}` +
     `<button class="copy-btn" data-code="${encodeURIComponent(
       code
     )}">复制</button></div>` +
-    `<pre><code class="hljs language-${lang}">${highlighted}</code></pre>` +
+    `<pre><code class="hljs language-${lang}">${linesHtml}</code></pre>` +
     `</div>`
   );
 }
@@ -171,4 +190,31 @@ export function bindCopyButtons(root: HTMLElement): void {
       });
     });
   });
+}
+
+// 代码逐行联动：高亮指定代码块（id 不含 cb- 前缀）的某些行并滚动进视口。
+import { flashLines } from "./anim";
+export function highlightLines(blockId: string, ranges: [number, number][]): void {
+  // 支持传 "foo" 或 "cb-foo"
+  const el = document.getElementById(
+    blockId.startsWith("cb-") ? blockId : `cb-${blockId}`
+  );
+  if (!el) return;
+  const codeEl = el.querySelector("code");
+  if (!codeEl) return;
+  const lineEls = Array.from(codeEl.querySelectorAll<HTMLElement>(".line"));
+  // 先清旧高亮
+  lineEls.forEach((l) => l.classList.remove("hl"));
+  const toFlash: HTMLElement[] = [];
+  for (const [a, b] of ranges) {
+    for (let i = a; i <= b; i++) {
+      const l = lineEls[i - 1];
+      if (l) {
+        l.classList.add("hl");
+        toFlash.push(l);
+      }
+    }
+  }
+  el.scrollIntoView({ behavior: "smooth", block: "center" });
+  flashLines(toFlash);
 }

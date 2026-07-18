@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="420" viewBox="0 0 800 420">
+  <rect width="800" height="420" fill="#0b0e13"/>
+  <rect x="1" y="1" width="798" height="418" fill="none" stroke="#232c3a" stroke-width="2" stroke-dasharray="8 6"/>
+  <text x="400" y="190" fill="#7ee787" font-family="monospace" font-size="22" text-anchor="middle" font-weight="bold">Sponza 场景渲染截图（占位）</text>
+  <text x="400" y="222" fill="#61718a" font-family="monospace" font-size="14" text-anchor="middle">screenshot · 待替换为引擎实际渲染截图</text>
+  <text x="400" y="250" fill="#9fb0c2" font-family="monospace" font-size="12" text-anchor="middle">BatchUploader 批量加载 ~880 资源 · PBR + IBL</text>
+</svg>

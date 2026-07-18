@@ -61,7 +61,7 @@ pub fn insert<T: Component>(&mut self, entity: Entity, component: T) {
 
 系统通过 `query` 拿到「同时拥有某些组件」的实体切片。`query2` / `query3` 支持多组件交集：
 
-```rust
+```rust id=ecs-query
 pub fn query2<A: Component, B: Component>(
     &self,
 ) -> impl Iterator<Item = (Entity, &A, &B)> {

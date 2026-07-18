@@ -2,6 +2,13 @@ import "./styles.css";
 import { CHAPTERS, findChapter, type ChapterMeta } from "./chapters";
 import { renderMarkdown, bindCopyButtons } from "./highlight";
 import { mountViz } from "./viz/index";
+import {
+  animateChapterSwitch,
+  animateVizIn,
+  createScrollProgress,
+  animateChapterProgress,
+  pulseSidebar,
+} from "./anim";
 import introMd from "./content/01-intro.md?raw";
 import helloMd from "./content/02-hello.md?raw";
 import depsMd from "./content/03-deps.md?raw";
@@ -16,7 +23,6 @@ import pbrMd from "./content/11-pbr.md?raw";
 import androidMd from "./content/12-android.md?raw";
 import reviewMd from "./content/13-review.md?raw";
 
-// 章节 id -> 原始 markdown 内容
 const CONTENT: Record<string, string> = {
   intro: introMd,
   hello: helloMd,
@@ -34,28 +40,46 @@ const CONTENT: Record<string, string> = {
 };
 
 const app = document.getElementById("app")!;
-
 let sidebarOpen = false;
+let setScrollProgress: (r: number) => void = () => {};
+
+function groupChapters(): Record<string, ChapterMeta[]> {
+  const groups: Record<string, ChapterMeta[]> = {};
+  for (const c of CHAPTERS) {
+    (groups[c.group] ??= []).push(c);
+  }
+  return groups;
+}
 
 function renderShell() {
+  const groups = groupChapters();
+  const groupOrder = ["基础", "图形", "引擎"];
+  const sidebarInner = groupOrder
+    .map((g) => {
+      const items = (groups[g] ?? [])
+        .map((c) => {
+          const num = c.title.split("·")[0].trim();
+          return `<a class="chapter-link" data-id="${c.id}">
+            <div class="t"><span class="num">${num}</span>${c.title
+            .split("·")[1]
+            .trim()}</div>
+            <div class="s">${c.subtitle}</div>
+          </a>`;
+        })
+        .join("");
+      return `<div class="side-title">${g}</div>${items}`;
+    })
+    .join("");
+
   app.innerHTML = `
     <div class="topbar">
       <button class="menu-btn" id="menu-btn">☰</button>
-      <div class="brand">Prisma<span>Rev</span><small>从 Rust 到 Vulkan 引擎 · 交互式教学</small><span class="ver-tag" title="教程基准 git 标签，对应源码快照">tutorial-v1</span></div>
+      <div class="brand">Prisma<span>Rev</span><small>从 Rust 到 Vulkan 引擎 · 交互式教学</small><span class="ver-tag" title="教程基准 git 标签">tutorial-v1</span></div>
       <div class="progress-wrap"><div class="progress-bar" id="progress-bar"></div></div>
       <div class="progress-label" id="progress-label">1 / ${CHAPTERS.length}</div>
     </div>
     <div class="layout">
-      <aside class="sidebar" id="sidebar">
-        <h2>学习路线</h2>
-        ${CHAPTERS.map(
-          (c) =>
-            `<a class="chapter-link" data-id="${c.id}">
-               <div class="t">${c.title}</div>
-               <div class="s">${c.subtitle}</div>
-             </a>`
-        ).join("")}
-      </aside>
+      <aside class="sidebar" id="sidebar">${sidebarInner}</aside>
       <div class="sidebar-backdrop" id="backdrop"></div>
       <main class="content">
         <article class="article" id="article"></article>
@@ -66,6 +90,9 @@ function renderShell() {
 
   const sidebar = document.getElementById("sidebar")!;
   const backdrop = document.getElementById("backdrop")!;
+  const progressBar = document.getElementById("progress-bar")!;
+  setScrollProgress = createScrollProgress(progressBar);
+
   document.getElementById("menu-btn")!.addEventListener("click", () => {
     sidebarOpen = !sidebarOpen;
     sidebar.classList.toggle("open", sidebarOpen);
@@ -86,19 +113,28 @@ function renderShell() {
       backdrop.classList.remove("show");
     });
   });
+
+  window.addEventListener(
+    "scroll",
+    () => {
+      const h = document.documentElement;
+      const ratio = h.scrollTop / (h.scrollHeight - h.clientHeight || 1);
+      setScrollProgress(ratio);
+    },
+    { passive: true }
+  );
 }
 
 function setActive(id: string) {
   document.querySelectorAll<HTMLElement>(".chapter-link").forEach((el) => {
-    el.classList.toggle("active", el.getAttribute("data-id") === id);
+    const active = el.getAttribute("data-id") === id;
+    el.classList.toggle("active", active);
+    if (active) pulseSidebar(el);
   });
   const idx = CHAPTERS.findIndex((c) => c.id === id);
   const bar = document.getElementById("progress-bar")!;
   const label = document.getElementById("progress-label")!;
-  if (idx >= 0) {
-    bar.style.width = `${((idx + 1) / CHAPTERS.length) * 100}%`;
-    label.textContent = `${idx + 1} / ${CHAPTERS.length}`;
-  }
+  if (idx >= 0) animateChapterProgress(bar, label, idx, CHAPTERS.length);
 }
 
 function renderPager(current: ChapterMeta) {
@@ -122,17 +158,20 @@ function renderChapter(id: string) {
   article.innerHTML = renderMarkdown(raw);
   bindCopyButtons(article);
 
-  // 在文章末尾「下一节」之前挂载可视化组件
-  if (chapter.viz) {
-    const vizHost = document.createElement("div");
-    vizHost.className = "viz-host";
-    article.appendChild(vizHost);
-    mountViz(chapter.viz, vizHost);
+  if (chapter.viz && chapter.viz.length) {
+    for (const vk of chapter.viz) {
+      const vizHost = document.createElement("div");
+      vizHost.className = "viz-host";
+      article.appendChild(vizHost);
+      mountViz(vk, vizHost);
+      animateVizIn(vizHost);
+    }
   }
 
   setActive(chapter.id);
   renderPager(chapter);
-  window.scrollTo({ top: 0, behavior: "instant" as ScrollBehavior });
+  window.scrollTo({ top: 0, behavior: "auto" });
+  animateChapterSwitch(article);
 }
 
 function route() {
