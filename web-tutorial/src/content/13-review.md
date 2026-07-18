@@ -1,6 +1,12 @@
 # 13 · 引擎架构复盘
 
-走完 M1→M5，我们把散落的 crates、数据流、坐标约定收拢成一张完整的地图。这章是「站在山顶往下看」。
+走完全部章节，我们把散落的 crates、数据流、设计约束收拢成一张完整的地图。本教程以 `docs/DESIGN.md`（**权威设计蓝图**）为准——它才是「意图的真相源」，README 的早期里程碑描述已过时，不要作为现状依据。这章是「站在山顶往下看」。
+
+## DESIGN 三条核心设计目标
+
+1. **移动端 TBDR 优化优先，抛弃历史包袱**：pass 间用 transient/lazy 附件，中间 RT 默认 `DONT_CARE`，重 pass 半分辨率；旧单体 `renderer.rs` 已拆掉，新代码一律走 RenderGraph + pass 节点。
+2. **PC / 移动端 / 全平台统一的可扩展模块化管线**：一套 RenderGraph 多端运行，差异只来自能力探测与 `RenderSettings` 开关；新增特性 = 新增一个 pass 节点。
+3. **运行时自动判断 Vulkan 版本与扩展支持**：能力驱动降级，不靠 `#[cfg(target_os)]` 平台硬编码。
 
 ## 数据流：一帧是怎么发生的
 
@@ -13,32 +19,39 @@
                                           │
                     view_proj = P·V·M  + 逐实体 push constant
                                           │
-                    Renderer: acquire → record → submit → present
+              Renderer / RenderGraph: begin_frame → passes → end_frame
+                  (GBuffer → Shadow/RayQuery → SHARC GI → Lighting → Post)
                                           │
-                               Swapchain → 屏幕
+                    acquire → record → submit → present（swapchain）
+                                          │
+                               屏幕
 ```
 
-关键观察：**数据从输入流向 GPU，系统（函数）是管道而非对象**。`World` 是唯一真相源，`Renderer` 只读它、`prism-asset` 只喂它。
+关键观察：**数据从输入流向 GPU，系统（函数）是管道而非对象**。`World` 是唯一真相源，渲染层只读它、`prism-asset` 只喂它。
 
-## 各 crate 的职责边界
+## 各 crate 的职责边界（对齐实际代码）
 
 | Crate | 职责 | 不负责 |
 |-------|------|--------|
 | `prism-ecs` | 实体/组件/世界的纯数据模型与查询 | 渲染、窗口、IO |
-| `prism-asset` | glTF/图像解析、句柄化、SceneStore | Vulkan 上传细节 |
-| `prism-render` | Vulkan 上下文/交换链/管线/着色器绑定 | 游戏逻辑、窗口事件 |
-| `prism-engine` | winit 主循环、`App`、相机、输入、RenderSystem | 平台差异（交给 winit） |
-| `prism-android` | Android cdylib 入口 | 任何引擎逻辑 |
+| `prism-asset` | glTF 2.0 加载 + `SceneStore` + `MaterialManager` + `BindlessTextureTable` 的 CPU 端 | Vulkan 上传细节 |
+| `prism-render` | Vulkan 后端：**`render_graph` + `passes`（RenderPassNode）/ `bindless` / `capabilities`（能力探测）/ managers / context / swapchain** | 游戏逻辑、窗口事件 |
+| `prism-engine` | winit 主循环、`App`、相机、输入、`render_system` | 平台差异（交给 winit） |
+| `prism-android` | Android cdylib 入口（`android-game-activity`） | 任何引擎逻辑 |
 
 :::tip 依赖方向是单向的
-`prism-engine` 依赖 `prism-render` + `prism-ecs`；`prism-render` 依赖 `prism-ecs`（仅类型）；`prism-asset` 不依赖任何引擎 crate（纯数据）。**没有循环依赖**——这是架构健康的标志。
+`prism-engine` 依赖 `prism-render` + `prism-ecs`；`prism-render` 依赖 `prism-ecs`（仅类型）与 `prism-asset` 的**类型接缝**（manager 用本地输入结构，不直接依赖 crate）；`prism-asset` 不依赖任何引擎 crate（纯数据）。**没有循环依赖**——这是架构健康的标志。
+:::
+
+:::info 当前落点 vs 过渡态
+DESIGN 第 4 节列出的当前落点：`render_graph.rs` + `passes.rs`（GBuffer/Sharc/RayQuery/Shadow/Lighting/Post）、`bindless.rs`、`prism-asset`、`shaders/slang/sharc/`、`capabilities.rs`。应用层目前通过 `Renderer`（`Renderer::begin_frame` / `draw_scene_pbr` / `end_frame`）衔接，legacy 单体路径正逐步退出——方向已锁定在 RenderGraph，无需平台分支。
 :::
 
 ![引擎架构总览图（待替换为真实架构图）](/assets/placeholder/arch.svg)
 
 ## 坐标约定（全引擎唯一真理）
 
-违反这套约定就是 bug。来自 `README.md`：
+违反这套约定就是 bug。以下约定在全引擎（README、`docs/` 与代码注释）一致沿用，是跨模块协作的硬约束：
 
 ### 世界 & 视图空间（右手系）
 - 原点：场景原点 `(0,0,0)`；轨道相机绕 `OrbitCamera::target` 转。
@@ -76,9 +89,9 @@
 | 语言 | `println!` | `unsafe` + 类型擦除 + blanket impl |
 | 依赖 | 单 crate | workspace + feature + bindgen |
 | 窗口 | 无 | winit 跨平台事件循环 |
-| 图形 | 无 | ash/Vulkan 上下文→swapchain→管线→PBR/IBL |
-| 架构 | 线性 main | ECS 数据导向 + 系统管道 |
-| 平台 | 桌面 | 桌面 + Android 同一份代码 |
+| 图形 | 无 | ash/Vulkan 上下文→swapchain→**RenderGraph + pass 节点**→PBR/IBL/SHARC GI |
+| 架构 | 线性 main | ECS 数据导向 + 系统管道 + **bindless** + **运行时能力探测降级** |
+| 平台 | 桌面 | 桌面 + Android **同一份代码、同一套管线**（无平台分支） |
 
 :::tip 接下来可以往哪走
 - **Render Graph**：把 pass 编排成图（引擎已有 `render_graph.rs`）。

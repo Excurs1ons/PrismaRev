@@ -54,6 +54,24 @@ impl SceneStore {
 `load_gltf` 内部把 glTF 的 node → 引擎的 `InstanceData`（含 Transform + MeshHandle + MaterialHandle），再 `add_instance_to_scene`。于是渲染系统 `query` 到的就是真实模型了。
 :::
 
+## 渲染层接入：MaterialManager 与 BindlessTextureTable
+
+`SceneStore` 是 **CPU 端**资产仓库。真正把资产送进 GPU 的是 `prism-render` 的 manager 层，它刻意**不依赖 `prism-asset`**——引擎层（`prism-engine`）在接缝处把 `prism_asset::MeshData` 等转成 manager 的本地输入结构：
+
+```rust
+// managers/mod.rs：三个 GPU 侧 manager
+pub use mesh_manager::{MeshHandle, RenderMeshManager, UploadedMesh};
+pub use material_manager::{GpuMaterial, MaterialHandle, RenderMaterialManager};
+pub use texture_manager::{RenderTextureManager, TextureFormat, UploadedTexture};
+```
+
+- **`RenderMaterialManager`**：PBR 材质槽池，每个 `MaterialData` 拿到材质 SSBO 里的稳定槽位（shader 用它查参数）。`GpuMaterial` 是 `#[repr(C)]` POD，字段偏移由编译期断言钉死——Rust 改了，shader 必须同步改（见第 11 章 bindless）。
+- **`BindlessTextureTable`**（`bindless.rs`）：现代**分离 SRV + 全局 sampler** 模型。所有纹理活在 `bindless_srvs[]`（runtime-sized `SAMPLED_IMAGE` 数组），采样器集中在很小的 `global_samplers[]`（按 `SamplerType`）。未注册/未就绪的纹理拿 `TextureHandle::INVALID`，shader 返回品红 fallback——在移动端异步加载时避免读未绑定描述符崩溃。
+
+:::tip 资源与渲染解耦（DESIGN 2.2）
+`prism-asset` 不依赖引擎 crate；`prism-render` 的 manager 也不依赖 `prism-asset`。两者通过「本地输入结构」在 `prism-engine` 这一层对接。这样资产格式（glTF/纹理）可替换，渲染架构不因此变形。
+:::
+
 ## glTF 加载：用 `gltf` crate
 
 注意 `Cargo.toml` 里 `gltf = "1.4"`——这个版本号是 **crate 的发布流**，不是 glTF 规范版本；该 crate 加载的是 **glTF 2.0**：
@@ -86,6 +104,19 @@ pub fn magenta_fallback() -> Self { /* (1,0,1) 品红 */ }
 :::warn 颜色空间别搞错
 glTF 的 baseColor 纹理通常是 **sRGB**，而法线/金属度/粗糙度贴图是 **线性**。上传到 Vulkan 时要用正确的 `VkFormat`（如 `SRGB8`）或在采样时做转换，否则颜色会偏暗/偏亮。引擎的 `TexFormat` 枚举区分了这点。
 :::
+
+## 批量上传：BatchUploader
+
+场景大时（如 Sponza 约 880 个资源），如果每个资源都「上传→submit→wait」一轮，GPU 会被几百次往返拖垮。引擎的 `batch.rs` 提供 `BatchUploader`：把许多 buffer / image 拷贝录进**同一个一次性提交命令缓冲**，最后用**一次 `vkQueueSubmit` + 一次 `vkWaitForFences`** 完成：
+
+```rust id=batch-upload
+let mut uploader = BatchUploader::new(&context, command_pool)?;
+uploader.upload_buffer(device_buffer, data)?;
+uploader.upload_image(image, width, height, mip_levels, pixels)?;
+uploader.finish(graphics_queue)?; // 单次 submit + wait，随后清理临时资源
+```
+
+`finish()` 是同步阻塞的（保持单线程加载路径简单），后续可做 timeline-semaphore 的异步变体。这是「资产管线」从「能加载」到「加载得快」的关键一步。
 
 ## 动手练习
 

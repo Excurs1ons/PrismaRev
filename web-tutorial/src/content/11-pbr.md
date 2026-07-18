@@ -60,6 +60,47 @@ float3 sample_specular(float3 r, float roughness) { /* 按 roughness 选 mip */ 
 `ibl.rs` 里有个关键坑：生成 mip 时，必须**提前把整条 mip 链**（所有层、6 个面）从 `UNDEFINED` 转到 `TRANSFER_DST_OPTIMAL`。否则 `cmd_blit_image` 写入 mip 1+ 时验证层会报错。作者专门在注释里记下了这点。
 :::
 
+## SHARC GI 与 RayQueryPass（移动端 GI 蓝图）
+
+PBR + IBL 解决直接光与单次环境反射，但**全局光照（物体互相反射）**需要更重的方案。引擎的 `passes.rs` 已落地：
+
+- **`SharcPass`**：SHARC 世界空间 radiance cache（移植自 NVIDIA RTXGI），是引擎的 GI 方案。相关 shader 在 `shaders/slang/sharc/`（buffers / hash_grid / integration）。
+- **`RayQueryPass`**：用 `VK_KHR_ray_query` 在任意着色阶段发射 inline 光线，做软阴影 / 反射占位。它是 compute pass，依赖能力探测。
+
+按 DESIGN 2.1，**重 pass 默认半分辨率**（`RayQueryPass` 的 `scale = 0.5`）以省移动端带宽/算力。
+
+## 能力探测驱动降级
+
+这是 DESIGN 2.3 的核心：**不靠 `#[cfg(target_os)]` 平台硬编码，而是运行时探测决定走哪条路径**。逻辑集中在 `capabilities.rs`，分层探测物理设备：
+
+```
+Layer 4  VK_KHR_ray_query             → inline 光线（软阴影 / 反射）
+Layer 3  VK_KHR_ray_tracing_pipeline  → 完整 RT-core pipeline（SBT）
+Layer 2  VK_KHR_acceleration_structure + deferred_host_operations
+Layer 1  Vulkan 1.2 提升特性（buffer_device_address, descriptor_indexing, timeline_semaphore）
+```
+
+一个扩展只有在**既被驱动声明、又被 feature struct 报告支持**时才算可用。`RayTracingCaps` 每个字段在缺特性时都是 `false`，调用方可以无条件 branch 而不会在老硬件上 panic：
+
+```rust
+// capabilities.rs（节选）：探测结果驱动 context 的条件启用
+pub struct RayTracingCaps {
+    pub vulkan_1_2: bool,
+    pub buffer_device_address: bool,
+    pub descriptor_indexing: bool,
+    // ... ray_query / ray_tracing_pipeline 等
+}
+```
+
+对应到管线：
+- 有 `VK_KHR_ray_query` → RayQuery 软阴影 / 反射；否则退化为 raster 硬阴影。
+- 支持 descriptor indexing → bindless SRV 表；否则退化为传统 descriptor set。
+- 高版本 Vulkan → dynamic rendering / transient 附件自动采用。
+
+:::tip 这就是「一套管线多端运行」
+桌面 x86_64 与移动端 aarch64 走**完全相同的 RenderGraph 定义**，差异只来自能力探测与 `RenderSettings` 开关。中端 GPU 撑不住时关 RT / 把 GI 切到 Off，架构本身不形变——这正是 DESIGN 2.2 的目标。
+:::
+
 ## Bindless：一次绑定，海量纹理
 
 传统 Vulkan 每个材质要一组独立的 descriptor 绑定，材质一多就爆表。**Bindless** 用「描述符索引」把所有纹理放进一张大表，draw 时只传一个索引：
