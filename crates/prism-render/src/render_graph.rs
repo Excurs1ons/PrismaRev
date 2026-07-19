@@ -22,7 +22,10 @@ use std::collections::HashMap;
 use anyhow::Result;
 use ash::vk;
 
+use crate::capabilities::RayTracingCaps;
 use crate::context::VulkanContext;
+use crate::descriptor::FrameUBO;
+use crate::managers::{MeshHandle, RenderMeshManager};
 
 /// A typed handle to a graph-managed resource (image, buffer).
 /// The inner `u32` is an index into the graph's resource table.
@@ -65,6 +68,30 @@ pub struct ResourceUsage {
     pub layout: vk::ImageLayout,
 }
 
+/// Shadow rendering strategy.
+///
+/// Selected per-frame by [`RenderSettings::resolve_shadow`] using probed
+/// ray-tracing capabilities, so the running path adapts to the GPU. Mirrors
+/// `docs/DESIGN.md` §2.3: `VK_KHR_ray_query` present → RayQuery soft shadow;
+/// otherwise fall back to a rasterized depth-only shadow map.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShadowMode {
+    /// No shadows.
+    None,
+    /// Rasterized depth-only shadow map (always available; the fallback path).
+    Raster,
+    /// RayQuery inline soft shadow (requires `VK_KHR_ray_query` + a built TLAS).
+    RayQuery,
+    /// Automatic: RayQuery when available and RT is enabled, else Raster.
+    Auto,
+}
+
+impl Default for ShadowMode {
+    fn default() -> Self {
+        ShadowMode::Auto
+    }
+}
+
 /// Quality / feature settings that passes consult at execution time.
 /// These are the runtime-switchable knobs described in
 /// `docs/mobile-raytracing-gi-design.md`.
@@ -91,19 +118,95 @@ pub struct RenderSettings {
 
     /// SHARC scene scale — controls voxel physical size.
     pub sharc_scene_scale: f32,
+
+    /// Shadow strategy. `Auto` (default) picks RayQuery when RT is enabled and
+    /// `VK_KHR_ray_query` is supported, otherwise falls back to the rasterized
+    /// shadow map. See [`ShadowMode`].
+    pub shadow_mode: ShadowMode,
 }
 
 impl Default for RenderSettings {
     fn default() -> Self {
         Self {
-            gbuffer_high_precision: true,    // P0 default: world-space normal in GBuffer A needs Rgba16F (Plan §4.3)
-            ray_tracing_enabled: false,      // off by default
+            gbuffer_high_precision: true, // P0 default: world-space normal in GBuffer A needs Rgba16F (Plan §4.3)
+            ray_tracing_enabled: false,   // off by default
             ray_query_resolution_scale: 0.5, // half-res default
-            gi_mode: 0,                      // GI off
-            sharc_capacity: 1 << 20,         // 1M slots (mobile budget)
+            gi_mode: 0,                   // GI off
+            sharc_capacity: 1 << 20,      // 1M slots (mobile budget)
             sharc_scene_scale: 1.0,
+            shadow_mode: ShadowMode::Auto, // adapt to hardware
         }
     }
+}
+
+impl RenderSettings {
+    /// Resolve the effective shadow mode given probed capabilities.
+    ///
+    /// `Auto` selects RayQuery when ray tracing is enabled and
+    /// `VK_KHR_ray_query` is supported, otherwise falls back to the
+    /// rasterized shadow map. Explicit modes pass through unchanged.
+    pub fn resolve_shadow(&self, caps: &RayTracingCaps) -> ShadowMode {
+        match self.shadow_mode {
+            ShadowMode::Auto => {
+                if self.ray_tracing_enabled && caps.has_ray_query() {
+                    ShadowMode::RayQuery
+                } else {
+                    ShadowMode::Raster
+                }
+            }
+            other => other,
+        }
+    }
+}
+
+/// One draw call's static data, supplied by the engine each frame.
+/// Graph passes read these to record geometry draws into their attachments.
+#[derive(Clone)]
+pub struct DrawItem {
+    /// GPU mesh handle (from [`crate::managers::RenderMeshManager`]).
+    pub mesh: MeshHandle,
+    /// Model matrix (world transform) for this instance.
+    pub model: [[f32; 4]; 4],
+    /// Material SSBO slot (index into `RenderMaterialManager`'s
+    /// `GpuMaterial[]` buffer) for the bindless PBR path. `None` -> slot 0
+    /// (the fallback material). `app.rs` resolves `MaterialHandle` -> slot
+    /// via `mat_map` when building the draw list, so passes can push the
+    /// slot directly without a per-draw `slot_of()` lookup.
+    pub material: Option<u32>,
+}
+
+/// Per-frame scene + lighting state shared with every pass via [`RenderContext`].
+///
+/// The `GraphRenderer` populates this once per frame (before driving the
+/// graph) with the camera/light UBO, the draw list, and the light-space
+/// view-projection used by both the shadow pass and the lighting pass.
+pub struct GraphFrame<'a> {
+    /// Per-frame UBO (camera + light). Its descriptor set is bound at set 0.
+    pub frame_ubo: &'a FrameUBO,
+    /// Draw list for the current frame.
+    pub draw_list: &'a [DrawItem],
+    /// Mesh manager — passes resolve [`DrawItem::mesh`] handles to GPU buffers.
+    pub mesh_manager: &'a RenderMeshManager,
+    /// Light-space view-projection (orthographic) used by the shadow pass and
+    /// by the lighting pass to project world positions into the shadow map.
+    pub light_view_proj: [[f32; 4]; 4],
+    /// Effective shadow mode for this frame (after capability resolution).
+    pub shadow_mode: ShadowMode,
+    /// PBR debug visualization mode (0 = final, 1 = albedo, ...). Forwarded to
+    /// the scene shader's push-constant `debug.x`.
+    pub debug_mode: u32,
+    /// Normal-space selector for the `Normal` debug view (0 = world, 1 = tangent).
+    /// Forwarded to the scene shader's push-constant `debug.y`.
+    pub normal_space: u32,
+    /// PBR component toggle bitmask (14 bits, see `scene_bindless.slang`
+    /// `PBR_FLAG_*`). 0 = all components neutral (raw baseColor). Forwarded
+    /// to the bindless push constant `debug_flags` field.
+    pub debug_flags: u32,
+    /// Inverse-view rotation (upper-left 3x3 of inverse(view)), packed as mat4.
+    /// Used by the skybox pass to rotate cube corners into world space. Because
+    /// the view matrix is a rigid transform, this is just the transpose of the
+    /// upper-left 3x3 of `view` (the rotation basis), with w=0 on the 4th row.
+    pub inv_view_rot: [[f32; 4]; 4],
 }
 
 /// Context passed to each pass's `execute`.
@@ -113,8 +216,16 @@ pub struct RenderContext<'a> {
     pub settings: &'a RenderSettings,
     pub cmd: vk::CommandBuffer,
     pub frame_index: u32,
+    /// Swapchain image index returned by `acquire_next_image`. Distinct from
+    /// `frame_index` (which is the frame-in-flight index): with N swapchain
+    /// images and 2 frames in flight, `frame_index` cycles 0..2 while
+    /// `image_index` cycles 0..N. Passes that own per-swapchain-image resources
+    /// (e.g. `ScenePass`'s framebuffers) index by this, not `frame_index`.
+    pub image_index: u32,
     /// Current swapchain extent.
     pub extent: vk::Extent2D,
+    /// Per-frame scene + lighting state (see [`GraphFrame`]).
+    pub frame: &'a GraphFrame<'a>,
 }
 
 /// Trait for a modular render pass.
@@ -249,14 +360,16 @@ impl RenderGraph {
     /// 2. Insert memory barriers between passes
     /// 3. Fuse compatible passes into subpasses
     /// 4. Dispatch compute passes between renderpasses
-    pub fn execute(
+    pub fn execute<'a>(
         &mut self,
         device: &ash::Device,
         context: &VulkanContext,
         settings: &RenderSettings,
         cmd: vk::CommandBuffer,
         frame_index: u32,
+        image_index: u32,
         extent: vk::Extent2D,
+        frame: &'a GraphFrame<'a>,
     ) -> Result<()> {
         let resources = GraphResources {
             resources: self.resources.clone(),
@@ -269,7 +382,9 @@ impl RenderGraph {
                 settings,
                 cmd,
                 frame_index,
+                image_index,
                 extent,
+                frame,
             };
             pass.execute(&ctx, &resources)?;
         }
@@ -320,7 +435,8 @@ impl RenderGraph {
                         *extent,
                         *sample_count,
                         vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT
-                            | vk::ImageUsageFlags::INPUT_ATTACHMENT,
+                            | vk::ImageUsageFlags::INPUT_ATTACHMENT
+                            | vk::ImageUsageFlags::SAMPLED,
                         true,
                     )?;
                     res.image = Some(image);
@@ -351,6 +467,12 @@ impl RenderGraph {
             }
         }
         Ok(())
+    }
+
+    /// Look up a graph-managed image view by resource handle.
+    /// Returns `None` if the handle does not exist or the resource has no view.
+    pub fn image_view(&self, h: ResourceHandle) -> Option<vk::ImageView> {
+        self.resources.get(&h).and_then(|r| r.image_view)
     }
 
     /// Destroy all owned Vulkan resources.

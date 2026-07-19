@@ -70,6 +70,19 @@
                                 }
                             },
                             "binding": {"kind": "uniform", "offset": 112, "size": 64}
+                        },
+                        {
+                            "name": "lightViewProj",
+                            "type": {
+                                "kind": "matrix",
+                                "rowCount": 4,
+                                "columnCount": 4,
+                                "elementType": {
+                                    "kind": "scalar",
+                                    "scalarType": "float32"
+                                }
+                            },
+                            "binding": {"kind": "uniform", "offset": 176, "size": 64}
                         }
                     ]
                 },
@@ -142,10 +155,23 @@
                                     }
                                 },
                                 "binding": {"kind": "uniform", "offset": 112, "size": 64}
+                            },
+                            {
+                                "name": "lightViewProj",
+                                "type": {
+                                    "kind": "matrix",
+                                    "rowCount": 4,
+                                    "columnCount": 4,
+                                    "elementType": {
+                                        "kind": "scalar",
+                                        "scalarType": "float32"
+                                    }
+                                },
+                                "binding": {"kind": "uniform", "offset": 176, "size": 64}
                             }
                         ]
                     },
-                    "binding": {"kind": "uniform", "offset": 0, "size": 176}
+                    "binding": {"kind": "uniform", "offset": 0, "size": 240}
                 }
             }
         },
@@ -214,6 +240,62 @@
                                 "scalarType": "uint32"
                             },
                             "binding": {"kind": "uniform", "offset": 44, "size": 4}
+                        },
+                        {
+                            "name": "transmission_factor",
+                            "type": {
+                                "kind": "vector",
+                                "elementCount": 4,
+                                "elementType": {
+                                    "kind": "scalar",
+                                    "scalarType": "float32"
+                                }
+                            },
+                            "binding": {"kind": "uniform", "offset": 48, "size": 16}
+                        },
+                        {
+                            "name": "clearcoat",
+                            "type": {
+                                "kind": "vector",
+                                "elementCount": 4,
+                                "elementType": {
+                                    "kind": "scalar",
+                                    "scalarType": "float32"
+                                }
+                            },
+                            "binding": {"kind": "uniform", "offset": 64, "size": 16}
+                        },
+                        {
+                            "name": "transmission_tex_idx",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "uint32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 80, "size": 4}
+                        },
+                        {
+                            "name": "clearcoat_tex_idx",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "uint32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 84, "size": 4}
+                        },
+                        {
+                            "name": "_pad0",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "uint32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 88, "size": 4}
+                        },
+                        {
+                            "name": "_pad1",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "uint32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 92, "size": 4}
                         }
                     ]
                 }
@@ -321,16 +403,24 @@
                             "binding": {"kind": "uniform", "offset": 76, "size": 4}
                         },
                         {
+                            "name": "debug_flags",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "uint32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 80, "size": 4}
+                        },
+                        {
                             "name": "_padding",
                             "type": {
                                 "kind": "vector",
-                                "elementCount": 4,
+                                "elementCount": 3,
                                 "elementType": {
                                     "kind": "scalar",
                                     "scalarType": "uint32"
                                 }
                             },
-                            "binding": {"kind": "uniform", "offset": 80, "size": 16}
+                            "binding": {"kind": "uniform", "offset": 96, "size": 12}
                         }
                     ]
                 },
@@ -388,20 +478,28 @@
                                 "binding": {"kind": "uniform", "offset": 76, "size": 4}
                             },
                             {
+                                "name": "debug_flags",
+                                "type": {
+                                    "kind": "scalar",
+                                    "scalarType": "uint32"
+                                },
+                                "binding": {"kind": "uniform", "offset": 80, "size": 4}
+                            },
+                            {
                                 "name": "_padding",
                                 "type": {
                                     "kind": "vector",
-                                    "elementCount": 4,
+                                    "elementCount": 3,
                                     "elementType": {
                                         "kind": "scalar",
                                         "scalarType": "uint32"
                                     }
                                 },
-                                "binding": {"kind": "uniform", "offset": 80, "size": 16}
+                                "binding": {"kind": "uniform", "offset": 96, "size": 12}
                             }
                         ]
                     },
-                    "binding": {"kind": "uniform", "offset": 0, "size": 96}
+                    "binding": {"kind": "uniform", "offset": 0, "size": 112}
                 }
             }
         }
@@ -538,7 +636,7 @@
                 },
                 {
                     "name": "envCube",
-                    "binding": {"kind": "descriptorTableSlot", "space": 2, "index": 0, "used": 0}
+                    "binding": {"kind": "descriptorTableSlot", "space": 2, "index": 0, "used": 1}
                 },
                 {
                     "name": "pc",

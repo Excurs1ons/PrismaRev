@@ -117,9 +117,9 @@ pub struct PbrPushConstants {
 }
 
 /// Push constants for the **bindless** PBR draw call (see
-/// `shaders/slang/bindless.slang`).
+/// `shaders/slang/scene_bindless.slang`).
 ///
-/// Material parameters are no longer pushed per-draw — they live in the
+/// Material parameters are no longer pushed per-draw - they live in the
 /// material SSBO (`RenderMaterialManager::buffer`) and are looked up by
 /// slot index. The draw only needs the model matrix, the material slot,
 /// the env cubemap bindless handle, and the albedo / normal-map bindless
@@ -133,7 +133,8 @@ pub struct PbrPushConstants {
 /// | env_handle      | 68     | 4    |
 /// | albedo_idx      | 72     | 4    |
 /// | normal_idx      | 76     | 4    |
-/// | _padding        | 80     | 16   |
+/// | debug_flags     | 80     | 4    |  <- PBR component toggle bitmask (14 bits)
+/// | _padding        | 84     | 12   |
 #[repr(C)]
 pub struct PbrBindlessPushConstants {
     pub model: [[f32; 4]; 4],
@@ -141,10 +142,14 @@ pub struct PbrBindlessPushConstants {
     pub env_handle: u32,
     pub albedo_idx: u32,
     pub normal_idx: u32,
+    /// Bitmask selecting which PBR components are active (see
+    /// `scene_bindless.slang` `PBR_FLAG_*` constants). Bit unset = component
+    /// uses its neutral value (so flags=0 yields raw baseColor).
+    pub debug_flags: u32,
     /// Explicit padding so the struct stays a multiple of 16 bytes; the
     /// shader declares the push-constant block with the same alignment
     /// and reads the same number of bytes.
-    pub _padding: [u32; 4],
+    pub _padding: [u32; 3],
 }
 
 #[cfg(test)]
@@ -181,9 +186,10 @@ mod tests {
             76
         );
         assert_eq!(
-            std::mem::offset_of!(PbrBindlessPushConstants, _padding),
+            std::mem::offset_of!(PbrBindlessPushConstants, debug_flags),
             80
         );
+        assert_eq!(std::mem::offset_of!(PbrBindlessPushConstants, _padding), 84);
     }
 
     #[test]

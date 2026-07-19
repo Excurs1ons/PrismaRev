@@ -27,7 +27,9 @@ pub mod buffer;
 pub mod capabilities;
 pub mod context;
 pub mod descriptor;
+pub mod egui_overlay;
 pub mod gizmo;
+pub mod graph_renderer;
 pub mod hdr;
 pub mod ibl;
 pub mod managers;
@@ -62,16 +64,21 @@ pub use deprecated::renderer_legacy::SceneDrawItem;
 pub use buffer::create_buffer;
 pub use capabilities::RayTracingCaps;
 pub use context::VulkanContext;
-pub use descriptor::{DescriptorLayout, DescriptorPool, FrameUBO, FrameUBOData};
+pub use descriptor::{
+    DescriptorLayout, DescriptorPool, FrameUBO, FrameUBOData, GpuLight, LIGHT_MAX,
+};
+pub use egui_overlay::EguiOverlay;
 pub use gizmo::Gizmo;
+pub use graph_renderer::GraphRenderer;
 pub use mesh::{Mesh, Vertex};
 pub use overlay::{Overlay, OverlayAction, OverlayVertex};
 pub use passes::{
-    GBufferPass, LightingPass, PostPass, RayQueryPass, ShadowPushConstants, SharcPass,
+    GBufferPass, LightingPass, PostPass, RayQueryPass, ScenePass, ShadowPushConstants, SharcPass,
     SharcQueryPushConstants,
 };
 pub use pbr_push::{DebugMode, NormalSpace, PbrBindlessPushConstants, PbrPushConstants};
 pub use pipeline::GraphicsPipeline;
+pub use render_graph::DrawItem;
 pub use render_pass::{DepthImage, Framebuffers, RenderPass};
 pub use shader::load_shader_module;
 pub use swapchain::Swapchain;

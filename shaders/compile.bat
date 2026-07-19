@@ -18,7 +18,7 @@ pushd "%HERE%"
 
 set SRC=slang
 set REFL=reflection
-set PROFILE=sspirv_1_5
+set PROFILE=spirv_1_5
 if not "%SLANG_PROFILE%"=="" set PROFILE=%SLANG_PROFILE%
 
 if "%SLANGC%"=="" set SLANGC=slangc
@@ -75,6 +75,27 @@ echo   shadow :: computeMain -^> shadow.comp.spv
 del /q "%REFL%\shadow.tmp.spv" 2>nul
 echo   reflect shadow -^> reflection\shadow.json
 
+REM shadowmap: vertex + fragment (rasterized depth-only shadow map fallback)
+%SLANGC% "%SRC%\shadowmap.slang"  -profile %PROFILE% -target spirv -entry vertexMain   -stage vertex   -fvk-use-entrypoint-name -o shadowmap.vert.spv  || goto :fail
+echo   shadowmap :: vertexMain   -^> shadowmap.vert.spv
+%SLANGC% "%SRC%\shadowmap.slang"  -profile %PROFILE% -target spirv -entry fragmentMain -stage fragment -fvk-use-entrypoint-name -o shadowmap.frag.spv  || goto :fail
+echo   shadowmap :: fragmentMain -^> shadowmap.frag.spv
+
+REM scene: vertex + fragment (forward PBR + IBL RenderGraph path)
+%SLANGC% "%SRC%\scene.vert.slang" -profile %PROFILE% -target spirv -entry vertexMain   -stage vertex   -fvk-use-entrypoint-name -o scene.vert.spv   || goto :fail
+echo   scene :: vertexMain   -^> scene.vert.spv
+%SLANGC% "%SRC%\scene.frag.slang" -profile %PROFILE% -target spirv -entry fragmentMain -stage fragment -fvk-use-entrypoint-name -o scene.frag.spv   || goto :fail
+echo   scene :: fragmentMain -^> scene.frag.spv
+
+REM skybox: vertex + fragment (environment cubemap background)
+%SLANGC% "%SRC%\skybox.slang" -profile %PROFILE% -target spirv -entry vertexMain   -stage vertex   -fvk-use-entrypoint-name -o skybox.vert.spv  || goto :fail
+echo   skybox :: vertexMain   -^> skybox.vert.spv
+%SLANGC% "%SRC%\skybox.slang" -profile %PROFILE% -target spirv -entry fragmentMain -stage fragment -fvk-use-entrypoint-name -o skybox.frag.spv  || goto :fail
+echo   skybox :: fragmentMain -^> skybox.frag.spv
+%SLANGC% "%SRC%\skybox.slang" -profile %PROFILE% -target spirv -entry vertexMain -stage vertex -entry fragmentMain -stage fragment -reflection-json "%REFL%\skybox.json" -o "%REFL%\skybox.tmp.spv"   || goto :fail
+del /q "%REFL%\skybox.tmp.spv" 2>nul
+echo   reflect skybox -^> reflection\skybox.json
+
 REM sharc_query: compute (SHARC GI cache lookup, half-res)
 %SLANGC% "%SRC%\sharc_query.slang"  -profile %PROFILE% -target spirv -entry computeMain -stage compute  -I "%SRC%" -fvk-use-entrypoint-name -o sharc_query.comp.spv   || goto :fail
 echo   sharc_query :: computeMain -^> sharc_query.comp.spv
@@ -100,9 +121,21 @@ REM bindless: fragment only (pairs with mesh.vert.spv from mesh.slang vertex
 REM at pipeline-build time to form the bindless PBR draw pipeline).
 %SLANGC% "%SRC%\bindless.slang"  -profile %PROFILE% -target spirv -entry fragmentMain -stage fragment -fvk-use-entrypoint-name -o bindless.frag.spv   || goto :fail
 echo   bindless :: fragmentMain -^> bindless.frag.spv
+REM Slang emits an illegal ArrayStride decoration on the bindless image/sampler
+REM runtime arrays; strip it (see fix_spirv.py) so the module validates.
+if exist "%REFL%\..\fix_spirv.py" python3 "%REFL%\..\fix_spirv.py" bindless.frag.spv bindless.frag.spv
 %SLANGC% "%SRC%\bindless.slang"  -profile %PROFILE% -target spirv -entry fragmentMain -stage fragment -reflection-json "%REFL%\bindless.json" -o "%REFL%\bindless.tmp.spv"   || goto :fail
 del /q "%REFL%\bindless.tmp.spv" 2>nul
 echo   reflect bindless -^> reflection\bindless.json
+
+REM scene_bindless: fragment only (RenderGraph ScenePass bindless PBR +
+REM rasterized shadow map). Pairs with mesh.vert.spv. This is the
+REM graph-path counterpart of bindless.slang with shadow-map sampling;
+REM lightViewProj is read from the per-frame UBO (not push constants) so
+REM the push constant stays under the 128-byte Vulkan limit.
+%SLANGC% "%SRC%\scene_bindless.slang" -profile %PROFILE% -target spirv -entry fragmentMain -stage fragment -fvk-use-entrypoint-name -o scene_bindless.frag.spv   || goto :fail
+echo   scene_bindless :: fragmentMain -^> scene_bindless.frag.spv
+if exist "%REFL%\..\fix_spirv.py" python3 "%REFL%\..\fix_spirv.py" scene_bindless.frag.spv scene_bindless.frag.spv
 
 echo.
 echo All Slang shaders compiled successfully.

@@ -177,8 +177,8 @@ impl SceneStore {
     /// Load a glTF / glb scene from a filesystem path. Loads external image
     /// references relative to the file's parent directory.
     pub fn load_gltf(&mut self, path: &Path) -> Result<SceneHandle> {
-        let bytes = std::fs::read(path)
-            .with_context(|| format!("read glTF file '{}'", path.display()))?;
+        let bytes =
+            std::fs::read(path).with_context(|| format!("read glTF file '{}'", path.display()))?;
         let base = path.parent();
         self.load_gltf_bytes(&bytes, base)
     }

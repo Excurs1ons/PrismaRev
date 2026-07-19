@@ -68,10 +68,8 @@ impl<'a> BatchUploader<'a> {
         }
         .context("BatchUploader: begin command buffer")?;
 
-        let sync2 =
-            ash::khr::synchronization2::Device::new(&context.instance, &context.device);
-        let copy2 =
-            ash::khr::copy_commands2::Device::new(&context.instance, &context.device);
+        let sync2 = ash::khr::synchronization2::Device::new(&context.instance, &context.device);
+        let copy2 = ash::khr::copy_commands2::Device::new(&context.instance, &context.device);
 
         Ok(Self {
             context,
@@ -388,16 +386,12 @@ impl<'a> BatchUploader<'a> {
             .context("BatchUploader: end command buffer")?;
         self.started = false;
 
-        let fence = unsafe {
-            device.create_fence(&vk::FenceCreateInfo::default(), None)
-        }
-        .context("BatchUploader: create fence")?;
+        let fence = unsafe { device.create_fence(&vk::FenceCreateInfo::default(), None) }
+            .context("BatchUploader: create fence")?;
         let cmd_bufs = [self.cmd];
         let submit_info = vk::SubmitInfo::default().command_buffers(&cmd_bufs);
-        unsafe {
-            device.queue_submit(graphics_queue, &[submit_info], fence)
-        }
-        .context("BatchUploader: submit")?;
+        unsafe { device.queue_submit(graphics_queue, &[submit_info], fence) }
+            .context("BatchUploader: submit")?;
         unsafe { device.wait_for_fences(&[fence], true, u64::MAX) }
             .context("BatchUploader: wait for fence")?;
         unsafe { device.destroy_fence(fence, None) };

@@ -8,15 +8,16 @@
 // reflection-generated bindings agree with the hand-written ones.
 module common;
 
-// Per-frame uniform data. Mirrors GLSL `FrameUBO` (set 0, binding 0).
-// std140: mat4(64) + vec4(16)*3 + mat4(64) = 176 bytes.
+// Per-frame uniform data. Mirrors Rust `FrameUBOData` (set 0, binding 0).
+// std140: mat4(64) + vec4(16)*3 + mat4(64) + mat4(64) = 240 bytes.
 public struct FrameUBO
 {
     public float4x4 viewProj;        // offset   0
-    public float4   cameraPosition;  // offset  64  (xyz = camera pos)
+    public float4   cameraPosition;  // offset  64  (xyz = camera pos, w = point light count)
     public float4   lightDirection;  // offset  80  (xyz = dir TO light, w = intensity)
     public float4   lightColor;      // offset  96  (rgb = color, w = ambient factor)
     public float4x4 view;            // offset 112  (world -> view)
+    public float4x4 lightViewProj;   // offset 176  (light-space VP for shadow map)
 };
 
 // Vertex stream matching mesh.vert input locations 0..4.

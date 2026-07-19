@@ -305,6 +305,7 @@ fn create_device(
     // --- Build the VkPhysicalDeviceFeatures2 pNext chain ---
     // Each feature struct is declared out here so it outlives the create_info
     // borrow (same pattern as validation_features in create_instance).
+    let mut vk11 = vk::PhysicalDeviceVulkan11Features::default();
     let mut vk12 = vk::PhysicalDeviceVulkan12Features::default();
     let mut accel_features = vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default();
     let mut rt_pipeline_features = vk::PhysicalDeviceRayTracingPipelineFeaturesKHR::default();
@@ -316,6 +317,11 @@ fn create_device(
     // illegal. `buffer.rs` issues these barriers unconditionally for texture
     // upload + mip generation.
     let mut sync2_features = vk::PhysicalDeviceSynchronization2FeaturesKHR::default();
+
+    // Vulkan 1.1 feature: shaderDrawParameters is needed when a shader
+    // references SV_VertexID (DrawParameters SPIR-V capability). The skybox
+    // vertex shader uses vid%8 to select cube corners without a vertex buffer.
+    vk11.shader_draw_parameters = vk::TRUE;
 
     // Layer 1: Vulkan 1.2 promoted features that RT depends on.
     if rt_caps.buffer_device_address {
@@ -340,6 +346,7 @@ fn create_device(
     sync2_features.synchronization2 = vk::TRUE;
     let mut features2 = vk::PhysicalDeviceFeatures2::default()
         .features(legacy_features)
+        .push_next(&mut vk11)
         .push_next(&mut vk12)
         .push_next(&mut sync2_features);
 

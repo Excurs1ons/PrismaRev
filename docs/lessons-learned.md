@@ -134,3 +134,67 @@ Vulkan 渲染循环的核心是**同步原语的正确配对**。最容易出错
 | fence | `MAX_FRAMES_IN_FLIGHT` | `current_frame` 轮转 | CPU 等待 GPU 完成命令缓冲区 |
 
 **不要画蛇添足**：标准模式（fence 轮转 + per-image render_finished 信号量）已经足够，不需要 per-image fence 追踪。多余的同步机制反而会引入死锁。
+
+## 12. Vulkan 1.2 下 `VK_KHR_synchronization2` 必须显式启用且用 KHR 包装器
+
+**问题**：`Unable to load cmd_pipeline_barrier2` 非展开 panic（崩在 `create_and_upload_image` 的 `vkCmdPipelineBarrier2`）。
+
+**原因**：
+- 实例/设备创建使用 `API_VERSION_1_2`。在 1.2 上核心符号 `vkCmdPipelineBarrier2` **不在 dispatch 表**里，只有 `vkCmdPipelineBarrier2KHR` 可用（该扩展在 1.3 才进核心）。
+- 仅 `enabled_extension_names.push(ash::khr::synchronization2::NAME)` **不够**——`ash::Device::cmd_pipeline_barrier2` 只加载核心符号，仍 panic。
+
+**教训**：
+- 在 1.2 设备上用到 sync2 barrier，必须把扩展加进 `enabled_extension_names`，并且用 `ash::khr::synchronization2::Device::new(&instance, &device)` 拿到 KHR 包装器来调用。
+- 同理 `cmd_blit_image2` 在 1.2 上来自 `VK_KHR_copy_commands2`，也要用对应 KHR 包装器。
+- 不要试图把实例升到 1.3 来"取巧"——物理设备可能只支持 1.2，会直接导致 `createDevice` 失败。
+
+## 13. Slang 对 bindless 运行时数组会生成非法 SPIR-V
+
+**问题**：validation 层 `vkCreateShaderModule()` 报 `Invalid explicit layout decorations on type`（`%_runtimearr_XX ArrayStride 8`），VUID-StandaloneSpirv-None-10684。
+
+**原因**：`Texture2D[]` / `SamplerState[]`（`UniformConstant` 运行时数组）被 Slang 错误加上 `OpDecorate <arr> ArrayStride 8`。SPIR-V 校验禁止对"元素是 opaque 类型（image/sampler）的运行时数组"加显式 layout 装饰。该 bug 在 `spirv_1_3`~`spirv_1_6` 所有 profile 上都复现。
+
+**教训**：
+- 编译后必须过 `spirv-val`；这种错误在 debug validation 下才会暴露，release 不校验但驱动行为未定义。
+- 修复：用 `shaders/fix_spirv.py` 在编译后剥离——只删"元素是 `OpTypeImage`/`OpTypeSampler` 的运行时数组"的 `ArrayStride`；**SSBO / struct 数组的 `ArrayStride` 是合法的，必须保留**。
+- 编译脚本（`compile.bat` / `compile.sh`）要把 `fix_spirv.py` 串进 bindless 着色器的产物链。
+
+## 14. 改了 shader 源文件却没生效？先确认三件事
+
+**问题**：反复改 `scene_bindless.slang` 的 IBL 常量，运行现象纹丝不动（"仍然灰白"）。
+
+**原因（按顺序排查）**：
+1. **shader 源文件名/编译脚本错误让 `.spv` 根本没重编**：`compile.sh` 有 `set -euo pipefail`，中途某个 shader 源文件名不对（如 `scene.slang` 实际是 `scene.vert.slang`/`scene.frag.slang`）会让脚本提前 `exit`，**后续 shader（含 bindless）没被重新生成**，磁盘上还是改之前的旧 `.spv`。profile 名字也要对：当前 slangc 接受 `spirv_1_5`，拒绝旧名 `sspirv_1_5`。
+2. **改错了 shader 文件**：sponza 走的是 `GraphRenderer` → `ScenePass`（`scene_bindless.frag.spv`）直连 swapchain。`GBufferPass`/`LightingPass`/`PostPass` 当前**没被 GraphRenderer 连接**，改 `lighting.slang`/`post.slang` 全是无效功。
+3. **`include_bytes!` 是编译期打进二进制的**：必须 `cargo build` 重编 Rust 才能拾取新 `.spv`。
+
+**教训**：
+- 改完**必须亲自用 `spirv-dis` 反编译 `.spv`，核对相关 `OpConstant %float` 确实变了**，不能只看 `compile.sh` 打印 "compiled"。
+- 改 shader 前先 grep 实际 `include_bytes!` 的 `FRAG_SPV`，以及 `GraphRenderer::render` / `add_pass` 里真正连接的 pass，确认改的是会被执行的 binary。
+- "屏蔽某段看还剩什么"是有效的隔离手段（屏蔽 IBL 后灰白消失 → 坐实 IBL 是元凶），但前提是隔离改的是对的文件。
+
+## 15. 色彩空间：SRGB swapchain 会对输出做二次 gamma 编码
+
+**问题**：unlit 直接 `return sampled.rgb`（纹理 sRGB 字节）后，红棕瓦片被提亮成**黄白**。
+
+**原因**：swapchain 是 `B8G8R8A8_SRGB`，Vulkan 会对 shader 输出再做一次 sRGB 编码（gamma 1/2.2）后显示。纹理以 `R8G8B8A8_UNORM`（sRGB 字节）上传，unlit 直接输出 → 被 swapchain 二次编码 → 偏亮偏黄白。
+**没有 post 参与**（本次 sponza 路径根本没接 PostPass），"黄白"不能归咎于 post 的 `pow(1/2.2)` —— 那是错误归因。
+
+**教训**：
+- unlit 想"所见即纹理"：输出前 `albedo = pow(sampled.rgb, 2.2)`（sRGB→linear），让 SRGB swapchain 编码回去 = 原纹理色。
+- **环境光"灰白污染"不是运算符问题**：漫反射 IBL `irradiance * albedo` 本来就是 multiply，正确。真问题是 `irradiance` 是个**恒定灰色常量**（如 0.06~0.12 灰），作为独立 add 项叠加，背光面只剩这层灰白。正确做法是从 `envCube` 采样真实辐照度（带环境色调），而非一坨灰常量。
+- **纹理格式应区分 sRGB / linear（根基性修复，仍待办）**：albedo / emissive 是 sRGB 数据，应上传为 `R8G8B8A8_SRGB`（采样自动转 linear，光照在 linear 空间算，输出 SRGB swapchain 编码回去）；normal / metallic-roughness 是 linear 数据，必须保持 `R8G8B8A8_UNORM`。当前所有纹理统一 `UNORM` 上传，是 PBR 色彩正确的根本缺陷，也是那套 gamma hack 的来源。
+
+## 总结（补充）
+
+本次里程碑暴露的问题集中在**扩展/校验/构建链路/色彩空间**四类，而非同步原语：
+
+| 类别 | 关键坑 | 验证手段 |
+|------|--------|----------|
+| 扩展加载 | 1.2 上 sync2/copy2 要显式启用 + KHR 包装器 | 崩溃栈指向 `load_erased` |
+| SPIR-V 合法性 | Slang 给 opaque 运行时数组加非法 `ArrayStride` | `spirv-val` 报 VUID-StandaloneSpirv |
+| 构建链路 | 编译脚本中途失败导致 `.spv` 没重编；改错文件 | `spirv-dis` 反编译核对常量 |
+| 色彩空间 | SRGB swapchain 二次 gamma 编码；IBL 灰常量 | unlit 输出 + 隔离 IBL |
+| 路径确认 | sponza 走 ScenePass 直连 swapchain，无 post | grep `include_bytes!` + `add_pass` |
+
+**先确认实际路径，再改代码**：所有"改了没生效 / 归因错"都源于先入为主假设了渲染路径。改 shader 前先确认它确实被编译、被连接、被二进制包含。

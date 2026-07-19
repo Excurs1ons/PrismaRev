@@ -123,8 +123,14 @@ impl RenderMeshManager {
         } else {
             Some(&input.indices)
         };
-        let mesh = Mesh::new(context, command_pool, graphics_queue, &vertices, indices_opt)
-            .context("RenderMeshManager::register: Mesh::new failed")?;
+        let mesh = Mesh::new(
+            context,
+            command_pool,
+            graphics_queue,
+            &vertices,
+            indices_opt,
+        )
+        .context("RenderMeshManager::register: Mesh::new failed")?;
         let handle = self.meshes.insert(UploadedMesh { mesh });
         Ok(handle)
     }
@@ -195,17 +201,9 @@ fn build_vertices(input: &MeshUploadInput) -> Vec<crate::mesh::Vertex> {
     for i in 0..n {
         let pos = input.positions.get(i).copied().unwrap_or([0.0, 0.0, 0.0]);
         let normal = input.normals.get(i).copied().unwrap_or([0.0, 1.0, 0.0]);
-        let color = input
-            .colors
-            .get(i)
-            .copied()
-            .unwrap_or([1.0, 1.0, 1.0]);
+        let color = input.colors.get(i).copied().unwrap_or([1.0, 1.0, 1.0]);
         let uv = input.uvs.get(i).copied().unwrap_or([0.0, 0.0]);
-        let tangent = input
-            .tangents
-            .get(i)
-            .copied()
-            .unwrap_or([1.0, 0.0, 0.0]);
+        let tangent = input.tangents.get(i).copied().unwrap_or([1.0, 0.0, 0.0]);
         out.push(crate::mesh::Vertex {
             position: pos,
             normal,

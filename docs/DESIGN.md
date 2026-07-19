@@ -47,6 +47,17 @@
   - 高版本 Vulkan 可用 dynamic rendering / transient 附件 → 自动采用以省带宽。
 - 探测逻辑集中、可测试，不被散落到各 pass 里。
 
+> **阴影实现状态（2026-07-18）**：当前 MVP 已实现**单张光栅化阴影贴图**
+> （`ShadowMapPass` 深度预渲染 + `ScenePass` 用 comparison sampler 采样，
+> 见 `shaders/slang/shadowmap.slang` / `scene.frag.slang`）。`RenderSettings::
+> shadow_mode` 支持 `Auto`/`Raster`/`RayQuery`/`None`，由 `resolve_shadow`
+> 按 `VK_KHR_ray_query` 能力自动选择。
+>
+> **TODO（CSM）**：级联阴影贴图（Cascaded Shadow Maps）尚未实现，仅单张
+> 固定范围正交阴影。后续在 `ShadowMapPass` 内按相机视锥切片拆成多张级联，
+> 并在 `scene.frag.slang::sample_shadow` 中按距离选择级联 —— 这是已知
+> 待办，不在本次 MVP 范围。
+
 ## 3. 派生约束（从目标推出来的硬规则）
 
 | 规则 | 理由 |
@@ -67,7 +78,7 @@
 | bindless / 全平台统一 | `prism-render/src/bindless.rs`（分离 SRV + 全局 sampler 表） |
 | 资源管理解耦 | `prism-asset`（glTF 2.0 加载器 + `SceneStore` + `MaterialManager`） |
 | 移动端 GI | `shaders/slang/sharc/`（SHARC 世界空间 radiance cache，移植自 NVIDIA RTXGI） |
-| 阴影 / RT | `shadow.slang`（RayQuery compute）+ `RayQueryPass`（软阴影 / 反射占位） |
+| 阴影 / RT | 光栅化阴影贴图：`ShadowMapPass`（深度预渲染）+ `ScenePass`（comparison sampler 采样）；RayQuery 软阴影占位 `shadow.slang` + `RayQueryPass`（待接入） |
 | 能力探测 | `prism-render/src/capabilities.rs`（集中探测，扩展中） |
 
 ## 5. 反目标（明确不做什么）

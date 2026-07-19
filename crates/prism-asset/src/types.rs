@@ -66,12 +66,15 @@ impl MeshData {
 ///
 /// `metallic_roughness_tex` is sampled as a packed texture: R unused, G =
 /// roughness, B = metallic, A unused (glTF convention).
+///
+/// Advanced PBR fields (transmission, IOR, translucency, anisotropy, clearcoat,
+/// emissive_strength) are gated by the PBR debug flag bits in the shader.
 #[derive(Clone, Debug)]
 pub struct MaterialData {
     pub name: String,
     /// Linear-space base color. The renderer assumes sRGB input has been
     /// converted to linear at sample time; for `albedo_tex` set, the shader
-    /// applies the sRGB→linear transform on the sampled value.
+    /// applies the sRGB->linear transform on the sampled value.
     pub base_color: [f32; 4],
     pub metallic: f32,
     pub roughness: f32,
@@ -86,6 +89,22 @@ pub struct MaterialData {
     /// Packed metallic (B) / roughness (G) per glTF convention.
     pub metallic_roughness_tex: Option<TextureHandle>,
     pub emissive_tex: Option<TextureHandle>,
+
+    // ---- Advanced PBR fields (gated by flag bits in shader) ----
+    /// Transmission factor [0,1]. How much light passes through the surface.
+    pub transmission: f32,
+    /// Index of refraction (for transmission). Typically 1.0-2.5.
+    pub ior: f32,
+    /// Translucency / subsurface approximation [0,1].
+    pub translucency: f32,
+    /// Anisotropy strength [0,1]. Controls specular stretching direction.
+    pub anisotropy: f32,
+    /// Clearcoat factor [0,1]. Extra dielectric specular lobe on top.
+    pub clearcoat: f32,
+    /// Clearcoat roughness [0,1]. Roughness of the clearcoat lobe.
+    pub clearcoat_roughness: f32,
+    /// Emissive strength multiplier (KHR_materials_emissive_strength).
+    pub emissive_strength: f32,
 }
 
 impl Default for MaterialData {
@@ -103,6 +122,13 @@ impl Default for MaterialData {
             normal_tex: None,
             metallic_roughness_tex: None,
             emissive_tex: None,
+            transmission: 0.0,
+            ior: 1.5,
+            translucency: 0.0,
+            anisotropy: 0.0,
+            clearcoat: 0.0,
+            clearcoat_roughness: 0.0,
+            emissive_strength: 1.0,
         }
     }
 }

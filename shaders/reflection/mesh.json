@@ -70,6 +70,19 @@
                                 }
                             },
                             "binding": {"kind": "uniform", "offset": 112, "size": 64}
+                        },
+                        {
+                            "name": "lightViewProj",
+                            "type": {
+                                "kind": "matrix",
+                                "rowCount": 4,
+                                "columnCount": 4,
+                                "elementType": {
+                                    "kind": "scalar",
+                                    "scalarType": "float32"
+                                }
+                            },
+                            "binding": {"kind": "uniform", "offset": 176, "size": 64}
                         }
                     ]
                 },
@@ -142,10 +155,23 @@
                                     }
                                 },
                                 "binding": {"kind": "uniform", "offset": 112, "size": 64}
+                            },
+                            {
+                                "name": "lightViewProj",
+                                "type": {
+                                    "kind": "matrix",
+                                    "rowCount": 4,
+                                    "columnCount": 4,
+                                    "elementType": {
+                                        "kind": "scalar",
+                                        "scalarType": "float32"
+                                    }
+                                },
+                                "binding": {"kind": "uniform", "offset": 176, "size": 64}
                             }
                         ]
                     },
-                    "binding": {"kind": "uniform", "offset": 0, "size": 176}
+                    "binding": {"kind": "uniform", "offset": 0, "size": 240}
                 }
             }
         },

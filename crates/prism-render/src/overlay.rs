@@ -328,12 +328,15 @@ impl Overlay {
             shader::load_shader_module(device, OVERLAY_FRAG_SPV).context("load overlay frag")?;
         // Entry-point names from Slang reflection (slangc keeps vertexMain /
         // fragmentMain via -fvk-use-entrypoint-name; see shader_bindings).
-        let vert_entry =
-            CString::new(crate::shader_bindings::overlay::ENTRY_VERTEX_MAIN).unwrap();
+        let vert_entry = CString::new(crate::shader_bindings::overlay::ENTRY_VERTEX_MAIN).unwrap();
         let frag_entry =
             CString::new(crate::shader_bindings::overlay::ENTRY_FRAGMENT_MAIN).unwrap();
         let shader_stages = [
-            shader::shader_stage(vk::ShaderStageFlags::VERTEX, vert_module, vert_entry.as_c_str()),
+            shader::shader_stage(
+                vk::ShaderStageFlags::VERTEX,
+                vert_module,
+                vert_entry.as_c_str(),
+            ),
             shader::shader_stage(
                 vk::ShaderStageFlags::FRAGMENT,
                 frag_module,

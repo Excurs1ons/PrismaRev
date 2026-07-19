@@ -4,8 +4,9 @@
 //! window, builds a [`Renderer`], creates an ECS [`World`] with a test scene
 //! of three cubes, and drives [`render_system`] each frame.
 //!
-//! Input events are routed to [`InputState`], and [`OrbitCameraController`]
-//! reads the input state to update the [`OrbitCamera`] every frame.
+//! Input events are routed to [`InputState`], and the free-fly [`Camera`]
+//! reads the input state (WASD + QE/Space/Ctrl to move, right-drag to look)
+//! every frame.
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -17,14 +18,14 @@ use winit::keyboard::KeyCode;
 use winit::raw_window_handle::HasDisplayHandle;
 use winit::window::{Window, WindowId};
 
-
 use prism_ecs::World;
-use prism_render::{DebugMode, FrameUBOData, NormalSpace, OverlayAction, Renderer, Vertex};
+use prism_render::{DebugMode, DrawItem, FrameUBOData, GraphRenderer, NormalSpace, Vertex};
 
-use crate::camera::OrbitCamera;
-use crate::camera_controller::OrbitCameraController;
+use crate::camera::{Camera, FlyCamera};
 use crate::input::{InputState, MouseButton};
-use crate::render_system::{render_system, MeshHandle, MeshManager, PbrMaterial, Transform};
+use crate::render_system::{
+    render_system, DirectionalLight, MeshHandle, MeshManager, PbrMaterial, PointLight, Transform,
+};
 
 /// Parse a `key = "value"` TOML line (after the `key` prefix has been stripped)
 /// and return the unquoted string value. Handles optional surrounding
@@ -104,15 +105,24 @@ fn load_env_bytes() -> Option<Vec<u8>> {
 
 /// Build the default demo scene: a sphere on the left and two cubes on the
 /// center/right, each as an ECS entity referencing a GPU mesh via
-/// [`MeshHandle`]. Returns the populated world and the mesh owner.
-fn create_test_scene(renderer: &Renderer) -> (World, MeshManager) {
-    let cube_mesh = renderer
-        .create_mesh(&cube_vertices(), Some(&cube_indices()))
-        .expect("create cube mesh");
-    let (sphere_verts, sphere_idx) = sphere_mesh(32, 24);
-    let sphere_mesh = renderer
-        .create_mesh(&sphere_verts, Some(&sphere_idx))
-        .expect("create sphere mesh");
+/// [`MeshHandle`]. Returns the populated world, the engine-side mesh owner, and
+/// a vector mapping each engine `MeshHandle` index to the renderer-side
+/// `prism_render::managers::MeshHandle` (so the draw path can resolve demo
+/// meshes through the RenderGraph renderer).
+fn create_test_scene(
+    renderer: &mut GraphRenderer,
+) -> (World, MeshManager, Vec<prism_render::managers::MeshHandle>) {
+    // Register demo meshes into the renderer's RenderMeshManager so the
+    // RenderGraph draw path can resolve them by handle.
+    let sphere_handle = renderer
+        .register_mesh(&mesh_upload_input_for_demo_sphere(sphere_mesh(32, 24)))
+        .expect("register sphere mesh");
+    let cube_handle = renderer
+        .register_mesh(&mesh_upload_input_for_demo(&(
+            cube_vertices(),
+            cube_indices(),
+        )))
+        .expect("register cube mesh");
 
     let mut world = World::new();
     // Left: sphere, center: PBR cube, right: cube.
@@ -136,10 +146,108 @@ fn create_test_scene(renderer: &Renderer) -> (World, MeshManager) {
         }
     }
 
+    // Directional light (single entity). Drives the per-frame UBO's
+    // `light_direction` / `light_color` / ambient factor. Editable at runtime
+    // via the egui inspector.
+    let dir_entity = world.spawn();
+    world.insert(dir_entity, DirectionalLight::default());
+
+    // Three point lights, matching the pre-refactor hard-coded values in
+    // ScenePass::set_resources. Editable at runtime via the inspector.
+    let point_lights = [
+        PointLight {
+            position: [2.0, 3.0, 2.0],
+            range: 12.0,
+            color: [8.0, 0.2, 0.2],
+            intensity: 1.0,
+        },
+        PointLight {
+            position: [-2.0, 3.0, -2.0],
+            range: 12.0,
+            color: [0.2, 8.0, 0.2],
+            intensity: 1.0,
+        },
+        PointLight {
+            position: [0.0, 4.0, 4.0],
+            range: 12.0,
+            color: [0.2, 0.2, 8.0],
+            intensity: 1.0,
+        },
+    ];
+    for pl in point_lights {
+        let entity = world.spawn();
+        world.insert(
+            entity,
+            Transform {
+                translation: pl.position,
+                ..Default::default()
+            },
+        );
+        world.insert(entity, pl);
+    }
+
+    // Engine-side MeshManager still owns the raw `Mesh` for destruction on exit.
     let mut mesh_manager = MeshManager::new();
-    mesh_manager.add(sphere_mesh);
-    mesh_manager.add(cube_mesh);
-    (world, mesh_manager)
+    let (sphere_verts, sphere_idx) = sphere_mesh(32, 24);
+    mesh_manager.add(
+        renderer
+            .create_mesh(&sphere_verts, Some(&sphere_idx))
+            .expect("create sphere mesh"),
+    );
+    mesh_manager.add(
+        renderer
+            .create_mesh(&cube_vertices(), Some(&cube_indices()))
+            .expect("create cube mesh"),
+    );
+
+    // Index by engine MeshHandle: 0 = sphere, 1 = cube.
+    let renderer_handles = vec![sphere_handle, cube_handle];
+    (world, mesh_manager, renderer_handles)
+}
+
+/// Path of the camera-state file, written on exit and restored on launch.
+/// Stored next to the executable (or in `assets/`) so it survives restarts.
+fn camera_state_path() -> std::path::PathBuf {
+    // Prefer an exe-relative location so the file travels with the install.
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            return dir.join("camera_state.json");
+        }
+    }
+    std::path::PathBuf::from("camera_state.json")
+}
+
+/// Load a previously saved camera viewpoint (if any). Returns `None` when the
+/// file is missing, unreadable, or malformed — the caller then keeps the
+/// default camera.
+fn load_camera_state() -> Option<crate::camera::SavedCamera> {
+    let path = camera_state_path();
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return None;
+    };
+    match crate::camera::SavedCamera::from_json(&text) {
+        Some(s) => {
+            log::info!("restored camera state from {:?}", path);
+            Some(s)
+        }
+        None => {
+            log::warn!("camera state file {:?} malformed; ignoring", path);
+            None
+        }
+    }
+}
+
+/// Persist the current camera viewpoint so the next launch restores it.
+fn save_camera_state(cam: &crate::camera::Camera) {
+    let Some(saved) = cam.snapshot() else {
+        return; // orbit variant is not persisted
+    };
+    let path = camera_state_path();
+    if let Err(e) = std::fs::write(&path, saved.to_json()) {
+        log::warn!("failed to save camera state to {:?}: {e}", path);
+    } else {
+        log::info!("saved camera state to {:?}", path);
+    }
 }
 
 fn cube_vertices() -> Vec<Vertex> {
@@ -256,6 +364,37 @@ fn cube_indices() -> Vec<u32> {
     indices
 }
 
+/// Build a `prism_render` `MeshUploadInput` from the demo cube geometry so it
+/// can be registered into the RenderGraph renderer's `RenderMeshManager`.
+fn mesh_upload_input_for_demo(
+    cube: &(Vec<Vertex>, Vec<u32>),
+) -> prism_render::managers::MeshUploadInput {
+    let (verts, indices) = cube;
+    prism_render::managers::MeshUploadInput {
+        positions: verts.iter().map(|v| v.position).collect(),
+        normals: verts.iter().map(|v| v.normal).collect(),
+        colors: verts.iter().map(|v| v.color).collect(),
+        uvs: verts.iter().map(|v| v.uv).collect(),
+        tangents: verts.iter().map(|v| v.tangent).collect(),
+        indices: indices.clone(),
+    }
+}
+
+/// Build a `prism_render` `MeshUploadInput` from the demo sphere geometry.
+fn mesh_upload_input_for_demo_sphere(
+    sphere: (Vec<Vertex>, Vec<u32>),
+) -> prism_render::managers::MeshUploadInput {
+    let (verts, indices) = sphere;
+    prism_render::managers::MeshUploadInput {
+        positions: verts.iter().map(|v| v.position).collect(),
+        normals: verts.iter().map(|v| v.normal).collect(),
+        colors: verts.iter().map(|v| v.color).collect(),
+        uvs: verts.iter().map(|v| v.uv).collect(),
+        tangents: verts.iter().map(|v| v.tangent).collect(),
+        indices,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Sphere geometry (UV sphere)
 // ---------------------------------------------------------------------------
@@ -308,14 +447,16 @@ fn sphere_mesh(sectors: u32, stacks: u32) -> (Vec<Vertex>, Vec<u32>) {
 
 pub struct App {
     window: Option<Arc<Window>>,
-    renderer: Option<Renderer>,
+    renderer: Option<GraphRenderer>,
     world: Option<World>,
     mesh_manager: MeshManager,
     input_state: InputState,
-    camera: OrbitCamera,
-    camera_controller: OrbitCameraController,
+    camera: Camera,
     needs_resize: bool,
     start: Instant,
+    /// Timestamp of the previous frame, used to compute per-frame `dt` for the
+    /// free-fly camera. `None` until the first frame.
+    last_frame: Option<Instant>,
     /// Optional equirectangular HDR environment map bytes (`.hdr`), threaded
     /// from the platform entry point into the renderer for image-based lighting.
     env_bytes: Option<Vec<u8>>,
@@ -323,6 +464,9 @@ pub struct App {
     debug_mode: DebugMode,
     /// Coordinate space for the `Normal` debug mode.
     normal_space: NormalSpace,
+    /// PBR component toggle bitmask (14 bits, see `scene_bindless.slang`
+    /// `PBR_FLAG_*`). 0 = all components neutral -> raw baseColor.
+    debug_flags: u32,
     /// Whether the debug overlay UI is shown.
     show_ui: bool,
     /// P0: CPU-side scene storage (meshes / materials / textures / instances)
@@ -334,12 +478,29 @@ pub struct App {
     /// re-creating them.
     demo_objects_loaded: bool,
     /// Asset-handle → render-handle maps built by `load_demo_scene`, plus the
-    /// resolved draw list consumed by `Renderer::draw_scene_pbr`. These let
+    /// resolved draw list consumed by `GraphRenderer::render`. These let
     /// `render_one_frame` draw the CPU-side scene without re-registering.
-    mesh_map: std::collections::HashMap<prism_asset::MeshHandle, prism_render::managers::MeshHandle>,
+    mesh_map:
+        std::collections::HashMap<prism_asset::MeshHandle, prism_render::managers::MeshHandle>,
     mat_map: std::collections::HashMap<prism_asset::MaterialHandle, u32>,
     tex_map: std::collections::HashMap<prism_asset::TextureHandle, u32>,
     draw_items: Vec<prism_render::SceneDrawItem>,
+    /// Renderer-side mesh handles for the procedural demo, indexed by the
+    /// engine `MeshHandle` (0 = sphere, 1 = cube). Used to build the demo
+    /// `DrawItem` list each frame.
+    demo_mesh_handles: Vec<prism_render::managers::MeshHandle>,
+    /// Fatal error that halted rendering. Once set, the app stops rendering
+    /// and shows a modal crash dialog (see [`App::show_fatal_dialog`]); the
+    /// event loop exits after the user confirms. `Some` also gates
+    /// `render_one_frame` so the error is only reported once instead of
+    /// spamming the log every frame.
+    fatal_error: Option<String>,
+    /// Whether a saved camera state was restored on the last `ensure_window`.
+    /// When `true`, scene-manifest camera positioning is skipped so the
+    /// user's last viewpoint is preserved across restarts.
+    camera_state_restored: bool,
+    /// Real-time scene parameter inspector (egui). Toggled with F1.
+    inspector: crate::inspector::Inspector,
 }
 
 impl App {
@@ -350,13 +511,14 @@ impl App {
             world: None,
             mesh_manager: MeshManager::new(),
             input_state: InputState::new(),
-            camera: OrbitCamera::new(16.0 / 9.0),
-            camera_controller: OrbitCameraController::default(),
+            camera: Camera::Fly(FlyCamera::new(16.0 / 9.0)),
             needs_resize: false,
             start: Instant::now(),
+            last_frame: None,
             env_bytes: None,
             debug_mode: DebugMode::Final,
             normal_space: NormalSpace::World,
+            debug_flags: 0,
             show_ui: true,
             scene_store: prism_asset::SceneStore::new(),
             demo_objects_loaded: false,
@@ -364,6 +526,10 @@ impl App {
             mat_map: std::collections::HashMap::new(),
             tex_map: std::collections::HashMap::new(),
             draw_items: Vec::new(),
+            demo_mesh_handles: Vec::new(),
+            fatal_error: None,
+            camera_state_restored: false,
+            inspector: crate::inspector::Inspector::new(),
         }
     }
 
@@ -438,7 +604,7 @@ impl App {
             .collect();
         let extensions_ref: Vec<&str> = extensions.iter().map(|s| s.as_str()).collect();
 
-        let renderer = Renderer::new(
+        let mut renderer = GraphRenderer::new(
             extensions_ref,
             window.as_ref(),
             window.as_ref(),
@@ -447,15 +613,27 @@ impl App {
         .expect("failed to create renderer");
 
         // --- Build test scene: sphere + cubes ---
-        let (world, mesh_manager) = create_test_scene(&renderer);
+        let (world, mesh_manager, demo_mesh_handles) = create_test_scene(&mut renderer);
 
         self.world = Some(world);
         self.mesh_manager = mesh_manager;
+        self.demo_mesh_handles = demo_mesh_handles;
         self.window = Some(window);
         self.renderer = Some(renderer);
 
-        // Update camera aspect ratio to match initial window size.
-        self.camera = OrbitCamera::new(1600.0 / 900.0);
+        // Create the free-fly camera with an aspect ratio matching the initial
+        // window size.
+        self.camera = Camera::Fly(FlyCamera::new(1600.0 / 900.0));
+
+        // Restore the last-run viewpoint if a camera-state file exists. This is
+        // applied before any scene-specific camera placement below, which
+        // (when a glTF scene loads) overrides it intentionally for framing.
+        if let Some(saved) = load_camera_state() {
+            self.camera.apply_saved(&saved);
+            self.camera_state_restored = true;
+        } else {
+            self.camera_state_restored = false;
+        }
 
         // Load a glTF scene from the asset manifest (if present + resolvable)
         // and upload it to the renderer managers. Keeps the legacy cube demo
@@ -525,10 +703,7 @@ impl App {
                     let path = if path.is_absolute() {
                         path
                     } else {
-                        manifest_dir
-                            .as_ref()
-                            .map(|d| d.join(&path))
-                            .unwrap_or(path)
+                        manifest_dir.as_ref().map(|d| d.join(&path)).unwrap_or(path)
                     };
                     let name = current_name.clone().unwrap_or_else(|| "unnamed".into());
                     scenes.push((name, path));
@@ -540,21 +715,20 @@ impl App {
 
         for (name, path) in scenes {
             let exists = path.exists();
-            log::info!(
-                "scene '{}' -> {:?} (exists={})",
-                name,
-                path,
-                exists
-            );
+            log::info!("scene '{}' -> {:?} (exists={})", name, path, exists);
             if !exists {
                 continue;
             }
             log::info!("loading scene '{}' from {:?}", name, path);
             if let Some(scene) = self.try_load_gltf(&path) {
                 self.load_demo_scene(scene);
-                // Frame the camera for an architectural interior (Sponza-scale).
-                self.camera.target = [0.0, 2.5, 0.0];
-                self.camera.distance = 18.0;
+                // Place the free-fly camera for an architectural interior
+                // (Sponza-scale), looking toward the origin. But only when no
+                // saved camera state was restored — the user's last viewpoint
+                // should be preserved across restarts.
+                if !self.camera_state_restored {
+                    self.camera.set_position([0.0, 2.5, 18.0]);
+                }
                 return;
             }
         }
@@ -595,13 +769,14 @@ impl App {
         // submit+wait per resource. This is the dominant load-time win for
         // Sponza (~880 round-trips -> 1).
         let ctx = renderer.context_arc();
-        let mut uploader = match prism_render::batch::BatchUploader::new(&ctx, renderer.command_pool()) {
-            Ok(u) => u,
-            Err(e) => {
-                log::error!("load_demo_scene: BatchUploader::new failed: {e}");
-                return;
-            }
-        };
+        let mut uploader =
+            match prism_render::batch::BatchUploader::new(&ctx, renderer.command_pool()) {
+                Ok(u) => u,
+                Err(e) => {
+                    log::error!("load_demo_scene: BatchUploader::new failed: {e}");
+                    return;
+                }
+            };
         let t_tex = std::time::Instant::now();
         let texture_data: Vec<_> = self
             .scene_store
@@ -630,7 +805,11 @@ impl App {
                 Err(e) => log::warn!("register_texture failed: {e}"),
             }
         }
-        log::info!("texture upload: {} textures, {}ms", tex_count, t_tex.elapsed().as_millis());
+        log::info!(
+            "texture upload: {} textures, {}ms",
+            tex_count,
+            t_tex.elapsed().as_millis()
+        );
 
         // 2. Register every material with real bindless texture slots.
         // `albedo_tex` etc. are `Option<asset::TextureHandle>` → resolved to a
@@ -683,6 +862,13 @@ impl App {
                 normal_tex,
                 metallic_roughness_tex: resolve(data.metallic_roughness_tex),
                 emissive_tex: resolve(data.emissive_tex),
+                transmission: data.transmission,
+                ior: data.ior,
+                translucency: data.translucency,
+                anisotropy: data.anisotropy,
+                clearcoat: data.clearcoat,
+                clearcoat_roughness: data.clearcoat_roughness,
+                emissive_strength: data.emissive_strength,
             };
             match renderer.register_material(input) {
                 Ok(handle) => {
@@ -726,7 +912,11 @@ impl App {
                 Err(e) => log::warn!("register_mesh failed: {e}"),
             }
         }
-        log::info!("mesh upload: {} meshes, {}ms", mesh_count, t_mesh.elapsed().as_millis());
+        log::info!(
+            "mesh upload: {} meshes, {}ms",
+            mesh_count,
+            t_mesh.elapsed().as_millis()
+        );
 
         // Flush the entire batched upload (all textures + all meshes) with a
         // single command-buffer submit + fence wait. This replaces ~880
@@ -861,6 +1051,34 @@ impl ApplicationHandler for App {
         _window_id: WindowId,
         event: WindowEvent,
     ) {
+        // If a fatal render error was recorded during the last frame, surface
+        // it once as a modal dialog and exit. Checking at the top of
+        // `window_event` (rather than inside `render_one_frame`) keeps the
+        // modal on the winit event-loop thread and ensures we don't re-enter
+        // rendering while the dialog is up. Any incoming event is sufficient
+        // to trigger this; `RedrawRequested` fires right after the failing
+        // frame, so the dialog appears promptly.
+        if self.fatal_error.is_some() {
+            self.show_fatal_dialog(event_loop);
+            return;
+        }
+
+        // Forward window events to the egui overlay first (when the inspector
+        // is open) so UI interactions don't also drive the camera. If egui
+        // consumes the event, stop here.
+        if self.inspector.show {
+            if let Some(window) = self.window.as_ref() {
+                if let Some(renderer) = self.renderer.as_mut() {
+                    if let Some(overlay) = renderer.egui_overlay_mut() {
+                        let consumed = overlay.handle_window_event(window, &event);
+                        if consumed {
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+
         match event {
             WindowEvent::CloseRequested => {
                 log::info!("close requested, exiting");
@@ -961,16 +1179,51 @@ impl ApplicationHandler for App {
             } => {
                 if state == winit::event::ElementState::Pressed {
                     if let winit::keyboard::PhysicalKey::Code(code) = physical_key {
-                        match code {
-                            KeyCode::Digit1 => self.debug_mode = DebugMode::Final,
-                            KeyCode::Digit2 => self.debug_mode = DebugMode::Albedo,
-                            KeyCode::Digit3 => self.debug_mode = DebugMode::Specular,
-                            KeyCode::Digit4 => self.debug_mode = DebugMode::Reflection,
-                            KeyCode::Digit5 => self.debug_mode = DebugMode::Ambient,
-                            KeyCode::Digit6 => self.debug_mode = DebugMode::Normal,
-                            KeyCode::KeyN => self.normal_space = self.normal_space.next(),
-                            KeyCode::KeyH => self.show_ui = !self.show_ui,
-                            _ => {}
+                        // Shift-modifier-aware PBR component toggles. The 14
+                        // bits map 1:1 to `scene_bindless.slang`'s
+                        // `PBR_FLAG_*` constants. Shift held selects the
+                        // high group (Shift+1..Shift+4); otherwise the digit
+                        // selects bits 0..9 (keys 1-9, 0).
+                        let shift = self.input_state.key_held(crate::input::KeyCode::ShiftLeft)
+                            || self.input_state.key_held(crate::input::KeyCode::ShiftRight);
+                        let toggled = match (code, shift) {
+                            (KeyCode::Digit1, false) => Some(0u32), // 直接光照
+                            (KeyCode::Digit2, false) => Some(1),    // 环境光照(IBL整体)
+                            (KeyCode::Digit3, false) => Some(2),    // 高光 specular
+                            (KeyCode::Digit4, false) => Some(3),    // 金属度
+                            (KeyCode::Digit5, false) => Some(4),    // 粗糙度
+                            (KeyCode::Digit6, false) => Some(5),    // IBL 漫反射 Irradiance
+                            (KeyCode::Digit7, false) => Some(6),    // IBL 高光 Prefiltered+LUT
+                            (KeyCode::Digit8, false) => Some(7),    // 多光源
+                            (KeyCode::Digit9, false) => Some(8),    // 阴影
+                            (KeyCode::Digit0, false) => Some(9),    // 自发光 Emissive
+                            (KeyCode::Digit1, true) => Some(10),    // Transmission
+                            (KeyCode::Digit2, true) => Some(11),    // Translucency
+                            (KeyCode::Digit3, true) => Some(12),    // Anisotropy
+                            (KeyCode::Digit4, true) => Some(13),    // Clear Coat
+                            _ => None,
+                        };
+                        if let Some(bit) = toggled {
+                            self.debug_flags ^= 1u32 << bit;
+                            log::info!(
+                                "PBR flags = 0b{:014b} ({})",
+                                self.debug_flags,
+                                self.pbr_flag_labels()
+                            );
+                        } else if code == KeyCode::KeyH {
+                            self.show_ui = !self.show_ui;
+                        } else if code == KeyCode::F1 {
+                            // Toggle the egui inspector panel. First activation
+                            // also lazily creates the EguiOverlay.
+                            self.inspector.toggle();
+                            if self.inspector.show {
+                                if let Some(renderer) = self.renderer.as_mut() {
+                                    if let Err(e) = renderer.ensure_egui_overlay() {
+                                        log::error!("failed to init egui overlay: {e}");
+                                        self.inspector.show = false;
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -998,6 +1251,10 @@ impl ApplicationHandler for App {
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         if event_loop.exiting() {
+            // Persist the current camera viewpoint so the next launch can
+            // restore it (no-op for the orbit variant).
+            save_camera_state(&self.camera);
+
             // Wait for the GPU to finish any in-flight work (e.g. the last
             // frame's command buffer) before destroying mesh buffers. Without
             // this, vkDestroyBuffer is called on buffers still referenced by a
@@ -1025,28 +1282,59 @@ impl App {
     /// Hit-test a pointer against the debug overlay and apply the resulting
     /// action. Returns `true` if the overlay consumed the click (so the caller
     /// should not also treat it as a camera drag).
-    fn handle_overlay_click(&mut self, px: f32, py: f32) -> bool {
-        if !self.show_ui {
-            return false;
+    fn handle_overlay_click(&mut self, _px: f32, _py: f32) -> bool {
+        // The RenderGraph path has no in-scene debug overlay yet (the legacy
+        // `Overlay`/`Gizmo` are legacy-renderer-only). Debug modes are still
+        // applied to the scene shader via `render_system`'s `debug_mode` arg.
+        // Click handling is a no-op until the overlay is ported.
+        false
+    }
+
+    /// Human-readable names of the 14 PBR component toggle bits, in bit order
+    /// (0..13). Matches `PBR_FLAG_*` in `shaders/slang/scene_bindless.slang`.
+    fn pbr_flag_names() -> &'static [&'static str; 14] {
+        &[
+            "Direct",       // 1
+            "AmbientIBL",   // 2
+            "Specular",     // 3
+            "Metallic",     // 4
+            "Roughness",    // 5
+            "DiffuseIBL",   // 6
+            "SpecularIBL",  // 7
+            "MultiLight",   // 8
+            "Shadow",       // 9
+            "Emissive",     // 0
+            "Transmission", // Shift+1
+            "Translucency", // Shift+2
+            "Anisotropy",   // Shift+3
+            "ClearCoat",    // Shift+4
+        ]
+    }
+
+    /// Comma-separated list of the currently-set PBR flag names (for logging).
+    fn pbr_flag_labels(&self) -> String {
+        let names = Self::pbr_flag_names();
+        let mut out = Vec::new();
+        for (i, n) in names.iter().enumerate() {
+            if (self.debug_flags >> i) & 1 == 1 {
+                out.push(*n);
+            }
         }
-        let action = self
-            .renderer
-            .as_ref()
-            .and_then(|r| r.hit_test_overlay(px, py));
-        match action {
-            Some(OverlayAction::SetMode(m)) => {
-                self.debug_mode = m;
-                true
-            }
-            Some(OverlayAction::CycleNormalSpace) => {
-                self.normal_space = self.normal_space.next();
-                true
-            }
-            None => false,
+        if out.is_empty() {
+            "(none - baseColor only)".to_string()
+        } else {
+            out.join(", ")
         }
     }
 
     fn render_one_frame(&mut self) {
+        // A fatal error has already been recorded; wait for `window_event` to
+        // show the modal dialog. Don't attempt another frame - the device may
+        // be lost and re-entering would just spam the log.
+        if self.fatal_error.is_some() {
+            return;
+        }
+
         // Skip rendering while the surface is suspended (no swapchain).
         let Some(renderer) = self.renderer.as_mut() else {
             return;
@@ -1067,42 +1355,68 @@ impl App {
         }
 
         // Update camera from input state (events populated by window_event).
-        self.camera_controller
-            .update(&mut self.camera, &self.input_state);
+        // Free-fly camera uses a per-frame dt for frame-rate-independent speed.
+        let now = Instant::now();
+        let dt = match self.last_frame {
+            Some(prev) => (now - prev).as_secs_f32().clamp(0.0, 0.1),
+            None => 1.0 / 60.0,
+        };
+        self.last_frame = Some(now);
+        self.camera.update(&self.input_state, dt);
         // Clear transient input state for the next frame.
         self.input_state.begin_frame();
 
-        // Animate cubes: rotate around Y axis.
+        // Animate cubes: rotate around Y axis. Paused while the inspector is
+        // open so user edits to `Transform.rotation` aren't overwritten each
+        // frame.
         let elapsed = self.start.elapsed().as_secs_f32();
-        if let Some(world) = self.world.as_mut() {
-            for (_, transform) in world.query_mut::<Transform>() {
-                let angle = elapsed * 0.5; // 0.5 rad/s ≈ 29°/s
-                let half = angle * 0.5;
-                transform.rotation = [0.0, half.sin(), 0.0, half.cos()];
+        if !self.inspector.show {
+            if let Some(world) = self.world.as_mut() {
+                for (_, transform) in world.query_mut::<Transform>() {
+                    let angle = elapsed * 0.5; // 0.5 rad/s ≈ 29°/s
+                    let half = angle * 0.5;
+                    transform.rotation = [0.0, half.sin(), 0.0, half.cos()];
+                }
             }
         }
 
-        // Build light data (directional).
-        // Light: 45° diagonal in XY plane (upper-left), Z=0.
-        let light_dir = [-1.0f32, 1.0, 0.0];
-        let light_dir_len = (light_dir[0] * light_dir[0]
-            + light_dir[1] * light_dir[1]
-            + light_dir[2] * light_dir[2])
-            .sqrt();
-        let light_direction = [
-            light_dir[0] / light_dir_len,
-            light_dir[1] / light_dir_len,
-            light_dir[2] / light_dir_len,
-            1.5, // intensity (direct light radiance multiplier)
-        ];
-        let light_color = [1.0, 1.0, 1.0, 1.0]; // white; .w = IBL ambient factor
+        // Phase 1 of the egui overlay: run the inspector UI (tessellate +
+        // cache). Must happen before `GraphRenderer::render` so `&mut World`
+        // and `&mut Camera` are still borrowable. The overlay itself lives on
+        // the renderer, so we borrow renderer + world + camera + inspector
+        // together here (four disjoint fields of `self`).
+        if self.inspector.show {
+            let window = self.window.clone();
+            let inspector = &mut self.inspector;
+            let camera = &mut self.camera;
+            let world = self.world.as_mut();
+            let renderer = self.renderer.as_mut();
+            if let (Some(window), Some(world), Some(renderer)) = (window.as_ref(), world, renderer)
+            {
+                if let Some(overlay) = renderer.egui_overlay_mut() {
+                    inspector.run(overlay, window, world, camera);
+                }
+            }
+        }
 
+        // Build fallback light data. The actual light values now come from the
+        // ECS world (`DirectionalLight` + `PointLight` components, queried in
+        // `render_system`); this struct is only used when the world has no
+        // `DirectionalLight` entity. Placeholders are filled by `render_system`.
         let light_data = FrameUBOData {
             view_proj: [[0.0; 4]; 4],  // placeholder, render_system fills it
             camera_position: [0.0; 4], // placeholder
-            light_direction,
-            light_color,
-            view: [[0.0; 4]; 4], // placeholder, render_system fills it
+            // Fallback: 45° in XY plane (direction TO the light), intensity 3.
+            // Only used when the world has no `DirectionalLight` entity.
+            light_direction: [
+                -std::f32::consts::FRAC_1_SQRT_2,
+                std::f32::consts::FRAC_1_SQRT_2,
+                0.0,
+                3.0,
+            ],
+            light_color: [1.0, 1.0, 1.0, 1.0], // white; .w = IBL ambient factor
+            view: [[0.0; 4]; 4],               // placeholder, render_system fills it
+            light_view_proj: [[0.0; 4]; 4],    // placeholder, render_system fills it
         };
 
         // Once a glTF scene has taken over, hide the procedural demo and use a
@@ -1116,28 +1430,94 @@ impl App {
             [0.05, 0.05, 0.1, 1.0] // dark blue-gray for the demo
         };
 
-        let (renderer, world, meshes) = match (
-            self.renderer.as_mut(),
-            self.world.as_ref(),
-            &self.mesh_manager,
-        ) {
-            (Some(r), Some(w), m) => (r, w, m),
+        let (renderer, world) = match (self.renderer.as_mut(), self.world.as_ref()) {
+            (Some(r), Some(w)) => (r, w),
             _ => return,
         };
 
-        render_system(
+        // Build the demo draw list from the ECS world: each entity with a
+        // MeshHandle + Transform becomes a DrawItem resolved through the
+        // renderer-side mesh handle map.
+        let mut demo_draw_items: Vec<DrawItem> = Vec::new();
+        if draw_demo {
+            for (_entity, handle, transform) in world.query2::<MeshHandle, Transform>() {
+                if let Some(&rh) = self.demo_mesh_handles.get(handle.0) {
+                    demo_draw_items.push(DrawItem {
+                        mesh: rh,
+                        model: transform.to_model_matrix(),
+                        material: None,
+                    });
+                }
+            }
+        }
+
+        let render_result = render_system(
             renderer,
             world,
-            meshes,
+            &self.mesh_manager,
             clear_color,
             &mut self.camera,
             &light_data,
             self.debug_mode as u32,
             self.normal_space as u32,
+            self.debug_flags,
             self.show_ui,
             &self.draw_items,
             draw_demo,
+            &demo_draw_items,
         );
+
+        // A render failure is treated as fatal: surface it once via a modal
+        // crash dialog and stop the render loop. Without this, the same error
+        // would be re-emitted every frame (and, for device-lost, the
+        // subsequent `wait_for in_flight fence` errors would drown out the
+        // original cause in the log). The dialog is shown from `window_event`
+        // / the event loop (see `show_fatal_dialog`) because winit's event
+        // loop must drive the modal.
+        if let Err(e) = render_result {
+            log::error!("Fatal render error: {e}");
+            self.fatal_error = Some(format!("{e:#}"));
+        }
+
+        // Phase 2 cleanup for the egui overlay: apply stashed platform output
+        // (cursor icon, clipboard) now that the window is available again.
+        if self.inspector.show {
+            if let (Some(window), Some(renderer)) = (self.window.as_ref(), self.renderer.as_mut()) {
+                if let Some(overlay) = renderer.egui_overlay_mut() {
+                    overlay.apply_platform_output(window);
+                }
+            }
+        }
+    }
+
+    /// Present the fatal-error modal dialog and request event-loop exit.
+    ///
+    /// Shows a **blocking native** modal dialog (see [`crate::crash_dialog`])
+    /// with the error text and two actions:
+    ///
+    /// - **Copy & Exit** - copies the error to the clipboard, then exits
+    /// - **Exit** - exits without copying
+    ///
+    /// The dialog blocks the calling thread (the winit event-loop / main
+    /// thread), which naturally suspends the render loop until the user
+    /// confirms. After confirmation the event loop is asked to exit.
+    fn show_fatal_dialog(&mut self, event_loop: &ActiveEventLoop) {
+        let message = self
+            .fatal_error
+            .take()
+            .unwrap_or_else(|| "An unknown fatal error occurred.".to_string());
+
+        let title = "PrismaRev - Fatal Error";
+        // `show_crash_dialog` always logs the error first (so it's in the log
+        // even if the native backend fails), then blocks on the modal. The
+        // returned choice tells us whether to copy; the clipboard write itself
+        // is handled inside `show_crash_dialog` (it knows the per-platform
+        // clipboard API).
+        let _choice = crate::crash_dialog::show_crash_dialog(title, &message);
+
+        // Stop the render loop and tear down the event loop.
+        self.fatal_error = None;
+        event_loop.exit();
     }
 }
 

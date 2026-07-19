@@ -72,6 +72,22 @@ emit_reflection() {
   rm -f "$tmp"
 }
 
+# fix_spv <file.spv>
+# Slang emits an illegal `ArrayStride` decoration on UniformConstant runtime
+# arrays of opaque types (sampled images / samplers) used for bindless
+# descriptor indexing. SPIR-V validation rejects explicit layout decorations on
+# such runtime arrays (VUID-StandaloneSpirv-None-10684), so the module fails to
+# load under the validation layer. fix_spirv.py strips only those illegal
+# decorations. Safe to run on any .spv; it leaves legal strides untouched.
+fix_spv() {
+  local spv="$1"
+  if command -v python3 >/dev/null 2>&1; then
+    python3 "$HERE/fix_spirv.py" "$spv" "$spv"
+  else
+    echo "  WARNING: python3 not found; skipping ArrayStride fix for $spv" >&2
+  fi
+}
+
 echo "Compiling Slang shaders (slangc = $SLANGC, profile = $PROFILE)..."
 
 # mesh: vertex + fragment (Blinn-Phong)
@@ -114,6 +130,40 @@ echo "  reflect shadow -> reflection/shadow.json"
   -o "$REFL/shadow.tmp.spv"
 rm -f "$REFL/shadow.tmp.spv"
 
+# shadowmap: vertex + fragment (rasterized depth-only shadow map fallback)
+compile_stage shadowmap vertexMain vertex
+compile_stage shadowmap fragmentMain fragment
+
+# scene: vertex + fragment (forward PBR + IBL RenderGraph path).
+# These are separate source files (scene.vert.slang / scene.frag.slang),
+# not a single scene.slang, so compile them explicitly.
+echo "  scene :: vertexMain -> scene.vert.spv"
+"$SLANGC" "$SRC/scene.vert.slang" \
+  -profile "$PROFILE" -target spirv -entry vertexMain -stage vertex \
+  -fvk-use-entrypoint-name -o "$OUT/scene.vert.spv"
+echo "  scene :: fragmentMain -> scene.frag.spv"
+"$SLANGC" "$SRC/scene.frag.slang" \
+  -profile "$PROFILE" -target spirv -entry fragmentMain -stage fragment \
+  -fvk-use-entrypoint-name -o "$OUT/scene.frag.spv"
+
+# skybox: vertex + fragment (environment cubemap background).
+# Single source file with two entry points (vertexMain / fragmentMain).
+echo "  skybox :: vertexMain -> skybox.vert.spv"
+"$SLANGC" "$SRC/skybox.slang" \
+  -profile "$PROFILE" -target spirv -entry vertexMain -stage vertex \
+  -fvk-use-entrypoint-name -o "$OUT/skybox.vert.spv"
+echo "  skybox :: fragmentMain -> skybox.frag.spv"
+"$SLANGC" "$SRC/skybox.slang" \
+  -profile "$PROFILE" -target spirv -entry fragmentMain -stage fragment \
+  -fvk-use-entrypoint-name -o "$OUT/skybox.frag.spv"
+echo "  reflect skybox -> reflection/skybox.json"
+"$SLANGC" "$SRC/skybox.slang" \
+  -profile "$PROFILE" -target spirv \
+  -entry vertexMain -stage vertex -entry fragmentMain -stage fragment \
+  -reflection-json "$REFL/skybox.json" \
+  -o "$REFL/skybox.tmp.spv"
+rm -f "$REFL/skybox.tmp.spv"
+
 # sharc_query: compute (SHARC GI cache lookup, half-res)
 SHARCQ_ENTRY="computeMain"
 SHARCQ_STAGE="compute"
@@ -148,6 +198,15 @@ emit_reflection post fragmentMain fragment
 # bindless: fragment only. Pairs with mesh.vert.spv (from mesh.slang vertex)
 # at pipeline-build time to form the bindless PBR draw pipeline.
 compile_stage bindless fragmentMain fragment
+fix_spv "$OUT/bindless.frag.spv"
 emit_reflection bindless fragmentMain fragment
+
+# scene_bindless: fragment only (RenderGraph ScenePass bindless PBR +
+# rasterized shadow map). Pairs with mesh.vert.spv. Graph-path counterpart
+# of bindless.slang with shadow-map sampling; lightViewProj is read from
+# the per-frame UBO (not push constants) so the push constant stays under
+# the 128-byte Vulkan limit.
+compile_stage scene_bindless fragmentMain fragment
+fix_spv "$OUT/scene_bindless.frag.spv"
 
 echo "All Slang shaders compiled. SPIR-V in $OUT, reflection JSON in $REFL"

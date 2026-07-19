@@ -103,17 +103,23 @@ impl GraphicsPipeline {
             .scissor_count(1);
 
         // --- Rasterizer ---
+        // `cull_mode` and `depth_bias_*` are optional overrides so shadow-map
+        // pipelines can flip culling and apply slope/constant depth bias to
+        // avoid self-shadow acne. Legacy callers pass `None` -> default BACK /
+        // no bias.
         let rasterizer = vk::PipelineRasterizationStateCreateInfo::default()
             .depth_clamp_enable(false)
             .rasterizer_discard_enable(false)
             .polygon_mode(vk::PolygonMode::FILL)
             .line_width(1.0)
-            .cull_mode(vk::CullModeFlags::BACK)
+            .cull_mode(desc.cull_mode.unwrap_or(vk::CullModeFlags::BACK))
             // View matrix is now a proper rotation (det +1); the projection's
             // y-flip (Vulkan NDC) is the single remaining reflection, so front
             // faces wind counter-clockwise in clip space.
             .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
-            .depth_bias_enable(false);
+            .depth_bias_enable(desc.depth_bias_enable.unwrap_or(false))
+            .depth_bias_constant_factor(desc.depth_bias_constant_factor.unwrap_or(0.0))
+            .depth_bias_slope_factor(desc.depth_bias_slope_factor.unwrap_or(0.0));
 
         // --- Multisampling (none) ---
         let multisampling = vk::PipelineMultisampleStateCreateInfo::default()
@@ -121,12 +127,17 @@ impl GraphicsPipeline {
             .rasterization_samples(vk::SampleCountFlags::TYPE_1);
 
         // --- Depth/stencil ---
+        // `depth_write_enable` is an optional override; shadow-map pipelines
+        // may disable color writes but keep depth writes, so it defaults true.
         let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
             .depth_test_enable(true)
-            .depth_write_enable(true)
+            .depth_write_enable(desc.depth_write_enable.unwrap_or(true))
             .depth_compare_op(vk::CompareOp::LESS);
 
-        // --- Color blend: one attachment with alpha blending ---
+        // --- Color blend ---
+        // `color_attachment_count` is an optional override. A depth-only
+        // shadow-map pipeline passes `Some(0)` so the blend state carries zero
+        // attachments (the fragment shader still runs for depth).
         let color_blend_attachment = vk::PipelineColorBlendAttachmentState::default()
             .color_write_mask(vk::ColorComponentFlags::RGBA)
             .blend_enable(true)
@@ -136,10 +147,16 @@ impl GraphicsPipeline {
             .src_alpha_blend_factor(vk::BlendFactor::ONE)
             .dst_alpha_blend_factor(vk::BlendFactor::ZERO)
             .alpha_blend_op(vk::BlendOp::ADD);
-        let color_blend_state = vk::PipelineColorBlendStateCreateInfo::default()
-            .logic_op_enable(false)
-            .logic_op(vk::LogicOp::COPY)
-            .attachments(std::slice::from_ref(&color_blend_attachment));
+        let color_blend_state = match desc.color_attachment_count.unwrap_or(1) {
+            0 => vk::PipelineColorBlendStateCreateInfo::default()
+                .logic_op_enable(false)
+                .logic_op(vk::LogicOp::COPY)
+                .attachments(&[]),
+            _ => vk::PipelineColorBlendStateCreateInfo::default()
+                .logic_op_enable(false)
+                .logic_op(vk::LogicOp::COPY)
+                .attachments(std::slice::from_ref(&color_blend_attachment)),
+        };
 
         // --- Pipeline create ---
         let pipeline_info = vk::GraphicsPipelineCreateInfo::default()

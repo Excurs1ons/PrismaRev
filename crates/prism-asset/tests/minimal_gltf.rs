@@ -89,7 +89,10 @@ fn load_gltf_bytes_with_garbage_returns_error() {
     // And the error must mention parse failure so the user can debug it.
     let msg = format!("{}", err.unwrap_err());
     assert!(
-        msg.contains("glTF") || msg.contains("gltf") || msg.contains("JSON") || msg.contains("parse"),
+        msg.contains("glTF")
+            || msg.contains("gltf")
+            || msg.contains("JSON")
+            || msg.contains("parse"),
         "error message should mention the parse failure: {msg}"
     );
 }

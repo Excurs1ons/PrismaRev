@@ -273,12 +273,13 @@ impl Renderer {
         // not hardcoded "main": the SPIR-V produced by slangc exposes the
         // original Slang entry-point names (vertexMain/fragmentMain) because
         // compile.sh passes -fvk-use-entrypoint-name.
-        let vert_entry =
-            CString::new(crate::shader_bindings::mesh::ENTRY_VERTEX_MAIN).unwrap();
-        let frag_entry =
-            CString::new(crate::shader_bindings::mesh::ENTRY_FRAGMENT_MAIN).unwrap();
-        let vert_stage =
-            shader::shader_stage(vk::ShaderStageFlags::VERTEX, vert_module, vert_entry.as_c_str());
+        let vert_entry = CString::new(crate::shader_bindings::mesh::ENTRY_VERTEX_MAIN).unwrap();
+        let frag_entry = CString::new(crate::shader_bindings::mesh::ENTRY_FRAGMENT_MAIN).unwrap();
+        let vert_stage = shader::shader_stage(
+            vk::ShaderStageFlags::VERTEX,
+            vert_module,
+            vert_entry.as_c_str(),
+        );
         let frag_stage = shader::shader_stage(
             vk::ShaderStageFlags::FRAGMENT,
             frag_module,
@@ -300,6 +301,12 @@ impl Renderer {
             push_constant_ranges: &push_constant_ranges,
             render_pass: render_pass.handle,
             subpass: 0,
+            cull_mode: None,
+            depth_bias_enable: None,
+            depth_bias_constant_factor: None,
+            depth_bias_slope_factor: None,
+            depth_write_enable: None,
+            color_attachment_count: None,
         })
         .context("create graphics pipeline")?;
 
@@ -332,6 +339,12 @@ impl Renderer {
             push_constant_ranges: &pbr_push_constant_ranges,
             render_pass: render_pass.handle,
             subpass: 0,
+            cull_mode: None,
+            depth_bias_enable: None,
+            depth_bias_constant_factor: None,
+            depth_bias_slope_factor: None,
+            depth_write_enable: None,
+            color_attachment_count: None,
         })
         .context("create pbr graphics pipeline")?;
 
@@ -360,13 +373,16 @@ impl Renderer {
         // ---- Bindless PBR pipeline (V5) ----
         // Combined set 0: frame UBO (b0) + materials SSBO (b1). One descriptor
         // set per frame; binding 1 points at the material manager's SSBO.
-        let bindless_set0_layout =
-            DescriptorLayout::new_combined(&context.device).context("create bindless set0 layout")?;
-        let bindless_pool =
-            DescriptorPool::new_combined(&context.device, FRAMES_IN_FLIGHT as u32)
-                .context("create bindless descriptor pool")?;
+        let bindless_set0_layout = DescriptorLayout::new_combined(&context.device)
+            .context("create bindless set0 layout")?;
+        let bindless_pool = DescriptorPool::new_combined(&context.device, FRAMES_IN_FLIGHT as u32)
+            .context("create bindless descriptor pool")?;
         let bindless_frame_sets = bindless_pool
-            .allocate_sets(&context.device, &bindless_set0_layout, FRAMES_IN_FLIGHT as u32)
+            .allocate_sets(
+                &context.device,
+                &bindless_set0_layout,
+                FRAMES_IN_FLIGHT as u32,
+            )
             .context("allocate bindless frame sets")?;
         for (i, set) in bindless_frame_sets.iter().enumerate() {
             let ubo_info = vk::DescriptorBufferInfo::default()
@@ -392,15 +408,17 @@ impl Renderer {
             unsafe { context.device.update_descriptor_sets(&writes, &[]) };
         }
 
-        let bindless_frag_module =
-            shader::load_shader_module(&context.device, BINDLESS_FRAG_SPV)
-                .context("load bindless fragment shader module")?;
+        let bindless_frag_module = shader::load_shader_module(&context.device, BINDLESS_FRAG_SPV)
+            .context("load bindless fragment shader module")?;
         let bindless_vert_entry =
             CString::new(crate::shader_bindings::mesh::ENTRY_VERTEX_MAIN).unwrap();
         let bindless_frag_entry =
             CString::new(crate::shader_bindings::bindless::ENTRY_FRAGMENT_MAIN).unwrap();
-        let bindless_vert_stage =
-            shader::shader_stage(vk::ShaderStageFlags::VERTEX, vert_module, bindless_vert_entry.as_c_str());
+        let bindless_vert_stage = shader::shader_stage(
+            vk::ShaderStageFlags::VERTEX,
+            vert_module,
+            bindless_vert_entry.as_c_str(),
+        );
         let bindless_frag_stage = shader::shader_stage(
             vk::ShaderStageFlags::FRAGMENT,
             bindless_frag_module,
@@ -431,9 +449,19 @@ impl Renderer {
             push_constant_ranges: &bindless_push,
             render_pass: render_pass.handle,
             subpass: 0,
+            cull_mode: None,
+            depth_bias_enable: None,
+            depth_bias_constant_factor: None,
+            depth_bias_slope_factor: None,
+            depth_write_enable: None,
+            color_attachment_count: None,
         })
         .context("create bindless graphics pipeline")?;
-        unsafe { context.device.destroy_shader_module(bindless_frag_module, None) };
+        unsafe {
+            context
+                .device
+                .destroy_shader_module(bindless_frag_module, None)
+        };
 
         let color_format = swapchain.format.format;
         Ok(Self {
@@ -581,8 +609,12 @@ impl Renderer {
         &mut self,
         input: &crate::managers::TextureUploadInput,
     ) -> anyhow::Result<crate::managers::AssetTextureHandle> {
-        self.texture_manager
-            .reserve(&self.context, self.command_pool, self.context.graphics_queue, input)
+        self.texture_manager.reserve(
+            &self.context,
+            self.command_pool,
+            self.context.graphics_queue,
+            input,
+        )
     }
 
     /// Register a material and return its render-side handle. The bindless
@@ -606,10 +638,7 @@ impl Renderer {
     }
 
     /// Look up a material's SSBO slot for the shader push-constant.
-    pub fn material_slot(
-        &self,
-        handle: crate::managers::MaterialHandle,
-    ) -> Option<u32> {
+    pub fn material_slot(&self, handle: crate::managers::MaterialHandle) -> Option<u32> {
         self.material_manager.slot_of(handle)
     }
 
@@ -643,8 +672,7 @@ impl Renderer {
     /// draw calls (the legacy pipelines and the IBL bindless table are
     /// untouched); only the three scene managers are reset.
     pub fn destroy_scene_managers(&mut self) {
-        self.material_manager
-            .destroy(&self.context.device);
+        self.material_manager.destroy(&self.context.device);
         self.texture_manager.destroy();
         // mesh_manager destroys buffers in a loop using `&ash::Device`,
         // so it must run before the context itself goes out of scope.
@@ -1200,7 +1228,11 @@ impl Renderer {
         let frame_index = frame.frame_index;
 
         unsafe {
-            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.bindless_pipeline.pipeline);
+            device.cmd_bind_pipeline(
+                cmd,
+                vk::PipelineBindPoint::GRAPHICS,
+                self.bindless_pipeline.pipeline,
+            );
             // Set 0: combined frame UBO + materials SSBO (per-frame set).
             device.cmd_bind_descriptor_sets(
                 cmd,
@@ -1247,7 +1279,8 @@ impl Renderer {
                 env_handle: self.ibl_bindless_handle.0,
                 albedo_idx: u32::MAX,
                 normal_idx: u32::MAX,
-                _padding: [0; 4],
+                debug_flags: 0,
+                _padding: [0; 3],
             };
             let pc_bytes = unsafe {
                 std::slice::from_raw_parts(

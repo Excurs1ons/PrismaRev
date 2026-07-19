@@ -1,8 +1,8 @@
-//! ECS-driven rendering system.
+//! ECS-driven rendering system for the RenderGraph path.
 //!
 //! Defines the ECS components and resources needed for the rendering pipeline
-//! and the [`render_system`] function that queries the ECS world each frame
-//! and submits draw calls.
+//! and the [`render_system`] function that queries the ECS world each frame,
+//! builds a flat [`DrawItem`] list, and submits it to [`GraphRenderer::render`].
 //!
 //! ## Components
 //!
@@ -12,9 +12,9 @@
 //! | [`MeshHandle`] | Index into an externally-owned mesh list |
 
 use prism_ecs::World;
-use prism_render::{FrameUBOData, Mesh, Renderer, SceneDrawItem};
+use prism_render::{DrawItem, FrameUBOData, GpuLight, GraphRenderer, Mesh, SceneDrawItem};
 
-use crate::camera::OrbitCamera;
+use crate::camera::Camera;
 
 // ---------------------------------------------------------------------------
 // ECS Components
@@ -44,14 +44,7 @@ impl Transform {
     ///
     /// Column-major layout for direct use as a GLSL `mat4`.
     /// The rotation is a quaternion (x, y, z, w).
-    ///
-    /// # Layout note
-    ///
-    /// Rust stores `[[f32; 4]; 4]` row-by-row in memory. GLSL reads `mat4`
-    /// column-by-column, so `m[i][j]` maps to GLSL column `i`, row `j`.
-    /// Translation is in column 3 (`m[3][0..2]`), and the last column's w is 1.
     pub fn to_model_matrix(&self) -> [[f32; 4]; 4] {
-        // Quaternion → rotation matrix (standard column-major form).
         let [qx, qy, qz, qw] = self.rotation;
         let xx = qx * qx;
         let yy = qy * qy;
@@ -66,9 +59,6 @@ impl Transform {
         let [sx, sy, sz] = self.scale;
         let [tx, ty, tz] = self.translation;
 
-        // Column-major: m[i] = column i, m[i][j] = row j within column i.
-        // NOTE: The scale applies to the basis vectors (columns).
-        // For example, column 0 (the local X axis) is scaled entirely by `sx`.
         [
             [
                 sx * (1.0 - 2.0 * (yy + zz)),
@@ -95,8 +85,6 @@ impl Transform {
 
 /// PBR surface material, used to route an entity through the PBR + IBL
 /// pipeline instead of the default Blinn-Phong path.
-///
-/// `albedo` is the linear base color, `metallic` and `roughness` are in [0,1].
 #[derive(Debug, Clone)]
 pub struct PbrMaterial {
     pub albedo: [f32; 3],
@@ -119,33 +107,83 @@ impl Default for PbrMaterial {
 #[derive(Debug, Clone, Copy)]
 pub struct MeshHandle(pub usize);
 
+/// Directional (infinite) light. The first one found in the world drives the
+/// per-frame UBO's `light_direction` / `light_color` / ambient factor. Stored
+/// un-normalized so the inspector can show the user's raw input; the render
+/// path normalizes on use.
+#[derive(Debug, Clone, Copy)]
+pub struct DirectionalLight {
+    /// Direction TO the light, in world space. Need not be unit length; the
+    /// render path normalizes it. Zero-length falls back to +Y.
+    pub direction: [f32; 3],
+    /// Direct light radiance multiplier (~PI for albedo-brightness lit faces).
+    pub intensity: f32,
+    /// RGB light color, linear, typically in [0,1] per channel.
+    pub color: [f32; 3],
+    /// IBL ambient factor packed into `FrameUBOData.light_color.w`.
+    pub ambient: f32,
+}
+
+impl Default for DirectionalLight {
+    fn default() -> Self {
+        // 45° diagonal in the XY plane, upper-left, matching the pre-refactor
+        // hard-coded value in `app.rs`.
+        Self {
+            direction: [-1.0, 1.0, 0.0],
+            intensity: 3.0,
+            color: [1.0, 1.0, 1.0],
+            ambient: 1.0,
+        }
+    }
+}
+
+/// Point light. Collected each frame into the ScenePass light SSBO (up to
+/// `LIGHT_MAX`). Position may be overridden by a sibling `Transform` component
+/// when present (see `render_system`); otherwise the raw `position` is used.
+#[derive(Debug, Clone, Copy)]
+pub struct PointLight {
+    /// World-space position (used directly unless a `Transform` is present).
+    pub position: [f32; 3],
+    /// Attenuation radius (packed into `GpuLight.position.w`).
+    pub range: f32,
+    /// RGB radiant intensity, linear.
+    pub color: [f32; 3],
+    /// Per-channel intensity scale (packed into `GpuLight.color.w` as 1.0 after
+    /// multiplying `color`; kept separate here so the inspector exposes it).
+    pub intensity: f32,
+}
+
+impl Default for PointLight {
+    fn default() -> Self {
+        Self {
+            position: [0.0, 4.0, 4.0],
+            range: 12.0,
+            color: [0.2, 0.2, 8.0],
+            intensity: 1.0,
+        }
+    }
+}
+
 /// Owns the GPU meshes and resolves [`MeshHandle`] indices to them.
-///
-/// Meshes are large GPU resources, so they live here (a single owner) rather
-/// than per-entity; entities only store a lightweight [`MeshHandle`].
 pub struct MeshManager {
     meshes: Vec<Mesh>,
 }
 
 impl MeshManager {
-    /// Create an empty manager.
     pub fn new() -> Self {
         Self { meshes: Vec::new() }
     }
 
-    /// Register a mesh, returning the handle entities should store.
     pub fn add(&mut self, mesh: Mesh) -> MeshHandle {
         let handle = MeshHandle(self.meshes.len());
         self.meshes.push(mesh);
         handle
     }
 
-    /// Resolve a handle to its mesh, if still present.
     pub fn get(&self, handle: MeshHandle) -> Option<&Mesh> {
         self.meshes.get(handle.0)
     }
 
-    /// Consume the manager, yielding the owned meshes (e.g. to destroy them).
     pub fn into_meshes(self) -> Vec<Mesh> {
         self.meshes
     }
@@ -161,117 +199,205 @@ impl Default for MeshManager {
 // Render system
 // ---------------------------------------------------------------------------
 
-/// Run the ECS-driven rendering pipeline.
+/// Run the ECS-driven rendering pipeline through the RenderGraph-based
+/// [`GraphRenderer`].
 ///
-/// 1. Calls [`Renderer::begin_frame`] to acquire and begin the render pass.
-/// 2. Uploads frame UBO data (view-proj, camera pos, light).
-/// 3. When `draw_demo` is set, queries the ECS `World` for entities with
-///    [`Transform`] + [`MeshHandle`] and draws each via [`Renderer::draw_mesh`].
-/// 4. Draws the glTF scene (`scene_draw_items`) via the bindless PBR path.
-/// 5. Calls [`Renderer::end_frame`] to submit and present.
+/// 1. Computes the display-oriented view-projection (with surface rotation).
+/// 2. Builds the per-frame [`FrameUBOData`] (camera + light).
+/// 3. Builds a flat [`DrawItem`] list from the ECS demo scene and the loaded
+///    glTF scene.
+/// 4. Computes the light-space view-projection for the shadow map.
+/// 5. Submits everything via [`GraphRenderer::render`].
 ///
-/// `meshes` owns the GPU meshes indexed by the entities' [`MeshHandle`].
-/// `draw_demo` is false once a glTF scene has loaded, so the procedural demo
-/// and the loaded scene never overlap.
+/// Returns `Err` only when [`GraphRenderer::render`] fails. Swapchain
+/// out-of-date (and other transient conditions) are handled inside `render`
+/// and surface as `Ok(false)`; this function propagates the `render` error
+/// unchanged so the caller can decide whether it is fatal.
 #[allow(clippy::too_many_arguments)]
 pub fn render_system(
-    renderer: &mut Renderer,
+    renderer: &mut GraphRenderer,
     world: &World,
     meshes: &MeshManager,
     clear_color: [f32; 4],
-    camera: &mut OrbitCamera,
+    camera: &mut Camera,
     light_data: &FrameUBOData,
     debug_mode: u32,
     normal_space: u32,
+    debug_flags: u32,
     show_ui: bool,
     scene_draw_items: &[SceneDrawItem],
     draw_demo: bool,
-) {
-    if let Err(e) = renderer.begin_frame(clear_color) {
-        log::error!("renderer.begin_frame failed: {e}");
-        return;
-    }
-
+    demo_draw_items: &[DrawItem],
+) -> anyhow::Result<()> {
     // Display-oriented aspect ratio + clip-space rotation that compensates for
-    // the swapchain's `pre_transform`. On a rotated (e.g. Android landscape)
-    // surface this keeps the scene upright and correctly proportioned.
+    // the swapchain's `pre_transform`.
     let (display_aspect, surface_rotation) = renderer.orientation();
-    log::debug!("render_system: display_aspect={:.4}", display_aspect);
     camera.set_aspect(display_aspect);
     let mut view_proj = camera.view_proj();
     view_proj = mat_mul(&surface_rotation, &view_proj);
 
+    // Resolve the directional light from the ECS world (first `DirectionalLight`
+    // component found). Falls back to the caller-supplied `light_data` (which
+    // itself defaults to the pre-refactor hard-coded diagonal) when the world
+    // has none, so the demo scene without an explicit light entity still lit.
+    let light_direction = world
+        .query::<DirectionalLight>()
+        .next()
+        .map(|(_, l)| {
+            let len = (l.direction[0] * l.direction[0]
+                + l.direction[1] * l.direction[1]
+                + l.direction[2] * l.direction[2])
+                .sqrt();
+            let inv = if len > 1e-6 { 1.0 / len } else { 0.0 };
+            [
+                l.direction[0] * inv,
+                l.direction[1] * inv,
+                l.direction[2] * inv,
+                l.intensity,
+            ]
+        })
+        .unwrap_or(light_data.light_direction);
+    let light_color = world
+        .query::<DirectionalLight>()
+        .next()
+        .map(|(_, l)| [l.color[0], l.color[1], l.color[2], l.ambient])
+        .unwrap_or(light_data.light_color);
+
+    // Collect point lights from the ECS world into the GPU layout. A sibling
+    // `Transform` (if present) overrides the component's `position`, so lights
+    // can be parented to scene objects. Capped at `LIGHT_MAX`.
+    let mut lights: Vec<GpuLight> = Vec::new();
+    for (entity, pl) in world.query::<PointLight>() {
+        if lights.len() >= prism_render::LIGHT_MAX as usize {
+            break;
+        }
+        let pos = world
+            .get::<Transform>(entity)
+            .map(|t| t.translation)
+            .unwrap_or(pl.position);
+        lights.push(GpuLight {
+            position: [pos[0], pos[1], pos[2], pl.range],
+            color: [
+                pl.color[0] * pl.intensity,
+                pl.color[1] * pl.intensity,
+                pl.color[2] * pl.intensity,
+                1.0,
+            ],
+        });
+    }
+    let light_count = lights.len() as f32;
+
     // Build the full frame data from camera + light.
+    // Light-space view-projection for the rasterized shadow map. The light
+    // direction is `frame.lightDirection.xyz` (direction TO the light). Build
+    // an orthographic projection looking from the light toward the origin over
+    // a fixed scene bounds; this matches the orthographic assumption in
+    // `scene_bindless.slang::sample_shadow`. This is stored in the per-frame
+    // UBO so the ScenePass fragment shader can project world positions into
+    // shadow space without a push-constant mat4 (which would exceed Vulkan's
+    // 128-byte push-constant limit alongside the bindless push block).
+    let light_view_proj = light_view_proj(&light_direction, 12.0);
+
     let frame_data = FrameUBOData {
         view_proj,
-        camera_position: [camera.eye()[0], camera.eye()[1], camera.eye()[2], 0.0],
-        light_direction: light_data.light_direction,
-        light_color: light_data.light_color,
+        camera_position: [
+            camera.eye()[0],
+            camera.eye()[1],
+            camera.eye()[2],
+            light_count,
+        ],
+        light_direction,
+        light_color,
         view: camera.view(),
+        light_view_proj,
     };
-    if let Err(e) = renderer.set_frame_data(&frame_data) {
-        log::error!("renderer.set_frame_data failed: {e}");
-    }
 
-    // Draw ECS entities with Mesh + Transform (procedural demo). Skipped once
-    // a glTF scene has taken over the viewport so the two never overlap.
-    let mut draw_count = 0;
+    // Build the flat draw list: demo ECS entities first, then the glTF scene.
+    let mut draw_items: Vec<DrawItem> = Vec::new();
     if draw_demo {
-        for (entity, handle, transform) in world.query2::<MeshHandle, Transform>() {
-            let Some(mesh) = meshes.get(*handle) else {
-                log::warn!(
-                    "entity {entity:?} references invalid mesh handle {}",
-                    handle.0
-                );
-                continue;
-            };
-            let model = transform.to_model_matrix();
-            log::debug!(
-                "drawing entity {entity:?} mesh={} pos={:?} z={}",
-                handle.0,
-                transform.translation,
-                model[3][2]
-            );
-            if let Some(mat) = world.get::<PbrMaterial>(entity) {
-                renderer.draw_mesh_pbr(
-                    mesh,
-                    &model,
-                    mat.albedo,
-                    mat.metallic,
-                    mat.roughness,
-                    debug_mode,
-                    normal_space,
-                );
-            } else {
-                renderer.draw_mesh(mesh, &model);
-            }
-            draw_count += 1;
-        }
+        // `demo_draw_items` is pre-built by `app.rs` (it holds the renderer-side
+        // mesh handles + per-entity model matrices). `world`/`meshes` are kept
+        // for API symmetry / future per-entity culling.
+        let _ = (world, meshes);
+        draw_items.extend_from_slice(demo_draw_items);
     }
-    log::debug!("drew {draw_count} meshes");
-
-    // Draw the glTF scene (Sponza) via the bindless PBR path, alongside the
-    // legacy ECS cube demo. No-ops when the scene did not load.
-    if !scene_draw_items.is_empty() {
-        log::debug!("drawing {} scene instances", scene_draw_items.len());
-        renderer.draw_scene_pbr(scene_draw_items);
+    for item in scene_draw_items {
+        draw_items.push(DrawItem {
+            mesh: item.mesh,
+            model: item.model,
+            // SceneDrawItem already carries the resolved SSBO slot (app.rs
+            // builds it via mat_map); forward it so the ScenePass push
+            // constant can index the material SSBO directly.
+            material: Some(item.material_slot),
+        });
     }
 
-    // Draw the world-space XYZ gizmo on top of the 3D scene.
-    renderer.draw_gizmo(&view_proj);
+    // Surface the render error to the caller (App) so it can present a fatal
+    // crash dialog instead of spamming the log every frame. `render` already
+    // handles swapchain out-of-date as `Ok(false)`; only real failures reach
+    // here.
+    renderer
+        .render(
+            &draw_items,
+            &frame_data,
+            light_view_proj,
+            debug_mode,
+            normal_space,
+            debug_flags,
+            &lights,
+        )
+        .map(|_| ())?;
+    let _ = (clear_color, show_ui);
+    Ok(())
+}
 
-    // Draw the debug overlay on top of the 3D scene.
-    renderer.draw_overlay(debug_mode, normal_space, show_ui);
+/// Build an orthographic light-space view-projection matrix.
+///
+/// `light_dir` is the direction TO the light (normalized). We place the light
+/// at `-light_dir * distance` and look at the origin, with an up vector chosen
+/// to avoid degeneracy, then apply an orthographic projection spanning
+/// `[-half, half]` in x/y and `[0, 2*distance]` in z.
+fn light_view_proj(light_dir: &[f32; 4], half: f32) -> [[f32; 4]; 4] {
+    let l = [light_dir[0], light_dir[1], light_dir[2]];
+    let len = (l[0] * l[0] + l[1] * l[1] + l[2] * l[2]).max(1e-6);
+    let l = [l[0] / len, l[1] / len, l[2] / len];
 
-    if let Err(e) = renderer.end_frame() {
-        log::error!("renderer.end_frame failed: {e}");
-    }
+    // Light position: opposite the direction-to-light, at distance `half*2`.
+    let dist = half * 2.0;
+    let eye = [-l[0] * dist, -l[1] * dist, -l[2] * dist];
+    let center = [0.0, 0.0, 0.0];
+    let up = if (l[1] * l[1]) > 0.99 {
+        [0.0, 0.0, 1.0]
+    } else {
+        [0.0, 1.0, 0.0]
+    };
+
+    let fwd = norm3([center[0] - eye[0], center[1] - eye[1], center[2] - eye[2]]);
+    let right = norm3(cross3(fwd, up));
+    let true_up = cross3(right, fwd);
+
+    // View matrix (world -> light space), column-major.
+    let view = [
+        [right[0], true_up[0], -fwd[0], 0.0],
+        [right[1], true_up[1], -fwd[1], 0.0],
+        [right[2], true_up[2], -fwd[2], 0.0],
+        [-dot3(right, eye), -dot3(true_up, eye), dot3(fwd, eye), 1.0],
+    ];
+
+    // Orthographic projection: x,y in [-half, half]; z in [0, 2*dist] mapped to
+    // [0,1] (Vulkan clip depth). Column-major.
+    let inv = 1.0 / half;
+    let proj = [
+        [inv, 0.0, 0.0, 0.0],
+        [0.0, inv, 0.0, 0.0],
+        [0.0, 0.0, -0.5 / dist, 0.0],
+        [0.0, 0.0, 0.5, 1.0],
+    ];
+
+    mat_mul(&proj, &view)
 }
 
 /// Column-major 4×4 matrix multiply: `out = a * b`.
-///
-/// Matrices follow the same `[[f32; 4]; 4]` column-major convention used
-/// elsewhere (`out[col][row]`), so this matches `OrbitCamera::view_proj`.
 fn mat_mul(a: &[[f32; 4]; 4], b: &[[f32; 4]; 4]) -> [[f32; 4]; 4] {
     let mut out = [[0.0f32; 4]; 4];
     for i in 0..4 {
@@ -284,4 +410,21 @@ fn mat_mul(a: &[[f32; 4]; 4], b: &[[f32; 4]; 4]) -> [[f32; 4]; 4] {
         }
     }
     out
+}
+
+fn cross3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
+fn dot3(a: [f32; 3], b: [f32; 3]) -> f32 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+fn norm3(a: [f32; 3]) -> [f32; 3] {
+    let l = (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).max(1e-8).sqrt();
+    [a[0] / l, a[1] / l, a[2] / l]
 }
