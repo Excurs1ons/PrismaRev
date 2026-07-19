@@ -60,8 +60,7 @@ pub use gizmo::Gizmo;
 pub use graph_renderer::GraphRenderer;
 pub use mesh::{Mesh, Vertex};
 pub use passes::{
-    GBufferPass, LightingPass, PostPass, RayQueryPass, ScenePass, ShadowPushConstants, SharcPass,
-    SharcQueryPushConstants,
+    ScenePass, ShadowMapPass, ShadowPassPushConstants,
 };
 pub use pbr_push::{DebugMode, NormalSpace, PbrBindlessPushConstants, PbrPushConstants};
 pub use pipeline::GraphicsPipeline;

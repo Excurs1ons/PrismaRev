@@ -137,7 +137,7 @@ impl Default for DirectionalLight {
             euler_xyz: [45.0, -45.0, 0.0],
             intensity: 3.0,
             color: [1.0, 1.0, 1.0],
-            ambient: 1.0,
+            ambient: 0.03,
         }
     }
 }

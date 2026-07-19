@@ -483,6 +483,10 @@ float4 fragmentMain(MeshVaryings in) : SV_Target
     }
 
     // ---- IBL (image-based). Gated by AMBIENT_IBL master flag. ----
+    // `frame.lightColor.w` is the ambient/IBL intensity factor (driven by the
+    // inspector "Ambient (IBL)" slider; default 1.0). Scaling both IBL terms by
+    // it lets the env contribution be tuned without regenerating the cubemaps.
+    float ibl_intensity = frame.lightColor.w;
     float3 f_ibl  = fresnel_schlick_roughness(max(dot(n, v), 0.0), f0, roughness);
     float3 kd_ibl = (float3(1.0) - f_ibl) * (1.0 - metallic);
     float3 diffuse_ibl  = float3(0.0);
@@ -493,7 +497,7 @@ float4 fragmentMain(MeshVaryings in) : SV_Target
         if (flag(PBR_FLAG_DIFFUSE_IBL))
         {
             float3 irradiance = sample_irradiance(n);
-            diffuse_ibl = kd_ibl * irradiance * albedo;
+            diffuse_ibl = ibl_intensity * kd_ibl * irradiance * albedo;
         }
         // Specular IBL: prefiltered env + BRDF LUT (set 2 binding 2/3).
         if (flag(PBR_FLAG_SPECULAR_IBL))
@@ -501,7 +505,7 @@ float4 fragmentMain(MeshVaryings in) : SV_Target
             float3 r = reflect(-v, n);
             float3 prefiltered = sample_specular(r, roughness);
             float2 brdf = sample_brdf_lut(max(dot(n, v), 0.0), roughness);
-            specular_ibl = prefiltered * (f_ibl * brdf.x + brdf.y);
+            specular_ibl = ibl_intensity * prefiltered * (f_ibl * brdf.x + brdf.y);
         }
     }
 

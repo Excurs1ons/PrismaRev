@@ -573,24 +573,22 @@ impl App {
             if normal_tex.is_some() {
                 mats_with_normal += 1;
             }
-            // Log the first few materials in detail so we can see real base
-            // colors + resolved texture slots (catches "all textures unbound"
-            // or "base color is near-black" at a glance).
-            if self.mat_map.len() < 4 {
-                log::info!(
-                    "material[{}] {:?}: base_color={:?} metallic={:.3} roughness={:.3} \
-                     albedo_tex={:?} normal_tex={:?} mr_tex={:?} emissive_tex={:?}",
-                    self.mat_map.len(),
-                    data.name,
-                    data.base_color,
-                    data.metallic,
-                    data.roughness,
-                    albedo_tex,
-                    normal_tex,
-                    resolve(data.metallic_roughness_tex),
-                    resolve(data.emissive_tex),
-                );
-            }
+            // Log every material in detail so we can see real base colors +
+            // resolved texture slots (catches "all textures unbound" or
+            // "all metallic/roughness stuck at the glTF default 1.0" at a glance).
+            log::info!(
+                "material[{}] {:?}: base_color={:?} metallic={:.3} roughness={:.3} \
+                 albedo_tex={:?} normal_tex={:?} mr_tex={:?} emissive_tex={:?}",
+                self.mat_map.len(),
+                data.name,
+                data.base_color,
+                data.metallic,
+                data.roughness,
+                albedo_tex,
+                normal_tex,
+                resolve(data.metallic_roughness_tex),
+                resolve(data.emissive_tex),
+            );
             let input = prism_render::managers::MaterialUploadInput {
                 base_color: data.base_color,
                 metallic: data.metallic,
