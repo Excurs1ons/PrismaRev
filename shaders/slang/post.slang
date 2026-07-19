@@ -52,10 +52,9 @@ public void vertexMain(
         (vid == 2u) ? 3.0 : -1.0
     );
     clipPos = float4(pos, 0.0, 1.0);
-    // Map clip -> uv in [0,1]. Flip Y so the HDR texel at v=0 (top, as written
-    // by ScenePass into a VK_IMAGE_ASPECT_COLOR framebuffer) maps to the top of
-    // the screen (NDC y=+1).
-    uv = float2(pos.x * 0.5 + 0.5, 1.0 - (pos.y * 0.5 + 0.5));
+    // Vulkan NDC y = -1 is the top; UV.y = 0 at the top. Match the framebuffer
+    // top-left origin so the HDR image keeps the ScenePass orientation.
+    uv = pos * 0.5 + 0.5;
 }
 
 [shader("fragment")]
