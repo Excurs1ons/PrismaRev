@@ -225,6 +225,16 @@ fn save_scene_state_file(world: &prism_ecs::World) {
     camera_state_restored: bool,
     /// Real-time scene parameter inspector (egui). Toggled with F1.
     inspector: crate::inspector::Inspector,
+    /// FPS-style pointer-lock: when `true` the cursor is hidden and grabbed and
+    /// the camera follows the mouse directly (no button held). Toggled by
+    /// left-click (enter), ESC (exit), holding ALT (temporary release).
+    pointer_locked: bool,
+    /// Whether the pointer was locked right before the inspector (F1) was
+    /// opened, so it can be re-locked when the inspector closes.
+    lock_before_inspector: bool,
+    /// `true` while ALT is held and has temporarily released a locked pointer,
+    /// so releasing ALT re-locks (distinct from a full ESC exit).
+    alt_temp_release: bool,
 }
 
 /// Default PBR component mask. A normally-lit PBR scene: direct lighting,
@@ -270,6 +280,9 @@ impl App {
             fatal_error: None,
             camera_state_restored: false,
             inspector: crate::inspector::Inspector::new(),
+            pointer_locked: false,
+            lock_before_inspector: false,
+            alt_temp_release: false,
         }
     }
 
@@ -732,6 +745,36 @@ impl App {
             }
         }
     }
+
+    /// Enable or disable FPS-style pointer lock. When `locked` is `true` the
+    /// cursor is hidden and confined to the window so the camera can follow the
+    /// mouse directly; when `false` the cursor is shown and freed. No-op on
+    /// platforms without a window cursor (e.g. Android).
+    fn set_locked(&mut self, locked: bool) {
+        self.pointer_locked = locked;
+        #[cfg(not(target_os = "android"))]
+        if let Some(window) = self.window.as_ref() {
+            if locked {
+                window.set_cursor_visible(false);
+                if let Err(e) = window.set_cursor_grab(winit::window::CursorGrabMode::Confined) {
+                    log::warn!("failed to grab cursor (pointer lock): {e}");
+                }
+                // Drop any motion accumulated while the cursor was visible so
+                // the view doesn't snap on the first locked frame — only
+                // post-lock mouse delta should rotate the camera.
+                self.input_state.begin_frame();
+            } else {
+                window.set_cursor_visible(true);
+                if let Err(e) = window.set_cursor_grab(winit::window::CursorGrabMode::None) {
+                    log::warn!("failed to release cursor grab: {e}");
+                }
+                // Drop any accumulated motion so the view doesn't jump when the
+                // cursor is freed / re-locked.
+                self.input_state.begin_frame();
+            }
+        }
+        log::info!("pointer lock = {}", locked);
+    }
 }
 
 impl ApplicationHandler for App {
@@ -861,6 +904,13 @@ impl ApplicationHandler for App {
                     if self.handle_overlay_click(pos[0] as f32, pos[1] as f32) {
                         return;
                     }
+                    // Left-click on the 3D scene (not a UI panel) enters
+                    // FPS-style pointer lock if not already locked and the
+                    // inspector isn't open.
+                    if !self.pointer_locked && !self.inspector.show {
+                        self.set_locked(true);
+                        return;
+                    }
                 }
                 self.input_state.handle_mouse_button(button.into(), state);
             }
@@ -919,6 +969,27 @@ impl ApplicationHandler for App {
             } => {
                 if state == winit::event::ElementState::Pressed {
                     if let winit::keyboard::PhysicalKey::Code(code) = physical_key {
+                        // ESC toggles pointer lock off. This is independent of
+                        // any modifier and takes priority over the debug keys.
+                        if code == KeyCode::Escape {
+                            if self.pointer_locked {
+                                self.set_locked(false);
+                                self.alt_temp_release = false;
+                            }
+                            self.input_state.handle_keyboard(physical_key, state);
+                            return;
+                        }
+                        // Holding ALT temporarily releases a locked pointer so
+                        // the user can move the cursor freely; releasing ALT
+                        // re-locks (handled in the Released branch below).
+                        if code == KeyCode::AltLeft || code == KeyCode::AltRight {
+                            if self.pointer_locked && !self.inspector.show {
+                                self.set_locked(false);
+                                self.alt_temp_release = true;
+                            }
+                            self.input_state.handle_keyboard(physical_key, state);
+                            return;
+                        }
                         // Shift-modifier-aware PBR component toggles. The 14
                         // bits map 1:1 to `scene_frag.slang`'s
                         // `PBR_FLAG_*` constants. Shift held selects the
@@ -965,12 +1036,25 @@ impl ApplicationHandler for App {
                             // also lazily creates the EguiOverlay.
                             self.inspector.toggle();
                             if self.inspector.show {
+                                // Opening the inspector: remember whether the
+                                // pointer was locked so we can restore it on
+                                // close, then free the cursor for UI interaction.
+                                self.lock_before_inspector = self.pointer_locked;
+                                self.alt_temp_release = false;
+                                if self.pointer_locked {
+                                    self.set_locked(false);
+                                }
                                 if let Some(renderer) = self.renderer.as_mut() {
                                     if let Err(e) = renderer.ensure_egui_overlay() {
                                         log::error!("failed to init egui overlay: {e}");
                                         self.inspector.show = false;
                                     }
                                 }
+                            } else if self.lock_before_inspector {
+                                // Closing the inspector: re-lock if it was
+                                // locked before we opened it.
+                                self.lock_before_inspector = false;
+                                self.set_locked(true);
                             }
                         } else if code == KeyCode::KeyS
                             && (self
@@ -988,6 +1072,19 @@ impl ApplicationHandler for App {
                     }
                 }
                 self.input_state.handle_keyboard(physical_key, state);
+                // Released ALT: if it had temporarily released a locked pointer
+                // (and the inspector isn't open), re-lock immediately.
+                if state == winit::event::ElementState::Released {
+                    if let winit::keyboard::PhysicalKey::Code(code) = physical_key {
+                        if (code == KeyCode::AltLeft || code == KeyCode::AltRight)
+                            && self.alt_temp_release
+                            && !self.inspector.show
+                        {
+                            self.set_locked(true);
+                            self.alt_temp_release = false;
+                        }
+                    }
+                }
             }
             _ => {}
         }
@@ -1011,6 +1108,11 @@ impl ApplicationHandler for App {
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         if event_loop.exiting() {
+            // Free the cursor if it was locked, so the user isn't left with a
+            // hidden/grabbed pointer after the window closes.
+            if self.pointer_locked {
+                self.set_locked(false);
+            }
             // Persist ECS scene state (camera, lights, transforms) for the
             // next launch. No-op when world is not yet initialised.
             if let Some(world) = self.world.as_ref() {
@@ -1123,10 +1225,13 @@ impl App {
             None => 1.0 / 60.0,
         };
         self.last_frame = Some(now);
-        // Update camera from input state (ECS entity component).
+        // Update camera from input state (ECS entity component). When pointer
+        // lock is active the camera follows the mouse directly; otherwise the
+        // camera falls back to its right-drag look behavior.
+        let look_active = self.pointer_locked;
         if let Some(world) = self.world.as_mut() {
             if let Some((_, camera)) = world.query_mut::<Camera>().next() {
-                camera.update(&self.input_state, dt);
+                camera.update(&self.input_state, dt, look_active);
             }
         }
         // Clear transient input state for the next frame.

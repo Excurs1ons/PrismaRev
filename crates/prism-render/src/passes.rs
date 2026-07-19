@@ -1,11 +1,13 @@
 //! Forward + post-process passes for the main scene render.
 //!
-//! * [`ScenePass`] — PBR forward pass writing to an offscreen HDR attachment.
-//! * [`PostPass`] — fullscreen-triangle tonemap (Reinhard/ACES) → swapchain.
-//! * [`ShadowMapPass`] — depth-only shadow map for directional light.
-//! * [`SkyboxPass`] — env cubemap background (drawn by ScenePass).
+//! * [`ScenePass`] - PBR forward pass writing the swapchain color (post-tonemap)
+//!   + a view-space normal MRT consumed by [`crate::gtao::GtaoPass`].
+//! * [`ShadowMapPass`] - depth-only shadow map for directional light.
+//! * [`SkyboxPass`] - env cubemap background (drawn by ScenePass).
 //!
 //! Dead passes removed: GBuffer, SHARC, RayQuery, Lighting, Post (stub).
+//! Tonemapping currently runs inline in `scene_frag.slang`; a real PostPass
+//! will be reintroduced when the HDR-intermediate-target refactor lands.
 
 use anyhow::Context as _;
 use anyhow::Result;
@@ -265,6 +267,7 @@ impl RenderPassNode for ShadowMapPass {
                 depth_bias_slope_factor: Some(8.0),
                 depth_write_enable: Some(true),
                 color_attachment_count: Some(0),
+                color_blend_attachments: None,
             })
             .context("create shadow depth-only pipeline")?;
 
@@ -428,16 +431,7 @@ impl Drop for ShadowMapPass {
     }
 }
 
-/// Push constants for the forward scene pass (144 bytes).
-/// Mirrors `scene.frag.slang` ScenePush.
-#[repr(C)]
-pub struct ScenePush {
-    pub model: [[f32; 4]; 4],
-    pub light_view_proj: [[f32; 4]; 4],
-    pub debug: [f32; 4],
-}
-
-/// Skybox pass — draws the IBL environment cubemap as a background behind the
+/// Skybox pass - draws the IBL environment cubemap as a background behind the
 /// scene.
 ///
 /// Reuses the env cubemap already produced by [`crate::ibl::IblResources`] from
@@ -553,6 +547,21 @@ impl SkyboxPass {
                 .offset(0)
                 .size(128)];
 
+            // MRT blend state: ScenePass's render pass now has 2 color
+            // attachments (color + view-normal). Every pipeline bound inside
+            // that render pass must declare a matching attachmentCount, so the
+            // skybox pipeline lists 2 blend states even though it only writes
+            // SV_Target0. attachment 1's write mask is 0 so the normal target
+            // is untouched (the cleared value remains for sky pixels).
+            let blend_attachments = [
+                vk::PipelineColorBlendAttachmentState::default()
+                    .color_write_mask(vk::ColorComponentFlags::RGBA)
+                    .blend_enable(false),
+                vk::PipelineColorBlendAttachmentState::default()
+                    .color_write_mask(vk::ColorComponentFlags::empty())
+                    .blend_enable(false),
+            ];
+
             let pipeline = GraphicsPipeline::new(&PipelineDesc {
                 device,
                 shader_stages: &shader_stages,
@@ -570,6 +579,7 @@ impl SkyboxPass {
                 // depth test LEQUAL lets it draw where depth == 1.0 (cleared).
                 depth_write_enable: Some(false),
                 color_attachment_count: None,
+                color_blend_attachments: Some(&blend_attachments),
             })
             .context("SkyboxPass: create pipeline")?;
 
@@ -656,8 +666,14 @@ impl Drop for SkyboxPass {
 ///            `RenderTextureManager::bindless`)
 ///   set 2 - IBL resources (3 combined image samplers: env, irradiance, prefiltered)
 ///   set 3 - shadow map (SAMPLED_IMAGE + comparison SAMPLER)
+///   set 4 - previous-frame GTAO R8 visibility texture (combined image sampler)
 pub struct ScenePass {
+    /// HDR intermediate color format (the ScenePass no longer targets the
+    /// swapchain directly; PostPass tonemaps HDR -> swapchain).
     color_format: vk::Format,
+    /// Format of the view-space normal MRT attachment (SV_Target1). Written by
+    /// the scene fragment shader and read by the GTAO pass.
+    normal_format: vk::Format,
     /// Bindless handle for the BRDF LUT (registered in the bindless texture table).
     brdf_handle: u32,
     /// One framebuffer per swapchain image. With N swapchain images and N
@@ -668,11 +684,20 @@ pub struct ScenePass {
     /// VUID-vkDestroyFramebuffer-framebuffer-00892 and cascades into a
     /// device-lost). Indexed by `image_index` from `acquire_next_image`.
     framebuffers: Vec<Option<vk::Framebuffer>>,
+    /// One HDR color image per swapchain image (the ScenePass render target,
+    /// replacing the old direct-to-swapchain path). Reused by PostPass as its
+    /// sampled input.
+    color_images: Vec<Option<crate::render_pass::NormalImage>>,
     /// One depth image per swapchain image (each framebuffer references its
     /// own depth view). Parallel to `framebuffers`.
     depth_images: Vec<Option<crate::render_pass::DepthImage>>,
-    /// Cached swapchain image views the framebuffers were built against, so we
-    /// can detect when the swapchain is recreated (new views) and rebuild.
+    /// One view-space normal image per swapchain image (MRT SV_Target1). Same
+    /// per-slot lifetime as `depth_images`: rebuilt only when its swapchain
+    /// view changes.
+    normal_images: Vec<Option<crate::render_pass::NormalImage>>,
+    /// Cached image_index validity markers (one per slot). `set_target` uses
+    /// `framebuffers[idx].is_some()` as the "current" check; this field is
+    /// kept for parity with the old swapchain-view tracking pattern.
     target_views: Vec<vk::ImageView>,
     extent: vk::Extent2D,
     render_pass: Option<vk::RenderPass>,
@@ -702,6 +727,17 @@ pub struct ScenePass {
     /// `LIGHT_MAX` hard-coded point lights. Shared across all frame sets.
     light_buffer: vk::Buffer,
     light_memory: vk::DeviceMemory,
+    /// set 4 - previous-frame GTAO R8 visibility texture (combined image
+    /// sampler). One descriptor set per frame-in-flight so updating the AO
+    /// view for frame N doesn't disturb frame N-1's still-in-flight set.
+    ao_ds_layout: Option<vk::DescriptorSetLayout>,
+    /// One AO descriptor set per frame-in-flight (parallels `frame_sets`).
+    ao_descriptor_sets: Vec<vk::DescriptorSet>,
+    ao_ds_pool: Option<vk::DescriptorPool>,
+    ao_sampler: vk::Sampler,
+    /// The AO view currently bound to each frame-in-flight's AO descriptor
+    /// set. Tracked so we skip redundant descriptor rewrites.
+    ao_views: Vec<vk::ImageView>,
     /// Skybox background pass (draws the IBL env cubemap). Owns its pipeline +
     /// set-2 (IBL env) layout; borrows the IBL descriptor set.
     skybox: SkyboxPass,
@@ -711,12 +747,22 @@ pub struct ScenePass {
     device: Option<ash::Device>,
 }
 impl ScenePass {
-    pub fn new(color_format: vk::Format) -> Self {
+    pub fn new(_swapchain_color_format: vk::Format) -> Self {
         Self {
-            color_format,
+            // HDR intermediate target (linear). PostPass tonemaps this to the
+            // sRGB swapchain. The old `_swapchain_color_format` argument is
+            // kept for API stability; PostPass owns the swapchain-format
+            // pipeline + render pass.
+            color_format: vk::Format::R16G16B16A16_SFLOAT,
+            // R16G16B16A16_SFLOAT: signed float so view-space normals (which
+            // can be negative in any axis) store without bias/packing. 4th
+            // channel unused (shader writes 0).
+            normal_format: vk::Format::R16G16B16A16_SFLOAT,
             brdf_handle: u32::MAX,
             framebuffers: Vec::new(),
+            color_images: Vec::new(),
             depth_images: Vec::new(),
+            normal_images: Vec::new(),
             target_views: Vec::new(),
             extent: vk::Extent2D {
                 width: 0,
@@ -736,6 +782,11 @@ impl ScenePass {
             bindless_layout: vk::DescriptorSetLayout::null(),
             light_buffer: vk::Buffer::null(),
             light_memory: vk::DeviceMemory::null(),
+            ao_ds_layout: None,
+            ao_descriptor_sets: Vec::new(),
+            ao_ds_pool: None,
+            ao_sampler: vk::Sampler::null(),
+            ao_views: Vec::new(),
             skybox: SkyboxPass::new(vk::DescriptorSet::null(), vk::DescriptorSetLayout::null()),
             gizmo: None,
             device: None,
@@ -743,23 +794,24 @@ impl ScenePass {
     }
 
     /// Ensure the framebuffer for `image_index` exists and is built against the
-    /// current swapchain views + extent. Returns the framebuffer handle via
+    /// current extent. Returns the framebuffer handle via
     /// `self.framebuffers[image_index]` (read by `execute`).
     ///
     /// With N swapchain images and N frames in flight, several command buffers
     /// can be in flight at once - each referencing its own framebuffer. So we
-    /// keep **one framebuffer per swapchain image** (plus its own depth image)
-    /// and only rebuild an entry when its swapchain view changes or the extent
-    /// changed. This avoids destroying a framebuffer that a prior (still
-    /// in-flight) command buffer references (VUID-vkDestroyFramebuffer-framebuffer-00892).
+    /// keep **one framebuffer per swapchain image** (plus its own HDR color +
+    /// depth + normal image) and only rebuild an entry when the extent changed.
+    /// This avoids destroying a framebuffer that a prior (still in-flight)
+    /// command buffer references (VUID-vkDestroyFramebuffer-framebuffer-00892).
     ///
     /// `image_index` is the value returned by `acquire_next_image`;
-    /// `swapchain_views` is the full `Swapchain::views` slice.
+    /// `image_count` is `swapchain.views.len()` (so we can size the per-slot
+    /// vectors on the first call or after a recreate).
     pub fn set_target(
         &mut self,
         device: &ash::Device,
         context: &crate::context::VulkanContext,
-        swapchain_views: &[vk::ImageView],
+        image_count: usize,
         image_index: u32,
         extent: vk::Extent2D,
     ) -> Result<()> {
@@ -768,10 +820,9 @@ impl ScenePass {
         }
 
         let idx = image_index as usize;
-        if idx >= swapchain_views.len() {
+        if idx >= image_count {
             return Ok(());
         }
-        let view = swapchain_views[idx];
 
         // The render pass must exist before we build a framebuffer against it.
         // `ensure_render_pass` is idempotent (early-returns once set).
@@ -781,31 +832,37 @@ impl ScenePass {
         // image count) or the extent changed, tear everything down and resize
         // the per-image vectors. This is the only place we destroy framebuffers
         // wholesale; per-frame we only (re)build the single entry for this
-        // `image_index`, and an entry is only rebuilt when its own view
-        // changed - so an in-flight frame's framebuffer is never touched.
-        let swapchain_changed = self.target_views.len() != swapchain_views.len()
-            || self.extent != extent
-            || self
-                .target_views
-                .iter()
-                .zip(swapchain_views.iter())
-                .any(|(a, b)| a != b);
+        // `image_index` - so an in-flight frame's framebuffer is never touched.
+        let swapchain_changed = self.target_views.len() != image_count || self.extent != extent;
         if swapchain_changed {
             self.drop_target(device);
-            self.target_views = swapchain_views.to_vec();
+            self.target_views = vec![vk::ImageView::null(); image_count];
             self.extent = extent;
-            self.framebuffers = (0..swapchain_views.len()).map(|_| None).collect();
-            self.depth_images = (0..swapchain_views.len()).map(|_| None).collect();
+            self.framebuffers = (0..image_count).map(|_| None).collect();
+            self.color_images = (0..image_count).map(|_| None).collect();
+            self.depth_images = (0..image_count).map(|_| None).collect();
+            self.normal_images = (0..image_count).map(|_| None).collect();
         }
 
-        // Build this image's framebuffer + depth if not already current.
-        let already_current = idx < self.target_views.len()
-            && self.target_views[idx] == view
-            && self.framebuffers[idx].is_some();
+        // Build this image's framebuffer + color + depth + normal if not
+        // already current.
+        let already_current = self.framebuffers[idx].is_some();
         if !already_current {
             let rp = self
                 .render_pass
                 .context("ScenePass: render_pass missing in set_target")?;
+
+            // Replace the HDR color image for this slot.
+            let color_image = crate::render_pass::NormalImage::new(
+                context,
+                extent,
+                self.color_format,
+            )
+            .context("ScenePass: create HDR color image")?;
+            if let Some(mut old) = self.color_images[idx].take() {
+                unsafe { old.destroy(device) };
+            }
+            self.color_images[idx] = Some(color_image);
 
             // Replace the depth image for this slot (create new, destroy old).
             let depth_image = crate::render_pass::DepthImage::new(context, extent)
@@ -815,6 +872,18 @@ impl ScenePass {
             }
             self.depth_images[idx] = Some(depth_image);
 
+            // Replace the view-space normal MRT image for this slot.
+            let normal_image = crate::render_pass::NormalImage::new(
+                context,
+                extent,
+                self.normal_format,
+            )
+            .context("ScenePass: create normal image")?;
+            if let Some(mut old) = self.normal_images[idx].take() {
+                unsafe { old.destroy(device) };
+            }
+            self.normal_images[idx] = Some(normal_image);
+
             // Destroy the old framebuffer for this slot BEFORE creating the
             // new one (order doesn't matter for validation here since both
             // reference the same slot, but destroy-old-first is tidy).
@@ -822,8 +891,11 @@ impl ScenePass {
                 unsafe { device.destroy_framebuffer(old_fb, None) };
             }
 
+            let color = self.color_images[idx].as_ref().unwrap();
             let depth = self.depth_images[idx].as_ref().unwrap();
-            let attachments = [view, depth.view];
+            let normal = self.normal_images[idx].as_ref().unwrap();
+            // Render pass attachment order: [color, depth, normal].
+            let attachments = [color.view, depth.view, normal.view];
             let fb = unsafe {
                 device.create_framebuffer(
                     &vk::FramebufferCreateInfo::default()
@@ -837,7 +909,6 @@ impl ScenePass {
             }
             .context("ScenePass: create framebuffer")?;
             self.framebuffers[idx] = Some(fb);
-            self.target_views[idx] = view;
         }
         Ok(())
     }
@@ -856,14 +927,24 @@ impl ScenePass {
     /// are kept (they don't reference swapchain views); `set_target` rebuilds
     /// the framebuffers + depth on the next frame.
     pub fn drop_target(&mut self, device: &ash::Device) {
-        // Framebuffers first (they reference depth views).
+        // Framebuffers first (they reference color + depth + normal views).
         for fb in self.framebuffers.drain(..).flatten() {
             unsafe { device.destroy_framebuffer(fb, None) };
+        }
+        // Then HDR color images.
+        for color in self.color_images.drain(..).flatten() {
+            let mut c = color;
+            unsafe { c.destroy(device) };
         }
         // Then depth images (destroys each depth view).
         for depth in self.depth_images.drain(..).flatten() {
             let mut d = depth;
             unsafe { d.destroy(device) };
+        }
+        // Then view-space normal MRT images.
+        for normal in self.normal_images.drain(..).flatten() {
+            let mut n = normal;
+            unsafe { n.destroy(device) };
         }
         self.target_views.clear();
         self.extent = vk::Extent2D {
@@ -920,6 +1001,21 @@ impl ScenePass {
         self.skybox.destroy(device);
         // Gizmo (its own pipeline + vertex buffer; Drop frees them).
         self.gizmo = None;
+
+        // set 4: AO descriptor set layout + pool + sampler.
+        if let Some(layout) = self.ao_ds_layout.take() {
+            unsafe { device.destroy_descriptor_set_layout(layout, None) };
+        }
+        if let Some(pool) = self.ao_ds_pool.take() {
+            unsafe { device.destroy_descriptor_pool(pool, None) };
+        }
+        if self.ao_sampler != vk::Sampler::null() {
+            unsafe { device.destroy_sampler(self.ao_sampler, None) };
+            self.ao_sampler = vk::Sampler::null();
+        }
+        self.ao_descriptor_sets.clear();
+        self.ao_views.clear();
+
         self.device = None;
     }
     /// Wire all external resources the ScenePass needs:
@@ -1204,7 +1300,185 @@ impl ScenePass {
         self.shadow_ds_layout = Some(shadow_layout);
         self.shadow_ds_pool = Some(pool);
         self.shadow_descriptor_set = ds;
+
+        // ---- set 4: previous-frame GTAO R8 visibility (combined image sampler) ----
+        // The AO view is updated every frame by `set_ao` (GraphRenderer passes
+        // the GTAO pass's double-buffered view for the frame the scene reads).
+        // Here we only create the layout + pool + sampler + descriptor set; the
+        // image_info write happens in `set_ao` once a view is available.
+        let ao_bindings = [vk::DescriptorSetLayoutBinding::default()
+            .binding(0)
+            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .descriptor_count(1)
+            .stage_flags(vk::ShaderStageFlags::FRAGMENT)];
+        let ao_layout = unsafe {
+            device.create_descriptor_set_layout(
+                &vk::DescriptorSetLayoutCreateInfo::default().bindings(&ao_bindings),
+                None,
+            )
+        }
+        .context("ScenePass: create set4 (AO) ds layout")?;
+
+        // Tear down any prior set4 layout/pool/sampler (e.g. on re-init).
+        if let Some(old) = self.ao_ds_layout.take() {
+            unsafe { device.destroy_descriptor_set_layout(old, None) };
+        }
+        if let Some(old) = self.ao_ds_pool.take() {
+            unsafe { device.destroy_descriptor_pool(old, None) };
+        }
+        if self.ao_sampler != vk::Sampler::null() {
+            unsafe { device.destroy_sampler(self.ao_sampler, None) };
+        }
+        self.ao_descriptor_sets.clear();
+        self.ao_views.clear();
+
+        let ao_sampler = unsafe {
+            device.create_sampler(
+                &vk::SamplerCreateInfo::default()
+                    .mag_filter(vk::Filter::LINEAR)
+                    .min_filter(vk::Filter::LINEAR)
+                    .mipmap_mode(vk::SamplerMipmapMode::LINEAR)
+                    .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                    .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                    .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                    .min_lod(0.0)
+                    .max_lod(vk::LOD_CLAMP_NONE),
+                None,
+            )
+        }
+        .context("ScenePass: create AO sampler")?;
+
+        // One AO descriptor set per frame-in-flight so `set_ao` can update
+        // frame N's set without disturbing frame N-1's still-in-flight set
+        // (VUID-vkUpdateDescriptorSets-None-03047). The frame-in-flight count
+        // matches `frame_ubo_buffers.len()` (== `frame_sets.len()`).
+        let ao_fif = frame_ubo_buffers.len() as u32;
+        let ao_pool = unsafe {
+            device.create_descriptor_pool(
+                &vk::DescriptorPoolCreateInfo::default()
+                    .max_sets(ao_fif)
+                    .pool_sizes(&[vk::DescriptorPoolSize {
+                        ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+                        descriptor_count: ao_fif,
+                    }]),
+                None,
+            )
+        }
+        .context("ScenePass: create set4 (AO) ds pool")?;
+
+        let ao_layouts = vec![ao_layout; ao_fif as usize];
+        let ao_sets = unsafe {
+            device.allocate_descriptor_sets(
+                &vk::DescriptorSetAllocateInfo::default()
+                    .descriptor_pool(ao_pool)
+                    .set_layouts(&ao_layouts),
+            )
+        }
+        .context("ScenePass: allocate set4 (AO) ds")?;
+        let ao_sets: Vec<vk::DescriptorSet> = ao_sets.into();
+
+        self.ao_ds_layout = Some(ao_layout);
+        self.ao_ds_pool = Some(ao_pool);
+        self.ao_sampler = ao_sampler;
+        self.ao_descriptor_sets = ao_sets;
+        self.ao_views = vec![vk::ImageView::null(); ao_fif as usize];
+        // The actual image_info write happens in `set_ao` once the GTAO pass
+        // produces its first AO view. Until then the descriptors point at null;
+        // `PBR_FLAG_AO` is off by default so nothing samples it.
+
         Ok(())
+    }
+
+    /// Update the set 4 AO descriptor for `frame_index` to point at `view`
+    /// (the previous frame's GTAO output). Called every frame from
+    /// `GraphRenderer::render` BEFORE `scene_pass.execute`. Skips the
+    /// descriptor write when `view` matches the currently-bound view for this
+    /// frame-in-flight.
+    pub fn set_ao(&mut self, device: &ash::Device, frame_index: u32, view: vk::ImageView) {
+        let i = (frame_index as usize) % self.ao_descriptor_sets.len();
+        if view == self.ao_views[i] {
+            return;
+        }
+        self.ao_views[i] = view;
+        if view == vk::ImageView::null() {
+            // No AO yet (first frame or GTAO disabled) - leave the descriptor
+            // unbound. The shader's `aoTex.SampleLevel` is only reached when
+            // PBR_FLAG_AO is set, which the app leaves off until the user
+            // toggles it (by which time `view` is non-null).
+            return;
+        }
+        let image_info = vk::DescriptorImageInfo::default()
+            .image_view(view)
+            .sampler(self.ao_sampler)
+            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
+        let write = vk::WriteDescriptorSet::default()
+            .dst_set(self.ao_descriptor_sets[i])
+            .dst_binding(0)
+            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .image_info(std::slice::from_ref(&image_info));
+        unsafe { device.update_descriptor_sets(&[write], &[]) };
+    }
+
+    /// Borrow the HDR color image view for `image_index`. Consumed by the
+    /// PostPass as its sampled input.
+    pub fn color_view(&self, image_index: u32) -> Option<vk::ImageView> {
+        self.color_images
+            .get(image_index as usize)
+            .and_then(|c| c.as_ref())
+            .map(|c| c.view)
+    }
+
+    /// Borrow the HDR color image handle for `image_index`. The PostPass needs
+    /// the image to record its SHADER_READ_ONLY_OPTIMAL layout barrier.
+    pub fn color_image(&self, image_index: u32) -> Option<vk::Image> {
+        self.color_images
+            .get(image_index as usize)
+            .and_then(|c| c.as_ref())
+            .map(|c| c.image)
+    }
+
+    /// Borrow the depth image view for `image_index` (the slot ScenePass just
+    /// rendered into). The GTAO pass samples it after ScenePass stores depth.
+    pub fn depth_view(&self, image_index: u32) -> Option<vk::ImageView> {
+        self.depth_images
+            .get(image_index as usize)
+            .and_then(|d| d.as_ref())
+            .map(|d| d.view)
+    }
+
+    /// Borrow the depth image handle for `image_index`. The GTAO pass needs the
+    /// image (not just the view) to record its DEPTH_STENCIL_READ_ONLY_OPTIMAL
+    /// layout barrier before sampling.
+    pub fn depth_image(&self, image_index: u32) -> Option<vk::Image> {
+        self.depth_images
+            .get(image_index as usize)
+            .and_then(|d| d.as_ref())
+            .map(|d| d.image)
+    }
+
+    /// Borrow the view-space normal MRT view for `image_index`. Consumed by
+    /// the GTAO pass when its `mode == 0` (normal MRT path).
+    pub fn normal_view(&self, image_index: u32) -> Option<vk::ImageView> {
+        self.normal_images
+            .get(image_index as usize)
+            .and_then(|n| n.as_ref())
+            .map(|n| n.view)
+    }
+
+    /// Borrow the view-space normal MRT image handle for `image_index`. The
+    /// GTAO pass needs the image to record its SHADER_READ_ONLY_OPTIMAL layout
+    /// barrier before sampling.
+    pub fn normal_image(&self, image_index: u32) -> Option<vk::Image> {
+        self.normal_images
+            .get(image_index as usize)
+            .and_then(|n| n.as_ref())
+            .map(|n| n.image)
+    }
+
+    /// The full-resolution extent the scene was rendered at. The GTAO pass
+    /// uses this (halved) to size its own viewport + AO textures.
+    pub fn extent(&self) -> vk::Extent2D {
+        self.extent
     }
 
     /// Rewrite the point-light SSBO from a fresh `&[GpuLight]` slice. Called
@@ -1257,6 +1531,7 @@ impl ScenePass {
         let device = &context.device;
         self.device = Some(device.clone());
 
+        // attachment 0: swapchain color (HDR lit color, post-tonemap).
         let color_attachment = vk::AttachmentDescription::default()
             .format(self.color_format)
             .samples(vk::SampleCountFlags::TYPE_1)
@@ -1276,11 +1551,15 @@ impl ScenePass {
             .attachment(0)
             .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
 
+        // attachment 1: scene depth (D32_SFLOAT). STORE because the GTAO pass
+        // samples it after ScenePass (it was DONT_CARE before GTAO existed).
+        // Final layout is DEPTH_STENCIL_ATTACHMENT_OPTIMAL; the GTAO pass
+        // transitions it to DEPTH_STENCIL_READ_ONLY_OPTIMAL before sampling.
         let depth_attachment = vk::AttachmentDescription::default()
             .format(vk::Format::D32_SFLOAT)
             .samples(vk::SampleCountFlags::TYPE_1)
             .load_op(vk::AttachmentLoadOp::CLEAR)
-            .store_op(vk::AttachmentStoreOp::DONT_CARE)
+            .store_op(vk::AttachmentStoreOp::STORE)
             .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
             .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
             .initial_layout(vk::ImageLayout::UNDEFINED)
@@ -1290,9 +1569,27 @@ impl ScenePass {
             .attachment(1)
             .layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
 
+        // attachment 2: view-space normal MRT (R16G16B16A16_SFLOAT). STORE so
+        // the GTAO pass can sample it. Final COLOR_ATTACHMENT_OPTIMAL; the GTAO
+        // pass transitions it to SHADER_READ_ONLY_OPTIMAL before sampling.
+        let normal_attachment = vk::AttachmentDescription::default()
+            .format(self.normal_format)
+            .samples(vk::SampleCountFlags::TYPE_1)
+            .load_op(vk::AttachmentLoadOp::CLEAR)
+            .store_op(vk::AttachmentStoreOp::STORE)
+            .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
+            .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .final_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
+
+        let normal_ref = vk::AttachmentReference::default()
+            .attachment(2)
+            .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
+
+        let color_refs = [color_ref, normal_ref];
         let subpass = vk::SubpassDescription::default()
             .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
-            .color_attachments(std::slice::from_ref(&color_ref))
+            .color_attachments(&color_refs)
             .depth_stencil_attachment(&depth_ref);
 
         let dependency = vk::SubpassDependency::default()
@@ -1312,7 +1609,7 @@ impl ScenePass {
                     | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
             );
 
-        let attachments = [color_attachment, depth_attachment];
+        let attachments = [color_attachment, depth_attachment, normal_attachment];
         let rp_create_info = vk::RenderPassCreateInfo::default()
             .attachments(&attachments)
             .subpasses(std::slice::from_ref(&subpass))
@@ -1399,8 +1696,12 @@ impl ScenePass {
         let set3_layout = self
             .shadow_ds_layout
             .context("ScenePass: shadow ds layout not set")?;
+        // set 4: previous-frame GTAO R8 visibility (combined image sampler).
+        let set4_layout = self
+            .ao_ds_layout
+            .context("ScenePass: set4 (AO) layout not set (call set_resources)")?;
 
-        let set_layouts = [set0_layout, set1_layout, set2_layout, set3_layout];
+        let set_layouts = [set0_layout, set1_layout, set2_layout, set3_layout, set4_layout];
 
         // Push constants: PbrBindlessPushConstants (96 bytes, VERTEX|FRAGMENT).
         // Matches scene_frag.slang::PbrBindlessPush and Rust
@@ -1409,6 +1710,24 @@ impl ScenePass {
             .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
             .offset(0)
             .size(128)];
+
+        // MRT blend state: two color attachments.
+        //   attachment 0 (color)     - alpha blend (legacy behavior).
+        //   attachment 1 (view norm) - no blend, write RGBA through.
+        let blend_attachments = [
+            vk::PipelineColorBlendAttachmentState::default()
+                .color_write_mask(vk::ColorComponentFlags::RGBA)
+                .blend_enable(true)
+                .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
+                .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
+                .color_blend_op(vk::BlendOp::ADD)
+                .src_alpha_blend_factor(vk::BlendFactor::ONE)
+                .dst_alpha_blend_factor(vk::BlendFactor::ZERO)
+                .alpha_blend_op(vk::BlendOp::ADD),
+            vk::PipelineColorBlendAttachmentState::default()
+                .color_write_mask(vk::ColorComponentFlags::RGBA)
+                .blend_enable(false),
+        ];
 
         let pipeline = GraphicsPipeline::new(&PipelineDesc {
             device,
@@ -1425,6 +1744,7 @@ impl ScenePass {
             depth_bias_slope_factor: None,
             depth_write_enable: None,
             color_attachment_count: None,
+            color_blend_attachments: Some(&blend_attachments),
         })
         .context("ScenePass: create pipeline")?;
 
@@ -1479,6 +1799,11 @@ impl RenderPassNode for ScenePass {
             .copied()
             .context("ScenePass: no set0 descriptor set for frame_index (call set_resources)")?;
 
+        // Clear values indexed by attachment number: 0 = HDR color, 1 = depth,
+        // 2 = view-space normal MRT. Even though attachment 2 is cleared, its
+        // clear value is irrelevant (the fragment shader overwrites every
+        // pixel); use opaque black. The count must be >= the highest cleared
+        // attachment index + 1 (VUID-VkRenderPassBeginInfo-clearValueCount-00902).
         let clear_values = [
             vk::ClearValue {
                 color: vk::ClearColorValue {
@@ -1489,6 +1814,11 @@ impl RenderPassNode for ScenePass {
                 depth_stencil: vk::ClearDepthStencilValue {
                     depth: 1.0,
                     stencil: 0,
+                },
+            },
+            vk::ClearValue {
+                color: vk::ClearColorValue {
+                    float32: [0.0, 0.0, 0.0, 0.0],
                 },
             },
         ];
@@ -1570,6 +1900,23 @@ impl RenderPassNode for ScenePass {
                 pipeline.layout,
                 3,
                 std::slice::from_ref(&self.shadow_descriptor_set),
+                &[],
+            );
+            // set 4: previous-frame GTAO visibility (combined image sampler).
+            // Bound every frame; only sampled when PBR_FLAG_AO is set. Uses
+            // the per-frame-in-flight descriptor set so updating the view for
+            // frame N doesn't disturb frame N-1's still-in-flight set.
+            let ao_set = self
+                .ao_descriptor_sets
+                .get(ctx.frame_index as usize)
+                .copied()
+                .unwrap_or(vk::DescriptorSet::null());
+            ctx.device.cmd_bind_descriptor_sets(
+                ctx.cmd,
+                vk::PipelineBindPoint::GRAPHICS,
+                pipeline.layout,
+                4,
+                std::slice::from_ref(&ao_set),
                 &[],
             );
         }
@@ -1710,29 +2057,5 @@ impl Drop for ScenePass {
             // Gizmo (its own pipeline + vertex buffer; Drop frees them).
             self.gizmo = None;
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn shadow_push_constant_size_is_48() {
-        assert_eq!(std::mem::size_of::<ShadowPushConstants>(), 48);
-    }
-
-    #[test]
-    fn shadow_push_constant_offsets() {
-        assert_eq!(std::mem::offset_of!(ShadowPushConstants, output_width), 0);
-        assert_eq!(std::mem::offset_of!(ShadowPushConstants, output_height), 4);
-        assert_eq!(std::mem::offset_of!(ShadowPushConstants, gbuffer_width), 8);
-        assert_eq!(
-            std::mem::offset_of!(ShadowPushConstants, gbuffer_height),
-            12
-        );
-        assert_eq!(std::mem::offset_of!(ShadowPushConstants, light_dir), 16);
-        assert_eq!(std::mem::offset_of!(ShadowPushConstants, light_range), 28);
-        assert_eq!(std::mem::offset_of!(ShadowPushConstants, normal_bias), 32);
     }
 }

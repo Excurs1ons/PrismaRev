@@ -1,0 +1,301 @@
+{
+    "parameters": [
+        {
+            "name": "depthTex",
+            "binding": {"kind": "descriptorTableSlot", "index": 0},
+            "type": {
+                "kind": "resource",
+                "baseShape": "texture2D",
+                "resultType": {
+                    "kind": "scalar",
+                    "scalarType": "float32"
+                }
+            }
+        },
+        {
+            "name": "depthSampler",
+            "binding": {"kind": "descriptorTableSlot", "index": 1},
+            "type": {
+                "kind": "samplerState"
+            }
+        },
+        {
+            "name": "normalTex",
+            "binding": {"kind": "descriptorTableSlot", "space": 1, "index": 0},
+            "type": {
+                "kind": "resource",
+                "baseShape": "texture2D",
+                "resultType": {
+                    "kind": "vector",
+                    "elementCount": 4,
+                    "elementType": {
+                        "kind": "scalar",
+                        "scalarType": "float32"
+                    }
+                }
+            }
+        },
+        {
+            "name": "normalSampler",
+            "binding": {"kind": "descriptorTableSlot", "space": 1, "index": 1},
+            "type": {
+                "kind": "samplerState"
+            }
+        },
+        {
+            "name": "pc",
+            "binding": {"kind": "pushConstantBuffer", "index": 0},
+            "type": {
+                "kind": "constantBuffer",
+                "elementType": {
+                    "kind": "struct",
+                    "name": "GtaoPush",
+                    "fields": [
+                        {
+                            "name": "inv_proj",
+                            "type": {
+                                "kind": "matrix",
+                                "rowCount": 4,
+                                "columnCount": 4,
+                                "elementType": {
+                                    "kind": "scalar",
+                                    "scalarType": "float32"
+                                }
+                            },
+                            "binding": {"kind": "uniform", "offset": 0, "size": 64}
+                        },
+                        {
+                            "name": "viewport",
+                            "type": {
+                                "kind": "vector",
+                                "elementCount": 2,
+                                "elementType": {
+                                    "kind": "scalar",
+                                    "scalarType": "float32"
+                                }
+                            },
+                            "binding": {"kind": "uniform", "offset": 64, "size": 8}
+                        },
+                        {
+                            "name": "radius",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "float32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 72, "size": 4}
+                        },
+                        {
+                            "name": "mode",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "uint32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 76, "size": 4}
+                        },
+                        {
+                            "name": "_pad0",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "uint32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 80, "size": 4}
+                        }
+                    ]
+                },
+                "containerVarLayout": {
+                    "binding": {"kind": "pushConstantBuffer", "index": 0}
+                },
+                "elementVarLayout": {
+                    "type": {
+                        "kind": "struct",
+                        "name": "GtaoPush",
+                        "fields": [
+                            {
+                                "name": "inv_proj",
+                                "type": {
+                                    "kind": "matrix",
+                                    "rowCount": 4,
+                                    "columnCount": 4,
+                                    "elementType": {
+                                        "kind": "scalar",
+                                        "scalarType": "float32"
+                                    }
+                                },
+                                "binding": {"kind": "uniform", "offset": 0, "size": 64}
+                            },
+                            {
+                                "name": "viewport",
+                                "type": {
+                                    "kind": "vector",
+                                    "elementCount": 2,
+                                    "elementType": {
+                                        "kind": "scalar",
+                                        "scalarType": "float32"
+                                    }
+                                },
+                                "binding": {"kind": "uniform", "offset": 64, "size": 8}
+                            },
+                            {
+                                "name": "radius",
+                                "type": {
+                                    "kind": "scalar",
+                                    "scalarType": "float32"
+                                },
+                                "binding": {"kind": "uniform", "offset": 72, "size": 4}
+                            },
+                            {
+                                "name": "mode",
+                                "type": {
+                                    "kind": "scalar",
+                                    "scalarType": "uint32"
+                                },
+                                "binding": {"kind": "uniform", "offset": 76, "size": 4}
+                            },
+                            {
+                                "name": "_pad0",
+                                "type": {
+                                    "kind": "scalar",
+                                    "scalarType": "uint32"
+                                },
+                                "binding": {"kind": "uniform", "offset": 80, "size": 4}
+                            }
+                        ]
+                    },
+                    "binding": {"kind": "uniform", "offset": 0, "size": 96}
+                }
+            }
+        }
+    ],
+    "entryPoints": [
+        {
+            "name": "vertexMain",
+            "stage": "vertex",
+            "parameters": [
+                {
+                    "name": "vid",
+                    "semanticName": "SV_VERTEXID",
+                    "type": {
+                        "kind": "scalar",
+                        "scalarType": "uint32"
+                    }
+                },
+                {
+                    "name": "clipPos",
+                    "semanticName": "SV_POSITION",
+                    "type": {
+                        "kind": "vector",
+                        "elementCount": 4,
+                        "elementType": {
+                            "kind": "scalar",
+                            "scalarType": "float32"
+                        }
+                    }
+                },
+                {
+                    "name": "uv",
+                    "stage": "vertex",
+                    "binding": {"kind": "varyingOutput", "index": 0},
+                    "semanticName": "TEXCOORD",
+                    "type": {
+                        "kind": "vector",
+                        "elementCount": 2,
+                        "elementType": {
+                            "kind": "scalar",
+                            "scalarType": "float32"
+                        }
+                    }
+                }
+            ],
+            "bindings": [
+                {
+                    "name": "depthTex",
+                    "binding": {"kind": "descriptorTableSlot", "index": 0}
+                },
+                {
+                    "name": "depthSampler",
+                    "binding": {"kind": "descriptorTableSlot", "index": 1}
+                },
+                {
+                    "name": "normalTex",
+                    "binding": {"kind": "descriptorTableSlot", "space": 1, "index": 0}
+                },
+                {
+                    "name": "normalSampler",
+                    "binding": {"kind": "descriptorTableSlot", "space": 1, "index": 1}
+                },
+                {
+                    "name": "pc",
+                    "binding": {"kind": "pushConstantBuffer", "index": 0}
+                }
+            ]
+        },
+        {
+            "name": "fragmentMain",
+            "stage": "fragment",
+            "parameters": [
+                {
+                    "name": "clipPos",
+                    "semanticName": "SV_POSITION",
+                    "type": {
+                        "kind": "vector",
+                        "elementCount": 4,
+                        "elementType": {
+                            "kind": "scalar",
+                            "scalarType": "float32"
+                        }
+                    }
+                },
+                {
+                    "name": "uv",
+                    "stage": "fragment",
+                    "binding": {"kind": "varyingInput", "index": 0},
+                    "semanticName": "TEXCOORD",
+                    "type": {
+                        "kind": "vector",
+                        "elementCount": 2,
+                        "elementType": {
+                            "kind": "scalar",
+                            "scalarType": "float32"
+                        }
+                    }
+                },
+                {
+                    "name": "outColor",
+                    "stage": "fragment",
+                    "binding": {"kind": "varyingOutput", "index": 0},
+                    "semanticName": "SV_TARGET",
+                    "type": {
+                        "kind": "vector",
+                        "elementCount": 4,
+                        "elementType": {
+                            "kind": "scalar",
+                            "scalarType": "float32"
+                        }
+                    }
+                }
+            ],
+            "bindings": [
+                {
+                    "name": "depthTex",
+                    "binding": {"kind": "descriptorTableSlot", "index": 0}
+                },
+                {
+                    "name": "depthSampler",
+                    "binding": {"kind": "descriptorTableSlot", "index": 1}
+                },
+                {
+                    "name": "normalTex",
+                    "binding": {"kind": "descriptorTableSlot", "space": 1, "index": 0}
+                },
+                {
+                    "name": "normalSampler",
+                    "binding": {"kind": "descriptorTableSlot", "space": 1, "index": 1}
+                },
+                {
+                    "name": "pc",
+                    "binding": {"kind": "pushConstantBuffer", "index": 0}
+                }
+            ]
+        }
+    ]
+}

@@ -16,11 +16,18 @@
 //   set 2, binding 2 - IBL prefiltered environment map (SamplerCube, combined)
 //   set 3, binding 0 - shadow map depth texture
 //   set 3, binding 1 - shadow comparison sampler
+//   set 4, binding 0 - previous-frame GTAO R8 visibility texture (Sampler2D, combined)
+//                      Sampled only when PBR_FLAG_AO is set; 1-frame latency.
 // brdf LUT: registered in the bindless Texture2D[] table at slot pc.env_handle
 //           (the env_handle push constant is repurposed for the BRDF LUT index).
 // Push constants: PbrBindlessPush (96 bytes, mirrors Rust
 //                  PbrBindlessPushConstants). lightViewProj lives in the
 //                  UBO so the push constant stays under 128 bytes.
+//
+// MRT: the fragment stage now writes two color attachments:
+//   SV_Target0 - linear HDR lit color (PostPass tonemaps this -> swapchain)
+//   SV_Target1 - view-space normal (R16G16B16A16_SFLOAT, xyz unit, w=0)
+//                consumed by the GTAO pass that runs after ScenePass.
 //
 // Compile:
 //   slangc scene_frag.slang -profile spirv_1_5 -target spirv \
@@ -92,6 +99,14 @@ Texture2D<float> shadowMap;
 [[vk::binding(1, 3)]]
 SamplerComparisonState shadowSampler;
 
+// ---- set 4, binding 0 - previous-frame GTAO visibility (R8_UNORM) ----
+// Half-resolution R8 texture produced by the GTAO pass the previous frame.
+// Sampled with a linear sampler so the half-res AO is smoothly upsampled to
+// full resolution here. 1.0 = unoccluded, 0.0 = fully occluded. Only applied
+// to the IBL diffuse + specular terms when PBR_FLAG_AO is set (bit 14).
+[[vk::binding(0, 4)]]
+Sampler2D aoTex;
+
 // ---- push constants -------------------------------------------------
 // Byte layout mirrors Rust `PbrBindlessPushConstants` (96 bytes):
 //   model(64) | material_slot(4) | env_handle(4) | albedo_idx(4) | normal_idx(4)
@@ -126,7 +141,7 @@ static const uint PBR_FLAG_TRANSMISSION = 10u; // Shift+1
 static const uint PBR_FLAG_TRANSLUCENCY = 11u; // Shift+2
 static const uint PBR_FLAG_ANISOTROPY   = 12u; // Shift+3
 static const uint PBR_FLAG_CLEARCOAT    = 13u; // Shift+4
-static const uint PBR_FLAG_AO           = 14u; // 9: ambient occlusion (placeholder, not yet implemented)
+static const uint PBR_FLAG_AO           = 14u; // 9: GTAO ambient occlusion (attenuates IBL diffuse+specular)
 
 bool flag(uint b) { return (pc.debug_flags & (1u << b)) != 0u; }
 
@@ -170,12 +185,6 @@ float geometry_smith(float3 n, float3 v, float3 l, float roughness)
     float n_dot_v = max(dot(n, v), 0.0);
     float n_dot_l = max(dot(n, l), 0.0);
     return geometry_schlick_ggx(n_dot_v, roughness) * geometry_schlick_ggx(n_dot_l, roughness);
-}
-
-float3 aces(float3 x)
-{
-    const float a = 2.51, b = 0.03, c = 2.43, d = 0.59, e = 0.14;
-    return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
 }
 
 /// Project a world position into the shadow map and return 1.0 (lit) or 0.0
@@ -377,8 +386,20 @@ float3 eval_clearcoat(GpuMaterial mat, float3 n, float3 v, float3 l, float3 h,
     return clearcoat_factor * specular_cc * radiance * n_dot_l * shadow;
 }
 
+// ---- MRT output struct -------------------------------------------------
+// SV_Target0 = HDR lit color (post-tonemap, written to the swapchain).
+// SV_Target1 = view-space normal (xyz unit, w=0), sampled by the GTAO pass.
+//              View-space normal = (float3x3)frame.view * worldNormal. The
+//              upper-left 3x3 of a rigid view matrix is orthonormal so the
+//              result stays unit-length after normalize().
+struct SceneOutput
+{
+    float4 color     : SV_Target0;
+    float4 viewNormal: SV_Target1;
+};
+
 [shader("fragment")]
-float4 fragmentMain(MeshVaryings in) : SV_Target
+SceneOutput fragmentMain(MeshVaryings in)
 {
     // ---- Material -------------------------------------------------------
     GpuMaterial mat = materials[pc.material_slot];
@@ -486,6 +507,11 @@ float4 fragmentMain(MeshVaryings in) : SV_Target
     // `frame.lightColor.w` is the ambient/IBL intensity factor (driven by the
     // inspector "Ambient (IBL)" slider; default 1.0). Scaling both IBL terms by
     // it lets the env contribution be tuned without regenerating the cubemaps.
+    //
+    // GTAO: when PBR_FLAG_AO (bit 14) is set, sample the previous frame's
+    // half-res R8 visibility texture and attenuate both IBL terms. This is the
+    // core fix for "IBL doesn't account for occlusion" - corners/crevices now
+    // receive less ambient bounce. 1-frame latency is invisible in practice.
     float ibl_intensity = frame.lightColor.w;
     float3 f_ibl  = fresnel_schlick_roughness(max(dot(n, v), 0.0), f0, roughness);
     float3 kd_ibl = (float3(1.0) - f_ibl) * (1.0 - metallic);
@@ -506,6 +532,15 @@ float4 fragmentMain(MeshVaryings in) : SV_Target
             float3 prefiltered = sample_specular(r, roughness);
             float2 brdf = sample_brdf_lut(max(dot(n, v), 0.0), roughness);
             specular_ibl = ibl_intensity * prefiltered * (f_ibl * brdf.x + brdf.y);
+        }
+        // GTAO visibility: 1.0 = unoccluded, 0.0 = fully occluded. Apply only
+        // to the IBL terms (not direct lighting - direct already has its own
+        // shadow map). Linear sampling smooths the half-res AO up to full res.
+        if (flag(PBR_FLAG_AO))
+        {
+            float ao = aoTex.SampleLevel(in.uv, 0.0).r;
+            diffuse_ibl  *= ao;
+            specular_ibl *= ao;
         }
     }
 
@@ -553,13 +588,17 @@ float4 fragmentMain(MeshVaryings in) : SV_Target
     color += multi_light + emissive;       // multilight + emissive
     color += transmission + translucency + aniso_spec + clearcoat;
 
-    // Tonemap: keep HDR terms in a displayable range before the SRGB swapchain
-    // re-encodes the linear output to sRGB. Operator is selectable at runtime
-    // via frame.tonemapMode (0 = Reinhard, 1 = ACES Narkowicz).
-    if (frame.tonemapMode == 1u) {
-        color = aces(color);
-    } else {
-        color = color / (color + 1.0);
-    }
-    return float4(color, 1.0);
+    // Output linear HDR color. Tonemapping (Reinhard / ACES) is now applied by
+    // the PostPass (post.slang), which samples this HDR attachment and writes
+    // the sRGB-encoded result to the swapchain. Keeping the scene output
+    // linear HDR lets future post effects (bloom, TAA) consume it without
+    // lossy pre-tonemap encoding.
+    SceneOutput o;
+    o.color = float4(color, 1.0);
+    // View-space normal for the GTAO pass: rotate the world-space shading
+    // normal into view space. alpha=0 so the GTAO shader can distinguish a
+    // written texel from a cleared one if needed.
+    float3 vn = normalize(mul((float3x3)frame.view, n));
+    o.viewNormal = float4(vn, 0.0);
+    return o;
 }

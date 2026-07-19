@@ -125,7 +125,13 @@ impl DepthImage {
             .array_layers(1)
             .samples(vk::SampleCountFlags::TYPE_1)
             .tiling(vk::ImageTiling::OPTIMAL)
-            .usage(vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT)
+            // DEPTH_STENCIL_ATTACHMENT for the scene render pass + SAMPLED so
+            // the GTAO pass can read it back as a texture after ScenePass
+            // stores depth.
+            .usage(
+                vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT
+                    | vk::ImageUsageFlags::SAMPLED,
+            )
             .sharing_mode(vk::SharingMode::EXCLUSIVE);
 
         let image =
@@ -197,6 +203,99 @@ pub fn find_memory_type(
         }
     }
     None
+}
+
+/// A color image + view used as an MRT attachment (e.g. the view-space normal
+/// target written by `ScenePass` and sampled by the GTAO pass). Mirrors
+/// [`DepthImage`] but for a `COLOR_ATTACHMENT | SAMPLED` image with a
+/// caller-supplied format.
+pub struct NormalImage {
+    pub image: vk::Image,
+    pub memory: vk::DeviceMemory,
+    pub view: vk::ImageView,
+}
+
+impl NormalImage {
+    /// Create a color image for the given extent + format. Usage is
+    /// `COLOR_ATTACHMENT | SAMPLED` so the GTAO pass can read it back as a
+    /// texture after the ScenePass stores it.
+    pub fn new(
+        context: &VulkanContext,
+        extent: vk::Extent2D,
+        format: vk::Format,
+    ) -> anyhow::Result<Self> {
+        let device = &context.device;
+
+        let image_info = vk::ImageCreateInfo::default()
+            .image_type(vk::ImageType::TYPE_2D)
+            .format(format)
+            .extent(vk::Extent3D {
+                width: extent.width,
+                height: extent.height,
+                depth: 1,
+            })
+            .mip_levels(1)
+            .array_layers(1)
+            .samples(vk::SampleCountFlags::TYPE_1)
+            .tiling(vk::ImageTiling::OPTIMAL)
+            .usage(
+                vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
+            )
+            .sharing_mode(vk::SharingMode::EXCLUSIVE);
+
+        let image =
+            unsafe { device.create_image(&image_info, None) }.context("create normal image")?;
+
+        let mem_reqs = unsafe { device.get_image_memory_requirements(image) };
+        let mem_type = find_memory_type(
+            &context.physical_device_memory_properties,
+            mem_reqs.memory_type_bits,
+            vk::MemoryPropertyFlags::DEVICE_LOCAL,
+        )
+        .context("no suitable memory type for normal image")?;
+
+        let alloc_info = vk::MemoryAllocateInfo::default()
+            .allocation_size(mem_reqs.size)
+            .memory_type_index(mem_type);
+
+        let memory = unsafe { device.allocate_memory(&alloc_info, None) }
+            .context("allocate normal image memory")?;
+
+        unsafe { device.bind_image_memory(image, memory, 0) }
+            .context("bind normal image memory")?;
+
+        let view_info = vk::ImageViewCreateInfo::default()
+            .image(image)
+            .view_type(vk::ImageViewType::TYPE_2D)
+            .format(format)
+            .subresource_range(vk::ImageSubresourceRange {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                base_mip_level: 0,
+                level_count: 1,
+                base_array_layer: 0,
+                layer_count: 1,
+            });
+
+        let view = unsafe { device.create_image_view(&view_info, None) }
+            .context("create normal image view")?;
+
+        Ok(Self {
+            image,
+            memory,
+            view,
+        })
+    }
+
+    /// Destroy the image, its memory, and its view.
+    ///
+    /// # Safety
+    ///
+    /// `device` must be a valid `ash::Device` that created these resources.
+    pub unsafe fn destroy(&mut self, device: &ash::Device) {
+        unsafe { device.destroy_image_view(self.view, None) };
+        unsafe { device.free_memory(self.memory, None) };
+        unsafe { device.destroy_image(self.image, None) };
+    }
 }
 
 /// Collection of framebuffers, one per swapchain image view.

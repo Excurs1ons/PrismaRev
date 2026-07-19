@@ -149,8 +149,19 @@ impl Gizmo {
         let color_blend_attachment = vk::PipelineColorBlendAttachmentState::default()
             .color_write_mask(vk::ColorComponentFlags::RGBA)
             .blend_enable(false);
+        // The gizmo draws inside ScenePass's render pass, which now has 2
+        // color attachments (color + view-normal MRT). Every pipeline bound in
+        // that render pass must declare a matching attachmentCount, so we list
+        // 2 blend states: attachment 0 (color) writes RGBA, attachment 1
+        // (normal) has an empty write mask so the cleared value is preserved.
+        let blend_attachments = [
+            color_blend_attachment,
+            vk::PipelineColorBlendAttachmentState::default()
+                .color_write_mask(vk::ColorComponentFlags::empty())
+                .blend_enable(false),
+        ];
         let color_blend_state = vk::PipelineColorBlendStateCreateInfo::default()
-            .attachments(std::slice::from_ref(&color_blend_attachment));
+            .attachments(&blend_attachments);
 
         let pipeline_info = vk::GraphicsPipelineCreateInfo::default()
             .stages(&shader_stages)

@@ -277,6 +277,12 @@ fn create_device(
     let available_features = unsafe { instance.get_physical_device_features(physical_device) };
     let legacy_features = vk::PhysicalDeviceFeatures {
         shader_clip_distance: available_features.shader_clip_distance,
+        // MRT pipelines (ScenePass writes color + view-space normal) use
+        // different blend states per attachment (color = alpha blend, normal =
+        // no blend). Vulkan requires `independentBlend` for that; without it
+        // every attachment must share the same blend config. Universally
+        // supported on desktop + modern Android.
+        independent_blend: available_features.independent_blend,
         ..vk::PhysicalDeviceFeatures::default()
     };
 

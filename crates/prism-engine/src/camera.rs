@@ -63,7 +63,15 @@ impl OrbitCamera {
         vp
     }
 
-    /// Column-major world → view matrix (used for view-space debug normals).
+    /// Column-major projection matrix (Vulkan y-flip, depth range [0,1]).
+    /// Exposed so callers that need projection separately (e.g. the GTAO pass
+    /// reconstructs view-space positions from depth using `inv_proj`) can fetch
+    /// it without recomputing it from `view_proj * inverse(view)`.
+    pub fn projection(&self) -> [[f32; 4]; 4] {
+        self.perspective()
+    }
+
+    /// Column-major world -> view matrix (used for view-space debug normals).
     pub fn view(&self) -> [[f32; 4]; 4] {
         self.look_at(self.eye())
     }
@@ -167,21 +175,15 @@ impl FlyCamera {
         [c_y * c_p, s_p, -s_y * c_p]
     }
 
-    /// Unit right vector = forward × worldUp (normalized).
+    /// Unit right vector, derived from yaw only (not forward × worldUp).
+    ///
+    /// Building it from yaw keeps it well-defined at any pitch — including
+    /// straight up/down (pitch = ±π/2) — where the `forward × worldUp` cross
+    /// product would degenerate to zero. `up = right × forward` then stays
+    /// orthonormal across the full pitch range.
     fn right(&self) -> [f32; 3] {
-        let f = self.forward();
-        let up = [0.0f32, 1.0, 0.0];
-        let r = [
-            f[1] * up[2] - f[2] * up[1],
-            f[2] * up[0] - f[0] * up[2],
-            f[0] * up[1] - f[1] * up[0],
-        ];
-        let l = (r[0] * r[0] + r[1] * r[1] + r[2] * r[2]).sqrt();
-        if l > 1e-8 {
-            [r[0] / l, r[1] / l, r[2] / l]
-        } else {
-            r
-        }
+        let (s_y, c_y) = self.yaw.sin_cos();
+        [s_y, 0.0, c_y]
     }
 
     pub fn eye(&self) -> [f32; 3] {
@@ -230,6 +232,12 @@ impl FlyCamera {
         vp
     }
 
+    /// Column-major projection matrix (Vulkan y-flip, depth range [0,1]).
+    /// See [`OrbitCamera::projection`] for rationale.
+    pub fn projection(&self) -> [[f32; 4]; 4] {
+        self.perspective()
+    }
+
     // Reuse the same perspective + look_at helpers as OrbitCamera.
     fn perspective(&self) -> [[f32; 4]; 4] {
         let inv_tan = 1.0 / (self.fov_y * 0.5).tan();
@@ -275,15 +283,34 @@ impl FlyCamera {
     }
 
     /// Apply free-fly input for one frame.
+    ///
+    /// Look is gated on right-mouse-button hold (classic orbit-drag style).
+    /// For FPS-style pointer-lock, use [`FlyCamera::update_with_look`] with
+    /// `look_active = true` so the camera follows the mouse without holding a
+    /// button.
     pub fn update(&mut self, input: &InputState, dt: f32) {
-        use crate::input::{KeyCode, MouseButton};
+        use crate::input::MouseButton;
+        self.update_with_look(input, dt, input.mouse_held(MouseButton::Right));
+    }
 
-        // Look: hold right mouse button and drag.
-        if input.mouse_held(MouseButton::Right) {
+    /// Like [`FlyCamera::update`], but the look behavior is controlled by
+    /// `look_active` instead of requiring a held mouse button. When `true`
+    /// (pointer-lock mode) the camera rotates directly from mouse delta; when
+    /// `false` the caller typically still wants right-drag, so pass
+    /// `input.mouse_held(MouseButton::Right)` to preserve that.
+    pub fn update_with_look(&mut self, input: &InputState, dt: f32, look_active: bool) {
+        use crate::input::KeyCode;
+
+        // Look: either right-drag (non-locked) or direct mouse-follow (locked).
+        if look_active {
             let d = input.mouse_delta();
             self.yaw -= d[0] as f32 * self.look_sensitivity;
             self.pitch -= d[1] as f32 * self.look_sensitivity;
-            let lim = std::f32::consts::FRAC_PI_2 - 0.01;
+            // Clamp just shy of straight up/down. `right()` is yaw-based so the
+            // basis never degenerates, and ~89° still reads as "looking
+            // straight up" to a human while avoiding the pole-crossing roll
+            // that the full ±90° range would produce.
+            let lim = std::f32::consts::FRAC_PI_2 - 0.02;
             self.pitch = self.pitch.clamp(-lim, lim);
         }
 
@@ -376,6 +403,16 @@ impl Camera {
         }
     }
 
+    /// Column-major projection matrix (Vulkan y-flip, depth range [0,1]).
+    /// Needed by passes that reconstruct view-space positions from depth
+    /// (e.g. GTAO) and therefore require the projection + its inverse.
+    pub fn projection(&self) -> [[f32; 4]; 4] {
+        match self {
+            Camera::Orbit(o) => o.projection(),
+            Camera::Fly(f) => f.projection(),
+        }
+    }
+
     pub fn set_aspect(&mut self, aspect: f32) {
         match self {
             Camera::Orbit(o) => o.set_aspect(aspect),
@@ -385,9 +422,11 @@ impl Camera {
 
     /// Per-frame input update. Only the free-fly variant consumes input;
     /// the orbit variant is driven externally via `OrbitCameraController`.
-    pub fn update(&mut self, input: &InputState, dt: f32) {
+    /// `look_active` controls whether the camera rotates from mouse delta
+    /// directly (pointer-lock mode) — see `FlyCamera::update_with_look`.
+    pub fn update(&mut self, input: &InputState, dt: f32, look_active: bool) {
         if let Camera::Fly(f) = self {
-            f.update(input, dt);
+            f.update_with_look(input, dt, look_active);
         }
     }
 

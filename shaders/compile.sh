@@ -130,4 +130,17 @@ compile_stage scene_frag fragmentMain fragment
 fix_spv "$OUT/scene_frag.frag.spv"
 emit_reflection scene_frag fragmentMain fragment
 
+# post: vertex + fragment (fullscreen HDR -> sRGB swapchain tonemap). Self
+# contained (no bindless/IBL), so no ArrayStride fix-up needed.
+compile_stage post vertexMain vertex
+compile_stage post fragmentMain fragment
+emit_reflection post vertexMain vertex fragmentMain fragment
+
+# gtao: vertex + fragment (half-res screen-space ambient occlusion). Reads the
+# ScenePass depth + view-normal MRT and writes an R8 visibility texture sampled
+# by the scene shader to attenuate IBL. Self-contained (no bindless/IBL).
+compile_stage gtao vertexMain vertex
+compile_stage gtao fragmentMain fragment
+emit_reflection gtao vertexMain vertex fragmentMain fragment
+
 echo "All Slang shaders compiled. SPIR-V in $OUT, reflection JSON in $REFL"

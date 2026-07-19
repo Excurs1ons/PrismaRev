@@ -57,6 +57,15 @@ pub struct GraphRenderer {
     ibl: IblResources,
     graph: RenderGraph,
     scene_pass: ScenePass,
+    /// Half-resolution GTAO pass. Runs after `scene_pass` every frame and
+    /// produces a double-buffered R8 AO texture the scene samples (1-frame
+    /// latency) to attenuate IBL diffuse + specular.
+    gtao_pass: crate::gtao::GtaoPass,
+    /// Fullscreen-triangle tonemap pass: HDR scene color -> sRGB swapchain.
+    /// Runs after `gtao_pass` (the GTAO barriers don't touch the HDR color,
+    /// so order between them is flexible; placing GTAO first lets a future
+    /// AO-aware bloom read the AO-modulated HDR).
+    post_pass: crate::post::PostPass,
     settings: RenderSettings,
     shadow_sampler: vk::Sampler,
     // Captured from the graph's allocated shadow map; consumed via the
@@ -205,6 +214,21 @@ impl GraphRenderer {
             )
             .context("ScenePass: set_resources")?;
 
+        // GTAO pass: half-resolution screen-space AO. Runs after ScenePass
+        // every frame and produces a double-buffered R8 AO texture the scene
+        // samples (1-frame latency) to attenuate IBL diffuse + specular.
+        let swapchain_extent = swapchain.extent;
+        let gtao_pass = crate::gtao::GtaoPass::new(&context, command_pool, swapchain_extent)
+            .context("GtaoPass::new")?;
+
+        // PostPass: tonemaps the ScenePass HDR intermediate color -> sRGB
+        // swapchain. Replaces the inline tonemap that used to live in
+        // scene_frag.slang so the scene output stays linear HDR. Allocates one
+        // descriptor set per frame-in-flight so `set_input` doesn't disturb an
+        // in-flight set.
+        let post_pass = crate::post::PostPass::new(&context, color_format, frame_count)
+            .context("PostPass::new")?;
+
         Ok(Self {
             swapchain: Some(swapchain),
             command_pool,
@@ -218,6 +242,8 @@ impl GraphRenderer {
             ibl,
             graph,
             scene_pass,
+            gtao_pass,
+            post_pass,
             settings,
             shadow_sampler,
             shadow_view,
@@ -431,6 +457,19 @@ impl GraphRenderer {
         // acquire/present out-of-date paths in `render` also route through
         // here so the framebuffer is always torn down first.
         self.scene_pass.drop_target(&self.context.device);
+        // PostPass wraps swapchain views too (its framebuffers target the
+        // swapchain directly). Drop them on the same lifecycle.
+        self.post_pass.drop_target(&self.context.device);
+        // GTAO owns its own AO images (not swapchain-derived) but sizes them
+        // to half the swapchain extent, so recreate them on resize too.
+        if let Some(sw) = self.swapchain.as_ref() {
+            if let Err(e) = self
+                .gtao_pass
+                .recreate_target(&self.context, self.command_pool, sw.extent)
+            {
+                log::warn!("GtaoPass recreate_target failed: {e:#}");
+            }
+        }
         if let Some(overlay) = self.egui_overlay.as_mut() {
             overlay.drop_target();
         }
@@ -451,9 +490,11 @@ impl GraphRenderer {
         draw_items: &[DrawItem],
         frame_data: &FrameUBOData,
         light_view_proj: [[f32; 4]; 4],
+        inv_projection: [[f32; 4]; 4],
         debug_mode: u32,
         normal_space: u32,
         debug_flags: u32,
+        tonemap_mode: u32,
         lights: &[GpuLight],
     ) -> anyhow::Result<bool> {
         // Clone the `ash::Device` handle (cheap: it's an `Arc` internally) so
@@ -508,15 +549,35 @@ impl GraphRenderer {
 
         let extent = self.extent();
         if record.is_ok() {
-            // --- Set ScenePass target ---
+            // --- Set ScenePass target (HDR intermediate + depth + normal MRT) ---
+            // ScenePass no longer targets the swapchain directly; it renders
+            // into a per-swapchain-image HDR color image that PostPass
+            // tonemaps into the swapchain later in the frame.
             if let Some(sw) = self.swapchain.as_ref() {
                 if extent.width > 0 && extent.height > 0 {
                     record = self
                         .scene_pass
-                        .set_target(&device, &self.context, &sw.views, image_index, extent)
+                        .set_target(
+                            &device,
+                            &self.context,
+                            sw.views.len(),
+                            image_index,
+                            extent,
+                        )
                         .context("ScenePass: set_target");
                 }
             }
+        }
+
+        // --- Bind last frame's GTAO output as the scene's AO input ---
+        // `ao_view((frame + 1) % 2)` reads the slot the GTAO pass wrote last
+        // frame (1-frame latency). On the first frame the view is null and
+        // `set_ao` leaves the descriptor unbound (PBR_FLAG_AO is off by
+        // default, so nothing samples it until the user toggles the bit).
+        if record.is_ok() {
+            let ao_view = self.gtao_pass.ao_view((frame as u32 + 1) % 2);
+            self.scene_pass
+                .set_ao(&device, frame as u32, ao_view);
         }
 
         // --- Update point-light SSBO from the ECS-collected lights ---
@@ -598,15 +659,119 @@ impl GraphRenderer {
                     )
                     .context("ScenePass execute");
             }
+
+            // --- GTAO pass: read scene depth + normal, write AO[frame] ---
+            // ScenePass leaves depth in DEPTH_STENCIL_ATTACHMENT_OPTIMAL and
+            // the normal MRT in COLOR_ATTACHMENT_OPTIMAL; the GTAO pass
+            // barriers both to *_READ_ONLY_OPTIMAL before sampling.
+            if record.is_ok() {
+                let (depth_view, depth_image) = match (
+                    self.scene_pass.depth_view(image_index),
+                    self.scene_pass.depth_image(image_index),
+                ) {
+                    (Some(v), Some(i)) => (v, i),
+                    _ => {
+                        record = Err(anyhow::anyhow!(
+                            "GtaoPass: scene depth view/image missing for image_index"
+                        ));
+                        (vk::ImageView::null(), vk::Image::null())
+                    }
+                };
+                let (normal_view, normal_image) = match (
+                    self.scene_pass.normal_view(image_index),
+                    self.scene_pass.normal_image(image_index),
+                ) {
+                    (Some(v), Some(i)) => (v, i),
+                    _ => {
+                        record = Err(anyhow::anyhow!(
+                            "GtaoPass: scene normal view/image missing for image_index"
+                        ));
+                        (vk::ImageView::null(), vk::Image::null())
+                    }
+                };
+                if record.is_ok() {
+                    self.gtao_pass
+                        .set_inputs(&device, frame as u32, depth_view, normal_view);
+                    let gtao_extent = self.gtao_pass.extent();
+                    let gtao_inputs = crate::gtao::GtaoFrameInputs {
+                        depth_image,
+                        depth_view,
+                        normal_image,
+                        normal_view,
+                    };
+                    let gtao_push = crate::gtao::GtaoPushConstants {
+                        inv_proj: inv_projection,
+                        viewport: [gtao_extent.width as f32, gtao_extent.height as f32],
+                        // View-space sample radius. Tuned for Sponza-scale scenes
+                        // (~30 world units); small enough to resolve corner
+                        // contact shadows, large enough to read across a step.
+                        radius: 0.5,
+                        // 0 = sample the normal MRT (default). The mobile
+                        // depth-reconstruct path is selected by flipping this
+                        // bit from the app once wired to a UI toggle.
+                        mode: 0,
+                        _pad0: 0,
+                    };
+                    record = self
+                        .gtao_pass
+                        .execute(&device, cmd, frame as u32, &gtao_inputs, &gtao_push)
+                        .context("GtaoPass execute");
+                }
+            }
+
+            // --- PostPass: tonemap HDR scene color -> sRGB swapchain ---
+            // Reads the ScenePass HDR color attachment (barriered here from
+            // COLOR_ATTACHMENT_OPTIMAL -> SHADER_READ_ONLY_OPTIMAL) and writes
+            // the swapchain image. The swapchain image transitions from
+            // PRESENT_SRC_KHR (last frame) -> COLOR_ATTACHMENT_OPTIMAL via the
+            // PostPass render pass `initial_layout = UNDEFINED`.
+            if record.is_ok() {
+                if let Some(sw) = self.swapchain.as_ref() {
+                    if extent.width > 0 && extent.height > 0 {
+                        record = self
+                            .post_pass
+                            .set_target(&device, &sw.views, image_index, extent)
+                            .context("PostPass: set_target");
+                    }
+                }
+                if record.is_ok() {
+                    let (hdr_view, hdr_image) = match (
+                        self.scene_pass.color_view(image_index),
+                        self.scene_pass.color_image(image_index),
+                    ) {
+                        (Some(v), Some(i)) => (v, i),
+                        _ => {
+                            record = Err(anyhow::anyhow!(
+                                "PostPass: scene HDR color view/image missing for image_index"
+                            ));
+                            (vk::ImageView::null(), vk::Image::null())
+                        }
+                    };
+                    if record.is_ok() {
+                        self.post_pass
+                            .set_input(&device, frame as u32, hdr_view);
+                        let post_push = crate::post::PostPushConstants {
+                            tonemap_mode,
+                            _pad0: 0,
+                            _pad1: 0,
+                            _pad2: 0,
+                        };
+                        record = self
+                            .post_pass
+                            .execute(&device, cmd, frame as u32, image_index, hdr_image, &post_push)
+                            .context("PostPass execute");
+                    }
+                }
+            }
         }
 
         // --- Transition swapchain image to PRESENT_SRC_KHR ---
-        // ScenePass leaves the color attachment in COLOR_ATTACHMENT_OPTIMAL
-        // (see `ensure_render_pass`). Two paths complete the transition to
-        // PRESENT_SRC_KHR:
+        // PostPass leaves the swapchain in COLOR_ATTACHMENT_OPTIMAL (see
+        // `PostPass::create_render_pass`). Two paths complete the transition
+        // to PRESENT_SRC_KHR:
         //   * If the egui overlay has a pending frame (produced by `run_ui`
         //     before this `render` call), it records its own render pass that
-        //     LOADs the scene and transitions to PRESENT_SRC_KHR on end.
+        //     LOADs the post output and transitions to PRESENT_SRC_KHR on end.
         //   * Otherwise, fall back to an explicit pipeline barrier.
         let egui_has_pending = self
             .egui_overlay
@@ -722,6 +887,14 @@ impl GraphRenderer {
         // pipeline, shadow descriptor set). Without this, vkDestroyDevice
         // reports leaked VkImage/VkDeviceMemory/VkImageView/VkRenderPass.
         self.scene_pass.destroy(device);
+
+        // Destroy GTAO pass (AO images, render pass, pipeline, descriptor
+        // sets, sampler).
+        self.gtao_pass.destroy(device);
+
+        // Destroy PostPass (framebuffers, render pass, pipeline, descriptor
+        // set, sampler).
+        self.post_pass.destroy(device);
 
         // Destroy egui overlay (its render pass, framebuffers, renderer).
         if let Some(overlay) = self.egui_overlay.as_mut() {

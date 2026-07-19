@@ -288,7 +288,7 @@ pub fn render_system(
     let fallback_col = [1.0, 1.0, 1.0, 1.0];
 
     // Extract camera from the first entity carrying a Camera component.
-    let (view_proj, eye, view) = {
+    let (view_proj, eye, view, projection) = {
         let camera_entity = world
             .query::<Camera>()
             .next()
@@ -299,10 +299,21 @@ pub fn render_system(
             .ok_or_else(|| anyhow::anyhow!("Camera entity has no Camera component"))?;
         let (display_aspect, surface_rotation) = renderer.orientation();
         camera.set_aspect(display_aspect);
+        // The surface rotation is applied to view_proj only (it rotates the
+        // clip-space output for device orientation). The raw projection matrix
+        // is what the GTAO pass needs to reconstruct view-space positions from
+        // depth, so we return it separately (unrotated).
+        let proj = camera.projection();
         let mut vp = camera.view_proj();
         vp = mat_mul(&surface_rotation, &vp);
-        (vp, camera.eye(), camera.view())
+        (vp, camera.eye(), camera.view(), proj)
     };
+
+    // Inverse projection for the GTAO pass (clip -> view reconstruction).
+    // Computed once per frame on the CPU; the GTAO shader multiplies this by
+    // the sampled clip-space position to recover view-space coords.
+    let inv_projection = mat_inverse(&projection);
+    let _ = projection; // projection is only consumed via inv_projection.
 
     // Resolve the directional light from the ECS world (first `DirectionalLight`
     // entity). Orientation is stored as XYZ Euler angles (degrees); derive the
@@ -401,9 +412,11 @@ pub fn render_system(
             &draw_items,
             &frame_data,
             light_view_proj,
+            inv_projection,
             debug_mode,
             normal_space,
             debug_flags,
+            tonemap_mode,
             &lights,
         )
         .map(|_| ())?;
@@ -495,6 +508,62 @@ fn mat_mul(a: &[[f32; 4]; 4], b: &[[f32; 4]; 4]) -> [[f32; 4]; 4] {
         }
     }
     out
+}
+
+/// Column-major 4×4 matrix inverse via cofactor / adjugate. Used to derive
+/// `inv_projection` for the GTAO pass (clip -> view reconstruction). Returns
+/// the identity matrix if `m` is singular (det ~= 0), which would only happen
+/// for a degenerate projection - safe fallback that produces no occlusion.
+fn mat_inverse(m: &[[f32; 4]; 4]) -> [[f32; 4]; 4] {
+    // Compute the 16 cofactors of the column-major matrix `m`. `m[col][row]`
+    // in code = m_{row, col} in math notation.
+    let m00 = m[0][0]; let m01 = m[0][1]; let m02 = m[0][2]; let m03 = m[0][3];
+    let m10 = m[1][0]; let m11 = m[1][1]; let m12 = m[1][2]; let m13 = m[1][3];
+    let m20 = m[2][0]; let m21 = m[2][1]; let m22 = m[2][2]; let m23 = m[2][3];
+    let m30 = m[3][0]; let m31 = m[3][1]; let m32 = m[3][2]; let m33 = m[3][3];
+
+    // 2×2 minors of the upper-left 3×3-ish blocks; full 4×4 cofactor expansion.
+    let c00 = (m11 * (m22 * m33 - m23 * m32)) - (m12 * (m21 * m33 - m23 * m31)) + (m13 * (m21 * m32 - m22 * m31));
+    let c01 = -((m10 * (m22 * m33 - m23 * m32)) - (m12 * (m20 * m33 - m23 * m30)) + (m13 * (m20 * m32 - m22 * m30)));
+    let c02 = (m10 * (m21 * m33 - m23 * m31)) - (m11 * (m20 * m33 - m23 * m30)) + (m13 * (m20 * m31 - m21 * m30));
+    let c03 = -((m10 * (m21 * m32 - m22 * m31)) - (m11 * (m20 * m32 - m22 * m30)) + (m12 * (m20 * m31 - m21 * m30)));
+
+    let det = m00 * c00 + m01 * c01 + m02 * c02 + m03 * c03;
+    if det.abs() < 1e-12 {
+        // Singular - return identity (GTAO will see no occlusion).
+        return [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ];
+    }
+    let inv_det = 1.0 / det;
+
+    // Remaining 12 cofactors.
+    let c10 = -((m01 * (m22 * m33 - m23 * m32)) - (m02 * (m21 * m33 - m23 * m31)) + (m03 * (m21 * m32 - m22 * m31)));
+    let c11 = (m00 * (m22 * m33 - m23 * m32)) - (m02 * (m20 * m33 - m23 * m30)) + (m03 * (m20 * m32 - m22 * m30));
+    let c12 = -((m00 * (m21 * m33 - m23 * m31)) - (m01 * (m20 * m33 - m23 * m30)) + (m03 * (m20 * m31 - m21 * m30)));
+    let c13 = (m00 * (m21 * m32 - m22 * m31)) - (m01 * (m20 * m32 - m22 * m30)) + (m02 * (m20 * m31 - m21 * m30));
+
+    let c20 = (m01 * (m12 * m33 - m13 * m32)) - (m02 * (m11 * m33 - m13 * m31)) + (m03 * (m11 * m32 - m12 * m31));
+    let c21 = -((m00 * (m12 * m33 - m13 * m32)) - (m02 * (m10 * m33 - m13 * m30)) + (m03 * (m10 * m32 - m12 * m30)));
+    let c22 = (m00 * (m11 * m33 - m13 * m31)) - (m01 * (m10 * m33 - m13 * m30)) + (m03 * (m10 * m31 - m11 * m30));
+    let c23 = -((m00 * (m11 * m32 - m12 * m31)) - (m01 * (m10 * m32 - m12 * m30)) + (m02 * (m10 * m31 - m11 * m30)));
+
+    let c30 = -((m01 * (m12 * m23 - m13 * m22)) - (m02 * (m11 * m23 - m13 * m21)) + (m03 * (m11 * m22 - m12 * m21)));
+    let c31 = (m00 * (m12 * m23 - m13 * m22)) - (m02 * (m10 * m23 - m13 * m20)) + (m03 * (m10 * m22 - m12 * m20));
+    let c32 = -((m00 * (m11 * m23 - m13 * m21)) - (m01 * (m10 * m23 - m13 * m20)) + (m03 * (m10 * m21 - m11 * m20)));
+    let c33 = (m00 * (m11 * m22 - m12 * m21)) - (m01 * (m10 * m22 - m12 * m20)) + (m02 * (m10 * m21 - m11 * m20));
+
+    // Adjugate (transpose of the cofactor matrix) * inv_det, in column-major
+    // layout: out[col][row] = cofactor[row][col] * inv_det.
+    [
+        [c00 * inv_det, c10 * inv_det, c20 * inv_det, c30 * inv_det],
+        [c01 * inv_det, c11 * inv_det, c21 * inv_det, c31 * inv_det],
+        [c02 * inv_det, c12 * inv_det, c22 * inv_det, c32 * inv_det],
+        [c03 * inv_det, c13 * inv_det, c23 * inv_det, c33 * inv_det],
+    ]
 }
 
 fn cross3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {

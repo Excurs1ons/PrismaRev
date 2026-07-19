@@ -46,6 +46,13 @@ pub struct PipelineDesc<'a> {
     /// Set to `Some(0)` for a depth-only pipeline (e.g. shadow map): the
     /// color blend state then carries zero attachments.
     pub color_attachment_count: Option<u32>,
+    /// Explicit per-attachment blend states for MRT pipelines. When `Some`,
+    /// this overrides `color_attachment_count` (the count is taken from the
+    /// slice length). Pass one entry per color attachment the subpass writes;
+    /// the i-th entry configures `SV_Target{i}`. Use this for MRT pipelines
+    /// (e.g. ScenePass writes color + view-normal) where each target needs a
+    /// different blend config (color = alpha blend, normal = no blend).
+    pub color_blend_attachments: Option<&'a [vk::PipelineColorBlendAttachmentState]>,
 }
 
 /// A compiled graphics pipeline with its layout.
@@ -135,9 +142,9 @@ impl GraphicsPipeline {
             .depth_compare_op(vk::CompareOp::LESS);
 
         // --- Color blend ---
-        // `color_attachment_count` is an optional override. A depth-only
-        // shadow-map pipeline passes `Some(0)` so the blend state carries zero
-        // attachments (the fragment shader still runs for depth).
+        // `color_blend_attachments` (when provided) drives the full MRT blend
+        // state; otherwise `color_attachment_count` selects 0 (depth-only) or 1
+        // (single attachment with the legacy alpha-blend config below).
         let color_blend_attachment = vk::PipelineColorBlendAttachmentState::default()
             .color_write_mask(vk::ColorComponentFlags::RGBA)
             .blend_enable(true)
@@ -147,15 +154,22 @@ impl GraphicsPipeline {
             .src_alpha_blend_factor(vk::BlendFactor::ONE)
             .dst_alpha_blend_factor(vk::BlendFactor::ZERO)
             .alpha_blend_op(vk::BlendOp::ADD);
-        let color_blend_state = match desc.color_attachment_count.unwrap_or(1) {
-            0 => vk::PipelineColorBlendStateCreateInfo::default()
+        let color_blend_state = if let Some(atts) = desc.color_blend_attachments {
+            vk::PipelineColorBlendStateCreateInfo::default()
                 .logic_op_enable(false)
                 .logic_op(vk::LogicOp::COPY)
-                .attachments(&[]),
-            _ => vk::PipelineColorBlendStateCreateInfo::default()
-                .logic_op_enable(false)
-                .logic_op(vk::LogicOp::COPY)
-                .attachments(std::slice::from_ref(&color_blend_attachment)),
+                .attachments(atts)
+        } else {
+            match desc.color_attachment_count.unwrap_or(1) {
+                0 => vk::PipelineColorBlendStateCreateInfo::default()
+                    .logic_op_enable(false)
+                    .logic_op(vk::LogicOp::COPY)
+                    .attachments(&[]),
+                _ => vk::PipelineColorBlendStateCreateInfo::default()
+                    .logic_op_enable(false)
+                    .logic_op(vk::LogicOp::COPY)
+                    .attachments(std::slice::from_ref(&color_blend_attachment)),
+            }
         };
 
         // --- Pipeline create ---

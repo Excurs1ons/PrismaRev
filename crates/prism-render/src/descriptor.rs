@@ -256,8 +256,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn frame_ubo_data_size_is_240() {
-        assert_eq!(std::mem::size_of::<FrameUBOData>(), 240);
+    fn frame_ubo_data_size_is_256() {
+        // std140 tail padding: tonemap_mode(u32 @ 240) + _pad([u32;3] @ 244)
+        // = 256 bytes total (16-byte aligned, matching the Slang `FrameUBO`
+        // mirror in common.slang).
+        assert_eq!(std::mem::size_of::<FrameUBOData>(), 256);
     }
 
     #[test]

@@ -30,6 +30,7 @@ pub mod descriptor;
 pub mod egui_overlay;
 pub mod gizmo;
 pub mod graph_renderer;
+pub mod gtao;
 pub mod hdr;
 pub mod ibl;
 pub mod managers;
@@ -37,6 +38,7 @@ pub mod mesh;
 pub mod passes;
 pub mod pbr_push;
 pub mod pipeline;
+pub mod post;
 pub mod render_graph;
 pub mod render_pass;
 pub mod shader;
@@ -58,13 +60,15 @@ pub use descriptor::{
 pub use egui_overlay::EguiOverlay;
 pub use gizmo::Gizmo;
 pub use graph_renderer::GraphRenderer;
+pub use gtao::{GtaoFrameInputs, GtaoPass, GtaoPushConstants};
 pub use mesh::{Mesh, Vertex};
 pub use passes::{
     ScenePass, ShadowMapPass, ShadowPassPushConstants,
 };
 pub use pbr_push::{DebugMode, NormalSpace, PbrBindlessPushConstants, PbrPushConstants};
 pub use pipeline::GraphicsPipeline;
+pub use post::{PostPass, PostPushConstants};
 pub use render_graph::DrawItem;
-pub use render_pass::{DepthImage, Framebuffers, RenderPass};
+pub use render_pass::{DepthImage, Framebuffers, NormalImage, RenderPass};
 pub use shader::load_shader_module;
 pub use swapchain::Swapchain;
