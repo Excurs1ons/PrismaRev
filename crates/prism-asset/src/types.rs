@@ -59,10 +59,10 @@ impl MeshData {
 
 /// PBR material parameters and texture references.
 ///
-/// Scalars match the GLSL `PbrMaterial` push-constant struct in
-/// `shaders/slang/pbr.slang` (albedo+metallic, roughness). Texture handles
-/// reference entries in the same `SceneStore`'s texture table; `None` means
-/// "use fallback" and the shader samples a 1x1 magenta texture.
+/// Scalars match the `GpuMaterial` struct in `shaders/slang/scene_frag.slang`
+/// (albedo+metallic, roughness). Texture handles reference entries in the same
+/// `SceneStore`'s texture table; `None` means "use fallback" and the shader
+/// samples a 1x1 magenta texture.
 ///
 /// `metallic_roughness_tex` is sampled as a packed texture: R unused, G =
 /// roughness, B = metallic, A unused (glTF convention).

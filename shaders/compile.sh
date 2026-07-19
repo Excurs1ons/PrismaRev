@@ -28,8 +28,8 @@ fi
 mkdir -p "$REFL"
 
 # name : entry:stage pairs (space separated). stage = vert|frag (matches the
-# .spv filenames the engine include_bytes!'s in renderer.rs / pbr_push.rs, e.g.
-# mesh.vert.spv / mesh.frag.spv).
+# .spv filenames the engine include_bytes!'s, e.g.
+# mesh_vert.vert.spv / scene_frag.frag.spv / shadow_depth.vert.spv).
 # Slang entry points are vertexMain / fragmentMain (see the [shader(...)] attrs).
 compile_stage() {
   local name="$1" entry="$2" stage="$3"
@@ -90,61 +90,19 @@ fix_spv() {
 
 echo "Compiling Slang shaders (slangc = $SLANGC, profile = $PROFILE)..."
 
-# mesh: vertex + fragment (Blinn-Phong)
-compile_stage mesh vertexMain vertex
-compile_stage mesh fragmentMain fragment
-emit_reflection mesh vertexMain vertex fragmentMain fragment
-
-# pbr: fragment only (reuses mesh.slang vertex stage at pipeline level)
-compile_stage pbr fragmentMain fragment
-emit_reflection pbr fragmentMain fragment
+# mesh_vert: vertex stage for the ScenePass (shared by all scene geometry).
+compile_stage mesh_vert vertexMain vertex
+emit_reflection mesh_vert vertexMain vertex
 
 # gizmo: vertex + fragment
 compile_stage gizmo vertexMain vertex
 compile_stage gizmo fragmentMain fragment
 emit_reflection gizmo vertexMain vertex fragmentMain fragment
 
-# overlay: vertex + fragment
-compile_stage overlay vertexMain vertex
-compile_stage overlay fragmentMain fragment
-emit_reflection overlay vertexMain vertex fragmentMain fragment
-
-# shadow: compute (RayQuery inline shadow pass, half-res)
-SHADOW_ENTRY="computeMain"
-SHADOW_STAGE="compute"
-echo "  shadow :: ${SHADOW_ENTRY} -> shadow.comp.spv"
-"$SLANGC" "$SRC/shadow.slang" \
-  -profile "$PROFILE" \
-  -target spirv \
-  -entry "$SHADOW_ENTRY" \
-  -stage "$SHADOW_STAGE" \
-  -fvk-use-entrypoint-name \
-  -o "$OUT/shadow.comp.spv"
-echo "  reflect shadow -> reflection/shadow.json"
-"$SLANGC" "$SRC/shadow.slang" \
-  -profile "$PROFILE" \
-  -target spirv \
-  -entry "$SHADOW_ENTRY" \
-  -stage "$SHADOW_STAGE" \
-  -reflection-json "$REFL/shadow.json" \
-  -o "$REFL/shadow.tmp.spv"
-rm -f "$REFL/shadow.tmp.spv"
-
-# shadowmap: vertex + fragment (rasterized depth-only shadow map fallback)
-compile_stage shadowmap vertexMain vertex
-compile_stage shadowmap fragmentMain fragment
-
-# scene: vertex + fragment (forward PBR + IBL RenderGraph path).
-# These are separate source files (scene.vert.slang / scene.frag.slang),
-# not a single scene.slang, so compile them explicitly.
-echo "  scene :: vertexMain -> scene.vert.spv"
-"$SLANGC" "$SRC/scene.vert.slang" \
-  -profile "$PROFILE" -target spirv -entry vertexMain -stage vertex \
-  -fvk-use-entrypoint-name -o "$OUT/scene.vert.spv"
-echo "  scene :: fragmentMain -> scene.frag.spv"
-"$SLANGC" "$SRC/scene.frag.slang" \
-  -profile "$PROFILE" -target spirv -entry fragmentMain -stage fragment \
-  -fvk-use-entrypoint-name -o "$OUT/scene.frag.spv"
+# shadow_depth: vertex + fragment (rasterized depth-only shadow map).
+compile_stage shadow_depth vertexMain vertex
+compile_stage shadow_depth fragmentMain fragment
+emit_reflection shadow_depth vertexMain vertex fragmentMain fragment
 
 # skybox: vertex + fragment (environment cubemap background).
 # Single source file with two entry points (vertexMain / fragmentMain).
@@ -164,49 +122,12 @@ echo "  reflect skybox -> reflection/skybox.json"
   -o "$REFL/skybox.tmp.spv"
 rm -f "$REFL/skybox.tmp.spv"
 
-# sharc_query: compute (SHARC GI cache lookup, half-res)
-SHARCQ_ENTRY="computeMain"
-SHARCQ_STAGE="compute"
-echo "  sharc_query :: ${SHARCQ_ENTRY} -> sharc_query.comp.spv"
-"$SLANGC" "$SRC/sharc_query.slang" \
-  -profile "$PROFILE" \
-  -target spirv \
-  -entry "$SHARCQ_ENTRY" \
-  -stage "$SHARCQ_STAGE" \
-  -I "$SRC" \
-  -fvk-use-entrypoint-name \
-  -o "$OUT/sharc_query.comp.spv"
-echo "  reflect sharc_query -> reflection/sharc_query.json"
-"$SLANGC" "$SRC/sharc_query.slang" \
-  -profile "$PROFILE" \
-  -target spirv \
-  -entry "$SHARCQ_ENTRY" \
-  -stage "$SHARCQ_STAGE" \
-  -I "$SRC" \
-  -reflection-json "$REFL/sharc_query.json" \
-  -o "$REFL/sharc_query.tmp.spv"
-rm -f "$REFL/sharc_query.tmp.spv"
-
-# lighting: fragment (GBuffer + shadow + GI + IBL → HDR)
-compile_stage lighting fragmentMain fragment
-emit_reflection lighting fragmentMain fragment
-
-# post: fragment (ACES tone map → swapchain)
-compile_stage post fragmentMain fragment
-emit_reflection post fragmentMain fragment
-
-# bindless: fragment only. Pairs with mesh.vert.spv (from mesh.slang vertex)
-# at pipeline-build time to form the bindless PBR draw pipeline.
-compile_stage bindless fragmentMain fragment
-fix_spv "$OUT/bindless.frag.spv"
-emit_reflection bindless fragmentMain fragment
-
-# scene_bindless: fragment only (RenderGraph ScenePass bindless PBR +
-# rasterized shadow map). Pairs with mesh.vert.spv. Graph-path counterpart
-# of bindless.slang with shadow-map sampling; lightViewProj is read from
-# the per-frame UBO (not push constants) so the push constant stays under
-# the 128-byte Vulkan limit.
-compile_stage scene_bindless fragmentMain fragment
-fix_spv "$OUT/scene_bindless.frag.spv"
+# scene_frag: fragment only (RenderGraph ScenePass bindless PBR + rasterized
+# shadow map). Pairs with mesh_vert.vert.spv. The light-space view-projection
+# for the shadow map is read from the per-frame UBO (not push constants) so
+# the push constant stays under the 128-byte Vulkan limit.
+compile_stage scene_frag fragmentMain fragment
+fix_spv "$OUT/scene_frag.frag.spv"
+emit_reflection scene_frag fragmentMain fragment
 
 echo "All Slang shaders compiled. SPIR-V in $OUT, reflection JSON in $REFL"

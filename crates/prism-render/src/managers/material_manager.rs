@@ -41,10 +41,9 @@ new_key_type! {
     pub struct MaterialHandle;
 }
 
-/// Shader-visible material record. The Slang `Material` struct in
-/// `shaders/slang/scene_bindless.slang` and `shaders/slang/bindless.slang`
-/// mirrors this exactly; field order and size are pinned by the static
-/// assertion below.
+/// Shader-visible material record. The Slang `GpuMaterial` struct in
+/// `shaders/slang/scene_frag.slang` mirrors this exactly; field order and
+/// size are pinned by the static assertion below.
 ///
 /// Layout (96 bytes, 16-byte aligned):
 ///   @0   base_color[4]                          (float4)

@@ -9,7 +9,7 @@
 module common;
 
 // Per-frame uniform data. Mirrors Rust `FrameUBOData` (set 0, binding 0).
-// std140: mat4(64) + vec4(16)*3 + mat4(64) + mat4(64) = 240 bytes.
+// std140: mat4(64) + vec4(16)*3 + mat4(64) + mat4(64) + uint(4) + pad(12) = 256.
 public struct FrameUBO
 {
     public float4x4 viewProj;        // offset   0
@@ -18,6 +18,10 @@ public struct FrameUBO
     public float4   lightColor;      // offset  96  (rgb = color, w = ambient factor)
     public float4x4 view;            // offset 112  (world -> view)
     public float4x4 lightViewProj;   // offset 176  (light-space VP for shadow map)
+    public uint     tonemapMode;     // offset 240  (0 = Reinhard, 1 = ACES)
+    public uint     _pad0;           // offset 244
+    public uint     _pad1;           // offset 248
+    public uint     _pad2;           // offset 252
 };
 
 // Vertex stream matching mesh.vert input locations 0..4.

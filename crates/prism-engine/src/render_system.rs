@@ -275,6 +275,7 @@ pub fn render_system(
     normal_space: u32,
     debug_flags: u32,
     show_ui: bool,
+    tonemap_mode: u32,
     scene_draw_items: &[SceneDrawItem],
 ) -> anyhow::Result<()> {
     // Fallback light values used when the world has no DirectionalLight entity.
@@ -344,16 +345,23 @@ pub fn render_system(
     }
     let light_count = lights.len() as f32;
 
-    // Build the full frame data from camera + light.
     // Light-space view-projection for the rasterized shadow map. The light
     // direction is `frame.lightDirection.xyz` (direction TO the light). Build
-    // an orthographic projection looking from the light toward the origin over
-    // a fixed scene bounds; this matches the orthographic assumption in
-    // `scene_bindless.slang::sample_shadow`. This is stored in the per-frame
-    // UBO so the ScenePass fragment shader can project world positions into
-    // shadow space without a push-constant mat4 (which would exceed Vulkan's
-    // 128-byte push-constant limit alongside the bindless push block).
-    let light_view_proj = light_view_proj(&light_direction, 12.0);
+    // an orthographic projection centered on the **camera** (not the origin)
+    // over a half-extent large enough to cover the visible scene; this matches
+    // the orthographic assumption in `scene_frag.slang::sample_shadow`.
+    // Centering on the camera means the shadow frustum follows the viewer, so
+    // geometry far from the world origin still casts/receives shadows instead
+    // of falling outside the fixed [-half,+half] box and being treated as lit.
+    // Stored in the per-frame UBO so the ScenePass fragment shader can project
+    // world positions into shadow space without a push-constant mat4 (which
+    // would exceed Vulkan's 128-byte push-constant limit alongside the bindless
+    // push block).
+    //
+    // `half = 30` covers Sponza's full footprint (~X∈[-15,15], Y∈[0,12],
+    // Z∈[-8,8]) with margin, and is large enough that the camera's nearby
+    // surroundings stay inside the box as it flies through the scene.
+    let light_view_proj = light_view_proj(&light_direction, 30.0, &eye);
 
     let frame_data = FrameUBOData {
         view_proj,
@@ -367,6 +375,8 @@ pub fn render_system(
         light_color,
         view,
         light_view_proj,
+        tonemap_mode,
+        _pad: [0; 3],
     };
 
     // Build the flat draw list from the loaded glTF scene.
@@ -404,21 +414,30 @@ pub fn render_system(
 /// Build an orthographic light-space view-projection matrix.
 ///
 /// `light_dir` is the direction TO the light (normalized). We place the light
-/// at `-light_dir * distance` and look at the origin, with an up vector chosen
-/// to avoid degeneracy, then apply an orthographic projection spanning
-/// `[-half, half]` in x/y and `[0, 2*distance]` in z.
-fn light_view_proj(light_dir: &[f32; 4], half: f32) -> [[f32; 4]; 4] {
+/// at `center + light_dir * distance` and look back toward `center`, with an
+/// up vector chosen to avoid degeneracy, then apply an orthographic projection
+/// spanning `[-half, half]` in x/y and a depth range around `distance`.
+///
+/// `center` is typically the camera position - centering the shadow frustum on
+/// the viewer means geometry near the camera always falls inside the ortho box,
+/// so it both casts and receives shadows. A frustum fixed at the world origin
+/// would leave anything outside `[-half, half]` treated as lit (see
+/// `scene_frag.slang::sample_shadow`'s out-of-bounds early-out).
+fn light_view_proj(light_dir: &[f32; 4], half: f32, center: &[f32; 3]) -> [[f32; 4]; 4] {
     let l = [light_dir[0], light_dir[1], light_dir[2]];
     let len = (l[0] * l[0] + l[1] * l[1] + l[2] * l[2]).max(1e-6);
     let l = [l[0] / len, l[1] / len, l[2] / len];
 
     // Light position: AT the light (direction TO the light is `l`), looking
-    // back toward the origin. Eye = +l * dist (NOT -l: placing it on the
-    // anti-light side would render the shadow map from the dark side and flip
-    // every shadow to the wrong, lit side).
+    // back toward `center`. Eye = center + l * dist (NOT center - l: placing it
+    // on the anti-light side would render the shadow map from the dark side and
+    // flip every shadow to the wrong, lit side).
     let dist = half * 2.0;
-    let eye = [l[0] * dist, l[1] * dist, l[2] * dist];
-    let center = [0.0, 0.0, 0.0];
+    let eye = [
+        center[0] + l[0] * dist,
+        center[1] + l[1] * dist,
+        center[2] + l[2] * dist,
+    ];
     let up = if (l[1] * l[1]) > 0.99 {
         [0.0, 0.0, 1.0]
     } else {
@@ -442,12 +461,14 @@ fn light_view_proj(light_dir: &[f32; 4], half: f32) -> [[f32; 4]; 4] {
     // range [near, far] to Vulkan's [0, 1] clip depth with the standard 0..1
     // orthographic form:
     //   clip.z = -z/(f-n) - n/(f-n)   (for view_z = -z, z in [n, f])
-    // `dist` is the light-to-origin distance, so the origin sits at view_z =
+    // `dist` is the light-to-center distance, so `center` sits at view_z =
     // -dist. near must be SMALLER than that or the whole scene is clipped by
     // the near plane (shadow map stays cleared -> nothing is ever shadowed).
-    // Use near = 0.5*dist (origin lands at ~0.17 depth, well inside) and far =
-    // 3*dist to cover geometry behind the origin. Column-major.
-    let ortho_half = dist;
+    // Use near = 0.5*dist (center lands at ~0.17 depth, well inside) and far =
+    // 3*dist to cover geometry behind the center. `ortho_half = half` (the
+    // function parameter, independent of `dist`) sets the x/y extent.
+    // Column-major.
+    let ortho_half = half;
     let inv = 1.0 / ortho_half;
     let n = 0.5 * dist;
     let f = 3.0 * dist;

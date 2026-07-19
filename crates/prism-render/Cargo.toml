@@ -6,9 +6,6 @@ license.workspace = true
 description = "Vulkan rendering backend for PrismaRev"
 
 [features]
-# Enable the legacy monolithic renderer (deprecated/renderer_legacy.rs) for
-# reference/comparison. Off by default — new code uses render_graph + passes.
-legacy_renderer = []
 
 [dependencies]
 ash = { workspace = true }

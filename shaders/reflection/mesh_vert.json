@@ -83,6 +83,38 @@
                                 }
                             },
                             "binding": {"kind": "uniform", "offset": 176, "size": 64}
+                        },
+                        {
+                            "name": "tonemapMode",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "uint32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 240, "size": 4}
+                        },
+                        {
+                            "name": "_pad0",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "uint32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 244, "size": 4}
+                        },
+                        {
+                            "name": "_pad1",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "uint32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 248, "size": 4}
+                        },
+                        {
+                            "name": "_pad2",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "uint32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 252, "size": 4}
                         }
                     ]
                 },
@@ -168,158 +200,66 @@
                                     }
                                 },
                                 "binding": {"kind": "uniform", "offset": 176, "size": 64}
+                            },
+                            {
+                                "name": "tonemapMode",
+                                "type": {
+                                    "kind": "scalar",
+                                    "scalarType": "uint32"
+                                },
+                                "binding": {"kind": "uniform", "offset": 240, "size": 4}
+                            },
+                            {
+                                "name": "_pad0",
+                                "type": {
+                                    "kind": "scalar",
+                                    "scalarType": "uint32"
+                                },
+                                "binding": {"kind": "uniform", "offset": 244, "size": 4}
+                            },
+                            {
+                                "name": "_pad1",
+                                "type": {
+                                    "kind": "scalar",
+                                    "scalarType": "uint32"
+                                },
+                                "binding": {"kind": "uniform", "offset": 248, "size": 4}
+                            },
+                            {
+                                "name": "_pad2",
+                                "type": {
+                                    "kind": "scalar",
+                                    "scalarType": "uint32"
+                                },
+                                "binding": {"kind": "uniform", "offset": 252, "size": 4}
                             }
                         ]
                     },
-                    "binding": {"kind": "uniform", "offset": 0, "size": 240}
+                    "binding": {"kind": "uniform", "offset": 0, "size": 256}
                 }
             }
         },
         {
-            "name": "gbufferA",
-            "binding": {"kind": "descriptorTableSlot", "index": 1},
-            "type": {
-                "kind": "resource",
-                "baseShape": "texture2D",
-                "resultType": {
-                    "kind": "vector",
-                    "elementCount": 4,
-                    "elementType": {
-                        "kind": "scalar",
-                        "scalarType": "float32"
-                    }
-                }
-            }
-        },
-        {
-            "name": "gbufferB",
-            "binding": {"kind": "descriptorTableSlot", "index": 2},
-            "type": {
-                "kind": "resource",
-                "baseShape": "texture2D",
-                "resultType": {
-                    "kind": "vector",
-                    "elementCount": 4,
-                    "elementType": {
-                        "kind": "scalar",
-                        "scalarType": "float32"
-                    }
-                }
-            }
-        },
-        {
-            "name": "shadowOutput",
-            "binding": {"kind": "descriptorTableSlot", "index": 3},
-            "type": {
-                "kind": "resource",
-                "baseShape": "texture2D",
-                "access": "readWrite",
-                "resultType": {
-                    "kind": "scalar",
-                    "scalarType": "float32"
-                }
-            }
-        },
-        {
-            "name": "tlas",
-            "binding": {"kind": "descriptorTableSlot", "index": 4},
-            "type": {
-                "kind": "resource",
-                "baseShape": "accelerationStructure"
-            }
-        },
-        {
-            "name": "pc",
+            "name": "push",
             "binding": {"kind": "pushConstantBuffer", "index": 0},
             "type": {
                 "kind": "constantBuffer",
                 "elementType": {
                     "kind": "struct",
-                    "name": "ShadowPushConstants",
+                    "name": "MeshPush",
                     "fields": [
                         {
-                            "name": "outputWidth",
+                            "name": "model",
                             "type": {
-                                "kind": "scalar",
-                                "scalarType": "uint32"
-                            },
-                            "binding": {"kind": "uniform", "offset": 0, "size": 4}
-                        },
-                        {
-                            "name": "outputHeight",
-                            "type": {
-                                "kind": "scalar",
-                                "scalarType": "uint32"
-                            },
-                            "binding": {"kind": "uniform", "offset": 4, "size": 4}
-                        },
-                        {
-                            "name": "gbufferWidth",
-                            "type": {
-                                "kind": "scalar",
-                                "scalarType": "uint32"
-                            },
-                            "binding": {"kind": "uniform", "offset": 8, "size": 4}
-                        },
-                        {
-                            "name": "gbufferHeight",
-                            "type": {
-                                "kind": "scalar",
-                                "scalarType": "uint32"
-                            },
-                            "binding": {"kind": "uniform", "offset": 12, "size": 4}
-                        },
-                        {
-                            "name": "lightDir",
-                            "type": {
-                                "kind": "vector",
-                                "elementCount": 3,
+                                "kind": "matrix",
+                                "rowCount": 4,
+                                "columnCount": 4,
                                 "elementType": {
                                     "kind": "scalar",
                                     "scalarType": "float32"
                                 }
                             },
-                            "binding": {"kind": "uniform", "offset": 16, "size": 12}
-                        },
-                        {
-                            "name": "lightRange",
-                            "type": {
-                                "kind": "scalar",
-                                "scalarType": "float32"
-                            },
-                            "binding": {"kind": "uniform", "offset": 28, "size": 4}
-                        },
-                        {
-                            "name": "normalBias",
-                            "type": {
-                                "kind": "scalar",
-                                "scalarType": "float32"
-                            },
-                            "binding": {"kind": "uniform", "offset": 32, "size": 4}
-                        },
-                        {
-                            "name": "_padding0",
-                            "type": {
-                                "kind": "scalar",
-                                "scalarType": "float32"
-                            },
-                            "binding": {"kind": "uniform", "offset": 36, "size": 4}
-                        },
-                        {
-                            "name": "_padding1",
-                            "type": {
-                                "kind": "scalar",
-                                "scalarType": "float32"
-                            },
-                            "binding": {"kind": "uniform", "offset": 40, "size": 4}
-                        },
-                        {
-                            "name": "_padding2",
-                            "type": {
-                                "kind": "scalar",
-                                "scalarType": "float32"
-                            },
-                            "binding": {"kind": "uniform", "offset": 44, "size": 4}
+                            "binding": {"kind": "uniform", "offset": 0, "size": 64}
                         }
                     ]
                 },
@@ -329,42 +269,43 @@
                 "elementVarLayout": {
                     "type": {
                         "kind": "struct",
-                        "name": "ShadowPushConstants",
+                        "name": "MeshPush",
                         "fields": [
                             {
-                                "name": "outputWidth",
+                                "name": "model",
                                 "type": {
-                                    "kind": "scalar",
-                                    "scalarType": "uint32"
+                                    "kind": "matrix",
+                                    "rowCount": 4,
+                                    "columnCount": 4,
+                                    "elementType": {
+                                        "kind": "scalar",
+                                        "scalarType": "float32"
+                                    }
                                 },
-                                "binding": {"kind": "uniform", "offset": 0, "size": 4}
-                            },
+                                "binding": {"kind": "uniform", "offset": 0, "size": 64}
+                            }
+                        ]
+                    },
+                    "binding": {"kind": "uniform", "offset": 0, "size": 64}
+                }
+            }
+        }
+    ],
+    "entryPoints": [
+        {
+            "name": "vertexMain",
+            "stage": "vertex",
+            "parameters": [
+                {
+                    "name": "in",
+                    "stage": "vertex",
+                    "binding": {"kind": "varyingInput", "index": 0, "count": 5},
+                    "type": {
+                        "kind": "struct",
+                        "name": "MeshVertexIn",
+                        "fields": [
                             {
-                                "name": "outputHeight",
-                                "type": {
-                                    "kind": "scalar",
-                                    "scalarType": "uint32"
-                                },
-                                "binding": {"kind": "uniform", "offset": 4, "size": 4}
-                            },
-                            {
-                                "name": "gbufferWidth",
-                                "type": {
-                                    "kind": "scalar",
-                                    "scalarType": "uint32"
-                                },
-                                "binding": {"kind": "uniform", "offset": 8, "size": 4}
-                            },
-                            {
-                                "name": "gbufferHeight",
-                                "type": {
-                                    "kind": "scalar",
-                                    "scalarType": "uint32"
-                                },
-                                "binding": {"kind": "uniform", "offset": 12, "size": 4}
-                            },
-                            {
-                                "name": "lightDir",
+                                "name": "position",
                                 "type": {
                                     "kind": "vector",
                                     "elementCount": 3,
@@ -373,97 +314,170 @@
                                         "scalarType": "float32"
                                     }
                                 },
-                                "binding": {"kind": "uniform", "offset": 16, "size": 12}
+                                "stage": "vertex",
+                                "binding": {"kind": "varyingInput", "index": 0},
+                                "semanticName": "POSITION"
                             },
                             {
-                                "name": "lightRange",
+                                "name": "normal",
                                 "type": {
-                                    "kind": "scalar",
-                                    "scalarType": "float32"
+                                    "kind": "vector",
+                                    "elementCount": 3,
+                                    "elementType": {
+                                        "kind": "scalar",
+                                        "scalarType": "float32"
+                                    }
                                 },
-                                "binding": {"kind": "uniform", "offset": 28, "size": 4}
+                                "stage": "vertex",
+                                "binding": {"kind": "varyingInput", "index": 1},
+                                "semanticName": "NORMAL"
                             },
                             {
-                                "name": "normalBias",
+                                "name": "color",
                                 "type": {
-                                    "kind": "scalar",
-                                    "scalarType": "float32"
+                                    "kind": "vector",
+                                    "elementCount": 3,
+                                    "elementType": {
+                                        "kind": "scalar",
+                                        "scalarType": "float32"
+                                    }
                                 },
-                                "binding": {"kind": "uniform", "offset": 32, "size": 4}
+                                "stage": "vertex",
+                                "binding": {"kind": "varyingInput", "index": 2},
+                                "semanticName": "COLOR"
                             },
                             {
-                                "name": "_padding0",
+                                "name": "uv",
                                 "type": {
-                                    "kind": "scalar",
-                                    "scalarType": "float32"
+                                    "kind": "vector",
+                                    "elementCount": 2,
+                                    "elementType": {
+                                        "kind": "scalar",
+                                        "scalarType": "float32"
+                                    }
                                 },
-                                "binding": {"kind": "uniform", "offset": 36, "size": 4}
+                                "stage": "vertex",
+                                "binding": {"kind": "varyingInput", "index": 3},
+                                "semanticName": "TEXCOORD"
                             },
                             {
-                                "name": "_padding1",
+                                "name": "tangent",
                                 "type": {
-                                    "kind": "scalar",
-                                    "scalarType": "float32"
+                                    "kind": "vector",
+                                    "elementCount": 3,
+                                    "elementType": {
+                                        "kind": "scalar",
+                                        "scalarType": "float32"
+                                    }
                                 },
-                                "binding": {"kind": "uniform", "offset": 40, "size": 4}
-                            },
-                            {
-                                "name": "_padding2",
-                                "type": {
-                                    "kind": "scalar",
-                                    "scalarType": "float32"
-                                },
-                                "binding": {"kind": "uniform", "offset": 44, "size": 4}
+                                "stage": "vertex",
+                                "binding": {"kind": "varyingInput", "index": 4},
+                                "semanticName": "TANGENT"
                             }
                         ]
-                    },
-                    "binding": {"kind": "uniform", "offset": 0, "size": 48}
-                }
-            }
-        }
-    ],
-    "entryPoints": [
-        {
-            "name": "computeMain",
-            "stage": "compute",
-            "parameters": [
-                {
-                    "name": "dispatchID",
-                    "semanticName": "SV_DISPATCHTHREADID",
-                    "type": {
-                        "kind": "vector",
-                        "elementCount": 3,
-                        "elementType": {
-                            "kind": "scalar",
-                            "scalarType": "uint32"
-                        }
                     }
                 }
             ],
-            "threadGroupSize": [8, 8, 1],
+            "result": {
+                "stage": "vertex",
+                "binding": {"kind": "varyingOutput", "index": 0, "count": 5},
+                "type": {
+                    "kind": "struct",
+                    "name": "MeshVaryings",
+                    "fields": [
+                        {
+                            "name": "clipPos",
+                            "type": {
+                                "kind": "vector",
+                                "elementCount": 4,
+                                "elementType": {
+                                    "kind": "scalar",
+                                    "scalarType": "float32"
+                                }
+                            },
+                            "semanticName": "SV_POSITION"
+                        },
+                        {
+                            "name": "color",
+                            "type": {
+                                "kind": "vector",
+                                "elementCount": 3,
+                                "elementType": {
+                                    "kind": "scalar",
+                                    "scalarType": "float32"
+                                }
+                            },
+                            "stage": "vertex",
+                            "binding": {"kind": "varyingOutput", "index": 0},
+                            "semanticName": "COLOR"
+                        },
+                        {
+                            "name": "worldNormal",
+                            "type": {
+                                "kind": "vector",
+                                "elementCount": 3,
+                                "elementType": {
+                                    "kind": "scalar",
+                                    "scalarType": "float32"
+                                }
+                            },
+                            "stage": "vertex",
+                            "binding": {"kind": "varyingOutput", "index": 1},
+                            "semanticName": "NORMAL"
+                        },
+                        {
+                            "name": "worldPos",
+                            "type": {
+                                "kind": "vector",
+                                "elementCount": 3,
+                                "elementType": {
+                                    "kind": "scalar",
+                                    "scalarType": "float32"
+                                }
+                            },
+                            "stage": "vertex",
+                            "binding": {"kind": "varyingOutput", "index": 2},
+                            "semanticName": "TEXCOORD",
+                            "semanticIndex": 1
+                        },
+                        {
+                            "name": "uv",
+                            "type": {
+                                "kind": "vector",
+                                "elementCount": 2,
+                                "elementType": {
+                                    "kind": "scalar",
+                                    "scalarType": "float32"
+                                }
+                            },
+                            "stage": "vertex",
+                            "binding": {"kind": "varyingOutput", "index": 3},
+                            "semanticName": "TEXCOORD"
+                        },
+                        {
+                            "name": "tangent",
+                            "type": {
+                                "kind": "vector",
+                                "elementCount": 3,
+                                "elementType": {
+                                    "kind": "scalar",
+                                    "scalarType": "float32"
+                                }
+                            },
+                            "stage": "vertex",
+                            "binding": {"kind": "varyingOutput", "index": 4},
+                            "semanticName": "TANGENT"
+                        }
+                    ]
+                }
+            },
             "bindings": [
                 {
                     "name": "frame",
-                    "binding": {"kind": "descriptorTableSlot", "index": 0, "used": 0}
+                    "binding": {"kind": "descriptorTableSlot", "index": 0, "used": 1}
                 },
                 {
-                    "name": "gbufferA",
-                    "binding": {"kind": "descriptorTableSlot", "index": 1, "used": 1}
-                },
-                {
-                    "name": "gbufferB",
-                    "binding": {"kind": "descriptorTableSlot", "index": 2, "used": 1}
-                },
-                {
-                    "name": "shadowOutput",
-                    "binding": {"kind": "descriptorTableSlot", "index": 3, "used": 1}
-                },
-                {
-                    "name": "tlas",
-                    "binding": {"kind": "descriptorTableSlot", "index": 4, "used": 1}
-                },
-                {
-                    "name": "pc",
+                    "name": "push",
                     "binding": {"kind": "pushConstantBuffer", "index": 0}
                 }
             ]

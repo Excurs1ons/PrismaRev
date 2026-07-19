@@ -287,9 +287,11 @@ impl RenderPassNode for GBufferPass {
 /// - UPDATE: only cache maintenance runs (Update + Resolve)
 /// - ON:     cache query runs after maintenance, writing GI radiance to output
 ///
-/// The SHARC algorithm files (`sharc/common.slang`, `hash_grid.slang`) are
-/// direct ports from TruvisRenderer. The query entry (`sharc_query.slang`)
-/// is PrismaRev's own lightweight integration.
+/// The SHARC algorithm sources (`shaders/slang/sharc/`) were ports from
+/// TruvisRenderer; the query entry point (`sharc_query.slang`) was PrismaRev's
+/// own lightweight integration. Both the shader sources and this pass are
+/// currently unused (no pipeline loads `sharc_query.comp.spv`); kept as a
+/// placeholder for the future mobile GI integration.
 pub struct SharcPass {
     /// SHARC hash entries buffer handle (RWStructuredBuffer<u64>)
     pub hash_entries: ResourceHandle,
@@ -331,7 +333,7 @@ impl Default for SharcPass {
 }
 
 /// Push constants for the SHARC query compute shader (48 bytes).
-/// Layout matches `sharc_query.slang` SharcQueryPushConstants.
+/// Layout matches the (now-removed) `sharc_query.slang` SharcQueryPushConstants.
 #[repr(C)]
 pub struct SharcQueryPushConstants {
     pub output_width: u32,
@@ -620,7 +622,8 @@ impl RenderPassNode for RayQueryPass {
         );
 
         // Full compute dispatch requires:
-        // 1. Load shadow.comp.spv (from include_bytes!)
+        // 1. Load shadow_depth spv (rasterized depth-only shadow map; the
+        //    RayQuery `shadow.comp` variant was removed).
         // 2. Create compute pipeline with TLAS + GBuffer descriptor set
         // 3. cmd_bind_pipeline + cmd_bind_descriptor_sets
         // 4. cmd_push_constants(&pc)
@@ -667,7 +670,7 @@ pub struct ShadowMapPass {
 const SHADOW_MAP_SIZE: u32 = 2048;
 
 /// Push constants for the shadow depth-only vertex shader (128 bytes).
-/// Layout matches `shadowmap.slang` `ShadowPush` (two mat4).
+/// Layout matches `shadow_depth.slang` `ShadowPush` (two mat4).
 #[repr(C)]
 pub struct ShadowPassPushConstants {
     pub model: [[f32; 4]; 4],
@@ -814,8 +817,8 @@ impl RenderPassNode for ShadowMapPass {
             .context("create shadow framebuffer")?;
             self.framebuffer = Some(framebuffer);
 
-            const VERT_SPV: &[u8] = include_bytes!("../../../shaders/shadowmap.vert.spv");
-            const FRAG_SPV: &[u8] = include_bytes!("../../../shaders/shadowmap.frag.spv");
+            const VERT_SPV: &[u8] = include_bytes!("../../../shaders/shadow_depth.vert.spv");
+            const FRAG_SPV: &[u8] = include_bytes!("../../../shaders/shadow_depth.frag.spv");
             let vert_module =
                 shader::load_shader_module(device, VERT_SPV).context("load shadow vert module")?;
             let frag_module =
@@ -836,7 +839,7 @@ impl RenderPassNode for ShadowMapPass {
             let shader_stages = [vert_stage, frag_stage];
 
             let binding_desc = Vertex::binding_description();
-            // The shadow vertex shader (`shadowmap.slang::vertexMain`) only
+            // The shadow vertex shader (`shadow_depth.slang::vertexMain`) only
             // consumes `position` (location 0). Declare just that one attribute
             // so the validation layer doesn't warn that normal/color/uv/tangent
             // (locations 1-4) are bound but unconsumed. The vertex buffer stride
@@ -853,8 +856,12 @@ impl RenderPassNode for ShadowMapPass {
                 .offset(0)
                 .size(std::mem::size_of::<ShadowPassPushConstants>() as u32)];
 
-            // Depth-only pipeline: front-face cull + depth bias to fight
-            // peter-panning / acne, no color attachments.
+            // Depth-only pipeline: NO face cull + depth bias. Cull is NONE so
+            // single-sided geometry (Sponza's ceilings/walls, whose back faces
+            // point toward the light when it shines through an interior) still
+            // writes depth - front-cull would drop those back faces entirely
+            // and the ceiling would stop blocking light. Depth bias stays on
+            // to fight the self-shadow acne that NONE cull reintroduces.
             let pipeline = GraphicsPipeline::new(&PipelineDesc {
                 device,
                 shader_stages: &shader_stages,
@@ -864,7 +871,7 @@ impl RenderPassNode for ShadowMapPass {
                 push_constant_ranges: &push,
                 render_pass,
                 subpass: 0,
-                cull_mode: Some(vk::CullModeFlags::FRONT),
+                cull_mode: Some(vk::CullModeFlags::NONE),
                 depth_bias_enable: Some(true),
                 // D32_SFLOAT: the constant factor is scaled by the format's
                 // minimum representable delta (~2^-23), so a value of 1.0 is
@@ -1350,7 +1357,7 @@ impl Drop for SkyboxPass {
 /// Forward scene pass (bindless PBR + neutral ambient + shadow map) targeting
 /// the swapchain.
 ///
-/// Descriptor set layout (mirrors `scene_bindless.slang`):
+/// Descriptor set layout (mirrors `scene_frag.slang`):
 ///   set 0 - per-frame UBO (binding 0) + material SSBO (binding 1)
 ///            one descriptor set per frame-in-flight (UBO buffer differs)
 ///   set 1 - bindless texture table (samplers + SRV array, owned by
@@ -2038,12 +2045,12 @@ impl ScenePass {
             .render_pass
             .context("ScenePass: render_pass not created before pipeline")?;
 
-        // Vertex: reuse mesh.vert.spv (MeshPush{model}, 64 bytes). The pipeline
+        // Vertex: reuse mesh_vert.vert.spv (MeshPush{model}, 64 bytes). The pipeline
         // pushes PbrBindlessPushConstants (96 bytes); the vertex stage only
         // reads the first 64 bytes (model), which Vulkan permits.
-        // Fragment: scene_bindless.frag.spv (bindless PBR + shadow).
-        const VERT_SPV: &[u8] = include_bytes!("../../../shaders/mesh.vert.spv");
-        const FRAG_SPV: &[u8] = include_bytes!("../../../shaders/scene_bindless.frag.spv");
+        // Fragment: scene_frag.frag.spv (bindless PBR + shadow).
+        const VERT_SPV: &[u8] = include_bytes!("../../../shaders/mesh_vert.vert.spv");
+        const FRAG_SPV: &[u8] = include_bytes!("../../../shaders/scene_frag.frag.spv");
         let vert_module =
             shader::load_shader_module(device, VERT_SPV).context("ScenePass: load vert")?;
         let frag_module =
@@ -2104,7 +2111,7 @@ impl ScenePass {
         let set_layouts = [set0_layout, set1_layout, set2_layout, set3_layout];
 
         // Push constants: PbrBindlessPushConstants (96 bytes, VERTEX|FRAGMENT).
-        // Matches scene_bindless.slang::PbrBindlessPush and Rust
+        // Matches scene_frag.slang::PbrBindlessPush and Rust
         // PbrBindlessPushConstants.
         let push = [vk::PushConstantRange::default()
             .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
@@ -2310,7 +2317,7 @@ impl RenderPassNode for ScenePass {
 
                 // Push per-draw constants: model + material SSBO slot. The
                 // remaining fields (albedo_idx/normal_idx) are
-                // unused by scene_bindless.slang (it reads texture indices
+                // unused by scene_frag.slang (it reads texture indices
                 // from the SSBO record, not the push constant) so we set them
                 // to INVALID. env_handle carries the BRDF LUT bindless handle.
                 // material_slot comes from DrawItem.material

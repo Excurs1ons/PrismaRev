@@ -189,11 +189,14 @@ fn save_scene_state_file(world: &prism_ecs::World) {
     debug_mode: DebugMode,
     /// Coordinate space for the `Normal` debug mode.
     normal_space: NormalSpace,
-    /// PBR component toggle bitmask (14 bits, see `scene_bindless.slang`
+    /// PBR component toggle bitmask (14 bits, see `scene_frag.slang`
     /// `PBR_FLAG_*`). 0 = all components neutral -> raw baseColor.
     debug_flags: u32,
     /// Whether the debug overlay UI is shown.
     show_ui: bool,
+    /// Tonemap operator for the final HDR -> displayable color: 0 = Reinhard,
+    /// 1 = ACES (Narkowicz). Switchable at runtime (inspector / `T` key).
+    tonemap_mode: u32,
     /// P0: CPU-side scene storage (meshes / materials / textures / instances)
     /// populated either from a glTF file or from the procedural fallback.
     /// The renderer's `Render*Manager`s consume this on `App::load_demo_scene`.
@@ -227,7 +230,7 @@ fn save_scene_state_file(world: &prism_ecs::World) {
 /// Default PBR component mask. A normally-lit PBR scene: direct lighting,
 /// IBL (diffuse irradiance + specular prefiltered), specular/metal/roughness
 /// response, multi-light, and rasterized shadow occlusion are all on.
-/// Bits mirror `PBR_FLAG_*` in `shaders/slang/scene_bindless.slang`.
+/// Bits mirror `PBR_FLAG_*` in `shaders/slang/scene_frag.slang`.
 /// Shadow (bit 8) is enabled by default so direct-light occlusion is always
 /// visible — without it, surfaces blocked from the sun stay lit. Ambient
 /// occlusion of the IBL/skybox term is a separate (deferred) feature.
@@ -257,6 +260,7 @@ impl App {
             normal_space: NormalSpace::World,
             debug_flags: DEFAULT_PBR_FLAGS,
             show_ui: true,
+            tonemap_mode: 0,
             scene_store: prism_asset::SceneStore::new(),
             scene_loaded: false,
             mesh_map: std::collections::HashMap::new(),
@@ -918,7 +922,7 @@ impl ApplicationHandler for App {
                 if state == winit::event::ElementState::Pressed {
                     if let winit::keyboard::PhysicalKey::Code(code) = physical_key {
                         // Shift-modifier-aware PBR component toggles. The 14
-                        // bits map 1:1 to `scene_bindless.slang`'s
+                        // bits map 1:1 to `scene_frag.slang`'s
                         // `PBR_FLAG_*` constants. Shift held selects the
                         // high group (Shift+1..Shift+4); otherwise the digit
                         // selects bits 0..9 (keys 1-9, 0).
@@ -926,14 +930,14 @@ impl ApplicationHandler for App {
                             || self.input_state.key_held(crate::input::KeyCode::ShiftRight);
                         let toggled = match (code, shift) {
                             (KeyCode::Digit1, false) => Some(0u32), // 直接光照
-                            (KeyCode::Digit2, false) => Some(1),    // 环境光照(IBL整体)
+                            (KeyCode::Digit2, false) => Some(8),    // 阴影 Shadow (原 Key9)
                             (KeyCode::Digit3, false) => Some(2),    // 高光 specular
                             (KeyCode::Digit4, false) => Some(3),    // 金属度
                             (KeyCode::Digit5, false) => Some(4),    // 粗糙度
                             (KeyCode::Digit6, false) => Some(5),    // IBL 漫反射 Irradiance
                             (KeyCode::Digit7, false) => Some(6),    // IBL 高光 Prefiltered+LUT
                             (KeyCode::Digit8, false) => Some(7),    // 多光源
-                            (KeyCode::Digit9, false) => Some(8),    // 阴影
+                            (KeyCode::Digit9, false) => Some(14),   // AO (暂未实装, 占位 bit)
                             (KeyCode::Digit0, false) => Some(9),    // 自发光 Emissive
                             (KeyCode::Digit1, true) => Some(10),    // Transmission
                             (KeyCode::Digit2, true) => Some(11),    // Translucency
@@ -947,6 +951,14 @@ impl ApplicationHandler for App {
                                 "PBR flags = 0b{:014b} ({})",
                                 self.debug_flags,
                                 self.pbr_flag_labels()
+                            );
+                        } else if code == KeyCode::KeyT {
+                            // Toggle tonemap mode: 0 = Reinhard, 1 = ACES Narkowicz.
+                            self.tonemap_mode = if self.tonemap_mode == 0 { 1 } else { 0 };
+                            log::info!(
+                                "tonemap mode = {} ({})",
+                                self.tonemap_mode,
+                                if self.tonemap_mode == 1 { "ACES" } else { "Reinhard" }
                             );
                         } else if code == KeyCode::KeyH {
                             self.show_ui = !self.show_ui;
@@ -1043,23 +1055,24 @@ impl App {
     }
 
     /// Human-readable names of the 14 PBR component toggle bits, in bit order
-    /// (0..13). Matches `PBR_FLAG_*` in `shaders/slang/scene_bindless.slang`.
-    fn pbr_flag_names() -> &'static [&'static str; 14] {
+    /// (0..13). Matches `PBR_FLAG_*` in `shaders/slang/scene_frag.slang`.
+    fn pbr_flag_names() -> &'static [&'static str; 15] {
         &[
             "Direct",       // 1
-            "AmbientIBL",   // 2
+            "AmbientIBL",   // 2 (inspector only)
             "Specular",     // 3
             "Metallic",     // 4
             "Roughness",    // 5
             "DiffuseIBL",   // 6
             "SpecularIBL",  // 7
             "MultiLight",   // 8
-            "Shadow",       // 9
+            "Shadow",       // 2
             "Emissive",     // 0
             "Transmission", // Shift+1
             "Translucency", // Shift+2
             "Anisotropy",   // Shift+3
             "ClearCoat",    // Shift+4
+            "AO",           // 9 (not yet implemented)
         ]
     }
 
@@ -1141,6 +1154,7 @@ impl App {
         if self.inspector.show {
             self.inspector.debug_flags = self.debug_flags;
             self.inspector.show_ui = self.show_ui;
+            self.inspector.tonemap_mode = self.tonemap_mode;
             let window = self.window.clone();
             let inspector = &mut self.inspector;
             let world = self.world.as_mut();
@@ -1151,6 +1165,9 @@ impl App {
                     inspector.run(overlay, window, world);
                 }
             }
+            // Push UI-edited tonemap selection back to the app so the `T` key
+            // and the inspector stay in sync.
+            self.tonemap_mode = self.inspector.tonemap_mode;
         }
 
         // Neutral clear color so we can tell whether the scene is actually
@@ -1171,6 +1188,7 @@ impl App {
             self.normal_space as u32,
             self.debug_flags,
             self.show_ui,
+            self.tonemap_mode,
             &self.draw_items,
         );
 

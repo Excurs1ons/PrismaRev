@@ -117,7 +117,7 @@ pub struct PbrPushConstants {
 }
 
 /// Push constants for the **bindless** PBR draw call (see
-/// `shaders/slang/scene_bindless.slang`).
+/// `shaders/slang/scene_frag.slang`).
 ///
 /// Material parameters are no longer pushed per-draw - they live in the
 /// material SSBO (`RenderMaterialManager::buffer`) and are looked up by
@@ -143,7 +143,7 @@ pub struct PbrBindlessPushConstants {
     pub albedo_idx: u32,
     pub normal_idx: u32,
     /// Bitmask selecting which PBR components are active (see
-    /// `scene_bindless.slang` `PBR_FLAG_*` constants). Bit unset = component
+    /// `scene_frag.slang` `PBR_FLAG_*` constants). Bit unset = component
     /// uses its neutral value (so flags=0 yields raw baseColor).
     pub debug_flags: u32,
     /// Explicit padding so the struct stays a multiple of 16 bytes; the

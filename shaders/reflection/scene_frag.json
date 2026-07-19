@@ -83,6 +83,38 @@
                                 }
                             },
                             "binding": {"kind": "uniform", "offset": 176, "size": 64}
+                        },
+                        {
+                            "name": "tonemapMode",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "uint32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 240, "size": 4}
+                        },
+                        {
+                            "name": "_pad0",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "uint32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 244, "size": 4}
+                        },
+                        {
+                            "name": "_pad1",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "uint32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 248, "size": 4}
+                        },
+                        {
+                            "name": "_pad2",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "uint32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 252, "size": 4}
                         }
                     ]
                 },
@@ -168,92 +200,243 @@
                                     }
                                 },
                                 "binding": {"kind": "uniform", "offset": 176, "size": 64}
+                            },
+                            {
+                                "name": "tonemapMode",
+                                "type": {
+                                    "kind": "scalar",
+                                    "scalarType": "uint32"
+                                },
+                                "binding": {"kind": "uniform", "offset": 240, "size": 4}
+                            },
+                            {
+                                "name": "_pad0",
+                                "type": {
+                                    "kind": "scalar",
+                                    "scalarType": "uint32"
+                                },
+                                "binding": {"kind": "uniform", "offset": 244, "size": 4}
+                            },
+                            {
+                                "name": "_pad1",
+                                "type": {
+                                    "kind": "scalar",
+                                    "scalarType": "uint32"
+                                },
+                                "binding": {"kind": "uniform", "offset": 248, "size": 4}
+                            },
+                            {
+                                "name": "_pad2",
+                                "type": {
+                                    "kind": "scalar",
+                                    "scalarType": "uint32"
+                                },
+                                "binding": {"kind": "uniform", "offset": 252, "size": 4}
                             }
                         ]
                     },
-                    "binding": {"kind": "uniform", "offset": 0, "size": 240}
+                    "binding": {"kind": "uniform", "offset": 0, "size": 256}
                 }
             }
         },
         {
-            "name": "gbufferA",
+            "name": "materials",
             "binding": {"kind": "descriptorTableSlot", "index": 1},
             "type": {
                 "kind": "resource",
-                "baseShape": "texture2D",
+                "baseShape": "structuredBuffer",
                 "resultType": {
-                    "kind": "vector",
-                    "elementCount": 4,
-                    "elementType": {
-                        "kind": "scalar",
-                        "scalarType": "float32"
-                    }
+                    "kind": "struct",
+                    "name": "GpuMaterial",
+                    "fields": [
+                        {
+                            "name": "base_color",
+                            "type": {
+                                "kind": "vector",
+                                "elementCount": 4,
+                                "elementType": {
+                                    "kind": "scalar",
+                                    "scalarType": "float32"
+                                }
+                            },
+                            "binding": {"kind": "uniform", "offset": 0, "size": 16}
+                        },
+                        {
+                            "name": "metallic_roughness_emissive",
+                            "type": {
+                                "kind": "vector",
+                                "elementCount": 4,
+                                "elementType": {
+                                    "kind": "scalar",
+                                    "scalarType": "float32"
+                                }
+                            },
+                            "binding": {"kind": "uniform", "offset": 16, "size": 16}
+                        },
+                        {
+                            "name": "albedo_idx",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "uint32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 32, "size": 4}
+                        },
+                        {
+                            "name": "normal_idx",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "uint32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 36, "size": 4}
+                        },
+                        {
+                            "name": "metallic_roughness_idx",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "uint32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 40, "size": 4}
+                        },
+                        {
+                            "name": "emissive_idx",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "uint32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 44, "size": 4}
+                        },
+                        {
+                            "name": "transmission_factor",
+                            "type": {
+                                "kind": "vector",
+                                "elementCount": 4,
+                                "elementType": {
+                                    "kind": "scalar",
+                                    "scalarType": "float32"
+                                }
+                            },
+                            "binding": {"kind": "uniform", "offset": 48, "size": 16}
+                        },
+                        {
+                            "name": "clearcoat",
+                            "type": {
+                                "kind": "vector",
+                                "elementCount": 4,
+                                "elementType": {
+                                    "kind": "scalar",
+                                    "scalarType": "float32"
+                                }
+                            },
+                            "binding": {"kind": "uniform", "offset": 64, "size": 16}
+                        },
+                        {
+                            "name": "transmission_tex_idx",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "uint32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 80, "size": 4}
+                        },
+                        {
+                            "name": "clearcoat_tex_idx",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "uint32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 84, "size": 4}
+                        },
+                        {
+                            "name": "_pad0",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "uint32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 88, "size": 4}
+                        },
+                        {
+                            "name": "_pad1",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "uint32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 92, "size": 4}
+                        }
+                    ]
                 }
             }
         },
         {
-            "name": "gbufferB",
+            "name": "pointLights",
             "binding": {"kind": "descriptorTableSlot", "index": 2},
             "type": {
                 "kind": "resource",
-                "baseShape": "texture2D",
+                "baseShape": "structuredBuffer",
                 "resultType": {
-                    "kind": "vector",
-                    "elementCount": 4,
-                    "elementType": {
-                        "kind": "scalar",
-                        "scalarType": "float32"
-                    }
+                    "kind": "struct",
+                    "name": "GpuLight",
+                    "fields": [
+                        {
+                            "name": "position",
+                            "type": {
+                                "kind": "vector",
+                                "elementCount": 4,
+                                "elementType": {
+                                    "kind": "scalar",
+                                    "scalarType": "float32"
+                                }
+                            },
+                            "binding": {"kind": "uniform", "offset": 0, "size": 16}
+                        },
+                        {
+                            "name": "color",
+                            "type": {
+                                "kind": "vector",
+                                "elementCount": 4,
+                                "elementType": {
+                                    "kind": "scalar",
+                                    "scalarType": "float32"
+                                }
+                            },
+                            "binding": {"kind": "uniform", "offset": 16, "size": 16}
+                        }
+                    ]
                 }
             }
         },
         {
-            "name": "gbufferC",
-            "binding": {"kind": "descriptorTableSlot", "index": 3},
+            "name": "globalSamplers",
+            "binding": {"kind": "descriptorTableSlot", "space": 1, "index": 0},
             "type": {
-                "kind": "resource",
-                "baseShape": "texture2D",
-                "resultType": {
-                    "kind": "vector",
-                    "elementCount": 4,
-                    "elementType": {
-                        "kind": "scalar",
-                        "scalarType": "float32"
-                    }
+                "kind": "array",
+                "elementCount": 0,
+                "elementType": {
+                    "kind": "samplerState"
                 }
             }
         },
         {
-            "name": "shadowMap",
-            "binding": {"kind": "descriptorTableSlot", "index": 4},
+            "name": "bindlessSrvs",
+            "binding": {"kind": "descriptorTableSlot", "space": 1, "index": 1},
             "type": {
-                "kind": "resource",
-                "baseShape": "texture2D",
-                "resultType": {
-                    "kind": "scalar",
-                    "scalarType": "float32"
-                }
-            }
-        },
-        {
-            "name": "giRadiance",
-            "binding": {"kind": "descriptorTableSlot", "index": 5},
-            "type": {
-                "kind": "resource",
-                "baseShape": "texture2D",
-                "resultType": {
-                    "kind": "vector",
-                    "elementCount": 4,
-                    "elementType": {
-                        "kind": "scalar",
-                        "scalarType": "float32"
+                "kind": "array",
+                "elementCount": 0,
+                "elementType": {
+                    "kind": "resource",
+                    "baseShape": "texture2D",
+                    "resultType": {
+                        "kind": "vector",
+                        "elementCount": 4,
+                        "elementType": {
+                            "kind": "scalar",
+                            "scalarType": "float32"
+                        }
                     }
                 }
             }
         },
         {
             "name": "envCube",
-            "binding": {"kind": "descriptorTableSlot", "index": 6},
+            "binding": {"kind": "descriptorTableSlot", "space": 2, "index": 0},
             "type": {
                 "kind": "resource",
                 "baseShape": "textureCube",
@@ -268,77 +451,129 @@
             }
         },
         {
+            "name": "irradianceCube",
+            "binding": {"kind": "descriptorTableSlot", "space": 2, "index": 1},
+            "type": {
+                "kind": "resource",
+                "baseShape": "textureCube",
+                "resultType": {
+                    "kind": "vector",
+                    "elementCount": 4,
+                    "elementType": {
+                        "kind": "scalar",
+                        "scalarType": "float32"
+                    }
+                }
+            }
+        },
+        {
+            "name": "prefilteredCube",
+            "binding": {"kind": "descriptorTableSlot", "space": 2, "index": 2},
+            "type": {
+                "kind": "resource",
+                "baseShape": "textureCube",
+                "resultType": {
+                    "kind": "vector",
+                    "elementCount": 4,
+                    "elementType": {
+                        "kind": "scalar",
+                        "scalarType": "float32"
+                    }
+                }
+            }
+        },
+        {
+            "name": "shadowMap",
+            "binding": {"kind": "descriptorTableSlot", "space": 3, "index": 0},
+            "type": {
+                "kind": "resource",
+                "baseShape": "texture2D",
+                "resultType": {
+                    "kind": "scalar",
+                    "scalarType": "float32"
+                }
+            }
+        },
+        {
+            "name": "shadowSampler",
+            "binding": {"kind": "descriptorTableSlot", "space": 3, "index": 1},
+            "type": {
+                "kind": "samplerState"
+            }
+        },
+        {
             "name": "pc",
             "binding": {"kind": "pushConstantBuffer", "index": 0},
             "type": {
                 "kind": "constantBuffer",
                 "elementType": {
                     "kind": "struct",
-                    "name": "LightingPushConstants",
+                    "name": "PbrBindlessPush",
                     "fields": [
                         {
-                            "name": "screenWidth",
+                            "name": "model",
+                            "type": {
+                                "kind": "matrix",
+                                "rowCount": 4,
+                                "columnCount": 4,
+                                "elementType": {
+                                    "kind": "scalar",
+                                    "scalarType": "float32"
+                                }
+                            },
+                            "binding": {"kind": "uniform", "offset": 0, "size": 64}
+                        },
+                        {
+                            "name": "material_slot",
                             "type": {
                                 "kind": "scalar",
                                 "scalarType": "uint32"
                             },
-                            "binding": {"kind": "uniform", "offset": 0, "size": 4}
+                            "binding": {"kind": "uniform", "offset": 64, "size": 4}
                         },
                         {
-                            "name": "screenHeight",
+                            "name": "env_handle",
                             "type": {
                                 "kind": "scalar",
                                 "scalarType": "uint32"
                             },
-                            "binding": {"kind": "uniform", "offset": 4, "size": 4}
+                            "binding": {"kind": "uniform", "offset": 68, "size": 4}
                         },
                         {
-                            "name": "shadowMapWidth",
+                            "name": "albedo_idx",
                             "type": {
                                 "kind": "scalar",
                                 "scalarType": "uint32"
                             },
-                            "binding": {"kind": "uniform", "offset": 8, "size": 4}
+                            "binding": {"kind": "uniform", "offset": 72, "size": 4}
                         },
                         {
-                            "name": "giMapWidth",
+                            "name": "normal_idx",
                             "type": {
                                 "kind": "scalar",
                                 "scalarType": "uint32"
                             },
-                            "binding": {"kind": "uniform", "offset": 12, "size": 4}
+                            "binding": {"kind": "uniform", "offset": 76, "size": 4}
                         },
                         {
-                            "name": "ambient",
+                            "name": "debug_flags",
                             "type": {
                                 "kind": "scalar",
-                                "scalarType": "float32"
+                                "scalarType": "uint32"
                             },
-                            "binding": {"kind": "uniform", "offset": 16, "size": 4}
+                            "binding": {"kind": "uniform", "offset": 80, "size": 4}
                         },
                         {
-                            "name": "_padding0",
+                            "name": "_padding",
                             "type": {
-                                "kind": "scalar",
-                                "scalarType": "float32"
+                                "kind": "vector",
+                                "elementCount": 3,
+                                "elementType": {
+                                    "kind": "scalar",
+                                    "scalarType": "uint32"
+                                }
                             },
-                            "binding": {"kind": "uniform", "offset": 20, "size": 4}
-                        },
-                        {
-                            "name": "_padding1",
-                            "type": {
-                                "kind": "scalar",
-                                "scalarType": "float32"
-                            },
-                            "binding": {"kind": "uniform", "offset": 24, "size": 4}
-                        },
-                        {
-                            "name": "_padding2",
-                            "type": {
-                                "kind": "scalar",
-                                "scalarType": "float32"
-                            },
-                            "binding": {"kind": "uniform", "offset": 28, "size": 4}
+                            "binding": {"kind": "uniform", "offset": 96, "size": 12}
                         }
                     ]
                 },
@@ -348,75 +583,76 @@
                 "elementVarLayout": {
                     "type": {
                         "kind": "struct",
-                        "name": "LightingPushConstants",
+                        "name": "PbrBindlessPush",
                         "fields": [
                             {
-                                "name": "screenWidth",
+                                "name": "model",
+                                "type": {
+                                    "kind": "matrix",
+                                    "rowCount": 4,
+                                    "columnCount": 4,
+                                    "elementType": {
+                                        "kind": "scalar",
+                                        "scalarType": "float32"
+                                    }
+                                },
+                                "binding": {"kind": "uniform", "offset": 0, "size": 64}
+                            },
+                            {
+                                "name": "material_slot",
                                 "type": {
                                     "kind": "scalar",
                                     "scalarType": "uint32"
                                 },
-                                "binding": {"kind": "uniform", "offset": 0, "size": 4}
+                                "binding": {"kind": "uniform", "offset": 64, "size": 4}
                             },
                             {
-                                "name": "screenHeight",
+                                "name": "env_handle",
                                 "type": {
                                     "kind": "scalar",
                                     "scalarType": "uint32"
                                 },
-                                "binding": {"kind": "uniform", "offset": 4, "size": 4}
+                                "binding": {"kind": "uniform", "offset": 68, "size": 4}
                             },
                             {
-                                "name": "shadowMapWidth",
+                                "name": "albedo_idx",
                                 "type": {
                                     "kind": "scalar",
                                     "scalarType": "uint32"
                                 },
-                                "binding": {"kind": "uniform", "offset": 8, "size": 4}
+                                "binding": {"kind": "uniform", "offset": 72, "size": 4}
                             },
                             {
-                                "name": "giMapWidth",
+                                "name": "normal_idx",
                                 "type": {
                                     "kind": "scalar",
                                     "scalarType": "uint32"
                                 },
-                                "binding": {"kind": "uniform", "offset": 12, "size": 4}
+                                "binding": {"kind": "uniform", "offset": 76, "size": 4}
                             },
                             {
-                                "name": "ambient",
+                                "name": "debug_flags",
                                 "type": {
                                     "kind": "scalar",
-                                    "scalarType": "float32"
+                                    "scalarType": "uint32"
                                 },
-                                "binding": {"kind": "uniform", "offset": 16, "size": 4}
+                                "binding": {"kind": "uniform", "offset": 80, "size": 4}
                             },
                             {
-                                "name": "_padding0",
+                                "name": "_padding",
                                 "type": {
-                                    "kind": "scalar",
-                                    "scalarType": "float32"
+                                    "kind": "vector",
+                                    "elementCount": 3,
+                                    "elementType": {
+                                        "kind": "scalar",
+                                        "scalarType": "uint32"
+                                    }
                                 },
-                                "binding": {"kind": "uniform", "offset": 20, "size": 4}
-                            },
-                            {
-                                "name": "_padding1",
-                                "type": {
-                                    "kind": "scalar",
-                                    "scalarType": "float32"
-                                },
-                                "binding": {"kind": "uniform", "offset": 24, "size": 4}
-                            },
-                            {
-                                "name": "_padding2",
-                                "type": {
-                                    "kind": "scalar",
-                                    "scalarType": "float32"
-                                },
-                                "binding": {"kind": "uniform", "offset": 28, "size": 4}
+                                "binding": {"kind": "uniform", "offset": 96, "size": 12}
                             }
                         ]
                     },
-                    "binding": {"kind": "uniform", "offset": 0, "size": 32}
+                    "binding": {"kind": "uniform", "offset": 0, "size": 112}
                 }
             }
         }
@@ -540,28 +776,40 @@
                     "binding": {"kind": "descriptorTableSlot", "index": 0, "used": 1}
                 },
                 {
-                    "name": "gbufferA",
+                    "name": "materials",
                     "binding": {"kind": "descriptorTableSlot", "index": 1, "used": 1}
                 },
                 {
-                    "name": "gbufferB",
+                    "name": "pointLights",
                     "binding": {"kind": "descriptorTableSlot", "index": 2, "used": 1}
                 },
                 {
-                    "name": "gbufferC",
-                    "binding": {"kind": "descriptorTableSlot", "index": 3, "used": 1}
+                    "name": "globalSamplers",
+                    "binding": {"kind": "descriptorTableSlot", "space": 1, "index": 0, "used": 1}
                 },
                 {
-                    "name": "shadowMap",
-                    "binding": {"kind": "descriptorTableSlot", "index": 4, "used": 1}
-                },
-                {
-                    "name": "giRadiance",
-                    "binding": {"kind": "descriptorTableSlot", "index": 5, "used": 1}
+                    "name": "bindlessSrvs",
+                    "binding": {"kind": "descriptorTableSlot", "space": 1, "index": 1, "used": 1}
                 },
                 {
                     "name": "envCube",
-                    "binding": {"kind": "descriptorTableSlot", "index": 6, "used": 1}
+                    "binding": {"kind": "descriptorTableSlot", "space": 2, "index": 0, "used": 0}
+                },
+                {
+                    "name": "irradianceCube",
+                    "binding": {"kind": "descriptorTableSlot", "space": 2, "index": 1, "used": 1}
+                },
+                {
+                    "name": "prefilteredCube",
+                    "binding": {"kind": "descriptorTableSlot", "space": 2, "index": 2, "used": 1}
+                },
+                {
+                    "name": "shadowMap",
+                    "binding": {"kind": "descriptorTableSlot", "space": 3, "index": 0, "used": 1}
+                },
+                {
+                    "name": "shadowSampler",
+                    "binding": {"kind": "descriptorTableSlot", "space": 3, "index": 1, "used": 1}
                 },
                 {
                     "name": "pc",

@@ -3,32 +3,6 @@
 //   shaders/reflection crates/prism-render/src/shader_bindings.rs
 #![allow(dead_code)]
 
-pub mod bindless {
-    //! Bindings reflected from shaders/slang/bindless.slang
-
-    /// Entry point names (for VkPipelineShaderStageCreateInfo).
-    pub const ENTRY_FRAGMENT_MAIN: &str = "fragmentMain"; // stage: FRAGMENT
-
-    /// Push-constant block size in bytes (reflected).
-    pub const PUSH_CONSTANT_SIZE: u32 = 96;
-
-    // --- descriptor set 0 ---
-    pub const FRAME_SET: u32 = 0;
-    pub const FRAME_BINDING: u32 = 0; // UNIFORM_BUFFER
-    pub const MATERIALS_SET: u32 = 0;
-    pub const MATERIALS_BINDING: u32 = 1; // UNIFORM_BUFFER
-
-    // --- descriptor set 1 ---
-    pub const GLOBAL_SAMPLERS_SET: u32 = 1;
-    pub const GLOBAL_SAMPLERS_BINDING: u32 = 0; // UNIFORM_BUFFER
-    pub const BINDLESS_SRVS_SET: u32 = 1;
-    pub const BINDLESS_SRVS_BINDING: u32 = 1; // UNIFORM_BUFFER
-
-    // --- descriptor set 2 ---
-    pub const ENV_CUBE_SET: u32 = 2;
-    pub const ENV_CUBE_BINDING: u32 = 0; // COMBINED_IMAGE_SAMPLER
-}
-
 pub mod gizmo {
     //! Bindings reflected from shaders/slang/gizmo.slang
 
@@ -40,139 +14,80 @@ pub mod gizmo {
     pub const PUSH_CONSTANT_SIZE: u32 = 64;
 }
 
-pub mod lighting {
-    //! Bindings reflected from shaders/slang/lighting.slang
-
-    /// Entry point names (for VkPipelineShaderStageCreateInfo).
-    pub const ENTRY_FRAGMENT_MAIN: &str = "fragmentMain"; // stage: FRAGMENT
-
-    /// Push-constant block size in bytes (reflected).
-    pub const PUSH_CONSTANT_SIZE: u32 = 32;
-
-    // --- descriptor set 0 ---
-    pub const FRAME_SET: u32 = 0;
-    pub const FRAME_BINDING: u32 = 0; // UNIFORM_BUFFER
-    pub const GBUFFER_A_SET: u32 = 0;
-    pub const GBUFFER_A_BINDING: u32 = 1; // COMBINED_IMAGE_SAMPLER
-    pub const GBUFFER_B_SET: u32 = 0;
-    pub const GBUFFER_B_BINDING: u32 = 2; // COMBINED_IMAGE_SAMPLER
-    pub const GBUFFER_C_SET: u32 = 0;
-    pub const GBUFFER_C_BINDING: u32 = 3; // COMBINED_IMAGE_SAMPLER
-    pub const SHADOW_MAP_SET: u32 = 0;
-    pub const SHADOW_MAP_BINDING: u32 = 4; // COMBINED_IMAGE_SAMPLER
-    pub const GI_RADIANCE_SET: u32 = 0;
-    pub const GI_RADIANCE_BINDING: u32 = 5; // COMBINED_IMAGE_SAMPLER
-    pub const ENV_CUBE_SET: u32 = 0;
-    pub const ENV_CUBE_BINDING: u32 = 6; // COMBINED_IMAGE_SAMPLER
-}
-
-pub mod mesh {
-    //! Bindings reflected from shaders/slang/mesh.slang
+pub mod mesh_vert {
+    //! Bindings reflected from shaders/slang/mesh_vert.slang
 
     /// Entry point names (for VkPipelineShaderStageCreateInfo).
     pub const ENTRY_VERTEX_MAIN: &str = "vertexMain"; // stage: VERTEX
-    pub const ENTRY_FRAGMENT_MAIN: &str = "fragmentMain"; // stage: FRAGMENT
 
     /// Push-constant block size in bytes (reflected).
-    pub const PUSH_CONSTANT_SIZE: u32 = 64;
+    pub const PUSH_CONSTANT_SIZE: u32 = 0;
 
     // --- descriptor set 0 ---
     pub const FRAME_SET: u32 = 0;
     pub const FRAME_BINDING: u32 = 0; // UNIFORM_BUFFER
 }
 
-pub mod overlay {
-    //! Bindings reflected from shaders/slang/overlay.slang
-
-    /// Entry point names (for VkPipelineShaderStageCreateInfo).
-    pub const ENTRY_VERTEX_MAIN: &str = "vertexMain"; // stage: VERTEX
-    pub const ENTRY_FRAGMENT_MAIN: &str = "fragmentMain"; // stage: FRAGMENT
-
-    // --- descriptor set 0 ---
-    pub const FONT_TEX_SET: u32 = 0;
-    pub const FONT_TEX_BINDING: u32 = 0; // COMBINED_IMAGE_SAMPLER
-}
-
-pub mod pbr {
-    //! Bindings reflected from shaders/slang/pbr.slang
+pub mod scene_frag {
+    //! Bindings reflected from shaders/slang/scene_frag.slang
 
     /// Entry point names (for VkPipelineShaderStageCreateInfo).
     pub const ENTRY_FRAGMENT_MAIN: &str = "fragmentMain"; // stage: FRAGMENT
 
     /// Push-constant block size in bytes (reflected).
-    pub const PUSH_CONSTANT_SIZE: u32 = 92;
+    pub const PUSH_CONSTANT_SIZE: u32 = 0;
 
     // --- descriptor set 0 ---
     pub const FRAME_SET: u32 = 0;
     pub const FRAME_BINDING: u32 = 0; // UNIFORM_BUFFER
+    pub const MATERIALS_SET: u32 = 0;
+    pub const MATERIALS_BINDING: u32 = 1; // UNIFORM_BUFFER
+    pub const POINT_LIGHTS_SET: u32 = 0;
+    pub const POINT_LIGHTS_BINDING: u32 = 2; // UNIFORM_BUFFER
 
     // --- descriptor set 1 ---
-    pub const ENV_CUBE_SET: u32 = 1;
+    pub const GLOBAL_SAMPLERS_SET: u32 = 1;
+    pub const GLOBAL_SAMPLERS_BINDING: u32 = 0; // UNIFORM_BUFFER
+    pub const BINDLESS_SRVS_SET: u32 = 1;
+    pub const BINDLESS_SRVS_BINDING: u32 = 1; // UNIFORM_BUFFER
+
+    // --- descriptor set 2 ---
+    pub const ENV_CUBE_SET: u32 = 2;
     pub const ENV_CUBE_BINDING: u32 = 0; // COMBINED_IMAGE_SAMPLER
+    pub const IRRADIANCE_CUBE_SET: u32 = 2;
+    pub const IRRADIANCE_CUBE_BINDING: u32 = 1; // COMBINED_IMAGE_SAMPLER
+    pub const PREFILTERED_CUBE_SET: u32 = 2;
+    pub const PREFILTERED_CUBE_BINDING: u32 = 2; // COMBINED_IMAGE_SAMPLER
+
+    // --- descriptor set 3 ---
+    pub const SHADOW_MAP_SET: u32 = 3;
+    pub const SHADOW_MAP_BINDING: u32 = 0; // COMBINED_IMAGE_SAMPLER
+    pub const SHADOW_SAMPLER_SET: u32 = 3;
+    pub const SHADOW_SAMPLER_BINDING: u32 = 1; // COMBINED_IMAGE_SAMPLER
 }
 
-pub mod post {
-    //! Bindings reflected from shaders/slang/post.slang
+pub mod shadow_depth {
+    //! Bindings reflected from shaders/slang/shadow_depth.slang
 
     /// Entry point names (for VkPipelineShaderStageCreateInfo).
+    pub const ENTRY_VERTEX_MAIN: &str = "vertexMain"; // stage: VERTEX
     pub const ENTRY_FRAGMENT_MAIN: &str = "fragmentMain"; // stage: FRAGMENT
 
     /// Push-constant block size in bytes (reflected).
-    pub const PUSH_CONSTANT_SIZE: u32 = 16;
-
-    // --- descriptor set 0 ---
-    pub const HDR_INPUT_SET: u32 = 0;
-    pub const HDR_INPUT_BINDING: u32 = 0; // COMBINED_IMAGE_SAMPLER
-    pub const HDR_SAMPLER_SET: u32 = 0;
-    pub const HDR_SAMPLER_BINDING: u32 = 1; // COMBINED_IMAGE_SAMPLER
+    pub const PUSH_CONSTANT_SIZE: u32 = 0;
 }
 
-pub mod shadow {
-    //! Bindings reflected from shaders/slang/shadow.slang
+pub mod skybox {
+    //! Bindings reflected from shaders/slang/skybox.slang
 
     /// Entry point names (for VkPipelineShaderStageCreateInfo).
-    pub const ENTRY_COMPUTE_MAIN: &str = "computeMain"; // stage: COMPUTE
+    pub const ENTRY_VERTEX_MAIN: &str = "vertexMain"; // stage: VERTEX
+    pub const ENTRY_FRAGMENT_MAIN: &str = "fragmentMain"; // stage: FRAGMENT
 
     /// Push-constant block size in bytes (reflected).
-    pub const PUSH_CONSTANT_SIZE: u32 = 48;
+    pub const PUSH_CONSTANT_SIZE: u32 = 0;
 
     // --- descriptor set 0 ---
-    pub const FRAME_SET: u32 = 0;
-    pub const FRAME_BINDING: u32 = 0; // UNIFORM_BUFFER
-    pub const GBUFFER_A_SET: u32 = 0;
-    pub const GBUFFER_A_BINDING: u32 = 1; // COMBINED_IMAGE_SAMPLER
-    pub const GBUFFER_B_SET: u32 = 0;
-    pub const GBUFFER_B_BINDING: u32 = 2; // COMBINED_IMAGE_SAMPLER
-    pub const SHADOW_OUTPUT_SET: u32 = 0;
-    pub const SHADOW_OUTPUT_BINDING: u32 = 3; // COMBINED_IMAGE_SAMPLER
-    pub const TLAS_SET: u32 = 0;
-    pub const TLAS_BINDING: u32 = 4; // UNIFORM_BUFFER
-}
-
-pub mod sharc_query {
-    //! Bindings reflected from shaders/slang/sharc_query.slang
-
-    /// Entry point names (for VkPipelineShaderStageCreateInfo).
-    pub const ENTRY_COMPUTE_MAIN: &str = "computeMain"; // stage: COMPUTE
-
-    /// Push-constant block size in bytes (reflected).
-    pub const PUSH_CONSTANT_SIZE: u32 = 48;
-
-    // --- descriptor set 0 ---
-    pub const FRAME_SET: u32 = 0;
-    pub const FRAME_BINDING: u32 = 0; // UNIFORM_BUFFER
-    pub const GBUFFER_A_SET: u32 = 0;
-    pub const GBUFFER_A_BINDING: u32 = 1; // COMBINED_IMAGE_SAMPLER
-    pub const GBUFFER_B_SET: u32 = 0;
-    pub const GBUFFER_B_BINDING: u32 = 2; // COMBINED_IMAGE_SAMPLER
-    pub const GI_OUTPUT_SET: u32 = 0;
-    pub const GI_OUTPUT_BINDING: u32 = 3; // COMBINED_IMAGE_SAMPLER
-
-    // --- descriptor set 1 ---
-    pub const SHARC_HASH_ENTRIES_SET: u32 = 1;
-    pub const SHARC_HASH_ENTRIES_BINDING: u32 = 0; // UNIFORM_BUFFER
-    pub const SHARC_ACCUMULATION_SET: u32 = 1;
-    pub const SHARC_ACCUMULATION_BINDING: u32 = 1; // UNIFORM_BUFFER
-    pub const SHARC_RESOLVED_SET: u32 = 1;
-    pub const SHARC_RESOLVED_BINDING: u32 = 2; // UNIFORM_BUFFER
+    pub const ENV_CUBE_SET: u32 = 0;
+    pub const ENV_CUBE_BINDING: u32 = 0; // COMBINED_IMAGE_SAMPLER
 }

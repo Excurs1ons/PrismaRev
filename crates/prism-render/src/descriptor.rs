@@ -151,7 +151,7 @@ pub const LIGHT_MAX: u32 = 8;
 
 /// GPU data layout for a single point light (32 bytes, 16-byte aligned).
 ///
-/// Mirrors the Slang `GpuLight` struct in `scene_bindless.slang`.
+/// Mirrors the Slang `GpuLight` struct in `scene_frag.slang`.
 /// Stored in a `StructuredBuffer<GpuLight>` at set 0 binding 2.
 #[repr(C)]
 pub struct GpuLight {
@@ -174,6 +174,11 @@ pub struct FrameUBOData {
     pub light_color: [f32; 4],          // 16 bytes, offset  96 (w = ambient factor)
     pub view: [[f32; 4]; 4],            // 64 bytes, offset 112 (world -> view)
     pub light_view_proj: [[f32; 4]; 4], // 64 bytes, offset 176 (light-space VP for shadow map)
+    /// Tonemap operator selector, applied to the final HDR color before the
+    /// SRGB swapchain encode. 0 = Reinhard (`x/(x+1)`), 1 = ACES (Narkowicz).
+    /// Switchable at runtime from the inspector / `T` key. offset 240.
+    pub tonemap_mode: u32,              // offset 240
+    pub _pad: [u32; 3],                 // offset 244..255 (std140 16-byte tail)
 }
 
 /// Per-frame UBO buffer and its descriptor set.

@@ -7,7 +7,7 @@ description = "Application layer and main loop for PrismaRev"
 
 [dependencies]
 prism-ecs = { path = "../prism-ecs" }
-prism-render = { path = "../prism-render", features = ["legacy_renderer"] }
+prism-render = { path = "../prism-render" }
 prism-asset = { path = "../prism-asset" }
 ash = { workspace = true }
 ash-window = { workspace = true }

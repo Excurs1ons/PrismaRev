@@ -49,7 +49,7 @@
 
 > **阴影实现状态（2026-07-18）**：当前 MVP 已实现**单张光栅化阴影贴图**
 > （`ShadowMapPass` 深度预渲染 + `ScenePass` 用 comparison sampler 采样，
-> 见 `shaders/slang/shadowmap.slang` / `scene.frag.slang`）。`RenderSettings::
+> 见 `shaders/slang/shadow_depth.slang` / `scene_frag.slang`）。`RenderSettings::
 > shadow_mode` 支持 `Auto`/`Raster`/`RayQuery`/`None`，由 `resolve_shadow`
 > 按 `VK_KHR_ray_query` 能力自动选择。
 >
@@ -77,8 +77,8 @@
 | 模块化管线 | `prism-render/src/render_graph.rs` + `passes.rs`（`RenderPassNode` 节点） |
 | bindless / 全平台统一 | `prism-render/src/bindless.rs`（分离 SRV + 全局 sampler 表） |
 | 资源管理解耦 | `prism-asset`（glTF 2.0 加载器 + `SceneStore` + `MaterialManager`） |
-| 移动端 GI | `shaders/slang/sharc/`（SHARC 世界空间 radiance cache，移植自 NVIDIA RTXGI） |
-| 阴影 / RT | 光栅化阴影贴图：`ShadowMapPass`（深度预渲染）+ `ScenePass`（comparison sampler 采样）；RayQuery 软阴影占位 `shadow.slang` + `RayQueryPass`（待接入） |
+| 移动端 GI | （规划中）SHARC 世界空间 radiance cache，移植自 NVIDIA RTXGI；其 shader 源（`shaders/slang/sharc/`、`sharc_query.slang`）与 `shadow.comp` RayQuery 占位当前已从仓库移除，待真正接入移动端 GI 时再实现 |
+| 阴影 / RT | 光栅化阴影贴图：`ShadowMapPass`（深度预渲染，见 `shadow_depth.slang`）+ `ScenePass`（comparison sampler 采样，见 `scene_frag.slang`） |
 | 能力探测 | `prism-render/src/capabilities.rs`（集中探测，扩展中） |
 
 ## 5. 反目标（明确不做什么）

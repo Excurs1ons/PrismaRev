@@ -41,6 +41,9 @@ pub struct Inspector {
     /// Whether the UI overlay is active (debug overlay). Toggles with H.
     /// Passed by `App` each frame so the Debug window can reflect current state.
     pub show_ui: bool,
+    /// Tonemap mode (0 = Reinhard, 1 = ACES Narkowicz). Mirrors `App::tonemap_mode`
+    /// and is synced each frame; editable here and pushed back to the app.
+    pub tonemap_mode: u32,
 }
 
 impl Default for Inspector {
@@ -54,6 +57,7 @@ impl Default for Inspector {
             dir_light_cached_for: None,
             debug_flags: crate::app::DEFAULT_PBR_FLAGS,
             show_ui: true,
+            tonemap_mode: 0,
         }
     }
 }
@@ -151,37 +155,34 @@ impl Inspector {
                 ui.heading("Debug Mode");
                 ui.separator();
                 ui.label("PBR component toggles (keys 1-9, Shift+1-4):");
+                // Ordered by key position; each row shows the bound key and the
+                // actual shader flag bit value.
                 let flags = [
-                    ("Direct", 0, "Primary diffuse/specular from dir light"),
-                    ("AmbientIBL", 1, "Image-based lighting ambient"),
-                    ("Specular", 2, "Specular reflections"),
-                    ("Metallic", 3, "Metallic material response"),
-                    ("Roughness", 4, "Microfacet roughness"),
-                    ("DiffuseIBL", 5, "Diffuse irradiance from env"),
-                    ("SpecularIBL", 6, "Prefiltered specular"),
-                    ("MultiLight", 7, "Multiple light sources"),
-                    ("Shadow", 8, "Shadow masking (shadow map)"),
-                    ("Emissive", 9, "Self-emissive surfaces"),
-                    ("Transmission", 10, "Transmission (refraction)"),
-                    ("Translucency", 11, "Translucent scattering"),
-                    ("Anisotropy", 12, "Anisotropic materials"),
-                    ("Clear Coat", 13, "Clear coat layer"),
+                    ("Direct", "1", 0, "Primary diffuse/specular from dir light"),
+                    ("Shadow", "2", 8, "Shadow masking (shadow map)"),
+                    ("Specular", "3", 2, "Specular reflections"),
+                    ("Metallic", "4", 3, "Metallic material response"),
+                    ("Roughness", "5", 4, "Microfacet roughness"),
+                    ("DiffuseIBL", "6", 5, "Diffuse irradiance from env"),
+                    ("SpecularIBL", "7", 6, "Prefiltered specular"),
+                    ("MultiLight", "8", 7, "Multiple light sources"),
+                    ("Emissive", "0", 9, "Self-emissive surfaces"),
+                    ("AO", "9", 14, "Ambient occlusion (not yet implemented)"),
+                    ("Transmission", "Shift+1", 10, "Transmission (refraction)"),
+                    ("Translucency", "Shift+2", 11, "Translucent scattering"),
+                    ("Anisotropy", "Shift+3", 12, "Anisotropic materials"),
+                    ("Clear Coat", "Shift+4", 13, "Clear coat layer"),
+                    ("AmbientIBL", "(inspector)", 1, "Image-based lighting ambient"),
                 ];
-                for (name, bit, desc) in flags.iter() {
+                for (name, key_label, bit, desc) in flags.iter() {
                     let active = (self.debug_flags >> bit) & 1 == 1;
                     let color = if active {
                         egui::Color32::from_rgb(80, 180, 80)
                     } else {
                         egui::Color32::from_rgb(80, 80, 80)
                     };
-                    let key_label = match bit {
-                        0 => "1", 1 => "2", 2 => "3", 3 => "4", 4 => "5",
-                        5 => "6", 6 => "7", 7 => "8", 8 => "9", 9 => "0",
-                        10 => "Shift+1", 11 => "Shift+2", 12 => "Shift+3", 13 => "Shift+4",
-                        _ => "?",
-                    };
                     ui.horizontal(|ui| {
-                        ui.colored_label(color, format!("{} (key {})", name, key_label));
+                        ui.colored_label(color, format!("{} [key {} | bit {}]", name, key_label, bit));
                         ui.label(format!("- {}", desc));
                     });
                 }
@@ -191,6 +192,16 @@ impl Inspector {
                 let inspector_mode = if self.show { "ON" } else { "OFF" };
                 ui.label(format!("F1: Inspector - {}", inspector_mode));
                 ui.label("Ctrl+S: Save scene state");
+                ui.separator();
+                ui.label("Tonemap (key T to toggle):");
+                ui.horizontal(|ui| {
+                    if ui.selectable_label(self.tonemap_mode == 0, "Reinhard").clicked() {
+                        self.tonemap_mode = 0;
+                    }
+                    if ui.selectable_label(self.tonemap_mode == 1, "ACES").clicked() {
+                        self.tonemap_mode = 1;
+                    }
+                });
             });
         let hint_frame = egui::Frame {
             fill: egui::Color32::from_black_alpha(100),

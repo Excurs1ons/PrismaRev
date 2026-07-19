@@ -27,6 +27,17 @@ use crate::render_graph::{
 };
 use crate::swapchain::Swapchain;
 
+/// One resolved draw for the bindless PBR path. The engine pre-resolves asset
+/// handles into render-side mesh handles + material SSBO slots and hands the
+/// renderer this flat list (so the renderer stays free of `prism_asset`
+/// types). Previously lived in the deprecated monolithic renderer; kept here
+/// as the engine<->renderer exchange type.
+pub struct SceneDrawItem {
+    pub mesh: MeshHandle,
+    pub material_slot: u32,
+    pub model: [[f32; 4]; 4],
+}
+
 pub struct GraphRenderer {
     swapchain: Option<Swapchain>,
     command_pool: vk::CommandPool,

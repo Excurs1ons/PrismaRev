@@ -23,9 +23,9 @@
 //                  UBO so the push constant stays under 128 bytes.
 //
 // Compile:
-//   slangc scene_bindless.frag.slang -profile spirv_1_5 -target spirv \
+//   slangc scene_frag.slang -profile spirv_1_5 -target spirv \
 //          -entry fragmentMain -stage fragment -fvk-use-entrypoint-name \
-//          -o scene_bindless.frag.spv
+//          -o scene_frag.frag.spv
 import common;
 
 // ---- set 0, binding 0 - per-frame UBO (unchanged) -------------------
@@ -126,6 +126,7 @@ static const uint PBR_FLAG_TRANSMISSION = 10u; // Shift+1
 static const uint PBR_FLAG_TRANSLUCENCY = 11u; // Shift+2
 static const uint PBR_FLAG_ANISOTROPY   = 12u; // Shift+3
 static const uint PBR_FLAG_CLEARCOAT    = 13u; // Shift+4
+static const uint PBR_FLAG_AO           = 14u; // 9: ambient occlusion (placeholder, not yet implemented)
 
 bool flag(uint b) { return (pc.debug_flags & (1u << b)) != 0u; }
 
@@ -548,8 +549,13 @@ float4 fragmentMain(MeshVaryings in) : SV_Target
     color += multi_light + emissive;       // multilight + emissive
     color += transmission + translucency + aniso_spec + clearcoat;
 
-    // Reinhard tonemap keeps HDR terms in a displayable range before the SRGB
-    // swapchain re-encodes the linear output to sRGB.
-    color = color / (color + 1.0);
+    // Tonemap: keep HDR terms in a displayable range before the SRGB swapchain
+    // re-encodes the linear output to sRGB. Operator is selectable at runtime
+    // via frame.tonemapMode (0 = Reinhard, 1 = ACES Narkowicz).
+    if (frame.tonemapMode == 1u) {
+        color = aces(color);
+    } else {
+        color = color / (color + 1.0);
+    }
     return float4(color, 1.0);
 }
