@@ -146,15 +146,39 @@ impl Drop for DescriptorPool {
     }
 }
 
-/// GPU data layout: 8 × vec4 = 128 bytes, std140 align.
-/// Mirrors GLSL `layout(binding = 0) uniform FrameUBO { ... }`.
+/// Maximum number of point lights in the light SSBO.
+pub const LIGHT_MAX: u32 = 8;
+
+/// GPU data layout for a single point light (32 bytes, 16-byte aligned).
+///
+/// Mirrors the Slang `GpuLight` struct in `scene_frag.slang`.
+/// Stored in a `StructuredBuffer<GpuLight>` at set 0 binding 2.
+#[repr(C)]
+pub struct GpuLight {
+    pub position: [f32; 4], // xyz = world position, w = range (attenuation radius)
+    pub color: [f32; 4],    // rgb = radiant intensity, w = 1.0
+}
+
+/// GPU data layout for the per-frame uniform buffer.
+///
+/// Mirrors the Slang `FrameUBO` in `shaders/slang/common.slang` byte-for-byte
+/// (std140). The RenderGraph ScenePass reads `light_view_proj` here for the
+/// shadow-map projection (keeping it out of push constants so the push
+/// constant block stays under Vulkan's 128-byte limit); the legacy shaders
+/// simply ignore the trailing field.
 #[repr(C)]
 pub struct FrameUBOData {
-    pub view_proj: [[f32; 4]; 4],  // 64 bytes, offset   0
-    pub camera_position: [f32; 4], // 16 bytes, offset  64
-    pub light_direction: [f32; 4], // 16 bytes, offset  80 (w = intensity)
-    pub light_color: [f32; 4],     // 16 bytes, offset  96 (w = ambient factor)
-    pub view: [[f32; 4]; 4],       // 64 bytes, offset 112 (world → view)
+    pub view_proj: [[f32; 4]; 4],       // 64 bytes, offset   0
+    pub camera_position: [f32; 4],      // 16 bytes, offset  64 (xyz = camera pos, w = light_count)
+    pub light_direction: [f32; 4],      // 16 bytes, offset  80 (w = intensity)
+    pub light_color: [f32; 4],          // 16 bytes, offset  96 (w = ambient factor)
+    pub view: [[f32; 4]; 4],            // 64 bytes, offset 112 (world -> view)
+    pub light_view_proj: [[f32; 4]; 4], // 64 bytes, offset 176 (light-space VP for shadow map)
+    /// Tonemap operator selector, applied to the final HDR color before the
+    /// SRGB swapchain encode. 0 = Reinhard (`x/(x+1)`), 1 = ACES (Narkowicz).
+    /// Switchable at runtime from the inspector / `T` key. offset 240.
+    pub tonemap_mode: u32,              // offset 240
+    pub _pad: [u32; 3],                 // offset 244..255 (std140 16-byte tail)
 }
 
 /// Per-frame UBO buffer and its descriptor set.
@@ -170,7 +194,7 @@ pub struct FrameUBO {
 impl FrameUBO {
     /// Create a UBO buffer and update the descriptor set to point to it.
     pub fn new(context: &VulkanContext, descriptor_set: vk::DescriptorSet) -> anyhow::Result<Self> {
-        let size = std::mem::size_of::<FrameUBOData>() as vk::DeviceSize; // 112
+        let size = std::mem::size_of::<FrameUBOData>() as vk::DeviceSize; // 240
 
         let (buffer, memory) = buffer::create_buffer(
             context,
@@ -232,8 +256,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn frame_ubo_data_size_is_176() {
-        assert_eq!(std::mem::size_of::<FrameUBOData>(), 176);
+    fn frame_ubo_data_size_is_240() {
+        assert_eq!(std::mem::size_of::<FrameUBOData>(), 240);
+    }
+
+    #[test]
+    fn gpu_light_size_is_32() {
+        assert_eq!(std::mem::size_of::<GpuLight>(), 32);
+    }
+
+    #[test]
+    fn gpu_light_offsets() {
+        assert_eq!(std::mem::offset_of!(GpuLight, position), 0);
+        assert_eq!(std::mem::offset_of!(GpuLight, color), 16);
     }
 
     #[test]
@@ -243,5 +278,6 @@ mod tests {
         assert_eq!(std::mem::offset_of!(FrameUBOData, light_direction), 80);
         assert_eq!(std::mem::offset_of!(FrameUBOData, light_color), 96);
         assert_eq!(std::mem::offset_of!(FrameUBOData, view), 112);
+        assert_eq!(std::mem::offset_of!(FrameUBOData, light_view_proj), 176);
     }
 }

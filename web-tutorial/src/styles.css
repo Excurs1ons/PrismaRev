@@ -114,9 +114,9 @@ body {
   font-size: 12px;
   margin-left: 2px;
 }
-.topbar .brand .ver-tag {
-  margin-left: 8px;
-  padding: 2px 10px;
+.topbar .ver-tag {
+  margin-left: auto;
+  padding: 3px 11px;
   border-radius: 999px;
   font-size: 11px;
   font-family: var(--mono);
@@ -126,29 +126,6 @@ body {
   background: rgba(88, 166, 255, 0.12);
   border: 1px solid rgba(88, 166, 255, 0.4);
   white-space: nowrap;
-}
-.topbar .progress-wrap {
-  flex: 1;
-  height: 5px;
-  background: var(--border);
-  border-radius: 999px;
-  overflow: hidden;
-  margin-left: auto;
-  max-width: 340px;
-  position: relative;
-}
-.topbar .progress-bar {
-  height: 100%;
-  width: 0%;
-  background: var(--grad);
-  border-radius: 999px;
-}
-.topbar .progress-label {
-  font-size: 12px;
-  color: var(--text-faint);
-  min-width: 54px;
-  text-align: right;
-  font-variant-numeric: tabular-nums;
 }
 
 /* ---------- 布局 ---------- */
@@ -211,16 +188,6 @@ body {
   border-color: rgba(88, 166, 255, 0.4);
   color: #fff;
 }
-.chapter-link.active::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 12px;
-  bottom: 12px;
-  width: 3px;
-  border-radius: 3px;
-  background: var(--grad);
-}
 .chapter-link .t {
   font-weight: 650;
   font-size: 14px;
@@ -254,11 +221,19 @@ body {
   flex: 1;
   padding: 36px 56px 140px;
   max-width: 100%;
-  overflow-x: hidden;
+  overflow-x: clip;
+}
+.reader {
+  display: grid;
+  grid-template-columns: minmax(0, 880px) 224px;
+  column-gap: 40px;
+  max-width: 1144px;
+  margin: 0 auto;
 }
 .article {
+  grid-column: 1;
+  min-width: 0;
   max-width: 880px;
-  margin: 0 auto;
 }
 .article h1 {
   font-size: 32px;
@@ -299,15 +274,66 @@ body {
   border-bottom-style: solid;
 }
 .article blockquote {
-  border-left: 3px solid var(--accent);
-  background: rgba(88, 166, 255, 0.06);
+  background: var(--bg-elev);
   margin: 18px 0;
   padding: 10px 16px;
   color: var(--text-dim);
-  border-radius: 0 10px 10px 0;
+  border-radius: 10px;
 }
 .article blockquote p {
   margin: 4px 0;
+}
+
+/* ---------- 本页目录：文章阅读区内的右栏（与正文同属一个整体） ---------- */
+.toc {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  align-self: start;
+  position: sticky;
+  top: calc(var(--topbar-h) + 18px);
+  max-height: calc(100vh - var(--topbar-h) - 36px);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.toc-head {
+  padding: 10px 14px;
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.4px;
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+}
+.toc-body {
+  overflow-y: auto;
+  padding: 8px 6px 10px;
+}
+.toc-link {
+  display: block;
+  padding: 5px 10px;
+  margin: 1px 0;
+  border-radius: 7px;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--text-dim);
+  text-decoration: none;
+  transition: background 0.15s, color 0.15s;
+}
+.toc-link.sub {
+  padding-left: 22px;
+  font-size: 12px;
+  color: var(--text-faint);
+}
+.toc-link:hover {
+  background: var(--bg-panel);
+  color: var(--text);
+}
+.toc-link.active {
+  background: rgba(88, 166, 255, 0.14);
+  color: var(--accent);
 }
 .article code:not(pre code) {
   background: var(--code-bg);
@@ -428,7 +454,6 @@ body {
 }
 .code-block pre code .line.hl {
   background: rgba(88, 166, 255, 0.14);
-  box-shadow: inset 3px 0 0 var(--accent);
 }
 .code-block pre code .line.hl::before {
   color: var(--accent);
@@ -437,19 +462,10 @@ body {
 /* ---------- 提示框 ---------- */
 .callout {
   border-radius: var(--radius);
-  padding: 13px 16px 13px 18px;
+  padding: 13px 16px;
   margin: 18px 0;
   border: 1px solid var(--border);
-  position: relative;
-  overflow: hidden;
-}
-.callout::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: 4px;
+  background: var(--bg-elev);
 }
 .callout .label {
   font-weight: 700;
@@ -462,41 +478,29 @@ body {
   margin: 4px 0;
 }
 .callout.tip {
-  background: rgba(126, 231, 135, 0.06);
-  border-color: rgba(126, 231, 135, 0.28);
-}
-.callout.tip::before {
-  background: var(--accent-2);
+  background: rgba(126, 231, 135, 0.07);
+  border-color: rgba(126, 231, 135, 0.3);
 }
 .callout.tip .label {
   color: var(--accent-2);
 }
 .callout.warn {
-  background: rgba(240, 198, 116, 0.06);
-  border-color: rgba(240, 198, 116, 0.28);
-}
-.callout.warn::before {
-  background: var(--warn);
+  background: rgba(240, 198, 116, 0.07);
+  border-color: rgba(240, 198, 116, 0.3);
 }
 .callout.warn .label {
   color: var(--warn);
 }
 .callout.danger {
-  background: rgba(255, 107, 107, 0.06);
-  border-color: rgba(255, 107, 107, 0.28);
-}
-.callout.danger::before {
-  background: var(--danger);
+  background: rgba(255, 107, 107, 0.07);
+  border-color: rgba(255, 107, 107, 0.3);
 }
 .callout.danger .label {
   color: var(--danger);
 }
 .callout.info {
-  background: rgba(88, 166, 255, 0.06);
-  border-color: rgba(88, 166, 255, 0.28);
-}
-.callout.info::before {
-  background: var(--accent);
+  background: rgba(88, 166, 255, 0.07);
+  border-color: rgba(88, 166, 255, 0.3);
 }
 .callout.info .label {
   color: var(--accent);
@@ -635,13 +639,11 @@ body {
 
 /* ---------- 上一章/下一章导航 ---------- */
 .pager {
+  grid-column: 1;
   display: flex;
   justify-content: space-between;
   gap: 14px;
   margin-top: 56px;
-  max-width: 880px;
-  margin-left: auto;
-  margin-right: auto;
 }
 .pager a {
   flex: 1;
@@ -705,5 +707,22 @@ body {
   }
   .topbar .brand small {
     display: none;
+  }
+}
+/* 中等/窄屏：阅读区变单列，目录栏隐藏（全局仅保留左侧 ☰ 一个菜单入口） */
+@media (max-width: 1180px) {
+  .reader {
+    display: block;
+    max-width: 880px;
+  }
+  .toc {
+    display: none;
+  }
+  .article {
+    margin: 0 auto;
+    max-width: 880px;
+  }
+  .pager {
+    max-width: 880px;
   }
 }

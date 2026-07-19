@@ -24,6 +24,11 @@ fn android_main(app: AndroidApp) {
 
     log::info!("PrismaRev Android starting");
 
+    // Register the AndroidApp with the engine's crash-dialog module so a
+    // fatal render error can show a native AlertDialog (via JNI) instead of
+    // silently dying. Must happen before the event loop starts.
+    prism_engine::crash_dialog::register_android_app(&app);
+
     // Read the equirectangular HDR environment map from the APK assets (if
     // bundled). Scans for any *.hdr by name so the resource keeps its own
     // filename; missing asset → procedural fallback inside the renderer.
@@ -77,7 +82,7 @@ fn android_main(app: AndroidApp) {
             // `open` returns None for missing files; we use the
             // presence of a valid buffer to decide whether the
             // candidate exists. The first match wins.
-            if let Ok(mut asset) = mgr.open(path) {
+            if let Some(mut asset) = mgr.open(path) {
                 if let Ok(buf) = asset.buffer() {
                     if !buf.is_empty() {
                         log::info!(
@@ -85,24 +90,22 @@ fn android_main(app: AndroidApp) {
                             path.to_string_lossy(),
                             buf.len()
                         );
-                        picked = Some(path.to_owned());
+                        picked = Some(std::ffi::CString::from(*path));
                         break;
                     }
                 }
             }
         }
         picked.and_then(|path| {
-            mgr.open(&path).ok().and_then(|mut asset| {
-                match asset.buffer() {
-                    Ok(buf) if !buf.is_empty() => Some(buf.to_vec()),
-                    Ok(_) => {
-                        log::warn!("glb asset is empty; using procedural fallback");
-                        None
-                    }
-                    Err(e) => {
-                        log::warn!("failed to read glb asset ({e}); using procedural fallback");
-                        None
-                    }
+            mgr.open(&path).and_then(|mut asset| match asset.buffer() {
+                Ok(buf) if !buf.is_empty() => Some(buf.to_vec()),
+                Ok(_) => {
+                    log::warn!("glb asset is empty; using procedural fallback");
+                    None
+                }
+                Err(e) => {
+                    log::warn!("failed to read glb asset ({e}); using procedural fallback");
+                    None
                 }
             })
         })

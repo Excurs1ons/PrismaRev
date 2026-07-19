@@ -1,13 +1,13 @@
 # PrismaRev · 从 Rust 到 Vulkan 引擎
 
-:::info 版本溯源 · 教程基准标签 `tutorial-v1`
-本教程所有代码与讲解**锚定在 git 标签 [`tutorial-v1`](https://github.com/Excurs1ons/PrismaRev/releases/tag/tutorial-v1)** 所对应的源码快照上：
+:::info 版本溯源 · 教程基准提交 `0b48449`
+本教程所有代码与讲解**锚定在 git 提交 [`0b48449`](https://github.com/Excurs1ons/PrismaRev/commit/0b48449840c10699789f88d4c9c675a64875ee69)**（对应标签 `tutorial-v1`）所对应的源码快照上：
 
 - **基准提交**：`0b48449`（feat: 源码资产/绑定重构 + 新增 PrismaRev Web 交互式教学）
 - **基准日期**：2026-07-18
 - **覆盖范围**：引擎首版 13 章教学 + 同期源码（资产/Bindless 重构、BatchUploader、Sponza 场景加载）
 
-> 用途：当引擎源码后续演进时，以 `tutorial-v1` 为对照锚点，可精确判断「哪些章节需要跟进更新」。新一版教程会打 `tutorial-v2` ……以此类推。
+> 用途：当引擎源码后续演进时，以提交 `0b48449` 为对照锚点，可精确判断「哪些章节需要跟进更新」。新一版教程会基于新的基准提交（如 `tutorial-v2` 对应的 commit hash）重新锚定，以此类推。
 :::
 
 欢迎来到这套交互式教学。我们将**拆解一个真实存在的、从零用 Rust 写出的 Vulkan 游戏引擎**——PrismaRev——来理解现代图形引擎是怎么从最基础的 `Hello World` 一步步长成型的。

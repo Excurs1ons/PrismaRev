@@ -213,7 +213,15 @@ impl RenderTextureManager {
             (input.width.max(input.height) as f32).log2().floor() as u32 + 1
         };
         let (image, memory, view) = unsafe {
-            create_and_upload_image(context, command_pool, graphics_queue, input.width, input.height, &input.pixels, mip_levels)
+            create_and_upload_image(
+                context,
+                command_pool,
+                graphics_queue,
+                input.width,
+                input.height,
+                &input.pixels,
+                mip_levels,
+            )
         }
         .context("RenderTextureManager::reserve: upload texture")?;
 
@@ -377,7 +385,8 @@ mod tests {
     #[test]
     fn valid_input_passes_size_check() {
         let input = valid_input();
-        let expected = input.width as usize * input.height as usize * input.format.bytes_per_pixel();
+        let expected =
+            input.width as usize * input.height as usize * input.format.bytes_per_pixel();
         assert_eq!(input.pixels.len(), expected);
     }
 }

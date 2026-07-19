@@ -289,10 +289,12 @@ pub unsafe fn create_and_upload_image(
         .old_layout(vk::ImageLayout::UNDEFINED)
         .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
         .image(image)
-        .subresource_range(vk::ImageSubresourceRange::default()
-            .aspect_mask(vk::ImageAspectFlags::COLOR)
-            .level_count(mip_levels)
-            .layer_count(1));
+        .subresource_range(
+            vk::ImageSubresourceRange::default()
+                .aspect_mask(vk::ImageAspectFlags::COLOR)
+                .level_count(mip_levels)
+                .layer_count(1),
+        );
     sync2.cmd_pipeline_barrier2(
         cmd,
         &vk::DependencyInfo::default().image_memory_barriers(&[undefined_to_dst]),
@@ -330,11 +332,13 @@ pub unsafe fn create_and_upload_image(
             .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
             .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
             .image(image)
-            .subresource_range(vk::ImageSubresourceRange::default()
-                .aspect_mask(vk::ImageAspectFlags::COLOR)
-                .base_mip_level(0)
-                .level_count(1)
-                .layer_count(1));
+            .subresource_range(
+                vk::ImageSubresourceRange::default()
+                    .aspect_mask(vk::ImageAspectFlags::COLOR)
+                    .base_mip_level(0)
+                    .level_count(1)
+                    .layer_count(1),
+            );
         sync2.cmd_pipeline_barrier2(
             cmd,
             &vk::DependencyInfo::default().image_memory_barriers(&[promote_mip0]),
@@ -345,11 +349,13 @@ pub unsafe fn create_and_upload_image(
             let src_ext = mip_extent(width, height, src_level);
             let dst_ext = mip_extent(width, height, mip);
             let blit = vk::ImageBlit2::default()
-                .src_subresource(vk::ImageSubresourceLayers::default()
-                    .aspect_mask(vk::ImageAspectFlags::COLOR)
-                    .mip_level(src_level)
-                    .base_array_layer(0)
-                    .layer_count(1))
+                .src_subresource(
+                    vk::ImageSubresourceLayers::default()
+                        .aspect_mask(vk::ImageAspectFlags::COLOR)
+                        .mip_level(src_level)
+                        .base_array_layer(0)
+                        .layer_count(1),
+                )
                 .src_offsets([
                     vk::Offset3D { x: 0, y: 0, z: 0 },
                     vk::Offset3D {
@@ -358,11 +364,13 @@ pub unsafe fn create_and_upload_image(
                         z: 1,
                     },
                 ])
-                .dst_subresource(vk::ImageSubresourceLayers::default()
-                    .aspect_mask(vk::ImageAspectFlags::COLOR)
-                    .mip_level(mip)
-                    .base_array_layer(0)
-                    .layer_count(1))
+                .dst_subresource(
+                    vk::ImageSubresourceLayers::default()
+                        .aspect_mask(vk::ImageAspectFlags::COLOR)
+                        .mip_level(mip)
+                        .base_array_layer(0)
+                        .layer_count(1),
+                )
                 .dst_offsets([
                     vk::Offset3D { x: 0, y: 0, z: 0 },
                     vk::Offset3D {
@@ -391,11 +399,13 @@ pub unsafe fn create_and_upload_image(
                 .old_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
                 .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                 .image(image)
-                .subresource_range(vk::ImageSubresourceRange::default()
-                    .aspect_mask(vk::ImageAspectFlags::COLOR)
-                    .base_mip_level(src_level)
-                    .level_count(1)
-                    .layer_count(1));
+                .subresource_range(
+                    vk::ImageSubresourceRange::default()
+                        .aspect_mask(vk::ImageAspectFlags::COLOR)
+                        .base_mip_level(src_level)
+                        .level_count(1)
+                        .layer_count(1),
+                );
             sync2.cmd_pipeline_barrier2(
                 cmd,
                 &vk::DependencyInfo::default().image_memory_barriers(&[src_done]),
@@ -411,11 +421,13 @@ pub unsafe fn create_and_upload_image(
                     .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
                     .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
                     .image(image)
-                    .subresource_range(vk::ImageSubresourceRange::default()
-                        .aspect_mask(vk::ImageAspectFlags::COLOR)
-                        .base_mip_level(mip)
-                        .level_count(1)
-                        .layer_count(1));
+                    .subresource_range(
+                        vk::ImageSubresourceRange::default()
+                            .aspect_mask(vk::ImageAspectFlags::COLOR)
+                            .base_mip_level(mip)
+                            .level_count(1)
+                            .layer_count(1),
+                    );
                 sync2.cmd_pipeline_barrier2(
                     cmd,
                     &vk::DependencyInfo::default().image_memory_barriers(&[promote]),
@@ -432,11 +444,13 @@ pub unsafe fn create_and_upload_image(
             .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
             .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
             .image(image)
-            .subresource_range(vk::ImageSubresourceRange::default()
-                .aspect_mask(vk::ImageAspectFlags::COLOR)
-                .base_mip_level(mip_levels - 1)
-                .level_count(1)
-                .layer_count(1));
+            .subresource_range(
+                vk::ImageSubresourceRange::default()
+                    .aspect_mask(vk::ImageAspectFlags::COLOR)
+                    .base_mip_level(mip_levels - 1)
+                    .level_count(1)
+                    .layer_count(1),
+            );
         sync2.cmd_pipeline_barrier2(
             cmd,
             &vk::DependencyInfo::default().image_memory_barriers(&[dst_to_read]),
@@ -452,10 +466,12 @@ pub unsafe fn create_and_upload_image(
             .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
             .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
             .image(image)
-            .subresource_range(vk::ImageSubresourceRange::default()
-                .aspect_mask(vk::ImageAspectFlags::COLOR)
-                .level_count(1)
-                .layer_count(1));
+            .subresource_range(
+                vk::ImageSubresourceRange::default()
+                    .aspect_mask(vk::ImageAspectFlags::COLOR)
+                    .level_count(1)
+                    .layer_count(1),
+            );
         sync2.cmd_pipeline_barrier2(
             cmd,
             &vk::DependencyInfo::default().image_memory_barriers(&[dst_to_read]),
@@ -470,7 +486,11 @@ pub unsafe fn create_and_upload_image(
         .create_fence(&vk::FenceCreateInfo::default(), None)
         .context("create texture upload fence")?;
     device
-        .queue_submit(graphics_queue, &[vk::SubmitInfo::default().command_buffers(&[cmd])], fence)
+        .queue_submit(
+            graphics_queue,
+            &[vk::SubmitInfo::default().command_buffers(&[cmd])],
+            fence,
+        )
         .context("submit texture upload")?;
     device
         .wait_for_fences(&[fence], true, u64::MAX)

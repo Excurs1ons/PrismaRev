@@ -5,8 +5,6 @@ import { mountViz } from "./viz/index";
 import {
   animateChapterSwitch,
   animateVizIn,
-  createScrollProgress,
-  animateChapterProgress,
   pulseSidebar,
 } from "./anim";
 import introMd from "./content/01-intro.md?raw";
@@ -41,7 +39,6 @@ const CONTENT: Record<string, string> = {
 
 const app = document.getElementById("app")!;
 let sidebarOpen = false;
-let setScrollProgress: (r: number) => void = () => {};
 
 function groupChapters(): Record<string, ChapterMeta[]> {
   const groups: Record<string, ChapterMeta[]> = {};
@@ -74,15 +71,20 @@ function renderShell() {
   app.innerHTML = `
     <div class="topbar">
       <button class="menu-btn" id="menu-btn">☰</button>
-      <div class="brand">Prisma<span>Rev</span><small>从 Rust 到 Vulkan 引擎 · 交互式教学</small><span class="ver-tag" title="教程基准 git 标签">tutorial-v1</span></div>
-      <div class="progress-wrap"><div class="progress-bar" id="progress-bar"></div></div>
-      <div class="progress-label" id="progress-label">1 / ${CHAPTERS.length}</div>
+      <div class="brand">Prisma<span>Rev</span><small>从 Rust 到 Vulkan 引擎 · 交互式教学</small></div>
+      <span class="ver-tag" title="教程基准 git 提交">0b48449</span>
     </div>
     <div class="layout">
       <aside class="sidebar" id="sidebar">${sidebarInner}</aside>
       <div class="sidebar-backdrop" id="backdrop"></div>
       <main class="content">
-        <article class="article" id="article"></article>
+        <div class="reader">
+          <article class="article" id="article"></article>
+          <aside class="toc" id="toc">
+            <div class="toc-head"><span>本页目录</span></div>
+            <div class="toc-body" id="toc-body"></div>
+          </aside>
+        </div>
         <nav class="pager" id="pager"></nav>
       </main>
     </div>
@@ -90,8 +92,6 @@ function renderShell() {
 
   const sidebar = document.getElementById("sidebar")!;
   const backdrop = document.getElementById("backdrop")!;
-  const progressBar = document.getElementById("progress-bar")!;
-  setScrollProgress = createScrollProgress(progressBar);
 
   document.getElementById("menu-btn")!.addEventListener("click", () => {
     sidebarOpen = !sidebarOpen;
@@ -113,16 +113,6 @@ function renderShell() {
       backdrop.classList.remove("show");
     });
   });
-
-  window.addEventListener(
-    "scroll",
-    () => {
-      const h = document.documentElement;
-      const ratio = h.scrollTop / (h.scrollHeight - h.clientHeight || 1);
-      setScrollProgress(ratio);
-    },
-    { passive: true }
-  );
 }
 
 function setActive(id: string) {
@@ -131,10 +121,6 @@ function setActive(id: string) {
     el.classList.toggle("active", active);
     if (active) pulseSidebar(el);
   });
-  const idx = CHAPTERS.findIndex((c) => c.id === id);
-  const bar = document.getElementById("progress-bar")!;
-  const label = document.getElementById("progress-label")!;
-  if (idx >= 0) animateChapterProgress(bar, label, idx, CHAPTERS.length);
 }
 
 function renderPager(current: ChapterMeta) {
@@ -170,8 +156,57 @@ function renderChapter(id: string) {
 
   setActive(chapter.id);
   renderPager(chapter);
-  window.scrollTo({ top: 0, behavior: "auto" });
+  buildToc();
+  // 先同步归零，待布局回流稳定后再确保一次，避免内容高度变化导致没回顶
+  window.scrollTo(0, 0);
+  requestAnimationFrame(() => window.scrollTo(0, 0));
   animateChapterSwitch(article);
+}
+
+// 右侧「本页目录」：从文章 h2/h3 生成锚点链接，可折叠，滚动高亮当前节。
+let tocScrollHandler: (() => void) | null = null;
+function buildToc(): void {
+  const article = document.getElementById("article")!;
+  const toc = document.getElementById("toc")!;
+  const body = document.getElementById("toc-body")!;
+  const heads = Array.from(
+    article.querySelectorAll<HTMLElement>("h2, h3")
+  );
+  if (!heads.length) {
+    toc.style.display = "none";
+    return;
+  }
+  toc.style.display = "";
+  body.innerHTML = heads
+    .map((h) => {
+      const sub = h.tagName === "H3" ? " sub" : "";
+      const text = (h.textContent ?? "").trim();
+      return `<a class="toc-link${sub}" data-target="${h.id}" href="javascript:void(0)">${text}</a>`;
+    })
+    .join("");
+
+  body.querySelectorAll<HTMLAnchorElement>(".toc-link").forEach((a) => {
+    a.addEventListener("click", (e) => {
+      e.preventDefault();
+      const el = document.getElementById(a.dataset.target!);
+      el?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  });
+
+  // 滚动时高亮当前所在小节（不污染章节路由的 location.hash）
+  if (tocScrollHandler) window.removeEventListener("scroll", tocScrollHandler);
+  tocScrollHandler = () => {
+    let currentId = heads[0]?.id ?? "";
+    for (const h of heads) {
+      if (h.getBoundingClientRect().top <= 130) currentId = h.id;
+      else break;
+    }
+    body.querySelectorAll<HTMLElement>(".toc-link").forEach((l) => {
+      l.classList.toggle("active", l.dataset.target === currentId);
+    });
+  };
+  window.addEventListener("scroll", tocScrollHandler, { passive: true });
+  tocScrollHandler();
 }
 
 function route() {

@@ -7,7 +7,7 @@ description = "Application layer and main loop for PrismaRev"
 
 [dependencies]
 prism-ecs = { path = "../prism-ecs" }
-prism-render = { path = "../prism-render", features = ["legacy_renderer"] }
+prism-render = { path = "../prism-render" }
 prism-asset = { path = "../prism-asset" }
 ash = { workspace = true }
 ash-window = { workspace = true }
@@ -17,3 +17,23 @@ log = { workspace = true }
 env_logger = { workspace = true }
 anyhow = { workspace = true }
 rustc-hash = "2"
+egui = { workspace = true }
+egui-winit = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Foundation",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Ole",
+    "Win32_System_DataExchange",
+    "Win32_System_Memory",
+] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21"
+# Match the same backend winit uses (see prism-android/Cargo.toml). The
+# `game-activity` feature selects the GameActivity backend; without it
+# android-activity won't compile.
+android-activity = { version = "0.6", features = ["game-activity"] }
+log = { workspace = true }

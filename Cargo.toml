@@ -43,6 +43,14 @@ raw-window-handle = "0.6"
 # Window / events
 winit = "0.30"
 
+# egui (real-time inspector UI). egui-ash-renderer 0.11 targets ash 0.38 and
+# egui 0.33; egui-winit 0.33 matches egui 0.33 and winit 0.30. Kept at the
+# workspace level so prism-render (Vulkan backend) and prism-engine (UI +
+# event handling) resolve to the same versions.
+egui = "0.33"
+egui-winit = "0.33"
+egui-ash-renderer = "0.11"
+
 # Logging
 log = "0.4"
 env_logger = "0.11"
@@ -53,7 +61,7 @@ anyhow = "1"
 # Asset / scene loading
 # `gltf` crate version is the crate's release stream (1.4 = current), not the
 # glTF spec version — the crate loads glTF 2.0 regardless of its own version.
-gltf = "1.4"
+gltf = { version = "1.4", features = ["KHR_materials_transmission", "KHR_materials_emissive_strength", "KHR_materials_ior", "extensions"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 slotmap = "1.0"
 rayon = "1.10"

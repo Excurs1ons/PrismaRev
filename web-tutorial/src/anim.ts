@@ -43,15 +43,14 @@ export function createScrollProgress(
   };
 }
 
-// 章节进度（数字 + 宽度）缓动。
+// 章节序号标签（"X / N"）缓动更新。注意：顶栏进度条宽度专用于
+// 「本页阅读进度」(createScrollProgress)，这里不碰 bar 宽度，避免冲突。
 export function animateChapterProgress(
-  bar: HTMLElement,
+  _bar: HTMLElement,
   label: HTMLElement,
   idx: number,
   total: number
 ): void {
-  const pct = ((idx + 1) / total) * 100;
-  gsap.to(bar, { width: `${pct}%`, duration: 0.6, ease: "power2.out" });
   gsap.to(label, {
     innerText: `${idx + 1} / ${total}`,
     duration: 0.5,

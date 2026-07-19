@@ -71,8 +71,9 @@ fn import_images_parallel(
         .par_iter()
         .map(|src| {
             let dyn_image = match src {
-                OwnedSource::Uri(path) => image::open(path)
-                    .with_context(|| format!("decode image {}", path.display()))?,
+                OwnedSource::Uri(path) => {
+                    image::open(path).with_context(|| format!("decode image {}", path.display()))?
+                }
                 OwnedSource::Bytes(bytes, mime) => {
                     let format = match mime.as_str() {
                         "image/png" => image::ImageFormat::Png,
@@ -136,10 +137,54 @@ pub(crate) fn load(
         let metallic = pbr.metallic_factor();
         let roughness = pbr.roughness_factor();
         let emissive_factor = mat.emissive_factor();
-        // `KHR_materials_emissive_strength` is an opt-in feature in the
-        // `gltf` crate; when the extension is absent the factor field alone
-        // drives the look (strength defaults to 1.0 in the spec).
-        let emissive = emissive_factor;
+
+        // KHR_materials_emissive_strength (needs Cargo feature).
+        let emissive_strength = mat.emissive_strength().unwrap_or(1.0);
+        // Scale emissive factor by strength.
+        let emissive = [
+            emissive_factor[0] * emissive_strength,
+            emissive_factor[1] * emissive_strength,
+            emissive_factor[2] * emissive_strength,
+        ];
+
+        // KHR_materials_transmission.
+        let (transmission, ior) = if let Some(t) = mat.transmission() {
+            let ior_from_ext = mat.ior().unwrap_or(1.5);
+            (t.transmission_factor(), ior_from_ext)
+        } else {
+            (0.0, 1.5)
+        };
+
+        // KHR_materials_clearcoat: read via raw extension JSON since the
+        // gltf crate does not have a built-in clearcoat feature.
+        let (clearcoat, clearcoat_roughness) = mat
+            .extension_value("KHR_materials_clearcoat")
+            .and_then(|v| {
+                let factor = v
+                    .get("clearcoatFactor")
+                    .and_then(|f| f.as_f64())
+                    .unwrap_or(0.0) as f32;
+                let roughness = v
+                    .get("clearcoatRoughnessFactor")
+                    .and_then(|f| f.as_f64())
+                    .unwrap_or(0.0) as f32;
+                Some((factor, roughness))
+            })
+            .unwrap_or((0.0, 0.0));
+
+        // KHR_materials_anisotropy: read via raw extension JSON.
+        let anisotropy = mat
+            .extension_value("KHR_materials_anisotropy")
+            .and_then(|v| {
+                v.get("anisotropyStrength")
+                    .and_then(|f| f.as_f64())
+                    .map(|f| f as f32)
+            })
+            .unwrap_or(0.0);
+
+        // Translucency is not a standard glTF extension; default 0.0.
+        let translucency = 0.0;
+
         material_indices.push(MaterialData {
             name: mat.name().unwrap_or("material").to_string(),
             base_color,
@@ -150,6 +195,13 @@ pub(crate) fn load(
             normal_tex: None,
             metallic_roughness_tex: None,
             emissive_tex: None,
+            transmission,
+            ior,
+            translucency,
+            anisotropy,
+            clearcoat,
+            clearcoat_roughness,
+            emissive_strength,
         });
     }
 

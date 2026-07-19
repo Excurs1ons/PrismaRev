@@ -27,12 +27,13 @@ pub mod buffer;
 pub mod capabilities;
 pub mod context;
 pub mod descriptor;
+pub mod egui_overlay;
 pub mod gizmo;
+pub mod graph_renderer;
 pub mod hdr;
 pub mod ibl;
 pub mod managers;
 pub mod mesh;
-pub mod overlay;
 pub mod passes;
 pub mod pbr_push;
 pub mod pipeline;
@@ -45,33 +46,25 @@ pub mod shader;
 pub mod shader_bindings;
 pub mod swapchain;
 
-// Legacy monolithic renderer — kept as reference in deprecated/.
-// Do not use in new code; use render_graph + passes instead.
-//
-// When the `legacy_renderer` feature is enabled, the deprecated module is
-// compiled and `Renderer` is re-exported for backwards compatibility with
-// prism-engine (which still uses the legacy renderer).
-#[cfg(feature = "legacy_renderer")]
-pub mod deprecated;
-
-#[cfg(feature = "legacy_renderer")]
-pub use deprecated::renderer_legacy::Renderer;
-#[cfg(feature = "legacy_renderer")]
-pub use deprecated::renderer_legacy::SceneDrawItem;
+// SceneDrawItem is the engine<->renderer exchange type for resolved draws.
+pub use graph_renderer::SceneDrawItem;
 
 pub use buffer::create_buffer;
 pub use capabilities::RayTracingCaps;
 pub use context::VulkanContext;
-pub use descriptor::{DescriptorLayout, DescriptorPool, FrameUBO, FrameUBOData};
+pub use descriptor::{
+    DescriptorLayout, DescriptorPool, FrameUBO, FrameUBOData, GpuLight, LIGHT_MAX,
+};
+pub use egui_overlay::EguiOverlay;
 pub use gizmo::Gizmo;
+pub use graph_renderer::GraphRenderer;
 pub use mesh::{Mesh, Vertex};
-pub use overlay::{Overlay, OverlayAction, OverlayVertex};
 pub use passes::{
-    GBufferPass, LightingPass, PostPass, RayQueryPass, ShadowPushConstants, SharcPass,
-    SharcQueryPushConstants,
+    ScenePass, ShadowMapPass, ShadowPassPushConstants,
 };
 pub use pbr_push::{DebugMode, NormalSpace, PbrBindlessPushConstants, PbrPushConstants};
 pub use pipeline::GraphicsPipeline;
+pub use render_graph::DrawItem;
 pub use render_pass::{DepthImage, Framebuffers, RenderPass};
 pub use shader::load_shader_module;
 pub use swapchain::Swapchain;

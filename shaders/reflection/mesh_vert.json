@@ -70,6 +70,51 @@
                                 }
                             },
                             "binding": {"kind": "uniform", "offset": 112, "size": 64}
+                        },
+                        {
+                            "name": "lightViewProj",
+                            "type": {
+                                "kind": "matrix",
+                                "rowCount": 4,
+                                "columnCount": 4,
+                                "elementType": {
+                                    "kind": "scalar",
+                                    "scalarType": "float32"
+                                }
+                            },
+                            "binding": {"kind": "uniform", "offset": 176, "size": 64}
+                        },
+                        {
+                            "name": "tonemapMode",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "uint32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 240, "size": 4}
+                        },
+                        {
+                            "name": "_pad0",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "uint32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 244, "size": 4}
+                        },
+                        {
+                            "name": "_pad1",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "uint32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 248, "size": 4}
+                        },
+                        {
+                            "name": "_pad2",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "uint32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 252, "size": 4}
                         }
                     ]
                 },
@@ -142,10 +187,55 @@
                                     }
                                 },
                                 "binding": {"kind": "uniform", "offset": 112, "size": 64}
+                            },
+                            {
+                                "name": "lightViewProj",
+                                "type": {
+                                    "kind": "matrix",
+                                    "rowCount": 4,
+                                    "columnCount": 4,
+                                    "elementType": {
+                                        "kind": "scalar",
+                                        "scalarType": "float32"
+                                    }
+                                },
+                                "binding": {"kind": "uniform", "offset": 176, "size": 64}
+                            },
+                            {
+                                "name": "tonemapMode",
+                                "type": {
+                                    "kind": "scalar",
+                                    "scalarType": "uint32"
+                                },
+                                "binding": {"kind": "uniform", "offset": 240, "size": 4}
+                            },
+                            {
+                                "name": "_pad0",
+                                "type": {
+                                    "kind": "scalar",
+                                    "scalarType": "uint32"
+                                },
+                                "binding": {"kind": "uniform", "offset": 244, "size": 4}
+                            },
+                            {
+                                "name": "_pad1",
+                                "type": {
+                                    "kind": "scalar",
+                                    "scalarType": "uint32"
+                                },
+                                "binding": {"kind": "uniform", "offset": 248, "size": 4}
+                            },
+                            {
+                                "name": "_pad2",
+                                "type": {
+                                    "kind": "scalar",
+                                    "scalarType": "uint32"
+                                },
+                                "binding": {"kind": "uniform", "offset": 252, "size": 4}
                             }
                         ]
                     },
-                    "binding": {"kind": "uniform", "offset": 0, "size": 176}
+                    "binding": {"kind": "uniform", "offset": 0, "size": 256}
                 }
             }
         },
@@ -384,130 +474,7 @@
             "bindings": [
                 {
                     "name": "frame",
-                    "binding": {"kind": "descriptorTableSlot", "index": 0}
-                },
-                {
-                    "name": "push",
-                    "binding": {"kind": "pushConstantBuffer", "index": 0}
-                }
-            ]
-        },
-        {
-            "name": "fragmentMain",
-            "stage": "fragment",
-            "parameters": [
-                {
-                    "name": "in",
-                    "stage": "fragment",
-                    "binding": {"kind": "varyingInput", "index": 0, "count": 5},
-                    "type": {
-                        "kind": "struct",
-                        "name": "MeshVaryings",
-                        "fields": [
-                            {
-                                "name": "clipPos",
-                                "type": {
-                                    "kind": "vector",
-                                    "elementCount": 4,
-                                    "elementType": {
-                                        "kind": "scalar",
-                                        "scalarType": "float32"
-                                    }
-                                },
-                                "semanticName": "SV_POSITION"
-                            },
-                            {
-                                "name": "color",
-                                "type": {
-                                    "kind": "vector",
-                                    "elementCount": 3,
-                                    "elementType": {
-                                        "kind": "scalar",
-                                        "scalarType": "float32"
-                                    }
-                                },
-                                "stage": "fragment",
-                                "binding": {"kind": "varyingInput", "index": 0},
-                                "semanticName": "COLOR"
-                            },
-                            {
-                                "name": "worldNormal",
-                                "type": {
-                                    "kind": "vector",
-                                    "elementCount": 3,
-                                    "elementType": {
-                                        "kind": "scalar",
-                                        "scalarType": "float32"
-                                    }
-                                },
-                                "stage": "fragment",
-                                "binding": {"kind": "varyingInput", "index": 1},
-                                "semanticName": "NORMAL"
-                            },
-                            {
-                                "name": "worldPos",
-                                "type": {
-                                    "kind": "vector",
-                                    "elementCount": 3,
-                                    "elementType": {
-                                        "kind": "scalar",
-                                        "scalarType": "float32"
-                                    }
-                                },
-                                "stage": "fragment",
-                                "binding": {"kind": "varyingInput", "index": 2},
-                                "semanticName": "TEXCOORD",
-                                "semanticIndex": 1
-                            },
-                            {
-                                "name": "uv",
-                                "type": {
-                                    "kind": "vector",
-                                    "elementCount": 2,
-                                    "elementType": {
-                                        "kind": "scalar",
-                                        "scalarType": "float32"
-                                    }
-                                },
-                                "stage": "fragment",
-                                "binding": {"kind": "varyingInput", "index": 3},
-                                "semanticName": "TEXCOORD"
-                            },
-                            {
-                                "name": "tangent",
-                                "type": {
-                                    "kind": "vector",
-                                    "elementCount": 3,
-                                    "elementType": {
-                                        "kind": "scalar",
-                                        "scalarType": "float32"
-                                    }
-                                },
-                                "stage": "fragment",
-                                "binding": {"kind": "varyingInput", "index": 4},
-                                "semanticName": "TANGENT"
-                            }
-                        ]
-                    }
-                }
-            ],
-            "result": {
-                "stage": "fragment",
-                "binding": {"kind": "varyingOutput", "index": 0},
-                "semanticName": "SV_TARGET",
-                "type": {
-                    "kind": "vector",
-                    "elementCount": 4,
-                    "elementType": {
-                        "kind": "scalar",
-                        "scalarType": "float32"
-                    }
-                }
-            },
-            "bindings": [
-                {
-                    "name": "frame",
-                    "binding": {"kind": "descriptorTableSlot", "index": 0}
+                    "binding": {"kind": "descriptorTableSlot", "index": 0, "used": 1}
                 },
                 {
                     "name": "push",

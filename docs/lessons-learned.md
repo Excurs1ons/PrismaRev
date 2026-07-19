@@ -134,3 +134,121 @@ Vulkan 渲染循环的核心是**同步原语的正确配对**。最容易出错
 | fence | `MAX_FRAMES_IN_FLIGHT` | `current_frame` 轮转 | CPU 等待 GPU 完成命令缓冲区 |
 
 **不要画蛇添足**：标准模式（fence 轮转 + per-image render_finished 信号量）已经足够，不需要 per-image fence 追踪。多余的同步机制反而会引入死锁。
+
+## 12. Vulkan 1.2 下 `VK_KHR_synchronization2` 必须显式启用且用 KHR 包装器
+
+**问题**：`Unable to load cmd_pipeline_barrier2` 非展开 panic（崩在 `create_and_upload_image` 的 `vkCmdPipelineBarrier2`）。
+
+**原因**：
+- 实例/设备创建使用 `API_VERSION_1_2`。在 1.2 上核心符号 `vkCmdPipelineBarrier2` **不在 dispatch 表**里，只有 `vkCmdPipelineBarrier2KHR` 可用（该扩展在 1.3 才进核心）。
+- 仅 `enabled_extension_names.push(ash::khr::synchronization2::NAME)` **不够**——`ash::Device::cmd_pipeline_barrier2` 只加载核心符号，仍 panic。
+
+**教训**：
+- 在 1.2 设备上用到 sync2 barrier，必须把扩展加进 `enabled_extension_names`，并且用 `ash::khr::synchronization2::Device::new(&instance, &device)` 拿到 KHR 包装器来调用。
+- 同理 `cmd_blit_image2` 在 1.2 上来自 `VK_KHR_copy_commands2`，也要用对应 KHR 包装器。
+- 不要试图把实例升到 1.3 来"取巧"——物理设备可能只支持 1.2，会直接导致 `createDevice` 失败。
+
+## 13. Slang 对 bindless 运行时数组会生成非法 SPIR-V
+
+**问题**：validation 层 `vkCreateShaderModule()` 报 `Invalid explicit layout decorations on type`（`%_runtimearr_XX ArrayStride 8`），VUID-StandaloneSpirv-None-10684。
+
+**原因**：`Texture2D[]` / `SamplerState[]`（`UniformConstant` 运行时数组）被 Slang 错误加上 `OpDecorate <arr> ArrayStride 8`。SPIR-V 校验禁止对"元素是 opaque 类型（image/sampler）的运行时数组"加显式 layout 装饰。该 bug 在 `spirv_1_3`~`spirv_1_6` 所有 profile 上都复现。
+
+**教训**：
+- 编译后必须过 `spirv-val`；这种错误在 debug validation 下才会暴露，release 不校验但驱动行为未定义。
+- 修复：用 `shaders/fix_spirv.py` 在编译后剥离——只删"元素是 `OpTypeImage`/`OpTypeSampler` 的运行时数组"的 `ArrayStride`；**SSBO / struct 数组的 `ArrayStride` 是合法的，必须保留**。
+- 编译脚本（`compile.bat` / `compile.sh`）要把 `fix_spirv.py` 串进 bindless 着色器的产物链。
+
+**手编陷阱（本次新增）**：不要手动调 `slangc` 时加 `-emit-spirv-directly`。该开关绕过了 `fix_spirv.py` 的后处理流程，会直接吐出带非法 `ArrayStride` 的 spv，立刻触发上面的 VUID-10684（`vkCreateShaderModule` 报 `Invalid explicit layout decorations on type for operand '%bindlessSrvs'`）。**统一用 `bash shaders/compile.sh`（或 `run.ps1`，内部调 compile.sh）重编**；手编只用 `compile_stage` 那组参数：`-target spirv -entry <name> -stage <vert|frag> -fvk-use-entrypoint-name`，**不带** `-emit-spirv-directly`。重编后用 `spirv-val.exe <file>.spv` 确认无输出（即无错误）再提交。
+
+## 14. 改了 shader 源文件却没生效？先确认三件事
+
+**问题**：反复改 `scene_bindless.slang` 的 IBL 常量，运行现象纹丝不动（"仍然灰白"）。
+
+**原因（按顺序排查）**：
+1. **shader 源文件名/编译脚本错误让 `.spv` 根本没重编**：`compile.sh` 有 `set -euo pipefail`，中途某个 shader 源文件名不对（如 `scene.slang` 实际是 `scene.vert.slang`/`scene.frag.slang`）会让脚本提前 `exit`，**后续 shader（含 bindless）没被重新生成**，磁盘上还是改之前的旧 `.spv`。profile 名字也要对：当前 slangc 接受 `spirv_1_5`，拒绝旧名 `sspirv_1_5`。
+2. **改错了 shader 文件**：sponza 走的是 `GraphRenderer` → `ScenePass`（`scene_bindless.frag.spv`）直连 swapchain。`GBufferPass`/`LightingPass`/`PostPass` 当前**没被 GraphRenderer 连接**，改 `lighting.slang`/`post.slang` 全是无效功。
+3. **`include_bytes!` 是编译期打进二进制的**：必须 `cargo build` 重编 Rust 才能拾取新 `.spv`。
+
+**教训**：
+- 改完**必须亲自用 `spirv-dis` 反编译 `.spv`，核对相关 `OpConstant %float` 确实变了**，不能只看 `compile.sh` 打印 "compiled"。
+- 改 shader 前先 grep 实际 `include_bytes!` 的 `FRAG_SPV`，以及 `GraphRenderer::render` / `add_pass` 里真正连接的 pass，确认改的是会被执行的 binary。
+- "屏蔽某段看还剩什么"是有效的隔离手段（屏蔽 IBL 后灰白消失 → 坐实 IBL 是元凶），但前提是隔离改的是对的文件。
+
+## 15. 色彩空间：SRGB swapchain 会对输出做二次 gamma 编码
+
+**问题**：unlit 直接 `return sampled.rgb`（纹理 sRGB 字节）后，红棕瓦片被提亮成**黄白**。
+
+**原因**：swapchain 是 `B8G8R8A8_SRGB`，Vulkan 会对 shader 输出再做一次 sRGB 编码（gamma 1/2.2）后显示。纹理以 `R8G8B8A8_UNORM`（sRGB 字节）上传，unlit 直接输出 → 被 swapchain 二次编码 → 偏亮偏黄白。
+**没有 post 参与**（本次 sponza 路径根本没接 PostPass），"黄白"不能归咎于 post 的 `pow(1/2.2)` —— 那是错误归因。
+
+**教训**：
+- unlit 想"所见即纹理"：输出前 `albedo = pow(sampled.rgb, 2.2)`（sRGB→linear），让 SRGB swapchain 编码回去 = 原纹理色。
+- **环境光"灰白污染"不是运算符问题**：漫反射 IBL `irradiance * albedo` 本来就是 multiply，正确。真问题是 `irradiance` 是个**恒定灰色常量**（如 0.06~0.12 灰），作为独立 add 项叠加，背光面只剩这层灰白。正确做法是从 `envCube` 采样真实辐照度（带环境色调），而非一坨灰常量。
+- **纹理格式应区分 sRGB / linear（根基性修复，仍待办）**：albedo / emissive 是 sRGB 数据，应上传为 `R8G8B8A8_SRGB`（采样自动转 linear，光照在 linear 空间算，输出 SRGB swapchain 编码回去）；normal / metallic-roughness 是 linear 数据，必须保持 `R8G8B8A8_UNORM`。当前所有纹理统一 `UNORM` 上传，是 PBR 色彩正确的根本缺陷，也是那套 gamma hack 的来源。
+
+## 总结（补充）
+
+本次里程碑暴露的问题集中在**扩展/校验/构建链路/色彩空间**四类，而非同步原语：
+
+| 类别 | 关键坑 | 验证手段 |
+|------|--------|----------|
+| 扩展加载 | 1.2 上 sync2/copy2 要显式启用 + KHR 包装器 | 崩溃栈指向 `load_erased` |
+| SPIR-V 合法性 | Slang 给 opaque 运行时数组加非法 `ArrayStride` | `spirv-val` 报 VUID-StandaloneSpirv |
+| 构建链路 | 编译脚本中途失败导致 `.spv` 没重编；改错文件 | `spirv-dis` 反编译核对常量 |
+| 色彩空间 | SRGB swapchain 二次 gamma 编码；IBL 灰常量 | unlit 输出 + 隔离 IBL |
+| 路径确认 | sponza 走 ScenePass 直连 swapchain，无 post | grep `include_bytes!` + `add_pass` |
+
+**先确认实际路径，再改代码**：所有"改了没生效 / 归因错"都源于先入为主假设了渲染路径。改 shader 前先确认它确实被编译、被连接、被二进制包含。
+
+## 16. 阴影正交投影的 z 映射 + near plane 必须自洽（否则条带/消失）
+
+**背景**：`DirectionalLight` 的 `light_direction` 在 shader 里是 **direction TO the light**（`dot(n, light_dir)` 受光，见 `scene_bindless.slang` 453/455 行），正交阴影投影用 Vulkan 的 `[0,1]` 深度。
+
+**踩过的三个坑（按出现顺序）**：
+
+1. **z 映射公式错 → 远处饱和成条带**：原 `proj[2][2]=-0.5/dist, proj[2][3]=0.5` 把 `view_z∈[-2*dist,0]` 映射到 `[1.5,0.5]`，远端 `clip.z>1` 被裁/饱和到 1.0，地面出现规则条带（shadow acne 类）。正确 Vulkan 0..1 正交：
+   ```rust
+   // view_z = -z (z 为距光正距离, ∈[n,f]); near=n, far=f
+   proj[2][2] = -1.0/(f-n);  proj[2][3] = -n/(f-n);
+   ```
+2. **near = dist 把原点裁掉 → 阴影完全消失**：`dist = half*2`，光在距原点 `dist` 处，`near=dist` 等于把 near plane 放在原点 → 原点及周围全在 near 之前被裁 → shadow map 保持清空的 1.0 → `SampleCmpLevelZero` 永远返回 lit。必须把 `near` 设得**小于**原点距离，例如 `n = 0.5*dist`（原点落在 depth≈0.17），`f = 3*dist` 覆盖背面几何。
+3. **x/y 半宽太小 → 阴影只在中心一小块**：正交半宽用传入的 `half`(=12) 只有 24×24，多数场景几何落在 `uv` 外被当成受光。半宽取 `dist`(=24) 覆盖 48×48。
+
+**教训**：正交阴影投影的 near/far 围绕"光到原点的距离"取值，且 near 必须留余量；z 映射用标准 0..1 正交而非手写缩放。改完用 `spirv-val` + 实跑双确认（条带=精度/偏置，消失=near 裁切，小块=半宽不足）。
+
+## 17. 阴影相机眼位置符号：eye = +direction_to_light（不是 -）
+
+**问题**：把光源眼放在 `-l*dist`（背光侧）看向原点，等于从**暗面**渲染深度图，阴影整体投到受光的错误一侧 —— 表现为"全部错位"。
+
+**定位依据**：`scene_bindless.slang` 第 455 行 `n_dot_l = max(dot(n, light_dir), 0.0)` 证明 `light_dir` 是"指向光源的方向"，所以光源在 `+l` 侧。阴影相机应放在 `+l*dist` 看向原点：
+```rust
+let eye = [l[0]*dist, l[1]*dist, l[2]*dist];  // NOT -l*dist
+```
+**教训**：判定光源方向别靠"看起来应该朝向哪"，直接查 shader 里 `light_dir` 的真实用法（受光点积还是光线传播方向）。方向反了是"整体错位"而非"消失"，容易和 z 映射问题混淆——两条独立排查。
+
+## 18. Vulkan 下 shadow map 采样**不要**翻转 Y
+
+**问题**：`sample_shadow` 里 `uv.y = 1.0 - (proj.y*0.5+0.5)`，导致阴影在垂直方向整体镜像偏移（"有阴影但错位"）。
+
+**根因**：shadow map 用**正交投影且没做 y-flip**（`proj[1][1]=+inv`，不同于主相机透视的 `p[1][1]=-inv_tan` Vulkan y-flip）。Vulkan framebuffer 原点在左上，NDC y=-1 已映射到纹理 v=0，**渲染时 `proj.y` 直接对应 `v=proj.y*0.5+0.5`，无需翻转**。occluder（写深度）和 receiver（采样）用同一个 `lightViewProj`，`proj.y` 计算相同，必须查**同一 texel**：
+```hlsl
+float2 uv = float2(proj.x * 0.5 + 0.5, proj.y * 0.5 + 0.5);  // 去掉 1.0 - 翻转
+```
+X 方向自始没有翻转，本就正确，所以错位只在垂直方向——与现象吻合。
+
+**教训**：shadow map 的 Y 翻转不能照搬"GL 习惯"。判定要不要翻：看生成 shadow map 的投影**有没有** y-flip。有（主相机类）→ 采样侧翻；没有（正交光投影）→ 采样侧不翻。
+
+## 19. 调试阴影的优先级顺序（避免来回打转）
+
+按这个顺序排查，每步一个变量：
+1. **先确认阴影被启用**：默认 `debug_flags` 必须含 `PBR_FLAG_SHADOW`(bit8) 且 `PBR_FLAG_DIRECT`(bit0) 也开，否则没有"直接光"可被遮挡，开阴影也看不见变化（本次默认 `0` 即纯 baseColor，是"开了没反应"的真因）。
+2. **阴影全无 vs 全错位 vs 垂直偏移 vs 条带** 各自对应不同根因：
+   - 全无/只在中心小块 → near 裁切 / 半宽不足（§16）
+   - 全部反向错位 → eye 符号（§17）
+   - 垂直镜像偏移 → 采样 Y 翻转（§18）
+   - 规则条带 → z 映射饱和 + 深度偏置太小（§16 + §20）
+3. **深度偏置**：D32_SFLOAT 下 `depth_bias_constant_factor` 乘格式最小可表示差（≈2^-23），`1.0` 实际≈0，地面大平面必出 acne 条带。用 `constant_factor≈64, slope_factor≈8`（可据 acne/peter-panning 微调方向）。
+
+**横向经验**：阴影链路（方向推导 → 投影 z → near/far → 半宽 → eye 符号 → 采样 Y 翻转 → 深度偏置）每一环独立，改一处只验证一处现象，别同时动多个变量。
+

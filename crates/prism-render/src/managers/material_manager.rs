@@ -41,18 +41,26 @@ new_key_type! {
     pub struct MaterialHandle;
 }
 
-/// Shader-visible material record. The Slang `Material` struct in
-/// `shaders/slang/bindless.slang` mirrors this exactly; field order and
+/// Shader-visible material record. The Slang `GpuMaterial` struct in
+/// `shaders/slang/scene_frag.slang` mirrors this exactly; field order and
 /// size are pinned by the static assertion below.
+///
+/// Layout (96 bytes, 16-byte aligned):
+///   @0   base_color[4]                          (float4)
+///   @16  metallic_roughness_emissive[4]          (float4: x=metallic, y=roughness, z=emissive, w=emissive_strength)
+///   @32  albedo_idx, normal_idx, mr_idx, emissive_idx  (4 x uint)
+///   @48  transmission_factor[4]                  (float4: x=transmission, y=ior, z=translucency, w=anisotropy)
+///   @64  clearcoat[4]                            (float4: x=clearcoat, y=clearcoat_roughness, z=reserved, w=reserved)
+///   @80  transmission_tex_idx, clearcoat_tex_idx, _pad0, _pad1  (4 x uint)
 #[repr(C, align(16))]
 #[derive(Copy, Clone, Debug)]
 pub struct GpuMaterial {
-    /// Linear-space base color (rgba). The shader applies sRGB→linear
+    /// Linear-space base color (rgba). The shader applies sRGB?linear
     /// on the sampled albedo texture, so the base color and texture path
     /// agree on the working color space.
     pub base_color: [f32; 4],
-    /// Packed metallic/roughness/emissive: x=metallic, y=roughness,
-    /// z=emissive intensity, w=unused.
+    /// Packed metallic/roughness/emissive/emissive_strength: x=metallic,
+    /// y=roughness, z=emissive intensity, w=emissive_strength multiplier.
     pub metallic_roughness_emissive: [f32; 4],
     /// Bindless SRV slot of the albedo (base color) texture. Use
     /// `TextureHandle::INVALID.0` for "no texture, use the scalar
@@ -68,17 +76,24 @@ pub struct GpuMaterial {
     /// Bindless SRV slot of the emissive texture. `INVALID` for "use the
     /// scalar emissive field".
     pub emissive_idx: u32,
+    // ---- Second 48-byte block (advanced PBR) ----
+    /// Packed transmission/ior/translucency/anisotropy.
+    /// x=transmission factor, y=index of refraction, z=translucency, w=anisotropy.
+    pub transmission_factor: [f32; 4],
+    /// Packed clearcoat parameters.
+    /// x=clearcoat factor, y=clearcoat roughness, z=reserved, w=reserved.
+    pub clearcoat: [f32; 4],
+    /// Bindless SRV slot of the transmission texture (reserved, 0xFFFFFFFF if none).
+    pub transmission_tex_idx: u32,
+    /// Bindless SRV slot of the clearcoat texture (reserved, 0xFFFFFFFF if none).
+    pub clearcoat_tex_idx: u32,
+    /// Padding to 96 bytes.
+    pub _pad0: u32,
+    pub _pad1: u32,
 }
 
-// Padding matches the shader: 4 floats × 16 bytes after the texture
-// handles for any future expansion (clearcoat, sheen, etc.). Sized to
-// keep the struct a multiple of 16 bytes, which is what
-// `STORAGE_BUFFER` layouts in the shader will assume.
-
-// `base_color` is offset 0 (16 bytes), `metallic_roughness_emissive` is
-// offset 16 (16 bytes), the four u32s start at offset 32 (16 bytes) and
-// the struct is 48 bytes. The static assertion below pins that.
-const _: [(); 48] = [(); std::mem::size_of::<GpuMaterial>()];
+// Static assertions for size and alignment.
+const _: [(); 96] = [(); std::mem::size_of::<GpuMaterial>()];
 const _: [(); 16] = [(); std::mem::align_of::<GpuMaterial>()];
 
 /// Plain-data material description used at the manager boundary. The
@@ -95,6 +110,14 @@ pub struct MaterialUploadInput {
     pub normal_tex: Option<u32>,
     pub metallic_roughness_tex: Option<u32>,
     pub emissive_tex: Option<u32>,
+    // Advanced PBR fields
+    pub transmission: f32,
+    pub ior: f32,
+    pub translucency: f32,
+    pub anisotropy: f32,
+    pub clearcoat: f32,
+    pub clearcoat_roughness: f32,
+    pub emissive_strength: f32,
 }
 
 impl MaterialUploadInput {
@@ -107,12 +130,23 @@ impl MaterialUploadInput {
                 self.metallic,
                 self.roughness,
                 self.emissive[0],
-                0.0,
+                self.emissive_strength,
             ],
             albedo_idx: self.albedo_tex.unwrap_or(u32::MAX),
             normal_idx: self.normal_tex.unwrap_or(u32::MAX),
             metallic_roughness_idx: self.metallic_roughness_tex.unwrap_or(u32::MAX),
             emissive_idx: self.emissive_tex.unwrap_or(u32::MAX),
+            transmission_factor: [
+                self.transmission,
+                self.ior,
+                self.translucency,
+                self.anisotropy,
+            ],
+            clearcoat: [self.clearcoat, self.clearcoat_roughness, 0.0, 0.0],
+            transmission_tex_idx: u32::MAX,
+            clearcoat_tex_idx: u32::MAX,
+            _pad0: 0,
+            _pad1: 0,
         }
     }
 }
@@ -164,6 +198,12 @@ impl RenderMaterialManager {
                 normal_idx: u32::MAX,
                 metallic_roughness_idx: u32::MAX,
                 emissive_idx: u32::MAX,
+                transmission_factor: [0.0; 4],
+                clearcoat: [0.0; 4],
+                transmission_tex_idx: u32::MAX,
+                clearcoat_tex_idx: u32::MAX,
+                _pad0: 0,
+                _pad1: 0,
             };
             MATERIAL_SSBO_MAX as usize
         ];
@@ -199,7 +239,11 @@ impl RenderMaterialManager {
 
     /// Update an existing material in place. Marks its slot dirty so the
     /// next `upload` re-writes the SSBO.
-    pub fn update(&mut self, handle: MaterialHandle, data: MaterialUploadInput) -> anyhow::Result<()> {
+    pub fn update(
+        &mut self,
+        handle: MaterialHandle,
+        data: MaterialUploadInput,
+    ) -> anyhow::Result<()> {
         let slot = self.slot_of(handle).ok_or_else(|| {
             anyhow::anyhow!("RenderMaterialManager::update: unknown handle {handle:?}")
         })?;
@@ -212,7 +256,10 @@ impl RenderMaterialManager {
     /// Translate a CPU handle to its SSBO slot. Returns `None` if the
     /// handle is unknown (it has been removed, or was never registered).
     pub fn slot_of(&self, handle: MaterialHandle) -> Option<u32> {
-        self.slots.iter().position(|h| *h == Some(handle)).map(|i| i as u32)
+        self.slots
+            .iter()
+            .position(|h| *h == Some(handle))
+            .map(|i| i as u32)
     }
 
     /// Underlying Vulkan buffer. The descriptor set the renderer builds
@@ -235,12 +282,8 @@ impl RenderMaterialManager {
         // bother with the dirty range optimization yet because the
         // upload size is so small (48KB) that the savings are noise.
         let total_size = self.gpu_data.len() * std::mem::size_of::<GpuMaterial>();
-        let bytes = unsafe {
-            std::slice::from_raw_parts(
-                self.gpu_data.as_ptr() as *const u8,
-                total_size,
-            )
-        };
+        let bytes =
+            unsafe { std::slice::from_raw_parts(self.gpu_data.as_ptr() as *const u8, total_size) };
         unsafe {
             buffer::upload_to_buffer(
                 context,
@@ -271,6 +314,12 @@ impl RenderMaterialManager {
                 normal_idx: u32::MAX,
                 metallic_roughness_idx: u32::MAX,
                 emissive_idx: u32::MAX,
+                transmission_factor: [0.0; 4],
+                clearcoat: [0.0; 4],
+                transmission_tex_idx: u32::MAX,
+                clearcoat_tex_idx: u32::MAX,
+                _pad0: 0,
+                _pad1: 0,
             };
             self.dirty_slots[slot as usize] = true;
             self.slots[slot as usize] = None;
@@ -329,12 +378,19 @@ mod tests {
             normal_tex: None,
             metallic_roughness_tex: None,
             emissive_tex: None,
+            transmission: 0.0,
+            ior: 1.5,
+            translucency: 0.0,
+            anisotropy: 0.0,
+            clearcoat: 0.0,
+            clearcoat_roughness: 0.0,
+            emissive_strength: 1.0,
         }
     }
 
     #[test]
-    fn gpu_material_layout_is_48_bytes() {
-        assert_eq!(std::mem::size_of::<GpuMaterial>(), 48);
+    fn gpu_material_layout_is_96_bytes() {
+        assert_eq!(std::mem::size_of::<GpuMaterial>(), 96);
         assert_eq!(std::mem::align_of::<GpuMaterial>(), 16);
     }
 
@@ -347,6 +403,12 @@ mod tests {
             normal_idx: 0,
             metallic_roughness_idx: 0,
             emissive_idx: 0,
+            transmission_factor: [0.0; 4],
+            clearcoat: [0.0; 4],
+            transmission_tex_idx: 0,
+            clearcoat_tex_idx: 0,
+            _pad0: 0,
+            _pad1: 0,
         };
         let base_ptr = &m as *const _ as usize;
         assert_eq!((&m.base_color as *const _ as usize) - base_ptr, 0);
@@ -361,6 +423,15 @@ mod tests {
             40
         );
         assert_eq!((&m.emissive_idx as *const _ as usize) - base_ptr, 44);
+        assert_eq!((&m.transmission_factor as *const _ as usize) - base_ptr, 48);
+        assert_eq!((&m.clearcoat as *const _ as usize) - base_ptr, 64);
+        assert_eq!(
+            (&m.transmission_tex_idx as *const _ as usize) - base_ptr,
+            80
+        );
+        assert_eq!((&m.clearcoat_tex_idx as *const _ as usize) - base_ptr, 84);
+        assert_eq!((&m._pad0 as *const _ as usize) - base_ptr, 88);
+        assert_eq!((&m._pad1 as *const _ as usize) - base_ptr, 92);
     }
 
     #[test]
@@ -370,10 +441,20 @@ mod tests {
         assert_eq!(gpu.base_color, [1.0, 0.5, 0.2, 1.0]);
         assert_eq!(gpu.metallic_roughness_emissive[0], 0.8);
         assert_eq!(gpu.metallic_roughness_emissive[1], 0.3);
+        assert_eq!(gpu.metallic_roughness_emissive[3], 1.0); // emissive_strength
         assert_eq!(gpu.albedo_idx, u32::MAX);
         assert_eq!(gpu.normal_idx, u32::MAX);
         assert_eq!(gpu.metallic_roughness_idx, u32::MAX);
         assert_eq!(gpu.emissive_idx, u32::MAX);
+        // Advanced fields
+        assert_eq!(gpu.transmission_factor[0], 0.0);
+        assert_eq!(gpu.transmission_factor[1], 1.5);
+        assert_eq!(gpu.transmission_factor[2], 0.0);
+        assert_eq!(gpu.transmission_factor[3], 0.0);
+        assert_eq!(gpu.clearcoat[0], 0.0);
+        assert_eq!(gpu.clearcoat[1], 0.0);
+        assert_eq!(gpu.transmission_tex_idx, u32::MAX);
+        assert_eq!(gpu.clearcoat_tex_idx, u32::MAX);
     }
 
     #[test]
@@ -390,5 +471,27 @@ mod tests {
         assert_eq!(gpu.normal_idx, 11);
         assert_eq!(gpu.metallic_roughness_idx, 13);
         assert_eq!(gpu.emissive_idx, 17);
+    }
+
+    #[test]
+    fn to_gpu_packs_advanced_fields() {
+        let input = MaterialUploadInput {
+            transmission: 0.5,
+            ior: 1.45,
+            translucency: 0.3,
+            anisotropy: 0.6,
+            clearcoat: 0.2,
+            clearcoat_roughness: 0.1,
+            emissive_strength: 2.5,
+            ..default_input()
+        };
+        let gpu = input.to_gpu();
+        assert_eq!(gpu.transmission_factor[0], 0.5);
+        assert_eq!(gpu.transmission_factor[1], 1.45);
+        assert_eq!(gpu.transmission_factor[2], 0.3);
+        assert_eq!(gpu.transmission_factor[3], 0.6);
+        assert_eq!(gpu.clearcoat[0], 0.2);
+        assert_eq!(gpu.clearcoat[1], 0.1);
+        assert_eq!(gpu.metallic_roughness_emissive[3], 2.5);
     }
 }

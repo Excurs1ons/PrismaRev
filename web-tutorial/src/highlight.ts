@@ -79,6 +79,28 @@ export const md = markdownit({
 // 覆盖默认的 fence 渲染器，注入工具条。
 md.renderer.rules.fence = renderFence;
 
+// 给文章标题自动生成锚点 id（供右侧 TOC 跳转）。
+// 中文标题保留，用 "-" 连接；重复 id 自动加序号。
+const usedHeadingIds = new Set<string>();
+const slugifyHeading = (s: string): string =>
+  s
+    .trim()
+    .toLowerCase()
+    .replace(/[^\w一-龥]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+md.renderer.rules.heading_open = (tokens, idx, options, _env, self) => {
+  const inline = tokens[idx + 1];
+  const text = inline?.content ?? "";
+  let base = slugifyHeading(text) || `section-${idx}`;
+  let id = base;
+  let n = 1;
+  while (usedHeadingIds.has(id)) id = `${base}-${++n}`;
+  usedHeadingIds.add(id);
+  tokens[idx].attrSet("id", id);
+  return self.renderToken(tokens, idx, options);
+};
+
 // 让 :::tip / :::warn / :::danger / :::info 容器语法可用。
 // 解析形如：:::tip 标题\n内容\n:::
 const containerPlugin = (mdLocal: typeof md) => {
@@ -174,6 +196,7 @@ exercisePlugin(md);
 
 // 渲染工具：把 markdown 字符串转成 HTML，并在渲染后绑定复制按钮事件。
 export function renderMarkdown(src: string): string {
+  usedHeadingIds.clear();
   return md.render(src);
 }
 

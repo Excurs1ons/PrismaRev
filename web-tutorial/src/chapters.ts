@@ -100,8 +100,8 @@ export const CHAPTERS: ChapterMeta[] = [
   },
   {
     id: "pbr",
-    title: "11 · PBR + IBL 进阶",
-    subtitle: "HDR 环境、bindless 与 debug view",
+    title: "11 · PBR：从纯色到物理渲染",
+    subtitle: "六步渐进、自解释代码、IBL 与 bindless",
     file: "11-pbr.md",
     group: "引擎",
   },

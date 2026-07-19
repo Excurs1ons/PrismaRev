@@ -70,6 +70,51 @@
                                 }
                             },
                             "binding": {"kind": "uniform", "offset": 112, "size": 64}
+                        },
+                        {
+                            "name": "lightViewProj",
+                            "type": {
+                                "kind": "matrix",
+                                "rowCount": 4,
+                                "columnCount": 4,
+                                "elementType": {
+                                    "kind": "scalar",
+                                    "scalarType": "float32"
+                                }
+                            },
+                            "binding": {"kind": "uniform", "offset": 176, "size": 64}
+                        },
+                        {
+                            "name": "tonemapMode",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "uint32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 240, "size": 4}
+                        },
+                        {
+                            "name": "_pad0",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "uint32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 244, "size": 4}
+                        },
+                        {
+                            "name": "_pad1",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "uint32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 248, "size": 4}
+                        },
+                        {
+                            "name": "_pad2",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "uint32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 252, "size": 4}
                         }
                     ]
                 },
@@ -142,10 +187,55 @@
                                     }
                                 },
                                 "binding": {"kind": "uniform", "offset": 112, "size": 64}
+                            },
+                            {
+                                "name": "lightViewProj",
+                                "type": {
+                                    "kind": "matrix",
+                                    "rowCount": 4,
+                                    "columnCount": 4,
+                                    "elementType": {
+                                        "kind": "scalar",
+                                        "scalarType": "float32"
+                                    }
+                                },
+                                "binding": {"kind": "uniform", "offset": 176, "size": 64}
+                            },
+                            {
+                                "name": "tonemapMode",
+                                "type": {
+                                    "kind": "scalar",
+                                    "scalarType": "uint32"
+                                },
+                                "binding": {"kind": "uniform", "offset": 240, "size": 4}
+                            },
+                            {
+                                "name": "_pad0",
+                                "type": {
+                                    "kind": "scalar",
+                                    "scalarType": "uint32"
+                                },
+                                "binding": {"kind": "uniform", "offset": 244, "size": 4}
+                            },
+                            {
+                                "name": "_pad1",
+                                "type": {
+                                    "kind": "scalar",
+                                    "scalarType": "uint32"
+                                },
+                                "binding": {"kind": "uniform", "offset": 248, "size": 4}
+                            },
+                            {
+                                "name": "_pad2",
+                                "type": {
+                                    "kind": "scalar",
+                                    "scalarType": "uint32"
+                                },
+                                "binding": {"kind": "uniform", "offset": 252, "size": 4}
                             }
                         ]
                     },
-                    "binding": {"kind": "uniform", "offset": 0, "size": 176}
+                    "binding": {"kind": "uniform", "offset": 0, "size": 256}
                 }
             }
         },
@@ -214,6 +304,100 @@
                                 "scalarType": "uint32"
                             },
                             "binding": {"kind": "uniform", "offset": 44, "size": 4}
+                        },
+                        {
+                            "name": "transmission_factor",
+                            "type": {
+                                "kind": "vector",
+                                "elementCount": 4,
+                                "elementType": {
+                                    "kind": "scalar",
+                                    "scalarType": "float32"
+                                }
+                            },
+                            "binding": {"kind": "uniform", "offset": 48, "size": 16}
+                        },
+                        {
+                            "name": "clearcoat",
+                            "type": {
+                                "kind": "vector",
+                                "elementCount": 4,
+                                "elementType": {
+                                    "kind": "scalar",
+                                    "scalarType": "float32"
+                                }
+                            },
+                            "binding": {"kind": "uniform", "offset": 64, "size": 16}
+                        },
+                        {
+                            "name": "transmission_tex_idx",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "uint32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 80, "size": 4}
+                        },
+                        {
+                            "name": "clearcoat_tex_idx",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "uint32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 84, "size": 4}
+                        },
+                        {
+                            "name": "_pad0",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "uint32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 88, "size": 4}
+                        },
+                        {
+                            "name": "_pad1",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "uint32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 92, "size": 4}
+                        }
+                    ]
+                }
+            }
+        },
+        {
+            "name": "pointLights",
+            "binding": {"kind": "descriptorTableSlot", "index": 2},
+            "type": {
+                "kind": "resource",
+                "baseShape": "structuredBuffer",
+                "resultType": {
+                    "kind": "struct",
+                    "name": "GpuLight",
+                    "fields": [
+                        {
+                            "name": "position",
+                            "type": {
+                                "kind": "vector",
+                                "elementCount": 4,
+                                "elementType": {
+                                    "kind": "scalar",
+                                    "scalarType": "float32"
+                                }
+                            },
+                            "binding": {"kind": "uniform", "offset": 0, "size": 16}
+                        },
+                        {
+                            "name": "color",
+                            "type": {
+                                "kind": "vector",
+                                "elementCount": 4,
+                                "elementType": {
+                                    "kind": "scalar",
+                                    "scalarType": "float32"
+                                }
+                            },
+                            "binding": {"kind": "uniform", "offset": 16, "size": 16}
                         }
                     ]
                 }
@@ -264,6 +448,57 @@
                         "scalarType": "float32"
                     }
                 }
+            }
+        },
+        {
+            "name": "irradianceCube",
+            "binding": {"kind": "descriptorTableSlot", "space": 2, "index": 1},
+            "type": {
+                "kind": "resource",
+                "baseShape": "textureCube",
+                "resultType": {
+                    "kind": "vector",
+                    "elementCount": 4,
+                    "elementType": {
+                        "kind": "scalar",
+                        "scalarType": "float32"
+                    }
+                }
+            }
+        },
+        {
+            "name": "prefilteredCube",
+            "binding": {"kind": "descriptorTableSlot", "space": 2, "index": 2},
+            "type": {
+                "kind": "resource",
+                "baseShape": "textureCube",
+                "resultType": {
+                    "kind": "vector",
+                    "elementCount": 4,
+                    "elementType": {
+                        "kind": "scalar",
+                        "scalarType": "float32"
+                    }
+                }
+            }
+        },
+        {
+            "name": "shadowMap",
+            "binding": {"kind": "descriptorTableSlot", "space": 3, "index": 0},
+            "type": {
+                "kind": "resource",
+                "baseShape": "texture2D",
+                "resultType": {
+                    "kind": "scalar",
+                    "scalarType": "float32"
+                }
+            }
+        },
+        {
+            "name": "shadowSampler",
+            "binding": {"kind": "descriptorTableSlot", "space": 3, "index": 1},
+            "type": {
+                "kind": "samplerState"
             }
         },
         {
@@ -321,16 +556,24 @@
                             "binding": {"kind": "uniform", "offset": 76, "size": 4}
                         },
                         {
+                            "name": "debug_flags",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "uint32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 80, "size": 4}
+                        },
+                        {
                             "name": "_padding",
                             "type": {
                                 "kind": "vector",
-                                "elementCount": 4,
+                                "elementCount": 3,
                                 "elementType": {
                                     "kind": "scalar",
                                     "scalarType": "uint32"
                                 }
                             },
-                            "binding": {"kind": "uniform", "offset": 80, "size": 16}
+                            "binding": {"kind": "uniform", "offset": 96, "size": 12}
                         }
                     ]
                 },
@@ -388,20 +631,28 @@
                                 "binding": {"kind": "uniform", "offset": 76, "size": 4}
                             },
                             {
+                                "name": "debug_flags",
+                                "type": {
+                                    "kind": "scalar",
+                                    "scalarType": "uint32"
+                                },
+                                "binding": {"kind": "uniform", "offset": 80, "size": 4}
+                            },
+                            {
                                 "name": "_padding",
                                 "type": {
                                     "kind": "vector",
-                                    "elementCount": 4,
+                                    "elementCount": 3,
                                     "elementType": {
                                         "kind": "scalar",
                                         "scalarType": "uint32"
                                     }
                                 },
-                                "binding": {"kind": "uniform", "offset": 80, "size": 16}
+                                "binding": {"kind": "uniform", "offset": 96, "size": 12}
                             }
                         ]
                     },
-                    "binding": {"kind": "uniform", "offset": 0, "size": 96}
+                    "binding": {"kind": "uniform", "offset": 0, "size": 112}
                 }
             }
         }
@@ -529,6 +780,10 @@
                     "binding": {"kind": "descriptorTableSlot", "index": 1, "used": 1}
                 },
                 {
+                    "name": "pointLights",
+                    "binding": {"kind": "descriptorTableSlot", "index": 2, "used": 1}
+                },
+                {
                     "name": "globalSamplers",
                     "binding": {"kind": "descriptorTableSlot", "space": 1, "index": 0, "used": 1}
                 },
@@ -539,6 +794,22 @@
                 {
                     "name": "envCube",
                     "binding": {"kind": "descriptorTableSlot", "space": 2, "index": 0, "used": 0}
+                },
+                {
+                    "name": "irradianceCube",
+                    "binding": {"kind": "descriptorTableSlot", "space": 2, "index": 1, "used": 1}
+                },
+                {
+                    "name": "prefilteredCube",
+                    "binding": {"kind": "descriptorTableSlot", "space": 2, "index": 2, "used": 1}
+                },
+                {
+                    "name": "shadowMap",
+                    "binding": {"kind": "descriptorTableSlot", "space": 3, "index": 0, "used": 1}
+                },
+                {
+                    "name": "shadowSampler",
+                    "binding": {"kind": "descriptorTableSlot", "space": 3, "index": 1, "used": 1}
                 },
                 {
                     "name": "pc",
