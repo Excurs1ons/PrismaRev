@@ -186,8 +186,14 @@ float sample_shadow(float3 world_pos)
     if (light_space.w <= 0.0)
         return 1.0;
     float3 proj = light_space.xyz / light_space.w;
-    // NDC [-1,1] -> UV [0,1]; flip Y for Vulkan's top-left origin.
-    float2 uv = float2(proj.x * 0.5 + 0.5, 1.0 - (proj.y * 0.5 + 0.5));
+    // NDC [-1,1] -> UV [0,1]. The shadow map was rendered with an
+    // orthographic projection that has NO y-flip (unlike the camera's
+    // perspective, which flips via p[1][1] = -inv_tan). In Vulkan the
+    // framebuffer origin is top-left, so NDC y=-1 already maps to v=0 with no
+    // extra flip. Flipping here would mirror the lookup vertically and offset
+    // every shadow. Both occluder and receiver use the same lightViewProj, so
+    // they must sample the same texel: uv = proj.xy * 0.5 + 0.5.
+    float2 uv = float2(proj.x * 0.5 + 0.5, proj.y * 0.5 + 0.5);
     float depth = proj.z; // orthographic light projection -> already [0,1]
     if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 || depth > 1.0)
         return 1.0;

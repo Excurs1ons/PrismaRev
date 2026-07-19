@@ -159,6 +159,8 @@ Vulkan 渲染循环的核心是**同步原语的正确配对**。最容易出错
 - 修复：用 `shaders/fix_spirv.py` 在编译后剥离——只删"元素是 `OpTypeImage`/`OpTypeSampler` 的运行时数组"的 `ArrayStride`；**SSBO / struct 数组的 `ArrayStride` 是合法的，必须保留**。
 - 编译脚本（`compile.bat` / `compile.sh`）要把 `fix_spirv.py` 串进 bindless 着色器的产物链。
 
+**手编陷阱（本次新增）**：不要手动调 `slangc` 时加 `-emit-spirv-directly`。该开关绕过了 `fix_spirv.py` 的后处理流程，会直接吐出带非法 `ArrayStride` 的 spv，立刻触发上面的 VUID-10684（`vkCreateShaderModule` 报 `Invalid explicit layout decorations on type for operand '%bindlessSrvs'`）。**统一用 `bash shaders/compile.sh`（或 `run.ps1`，内部调 compile.sh）重编**；手编只用 `compile_stage` 那组参数：`-target spirv -entry <name> -stage <vert|frag> -fvk-use-entrypoint-name`，**不带** `-emit-spirv-directly`。重编后用 `spirv-val.exe <file>.spv` 确认无输出（即无错误）再提交。
+
 ## 14. 改了 shader 源文件却没生效？先确认三件事
 
 **问题**：反复改 `scene_bindless.slang` 的 IBL 常量，运行现象纹丝不动（"仍然灰白"）。
@@ -198,3 +200,55 @@ Vulkan 渲染循环的核心是**同步原语的正确配对**。最容易出错
 | 路径确认 | sponza 走 ScenePass 直连 swapchain，无 post | grep `include_bytes!` + `add_pass` |
 
 **先确认实际路径，再改代码**：所有"改了没生效 / 归因错"都源于先入为主假设了渲染路径。改 shader 前先确认它确实被编译、被连接、被二进制包含。
+
+## 16. 阴影正交投影的 z 映射 + near plane 必须自洽（否则条带/消失）
+
+**背景**：`DirectionalLight` 的 `light_direction` 在 shader 里是 **direction TO the light**（`dot(n, light_dir)` 受光，见 `scene_bindless.slang` 453/455 行），正交阴影投影用 Vulkan 的 `[0,1]` 深度。
+
+**踩过的三个坑（按出现顺序）**：
+
+1. **z 映射公式错 → 远处饱和成条带**：原 `proj[2][2]=-0.5/dist, proj[2][3]=0.5` 把 `view_z∈[-2*dist,0]` 映射到 `[1.5,0.5]`，远端 `clip.z>1` 被裁/饱和到 1.0，地面出现规则条带（shadow acne 类）。正确 Vulkan 0..1 正交：
+   ```rust
+   // view_z = -z (z 为距光正距离, ∈[n,f]); near=n, far=f
+   proj[2][2] = -1.0/(f-n);  proj[2][3] = -n/(f-n);
+   ```
+2. **near = dist 把原点裁掉 → 阴影完全消失**：`dist = half*2`，光在距原点 `dist` 处，`near=dist` 等于把 near plane 放在原点 → 原点及周围全在 near 之前被裁 → shadow map 保持清空的 1.0 → `SampleCmpLevelZero` 永远返回 lit。必须把 `near` 设得**小于**原点距离，例如 `n = 0.5*dist`（原点落在 depth≈0.17），`f = 3*dist` 覆盖背面几何。
+3. **x/y 半宽太小 → 阴影只在中心一小块**：正交半宽用传入的 `half`(=12) 只有 24×24，多数场景几何落在 `uv` 外被当成受光。半宽取 `dist`(=24) 覆盖 48×48。
+
+**教训**：正交阴影投影的 near/far 围绕"光到原点的距离"取值，且 near 必须留余量；z 映射用标准 0..1 正交而非手写缩放。改完用 `spirv-val` + 实跑双确认（条带=精度/偏置，消失=near 裁切，小块=半宽不足）。
+
+## 17. 阴影相机眼位置符号：eye = +direction_to_light（不是 -）
+
+**问题**：把光源眼放在 `-l*dist`（背光侧）看向原点，等于从**暗面**渲染深度图，阴影整体投到受光的错误一侧 —— 表现为"全部错位"。
+
+**定位依据**：`scene_bindless.slang` 第 455 行 `n_dot_l = max(dot(n, light_dir), 0.0)` 证明 `light_dir` 是"指向光源的方向"，所以光源在 `+l` 侧。阴影相机应放在 `+l*dist` 看向原点：
+```rust
+let eye = [l[0]*dist, l[1]*dist, l[2]*dist];  // NOT -l*dist
+```
+**教训**：判定光源方向别靠"看起来应该朝向哪"，直接查 shader 里 `light_dir` 的真实用法（受光点积还是光线传播方向）。方向反了是"整体错位"而非"消失"，容易和 z 映射问题混淆——两条独立排查。
+
+## 18. Vulkan 下 shadow map 采样**不要**翻转 Y
+
+**问题**：`sample_shadow` 里 `uv.y = 1.0 - (proj.y*0.5+0.5)`，导致阴影在垂直方向整体镜像偏移（"有阴影但错位"）。
+
+**根因**：shadow map 用**正交投影且没做 y-flip**（`proj[1][1]=+inv`，不同于主相机透视的 `p[1][1]=-inv_tan` Vulkan y-flip）。Vulkan framebuffer 原点在左上，NDC y=-1 已映射到纹理 v=0，**渲染时 `proj.y` 直接对应 `v=proj.y*0.5+0.5`，无需翻转**。occluder（写深度）和 receiver（采样）用同一个 `lightViewProj`，`proj.y` 计算相同，必须查**同一 texel**：
+```hlsl
+float2 uv = float2(proj.x * 0.5 + 0.5, proj.y * 0.5 + 0.5);  // 去掉 1.0 - 翻转
+```
+X 方向自始没有翻转，本就正确，所以错位只在垂直方向——与现象吻合。
+
+**教训**：shadow map 的 Y 翻转不能照搬"GL 习惯"。判定要不要翻：看生成 shadow map 的投影**有没有** y-flip。有（主相机类）→ 采样侧翻；没有（正交光投影）→ 采样侧不翻。
+
+## 19. 调试阴影的优先级顺序（避免来回打转）
+
+按这个顺序排查，每步一个变量：
+1. **先确认阴影被启用**：默认 `debug_flags` 必须含 `PBR_FLAG_SHADOW`(bit8) 且 `PBR_FLAG_DIRECT`(bit0) 也开，否则没有"直接光"可被遮挡，开阴影也看不见变化（本次默认 `0` 即纯 baseColor，是"开了没反应"的真因）。
+2. **阴影全无 vs 全错位 vs 垂直偏移 vs 条带** 各自对应不同根因：
+   - 全无/只在中心小块 → near 裁切 / 半宽不足（§16）
+   - 全部反向错位 → eye 符号（§17）
+   - 垂直镜像偏移 → 采样 Y 翻转（§18）
+   - 规则条带 → z 映射饱和 + 深度偏置太小（§16 + §20）
+3. **深度偏置**：D32_SFLOAT 下 `depth_bias_constant_factor` 乘格式最小可表示差（≈2^-23），`1.0` 实际≈0，地面大平面必出 acne 条带。用 `constant_factor≈64, slope_factor≈8`（可据 acne/peter-panning 微调方向）。
+
+**横向经验**：阴影链路（方向推导 → 投影 z → near/far → 半宽 → eye 符号 → 采样 Y 翻转 → 深度偏置）每一环独立，改一处只验证一处现象，别同时动多个变量。
+

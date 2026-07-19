@@ -412,9 +412,12 @@ fn light_view_proj(light_dir: &[f32; 4], half: f32) -> [[f32; 4]; 4] {
     let len = (l[0] * l[0] + l[1] * l[1] + l[2] * l[2]).max(1e-6);
     let l = [l[0] / len, l[1] / len, l[2] / len];
 
-    // Light position: opposite the direction-to-light, at distance `half*2`.
+    // Light position: AT the light (direction TO the light is `l`), looking
+    // back toward the origin. Eye = +l * dist (NOT -l: placing it on the
+    // anti-light side would render the shadow map from the dark side and flip
+    // every shadow to the wrong, lit side).
     let dist = half * 2.0;
-    let eye = [-l[0] * dist, -l[1] * dist, -l[2] * dist];
+    let eye = [l[0] * dist, l[1] * dist, l[2] * dist];
     let center = [0.0, 0.0, 0.0];
     let up = if (l[1] * l[1]) > 0.99 {
         [0.0, 0.0, 1.0]
@@ -434,14 +437,25 @@ fn light_view_proj(light_dir: &[f32; 4], half: f32) -> [[f32; 4]; 4] {
         [-dot3(right, eye), -dot3(true_up, eye), dot3(fwd, eye), 1.0],
     ];
 
-    // Orthographic projection: x,y in [-half, half]; z in [0, 2*dist] mapped to
-    // [0,1] (Vulkan clip depth). Column-major.
-    let inv = 1.0 / half;
+    // Orthographic projection. The light looks down -fwd, so scene geometry
+    // sits at negative view-space z (in front of the light). We map the depth
+    // range [near, far] to Vulkan's [0, 1] clip depth with the standard 0..1
+    // orthographic form:
+    //   clip.z = -z/(f-n) - n/(f-n)   (for view_z = -z, z in [n, f])
+    // `dist` is the light-to-origin distance, so the origin sits at view_z =
+    // -dist. near must be SMALLER than that or the whole scene is clipped by
+    // the near plane (shadow map stays cleared -> nothing is ever shadowed).
+    // Use near = 0.5*dist (origin lands at ~0.17 depth, well inside) and far =
+    // 3*dist to cover geometry behind the origin. Column-major.
+    let ortho_half = dist;
+    let inv = 1.0 / ortho_half;
+    let n = 0.5 * dist;
+    let f = 3.0 * dist;
     let proj = [
         [inv, 0.0, 0.0, 0.0],
         [0.0, inv, 0.0, 0.0],
-        [0.0, 0.0, -0.5 / dist, 0.0],
-        [0.0, 0.0, 0.5, 1.0],
+        [0.0, 0.0, -1.0 / (f - n), 0.0],
+        [0.0, 0.0, -n / (f - n), 1.0],
     ];
 
     mat_mul(&proj, &view)

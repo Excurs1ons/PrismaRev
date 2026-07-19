@@ -224,6 +224,23 @@ fn save_scene_state_file(world: &prism_ecs::World) {
     inspector: crate::inspector::Inspector,
 }
 
+/// Default PBR component mask. A normally-lit PBR scene: direct lighting,
+/// IBL (diffuse irradiance + specular prefiltered), specular/metal/roughness
+/// response, multi-light, and rasterized shadow occlusion are all on.
+/// Bits mirror `PBR_FLAG_*` in `shaders/slang/scene_bindless.slang`.
+/// Shadow (bit 8) is enabled by default so direct-light occlusion is always
+/// visible — without it, surfaces blocked from the sun stay lit. Ambient
+/// occlusion of the IBL/skybox term is a separate (deferred) feature.
+pub const DEFAULT_PBR_FLAGS: u32 = (1 << 0)  // Direct
+    | (1 << 1)  // AmbientIBL
+    | (1 << 2)  // Specular
+    | (1 << 3)  // Metallic
+    | (1 << 4)  // Roughness
+    | (1 << 5)  // DiffuseIBL
+    | (1 << 6)  // SpecularIBL
+    | (1 << 7)  // MultiLight
+    | (1 << 8); // Shadow (direct-light occlusion, on by default)
+
 impl App {
     pub fn new() -> Self {
         Self {
@@ -238,7 +255,7 @@ impl App {
             env_bytes: None,
             debug_mode: DebugMode::Final,
             normal_space: NormalSpace::World,
-            debug_flags: 0,
+            debug_flags: DEFAULT_PBR_FLAGS,
             show_ui: true,
             scene_store: prism_asset::SceneStore::new(),
             scene_loaded: false,
@@ -1122,6 +1139,8 @@ impl App {
         // cache). Must happen before `GraphRenderer::render` so `&mut World`
         // is still borrowable.
         if self.inspector.show {
+            self.inspector.debug_flags = self.debug_flags;
+            self.inspector.show_ui = self.show_ui;
             let window = self.window.clone();
             let inspector = &mut self.inspector;
             let world = self.world.as_mut();

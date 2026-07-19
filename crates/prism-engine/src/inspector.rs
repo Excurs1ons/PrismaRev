@@ -35,6 +35,12 @@ pub struct Inspector {
     /// y = yaw, z = roll. Cached per-entity, same pattern as rotation.
     dir_light_euler_deg: [f32; 3],
     dir_light_cached_for: Option<Entity>,
+    /// Current PBR debug flag bitmask (mirrors `App::debug_flags`). Updated
+    /// each frame from the app so the Debug window can show active flags.
+    pub debug_flags: u32,
+    /// Whether the UI overlay is active (debug overlay). Toggles with H.
+    /// Passed by `App` each frame so the Debug window can reflect current state.
+    pub show_ui: bool,
 }
 
 impl Default for Inspector {
@@ -46,6 +52,8 @@ impl Default for Inspector {
             rotation_cached_for: None,
             dir_light_euler_deg: [0.0; 3],
             dir_light_cached_for: None,
+            debug_flags: crate::app::DEFAULT_PBR_FLAGS,
+            show_ui: true,
         }
     }
 }
@@ -130,7 +138,60 @@ impl Inspector {
                 });
             });
 
-        // --- Quick hint (bottom-right corner) ---
+        // --- Debug mode status ---
+        egui::Window::new("Debug")
+            .id("inspector_debug".into())
+            .default_pos([430.0, 16.0])
+            .default_size([300.0, 200.0])
+            .resizable(true)
+            .movable(true)
+            .collapsible(true)
+            .frame(window_frame.clone())
+            .show(ctx, |ui| {
+                ui.heading("Debug Mode");
+                ui.separator();
+                ui.label("PBR component toggles (keys 1-9, Shift+1-4):");
+                let flags = [
+                    ("Direct", 0, "Primary diffuse/specular from dir light"),
+                    ("AmbientIBL", 1, "Image-based lighting ambient"),
+                    ("Specular", 2, "Specular reflections"),
+                    ("Metallic", 3, "Metallic material response"),
+                    ("Roughness", 4, "Microfacet roughness"),
+                    ("DiffuseIBL", 5, "Diffuse irradiance from env"),
+                    ("SpecularIBL", 6, "Prefiltered specular"),
+                    ("MultiLight", 7, "Multiple light sources"),
+                    ("Shadow", 8, "Shadow masking (shadow map)"),
+                    ("Emissive", 9, "Self-emissive surfaces"),
+                    ("Transmission", 10, "Transmission (refraction)"),
+                    ("Translucency", 11, "Translucent scattering"),
+                    ("Anisotropy", 12, "Anisotropic materials"),
+                    ("Clear Coat", 13, "Clear coat layer"),
+                ];
+                for (name, bit, desc) in flags.iter() {
+                    let active = (self.debug_flags >> bit) & 1 == 1;
+                    let color = if active {
+                        egui::Color32::from_rgb(80, 180, 80)
+                    } else {
+                        egui::Color32::from_rgb(80, 80, 80)
+                    };
+                    let key_label = match bit {
+                        0 => "1", 1 => "2", 2 => "3", 3 => "4", 4 => "5",
+                        5 => "6", 6 => "7", 7 => "8", 8 => "9", 9 => "0",
+                        10 => "Shift+1", 11 => "Shift+2", 12 => "Shift+3", 13 => "Shift+4",
+                        _ => "?",
+                    };
+                    ui.horizontal(|ui| {
+                        ui.colored_label(color, format!("{} (key {})", name, key_label));
+                        ui.label(format!("- {}", desc));
+                    });
+                }
+                ui.separator();
+                let h_mode = if self.show_ui { "ON" } else { "OFF" };
+                ui.label(format!("H: UI overlay - {}", h_mode));
+                let inspector_mode = if self.show { "ON" } else { "OFF" };
+                ui.label(format!("F1: Inspector - {}", inspector_mode));
+                ui.label("Ctrl+S: Save scene state");
+            });
         let hint_frame = egui::Frame {
             fill: egui::Color32::from_black_alpha(100),
             corner_radius: egui::CornerRadius::same(4u8),

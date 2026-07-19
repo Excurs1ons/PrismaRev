@@ -866,8 +866,13 @@ impl RenderPassNode for ShadowMapPass {
                 subpass: 0,
                 cull_mode: Some(vk::CullModeFlags::FRONT),
                 depth_bias_enable: Some(true),
-                depth_bias_constant_factor: Some(1.0),
-                depth_bias_slope_factor: Some(1.0),
+                // D32_SFLOAT: the constant factor is scaled by the format's
+                // minimum representable delta (~2^-23), so a value of 1.0 is
+                // effectively zero and produces shadow-acne banding on large
+                // planes (e.g. the ground). Use values large enough to push
+                // the stored depth clear of self-intersection.
+                depth_bias_constant_factor: Some(64.0),
+                depth_bias_slope_factor: Some(8.0),
                 depth_write_enable: Some(true),
                 color_attachment_count: Some(0),
             })
