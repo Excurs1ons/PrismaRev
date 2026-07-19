@@ -79,28 +79,72 @@ impl Inspector {
 
     /// The actual egui layout. Separate from `run` so it can be called
     /// directly in tests.
+    ///
+    /// Uses floating windows with a translucent dark frame so the 3D scene
+    /// behind remains visible during live edits. Windows are movable and
+    /// resizable.
     fn ui(&mut self, ctx: &Context, world: &mut World, camera: &mut Camera) {
-        egui::TopBottomPanel::top("inspector_menu").show(ctx, |ui| {
-            ui.menu_button("Inspector", |ui| {
-                ui.label("F1 toggles this panel");
+        // Semi-transparent dark frame shared by all inspector windows.
+        let window_frame = egui::Frame {
+            fill: egui::Color32::from_black_alpha(200),
+            stroke: egui::Stroke::new(1.0_f32, egui::Color32::from_gray(80)),
+            corner_radius: egui::CornerRadius::same(6u8),
+            inner_margin: egui::Margin::symmetric(8_i8, 4_i8),
+            ..Default::default()
+        };
+
+        // --- Entity list (left) ---
+        egui::Window::new("Entities")
+            .id("inspector_entities".into())
+            .default_pos([16.0, 16.0])
+            .default_size([200.0, 300.0])
+            .resizable(true)
+            .movable(true)
+            .collapsible(true)
+            .frame(window_frame.clone())
+            .show(ctx, |ui| {
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    self.entity_list(ui, world);
+                });
             });
-        });
 
-        egui::SidePanel::left("inspector_entities").show(ctx, |ui| {
-            ui.heading("Entities");
-            ui.separator();
-            self.entity_list(ui, world);
-        });
+        // --- Editor panel (right) ---
+        egui::Window::new("Editor")
+            .id("inspector_editor".into())
+            .default_pos([230.0, 16.0])
+            .default_size([320.0, 400.0])
+            .resizable(true)
+            .movable(true)
+            .collapsible(true)
+            .frame(window_frame.clone())
+            .show(ctx, |ui| {
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    if let Some(entity) = self.selected {
+                        self.entity_editor(ui, world, entity);
+                    } else {
+                        ui.label("Select an entity in the list.");
+                    }
+                    ui.separator();
+                    self.camera_editor(ui, camera);
+                });
+            });
 
-        egui::CentralPanel::default().show(ctx, |ui| {
-            if let Some(entity) = self.selected {
-                self.entity_editor(ui, world, entity);
-            } else {
-                ui.label("Select an entity on the left.");
-            }
-            ui.separator();
-            self.camera_editor(ui, camera);
-        });
+        // --- Quick hint (bottom-right corner) ---
+        let hint_frame = egui::Frame {
+            fill: egui::Color32::from_black_alpha(100),
+            corner_radius: egui::CornerRadius::same(4u8),
+            inner_margin: egui::Margin::symmetric(6_i8, 3_i8),
+            ..Default::default()
+        };
+        egui::Area::new("inspector_hint".into())
+            .anchor(egui::Align2::RIGHT_BOTTOM, [-8.0, -8.0])
+            .movable(false)
+            .interactable(false)
+            .show(ctx, |ui| {
+                hint_frame.show(ui, |ui| {
+                    ui.label("F1: toggle  |  Ctrl+S: save");
+                });
+            });
     }
 
     /// Build the scrollable entity list from all light/transform-bearing
