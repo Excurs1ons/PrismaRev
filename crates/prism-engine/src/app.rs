@@ -19,12 +19,12 @@ use winit::raw_window_handle::HasDisplayHandle;
 use winit::window::{Window, WindowId};
 
 use prism_ecs::World;
-use prism_render::{DebugMode, DrawItem, FrameUBOData, GraphRenderer, NormalSpace, Vertex};
+use prism_render::{DebugMode, GraphRenderer, NormalSpace};
 
 use crate::camera::{Camera, FlyCamera};
 use crate::input::{InputState, MouseButton};
 use crate::render_system::{
-    render_system, DirectionalLight, MeshHandle, MeshManager, PbrMaterial, PointLight, Transform,
+    render_system, DirectionalLight, MeshManager, PointLight, Transform,
 };
 
 /// Parse a `key = "value"` TOML line (after the `key` prefix has been stripped)
@@ -100,60 +100,28 @@ fn load_env_bytes() -> Option<Vec<u8>> {
 }
 
 // ---------------------------------------------------------------------------
-// Cube geometry (24 vertices, 36 indices)
+// Default scene contents
 // ---------------------------------------------------------------------------
 
-/// Build the default demo scene: a sphere on the left and two cubes on the
-/// center/right, each as an ECS entity referencing a GPU mesh via
-/// [`MeshHandle`]. Returns the populated world, the engine-side mesh owner, and
-/// a vector mapping each engine `MeshHandle` index to the renderer-side
-/// `prism_render::managers::MeshHandle` (so the draw path can resolve demo
-/// meshes through the RenderGraph renderer).
-fn create_test_scene(
-    renderer: &mut GraphRenderer,
-) -> (World, MeshManager, Vec<prism_render::managers::MeshHandle>) {
-    // Register demo meshes into the renderer's RenderMeshManager so the
-    // RenderGraph draw path can resolve them by handle.
-    let sphere_handle = renderer
-        .register_mesh(&mesh_upload_input_for_demo_sphere(sphere_mesh(32, 24)))
-        .expect("register sphere mesh");
-    let cube_handle = renderer
-        .register_mesh(&mesh_upload_input_for_demo(&(
-            cube_vertices(),
-            cube_indices(),
-        )))
-        .expect("register cube mesh");
-
-    let mut world = World::new();
-    // Left: sphere, center: PBR cube, right: cube.
-    let configs = [
-        ([-2.5, 0.0, 0.0], 0usize, false),
-        ([0.0, 0.0, 0.0], 1, true), // middle -> PBR + IBL
-        ([2.5, 0.0, 0.0], 1, false),
-    ];
-    for &(pos, mesh_idx, pbr) in &configs {
-        let entity = world.spawn();
-        world.insert(
-            entity,
-            Transform {
-                translation: pos,
-                ..Default::default()
-            },
-        );
-        world.insert(entity, MeshHandle(mesh_idx));
-        if pbr {
-            world.insert(entity, PbrMaterial::default());
-        }
-    }
-
+/// Populate the ECS `world` with the default scene contents: a directional
+/// light and a few point lights. The camera lives as a `World` resource (see
+/// `ensure_window`); actual geometry comes from the glTF scene loaded via
+/// `load_scene_from_manifest` / `load_demo_scene` (the real "main scene"), not
+/// from hardcoded demo meshes.
+///
+/// This replaces the old `create_test_scene`, which baked sphere/cube demo
+/// meshes into the world and was tightly coupled to `App` (see task notes).
+fn create_default_scene(world: &mut World) {
     // Directional light (single entity). Drives the per-frame UBO's
-    // `light_direction` / `light_color` / ambient factor. Editable at runtime
-    // via the egui inspector.
+    // `light_direction` / `light_color` / ambient factor. Its orientation is an
+    // XYZ Euler triple (`DirectionalLight::euler_xyz`); the render path derives
+    // the world-space direction from it. Editable at runtime via the inspector.
     let dir_entity = world.spawn();
     world.insert(dir_entity, DirectionalLight::default());
 
-    // Three point lights, matching the pre-refactor hard-coded values in
-    // ScenePass::set_resources. Editable at runtime via the inspector.
+    // A few point lights so the PBR scene has local highlights. Positions may be
+    // overridden by a sibling `Transform` at render time. Editable via the
+    // inspector.
     let point_lights = [
         PointLight {
             position: [2.0, 3.0, 2.0],
@@ -186,233 +154,29 @@ fn create_test_scene(
         world.insert(entity, pl);
     }
 
-    // Engine-side MeshManager still owns the raw `Mesh` for destruction on exit.
-    let mut mesh_manager = MeshManager::new();
-    let (sphere_verts, sphere_idx) = sphere_mesh(32, 24);
-    mesh_manager.add(
-        renderer
-            .create_mesh(&sphere_verts, Some(&sphere_idx))
-            .expect("create sphere mesh"),
-    );
-    mesh_manager.add(
-        renderer
-            .create_mesh(&cube_vertices(), Some(&cube_indices()))
-            .expect("create cube mesh"),
-    );
-
-    // Index by engine MeshHandle: 0 = sphere, 1 = cube.
-    let renderer_handles = vec![sphere_handle, cube_handle];
-    (world, mesh_manager, renderer_handles)
+    // Camera entity (free-fly by default). Editable at runtime via the
+    // inspector like any other scene object.
+    let camera_entity = world.spawn();
+    world.insert(camera_entity, Camera::Fly(FlyCamera::new(16.0 / 9.0)));
 }
 
-/// Persist the current ECS + camera state to scene_state.json.
-fn save_scene_state_file(world: &prism_ecs::World, camera: &crate::camera::Camera) {
-    crate::scene_state::save_scene_state(world, camera);
+/// Persist the current ECS state (including Camera resource) to scene_state.json.
+fn save_scene_state_file(world: &prism_ecs::World) {
+    crate::scene_state::save_scene_state(world);
     log::info!("scene state saved");
 }
 
-fn cube_vertices() -> Vec<Vertex> {
-    // Each face: 4 corners with that face's normal, each gets a face color.
-    let colors: [[f32; 3]; 6] = [
-        [1.0, 0.2, 0.2], // front:  red
-        [0.2, 1.0, 0.2], // back:   green
-        [0.2, 0.2, 1.0], // right:  blue
-        [1.0, 1.0, 0.2], // left:   yellow
-        [0.2, 1.0, 1.0], // top:    cyan
-        [1.0, 0.2, 1.0], // bottom: magenta
-    ];
-    let (positions, normals): ([[f32; 3]; 24], [[f32; 3]; 24]) = (
-        [
-            [-0.5, -0.5, 0.5],
-            [0.5, -0.5, 0.5],
-            [0.5, 0.5, 0.5],
-            [-0.5, 0.5, 0.5], // front
-            [-0.5, 0.5, -0.5],
-            [0.5, 0.5, -0.5],
-            [0.5, -0.5, -0.5],
-            [-0.5, -0.5, -0.5], // back
-            [0.5, -0.5, 0.5],
-            [0.5, -0.5, -0.5],
-            [0.5, 0.5, -0.5],
-            [0.5, 0.5, 0.5], // right
-            [-0.5, -0.5, -0.5],
-            [-0.5, -0.5, 0.5],
-            [-0.5, 0.5, 0.5],
-            [-0.5, 0.5, -0.5], // left
-            [-0.5, 0.5, 0.5],
-            [0.5, 0.5, 0.5],
-            [0.5, 0.5, -0.5],
-            [-0.5, 0.5, -0.5], // top
-            [-0.5, -0.5, -0.5],
-            [0.5, -0.5, -0.5],
-            [0.5, -0.5, 0.5],
-            [-0.5, -0.5, 0.5], // bottom
-        ],
-        [
-            [0.0, 0.0, 1.0],
-            [0.0, 0.0, 1.0],
-            [0.0, 0.0, 1.0],
-            [0.0, 0.0, 1.0],
-            [0.0, 0.0, -1.0],
-            [0.0, 0.0, -1.0],
-            [0.0, 0.0, -1.0],
-            [0.0, 0.0, -1.0],
-            [1.0, 0.0, 0.0],
-            [1.0, 0.0, 0.0],
-            [1.0, 0.0, 0.0],
-            [1.0, 0.0, 0.0],
-            [-1.0, 0.0, 0.0],
-            [-1.0, 0.0, 0.0],
-            [-1.0, 0.0, 0.0],
-            [-1.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0],
-            [0.0, 1.0, 0.0],
-            [0.0, 1.0, 0.0],
-            [0.0, 1.0, 0.0],
-            [0.0, -1.0, 0.0],
-            [0.0, -1.0, 0.0],
-            [0.0, -1.0, 0.0],
-            [0.0, -1.0, 0.0],
-        ],
-    );
-
-    let mut verts = Vec::with_capacity(24);
-    // Per-corner UVs (planar mapping per face).
-    let uvs: [[f32; 2]; 4] = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
-    for (face, &color) in colors.iter().enumerate() {
-        let tangent = face_tangent(normals[face * 4]);
-        for (corner, &uv) in uvs.iter().enumerate() {
-            let idx = face * 4 + corner;
-            verts.push(Vertex {
-                position: positions[idx],
-                normal: normals[idx],
-                color,
-                uv,
-                tangent,
-            });
-        }
-    }
-    verts
-}
-
-/// Pick a stable tangent for a face given its normal (used for the PBR debug
-/// `Normal` (Tangent) view). Not strictly orthonormalized against the normal
-/// but sufficient for visualization.
-fn face_tangent(n: [f32; 3]) -> [f32; 3] {
-    let mut up = [0.0f32, 1.0, 0.0];
-    if (n[0] * n[0] + n[1] * n[1]).sqrt() < 1e-4 {
-        up = [1.0, 0.0, 0.0];
-    }
-    let t = [
-        up[1] * n[2] - up[2] * n[1],
-        up[2] * n[0] - up[0] * n[2],
-        up[0] * n[1] - up[1] * n[0],
-    ];
-    let len = (t[0] * t[0] + t[1] * t[1] + t[2] * t[2]).sqrt();
-    if len < 1e-6 {
-        [1.0, 0.0, 0.0]
-    } else {
-        [t[0] / len, t[1] / len, t[2] / len]
-    }
-}
-
-fn cube_indices() -> Vec<u32> {
-    let mut indices = Vec::with_capacity(36);
-    for face in 0..6 {
-        let base = (face * 4) as u32;
-        indices.extend_from_slice(&[base, base + 1, base + 2, base + 2, base + 3, base]);
-    }
-    indices
-}
-
-/// Build a `prism_render` `MeshUploadInput` from the demo cube geometry so it
-/// can be registered into the RenderGraph renderer's `RenderMeshManager`.
-fn mesh_upload_input_for_demo(
-    cube: &(Vec<Vertex>, Vec<u32>),
-) -> prism_render::managers::MeshUploadInput {
-    let (verts, indices) = cube;
-    prism_render::managers::MeshUploadInput {
-        positions: verts.iter().map(|v| v.position).collect(),
-        normals: verts.iter().map(|v| v.normal).collect(),
-        colors: verts.iter().map(|v| v.color).collect(),
-        uvs: verts.iter().map(|v| v.uv).collect(),
-        tangents: verts.iter().map(|v| v.tangent).collect(),
-        indices: indices.clone(),
-    }
-}
-
-/// Build a `prism_render` `MeshUploadInput` from the demo sphere geometry.
-fn mesh_upload_input_for_demo_sphere(
-    sphere: (Vec<Vertex>, Vec<u32>),
-) -> prism_render::managers::MeshUploadInput {
-    let (verts, indices) = sphere;
-    prism_render::managers::MeshUploadInput {
-        positions: verts.iter().map(|v| v.position).collect(),
-        normals: verts.iter().map(|v| v.normal).collect(),
-        colors: verts.iter().map(|v| v.color).collect(),
-        uvs: verts.iter().map(|v| v.uv).collect(),
-        tangents: verts.iter().map(|v| v.tangent).collect(),
-        indices,
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Sphere geometry (UV sphere)
-// ---------------------------------------------------------------------------
-
-fn sphere_mesh(sectors: u32, stacks: u32) -> (Vec<Vertex>, Vec<u32>) {
-    let r = 0.5;
-    let mut verts = Vec::new();
-    let mut indices = Vec::new();
-
-    for i in 0..=stacks {
-        let phi = i as f32 * std::f32::consts::PI / stacks as f32;
-        let (sp, cp) = phi.sin_cos();
-        for j in 0..=sectors {
-            let theta = j as f32 * 2.0 * std::f32::consts::PI / sectors as f32;
-            let (st, ct) = theta.sin_cos();
-            let pos = [r * sp * ct, r * cp, r * sp * st];
-            // Analytic tangent along increasing theta (u direction).
-            let mut tangent = [-sp * st, 0.0, sp * ct];
-            let tlen = (tangent[0] * tangent[0] + tangent[2] * tangent[2]).sqrt();
-            if tlen > 1e-6 {
-                tangent = [tangent[0] / tlen, 0.0, tangent[2] / tlen];
-            }
-            let u = theta / (2.0 * std::f32::consts::PI);
-            let v = phi / std::f32::consts::PI;
-            verts.push(Vertex {
-                position: pos,
-                normal: [pos[0] / r, pos[1] / r, pos[2] / r],
-                color: [0.85, 0.85, 0.85], // light gray
-                uv: [u, v],
-                tangent,
-            });
-        }
-    }
-
-    for i in 0..stacks {
-        for j in 0..sectors {
-            let first = i * (sectors + 1) + j;
-            let second = first + sectors + 1;
-            indices.extend_from_slice(&[first, first + 1, second]);
-            indices.extend_from_slice(&[first + 1, second + 1, second]);
-        }
-    }
-
-    (verts, indices)
-}
 
 // ---------------------------------------------------------------------------
 // App
 // ---------------------------------------------------------------------------
 
-pub struct App {
-    window: Option<Arc<Window>>,
-    renderer: Option<GraphRenderer>,
-    world: Option<World>,
-    mesh_manager: MeshManager,
-    input_state: InputState,
-    camera: Camera,
+    pub struct App {
+        window: Option<Arc<Window>>,
+        renderer: Option<GraphRenderer>,
+        world: Option<World>,
+        mesh_manager: MeshManager,
+        input_state: InputState,
     needs_resize: bool,
     start: Instant,
     /// Timestamp of the previous frame, used to compute per-frame `dt` for the
@@ -437,7 +201,7 @@ pub struct App {
     /// Set to `true` once `App::load_demo_scene` has run; subsequent
     /// `resumed` callbacks reuse the registered resources instead of
     /// re-creating them.
-    demo_objects_loaded: bool,
+    scene_loaded: bool,
     /// Asset-handle → render-handle maps built by `load_demo_scene`, plus the
     /// resolved draw list consumed by `GraphRenderer::render`. These let
     /// `render_one_frame` draw the CPU-side scene without re-registering.
@@ -446,10 +210,6 @@ pub struct App {
     mat_map: std::collections::HashMap<prism_asset::MaterialHandle, u32>,
     tex_map: std::collections::HashMap<prism_asset::TextureHandle, u32>,
     draw_items: Vec<prism_render::SceneDrawItem>,
-    /// Renderer-side mesh handles for the procedural demo, indexed by the
-    /// engine `MeshHandle` (0 = sphere, 1 = cube). Used to build the demo
-    /// `DrawItem` list each frame.
-    demo_mesh_handles: Vec<prism_render::managers::MeshHandle>,
     /// Fatal error that halted rendering. Once set, the app stops rendering
     /// and shows a modal crash dialog (see [`App::show_fatal_dialog`]); the
     /// event loop exits after the user confirms. `Some` also gates
@@ -472,7 +232,6 @@ impl App {
             world: None,
             mesh_manager: MeshManager::new(),
             input_state: InputState::new(),
-            camera: Camera::Fly(FlyCamera::new(16.0 / 9.0)),
             needs_resize: false,
             start: Instant::now(),
             last_frame: None,
@@ -482,12 +241,11 @@ impl App {
             debug_flags: 0,
             show_ui: true,
             scene_store: prism_asset::SceneStore::new(),
-            demo_objects_loaded: false,
+            scene_loaded: false,
             mesh_map: std::collections::HashMap::new(),
             mat_map: std::collections::HashMap::new(),
             tex_map: std::collections::HashMap::new(),
             draw_items: Vec::new(),
-            demo_mesh_handles: Vec::new(),
             fatal_error: None,
             camera_state_restored: false,
             inspector: crate::inspector::Inspector::new(),
@@ -565,7 +323,7 @@ impl App {
             .collect();
         let extensions_ref: Vec<&str> = extensions.iter().map(|s| s.as_str()).collect();
 
-        let mut renderer = GraphRenderer::new(
+        let renderer = GraphRenderer::new(
             extensions_ref,
             window.as_ref(),
             window.as_ref(),
@@ -573,26 +331,20 @@ impl App {
         )
         .expect("failed to create renderer");
 
-        // --- Build test scene: sphere + cubes ---
-        let (world, mesh_manager, demo_mesh_handles) = create_test_scene(&mut renderer);
+        // --- Build default ECS scene (lights + camera) ---
+        let mut world = World::new();
+        create_default_scene(&mut world);
 
         self.world = Some(world);
-        self.mesh_manager = mesh_manager;
-        self.demo_mesh_handles = demo_mesh_handles;
         self.window = Some(window);
         self.renderer = Some(renderer);
-
-        // Create the free-fly camera with an aspect ratio matching the initial
-        // window size.
-        self.camera = Camera::Fly(FlyCamera::new(1600.0 / 900.0));
 
         // Restore the saved scene state (camera, lights, transforms) from
         // scene_state.json. Overrides the default camera and ECS data.
         // Must happen before scene-from-manifest placement below.
         let mut state_loaded = false;
         if let Some(world) = self.world.as_mut() {
-            state_loaded =
-                crate::scene_state::load_scene_state(world, &mut self.camera);
+            state_loaded = crate::scene_state::load_scene_state(world);
         }
         self.camera_state_restored = state_loaded;
 
@@ -688,7 +440,11 @@ impl App {
                 // saved camera state was restored — the user's last viewpoint
                 // should be preserved across restarts.
                 if !self.camera_state_restored {
-                    self.camera.set_position([0.0, 2.5, 18.0]);
+                    if let Some(world) = self.world.as_mut() {
+                        if let Some((_, camera)) = world.query_mut::<Camera>().next() {
+                            camera.set_position([0.0, 2.5, 18.0]);
+                        }
+                    }
                 }
                 return;
             }
@@ -711,7 +467,7 @@ impl App {
     // is about getting the manager lifecycle + scene loading path
     // covered.
     pub fn load_demo_scene(&mut self, scene: prism_asset::SceneHandle) {
-        if self.demo_objects_loaded {
+        if self.scene_loaded {
             log::debug!("App::load_demo_scene: already loaded, skipping");
             return;
         }
@@ -923,7 +679,7 @@ impl App {
         // The `scene` argument is retained for API symmetry; all instances in
         // it are already reflected into `draw_items` above.
         let _ = scene;
-        self.demo_objects_loaded = true;
+        self.scene_loaded = true;
         log::info!(
             "App::load_demo_scene: registered {} mesh(es), {} material(s), {} texture(s); {} draw items",
             self.scene_store.meshes().count(),
@@ -1059,7 +815,11 @@ impl ApplicationHandler for App {
                 );
                 if size.width > 0 && size.height > 0 {
                     let aspect = size.width as f32 / size.height as f32;
-                    self.camera.set_aspect(aspect);
+                    if let Some(world) = self.world.as_mut() {
+                        if let Some((_, camera)) = world.query_mut::<Camera>().next() {
+                            camera.set_aspect(aspect);
+                        }
+                    }
                 }
             }
             WindowEvent::RedrawRequested => {
@@ -1195,7 +955,7 @@ impl ApplicationHandler for App {
                         {
                             // Ctrl+S: manually save scene state
                             if let Some(world) = self.world.as_ref() {
-                                save_scene_state_file(world, &self.camera);
+                                save_scene_state_file(world);
                             }
                         }
                     }
@@ -1227,7 +987,7 @@ impl ApplicationHandler for App {
             // Persist ECS scene state (camera, lights, transforms) for the
             // next launch. No-op when world is not yet initialised.
             if let Some(world) = self.world.as_ref() {
-                save_scene_state_file(world, &self.camera);
+                save_scene_state_file(world);
             }
 
             // Wait for the GPU to finish any in-flight work (e.g. the last
@@ -1329,15 +1089,18 @@ impl App {
             }
         }
 
-        // Update camera from input state (events populated by window_event).
-        // Free-fly camera uses a per-frame dt for frame-rate-independent speed.
         let now = Instant::now();
         let dt = match self.last_frame {
             Some(prev) => (now - prev).as_secs_f32().clamp(0.0, 0.1),
             None => 1.0 / 60.0,
         };
         self.last_frame = Some(now);
-        self.camera.update(&self.input_state, dt);
+        // Update camera from input state (ECS entity component).
+        if let Some(world) = self.world.as_mut() {
+            if let Some((_, camera)) = world.query_mut::<Camera>().next() {
+                camera.update(&self.input_state, dt);
+            }
+        }
         // Clear transient input state for the next frame.
         self.input_state.begin_frame();
 
@@ -1357,89 +1120,39 @@ impl App {
 
         // Phase 1 of the egui overlay: run the inspector UI (tessellate +
         // cache). Must happen before `GraphRenderer::render` so `&mut World`
-        // and `&mut Camera` are still borrowable. The overlay itself lives on
-        // the renderer, so we borrow renderer + world + camera + inspector
-        // together here (four disjoint fields of `self`).
+        // is still borrowable.
         if self.inspector.show {
             let window = self.window.clone();
             let inspector = &mut self.inspector;
-            let camera = &mut self.camera;
             let world = self.world.as_mut();
             let renderer = self.renderer.as_mut();
             if let (Some(window), Some(world), Some(renderer)) = (window.as_ref(), world, renderer)
             {
                 if let Some(overlay) = renderer.egui_overlay_mut() {
-                    inspector.run(overlay, window, world, camera);
+                    inspector.run(overlay, window, world);
                 }
             }
         }
 
-        // Build fallback light data. The actual light values now come from the
-        // ECS world (`DirectionalLight` + `PointLight` components, queried in
-        // `render_system`); this struct is only used when the world has no
-        // `DirectionalLight` entity. Placeholders are filled by `render_system`.
-        let light_data = FrameUBOData {
-            view_proj: [[0.0; 4]; 4],  // placeholder, render_system fills it
-            camera_position: [0.0; 4], // placeholder
-            // Fallback: 45° in XY plane (direction TO the light), intensity 3.
-            // Only used when the world has no `DirectionalLight` entity.
-            light_direction: [
-                -std::f32::consts::FRAC_1_SQRT_2,
-                std::f32::consts::FRAC_1_SQRT_2,
-                0.0,
-                3.0,
-            ],
-            light_color: [1.0, 1.0, 1.0, 1.0], // white; .w = IBL ambient factor
-            view: [[0.0; 4]; 4],               // placeholder, render_system fills it
-            light_view_proj: [[0.0; 4]; 4],    // placeholder, render_system fills it
-        };
+        // Neutral clear color so we can tell whether the scene is actually
+        // drawing (a dark clear color looks identical to "nothing drew").
+        let clear_color = [0.5, 0.5, 0.5, 1.0];
 
-        // Once a glTF scene has taken over, hide the procedural demo and use a
-        // neutral clear color so we can tell whether the scene is actually
-        // drawing (the old dark blue-gray looked identical to "nothing drew").
-        let scene_active = !self.draw_items.is_empty();
-        let draw_demo = !scene_active;
-        let clear_color = if scene_active {
-            [0.5, 0.5, 0.5, 1.0] // neutral gray: any unlit region reads as gray
-        } else {
-            [0.05, 0.05, 0.1, 1.0] // dark blue-gray for the demo
-        };
-
-        let (renderer, world) = match (self.renderer.as_mut(), self.world.as_ref()) {
+        let (renderer, world) = match (self.renderer.as_mut(), self.world.as_mut()) {
             (Some(r), Some(w)) => (r, w),
             _ => return,
         };
 
-        // Build the demo draw list from the ECS world: each entity with a
-        // MeshHandle + Transform becomes a DrawItem resolved through the
-        // renderer-side mesh handle map.
-        let mut demo_draw_items: Vec<DrawItem> = Vec::new();
-        if draw_demo {
-            for (_entity, handle, transform) in world.query2::<MeshHandle, Transform>() {
-                if let Some(&rh) = self.demo_mesh_handles.get(handle.0) {
-                    demo_draw_items.push(DrawItem {
-                        mesh: rh,
-                        model: transform.to_model_matrix(),
-                        material: None,
-                    });
-                }
-            }
-        }
-
+        // Draw the glTF scene (resolved into `draw_items` by `load_demo_scene`).
         let render_result = render_system(
             renderer,
             world,
-            &self.mesh_manager,
             clear_color,
-            &mut self.camera,
-            &light_data,
             self.debug_mode as u32,
             self.normal_space as u32,
             self.debug_flags,
             self.show_ui,
             &self.draw_items,
-            draw_demo,
-            &demo_draw_items,
         );
 
         // A render failure is treated as fatal: surface it once via a modal

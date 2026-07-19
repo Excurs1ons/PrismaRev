@@ -94,8 +94,8 @@ impl CameraState {
 impl DirectionalLight {
     fn to_json(&self) -> String {
         format!(
-            "{{\"direction\":[{}],\"intensity\":{},\"color\":[{}],\"ambient\":{}}}",
-            fmt3(self.direction),
+            "{{\"euler_xyz\":[{}],\"intensity\":{},\"color\":[{}],\"ambient\":{}}}",
+            fmt3(self.euler_xyz),
             self.intensity,
             fmt3(self.color),
             self.ambient,
@@ -103,13 +103,13 @@ impl DirectionalLight {
     }
 
     fn from_json(s: &str) -> Option<Self> {
-        let dir = find_array_f32(s, "direction")?;
+        let euler = find_array_f32(s, "euler_xyz")?;
         let col = find_array_f32(s, "color")?;
-        if dir.len() != 3 || col.len() != 3 {
+        if euler.len() != 3 || col.len() != 3 {
             return None;
         }
         Some(Self {
-            direction: [dir[0], dir[1], dir[2]],
+            euler_xyz: [euler[0], euler[1], euler[2]],
             intensity: find_field_f32(s, "intensity")?,
             color: [col[0], col[1], col[2]],
             ambient: find_field_f32(s, "ambient").unwrap_or(1.0),
@@ -167,22 +167,26 @@ impl Transform {
 // ---------------------------------------------------------------------------
 
 /// Query the ECS world + camera and write the JSON file.
-pub fn save_scene_state(world: &World, camera: &Camera) {
+pub fn save_scene_state(world: &World) {
     use std::fmt::Write;
 
-    let camera_state = match camera {
-        Camera::Fly(f) => Some(CameraState {
-            position: f.position,
-            yaw: f.yaw,
-            pitch: f.pitch,
-            fov_y: f.fov_y,
-            move_speed: f.move_speed,
-            look_sensitivity: f.look_sensitivity,
-            znear: f.znear,
-            zfar: f.zfar,
-        }),
-        Camera::Orbit(_) => None,
-    };
+    let camera_state: Option<CameraState> = world
+        .query::<Camera>()
+        .next()
+        .and_then(|(entity, _)| world.get::<Camera>(entity))
+        .and_then(|camera| match camera {
+            Camera::Fly(f) => Some(CameraState {
+                position: f.position,
+                yaw: f.yaw,
+                pitch: f.pitch,
+                fov_y: f.fov_y,
+                move_speed: f.move_speed,
+                look_sensitivity: f.look_sensitivity,
+                znear: f.znear,
+                zfar: f.zfar,
+            }),
+            Camera::Orbit(_) => None,
+        });
 
     let dir_light = world.query::<DirectionalLight>().next().map(|(_, dl)| dl.clone());
     let point_lights: Vec<PointLight> = world
@@ -235,9 +239,10 @@ pub fn save_scene_state(world: &World, camera: &Camera) {
     }
 }
 
-/// Read the JSON file and apply saved values to the ECS world + camera.
+/// Read the JSON file and apply saved values to the ECS world (camera
+/// lives as a resource inside the world).
 /// Returns `true` if a state was loaded (so callers can skip default placement).
-pub fn load_scene_state(world: &mut World, camera: &mut Camera) -> bool {
+pub fn load_scene_state(world: &mut World) -> bool {
     let path = scene_state_path();
     let text = match std::fs::read_to_string(&path) {
         Ok(t) => t,
@@ -246,19 +251,21 @@ pub fn load_scene_state(world: &mut World, camera: &mut Camera) -> bool {
 
     log::info!("restoring scene state from {:?}", path);
 
-    // --- Camera ---
+    // --- Camera (ECS component on first camera entity) ---
     if let Some(cs) = extract_object(&text, "camera")
         .and_then(|json| CameraState::from_json(&json))
     {
-        if let Camera::Fly(f) = camera {
-            f.position = cs.position;
-            f.yaw = cs.yaw;
-            f.pitch = cs.pitch;
-            f.fov_y = cs.fov_y;
-            f.move_speed = cs.move_speed;
-            f.look_sensitivity = cs.look_sensitivity;
-            f.znear = cs.znear;
-            f.zfar = cs.zfar;
+        if let Some((_, camera)) = world.query_mut::<Camera>().next() {
+            if let Camera::Fly(f) = camera {
+                f.position = cs.position;
+                f.yaw = cs.yaw;
+                f.pitch = cs.pitch;
+                f.fov_y = cs.fov_y;
+                f.move_speed = cs.move_speed;
+                f.look_sensitivity = cs.look_sensitivity;
+                f.znear = cs.znear;
+                f.zfar = cs.zfar;
+            }
         }
     }
 

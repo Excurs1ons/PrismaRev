@@ -547,6 +547,10 @@ impl GraphRenderer {
                     m[3][3] = 1.0;
                     m
                 },
+                // Full view-projection (clip = proj * view), with surface
+                // rotation already applied in `frame_data.view_proj`. The gizmo
+                // uses this to stay aligned with the camera.
+                view_proj: frame_data.view_proj,
             };
 
             record = self

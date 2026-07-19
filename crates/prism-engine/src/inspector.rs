@@ -29,9 +29,12 @@ pub struct Inspector {
     /// which is awkward to edit directly. Refreshed from the entity each
     /// frame when the selection changes.
     rotation_euler_deg: [f32; 3],
-    /// Entity whose euler cache was last refreshed. When the selection
-    /// changes, we re-derive euler from the new entity's quaternion.
+    /// Entity whose euler cache was last refreshed.
     rotation_cached_for: Option<Entity>,
+    /// Directional light: editable as XYZ Euler angles (degrees) — x = pitch,
+    /// y = yaw, z = roll. Cached per-entity, same pattern as rotation.
+    dir_light_euler_deg: [f32; 3],
+    dir_light_cached_for: Option<Entity>,
 }
 
 impl Default for Inspector {
@@ -41,6 +44,8 @@ impl Default for Inspector {
             selected: None,
             rotation_euler_deg: [0.0; 3],
             rotation_cached_for: None,
+            dir_light_euler_deg: [0.0; 3],
+            dir_light_cached_for: None,
         }
     }
 }
@@ -56,24 +61,22 @@ impl Inspector {
     }
 
     /// Phase 1: run the inspector UI through the egui overlay. Called before
-    /// `GraphRenderer::render` so `world` / `camera` are mutably borrowable.
+    /// `GraphRenderer::render` so `world` is mutably borrowable.
     /// `run_ui` is the egui-ash-renderer entry point that tessellates and
     /// caches the frame for later GPU recording.
+    ///
+    /// Camera is read/written through the ECS resource inside `world`.
     pub fn run(
         &mut self,
         overlay: &mut prism_render::EguiOverlay,
         window: &winit::window::Window,
         world: &mut World,
-        camera: &mut Camera,
     ) {
         if !self.show {
             return;
         }
-        // `overlay` is borrowed mutably for the `run_ui` call; `self`, `world`,
-        // and `camera` are captured by the closure. These are four distinct
-        // values so the borrows don't conflict.
         overlay.run_ui(window, |ctx| {
-            self.ui(ctx, world, camera);
+            self.ui(ctx, world);
         });
     }
 
@@ -83,7 +86,7 @@ impl Inspector {
     /// Uses floating windows with a translucent dark frame so the 3D scene
     /// behind remains visible during live edits. Windows are movable and
     /// resizable.
-    fn ui(&mut self, ctx: &Context, world: &mut World, camera: &mut Camera) {
+    fn ui(&mut self, ctx: &Context, world: &mut World) {
         // Semi-transparent dark frame shared by all inspector windows.
         let window_frame = egui::Frame {
             fill: egui::Color32::from_black_alpha(200),
@@ -124,8 +127,6 @@ impl Inspector {
                     } else {
                         ui.label("Select an entity in the list.");
                     }
-                    ui.separator();
-                    self.camera_editor(ui, camera);
                 });
             });
 
@@ -169,6 +170,11 @@ impl Inspector {
                 entries.push((e, format!("Entity {} (dir light)", e.id())));
             }
         }
+        for (e, _) in world.query::<Camera>() {
+            if ids.insert(e.id()) {
+                entries.push((e, format!("Entity {} (camera)", e.id())));
+            }
+        }
         entries.sort_by_key(|(e, _)| e.id());
 
         egui::ScrollArea::vertical().show(ui, |ui| {
@@ -194,6 +200,14 @@ impl Inspector {
             self.rotation_cached_for = Some(entity);
         }
 
+        // Refresh the directional-light Euler cache when selection changes.
+        if self.dir_light_cached_for != Some(entity) {
+            if let Some(dl) = world.get::<DirectionalLight>(entity) {
+                self.dir_light_euler_deg = dl.euler_xyz;
+            }
+            self.dir_light_cached_for = Some(entity);
+        }
+
         if world.get::<Transform>(entity).is_some() {
             ui.collapsing("Transform", |ui| {
                 self.transform_editor(ui, world, entity);
@@ -206,7 +220,12 @@ impl Inspector {
         }
         if world.get::<DirectionalLight>(entity).is_some() {
             ui.collapsing("Directional Light", |ui| {
-                directional_light_editor(ui, world, entity);
+                self.dir_light_editor(ui, world, entity);
+            });
+        }
+        if world.get::<Camera>(entity).is_some() {
+            ui.collapsing("Camera", |ui| {
+                camera_editor_inline(ui, world, entity);
             });
         }
     }
@@ -255,57 +274,102 @@ impl Inspector {
             ui.add(DragValue::new(&mut t.scale[2]).speed(0.05));
         });
     }
+}
 
-    fn camera_editor(&self, ui: &mut Ui, camera: &mut Camera) {
-        ui.heading("Camera");
-        ui.separator();
-        match camera {
-            Camera::Orbit(c) => {
-                ui.label("Target");
-                ui.horizontal(|ui| {
-                    ui.add(DragValue::new(&mut c.target[0]).speed(0.05));
-                    ui.add(DragValue::new(&mut c.target[1]).speed(0.05));
-                    ui.add(DragValue::new(&mut c.target[2]).speed(0.05));
-                });
-                ui.add(egui::Slider::new(&mut c.distance, 0.1..=50.0).text("Distance"));
-                ui.add(
-                    egui::Slider::new(&mut c.theta, -std::f32::consts::TAU..=std::f32::consts::TAU)
-                        .text("Theta (rad)"),
-                );
-                ui.add(
-                    egui::Slider::new(&mut c.phi, 0.01..=std::f32::consts::PI - 0.01)
-                        .text("Phi (rad)"),
-                );
-                ui.add(egui::Slider::new(&mut c.fov_y, 0.1..=std::f32::consts::PI).text("FOV Y"));
-                ui.add(egui::Slider::new(&mut c.znear, 0.001..=5.0).text("z near"));
-                ui.add(egui::Slider::new(&mut c.zfar, 10.0..=1000.0).text("z far"));
-            }
-            Camera::Fly(c) => {
-                ui.label("Position");
-                ui.horizontal(|ui| {
-                    ui.add(DragValue::new(&mut c.position[0]).speed(0.1));
-                    ui.add(DragValue::new(&mut c.position[1]).speed(0.1));
-                    ui.add(DragValue::new(&mut c.position[2]).speed(0.1));
-                });
-                ui.add(
-                    egui::Slider::new(&mut c.yaw, -std::f32::consts::TAU..=std::f32::consts::TAU)
-                        .text("Yaw (rad)"),
-                );
-                ui.add(
-                    egui::Slider::new(
-                        &mut c.pitch,
-                        -std::f32::consts::FRAC_PI_2..=std::f32::consts::FRAC_PI_2,
-                    )
-                    .text("Pitch (rad)"),
-                );
-                ui.add(egui::Slider::new(&mut c.fov_y, 0.1..=std::f32::consts::PI).text("FOV Y"));
-                ui.add(egui::Slider::new(&mut c.move_speed, 0.1..=50.0).text("Move speed"));
-                ui.add(
-                    egui::Slider::new(&mut c.look_sensitivity, 0.0001..=0.01)
-                        .text("Look sensitivity"),
-                );
-            }
+fn camera_editor_inline(ui: &mut Ui, world: &mut World, entity: Entity) {
+    let Some(camera) = world.get_mut::<Camera>(entity) else {
+        return;
+    };
+    ui.heading("Camera");
+    ui.separator();
+    match camera {
+        Camera::Orbit(c) => {
+            ui.label("Target");
+            ui.horizontal(|ui| {
+                ui.add(DragValue::new(&mut c.target[0]).speed(0.05));
+                ui.add(DragValue::new(&mut c.target[1]).speed(0.05));
+                ui.add(DragValue::new(&mut c.target[2]).speed(0.05));
+            });
+            ui.add(egui::Slider::new(&mut c.distance, 0.1..=50.0).text("Distance"));
+            ui.add(
+                egui::Slider::new(&mut c.theta, -std::f32::consts::TAU..=std::f32::consts::TAU)
+                    .text("Theta (rad)"),
+            );
+            ui.add(
+                egui::Slider::new(&mut c.phi, 0.01..=std::f32::consts::PI - 0.01)
+                    .text("Phi (rad)"),
+            );
+            ui.add(egui::Slider::new(&mut c.fov_y, 0.1..=std::f32::consts::PI).text("FOV Y"));
+            ui.add(egui::Slider::new(&mut c.znear, 0.001..=5.0).text("z near"));
+            ui.add(egui::Slider::new(&mut c.zfar, 10.0..=1000.0).text("z far"));
         }
+        Camera::Fly(c) => {
+            ui.label("Position");
+            ui.horizontal(|ui| {
+                ui.add(DragValue::new(&mut c.position[0]).speed(0.1));
+                ui.add(DragValue::new(&mut c.position[1]).speed(0.1));
+                ui.add(DragValue::new(&mut c.position[2]).speed(0.1));
+            });
+            ui.add(
+                egui::Slider::new(&mut c.yaw, -std::f32::consts::TAU..=std::f32::consts::TAU)
+                    .text("Yaw (rad)"),
+            );
+            ui.add(
+                egui::Slider::new(
+                    &mut c.pitch,
+                    -std::f32::consts::FRAC_PI_2..=std::f32::consts::FRAC_PI_2,
+                )
+                .text("Pitch (rad)"),
+            );
+            ui.add(egui::Slider::new(&mut c.fov_y, 0.1..=std::f32::consts::PI).text("FOV Y"));
+            ui.add(egui::Slider::new(&mut c.move_speed, 0.1..=50.0).text("Move speed"));
+            ui.add(
+                egui::Slider::new(&mut c.look_sensitivity, 0.0001..=0.01)
+                    .text("Look sensitivity"),
+            );
+        }
+    }
+}
+
+impl Inspector {
+    fn dir_light_editor(&mut self, ui: &mut Ui, world: &mut World, entity: Entity) {
+        let Some(dl) = world.get_mut::<DirectionalLight>(entity) else {
+            return;
+        };
+        // XYZ Euler angles (degrees): X = pitch, Y = yaw, Z = roll.
+        ui.label("Pitch / Yaw / Roll (degrees)");
+        let mut changed = false;
+        ui.horizontal(|ui| {
+            ui.label("X");
+            changed |= ui
+                .add(DragValue::new(&mut self.dir_light_euler_deg[0]).speed(1.0).range(-90.0..=90.0))
+                .changed();
+            ui.label("Y");
+            changed |= ui
+                .add(DragValue::new(&mut self.dir_light_euler_deg[1]).speed(1.0).range(-180.0..=180.0))
+                .changed();
+            ui.label("Z");
+            changed |= ui
+                .add(DragValue::new(&mut self.dir_light_euler_deg[2]).speed(1.0).range(-180.0..=180.0))
+                .changed();
+        });
+        if changed {
+            dl.euler_xyz = self.dir_light_euler_deg;
+        }
+
+        let mut color_rgb = [dl.color[0], dl.color[1], dl.color[2]];
+        let color_changed = ui
+            .horizontal(|ui| {
+                ui.label("Color");
+                ui.color_edit_button_rgb(&mut color_rgb)
+            })
+            .inner
+            .changed();
+        if color_changed {
+            dl.color = color_rgb;
+        }
+        ui.add(egui::Slider::new(&mut dl.intensity, 0.0..=10.0).text("Intensity"));
+        ui.add(egui::Slider::new(&mut dl.ambient, 0.0..=3.0).text("Ambient (IBL)"));
     }
 }
 
@@ -332,31 +396,6 @@ fn point_light_editor(ui: &mut Ui, world: &mut World, entity: Entity) {
         pl.color = color_rgb;
     }
     ui.add(egui::Slider::new(&mut pl.intensity, 0.0..=20.0).text("Intensity"));
-}
-
-fn directional_light_editor(ui: &mut Ui, world: &mut World, entity: Entity) {
-    let Some(dl) = world.get_mut::<DirectionalLight>(entity) else {
-        return;
-    };
-    ui.label("Direction (normalized on render)");
-    ui.horizontal(|ui| {
-        ui.add(DragValue::new(&mut dl.direction[0]).speed(0.05));
-        ui.add(DragValue::new(&mut dl.direction[1]).speed(0.05));
-        ui.add(DragValue::new(&mut dl.direction[2]).speed(0.05));
-    });
-    let mut color_rgb = [dl.color[0], dl.color[1], dl.color[2]];
-    let color_changed = ui
-        .horizontal(|ui| {
-            ui.label("Color");
-            ui.color_edit_button_rgb(&mut color_rgb)
-        })
-        .inner
-        .changed();
-    if color_changed {
-        dl.color = color_rgb;
-    }
-    ui.add(egui::Slider::new(&mut dl.intensity, 0.0..=10.0).text("Intensity"));
-    ui.add(egui::Slider::new(&mut dl.ambient, 0.0..=3.0).text("Ambient (IBL)"));
 }
 
 // ---------------------------------------------------------------------------

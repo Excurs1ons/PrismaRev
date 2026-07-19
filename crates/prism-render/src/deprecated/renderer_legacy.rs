@@ -25,8 +25,7 @@ use crate::descriptor::{DescriptorLayout, DescriptorPool, FrameUBO, FrameUBOData
 use crate::gizmo::Gizmo;
 use crate::ibl::IblResources;
 use crate::mesh::{Mesh, Vertex};
-use crate::overlay::{Overlay, OverlayAction, OverlayDrawParams};
-use crate::pbr_push::{DebugMode, NormalSpace, PbrBindlessPushConstants, PbrPushConstants};
+use crate::pbr_push::{PbrBindlessPushConstants, PbrPushConstants};
 use crate::pipeline::{GraphicsPipeline, PipelineDesc};
 use crate::render_pass::{DepthImage, Framebuffers, RenderPass};
 use crate::shader;
@@ -137,10 +136,6 @@ pub struct Renderer {
     #[allow(dead_code)]
     descriptor_pool: DescriptorPool,
     frame_ubos: Vec<FrameUBO>,
-
-    /// In-app debug overlay (mode buttons + labels), drawn on top of the 3D
-    /// scene with depth test disabled.
-    overlay: Overlay,
 
     /// World-space XYZ orientation gizmo, drawn on top of the 3D scene with
     /// depth test disabled.
@@ -351,10 +346,6 @@ impl Renderer {
         // Shader module is consumed at pipeline creation; safe to drop now.
         unsafe { context.device.destroy_shader_module(pbr_frag_module, None) };
 
-        // --- Debug overlay (font atlas + 2D UI pipeline) ---
-        let overlay = Overlay::new(&context, command_pool, render_pass.handle)
-            .context("create debug overlay")?;
-
         // --- World-space XYZ gizmo (always-on-top debug helper) ---
         let gizmo = Gizmo::new(&context, render_pass.handle).context("create gizmo")?;
 
@@ -487,7 +478,6 @@ impl Renderer {
             bindless_set0_layout,
             bindless_pool,
             bindless_frame_sets,
-            overlay,
             gizmo,
             vert_module,
             frag_module,
@@ -1329,29 +1319,6 @@ impl Renderer {
             .context("update frame UBO")
     }
 
-    /// Draw the debug overlay on top of the 3D scene.
-    ///
-    /// Must be called between [`begin_frame`](Self::begin_frame) and
-    /// [`end_frame`](Self::end_frame), after the 3D draws. `debug_mode` /
-    /// `normal_space` are the `u32` discriminants; `show_ui` toggles the
-    /// overlay entirely.
-    pub fn draw_overlay(&self, debug_mode: u32, normal_space: u32, show_ui: bool) {
-        let Some(ref frame) = self.current else {
-            return;
-        };
-        let extent = self.extent();
-        let rotation = self.orientation().1;
-        self.overlay.draw(&OverlayDrawParams {
-            cmd: frame.command_buffer,
-            extent_w: extent.width,
-            extent_h: extent.height,
-            mode: DebugMode::from_u32(debug_mode),
-            space: NormalSpace::from_u32(normal_space),
-            show_ui,
-            rotation,
-        });
-    }
-
     /// Draw the world-space XYZ orientation gizmo on top of the 3D scene.
     ///
     /// Must be called between [`begin_frame`](Self::begin_frame) and
@@ -1363,13 +1330,6 @@ impl Renderer {
             return;
         };
         self.gizmo.draw(frame.command_buffer, view_proj);
-    }
-
-    /// Hit-test a pointer (pixels, top-left origin) against the overlay
-    /// buttons. Returns the action to apply, or `None` if nothing was hit.
-    pub fn hit_test_overlay(&self, px: f32, py: f32) -> Option<OverlayAction> {
-        let extent = self.extent();
-        self.overlay.hit_test(px, py, extent.width, extent.height)
     }
 
     /// Finish the current frame: end the render pass and command buffer,

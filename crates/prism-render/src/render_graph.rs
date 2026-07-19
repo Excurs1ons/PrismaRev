@@ -208,6 +208,10 @@ pub struct GraphFrame<'a> {
     /// transpose of the upper-left 3x3 of `view` (the rotation basis), with w=0
     /// on the 4th row.
     pub inv_view_rot: [[f32; 4]; 4],
+    /// Full world-space view-projection (clip = proj * view), including the
+    /// surface rotation. Used by the world-space gizmo (drawn on top of the
+    /// scene) so the axes track the camera.
+    pub view_proj: [[f32; 4]; 4],
 }
 
 /// Context passed to each pass's `execute`.

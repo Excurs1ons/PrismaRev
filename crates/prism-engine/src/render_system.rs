@@ -108,14 +108,19 @@ impl Default for PbrMaterial {
 pub struct MeshHandle(pub usize);
 
 /// Directional (infinite) light. The first one found in the world drives the
-/// per-frame UBO's `light_direction` / `light_color` / ambient factor. Stored
-/// un-normalized so the inspector can show the user's raw input; the render
-/// path normalizes on use.
+/// per-frame UBO's `light_direction` / `light_color` / ambient factor.
+///
+/// Orientation is stored as **XYZ Euler angles in degrees** (x = pitch around
+/// X, y = yaw around Y, z = roll around Z), matching the engine's right-handed
+/// coordinate convention (+Y up, camera looks down -Z). The render path derives
+/// the world-space direction vector from these angles via
+/// [`euler_xyz_deg_to_dir`]; storing angles (not a direction vector) keeps the
+/// inspector editable and the serialization human-readable.
 #[derive(Debug, Clone, Copy)]
 pub struct DirectionalLight {
-    /// Direction TO the light, in world space. Need not be unit length; the
-    /// render path normalizes it. Zero-length falls back to +Y.
-    pub direction: [f32; 3],
+    /// XYZ Euler angles (degrees): x = pitch (around X), y = yaw (around Y),
+    /// z = roll (around Z). The direction TO the light is derived from these.
+    pub euler_xyz: [f32; 3],
     /// Direct light radiance multiplier (~PI for albedo-brightness lit faces).
     pub intensity: f32,
     /// RGB light color, linear, typically in [0,1] per channel.
@@ -126,15 +131,64 @@ pub struct DirectionalLight {
 
 impl Default for DirectionalLight {
     fn default() -> Self {
-        // 45° diagonal in the XY plane, upper-left, matching the pre-refactor
-        // hard-coded value in `app.rs`.
+        // pitch=45°, yaw=-45°, roll=0° — matches the pre-refactor hard-coded
+        // direction [-1, 1, 0] (upper-left, 45° diagonal in the XY plane).
         Self {
-            direction: [-1.0, 1.0, 0.0],
+            euler_xyz: [45.0, -45.0, 0.0],
             intensity: 3.0,
             color: [1.0, 1.0, 1.0],
             ambient: 1.0,
         }
     }
+}
+
+/// Convert XYZ Euler angles (degrees) to a unit direction vector (direction
+/// TO the light), in world space.
+///
+/// Conventions (see `README.md` §Coordinate Conventions):
+/// - Right-handed; +Y up; camera looks down -Z.
+/// - Euler order **Rx(pitch) · Ry(yaw) · Rz(roll)** (rotate X first, then Y,
+///   then Z) in column-major `mat4` form `[col][row]`.
+/// - The base direction is `+Z` (yaw = 0 points toward +Z, matching the legacy
+///   `pitch_yaw_deg_to_dir`). Roll rotates the result around Z (no effect on a
+///   pure direction, retained for completeness of the Euler representation).
+///
+/// With `roll = 0` this reduces exactly to `[cp·sy, sp, cp·cy]`, so existing
+/// scenes keep their current appearance.
+pub fn euler_xyz_deg_to_dir(e: [f32; 3]) -> [f32; 3] {
+    let p = e[0].to_radians();
+    let y = e[1].to_radians();
+    let r = e[2].to_radians();
+    let (sp, cp) = p.sin_cos();
+    let (sy, cy) = y.sin_cos();
+    // `r` (roll around Z) is part of the Euler representation but does not
+    // change the direction of a pure +Z base vector, so it is intentionally
+    // unused here.
+    let _ = r;
+
+    // Direction TO the light = R · (0,0,1) with R = Rx(p)·Ry(y)·Rz(r) in the
+    // engine's right-handed, column-major convention (+Y up, camera looks down
+    // -Z). For a +Z base vector this reduces to:
+    //   x = cp·sy,  y = sp,  z = cp·cy
+    // which with roll = 0 is exactly the legacy `pitch_yaw_deg_to_dir`, so
+    // existing scenes keep their current appearance.
+    let x = cp * sy;
+    let yy = sp;
+    let z = cp * cy;
+    let len = (x * x + yy * yy + z * z).sqrt().max(1e-8);
+    [x / len, yy / len, z / len]
+}
+
+/// Inverse of [`euler_xyz_deg_to_dir`]: derive XYZ Euler angles (degrees) from a
+/// direction vector. Used as a helper (e.g. for serialization round-tripping or
+/// future import paths). Pitch is clamped to (-90°, 90°).
+pub fn dir_to_euler_xyz_deg(d: [f32; 3]) -> [f32; 3] {
+    let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt().max(1e-8);
+    let n = [d[0] / len, d[1] / len, d[2] / len];
+    let pitch = n[1].asin().to_degrees();
+    let yaw = n[0].atan2(n[2]).to_degrees();
+    let roll = 0.0;
+    [pitch, yaw, roll]
 }
 
 /// Point light. Collected each frame into the ScenePass light SSBO (up to
@@ -204,8 +258,7 @@ impl Default for MeshManager {
 ///
 /// 1. Computes the display-oriented view-projection (with surface rotation).
 /// 2. Builds the per-frame [`FrameUBOData`] (camera + light).
-/// 3. Builds a flat [`DrawItem`] list from the ECS demo scene and the loaded
-///    glTF scene.
+/// 3. Builds a flat [`DrawItem`] list from the loaded glTF scene.
 /// 4. Computes the light-space view-projection for the shadow map.
 /// 5. Submits everything via [`GraphRenderer::render`].
 ///
@@ -216,52 +269,56 @@ impl Default for MeshManager {
 #[allow(clippy::too_many_arguments)]
 pub fn render_system(
     renderer: &mut GraphRenderer,
-    world: &World,
-    meshes: &MeshManager,
+    world: &mut World,
     clear_color: [f32; 4],
-    camera: &mut Camera,
-    light_data: &FrameUBOData,
     debug_mode: u32,
     normal_space: u32,
     debug_flags: u32,
     show_ui: bool,
     scene_draw_items: &[SceneDrawItem],
-    draw_demo: bool,
-    demo_draw_items: &[DrawItem],
 ) -> anyhow::Result<()> {
-    // Display-oriented aspect ratio + clip-space rotation that compensates for
-    // the swapchain's `pre_transform`.
-    let (display_aspect, surface_rotation) = renderer.orientation();
-    camera.set_aspect(display_aspect);
-    let mut view_proj = camera.view_proj();
-    view_proj = mat_mul(&surface_rotation, &view_proj);
+    // Fallback light values used when the world has no DirectionalLight entity.
+    let fallback_dir = [
+        -std::f32::consts::FRAC_1_SQRT_2,
+        std::f32::consts::FRAC_1_SQRT_2,
+        0.0,
+        3.0,
+    ];
+    let fallback_col = [1.0, 1.0, 1.0, 1.0];
+
+    // Extract camera from the first entity carrying a Camera component.
+    let (view_proj, eye, view) = {
+        let camera_entity = world
+            .query::<Camera>()
+            .next()
+            .map(|(e, _)| e)
+            .ok_or_else(|| anyhow::anyhow!("no Camera entity in ECS world"))?;
+        let camera = world
+            .get_mut::<Camera>(camera_entity)
+            .ok_or_else(|| anyhow::anyhow!("Camera entity has no Camera component"))?;
+        let (display_aspect, surface_rotation) = renderer.orientation();
+        camera.set_aspect(display_aspect);
+        let mut vp = camera.view_proj();
+        vp = mat_mul(&surface_rotation, &vp);
+        (vp, camera.eye(), camera.view())
+    };
 
     // Resolve the directional light from the ECS world (first `DirectionalLight`
-    // component found). Falls back to the caller-supplied `light_data` (which
-    // itself defaults to the pre-refactor hard-coded diagonal) when the world
-    // has none, so the demo scene without an explicit light entity still lit.
+    // entity). Orientation is stored as XYZ Euler angles (degrees); derive the
+    // world-space direction vector on the fly.
     let light_direction = world
         .query::<DirectionalLight>()
         .next()
         .map(|(_, l)| {
-            let len = (l.direction[0] * l.direction[0]
-                + l.direction[1] * l.direction[1]
-                + l.direction[2] * l.direction[2])
-                .sqrt();
-            let inv = if len > 1e-6 { 1.0 / len } else { 0.0 };
-            [
-                l.direction[0] * inv,
-                l.direction[1] * inv,
-                l.direction[2] * inv,
-                l.intensity,
-            ]
+            let d = euler_xyz_deg_to_dir(l.euler_xyz);
+            [d[0], d[1], d[2], l.intensity]
         })
-        .unwrap_or(light_data.light_direction);
+        .unwrap_or(fallback_dir);
     let light_color = world
         .query::<DirectionalLight>()
         .next()
         .map(|(_, l)| [l.color[0], l.color[1], l.color[2], l.ambient])
-        .unwrap_or(light_data.light_color);
+        .unwrap_or(fallback_col);
 
     // Collect point lights from the ECS world into the GPU layout. A sibling
     // `Transform` (if present) overrides the component's `position`, so lights
@@ -301,26 +358,19 @@ pub fn render_system(
     let frame_data = FrameUBOData {
         view_proj,
         camera_position: [
-            camera.eye()[0],
-            camera.eye()[1],
-            camera.eye()[2],
+            eye[0],
+            eye[1],
+            eye[2],
             light_count,
         ],
         light_direction,
         light_color,
-        view: camera.view(),
+        view,
         light_view_proj,
     };
 
-    // Build the flat draw list: demo ECS entities first, then the glTF scene.
+    // Build the flat draw list from the loaded glTF scene.
     let mut draw_items: Vec<DrawItem> = Vec::new();
-    if draw_demo {
-        // `demo_draw_items` is pre-built by `app.rs` (it holds the renderer-side
-        // mesh handles + per-entity model matrices). `world`/`meshes` are kept
-        // for API symmetry / future per-entity culling.
-        let _ = (world, meshes);
-        draw_items.extend_from_slice(demo_draw_items);
-    }
     for item in scene_draw_items {
         draw_items.push(DrawItem {
             mesh: item.mesh,

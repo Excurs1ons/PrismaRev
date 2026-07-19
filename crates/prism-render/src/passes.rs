@@ -18,6 +18,7 @@ use anyhow::Result;
 use ash::vk;
 
 use crate::mesh::Vertex;
+use crate::gizmo::Gizmo;
 use crate::pipeline::{GraphicsPipeline, PipelineDesc};
 use crate::render_graph::{
     GraphResources, RenderContext, RenderGraphBuilder, RenderPassNode, RenderSettings,
@@ -1400,6 +1401,9 @@ pub struct ScenePass {
     /// Skybox background pass (draws the IBL env cubemap). Owns its pipeline +
     /// set-2 (IBL env) layout; borrows the IBL descriptor set.
     skybox: SkyboxPass,
+    /// World-space XYZ orientation gizmo, drawn on top of the scene (depth
+    /// test disabled). Built lazily once the render pass exists.
+    gizmo: Option<Gizmo>,
     device: Option<ash::Device>,
 }
 impl ScenePass {
@@ -1429,6 +1433,7 @@ impl ScenePass {
             light_buffer: vk::Buffer::null(),
             light_memory: vk::DeviceMemory::null(),
             skybox: SkyboxPass::new(vk::DescriptorSet::null(), vk::DescriptorSetLayout::null()),
+            gizmo: None,
             device: None,
         }
     }
@@ -1466,7 +1471,7 @@ impl ScenePass {
 
         // The render pass must exist before we build a framebuffer against it.
         // `ensure_render_pass` is idempotent (early-returns once set).
-        self.ensure_render_pass(device)?;
+        self.ensure_render_pass(context)?;
 
         // If the swapchain image count changed (recreate with a different
         // image count) or the extent changed, tear everything down and resize
@@ -1609,6 +1614,8 @@ impl ScenePass {
         }
         // Skybox pass (its own pipeline + set-2 layout).
         self.skybox.destroy(device);
+        // Gizmo (its own pipeline + vertex buffer; Drop frees them).
+        self.gizmo = None;
         self.device = None;
     }
     /// Wire all external resources the ScenePass needs:
@@ -1939,10 +1946,11 @@ impl ScenePass {
         unsafe { device.unmap_memory(self.light_memory) };
         Ok(())
     }
-    fn ensure_render_pass(&mut self, device: &ash::Device) -> Result<()> {
+    fn ensure_render_pass(&mut self, context: &crate::context::VulkanContext) -> Result<()> {
         if self.render_pass.is_some() {
             return Ok(());
         }
+        let device = &context.device;
         self.device = Some(device.clone());
 
         let color_attachment = vk::AttachmentDescription::default()
@@ -2009,6 +2017,12 @@ impl ScenePass {
         let rp = unsafe { device.create_render_pass(&rp_create_info, None) }
             .context("ScenePass: create render pass")?;
         self.render_pass = Some(rp);
+
+        // Lazily build the world-space gizmo pipeline against this render pass
+        // (the gizmo draws inside the same render pass, on top of the scene).
+        if self.gizmo.is_none() {
+            self.gizmo = Some(Gizmo::new(context, rp).context("ScenePass: create gizmo")?);
+        }
         Ok(())
     }
     fn ensure_pipeline(&mut self, device: &ash::Device) -> Result<()> {
@@ -2136,7 +2150,7 @@ impl RenderPassNode for ScenePass {
     }
 
     fn execute(&mut self, ctx: &RenderContext, _resources: &GraphResources) -> Result<()> {
-        self.ensure_render_pass(ctx.device)?;
+        self.ensure_render_pass(ctx.context)?;
         self.ensure_pipeline(ctx.device)?;
 
         let rp = self.render_pass.unwrap();
@@ -2329,6 +2343,13 @@ impl RenderPassNode for ScenePass {
             }
         }
 
+        // Draw the world-space XYZ gizmo on top of the scene (its pipeline has
+        // depth test disabled, so it is never occluded). Uses the same
+        // view-projection the scene was drawn with.
+        if let Some(gizmo) = &self.gizmo {
+            gizmo.draw(ctx.cmd, &ctx.frame.view_proj);
+        }
+
         unsafe { ctx.device.cmd_end_render_pass(ctx.cmd) };
 
         log::trace!(
@@ -2382,6 +2403,8 @@ impl Drop for ScenePass {
             }
             // Skybox pass (its own pipeline + set-2 layout).
             self.skybox.destroy(&device);
+            // Gizmo (its own pipeline + vertex buffer; Drop frees them).
+            self.gizmo = None;
         }
     }
 }

@@ -34,7 +34,6 @@ pub mod hdr;
 pub mod ibl;
 pub mod managers;
 pub mod mesh;
-pub mod overlay;
 pub mod passes;
 pub mod pbr_push;
 pub mod pipeline;
@@ -71,7 +70,6 @@ pub use egui_overlay::EguiOverlay;
 pub use gizmo::Gizmo;
 pub use graph_renderer::GraphRenderer;
 pub use mesh::{Mesh, Vertex};
-pub use overlay::{Overlay, OverlayAction, OverlayVertex};
 pub use passes::{
     GBufferPass, LightingPass, PostPass, RayQueryPass, ScenePass, ShadowPushConstants, SharcPass,
     SharcQueryPushConstants,
