@@ -1211,9 +1211,10 @@ impl SkyboxPass {
         // a swapchain recreate that rebuilt ScenePass' render pass).
         let rebuild = self.built_for_render_pass != Some(render_pass);
         if rebuild {
-            if let Some(old) = self.pipeline.take() {
-                unsafe { device.destroy_pipeline(old.pipeline, None) };
-            }
+            // Drop the old pipeline via GraphicsPipeline::Drop (which destroys
+            // the pipeline + layout). Do NOT call destroy_pipeline manually -
+            // that double-frees.
+            self.pipeline = None;
 
             const VERT_SPV: &[u8] = include_bytes!("../../../shaders/skybox.vert.spv");
             const FRAG_SPV: &[u8] = include_bytes!("../../../shaders/skybox.frag.spv");
@@ -1315,20 +1316,27 @@ impl SkyboxPass {
     }
 
     /// Tear down GPU resources.
-    pub fn destroy(&mut self, device: &ash::Device) {
-        if let Some(p) = self.pipeline.take() {
-            unsafe { device.destroy_pipeline(p.pipeline, None) };
-        }
+    ///
+    /// `GraphicsPipeline` owns its own Vulkan handles and destroys them in its
+    /// `Drop` impl, so we just drop the `Option` here -- do NOT call
+    /// `destroy_pipeline` manually (that double-frees, since `Drop` would then
+    /// destroy the same handle again).
+    pub fn destroy(&mut self, _device: &ash::Device) {
+        // Dropping `pipeline` runs `GraphicsPipeline::drop`, which calls
+        // `destroy_pipeline` + `destroy_pipeline_layout`.
+        self.pipeline = None;
         self.device = None;
     }
 }
 
 impl Drop for SkyboxPass {
     fn drop(&mut self) {
-        if let Some(device) = self.device.take() {
-            if let Some(p) = self.pipeline.take() {
-                unsafe { device.destroy_pipeline(p.pipeline, None) };
-            }
+        // `GraphicsPipeline::drop` handles destroy_pipeline + destroy_layout,
+        // so just drop the Option. We gate on `self.device` so that an
+        // un-initialized `SkyboxPass` (device=None) doesn't drop a pipeline
+        // that was never created.
+        if self.device.take().is_some() {
+            self.pipeline = None;
         }
     }
 }
@@ -2145,68 +2153,13 @@ impl RenderPassNode for ScenePass {
             .context("ScenePass: no framebuffer for image_index (call set_target first)")?;
         let pipeline = self.pipeline.as_ref().unwrap();
 
-        // Bind pipeline.
-        unsafe {
-            ctx.device.cmd_bind_pipeline(
-                ctx.cmd,
-                vk::PipelineBindPoint::GRAPHICS,
-                pipeline.pipeline,
-            );
-        }
-
-        // Bind set 0: per-frame UBO + materials SSBO (one set per
-        // frame-in-flight; pick by `frame_index`).
+        // Resolve the per-frame descriptor set now (used after the skybox draw,
+        // when we re-bind the scene pipeline + descriptors).
         let frame_set = self
             .frame_sets
             .get(ctx.frame_index as usize)
             .copied()
             .context("ScenePass: no set0 descriptor set for frame_index (call set_resources)")?;
-        unsafe {
-            ctx.device.cmd_bind_descriptor_sets(
-                ctx.cmd,
-                vk::PipelineBindPoint::GRAPHICS,
-                pipeline.layout,
-                0,
-                std::slice::from_ref(&frame_set),
-                &[],
-            );
-        }
-
-        // Bind set 1: bindless texture table (samplers + SRV array).
-        unsafe {
-            ctx.device.cmd_bind_descriptor_sets(
-                ctx.cmd,
-                vk::PipelineBindPoint::GRAPHICS,
-                pipeline.layout,
-                1,
-                std::slice::from_ref(&self.bindless_set),
-                &[],
-            );
-        }
-
-        // Bind set 2: IBL cubemap.
-        unsafe {
-            ctx.device.cmd_bind_descriptor_sets(
-                ctx.cmd,
-                vk::PipelineBindPoint::GRAPHICS,
-                pipeline.layout,
-                2,
-                std::slice::from_ref(&self.ibl_descriptor_set),
-                &[],
-            );
-        }
-
-        // Bind set 3: shadow map.
-        unsafe {
-            ctx.device.cmd_bind_descriptor_sets(
-                ctx.cmd,
-                vk::PipelineBindPoint::GRAPHICS,
-                pipeline.layout,
-                3,
-                std::slice::from_ref(&self.shadow_descriptor_set),
-                &[],
-            );
-        }
 
         let clear_values = [
             vk::ClearValue {
@@ -2240,17 +2193,67 @@ impl RenderPassNode for ScenePass {
         // env descriptor set and writes no depth, so scene geometry drawn
         // afterwards always occludes it. Runs before the scene pipeline is
         // (re)bound below.
-        // TEMPORARILY DISABLED to isolate the all-black regression.
-        if false {
-            if let Err(e) = self.skybox.draw(
-                ctx.device,
+        if let Err(e) = self.skybox.draw(
+            ctx.device,
+            ctx.cmd,
+            self.render_pass.unwrap(),
+            self.extent,
+            &ctx.frame.inv_view_rot,
+        ) {
+            log::warn!("SkyboxPass draw failed (skybox skipped): {e:#}");
+        }
+
+        // Re-bind the scene pipeline + all descriptor sets AFTER the skybox
+        // draw. The skybox binds its own pipeline (different layout) + IBL
+        // descriptor set at set 0, which invalidates the scene's descriptor
+        // bindings (pipeline-layout compatibility: a pipeline bind with an
+        // incompatible layout voids previously-bound sets at the differing
+        // indices). Without this re-bind, the scene's `cmd_draw_indexed`
+        // fires with set 0 still holding the skybox's combined-image-sampler
+        // instead of the frame UBO, triggering
+        // VUID-vkCmdDrawIndexed-None-08600 and producing a black screen.
+        unsafe {
+            ctx.device.cmd_bind_pipeline(
                 ctx.cmd,
-                self.render_pass.unwrap(),
-                self.extent,
-                &ctx.frame.inv_view_rot,
-            ) {
-                log::warn!("SkyboxPass draw failed (skybox skipped): {e:#}");
-            }
+                vk::PipelineBindPoint::GRAPHICS,
+                pipeline.pipeline,
+            );
+            // set 0: frame UBO + materials SSBO + light SSBO
+            ctx.device.cmd_bind_descriptor_sets(
+                ctx.cmd,
+                vk::PipelineBindPoint::GRAPHICS,
+                pipeline.layout,
+                0,
+                std::slice::from_ref(&frame_set),
+                &[],
+            );
+            // set 1: bindless texture table
+            ctx.device.cmd_bind_descriptor_sets(
+                ctx.cmd,
+                vk::PipelineBindPoint::GRAPHICS,
+                pipeline.layout,
+                1,
+                std::slice::from_ref(&self.bindless_set),
+                &[],
+            );
+            // set 2: IBL cubemap
+            ctx.device.cmd_bind_descriptor_sets(
+                ctx.cmd,
+                vk::PipelineBindPoint::GRAPHICS,
+                pipeline.layout,
+                2,
+                std::slice::from_ref(&self.ibl_descriptor_set),
+                &[],
+            );
+            // set 3: shadow map
+            ctx.device.cmd_bind_descriptor_sets(
+                ctx.cmd,
+                vk::PipelineBindPoint::GRAPHICS,
+                pipeline.layout,
+                3,
+                std::slice::from_ref(&self.shadow_descriptor_set),
+                &[],
+            );
         }
 
         unsafe {

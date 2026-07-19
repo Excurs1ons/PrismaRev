@@ -62,9 +62,12 @@ public void vertexMain(
     // look direction from the camera. Using a w=0 multiply strips translation
     // so the box stays centered on the camera (at infinity).
     worldDir = mul(pc.invViewRot, float4(corner, 0.0)).xyz;
-    // Draw at the far plane (z/w = 1 in Vulkan NDC). Depth write is disabled
-    // by the pipeline, so real geometry drawn afterwards always occludes it.
-    clipPos = float4(corner.xy, 1.0, 1.0);
+    // Draw at the near plane (z=0 in Vulkan NDC, depth = z/w = 0/1 = 0).
+    // Depth test is LESS against the cleared depth buffer (1.0), so the
+    // skybox passes (0 < 1.0). Depth writes are disabled by the pipeline, so
+    // the depth buffer stays at 1.0 and scene geometry (z in (0,1)) still
+    // passes LESS and occludes the skybox.
+    clipPos = float4(corner.xy, 0.0, 1.0);
 }
 
 [shader("fragment")]
