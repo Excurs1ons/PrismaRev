@@ -205,49 +205,10 @@ fn create_test_scene(
     (world, mesh_manager, renderer_handles)
 }
 
-/// Path of the camera-state file, written on exit and restored on launch.
-/// Stored next to the executable (or in `assets/`) so it survives restarts.
-fn camera_state_path() -> std::path::PathBuf {
-    // Prefer an exe-relative location so the file travels with the install.
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            return dir.join("camera_state.json");
-        }
-    }
-    std::path::PathBuf::from("camera_state.json")
-}
-
-/// Load a previously saved camera viewpoint (if any). Returns `None` when the
-/// file is missing, unreadable, or malformed — the caller then keeps the
-/// default camera.
-fn load_camera_state() -> Option<crate::camera::SavedCamera> {
-    let path = camera_state_path();
-    let Ok(text) = std::fs::read_to_string(&path) else {
-        return None;
-    };
-    match crate::camera::SavedCamera::from_json(&text) {
-        Some(s) => {
-            log::info!("restored camera state from {:?}", path);
-            Some(s)
-        }
-        None => {
-            log::warn!("camera state file {:?} malformed; ignoring", path);
-            None
-        }
-    }
-}
-
-/// Persist the current camera viewpoint so the next launch restores it.
-fn save_camera_state(cam: &crate::camera::Camera) {
-    let Some(saved) = cam.snapshot() else {
-        return; // orbit variant is not persisted
-    };
-    let path = camera_state_path();
-    if let Err(e) = std::fs::write(&path, saved.to_json()) {
-        log::warn!("failed to save camera state to {:?}: {e}", path);
-    } else {
-        log::info!("saved camera state to {:?}", path);
-    }
+/// Persist the current ECS + camera state to scene_state.json.
+fn save_scene_state_file(world: &prism_ecs::World, camera: &crate::camera::Camera) {
+    crate::scene_state::save_scene_state(world, camera);
+    log::info!("scene state saved");
 }
 
 fn cube_vertices() -> Vec<Vertex> {
@@ -625,15 +586,15 @@ impl App {
         // window size.
         self.camera = Camera::Fly(FlyCamera::new(1600.0 / 900.0));
 
-        // Restore the last-run viewpoint if a camera-state file exists. This is
-        // applied before any scene-specific camera placement below, which
-        // (when a glTF scene loads) overrides it intentionally for framing.
-        if let Some(saved) = load_camera_state() {
-            self.camera.apply_saved(&saved);
-            self.camera_state_restored = true;
-        } else {
-            self.camera_state_restored = false;
+        // Restore the saved scene state (camera, lights, transforms) from
+        // scene_state.json. Overrides the default camera and ECS data.
+        // Must happen before scene-from-manifest placement below.
+        let mut state_loaded = false;
+        if let Some(world) = self.world.as_mut() {
+            state_loaded =
+                crate::scene_state::load_scene_state(world, &mut self.camera);
         }
+        self.camera_state_restored = state_loaded;
 
         // Load a glTF scene from the asset manifest (if present + resolvable)
         // and upload it to the renderer managers. Keeps the legacy cube demo
@@ -1224,6 +1185,18 @@ impl ApplicationHandler for App {
                                     }
                                 }
                             }
+                        } else if code == KeyCode::KeyS
+                            && (self
+                                .input_state
+                                .key_held(crate::input::KeyCode::ControlLeft)
+                                || self
+                                    .input_state
+                                    .key_held(crate::input::KeyCode::ControlRight))
+                        {
+                            // Ctrl+S: manually save scene state
+                            if let Some(world) = self.world.as_ref() {
+                                save_scene_state_file(world, &self.camera);
+                            }
                         }
                     }
                 }
@@ -1251,9 +1224,11 @@ impl ApplicationHandler for App {
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         if event_loop.exiting() {
-            // Persist the current camera viewpoint so the next launch can
-            // restore it (no-op for the orbit variant).
-            save_camera_state(&self.camera);
+            // Persist ECS scene state (camera, lights, transforms) for the
+            // next launch. No-op when world is not yet initialised.
+            if let Some(world) = self.world.as_ref() {
+                save_scene_state_file(world, &self.camera);
+            }
 
             // Wait for the GPU to finish any in-flight work (e.g. the last
             // frame's command buffer) before destroying mesh buffers. Without

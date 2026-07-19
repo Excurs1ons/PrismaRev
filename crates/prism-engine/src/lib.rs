@@ -8,6 +8,7 @@ pub mod crash_dialog;
 pub mod input;
 pub mod inspector;
 pub mod render_system;
+pub mod scene_state;
 
 pub use app::App;
 pub use render_system::{
