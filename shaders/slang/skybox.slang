@@ -1,18 +1,22 @@
-// Skybox pass — renders the IBL environment cubemap as a background.
+// Skybox pass - renders the IBL environment cubemap as a background.
 //
-// Draws a unit cube centered at the camera (the vertex shader strips the
-// translation from the view-projection so the box stays at infinity) and
-// samples the environment cubemap by the world-space look direction.
+// Full-screen triangle approach: the vertex shader emits a quad covering NDC
+// [-1,1]² at the near plane (z=0, depth test LESS passes against cleared 1.0;
+// depth writes are disabled so scene geometry occludes the sky). The fragment
+// shader reconstructs the world-space view ray by rotating the view-space
+// look direction (ndc.x, ndc.y, -1) by the inverse view rotation, then samples
+// the environment cubemap.
 //
 // This reuses the env cubemap already produced by `IblResources` from the
-// user's `.hdr` (e.g. kloppenheim_05_4k.hdr) — no separate loading path is
-// needed; the skybox is just the env map drawn behind the scene.
+// user's `.hdr` - no separate loading path is needed; the skybox is just the
+// env map drawn behind the scene.
 //
 // Sets (must match `SkyboxPass::ensure_pipeline`):
-//   set 2, binding 0 - IBL environment cubemap (SamplerCube, combined)
+//   set 0, binding 0 - IBL environment cubemap (SamplerCube, combined)
 //
-// Push constants: SkyboxPush (96 bytes) — only `invViewRot` (a mat3 packed as
-// mat4) is used; the rest pads to 96 bytes to match the engine's push buffer.
+// Push constants: SkyboxPush (128 bytes) - `invViewRot` (the inverse of the
+// view matrix's rotation, i.e. the world<-view rotation) is used to turn the
+// view-space look direction into a world-space cubemap sample direction.
 //
 // Compile:
 //   slangc skybox.slang -profile spirv_1_5 -target spirv \
@@ -22,31 +26,27 @@
 import common;
 
 // ---- set 0, binding 0 - IBL environment cubemap (combined image+sampler).
-// The skybox's pipeline layout has one set (this one), bound at set 0. The
-// descriptor set is shared with `IblResources` (set 2 binding 0 in that
-// layout), but since VkDescriptorSetLayout only encodes the *binding numbers*
-// inside the set — not the set slot — we can bind the IBL set at set 0 and
-// the shader sees binding 0 as the env cubemap.
 [[vk::binding(0, 0)]]
 SamplerCube envCube;
 
-// View rotation only (upper-left 3x3 of the inverse view matrix), packed as a
-// mat4 so it matches the std140-ish push constant layout the engine already
-// pushes for the scene pass.
+// Push constants: `invViewRot` = inverse of the view rotation (world <- view).
+// Because the view matrix is a rigid transform, this is the transpose of its
+// upper-left 3x3. Packed as a mat4 with the translation row zeroed.
 public struct SkyboxPush
 {
-    public float4x4 invViewRot;  // world <- view rotation (xyz basis)
+    public float4x4 invViewRot;  // world <- view rotation
     public float4   _pad0;
     public float4   _pad1;
 };
 [[vk::push_constant]]
 SkyboxPush pc;
 
-// 8 cube corners (unit cube, [-1,1]^3).
-static const float3 kCorners[8] = float3[8](
-    float3(-1, -1, -1), float3( 1, -1, -1), float3( 1,  1, -1), float3(-1,  1, -1),
-    float3(-1, -1,  1), float3( 1, -1,  1), float3( 1,  1,  1), float3(-1,  1,  1)
+// 6 vertices = 2 triangles forming a full-screen quad over NDC [-1,1]².
+// Winding is CCW (Vulkan default front face). `vid` selects one of 4 corners.
+static const float2 kQuadCorners[4] = float2[4](
+    float2(-1, -1), float2( 1, -1), float2( 1,  1), float2(-1,  1)
 );
+static const uint kQuadIdx[6] = uint[6](0, 1, 2, 0, 2, 3);
 
 [shader("vertex")]
 public void vertexMain(
@@ -55,19 +55,18 @@ public void vertexMain(
     out float3 worldDir : TEXCOORD0
 )
 {
-    // 36 vertices (12 triangles) over the 8 cube corners; wrap with %8. No
-    // index buffer is bound — the vertex shader selects the corner by vid.
-    float3 corner = kCorners[vid % 8];
-    // Rotate the corner by the inverse-view rotation to get the world-space
-    // look direction from the camera. Using a w=0 multiply strips translation
-    // so the box stays centered on the camera (at infinity).
-    worldDir = mul(pc.invViewRot, float4(corner, 0.0)).xyz;
-    // Draw at the near plane (z=0 in Vulkan NDC, depth = z/w = 0/1 = 0).
-    // Depth test is LESS against the cleared depth buffer (1.0), so the
-    // skybox passes (0 < 1.0). Depth writes are disabled by the pipeline, so
-    // the depth buffer stays at 1.0 and scene geometry (z in (0,1)) still
-    // passes LESS and occludes the skybox.
-    clipPos = float4(corner.xy, 0.0, 1.0);
+    float2 ndc = kQuadCorners[kQuadIdx[vid]];
+    // Full-screen quad at the near plane: z=0 -> depth = z/w = 0, which passes
+    // the LESS test against the cleared depth (1.0). Depth writes are disabled
+    // by the pipeline, so scene geometry (which writes depth) always occludes.
+    clipPos = float4(ndc, 0.0, 1.0);
+    // View-space look direction for this pixel: (ndc.x, ndc.y, -1). The -Z
+    // matches the engine's view convention (camera looks down -Z). This is a
+    // cheap approximation that ignores projection/FOV; for a skybox at
+    // infinity the direction is what matters and the slight FOV distortion is
+    // visually acceptable. Rotate into world space for cubemap sampling.
+    float3 viewDir = float3(ndc.x, ndc.y, -1.0);
+    worldDir = mul(pc.invViewRot, float4(viewDir, 0.0)).xyz;
 }
 
 [shader("fragment")]

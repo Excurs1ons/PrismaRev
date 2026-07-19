@@ -1194,9 +1194,9 @@ impl SkyboxPass {
 
     /// Draw the skybox into the currently-bound render pass (begun by the
     /// caller, `ScenePass`). `render_pass` + `extent` are needed to lazily
-    /// create the pipeline. `inv_view_rot` is the upper-left 3x3 of the
-    /// inverse view matrix, packed as mat4, used to rotate the cube corners
-    /// into world space.
+    /// create the pipeline. `inv_view_rot` is the inverse view rotation
+    /// (world <- view), used to rotate the view-space look direction into
+    /// world space for cubemap sampling.
     pub fn draw(
         &mut self,
         device: &ash::Device,
@@ -1292,8 +1292,8 @@ impl SkyboxPass {
                 &[],
             );
 
-            // Push the inverse-view rotation as the SkyboxPush (128-byte
-            // range; only the first mat4 is used by the shader).
+            // Push `invViewRot` (inverse view rotation) as the SkyboxPush
+            // (128-byte range; only the first mat4 is used by the shader).
             let mut push_data = [0u8; 128];
             push_data[..64].copy_from_slice(std::slice::from_raw_parts(
                 inv_view_rot as *const _ as *const u8,

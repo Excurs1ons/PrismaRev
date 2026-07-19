@@ -203,9 +203,10 @@ pub struct GraphFrame<'a> {
     /// to the bindless push constant `debug_flags` field.
     pub debug_flags: u32,
     /// Inverse-view rotation (upper-left 3x3 of inverse(view)), packed as mat4.
-    /// Used by the skybox pass to rotate cube corners into world space. Because
-    /// the view matrix is a rigid transform, this is just the transpose of the
-    /// upper-left 3x3 of `view` (the rotation basis), with w=0 on the 4th row.
+    /// Used by the skybox pass to rotate view-space look directions into world
+    /// space. Because the view matrix is a rigid transform, this is just the
+    /// transpose of the upper-left 3x3 of `view` (the rotation basis), with w=0
+    /// on the 4th row.
     pub inv_view_rot: [[f32; 4]; 4],
 }
 
