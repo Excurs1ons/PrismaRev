@@ -231,6 +231,11 @@ pub struct GraphFrame<'a> {
     /// Inverse projection (used by `GtaoPass` to reconstruct view-space
     /// radius from screen-space samples). Forwarded via `GraphFrame`.
     pub inv_projection: [[f32; 4]; 4],
+    /// Swapchain image views for the current frame. Forwarded so `PostPass`
+    /// can (re)build its per-swapchain-image framebuffers inside `execute`
+    /// (mirroring `ScenePass::ensure_target`), instead of relying on
+    /// `GraphRenderer` to call `set_target` every frame.
+    pub swapchain_views: &'a [vk::ImageView],
 }
 
 /// Context passed to each pass's `execute`.

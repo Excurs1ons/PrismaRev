@@ -561,6 +561,24 @@ impl GraphRenderer {
         // Per-frame state (framebuffer ensure, AO view, light SSBO) is now
         // handled inside each pass's `execute`, reading from `ctx.frame`.
         if record.is_ok() {
+            // Pull last frame's GTAO AO view before constructing `GraphFrame`
+            // so the graph_frame build doesn't hold a `&mut self.graph` borrow
+            // alongside `&self.swapchain` below (both are disjoint fields, but
+            // extracting the Copy value up front keeps the borrow story simple).
+            let ao_view = self
+                .graph
+                .pass_mut::<crate::gtao::GtaoPass>()
+                .map(|g| g.ao_view((frame as u32 + 1) % 2))
+                .unwrap_or_else(vk::ImageView::null);
+            // PostPass (re)builds its per-swapchain-image framebuffer inside
+            // `execute` from these views, mirroring ScenePass::ensure_target.
+            // Empty slice when there is no swapchain (e.g. headless test) -
+            // PostPass::set_target no-ops on an empty view list.
+            let swapchain_views: &[vk::ImageView] = self
+                .swapchain
+                .as_ref()
+                .map(|sw| sw.views.as_slice())
+                .unwrap_or(&[]);
             let graph_frame = GraphFrame {
                 frame_ubo: &self.frame_ubos[frame],
                 draw_list: draw_items,
@@ -591,13 +609,10 @@ impl GraphRenderer {
                 // uses this to stay aligned with the camera.
                 view_proj: frame_data.view_proj,
                 lights,
-                ao_view: self
-                    .graph
-                    .pass_mut::<crate::gtao::GtaoPass>()
-                    .map(|g| g.ao_view((frame as u32 + 1) % 2))
-                    .unwrap_or_else(vk::ImageView::null),
+                ao_view,
                 tonemap_mode,
                 inv_projection,
+                swapchain_views,
             };
 
             let render_ctx = crate::render_graph::RenderContext {

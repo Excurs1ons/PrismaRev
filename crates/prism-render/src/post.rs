@@ -504,6 +504,18 @@ impl RenderPassNode for PostPass {
             .published_image(SCENE_COLOR_H)
             .unwrap_or(vk::Image::null());
 
+        // (Re)build this swapchain image's framebuffer if missing or the
+        // swapchain changed - mirrors `ScenePass::ensure_target`. Before PR-1
+        // this was `GraphRenderer`'s job (it called `set_target` every frame);
+        // now the graph drives it so the framebuffer lifecycle is owned here.
+        self.set_target(
+            ctx.device,
+            ctx.frame.swapchain_views,
+            ctx.image_index,
+            ctx.extent,
+        )
+        .context("PostPass: set_target")?;
+
         // Bind the HDR input view into this frame's descriptor set (replaces
         // the old `set_input` call from `GraphRenderer::render`).
         self.set_input(ctx.device, ctx.frame_index, hdr_view);

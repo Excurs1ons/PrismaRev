@@ -879,6 +879,13 @@ impl RenderPassNode for GtaoPass {
             .published_image(SCENE_NORMAL_H)
             .unwrap_or(vk::Image::null());
 
+        // Update the depth + normal descriptor sets for this frame-in-flight.
+        // This used to be called from `GraphRenderer::render` before PR-1; it
+        // MUST happen before `execute` (which binds the descriptor sets and
+        // draws), otherwise validation reports `depthTex` / `normalTex` as
+        // never updated via vkUpdateDescriptorSets.
+        self.set_inputs(ctx.device, ctx.frame_index, depth_view, normal_view);
+
         let gtao_extent = self.extent();
         let inputs = GtaoFrameInputs {
             depth_image,
