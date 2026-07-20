@@ -62,7 +62,7 @@
                                     "scalarType": "float32"
                                 }
                             },
-                            "binding": {"kind": "uniform", "offset": 0, "size": 64}
+                            "binding": {"kind": "uniform", "offset": 0, "size": 64, "elementStride": 0}
                         },
                         {
                             "name": "viewport",
@@ -74,7 +74,7 @@
                                     "scalarType": "float32"
                                 }
                             },
-                            "binding": {"kind": "uniform", "offset": 64, "size": 8}
+                            "binding": {"kind": "uniform", "offset": 64, "size": 8, "elementStride": 4}
                         },
                         {
                             "name": "radius",
@@ -82,7 +82,7 @@
                                 "kind": "scalar",
                                 "scalarType": "float32"
                             },
-                            "binding": {"kind": "uniform", "offset": 72, "size": 4}
+                            "binding": {"kind": "uniform", "offset": 72, "size": 4, "elementStride": 0}
                         },
                         {
                             "name": "mode",
@@ -90,7 +90,7 @@
                                 "kind": "scalar",
                                 "scalarType": "uint32"
                             },
-                            "binding": {"kind": "uniform", "offset": 76, "size": 4}
+                            "binding": {"kind": "uniform", "offset": 76, "size": 4, "elementStride": 0}
                         },
                         {
                             "name": "_pad0",
@@ -98,7 +98,7 @@
                                 "kind": "scalar",
                                 "scalarType": "uint32"
                             },
-                            "binding": {"kind": "uniform", "offset": 80, "size": 4}
+                            "binding": {"kind": "uniform", "offset": 80, "size": 4, "elementStride": 0}
                         }
                     ]
                 },
@@ -121,7 +121,7 @@
                                         "scalarType": "float32"
                                     }
                                 },
-                                "binding": {"kind": "uniform", "offset": 0, "size": 64}
+                                "binding": {"kind": "uniform", "offset": 0, "size": 64, "elementStride": 0}
                             },
                             {
                                 "name": "viewport",
@@ -133,7 +133,7 @@
                                         "scalarType": "float32"
                                     }
                                 },
-                                "binding": {"kind": "uniform", "offset": 64, "size": 8}
+                                "binding": {"kind": "uniform", "offset": 64, "size": 8, "elementStride": 4}
                             },
                             {
                                 "name": "radius",
@@ -141,7 +141,7 @@
                                     "kind": "scalar",
                                     "scalarType": "float32"
                                 },
-                                "binding": {"kind": "uniform", "offset": 72, "size": 4}
+                                "binding": {"kind": "uniform", "offset": 72, "size": 4, "elementStride": 0}
                             },
                             {
                                 "name": "mode",
@@ -149,7 +149,7 @@
                                     "kind": "scalar",
                                     "scalarType": "uint32"
                                 },
-                                "binding": {"kind": "uniform", "offset": 76, "size": 4}
+                                "binding": {"kind": "uniform", "offset": 76, "size": 4, "elementStride": 0}
                             },
                             {
                                 "name": "_pad0",
@@ -157,11 +157,11 @@
                                     "kind": "scalar",
                                     "scalarType": "uint32"
                                 },
-                                "binding": {"kind": "uniform", "offset": 80, "size": 4}
+                                "binding": {"kind": "uniform", "offset": 80, "size": 4, "elementStride": 0}
                             }
                         ]
                     },
-                    "binding": {"kind": "uniform", "offset": 0, "size": 96}
+                    "binding": {"kind": "uniform", "offset": 0, "size": 96, "elementStride": 0}
                 }
             }
         }
@@ -297,5 +297,6 @@
                 }
             ]
         }
-    ]
+    ],
+    "bindlessSpaceIndex": 2
 }

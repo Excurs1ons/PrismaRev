@@ -20,7 +20,7 @@
                                     "scalarType": "float32"
                                 }
                             },
-                            "binding": {"kind": "uniform", "offset": 0, "size": 64}
+                            "binding": {"kind": "uniform", "offset": 0, "size": 64, "elementStride": 0}
                         }
                     ]
                 },
@@ -43,11 +43,11 @@
                                         "scalarType": "float32"
                                     }
                                 },
-                                "binding": {"kind": "uniform", "offset": 0, "size": 64}
+                                "binding": {"kind": "uniform", "offset": 0, "size": 64, "elementStride": 0}
                             }
                         ]
                     },
-                    "binding": {"kind": "uniform", "offset": 0, "size": 64}
+                    "binding": {"kind": "uniform", "offset": 0, "size": 64, "elementStride": 0}
                 }
             }
         }
@@ -202,5 +202,6 @@
                 }
             ]
         }
-    ]
+    ],
+    "bindlessSpaceIndex": 0
 }

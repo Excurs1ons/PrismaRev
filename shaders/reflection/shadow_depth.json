@@ -20,7 +20,7 @@
                                     "scalarType": "float32"
                                 }
                             },
-                            "binding": {"kind": "uniform", "offset": 0, "size": 64}
+                            "binding": {"kind": "uniform", "offset": 0, "size": 64, "elementStride": 0}
                         },
                         {
                             "name": "lightViewProj",
@@ -33,7 +33,7 @@
                                     "scalarType": "float32"
                                 }
                             },
-                            "binding": {"kind": "uniform", "offset": 64, "size": 64}
+                            "binding": {"kind": "uniform", "offset": 64, "size": 64, "elementStride": 0}
                         }
                     ]
                 },
@@ -56,7 +56,7 @@
                                         "scalarType": "float32"
                                     }
                                 },
-                                "binding": {"kind": "uniform", "offset": 0, "size": 64}
+                                "binding": {"kind": "uniform", "offset": 0, "size": 64, "elementStride": 0}
                             },
                             {
                                 "name": "lightViewProj",
@@ -69,11 +69,11 @@
                                         "scalarType": "float32"
                                     }
                                 },
-                                "binding": {"kind": "uniform", "offset": 64, "size": 64}
+                                "binding": {"kind": "uniform", "offset": 64, "size": 64, "elementStride": 0}
                             }
                         ]
                     },
-                    "binding": {"kind": "uniform", "offset": 0, "size": 128}
+                    "binding": {"kind": "uniform", "offset": 0, "size": 128, "elementStride": 0}
                 }
             }
         }
@@ -193,5 +193,6 @@
                 }
             ]
         }
-    ]
+    ],
+    "bindlessSpaceIndex": 0
 }

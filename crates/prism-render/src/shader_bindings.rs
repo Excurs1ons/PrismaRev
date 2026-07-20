@@ -14,6 +14,29 @@ pub mod gizmo {
     pub const PUSH_CONSTANT_SIZE: u32 = 64;
 }
 
+pub mod gtao {
+    //! Bindings reflected from shaders/slang/gtao.slang
+
+    /// Entry point names (for VkPipelineShaderStageCreateInfo).
+    pub const ENTRY_VERTEX_MAIN: &str = "vertexMain"; // stage: VERTEX
+    pub const ENTRY_FRAGMENT_MAIN: &str = "fragmentMain"; // stage: FRAGMENT
+
+    /// Push-constant block size in bytes (reflected).
+    pub const PUSH_CONSTANT_SIZE: u32 = 0;
+
+    // --- descriptor set 0 ---
+    pub const DEPTH_TEX_SET: u32 = 0;
+    pub const DEPTH_TEX_BINDING: u32 = 0; // COMBINED_IMAGE_SAMPLER
+    pub const DEPTH_SAMPLER_SET: u32 = 0;
+    pub const DEPTH_SAMPLER_BINDING: u32 = 1; // COMBINED_IMAGE_SAMPLER
+
+    // --- descriptor set 1 ---
+    pub const NORMAL_TEX_SET: u32 = 1;
+    pub const NORMAL_TEX_BINDING: u32 = 0; // COMBINED_IMAGE_SAMPLER
+    pub const NORMAL_SAMPLER_SET: u32 = 1;
+    pub const NORMAL_SAMPLER_BINDING: u32 = 1; // COMBINED_IMAGE_SAMPLER
+}
+
 pub mod mesh_vert {
     //! Bindings reflected from shaders/slang/mesh_vert.slang
 
@@ -26,6 +49,21 @@ pub mod mesh_vert {
     // --- descriptor set 0 ---
     pub const FRAME_SET: u32 = 0;
     pub const FRAME_BINDING: u32 = 0; // UNIFORM_BUFFER
+}
+
+pub mod post {
+    //! Bindings reflected from shaders/slang/post.slang
+
+    /// Entry point names (for VkPipelineShaderStageCreateInfo).
+    pub const ENTRY_VERTEX_MAIN: &str = "vertexMain"; // stage: VERTEX
+    pub const ENTRY_FRAGMENT_MAIN: &str = "fragmentMain"; // stage: FRAGMENT
+
+    /// Push-constant block size in bytes (reflected).
+    pub const PUSH_CONSTANT_SIZE: u32 = 16;
+
+    // --- descriptor set 0 ---
+    pub const HDR_TEX_SET: u32 = 0;
+    pub const HDR_TEX_BINDING: u32 = 0; // COMBINED_IMAGE_SAMPLER
 }
 
 pub mod scene_frag {
@@ -64,6 +102,10 @@ pub mod scene_frag {
     pub const SHADOW_MAP_BINDING: u32 = 0; // COMBINED_IMAGE_SAMPLER
     pub const SHADOW_SAMPLER_SET: u32 = 3;
     pub const SHADOW_SAMPLER_BINDING: u32 = 1; // COMBINED_IMAGE_SAMPLER
+
+    // --- descriptor set 4 ---
+    pub const AO_TEX_SET: u32 = 4;
+    pub const AO_TEX_BINDING: u32 = 0; // COMBINED_IMAGE_SAMPLER
 }
 
 pub mod shadow_depth {
