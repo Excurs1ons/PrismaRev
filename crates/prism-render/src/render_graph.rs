@@ -443,9 +443,9 @@ impl RenderGraph {
     /// like `recreate_swapchain`, which must call into a specific pass).
     /// Returns `None` if no pass of that type was registered.
     pub fn pass_mut<T: RenderPassNode + 'static>(&mut self) -> Option<&mut T> {
-        self.passes.iter_mut().find_map(|p| {
-            (p as &mut dyn RenderPassNode as &mut dyn std::any::Any).downcast_mut::<T>()
-        })
+        self.passes
+            .iter_mut()
+            .find_map(|p| (&mut **p as &mut dyn std::any::Any).downcast_mut::<T>())
     }
 
     /// Append a pass to an already-built graph (e.g. ScenePass / GtaoPass /
