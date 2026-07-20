@@ -67,10 +67,7 @@ fn try_clip(bin: &str, args: &[&str], text: &str) -> std::io::Result<()> {
     }
     let status = child.wait()?;
     if !status.success() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("{bin} exited non-zero"),
-        ));
+        return Err(std::io::Error::other(format!("{bin} exited non-zero")));
     }
     Ok(())
 }

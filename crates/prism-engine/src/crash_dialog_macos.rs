@@ -58,10 +58,7 @@ pub fn copy_to_clipboard(text: &str) -> std::io::Result<()> {
     }
     let status = child.wait()?;
     if !status.success() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "pbcopy exited non-zero",
-        ));
+        return Err(std::io::Error::other("pbcopy exited non-zero"));
     }
     Ok(())
 }
