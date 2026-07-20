@@ -386,3 +386,32 @@ GTAO+PostPass 集成时一次性暴露了 5 个验证错误，按修复顺序：
 - 验证错误按 Vulkan 调用顺序报（创建 -> 记录 -> 提交），**前面的错误可能掩盖后面的**。修一个跑一次，别一次性猜所有错。
 - 错误 4（in-flight descriptor）最初被错误 3（usage 不匹配）的 noise 掩盖 -- 修完 3 才看清 4 是独立问题。每个 VUID 独立排查，别假设"都是 descriptor 引起的"。
 - `RUST_LOG=info,prism_render=trace` + 日志写文件（`target/debug/prismarev.log`，main.rs 的 logger 在非终端时自动落盘）是验证渲染管线的标准手段：grep `validation|ERROR|VUID` 计数，grep `ScenePass:|GtaoPass:|PostPass:` 确认各 pass 都在执行。
+
+## 30. CI 漂移 / 工具链类教训（本次修 CI 全绿踩的坑）
+
+**背景**：一次 `git pull` 拉进大量新 shader 源（新增 `gtao.slang` / `post.slang` / `skybox.slang`，重命名 `mesh->mesh_vert`、`bindless->scene_frag`、`shadow->shadow_depth`），但没人跑 `shaders/compile.sh` + `xtask shader-bindgen` 重新生成产物，导致 CI 的 5 个 job 全红。修完一共 4 个 commit。
+
+### 30.1 lint 类（fmt + clippy）
+
+- **`cargo fmt --all -- --check` 必须过**：pull 进来的代码若不符合当前 rustfmt 版本，`cargo fmt --all` 会改动一批文件（即使不是你逻辑改的），CI 第一步就挂。本地先 `cargo fmt --all` 再提交。
+- **clippy 以 CI 的 rustc 版本为准，不是本地**：CI 用最新 stable，本地 Termux 的 rustc 可能旧一两个小版本，会漏掉新 lint。本次 `crash_dialog_linux.rs` / `macos.rs` 的 `std::io::Error::new(ErrorKind::Other, ...)` 触发 `io_other_error` lint（CI 新版 rustc 才有），本地 1.96 不报。**本地复现不到的 lint 只能靠 CI 迭代**。根因修法：`ErrorKind::Other` → `std::io::Error::other(...)`。
+- **clippy `-D warnings` 下所有 `too_many_arguments`（阈值 7）必须重构，不要用 `#[allow]`**：本项目约定修根因。把 8+ 参数拆成参数分组 struct（`barrier2` 的 `ImageBarrier` + `color_subresource`；`transition_image_single` 收 `vk::ImageSubresourceRange`；`RenderGraph::execute` 收聚合的 `&RenderContext`）。
+- 其他常见 clippy 根因修法（均已落）：`and_then(|x| Some(y))` → `map`；`impl Default` 可派生就 derive + `#[default]`；`x as usize` 当 `x: usize` 时去掉 cast；`bits = (bits<<16)|(bits>>16)` → `bits.rotate_right(16)`；过高精度 float 字面量截断；`clone()` 在 Copy 类型上去掉；`to_json(&self)` 对 Copy 类型改 `to_json(self)`；`write!(..,"{}\n")` → `writeln!`；可合并的 `if let` 合并；显式无用 lifetime 省略。
+
+### 30.2 shaders job 环境依赖
+
+- **`shaders/compile.sh` 依赖 `spirv-tools`（`spirv-dis` / `spirv-as`），CI 的 shaders job 之前没装**：`fix_spirv.py`（剥离 bindless 运行时数组的非法 `ArrayStride`，见 §13）调用 `spirv-dis` 反汇编，缺工具直接 `FileNotFoundError` 崩溃。修复：在 ci.yml 的 shaders job 加 `sudo apt-get install -y spirv-tools`。
+- **`shaders/compile.sh` 只在 `scene_frag` 上跑 `fix_spv`**（仅 bindless 那个 shader 有 ArrayStride 问题）。其余 shader 不调 `fix_spirv`，不需要 spirv-tools。
+
+### 30.3 drift check：改了 shader 源必须重生成并提交产物
+
+- CI shaders job 末尾有 **drift guard**：跑 `shaders/compile.sh` 重新编译 `.spv` + reflection JSON，再 `xtask shader-bindgen` 重新生成 `crates/prism-render/src/shader_bindings.rs`，然后 `git diff --quiet` 比对仓库里已提交的 `.spv` 和 `shader_bindings.rs`。**任何不一致 → `exit 1`**。
+- **规则：动了 `shaders/slang/*.slang`，必须本地跑 `bash shaders/compile.sh` + `cd xtask && cargo run --bin shader-bindgen -- ../shaders/reflection ../crates/prism-render/src/shader_bindings.rs`，把生成的 `.spv` / `reflection/*.json` / `shader_bindings.rs` 一起 commit**。否则 CI 必红。
+- **Termux 本地跑不了 `shaders/compile.sh`**：slangc 官方预编译是 glibc 二进制，Termux（bionic）无法运行；且 `.spv` 是 `include_bytes!` 进二进制的，必须和 CI 用**同版本 slangc**（当前 `2026.13.1`）生成才一致。本次因本地无 slangc，借 **CI artifact**（drift step 前的 `Upload compiled SPIR-V + reflection (debug)` 已上传重新编译的 `.spv` 和 reflection JSON）取回正确产物：下载 artifact 的 `.spv` + `reflection/*.json`，本地只跑 `xtask shader-bindgen`（它只吃 reflection JSON，不需要 slangc）生成 `shader_bindings.rs`，覆盖后提交。
+- **`.spv` 和 `shader_bindings.rs` 必须同时更新**：只更新一个，drift 仍挂（drift 同时检查两者）。
+
+### 30.4 环境 / 操作
+
+- **Termux 下 `rm -rf` 被系统禁止**：清理目录用 `python3 -c "import shutil; shutil.rmtree(path)"` 或 `rmdir`（空目录），不要用 `rm -rf`。单文件 `rm` 无 `-r` 正常。
+- **crates.io 直连 TLS 抖动**：Termux 下 `static.crates.io` 下载偶发 `SSL connect error`。配置 `~/.cargo/config.toml` 走国内镜像（当前 `rsproxy`：`registry = "sparse+https://rsproxy.cn/index/"`）稳定。
+- **CI 失败先抓 `gh run view <id> --log-failed`**：GitHub API 偶发 503，用重试循环抓；失败 job 的真实错误在 `--log-failed` 末尾（`##[error]Process completed with exit code 1` 上方）。本次链路：`lint(clippy)` → `shaders(spirv-tools 缺失)` → `shaders(drift: shader 产物陈旧)` 三层，逐层迭代修。
