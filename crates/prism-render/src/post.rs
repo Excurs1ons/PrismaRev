@@ -502,7 +502,7 @@ impl RenderPassNode for PostPass {
         };
         let hdr_image = resources
             .published_image(SCENE_COLOR_H)
-            .unwrap_or_else(|| vk::Image::null());
+            .unwrap_or(vk::Image::null());
 
         // Bind the HDR input view into this frame's descriptor set (replaces
         // the old `set_input` call from `GraphRenderer::render`).

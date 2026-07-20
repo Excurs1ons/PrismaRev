@@ -874,10 +874,10 @@ impl RenderPassNode for GtaoPass {
         // the resource table's image (if present) else fall back to the view.
         let depth_image = resources
             .published_image(SCENE_DEPTH_H)
-            .unwrap_or_else(|| vk::Image::null());
+            .unwrap_or(vk::Image::null());
         let normal_image = resources
             .published_image(SCENE_NORMAL_H)
-            .unwrap_or_else(|| vk::Image::null());
+            .unwrap_or(vk::Image::null());
 
         let gtao_extent = self.extent();
         let inputs = GtaoFrameInputs {
