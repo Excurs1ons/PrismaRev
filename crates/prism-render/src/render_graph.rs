@@ -338,7 +338,7 @@ impl GraphResources {
 // ---------------------------------------------------------------------------
 
 pub struct RenderGraphBuilder {
-    passes: Vec<Box<dyn RenderPassNode>>,
+    passes: Vec<Box<dyn RenderPassNode + 'static>>,
     resources: HashMap<ResourceHandle, GraphResource>,
     next_handle: u32,
     settings: RenderSettings,
@@ -356,13 +356,13 @@ impl RenderGraphBuilder {
 
     /// Override the render settings used when `setup` is called on passes.
     pub fn settings(mut self, settings: &RenderSettings) -> Self {
-        self.settings = *settings;
+        self.settings = settings.clone();
         self
     }
 
     /// Register a pass. Order of insertion = execution order (simple
     /// linear pipeline for now; topological sort can be added later).
-    pub fn add_pass(&mut self, pass: Box<dyn RenderPassNode>) {
+    pub fn add_pass(&mut self, pass: Box<dyn RenderPassNode + 'static>) {
         self.passes.push(pass);
     }
 
@@ -433,7 +433,7 @@ impl Default for RenderGraphBuilder {
 // ---------------------------------------------------------------------------
 
 pub struct RenderGraph {
-    passes: Vec<Box<dyn RenderPassNode>>,
+    passes: Vec<Box<dyn RenderPassNode + 'static>>,
     resources: HashMap<ResourceHandle, GraphResource>,
     settings: RenderSettings,
 }
@@ -453,7 +453,7 @@ impl RenderGraph {
     /// the scene can bind the shadow view). Runs `setup` on the new pass
     /// (merging its declared resources into the graph) and appends it to the
     /// execution order.
-    pub fn add_pass(&mut self, mut pass: Box<dyn RenderPassNode>) {
+    pub fn add_pass(&mut self, mut pass: Box<dyn RenderPassNode + 'static>) {
         let mut b = RenderGraphBuilder::new().settings(&self.settings);
         pass.setup(&mut b, &self.settings);
         for (h, r) in b.resources {

@@ -847,7 +847,11 @@ impl RenderPassNode for GtaoPass {
         // from `resources` in `execute`. No graph-managed resources of its own.
     }
 
-    fn execute(&mut self, ctx: &RenderContext, resources: &mut GraphResources) -> Result<()> {
+    fn execute(
+        &mut self,
+        ctx: &RenderContext,
+        resources: &mut GraphResources,
+    ) -> anyhow::Result<()> {
         let depth_view = match resources.published_view(SCENE_DEPTH_H) {
             Some(v) => v,
             None => {
@@ -893,6 +897,7 @@ impl RenderPassNode for GtaoPass {
     }
 }
 mod tests {
+    #[allow(unused_imports)]
     use super::*;
 
     #[test]

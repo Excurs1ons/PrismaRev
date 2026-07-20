@@ -488,7 +488,11 @@ impl RenderPassNode for PostPass {
         // `execute`. PostPass owns no graph-managed resources of its own.
     }
 
-    fn execute(&mut self, ctx: &RenderContext, resources: &mut GraphResources) -> Result<()> {
+    fn execute(
+        &mut self,
+        ctx: &RenderContext,
+        resources: &mut GraphResources,
+    ) -> anyhow::Result<()> {
         let hdr_view = match resources.published_view(SCENE_COLOR_H) {
             Some(v) => v,
             None => {
