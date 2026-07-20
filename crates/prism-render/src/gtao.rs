@@ -32,6 +32,9 @@ use ash::vk;
 
 use crate::context::VulkanContext;
 use crate::pipeline::{GraphicsPipeline, PipelineDesc};
+use crate::render_graph::{
+    GraphResources, RenderContext, RenderPassNode, RenderSettings, SCENE_DEPTH_H, SCENE_NORMAL_H,
+};
 use crate::render_pass::find_memory_type;
 use crate::shader;
 
@@ -832,7 +835,62 @@ fn transition_ao_images_to_shader_read(
     Ok(())
 }
 
-#[cfg(test)]
+impl RenderPassNode for GtaoPass {
+    fn name(&self) -> &str {
+        "GtaoPass"
+    }
+
+    fn setup(&mut self, _graph: &mut RenderGraphBuilder, _settings: &RenderSettings) {
+        // Inputs (depth/normal views) are published by ScenePass under the
+        // well-known SCENE_DEPTH_H / SCENE_NORMAL_H handles; GTAO reads them
+        // from `resources` in `execute`. No graph-managed resources of its own.
+    }
+
+    fn execute(&mut self, ctx: &RenderContext, resources: &mut GraphResources) -> Result<()> {
+        let depth_view = match resources.published_view(SCENE_DEPTH_H) {
+            Some(v) => v,
+            None => {
+                log::warn!("GtaoPass: no ScenePass depth view published; skipping");
+                return Ok(());
+            }
+        };
+        let normal_view = match resources.published_view(SCENE_NORMAL_H) {
+            Some(v) => v,
+            None => {
+                log::warn!("GtaoPass: no ScenePass normal view published; skipping");
+                return Ok(());
+            }
+        };
+        // The images themselves are needed only for the layout barriers; reuse
+        // the view's image handle via the ScenePass-published view (vkImageView
+        // carries the image). We pass the same handle for image + view; the
+        // barrier only needs a valid image, and `vk::Image` from a view is not
+        // directly available here, so we use the ScenePass-published image via
+        // the resource table's image (if present) else fall back to the view.
+        let depth_image = resources
+            .published_image(SCENE_DEPTH_H)
+            .unwrap_or_else(|| vk::Image::null());
+        let normal_image = resources
+            .published_image(SCENE_NORMAL_H)
+            .unwrap_or_else(|| vk::Image::null());
+
+        let gtao_extent = self.extent();
+        let inputs = GtaoFrameInputs {
+            depth_image,
+            depth_view,
+            normal_image,
+            normal_view,
+        };
+        let push = GtaoPushConstants {
+            inv_proj: ctx.frame.inv_projection,
+            viewport: [gtao_extent.width as f32, gtao_extent.height as f32],
+            radius: 0.5,
+            mode: 0,
+            _pad0: 0,
+        };
+        self.execute(ctx.device, ctx.cmd, ctx.frame_index, &inputs, &push)
+    }
+}
 mod tests {
     use super::*;
 

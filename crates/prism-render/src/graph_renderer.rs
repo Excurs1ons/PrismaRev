@@ -55,16 +55,11 @@ pub struct GraphRenderer {
     #[allow(dead_code)]
     ibl: IblResources,
     graph: RenderGraph,
-    scene_pass: ScenePass,
-    /// Half-resolution GTAO pass. Runs after `scene_pass` every frame and
-    /// produces a double-buffered R8 AO texture the scene samples (1-frame
-    /// latency) to attenuate IBL diffuse + specular.
-    gtao_pass: crate::gtao::GtaoPass,
-    /// Fullscreen-triangle tonemap pass: HDR scene color -> sRGB swapchain.
-    /// Runs after `gtao_pass` (the GTAO barriers don't touch the HDR color,
-    /// so order between them is flexible; placing GTAO first lets a future
-    /// AO-aware bloom read the AO-modulated HDR).
-    post_pass: crate::post::PostPass,
+    /// All render passes (ShadowMapPass + ScenePass + GtaoPass + PostPass)
+    /// are owned by the graph and executed in registration order. The
+    /// `GraphRenderer` no longer pokes individual passes; it drives them via
+    /// `graph.execute` and reaches into them only for lifecycle ops
+    /// (`recreate_swapchain`) via `graph.pass_mut`.
     settings: RenderSettings,
     shadow_sampler: vk::Sampler,
     // Captured from the graph's allocated shadow map; consumed via the
@@ -166,7 +161,7 @@ impl GraphRenderer {
         // graph's Vulkan resources (the shadow map depth image) and fetch its
         // image view for the ScenePass to sample.
         let mut shadow_pass = crate::passes::ShadowMapPass::new();
-        let mut builder = RenderGraphBuilder::new();
+        let mut builder = RenderGraphBuilder::new().settings(&settings);
         shadow_pass.setup(&mut builder, &settings);
         let shadow_handle = shadow_pass.shadow_map_handle();
         builder.add_pass(Box::new(shadow_pass));
@@ -229,6 +224,15 @@ impl GraphRenderer {
         let post_pass = crate::post::PostPass::new(&context, color_format, frame_count)
             .context("PostPass::new")?;
 
+        // Register ScenePass / GtaoPass / PostPass into the graph. The shadow
+        // map is already allocated (above), so ScenePass binds the correct
+        // shadow view via `set_resources`. `RenderGraph::add_pass` runs each
+        // pass's `setup` (declaring its graph-edge output handles) and appends
+        // it to the execution order: Shadow -> Scene -> GTAO -> Post.
+        graph.add_pass(Box::new(scene_pass));
+        graph.add_pass(Box::new(gtao_pass));
+        graph.add_pass(Box::new(post_pass));
+
         Ok(Self {
             swapchain: Some(swapchain),
             command_pool,
@@ -241,16 +245,10 @@ impl GraphRenderer {
             material_manager,
             ibl,
             graph,
-            scene_pass,
-            gtao_pass,
-            post_pass,
             settings,
             shadow_sampler,
             shadow_view,
             color_format,
-            // Lazily created by `ensure_egui_overlay` when the app first
-            // requests the inspector (avoids paying egui-ash-renderer init
-            // cost when the UI is never shown).
             egui_overlay: None,
             context,
         })
@@ -456,18 +454,27 @@ impl GraphRenderer {
         // This is the single entry point for swapchain recreation - the
         // acquire/present out-of-date paths in `render` also route through
         // here so the framebuffer is always torn down first.
-        self.scene_pass.drop_target(&self.context.device);
+        if let Some(scene) = self.graph.pass_mut::<ScenePass>() {
+            scene.drop_target(&self.context.device);
+            // Re-size the per-image framebuffer vectors for the new swapchain
+            // image count. `ScenePass::execute` rebuilds any missing slot via
+            // `ensure_target` on the next frame.
+            if let Some(sw) = self.swapchain.as_ref() {
+                scene.set_image_count(sw.views.len());
+            }
+        }
         // PostPass wraps swapchain views too (its framebuffers target the
         // swapchain directly). Drop them on the same lifecycle.
-        self.post_pass.drop_target(&self.context.device);
+        if let Some(post) = self.graph.pass_mut::<PostPass>() {
+            post.drop_target(&self.context.device);
+        }
         // GTAO owns its own AO images (not swapchain-derived) but sizes them
         // to half the swapchain extent, so recreate them on resize too.
         if let Some(sw) = self.swapchain.as_ref() {
-            if let Err(e) =
-                self.gtao_pass
-                    .recreate_target(&self.context, self.command_pool, sw.extent)
-            {
-                log::warn!("GtaoPass recreate_target failed: {e:#}");
+            if let Some(gtao) = self.graph.pass_mut::<crate::gtao::GtaoPass>() {
+                if let Err(e) = gtao.recreate_target(&self.context, self.command_pool, sw.extent) {
+                    log::warn!("GtaoPass recreate_target failed: {e:#}");
+                }
             }
         }
         if let Some(overlay) = self.egui_overlay.as_mut() {
@@ -548,44 +555,11 @@ impl GraphRenderer {
         }
 
         let extent = self.extent();
-        if record.is_ok() {
-            // --- Set ScenePass target (HDR intermediate + depth + normal MRT) ---
-            // ScenePass no longer targets the swapchain directly; it renders
-            // into a per-swapchain-image HDR color image that PostPass
-            // tonemaps into the swapchain later in the frame.
-            if let Some(sw) = self.swapchain.as_ref() {
-                if extent.width > 0 && extent.height > 0 {
-                    record = self
-                        .scene_pass
-                        .set_target(&device, &self.context, sw.views.len(), image_index, extent)
-                        .context("ScenePass: set_target");
-                }
-            }
-        }
 
-        // --- Bind last frame's GTAO output as the scene's AO input ---
-        // `ao_view((frame + 1) % 2)` reads the slot the GTAO pass wrote last
-        // frame (1-frame latency). On the first frame the view is null and
-        // `set_ao` leaves the descriptor unbound (PBR_FLAG_AO is off by
-        // default, so nothing samples it until the user toggles the bit).
-        if record.is_ok() {
-            let ao_view = self.gtao_pass.ao_view((frame as u32 + 1) % 2);
-            self.scene_pass.set_ao(&device, frame as u32, ao_view);
-        }
-
-        // --- Update point-light SSBO from the ECS-collected lights ---
-        // Rewrites the host-visible light buffer every frame so inspector edits
-        // to `PointLight` components show up immediately.
-        if record.is_ok() {
-            record = self
-                .scene_pass
-                .update_lights(&device, lights)
-                .context("ScenePass: update_lights");
-        }
-
-        // --- Execute render graph (ShadowMapPass) + ScenePass ---
-        // These need `&self` borrows for the frame UBO / mesh manager, so we
-        // build the GraphFrame inside the block.
+        // --- Execute render graph (Shadow -> Scene -> GTAO -> Post) ---
+        // All four passes are driven by the graph (registered in `new`).
+        // Per-frame state (framebuffer ensure, AO view, light SSBO) is now
+        // handled inside each pass's `execute`, reading from `ctx.frame`.
         if record.is_ok() {
             let graph_frame = GraphFrame {
                 frame_ubo: &self.frame_ubos[frame],
@@ -616,6 +590,14 @@ impl GraphRenderer {
                 // rotation already applied in `frame_data.view_proj`. The gizmo
                 // uses this to stay aligned with the camera.
                 view_proj: frame_data.view_proj,
+                lights,
+                ao_view: self
+                    .graph
+                    .pass_mut::<crate::gtao::GtaoPass>()
+                    .map(|g| g.ao_view((frame as u32 + 1) % 2))
+                    .unwrap_or_else(vk::ImageView::null),
+                tonemap_mode,
+                inv_projection,
             };
 
             let render_ctx = crate::render_graph::RenderContext {
@@ -630,136 +612,10 @@ impl GraphRenderer {
             };
             record = self.graph.execute(&render_ctx).context("graph execute");
 
-            if record.is_ok() {
-                record = self
-                    .scene_pass
-                    .execute(
-                        &crate::render_graph::RenderContext {
-                            device: &device,
-                            context: &self.context,
-                            settings: &self.settings,
-                            cmd,
-                            frame_index: frame as u32,
-                            image_index,
-                            extent,
-                            frame: &graph_frame,
-                        },
-                        &crate::render_graph::GraphResources {
-                            resources: std::collections::HashMap::new(),
-                        },
-                    )
-                    .context("ScenePass execute");
-            }
-
             // --- GTAO pass: read scene depth + normal, write AO[frame] ---
             // ScenePass leaves depth in DEPTH_STENCIL_ATTACHMENT_OPTIMAL and
             // the normal MRT in COLOR_ATTACHMENT_OPTIMAL; the GTAO pass
             // barriers both to *_READ_ONLY_OPTIMAL before sampling.
-            if record.is_ok() {
-                let (depth_view, depth_image) = match (
-                    self.scene_pass.depth_view(image_index),
-                    self.scene_pass.depth_image(image_index),
-                ) {
-                    (Some(v), Some(i)) => (v, i),
-                    _ => {
-                        record = Err(anyhow::anyhow!(
-                            "GtaoPass: scene depth view/image missing for image_index"
-                        ));
-                        (vk::ImageView::null(), vk::Image::null())
-                    }
-                };
-                let (normal_view, normal_image) = match (
-                    self.scene_pass.normal_view(image_index),
-                    self.scene_pass.normal_image(image_index),
-                ) {
-                    (Some(v), Some(i)) => (v, i),
-                    _ => {
-                        record = Err(anyhow::anyhow!(
-                            "GtaoPass: scene normal view/image missing for image_index"
-                        ));
-                        (vk::ImageView::null(), vk::Image::null())
-                    }
-                };
-                if record.is_ok() {
-                    self.gtao_pass
-                        .set_inputs(&device, frame as u32, depth_view, normal_view);
-                    let gtao_extent = self.gtao_pass.extent();
-                    let gtao_inputs = crate::gtao::GtaoFrameInputs {
-                        depth_image,
-                        depth_view,
-                        normal_image,
-                        normal_view,
-                    };
-                    let gtao_push = crate::gtao::GtaoPushConstants {
-                        inv_proj: inv_projection,
-                        viewport: [gtao_extent.width as f32, gtao_extent.height as f32],
-                        // View-space sample radius. Tuned for Sponza-scale scenes
-                        // (~30 world units); small enough to resolve corner
-                        // contact shadows, large enough to read across a step.
-                        radius: 0.5,
-                        // 0 = sample the normal MRT (default). The mobile
-                        // depth-reconstruct path is selected by flipping this
-                        // bit from the app once wired to a UI toggle.
-                        mode: 0,
-                        _pad0: 0,
-                    };
-                    record = self
-                        .gtao_pass
-                        .execute(&device, cmd, frame as u32, &gtao_inputs, &gtao_push)
-                        .context("GtaoPass execute");
-                }
-            }
-
-            // --- PostPass: tonemap HDR scene color -> sRGB swapchain ---
-            // Reads the ScenePass HDR color attachment (barriered here from
-            // COLOR_ATTACHMENT_OPTIMAL -> SHADER_READ_ONLY_OPTIMAL) and writes
-            // the swapchain image. The swapchain image transitions from
-            // PRESENT_SRC_KHR (last frame) -> COLOR_ATTACHMENT_OPTIMAL via the
-            // PostPass render pass `initial_layout = UNDEFINED`.
-            if record.is_ok() {
-                if let Some(sw) = self.swapchain.as_ref() {
-                    if extent.width > 0 && extent.height > 0 {
-                        record = self
-                            .post_pass
-                            .set_target(&device, &sw.views, image_index, extent)
-                            .context("PostPass: set_target");
-                    }
-                }
-                if record.is_ok() {
-                    let (hdr_view, hdr_image) = match (
-                        self.scene_pass.color_view(image_index),
-                        self.scene_pass.color_image(image_index),
-                    ) {
-                        (Some(v), Some(i)) => (v, i),
-                        _ => {
-                            record = Err(anyhow::anyhow!(
-                                "PostPass: scene HDR color view/image missing for image_index"
-                            ));
-                            (vk::ImageView::null(), vk::Image::null())
-                        }
-                    };
-                    if record.is_ok() {
-                        self.post_pass.set_input(&device, frame as u32, hdr_view);
-                        let post_push = crate::post::PostPushConstants {
-                            tonemap_mode,
-                            _pad0: 0,
-                            _pad1: 0,
-                            _pad2: 0,
-                        };
-                        record = self
-                            .post_pass
-                            .execute(
-                                &device,
-                                cmd,
-                                frame as u32,
-                                image_index,
-                                hdr_image,
-                                &post_push,
-                            )
-                            .context("PostPass execute");
-                    }
-                }
-            }
         }
 
         // --- Transition swapchain image to PRESENT_SRC_KHR ---
@@ -883,15 +739,21 @@ impl GraphRenderer {
         // Destroy ScenePass (framebuffers, depth images, render pass,
         // pipeline, shadow descriptor set). Without this, vkDestroyDevice
         // reports leaked VkImage/VkDeviceMemory/VkImageView/VkRenderPass.
-        self.scene_pass.destroy(device);
+        if let Some(scene) = self.graph.pass_mut::<ScenePass>() {
+            scene.destroy(device);
+        }
 
         // Destroy GTAO pass (AO images, render pass, pipeline, descriptor
         // sets, sampler).
-        self.gtao_pass.destroy(device);
+        if let Some(gtao) = self.graph.pass_mut::<crate::gtao::GtaoPass>() {
+            gtao.destroy(device);
+        }
 
         // Destroy PostPass (framebuffers, render pass, pipeline, descriptor
         // set, sampler).
-        self.post_pass.destroy(device);
+        if let Some(post) = self.graph.pass_mut::<crate::post::PostPass>() {
+            post.destroy(device);
+        }
 
         // Destroy egui overlay (its render pass, framebuffers, renderer).
         if let Some(overlay) = self.egui_overlay.as_mut() {

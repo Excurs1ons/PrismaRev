@@ -18,7 +18,7 @@ use crate::mesh::Vertex;
 use crate::pipeline::{GraphicsPipeline, PipelineDesc};
 use crate::render_graph::{
     GraphResources, RenderContext, RenderGraphBuilder, RenderPassNode, RenderSettings,
-    ResourceHandle, ResourceType, ShadowMode,
+    ResourceHandle, ResourceType, ShadowMode, SCENE_COLOR_H, SCENE_DEPTH_H, SCENE_NORMAL_H,
 };
 use crate::shader;
 
@@ -151,7 +151,7 @@ impl RenderPassNode for ShadowMapPass {
         });
     }
 
-    fn execute(&mut self, ctx: &RenderContext, resources: &GraphResources) -> Result<()> {
+    fn execute(&mut self, ctx: &RenderContext, resources: &mut GraphResources) -> Result<()> {
         // Only render when the rasterized shadow path is active. The graph
         // builder adds this pass only for `ShadowMode::Raster`, but guard
         // anyway so a misconfigured graph can't waste a depth pass.
@@ -688,6 +688,21 @@ pub struct ScenePass {
     /// `framebuffers[idx].is_some()` as the "current" check; this field is
     /// kept for parity with the old swapchain-view tracking pattern.
     target_views: Vec<vk::ImageView>,
+    /// Number of swapchain images. Set by `set_image_count` (called from
+    /// `GraphRenderer::recreate_swapchain` after the swapchain is recreated)
+    /// and used by `ensure_target` so the per-image framebuffer vectors are
+    /// sized correctly. Decouples framebuffer (re)creation from
+    /// `GraphRenderer`'s per-frame call sequence.
+    image_count: usize,
+    /// Graph resource handles for this pass's outputs, created in `setup` and
+    /// published (view registered) in `execute` so downstream passes
+    /// (`GtaoPass`, `PostPass`) read them by handle instead of `GraphRenderer`
+    /// poking into `ScenePass` internals. The graph does not allocate the
+    /// underlying images (ScenePass still owns its framebuffers in PR-1);
+    /// only the handle->view mapping lives in `GraphResources`.
+    out_color_h: ResourceHandle,
+    out_depth_h: ResourceHandle,
+    out_normal_h: ResourceHandle,
     extent: vk::Extent2D,
     render_pass: Option<vk::RenderPass>,
     pipeline: Option<GraphicsPipeline>,
@@ -753,6 +768,10 @@ impl ScenePass {
             depth_images: Vec::new(),
             normal_images: Vec::new(),
             target_views: Vec::new(),
+            image_count: 0,
+            out_color_h: ResourceHandle::INVALID,
+            out_depth_h: ResourceHandle::INVALID,
+            out_normal_h: ResourceHandle::INVALID,
             extent: vk::Extent2D {
                 width: 0,
                 height: 0,
@@ -796,6 +815,27 @@ impl ScenePass {
     /// `image_index` is the value returned by `acquire_next_image`;
     /// `image_count` is `swapchain.views.len()` (so we can size the per-slot
     /// vectors on the first call or after a recreate).
+    pub fn set_image_count(&mut self, image_count: usize) {
+        self.image_count = image_count;
+    }
+
+    /// Idempotent per-frame (re)creation of this swapchain image's
+    /// framebuffer + HDR/depth/normal attachments. Called from `ScenePass::
+    /// execute` (driven by the `RenderGraph`) so framebuffer lifecycle no
+    /// longer depends on `GraphRenderer` calling `set_target` every frame.
+    /// Rebuilds only the entry for `image_index` when it is missing or the
+    /// swapchain changed; safe against in-flight framebuffers (mirrors the
+    /// old `set_target` contract).
+    pub fn ensure_target(
+        &mut self,
+        device: &ash::Device,
+        context: &crate::context::VulkanContext,
+        image_index: u32,
+        extent: vk::Extent2D,
+    ) -> Result<()> {
+        self.set_target(device, context, self.image_count, image_index, extent)
+    }
+
     pub fn set_target(
         &mut self,
         device: &ash::Device,
@@ -1758,11 +1798,60 @@ impl RenderPassNode for ScenePass {
         "ScenePass"
     }
 
-    fn setup(&mut self, _graph: &mut RenderGraphBuilder, _settings: &RenderSettings) {
-        // ScenePass uses the swapchain directly (no graph-managed resources).
+    fn setup(&mut self, graph: &mut RenderGraphBuilder, _settings: &RenderSettings) {
+        // Declare output handles (well-known, so downstream passes read our
+        // depth / normal / HDR views by handle). The graph does NOT allocate
+        // the underlying images in PR-1 (ScenePass still owns its
+        // framebuffers); only the handle->view mapping is published in
+        // `execute`.
+        graph.create_resource_at(
+            SCENE_DEPTH_H,
+            ResourceType::DepthAttachment {
+                extent: vk::Extent2D {
+                    width: 1,
+                    height: 1,
+                },
+                sample_count: vk::SampleCountFlags::TYPE_1,
+            },
+        );
+        graph.create_resource_at(
+            SCENE_NORMAL_H,
+            ResourceType::ColorAttachment {
+                format: self.normal_format,
+                extent: vk::Extent2D {
+                    width: 1,
+                    height: 1,
+                },
+                sample_count: vk::SampleCountFlags::TYPE_1,
+            },
+        );
+        graph.create_resource_at(
+            SCENE_COLOR_H,
+            ResourceType::ColorAttachment {
+                format: self.color_format,
+                extent: vk::Extent2D {
+                    width: 1,
+                    height: 1,
+                },
+                sample_count: vk::SampleCountFlags::TYPE_1,
+            },
+        );
+        self.out_depth_h = SCENE_DEPTH_H;
+        self.out_normal_h = SCENE_NORMAL_H;
+        self.out_color_h = SCENE_COLOR_H;
     }
 
-    fn execute(&mut self, ctx: &RenderContext, _resources: &GraphResources) -> Result<()> {
+    fn execute(&mut self, ctx: &RenderContext, resources: &mut GraphResources) -> Result<()> {
+        // Framebuffer + HDR/depth/normal lifecycle now owned here (driven by
+        // the graph), not by `GraphRenderer::render`. `ensure_target` is
+        // idempotent: (re)builds only the slot for `image_index` when missing
+        // or the swapchain changed. `set_ao` rebinds the previous-frame GTAO
+        // visibility view (1-frame latency); `update_lights` rewrites the
+        // point-light SSBO from the ECS-collected lights for this frame.
+        self.ensure_target(ctx.device, ctx.context, ctx.image_index, ctx.extent)?;
+        self.set_ao(ctx.device, ctx.frame_index, ctx.frame.ao_view);
+        self.update_lights(ctx.device, ctx.frame.lights)?;
+
         self.ensure_render_pass(ctx.context)?;
         self.ensure_pipeline(ctx.device)?;
 
@@ -1991,6 +2080,23 @@ impl RenderPassNode for ScenePass {
         }
 
         unsafe { ctx.device.cmd_end_render_pass(ctx.cmd) };
+
+        // Publish our output views under the handles declared in `setup` so
+        // downstream passes (`GtaoPass`, `PostPass`) read them by handle
+        // instead of `GraphRenderer` reaching into ScenePass internals.
+        let idx = ctx.image_index;
+        if let (Some(v), Some(i)) = (self.color_view(idx), self.color_image(idx)) {
+            resources.set_image_view(self.out_color_h, v);
+            resources.set_image(self.out_color_h, i);
+        }
+        if let (Some(v), Some(i)) = (self.depth_view(idx), self.depth_image(idx)) {
+            resources.set_image_view(self.out_depth_h, v);
+            resources.set_image(self.out_depth_h, i);
+        }
+        if let (Some(v), Some(i)) = (self.normal_view(idx), self.normal_image(idx)) {
+            resources.set_image_view(self.out_normal_h, v);
+            resources.set_image(self.out_normal_h, i);
+        }
 
         log::trace!(
             "ScenePass: rendered {} draws into {}x{}",

@@ -24,13 +24,22 @@ use ash::vk;
 
 use crate::capabilities::RayTracingCaps;
 use crate::context::VulkanContext;
-use crate::descriptor::FrameUBO;
+use crate::descriptor::{FrameUBO, GpuLight};
 use crate::managers::{MeshHandle, RenderMeshManager};
 
 /// A typed handle to a graph-managed resource (image, buffer).
 /// The inner `u32` is an index into the graph's resource table.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ResourceHandle(pub u32);
+
+/// Well-known graph-edge resource handles published by `ScenePass` and read
+/// by downstream passes (`GtaoPass`, `PostPass`). Fixed (not counter-based)
+/// so a pass added later can reference them without knowing the upstream
+/// pass's internal handle field. The graph's `next_handle` counter is kept
+/// below this range (see `create_resource_at`), so there is no collision.
+pub const SCENE_DEPTH_H: ResourceHandle = ResourceHandle(1000);
+pub const SCENE_NORMAL_H: ResourceHandle = ResourceHandle(1001);
+pub const SCENE_COLOR_H: ResourceHandle = ResourceHandle(1002);
 
 impl ResourceHandle {
     pub const INVALID: ResourceHandle = ResourceHandle(u32::MAX);
@@ -207,6 +216,21 @@ pub struct GraphFrame<'a> {
     /// surface rotation. Used by the world-space gizmo (drawn on top of the
     /// scene) so the axes track the camera.
     pub view_proj: [[f32; 4]; 4],
+    /// Point lights collected from the ECS this frame, rewritten into the
+    /// scene shader's light SSBO. Forwarded to `ScenePass::execute` so it can
+    /// update its descriptor set without `GraphRenderer` poking it directly.
+    pub lights: &'a [GpuLight],
+    /// Previous-frame GTAO visibility view (1-frame latency). `ScenePass`
+    /// binds this as its AO input; it reads `ao[(frame + 1) % 2]` written by
+    /// `GtaoPass` last frame. Forwarded via `GraphFrame` so the graph, not
+    /// `GraphRenderer`, owns the cross-pass wiring.
+    pub ao_view: vk::ImageView,
+    /// Tonemap mode for `PostPass` (Reinhard / ACES / ...). Forwarded so
+    /// `PostPass::execute` reads it from the graph context.
+    pub tonemap_mode: u32,
+    /// Inverse projection (used by `GtaoPass` to reconstruct view-space
+    /// radius from screen-space samples). Forwarded via `GraphFrame`.
+    pub inv_projection: [[f32; 4]; 4],
 }
 
 /// Context passed to each pass's `execute`.
@@ -243,8 +267,10 @@ pub trait RenderPassNode: std::any::Any {
     /// can pick the right format for its attachments.
     fn setup(&mut self, graph: &mut RenderGraphBuilder, settings: &RenderSettings);
 
-    /// Record Vulkan commands into `ctx.cmd`.
-    fn execute(&mut self, ctx: &RenderContext, resources: &GraphResources) -> Result<()>;
+    /// Record Vulkan commands into `ctx.cmd`. `resources` is mutable so the
+    /// pass can publish its output views (depth / normal / HDR) for downstream
+    /// passes to read by handle.
+    fn execute(&mut self, ctx: &RenderContext, resources: &mut GraphResources) -> Result<()>;
 }
 
 /// A resource entry in the graph's resource table.
@@ -259,8 +285,22 @@ pub struct GraphResource {
 }
 
 /// Resource table passed to passes at execute time.
+/// Besides the graph-owned images (allocated in `allocate_resources`), it
+/// carries **pass-exported views + images** (e.g. `ScenePass` publishes its
+/// depth / normal / HDR views AND images here so downstream passes like
+/// `GtaoPass` / `PostPass` can read them by handle). This is the minimal
+/// graph-edge resource handoff for PR-1: the graph does not own the
+/// underlying images (passes still create their own framebuffers), but it is
+/// the channel through which passes exchange resource handles instead of
+/// `GraphRenderer` poking each pass.
 pub struct GraphResources {
     pub resources: HashMap<ResourceHandle, GraphResource>,
+    /// Pass-published image views, keyed by `ResourceHandle`.
+    pub image_views: HashMap<ResourceHandle, vk::ImageView>,
+    /// Pass-published images (handles), keyed by `ResourceHandle`. Needed by
+    /// downstream passes that emit layout barriers (which reference the image,
+    /// not the view).
+    pub images: HashMap<ResourceHandle, vk::Image>,
 }
 
 impl GraphResources {
@@ -270,6 +310,26 @@ impl GraphResources {
 
     pub fn image_view(&self, h: ResourceHandle) -> Option<vk::ImageView> {
         self.resources.get(&h).and_then(|r| r.image_view)
+    }
+
+    /// Publish an image view under a handle so downstream passes can read it.
+    pub fn set_image_view(&mut self, h: ResourceHandle, view: vk::ImageView) {
+        self.image_views.insert(h, view);
+    }
+
+    /// Publish an image under a handle (for downstream layout barriers).
+    pub fn set_image(&mut self, h: ResourceHandle, image: vk::Image) {
+        self.images.insert(h, image);
+    }
+
+    /// Read a view published by an upstream pass.
+    pub fn published_view(&self, h: ResourceHandle) -> Option<vk::ImageView> {
+        self.image_views.get(&h).copied()
+    }
+
+    /// Read an image published by an upstream pass.
+    pub fn published_image(&self, h: ResourceHandle) -> Option<vk::Image> {
+        self.images.get(&h).copied()
     }
 }
 
@@ -281,6 +341,7 @@ pub struct RenderGraphBuilder {
     passes: Vec<Box<dyn RenderPassNode>>,
     resources: HashMap<ResourceHandle, GraphResource>,
     next_handle: u32,
+    settings: RenderSettings,
 }
 
 impl RenderGraphBuilder {
@@ -289,7 +350,14 @@ impl RenderGraphBuilder {
             passes: Vec::new(),
             resources: HashMap::new(),
             next_handle: 0,
+            settings: RenderSettings::default(),
         }
+    }
+
+    /// Override the render settings used when `setup` is called on passes.
+    pub fn settings(mut self, settings: &RenderSettings) -> Self {
+        self.settings = *settings;
+        self
     }
 
     /// Register a pass. Order of insertion = execution order (simple
@@ -315,6 +383,22 @@ impl RenderGraphBuilder {
         handle
     }
 
+    /// Create a transient resource at a specific handle (e.g. a well-known
+    /// graph-edge handle like `SCENE_DEPTH_H`). Used so downstream passes can
+    /// reference a publisher's output without knowing its internal field.
+    pub fn create_resource_at(&mut self, handle: ResourceHandle, res_type: ResourceType) {
+        self.resources.insert(
+            handle,
+            GraphResource {
+                handle,
+                res_type,
+                image: None,
+                image_view: None,
+                memory: None,
+            },
+        );
+    }
+
     /// Mark a pass (by index) as reading a resource.
     /// Tracked for future barrier generation and topological sort.
     pub fn read(&mut self, pass_idx: usize, handle: ResourceHandle) {
@@ -333,6 +417,7 @@ impl RenderGraphBuilder {
         RenderGraph {
             passes: self.passes,
             resources: self.resources,
+            settings: self.settings,
         }
     }
 }
@@ -350,9 +435,33 @@ impl Default for RenderGraphBuilder {
 pub struct RenderGraph {
     passes: Vec<Box<dyn RenderPassNode>>,
     resources: HashMap<ResourceHandle, GraphResource>,
+    settings: RenderSettings,
 }
 
 impl RenderGraph {
+    /// Borrow a registered pass by concrete type (for lifecycle operations
+    /// like `recreate_swapchain`, which must call into a specific pass).
+    /// Returns `None` if no pass of that type was registered.
+    pub fn pass_mut<T: RenderPassNode + 'static>(&mut self) -> Option<&mut T> {
+        self.passes.iter_mut().find_map(|p| {
+            (p as &mut dyn RenderPassNode as &mut dyn std::any::Any).downcast_mut::<T>()
+        })
+    }
+
+    /// Append a pass to an already-built graph (e.g. ScenePass / GtaoPass /
+    /// PostPass, registered after the shadow map's resources are allocated so
+    /// the scene can bind the shadow view). Runs `setup` on the new pass
+    /// (merging its declared resources into the graph) and appends it to the
+    /// execution order.
+    pub fn add_pass(&mut self, mut pass: Box<dyn RenderPassNode>) {
+        let mut b = RenderGraphBuilder::new().settings(&self.settings);
+        pass.setup(&mut b, &self.settings);
+        for (h, r) in b.resources {
+            self.resources.insert(h, r);
+        }
+        self.passes.push(pass);
+    }
+
     /// Run all registered passes in order, recording into `ctx.cmd`.
     ///
     /// For now this is a simple linear execution. A production graph would:
@@ -361,12 +470,14 @@ impl RenderGraph {
     /// 3. Fuse compatible passes into subpasses
     /// 4. Dispatch compute passes between renderpasses
     pub fn execute(&mut self, ctx: &RenderContext) -> Result<()> {
-        let resources = GraphResources {
+        let mut resources = GraphResources {
             resources: self.resources.clone(),
+            image_views: HashMap::new(),
+            images: HashMap::new(),
         };
 
         for pass in &mut self.passes {
-            pass.execute(ctx, &resources)?;
+            pass.execute(ctx, &mut resources)?;
         }
 
         Ok(())

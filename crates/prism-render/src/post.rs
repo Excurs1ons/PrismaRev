@@ -474,6 +474,49 @@ impl Drop for PostPass {
     }
 }
 
+impl RenderPassNode for PostPass {
+    fn name(&self) -> &str {
+        "PostPass"
+    }
+
+    fn setup(&mut self, _graph: &mut RenderGraphBuilder, _settings: &RenderSettings) {
+        // HDR input is published by ScenePass under SCENE_COLOR_H; read in
+        // `execute`. PostPass owns no graph-managed resources of its own.
+    }
+
+    fn execute(&mut self, ctx: &RenderContext, resources: &mut GraphResources) -> Result<()> {
+        let hdr_view = match resources.published_view(SCENE_COLOR_H) {
+            Some(v) => v,
+            None => {
+                log::warn!("PostPass: no ScenePass HDR view published; skipping");
+                return Ok(());
+            }
+        };
+        let hdr_image = resources
+            .published_image(SCENE_COLOR_H)
+            .unwrap_or_else(|| vk::Image::null());
+
+        // Bind the HDR input view into this frame's descriptor set (replaces
+        // the old `set_input` call from `GraphRenderer::render`).
+        self.set_input(ctx.device, ctx.frame_index, hdr_view);
+
+        let push = PostPushConstants {
+            tonemap_mode: ctx.frame.tonemap_mode,
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
+        };
+        self.execute(
+            ctx.device,
+            ctx.cmd,
+            ctx.frame_index,
+            ctx.image_index,
+            hdr_image,
+            &push,
+        )
+    }
+}
+
 /// Create the PostPass render pass: 1 swapchain-format color attachment
 /// (CLEAR -> STORE), no depth. `initial_layout = UNDEFINED` so the GPU
 /// transitions the swapchain image from whatever layout it was in (typically
