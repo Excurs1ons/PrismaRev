@@ -121,10 +121,15 @@ jobs:
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install SPIR-V tools (spirv-dis / spirv-as for fix_spirv.py)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y spirv-tools
+
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ env.CACHE_VERSION }}-shaders
+            key: ${{ env.CACHE_VERSION }}-shaders
 
       - name: Download slang ${{ env.SLANG_VERSION }} (linux-x86_64)
         run: |
