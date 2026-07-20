@@ -92,7 +92,7 @@ impl CameraState {
 }
 
 impl DirectionalLight {
-    fn to_json(&self) -> String {
+    fn to_json(self) -> String {
         format!(
             "{{\"euler_xyz\":[{}],\"intensity\":{},\"color\":[{}],\"ambient\":{}}}",
             fmt3(self.euler_xyz),
@@ -118,7 +118,7 @@ impl DirectionalLight {
 }
 
 impl PointLight {
-    fn to_json(&self) -> String {
+    fn to_json(self) -> String {
         format!(
             "{{\"position\":[{}],\"range\":{},\"color\":[{}],\"intensity\":{}}}",
             fmt3(self.position),
@@ -128,12 +128,7 @@ impl PointLight {
         )
     }
 
-    fn from_json_fields(
-        pos: [f32; 3],
-        range: f32,
-        color: [f32; 3],
-        intensity: f32,
-    ) -> Self {
+    fn from_json_fields(pos: [f32; 3], range: f32, color: [f32; 3], intensity: f32) -> Self {
         Self {
             position: pos,
             range,
@@ -188,27 +183,21 @@ pub fn save_scene_state(world: &World) {
             Camera::Orbit(_) => None,
         });
 
-    let dir_light = world.query::<DirectionalLight>().next().map(|(_, dl)| dl.clone());
-    let point_lights: Vec<PointLight> = world
-        .query::<PointLight>()
-        .map(|(_, pl)| pl.clone())
-        .collect();
-    let transforms: Vec<Transform> = world
-        .query::<Transform>()
-        .map(|(_, t)| t.clone())
-        .collect();
+    let dir_light = world.query::<DirectionalLight>().next().map(|(_, dl)| *dl);
+    let point_lights: Vec<PointLight> = world.query::<PointLight>().map(|(_, pl)| *pl).collect();
+    let transforms: Vec<Transform> = world.query::<Transform>().map(|(_, t)| t.clone()).collect();
 
     let mut json = String::new();
     json.push_str("{\n");
 
     // Camera
     if let Some(cs) = &camera_state {
-        let _ = write!(json, "\"camera\":{},\n", cs.to_json());
+        let _ = writeln!(json, "\"camera\":{},", cs.to_json());
     }
 
     // Directional light
     if let Some(dl) = &dir_light {
-        let _ = write!(json, "\"directionalLight\":{},\n", dl.to_json());
+        let _ = writeln!(json, "\"directionalLight\":{},", (*dl).to_json());
     }
 
     // Point lights
@@ -217,7 +206,7 @@ pub fn save_scene_state(world: &World) {
         if i > 0 {
             json.push(',');
         }
-        let _ = write!(json, "{}", pl.to_json());
+        let _ = write!(json, "{}", (*pl).to_json());
     }
     json.push_str("],\n");
 
@@ -252,20 +241,17 @@ pub fn load_scene_state(world: &mut World) -> bool {
     log::info!("restoring scene state from {:?}", path);
 
     // --- Camera (ECS component on first camera entity) ---
-    if let Some(cs) = extract_object(&text, "camera")
-        .and_then(|json| CameraState::from_json(&json))
+    if let Some(cs) = extract_object(&text, "camera").and_then(|json| CameraState::from_json(&json))
     {
-        if let Some((_, camera)) = world.query_mut::<Camera>().next() {
-            if let Camera::Fly(f) = camera {
-                f.position = cs.position;
-                f.yaw = cs.yaw;
-                f.pitch = cs.pitch;
-                f.fov_y = cs.fov_y;
-                f.move_speed = cs.move_speed;
-                f.look_sensitivity = cs.look_sensitivity;
-                f.znear = cs.znear;
-                f.zfar = cs.zfar;
-            }
+        if let Some((_, Camera::Fly(f))) = world.query_mut::<Camera>().next() {
+            f.position = cs.position;
+            f.yaw = cs.yaw;
+            f.pitch = cs.pitch;
+            f.fov_y = cs.fov_y;
+            f.move_speed = cs.move_speed;
+            f.look_sensitivity = cs.look_sensitivity;
+            f.znear = cs.znear;
+            f.zfar = cs.zfar;
         }
     }
 
@@ -273,7 +259,7 @@ pub fn load_scene_state(world: &mut World) -> bool {
     if let Some(dl_json) = extract_object(&text, "directionalLight") {
         if let Some(dl) = DirectionalLight::from_json(&dl_json) {
             for (_, existing) in world.query_mut::<DirectionalLight>() {
-                *existing = dl.clone();
+                *existing = dl;
             }
         }
     }
@@ -322,14 +308,14 @@ fn find_field_f32(s: &str, key: &str) -> Option<f32> {
     let pos = s.find(&needle)? + needle.len();
     let rest = s[pos..].trim_start();
     let end = rest
-        .find(|c: char| c == ',' || c == '}' || c == ']')
+        .find(|c: char| [',', '}', ']'].contains(&c))
         .unwrap_or(rest.len());
     rest[..end].trim().parse::<f32>().ok()
 }
 
 /// Extract the JSON object `{...}` for a top-level key. Returns the inner
 /// content (without the outer braces) so `from_json` can parse it.
-fn extract_object<'a>(s: &'a str, key: &str) -> Option<String> {
+fn extract_object(s: &str, key: &str) -> Option<String> {
     let needle = format!("\"{key}\":");
     let start = s.find(&needle)? + needle.len();
     let rest = &s[start..];
@@ -357,7 +343,7 @@ fn extract_object<'a>(s: &'a str, key: &str) -> Option<String> {
 }
 
 /// Extract a JSON array `[...]` for a key.
-fn extract_array<'a>(s: &'a str, key: &str) -> Option<String> {
+fn extract_array(s: &str, key: &str) -> Option<String> {
     let needle = format!("\"{key}\":");
     let start = s.find(&needle)? + needle.len();
     let rest = &s[start..];
@@ -406,9 +392,17 @@ fn parse_point_light_array(s: &str) -> Vec<PointLight> {
         let col = find_array_f32(&obj_str, "color").unwrap_or_default();
         let intensity = find_field_f32(&obj_str, "intensity").unwrap_or(1.0);
         out.push(PointLight::from_json_fields(
-            if pos.len() == 3 { [pos[0], pos[1], pos[2]] } else { [0.0; 3] },
+            if pos.len() == 3 {
+                [pos[0], pos[1], pos[2]]
+            } else {
+                [0.0; 3]
+            },
             range,
-            if col.len() == 3 { [col[0], col[1], col[2]] } else { [0.2, 0.2, 8.0] },
+            if col.len() == 3 {
+                [col[0], col[1], col[2]]
+            } else {
+                [0.2, 0.2, 8.0]
+            },
             intensity,
         ));
     }
@@ -435,9 +429,21 @@ fn parse_transform_array(s: &str) -> Vec<Transform> {
         let r = find_array_f32(&obj_str, "rotation").unwrap_or_default();
         let s = find_array_f32(&obj_str, "scale").unwrap_or_default();
         out.push(Transform::from_json_fields(
-            if t.len() == 3 { [t[0], t[1], t[2]] } else { [0.0; 3] },
-            if r.len() == 4 { [r[0], r[1], r[2], r[3]] } else { [0.0, 0.0, 0.0, 1.0] },
-            if s.len() == 3 { [s[0], s[1], s[2]] } else { [1.0; 3] },
+            if t.len() == 3 {
+                [t[0], t[1], t[2]]
+            } else {
+                [0.0; 3]
+            },
+            if r.len() == 4 {
+                [r[0], r[1], r[2], r[3]]
+            } else {
+                [0.0, 0.0, 0.0, 1.0]
+            },
+            if s.len() == 3 {
+                [s[0], s[1], s[2]]
+            } else {
+                [1.0; 3]
+            },
         ));
     }
     out

@@ -376,12 +376,7 @@ pub fn render_system(
 
     let frame_data = FrameUBOData {
         view_proj,
-        camera_position: [
-            eye[0],
-            eye[1],
-            eye[2],
-            light_count,
-        ],
+        camera_position: [eye[0], eye[1], eye[2], light_count],
         light_direction,
         light_color,
         view,
@@ -517,16 +512,32 @@ fn mat_mul(a: &[[f32; 4]; 4], b: &[[f32; 4]; 4]) -> [[f32; 4]; 4] {
 fn mat_inverse(m: &[[f32; 4]; 4]) -> [[f32; 4]; 4] {
     // Compute the 16 cofactors of the column-major matrix `m`. `m[col][row]`
     // in code = m_{row, col} in math notation.
-    let m00 = m[0][0]; let m01 = m[0][1]; let m02 = m[0][2]; let m03 = m[0][3];
-    let m10 = m[1][0]; let m11 = m[1][1]; let m12 = m[1][2]; let m13 = m[1][3];
-    let m20 = m[2][0]; let m21 = m[2][1]; let m22 = m[2][2]; let m23 = m[2][3];
-    let m30 = m[3][0]; let m31 = m[3][1]; let m32 = m[3][2]; let m33 = m[3][3];
+    let m00 = m[0][0];
+    let m01 = m[0][1];
+    let m02 = m[0][2];
+    let m03 = m[0][3];
+    let m10 = m[1][0];
+    let m11 = m[1][1];
+    let m12 = m[1][2];
+    let m13 = m[1][3];
+    let m20 = m[2][0];
+    let m21 = m[2][1];
+    let m22 = m[2][2];
+    let m23 = m[2][3];
+    let m30 = m[3][0];
+    let m31 = m[3][1];
+    let m32 = m[3][2];
+    let m33 = m[3][3];
 
     // 2×2 minors of the upper-left 3×3-ish blocks; full 4×4 cofactor expansion.
-    let c00 = (m11 * (m22 * m33 - m23 * m32)) - (m12 * (m21 * m33 - m23 * m31)) + (m13 * (m21 * m32 - m22 * m31));
-    let c01 = -((m10 * (m22 * m33 - m23 * m32)) - (m12 * (m20 * m33 - m23 * m30)) + (m13 * (m20 * m32 - m22 * m30)));
-    let c02 = (m10 * (m21 * m33 - m23 * m31)) - (m11 * (m20 * m33 - m23 * m30)) + (m13 * (m20 * m31 - m21 * m30));
-    let c03 = -((m10 * (m21 * m32 - m22 * m31)) - (m11 * (m20 * m32 - m22 * m30)) + (m12 * (m20 * m31 - m21 * m30)));
+    let c00 = (m11 * (m22 * m33 - m23 * m32)) - (m12 * (m21 * m33 - m23 * m31))
+        + (m13 * (m21 * m32 - m22 * m31));
+    let c01 = -((m10 * (m22 * m33 - m23 * m32)) - (m12 * (m20 * m33 - m23 * m30))
+        + (m13 * (m20 * m32 - m22 * m30)));
+    let c02 = (m10 * (m21 * m33 - m23 * m31)) - (m11 * (m20 * m33 - m23 * m30))
+        + (m13 * (m20 * m31 - m21 * m30));
+    let c03 = -((m10 * (m21 * m32 - m22 * m31)) - (m11 * (m20 * m32 - m22 * m30))
+        + (m12 * (m20 * m31 - m21 * m30)));
 
     let det = m00 * c00 + m01 * c01 + m02 * c02 + m03 * c03;
     if det.abs() < 1e-12 {
@@ -541,20 +552,32 @@ fn mat_inverse(m: &[[f32; 4]; 4]) -> [[f32; 4]; 4] {
     let inv_det = 1.0 / det;
 
     // Remaining 12 cofactors.
-    let c10 = -((m01 * (m22 * m33 - m23 * m32)) - (m02 * (m21 * m33 - m23 * m31)) + (m03 * (m21 * m32 - m22 * m31)));
-    let c11 = (m00 * (m22 * m33 - m23 * m32)) - (m02 * (m20 * m33 - m23 * m30)) + (m03 * (m20 * m32 - m22 * m30));
-    let c12 = -((m00 * (m21 * m33 - m23 * m31)) - (m01 * (m20 * m33 - m23 * m30)) + (m03 * (m20 * m31 - m21 * m30)));
-    let c13 = (m00 * (m21 * m32 - m22 * m31)) - (m01 * (m20 * m32 - m22 * m30)) + (m02 * (m20 * m31 - m21 * m30));
+    let c10 = -((m01 * (m22 * m33 - m23 * m32)) - (m02 * (m21 * m33 - m23 * m31))
+        + (m03 * (m21 * m32 - m22 * m31)));
+    let c11 = (m00 * (m22 * m33 - m23 * m32)) - (m02 * (m20 * m33 - m23 * m30))
+        + (m03 * (m20 * m32 - m22 * m30));
+    let c12 = -((m00 * (m21 * m33 - m23 * m31)) - (m01 * (m20 * m33 - m23 * m30))
+        + (m03 * (m20 * m31 - m21 * m30)));
+    let c13 = (m00 * (m21 * m32 - m22 * m31)) - (m01 * (m20 * m32 - m22 * m30))
+        + (m02 * (m20 * m31 - m21 * m30));
 
-    let c20 = (m01 * (m12 * m33 - m13 * m32)) - (m02 * (m11 * m33 - m13 * m31)) + (m03 * (m11 * m32 - m12 * m31));
-    let c21 = -((m00 * (m12 * m33 - m13 * m32)) - (m02 * (m10 * m33 - m13 * m30)) + (m03 * (m10 * m32 - m12 * m30)));
-    let c22 = (m00 * (m11 * m33 - m13 * m31)) - (m01 * (m10 * m33 - m13 * m30)) + (m03 * (m10 * m31 - m11 * m30));
-    let c23 = -((m00 * (m11 * m32 - m12 * m31)) - (m01 * (m10 * m32 - m12 * m30)) + (m02 * (m10 * m31 - m11 * m30)));
+    let c20 = (m01 * (m12 * m33 - m13 * m32)) - (m02 * (m11 * m33 - m13 * m31))
+        + (m03 * (m11 * m32 - m12 * m31));
+    let c21 = -((m00 * (m12 * m33 - m13 * m32)) - (m02 * (m10 * m33 - m13 * m30))
+        + (m03 * (m10 * m32 - m12 * m30)));
+    let c22 = (m00 * (m11 * m33 - m13 * m31)) - (m01 * (m10 * m33 - m13 * m30))
+        + (m03 * (m10 * m31 - m11 * m30));
+    let c23 = -((m00 * (m11 * m32 - m12 * m31)) - (m01 * (m10 * m32 - m12 * m30))
+        + (m02 * (m10 * m31 - m11 * m30)));
 
-    let c30 = -((m01 * (m12 * m23 - m13 * m22)) - (m02 * (m11 * m23 - m13 * m21)) + (m03 * (m11 * m22 - m12 * m21)));
-    let c31 = (m00 * (m12 * m23 - m13 * m22)) - (m02 * (m10 * m23 - m13 * m20)) + (m03 * (m10 * m22 - m12 * m20));
-    let c32 = -((m00 * (m11 * m23 - m13 * m21)) - (m01 * (m10 * m23 - m13 * m20)) + (m03 * (m10 * m21 - m11 * m20)));
-    let c33 = (m00 * (m11 * m22 - m12 * m21)) - (m01 * (m10 * m22 - m12 * m20)) + (m02 * (m10 * m21 - m11 * m20));
+    let c30 = -((m01 * (m12 * m23 - m13 * m22)) - (m02 * (m11 * m23 - m13 * m21))
+        + (m03 * (m11 * m22 - m12 * m21)));
+    let c31 = (m00 * (m12 * m23 - m13 * m22)) - (m02 * (m10 * m23 - m13 * m20))
+        + (m03 * (m10 * m22 - m12 * m20));
+    let c32 = -((m00 * (m11 * m23 - m13 * m21)) - (m01 * (m10 * m23 - m13 * m20))
+        + (m03 * (m10 * m21 - m11 * m20)));
+    let c33 = (m00 * (m11 * m22 - m12 * m21)) - (m01 * (m10 * m22 - m12 * m20))
+        + (m02 * (m10 * m21 - m11 * m20));
 
     // Adjugate (transpose of the cofactor matrix) * inv_det, in column-major
     // layout: out[col][row] = cofactor[row][col] * inv_det.

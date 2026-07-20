@@ -13,15 +13,14 @@ use anyhow::Context as _;
 use anyhow::Result;
 use ash::vk;
 
-use crate::mesh::Vertex;
 use crate::gizmo::Gizmo;
+use crate::mesh::Vertex;
 use crate::pipeline::{GraphicsPipeline, PipelineDesc};
 use crate::render_graph::{
     GraphResources, RenderContext, RenderGraphBuilder, RenderPassNode, RenderSettings,
     ResourceHandle, ResourceType, ShadowMode,
 };
 use crate::shader;
-
 
 /// Rasterized shadow map — the depth-only fallback for the hybrid adaptive
 /// shadow system (`docs/DESIGN.md` §2.3).
@@ -60,16 +59,6 @@ const SHADOW_MAP_SIZE: u32 = 2048;
 pub struct ShadowPassPushConstants {
     pub model: [[f32; 4]; 4],
     pub light_view_proj: [[f32; 4]; 4],
-}
-
-#[cfg(test)]
-mod shadow_push_tests {
-    use super::*;
-
-    #[test]
-    fn shadow_push_constants_is_128() {
-        assert_eq!(std::mem::size_of::<ShadowPassPushConstants>(), 128);
-    }
 }
 
 impl ShadowMapPass {
@@ -853,12 +842,9 @@ impl ScenePass {
                 .context("ScenePass: render_pass missing in set_target")?;
 
             // Replace the HDR color image for this slot.
-            let color_image = crate::render_pass::NormalImage::new(
-                context,
-                extent,
-                self.color_format,
-            )
-            .context("ScenePass: create HDR color image")?;
+            let color_image =
+                crate::render_pass::NormalImage::new(context, extent, self.color_format)
+                    .context("ScenePass: create HDR color image")?;
             if let Some(mut old) = self.color_images[idx].take() {
                 unsafe { old.destroy(device) };
             }
@@ -873,12 +859,9 @@ impl ScenePass {
             self.depth_images[idx] = Some(depth_image);
 
             // Replace the view-space normal MRT image for this slot.
-            let normal_image = crate::render_pass::NormalImage::new(
-                context,
-                extent,
-                self.normal_format,
-            )
-            .context("ScenePass: create normal image")?;
+            let normal_image =
+                crate::render_pass::NormalImage::new(context, extent, self.normal_format)
+                    .context("ScenePass: create normal image")?;
             if let Some(mut old) = self.normal_images[idx].take() {
                 unsafe { old.destroy(device) };
             }
@@ -1375,7 +1358,7 @@ impl ScenePass {
             )
         }
         .context("ScenePass: allocate set4 (AO) ds")?;
-        let ao_sets: Vec<vk::DescriptorSet> = ao_sets.into();
+        let ao_sets: Vec<vk::DescriptorSet> = ao_sets;
 
         self.ao_ds_layout = Some(ao_layout);
         self.ao_ds_pool = Some(ao_pool);
@@ -1701,7 +1684,13 @@ impl ScenePass {
             .ao_ds_layout
             .context("ScenePass: set4 (AO) layout not set (call set_resources)")?;
 
-        let set_layouts = [set0_layout, set1_layout, set2_layout, set3_layout, set4_layout];
+        let set_layouts = [
+            set0_layout,
+            set1_layout,
+            set2_layout,
+            set3_layout,
+            set4_layout,
+        ];
 
         // Push constants: PbrBindlessPushConstants (96 bytes, VERTEX|FRAGMENT).
         // Matches scene_frag.slang::PbrBindlessPush and Rust
@@ -2057,5 +2046,15 @@ impl Drop for ScenePass {
             // Gizmo (its own pipeline + vertex buffer; Drop frees them).
             self.gizmo = None;
         }
+    }
+}
+
+#[cfg(test)]
+mod shadow_push_tests {
+    use super::*;
+
+    #[test]
+    fn shadow_push_constants_is_128() {
+        assert_eq!(std::mem::size_of::<ShadowPassPushConstants>(), 128);
     }
 }

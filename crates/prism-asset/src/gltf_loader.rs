@@ -159,7 +159,7 @@ pub(crate) fn load(
         // gltf crate does not have a built-in clearcoat feature.
         let (clearcoat, clearcoat_roughness) = mat
             .extension_value("KHR_materials_clearcoat")
-            .and_then(|v| {
+            .map(|v| {
                 let factor = v
                     .get("clearcoatFactor")
                     .and_then(|f| f.as_f64())
@@ -168,7 +168,7 @@ pub(crate) fn load(
                     .get("clearcoatRoughnessFactor")
                     .and_then(|f| f.as_f64())
                     .unwrap_or(0.0) as f32;
-                Some((factor, roughness))
+                (factor, roughness)
             })
             .unwrap_or((0.0, 0.0));
 

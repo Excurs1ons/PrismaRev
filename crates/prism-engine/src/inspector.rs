@@ -116,7 +116,7 @@ impl Inspector {
             .resizable(true)
             .movable(true)
             .collapsible(true)
-            .frame(window_frame.clone())
+            .frame(window_frame)
             .show(ctx, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     self.entity_list(ui, world);
@@ -131,7 +131,7 @@ impl Inspector {
             .resizable(true)
             .movable(true)
             .collapsible(true)
-            .frame(window_frame.clone())
+            .frame(window_frame)
             .show(ctx, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     if let Some(entity) = self.selected {
@@ -150,7 +150,7 @@ impl Inspector {
             .resizable(true)
             .movable(true)
             .collapsible(true)
-            .frame(window_frame.clone())
+            .frame(window_frame)
             .show(ctx, |ui| {
                 ui.heading("Debug Mode");
                 ui.separator();
@@ -172,7 +172,12 @@ impl Inspector {
                     ("Translucency", "Shift+2", 11, "Translucent scattering"),
                     ("Anisotropy", "Shift+3", 12, "Anisotropic materials"),
                     ("Clear Coat", "Shift+4", 13, "Clear coat layer"),
-                    ("AmbientIBL", "(inspector)", 1, "Image-based lighting ambient"),
+                    (
+                        "AmbientIBL",
+                        "(inspector)",
+                        1,
+                        "Image-based lighting ambient",
+                    ),
                 ];
                 for (name, key_label, bit, desc) in flags.iter() {
                     let active = (self.debug_flags >> bit) & 1 == 1;
@@ -182,7 +187,10 @@ impl Inspector {
                         egui::Color32::from_rgb(80, 80, 80)
                     };
                     ui.horizontal(|ui| {
-                        ui.colored_label(color, format!("{} [key {} | bit {}]", name, key_label, bit));
+                        ui.colored_label(
+                            color,
+                            format!("{} [key {} | bit {}]", name, key_label, bit),
+                        );
                         ui.label(format!("- {}", desc));
                     });
                 }
@@ -195,10 +203,16 @@ impl Inspector {
                 ui.separator();
                 ui.label("Tonemap (key T to toggle):");
                 ui.horizontal(|ui| {
-                    if ui.selectable_label(self.tonemap_mode == 0, "Reinhard").clicked() {
+                    if ui
+                        .selectable_label(self.tonemap_mode == 0, "Reinhard")
+                        .clicked()
+                    {
                         self.tonemap_mode = 0;
                     }
-                    if ui.selectable_label(self.tonemap_mode == 1, "ACES").clicked() {
+                    if ui
+                        .selectable_label(self.tonemap_mode == 1, "ACES")
+                        .clicked()
+                    {
                         self.tonemap_mode = 1;
                     }
                 });
@@ -368,8 +382,7 @@ fn camera_editor_inline(ui: &mut Ui, world: &mut World, entity: Entity) {
                     .text("Theta (rad)"),
             );
             ui.add(
-                egui::Slider::new(&mut c.phi, 0.01..=std::f32::consts::PI - 0.01)
-                    .text("Phi (rad)"),
+                egui::Slider::new(&mut c.phi, 0.01..=std::f32::consts::PI - 0.01).text("Phi (rad)"),
             );
             ui.add(egui::Slider::new(&mut c.fov_y, 0.1..=std::f32::consts::PI).text("FOV Y"));
             ui.add(egui::Slider::new(&mut c.znear, 0.001..=5.0).text("z near"));
@@ -396,8 +409,7 @@ fn camera_editor_inline(ui: &mut Ui, world: &mut World, entity: Entity) {
             ui.add(egui::Slider::new(&mut c.fov_y, 0.1..=std::f32::consts::PI).text("FOV Y"));
             ui.add(egui::Slider::new(&mut c.move_speed, 0.1..=50.0).text("Move speed"));
             ui.add(
-                egui::Slider::new(&mut c.look_sensitivity, 0.0001..=0.01)
-                    .text("Look sensitivity"),
+                egui::Slider::new(&mut c.look_sensitivity, 0.0001..=0.01).text("Look sensitivity"),
             );
         }
     }
@@ -414,15 +426,27 @@ impl Inspector {
         ui.horizontal(|ui| {
             ui.label("X");
             changed |= ui
-                .add(DragValue::new(&mut self.dir_light_euler_deg[0]).speed(1.0).range(-90.0..=90.0))
+                .add(
+                    DragValue::new(&mut self.dir_light_euler_deg[0])
+                        .speed(1.0)
+                        .range(-90.0..=90.0),
+                )
                 .changed();
             ui.label("Y");
             changed |= ui
-                .add(DragValue::new(&mut self.dir_light_euler_deg[1]).speed(1.0).range(-180.0..=180.0))
+                .add(
+                    DragValue::new(&mut self.dir_light_euler_deg[1])
+                        .speed(1.0)
+                        .range(-180.0..=180.0),
+                )
                 .changed();
             ui.label("Z");
             changed |= ui
-                .add(DragValue::new(&mut self.dir_light_euler_deg[2]).speed(1.0).range(-180.0..=180.0))
+                .add(
+                    DragValue::new(&mut self.dir_light_euler_deg[2])
+                        .speed(1.0)
+                        .range(-180.0..=180.0),
+                )
                 .changed();
         });
         if changed {

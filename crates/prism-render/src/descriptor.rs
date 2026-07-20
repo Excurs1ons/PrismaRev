@@ -177,7 +177,7 @@ pub struct FrameUBOData {
     /// Tonemap operator selector, applied to the final HDR color before the
     /// SRGB swapchain encode. 0 = Reinhard (`x/(x+1)`), 1 = ACES (Narkowicz).
     /// Switchable at runtime from the inspector / `T` key. offset 240.
-    pub tonemap_mode: u32,              // offset 240
+    pub tonemap_mode: u32, // offset 240
     pub _pad: [u32; 3],                 // offset 244..255 (std140 16-byte tail)
 }
 

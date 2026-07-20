@@ -205,14 +205,15 @@ impl<'a> BatchUploader<'a> {
             &self.sync2,
             self.cmd,
             image,
-            0,
-            mip_levels,
-            vk::ImageLayout::UNDEFINED,
-            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-            vk::PipelineStageFlags2::NONE,
-            vk::AccessFlags2::NONE,
-            vk::PipelineStageFlags2::TRANSFER,
-            vk::AccessFlags2::TRANSFER_WRITE,
+            color_sub(0, mip_levels),
+            ImageBarrier {
+                old_layout: vk::ImageLayout::UNDEFINED,
+                new_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                src_stage: vk::PipelineStageFlags2::NONE,
+                src_access: vk::AccessFlags2::NONE,
+                dst_stage: vk::PipelineStageFlags2::TRANSFER,
+                dst_access: vk::AccessFlags2::TRANSFER_WRITE,
+            },
         );
 
         // Copy staging -> mip 0.
@@ -241,14 +242,15 @@ impl<'a> BatchUploader<'a> {
                 &self.sync2,
                 self.cmd,
                 image,
-                0,
-                1,
-                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-                vk::PipelineStageFlags2::TRANSFER,
-                vk::AccessFlags2::TRANSFER_WRITE,
-                vk::PipelineStageFlags2::TRANSFER,
-                vk::AccessFlags2::TRANSFER_READ,
+                color_sub(0, 1),
+                ImageBarrier {
+                    old_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                    new_layout: vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                    src_stage: vk::PipelineStageFlags2::TRANSFER,
+                    src_access: vk::AccessFlags2::TRANSFER_WRITE,
+                    dst_stage: vk::PipelineStageFlags2::TRANSFER,
+                    dst_access: vk::AccessFlags2::TRANSFER_READ,
+                },
             );
             for mip in 1..mip_levels {
                 let src_level = mip - 1;
@@ -302,28 +304,30 @@ impl<'a> BatchUploader<'a> {
                     &self.sync2,
                     self.cmd,
                     image,
-                    src_level,
-                    1,
-                    vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-                    vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                    vk::PipelineStageFlags2::TRANSFER,
-                    vk::AccessFlags2::TRANSFER_READ,
-                    vk::PipelineStageFlags2::FRAGMENT_SHADER,
-                    vk::AccessFlags2::SHADER_READ,
+                    color_sub(src_level, 1),
+                    ImageBarrier {
+                        old_layout: vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                        new_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                        src_stage: vk::PipelineStageFlags2::TRANSFER,
+                        src_access: vk::AccessFlags2::TRANSFER_READ,
+                        dst_stage: vk::PipelineStageFlags2::FRAGMENT_SHADER,
+                        dst_access: vk::AccessFlags2::SHADER_READ,
+                    },
                 );
                 if mip + 1 < mip_levels {
                     barrier2(
                         &self.sync2,
                         self.cmd,
                         image,
-                        mip,
-                        1,
-                        vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                        vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-                        vk::PipelineStageFlags2::TRANSFER,
-                        vk::AccessFlags2::TRANSFER_WRITE,
-                        vk::PipelineStageFlags2::TRANSFER,
-                        vk::AccessFlags2::TRANSFER_READ,
+                        color_sub(mip, 1),
+                        ImageBarrier {
+                            old_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                            new_layout: vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                            src_stage: vk::PipelineStageFlags2::TRANSFER,
+                            src_access: vk::AccessFlags2::TRANSFER_WRITE,
+                            dst_stage: vk::PipelineStageFlags2::TRANSFER,
+                            dst_access: vk::AccessFlags2::TRANSFER_READ,
+                        },
                     );
                 }
             }
@@ -332,14 +336,15 @@ impl<'a> BatchUploader<'a> {
                 &self.sync2,
                 self.cmd,
                 image,
-                mip_levels - 1,
-                1,
-                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                vk::PipelineStageFlags2::TRANSFER,
-                vk::AccessFlags2::TRANSFER_WRITE,
-                vk::PipelineStageFlags2::FRAGMENT_SHADER,
-                vk::AccessFlags2::SHADER_READ,
+                color_sub(mip_levels - 1, 1),
+                ImageBarrier {
+                    old_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                    new_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                    src_stage: vk::PipelineStageFlags2::TRANSFER,
+                    src_access: vk::AccessFlags2::TRANSFER_WRITE,
+                    dst_stage: vk::PipelineStageFlags2::FRAGMENT_SHADER,
+                    dst_access: vk::AccessFlags2::SHADER_READ,
+                },
             );
         } else {
             // single mip: dst -> shader read
@@ -347,14 +352,15 @@ impl<'a> BatchUploader<'a> {
                 &self.sync2,
                 self.cmd,
                 image,
-                0,
-                1,
-                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                vk::PipelineStageFlags2::TRANSFER,
-                vk::AccessFlags2::TRANSFER_WRITE,
-                vk::PipelineStageFlags2::FRAGMENT_SHADER,
-                vk::AccessFlags2::SHADER_READ,
+                color_sub(0, 1),
+                ImageBarrier {
+                    old_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                    new_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                    src_stage: vk::PipelineStageFlags2::TRANSFER,
+                    src_access: vk::AccessFlags2::TRANSFER_WRITE,
+                    dst_stage: vk::PipelineStageFlags2::FRAGMENT_SHADER,
+                    dst_access: vk::AccessFlags2::SHADER_READ,
+                },
             );
         }
 
@@ -454,36 +460,44 @@ fn mip_extent(width: u32, height: u32, level: u32) -> vk::Extent3D {
     }
 }
 
-/// Record a synchronization2 image memory barrier on `cmd`. Helper used by
-/// the mip-generation blit loop in [`BatchUploader::upload_image`].
-fn barrier2(
-    sync2: &ash::khr::synchronization2::Device,
-    cmd: vk::CommandBuffer,
-    image: vk::Image,
-    base_mip: u32,
-    level_count: u32,
+/// A full image-layout transition described as sync + layout endpoints.
+struct ImageBarrier {
     old_layout: vk::ImageLayout,
     new_layout: vk::ImageLayout,
     src_stage: vk::PipelineStageFlags2,
     src_access: vk::AccessFlags2,
     dst_stage: vk::PipelineStageFlags2,
     dst_access: vk::AccessFlags2,
+}
+
+/// Build a single-layer COLOR `ImageSubresourceRange` over `level_count` mips
+/// starting at `base_mip`, used by [`barrier2`].
+fn color_sub(base_mip: u32, level_count: u32) -> vk::ImageSubresourceRange {
+    vk::ImageSubresourceRange::default()
+        .aspect_mask(vk::ImageAspectFlags::COLOR)
+        .base_mip_level(base_mip)
+        .level_count(level_count)
+        .layer_count(1)
+}
+
+/// Record a synchronization2 image memory barrier on `cmd`. Helper used by
+/// the mip-generation blit loop in [`BatchUploader::upload_image`].
+fn barrier2(
+    sync2: &ash::khr::synchronization2::Device,
+    cmd: vk::CommandBuffer,
+    image: vk::Image,
+    subresource: vk::ImageSubresourceRange,
+    b: ImageBarrier,
 ) {
     let barrier = vk::ImageMemoryBarrier2::default()
-        .src_stage_mask(src_stage)
-        .src_access_mask(src_access)
-        .dst_stage_mask(dst_stage)
-        .dst_access_mask(dst_access)
-        .old_layout(old_layout)
-        .new_layout(new_layout)
+        .src_stage_mask(b.src_stage)
+        .src_access_mask(b.src_access)
+        .dst_stage_mask(b.dst_stage)
+        .dst_access_mask(b.dst_access)
+        .old_layout(b.old_layout)
+        .new_layout(b.new_layout)
         .image(image)
-        .subresource_range(
-            vk::ImageSubresourceRange::default()
-                .aspect_mask(vk::ImageAspectFlags::COLOR)
-                .base_mip_level(base_mip)
-                .level_count(level_count)
-                .layer_count(1),
-        );
+        .subresource_range(subresource);
     unsafe {
         sync2.cmd_pipeline_barrier2(
             cmd,

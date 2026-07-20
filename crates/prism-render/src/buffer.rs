@@ -187,6 +187,19 @@ pub unsafe fn upload_to_buffer(
 /// opaque handle; the image/memory behind it must outlive the descriptor).
 ///
 /// `command_pool`/`graphics_queue` must belong to the same queue family.
+///
+/// # Safety
+///
+/// The caller must ensure that:
+/// - `context` stays alive and its `device`/`instance`/`physical_device` remain valid
+///   for the duration of the call.
+/// - `command_pool` and `graphics_queue` belong to the same queue family, and the
+///   queue is not being used concurrently for other submissions during the upload.
+/// - `pixels` contains at least `width * height * 4` bytes (RGBA8) when `mip_levels == 1`,
+///   and enough data for all generated mip levels otherwise.
+/// - The returned `vk::Image`/`vk::DeviceMemory`/`vk::ImageView` are freed by the caller
+///   (the bindless table keeps the `VkImageView` alive only as an opaque handle; the
+///   image/memory behind it must outlive the descriptor).
 pub unsafe fn create_and_upload_image(
     context: &VulkanContext,
     command_pool: vk::CommandPool,

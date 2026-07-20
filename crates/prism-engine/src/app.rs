@@ -23,9 +23,7 @@ use prism_render::{DebugMode, GraphRenderer, NormalSpace};
 
 use crate::camera::{Camera, FlyCamera};
 use crate::input::{InputState, MouseButton};
-use crate::render_system::{
-    render_system, DirectionalLight, MeshManager, PointLight, Transform,
-};
+use crate::render_system::{render_system, DirectionalLight, MeshManager, PointLight, Transform};
 
 /// Parse a `key = "value"` TOML line (after the `key` prefix has been stripped)
 /// and return the unquoted string value. Handles optional surrounding
@@ -166,17 +164,16 @@ fn save_scene_state_file(world: &prism_ecs::World) {
     log::info!("scene state saved");
 }
 
-
 // ---------------------------------------------------------------------------
 // App
 // ---------------------------------------------------------------------------
 
-    pub struct App {
-        window: Option<Arc<Window>>,
-        renderer: Option<GraphRenderer>,
-        world: Option<World>,
-        mesh_manager: MeshManager,
-        input_state: InputState,
+pub struct App {
+    window: Option<Arc<Window>>,
+    renderer: Option<GraphRenderer>,
+    world: Option<World>,
+    mesh_manager: MeshManager,
+    input_state: InputState,
     needs_resize: bool,
     start: Instant,
     /// Timestamp of the previous frame, used to compute per-frame `dt` for the
@@ -1027,7 +1024,11 @@ impl ApplicationHandler for App {
                             log::info!(
                                 "tonemap mode = {} ({})",
                                 self.tonemap_mode,
-                                if self.tonemap_mode == 1 { "ACES" } else { "Reinhard" }
+                                if self.tonemap_mode == 1 {
+                                    "ACES"
+                                } else {
+                                    "Reinhard"
+                                }
                             );
                         } else if code == KeyCode::KeyH {
                             self.show_ui = !self.show_ui;

@@ -466,10 +466,7 @@ impl IblResources {
             &device,
             cmd,
             irradiance_image,
-            0,
-            1,
-            0,
-            6,
+            color_subresource(0, 1, 0, 6),
             vk::ImageLayout::UNDEFINED,
             vk::ImageLayout::TRANSFER_DST_OPTIMAL,
         );
@@ -503,10 +500,7 @@ impl IblResources {
             &device,
             cmd,
             irradiance_image,
-            0,
-            1,
-            0,
-            6,
+            color_subresource(0, 1, 0, 6),
             vk::ImageLayout::TRANSFER_DST_OPTIMAL,
             vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
         );
@@ -516,10 +510,7 @@ impl IblResources {
             &device,
             cmd,
             prefiltered_image,
-            0,
-            PREFILTERED_MIP_LEVELS,
-            0,
-            6,
+            color_subresource(0, PREFILTERED_MIP_LEVELS, 0, 6),
             vk::ImageLayout::UNDEFINED,
             vk::ImageLayout::TRANSFER_DST_OPTIMAL,
         );
@@ -558,10 +549,7 @@ impl IblResources {
             &device,
             cmd,
             prefiltered_image,
-            0,
-            PREFILTERED_MIP_LEVELS,
-            0,
-            6,
+            color_subresource(0, PREFILTERED_MIP_LEVELS, 0, 6),
             vk::ImageLayout::TRANSFER_DST_OPTIMAL,
             vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
         );
@@ -571,10 +559,7 @@ impl IblResources {
             &device,
             cmd,
             brdf_image,
-            0,
-            1,
-            0,
-            1,
+            color_subresource(0, 1, 0, 1),
             vk::ImageLayout::UNDEFINED,
             vk::ImageLayout::TRANSFER_DST_OPTIMAL,
         );
@@ -608,10 +593,7 @@ impl IblResources {
             &device,
             cmd,
             brdf_image,
-            0,
-            1,
-            0,
-            1,
+            color_subresource(0, 1, 0, 1),
             vk::ImageLayout::TRANSFER_DST_OPTIMAL,
             vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
         );
@@ -1185,12 +1167,12 @@ fn hammersley(i: u32, n: u32) -> [f32; 2] {
 }
 
 fn radical_inverse_vdc(mut bits: u32) -> f32 {
-    bits = (bits << 16) | (bits >> 16);
+    bits = bits.rotate_right(16);
     bits = ((bits & 0x55555555) << 1) | ((bits & 0xAAAAAAAA) >> 1);
     bits = ((bits & 0x33333333) << 2) | ((bits & 0xCCCCCCCC) >> 2);
     bits = ((bits & 0x0F0F0F0F) << 4) | ((bits & 0xF0F0F0F0) >> 4);
     bits = ((bits & 0x00FF00FF) << 8) | ((bits & 0xFF00FF00) >> 8);
-    bits as f32 * 2.3283064365386963e-10
+    bits as f32 * 2.328_306_4e-10
 }
 
 /// GGX importance sample direction in tangent space (z = up).
@@ -1348,15 +1330,28 @@ fn transition_image(
     };
 }
 
-/// Transition a single image with explicit layer count (for non-cube images).
-fn transition_image_single(
-    device: &ash::Device,
-    cmd: vk::CommandBuffer,
-    image: vk::Image,
+/// Build a COLOR `ImageSubresourceRange` for [`transition_image_single`].
+fn color_subresource(
     base_mip: u32,
     level_count: u32,
     base_layer: u32,
     layer_count: u32,
+) -> vk::ImageSubresourceRange {
+    vk::ImageSubresourceRange::default()
+        .aspect_mask(vk::ImageAspectFlags::COLOR)
+        .base_mip_level(base_mip)
+        .level_count(level_count)
+        .base_array_layer(base_layer)
+        .layer_count(layer_count)
+}
+
+/// Transition a single image with an explicit subresource range (for
+/// non-cube images).
+fn transition_image_single(
+    device: &ash::Device,
+    cmd: vk::CommandBuffer,
+    image: vk::Image,
+    subresource: vk::ImageSubresourceRange,
     old_layout: vk::ImageLayout,
     new_layout: vk::ImageLayout,
 ) {
@@ -1387,13 +1382,7 @@ fn transition_image_single(
         src_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
         dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
         image,
-        subresource_range: vk::ImageSubresourceRange {
-            aspect_mask: vk::ImageAspectFlags::COLOR,
-            base_mip_level: base_mip,
-            level_count,
-            base_array_layer: base_layer,
-            layer_count,
-        },
+        subresource_range: subresource,
         src_access_mask: src_access,
         dst_access_mask: dst_access,
         ..Default::default()

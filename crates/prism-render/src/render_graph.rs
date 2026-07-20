@@ -74,7 +74,7 @@ pub struct ResourceUsage {
 /// ray-tracing capabilities, so the running path adapts to the GPU. Mirrors
 /// `docs/DESIGN.md` §2.3: `VK_KHR_ray_query` present → RayQuery soft shadow;
 /// otherwise fall back to a rasterized depth-only shadow map.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum ShadowMode {
     /// No shadows.
     None,
@@ -83,13 +83,8 @@ pub enum ShadowMode {
     /// RayQuery inline soft shadow (requires `VK_KHR_ray_query` + a built TLAS).
     RayQuery,
     /// Automatic: RayQuery when available and RT is enabled, else Raster.
+    #[default]
     Auto,
-}
-
-impl Default for ShadowMode {
-    fn default() -> Self {
-        ShadowMode::Auto
-    }
 }
 
 /// Quality / feature settings that passes consult at execution time.
@@ -358,40 +353,20 @@ pub struct RenderGraph {
 }
 
 impl RenderGraph {
-    /// Execute all passes in order.
+    /// Run all registered passes in order, recording into `ctx.cmd`.
     ///
     /// For now this is a simple linear execution. A production graph would:
     /// 1. Allocate transient resources (with aliasing for TBDR)
     /// 2. Insert memory barriers between passes
     /// 3. Fuse compatible passes into subpasses
     /// 4. Dispatch compute passes between renderpasses
-    pub fn execute<'a>(
-        &mut self,
-        device: &ash::Device,
-        context: &VulkanContext,
-        settings: &RenderSettings,
-        cmd: vk::CommandBuffer,
-        frame_index: u32,
-        image_index: u32,
-        extent: vk::Extent2D,
-        frame: &'a GraphFrame<'a>,
-    ) -> Result<()> {
+    pub fn execute(&mut self, ctx: &RenderContext) -> Result<()> {
         let resources = GraphResources {
             resources: self.resources.clone(),
         };
 
         for pass in &mut self.passes {
-            let ctx = RenderContext {
-                device,
-                context,
-                settings,
-                cmd,
-                frame_index,
-                image_index,
-                extent,
-                frame,
-            };
-            pass.execute(&ctx, &resources)?;
+            pass.execute(ctx, &resources)?;
         }
 
         Ok(())

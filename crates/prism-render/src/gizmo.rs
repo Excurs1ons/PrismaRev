@@ -160,8 +160,8 @@ impl Gizmo {
                 .color_write_mask(vk::ColorComponentFlags::empty())
                 .blend_enable(false),
         ];
-        let color_blend_state = vk::PipelineColorBlendStateCreateInfo::default()
-            .attachments(&blend_attachments);
+        let color_blend_state =
+            vk::PipelineColorBlendStateCreateInfo::default().attachments(&blend_attachments);
 
         let pipeline_info = vk::GraphicsPipelineCreateInfo::default()
             .stages(&shader_stages)

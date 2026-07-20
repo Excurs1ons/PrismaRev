@@ -132,7 +132,7 @@ impl PostPass {
             )
         }
         .context("PostPass: allocate ds")?;
-        let descriptor_sets: Vec<vk::DescriptorSet> = descriptor_sets.into();
+        let descriptor_sets: Vec<vk::DescriptorSet> = descriptor_sets;
 
         let render_pass = create_render_pass(device, color_format)?;
 
@@ -524,10 +524,7 @@ fn create_render_pass(device: &ash::Device, format: vk::Format) -> anyhow::Resul
 // ScenePass). Kept here as a placeholder import to avoid an unused warning
 // if no callers use it.
 #[allow(dead_code)]
-fn _memory_type_for_hdr(
-    context: &VulkanContext,
-    mem_type_bits: u32,
-) -> anyhow::Result<u32> {
+fn _memory_type_for_hdr(context: &VulkanContext, mem_type_bits: u32) -> anyhow::Result<u32> {
     find_memory_type(
         &context.physical_device_memory_properties,
         mem_type_bits,

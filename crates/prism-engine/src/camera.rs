@@ -333,40 +333,40 @@ impl FlyCamera {
         let up = [0.0f32, 1.0, 0.0];
         let mut movev = [0.0f32; 3];
         if input.key_held(KeyCode::KeyW) {
-            for i in 0..3 {
-                movev[i] += f[i];
+            for (mv, v) in movev.iter_mut().zip(f.iter()) {
+                *mv += v;
             }
         }
         if input.key_held(KeyCode::KeyS) {
-            for i in 0..3 {
-                movev[i] -= f[i];
+            for (mv, v) in movev.iter_mut().zip(f.iter()) {
+                *mv -= v;
             }
         }
         if input.key_held(KeyCode::KeyD) {
-            for i in 0..3 {
-                movev[i] += r[i];
+            for (mv, v) in movev.iter_mut().zip(r.iter()) {
+                *mv += v;
             }
         }
         if input.key_held(KeyCode::KeyA) {
-            for i in 0..3 {
-                movev[i] -= r[i];
+            for (mv, v) in movev.iter_mut().zip(r.iter()) {
+                *mv -= v;
             }
         }
         if input.key_held(KeyCode::Space) || input.key_held(KeyCode::KeyE) {
-            for i in 0..3 {
-                movev[i] += up[i];
+            for (mv, v) in movev.iter_mut().zip(up.iter()) {
+                *mv += v;
             }
         }
         if input.key_held(KeyCode::ControlLeft) || input.key_held(KeyCode::KeyQ) {
-            for i in 0..3 {
-                movev[i] -= up[i];
+            for (mv, v) in movev.iter_mut().zip(up.iter()) {
+                *mv -= v;
             }
         }
         let ml = (movev[0] * movev[0] + movev[1] * movev[1] + movev[2] * movev[2]).sqrt();
         if ml > 1e-6 {
             let inv = speed / ml;
-            for i in 0..3 {
-                self.position[i] += movev[i] * inv;
+            for (p, mv) in self.position.iter_mut().zip(movev.iter()) {
+                *p += mv * inv;
             }
         }
     }
@@ -523,7 +523,9 @@ fn find_field_f32(s: &str, key: &str) -> Option<f32> {
     let colon = rest.find(':')?;
     let val = rest[colon + 1..].trim_start();
     // Value ends at the next comma or closing brace.
-    let end = val.find(|c| c == ',' || c == '}').unwrap_or(val.len());
+    let end = val
+        .find(|c: char| [',', '}'].contains(&c))
+        .unwrap_or(val.len());
     val[..end].trim().parse::<f32>().ok()
 }
 

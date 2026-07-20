@@ -23,7 +23,6 @@ use crate::mesh::Vertex;
 use crate::passes::ScenePass;
 use crate::render_graph::{
     DrawItem, GraphFrame, RenderGraph, RenderGraphBuilder, RenderPassNode, RenderSettings,
-    ShadowMode,
 };
 use crate::swapchain::Swapchain;
 
@@ -155,11 +154,12 @@ impl GraphRenderer {
         }
         .context("create shadow comparison sampler")?;
 
-        let mut settings = RenderSettings::default();
-        settings.shadow_mode = ShadowMode::Raster;
-        settings.ray_tracing_enabled = false;
-        let resolved = settings.resolve_shadow(&context.rt_caps);
-        settings.shadow_mode = resolved;
+        let resolved = RenderSettings::default().resolve_shadow(&context.rt_caps);
+        let settings = RenderSettings {
+            shadow_mode: resolved,
+            ray_tracing_enabled: false,
+            ..Default::default()
+        };
 
         // Build graph with ShadowMapPass. Call setup() on the pass before
         // adding it so it registers its shadow-map resource, then allocate the
@@ -463,9 +463,9 @@ impl GraphRenderer {
         // GTAO owns its own AO images (not swapchain-derived) but sizes them
         // to half the swapchain extent, so recreate them on resize too.
         if let Some(sw) = self.swapchain.as_ref() {
-            if let Err(e) = self
-                .gtao_pass
-                .recreate_target(&self.context, self.command_pool, sw.extent)
+            if let Err(e) =
+                self.gtao_pass
+                    .recreate_target(&self.context, self.command_pool, sw.extent)
             {
                 log::warn!("GtaoPass recreate_target failed: {e:#}");
             }
@@ -522,7 +522,7 @@ impl GraphRenderer {
             }
         };
 
-        let cmd = self.command_buffers[frame as usize];
+        let cmd = self.command_buffers[frame];
 
         // --- Reset & begin command buffer ---
         unsafe { device.reset_command_buffer(cmd, vk::CommandBufferResetFlags::empty()) }
@@ -542,7 +542,7 @@ impl GraphRenderer {
         let mut record: anyhow::Result<()> = Ok(());
 
         if record.is_ok() {
-            record = self.frame_ubos[frame as usize]
+            record = self.frame_ubos[frame]
                 .update(&device, frame_data)
                 .context("update frame UBO");
         }
@@ -557,13 +557,7 @@ impl GraphRenderer {
                 if extent.width > 0 && extent.height > 0 {
                     record = self
                         .scene_pass
-                        .set_target(
-                            &device,
-                            &self.context,
-                            sw.views.len(),
-                            image_index,
-                            extent,
-                        )
+                        .set_target(&device, &self.context, sw.views.len(), image_index, extent)
                         .context("ScenePass: set_target");
                 }
             }
@@ -576,8 +570,7 @@ impl GraphRenderer {
         // default, so nothing samples it until the user toggles the bit).
         if record.is_ok() {
             let ao_view = self.gtao_pass.ao_view((frame as u32 + 1) % 2);
-            self.scene_pass
-                .set_ao(&device, frame as u32, ao_view);
+            self.scene_pass.set_ao(&device, frame as u32, ao_view);
         }
 
         // --- Update point-light SSBO from the ECS-collected lights ---
@@ -595,7 +588,7 @@ impl GraphRenderer {
         // build the GraphFrame inside the block.
         if record.is_ok() {
             let graph_frame = GraphFrame {
-                frame_ubo: &self.frame_ubos[frame as usize],
+                frame_ubo: &self.frame_ubos[frame],
                 draw_list: draw_items,
                 mesh_manager: &self.mesh_manager,
                 light_view_proj,
@@ -625,19 +618,17 @@ impl GraphRenderer {
                 view_proj: frame_data.view_proj,
             };
 
-            record = self
-                .graph
-                .execute(
-                    &device,
-                    &self.context,
-                    &self.settings,
-                    cmd,
-                    frame as u32,
-                    image_index,
-                    extent,
-                    &graph_frame,
-                )
-                .context("graph execute");
+            let render_ctx = crate::render_graph::RenderContext {
+                device: &device,
+                context: &self.context,
+                settings: &self.settings,
+                cmd,
+                frame_index: frame as u32,
+                image_index,
+                extent,
+                frame: &graph_frame,
+            };
+            record = self.graph.execute(&render_ctx).context("graph execute");
 
             if record.is_ok() {
                 record = self
@@ -748,8 +739,7 @@ impl GraphRenderer {
                         }
                     };
                     if record.is_ok() {
-                        self.post_pass
-                            .set_input(&device, frame as u32, hdr_view);
+                        self.post_pass.set_input(&device, frame as u32, hdr_view);
                         let post_push = crate::post::PostPushConstants {
                             tonemap_mode,
                             _pad0: 0,
@@ -758,7 +748,14 @@ impl GraphRenderer {
                         };
                         record = self
                             .post_pass
-                            .execute(&device, cmd, frame as u32, image_index, hdr_image, &post_push)
+                            .execute(
+                                &device,
+                                cmd,
+                                frame as u32,
+                                image_index,
+                                hdr_image,
+                                &post_push,
+                            )
                             .context("PostPass execute");
                     }
                 }

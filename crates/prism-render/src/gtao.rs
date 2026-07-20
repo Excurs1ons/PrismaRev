@@ -231,11 +231,7 @@ impl GtaoPass {
         // layout matches even on frame 0. The GTAO render pass uses
         // `initial_layout = UNDEFINED`, which tolerates any incoming layout
         // when it transitions back to COLOR_ATTACHMENT_OPTIMAL to write.
-        transition_ao_images_to_shader_read(
-            context,
-            command_pool,
-            [ao_images[0], ao_images[1]],
-        )?;
+        transition_ao_images_to_shader_read(context, command_pool, [ao_images[0], ao_images[1]])?;
 
         Ok(Self {
             extent,
@@ -691,8 +687,8 @@ fn create_ao_image(
         .tiling(vk::ImageTiling::OPTIMAL)
         .usage(vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED)
         .sharing_mode(vk::SharingMode::EXCLUSIVE);
-    let image = unsafe { device.create_image(&image_info, None) }
-        .context("GtaoPass: create AO image")?;
+    let image =
+        unsafe { device.create_image(&image_info, None) }.context("GtaoPass: create AO image")?;
 
     let mem_reqs = unsafe { device.get_image_memory_requirements(image) };
     let mem_type = find_memory_type(
@@ -783,7 +779,8 @@ fn transition_ao_images_to_shader_read(
         .command_buffer_count(1);
     let cmd = unsafe { device.allocate_command_buffers(&alloc_info) }
         .context("GtaoPass: allocate transition cmd")?[0];
-    let begin = vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+    let begin =
+        vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
     unsafe { device.begin_command_buffer(cmd, &begin) }
         .context("GtaoPass: begin transition cmd")?;
 
@@ -822,7 +819,11 @@ fn transition_ao_images_to_shader_read(
 
     let submit = vk::SubmitInfo::default().command_buffers(std::slice::from_ref(&cmd));
     unsafe {
-        device.queue_submit(context.graphics_queue, std::slice::from_ref(&submit), vk::Fence::null())
+        device.queue_submit(
+            context.graphics_queue,
+            std::slice::from_ref(&submit),
+            vk::Fence::null(),
+        )
     }
     .context("GtaoPass: submit transition")?;
     unsafe { device.queue_wait_idle(context.graphics_queue) }
