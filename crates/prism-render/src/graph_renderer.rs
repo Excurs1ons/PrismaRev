@@ -465,7 +465,7 @@ impl GraphRenderer {
         }
         // PostPass wraps swapchain views too (its framebuffers target the
         // swapchain directly). Drop them on the same lifecycle.
-        if let Some(post) = self.graph.pass_mut::<PostPass>() {
+        if let Some(post) = self.graph.pass_mut::<crate::post::PostPass>() {
             post.drop_target(&self.context.device);
         }
         // GTAO owns its own AO images (not swapchain-derived) but sizes them

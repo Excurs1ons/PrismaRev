@@ -33,7 +33,8 @@ use ash::vk;
 use crate::context::VulkanContext;
 use crate::pipeline::{GraphicsPipeline, PipelineDesc};
 use crate::render_graph::{
-    GraphResources, RenderContext, RenderPassNode, RenderSettings, SCENE_DEPTH_H, SCENE_NORMAL_H,
+    GraphResources, RenderContext, RenderGraphBuilder, RenderPassNode, RenderSettings,
+    SCENE_DEPTH_H, SCENE_NORMAL_H,
 };
 use crate::render_pass::find_memory_type;
 use crate::shader;
