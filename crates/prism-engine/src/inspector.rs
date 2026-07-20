@@ -167,7 +167,7 @@ impl Inspector {
                     ("SpecularIBL", "7", 6, "Prefiltered specular"),
                     ("MultiLight", "8", 7, "Multiple light sources"),
                     ("Emissive", "0", 9, "Self-emissive surfaces"),
-                    ("AO", "9", 14, "Ambient occlusion (not yet implemented)"),
+                    ("AO", "9", 14, "GTAO ambient occlusion (attenuates IBL)"),
                     ("Transmission", "Shift+1", 10, "Transmission (refraction)"),
                     ("Translucency", "Shift+2", 11, "Translucent scattering"),
                     ("Anisotropy", "Shift+3", 12, "Anisotropic materials"),

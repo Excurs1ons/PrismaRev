@@ -239,8 +239,9 @@ pub struct App {
 /// response, multi-light, and rasterized shadow occlusion are all on.
 /// Bits mirror `PBR_FLAG_*` in `shaders/slang/scene_frag.slang`.
 /// Shadow (bit 8) is enabled by default so direct-light occlusion is always
-/// visible — without it, surfaces blocked from the sun stay lit. Ambient
-/// occlusion of the IBL/skybox term is a separate (deferred) feature.
+/// visible - without it, surfaces blocked from the sun stay lit. GTAO (bit 14)
+/// is on by default so IBL diffuse+specular are attenuated by screen-space
+/// occlusion (1-frame latency; the first frame reads a cleared 1.0 AO texture).
 pub const DEFAULT_PBR_FLAGS: u32 = (1 << 0)  // Direct
     | (1 << 1)  // AmbientIBL
     | (1 << 2)  // Specular
@@ -249,7 +250,8 @@ pub const DEFAULT_PBR_FLAGS: u32 = (1 << 0)  // Direct
     | (1 << 5)  // DiffuseIBL
     | (1 << 6)  // SpecularIBL
     | (1 << 7)  // MultiLight
-    | (1 << 8); // Shadow (direct-light occlusion, on by default)
+    | (1 << 8)  // Shadow (direct-light occlusion, on by default)
+    | (1 << 14); // AO (GTAO, attenuates IBL diffuse+specular)
 
 impl App {
     pub fn new() -> Self {
@@ -1003,7 +1005,7 @@ impl ApplicationHandler for App {
                             (KeyCode::Digit6, false) => Some(5),    // IBL 漫反射 Irradiance
                             (KeyCode::Digit7, false) => Some(6),    // IBL 高光 Prefiltered+LUT
                             (KeyCode::Digit8, false) => Some(7),    // 多光源
-                            (KeyCode::Digit9, false) => Some(14),   // AO (暂未实装, 占位 bit)
+                            (KeyCode::Digit9, false) => Some(14),   // AO (GTAO, attenuates IBL diffuse+specular)
                             (KeyCode::Digit0, false) => Some(9),    // 自发光 Emissive
                             (KeyCode::Digit1, true) => Some(10),    // Transmission
                             (KeyCode::Digit2, true) => Some(11),    // Translucency
@@ -1173,7 +1175,7 @@ impl App {
             "Translucency", // Shift+2
             "Anisotropy",   // Shift+3
             "ClearCoat",    // Shift+4
-            "AO",           // 9 (not yet implemented)
+            "AO",           // 9 (GTAO, attenuates IBL)
         ]
     }
 
