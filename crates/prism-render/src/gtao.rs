@@ -863,10 +863,10 @@ impl RenderPassNode for GtaoPass {
         };
         // TEMP PROBE: confirm GTAO execute runs and inputs are valid. Throttled
         // to once per second so the log isn't flooded at frame rate; emitted at
-        // `debug!` level so it stays quiet under the default `info` filter.
+        // `trace!` level so it stays quiet under the default `info` filter.
         if self.last_probe_log.elapsed().as_secs_f32() >= 1.0 {
             self.last_probe_log = Instant::now();
-            log::warn!(
+            log::trace!(
                 "AO_PROBE GTAO: frame={} image={} depth_view={:?} normal_view={:?} ao_write_slot={} ao_read_view={:?} debug_flags=0x{:x}",
                 ctx.frame_index,
                 ctx.image_index,

@@ -378,6 +378,13 @@ impl GraphRenderer {
         &self.mesh_manager
     }
 
+    /// GI mode: 0=Off, 1=Update-only, 2=On (query cache).
+    /// Used by `render_system` to gate IBL — when GI is off, IBL ambient is
+    /// zeroed so no indirect lighting contribution reaches the shader.
+    pub fn gi_mode(&self) -> u32 {
+        self.settings.gi_mode
+    }
+
     pub fn extent(&self) -> vk::Extent2D {
         self.swapchain
             .as_ref()

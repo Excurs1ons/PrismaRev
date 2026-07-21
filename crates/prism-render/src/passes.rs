@@ -1427,10 +1427,10 @@ impl ScenePass {
         let i = (frame_index as usize) % self.ao_descriptor_sets.len();
         // TEMP PROBE: confirm set_ao runs with valid inputs. Throttled to once
         // per second so the log isn't flooded at frame rate; emitted at
-        // `debug!` so it stays quiet under the default `info` filter.
+        // `trace!` so it stays quiet under the default `info` filter.
         if self.last_probe_log.elapsed().as_secs_f32() >= 1.0 {
             self.last_probe_log = Instant::now();
-            log::warn!(
+            log::trace!(
                 "AO_PROBE set_ao: frame={} slot={} view={:?} prev_bound={:?} ao_views={:?} will_write={}",
                 frame_index,
                 i,

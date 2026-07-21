@@ -331,11 +331,18 @@ pub fn render_system(
             [d[0], d[1], d[2], l.intensity]
         })
         .unwrap_or(fallback_dir);
-    let light_color = world
+    let mut light_color = world
         .query::<DirectionalLight>()
         .next()
         .map(|(_, l)| [l.color[0], l.color[1], l.color[2], l.ambient])
         .unwrap_or(fallback_col);
+
+    // GI gate: when gi_mode == 0 (GI off), disable IBL by zeroing the ambient
+    // factor. This is a temporary measure — once GI is implemented, setting
+    // gi_mode > 0 will restore indirect lighting (through GI, not IBL).
+    if renderer.gi_mode() == 0 {
+        light_color[3] = 0.0;
+    }
 
     // Collect point lights from the ECS world into the GPU layout. A sibling
     // `Transform` (if present) overrides the component's `position`, so lights

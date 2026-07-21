@@ -1076,7 +1076,7 @@ fn emit_read_barriers(
             .copied()
             .unwrap_or(vk::ImageLayout::UNDEFINED);
         if probe {
-            log::warn!(
+            log::trace!(
                 "BARRIER_PROBE pass {} read {:?}: current={:?} desired={:?} image_index={}",
                 pass_idx,
                 handle,
@@ -1172,7 +1172,7 @@ fn apply_write_layouts(
     for e in edges {
         if e.kind == EdgeKind::Write {
             if probe {
-                log::warn!(
+                log::trace!(
                     "BARRIER_PROBE pass write {:?} -> layout={:?} image_index={}",
                     e.usage.handle,
                     e.usage.layout,
