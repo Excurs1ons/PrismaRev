@@ -571,15 +571,20 @@ SceneOutput fragmentMain(MeshVaryings in)
         specular_ibl *= ao;
     }
 
-    // ---- GI indirect diffuse (probe volume). Gated by giMode master switch
-    // + PBR_FLAG_GI isolate flag. Adds bounce light that IBL cannot provide
-    // (position-dependent, occlusion-aware via baked SH). ----
+    // ---- GI (probe volume) gates IBL. Gated by giMode master switch +
+    // PBR_FLAG_GI isolate flag. When active, REPLACES IBL diffuse with probe
+    // volume irradiance AND suppresses specular IBL — the env cubemap is an
+    // outdoor sky that does not represent enclosed spaces, so leaving it on
+    // leaks blue-gray light into interiors. Probes baked with occlusion
+    // receive less sky irradiance → interiors naturally darken. ----
     float3 gi_diffuse = float3(0.0);
     if (frame.giMode != 0u && on(PBR_FLAG_GI))
     {
         float3 gi_irradiance = SampleProbeVolumeIrradiance(
             probeVolume, probeInfo, in.worldPos, n);
         gi_diffuse = kd_ibl * gi_irradiance * albedo;
+        diffuse_ibl = gi_diffuse;  // replace IBL diffuse → interior darkening
+        specular_ibl = float3(0.0); // env sky specular invalid in enclosed space
     }
 
     // ---- Emissive (gated). Neutral = 0. ----
@@ -652,8 +657,7 @@ SceneOutput fragmentMain(MeshVaryings in)
     // NOT added again -- otherwise shadowed faces (NdotL~0) would stay bright
     // and direct-light shading would look flat.
     float3 color = direct;
-    color += diffuse_ibl + specular_ibl;   // IBL
-    color += gi_diffuse;                    // GI indirect diffuse (probe volume)
+    color += diffuse_ibl + specular_ibl;   // IBL (diffuse replaced by GI when active)
     color += multi_light + emissive;       // multilight + emissive
     color += transmission + translucency + aniso_spec + clearcoat;
 
