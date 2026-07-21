@@ -276,6 +276,7 @@ pub fn render_system(
     debug_flags: u32,
     show_ui: bool,
     tonemap_mode: u32,
+    debug_rt: u32,
     scene_draw_items: &[SceneDrawItem],
 ) -> anyhow::Result<()> {
     // Fallback light values used when the world has no DirectionalLight entity.
@@ -313,6 +314,10 @@ pub fn render_system(
     // Computed once per frame on the CPU; the GTAO shader multiplies this by
     // the sampled clip-space position to recover view-space coords.
     let inv_projection = mat_inverse(&projection);
+    // Projection entries [2][2] / [3][2] (column-major m[col][row]) for the
+    // PostPass depth-linearization debug view (view_z = proj22*d + proj32).
+    let proj22 = projection[2][2];
+    let proj32 = projection[3][2];
     let _ = projection; // projection is only consumed via inv_projection.
 
     // Resolve the directional light from the ECS world (first `DirectionalLight`
@@ -382,7 +387,11 @@ pub fn render_system(
         view,
         light_view_proj,
         tonemap_mode,
-        _pad: [0; 3],
+        viewport_size: {
+            let e = renderer.extent();
+            [e.width as f32, e.height as f32]
+        },
+        _pad: 0,
     };
 
     // Build the flat draw list from the loaded glTF scene.
@@ -412,6 +421,9 @@ pub fn render_system(
             normal_space,
             debug_flags,
             tonemap_mode,
+            debug_rt,
+            proj22,
+            proj32,
             &lights,
         )
         .map(|_| ())?;

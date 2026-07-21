@@ -12,13 +12,15 @@
 use anyhow::Context as _;
 use anyhow::Result;
 use ash::vk;
+use std::time::Instant;
 
 use crate::gizmo::Gizmo;
 use crate::mesh::Vertex;
 use crate::pipeline::{GraphicsPipeline, PipelineDesc};
 use crate::render_graph::{
-    GraphResources, RenderContext, RenderGraphBuilder, RenderPassNode, RenderSettings,
-    ResourceHandle, ResourceType, ShadowMode, SCENE_COLOR_H, SCENE_DEPTH_H, SCENE_NORMAL_H,
+    GraphResources, PassInfo, PassKind, RenderContext, RenderGraphBuilder, RenderPassNode,
+    RenderSettings, ResourceHandle, ResourceType, ResourceUsage, ShadowMode, SCENE_COLOR_H,
+    SCENE_DEPTH_H, SCENE_NORMAL_H,
 };
 use crate::shader;
 
@@ -78,6 +80,15 @@ impl ShadowMapPass {
         self.shadow_map
     }
 
+    /// Square shadow map extent (`shadow_size` x `shadow_size`). Exposed for
+    /// the render-graph visualizer.
+    pub fn shadow_extent(&self) -> vk::Extent2D {
+        vk::Extent2D {
+            width: self.shadow_size,
+            height: self.shadow_size,
+        }
+    }
+
     /// Create a depth-only render pass (single depth attachment, no color).
     ///
     /// Uses `DEPTH_STENCIL_ATTACHMENT_OPTIMAL` / `DEPTH_STENCIL_READ_ONLY_OPTIMAL`
@@ -97,7 +108,14 @@ impl ShadowMapPass {
             .store_op(vk::AttachmentStoreOp::STORE)
             .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
             .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
-            .initial_layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
+            // `UNDEFINED` + LOAD_OP_CLEAR is the Vulkan-idiomatic way to say
+            // "discard incoming contents, I'll clear": the render pass performs
+            // the implicit `any -> DEPTH_STENCIL_ATTACHMENT_OPTIMAL` transition.
+            // This removes the need for the hand-rolled `UNDEFINED -> ATTACHMENT`
+            // `cmd_pipeline_barrier` that used to precede `cmd_begin_render_pass`
+            // (the image is graph-managed and re-cleared every frame, so there
+            // is nothing to preserve between frames).
+            .initial_layout(vk::ImageLayout::UNDEFINED)
             .final_layout(vk::ImageLayout::DEPTH_STENCIL_READ_ONLY_OPTIMAL);
 
         let depth_ref = vk::AttachmentReference::default()
@@ -167,7 +185,6 @@ impl RenderPassNode for ShadowMapPass {
                 return Ok(());
             }
         };
-        let shadow_img = resources.image(self.shadow_map).unwrap_or_default();
 
         // Lazy-init pipeline + render pass + framebuffer on first execute.
         if self.pipeline.is_none() {
@@ -272,38 +289,13 @@ impl RenderPassNode for ShadowMapPass {
         let render_pass = self.render_pass.unwrap();
         let framebuffer = self.framebuffer.unwrap();
 
-        // Transition shadow map to depth-attachment layout (contents are
-        // cleared below, so UNDEFINED source is fine). Use the combined
-        // DEPTH_STENCIL_ATTACHMENT_OPTIMAL layout to match the render pass:
-        // separateDepthStencilLayouts is not enabled (see create_render_pass).
-        let barrier = vk::ImageMemoryBarrier {
-            old_layout: vk::ImageLayout::UNDEFINED,
-            new_layout: vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-            src_access_mask: vk::AccessFlags::empty(),
-            dst_access_mask: vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
-            src_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
-            dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
-            image: shadow_img,
-            subresource_range: vk::ImageSubresourceRange {
-                aspect_mask: vk::ImageAspectFlags::DEPTH,
-                base_mip_level: 0,
-                level_count: 1,
-                base_array_layer: 0,
-                layer_count: 1,
-            },
-            ..Default::default()
-        };
-        unsafe {
-            ctx.device.cmd_pipeline_barrier(
-                ctx.cmd,
-                vk::PipelineStageFlags::TOP_OF_PIPE,
-                vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
-                vk::DependencyFlags::empty(),
-                &[],
-                &[],
-                &[barrier],
-            );
-        }
+        // The shadow map's `UNDEFINED -> DEPTH_STENCIL_ATTACHMENT_OPTIMAL`
+        // transition used to live here as a hand-rolled `cmd_pipeline_barrier`.
+        // It is now handled implicitly by the render pass: the attachment
+        // `initial_layout = UNDEFINED` + `LOAD_OP_CLEAR` lets Vulkan perform
+        // the transition inside `cmd_begin_render_pass` (see `create_render_pass`).
+        // `shadow_img` is therefore no longer needed in this function body.
+        let _ = resources.image(self.shadow_map).unwrap_or_default();
 
         let clear = vk::ClearValue {
             depth_stencil: vk::ClearDepthStencilValue {
@@ -403,6 +395,16 @@ impl RenderPassNode for ShadowMapPass {
             size
         );
         Ok(())
+    }
+
+    fn graph_info(&self) -> PassInfo {
+        PassInfo {
+            index: usize::MAX,
+            name: self.name().to_string(),
+            kind: PassKind::Shadow,
+            inputs: Vec::new(),
+            outputs: vec![self.shadow_map],
+        }
     }
 }
 
@@ -742,6 +744,9 @@ pub struct ScenePass {
     /// The AO view currently bound to each frame-in-flight's AO descriptor
     /// set. Tracked so we skip redundant descriptor rewrites.
     ao_views: Vec<vk::ImageView>,
+    /// Last time the AO_PROBE debug line in `set_ao` was logged; throttled to
+    /// once per second so it doesn't flood the log at frame rate.
+    last_probe_log: Instant,
     /// Skybox background pass (draws the IBL env cubemap). Owns its pipeline +
     /// set-2 (IBL env) layout; borrows the IBL descriptor set.
     skybox: SkyboxPass,
@@ -795,6 +800,7 @@ impl ScenePass {
             ao_ds_pool: None,
             ao_sampler: vk::Sampler::null(),
             ao_views: Vec::new(),
+            last_probe_log: Instant::now(),
             skybox: SkyboxPass::new(vk::DescriptorSet::null(), vk::DescriptorSetLayout::null()),
             gizmo: None,
             device: None,
@@ -1419,6 +1425,21 @@ impl ScenePass {
     /// frame-in-flight.
     pub fn set_ao(&mut self, device: &ash::Device, frame_index: u32, view: vk::ImageView) {
         let i = (frame_index as usize) % self.ao_descriptor_sets.len();
+        // TEMP PROBE: confirm set_ao runs with valid inputs. Throttled to once
+        // per second so the log isn't flooded at frame rate; emitted at
+        // `debug!` so it stays quiet under the default `info` filter.
+        if self.last_probe_log.elapsed().as_secs_f32() >= 1.0 {
+            self.last_probe_log = Instant::now();
+            log::warn!(
+                "AO_PROBE set_ao: frame={} slot={} view={:?} prev_bound={:?} ao_views={:?} will_write={}",
+                frame_index,
+                i,
+                view,
+                self.ao_views[i],
+                self.ao_views,
+                view != self.ao_views[i] && view != vk::ImageView::null()
+            );
+        }
         if view == self.ao_views[i] {
             return;
         }
@@ -1502,6 +1523,29 @@ impl ScenePass {
     /// uses this (halved) to size its own viewport + AO textures.
     pub fn extent(&self) -> vk::Extent2D {
         self.extent
+    }
+
+    /// HDR intermediate color format (the scene target PostPass tonemaps).
+    /// Exposed for the render-graph visualizer.
+    pub fn color_format(&self) -> vk::Format {
+        self.color_format
+    }
+
+    /// View-space normal MRT format (read by GTAO). Exposed for the viz.
+    pub fn normal_format(&self) -> vk::Format {
+        self.normal_format
+    }
+
+    /// Number of swapchain images (framebuffers / HDR color / depth / normal
+    /// slots are all sized to this). Exposed for the viz.
+    pub fn image_count(&self) -> usize {
+        self.image_count
+    }
+
+    /// The three well-known output handles (`[color, normal, depth]`), in the
+    /// same order `setup` declares them. Exposed for the viz's edge labels.
+    pub fn out_handles(&self) -> [ResourceHandle; 3] {
+        [self.out_color_h, self.out_normal_h, self.out_depth_h]
     }
 
     /// Rewrite the point-light SSBO from a fresh `&[GpuLight]` slice. Called
@@ -1839,6 +1883,33 @@ impl RenderPassNode for ScenePass {
         self.out_depth_h = SCENE_DEPTH_H;
         self.out_normal_h = SCENE_NORMAL_H;
         self.out_color_h = SCENE_COLOR_H;
+
+        // Declare write edges so the render graph's layout cache records the
+        // layout this pass leaves each attachment in (matching the render pass
+        // `final_layout`). Downstream `GtaoPass` / `PostPass` read edges then
+        // trigger the ATTACHMENT -> READ_ONLY / SHADER_READ_ONLY barriers
+        // automatically, with `src` stage/access taken from these write edges.
+        // No barrier is emitted for the writes themselves: ScenePass's render
+        // pass performs the UNDEFINED -> ATTACHMENT transitions via
+        // `initial_layout` (see `create_render_pass`).
+        graph.write_usage(ResourceUsage {
+            handle: SCENE_DEPTH_H,
+            access: vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
+            stage: vk::PipelineStageFlags::LATE_FRAGMENT_TESTS,
+            layout: vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+        });
+        graph.write_usage(ResourceUsage {
+            handle: SCENE_NORMAL_H,
+            access: vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
+            stage: vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+            layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+        });
+        graph.write_usage(ResourceUsage {
+            handle: SCENE_COLOR_H,
+            access: vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
+            stage: vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+            layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+        });
     }
 
     fn execute(&mut self, ctx: &RenderContext, resources: &mut GraphResources) -> Result<()> {
@@ -2105,6 +2176,19 @@ impl RenderPassNode for ScenePass {
             self.extent.height
         );
         Ok(())
+    }
+
+    fn graph_info(&self) -> PassInfo {
+        PassInfo {
+            index: usize::MAX,
+            name: self.name().to_string(),
+            kind: PassKind::Scene,
+            // Shadow view / IBL / previous-frame AO are bound via `set_resources`
+            // / `set_ao` and bypass `GraphResources`, so they aren't listed as
+            // graph edges here - the viz surfaces them as human-readable notes.
+            inputs: Vec::new(),
+            outputs: vec![self.out_depth_h, self.out_normal_h, self.out_color_h],
+        }
     }
 }
 

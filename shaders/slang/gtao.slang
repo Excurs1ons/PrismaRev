@@ -134,21 +134,23 @@ float3 load_normal(float2 uv, float2 texel, float3 center, float depth)
 }
 
 /// Search the horizon along one direction of a slice. Steps in screen UV space
-/// along `dir_uv`, sampling depth and reconstructing view-space positions.
-/// Returns the horizon angle's sine (clamped to the tangent plane) - the larger
-/// the sine, the higher the occluder above the surface = more occlusion.
+/// along `axis_uv`, sampling depth and reconstructing view-space positions.
+/// Returns the sine of the horizon angle measured above the surface's tangent
+/// plane (the plane through `center` perpendicular to `normal`) - the larger
+/// the sine, the higher the occluder rises above the surface = more occlusion.
 ///
 /// `center` = center pixel's view-space position.
-/// `normal` = surface normal at the center pixel.
+/// `normal` = surface normal at the center pixel (defines the tangent plane).
 /// `axis_uv` = screen-space direction (unit) along which to search.
 /// `sign` = +1 or -1 (search both sides of the slice).
 float search_horizon(float3 center, float3 normal, float2 uv, float2 axis_uv, float sign)
 {
-    // The horizon is the largest angle gamma between the view ray to a sample
-    // and the horizon plane (the plane through `center` parallel to the screen).
-    // We track cos(gamma) where gamma is measured from the +Z view direction:
-    // a sample higher than the center (closer to camera, larger z) raises the
-    // horizon and increases occlusion. cos(gamma) = (sample.z - center.z) / dist.
+    // The horizon angle is measured from the surface tangent plane (perpendicular
+    // to `normal`), NOT the screen plane - this is what makes the occlusion
+    // correct for surfaces tilted relative to the screen. A sample direction `v`
+    // makes angle alpha above the tangent plane where sin(alpha) = dot(v, normal)
+    // / |v|: positive when the sample sits on the normal (sky) side of the
+    // tangent plane, i.e. it is an occluder. We keep the highest such sine.
     float max_sine = 0.0;
     float2 texel_step = axis_uv * sign / pc.viewport;
     for (uint i = 1u; i <= SAMPLES_PER_SIDE; i++)
@@ -162,44 +164,36 @@ float search_horizon(float3 center, float3 normal, float2 uv, float2 axis_uv, fl
         float sd = sample_depth(sample_uv);
         float3 sp = reconstruct_view_pos(sample_uv, sd);
         float3 v = sp - center;
-        // Distance in the xy plane of view space (the horizon plane).
-        float len_xy = length(v.xy);
-        if (len_xy < 1e-4)
+        float len_v = length(v);
+        if (len_v < 1e-4)
             continue;
-        // sin of the angle above the horizon plane. Positive = sample is above
-        // the center (occluder); negative = below (no occlusion from this one).
-        float sin_h = v.z / len_xy;
-        // Note: view-space z is negative (camera looks down -Z), and a sample
-        // closer to the camera has a LESS negative z (larger). So an occluder
-        // above the surface has v.z > 0 (sample.z less negative than center.z).
+        // sin of the angle above the tangent plane. Positive = occluder on the
+        // normal side; negative = below the surface (ignored via the max below).
+        float sin_h = dot(v, normal) / len_v;
         max_sine = max(max_sine, sin_h);
     }
     return max_sine;
 }
 
-/// Integrate the GTAO visibility for one slice given the two horizon sines
-/// (left and right). Returns 1.0 = unoccluded, 0.0 = fully occluded.
-/// Uses the cosine-weighted hemisphere approximation from the GTAO paper:
-/// the slice's contribution is the integral of cos(theta) between the two
-/// horizons, weighted by the normal's projection onto the slice direction.
-float integrate_slice(float sin_h1, float sin_h2, float3 normal, float3 slice_dir)
+/// Integrate the cosine-weighted visibility for one slice given the two horizon
+/// sines (left and right). Returns 1.0 = unoccluded, 0.0 = fully occluded.
+///
+/// This is the core GTAO improvement over HBAO: the hemisphere is cosine-weighted
+/// (directions near the normal contribute more ambient light than grazing ones).
+/// For a slice whose plane contains the normal, the unoccluded fraction of the
+/// cosine-weighted arc equals the average of the two horizon cosines: with no
+/// occluders the horizon sits at the tangent plane (h=0, cos=1) -> visibility 1;
+/// a horizon raised all the way to the normal (h=1, cos=0) -> visibility 0.
+float integrate_slice(float sin_h1, float sin_h2)
 {
-    // Clamp horizons to the upper hemisphere (above the tangent plane).
-    float h1 = max(sin_h1, 0.0);
-    float h2 = max(sin_h2, 0.0);
-    // Convert sine horizons to cosine (the integrand is cos(theta)).
-    float cos_h1 = sqrt(saturate(1.0 - h1 * h1));
-    float cos_h2 = sqrt(saturate(1.0 - h2 * h2));
-    // Approximate cosine-weighted integral: (sin(h) - cos(h)*n_dot_s) range.
-    // Use the closed form 1 - cos(h) for the unprojected hemisphere, then
-    // weight by the normal's slice projection.
-    float n_dot_s = dot(normal, slice_dir);
-    // Visibility = 1 - occluded_fraction. Occluded fraction ~ (1 - cos(h_avg))
-    // scaled by the normal's alignment with the slice direction.
-    float h_avg = (h1 + h2) * 0.5;
-    float cos_avg = (cos_h1 + cos_h2) * 0.5;
-    float occlusion = (1.0 - cos_avg) * abs(n_dot_s);
-    return saturate(1.0 - occlusion);
+    // Clamp horizons to the upper hemisphere (above the tangent plane); an
+    // occluder below the tangent plane contributes nothing.
+    float h1 = saturate(sin_h1);
+    float h2 = saturate(sin_h2);
+    // Convert sine horizons to cosine (the cosine-weighted integrand).
+    float cos_h1 = sqrt(1.0 - h1 * h1);
+    float cos_h2 = sqrt(1.0 - h2 * h2);
+    return (cos_h1 + cos_h2) * 0.5;
 }
 
 [shader("fragment")]
@@ -212,6 +206,7 @@ public void fragmentMain(
     float2 texel = 1.0 / pc.viewport;
 
     float depth = sample_depth(uv);
+
     // Sky pixels (depth == 1.0, the cleared value) have no occlusion - emit 1.0
     // so the scene's IBL term is unmodified there.
     if (depth >= 1.0)
@@ -245,7 +240,7 @@ public void fragmentMain(
         float sin_h1 = search_horizon(center, normal, uv, axis_uv, -1.0);
         float sin_h2 = search_horizon(center, normal, uv, axis_uv, 1.0);
 
-        visibility += integrate_slice(sin_h1, sin_h2, normal, slice_dir);
+        visibility += integrate_slice(sin_h1, sin_h2);
     }
     visibility /= float(SLICE_COUNT);
 

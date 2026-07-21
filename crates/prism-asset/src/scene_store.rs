@@ -101,6 +101,15 @@ impl SceneStore {
         self.instances.get(h)
     }
 
+    /// Like [`textures`](Self::textures) but yields mutable references, so the
+    /// renderer can drain pixel buffers in insertion order (via `mem::take`)
+    /// instead of cloning them into `TextureUploadInput`. After upload the
+    /// CPU-side pixels are dead weight (Sponza: ~5 GB), and nothing reads
+    /// `pixels` post-upload, so draining is safe.
+    pub fn textures_mut(&mut self) -> impl Iterator<Item = (TextureHandle, &mut TextureData)> {
+        self.textures.iter_mut()
+    }
+
     /// Insert raw CPU data into the store. Used by the glTF loader and by
     /// the procedural demo path.
     pub fn insert_mesh(&mut self, data: MeshData) -> MeshHandle {

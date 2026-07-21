@@ -16,7 +16,7 @@ $env:PATH = "$env:USERPROFILE\.cargo\bin;$sdk\Bin;" + $env:PATH
 $env:VK_SDK = $sdk
 $env:VK_LAYER_PATH = "$sdk\Bin"
 $env:VULKAN_SDK = $sdk
-$env:RUST_LOG = "info,tracy_client=off"
+$env:RUST_LOG = "warn,tracy_client=off"
 
 Set-Location $PSScriptRoot
 

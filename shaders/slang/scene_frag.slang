@@ -128,22 +128,29 @@ PbrBindlessPush pc;
 // uses its neutral value. flags=0 -> raw baseColor (unlit). Order matches the
 // keyboard map in app.rs (keys 1-9, 0, Shift+1..Shift+4).
 static const uint PBR_FLAG_DIRECT       = 0u;  // 1: direct lighting (NdotL factor)
-static const uint PBR_FLAG_AMBIENT_IBL  = 1u;  // 2: IBL master (gates 6/7)
+static const uint PBR_FLAG_SHADOW       = 1u;  // 2: shadow map attenuation
 static const uint PBR_FLAG_SPECULAR     = 2u;  // 3: specular (direct + IBL)
 static const uint PBR_FLAG_METALLIC     = 3u;  // 4: real metallic (else 0)
 static const uint PBR_FLAG_ROUGHNESS    = 4u;  // 5: real roughness (else 0.5)
 static const uint PBR_FLAG_DIFFUSE_IBL  = 5u;  // 6: IBL diffuse irradiance
 static const uint PBR_FLAG_SPECULAR_IBL = 6u;  // 7: IBL specular (prefiltered+LUT)
 static const uint PBR_FLAG_MULTILIGHT   = 7u;  // 8: extra point lights
-static const uint PBR_FLAG_SHADOW       = 8u;  // 9: shadow map attenuation
+static const uint PBR_FLAG_AO           = 8u;  // 9: GTAO ambient occlusion (attenuates IBL diffuse+specular)
 static const uint PBR_FLAG_EMISSIVE     = 9u;  // 0: emissive
 static const uint PBR_FLAG_TRANSMISSION = 10u; // Shift+1
 static const uint PBR_FLAG_TRANSLUCENCY = 11u; // Shift+2
 static const uint PBR_FLAG_ANISOTROPY   = 12u; // Shift+3
 static const uint PBR_FLAG_CLEARCOAT    = 13u; // Shift+4
-static const uint PBR_FLAG_AO           = 14u; // 9: GTAO ambient occlusion (attenuates IBL diffuse+specular)
+
 
 bool flag(uint b) { return (pc.debug_flags & (1u << b)) != 0u; }
+
+// Whether a PBR component should be *computed* this frame. In normal render
+// mode (`debug_flags == 0`) every component is on; in isolate mode only the
+// single selected component is computed (the rest stay at their neutral 0 so
+// they contribute nothing, and the isolate branch in fragmentMain emits just
+// the selected one as a grayscale visualization).
+bool on(uint b) { return pc.debug_flags == 0u || flag(b); }
 
 static const float PI          = 3.14159265359;
 static const float PREFILTER_MAX_LOD = 4.0; // PREFILTERED_MIP_LEVELS - 1
@@ -470,6 +477,13 @@ SceneOutput fragmentMain(MeshVaryings in)
 
     float3 v = normalize(frame.cameraPosition.xyz - in.worldPos);
 
+    // Screen-space UV for sampling screen-space textures (the GTAO visibility
+    // target). SV_Position.xy is the framebuffer pixel coordinate with a
+    // top-left origin, which matches the GTAO pass's UV convention
+    // (uv.y = 0 at the top). NOTE: the AO texture is screen-space, so it must
+    // be sampled with this UV - NOT the mesh texture coordinate `in.uv`.
+    float2 screen_uv = in.clipPos.xy / float2(frame.viewportW, frame.viewportH);
+
     float3 f0 = lerp(float3(0.04), albedo, metallic);
 
     // ---- Direct lighting (single directional, Cook-Torrance PBR) ----
@@ -491,15 +505,15 @@ SceneOutput fragmentMain(MeshVaryings in)
     float3 kD_direct = (float3(1.0) - f) * (1.0 - metallic);
 
     // Shadow (rasterized). 1.0 = lit, 0.0 = shadowed. Neutral = 1.0.
-    float shadow = flag(PBR_FLAG_SHADOW) ? sample_shadow(in.worldPos) : 1.0;
+    float shadow = on(PBR_FLAG_SHADOW) ? sample_shadow(in.worldPos) : 1.0;
 
     float3 direct = float3(0.0);
-    if (flag(PBR_FLAG_DIRECT))
+    if (on(PBR_FLAG_DIRECT))
     {
         // Diffuse lobe (always part of direct when DIRECT is on).
         float3 diffuse = kD_direct * albedo / PI;
         // Specular lobe gated by SPECULAR (neutral = omitted).
-        float3 spec_term = flag(PBR_FLAG_SPECULAR) ? specular : float3(0.0);
+        float3 spec_term = on(PBR_FLAG_SPECULAR) ? specular : float3(0.0);
         direct = (diffuse + spec_term) * radiance * n_dot_l * shadow;
     }
 
@@ -517,36 +531,34 @@ SceneOutput fragmentMain(MeshVaryings in)
     float3 kd_ibl = (float3(1.0) - f_ibl) * (1.0 - metallic);
     float3 diffuse_ibl  = float3(0.0);
     float3 specular_ibl = float3(0.0);
-    if (flag(PBR_FLAG_AMBIENT_IBL))
+
+    // Diffuse IBL: real irradiance cube (set 2 binding 1, added in IBL pass).
+    if (on(PBR_FLAG_DIFFUSE_IBL))
     {
-        // Diffuse IBL: real irradiance cube (set 2 binding 1, added in IBL pass).
-        if (flag(PBR_FLAG_DIFFUSE_IBL))
-        {
-            float3 irradiance = sample_irradiance(n);
-            diffuse_ibl = ibl_intensity * kd_ibl * irradiance * albedo;
-        }
-        // Specular IBL: prefiltered env + BRDF LUT (set 2 binding 2/3).
-        if (flag(PBR_FLAG_SPECULAR_IBL))
-        {
-            float3 r = reflect(-v, n);
-            float3 prefiltered = sample_specular(r, roughness);
-            float2 brdf = sample_brdf_lut(max(dot(n, v), 0.0), roughness);
-            specular_ibl = ibl_intensity * prefiltered * (f_ibl * brdf.x + brdf.y);
-        }
-        // GTAO visibility: 1.0 = unoccluded, 0.0 = fully occluded. Apply only
-        // to the IBL terms (not direct lighting - direct already has its own
-        // shadow map). Linear sampling smooths the half-res AO up to full res.
-        if (flag(PBR_FLAG_AO))
-        {
-            float ao = aoTex.SampleLevel(in.uv, 0.0).r;
-            diffuse_ibl  *= ao;
-            specular_ibl *= ao;
-        }
+        float3 irradiance = sample_irradiance(n);
+        diffuse_ibl = ibl_intensity * kd_ibl * irradiance * albedo;
+    }
+    // Specular IBL: prefiltered env + BRDF LUT (set 2 binding 2/3).
+    if (on(PBR_FLAG_SPECULAR_IBL))
+    {
+        float3 r = reflect(-v, n);
+        float3 prefiltered = sample_specular(r, roughness);
+        float2 brdf = sample_brdf_lut(max(dot(n, v), 0.0), roughness);
+        specular_ibl = ibl_intensity * prefiltered * (f_ibl * brdf.x + brdf.y);
+    }
+    // GTAO visibility: 1.0 = unoccluded, 0.0 = fully occluded. Apply only
+    // to the IBL terms (not direct lighting - direct already has its own
+    // shadow map). Linear sampling smooths the half-res AO up to full res.
+    if (on(PBR_FLAG_AO))
+    {
+        float ao = aoTex.SampleLevel(screen_uv, 0.0).r;
+        diffuse_ibl  *= ao;
+        specular_ibl *= ao;
     }
 
     // ---- Emissive (gated). Neutral = 0. ----
     float3 emissive = float3(0.0);
-    if (flag(PBR_FLAG_EMISSIVE))
+    if (on(PBR_FLAG_EMISSIVE))
     {
         float emissive_intensity = mat.metallic_roughness_emissive.z;
         float emissive_strength  = mat.metallic_roughness_emissive.w;
@@ -561,7 +573,7 @@ SceneOutput fragmentMain(MeshVaryings in)
 
     // ---- Multi-light: extra hard-coded point lights (gated). ----
     float3 multi_light = float3(0.0);
-    if (flag(PBR_FLAG_MULTILIGHT))
+    if (on(PBR_FLAG_MULTILIGHT))
     {
         multi_light = eval_point_lights(n, v, in.worldPos, albedo, f0, metallic,
                                         roughness, shadow);
@@ -572,23 +584,52 @@ SceneOutput fragmentMain(MeshVaryings in)
     float3 translucency = float3(0.0);
     float3 aniso_spec   = float3(0.0);
     float3 clearcoat    = float3(0.0);
-    if (flag(PBR_FLAG_TRANSMISSION)) transmission = eval_transmission(mat, in, v, n);
-    if (flag(PBR_FLAG_TRANSLUCENCY)) translucency = eval_translucency(mat, n, v, light_dir, radiance);
-    if (flag(PBR_FLAG_ANISOTROPY))   aniso_spec   = eval_anisotropy(mat, n, v, light_dir, h, roughness, f0, radiance, shadow, in.tangent);
-    if (flag(PBR_FLAG_CLEARCOAT))    clearcoat    = eval_clearcoat(mat, n, v, light_dir, h, radiance, shadow);
+    if (on(PBR_FLAG_TRANSMISSION)) transmission = eval_transmission(mat, in, v, n);
+    if (on(PBR_FLAG_TRANSLUCENCY)) translucency = eval_translucency(mat, n, v, light_dir, radiance);
+    if (on(PBR_FLAG_ANISOTROPY))   aniso_spec   = eval_anisotropy(mat, n, v, light_dir, h, roughness, f0, radiance, shadow, in.tangent);
+    if (on(PBR_FLAG_CLEARCOAT))    clearcoat    = eval_clearcoat(mat, n, v, light_dir, h, radiance, shadow);
 
     // ---- Compose (linear). ----
-    // The albedo baseline is only shown when DIRECT is OFF (default = raw
-    // baseColor). When DIRECT is ON, the surface is lit by the Cook-Torrance
-    // direct lobe (which already carries the albedo via kD*albedo/PI), so the
-    // raw albedo is NOT added again -- otherwise shadowed faces (NdotL~0)
-    // would stay bright and direct-light shading would look flat.
-    float3 color = flag(PBR_FLAG_DIRECT) ? direct : albedo;
-    color += diffuse_ibl + specular_ibl;   // IBL (AMBIENT_IBL + DIFFUSE/SPECULAR_IBL)
+    // `debug_flags` doubles as a single-select PBR component isolator: when a
+    // flag is set (by the app's digit keys Digit1..9/0/Shift+1..4), render
+    // ONLY that one component as a grayscale visualization so each PBR term
+    // can be eyeballed in isolation (e.g. Digit9 -> AO grayscale tells you
+    // immediately whether GTAO is producing non-trivial values). When no flag
+    // is set (default), render the full PBR lit scene with all features on.
+    if (pc.debug_flags != 0u)
+    {
+        float3 isolated = float3(0.0);
+        if (flag(PBR_FLAG_DIRECT))       isolated = direct;
+        else if (flag(PBR_FLAG_SHADOW))  isolated = shadow.xxx;        // 1=lit, 0=shadowed
+        else if (flag(PBR_FLAG_SPECULAR))isolated = specular * radiance * n_dot_l; // direct specular lobe
+        else if (flag(PBR_FLAG_METALLIC))isolated = metallic.xxx;
+        else if (flag(PBR_FLAG_ROUGHNESS))isolated = roughness.xxx;
+        else if (flag(PBR_FLAG_DIFFUSE_IBL)) isolated = diffuse_ibl;
+        else if (flag(PBR_FLAG_SPECULAR_IBL))isolated = specular_ibl;
+        else if (flag(PBR_FLAG_MULTILIGHT))  isolated = multi_light;
+        else if (flag(PBR_FLAG_AO))      isolated = aoTex.SampleLevel(screen_uv, 0.0).rrr; // 1=unoccluded, 0=occluded
+        else if (flag(PBR_FLAG_EMISSIVE))isolated = emissive;
+        else if (flag(PBR_FLAG_TRANSMISSION)) isolated = transmission;
+        else if (flag(PBR_FLAG_TRANSLUCENCY)) isolated = translucency;
+        else if (flag(PBR_FLAG_ANISOTROPY))   isolated = aniso_spec;
+        else if (flag(PBR_FLAG_CLEARCOAT))    isolated = clearcoat;
+        SceneOutput o;
+        o.color = float4(isolated, 1.0);
+        float3 vn = normalize(mul((float3x3)frame.view, n));
+        o.viewNormal = float4(vn, 0.0);
+        return o;
+    }
+
+    // No component isolated: full PBR compose (all features on).
+    // `direct` already carries the albedo via kD*albedo/PI, so raw albedo is
+    // NOT added again -- otherwise shadowed faces (NdotL~0) would stay bright
+    // and direct-light shading would look flat.
+    float3 color = direct;
+    color += diffuse_ibl + specular_ibl;   // IBL
     color += multi_light + emissive;       // multilight + emissive
     color += transmission + translucency + aniso_spec + clearcoat;
 
-    // Output linear HDR color. Tonemapping (Reinhard / ACES) is now applied by
+    // Output linear HDR color. Tonemapping (Reinhard / ACES) is applied by
     // the PostPass (post.slang), which samples this HDR attachment and writes
     // the sRGB-encoded result to the swapchain. Keeping the scene output
     // linear HDR lets future post effects (bloom, TAA) consume it without

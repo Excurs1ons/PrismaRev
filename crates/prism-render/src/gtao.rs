@@ -29,12 +29,13 @@
 
 use anyhow::Context as _;
 use ash::vk;
+use std::time::Instant;
 
 use crate::context::VulkanContext;
 use crate::pipeline::{GraphicsPipeline, PipelineDesc};
 use crate::render_graph::{
-    GraphResources, RenderContext, RenderGraphBuilder, RenderPassNode, RenderSettings,
-    SCENE_DEPTH_H, SCENE_NORMAL_H,
+    GraphResources, PassInfo, PassKind, RenderContext, RenderGraphBuilder, RenderPassNode,
+    RenderSettings, ResourceUsage, SCENE_DEPTH_H, SCENE_NORMAL_H,
 };
 use crate::render_pass::find_memory_type;
 use crate::shader;
@@ -91,6 +92,9 @@ pub struct GtaoPass {
     bound_depth: [vk::ImageView; 2],
     bound_normal: [vk::ImageView; 2],
     device: Option<ash::Device>,
+    /// Last time the AO_PROBE debug line was logged; the probe is throttled to
+    /// once per second so it doesn't flood the log at frame rate.
+    last_probe_log: Instant,
 }
 
 impl GtaoPass {
@@ -252,12 +256,18 @@ impl GtaoPass {
             bound_depth: [vk::ImageView::null(); 2],
             bound_normal: [vk::ImageView::null(); 2],
             device: Some(device.clone()),
+            last_probe_log: Instant::now(),
         })
     }
 
     /// The half-resolution AO extent.
     pub fn extent(&self) -> vk::Extent2D {
         self.extent
+    }
+
+    /// AO image format (`R8_UNORM`). Exposed for the render-graph visualizer.
+    pub fn ao_format() -> vk::Format {
+        vk::Format::R8_UNORM
     }
 
     /// Borrow the AO view for `frame_index` (frame-in-flight, 0..2). The scene
@@ -391,57 +401,16 @@ impl GtaoPass {
         let pipeline = self.pipeline.as_ref().unwrap();
         let fb = self.framebuffers[i];
 
-        // ---- 1. Barrier depth -> DEPTH_STENCIL_READ_ONLY_OPTIMAL ----
-        // separateDepthStencilLayouts is NOT enabled, so we use the combined
-        // DEPTH_STENCIL_* layout even though we only read the depth aspect.
-        let depth_barrier = vk::ImageMemoryBarrier::default()
-            .old_layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
-            .new_layout(vk::ImageLayout::DEPTH_STENCIL_READ_ONLY_OPTIMAL)
-            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-            .image(inputs.depth_image)
-            .src_access_mask(vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE)
-            .dst_access_mask(vk::AccessFlags::SHADER_READ)
-            .subresource_range(vk::ImageSubresourceRange {
-                aspect_mask: vk::ImageAspectFlags::DEPTH,
-                base_mip_level: 0,
-                level_count: 1,
-                base_array_layer: 0,
-                layer_count: 1,
-            });
+        // The depth/normal -> READ_ONLY barriers used to live here. They are now
+        // inserted automatically by `RenderGraph::execute` from the `read_usage`
+        // edges declared in `setup` (DEPTH_STENCIL_ATTACHMENT_OPTIMAL ->
+        // DEPTH_STENCIL_READ_ONLY_OPTIMAL for depth, COLOR_ATTACHMENT_OPTIMAL ->
+        // SHADER_READ_ONLY_OPTIMAL for normal). `inputs.depth_image` /
+        // `inputs.normal_image` are now unused for barriers (kept for
+        // descriptor wiring in `set_inputs`, which runs in the trait `execute`).
+        let _ = (inputs.depth_image, inputs.normal_image);
 
-        // ---- 2. Barrier normal -> SHADER_READ_ONLY_OPTIMAL ----
-        let normal_barrier = vk::ImageMemoryBarrier::default()
-            .old_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-            .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-            .image(inputs.normal_image)
-            .src_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
-            .dst_access_mask(vk::AccessFlags::SHADER_READ)
-            .subresource_range(vk::ImageSubresourceRange {
-                aspect_mask: vk::ImageAspectFlags::COLOR,
-                base_mip_level: 0,
-                level_count: 1,
-                base_array_layer: 0,
-                layer_count: 1,
-            });
-
-        let barriers = [depth_barrier, normal_barrier];
-        unsafe {
-            device.cmd_pipeline_barrier(
-                cmd,
-                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-                    | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS,
-                vk::PipelineStageFlags::FRAGMENT_SHADER,
-                vk::DependencyFlags::empty(),
-                &[],
-                &[],
-                &barriers,
-            );
-        }
-
-        // ---- 3. Begin render pass (writes ao[i]) ----
+        // ---- Begin render pass (writes ao[i]) ----
         // Clear to white (1.0 = unoccluded) so any pixel the shader doesn't
         // write (there shouldn't be any - the fullscreen triangle covers the
         // whole AO target) reads as fully lit.
@@ -520,11 +489,14 @@ impl GtaoPass {
 
         unsafe { device.cmd_end_render_pass(cmd) };
 
-        // ---- 4. Barrier ao[i] -> SHADER_READ_ONLY_OPTIMAL ----
-        // The scene reads this view next frame; SHADER_READ_ONLY_OPTIMAL stays
-        // valid until the GTAO pass writes this slot again (2 frames later),
-        // whose render pass `initial_layout = UNDEFINED` tolerates the incoming
-        // layout.
+        // ---- Barrier ao[i] -> SHADER_READ_ONLY_OPTIMAL ----
+        // GRAPH-EDGE EXCEPTION: this is a cross-frame delayed edge. `ScenePass`
+        // reads this AO image *next frame* (1-frame latency, wired via
+        // `GraphFrame.ao_view` -> `ScenePass::set_ao`, NOT via a graph
+        // `read_usage` edge), so the render graph cannot express or schedule
+        // this barrier. It stays manual. SHADER_READ_ONLY_OPTIMAL stays valid
+        // until the GTAO pass writes this slot again (2 frames later), whose
+        // render pass `initial_layout = UNDEFINED` tolerates the incoming layout.
         let ao_barrier = vk::ImageMemoryBarrier::default()
             .old_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
             .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
@@ -771,6 +743,12 @@ fn create_render_pass(device: &ash::Device) -> anyhow::Result<vk::RenderPass> {
 /// a one-shot command buffer. Called once at creation (and on recreate) so the
 /// scene shader's AO descriptor finds the images in the layout it declares
 /// (`SHADER_READ_ONLY_OPTIMAL`) before the GTAO pass first writes them.
+///
+/// GRAPH-EDGE EXCEPTION: this is a one-shot resource-creation transition, not
+/// a per-frame graph edge. The render graph only tracks layouts for graph-flow
+/// handles (shadow / scene depth / normal / HDR color); the AO images are
+/// `GtaoPass`-private and fed back to `ScenePass` via a side-channel
+/// (`GraphFrame.ao_view`), so the graph never sees them.
 fn transition_ao_images_to_shader_read(
     context: &VulkanContext,
     command_pool: vk::CommandPool,
@@ -841,10 +819,27 @@ impl RenderPassNode for GtaoPass {
         "GtaoPass"
     }
 
-    fn setup(&mut self, _graph: &mut RenderGraphBuilder, _settings: &RenderSettings) {
+    fn setup(&mut self, graph: &mut RenderGraphBuilder, _settings: &RenderSettings) {
         // Inputs (depth/normal views) are published by ScenePass under the
         // well-known SCENE_DEPTH_H / SCENE_NORMAL_H handles; GTAO reads them
         // from `resources` in `execute`. No graph-managed resources of its own.
+        //
+        // Declare the read edges so the render graph inserts the
+        // COLOR/DEPTH_ATTACHMENT_OPTIMAL -> *_READ_ONLY / SHADER_READ_ONLY
+        // barriers automatically before this pass (replacing the hand-rolled
+        // `cmd_pipeline_barrier` that used to live in `draw_ao`).
+        graph.read_usage(ResourceUsage {
+            handle: SCENE_DEPTH_H,
+            access: vk::AccessFlags::SHADER_READ,
+            stage: vk::PipelineStageFlags::FRAGMENT_SHADER,
+            layout: vk::ImageLayout::DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+        });
+        graph.read_usage(ResourceUsage {
+            handle: SCENE_NORMAL_H,
+            access: vk::AccessFlags::SHADER_READ,
+            stage: vk::PipelineStageFlags::FRAGMENT_SHADER,
+            layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+        });
     }
 
     fn execute(
@@ -866,6 +861,22 @@ impl RenderPassNode for GtaoPass {
                 return Ok(());
             }
         };
+        // TEMP PROBE: confirm GTAO execute runs and inputs are valid. Throttled
+        // to once per second so the log isn't flooded at frame rate; emitted at
+        // `debug!` level so it stays quiet under the default `info` filter.
+        if self.last_probe_log.elapsed().as_secs_f32() >= 1.0 {
+            self.last_probe_log = Instant::now();
+            log::warn!(
+                "AO_PROBE GTAO: frame={} image={} depth_view={:?} normal_view={:?} ao_write_slot={} ao_read_view={:?} debug_flags=0x{:x}",
+                ctx.frame_index,
+                ctx.image_index,
+                depth_view,
+                normal_view,
+                ctx.frame_index % 2,
+                ctx.frame.ao_view,
+                ctx.frame.debug_flags
+            );
+        }
         // The images themselves are needed only for the layout barriers; reuse
         // the view's image handle via the ScenePass-published view (vkImageView
         // carries the image). We pass the same handle for image + view; the
@@ -901,6 +912,19 @@ impl RenderPassNode for GtaoPass {
             _pad0: 0,
         };
         self.execute(ctx.device, ctx.cmd, ctx.frame_index, &inputs, &push)
+    }
+
+    fn graph_info(&self) -> PassInfo {
+        PassInfo {
+            index: usize::MAX,
+            name: self.name().to_string(),
+            kind: PassKind::Gtao,
+            // Depth + normal come from ScenePass via the well-known handles.
+            inputs: vec![SCENE_DEPTH_H, SCENE_NORMAL_H],
+            // AO is consumed by ScenePass via `set_ao` (1-frame latency), not a
+            // graph edge - surfaced as a note by the viz instead.
+            outputs: Vec::new(),
+        }
     }
 }
 mod tests {

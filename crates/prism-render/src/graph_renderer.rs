@@ -270,6 +270,14 @@ impl GraphRenderer {
         self.context.graphics_queue
     }
 
+    /// Immutable borrow of the render graph (passes + declared resources +
+    /// settings). Exposed for the render-graph visualizer (F2): the viz takes a
+    /// per-frame `snapshot()` from this and reads live per-pass state via
+    /// `pass_ref::<T>()`. Read-only - no mutation path is exposed.
+    pub fn graph(&self) -> &RenderGraph {
+        &self.graph
+    }
+
     /// Lazily create the egui overlay if it doesn't exist yet, then return a
     /// mutable reference to it. Called by `App` when the inspector is first
     /// shown. Uses the same `in_flight_frames` count as the renderer (2).
@@ -484,6 +492,13 @@ impl GraphRenderer {
         if let Some(sw) = self.swapchain.as_mut() {
             sw.recreate(&self.context)?;
         }
+
+        // All per-swapchain-image attachments (ScenePass HDR/depth/normal,
+        // PostPass framebuffer) were just rebuilt, so the render graph's cached
+        // image layouts are stale. Clear them so the first frame after
+        // recreate re-transitions from UNDEFINED instead of trusting a layout
+        // that no longer matches the fresh images.
+        self.graph.reset_layouts();
         Ok(())
     }
     // -------------------------------------------------------------------
@@ -502,6 +517,9 @@ impl GraphRenderer {
         normal_space: u32,
         debug_flags: u32,
         tonemap_mode: u32,
+        debug_rt: u32,
+        proj22: f32,
+        proj32: f32,
         lights: &[GpuLight],
     ) -> anyhow::Result<bool> {
         // Clone the `ash::Device` handle (cheap: it's an `Arc` internally) so
@@ -611,6 +629,9 @@ impl GraphRenderer {
                 lights,
                 ao_view,
                 tonemap_mode,
+                debug_rt,
+                proj22,
+                proj32,
                 inv_projection,
                 swapchain_views,
             };
@@ -667,6 +688,14 @@ impl GraphRenderer {
         } else if record.is_ok() {
             if let Some(sw) = self.swapchain.as_ref() {
                 let image = sw.images[image_index as usize];
+                // GRAPH-EDGE EXCEPTION: the swapchain image is not a graph
+                // resource (it is owned by the swapchain and acquired/presented
+                // by `GraphRenderer`), so the render graph's automatic barrier
+                // insertion cannot cover the `COLOR_ATTACHMENT_OPTIMAL ->
+                // PRESENT_SRC_KHR` transition. This fallback path runs only
+                // when no egui overlay owns the swapchain's final layout
+                // (otherwise the overlay's render pass performs this transition
+                // via its `final_layout`).
                 let barrier = vk::ImageMemoryBarrier::default()
                     .old_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
                     .new_layout(vk::ImageLayout::PRESENT_SRC_KHR)

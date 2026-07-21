@@ -6,7 +6,6 @@
             "type": {
                 "kind": "resource",
                 "baseShape": "texture2D",
-                "combined": true,
                 "resultType": {
                     "kind": "vector",
                     "elementCount": 4,
@@ -32,7 +31,7 @@
                                 "kind": "scalar",
                                 "scalarType": "uint32"
                             },
-                            "binding": {"kind": "uniform", "offset": 0, "size": 4, "elementStride": 0}
+                            "binding": {"kind": "uniform", "offset": 0, "size": 4}
                         }
                     ]
                 },
@@ -50,11 +49,11 @@
                                     "kind": "scalar",
                                     "scalarType": "uint32"
                                 },
-                                "binding": {"kind": "uniform", "offset": 0, "size": 4, "elementStride": 0}
+                                "binding": {"kind": "uniform", "offset": 0, "size": 4}
                             }
                         ]
                     },
-                    "binding": {"kind": "uniform", "offset": 0, "size": 4, "elementStride": 0}
+                    "binding": {"kind": "uniform", "offset": 0, "size": 4}
                 }
             }
         }
@@ -166,6 +165,5 @@
                 }
             ]
         }
-    ],
-    "bindlessSpaceIndex": 1
+    ]
 }

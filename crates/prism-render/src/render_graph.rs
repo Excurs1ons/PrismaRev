@@ -18,6 +18,7 @@
 //!   into a single renderpass to avoid tile memory writeback.
 
 use std::collections::HashMap;
+use std::time::Instant;
 
 use anyhow::Result;
 use ash::vk;
@@ -75,6 +76,115 @@ pub struct ResourceUsage {
     pub access: vk::AccessFlags,
     pub stage: vk::PipelineStageFlags,
     pub layout: vk::ImageLayout,
+}
+
+/// Direction of a declared resource edge. Read edges cause the graph to
+/// transition the image into `usage.layout` (with src from the last writer);
+/// write edges record the layout the pass leaves the image in (via its render
+/// pass `final_layout`), so the next reader's barrier knows the true
+/// `old_layout`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EdgeKind {
+    Read,
+    Write,
+}
+
+/// One declared resource access (a read or write edge) for dependency
+/// resolution and automatic barrier insertion.
+#[derive(Clone, Debug)]
+pub struct ResourceEdge {
+    pub pass_idx: usize,
+    pub usage: ResourceUsage,
+    pub kind: EdgeKind,
+}
+
+/// Per-resource lifecycle span `[first_write_pass, last_read_pass]`, computed
+/// at build time. Currently only surfaced to the visualizer; reserved as input
+/// for future TBDR memory aliasing (not yet implemented).
+#[derive(Clone, Debug, Default)]
+pub struct ResourceLifecycle {
+    pub first_write: Option<usize>,
+    pub last_read: Option<usize>,
+}
+
+impl ResourceLifecycle {
+    /// Fold a single edge into the span.
+    pub fn update(&mut self, e: &ResourceEdge) {
+        match e.kind {
+            EdgeKind::Write => {
+                self.first_write = Some(self.first_write.map_or(e.pass_idx, |w| w.min(e.pass_idx)));
+            }
+            EdgeKind::Read => {
+                self.last_read = Some(self.last_read.map_or(e.pass_idx, |r| r.max(e.pass_idx)));
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Read-only snapshots for the render-graph visualizer (egui, F2).
+//
+// The engine-side viz must not borrow `RenderGraph` (its passes are private
+// trait objects) nor touch `vk::*` handles inside the egui closure. These
+// plain-data structs are produced by `RenderGraph::snapshot` + each pass's
+// `RenderPassNode::graph_info`, cloned once per frame, and consumed by the UI.
+// ---------------------------------------------------------------------------
+
+/// Coarse classification of a pass for visualization (coloring / iconography).
+/// Kept in sync with the concrete pass structs that override `graph_info`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum PassKind {
+    /// Rasterized depth-only shadow map (`ShadowMapPass`).
+    Shadow,
+    /// Forward PBR scene render (`ScenePass`).
+    Scene,
+    /// Half-resolution screen-space ambient occlusion (`GtaoPass`).
+    Gtao,
+    /// Fullscreen tonemap / present (`PostPass`).
+    Post,
+    /// Unrecognized pass (future / experimental).
+    #[default]
+    Unknown,
+}
+
+/// Static description of one graph-managed resource for the visualizer.
+/// Mirrors the relevant subset of [`GraphResource`] without exposing Vulkan
+/// handles.
+#[derive(Clone, Debug)]
+pub struct ResourceInfo {
+    pub handle: ResourceHandle,
+    pub res_type: ResourceType,
+    /// `true` once `allocate_resources` has created the backing image.
+    pub allocated: bool,
+}
+
+/// Static description of one pass for the visualizer: its declared resource
+/// edges (`inputs` = handles it reads via `GraphResources::published_view`,
+/// `outputs` = handles it publishes) plus a coarse kind for coloring.
+///
+/// Side-inputs that bypass the graph (shadow view, IBL set, previous-frame AO
+/// bound via `set_ao`) are NOT listed here - they are surfaced as human-readable
+/// notes by the viz instead, since they don't flow through `GraphResources`.
+#[derive(Clone, Debug)]
+pub struct PassInfo {
+    /// Execution index (filled in by `RenderGraph::snapshot`).
+    pub index: usize,
+    pub name: String,
+    pub kind: PassKind,
+    /// Resource handles this pass reads from upstream passes.
+    pub inputs: Vec<ResourceHandle>,
+    /// Resource handles this pass publishes for downstream passes.
+    pub outputs: Vec<ResourceHandle>,
+}
+
+/// A complete read-only snapshot of the render graph: passes in execution
+/// order, the resource table, and the active settings. Produced per-frame by
+/// [`RenderGraph::snapshot`].
+#[derive(Clone, Debug)]
+pub struct RenderGraphSnapshot {
+    pub passes: Vec<PassInfo>,
+    pub resources: Vec<ResourceInfo>,
+    pub settings: RenderSettings,
 }
 
 /// Shadow rendering strategy.
@@ -228,6 +338,15 @@ pub struct GraphFrame<'a> {
     /// Tonemap mode for `PostPass` (Reinhard / ACES / ...). Forwarded so
     /// `PostPass::execute` reads it from the graph context.
     pub tonemap_mode: u32,
+    /// PostPass debug render-target viewer (Tab key). 0 = normal tonemapped
+    /// HDR, 1 = linearized depth, 2 = view-space normal. PostPass picks which
+    /// published view to sample based on this.
+    pub debug_rt: u32,
+    /// Projection matrix entries `[2][2]` / `[3][2]` (column-major
+    /// `m[col][row]`) used by PostPass to linearize the depth buffer for the
+    /// debug depth view (`view_z = proj22 * d + proj32`).
+    pub proj22: f32,
+    pub proj32: f32,
     /// Inverse projection (used by `GtaoPass` to reconstruct view-space
     /// radius from screen-space samples). Forwarded via `GraphFrame`.
     pub inv_projection: [[f32; 4]; 4],
@@ -276,6 +395,23 @@ pub trait RenderPassNode: std::any::Any {
     /// pass can publish its output views (depth / normal / HDR) for downstream
     /// passes to read by handle.
     fn execute(&mut self, ctx: &RenderContext, resources: &mut GraphResources) -> Result<()>;
+
+    /// Read-only snapshot of this pass's declared resource edges + coarse kind,
+    /// for the render-graph visualizer. Default returns an "unknown" pass with
+    /// no edges; concrete passes override to populate `kind`/`inputs`/`outputs`.
+    ///
+    /// The execution `index` is filled in by [`RenderGraph::snapshot`] (the pass
+    /// does not know its own position); implementations should leave it as
+    /// `usize::MAX` or `0`.
+    fn graph_info(&self) -> PassInfo {
+        PassInfo {
+            index: usize::MAX,
+            name: self.name().to_string(),
+            kind: PassKind::Unknown,
+            inputs: Vec::new(),
+            outputs: Vec::new(),
+        }
+    }
 }
 
 /// A resource entry in the graph's resource table.
@@ -345,8 +481,20 @@ impl GraphResources {
 pub struct RenderGraphBuilder {
     passes: Vec<Box<dyn RenderPassNode + 'static>>,
     resources: HashMap<ResourceHandle, GraphResource>,
+    /// Declared read/write edges collected from passes' `setup`. Indexed by
+    /// `pass_idx` (= `pass_idx_offset + passes.len()` at the moment
+    /// `read_usage`/`write_usage` is called during setup, before `add_pass`
+    /// pushes the pass). The offset is non-zero when this builder is a
+    /// temporary created by `RenderGraph::add_pass` to set up a pass that will
+    /// be appended to an already-populated graph.
+    edges: Vec<ResourceEdge>,
     next_handle: u32,
     settings: RenderSettings,
+    /// Index of the first pass this builder will register, in the final
+    /// graph's pass list. Zero for a fresh builder; set to
+    /// `RenderGraph::passes.len()` by `RenderGraph::add_pass` so edges declared
+    /// during a pass's `setup` get the correct absolute `pass_idx`.
+    pass_idx_offset: usize,
 }
 
 impl RenderGraphBuilder {
@@ -354,9 +502,19 @@ impl RenderGraphBuilder {
         Self {
             passes: Vec::new(),
             resources: HashMap::new(),
+            edges: Vec::new(),
             next_handle: 0,
             settings: RenderSettings::default(),
+            pass_idx_offset: 0,
         }
+    }
+
+    /// Set the base pass index for edges declared via this builder. Used by
+    /// [`RenderGraph::add_pass`] so a pass appended to an already-built graph
+    /// records edges with its true absolute `pass_idx` rather than 0.
+    pub fn pass_idx_offset(mut self, offset: usize) -> Self {
+        self.pass_idx_offset = offset;
+        self
     }
 
     /// Override the render settings used when `setup` is called on passes.
@@ -404,6 +562,36 @@ impl RenderGraphBuilder {
         );
     }
 
+    /// Mark the pass currently being set up (i.e. the next one `add_pass`
+    /// will push, at index `self.passes.len()`) as reading a resource, with
+    /// the access/stage/layout it reads with. The graph uses this to insert a
+    /// `vkCmdPipelineBarrier` before the pass when the image's current layout
+    /// differs from `usage.layout`.
+    ///
+    /// Must be called from within `RenderPassNode::setup` (before `add_pass`
+    /// pushes the pass); calling it elsewhere panics.
+    pub fn read_usage(&mut self, usage: ResourceUsage) {
+        self.push_edge(usage, EdgeKind::Read);
+    }
+
+    /// Mark the pass currently being set up as writing a resource, with the
+    /// access/stage/layout it leaves the image in (typically the render pass
+    /// `final_layout`). The graph records this as the resource's current
+    /// layout after the pass executes, so the next reader's barrier knows the
+    /// true `old_layout`. No barrier is emitted for the write itself (the
+    /// pass's render pass performs the layout transition implicitly).
+    pub fn write_usage(&mut self, usage: ResourceUsage) {
+        self.push_edge(usage, EdgeKind::Write);
+    }
+
+    fn push_edge(&mut self, usage: ResourceUsage, kind: EdgeKind) {
+        self.edges.push(ResourceEdge {
+            pass_idx: self.pass_idx_offset + self.passes.len(),
+            usage,
+            kind,
+        });
+    }
+
     /// Mark a pass (by index) as reading a resource.
     /// Tracked for future barrier generation and topological sort.
     pub fn read(&mut self, pass_idx: usize, handle: ResourceHandle) {
@@ -419,12 +607,30 @@ impl RenderGraphBuilder {
 
     /// Compile into an executable graph.
     pub fn build(self) -> RenderGraph {
-        RenderGraph {
+        let lifecycles = compute_lifecycles(&self.edges);
+        let g = RenderGraph {
             passes: self.passes,
             resources: self.resources,
             settings: self.settings,
-        }
+            edges: self.edges,
+            layouts: HashMap::new(),
+            lifecycles,
+            last_barrier_probe: Instant::now(),
+        };
+        g.validate_edges();
+        g
     }
+}
+
+/// Compute the `[first_write, last_read]` span per resource from the declared
+/// edges. Used by the visualizer and reserved as input for future TBDR memory
+/// aliasing (no aliasing is performed today).
+fn compute_lifecycles(edges: &[ResourceEdge]) -> HashMap<ResourceHandle, ResourceLifecycle> {
+    let mut map: HashMap<ResourceHandle, ResourceLifecycle> = HashMap::new();
+    for e in edges {
+        map.entry(e.usage.handle).or_default().update(e);
+    }
+    map
 }
 
 impl Default for RenderGraphBuilder {
@@ -441,6 +647,19 @@ pub struct RenderGraph {
     passes: Vec<Box<dyn RenderPassNode + 'static>>,
     resources: HashMap<ResourceHandle, GraphResource>,
     settings: RenderSettings,
+    /// Declared read/write edges, collected from each pass's `setup`.
+    edges: Vec<ResourceEdge>,
+    /// Per-`(handle, image_index)` current image layout, persisted across
+    /// frames so cross-frame reads (e.g. GTAO's double-buffered AO) keep their
+    /// layout. Keyed by `image_index` because `ScenePass`/`PostPass` own
+    /// per-swapchain-image attachments under the same handle.
+    layouts: HashMap<(ResourceHandle, u32), vk::ImageLayout>,
+    /// `[first_write, last_read]` span per resource, for the visualizer and
+    /// future aliasing.
+    lifecycles: HashMap<ResourceHandle, ResourceLifecycle>,
+    /// Last time the `BARRIER_PROBE` trace lines were emitted; throttled to
+    /// once per second so the log isn't flooded at frame rate.
+    last_barrier_probe: Instant,
 }
 
 impl RenderGraph {
@@ -453,27 +672,179 @@ impl RenderGraph {
             .find_map(|p| (&mut **p as &mut dyn std::any::Any).downcast_mut::<T>())
     }
 
+    /// Immutable borrow of a registered pass by concrete type. The read-only
+    /// counterpart to [`pass_mut`](Self::pass_mut); used by the render-graph
+    /// visualizer to pull live per-pass state (extent / format / image_count)
+    /// without mutating the graph.
+    pub fn pass_ref<T: RenderPassNode + 'static>(&self) -> Option<&T> {
+        self.passes
+            .iter()
+            .find_map(|p| (&**p as &dyn std::any::Any).downcast_ref::<T>())
+    }
+
+    /// Active render settings (feature knobs consulted by passes at execute
+    /// time). Exposed read-only for the visualizer's header summary.
+    pub fn settings(&self) -> &RenderSettings {
+        &self.settings
+    }
+
+    /// Iterator over all declared graph resources (depth/color attachments,
+    /// storage images). Exposed read-only for the visualizer.
+    pub fn resources(&self) -> impl Iterator<Item = &GraphResource> {
+        self.resources.values()
+    }
+
+    /// Look up a graph-managed resource by handle (immutable).
+    pub fn resource(&self, h: ResourceHandle) -> Option<&GraphResource> {
+        self.resources.get(&h)
+    }
+
+    /// Build a complete read-only snapshot of the graph for the visualizer:
+    /// passes in execution order (with `index` filled in), the resource table,
+    /// and the active settings. Cheap to call per-frame - clones only the
+    /// small declarative metadata, never Vulkan handles.
+    pub fn snapshot(&self) -> RenderGraphSnapshot {
+        let passes = self
+            .passes
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                let mut info = p.graph_info();
+                info.index = i;
+                info
+            })
+            .collect();
+        let resources = self
+            .resources
+            .values()
+            .map(|r| ResourceInfo {
+                handle: r.handle,
+                res_type: r.res_type.clone(),
+                allocated: r.image.is_some(),
+            })
+            .collect();
+        RenderGraphSnapshot {
+            passes,
+            resources,
+            settings: self.settings.clone(),
+        }
+    }
+
     /// Append a pass to an already-built graph (e.g. ScenePass / GtaoPass /
     /// PostPass, registered after the shadow map's resources are allocated so
     /// the scene can bind the shadow view). Runs `setup` on the new pass
     /// (merging its declared resources into the graph) and appends it to the
     /// execution order.
     pub fn add_pass(&mut self, mut pass: Box<dyn RenderPassNode + 'static>) {
-        let mut b = RenderGraphBuilder::new().settings(&self.settings);
+        let pass_idx = self.passes.len();
+        let mut b = RenderGraphBuilder::new()
+            .settings(&self.settings)
+            .pass_idx_offset(pass_idx);
         pass.setup(&mut b, &self.settings);
         for (h, r) in b.resources {
             self.resources.insert(h, r);
         }
+        // Edges were recorded with pass_idx = offset + b.passes.len() == pass_idx
+        // (b is a fresh builder with no passes pushed); sanity-check before merging.
+        for mut e in b.edges {
+            debug_assert_eq!(e.pass_idx, pass_idx);
+            e.pass_idx = pass_idx;
+            self.lifecycles
+                .entry(e.usage.handle)
+                .or_default()
+                .update(&e);
+            self.edges.push(e);
+        }
         self.passes.push(pass);
+    }
+
+    /// Drop all cached image layouts. Called after `recreate_swapchain` (where
+    /// every per-swapchain-image attachment is rebuilt) so stale layout state
+    /// doesn't suppress the first-frame barriers.
+    pub fn reset_layouts(&mut self) {
+        self.layouts.clear();
+    }
+
+    /// Validate declared edges: warn on reads before writes (potential
+    /// cross-frame / ordering issue) and log an error on dependency cycles.
+    /// Execution order is never reordered (the registration order in
+    /// `GraphRenderer::new` reflects physical dependencies).
+    fn validate_edges(&self) {
+        use std::collections::HashSet;
+        // Per-handle write-before-read check.
+        let mut last_write: HashMap<ResourceHandle, usize> = HashMap::new();
+        for e in &self.edges {
+            match e.kind {
+                EdgeKind::Write => {
+                    last_write.insert(e.usage.handle, e.pass_idx);
+                }
+                EdgeKind::Read => match last_write.get(&e.usage.handle) {
+                    Some(w) if *w > e.pass_idx => {
+                        log::warn!(
+                            "render-graph: pass {} reads {:?} before pass {} writes it \
+                             (cross-frame dependency? ensure manual barriers cover this)",
+                            e.pass_idx,
+                            e.usage.handle,
+                            w
+                        );
+                    }
+                    _ => {}
+                },
+            }
+        }
+        // Cycle detection: pass A -> pass B if A writes a handle B reads.
+        let n = self.passes.len();
+        let mut adj: Vec<HashSet<usize>> = vec![HashSet::new(); n];
+        for e in &self.edges {
+            if e.kind == EdgeKind::Read {
+                if let Some(w) = last_write.get(&e.usage.handle) {
+                    if *w != e.pass_idx {
+                        adj[*w].insert(e.pass_idx);
+                    }
+                }
+            }
+        }
+        let mut color = vec![0u8; n]; // 0=white,1=gray,2=black
+        let mut has_cycle = false;
+        fn dfs(u: usize, adj: &[HashSet<usize>], color: &mut [u8], has_cycle: &mut bool) {
+            color[u] = 1;
+            for &v in &adj[u] {
+                match color[v] {
+                    1 => {
+                        *has_cycle = true;
+                    }
+                    0 => dfs(v, adj, color, has_cycle),
+                    _ => {}
+                }
+            }
+            color[u] = 2;
+        }
+        for s in 0..n {
+            if color[s] == 0 {
+                dfs(s, &adj, &mut color, &mut has_cycle);
+            }
+        }
+        if has_cycle {
+            log::error!("render-graph: dependency cycle detected among passes");
+        }
     }
 
     /// Run all registered passes in order, recording into `ctx.cmd`.
     ///
-    /// For now this is a simple linear execution. A production graph would:
-    /// 1. Allocate transient resources (with aliasing for TBDR)
-    /// 2. Insert memory barriers between passes
-    /// 3. Fuse compatible passes into subpasses
-    /// 4. Dispatch compute passes between renderpasses
+    /// Before each pass, the graph inspects that pass's declared **read** edges
+    /// and emits a `vkCmdPipelineBarrier` per resource whose cached layout
+    /// differs from the read's `usage.layout`. The barrier's `src` stage/access
+    /// come from the last **write** edge on that handle (the pass that left the
+    /// image in its current layout); if no writer is known, `TOP_OF_PIPE` /
+    /// empty access is used (initial-transition semantics). After each pass,
+    /// its **write** edges update the cached layout (no barrier emitted - the
+    /// pass's own render pass performs that transition via `final_layout`).
+    ///
+    /// Note: cross-frame reads (e.g. GTAO's double-buffered AO fed back to
+    /// `ScenePass`) and the swapchain `-> PRESENT_SRC_KHR` transition are NOT
+    /// graph edges and remain manual (see the pass-level comments). The layout
+    /// cache only tracks the four graph-flow handles (shadow / scene depth /
+    /// normal / HDR color).
     pub fn execute(&mut self, ctx: &RenderContext) -> Result<()> {
         let mut resources = GraphResources {
             resources: self.resources.clone(),
@@ -481,8 +852,44 @@ impl RenderGraph {
             images: HashMap::new(),
         };
 
-        for pass in &mut self.passes {
+        // Snapshot of pass_idx -> write edges, so borrows of `self.edges` don't
+        // fight the `&mut self.passes` iteration. Cheap: a few edges per pass.
+        let pass_edges: Vec<Vec<ResourceEdge>> = {
+            let mut buckets: Vec<Vec<ResourceEdge>> = vec![Vec::new(); self.passes.len()];
+            for e in &self.edges {
+                if e.pass_idx < buckets.len() {
+                    buckets[e.pass_idx].push(e.clone());
+                }
+            }
+            buckets
+        };
+        // Snapshot of (handle, pass_idx) -> last writer's usage, for barrier
+        // src stage/access. Built once per frame from `self.edges`.
+        let last_writers = build_last_writers(&self.edges);
+
+        // Throttle the BARRIER_PROBE trace lines to once per second so the log
+        // isn't flooded at frame rate. The probe is a debugging aid for the
+        // automatic barrier pipeline; gating it here avoids passing `Instant`
+        // state through the free functions.
+        let probe = if self.last_barrier_probe.elapsed().as_secs_f32() >= 1.0 {
+            self.last_barrier_probe = Instant::now();
+            true
+        } else {
+            false
+        };
+
+        for (pass_idx, pass) in self.passes.iter_mut().enumerate() {
+            emit_read_barriers(
+                ctx,
+                &resources,
+                pass_idx,
+                &pass_edges[pass_idx],
+                &last_writers,
+                &mut self.layouts,
+                probe,
+            )?;
             pass.execute(ctx, &mut resources)?;
+            apply_write_layouts(ctx, &pass_edges[pass_idx], &mut self.layouts, probe);
         }
 
         Ok(())
@@ -602,6 +1009,180 @@ impl Drop for RenderGraph {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Pick the image aspect mask for a layout transition barrier: depth/stencil
+/// layouts use the DEPTH aspect (this project uses D32_SFLOAT, no separate
+/// stencil), all color/sample/storage layouts use COLOR.
+fn aspect_mask_for_layout(layout: vk::ImageLayout) -> vk::ImageAspectFlags {
+    match layout {
+        vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+        | vk::ImageLayout::DEPTH_STENCIL_READ_ONLY_OPTIMAL
+        | vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL
+        | vk::ImageLayout::DEPTH_READ_ONLY_OPTIMAL
+        | vk::ImageLayout::STENCIL_ATTACHMENT_OPTIMAL
+        | vk::ImageLayout::STENCIL_READ_ONLY_OPTIMAL => vk::ImageAspectFlags::DEPTH,
+        _ => vk::ImageAspectFlags::COLOR,
+    }
+}
+
+/// Build a `handle -> &ResourceUsage` map of the last writer (highest pass_idx
+/// that writes the handle). Readers use this to fill a barrier's src
+/// stage/access; a handle with no writer uses `TOP_OF_PIPE` / empty access
+/// (initial-transition semantics).
+fn build_last_writers(edges: &[ResourceEdge]) -> HashMap<ResourceHandle, &ResourceUsage> {
+    let mut map: HashMap<ResourceHandle, (usize, &ResourceUsage)> = HashMap::new();
+    for e in edges {
+        if e.kind == EdgeKind::Write {
+            match map.get(&e.usage.handle) {
+                Some((prev_idx, _)) if *prev_idx >= e.pass_idx => {}
+                _ => {
+                    map.insert(e.usage.handle, (e.pass_idx, &e.usage));
+                }
+            }
+        }
+    }
+    map.into_iter().map(|(h, (_, u))| (h, u)).collect()
+}
+
+/// Emit `vkCmdPipelineBarrier` for each read edge whose cached layout differs
+/// from the read's desired layout. `src` stage/access come from the last
+/// writer's `ResourceUsage`; `dst` from this reader's `ResourceUsage`.
+fn emit_read_barriers(
+    ctx: &RenderContext,
+    resources: &GraphResources,
+    pass_idx: usize,
+    edges: &[ResourceEdge],
+    last_writers: &HashMap<ResourceHandle, &ResourceUsage>,
+    layouts: &mut HashMap<(ResourceHandle, u32), vk::ImageLayout>,
+    probe: bool,
+) -> Result<()> {
+    let read_edges: Vec<&ResourceEdge> = edges
+        .iter()
+        .filter(|e| e.kind == EdgeKind::Read)
+        .collect();
+    if read_edges.is_empty() {
+        return Ok(());
+    }
+
+    let mut barriers: Vec<vk::ImageMemoryBarrier> = Vec::new();
+    let mut max_src_stage = vk::PipelineStageFlags::empty();
+    let mut max_dst_stage = vk::PipelineStageFlags::empty();
+
+    for re in &read_edges {
+        let handle = re.usage.handle;
+        let key = (handle, ctx.image_index);
+        let current = layouts
+            .get(&key)
+            .copied()
+            .unwrap_or(vk::ImageLayout::UNDEFINED);
+        if probe {
+            log::warn!(
+                "BARRIER_PROBE pass {} read {:?}: current={:?} desired={:?} image_index={}",
+                pass_idx,
+                handle,
+                current,
+                re.usage.layout,
+                ctx.image_index
+            );
+        }
+        if current == re.usage.layout {
+            continue; // already in the desired layout
+        }
+
+        let image = resources
+            .published_image(handle)
+            .or_else(|| resources.image(handle));
+        let image = match image {
+            Some(img) => img,
+            None => {
+                log::trace!(
+                    "render-graph: pass {} reads {:?} but no image published yet; skip barrier",
+                    pass_idx,
+                    handle
+                );
+                continue;
+            }
+        };
+
+        let (src_access, src_stage) = match last_writers.get(&handle) {
+            Some(w) => ((**w).access, (**w).stage),
+            None => (vk::AccessFlags::empty(), vk::PipelineStageFlags::TOP_OF_PIPE),
+        };
+
+        let aspect = aspect_mask_for_layout(re.usage.layout);
+        barriers.push(
+            vk::ImageMemoryBarrier::default()
+                .old_layout(current)
+                .new_layout(re.usage.layout)
+                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .image(image)
+                .src_access_mask(src_access)
+                .dst_access_mask(re.usage.access)
+                .subresource_range(vk::ImageSubresourceRange {
+                    aspect_mask: aspect,
+                    base_mip_level: 0,
+                    level_count: 1,
+                    base_array_layer: 0,
+                    layer_count: 1,
+                }),
+        );
+        max_src_stage |= src_stage;
+        max_dst_stage |= re.usage.stage;
+
+        layouts.insert(key, re.usage.layout);
+    }
+
+    if !barriers.is_empty() {
+        // Vulkan requires non-empty stage masks when there are barriers.
+        let src_stage = if max_src_stage.is_empty() {
+            vk::PipelineStageFlags::TOP_OF_PIPE
+        } else {
+            max_src_stage
+        };
+        let dst_stage = if max_dst_stage.is_empty() {
+            vk::PipelineStageFlags::BOTTOM_OF_PIPE
+        } else {
+            max_dst_stage
+        };
+        unsafe {
+            ctx.device.cmd_pipeline_barrier(
+                ctx.cmd,
+                src_stage,
+                dst_stage,
+                vk::DependencyFlags::empty(),
+                &[],
+                &[],
+                &barriers,
+            );
+        }
+    }
+    Ok(())
+}
+
+/// After a pass executes, record the layout each of its **write** edges leaves
+/// the image in (the pass's render pass `final_layout`). No barrier is emitted
+/// - the transition happened inside the pass's render pass.
+fn apply_write_layouts(
+    ctx: &RenderContext,
+    edges: &[ResourceEdge],
+    layouts: &mut HashMap<(ResourceHandle, u32), vk::ImageLayout>,
+    probe: bool,
+) {
+    for e in edges {
+        if e.kind == EdgeKind::Write {
+            if probe {
+                log::warn!(
+                    "BARRIER_PROBE pass write {:?} -> layout={:?} image_index={}",
+                    e.usage.handle,
+                    e.usage.layout,
+                    ctx.image_index
+                );
+            }
+            layouts.insert((e.usage.handle, ctx.image_index), e.usage.layout);
+        }
+    }
+}
 
 /// Create an image with optional lazy allocation (transient attachment).
 fn create_transient_image(

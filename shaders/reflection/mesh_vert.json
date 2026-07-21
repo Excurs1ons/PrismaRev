@@ -20,7 +20,7 @@
                                     "scalarType": "float32"
                                 }
                             },
-                            "binding": {"kind": "uniform", "offset": 0, "size": 64, "elementStride": 0}
+                            "binding": {"kind": "uniform", "offset": 0, "size": 64}
                         },
                         {
                             "name": "cameraPosition",
@@ -32,7 +32,7 @@
                                     "scalarType": "float32"
                                 }
                             },
-                            "binding": {"kind": "uniform", "offset": 64, "size": 16, "elementStride": 4}
+                            "binding": {"kind": "uniform", "offset": 64, "size": 16}
                         },
                         {
                             "name": "lightDirection",
@@ -44,7 +44,7 @@
                                     "scalarType": "float32"
                                 }
                             },
-                            "binding": {"kind": "uniform", "offset": 80, "size": 16, "elementStride": 4}
+                            "binding": {"kind": "uniform", "offset": 80, "size": 16}
                         },
                         {
                             "name": "lightColor",
@@ -56,7 +56,7 @@
                                     "scalarType": "float32"
                                 }
                             },
-                            "binding": {"kind": "uniform", "offset": 96, "size": 16, "elementStride": 4}
+                            "binding": {"kind": "uniform", "offset": 96, "size": 16}
                         },
                         {
                             "name": "view",
@@ -69,7 +69,7 @@
                                     "scalarType": "float32"
                                 }
                             },
-                            "binding": {"kind": "uniform", "offset": 112, "size": 64, "elementStride": 0}
+                            "binding": {"kind": "uniform", "offset": 112, "size": 64}
                         },
                         {
                             "name": "lightViewProj",
@@ -82,7 +82,7 @@
                                     "scalarType": "float32"
                                 }
                             },
-                            "binding": {"kind": "uniform", "offset": 176, "size": 64, "elementStride": 0}
+                            "binding": {"kind": "uniform", "offset": 176, "size": 64}
                         },
                         {
                             "name": "tonemapMode",
@@ -90,23 +90,23 @@
                                 "kind": "scalar",
                                 "scalarType": "uint32"
                             },
-                            "binding": {"kind": "uniform", "offset": 240, "size": 4, "elementStride": 0}
+                            "binding": {"kind": "uniform", "offset": 240, "size": 4}
                         },
                         {
-                            "name": "_pad0",
+                            "name": "viewportW",
                             "type": {
                                 "kind": "scalar",
-                                "scalarType": "uint32"
+                                "scalarType": "float32"
                             },
-                            "binding": {"kind": "uniform", "offset": 244, "size": 4, "elementStride": 0}
+                            "binding": {"kind": "uniform", "offset": 244, "size": 4}
                         },
                         {
-                            "name": "_pad1",
+                            "name": "viewportH",
                             "type": {
                                 "kind": "scalar",
-                                "scalarType": "uint32"
+                                "scalarType": "float32"
                             },
-                            "binding": {"kind": "uniform", "offset": 248, "size": 4, "elementStride": 0}
+                            "binding": {"kind": "uniform", "offset": 248, "size": 4}
                         },
                         {
                             "name": "_pad2",
@@ -114,7 +114,7 @@
                                 "kind": "scalar",
                                 "scalarType": "uint32"
                             },
-                            "binding": {"kind": "uniform", "offset": 252, "size": 4, "elementStride": 0}
+                            "binding": {"kind": "uniform", "offset": 252, "size": 4}
                         }
                     ]
                 },
@@ -137,7 +137,7 @@
                                         "scalarType": "float32"
                                     }
                                 },
-                                "binding": {"kind": "uniform", "offset": 0, "size": 64, "elementStride": 0}
+                                "binding": {"kind": "uniform", "offset": 0, "size": 64}
                             },
                             {
                                 "name": "cameraPosition",
@@ -149,7 +149,7 @@
                                         "scalarType": "float32"
                                     }
                                 },
-                                "binding": {"kind": "uniform", "offset": 64, "size": 16, "elementStride": 4}
+                                "binding": {"kind": "uniform", "offset": 64, "size": 16}
                             },
                             {
                                 "name": "lightDirection",
@@ -161,7 +161,7 @@
                                         "scalarType": "float32"
                                     }
                                 },
-                                "binding": {"kind": "uniform", "offset": 80, "size": 16, "elementStride": 4}
+                                "binding": {"kind": "uniform", "offset": 80, "size": 16}
                             },
                             {
                                 "name": "lightColor",
@@ -173,7 +173,7 @@
                                         "scalarType": "float32"
                                     }
                                 },
-                                "binding": {"kind": "uniform", "offset": 96, "size": 16, "elementStride": 4}
+                                "binding": {"kind": "uniform", "offset": 96, "size": 16}
                             },
                             {
                                 "name": "view",
@@ -186,7 +186,7 @@
                                         "scalarType": "float32"
                                     }
                                 },
-                                "binding": {"kind": "uniform", "offset": 112, "size": 64, "elementStride": 0}
+                                "binding": {"kind": "uniform", "offset": 112, "size": 64}
                             },
                             {
                                 "name": "lightViewProj",
@@ -199,7 +199,7 @@
                                         "scalarType": "float32"
                                     }
                                 },
-                                "binding": {"kind": "uniform", "offset": 176, "size": 64, "elementStride": 0}
+                                "binding": {"kind": "uniform", "offset": 176, "size": 64}
                             },
                             {
                                 "name": "tonemapMode",
@@ -207,23 +207,23 @@
                                     "kind": "scalar",
                                     "scalarType": "uint32"
                                 },
-                                "binding": {"kind": "uniform", "offset": 240, "size": 4, "elementStride": 0}
+                                "binding": {"kind": "uniform", "offset": 240, "size": 4}
                             },
                             {
-                                "name": "_pad0",
+                                "name": "viewportW",
                                 "type": {
                                     "kind": "scalar",
-                                    "scalarType": "uint32"
+                                    "scalarType": "float32"
                                 },
-                                "binding": {"kind": "uniform", "offset": 244, "size": 4, "elementStride": 0}
+                                "binding": {"kind": "uniform", "offset": 244, "size": 4}
                             },
                             {
-                                "name": "_pad1",
+                                "name": "viewportH",
                                 "type": {
                                     "kind": "scalar",
-                                    "scalarType": "uint32"
+                                    "scalarType": "float32"
                                 },
-                                "binding": {"kind": "uniform", "offset": 248, "size": 4, "elementStride": 0}
+                                "binding": {"kind": "uniform", "offset": 248, "size": 4}
                             },
                             {
                                 "name": "_pad2",
@@ -231,11 +231,11 @@
                                     "kind": "scalar",
                                     "scalarType": "uint32"
                                 },
-                                "binding": {"kind": "uniform", "offset": 252, "size": 4, "elementStride": 0}
+                                "binding": {"kind": "uniform", "offset": 252, "size": 4}
                             }
                         ]
                     },
-                    "binding": {"kind": "uniform", "offset": 0, "size": 256, "elementStride": 0}
+                    "binding": {"kind": "uniform", "offset": 0, "size": 256}
                 }
             }
         },
@@ -259,7 +259,7 @@
                                     "scalarType": "float32"
                                 }
                             },
-                            "binding": {"kind": "uniform", "offset": 0, "size": 64, "elementStride": 0}
+                            "binding": {"kind": "uniform", "offset": 0, "size": 64}
                         }
                     ]
                 },
@@ -282,11 +282,11 @@
                                         "scalarType": "float32"
                                     }
                                 },
-                                "binding": {"kind": "uniform", "offset": 0, "size": 64, "elementStride": 0}
+                                "binding": {"kind": "uniform", "offset": 0, "size": 64}
                             }
                         ]
                     },
-                    "binding": {"kind": "uniform", "offset": 0, "size": 64, "elementStride": 0}
+                    "binding": {"kind": "uniform", "offset": 0, "size": 64}
                 }
             }
         }
@@ -482,6 +482,5 @@
                 }
             ]
         }
-    ],
-    "bindlessSpaceIndex": 1
+    ]
 }

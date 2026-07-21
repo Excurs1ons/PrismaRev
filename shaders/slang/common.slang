@@ -18,9 +18,9 @@ public struct FrameUBO
     public float4   lightColor;      // offset  96  (rgb = color, w = ambient factor)
     public float4x4 view;            // offset 112  (world -> view)
     public float4x4 lightViewProj;   // offset 176  (light-space VP for shadow map)
-    public uint     tonemapMode;     // offset 240  (0 = Reinhard, 1 = ACES)
-    public uint     _pad0;           // offset 244
-    public uint     _pad1;           // offset 248
+    public uint     tonemapMode;     // offset 240 (0 = Reinhard, 1 = ACES)
+    public float    viewportW;       // offset 244 - scene colour viewport width, px
+    public float    viewportH;       // offset 248 - scene colour viewport height, px
     public uint     _pad2;           // offset 252
 };
 

@@ -20,7 +20,7 @@
                                     "scalarType": "float32"
                                 }
                             },
-                            "binding": {"kind": "uniform", "offset": 0, "size": 64, "elementStride": 0}
+                            "binding": {"kind": "uniform", "offset": 0, "size": 64}
                         },
                         {
                             "name": "cameraPosition",
@@ -32,7 +32,7 @@
                                     "scalarType": "float32"
                                 }
                             },
-                            "binding": {"kind": "uniform", "offset": 64, "size": 16, "elementStride": 4}
+                            "binding": {"kind": "uniform", "offset": 64, "size": 16}
                         },
                         {
                             "name": "lightDirection",
@@ -44,7 +44,7 @@
                                     "scalarType": "float32"
                                 }
                             },
-                            "binding": {"kind": "uniform", "offset": 80, "size": 16, "elementStride": 4}
+                            "binding": {"kind": "uniform", "offset": 80, "size": 16}
                         },
                         {
                             "name": "lightColor",
@@ -56,7 +56,7 @@
                                     "scalarType": "float32"
                                 }
                             },
-                            "binding": {"kind": "uniform", "offset": 96, "size": 16, "elementStride": 4}
+                            "binding": {"kind": "uniform", "offset": 96, "size": 16}
                         },
                         {
                             "name": "view",
@@ -69,7 +69,7 @@
                                     "scalarType": "float32"
                                 }
                             },
-                            "binding": {"kind": "uniform", "offset": 112, "size": 64, "elementStride": 0}
+                            "binding": {"kind": "uniform", "offset": 112, "size": 64}
                         },
                         {
                             "name": "lightViewProj",
@@ -82,7 +82,7 @@
                                     "scalarType": "float32"
                                 }
                             },
-                            "binding": {"kind": "uniform", "offset": 176, "size": 64, "elementStride": 0}
+                            "binding": {"kind": "uniform", "offset": 176, "size": 64}
                         },
                         {
                             "name": "tonemapMode",
@@ -90,23 +90,23 @@
                                 "kind": "scalar",
                                 "scalarType": "uint32"
                             },
-                            "binding": {"kind": "uniform", "offset": 240, "size": 4, "elementStride": 0}
+                            "binding": {"kind": "uniform", "offset": 240, "size": 4}
                         },
                         {
-                            "name": "_pad0",
+                            "name": "viewportW",
                             "type": {
                                 "kind": "scalar",
-                                "scalarType": "uint32"
+                                "scalarType": "float32"
                             },
-                            "binding": {"kind": "uniform", "offset": 244, "size": 4, "elementStride": 0}
+                            "binding": {"kind": "uniform", "offset": 244, "size": 4}
                         },
                         {
-                            "name": "_pad1",
+                            "name": "viewportH",
                             "type": {
                                 "kind": "scalar",
-                                "scalarType": "uint32"
+                                "scalarType": "float32"
                             },
-                            "binding": {"kind": "uniform", "offset": 248, "size": 4, "elementStride": 0}
+                            "binding": {"kind": "uniform", "offset": 248, "size": 4}
                         },
                         {
                             "name": "_pad2",
@@ -114,7 +114,7 @@
                                 "kind": "scalar",
                                 "scalarType": "uint32"
                             },
-                            "binding": {"kind": "uniform", "offset": 252, "size": 4, "elementStride": 0}
+                            "binding": {"kind": "uniform", "offset": 252, "size": 4}
                         }
                     ]
                 },
@@ -137,7 +137,7 @@
                                         "scalarType": "float32"
                                     }
                                 },
-                                "binding": {"kind": "uniform", "offset": 0, "size": 64, "elementStride": 0}
+                                "binding": {"kind": "uniform", "offset": 0, "size": 64}
                             },
                             {
                                 "name": "cameraPosition",
@@ -149,7 +149,7 @@
                                         "scalarType": "float32"
                                     }
                                 },
-                                "binding": {"kind": "uniform", "offset": 64, "size": 16, "elementStride": 4}
+                                "binding": {"kind": "uniform", "offset": 64, "size": 16}
                             },
                             {
                                 "name": "lightDirection",
@@ -161,7 +161,7 @@
                                         "scalarType": "float32"
                                     }
                                 },
-                                "binding": {"kind": "uniform", "offset": 80, "size": 16, "elementStride": 4}
+                                "binding": {"kind": "uniform", "offset": 80, "size": 16}
                             },
                             {
                                 "name": "lightColor",
@@ -173,7 +173,7 @@
                                         "scalarType": "float32"
                                     }
                                 },
-                                "binding": {"kind": "uniform", "offset": 96, "size": 16, "elementStride": 4}
+                                "binding": {"kind": "uniform", "offset": 96, "size": 16}
                             },
                             {
                                 "name": "view",
@@ -186,7 +186,7 @@
                                         "scalarType": "float32"
                                     }
                                 },
-                                "binding": {"kind": "uniform", "offset": 112, "size": 64, "elementStride": 0}
+                                "binding": {"kind": "uniform", "offset": 112, "size": 64}
                             },
                             {
                                 "name": "lightViewProj",
@@ -199,7 +199,7 @@
                                         "scalarType": "float32"
                                     }
                                 },
-                                "binding": {"kind": "uniform", "offset": 176, "size": 64, "elementStride": 0}
+                                "binding": {"kind": "uniform", "offset": 176, "size": 64}
                             },
                             {
                                 "name": "tonemapMode",
@@ -207,23 +207,23 @@
                                     "kind": "scalar",
                                     "scalarType": "uint32"
                                 },
-                                "binding": {"kind": "uniform", "offset": 240, "size": 4, "elementStride": 0}
+                                "binding": {"kind": "uniform", "offset": 240, "size": 4}
                             },
                             {
-                                "name": "_pad0",
+                                "name": "viewportW",
                                 "type": {
                                     "kind": "scalar",
-                                    "scalarType": "uint32"
+                                    "scalarType": "float32"
                                 },
-                                "binding": {"kind": "uniform", "offset": 244, "size": 4, "elementStride": 0}
+                                "binding": {"kind": "uniform", "offset": 244, "size": 4}
                             },
                             {
-                                "name": "_pad1",
+                                "name": "viewportH",
                                 "type": {
                                     "kind": "scalar",
-                                    "scalarType": "uint32"
+                                    "scalarType": "float32"
                                 },
-                                "binding": {"kind": "uniform", "offset": 248, "size": 4, "elementStride": 0}
+                                "binding": {"kind": "uniform", "offset": 248, "size": 4}
                             },
                             {
                                 "name": "_pad2",
@@ -231,11 +231,11 @@
                                     "kind": "scalar",
                                     "scalarType": "uint32"
                                 },
-                                "binding": {"kind": "uniform", "offset": 252, "size": 4, "elementStride": 0}
+                                "binding": {"kind": "uniform", "offset": 252, "size": 4}
                             }
                         ]
                     },
-                    "binding": {"kind": "uniform", "offset": 0, "size": 256, "elementStride": 0}
+                    "binding": {"kind": "uniform", "offset": 0, "size": 256}
                 }
             }
         },
@@ -259,7 +259,7 @@
                                     "scalarType": "float32"
                                 }
                             },
-                            "binding": {"kind": "uniform", "offset": 0, "size": 16, "elementStride": 4}
+                            "binding": {"kind": "uniform", "offset": 0, "size": 16}
                         },
                         {
                             "name": "metallic_roughness_emissive",
@@ -271,7 +271,7 @@
                                     "scalarType": "float32"
                                 }
                             },
-                            "binding": {"kind": "uniform", "offset": 16, "size": 16, "elementStride": 4}
+                            "binding": {"kind": "uniform", "offset": 16, "size": 16}
                         },
                         {
                             "name": "albedo_idx",
@@ -279,7 +279,7 @@
                                 "kind": "scalar",
                                 "scalarType": "uint32"
                             },
-                            "binding": {"kind": "uniform", "offset": 32, "size": 4, "elementStride": 0}
+                            "binding": {"kind": "uniform", "offset": 32, "size": 4}
                         },
                         {
                             "name": "normal_idx",
@@ -287,7 +287,7 @@
                                 "kind": "scalar",
                                 "scalarType": "uint32"
                             },
-                            "binding": {"kind": "uniform", "offset": 36, "size": 4, "elementStride": 0}
+                            "binding": {"kind": "uniform", "offset": 36, "size": 4}
                         },
                         {
                             "name": "metallic_roughness_idx",
@@ -295,7 +295,7 @@
                                 "kind": "scalar",
                                 "scalarType": "uint32"
                             },
-                            "binding": {"kind": "uniform", "offset": 40, "size": 4, "elementStride": 0}
+                            "binding": {"kind": "uniform", "offset": 40, "size": 4}
                         },
                         {
                             "name": "emissive_idx",
@@ -303,7 +303,7 @@
                                 "kind": "scalar",
                                 "scalarType": "uint32"
                             },
-                            "binding": {"kind": "uniform", "offset": 44, "size": 4, "elementStride": 0}
+                            "binding": {"kind": "uniform", "offset": 44, "size": 4}
                         },
                         {
                             "name": "transmission_factor",
@@ -315,7 +315,7 @@
                                     "scalarType": "float32"
                                 }
                             },
-                            "binding": {"kind": "uniform", "offset": 48, "size": 16, "elementStride": 4}
+                            "binding": {"kind": "uniform", "offset": 48, "size": 16}
                         },
                         {
                             "name": "clearcoat",
@@ -327,7 +327,7 @@
                                     "scalarType": "float32"
                                 }
                             },
-                            "binding": {"kind": "uniform", "offset": 64, "size": 16, "elementStride": 4}
+                            "binding": {"kind": "uniform", "offset": 64, "size": 16}
                         },
                         {
                             "name": "transmission_tex_idx",
@@ -335,7 +335,7 @@
                                 "kind": "scalar",
                                 "scalarType": "uint32"
                             },
-                            "binding": {"kind": "uniform", "offset": 80, "size": 4, "elementStride": 0}
+                            "binding": {"kind": "uniform", "offset": 80, "size": 4}
                         },
                         {
                             "name": "clearcoat_tex_idx",
@@ -343,7 +343,7 @@
                                 "kind": "scalar",
                                 "scalarType": "uint32"
                             },
-                            "binding": {"kind": "uniform", "offset": 84, "size": 4, "elementStride": 0}
+                            "binding": {"kind": "uniform", "offset": 84, "size": 4}
                         },
                         {
                             "name": "_pad0",
@@ -351,7 +351,7 @@
                                 "kind": "scalar",
                                 "scalarType": "uint32"
                             },
-                            "binding": {"kind": "uniform", "offset": 88, "size": 4, "elementStride": 0}
+                            "binding": {"kind": "uniform", "offset": 88, "size": 4}
                         },
                         {
                             "name": "_pad1",
@@ -359,7 +359,7 @@
                                 "kind": "scalar",
                                 "scalarType": "uint32"
                             },
-                            "binding": {"kind": "uniform", "offset": 92, "size": 4, "elementStride": 0}
+                            "binding": {"kind": "uniform", "offset": 92, "size": 4}
                         }
                     ]
                 }
@@ -385,7 +385,7 @@
                                     "scalarType": "float32"
                                 }
                             },
-                            "binding": {"kind": "uniform", "offset": 0, "size": 16, "elementStride": 4}
+                            "binding": {"kind": "uniform", "offset": 0, "size": 16}
                         },
                         {
                             "name": "color",
@@ -397,7 +397,7 @@
                                     "scalarType": "float32"
                                 }
                             },
-                            "binding": {"kind": "uniform", "offset": 16, "size": 16, "elementStride": 4}
+                            "binding": {"kind": "uniform", "offset": 16, "size": 16}
                         }
                     ]
                 }
@@ -440,7 +440,6 @@
             "type": {
                 "kind": "resource",
                 "baseShape": "textureCube",
-                "combined": true,
                 "resultType": {
                     "kind": "vector",
                     "elementCount": 4,
@@ -457,7 +456,6 @@
             "type": {
                 "kind": "resource",
                 "baseShape": "textureCube",
-                "combined": true,
                 "resultType": {
                     "kind": "vector",
                     "elementCount": 4,
@@ -474,7 +472,6 @@
             "type": {
                 "kind": "resource",
                 "baseShape": "textureCube",
-                "combined": true,
                 "resultType": {
                     "kind": "vector",
                     "elementCount": 4,
@@ -510,7 +507,6 @@
             "type": {
                 "kind": "resource",
                 "baseShape": "texture2D",
-                "combined": true,
                 "resultType": {
                     "kind": "vector",
                     "elementCount": 4,
@@ -541,7 +537,7 @@
                                     "scalarType": "float32"
                                 }
                             },
-                            "binding": {"kind": "uniform", "offset": 0, "size": 64, "elementStride": 0}
+                            "binding": {"kind": "uniform", "offset": 0, "size": 64}
                         },
                         {
                             "name": "material_slot",
@@ -549,7 +545,7 @@
                                 "kind": "scalar",
                                 "scalarType": "uint32"
                             },
-                            "binding": {"kind": "uniform", "offset": 64, "size": 4, "elementStride": 0}
+                            "binding": {"kind": "uniform", "offset": 64, "size": 4}
                         },
                         {
                             "name": "env_handle",
@@ -557,7 +553,7 @@
                                 "kind": "scalar",
                                 "scalarType": "uint32"
                             },
-                            "binding": {"kind": "uniform", "offset": 68, "size": 4, "elementStride": 0}
+                            "binding": {"kind": "uniform", "offset": 68, "size": 4}
                         },
                         {
                             "name": "albedo_idx",
@@ -565,7 +561,7 @@
                                 "kind": "scalar",
                                 "scalarType": "uint32"
                             },
-                            "binding": {"kind": "uniform", "offset": 72, "size": 4, "elementStride": 0}
+                            "binding": {"kind": "uniform", "offset": 72, "size": 4}
                         },
                         {
                             "name": "normal_idx",
@@ -573,7 +569,7 @@
                                 "kind": "scalar",
                                 "scalarType": "uint32"
                             },
-                            "binding": {"kind": "uniform", "offset": 76, "size": 4, "elementStride": 0}
+                            "binding": {"kind": "uniform", "offset": 76, "size": 4}
                         },
                         {
                             "name": "debug_flags",
@@ -581,7 +577,7 @@
                                 "kind": "scalar",
                                 "scalarType": "uint32"
                             },
-                            "binding": {"kind": "uniform", "offset": 80, "size": 4, "elementStride": 0}
+                            "binding": {"kind": "uniform", "offset": 80, "size": 4}
                         },
                         {
                             "name": "_padding",
@@ -593,7 +589,7 @@
                                     "scalarType": "uint32"
                                 }
                             },
-                            "binding": {"kind": "uniform", "offset": 96, "size": 12, "elementStride": 4}
+                            "binding": {"kind": "uniform", "offset": 96, "size": 12}
                         }
                     ]
                 },
@@ -616,7 +612,7 @@
                                         "scalarType": "float32"
                                     }
                                 },
-                                "binding": {"kind": "uniform", "offset": 0, "size": 64, "elementStride": 0}
+                                "binding": {"kind": "uniform", "offset": 0, "size": 64}
                             },
                             {
                                 "name": "material_slot",
@@ -624,7 +620,7 @@
                                     "kind": "scalar",
                                     "scalarType": "uint32"
                                 },
-                                "binding": {"kind": "uniform", "offset": 64, "size": 4, "elementStride": 0}
+                                "binding": {"kind": "uniform", "offset": 64, "size": 4}
                             },
                             {
                                 "name": "env_handle",
@@ -632,7 +628,7 @@
                                     "kind": "scalar",
                                     "scalarType": "uint32"
                                 },
-                                "binding": {"kind": "uniform", "offset": 68, "size": 4, "elementStride": 0}
+                                "binding": {"kind": "uniform", "offset": 68, "size": 4}
                             },
                             {
                                 "name": "albedo_idx",
@@ -640,7 +636,7 @@
                                     "kind": "scalar",
                                     "scalarType": "uint32"
                                 },
-                                "binding": {"kind": "uniform", "offset": 72, "size": 4, "elementStride": 0}
+                                "binding": {"kind": "uniform", "offset": 72, "size": 4}
                             },
                             {
                                 "name": "normal_idx",
@@ -648,7 +644,7 @@
                                     "kind": "scalar",
                                     "scalarType": "uint32"
                                 },
-                                "binding": {"kind": "uniform", "offset": 76, "size": 4, "elementStride": 0}
+                                "binding": {"kind": "uniform", "offset": 76, "size": 4}
                             },
                             {
                                 "name": "debug_flags",
@@ -656,7 +652,7 @@
                                     "kind": "scalar",
                                     "scalarType": "uint32"
                                 },
-                                "binding": {"kind": "uniform", "offset": 80, "size": 4, "elementStride": 0}
+                                "binding": {"kind": "uniform", "offset": 80, "size": 4}
                             },
                             {
                                 "name": "_padding",
@@ -668,11 +664,11 @@
                                         "scalarType": "uint32"
                                     }
                                 },
-                                "binding": {"kind": "uniform", "offset": 96, "size": 12, "elementStride": 4}
+                                "binding": {"kind": "uniform", "offset": 96, "size": 12}
                             }
                         ]
                     },
-                    "binding": {"kind": "uniform", "offset": 0, "size": 112, "elementStride": 0}
+                    "binding": {"kind": "uniform", "offset": 0, "size": 112}
                 }
             }
         }
@@ -867,6 +863,5 @@
                 }
             ]
         }
-    ],
-    "bindlessSpaceIndex": 5
+    ]
 }

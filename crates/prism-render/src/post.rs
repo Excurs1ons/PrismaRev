@@ -30,26 +30,38 @@ use ash::vk;
 use crate::context::VulkanContext;
 use crate::pipeline::{GraphicsPipeline, PipelineDesc};
 use crate::render_graph::{
-    GraphResources, RenderContext, RenderGraphBuilder, RenderPassNode, RenderSettings,
-    SCENE_COLOR_H,
+    GraphResources, PassInfo, PassKind, RenderContext, RenderGraphBuilder, RenderPassNode,
+    RenderSettings, ResourceUsage, SCENE_COLOR_H, SCENE_DEPTH_H, SCENE_NORMAL_H,
 };
 use crate::render_pass::find_memory_type;
 use crate::shader;
 
-/// Push constants for `post.slang::PostPush` (16 bytes).
-/// `tonemapMode`: 0 = Reinhard, 1 = ACES Narkowicz.
+/// Push constants for `post.slang::PostPush` (32 bytes).
+/// - `tonemap_mode`: 0 = Reinhard, 1 = ACES Narkowicz.
+/// - `debug_rt`: 0 = normal tonemapped HDR, 1 = linearized depth, 2 = normal.
+/// - `proj22` / `proj32`: entries of the perspective projection used to
+///   linearize the depth buffer (`view_z = proj22 * d + proj32`).
+/// - `near` / `far`: clip planes (derived from proj22/proj32) used to
+///   normalize the linearized depth for display.
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub struct PostPushConstants {
     pub tonemap_mode: u32,
+    pub debug_rt: u32,
+    pub proj22: f32,
+    pub proj32: f32,
+    pub near: f32,
+    pub far: f32,
     pub _pad0: u32,
     pub _pad1: u32,
-    pub _pad2: u32,
 }
 
 /// Fullscreen-triangle tonemap pass: HDR scene color -> sRGB swapchain.
 pub struct PostPass {
     render_pass: Option<vk::RenderPass>,
+    /// Swapchain color format (set in `new`, used to rebuild the render pass on
+    /// `drop_target`/`set_target`). Stored so the visualizer can read it.
+    color_format: vk::Format,
     /// One framebuffer per swapchain image (each wraps its swapchain view).
     framebuffers: Vec<Option<vk::Framebuffer>>,
     /// Cached swapchain views the framebuffers were built against (for
@@ -142,6 +154,7 @@ impl PostPass {
 
         Ok(Self {
             render_pass: Some(render_pass),
+            color_format,
             framebuffers: Vec::new(),
             target_views: Vec::new(),
             extent: vk::Extent2D {
@@ -156,6 +169,16 @@ impl PostPass {
             bound_hdrs: vec![vk::ImageView::null(); fif as usize],
             device: Some(device.clone()),
         })
+    }
+
+    /// Swapchain extent PostPass tonemaps into. Exposed for the visualizer.
+    pub fn extent(&self) -> vk::Extent2D {
+        self.extent
+    }
+
+    /// Swapchain color format PostPass targets. Exposed for the visualizer.
+    pub fn color_format(&self) -> vk::Format {
+        self.color_format
     }
 
     /// Ensure the framebuffer for `image_index` exists and is built against the
@@ -236,9 +259,18 @@ impl PostPass {
 
     /// Update the HDR input view bound to the frame-in-flight's descriptor set.
     /// Called every frame from `GraphRenderer::render` before `execute`.
-    /// Skips the descriptor write when `view` matches the currently-bound one
-    /// for this frame-in-flight.
-    pub fn set_input(&mut self, device: &ash::Device, frame_index: u32, view: vk::ImageView) {
+    /// Bind `view` (sampled with `image_layout`) as the input texture for this
+    /// frame-in-flight's descriptor set. Skips the write when `view` matches
+    /// the currently-bound one. `image_layout` must match the image's actual
+    /// layout at draw time (depth uses `DEPTH_STENCIL_READ_ONLY_OPTIMAL`,
+    /// color/normal use `SHADER_READ_ONLY_OPTIMAL`).
+    pub fn set_input(
+        &mut self,
+        device: &ash::Device,
+        frame_index: u32,
+        view: vk::ImageView,
+        image_layout: vk::ImageLayout,
+    ) {
         let i = (frame_index as usize) % self.descriptor_sets.len();
         if view == self.bound_hdrs[i] {
             return;
@@ -247,7 +279,7 @@ impl PostPass {
         let image_info = vk::DescriptorImageInfo::default()
             .image_view(view)
             .sampler(self.sampler)
-            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
+            .image_layout(image_layout);
         let write = vk::WriteDescriptorSet::default()
             .dst_set(self.descriptor_sets[i])
             .dst_binding(0)
@@ -285,33 +317,12 @@ impl PostPass {
             .copied()
             .context("PostPass: no descriptor set for frame_index")?;
 
-        // Barrier HDR input COLOR_ATTACHMENT_OPTIMAL -> SHADER_READ_ONLY_OPTIMAL.
-        let hdr_barrier = vk::ImageMemoryBarrier::default()
-            .old_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-            .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-            .image(hdr_image)
-            .src_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
-            .dst_access_mask(vk::AccessFlags::SHADER_READ)
-            .subresource_range(vk::ImageSubresourceRange {
-                aspect_mask: vk::ImageAspectFlags::COLOR,
-                base_mip_level: 0,
-                level_count: 1,
-                base_array_layer: 0,
-                layer_count: 1,
-            });
-        unsafe {
-            device.cmd_pipeline_barrier(
-                cmd,
-                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-                vk::PipelineStageFlags::FRAGMENT_SHADER,
-                vk::DependencyFlags::empty(),
-                &[],
-                &[],
-                std::slice::from_ref(&hdr_barrier),
-            );
-        }
+        // The HDR input COLOR_ATTACHMENT_OPTIMAL -> SHADER_READ_ONLY_OPTIMAL
+        // barrier used to live here. It is now inserted automatically by
+        // `RenderGraph::execute` from the `read_usage` edge declared in
+        // `setup`. `hdr_image` is therefore no longer needed in this function
+        // (it was only referenced by the deleted barrier).
+        let _ = hdr_image;
 
         // The swapchain image transitions UNDEFINED -> COLOR_ATTACHMENT_OPTIMAL
         // via the render pass `initial_layout` (the egui overlay or the caller's
@@ -483,9 +494,38 @@ impl RenderPassNode for PostPass {
         "PostPass"
     }
 
-    fn setup(&mut self, _graph: &mut RenderGraphBuilder, _settings: &RenderSettings) {
+    fn setup(&mut self, graph: &mut RenderGraphBuilder, _settings: &RenderSettings) {
         // HDR input is published by ScenePass under SCENE_COLOR_H; read in
         // `execute`. PostPass owns no graph-managed resources of its own.
+        //
+        // Declare the read edge so the render graph inserts the
+        // COLOR_ATTACHMENT_OPTIMAL -> SHADER_READ_ONLY_OPTIMAL barrier
+        // automatically before this pass (replacing the hand-rolled
+        // `cmd_pipeline_barrier` that used to live in `execute`).
+        graph.read_usage(ResourceUsage {
+            handle: SCENE_COLOR_H,
+            access: vk::AccessFlags::SHADER_READ,
+            stage: vk::PipelineStageFlags::FRAGMENT_SHADER,
+            layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+        });
+        // Debug RT viewer (Tab) can also sample the scene depth (mode 1) and
+        // view-space normal (mode 2). Declare these read edges unconditionally
+        // so the automatic barrier pipeline keeps them in a sampled layout
+        // even when mode 0 doesn't read them (GTAO already transitions depth
+        // and normal to read-only layouts, so this is usually a cache hit and
+        // emits no extra barrier).
+        graph.read_usage(ResourceUsage {
+            handle: SCENE_DEPTH_H,
+            access: vk::AccessFlags::SHADER_READ,
+            stage: vk::PipelineStageFlags::FRAGMENT_SHADER,
+            layout: vk::ImageLayout::DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+        });
+        graph.read_usage(ResourceUsage {
+            handle: SCENE_NORMAL_H,
+            access: vk::AccessFlags::SHADER_READ,
+            stage: vk::PipelineStageFlags::FRAGMENT_SHADER,
+            layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+        });
     }
 
     fn execute(
@@ -493,15 +533,28 @@ impl RenderPassNode for PostPass {
         ctx: &RenderContext,
         resources: &mut GraphResources,
     ) -> anyhow::Result<()> {
-        let hdr_view = match resources.published_view(SCENE_COLOR_H) {
+        // Pick the input RT based on the debug viewer mode (Tab key).
+        // 0 = HDR color (normal tonemap), 1 = depth (linearized),
+        // 2 = view-space normal. The layout must match the image's actual
+        // layout at draw time; the graph's automatic barrier pipeline keeps
+        // all three in a sampled layout (see `setup`'s read edges).
+        let (handle, image_layout) = match ctx.frame.debug_rt {
+            1 => (
+                SCENE_DEPTH_H,
+                vk::ImageLayout::DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+            ),
+            2 => (SCENE_NORMAL_H, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL),
+            _ => (SCENE_COLOR_H, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL),
+        };
+        let input_view = match resources.published_view(handle) {
             Some(v) => v,
             None => {
-                log::warn!("PostPass: no ScenePass HDR view published; skipping");
+                log::warn!("PostPass: no {:?} view published; skipping", handle);
                 return Ok(());
             }
         };
-        let hdr_image = resources
-            .published_image(SCENE_COLOR_H)
+        let input_image = resources
+            .published_image(handle)
             .unwrap_or(vk::Image::null());
 
         // (Re)build this swapchain image's framebuffer if missing or the
@@ -516,24 +569,58 @@ impl RenderPassNode for PostPass {
         )
         .context("PostPass: set_target")?;
 
-        // Bind the HDR input view into this frame's descriptor set (replaces
-        // the old `set_input` call from `GraphRenderer::render`).
-        self.set_input(ctx.device, ctx.frame_index, hdr_view);
+        // Bind the selected input view into this frame's descriptor set. The
+        // cache (`bound_hdrs`) keys on the view handle, so switching modes
+        // (which changes the view) triggers a rewrite automatically.
+        self.set_input(ctx.device, ctx.frame_index, input_view, image_layout);
+
+        // Derive near/far from the projection entries for depth linearization.
+        // Vulkan perspective depth [0,1]: far = proj32/(proj22-1),
+        // near = proj32/(proj22+1). Guarded against div-by-zero (proj22==1 is
+        // only possible for an infinite far plane, unusual in practice).
+        let proj22 = ctx.frame.proj22;
+        let proj32 = ctx.frame.proj32;
+        let near = if (proj22 - 1.0).abs() > 1e-6 {
+            proj32 / (proj22 + 1.0)
+        } else {
+            0.1
+        };
+        let far = if (proj22 - 1.0).abs() > 1e-6 {
+            proj32 / (proj22 - 1.0)
+        } else {
+            100.0
+        };
 
         let push = PostPushConstants {
             tonemap_mode: ctx.frame.tonemap_mode,
+            debug_rt: ctx.frame.debug_rt,
+            proj22,
+            proj32,
+            near,
+            far,
             _pad0: 0,
             _pad1: 0,
-            _pad2: 0,
         };
         self.execute(
             ctx.device,
             ctx.cmd,
             ctx.frame_index,
             ctx.image_index,
-            hdr_image,
+            input_image,
             &push,
         )
+    }
+
+    fn graph_info(&self) -> PassInfo {
+        PassInfo {
+            index: usize::MAX,
+            name: self.name().to_string(),
+            kind: PassKind::Post,
+            // HDR color comes from ScenePass via SCENE_COLOR_H.
+            inputs: vec![SCENE_COLOR_H],
+            // PostPass writes the swapchain (not a graph-managed resource).
+            outputs: Vec::new(),
+        }
     }
 }
 
@@ -602,6 +689,6 @@ mod tests {
 
     #[test]
     fn push_constant_size_is_16() {
-        assert_eq!(std::mem::size_of::<PostPushConstants>(), 16);
+        assert_eq!(std::mem::size_of::<PostPushConstants>(), 32);
     }
 }

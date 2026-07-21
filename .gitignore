@@ -26,6 +26,9 @@ frame_*.ppm
 # on Termux). Never commit the 60+ MB release tree — it is fetched at build time.
 tools/slang/
 
+# Precomputed IBL convolution cache (auto-generated; see docs/lessons-learned.md §32)
+assets/ibr/
+
 # Scene model assets (large; referenced via assets/scenes.toml virtual mapping,
 # not committed). The manifest file assets/scenes.toml itself stays tracked.
 assets/scenes/*

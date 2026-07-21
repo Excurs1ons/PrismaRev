@@ -14,6 +14,9 @@
 
 use anyhow::Context as _;
 use ash::vk;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::Hasher;
+use std::path::Path;
 use std::sync::Arc;
 
 use crate::context::VulkanContext;
@@ -63,6 +66,13 @@ const PREFILTERED_SAMPLES: u32 = 128;
 const BRDF_LUT_SIZE: u32 = 512;
 const BRDF_LUT_SAMPLES: u32 = 1024;
 
+// IBL disk cache paths (relative to working directory).
+const IBL_CACHE_DIR: &str = "assets/ibr";
+const BRDF_CACHE_FILE: &str = "brdf_lut_512.bin";
+const ENV_CUBE_CACHE_FILE: &str = "cube_512.bin";
+const IRRADIANCE_CACHE_FILE: &str = "irradiance_64.bin";
+const PREFILTERED_CACHE_PREFIX: &str = "prefiltered_mip";
+
 impl IblResources {
     pub fn new(
         context: Arc<VulkanContext>,
@@ -74,7 +84,8 @@ impl IblResources {
         let mem_props = &context.physical_device_memory_properties;
 
         // 1. Obtain linear RGBA float equirect data (decode file or synthesize).
-        let (rgba_f32, width, height) = match env_bytes {
+        let t_hdr = std::time::Instant::now();
+        let (rgba_f32, width, height) = match &env_bytes {
             Some(bytes) => {
                 let (data, w, h) =
                     crate::hdr::load_rgbe(&bytes).context("failed to decode environment .hdr")?;
@@ -91,33 +102,115 @@ impl IblResources {
                 (data, w, h)
             }
         };
+        let hdr_decode_ms = t_hdr.elapsed().as_millis();
+        log::info!("  IBL phase: HDR decode: {}ms", hdr_decode_ms);
 
-        // 1b. Environment cubemap (existing path).
+        // Compute env content hash for disk cache (only when .hdr was loaded).
+        let env_hash = env_bytes.as_ref().map(|b| env_content_hash(b));
+        if let Some(ref hash) = env_hash {
+            let _ = ensure_cache_dir(hash);
+        }
+
+        // 1b. Environment cubemap + disk cache.
         const FACE_SIZE: u32 = 512;
-        let cube_rgba = generate_cubemap(&rgba_f32, width, height, FACE_SIZE);
+        let t_cube = std::time::Instant::now();
+        let cube_rgba: Vec<f32> = if let Some(ref hash) = env_hash {
+            let path = cache_path(hash, ENV_CUBE_CACHE_FILE);
+            load_f32_cache(&path).unwrap_or_else(|| {
+                let data = generate_cubemap(&rgba_f32, width, height, FACE_SIZE);
+                save_f32_cache(&path, &data);
+                data
+            })
+        } else {
+            generate_cubemap(&rgba_f32, width, height, FACE_SIZE)
+        };
+        let cube_gen_ms = t_cube.elapsed().as_millis();
+        if cube_gen_ms < 10 {
+            log::info!("  IBL phase: generate cubemap (6x512x512): {}ms (cached)", cube_gen_ms);
+        } else {
+            log::info!("  IBL phase: generate cubemap (6x512x512): {}ms", cube_gen_ms);
+        }
         let cube_texel_count = (6 * FACE_SIZE * FACE_SIZE) as usize;
         let mip_levels = {
             let max_dim = FACE_SIZE;
             (max_dim as f32).log2().floor() as u32 + 1
         };
 
-        // 1c. Convolve the three IBL resources on the CPU.
-        let t0 = std::time::Instant::now();
-        let irradiance_rgba = convolve_irradiance(&rgba_f32, width, height, IRRADIANCE_FACE_SIZE);
-        let prefiltered_rgba = convolve_prefiltered(
-            &rgba_f32,
-            width,
-            height,
-            PREFILTERED_FACE_SIZE,
-            PREFILTERED_MIP_LEVELS,
-        );
-        let brdf_rg = compute_brdf_lut(BRDF_LUT_SIZE);
-        let elapsed = t0.elapsed();
-        log::info!(
-            "IBL: convolved irradiance/prefiltered/brdf-lut in {}.{:03}ms",
-            elapsed.as_millis(),
-            elapsed.subsec_millis(),
-        );
+        // 1c. Convolve the three IBL resources on the CPU (or load from cache).
+        let t_irr = std::time::Instant::now();
+        let irradiance_rgba: Vec<f32> = if let Some(ref hash) = env_hash {
+            let path = cache_path(hash, IRRADIANCE_CACHE_FILE);
+            load_f32_cache(&path).unwrap_or_else(|| {
+                let data = convolve_irradiance(&rgba_f32, width, height, IRRADIANCE_FACE_SIZE);
+                save_f32_cache(&path, &data);
+                data
+            })
+        } else {
+            convolve_irradiance(&rgba_f32, width, height, IRRADIANCE_FACE_SIZE)
+        };
+        let irrad_ms = t_irr.elapsed().as_millis();
+        let t_pre = std::time::Instant::now();
+
+        let prefiltered_rgba: Vec<Vec<f32>> = if let Some(ref hash) = env_hash {
+            let mut mips = Vec::with_capacity(PREFILTERED_MIP_LEVELS as usize);
+            let mut all_cached = true;
+            for mip in 0..PREFILTERED_MIP_LEVELS {
+                let path = cache_path(hash, &format!("{}{}.bin", PREFILTERED_CACHE_PREFIX, mip));
+                if let Some(data) = load_f32_cache(&path) {
+                    mips.push(data);
+                } else {
+                    all_cached = false;
+                    break;
+                }
+            }
+            if all_cached {
+                mips
+            } else {
+                let data = convolve_prefiltered(
+                    &rgba_f32, width, height, PREFILTERED_FACE_SIZE, PREFILTERED_MIP_LEVELS,
+                );
+                for (mip, mip_data) in data.iter().enumerate() {
+                    let path = cache_path(hash, &format!("{}{}.bin", PREFILTERED_CACHE_PREFIX, mip));
+                    save_f32_cache(&path, mip_data);
+                }
+                data
+            }
+        } else {
+            convolve_prefiltered(
+                &rgba_f32, width, height, PREFILTERED_FACE_SIZE, PREFILTERED_MIP_LEVELS,
+            )
+        };
+        let pref_ms = t_pre.elapsed().as_millis();
+        let t_brdf = std::time::Instant::now();
+
+        // BRDF LUT — no env dependency, always check disk first.
+        let brdf_rg: Vec<f32> = {
+            let _ = ensure_cache_dir("");
+            let path = cache_path("", BRDF_CACHE_FILE);
+            load_f32_cache(&path).unwrap_or_else(|| {
+                let data = compute_brdf_lut(BRDF_LUT_SIZE);
+                save_f32_cache(&path, &data);
+                data
+            })
+        };
+        let brdf_ms = t_brdf.elapsed().as_millis();
+
+        if irrad_ms < 10 {
+            log::info!("  IBL phase: convolve irradiance (6x64x64, 64 samples): {}ms (cached)", irrad_ms);
+        } else {
+            log::info!("  IBL phase: convolve irradiance (6x64x64, 64 samples): {}ms", irrad_ms);
+        }
+        if pref_ms < 10 {
+            log::info!("  IBL phase: convolve prefiltered (5 mips): {}ms (cached)", pref_ms);
+        } else {
+            log::info!("  IBL phase: convolve prefiltered (5 mips, 128x128x6x128 samples): {}ms", pref_ms);
+        }
+        if brdf_ms < 10 {
+            log::info!("  IBL phase: compute BRDF LUT (512x512, 1024 samples): {}ms (cached)", brdf_ms);
+        } else {
+            log::info!("  IBL phase: compute BRDF LUT (512x512, 1024 samples): {}ms", brdf_ms);
+        }
+        log::info!("  IBL phase: convolve total: {}ms", irrad_ms + pref_ms + brdf_ms);
 
         // 2. Create all images.
         // 2a. Environment cubemap (existing).
@@ -140,6 +233,7 @@ impl IblResources {
             sharing_mode: vk::SharingMode::EXCLUSIVE,
             ..Default::default()
         };
+        let t_img_create = std::time::Instant::now();
         let image = unsafe { device.create_image(&image_info, None) }?;
         let mem_req = unsafe { device.get_image_memory_requirements(image) };
         let memory = allocate_device_memory(&device, mem_props, mem_req)?;
@@ -599,8 +693,14 @@ impl IblResources {
         );
 
         unsafe { device.end_command_buffer(cmd) }?;
+        let img_create_ms = t_img_create.elapsed().as_millis();
+        log::info!("  IBL phase: create images + alloc + fill staging: {}ms", img_create_ms);
+        let t_upload = std::time::Instant::now();
         submit_and_wait(&device, queue, command_pool, cmd);
+        let upload_ms = t_upload.elapsed().as_millis();
+        log::info!("  IBL phase: upload + submit + wait: {}ms", upload_ms);
 
+        let t_views = std::time::Instant::now();
         // 4. Create image views + samplers.
 
         // 4a. Env cube view + sampler.
@@ -847,6 +947,8 @@ impl IblResources {
             )
         };
 
+        let views_ms = t_views.elapsed().as_millis();
+        log::info!("  IBL phase: views + samplers + descriptors: {}ms", views_ms);
         Ok(Self {
             device,
             descriptor_set_layout,
@@ -939,6 +1041,72 @@ impl Drop for IblResources {
                 .destroy_descriptor_set_layout(self.descriptor_set_layout, None);
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// IBL disk cache helpers
+// ---------------------------------------------------------------------------
+
+/// Ensure the IBL cache subdirectory exists, creating it if needed.
+fn ensure_cache_dir(subdir: &str) -> Option<std::path::PathBuf> {
+    let path = std::path::PathBuf::from(IBL_CACHE_DIR).join(subdir);
+    std::fs::create_dir_all(&path).ok()?;
+    Some(path)
+}
+
+/// Build a full cache path from hash subdir and filename.
+fn cache_path(hash: &str, filename: &str) -> std::path::PathBuf {
+    std::path::PathBuf::from(IBL_CACHE_DIR).join(hash).join(filename)
+}
+
+/// Deterministic content hash of the raw `.hdr` file bytes.
+/// Used as subdirectory name so a changed env map produces a new cache.
+fn env_content_hash(bytes: &[u8]) -> String {
+    let mut hasher = DefaultHasher::new();
+    use std::hash::Hash;
+    bytes.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
+/// Save `data` (f32 slice) to `path` as `u32 LE count + f32 LE × count`.
+fn save_f32_cache(path: &Path, data: &[f32]) {
+    use std::io::Write;
+    let count = data.len() as u32;
+    // SAFETY: reinterpreting &[f32] as &[u8] is safe.
+    let bytes = unsafe {
+        std::slice::from_raw_parts(data.as_ptr() as *const u8, data.len() * 4)
+    };
+    match std::fs::File::create(path) {
+        Ok(mut f) => {
+            let _ = f.write_all(&count.to_le_bytes());
+            let _ = f.write_all(bytes);
+        }
+        Err(e) => log::warn!("IBL cache: failed to write {}: {e}", path.display()),
+    }
+}
+
+/// Load an f32 cache file written by `save_f32_cache`. Returns `None` on any
+/// error (missing file, wrong size, I/O error).
+fn load_f32_cache(path: &Path) -> Option<Vec<f32>> {
+    let raw = std::fs::read(path).ok()?;
+    if raw.len() < 4 {
+        return None;
+    }
+    let count = u32::from_le_bytes(raw[..4].try_into().ok()?) as usize;
+    if raw.len() != 4 + count * 4 {
+        return None;
+    }
+    let mut out = vec![0.0f32; count];
+    // SAFETY: raw bytes were written by our own save function.
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            raw.as_ptr().add(4) as *const f32,
+            out.as_mut_ptr(),
+            count,
+        );
+    }
+    log::info!("  IBL cache: loaded {}", path.display());
+    Some(out)
 }
 
 // ---------------------------------------------------------------------------

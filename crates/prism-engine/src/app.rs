@@ -186,14 +186,18 @@ pub struct App {
     debug_mode: DebugMode,
     /// Coordinate space for the `Normal` debug mode.
     normal_space: NormalSpace,
-    /// PBR component toggle bitmask (14 bits, see `scene_frag.slang`
-    /// `PBR_FLAG_*`). 0 = all components neutral -> raw baseColor.
+    /// PBR component isolate selector (14 bits, see `scene_frag.slang`
+    /// `PBR_FLAG_*`). `0` = normal full-PBR render (all components on);
+    /// `1 << bit` = isolate that one component as a grayscale visualization.
     debug_flags: u32,
     /// Whether the debug overlay UI is shown.
     show_ui: bool,
     /// Tonemap operator for the final HDR -> displayable color: 0 = Reinhard,
     /// 1 = ACES (Narkowicz). Switchable at runtime (inspector / `T` key).
     tonemap_mode: u32,
+    /// PostPass debug render-target viewer (Tab key cycles). 0 = normal
+    /// tonemapped HDR, 1 = linearized depth, 2 = view-space normal.
+    debug_rt: u32,
     /// P0: CPU-side scene storage (meshes / materials / textures / instances)
     /// populated either from a glTF file or from the procedural fallback.
     /// The renderer's `Render*Manager`s consume this on `App::load_demo_scene`.
@@ -222,6 +226,11 @@ pub struct App {
     camera_state_restored: bool,
     /// Real-time scene parameter inspector (egui). Toggled with F1.
     inspector: crate::inspector::Inspector,
+    /// Render-graph visualizer (egui). Toggled with F2. Read-only pipeline
+    /// diagram + live per-pass state. Shares the same `EguiOverlay` as the
+    /// inspector; when both are open their UIs run inside a single
+    /// `run_ui` closure (see `render_one_frame`).
+    render_graph_viz: crate::render_graph_viz::RenderGraphViz,
     /// FPS-style pointer-lock: when `true` the cursor is hidden and grabbed and
     /// the camera follows the mouse directly (no button held). Toggled by
     /// left-click (enter), ESC (exit), holding ALT (temporary release).
@@ -234,24 +243,18 @@ pub struct App {
     alt_temp_release: bool,
 }
 
-/// Default PBR component mask. A normally-lit PBR scene: direct lighting,
-/// IBL (diffuse irradiance + specular prefiltered), specular/metal/roughness
-/// response, multi-light, and rasterized shadow occlusion are all on.
-/// Bits mirror `PBR_FLAG_*` in `shaders/slang/scene_frag.slang`.
-/// Shadow (bit 8) is enabled by default so direct-light occlusion is always
-/// visible - without it, surfaces blocked from the sun stay lit. GTAO (bit 14)
-/// is on by default so IBL diffuse+specular are attenuated by screen-space
-/// occlusion (1-frame latency; the first frame reads a cleared 1.0 AO texture).
-pub const DEFAULT_PBR_FLAGS: u32 = (1 << 0)  // Direct
-    | (1 << 1)  // AmbientIBL
-    | (1 << 2)  // Specular
-    | (1 << 3)  // Metallic
-    | (1 << 4)  // Roughness
-    | (1 << 5)  // DiffuseIBL
-    | (1 << 6)  // SpecularIBL
-    | (1 << 7)  // MultiLight
-    | (1 << 8)  // Shadow (direct-light occlusion, on by default)
-    | (1 << 14); // AO (GTAO, attenuates IBL diffuse+specular)
+/// Default PBR mode. `debug_flags == 0` means **normal full-PBR rendering**:
+/// every component (direct, shadow, specular, IBL, AO, ...) is computed and
+/// composed. The debug digit keys (Digit1..9, Digit0, Shift+1..Shift+4) are
+/// **single-select isolators**: pressing one sets `debug_flags = 1 << bit`,
+/// which makes `scene_frag.slang` render ONLY that one component as a
+/// grayscale visualization (so you can eyeball e.g. GTAO output alone).
+/// Pressing the same key again clears `debug_flags` back to 0 = normal render.
+///
+/// Bits mirror `PBR_FLAG_*` in `shaders/slang/scene_frag.slang` (0..13). The
+/// key->bit map is 1:1 in declaration order (Digit1=Direct=bit0, Digit2=Shadow
+/// =bit1, ..., Digit9=AO=bit8, Digit0=Emissive=bit9, Shift+1..4 = bits 10..13).
+pub const DEFAULT_PBR_FLAGS: u32 = 0;
 
 impl App {
     pub fn new() -> Self {
@@ -270,6 +273,7 @@ impl App {
             debug_flags: DEFAULT_PBR_FLAGS,
             show_ui: true,
             tonemap_mode: 0,
+            debug_rt: 0,
             scene_store: prism_asset::SceneStore::new(),
             scene_loaded: false,
             mesh_map: std::collections::HashMap::new(),
@@ -279,6 +283,7 @@ impl App {
             fatal_error: None,
             camera_state_restored: false,
             inspector: crate::inspector::Inspector::new(),
+            render_graph_viz: crate::render_graph_viz::RenderGraphViz::new(),
             pointer_locked: false,
             lock_before_inspector: false,
             alt_temp_release: false,
@@ -329,6 +334,7 @@ impl App {
     }
 
     fn ensure_window(&mut self, event_loop: &ActiveEventLoop) {
+        let t_start = std::time::Instant::now();
         if self.window.is_some() {
             return;
         }
@@ -341,6 +347,7 @@ impl App {
                 )
                 .expect("failed to create window"),
         );
+        let t_after_win = std::time::Instant::now();
 
         // Instance extensions from the surface.
         let display_handle = window.display_handle().expect("get display handle").into();
@@ -356,6 +363,7 @@ impl App {
             .collect();
         let extensions_ref: Vec<&str> = extensions.iter().map(|s| s.as_str()).collect();
 
+        let t_renderer = std::time::Instant::now();
         let renderer = GraphRenderer::new(
             extensions_ref,
             window.as_ref(),
@@ -363,10 +371,19 @@ impl App {
             self.env_bytes.clone(),
         )
         .expect("failed to create renderer");
+        let t_after_renderer = std::time::Instant::now();
+
+        log::info!(
+            "startup: window {}ms, extensions {}ms, renderer (incl. IBL) {}ms",
+            (t_after_win - t_start).as_millis(),
+            (t_renderer - t_after_win).as_millis(),
+            (t_after_renderer - t_renderer).as_millis(),
+        );
 
         // --- Build default ECS scene (lights + camera) ---
         let mut world = World::new();
         create_default_scene(&mut world);
+        let t_after_world = std::time::Instant::now();
 
         self.world = Some(world);
         self.window = Some(window);
@@ -381,10 +398,13 @@ impl App {
         }
         self.camera_state_restored = state_loaded;
 
+        log::info!("startup: world+state: {}ms", t_after_world.elapsed().as_millis());
+
         // Load a glTF scene from the asset manifest (if present + resolvable)
         // and upload it to the renderer managers. Keeps the legacy cube demo
         // running alongside it.
         self.load_scene_from_manifest();
+        log::info!("startup total (incl. scene): {}ms", t_start.elapsed().as_millis());
     }
 
     /// Read `assets/scenes.toml`, pick the first scene whose `path` exists on
@@ -528,25 +548,39 @@ impl App {
                 }
             };
         let t_tex = std::time::Instant::now();
-        let texture_data: Vec<_> = self
-            .scene_store
-            .textures()
-            .map(|(h, data)| (h, data.clone()))
-            .collect();
-        let tex_count = texture_data.len();
-        for (asset_h, data) in texture_data {
+        // Drain texture pixels straight out of `scene_store` instead of
+        // cloning them. On Sponza this avoids two ~5 GB heap copies
+        // (collect-clone + per-tex `pixels.clone()` into the upload input);
+        // after upload the CPU-side pixels are dead weight anyway.
+        //
+        // We collect `(asset_h, input)` into a local Vec first so the
+        // `&mut self.scene_store` borrow ends before we touch
+        // `&mut self.renderer` below.
+        let t_tex_collect = std::time::Instant::now();
+        let mut texture_inputs: Vec<(prism_asset::TextureHandle, prism_render::managers::TextureUploadInput)> =
+            Vec::new();
+        let mut tex_pixels_total: usize = 0;
+        for (asset_h, data) in self.scene_store.textures_mut() {
+            if data.format == prism_asset::TexFormat::Rgba16f {
+                log::warn!("Rgba16f texture not yet supported; skipping {:?}", asset_h);
+                continue;
+            }
+            tex_pixels_total += (data.width as usize) * (data.height as usize);
             let input = prism_render::managers::TextureUploadInput {
                 width: data.width,
                 height: data.height,
-                format: match data.format {
-                    prism_asset::TexFormat::Rgba8 => prism_render::managers::TextureFormat::Rgba8,
-                    prism_asset::TexFormat::Rgba16f => {
-                        log::warn!("Rgba16f texture not yet supported; skipping {:?}", asset_h);
-                        continue;
-                    }
-                },
-                pixels: data.pixels.clone(),
+                format: prism_render::managers::TextureFormat::Rgba8,
+                // Move the pixel buffer straight out of the store; `mem::take`
+                // leaves an empty Vec behind so the slot stays valid.
+                pixels: std::mem::take(&mut data.pixels),
             };
+            texture_inputs.push((asset_h, input));
+        }
+        let tex_count = texture_inputs.len();
+        let tex_collect_ms = t_tex_collect.elapsed().as_millis();
+
+        let t_tex_upload = std::time::Instant::now();
+        for (asset_h, input) in texture_inputs {
             match renderer.register_texture_into(&mut uploader, &input) {
                 Ok(handle) => {
                     let slot = renderer.texture_srv(handle).0;
@@ -556,8 +590,11 @@ impl App {
             }
         }
         log::info!(
-            "texture upload: {} textures, {}ms",
+            "texture upload: {} textures, {:.1} MP, collect={}ms upload={}ms total={}ms",
             tex_count,
+            tex_pixels_total as f64 / 1_000_000.0,
+            tex_collect_ms,
+            t_tex_upload.elapsed().as_millis(),
             t_tex.elapsed().as_millis()
         );
 
@@ -588,7 +625,7 @@ impl App {
             // Log every material in detail so we can see real base colors +
             // resolved texture slots (catches "all textures unbound" or
             // "all metallic/roughness stuck at the glTF default 1.0" at a glance).
-            log::info!(
+            log::debug!(
                 "material[{}] {:?}: base_color={:?} metallic={:.3} roughness={:.3} \
                  albedo_tex={:?} normal_tex={:?} mr_tex={:?} emissive_tex={:?}",
                 self.mat_map.len(),
@@ -636,14 +673,20 @@ impl App {
         );
 
         // 3. Upload every mesh (vertex + index buffers) and record the
-        // asset mesh handle → render mesh handle.
+        // asset mesh handle -> render mesh handle.
         let t_mesh = std::time::Instant::now();
+        let t_mesh_collect = std::time::Instant::now();
         let mesh_data: Vec<_> = self
             .scene_store
             .meshes()
             .map(|(h, data)| (h, data.clone()))
             .collect();
         let mesh_count = mesh_data.len();
+        let mesh_verts_total: usize = mesh_data.iter().map(|(_, d)| d.positions.len()).sum();
+        let mesh_idx_total: usize = mesh_data.iter().map(|(_, d)| d.indices.len()).sum();
+        let mesh_collect_ms = t_mesh_collect.elapsed().as_millis();
+
+        let t_mesh_upload = std::time::Instant::now();
         for (asset_h, data) in mesh_data {
             let input = prism_render::managers::MeshUploadInput {
                 positions: data.positions.clone(),
@@ -661,8 +704,12 @@ impl App {
             }
         }
         log::info!(
-            "mesh upload: {} meshes, {}ms",
+            "mesh upload: {} meshes, {} verts, {} indices, collect={}ms upload={}ms total={}ms",
             mesh_count,
+            mesh_verts_total,
+            mesh_idx_total,
+            mesh_collect_ms,
+            t_mesh_upload.elapsed().as_millis(),
             t_mesh.elapsed().as_millis()
         );
 
@@ -731,7 +778,10 @@ impl App {
         let t = std::time::Instant::now();
         match self.scene_store.load_gltf(path) {
             Ok(h) => {
-                log::info!("gltf parse+import: {}ms", t.elapsed().as_millis());
+                log::info!(
+                    "gltf parse+import: {}ms (see phase breakdown above)",
+                    t.elapsed().as_millis()
+                );
                 log::info!("App::try_load_gltf: loaded {}", path.display());
                 Some(h)
             }
@@ -844,7 +894,7 @@ impl ApplicationHandler for App {
         // Forward window events to the egui overlay first (when the inspector
         // is open) so UI interactions don't also drive the camera. If egui
         // consumes the event, stop here.
-        if self.inspector.show {
+        if self.any_ui_open() {
             if let Some(window) = self.window.as_ref() {
                 if let Some(renderer) = self.renderer.as_mut() {
                     if let Some(overlay) = renderer.egui_overlay_mut() {
@@ -906,7 +956,7 @@ impl ApplicationHandler for App {
                     // Left-click on the 3D scene (not a UI panel) enters
                     // FPS-style pointer lock if not already locked and the
                     // inspector isn't open.
-                    if !self.pointer_locked && !self.inspector.show {
+                    if !self.pointer_locked && !self.any_ui_open() {
                         self.set_locked(true);
                         return;
                     }
@@ -928,7 +978,7 @@ impl ApplicationHandler for App {
                         self.input_state.set_mouse_position(pos);
                         let ext = self.renderer.as_ref().map(|r| r.extent());
                         let orient = self.renderer.as_ref().map(|r| r.orientation());
-                        log::info!(
+                        log::debug!(
                             "TOUCH_DEBUG touch.location=({:.1},{:.1}) extent={:?} \
                              orientation_aspect={:.4} rotation={:?}",
                             pos[0],
@@ -982,44 +1032,62 @@ impl ApplicationHandler for App {
                         // the user can move the cursor freely; releasing ALT
                         // re-locks (handled in the Released branch below).
                         if code == KeyCode::AltLeft || code == KeyCode::AltRight {
-                            if self.pointer_locked && !self.inspector.show {
+                            if self.pointer_locked && !self.any_ui_open() {
                                 self.set_locked(false);
                                 self.alt_temp_release = true;
                             }
                             self.input_state.handle_keyboard(physical_key, state);
                             return;
                         }
-                        // Shift-modifier-aware PBR component toggles. The 14
-                        // bits map 1:1 to `scene_frag.slang`'s
-                        // `PBR_FLAG_*` constants. Shift held selects the
-                        // high group (Shift+1..Shift+4); otherwise the digit
-                        // selects bits 0..9 (keys 1-9, 0).
+                        // Single-select PBR component visualization. Each digit
+                        // maps 1:1 to a `PBR_FLAG_*` constant in
+                        // `scene_frag.slang` (by declaration order); pressing it
+                        // clears the others and isolates that one component as a
+                        // grayscale render (see the shader's isolate path).
+                        // Shift selects the high group (Shift+1..Shift+4).
                         let shift = self.input_state.key_held(crate::input::KeyCode::ShiftLeft)
                             || self.input_state.key_held(crate::input::KeyCode::ShiftRight);
-                        let toggled = match (code, shift) {
-                            (KeyCode::Digit1, false) => Some(0u32), // 直接光照
-                            (KeyCode::Digit2, false) => Some(8),    // 阴影 Shadow (原 Key9)
-                            (KeyCode::Digit3, false) => Some(2),    // 高光 specular
-                            (KeyCode::Digit4, false) => Some(3),    // 金属度
-                            (KeyCode::Digit5, false) => Some(4),    // 粗糙度
-                            (KeyCode::Digit6, false) => Some(5),    // IBL 漫反射 Irradiance
-                            (KeyCode::Digit7, false) => Some(6),    // IBL 高光 Prefiltered+LUT
-                            (KeyCode::Digit8, false) => Some(7),    // 多光源
-                            (KeyCode::Digit9, false) => Some(14),   // AO (GTAO, attenuates IBL diffuse+specular)
-                            (KeyCode::Digit0, false) => Some(9),    // 自发光 Emissive
-                            (KeyCode::Digit1, true) => Some(10),    // Transmission
-                            (KeyCode::Digit2, true) => Some(11),    // Translucency
-                            (KeyCode::Digit3, true) => Some(12),    // Anisotropy
-                            (KeyCode::Digit4, true) => Some(13),    // Clear Coat
+                        let selected = match (code, shift) {
+                            (KeyCode::Digit1, false) => Some(0u32),  // Direct
+                            (KeyCode::Digit2, false) => Some(1),     // Shadow
+                            (KeyCode::Digit3, false) => Some(2),     // Specular
+                            (KeyCode::Digit4, false) => Some(3),     // Metallic
+                            (KeyCode::Digit5, false) => Some(4),     // Roughness
+                            (KeyCode::Digit6, false) => Some(5),     // DiffuseIBL
+                            (KeyCode::Digit7, false) => Some(6),     // SpecularIBL
+                            (KeyCode::Digit8, false) => Some(7),     // MultiLight
+                            (KeyCode::Digit9, false) => Some(8),     // AO (GTAO)
+                            (KeyCode::Digit0, false) => Some(9),     // Emissive
+                            (KeyCode::Digit1, true) => Some(10),     // Transmission
+                            (KeyCode::Digit2, true) => Some(11),     // Translucency
+                            (KeyCode::Digit3, true) => Some(12),     // Anisotropy
+                            (KeyCode::Digit4, true) => Some(13),     // ClearCoat
                             _ => None,
                         };
-                        if let Some(bit) = toggled {
-                            self.debug_flags ^= 1u32 << bit;
+                        if let Some(bit) = selected {
+                            // Single-select: pressing the same key again toggles
+                            // it off (back to black); a different key switches.
+                            self.debug_flags = if self.debug_flags == (1u32 << bit) {
+                                0
+                            } else {
+                                1u32 << bit
+                            };
                             log::info!(
-                                "PBR flags = 0b{:014b} ({})",
-                                self.debug_flags,
-                                self.pbr_flag_labels()
+                                "PBR isolate = {} (flags=0x{:x})",
+                                self.pbr_flag_labels(),
+                                self.debug_flags
                             );
+                        } else if code == KeyCode::Tab {
+                            // Cycle the PostPass debug render-target viewer:
+                            // 0 = normal HDR, 1 = linearized depth, 2 = normal.
+                            self.debug_rt = (self.debug_rt + 1) % 3;
+                            let name = match self.debug_rt {
+                                0 => "normal (HDR tonemap)",
+                                1 => "depth (linearized)",
+                                2 => "normal (view-space)",
+                                _ => "?",
+                            };
+                            log::info!("debug RT = {} ({})", self.debug_rt, name);
                         } else if code == KeyCode::KeyT {
                             // Toggle tonemap mode: 0 = Reinhard, 1 = ACES Narkowicz.
                             self.tonemap_mode = if self.tonemap_mode == 0 { 1 } else { 0 };
@@ -1053,9 +1121,33 @@ impl ApplicationHandler for App {
                                         self.inspector.show = false;
                                     }
                                 }
-                            } else if self.lock_before_inspector {
+                            } else if self.lock_before_inspector && !self.render_graph_viz.show {
                                 // Closing the inspector: re-lock if it was
-                                // locked before we opened it.
+                                // locked before we opened it - but only if no
+                                // other UI panel (F2 viz) is still open.
+                                self.lock_before_inspector = false;
+                                self.set_locked(true);
+                            }
+                        } else if code == KeyCode::F2 {
+                            // Toggle the render-graph visualizer. Same overlay
+                            // lifecycle as F1: lazily create the EguiOverlay on
+                            // first open and free the cursor for UI interaction.
+                            self.render_graph_viz.toggle();
+                            if self.render_graph_viz.show {
+                                self.lock_before_inspector = self.pointer_locked;
+                                self.alt_temp_release = false;
+                                if self.pointer_locked {
+                                    self.set_locked(false);
+                                }
+                                if let Some(renderer) = self.renderer.as_mut() {
+                                    if let Err(e) = renderer.ensure_egui_overlay() {
+                                        log::error!("failed to init egui overlay: {e}");
+                                        self.render_graph_viz.show = false;
+                                    }
+                                }
+                            } else if self.lock_before_inspector && !self.inspector.show {
+                                // Closing the viz: re-lock only if the inspector
+                                // isn't still holding the cursor.
                                 self.lock_before_inspector = false;
                                 self.set_locked(true);
                             }
@@ -1081,7 +1173,7 @@ impl ApplicationHandler for App {
                     if let winit::keyboard::PhysicalKey::Code(code) = physical_key {
                         if (code == KeyCode::AltLeft || code == KeyCode::AltRight)
                             && self.alt_temp_release
-                            && !self.inspector.show
+                            && !self.any_ui_open()
                         {
                             self.set_locked(true);
                             self.alt_temp_release = false;
@@ -1146,6 +1238,13 @@ impl ApplicationHandler for App {
 }
 
 impl App {
+    /// Whether any egui overlay panel (inspector F1 or render-graph viz F2) is
+    /// currently open. Used to gate pointer-lock, scene animation, and egui
+    /// event forwarding so input goes to the UI whenever a panel is visible.
+    fn any_ui_open(&self) -> bool {
+        self.inspector.show || self.render_graph_viz.show
+    }
+
     /// Hit-test a pointer against the debug overlay and apply the resulting
     /// action. Returns `true` if the overlay consumed the click (so the caller
     /// should not also treat it as a camera drag).
@@ -1157,42 +1256,39 @@ impl App {
         false
     }
 
-    /// Human-readable names of the 14 PBR component toggle bits, in bit order
-    /// (0..13). Matches `PBR_FLAG_*` in `shaders/slang/scene_frag.slang`.
-    fn pbr_flag_names() -> &'static [&'static str; 15] {
+    /// Human-readable names of the 14 PBR component bits, in bit order
+    /// (0..13). Matches `PBR_FLAG_*` in `shaders/slang/scene_frag.slang`
+    /// 1:1 (Direct=0, Shadow=1, Specular=2, ..., AO=8, Emissive=9, ...,
+    /// ClearCoat=13). Used by the isolate-mode label and the inspector.
+    fn pbr_flag_names() -> &'static [&'static str; 14] {
         &[
-            "Direct",       // 1
-            "AmbientIBL",   // 2 (inspector only)
-            "Specular",     // 3
-            "Metallic",     // 4
-            "Roughness",    // 5
-            "DiffuseIBL",   // 6
-            "SpecularIBL",  // 7
-            "MultiLight",   // 8
-            "Shadow",       // 2
-            "Emissive",     // 0
-            "Transmission", // Shift+1
-            "Translucency", // Shift+2
-            "Anisotropy",   // Shift+3
-            "ClearCoat",    // Shift+4
-            "AO",           // 9 (GTAO, attenuates IBL)
+            "Direct",       // 1  (bit 0)
+            "Shadow",       // 2  (bit 1)
+            "Specular",     // 3  (bit 2)
+            "Metallic",     // 4  (bit 3)
+            "Roughness",    // 5  (bit 4)
+            "DiffuseIBL",   // 6  (bit 5)
+            "SpecularIBL",  // 7  (bit 6)
+            "MultiLight",   // 8  (bit 7)
+            "AO",           // 9  (bit 8, GTAO)
+            "Emissive",     // 0  (bit 9)
+            "Transmission", // Shift+1 (bit 10)
+            "Translucency", // Shift+2 (bit 11)
+            "Anisotropy",   // Shift+3 (bit 12)
+            "ClearCoat",    // Shift+4 (bit 13)
         ]
     }
 
-    /// Comma-separated list of the currently-set PBR flag names (for logging).
+    /// Name of the currently-isolated PBR component, or "(normal render)"
+    /// when no component is isolated (`debug_flags == 0` = full PBR).
     fn pbr_flag_labels(&self) -> String {
         let names = Self::pbr_flag_names();
-        let mut out = Vec::new();
         for (i, n) in names.iter().enumerate() {
-            if (self.debug_flags >> i) & 1 == 1 {
-                out.push(*n);
+            if self.debug_flags == (1u32 << i) {
+                return (*n).to_string();
             }
         }
-        if out.is_empty() {
-            "(none - baseColor only)".to_string()
-        } else {
-            out.join(", ")
-        }
+        "(normal render)".to_string()
     }
 
     fn render_one_frame(&mut self) {
@@ -1240,11 +1336,11 @@ impl App {
         // Clear transient input state for the next frame.
         self.input_state.begin_frame();
 
-        // Animate cubes: rotate around Y axis. Paused while the inspector is
+        // Animate cubes: rotate around Y axis. Paused while any UI panel is
         // open so user edits to `Transform.rotation` aren't overwritten each
         // frame.
         let elapsed = self.start.elapsed().as_secs_f32();
-        if !self.inspector.show {
+        if !self.any_ui_open() {
             if let Some(world) = self.world.as_mut() {
                 for (_, transform) in world.query_mut::<Transform>() {
                     let angle = elapsed * 0.5; // 0.5 rad/s ≈ 29°/s
@@ -1254,21 +1350,37 @@ impl App {
             }
         }
 
-        // Phase 1 of the egui overlay: run the inspector UI (tessellate +
-        // cache). Must happen before `GraphRenderer::render` so `&mut World`
-        // is still borrowable.
-        if self.inspector.show {
+        // Phase 1 of the egui overlay: tessellate + cache the UI for this
+        // frame. Must happen before `GraphRenderer::render` so `&mut World`
+        // is still borrowable. `EguiOverlay::run_ui` overwrites its cached
+        // pending frame, so when BOTH the inspector (F1) and the render-graph
+        // viz (F2) are open we must run both UIs inside a single `run_ui`
+        // closure - otherwise the second call clobbers the first.
+        if self.any_ui_open() {
             self.inspector.debug_flags = self.debug_flags;
             self.inspector.show_ui = self.show_ui;
             self.inspector.tonemap_mode = self.tonemap_mode;
+            // Refresh the viz's per-frame snapshot while `&GraphRenderer` is
+            // borrowable (the egui closure only holds plain data).
             let window = self.window.clone();
             let inspector = &mut self.inspector;
+            let viz = &mut self.render_graph_viz;
             let world = self.world.as_mut();
             let renderer = self.renderer.as_mut();
             if let (Some(window), Some(world), Some(renderer)) = (window.as_ref(), world, renderer)
             {
+                if viz.show {
+                    viz.refresh_from(renderer);
+                }
                 if let Some(overlay) = renderer.egui_overlay_mut() {
-                    inspector.run(overlay, window, world);
+                    overlay.run_ui(window, |ctx| {
+                        if inspector.show {
+                            inspector.ui(ctx, world);
+                        }
+                        if viz.show {
+                            viz.ui(ctx);
+                        }
+                    });
                 }
             }
             // Push UI-edited tonemap selection back to the app so the `T` key
@@ -1295,6 +1407,7 @@ impl App {
             self.debug_flags,
             self.show_ui,
             self.tonemap_mode,
+            self.debug_rt,
             &self.draw_items,
         );
 
@@ -1312,7 +1425,7 @@ impl App {
 
         // Phase 2 cleanup for the egui overlay: apply stashed platform output
         // (cursor icon, clipboard) now that the window is available again.
-        if self.inspector.show {
+        if self.any_ui_open() {
             if let (Some(window), Some(renderer)) = (self.window.as_ref(), self.renderer.as_mut()) {
                 if let Some(overlay) = renderer.egui_overlay_mut() {
                     overlay.apply_platform_output(window);

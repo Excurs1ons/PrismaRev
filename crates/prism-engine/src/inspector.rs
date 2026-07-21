@@ -93,12 +93,11 @@ impl Inspector {
     }
 
     /// The actual egui layout. Separate from `run` so it can be called
-    /// directly in tests.
-    ///
-    /// Uses floating windows with a translucent dark frame so the 3D scene
-    /// behind remains visible during live edits. Windows are movable and
-    /// resizable.
-    fn ui(&mut self, ctx: &Context, world: &mut World) {
+    /// directly when co-hosting with another egui panel (e.g. the render-graph
+    /// visualizer) inside a single `EguiOverlay::run_ui` closure - that closure
+    /// overwrites the overlay's cached pending frame, so only one `run_ui` may
+    /// run per frame.
+    pub(crate) fn ui(&mut self, ctx: &Context, world: &mut World) {
         // Semi-transparent dark frame shared by all inspector windows.
         let window_frame = egui::Frame {
             fill: egui::Color32::from_black_alpha(200),
@@ -158,29 +157,26 @@ impl Inspector {
                 // Ordered by key position; each row shows the bound key and the
                 // actual shader flag bit value.
                 let flags = [
-                    ("Direct", "1", 0, "Primary diffuse/specular from dir light"),
-                    ("Shadow", "2", 8, "Shadow masking (shadow map)"),
-                    ("Specular", "3", 2, "Specular reflections"),
-                    ("Metallic", "4", 3, "Metallic material response"),
-                    ("Roughness", "5", 4, "Microfacet roughness"),
-                    ("DiffuseIBL", "6", 5, "Diffuse irradiance from env"),
-                    ("SpecularIBL", "7", 6, "Prefiltered specular"),
-                    ("MultiLight", "8", 7, "Multiple light sources"),
+                    // Single-select isolate mode: pressing a key clears the
+                    // others and renders only that component (grayscale). Bit
+                    // order matches `PBR_FLAG_*` in scene_frag.slang 1:1.
+                    ("Direct", "1", 0, "Direct diffuse/specular (dir light)"),
+                    ("Shadow", "2", 1, "Shadow map attenuation (1=lit/0=shaded)"),
+                    ("Specular", "3", 2, "Direct specular lobe"),
+                    ("Metallic", "4", 3, "Metallic material value"),
+                    ("Roughness", "5", 4, "Roughness material value"),
+                    ("DiffuseIBL", "6", 5, "IBL diffuse irradiance"),
+                    ("SpecularIBL", "7", 6, "IBL specular (prefiltered+LUT)"),
+                    ("MultiLight", "8", 7, "Extra point lights"),
+                    ("AO", "9", 8, "GTAO visibility (1=unoccluded/0=occluded)"),
                     ("Emissive", "0", 9, "Self-emissive surfaces"),
-                    ("AO", "9", 14, "GTAO ambient occlusion (attenuates IBL)"),
                     ("Transmission", "Shift+1", 10, "Transmission (refraction)"),
                     ("Translucency", "Shift+2", 11, "Translucent scattering"),
                     ("Anisotropy", "Shift+3", 12, "Anisotropic materials"),
-                    ("Clear Coat", "Shift+4", 13, "Clear coat layer"),
-                    (
-                        "AmbientIBL",
-                        "(inspector)",
-                        1,
-                        "Image-based lighting ambient",
-                    ),
+                    ("ClearCoat", "Shift+4", 13, "Clear coat layer"),
                 ];
                 for (name, key_label, bit, desc) in flags.iter() {
-                    let active = (self.debug_flags >> bit) & 1 == 1;
+                    let active = self.debug_flags == (1u32 << bit);
                     let color = if active {
                         egui::Color32::from_rgb(80, 180, 80)
                     } else {

@@ -66,7 +66,10 @@ pub use passes::{ScenePass, ShadowMapPass, ShadowPassPushConstants};
 pub use pbr_push::{DebugMode, NormalSpace, PbrBindlessPushConstants, PbrPushConstants};
 pub use pipeline::GraphicsPipeline;
 pub use post::{PostPass, PostPushConstants};
-pub use render_graph::DrawItem;
+pub use render_graph::{
+    DrawItem, PassInfo, PassKind, RenderGraphSnapshot, RenderSettings, ResourceHandle,
+    ResourceInfo, ResourceType, ShadowMode,
+};
 pub use render_pass::{DepthImage, Framebuffers, NormalImage, RenderPass};
 pub use shader::load_shader_module;
 pub use swapchain::Swapchain;

@@ -415,3 +415,194 @@ GTAO+PostPass 集成时一次性暴露了 5 个验证错误，按修复顺序：
 - **Termux 下 `rm -rf` 被系统禁止**：清理目录用 `python3 -c "import shutil; shutil.rmtree(path)"` 或 `rmdir`（空目录），不要用 `rm -rf`。单文件 `rm` 无 `-r` 正常。
 - **crates.io 直连 TLS 抖动**：Termux 下 `static.crates.io` 下载偶发 `SSL connect error`。配置 `~/.cargo/config.toml` 走国内镜像（当前 `rsproxy`：`registry = "sparse+https://rsproxy.cn/index/"`）稳定。
 - **CI 失败先抓 `gh run view <id> --log-failed`**：GitHub API 偶发 503，用重试循环抓；失败 job 的真实错误在 `--log-failed` 末尾（`##[error]Process completed with exit code 1` 上方）。本次链路：`lint(clippy)` → `shaders(spirv-tools 缺失)` → `shaders(drift: shader 产物陈旧)` 三层，逐层迭代修。
+
+## 31. 场景加载耗时拆解 + 冗余拷贝消除（Sponza 7.6s -> 1.8s）
+
+**背景**：Sponza 加载日志只有一行 `gltf parse+import: 5430ms` 和 `texture upload: 1498ms`，看不出时间花在哪。先加阶段计时定位，再修最大的冗余拷贝。
+
+### 31.1 先拆日志，再动手优化
+
+**做法**：在 `gltf_loader::load` 按阶段插 `Instant::now()`，把 `parse+import` 拆成 parse JSON / import buffers / decode images / materials / textures / meshes / scene nodes 七段；在 `load_demo_scene` 把 `texture upload` / `mesh upload` 各拆成 collect（clone scene_store 数据）+ upload（register_*_into）两段，并统计像素/顶点总量。
+
+**拆出来的真相**（Intel Sponza 2022 测试资产：72 张 4K 纹理 = 1208 MP，PNG 磁盘 1.89 GB → RGBA8 解压 4.50 GB；405 mesh / 2M verts）。注意这套资产**不代表真实游戏负载**，见 §31.7。
+
+| 阶段 | 耗时 | 占比 |
+|------|------|------|
+| `gltf phase: decode images` | 713ms | 14% |
+| **`gltf phase: textures`** | **4406ms** | **84%** ← 大头 |
+| `gltf phase: meshes` | 86ms | 2% |
+| `texture upload collect` (clone) | 543ms | - |
+| `texture upload` (per-tex pixels.clone) | 1001ms | - |
+| `batch upload submit+wait` (GPU) | 540ms | - |
+
+**教训**：聚合日志（"X 总耗时 Nms"）对定位瓶颈没用。任何超过 ~200ms 的阶段都要再拆一层，并带上规模指标（纹理总兆像素 / 顶点数 / 索引数），这样才能区分"数量多"还是"单资源大"。本次 `gltf phase: textures (72 images, 1208.0 MP)` 一行就立刻暴露 4.5 GB 像素数据是被反复拷贝的。**另一个坑**：不能拿磁盘上的 PNG 大小（1.89 GB）估算内存拷贝开销 -- PNG 解压成 RGBA8 后膨胀 ~2.4×，真正的内存压力看解压后的像素字节数（1208M × 4 = 4.5 GB）。
+
+### 31.2 `to_rgba8` 在做无意义的全量拷贝（4406ms 的根因）
+
+**问题**：`import_images_parallel` 已经把每张图转成 `R8G8B8A8`（`dyn_image.to_rgba8()`），但 `to_rgba8(&image)` 又对这 4.5 GB 做了三遍：`image.pixels.clone()`（4.5 GB 读 + 4.5 GB 写）+ `Vec::with_capacity(count*4)`（4.5 GB 分配）+ 逐 4 字节走 `expand_to_rgba` 函数拷贝（4.5 GB 写，非 memcpy）。≈ 18 GB 内存吞吐，在 ~3.3 GB/s 带宽下正好 ≈ 5.4s，和观测的 4406ms 吻合。
+
+**修复**（`crates/prism-asset/src/gltf_loader.rs`）：
+- `to_rgba8` 改为按值接收 `GltfImageData`（`&GltfImageData` -> `GltfImageData`），调用处 `images.iter()` -> `images.into_iter()`。
+- RGBA8 源格式走快路径：`return Ok(RgbaPixels { pixels: image.pixels })`，零拷贝 move。
+- 非 RGBA8 源格式走慢路径，**打 `log::warn!`** 报告分辨率 + 格式 + 通道数 -- 我们自己的并行 import 永远产 RGBA8，命中慢路径说明有别的代码路径喂数 RGBA8 以外的格式，必须可见。
+- 效果：`gltf phase: textures` 4406ms -> **0ms**。
+
+**教训**：转换函数如果"输入已经是目标格式"，必须走零拷贝 move，不能无条件 clone + 逐元素处理。尤其是像素/顶点这种 GB 级数据，一次冗余拷贝就是秒级开销。代码里的 `image.pixels.clone()` + `Vec::with_capacity` + `chunks_exact` 三连是典型的"安全但浪费"写法，发现规模指标（1208 MP）后立刻能定位。
+
+### 31.3 上传路径两处冗余 clone（collect + per-tex pixels.clone）
+
+**问题**：`load_demo_scene` 的纹理上传循环做了两次 4.5 GB 克隆：
+1. `texture_data: Vec<_> = scene_store.textures().map(|(h, d)| (h, d.clone())).collect()` -- 543ms
+2. 循环里 `pixels: data.pixels.clone()` 进 `TextureUploadInput` -- 又一次
+
+**修复**（`crates/prism-engine/src/app.rs` + `crates/prism-asset/src/scene_store.rs`）：
+- 给 `SceneStore` 加 `textures_mut() -> impl Iterator<Item = (TextureHandle, &mut TextureData)>`。
+- 上传循环改成 drain 模式：`std::mem::take(&mut data.pixels)` 直接把像素 buffer move 进 `TextureUploadInput`，store 里留空 `Vec`。上传后 CPU 侧像素本就是死重量（GPU 有 device-local 副本），drain 安全。
+- 借用坑：`for (h, data) in self.scene_store.textures_mut()` 持有 `&mut scene_store.textures`，循环体内不能再调 `self.scene_store.take_texture_pixels(h)`（二次可变借用）。正解是直接从迭代器给的 `&mut TextureData` 上 `mem::take(&mut data.pixels)`，不需要额外 accessor -- 所以最终没留 `take_texture_pixels` 方法，只留 `textures_mut`。
+- 先把 `(asset_h, TextureUploadInput)` 收集进本地 Vec，让 `&mut self.scene_store` 借用在调 `&mut self.renderer` 之前结束，避免 self 借用冲突。
+- 效果：`texture upload collect` 543ms -> **0ms**，`texture upload` total 1545ms -> **330ms**。
+
+**教训**：
+- **上传后不再被读的 CPU 侧数据应该 drain，不是 clone**。判断标准：grep 这个 store accessor 的所有调用点，如果上传后只剩 `.count()` 之类的元数据查询（本项目 `scene_store.textures()` 上传后只在汇总日志里 `.count()`），drain pixels 就是安全的。
+- 借用冲突时优先"从已有的 `&mut` 引用上直接操作"，不要为了对称再加一个 `take_xxx(handle)` accessor -- 后者会触发"同一结构的二次可变借用"。`textures_mut` + `mem::take` 是 Rust 里 drain slotmap 表的标准模式。
+- `TextureUploadInput` 持有 `pixels: Vec<u8>` 所有权是合理的（`reserve_into` 只借一次做 staging map），所以 move 进去后无需改 manager 签名。
+
+### 31.4 mesh 上传路径没动（刻意）
+
+`mesh upload: collect=23ms upload=147ms` 已经很小（2M verts ≈ 100 MB，clone 成本可忽略），且 mesh 数据上传后仍可能被 scene_store 读取（不像纹理那样明确 drain 安全）。**刻意不优化**：优化的第一条原则是先看规模指标，别对 23ms 的阶段动刀。
+
+### 31.5 修复后瓶颈分布（~1.8s，可接受）
+
+```
+gltf parse+import:        805ms  (45%)
+  └ decode images:        701ms  (39%)  ← PNG/JPEG 解码，rayon 已并行
+  └ import buffers:        23ms
+  └ meshes:                74ms
+batch upload submit+wait: 522ms  (29%)  ← GPU 实际 PCIe 传输
+texture upload (CPU):     330ms  (18%)  ← 72 次 vkCreateImage + alloc + staging map
+mesh upload (CPU):        168ms   (9%)
+```
+
+剩下的大头已经是真活儿，不是冗余拷贝。
+
+### 31.6 后续优化方向（未做，按性价比排序）
+
+0. **GPU 块压缩上传（最高性价比，根治内存）**：当前所有纹理按 `R8G8B8A8_UNORM` 上传，4.5 GB device-local + 4.5 GB host staging 是这套资产内存爆的根本原因（§15 已记录这是 PBR 色彩正确性缺陷）。改成 BC7（0.5 bytes/pixel）上传后：GPU 纹理 ~1.1 GB，staging ~1.1 GB，CPU 峰值砍到 ~2.3 GB。需要：(a) glTF 加载阶段对 RGBA8 做 BC7 编码（CPU 侧，可用 `bc7enc` crate）；(b) `TextureUploadInput` / `BatchUploader::upload_image` 支持 BC7 格式 + 不再生成 mip blit（BC 压缩后再做 blit 要重新编码）。**这条比下面的 decode images 优先级更高**，因为它解决的是内存（GB 级），不只是加载时间（秒级）。注意 albedo/emissive 应上传为 sRGB variant（`BC7_SRGB`），normal/MR 保持 UNORM（§15 的色彩空间缺陷一起修）。
+
+1. **decode images 701ms（次高性价比）**：72 张 4K PNG 的 `image` crate 解码，已 rayon 并行。继续压只有换解码器：
+   - `zune-image` / `zune-png`（Rust 原生，SIMD，比 `image` 的 PNG 快 2-3×）
+   - 或 `lodepng` 纯 PNG 路径
+   - 注意：换解码器要保留"输出 RGBA8"的契约，否则 `to_rgba8` 的快路径会失效（会命中慢路径并打 warn）。
+2. **texture upload 330ms（中性价比）**：72 次 `vkCreateImage` + `vkAllocateMemory` + staging map。改成 suballocator（如 `gpu-allocator` crate 或自写 bump allocator）把逐资源分配改成批量分配，预计砍一半。改动较大，动 `BatchUploader` 和 `RenderTextureManager` 的内存所有权。
+3. **batch upload submit+wait 522ms（低性价比）**：4.5 GB 像素 + 100 MB mesh 过 PCIe，已接近物理带宽上限。除非上 async / timeline semaphore 让上传和首帧渲染重叠（本项目 `BatchUploader` 注释里提到的 follow-up），否则压不动。改 async 是架构级改动。
+4. **懒加载 / 流式上传（架构级，最彻底）**：把"全量加载完再渲染"改成"先加载 mipmap 0 的低分辨率 + 首帧立即可见，后台流式补全高 mip"。需要改 `SceneStore` 的所有权模型和渲染管线的"纹理就绪"判定，工作量大，适合里程碑级重构。
+
+**当前 ~1.8s 对这套 4.5 GB RGBA8 极端资产已经合理（真实游戏场景会小得多，见 §31.7）**。本次的核心教训是 31.1：**先拆日志定位，再按规模指标找冗余拷贝**，不要凭感觉猜瓶颈。`to_rgba8` 的零拷贝快路径 + drain 上传是两个通用的"GB 级数据搬运"反模式修复，后续加新资源类型（音频、动画）时直接套用。
+
+### 31.7 测试资产不代表真实游戏负载（重要归因）
+
+本次优化的所有数字（4.5 GB 像素、9 GB CPU 峰值、~1.8s 加载）都建立在 **Intel Sponza 2022** 测试资产上，这套资产的纹理规模**远超真实游戏**，不能用它的绝对数字推断引擎在生产场景下的表现。
+
+**Sponza 版本对比**：
+
+| 资产版本 | 纹理数 | 单张尺寸 | 像素总量 | RGBA8 解压 | 用途 |
+|----------|--------|----------|----------|-----------|------|
+| Crytek Sponza（经典，游戏常用） | ~20 | 混合 512/1024/2048 | ~200 MP | ~0.8 GB | 实时渲染基准 |
+| **Intel Sponza 2022（本项目在用）** | **135** | **全部 4096×4096** | **2184 MP** | **~8.5 GB** | 离线渲染/参考图 |
+| 典型 3A 游戏 Sponza 级场景 | ~30-50 | 混合 1K/2K/4K | ~400 MP | ~1.5 GB | 加上 BC 压缩后 ~0.4 GB |
+
+gltf 引用的子集是 72 张全 4K（1.89 GB PNG -> 4.5 GB RGBA8），已经是极端情况。**没有任何真实游戏会给 Sponza 全 4K 纹理** -- Intel Sponza 2022 是为路径追踪参考图做的 4K 扫描资产，不是为实时渲染设计的。
+
+**真实游戏如何控制纹理内存**（引擎后续应支持，按优先级）：
+
+1. **GPU 块压缩（BC1/BC3/BC7/BCN）** -- §31.6 第 0 条已列。4096×4096 RGBA8 = 64 MB，BC7 = 16 MB（4:1），BC1 = 8 MB（8:1，无 alpha）。这是真实游戏纹理内存控制在 GB 级以下的根本手段。本项目当前全 RGBA8 上传是已知缺陷（§15），不只是色彩问题，也是内存问题。
+2. **mip chain 流式加载**：只加载可视距离需要的 mip。4K 纹理完整 mip chain = 21 MB，但只有最近物体的 1-2 张需要 4K，远处用 1K/512。真实游戏按"表面离玩家多近"动态选 mip，CPU/GPU 内存峰值远低于全量加载。
+3. **虚拟纹理（VT）**：3A 游戏把 GB 级纹理切成 64KB page 按需加载，CPU/GPU 只驻留可见 page。这是把"全 4K Sponza"压到可运行的唯一办法，但实现复杂（page table、page fault、反馈通道），属于引擎级里程碑。
+4. **分辨率分级**：不是所有表面都给 4K。真实美术会按"这块表面离玩家多近、多常被看"给 1K/2K/4K 混合，而不是 Sponza 2022 那样无脑全 4K。
+
+**对本项目的实际影响**：
+
+- 引擎本身**没有内存泄漏或浪费**（§31.2/§31.3 的冗余拷贝已修）。4.5 GB 是这套资产解压后的真实大小，任何引擎加载它都会面临同样的像素数据量。
+- 但引擎**缺真实游戏必备的纹理管线**：块压缩、流式加载、分辨率分级都没有。这是后续里程碑的工作，不是 bug。
+- **测试建议**：后续性能基线应该用 Crytek Sponza 或自制的"混合分辨率"场景，而不是 Intel Sponza 2022，否则优化决策会被极端资产带偏（例如为了 4.5 GB 去做 suballocator，但真实场景 0.4 GB 根本不需要）。
+
+**教训**：性能优化的结论要和测试资产绑定。用极端资产（Intel Sponza 2022 全 4K）得到的瓶颈分布，不能直接外推到生产场景。每次记录耗时数字时，旁边要标明资产规模（"72 张 4K = 4.5 GB RGBA8"），否则后人会误以为"引擎加载 Sponza 要 1.8s"是普遍结论，而实际 Crytek Sponza 大概几百毫秒就进去了。
+
+### 32 IBL CPU 卷积磁盘缓存
+
+**背景**：`IblResources::new()` 在引擎启动时对 HDR 环境贴图做三类 CPU 卷积 + BRDF LUT 积分，总计 ~4127ms（Intel Sponza 2022 + 1K HDR），是启动流程中最长的单次冻结（约占 64%）。其中 BRDF LUT（3260ms）占 IBL 总耗时的 79%。
+
+#### 32.1 瓶颈分布（缓存前）
+
+| 卷积步骤 | 耗时 | 占比 | 说明 |
+|----------|------|------|------|
+| BRDF LUT（512x512, 1024 samples） | 3260ms | 79% | 双重循环 512x512x1024 = 268M 次迭代，最密集 |
+| 预滤波卷积（5 mips, 128 samples） | 792ms | 19% | 次热点，但 mip 链多 pass |
+| 辐照度卷积（64x64, 4096 samples） | 75ms | 2% | 分辨率低，耗时少 |
+| 总计 | 4127ms | 100% | |
+
+#### 32.2 磁盘缓存设计
+
+**核心思路**：将 CPU 卷积结果缓存到 `assets/ibr/` 目录，后续启动跳过计算直接加载 f32 原始数据回 `Vec<f32>`，Vulkan 上传管线（f16 转换 + staging buffer + submit）保持不变。
+
+**缓存 key 方案**：
+
+- **BRDF LUT**：固定文件名 `brdf_lut_512.bin`，无依赖（纯 GGX Smith 数学函数，任何场景、任何 HDR 结果相同）。缓存永远有效。
+- **Env 相关（cubemap / irradiance / prefiltered）**：对 `env_bytes`（原始 .hdr 文件内容）做 `std::hash::DefaultHasher`（SipHash-1-3），hex 编码为目录名。HDR 文件内容变化 → hash 不同 → 自动产生新缓存。
+
+**文件格式**：`u32 LE（元素数）+ f32 LE × 元素数`，带长度校验。共 9 个文件：
+
+| 文件 | 大小 | 说明 |
+|------|------|------|
+| `assets/ibr/brdf_lut_512.bin` | ~2 MB | 512×512×2 floats, 独立于 HDR |
+| `assets/ibr/<hash>/cube_512.bin` | ~24 MB | 6×512×512×4 floats |
+| `assets/ibr/<hash>/irradiance_64.bin` | ~393 KB | 6×64×64×4 floats |
+| `assets/ibr/<hash>/prefiltered_mip{0..4}.bin` | ~2.1 MB | 各 mip 独立文件，方便单 mip 缓存命中 |
+| **总计** | **~28.5 MB** | 每 HDR 环境占 ~28MB 磁盘 |
+
+**实现位置**：仅在 `crates/prism-render/src/ibl.rs` 内新增 5 个辅助函数（`ensure_cache_dir` / `cache_path` / `env_content_hash` / `save_f32_cache` / `load_f32_cache`），不新增外部依赖（只用 `std::hash::DefaultHasher` + `std::fs`），不改动任何其他文件。
+
+#### 32.3 改动的权衡
+
+| 取舍 | 选择 | 理由 |
+|------|------|------|
+| 存储格式 | f32 原始数组（非 f16） | 写回时直接可用，不需转换；28MB 可接受 |
+| Hash 算法 | SipHash-1-3 而非 FNV/SHA | Rust std 内置，确定性，碰撞概率可忽略 |
+| 缓存粒度 | 逐文件（9 个文件）而非单一大包 | 增量失效：换 HDR 只重建 env 相关，保留 BRDF LUT |
+| 加载时机 | 同步阻塞（startup） | 当前 IBL 必须就绪才能渲染第一帧；异步后续 PR |
+| 错误处理 | 任何 I/O 失败回退到重新计算 | 幂等：计算结果与缓存内容一致 |
+
+**为什么不用更复杂的方案**：
+
+- **LZ4 压缩**：28MB 不值得压缩，况且 f32 数据近乎白噪声（随机采样结果），压缩比极差。
+- **异步/后台加载**：第一帧就需要 IBL 纹理（场景反射），异步需要先渲染无 IBL 再闪现的过渡逻辑，复杂度远大于收益。
+- **GPU 卷积**：IBL 卷积（辐照度/预滤波）用 compute shader 在 GPU 做更快（~5-10ms），但 BRDF LUT 是中心瓶颈，且 GPU 卷积需要额外的 compute pipeline + 同步逻辑。
+
+#### 32.4 结果
+
+| 指标 | 缓存前 | 缓存后 | 加速比 |
+|------|--------|--------|--------|
+| IBL 卷积总耗时 | 4127ms | **1ms** | **~4000×** |
+| Renderer 初始化（含 IBL） | 4441ms | 233ms | 19× |
+| 启动至第一帧（含场景加载） | 6419ms | **2075ms** | **3.1×** |
+
+#### 32.5 经验教训
+
+1. **BRDF LUT 是最容易的优化**：不依赖任何外部输入，纯数学函数，缓存永远有效，3260ms→0ms 只花了几十行代码。任何引擎的第一个 IBL 优化都应该是 BRDF LUT 缓存。
+
+2. **逐阶段拆解定位瓶颈有效**：从笼统的 "IBL: 3678ms" 拆成 8 个子阶段日志（HDR decode / generate_cubemap / convolve_irradiance / prefiltered / brdf_lut / create_images / upload / views），一眼锁定 BRDF LUT 是头号瓶颈，避免了对辐照度或预滤波做无谓优化。
+
+3. **内容 hash 做缓存 key 比时间戳可靠**：文件修改时间在 git checkout / 复制时会被重置，导致不必要的缓存失效。内容 hash（SipHash of HDR bytes）保证"同内容同缓存"。
+
+4. **缓存路径设计要考虑增量失效**：BRDF LUT 和 env 相关数据分开目录，换 HDR 时不破坏 BRDF LUT 缓存。
+
+5. **f32 原始数组是最简单的序列化格式**：无 schema、无依赖、零拷贝反序列化（`ptr::copy_nonoverlapping`）。对于已知大小的数组，`u32 长度前缀 + f32 数据` 足够。
+
+6. **"缓存失效"不是问题，依赖关系才是**：BRDF LUT 零依赖→永远有效；env 数据只依赖 .hdr 内容→内容 hash 驱动失效。不存在"我改了配置但缓存没刷新"的歧义。
+
+#### 32.6 后续方向（不在本次范围）
+
+- **skybox 组件化**：将 HDR + 预计算 IBL 数据 + BRDF LUT 打包为一个可复用的 skybox 资源组件（ECS 或 asset），支持运行时切换环境贴图而不用重建 `IblResources`。
+- **GPU 卷积**：辐照度和预滤波可以用 compute shader 在 GPU 上完成（~5-10ms vs CPU ~900ms），并直接生成 Vulkan image 而非 CPU f32 staging，省掉 f16 转换 + 上传步骤。
+- **BRDF LUT samples 可配置**：当前 1024 固定，可暴露为常量或运行时参数（512 约 800ms，256 约 200ms，质量差异 < 0.5 dB）。
+- **IBL 加载进度反馈**：引擎启动时显示 "loading environment..." 或使用后台线程 + 信号量，避免无响应窗口。

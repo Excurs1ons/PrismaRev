@@ -113,23 +113,50 @@ pub(crate) fn load(
     bytes: &[u8],
     base_dir: Option<&Path>,
 ) -> Result<SceneHandle> {
+    // Phase-level timing: the aggregate "gltf parse+import: Nms" log from
+    // `App::try_load_gltf` covers this whole function but hides where the
+    // time goes. For Sponza-class scenes the dominant cost is image decode,
+    // so each phase below logs its own elapsed time so we can spot regressions.
+    let t_total = std::time::Instant::now();
+
+    let t_parse = std::time::Instant::now();
     let gltf = Gltf::from_slice(bytes)
         .with_context(|| "failed to parse glTF bytes (need glTF 2.0 / .glb)")?;
     let doc = &gltf.document;
     let blob = gltf.blob.clone();
+    log::info!(
+        "  gltf phase: parse JSON: {}ms",
+        t_parse.elapsed().as_millis()
+    );
+
+    let t_bufs = std::time::Instant::now();
     let buffers = gltf::import_buffers(doc, base_dir, blob)
         .with_context(|| "failed to import glTF buffers (external .bin not found?)")?;
+    log::info!(
+        "  gltf phase: import buffers ({}): {}ms",
+        buffers.len(),
+        t_bufs.elapsed().as_millis()
+    );
+
     // Decode images in parallel. `gltf::import_images` decodes them serially
     // on the calling thread, which is the dominant cost for large scenes
     // (Sponza: 72 x 4K PNGs, ~15s). We collect each image's source as an
     // owned description on the main thread, then rayon-decode them all.
+    let t_imgs = std::time::Instant::now();
     let images = import_images_parallel(doc, base_dir, &buffers)
         .with_context(|| "failed to import glTF images (external textures not found?)")?;
+    log::info!(
+        "  gltf phase: decode images ({}): {}ms",
+        images.len(),
+        t_imgs.elapsed().as_millis()
+    );
+
     let (doc, buffers, images) = (doc.clone(), buffers, images);
 
     // ---- 1. Materials -------------------------------------------------
-    // First pass: material parameters only, no texture refs yet — textures
+    // First pass: material parameters only, no texture refs yet - textures
     // are inserted into the store and assigned indices in the next pass.
+    let t_mats = std::time::Instant::now();
     let mut material_indices: Vec<MaterialData> = Vec::with_capacity(doc.materials().len());
     for mat in doc.materials() {
         let pbr = mat.pbr_metallic_roughness();
@@ -209,14 +236,28 @@ pub(crate) fn load(
     for data in material_indices {
         material_handles.push(store.insert_material(data));
     }
+    log::info!(
+        "  gltf phase: materials ({}): {}ms",
+        material_handles.len(),
+        t_mats.elapsed().as_millis()
+    );
 
     // ---- 2. Textures --------------------------------------------------
     // `gltf::import_slice` already decoded every image to 8-bit-per-channel
     // pixels in one of: R8, R8G8, R8G8B8, R8G8B8A8, R16, R8G8B16, etc. We
     // convert everything to RGBA8 so the renderer has one format to handle.
+    //
+    // `import_images_parallel` already promotes every image to
+    // `R8G8B8A8` (see `to_rgba8` there), so the common case is a pure
+    // move of the decoded pixel buffer - no re-alloc, no re-copy. The
+    // slow path (non-RGBA8 source formats) is rare and logged as a warn
+    // so we notice if a scene starts hitting it.
+    let t_texs = std::time::Instant::now();
     let mut texture_handles: Vec<Option<TextureHandle>> = vec![None; images.len()];
-    for (image_idx, image) in images.iter().enumerate() {
+    let mut tex_pixels_total: usize = 0;
+    for (image_idx, image) in images.into_iter().enumerate() {
         let rgba = to_rgba8(image)?;
+        tex_pixels_total += (rgba.width as usize) * (rgba.height as usize);
         let data = TextureData {
             name: format!("image_{image_idx}"),
             width: rgba.width,
@@ -226,6 +267,12 @@ pub(crate) fn load(
         };
         texture_handles[image_idx] = Some(store.insert_texture(data));
     }
+    log::info!(
+        "  gltf phase: textures ({} images, {:.1} MP): {}ms",
+        texture_handles.len(),
+        tex_pixels_total as f64 / 1_000_000.0,
+        t_texs.elapsed().as_millis()
+    );
 
     // Second pass on materials: wire texture refs using the handles above.
     for (mat, handle) in doc.materials().zip(material_handles.iter().copied()) {
@@ -271,17 +318,29 @@ pub(crate) fn load(
     // ---- 3. Meshes ---------------------------------------------------
     // One glTF `Mesh` becomes several `MeshData` (one per Primitive). The
     // renderer draws each independently.
+    let t_meshs = std::time::Instant::now();
     let mut mesh_handles: Vec<Vec<MeshHandle>> = Vec::with_capacity(doc.meshes().len());
+    let mut prim_total: usize = 0;
+    let mut vert_total: usize = 0;
     for mesh in doc.meshes() {
         let mut prim_handles = Vec::with_capacity(mesh.primitives().len());
         for (prim_idx, prim) in mesh.primitives().enumerate() {
             let data = primitive_to_mesh(&prim, &buffers, mesh.index(), prim_idx)?;
+            vert_total += data.positions.len();
+            prim_total += 1;
             prim_handles.push(store.insert_mesh(data));
         }
         mesh_handles.push(prim_handles);
     }
+    log::info!(
+        "  gltf phase: meshes ({} prims, {} verts): {}ms",
+        prim_total,
+        vert_total,
+        t_meshs.elapsed().as_millis()
+    );
 
     // ---- 4. Scene + instances ----------------------------------------
+    let t_nodes = std::time::Instant::now();
     let scene = doc
         .default_scene()
         .or_else(|| doc.scenes().next())
@@ -297,6 +356,14 @@ pub(crate) fn load(
             scene_handle,
         )?;
     }
+    log::info!(
+        "  gltf phase: scene nodes: {}ms",
+        t_nodes.elapsed().as_millis()
+    );
+    log::info!(
+        "  gltf phase: TOTAL: {}ms",
+        t_total.elapsed().as_millis()
+    );
     Ok(scene_handle)
 }
 
@@ -586,24 +653,58 @@ fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
 }
 
 /// Convert glTF's decoded image data to RGBA8. glTF's import step already
-/// gives us 8-bit-per-channel pixels in one of the formats below; we
-/// promote everything to RGBA8 with explicit channel expansion.
-fn to_rgba8(image: &GltfImageData) -> Result<RgbaPixels> {
+/// gives us 8-bit-per-channel pixels in one of the formats below; we promote
+/// everything to RGBA8 with explicit channel expansion.
+///
+/// Takes `image` by value so the already-`R8G8B8A8` common case (the only
+/// format `import_images_parallel` produces) can move the pixel buffer
+/// straight into the result with zero re-alloc / re-copy. Any other format
+/// hits the slow expansion path and logs a `warn` so it's visible - on
+/// Sponza-class scenes the redundant ~5 GB copy behind the slow path was
+/// the dominant load cost.
+fn to_rgba8(image: GltfImageData) -> Result<RgbaPixels> {
     use gltf::image::Format;
     let w = image.width;
     let h = image.height;
-    let pixels = image.pixels.clone();
+
+    // Fast path: source is already RGBA8 - just take the buffer.
+    if image.format == Format::R8G8B8A8 {
+        let expected = (w as usize) * (h as usize) * 4;
+        if image.pixels.len() != expected {
+            return Err(anyhow!(
+                "glTF image pixel buffer size {} does not match {}x{}*4",
+                image.pixels.len(),
+                w,
+                h
+            ));
+        }
+        return Ok(RgbaPixels {
+            width: w,
+            height: h,
+            pixels: image.pixels,
+        });
+    }
+
+    // Slow path: non-RGBA8 source. Rare in practice (our parallel import
+    // always produces RGBA8), but keep the channel-expansion logic so we
+    // degrade correctly if a future code path feeds us raw glTF image data.
     let channels = match image.format {
         Format::R8 => 1,
         Format::R8G8 => 2,
         Format::R8G8B8 => 3,
-        Format::R8G8B8A8 => 4,
         other => {
             return Err(anyhow!(
                 "unsupported glTF image format {other:?} (only 8-bit 1/2/3/4 channel formats supported)"
             ))
         }
     };
+    log::warn!(
+        "gltf texture {w}x{h} has non-RGBA8 source format {:?} ({} channels); \
+         falling back to per-pixel channel expansion",
+        image.format,
+        channels
+    );
+    let pixels = image.pixels;
     let count = (w as usize) * (h as usize);
     if pixels.len() != count * channels {
         return Err(anyhow!(

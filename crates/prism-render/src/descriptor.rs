@@ -178,7 +178,10 @@ pub struct FrameUBOData {
     /// SRGB swapchain encode. 0 = Reinhard (`x/(x+1)`), 1 = ACES (Narkowicz).
     /// Switchable at runtime from the inspector / `T` key. offset 240.
     pub tonemap_mode: u32, // offset 240
-    pub _pad: [u32; 3],                 // offset 244..255 (std140 16-byte tail)
+    /// Scene colour viewport size in pixels (xy). Used by the fragment shader
+    /// to derive screen-space UVs for sampling the screen-space AO texture.
+    pub viewport_size: [f32; 2],        // offset 244..251
+    pub _pad: u32,                      // offset 252..255 (std140 16-byte tail)
 }
 
 /// Per-frame UBO buffer and its descriptor set.
@@ -257,9 +260,9 @@ mod tests {
 
     #[test]
     fn frame_ubo_data_size_is_256() {
-        // std140 tail padding: tonemap_mode(u32 @ 240) + _pad([u32;3] @ 244)
-        // = 256 bytes total (16-byte aligned, matching the Slang `FrameUBO`
-        // mirror in common.slang).
+        // std140 tail padding: tonemap_mode(u32 @ 240) + viewport_size([f32;2] @ 244)
+        // + _pad(u32 @ 252) = 256 bytes total (16-byte aligned, matching the
+        // Slang `FrameUBO` mirror in common.slang).
         assert_eq!(std::mem::size_of::<FrameUBOData>(), 256);
     }
 
