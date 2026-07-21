@@ -21,7 +21,7 @@ public struct FrameUBO
     public uint     tonemapMode;     // offset 240 (0 = Reinhard, 1 = ACES)
     public float    viewportW;       // offset 244 - scene colour viewport width, px
     public float    viewportH;       // offset 248 - scene colour viewport height, px
-    public uint     _pad2;           // offset 252
+    public uint     giMode;          // offset 252 (0=Off, 2=On; gates GI indirect diffuse)
 };
 
 // Vertex stream matching mesh.vert input locations 0..4.

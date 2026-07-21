@@ -44,6 +44,9 @@ pub struct Inspector {
     /// Tonemap mode (0 = Reinhard, 1 = ACES Narkowicz). Mirrors `App::tonemap_mode`
     /// and is synced each frame; editable here and pushed back to the app.
     pub tonemap_mode: u32,
+    /// GI mode (0 = Off, 2 = On). Mirrors `GraphRenderer::gi_mode()` and is
+    /// synced each frame; editable here and pushed back to the renderer.
+    pub gi_mode: u32,
 }
 
 impl Default for Inspector {
@@ -58,6 +61,7 @@ impl Default for Inspector {
             debug_flags: crate::app::DEFAULT_PBR_FLAGS,
             show_ui: true,
             tonemap_mode: 0,
+            gi_mode: 0,
         }
     }
 }
@@ -210,6 +214,21 @@ impl Inspector {
                         .clicked()
                     {
                         self.tonemap_mode = 1;
+                    }
+                });
+                ui.label("GI (key G to toggle):");
+                ui.horizontal(|ui| {
+                    if ui
+                        .selectable_label(self.gi_mode == 0, "Off")
+                        .clicked()
+                    {
+                        self.gi_mode = 0;
+                    }
+                    if ui
+                        .selectable_label(self.gi_mode == 2, "On")
+                        .clicked()
+                    {
+                        self.gi_mode = 2;
                     }
                 });
             });

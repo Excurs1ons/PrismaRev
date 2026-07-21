@@ -25,10 +25,12 @@ pub mod batch;
 pub mod bindless;
 pub mod buffer;
 pub mod capabilities;
+pub mod compute;
 pub mod context;
 pub mod descriptor;
 pub mod egui_overlay;
 pub mod gizmo;
+pub mod gi;
 pub mod graph_renderer;
 pub mod gtao;
 pub mod hdr;
@@ -41,6 +43,7 @@ pub mod pipeline;
 pub mod post;
 pub mod render_graph;
 pub mod render_pass;
+pub mod scene_scope;
 pub mod shader;
 /// Slang-reflection-generated binding constants (set/binding indices, entry
 /// point names, push-constant sizes). Regenerate with `xtask/shader-bindgen`
@@ -58,6 +61,10 @@ pub use descriptor::{
     DescriptorLayout, DescriptorPool, FrameUBO, FrameUBOData, GpuLight, LIGHT_MAX,
 };
 pub use egui_overlay::EguiOverlay;
+pub use gi::{
+    eval_sh9, sample_probe_irradiance, sh_basis, trilinear_weights, world_to_probe_coord,
+    ProbeVolumeInfo, SH_COEFF_COUNT,
+};
 pub use gizmo::Gizmo;
 pub use graph_renderer::GraphRenderer;
 pub use gtao::{GtaoFrameInputs, GtaoPass, GtaoPushConstants};

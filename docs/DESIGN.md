@@ -154,7 +154,7 @@ ShadowMapPass → ScenePass → GtaoPass → PostPass
 - 接入点：`indirectDiffuse` 加到现有 IBL diffuse irradiance 旁边（两者都是 diffuse 间接光，
   相加或按 `PBR_FLAG_GI` 选择）。
 - 不动：前向单 shader 结构、现有 PBR / 阴影 / GTAO 采样、specular 走 IBL prefiltered（specular 间接光已由 IBL 覆盖，GI 只补 diffuse）。
-- 新增 `PBR_FLAG_GI`（bit 15）开关；`RenderSettings::gi_mode` 复用（0=Off，非0=On；baked 无 Update 状态，故只 0/非0）。
+- 新增 `PBR_FLAG_GI`（bit 14）开关；`RenderSettings::gi_mode` 复用（0=Off，非0=On；baked 无 Update 状态，故只 0/非0）。
 
 ### 6.6 迁移步骤（可拆 PR，每步独立可验证、CI 不红）
 

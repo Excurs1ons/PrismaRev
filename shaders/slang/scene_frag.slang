@@ -18,6 +18,8 @@
 //   set 3, binding 1 - shadow comparison sampler
 //   set 4, binding 0 - previous-frame GTAO R8 visibility texture (Sampler2D, combined)
 //                      Sampled only when PBR_FLAG_AO is set; 1-frame latency.
+//   set 5, binding 0 - probe volume 3D texture (Texture3D, RGBA16F, integer Load)
+//   set 5, binding 1 - probe volume grid metadata UBO (ProbeVolumeInfo)
 // brdf LUT: registered in the bindless Texture2D[] table at slot pc.env_handle
 //           (the env_handle push constant is repurposed for the BRDF LUT index).
 // Push constants: PbrBindlessPush (96 bytes, mirrors Rust
@@ -34,6 +36,7 @@
 //          -entry fragmentMain -stage fragment -fvk-use-entrypoint-name \
 //          -o scene_frag.frag.spv
 import common;
+import gi;
 
 // ---- set 0, binding 0 - per-frame UBO (unchanged) -------------------
 [[vk::binding(0, 0)]]
@@ -107,6 +110,17 @@ SamplerComparisonState shadowSampler;
 [[vk::binding(0, 4)]]
 Sampler2D aoTex;
 
+// ---- set 5, binding 0 - probe volume 3D texture (RGBA16F) ----
+// Regular grid of order-2 SH probes; coefficient c occupies depth slices
+// [c*dims.z, (c+1)*dims.z). Sampled with integer Load + manual trilinear in
+// gi.slang (no hardware sampler — avoids cross-coefficient bleed).
+[[vk::binding(0, 5)]]
+Texture3D probeVolume;
+
+// ---- set 5, binding 1 - probe volume grid metadata UBO ----
+[[vk::binding(1, 5)]]
+ConstantBuffer<ProbeVolumeInfo> probeInfo;
+
 // ---- push constants -------------------------------------------------
 // Byte layout mirrors Rust `PbrBindlessPushConstants` (96 bytes):
 //   model(64) | material_slot(4) | env_handle(4) | albedo_idx(4) | normal_idx(4)
@@ -118,7 +132,7 @@ struct PbrBindlessPush
     uint     env_handle;
     uint     albedo_idx;
     uint     normal_idx;
-    uint     debug_flags;   // PBR component toggle bitmask (14 bits)
+    uint     debug_flags;   // PBR component toggle bitmask (15 bits)
     uint3    _padding;
 };
 [[vk::push_constant]]
@@ -141,6 +155,7 @@ static const uint PBR_FLAG_TRANSMISSION = 10u; // Shift+1
 static const uint PBR_FLAG_TRANSLUCENCY = 11u; // Shift+2
 static const uint PBR_FLAG_ANISOTROPY   = 12u; // Shift+3
 static const uint PBR_FLAG_CLEARCOAT    = 13u; // Shift+4
+static const uint PBR_FLAG_GI           = 14u; // Shift+5: probe-volume indirect diffuse
 
 
 bool flag(uint b) { return (pc.debug_flags & (1u << b)) != 0u; }
@@ -556,6 +571,17 @@ SceneOutput fragmentMain(MeshVaryings in)
         specular_ibl *= ao;
     }
 
+    // ---- GI indirect diffuse (probe volume). Gated by giMode master switch
+    // + PBR_FLAG_GI isolate flag. Adds bounce light that IBL cannot provide
+    // (position-dependent, occlusion-aware via baked SH). ----
+    float3 gi_diffuse = float3(0.0);
+    if (frame.giMode != 0u && on(PBR_FLAG_GI))
+    {
+        float3 gi_irradiance = SampleProbeVolumeIrradiance(
+            probeVolume, probeInfo, in.worldPos, n);
+        gi_diffuse = kd_ibl * gi_irradiance * albedo;
+    }
+
     // ---- Emissive (gated). Neutral = 0. ----
     float3 emissive = float3(0.0);
     if (on(PBR_FLAG_EMISSIVE))
@@ -613,6 +639,7 @@ SceneOutput fragmentMain(MeshVaryings in)
         else if (flag(PBR_FLAG_TRANSLUCENCY)) isolated = translucency;
         else if (flag(PBR_FLAG_ANISOTROPY))   isolated = aniso_spec;
         else if (flag(PBR_FLAG_CLEARCOAT))    isolated = clearcoat;
+        else if (flag(PBR_FLAG_GI))           isolated = gi_diffuse;
         SceneOutput o;
         o.color = float4(isolated, 1.0);
         float3 vn = normalize(mul((float3x3)frame.view, n));
@@ -626,6 +653,7 @@ SceneOutput fragmentMain(MeshVaryings in)
     // and direct-light shading would look flat.
     float3 color = direct;
     color += diffuse_ibl + specular_ibl;   // IBL
+    color += gi_diffuse;                    // GI indirect diffuse (probe volume)
     color += multi_light + emissive;       // multilight + emissive
     color += transmission + translucency + aniso_spec + clearcoat;
 

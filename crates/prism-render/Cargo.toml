@@ -5,6 +5,10 @@ edition.workspace = true
 license.workspace = true
 description = "Vulkan rendering backend for PrismaRev"
 
+[[bin]]
+name = "prism-bake-gi"
+path = "src/bin/prism_bake_gi.rs"
+
 [features]
 
 [dependencies]
@@ -18,3 +22,5 @@ slotmap = { workspace = true }
 egui = { workspace = true }
 egui-winit = { workspace = true }
 egui-ash-renderer = { workspace = true }
+prism-asset = { path = "../prism-asset" }
+env_logger = { workspace = true }

@@ -181,7 +181,9 @@ pub struct FrameUBOData {
     /// Scene colour viewport size in pixels (xy). Used by the fragment shader
     /// to derive screen-space UVs for sampling the screen-space AO texture.
     pub viewport_size: [f32; 2],        // offset 244..251
-    pub _pad: u32,                      // offset 252..255 (std140 16-byte tail)
+    /// GI mode master switch (0=Off, 2=On). Gates the probe-volume indirect
+    /// diffuse term in `scene_frag.slang`. Set from `RenderSettings::gi_mode`.
+    pub gi_mode: u32,                     // offset 252..255 (std140 16-byte tail)
 }
 
 /// Per-frame UBO buffer and its descriptor set.
@@ -261,7 +263,7 @@ mod tests {
     #[test]
     fn frame_ubo_data_size_is_256() {
         // std140 tail padding: tonemap_mode(u32 @ 240) + viewport_size([f32;2] @ 244)
-        // + _pad(u32 @ 252) = 256 bytes total (16-byte aligned, matching the
+        // + gi_mode(u32 @ 252) = 256 bytes total (16-byte aligned, matching the
         // Slang `FrameUBO` mirror in common.slang).
         assert_eq!(std::mem::size_of::<FrameUBOData>(), 256);
     }

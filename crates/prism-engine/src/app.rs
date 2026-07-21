@@ -186,7 +186,7 @@ pub struct App {
     debug_mode: DebugMode,
     /// Coordinate space for the `Normal` debug mode.
     normal_space: NormalSpace,
-    /// PBR component isolate selector (14 bits, see `scene_frag.slang`
+    /// PBR component isolate selector (15 bits, see `scene_frag.slang`
     /// `PBR_FLAG_*`). `0` = normal full-PBR render (all components on);
     /// `1 << bit` = isolate that one component as a grayscale visualization.
     debug_flags: u32,
@@ -251,9 +251,9 @@ pub struct App {
 /// grayscale visualization (so you can eyeball e.g. GTAO output alone).
 /// Pressing the same key again clears `debug_flags` back to 0 = normal render.
 ///
-/// Bits mirror `PBR_FLAG_*` in `shaders/slang/scene_frag.slang` (0..13). The
+/// Bits mirror `PBR_FLAG_*` in `shaders/slang/scene_frag.slang` (0..14). The
 /// key->bit map is 1:1 in declaration order (Digit1=Direct=bit0, Digit2=Shadow
-/// =bit1, ..., Digit9=AO=bit8, Digit0=Emissive=bit9, Shift+1..4 = bits 10..13).
+/// =bit1, ..., Digit9=AO=bit8, Digit0=Emissive=bit9, Shift+1..5 = bits 10..14).
 pub const DEFAULT_PBR_FLAGS: u32 = 0;
 
 impl App {
@@ -1062,6 +1062,7 @@ impl ApplicationHandler for App {
                             (KeyCode::Digit2, true) => Some(11),     // Translucency
                             (KeyCode::Digit3, true) => Some(12),     // Anisotropy
                             (KeyCode::Digit4, true) => Some(13),     // ClearCoat
+                            (KeyCode::Digit5, true) => Some(14),     // GI (probe volume)
                             _ => None,
                         };
                         if let Some(bit) = selected {
@@ -1100,6 +1101,17 @@ impl ApplicationHandler for App {
                                     "Reinhard"
                                 }
                             );
+                        } else if code == KeyCode::KeyG {
+                            // Toggle GI mode: 0 = Off, 2 = On (probe volume).
+                            if let Some(renderer) = self.renderer.as_mut() {
+                                let new_mode = if renderer.gi_mode() == 0 { 2 } else { 0 };
+                                renderer.set_gi_mode(new_mode);
+                                log::info!(
+                                    "GI mode = {} ({})",
+                                    new_mode,
+                                    if new_mode == 2 { "On" } else { "Off" }
+                                );
+                            }
                         } else if code == KeyCode::KeyH {
                             self.show_ui = !self.show_ui;
                         } else if code == KeyCode::F1 {
@@ -1260,7 +1272,7 @@ impl App {
     /// (0..13). Matches `PBR_FLAG_*` in `shaders/slang/scene_frag.slang`
     /// 1:1 (Direct=0, Shadow=1, Specular=2, ..., AO=8, Emissive=9, ...,
     /// ClearCoat=13). Used by the isolate-mode label and the inspector.
-    fn pbr_flag_names() -> &'static [&'static str; 14] {
+    fn pbr_flag_names() -> &'static [&'static str; 15] {
         &[
             "Direct",       // 1  (bit 0)
             "Shadow",       // 2  (bit 1)
@@ -1276,6 +1288,7 @@ impl App {
             "Translucency", // Shift+2 (bit 11)
             "Anisotropy",   // Shift+3 (bit 12)
             "ClearCoat",    // Shift+4 (bit 13)
+            "GI",           // Shift+5 (bit 14, probe volume)
         ]
     }
 
@@ -1360,6 +1373,10 @@ impl App {
             self.inspector.debug_flags = self.debug_flags;
             self.inspector.show_ui = self.show_ui;
             self.inspector.tonemap_mode = self.tonemap_mode;
+            // Sync GI mode from renderer -> inspector (before UI runs).
+            if let Some(r) = self.renderer.as_ref() {
+                self.inspector.gi_mode = r.gi_mode();
+            }
             // Refresh the viz's per-frame snapshot while `&GraphRenderer` is
             // borrowable (the egui closure only holds plain data).
             let window = self.window.clone();
@@ -1386,6 +1403,10 @@ impl App {
             // Push UI-edited tonemap selection back to the app so the `T` key
             // and the inspector stay in sync.
             self.tonemap_mode = self.inspector.tonemap_mode;
+            // Push UI-edited GI mode back to the renderer.
+            if let Some(r) = self.renderer.as_mut() {
+                r.set_gi_mode(self.inspector.gi_mode);
+            }
         }
 
         // Neutral clear color so we can tell whether the scene is actually

@@ -24,6 +24,7 @@ use crate::passes::ScenePass;
 use crate::render_graph::{
     DrawItem, GraphFrame, RenderGraph, RenderGraphBuilder, RenderPassNode, RenderSettings,
 };
+use crate::scene_scope::SceneScope;
 use crate::swapchain::Swapchain;
 
 /// One resolved draw for the bindless PBR path. The engine pre-resolves asset
@@ -54,6 +55,9 @@ pub struct GraphRenderer {
     // descriptor set handle stored in `scene_pass`.
     #[allow(dead_code)]
     ibl: IblResources,
+    /// Scene-level GI probe volume resources (set 5). Survives swapchain
+    /// recreation; only rebuilt on scene/level change.
+    scene_scope: SceneScope,
     graph: RenderGraph,
     /// All render passes (ShadowMapPass + ScenePass + GtaoPass + PostPass)
     /// are owned by the graph and executed in registration order. The
@@ -194,6 +198,10 @@ impl GraphRenderer {
         );
 
         let mut scene_pass = ScenePass::new(color_format);
+        // Scene-level GI probe volume (SceneScope). Created before ScenePass
+        // wiring so its descriptor set + layout can be borrowed (set 5).
+        let scene_scope = SceneScope::new(context.clone())
+            .context("SceneScope::new")?;
         scene_pass
             .set_resources(
                 &context,
@@ -206,6 +214,8 @@ impl GraphRenderer {
                 materials_buffer,
                 &frame_ubo_buffers,
                 brdf_handle.0,
+                scene_scope.descriptor_set,
+                scene_scope.descriptor_set_layout,
             )
             .context("ScenePass: set_resources")?;
 
@@ -244,6 +254,7 @@ impl GraphRenderer {
             texture_manager,
             material_manager,
             ibl,
+            scene_scope,
             graph,
             settings,
             shadow_sampler,
@@ -383,6 +394,12 @@ impl GraphRenderer {
     /// zeroed so no indirect lighting contribution reaches the shader.
     pub fn gi_mode(&self) -> u32 {
         self.settings.gi_mode
+    }
+
+    /// Set the GI mode (0=Off, 2=On). Propagated to the shader via
+    /// `FrameUBOData.gi_mode` each frame.
+    pub fn set_gi_mode(&mut self, mode: u32) {
+        self.settings.gi_mode = mode;
     }
 
     pub fn extent(&self) -> vk::Extent2D {
@@ -793,6 +810,10 @@ impl GraphRenderer {
         if let Some(scene) = self.graph.pass_mut::<ScenePass>() {
             scene.destroy(device);
         }
+
+        // Destroy scene-level GI probe volume (SceneScope). Must happen AFTER
+        // ScenePass::destroy (ScenePass borrows the descriptor set).
+        self.scene_scope.destroy();
 
         // Destroy GTAO pass (AO images, render pass, pipeline, descriptor
         // sets, sampler).

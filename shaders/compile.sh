@@ -143,4 +143,12 @@ compile_stage gtao vertexMain vertex
 compile_stage gtao fragmentMain fragment
 emit_reflection gtao vertexMain vertex fragmentMain fragment
 
+# gi_bake: compute shader for offline probe-volume GI baking (ray-query).
+# Dispatched (dims.x, dims.y, dims.z) — one thread per probe. Requires
+# VK_KHR_ray_query hardware. Output: RWTexture3D coefficient-major depth slices.
+echo "  gi_bake :: bakeMain -> gi_bake.comp.spv"
+"$SLANGC" "$SRC/gi_bake.slang" \
+  -profile "$PROFILE" -target spirv -entry bakeMain -stage compute \
+  -fvk-use-entrypoint-name -o "$OUT/gi_bake.comp.spv"
+
 echo "All Slang shaders compiled. SPIR-V in $OUT, reflection JSON in $REFL"

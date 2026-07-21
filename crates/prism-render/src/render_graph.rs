@@ -312,7 +312,7 @@ pub struct GraphFrame<'a> {
     /// Normal-space selector for the `Normal` debug view (0 = world, 1 = tangent).
     /// Forwarded to the scene shader's push-constant `debug.y`.
     pub normal_space: u32,
-    /// PBR component toggle bitmask (14 bits, see `scene_frag.slang`
+    /// PBR component toggle bitmask (15 bits, see `scene_frag.slang`
     /// `PBR_FLAG_*`). 0 = all components neutral (raw baseColor). Forwarded
     /// to the bindless push constant `debug_flags` field.
     pub debug_flags: u32,

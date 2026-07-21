@@ -747,6 +747,12 @@ pub struct ScenePass {
     /// Last time the AO_PROBE debug line in `set_ao` was logged; throttled to
     /// once per second so it doesn't flood the log at frame rate.
     last_probe_log: Instant,
+    /// set 5 - probe volume GI (borrowed from `SceneScope`, scene-level).
+    /// binding 0: 3D texture (SAMPLED_IMAGE), binding 1: ProbeVolumeInfo UBO.
+    gi_descriptor_set: vk::DescriptorSet,
+    /// GI descriptor set layout (borrowed from `SceneScope`). Used for
+    /// pipeline-layout creation; NOT destroyed by ScenePass.
+    gi_layout: vk::DescriptorSetLayout,
     /// Skybox background pass (draws the IBL env cubemap). Owns its pipeline +
     /// set-2 (IBL env) layout; borrows the IBL descriptor set.
     skybox: SkyboxPass,
@@ -801,6 +807,8 @@ impl ScenePass {
             ao_sampler: vk::Sampler::null(),
             ao_views: Vec::new(),
             last_probe_log: Instant::now(),
+            gi_descriptor_set: vk::DescriptorSet::null(),
+            gi_layout: vk::DescriptorSetLayout::null(),
             skybox: SkyboxPass::new(vk::DescriptorSet::null(), vk::DescriptorSetLayout::null()),
             gizmo: None,
             device: None,
@@ -1045,6 +1053,10 @@ impl ScenePass {
         self.ao_descriptor_sets.clear();
         self.ao_views.clear();
 
+        // set 5 (GI probe volume) is borrowed from SceneScope — not destroyed here.
+        self.gi_descriptor_set = vk::DescriptorSet::null();
+        self.gi_layout = vk::DescriptorSetLayout::null();
+
         self.device = None;
     }
     /// Wire all external resources the ScenePass needs:
@@ -1055,6 +1067,7 @@ impl ScenePass {
     ///   frame-in-flight so each frame's UBO buffer is bound without runtime
     ///   descriptor rewrites)
     /// - light SSBO buffer (set 0 binding 2, hard-coded point lights)
+    /// - GI probe volume descriptor set + layout (set 5, borrowed from SceneScope)
     ///
     /// `frame_ubo_buffers` length determines the frame-in-flight count (== set0
     /// set count). `materials_buffer` is the `RenderMaterialManager` SSBO.
@@ -1071,6 +1084,8 @@ impl ScenePass {
         materials_buffer: vk::Buffer,
         frame_ubo_buffers: &[vk::Buffer],
         brdf_handle: u32,
+        gi_descriptor_set: vk::DescriptorSet,
+        gi_layout: vk::DescriptorSetLayout,
     ) -> Result<()> {
         let device = &context.device;
         self.ibl_descriptor_set = ibl_descriptor_set;
@@ -1078,6 +1093,8 @@ impl ScenePass {
         self.bindless_set = bindless_set;
         self.bindless_layout = bindless_layout;
         self.brdf_handle = brdf_handle;
+        self.gi_descriptor_set = gi_descriptor_set;
+        self.gi_layout = gi_layout;
         // Skybox reuses the IBL env cubemap descriptor set + layout (set 0).
         self.skybox = SkyboxPass::new(ibl_descriptor_set, ibl_layout);
 
@@ -1414,6 +1431,9 @@ impl ScenePass {
         // The actual image_info write happens in `set_ao` once the GTAO pass
         // produces its first AO view. Until then the descriptors point at null;
         // `PBR_FLAG_AO` is off by default so nothing samples it.
+
+        // set 5 (GI probe volume) is borrowed from SceneScope — already wired
+        // via `gi_descriptor_set` / `gi_layout` parameters above.
 
         Ok(())
     }
@@ -1767,6 +1787,8 @@ impl ScenePass {
         let set4_layout = self
             .ao_ds_layout
             .context("ScenePass: set4 (AO) layout not set (call set_resources)")?;
+        // set 5: probe volume GI (SAMPLED_IMAGE + UBO), borrowed from SceneScope.
+        let set5_layout = self.gi_layout;
 
         let set_layouts = [
             set0_layout,
@@ -1774,6 +1796,7 @@ impl ScenePass {
             set2_layout,
             set3_layout,
             set4_layout,
+            set5_layout,
         ];
 
         // Push constants: PbrBindlessPushConstants (96 bytes, VERTEX|FRAGMENT).
@@ -2068,6 +2091,15 @@ impl RenderPassNode for ScenePass {
                 std::slice::from_ref(&ao_set),
                 &[],
             );
+            // set 5: probe volume GI (scene-level, static — same set every frame).
+            ctx.device.cmd_bind_descriptor_sets(
+                ctx.cmd,
+                vk::PipelineBindPoint::GRAPHICS,
+                pipeline.layout,
+                5,
+                std::slice::from_ref(&self.gi_descriptor_set),
+                &[],
+            );
         }
 
         unsafe {
@@ -2117,7 +2149,7 @@ impl RenderPassNode for ScenePass {
                     env_handle: self.brdf_handle,
                     albedo_idx: u32::MAX,
                     normal_idx: u32::MAX,
-                    // PBR component toggles from the app (14-bit bitmask).
+                    // PBR component toggles from the app (15-bit bitmask).
                     debug_flags: ctx.frame.debug_flags,
                     _padding: [0; 3],
                 };
@@ -2235,6 +2267,7 @@ impl Drop for ScenePass {
             self.skybox.destroy(&device);
             // Gizmo (its own pipeline + vertex buffer; Drop frees them).
             self.gizmo = None;
+            // set 5 (GI probe volume) is borrowed from SceneScope — not destroyed here.
         }
     }
 }

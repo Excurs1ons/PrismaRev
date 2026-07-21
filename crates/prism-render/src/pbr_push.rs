@@ -133,7 +133,7 @@ pub struct PbrPushConstants {
 /// | env_handle      | 68     | 4    |
 /// | albedo_idx      | 72     | 4    |
 /// | normal_idx      | 76     | 4    |
-/// | debug_flags     | 80     | 4    |  <- PBR component toggle bitmask (14 bits)
+/// | debug_flags     | 80     | 4    |  <- PBR component toggle bitmask (15 bits)
 /// | _padding        | 84     | 12   |
 #[repr(C)]
 pub struct PbrBindlessPushConstants {

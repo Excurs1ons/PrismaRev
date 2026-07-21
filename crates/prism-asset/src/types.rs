@@ -206,3 +206,43 @@ impl Default for InstanceData {
         }
     }
 }
+
+/// CPU-side baked probe-volume GI data.
+///
+/// A regular grid of order-2 spherical-harmonic (SH) probes. Each probe stores
+/// 9 RGB coefficient triplets (irradiance, cosine-convolution pre-applied by
+/// the baker). The coefficient ordering matches `prism-render::gi::SH_COEFF_COUNT`
+/// (bands 0+1+2 = 9).
+///
+/// `coeffs` length = `dims[0] * dims[1] * dims[2] * 9`, indexed as
+/// `coeffs[(probe_idx * 9 + coeff_idx)]` where probe_idx is row-major
+/// `(x + y*dims[0] + z*dims[0]*dims[1])`.
+#[derive(Clone, Debug)]
+pub struct ProbeVolumeData {
+    /// World position of probe `(0,0,0)`.
+    pub origin: [f32; 3],
+    /// World distance between adjacent probes (per axis).
+    pub spacing: [f32; 3],
+    /// Probe count per axis (each >= 1).
+    pub dims: [u32; 3],
+    /// SH coefficients: `dims.x * dims.y * dims.z * 9` RGB triplets.
+    pub coeffs: Vec<[f32; 3]>,
+}
+
+impl ProbeVolumeData {
+    /// Total number of probes in the grid.
+    pub fn probe_count(&self) -> usize {
+        self.dims[0] as usize * self.dims[1] as usize * self.dims[2] as usize
+    }
+
+    /// Expected `coeffs.len()` for the given dims.
+    pub fn expected_coeff_count(&self) -> usize {
+        self.probe_count() * 9
+    }
+
+    /// Validate internal consistency (coeffs length matches dims).
+    pub fn is_valid(&self) -> bool {
+        self.coeffs.len() == self.expected_coeff_count()
+            && self.dims.iter().all(|&d| d >= 1)
+    }
+}
