@@ -1,32 +1,37 @@
-//! Offline GI probe-volume baker (GPU ray-query compute).
+//! Offline GI probe-volume baker (GPU ray-query).
 //!
-//! Usage: `prism-bake-gi [OPTIONS]`
+//! Usage: `prism-bake-gi [OUTPUT] [GLTF]`
+//!   OUTPUT — probe-volume `.bin` path (default `assets/gi/probe_volume.bin`)
+//!   GLTF   — optional scene glTF path; when omitted the first existing scene
+//!            in `assets/scenes.toml` is used (same manifest the app reads).
 //!
-//! Creates a headless Vulkan context, builds BLAS/TLAS from the scene,
-//! dispatches a compute shader that traces rays and projects direct lighting
-//! onto order-2 SH coefficients, reads back the result, and writes a `.bin`
-//! probe-volume file via `prism-asset`.
-//!
-//! Requires hardware supporting `VK_KHR_ray_query`.
+//! Loads the scene via `prism-asset`, flattens every instance into a single
+//! world-space mesh (vertex color = material base color), builds a BLAS/TLAS,
+//! derives a probe grid from the scene AABB, dispatches a ray-query compute
+//! shader that bakes cosine-weighted SH irradiance per probe (sky for missed
+//! rays, direct sun bounce for hits), reads the result back, and writes a
+//! `.bin` probe-volume file. Requires hardware `VK_KHR_ray_query`.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
 use ash::vk;
 
 use prism_render::context::VulkanContext;
+use prism_render::mesh::Vertex;
 
-/// Default probe grid dimensions.
-const DEFAULT_DIMS: [u32; 3] = [5, 4, 5];
-/// Default probe spacing (world units).
-const DEFAULT_SPACING: [f32; 3] = [3.0, 3.0, 3.0];
-/// Default grid origin.
-const DEFAULT_ORIGIN: [f32; 3] = [-6.0, 0.0, -6.0];
 /// Number of ray directions per probe (Fibonacci sphere).
 const NUM_RAYS: u32 = 64;
 /// Default output path.
 const DEFAULT_OUTPUT: &str = "assets/gi/probe_volume.bin";
+/// Scene manifest the app also reads.
+const SCENE_MANIFEST: &str = "assets/scenes.toml";
+/// Probe grid derivation: max probes per axis + target spacing (world units).
+const MAX_DIM: u32 = 32;
+const TARGET_SPACING: f32 = 1.0;
+/// Padding around the scene AABB so edge probes sit just outside the walls.
+const GRID_MARGIN: f32 = 1.0;
 
 fn main() -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
@@ -36,18 +41,15 @@ fn main() -> Result<()> {
         .get(1)
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(DEFAULT_OUTPUT));
+    let cli_gltf = args.get(2).map(PathBuf::from);
 
     log::info!("prism-bake-gi: starting headless GI bake");
     log::info!("  output: {}", output_path.display());
-    log::info!("  grid: {:?} spacing {:?} origin {:?}", DEFAULT_DIMS, DEFAULT_SPACING, DEFAULT_ORIGIN);
     log::info!("  rays per probe: {}", NUM_RAYS);
 
     // ---- 1. Create headless Vulkan context ----
-    let context = Arc::new(
-        VulkanContext::new(&[]).context("create headless VulkanContext")?,
-    );
+    let context = Arc::new(VulkanContext::new(&[]).context("create headless VulkanContext")?);
 
-    // Verify ray query support.
     if !context.rt_caps.has_ray_query() {
         bail!(
             "VK_KHR_ray_query not supported on this device. \
@@ -58,7 +60,7 @@ fn main() -> Result<()> {
     }
     log::info!("  ray query: supported");
 
-    // ---- 2. Create command pool ----
+    // ---- 2. Command pool ----
     let cmd_pool = unsafe {
         context.device.create_command_pool(
             &vk::CommandPoolCreateInfo::default()
@@ -69,43 +71,74 @@ fn main() -> Result<()> {
     }
     .context("create command pool")?;
 
-    // ---- 3. Build a simple test scene (ground plane + box) ----
-    // For the first version, we bake a simple procedural scene.
-    // Phase E will load real scenes via prism-asset.
-    let (vertex_buffer, vertex_memory, vertex_count) =
-        create_test_scene_vertices(&context)?;
-    let (index_buffer, index_memory, index_count) =
-        create_test_scene_indices(&context)?;
+    // ---- 3. Load the scene and flatten to one world-space mesh ----
+    // Diagnostic: PRISM_BAKE_TEST_CUBE=1 bakes a unit cube at the origin
+    // instead of the manifest scene, to isolate ray-query mechanism bugs from
+    // scene-data bugs (a cube must produce non-zero hit ratios for interior
+    // probes).
+    let (vertices, indices, aabb_min, aabb_max) =
+        if std::env::var("PRISM_BAKE_TEST_CUBE").is_ok() {
+            log::info!("  TEST MODE: procedural cube");
+            test_cube_geometry()
+        } else {
+            let scene_path = resolve_scene_path(cli_gltf.as_deref())?;
+            log::info!("  scene: {}", scene_path.display());
+            load_scene_geometry(&scene_path).context("load + flatten scene geometry")?
+        };
+    log::info!(
+        "  flattened: {} vertices, {} indices ({} tris)",
+        vertices.len(),
+        indices.len(),
+        indices.len() / 3
+    );
+    log::info!("  AABB: min {:?} max {:?}", aabb_min, aabb_max);
 
-    log::info!("  test scene: {} vertices, {} indices", vertex_count, index_count);
+    // ---- 4. Derive probe grid from the scene AABB ----
+    let (origin, spacing, dims) = derive_grid(aabb_min, aabb_max);
+    log::info!(
+        "  probe grid: dims {:?} spacing {:?} origin {:?}",
+        dims, spacing, origin
+    );
 
-    // ---- 4. Build BLAS + TLAS ----
+    // ---- 5. Upload vertex + index buffers (host-visible storage buffers) ----
+    let (vertex_buffer, vertex_memory) =
+        create_storage_buffer(&context, vertex_bytes(&vertices)).context("vertex buffer")?;
+    let (index_buffer, index_memory) =
+        create_storage_buffer(&context, index_bytes(&indices)).context("index buffer")?;
+
+    // ---- 6. Build BLAS (single flattened mesh) + TLAS (identity instance) ----
     let mesh = prism_render::mesh::Mesh {
         vertex_buffer,
         vertex_memory,
         index_buffer: Some(index_buffer),
         index_memory: Some(index_memory),
-        vertex_count: vertex_count as u32,
-        index_count: index_count as u32,
+        vertex_count: vertices.len() as u32,
+        index_count: indices.len() as u32,
     };
-
-    let blas = prism_render::acceleration_structure::BlasEntry::build(
-        &context, cmd_pool, &mesh,
-    )
-    .context("build BLAS")?;
-
+    let blas = prism_render::acceleration_structure::BlasEntry::build(&context, cmd_pool, &mesh)
+        .context("build BLAS")?;
+    log::info!(
+        "  BLAS device_address={:#x} (verts={} idx={})",
+        blas.device_address, mesh.vertex_count, mesh.index_count
+    );
+    // Echo the first triangle so we can confirm the uploaded geometry is
+    // sane (non-zero, in scene range) and matches the shader's byte layout.
+    if vertices.len() >= 3 && indices.len() >= 3 {
+        let (a, b, c) = (indices[0] as usize, indices[1] as usize, indices[2] as usize);
+        log::info!(
+            "  tri0 verts: {:?} {:?} {:?}",
+            vertices[a].position, vertices[b].position, vertices[c].position
+        );
+    }
+    // Geometry is already baked into world space, so the single instance uses
+    // an identity transform (3x4 row-major, last row implied [0,0,0,1]).
     let instance = prism_render::acceleration_structure::TlasInstance {
-        transform: [
-            1.0, 0.0, 0.0, 0.0,
-            0.0, 1.0, 0.0, 0.0,
-            0.0, 0.0, 1.0, 0.0,
-        ],
+        transform: [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0],
         custom_index: 0,
         mask: 0xFF,
         instance_shader_binding_table_record_offset: 0,
         flags: vk::GeometryInstanceFlagsKHR::TRIANGLE_FACING_CULL_DISABLE,
     };
-
     let tlas = prism_render::acceleration_structure::Tlas::build(
         &context,
         cmd_pool,
@@ -113,11 +146,10 @@ fn main() -> Result<()> {
         &[blas.device_address],
     )
     .context("build TLAS")?;
-
+    log::info!("  TLAS device_address={:#x}", tlas.device_address);
     log::info!("  BLAS + TLAS built");
 
-    // ---- 5. Create probe volume 3D texture (GENERAL layout for compute write) ----
-    let dims = DEFAULT_DIMS;
+    // ---- 7. Probe volume 3D texture (GENERAL layout for compute write) ----
     let tex_w = dims[0];
     let tex_h = dims[1];
     let tex_d = dims[2] * 9; // 9 coefficient layers
@@ -125,22 +157,14 @@ fn main() -> Result<()> {
     let image_info = vk::ImageCreateInfo::default()
         .image_type(vk::ImageType::TYPE_3D)
         .format(vk::Format::R32G32B32A32_SFLOAT)
-        .extent(vk::Extent3D {
-            width: tex_w,
-            height: tex_h,
-            depth: tex_d,
-        })
+        .extent(vk::Extent3D { width: tex_w, height: tex_h, depth: tex_d })
         .mip_levels(1)
         .array_layers(1)
         .samples(vk::SampleCountFlags::TYPE_1)
         .tiling(vk::ImageTiling::OPTIMAL)
-        .usage(
-            vk::ImageUsageFlags::STORAGE
-                | vk::ImageUsageFlags::TRANSFER_SRC,
-        )
+        .usage(vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_SRC)
         .sharing_mode(vk::SharingMode::EXCLUSIVE)
         .initial_layout(vk::ImageLayout::UNDEFINED);
-
     let volume_image = unsafe { context.device.create_image(&image_info, None) }
         .context("create probe volume 3D image")?;
     let mem_reqs = unsafe { context.device.get_image_memory_requirements(volume_image) };
@@ -161,7 +185,6 @@ fn main() -> Result<()> {
     .context("allocate volume memory")?;
     unsafe { context.device.bind_image_memory(volume_image, volume_memory, 0) }
         .context("bind volume memory")?;
-
     let volume_view = unsafe {
         context.device.create_image_view(
             &vk::ImageViewCreateInfo::default()
@@ -180,8 +203,8 @@ fn main() -> Result<()> {
     }
     .context("create volume image view")?;
 
-    // ---- 6. Create ProbeVolumeInfo UBO ----
-    let info = prism_render::gi::ProbeVolumeInfo::new(DEFAULT_ORIGIN, DEFAULT_SPACING, dims);
+    // ---- 8. ProbeVolumeInfo UBO ----
+    let info = prism_render::gi::ProbeVolumeInfo::new(origin, spacing, dims);
     let info_size = std::mem::size_of::<prism_render::gi::ProbeVolumeInfo>() as vk::DeviceSize;
     let (info_buffer, info_memory) = prism_render::buffer::create_buffer(
         &context,
@@ -197,8 +220,8 @@ fn main() -> Result<()> {
         context.device.unmap_memory(info_memory);
     }
 
-    // ---- 7. Create instance albedo SSBO (1 instance, white albedo) ----
-    let albedo_data: [f32; 4] = [0.8, 0.8, 0.8, 1.0]; // rgb albedo, w=1 means "use override"
+    // ---- 9. Instance albedo SSBO (1 instance, w=0 -> use vertex color) ----
+    let albedo_data: [f32; 4] = [1.0, 1.0, 1.0, 0.0]; // w=0: no override
     let albedo_size = 16u64;
     let (albedo_buffer, albedo_memory) = prism_render::buffer::create_buffer(
         &context,
@@ -214,39 +237,33 @@ fn main() -> Result<()> {
         context.device.unmap_memory(albedo_memory);
     }
 
-    // ---- 8. Create descriptor set layout + pool + set ----
+    // ---- 10. Descriptor set layout + pool + set ----
     let bindings = [
-        // binding 0: RWTexture3D (STORAGE_IMAGE)
         vk::DescriptorSetLayoutBinding::default()
             .binding(0)
             .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
             .descriptor_count(1)
             .stage_flags(vk::ShaderStageFlags::COMPUTE),
-        // binding 1: ProbeVolumeInfo UBO
         vk::DescriptorSetLayoutBinding::default()
             .binding(1)
             .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
             .descriptor_count(1)
             .stage_flags(vk::ShaderStageFlags::COMPUTE),
-        // binding 2: TLAS (ACCELERATION_STRUCTURE)
         vk::DescriptorSetLayoutBinding::default()
             .binding(2)
             .descriptor_type(vk::DescriptorType::ACCELERATION_STRUCTURE_KHR)
             .descriptor_count(1)
             .stage_flags(vk::ShaderStageFlags::COMPUTE),
-        // binding 3: vertices SSBO
         vk::DescriptorSetLayoutBinding::default()
             .binding(3)
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
             .descriptor_count(1)
             .stage_flags(vk::ShaderStageFlags::COMPUTE),
-        // binding 4: indices SSBO
         vk::DescriptorSetLayoutBinding::default()
             .binding(4)
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
             .descriptor_count(1)
             .stage_flags(vk::ShaderStageFlags::COMPUTE),
-        // binding 5: instance albedo SSBO
         vk::DescriptorSetLayoutBinding::default()
             .binding(5)
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
@@ -260,7 +277,6 @@ fn main() -> Result<()> {
         )
     }
     .context("create bake ds layout")?;
-
     let ds_pool = unsafe {
         context.device.create_descriptor_pool(
             &vk::DescriptorPoolCreateInfo::default()
@@ -275,7 +291,6 @@ fn main() -> Result<()> {
         )
     }
     .context("create bake ds pool")?;
-
     let ds = unsafe {
         context.device.allocate_descriptor_sets(
             &vk::DescriptorSetAllocateInfo::default()
@@ -285,7 +300,6 @@ fn main() -> Result<()> {
     }
     .context("allocate bake ds")?[0];
 
-    // Write descriptors.
     let img_info = vk::DescriptorImageInfo::default()
         .image_view(volume_view)
         .image_layout(vk::ImageLayout::GENERAL);
@@ -307,7 +321,6 @@ fn main() -> Result<()> {
         .buffer(albedo_buffer)
         .offset(0)
         .range(albedo_size);
-
     let writes = [
         vk::WriteDescriptorSet::default()
             .dst_set(ds)
@@ -322,6 +335,7 @@ fn main() -> Result<()> {
         vk::WriteDescriptorSet::default()
             .dst_set(ds)
             .dst_binding(2)
+            .descriptor_count(1)
             .descriptor_type(vk::DescriptorType::ACCELERATION_STRUCTURE_KHR)
             .push_next(&mut as_info),
         vk::WriteDescriptorSet::default()
@@ -342,18 +356,16 @@ fn main() -> Result<()> {
     ];
     unsafe { context.device.update_descriptor_sets(&writes, &[]) };
 
-    // ---- 9. Create compute pipeline ----
+    // ---- 11. Compute pipeline ----
     let spv_path = std::path::Path::new("shaders/gi_bake.comp.spv");
     let spv_bytes = std::fs::read(spv_path)
         .with_context(|| format!("read {} (compile shaders first: shaders/compile.sh)", spv_path.display()))?;
     let shader_module = prism_render::shader::load_shader_module(&context.device, &spv_bytes)
         .context("create gi_bake shader module")?;
-
     let push_range = vk::PushConstantRange::default()
         .stage_flags(vk::ShaderStageFlags::COMPUTE)
         .offset(0)
-        .size(36); // 2x vec4 + 1x uint = 36 bytes
-
+        .size(36); // 2x vec4 + 1x uint
     let pipeline = prism_render::compute::ComputePipeline::new(
         &context.device,
         shader_module,
@@ -362,10 +374,9 @@ fn main() -> Result<()> {
         std::slice::from_ref(&push_range),
     )
     .context("create compute pipeline")?;
-
     unsafe { context.device.destroy_shader_module(shader_module, None) };
 
-    // ---- 10. Transition image to GENERAL + dispatch + transition to TRANSFER_SRC ----
+    // ---- 12. Dispatch (UNDEFINED -> GENERAL -> compute -> TRANSFER_SRC) ----
     let cmd_buf = unsafe {
         context.device.allocate_command_buffers(
             &vk::CommandBufferAllocateInfo::default()
@@ -375,16 +386,17 @@ fn main() -> Result<()> {
         )
     }?[0];
 
-    // Push constants data.
     #[repr(C)]
     struct BakePush {
         light_dir: [f32; 4],
         light_color: [f32; 4],
         num_rays: u32,
     }
+    // Warm directional sun, normalized. Points FROM the surface TO the light.
+    let ld = normalize3([0.45, 0.75, 0.35]);
     let push_data = BakePush {
-        light_dir: [0.4, 0.8, 0.3, 0.0], // normalized direction TO light
-        light_color: [3.0, 2.8, 2.5, 0.0], // warm directional light
+        light_dir: [ld[0], ld[1], ld[2], 0.0],
+        light_color: [3.0, 2.8, 2.5, 0.0],
         num_rays: NUM_RAYS,
     };
 
@@ -394,8 +406,6 @@ fn main() -> Result<()> {
             &vk::CommandBufferBeginInfo::default()
                 .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
         )?;
-
-        // UNDEFINED -> GENERAL (for compute write)
         context.device.cmd_pipeline_barrier(
             cmd_buf,
             vk::PipelineStageFlags::TOP_OF_PIPE,
@@ -417,13 +427,7 @@ fn main() -> Result<()> {
                     layer_count: 1,
                 })],
         );
-
-        // Bind pipeline + descriptor set + push constants.
-        context.device.cmd_bind_pipeline(
-            cmd_buf,
-            vk::PipelineBindPoint::COMPUTE,
-            pipeline.pipeline,
-        );
+        context.device.cmd_bind_pipeline(cmd_buf, vk::PipelineBindPoint::COMPUTE, pipeline.pipeline);
         context.device.cmd_bind_descriptor_sets(
             cmd_buf,
             vk::PipelineBindPoint::COMPUTE,
@@ -442,11 +446,7 @@ fn main() -> Result<()> {
                 std::mem::size_of::<BakePush>(),
             ),
         );
-
-        // Dispatch: one thread per probe.
         context.device.cmd_dispatch(cmd_buf, dims[0], dims[1], dims[2]);
-
-        // GENERAL -> TRANSFER_SRC (for readback)
         context.device.cmd_pipeline_barrier(
             cmd_buf,
             vk::PipelineStageFlags::COMPUTE_SHADER,
@@ -468,19 +468,16 @@ fn main() -> Result<()> {
                     layer_count: 1,
                 })],
         );
-
         context.device.end_command_buffer(cmd_buf)?;
     }
-
     let submit = vk::SubmitInfo::default().command_buffers(std::slice::from_ref(&cmd_buf));
     unsafe {
         context.device.queue_submit(context.graphics_queue, std::slice::from_ref(&submit), vk::Fence::null())?;
         context.device.queue_wait_idle(context.graphics_queue)?;
     }
-
     log::info!("  compute dispatch complete");
 
-    // ---- 11. Readback: copy 3D image to staging buffer ----
+    // ---- 13. Readback: copy 3D image to a staging buffer ----
     let pixel_count = (tex_w * tex_h * tex_d) as usize;
     let readback_size = (pixel_count * 4 * 4) as vk::DeviceSize; // RGBA32F
     let (staging_buf, staging_mem) = prism_render::buffer::create_buffer(
@@ -491,7 +488,6 @@ fn main() -> Result<()> {
             | prism_render::buffer::MemoryProperties::HOST_COHERENT,
     )
     .context("create readback staging buffer")?;
-
     let cmd_buf2 = unsafe {
         context.device.allocate_command_buffers(
             &vk::CommandBufferAllocateInfo::default()
@@ -522,11 +518,7 @@ fn main() -> Result<()> {
                         .base_array_layer(0)
                         .layer_count(1),
                 )
-                .image_extent(vk::Extent3D {
-                    width: tex_w,
-                    height: tex_h,
-                    depth: tex_d,
-                })],
+                .image_extent(vk::Extent3D { width: tex_w, height: tex_h, depth: tex_d })],
         );
         context.device.end_command_buffer(cmd_buf2)?;
     }
@@ -535,8 +527,6 @@ fn main() -> Result<()> {
         context.device.queue_submit(context.graphics_queue, std::slice::from_ref(&submit2), vk::Fence::null())?;
         context.device.queue_wait_idle(context.graphics_queue)?;
     }
-
-    // Map and read pixels.
     let pixels: Vec<f32> = unsafe {
         let ptr = context.device.map_memory(staging_mem, 0, readback_size, vk::MemoryMapFlags::empty())?;
         let slice = std::slice::from_raw_parts(ptr as *const f32, pixel_count * 4);
@@ -544,18 +534,15 @@ fn main() -> Result<()> {
         context.device.unmap_memory(staging_mem);
         result
     };
-
     log::info!("  readback complete: {} pixels", pixel_count);
 
-    // ---- 12. Convert to ProbeVolumeData ----
-    // The texture layout is coefficient-major: coeff c at depth [c*dz, (c+1)*dz).
-    // ProbeVolumeData expects per-probe coefficients: coeffs[probe_idx * 9 + coeff].
+    // ---- 14. Convert to ProbeVolumeData (per-probe coefficient order) ----
     let dx = dims[0] as usize;
     let dy = dims[1] as usize;
     let dz = dims[2] as usize;
     let probe_count = dx * dy * dz;
     let mut coeffs = vec![[0.0f32; 3]; probe_count * 9];
-
+    let mut hit_ratios = vec![0.0f32; probe_count];
     for z in 0..dz {
         for y in 0..dy {
             for x in 0..dx {
@@ -564,38 +551,75 @@ fn main() -> Result<()> {
                     let tex_z = c * dz + z;
                     let texel_idx = (tex_z * dy * dx) + y * dx + x;
                     let base = texel_idx * 4;
-                    coeffs[probe_idx * 9 + c] = [
-                        pixels[base],
-                        pixels[base + 1],
-                        pixels[base + 2],
-                    ];
+                    coeffs[probe_idx * 9 + c] = [pixels[base], pixels[base + 1], pixels[base + 2]];
+                    if c == 0 {
+                        hit_ratios[probe_idx] = pixels[base + 3];
+                    }
                 }
             }
         }
     }
+    let probe_data = prism_asset::ProbeVolumeData { origin, spacing, dims, coeffs };
 
-    let probe_data = prism_asset::ProbeVolumeData {
-        origin: DEFAULT_ORIGIN,
-        spacing: DEFAULT_SPACING,
-        dims,
-        coeffs,
-    };
-
-    // Sanity check: DC coefficient magnitude.
-    let dc = probe_data.coeffs[0]; // first probe, DC coefficient
+    // Sanity: DC coefficient (c=0) of a few probes. DC must be non-negative
+    // (it is the mean irradiance); a negative DC would signal a bake bug. Each
+    // probe owns 9 consecutive coefficients, so index probe p's DC at p*9.
+    let mid_probe = probe_count / 2;
+    let mid_dc = probe_data.coeffs[mid_probe * 9];
     log::info!(
-        "  DC coefficient (probe 0): [{:.4}, {:.4}, {:.4}]",
-        dc[0], dc[1], dc[2]
+        "  DC coefficient (mid probe {}): [{:.4}, {:.4}, {:.4}]",
+        mid_probe, mid_dc[0], mid_dc[1], mid_dc[2]
+    );
+    // Sample a small grid of probes' DC to expose the indoor/outdoor contrast.
+    let mut dc_min = [f32::MAX; 3];
+    let mut dc_max = [f32::MIN; 3];
+    let mut dark = 0usize;
+    let mut bright = 0usize;
+    for p in 0..probe_count {
+        let dc = probe_data.coeffs[p * 9];
+        let lum = dc[0] + dc[1] + dc[2];
+        for a in 0..3 {
+            dc_min[a] = dc_min[a].min(dc[a]);
+            dc_max[a] = dc_max[a].max(dc[a]);
+        }
+        if lum < 0.3 {
+            dark += 1;
+        } else if lum > 1.5 {
+            bright += 1;
+        }
+    }
+    log::info!(
+        "  DC stats: min [{:.3},{:.3},{:.3}] max [{:.3},{:.3},{:.3}] dark(lum<0.3)={} bright(lum>1.5)={}",
+        dc_min[0], dc_min[1], dc_min[2],
+        dc_max[0], dc_max[1], dc_max[2],
+        dark, bright
+    );
+    // Hit-ratio diagnostic: fraction of rays that hit geometry per probe.
+    // 0.0 everywhere => the TLAS is empty / ray query misses everything.
+    let mut hr_min = f32::MAX;
+    let mut hr_max = f32::MIN;
+    let mut hr_sum = 0.0f32;
+    for &h in &hit_ratios {
+        hr_min = hr_min.min(h);
+        hr_max = hr_max.max(h);
+        hr_sum += h;
+    }
+    log::info!(
+        "  hit ratio: min {:.3} max {:.3} avg {:.3} (0 = all rays miss TLAS)",
+        hr_min, hr_max, hr_sum / probe_count as f32
     );
 
-    // ---- 13. Write .bin ----
+    // ---- 15. Write .bin ----
     if let Some(parent) = output_path.parent() {
         std::fs::create_dir_all(parent).ok();
     }
-    prism_asset::save_probe_volume(&output_path, &probe_data)
-        .context("write probe volume .bin")?;
-
-    log::info!("  wrote {} ({} probes, {} coeffs)", output_path.display(), probe_count, probe_data.coeffs.len());
+    prism_asset::save_probe_volume(&output_path, &probe_data).context("write probe volume .bin")?;
+    log::info!(
+        "  wrote {} ({} probes, {} coeffs)",
+        output_path.display(),
+        probe_count,
+        probe_data.coeffs.len()
+    );
     log::info!("prism-bake-gi: done");
 
     // ---- Cleanup ----
@@ -618,7 +642,6 @@ fn main() -> Result<()> {
         context.device.destroy_buffer(index_buffer, None);
         context.device.free_memory(index_memory, None);
     }
-    // pipeline + tlas + blas drop via their Drop impls.
     drop(pipeline);
     drop(tlas);
     drop(blas);
@@ -627,143 +650,210 @@ fn main() -> Result<()> {
 }
 
 // -------------------------------------------------------------------
-// Test scene: a ground plane (2 triangles) + a box (12 triangles)
+// Scene loading + flattening
 // -------------------------------------------------------------------
 
-/// Vertex layout matching prism-render's Vertex (56 bytes).
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct BakeVertex {
-    position: [f32; 3],
-    normal: [f32; 3],
-    color: [f32; 4],
-    uv: [f32; 2],
-    tangent: [f32; 3],
-    _pad: f32,
-}
-
-fn make_vertex(pos: [f32; 3], normal: [f32; 3], color: [f32; 4]) -> BakeVertex {
-    BakeVertex {
-        position: pos,
-        normal,
-        color,
-        uv: [0.0; 2],
-        tangent: [1.0, 0.0, 0.0],
-        _pad: 0.0,
+/// Pick the glTF to bake: explicit CLI path, else the first existing scene in
+/// `assets/scenes.toml` (same resolution the app uses).
+fn resolve_scene_path(cli: Option<&Path>) -> Result<PathBuf> {
+    if let Some(p) = cli {
+        anyhow::ensure!(p.exists(), "glTF path does not exist: {}", p.display());
+        return Ok(p.to_path_buf());
     }
+    let text = std::fs::read_to_string(SCENE_MANIFEST)
+        .with_context(|| format!("read scene manifest {SCENE_MANIFEST}"))?;
+    let mut paths: Vec<PathBuf> = Vec::new();
+    for raw in text.lines() {
+        let line = raw.trim();
+        if let Some(rest) = line.strip_prefix("path") {
+            let val = rest.trim_start().trim_start_matches('=').trim();
+            let val = val.trim_matches('"');
+            if !val.is_empty() {
+                paths.push(PathBuf::from(val));
+            }
+        }
+    }
+    for p in paths {
+        if p.exists() {
+            return Ok(p);
+        }
+    }
+    bail!("no existing scene found in {SCENE_MANIFEST}; pass a glTF path explicitly")
 }
 
-fn create_test_scene_vertices(context: &VulkanContext) -> Result<(vk::Buffer, vk::DeviceMemory, usize)> {
-    // Ground plane (y=0, 12x12 units) + a box on top.
-    let ground_color = [0.4, 0.5, 0.3, 1.0]; // greenish
-    let box_color = [0.8, 0.2, 0.2, 1.0]; // reddish
+/// Load a glTF scene and flatten every instance into ONE world-space mesh.
+/// Vertex color carries the material base color (the baker's albedo source).
+/// Returns `(vertices, indices, aabb_min, aabb_max)`.
+fn load_scene_geometry(path: &Path) -> Result<(Vec<Vertex>, Vec<u32>, [f32; 3], [f32; 3])> {
+    let mut store = prism_asset::SceneStore::new();
+    let _scene = store.load_gltf(path)?;
 
-    let mut verts: Vec<BakeVertex> = Vec::new();
+    let mut vertices: Vec<Vertex> = Vec::new();
+    let mut indices: Vec<u32> = Vec::new();
+    let mut aabb_min = [f32::MAX; 3];
+    let mut aabb_max = [f32::MIN; 3];
 
-    // Ground plane (2 triangles, normal up).
-    let g = 6.0;
-    verts.push(make_vertex([-g, 0.0, -g], [0.0, 1.0, 0.0], ground_color));
-    verts.push(make_vertex([g, 0.0, -g], [0.0, 1.0, 0.0], ground_color));
-    verts.push(make_vertex([g, 0.0, g], [0.0, 1.0, 0.0], ground_color));
-    verts.push(make_vertex([-g, 0.0, g], [0.0, 1.0, 0.0], ground_color));
+    for (_h, inst) in store.instances() {
+        let Some(mesh) = store.mesh(inst.mesh) else { continue };
+        let albedo = store
+            .material(inst.material)
+            .map(|m| [m.base_color[0], m.base_color[1], m.base_color[2]])
+            .unwrap_or([0.8, 0.8, 0.8]);
+        let xf = inst.transform; // column-major 4x4
+        let base = vertices.len() as u32;
 
-    // Box (1x1x1 centered at origin, y offset 0.5).
-    let s = 1.0;
-    let y0 = 0.0;
-    let y1 = s * 2.0;
-    // Front face (+z)
-    verts.push(make_vertex([-s, y0, s], [0.0, 0.0, 1.0], box_color));
-    verts.push(make_vertex([s, y0, s], [0.0, 0.0, 1.0], box_color));
-    verts.push(make_vertex([s, y1, s], [0.0, 0.0, 1.0], box_color));
-    verts.push(make_vertex([-s, y1, s], [0.0, 0.0, 1.0], box_color));
-    // Back face (-z)
-    verts.push(make_vertex([s, y0, -s], [0.0, 0.0, -1.0], box_color));
-    verts.push(make_vertex([-s, y0, -s], [0.0, 0.0, -1.0], box_color));
-    verts.push(make_vertex([-s, y1, -s], [0.0, 0.0, -1.0], box_color));
-    verts.push(make_vertex([s, y1, -s], [0.0, 0.0, -1.0], box_color));
-    // Top face (+y)
-    verts.push(make_vertex([-s, y1, s], [0.0, 1.0, 0.0], box_color));
-    verts.push(make_vertex([s, y1, s], [0.0, 1.0, 0.0], box_color));
-    verts.push(make_vertex([s, y1, -s], [0.0, 1.0, 0.0], box_color));
-    verts.push(make_vertex([-s, y1, -s], [0.0, 1.0, 0.0], box_color));
-    // Bottom face (-y)
-    verts.push(make_vertex([-s, y0, -s], [0.0, -1.0, 0.0], box_color));
-    verts.push(make_vertex([s, y0, -s], [0.0, -1.0, 0.0], box_color));
-    verts.push(make_vertex([s, y0, s], [0.0, -1.0, 0.0], box_color));
-    verts.push(make_vertex([-s, y0, s], [0.0, -1.0, 0.0], box_color));
-    // Right face (+x)
-    verts.push(make_vertex([s, y0, s], [1.0, 0.0, 0.0], box_color));
-    verts.push(make_vertex([s, y0, -s], [1.0, 0.0, 0.0], box_color));
-    verts.push(make_vertex([s, y1, -s], [1.0, 0.0, 0.0], box_color));
-    verts.push(make_vertex([s, y1, s], [1.0, 0.0, 0.0], box_color));
-    // Left face (-x)
-    verts.push(make_vertex([-s, y0, -s], [-1.0, 0.0, 0.0], box_color));
-    verts.push(make_vertex([-s, y0, s], [-1.0, 0.0, 0.0], box_color));
-    verts.push(make_vertex([-s, y1, s], [-1.0, 0.0, 0.0], box_color));
-    verts.push(make_vertex([-s, y1, -s], [-1.0, 0.0, 0.0], box_color));
+        for i in 0..mesh.positions.len() {
+            let world = transform_point(xf, mesh.positions[i]);
+            for a in 0..3 {
+                aabb_min[a] = aabb_min[a].min(world[a]);
+                aabb_max[a] = aabb_max[a].max(world[a]);
+            }
+            let normal = mesh.normals.get(i).copied().unwrap_or([0.0, 1.0, 0.0]);
+            let wn = normalize3(transform_dir(xf, normal));
+            vertices.push(Vertex {
+                position: world,
+                normal: wn,
+                color: albedo,
+                uv: mesh.uvs.get(i).copied().unwrap_or([0.0, 0.0]),
+                tangent: mesh.tangents.get(i).copied().unwrap_or([1.0, 0.0, 0.0]),
+            });
+        }
 
-    let vertex_count = verts.len();
-    let buf_size = (vertex_count * std::mem::size_of::<BakeVertex>()) as vk::DeviceSize;
-
-    let (buffer, memory) = prism_render::buffer::create_buffer(
-        context,
-        buf_size,
-        prism_render::buffer::BufferUsage::STORAGE_BUFFER
-            | prism_render::buffer::BufferUsage::SHADER_DEVICE_ADDRESS
-            | prism_render::buffer::BufferUsage::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
-        prism_render::buffer::MemoryProperties::HOST_VISIBLE
-            | prism_render::buffer::MemoryProperties::HOST_COHERENT,
-    )
-    .context("create vertex buffer")?;
-
-    unsafe {
-        let ptr = context.device.map_memory(memory, 0, buf_size, vk::MemoryMapFlags::empty())?;
-        std::ptr::copy_nonoverlapping(verts.as_ptr() as *const u8, ptr as *mut u8, buf_size as usize);
-        context.device.unmap_memory(memory);
+        if mesh.is_indexed() {
+            for idx in &mesh.indices {
+                indices.push(base + idx);
+            }
+        } else {
+            for i in 0..mesh.positions.len() as u32 {
+                indices.push(base + i);
+            }
+        }
     }
 
-    Ok((buffer, memory, vertex_count))
+    anyhow::ensure!(!vertices.is_empty(), "scene produced no geometry");
+    Ok((vertices, indices, aabb_min, aabb_max))
 }
 
-fn create_test_scene_indices(context: &VulkanContext) -> Result<(vk::Buffer, vk::DeviceMemory, usize)> {
-    // Ground: 2 triangles (0,1,2) (0,2,3)
-    // Box: 6 faces × 2 triangles each
-    let indices: Vec<u32> = vec![
-        // Ground
-        0, 1, 2, 0, 2, 3,
-        // Box front
-        4, 5, 6, 4, 6, 7,
-        // Box back
-        8, 9, 10, 8, 10, 11,
-        // Box top
-        12, 13, 14, 12, 14, 15,
-        // Box bottom
-        16, 17, 18, 16, 18, 19,
-        // Box right
-        20, 21, 22, 20, 22, 23,
-        // Box left
-        24, 25, 26, 24, 26, 27,
+/// A closed unit cube centered at the origin (side length 4, so [-2,2]^3),
+/// 12 triangles, white albedo. Used to validate the ray-query bake path
+/// independent of any glTF scene. Returns `(verts, indices, aabb_min, aabb_max)`.
+fn test_cube_geometry() -> (Vec<Vertex>, Vec<u32>, [f32; 3], [f32; 3]) {
+    let p: [[f32; 3]; 8] = [
+        [-2.0, -2.0, -2.0],
+        [2.0, -2.0, -2.0],
+        [2.0, 2.0, -2.0],
+        [-2.0, 2.0, -2.0],
+        [-2.0, -2.0, 2.0],
+        [2.0, -2.0, 2.0],
+        [2.0, 2.0, 2.0],
+        [-2.0, 2.0, 2.0],
     ];
+    // Faces wound CCW as seen from outside; cull is disabled anyway.
+    let faces: [[u32; 4]; 6] = [
+        [0, 1, 2, 3], // -Z
+        [5, 4, 7, 6], // +Z
+        [4, 0, 3, 7], // -X
+        [1, 5, 6, 2], // +X
+        [3, 2, 6, 7], // +Y
+        [4, 5, 1, 0], // -Y
+    ];
+    let mut vertices = Vec::new();
+    let mut indices = Vec::new();
+    for f in &faces {
+        let base = vertices.len() as u32;
+        for &vi in f {
+            vertices.push(Vertex {
+                position: p[vi as usize],
+                normal: [0.0, 1.0, 0.0],
+                color: [0.8, 0.8, 0.8],
+                uv: [0.0, 0.0],
+                tangent: [1.0, 0.0, 0.0],
+            });
+        }
+        indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+    }
+    (vertices, indices, [-2.0, -2.0, -2.0], [2.0, 2.0, 2.0])
+}
 
-    let index_count = indices.len();
-    let buf_size = (index_count * 4) as vk::DeviceSize;
+/// Column-major 4x4 point transform (includes translation).
+fn transform_point(m: [[f32; 4]; 4], p: [f32; 3]) -> [f32; 3] {
+    [
+        m[0][0] * p[0] + m[1][0] * p[1] + m[2][0] * p[2] + m[3][0],
+        m[0][1] * p[0] + m[1][1] * p[1] + m[2][1] * p[2] + m[3][1],
+        m[0][2] * p[0] + m[1][2] * p[1] + m[2][2] * p[2] + m[3][2],
+    ]
+}
 
+/// Column-major 4x4 direction transform (no translation).
+fn transform_dir(m: [[f32; 4]; 4], d: [f32; 3]) -> [f32; 3] {
+    [
+        m[0][0] * d[0] + m[1][0] * d[1] + m[2][0] * d[2],
+        m[0][1] * d[0] + m[1][1] * d[1] + m[2][1] * d[2],
+        m[0][2] * d[0] + m[1][2] * d[1] + m[2][2] * d[2],
+    ]
+}
+
+fn normalize3(v: [f32; 3]) -> [f32; 3] {
+    let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+    if len > 1e-8 {
+        [v[0] / len, v[1] / len, v[2] / len]
+    } else {
+        [0.0, 1.0, 0.0]
+    }
+}
+
+/// Derive a probe grid covering the scene AABB (plus margin). Spacing aims for
+/// `TARGET_SPACING` world units, clamped to `MAX_DIM` probes per axis.
+fn derive_grid(aabb_min: [f32; 3], aabb_max: [f32; 3]) -> ([f32; 3], [f32; 3], [u32; 3]) {
+    let mut origin = [0.0f32; 3];
+    let mut spacing = [0.0f32; 3];
+    let mut dims = [0u32; 3];
+    for a in 0..3 {
+        let size = (aabb_max[a] - aabb_min[a]) + 2.0 * GRID_MARGIN;
+        let dim = ((size / TARGET_SPACING).ceil() as u32).clamp(2, MAX_DIM);
+        origin[a] = aabb_min[a] - GRID_MARGIN;
+        dims[a] = dim;
+        spacing[a] = size / (dim - 1) as f32;
+    }
+    (origin, spacing, dims)
+}
+
+// -------------------------------------------------------------------
+// Buffer upload helpers
+// -------------------------------------------------------------------
+
+fn vertex_bytes(vertices: &[Vertex]) -> &[u8] {
+    unsafe {
+        std::slice::from_raw_parts(
+            vertices.as_ptr() as *const u8,
+            vertices.len() * std::mem::size_of::<Vertex>(),
+        )
+    }
+}
+
+fn index_bytes(indices: &[u32]) -> &[u8] {
+    unsafe {
+        std::slice::from_raw_parts(indices.as_ptr() as *const u8, indices.len() * 4)
+    }
+}
+
+/// Host-visible storage buffer (also usable as a BLAS build input + via
+/// device address), initialized with `data`.
+fn create_storage_buffer(context: &VulkanContext, data: &[u8]) -> Result<(vk::Buffer, vk::DeviceMemory)> {
+    let size = data.len() as vk::DeviceSize;
     let (buffer, memory) = prism_render::buffer::create_buffer(
         context,
-        buf_size,
+        size,
         prism_render::buffer::BufferUsage::STORAGE_BUFFER
             | prism_render::buffer::BufferUsage::SHADER_DEVICE_ADDRESS
             | prism_render::buffer::BufferUsage::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
         prism_render::buffer::MemoryProperties::HOST_VISIBLE
             | prism_render::buffer::MemoryProperties::HOST_COHERENT,
-    )
-    .context("create index buffer")?;
-
+    )?;
     unsafe {
-        let ptr = context.device.map_memory(memory, 0, buf_size, vk::MemoryMapFlags::empty())?;
-        std::ptr::copy_nonoverlapping(indices.as_ptr() as *const u8, ptr as *mut u8, buf_size as usize);
+        let ptr = context.device.map_memory(memory, 0, size, vk::MemoryMapFlags::empty())?;
+        std::ptr::copy_nonoverlapping(data.as_ptr(), ptr as *mut u8, data.len());
         context.device.unmap_memory(memory);
     }
-
-    Ok((buffer, memory, index_count))
+    Ok((buffer, memory))
 }

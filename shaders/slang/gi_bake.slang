@@ -1,9 +1,13 @@
 // GI bake compute shader — offline probe-volume baker (GPU ray-query).
 //
 // Each thread bakes one probe: casts N rays (Fibonacci sphere) against the
-// TLAS, computes direct lighting (directional light × hit albedo), and
-// projects the incoming radiance onto 9 order-2 SH coefficients with cosine
+// TLAS, computes incoming radiance (sky for missed rays, direct sun bounce
+// for hits), and projects it onto 9 order-2 SH coefficients with cosine
 // weighting (pre-multiplied cosine convolution, matching gi.rs contract).
+//
+// Missed rays return sky radiance — this is what makes enclosed interiors
+// darken: probes inside a room have all rays hit geometry (little/no sky),
+// while outdoor probes see bright sky through their upward rays.
 //
 // Dispatch: (dims.x, dims.y, dims.z) — one thread per probe.
 // Output: RWTexture3D in GENERAL layout, coefficient-major depth slices.
@@ -40,16 +44,13 @@ struct ProbeVolumeInfo
     uint4  dims;     // xyz = probe count per axis
 };
 
-// ---- Vertex layout (matches prism-render Vertex: pos[3], normal[3], color[4], uv[2], tangent[3], _pad) ----
-struct GpuVertex
-{
-    float3 position;
-    float3 normal;
-    float4 color;    // .rgb = albedo (linear)
-    float2 uv;
-    float3 tangent;
-    float  _pad;
-};
+// ---- Vertex layout (matches prism-render `mesh::Vertex`, repr(C), 56 bytes) ----
+// position [f32;3] @ 0, normal [f32;3] @ 12, color [f32;3] @ 24,
+// uv [f32;2] @ 36, tangent [f32;3] @ 44. Read via ByteAddressBuffer with
+// explicit byte offsets to avoid any struct-layout ambiguity.
+static const uint VERTEX_STRIDE   = 56u;
+static const uint POSITION_OFFSET = 0u;
+static const uint COLOR_OFFSET    = 24u;
 
 // ---- Push constants ----
 struct BakePush
@@ -61,6 +62,7 @@ struct BakePush
 
 // ---- Descriptors (set 0) ----
 [[vk::binding(0, 0)]]
+[format("rgba32f")]
 RWTexture3D<float4> probeVolume;
 
 [[vk::binding(1, 0)]]
@@ -70,16 +72,25 @@ ConstantBuffer<ProbeVolumeInfo> probeInfo;
 RaytracingAccelerationStructure tlas;
 
 [[vk::binding(3, 0)]]
-StructuredBuffer<GpuVertex> vertices;
+ByteAddressBuffer vertexData;   // interleaved mesh::Vertex (56-byte stride)
 
 [[vk::binding(4, 0)]]
 StructuredBuffer<uint> indices;
 
 [[vk::binding(5, 0)]]
-StructuredBuffer<float4> instanceAlbedo; // per-instance albedo override (rgb), w = unused
+StructuredBuffer<float4> instanceAlbedo; // per-instance override; w>0.5 = use
 
 [[vk::push_constant]]
 BakePush push;
+
+// Sky radiance for a missed ray (escapes the scene). Bright blue sky above,
+// dark ground below. Only the upper hemisphere contributes (cosine weighting).
+float3 sky_radiance(float3 dir)
+{
+    float t = clamp(dir.y, 0.0, 1.0);
+    // Horizon (bright haze) -> zenith (deep blue).
+    return lerp(float3(0.55, 0.60, 0.65), float3(0.25, 0.45, 0.90), t);
+}
 
 // ---- Compute entry point ----
 [shader("compute")]
@@ -101,6 +112,7 @@ void bakeMain(uint3 tid : SV_DispatchThreadID)
 
     uint N = push.num_rays;
     float weight_base = 4.0 * 3.14159265 / float(N);
+    uint hit_count = 0; // diagnostic: how many rays hit geometry
 
     for (uint si = 0; si < N; si++)
     {
@@ -117,34 +129,40 @@ void bakeMain(uint3 tid : SV_DispatchThreadID)
         ray.TMin = 0.01;
         ray.TMax = 1000.0;
 
-        RayQuery<RAY_FLAG_CULL_BACK_FACING_TRIANGLES> q;
+        // No back-face culling: interior probes must hit the INSIDE of
+        // single-sided walls (which are back-facing relative to the ray),
+        // otherwise rays leak through walls to the sky and interiors stay
+        // bright. TMin guards against self-intersection.
+        RayQuery<RAY_FLAG_NONE> q;
         q.TraceRayInline(tlas, RAY_FLAG_NONE, 0xFF, ray);
         q.Proceed();
 
-        float3 radiance = float3(0.0, 0.0, 0.0);
+        float3 radiance;
 
         if (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
         {
-            // Get hit triangle vertices.
+            hit_count++;
+            // Hit triangle: read vertex positions + colors from the flattened
+            // world-space mesh (single BLAS, global primitive/vertex indices).
             uint prim_idx = q.CommittedPrimitiveIndex();
-            uint instance_id = q.CommittedInstanceIndex();
             uint i0 = indices[prim_idx * 3 + 0];
             uint i1 = indices[prim_idx * 3 + 1];
             uint i2 = indices[prim_idx * 3 + 2];
 
-            float3 v0 = vertices[i0].position;
-            float3 v1 = vertices[i1].position;
-            float3 v2 = vertices[i2].position;
+            float3 v0 = asfloat(vertexData.Load3(i0 * VERTEX_STRIDE + POSITION_OFFSET));
+            float3 v1 = asfloat(vertexData.Load3(i1 * VERTEX_STRIDE + POSITION_OFFSET));
+            float3 v2 = asfloat(vertexData.Load3(i2 * VERTEX_STRIDE + POSITION_OFFSET));
 
-            // Barycentric interpolation for albedo.
+            // Barycentric interpolation of per-vertex albedo (material base color).
             float2 bary = q.CommittedTriangleBarycentrics();
             float w0 = 1.0 - bary.x - bary.y;
-            float3 albedo_v0 = vertices[i0].color.rgb;
-            float3 albedo_v1 = vertices[i1].color.rgb;
-            float3 albedo_v2 = vertices[i2].color.rgb;
-            float3 hit_albedo = w0 * albedo_v0 + bary.x * albedo_v1 + bary.y * albedo_v2;
+            float3 c0 = asfloat(vertexData.Load3(i0 * VERTEX_STRIDE + COLOR_OFFSET));
+            float3 c1 = asfloat(vertexData.Load3(i1 * VERTEX_STRIDE + COLOR_OFFSET));
+            float3 c2 = asfloat(vertexData.Load3(i2 * VERTEX_STRIDE + COLOR_OFFSET));
+            float3 hit_albedo = w0 * c0 + bary.x * c1 + bary.y * c2;
 
-            // Per-instance albedo override (if available).
+            // Per-instance albedo override (if flagged).
+            uint instance_id = q.CommittedInstanceIndex();
             if (instance_id < 1024u)
             {
                 float4 inst_alb = instanceAlbedo[instance_id];
@@ -152,18 +170,19 @@ void bakeMain(uint3 tid : SV_DispatchThreadID)
                     hit_albedo = inst_alb.rgb;
             }
 
-            // Direct lighting: NdotL * light_color * albedo.
+            // Direct sun bounce off the hit surface: NdotL * light * albedo.
             float3 hit_normal = normalize(cross(v1 - v0, v2 - v0));
             float ndotl = max(dot(hit_normal, push.light_dir.xyz), 0.0);
             radiance = hit_albedo * push.light_color.xyz * ndotl;
         }
+        else
+        {
+            // Missed the scene: incoming sky radiance.
+            radiance = sky_radiance(dir);
+        }
 
-        // Cosine-weighted SH projection.
-        // The probe "surface normal" for cosine weighting is the ray direction
-        // itself (we're integrating the sphere, cosine lobe centered on each
-        // probe's local up — but for a full-sphere probe we use cos(theta)
-        // relative to the probe's implicit up = +Y).
-        float cos_w = max(dir.y, 0.0); // hemisphere weighting (upper)
+        // Cosine-weighted SH projection (upper hemisphere, lobe centered on +Y).
+        float cos_w = max(dir.y, 0.0);
         float w = weight_base * cos_w;
 
         float basis[SH_COEFF_COUNT];
@@ -175,11 +194,15 @@ void bakeMain(uint3 tid : SV_DispatchThreadID)
         }
     }
 
-    // Write to 3D texture (coefficient-major depth slices).
+    // Write to 3D texture (coefficient-major depth slices). The c=0 texel's
+    // alpha carries the per-probe hit ratio (diagnostic: 0 = all rays missed
+    // the TLAS, 1 = fully enclosed).
     uint dz = dims.z;
+    float hit_ratio = float(hit_count) / float(N);
     for (uint c = 0; c < SH_COEFF_COUNT; c++)
     {
         uint tex_z = c * dz + tid.z;
-        probeVolume[uint3(tid.x, tid.y, tex_z)] = float4(sh[c], 0.0);
+        float alpha = (c == 0u) ? hit_ratio : 0.0;
+        probeVolume[uint3(tid.x, tid.y, tex_z)] = float4(sh[c], alpha);
     }
 }

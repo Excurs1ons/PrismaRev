@@ -758,6 +758,13 @@ impl App {
         // it are already reflected into `draw_items` above.
         let _ = scene;
         self.scene_loaded = true;
+
+        // Replace the synthetic sky probe field with real baked GI if a
+        // `.bin` exists (produced by `prism-bake-gi`). Missing file is
+        // non-fatal — the renderer keeps the synthetic field so the app
+        // still renders. This is what makes enclosed interiors darken.
+        renderer.load_probe_volume_file(std::path::Path::new("assets/gi/probe_volume.bin"));
+
         log::info!(
             "App::load_demo_scene: registered {} mesh(es), {} material(s), {} texture(s); {} draw items",
             self.scene_store.meshes().count(),

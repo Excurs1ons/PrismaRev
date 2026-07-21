@@ -402,6 +402,39 @@ impl GraphRenderer {
         self.settings.gi_mode = mode;
     }
 
+    /// Replace the scene-scope probe volume with real baked data loaded from a
+    /// `.bin` file (produced by `prism-bake-gi`). Falls back to the synthetic
+    /// sky field already resident if the file is missing or invalid, so the
+    /// app still renders. Returns `true` when baked data was applied.
+    pub fn load_probe_volume_file(&mut self, path: &std::path::Path) -> bool {
+        match prism_asset::load_probe_volume(path) {
+            Ok(data) => match self.scene_scope.from_probe_data(&data) {
+                Ok(()) => {
+                    log::info!(
+                        "GraphRenderer: loaded baked GI probe volume from {} (dims {:?})",
+                        path.display(),
+                        data.dims
+                    );
+                    true
+                }
+                Err(e) => {
+                    log::warn!(
+                        "GraphRenderer: failed to upload baked probe volume {}: {e:#}",
+                        path.display()
+                    );
+                    false
+                }
+            },
+            Err(e) => {
+                log::info!(
+                    "GraphRenderer: no baked GI at {} ({e}); keeping synthetic sky field",
+                    path.display()
+                );
+                false
+            }
+        }
+    }
+
     pub fn extent(&self) -> vk::Extent2D {
         self.swapchain
             .as_ref()
