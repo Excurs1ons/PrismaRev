@@ -243,7 +243,7 @@ impl SceneScope {
         let data_bytes: &[u8] = unsafe {
             std::slice::from_raw_parts(
                 pixels.as_ptr() as *const u8,
-                pixels.len() * std::mem::size_of::<f32>(),
+                std::mem::size_of_val(pixels),
             )
         };
         let staging_size = data_bytes.len() as vk::DeviceSize;
@@ -494,13 +494,13 @@ impl SceneScope {
             let pi = probe_idx % dims[0];
             let pj = (probe_idx / dims[0]) % dims[1];
             let pk = probe_idx / (dims[0] * dims[1]);
-            for coeff in 0..SH_COEFF_COUNT {
+            for (coeff, shc) in sh.iter().enumerate() {
                 let z = coeff * dz + pk;
                 let texel_idx = (z * dims[1] * dims[0]) + pj * dims[0] + pi;
                 let base = texel_idx * 4;
-                pixels[base] = sh[coeff][0];
-                pixels[base + 1] = sh[coeff][1];
-                pixels[base + 2] = sh[coeff][2];
+                pixels[base] = shc[0];
+                pixels[base + 1] = shc[1];
+                pixels[base + 2] = shc[2];
                 pixels[base + 3] = 0.0; // alpha unused
             }
         }

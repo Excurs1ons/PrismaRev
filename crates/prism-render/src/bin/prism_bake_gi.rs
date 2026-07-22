@@ -21,6 +21,9 @@ use ash::vk;
 use prism_render::context::VulkanContext;
 use prism_render::mesh::Vertex;
 
+/// Flattened world-space geometry: vertices, indices, and the scene AABB.
+type SceneGeometry = (Vec<Vertex>, Vec<u32>, [f32; 3], [f32; 3]);
+
 /// Number of ray directions per probe (Fibonacci sphere).
 const NUM_RAYS: u32 = 64;
 /// Default output path.
@@ -76,14 +79,19 @@ fn main() -> Result<()> {
     // instead of the manifest scene, to isolate ray-query mechanism bugs from
     // scene-data bugs (a cube must produce non-zero hit ratios for interior
     // probes).
-    let (vertices, indices, aabb_min, aabb_max) =
-        if std::env::var("PRISM_BAKE_TEST_CUBE").is_ok() {
+    let (vertices, indices, aabb_min, aabb_max, scene_name) =
+        if std::env::var("PRISM_BAKE_TEST_CUBE").is_ok()
+            || cli_gltf.as_deref().map(|p| p == Path::new("cube")).unwrap_or(false)
+        {
             log::info!("  TEST MODE: procedural cube");
-            test_cube_geometry()
+            let (v, i, mn, mx) = test_cube_geometry();
+            (v, i, mn, mx, "test_cube".to_string())
         } else {
-            let scene_path = resolve_scene_path(cli_gltf.as_deref())?;
-            log::info!("  scene: {}", scene_path.display());
-            load_scene_geometry(&scene_path).context("load + flatten scene geometry")?
+            let (scene_path, scene_name) = resolve_scene_path(cli_gltf.as_deref())?;
+            log::info!("  scene: {} ({})", scene_path.display(), scene_name);
+            let (v, i, mn, mx) =
+                load_scene_geometry(&scene_path).context("load + flatten scene geometry")?;
+            (v, i, mn, mx, scene_name)
         };
     log::info!(
         "  flattened: {} vertices, {} indices ({} tris)",
@@ -220,24 +228,15 @@ fn main() -> Result<()> {
         context.device.unmap_memory(info_memory);
     }
 
-    // ---- 9. Instance albedo SSBO (1 instance, w=0 -> use vertex color) ----
-    let albedo_data: [f32; 4] = [1.0, 1.0, 1.0, 0.0]; // w=0: no override
-    let albedo_size = 16u64;
-    let (albedo_buffer, albedo_memory) = prism_render::buffer::create_buffer(
-        &context,
-        albedo_size,
-        prism_render::buffer::BufferUsage::STORAGE_BUFFER,
-        prism_render::buffer::MemoryProperties::HOST_VISIBLE
-            | prism_render::buffer::MemoryProperties::HOST_COHERENT,
-    )
-    .context("create albedo SSBO")?;
-    unsafe {
-        let ptr = context.device.map_memory(albedo_memory, 0, albedo_size, vk::MemoryMapFlags::empty())?;
-        std::ptr::copy_nonoverlapping(albedo_data.as_ptr() as *const u8, ptr as *mut u8, 16);
-        context.device.unmap_memory(albedo_memory);
-    }
+    // ---- 9. (removed) Instance albedo SSBO ----
+    // Previously a 16-byte per-instance albedo override buffer (binding 5).
+    // Removed: the baker flattens all instances into one mesh whose vertex
+    // color already carries the material base color, so the override was dead
+    // code (always w=0 -> never applied). The shader no longer declares it.
 
     // ---- 10. Descriptor set layout + pool + set ----
+    // Bindings 0..4 (binding 5 = instanceAlbedo removed; vertex color carries
+    // albedo). Must match gi_bake.slang descriptor declarations.
     let bindings = [
         vk::DescriptorSetLayoutBinding::default()
             .binding(0)
@@ -264,11 +263,6 @@ fn main() -> Result<()> {
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
             .descriptor_count(1)
             .stage_flags(vk::ShaderStageFlags::COMPUTE),
-        vk::DescriptorSetLayoutBinding::default()
-            .binding(5)
-            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::COMPUTE),
     ];
     let ds_layout = unsafe {
         context.device.create_descriptor_set_layout(
@@ -285,7 +279,7 @@ fn main() -> Result<()> {
                     vk::DescriptorPoolSize { ty: vk::DescriptorType::STORAGE_IMAGE, descriptor_count: 1 },
                     vk::DescriptorPoolSize { ty: vk::DescriptorType::UNIFORM_BUFFER, descriptor_count: 1 },
                     vk::DescriptorPoolSize { ty: vk::DescriptorType::ACCELERATION_STRUCTURE_KHR, descriptor_count: 1 },
-                    vk::DescriptorPoolSize { ty: vk::DescriptorType::STORAGE_BUFFER, descriptor_count: 3 },
+                    vk::DescriptorPoolSize { ty: vk::DescriptorType::STORAGE_BUFFER, descriptor_count: 2 },
                 ]),
             None,
         )
@@ -317,10 +311,6 @@ fn main() -> Result<()> {
         .buffer(index_buffer)
         .offset(0)
         .range(vk::WHOLE_SIZE);
-    let alb_buf_info = vk::DescriptorBufferInfo::default()
-        .buffer(albedo_buffer)
-        .offset(0)
-        .range(albedo_size);
     let writes = [
         vk::WriteDescriptorSet::default()
             .dst_set(ds)
@@ -348,11 +338,6 @@ fn main() -> Result<()> {
             .dst_binding(4)
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
             .buffer_info(std::slice::from_ref(&idx_buf_info)),
-        vk::WriteDescriptorSet::default()
-            .dst_set(ds)
-            .dst_binding(5)
-            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-            .buffer_info(std::slice::from_ref(&alb_buf_info)),
     ];
     unsafe { context.device.update_descriptor_sets(&writes, &[]) };
 
@@ -362,10 +347,25 @@ fn main() -> Result<()> {
         .with_context(|| format!("read {} (compile shaders first: shaders/compile.sh)", spv_path.display()))?;
     let shader_module = prism_render::shader::load_shader_module(&context.device, &spv_bytes)
         .context("create gi_bake shader module")?;
+    // Push constant range. The Slang `BakePush` block is 3x vec4 (48 bytes)
+    // + 1x uint (4 bytes) = 52 bytes under the std140/scalar layout the
+    // compiler emits (the trailing uint is NOT padded to 16 here). This MUST
+    // match the range declared in the pipeline layout or validation rejects
+    // it (VUID-VkComputePipelineCreateInfo-layout-10069). The Rust mirror
+    // below is `#[repr(C)]` and also 52 bytes, so `size_of::<BakePush>()`
+    // drives both the range and the push-constant upload.
+    #[repr(C)]
+    struct BakePush {
+        light_dir: [f32; 4],
+        light_color: [f32; 4],
+        probe_spacing: [f32; 4],
+        num_rays: u32,
+    }
+    const BAKE_PUSH_SIZE: u32 = std::mem::size_of::<BakePush>() as u32; // 52
     let push_range = vk::PushConstantRange::default()
         .stage_flags(vk::ShaderStageFlags::COMPUTE)
         .offset(0)
-        .size(36); // 2x vec4 + 1x uint
+        .size(BAKE_PUSH_SIZE);
     let pipeline = prism_render::compute::ComputePipeline::new(
         &context.device,
         shader_module,
@@ -386,17 +386,28 @@ fn main() -> Result<()> {
         )
     }?[0];
 
-    #[repr(C)]
-    struct BakePush {
-        light_dir: [f32; 4],
-        light_color: [f32; 4],
-        num_rays: u32,
-    }
-    // Warm directional sun, normalized. Points FROM the surface TO the light.
-    let ld = normalize3([0.45, 0.75, 0.35]);
+    // Directional sun: reuse the runtime default light so the baked direct-sun
+    // bounce matches the sun the player sees. The constants mirror
+    // prism_engine::DirectionalLight::default() (euler=[45,-45,0], intensity=3,
+    // color=white); see prism_render::gi::BAKE_DEFAULT_LIGHT_*.
+    use prism_render::gi::{
+        bake_euler_xyz_deg_to_dir, BAKE_DEFAULT_LIGHT_COLOR, BAKE_DEFAULT_LIGHT_EULER,
+        BAKE_DEFAULT_LIGHT_INTENSITY,
+    };
+    let ld = bake_euler_xyz_deg_to_dir(BAKE_DEFAULT_LIGHT_EULER);
+    let lc = [
+        BAKE_DEFAULT_LIGHT_COLOR[0] * BAKE_DEFAULT_LIGHT_INTENSITY,
+        BAKE_DEFAULT_LIGHT_COLOR[1] * BAKE_DEFAULT_LIGHT_INTENSITY,
+        BAKE_DEFAULT_LIGHT_COLOR[2] * BAKE_DEFAULT_LIGHT_INTENSITY,
+    ];
+    log::info!(
+        "  bake light: dir=[{:.3},{:.3},{:.3}] color=[{:.3},{:.3},{:.3}] (matches runtime default)",
+        ld[0], ld[1], ld[2], lc[0], lc[1], lc[2]
+    );
     let push_data = BakePush {
         light_dir: [ld[0], ld[1], ld[2], 0.0],
-        light_color: [3.0, 2.8, 2.5, 0.0],
+        light_color: [lc[0], lc[1], lc[2], 0.0],
+        probe_spacing: [spacing[0], spacing[1], spacing[2], 0.0],
         num_rays: NUM_RAYS,
     };
 
@@ -446,7 +457,12 @@ fn main() -> Result<()> {
                 std::mem::size_of::<BakePush>(),
             ),
         );
-        context.device.cmd_dispatch(cmd_buf, dims[0], dims[1], dims[2]);
+        // Dispatch with numthreads(4,4,1): round up so every probe gets a
+        // thread. The shader's `tid >= dims` guard clips the tail when dims
+        // isn't a multiple of 4.
+        let dgx = dims[0].div_ceil(4);
+        let dgy = dims[1].div_ceil(4);
+        context.device.cmd_dispatch(cmd_buf, dgx, dgy, dims[2]);
         context.device.cmd_pipeline_barrier(
             cmd_buf,
             vk::PipelineStageFlags::COMPUTE_SHADER,
@@ -559,7 +575,37 @@ fn main() -> Result<()> {
             }
         }
     }
-    let probe_data = prism_asset::ProbeVolumeData { origin, spacing, dims, coeffs };
+
+    // Global hit ratio = mean over probes that are NOT inside-solid sentinels
+    // (hit_ratio == -1.0). Inside-solid probes are excluded so a scene with
+    // many embedded probes doesn't drag the average toward -1 and trip the
+    // runtime's all-miss guard. If every probe is inside-solid (degenerate),
+    // fall back to 0.0 so the runtime rejects it.
+    let mut hr_sum = 0.0f32;
+    let mut hr_count = 0u32;
+    let mut inside_solid = 0u32;
+    for &h in &hit_ratios {
+        if h < 0.0 {
+            inside_solid += 1;
+        } else {
+            hr_sum += h;
+            hr_count += 1;
+        }
+    }
+    let global_hit_ratio = if hr_count > 0 {
+        hr_sum / hr_count as f32
+    } else {
+        0.0
+    };
+
+    let probe_data = prism_asset::ProbeVolumeData {
+        origin,
+        spacing,
+        dims,
+        coeffs,
+        scene_name: scene_name.clone(),
+        global_hit_ratio,
+    };
 
     // Sanity: DC coefficient (c=0) of a few probes. DC must be non-negative
     // (it is the mean irradiance); a negative DC would signal a bake bug. Each
@@ -596,17 +642,18 @@ fn main() -> Result<()> {
     );
     // Hit-ratio diagnostic: fraction of rays that hit geometry per probe.
     // 0.0 everywhere => the TLAS is empty / ray query misses everything.
+    // -1.0 => inside-solid probe (coefficients zeroed by the shader).
     let mut hr_min = f32::MAX;
     let mut hr_max = f32::MIN;
-    let mut hr_sum = 0.0f32;
     for &h in &hit_ratios {
-        hr_min = hr_min.min(h);
-        hr_max = hr_max.max(h);
-        hr_sum += h;
+        if h >= 0.0 {
+            hr_min = hr_min.min(h);
+            hr_max = hr_max.max(h);
+        }
     }
     log::info!(
-        "  hit ratio: min {:.3} max {:.3} avg {:.3} (0 = all rays miss TLAS)",
-        hr_min, hr_max, hr_sum / probe_count as f32
+        "  hit ratio: min {:.3} max {:.3} avg {:.3} inside-solid={} / {} (0 = all rays miss TLAS, -1 = inside solid)",
+        hr_min, hr_max, global_hit_ratio, inside_solid, probe_count
     );
 
     // ---- 15. Write .bin ----
@@ -615,10 +662,12 @@ fn main() -> Result<()> {
     }
     prism_asset::save_probe_volume(&output_path, &probe_data).context("write probe volume .bin")?;
     log::info!(
-        "  wrote {} ({} probes, {} coeffs)",
+        "  wrote {} ({} probes, {} coeffs, scene='{}', hit_ratio={:.3})",
         output_path.display(),
         probe_count,
-        probe_data.coeffs.len()
+        probe_data.coeffs.len(),
+        probe_data.scene_name,
+        probe_data.global_hit_ratio
     );
     log::info!("prism-bake-gi: done");
 
@@ -633,8 +682,6 @@ fn main() -> Result<()> {
         context.device.free_memory(volume_memory, None);
         context.device.destroy_buffer(info_buffer, None);
         context.device.free_memory(info_memory, None);
-        context.device.destroy_buffer(albedo_buffer, None);
-        context.device.free_memory(albedo_memory, None);
         context.device.destroy_buffer(staging_buf, None);
         context.device.free_memory(staging_mem, None);
         context.device.destroy_buffer(vertex_buffer, None);
@@ -654,37 +701,66 @@ fn main() -> Result<()> {
 // -------------------------------------------------------------------
 
 /// Pick the glTF to bake: explicit CLI path, else the first existing scene in
-/// `assets/scenes.toml` (same resolution the app uses).
-fn resolve_scene_path(cli: Option<&Path>) -> Result<PathBuf> {
+/// `assets/scenes.toml` (same resolution the app uses). Returns
+/// `(path, scene_name)` where `scene_name` is the manifest `name` (or the
+/// glTF file stem for a CLI path) - written into the `.bin` so the runtime can
+/// reject a volume baked for a different scene.
+fn resolve_scene_path(cli: Option<&Path>) -> Result<(PathBuf, String)> {
     if let Some(p) = cli {
         anyhow::ensure!(p.exists(), "glTF path does not exist: {}", p.display());
-        return Ok(p.to_path_buf());
+        let name = p
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("unnamed")
+            .to_string();
+        return Ok((p.to_path_buf(), name));
     }
     let text = std::fs::read_to_string(SCENE_MANIFEST)
         .with_context(|| format!("read scene manifest {SCENE_MANIFEST}"))?;
-    let mut paths: Vec<PathBuf> = Vec::new();
+    // Minimal TOML parse for the fixed schema (matches app.rs): track the
+    // current `name` and pair it with the following `path`.
+    let mut scenes: Vec<(String, PathBuf)> = Vec::new();
+    let mut current_name: Option<String> = None;
     for raw in text.lines() {
         let line = raw.trim();
-        if let Some(rest) = line.strip_prefix("path") {
-            let val = rest.trim_start().trim_start_matches('=').trim();
-            let val = val.trim_matches('"');
-            if !val.is_empty() {
-                paths.push(PathBuf::from(val));
+        if line.starts_with("[[scenes]]") {
+            current_name = None;
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("name") {
+            if let Some(v) = split_toml_string(rest) {
+                current_name = Some(v);
+            }
+        } else if let Some(rest) = line.strip_prefix("path") {
+            if let Some(v) = split_toml_string(rest) {
+                let name = current_name.clone().unwrap_or_else(|| "unnamed".into());
+                scenes.push((name, PathBuf::from(v)));
             }
         }
     }
-    for p in paths {
+    for (name, p) in scenes {
         if p.exists() {
-            return Ok(p);
+            return Ok((p, name));
         }
     }
     bail!("no existing scene found in {SCENE_MANIFEST}; pass a glTF path explicitly")
 }
 
+/// Trim a ` = "value"` TOML string tail into the inner value (mirrors the
+/// app.rs `split_toml_string` helper so the baker parses the manifest the same
+/// way the app does).
+fn split_toml_string(rest: &str) -> Option<String> {
+    let s = rest.trim();
+    let s = s.strip_prefix('=')?.trim();
+    let s = s.strip_prefix('"').or_else(|| s.strip_prefix('\''))?;
+    let s = s.strip_suffix('"').or_else(|| s.strip_suffix('\''))?;
+    Some(s.trim().to_string())
+}
+
 /// Load a glTF scene and flatten every instance into ONE world-space mesh.
 /// Vertex color carries the material base color (the baker's albedo source).
 /// Returns `(vertices, indices, aabb_min, aabb_max)`.
-fn load_scene_geometry(path: &Path) -> Result<(Vec<Vertex>, Vec<u32>, [f32; 3], [f32; 3])> {
+fn load_scene_geometry(path: &Path) -> Result<SceneGeometry> {
     let mut store = prism_asset::SceneStore::new();
     let _scene = store.load_gltf(path)?;
 
@@ -737,7 +813,7 @@ fn load_scene_geometry(path: &Path) -> Result<(Vec<Vertex>, Vec<u32>, [f32; 3], 
 /// A closed unit cube centered at the origin (side length 4, so [-2,2]^3),
 /// 12 triangles, white albedo. Used to validate the ray-query bake path
 /// independent of any glTF scene. Returns `(verts, indices, aabb_min, aabb_max)`.
-fn test_cube_geometry() -> (Vec<Vertex>, Vec<u32>, [f32; 3], [f32; 3]) {
+fn test_cube_geometry() -> SceneGeometry {
     let p: [[f32; 3]; 8] = [
         [-2.0, -2.0, -2.0],
         [2.0, -2.0, -2.0],
@@ -826,7 +902,7 @@ fn vertex_bytes(vertices: &[Vertex]) -> &[u8] {
     unsafe {
         std::slice::from_raw_parts(
             vertices.as_ptr() as *const u8,
-            vertices.len() * std::mem::size_of::<Vertex>(),
+            std::mem::size_of_val(vertices),
         )
     }
 }

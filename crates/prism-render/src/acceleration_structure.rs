@@ -84,6 +84,15 @@ impl BlasEntry {
                 &mut size_info,
             );
         }
+        log::info!(
+            "BLAS build: tri_count={} as_size={} scratch={} verts={} vaddr={:#x} iaddr={:#x}",
+            tri_count,
+            size_info.acceleration_structure_size,
+            size_info.build_scratch_size,
+            mesh.vertex_count,
+            vertex_addr,
+            index_addr,
+        );
 
         let (as_buffer, as_memory) = buffer::create_buffer(
             context,
@@ -141,6 +150,20 @@ impl BlasEntry {
                 cmd,
                 std::slice::from_ref(&build_info),
                 &[&ranges],
+            );
+            // Make the built BLAS visible to subsequent acceleration-structure
+            // reads (the TLAS build references it). Without this barrier the
+            // TLAS build can read a stale/empty BLAS and every ray misses.
+            device.cmd_pipeline_barrier(
+                cmd,
+                vk::PipelineStageFlags::ACCELERATION_STRUCTURE_BUILD_KHR,
+                vk::PipelineStageFlags::ACCELERATION_STRUCTURE_BUILD_KHR,
+                vk::DependencyFlags::empty(),
+                &[vk::MemoryBarrier::default()
+                    .src_access_mask(vk::AccessFlags::ACCELERATION_STRUCTURE_WRITE_KHR)
+                    .dst_access_mask(vk::AccessFlags::ACCELERATION_STRUCTURE_READ_KHR)],
+                &[],
+                &[],
             );
             device.end_command_buffer(cmd)?;
         }
@@ -289,6 +312,13 @@ impl Tlas {
                 &mut size_info,
             );
         }
+        log::info!(
+            "TLAS build: instances={} as_size={} scratch={} blas_addr={:#x}",
+            instances.len(),
+            size_info.acceleration_structure_size,
+            size_info.build_scratch_size,
+            blas_addresses.first().copied().unwrap_or(0),
+        );
 
         let (as_buffer, as_memory) = buffer::create_buffer(
             context,
@@ -346,6 +376,21 @@ impl Tlas {
                 cmd,
                 std::slice::from_ref(&build_info),
                 &[&ranges],
+            );
+            // Make the built TLAS visible to subsequent ray-query traces
+            // (compute shader). The dst stage covers both further AS builds
+            // and the compute stage that issues OpRayQueryInitializeKHR.
+            device.cmd_pipeline_barrier(
+                cmd,
+                vk::PipelineStageFlags::ACCELERATION_STRUCTURE_BUILD_KHR,
+                vk::PipelineStageFlags::ACCELERATION_STRUCTURE_BUILD_KHR
+                    | vk::PipelineStageFlags::COMPUTE_SHADER,
+                vk::DependencyFlags::empty(),
+                &[vk::MemoryBarrier::default()
+                    .src_access_mask(vk::AccessFlags::ACCELERATION_STRUCTURE_WRITE_KHR)
+                    .dst_access_mask(vk::AccessFlags::ACCELERATION_STRUCTURE_READ_KHR)],
+                &[],
+                &[],
             );
             device.end_command_buffer(cmd)?;
         }

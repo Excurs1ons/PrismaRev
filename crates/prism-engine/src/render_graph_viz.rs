@@ -28,6 +28,7 @@ use prism_render::passes::{ScenePass, ShadowMapPass};
 use prism_render::post::PostPass;
 
 /// Read-only render-graph visualizer (toggled with F2).
+#[derive(Default)]
 pub struct RenderGraphViz {
     /// Whether the window is shown (toggled with F2).
     pub show: bool,
@@ -37,16 +38,6 @@ pub struct RenderGraphViz {
     /// Live per-pass state captured alongside `snapshot`, as plain data so the
     /// egui closure never touches `vk::*` handles.
     pass_details: Vec<PassDetail>,
-}
-
-impl Default for RenderGraphViz {
-    fn default() -> Self {
-        Self {
-            show: false,
-            snapshot: None,
-            pass_details: Vec::new(),
-        }
-    }
 }
 
 impl RenderGraphViz {

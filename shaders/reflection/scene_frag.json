@@ -109,7 +109,7 @@
                             "binding": {"kind": "uniform", "offset": 248, "size": 4}
                         },
                         {
-                            "name": "_pad2",
+                            "name": "giMode",
                             "type": {
                                 "kind": "scalar",
                                 "scalarType": "uint32"
@@ -226,7 +226,7 @@
                                 "binding": {"kind": "uniform", "offset": 248, "size": 4}
                             },
                             {
-                                "name": "_pad2",
+                                "name": "giMode",
                                 "type": {
                                     "kind": "scalar",
                                     "scalarType": "uint32"
@@ -514,6 +514,119 @@
                         "kind": "scalar",
                         "scalarType": "float32"
                     }
+                }
+            }
+        },
+        {
+            "name": "probeVolume",
+            "binding": {"kind": "descriptorTableSlot", "space": 5, "index": 0},
+            "type": {
+                "kind": "resource",
+                "baseShape": "texture3D",
+                "resultType": {
+                    "kind": "vector",
+                    "elementCount": 4,
+                    "elementType": {
+                        "kind": "scalar",
+                        "scalarType": "float32"
+                    }
+                }
+            }
+        },
+        {
+            "name": "probeInfo",
+            "binding": {"kind": "descriptorTableSlot", "space": 5, "index": 1},
+            "type": {
+                "kind": "constantBuffer",
+                "elementType": {
+                    "kind": "struct",
+                    "name": "ProbeVolumeInfo",
+                    "fields": [
+                        {
+                            "name": "origin",
+                            "type": {
+                                "kind": "vector",
+                                "elementCount": 4,
+                                "elementType": {
+                                    "kind": "scalar",
+                                    "scalarType": "float32"
+                                }
+                            },
+                            "binding": {"kind": "uniform", "offset": 0, "size": 16}
+                        },
+                        {
+                            "name": "spacing",
+                            "type": {
+                                "kind": "vector",
+                                "elementCount": 4,
+                                "elementType": {
+                                    "kind": "scalar",
+                                    "scalarType": "float32"
+                                }
+                            },
+                            "binding": {"kind": "uniform", "offset": 16, "size": 16}
+                        },
+                        {
+                            "name": "dims",
+                            "type": {
+                                "kind": "vector",
+                                "elementCount": 4,
+                                "elementType": {
+                                    "kind": "scalar",
+                                    "scalarType": "uint32"
+                                }
+                            },
+                            "binding": {"kind": "uniform", "offset": 32, "size": 16}
+                        }
+                    ]
+                },
+                "containerVarLayout": {
+                    "binding": {"kind": "descriptorTableSlot", "index": 0}
+                },
+                "elementVarLayout": {
+                    "type": {
+                        "kind": "struct",
+                        "name": "ProbeVolumeInfo",
+                        "fields": [
+                            {
+                                "name": "origin",
+                                "type": {
+                                    "kind": "vector",
+                                    "elementCount": 4,
+                                    "elementType": {
+                                        "kind": "scalar",
+                                        "scalarType": "float32"
+                                    }
+                                },
+                                "binding": {"kind": "uniform", "offset": 0, "size": 16}
+                            },
+                            {
+                                "name": "spacing",
+                                "type": {
+                                    "kind": "vector",
+                                    "elementCount": 4,
+                                    "elementType": {
+                                        "kind": "scalar",
+                                        "scalarType": "float32"
+                                    }
+                                },
+                                "binding": {"kind": "uniform", "offset": 16, "size": 16}
+                            },
+                            {
+                                "name": "dims",
+                                "type": {
+                                    "kind": "vector",
+                                    "elementCount": 4,
+                                    "elementType": {
+                                        "kind": "scalar",
+                                        "scalarType": "uint32"
+                                    }
+                                },
+                                "binding": {"kind": "uniform", "offset": 32, "size": 16}
+                            }
+                        ]
+                    },
+                    "binding": {"kind": "uniform", "offset": 0, "size": 48}
                 }
             }
         },
@@ -856,6 +969,14 @@
                 {
                     "name": "aoTex",
                     "binding": {"kind": "descriptorTableSlot", "space": 4, "index": 0, "used": 1}
+                },
+                {
+                    "name": "probeVolume",
+                    "binding": {"kind": "descriptorTableSlot", "space": 5, "index": 0, "used": 1}
+                },
+                {
+                    "name": "probeInfo",
+                    "binding": {"kind": "descriptorTableSlot", "space": 5, "index": 1, "used": 1}
                 },
                 {
                     "name": "pc",

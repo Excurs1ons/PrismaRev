@@ -88,7 +88,7 @@ impl IblResources {
         let (rgba_f32, width, height) = match &env_bytes {
             Some(bytes) => {
                 let (data, w, h) =
-                    crate::hdr::load_rgbe(&bytes).context("failed to decode environment .hdr")?;
+                    crate::hdr::load_rgbe(bytes).context("failed to decode environment .hdr")?;
                 log::info!("IBL: loaded env map {}x{} from .hdr", w, h);
                 (data, w, h)
             }

@@ -79,6 +79,53 @@ impl ProbeVolumeInfo {
     }
 }
 
+// -------------------------------------------------------------------
+// Bake-time directional light (shared default for baker + runtime)
+// -------------------------------------------------------------------
+//
+// The offline baker lives in `prism-render` (the `prism-bake-gi` binary) and
+// cannot depend on `prism-engine` (the dependency runs engine -> render, so
+// importing `engine::DirectionalLight` would form a cycle). To keep the baked
+// indirect sun in sync with the runtime sun without that cycle, the canonical
+// default light parameters are mirrored here. **These constants MUST stay in
+// lock-step with `prism_engine::render_system::DirectionalLight::default()`**
+// (euler_xyz, intensity, color). The runtime inserts that default into the ECS
+// (`app.rs` `create_default_scene`), so as long as the two match, a bake's
+// direct-sun bounce uses the same direction/color/intensity the player sees.
+//
+// The direction is stored as XYZ Euler angles (degrees) and converted with
+// [`bake_euler_xyz_deg_to_dir`], a byte-identical copy of
+// `prism_engine::render_system::euler_xyz_deg_to_dir` (see that function's
+// docs for the right-handed Rx·Ry·Rz convention, +Y up, base vector +Z).
+
+/// Default directional light Euler angles (degrees), matching
+/// `DirectionalLight::default().euler_xyz` = `[45.0, -45.0, 0.0]`
+/// (pitch=45°, yaw=-45° -> direction `[-1/√2, 1/√2, 0]`).
+pub const BAKE_DEFAULT_LIGHT_EULER: [f32; 3] = [45.0, -45.0, 0.0];
+/// Default directional light intensity, matching
+/// `DirectionalLight::default().intensity`.
+pub const BAKE_DEFAULT_LIGHT_INTENSITY: f32 = 3.0;
+/// Default directional light RGB color, matching
+/// `DirectionalLight::default().color`.
+pub const BAKE_DEFAULT_LIGHT_COLOR: [f32; 3] = [1.0, 1.0, 1.0];
+
+/// Convert XYZ Euler angles (degrees) to a unit direction vector (direction
+/// TO the light). Mirror of `prism_engine::render_system::euler_xyz_deg_to_dir`;
+/// kept here so the baker (in `prism-render`) can reuse it without a crate
+/// cycle. See the engine function for the full convention derivation.
+pub fn bake_euler_xyz_deg_to_dir(e: [f32; 3]) -> [f32; 3] {
+    let p = e[0].to_radians();
+    let y = e[1].to_radians();
+    // Roll (e[2]) does not affect a pure +Z base direction; intentionally unused.
+    let (sp, cp) = p.sin_cos();
+    let (sy, cy) = y.sin_cos();
+    let x = cp * sy;
+    let yy = sp;
+    let z = cp * cy;
+    let len = (x * x + yy * yy + z * z).sqrt().max(1e-8);
+    [x / len, yy / len, z / len]
+}
+
 /// Order-2 real SH basis values for a unit direction `n = (x, y, z)`.
 ///
 /// Returns the 9 basis values in the documented order. The direction is
@@ -201,19 +248,18 @@ where
 
     // Trilinear-blend the 9 SH coefficients across the 8 corner probes.
     let mut sh = [[0.0f32; 3]; SH_COEFF_COUNT];
-    for idx in 0..8 {
+    for (idx, &weight) in w.iter().enumerate() {
         let di = (idx & 1) as i32;
         let dj = ((idx >> 1) & 1) as i32;
         let dk = ((idx >> 2) & 1) as i32;
-        let weight = w[idx];
         if weight == 0.0 {
             continue;
         }
-        for c in 0..SH_COEFF_COUNT {
+        for (c, shc) in sh.iter_mut().enumerate() {
             let coeff = fetch(base[0] + di, base[1] + dj, base[2] + dk, c);
-            sh[c][0] += coeff[0] * weight;
-            sh[c][1] += coeff[1] * weight;
-            sh[c][2] += coeff[2] * weight;
+            shc[0] += coeff[0] * weight;
+            shc[1] += coeff[1] * weight;
+            shc[2] += coeff[2] * weight;
         }
     }
     eval_sh9(normal, &sh)
@@ -230,6 +276,36 @@ mod tests {
     }
     fn approx_eq3(a: [f32; 3], b: [f32; 3]) -> bool {
         approx_eq(a[0], b[0]) && approx_eq(a[1], b[1]) && approx_eq(a[2], b[2])
+    }
+
+    // ---- Bake-time directional light (must match engine default) ----
+
+    #[test]
+    fn bake_default_light_dir_matches_runtime_default() {
+        // The runtime inserts DirectionalLight::default() (euler=[45,-45,0],
+        // intensity=3.0, color=white) into the ECS, and render_system derives
+        // the light direction via euler_xyz_deg_to_dir. The baker must use the
+        // SAME euler angles + conversion so the baked sun bounce matches the
+        // real-time sun. Verify the conversion produces a unit vector in the
+        // documented upper-left direction (y>0). The exact components come from
+        // the formula [cp*sy, sp, cp*cy] with p=45deg, y=-45deg.
+        let dir = bake_euler_xyz_deg_to_dir(BAKE_DEFAULT_LIGHT_EULER);
+        let len = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt();
+        assert!(approx_eq(len, 1.0), "non-unit dir {dir:?}");
+        // Upward component (y) must be sin(45deg) = 1/√2 (the light is above
+        // the horizon), and the horizontal components come from cos(45)*sin/cos.
+        let inv_sqrt2 = std::f32::consts::FRAC_1_SQRT_2;
+        assert!(approx_eq(dir[1], inv_sqrt2), "y component {dir:?}");
+        assert!(dir[1] > 0.0, "light must be above horizon: {dir:?}");
+    }
+
+    #[test]
+    fn bake_euler_is_unit_length() {
+        for e in [[0.0, 0.0, 0.0], [45.0, -45.0, 0.0], [30.0, 60.0, 17.0]] {
+            let d = bake_euler_xyz_deg_to_dir(e);
+            let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+            assert!(approx_eq(len, 1.0), "euler {e:?} -> len {len}");
+        }
     }
 
     // ---- ABI: ProbeVolumeInfo mirrors the Slang std140 layout ----

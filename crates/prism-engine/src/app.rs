@@ -206,6 +206,11 @@ pub struct App {
     /// `resumed` callbacks reuse the registered resources instead of
     /// re-creating them.
     scene_loaded: bool,
+    /// Name of the currently-loaded scene (from `scenes.toml`), or the glTF
+    /// file stem for a directly-loaded scene. `None` for the procedural demo.
+    /// Passed to `GraphRenderer::load_probe_volume_file` so it can reject a
+    /// baked GI volume that was baked for a different scene.
+    current_scene_name: Option<String>,
     /// Asset-handle → render-handle maps built by `load_demo_scene`, plus the
     /// resolved draw list consumed by `GraphRenderer::render`. These let
     /// `render_one_frame` draw the CPU-side scene without re-registering.
@@ -276,6 +281,7 @@ impl App {
             debug_rt: 0,
             scene_store: prism_asset::SceneStore::new(),
             scene_loaded: false,
+            current_scene_name: None,
             mesh_map: std::collections::HashMap::new(),
             mat_map: std::collections::HashMap::new(),
             tex_map: std::collections::HashMap::new(),
@@ -487,6 +493,9 @@ impl App {
             }
             log::info!("loading scene '{}' from {:?}", name, path);
             if let Some(scene) = self.try_load_gltf(&path) {
+                // Record the scene name so the baked-GI loader can reject a
+                // `.bin` baked for a different scene.
+                self.current_scene_name = Some(name.clone());
                 self.load_demo_scene(scene);
                 // Place the free-fly camera for an architectural interior
                 // (Sponza-scale), looking toward the origin. But only when no
@@ -760,10 +769,14 @@ impl App {
         self.scene_loaded = true;
 
         // Replace the synthetic sky probe field with real baked GI if a
-        // `.bin` exists (produced by `prism-bake-gi`). Missing file is
-        // non-fatal — the renderer keeps the synthetic field so the app
-        // still renders. This is what makes enclosed interiors darken.
-        renderer.load_probe_volume_file(std::path::Path::new("assets/gi/probe_volume.bin"));
+        // `.bin` exists (produced by `prism-bake-gi`). Missing/mismatched file
+        // is non-fatal - the renderer keeps the synthetic field so the app
+        // still renders. The scene name is passed so the loader can reject a
+        // volume baked for a different scene (prevents silent wrong-scene GI).
+        renderer.load_probe_volume_file(
+            std::path::Path::new("assets/gi/probe_volume.bin"),
+            self.current_scene_name.as_deref(),
+        );
 
         log::info!(
             "App::load_demo_scene: registered {} mesh(es), {} material(s), {} texture(s); {} draw items",

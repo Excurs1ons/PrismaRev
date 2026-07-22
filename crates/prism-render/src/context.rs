@@ -76,8 +76,13 @@ impl VulkanContext {
         let graphics_queue_family = pick_graphics_queue_family(&instance, physical_device)
             .context("no graphics-capable queue family found")?;
 
-        let (device, enabled_extensions) =
-            create_device(&instance, physical_device, graphics_queue_family, &rt_caps)?;
+        let (device, enabled_extensions) = create_device(
+            &instance,
+            physical_device,
+            graphics_queue_family,
+            &rt_caps,
+            !window_extensions.is_empty(),
+        )?;
 
         let graphics_queue = unsafe { device.get_device_queue(graphics_queue_family, 0) };
 
@@ -126,8 +131,10 @@ impl VulkanContext {
     }
 
     /// Names of the device extensions that were enabled at device creation.
-    /// Includes `VK_KHR_swapchain` plus any RT extensions the hardware
-    /// supports. Used by RT modules to decide which code path to take.
+    /// `VK_KHR_swapchain` is included only for windowed contexts (a headless
+    /// context like the GI baker enables no surface, so swapchain is omitted);
+    /// RT extensions are included when the hardware supports them. Used by RT
+    /// modules to decide which code path to take.
     pub fn enabled_extension_names(&self) -> &[CString] {
         &self.enabled_extensions
     }
@@ -265,6 +272,7 @@ fn create_device(
     physical_device: vk::PhysicalDevice,
     graphics_queue_family: u32,
     rt_caps: &RayTracingCaps,
+    has_surface: bool,
 ) -> anyhow::Result<(ash::Device, Vec<CString>)> {
     use anyhow::Context as _;
     let priorities = [1.0f32];
@@ -286,9 +294,14 @@ fn create_device(
         ..vk::PhysicalDeviceFeatures::default()
     };
 
-    // --- Build the extension list: swapchain (always) + RT (conditional) ---
+    // --- Build the extension list: swapchain (windowed only) + RT (conditional) ---
+    // VK_KHR_swapchain requires VK_KHR_surface on the instance; a headless
+    // context (baker) enables no surface instance extensions, so requesting
+    // swapchain there trips validation. Only enable it when a surface exists.
     let mut enabled_extensions: Vec<CString> = Vec::new();
-    enabled_extensions.push(ash::khr::swapchain::NAME.into());
+    if has_surface {
+        enabled_extensions.push(ash::khr::swapchain::NAME.into());
+    }
     // `cmd_pipeline_barrier2` / `ImageMemoryBarrier2` (used unconditionally in
     // `buffer.rs` for texture uploads and mip generation) come from
     // VK_KHR_synchronization2. We target a Vulkan 1.2 instance, where the core

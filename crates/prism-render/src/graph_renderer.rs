@@ -404,30 +404,71 @@ impl GraphRenderer {
 
     /// Replace the scene-scope probe volume with real baked data loaded from a
     /// `.bin` file (produced by `prism-bake-gi`). Falls back to the synthetic
-    /// sky field already resident if the file is missing or invalid, so the
-    /// app still renders. Returns `true` when baked data was applied.
-    pub fn load_probe_volume_file(&mut self, path: &std::path::Path) -> bool {
-        match prism_asset::load_probe_volume(path) {
-            Ok(data) => match self.scene_scope.from_probe_data(&data) {
-                Ok(()) => {
-                    log::info!(
-                        "GraphRenderer: loaded baked GI probe volume from {} (dims {:?})",
-                        path.display(),
-                        data.dims
-                    );
-                    true
-                }
-                Err(e) => {
-                    log::warn!(
-                        "GraphRenderer: failed to upload baked probe volume {}: {e:#}",
-                        path.display()
-                    );
-                    false
-                }
-            },
+    /// sky field already resident if the file is missing, invalid, baked for a
+    /// different scene, or appears to be an all-miss (broken) bake, so the app
+    /// still renders. Returns `true` when baked data was applied.
+    ///
+    /// `scene_name` is the name of the currently-loaded scene (from
+    /// `scenes.toml`). When non-`None` and the `.bin` carries a non-empty
+    /// `scene_name`, the two are compared and a mismatch rejects the volume
+    /// (prevents silent wrong-scene GI). A `None`/empty name skips the check
+    /// (e.g. procedural scenes).
+    pub fn load_probe_volume_file(&mut self, path: &std::path::Path, scene_name: Option<&str>) -> bool {
+        let data = match prism_asset::load_probe_volume(path) {
+            Ok(d) => d,
             Err(e) => {
                 log::info!(
                     "GraphRenderer: no baked GI at {} ({e}); keeping synthetic sky field",
+                    path.display()
+                );
+                return false;
+            }
+        };
+
+        // Scene binding check: reject a volume baked for a different scene.
+        if let Some(name) = scene_name {
+            if !name.is_empty() && !data.scene_name.is_empty() && data.scene_name != name {
+                log::warn!(
+                    "GraphRenderer: baked GI at {} is for scene '{}', but loaded scene is \
+                     '{}'; keeping synthetic sky field (rebake to apply)",
+                    path.display(),
+                    data.scene_name,
+                    name
+                );
+                return false;
+            }
+        }
+
+        // Validity check: an all-miss bake (global_hit_ratio in [0, 0.05))
+        // means the ray query missed every triangle - applying it would show
+        // flat sky everywhere. -1.0 (unknown) skips this check.
+        const HIT_RATIO_INVALID_THRESHOLD: f32 = 0.05;
+        if data.global_hit_ratio >= 0.0 && data.global_hit_ratio < HIT_RATIO_INVALID_THRESHOLD {
+            log::warn!(
+                "GraphRenderer: baked GI at {} looks invalid (hit_ratio={:.3} < {:.2}, all rays \
+                 missed the TLAS); keeping synthetic sky field (check ray-query setup / BLAS)",
+                path.display(),
+                data.global_hit_ratio,
+                HIT_RATIO_INVALID_THRESHOLD
+            );
+            return false;
+        }
+
+        match self.scene_scope.from_probe_data(&data) {
+            Ok(()) => {
+                log::info!(
+                    "GraphRenderer: loaded baked GI probe volume from {} (dims {:?}, scene='{}', \
+                     hit_ratio={:.3})",
+                    path.display(),
+                    data.dims,
+                    data.scene_name,
+                    data.global_hit_ratio
+                );
+                true
+            }
+            Err(e) => {
+                log::warn!(
+                    "GraphRenderer: failed to upload baked probe volume {}: {e:#}",
                     path.display()
                 );
                 false

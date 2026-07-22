@@ -227,6 +227,16 @@ pub struct ProbeVolumeData {
     pub dims: [u32; 3],
     /// SH coefficients: `dims.x * dims.y * dims.z * 9` RGB triplets.
     pub coeffs: Vec<[f32; 3]>,
+    /// Name of the scene this volume was baked for (from `scenes.toml`).
+    /// Used at runtime to reject a `.bin` baked for a different scene
+    /// (prevents silent wrong-scene GI). Empty for v1 files / unknown scenes
+    /// -> the runtime skips the binding check.
+    pub scene_name: String,
+    /// Mean per-probe hit ratio across all probes (fraction of rays that hit
+    /// geometry). `-1.0` = unknown (v1 file). At runtime a value in
+    /// `[0, 0.05)` signals an all-miss (broken) bake, so the renderer can
+    /// reject it and keep the synthetic field instead of showing flat sky.
+    pub global_hit_ratio: f32,
 }
 
 impl ProbeVolumeData {

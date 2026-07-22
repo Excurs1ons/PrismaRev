@@ -1105,7 +1105,7 @@ fn emit_read_barriers(
         };
 
         let (src_access, src_stage) = match last_writers.get(&handle) {
-            Some(w) => ((**w).access, (**w).stage),
+            Some(w) => (w.access, w.stage),
             None => (vk::AccessFlags::empty(), vk::PipelineStageFlags::TOP_OF_PIPE),
         };
 
