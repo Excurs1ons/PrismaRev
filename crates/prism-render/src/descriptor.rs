@@ -154,6 +154,7 @@ pub const LIGHT_MAX: u32 = 8;
 /// Mirrors the Slang `GpuLight` struct in `scene_frag.slang`.
 /// Stored in a `StructuredBuffer<GpuLight>` at set 0 binding 2.
 #[repr(C)]
+#[derive(Clone, Debug)]
 pub struct GpuLight {
     pub position: [f32; 4], // xyz = world position, w = range (attenuation radius)
     pub color: [f32; 4],    // rgb = radiant intensity, w = 1.0

@@ -250,6 +250,138 @@ impl Default for MeshManager {
 }
 
 // ---------------------------------------------------------------------------
+// SceneChanges — per-frame ECS snapshot (PR-S1)
+// ---------------------------------------------------------------------------
+
+/// Per-frame data extracted from the ECS [`World`] each frame.
+///
+/// Built by [`collect_scene_changes`] and consumed by [`render_system`] to
+/// populate [`FrameInput`] + [`FrameUBOData`].  This is the **data boundary**
+/// between the CPU update (ECS queries + camera math + light resolution) and
+/// the GPU render pipeline.
+///
+/// Future phases (PR-S2 DirtyRouter, PR-S3 SceneReadView) will track diffs
+/// against this snapshot to avoid redundant uploads.
+#[derive(Clone)]
+pub struct SceneChanges {
+    pub view_proj: [[f32; 4]; 4],
+    pub eye: [f32; 3],
+    pub view: [[f32; 4]; 4],
+    /// Unrotated projection (GTAO pass needs the raw matrix for
+    /// clip → view-space reconstruction; the surface-rotation is applied
+    /// only to `view_proj`).
+    pub projection: [[f32; 4]; 4],
+    pub inv_projection: [[f32; 4]; 4],
+    pub proj22: f32,
+    pub proj32: f32,
+    /// Direction TO the light, packed as `[x, y, z, intensity]`.
+    pub light_direction: [f32; 4],
+    /// Light colour + ambient, packed as `[r, g, b, ambient]`.
+    pub light_color: [f32; 4],
+    /// Light-space orthographic view-projection (shadow map).
+    pub light_view_proj: [[f32; 4]; 4],
+    /// Point lights collected from the ECS world (up to `LIGHT_MAX`).
+    pub lights: Vec<GpuLight>,
+}
+
+/// Read the ECS [`World`] and the [`GraphRenderer`] orientation, then produce
+/// a [`SceneChanges`] snapshot for the current frame.
+///
+/// This replaces the inline camera/light extraction that was previously
+/// scattered through [`render_system`]; moving it to a dedicated function
+/// creates a clean **scene-update** boundary and makes it possible to later
+/// diff against the previous frame (DirtyRouter / PR-S2).
+fn collect_scene_changes(
+    world: &mut World,
+    renderer: &GraphRenderer,
+) -> anyhow::Result<SceneChanges> {
+    // Fallback light values for empty worlds (no DirectionalLight entity).
+    let fallback_dir = [
+        -std::f32::consts::FRAC_1_SQRT_2,
+        std::f32::consts::FRAC_1_SQRT_2,
+        0.0,
+        3.0,
+    ];
+    let fallback_col = [1.0, 1.0, 1.0, 1.0];
+
+    // 1. Camera — first entity with a Camera component.
+    let (view_proj, eye, view, projection) = {
+        let camera_entity = world
+            .query::<Camera>()
+            .next()
+            .map(|(e, _)| e)
+            .ok_or_else(|| anyhow::anyhow!("no Camera entity in ECS world"))?;
+        let camera = world
+            .get_mut::<Camera>(camera_entity)
+            .ok_or_else(|| anyhow::anyhow!("Camera entity has no Camera component"))?;
+        let (display_aspect, surface_rotation) = renderer.orientation();
+        camera.set_aspect(display_aspect);
+        let proj = camera.projection();
+        let mut vp = camera.view_proj();
+        vp = mat_mul(&surface_rotation, &vp);
+        (vp, camera.eye(), camera.view(), proj)
+    };
+
+    let inv_projection = mat_inverse(&projection);
+    let proj22 = projection[2][2];
+    let proj32 = projection[3][2];
+    let _ = projection;
+
+    // 2. Directional light (first entity).
+    let light_direction = world
+        .query::<DirectionalLight>()
+        .next()
+        .map(|(_, l)| {
+            let d = euler_xyz_deg_to_dir(l.euler_xyz);
+            [d[0], d[1], d[2], l.intensity]
+        })
+        .unwrap_or(fallback_dir);
+    let light_color = world
+        .query::<DirectionalLight>()
+        .next()
+        .map(|(_, l)| [l.color[0], l.color[1], l.color[2], l.ambient])
+        .unwrap_or(fallback_col);
+
+    // 3. Point lights (up to LIGHT_MAX).
+    let mut lights: Vec<GpuLight> = Vec::new();
+    for (entity, pl) in world.query::<PointLight>() {
+        if lights.len() >= prism_render::LIGHT_MAX as usize {
+            break;
+        }
+        let pos = world
+            .get::<Transform>(entity)
+            .map(|t| t.translation)
+            .unwrap_or(pl.position);
+        lights.push(GpuLight {
+            position: [pos[0], pos[1], pos[2], pl.range],
+            color: [
+                pl.color[0] * pl.intensity,
+                pl.color[1] * pl.intensity,
+                pl.color[2] * pl.intensity,
+                1.0,
+            ],
+        });
+    }
+
+    // 4. Light-space view-projection (shadow map).
+    let light_view_proj = light_view_proj(&light_direction, 30.0, &eye);
+
+    Ok(SceneChanges {
+        view_proj,
+        eye,
+        view,
+        projection,
+        inv_projection,
+        proj22,
+        proj32,
+        light_direction,
+        light_color,
+        light_view_proj,
+        lights,
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Render system
 // ---------------------------------------------------------------------------
 
@@ -279,110 +411,24 @@ pub fn render_system(
     debug_rt: u32,
     scene_draw_items: &[SceneDrawItem],
 ) -> anyhow::Result<()> {
-    // Fallback light values used when the world has no DirectionalLight entity.
-    let fallback_dir = [
-        -std::f32::consts::FRAC_1_SQRT_2,
-        std::f32::consts::FRAC_1_SQRT_2,
-        0.0,
-        3.0,
-    ];
-    let fallback_col = [1.0, 1.0, 1.0, 1.0];
-
-    // Extract camera from the first entity carrying a Camera component.
-    let (view_proj, eye, view, projection) = {
-        let camera_entity = world
-            .query::<Camera>()
-            .next()
-            .map(|(e, _)| e)
-            .ok_or_else(|| anyhow::anyhow!("no Camera entity in ECS world"))?;
-        let camera = world
-            .get_mut::<Camera>(camera_entity)
-            .ok_or_else(|| anyhow::anyhow!("Camera entity has no Camera component"))?;
-        let (display_aspect, surface_rotation) = renderer.orientation();
-        camera.set_aspect(display_aspect);
-        // The surface rotation is applied to view_proj only (it rotates the
-        // clip-space output for device orientation). The raw projection matrix
-        // is what the GTAO pass needs to reconstruct view-space positions from
-        // depth, so we return it separately (unrotated).
-        let proj = camera.projection();
-        let mut vp = camera.view_proj();
-        vp = mat_mul(&surface_rotation, &vp);
-        (vp, camera.eye(), camera.view(), proj)
-    };
-
-    // Inverse projection for the GTAO pass (clip -> view reconstruction).
-    // Computed once per frame on the CPU; the GTAO shader multiplies this by
-    // the sampled clip-space position to recover view-space coords.
-    let inv_projection = mat_inverse(&projection);
-    // Projection entries [2][2] / [3][2] (column-major m[col][row]) for the
-    // PostPass depth-linearization debug view (view_z = proj22*d + proj32).
-    let proj22 = projection[2][2];
-    let proj32 = projection[3][2];
-    let _ = projection; // projection is only consumed via inv_projection.
-
-    // Resolve the directional light from the ECS world (first `DirectionalLight`
-    // entity). Orientation is stored as XYZ Euler angles (degrees); derive the
-    // world-space direction vector on the fly.
-    let light_direction = world
-        .query::<DirectionalLight>()
-        .next()
-        .map(|(_, l)| {
-            let d = euler_xyz_deg_to_dir(l.euler_xyz);
-            [d[0], d[1], d[2], l.intensity]
-        })
-        .unwrap_or(fallback_dir);
-    let light_color = world
-        .query::<DirectionalLight>()
-        .next()
-        .map(|(_, l)| [l.color[0], l.color[1], l.color[2], l.ambient])
-        .unwrap_or(fallback_col);
-
-    // GI gate: gi_mode is forwarded to the shader via FrameUBO.gi_mode; the
-    // scene_frag GI branch is gated on (giMode != 0). IBL ambient is no longer
-    // zeroed here — the shader handles GI/IBL independently.
-
-    // Collect point lights from the ECS world into the GPU layout. A sibling
-    // `Transform` (if present) overrides the component's `position`, so lights
-    // can be parented to scene objects. Capped at `LIGHT_MAX`.
-    let mut lights: Vec<GpuLight> = Vec::new();
-    for (entity, pl) in world.query::<PointLight>() {
-        if lights.len() >= prism_render::LIGHT_MAX as usize {
-            break;
-        }
-        let pos = world
-            .get::<Transform>(entity)
-            .map(|t| t.translation)
-            .unwrap_or(pl.position);
-        lights.push(GpuLight {
-            position: [pos[0], pos[1], pos[2], pl.range],
-            color: [
-                pl.color[0] * pl.intensity,
-                pl.color[1] * pl.intensity,
-                pl.color[2] * pl.intensity,
-                1.0,
-            ],
-        });
-    }
+    // 1. Collect per-frame scene state from the ECS world (camera, lights).
+    let scene = collect_scene_changes(world, renderer)?;
+    let SceneChanges {
+        view_proj,
+        eye,
+        view,
+        projection: _,
+        inv_projection,
+        proj22,
+        proj32,
+        light_direction,
+        light_color,
+        light_view_proj,
+        lights,
+    } = scene;
     let light_count = lights.len() as f32;
 
-    // Light-space view-projection for the rasterized shadow map. The light
-    // direction is `frame.lightDirection.xyz` (direction TO the light). Build
-    // an orthographic projection centered on the **camera** (not the origin)
-    // over a half-extent large enough to cover the visible scene; this matches
-    // the orthographic assumption in `scene_frag.slang::sample_shadow`.
-    // Centering on the camera means the shadow frustum follows the viewer, so
-    // geometry far from the world origin still casts/receives shadows instead
-    // of falling outside the fixed [-half,+half] box and being treated as lit.
-    // Stored in the per-frame UBO so the ScenePass fragment shader can project
-    // world positions into shadow space without a push-constant mat4 (which
-    // would exceed Vulkan's 128-byte push-constant limit alongside the bindless
-    // push block).
-    //
-    // `half = 30` covers Sponza's full footprint (~X∈[-15,15], Y∈[0,12],
-    // Z∈[-8,8]) with margin, and is large enough that the camera's nearby
-    // surroundings stay inside the box as it flies through the scene.
-    let light_view_proj = light_view_proj(&light_direction, 30.0, &eye);
-
+    // 2. Build the per-frame UBO (merges scene data with renderer state).
     let frame_data = FrameUBOData {
         view_proj,
         camera_position: [eye[0], eye[1], eye[2], light_count],
@@ -398,22 +444,17 @@ pub fn render_system(
         gi_mode: renderer.gi_mode(),
     };
 
-    // Build the flat draw list from the loaded glTF scene.
+    // 3. Build the flat draw list from the loaded glTF scene.
     let mut draw_items: Vec<DrawItem> = Vec::new();
     for item in scene_draw_items {
         draw_items.push(DrawItem {
             mesh: item.mesh,
             model: item.model,
-            // SceneDrawItem already carries the resolved SSBO slot (app.rs
-            // builds it via mat_map); forward it so the ScenePass push
-            // constant can index the material SSBO directly.
             material: Some(item.material_slot),
         });
     }
 
-    // Use the explicit phase API: begin_frame → execute → present.
-    // This allows future insertion of a prepare stage between begin and
-    // execute for batching scene uploads and descriptor updates.
+    // 4. Drive the render-graph phase API (begin_frame → execute → present).
     let ctx = match renderer.begin_frame()? {
         Some(c) => c,
         None => return Ok(()),
