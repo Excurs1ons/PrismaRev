@@ -411,12 +411,16 @@ pub fn render_system(
         });
     }
 
-    // Surface the render error to the caller (App) so it can present a fatal
-    // crash dialog instead of spamming the log every frame. `render` already
-    // handles swapchain out-of-date as `Ok(false)`; only real failures reach
-    // here.
+    // Use the explicit phase API: begin_frame → execute → present.
+    // This allows future insertion of a prepare stage between begin and
+    // execute for batching scene uploads and descriptor updates.
+    let ctx = match renderer.begin_frame()? {
+        Some(c) => c,
+        None => return Ok(()),
+    };
     renderer
-        .render(
+        .execute(
+            &ctx,
             &draw_items,
             &frame_data,
             light_view_proj,
@@ -430,7 +434,12 @@ pub fn render_system(
             proj32,
             &lights,
         )
-        .map(|_| ())?;
+        .map_err(|e| {
+            // Recording error: still call present() to signal the fence.
+            let _ = renderer.present(&ctx);
+            e
+        })?;
+    let _ = renderer.present(&ctx)?;
     let _ = (clear_color, show_ui);
     Ok(())
 }

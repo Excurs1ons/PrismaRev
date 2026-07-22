@@ -80,6 +80,19 @@ pub struct GraphRenderer {
     context: Arc<VulkanContext>,
 }
 
+/// Per-frame context returned by [`GraphRenderer::begin_frame`], consumed by
+/// [`GraphRenderer::execute`] and [`GraphRenderer::present`].
+pub struct FrameCtx {
+    pub device: ash::Device,
+    pub cmd: vk::CommandBuffer,
+    pub image_index: u32,
+    pub frame_index: u32,
+    pub extent: vk::Extent2D,
+    fence: vk::Fence,
+    image_available: vk::Semaphore,
+    render_finished: vk::Semaphore,
+}
+
 impl GraphRenderer {
     pub fn new(
         window_extensions: Vec<&str>,
@@ -600,13 +613,73 @@ impl GraphRenderer {
         Ok(())
     }
     // -------------------------------------------------------------------
-    // Frame lifecycle
+    // Frame lifecycle — phase API
     // -------------------------------------------------------------------
 
-    /// Render a frame: acquire, execute graph, present.
-    #[allow(clippy::too_many_arguments)]
-    pub fn render(
+    /// Phase 1/3: acquire swapchain image, reset & begin the command buffer.
+    ///
+    /// Returns a [`FrameCtx`] carrying the per-frame Vulkan handles. On
+    /// swapchain out-of-date returns `Ok(None)` — the caller should return
+    /// early (the swapchain was recreated internally). On real error returns
+    /// `Err`.
+    pub fn begin_frame(&mut self) -> anyhow::Result<Option<FrameCtx>> {
+        let device = self.context.device.clone();
+
+        // --- Acquire next image ---
+        let (image_index, frame, image_available, render_finished, fence) = match self
+            .swapchain
+            .as_mut()
+            .context("begin_frame called with no swapchain")?
+            .acquire_next_image(&device)
+        {
+            Ok(v) => v,
+            Err(e) => {
+                let msg = format!("{e}");
+                if msg.contains("out of date") {
+                    log::debug!("acquire out of date, recreating");
+                    self.recreate_swapchain()?;
+                    return Ok(None);
+                }
+                return Err(e);
+            }
+        };
+
+        let cmd = self.command_buffers[frame];
+        let extent = self.extent();
+
+        // --- Reset & begin command buffer ---
+        unsafe { device.reset_command_buffer(cmd, vk::CommandBufferResetFlags::empty()) }
+            .context("reset command buffer")?;
+        let begin_info = vk::CommandBufferBeginInfo::default()
+            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+        unsafe { device.begin_command_buffer(cmd, &begin_info) }
+            .context("begin command buffer")?;
+
+        Ok(Some(FrameCtx {
+            device,
+            cmd,
+            image_index,
+            frame_index: frame as u32,
+            extent,
+            fence,
+            image_available,
+            render_finished,
+        }))
+    }
+
+    /// Phase 2/3: record all render commands into the frame's command buffer.
+    ///
+    /// Updates the per-frame UBO, builds the [`GraphFrame`], executes the
+    /// render graph (ShadowMap → Scene → GTAO → Post), records the egui
+    /// overlay if present (or inserts the swapchain-layout barrier), and ends
+    /// the command buffer.
+    ///
+    /// Recording errors are captured and returned, but the command buffer is
+    /// **always ended** — even on failure — so that [`present`] can submit a
+    /// partial buffer and keep the in-flight fence signaled.
+    pub fn execute(
         &mut self,
+        ctx: &FrameCtx,
         draw_items: &[DrawItem],
         frame_data: &FrameUBOData,
         light_view_proj: [[f32; 4]; 4],
@@ -619,77 +692,33 @@ impl GraphRenderer {
         proj22: f32,
         proj32: f32,
         lights: &[GpuLight],
-    ) -> anyhow::Result<bool> {
-        // Clone the `ash::Device` handle (cheap: it's an `Arc` internally) so
-        // we don't hold a long-lived borrow of `self.context` and can still
-        // call `&mut self` methods (set_target / graph.execute / scene_pass)
-        // while using `device` in the same scope.
-        let device = self.context.device.clone();
+    ) -> anyhow::Result<()> {
+        let device = &ctx.device;
+        let cmd = ctx.cmd;
+        let frame = ctx.frame_index as usize;
+        let image_index = ctx.image_index;
+        let extent = ctx.extent;
 
-        // --- Acquire next image ---
-        let (image_index, frame, image_available, render_finished, fence) = match self
-            .swapchain
-            .as_mut()
-            .context("render called with no swapchain")?
-            .acquire_next_image(&device)
-        {
-            Ok(v) => v,
-            Err(e) => {
-                let msg = format!("{e}");
-                if msg.contains("out of date") {
-                    log::debug!("acquire out of date, recreating");
-                    self.recreate_swapchain()?;
-                    return Ok(false);
-                }
-                return Err(e);
-            }
-        };
-
-        let cmd = self.command_buffers[frame];
-
-        // --- Reset & begin command buffer ---
-        unsafe { device.reset_command_buffer(cmd, vk::CommandBufferResetFlags::empty()) }
-            .context("reset command buffer")?;
-
-        let begin_info = vk::CommandBufferBeginInfo::default()
-            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
-        unsafe { device.begin_command_buffer(cmd, &begin_info) }.context("begin command buffer")?;
-
-        // --- Record frame commands ---
         // Record into a `Result` rather than `?`-propagating: if any step
-        // fails we still must `end_command_buffer` + `queue_submit` below so
-        // the in-flight fence (already reset by `acquire_next_image`) gets
-        // signaled. Otherwise the next frame's `wait_for_fences` would hang
-        // forever (or return DEVICE_LOST once the GPU faults), producing the
-        // "wait for in_flight fence" error storm.
+        // fails we still must `end_command_buffer` below so the in-flight
+        // fence gets signaled in `present`. Otherwise the next frame's
+        // `wait_for_fences` would hang forever.
         let mut record: anyhow::Result<()> = Ok(());
 
+        // --- Update frame UBO ---
         if record.is_ok() {
             record = self.frame_ubos[frame]
-                .update(&device, frame_data)
+                .update(device, frame_data)
                 .context("update frame UBO");
         }
 
-        let extent = self.extent();
-
         // --- Execute render graph (Shadow -> Scene -> GTAO -> Post) ---
-        // All four passes are driven by the graph (registered in `new`).
-        // Per-frame state (framebuffer ensure, AO view, light SSBO) is now
-        // handled inside each pass's `execute`, reading from `ctx.frame`.
         if record.is_ok() {
-            // Pull last frame's GTAO AO view before constructing `GraphFrame`
-            // so the graph_frame build doesn't hold a `&mut self.graph` borrow
-            // alongside `&self.swapchain` below (both are disjoint fields, but
-            // extracting the Copy value up front keeps the borrow story simple).
             let ao_view = self
                 .graph
                 .pass_mut::<crate::gtao::GtaoPass>()
                 .map(|g| g.ao_view((frame as u32 + 1) % 2))
                 .unwrap_or_else(vk::ImageView::null);
-            // PostPass (re)builds its per-swapchain-image framebuffer inside
-            // `execute` from these views, mirroring ScenePass::ensure_target.
-            // Empty slice when there is no swapchain (e.g. headless test) -
-            // PostPass::set_target no-ops on an empty view list.
             let swapchain_views: &[vk::ImageView] = self
                 .swapchain
                 .as_ref()
@@ -704,11 +733,6 @@ impl GraphRenderer {
                 debug_mode,
                 normal_space,
                 debug_flags,
-                // Inverse-view rotation (upper-left 3x3 of inverse(view)).
-                // The view matrix is a rigid transform, so inv(view) =
-                // [Rᵀ | -Rᵀ t; 0 0 0 1], and the rotation Rᵀ is the transpose
-                // of the upper-left 3x3 of `view`. `view` is column-major
-                // (view[col][row]), so Rᵀ[col][row] = view[row][col].
                 inv_view_rot: {
                     let v = &frame_data.view;
                     let mut m = [[0.0f32; 4]; 4];
@@ -720,9 +744,6 @@ impl GraphRenderer {
                     m[3][3] = 1.0;
                     m
                 },
-                // Full view-projection (clip = proj * view), with surface
-                // rotation already applied in `frame_data.view_proj`. The gizmo
-                // uses this to stay aligned with the camera.
                 view_proj: frame_data.view_proj,
                 lights,
                 ao_view,
@@ -733,9 +754,8 @@ impl GraphRenderer {
                 inv_projection,
                 swapchain_views,
             };
-
             let render_ctx = crate::render_graph::RenderContext {
-                device: &device,
+                device,
                 context: &self.context,
                 settings: &self.settings,
                 cmd,
@@ -745,21 +765,9 @@ impl GraphRenderer {
                 frame: &graph_frame,
             };
             record = self.graph.execute(&render_ctx).context("graph execute");
-
-            // --- GTAO pass: read scene depth + normal, write AO[frame] ---
-            // ScenePass leaves depth in DEPTH_STENCIL_ATTACHMENT_OPTIMAL and
-            // the normal MRT in COLOR_ATTACHMENT_OPTIMAL; the GTAO pass
-            // barriers both to *_READ_ONLY_OPTIMAL before sampling.
         }
 
         // --- Transition swapchain image to PRESENT_SRC_KHR ---
-        // PostPass leaves the swapchain in COLOR_ATTACHMENT_OPTIMAL (see
-        // `PostPass::create_render_pass`). Two paths complete the transition
-        // to PRESENT_SRC_KHR:
-        //   * If the egui overlay has a pending frame (produced by `run_ui`
-        //     before this `render` call), it records its own render pass that
-        //     LOADs the post output and transitions to PRESENT_SRC_KHR on end.
-        //   * Otherwise, fall back to an explicit pipeline barrier.
         let egui_has_pending = self
             .egui_overlay
             .as_ref()
@@ -770,7 +778,7 @@ impl GraphRenderer {
                 if let Some(overlay) = self.egui_overlay.as_mut() {
                     record = overlay
                         .record(
-                            &device,
+                            device,
                             self.command_pool,
                             self.context.graphics_queue,
                             cmd,
@@ -786,14 +794,6 @@ impl GraphRenderer {
         } else if record.is_ok() {
             if let Some(sw) = self.swapchain.as_ref() {
                 let image = sw.images[image_index as usize];
-                // GRAPH-EDGE EXCEPTION: the swapchain image is not a graph
-                // resource (it is owned by the swapchain and acquired/presented
-                // by `GraphRenderer`), so the render graph's automatic barrier
-                // insertion cannot cover the `COLOR_ATTACHMENT_OPTIMAL ->
-                // PRESENT_SRC_KHR` transition. This fallback path runs only
-                // when no egui overlay owns the swapchain's final layout
-                // (otherwise the overlay's render pass performs this transition
-                // via its `final_layout`).
                 let barrier = vk::ImageMemoryBarrier::default()
                     .old_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
                     .new_layout(vk::ImageLayout::PRESENT_SRC_KHR)
@@ -823,48 +823,95 @@ impl GraphRenderer {
             }
         }
 
-        // --- End command buffer ---
-        // End whether or not recording succeeded; combine with any existing
-        // recording error (recording error takes priority).
+        // --- End command buffer (always attempted) ---
         if let Err(end_err) = unsafe { device.end_command_buffer(cmd) } {
             if record.is_ok() {
                 record = Err(anyhow::anyhow!("end command buffer: {end_err:?}"));
             }
         }
 
-        // --- Submit ---
-        // Always submit so the fence is signaled, even when recording produced
-        // an error (the command buffer may contain a partial but valid prefix).
-        // We propagate `record` *after* the submit so fence state stays
-        // consistent for the next frame.
-        let wait_semaphores = [image_available];
+        record
+    }
+
+    /// Phase 3/3: submit the recorded command buffer and present to the
+    /// swapchain.
+    ///
+    /// Runs **regardless** of whether [`execute`] returned an error — the
+    /// in-flight fence (reset during [`begin_frame`]) must be signaled so the
+    /// next frame does not hang. Returns `true` when the swapchain was
+    /// recreated (out-of-date on present).
+    pub fn present(&mut self, ctx: &FrameCtx) -> anyhow::Result<bool> {
+        let wait_semaphores = [ctx.image_available];
         let wait_stages = [vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
-        let signal_semaphores = [render_finished];
-        let cmd_bufs = [cmd];
+        let signal_semaphores = [ctx.render_finished];
+        let cmd_bufs = [ctx.cmd];
         let submit = vk::SubmitInfo::default()
             .wait_semaphores(&wait_semaphores)
             .wait_dst_stage_mask(&wait_stages)
             .command_buffers(&cmd_bufs)
             .signal_semaphores(&signal_semaphores);
-        unsafe { device.queue_submit(self.context.graphics_queue, &[submit], fence) }
-            .context("queue submit")?;
+        unsafe {
+            ctx.device
+                .queue_submit(self.context.graphics_queue, &[submit], ctx.fence)
+        }
+        .context("queue submit")?;
 
-        // Now that the fence is guaranteed to be signaled, surface any
-        // recording error to the caller.
-        record?;
-
-        // --- Present ---
         let out_of_date = self
             .swapchain
             .as_mut()
-            .context("render: no swapchain")?
-            .present(self.context.graphics_queue, image_index, render_finished)?;
+            .context("present: no swapchain")?
+            .present(self.context.graphics_queue, ctx.image_index, ctx.render_finished)?;
 
         if out_of_date {
             log::debug!("present out of date, recreating");
             self.recreate_swapchain()?;
         }
 
+        Ok(out_of_date)
+    }
+
+    /// Render a frame: one-shot convenience that calls [`begin_frame`],
+    /// [`execute`], and [`present`] in order.
+    ///
+    /// This is a compatibility wrapper; new code should prefer the explicit
+    /// phase API for finer error handling and future prepare-stage insertion.
+    #[allow(clippy::too_many_arguments)]
+    pub fn render(
+        &mut self,
+        draw_items: &[DrawItem],
+        frame_data: &FrameUBOData,
+        light_view_proj: [[f32; 4]; 4],
+        inv_projection: [[f32; 4]; 4],
+        debug_mode: u32,
+        normal_space: u32,
+        debug_flags: u32,
+        tonemap_mode: u32,
+        debug_rt: u32,
+        proj22: f32,
+        proj32: f32,
+        lights: &[GpuLight],
+    ) -> anyhow::Result<bool> {
+        let ctx = match self.begin_frame()? {
+            Some(c) => c,
+            None => return Ok(false),
+        };
+        let exec_result = self.execute(
+            &ctx,
+            draw_items,
+            frame_data,
+            light_view_proj,
+            inv_projection,
+            debug_mode,
+            normal_space,
+            debug_flags,
+            tonemap_mode,
+            debug_rt,
+            proj22,
+            proj32,
+            lights,
+        );
+        let out_of_date = self.present(&ctx)?;
+        exec_result?; // propagate recording error after fence is safe
         Ok(out_of_date)
     }
 
