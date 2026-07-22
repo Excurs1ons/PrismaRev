@@ -222,10 +222,6 @@ pub struct RenderSettings {
     /// Setting to 1.0 disables half-resolution (user wants full quality).
     pub ray_query_resolution_scale: f32,
 
-    /// GI mode: 0=Off, 1=Update-only, 2=On (query cache).
-    /// Mirrors SHARC_MODE_OFF / UPDATE / ON.
-    pub gi_mode: u32,
-
     /// SHARC hash-map capacity (number of voxel slots).
     /// Mobile default: 2^20 (1M). Desktop: 2^23 (8M).
     pub sharc_capacity: u32,
@@ -237,6 +233,12 @@ pub struct RenderSettings {
     /// `VK_KHR_ray_query` is supported, otherwise falls back to the rasterized
     /// shadow map. See [`ShadowMode`].
     pub shadow_mode: ShadowMode,
+
+    /// Camera exposure multiplier applied to all light radiance (direct +
+    /// point) before tonemapping. Lets the app keep physically-based light
+    /// units (lux / candela) while controlling final image brightness.
+    /// Default 1/10000 scales 100k lux daylight to a reasonable HDR range.
+    pub exposure: f32,
 }
 
 impl Default for RenderSettings {
@@ -245,10 +247,10 @@ impl Default for RenderSettings {
             gbuffer_high_precision: true, // P0 default: world-space normal in GBuffer A needs Rgba16F (Plan §4.3)
             ray_tracing_enabled: false,   // off by default
             ray_query_resolution_scale: 0.5, // half-res default
-            gi_mode: 0,                   // GI off
             sharc_capacity: 1 << 20,      // 1M slots (mobile budget)
             sharc_scene_scale: 1.0,
             shadow_mode: ShadowMode::Auto, // adapt to hardware
+            exposure: 1.0 / 10_000.0, // 100k lux daylight -> ~10 radiance pre-tonemap
         }
     }
 }
@@ -488,13 +490,18 @@ impl ResourceStateTracker {
     /// declared usage. Returns `(barriers, src_stage, dst_stage)`; callers
     /// should emit a single `vkCmdPipelineBarrier` with the union of stages.
     /// Skips resources already in the desired layout or not yet published.
+    ///
+    /// Each emitted barrier also updates the tracked layout to the reader's
+    /// `usage.layout`, so a second reader of the same resource in the same
+    /// frame sees the post-transition layout as its `old_layout` instead of a
+    /// stale pre-transition value (which would trip VUID-oldLayout-01197).
     pub fn build_read_barriers(
-        &self,
+        &mut self,
         edges: &[ResourceEdge],
         last_writers: &HashMap<ResourceHandle, ResourceUsage>,
         image_index: u32,
         resources: &GraphResources,
-    ) -> (Vec<vk::ImageMemoryBarrier>, vk::PipelineStageFlags, vk::PipelineStageFlags) {
+    ) -> (Vec<vk::ImageMemoryBarrier<'_>>, vk::PipelineStageFlags, vk::PipelineStageFlags) {
         let mut barriers: Vec<vk::ImageMemoryBarrier> = Vec::new();
         let mut max_src_stage = vk::PipelineStageFlags::empty();
         let mut max_dst_stage = vk::PipelineStageFlags::empty();
@@ -542,6 +549,18 @@ impl ResourceStateTracker {
             );
             max_src_stage |= src_stage;
             max_dst_stage |= re.usage.stage;
+
+            // Advance the tracked state to the post-barrier layout, matching
+            // the GPU transition we just recorded. This must happen per-read,
+            // not per-write: a layout change is driven by the read edge here,
+            // and `apply_writes` only runs after the pass executes.
+            self.set(
+                handle,
+                image_index,
+                re.usage.layout,
+                re.usage.access,
+                re.usage.stage,
+            );
         }
 
         (barriers, max_src_stage, max_dst_stage)
@@ -1375,7 +1394,6 @@ mod tests {
         assert!(s.gbuffer_high_precision);
         assert!(!s.ray_tracing_enabled);
         assert_eq!(s.ray_query_resolution_scale, 0.5);
-        assert_eq!(s.gi_mode, 0);
         assert_eq!(s.sharc_capacity, 1 << 20);
     }
 }

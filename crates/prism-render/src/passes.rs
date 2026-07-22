@@ -265,12 +265,12 @@ impl RenderPassNode for ShadowMapPass {
                 cull_mode: Some(vk::CullModeFlags::NONE),
                 depth_bias_enable: Some(true),
                 // D32_SFLOAT: the constant factor is scaled by the format's
-                // minimum representable delta (~2^-23), so a value of 1.0 is
-                // effectively zero and produces shadow-acne banding on large
-                // planes (e.g. the ground). Use values large enough to push
-                // the stored depth clear of self-intersection.
-                depth_bias_constant_factor: Some(64.0),
-                depth_bias_slope_factor: Some(8.0),
+                // minimum representable delta (~2^-23). A moderate constant +
+                // slope bias fights self-shadow acne; the shader's normal bias
+                // (offsetting the receiver along the normal) handles the rest,
+                // so these can stay smaller than a pure depth-bias setup.
+                depth_bias_constant_factor: Some(32.0),
+                depth_bias_slope_factor: Some(4.0),
                 depth_write_enable: Some(true),
                 color_attachment_count: Some(0),
                 color_blend_attachments: None,
@@ -405,6 +405,33 @@ impl RenderPassNode for ShadowMapPass {
             inputs: Vec::new(),
             outputs: vec![self.shadow_map],
         }
+    }
+}
+
+impl ShadowMapPass {
+    /// Tear down all GPU resources (framebuffer, render pass, pipeline/layout).
+    ///
+    /// Called from [`GraphRenderer::destroy`] on shutdown **before** the
+    /// `Arc<VulkanContext>` reference count drops to zero. Without this explicit
+    /// call, `ShadowMapPass` relies on its `Drop` impl — but Rust's struct field
+    /// drop order means the graph (and thus this pass) is dropped *after* the
+    /// `Arc<VulkanContext>` holders (`runtime`/`ibl`/`scene_scope`), at which
+    /// point the device handle is already stale and calling
+    /// `destroy_framebuffer` / `destroy_render_pass` on it causes an access
+    /// violation.
+    ///
+    /// After this call `self.device` is `None`, so the subsequent `Drop` becomes
+    /// a no-op.
+    pub fn destroy(&mut self, device: &ash::Device) {
+        if let Some(fb) = self.framebuffer.take() {
+            unsafe { device.destroy_framebuffer(fb, None) };
+        }
+        if let Some(rp) = self.render_pass.take() {
+            unsafe { device.destroy_render_pass(rp, None) };
+        }
+        // GraphicsPipeline::Drop frees the pipeline + layout.
+        self.pipeline = None;
+        self.device = None;
     }
 }
 

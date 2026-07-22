@@ -460,17 +460,9 @@ impl GraphRenderer {
         &self.mesh_manager
     }
 
-    /// GI mode: 0=Off, 1=Update-only, 2=On (query cache).
-    /// Used by `render_system` to gate IBL — when GI is off, IBL ambient is
-    /// zeroed so no indirect lighting contribution reaches the shader.
-    pub fn gi_mode(&self) -> u32 {
-        self.settings.gi_mode
-    }
-
-    /// Set the GI mode (0=Off, 2=On). Propagated to the shader via
-    /// `FrameUBOData.gi_mode` each frame.
-    pub fn set_gi_mode(&mut self, mode: u32) {
-        self.settings.gi_mode = mode;
+    /// Camera exposure multiplier (scales all light radiance pre-tonemap).
+    pub fn exposure(&self) -> f32 {
+        self.settings.exposure
     }
 
     /// Replace the scene-scope probe volume with real baked data loaded from a
@@ -1017,6 +1009,16 @@ impl GraphRenderer {
         // set, sampler).
         if let Some(post) = self.graph.pass_mut::<crate::post::PostPass>() {
             post.destroy(device);
+        }
+
+        // Destroy ShadowMapPass (framebuffer, render pass, pipeline/layout).
+        // This MUST happen BEFORE scene_scope/graph destruction (which owns
+        // the Arc<VulkanContext>) because Rust field-drop order drops the
+        // context-holders (runtime/ibl/scene_scope) *before* the graph — if
+        // ShadowMapPass relied on its Drop alone, the device handle would be
+        // stale by the time it ran, causing leaked resources + access violation.
+        if let Some(shadow) = self.graph.pass_mut::<crate::passes::ShadowMapPass>() {
+            shadow.destroy(device);
         }
 
         // Destroy egui overlay (its render pass, framebuffers, renderer).
