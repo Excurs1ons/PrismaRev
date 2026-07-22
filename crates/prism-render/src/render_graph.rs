@@ -414,6 +414,151 @@ pub trait RenderPassNode: std::any::Any {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Resource state tracker — automatic barrier derivation
+// ---------------------------------------------------------------------------
+
+/// Per-resource GPU layout + access + stage snapshot for auto-barrier logic.
+#[derive(Clone, Copy, Debug)]
+pub struct ResourceState {
+    pub layout: vk::ImageLayout,
+    pub access: vk::AccessFlags,
+    pub stage: vk::PipelineStageFlags,
+}
+
+/// Tracks per-`(handle, image_index)` resource state across passes and frames.
+/// Used by `RenderGraph::execute` to derive automatic barriers between passes.
+/// `reset()` clears all state (called after swapchain recreation).
+#[derive(Clone, Debug)]
+pub struct ResourceStateTracker {
+    states: HashMap<(ResourceHandle, u32), ResourceState>,
+}
+
+impl ResourceStateTracker {
+    pub fn new() -> Self {
+        Self {
+            states: HashMap::new(),
+        }
+    }
+
+    /// Look up current state; returns UNDEFINED / empty / TOP_OF_PIPE when
+    /// unknown (initial-transition semantics).
+    pub fn get(&self, handle: ResourceHandle, image_index: u32) -> ResourceState {
+        self.states
+            .get(&(handle, image_index))
+            .copied()
+            .unwrap_or(ResourceState {
+                layout: vk::ImageLayout::UNDEFINED,
+                access: vk::AccessFlags::empty(),
+                stage: vk::PipelineStageFlags::TOP_OF_PIPE,
+            })
+    }
+
+    /// Record that a resource is now in the given state (called after a pass's
+    /// render pass transitions it via `final_layout`).
+    pub fn set(
+        &mut self,
+        handle: ResourceHandle,
+        image_index: u32,
+        layout: vk::ImageLayout,
+        access: vk::AccessFlags,
+        stage: vk::PipelineStageFlags,
+    ) {
+        self.states
+            .insert((handle, image_index), ResourceState { layout, access, stage });
+    }
+
+    /// Batch-apply write edges from a pass: each write edge records the layout
+    /// the pass leaves the resource in.
+    pub fn apply_writes(&mut self, edges: &[ResourceEdge], image_index: u32) {
+        for e in edges {
+            if e.kind == EdgeKind::Write {
+                self.set(
+                    e.usage.handle,
+                    image_index,
+                    e.usage.layout,
+                    e.usage.access,
+                    e.usage.stage,
+                );
+            }
+        }
+    }
+
+    /// Build barriers for all read edges whose tracked layout differs from the
+    /// declared usage. Returns `(barriers, src_stage, dst_stage)`; callers
+    /// should emit a single `vkCmdPipelineBarrier` with the union of stages.
+    /// Skips resources already in the desired layout or not yet published.
+    pub fn build_read_barriers(
+        &self,
+        edges: &[ResourceEdge],
+        last_writers: &HashMap<ResourceHandle, ResourceUsage>,
+        image_index: u32,
+        resources: &GraphResources,
+    ) -> (Vec<vk::ImageMemoryBarrier>, vk::PipelineStageFlags, vk::PipelineStageFlags) {
+        let mut barriers: Vec<vk::ImageMemoryBarrier> = Vec::new();
+        let mut max_src_stage = vk::PipelineStageFlags::empty();
+        let mut max_dst_stage = vk::PipelineStageFlags::empty();
+
+        for re in edges {
+            if re.kind != EdgeKind::Read {
+                continue;
+            }
+            let handle = re.usage.handle;
+            let current = self.get(handle, image_index);
+            if current.layout == re.usage.layout {
+                continue;
+            }
+
+            let image = resources
+                .published_image(handle)
+                .or_else(|| resources.image(handle));
+            let image = match image {
+                Some(img) => img,
+                None => continue,
+            };
+
+            let (src_access, src_stage) = match last_writers.get(&handle) {
+                Some(w) => (w.access, w.stage),
+                None => (vk::AccessFlags::empty(), vk::PipelineStageFlags::TOP_OF_PIPE),
+            };
+
+            let aspect = aspect_mask_for_layout(re.usage.layout);
+            barriers.push(
+                vk::ImageMemoryBarrier::default()
+                    .old_layout(current.layout)
+                    .new_layout(re.usage.layout)
+                    .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                    .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                    .image(image)
+                    .src_access_mask(src_access)
+                    .dst_access_mask(re.usage.access)
+                    .subresource_range(vk::ImageSubresourceRange {
+                        aspect_mask: aspect,
+                        base_mip_level: 0,
+                        level_count: 1,
+                        base_array_layer: 0,
+                        layer_count: 1,
+                    }),
+            );
+            max_src_stage |= src_stage;
+            max_dst_stage |= re.usage.stage;
+        }
+
+        (barriers, max_src_stage, max_dst_stage)
+    }
+
+    /// Clear all tracked state (swapchain recreation).
+    pub fn reset(&mut self) {
+        self.states.clear();
+    }
+}
+
+impl Default for ResourceStateTracker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// A resource entry in the graph's resource table.
 #[derive(Clone)]
 pub struct GraphResource {
@@ -613,7 +758,7 @@ impl RenderGraphBuilder {
             resources: self.resources,
             settings: self.settings,
             edges: self.edges,
-            layouts: HashMap::new(),
+            state_tracker: ResourceStateTracker::new(),
             lifecycles,
             last_barrier_probe: Instant::now(),
         };
@@ -649,11 +794,11 @@ pub struct RenderGraph {
     settings: RenderSettings,
     /// Declared read/write edges, collected from each pass's `setup`.
     edges: Vec<ResourceEdge>,
-    /// Per-`(handle, image_index)` current image layout, persisted across
+    /// Per-`(handle, image_index)` resource state tracker, persisted across
     /// frames so cross-frame reads (e.g. GTAO's double-buffered AO) keep their
     /// layout. Keyed by `image_index` because `ScenePass`/`PostPass` own
     /// per-swapchain-image attachments under the same handle.
-    layouts: HashMap<(ResourceHandle, u32), vk::ImageLayout>,
+    state_tracker: ResourceStateTracker,
     /// `[first_write, last_read]` span per resource, for the visualizer and
     /// future aliasing.
     lifecycles: HashMap<ResourceHandle, ResourceLifecycle>,
@@ -762,7 +907,7 @@ impl RenderGraph {
     /// every per-swapchain-image attachment is rebuilt) so stale layout state
     /// doesn't suppress the first-frame barriers.
     pub fn reset_layouts(&mut self) {
-        self.layouts.clear();
+        self.state_tracker.reset();
     }
 
     /// Validate declared edges: warn on reads before writes (potential
@@ -879,17 +1024,59 @@ impl RenderGraph {
         };
 
         for (pass_idx, pass) in self.passes.iter_mut().enumerate() {
-            emit_read_barriers(
-                ctx,
-                &resources,
-                pass_idx,
+            // Build and emit barriers for this pass's read edges, then
+            // update the tracker with write edges after the pass executes.
+            let (barriers, src_stage, dst_stage) = self.state_tracker.build_read_barriers(
                 &pass_edges[pass_idx],
                 &last_writers,
-                &mut self.layouts,
-                probe,
-            )?;
+                ctx.image_index,
+                &resources,
+            );
+            if !barriers.is_empty() {
+                let src_stage = if src_stage.is_empty() {
+                    vk::PipelineStageFlags::TOP_OF_PIPE
+                } else {
+                    src_stage
+                };
+                let dst_stage = if dst_stage.is_empty() {
+                    vk::PipelineStageFlags::BOTTOM_OF_PIPE
+                } else {
+                    dst_stage
+                };
+                unsafe {
+                    ctx.device.cmd_pipeline_barrier(
+                        ctx.cmd,
+                        src_stage,
+                        dst_stage,
+                        vk::DependencyFlags::empty(),
+                        &[],
+                        &[],
+                        &barriers,
+                    );
+                }
+            }
+
+            if probe {
+                for e in &pass_edges[pass_idx] {
+                    if e.kind == EdgeKind::Read {
+                        let st = self.state_tracker.get(e.usage.handle, ctx.image_index);
+                        log::trace!(
+                            "BARRIER_PROBE pass {} {} {:?}: tracked={:?} desired={:?} image_index={}",
+                            pass_idx,
+                            if e.kind == EdgeKind::Read { "read" } else { "write" },
+                            e.usage.handle,
+                            st.layout,
+                            e.usage.layout,
+                            ctx.image_index
+                        );
+                    }
+                }
+            }
+
             pass.execute(ctx, &mut resources)?;
-            apply_write_layouts(ctx, &pass_edges[pass_idx], &mut self.layouts, probe);
+
+            self.state_tracker
+                .apply_writes(&pass_edges[pass_idx], ctx.image_index);
         }
 
         Ok(())
@@ -1042,146 +1229,6 @@ fn build_last_writers(edges: &[ResourceEdge]) -> HashMap<ResourceHandle, &Resour
         }
     }
     map.into_iter().map(|(h, (_, u))| (h, u)).collect()
-}
-
-/// Emit `vkCmdPipelineBarrier` for each read edge whose cached layout differs
-/// from the read's desired layout. `src` stage/access come from the last
-/// writer's `ResourceUsage`; `dst` from this reader's `ResourceUsage`.
-fn emit_read_barriers(
-    ctx: &RenderContext,
-    resources: &GraphResources,
-    pass_idx: usize,
-    edges: &[ResourceEdge],
-    last_writers: &HashMap<ResourceHandle, &ResourceUsage>,
-    layouts: &mut HashMap<(ResourceHandle, u32), vk::ImageLayout>,
-    probe: bool,
-) -> Result<()> {
-    let read_edges: Vec<&ResourceEdge> = edges
-        .iter()
-        .filter(|e| e.kind == EdgeKind::Read)
-        .collect();
-    if read_edges.is_empty() {
-        return Ok(());
-    }
-
-    let mut barriers: Vec<vk::ImageMemoryBarrier> = Vec::new();
-    let mut max_src_stage = vk::PipelineStageFlags::empty();
-    let mut max_dst_stage = vk::PipelineStageFlags::empty();
-
-    for re in &read_edges {
-        let handle = re.usage.handle;
-        let key = (handle, ctx.image_index);
-        let current = layouts
-            .get(&key)
-            .copied()
-            .unwrap_or(vk::ImageLayout::UNDEFINED);
-        if probe {
-            log::trace!(
-                "BARRIER_PROBE pass {} read {:?}: current={:?} desired={:?} image_index={}",
-                pass_idx,
-                handle,
-                current,
-                re.usage.layout,
-                ctx.image_index
-            );
-        }
-        if current == re.usage.layout {
-            continue; // already in the desired layout
-        }
-
-        let image = resources
-            .published_image(handle)
-            .or_else(|| resources.image(handle));
-        let image = match image {
-            Some(img) => img,
-            None => {
-                log::trace!(
-                    "render-graph: pass {} reads {:?} but no image published yet; skip barrier",
-                    pass_idx,
-                    handle
-                );
-                continue;
-            }
-        };
-
-        let (src_access, src_stage) = match last_writers.get(&handle) {
-            Some(w) => (w.access, w.stage),
-            None => (vk::AccessFlags::empty(), vk::PipelineStageFlags::TOP_OF_PIPE),
-        };
-
-        let aspect = aspect_mask_for_layout(re.usage.layout);
-        barriers.push(
-            vk::ImageMemoryBarrier::default()
-                .old_layout(current)
-                .new_layout(re.usage.layout)
-                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .image(image)
-                .src_access_mask(src_access)
-                .dst_access_mask(re.usage.access)
-                .subresource_range(vk::ImageSubresourceRange {
-                    aspect_mask: aspect,
-                    base_mip_level: 0,
-                    level_count: 1,
-                    base_array_layer: 0,
-                    layer_count: 1,
-                }),
-        );
-        max_src_stage |= src_stage;
-        max_dst_stage |= re.usage.stage;
-
-        layouts.insert(key, re.usage.layout);
-    }
-
-    if !barriers.is_empty() {
-        // Vulkan requires non-empty stage masks when there are barriers.
-        let src_stage = if max_src_stage.is_empty() {
-            vk::PipelineStageFlags::TOP_OF_PIPE
-        } else {
-            max_src_stage
-        };
-        let dst_stage = if max_dst_stage.is_empty() {
-            vk::PipelineStageFlags::BOTTOM_OF_PIPE
-        } else {
-            max_dst_stage
-        };
-        unsafe {
-            ctx.device.cmd_pipeline_barrier(
-                ctx.cmd,
-                src_stage,
-                dst_stage,
-                vk::DependencyFlags::empty(),
-                &[],
-                &[],
-                &barriers,
-            );
-        }
-    }
-    Ok(())
-}
-
-/// After a pass executes, record the layout each of its **write** edges leaves
-/// the image in (the pass's render pass `final_layout`). No barrier is emitted
-/// - the transition happened inside the pass's render pass.
-fn apply_write_layouts(
-    ctx: &RenderContext,
-    edges: &[ResourceEdge],
-    layouts: &mut HashMap<(ResourceHandle, u32), vk::ImageLayout>,
-    probe: bool,
-) {
-    for e in edges {
-        if e.kind == EdgeKind::Write {
-            if probe {
-                log::trace!(
-                    "BARRIER_PROBE pass write {:?} -> layout={:?} image_index={}",
-                    e.usage.handle,
-                    e.usage.layout,
-                    ctx.image_index
-                );
-            }
-            layouts.insert((e.usage.handle, ctx.image_index), e.usage.layout);
-        }
-    }
 }
 
 /// Create an image with optional lazy allocation (transient attachment).
