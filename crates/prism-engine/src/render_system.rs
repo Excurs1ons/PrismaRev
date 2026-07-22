@@ -11,10 +11,32 @@
 //! | [`Transform`] | Translation + rotation + scale → model matrix |
 //! | [`MeshHandle`] | Index into an externally-owned mesh list |
 
+use std::sync::Mutex;
+
 use prism_ecs::World;
 use prism_render::{DrawItem, FrameUBOData, GpuLight, GraphRenderer, Mesh, SceneDrawItem};
 
 use crate::camera::Camera;
+use crate::dirty_router::DirtyRouter;
+
+/// Module-level [`DirtyRouter`] that persists across frames.
+///
+/// Initialized lazily on the first call to [`render_system`]; each subsequent
+/// frame compares the new [`SceneChanges`] against the previous snapshot and
+/// produces [`DirtyFlags`], which are stored in [`FrameInput`] for the rest of
+/// the render pipeline to act on.
+static SCENE_DIRTY_ROUTER: Mutex<Option<DirtyRouter>> = Mutex::new(None);
+
+/// Lazy-init the dirty router (first call creates it; subsequent calls return
+/// the existing instance).
+fn with_dirty_router<F, R>(f: F) -> R
+where
+    F: FnOnce(&mut DirtyRouter) -> R,
+{
+    let mut guard = SCENE_DIRTY_ROUTER.lock().unwrap();
+    let router = guard.get_or_insert_with(DirtyRouter::new);
+    f(router)
+}
 
 // ---------------------------------------------------------------------------
 // ECS Components
@@ -413,6 +435,15 @@ pub fn render_system(
 ) -> anyhow::Result<()> {
     // 1. Collect per-frame scene state from the ECS world (camera, lights).
     let scene = collect_scene_changes(world, renderer)?;
+    let dirty_flags = with_dirty_router(|r| r.update(&scene));
+    if dirty_flags.any() {
+        log::trace!(
+            "dirty_flags: camera={} dir_light={} point_lights={}",
+            dirty_flags.camera,
+            dirty_flags.directional_light,
+            dirty_flags.point_lights,
+        );
+    }
     let SceneChanges {
         view_proj,
         eye,

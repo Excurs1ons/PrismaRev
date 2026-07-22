@@ -5,6 +5,7 @@ pub mod app;
 pub mod camera;
 pub mod camera_controller;
 pub mod crash_dialog;
+pub mod dirty_router;
 pub mod input;
 pub mod inspector;
 pub mod render_graph_viz;
