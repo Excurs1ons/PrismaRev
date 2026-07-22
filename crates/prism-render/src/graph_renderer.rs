@@ -64,16 +64,79 @@ pub struct FrameInput<'a> {
     pub lights: &'a [GpuLight],
 }
 
+/// GPU session that owns the long-lived Vulkan runtime objects (device,
+/// command pool, descriptor infrastructure). Survives swapchain recreation
+/// and is the minimum set of fields that must outlive all render passes.
+///
+/// Extracted from [`GraphRenderer`] as the first step toward the dedicated
+/// render-thread separation (PR-L2): once the runtime is self-contained, the
+/// engine can move it (and the [`RenderGraph`]) onto a separate thread without
+/// moving scene-level managers and GUI state.
+pub struct RenderRuntime {
+    pub context: Arc<VulkanContext>,
+    pub command_pool: vk::CommandPool,
+    pub command_buffers: Vec<vk::CommandBuffer>,
+    #[allow(dead_code)]
+    pub descriptor_layout: DescriptorLayout,
+    #[allow(dead_code)]
+    pub descriptor_pool: DescriptorPool,
+    pub frame_ubos: Vec<FrameUBO>,
+}
+
+impl RenderRuntime {
+    /// Build the runtime from a pre-created Vulkan context.
+    ///
+    /// `cmd_buffer_count` determines how many command buffers to allocate
+    /// (one per swapchain image).
+    fn new(
+        context: Arc<VulkanContext>,
+        cmd_buffer_count: u32,
+    ) -> anyhow::Result<Self> {
+        let descriptor_layout =
+            DescriptorLayout::new(&context.device).context("create descriptor layout")?;
+        let frame_count = 2u32;
+        let descriptor_pool =
+            DescriptorPool::new(&context.device, frame_count)
+                .context("create descriptor pool")?;
+        let descriptor_sets = descriptor_pool
+            .allocate_sets(&context.device, &descriptor_layout, frame_count)
+            .context("allocate descriptor sets")?;
+
+        let frame_ubos = descriptor_sets
+            .into_iter()
+            .map(|set| FrameUBO::new(&context, set))
+            .collect::<anyhow::Result<Vec<_>>>()
+            .context("create frame UBOs")?;
+
+        let pool_info = vk::CommandPoolCreateInfo::default()
+            .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
+            .queue_family_index(context.graphics_queue_family);
+        let command_pool = unsafe { context.device.create_command_pool(&pool_info, None) }
+            .context("create command pool")?;
+
+        let alloc_info = vk::CommandBufferAllocateInfo::default()
+            .command_pool(command_pool)
+            .level(vk::CommandBufferLevel::PRIMARY)
+            .command_buffer_count(cmd_buffer_count);
+        let command_buffers = unsafe { context.device.allocate_command_buffers(&alloc_info) }
+            .context("allocate command buffers")?;
+
+        Ok(Self {
+            context,
+            command_pool,
+            command_buffers,
+            descriptor_layout,
+            descriptor_pool,
+            frame_ubos,
+        })
+    }
+}
+
 pub struct GraphRenderer {
     swapchain: Option<Swapchain>,
-    command_pool: vk::CommandPool,
-    command_buffers: Vec<vk::CommandBuffer>,
-    // Owned for RAII (dropped in `destroy`/`Drop`); not read after creation.
-    #[allow(dead_code)]
-    descriptor_layout: DescriptorLayout,
-    #[allow(dead_code)]
-    descriptor_pool: DescriptorPool,
-    frame_ubos: Vec<FrameUBO>,
+    /// Long-lived GPU session (device, command pool, descriptors, UBOs).
+    /// Survives swapchain recreation — see [`RenderRuntime`].
+    runtime: RenderRuntime,
     mesh_manager: RenderMeshManager,
     texture_manager: RenderTextureManager,
     material_manager: RenderMaterialManager,
@@ -103,7 +166,6 @@ pub struct GraphRenderer {
     /// COLOR_ATTACHMENT_OPTIMAL -> PRESENT_SRC_KHR transition. When `None`,
     /// `render` falls back to an explicit pipeline barrier for the transition.
     egui_overlay: Option<EguiOverlay>,
-    context: Arc<VulkanContext>,
 }
 
 /// Per-frame context returned by [`GraphRenderer::begin_frame`], consumed by
@@ -130,45 +192,21 @@ impl GraphRenderer {
         let swapchain = Swapchain::new(&context, window, window_handle)?;
         let color_format = swapchain.format.format;
 
-        let descriptor_layout =
-            DescriptorLayout::new(&context.device).context("create descriptor layout")?;
-        let frame_count = 2u32;
-        let descriptor_pool =
-            DescriptorPool::new(&context.device, frame_count).context("create descriptor pool")?;
-        let descriptor_sets = descriptor_pool
-            .allocate_sets(&context.device, &descriptor_layout, frame_count)
-            .context("allocate descriptor sets")?;
-
-        let frame_ubos = descriptor_sets
-            .into_iter()
-            .map(|set| FrameUBO::new(&context, set))
-            .collect::<anyhow::Result<Vec<_>>>()
-            .context("create frame UBOs")?;
-
-        let pool_info = vk::CommandPoolCreateInfo::default()
-            .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
-            .queue_family_index(context.graphics_queue_family);
-        let command_pool = unsafe { context.device.create_command_pool(&pool_info, None) }
-            .context("create command pool")?;
-
-        let cmd_count = swapchain.views.len() as u32;
-        let alloc_info = vk::CommandBufferAllocateInfo::default()
-            .command_pool(command_pool)
-            .level(vk::CommandBufferLevel::PRIMARY)
-            .command_buffer_count(cmd_count);
-        let command_buffers = unsafe { context.device.allocate_command_buffers(&alloc_info) }
-            .context("allocate command buffers")?;
+        // Build the GPU runtime: descriptor infrastructure, command pool,
+        // per-frame command buffers, and frame UBOs.  These survive swapchain
+        // recreation; the runtime is independent of scene-level resources.
+        let runtime = RenderRuntime::new(context.clone(), swapchain.views.len() as u32)?;
 
         let ibl = IblResources::new(
             context.clone(),
-            command_pool,
+            runtime.command_pool,
             context.graphics_queue,
             env_bytes,
         )
         .context("create IBL resources")?;
 
         let mut texture_manager =
-            RenderTextureManager::new(&context, command_pool, context.graphics_queue, 1024)
+            RenderTextureManager::new(&context, runtime.command_pool, context.graphics_queue, 1024)
                 .context("create RenderTextureManager")?;
         let material_manager =
             RenderMaterialManager::new(&context).context("create RenderMaterialManager")?;
@@ -223,7 +261,8 @@ impl GraphRenderer {
         // per-frame UBO buffers (one set0 descriptor set per frame-in-flight).
         // ScenePass is executed directly by GraphRenderer (it targets the
         // swapchain, not a graph-managed resource).
-        let frame_ubo_buffers: Vec<vk::Buffer> = frame_ubos.iter().map(|u| u.buffer).collect();
+        let frame_ubo_buffers: Vec<vk::Buffer> =
+            runtime.frame_ubos.iter().map(|u| u.buffer).collect();
         let bindless = texture_manager.bindless_mut();
         let materials_buffer = material_manager.buffer();
 
@@ -262,14 +301,12 @@ impl GraphRenderer {
         // every frame and produces a double-buffered R8 AO texture the scene
         // samples (1-frame latency) to attenuate IBL diffuse + specular.
         let swapchain_extent = swapchain.extent;
-        let gtao_pass = crate::gtao::GtaoPass::new(&context, command_pool, swapchain_extent)
-            .context("GtaoPass::new")?;
+        let gtao_pass =
+            crate::gtao::GtaoPass::new(&context, runtime.command_pool, swapchain_extent)
+                .context("GtaoPass::new")?;
 
-        // PostPass: tonemaps the ScenePass HDR intermediate color -> sRGB
-        // swapchain. Replaces the inline tonemap that used to live in
-        // scene_frag.slang so the scene output stays linear HDR. Allocates one
-        // descriptor set per frame-in-flight so `set_input` doesn't disturb an
-        // in-flight set.
+        // PostPass parameters: 2 in-flight frames = 2 descriptor sets.
+        let frame_count = 2u32;
         let post_pass = crate::post::PostPass::new(&context, color_format, frame_count)
             .context("PostPass::new")?;
 
@@ -284,11 +321,7 @@ impl GraphRenderer {
 
         Ok(Self {
             swapchain: Some(swapchain),
-            command_pool,
-            command_buffers,
-            descriptor_layout,
-            descriptor_pool,
-            frame_ubos,
+            runtime,
             mesh_manager,
             texture_manager,
             material_manager,
@@ -300,7 +333,6 @@ impl GraphRenderer {
             shadow_view,
             color_format,
             egui_overlay: None,
-            context,
         })
     }
     // -------------------------------------------------------------------
@@ -308,16 +340,16 @@ impl GraphRenderer {
     // -------------------------------------------------------------------
 
     pub fn context(&self) -> &VulkanContext {
-        &self.context
+        &self.runtime.context
     }
     pub fn context_arc(&self) -> Arc<VulkanContext> {
-        self.context.clone()
+        self.runtime.context.clone()
     }
     pub fn command_pool(&self) -> vk::CommandPool {
-        self.command_pool
+        self.runtime.command_pool
     }
     pub fn graphics_queue(&self) -> vk::Queue {
-        self.context.graphics_queue
+        self.runtime.context.graphics_queue
     }
 
     /// Immutable borrow of the render graph (passes + declared resources +
@@ -333,7 +365,7 @@ impl GraphRenderer {
     /// shown. Uses the same `in_flight_frames` count as the renderer (2).
     pub fn ensure_egui_overlay(&mut self) -> anyhow::Result<&mut EguiOverlay> {
         if self.egui_overlay.is_none() {
-            let overlay = EguiOverlay::new(&self.context, self.color_format, 2)?;
+            let overlay = EguiOverlay::new(&self.runtime.context, self.color_format, 2)?;
             self.egui_overlay = Some(overlay);
         }
         Ok(self.egui_overlay.as_mut().expect("just ensured"))
@@ -350,9 +382,9 @@ impl GraphRenderer {
 
     pub fn register_mesh(&mut self, input: &MeshUploadInput) -> anyhow::Result<MeshHandle> {
         self.mesh_manager.register(
-            &self.context,
-            self.command_pool,
-            self.context.graphics_queue,
+            &self.runtime.context,
+            self.runtime.command_pool,
+            self.runtime.context.graphics_queue,
             input,
         )
     }
@@ -363,9 +395,9 @@ impl GraphRenderer {
         indices: Option<&[u32]>,
     ) -> anyhow::Result<crate::mesh::Mesh> {
         crate::mesh::Mesh::new(
-            &self.context,
-            self.command_pool,
-            self.context.graphics_queue,
+            &self.runtime.context,
+            self.runtime.command_pool,
+            self.runtime.context.graphics_queue,
             vertices,
             indices,
         )
@@ -377,7 +409,7 @@ impl GraphRenderer {
         input: &MeshUploadInput,
     ) -> anyhow::Result<MeshHandle> {
         self.mesh_manager
-            .register_into(&self.context, uploader, input)
+            .register_into(&self.runtime.context, uploader, input)
     }
 
     pub fn register_texture(
@@ -385,9 +417,9 @@ impl GraphRenderer {
         input: &TextureUploadInput,
     ) -> anyhow::Result<AssetTextureHandle> {
         self.texture_manager.reserve(
-            &self.context,
-            self.command_pool,
-            self.context.graphics_queue,
+            &self.runtime.context,
+            self.runtime.command_pool,
+            self.runtime.context.graphics_queue,
             input,
         )
     }
@@ -398,7 +430,7 @@ impl GraphRenderer {
         input: &TextureUploadInput,
     ) -> anyhow::Result<AssetTextureHandle> {
         self.texture_manager
-            .reserve_into(&self.context, uploader, input)
+            .reserve_into(&self.runtime.context, uploader, input)
     }
 
     pub fn register_material(
@@ -418,9 +450,9 @@ impl GraphRenderer {
 
     pub fn flush_materials(&mut self) -> anyhow::Result<()> {
         self.material_manager.upload(
-            &self.context,
-            self.command_pool,
-            self.context.graphics_queue,
+            &self.runtime.context,
+            self.runtime.command_pool,
+            self.runtime.context.graphics_queue,
         )
     }
 
@@ -558,7 +590,7 @@ impl GraphRenderer {
     }
 
     pub fn suspend_surface(&mut self) {
-        let device = &self.context.device;
+        let device = &self.runtime.context.device;
         unsafe { device.device_wait_idle() }.ok();
         if let Some(mut sw) = self.swapchain.take() {
             unsafe { sw.destroy(device) };
@@ -574,7 +606,7 @@ impl GraphRenderer {
         if self.swapchain.is_some() {
             return Ok(());
         }
-        let swapchain = Swapchain::new(&self.context, window, window_handle)?;
+        let swapchain = Swapchain::new(&self.runtime.context, window, window_handle)?;
         self.swapchain = Some(swapchain);
         log::info!("GraphRenderer resumed");
         Ok(())
@@ -586,7 +618,7 @@ impl GraphRenderer {
         // the ScenePass framebuffers and the egui overlay framebuffers; without
         // this wait, vkDestroyFramebuffer fires while a command buffer is still
         // executing (VUID-vkDestroyFramebuffer-framebuffer-00892).
-        unsafe { self.context.device.device_wait_idle() }
+        unsafe { self.runtime.context.device.device_wait_idle() }
             .context("recreate_swapchain: device_wait_idle")?;
 
         // Drop the ScenePass framebuffer + depth image BEFORE the swapchain is
@@ -600,7 +632,7 @@ impl GraphRenderer {
         // acquire/present out-of-date paths in `render` also route through
         // here so the framebuffer is always torn down first.
         if let Some(scene) = self.graph.pass_mut::<ScenePass>() {
-            scene.drop_target(&self.context.device);
+            scene.drop_target(&self.runtime.context.device);
             // Re-size the per-image framebuffer vectors for the new swapchain
             // image count. `ScenePass::execute` rebuilds any missing slot via
             // `ensure_target` on the next frame.
@@ -611,13 +643,13 @@ impl GraphRenderer {
         // PostPass wraps swapchain views too (its framebuffers target the
         // swapchain directly). Drop them on the same lifecycle.
         if let Some(post) = self.graph.pass_mut::<crate::post::PostPass>() {
-            post.drop_target(&self.context.device);
+            post.drop_target(&self.runtime.context.device);
         }
         // GTAO owns its own AO images (not swapchain-derived) but sizes them
         // to half the swapchain extent, so recreate them on resize too.
         if let Some(sw) = self.swapchain.as_ref() {
             if let Some(gtao) = self.graph.pass_mut::<crate::gtao::GtaoPass>() {
-                if let Err(e) = gtao.recreate_target(&self.context, self.command_pool, sw.extent) {
+                if let Err(e) = gtao.recreate_target(&self.runtime.context, self.runtime.command_pool, sw.extent) {
                     log::warn!("GtaoPass recreate_target failed: {e:#}");
                 }
             }
@@ -627,7 +659,7 @@ impl GraphRenderer {
         }
 
         if let Some(sw) = self.swapchain.as_mut() {
-            sw.recreate(&self.context)?;
+            sw.recreate(&self.runtime.context)?;
         }
 
         // All per-swapchain-image attachments (ScenePass HDR/depth/normal,
@@ -649,7 +681,7 @@ impl GraphRenderer {
     /// early (the swapchain was recreated internally). On real error returns
     /// `Err`.
     pub fn begin_frame(&mut self) -> anyhow::Result<Option<FrameCtx>> {
-        let device = self.context.device.clone();
+        let device = self.runtime.context.device.clone();
 
         // --- Acquire next image ---
         let (image_index, frame, image_available, render_finished, fence) = match self
@@ -670,7 +702,7 @@ impl GraphRenderer {
             }
         };
 
-        let cmd = self.command_buffers[frame];
+        let cmd = self.runtime.command_buffers[frame];
         let extent = self.extent();
 
         // --- Reset & begin command buffer ---
@@ -746,7 +778,7 @@ impl GraphRenderer {
 
         // --- Update frame UBO ---
         if record.is_ok() {
-            record = self.frame_ubos[frame]
+            record = self.runtime.frame_ubos[frame]
                 .update(device, frame_data)
                 .context("update frame UBO");
         }
@@ -764,7 +796,7 @@ impl GraphRenderer {
                 .map(|sw| sw.views.as_slice())
                 .unwrap_or(&[]);
             let graph_frame = GraphFrame {
-                frame_ubo: &self.frame_ubos[frame],
+                frame_ubo: &self.runtime.frame_ubos[frame],
                 draw_list: draw_items,
                 mesh_manager: &self.mesh_manager,
                 light_view_proj,
@@ -795,7 +827,7 @@ impl GraphRenderer {
             };
             let render_ctx = crate::render_graph::RenderContext {
                 device,
-                context: &self.context,
+                context: &self.runtime.context,
                 settings: &self.settings,
                 cmd,
                 frame_index: frame as u32,
@@ -818,8 +850,8 @@ impl GraphRenderer {
                     record = overlay
                         .record(
                             device,
-                            self.command_pool,
-                            self.context.graphics_queue,
+                            self.runtime.command_pool,
+                            self.runtime.context.graphics_queue,
                             cmd,
                             &sw.views,
                             image_index,
@@ -891,7 +923,7 @@ impl GraphRenderer {
             .signal_semaphores(&signal_semaphores);
         unsafe {
             ctx.device
-                .queue_submit(self.context.graphics_queue, &[submit], ctx.fence)
+                .queue_submit(self.runtime.context.graphics_queue, &[submit], ctx.fence)
         }
         .context("queue submit")?;
 
@@ -899,7 +931,7 @@ impl GraphRenderer {
             .swapchain
             .as_mut()
             .context("present: no swapchain")?
-            .present(self.context.graphics_queue, ctx.image_index, ctx.render_finished)?;
+            .present(self.runtime.context.graphics_queue, ctx.image_index, ctx.render_finished)?;
 
         if out_of_date {
             log::debug!("present out of date, recreating");
@@ -956,7 +988,7 @@ impl GraphRenderer {
 
     /// Release all GPU resources.
     pub fn destroy(&mut self) {
-        let device = &self.context.device;
+        let device = &self.runtime.context.device;
         unsafe { device.device_wait_idle() }.ok();
 
         // Destroy scene managers.
@@ -999,7 +1031,7 @@ impl GraphRenderer {
         self.graph.destroy(device);
 
         // Destroy command pool.
-        unsafe { device.destroy_command_pool(self.command_pool, None) };
+        unsafe { device.destroy_command_pool(self.runtime.command_pool, None) };
 
         // Destroy swapchain.
         if let Some(mut sw) = self.swapchain.take() {
