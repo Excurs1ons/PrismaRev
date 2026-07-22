@@ -38,6 +38,32 @@ pub struct SceneDrawItem {
     pub model: [[f32; 4]; 4],
 }
 
+/// Bundled per-frame input from the engine / app layer to [`GraphRenderer`].
+///
+/// Built each frame by [`render_system`] (ECS → flat data) and consumed by
+/// [`GraphRenderer::execute`], which unpacks it into [`GraphFrame`] +
+/// [`RenderContext`] and hands them to the render graph.
+///
+/// This struct is the **data boundary** between the CPU update (ECS queries,
+/// camera math, light resolution, …) and the GPU render pipeline.  Future
+/// phases (prepare / scene sync) may inject additional data here without
+/// touching the [`GraphRenderer`] plumbing.
+#[derive(Clone)]
+pub struct FrameInput<'a> {
+    pub draw_items: &'a [DrawItem],
+    pub frame_data: &'a FrameUBOData,
+    pub light_view_proj: [[f32; 4]; 4],
+    pub inv_projection: [[f32; 4]; 4],
+    pub debug_mode: u32,
+    pub normal_space: u32,
+    pub debug_flags: u32,
+    pub tonemap_mode: u32,
+    pub debug_rt: u32,
+    pub proj22: f32,
+    pub proj32: f32,
+    pub lights: &'a [GpuLight],
+}
+
 pub struct GraphRenderer {
     swapchain: Option<Swapchain>,
     command_pool: vk::CommandPool,
@@ -680,24 +706,37 @@ impl GraphRenderer {
     pub fn execute(
         &mut self,
         ctx: &FrameCtx,
-        draw_items: &[DrawItem],
-        frame_data: &FrameUBOData,
-        light_view_proj: [[f32; 4]; 4],
-        inv_projection: [[f32; 4]; 4],
-        debug_mode: u32,
-        normal_space: u32,
-        debug_flags: u32,
-        tonemap_mode: u32,
-        debug_rt: u32,
-        proj22: f32,
-        proj32: f32,
-        lights: &[GpuLight],
+        input: &FrameInput<'_>,
     ) -> anyhow::Result<()> {
         let device = &ctx.device;
         let cmd = ctx.cmd;
         let frame = ctx.frame_index as usize;
         let image_index = ctx.image_index;
         let extent = ctx.extent;
+
+        let FrameInput {
+            draw_items,
+            frame_data,
+            light_view_proj,
+            inv_projection,
+            debug_mode,
+            normal_space,
+            debug_flags,
+            tonemap_mode,
+            debug_rt,
+            proj22,
+            proj32,
+            lights,
+        } = input;
+        let light_view_proj = *light_view_proj;
+        let inv_projection = *inv_projection;
+        let debug_mode = *debug_mode;
+        let normal_space = *normal_space;
+        let debug_flags = *debug_flags;
+        let tonemap_mode = *tonemap_mode;
+        let debug_rt = *debug_rt;
+        let proj22 = *proj22;
+        let proj32 = *proj32;
 
         // Record into a `Result` rather than `?`-propagating: if any step
         // fails we still must `end_command_buffer` below so the in-flight
@@ -895,8 +934,7 @@ impl GraphRenderer {
             Some(c) => c,
             None => return Ok(false),
         };
-        let exec_result = self.execute(
-            &ctx,
+        let input = FrameInput {
             draw_items,
             frame_data,
             light_view_proj,
@@ -909,7 +947,8 @@ impl GraphRenderer {
             proj22,
             proj32,
             lights,
-        );
+        };
+        let exec_result = self.execute(&ctx, &input);
         let out_of_date = self.present(&ctx)?;
         exec_result?; // propagate recording error after fence is safe
         Ok(out_of_date)

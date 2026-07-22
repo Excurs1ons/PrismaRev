@@ -66,7 +66,7 @@ pub use gi::{
     ProbeVolumeInfo, SH_COEFF_COUNT,
 };
 pub use gizmo::Gizmo;
-pub use graph_renderer::{FrameCtx, GraphRenderer};
+pub use graph_renderer::{FrameCtx, FrameInput, GraphRenderer};
 pub use gtao::{GtaoFrameInputs, GtaoPass, GtaoPushConstants};
 pub use mesh::{Mesh, Vertex};
 pub use passes::{ScenePass, ShadowMapPass, ShadowPassPushConstants};

@@ -418,22 +418,22 @@ pub fn render_system(
         Some(c) => c,
         None => return Ok(()),
     };
+    let input = prism_render::FrameInput {
+        draw_items: &draw_items,
+        frame_data: &frame_data,
+        light_view_proj,
+        inv_projection,
+        debug_mode,
+        normal_space,
+        debug_flags,
+        tonemap_mode,
+        debug_rt,
+        proj22,
+        proj32,
+        lights: &lights,
+    };
     renderer
-        .execute(
-            &ctx,
-            &draw_items,
-            &frame_data,
-            light_view_proj,
-            inv_projection,
-            debug_mode,
-            normal_space,
-            debug_flags,
-            tonemap_mode,
-            debug_rt,
-            proj22,
-            proj32,
-            &lights,
-        )
+        .execute(&ctx, &input)
         .map_err(|e| {
             // Recording error: still call present() to signal the fence.
             let _ = renderer.present(&ctx);

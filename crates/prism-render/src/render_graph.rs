@@ -1216,7 +1216,7 @@ fn aspect_mask_for_layout(layout: vk::ImageLayout) -> vk::ImageAspectFlags {
 /// that writes the handle). Readers use this to fill a barrier's src
 /// stage/access; a handle with no writer uses `TOP_OF_PIPE` / empty access
 /// (initial-transition semantics).
-fn build_last_writers(edges: &[ResourceEdge]) -> HashMap<ResourceHandle, &ResourceUsage> {
+fn build_last_writers(edges: &[ResourceEdge]) -> HashMap<ResourceHandle, ResourceUsage> {
     let mut map: HashMap<ResourceHandle, (usize, &ResourceUsage)> = HashMap::new();
     for e in edges {
         if e.kind == EdgeKind::Write {
@@ -1228,7 +1228,7 @@ fn build_last_writers(edges: &[ResourceEdge]) -> HashMap<ResourceHandle, &Resour
             }
         }
     }
-    map.into_iter().map(|(h, (_, u))| (h, u)).collect()
+    map.into_iter().map(|(h, (_, u))| (h, u.clone())).collect()
 }
 
 /// Create an image with optional lazy allocation (transient attachment).
