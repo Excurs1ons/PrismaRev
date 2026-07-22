@@ -60,12 +60,24 @@ pub struct TextureUploadInput {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextureFormat {
     Rgba8,
+    /// sRGB-encoded RGBA8 -> Vulkan `R8G8B8A8_SRGB`. Hardware performs the
+    /// sRGB->linear conversion on sample, so the shader receives linear values
+    /// and must NOT apply a manual `pow(2.2)`. Used for albedo / emissive.
+    Rgba8Srgb,
 }
 
 impl TextureFormat {
     pub const fn bytes_per_pixel(self) -> usize {
         match self {
-            TextureFormat::Rgba8 => 4,
+            TextureFormat::Rgba8 | TextureFormat::Rgba8Srgb => 4,
+        }
+    }
+
+    /// The Vulkan image format to use for this texture kind.
+    pub const fn vk_format(self) -> vk::Format {
+        match self {
+            TextureFormat::Rgba8 => vk::Format::R8G8B8A8_UNORM,
+            TextureFormat::Rgba8Srgb => vk::Format::R8G8B8A8_SRGB,
         }
     }
 }
@@ -128,7 +140,7 @@ impl RenderTextureManager {
         // its exact color space is irrelevant). Written into bindless slot 0.
         let magenta = [255u8, 0, 255, 255];
         let (fb_image, fb_memory, fb_view) = unsafe {
-            create_and_upload_image(context, command_pool, graphics_queue, 1, 1, &magenta, 1)
+            create_and_upload_image(context, command_pool, graphics_queue, 1, 1, &magenta, 1, vk::Format::R8G8B8A8_UNORM)
         }
         .context("RenderTextureManager::new: create magenta fallback")?;
         bindless
@@ -221,6 +233,7 @@ impl RenderTextureManager {
                 input.height,
                 &input.pixels,
                 mip_levels,
+                input.format.vk_format(),
             )
         }
         .context("RenderTextureManager::reserve: upload texture")?;
@@ -274,7 +287,7 @@ impl RenderTextureManager {
 
         let mip_levels = crate::batch::mip_level_count(input.width, input.height);
         let (image, memory, view) = uploader
-            .upload_image(input.width, input.height, mip_levels, &input.pixels)
+            .upload_image(input.width, input.height, mip_levels, &input.pixels, input.format.vk_format())
             .context("RenderTextureManager::reserve_into: upload texture")?;
 
         let srv = self

@@ -97,6 +97,12 @@ impl SceneStore {
     pub fn texture(&self, h: TextureHandle) -> Option<&TextureData> {
         self.textures.get(h)
     }
+    /// Mutable access to a single texture by handle. Used by the glTF loader
+    /// to retag a texture's `format` (e.g. mark albedo/emissive textures as
+    /// sRGB) after the material pass resolves which texture serves which role.
+    pub fn texture_mut(&mut self, h: TextureHandle) -> Option<&mut TextureData> {
+        self.textures.get_mut(h)
+    }
     pub fn instance(&self, h: InstanceHandle) -> Option<&InstanceData> {
         self.instances.get(h)
     }
@@ -215,7 +221,7 @@ mod tests {
             name: "m".into(),
             positions: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
             normals: vec![[0.0, 0.0, 1.0]; 3],
-            tangents: vec![[1.0, 0.0, 0.0]; 3],
+            tangents: vec![[1.0, 0.0, 0.0, 1.0]; 3],
             uvs: vec![[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]],
             indices: vec![0, 1, 2],
         }

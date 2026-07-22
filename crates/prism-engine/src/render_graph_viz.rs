@@ -196,8 +196,6 @@ impl RenderGraphViz {
                 }
             ));
             ui.separator();
-            ui.label(format!("gi_mode: {}", s.gi_mode));
-            ui.separator();
             ui.label(format!(
                 "gbuffer_hi: {}",
                 if s.gbuffer_high_precision { "on" } else { "off" }

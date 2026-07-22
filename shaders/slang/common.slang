@@ -9,19 +9,22 @@
 module common;
 
 // Per-frame uniform data. Mirrors Rust `FrameUBOData` (set 0, binding 0).
-// std140: mat4(64) + vec4(16)*3 + mat4(64) + mat4(64) + uint(4) + pad(12) = 256.
+// std140: mat4(64) + vec4(16)*3 + mat4(64) + mat4(64) + uint(4) + vec2(8) +
+//         float(4) + float3(12) = 268, padded to 272.
 public struct FrameUBO
 {
     public float4x4 viewProj;        // offset   0
     public float4   cameraPosition;  // offset  64  (xyz = camera pos, w = point light count)
-    public float4   lightDirection;  // offset  80  (xyz = dir TO light, w = intensity)
+    public float4   lightDirection;  // offset  80  (xyz = dir TO light, w = illuminance in lux)
     public float4   lightColor;      // offset  96  (rgb = color, w = ambient factor)
     public float4x4 view;            // offset 112  (world -> view)
     public float4x4 lightViewProj;   // offset 176  (light-space VP for shadow map)
     public uint     tonemapMode;     // offset 240 (0 = Reinhard, 1 = ACES)
     public float    viewportW;       // offset 244 - scene colour viewport width, px
     public float    viewportH;       // offset 248 - scene colour viewport height, px
-    public uint     giMode;          // offset 252 (0=Off, 2=On; gates GI indirect diffuse)
+    public float    exposure;        // offset 252 (multiplies all light radiance pre-tonemap)
+    public float3   _pad2;           // offset 256..267 (std140 tail pad to 268)
+    public float    _pad3;           // offset 268..271 (pad to 272, multiple of 16)
 };
 
 // Vertex stream matching mesh.vert input locations 0..4.
@@ -31,7 +34,7 @@ public struct MeshVertexIn
     public float3 normal    : NORMAL;     // location 1
     public float3 color     : COLOR0;     // location 2
     public float2 uv        : TEXCOORD0;  // location 3
-    public float3 tangent   : TANGENT;    // location 4
+    public float4 tangent   : TANGENT;    // location 4 (xyz = dir, w = handedness)
 };
 
 // Interpolants shared by mesh.frag (Blinn-Phong) and pbr.frag (PBR).
@@ -44,5 +47,5 @@ public struct MeshVaryings
     public float3 worldNormal  : NORMAL;     // location 1
     public float3 worldPos     : TEXCOORD1;  // location 2
     public float2 uv           : TEXCOORD0;  // location 3
-    public float3 tangent      : TANGENT;    // location 4
+    public float4 tangent      : TANGENT;    // location 4 (xyz = dir, w = handedness)
 };

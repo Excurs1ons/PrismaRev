@@ -143,7 +143,9 @@ pub struct DirectionalLight {
     /// XYZ Euler angles (degrees): x = pitch (around X), y = yaw (around Y),
     /// z = roll (around Z). The direction TO the light is derived from these.
     pub euler_xyz: [f32; 3],
-    /// Direct light radiance multiplier (~PI for albedo-brightness lit faces).
+    /// Direct light illuminance in **lux** (physical unit). The shader divides
+    /// by PI to convert illuminance to radiance. Typical values: 100k = bright
+    /// sunlight, 10k = overcast, 1k = indoor office, 100 = dim indoor.
     pub intensity: f32,
     /// RGB light color, linear, typically in [0,1] per channel.
     pub color: [f32; 3],
@@ -153,13 +155,15 @@ pub struct DirectionalLight {
 
 impl Default for DirectionalLight {
     fn default() -> Self {
-        // pitch=45°, yaw=-45°, roll=0° — matches the pre-refactor hard-coded
+        // pitch=45°, yaw=-45°, roll=0° - matches the pre-refactor hard-coded
         // direction [-1, 1, 0] (upper-left, 45° diagonal in the XY plane).
+        // intensity = 100k lux (bright daylight); ambient = 0.3 for a moderate
+        // IBL contribution.
         Self {
             euler_xyz: [45.0, -45.0, 0.0],
-            intensity: 3.0,
+            intensity: 100_000.0,
             color: [1.0, 1.0, 1.0],
-            ambient: 0.03,
+            ambient: 0.3,
         }
     }
 }
@@ -222,10 +226,11 @@ pub struct PointLight {
     pub position: [f32; 3],
     /// Attenuation radius (packed into `GpuLight.position.w`).
     pub range: f32,
-    /// RGB radiant intensity, linear.
+    /// RGB color, linear, typically in [0,1] per channel (tint).
     pub color: [f32; 3],
-    /// Per-channel intensity scale (packed into `GpuLight.color.w` as 1.0 after
-    /// multiplying `color`; kept separate here so the inspector exposes it).
+    /// Luminous intensity in **candela** (physical unit). The shader applies
+    /// inverse-square attenuation (1/dist^2) to convert to illuminance (lux),
+    /// then divides by PI for radiance. Typical indoor bulb ~100-300 cd.
     pub intensity: f32,
 }
 
@@ -235,7 +240,7 @@ impl Default for PointLight {
             position: [0.0, 4.0, 4.0],
             range: 12.0,
             color: [0.2, 0.2, 8.0],
-            intensity: 1.0,
+            intensity: 100.0,
         }
     }
 }
@@ -472,7 +477,9 @@ pub fn render_system(
             let e = renderer.extent();
             [e.width as f32, e.height as f32]
         },
-        gi_mode: renderer.gi_mode(),
+        exposure: renderer.exposure(),
+        _pad2: [0.0; 3],
+        _pad3: 0.0,
     };
 
     // 3. Build the flat draw list from the loaded glTF scene.

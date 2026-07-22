@@ -387,9 +387,16 @@ fn main() -> Result<()> {
     }?[0];
 
     // Directional sun: reuse the runtime default light so the baked direct-sun
-    // bounce matches the sun the player sees. The constants mirror
-    // prism_engine::DirectionalLight::default() (euler=[45,-45,0], intensity=3,
-    // color=white); see prism_render::gi::BAKE_DEFAULT_LIGHT_*.
+    // bounce captures the full sunlight energy. The constants mirror
+    // prism_engine::DirectionalLight::default() (euler=[45,-45,0], intensity=100k
+    // lux, color=white); see prism_render::gi::BAKE_DEFAULT_LIGHT_*.
+    //
+    // We use the RAW intensity directly (no /PI, no *exposure) as the bake
+    // shader's light radiance. The runtime *does* divide by PI and multiply by
+    // exposure for the *direct* sun term, but the GI probes store the physical
+    // bounce radiance and are NOT exposure-scaled at runtime — the exposure
+    // multiplication on the direct term is a per-frame control and doesn't
+    // affect the baked indirect contribution.
     use prism_render::gi::{
         bake_euler_xyz_deg_to_dir, BAKE_DEFAULT_LIGHT_COLOR, BAKE_DEFAULT_LIGHT_EULER,
         BAKE_DEFAULT_LIGHT_INTENSITY,
@@ -401,8 +408,8 @@ fn main() -> Result<()> {
         BAKE_DEFAULT_LIGHT_COLOR[2] * BAKE_DEFAULT_LIGHT_INTENSITY,
     ];
     log::info!(
-        "  bake light: dir=[{:.3},{:.3},{:.3}] color=[{:.3},{:.3},{:.3}] (matches runtime default)",
-        ld[0], ld[1], ld[2], lc[0], lc[1], lc[2]
+        "  bake light: dir=[{:.3},{:.3},{:.3}] intensity={:.0} lux -> radiance=[{:.1},{:.1},{:.1}]",
+        ld[0], ld[1], ld[2], BAKE_DEFAULT_LIGHT_INTENSITY, lc[0], lc[1], lc[2]
     );
     let push_data = BakePush {
         light_dir: [ld[0], ld[1], ld[2], 0.0],
@@ -576,11 +583,65 @@ fn main() -> Result<()> {
         }
     }
 
-    // Global hit ratio = mean over probes that are NOT inside-solid sentinels
-    // (hit_ratio == -1.0). Inside-solid probes are excluded so a scene with
-    // many embedded probes doesn't drag the average toward -1 and trip the
-    // runtime's all-miss guard. If every probe is inside-solid (degenerate),
-    // fall back to 0.0 so the runtime rejects it.
+    // ---- Post-bake sanity: detect & zero degenerate probes ----
+    // The inside-solid ray-level detection can miss probes embedded in walls
+    // thicker than `test_len` (0.5× max probe spacing). Those probes produce
+    // large-magnitude SH coefficients (negative DC, or huge amplitude in any
+    // coefficient) that bleed into neighboring probes via trilinear
+    // interpolation, causing visible color circles at the surface. Flag them
+    // as inside-solid (-1.0 hit_ratio, zero all 9 SH coeffs) so the runtime
+    // ignores them.
+    let mut sanity_flagged = 0u32;
+    for p in 0..probe_count {
+        if hit_ratios[p] < 0.0 {
+            continue; // already flagged as inside-solid by the shader
+        }
+        // DC (c=0) is the mean irradiance, which must be >= 0.
+        // A negative DC in any channel indicates a bake bug or corruption.
+        // Higher-order coefficients (c=1..8) can be legitimately negative
+        // (directional variation: sky above, dark ground below), so they
+        // are NOT checked for negativity — only for exceeding the maximum
+        // plausible magnitude.
+        // Maximum plausible value: with raw 100k lux radiance, the SH
+        // projection of a single ray maxes out at ≈ radiance * max|basis| *
+        // (4π/N) ≈ 100k * 1.09 * 0.196 ≈ 21.4k per ray, times 64 rays →
+        // ~1.37M absolute upper bound. Threshold 1.5M gives headroom.
+        let mut degenerate = false;
+        // (a) DC (c=0) must not be below -1.0 in any channel.
+        for a in 0..3 {
+            if coeffs[p * 9 + 0][a] < -1.0 {
+                degenerate = true;
+                break;
+            }
+        }
+        // (b) Any coefficient > 1.5M → garbage.
+        if !degenerate {
+            for c in 0..9usize {
+                for a in 0..3 {
+                    if coeffs[p * 9 + c][a] > 1_500_000.0 {
+                        degenerate = true;
+                        break;
+                    }
+                }
+                if degenerate { break; }
+            }
+        }
+        if degenerate {
+            for c in 0..9usize {
+                coeffs[p * 9 + c] = [0.0; 3];
+            }
+            hit_ratios[p] = -1.0; // inside-solid sentinel
+            sanity_flagged += 1;
+        }
+    }
+    if sanity_flagged > 0 {
+        log::warn!(
+            "  post-bake sanity: flagged {} probes with degenerate coefficients (zeroed + marked inside-solid)",
+            sanity_flagged
+        );
+    }
+
+    // ---- Global hit ratio ----
     let mut hr_sum = 0.0f32;
     let mut hr_count = 0u32;
     let mut inside_solid = 0u32;
@@ -639,6 +700,60 @@ fn main() -> Result<()> {
         dc_min[0], dc_min[1], dc_min[2],
         dc_max[0], dc_max[1], dc_max[2],
         dark, bright
+    );
+    // Diagnose the worst-DC probe: print its full 9 SH coeffs, hit_ratio and
+    // grid coord. DC (c=0) must be >= 0 (it is sum of radiance*C0*w, all >=0);
+    // a negative DC means either a bake bug or readback memory corruption.
+    // Knowing which probe is worst and whether only DC or all coeffs are bad
+    // pinpoints the failure (e.g. a single degenerate probe vs. systematic).
+    let mut worst_probe = 0usize;
+    let mut worst_dc_lum = f32::INFINITY;
+    for p in 0..probe_count {
+        let dc = probe_data.coeffs[p * 9];
+        let lum = dc[0] + dc[1] + dc[2];
+        if lum < worst_dc_lum {
+            worst_dc_lum = lum;
+            worst_probe = p;
+        }
+    }
+    let dy_g = dims[1] as usize;
+    let dx_g = dims[0] as usize;
+    let pz = worst_probe / (dx_g * dy_g);
+    let py = (worst_probe / dx_g) % dy_g;
+    let px = worst_probe % dx_g;
+    let c9 = &probe_data.coeffs[worst_probe * 9..worst_probe * 9 + 9];
+    log::info!(
+        "  worst-DC probe #{} @grid({},{},{}) hit_ratio={:.3} DC=[{:.3},{:.3},{:.3}]",
+        worst_probe, px, py, pz, hit_ratios[worst_probe],
+        c9[0][0], c9[0][1], c9[0][2]
+    );
+    log::info!(
+        "    its 9 SH coeffs: c0=[{:.3},{:.3},{:.3}] c1=[{:.3},{:.3},{:.3}] c2=[{:.3},{:.3},{:.3}] c3=[{:.3},{:.3},{:.3}]",
+        c9[0][0], c9[0][1], c9[0][2],
+        c9[1][0], c9[1][1], c9[1][2],
+        c9[2][0], c9[2][1], c9[2][2],
+        c9[3][0], c9[3][1], c9[3][2],
+    );
+    log::info!(
+        "                      c4=[{:.3},{:.3},{:.3}] c5=[{:.3},{:.3},{:.3}] c6=[{:.3},{:.3},{:.3}] c7=[{:.3},{:.3},{:.3}] c8=[{:.3},{:.3},{:.3}]",
+        c9[4][0], c9[4][1], c9[4][2],
+        c9[5][0], c9[5][1], c9[5][2],
+        c9[6][0], c9[6][1], c9[6][2],
+        c9[7][0], c9[7][1], c9[7][2],
+        c9[8][0], c9[8][1], c9[8][2],
+    );
+    // Count how many probes have strictly-negative DC (any channel) to see if
+    // the corruption is isolated (a few bad probes) or systematic (most probes).
+    let mut neg_dc_count = 0usize;
+    for p in 0..probe_count {
+        let dc = probe_data.coeffs[p * 9];
+        if dc[0] < 0.0 || dc[1] < 0.0 || dc[2] < 0.0 {
+            neg_dc_count += 1;
+        }
+    }
+    log::info!(
+        "  probes with negative DC (any channel): {} / {} ({:.1}%)",
+        neg_dc_count, probe_count, 100.0 * neg_dc_count as f32 / probe_count as f32
     );
     // Hit-ratio diagnostic: fraction of rays that hit geometry per probe.
     // 0.0 everywhere => the TLAS is empty / ray query misses everything.
@@ -791,7 +906,7 @@ fn load_scene_geometry(path: &Path) -> Result<SceneGeometry> {
                 normal: wn,
                 color: albedo,
                 uv: mesh.uvs.get(i).copied().unwrap_or([0.0, 0.0]),
-                tangent: mesh.tangents.get(i).copied().unwrap_or([1.0, 0.0, 0.0]),
+                tangent: mesh.tangents.get(i).copied().unwrap_or([1.0, 0.0, 0.0, 1.0]),
             });
         }
 
@@ -843,7 +958,7 @@ fn test_cube_geometry() -> SceneGeometry {
                 normal: [0.0, 1.0, 0.0],
                 color: [0.8, 0.8, 0.8],
                 uv: [0.0, 0.0],
-                tangent: [1.0, 0.0, 0.0],
+                tangent: [1.0, 0.0, 0.0, 1.0],
             });
         }
         indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);

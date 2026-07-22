@@ -208,6 +208,7 @@ pub unsafe fn create_and_upload_image(
     height: u32,
     pixels: &[u8],
     mip_levels: u32,
+    format: vk::Format,
 ) -> anyhow::Result<(vk::Image, vk::DeviceMemory, vk::ImageView)> {
     let device = &context.device;
     // `cmd_pipeline_barrier2` lives in VK_KHR_synchronization2. On a Vulkan 1.2
@@ -218,7 +219,6 @@ pub unsafe fn create_and_upload_image(
     // `cmd_blit_image2` (mip generation) comes from VK_KHR_copy_commands2 on a
     // 1.2 device; same reason as `sync2` above, use the KHR wrapper.
     let copy2 = ash::khr::copy_commands2::Device::new(&context.instance, &context.device);
-    let format = vk::Format::R8G8B8A8_UNORM;
     let extent = vk::Extent3D {
         width,
         height,

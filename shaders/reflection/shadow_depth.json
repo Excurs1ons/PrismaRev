@@ -151,7 +151,7 @@
                                 "name": "tangent",
                                 "type": {
                                     "kind": "vector",
-                                    "elementCount": 3,
+                                    "elementCount": 4,
                                     "elementType": {
                                         "kind": "scalar",
                                         "scalarType": "float32"

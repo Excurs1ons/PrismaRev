@@ -13,8 +13,10 @@ use crate::handle::{MaterialHandle, MeshHandle, TextureHandle};
 /// tangents.len() == uvs.len()`). `indices` is empty for non-indexed meshes;
 /// the upload path will skip the index buffer in that case.
 ///
-/// `tangents` is `vec3` (no handedness component); the shader reconstructs
-/// handedness from `cross(normal, tangent)`.
+/// `tangents` is `vec4` (xyz = tangent direction, w = handedness sign, +1 or
+/// -1); the shader reconstructs the bitangent as `cross(N, T) * tangent.w`.
+/// This matches the glTF / MikkTSpace convention so mirrored UVs produce the
+/// correct bitangent direction.
 #[derive(Clone, Debug)]
 pub struct MeshData {
     /// Human-readable name from the source (glTF mesh name, "cube", etc.).
@@ -29,9 +31,10 @@ pub struct MeshData {
     /// `[0, 0, 0]` normals as "missing" and falls back to face-derived ones.
     pub normals: Vec<[f32; 3]>,
 
-    /// Per-vertex tangents, world-space. Loader generates these from
-    /// `face_tangent` when the source has no tangent attribute.
-    pub tangents: Vec<[f32; 3]>,
+    /// Per-vertex tangents, world-space, with handedness in `.w` (+1 or -1).
+    /// Loader generates these from `face_tangent` (handedness +1) when the
+    /// source has no tangent attribute; glTF tangents carry the real `.w`.
+    pub tangents: Vec<[f32; 4]>,
 
     /// Per-vertex UVs in `[0, 1]` for the first UV set. Empty when the source
     /// has no UVs.
@@ -72,9 +75,9 @@ impl MeshData {
 #[derive(Clone, Debug)]
 pub struct MaterialData {
     pub name: String,
-    /// Linear-space base color. The renderer assumes sRGB input has been
-    /// converted to linear at sample time; for `albedo_tex` set, the shader
-    /// applies the sRGB->linear transform on the sampled value.
+    /// Linear-space base color. The albedo texture (when bound) is uploaded
+    /// as `R8G8B8A8_SRGB` so the hardware performs sRGB->linear on sample;
+    /// this scalar factor is always linear (per glTF spec).
     pub base_color: [f32; 4],
     pub metallic: f32,
     pub roughness: f32,
@@ -89,6 +92,18 @@ pub struct MaterialData {
     /// Packed metallic (B) / roughness (G) per glTF convention.
     pub metallic_roughness_tex: Option<TextureHandle>,
     pub emissive_tex: Option<TextureHandle>,
+    /// Ambient occlusion / occlusion map (R channel). Attenuates the IBL
+    /// diffuse + specular terms only (never direct lighting), per the PBR
+    /// baseline. Often shares the same image as `metallic_roughness_tex`
+    /// (glTF ORM: R=occlusion, G=roughness, B=metallic).
+    pub occlusion_tex: Option<TextureHandle>,
+
+    /// Normal map strength. Scales the xy of the decoded tangent-space normal
+    /// before normalize; 1.0 = verbatim, 0.0 = flat (geometric normal).
+    pub normal_scale: f32,
+    /// Occlusion strength. Blends between fully-occluded (tex.r=0) and
+    /// unoccluded (tex.r=1); 1.0 = verbatim, 0.0 = ignore the map.
+    pub occlusion_strength: f32,
 
     // ---- Advanced PBR fields (gated by flag bits in shader) ----
     /// Transmission factor [0,1]. How much light passes through the surface.
@@ -122,6 +137,9 @@ impl Default for MaterialData {
             normal_tex: None,
             metallic_roughness_tex: None,
             emissive_tex: None,
+            occlusion_tex: None,
+            normal_scale: 1.0,
+            occlusion_strength: 1.0,
             transmission: 0.0,
             ior: 1.5,
             translucency: 0.0,
@@ -167,6 +185,12 @@ impl TextureData {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TexFormat {
     Rgba8,
+    /// sRGB-encoded RGBA8. The Vulkan image is created as `R8G8B8A8_SRGB` so
+    /// the hardware performs sRGB->linear conversion on sample. Used for
+    /// albedo / base-color and emissive textures (whose stored values are in
+    /// the sRGB transfer function); NOT for data textures (normal, metallic-
+    /// roughness, occlusion) which are already linear.
+    Rgba8Srgb,
     /// Not yet consumed by the renderer; reserved for HDR.
     Rgba16f,
 }
@@ -174,7 +198,7 @@ pub enum TexFormat {
 impl TexFormat {
     pub const fn bytes_per_pixel(self) -> usize {
         match self {
-            TexFormat::Rgba8 => 4,
+            TexFormat::Rgba8 | TexFormat::Rgba8Srgb => 4,
             TexFormat::Rgba16f => 8,
         }
     }

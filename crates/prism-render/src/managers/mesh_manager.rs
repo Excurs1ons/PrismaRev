@@ -42,7 +42,8 @@ pub struct MeshUploadInput {
     /// bound). Empty vector means "all white".
     pub colors: Vec<[f32; 3]>,
     pub uvs: Vec<[f32; 2]>,
-    pub tangents: Vec<[f32; 3]>,
+    /// Per-vertex tangents (xyz = direction, w = handedness sign +1/-1).
+    pub tangents: Vec<[f32; 4]>,
     pub indices: Vec<u32>,
 }
 
@@ -203,7 +204,7 @@ fn build_vertices(input: &MeshUploadInput) -> Vec<crate::mesh::Vertex> {
         let normal = input.normals.get(i).copied().unwrap_or([0.0, 1.0, 0.0]);
         let color = input.colors.get(i).copied().unwrap_or([1.0, 1.0, 1.0]);
         let uv = input.uvs.get(i).copied().unwrap_or([0.0, 0.0]);
-        let tangent = input.tangents.get(i).copied().unwrap_or([1.0, 0.0, 0.0]);
+        let tangent = input.tangents.get(i).copied().unwrap_or([1.0, 0.0, 0.0, 1.0]);
         out.push(crate::mesh::Vertex {
             position: pos,
             normal,
@@ -236,7 +237,7 @@ mod tests {
         assert_eq!(v[1].normal, [0.0, 1.0, 0.0]);
         assert_eq!(v[0].uv, [0.5, 0.5]);
         assert_eq!(v[1].uv, [0.0, 0.0]);
-        assert_eq!(v[0].tangent, [1.0, 0.0, 0.0]);
+        assert_eq!(v[0].tangent, [1.0, 0.0, 0.0, 1.0]);
         assert_eq!(v[1].color, [1.0, 1.0, 1.0]);
     }
 

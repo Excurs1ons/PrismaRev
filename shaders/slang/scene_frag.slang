@@ -57,9 +57,9 @@ struct GpuMaterial
     float4 transmission_factor;                 // offset 48: x=transmission, y=ior, z=translucency, w=anisotropy
     float4 clearcoat;                           // offset 64: x=clearcoat, y=clearcoat_roughness, z=reserved, w=reserved
     uint   transmission_tex_idx;                // offset 80
-    uint   clearcoat_tex_idx;                   // offset 84
-    uint   _pad0;                               // offset 88
-    uint   _pad1;                               // offset 92
+    uint   occlusion_idx;                       // offset 84: R channel, attenuates IBL only
+    float  normal_scale;                        // offset 88: normal map strength
+    float  occlusion_strength;                  // offset 92: lerp factor for occlusion R into IBL
 };
 [[vk::binding(1, 0)]]
 StructuredBuffer<GpuMaterial> materials;
@@ -209,12 +209,22 @@ float geometry_smith(float3 n, float3 v, float3 l, float roughness)
     return geometry_schlick_ggx(n_dot_v, roughness) * geometry_schlick_ggx(n_dot_l, roughness);
 }
 
-/// Project a world position into the shadow map and return 1.0 (lit) or 0.0
-/// (shadowed) using a comparison sampler. Returns 1.0 outside the light's
-/// frustum (treated as lit). `lightViewProj` comes from the per-frame UBO.
-float sample_shadow(float3 world_pos)
+/// Project a world position into the shadow map and return a visibility factor
+/// in [0,1] (1.0 = fully lit, 0.0 = fully shadowed) using a comparison sampler
+/// with 3x3 (9-tap) PCF. Returns 1.0 outside the light's frustum (treated as
+/// lit). `lightViewProj` comes from the per-frame UBO.
+///
+/// `n` is the surface normal, used for a normal bias: the world position is
+/// offset along the normal before projection so the receiver samples a texel
+/// away from its own silhouette, reducing self-shadow acne without the
+/// peter-panning that a pure depth bias causes.
+float sample_shadow(float3 world_pos, float3 n)
 {
-    float4 light_space = mul(frame.lightViewProj, float4(world_pos, 1.0));
+    // Normal bias: push the receiver slightly along the geometric normal so it
+    // samples a neighbour texel instead of its own (acne-prone) silhouette.
+    // The amount is small (world units) - tuned for the ~1-unit scene scale.
+    float3 biased_pos = world_pos + n * 0.02;
+    float4 light_space = mul(frame.lightViewProj, float4(biased_pos, 1.0));
     if (light_space.w <= 0.0)
         return 1.0;
     float3 proj = light_space.xyz / light_space.w;
@@ -229,9 +239,20 @@ float sample_shadow(float3 world_pos)
     float depth = proj.z; // orthographic light projection -> already [0,1]
     if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 || depth > 1.0)
         return 1.0;
-    // SampleCmpLevelZero returns 1.0 when `depth` passes the comparison
-    // (fragment is closer than the stored shadow depth -> lit).
-    return shadowMap.SampleCmpLevelZero(shadowSampler, uv, depth);
+    // 3x3 PCF: average 9 comparison samples in a texel-spaced grid. Each
+    // SampleCmpLevelZero returns 1.0 (pass) or 0.0 (fail) with hardware 2x2
+    // bilinear filtering, so the 9-tap average gives a soft shadow edge.
+    float2 texel = 1.0 / float2(2048.0, 2048.0); // SHADOW_MAP_SIZE
+    float sum = 0.0;
+    for (int y = -1; y <= 1; y++)
+    {
+        for (int x = -1; x <= 1; x++)
+        {
+            float2 offset = float2(float(x), float(y)) * texel;
+            sum += shadowMap.SampleCmpLevelZero(shadowSampler, uv + offset, depth);
+        }
+    }
+    return sum / 9.0;
 }
 
 // ---- IBL sampling (real resources). ----
@@ -243,8 +264,11 @@ float3 sample_irradiance(float3 n)
 }
 float3 sample_specular(float3 r, float roughness)
 {
-    // Roughness maps to LOD: 0 = low roughness (sharp), PREFILTER_MAX_LOD = high roughness.
-    return prefilteredCube.SampleLevel(r, roughness * PREFILTER_MAX_LOD).rgb;
+    // Roughness maps to LOD. The prefiltered env map was convolved per-mip with
+    // roughness = (mip/(MAX))^2 (Epic split-sum spec), so to find the mip whose
+    // convolved roughness matches the surface roughness we invert: lod = sqrt(r)
+    // * MAX. This keeps the sampling and generation sides in sync.
+    return prefilteredCube.SampleLevel(r, sqrt(roughness) * PREFILTER_MAX_LOD).rgb;
 }
 float2 sample_brdf_lut(float n_dot_v, float roughness)
 {
@@ -272,7 +296,12 @@ float3 eval_point_lights(float3 n, float3 v, float3 world_pos, float3 albedo,
         // Range cutoff (smooth).
         float r = L.position.w;
         atten *= saturate(1.0 - (dist / r));
-        float3 radiance = L.color.rgb * atten;
+        // Point-light units are physical: `L.color.rgb` carries luminous
+        // intensity in candela (color * intensity, packed on the CPU side).
+        // Inverse-square attenuation (1/dist^2) converts candela to lux
+        // (illuminance), and the BRDF divides by PI for radiance. `exposure`
+        // scales the final value for tone-mapping control.
+        float3 radiance = L.color.rgb * (atten * frame.exposure / PI);
         float3 h = normalize(v + l);
         float n_dot_l = max(dot(n, l), 0.0);
         if (n_dot_l <= 0.0) continue;
@@ -440,11 +469,10 @@ SceneOutput fragmentMain(MeshVaryings in)
         {
             discard;
         }
-        // UNLIT debug view: the swapchain is B8G8R8A8_SRGB, which re-encodes
-        // the shader output with gamma 1/2.2. To display the texture's stored
-        // sRGB color verbatim, convert it sRGB->linear here so the swapchain
-        // encodes it back to the original value.
-        albedo = pow(sampled.rgb, float3(2.2));
+        // The albedo texture is created as R8G8B8A8_SRGB, so the hardware
+        // performs the sRGB->linear conversion on sample. `sampled.rgb` is
+        // already linear - no manual pow() needed.
+        albedo = sampled.rgb;
     }
     else
     {
@@ -475,14 +503,21 @@ SceneOutput fragmentMain(MeshVaryings in)
     // Normal: tangent-space normal map if bound. There is no dedicated toggle
     // bit for the normal map among the 14 PBR components, so it is applied
     // whenever a valid slot is bound (neutral fallback = geometric normal).
+    // TBN uses the glTF/MikkTSpace convention: bitangent = cross(N, T) * w,
+    // where w is the tangent's handedness sign (tangent.w), so mirrored UVs
+    // produce the correct bitangent direction.
     float3 n;
     if (mat.normal_idx != 0xFFFFFFFFu)
     {
         float3 n_ts = bindlessSrvs[NonUniformResourceIndex(mat.normal_idx)]
             .Sample(globalSamplers[NonUniformResourceIndex(SAMPLER_LINEAR_WRAP)], in.uv).xyz;
         n_ts = n_ts * 2.0 - 1.0;
-        float3 t = normalize(in.tangent);
-        float3 b = cross(in.worldNormal, t);
+        // normal_scale: scale the xy (tangent/bitangent) components before
+        // normalize so the bump strength is adjustable. 1.0 = verbatim.
+        n_ts.xy *= mat.normal_scale;
+        float3 t = normalize(in.tangent.xyz);
+        float  t_sign = in.tangent.w < 0.0 ? -1.0 : 1.0;
+        float3 b = cross(in.worldNormal, t) * t_sign;
         n = normalize(n_ts.x * t + n_ts.y * b + n_ts.z * in.worldNormal);
     }
     else
@@ -507,11 +542,17 @@ SceneOutput fragmentMain(MeshVaryings in)
     //   specular = D*G*F / (4 * NdotV * NdotL)
     // DIRECT gates the whole direct lobe; SPECULAR gates only the specular
     // part (off -> pure diffuse). SHADOW attenuates. Neutral (off) = 0.
+    //
+    // Light units are physical: `lightDirection.w` is the directional light's
+    // illuminance in lux. Converting illuminance (lux) to radiance requires
+    // dividing by PI (a Lambertian surface reflects lux/PI as radiance).
+    // `exposure` scales the result so the app can keep real-world lux values
+    // while controlling final image brightness.
     float3 light_dir = normalize(frame.lightDirection.xyz);
     float3 h         = normalize(v + light_dir);
     float  n_dot_l   = max(dot(n, light_dir), 0.0);
     float  n_dot_v   = max(dot(n, v), 0.0);
-    float3 radiance  = frame.lightColor.rgb * frame.lightDirection.w;
+    float3 radiance  = frame.lightColor.rgb * (frame.lightDirection.w * frame.exposure / PI);
 
     float  ndf = distribution_ggx(n, h, roughness);
     float  g   = geometry_smith(n, v, light_dir, roughness);
@@ -520,7 +561,7 @@ SceneOutput fragmentMain(MeshVaryings in)
     float3 kD_direct = (float3(1.0) - f) * (1.0 - metallic);
 
     // Shadow (rasterized). 1.0 = lit, 0.0 = shadowed. Neutral = 1.0.
-    float shadow = on(PBR_FLAG_SHADOW) ? sample_shadow(in.worldPos) : 1.0;
+    float shadow = on(PBR_FLAG_SHADOW) ? sample_shadow(in.worldPos, n) : 1.0;
 
     float3 direct = float3(0.0);
     if (on(PBR_FLAG_DIRECT))
@@ -570,21 +611,51 @@ SceneOutput fragmentMain(MeshVaryings in)
         diffuse_ibl  *= ao;
         specular_ibl *= ao;
     }
-
-    // ---- GI (probe volume) gates IBL. Gated by giMode master switch +
-    // PBR_FLAG_GI isolate flag. When active, REPLACES IBL diffuse with probe
-    // volume irradiance AND suppresses specular IBL — the env cubemap is an
-    // outdoor sky that does not represent enclosed spaces, so leaving it on
-    // leaks blue-gray light into interiors. Probes baked with occlusion
-    // receive less sky irradiance → interiors naturally darken. ----
-    float3 gi_diffuse = float3(0.0);
-    if (frame.giMode != 0u && on(PBR_FLAG_GI))
+    // Material occlusion map (glTF occlusionTexture, R channel). Also affects
+    // IBL only (never direct light), and is blended by `occlusion_strength`:
+    // mix(1.0, tex.r, strength) so strength=0 ignores the map. Combined with
+    // GTAO multiplicatively (both attenuate indirect light).
+    if (mat.occlusion_idx != 0xFFFFFFFFu)
     {
+        float occ_tex = bindlessSrvs[NonUniformResourceIndex(mat.occlusion_idx)]
+            .Sample(globalSamplers[NonUniformResourceIndex(SAMPLER_LINEAR_WRAP)], in.uv).r;
+        float occ = lerp(1.0, occ_tex, mat.occlusion_strength);
+        diffuse_ibl  *= occ;
+        specular_ibl *= occ;
+    }
+
+    // ---- GI (probe volume) gates IBL. Gated by PBR_FLAG_GI isolate flag
+    // (always active in normal mode). Replaces BOTH IBL diffuse AND specular
+    // with probe volume data so the indirect lighting is self-consistent:
+    //
+    // Diffuse — sample probes at surface normal (replaces env irradiance).
+    // Specular — sample probes at reflection direction (replaces env cubemap
+    //   prefiltered mip). Using the env cubemap for specular while GI probes
+    //   provide diffuse would show the outdoor sky reflected off interior
+    //   walls (the env sky leaks into enclosed spaces), contradicting the
+    //   baked occlusion. Sampling the probe SH at the reflected ray direction
+    //   gives a consistent (if blurry for mirror-like surfaces) reflection
+    //   that matches the scene's indirect lighting. The split-sum Fresnel +
+    //   roughness factorization (f_ibl, brdf) is reused from the env specular
+    //   path; only the "prefiltered" input is replaced by the probe volume. ----
+    float3 gi_diffuse = float3(0.0);
+    if (on(PBR_FLAG_GI))
+    {
+        // — Diffuse: probes at surface normal (as before) —
         float3 gi_irradiance = SampleProbeVolumeIrradiance(
             probeVolume, probeInfo, in.worldPos, n);
         gi_diffuse = kd_ibl * gi_irradiance * albedo;
-        diffuse_ibl = gi_diffuse;  // replace IBL diffuse → interior darkening
-        specular_ibl = float3(0.0); // env sky specular invalid in enclosed space
+        diffuse_ibl = gi_diffuse;
+
+        // — Specular: probes at reflection direction (replaces env cubemap) —
+        if (on(PBR_FLAG_SPECULAR_IBL))
+        {
+            float3 r = reflect(-v, n);
+            float3 gi_spec = SampleProbeVolumeIrradiance(
+                probeVolume, probeInfo, in.worldPos, r);
+            float2 brdf = sample_brdf_lut(max(dot(n, v), 0.0), roughness);
+            specular_ibl = ibl_intensity * gi_spec * (f_ibl * brdf.x + brdf.y);
+        }
     }
 
     // ---- Emissive (gated). Neutral = 0. ----
@@ -617,7 +688,7 @@ SceneOutput fragmentMain(MeshVaryings in)
     float3 clearcoat    = float3(0.0);
     if (on(PBR_FLAG_TRANSMISSION)) transmission = eval_transmission(mat, in, v, n);
     if (on(PBR_FLAG_TRANSLUCENCY)) translucency = eval_translucency(mat, n, v, light_dir, radiance);
-    if (on(PBR_FLAG_ANISOTROPY))   aniso_spec   = eval_anisotropy(mat, n, v, light_dir, h, roughness, f0, radiance, shadow, in.tangent);
+    if (on(PBR_FLAG_ANISOTROPY))   aniso_spec   = eval_anisotropy(mat, n, v, light_dir, h, roughness, f0, radiance, shadow, in.tangent.xyz);
     if (on(PBR_FLAG_CLEARCOAT))    clearcoat    = eval_clearcoat(mat, n, v, light_dir, h, radiance, shadow);
 
     // ---- Compose (linear). ----

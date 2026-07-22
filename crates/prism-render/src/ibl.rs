@@ -1191,8 +1191,13 @@ fn convolve_prefiltered(
     let mut out = Vec::with_capacity(mip_levels as usize);
     for mip in 0..mip_levels {
         let fs = (face_size >> mip).max(1);
+        // Epic's split-sum IBL spec: mip level maps linearly to *perceptual*
+        // roughness, but GGX uses alpha = roughness^2, so the actual roughness
+        // fed to the importance sampler is (mip / (mips-1))^2. The sampling
+        // side (sample_specular) must invert this: lod = sqrt(roughness) * MAX.
         let roughness = if mip_levels > 1 {
-            mip as f32 / (mip_levels - 1) as f32
+            let t = mip as f32 / (mip_levels - 1) as f32;
+            t * t
         } else {
             0.0
         };

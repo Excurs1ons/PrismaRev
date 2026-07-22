@@ -171,7 +171,7 @@ pub struct GpuLight {
 pub struct FrameUBOData {
     pub view_proj: [[f32; 4]; 4],       // 64 bytes, offset   0
     pub camera_position: [f32; 4],      // 16 bytes, offset  64 (xyz = camera pos, w = light_count)
-    pub light_direction: [f32; 4],      // 16 bytes, offset  80 (w = intensity)
+    pub light_direction: [f32; 4],      // 16 bytes, offset  80 (w = illuminance in lux)
     pub light_color: [f32; 4],          // 16 bytes, offset  96 (w = ambient factor)
     pub view: [[f32; 4]; 4],            // 64 bytes, offset 112 (world -> view)
     pub light_view_proj: [[f32; 4]; 4], // 64 bytes, offset 176 (light-space VP for shadow map)
@@ -182,9 +182,14 @@ pub struct FrameUBOData {
     /// Scene colour viewport size in pixels (xy). Used by the fragment shader
     /// to derive screen-space UVs for sampling the screen-space AO texture.
     pub viewport_size: [f32; 2],        // offset 244..251
-    /// GI mode master switch (0=Off, 2=On). Gates the probe-volume indirect
-    /// diffuse term in `scene_frag.slang`. Set from `RenderSettings::gi_mode`.
-    pub gi_mode: u32,                     // offset 252..255 (std140 16-byte tail)
+    /// Exposure multiplier applied to all light radiance (direct + point)
+    /// before tonemapping. Lets the app keep physically-based light units
+    /// (lux / candela) while controlling the final image brightness. offset 252.
+    pub exposure: f32,                    // offset 252
+    /// Pad to 272 bytes so the Rust `#[repr(C)]` layout matches the Slang
+    /// std140 `FrameUBO` (struct size must be a multiple of 16).
+    pub _pad2: [f32; 3],                  // offset 256..267
+    pub _pad3: f32,                       // offset 268..271
 }
 
 /// Per-frame UBO buffer and its descriptor set.
@@ -200,7 +205,7 @@ pub struct FrameUBO {
 impl FrameUBO {
     /// Create a UBO buffer and update the descriptor set to point to it.
     pub fn new(context: &VulkanContext, descriptor_set: vk::DescriptorSet) -> anyhow::Result<Self> {
-        let size = std::mem::size_of::<FrameUBOData>() as vk::DeviceSize; // 240
+        let size = std::mem::size_of::<FrameUBOData>() as vk::DeviceSize; // 272
 
         let (buffer, memory) = buffer::create_buffer(
             context,
@@ -262,11 +267,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn frame_ubo_data_size_is_256() {
+    fn frame_ubo_data_size_is_272() {
         // std140 tail padding: tonemap_mode(u32 @ 240) + viewport_size([f32;2] @ 244)
-        // + gi_mode(u32 @ 252) = 256 bytes total (16-byte aligned, matching the
-        // Slang `FrameUBO` mirror in common.slang).
-        assert_eq!(std::mem::size_of::<FrameUBOData>(), 256);
+        // + exposure(f32 @ 252) + _pad2([f32;3] @ 256) + _pad3(f32 @ 268) =
+        // 272 bytes total (16-byte aligned, matching the Slang `FrameUBO` mirror
+        // in common.slang).
+        assert_eq!(std::mem::size_of::<FrameUBOData>(), 272);
     }
 
     #[test]
@@ -288,5 +294,8 @@ mod tests {
         assert_eq!(std::mem::offset_of!(FrameUBOData, light_color), 96);
         assert_eq!(std::mem::offset_of!(FrameUBOData, view), 112);
         assert_eq!(std::mem::offset_of!(FrameUBOData, light_view_proj), 176);
+        assert_eq!(std::mem::offset_of!(FrameUBOData, tonemap_mode), 240);
+        assert_eq!(std::mem::offset_of!(FrameUBOData, viewport_size), 244);
+        assert_eq!(std::mem::offset_of!(FrameUBOData, exposure), 252);
     }
 }

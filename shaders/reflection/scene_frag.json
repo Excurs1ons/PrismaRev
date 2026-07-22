@@ -109,12 +109,32 @@
                             "binding": {"kind": "uniform", "offset": 248, "size": 4}
                         },
                         {
-                            "name": "giMode",
+                            "name": "exposure",
                             "type": {
                                 "kind": "scalar",
-                                "scalarType": "uint32"
+                                "scalarType": "float32"
                             },
                             "binding": {"kind": "uniform", "offset": 252, "size": 4}
+                        },
+                        {
+                            "name": "_pad2",
+                            "type": {
+                                "kind": "vector",
+                                "elementCount": 3,
+                                "elementType": {
+                                    "kind": "scalar",
+                                    "scalarType": "float32"
+                                }
+                            },
+                            "binding": {"kind": "uniform", "offset": 256, "size": 12}
+                        },
+                        {
+                            "name": "_pad3",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "float32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 268, "size": 4}
                         }
                     ]
                 },
@@ -226,16 +246,36 @@
                                 "binding": {"kind": "uniform", "offset": 248, "size": 4}
                             },
                             {
-                                "name": "giMode",
+                                "name": "exposure",
                                 "type": {
                                     "kind": "scalar",
-                                    "scalarType": "uint32"
+                                    "scalarType": "float32"
                                 },
                                 "binding": {"kind": "uniform", "offset": 252, "size": 4}
+                            },
+                            {
+                                "name": "_pad2",
+                                "type": {
+                                    "kind": "vector",
+                                    "elementCount": 3,
+                                    "elementType": {
+                                        "kind": "scalar",
+                                        "scalarType": "float32"
+                                    }
+                                },
+                                "binding": {"kind": "uniform", "offset": 256, "size": 12}
+                            },
+                            {
+                                "name": "_pad3",
+                                "type": {
+                                    "kind": "scalar",
+                                    "scalarType": "float32"
+                                },
+                                "binding": {"kind": "uniform", "offset": 268, "size": 4}
                             }
                         ]
                     },
-                    "binding": {"kind": "uniform", "offset": 0, "size": 256}
+                    "binding": {"kind": "uniform", "offset": 0, "size": 272}
                 }
             }
         },
@@ -338,7 +378,7 @@
                             "binding": {"kind": "uniform", "offset": 80, "size": 4}
                         },
                         {
-                            "name": "clearcoat_tex_idx",
+                            "name": "occlusion_idx",
                             "type": {
                                 "kind": "scalar",
                                 "scalarType": "uint32"
@@ -346,18 +386,18 @@
                             "binding": {"kind": "uniform", "offset": 84, "size": 4}
                         },
                         {
-                            "name": "_pad0",
+                            "name": "normal_scale",
                             "type": {
                                 "kind": "scalar",
-                                "scalarType": "uint32"
+                                "scalarType": "float32"
                             },
                             "binding": {"kind": "uniform", "offset": 88, "size": 4}
                         },
                         {
-                            "name": "_pad1",
+                            "name": "occlusion_strength",
                             "type": {
                                 "kind": "scalar",
-                                "scalarType": "uint32"
+                                "scalarType": "float32"
                             },
                             "binding": {"kind": "uniform", "offset": 92, "size": 4}
                         }
@@ -872,7 +912,7 @@
                                 "name": "tangent",
                                 "type": {
                                     "kind": "vector",
-                                    "elementCount": 3,
+                                    "elementCount": 4,
                                     "elementType": {
                                         "kind": "scalar",
                                         "scalarType": "float32"

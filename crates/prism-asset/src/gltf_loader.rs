@@ -212,6 +212,13 @@ pub(crate) fn load(
         // Translucency is not a standard glTF extension; default 0.0.
         let translucency = 0.0;
 
+        // Normal map scale and occlusion strength (glTF core material fields).
+        let normal_scale = mat.normal_texture().map(|t| t.scale()).unwrap_or(1.0);
+        let occlusion_strength = mat
+            .occlusion_texture()
+            .map(|t| t.strength())
+            .unwrap_or(1.0);
+
         material_indices.push(MaterialData {
             name: mat.name().unwrap_or("material").to_string(),
             base_color,
@@ -222,6 +229,9 @@ pub(crate) fn load(
             normal_tex: None,
             metallic_roughness_tex: None,
             emissive_tex: None,
+            occlusion_tex: None,
+            normal_scale,
+            occlusion_strength,
             transmission,
             ior,
             translucency,
@@ -309,6 +319,15 @@ pub(crate) fn load(
                 store,
                 handle,
                 "emissive_tex",
+                info.texture().source().index(),
+                &texture_handles,
+            )?;
+        }
+        if let Some(info) = mat.occlusion_texture() {
+            set_material_tex(
+                store,
+                handle,
+                "occlusion_tex",
                 info.texture().source().index(),
                 &texture_handles,
             )?;
@@ -524,8 +543,8 @@ fn primitive_to_mesh(
     };
 
     // Tangents — fall back to a face-derived tangent (cheap, no MikkTSpace).
-    let tangents: Vec<[f32; 3]> = match reader.read_tangents() {
-        Some(it) => it.map(|t| [t[0], t[1], t[2]]).collect(),
+    let tangents: Vec<[f32; 4]> = match reader.read_tangents() {
+        Some(it) => it.map(|t| [t[0], t[1], t[2], t[3]]).collect(),
         None => generate_tangents(&positions, &normals, &indices),
     };
 
@@ -597,7 +616,7 @@ fn generate_tangents(
     positions: &[[f32; 3]],
     normals: &[[f32; 3]],
     indices: &[u32],
-) -> Vec<[f32; 3]> {
+) -> Vec<[f32; 4]> {
     let mut tangents = vec![[0.0f32, 0.0, 0.0]; positions.len()];
     let owned;
     let idx: &[u32] = if indices.is_empty() {
@@ -614,17 +633,19 @@ fn generate_tangents(
         tangents[b] = add(tangents[b], proj);
         tangents[c] = add(tangents[c], proj);
     }
-    for t in tangents.iter_mut() {
-        let len = (t[0] * t[0] + t[1] * t[1] + t[2] * t[2]).sqrt();
-        if len > 0.0 {
-            t[0] /= len;
-            t[1] /= len;
-            t[2] /= len;
-        } else {
-            *t = [1.0, 0.0, 0.0];
-        }
-    }
+    // Pack into vec4 with handedness +1 (generated tangents have no mirrored
+    // UV information, so the positive sign is the safe default).
     tangents
+        .iter()
+        .map(|t| {
+            let len = (t[0] * t[0] + t[1] * t[1] + t[2] * t[2]).sqrt();
+            if len > 0.0 {
+                [t[0] / len, t[1] / len, t[2] / len, 1.0]
+            } else {
+                [1.0, 0.0, 0.0, 1.0]
+            }
+        })
+        .collect()
 }
 
 #[inline]
@@ -761,12 +782,34 @@ fn set_material_tex(
     let data = store
         .material_mut(mat)
         .ok_or_else(|| anyhow!("material handle {mat:?} not found while wiring textures"))?;
+    // Whether this texture slot carries color data (sRGB transfer function) or
+    // data (linear). glTF stores albedo/emissive as sRGB-encoded images; the
+    // Vulkan image format must be `_SRGB` so the hardware converts to linear on
+    // sample, and the shader must NOT apply a manual pow(2.2) in that case.
+    // Normal / metallic-roughness / occlusion are linear data textures.
+    let srgb = match field {
+        "albedo_tex" | "emissive_tex" => true,
+        "normal_tex" | "metallic_roughness_tex" | "occlusion_tex" => false,
+        _ => return Err(anyhow!("unknown texture field {field}")),
+    };
     match field {
         "albedo_tex" => data.albedo_tex = Some(tex),
         "normal_tex" => data.normal_tex = Some(tex),
         "metallic_roughness_tex" => data.metallic_roughness_tex = Some(tex),
         "emissive_tex" => data.emissive_tex = Some(tex),
+        "occlusion_tex" => data.occlusion_tex = Some(tex),
         _ => return Err(anyhow!("unknown texture field {field}")),
+    }
+    // Retag the texture's format so the renderer picks the right Vulkan image
+    // format. If a texture is shared across a color and a data slot (rare in
+    // practice), the last binding wins - this is acceptable because glTF assets
+    // virtually never reuse one image for both albedo and metallic-roughness.
+    if let Some(td) = store.texture_mut(tex) {
+        td.format = if srgb {
+            TexFormat::Rgba8Srgb
+        } else {
+            TexFormat::Rgba8
+        };
     }
     Ok(())
 }

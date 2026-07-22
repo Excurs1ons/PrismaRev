@@ -124,20 +124,20 @@ fn create_default_scene(world: &mut World) {
         PointLight {
             position: [2.0, 3.0, 2.0],
             range: 12.0,
-            color: [8.0, 0.2, 0.2],
-            intensity: 1.0,
+            color: [1.0, 0.2, 0.2],
+            intensity: 150.0,
         },
         PointLight {
             position: [-2.0, 3.0, -2.0],
             range: 12.0,
-            color: [0.2, 8.0, 0.2],
-            intensity: 1.0,
+            color: [0.2, 1.0, 0.2],
+            intensity: 150.0,
         },
         PointLight {
             position: [0.0, 4.0, 4.0],
             range: 12.0,
-            color: [0.2, 0.2, 8.0],
-            intensity: 1.0,
+            color: [0.2, 0.2, 1.0],
+            intensity: 150.0,
         },
     ];
     for pl in point_lights {
@@ -575,10 +575,23 @@ impl App {
                 continue;
             }
             tex_pixels_total += (data.width as usize) * (data.height as usize);
+            // Map asset-side format to render-side. The glTF loader retags
+            // albedo/emissive textures as Rgba8Srgb (so the Vulkan image is
+            // _SRGB and the hardware does sRGB->linear on sample); data
+            // textures (normal/mr/occlusion) stay linear Rgba8.
+            let format = match data.format {
+                prism_asset::TexFormat::Rgba8Srgb => {
+                    prism_render::managers::TextureFormat::Rgba8Srgb
+                }
+                prism_asset::TexFormat::Rgba8 => {
+                    prism_render::managers::TextureFormat::Rgba8
+                }
+                prism_asset::TexFormat::Rgba16f => unreachable!("guarded above"),
+            };
             let input = prism_render::managers::TextureUploadInput {
                 width: data.width,
                 height: data.height,
-                format: prism_render::managers::TextureFormat::Rgba8,
+                format,
                 // Move the pixel buffer straight out of the store; `mem::take`
                 // leaves an empty Vec behind so the slot stays valid.
                 pixels: std::mem::take(&mut data.pixels),
@@ -656,6 +669,9 @@ impl App {
                 normal_tex,
                 metallic_roughness_tex: resolve(data.metallic_roughness_tex),
                 emissive_tex: resolve(data.emissive_tex),
+                occlusion_tex: resolve(data.occlusion_tex),
+                normal_scale: data.normal_scale,
+                occlusion_strength: data.occlusion_strength,
                 transmission: data.transmission,
                 ior: data.ior,
                 translucency: data.translucency,
@@ -762,6 +778,22 @@ impl App {
             });
         }
         log::info!("build draw list: {}ms", t_draw.elapsed().as_millis());
+
+        // 6. Append BRDF calibration spheres (white/black/gold/aluminum/
+        // plastic/stone) so the PBR pipeline can be eyeballed against
+        // reference materials. These share a single UV-sphere mesh and use
+        // scalar material values (no textures), so any visual discrepancy is
+        // attributable to the BRDF, not asset loading. Placed along +X starting
+        // near the scene origin so they're visible alongside the loaded scene.
+        if let Err(e) = crate::calibration_spheres::spawn_calibration_spheres(
+            renderer,
+            &mut self.draw_items,
+            0.0,
+            1.0,
+            0.0,
+        ) {
+            log::warn!("calibration spheres failed: {e}");
+        }
 
         // The `scene` argument is retained for API symmetry; all instances in
         // it are already reflected into `draw_items` above.
@@ -1121,17 +1153,6 @@ impl ApplicationHandler for App {
                                     "Reinhard"
                                 }
                             );
-                        } else if code == KeyCode::KeyG {
-                            // Toggle GI mode: 0 = Off, 2 = On (probe volume).
-                            if let Some(renderer) = self.renderer.as_mut() {
-                                let new_mode = if renderer.gi_mode() == 0 { 2 } else { 0 };
-                                renderer.set_gi_mode(new_mode);
-                                log::info!(
-                                    "GI mode = {} ({})",
-                                    new_mode,
-                                    if new_mode == 2 { "On" } else { "Off" }
-                                );
-                            }
                         } else if code == KeyCode::KeyH {
                             self.show_ui = !self.show_ui;
                         } else if code == KeyCode::F1 {
@@ -1393,10 +1414,6 @@ impl App {
             self.inspector.debug_flags = self.debug_flags;
             self.inspector.show_ui = self.show_ui;
             self.inspector.tonemap_mode = self.tonemap_mode;
-            // Sync GI mode from renderer -> inspector (before UI runs).
-            if let Some(r) = self.renderer.as_ref() {
-                self.inspector.gi_mode = r.gi_mode();
-            }
             // Refresh the viz's per-frame snapshot while `&GraphRenderer` is
             // borrowable (the egui closure only holds plain data).
             let window = self.window.clone();
@@ -1423,10 +1440,6 @@ impl App {
             // Push UI-edited tonemap selection back to the app so the `T` key
             // and the inspector stay in sync.
             self.tonemap_mode = self.inspector.tonemap_mode;
-            // Push UI-edited GI mode back to the renderer.
-            if let Some(r) = self.renderer.as_mut() {
-                r.set_gi_mode(self.inspector.gi_mode);
-            }
         }
 
         // Neutral clear color so we can tell whether the scene is actually

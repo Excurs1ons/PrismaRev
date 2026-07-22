@@ -51,23 +51,25 @@ new_key_type! {
 ///   @32  albedo_idx, normal_idx, mr_idx, emissive_idx  (4 x uint)
 ///   @48  transmission_factor[4]                  (float4: x=transmission, y=ior, z=translucency, w=anisotropy)
 ///   @64  clearcoat[4]                            (float4: x=clearcoat, y=clearcoat_roughness, z=reserved, w=reserved)
-///   @80  transmission_tex_idx, clearcoat_tex_idx, _pad0, _pad1  (4 x uint)
+///   @80  transmission_tex_idx, occlusion_idx     (2 x uint)
+///   @88  normal_scale, occlusion_strength         (2 x float, padded to 96)
 #[repr(C, align(16))]
 #[derive(Copy, Clone, Debug)]
 pub struct GpuMaterial {
-    /// Linear-space base color (rgba). The shader applies sRGB?linear
-    /// on the sampled albedo texture, so the base color and texture path
-    /// agree on the working color space.
+    /// Linear-space base color (rgba). When an albedo texture is bound it is
+    /// created as `R8G8B8A8_SRGB`, so the hardware converts the sampled value
+    /// to linear and no manual sRGB decode is needed in the shader; this scalar
+    /// factor is always linear (per glTF spec).
     pub base_color: [f32; 4],
     /// Packed metallic/roughness/emissive/emissive_strength: x=metallic,
     /// y=roughness, z=emissive intensity, w=emissive_strength multiplier.
     pub metallic_roughness_emissive: [f32; 4],
     /// Bindless SRV slot of the albedo (base color) texture. Use
     /// `TextureHandle::INVALID.0` for "no texture, use the scalar
-    /// base_color" — the shader will fall back to the scalar.
+    /// base_color" - the shader will fall back to the scalar.
     pub albedo_idx: u32,
     /// Bindless SRV slot of the tangent-space normal map. `INVALID` for
-    /// "no normal map" — the shader uses the geometric normal.
+    /// "no normal map" - the shader uses the geometric normal.
     pub normal_idx: u32,
     /// Bindless SRV slot of the packed metallic-roughness texture
     /// (glTF: G=roughness, B=metallic). `INVALID` for "use the scalar
@@ -85,11 +87,16 @@ pub struct GpuMaterial {
     pub clearcoat: [f32; 4],
     /// Bindless SRV slot of the transmission texture (reserved, 0xFFFFFFFF if none).
     pub transmission_tex_idx: u32,
-    /// Bindless SRV slot of the clearcoat texture (reserved, 0xFFFFFFFF if none).
-    pub clearcoat_tex_idx: u32,
-    /// Padding to 96 bytes.
-    pub _pad0: u32,
-    pub _pad1: u32,
+    /// Bindless SRV slot of the occlusion texture (R channel). 0xFFFFFFFF if
+    /// none; the shader attenuates IBL diffuse+specular by `mix(1, tex.r,
+    /// occlusion_strength)` and never touches direct lighting.
+    pub occlusion_idx: u32,
+    /// Normal map strength (scales decoded tangent-space normal xy before
+    /// normalize). 1.0 = verbatim.
+    pub normal_scale: f32,
+    /// Occlusion strength (lerp factor between 1.0 and the occlusion texture's
+    /// R channel, applied to IBL diffuse+specular only). Defaults to 1.0.
+    pub occlusion_strength: f32,
 }
 
 // Static assertions for size and alignment.
@@ -110,6 +117,9 @@ pub struct MaterialUploadInput {
     pub normal_tex: Option<u32>,
     pub metallic_roughness_tex: Option<u32>,
     pub emissive_tex: Option<u32>,
+    pub occlusion_tex: Option<u32>,
+    pub normal_scale: f32,
+    pub occlusion_strength: f32,
     // Advanced PBR fields
     pub transmission: f32,
     pub ior: f32,
@@ -144,9 +154,9 @@ impl MaterialUploadInput {
             ],
             clearcoat: [self.clearcoat, self.clearcoat_roughness, 0.0, 0.0],
             transmission_tex_idx: u32::MAX,
-            clearcoat_tex_idx: u32::MAX,
-            _pad0: 0,
-            _pad1: 0,
+            occlusion_idx: self.occlusion_tex.unwrap_or(u32::MAX),
+            normal_scale: self.normal_scale,
+            occlusion_strength: self.occlusion_strength,
         }
     }
 }
@@ -201,9 +211,9 @@ impl RenderMaterialManager {
                 transmission_factor: [0.0; 4],
                 clearcoat: [0.0; 4],
                 transmission_tex_idx: u32::MAX,
-                clearcoat_tex_idx: u32::MAX,
-                _pad0: 0,
-                _pad1: 0,
+                occlusion_idx: u32::MAX,
+                normal_scale: 1.0,
+                occlusion_strength: 1.0,
             };
             MATERIAL_SSBO_MAX as usize
         ];
@@ -317,9 +327,9 @@ impl RenderMaterialManager {
                 transmission_factor: [0.0; 4],
                 clearcoat: [0.0; 4],
                 transmission_tex_idx: u32::MAX,
-                clearcoat_tex_idx: u32::MAX,
-                _pad0: 0,
-                _pad1: 0,
+                occlusion_idx: u32::MAX,
+                normal_scale: 1.0,
+                occlusion_strength: 1.0,
             };
             self.dirty_slots[slot as usize] = true;
             self.slots[slot as usize] = None;
@@ -378,6 +388,9 @@ mod tests {
             normal_tex: None,
             metallic_roughness_tex: None,
             emissive_tex: None,
+            occlusion_tex: None,
+            normal_scale: 1.0,
+            occlusion_strength: 1.0,
             transmission: 0.0,
             ior: 1.5,
             translucency: 0.0,
@@ -406,9 +419,9 @@ mod tests {
             transmission_factor: [0.0; 4],
             clearcoat: [0.0; 4],
             transmission_tex_idx: 0,
-            clearcoat_tex_idx: 0,
-            _pad0: 0,
-            _pad1: 0,
+            occlusion_idx: 0,
+            normal_scale: 0.0,
+            occlusion_strength: 0.0,
         };
         let base_ptr = &m as *const _ as usize;
         assert_eq!((&m.base_color as *const _ as usize) - base_ptr, 0);
@@ -429,9 +442,9 @@ mod tests {
             (&m.transmission_tex_idx as *const _ as usize) - base_ptr,
             80
         );
-        assert_eq!((&m.clearcoat_tex_idx as *const _ as usize) - base_ptr, 84);
-        assert_eq!((&m._pad0 as *const _ as usize) - base_ptr, 88);
-        assert_eq!((&m._pad1 as *const _ as usize) - base_ptr, 92);
+        assert_eq!((&m.occlusion_idx as *const _ as usize) - base_ptr, 84);
+        assert_eq!((&m.normal_scale as *const _ as usize) - base_ptr, 88);
+        assert_eq!((&m.occlusion_strength as *const _ as usize) - base_ptr, 92);
     }
 
     #[test]
@@ -454,7 +467,8 @@ mod tests {
         assert_eq!(gpu.clearcoat[0], 0.0);
         assert_eq!(gpu.clearcoat[1], 0.0);
         assert_eq!(gpu.transmission_tex_idx, u32::MAX);
-        assert_eq!(gpu.clearcoat_tex_idx, u32::MAX);
+        assert_eq!(gpu.occlusion_idx, u32::MAX);
+        assert_eq!(gpu.normal_scale, 1.0);
     }
 
     #[test]
@@ -464,6 +478,8 @@ mod tests {
             normal_tex: Some(11),
             metallic_roughness_tex: Some(13),
             emissive_tex: Some(17),
+            occlusion_tex: Some(19),
+            normal_scale: 0.75,
             ..default_input()
         };
         let gpu = input.to_gpu();
@@ -471,6 +487,8 @@ mod tests {
         assert_eq!(gpu.normal_idx, 11);
         assert_eq!(gpu.metallic_roughness_idx, 13);
         assert_eq!(gpu.emissive_idx, 17);
+        assert_eq!(gpu.occlusion_idx, 19);
+        assert_eq!(gpu.normal_scale, 0.75);
     }
 
     #[test]

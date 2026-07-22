@@ -102,9 +102,12 @@ impl ProbeVolumeInfo {
 /// `DirectionalLight::default().euler_xyz` = `[45.0, -45.0, 0.0]`
 /// (pitch=45°, yaw=-45° -> direction `[-1/√2, 1/√2, 0]`).
 pub const BAKE_DEFAULT_LIGHT_EULER: [f32; 3] = [45.0, -45.0, 0.0];
-/// Default directional light intensity, matching
-/// `DirectionalLight::default().intensity`.
-pub const BAKE_DEFAULT_LIGHT_INTENSITY: f32 = 3.0;
+/// Default directional light illuminance in **lux**, matching
+/// `DirectionalLight::default().intensity` (100k lux = bright sunlight).
+/// The runtime shader converts illuminance to radiance via `/ PI`; the baker
+/// mirrors that division so the baked sun bounce uses the same effective
+/// radiance the player sees.
+pub const BAKE_DEFAULT_LIGHT_INTENSITY: f32 = 100_000.0;
 /// Default directional light RGB color, matching
 /// `DirectionalLight::default().color`.
 pub const BAKE_DEFAULT_LIGHT_COLOR: [f32; 3] = [1.0, 1.0, 1.0];

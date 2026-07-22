@@ -122,10 +122,15 @@ impl<'a> BatchUploader<'a> {
         Ok(())
     }
 
-    /// Create a device-local 2D R8G8B8A8_UNORM image, upload `pixels` (RGBA8)
-    /// into mip 0 via a staging buffer, then blit the mip chain. The image is
-    /// transitioned to `SHADER_READ_ONLY_OPTIMAL` by the time `finish` runs.
-    /// Returns `(image, memory, view)`; the caller owns them.
+    /// Create a device-local 2D image with the given `format`, upload `pixels`
+    /// (RGBA8, tightly packed) into mip 0 via a staging buffer, then blit the
+    /// mip chain. The image is transitioned to `SHADER_READ_ONLY_OPTIMAL` by
+    /// the time `finish` runs. Returns `(image, memory, view)`; the caller
+    /// owns them.
+    ///
+    /// Pass `R8G8B8A8_SRGB` for color textures (albedo/emissive) so the
+    /// hardware performs sRGB->linear on sample; `R8G8B8A8_UNORM` for data
+    /// textures (normal/metallic-roughness/occlusion).
     ///
     /// `mip_levels` should be `mip_level_count(width, height)` for a full
     /// chain, or `1` to skip mip generation.
@@ -135,9 +140,9 @@ impl<'a> BatchUploader<'a> {
         height: u32,
         mip_levels: u32,
         pixels: &[u8],
+        format: vk::Format,
     ) -> Result<(vk::Image, vk::DeviceMemory, vk::ImageView)> {
         let device = &self.context.device;
-        let format = vk::Format::R8G8B8A8_UNORM;
         let extent = vk::Extent3D {
             width,
             height,

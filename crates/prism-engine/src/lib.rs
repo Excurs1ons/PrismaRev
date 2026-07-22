@@ -2,6 +2,7 @@
 //! rendering integration.
 
 pub mod app;
+pub mod calibration_spheres;
 pub mod camera;
 pub mod camera_controller;
 pub mod crash_dialog;

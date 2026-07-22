@@ -29,7 +29,7 @@ fn loader_paths_keep_consistent_counts() {
         name: "shared".into(),
         positions: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
         normals: vec![[0.0, 1.0, 0.0]; 3],
-        tangents: vec![[1.0, 0.0, 0.0]; 3],
+        tangents: vec![[1.0, 0.0, 0.0, 1.0]; 3],
         uvs: vec![[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]],
         indices: vec![0, 1, 2],
     });

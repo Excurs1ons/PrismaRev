@@ -12,6 +12,8 @@ use crate::buffer::{self, BufferUsage, MemoryProperties};
 use crate::context::VulkanContext;
 
 /// A single vertex: position + normal + color + uv + tangent (interleaved).
+/// `tangent` is vec4: xyz = tangent direction, w = handedness sign (+1/-1)
+/// used to reconstruct the bitangent as `cross(N, T) * tangent.w`.
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub struct Vertex {
@@ -19,7 +21,7 @@ pub struct Vertex {
     pub normal: [f32; 3],
     pub color: [f32; 3],
     pub uv: [f32; 2],
-    pub tangent: [f32; 3],
+    pub tangent: [f32; 4],
 }
 
 impl Vertex {
@@ -58,7 +60,7 @@ impl Vertex {
         let tangent = vk::VertexInputAttributeDescription::default()
             .location(4)
             .binding(0)
-            .format(vk::Format::R32G32B32_SFLOAT)
+            .format(vk::Format::R32G32B32A32_SFLOAT)
             .offset(11 * f);
         [position, normal, color, uv, tangent]
     }
@@ -285,9 +287,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn vertex_stride_is_56() {
-        assert_eq!(std::mem::size_of::<Vertex>(), 56);
-        assert_eq!(Vertex::binding_description().stride, 56);
+    fn vertex_stride_is_60() {
+        // position(3) + normal(3) + color(3) + uv(2) + tangent(4) = 15 floats = 60 bytes.
+        assert_eq!(std::mem::size_of::<Vertex>(), 60);
+        assert_eq!(Vertex::binding_description().stride, 60);
     }
 
     #[test]
