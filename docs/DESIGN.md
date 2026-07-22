@@ -80,6 +80,9 @@
 | 移动端 GI | **Baked probe-volume GI**（2 阶 SH，9 系数 RGB16F，3D texture），非实时 SHARC。设计见 §6。SHARC 实时 slang 已移除，不再恢复（移动端跑不动每帧 ray 填 cache）。|
 | 阴影 / RT | 光栅化阴影贴图：`ShadowMapPass`（深度预渲染，见 `shadow_depth.slang`）+ `ScenePass`（comparison sampler 采样，见 `scene_frag.slang`） |
 | 能力探测 | `prism-render/src/capabilities.rs`（集中探测，扩展中） |
+| 帧生命周期 | **未实现**。当前 `GraphRenderer::render()` 在一个函数内完成同步 → 绘制 → present。缺少 `begin_frame` / `update` / `prepare` / `render` / `present` / `end_frame` 阶段划分。设计见 §8。 |
+| 场景同步（CPU→GPU） | **基础实现**。`RenderMeshManager` / `RenderTextureManager` 各自由调用者手动触发上传，缺少统一的脏事件路由和 prepare 阶段批同步。设计见 §9。 |
+| 只读场景视图 | **未实现**。Pass 直接引用 manager 内部状态，没有 `SceneReadView` 类只读访问层。设计见 §9。 |
 
 ## 5. 反目标（明确不做什么）
 
@@ -108,17 +111,20 @@
 
 ### 6.2 RenderGraph 接口修订
 
-目标：对齐 Truvis `truvis-render-graph` 模式（资源句柄声明 + 图托管 + 自动屏障）。
+目标：资源句柄声明 + 图托管 + 自动屏障 + 生命周期范围。
 
 - `RenderPassNode::setup(&mut self, graph: &mut RenderGraphBuilder, settings)` — 声明
-  读/写哪些 `ResourceHandle`（图边），**不**创建物理资源（物理资源由图在
-  `allocate_resources` / `import` 时统一建）。
+  读/写哪些 `ResourceHandle`（图边）**及资源的作用域**（scene / swapchain / frame），
+  物理资源由图在 `allocate_resources` / `import` 时统一建。
 - `RenderPassNode::execute(&mut self, ctx: &RenderContext, resources: &GraphResources)`
   — 只拿 command buffer + 已绑定/可查询的资源句柄，**不**自己管 framebuffer 生命周期。
 - 资源句柄是图内 ID（`ResourceHandle(u32)`），pass 不持有裸 `vk::Image` / `vk::Framebuffer`。
-- 图在编译期做拓扑排序 + **自动插屏障**（对齐 `resource_state` + `barrier`）；
-  第一阶段可先用手工依赖表（`read`/`write` 排顺序、屏障仍由 pass 内 `vkCmdPipelineBarrier`
-  显式写），行为不变后再升级自动屏障。
+- 图在编译期做拓扑排序；图在运行时逐帧推导并插入 **自动屏障**——
+  `RenderGraphExecutor` 维护逐资源的 `ResourceStateTracker`，跟踪每个 image 的
+  `layout` / `access` / `stage`，在 pass 切换时自动插入 `vkCmdPipelineBarrier`，
+  不再依赖 pass 内显式手工 barrier。状态追踪按 `(handle, image_index, layer_count)` 分帧，
+  swapchain recreate 时重置全部 tracked state。
+  第一阶段可先过渡：手动依赖表排顺序 + pass 内显式 barrier，行为不变后再启用自动屏障。
 - `ShadowMapPass` 已正确实现 `RenderPassNode`，作为参照，**不动**。
 
 ### 6.3 Pass 拓扑（重构后）
@@ -366,3 +372,147 @@ pub enum TextureFormat {
 - **不**用 Basis Universal UASTC 跨平台单编码。画质略损，且 PrismaRev 桌面/移动都支持 ASTC（桌面现代 GPU 全支持），不需要"一次编码到处转"。多平台产物分别生成更清晰。
 - **不**用神经纹理压缩（NTC / Adreno 神经纹理）。无标准扩展、无跨厂商工具链，留待 Khronos 标准化。
 - **不**为 BC1/BC2/BC3 单独支持。BC2/BC3 是 DX9 时代格式被 BC7 取代；BC1 仅极致体积场景用，移动端 ASTC 12×12 已覆盖该 niche。
+
+---
+
+## 8. 帧生命周期与架构分层（规划）
+
+> 当前 `GraphRenderer::render()` 在一个入口函数内完成"等待 FIF → acquire present target → 同步 scene → 遍历 pass → 提交 → present"全流程。随着场景资产增多和 RT 管线引入，需要显式阶段化来保证线程安全和资源契约不被违反。
+
+### 8.1 一帧的不同阶段
+
+```
+Before Render = begin_frame + update + prepare + after_prepare
+Render        = app.render (RenderGraph 录制 + 提交)
+After Render  = present + end_frame
+```
+
+各阶段的访问权限：
+
+| 阶段 | 可访问 | 不可访问 |
+|------|--------|----------|
+| `update` | 修改 `World`（CPU 场景语义：增删 instance、换材质、改 transform） | GPU 资源、bindless 表 |
+| `prepare` | 读 `World` 当前快照，写 GPU scene buffer、descriptor、bindless | 修改 `World` |
+| `after_prepare` | 只读 query（批量 raycast、scene 版本检查） | 修改 `World` 或 GPU scene |
+| `render` | 只读 GPU scene（`SceneReadView`），通过 RenderGraph 录制 command | 修改 scene state |
+
+### 8.2 三层职责
+
+| 层 | 职责 | 对应代码 |
+|----|------|---------|
+| **RenderRuntime** | GPU 资源 owner：`VulkanContext`、bindless manager、descriptor system、swapchain、command pool、render world（scene GPU 快照）。提供阶段化访问入口。 | 当前 `GraphRenderer` 拆出，新 crate `prism-render-runtime` |
+| **RenderAppShell** | 一帧顺序编排者：按固定顺序调用 runtime 的各阶段钩子，把窄化后的上下文传给 App。 | 新模块，依赖 runtime |
+| **App / Plugin** | 具体业务：决定 pass 顺序、持有窗口尺寸资源（RT targets、main view）、camera、GUI。 | 当前分散在 `app.rs` + `render_system.rs`，逐步拆为 Plugin |
+
+### 8.3 启动与 Resize
+
+- 启动入口唯一：平台层创建窗口，渲染线程通过 `Box<dyn RenderApp>` 驱动 App。
+- resize 只在 render loop 安全点处理。`RenderRuntime::handle_resize` 重建 swapchain + present 状态后，返回 `ResizeCtx`，App 据此通知需要重建窗口尺寸的 Plugin（RT working target、main view、GBuffer）。
+- 关闭流程：先调用 App 和 Plugin 的 `shutdown()`，再销毁 `RenderRuntime`（GPU idle → release 子资源 → destroy `Gfx` owner）。
+
+### 8.4 Plugin 模型（扩展路线）
+
+渲染管线能力拆为可插拔的 Plugin，每个 Plugin ：
+
+- 在 `setup` 时注册自己的 pass 节点到 RenderGraph。
+- 在 `update` / `prepare` / `render` 阶段被 App 依次调用。
+- 持有自己的资源生命周期（如 `RtPipeline` 持有 RT working target、main view target）。
+
+当前 `ShadowMapPass` / `ScenePass` / `GtaoPass` / `PostPass` 顺序固定写死在 `GraphRenderer::new` 中，后续改为 App 在 `render` 钩子中按需添加 pass。
+
+### 8.5 迁移步骤
+
+- **PR-L1：阶段化拆分**。`GraphRenderer::render()` 拆为 `begin_frame` → `prepare` → `render` → `present` → `end_frame` 等独立方法。当前行为不变（还在单线程内顺序调用），CI 绿。
+- **PR-L2：Runtime / App 分离**。将 GPU 资源 owner（`VulkanContext` / bindless / descriptor / command pool）归入 `RenderRuntime`，把 pass 编排 + 输入处理 + GUI 抽成 `RenderApp` trait。`app.rs` / `render_system.rs` 移入 App 侧。
+- **PR-L3：Plugin 接入**。将 `ShadowMapPass` / `GtaoPass` 等封装为 Plugin，App 在构建 RenderGraph 时注册；`RenderSettings` 开关控制 Plugin 是否生效。
+
+---
+
+## 9. 场景数据同步（CPU→GPU 设计）
+
+> 当前场景同步是"点对点手动触发"：`app.rs` 在每帧调用 `RenderMeshManager` / `RenderTextureManager` / `BindlessTextureTable` 的各路 upload 方法。这种写法在 pass 数量增加后难以维护，且无法做 prepare 阶段批优化（合并 upload、合并 descriptor update）。
+
+### 9.1 同步管道总览
+
+```
+World (CPU 语义权威)
+  │
+  ├─ AssetHub 后台加载 glTF/纹理 → 发 ModelLoaded 事件
+  │
+  └─ sync_for_render (每帧 update → prepare 边界)
+       │
+       ├─ SceneAssetIngestor：把 loader 产出的 CPU bytes 转为 typed handle
+       │   （TextureHandle / MeshHandle / MaterialHandle）
+       │
+       ├─ SceneChanges：本帧 CPU 语义变化集合
+       │   （added/removed/changed instance / material / light / texture / sky）
+       │
+       └─ DirtyRouter：SceneChanges + 静态规则 → DirtyDispatchPlan
+            │
+            ├─ RenderTextureManager：上传 texture → bindless 注册
+            ├─ RenderMeshManager：submesh geometry upload + mesh BLAS
+            ├─ RenderMaterialManager：material buffer upload
+            ├─ RenderInstanceManager：instance slot 分配 + active render list
+            ├─ RenderSkyManager：HDRI importance alias table + sky dispatch
+            ├─ RenderAnalyticLightManager：analytic light buffer
+            └─ RenderEmissiveLightTable：emissive triangle records + alias table
+```
+
+### 9.2 Dirty 路由规则
+
+Dirty dispatch 不采用通用事件总线，而是使用**静态规则集**，每类 SceneChange 映射到一个或多个 render manager 的 dispatch：
+
+| CPU 变化 | 触发的 render dispatch |
+|----------|----------------------|
+| texture added / changed / removed | `RenderTextureManager` → 上传 / 更新 / 释放 bindless slot |
+| texture ready 完成 | → 标记依赖该 texture 的 material dirty |
+| mesh added / changed / removed | `RenderMeshManager` → geometry upload + BLAS rebuild |
+| material changed | `RenderMaterialManager` → material buffer upload |
+| instance changed (transform / active / binding) | `RenderInstanceManager` → instance slot update + `RenderEmissiveLightTable` dirty |
+| sky changed | `RenderSkyManager` → sky dispatch |
+| analytic light changed | `RenderAnalyticLightManager` → light buffer rebuild |
+| emissive table rebuild (由 mesh / material / instance dirty 级联触发) | `RenderEmissiveLightTable` → emissive triangle records + alias table |
+
+**关键规则**：
+- prepare 阶段**一次性**消费 `SceneChanges` 并生成 `DirtyDispatchPlan`，不允许多帧累积脏状态。
+- `RenderEmissiveLightTable` 依赖 `RenderInstanceManager` 的 prepare 结果（active instance list），因此它的 rebuild 排在 instance dispatch 之后。
+- texture → material → instance 的级联脏标记通过 `SceneStore` 内部反向索引完成：删除 texture 时如果有 material 引用，`World` 暴露 `WorldEditError`，拒绝删除。
+
+### 9.3 只读场景视图
+
+Pass 不直接访问 manager 内部状态，改为通过只读 `SceneReadView`：
+
+```rust
+pub struct SceneReadView<'a> {
+    /// scene root buffer（instance / material / light SSBOs）
+    scene_buffers: &'a SceneGpuBuffers,
+    /// TLAS handle（ray query）
+    tlas: vk::AccelerationStructureKHR,
+    /// bindless texture table
+    textures: &'a BindlessTextureTable,
+    /// sky distribution alias table（HDRI importance sampling）
+    sky: &'a SkyGpuState,
+}
+```
+
+- `SceneReadView` 在 prepare 之后产生，render 阶段只读。
+- 版本号快照（`accum_signature`）暴露 scene 语义是否变化，供 App 判断是否需要重置离线累积状态。
+- 不暴露 `RenderWorld` owner 或具体 GPU buffer 布局。
+
+### 9.4 资源生命周期与同步阶段
+
+按 scope 区分，prepare 阶段按以下顺序执行：
+
+1. **帧级同步**：acquire present target、FIF wait、command pool reset。
+2. **Dirty dispatch**：消费 `SceneChanges`，写入 render manager 的 pending 队列。
+3. **GPU upload**：texture → submesh geometry → material buffer → instance buffer。
+4. **Emissive table**：在 instance dispatch 之后、scene buffer upload 之前构建。
+5. **Descriptor update**：per-frame descriptor 写入（scene UBO、bindless table 版本）。
+6. **SceneReadView 生成**：所有 upload 完成后，构造不可变快照。
+
+### 9.5 迁移步骤
+
+- **PR-S1：SceneChanges 提取**。`World` 在每帧 `sync_for_render` 中输出的变化汇总为 `SceneChanges` 结构体，替代目前分散在各处的"单独检查 xxx_dirty 标志"。先只收集、不消费，行为不变。
+- **PR-S2：DirtyRouter 接入 RenderManager**。给 `RenderTextureManager` / `RenderMeshManager` / `RenderInstanceManager` 等实现 consume dirty dispatch 接口。在 prepare 阶段执行 dispatch plan，**不再允许外部直接调用各 manager 的 upload**。
+- **PR-S3：SceneReadView 替换 pass 中的 manager 直接引用**。Pass 签名改为接收 `&SceneReadView`，不再持有 `&RenderMeshManager` 等私有句柄。
+- **PR-S4（可选）：后台 AssetHub 异步加载**。`AssetHub` 在后台线程解码 glTF / KTX2，完成后通过 `ModelLoaded` 事件交付 owned CPU scene payload；`sync_for_render` 的 `SceneAssetIngestor` 将其映射为 typed handle。当前同步加载路径保留为回退。
