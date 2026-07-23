@@ -126,51 +126,48 @@ fn main() -> Result<()> {
         )
     }?;
 
-    // ---- 3. Load scene + build BLAS/TLAS ----
-    let (vertices, indices) = if let Some(ref p) = args.scene {
+    // ---- 3. Load scene + build per-instance BLAS/TLAS + materials SSBO ----
+    // The path tracer resolves albedo from the material SSBO at the hit point
+    // (per-instance material slot via the TLAS custom index), so we build the
+    // same per-instance geometry the real-time PT pass uses. Textures aren't
+    // registered in a bindless table here, so materials are scalar-only
+    // (albedo_idx = INVALID -> base_color fallback) - matches the previous
+    // vertex-color behaviour of the offline renderer.
+    let mut store = prism_asset::SceneStore::new();
+    let instances: Vec<bake_common::PtGeometryInstance> = if let Some(ref p) = args.scene {
         log::info!("  scene: {}", p.display());
-        let (v, i, mn, mx) = bake_common::load_scene_geometry(p)
-            .context("load scene geometry")?;
-        log::info!("  AABB: min [{:.3},{:.3},{:.3}] max [{:.3},{:.3},{:.3}]",
-            mn[0], mn[1], mn[2], mx[0], mx[1], mx[2]);
-        (v, i)
+        store.load_gltf(p).context("load glTF")?;
+        let (mat_bytes, mat_map) = bake_common::build_scalar_material_ssbo(&store)
+            .context("build scalar material SSBO")?;
+        // materials SSBO is bound separately below; flatten needs mat_map only.
+        let _ = mat_bytes;
+        bake_common::flatten_instances_from_store(&store, &mat_map)
+            .context("flatten instances")?
     } else {
-        // Use test cube if no scene specified.
+        // Use test cube if no scene specified (single instance, slot 0).
         log::info!("  scene: test cube");
         let (v, i, _, _) = bake_common::test_cube_geometry();
-        (v, i)
+        vec![bake_common::PtGeometryInstance {
+            vertices: v,
+            indices: i,
+            material_slot: 0,
+        }]
     };
+    let (mat_bytes, _) = if store.materials().count() > 0 {
+        bake_common::build_scalar_material_ssbo(&store)?
+    } else {
+        // Single neutral material for the test cube path.
+        bake_common::build_scalar_material_ssbo(&store)?
+    };
+    log::info!("  geometry: {} instances", instances.len());
+
+    let scene = bake_common::build_pt_scene(&context, cmd_pool, &instances, &mat_bytes)
+        .context("build PT scene")?;
     log::info!(
-        "  geometry: {} vertices, {} indices ({} tris)",
-        vertices.len(), indices.len(), indices.len() / 3
+        "  TLAS device_address={:#x} ({} instances)",
+        scene.tlas.as_ref().unwrap().device_address,
+        instances.len()
     );
-
-    let (vertex_buffer, vertex_memory) =
-        bake_common::create_storage_buffer(&context, bake_common::vertex_bytes(&vertices))?;
-    let (index_buffer, index_memory) =
-        bake_common::create_storage_buffer(&context, bake_common::index_bytes(&indices))?;
-
-    let mesh = prism_render::mesh::Mesh {
-        vertex_buffer,
-        vertex_memory,
-        index_buffer: Some(index_buffer),
-        index_memory: Some(index_memory),
-        vertex_count: vertices.len() as u32,
-        index_count: indices.len() as u32,
-    };
-    let blas = prism_render::acceleration_structure::BlasEntry::build(&context, cmd_pool, &mesh)?;
-    log::info!("  BLAS device_address={:#x}", blas.device_address);
-    let instance = prism_render::acceleration_structure::TlasInstance {
-        transform: [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0],
-        custom_index: 0,
-        mask: 0xFF,
-        instance_shader_binding_table_record_offset: 0,
-        flags: vk::GeometryInstanceFlagsKHR::TRIANGLE_FACING_CULL_DISABLE,
-    };
-    let tlas = prism_render::acceleration_structure::Tlas::build(
-        &context, cmd_pool, &[instance], &[blas.device_address],
-    )?;
-    log::info!("  TLAS device_address={:#x}", tlas.device_address);
 
     // ---- 4. Camera: compute view-projection + inverse ----
     let aspect = args.width as f32 / args.height as f32;
@@ -234,7 +231,12 @@ fn main() -> Result<()> {
         )
     }?;
 
-    // ---- 6. Descriptor set ----
+    // ---- 6. Descriptor sets ----
+    // Set 0: b0=output, b1=tlas, b2=vertex, b3=index, b6=instance_meta,
+    //        b7=materials (b6/b7 declared in path_integrator.slang).
+    // Set 1: bindless (globalSamplers[1] + bindlessSrvs[1]); the materials have
+    //        albedo_idx=INVALID so bindlessSrvs is never sampled, but the
+    //        binding must exist for the pipeline layout to match the shader.
     let bindings = [
         vk::DescriptorSetLayoutBinding::default()
             .binding(0)
@@ -256,6 +258,16 @@ fn main() -> Result<()> {
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
             .descriptor_count(1)
             .stage_flags(vk::ShaderStageFlags::COMPUTE),
+        vk::DescriptorSetLayoutBinding::default()
+            .binding(6)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .descriptor_count(1)
+            .stage_flags(vk::ShaderStageFlags::COMPUTE),
+        vk::DescriptorSetLayoutBinding::default()
+            .binding(7)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .descriptor_count(1)
+            .stage_flags(vk::ShaderStageFlags::COMPUTE),
     ];
     let ds_layout = unsafe {
         context.device.create_descriptor_set_layout(
@@ -263,23 +275,62 @@ fn main() -> Result<()> {
             None,
         )
     }?;
+
+    // Set 1: a minimal bindless layout (1 sampler + 1 sampled image) just so
+    // the pipeline layout has a matching set 1. The dummy texture is never
+    // sampled (albedo_idx=INVALID).
+    let sampler_info = vk::SamplerCreateInfo::default()
+        .mag_filter(vk::Filter::LINEAR)
+        .min_filter(vk::Filter::LINEAR)
+        .address_mode_u(vk::SamplerAddressMode::REPEAT)
+        .address_mode_v(vk::SamplerAddressMode::REPEAT)
+        .address_mode_w(vk::SamplerAddressMode::REPEAT);
+    let dummy_sampler = unsafe { context.device.create_sampler(&sampler_info, None) }?;
+    let bindless_bindings = [
+        vk::DescriptorSetLayoutBinding::default()
+            .binding(0)
+            .descriptor_type(vk::DescriptorType::SAMPLER)
+            .descriptor_count(1)
+            .stage_flags(vk::ShaderStageFlags::COMPUTE),
+        vk::DescriptorSetLayoutBinding::default()
+            .binding(1)
+            .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+            .descriptor_count(1)
+            .stage_flags(vk::ShaderStageFlags::COMPUTE),
+    ];
+    let bindless_layout = unsafe {
+        context.device.create_descriptor_set_layout(
+            &vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindless_bindings),
+            None,
+        )
+    }?;
+
     let ds_pool = unsafe {
         context.device.create_descriptor_pool(
             &vk::DescriptorPoolCreateInfo::default()
-                .max_sets(1)
+                .max_sets(2)
                 .pool_sizes(&[
                     vk::DescriptorPoolSize { ty: vk::DescriptorType::STORAGE_IMAGE, descriptor_count: 1 },
                     vk::DescriptorPoolSize { ty: vk::DescriptorType::ACCELERATION_STRUCTURE_KHR, descriptor_count: 1 },
-                    vk::DescriptorPoolSize { ty: vk::DescriptorType::STORAGE_BUFFER, descriptor_count: 2 },
+                    vk::DescriptorPoolSize { ty: vk::DescriptorType::STORAGE_BUFFER, descriptor_count: 4 },
+                    vk::DescriptorPoolSize { ty: vk::DescriptorType::SAMPLER, descriptor_count: 1 },
+                    vk::DescriptorPoolSize { ty: vk::DescriptorType::SAMPLED_IMAGE, descriptor_count: 1 },
                 ]),
             None,
         )
     }?;
-    let ds = unsafe {
+    let ds_set0 = unsafe {
         context.device.allocate_descriptor_sets(
             &vk::DescriptorSetAllocateInfo::default()
                 .descriptor_pool(ds_pool)
                 .set_layouts(std::slice::from_ref(&ds_layout)),
+        )
+    }?[0];
+    let ds_set1 = unsafe {
+        context.device.allocate_descriptor_sets(
+            &vk::DescriptorSetAllocateInfo::default()
+                .descriptor_pool(ds_pool)
+                .set_layouts(std::slice::from_ref(&bindless_layout)),
         )
     }?[0];
 
@@ -287,39 +338,78 @@ fn main() -> Result<()> {
         .image_view(render_view)
         .image_layout(vk::ImageLayout::GENERAL);
     let mut as_info = vk::WriteDescriptorSetAccelerationStructureKHR::default()
-        .acceleration_structures(std::slice::from_ref(&tlas.handle));
+        .acceleration_structures(std::slice::from_ref(&scene.tlas.as_ref().unwrap().handle));
     let vert_buf_info = vk::DescriptorBufferInfo::default()
-        .buffer(vertex_buffer)
+        .buffer(scene.vertex_buffer)
         .offset(0)
         .range(vk::WHOLE_SIZE);
     let idx_buf_info = vk::DescriptorBufferInfo::default()
-        .buffer(index_buffer)
+        .buffer(scene.index_buffer)
+        .offset(0)
+        .range(vk::WHOLE_SIZE);
+    let meta_buf_info = vk::DescriptorBufferInfo::default()
+        .buffer(scene.instance_meta_buffer)
+        .offset(0)
+        .range(vk::WHOLE_SIZE);
+    let mat_buf_info = vk::DescriptorBufferInfo::default()
+        .buffer(scene.materials_buffer)
         .offset(0)
         .range(vk::WHOLE_SIZE);
     let writes = [
         vk::WriteDescriptorSet::default()
-            .dst_set(ds)
+            .dst_set(ds_set0)
             .dst_binding(0)
             .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
             .image_info(std::slice::from_ref(&img_info)),
         vk::WriteDescriptorSet::default()
-            .dst_set(ds)
+            .dst_set(ds_set0)
             .dst_binding(1)
             .descriptor_count(1)
             .descriptor_type(vk::DescriptorType::ACCELERATION_STRUCTURE_KHR)
             .push_next(&mut as_info),
         vk::WriteDescriptorSet::default()
-            .dst_set(ds)
+            .dst_set(ds_set0)
             .dst_binding(2)
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
             .buffer_info(std::slice::from_ref(&vert_buf_info)),
         vk::WriteDescriptorSet::default()
-            .dst_set(ds)
+            .dst_set(ds_set0)
             .dst_binding(3)
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
             .buffer_info(std::slice::from_ref(&idx_buf_info)),
+        vk::WriteDescriptorSet::default()
+            .dst_set(ds_set0)
+            .dst_binding(6)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .buffer_info(std::slice::from_ref(&meta_buf_info)),
+        vk::WriteDescriptorSet::default()
+            .dst_set(ds_set0)
+            .dst_binding(7)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .buffer_info(std::slice::from_ref(&mat_buf_info)),
     ];
-    unsafe { context.device.update_descriptor_sets(&writes, &[]) };
+    // Set 1: bind the dummy sampler + a dummy sampled image view (render_view
+    // reused - it's valid, just never sampled).
+    let sampler_di = vk::DescriptorImageInfo::default().sampler(dummy_sampler);
+    let srv_di = vk::DescriptorImageInfo::default()
+        .image_view(render_view)
+        .image_layout(vk::ImageLayout::GENERAL);
+    let bindless_writes = [
+        vk::WriteDescriptorSet::default()
+            .dst_set(ds_set1)
+            .dst_binding(0)
+            .descriptor_type(vk::DescriptorType::SAMPLER)
+            .image_info(std::slice::from_ref(&sampler_di)),
+        vk::WriteDescriptorSet::default()
+            .dst_set(ds_set1)
+            .dst_binding(1)
+            .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+            .image_info(std::slice::from_ref(&srv_di)),
+    ];
+    unsafe {
+        context.device.update_descriptor_sets(&writes, &[]);
+        context.device.update_descriptor_sets(&bindless_writes, &[]);
+    }
 
     // ---- 7. Compute pipeline ----
     let spv_path = std::path::Path::new("shaders/gi_render.comp.spv");
@@ -340,11 +430,12 @@ fn main() -> Result<()> {
         .stage_flags(vk::ShaderStageFlags::COMPUTE)
         .offset(0)
         .size(RENDER_PUSH_SIZE);
+    let set_layouts = [ds_layout, bindless_layout];
     let pipeline = prism_render::compute::ComputePipeline::new(
         &context.device,
         shader_module,
         c"renderMain",
-        std::slice::from_ref(&ds_layout),
+        &set_layouts,
         std::slice::from_ref(&push_range),
     )?;
     unsafe { context.device.destroy_shader_module(shader_module, None) };
@@ -413,9 +504,10 @@ fn main() -> Result<()> {
         );
 
         context.device.cmd_bind_pipeline(cmd_buf, vk::PipelineBindPoint::COMPUTE, pipeline.pipeline);
+        let bind_sets = [ds_set0, ds_set1];
         context.device.cmd_bind_descriptor_sets(
             cmd_buf, vk::PipelineBindPoint::COMPUTE, pipeline.layout, 0,
-            std::slice::from_ref(&ds), &[],
+            &bind_sets, &[],
         );
         context.device.cmd_push_constants(
             cmd_buf, pipeline.layout, vk::ShaderStageFlags::COMPUTE, 0,
@@ -565,21 +657,18 @@ fn main() -> Result<()> {
     unsafe {
         context.device.free_command_buffers(cmd_pool, &[cmd_buf, cmd_buf2]);
         context.device.destroy_command_pool(cmd_pool, None);
+        context.device.destroy_sampler(dummy_sampler, None);
         context.device.destroy_descriptor_pool(ds_pool, None);
         context.device.destroy_descriptor_set_layout(ds_layout, None);
+        context.device.destroy_descriptor_set_layout(bindless_layout, None);
         context.device.destroy_image_view(render_view, None);
         context.device.destroy_image(render_image, None);
         context.device.free_memory(render_memory, None);
         context.device.destroy_buffer(staging_buf, None);
         context.device.free_memory(staging_mem, None);
-        context.device.destroy_buffer(vertex_buffer, None);
-        context.device.free_memory(vertex_memory, None);
-        context.device.destroy_buffer(index_buffer, None);
-        context.device.free_memory(index_memory, None);
     }
     drop(pipeline);
-    drop(tlas);
-    drop(blas);
+    drop(scene); // drops vertex/index/meta/materials buffers + BLAS + TLAS
 
     Ok(())
 }

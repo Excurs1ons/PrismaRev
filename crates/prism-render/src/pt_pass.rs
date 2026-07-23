@@ -20,10 +20,8 @@
 use anyhow::Context as _;
 use ash::vk;
 
-use crate::acceleration_structure::{BlasEntry, Tlas, TlasInstance};
 use crate::compute::ComputePipeline;
 use crate::context::VulkanContext;
-use crate::mesh::Vertex;
 use crate::render_graph::{
     GraphResources, PassInfo, PassKind, RenderContext, RenderGraphBuilder, RenderPassNode,
     RenderSettings, ResourceUsage, PT_COLOR_H, ResourceType,
@@ -54,6 +52,12 @@ pub struct PathTracePass {
     ds_pool: vk::DescriptorPool,
     ds: vk::DescriptorSet,
 
+    // Bindless texture table (set 1) - shared with the rasterizer. Not owned;
+    // stored so the pipeline layout can reference its layout and the command
+    // recorder can bind its set. Wired via `set_material_resources`.
+    bindless_set: vk::DescriptorSet,
+    bindless_layout: vk::DescriptorSetLayout,
+
     // Accumulation buffers (persistent across frames)
     accum_image: vk::Image,
     accum_view: vk::ImageView,
@@ -67,16 +71,16 @@ pub struct PathTracePass {
     output_view: vk::ImageView,
     output_memory: vk::DeviceMemory,
 
-    // Flattened world-space geometry (uploaded once per scene)
-    vertex_buffer: Option<vk::Buffer>,
-    vertex_memory: Option<vk::DeviceMemory>,
-    vertex_address: vk::DeviceAddress,
-    index_buffer: Option<vk::Buffer>,
-    index_memory: Option<vk::DeviceMemory>,
+    // Per-instance ray-traceable scene (combined vertex/index buffers,
+    // per-instance BLAS, TLAS, instance_meta SSBO). Built once per scene by
+    // `set_geometry` via `bake_common::build_pt_scene`. Owns its GPU resources.
+    pt_scene: Option<crate::bake_common::PtScene>,
 
-    // Acceleration structures
-    blas: Option<BlasEntry>,
-    tlas: Option<Tlas>,
+    // Materials SSBO (shared `RenderMaterialManager::buffer()`), bound at set 0
+    // binding 7. Wired via `set_material_resources`. The real-time pass does
+    // NOT own this buffer (the material manager does) - it only holds the
+    // handle for descriptor writes.
+    materials_buffer: Option<vk::Buffer>,
 
     // State tracking
     img_width: u32,
@@ -93,13 +97,18 @@ impl PathTracePass {
     pub fn new(context: &VulkanContext) -> anyhow::Result<Self> {
         let device = &context.device;
 
-        // Set 0 bindings (must match pt_render.slang):
+        // Set 0 bindings (must match pt_render.slang / path_integrator.slang):
         // b0: RWTexture2D<float4> accumImage
         // b1: RWTexture2D<uint>   sampleCount
         // b2: AccelerationStructure tlas
-        // b3: ByteAddressBuffer vertexData
-        // b4: StructuredBuffer<uint> indices
+        // b3: ByteAddressBuffer vertexData  (combined world-space vertices)
+        // b4: StructuredBuffer<uint> indices (combined index buffer)
         // b5: RWTexture2D<float4> outputImage
+        // b6: StructuredBuffer<PtInstanceMeta> instance_meta (per-instance
+        //     material slot + vertex/index base offsets, indexed by
+        //     q.CommittedInstanceID())
+        // b7: StructuredBuffer<GpuMaterial> materials (shared SSBO)
+        // Set 1 (bindless, bound separately): globalSamplers[] + bindlessSrvs[]
         let bindings = [
             b(0, vk::DescriptorType::STORAGE_IMAGE, vk::ShaderStageFlags::COMPUTE),
             b(1, vk::DescriptorType::STORAGE_IMAGE, vk::ShaderStageFlags::COMPUTE),
@@ -107,6 +116,8 @@ impl PathTracePass {
             b(3, vk::DescriptorType::STORAGE_BUFFER, vk::ShaderStageFlags::COMPUTE),
             b(4, vk::DescriptorType::STORAGE_BUFFER, vk::ShaderStageFlags::COMPUTE),
             b(5, vk::DescriptorType::STORAGE_IMAGE, vk::ShaderStageFlags::COMPUTE),
+            b(6, vk::DescriptorType::STORAGE_BUFFER, vk::ShaderStageFlags::COMPUTE),
+            b(7, vk::DescriptorType::STORAGE_BUFFER, vk::ShaderStageFlags::COMPUTE),
         ];
 
         let ds_layout = unsafe {
@@ -119,7 +130,7 @@ impl PathTracePass {
 
         let pool_sizes = [
             vk::DescriptorPoolSize { ty: vk::DescriptorType::STORAGE_IMAGE, descriptor_count: 3 },
-            vk::DescriptorPoolSize { ty: vk::DescriptorType::STORAGE_BUFFER, descriptor_count: 2 },
+            vk::DescriptorPoolSize { ty: vk::DescriptorType::STORAGE_BUFFER, descriptor_count: 4 },
             vk::DescriptorPoolSize { ty: vk::DescriptorType::ACCELERATION_STRUCTURE_KHR, descriptor_count: 1 },
         ];
         let ds_pool = unsafe {
@@ -153,6 +164,8 @@ impl PathTracePass {
             ds_layout,
             ds_pool,
             ds,
+            bindless_set: vk::DescriptorSet::null(),
+            bindless_layout: vk::DescriptorSetLayout::null(),
             accum_image: ai,
             accum_view: av,
             accum_memory: am,
@@ -162,13 +175,8 @@ impl PathTracePass {
             output_image: oi,
             output_view: ov,
             output_memory: om,
-            vertex_buffer: None,
-            vertex_memory: None,
-            vertex_address: 0,
-            index_buffer: None,
-            index_memory: None,
-            blas: None,
-            tlas: None,
+            pt_scene: None,
+            materials_buffer: None,
             img_width: 1,
             img_height: 1,
             frame_counter: 0,
@@ -178,73 +186,68 @@ impl PathTracePass {
         })
     }
 
-    /// Upload flattened world-space geometry and build BLAS/TLAS.
-    /// Called once from `App::load_demo_scene`.
+    /// Upload per-instance world-space geometry and build BLAS/TLAS.
+    ///
+    /// Builds a single combined vertex + index buffer (so the shader's
+    /// `vertexData`/`indices` reads resolve any instance's vertices), then one
+    /// BLAS per instance pointing at that instance's slice of the combined
+    /// buffers, and one TLAS whose `instanceCustomIndex` carries the instance
+    /// index (0..N) used to look up `PtInstanceMeta` -> `material_slot`.
+    ///
+    /// `instances` is produced by `bake_common::flatten_instances_from_store`
+    /// (scene) plus the ECS `RenderInstance` walk (calibration spheres).
     pub fn set_geometry(
         &mut self,
         context: &VulkanContext,
         command_pool: vk::CommandPool,
-        vertices: &[Vertex],
-        indices: &[u32],
+        instances: &[crate::bake_common::PtGeometryInstance],
     ) -> anyhow::Result<()> {
-        let device = &context.device;
+        if instances.is_empty() {
+            anyhow::bail!("PathTracePass::set_geometry: no instances");
+        }
 
-        let vbytes = crate::bake_common::vertex_bytes(vertices);
-        let (vbuf, vmem) = crate::bake_common::create_storage_buffer(context, vbytes)
-            .context("PathTracePass: vertex buffer")?;
-        let vaddr = unsafe {
-            device.get_buffer_device_address(
-                &vk::BufferDeviceAddressInfo::default().buffer(vbuf),
-            )
-        };
-
-        let ibytes = crate::bake_common::index_bytes(indices);
-        let (ibuf, imem) = crate::bake_common::create_storage_buffer(context, ibytes)
-            .context("PathTracePass: index buffer")?;
-
-        // Build BLAS using Mesh-like wrapper
-        let mesh = crate::mesh::Mesh {
-            vertex_buffer: vbuf,
-            vertex_memory: vmem,
-            index_buffer: Some(ibuf),
-            index_memory: Some(imem),
-            vertex_count: vertices.len() as u32,
-            index_count: indices.len() as u32,
-        };
-        let blas = BlasEntry::build(context, command_pool, &mesh)
-            .context("PathTracePass: BLAS")?;
-
-        // TLAS with one instance
-        let tlas = Tlas::build(
+        // The materials SSBO bytes: if `set_material_resources` wired the
+        // shared `RenderMaterialManager` buffer we use an empty slice (the
+        // buffer is bound separately at b7 and never owned by the scene); if
+        // not wired (shouldn't happen for the real-time pass), fall back to a
+        // single neutral material so the build still succeeds.
+        // `build_pt_scene` only allocates its OWN materials buffer from these
+        // bytes; the real-time pass overrides it with the shared manager
+        // buffer in `update_ds`, so we pass a minimal placeholder here.
+        let placeholder_material = [0u8; 96]; // one GpuMaterial's worth of zeroes
+        let scene = crate::bake_common::build_pt_scene(
             context,
             command_pool,
-            &[TlasInstance {
-                transform: [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0],
-                custom_index: 0,
-                mask: 0xFF,
-                instance_shader_binding_table_record_offset: 0,
-                flags: vk::GeometryInstanceFlagsKHR::empty(),
-            }],
-            &[blas.device_address],
+            instances,
+            &placeholder_material,
         )
-        .context("PathTracePass: TLAS")?;
+        .context("PathTracePass: build_pt_scene")?;
 
-        // Drop old
-        if let Some(b) = self.vertex_buffer.take() { unsafe { device.destroy_buffer(b, None); } }
-        if let Some(m) = self.vertex_memory.take() { unsafe { device.free_memory(m, None); } }
-        if let Some(b) = self.index_buffer.take() { unsafe { device.destroy_buffer(b, None); } }
-        if let Some(m) = self.index_memory.take() { unsafe { device.free_memory(m, None); } }
+        // Drop the previous scene (frees its buffers/BLAS/TLAS via Drop).
+        self.pt_scene = Some(scene);
 
-        self.vertex_buffer = Some(vbuf);
-        self.vertex_memory = Some(vmem);
-        self.vertex_address = vaddr;
-        self.index_buffer = Some(ibuf);
-        self.index_memory = Some(imem);
-        self.blas = Some(blas);
-        self.tlas = Some(tlas);
-
-        log::info!("PathTracePass: geometry ({} verts, {} indices)", vertices.len(), indices.len());
+        log::info!(
+            "PathTracePass: {} instances uploaded",
+            instances.len()
+        );
         Ok(())
+    }
+
+    /// Wire the shared bindless texture table (set 1) + materials SSBO (set 0
+    /// binding 7). Must be called before the first frame so the pipeline layout
+    /// can include the bindless set and `update_ds` can write the materials
+    /// binding. The materials buffer is `RenderMaterialManager::buffer()`.
+    pub fn set_material_resources(
+        &mut self,
+        materials_buffer: vk::Buffer,
+        bindless_set: vk::DescriptorSet,
+        bindless_layout: vk::DescriptorSetLayout,
+    ) {
+        self.materials_buffer = Some(materials_buffer);
+        self.bindless_set = bindless_set;
+        self.bindless_layout = bindless_layout;
+        // Force pipeline rebuild so it picks up the 2-set layout.
+        self.pipeline = None;
     }
 
     fn resize_images(
@@ -298,7 +301,9 @@ impl PathTracePass {
         const SPV: &[u8] = include_bytes!("../../../shaders/pt_render.comp.spv");
         let mod_ = shader::load_shader_module(device, SPV).context("PathTracePass: load spv")?;
         let entry = std::ffi::CString::new("ptMain").unwrap();
-        let layouts = [self.ds_layout];
+        // Two sets: set 0 = PT-local (accum/output/TLAS/vertex/index/meta/
+        // materials), set 1 = shared bindless texture table (samplers + SRVs).
+        let layouts = [self.ds_layout, self.bindless_layout];
         let push = [vk::PushConstantRange {
             stage_flags: vk::ShaderStageFlags::COMPUTE,
             offset: 0,
@@ -373,10 +378,21 @@ impl PathTracePass {
         let oi = vk::DescriptorImageInfo::default()
             .image_view(self.output_view).image_layout(vk::ImageLayout::GENERAL);
 
+        // Geometry buffers come from the PtScene (vertex/index/instance_meta).
+        // The materials buffer is the shared RenderMaterialManager SSBO (wired
+        // via set_material_resources), NOT the PtScene's placeholder buffer.
+        let (vbuf, ibuf, mbuf) = match self.pt_scene.as_ref() {
+            Some(s) => (s.vertex_buffer, s.index_buffer, s.instance_meta_buffer),
+            None => (vk::Buffer::null(), vk::Buffer::null(), vk::Buffer::null()),
+        };
         let vbi = vk::DescriptorBufferInfo::default()
-            .buffer(self.vertex_buffer.unwrap_or(vk::Buffer::null())).offset(0).range(vk::WHOLE_SIZE);
+            .buffer(vbuf).offset(0).range(vk::WHOLE_SIZE);
         let ibi = vk::DescriptorBufferInfo::default()
-            .buffer(self.index_buffer.unwrap_or(vk::Buffer::null())).offset(0).range(vk::WHOLE_SIZE);
+            .buffer(ibuf).offset(0).range(vk::WHOLE_SIZE);
+        let mbi = vk::DescriptorBufferInfo::default()
+            .buffer(mbuf).offset(0).range(vk::WHOLE_SIZE);
+        let matbi = vk::DescriptorBufferInfo::default()
+            .buffer(self.materials_buffer.unwrap_or(vk::Buffer::null())).offset(0).range(vk::WHOLE_SIZE);
 
         let writes = vec![
             vk::WriteDescriptorSet::default().dst_set(self.ds).dst_binding(0)
@@ -389,12 +405,16 @@ impl PathTracePass {
                 .descriptor_type(vk::DescriptorType::STORAGE_BUFFER).buffer_info(std::slice::from_ref(&ibi)),
             vk::WriteDescriptorSet::default().dst_set(self.ds).dst_binding(5)
                 .descriptor_type(vk::DescriptorType::STORAGE_IMAGE).image_info(std::slice::from_ref(&oi)),
+            vk::WriteDescriptorSet::default().dst_set(self.ds).dst_binding(6)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER).buffer_info(std::slice::from_ref(&mbi)),
+            vk::WriteDescriptorSet::default().dst_set(self.ds).dst_binding(7)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER).buffer_info(std::slice::from_ref(&matbi)),
         ];
         unsafe { device.update_descriptor_sets(&writes, &[]); }
 
-        // Acceleration structure write (binding 2) — done as a separate call
+        // Acceleration structure write (binding 2) - done as a separate call
         // because its push_next reference must stay alive for the update call.
-        if let Some(handle) = self.tlas.as_ref().map(|t| t.handle) {
+        if let Some(handle) = self.pt_scene.as_ref().and_then(|s| s.tlas.as_ref().map(|t| t.handle)) {
             let mut as_info = vk::WriteDescriptorSetAccelerationStructureKHR::default()
                 .acceleration_structures(std::slice::from_ref(&handle));
             let as_write = vk::WriteDescriptorSet::default().dst_set(self.ds).dst_binding(2)
@@ -419,12 +439,9 @@ impl PathTracePass {
             device.destroy_image(self.output_image, None);
             device.free_memory(self.output_memory, None);
         }
-        if let Some(b) = self.vertex_buffer.take() { unsafe { device.destroy_buffer(b, None); } }
-        if let Some(m) = self.vertex_memory.take() { unsafe { device.free_memory(m, None); } }
-        if let Some(b) = self.index_buffer.take() { unsafe { device.destroy_buffer(b, None); } }
-        if let Some(m) = self.index_memory.take() { unsafe { device.free_memory(m, None); } }
-        self.blas = None;
-        self.tlas = None;
+        // PtScene drops its own vertex/index/meta/materials buffers + BLAS + TLAS.
+        self.pt_scene = None;
+        self.materials_buffer = None;
         unsafe {
             device.destroy_descriptor_set_layout(self.ds_layout, None);
             device.destroy_descriptor_pool(self.ds_pool, None);
@@ -461,8 +478,8 @@ impl RenderPassNode for PathTracePass {
         if ctx.frame.render_mode != crate::render_graph::RenderMode::PathTrace {
             return Ok(());
         }
-        if self.vertex_buffer.is_none() || self.tlas.is_none() {
-            log::debug!("PathTracePass: no geometry, skipping");
+        if self.pt_scene.is_none() || self.materials_buffer.is_none() {
+            log::debug!("PathTracePass: no geometry/materials, skipping");
             return Ok(());
         }
 
@@ -568,11 +585,12 @@ impl RenderPassNode for PathTracePass {
         // Update descriptors
         self.update_ds(device);
 
-        // Bind
+        // Bind: set 0 = PT-local, set 1 = shared bindless texture table.
+        let sets = [self.ds, self.bindless_set];
         unsafe {
             device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pl.pipeline);
             device.cmd_bind_descriptor_sets(cmd, vk::PipelineBindPoint::COMPUTE, pl.layout,
-                0, std::slice::from_ref(&self.ds), &[]);
+                0, &sets, &[]);
         }
 
         // Pack reset into params.w bit 31

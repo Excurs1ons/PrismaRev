@@ -1,15 +1,41 @@
-// Path integrator — shared multi-bounce path tracing core.
+// Path integrator - shared multi-bounce path tracing core.
 //
-// Slang module imported by GI bakers, offline renderers, lightmap bakers,
-// and any other consumer that needs physically-based multi-bounce radiance.
+// Slang module imported by GI bakers, offline renderers, and the real-time PT
+// pass. It only computes the radiance arriving at a point from a given
+// direction by tracing paths through the scene. Consumers decide what to do
+// with that radiance (SH projection, pixel color, ...).
 //
-// The module is producer-agnostic: it only computes the radiance arriving at a
-// point from a given direction by tracing paths through the scene. Consumers
-// decide what to do with that radiance (SH projection, pixel color, etc.).
-//
-// This replaces the old single-bounce + SKY_AMBIENT approach with proper
-// path-traced multi-bounce using Russian-roulette termination.
+// Geometry + materials are module-global bindings (so `TraceRadiance`'s
+// signature stays small): one combined vertex/index buffer, one TLAS, a
+// per-instance metadata SSBO (`PtInstanceMeta[]`), and the shared
+// `GpuMaterial[]` SSBO + bindless texture table. Albedo is resolved at the ray
+// hit exactly like the rasterizer: instance index -> material slot -> material
+// -> albedo texture (if bound) else scalar base color.
 module path_integrator;
+
+// ---- Vertex layout constants (shared by all consumers) ----
+// Matches prism-render `mesh::Vertex`, repr(C), 60 bytes.
+public static const uint VERTEX_STRIDE   = 60u;
+public static const uint POSITION_OFFSET = 0u;
+public static const uint NORMAL_OFFSET   = 12u;
+public static const uint UV_OFFSET       = 36u;
+
+// ---- Descriptor bindings (consumers must declare the same sets) ----
+// Set 0: per-consumer local bindings. b0..b5 are consumer-specific (accum/
+// output images, TLAS, vertex/index buffers). b6 + b7 are shared here:
+[[vk::binding(6, 0)]]
+StructuredBuffer<PtInstanceMeta> instance_meta; // per-instance material slot + bases
+
+[[vk::binding(7, 0)]]
+StructuredBuffer<GpuMaterial> materials; // shared material SSBO
+
+// Set 1: bindless texture table (shared with the rasterizer).
+[[vk::binding(0, 1)]]
+SamplerState globalSamplers[];
+[[vk::binding(1, 1)]]
+Texture2D bindlessSrvs[];
+
+static const uint SAMPLER_LINEAR_WRAP = 0u;
 
 // ---- Pseudo-random number generation (Wang hash) ----
 // Deterministic hash-based RNG seeded by the caller. Each call advances the
@@ -56,35 +82,92 @@ public float3 cosine_hemisphere_sample(float3 n, float u1, float u2)
 
 // ---- Procedural sky radiance ----
 // Bright blue sky above (zenith), hazy horizon, dark ground below.
-// Matches the sky model in the original baker (but without SKY_SCALE, since
-// multi-bounce naturally carries sky energy through the bounce chain).
 public float3 sky_radiance(float3 dir)
 {
     float t = clamp(dir.y, 0.0, 1.0);
     return lerp(float3(0.55, 0.60, 0.65), float3(0.25, 0.45, 0.90), t);
 }
 
-// ---- Vertex layout constants (shared by all consumers) ----
-// Matches prism-render `mesh::Vertex`, repr(C), 56 bytes.
-public static const uint VERTEX_STRIDE   = 60u;
-public static const uint POSITION_OFFSET = 0u;
-public static const uint COLOR_OFFSET    = 24u;
+// ---- Per-instance metadata (mirrors `PtInstanceMeta` in pt_pass.rs) ----
+struct PtInstanceMeta
+{
+    uint material_slot;  // index into `materials[]`
+    uint index_base;     // base index into the combined index buffer
+    uint vertex_base;    // base vertex into the combined vertex buffer
+    uint _pad;
+};
+
+// ---- GpuMaterial (mirrors scene_frag.slang / GpuMaterial, 96 bytes) ----
+struct GpuMaterial
+{
+    float4 base_color;                  // offset 0
+    float4 metallic_roughness_emissive; // offset 16: x=metallic, y=roughness, z=emissive, w=emissive_strength
+    uint   albedo_idx;                  // offset 32
+    uint   normal_idx;                  // offset 36
+    uint   metallic_roughness_idx;      // offset 40
+    uint   emissive_idx;                // offset 44
+    float4 transmission_factor;         // offset 48
+    float4 clearcoat;                   // offset 64
+    uint   transmission_tex_idx;        // offset 80
+    uint   occlusion_idx;               // offset 84
+    float  normal_scale;                // offset 88
+    float  occlusion_strength;          // offset 92
+};
+
+// ---- Read the three vertices of a hit triangle ----
+// `instance_id` is the TLAS instanceCustomIndex (= PtInstanceMeta index);
+// `prim_idx` is the primitive index within that instance's BLAS. Returns the
+// triangle's three positions and UVs via out-params.
+public void read_hit_triangle(
+    uint instance_id, uint prim_idx,
+    ByteAddressBuffer vertexData, StructuredBuffer<uint> indices,
+    out float3 v0, out float3 v1, out float3 v2,
+    out float2 uv0, out float2 uv1, out float2 uv2)
+{
+    PtInstanceMeta meta = instance_meta[instance_id];
+    uint i0 = indices[meta.index_base + prim_idx * 3 + 0];
+    uint i1 = indices[meta.index_base + prim_idx * 3 + 1];
+    uint i2 = indices[meta.index_base + prim_idx * 3 + 2];
+
+    // Vertex addresses are absolute (combined buffer), so no +vertex_base
+    // needed on the byte offset - the stored indices already index the
+    // combined buffer (remapped at flatten time). But the byte offset uses
+    // the vertex's position within the combined buffer directly.
+    v0 = asfloat(vertexData.Load3(i0 * VERTEX_STRIDE + POSITION_OFFSET));
+    v1 = asfloat(vertexData.Load3(i1 * VERTEX_STRIDE + POSITION_OFFSET));
+    v2 = asfloat(vertexData.Load3(i2 * VERTEX_STRIDE + POSITION_OFFSET));
+    uv0 = asfloat(vertexData.Load2(i0 * VERTEX_STRIDE + UV_OFFSET));
+    uv1 = asfloat(vertexData.Load2(i1 * VERTEX_STRIDE + UV_OFFSET));
+    uv2 = asfloat(vertexData.Load2(i2 * VERTEX_STRIDE + UV_OFFSET));
+}
+
+// ---- Resolve the hit surface albedo ----
+// Mirrors scene_frag.slang: prefer the albedo texture (if bound), else the
+// scalar base color factor. `uv` is the interpolated hit UV. Uses SampleLevel
+// (mip 0) because RayQuery has no derivatives.
+float3 resolve_albedo(GpuMaterial mat, float2 uv)
+{
+    if (mat.albedo_idx != 0xFFFFFFFFu)
+    {
+        float3 sampled = bindlessSrvs[NonUniformResourceIndex(mat.albedo_idx)]
+            .SampleLevel(globalSamplers[NonUniformResourceIndex(SAMPLER_LINEAR_WRAP)], uv, 0.0).rgb;
+        return sampled * mat.base_color.rgb;
+    }
+    return mat.base_color.rgb;
+}
 
 // ---- Core path tracing function ----
 // Trace a path starting from `origin` in direction `dir`, accumulating
 // direct-sun bounces through up to `max_bounce` diffuse inter-reflections
-// with Russian-roulette termination.
+// with Russian-roulette termination. Geometry/materials are module globals.
 //
 // Parameters:
-//   origin     — world-space ray origin (probe position or camera)
-//   dir        — unit direction of the ray
-//   tlas       — top-level acceleration structure
-//   vertexData — ByteAddressBuffer of interleaved Vertex (56-byte stride)
-//   indices    — triangle index buffer
-//   light_dir  — unit direction TO the directional light (sun)
-//   light_color— radiance of the directional light
-//   max_bounce — maximum path depth (1 = only direct sun at first hit)
-//   seed       — inout RNG seed (per-path, advanced on each random call)
+//   origin     - world-space ray origin (probe position or camera)
+//   dir        - unit direction of the ray
+//   light_dir  - unit direction TO the directional light (sun)
+//   light_color- radiance of the directional light
+//   max_bounce - maximum path depth (1 = only direct sun at first hit)
+//   seed       - inout RNG seed (per-path, advanced on each random call)
 //
 // Returns the total radiance arriving at `origin` from direction `dir`.
 public float3 TraceRadiance(
@@ -118,27 +201,18 @@ public float3 TraceRadiance(
 
         if (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
         {
-            // Read hit surface data.
+            // Instance index -> per-instance metadata -> material slot.
+            uint instance_id = q.CommittedInstanceID();
             uint prim_idx = q.CommittedPrimitiveIndex();
-            uint i0 = indices[prim_idx * 3 + 0];
-            uint i1 = indices[prim_idx * 3 + 1];
-            uint i2 = indices[prim_idx * 3 + 2];
 
-            float3 v0 = asfloat(vertexData.Load3(i0 * VERTEX_STRIDE + POSITION_OFFSET));
-            float3 v1 = asfloat(vertexData.Load3(i1 * VERTEX_STRIDE + POSITION_OFFSET));
-            float3 v2 = asfloat(vertexData.Load3(i2 * VERTEX_STRIDE + POSITION_OFFSET));
+            float3 v0, v1, v2;
+            float2 uv0, uv1, uv2;
+            read_hit_triangle(instance_id, prim_idx, vertexData, indices,
+                v0, v1, v2, uv0, uv1, uv2);
 
             float2 bary = q.CommittedTriangleBarycentrics();
             float w0 = 1.0 - bary.x - bary.y;
-            float3 c0 = asfloat(vertexData.Load3(i0 * VERTEX_STRIDE + COLOR_OFFSET));
-            float3 c1 = asfloat(vertexData.Load3(i1 * VERTEX_STRIDE + COLOR_OFFSET));
-            float3 c2 = asfloat(vertexData.Load3(i2 * VERTEX_STRIDE + COLOR_OFFSET));
-            float3 hit_albedo = w0 * c0 + bary.x * c1 + bary.y * c2;
-
-            // Validate barycentric reconstruction against hit point.
-            float3 recon = w0 * v0 + bary.x * v1 + bary.y * v2;
             float3 hit_pos = pos + dir * q.CommittedRayT();
-            hit_albedo *= step(length(recon - hit_pos), 0.5);
 
             // Geometric normal from winding. Flip to face the incoming ray.
             float3 edge1 = v1 - v0;
@@ -150,6 +224,12 @@ public float3 TraceRadiance(
             hit_normal = hit_normal * rsqrt(tri_area2);
             if (dot(hit_normal, dir) > 0.0)
                 hit_normal = -hit_normal;
+
+            // Resolve albedo from the hit material (texture or scalar).
+            PtInstanceMeta meta = instance_meta[instance_id];
+            GpuMaterial mat = materials[meta.material_slot];
+            float2 hit_uv = w0 * uv0 + bary.x * uv1 + bary.y * uv2;
+            float3 hit_albedo = resolve_albedo(mat, hit_uv);
 
             // Direct sun contribution at this bounce.
             float ndotl = max(dot(hit_normal, light_dir), 0.0);

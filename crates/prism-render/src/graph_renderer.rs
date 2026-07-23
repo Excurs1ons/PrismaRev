@@ -474,6 +474,19 @@ impl GraphRenderer {
         &self.mesh_manager
     }
 
+    /// Read-only access to the texture manager (owns the bindless texture
+    /// table). Used by the path-trace pass wiring to fetch the shared bindless
+    /// descriptor set + layout.
+    pub fn texture_manager(&self) -> &RenderTextureManager {
+        &self.texture_manager
+    }
+
+    /// Read-only access to the material manager (owns the `GpuMaterial[]`
+    /// SSBO). Used by the path-trace pass to bind the materials SSBO.
+    pub fn material_manager(&self) -> &RenderMaterialManager {
+        &self.material_manager
+    }
+
     /// Camera exposure multiplier (scales all light radiance pre-tonemap).
     pub fn exposure(&self) -> f32 {
         self.settings.exposure

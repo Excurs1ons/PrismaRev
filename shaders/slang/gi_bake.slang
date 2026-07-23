@@ -68,7 +68,7 @@ ConstantBuffer<ProbeVolumeInfo> probeInfo;
 RaytracingAccelerationStructure tlas;
 
 [[vk::binding(3, 0)]]
-ByteAddressBuffer vertexData;   // interleaved mesh::Vertex (56-byte stride)
+ByteAddressBuffer vertexData;   // interleaved mesh::Vertex (60-byte stride)
 
 [[vk::binding(4, 0)]]
 StructuredBuffer<uint> indices;
@@ -149,14 +149,16 @@ void bakeMain(uint3 tid : SV_DispatchThreadID)
             {
                 first_hit_count++;
 
+                // Resolve the hit triangle via the shared helper (uses
+                // instance_meta + CommittedInstanceID, so per-instance BLAS
+                // primitive indices resolve to the correct combined-buffer
+                // vertices).
+                uint instance_id = q.CommittedInstanceID();
                 uint prim_idx = q.CommittedPrimitiveIndex();
-                uint i0 = indices[prim_idx * 3 + 0];
-                uint i1 = indices[prim_idx * 3 + 1];
-                uint i2 = indices[prim_idx * 3 + 2];
-
-                float3 v0 = asfloat(vertexData.Load3(i0 * VERTEX_STRIDE + POSITION_OFFSET));
-                float3 v1 = asfloat(vertexData.Load3(i1 * VERTEX_STRIDE + POSITION_OFFSET));
-                float3 v2 = asfloat(vertexData.Load3(i2 * VERTEX_STRIDE + POSITION_OFFSET));
+                float3 v0, v1, v2;
+                float2 uv0, uv1, uv2;
+                read_hit_triangle(instance_id, prim_idx, vertexData, indices,
+                    v0, v1, v2, uv0, uv1, uv2);
 
                 float3 edge1 = v1 - v0;
                 float3 edge2 = v2 - v0;

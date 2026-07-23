@@ -35,11 +35,6 @@ impl BlasEntry {
         mesh: &Mesh,
     ) -> anyhow::Result<Self> {
         let device = &context.device;
-        let as_fn = context
-            .acceleration_structure_fn
-            .as_ref()
-            .context("acceleration structure extension not enabled")?;
-
         let vertex_addr = mesh.vertex_buffer_device_address(device);
         let index_addr = mesh.index_buffer_device_address(device);
         let tri_count = if mesh.index_count > 0 {
@@ -47,6 +42,59 @@ impl BlasEntry {
         } else {
             mesh.vertex_count / 3
         };
+        Self::build_impl(
+            context,
+            command_pool,
+            vertex_addr,
+            index_addr,
+            mesh.vertex_count,
+            tri_count,
+        )
+    }
+
+    /// Build a BLAS pointing at a **slice** of a combined vertex/index buffer.
+    ///
+    /// `vertex_addr` / `index_addr` are the device addresses of this instance's
+    /// vertex/index range (already offset into the combined buffer), and
+    /// `vertex_count` / `tri_count` bound it. Used by `PathTracePass` to build
+    /// one BLAS per scene instance while keeping a single merged vertex/index
+    /// buffer for shader-side `ByteAddressBuffer` reads.
+    pub fn build_at(
+        context: &VulkanContext,
+        command_pool: vk::CommandPool,
+        vertex_addr: vk::DeviceAddress,
+        index_addr: vk::DeviceAddress,
+        vertex_count: u32,
+        index_count: u32,
+    ) -> anyhow::Result<Self> {
+        let tri_count = if index_count > 0 {
+            index_count / 3
+        } else {
+            vertex_count / 3
+        };
+        Self::build_impl(
+            context,
+            command_pool,
+            vertex_addr,
+            index_addr,
+            vertex_count,
+            tri_count,
+        )
+    }
+
+    fn build_impl(
+        context: &VulkanContext,
+        command_pool: vk::CommandPool,
+        vertex_addr: vk::DeviceAddress,
+        index_addr: vk::DeviceAddress,
+        vertex_count: u32,
+        tri_count: u32,
+    ) -> anyhow::Result<Self> {
+        let device = &context.device;
+        let as_fn = context
+            .acceleration_structure_fn
+            .as_ref()
+            .context("acceleration structure extension not enabled")?;
 
         let geom = vk::AccelerationStructureGeometryKHR::default()
             .geometry_type(vk::GeometryTypeKHR::TRIANGLES)
@@ -57,7 +105,7 @@ impl BlasEntry {
                         device_address: vertex_addr,
                     },
                     vertex_stride: std::mem::size_of::<crate::mesh::Vertex>() as vk::DeviceSize,
-                    max_vertex: mesh.vertex_count.saturating_sub(1),
+                    max_vertex: vertex_count.saturating_sub(1),
                     index_type: if index_addr != 0 {
                         vk::IndexType::UINT32
                     } else {
@@ -89,7 +137,7 @@ impl BlasEntry {
             tri_count,
             size_info.acceleration_structure_size,
             size_info.build_scratch_size,
-            mesh.vertex_count,
+            vertex_count,
             vertex_addr,
             index_addr,
         );
@@ -240,13 +288,23 @@ impl Tlas {
             MemoryProperties::HOST_VISIBLE | MemoryProperties::HOST_COHERENT,
         )?;
 
+        // Pair each instance with its BLAS address by array position. We do NOT
+        // use `inst.custom_index` to index `blas_addresses` - that field is
+        // reserved for shader-visible per-instance data (e.g. a material slot),
+        // so it must stay decoupled from the BLAS-address array position.
+        // Callers must pass `blas_addresses.len() == instances.len()`; a
+        // missing entry falls back to address 0 (produces no hits for that
+        // instance - safe, just invisible).
+        anyhow::ensure!(
+            blas_addresses.len() == instances.len(),
+            "Tlas::build: blas_addresses.len() ({}) != instances.len() ({})",
+            blas_addresses.len(),
+            instances.len(),
+        );
         let packed: Vec<vk::AccelerationStructureInstanceKHR> = instances
             .iter()
-            .map(|inst| {
-                let blas_addr = blas_addresses
-                    .get(inst.custom_index as usize)
-                    .copied()
-                    .unwrap_or(0);
+            .zip(blas_addresses.iter())
+            .map(|(inst, &blas_addr)| {
                 vk::AccelerationStructureInstanceKHR {
                     transform: vk::TransformMatrixKHR {
                         matrix: inst.transform,
@@ -416,6 +474,10 @@ impl Tlas {
 
 impl Drop for Tlas {
     fn drop(&mut self) {
+        // `Default`-constructed (null) TLAS instances are safe to drop.
+        if self.handle == vk::AccelerationStructureKHR::null() {
+            return;
+        }
         unsafe {
             self.as_fn.destroy_acceleration_structure(self.handle, None);
             self.device.destroy_buffer(self.buffer, None);

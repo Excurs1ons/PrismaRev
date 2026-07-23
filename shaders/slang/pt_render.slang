@@ -1,7 +1,7 @@
-// Real-time path-tracing renderer — compute shader with temporal accumulation.
+// Real-time path-tracing renderer - compute shader with temporal accumulation.
 //
 // Each frame traces ONE sample per pixel and accumulates the result across
-// frames (1 sample/frame → noise converges over time). The accumulation
+// frames (1 sample/frame -> noise converges over time). The accumulation
 // buffer is reset when the camera moves or the user requests it.
 //
 // Dispatch: ((width+15)/16, (height+15)/16, 1) with numthreads(16,16,1).
@@ -9,13 +9,26 @@
 //
 // Output: The accumulated radiance divided by sample count is written to
 // the output image (PT_COLOR_H in the render graph), which PostPass tonemaps.
+//
+// Bindings:
+//   set 0 (PT-local):
+//     b0 RWTexture2D<float4> accumImage
+//     b1 RWTexture2D<uint>   sampleCount
+//     b2 AccelerationStructure tlas
+//     b3 ByteAddressBuffer vertexData (combined world-space vertices)
+//     b4 StructuredBuffer<uint> indices (combined index buffer)
+//     b5 RWTexture2D<float4> outputImage
+//     b6 StructuredBuffer<PtInstanceMeta> instance_meta (module-global)
+//     b7 StructuredBuffer<GpuMaterial> materials (module-global)
+//   set 1 (shared bindless): globalSamplers[] + bindlessSrvs[] (module-global)
+// The b6/b7 + set 1 bindings are declared in path_integrator.slang (imported).
 
 import path_integrator;
 
 // ---- Push constants ----
 struct PtPush
 {
-    float4x4 inv_view_proj;  // NDC [-1,1]^2 (y-flipped, depth [0,1]) → world
+    float4x4 inv_view_proj;  // NDC [-1,1]^2 (y-flipped, depth [0,1]) -> world
     float4   camera_pos;     // .w unused
     float4   light_dir;      // xyz = dir TO light, w = pre-scaled radiance
     uint4    params;         // x = width, y = height, z = max_bounce, w = packed(frame_count|reset<<31)
@@ -53,7 +66,7 @@ void generate_ray(uint px, uint py, float jx, float jy,
     uint w = push.params.x;
     uint h = push.params.y;
 
-    // Pixel center + jitter → NDC [-1, 1]^2 (y-flipped: -1=top, +1=bottom)
+    // Pixel center + jitter -> NDC [-1, 1]^2 (y-flipped: -1=top, +1=bottom)
     float ndc_x = ((float(px) + 0.5 + jx) / float(w)) * 2.0 - 1.0;
     float ndc_y = ((float(py) + 0.5 + jy) / float(h)) * 2.0 - 1.0;
 

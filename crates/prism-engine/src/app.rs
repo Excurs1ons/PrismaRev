@@ -808,37 +808,55 @@ impl App {
 
         self.scene_loaded = true;
 
-        // 7. Upload flattened world-space geometry to the real-time PT pass.
-        // The PT pass builds its own BLAS/TLAS from this geometry (constant —
-        // no per-frame rebuild needed for static scenes).
+        // 7. Upload per-instance world-space geometry to the real-time PT pass.
+        // The PT pass builds a per-instance BLAS + one TLAS whose
+        // `instanceCustomIndex` carries the instance index (looked up in the
+        // shader to fetch the per-instance material slot). Each instance keeps
+        // its material slot so the path tracer can sample the correct albedo
+        // texture at the hit point (Sponza has many materials).
         {
             // Extract these BEFORE the mutable borrow on `renderer` to avoid
             // borrow conflicts with graph_mut().
             let ctx = renderer.context_arc();
             let cmd_pool = renderer.command_pool();
+            // Bindless set + materials SSBO (shared with the rasterizer).
+            let bindless_set = renderer.texture_manager().bindless().set;
+            let bindless_layout = renderer.texture_manager().bindless().layout;
+            let materials_buffer = renderer.material_manager().buffer();
             if let Some(pt_pass) = renderer.graph_mut().pass_mut::<PathTracePass>() {
+                // Wire the shared material SSBO + bindless texture table so the
+                // path tracer can do `materials[slot]` + `bindlessSrvs[idx]`
+                // exactly like scene_frag.slang.
+                pt_pass.set_material_resources(materials_buffer, bindless_set, bindless_layout);
+
                 let t_pt = std::time::Instant::now();
-                match prism_render::bake_common::flatten_from_store(&self.scene_store) {
-                    Ok((verts, indices, _min, _max)) => {
-                        if let Err(e) = pt_pass.set_geometry(ctx.as_ref(), cmd_pool, &verts, &indices) {
+                match prism_render::bake_common::flatten_instances_from_store(
+                    &self.scene_store,
+                    &self.mat_map,
+                ) {
+                    Ok(instances) => {
+                        let n_inst = instances.len();
+                        if let Err(e) =
+                            pt_pass.set_geometry(ctx.as_ref(), cmd_pool, &instances)
+                        {
                             log::warn!("PathTracePass::set_geometry failed: {e}");
                         } else {
                             log::info!(
-                                "PT geometry: {} verts, {} indices, {}ms",
-                                verts.len(),
-                                indices.len(),
+                                "PT geometry: {} instances, {}ms",
+                                n_inst,
                                 t_pt.elapsed().as_millis()
                             );
                         }
                     }
                     Err(e) => {
-                        log::warn!("flatten_from_store failed (PT disabled): {e}");
+                        log::warn!("flatten_instances_from_store failed (PT disabled): {e}");
                     }
                 }
             } else {
-                log::warn!("PathTracePass not found in graph — PT unavailable");
+                log::warn!("PathTracePass not found in graph - PT unavailable");
             }
         }
+
 
         // Replace the synthetic sky probe field with real baked GI if a
         // `.bin` exists (produced by `prism-bake-gi`). Missing/mismatched file
