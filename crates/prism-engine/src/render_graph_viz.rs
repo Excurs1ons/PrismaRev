@@ -115,6 +115,13 @@ impl RenderGraphViz {
                     d.notes.push("writes swapchain (not a graph resource)".into());
                 }
             }
+            PassKind::Pt => {
+                // PathTracePass has no tracked metadata we can cheaply read
+                // via pass_ref (its fields are mostly Vulkan handles). Show
+                // a placeholder note so the pass appears in the graph.
+                d.notes.push("real-time PT compute (1 sample/frame)".into());
+                d.notes.push("temporal accumulation".into());
+            }
             PassKind::Unknown => {}
         }
         d
@@ -485,13 +492,15 @@ fn edge_label(
 
 /// Name a well-known resource handle; fall back to its numeric id.
 fn handle_name(h: ResourceHandle) -> String {
-    use prism_render::render_graph::{SCENE_COLOR_H, SCENE_DEPTH_H, SCENE_NORMAL_H};
+    use prism_render::render_graph::{PT_COLOR_H, SCENE_COLOR_H, SCENE_DEPTH_H, SCENE_NORMAL_H};
     if h == SCENE_DEPTH_H {
         "scene depth".into()
     } else if h == SCENE_NORMAL_H {
         "scene normal".into()
     } else if h == SCENE_COLOR_H {
         "scene color (HDR)".into()
+    } else if h == PT_COLOR_H {
+        "PT output color".into()
     } else {
         format!("handle {}", h.0)
     }
@@ -504,6 +513,7 @@ fn node_color(kind: PassKind) -> Color32 {
         PassKind::Scene => Color32::from_rgb(120, 180, 240),
         PassKind::Gtao => Color32::from_rgb(180, 140, 220),
         PassKind::Post => Color32::from_rgb(120, 220, 180),
+        PassKind::Pt => Color32::from_rgb(240, 200, 80),
         PassKind::Unknown => Color32::from_gray(160),
     }
 }

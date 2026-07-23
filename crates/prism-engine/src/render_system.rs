@@ -14,10 +14,16 @@
 use std::sync::Mutex;
 
 use prism_ecs::World;
-use prism_render::{DrawItem, FrameUBOData, GpuLight, GraphRenderer, Mesh, SceneDrawItem};
+use prism_render::{DrawItem, FrameUBOData, GpuLight, GraphRenderer, Mesh, RenderMode};
 
 use crate::camera::Camera;
 use crate::dirty_router::DirtyRouter;
+
+/// Pre-scale factor that replaces the old GPU-side `exposure / PI` unit
+/// conversion. Lux (or candela) is multiplied by this on the CPU so the shader
+/// receives effective radiance directly. `exposure` then becomes a pure
+/// brightness multiplier applied to the final composed HDR color.
+const LUX_TO_RADIANCE_SCALE: f32 = 1.0 / (10_000.0 * std::f32::consts::PI);
 
 /// Module-level [`DirtyRouter`] that persists across frames.
 ///
@@ -125,6 +131,21 @@ impl Default for PbrMaterial {
     }
 }
 
+/// A scene object that can be rendered: mesh + material + world transform.
+///
+/// Spawned as an ECS entity by [`load_demo_scene`] in place of the old flat
+/// `Vec<SceneDrawItem>`, so scene geometry lives in the ECS world and can be
+/// queried/manipulated like any other entity.
+#[derive(Debug, Clone)]
+pub struct RenderInstance {
+    /// Render-side mesh handle (from `RenderMeshManager`).
+    pub mesh: prism_render::managers::MeshHandle,
+    /// Index into the material SSBO.
+    pub material_slot: u32,
+    /// Column-major 4×4 world transform from the glTF instance.
+    pub model: [[f32; 4]; 4],
+}
+
 /// Index into an externally-owned list of GPU meshes.
 #[derive(Debug, Clone, Copy)]
 pub struct MeshHandle(pub usize);
@@ -157,13 +178,13 @@ impl Default for DirectionalLight {
     fn default() -> Self {
         // pitch=45°, yaw=-45°, roll=0° - matches the pre-refactor hard-coded
         // direction [-1, 1, 0] (upper-left, 45° diagonal in the XY plane).
-        // intensity = 100k lux (bright daylight); ambient = 0.3 for a moderate
-        // IBL contribution.
+        // intensity = 100k lux (bright daylight); ambient = 1.0 so IBL
+        // energy is at full strength (no artificial dimming).
         Self {
             euler_xyz: [45.0, -45.0, 0.0],
             intensity: 100_000.0,
             color: [1.0, 1.0, 1.0],
-            ambient: 0.3,
+            ambient: 1.0,
         }
     }
 }
@@ -323,11 +344,13 @@ fn collect_scene_changes(
     renderer: &GraphRenderer,
 ) -> anyhow::Result<SceneChanges> {
     // Fallback light values for empty worlds (no DirectionalLight entity).
+    // The w component (intensity) is pre-scaled by LUX_TO_RADIANCE_SCALE so
+    // the shader receives effective radiance directly.
     let fallback_dir = [
         -std::f32::consts::FRAC_1_SQRT_2,
         std::f32::consts::FRAC_1_SQRT_2,
         0.0,
-        3.0,
+        3.0 * LUX_TO_RADIANCE_SCALE,
     ];
     let fallback_col = [1.0, 1.0, 1.0, 1.0];
 
@@ -354,13 +377,15 @@ fn collect_scene_changes(
     let proj32 = projection[3][2];
     let _ = projection;
 
-    // 2. Directional light (first entity).
+    // 2. Directional light (first entity). The intensity is pre-scaled by
+    //    LUX_TO_RADIANCE_SCALE so the shader receives effective radiance and
+    //    `exposure` is a pure post-composition multiplier.
     let light_direction = world
         .query::<DirectionalLight>()
         .next()
         .map(|(_, l)| {
             let d = euler_xyz_deg_to_dir(l.euler_xyz);
-            [d[0], d[1], d[2], l.intensity]
+            [d[0], d[1], d[2], l.intensity * LUX_TO_RADIANCE_SCALE]
         })
         .unwrap_or(fallback_dir);
     let light_color = world
@@ -381,10 +406,12 @@ fn collect_scene_changes(
             .unwrap_or(pl.position);
         lights.push(GpuLight {
             position: [pos[0], pos[1], pos[2], pl.range],
+            // Pre-scale by the same lux-to-radiance factor so the shader
+            // receives effective radiance directly (no exposure in light math).
             color: [
-                pl.color[0] * pl.intensity,
-                pl.color[1] * pl.intensity,
-                pl.color[2] * pl.intensity,
+                pl.color[0] * pl.intensity * LUX_TO_RADIANCE_SCALE,
+                pl.color[1] * pl.intensity * LUX_TO_RADIANCE_SCALE,
+                pl.color[2] * pl.intensity * LUX_TO_RADIANCE_SCALE,
                 1.0,
             ],
         });
@@ -436,7 +463,8 @@ pub fn render_system(
     show_ui: bool,
     tonemap_mode: u32,
     debug_rt: u32,
-    scene_draw_items: &[SceneDrawItem],
+    render_mode: RenderMode,
+    pt_max_bounces: u32,
 ) -> anyhow::Result<()> {
     // 1. Collect per-frame scene state from the ECS world (camera, lights).
     let scene = collect_scene_changes(world, renderer)?;
@@ -482,15 +510,15 @@ pub fn render_system(
         _pad3: 0.0,
     };
 
-    // 3. Build the flat draw list from the loaded glTF scene.
-    let mut draw_items: Vec<DrawItem> = Vec::new();
-    for item in scene_draw_items {
-        draw_items.push(DrawItem {
-            mesh: item.mesh,
-            model: item.model,
-            material: Some(item.material_slot),
-        });
-    }
+    // 3. Build the flat draw list from ECS entities with RenderInstance.
+    let draw_items: Vec<DrawItem> = world
+        .query::<RenderInstance>()
+        .map(|(_, inst)| DrawItem {
+            mesh: inst.mesh,
+            model: inst.model,
+            material: Some(inst.material_slot),
+        })
+        .collect();
 
     // 4. Drive the render-graph phase API (begin_frame → execute → present).
     let ctx = match renderer.begin_frame()? {
@@ -510,6 +538,8 @@ pub fn render_system(
         proj22,
         proj32,
         lights: &lights,
+        render_mode,
+        pt_max_bounces,
     };
     renderer
         .execute(&ctx, &input)

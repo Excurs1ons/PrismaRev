@@ -41,6 +41,10 @@ pub struct ResourceHandle(pub u32);
 pub const SCENE_DEPTH_H: ResourceHandle = ResourceHandle(1000);
 pub const SCENE_NORMAL_H: ResourceHandle = ResourceHandle(1001);
 pub const SCENE_COLOR_H: ResourceHandle = ResourceHandle(1002);
+/// PT (path tracing) output color — replaces SCENE_COLOR_H when
+/// `RenderSettings.render_mode == PathTrace`. Written by PathTracePass
+/// as a storage+sampled image, read by PostPass for tonemapping.
+pub const PT_COLOR_H: ResourceHandle = ResourceHandle(1003);
 
 impl ResourceHandle {
     pub const INVALID: ResourceHandle = ResourceHandle(u32::MAX);
@@ -130,6 +134,16 @@ impl ResourceLifecycle {
 // `RenderPassNode::graph_info`, cloned once per frame, and consumed by the UI.
 // ---------------------------------------------------------------------------
 
+/// Render mode selector — full rasterized PBR vs real-time path tracing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum RenderMode {
+    /// Standard rasterized PBR pipeline (ScenePass + ShadowMap + GTAO + Post).
+    #[default]
+    Raster,
+    /// Real-time path tracing (PathTracePass compute + Post).
+    PathTrace,
+}
+
 /// Coarse classification of a pass for visualization (coloring / iconography).
 /// Kept in sync with the concrete pass structs that override `graph_info`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -142,6 +156,8 @@ pub enum PassKind {
     Gtao,
     /// Fullscreen tonemap / present (`PostPass`).
     Post,
+    /// Real-time path tracing compute pass (`PathTracePass`).
+    Pt,
     /// Unrecognized pass (future / experimental).
     #[default]
     Unknown,
@@ -239,18 +255,26 @@ pub struct RenderSettings {
     /// units (lux / candela) while controlling final image brightness.
     /// Default 1/10000 scales 100k lux daylight to a reasonable HDR range.
     pub exposure: f32,
+
+    /// Render mode: Raster (PBR) or PathTrace (real-time PT).
+    pub render_mode: RenderMode,
+
+    /// Maximum path depth (bounces) for path tracing.
+    pub pt_max_bounces: u32,
 }
 
 impl Default for RenderSettings {
     fn default() -> Self {
         Self {
-            gbuffer_high_precision: true, // P0 default: world-space normal in GBuffer A needs Rgba16F (Plan §4.3)
-            ray_tracing_enabled: false,   // off by default
-            ray_query_resolution_scale: 0.5, // half-res default
-            sharc_capacity: 1 << 20,      // 1M slots (mobile budget)
+            gbuffer_high_precision: true,
+            ray_tracing_enabled: false,
+            ray_query_resolution_scale: 0.5,
+            sharc_capacity: 1 << 20,
             sharc_scene_scale: 1.0,
-            shadow_mode: ShadowMode::Auto, // adapt to hardware
-            exposure: 1.0 / 10_000.0, // 100k lux daylight -> ~10 radiance pre-tonemap
+            shadow_mode: ShadowMode::Auto,
+            exposure: 1.0,
+            render_mode: RenderMode::Raster,
+            pt_max_bounces: 3,
         }
     }
 }
@@ -357,6 +381,16 @@ pub struct GraphFrame<'a> {
     /// (mirroring `ScenePass::ensure_target`), instead of relying on
     /// `GraphRenderer` to call `set_target` every frame.
     pub swapchain_views: &'a [vk::ImageView],
+    /// Active render mode (Raster vs PathTrace). Passes check this to decide
+    /// whether to run (ScenePass skips in PT mode, PathTracePass skips in
+    /// Raster mode).
+    pub render_mode: RenderMode,
+    /// Path tracing max bounces.
+    pub pt_max_bounces: u32,
+    /// Camera world-space position [x, y, z, light_count] from the frame UBO.
+    pub camera_pos: [f32; 4],
+    /// Light direction [x, y, z, intensity] from the frame UBO.
+    pub light_dir: [f32; 4],
 }
 
 /// Context passed to each pass's `execute`.
@@ -1162,7 +1196,9 @@ impl RenderGraph {
                             height: extent.height,
                         },
                         vk::SampleCountFlags::TYPE_1,
-                        vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_DST,
+                        vk::ImageUsageFlags::STORAGE
+                            | vk::ImageUsageFlags::TRANSFER_DST
+                            | vk::ImageUsageFlags::SAMPLED,
                         false, // storage images can't be lazy
                     )?;
                     res.image = Some(image);

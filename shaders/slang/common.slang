@@ -15,7 +15,7 @@ public struct FrameUBO
 {
     public float4x4 viewProj;        // offset   0
     public float4   cameraPosition;  // offset  64  (xyz = camera pos, w = point light count)
-    public float4   lightDirection;  // offset  80  (xyz = dir TO light, w = illuminance in lux)
+    public float4   lightDirection;  // offset  80  (xyz = dir TO light, w = pre-scaled radiance = lux/(10000*PI))
     public float4   lightColor;      // offset  96  (rgb = color, w = ambient factor)
     public float4x4 view;            // offset 112  (world -> view)
     public float4x4 lightViewProj;   // offset 176  (light-space VP for shadow map)

@@ -15,5 +15,6 @@ pub mod scene_state;
 
 pub use app::App;
 pub use render_system::{
-    render_system, DirectionalLight, MeshHandle, MeshManager, PbrMaterial, PointLight, Transform,
+    render_system, DirectionalLight, MeshHandle, MeshManager, PbrMaterial, PointLight,
+    RenderInstance, Transform,
 };

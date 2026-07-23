@@ -30,8 +30,9 @@ use ash::vk;
 use crate::context::VulkanContext;
 use crate::pipeline::{GraphicsPipeline, PipelineDesc};
 use crate::render_graph::{
-    GraphResources, PassInfo, PassKind, RenderContext, RenderGraphBuilder, RenderPassNode,
-    RenderSettings, ResourceUsage, SCENE_COLOR_H, SCENE_DEPTH_H, SCENE_NORMAL_H,
+    GraphResources, PassInfo, PassKind, PT_COLOR_H, RenderContext, RenderGraphBuilder,
+    RenderMode, RenderPassNode, RenderSettings, ResourceUsage, SCENE_COLOR_H, SCENE_DEPTH_H,
+    SCENE_NORMAL_H,
 };
 use crate::render_pass::find_memory_type;
 use crate::shader;
@@ -508,6 +509,14 @@ impl RenderPassNode for PostPass {
             stage: vk::PipelineStageFlags::FRAGMENT_SHADER,
             layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
         });
+        // PT output color (read in path-trace mode). Declare unconditionally
+        // so the graph reserves the barrier slot even when in raster mode.
+        graph.read_usage(ResourceUsage {
+            handle: PT_COLOR_H,
+            access: vk::AccessFlags::SHADER_READ,
+            stage: vk::PipelineStageFlags::FRAGMENT_SHADER,
+            layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+        });
         // Debug RT viewer (Tab) can also sample the scene depth (mode 1) and
         // view-space normal (mode 2). Declare these read edges unconditionally
         // so the automatic barrier pipeline keeps them in a sampled layout
@@ -533,17 +542,17 @@ impl RenderPassNode for PostPass {
         ctx: &RenderContext,
         resources: &mut GraphResources,
     ) -> anyhow::Result<()> {
-        // Pick the input RT based on the debug viewer mode (Tab key).
-        // 0 = HDR color (normal tonemap), 1 = depth (linearized),
-        // 2 = view-space normal. The layout must match the image's actual
-        // layout at draw time; the graph's automatic barrier pipeline keeps
-        // all three in a sampled layout (see `setup`'s read edges).
+        // Pick the input RT based on the render mode and debug viewer (Tab).
+        // In path-trace mode we read PT_COLOR_H instead of SCENE_COLOR_H.
+        // Debug modes 1 (depth) and 2 (normal) always read from scene output.
+        let is_pt = ctx.frame.render_mode == RenderMode::PathTrace;
         let (handle, image_layout) = match ctx.frame.debug_rt {
             1 => (
                 SCENE_DEPTH_H,
                 vk::ImageLayout::DEPTH_STENCIL_READ_ONLY_OPTIMAL,
             ),
             2 => (SCENE_NORMAL_H, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL),
+            _ if is_pt => (PT_COLOR_H, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL),
             _ => (SCENE_COLOR_H, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL),
         };
         let input_view = match resources.published_view(handle) {

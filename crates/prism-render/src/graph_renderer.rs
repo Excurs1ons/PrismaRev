@@ -21,8 +21,10 @@ use crate::managers::{
 };
 use crate::mesh::Vertex;
 use crate::passes::ScenePass;
+use crate::pt_pass::PathTracePass;
 use crate::render_graph::{
-    DrawItem, GraphFrame, RenderGraph, RenderGraphBuilder, RenderPassNode, RenderSettings,
+    DrawItem, GraphFrame, RenderGraph, RenderGraphBuilder, RenderMode, RenderPassNode,
+    RenderSettings,
 };
 use crate::scene_scope::SceneScope;
 use crate::swapchain::Swapchain;
@@ -62,6 +64,8 @@ pub struct FrameInput<'a> {
     pub proj22: f32,
     pub proj32: f32,
     pub lights: &'a [GpuLight],
+    pub render_mode: RenderMode,
+    pub pt_max_bounces: u32,
 }
 
 /// GPU session that owns the long-lived Vulkan runtime objects (device,
@@ -310,13 +314,16 @@ impl GraphRenderer {
         let post_pass = crate::post::PostPass::new(&context, color_format, frame_count)
             .context("PostPass::new")?;
 
-        // Register ScenePass / GtaoPass / PostPass into the graph. The shadow
-        // map is already allocated (above), so ScenePass binds the correct
-        // shadow view via `set_resources`. `RenderGraph::add_pass` runs each
-        // pass's `setup` (declaring its graph-edge output handles) and appends
-        // it to the execution order: Shadow -> Scene -> GTAO -> Post.
+        // PathTracePass — real-time path tracing compute pass. Always added;
+        // checks RenderSettings.render_mode internally to decide whether to
+        // dispatch. Created with scene geometry later via set_geometry.
+        let pt_pass = PathTracePass::new(&context).context("PathTracePass::new")?;
+
+        // Register all passes into the graph in execution order.
+        // Shadow -> Scene -> GTAO -> PathTrace -> Post.
         graph.add_pass(Box::new(scene_pass));
         graph.add_pass(Box::new(gtao_pass));
+        graph.add_pass(Box::new(pt_pass));
         graph.add_pass(Box::new(post_pass));
 
         Ok(Self {
@@ -358,6 +365,13 @@ impl GraphRenderer {
     /// `pass_ref::<T>()`. Read-only - no mutation path is exposed.
     pub fn graph(&self) -> &RenderGraph {
         &self.graph
+    }
+
+    /// Mutable borrow of the render graph. Used internally for lifecycle ops
+    /// and by the app layer to reach passes (e.g. PathTracePass::set_geometry)
+    /// after construction.
+    pub fn graph_mut(&mut self) -> &mut RenderGraph {
+        &mut self.graph
     }
 
     /// Lazily create the egui overlay if it doesn't exist yet, then return a
@@ -463,6 +477,12 @@ impl GraphRenderer {
     /// Camera exposure multiplier (scales all light radiance pre-tonemap).
     pub fn exposure(&self) -> f32 {
         self.settings.exposure
+    }
+
+    /// Set the exposure multiplier at runtime. Clamped to [0, 5] to prevent
+    /// degenerate values.
+    pub fn set_exposure(&mut self, value: f32) {
+        self.settings.exposure = value.clamp(0.0, 5.0);
     }
 
     /// Replace the scene-scope probe volume with real baked data loaded from a
@@ -751,6 +771,8 @@ impl GraphRenderer {
             proj22,
             proj32,
             lights,
+            render_mode,
+            pt_max_bounces,
         } = input;
         let light_view_proj = *light_view_proj;
         let inv_projection = *inv_projection;
@@ -816,6 +838,10 @@ impl GraphRenderer {
                 proj32,
                 inv_projection,
                 swapchain_views,
+                render_mode: *render_mode,
+                pt_max_bounces: *pt_max_bounces,
+                camera_pos: frame_data.camera_position,
+                light_dir: frame_data.light_direction,
             };
             let render_ctx = crate::render_graph::RenderContext {
                 device,
@@ -953,6 +979,8 @@ impl GraphRenderer {
         proj22: f32,
         proj32: f32,
         lights: &[GpuLight],
+        render_mode: RenderMode,
+        pt_max_bounces: u32,
     ) -> anyhow::Result<bool> {
         let ctx = match self.begin_frame()? {
             Some(c) => c,
@@ -971,6 +999,8 @@ impl GraphRenderer {
             proj22,
             proj32,
             lights,
+            render_mode,
+            pt_max_bounces,
         };
         let exec_result = self.execute(&ctx, &input);
         let out_of_date = self.present(&ctx)?;
@@ -1009,6 +1039,12 @@ impl GraphRenderer {
         // set, sampler).
         if let Some(post) = self.graph.pass_mut::<crate::post::PostPass>() {
             post.destroy(device);
+        }
+
+        // Destroy PathTracePass (accumulation images, geometry buffers,
+        // BLAS/TLAS, descriptor set, layout, pool).
+        if let Some(pt) = self.graph.pass_mut::<PathTracePass>() {
+            pt.destroy(device);
         }
 
         // Destroy ShadowMapPass (framebuffer, render pass, pipeline/layout).

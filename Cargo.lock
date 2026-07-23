@@ -1890,6 +1890,7 @@ dependencies = [
  "egui-ash-renderer",
  "egui-winit",
  "env_logger",
+ "image",
  "log",
  "prism-asset",
  "raw-window-handle",

@@ -142,25 +142,38 @@ ShadowMapPass → ScenePass → GtaoPass → PostPass
   - `GtaoPass` 写 `ao[frame]`（帧级双缓冲） → `ScenePass`（下一帧读，`ao[(frame+1)%2]`，1-frame latency）。
     **跨帧依赖由 `GtaoPass::setup` 声明"读上一帧 AO / 写本帧 AO"，图据此不把 GTAO 排在它自己读的那个 slot 前面**；首帧上游 view 为 null，shader 不采样（PBR_FLAG_AO 默认 off）。
 
-### 6.4 Baked GI 数据规格
+### 6.4 Baked GI 数据规格（PR-5 更新）
 
-- **SH 阶数**：2 阶，9 个系数 × RGB。每系数 `float16`（半精度足够，移动端带宽紧）。
+- **SH 阶数**：2 阶，9 个系数 × RGB。每系数 `float32`（当前实现 `R32G32B32A32_SFLOAT`；后续可切 `float16` 省带宽，移动端带宽紧）。
+- **SH 表示**：Probe volume 存储 **radiance SH**（非 irradiance SH）。Baker 不做 cosine 预卷积，仅对入射 radiance 做 Monte Carlo 积分投影到 SH 基。运行时通过两套求值路径区别使用：
+  - **Diffuse** → `EvalSH9Irradiance()` 应用 Ramamoorthi & Hanrahan A_l 因子（A₀=π, A₁=2π/3, A₂=π/4），返回 E(n) = ∫ L(ω) max(0, n·ω) dω。调用方除以 π 得 Lambertian BRDF。
+  - **Specular** → `EvalSH9Radiance()` 直接 SH 重建 L(ω)，输入分裂和（split-sum）近似代替 prefiltered env map。
+  - 同一份 9 系数数据供两条路径使用，无需额外存储。
+- **/π 一致性**：IBL irradiance cubemap 存储 E/π（cosine 加权平均），GI SH 存储 radiance（无 cosine）。运行时 diffuse 路径两者统一为 kd · albedo · E/π，消除旧实现中 GI 比 IBL 亮 π 倍的 bug。
 - **Probe grid**：`origin: vec3`、`spacing: vec3`、`dims: ivec3`（grid 分辨率），经 cbuffer/UBO 传入 shader。
-- **3D texture 打包**：每层一张 2D 切片（R16G16B16A16_SFLOAT 或 R16G16B16 打包），层数 = 9
-  （每系数一层 RGB）。或按 `dims.x*dims.y*dims.z` 体素 + 9 系数存 SSBO —— 选 **3D texture
-  分层**（硬件三线性插值，移动端友好），避免 CPU 侧手动插值。
-- **烘焙工具**（不进运行时）：离线 path tracer / 烘焙器输出上述 3D texture（`.ktx2` 或
-  预编译资产）。格式契约在 `docs/` 单独定义；加载走 `prism-asset`，引擎不直读文件。
-- **内存预算**：2 阶 SH + float16，单个 probe = 9×3×2 = 54 bytes；grid 32³ ≈ 1.8MB，
-  64³ ≈ 14MB —— 中低端取 16³~32³。
+- **3D texture 打包**：每层一张 2D 切片（R32G32B32A32_SFLOAT），深度 = dims.z × 9
+  （每系数一层 RGB）。采样用 integer `Load` + 手动三线性插值，**不用硬件 sampler**，防止系数层间串扰。
+- **烘焙工具**（`prism-bake-gi` 独立二进制，不进运行时）：多 bounce 路径追踪（3 bounce + Russian roulette）对每条 Fibonacci 球面方向做完整 bounce 链，`probe_volume.bin` 经 `prism-asset` 加载。
+- **内存预算**：2 阶 SH + float32，单个 probe = 9×3×4 = 108 bytes；grid 16³ ≈ 432KB，32³ ≈ 3.5MB。
+  若后续切 float16：单个 probe = 54 bytes，32³ ≈ 1.8MB。
 
-### 6.5 `scene_frag.slang` 改动（最小侵入）
+### 6.5 `scene_frag.slang` 改动（PR-5 更新）
 
-- 新增：probe volume 采样 + `EvalSH9`（9 系数 SH 求值，~20 行），放在 `indirectDiffuse` 计算处。
-- 接入点：`indirectDiffuse` 加到现有 IBL diffuse irradiance 旁边（两者都是 diffuse 间接光，
-  相加或按 `PBR_FLAG_GI` 选择）。
-- 不动：前向单 shader 结构、现有 PBR / 阴影 / GTAO 采样、specular 走 IBL prefiltered（specular 间接光已由 IBL 覆盖，GI 只补 diffuse）。
-- 新增 `PBR_FLAG_GI`（bit 14）开关；`RenderSettings::gi_mode` 复用（0=Off，非0=On；baked 无 Update 状态，故只 0/非0）。
+- **Diffuse GI**：`SampleProbeVolumeIrradiance()` → `EvalSH9Irradiance(n)` 算出 E(n)，公式：
+  `gi_diffuse = kd_ibl · ibl_intensity · (E(n) / π) · albedo`
+  替代 IBL irradiance cubemap 采样。
+- **Specular GI**：`SampleProbeVolumeRadiance()` → `EvalSH9Radiance(r)` 算出 L(r)，公式：
+  `specular_ibl = ibl_intensity · L(r) · (f_ibl · brdf_LUT.x + brdf_LUT.y)`
+  替代 IBL prefiltered env map 采样。SH 2 阶对镜面反射很模糊，但室内场景中 bounced light 本质低频，且比泄漏 env sky 正确。
+- `PBR_FLAG_GI`（bit 14）控制开关；`RenderSettings::gi_mode` 复用（0=Off，非0=On；baked 无 Update 状态，故只 0/非0）。
+
+### 6.7 SH 表示变更记录（PR-5）
+
+| 版本 | SH 存储 | Diffuse 求值 | Specular 求值 | /π 一致性 |
+|------|---------|-------------|--------------|----------|
+| PR-3 前 | **Irradiance SH**（cosine 预卷积） | `EvalSH9(n)` = E(n) | 无 GI specular（走 IBL env） | ❌ GI 比 IBL 亮 π 倍 |
+| PR-3 | **Irradiance SH** | `EvalSH9(n)` = E(n) | 复用 `EvalSH9(r)` 当 specular（错用 irradiance） | ❌ /π 缺失 + specular 物理错误 |
+| **PR-5** | **Radiance SH**（无 cosine 预卷积） | `EvalSH9Irradiance(n)` = E(n) 含 A_l 因子 | `EvalSH9Radiance(r)` = L(r) 直接重建 | ✅ 两路径统一为 kd·albedo·E/π |
 
 ### 6.6 迁移步骤（可拆 PR，每步独立可验证、CI 不红）
 

@@ -9,6 +9,10 @@ description = "Vulkan rendering backend for PrismaRev"
 name = "prism-bake-gi"
 path = "src/bin/prism_bake_gi.rs"
 
+[[bin]]
+name = "prism-bake-image"
+path = "src/bin/prism_bake_image.rs"
+
 [features]
 
 [dependencies]
@@ -24,3 +28,4 @@ egui-winit = { workspace = true }
 egui-ash-renderer = { workspace = true }
 prism-asset = { path = "../prism-asset" }
 env_logger = { workspace = true }
+image = { workspace = true, features = ["hdr"] }

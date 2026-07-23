@@ -19,11 +19,13 @@ use winit::raw_window_handle::HasDisplayHandle;
 use winit::window::{Window, WindowId};
 
 use prism_ecs::World;
-use prism_render::{DebugMode, GraphRenderer, NormalSpace};
+use prism_render::{DebugMode, GraphRenderer, NormalSpace, PathTracePass, RenderMode};
 
 use crate::camera::{Camera, FlyCamera};
 use crate::input::{InputState, MouseButton};
-use crate::render_system::{render_system, DirectionalLight, MeshManager, PointLight, Transform};
+use crate::render_system::{
+    render_system, DirectionalLight, MeshManager, PointLight, RenderInstance, Transform,
+};
 
 /// Parse a `key = "value"` TOML line (after the `key` prefix has been stripped)
 /// and return the unquoted string value. Handles optional surrounding
@@ -218,7 +220,6 @@ pub struct App {
         std::collections::HashMap<prism_asset::MeshHandle, prism_render::managers::MeshHandle>,
     mat_map: std::collections::HashMap<prism_asset::MaterialHandle, u32>,
     tex_map: std::collections::HashMap<prism_asset::TextureHandle, u32>,
-    draw_items: Vec<prism_render::SceneDrawItem>,
     /// Fatal error that halted rendering. Once set, the app stops rendering
     /// and shows a modal crash dialog (see [`App::show_fatal_dialog`]); the
     /// event loop exits after the user confirms. `Some` also gates
@@ -246,6 +247,10 @@ pub struct App {
     /// `true` while ALT is held and has temporarily released a locked pointer,
     /// so releasing ALT re-locks (distinct from a full ESC exit).
     alt_temp_release: bool,
+    /// Current render mode: Raster (PBR) or PathTrace (real-time PT).
+    render_mode: RenderMode,
+    /// Maximum path depth (bounces) for path tracing.
+    pt_max_bounces: u32,
 }
 
 /// Default PBR mode. `debug_flags == 0` means **normal full-PBR rendering**:
@@ -285,7 +290,6 @@ impl App {
             mesh_map: std::collections::HashMap::new(),
             mat_map: std::collections::HashMap::new(),
             tex_map: std::collections::HashMap::new(),
-            draw_items: Vec::new(),
             fatal_error: None,
             camera_state_restored: false,
             inspector: crate::inspector::Inspector::new(),
@@ -293,6 +297,8 @@ impl App {
             pointer_locked: false,
             lock_before_inspector: false,
             alt_temp_release: false,
+            render_mode: RenderMode::Raster,
+            pt_max_bounces: 3,
         }
     }
 
@@ -528,7 +534,7 @@ impl App {
     // bindless-frag pipeline + descriptor-set layout is in place. P0
     // is about getting the manager lifecycle + scene loading path
     // covered.
-    pub fn load_demo_scene(&mut self, scene: prism_asset::SceneHandle) {
+    pub fn load_demo_scene(&mut self, _scene: prism_asset::SceneHandle) {
         if self.scene_loaded {
             log::debug!("App::load_demo_scene: already loaded, skipping");
             return;
@@ -757,11 +763,13 @@ impl App {
         }
         log::info!("flush materials: {}ms", t_flush.elapsed().as_millis());
 
-        // 5. Build the resolved draw list from scene instances. Each instance
-        // references an asset mesh + material; both maps resolve them to the
-        // render-side handles the bindless pipeline needs.
-        let t_draw = std::time::Instant::now();
-        self.draw_items.clear();
+        // 5. Spawn ECS entities for each scene instance. Each instance becomes
+        // an entity with a `RenderInstance` component (mesh handle + material
+        // slot + world transform), replacing the old flat `Vec<SceneDrawItem>`.
+        // This lets scene geometry live in the ECS world alongside other entities
+        // (camera, lights, calibration spheres, ...) and be queried/manipulated.
+        let t_ents = std::time::Instant::now();
+        let world = self.world.as_mut().unwrap();
         for (_inst_h, inst) in self.scene_store.instances() {
             let Some(&mesh) = self.mesh_map.get(&inst.mesh) else {
                 log::warn!("instance references unknown mesh; skipping");
@@ -771,23 +779,26 @@ impl App {
                 log::warn!("instance references unknown material; skipping");
                 continue;
             };
-            self.draw_items.push(prism_render::SceneDrawItem {
-                mesh,
-                material_slot,
-                model: inst.transform,
-            });
+            let entity = world.spawn();
+            world.insert(
+                entity,
+                RenderInstance {
+                    mesh,
+                    material_slot,
+                    model: inst.transform,
+                },
+            );
         }
-        log::info!("build draw list: {}ms", t_draw.elapsed().as_millis());
+        log::info!("spawn entities: {}ms", t_ents.elapsed().as_millis());
 
-        // 6. Append BRDF calibration spheres (white/black/gold/aluminum/
-        // plastic/stone) so the PBR pipeline can be eyeballed against
-        // reference materials. These share a single UV-sphere mesh and use
-        // scalar material values (no textures), so any visual discrepancy is
-        // attributable to the BRDF, not asset loading. Placed along +X starting
-        // near the scene origin so they're visible alongside the loaded scene.
+        // 6. Spawn BRDF calibration spheres as ECS entities
+        // (white/black/gold/aluminum/plastic/stone) so the PBR pipeline can be
+        // eyeballed against reference materials. These share a single UV-sphere
+        // mesh and use scalar material values (no textures), so any visual
+        // discrepancy is attributable to the BRDF, not asset loading.
         if let Err(e) = crate::calibration_spheres::spawn_calibration_spheres(
             renderer,
-            &mut self.draw_items,
+            world,
             0.0,
             1.0,
             0.0,
@@ -795,10 +806,39 @@ impl App {
             log::warn!("calibration spheres failed: {e}");
         }
 
-        // The `scene` argument is retained for API symmetry; all instances in
-        // it are already reflected into `draw_items` above.
-        let _ = scene;
         self.scene_loaded = true;
+
+        // 7. Upload flattened world-space geometry to the real-time PT pass.
+        // The PT pass builds its own BLAS/TLAS from this geometry (constant —
+        // no per-frame rebuild needed for static scenes).
+        {
+            // Extract these BEFORE the mutable borrow on `renderer` to avoid
+            // borrow conflicts with graph_mut().
+            let ctx = renderer.context_arc();
+            let cmd_pool = renderer.command_pool();
+            if let Some(pt_pass) = renderer.graph_mut().pass_mut::<PathTracePass>() {
+                let t_pt = std::time::Instant::now();
+                match prism_render::bake_common::flatten_from_store(&self.scene_store) {
+                    Ok((verts, indices, _min, _max)) => {
+                        if let Err(e) = pt_pass.set_geometry(ctx.as_ref(), cmd_pool, &verts, &indices) {
+                            log::warn!("PathTracePass::set_geometry failed: {e}");
+                        } else {
+                            log::info!(
+                                "PT geometry: {} verts, {} indices, {}ms",
+                                verts.len(),
+                                indices.len(),
+                                t_pt.elapsed().as_millis()
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        log::warn!("flatten_from_store failed (PT disabled): {e}");
+                    }
+                }
+            } else {
+                log::warn!("PathTracePass not found in graph — PT unavailable");
+            }
+        }
 
         // Replace the synthetic sky probe field with real baked GI if a
         // `.bin` exists (produced by `prism-bake-gi`). Missing/mismatched file
@@ -811,11 +851,11 @@ impl App {
         );
 
         log::info!(
-            "App::load_demo_scene: registered {} mesh(es), {} material(s), {} texture(s); {} draw items",
+            "App::load_demo_scene: registered {} mesh(es), {} material(s), {} texture(s); {} instance entity(ies)",
             self.scene_store.meshes().count(),
             self.scene_store.materials().count(),
             self.scene_store.textures().count(),
-            self.draw_items.len(),
+            world.query::<RenderInstance>().count(),
         );
         log::info!("load_demo_scene total: {}ms", t_total.elapsed().as_millis());
     }
@@ -1414,6 +1454,15 @@ impl App {
             self.inspector.debug_flags = self.debug_flags;
             self.inspector.show_ui = self.show_ui;
             self.inspector.tonemap_mode = self.tonemap_mode;
+            // Sync render settings from app to inspector so the UI reflects
+            // the current state (including keyboard-driven changes).
+            self.inspector.render_mode = self.render_mode;
+            self.inspector.pt_max_bounces = self.pt_max_bounces;
+            // Sync exposure from the renderer so the inspector slider reflects
+            // the current value (including the hard-coded default).
+            if let Some(renderer) = self.renderer.as_ref() {
+                self.inspector.exposure = renderer.exposure();
+            }
             // Refresh the viz's per-frame snapshot while `&GraphRenderer` is
             // borrowable (the egui closure only holds plain data).
             let window = self.window.clone();
@@ -1440,6 +1489,13 @@ impl App {
             // Push UI-edited tonemap selection back to the app so the `T` key
             // and the inspector stay in sync.
             self.tonemap_mode = self.inspector.tonemap_mode;
+            // Push UI-edited exposure back to the renderer.
+            if let Some(renderer) = self.renderer.as_mut() {
+                renderer.set_exposure(self.inspector.exposure);
+            }
+            // Push UI-edited render settings back to the app.
+            self.render_mode = self.inspector.render_mode;
+            self.pt_max_bounces = self.inspector.pt_max_bounces;
         }
 
         // Neutral clear color so we can tell whether the scene is actually
@@ -1451,7 +1507,7 @@ impl App {
             _ => return,
         };
 
-        // Draw the glTF scene (resolved into `draw_items` by `load_demo_scene`).
+        // Draw the scene (ECS entities with RenderInstance).
         let render_result = render_system(
             renderer,
             world,
@@ -1462,7 +1518,8 @@ impl App {
             self.show_ui,
             self.tonemap_mode,
             self.debug_rt,
-            &self.draw_items,
+            self.render_mode,
+            self.pt_max_bounces,
         );
 
         // A render failure is treated as fatal: surface it once via a modal

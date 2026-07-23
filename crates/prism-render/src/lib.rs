@@ -21,6 +21,7 @@
 //! | [`passes`] | Individual render-pass implementations |
 
 pub mod acceleration_structure;
+pub mod bake_common;
 pub mod batch;
 pub mod bindless;
 pub mod buffer;
@@ -41,6 +42,7 @@ pub mod passes;
 pub mod pbr_push;
 pub mod pipeline;
 pub mod post;
+pub mod pt_pass;
 pub mod render_graph;
 pub mod render_pass;
 pub mod scene_scope;
@@ -73,8 +75,9 @@ pub use passes::{ScenePass, ShadowMapPass, ShadowPassPushConstants};
 pub use pbr_push::{DebugMode, NormalSpace, PbrBindlessPushConstants, PbrPushConstants};
 pub use pipeline::GraphicsPipeline;
 pub use post::{PostPass, PostPushConstants};
+pub use pt_pass::{PathTracePass, PtPushConstants};
 pub use render_graph::{
-    DrawItem, PassInfo, PassKind, RenderGraphSnapshot, RenderSettings, ResourceHandle,
+    DrawItem, PassInfo, PassKind, RenderGraphSnapshot, RenderMode, RenderSettings, ResourceHandle,
     ResourceInfo, ResourceType, ShadowMode,
 };
 pub use render_pass::{DepthImage, Framebuffers, NormalImage, RenderPass};

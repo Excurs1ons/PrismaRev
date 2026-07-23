@@ -148,11 +148,15 @@ pub fn sh_basis(n: [f32; 3]) -> [f32; SH_COEFF_COUNT] {
     ]
 }
 
-/// Evaluate order-2 SH (9 RGB coefficients) for a unit direction `n`.
+/// Evaluate order-2 RADIANCE SH for a unit direction `n`.
 ///
-/// `sh[c]` is the c-th coefficient (RGB). Returns the reconstructed irradiance
-/// (RGB). Cosine convolution is assumed pre-applied by the baker (see module
-/// docs); this does **not** multiply by albedo/π.
+/// Returns L(n) ≈ Σ c_lm * Y_lm(n) — the incident radiance reconstructed from
+/// the radiance SH coefficients. No cosine convolution is applied; the baker
+/// stores radiance SH (no cosine pre-convolution). This is the correct input
+/// for the split-sum specular approximation.
+///
+/// For diffuse irradiance, use [`eval_sh9_irradiance`] which applies the
+/// Ramamoorthi & Hanrahan A_l factors.
 pub fn eval_sh9(n: [f32; 3], sh: &[[f32; 3]; SH_COEFF_COUNT]) -> [f32; 3] {
     let b = sh_basis(n);
     let mut out = [0.0f32; 3];
@@ -160,6 +164,33 @@ pub fn eval_sh9(n: [f32; 3], sh: &[[f32; 3]; SH_COEFF_COUNT]) -> [f32; 3] {
         out[0] += sh[c][0] * b[c];
         out[1] += sh[c][1] * b[c];
         out[2] += sh[c][2] * b[c];
+    }
+    out
+}
+
+/// Ramamoorthi & Hanrahan SH cosine-convolution factors (orthonormal basis).
+/// A_0 = π, A_1 = 2π/3, A_2 = π/4.
+const A_L0: f32 = std::f32::consts::PI;
+const A_L1: f32 = 2.0 * std::f32::consts::PI / 3.0;
+const A_L2: f32 = std::f32::consts::PI / 4.0;
+
+/// Evaluate order-2 IRRADIANCE SH for a surface normal `n`.
+///
+/// Applies the Ramamoorthi & Hanrahan cosine-convolution factors A_l to the
+/// radiance SH coefficients, returning E(n) = Σ c_lm * A_l * Y_lm(n).
+/// The caller divides by π for the Lambertian BRDF: diffuse = kd * E(n) * albedo / π.
+pub fn eval_sh9_irradiance(n: [f32; 3], sh: &[[f32; 3]; SH_COEFF_COUNT]) -> [f32; 3] {
+    let b = sh_basis(n);
+    let mut out = [0.0f32; 3];
+    // Band 0 (l=0, c=0): A_0 = π
+    // Band 1 (l=1, c=1,2,3): A_1 = 2π/3
+    // Band 2 (l=2, c=4..8): A_2 = π/4
+    let al = [A_L0, A_L1, A_L1, A_L1, A_L2, A_L2, A_L2, A_L2, A_L2];
+    for c in 0..SH_COEFF_COUNT {
+        let a = al[c];
+        out[0] += sh[c][0] * b[c] * a;
+        out[1] += sh[c][1] * b[c] * a;
+        out[2] += sh[c][2] * b[c] * a;
     }
     out
 }
@@ -231,11 +262,13 @@ pub fn trilinear_weights(coord: [f32; 3], dims: [u32; 3]) -> ([i32; 3], [f32; 8]
 /// normal.
 ///
 /// `fetch(i, j, k, c)` returns the RGB SH coefficient `c` of probe `(i, j, k)`.
-/// The 8 corner probes' 9 coefficients are trilinear-blended, then [`eval_sh9`]
-/// reconstructs the irradiance for `normal`. Producer-agnostic: `fetch` can
+/// The 8 corner probes' 9 coefficients are trilinear-blended, then
+/// [`eval_sh9_irradiance`] reconstructs the irradiance for `normal` using the
+/// Ramamoorthi & Hanrahan A_l factors. Producer-agnostic: `fetch` can
 /// read a baked 3D texture or a DDGI-updated one — the algorithm is identical.
 ///
-/// The result is irradiance only; multiply by `albedo / π` at the call site.
+/// The result is irradiance E(n) = ∫ L(ω) max(0, n·ω) dω; multiply by
+/// `kd * albedo / π` at the call site for the Lambertian diffuse BRDF.
 pub fn sample_probe_irradiance<F>(
     world: [f32; 3],
     normal: [f32; 3],
@@ -265,7 +298,7 @@ where
             shc[2] += coeff[2] * weight;
         }
     }
-    eval_sh9(normal, &sh)
+    eval_sh9_irradiance(normal, &sh)
 }
 
 #[cfg(test)]
@@ -372,6 +405,44 @@ mod tests {
         assert!(approx_eq(eval_sh9([0.0, 0.0, 1.0], &sh)[0], 0.0));
     }
 
+    #[test]
+    fn eval_sh9_irradiance_dc_only_scales_by_pi() {
+        // DC-only radiance SH: irradiance = sh[0] * Y_0 * A_0
+        //                      = sh[0] * SH_C0 * PI
+        // which is PI * eval_sh9 since A_0 = PI.
+        let pi = std::f32::consts::PI;
+        let mut sh = [[0.0f32; 3]; SH_COEFF_COUNT];
+        sh[0] = [1.0, 2.0, 3.0];
+        for n in [
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ] {
+            let rad = eval_sh9(n, &sh);
+            let irr = eval_sh9_irradiance(n, &sh);
+            assert!(approx_eq3(irr, [rad[0] * pi, rad[1] * pi, rad[2] * pi]));
+        }
+    }
+
+    #[test]
+    fn eval_sh9_irradiance_band1_scales_by_two_thirds_pi() {
+        // Band-1-only radiance SH: irradiance = sh[1] * (SH_C1 * y) * A_1
+        //                          = sh[1] * (SH_C1 * y) * (2*PI/3)
+        //                          = (2*PI/3) * eval_sh9.
+        let mut sh = [[0.0f32; 3]; SH_COEFF_COUNT];
+        sh[1] = [0.5, 1.0, 1.5]; // Y lobe (y)
+        let factor = 2.0 * std::f32::consts::PI / 3.0;
+        for n in [
+            [0.0, 1.0, 0.0],
+            [0.0, -1.0, 0.0],
+            [0.0, 0.3, 0.95],
+        ] {
+            let rad = eval_sh9(n, &sh);
+            let irr = eval_sh9_irradiance(n, &sh);
+            assert!(approx_eq3(irr, [rad[0] * factor, rad[1] * factor, rad[2] * factor]));
+        }
+    }
+
     // ---- world -> grid mapping ----
 
     #[test]
@@ -464,10 +535,12 @@ mod tests {
 
     #[test]
     fn sample_uniform_field_is_position_and_normal_independent() {
-        // Every probe holds the same DC-only coefficient -> a uniform irradiance
-        // field. Sampling anywhere, for any normal, gives sh[0] * Y_0^0.
+        // Every probe holds the same DC-only coefficient -> a uniform radiance
+        // field. sample_probe_irradiance applies A_0 = PI for the cosine
+        // convolution, giving irradiance = sh[0] * Y_0 * PI.
         let info = ProbeVolumeInfo::new([0.0, 0.0, 0.0], [1.0, 1.0, 1.0], [4, 4, 4]);
         let dc = [0.5, 0.25, 1.0];
+        let pi = std::f32::consts::PI;
         let fetch = |_i: i32, _j: i32, _k: i32, c: usize| -> [f32; 3] {
             if c == 0 {
                 dc
@@ -475,7 +548,7 @@ mod tests {
                 [0.0, 0.0, 0.0]
             }
         };
-        let expected = [dc[0] * SH_C0, dc[1] * SH_C0, dc[2] * SH_C0];
+        let expected = [dc[0] * SH_C0 * pi, dc[1] * SH_C0 * pi, dc[2] * SH_C0 * pi];
         for world in [
             [0.0, 0.0, 0.0],
             [1.5, 2.5, 0.5],
@@ -494,8 +567,9 @@ mod tests {
     fn sample_linear_field_is_exact() {
         // Trilinear interpolation reproduces linear functions exactly. Make the
         // DC coefficient vary linearly with the probe's x index: sh[0] = i.
-        // Sampling at fractional coord x = 1.5 must yield blended sh[0] = 1.5,
-        // hence irradiance = 1.5 * Y_0^0 (independent of y/z/normal).
+        // Sampling at fractional coord x = 1.5 yields blended sh[0] = 1.5,
+        // irradiance = 1.5 * Y_0^0 * A_0 = 1.5 * SH_C0 * PI.
+        let pi = std::f32::consts::PI;
         let info = ProbeVolumeInfo::new([0.0, 0.0, 0.0], [1.0, 1.0, 1.0], [4, 4, 4]);
         let fetch = |i: i32, _j: i32, _k: i32, c: usize| -> [f32; 3] {
             if c == 0 {
@@ -505,7 +579,7 @@ mod tests {
             }
         };
         let got = sample_probe_irradiance([1.5, 0.7, 2.3], [0.0, 1.0, 0.0], &info, fetch);
-        assert!(approx_eq(got[0], 1.5 * SH_C0), "got {:?}", got);
+        assert!(approx_eq(got[0], 1.5 * SH_C0 * pi), "got {:?}", got);
         assert!(approx_eq(got[1], 0.0));
         assert!(approx_eq(got[2], 0.0));
     }

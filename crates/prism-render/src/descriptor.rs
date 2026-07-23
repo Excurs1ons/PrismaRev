@@ -171,7 +171,7 @@ pub struct GpuLight {
 pub struct FrameUBOData {
     pub view_proj: [[f32; 4]; 4],       // 64 bytes, offset   0
     pub camera_position: [f32; 4],      // 16 bytes, offset  64 (xyz = camera pos, w = light_count)
-    pub light_direction: [f32; 4],      // 16 bytes, offset  80 (w = illuminance in lux)
+    pub light_direction: [f32; 4],      // 16 bytes, offset  80 (w = pre-scaled radiance = lux/(10000*PI))
     pub light_color: [f32; 4],          // 16 bytes, offset  96 (w = ambient factor)
     pub view: [[f32; 4]; 4],            // 64 bytes, offset 112 (world -> view)
     pub light_view_proj: [[f32; 4]; 4], // 64 bytes, offset 176 (light-space VP for shadow map)
@@ -182,9 +182,9 @@ pub struct FrameUBOData {
     /// Scene colour viewport size in pixels (xy). Used by the fragment shader
     /// to derive screen-space UVs for sampling the screen-space AO texture.
     pub viewport_size: [f32; 2],        // offset 244..251
-    /// Exposure multiplier applied to all light radiance (direct + point)
-    /// before tonemapping. Lets the app keep physically-based light units
-    /// (lux / candela) while controlling the final image brightness. offset 252.
+    /// Exposure multiplier applied as a uniform scale to the final composed HDR
+    /// color before tonemapping. Default 1.0 = no scaling; inspector slider
+    /// lets the user brighten/darken the entire image uniformly. offset 252.
     pub exposure: f32,                    // offset 252
     /// Pad to 272 bytes so the Rust `#[repr(C)]` layout matches the Slang
     /// std140 `FrameUBO` (struct size must be a multiple of 16).

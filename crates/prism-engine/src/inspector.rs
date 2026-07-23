@@ -14,6 +14,7 @@
 
 use egui::{Context, DragValue, Ui};
 use prism_ecs::{Entity, World};
+use prism_render::RenderMode;
 
 use crate::camera::Camera;
 use crate::render_system::{DirectionalLight, PointLight, Transform};
@@ -44,6 +45,13 @@ pub struct Inspector {
     /// Tonemap mode (0 = Reinhard, 1 = ACES Narkowicz). Mirrors `App::tonemap_mode`
     /// and is synced each frame; editable here and pushed back to the app.
     pub tonemap_mode: u32,
+    /// Exposure multiplier for the renderer. Synced from the renderer each frame
+    /// and pushed back when edited. A slider in the Debug window controls it.
+    pub exposure: f32,
+    /// Render mode: Raster (PBR) or PathTrace (real-time PT).
+    pub render_mode: RenderMode,
+    /// Maximum path depth (bounces) for path tracing.
+    pub pt_max_bounces: u32,
 }
 
 impl Default for Inspector {
@@ -58,6 +66,9 @@ impl Default for Inspector {
             debug_flags: crate::app::DEFAULT_PBR_FLAGS,
             show_ui: true,
             tonemap_mode: 0,
+            exposure: 1.0, // default, overridden by renderer sync
+            render_mode: RenderMode::Raster,
+            pt_max_bounces: 3,
         }
     }
 }
@@ -153,7 +164,7 @@ impl Inspector {
             .show(ctx, |ui| {
                 ui.heading("Debug Mode");
                 ui.separator();
-                ui.label("PBR component toggles (keys 1-9, Shift+1-4):");
+                ui.label("PBR component toggles (keys 1-9, Shift+1-5):");
                 // Ordered by key position; each row shows the bound key and the
                 // actual shader flag bit value.
                 let flags = [
@@ -174,6 +185,7 @@ impl Inspector {
                     ("Translucency", "Shift+2", 11, "Translucent scattering"),
                     ("Anisotropy", "Shift+3", 12, "Anisotropic materials"),
                     ("ClearCoat", "Shift+4", 13, "Clear coat layer"),
+                    ("GI", "Shift+5", 14, "Probe-volume GI (replaces IBL)"),
                 ];
                 for (name, key_label, bit, desc) in flags.iter() {
                     let active = self.debug_flags == (1u32 << bit);
@@ -212,7 +224,50 @@ impl Inspector {
                         self.tonemap_mode = 1;
                     }
                 });
+                ui.separator();
+                ui.add(
+                    egui::Slider::new(&mut self.exposure, 0.0..=5.0)
+                        .text("Exposure")
+                        .logarithmic(true),
+                );
             });
+
+        // --- Render Settings ---
+        egui::Window::new("Render Settings")
+            .id("inspector_render_settings".into())
+            .default_pos([430.0, 230.0])
+            .default_size([280.0, 160.0])
+            .resizable(true)
+            .movable(true)
+            .collapsible(true)
+            .frame(window_frame)
+            .show(ctx, |ui| {
+                ui.heading("Render Mode");
+                ui.separator();
+                ui.horizontal(|ui| {
+                    if ui
+                        .selectable_label(self.render_mode == RenderMode::Raster, "Raster (PBR)")
+                        .clicked()
+                    {
+                        self.render_mode = RenderMode::Raster;
+                    }
+                    if ui
+                        .selectable_label(self.render_mode == RenderMode::PathTrace, "Path Tracing")
+                        .clicked()
+                    {
+                        self.render_mode = RenderMode::PathTrace;
+                    }
+                });
+                if self.render_mode == RenderMode::PathTrace {
+                    ui.separator();
+                    ui.label("PT Settings");
+                    ui.add(
+                        egui::Slider::new(&mut self.pt_max_bounces, 1..=16)
+                            .text("Max Bounces"),
+                    );
+                }
+            });
+
         let hint_frame = egui::Frame {
             fill: egui::Color32::from_black_alpha(100),
             corner_radius: egui::CornerRadius::same(4u8),

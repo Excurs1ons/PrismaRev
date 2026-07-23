@@ -151,4 +151,20 @@ echo "  gi_bake :: bakeMain -> gi_bake.comp.spv"
   -profile "$PROFILE" -target spirv -entry bakeMain -stage compute \
   -fvk-use-entrypoint-name -o "$OUT/gi_bake.comp.spv"
 
+# gi_render: compute shader for offline path-traced image rendering (ray-query).
+# Dispatched per pixel — renders an HDR image directly. Requires
+# VK_KHR_ray_query hardware. Output: RWTexture2D RGBA32F.
+echo "  gi_render :: renderMain -> gi_render.comp.spv"
+"$SLANGC" "$SRC/gi_render.slang" \
+  -profile "$PROFILE" -target spirv -entry renderMain -stage compute \
+  -fvk-use-entrypoint-name -o "$OUT/gi_render.comp.spv"
+
+# pt_render: real-time path tracing compute shader (temporal accumulation).
+# Dispatched per pixel — traces 1 sample/frame, accumulates for convergence.
+# Requires VK_KHR_ray_query hardware. Output: RWTexture2D RGBA32F (accumulated).
+echo "  pt_render :: ptMain -> pt_render.comp.spv"
+"$SLANGC" "$SRC/pt_render.slang" \
+  -profile "$PROFILE" -target spirv -entry ptMain -stage compute \
+  -fvk-use-entrypoint-name -o "$OUT/pt_render.comp.spv"
+
 echo "All Slang shaders compiled. SPIR-V in $OUT, reflection JSON in $REFL"

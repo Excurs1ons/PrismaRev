@@ -301,7 +301,7 @@ float3 eval_point_lights(float3 n, float3 v, float3 world_pos, float3 albedo,
         // Inverse-square attenuation (1/dist^2) converts candela to lux
         // (illuminance), and the BRDF divides by PI for radiance. `exposure`
         // scales the final value for tone-mapping control.
-        float3 radiance = L.color.rgb * (atten * frame.exposure / PI);
+        float3 radiance = L.color.rgb * (atten / PI);
         float3 h = normalize(v + l);
         float n_dot_l = max(dot(n, l), 0.0);
         if (n_dot_l <= 0.0) continue;
@@ -552,7 +552,7 @@ SceneOutput fragmentMain(MeshVaryings in)
     float3 h         = normalize(v + light_dir);
     float  n_dot_l   = max(dot(n, light_dir), 0.0);
     float  n_dot_v   = max(dot(n, v), 0.0);
-    float3 radiance  = frame.lightColor.rgb * (frame.lightDirection.w * frame.exposure / PI);
+    float3 radiance  = frame.lightColor.rgb * frame.lightDirection.w;
 
     float  ndf = distribution_ggx(n, h, roughness);
     float  g   = geometry_smith(n, v, light_dir, roughness);
@@ -587,32 +587,81 @@ SceneOutput fragmentMain(MeshVaryings in)
     float3 kd_ibl = (float3(1.0) - f_ibl) * (1.0 - metallic);
     float3 diffuse_ibl  = float3(0.0);
     float3 specular_ibl = float3(0.0);
+    float3 gi_diffuse   = float3(0.0); // captured for isolate-mode viz (line 739)
 
-    // Diffuse IBL: real irradiance cube (set 2 binding 1, added in IBL pass).
-    if (on(PBR_FLAG_DIFFUSE_IBL))
+    // ---- GI (probe volume) replaces IBL when active. ----
+    // When PBR_FLAG_GI is on (normal mode or GI isolate), the baked probe
+    // volume provides indirect diffuse + specular, replacing the environment
+    // cubemap entirely. The IBL env paths are skipped to avoid wasted sampling.
+    //
+    // AO & occlusion are applied *after* this branch (below) so they correctly
+    // attenuate whichever indirect source is active — previously they were
+    // applied to IBL values that GI then overwrote, discarding the occlusion.
+    if (on(PBR_FLAG_GI))
     {
-        float3 irradiance = sample_irradiance(n);
-        diffuse_ibl = ibl_intensity * kd_ibl * irradiance * albedo;
+        // — Diffuse: probes at surface normal (irradiance SH, A_l factors) —
+        // E(n) = ∑ c_lm * A_l * Y_lm(n) where A_l = [PI, 2*PI/3, PI/4]
+        // are the Ramamoorthi & Hanrahan cosine-convolution factors applied
+        // by EvalSH9Irradiance inside SampleProbeVolumeIrradiance.
+        // Lambertian BRDF = kd * albedo / PI, so we divide E(n) by PI:
+        //   gi_diffuse = kd * (E(n) / PI) * albedo
+        float3 gi_irradiance = SampleProbeVolumeIrradiance(
+            probeVolume, probeInfo, in.worldPos, n);
+        gi_diffuse = kd_ibl * (gi_irradiance / PI) * albedo;
+        diffuse_ibl = ibl_intensity * gi_diffuse;
+
+        // — Specular: probes at reflection direction (radiance SH, no A_l) —
+        // L(r) = ∑ c_lm * Y_lm(r) — direct SH reconstruction of incident
+        // radiance at the reflection direction, feeding the split-sum
+        // specular approximation. No further PI division needed since the
+        // split-sum formula and BRDF LUT already contain the correct
+        // Fresnel/roughness factors.
+        if (on(PBR_FLAG_SPECULAR_IBL))
+        {
+            float3 r = reflect(-v, n);
+            float3 gi_radiance = SampleProbeVolumeRadiance(
+                probeVolume, probeInfo, in.worldPos, r);
+            float2 brdf = sample_brdf_lut(max(dot(n, v), 0.0), roughness);
+            specular_ibl = ibl_intensity * gi_radiance * (f_ibl * brdf.x + brdf.y);
+        }
     }
-    // Specular IBL: prefiltered env + BRDF LUT (set 2 binding 2/3).
-    if (on(PBR_FLAG_SPECULAR_IBL))
+    // ---- IBL (environment cubemap, only when GI is inactive). ----
+    // Legacy fallback: sample the env irradiance and prefiltered cubemaps.
+    // Only reached when GI is off (isolate mode or GI resources unavailable).
+    else
     {
-        float3 r = reflect(-v, n);
-        float3 prefiltered = sample_specular(r, roughness);
-        float2 brdf = sample_brdf_lut(max(dot(n, v), 0.0), roughness);
-        specular_ibl = ibl_intensity * prefiltered * (f_ibl * brdf.x + brdf.y);
+        // Diffuse IBL: real irradiance cube (set 2 binding 1).
+        if (on(PBR_FLAG_DIFFUSE_IBL))
+        {
+            float3 irradiance = sample_irradiance(n);
+            diffuse_ibl = ibl_intensity * kd_ibl * irradiance * albedo;
+        }
+        // Specular IBL: prefiltered env + BRDF LUT (set 2 binding 2/3).
+        if (on(PBR_FLAG_SPECULAR_IBL))
+        {
+            float3 r = reflect(-v, n);
+            float3 prefiltered = sample_specular(r, roughness);
+            float2 brdf = sample_brdf_lut(max(dot(n, v), 0.0), roughness);
+            specular_ibl = ibl_intensity * prefiltered * (f_ibl * brdf.x + brdf.y);
+        }
     }
+
+    // ---- AO & occlusion (attenuate whichever indirect source is active). ----
     // GTAO visibility: 1.0 = unoccluded, 0.0 = fully occluded. Apply only
-    // to the IBL terms (not direct lighting - direct already has its own
+    // to indirect terms (not direct lighting — direct already has its own
     // shadow map). Linear sampling smooths the half-res AO up to full res.
     if (on(PBR_FLAG_AO))
     {
         float ao = aoTex.SampleLevel(screen_uv, 0.0).r;
-        diffuse_ibl  *= ao;
-        specular_ibl *= ao;
+        // Soften: lerp between unoccluded (1.0) and the raw AO so the darkest
+        // corners never lose all ambient light. 0.8 = AO at fully occluded
+        // (ao~0) retains 20 % of the indirect energy.
+        float ao_soft = lerp(1.0, ao, 0.8);
+        diffuse_ibl  *= ao_soft;
+        specular_ibl *= ao_soft;
     }
     // Material occlusion map (glTF occlusionTexture, R channel). Also affects
-    // IBL only (never direct light), and is blended by `occlusion_strength`:
+    // indirect only (never direct light), and is blended by `occlusion_strength`:
     // mix(1.0, tex.r, strength) so strength=0 ignores the map. Combined with
     // GTAO multiplicatively (both attenuate indirect light).
     if (mat.occlusion_idx != 0xFFFFFFFFu)
@@ -624,39 +673,12 @@ SceneOutput fragmentMain(MeshVaryings in)
         specular_ibl *= occ;
     }
 
-    // ---- GI (probe volume) gates IBL. Gated by PBR_FLAG_GI isolate flag
-    // (always active in normal mode). Replaces BOTH IBL diffuse AND specular
-    // with probe volume data so the indirect lighting is self-consistent:
-    //
-    // Diffuse — sample probes at surface normal (replaces env irradiance).
-    // Specular — sample probes at reflection direction (replaces env cubemap
-    //   prefiltered mip). Using the env cubemap for specular while GI probes
-    //   provide diffuse would show the outdoor sky reflected off interior
-    //   walls (the env sky leaks into enclosed spaces), contradicting the
-    //   baked occlusion. Sampling the probe SH at the reflected ray direction
-    //   gives a consistent (if blurry for mirror-like surfaces) reflection
-    //   that matches the scene's indirect lighting. The split-sum Fresnel +
-    //   roughness factorization (f_ibl, brdf) is reused from the env specular
-    //   path; only the "prefiltered" input is replaced by the probe volume. ----
-    float3 gi_diffuse = float3(0.0);
-    if (on(PBR_FLAG_GI))
-    {
-        // — Diffuse: probes at surface normal (as before) —
-        float3 gi_irradiance = SampleProbeVolumeIrradiance(
-            probeVolume, probeInfo, in.worldPos, n);
-        gi_diffuse = kd_ibl * gi_irradiance * albedo;
-        diffuse_ibl = gi_diffuse;
-
-        // — Specular: probes at reflection direction (replaces env cubemap) —
-        if (on(PBR_FLAG_SPECULAR_IBL))
-        {
-            float3 r = reflect(-v, n);
-            float3 gi_spec = SampleProbeVolumeIrradiance(
-                probeVolume, probeInfo, in.worldPos, r);
-            float2 brdf = sample_brdf_lut(max(dot(n, v), 0.0), roughness);
-            specular_ibl = ibl_intensity * gi_spec * (f_ibl * brdf.x + brdf.y);
-        }
-    }
+    // ---- Minimum ambient floor ----
+    // After all IBL modifications (AO, occlusion, GI), ensure shadowed /
+    // occluded areas never go to pure black. 8 % of albedo at default exposure
+    // (1.0) gives dark stone ~6 sRGB (barely visible), and at max exposure
+    // (5.0) gives ~28 sRGB (dark but clearly non-black).
+    diffuse_ibl = max(diffuse_ibl, 0.08 * albedo);
 
     // ---- Emissive (gated). Neutral = 0. ----
     float3 emissive = float3(0.0);
@@ -728,9 +750,14 @@ SceneOutput fragmentMain(MeshVaryings in)
     // NOT added again -- otherwise shadowed faces (NdotL~0) would stay bright
     // and direct-light shading would look flat.
     float3 color = direct;
-    color += diffuse_ibl + specular_ibl;   // IBL (diffuse replaced by GI when active)
+    color += diffuse_ibl + specular_ibl;   // Indirect: GI (when active) or IBL fallback
     color += multi_light + emissive;       // multilight + emissive
     color += transmission + translucency + aniso_spec + clearcoat;
+
+    // Overall brightness (exposure). Applied here so it uniformly scales every
+    // light component (direct, IBL, point lights, emissive, ...). The PostPass
+    // tonemaps the result before outputting to the swapchain.
+    color *= frame.exposure;
 
     // Output linear HDR color. Tonemapping (Reinhard / ACES) is applied by
     // the PostPass (post.slang), which samples this HDR attachment and writes
