@@ -81,18 +81,6 @@ pub fn load_scene_geometry(path: &Path) -> Result<SceneGeometry> {
 /// Flatten an already-loaded [`prism_asset::SceneStore`] into world-space
 /// vertex data. Same logic as [`load_scene_geometry`] but works on a
 /// pre-populated store (used by the real-time PT pass).
-///
-/// **Albedo resolution:** the path tracer's `path_integrator` reads per-vertex
-/// `color` as the surface albedo (it has no fragment-shader texture sampling).
-/// For textured materials (e.g. Sponza) the scalar `base_color` factor is
-/// usually white and the actual colour lives in the albedo texture, so using
-/// only `base_color` would make every textured surface render as a flat white
-/// "白模". To avoid that, when a material has an `albedo_tex` we sample it at
-/// each vertex's UV, convert sRGB→linear, and multiply by the scalar
-/// `base_color` - baking the textured albedo into the vertex colours. This is
-/// an approximation (it loses sub-triangle detail and mip filtering), but it
-/// is the right fix for a `RayQuery` path tracer that cannot sample textures
-/// mid-ray. Materials without an albedo texture keep using the scalar factor.
 pub fn flatten_from_store(store: &prism_asset::SceneStore) -> Result<SceneGeometry> {
     let mut vertices: Vec<Vertex> = Vec::new();
     let mut indices: Vec<u32> = Vec::new();
@@ -101,14 +89,10 @@ pub fn flatten_from_store(store: &prism_asset::SceneStore) -> Result<SceneGeomet
 
     for (_h, inst) in store.instances() {
         let Some(mesh) = store.mesh(inst.mesh) else { continue };
-        let mat = store.material(inst.material);
-        let base_color = mat
+        let albedo = store
+            .material(inst.material)
             .map(|m| [m.base_color[0], m.base_color[1], m.base_color[2]])
             .unwrap_or([0.8, 0.8, 0.8]);
-        // Resolve the albedo texture (if any) so we can sample it per-vertex.
-        let albedo_tex = mat
-            .and_then(|m| m.albedo_tex)
-            .and_then(|h| store.texture(h));
         let xf = inst.transform;
         let base = vertices.len() as u32;
 
@@ -120,29 +104,11 @@ pub fn flatten_from_store(store: &prism_asset::SceneStore) -> Result<SceneGeomet
             }
             let normal = mesh.normals.get(i).copied().unwrap_or([0.0, 1.0, 0.0]);
             let wn = normalize3(transform_dir(xf, normal));
-            let uv = mesh.uvs.get(i).copied().unwrap_or([0.0, 0.0]);
-
-            // Bake textured albedo into the vertex colour when a texture is
-            // bound; otherwise fall back to the scalar base colour factor.
-            let color = match albedo_tex {
-                Some(tex) => {
-                    let texel = sample_albedo_rgba8(tex, uv);
-                    // texel is already sRGB-decoded to linear; multiply by the
-                    // scalar factor (glTF: final = base_color * texture).
-                    [
-                        base_color[0] * texel[0],
-                        base_color[1] * texel[1],
-                        base_color[2] * texel[2],
-                    ]
-                }
-                None => base_color,
-            };
-
             vertices.push(Vertex {
                 position: world,
                 normal: wn,
-                color,
-                uv,
+                color: albedo,
+                uv: mesh.uvs.get(i).copied().unwrap_or([0.0, 0.0]),
                 tangent: mesh.tangents.get(i).copied().unwrap_or([1.0, 0.0, 0.0, 1.0]),
             });
         }
@@ -160,70 +126,6 @@ pub fn flatten_from_store(store: &prism_asset::SceneStore) -> Result<SceneGeomet
 
     anyhow::ensure!(!vertices.is_empty(), "scene produced no geometry");
     Ok((vertices, indices, aabb_min, aabb_max))
-}
-
-/// Sample an albedo texture (RGBA8, possibly sRGB-encoded) at UV `uv` with
-/// repeat wrapping and nearest filtering, returning a **linear** RGB tuple in
-/// [0,1]. Used by [`flatten_from_store`] to bake textured albedo into vertex
-/// colours for the path tracer.
-///
-/// Nearest filtering is intentional: the result is stored per-vertex, so any
-/// bilinear interpolation we did here would be re-linearly interpolated across
-/// the triangle anyway. Mipmapping is not available at flatten time (the CPU
-/// only has the base mip), so distant surfaces may alias - acceptable for a
-/// real-time PT preview.
-fn sample_albedo_rgba8(tex: &prism_asset::TextureData, uv: [f32; 2]) -> [f32; 3] {
-    use prism_asset::TexFormat;
-
-    let (w, h) = (tex.width as i32, tex.height as i32);
-    if w == 0 || h == 0 {
-        return [1.0, 1.0, 1.0];
-    }
-    // Repeat wrapping on both axes (matches the renderer's LINEAR_WRAP sampler).
-    // glTF UVs are normalised to [0,1] over the texture, so scale to texels
-    // before wrapping.
-    let wrap = |v: f32, n: i32| -> i32 {
-        let mut i = ((v * n as f32).floor() as i32) % n;
-        if i < 0 {
-            i += n;
-        }
-        i
-    };
-    let x = wrap(uv[0], w);
-    let y = wrap(uv[1], h);
-    let idx = ((y as usize) * (w as usize) + (x as usize)) * 4;
-
-    let bytes = tex.pixels.get(idx..idx + 4);
-    let rgba = match (tex.format, bytes) {
-        // sRGB-encoded: decode to linear.
-        (TexFormat::Rgba8Srgb, Some(b)) => [
-            srgb_to_linear(b[0] as f32 / 255.0),
-            srgb_to_linear(b[1] as f32 / 255.0),
-            srgb_to_linear(b[2] as f32 / 255.0),
-        ],
-        // Already linear.
-        (TexFormat::Rgba8, Some(b)) => [
-            b[0] as f32 / 255.0,
-            b[1] as f32 / 255.0,
-            b[2] as f32 / 255.0,
-        ],
-        // HDR textures are not supported in this bake path; treat as white.
-        (TexFormat::Rgba16f, _) => [1.0, 1.0, 1.0],
-        // Out-of-range UV or undersized pixel buffer: magenta fallback so the
-        // mistake is visible rather than silently white.
-        (_, None) => [1.0, 0.0, 1.0],
-    };
-    rgba
-}
-
-/// Standard sRGB transfer-function decode (channel-wise). Matches the
-/// `R8G8B8A8_SRGB` image-view decode the rasterizer gets from the hardware.
-fn srgb_to_linear(c: f32) -> f32 {
-    if c <= 0.04045 {
-        c / 12.92
-    } else {
-        ((c + 0.055) / 1.055).powf(2.4)
-    }
 }
 
 /// A closed unit cube centered at the origin (side length 4, so [-2,2]^3),
@@ -340,67 +242,4 @@ pub fn create_storage_buffer(
         context.device.unmap_memory(memory);
     }
     Ok((buffer, memory))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use prism_asset::{TexFormat, TextureData};
-
-    fn tex(format: TexFormat, pixels: Vec<u8>) -> TextureData {
-        TextureData {
-            name: "t".into(),
-            width: 2,
-            height: 2,
-            format,
-            pixels,
-        }
-    }
-
-    #[test]
-    fn sample_albedo_repeats_uv_and_decodes_srgb() {
-        // 2x2 sRGB texture. Pixel (0,0)=red, (1,0)=green, (0,1)=blue, (1,1)=white.
-        let pixels = vec![
-            255, 0, 0, 255, // (0,0)
-            0, 255, 0, 255, // (1,0)
-            0, 0, 255, 255, // (0,1)
-            255, 255, 255, 255, // (1,1)
-        ];
-        let t = tex(TexFormat::Rgba8Srgb, pixels);
-
-        // UV (0.25, 0.25) -> floor -> (0,0) -> red. sRGB(255)=1.0 linear.
-        let r = sample_albedo_rgba8(&t, [0.25, 0.25]);
-        assert!((r[0] - 1.0).abs() < 1e-3 && r[1] < 1e-3 && r[2] < 1e-3);
-
-        // UV (0.75, 0.25) -> (1,0) -> green.
-        let g = sample_albedo_rgba8(&t, [0.75, 0.25]);
-        assert!(g[0] < 1e-3 && (g[1] - 1.0).abs() < 1e-3 && g[2] < 1e-3);
-
-        // Repeat wrapping: UV (1.25, 0.25) -> 1.25*2=2.5 -> floor 2 -> %2=0 -> red.
-        let wrapped = sample_albedo_rgba8(&t, [1.25, 0.25]);
-        assert!((wrapped[0] - 1.0).abs() < 1e-3, "wrap x failed: {:?}", wrapped);
-
-        // Negative UV wraps: -0.25*2=-0.5 -> floor -1 -> +2=1 -> pixel 1 = green.
-        let neg = sample_albedo_rgba8(&t, [-0.25, 0.25]);
-        assert!((neg[1] - 1.0).abs() < 1e-3, "negative wrap failed: {:?}", neg);
-    }
-
-    #[test]
-    fn sample_albedo_linear_format_skips_srgb_decode() {
-        // A mid-grey (128) in a linear texture must come back as 128/255, NOT
-        // the sRGB-decoded ~0.215.
-        let pixels = vec![128, 128, 128, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255];
-        let t = tex(TexFormat::Rgba8, pixels);
-        let c = sample_albedo_rgba8(&t, [0.25, 0.25]);
-        let expect = 128.0_f32 / 255.0;
-        assert!((c[0] - expect).abs() < 1e-3, "linear decode wrong: {}", c[0]);
-    }
-
-    #[test]
-    fn srgb_to_linear_endpoints() {
-        assert!((srgb_to_linear(0.0)).abs() < 1e-6);
-        assert!((srgb_to_linear(1.0) - 1.0).abs() < 1e-6);
-        // sRGB 0.5 decodes to ~0.214 (canonical value).
-        assert!((srgb_to_linear(0.5) - 0.21404114).abs() < 1e-3);
-    }
 }
