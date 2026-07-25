@@ -1,6 +1,7 @@
-# Hidden folders (.*) — but keep CI config tracked
+# Hidden folders (.*) — but keep CI config and agent skills tracked
 .*/
 !.github/
+!.claude/skills/
 
 # Rust build artifacts
 /target
