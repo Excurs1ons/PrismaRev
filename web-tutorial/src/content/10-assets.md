@@ -144,6 +144,34 @@ uploader.finish(graphics_queue)?; // 单次 submit + wait，随后清理临时�
 
 `finish()` 是同步阻塞的（保持单线程加载路径简单），后续可做 timeline-semaphore 的异步变体。这是「资产管线」从「能加载」到「加载得快」的关键一步。
 
+## 场景持久化：SceneState
+
+场景编辑完的光照/相机/变换参数如果每次重启都丢失，调试效率会非常低。引擎的 `scene_state.rs` 实现了**手写 JSON 持久化**（无 serde 依赖），在 Ctrl+S 或优雅退出时保存，启动时自动加载：
+
+```rust
+#[derive(Clone, Debug)]
+pub struct SceneState {
+    pub camera: Option<CameraState>,
+    pub directional_light: Option<DirectionalLight>,
+    pub point_lights: Vec<PointLight>,
+    pub transforms: Vec<Transform>,
+}
+```
+
+```rust
+// 序列化（手写 JSON）
+fn save_scene_state(
+    path: &Path, camera: &Camera, world: &World
+) -> Result<()>;
+
+// 反序列化 → 恢复 ECS 组件
+fn load_scene_state(
+    path: &Path, camera: &mut Camera, world: &mut World
+) -> Result<()>;
+```
+
+格式是嵌套 JSON（无外部依赖），保存到 `scene_state.json` 在可执行文件旁。这样每次在 Inspector 中调好的场景参数（光源位置/颜色/强度、相机角度、物体变换）下次启动时自动恢复。
+
 ## 动手练习
 
 :::exercise

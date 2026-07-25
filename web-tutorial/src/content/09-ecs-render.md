@@ -39,9 +39,13 @@ impl Transform {
 引擎使用**物理单位**：光照强度用 `lux`（勒克斯，方向光）/ `candela`（坎德拉，点光源），而非无单位的魔数。这样不同场景的光照参数可以直接复用真实世界的参考值（晴天 100k lux，室内 100 cd）。
 :::
 
-## 相机
+## 相机系统
 
-`OrbitCamera` 用球坐标（azimuth `theta`、elevation `phi`、距离 `distance`）围绕一个 `target` 旋转。它的 `view_proj()` 产出 `proj * view`（**列主序**，与 GLSL `m[col][row]` 对齐）：
+引擎的相机系统在 `crates/prism-engine/src/camera.rs`（693 行）中定义，支持**两种相机模式**，运行时通过 `Camera` 枚举切换：
+
+### OrbitCamera（轨道相机）
+
+用球坐标（azimuth `theta`、elevation `phi`、距离 `distance`）围绕一个 `target` 旋转。它的 `view_proj()` 产出 `proj * view`（**列主序**，与 GLSL `m[col][row]` 对齐）：
 
 ```rust id=camera-vp
 pub fn view_proj(&self) -> [[f32; 4]; 4] {
@@ -50,6 +54,43 @@ pub fn view_proj(&self) -> [[f32; 4]; 4] {
     proj * view   // 列主序矩阵乘法
 }
 ```
+
+### FlyCamera（自由飞行）
+
+WASD + 鼠标控制的自由相机，适用于场景漫游。与 `OrbitCamera` 共用 `view_proj` / `projection` / `view` 接口。
+
+```rust
+pub struct FlyCamera {
+    pub position: [f32; 3],
+    pub yaw: f32,      // 水平旋转角（弧度）
+    pub pitch: f32,    // 垂直俯仰角（弧度）
+    pub fov_y: f32,
+    pub znear: f32,
+    pub zfar: f32,
+    pub move_speed: f32,
+    pub look_sensitivity: f32,
+    pub exposure: f32,
+}
+```
+
+### Camera 枚举（运行时切换）
+
+`Camera` 枚举包装两种模式，并通过 `OrbitCameraController` 统一处理输入：
+
+```rust
+pub enum Camera {
+    Orbit(OrbitCamera),
+    Fly(FlyCamera),
+}
+
+impl Camera {
+    pub fn view_proj(&self) -> [[f32; 4]; 4];
+    pub fn eye(&self) -> [f32; 3];
+    pub fn projection(&self) -> [[f32; 4]; 4];
+}
+```
+
+`OrbitCameraController`（`camera_controller.rs`）监听 `InputState` 的鼠标拖拽/滚轮事件，驱动 `OrbitCamera` 的 theta/phi/distance 变化。`FlyCamera` 的 WASD 输入则在 `App::update` 中直接处理。
 
 :::danger 透视投影的 Vulkan y-flip
 `perspective()` 里 `p[1][1] = -inv_tan(fovy/2)`（注意负号）。这是 Vulkan 与 OpenGL 的关键差异——OpenGL 用 `+inv_tan`。深度映射到 `[0,1]` 而非 `[-1,1]`。漏掉这个负号，画面会上下颠倒。详见第 13 章坐标约定。

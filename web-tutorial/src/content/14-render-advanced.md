@@ -221,6 +221,71 @@ float3 irradiance = SampleProbeVolumeIrradiance(
 
 ---
 
+## BLAS/TLAS：光线追踪的加速结构
+
+路径追踪和 ReSTIR 都需要高效的光线求交。Vulkan 提供**加速结构（Acceleration Structure）**来组织场景几何体，让 GPU 可以快速跳过无关三角形。引擎的 `acceleration_structure.rs`（751 行）构建两层结构：
+
+### 底层加速结构（BLAS）
+
+每个网格构建一个 BLAS，包含其顶点和索引缓冲的设备地址。引擎支持两种构建方式：
+
+- **完整网格 BLAS**：直接从 `Mesh` 构建，用于离线烘焙
+- **切片 BLAS**：从组合顶点/索引缓冲的某一段构建，用于 `PathTracePass` 的场景实例级切割
+
+```rust
+// BlasEntry::build 从 Mesh 构建
+pub fn build(
+    context: &VulkanContext,
+    command_pool: vk::CommandPool,
+    mesh: &Mesh,
+) -> anyhow::Result<Self>
+```
+
+每个 `BlasEntry` 包含 `vk::AccelerationStructureKHR` + 设备地址 + 配套缓冲/内存。
+
+### 顶层加速结构（TLAS）
+
+`build_multi_instance_tlas` 把多个 BLAS 实例（每个带独立 transform）组合为一个 TLAS。`PathTracePass` 每帧更新 TLAS（若场景变换有变化），shader 通过 `RaytracingAccelerationStructure tlas` descriptor 追踪光线：
+
+```rust
+pub fn build_multi_instance_tlas(
+    context: &VulkanContext,
+    command_pool: vk::CommandPool,
+    entries: &[(vk::DeviceAddress, &[[f32; 4]; 4])],
+) -> anyhow::Result<TlasEntry>
+```
+
+引擎在构建加速结构时要求 `VK_KHR_acceleration_structure` + `buffer_device_address` 扩展，在启动时通过 `capabilities.rs` 探测可用性。
+
+---
+
+## Gizmo：世界坐标轴指示器
+
+`gizmo.rs`（375 行）在场景原点绘制三个彩色箭头，帮助观察者理解坐标方向：
+
+- **X 轴** → 红色
+- **Y 轴** → 绿色
+- **Z 轴** → 蓝色
+
+Gizmo 使用独立的 Vertex Buffer + Pipeline，**关闭深度测试**（始终显示在最上层）。适配 `ScenePass` 的 2 个 MRT attachment 的混合状态（只写入 attachment 0，attachment 1 的 write mask 为 0）。
+
+```rust
+pub struct Gizmo {
+    pipeline: vk::Pipeline,
+    layout: vk::PipelineLayout,
+    vertex_buffer: vk::Buffer,
+    vertex_count: u32,
+    // ...
+}
+
+// push constant 只包含 view_proj 矩阵
+let pc = GizmoPush { viewProj: view_proj };
+```
+
+Gizmo 通过 push constant 接收 `view_proj`，顶点 shader 直接输出变换后的位置，不需要每帧更新 GPU 缓冲。它内嵌于 `ScenePass` 中，在场景几何体绘制完成后、PostPass 之前渲染。
+
+---
+
 ## 综合：三种渲染模式
 
 引擎在 `RenderSettings.render_mode` 下支持三种模式，第 7 章和第 11 章的内容在这里汇合：
@@ -242,6 +307,7 @@ float3 irradiance = SampleProbeVolumeIrradiance(
 2. 在 `shaders/slang/pt_render.slang` 中找到 ReSTIR DI 的完整流程（RIS → temporal → spatial → shade），画出数据依赖图。
 3. 读 `crates/prism-render/src/pt_pass.rs`，找 PathTracePass 如何与 `RenderGraph` 对接（setup/execute）。
 4. 读 `crates/prism-render/src/gi.rs` 的 `eval_sh9` 函数，验证 9 个 SH 系数与 `gi.slang` 中的 `EvalSH9` 是否一致。
-5. 在引擎中切换 `RenderMode::Raster` 和 `RenderMode::PathTrace`，对比同一个场景在两种模式下的视觉效果。
-
+5. 读 `crates/prism-render/src/acceleration_structure.rs` 的 `BlasEntry::build` 和 `build_multi_instance_tlas`，画出 BLAS → TLAS 的数据流。
+6. 在 `gizmo.rs` 中找到 `GizmoPush` push constant 的字段，验证它只包含 `viewProj`——理解为什么 Gizmo 不需要每帧更新 GPU 缓冲。
+7. 在引擎中切换 `RenderMode::Raster` 和 `RenderMode::PathTrace`，对比同一个场景在两种模式下的视觉效果。
 :::

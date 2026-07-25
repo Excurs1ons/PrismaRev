@@ -150,7 +150,56 @@ WindowEvent::KeyboardInput { event, .. } => {
 
 现在 `Esc` 也能退出。
 
-## 4.6 动手练习
+## 4.6 输入抽象：InputState
+
+原始 `WindowEvent::KeyboardInput` 事件流零散、反直觉——按一次键触发两次（press + release）。每次都要 match 很麻烦。引擎在 `crates/prism-engine/src/input.rs` 中封装了自己的 **`InputState`**，把零散事件转为可查询的状态机：
+
+```rust id=input-state
+pub struct InputState {
+    // 每个键的「当前帧是否按下」
+    keys: Vec<(KeyCode, bool)>,
+    // 鼠标增量（每帧归零）
+    mouse_delta: (f64, f64),
+    scroll_delta: f32,
+    // ...
+}
+
+impl InputState {
+    // 在 window_event/device_event 中更新
+    pub fn update_key(&mut self, code: KeyCode, pressed: bool);
+    pub fn update_mouse(&mut self, delta: (f64, f64));
+    pub fn update_scroll(&mut self, delta: f32);
+
+    // 查询方法
+    pub fn key_held(&self, code: KeyCode) -> bool;     // 按住不放
+    pub fn key_pressed(&self, code: KeyCode) -> bool;   // 这一帧刚按下
+    pub fn key_released(&self, code: KeyCode) -> bool;  // 这一帧刚松
+    pub fn mouse_delta(&self) -> (f64, f64);
+    pub fn scroll_delta(&self) -> f32;
+}
+```
+
+```rust
+// 引擎 App 中的典型使用模式
+fn window_event(&mut self, event_loop: &ActiveEventLoop, ...) {
+    match event {
+        WindowEvent::KeyboardInput { event, .. } => {
+            if let Some(code) = event.physical_key_code() {
+                let pressed = event.state == ElementState::Pressed;
+                self.input.update_key(code.into(), pressed);
+            }
+        }
+        WindowEvent::MouseInput { state, button, .. } => {
+            self.input.update_mouse_button(button.into(), state == ElementState::Pressed);
+        }
+        // ...
+    }
+}
+```
+
+KeyCode 枚举映射 winit 的 `PhysicalKey`，覆盖 WASD/Shift/Ctrl/方向键/数字键等常用按键。这样引擎其他子系统（相机控制器、Inspector、调试 HUD）只需查 `input.key_held(KeyCode::KeyW)`，无需关心 winit 事件流的细节。
+
+## 4.7 动手练习
 
 :::exercise
 1. 用上面模板建 `prism_window`，`cargo run` 确认窗口弹出，拖动改尺寸看终端输出。

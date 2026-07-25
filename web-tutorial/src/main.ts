@@ -21,6 +21,7 @@ import pbrMd from "./content/11-pbr.md?raw";
 import androidMd from "./content/12-android.md?raw";
 import reviewMd from "./content/13-review.md?raw";
 import renderAdvancedMd from "./content/14-render-advanced.md?raw";
+import engineToolsMd from "./content/15-engine-tools.md?raw";
 
 const CONTENT: Record<string, string> = {
   intro: introMd,
@@ -37,6 +38,7 @@ const CONTENT: Record<string, string> = {
   android: androidMd,
   review: reviewMd,
   "render-advanced": renderAdvancedMd,
+  "engine-tools": engineToolsMd,
 };
 
 const app = document.getElementById("app")!;

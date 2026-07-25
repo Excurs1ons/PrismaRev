@@ -129,6 +129,13 @@ export const CHAPTERS: ChapterMeta[] = [
     group: "引擎",
     viz: ["rendergraph"],
   },
+  {
+    id: "engine-tools",
+    title: "15 · 音频与调试子系统",
+    subtitle: "AudioEngine、Inspector、EguiOverlay",
+    file: "15-engine-tools.md",
+    group: "引擎",
+  },
 ];
 
 export function findChapter(id: string): ChapterMeta | undefined {
