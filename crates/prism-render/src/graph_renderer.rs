@@ -912,7 +912,7 @@ impl GraphRenderer {
                 light_color: frame_data.light_color,
                 exposure: *exposure,
                 pt_lights,
-                pt_accum_dirty: input.pt_accum_dirty,
+                pt_accum_dirty: *pt_accum_dirty,
             };
             let render_ctx = crate::render_graph::RenderContext {
                 device,

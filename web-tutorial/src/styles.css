@@ -31,7 +31,7 @@
   --grad: linear-gradient(135deg, var(--accent), var(--accent-2));
 
   /* 尺寸与排版 */
-  --sidebar-w: 312px;
+  --sidebar-w: 280px;
   --topbar-h: 58px;
   --radius: 10px;
   --mono: "Fira Code", "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
@@ -126,8 +126,8 @@ body::before {
   pointer-events: none;
 }
 
-/* 侧栏/内容区背景深处的大气云朵柔光 */
-.layout::before {
+/* 内容区背景深处的大气云朵柔光 */
+#app::before {
   content: "";
   position: fixed;
   top: var(--topbar-h);
@@ -161,15 +161,27 @@ body::before {
 }
 
 .topbar .menu-btn {
-  display: none;
-  background: var(--bg-panel);
-  border: 1px solid var(--border);
-  color: var(--text);
-  border-radius: 9px;
-  padding: 6px 11px;
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  border-radius: 8px;
+  padding: 4px 8px;
   cursor: pointer;
-  font-size: 18px;
+  font-size: 20px;
   line-height: 1;
+  transition: color 0.15s, background 0.15s;
+}
+.topbar .menu-btn:hover {
+  color: var(--text);
+  background: var(--bg-elev);
+}
+
+.chapter-counter {
+  font-size: 12px;
+  color: var(--text-faint);
+  font-family: var(--mono);
+  font-weight: 500;
+  white-space: nowrap;
 }
 
 .topbar .brand {
@@ -186,13 +198,6 @@ body::before {
   color: var(--accent);
 }
 
-.topbar .brand small {
-  color: var(--text-faint);
-  font-weight: 400;
-  font-size: 12px;
-  margin-left: 2px;
-}
-
 .topbar .ver-tag {
   margin-left: auto;
   padding: 3px 11px;
@@ -207,21 +212,10 @@ body::before {
   white-space: nowrap;
 }
 
-/* ========== 布局 ========== */
-
-.layout {
-  display: flex;
-  padding-top: var(--topbar-h);
-  height: 100%;
-  position: relative;
-  z-index: 1;
-}
-
-/* ========== 侧边栏 ========== */
+/* ========== 侧边栏（Overlay 面板） ========== */
 
 .sidebar {
-  width: var(--sidebar-w);
-  flex: 0 0 var(--sidebar-w);
+  width: 280px;
   background: var(--bg-panel);
   border-right: 1px solid var(--border);
   height: calc(100% - var(--topbar-h));
@@ -230,7 +224,14 @@ body::before {
   left: 0;
   overflow-y: auto;
   padding: 16px 12px 80px;
-  z-index: 25;
+  z-index: 50;
+  transform: translateX(-100%);
+  transition: transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 4px 0 24px rgba(0, 0, 0, 0.08);
+}
+
+.sidebar.open {
+  transform: translateX(0);
 }
 
 .sidebar .side-title {
@@ -303,30 +304,17 @@ body::before {
   color: var(--text-dim);
 }
 
-/* ========== 内容区 ========== */
+/* ========== 内容区（居中单列） ========== */
 
 .content {
-  margin-left: var(--sidebar-w);
-  flex: 1;
-  padding: 36px 56px 140px;
-  max-width: 100%;
-  overflow-x: clip;
+  max-width: 740px;
+  margin: 0 auto;
+  padding: calc(var(--topbar-h) + 28px) 24px 120px;
   position: relative;
   z-index: 1;
 }
 
-.reader {
-  display: grid;
-  grid-template-columns: minmax(0, 880px) 224px;
-  column-gap: 40px;
-  max-width: 1144px;
-  margin: 0 auto;
-}
-
 .article {
-  grid-column: 1;
-  min-width: 0;
-  max-width: 880px;
   position: relative;
 }
 
@@ -461,62 +449,85 @@ body::before {
   color: hsl(345deg 75% 36%);
 }
 
-/* ========== 本页目录（TOC） ========== */
+/* ========== 浮动 TOC 按钮与面板 ========== */
 
-.toc {
-  grid-column: 2;
-  grid-row: 1 / span 2;
-  align-self: start;
-  position: sticky;
-  top: calc(var(--topbar-h) + 18px);
-  max-height: calc(100vh - var(--topbar-h) - 36px);
+.toc-btn {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  cursor: pointer;
   display: flex;
-  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 14px rgba(108, 99, 255, 0.30);
+  z-index: 35;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+.toc-btn:hover {
+  transform: scale(1.08);
+  box-shadow: 0 6px 20px rgba(108, 99, 255, 0.35);
+}
+.toc-btn svg {
+  display: block;
+}
+
+.toc-panel {
+  position: fixed;
+  bottom: 78px;
+  right: 24px;
+  width: 220px;
+  max-height: 300px;
   background: var(--bg-panel);
   border: 1px solid var(--border);
   border-radius: var(--radius);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.10);
+  z-index: 35;
+  display: none;
+  flex-direction: column;
   overflow: hidden;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
 }
-
-.toc-head {
-  padding: 10px 14px;
+.toc-panel.open {
+  display: flex;
+}
+.toc-panel .toc-head {
+  padding: 8px 12px;
   font-weight: 700;
-  font-size: 13px;
+  font-size: 12px;
   letter-spacing: 0.4px;
   color: var(--text);
   border-bottom: 1px solid var(--border);
 }
-
-.toc-body {
+.toc-panel .toc-body {
   overflow-y: auto;
-  padding: 8px 6px 10px;
+  padding: 6px;
 }
-
-.toc-link {
+.toc-panel .toc-link {
   display: block;
-  padding: 5px 10px;
+  padding: 4px 8px;
   margin: 1px 0;
-  border-radius: 7px;
-  font-size: 13px;
+  border-radius: 6px;
+  font-size: 12px;
   line-height: 1.4;
   color: var(--text-dim);
   text-decoration: none;
   transition: background 0.15s, color 0.15s;
 }
-
-.toc-link.sub {
-  padding-left: 22px;
-  font-size: 12px;
+.toc-panel .toc-link.sub {
+  padding-left: 18px;
+  font-size: 11px;
   color: var(--text-faint);
 }
-
-.toc-link:hover {
+.toc-panel .toc-link:hover {
   background: var(--bg-elev);
   color: var(--text);
 }
-
-.toc-link.active {
+.toc-panel .toc-link.active {
   background: rgba(108, 99, 255, 0.08);
   color: var(--accent);
   font-weight: 600;
@@ -910,11 +921,12 @@ body::before {
 /* ========== 上一章/下一章导航 ========== */
 
 .pager {
-  grid-column: 1;
   display: flex;
   justify-content: space-between;
   gap: 14px;
-  margin-top: 56px;
+  margin-top: 48px;
+  padding-top: 28px;
+  border-top: 1px solid var(--border);
 }
 
 .pager a {
@@ -928,28 +940,29 @@ body::before {
   background: var(--bg-panel);
 }
 
-.pager a:hover {
+.pager a.prev:hover {
   border-color: var(--accent);
   color: var(--accent);
-  transform: translateY(-2px);
+  transform: translate(-3px, -2px);
+}
+.pager a.next:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  transform: translate(3px, -2px);
 }
 
 .pager a .dir {
   font-size: 12px;
   color: var(--text-faint);
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  transition: gap 0.2s ease, transform 0.2s ease;
+  display: inline-block;
+  transition: letter-spacing 0.2s ease, transform 0.2s ease;
 }
-
 .pager a.prev:hover .dir {
-  gap: 8px;
+  letter-spacing: 0.06em;
   transform: translateX(-2px);
 }
-
 .pager a.next:hover .dir {
-  gap: 8px;
+  letter-spacing: 0.06em;
   transform: translateX(2px);
 }
 
@@ -973,56 +986,31 @@ body::before {
   top: var(--topbar-h);
   background: rgba(0, 0, 0, 0.30);
   backdrop-filter: blur(2px);
-  z-index: 22;
+  z-index: 45;
+}
+.sidebar-backdrop.show {
+  display: block;
 }
 
 /* ========== 响应式 ========== */
 
-@media (max-width: 940px) {
-  .topbar .menu-btn {
-    display: block;
-  }
-
-  .sidebar {
-    transform: translateX(-100%);
-    transition: transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
-    box-shadow: 4px 0 24px rgba(0, 0, 0, 0.08);
-  }
-
-  .sidebar.open {
-    transform: translateX(0);
-  }
-
-  .sidebar-backdrop.show {
-    display: block;
-  }
-
+@media (max-width: 700px) {
   .content {
-    margin-left: 0;
-    padding: 24px 18px 110px;
+    padding-left: 16px;
+    padding-right: 16px;
   }
-
-  .topbar .brand small {
+  .chapter-counter {
     display: none;
   }
-}
-
-@media (max-width: 1180px) {
-  .reader {
-    display: block;
-    max-width: 880px;
+  .toc-btn {
+    bottom: 16px;
+    right: 16px;
+    width: 38px;
+    height: 38px;
   }
-
-  .toc {
-    display: none;
-  }
-
-  .article {
-    margin: 0 auto;
-    max-width: 880px;
-  }
-
-  .pager {
-    max-width: 880px;
+  .toc-panel {
+    bottom: 64px;
+    right: 16px;
+    width: 200px;
   }
 }

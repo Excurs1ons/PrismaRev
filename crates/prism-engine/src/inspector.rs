@@ -68,6 +68,9 @@ pub struct Inspector {
     /// Current PT accumulation frame count (samples per pixel).
     /// Only meaningful in PT mode; 0 when rasterizing.
     pub pt_frame_count: u32,
+    /// Whether the frame-time / FPS / PT performance HUD is shown.
+    /// Independent of the F1 inspector panel. Toggled with F3 by default.
+    pub show_perf: bool,
 }
 
 impl Default for Inspector {
@@ -91,6 +94,7 @@ impl Default for Inspector {
             frame_time_ms: 0.0,
             fps: 0.0,
             pt_frame_count: 0,
+            show_perf: true,
         }
     }
 }
@@ -103,6 +107,11 @@ impl Inspector {
     /// Toggle visibility (bound to F1 in `App::window_event`).
     pub fn toggle(&mut self) {
         self.show = !self.show;
+    }
+
+    /// Toggle the performance HUD (bound to F3 in `App::window_event`).
+    pub fn toggle_perf(&mut self) {
+        self.show_perf = !self.show_perf;
     }
 
     /// Phase 1: run the inspector UI through the egui overlay. Called before
@@ -125,12 +134,54 @@ impl Inspector {
         });
     }
 
+    /// Draw the bottom-left performance HUD (frame time / FPS / PT samples).
+    /// Separated from `ui()` so it can be rendered independently of the F1
+    /// inspector panel.
+    pub fn perf_hud(&self, ctx: &egui::Context) {
+        if !self.show_perf {
+            return;
+        }
+        let hint_frame = egui::Frame {
+            fill: egui::Color32::from_black_alpha(100),
+            corner_radius: egui::CornerRadius::same(4u8),
+            inner_margin: egui::Margin::symmetric(6_i8, 3_i8),
+            ..Default::default()
+        };
+        let mut perf_text = format!(
+            "{:.1} ms  |  {:.0} FPS",
+            self.frame_time_ms, self.fps,
+        );
+        if self.render_mode == RenderMode::PathTrace {
+            let max_str = if self.pt_max_iterations > 0 {
+                format!("{}", self.pt_max_iterations)
+            } else {
+                "∞".to_string()
+            };
+            perf_text.push_str(&format!(
+                "  |  PT {}/{} smp",
+                self.pt_frame_count, max_str,
+            ));
+        }
+        egui::Area::new("perf_hud".into())
+            .anchor(egui::Align2::LEFT_BOTTOM, [8.0, -8.0])
+            .movable(false)
+            .interactable(false)
+            .show(ctx, |ui| {
+                hint_frame.show(ui, |ui| {
+                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+                    ui.colored_label(egui::Color32::from_gray(180), perf_text);
+                });
+            });
+    }
+
     /// The actual egui layout. Separate from `run` so it can be called
     /// directly when co-hosting with another egui panel (e.g. the render-graph
     /// visualizer) inside a single `EguiOverlay::run_ui` closure - that closure
     /// overwrites the overlay's cached pending frame, so only one `run_ui` may
     /// run per frame.
     pub(crate) fn ui(&mut self, ctx: &Context, world: &mut World) {
+        self.perf_hud(ctx);
+
         // Semi-transparent dark frame shared by all inspector windows.
         let window_frame = egui::Frame {
             fill: egui::Color32::from_black_alpha(200),
@@ -328,33 +379,6 @@ impl Inspector {
             inner_margin: egui::Margin::symmetric(6_i8, 3_i8),
             ..Default::default()
         };
-        // --- Frame-time HUD (bottom-left, always when show_ui) ---
-        let mut perf_text = format!(
-            "{:.1} ms  |  {:.0} FPS",
-            self.frame_time_ms, self.fps,
-        );
-        if self.render_mode == RenderMode::PathTrace {
-            let max_str = if self.pt_max_iterations > 0 {
-                format!("{}", self.pt_max_iterations)
-            } else {
-                "∞".to_string()
-            };
-            perf_text.push_str(&format!(
-                "  |  PT {}/{} smp",
-                self.pt_frame_count, max_str,
-            ));
-        }
-        egui::Area::new("perf_hud".into())
-            .anchor(egui::Align2::LEFT_BOTTOM, [8.0, -8.0])
-            .movable(false)
-            .interactable(false)
-            .show(ctx, |ui| {
-                hint_frame.show(ui, |ui| {
-                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-                    ui.colored_label(egui::Color32::from_gray(180), perf_text);
-                });
-            });
-
         // --- Inspector hint (bottom-right, only when inspector visible) ---
         egui::Area::new("inspector_hint".into())
             .anchor(egui::Align2::RIGHT_BOTTOM, [-8.0, -8.0])
@@ -362,23 +386,21 @@ impl Inspector {
             .interactable(false)
             .show(ctx, |ui| {
                 hint_frame.show(ui, |ui| {
-                    ui.label("F1: toggle  |  Ctrl+S: save");
+                    ui.label("F1: inspector  |  F3: perf  |  Ctrl+S: save");
                 });
             });
     }
 
     /// Build the scrollable entity list from all light/transform-bearing
-    /// entities.
+    /// entities. More specific component labels (point light / dir light /
+    /// camera) are listed first; pure-transform entities get a generic label.
     fn entity_list(&mut self, ui: &mut Ui, world: &World) {
         use std::collections::HashSet;
 
         let mut ids: HashSet<u32> = HashSet::new();
         let mut entries: Vec<(Entity, String)> = Vec::new();
-        for (e, _) in world.query::<Transform>() {
-            if ids.insert(e.id()) {
-                entries.push((e, format!("Entity {} (transform)", e.id())));
-            }
-        }
+        // Specific component types first — they take priority over generic
+        // "transform" when an entity carries multiple component types.
         for (e, _) in world.query::<PointLight>() {
             if ids.insert(e.id()) {
                 entries.push((e, format!("Entity {} (point light)", e.id())));
@@ -392,6 +414,12 @@ impl Inspector {
         for (e, _) in world.query::<Camera>() {
             if ids.insert(e.id()) {
                 entries.push((e, format!("Entity {} (camera)", e.id())));
+            }
+        }
+        // Generic Transform fallback — only for entities not already listed.
+        for (e, _) in world.query::<Transform>() {
+            if ids.insert(e.id()) {
+                entries.push((e, format!("Entity {} (transform)", e.id())));
             }
         }
         entries.sort_by_key(|(e, _)| e.id());

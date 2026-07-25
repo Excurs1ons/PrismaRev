@@ -1303,6 +1303,18 @@ impl ApplicationHandler for App {
                                 self.lock_before_inspector = false;
                                 self.set_locked(true);
                             }
+                        } else if code == KeyCode::F3 {
+                            // Toggle the performance HUD independently of F1/F2.
+                            // Does NOT affect cursor lock (unlike F1/F2).
+                            self.inspector.toggle_perf();
+                            if self.inspector.show_perf {
+                                if let Some(renderer) = self.renderer.as_mut() {
+                                    if let Err(e) = renderer.ensure_egui_overlay() {
+                                        log::error!("failed to init egui overlay: {e}");
+                                        self.inspector.show_perf = false;
+                                    }
+                                }
+                            }
                         } else if code == KeyCode::KeyS
                             && (self
                                 .input_state
@@ -1394,7 +1406,7 @@ impl App {
     /// currently open. Used to gate pointer-lock, scene animation, and egui
     /// event forwarding so input goes to the UI whenever a panel is visible.
     fn any_ui_open(&self) -> bool {
-        self.inspector.show || self.render_graph_viz.show
+        self.inspector.show || self.render_graph_viz.show || self.inspector.show_perf
     }
 
     /// Hit-test a pointer against the debug overlay and apply the resulting
@@ -1541,6 +1553,7 @@ impl App {
                 }
                 if let Some(overlay) = renderer.egui_overlay_mut() {
                     overlay.run_ui(window, |ctx| {
+                        inspector.perf_hud(ctx);
                         if inspector.show {
                             inspector.ui(ctx, world);
                         }

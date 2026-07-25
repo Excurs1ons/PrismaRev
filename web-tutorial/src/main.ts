@@ -75,23 +75,28 @@ function renderShell() {
   app.innerHTML = `
     <div class="topbar">
       <button class="menu-btn" id="menu-btn">☰</button>
-      <div class="brand">Prisma<span>Rev</span><small>从 Rust 到 Vulkan 引擎 · 交互式教学</small></div>
+      <div class="brand">Prisma<span>Rev</span></div>
+      <span class="chapter-counter" id="chapter-counter"></span>
       <span class="ver-tag" title="教程基准 git 提交">0b48449</span>
     </div>
-    <div class="layout">
-      <aside class="sidebar" id="sidebar">${sidebarInner}</aside>
-      <div class="sidebar-backdrop" id="backdrop"></div>
-      <main class="content">
-        <div class="reader">
-          <article class="article" id="article"></article>
-          <aside class="toc" id="toc">
-            <div class="toc-head"><span>本页目录</span></div>
-            <div class="toc-body" id="toc-body"></div>
-          </aside>
-        </div>
-        <nav class="pager" id="pager"></nav>
-      </main>
-    </div>
+    <aside class="sidebar" id="sidebar">${sidebarInner}</aside>
+    <div class="sidebar-backdrop" id="backdrop"></div>
+    <main class="content">
+      <article class="article" id="article"></article>
+      <nav class="pager" id="pager"></nav>
+    </main>
+    <button class="toc-btn" id="toc-btn" aria-label="本页目录">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M3 3.5h10M3 8h10M3 12.5h10"/>
+        <circle cx="3" cy="3.5" r="1.2" fill="currentColor" stroke="none"/>
+        <circle cx="3" cy="8" r="1.2" fill="currentColor" stroke="none"/>
+        <circle cx="3" cy="12.5" r="1.2" fill="currentColor" stroke="none"/>
+      </svg>
+    </button>
+    <aside class="toc-panel" id="toc-panel">
+      <div class="toc-head"><span>本页目录</span></div>
+      <div class="toc-body" id="toc-body"></div>
+    </aside>
   `;
 
   const sidebar = document.getElementById("sidebar")!;
@@ -117,6 +122,22 @@ function renderShell() {
       backdrop.classList.remove("show");
     });
   });
+
+  /* 浮动 TOC 按钮：点击切换面板 */
+  const tocBtn = document.getElementById("toc-btn")!;
+  const tocPanel = document.getElementById("toc-panel")!;
+  tocBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    tocPanel.classList.toggle("open");
+  });
+  document.addEventListener("click", (e) => {
+    if (
+      !tocPanel.contains(e.target as Node) &&
+      !tocBtn.contains(e.target as Node)
+    ) {
+      tocPanel.classList.remove("open");
+    }
+  });
 }
 
 function setActive(id: string) {
@@ -141,6 +162,14 @@ function renderPager(current: ChapterMeta) {
   pager.innerHTML = prevHtml + nextHtml;
 }
 
+function updateChapterCounter(current: ChapterMeta) {
+  const idx = CHAPTERS.indexOf(current);
+  const counter = document.getElementById("chapter-counter");
+  if (counter) {
+    counter.textContent = `第 ${idx + 1} 章 / 共 ${CHAPTERS.length} 章`;
+  }
+}
+
 function renderChapter(id: string) {
   const chapter = findChapter(id) ?? CHAPTERS[0];
   const raw = CONTENT[chapter.id] ?? "# 内容缺失";
@@ -160,6 +189,7 @@ function renderChapter(id: string) {
 
   setActive(chapter.id);
   renderPager(chapter);
+  updateChapterCounter(chapter);
   buildToc();
   // 先同步归零，待布局回流稳定后再确保一次，避免内容高度变化导致没回顶
   window.scrollTo(0, 0);
@@ -167,20 +197,23 @@ function renderChapter(id: string) {
   animateChapterSwitch(article);
 }
 
-// 右侧「本页目录」：从文章 h2/h3 生成锚点链接，可折叠，滚动高亮当前节。
+// 浮动 TOC：从文章 h2/h3 生成锚点链接，滚动高亮当前节。
 let tocScrollHandler: (() => void) | null = null;
 function buildToc(): void {
   const article = document.getElementById("article")!;
-  const toc = document.getElementById("toc")!;
+  const toc = document.getElementById("toc-panel")!;
+  const tocBtn = document.getElementById("toc-btn")!;
   const body = document.getElementById("toc-body")!;
   const heads = Array.from(
     article.querySelectorAll<HTMLElement>("h2, h3")
   );
   if (!heads.length) {
     toc.style.display = "none";
+    tocBtn.style.display = "none";
     return;
   }
   toc.style.display = "";
+  tocBtn.style.display = "";
   body.innerHTML = heads
     .map((h) => {
       const sub = h.tagName === "H3" ? " sub" : "";
@@ -194,6 +227,7 @@ function buildToc(): void {
       e.preventDefault();
       const el = document.getElementById(a.dataset.target!);
       el?.scrollIntoView({ behavior: "smooth", block: "start" });
+      toc.classList.remove("open");
     });
   });
 
