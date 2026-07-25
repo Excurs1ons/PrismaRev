@@ -577,6 +577,7 @@ pub fn render_system(
         pt_max_iterations,
         exposure,
         pt_lights,
+        pt_accum_dirty: dirty_flags.directional_light,
     };
     renderer
         .execute(&ctx, &input)

@@ -411,6 +411,9 @@ pub struct GraphFrame<'a> {
     /// Analytic lights for path tracing (point/spot/area/directional).
     /// Written into the PT lights SSBO for multi-light NEE.
     pub pt_lights: &'a [PtAnalyticLight],
+    /// When `true`, the path tracer should reset its accumulation next frame.
+    /// Set when directional-light properties change.
+    pub pt_accum_dirty: bool,
 }
 
 /// Context passed to each pass's `execute`.

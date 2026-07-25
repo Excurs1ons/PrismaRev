@@ -79,6 +79,9 @@ pub struct FrameInput<'a> {
     /// Analytic lights for path tracing (point/spot/area/directional).
     /// Passed via SSBO to the PT compute shader for multi-light NEE.
     pub pt_lights: &'a [PtAnalyticLight],
+    /// When `true`, the path tracer should reset its accumulation next frame.
+    /// Set when directional-light properties (intensity/color/direction) change.
+    pub pt_accum_dirty: bool,
 }
 
 /// GPU session that owns the long-lived Vulkan runtime objects (device,
@@ -834,6 +837,7 @@ impl GraphRenderer {
             pt_max_iterations,
             exposure,
             pt_lights,
+            pt_accum_dirty,
         } = input;
         let light_view_proj = *light_view_proj;
         let inv_projection = *inv_projection;
@@ -908,6 +912,7 @@ impl GraphRenderer {
                 light_color: frame_data.light_color,
                 exposure: *exposure,
                 pt_lights,
+                pt_accum_dirty: input.pt_accum_dirty,
             };
             let render_ctx = crate::render_graph::RenderContext {
                 device,
@@ -1075,6 +1080,7 @@ impl GraphRenderer {
             pt_max_iterations,
             exposure,
             pt_lights,
+            pt_accum_dirty: true,
         };
         let exec_result = self.execute(&ctx, &input);
         let out_of_date = self.present(&ctx)?;

@@ -1,28 +1,48 @@
+/* ================================================================
+   PrismaRev Web Tutorial — Josh Comeau 风明亮色主题
+   Light theme, warm off-white bg, purple accent, cloud decorations,
+   clean code blocks with light background, left-border callouts.
+   ================================================================ */
+
 :root {
-  --bg: #0b0e13;
-  --bg-soft: #121821;
-  --bg-panel: #0f141c;
-  --bg-elev: #161d28;
-  --border: #232c3a;
-  --border-soft: #1a212c;
-  --text: #e8eef6;
-  --text-dim: #9fb0c2;
-  --text-faint: #61718a;
-  --accent: #58a6ff;
-  --accent-2: #7ee787;
-  --accent-3: #ff9d6f;
-  --warn: #f0c674;
-  --danger: #ff6b6b;
-  --grad: linear-gradient(135deg, #58a6ff 0%, #7ee787 100%);
-  --code-bg: #080b10;
+  /* ---------- 主色调 ---------- */
+  --bg: #fcfbf9;
+  --bg-soft: #f7f5f0;
+  --bg-panel: #ffffff;
+  --bg-elev: #eeede8;
+  --border: #e3e0d9;
+  --border-soft: #ebe9e2;
+  --text: hsl(222deg 22% 5%);
+  --text-dim: hsl(222deg 15% 38%);
+  --text-faint: hsl(222deg 12% 58%);
+
+  /* Josh Comeau 标志性色板 */
+  --accent: hsl(240deg 95% 62%);   /* #6C63FF 紫 */
+  --accent-2: hsl(333deg 100% 45%); /* #E6006E 粉 */
+  --accent-3: hsl(200deg 75% 65%);  /* #66C2E6 天蓝 */
+
+  /* 功能性颜色 */
+  --warn: hsl(38deg 95% 55%);       /* #F29C2E 橙 */
+  --danger: hsl(0deg 85% 60%);      /* #E84C4C 红 */
+  --info: hsl(204deg 75% 55%);      /* #3D94D9 蓝 */
+  --success: hsl(140deg 60% 45%);   /* #2EA85E 绿 */
+
+  --code-bg: hsl(210deg 40% 96%);   /* #F0F3F8 浅蓝灰 */
+  --grad: linear-gradient(135deg, var(--accent), var(--accent-2));
+
+  /* 尺寸与排版 */
   --sidebar-w: 312px;
   --topbar-h: 58px;
-  --radius: 12px;
-  --mono: "JetBrains Mono", "Fira Code", "SFMono-Regular", Consolas, monospace;
-  --sans: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", Roboto,
-    Helvetica, Arial, sans-serif;
-  --shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
+  --radius: 10px;
+  --mono: "Fira Code", "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "PingFang SC", "Microsoft YaHei", sans-serif;
+
+  /* 阴影更轻、更暖 */
+  --shadow: 0 4px 14px rgba(0, 0, 0, 0.06);
 }
+
+/* ========== 全局重置 ========== */
 
 * {
   box-sizing: border-box;
@@ -33,23 +53,39 @@ body {
   margin: 0;
   padding: 0;
   height: 100%;
-  background: var(--bg);
-  color: var(--text);
   font-family: var(--sans);
   font-size: 16px;
   line-height: 1.78;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
+}
+
+body {
+  background-color: var(--bg-soft);
+  color: var(--text);
+  /* 页面背景装饰：淡淡的云朵光泽 */
+  background-image:
+    radial-gradient(ellipse at 80% 15%, rgba(102, 194, 230, 0.06) 0%, transparent 55%),
+    radial-gradient(ellipse at 20% 30%, rgba(108, 99, 255, 0.04) 0%, transparent 50%),
+    radial-gradient(ellipse at 50% 80%, rgba(230, 0, 110, 0.02) 0%, transparent 40%);
+  background-attachment: fixed;
 }
 
 #app {
   height: 100%;
 }
 
-/* 全局自定义滚动条 */
+/* 选中高亮 — 紫调 */
+::selection {
+  background: rgba(108, 99, 255, 0.18);
+  color: var(--text);
+}
+
+/* 全局自定义滚动条 — 浅色 */
 * {
   scrollbar-width: thin;
-  scrollbar-color: #2a3543 transparent;
+  scrollbar-color: #d0cdc6 transparent;
 }
 *::-webkit-scrollbar {
   width: 10px;
@@ -59,17 +95,54 @@ body {
   background: transparent;
 }
 *::-webkit-scrollbar-thumb {
-  background: #2a3543;
+  background: #d0cdc6;
   border-radius: 8px;
   border: 2px solid transparent;
   background-clip: content-box;
 }
 *::-webkit-scrollbar-thumb:hover {
-  background: #3a4757;
+  background: #b8b4ab;
   background-clip: content-box;
 }
 
-/* ---------- 顶栏 ---------- */
+/* ========== 装饰元素：彩虹条 ========== */
+/* 页顶固定彩虹渐变细条，仿 Josh Comeau 标志性装饰 */
+
+body::before {
+  content: "";
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(90deg,
+    var(--accent) 0%,
+    var(--accent-3) 25%,
+    var(--success) 50%,
+    var(--warn) 75%,
+    var(--accent-2) 100%
+  );
+  z-index: 100;
+  pointer-events: none;
+}
+
+/* 侧栏/内容区背景深处的大气云朵柔光 */
+.layout::before {
+  content: "";
+  position: fixed;
+  top: var(--topbar-h);
+  right: 0;
+  width: 420px;
+  height: 380px;
+  background:
+    radial-gradient(ellipse at 70% 20%, rgba(102, 194, 230, 0.08) 0%, transparent 55%),
+    radial-gradient(ellipse at 50% 60%, rgba(108, 99, 255, 0.05) 0%, transparent 50%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* ========== 顶栏 ========== */
+
 .topbar {
   position: fixed;
   top: 0;
@@ -80,15 +153,16 @@ body {
   align-items: center;
   gap: 14px;
   padding: 0 18px;
-  background: rgba(11, 14, 19, 0.72);
-  backdrop-filter: blur(14px) saturate(140%);
-  -webkit-backdrop-filter: blur(14px) saturate(140%);
+  background: rgba(255, 255, 255, 0.78);
+  backdrop-filter: blur(16px) saturate(150%);
+  -webkit-backdrop-filter: blur(16px) saturate(150%);
   border-bottom: 1px solid var(--border);
   z-index: 40;
 }
+
 .topbar .menu-btn {
   display: none;
-  background: var(--bg-elev);
+  background: var(--bg-panel);
   border: 1px solid var(--border);
   color: var(--text);
   border-radius: 9px;
@@ -97,6 +171,7 @@ body {
   font-size: 18px;
   line-height: 1;
 }
+
 .topbar .brand {
   font-weight: 800;
   font-size: 17px;
@@ -104,16 +179,20 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
+  color: var(--text);
 }
+
 .topbar .brand span {
   color: var(--accent);
 }
+
 .topbar .brand small {
   color: var(--text-faint);
   font-weight: 400;
   font-size: 12px;
   margin-left: 2px;
 }
+
 .topbar .ver-tag {
   margin-left: auto;
   padding: 3px 11px;
@@ -123,23 +202,27 @@ body {
   font-weight: 600;
   letter-spacing: 0.3px;
   color: var(--accent);
-  background: rgba(88, 166, 255, 0.12);
-  border: 1px solid rgba(88, 166, 255, 0.4);
+  background: rgba(108, 99, 255, 0.08);
+  border: 1px solid rgba(108, 99, 255, 0.28);
   white-space: nowrap;
 }
 
-/* ---------- 布局 ---------- */
+/* ========== 布局 ========== */
+
 .layout {
   display: flex;
   padding-top: var(--topbar-h);
   height: 100%;
+  position: relative;
+  z-index: 1;
 }
 
-/* ---------- 侧边栏 ---------- */
+/* ========== 侧边栏 ========== */
+
 .sidebar {
   width: var(--sidebar-w);
   flex: 0 0 var(--sidebar-w);
-  background: linear-gradient(180deg, var(--bg-panel) 0%, #0c1119 100%);
+  background: var(--bg-panel);
   border-right: 1px solid var(--border);
   height: calc(100% - var(--topbar-h));
   position: fixed;
@@ -149,6 +232,7 @@ body {
   padding: 16px 12px 80px;
   z-index: 25;
 }
+
 .sidebar .side-title {
   font-size: 11px;
   text-transform: uppercase;
@@ -157,9 +241,11 @@ body {
   margin: 18px 12px 8px;
   font-weight: 700;
 }
+
 .sidebar .side-title:first-child {
   margin-top: 4px;
 }
+
 .chapter-link {
   display: block;
   padding: 10px 13px;
@@ -174,20 +260,19 @@ body {
     transform 0.18s;
   position: relative;
 }
+
 .chapter-link:hover {
   background: var(--bg-elev);
   color: var(--text);
-  transform: translateX(2px);
+  transform: translateX(3px);
 }
+
 .chapter-link.active {
-  background: linear-gradient(
-    90deg,
-    rgba(88, 166, 255, 0.16),
-    rgba(88, 166, 255, 0.04)
-  );
-  border-color: rgba(88, 166, 255, 0.4);
-  color: #fff;
+  background: rgba(108, 99, 255, 0.07);
+  border-color: rgba(108, 99, 255, 0.25);
+  color: var(--accent);
 }
+
 .chapter-link .t {
   font-weight: 650;
   font-size: 14px;
@@ -195,34 +280,41 @@ body {
   align-items: center;
   gap: 8px;
 }
+
 .chapter-link .num {
   font-family: var(--mono);
   font-size: 11px;
   color: var(--accent);
-  background: rgba(88, 166, 255, 0.12);
+  background: rgba(108, 99, 255, 0.08);
   border-radius: 6px;
   padding: 1px 6px;
   min-width: 22px;
   text-align: center;
 }
+
 .chapter-link .s {
   font-size: 12px;
   color: var(--text-faint);
   margin-top: 3px;
   line-height: 1.4;
 }
+
 .chapter-link.active .s {
   color: var(--text-dim);
 }
 
-/* ---------- 内容区 ---------- */
+/* ========== 内容区 ========== */
+
 .content {
   margin-left: var(--sidebar-w);
   flex: 1;
   padding: 36px 56px 140px;
   max-width: 100%;
   overflow-x: clip;
+  position: relative;
+  z-index: 1;
 }
+
 .reader {
   display: grid;
   grid-template-columns: minmax(0, 880px) 224px;
@@ -230,11 +322,16 @@ body {
   max-width: 1144px;
   margin: 0 auto;
 }
+
 .article {
   grid-column: 1;
   min-width: 0;
   max-width: 880px;
+  position: relative;
 }
+
+/* ----- 文章排版 ----- */
+
 .article h1 {
   font-size: 32px;
   line-height: 1.25;
@@ -242,49 +339,130 @@ body {
   padding-bottom: 16px;
   border-bottom: 1px solid var(--border);
   letter-spacing: -0.01em;
+  color: var(--text);
 }
+
 .article h2 {
   font-size: 23px;
   margin: 40px 0 12px;
-  color: #fff;
   padding-top: 6px;
+  color: var(--text);
+  font-weight: 700;
 }
+
 .article h3 {
   font-size: 18px;
   margin: 26px 0 8px;
-  color: var(--accent);
+  color: var(--text);
+  font-weight: 650;
 }
+
 .article p {
   color: var(--text);
+  margin: 14px 0;
 }
+
 .article ul,
 .article ol {
   padding-left: 22px;
   color: var(--text);
 }
+
 .article li {
   margin: 6px 0;
 }
+
+/* ----- 链接：紫色 + boop 弹跳 ----- */
+
 .article a {
   color: var(--accent);
-  text-decoration: none;
-  border-bottom: 1px dashed rgba(88, 166, 255, 0.5);
+  text-decoration: underline;
+  text-decoration-color: rgba(108, 99, 255, 0.3);
+  text-underline-offset: 2px;
+  transition: color 0.15s, text-decoration-color 0.15s;
 }
+
+@keyframes boop {
+  0%   { transform: scale(1); }
+  30%  { transform: scale(1.07); }
+  60%  { transform: scale(0.97); }
+  100% { transform: scale(1); }
+}
+
 .article a:hover {
-  border-bottom-style: solid;
+  color: var(--accent);
+  text-decoration-color: var(--accent);
+  animation: boop 0.35s ease;
 }
+
+/* ----- 引用、表格、分割线 ----- */
+
 .article blockquote {
-  background: var(--bg-elev);
+  background: var(--bg-panel);
   margin: 18px 0;
   padding: 10px 16px;
   color: var(--text-dim);
   border-radius: 10px;
+  border-left: 4px solid var(--border);
 }
+
 .article blockquote p {
   margin: 4px 0;
 }
 
-/* ---------- 本页目录：文章阅读区内的右栏（与正文同属一个整体） ---------- */
+.article table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 18px 0;
+  font-size: 14px;
+  overflow: hidden;
+  border-radius: 10px;
+}
+
+.article th,
+.article td {
+  border: 1px solid var(--border);
+  padding: 9px 13px;
+  text-align: left;
+}
+
+.article th {
+  background: var(--bg-elev);
+  color: var(--text);
+  font-weight: 650;
+}
+
+.article tr:nth-child(even) td {
+  background: rgba(0, 0, 0, 0.014);
+}
+
+.article hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 34px 0;
+}
+
+.article img {
+  max-width: 100%;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  display: block;
+  margin: 18px auto;
+}
+
+/* ----- 行内代码 ----- */
+.article code:not(pre code) {
+  background: var(--code-bg);
+  border: 1px solid var(--border-soft);
+  padding: 1px 6px;
+  border-radius: 6px;
+  font-family: var(--mono);
+  font-size: 0.86em;
+  color: hsl(345deg 75% 36%);
+}
+
+/* ========== 本页目录（TOC） ========== */
+
 .toc {
   grid-column: 2;
   grid-row: 1 / span 2;
@@ -294,11 +472,13 @@ body {
   max-height: calc(100vh - var(--topbar-h) - 36px);
   display: flex;
   flex-direction: column;
-  background: var(--bg-elev);
+  background: var(--bg-panel);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   overflow: hidden;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
 }
+
 .toc-head {
   padding: 10px 14px;
   font-weight: 700;
@@ -307,10 +487,12 @@ body {
   color: var(--text);
   border-bottom: 1px solid var(--border);
 }
+
 .toc-body {
   overflow-y: auto;
   padding: 8px 6px 10px;
 }
+
 .toc-link {
   display: block;
   padding: 5px 10px;
@@ -322,64 +504,26 @@ body {
   text-decoration: none;
   transition: background 0.15s, color 0.15s;
 }
+
 .toc-link.sub {
   padding-left: 22px;
   font-size: 12px;
   color: var(--text-faint);
 }
+
 .toc-link:hover {
-  background: var(--bg-panel);
-  color: var(--text);
-}
-.toc-link.active {
-  background: rgba(88, 166, 255, 0.14);
-  color: var(--accent);
-}
-.article code:not(pre code) {
-  background: var(--code-bg);
-  border: 1px solid var(--border);
-  padding: 1px 6px;
-  border-radius: 6px;
-  font-family: var(--mono);
-  font-size: 0.86em;
-  color: var(--accent-2);
-}
-.article table {
-  border-collapse: collapse;
-  width: 100%;
-  margin: 18px 0;
-  font-size: 14px;
-  overflow: hidden;
-  border-radius: 10px;
-}
-.article th,
-.article td {
-  border: 1px solid var(--border);
-  padding: 9px 13px;
-  text-align: left;
-}
-.article th {
   background: var(--bg-elev);
   color: var(--text);
-  font-weight: 650;
-}
-.article tr:nth-child(even) td {
-  background: rgba(255, 255, 255, 0.014);
-}
-.article hr {
-  border: none;
-  border-top: 1px solid var(--border);
-  margin: 34px 0;
-}
-.article img {
-  max-width: 100%;
-  border-radius: 10px;
-  border: 1px solid var(--border);
-  display: block;
-  margin: 18px auto;
 }
 
-/* ---------- 代码块 ---------- */
+.toc-link.active {
+  background: rgba(108, 99, 255, 0.08);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* ========== 代码块（浅色背景） ========== */
+
 .code-block {
   position: relative;
   margin: 16px 0;
@@ -387,28 +531,32 @@ body {
   border: 1px solid var(--border);
   background: var(--code-bg);
   overflow: hidden;
-  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.04);
 }
+
 .code-block .code-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 8px 14px;
-  background: var(--bg-elev);
+  background: hsl(210deg 38% 93%);
   border-bottom: 1px solid var(--border);
   font-size: 12px;
   color: var(--text-faint);
   font-family: var(--mono);
 }
+
 .code-block .code-head .lang {
   text-transform: uppercase;
   letter-spacing: 1.4px;
   color: var(--accent);
   font-weight: 600;
 }
+
 .code-block .code-head .fname {
-  color: var(--text-faint);
+  color: var(--text-dim);
 }
+
 .code-block .copy-btn {
   background: transparent;
   border: 1px solid var(--border);
@@ -419,16 +567,19 @@ body {
   font-size: 11px;
   transition: all 0.15s;
 }
+
 .code-block .copy-btn:hover {
-  color: var(--text);
+  color: var(--accent);
   border-color: var(--accent);
-  background: rgba(88, 166, 255, 0.1);
+  background: rgba(108, 99, 255, 0.07);
 }
+
 .code-block pre {
   margin: 0;
   padding: 14px 0;
   overflow-x: auto;
 }
+
 .code-block pre code {
   font-family: var(--mono);
   font-size: 13.5px;
@@ -436,12 +587,14 @@ body {
   display: block;
   counter-reset: ln;
 }
+
 .code-block pre code .line {
   display: block;
   padding: 0 16px 0 56px;
   position: relative;
   white-space: pre;
 }
+
 .code-block pre code .line::before {
   counter-increment: ln;
   content: counter(ln);
@@ -449,24 +602,121 @@ body {
   left: 0;
   width: 42px;
   text-align: right;
-  color: #3a4757;
+  color: #b8bcc4;
   user-select: none;
 }
+
 .code-block pre code .line.hl {
-  background: rgba(88, 166, 255, 0.14);
+  background: rgba(108, 99, 255, 0.08);
 }
+
 .code-block pre code .line.hl::before {
   color: var(--accent);
 }
 
-/* ---------- 提示框 ---------- */
+/* ================================================================
+   Highlight.js 语法高亮 — Light Theme (GitHub 风)
+   ================================================================ */
+
+.hljs {
+  color: var(--text);
+  background: transparent;
+}
+
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-title.function_,
+.hljs-built_in {
+  color: #8250df;  /* 紫 */
+}
+
+.hljs-string,
+.hljs-addition {
+  color: #0a3069;  /* 深蓝 */
+}
+
+.hljs-number,
+.hljs-literal,
+.hljs-variable,
+.hljs-template-variable {
+  color: #0550ae;  /* 蓝 */
+}
+
+.hljs-comment,
+.hljs-quote,
+.hljs-meta {
+  color: #6e7781;  /* 灰 */
+  font-style: italic;
+}
+
+.hljs-type,
+.hljs-params {
+  color: #0550ae;
+}
+
+.hljs-attr,
+.hljs-attribute,
+.hljs-selector-attr,
+.hljs-selector-pseudo,
+.hljs-selector-class,
+.hljs-selector-id {
+  color: #953800;  /* 棕 */
+}
+
+.hljs-title,
+.hljs-title.class_,
+.hljs-section {
+  color: #953800;
+  font-weight: 600;
+}
+
+.hljs-tag,
+.hljs-name {
+  color: #0550ae;
+}
+
+.hljs-regexp,
+.hljs-link {
+  color: #0a3069;
+}
+
+.hljs-symbol,
+.hljs-bullet {
+  color: #8250df;
+}
+
+.hljs-deletion {
+  color: #82071e;
+  background: #ffebe9;
+}
+
+.hljs-emphasis {
+  font-style: italic;
+}
+
+.hljs-strong {
+  font-weight: bold;
+}
+
+.hljs-formula {
+  background: #eef0f2;
+}
+
+.hljs-punctuation {
+  color: var(--text-dim);
+}
+
+/* ========== 提示框（Callout）— 左边框风格 ========== */
+
 .callout {
   border-radius: var(--radius);
-  padding: 13px 16px;
+  padding: 14px 16px;
   margin: 18px 0;
   border: 1px solid var(--border);
-  background: var(--bg-elev);
+  border-left: 4px solid var(--info);
+  background: var(--bg-panel);
 }
+
 .callout .label {
   font-weight: 700;
   font-size: 13px;
@@ -474,50 +724,53 @@ body {
   margin-bottom: 4px;
   display: block;
 }
+
 .callout p {
   margin: 4px 0;
 }
+
 .callout.tip {
-  background: rgba(126, 231, 135, 0.07);
-  border-color: rgba(126, 231, 135, 0.3);
+  border-left-color: var(--success);
 }
+
 .callout.tip .label {
-  color: var(--accent-2);
+  color: var(--success);
 }
+
 .callout.warn {
-  background: rgba(240, 198, 116, 0.07);
-  border-color: rgba(240, 198, 116, 0.3);
+  border-left-color: var(--warn);
 }
+
 .callout.warn .label {
   color: var(--warn);
 }
+
 .callout.danger {
-  background: rgba(255, 107, 107, 0.07);
-  border-color: rgba(255, 107, 107, 0.3);
+  border-left-color: var(--danger);
 }
+
 .callout.danger .label {
   color: var(--danger);
 }
+
 .callout.info {
-  background: rgba(88, 166, 255, 0.07);
-  border-color: rgba(88, 166, 255, 0.3);
-}
-.callout.info .label {
-  color: var(--accent);
+  border-left-color: var(--info);
 }
 
-/* ---------- 练习框 ---------- */
+.callout.info .label {
+  color: var(--info);
+}
+
+/* ========== 练习框 ========== */
+
 .exercise {
-  background: linear-gradient(
-    135deg,
-    rgba(88, 166, 255, 0.07),
-    rgba(88, 166, 255, 0.02)
-  );
-  border: 1px dashed rgba(88, 166, 255, 0.45);
+  background: rgba(108, 99, 255, 0.04);
+  border: 1px dashed rgba(108, 99, 255, 0.35);
   border-radius: var(--radius);
   padding: 14px 18px;
   margin: 22px 0;
 }
+
 .exercise .label {
   font-weight: 700;
   color: var(--accent);
@@ -526,23 +779,27 @@ body {
   margin-bottom: 6px;
   display: block;
 }
+
 .exercise ol {
   margin: 6px 0 0;
   padding-left: 20px;
 }
+
 .exercise li {
   margin: 5px 0;
 }
 
-/* ---------- 可视化容器 ---------- */
+/* ========== 可视化容器 ========== */
+
 .viz {
   margin: 26px 0;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  background: linear-gradient(180deg, var(--bg-panel), #0c1119);
+  background: var(--bg-panel);
   overflow: hidden;
-  box-shadow: var(--shadow);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.04);
 }
+
 .viz .viz-head {
   padding: 11px 16px;
   border-bottom: 1px solid var(--border);
@@ -553,14 +810,16 @@ body {
   gap: 9px;
   background: var(--bg-elev);
 }
+
 .viz .viz-head .dot {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--accent-2);
-  box-shadow: 0 0 10px var(--accent-2);
+  background: var(--accent);
+  box-shadow: 0 0 10px var(--accent);
   animation: pulse 2s infinite;
 }
+
 @keyframes pulse {
   0%,
   100% {
@@ -570,16 +829,19 @@ body {
     opacity: 0.35;
   }
 }
+
 .viz .viz-body {
   padding: 16px;
 }
+
 .viz canvas {
   display: block;
   width: 100%;
-  background: var(--code-bg);
+  background: var(--bg-soft);
   border-radius: 9px;
   border: 1px solid var(--border-soft);
 }
+
 .viz .viz-controls {
   display: flex;
   gap: 9px;
@@ -587,8 +849,9 @@ body {
   margin-top: 13px;
   align-items: center;
 }
+
 .viz button {
-  background: var(--bg-elev);
+  background: var(--bg-panel);
   border: 1px solid var(--border);
   color: var(--text);
   border-radius: 8px;
@@ -597,22 +860,26 @@ body {
   font-size: 13px;
   transition: all 0.15s;
 }
+
 .viz button:hover {
   border-color: var(--accent);
   color: var(--accent);
-  background: rgba(88, 166, 255, 0.08);
+  background: rgba(108, 99, 255, 0.06);
 }
+
 .viz button.primary {
-  background: rgba(88, 166, 255, 0.16);
-  border-color: rgba(88, 166, 255, 0.5);
+  background: rgba(108, 99, 255, 0.10);
+  border-color: rgba(108, 99, 255, 0.35);
   color: var(--accent);
 }
+
 .viz .viz-hint {
   font-size: 12px;
   color: var(--text-faint);
   margin-top: 9px;
   line-height: 1.5;
 }
+
 .viz .ctrl-row {
   display: flex;
   align-items: center;
@@ -621,15 +888,18 @@ body {
   color: var(--text-dim);
   margin: 7px 0;
 }
+
 .viz .ctrl-row label {
   min-width: 130px;
   font-family: var(--mono);
 }
+
 .viz input[type="range"] {
   flex: 1;
   accent-color: var(--accent);
   height: 4px;
 }
+
 .viz .ctrl-row .val {
   font-family: var(--mono);
   color: var(--accent);
@@ -637,7 +907,8 @@ body {
   text-align: right;
 }
 
-/* ---------- 上一章/下一章导航 ---------- */
+/* ========== 上一章/下一章导航 ========== */
+
 .pager {
   grid-column: 1;
   display: flex;
@@ -645,6 +916,7 @@ body {
   gap: 14px;
   margin-top: 56px;
 }
+
 .pager a {
   flex: 1;
   border: 1px solid var(--border);
@@ -653,75 +925,103 @@ body {
   text-decoration: none;
   color: var(--text-dim);
   transition: border-color 0.18s, color 0.18s, transform 0.18s;
-  background: var(--bg-soft);
+  background: var(--bg-panel);
 }
+
 .pager a:hover {
   border-color: var(--accent);
   color: var(--accent);
   transform: translateY(-2px);
 }
+
 .pager a .dir {
   font-size: 12px;
   color: var(--text-faint);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  transition: gap 0.2s ease, transform 0.2s ease;
 }
+
+.pager a.prev:hover .dir {
+  gap: 8px;
+  transform: translateX(-2px);
+}
+
+.pager a.next:hover .dir {
+  gap: 8px;
+  transform: translateX(2px);
+}
+
 .pager a .ttl {
   font-weight: 600;
   font-size: 14px;
   display: block;
   margin-top: 3px;
 }
+
 .pager a.next {
   text-align: right;
 }
 
-/* ---------- 移动端遮罩 ---------- */
+/* ========== 移动端遮罩 ========== */
+
 .sidebar-backdrop {
   display: none;
   position: fixed;
   inset: 0;
   top: var(--topbar-h);
-  background: rgba(0, 0, 0, 0.55);
+  background: rgba(0, 0, 0, 0.30);
   backdrop-filter: blur(2px);
   z-index: 22;
 }
 
-/* ---------- 响应式 ---------- */
+/* ========== 响应式 ========== */
+
 @media (max-width: 940px) {
   .topbar .menu-btn {
     display: block;
   }
+
   .sidebar {
     transform: translateX(-100%);
     transition: transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
-    box-shadow: 6px 0 30px rgba(0, 0, 0, 0.6);
+    box-shadow: 4px 0 24px rgba(0, 0, 0, 0.08);
   }
+
   .sidebar.open {
     transform: translateX(0);
   }
+
   .sidebar-backdrop.show {
     display: block;
   }
+
   .content {
     margin-left: 0;
     padding: 24px 18px 110px;
   }
+
   .topbar .brand small {
     display: none;
   }
 }
-/* 中等/窄屏：阅读区变单列，目录栏隐藏（全局仅保留左侧 ☰ 一个菜单入口） */
+
 @media (max-width: 1180px) {
   .reader {
     display: block;
     max-width: 880px;
   }
+
   .toc {
     display: none;
   }
+
   .article {
     margin: 0 auto;
     max-width: 880px;
   }
+
   .pager {
     max-width: 880px;
   }

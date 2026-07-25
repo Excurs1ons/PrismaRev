@@ -72,9 +72,9 @@ export function flashLines(els: HTMLElement[]): void {
   if (!els.length) return;
   gsap.fromTo(
     els,
-    { backgroundColor: "rgba(88,166,255,0.30)" },
+    { backgroundColor: "rgba(108,99,255,0.20)" },
     {
-      backgroundColor: "rgba(88,166,255,0.14)",
+      backgroundColor: "rgba(108,99,255,0.08)",
       duration: 1.1,
       ease: "power2.out",
     }

@@ -804,10 +804,12 @@ impl RenderPassNode for PathTracePass {
         let cam_pos = ctx.frame.camera_pos;
         let cam_xyz = [cam_pos[0], cam_pos[1], cam_pos[2]];
         let inv_vp = mat_inverse(&ctx.frame.view_proj);
-        // Reset on camera motion OR an externally-requested dirty (parameter
-        // change such as max_bounces/exposure/light). The dirty flag is cleared
-        // after the reset is applied so only one reset happens per request.
-        let reset = self.should_reset(cam_xyz, inv_vp) || self.accum_dirty;
+        // Reset on camera motion, explicit accum-dirty (geometry), or the
+        // directional-light accumulation-dirty flag from the frame (intensity,
+        // color, or direction changed). Cleared after one frame in both cases.
+        let reset = self.should_reset(cam_xyz, inv_vp)
+            || self.accum_dirty
+            || ctx.frame.pt_accum_dirty;
         self.accum_dirty = false;
 
         self.prev_camera_pos = Some(cam_xyz);
