@@ -68,7 +68,7 @@
 | 重 pass（阴影/GI/反射）默认半分辨率 | 2.1：移动端带宽/算力 |
 | 所有跨端布局（push constant、UBO、SSBO）显式 padding 并验证 | 全平台一致 ABI |
 | 阴影 / GI / RT / 调试视图由 `RenderSettings` 统一开关 | 2.2：可降级不形变 |
-| 资源格式（glTF / 纹理）经 `prism-asset`（运行时即时加载）或 `resource-pipeline/*`（离线预处理 → .pak）接入，引擎不直读文件 | 2.2：解耦 |
+| 资源格式（glTF / 纹理）经 `prism-asset`（运行时即时加载）或 `prism-asset/*`（离线预处理 → .pak）接入，引擎不直读文件 | 2.2：解耦 |
 
 ## 4. 当前架构落点（与目标的对应关系）
 
@@ -76,7 +76,7 @@
 |----------|----------|
 | 模块化管线 | `prism-render/src/render_graph.rs`（`RenderPassNode` 图）+ `passes.rs`。**现状（2026-07-20）**：`RenderGraph::execute()` 统一驱动四个 pass（`ShadowMapPass` -> `ScenePass` -> `GtaoPass` -> `PostPass`，按注册顺序线性执行）。passes 通过 `read_usage` / `write_usage` 声明图边依赖，graph 据此自动插入跨 pass 的 `vkCmdPipelineBarrier`（layout cache 按 `(handle, image_index)` 跨帧持久，`recreate_swapchain` 时 `reset_layouts`）。跨帧延迟边（GTAO 双缓冲 AO 回喂）与 swapchain->`PRESENT_SRC_KHR` 保留手动，标注为图边界特例。环检测已实现（`validate_edges`），执行顺序不重排（接线顺序见 `GraphRenderer::new`）。资源生命周期区间已声明，TBDR 内存 aliasing 待后续。|
 | bindless / 全平台统一 | `prism-render/src/bindless.rs`（分离 SRV + 全局 sampler 表） |
-| 资源管理解耦 | `crates/prism-asset`（运行时 glTF 2.0 加载器 + `SceneStore` + `MaterialManager`），**新增** `resource-pipeline/*`（独立工作空间）提供离线预处理管线（Import→Cook→Package→Runtime，见 §10）。当前两套并存，`.pak` 路径尚未接入引擎。 |
+| 资源管理解耦 | `crates/prism-asset`（运行时 glTF 2.0 加载器 + `SceneStore` + `MaterialManager`），**新增** `prism-asset/*`（独立工作空间）提供离线预处理管线（Import→Cook→Package→Runtime，见 §10）。当前两套并存，`.pak` 路径尚未接入引擎。 |
 | 移动端 GI | **Baked probe-volume GI**（2 阶 SH，9 系数 RGB16F，3D texture），非实时 SHARC。设计见 §6。SHARC 实时 slang 已移除，不再恢复（移动端跑不动每帧 ray 填 cache）。|
 | 阴影 / RT | 光栅化阴影贴图：`ShadowMapPass`（深度预渲染，见 `shadow_depth.slang`）+ `ScenePass`（comparison sampler 采样，见 `scene_frag.slang`） |
 | 能力探测 | `prism-render/src/capabilities.rs`（集中探测，扩展中） |
@@ -534,7 +534,7 @@ pub struct SceneReadView<'a> {
 
 ## 10. 资源管线 v2 —— 离线预处理管线（独立工作空间）
 
-> 2026-07-25 新增。`resource-pipeline/` 是一个**独立工作空间**（不加入根 workspace
+> 2026-07-25 新增。`prism-asset/` 是一个**独立工作空间**（不加入根 workspace
 > `members`），实现了编辑器侧的"导入 → 烹饪 → 打包 → 运行时加载"全流程管线，
 > 与现有 `crates/prism-asset` 运行时 glTF 加载路径并存，后续逐步取代之。
 
@@ -582,10 +582,10 @@ pub struct SceneReadView<'a> {
 | `asset-runtime` | 运行时 `ResourceManager`：懒加载 `Handle<T>`、内存预算 LRU/FIFO、依赖递归解析、轮询式热重载 | asset-core, asset-package |
 | `asset-cli` | 7 个子命令：`init` / `scan` / `import` / `build` / `validate` / `list` / `inspect` | 以上所有 + clap |
 
-**工作空间配置**：`resource-pipeline/Cargo.toml` 定义独立 workspace，
+**工作空间配置**：`prism-asset/Cargo.toml` 定义独立 workspace，
 成员不加入根 workspace `members`。可独立构建：
 ```sh
-cd resource-pipeline && cargo build
+cd prism-asset && cargo build
 cargo test                       # 99 个测试全部通过
 cargo run -p asset-cli -- init
 ```
@@ -736,7 +736,7 @@ pub trait Asset: Sized + Send + 'static {
 
 ### 10.10 与现有管线（prism-asset）的关系
 
-| 维度 | 现有 `crates/prism-asset` | 新 `resource-pipeline/*` |
+| 维度 | 现有 `crates/prism-asset` | 新 `prism-asset/*` |
 |------|--------------------------|--------------------------|
 | 定位 | 运行时 glTF/PNG/HDR 实时加载 | 编辑器离线预处理 → .pak |
 | 加载时机 | 应用启动时同步加载 | 编辑器离线构建，运行时按需懒加载 |
