@@ -23,6 +23,7 @@ members = [
     "crates/prism-asset",
     "crates/prism-engine",
     "crates/prism-android",
+    "crates/prism-audio",
 ]
 # xtask (Slang reflection -> Rust binding codegen) is a build-time tool run only
 # on desktop/CI hosts that have slangc. Excluded so it never enters the default

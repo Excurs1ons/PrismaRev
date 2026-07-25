@@ -18,6 +18,7 @@ use winit::keyboard::KeyCode;
 use winit::raw_window_handle::HasDisplayHandle;
 use winit::window::{Window, WindowId};
 
+use prism_audio::{AudioConfig, AudioEngine};
 use prism_ecs::World;
 use prism_render::{DebugMode, GraphRenderer, NormalSpace, PathTracePass, RenderMode};
 
@@ -247,6 +248,9 @@ pub struct App {
     /// `true` while ALT is held and has temporarily released a locked pointer,
     /// so releasing ALT re-locks (distinct from a full ESC exit).
     alt_temp_release: bool,
+    /// Audio engine for spatial and UI sounds. Initialised (or gracefully
+    /// skipped on failure) after the window is ready. `None` = silent mode.
+    audio: Option<AudioEngine>,
     /// Current render mode: Raster (PBR) or PathTrace (real-time PT).
     render_mode: RenderMode,
     /// Maximum path depth (bounces) for path tracing.
@@ -302,6 +306,7 @@ impl App {
             pointer_locked: false,
             lock_before_inspector: false,
             alt_temp_release: false,
+            audio: None,
             render_mode: RenderMode::Raster,
             pt_max_bounces: 3,
             pt_ray_max_distance: 1000.0,
@@ -423,6 +428,23 @@ impl App {
         // and upload it to the renderer managers. Keeps the legacy cube demo
         // running alongside it.
         self.load_scene_from_manifest();
+
+        // Start the audio engine (best-effort; silent mode on failure).
+        let audio_config = AudioConfig {
+            sample_rate: 44100,
+            channels: 2,
+            ..Default::default()
+        };
+        match AudioEngine::new(audio_config) {
+            Ok(engine) => {
+                log::info!("audio engine started");
+                self.audio = Some(engine);
+            }
+            Err(e) => {
+                log::warn!("audio engine failed to start, running silent: {e}");
+            }
+        }
+
         log::info!("startup total (incl. scene): {}ms", t_start.elapsed().as_millis());
     }
 
@@ -859,6 +881,12 @@ impl App {
                                 n_inst,
                                 t_pt.elapsed().as_millis()
                             );
+                            // Build emissive triangle SSBO from real material data.
+                            if let Ok((mat_bytes, _mat_map)) =
+                                prism_render::bake_common::build_scalar_material_ssbo(&self.scene_store)
+                            {
+                                pt_pass.set_emissive(ctx.as_ref(), &instances, &mat_bytes);
+                            }
                         }
                     }
                     Err(e) => {
@@ -1594,6 +1622,16 @@ impl App {
                 if let Some(overlay) = renderer.egui_overlay_mut() {
                     overlay.apply_platform_output(window);
                 }
+            }
+        }
+
+        // Advance the audio engine (flush events, GC finished sounds).
+        if let Some(audio) = self.audio.as_mut() {
+            audio.update();
+
+            // Sync ECS AudioSource components with the audio engine.
+            if let Some(world) = self.world.as_mut() {
+                crate::audio::sync_audio_sources(audio, world);
             }
         }
     }
