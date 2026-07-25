@@ -69,13 +69,13 @@ pub use gi::{
 };
 pub use gizmo::Gizmo;
 pub use graph_renderer::{FrameCtx, FrameInput, GraphRenderer};
-pub use gtao::{GtaoFrameInputs, GtaoPass, GtaoPushConstants};
+pub use gtao::{GtaoFrameInputs, GtaoPass};
 pub use mesh::{Mesh, Vertex};
-pub use passes::{ScenePass, ShadowMapPass, ShadowPassPushConstants};
-pub use pbr_push::{DebugMode, NormalSpace, PbrBindlessPushConstants, PbrPushConstants};
+pub use passes::{ScenePass, ShadowMapPass};
+pub use pbr_push::{DebugMode, NormalSpace};
 pub use pipeline::GraphicsPipeline;
-pub use post::{PostPass, PostPushConstants};
-pub use pt_pass::{PathTracePass, PtPushConstants};
+pub use post::PostPass;
+pub use pt_pass::PathTracePass;
 pub use render_graph::{
     DrawItem, PassInfo, PassKind, RenderGraphSnapshot, RenderMode, RenderSettings, ResourceHandle,
     ResourceInfo, ResourceType, ShadowMode,

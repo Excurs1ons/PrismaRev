@@ -169,5 +169,6 @@ echo "  pt_render :: ptMain -> pt_render.comp.spv"
   -profile "$PROFILE" -target spirv -entry ptMain -stage compute \
   -fvk-use-entrypoint-name -o "$OUT/pt_render.comp.spv"
 fix_spv "$OUT/pt_render.comp.spv"
+emit_reflection pt_render ptMain compute
 
 echo "All Slang shaders compiled. SPIR-V in $OUT, reflection JSON in $REFL"

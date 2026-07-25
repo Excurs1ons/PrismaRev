@@ -26,12 +26,20 @@
 import path_integrator;
 
 // ---- Push constants ----
+// `exposure` is packed into `camera_pos.w` to keep the push-constant struct
+// compact. `ray_max_distance` is a separate float at the end - the struct is
+// 132 bytes, which exceeds the Vulkan-guaranteed 128-byte push-constant
+// minimum, so the device must advertise maxPushConstantsSize >= 132 (verified
+// at device selection in context.rs).
 struct PtPush
 {
     float4x4 inv_view_proj;  // NDC [-1,1]^2 (y-flipped, depth [0,1]) -> world
-    float4   camera_pos;     // .w unused
+    float4   camera_pos;     // .xyz = camera pos, .w = exposure
     float4   light_dir;      // xyz = dir TO light, w = pre-scaled radiance
+    float4   light_color;    // rgb = directional light color, w = ambient factor
     uint4    params;         // x = width, y = height, z = max_bounce, w = packed(frame_count|reset<<31)
+    float    ray_max_distance; // max world-space length of primary + shadow rays
+    uint     max_iterations;   // 0 = accumulate forever; >0 = freeze after N samples/pixel
 };
 
 // ---- Descriptors (set 0) ----
@@ -103,6 +111,16 @@ void ptMain(uint3 tid : SV_DispatchThreadID)
         // Still trace one sample so the first post-reset frame has data.
     }
 
+    // ---- Freeze when max iterations reached ----
+    uint sample_n = sampleCount[pixel];
+    if (push.max_iterations > 0u && sample_n >= push.max_iterations)
+    {
+        float3 resolved = sample_n > 0u ? accumImage[pixel].rgb / float(sample_n) : float3(0.0);
+        resolved *= push.camera_pos.w;
+        outputImage[pixel] = float4(resolved, 1.0);
+        return;
+    }
+
     // ---- Trace one sample with pixel jitter ----
     uint base_seed = tid.x * 73856093u + tid.y * 19349663u + frame_count * 2567483615u;
     uint seed = base_seed;
@@ -113,11 +131,17 @@ void ptMain(uint3 tid : SV_DispatchThreadID)
     float3 origin, dir;
     generate_ray(tid.x, tid.y, jx, jy, origin, dir);
 
+    // Effective sun radiance = color * intensity (matches the rasterizer's
+    // `radiance = frame.lightColor.rgb * frame.lightDirection.w`). Previously
+    // this was hardcoded to white, ignoring the scene's light color/intensity
+    // and producing wrong-colored highlights.
+    float3 sun_radiance = push.light_color.rgb * push.light_dir.w;
+
     float3 L = TraceRadiance(
         origin, dir,
         tlas, vertexData, indices,
-        push.light_dir.xyz, float3(1.0, 1.0, 1.0),
-        push.params.z, seed);
+        push.light_dir.xyz, sun_radiance,
+        push.params.z, push.ray_max_distance, seed);
 
     // ---- Accumulate ----
     float3 prev = accumImage[pixel].rgb;
@@ -131,6 +155,10 @@ void ptMain(uint3 tid : SV_DispatchThreadID)
 
     // Output the resolved result to the output image (PT_COLOR_H in the
     // render graph, which PostPass reads as Sampler2D for tonemapping).
+    // Apply exposure as a uniform brightness multiplier (matches the raster
+    // pipeline's `scene_frag.slang`: `color *= frame.exposure`). Exposure is
+    // packed into `camera_pos.w` to keep the push-constant struct at 128 bytes.
     float3 result = new_count > 0u ? new_accum / float(new_count) : float3(0.0);
+    result *= push.camera_pos.w;
     outputImage[pixel] = float4(result, 1.0);
 }

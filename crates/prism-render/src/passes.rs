@@ -23,6 +23,7 @@ use crate::render_graph::{
     SCENE_DEPTH_H, SCENE_NORMAL_H,
 };
 use crate::shader;
+use crate::shader_bindings;
 
 /// Rasterized shadow map — the depth-only fallback for the hybrid adaptive
 /// shadow system (`docs/DESIGN.md` §2.3).
@@ -55,13 +56,7 @@ pub struct ShadowMapPass {
 /// raise for quality, lower for bandwidth on weak GPUs.
 const SHADOW_MAP_SIZE: u32 = 2048;
 
-/// Push constants for the shadow depth-only vertex shader (128 bytes).
-/// Layout matches `shadow_depth.slang` `ShadowPush` (two mat4).
-#[repr(C)]
-pub struct ShadowPassPushConstants {
-    pub model: [[f32; 4]; 4],
-    pub light_view_proj: [[f32; 4]; 4],
-}
+
 
 impl ShadowMapPass {
     pub fn new() -> Self {
@@ -245,7 +240,7 @@ impl RenderPassNode for ShadowMapPass {
             let push = [vk::PushConstantRange::default()
                 .stage_flags(vk::ShaderStageFlags::VERTEX)
                 .offset(0)
-                .size(std::mem::size_of::<ShadowPassPushConstants>() as u32)];
+                .size(std::mem::size_of::<shader_bindings::shadow_depth::ShadowPush>() as u32)];
 
             // Depth-only pipeline: NO face cull + depth bias. Cull is NONE so
             // single-sided geometry (Sponza's ceilings/walls, whose back faces
@@ -360,9 +355,9 @@ impl RenderPassNode for ShadowMapPass {
                 ctx.device
                     .cmd_bind_vertex_buffers(ctx.cmd, 0, &vertex_buffers, &offsets);
 
-                let pc = ShadowPassPushConstants {
+                let pc = shader_bindings::shadow_depth::ShadowPush {
                     model: item.model,
-                    light_view_proj: ctx.frame.light_view_proj,
+                    lightViewProj: ctx.frame.light_view_proj,
                 };
                 ctx.device.cmd_push_constants(
                     ctx.cmd,
@@ -371,7 +366,7 @@ impl RenderPassNode for ShadowMapPass {
                     0,
                     std::slice::from_raw_parts(
                         &pc as *const _ as *const u8,
-                        std::mem::size_of::<ShadowPassPushConstants>(),
+                        std::mem::size_of::<shader_bindings::shadow_depth::ShadowPush>(),
                     ),
                 );
 
@@ -2170,7 +2165,7 @@ impl RenderPassNode for ScenePass {
                 // material_slot comes from DrawItem.material
                 // (already resolved to an SSBO slot in app.rs); None -> slot 0
                 // (the fallback material).
-                let pc = crate::pbr_push::PbrBindlessPushConstants {
+                let pc = crate::shader_bindings::scene_frag::PbrBindlessPush {
                     model: item.model,
                     material_slot: item.material.unwrap_or(0),
                     env_handle: self.brdf_handle,
@@ -2187,7 +2182,7 @@ impl RenderPassNode for ScenePass {
                     0,
                     std::slice::from_raw_parts(
                         &pc as *const _ as *const u8,
-                        std::mem::size_of::<crate::pbr_push::PbrBindlessPushConstants>(),
+                        std::mem::size_of::<crate::shader_bindings::scene_frag::PbrBindlessPush>(),
                     ),
                 );
 
@@ -2299,12 +2294,4 @@ impl Drop for ScenePass {
     }
 }
 
-#[cfg(test)]
-mod shadow_push_tests {
-    use super::*;
 
-    #[test]
-    fn shadow_push_constants_is_128() {
-        assert_eq!(std::mem::size_of::<ShadowPassPushConstants>(), 128);
-    }
-}

@@ -330,6 +330,9 @@ pub struct SceneChanges {
     pub light_view_proj: [[f32; 4]; 4],
     /// Point lights collected from the ECS world (up to `LIGHT_MAX`).
     pub lights: Vec<GpuLight>,
+    /// Exposure multiplier from the camera entity. Applied to the final HDR color
+    /// before tonemapping. Replaces the global `RenderSettings.exposure`.
+    pub exposure: f32,
 }
 
 /// Read the ECS [`World`] and the [`GraphRenderer`] orientation, then produce
@@ -355,7 +358,7 @@ fn collect_scene_changes(
     let fallback_col = [1.0, 1.0, 1.0, 1.0];
 
     // 1. Camera — first entity with a Camera component.
-    let (view_proj, eye, view, projection) = {
+    let (view_proj, eye, view, projection, exposure) = {
         let camera_entity = world
             .query::<Camera>()
             .next()
@@ -369,7 +372,8 @@ fn collect_scene_changes(
         let proj = camera.projection();
         let mut vp = camera.view_proj();
         vp = mat_mul(&surface_rotation, &vp);
-        (vp, camera.eye(), camera.view(), proj)
+        let exposure = camera.exposure();
+        (vp, camera.eye(), camera.view(), proj, exposure)
     };
 
     let inv_projection = mat_inverse(&projection);
@@ -432,6 +436,7 @@ fn collect_scene_changes(
         light_color,
         light_view_proj,
         lights,
+        exposure,
     })
 }
 
@@ -465,6 +470,8 @@ pub fn render_system(
     debug_rt: u32,
     render_mode: RenderMode,
     pt_max_bounces: u32,
+    pt_ray_max_distance: f32,
+    pt_max_iterations: u32,
 ) -> anyhow::Result<()> {
     // 1. Collect per-frame scene state from the ECS world (camera, lights).
     let scene = collect_scene_changes(world, renderer)?;
@@ -489,6 +496,7 @@ pub fn render_system(
         light_color,
         light_view_proj,
         lights,
+        exposure,
     } = scene;
     let light_count = lights.len() as f32;
 
@@ -505,7 +513,7 @@ pub fn render_system(
             let e = renderer.extent();
             [e.width as f32, e.height as f32]
         },
-        exposure: renderer.exposure(),
+        exposure,
         _pad2: [0.0; 3],
         _pad3: 0.0,
     };
@@ -540,6 +548,9 @@ pub fn render_system(
         lights: &lights,
         render_mode,
         pt_max_bounces,
+        pt_ray_max_distance,
+        pt_max_iterations,
+        exposure,
     };
     renderer
         .execute(&ctx, &input)

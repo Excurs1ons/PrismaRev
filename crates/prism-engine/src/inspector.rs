@@ -52,6 +52,22 @@ pub struct Inspector {
     pub render_mode: RenderMode,
     /// Maximum path depth (bounces) for path tracing.
     pub pt_max_bounces: u32,
+    /// Max world-space length of PT primary + shadow rays. Smaller values cut
+    /// long-range bounces (and distant shadow casters) - an artistic focus/
+    /// fog control and a cost cap on huge scenes.
+    pub pt_ray_max_distance: f32,
+    /// Maximum iterations (samples per pixel) for path tracing.
+    /// 0 = accumulate forever.
+    pub pt_max_iterations: u32,
+    /// Frame-time delta (seconds) from the previous frame.
+    pub dt: f32,
+    /// Smoothed frame time in milliseconds.
+    pub frame_time_ms: f32,
+    /// Smoothed FPS.
+    pub fps: f32,
+    /// Current PT accumulation frame count (samples per pixel).
+    /// Only meaningful in PT mode; 0 when rasterizing.
+    pub pt_frame_count: u32,
 }
 
 impl Default for Inspector {
@@ -69,6 +85,12 @@ impl Default for Inspector {
             exposure: 1.0, // default, overridden by renderer sync
             render_mode: RenderMode::Raster,
             pt_max_bounces: 3,
+            pt_ray_max_distance: 1000.0,
+            pt_max_iterations: 0,
+            dt: 0.0,
+            frame_time_ms: 0.0,
+            fps: 0.0,
+            pt_frame_count: 0,
         }
     }
 }
@@ -152,6 +174,15 @@ impl Inspector {
                 });
             });
 
+        // Sync exposure from the camera entity before the Debug window.
+        // The camera's exposure value is the source of truth; the inspector's
+        // cached `self.exposure` is refreshed from it each frame and written
+        // back after the UI runs (below). This replaces the old
+        // `app.rs`-driven sync with `renderer.exposure()`.
+        if let Some((_, camera)) = world.query::<Camera>().next() {
+            self.exposure = camera.exposure();
+        }
+
         // --- Debug mode status ---
         egui::Window::new("Debug")
             .id("inspector_debug".into())
@@ -232,6 +263,11 @@ impl Inspector {
                 );
             });
 
+        // Write back the edited exposure value to the camera entity.
+        if let Some((_, camera)) = world.query_mut::<Camera>().next() {
+            camera.set_exposure(self.exposure);
+        }
+
         // --- Render Settings ---
         egui::Window::new("Render Settings")
             .id("inspector_render_settings".into())
@@ -265,6 +301,24 @@ impl Inspector {
                         egui::Slider::new(&mut self.pt_max_bounces, 1..=16)
                             .text("Max Bounces"),
                     );
+                    ui.add(
+                        egui::Slider::new(&mut self.pt_ray_max_distance, 5.0..=2000.0)
+                            .text("Ray Max Distance")
+                            .suffix(" m"),
+                    );
+                    let max_iter = &mut self.pt_max_iterations;
+                    let mut iter_i32 = *max_iter as i32;
+                    ui.horizontal(|ui| {
+                        ui.add(
+                            egui::Slider::new(&mut iter_i32, 0..=16384)
+                                .text("Max Iterations")
+                                .clamping(egui::SliderClamping::Always),
+                        );
+                        if ui.button("Reset").clicked() {
+                            iter_i32 = 0;
+                        }
+                    });
+                    *max_iter = iter_i32.max(0) as u32;
                 }
             });
 
@@ -274,6 +328,33 @@ impl Inspector {
             inner_margin: egui::Margin::symmetric(6_i8, 3_i8),
             ..Default::default()
         };
+        // --- Frame-time HUD (bottom-left, always when show_ui) ---
+        let mut perf_text = format!(
+            "{:.1} ms  |  {:.0} FPS",
+            self.frame_time_ms, self.fps,
+        );
+        if self.render_mode == RenderMode::PathTrace {
+            let max_str = if self.pt_max_iterations > 0 {
+                format!("{}", self.pt_max_iterations)
+            } else {
+                "∞".to_string()
+            };
+            perf_text.push_str(&format!(
+                "  |  PT {}/{} smp",
+                self.pt_frame_count, max_str,
+            ));
+        }
+        egui::Area::new("perf_hud".into())
+            .anchor(egui::Align2::LEFT_BOTTOM, [8.0, -8.0])
+            .movable(false)
+            .interactable(false)
+            .show(ctx, |ui| {
+                hint_frame.show(ui, |ui| {
+                    ui.colored_label(egui::Color32::from_gray(180), perf_text);
+                });
+            });
+
+        // --- Inspector hint (bottom-right, only when inspector visible) ---
         egui::Area::new("inspector_hint".into())
             .anchor(egui::Align2::RIGHT_BOTTOM, [-8.0, -8.0])
             .movable(false)
@@ -438,6 +519,12 @@ fn camera_editor_inline(ui: &mut Ui, world: &mut World, entity: Entity) {
             ui.add(egui::Slider::new(&mut c.fov_y, 0.1..=std::f32::consts::PI).text("FOV Y"));
             ui.add(egui::Slider::new(&mut c.znear, 0.001..=5.0).text("z near"));
             ui.add(egui::Slider::new(&mut c.zfar, 10.0..=1000.0).text("z far"));
+            ui.separator();
+            ui.add(
+                egui::Slider::new(&mut c.exposure, 0.0..=5.0)
+                    .text("Exposure")
+                    .logarithmic(true),
+            );
         }
         Camera::Fly(c) => {
             ui.label("Position");
@@ -461,6 +548,12 @@ fn camera_editor_inline(ui: &mut Ui, world: &mut World, entity: Entity) {
             ui.add(egui::Slider::new(&mut c.move_speed, 0.1..=50.0).text("Move speed"));
             ui.add(
                 egui::Slider::new(&mut c.look_sensitivity, 0.0001..=0.01).text("Look sensitivity"),
+            );
+            ui.separator();
+            ui.add(
+                egui::Slider::new(&mut c.exposure, 0.0..=5.0)
+                    .text("Exposure")
+                    .logarithmic(true),
             );
         }
     }

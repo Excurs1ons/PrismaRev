@@ -36,26 +36,9 @@ use crate::render_graph::{
 };
 use crate::render_pass::find_memory_type;
 use crate::shader;
+use crate::shader_bindings;
 
-/// Push constants for `post.slang::PostPush` (32 bytes).
-/// - `tonemap_mode`: 0 = Reinhard, 1 = ACES Narkowicz.
-/// - `debug_rt`: 0 = normal tonemapped HDR, 1 = linearized depth, 2 = normal.
-/// - `proj22` / `proj32`: entries of the perspective projection used to
-///   linearize the depth buffer (`view_z = proj22 * d + proj32`).
-/// - `near` / `far`: clip planes (derived from proj22/proj32) used to
-///   normalize the linearized depth for display.
-#[repr(C)]
-#[derive(Clone, Copy, Default)]
-pub struct PostPushConstants {
-    pub tonemap_mode: u32,
-    pub debug_rt: u32,
-    pub proj22: f32,
-    pub proj32: f32,
-    pub near: f32,
-    pub far: f32,
-    pub _pad0: u32,
-    pub _pad1: u32,
-}
+
 
 /// Fullscreen-triangle tonemap pass: HDR scene color -> sRGB swapchain.
 pub struct PostPass {
@@ -301,7 +284,7 @@ impl PostPass {
         frame_index: u32,
         image_index: u32,
         hdr_image: vk::Image,
-        push: &PostPushConstants,
+        push: &shader_bindings::post::PostPush,
     ) -> anyhow::Result<()> {
         self.ensure_pipeline(device)?;
         let rp = self.render_pass.unwrap();
@@ -380,7 +363,7 @@ impl PostPass {
                 0,
                 std::slice::from_raw_parts(
                     push as *const _ as *const u8,
-                    std::mem::size_of::<PostPushConstants>(),
+                    std::mem::size_of::<shader_bindings::post::PostPush>(),
                 ),
             );
             // Fullscreen triangle (3 verts, no vertex buffer - SV_VertexID).
@@ -434,7 +417,7 @@ impl PostPass {
         let push = [vk::PushConstantRange::default()
             .stage_flags(vk::ShaderStageFlags::FRAGMENT)
             .offset(0)
-            .size(std::mem::size_of::<PostPushConstants>() as u32)];
+            .size(std::mem::size_of::<shader_bindings::post::PostPush>() as u32)];
 
         let blend_attachment = vk::PipelineColorBlendAttachmentState::default()
             .color_write_mask(vk::ColorComponentFlags::RGBA)
@@ -583,32 +566,26 @@ impl RenderPassNode for PostPass {
         // (which changes the view) triggers a rewrite automatically.
         self.set_input(ctx.device, ctx.frame_index, input_view, image_layout);
 
-        // Derive near/far from the projection entries for depth linearization.
-        // Vulkan perspective depth [0,1]: far = proj32/(proj22-1),
-        // near = proj32/(proj22+1). Guarded against div-by-zero (proj22==1 is
-        // only possible for an infinite far plane, unusual in practice).
-        let proj22 = ctx.frame.proj22;
-        let proj32 = ctx.frame.proj32;
-        let near = if (proj22 - 1.0).abs() > 1e-6 {
-            proj32 / (proj22 + 1.0)
+        // The generated PostPush only contains tonemapMode (the post shader
+        // selects Reinhard vs ACES via this field). debug_rt, proj22/proj32,
+        // near/far etc. are consumed on the Rust side (input binding selection,
+        // depth linearization) and are NOT part of the GPU push constant.
+        // proj22/proj32/near/far depth linearization values are still computed
+        // here as a reference for future shader extensions.
+        let _proj22 = ctx.frame.proj22;
+        let _proj32 = ctx.frame.proj32;
+        let _near = if (_proj22 - 1.0).abs() > 1e-6 {
+            _proj32 / (_proj22 + 1.0)
         } else {
             0.1
         };
-        let far = if (proj22 - 1.0).abs() > 1e-6 {
-            proj32 / (proj22 - 1.0)
+        let _far = if (_proj22 - 1.0).abs() > 1e-6 {
+            _proj32 / (_proj22 - 1.0)
         } else {
             100.0
         };
-
-        let push = PostPushConstants {
-            tonemap_mode: ctx.frame.tonemap_mode,
-            debug_rt: ctx.frame.debug_rt,
-            proj22,
-            proj32,
-            near,
-            far,
-            _pad0: 0,
-            _pad1: 0,
+        let push = shader_bindings::post::PostPush {
+            tonemapMode: ctx.frame.tonemap_mode,
         };
         self.execute(
             ctx.device,
@@ -692,12 +669,3 @@ fn _memory_type_for_hdr(context: &VulkanContext, mem_type_bits: u32) -> anyhow::
     .context("PostPass: no suitable memory type for HDR image")
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn push_constant_size_is_16() {
-        assert_eq!(std::mem::size_of::<PostPushConstants>(), 32);
-    }
-}

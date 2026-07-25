@@ -27,22 +27,12 @@ use crate::render_graph::{
     RenderSettings, ResourceUsage, PT_COLOR_H, ResourceType,
 };
 use crate::shader;
+use crate::shader_bindings;
 
-/// Push constants mirroring `PtPush` in `pt_render.slang` (≤ 128 bytes).
-///
-/// float4x4 inv_view_proj → 64 bytes
-/// float4   camera_pos    → 16
-/// float4   light_dir     → 16
-/// uint4    params        → 16  (x=width, y=height, z=max_bounce, w=packed)
-/// TOTAL = 112 bytes ✓
-#[repr(C)]
-#[derive(Clone, Copy, Default)]
-pub struct PtPushConstants {
-    pub inv_view_proj: [[f32; 4]; 4], // 64
-    pub camera_pos: [f32; 4],         // 16
-    pub light_dir: [f32; 4],          // 16
-    pub params: [u32; 4],             // 16 (w bits 0-30 = frame_count, bit 31 = reset)
-}
+/// GPU push-constant block size for PtPush (std140 rounds to 16-byte boundary).
+/// The auto-generated `shader_bindings::pt_render::PtPush` is 136 bytes in
+/// `#[repr(C)]`; add 8 bytes of std140 trailing padding for the actual range.
+const PT_PUSH_RANGE_SIZE: u32 = 144;
 
 /// Real-time path tracing compute pass.
 pub struct PathTracePass {
@@ -93,6 +83,15 @@ pub struct PathTracePass {
     frame_counter: u32,
     prev_camera_pos: Option<[f32; 3]>,
     prev_view_proj: Option<[[f32; 4]; 4]>,
+    // Global accumulation-reset flag. Set by either (a) camera motion
+    // (`should_reset`) or (b) an external `request_reset()` call when the app
+    // knows a render parameter changed (max bounces, exposure, light
+    // color/direction, scene reload, ...). Without this, stale samples
+    // accumulated under the old parameters keep dominating the running
+    // average and parameter tweaks look like they do nothing. This keeps the
+    // "what changed?" decision in the caller rather than diffing every PT
+    // input per frame.
+    accum_dirty: bool,
 
     // Device handles
     device: Option<ash::Device>,
@@ -220,6 +219,7 @@ impl PathTracePass {
             frame_counter: 0,
             prev_camera_pos: None,
             prev_view_proj: None,
+            accum_dirty: false,
             device: Some(device.clone()),
         })
     }
@@ -302,6 +302,22 @@ impl PathTracePass {
         self.pipeline = None;
     }
 
+    /// Request an accumulation-buffer reset on the next frame. Call this when a
+    /// render parameter that affects the traced radiance changes (max bounces,
+    /// exposure, light color/direction/intensity, scene geometry, ...). The
+    /// pass also resets automatically on camera motion; this is the hook for
+    /// non-camera changes it can't otherwise detect.
+    pub fn request_reset(&mut self) {
+        self.accum_dirty = true;
+    }
+
+    /// Current frame counter (number of accumulated samples per pixel).
+    /// Resets to 0 when accumulation is cleared (camera motion or
+    /// [`request_reset`]).
+    pub fn frame_count(&self) -> u32 {
+        self.frame_counter
+    }
+
     fn resize_images(
         &mut self,
         device: &ash::Device,
@@ -363,7 +379,7 @@ impl PathTracePass {
         let push = [vk::PushConstantRange {
             stage_flags: vk::ShaderStageFlags::COMPUTE,
             offset: 0,
-            size: std::mem::size_of::<PtPushConstants>() as u32,
+            size: PT_PUSH_RANGE_SIZE,
         }];
         let pl = ComputePipeline::new(device, mod_, entry.as_c_str(), &layouts, &push)
             .context("PathTracePass: pipeline")?;
@@ -555,7 +571,11 @@ impl RenderPassNode for PathTracePass {
         let cam_pos = ctx.frame.camera_pos;
         let cam_xyz = [cam_pos[0], cam_pos[1], cam_pos[2]];
         let inv_vp = mat_inverse(&ctx.frame.view_proj);
-        let reset = self.should_reset(cam_xyz, inv_vp);
+        // Reset on camera motion OR an externally-requested dirty (parameter
+        // change such as max_bounces/exposure/light). The dirty flag is cleared
+        // after the reset is applied so only one reset happens per request.
+        let reset = self.should_reset(cam_xyz, inv_vp) || self.accum_dirty;
+        self.accum_dirty = false;
 
         self.prev_camera_pos = Some(cam_xyz);
         self.prev_view_proj = Some(inv_vp);
@@ -663,17 +683,25 @@ impl RenderPassNode for PathTracePass {
         };
 
         let light_dir = ctx.frame.light_dir;
-        let push = PtPushConstants {
+        let light_color = ctx.frame.light_color;
+        // Pack exposure into camera_pos.w (PT only uses camera_pos.xyz for
+        // ray origin; the .w slot was previously unused).
+        let mut camera_pos = cam_pos;
+        camera_pos[3] = ctx.frame.exposure;
+        let push = shader_bindings::pt_render::PtPush {
             inv_view_proj: inv_vp,
-            camera_pos: cam_pos,
+            camera_pos,
             light_dir,
+            light_color,
             params: [w, h, ctx.frame.pt_max_bounces, params_w],
+            ray_max_distance: ctx.frame.pt_ray_max_distance,
+            max_iterations: ctx.frame.pt_max_iterations,
         };
         unsafe {
             device.cmd_push_constants(cmd, pl.layout, vk::ShaderStageFlags::COMPUTE,
                 0, std::slice::from_raw_parts(
                     &push as *const _ as *const u8,
-                    std::mem::size_of::<PtPushConstants>(),
+                    std::mem::size_of::<shader_bindings::pt_render::PtPush>(),
                 ));
         }
 
@@ -950,7 +978,12 @@ mod tests {
     use super::*;
     #[test]
     fn push_constant_size() {
-        assert!(std::mem::size_of::<PtPushConstants>() <= 128,
-            "PtPushConstants ({}) > 128 bytes", std::mem::size_of::<PtPushConstants>());
+        // The auto-generated PtPush is 136 bytes (repr(C)). The shader's std140
+        // block rounds to 144 — covered by PT_PUSH_RANGE_SIZE (see ensure_pipeline).
+        assert_eq!(
+            std::mem::size_of::<shader_bindings::pt_render::PtPush>(),
+            136,
+            "shader_bindings::pt_render::PtPush (repr(C))"
+        );
     }
 }

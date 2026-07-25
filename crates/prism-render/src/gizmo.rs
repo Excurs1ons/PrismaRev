@@ -12,6 +12,7 @@ use ash::vk;
 
 use crate::buffer::{create_buffer, BufferUsage, MemoryProperties};
 use crate::context::VulkanContext;
+use crate::shader_bindings::gizmo::GizmoPush;
 
 const GIZMO_VERT_SPV: &[u8] = include_bytes!("../../../shaders/gizmo.vert.spv");
 const GIZMO_FRAG_SPV: &[u8] = include_bytes!("../../../shaders/gizmo.frag.spv");
@@ -202,13 +203,16 @@ impl Gizmo {
     /// `end_frame`, after the 3D scene draws.
     pub fn draw(&self, cmd: vk::CommandBuffer, view_proj: &[[f32; 4]; 4]) {
         let device = &self.device;
+        let push = GizmoPush { viewProj: *view_proj };
         unsafe {
             device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.pipeline);
-            let pc = std::slice::from_raw_parts(
-                view_proj as *const _ as *const u8,
-                size_of::<[[f32; 4]; 4]>(),
+            device.cmd_push_constants(
+                cmd, self.layout, vk::ShaderStageFlags::VERTEX, 0,
+                std::slice::from_raw_parts(
+                    &push as *const _ as *const u8,
+                    size_of::<GizmoPush>(),
+                ),
             );
-            device.cmd_push_constants(cmd, self.layout, vk::ShaderStageFlags::VERTEX, 0, pc);
             let buffers = [self.vertex_buffer];
             let offsets = [0u64];
             device.cmd_bind_vertex_buffers(cmd, 0, &buffers, &offsets);

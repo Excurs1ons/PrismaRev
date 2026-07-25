@@ -250,17 +250,18 @@ pub struct RenderSettings {
     /// shadow map. See [`ShadowMode`].
     pub shadow_mode: ShadowMode,
 
-    /// Camera exposure multiplier applied to all light radiance (direct +
-    /// point) before tonemapping. Lets the app keep physically-based light
-    /// units (lux / candela) while controlling final image brightness.
-    /// Default 1/10000 scales 100k lux daylight to a reasonable HDR range.
-    pub exposure: f32,
-
     /// Render mode: Raster (PBR) or PathTrace (real-time PT).
     pub render_mode: RenderMode,
 
     /// Maximum path depth (bounces) for path tracing.
     pub pt_max_bounces: u32,
+    /// Max world-space length of PT primary + shadow rays. Smaller values cut
+    /// long-range bounces (and distant shadow casters) — an artistic focus/
+    /// fog control and a cost cap on huge scenes.
+    pub pt_ray_max_distance: f32,
+    /// Maximum iterations (samples per pixel) for path tracing.
+    /// 0 = accumulate forever (default).
+    pub pt_max_iterations: u32,
 }
 
 impl Default for RenderSettings {
@@ -272,9 +273,10 @@ impl Default for RenderSettings {
             sharc_capacity: 1 << 20,
             sharc_scene_scale: 1.0,
             shadow_mode: ShadowMode::Auto,
-            exposure: 1.0,
             render_mode: RenderMode::Raster,
             pt_max_bounces: 3,
+            pt_ray_max_distance: 1000.0,
+            pt_max_iterations: 0,
         }
     }
 }
@@ -387,10 +389,25 @@ pub struct GraphFrame<'a> {
     pub render_mode: RenderMode,
     /// Path tracing max bounces.
     pub pt_max_bounces: u32,
+    /// Max world-space length of PT primary + shadow rays. Smaller values cut
+    /// long-range bounces (and distant shadow casters), useful as an artistic
+    /// "fog"/focus control and to limit cost on huge scenes.
+    pub pt_ray_max_distance: f32,
+    /// Maximum iterations (samples per pixel). 0 = accumulate forever.
+    pub pt_max_iterations: u32,
     /// Camera world-space position [x, y, z, light_count] from the frame UBO.
     pub camera_pos: [f32; 4],
     /// Light direction [x, y, z, intensity] from the frame UBO.
     pub light_dir: [f32; 4],
+    /// Light color [r, g, b, ambient] from the frame UBO. Forwarded to the
+    /// path-trace pass so it can apply the scene's actual sun color instead
+    /// of a hardcoded white (the rasterizer reads this via the FrameUBO).
+    pub light_color: [f32; 4],
+    /// Exposure multiplier applied to the final HDR color before tonemapping.
+    /// Forwarded from [`FrameInput`](crate::graph_renderer::FrameInput) so both
+    /// ScenePass (via FrameUBOData) and PathTracePass (via push constant) apply
+    /// the same exposure value from the camera entity.
+    pub exposure: f32,
 }
 
 /// Context passed to each pass's `execute`.

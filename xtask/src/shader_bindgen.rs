@@ -55,6 +55,63 @@ struct TypeInfo {
     kind: Option<String>,
     #[serde(default, rename = "baseShape")]
     base_shape: Option<String>,
+    /// For struct types (constantBuffer → elementType → struct with fields).
+    #[serde(default, rename = "elementType")]
+    element_type: Option<StructTypeInfo>,
+}
+
+/// Info about a struct type nested inside a parameter's type.
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+struct StructTypeInfo {
+    #[serde(default)]
+    kind: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    fields: Option<Vec<StructField>>,
+}
+
+/// A single field inside a struct definition in the reflection JSON.
+#[derive(Debug, Deserialize)]
+struct StructField {
+    name: String,
+    #[serde(rename = "type")]
+    ty: FieldType,
+    #[serde(default)]
+    binding: FieldBinding,
+}
+
+/// Type info for a struct field (more detailed than TypeInfo).
+#[derive(Debug, Deserialize)]
+struct FieldType {
+    /// "scalar", "vector", "matrix"
+    #[serde(default)]
+    kind: String,
+    /// "float32", "uint32", "int32"
+    #[serde(default, rename = "scalarType")]
+    scalar_type: Option<String>,
+    /// For vectors: 2, 3, or 4
+    #[serde(default, rename = "elementCount")]
+    element_count: Option<u32>,
+    /// For matrices: 4
+    #[serde(default, rename = "rowCount")]
+    row_count: Option<u32>,
+    /// For matrices: 4
+    #[serde(default, rename = "columnCount")]
+    column_count: Option<u32>,
+    /// For vectors/matrices: the element type
+    #[serde(default, rename = "elementType")]
+    element_type: Option<Box<FieldType>>,
+}
+
+/// Binding info for a struct field.
+#[derive(Debug, Default, Deserialize)]
+struct FieldBinding {
+    #[serde(default)]
+    offset: Option<u32>,
+    #[serde(default)]
+    size: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -64,6 +121,63 @@ struct EntryPoint {
     stage: Option<String>,
     #[serde(default)]
     parameters: Vec<Parameter>,
+}
+
+/// Map a Slang reflection field type to its Rust type name.
+fn field_type_to_rust(ft: &FieldType) -> String {
+    match ft.kind.as_str() {
+        "scalar" => match ft.scalar_type.as_deref() {
+            Some("float32") => "f32".into(),
+            Some("uint32") => "u32".into(),
+            Some("int32") => "i32".into(),
+            Some("float16") => "f16".into(),
+            Some("bool") => "u32".into(),
+            _ => "u32".into(),
+        },
+        "vector" => {
+            let count = ft.element_count.unwrap_or(4);
+            let elem = ft
+                .element_type
+                .as_deref()
+                .map(|e| field_type_to_rust(e))
+                .unwrap_or_else(|| "f32".into());
+            format!("[{elem}; {count}]")
+        }
+        "matrix" => {
+            let rows = ft.row_count.unwrap_or(4);
+            let cols = ft.column_count.unwrap_or(4);
+            let elem = ft
+                .element_type
+                .as_deref()
+                .map(|e| field_type_to_rust(e))
+                .unwrap_or_else(|| "f32".into());
+            format!("[[{elem}; {cols}]; {rows}]")
+        }
+        _ => "u32".into(),
+    }
+}
+
+/// Generate a Rust struct definition from reflected push constant fields.
+fn emit_push_struct(struct_name: &str, fields: &[StructField]) -> String {
+    let mut out = String::new();
+    out.push_str(&format!(
+        "\n    /// Push-constant struct (auto-generated from Slang `{}`).\n",
+        struct_name
+    ));
+    out.push_str("    #[repr(C)]\n    #[derive(Clone, Copy, Default)]\n");
+    out.push_str(&format!("    pub struct {struct_name} {{\n"));
+    for f in fields {
+        let rust_type = field_type_to_rust(&f.ty);
+        // Emit doc comment showing the reflected offset+size for easy verification.
+        let off = f.binding.offset.unwrap_or(0);
+        let sz = f.binding.size.unwrap_or(0);
+        out.push_str(&format!(
+            "        /// offset {off}, size {sz}\n        pub {}: {},\n",
+            f.name, rust_type
+        ));
+    }
+    out.push_str("    }\n");
+    out
 }
 
 /// A resolved binding fact we care about for Rust codegen.
@@ -83,22 +197,13 @@ enum BindKind {
 /// Fallback push-constant sizes for shaders whose slangc reflection omits the
 /// `size` field on the `pushConstantBuffer` parameter. Newer Slang releases
 /// (e.g. 2026.13.1) stopped emitting `size` on the parameter binding, so we
-/// keep the authoritative layout here. These mirror the `#[repr(C)]` structs in
-/// the engine (pbr_push.rs / passes.rs) — the source of truth is the Rust
-/// layout, verified by `size_of!` / `offset_of!` tests where the pass is live.
+/// keep fallback values here. Struct-level layout is now auto-generated from
+/// the reflection JSON (see `emit_push_struct`).
 const PUSH_SIZE_FALLBACK: &[(&str, u32)] = &[
-    ("mesh", 64),
-    ("pbr", 92),
-    ("gizmo", 64),
-    ("bindless", 96),
     ("overlay", 0),
     // LightingPushConstants: 4×u32 + 4×f32 = 32 bytes.
     ("lighting", 32),
-    // PostPushConstants: exposure + padding, padded to 16.
-    ("post", 16),
-    // ShadowPushConstants: verified by `shadow_push_constant_size_is_48` test.
-    ("shadow", 48),
-    // SharcQueryPushConstants: 7 fields padded to 48 (see passes.rs).
+    // SharcQueryPushConstants: 7 fields padded to 48.
     ("sharc_query", 48),
 ];
 
@@ -257,6 +362,45 @@ fn process_file(path: &Path, out: &mut String) -> Result<()> {
         }
     }
 
+    // --- Auto-generated push-constant struct definitions ---
+    // Scan global and entry-point parameters for push-constant buffers whose
+    // types carry struct field info; emit a #[repr(C)] Rust struct for each.
+    // This replaces the hand-written push-constant structs in the engine.
+    for p in &refl.parameters {
+        if let Some(ety) = p
+            .binding
+            .as_ref()
+            .filter(|b| b.kind == "pushConstantBuffer" || b.kind == "pushConstant")
+            .and_then(|_| p.ty.as_ref())
+            .and_then(|t| t.element_type.as_ref())
+            .filter(|e| e.fields.is_some())
+        {
+            let struct_name = ety.name.as_deref().unwrap_or("PushConstants");
+            if let Some(ref fields) = ety.fields {
+                out.push_str(&emit_push_struct(struct_name, fields));
+            }
+        }
+    }
+    // Same for entry-point parameters (some shaders declare push constants
+    // at the entry-point level instead of globally).
+    for ep in &refl.entry_points {
+        for p in &ep.parameters {
+            if let Some(ety) = p
+                .binding
+                .as_ref()
+                .filter(|b| b.kind == "pushConstantBuffer" || b.kind == "pushConstant")
+                .and_then(|_| p.ty.as_ref())
+                .and_then(|t| t.element_type.as_ref())
+                .filter(|e| e.fields.is_some())
+            {
+                let struct_name = ety.name.as_deref().unwrap_or("PushConstants");
+                if let Some(ref fields) = ety.fields {
+                    out.push_str(&emit_push_struct(struct_name, fields));
+                }
+            }
+        }
+    }
+
     out.push_str("}\n");
     Ok(())
 }
@@ -276,7 +420,7 @@ fn main() -> Result<()> {
     out.push_str("// @generated by xtask/shader-bindgen from Slang reflection JSON.\n");
     out.push_str("// DO NOT EDIT. Regenerate: cargo run -p xtask --bin shader-bindgen -- \\\n");
     out.push_str("//   shaders/reflection crates/prism-render/src/shader_bindings.rs\n");
-    out.push_str("#![allow(dead_code)]\n");
+    out.push_str("#![allow(dead_code, non_snake_case)]\n");
 
     let mut files: Vec<PathBuf> = std::fs::read_dir(&in_dir)
         .with_context(|| format!("read dir {}", in_dir.display()))?

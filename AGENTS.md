@@ -36,6 +36,26 @@ Conventions) before touching any matrix/coordinate math — deviating from those
 - The committed GLSL `.spv`/`.bat` are legacy references; glslc output uses entry `main` and is
   **not** compatible with the current Rust code.
 
+## Auto-generated shader bindings (push constants, descriptor bindings)
+- **All push-constant struct definitions must come from `shader_bindings`**, never hand-written.
+  At `cmd_push_constants` call sites, reference `shader_bindings::module::Struct` directly —
+  no type alias, no re-export, no intermediate module.
+- `xtask/src/shader_bindgen.rs` reads `shaders/reflection/*.json` and emits
+  `crates/prism-render/src/shader_bindings.rs` — one `pub mod` per Slang module.
+  Run after recompiling shaders: `cd xtask && cargo run --bin shader-bindgen -- ../shaders/reflection ../crates/prism-render/src/shader_bindings.rs`
+- Each generated module contains:
+  - Entry-point name constants (`ENTRY_VERTEX_MAIN`, etc.)
+  - Descriptor set/binding constants
+  - Push-constant struct (`#[repr(C)]` with all reflected fields)
+- Push-constant structs use `#[repr(C)]`, which matches std140 for `mat4`/`vec4`/`scalar`
+  fields but may omit std140 trailing structure padding. When the Slang reflection JSON
+  doesn't include trailing implicit padding, the generated struct will be a few bytes
+  shorter than the shader's std140 block size. In that case declare the `VkPushConstantRange`
+  `size` explicitly (e.g. `144`) rather than relying on `size_of`.
+- If a Slang shader lacks `emit_reflection` in `compile.sh`, add it so the bindgen covers it.
+- Do NOT add hand-written `#[repr(C)]` push-constant structs. If the bindgen can't cover a
+  case, extend `shader_bindgen.rs` (it should parse all Slang reflection field types).
+
 ## Coordinate & matrix conventions (do not mix up)
 - Right-handed; camera looks down **−Z**; +X right, +Y up, +Z toward viewer.
 - Column-major `mat4` = `[[f32;4];4]` indexed `[col][row]`; `clip = projection * view * model`.

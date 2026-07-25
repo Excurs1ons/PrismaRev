@@ -157,8 +157,9 @@ void bakeMain(uint3 tid : SV_DispatchThreadID)
                 uint prim_idx = q.CommittedPrimitiveIndex();
                 float3 v0, v1, v2;
                 float2 uv0, uv1, uv2;
+                float3 n0, n1, n2;
                 read_hit_triangle(instance_id, prim_idx, vertexData, indices,
-                    v0, v1, v2, uv0, uv1, uv2);
+                    v0, v1, v2, uv0, uv1, uv2, n0, n1, n2);
 
                 float3 edge1 = v1 - v0;
                 float3 edge2 = v2 - v0;
@@ -179,7 +180,7 @@ void bakeMain(uint3 tid : SV_DispatchThreadID)
             world_pos, initial_dir,
             tlas, vertexData, indices,
             push.light_dir.xyz, push.light_color.xyz,
-            push.max_bounce, seed);
+            push.max_bounce, 1000.0, seed);
 
         // Radiance SH projection using the INITIAL direction.
         // No cosine pre-convolution — the probe volume stores the radiance

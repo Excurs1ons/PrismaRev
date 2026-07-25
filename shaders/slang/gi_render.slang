@@ -89,7 +89,7 @@ void renderMain(uint3 tid : SV_DispatchThreadID)
             origin, dir,
             tlas, vertexData, indices,
             push.light_dir.xyz, push.light_color.xyz,
-            push.params.z, seed);
+            push.params.z, 1000.0, seed);
 
         accum += L;
     }

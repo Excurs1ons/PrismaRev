@@ -251,6 +251,11 @@ pub struct App {
     render_mode: RenderMode,
     /// Maximum path depth (bounces) for path tracing.
     pt_max_bounces: u32,
+    /// Max world-space length of PT primary + shadow rays.
+    pt_ray_max_distance: f32,
+    /// Maximum iterations (samples per pixel) for path tracing.
+    /// 0 = accumulate forever (default).
+    pt_max_iterations: u32,
 }
 
 /// Default PBR mode. `debug_flags == 0` means **normal full-PBR rendering**:
@@ -299,6 +304,8 @@ impl App {
             alt_temp_release: false,
             render_mode: RenderMode::Raster,
             pt_max_bounces: 3,
+            pt_ray_max_distance: 1000.0,
+            pt_max_iterations: 0,
         }
     }
 
@@ -1442,6 +1449,14 @@ impl App {
             None => 1.0 / 60.0,
         };
         self.last_frame = Some(now);
+        // Update frame-time metrics on the inspector.
+        self.inspector.dt = dt;
+        self.inspector.frame_time_ms = self.inspector.frame_time_ms * 0.9 + dt * 1000.0 * 0.1;
+        self.inspector.fps = if dt > 0.0 { 1.0 / dt } else { 0.0 };
+        // Read PT frame count from the renderer (0 when not in PT mode).
+        if let Some(renderer) = self.renderer.as_ref() {
+            self.inspector.pt_frame_count = renderer.pt_frame_count().unwrap_or(0);
+        }
         // Update camera from input state (ECS entity component). When pointer
         // lock is active the camera follows the mouse directly; otherwise the
         // camera falls back to its right-drag look behavior.
@@ -1482,11 +1497,8 @@ impl App {
             // the current state (including keyboard-driven changes).
             self.inspector.render_mode = self.render_mode;
             self.inspector.pt_max_bounces = self.pt_max_bounces;
-            // Sync exposure from the renderer so the inspector slider reflects
-            // the current value (including the hard-coded default).
-            if let Some(renderer) = self.renderer.as_ref() {
-                self.inspector.exposure = renderer.exposure();
-            }
+            self.inspector.pt_ray_max_distance = self.pt_ray_max_distance;
+            self.inspector.pt_max_iterations = self.pt_max_iterations;
             // Refresh the viz's per-frame snapshot while `&GraphRenderer` is
             // borrowable (the egui closure only holds plain data).
             let window = self.window.clone();
@@ -1513,13 +1525,28 @@ impl App {
             // Push UI-edited tonemap selection back to the app so the `T` key
             // and the inspector stay in sync.
             self.tonemap_mode = self.inspector.tonemap_mode;
-            // Push UI-edited exposure back to the renderer.
-            if let Some(renderer) = self.renderer.as_mut() {
-                renderer.set_exposure(self.inspector.exposure);
-            }
-            // Push UI-edited render settings back to the app.
+            // Push UI-edited render settings back to the app. Detect changes
+            // to PT-affecting parameters and request an accumulation reset so
+            // the path tracer converges against the new settings instead of
+            // averaging them with stale frames.
+            let prev_pt_max_bounces = self.pt_max_bounces;
+            let prev_pt_ray_max_distance = self.pt_ray_max_distance;
+            let prev_pt_max_iterations = self.pt_max_iterations;
+            let prev_render_mode = self.render_mode;
             self.render_mode = self.inspector.render_mode;
             self.pt_max_bounces = self.inspector.pt_max_bounces;
+            self.pt_ray_max_distance = self.inspector.pt_ray_max_distance;
+            self.pt_max_iterations = self.inspector.pt_max_iterations;
+            if self.render_mode == RenderMode::PathTrace
+                && (self.pt_max_bounces != prev_pt_max_bounces
+                    || self.pt_ray_max_distance != prev_pt_ray_max_distance
+                    || self.pt_max_iterations != prev_pt_max_iterations
+                    || self.render_mode != prev_render_mode)
+            {
+                if let Some(renderer) = self.renderer.as_mut() {
+                    renderer.request_pt_reset();
+                }
+            }
         }
 
         // Neutral clear color so we can tell whether the scene is actually
@@ -1544,6 +1571,8 @@ impl App {
             self.debug_rt,
             self.render_mode,
             self.pt_max_bounces,
+            self.pt_ray_max_distance,
+            self.pt_max_iterations,
         );
 
         // A render failure is treated as fatal: surface it once via a modal

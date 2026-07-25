@@ -246,8 +246,22 @@ fn pick_physical_device(instance: &ash::Instance) -> anyhow::Result<vk::Physical
             best = Some(device);
         }
     }
-
-    best.context("no suitable physical device found")
+    let device = best.ok_or_else(|| anyhow::anyhow!("no GPU with a graphics queue found"))?;
+    // The path-trace pass uses a 144-byte push-constant block (PtPushConstants,
+    // padded per std140: the trailing `ray_max_distance` float rounds the struct
+    // up to a 16-byte multiple). Vulkan only guarantees 128 bytes, so verify
+    // the device actually supports more before we write past the guaranteed
+    // range. All desktop GPUs and modern mobile parts advertise 256; very old
+    // / emulator devices may only do 128 and would silently truncate the PT
+    // push constants.
+    let props = unsafe { instance.get_physical_device_properties(device) };
+    let max_pc = props.limits.max_push_constants_size;
+    anyhow::ensure!(
+        max_pc >= 144,
+        "selected GPU only supports {} bytes of push constants; PT pass needs 144",
+        max_pc
+    );
+    Ok(device)
 }
 
 fn pick_graphics_queue_family(

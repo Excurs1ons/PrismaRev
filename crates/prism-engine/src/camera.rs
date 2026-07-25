@@ -13,6 +13,10 @@ pub struct OrbitCamera {
     /// on resize / orientation change so [`OrbitCamera::view_proj`] needs no
     /// per-call aspect argument.
     pub aspect: f32,
+    /// Exposure multiplier applied to the final HDR color before tonemapping.
+    /// Default 1.0 = no scaling; range [0, 5] via inspector slider.
+    /// Controls overall image brightness independently of light intensity.
+    pub exposure: f32,
 }
 
 impl OrbitCamera {
@@ -26,6 +30,7 @@ impl OrbitCamera {
             znear: 0.01,
             zfar: 100.0,
             aspect,
+            exposure: 1.0,
         }
     }
 
@@ -147,6 +152,10 @@ pub struct FlyCamera {
     pub move_speed: f32,
     /// Mouse look sensitivity (rad per pixel).
     pub look_sensitivity: f32,
+    /// Exposure multiplier applied to the final HDR color before tonemapping.
+    /// Default 1.0 = no scaling; range [0, 5] via inspector slider.
+    /// Controls overall image brightness independently of light intensity.
+    pub exposure: f32,
 }
 
 impl FlyCamera {
@@ -161,6 +170,7 @@ impl FlyCamera {
             zfar: 1000.0,
             move_speed: 5.0,
             look_sensitivity: 0.005,
+            exposure: 1.0,
         }
     }
 
@@ -434,6 +444,23 @@ impl Camera {
     pub fn set_position(&mut self, position: [f32; 3]) {
         if let Camera::Fly(f) = self {
             f.position = position;
+        }
+    }
+
+    /// Exposure multiplier applied to the final HDR color before tonemapping.
+    pub fn exposure(&self) -> f32 {
+        match self {
+            Camera::Orbit(o) => o.exposure,
+            Camera::Fly(f) => f.exposure,
+        }
+    }
+
+    /// Set the exposure multiplier, clamped to [0, 5].
+    pub fn set_exposure(&mut self, value: f32) {
+        let clamped = value.clamp(0.0, 5.0);
+        match self {
+            Camera::Orbit(o) => o.exposure = clamped,
+            Camera::Fly(f) => f.exposure = clamped,
         }
     }
 

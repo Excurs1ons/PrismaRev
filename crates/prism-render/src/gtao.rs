@@ -39,19 +39,9 @@ use crate::render_graph::{
 };
 use crate::render_pass::find_memory_type;
 use crate::shader;
+use crate::shader_bindings;
 
-/// Push constants for `gtao.slang::GtaoPush`. Mirrors the Slang struct
-/// byte-for-byte: inv_proj(64) + viewport(8) + radius(4) + mode(4) + pad(4)
-/// = 84 bytes. Well within Vulkan's guaranteed 128-byte minimum push-constant
-/// range.
-#[repr(C)]
-pub struct GtaoPushConstants {
-    pub inv_proj: [[f32; 4]; 4],
-    pub viewport: [f32; 2],
-    pub radius: f32,
-    pub mode: u32,
-    pub _pad0: u32,
-}
+
 
 /// Per-frame-in-flight inputs the GTAO pass needs to sample. Built by
 /// `GraphRenderer::render` from `ScenePass` accessors and passed to
@@ -393,7 +383,7 @@ impl GtaoPass {
         cmd: vk::CommandBuffer,
         frame_index: u32,
         inputs: &GtaoFrameInputs,
-        push: &GtaoPushConstants,
+        push: &shader_bindings::gtao::GtaoPush,
     ) -> anyhow::Result<()> {
         self.ensure_pipeline(device)?;
         let i = (frame_index as usize) % 2;
@@ -471,7 +461,7 @@ impl GtaoPass {
                 }],
             );
 
-            // Push constants: GtaoPushConstants (96 bytes, FRAGMENT).
+            // Push constants: shader_bindings::gtao::GtaoPush (96 bytes, FRAGMENT).
             device.cmd_push_constants(
                 cmd,
                 pipeline.layout,
@@ -479,7 +469,7 @@ impl GtaoPass {
                 0,
                 std::slice::from_raw_parts(
                     push as *const _ as *const u8,
-                    std::mem::size_of::<GtaoPushConstants>(),
+                    std::mem::size_of::<shader_bindings::gtao::GtaoPush>(),
                 ),
             );
 
@@ -569,11 +559,11 @@ impl GtaoPass {
         // set 0 + set 1 share the same layout (SAMPLED_IMAGE + SAMPLER).
         let set_layouts = [self.ds_layout, self.ds_layout];
 
-        // Push constants: GtaoPushConstants (96 bytes, FRAGMENT only).
+        // Push constants: shader_bindings::gtao::GtaoPush (96 bytes, FRAGMENT only).
         let push = [vk::PushConstantRange::default()
             .stage_flags(vk::ShaderStageFlags::FRAGMENT)
             .offset(0)
-            .size(std::mem::size_of::<GtaoPushConstants>() as u32)];
+            .size(std::mem::size_of::<shader_bindings::gtao::GtaoPush>() as u32)];
 
         let blend_attachment = vk::PipelineColorBlendAttachmentState::default()
             .color_write_mask(vk::ColorComponentFlags::RGBA)
@@ -908,7 +898,7 @@ impl RenderPassNode for GtaoPass {
             normal_image,
             normal_view,
         };
-        let push = GtaoPushConstants {
+        let push = shader_bindings::gtao::GtaoPush {
             inv_proj: ctx.frame.inv_projection,
             viewport: [gtao_extent.width as f32, gtao_extent.height as f32],
             radius: 0.5,
@@ -931,17 +921,4 @@ impl RenderPassNode for GtaoPass {
         }
     }
 }
-mod tests {
-    #[allow(unused_imports)]
-    use super::*;
 
-    #[test]
-    fn push_constant_size_is_84() {
-        // 64 (inv_proj) + 8 (viewport) + 4 (radius) + 4 (mode) + 4 (pad) = 84.
-        // Matches the Slang `GtaoPush` struct byte-for-byte (slangc lays out
-        // the struct tightly with no trailing alignment padding, same as
-        // `#[repr(C)]`). Vulkan push-constant ranges don't require 16-byte
-        // multiples - the range `size` just has to match the bytes pushed.
-        assert_eq!(std::mem::size_of::<GtaoPushConstants>(), 84);
-    }
-}

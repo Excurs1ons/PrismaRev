@@ -66,6 +66,16 @@ pub struct FrameInput<'a> {
     pub lights: &'a [GpuLight],
     pub render_mode: RenderMode,
     pub pt_max_bounces: u32,
+    /// Max PT primary + shadow ray length (world units). Forwarded to the PT
+    /// pass as a push constant so the inspector can tune it live.
+    pub pt_ray_max_distance: f32,
+    /// Exposure multiplier applied to the final HDR color before tonemapping.
+    /// When the render mode is [`RenderMode::PathTrace`] this value is also
+    /// forwarded to the PT compute shader as a push constant.
+    pub exposure: f32,
+    /// Maximum iterations (samples per pixel) for path tracing.
+    /// 0 = accumulate forever (default).
+    pub pt_max_iterations: u32,
 }
 
 /// GPU session that owns the long-lived Vulkan runtime objects (device,
@@ -374,6 +384,28 @@ impl GraphRenderer {
         &mut self.graph
     }
 
+    /// Request a path-tracer accumulation reset on the next frame. Call this
+    /// when a render parameter that affects traced radiance changes (max
+    /// bounces, exposure, light color/direction/intensity, scene reload, ...).
+    /// No-op if PathTracePass isn't in the graph.
+    pub fn request_pt_reset(&mut self) {
+        if let Some(pt) = self.graph.pass_mut::<PathTracePass>() {
+            pt.request_reset();
+        }
+    }
+
+    /// Current PT frame counter (number of accumulated samples per pixel).
+    /// Capped at `pt_max_iterations` when freeze is active (> 0), so the UI
+    /// doesn't keep counting after the shader stops accumulating.
+    /// Returns `None` if the path-trace pass is not in the graph.
+    pub fn pt_frame_count(&self) -> Option<u32> {
+        self.graph.pass_ref::<PathTracePass>().map(|pt| {
+            let fc = pt.frame_count();
+            let max = self.settings.pt_max_iterations;
+            if max > 0 && fc > max { max } else { fc }
+        })
+    }
+
     /// Lazily create the egui overlay if it doesn't exist yet, then return a
     /// mutable reference to it. Called by `App` when the inspector is first
     /// shown. Uses the same `in_flight_frames` count as the renderer (2).
@@ -494,17 +526,6 @@ impl GraphRenderer {
     /// SSBO). Used by the path-trace pass to bind the materials SSBO.
     pub fn material_manager(&self) -> &RenderMaterialManager {
         &self.material_manager
-    }
-
-    /// Camera exposure multiplier (scales all light radiance pre-tonemap).
-    pub fn exposure(&self) -> f32 {
-        self.settings.exposure
-    }
-
-    /// Set the exposure multiplier at runtime. Clamped to [0, 5] to prevent
-    /// degenerate values.
-    pub fn set_exposure(&mut self, value: f32) {
-        self.settings.exposure = value.clamp(0.0, 5.0);
     }
 
     /// Replace the scene-scope probe volume with real baked data loaded from a
@@ -795,6 +816,9 @@ impl GraphRenderer {
             lights,
             render_mode,
             pt_max_bounces,
+            pt_ray_max_distance,
+            pt_max_iterations,
+            exposure,
         } = input;
         let light_view_proj = *light_view_proj;
         let inv_projection = *inv_projection;
@@ -862,8 +886,12 @@ impl GraphRenderer {
                 swapchain_views,
                 render_mode: *render_mode,
                 pt_max_bounces: *pt_max_bounces,
+                pt_ray_max_distance: *pt_ray_max_distance,
+                pt_max_iterations: *pt_max_iterations,
                 camera_pos: frame_data.camera_position,
                 light_dir: frame_data.light_direction,
+                light_color: frame_data.light_color,
+                exposure: *exposure,
             };
             let render_ctx = crate::render_graph::RenderContext {
                 device,
@@ -1003,6 +1031,9 @@ impl GraphRenderer {
         lights: &[GpuLight],
         render_mode: RenderMode,
         pt_max_bounces: u32,
+        pt_ray_max_distance: f32,
+        pt_max_iterations: u32,
+        exposure: f32,
     ) -> anyhow::Result<bool> {
         let ctx = match self.begin_frame()? {
             Some(c) => c,
@@ -1023,6 +1054,9 @@ impl GraphRenderer {
             lights,
             render_mode,
             pt_max_bounces,
+            pt_ray_max_distance,
+            pt_max_iterations,
+            exposure,
         };
         let exec_result = self.execute(&ctx, &input);
         let out_of_date = self.present(&ctx)?;
