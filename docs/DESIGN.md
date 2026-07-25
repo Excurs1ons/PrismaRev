@@ -68,7 +68,7 @@
 | 重 pass（阴影/GI/反射）默认半分辨率 | 2.1：移动端带宽/算力 |
 | 所有跨端布局（push constant、UBO、SSBO）显式 padding 并验证 | 全平台一致 ABI |
 | 阴影 / GI / RT / 调试视图由 `RenderSettings` 统一开关 | 2.2：可降级不形变 |
-| 资源格式（glTF / 纹理）经 `prism-asset` 接入，引擎不直读文件 | 2.2：解耦 |
+| 资源格式（glTF / 纹理）经 `prism-asset`（运行时即时加载）或 `resource-pipeline/*`（离线预处理 → .pak）接入，引擎不直读文件 | 2.2：解耦 |
 
 ## 4. 当前架构落点（与目标的对应关系）
 
@@ -76,7 +76,7 @@
 |----------|----------|
 | 模块化管线 | `prism-render/src/render_graph.rs`（`RenderPassNode` 图）+ `passes.rs`。**现状（2026-07-20）**：`RenderGraph::execute()` 统一驱动四个 pass（`ShadowMapPass` -> `ScenePass` -> `GtaoPass` -> `PostPass`，按注册顺序线性执行）。passes 通过 `read_usage` / `write_usage` 声明图边依赖，graph 据此自动插入跨 pass 的 `vkCmdPipelineBarrier`（layout cache 按 `(handle, image_index)` 跨帧持久，`recreate_swapchain` 时 `reset_layouts`）。跨帧延迟边（GTAO 双缓冲 AO 回喂）与 swapchain->`PRESENT_SRC_KHR` 保留手动，标注为图边界特例。环检测已实现（`validate_edges`），执行顺序不重排（接线顺序见 `GraphRenderer::new`）。资源生命周期区间已声明，TBDR 内存 aliasing 待后续。|
 | bindless / 全平台统一 | `prism-render/src/bindless.rs`（分离 SRV + 全局 sampler 表） |
-| 资源管理解耦 | `prism-asset`（glTF 2.0 加载器 + `SceneStore` + `MaterialManager`） |
+| 资源管理解耦 | `crates/prism-asset`（运行时 glTF 2.0 加载器 + `SceneStore` + `MaterialManager`），**新增** `resource-pipeline/*`（独立工作空间）提供离线预处理管线（Import→Cook→Package→Runtime，见 §10）。当前两套并存，`.pak` 路径尚未接入引擎。 |
 | 移动端 GI | **Baked probe-volume GI**（2 阶 SH，9 系数 RGB16F，3D texture），非实时 SHARC。设计见 §6。SHARC 实时 slang 已移除，不再恢复（移动端跑不动每帧 ray 填 cache）。|
 | 阴影 / RT | 光栅化阴影贴图：`ShadowMapPass`（深度预渲染，见 `shadow_depth.slang`）+ `ScenePass`（comparison sampler 采样，见 `scene_frag.slang`） |
 | 能力探测 | `prism-render/src/capabilities.rs`（集中探测，扩展中） |
@@ -529,3 +529,282 @@ pub struct SceneReadView<'a> {
 - **PR-S2：DirtyRouter 接入 RenderManager**。给 `RenderTextureManager` / `RenderMeshManager` / `RenderInstanceManager` 等实现 consume dirty dispatch 接口。在 prepare 阶段执行 dispatch plan，**不再允许外部直接调用各 manager 的 upload**。
 - **PR-S3：SceneReadView 替换 pass 中的 manager 直接引用**。Pass 签名改为接收 `&SceneReadView`，不再持有 `&RenderMeshManager` 等私有句柄。
 - **PR-S4（可选）：后台 AssetHub 异步加载**。`AssetHub` 在后台线程解码 glTF / KTX2，完成后通过 `ModelLoaded` 事件交付 owned CPU scene payload；`sync_for_render` 的 `SceneAssetIngestor` 将其映射为 typed handle。当前同步加载路径保留为回退。
+
+---
+
+## 10. 资源管线 v2 —— 离线预处理管线（独立工作空间）
+
+> 2026-07-25 新增。`resource-pipeline/` 是一个**独立工作空间**（不加入根 workspace
+> `members`），实现了编辑器侧的"导入 → 烹饪 → 打包 → 运行时加载"全流程管线，
+> 与现有 `crates/prism-asset` 运行时 glTF 加载路径并存，后续逐步取代之。
+
+### 10.1 架构总览
+
+```
+源文件 (Assets/)
+    │
+    ▼  [Import]  ← asset-importer + asset-db
+  ┌─────────────┐
+  │  中间格式     │  RTXI（纹理）、RMXI（网格）
+  └──────┬──────┘
+         │
+         ▼  [Cook]  ← asset-cooker + profile
+  ┌─────────────┐
+  │  运行时格式    │  RTEX（纹理 mip 链）、RMES（交错顶点）
+  └──────┬──────┘
+         │
+         ▼  [Package]  ← asset-package
+  ┌─────────────┐
+  │  .pak 归档   │  RPAK 格式 + xxh3 校验和
+  └──────┬──────┘
+         │
+         ▼  [Runtime]  ← asset-runtime
+  ┌─────────────┐
+  │  Handle<T>  │  懒加载 + 内存预算 + 依赖解析 + 热重载
+  └─────────────┘
+```
+
+**核心设计原则**：
+- **编辑器离线完成重计算**，运行时只读 `.pak`，零解码、零编码。
+- **运行时无编辑器依赖**（`asset-runtime` 只依赖 `asset-core` + `asset-package`）。
+- **Handle<T> 与 ECS Entity 分离**：Handle 是资产生命周期概念（代沟计数 slot），
+  Entity 是帧级 ECS 概念，二者不混用。
+
+### 10.2 7 个 crate 及其职责
+
+| crate | 职责 | 依赖 |
+|-------|------|------|
+| `asset-core` | 基础类型：`AssetId`（64 bit gen+serial）、`AssetType`（8 分类）、`Handle<T>`（代沟计数）、`AssetRef` | serde, thiserror |
+| `asset-db` | 编辑器资产数据库（JSON），文件→ID 索引 + 导入缓存（xxh3） | asset-core |
+| `asset-importer` | 导入器框架 + 内置 4 个 Importer：Texture（PNG→RTXI）、Gltf（→RMXI）、Json、Raw | asset-core, asset-db, image, gltf |
+| `asset-cooker` | 烹饪器框架 + CookProfile 系统 + 3 个 Cooker：Texture（RTXI→RTEX+mip）、Mesh（RMXI→RMES）、Binary 直通 | asset-core, asset-db, asset-package |
+| `asset-package` | `.pak` 归档格式（RPAK），支持 zstd 压缩 + xxh3 校验和 + 依赖表 | asset-core, zstd, xxhash-rust |
+| `asset-runtime` | 运行时 `ResourceManager`：懒加载 `Handle<T>`、内存预算 LRU/FIFO、依赖递归解析、轮询式热重载 | asset-core, asset-package |
+| `asset-cli` | 7 个子命令：`init` / `scan` / `import` / `build` / `validate` / `list` / `inspect` | 以上所有 + clap |
+
+**工作空间配置**：`resource-pipeline/Cargo.toml` 定义独立 workspace，
+成员不加入根 workspace `members`。可独立构建：
+```sh
+cd resource-pipeline && cargo build
+cargo test                       # 99 个测试全部通过
+cargo run -p asset-cli -- init
+```
+
+### 10.3 资源类型系统（asset-core）
+
+**`AssetId`**（`id.rs`）：
+```
+高 32 位 = generation（单调 epoch），低 32 位 = serial
+AssetId::generate()       → 进程级原子递增
+AssetId::tombstone(n)     → 删除标记（gen=u32::MAX，排序在所有活 ID 之后）
+AssetIdGenerator           → 编辑器侧持久化 ID 发生器
+```
+
+**`AssetType`**（`type.rs`）—— `#[repr(u32)]` 枚举，运行时通过 u32 判别：
+```
+Binary(0) / Texture(1) / Mesh(2) / Material(3) / Shader(4) /
+Prefab(5) / Scene(6) / Audio(7) / Unknown(0xFF)
+```
+- `from_extension()` 由扩展名推断类型
+- `AssetRef { id, asset_type }`——可序列化的轻量跨资产引用
+
+**`Handle<T>`**（`handle.rs`）——代沟计数句柄，`u64` 大小：
+```
+低 32 位 = slot index，高 32 位 = generation
+null = (0, 0)，static 区 = index < 1024
+AnyHandle = 类型擦除版本，支持异构存储
+```
+
+### 10.4 中间格式（Importer→Cooker 契约）
+
+| 格式 | 魔数 | 载荷 |
+|------|------|------|
+| **RTXI**（纹理中间） | `b"RTXI"` | `[magic:4][w:4][h:4][ch:1][fmt:1][RGBA8 pixels:N]` |
+| **RMXI**（网格中间） | `b"RMXI"` | `[magic:4][ver:1][verts:4][idxs:4][uv_ch:4][pos:N][nrm:N][uv:N][idx:N]` |
+
+中间格式是纯 CPU 数据，无 GPU 依赖。Importer 负责从源文件解码，
+Cooker 负责消费中间格式生成运行时格式。
+
+### 10.5 运行时格式（Cooker→Package 契约）
+
+| 格式 | 魔数 | 结构 |
+|------|------|------|
+| **RTEX**（cooked 纹理） | `b"RTEX"` | header + mip 偏移表 + 各级 mip 数据（box filter 降采样） |
+| **RMES**（cooked 网格） | `b"RMES"` | header + 属性偏移表 + 交错顶点数据 + 索引数据 |
+
+RTEX 的 mip 链由 Cooker 通过 2×2 box filter 生成（`TextureCooker::generate_mips`），
+运行时无需降采样。后期可替换为更高质量的 Kaiser/ Lanczos 滤波。
+
+### 10.6 .pak 归档格式（asset-package）
+
+```
+┌─ PackageHeader ────────────────────────┬── 52 bytes ─┐
+│ magic(4)=b"RPAK"  version(4)=1          │
+│ asset_count(4)  registry_offset(8)      │
+│ registry_size(8)  data_offset(8)        │
+│ data_size(8)  checksum(8)               │
+├─ RuntimeAssetRecord[n] ────────────────┬── 48 bytes × n ─┐
+│ id(8)  type_id(4)  flags(4)             │
+│ offset(8)  size(8)  compressed_size(8)  │
+│ dep_start(4)  dep_count(4)              │
+├─ Dependency Array[m] ──────────────────┬── 8 bytes × m ─┐
+│ [AssetId(u64)]                          │
+├─ Data Chunks ──────────────────────────┤
+│ [asset 0 data][asset 1 data]...         │
+└─────────────────────────────────────────┘
+```
+- **压缩**：zstd（按 asset 粒度，`FLAG_COMPRESSED` 标记）
+- **校验**：xxh3-64 覆盖 `header[12..] + registry + deps + data`
+- **读取**：`PackageReader` 零拷贝访问（未压缩 asset 直接 memcpy）
+
+### 10.7 Cook Profile 系统（asset-cooker/src/profile.rs）
+
+**优先级链**（高→低）：
+```
+1. CLI 覆盖（命令行参数）
+2. 活动项目配置（--profile 或 active.json）
+3. 平台默认配置（--platform → desktop/android/ios/embedded）
+4. base.json（最低）
+```
+
+**内置 5 个配置**：
+
+| 配置 | 纹理压缩 | 最大尺寸 | 生成切线 | 顶点压缩 | 流式 |
+|------|---------|---------|---------|---------|------|
+| base | RGBA8 | 不限 | 否 | 否 | 否 |
+| desktop | **BC7** | 4096 | **是** | 否 | 否 |
+| android | **ASTC 8×8** | 2048 | 否 | **是** | **是** |
+| ios | ASTC 8×8 | 2048 | 否 | 是 | 是 |
+| embedded | ETC2 RGBA | 1024 | 否 | 是 | 是 |
+
+**重要说明**：当前 `TextureCooker` 仍生成 RGBA8 RTEX，BC7/ASTC/ETC2 压缩
+尚未实现（`TextureCompression` 枚举已定，编码器集成待后续 PR）。
+此处的"压缩格式"是 profile 系统的预留配置，待 PR-T1（见 §7.7）接入后才实际生效。
+
+**`CookSettings`** 提供 `settings_hash()`：确定性 JSON → xxh3-64，
+用于增量构建缓存键。
+
+**`ProfileManager`：**
+- `resolve(name)` → 递归继承合并 → `CookSettings`
+- 循环检测（环路径文字报告）
+- `apply_cli_overrides()` → 命令行覆盖叠加
+- 内置配置由 `BUILTIN_DEFAULTS` 静态 `LazyLock<HashMap>` 承载，
+  用户配置从磁盘 `profiles_dir/{name}.json` 加载
+
+### 10.8 运行时 ResourceManager（asset-runtime）
+
+**核心流程**：
+1. `load_package("game.pak")` → 注册所有资产（填充 slot 数组 + `AssetId→index` 映射）
+2. `load::<T: Asset>(id)` → 首次按需从 `.pak` 读取数据，缓存到 slot，返回 `Handle<T>`
+3. `get::<T>(handle)` → 代沟校验 → 反序列化 → 返回 `T`
+4. `unload(handle)` / `unload_all()` → 释放数据，更新内存追踪
+
+**内存预算**：
+- `set_memory_budget(bytes)` + `set_eviction_policy(Lru|Fifo|None)`
+- `load()` 时预算超额 → 自动淘汰最久未访问资源
+- `evict(target_bytes)` 手动触发淘汰
+
+**依赖解析**：
+- `load_with_deps<T>(id)` → DFS 拓扑序加载所有依赖
+- 循环检测（warn + 跳过）
+
+**热重载**（feature-gated `hot-reload`）：
+- `HotReloadWatcher`：轮询 `.pak` 文件修改时间
+- `on_pak_changed()`：重读数据 → 更新 slot → 递增 generation
+
+**`Asset` trait**：
+```rust
+pub trait Asset: Sized + Send + 'static {
+    fn asset_type() -> AssetType;
+    fn from_bytes(data: &[u8]) -> Result<Self, RuntimeError>;
+    fn into_bytes(self) -> Vec<u8>;
+}
+```
+内建 `impl Asset for Vec<u8>`（二进制 blob）。
+
+### 10.9 CLI 工具（asset-cli）
+
+| 命令 | 功能 |
+|------|------|
+| `init` | 创建 `Assets/` + `Library/` 目录结构 |
+| `scan` | 扫描 `Assets/`，按扩展名推断类型，写入数据库 |
+| `import` | 对每个文件运行匹配的 Importer，增量缓存 |
+| `build --output game.pak` | 烹饪所有资产 → 打包 `.pak` |
+| `validate game.pak` | 验证魔数 + 版本 + 校验和 |
+| `list` | 列出数据库全部资产 |
+| `inspect <id>` | 查看单资产详情（依赖树可见） |
+
+### 10.10 与现有管线（prism-asset）的关系
+
+| 维度 | 现有 `crates/prism-asset` | 新 `resource-pipeline/*` |
+|------|--------------------------|--------------------------|
+| 定位 | 运行时 glTF/PNG/HDR 实时加载 | 编辑器离线预处理 → .pak |
+| 加载时机 | 应用启动时同步加载 | 编辑器离线构建，运行时按需懒加载 |
+| 格式处理 | 解析 glTF → 直接 GPU 上传 | 三阶段 Import→Cook→Package |
+| 增量构建 | 无 | ImportCache(xxh3) + settings_hash |
+| 平台适配 | 无 | CookProfile（5 内置配置 + 继承链） |
+| 内存管理 | 无 | 预算 + LRU/FIFO 淘汰 |
+| 热重载 | 无 | 轮询式 `.pak` 热重载 |
+| Handle 类型 | slotmap key | 代沟计数 `Handle<T>` |
+| 集成度 | 已接入 `prism-engine`（load_demo_scene） | 尚未接入引擎 |
+
+**共存策略**：两套管线并存。现有 `prism-asset` 即时加载用于开发快速迭代，
+新管线适用于发布构建。后续将新增引擎启动路径检测：
+优先加载 `game.pak`（发布模式），回退走 `prism-asset` 实时加载（开发模式）。
+
+### 10.11 接入引擎的待办清单（Integration Gate）
+
+要完成"离线预处理 → .pak → 引擎运行时"的闭环，需要以下 PR：
+
+- **[G1] asset-runtime 格式解码器**：为 RTEX / RMES 实现 GPU 上传逻辑。
+  - `TextureDecoder`：解析 RTEX header → 提取各 mip level 像素 → 
+    `TextureUploadInput` 格式适配 → 走现有 `BatchUploader` 上传
+  - `MeshDecoder`：解析 RMES header → 提取交错顶点 → `MeshUploadInput` 格式适配
+  - `MaterialDecoder`：从 `.pak` 读取 cooked material 数据 → 填充 `MaterialUploadInput`
+  - 位置：`prism-render` 新模块或 `asset-runtime` → `prism-render` 桥接层
+
+- **[G2] Cooker 输出格式与引擎对接**：确保 `TextureCooker` 和 `MeshCooker` 输出的
+  二进制格式能被 G1 的解码器正确解析，字段布局、字节对齐一一对应。
+  - 添加 `repr(C)` 布局验证测试
+  - 添加端到端测试：cook → decode → 与现有加载结果逐字段相等
+
+- **[G3] ResourceManager → Engine 桥接**：
+  - `prism-engine` 引入 `asset-runtime` 依赖
+  - 启动时检测 `game.pak` 是否存在，存在则通过 `ResourceManager` 加载
+  - 加载完成后，将 `Handle<T>` 解析为 ECS Entity（现有 `load_demo_scene` 模式）
+  - 走通全链路：CLI build → engine 启动 → 读取 .pak → GPU 渲染
+
+- **[G4] 构建脚本集成**：
+  - `run.ps1` / CI 脚本集成 `asset-cli build` 步骤
+  - 开发模式跳过 `.pak` 构建（走 `prism-asset` 即时加载）
+  - 发布模式强制先构建 `.pak` 再启动引擎
+
+- **[G5] CookProfile 集成到引擎设置**：
+  - 引擎启动参数支持 `--profile desktop/android` 等
+  - `CookSettings` 传递到 cooker pipeline 影响输出格式
+  - 平台自适应：引擎启动时探测平台 → 选择对应 profile → 加载匹配的 .pak
+
+- **[G6] 热重载管道**（可选，Phase 3）：
+  - 引擎在编辑器模式下启动 `HotReloadWatcher`
+  - `.pak` 变更 → `on_pak_changed()` → 更新 GPU 资源
+  - 为材质 / 纹理编辑提供即时反馈
+
+> **里程碑建议**：G1+G2+G3 为"闭环 MVP"，完成后即可端到端运行
+> （CLI build → .pak → engine load → render）。G4+G5 为"开发体验完善"，
+> G6 为"编辑器体验"。
+
+### 10.12 §7 纹理管线与 §10 的关系
+
+§7（纹理管线）设计的 KTX2/BC/ASTC 离线压缩方案，在概念上属于 §10 管线中
+`TextureImporter` → `TextureCooker` 链的增强。具体来说：
+
+- §7 的 **PR-T1（压缩格式上传支持）** 属于 §10 G1 的一部分——扩展
+  `BatchUploader::upload_image` 支持 BC/ASTC `vk::Format`。
+- §7 的 **PR-T2（xtask texture-import）** 属于 §10 Cooker 的离线编码增强——
+  在 `TextureCooker` 中添加 `compress: Some(Bc7|Astc|...)` 路径，
+  替代当前的 RGBA8 直通路径。
+- §7 的 **PR-T3（运行时优先读 KTX2）** 被 §10 `.pak` 方案取代——
+  运行时不再读 KTX2 文件，而是读内含已压缩 RTEX 数据的 `.pak`。
+
+因此 §7 不删除，而是被 §10 框架吸纳为内部实现细节。新增纹理压缩功能
+应在 §10 的 Cooker 和 Package 层级实现，而非绕过管线直读文件系统。

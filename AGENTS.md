@@ -8,17 +8,23 @@ Conventions) before touching any matrix/coordinate math — deviating from those
 - `crates/prism-ecs` — ECS core (Entity/Component/World/Query).
 - `crates/prism-render` — Vulkan backend: context, swapchain, render-graph passes (`passes.rs`),
   `GraphRenderer` driver (`graph_renderer.rs`), IBL cubemap (`ibl.rs`), bindless/PBR.
-- `crates/prism-asset` — asset/scene loading (glTF, HDR).
+- `crates/prism-asset` — runtime asset/scene loading (glTF, HDR). Used for development fast-iteration;
+  superseded by `resource-pipeline/*` for production builds.
 - `crates/prism-engine` — app layer + winit main loop, egui inspector.
 - `crates/prism-android` — Android port.
 - `src/main.rs` — binary entry (depends on `prism-engine`).
 - `shaders/` — Slang sources in `slang/`, compiled `.spv` + `reflection/*.json` next to them.
 - `xtask/` — **excluded** from default workspace; desktop/CI only (needs `slangc`).
+- `resource-pipeline/` — **independent workspace** (not in root `members`). Offline asset pipeline
+  (Import → Cook → Package → Runtime). 7 crates: `asset-core`, `asset-db`, `asset-importer`,
+  `asset-cooker`, `asset-package`, `asset-runtime`, `asset-cli`. See DESIGN.md §10.
+  Build/test separately: `cd resource-pipeline && cargo build/test`.
 
 ## Build / check / test
 - Build/run: `.\run.ps1` (Windows; sets `VK_SDK`, `RUST_LOG=info`, runs `shaders/compile.sh` then `cargo build`).
 - Checks: `cargo check -p prism-render`, `cargo build`, `cargo test`.
 - `xtask` is excluded from the workspace — run it explicitly with `cargo run -p xtask` from a desktop host; do not add it to default `members`.
+- Resource-pipeline: `cd resource-pipeline && cargo build && cargo test` (99 tests, independent workspace).
 
 ## Shaders (important gotcha)
 - Shaders are **Slang** (`shaders/slang/*.slang`), compiled with `slangc` to `.spv`.
@@ -50,6 +56,19 @@ Conventions) before touching any matrix/coordinate math — deviating from those
   Skybox reuses set 0 = IBL `envCube` (combined image sampler).
 - Push-constant structs (`ScenePush`, `SkyboxPush`, `ShadowPassPushConstants`, ...) must match the
   `#[repr(C)]` Rust mirrors byte-for-byte.
+
+## Resource-pipeline architecture rules
+- **Independent workspace** at `resource-pipeline/`; never add its crates to root workspace `members`.
+- Pipeline stages: `[Source] → Importer → [Intermediate] → Cooker → [Cooked] → Package → [.pak] → Runtime`.
+- Handle types in `asset-core` (`Handle<T>`, `AssetId`) are **distinct** from `prism_ecs::Entity`
+  and from `prism_asset`'s slotmap handles — never conflate them.
+- The runtime `ResourceManager` is the only consumer-facing API for game code reading `.pak` files.
+  It has zero dependencies on editor crates (`asset-db`, `asset-importer`).
+- CookProfile system (`asset-cooker/src/profile.rs`) drives platform-specific cooking via
+  5 built-in profiles (base/desktop/android/ios/embedded) with inheritance and CLI overrides.
+- When adding a new asset type: add to `AssetType` enum, implement `Importer` + `Cooker`,
+  wire into CLI commands.
+- Run tests: `cd resource-pipeline && cargo test` (currently 99 tests, all passing).
 
 ## Logging
 - Use the `log` crate (`log::trace!`/`warn!`/...). Verbose pass tracing uses `log::trace!`.
