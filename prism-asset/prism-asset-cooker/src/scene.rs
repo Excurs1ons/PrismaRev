@@ -331,20 +331,22 @@ mod tests {
         serde_json::from_str(SCENE_JSON).unwrap()
     }
 
-    fn make_cook_context(data: &[u8]) -> CookContext {
+    fn make_intermediate(scene: &SceneJson) -> Vec<u8> {
+        serde_json::to_vec_pretty(scene).unwrap()
+    }
+
+    fn cook_scene_json(json: &[u8]) -> Result<CookResult, CookError> {
+        let cooker = SceneCooker;
         let id = AssetId::from_raw((1u64 << 32) | 300);
         let record =
             prism_asset_db::AssetRecord::new(id, "scene.scene".into(), AssetType::Scene, "scene-importer");
         let settings = crate::profile::CookSettings::default();
-        CookContext {
+        let ctx = CookContext {
             record: &record,
-            imported_data: data,
+            imported_data: json,
             settings: &settings,
-        }
-    }
-
-    fn make_intermediate(scene: &SceneJson) -> Vec<u8> {
-        serde_json::to_vec_pretty(scene).unwrap()
+        };
+        cooker.cook(&ctx)
     }
 
     // ── sample scene JSON ────────────────────────────────────────────
@@ -394,9 +396,7 @@ mod tests {
     fn scene_cooker_produces_valid_rscn() {
         let scene = make_scene_json();
         let intermediate = make_intermediate(&scene);
-        let cooker = SceneCooker;
-        let ctx = make_cook_context(&intermediate);
-        let result = cooker.cook(&ctx).unwrap();
+        let result = cook_scene_json(&intermediate).unwrap();
 
         // Verify RSCN magic.
         assert_eq!(&result.cooked_data[..4], b"RSCN");
@@ -412,47 +412,56 @@ mod tests {
     fn scene_cooker_parent_order() {
         let scene = make_scene_json();
         let intermediate = make_intermediate(&scene);
-        let cooker = SceneCooker;
-        let ctx = make_cook_context(&intermediate);
-        let result = cooker.cook(&ctx).unwrap();
+        let result = cook_scene_json(&intermediate).unwrap();
 
-        // Parse the RSCN header + walk entities to verify parent order.
         let header = parse_rscn_header(&result.cooked_data).unwrap();
         assert_eq!(header.entity_count, 4);
 
-        // Read parent fields from the binary blob.
-        // Skip header (9 bytes), then read each entity's parent.
-        let mut offset = 9usize;
+        // Walk entities in order, extracting parent indexes.
+        let data = &result.cooked_data;
+        let mut off = 9usize; // skip header
+        let mut parents = Vec::new();
 
-        // Helper to read parent at current offset.
-        let read_parent = |data: &[u8], off: &mut usize| -> i32 {
-            // name_len (2) + parent (4) = 6 bytes of header per entity
-            let name_len = u16::from_le_bytes(data[*off..*off + 2].try_into().unwrap()) as usize;
-            *off += 2 + name_len; // skip name
-            let parent = i32::from_le_bytes(data[*off..*off + 4].try_into().unwrap());
-            *off += 4;
-            // skip transform (12+16+12 = 40) + flags (1)
-            *off += 40 + 1;
-            parent
-        };
+        for _ in 0..header.entity_count {
+            // Name (length-prefixed).
+            let name_len = u16::from_le_bytes(data[off..off + 2].try_into().unwrap()) as usize;
+            off += 2 + name_len;
 
-        // Entities are parent-first sorted: roots first, then children.
-        // Root (0) and Sun (2) are both roots → order depends on BFS.
-        // Let's just verify consistency: every non-root entity must have
-        // a parent that appears earlier in the array.
+            // Parent.
+            let parent = i32::from_le_bytes(data[off..off + 4].try_into().unwrap());
+            off += 4;
+            parents.push(parent);
 
-        // We need to track which indices represent which entities.
-        // After sort, read first two entities' parent fields:
-        let p0 = read_parent(&result.cooked_data, &mut offset);
-        // Must be root (-1).
-        assert_eq!(p0, -1, "first entity should be a root");
+            // Transform: tx(12) + rot(16) + scale(12).
+            off += 40;
 
-        let p1 = read_parent(&result.cooked_data, &mut offset);
-        let p2 = read_parent(&result.cooked_data, &mut offset);
-        let p3 = read_parent(&result.cooked_data, &mut offset);
+            // Flags.
+            let flags = data[off];
+            off += 1;
 
-        // Each non-root parent must be a valid index < its own position.
-        for (i, &p) in [p0, p1, p2, p3].iter().enumerate() {
+            // Skip optional components based on flags.
+            let skip_str = |off: &mut usize| {
+                let len = u16::from_le_bytes(data[*off..*off + 2].try_into().unwrap()) as usize;
+                *off += 2 + len;
+            };
+            if flags & FLAG_HAS_MESH != 0 {
+                skip_str(&mut off);
+            }
+            if flags & FLAG_HAS_MATERIAL != 0 {
+                skip_str(&mut off);
+            }
+            if flags & FLAG_HAS_LIGHT != 0 {
+                // type(1) + color(12) + intensity(4) + range(4) + inner_cone(4) + outer_cone(4)
+                off += 29;
+            }
+            if flags & FLAG_HAS_CAMERA != 0 {
+                // fov(4) + near(4) + far(4)
+                off += 12;
+            }
+        }
+
+        // Every non-root parent must be an earlier entity.
+        for (i, &p) in parents.iter().enumerate() {
             if p != -1 {
                 assert!(
                     (p as usize) < i,
@@ -464,9 +473,7 @@ mod tests {
 
     #[test]
     fn scene_cooker_rejects_bad_json() {
-        let cooker = SceneCooker;
-        let ctx = make_cook_context(b"not valid json");
-        assert!(cooker.cook(&ctx).is_err());
+        assert!(cook_scene_json(b"not valid json").is_err());
     }
 
     #[test]
@@ -480,9 +487,7 @@ mod tests {
                 "transform": {}
             }]
         }"#;
-        let cooker = SceneCooker;
-        let ctx = make_cook_context(json);
-        assert!(cooker.cook(&ctx).is_err());
+        assert!(cook_scene_json(json).is_err());
     }
 
     #[test]
@@ -491,18 +496,14 @@ mod tests {
             "version": 1,
             "entities": []
         }"#;
-        let cooker = SceneCooker;
-        let ctx = make_cook_context(json);
-        assert!(cooker.cook(&ctx).is_err());
+        assert!(cook_scene_json(json).is_err());
     }
 
     #[test]
     fn scene_cooker_roundtrip_entity_count() {
         let scene = make_scene_json();
         let intermediate = make_intermediate(&scene);
-        let cooker = SceneCooker;
-        let ctx = make_cook_context(&intermediate);
-        let result = cooker.cook(&ctx).unwrap();
+        let result = cook_scene_json(&intermediate).unwrap();
 
         let header = parse_rscn_header(&result.cooked_data).unwrap();
         assert_eq!(header.entity_count, 4);
@@ -535,9 +536,7 @@ mod tests {
                 "transform": {"translation": [1,2,3], "rotation": [0,0,0,1], "scale": [1,1,1]}
             }]
         }"#;
-        let cooker = SceneCooker;
-        let ctx = make_cook_context(json);
-        let result = cooker.cook(&ctx).unwrap();
+        let result = cook_scene_json(json).unwrap();
         let header = parse_rscn_header(&result.cooked_data).unwrap();
         assert_eq!(header.entity_count, 1);
     }
@@ -555,9 +554,7 @@ mod tests {
                 "camera": {"type": "perspective", "fov_y_degrees": 45.0, "near": 0.01, "far": 500.0}
             }]
         }"#;
-        let cooker = SceneCooker;
-        let ctx = make_cook_context(json);
-        let result = cooker.cook(&ctx).unwrap();
+        let result = cook_scene_json(json).unwrap();
 
         let header = parse_rscn_header(&result.cooked_data).unwrap();
         assert_eq!(header.entity_count, 1);
@@ -587,9 +584,7 @@ mod tests {
                 {"name": "C", "parent": 1, "transform": {}}
             ]
         }"#;
-        let cooker = SceneCooker;
-        let ctx = make_cook_context(json);
-        let result = cooker.cook(&ctx).unwrap();
+        let result = cook_scene_json(json).unwrap();
         let header = parse_rscn_header(&result.cooked_data).unwrap();
         assert_eq!(header.entity_count, 3);
     }

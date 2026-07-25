@@ -1048,7 +1048,7 @@ impl ApplicationHandler for App {
         // Forward window events to the egui overlay first (when the inspector
         // is open) so UI interactions don't also drive the camera. If egui
         // consumes the event, stop here.
-        if self.any_ui_open() {
+        if self.any_ui_visible() {
             if let Some(window) = self.window.as_ref() {
                 if let Some(renderer) = self.renderer.as_mut() {
                     if let Some(overlay) = renderer.egui_overlay_mut() {
@@ -1087,6 +1087,16 @@ impl ApplicationHandler for App {
                     }
                 }
             }
+            WindowEvent::Focused(false) => {
+                // Window lost focus (ALT+TAB, click another window, etc).
+                // Auto-release pointer lock so the user isn't stuck in a locked
+                // cursor state when they return, and so stale mouse delta can't
+                // accumulate while the window is inactive and cause a camera
+                // jump on re-entry.
+                if self.pointer_locked {
+                    self.set_locked(false);
+                }
+            }
             WindowEvent::RedrawRequested => {
                 self.render_one_frame();
             }
@@ -1110,7 +1120,7 @@ impl ApplicationHandler for App {
                     // Left-click on the 3D scene (not a UI panel) enters
                     // FPS-style pointer lock if not already locked and the
                     // inspector isn't open.
-                    if !self.pointer_locked && !self.any_ui_open() {
+                    if !self.pointer_locked && !self.ui_modal_open() {
                         self.set_locked(true);
                         return;
                     }
@@ -1186,7 +1196,7 @@ impl ApplicationHandler for App {
                         // the user can move the cursor freely; releasing ALT
                         // re-locks (handled in the Released branch below).
                         if code == KeyCode::AltLeft || code == KeyCode::AltRight {
-                            if self.pointer_locked && !self.any_ui_open() {
+                            if self.pointer_locked && !self.ui_modal_open() {
                                 self.set_locked(false);
                                 self.alt_temp_release = true;
                             }
@@ -1340,7 +1350,7 @@ impl ApplicationHandler for App {
                     if let winit::keyboard::PhysicalKey::Code(code) = physical_key {
                         if (code == KeyCode::AltLeft || code == KeyCode::AltRight)
                             && self.alt_temp_release
-                            && !self.any_ui_open()
+                            && !self.ui_modal_open()
                         {
                             self.set_locked(true);
                             self.alt_temp_release = false;
@@ -1412,10 +1422,18 @@ impl ApplicationHandler for App {
 }
 
 impl App {
-    /// Whether any egui overlay panel (inspector F1 or render-graph viz F2) is
-    /// currently open. Used to gate pointer-lock, scene animation, and egui
-    /// event forwarding so input goes to the UI whenever a panel is visible.
-    fn any_ui_open(&self) -> bool {
+    /// Whether any modal egui panel (inspector F1 or render-graph viz F2) is
+    /// open. The performance HUD alone does not count — it doesn't consume
+    /// mouse/keyboard focus or block scene interaction. Used to gate pointer-
+    /// lock and scene animation so input goes to the UI whenever a panel is
+    /// visible.
+    fn ui_modal_open(&self) -> bool {
+        self.inspector.show || self.render_graph_viz.show
+    }
+
+    /// Whether any egui overlay (including the performance HUD) is visible
+    /// and needs per-frame egui rendering. Wider than [`Self::ui_modal_open`].
+    fn any_ui_visible(&self) -> bool {
         self.inspector.show || self.render_graph_viz.show || self.inspector.show_perf
     }
 
@@ -1523,7 +1541,7 @@ impl App {
         // open so user edits to `Transform.rotation` aren't overwritten each
         // frame.
         let elapsed = self.start.elapsed().as_secs_f32();
-        if !self.any_ui_open() {
+        if !self.ui_modal_open() {
             if let Some(world) = self.world.as_mut() {
                 for (_, transform) in world.query_mut::<Transform>() {
                     let angle = elapsed * 0.5; // 0.5 rad/s ≈ 29°/s
@@ -1539,7 +1557,7 @@ impl App {
         // pending frame, so when BOTH the inspector (F1) and the render-graph
         // viz (F2) are open we must run both UIs inside a single `run_ui`
         // closure - otherwise the second call clobbers the first.
-        if self.any_ui_open() {
+        if self.any_ui_visible() {
             self.inspector.debug_flags = self.debug_flags;
             self.inspector.show_ui = self.show_ui;
             self.inspector.tonemap_mode = self.tonemap_mode;
@@ -1640,7 +1658,7 @@ impl App {
 
         // Phase 2 cleanup for the egui overlay: apply stashed platform output
         // (cursor icon, clipboard) now that the window is available again.
-        if self.any_ui_open() {
+        if self.any_ui_visible() {
             if let (Some(window), Some(renderer)) = (self.window.as_ref(), self.renderer.as_mut()) {
                 if let Some(overlay) = renderer.egui_overlay_mut() {
                     overlay.apply_platform_output(window);

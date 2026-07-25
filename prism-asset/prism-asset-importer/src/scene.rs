@@ -59,7 +59,7 @@ pub struct EntityJson {
 // ---------------------------------------------------------------------------
 
 /// Local transform component.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransformJson {
     /// Translation in world units (right-handed: +X right, +Y up, +Z toward viewer).
     #[serde(default)]
@@ -84,7 +84,7 @@ fn one_vec3() -> [f32; 3] {
 // ---------------------------------------------------------------------------
 
 /// Light component.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LightJson {
     /// Light type: `"directional"`, `"point"`, or `"spot"`.
     #[serde(rename = "type")]
@@ -118,7 +118,7 @@ fn one_f32() -> f32 {
 // ---------------------------------------------------------------------------
 
 /// Perspective camera component.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CameraJson {
     /// Camera type: `"perspective"` (only option for now).
     #[serde(rename = "type", default = "default_camera_type")]

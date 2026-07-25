@@ -1779,17 +1779,10 @@ fn procedural_equirect(width: u32, height: u32) -> (Vec<f32>, u32, u32) {
                 0.35 + 0.55 * (0.5 + 0.5 * up),
                 0.55 + 0.45 * (0.5 + 0.5 * up),
             ];
-            let sun_dir = [-0.4, 0.7, 0.6];
-            let d = dot3(dir, sun_dir);
-            let sun = if d > 0.985 {
-                6.0 * smoothstep(0.985, 1.0, d)
-            } else {
-                0.0
-            };
             let i = ((y * width + x) * 4) as usize;
-            data[i] = sky[0] + sun;
-            data[i + 1] = sky[1] + sun;
-            data[i + 2] = sky[2] + sun;
+            data[i] = sky[0];
+            data[i + 1] = sky[1];
+            data[i + 2] = sky[2];
             data[i + 3] = 1.0;
         }
     }
