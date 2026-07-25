@@ -25,7 +25,7 @@ use prism_render::{DebugMode, GraphRenderer, NormalSpace, PathTracePass, RenderM
 use crate::camera::{Camera, FlyCamera};
 use crate::input::{InputState, MouseButton};
 use crate::render_system::{
-    render_system, DirectionalLight, MeshManager, RenderInstance, Transform,
+    render_system, DirectionalLight, MeshManager, PointLight, RenderInstance, Transform,
 };
 
 /// Parse a `key = "value"` TOML line (after the `key` prefix has been stripped)
@@ -120,41 +120,43 @@ fn create_default_scene(world: &mut World) {
     let dir_entity = world.spawn();
     world.insert(dir_entity, DirectionalLight::default());
 
-    // TEMP: Disabled point lights for color-diagnosis (pathtracing tonemap issue).
     // A few point lights so the PBR scene has local highlights. Positions may be
     // overridden by a sibling `Transform` at render time. Editable via the
     // inspector.
-    // let point_lights = [
-    //     PointLight {
-    //         position: [2.0, 3.0, 2.0],
-    //         range: 12.0,
-    //         color: [1.0, 0.2, 0.2],
-    //         intensity: 150.0,
-    //     },
-    //     PointLight {
-    //         position: [-2.0, 3.0, -2.0],
-    //         range: 12.0,
-    //         color: [0.2, 1.0, 0.2],
-    //         intensity: 150.0,
-    //     },
-    //     PointLight {
-    //         position: [0.0, 4.0, 4.0],
-    //         range: 12.0,
-    //         color: [0.2, 0.2, 1.0],
-    //         intensity: 150.0,
-    //     },
-    // ];
-    // for pl in point_lights {
-    //     let entity = world.spawn();
-    //     world.insert(
-    //         entity,
-    //         Transform {
-    //             translation: pl.position,
-    //             ..Default::default()
-    //         },
-    //     );
-    //     world.insert(entity, pl);
-    // }
+    let point_lights = [
+        PointLight {
+            position: [2.0, 3.0, 2.0],
+            range: 12.0,
+            color: [1.0, 0.2, 0.2],
+            intensity: 150.0,
+            enabled: true,
+        },
+        PointLight {
+            position: [-2.0, 3.0, -2.0],
+            range: 12.0,
+            color: [0.2, 1.0, 0.2],
+            intensity: 150.0,
+            enabled: true,
+        },
+        PointLight {
+            position: [0.0, 4.0, 4.0],
+            range: 12.0,
+            color: [0.2, 0.2, 1.0],
+            intensity: 150.0,
+            enabled: true,
+        },
+    ];
+    for pl in point_lights {
+        let entity = world.spawn();
+        world.insert(
+            entity,
+            Transform {
+                translation: pl.position,
+                ..Default::default()
+            },
+        );
+        world.insert(entity, pl);
+    }
 
     // Camera entity (free-fly by default). Editable at runtime via the
     // inspector like any other scene object.

@@ -31,7 +31,7 @@
   --grad: linear-gradient(135deg, var(--accent), var(--accent-2));
 
   /* 尺寸与排版 */
-  --sidebar-w: 280px;
+  --sidebar-w: 360px;
   --topbar-h: 58px;
   --radius: 10px;
   --mono: "Fira Code", "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
@@ -215,7 +215,7 @@ body::before {
 /* ========== 侧边栏（Overlay 面板） ========== */
 
 .sidebar {
-  width: 280px;
+  width: var(--sidebar-w);
   background: var(--bg-panel);
   border-right: 1px solid var(--border);
   height: calc(100% - var(--topbar-h));

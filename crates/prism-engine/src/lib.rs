@@ -12,6 +12,7 @@ pub mod input;
 pub mod inspector;
 pub mod render_graph_viz;
 pub mod render_system;
+pub mod scene;
 pub mod scene_state;
 
 pub use app::App;

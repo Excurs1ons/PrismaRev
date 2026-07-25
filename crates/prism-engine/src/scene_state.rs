@@ -93,12 +93,14 @@ impl CameraState {
 
 impl DirectionalLight {
     fn to_json(self) -> String {
+        let enabled = if self.enabled { 1_i32 } else { 0_i32 };
         format!(
-            "{{\"euler_xyz\":[{}],\"intensity\":{},\"color\":[{}],\"ambient\":{}}}",
+            "{{\"euler_xyz\":[{}],\"intensity\":{},\"color\":[{}],\"ambient\":{},\"enabled\":{}}}",
             fmt3(self.euler_xyz),
             self.intensity,
             fmt3(self.color),
             self.ambient,
+            enabled,
         )
     }
 
@@ -113,49 +115,64 @@ impl DirectionalLight {
             intensity: find_field_f32(s, "intensity")?,
             color: [col[0], col[1], col[2]],
             ambient: find_field_f32(s, "ambient").unwrap_or(1.0),
-            enabled: true,
+            enabled: find_field_f32(s, "enabled").unwrap_or(1.0) != 0.0,
         })
     }
 }
 
 impl PointLight {
     fn to_json(self) -> String {
+        let enabled = if self.enabled { 1_i32 } else { 0_i32 };
         format!(
-            "{{\"position\":[{}],\"range\":{},\"color\":[{}],\"intensity\":{}}}",
+            "{{\"position\":[{}],\"range\":{},\"color\":[{}],\"intensity\":{},\"enabled\":{}}}",
             fmt3(self.position),
             self.range,
             fmt3(self.color),
             self.intensity,
+            enabled,
         )
     }
 
-    fn from_json_fields(pos: [f32; 3], range: f32, color: [f32; 3], intensity: f32) -> Self {
+    fn from_json_fields(
+        pos: [f32; 3],
+        range: f32,
+        color: [f32; 3],
+        intensity: f32,
+        enabled: bool,
+    ) -> Self {
         Self {
             position: pos,
             range,
             color,
             intensity,
-            enabled: true,
+            enabled,
         }
     }
 }
 
 impl Transform {
     fn to_json(&self) -> String {
+        let enabled = if self.enabled { 1_i32 } else { 0_i32 };
         format!(
-            "{{\"translation\":[{}],\"rotation\":[{}],\"scale\":[{}]}}",
+            "{{\"translation\":[{}],\"rotation\":[{}],\"scale\":[{}],\"enabled\":{}}}",
             fmt3(self.translation),
             fmt4(self.rotation),
             fmt3(self.scale),
+            enabled,
         )
     }
 
-    fn from_json_fields(translation: [f32; 3], rotation: [f32; 4], scale: [f32; 3]) -> Self {
+    fn from_json_fields(
+        translation: [f32; 3],
+        rotation: [f32; 4],
+        scale: [f32; 3],
+        enabled: bool,
+    ) -> Self {
         Self {
             translation,
             rotation,
             scale,
-            enabled: true,
+            enabled,
         }
     }
 }
@@ -394,6 +411,7 @@ fn parse_point_light_array(s: &str) -> Vec<PointLight> {
         let range = find_field_f32(&obj_str, "range").unwrap_or(12.0);
         let col = find_array_f32(&obj_str, "color").unwrap_or_default();
         let intensity = find_field_f32(&obj_str, "intensity").unwrap_or(1.0);
+        let enabled = find_field_f32(&obj_str, "enabled").unwrap_or(1.0) != 0.0;
         out.push(PointLight::from_json_fields(
             if pos.len() == 3 {
                 [pos[0], pos[1], pos[2]]
@@ -407,6 +425,7 @@ fn parse_point_light_array(s: &str) -> Vec<PointLight> {
                 [0.2, 0.2, 8.0]
             },
             intensity,
+            enabled,
         ));
     }
     out
@@ -431,6 +450,7 @@ fn parse_transform_array(s: &str) -> Vec<Transform> {
         let t = find_array_f32(&obj_str, "translation").unwrap_or_default();
         let r = find_array_f32(&obj_str, "rotation").unwrap_or_default();
         let s = find_array_f32(&obj_str, "scale").unwrap_or_default();
+        let enabled = find_field_f32(&obj_str, "enabled").unwrap_or(1.0) != 0.0;
         out.push(Transform::from_json_fields(
             if t.len() == 3 {
                 [t[0], t[1], t[2]]
@@ -447,6 +467,7 @@ fn parse_transform_array(s: &str) -> Vec<Transform> {
             } else {
                 [1.0; 3]
             },
+            enabled,
         ));
     }
     out

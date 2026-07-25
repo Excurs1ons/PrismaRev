@@ -20,6 +20,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use thiserror::Error;
 
+pub mod scene;
+
 use serde_json::Value;
 
 // ---------------------------------------------------------------------------

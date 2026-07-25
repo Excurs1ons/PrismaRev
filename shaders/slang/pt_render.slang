@@ -635,6 +635,55 @@ void ptMain(uint3 tid : SV_DispatchThreadID)
                 // Emissive
                 total_radiance += throughput * hit_surf.emissive;
 
+                // ---- Bounce NEE: sample directional sun at indirect hit ----
+                // Without NEE in bounce 1+, shadow regions get indirect light
+                // only when the BRDF-sampled direction accidentally hits a
+                // sun-lit surface — high variance produces colored noise.
+                {
+                    float bn_shadow = 1.0;
+                    float3 bn_dir = push.light_dir.xyz;
+                    if (dot(hn, bn_dir) > 0.0)
+                    {
+                        RayDesc sr;
+                        sr.Origin = hp + 0.0001 * bn_dir;
+                        sr.Direction = bn_dir;
+                        sr.TMin = 0.001;
+                        sr.TMax = push.ray_max_distance;
+                        RayQuery<RAY_FLAG_SKIP_CLOSEST_HIT_SHADER> sq;
+                        sq.TraceRayInline(tlas, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER, 0xFF, sr);
+                        while (sq.Proceed())
+                        {
+                            if (sq.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE)
+                            {
+                                uint si = sq.CandidateInstanceID();
+                                uint sp = sq.CandidatePrimitiveIndex();
+                                float2 sb = sq.CandidateTriangleBarycentrics();
+                                float3 sv0, sv1, sv2;
+                                float2 suv0, suv1, suv2;
+                                float3 sn0, sn1, sn2;
+                                read_hit_triangle(si, sp, vertexData, indices,
+                                    sv0, sv1, sv2, suv0, suv1, suv2, sn0, sn1, sn2);
+                                float sw = 1.0 - sb.x - sb.y;
+                                float2 suv = sw * suv0 + sb.x * suv1 + sb.y * suv2;
+                                PtInstanceMeta sm = instance_meta[si];
+                                GpuMaterial smat = materials[sm.material_slot];
+                                if (mat_albedo_alpha(smat, suv) >= 0.5)
+                                {
+                                    sq.CommitNonOpaqueTriangleHit();
+                                    break;
+                                }
+                            }
+                        }
+                        if (sq.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
+                            bn_shadow = 0.0;
+                    }
+                    float3 bn_brdf = eval_brdf(hit_surf, hn, vw_dir, bn_dir);
+                    float p_brdf_bn = eval_brdf_pdf(hit_surf, hn, vw_dir, bn_dir);
+                    float p_nee_bn = 1.0; // sun is deterministic
+                    total_radiance += throughput * bn_brdf * sun_radiance * bn_shadow
+                        * p_nee_bn / max(p_nee_bn * p_nee_bn + p_brdf_bn * p_brdf_bn, 1e-20);
+                }
+
                 // Russian roulette
                 float p = max(max(throughput.r, throughput.g), throughput.b);
                 if (bounce + 1u >= push.params.z) break;
@@ -710,6 +759,13 @@ void ptMain(uint3 tid : SV_DispatchThreadID)
         // ---- Primary ray missed: HDR sky ----
         total_radiance += throughput * envCube.SampleLevel(dir, 0.0).rgb;
     }
+
+    // ---- Firefly clamp: prevent individual bright samples from creating
+    // persistent sparkles in the accumulation. The bound 50.0 corresponds to
+    // ~140× a typical diffuse-sun bounce (0.36), so it only clips outliers.
+    float ff_luma = dot(total_radiance, float3(0.2126, 0.7152, 0.0722));
+    if (ff_luma > 50.0)
+        total_radiance *= 50.0 / ff_luma;
 
     // ---- Accumulate ----
     float3 prev = accumImage[pixel].rgb;

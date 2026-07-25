@@ -743,6 +743,7 @@ dependencies = [
  "image",
  "prism-asset-core",
  "prism-asset-db",
+ "prism-asset-importer",
  "prism-asset-package",
  "serde",
  "serde_json",

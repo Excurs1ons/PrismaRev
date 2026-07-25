@@ -18,6 +18,7 @@ use std::collections::HashMap;
 use thiserror::Error;
 
 pub mod profile;
+pub mod scene;
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -752,6 +753,7 @@ pub fn default_cooker_registry() -> CookerRegistry {
     reg.register(Box::new(BinaryCooker));
     reg.register(Box::new(TextureCooker));
     reg.register(Box::new(MeshCooker));
+    reg.register(Box::new(scene::SceneCooker));
     reg
 }
 

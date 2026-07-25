@@ -65,10 +65,10 @@ public void fragmentMain(
 )
 {
     float3 hdr = hdrTex.Sample(uv).rgb;
-    if (pc.tonemapMode == 1u) {
-        hdr = aces(hdr);
-    } else {
-        hdr = hdr / (hdr + 1.0);
-    }
-    outColor = float4(hdr, 1.0);
+    float3 tonemapped;
+    if (pc.tonemapMode == 0u)
+        tonemapped = hdr / (hdr + 1.0);          // Reinhard
+    else
+        tonemapped = aces(hdr);                    // ACES Narkowicz
+    outColor = float4(tonemapped, 1.0);
 }

@@ -8,6 +8,7 @@ description = "Cooker framework for the resource pipeline"
 [dependencies]
 prism-asset-core = { path = "../prism-asset-core" }
 prism-asset-db = { path = "../prism-asset-db" }
+prism-asset-importer = { path = "../prism-asset-importer" }
 prism-asset-package = { path = "../prism-asset-package" }
 serde = { workspace = true }
 serde_json = { workspace = true }

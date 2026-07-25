@@ -394,7 +394,8 @@ impl Inspector {
     /// Build the scrollable entity list from all light/transform-bearing
     /// entities. More specific component labels (point light / dir light /
     /// camera) are listed first; pure-transform entities get a generic label.
-    fn entity_list(&mut self, ui: &mut Ui, world: &World) {
+    /// Each row has an active-toggle checkbox; inactive entities are dimmed.
+    fn entity_list(&mut self, ui: &mut Ui, world: &mut World) {
         use std::collections::HashSet;
 
         let mut ids: HashSet<u32> = HashSet::new();
@@ -426,16 +427,32 @@ impl Inspector {
 
         egui::ScrollArea::vertical().show(ui, |ui| {
             for (entity, label) in &entries {
-                let selected = self.selected == Some(*entity);
-                if ui.selectable_label(selected, label).clicked() {
-                    self.selected = Some(*entity);
-                }
+                let is_active = world.is_active(*entity);
+                ui.horizontal(|ui| {
+                    let mut checked = is_active;
+                    if ui.checkbox(&mut checked, "").changed() {
+                        world.set_active(*entity, checked);
+                    }
+                    let selected = self.selected == Some(*entity);
+                    let label_rt = if is_active {
+                        egui::RichText::new(label)
+                    } else {
+                        egui::RichText::new(label).color(egui::Color32::from_gray(100))
+                    };
+                    if ui.selectable_label(selected, label_rt).clicked() {
+                        self.selected = Some(*entity);
+                    }
+                });
             }
         });
     }
 
     /// Edit the selected entity's components.
     fn entity_editor(&mut self, ui: &mut Ui, world: &mut World, entity: Entity) {
+        let mut is_active = world.is_active(entity);
+        if ui.checkbox(&mut is_active, "Active").changed() {
+            world.set_active(entity, is_active);
+        }
         ui.heading(format!("Entity {}", entity.id()));
         ui.separator();
 
@@ -455,23 +472,59 @@ impl Inspector {
             self.dir_light_cached_for = Some(entity);
         }
 
-        if world.get::<Transform>(entity).is_some() {
-            ui.collapsing("Transform", |ui| {
+        // --- Transform ---
+        if let Some(t) = world.get::<Transform>(entity) {
+            let mut enabled = t.enabled;
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut enabled, "Transform");
+            });
+            // Write back enabled change in a tight scope
+            if let Some(t) = world.get_mut::<Transform>(entity) {
+                t.enabled = enabled;
+            }
+            ui.collapsing("", |ui| {
                 self.transform_editor(ui, world, entity);
             });
         }
-        if world.get::<PointLight>(entity).is_some() {
-            ui.collapsing("Point Light", |ui| {
+
+        // --- Point Light ---
+        if let Some(pl) = world.get::<PointLight>(entity) {
+            let mut enabled = pl.enabled;
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut enabled, "Point Light");
+            });
+            if let Some(pl) = world.get_mut::<PointLight>(entity) {
+                pl.enabled = enabled;
+            }
+            ui.collapsing("", |ui| {
                 point_light_editor(ui, world, entity);
             });
         }
-        if world.get::<DirectionalLight>(entity).is_some() {
-            ui.collapsing("Directional Light", |ui| {
+
+        // --- Directional Light ---
+        if let Some(dl) = world.get::<DirectionalLight>(entity) {
+            let mut enabled = dl.enabled;
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut enabled, "Directional Light");
+            });
+            if let Some(dl) = world.get_mut::<DirectionalLight>(entity) {
+                dl.enabled = enabled;
+            }
+            ui.collapsing("", |ui| {
                 self.dir_light_editor(ui, world, entity);
             });
         }
-        if world.get::<Camera>(entity).is_some() {
-            ui.collapsing("Camera", |ui| {
+
+        // --- Camera ---
+        if let Some(camera) = world.get::<Camera>(entity) {
+            let mut enabled = camera.enabled();
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut enabled, "Camera");
+            });
+            if let Some(camera) = world.get_mut::<Camera>(entity) {
+                camera.set_enabled(enabled);
+            }
+            ui.collapsing("", |ui| {
                 camera_editor_inline(ui, world, entity);
             });
         }
