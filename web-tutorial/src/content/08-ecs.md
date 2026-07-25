@@ -1,6 +1,6 @@
 # 08 · ECS 内核设计
 
-图形管线解决「怎么画」，但引擎还要回答「画什么、谁来动」。PrismaRev 用 **ECS（Entity-Component-System）**——一种数据导向架构，而不是传统「GameObject 继承树」。ECS 内核在 `prism-ecs/src/lib.rs`，仅 626 行，却支撑了全部游戏逻辑。
+引擎不仅要把东西画到屏幕上，还要回答「画什么、谁来动」。PrismaRev 用 **ECS（Entity-Component-System）**——一种数据导向架构，而不是传统「GameObject 继承树」。ECS 内核在 `prism-ecs/src/lib.rs`，仅 626 行，却支撑了全部游戏逻辑。它是整个引擎的**数据层基石**——渲染、物理、音频都建立在它之上。
 
 :::info 为什么是 ECS 而非 OOP
 Rust 的所有权模型不喜欢「对象互相持有引用」的 OOP 树。ECS 把对象拆成：**Entity（整数句柄）+ Component（纯数据）+ System（函数）**。数据连续存储、系统批量处理，既契合所有权，又对缓存友好（data-oriented）。
@@ -176,4 +176,4 @@ pub fn query2<A: Component, B: Component>(
 4. 运行 `cargo test -p prism-ecs`，看 spawn/despawn/generation 的单元测试如何验证句柄回收的正确性。
 :::
 
-下一章，我们用 ECS 真正驱动渲染——相机、变换、Blinn-Phong 光照。
+在完成图形层的 Vulkan 初始化后，我们将回到 ECS，用它真正驱动渲染——相机、变换、Blinn-Phong 光照（见第 12 章）。

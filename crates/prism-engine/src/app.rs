@@ -25,7 +25,7 @@ use prism_render::{DebugMode, GraphRenderer, NormalSpace, PathTracePass, RenderM
 use crate::camera::{Camera, FlyCamera};
 use crate::input::{InputState, MouseButton};
 use crate::render_system::{
-    render_system, DirectionalLight, MeshManager, PointLight, RenderInstance, Transform,
+    render_system, DirectionalLight, MeshManager, RenderInstance, Transform,
 };
 
 /// Parse a `key = "value"` TOML line (after the `key` prefix has been stripped)
@@ -120,40 +120,41 @@ fn create_default_scene(world: &mut World) {
     let dir_entity = world.spawn();
     world.insert(dir_entity, DirectionalLight::default());
 
+    // TEMP: Disabled point lights for color-diagnosis (pathtracing tonemap issue).
     // A few point lights so the PBR scene has local highlights. Positions may be
     // overridden by a sibling `Transform` at render time. Editable via the
     // inspector.
-    let point_lights = [
-        PointLight {
-            position: [2.0, 3.0, 2.0],
-            range: 12.0,
-            color: [1.0, 0.2, 0.2],
-            intensity: 150.0,
-        },
-        PointLight {
-            position: [-2.0, 3.0, -2.0],
-            range: 12.0,
-            color: [0.2, 1.0, 0.2],
-            intensity: 150.0,
-        },
-        PointLight {
-            position: [0.0, 4.0, 4.0],
-            range: 12.0,
-            color: [0.2, 0.2, 1.0],
-            intensity: 150.0,
-        },
-    ];
-    for pl in point_lights {
-        let entity = world.spawn();
-        world.insert(
-            entity,
-            Transform {
-                translation: pl.position,
-                ..Default::default()
-            },
-        );
-        world.insert(entity, pl);
-    }
+    // let point_lights = [
+    //     PointLight {
+    //         position: [2.0, 3.0, 2.0],
+    //         range: 12.0,
+    //         color: [1.0, 0.2, 0.2],
+    //         intensity: 150.0,
+    //     },
+    //     PointLight {
+    //         position: [-2.0, 3.0, -2.0],
+    //         range: 12.0,
+    //         color: [0.2, 1.0, 0.2],
+    //         intensity: 150.0,
+    //     },
+    //     PointLight {
+    //         position: [0.0, 4.0, 4.0],
+    //         range: 12.0,
+    //         color: [0.2, 0.2, 1.0],
+    //         intensity: 150.0,
+    //     },
+    // ];
+    // for pl in point_lights {
+    //     let entity = world.spawn();
+    //     world.insert(
+    //         entity,
+    //         Transform {
+    //             translation: pl.position,
+    //             ..Default::default()
+    //         },
+    //     );
+    //     world.insert(entity, pl);
+    // }
 
     // Camera entity (free-fly by default). Editable at runtime via the
     // inspector like any other scene object.
@@ -1356,9 +1357,16 @@ impl ApplicationHandler for App {
         event: DeviceEvent,
     ) {
         if let DeviceEvent::MouseMotion { delta } = event {
-            // Absolute mouse motion from raw device events.
-            // On some platforms (Linux/Windows raw input) CursorMoved may not
-            // fire reliably while a button is held; MouseMotion supplements it.
+            // Only accept raw mouse-motion delta when the pointer is locked
+            // (FPS-look mode). When the cursor is free the reliable absolute
+            // positions from CursorMoved are sufficient; accepting raw delta
+            // here as well would double-accumulate and can cause the camera
+            // to jump after unlocking (eg. closing the inspector) if a motion
+            // event arrives between set_locked(begin_frame) and the next
+            // camera update.
+            if !self.pointer_locked {
+                return;
+            }
             let pos = self.input_state.mouse_position();
             self.input_state
                 .handle_mouse_move([pos[0] + delta.0, pos[1] + delta.1]);

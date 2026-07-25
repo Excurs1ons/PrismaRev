@@ -1,6 +1,6 @@
 # 14 · 进阶渲染技术
 
-引擎在前 13 章搭建了一套完整的 Vulkan 渲染管线，但这远不是终点。本章介绍 PrismaRev 实现的**三个进阶渲染技术**，理解它们需要前面所有的知识。
+前面章节（Vulkan 上下文、着色器管线、PBR 光照）搭建了一套完整的渲染基础，但这远不是终点。本章介绍 PrismaRev 实现的**三个进阶渲染技术**，需要结合前面图形层的全部知识。
 
 :::info 本章覆盖
 - **ReSTIR DI**（Reservoir Spatio-Temporal Importance Resampling）：用 RIS + 时序复用 + 空间复用高效采样直接光

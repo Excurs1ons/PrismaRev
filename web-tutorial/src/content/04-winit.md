@@ -209,4 +209,4 @@ KeyCode 枚举映射 winit 的 `PhysicalKey`，覆盖 WASD/Shift/Ctrl/方向键/
 5. 思考：为什么 `resumed` 里要判 `if self.window.is_some() { return; }`？移动端 `suspended` 后再次 `resumed` 时，旧 window 还在吗？（提示：挂起时 window 可能已失效，需要重建——这正是下一阶段要处理的。）
 :::
 
-下一章，我们正式进入 Vulkan——先建上下文（instance / 设备 / 队列）。
+下一章（Vulkan 上下文），我们开始 GPU 初始化——创建 instance、选择设备、获取队列。

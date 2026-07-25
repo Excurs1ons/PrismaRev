@@ -1,6 +1,6 @@
 # 07 · RenderGraph 与 RenderPassNode（模块化管线）
 
-M2 在旧设计里是「一个 render pass + 一个图形管线画一个网格」。但今天 PrismaRev 的核心不是单体管线，而是 **RenderGraph**：把每个渲染阶段拆成可组合、可开关、可降级的 **`RenderPassNode`**。这一章讲这套模块化管线的设计——它是 DESIGN 文档「统一可扩展管线」目标的落点。
+Vulkan 上下文和 swapchain 就绪后，我们开始设计**渲染架构**。PrismaRev 的核心不是单体管线，而是 **RenderGraph**：把每个渲染阶段拆成可组合、可开关、可降级的 **`RenderPassNode`**。这一章讲这套模块化管线的设计——它在 `prism-render` crate 中实现。
 
 :::info 本章对应 DESIGN
 - 2.2 模块化 = pass 即节点；新增特性 = 新增一个 pass，不改动既有节点。
@@ -181,4 +181,4 @@ tex.Sample(global_samplers[sampler_type], uv);
 5. 对比 `GtaoPass` 的分辨率与 ScenePass：为什么 AO 可以是半分辨率？（提示：AO 是低频信号）
 :::
 
-下一章，我们退一步，先设计支撑整个引擎的**数据模型**：ECS。
+ECS 数据层和资产管线已在前面章节铺垫完成，下一章我们深入 PBR 光照模型。

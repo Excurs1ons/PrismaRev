@@ -17,6 +17,9 @@ pub struct OrbitCamera {
     /// Default 1.0 = no scaling; range [0, 5] via inspector slider.
     /// Controls overall image brightness independently of light intensity.
     pub exposure: f32,
+    /// When `false` the camera is skipped during scene collection (the
+    /// renderer falls back to the next available camera).
+    pub enabled: bool,
 }
 
 impl OrbitCamera {
@@ -31,6 +34,7 @@ impl OrbitCamera {
             zfar: 100.0,
             aspect,
             exposure: 1.0,
+            enabled: true,
         }
     }
 
@@ -156,6 +160,9 @@ pub struct FlyCamera {
     /// Default 1.0 = no scaling; range [0, 5] via inspector slider.
     /// Controls overall image brightness independently of light intensity.
     pub exposure: f32,
+    /// When `false` the camera is skipped during scene collection (the
+    /// renderer falls back to the next available camera).
+    pub enabled: bool,
 }
 
 impl FlyCamera {
@@ -171,6 +178,7 @@ impl FlyCamera {
             move_speed: 5.0,
             look_sensitivity: 0.005,
             exposure: 1.0,
+            enabled: true,
         }
     }
 
@@ -444,6 +452,23 @@ impl Camera {
     pub fn set_position(&mut self, position: [f32; 3]) {
         if let Camera::Fly(f) = self {
             f.position = position;
+        }
+    }
+
+    /// Whether the camera is enabled. Disabled cameras are skipped during
+    /// scene collection (the renderer falls back to the next available one).
+    pub fn enabled(&self) -> bool {
+        match self {
+            Camera::Orbit(o) => o.enabled,
+            Camera::Fly(f) => f.enabled,
+        }
+    }
+
+    /// Set the enabled state.
+    pub fn set_enabled(&mut self, value: bool) {
+        match self {
+            Camera::Orbit(o) => o.enabled = value,
+            Camera::Fly(f) => f.enabled = value,
         }
     }
 

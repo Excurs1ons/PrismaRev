@@ -184,4 +184,4 @@ graph_renderer.render(
 4. 跟踪一个 `DirtyFlags::camera = true` 到 `set_ubo_data` 的数据流：哪些 GPU 资源会被重写？
 :::
 
-下一章，我们让场景不再手写——从 glTF 文件加载真实资产。
+资产管线（第 5 章）负责从 glTF 加载网格和纹理，下一章我们在此基础上深入 PBR 光照模型。

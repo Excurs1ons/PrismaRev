@@ -41,7 +41,7 @@ fn android_main(app: AndroidApp) {
 winit = { workspace = true, features = ["android-game-activity"] }
 ```
 
-桌面的 `prism-engine` 则用默认（桌面）后端。feature 让「同一 API，不同平台实现」成为可能——这正是第 4 章 `ApplicationHandler` 抽象的回报：`resumed`/`suspended` 回调天然对应 Android 的前后台切换。
+桌面的 `prism-engine` 则用默认（桌面）后端。feature 让「同一 API，不同平台实现」成为可能——这正是第 6 章 `ApplicationHandler` 抽象的回报：`resumed`/`suspended` 回调天然对应 Android 的前后台切换。
 
 ## NDK 链接：`.cargo/config.toml`
 
@@ -78,7 +78,7 @@ cd android && ./gradlew assembleRelease
 
 ## 旋转与 pre_transform
 
-手机横屏时 compositor 会对整帧做 `ROTATE_90`。引擎的应对（见第 9/13 章）：在 clip 空间按 `surface_rotation = pre_transform⁻¹` **预旋转** 3D 内容和 2D overlay，使画面保持正立。overlay HUD 的命中测试因此**无需额外旋转**——直接在 top-left/y-down 屏幕空间比对指针与矩形。
+手机横屏时 compositor 会对整帧做 `ROTATE_90`。引擎的应对（见第 12/15 章）：在 clip 空间按 `surface_rotation = pre_transform⁻¹` **预旋转** 3D 内容和 2D overlay，使画面保持正立。overlay HUD 的命中测试因此**无需额外旋转**——直接在 top-left/y-down 屏幕空间比对指针与矩形。
 
 ## 交互演示：两条构建链路
 
@@ -89,7 +89,7 @@ cd android && ./gradlew assembleRelease
 :::exercise
 1. 读 `docs/plans/2026-07-11-android-integration.md`，列出把引擎搬上 Android 的 task 清单（拆分 run、建 cdylib、配 NDK、写 Gradle）。
 2. 对比 `src/main.rs` 和 `prism-android` 的入口，说明它们如何共享 `App::run_on_event_loop`。
-3. 理解 `resumed`/`suspended` 在 Android 上对应什么生命周期事件，为什么 swapchain 要在 `suspended` 时销毁、在 `resumed` 时重建（提示：回看第 6 章的 surface 失效）。
+3. 理解 `resumed`/`suspended` 在 Android 上对应什么生命周期事件，为什么 swapchain 要在 `suspended` 时销毁、在 `resumed` 时重建（提示：回看第 8 章的 surface 失效）。
 4. 在你的机器上配好 NDK，尝试 `cargo build --target aarch64-linux-android` 看能否通过链接。
 :::
 

@@ -88,7 +88,7 @@ DESIGN 第 4 节列出的当前落点：`render_graph.rs` + `passes.rs`（SceneP
 
 ## 交互演示：坐标变换复盘
 
-下面把第 9 章的坐标变换再摆一次，但这次把**完整链路**（世界 → 视图 → Clip → NDC，含 y-flip 与 [0,1] 深度）一次看全。拖拽旋转，点「切换 y-flip」对比 OpenGL：
+下面把第 12 章的坐标变换再摆一次，但这次把**完整链路**（世界 → 视图 → Clip → NDC，含 y-flip 与 [0,1] 深度）一次看全。拖拽旋转，点「切换 y-flip」对比 OpenGL：
 
 （在页面下方查看交互演示）
 
@@ -118,7 +118,7 @@ DESIGN 第 4 节列出的当前落点：`render_graph.rs` + `passes.rs`（SceneP
 
 :::exercise
 1. 画一张「从 `cargo run` 到像素上屏」的完整调用时序图，标出每个 crate 的参与点。
-2. 用第 13 章的坐标约定，手算一个位于 `(0,0,-1)`、看向 −Z 的相机，对一个 `(0,0,0)` 点的 clip.y 符号——验证 y-flip。
+2. 用第 15 章的坐标约定，手算一个位于 `(0,0,-1)`、看向 −Z 的相机，对一个 `(0,0,0)` 点的 clip.y 符号——验证 y-flip。
 3. 选一个方向深入：读 `render_graph.rs` 或 `acceleration_structure.rs`，写一段笔记讲清它的设计意图。
 4. 回到第 1 章的环境搭建，现在你已经能把引擎 `cargo run` 起来，并能解释窗口里每个像素的来历。恭喜——你已完成从 Rust Hello World 到 Vulkan 引擎的完整穿越。
 :::

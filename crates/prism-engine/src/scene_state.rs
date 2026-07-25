@@ -113,6 +113,7 @@ impl DirectionalLight {
             intensity: find_field_f32(s, "intensity")?,
             color: [col[0], col[1], col[2]],
             ambient: find_field_f32(s, "ambient").unwrap_or(1.0),
+            enabled: true,
         })
     }
 }
@@ -134,6 +135,7 @@ impl PointLight {
             range,
             color,
             intensity,
+            enabled: true,
         }
     }
 }
@@ -153,6 +155,7 @@ impl Transform {
             translation,
             rotation,
             scale,
+            enabled: true,
         }
     }
 }

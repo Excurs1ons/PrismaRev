@@ -55,6 +55,9 @@ pub struct Transform {
     pub translation: [f32; 3],
     pub rotation: [f32; 4], // (x, y, z, w) quaternion
     pub scale: [f32; 3],
+    /// When `false` the entity still exists in the ECS but is skipped by
+    /// systems that process transforms (animation, physics, etc.).
+    pub enabled: bool,
 }
 
 impl Default for Transform {
@@ -63,6 +66,7 @@ impl Default for Transform {
             translation: [0.0; 3],
             rotation: [0.0, 0.0, 0.0, 1.0], // identity quaternion
             scale: [1.0; 3],
+            enabled: true,
         }
     }
 }
@@ -118,6 +122,9 @@ pub struct PbrMaterial {
     pub albedo: [f32; 3],
     pub metallic: f32,
     pub roughness: f32,
+    /// When `false` the material is treated as invisible (the entity using
+    /// this material will not produce a draw call).
+    pub enabled: bool,
 }
 
 impl Default for PbrMaterial {
@@ -127,6 +134,7 @@ impl Default for PbrMaterial {
             albedo: [1.0, 0.78, 0.34],
             metallic: 1.0,
             roughness: 0.3,
+            enabled: true,
         }
     }
 }
@@ -172,6 +180,10 @@ pub struct DirectionalLight {
     pub color: [f32; 3],
     /// IBL ambient factor packed into `FrameUBOData.light_color.w`.
     pub ambient: f32,
+    /// When `false` the light is skipped during scene collection and the
+    /// frame UBO receives fallback (dark) values, effectively turning the
+    /// sun off.
+    pub enabled: bool,
 }
 
 impl Default for DirectionalLight {
@@ -185,6 +197,7 @@ impl Default for DirectionalLight {
             intensity: 100_000.0,
             color: [1.0, 1.0, 1.0],
             ambient: 1.0,
+            enabled: true,
         }
     }
 }
@@ -253,6 +266,9 @@ pub struct PointLight {
     /// inverse-square attenuation (1/dist^2) to convert to illuminance (lux),
     /// then divides by PI for radiance. Typical indoor bulb ~100-300 cd.
     pub intensity: f32,
+    /// When `false` the light is skipped during scene collection and does
+    /// not contribute to shading.
+    pub enabled: bool,
 }
 
 impl Default for PointLight {
@@ -262,6 +278,7 @@ impl Default for PointLight {
             range: 12.0,
             color: [0.2, 0.2, 8.0],
             intensity: 100.0,
+            enabled: true,
         }
     }
 }
@@ -360,11 +377,11 @@ fn collect_scene_changes(
     ];
     let fallback_col = [1.0, 1.0, 1.0, 1.0];
 
-    // 1. Camera — first entity with a Camera component.
+    // 1. Camera — first enabled entity with a Camera component.
     let (view_proj, eye, view, projection, exposure) = {
         let camera_entity = world
             .query::<Camera>()
-            .next()
+            .find(|(_, c)| c.enabled())
             .map(|(e, _)| e)
             .ok_or_else(|| anyhow::anyhow!("no Camera entity in ECS world"))?;
         let camera = world
@@ -384,12 +401,12 @@ fn collect_scene_changes(
     let proj32 = projection[3][2];
     let _ = projection;
 
-    // 2. Directional light (first entity). The intensity is pre-scaled by
-    //    LUX_TO_RADIANCE_SCALE so the shader receives effective radiance and
+    // 2. Directional light (first enabled entity). The intensity is pre-scaled
+    //    by LUX_TO_RADIANCE_SCALE so the shader receives effective radiance and
     //    `exposure` is a pure post-composition multiplier.
     let light_direction = world
         .query::<DirectionalLight>()
-        .next()
+        .find(|(_, l)| l.enabled)
         .map(|(_, l)| {
             let d = euler_xyz_deg_to_dir(l.euler_xyz);
             [d[0], d[1], d[2], l.intensity * LUX_TO_RADIANCE_SCALE]
@@ -397,13 +414,16 @@ fn collect_scene_changes(
         .unwrap_or(fallback_dir);
     let light_color = world
         .query::<DirectionalLight>()
-        .next()
+        .find(|(_, l)| l.enabled)
         .map(|(_, l)| [l.color[0], l.color[1], l.color[2], l.ambient])
         .unwrap_or(fallback_col);
 
-    // 3. Point lights (up to LIGHT_MAX).
+    // 3. Point lights (up to LIGHT_MAX). Only enabled lights contribute.
     let mut lights: Vec<GpuLight> = Vec::new();
     for (entity, pl) in world.query::<PointLight>() {
+        if !pl.enabled {
+            continue;
+        }
         if lights.len() >= prism_render::LIGHT_MAX as usize {
             break;
         }
@@ -424,11 +444,14 @@ fn collect_scene_changes(
         });
     }
 
-    // 4. Build pt_lights from ECS PointLight components.
+    // 4. Build pt_lights from enabled ECS PointLight components.
     // Directional light (sun) is handled separately via push-constant NEE
     // with MIS weighting; it is NOT added to pt_lights to avoid double-counting.
     let mut pt_lights: Vec<PtAnalyticLight> = Vec::new();
     for (entity, pl) in world.query::<PointLight>() {
+        if !pl.enabled {
+            continue;
+        }
         if pt_lights.len() >= PT_LIGHT_MAX as usize {
             break;
         }

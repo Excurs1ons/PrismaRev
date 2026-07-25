@@ -180,7 +180,7 @@ pub fn show_crash_dialog(title: &str, message: &str) -> CrashChoice;
 1. 读 `crates/prism-audio/src/engine.rs` 的 `AudioEngine::play` 和 `stop` 方法，理解 `PlaybackHandle` 的生成和销毁生命周期。
 2. 用 `AudioSource` 组件在场景中 spawn 一个会发声的实体，观察 `sync_audio_sources` 如何驱动 `AudioEngine`。
 3. 按 F1 打开 Inspector，编辑方向光的 `euler_xyz` 角度，观察场景中阴影的实时变化。
-4. 按 F2 打开 RenderGraphViz，对照第 7 章的 pass 列表，验证可视化图的结构。
+4. 按 F2 打开 RenderGraphViz，对照渲染管线章（第 9 章）的 pass 列表，验证可视化图的结构。
 5. 读 `egui_overlay.rs` 的 `run_ui` / `record` 两阶段设计，画出时序图解释为什么必须这样拆分。
 6. 在引擎中制造一个 device lost（如移除 `drop_target` 调用），验证崩溃对话框正确弹出。
 :::

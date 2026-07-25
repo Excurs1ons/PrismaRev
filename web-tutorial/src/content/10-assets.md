@@ -181,4 +181,4 @@ fn load_scene_state(
 4. 把一个真实的 `.glb` 拖进 `assets/`，跑引擎看模型是否出现——这是 M3 场景「被文件替代」的瞬间。
 :::
 
-下一章，我们把光照从 Blinn-Phong 升级到物理正确的 PBR + IBL。
+在图形层的渲染管线就绪后，下一章我们开始升级光照——从 Blinn-Phong 到物理正确的 PBR + IBL（见第 10 章）。

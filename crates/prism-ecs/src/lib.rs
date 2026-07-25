@@ -61,6 +61,10 @@ pub struct World {
     /// for a freed/recyclable slot it holds the generation the *next*
     /// recycled handle will have (old + 1), so stale handles stay dead.
     entities: Vec<u32>,
+    /// Parallel to `entities`: whether each live entity is active (i.e.
+    /// should be included in queries).  Inactive entities remain in the
+    /// world but are skipped by all query iterators.
+    active: Vec<bool>,
     /// Indices of freed slots available for reuse.
     free: Vec<u32>,
     /// Component storage, one pool per type. Pools are stored type-erased as
@@ -77,23 +81,26 @@ impl World {
     pub fn new() -> Self {
         Self {
             entities: Vec::new(),
+            active: Vec::new(),
             free: Vec::new(),
             pools: HashMap::new(),
             resources: HashMap::new(),
         }
     }
 
-    /// Allocate a fresh entity handle.
+    /// Allocate a fresh entity handle (starts active).
     pub fn spawn(&mut self) -> Entity {
         if let Some(id) = self.free.pop() {
             // Recycle a freed slot. despawn stored the next generation number
             // here (old + 1) so a recycled handle is distinguishable from the
             // stale one that was just freed.
             let generation = self.entities[id as usize];
+            self.active[id as usize] = true;
             Entity { id, generation }
         } else {
             let id = self.entities.len() as u32;
             self.entities.push(0);
+            self.active.push(true);
             Entity { id, generation: 0 }
         }
     }
@@ -120,6 +127,22 @@ impl World {
         self.entities
             .get(entity.id as usize)
             .is_some_and(|&gen| gen == entity.generation)
+    }
+
+    /// True if the entity is alive and active. Inactive entities are excluded
+    /// from queries so they effectively stop participating in all systems.
+    pub fn is_active(&self, entity: Entity) -> bool {
+        self.is_alive(entity)
+            && self.active.get(entity.id as usize).copied().unwrap_or(true)
+    }
+
+    /// Set the active state of a live entity. Has no effect on dead entities.
+    pub fn set_active(&mut self, entity: Entity, value: bool) {
+        if self.is_alive(entity) {
+            if let Some(slot) = self.active.get_mut(entity.id as usize) {
+                *slot = value;
+            }
+        }
     }
 
     /// Attach a component value to `entity`, replacing any existing one of the
@@ -168,37 +191,48 @@ impl World {
     /// Iterate over all `(entity, &T)` pairs for a single component type.
     ///
     /// Lazily walks the component's dense storage; the entity generation is
-    /// read directly from `self.entities` (no per-query clone).
+    /// read directly from `self.entities` (no per-query clone). Inactive
+    /// entities are skipped.
     pub fn query<T: Component>(&self) -> impl Iterator<Item = (Entity, &T)> {
         let entities = &self.entities;
+        let active = &self.active;
         let pool = self.pools.get(&TypeId::of::<T>());
         pool.into_iter()
             .flat_map(move |p| pool_downcast_ref::<T>(p.as_ref()).iter())
             .filter_map(move |(id, value)| {
-                entities
-                    .get(id as usize)
-                    .map(|&generation| (Entity { id, generation }, value))
+                let generation = *entities.get(id as usize)?;
+                if !active.get(id as usize).copied().unwrap_or(true) {
+                    return None;
+                }
+                Some((Entity { id, generation }, value))
             })
     }
 
     /// Iterate over all `(entity, &mut T)` pairs for a single component type.
+    /// Inactive entities are skipped.
     pub fn query_mut<T: Component>(&mut self) -> impl Iterator<Item = (Entity, &mut T)> {
         let entities = &self.entities;
+        let active_ptr: *const Vec<bool> = &self.active;
         let pool = self.pools.get_mut(&TypeId::of::<T>());
         pool.into_iter()
             .flat_map(move |p| pool_downcast_mut::<T>(p.as_mut()).iter_mut())
             .filter_map(move |(id, value)| {
-                entities
-                    .get(id as usize)
-                    .map(|&generation| (Entity { id, generation }, value))
+                let generation = *entities.get(id as usize)?;
+                // SAFETY: self.active is not mutated during the iteration.
+                if !unsafe { &*active_ptr }.get(id as usize).copied().unwrap_or(true) {
+                    return None;
+                }
+                Some((Entity { id, generation }, value))
             })
     }
 
     /// Lazily iterate over entities that have **both** `A` and `B`, yielding
     /// `(entity, &A, &B)`. This is a sparse-set join: it walks pool `A` and
-    /// probes pool `B` for each entity id, allocating nothing.
+    /// probes pool `B` for each entity id, allocating nothing. Inactive
+    /// entities are skipped.
     pub fn query2<A: Component, B: Component>(&self) -> impl Iterator<Item = (Entity, &A, &B)> {
         let entities = &self.entities;
+        let active = &self.active;
         let pool_a = self
             .pools
             .get(&TypeId::of::<A>())
@@ -210,20 +244,24 @@ impl World {
         pool_a.into_iter().flat_map(move |a| {
             pool_b.into_iter().flat_map(move |b| {
                 a.iter().filter_map(move |(id, av)| {
-                    b.get(id).map(|bv| {
-                        let generation = *entities.get(id as usize).unwrap_or(&0);
-                        (Entity { id, generation }, av, bv)
-                    })
+                    let bv = b.get(id)?;
+                    let generation = *entities.get(id as usize).unwrap_or(&0);
+                    if !active.get(id as usize).copied().unwrap_or(true) {
+                        return None;
+                    }
+                    Some((Entity { id, generation }, av, bv))
                 })
             })
         })
     }
 
     /// Lazily iterate over entities that have `A`, `B`, and `C` simultaneously.
+    /// Inactive entities are skipped.
     pub fn query3<A: Component, B: Component, C: Component>(
         &self,
     ) -> impl Iterator<Item = (Entity, &A, &B, &C)> {
         let entities = &self.entities;
+        let active = &self.active;
         let pool_a = self
             .pools
             .get(&TypeId::of::<A>())
@@ -243,6 +281,9 @@ impl World {
                         let bv = b.get(id)?;
                         let cv = c.get(id)?;
                         let generation = *entities.get(id as usize).unwrap_or(&0);
+                        if !active.get(id as usize).copied().unwrap_or(true) {
+                            return None;
+                        }
                         Some((Entity { id, generation }, av, bv, cv))
                     })
                 })
@@ -267,6 +308,7 @@ impl World {
         &mut self,
     ) -> Box<dyn Iterator<Item = (Entity, &mut A, &B)> + '_> {
         let generation_for = &self.entities;
+        let active_ptr: *const Vec<bool> = &self.active;
         // SAFETY: see above. A and B have different TypeIds, so the two pool
         // entries are disjoint and cannot alias.
         let pools_ptr: *mut HashMap<TypeId, Box<dyn ErasedPool>> = &mut self.pools;
@@ -281,6 +323,9 @@ impl World {
         Box::new(a.iter_mut().filter_map(move |(id, av)| {
             let bv = b.get(id)?;
             let generation = *generation_for.get(id as usize).unwrap_or(&0);
+            if !unsafe { &*active_ptr }.get(id as usize).copied().unwrap_or(true) {
+                return None;
+            }
             Some((Entity { id, generation }, av, bv))
         }))
     }
