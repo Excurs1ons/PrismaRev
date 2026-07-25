@@ -543,22 +543,22 @@ pub struct SceneReadView<'a> {
 ```
 源文件 (Assets/)
     │
-    ▼  [Import]  ← asset-importer + asset-db
+    ▼  [Import]  ← prism-asset-importer + prism-asset-db
   ┌─────────────┐
   │  中间格式     │  RTXI（纹理）、RMXI（网格）
   └──────┬──────┘
          │
-         ▼  [Cook]  ← asset-cooker + profile
+         ▼  [Cook]  ← prism-asset-cooker + profile
   ┌─────────────┐
   │  运行时格式    │  RTEX（纹理 mip 链）、RMES（交错顶点）
   └──────┬──────┘
          │
-         ▼  [Package]  ← asset-package
+         ▼  [Package]  ← prism-asset-package
   ┌─────────────┐
   │  .pak 归档   │  RPAK 格式 + xxh3 校验和
   └──────┬──────┘
          │
-         ▼  [Runtime]  ← asset-runtime
+         ▼  [Runtime]  ← prism-asset-runtime
   ┌─────────────┐
   │  Handle<T>  │  懒加载 + 内存预算 + 依赖解析 + 热重载
   └─────────────┘
@@ -566,7 +566,7 @@ pub struct SceneReadView<'a> {
 
 **核心设计原则**：
 - **编辑器离线完成重计算**，运行时只读 `.pak`，零解码、零编码。
-- **运行时无编辑器依赖**（`asset-runtime` 只依赖 `asset-core` + `asset-package`）。
+- **运行时无编辑器依赖**（`prism-asset-runtime` 只依赖 `prism-asset-core` + `prism-asset-package`）。
 - **Handle<T> 与 ECS Entity 分离**：Handle 是资产生命周期概念（代沟计数 slot），
   Entity 是帧级 ECS 概念，二者不混用。
 
@@ -574,23 +574,23 @@ pub struct SceneReadView<'a> {
 
 | crate | 职责 | 依赖 |
 |-------|------|------|
-| `asset-core` | 基础类型：`AssetId`（64 bit gen+serial）、`AssetType`（8 分类）、`Handle<T>`（代沟计数）、`AssetRef` | serde, thiserror |
-| `asset-db` | 编辑器资产数据库（JSON），文件→ID 索引 + 导入缓存（xxh3） | asset-core |
-| `asset-importer` | 导入器框架 + 内置 4 个 Importer：Texture（PNG→RTXI）、Gltf（→RMXI）、Json、Raw | asset-core, asset-db, image, gltf |
-| `asset-cooker` | 烹饪器框架 + CookProfile 系统 + 3 个 Cooker：Texture（RTXI→RTEX+mip）、Mesh（RMXI→RMES）、Binary 直通 | asset-core, asset-db, asset-package |
-| `asset-package` | `.pak` 归档格式（RPAK），支持 zstd 压缩 + xxh3 校验和 + 依赖表 | asset-core, zstd, xxhash-rust |
-| `asset-runtime` | 运行时 `ResourceManager`：懒加载 `Handle<T>`、内存预算 LRU/FIFO、依赖递归解析、轮询式热重载 | asset-core, asset-package |
-| `asset-cli` | 7 个子命令：`init` / `scan` / `import` / `build` / `validate` / `list` / `inspect` | 以上所有 + clap |
+| `prism-asset-core` | 基础类型：`AssetId`（64 bit gen+serial）、`AssetType`（8 分类）、`Handle<T>`（代沟计数）、`AssetRef` | serde, thiserror |
+| `prism-asset-db` | 编辑器资产数据库（JSON），文件→ID 索引 + 导入缓存（xxh3） | prism-asset-core |
+| `prism-asset-importer` | 导入器框架 + 内置 4 个 Importer：Texture（PNG→RTXI）、Gltf（→RMXI）、Json、Raw | prism-asset-core, prism-asset-db, image, gltf |
+| `prism-asset-cooker` | 烹饪器框架 + CookProfile 系统 + 3 个 Cooker：Texture（RTXI→RTEX+mip）、Mesh（RMXI→RMES）、Binary 直通 | prism-asset-core, prism-asset-db, prism-asset-package |
+| `prism-asset-package` | `.pak` 归档格式（RPAK），支持 zstd 压缩 + xxh3 校验和 + 依赖表 | prism-asset-core, zstd, xxhash-rust |
+| `prism-asset-runtime` | 运行时 `ResourceManager`：懒加载 `Handle<T>`、内存预算 LRU/FIFO、依赖递归解析、轮询式热重载 | prism-asset-core, prism-asset-package |
+| `prism-asset-cli` | 7 个子命令：`init` / `scan` / `import` / `build` / `validate` / `list` / `inspect` | 以上所有 + clap |
 
 **工作空间配置**：`prism-asset/Cargo.toml` 定义独立 workspace，
 成员不加入根 workspace `members`。可独立构建：
 ```sh
 cd prism-asset && cargo build
 cargo test                       # 99 个测试全部通过
-cargo run -p asset-cli -- init
+cargo run -p prism-asset-cli -- init
 ```
 
-### 10.3 资源类型系统（asset-core）
+### 10.3 资源类型系统（prism-asset-core）
 
 **`AssetId`**（`id.rs`）：
 ```
@@ -635,7 +635,7 @@ Cooker 负责消费中间格式生成运行时格式。
 RTEX 的 mip 链由 Cooker 通过 2×2 box filter 生成（`TextureCooker::generate_mips`），
 运行时无需降采样。后期可替换为更高质量的 Kaiser/ Lanczos 滤波。
 
-### 10.6 .pak 归档格式（asset-package）
+### 10.6 .pak 归档格式（prism-asset-package）
 
 ```
 ┌─ PackageHeader ────────────────────────┬── 52 bytes ─┐
@@ -657,7 +657,7 @@ RTEX 的 mip 链由 Cooker 通过 2×2 box filter 生成（`TextureCooker::gener
 - **校验**：xxh3-64 覆盖 `header[12..] + registry + deps + data`
 - **读取**：`PackageReader` 零拷贝访问（未压缩 asset 直接 memcpy）
 
-### 10.7 Cook Profile 系统（asset-cooker/src/profile.rs）
+### 10.7 Cook Profile 系统（prism-asset-cooker/src/profile.rs）
 
 **优先级链**（高→低）：
 ```
@@ -691,7 +691,7 @@ RTEX 的 mip 链由 Cooker 通过 2×2 box filter 生成（`TextureCooker::gener
 - 内置配置由 `BUILTIN_DEFAULTS` 静态 `LazyLock<HashMap>` 承载，
   用户配置从磁盘 `profiles_dir/{name}.json` 加载
 
-### 10.8 运行时 ResourceManager（asset-runtime）
+### 10.8 运行时 ResourceManager（prism-asset-runtime）
 
 **核心流程**：
 1. `load_package("game.pak")` → 注册所有资产（填充 slot 数组 + `AssetId→index` 映射）
@@ -722,7 +722,7 @@ pub trait Asset: Sized + Send + 'static {
 ```
 内建 `impl Asset for Vec<u8>`（二进制 blob）。
 
-### 10.9 CLI 工具（asset-cli）
+### 10.9 CLI 工具（prism-asset-cli）
 
 | 命令 | 功能 |
 |------|------|
@@ -756,12 +756,12 @@ pub trait Asset: Sized + Send + 'static {
 
 要完成"离线预处理 → .pak → 引擎运行时"的闭环，需要以下 PR：
 
-- **[G1] asset-runtime 格式解码器**：为 RTEX / RMES 实现 GPU 上传逻辑。
+- **[G1] prism-asset-runtime 格式解码器**：为 RTEX / RMES 实现 GPU 上传逻辑。
   - `TextureDecoder`：解析 RTEX header → 提取各 mip level 像素 → 
     `TextureUploadInput` 格式适配 → 走现有 `BatchUploader` 上传
   - `MeshDecoder`：解析 RMES header → 提取交错顶点 → `MeshUploadInput` 格式适配
   - `MaterialDecoder`：从 `.pak` 读取 cooked material 数据 → 填充 `MaterialUploadInput`
-  - 位置：`prism-render` 新模块或 `asset-runtime` → `prism-render` 桥接层
+  - 位置：`prism-render` 新模块或 `prism-asset-runtime` → `prism-render` 桥接层
 
 - **[G2] Cooker 输出格式与引擎对接**：确保 `TextureCooker` 和 `MeshCooker` 输出的
   二进制格式能被 G1 的解码器正确解析，字段布局、字节对齐一一对应。
@@ -769,13 +769,13 @@ pub trait Asset: Sized + Send + 'static {
   - 添加端到端测试：cook → decode → 与现有加载结果逐字段相等
 
 - **[G3] ResourceManager → Engine 桥接**：
-  - `prism-engine` 引入 `asset-runtime` 依赖
+  - `prism-engine` 引入 `prism-asset-runtime` 依赖
   - 启动时检测 `game.pak` 是否存在，存在则通过 `ResourceManager` 加载
   - 加载完成后，将 `Handle<T>` 解析为 ECS Entity（现有 `load_demo_scene` 模式）
   - 走通全链路：CLI build → engine 启动 → 读取 .pak → GPU 渲染
 
 - **[G4] 构建脚本集成**：
-  - `run.ps1` / CI 脚本集成 `asset-cli build` 步骤
+  - `run.ps1` / CI 脚本集成 `prism-asset-cli build` 步骤
   - 开发模式跳过 `.pak` 构建（走 `prism-asset` 即时加载）
   - 发布模式强制先构建 `.pak` 再启动引擎
 

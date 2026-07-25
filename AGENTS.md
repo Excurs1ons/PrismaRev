@@ -16,8 +16,8 @@ Conventions) before touching any matrix/coordinate math — deviating from those
 - `shaders/` — Slang sources in `slang/`, compiled `.spv` + `reflection/*.json` next to them.
 - `xtask/` — **excluded** from default workspace; desktop/CI only (needs `slangc`).
 - `prism-asset/` — **independent workspace** (not in root `members`). Offline asset pipeline
-  (Import → Cook → Package → Runtime). 7 crates: `asset-core`, `asset-db`, `asset-importer`,
-  `asset-cooker`, `asset-package`, `asset-runtime`, `asset-cli`. See DESIGN.md §10.
+  (Import → Cook → Package → Runtime). 7 crates: `prism-asset-core`, `prism-asset-db`, `prism-asset-importer`,
+  `prism-asset-cooker`, `prism-asset-package`, `prism-asset-runtime`, `prism-asset-cli`. See DESIGN.md §10.
   Build/test separately: `cd prism-asset && cargo build/test`.
 
 ## Build / check / test
@@ -87,11 +87,11 @@ Conventions) before touching any matrix/coordinate math — deviating from those
 ## Prism-asset architecture rules
 - **Independent workspace** at `prism-asset/`; never add its crates to root workspace `members`.
 - Pipeline stages: `[Source] → Importer → [Intermediate] → Cooker → [Cooked] → Package → [.pak] → Runtime`.
-- Handle types in `asset-core` (`Handle<T>`, `AssetId`) are **distinct** from `prism_ecs::Entity`
+- Handle types in `prism-asset-core` (`Handle<T>`, `AssetId`) are **distinct** from `prism_ecs::Entity`
   and from `prism_asset`'s slotmap handles — never conflate them.
 - The runtime `ResourceManager` is the only consumer-facing API for game code reading `.pak` files.
-  It has zero dependencies on editor crates (`asset-db`, `asset-importer`).
-- CookProfile system (`asset-cooker/src/profile.rs`) drives platform-specific cooking via
+  It has zero dependencies on editor crates (`prism-asset-db`, `prism-asset-importer`).
+- CookProfile system (`prism-asset-cooker/src/profile.rs`) drives platform-specific cooking via
   5 built-in profiles (base/desktop/android/ios/embedded) with inheritance and CLI overrides.
 - When adding a new asset type: add to `AssetType` enum, implement `Importer` + `Cooker`,
   wire into CLI commands.

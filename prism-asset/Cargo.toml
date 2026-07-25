@@ -1,13 +1,13 @@
 [workspace]
 resolver = "2"
 members = [
-    "asset-core",
-    "asset-package",
-    "asset-db",
-    "asset-importer",
-    "asset-cooker",
-    "asset-runtime",
-    "asset-cli",
+    "prism-asset-core",
+    "prism-asset-package",
+    "prism-asset-db",
+    "prism-asset-importer",
+    "prism-asset-cooker",
+    "prism-asset-runtime",
+    "prism-asset-cli",
 ]
 
 [workspace.package]

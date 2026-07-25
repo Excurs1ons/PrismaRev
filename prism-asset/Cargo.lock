@@ -74,117 +74,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
-name = "asset-cli"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "asset-cooker",
- "asset-core",
- "asset-db",
- "asset-importer",
- "asset-package",
- "asset-runtime",
- "clap",
- "image",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "unicode-width",
- "xxhash-rust",
-]
-
-[[package]]
-name = "asset-cooker"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "asset-core",
- "asset-db",
- "asset-package",
- "ctt",
- "image",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
- "xxhash-rust",
-]
-
-[[package]]
-name = "asset-core"
-version = "0.1.0"
-dependencies = [
- "bincode",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
-]
-
-[[package]]
-name = "asset-db"
-version = "0.1.0"
-dependencies = [
- "asset-core",
- "path-clean",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "asset-importer"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "asset-core",
- "asset-db",
- "gltf",
- "image",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
- "xxhash-rust",
-]
-
-[[package]]
-name = "asset-package"
-version = "0.1.0"
-dependencies = [
- "asset-core",
- "serde",
- "tempfile",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
- "xxhash-rust",
- "zstd",
-]
-
-[[package]]
-name = "asset-runtime"
-version = "0.1.0"
-dependencies = [
- "asset-core",
- "asset-package",
- "serde",
- "tempfile",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -820,6 +709,117 @@ dependencies = [
  "fdeflate",
  "flate2",
  "miniz_oxide",
+]
+
+[[package]]
+name = "prism-asset-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "image",
+ "prism-asset-cooker",
+ "prism-asset-core",
+ "prism-asset-db",
+ "prism-asset-importer",
+ "prism-asset-package",
+ "prism-asset-runtime",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "unicode-width",
+ "xxhash-rust",
+]
+
+[[package]]
+name = "prism-asset-cooker"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "ctt",
+ "image",
+ "prism-asset-core",
+ "prism-asset-db",
+ "prism-asset-package",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "xxhash-rust",
+]
+
+[[package]]
+name = "prism-asset-core"
+version = "0.1.0"
+dependencies = [
+ "bincode",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "prism-asset-db"
+version = "0.1.0"
+dependencies = [
+ "path-clean",
+ "prism-asset-core",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "prism-asset-importer"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "gltf",
+ "image",
+ "prism-asset-core",
+ "prism-asset-db",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "xxhash-rust",
+]
+
+[[package]]
+name = "prism-asset-package"
+version = "0.1.0"
+dependencies = [
+ "prism-asset-core",
+ "serde",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "xxhash-rust",
+ "zstd",
+]
+
+[[package]]
+name = "prism-asset-runtime"
+version = "0.1.0"
+dependencies = [
+ "prism-asset-core",
+ "prism-asset-package",
+ "serde",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

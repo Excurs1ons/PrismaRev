@@ -1,0 +1,18 @@
+[package]
+name = "prism-asset-db"
+version.workspace = true
+edition = "2021"
+license.workspace = true
+description = "Editor asset database for the resource pipeline"
+
+[dependencies]
+prism-asset-core = { path = "../prism-asset-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = "0.1"
+path-clean = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
