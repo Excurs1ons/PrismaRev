@@ -13,14 +13,17 @@
 ```
 输入(winit) → InputState → OrbitCameraController 更新 OrbitCamera
                                           │
-                          ECS World (Transform/Mesh/Material)
+              ECS World (Transform/MeshHandle/PbrMaterial/RenderInstance)
                                           │
-                            render_system() 每帧 query3
+                    collect_scene_changes() → SceneChanges
                                           │
-                    view_proj = P·V·M  + 逐实体 push constant
+              DirtyRouter::update() → DirtyFlags（跳过冗余上传）
                                           │
-              Renderer / RenderGraph: begin_frame → passes → end_frame
-                  (GBuffer → Shadow/RayQuery → SHARC GI → Lighting → Post)
+                    FrameInput + DrawItem 列表
+                                          │
+         GraphRenderer: begin_frame → render → present
+           ShadowMapPass → ScenePass(PBR MRT) → GtaoPass → PostPass
+           (或 PathTracePass 替代前向链)
                                           │
                     acquire → record → submit → present（swapchain）
                                           │
@@ -34,17 +37,24 @@
 | Crate | 职责 | 不负责 |
 |-------|------|--------|
 | `prism-ecs` | 实体/组件/世界的纯数据模型与查询 | 渲染、窗口、IO |
-| `prism-asset` | glTF 2.0 加载 + `SceneStore` + `MaterialManager` + `BindlessTextureTable` 的 CPU 端 | Vulkan 上传细节 |
-| `prism-render` | Vulkan 后端：**`render_graph` + `passes`（RenderPassNode）/ `bindless` / `capabilities`（能力探测）/ managers / context / swapchain** | 游戏逻辑、窗口事件 |
-| `prism-engine` | winit 主循环、`App`、相机、输入、`render_system` | 平台差异（交给 winit） |
+| `prism-asset` | 运行时：glTF 2.0 加载 + `SceneStore` + `BatchUploader` + Bindless 纹理表 CPU 端 | Vulkan 上传细节 |
+| `prism-render` | Vulkan 后端：**`render_graph` + `passes`（ScenePass/ShadowMapPass/GtaoPass/PostPass）/ `bindless` / `capabilities` / managers / context / swapchain / `ibl` / `gi` / `pt_pass` / `gtao`** | 游戏逻辑、窗口事件 |
+| `prism-engine` | winit 主循环、`App`、相机、输入、`render_system`、`DirtyRouter`、`SceneChanges` | 平台差异（交给 winit） |
 | `prism-android` | Android cdylib 入口（`android-game-activity`） | 任何引擎逻辑 |
+| `prism-audio` | 音频子系统（`cpal` 后端），`AudioEngine` + `AudioSource` ECS 组件 | 渲染、窗口 |
+
+:::tip prism-audio 的优雅降级
+当设备不可用（如无音频输出设备）时，`AudioEngine` 静默运行，不会让游戏崩溃。这遵循引擎的「可降级不形变」设计哲学——与 RT 不可用自动降级为 ShadowMapPass 一致。
+:::
+
+此外，`prism-asset/` 是一个**独立工作空间**（不在根 workspace 中），包含 7 个 crate（core/db/importer/cooker/package/runtime/cli），专用于离线资产管线。
 
 :::tip 依赖方向是单向的
 `prism-engine` 依赖 `prism-render` + `prism-ecs`；`prism-render` 依赖 `prism-ecs`（仅类型）与 `prism-asset` 的**类型接缝**（manager 用本地输入结构，不直接依赖 crate）；`prism-asset` 不依赖任何引擎 crate（纯数据）。**没有循环依赖**——这是架构健康的标志。
 :::
 
 :::info 当前落点 vs 过渡态
-DESIGN 第 4 节列出的当前落点：`render_graph.rs` + `passes.rs`（GBuffer/Sharc/RayQuery/Shadow/Lighting/Post）、`bindless.rs`、`prism-asset`、`shaders/slang/sharc/`、`capabilities.rs`。应用层目前通过 `Renderer`（`Renderer::begin_frame` / `draw_scene_pbr` / `end_frame`）衔接，legacy 单体路径正逐步退出——方向已锁定在 RenderGraph，无需平台分支。
+DESIGN 第 4 节列出的当前落点：`render_graph.rs` + `passes.rs`（ScenePass/ShadowMapPass/GtaoPass/PostPass）、`bindless.rs`、`ibl.rs`、`gi.rs`、`gtao.rs`、`pt_pass.rs`、`capabilities.rs`、`dirty_router.rs`。应用层通过 `GraphRenderer`（`begin_frame` → `render` → `present`）驱动每帧流程，ECS 场景变更经 `SceneChanges` + `DirtyRouter` 同步到 GPU。Legacy 单体 `renderer.rs` 已被完全移除。方向已锁定在 RenderGraph + SceneChanges 数据流，无需平台分支。
 :::
 
 ![引擎架构总览图（待替换为真实架构图）](/assets/placeholder/arch.svg)
@@ -94,9 +104,12 @@ DESIGN 第 4 节列出的当前落点：`render_graph.rs` + `passes.rs`（GBuffe
 | 平台 | 桌面 | 桌面 + Android **同一份代码、同一套管线**（无平台分支） |
 
 :::tip 接下来可以往哪走
-- **Render Graph**：把 pass 编排成图（引擎已有 `render_graph.rs`）。
-- **光线追踪**：`acceleration_structure.rs` + `sharc_query` 已铺好 RT 路径。
-- **移动端 GI**：`docs/mobile-raytracing-gi-design.md` 描述了下一步的全局光照设计。
+- **Render Graph**：把 pass 编排成图（`render_graph.rs` 已实现，未来可加更多 pass）。
+- **GTAO 异步计算**：AO 用 async compute queue 异步执行，不与前向渲染抢占。
+- **实时 GI（DDGI）**：当前探针体积 GI 是离线烘焙的，下一步可做实时动态 GI。
+- **路径追踪**：`pt_pass.rs` 已实现实时路径追踪，仍可优化降噪器和采样策略。
+- **音频**：`prism-audio` 已基本可用，未来可加 3D 空间音频和 HRTF。
+- **资产管线**：`prism-asset/` 离线管线可扩展更多导入/烘焙/压缩 profile。
 
 引擎是活的——你现在读得懂它的每一行，也就能改它、扩展它。
 :::

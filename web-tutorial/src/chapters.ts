@@ -121,6 +121,14 @@ export const CHAPTERS: ChapterMeta[] = [
     group: "引擎",
     viz: ["coordSpace", "coordchain", "rendergraph"],
   },
+  {
+    id: "render-advanced",
+    title: "14 · 进阶渲染技术",
+    subtitle: "ReSTIR DI、路径追踪、SH GI",
+    file: "14-render-advanced.md",
+    group: "引擎",
+    viz: ["rendergraph"],
+  },
 ];
 
 export function findChapter(id: string): ChapterMeta | undefined {

@@ -1,44 +1,49 @@
 # 09 · ECS 驱动渲染（M3）
 
-M2 画了一个静态网格。M3 让场景**活起来**：一个轨道相机绕着物体转，多个带 `Transform` 的实体被 `RenderSystem` 每帧查询并绘制，并用 **Blinn-Phong** 光照上色。
+M2 画了一个静态网格。M3 让场景**活起来**：多个带 `Transform` 的实体被 `render_system` 每帧从 ECS World 查询，构建 `DrawItem` 列表，提交给 `GraphRenderer` 完成前向 PBR 渲染。这是引擎第一次「像一个引擎」在跑。
 
 :::info 里程碑 M3 的目标
-ECS 驱动的渲染：相机（OrbitCamera）+ 每个实体的 Transform/Mesh/Material → RenderSystem 每帧 Query 世界、提交绘制调用、Blinn-Phong 光照。这是引擎第一次「像一个引擎」在跑。
+ECS 驱动的渲染：相机 + 每个实体的 Transform/MeshHandle/PbrMaterial → render_system 每帧查询世界、构建场景变更（SceneChanges）→ DirtyRouter 追踪差异 → GraphRenderer 消费 DrawItem 列表绘制。
 :::
 
-## 组件：Transform / Mesh / Material
+## 渲染组件
 
-渲染系统关心的组件（来自 `render_system.rs` 文档）：
+引擎的 ECS 组件定义在 `crates/prism-engine/src/render_system.rs`：
 
 | 组件 | 字段 | 说明 |
 |------|------|------|
-| `Transform` | `translation`, `rotation`(四元数), `scale` | 实体局部到世界的变换 |
-| `Mesh` | 网格句柄 | 指向 `MeshManager` 里的顶点/索引缓冲 |
-| `Material` | 反照率/金属度/粗糙度 | 决定表面如何响应光 |
+| `Transform` | `translation`, `rotation`(四元数), `scale` | 实体局部到世界的变换，`to_model_matrix()` 生成列主序 `mat4` |
+| `MeshHandle` | `usize` 索引 | 指向 `MeshManager` 里的 GPU 网格 |
+| `PbrMaterial` | `albedo`, `metallic`, `roughness` | PBR 表面参数 |
+| `RenderInstance` | `mesh`, `material_slot`, `model` | 可渲染对象的组合结构（从 glTF 实例创建） |
+| `DirectionalLight` | `euler_xyz`, `intensity`, `color`, `ambient` | 方向光，角度+物理照度（lux） |
+| `PointLight` | `position`, `range`, `color`, `intensity` | 点光源，物理发光强度（candela） |
 
-```rust
+```rust id=transform-comp
+// Transform：从四元数生成模型矩阵
 pub struct Transform {
     pub translation: [f32; 3],
     pub rotation: [f32; 4], // (x, y, z, w) 四元数
     pub scale: [f32; 3],
 }
+
+impl Transform {
+    pub fn to_model_matrix(&self) -> [[f32; 4]; 4] {
+        // 列主序 mat4 [col][row] — 直接作为 GLSL mat4 使用
+        // 四元数 → 旋转矩阵 + scale + translation
+    }
+}
 ```
 
-## 相机：OrbitCamera（轨道相机）
+:::tip 物理单位
+引擎使用**物理单位**：光照强度用 `lux`（勒克斯，方向光）/ `candela`（坎德拉，点光源），而非无单位的魔数。这样不同场景的光照参数可以直接复用真实世界的参考值（晴天 100k lux，室内 100 cd）。
+:::
+
+## 相机
 
 `OrbitCamera` 用球坐标（azimuth `theta`、elevation `phi`、距离 `distance`）围绕一个 `target` 旋转。它的 `view_proj()` 产出 `proj * view`（**列主序**，与 GLSL `m[col][row]` 对齐）：
 
 ```rust id=camera-vp
-pub struct OrbitCamera {
-    pub target: [f32; 3],
-    pub distance: f32,
-    pub theta: f32,   // 方位角，0 = +Z
-    pub phi: f32,     // 仰角，π/2 = 水平
-    pub fov_y: f32,
-    pub znear: f32,
-    pub zfar: f32,
-}
-
 pub fn view_proj(&self) -> [[f32; 4]; 4] {
     let proj = self.perspective();
     let view = self.look_at(self.eye());
@@ -50,51 +55,79 @@ pub fn view_proj(&self) -> [[f32; 4]; 4] {
 `perspective()` 里 `p[1][1] = -inv_tan(fovy/2)`（注意负号）。这是 Vulkan 与 OpenGL 的关键差异——OpenGL 用 `+inv_tan`。深度映射到 `[0,1]` 而非 `[-1,1]`。漏掉这个负号，画面会上下颠倒。详见第 13 章坐标约定。
 :::
 
-## RenderSystem：每帧 Query 世界
+## 渲染管线：数据流全景
 
-`render_system()` 是引擎的「绘制系统」。它不持有场景，每帧从 `World` **查询**：
+每帧的渲染流程不再是一条 `render_system` 函数到底，而是四个阶段：
+
+```
+ECS World
+    │
+    ▼
+collect_scene_changes()  ← PR-S1：从 ECS 抽离场景快照
+    │ 产出 SceneChanges { view_proj, eye, view, draw_list, ... }
+    ▼
+DirtyRouter::update()    ← PR-S2：对比上一帧，产出 DirtyFlags
+    │ 标记 camera/directional_light/point_lights 是否变更
+    ▼
+FrameInput 构建           ← GraphRenderer::begin_frame
+    │ 接收 FrameUBOData + DrawItem 列表 + GTAO inputs
+    ▼
+GraphRenderer::render()  ← begin_frame → ScenePass/Gtao/Post → present
+    │ 遍历 draw_list，逐物体提交绘制调用
+    ▼
+屏幕
+```
+
+### collect_scene_changes：ECS → 场景快照
+
+每帧开头，`collect_scene_changes` 从 `World` 中查询所有相关组件，构建一个纯数据结构的 `SceneChanges`。
 
 ```rust
-pub fn render_system(
-    renderer: &mut Renderer,
-    world: &World,
-    meshes: &MeshManager,
-    clear_color: [f32; 4],
-    camera: &mut OrbitCamera,
-    light_data: &FrameUBOData,
-) {
-    camera.set_aspect(display_aspect);
-    let mut view_proj = camera.view_proj();
-    // 叠加 surface 旋转（应对 Android 横屏 ROTATE_90 等）
-    view_proj = mat_mul(&surface_rotation, &view_proj);
-
-    // 遍历所有「有 Transform+Mesh+Material」的实体，录制绘制调用
-    for (entity, tf, mesh, mat) in world.query3::<Transform, Mesh, Material>() {
-        // 计算 model 矩阵 → 写 push constant / UBO → draw
+pub fn collect_scene_changes(
+    world: &World, camera: &Camera, mesh_manager: &MeshManager,
+) -> SceneChanges {
+    // 查询 Transform + RenderInstance 实体 → DrawItem 列表
+    for (entity, tf, inst) in world.query2::<Transform, RenderInstance>() {
+        let model = tf.to_model_matrix();
+        draw_list.push(DrawItem { mesh: inst.mesh, model, material_slot: inst.material_slot });
     }
+    // 查询 DirectionalLight → 提取方向/颜色/照度
+    // 查询 PointLight → 提取位置/范围/颜色/强度
+    // 计算 view_proj, eye, view
+    SceneChanges { view_proj, eye, view, draw_list, directional_light, point_lights, ... }
 }
 ```
 
-:::tip 系统即函数，世界即数据
-注意 `render_system` 是**普通函数**，不是某个「渲染器对象」的方法。它与 `World` 解耦：换一套逻辑只需换一个系统函数。这是 ECS 相比 OOP 的核心优势——逻辑可组合、可测试、无继承耦合。
-:::
+### DirtyRouter：帧间差异追踪
 
-## Blinn-Phong 光照
+`DirtyRouter` 保存上一帧的 `SceneChanges`，对比当前帧后产出 `DirtyFlags` 标志位集合：
 
-片元着色器里用相机方向、法线、光源方向算高光。引擎的 `lighting.slang` 实现了 Blinn-Phong（以及后续升级的 PBR）：
+| 标志 | 含义 |
+|------|------|
+| `camera` | view-proj、eye、view 任意变化 |
+| `directional_light` | 方向光参数变化 |
+| `point_lights` | 点光源列表/参数变化 |
 
-```hlsl
-float3 N = normalize(input.normal);
-float3 L = normalize(light_dir);
-float3 V = normalize(camera_pos - world_pos);
-float3 H = normalize(L + V);
-float diff = max(dot(N, L), 0.0);
-float spec = pow(max(dot(N, H), 0.0), shininess);
-float3 color = ambient + albedo * diff + spec_color * spec;
+这些标志用于跳过冗余的 GPU 上传（如点光源未变则不重写 SSBO）。
+
+### GraphRenderer 消费
+
+```rust
+// render_system 的最终调用
+graph_renderer.render(
+    &FrameInput {
+        ubo: frame_ubo_data,
+        draw_list: scene_changes.draw_list,
+        gtao_inputs,  // ScenePass → GtaoPass 的 AO 数据
+        ...
+    },
+);
 ```
 
-:::info 从 Blinn-Phong 到 PBR
-M3 用 Blinn-Phong 是因为它直观、参数少、好调试。第 11 章会把它升级为物理正确的 PBR + IBL——但管线结构（每帧算 `view_proj`、逐实体提交、逐片元光照）完全不变。
+`GraphRenderer` 内部驱动 `ShadowMapPass → ScenePass → GtaoPass → PostPass` 链（见第 7 章）。每帧遍历 `draw_list`，为每个 `DrawItem` 计算 model 矩阵、绑定点光源、录制绘制命令。
+
+:::tip 系统即函数，世界即数据
+注意 `render_system` 是**普通函数**，不是某个「渲染器对象」的方法。它与 `World` 解耦：换一套逻辑只需换一个系统函数。这是 ECS 相比 OOP 的核心优势——逻辑可组合、可测试、无继承耦合。
 :::
 
 ## 交互演示：坐标变换
@@ -104,10 +137,10 @@ M3 用 Blinn-Phong 是因为它直观、参数少、好调试。第 11 章会把
 （在页面下方查看交互演示）
 
 :::exercise
-1. 在 `crates/prism-engine/src/render_system.rs` 里找到 `query3::<Transform, Mesh, Material>()` 的调用，列出它为每个实体做了哪些事。
-2. 在场景里 spawn 一个带 `Transform` 但没有 `Mesh` 的实体，验证渲染系统会**忽略**它（因为不满足组件交集）。
+1. 在 `crates/prism-engine/src/render_system.rs` 里找到 `collect_scene_changes` 函数，列出它从 World 查询了哪几种组件组合。
+2. 在场景里 spawn 一个带 `Transform` 但没有 `RenderInstance` 的实体，验证渲染系统会**忽略**它（因为 `query2::<Transform, RenderInstance>` 不匹配）。
 3. 打开 `camera.rs`，把 `perspective()` 里的负号去掉，运行看画面如何颠倒——亲手验证 y-flip 的必要性。
-4. 用 `OrbitCameraController`（读 `camera_controller.rs`）理解输入如何驱动 `theta`/`phi`。
+4. 跟踪一个 `DirtyFlags::camera = true` 到 `set_ubo_data` 的数据流：哪些 GPU 资源会被重写？
 :::
 
 下一章，我们让场景不再手写——从 glTF 文件加载真实资产。

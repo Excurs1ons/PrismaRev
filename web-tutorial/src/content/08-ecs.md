@@ -31,7 +31,7 @@ impl<T: 'static> Component for T {}
 
 ## World：类型擦除的稀疏池
 
-`World` 用 `HashMap<TypeId, Box<dyn ErasedPool>>` 按类型存组件池。每个池是「entity id → 值」的稀疏映射，所以实体可以**任意组合**组件（无需 archetype）：
+`World` 用 `HashMap<TypeId, Box<dyn ErasedPool>>` 按类型存组件池。每个池的具体实现是**稀疏集**（`ComponentPool<T>`），用 `dense + sparse` 双数组取代朴素的 `HashMap`，获得更好的缓存局部性：
 
 ```rust
 pub struct World {
@@ -40,9 +40,16 @@ pub struct World {
     pools: HashMap<TypeId, Box<dyn ErasedPool>>,  // 每类型一个池
     resources: HashMap<TypeId, Box<dyn Any>>,     // 单例资源（如 Camera）
 }
+
+// 每个组件池的内部实现：稀疏集
+struct ComponentPool<T> {
+    dense: Vec<(u32, T)>,  // (entity_id, component) 紧凑排列
+    sparse: Vec<u32>,       // entity_id → dense 数组中的下标
+    // SPARSE_NONE sentinel 表示该实体没有此组件
+}
 ```
 
-添加/删除组件是 O(1) 的池操作；`despawn` 时遍历所有池删掉该实体，并存入「下一个 generation」以便回收：
+`dense` 是 `(entity_id, value)` 对的紧凑数组，迭代时连续访问，对 CPU 缓存友好（data-oriented 的核心体现）。`sparse` 用 `entity_id` 直接索引，O(1) 定位组件。添加/删除组件是 O(1) 的池操作；`despawn` 时遍历所有池删掉该实体，并存入「下一个 generation」以便回收：
 
 ```rust
 pub fn insert<T: Component>(&mut self, entity: Entity, component: T) {

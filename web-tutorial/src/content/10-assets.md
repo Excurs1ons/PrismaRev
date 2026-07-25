@@ -1,10 +1,36 @@
 # 10 · 资产管线
 
-M3 的场景是代码里手写几个立方体。真实引擎要从**文件**加载——glTF 场景、PNG/JPEG 纹理、HDR 环境。这部分在 `prism-asset` crate。
+M3 的场景是代码里手写几个立方体。真实引擎要从**文件**加载——glTF 场景、PNG/JPEG 纹理、HDR 环境。这部分由**两层体系**支撑：运行时 `prism-asset` crate（游戏内加载）和离线 `prism-asset/` 工作空间（资产管线）。
 
 :::info 里程碑 M5（资产管线）
-目标：编译着色器、加载 glTF 2.0 场景、解码图像纹理，把「美术产出的资源」变成「GPU 上的缓冲与图像」。本章聚焦 glTF 与图像两条主线。
+目标：编译着色器、加载 glTF 2.0 场景、解码图像纹理，把「美术产出的资源」变成「GPU 上的缓冲与图像」。本章聚焦 glTF 与图像两条主线，并在末尾介绍离线资产管线。
 :::
+
+---
+
+## 离线资产管线：prism-asset 工作空间
+
+除了运行时加载，引擎还维护一个**独立的离线资产管线**——`prism-asset/` 目录是一个独立的 Rust 工作空间（**不**在根 workspace 的 `members` 中，7 个 crate），专用于构建期资产处理：
+
+```
+prism-asset/                    ← 独立 workspace（cd prism-asset && cargo build）
+├── prism-asset-core/           # 核心类型：Handle<T>, AssetId, AssetType
+├── prism-asset-db/             # 资产数据库（索引/元数据）
+├── prism-asset-importer/       # 导入器：源文件 → Intermediate 表示
+├── prism-asset-cooker/         # 烘焙器：Intermediate → 平台优化格式
+│   └── profile.rs              # CookProfile 系统（5 个内置 profile）
+├── prism-asset-package/        # 打包器：烘焙结果 → .pak 文件
+├── prism-asset-runtime/        # 运行时读取 .pak（ResourceManager API）
+└── prism-asset-cli/            # CLI 入口
+```
+
+**管线阶段**：`[Source] → Importer → [Intermediate] → Cooker → [Cooked] → Package → [.pak] → Runtime`
+
+**CookProfile 系统**（`profile.rs`）驱动平台特定的烘焙配置，内置 5 个 profile（base/desktop/android/ios/embedded），支持继承和 CLI 覆盖。不同平台可以输出不同格式（如 Android 用 KTX2 纹理压缩，桌面保留未压缩）。
+
+:::tip 独立工作空间的理由
+离线管线工具链依赖繁重（如 KTX-Software、meshoptimizer），不应拖慢主引擎编译。所以 `prism-asset/` 是独立的 `cargo workspace`，不在根目录的 `members` 列表里。构建/测试：`cd prism-asset && cargo build && cargo test`（99 个测试）。
+::: 
 
 ## 为什么需要资产层
 

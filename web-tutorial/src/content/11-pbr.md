@@ -1,14 +1,17 @@
 # 11 · PBR：从纯色到物理渲染
 
-M3 的 Blinn-Phong 好看，但「不物理」——同一个金属球，换一个环境、换一个引擎，反光就对不上。真实引擎要回答的是：**这个表面在物理上应该怎么反光？** 答案就是**基于物理的渲染（PBR）**。
+M3 的教程用 Blinn-Phong 来教学，但真实引擎回答的是：**这个表面在物理上应该怎么反光？** 答案就是**基于物理的渲染（PBR）**——引擎从第 9 章开始就已经在用 PBR。
 
-本章不堆公式。我们把 PBR 拆成一条**可逐步验证的路线**，每一步都给你能直接读、能直接抄的代码，符号旁边都标了它「算的是什么」。
+本章不堆公式。我们把 PBR 拆成一条**可逐步验证的路线**，每一步都给你能直接读、能直接抄的代码，符号旁边都标了它「算的是什么」。引擎的 PBR 着色器代码在 `shaders/slang/scene_frag.slang`（片元主循环）+ `common.slang`（D/G/F 数学函数）。
 
 :::info 本章覆盖
 - 一条从 `baseColor` 走到完整 PBR 的渐进路线（每步可独立验证）
 - Cook-Torrance 镜面反射：`D_distribution` / `G_geometry` / `F_fresnel` 三个量各自算什么
 - IBL：把 HDR 环境贴图当「无限大光源」（漫反射辐照度 + 镜面预过滤）
 - Bindless：用索引一次性绑定海量纹理
+- GTAO：屏幕空间环境光遮蔽
+- Probe Volume GI：烘焙探针全局光照
+- Path Tracing：实时路径追踪
 - Debug View：把中间量画出来，专治「这个球为什么发黑」
 :::
 
@@ -27,7 +30,7 @@ M3 的 Blinn-Phong 好看，但「不物理」——同一个金属球，换一�
 | 4 | 法线贴图 | 平面表面出现凹凸细节 |
 | 5 | 环境光照 IBL | 即使没有灯，物体也反射周围环境 |
 
-下面一步一步来。所有代码都是片元着色器里「算一个像素最终颜色」的逻辑。
+引擎的 PBR 代码在 `scene_frag.slang` 的 `main_fragment` 函数中，以上就是它的计算顺序。
 
 ---
 
@@ -65,10 +68,6 @@ float3 pixel_color = diffuse_color;
 
 **验证：** 旋转摄像机或光源，能看到物体明暗随角度变化。重点检查**法线方向对不对**——如果亮暗反了，基本是法线矩阵（normal matrix）没用对，或 winding order 错了。
 
-:::tip 为什么除以 PI
-漫反射在半球上积分后需要归一化，才能让「总能量」守恒。先把它当成固定写法记住，后面讲 IBL 时会自然接上。
-:::
-
 ---
 
 ## 步骤 2：加上镜面高光 —— Cook-Torrance 三件套
@@ -102,7 +101,6 @@ float3 F_fresnel =
                     base_reflectivity_at_normal);
 
 // 把三件套组合成镜面反射强度
-// 分母的 4*(N·V)*(N·L) 是微表面模型的几何归一化项
 float3 specular_color =
     (D_distribution * G_geometry * F_fresnel) /
     max(4.0 * dot(surface_normal, direction_to_camera)
@@ -113,9 +111,9 @@ float3 pixel_color =
     (diffuse_color + specular_color) * light_color * how_much_light_hits;
 ```
 
-**验证：** 在光滑球上能看到一个明显的高光亮点；调 `roughness` 时，高光的大小和锐利度随之变化。再检查**菲涅尔效果**——把摄像机贴近表面、几乎平行地看过去，高光应该变强（即使是非金属）。
+**验证：** 在光滑球上能看到一个明显的高光亮点；调 `roughness` 时，高光的大小和锐利度随之变化。
 
-> 上面 `geometry_smith` / `fresnel_schlick` 就是引擎 `pbr.slang` 里的真实函数名。缩写 `D`/`G`/`F` 来自论文，我们用 `D_distribution` 这种写法把「它算什么」钉在名字里，读代码不再需要翻公式。
+> 上面 `geometry_smith` / `fresnel_schlick` 就是引擎 `common.slang` 里的真实函数名。缩写 `D`/`G`/`F` 来自论文，我们用 `D_distribution` 这种写法把「它算什么」钉在名字里。
 
 ---
 
@@ -127,183 +125,152 @@ float3 pixel_color =
 // 金属度 metallic：0 = 塑料/绝缘体，1 = 纯金属
 // 粗糙度 roughness：0 = 镜面，1 = 完全粗糙
 // F0（垂直入射时的基础反射率）：
-//   绝缘体（非金属）永远约 0.04；金属则用 baseColor 当反射色（金色金属反金光）
+//   绝缘体（非金属）永远约 0.04；金属则用 baseColor 当反射色
 float3 base_reflectivity_at_normal =
     lerp(float3(0.04, 0.04, 0.04), baseColor, metallic);
 
 // 能量守恒：被镜面反射吃掉的比例（kS）越多，留给漫反射的（kD）越少
 float3 specular_ratio = F_fresnel;                       // kS = 菲涅尔
 float3 diffuse_ratio  = (1.0 - metallic) * (1.0 - F_fresnel); // kD：金属没有漫反射
-
-float3 diffuse_color  = diffuse_ratio  * baseColor / PI;
-float3 specular_color = (D_distribution * G_geometry * F_fresnel) /
-                        max(4.0 * dot_N_V * dot_N_L, 0.001);
 ```
 
-**验证（关键）：** 用一个金属球测试——
-- `metallic = 1` 时，漫反射几乎消失，高光带 `baseColor` 的色调（金球反金光）。
-- `metallic = 0` 时，保持绝缘体的 `0.04` 反射 + `baseColor` 漫反射。
-这才是 PBR「对」的地方：金属没有漫反射颜色，非金属有。
+**验证（关键）：** 用一个金属球测试——`metallic = 1` 时，漫反射几乎消失，高光带 `baseColor` 的色调（金球反金光）；`metallic = 0` 时，保持绝缘体的 `0.04` 反射 + `baseColor` 漫反射。
 
 ---
 
 ## 步骤 4：法线贴图 —— 在平面上伪造凹凸
 
-粗糙度解决不了「表面有很多小凹凸」的细节。法线贴图不改几何，只改**每个像素的法线方向**：
-
 ```hlsl
-// 从切线空间的法线贴图里取出扰动后的法线，再乘 TBN 矩阵转回世界空间
 float3 perturbed_normal =
     normalize(tbn_matrix * (texture(normal_map, uv).xyz * 2.0 - 1.0));
 
 // 之后所有 dot(surface_normal, ...) 都换成 dot(perturbed_normal, ...)
 ```
 
-**验证：** 同一块平面，开启/关闭法线贴图对比，能看到光照随微表面法线起伏，呈现凹凸感。
-
 ---
 
 ## 步骤 5：环境光照 IBL —— 没有灯也能亮
 
-实时渲染不能每个方向都放一盏灯。IBL（Image-Based Lighting）把一张 **HDR 环境贴图**当成包围场景的发光穹顶。它同样拆成漫反射和镜面两部分：
+实时渲染不能每个方向都放一盏灯。IBL（Image-Based Lighting）把一张 **HDR 环境贴图**当成包围场景的发光穹顶。引擎的 `ibl.rs` 负责从 HDR 生成三张 cubemap：
+
+- **Irradiance map**：漫反射环境，对法线半球做余弦加权积分，低频
+- **Prefiltered env map**：镜面环境，粗糙度越高取越模糊的 mip（预过滤）
+- **BRDF LUT**：2D 查表，把菲涅尔拆成缩放和偏移两个因子（UE4 split-sum）
 
 ```hlsl
-// ---- 漫反射环境（irradiance）：对法线半球做余弦加权积分，预存成一张图 ----
+// 漫反射环境
 float3 ambient_diffuse =
-    texture(irradiance_map, surface_normal).rgb   // 环境从法线方向照进来
-    * diffuse_ratio * baseColor / PI;
+    texture(irradiance_map, surface_normal).rgb * diffuse_ratio * baseColor / PI;
 
-// ---- 镜面环境（prefiltered + BRDF 查表）：UE4 的 split-sum 近似 ----
-// 1) 按反射方向采样「预过滤环境图」，粗糙度越高取越模糊的 mip
+// 镜面环境（split-sum 近似）
 float3 reflection_direction = reflect(-direction_to_camera, surface_normal);
 float3 prefiltered_env =
     textureLod(prefiltered_env_map, reflection_direction,
                roughness * MAX_MIP_LEVEL).rgb;
-
-// 2) 用 (视线与法线夹角, 粗糙度) 查一张 BRDF 预计算表，把菲涅尔拆出来
-float2 brdf_lookup =
-    texture(brdf_lut, float2(dot_N_V, roughness)).rg; // .r=缩放 .g=偏移
+float2 brdf_lookup = texture(brdf_lut, float2(dot_N_V, roughness)).rg;
 float3 ambient_specular =
-    prefiltered_env * (base_reflectivity_at_normal * brdf_lookup.r
-                       + brdf_lookup.g);
-
-// 最终环境光 = 漫反射环境 + 镜面环境
-float3 ambient_color = ambient_diffuse + ambient_specular;
+    prefiltered_env * (base_reflectivity_at_normal * brdf_lookup.r + brdf_lookup.g);
 ```
 
-**验证（最直观的一步）：** 把场景里所有直接光关掉，物体**依然被环境照亮**，且金属球清晰地反射周围环境、粗糙表面呈现模糊反射。切换不同的 HDR 环境贴图，物体表面色调随之变化。
-
-:::warn mip 链要一次性 transition
-`ibl.rs` 里生成环境图 mip 时，必须**提前把整条 mip 链**（所有层、6 个面）从 `UNDEFINED` 转到 `TRANSFER_DST_OPTIMAL`。否则 `cmd_blit_image` 写 mip 1+ 时验证层会报错。作者专门在注释里记下了这点。
-:::
+**验证：** 关掉所有直接光，物体**依然被环境照亮**，金属球反射周围环境。
 
 ---
 
-## 合起来：一个像素的完整计算
+## GTAO：屏幕空间环境光遮蔽
 
-把上面所有步骤拼起来，就是一个现代 PBR 片元着色器的主干（函数名即引擎 `pbr.slang` 真实命名）：
+PBR + IBL 之后，物体看起来已经很好了，但角落和裂缝处缺少「接触阴影」——这就是 AO 做的事。
 
-```hlsl
-// ===== 输入 =====
-float3 baseColor;            // 反照率（材质基础色）
-float  metallic;            // 金属度 0..1
-float  roughness;           // 粗糙度 0..1
-float3 surface_normal;      // 世界空间法线（已含法线贴图扰动）
-float3 world_position;
-float3 direction_to_camera; // 指向摄像机
+引擎的 **GTAO（Ground-Truth Ambient Occlusion）** 在 `gtao.rs` 中实现，特点：
 
-// ===== F0：基础反射率，由金属度推导 =====
-float3 F0 = lerp(float3(0.04), baseColor, metallic);
+- **半分辨率**：AO 是低频信号，无需全分辨率，节约带宽
+- **后 ScenePass**：读取 ScenePass MRT 的视图空间法线和深度
+- **双帧缓冲**：交替写入两个 R8 纹理，时序累积抗闪烁
+- **前一帧采样**：ScenePass 采样上一帧的 AO 结果（1 帧延迟，对静态场景无感知影响）
 
-// ===== 直接光（遍历每个光源累加）=====
-float3 pixel_color_from_lights = float3(0.0);
-for (int i = 0; i < light_count; i++) {
-    float3 direction_to_light = normalize(light[i].position - world_position);
-    float3 halfway = normalize(direction_to_light + direction_to_camera);
-
-    float dot_N_L = max(dot(surface_normal, direction_to_light), 0.0);
-    float dot_N_V = max(dot(surface_normal, direction_to_camera), 0.0);
-    float dot_N_H = max(dot(surface_normal, halfway),      0.0);
-
-    // D_distribution：微平面法线分布（GGX）
-    float D_distribution = distribution_ggx(dot_N_H, roughness);
-    // G_geometry：微平面互相遮蔽（Smith）
-    float G_geometry = geometry_smith(dot_N_V, dot_N_L, roughness);
-    // F_fresnel：该入射角下的反射比例（Schlick）
-    float3 F_fresnel = fresnel_schlick(max(dot(halfway, direction_to_camera),0.0), F0);
-
-    float3 kS = F_fresnel;
-    float3 kD = (1.0 - metallic) * (1.0 - F_fresnel);
-
-    float3 specular = (D_distribution * G_geometry * F_fresnel)
-                      / max(4.0 * dot_N_V * dot_N_L, 0.001);
-    float3 diffuse  = kD * baseColor / PI;
-
-    float3 radiance = light[i].color * light[i].attenuation;
-    pixel_color_from_lights += (diffuse + specular) * radiance * dot_N_L;
+```rust
+// GtaoFrameInputs
+pub struct GtaoFrameInputs {
+    pub current_ao: vk::ImageView,
+    pub previous_ao: vk::ImageView,
+    pub scene_normal: ResourceHandle,  // 从 ScenePass MRT 读取
+    pub scene_depth: ResourceHandle,
 }
-
-// ===== 环境光 IBL =====
-float3 ambient = ambient_diffuse + ambient_specular;  // 见步骤 5
-
-// ===== 合成 + 色调映射 + gamma =====
-float3 final_color = pixel_color_from_lights + ambient;
-final_color = tone_map(final_color);
-final_color = pow(final_color, float3(1.0 / 2.2)); // 转回 sRGB 给人眼看
 ```
 
-:::tip PBR 为什么「对」
-不论光源强弱、视角如何，这套输出在物理上自洽：**能量守恒**（kD + kS ≤ 1）、**金属无漫反射**、**粗糙表面高光更弥散**。美术用一个统一工作流就能产出跨引擎一致的结果。
-:::
+GTAO 的结果通过 set 4 传递给 ScenePass，衰减 IBL 的漫反射和镜面项。
+
+---
+
+## Probe Volume GI：全局光照
+
+旧版教程提到的 SHARC GI 已被移除。引擎现在使用 **探针体积 GI**（`gi.rs` + `scene_scope.rs`）：
+
+- 场景中放置一个**规则网格**的球谐探针（order-2 SH，9 系数）
+- 离线烘焙器（`bin/prism_bake_gi.rs`）计算间接光照并写入 3D 纹理
+- 运行时通过 set 5 传递给 ScenePass：binding 0 = 3D 纹理，binding 1 = ProbeVolumeInfo UBO
+- 生产者和消费者解耦：同一数据布局既可被离线烘焙器写入，也可被未来的实时 DDGI 更新
+
+```hlsl
+// gi.slang：探针体积采样
+float3 irradiance = SampleProbeVolumeIrradiance(world_position, surface_normal);
+```
+
+---
+
+## Path Tracing：实时路径追踪
+
+除了前向 PBR 管线，引擎还实现了**实时路径追踪**（`pt_pass.rs`），通过 `VK_KHR_ray_query` 每像素每帧追踪一条光线，经时序累积后输出：
+
+```rust
+// PathTracePass：compute shader dispatch
+// 每帧 1 sample/pixel，累积去噪
+// 相机移动时自动重置累积缓冲
+```
+
+切换方式：`RenderSettings.render_mode` 在 `RenderMode::Raster` 和 `RenderMode::PathTrace` 之间切换。启用 PT 时，`PathTracePass` 替代 `ScenePass + GtaoPass` 写入 `PT_COLOR_H`，`PostPass` 仍负责 tone mapping。
 
 ---
 
 ## Bindless：一次绑定，海量纹理
 
-传统 Vulkan 每个材质要一组独立 descriptor 绑定，材质一多就爆表。**Bindless** 用「描述符索引」把所有纹理放进一张大表，draw 时只传一个索引：
+传统 Vulkan 每个材质要一组独立 descriptor 绑定，材质一多就爆表。**Bindless** 用「描述符索引」把所有纹理放进一张大表，draw 时只传一个索引。材质参数存在 `GpuMaterial` SSBO 中，纹理通过 bindless 表采样：
 
-```hlsl
-// bindless.slang：材质参数进 SSBO，纹理通过 bindless 表采样
-struct GpuMaterial {
-    float4 base_color;
-    float4 metallic_roughness_emissive;
-    uint   albedo_idx;     // → bindless 表里的纹理槽
-    uint   normal_idx;
+```rust
+// GpuMaterial（48 字节、16 对齐）
+pub struct GpuMaterial {
+    pub base_color: [f32; 4],
+    pub metallic_roughness_emissive: [f32; 4],
+    pub albedo_idx: u32,    // → bindless 表里的纹理槽
+    pub normal_idx: u32,
     // ...
-};
-[[vk::binding(0, 1)]] RWStructuredBuffer<GpuMaterial> materials;  // 每材质一条
+}
 ```
 
 :::danger 着色器与 Rust 布局必须逐字节对齐
-bindless 靠 `GpuMaterial`（48 字节、16 字节对齐）与 Rust 端 `PbrBindlessPushConstants`/`BindlessTextureTable` **严格对齐**。任何字段增删都要通过 `xtask` 的 `shader-bindgen` 重新生成 `shader_bindings.rs`——这正是项目里 `exclude = ["xtask"]` 的原因（它是构建期代码生成工具，不该进运行期依赖）。
+Bindless 靠 `GpuMaterial` 与着色器端**严格对齐**。任何字段增删都要通过 `xtask` 的 `shader-bindgen` 重新生成 `shader_bindings` 模块——这正是项目里 `exclude = ["xtask"]` 的原因。
 :::
 
 ---
 
 ## Debug View：把中间量画出来
 
-引擎支持按 `debug_mode` 切换输出：Final / Albedo / Specular / Reflect / Ambient / Normal。这是排查「为什么这个球发黑」的利器——直接看法线是否翻了、反照率对不对：
+引擎支持按 `debug_mode` 切换输出：Final / Albedo / Specular / Reflect / Ambient / Normal。这是排查「为什么这个球发黑」的利器：
 
 ```hlsl
-uint debug_mode;  // 0 Final,1 Albedo,2 Specular,3 Reflect,4 Ambient,5 Normal
+uint debug_mode;  // 0 Final, 1 Albedo, 2 Specular, 3 Reflect, 4 Ambient, 5 Normal
 ```
-
-:::info 本章小结
-PBR 替换了 M3 的 Blinn-Phong，但**管线结构没变**：还是每帧算 `view_proj`、逐实体提交、逐片元光照。变化的是「光照模型」本身——从经验公式变成能量守恒的微表面模型，以及「资源组织方式」（cubemap、SSBO、bindless 表）。这再次印证 ECS + 渲染系统的设计有多稳。
-:::
-
-![Sponza 场景渲染（待替换为引擎实际截图）](/assets/placeholder/sponza.svg)
 
 ---
 
 ## 动手练习
 
 :::exercise
-1. 按本章六步路线，在 `shaders/slang/pbr.slang` 里找到对应的 `distribution_ggx` / `geometry_smith` / `fresnel_schlick`，给每个函数补一行注释，写明它对应 D_distribution / G_geometry / F_fresnel 的哪一个物理意义。
+1. 在 `shaders/slang/common.slang` 里找到 `distribution_ggx` / `geometry_smith` / `fresnel_schlick`，给每个函数补一行注释，标明它对应 D / G / F 的哪一个物理意义。
 2. 读 `crates/prism-render/src/ibl.rs`，画出 HDR → cubemap → mip 链 → 上传 GPU 的流程。
 3. 在引擎里按数字键切换 `debug_mode`，观察 Normal 视图——验证法线方向是否符合第 13 章的坐标约定。
-4. 调一个金属球的 `metallic`：验证 `metallic = 1` 时漫反射几乎消失、高光带 `baseColor` 色调（呼应步骤 3 的「金属没有漫反射」）。
-5. 理解 `xtask` 的 `shader-bindgen`：改一下 `GpuMaterial` 的字段，运行它看 `shader_bindings.rs` 如何自动更新。
+4. 在 `gtao.rs` 中找到半分辨率逻辑，思考为什么 AO 不需要全分辨率。
+5. 读 `gi.rs` 的 `eval_sh9` 函数，理解 9 个球谐系数如何重建辐照度。
+6. 理解 `xtask` 的 `shader-bindgen`：改一下 `GpuMaterial` 的字段，运行它看 `shader_bindings.rs` 如何自动更新。
 :::
 
 下一章，我们把整个引擎搬到 Android——同一份代码，一个 APK。

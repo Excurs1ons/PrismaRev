@@ -20,6 +20,7 @@ import assetsMd from "./content/10-assets.md?raw";
 import pbrMd from "./content/11-pbr.md?raw";
 import androidMd from "./content/12-android.md?raw";
 import reviewMd from "./content/13-review.md?raw";
+import renderAdvancedMd from "./content/14-render-advanced.md?raw";
 
 const CONTENT: Record<string, string> = {
   intro: introMd,
@@ -35,6 +36,7 @@ const CONTENT: Record<string, string> = {
   pbr: pbrMd,
   android: androidMd,
   review: reviewMd,
+  "render-advanced": renderAdvancedMd,
 };
 
 const app = document.getElementById("app")!;
