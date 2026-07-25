@@ -12,7 +12,7 @@
 //
 // Requires: VK_KHR_ray_query (hardware ray tracing).
 
-import path_integrator;
+#include "path_integrator.slang"
 
 // ---- SH basis constants (must match gi.slang / gi.rs) ----
 static const uint SH_COEFF_COUNT = 9u;
@@ -176,11 +176,12 @@ void bakeMain(uint3 tid : SV_DispatchThreadID)
         }
 
         // Full multi-bounce radiance via the shared path integrator.
+        // GI baking has no analytic lights (num_lights = 0), only envMap + emissive.
         float3 L = TraceRadiance(
             world_pos, initial_dir,
             tlas, vertexData, indices,
             push.light_dir.xyz, push.light_color.xyz,
-            push.max_bounce, 1000.0, seed);
+            0u, 0u, push.max_bounce, 1000.0, seed);
 
         // Radiance SH projection using the INITIAL direction.
         // No cosine pre-convolution — the probe volume stores the radiance

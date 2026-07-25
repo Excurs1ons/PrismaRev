@@ -252,6 +252,135 @@ Bindless 靠 `GpuMaterial` 与着色器端**严格对齐**。任何字段增删�
 
 ---
 
+## 原理探微：Bindless 描述符索引
+
+Bindless 渲染的核心思想源于 `VK_EXT_descriptor_indexing`（Vulkan 1.2 core）。传统（non-bindless）的 descriptor 模型要求管线在创建时**固定每个 set 的绑定个数和类型**：
+
+```c
+// 传统方式：每个材质一个 descriptor set
+VkDescriptorSetLayoutBinding { binding=0, type=VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, count=1 };
+// 100 个材质 → 100 个 descriptor set → bind 时切换
+```
+
+这在开放世界场景（上千种材质）中意味着频繁的 `vkCmdBindDescriptorSets` 调用，每次切换都可能触发 GPU pipeline stall。
+
+### Bindless 的突破
+
+`VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT` + `MAX_PER_STAGE_DESCRIPTOR_COMBINED_IMAGE_SAMPLERS` 允许你声明一个**超大的绑定数组**，然后只填需要的部分：
+
+```c
+// Bindless 方式：声明 1024 个槽位，用多少填多少
+VkDescriptorSetLayoutBinding { binding=0, type=VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, count=1024 };
+// 每个材质只需传一个 index：材质 m 的纹理在槽 i
+```
+
+描述符集在应用启动时创建一次，此后**不再切换**。所有材质共享同一个 bindless 表，draw 调用之间只需更新 `GpuMaterial.albedo_idx` 这样的整数索引。
+
+### NonUniformResourceIndex 指令
+
+这是一个被低估的关键细节：当着色器中使用**动态索引**（索引不是 uniform 常量时），Vulkan 驱动**不能保证**相邻线程访问的是同一个 descriptor 槽。`NonUniformResourceIndex` 告诉驱动：请处理不同线程访问不同槽的情况（subgroup divergence）：
+
+```hlsl
+// NonUniformResourceIndex 是必需的！
+Texture2D tex = bindless_srvs[NonUniformResourceIndex(handle.index)];
+```
+
+没有它，在 AMD 和 Intel GPU 上会出现**不正确的采样结果**（通常表现为采样全黑，或所有材质显示同一纹理）。
+
+### 引擎的 Bindless 设计
+
+引擎把 bindless 表放在 `RenderTextureManager`（描述符集 1），外加一个 **GpuMaterial SSBO**（描述符集 0，binding 1）：
+
+```
+set 0, binding 0: 帧 UBO（每帧更新）
+set 0, binding 1: GpuMaterial SSBO（所有材质的数组，读取时按实体索引）
+set 1, binding 0: bindless_srvs[]（Image + Sampler，1024 槽）
+set 1, binding 1: bindless_samplers[]（独立 sampler 对象）
+```
+
+`GpuMaterial` 里的 `albedo_idx`/`normal_idx`/`metallic_roughness_idx` 直接就是 set 1 bindless 表的下标：
+
+```hlsl
+// scene_frag.slang
+GpuMaterial mat = materials[gpu_material_index];  // set 0 binding 1
+float3 albedo = bindless_srvs[NonUniformResourceIndex(mat.albedo_idx)]
+                    .Sample(...);
+```
+
+这种方式的好处：无论场景中有 10 种还是 1000 种材质，描述符集只绑定一次，draw 调用的 `gpu_material_index` 写入 push-constant 即可。
+
+---
+
+## 原理探微：PBR 的 D/G/F 物理推导
+
+上面的步骤 2 直接把 Cook-Torrance 公式给了你。这里我们**展开每个项的物理来源**，不只是「怎么算」，而是**为什么要这么算**。
+
+### 微表面模型的基本假设
+
+PBR 的起点是**微表面理论**：真实表面在微观尺度上不是光滑平面，而是布满微小的**镜面平面**（microfacets）。每个 microfacets 都是完美镜面（反射方向等于入射方向关于法线的镜像）。粗糙度只是这些微平面法线方向的**统计分布**。
+
+### D（法线分布）：GGX/Trowbridge-Reitz
+
+D 项回答：「有多少微平面正好朝向半程方向 `h`？」
+
+GGX 分布是一个统计学模型——微平面法线围绕宏观法线 `n` 的概率分布：
+
+```
+D(h) = α² / (π * ( (n·h)² * (α² - 1) + 1 )²)
+其中 α = roughness²  （注：引擎里 roughness 是线性存入的，GLTF 约定是 perceptual roughness，平方后才是 α）
+```
+
+- `α → 0`（光滑）：D 集中在 n=h 附近，只有少数微平面「恰好」反射
+- `α → 1`（粗糙）：D 分布均匀，大量微平面随机朝向，高光扩散成柔和的泛光
+
+选择 GGX 而不是 Blinn-Phong 的原因是 **GGX 有更长的拖尾**（long tail）——在掠射角时，GGX 的高光衰减慢于 Blinn-Phong，更符合真实材料照片测量数据。
+
+### G（几何遮蔽）：Smith-GGX
+
+G 项回答：「有多少微平面**没有被其他微平面遮挡**？」
+
+这是一个几何遮挡概率问题。想象粗糙表面的山谷和山峰——从某个角度看去，部分山谷被山峰挡住了。Smith 近似将遮蔽简化为两个独立事件的乘积：
+
+```
+G(v, l, h) = G₁(v) * G₁(l)
+
+G₁(x) 是视角方向 x 下「一个微平面可见」的概率
+G₁(x) ≈ 1 / (1 + Λ(x))
+其中 Λ(x) 是 Smith 函数，GGX 有解析解：
+  Λ = (sqrt(1 + α² * tan²θ) - 1) / 2
+  （θ 是 x 与法线 n 的夹角）
+```
+
+Smith-GGX 的几何遮蔽模型被选中的原因是它在数学上**与 GGX 分布兼容**——对同一个 α 值，Smith 函数和 GGX 分布共享相同的「microsurface 高度分布」假设，构成自洽的微表面模型。使用不兼容的组合（如 GGX × Blinn-Phong 遮蔽）会**破坏能量守恒**（粗糙表面可能反射比吸收更多的光）。
+
+### F（菲涅尔）：Schlick 近似
+
+F 项回答：「在这个入射角下，光被反射的比例是多少？」
+
+完整的菲涅尔方程来自麦克斯韦方程组，但 Schlick 用一个**三次多项式近似**足够精确：
+
+```
+F(θ) = F₀ + (1 - F₀) * (1 - cosθ)⁵
+
+F₀ 是垂直入射（θ=0°）时的反射率：
+  绝缘体：F₀ ≈ 0.04（固定值，与颜色无关）
+  金属：  F₀ = baseColor（反射带颜色，因为光不进入金属体）
+  
+θ = 视线与半程方向的夹角（或法线与视线方向的夹角，split-sum 中常用）
+```
+
+(1-F₀) * (1-cosθ)⁵ 项在 θ → 90° 时趋近于 (1-F₀)，所以 F(θ) → 1——所有表面在掠射角都接近 100% 反射。这就是为什么远处的湖面像镜子，而直射看水下看得清。
+
+### 能量守恒的工程落地
+
+D·G·F 的乘积除以 `4(n·v)(n·l)` 是为了能量守恒——确保 BRDF 的积分（所有方向的光加起来）≤ 1：
+
+```
+specular = D · G · F / (4 * (n·v) * (n·l))
+```
+
+这个分母来自微表面模型的可见性归一化——它保证了即使微表面高度复杂，反射的总能量不会超过入射能量。分母中的 `4` 是标准化因子，来源于微表面投影面积与宏观面积之比。
+
 ## Debug View：把中间量画出来
 
 引擎支持按 `debug_mode` 切换输出：Final / Albedo / Specular / Reflect / Ambient / Normal。这是排查「为什么这个球发黑」的利器：

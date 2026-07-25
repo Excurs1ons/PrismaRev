@@ -10,6 +10,7 @@ use anyhow::{Context, Result};
 use ash::vk;
 
 use crate::context::VulkanContext;
+use crate::descriptor::{PtEmissiveTri, PT_EMISSIVE_MAX};
 use crate::mesh::Vertex;
 
 /// Flattened world-space geometry: vertices, indices, and the scene AABB.
@@ -370,6 +371,103 @@ impl Drop for PtScene {
     }
 }
 
+/// Extract emissive triangles from scene instances + materials bytes.
+///
+/// Iterates over all instances, checks each instance's material for emissive
+/// radiance > 0, and collects the world-space triangles into a flat array
+/// suitable for a `StructuredBuffer<PtEmissiveTri>`.
+///
+/// `materials_bytes` is the raw `GpuMaterial[]` from `build_pt_scene`'s
+/// caller. Each `GpuMaterial` is 96 bytes; the emissive radiance is at
+/// byte offset 24 (z of `metallic_roughness_emissive`) and strength at
+/// offset 28 (w). Radiance = emissive * strength.
+pub fn build_emissive_triangles(
+    instances: &[PtGeometryInstance],
+    materials_bytes: &[u8],
+) -> Vec<PtEmissiveTri> {
+    const MAT_SIZE: usize = 96; // GpuMaterial is 96 bytes
+    let mut out: Vec<PtEmissiveTri> = Vec::new();
+    for inst in instances {
+        let mat_offset = (inst.material_slot as usize) * MAT_SIZE;
+        if mat_offset + 32 > materials_bytes.len() {
+            continue; // out of bounds, skip
+        }
+        // Read emissive radiance = metallic_roughness_emissive.z * .w
+        // at byte offset 16 + 8 (z) and 16 + 12 (w) in GpuMaterial.
+        let slice = &materials_bytes[mat_offset..mat_offset + 32];
+        let emissive = f32::from_ne_bytes([slice[24], slice[25], slice[26], slice[27]]);
+        let strength = f32::from_ne_bytes([slice[28], slice[29], slice[30], slice[31]]);
+        let rad = emissive * strength;
+        if rad <= 0.0 {
+            continue;
+        }
+        // Iterate over the instance's triangles to find emissive ones
+        // (all triangles share the same material emissive).
+        let tri_count = inst.indices.len() / 3;
+        for ti in 0..tri_count {
+            if out.len() >= PT_EMISSIVE_MAX as usize {
+                return out;
+            }
+            let i0 = inst.indices[ti * 3] as usize;
+            let i1 = inst.indices[ti * 3 + 1] as usize;
+            let i2 = inst.indices[ti * 3 + 2] as usize;
+            let v0 = inst.vertices[i0].position;
+            let v1 = inst.vertices[i1].position;
+            let v2 = inst.vertices[i2].position;
+            // Shading normal (face normal, unweighted average)
+            let e1 = [v1[0] - v0[0], v1[1] - v0[1], v1[2] - v0[2]];
+            let e2 = [v2[0] - v0[0], v2[1] - v0[1], v2[2] - v0[2]];
+            let nx = e1[1] * e2[2] - e1[2] * e2[1];
+            let ny = e1[2] * e2[0] - e1[0] * e2[2];
+            let nz = e1[0] * e2[1] - e1[1] * e2[0];
+            let nl = (nx * nx + ny * ny + nz * nz).sqrt().max(1e-8);
+            let tri_area = 0.5 * nl;
+            out.push(PtEmissiveTri {
+                v0: [v0[0], v0[1], v0[2], 0.0],
+                v1: [v1[0], v1[1], v1[2], 0.0],
+                v2: [v2[0], v2[1], v2[2], 0.0],
+                normal: [nx / nl, ny / nl, nz / nl, 0.0],
+                radiance: [rad, rad, rad, 0.0],
+                area: tri_area,
+            });
+        }
+    }
+    out
+}
+
+/// Create a device-local storage buffer containing [`PtEmissiveTri`] entries for
+/// all emissive triangles in the given instances/materials. Returns
+/// `(buffer, memory, count)` — all zero/null if no emissive geometry.
+///
+/// This is separate from `build_pt_scene` because the real-time PT pass builds
+/// its BLAS/TLAS with placeholder materials (before the material manager is
+/// ready), but can call this later once actual material bytes are available.
+pub fn create_emissive_buffer(
+    context: &VulkanContext,
+    instances: &[PtGeometryInstance],
+    materials_bytes: &[u8],
+) -> (Option<vk::Buffer>, Option<vk::DeviceMemory>, u32) {
+    let tris = build_emissive_triangles(instances, materials_bytes);
+    if tris.is_empty() {
+        return (None, None, 0);
+    }
+    let bytes: Vec<u8> = {
+        let mut b = Vec::with_capacity(tris.len() * size_of::<PtEmissiveTri>());
+        for tri in &tris {
+            let ptr = tri as *const PtEmissiveTri as *const u8;
+            b.extend_from_slice(unsafe { std::slice::from_raw_parts(ptr, size_of::<PtEmissiveTri>()) });
+        }
+        b
+    };
+    match create_storage_buffer(context, &bytes) {
+        Ok((buf, mem)) => (Some(buf), Some(mem), tris.len() as u32),
+        Err(e) => {
+            log::warn!("create_emissive_buffer failed: {e}");
+            (None, None, 0)
+        }
+    }
+}
+
 /// Build a [`PtScene`] from per-instance geometry + a materials SSBO byte
 /// buffer. Creates a combined vertex/index buffer, one BLAS per instance
 /// (pointing at its slice of the combined buffers), a TLAS whose
@@ -433,6 +531,8 @@ pub fn build_pt_scene(
 
     let (matbuf, matmem) = create_storage_buffer(context, materials_bytes)
         .context("build_pt_scene: materials buffer")?;
+
+    // ---- 2. Build all BLAS in one batch (single submit + wait).
 
     // ---- 2. Build all BLAS in one batch (single submit + wait).
     let index_stride = 4u32 as vk::DeviceAddress;

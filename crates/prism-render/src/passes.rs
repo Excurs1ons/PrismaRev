@@ -1778,29 +1778,12 @@ impl ScenePass {
         // set 1: bindless texture table (samplers + SRV array).
         let set1_layout = self.bindless_layout;
         // set 2: IBL resources (3 combined image samplers: env, irradiance, prefiltered).
-        let set2_layout = unsafe {
-            device.create_descriptor_set_layout(
-                &vk::DescriptorSetLayoutCreateInfo::default().bindings(&[
-                    vk::DescriptorSetLayoutBinding::default()
-                        .binding(0)
-                        .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                        .descriptor_count(1)
-                        .stage_flags(vk::ShaderStageFlags::FRAGMENT),
-                    vk::DescriptorSetLayoutBinding::default()
-                        .binding(1)
-                        .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                        .descriptor_count(1)
-                        .stage_flags(vk::ShaderStageFlags::FRAGMENT),
-                    vk::DescriptorSetLayoutBinding::default()
-                        .binding(2)
-                        .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                        .descriptor_count(1)
-                        .stage_flags(vk::ShaderStageFlags::FRAGMENT),
-                ]),
-                None,
-            )
-        }
-        .context("ScenePass: create set2 (IBL) layout")?;
+        // Use the IBL's own descriptor set layout (set via `set_resources`) so the
+        // stage flags match exactly (`FRAGMENT | COMPUTE` — the path-tracing pass
+        // samples the same IBL cubemap in a compute shader). Creating a separate
+        // layout with mismatched stage flags would trigger VUID-vkCmdBindDescriptorSets-
+        // pDescriptorSets-00358.
+        let set2_layout = self.ibl_layout;
         // set 3: shadow map (SAMPLED_IMAGE + SAMPLER).
         let set3_layout = self
             .shadow_ds_layout
@@ -1868,15 +1851,11 @@ impl ScenePass {
 
         unsafe { device.destroy_shader_module(vert_module, None) };
         unsafe { device.destroy_shader_module(frag_module, None) };
-        // set2_layout (IBL) was created locally here; set0/set1/set3 are owned
-        // elsewhere (frame_set_layout / BindlessTextureTable / shadow_ds_layout).
-        // Keep set2_layout alive for the pipeline's lifetime - actually, Vulkan
-        // pipeline layouts hold their own reference to the layout objects only
-        // during creation; after vkCreatePipelineLayout the layouts can be
-        // destroyed. But we keep it for clarity / potential recreation.
-        // Store it in a dedicated field? For now destroy it - the pipeline
-        // layout captures the binding info, not the layout object, post-creation.
-        unsafe { device.destroy_descriptor_set_layout(set2_layout, None) };
+        // set2_layout (IBL) is borrowed from `IblResources` (set via
+        // `set_resources`) — do NOT destroy it here. `IblResources` owns the
+        // layout lifetime; it outlives all passes.
+        // set0/set1/set3 are owned elsewhere (frame_set_layout /
+        // BindlessTextureTable / shadow_ds_layout).
 
         self.pipeline = Some(pipeline);
         Ok(())

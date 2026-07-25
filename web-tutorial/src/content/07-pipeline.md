@@ -116,6 +116,47 @@ pub struct GtaoFrameInputs {
 
 可选路径：**路径追踪**。当 `RenderSettings.render_mode == PathTrace` 时，`PathTracePass` 替代整个前向管线，将结果写入 `PT_COLOR_H`（`ResourceHandle(1003)`），仍由 PostPass 完成 tone mapping。详见第 11 章。
 
+## 原理探微：RenderGraph 资源管理
+
+RenderGraph 除了编排 pass 外，还有一个关键职责：**资源生命周期的自动推导**。每个 pass 在 `setup` 中声明它需要的资源（格式、尺寸、用途），Graph 在编译阶段解决三个问题：
+
+### 资源别名（Aliasing）
+
+两个 pass 如果**不同时存活**（一个写完、另一个才读），它们的中间资源可以**共享同一块内存**：
+
+```
+Pass A: 输出 RT1 ──→ Pass B: 读 RT1
+                          Pass C: 输出 RT2  ← RT1 已用尽，RT2 可复用 RT1 的内存
+```
+
+`transient.rs` 中的 `LAZILY_ALLOCATED` 内存在 TBDR GPU 上等效于 tile memory 内的临时存储——不在系统 RAM 中落地，这对移动带宽是重大节省。
+
+### 屏障自动插入
+
+传统 Vulkan 需要手动在 pass 间插入 `cmd_pipeline_barrier` 做 layout 转换。RenderGraph 根据 pass 声明的 `input`/`output` 角色自动决定：
+
+```
+资源从 Pass A → Pass B:
+  如果 A 写 + B 读 → 自动 COLOR_ATTACHMENT_OPTIMAL → SHADER_READ_ONLY_OPTIMAL 屏障
+  如果 A 读 + B 读 → 不插入屏障（READ_ONLY → READ_ONLY 安全）
+```
+
+引擎的 `GraphResources` 在 `execute` 时提供了 `image()`/`image_view()`/`buffer()` 访问器，pass 只需读写资源，不关心底层布局转换。
+
+### 已知句柄常量
+
+ScenePass 的三个输出（`SCENE_COLOR_H`、`SCENE_NORMAL_H`、`SCENE_DEPTH_H`）和 PathTracePass 的输出（`PT_COLOR_H`）用了**固定 handle 值**（1000-1003），而不是由图自动分配。这样后置的 `GtaoPass`/`PostPass` 在写代码时可以硬编码 `SCENE_NORMAL_H` 引用上游，无需在运行时查询 pass 的输出 slot：
+
+```rust
+// render_graph.rs 中的常量
+pub const SCENE_DEPTH_H: ResourceHandle = ResourceHandle(1000);
+pub const SCENE_NORMAL_H: ResourceHandle = ResourceHandle(1001);
+pub const SCENE_COLOR_H: ResourceHandle = ResourceHandle(1002);
+pub const PT_COLOR_H: ResourceHandle = ResourceHandle(1003);
+```
+
+这暴露了一个工程权衡：**固定 handle 简化了下游 pass 的引用，但牺牲了图的通用性**（新 pass 不能随意插入改变 handle）。当前引擎选择了明确性，因为 pass 链已经很稳定。
+
 ## 着色器：从 Slang 到 SPIR-V
 
 引擎用 **Slang** 写着色器（`shaders/slang/`），编译成 `.spv`。PBR/光照代码现在在 `scene_frag.slang`（片元主循环）+ `common.slang`（D/G/F 数学函数），而不是旧版的 `pbr.slang`/`lighting.slang`。Bindless 采样在 `scene_frag.slang` 中通过 `bindless_srvs[NonUniformResourceIndex(handle.index)]` 完成：

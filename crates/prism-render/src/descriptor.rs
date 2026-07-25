@@ -160,6 +160,88 @@ pub struct GpuLight {
     pub color: [f32; 4],    // rgb = radiant intensity, w = 1.0
 }
 
+/// Maximum number of analytic lights in the PT light SSBO.
+pub const PT_LIGHT_MAX: u32 = 64;
+
+/// Kind discriminator for [`PtAnalyticLight`].
+#[repr(u32)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PtLightKind {
+    Directional = 0,
+    Point = 1,
+    Spot = 2,
+    Area = 3,
+}
+
+/// GPU data layout for a single path-tracer analytic light (48 bytes).
+///
+/// Mirrors the Slang `PtAnalyticLight` struct in `pt_render.slang`.
+/// The `kind` field selects interpretation of the union-typed payload fields.
+/// Stored in a `StructuredBuffer<PtAnalyticLight>` at PT set 0 binding 8.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct PtAnalyticLight {
+    /// .xyz = world position; .w = kind (PtLightKind as u32)
+    pub position_kind: [f32; 4],
+    /// .xyz = direction (for spot/directional); .w = inner_angle cos (spot) or unused
+    pub direction_params: [f32; 4],
+    /// .xyz = linear-space radiance/color; .w = outer_angle cos (spot) or range (point) or area
+    pub color_params: [f32; 4],
+}
+
+impl PtAnalyticLight {
+    pub fn directional(dir: [f32; 3], radiance: [f32; 3]) -> Self {
+        Self {
+            position_kind: [0.0; 4],
+            direction_params: [dir[0], dir[1], dir[2], 1.0],
+            color_params: [radiance[0], radiance[1], radiance[2], -1.0],
+        }
+    }
+    pub fn point(pos: [f32; 3], color: [f32; 3], range: f32) -> Self {
+        Self {
+            position_kind: [pos[0], pos[1], pos[2], PtLightKind::Point as u32 as f32],
+            direction_params: [0.0; 4],
+            color_params: [color[0], color[1], color[2], range],
+        }
+    }
+}
+
+/// Maximum number of emissive triangles in the PT emissive SSBO (binding 9).
+pub const PT_EMISSIVE_MAX: u32 = 1024;
+
+/// Per-pixel ReSTIR DI reservoir for temporal+spatial resampling of direct lights.
+///
+/// Stored in a ping-pong buffer (two `StructuredBuffer<ReSTIRReservoir>`) at
+/// set 0 bindings 10 (current, write) and 11 (previous, read).  Updated every
+/// frame: the path tracer reads binding 11 for temporal reuse, and writes
+/// binding 10 for next frame's temporal reuse.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+#[allow(non_snake_case)]
+pub struct ReSTIRReservoir {
+    pub light_idx: u32,  // 0=sun, 1..PT_LIGHT_MAX=analytic
+    pub M: f32,          // effective sample count
+    pub W: f32,          // sum of RIS weights (target_pdf / p_init)
+    pub target_pdf: f32, // π(selected_light) for ReSTIR pdf = W/(M*π(y))
+}
+
+/// GPU data for a single emissive triangle (area light from emissive materials).
+///
+/// Each triangle is stored as 3 world-space vertices, a shading normal, the
+/// pre-scaled emissive radiance, and the precomputed double-sided area.
+/// Stored in a `StructuredBuffer<PtEmissiveTri>` at PT set 0 binding 9,
+/// used for explicit emissive NEE in the path tracer.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct PtEmissiveTri {
+    pub v0: [f32; 4],        // .xyz = vertex 0
+    pub v1: [f32; 4],        // .xyz = vertex 1
+    pub v2: [f32; 4],        // .xyz = vertex 2
+    pub normal: [f32; 4],    // .xyz = shading normal
+    pub radiance: [f32; 4],  // .rgb = pre-scaled emissive radiance
+    pub area: f32,            // precomputed triangle area (for PDF)
+}
+
 /// GPU data layout for the per-frame uniform buffer.
 ///
 /// Mirrors the Slang `FrameUBO` in `shaders/slang/common.slang` byte-for-byte

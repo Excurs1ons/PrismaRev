@@ -19,7 +19,7 @@
 // metallic-tagged geometry from rendering as flat "black plastic" - the
 // previous pure-Lambert integrator had no specular lobe, so metallic surfaces
 // (whose diffuse term is zero) had nowhere to put their energy.
-module path_integrator;
+#pragma once
 
 static const float PI = 3.14159265359;
 
@@ -44,6 +44,46 @@ StructuredBuffer<GpuMaterial> materials; // shared material SSBO
 SamplerState globalSamplers[];
 [[vk::binding(1, 1)]]
 Texture2D bindlessSrvs[];
+
+// b8: Analytic lights for multi-light NEE. Mirrors descriptor.rs PtAnalyticLight.
+// Zeroed entries are safe to skip (color_params ~= 0 => no contribution).
+static const uint PT_LIGHT_MAX = 64u;
+
+struct PtAnalyticLight
+{
+    float4 position_kind;    // .xyz = world position; .w = kind (PtLightKind as float)
+    float4 direction_params; // .xyz = direction (for spot/directional); .w = inner_angle cos
+    float4 color_params;     // .rgb = radiance/color; .w = outer_angle cos / range / area
+};
+
+enum PtLightKind
+{
+    Directional = 0,
+    Point       = 1,
+    Spot        = 2,
+    Area        = 3,
+};
+
+[[vk::binding(8, 0)]]
+StructuredBuffer<PtAnalyticLight> ptLights;
+
+// b9: Emissive triangle SSBO. Mirrors descriptor.rs PtEmissiveTri.
+// Each entry is a world-space triangle with pre-computed radiance, used for
+// explicit NEE from emissive surface geometry.
+static const uint PT_EMISSIVE_MAX = 1024u;
+
+struct PtEmissiveTri
+{
+    float4 v0;       // .xyz = vertex 0
+    float4 v1;       // .xyz = vertex 1
+    float4 v2;       // .xyz = vertex 2
+    float4 normal;   // .xyz = shading normal (face normal)
+    float4 radiance; // .rgb = pre-scaled emissive radiance
+    float  area;     // precomputed triangle area (for PDF)
+};
+
+[[vk::binding(9, 0)]]
+StructuredBuffer<PtEmissiveTri> ptEmissive;
 
 // Set 2: IBL environment cubemap (HDR sky sampled on ray miss).
 [[vk::binding(0, 2)]]
@@ -122,6 +162,16 @@ float3 fresnel_schlick(float v_dot_h, float3 f0)
 {
     float f = pow(clamp(1.0 - v_dot_h, 0.0, 1.0), 5.0);
     return f + f0 * (1.0 - f);
+}
+
+// Scalar Fresnel for dielectrics (Schlick approximation).
+// `cos_theta` = dot(normal, view_dir)  (positive, in [0,1]).
+// `ior` = index of refraction (e.g. 1.45 for glass).
+float fresnel_dielectric(float cos_theta, float ior)
+{
+    float f0 = (ior - 1.0) / (ior + 1.0);
+    f0 = f0 * f0;
+    return f0 + (1.0 - f0) * pow(1.0 - cos_theta, 5.0);
 }
 
 // Smith correlated visibility term (G / (4 * NdotV * NdotL) folded in).
@@ -229,7 +279,10 @@ struct SurfaceMaterial
     float  alpha;       // base color alpha (cutout test: alpha < 0.5 = transparent)
     float  metallic;
     float  roughness;
-    float3 emissive; // emissive radiance (already scaled by strength)
+    float3 emissive;    // emissive radiance (already scaled by strength)
+    float  transmission; // 0 = opaque, 1 = fully transmissive (glass)
+    float  ior;          // index of refraction (e.g. 1.45 for glass)
+    float3 trans_color;  // transmission color (Beer's law absorption tint)
 };
 
 // Resolve the full PBR material at a hit. Mirrors truvis `MaterialAccess` +
@@ -316,6 +369,21 @@ SurfaceMaterial resolve_material(GpuMaterial mat, float2 uv)
         s.emissive = e * ei * es;
     }
 
+    // Transmission / IOR (glTF transmission extension).
+    // transmission_factor.x = transmission (0-1), .y = ior, .z = translucency, .w = anisotropy.
+    s.transmission = saturate(mat.transmission_factor.x);
+    s.ior = max(mat.transmission_factor.y, 1.0);
+    // Transmission color: base_color rgb is the tint at zero thickness
+    // (glTF KHR_materials_transmission convention).
+    s.trans_color = s.base_color;
+    // Optionally sample a dedicated transmission texture (if present).
+    if (mat.transmission_tex_idx != 0xFFFFFFFFu && s.transmission > 0.0)
+    {
+        float3 t = bindlessSrvs[NonUniformResourceIndex(mat.transmission_tex_idx)]
+            .SampleLevel(globalSamplers[NonUniformResourceIndex(SAMPLER_LINEAR_WRAP)], uv, 0.0).rgb;
+        s.trans_color *= t;
+    }
+
     return s;
 }
 
@@ -372,6 +440,189 @@ float eval_brdf_pdf(SurfaceMaterial s, float3 n, float3 view_dir, float3 light_d
     return prob_diffuse * diffuse_pdf + (1.0 - prob_diffuse) * specular_pdf;
 }
 
+// ---- MIS helpers ----
+// NEE pdf for a directional (push-constant) sun light. Always sampled when
+// the light exists (deterministic direction), so pdf_sun = 1.0.
+float nee_pdf_sun() { return 1.0; }
+
+// NEE pdf for a single analytic light from the SSBO. `num_lights` is the
+// total number of active point/spot/area lights (excluding the sun).
+// Point lights are sampled uniformly over the sphere from the hit point.
+float nee_pdf_point(uint num_lights)
+{
+    return 1.0 / (4.0 * PI * max(float(num_lights), 1.0));
+}
+
+// Power-heuristic MIS weight with beta=2.
+// `p_a` = pdf of the evaluating strategy (NEE).
+// `p_b` = pdf of the alternative strategy (BRDF sampling).
+float mis_weight(float p_a, float p_b)
+{
+    float pa2 = p_a * p_a;
+    float pb2 = p_b * p_b;
+    return pa2 / max(pa2 + pb2, 1e-20);
+}
+
+// ---- ReSTIR DI structures and helpers ----
+// Per-pixel reservoir for temporal+spatial direct-light resampling.
+// light_idx 0 = sun, 1..PT_LIGHT_MAX = analytic lights.
+// For the current implementation, emissive triangles are not included in
+// ReSTIR; they still use the standard NEE loop.
+struct ReSTIRReservoir
+{
+    uint  light_idx;
+    float M;
+    float W;
+    float target_pdf; // π(selected), used for effective pdf = W/(M·π(y))
+};
+
+// ---- ReSTIR: resolve light direction + radiance + distance from index ---
+// Index 0 = sun (from push constants). Index 1.. = ptLights[li-1].
+void restir_resolve_light(
+    uint light_idx, float3 hit_pos,
+    out float3 L_dir, out float3 L_radiance, out float L_dist2,
+    float3 sun_dir, float3 sun_radiance)
+{
+    if (light_idx == 0u)
+    {
+        // Sun from push constants
+        L_dir = sun_dir;
+        L_radiance = sun_radiance;
+        L_dist2 = 1e10; // effectively infinite
+    }
+    else
+    {
+        uint li = light_idx - 1u;
+        if (li >= PT_LIGHT_MAX) { L_dir = float3(0,0,1); L_radiance = 0; L_dist2 = 1e10; return; }
+        PtAnalyticLight al = ptLights[li];
+        L_radiance = al.color_params.rgb;
+        uint kind = uint(al.position_kind.w);
+        if (kind == uint(PtLightKind::Directional))
+        {
+            L_dir = -normalize(al.direction_params.xyz);
+            L_dist2 = 1e10;
+        }
+        else
+        {
+            L_dir = al.position_kind.xyz - hit_pos;
+            L_dist2 = dot(L_dir, L_dir);
+            float dist = sqrt(L_dist2);
+            L_dir = L_dir / max(dist, 1e-8);
+            // Distance falloff for point/spot
+            if (kind == uint(PtLightKind::Point) || kind == uint(PtLightKind::Spot))
+            {
+                float range = al.color_params.w;
+                if (range > 0.0 && dist > range) { L_radiance = 0; return; }
+                L_radiance /= max(L_dist2, 1e-8);
+            }
+            else if (kind == uint(PtLightKind::Area))
+            {
+                float radius = al.direction_params.w;
+                float solid_angle = PI * radius * radius / max(L_dist2, 1e-8);
+                L_radiance *= clamp(solid_angle, 0.0, 1.0);
+            }
+        }
+    }
+}
+
+// Quick light direction only (for visibility checks during spatial reuse).
+void restir_resolve_dir(uint light_idx, float3 hit_pos, out float3 L_dir,
+    float3 sun_dir)
+{
+    if (light_idx == 0u) { L_dir = sun_dir; return; }
+    uint li = light_idx - 1u;
+    if (li >= PT_LIGHT_MAX) { L_dir = float3(0,0,1); return; }
+    PtAnalyticLight al = ptLights[li];
+    uint kind = uint(al.position_kind.w);
+    if (kind == uint(PtLightKind::Directional))
+        L_dir = -normalize(al.direction_params.xyz);
+    else
+    {
+        L_dir = al.position_kind.xyz - hit_pos;
+        float dist = max(length(L_dir), 1e-8);
+        L_dir /= dist;
+    }
+}
+
+// RIS target function: approximate luminance of BRDF * radiance contribution.
+// Used for both the RIS weight and the stored target_pdf of the selected light.
+float restir_target_pdf(SurfaceMaterial s, float3 n, float3 view_dir,
+    float3 L_dir, float3 L_radiance)
+{
+    float3 brdf = eval_brdf(s, n, view_dir, L_dir);
+    return dot(brdf * L_radiance, float3(0.2126, 0.7152, 0.0722));
+}
+
+// RIS initial sampling: evaluate M candidate lights, build reservoir.
+// M is the RIS candidate count (e.g. 8).
+ReSTIRReservoir restir_ris_init(
+    SurfaceMaterial s, float3 n, float3 view_dir, float3 hit_pos,
+    float3 sun_dir, float3 sun_radiance, uint num_lights, uint num_emissive,
+    uint M, inout uint seed)
+{
+    ReSTIRReservoir r;
+    r.light_idx = 0; r.M = 0; r.W = 0; r.target_pdf = 0;
+    uint total = num_lights + 1u; // 0 = sun, 1..num_lights = analytic
+    float p_init = 1.0 / max(float(total), 1.0);
+
+    for (uint i = 0u; i < M; i++)
+    {
+        // Random candidate
+        uint li = uint(rand_float(seed) * float(total));
+        li = min(li, total - 1u);
+
+        float3 L_dir, L_rad;
+        float dist2;
+        restir_resolve_light(li, hit_pos, L_dir, L_rad, dist2, sun_dir, sun_radiance);
+
+        float n_dot_l = dot(n, L_dir);
+        if (n_dot_l <= 0.0 || dot(L_rad, L_rad) < 1e-10) continue;
+
+        float target = restir_target_pdf(s, n, view_dir, L_dir, L_rad);
+
+        // RIS weight update
+        float w = target / max(p_init, 1e-38);
+        r.W += w;
+        r.M += 1.0;
+
+        if (rand_float(seed) < w / max(r.W, 1e-38))
+        {
+            r.light_idx = li;
+            r.target_pdf = target;
+        }
+    }
+    // If no valid candidate found, set a sane default.
+    if (r.M < 0.5) { r.light_idx = 0; r.target_pdf = 1.0; r.W = 0.0; r.M = 1.0; }
+    return r;
+}
+
+// Combine two reservoirs (used for temporal + spatial reuse).
+// `b_scale` = weight of the second reservoir (typically 1.0 for temporal,
+// 1.0 for each spatial neighbor).
+ReSTIRReservoir restir_combine(ReSTIRReservoir a, ReSTIRReservoir b,
+    float b_scale, inout uint seed)
+{
+    ReSTIRReservoir r;
+    r.M = a.M + b.M * b_scale;
+    r.W = a.W + b.W * b_scale;
+    r.light_idx = a.light_idx;
+    r.target_pdf = a.target_pdf;
+
+    float p_accept = (b.W * b_scale) / max(r.W, 1e-38);
+    if (rand_float(seed) < p_accept)
+    {
+        r.light_idx = b.light_idx;
+        r.target_pdf = b.target_pdf;
+    }
+    return r;
+}
+
+// Compute effective ReSTIR pdf for MIS w/ BRDF sampling.
+float restir_effective_pdf(ReSTIRReservoir r)
+{
+    return max(r.target_pdf / max(r.W, 1e-38), 1e-8);
+}
+
 // ---- Core path tracing function ----
 // Trace a path starting from `origin` in direction `dir`, accumulating
 // direct-sun + emissive + sky contributions through up to `max_bounce`
@@ -397,6 +648,8 @@ public float3 TraceRadiance(
     StructuredBuffer<uint> indices,
     float3 light_dir,
     float3 light_color,
+    uint num_lights,
+    uint num_emissive,
     uint max_bounce,
     float ray_max_distance,
     inout uint seed)
@@ -546,8 +799,197 @@ public float3 TraceRadiance(
                 if (sq.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
                     shadow = 0.0;
             }
+            // Sun NEE contribution (directional light from push constants).
+            // MIS power-heuristic: w_mis = p_nee / (p_nee^2 + p_brdf^2).
+            // p_nee_sun = 1.0 (deterministic direction, always sampled).
             float3 brdf_cos = eval_brdf(surf, hit_normal, view_dir, light_dir);
-            total_radiance += throughput * brdf_cos * light_color * shadow;
+            float p_brdf_sun = eval_brdf_pdf(surf, hit_normal, view_dir, light_dir);
+            float p_nee_sun = 1.0;
+            total_radiance += throughput * brdf_cos * light_color * shadow
+                * p_nee_sun / max(p_nee_sun * p_nee_sun + p_brdf_sun * p_brdf_sun, 1e-20);
+
+            // Multi-light NEE: iterate over all SSBO analytic lights.
+            // Zeroed (unused) entries contribute < 1e-8 and are skipped early.
+            for (uint li = 0u; li < PT_LIGHT_MAX; li++)
+            {
+                PtAnalyticLight al = ptLights[li];
+                float4 al_color = al.color_params;
+                // Skip empty entries (color ~= 0 and params ~= 0)
+                if (dot(al_color.rgb, al_color.rgb) < 1e-8 && abs(al_color.w) < 1e-8)
+                    continue;
+
+                // Resolve light direction and squared distance per type.
+                float3 L_dir;
+                float L_dist2 = 1.0;
+                float3 L_radiance = al_color.rgb;
+                uint kind = uint(al.position_kind.w);
+
+                if (kind == uint(PtLightKind::Directional))
+                {
+                    L_dir = -normalize(al.direction_params.xyz);
+                    // Directional: no distance falloff; radiance baked into color_params.rgb
+                }
+                else if (kind == uint(PtLightKind::Point) || kind == uint(PtLightKind::Spot))
+                {
+                    L_dir = al.position_kind.xyz - hit_pos;
+                    L_dist2 = dot(L_dir, L_dir);
+                    float range = al_color.w;
+                    float dist = sqrt(L_dist2);
+                    L_dir = L_dir / max(dist, 1e-8);
+
+                    // Spot light cone check
+                    if (kind == uint(PtLightKind::Spot))
+                    {
+                        float3 spot_dir = normalize(al.direction_params.xyz);
+                        float cos_ang = dot(-L_dir, spot_dir);
+                        float inner_cos = al.direction_params.w;
+                        float outer_cos = al_color.w;
+                        if (cos_ang < outer_cos)
+                            continue; // outside spot cone
+                        // Smooth falloff between inner and outer cone
+                        float t = (cos_ang - outer_cos) / max(inner_cos - outer_cos, 1e-8);
+                        L_radiance *= clamp(t, 0.0, 1.0);
+                    }
+
+                    // Distance culling + inverse-square falloff
+                    if (range > 0.0 && dist > range)
+                        continue;
+                    float falloff = 1.0 / max(L_dist2, 1e-8);
+                    L_radiance *= falloff;
+                }
+                else if (kind == uint(PtLightKind::Area))
+                {
+                    float3 center = al.position_kind.xyz;
+                    float radius = al.direction_params.w;
+                    L_dir = center - hit_pos;
+                    L_dist2 = dot(L_dir, L_dir);
+                    float dist = sqrt(L_dist2);
+                    L_dir = L_dir / max(dist, 1e-8);
+                    // Solid-angle approx for disk of radius r at distance d: pi * r^2 / d^2
+                    float solid_angle = PI * radius * radius / max(L_dist2, 1e-8);
+                    L_radiance *= clamp(solid_angle, 0.0, 1.0);
+                }
+                else
+                {
+                    continue; // unknown kind, skip
+                }
+
+                // Shadow ray for this light
+                float al_shadow = 1.0;
+                if (dot(hit_normal, L_dir) > 0.0)
+                {
+                    RayDesc sr;
+                    sr.Origin = hit_pos + 0.0001 * L_dir;
+                    sr.Direction = L_dir;
+                    sr.TMin = 0.001;
+                    sr.TMax = ray_max_distance;
+                    RayQuery<RAY_FLAG_SKIP_CLOSEST_HIT_SHADER> sq;
+                    sq.TraceRayInline(tlas, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER, 0xFF, sr);
+                    while (sq.Proceed())
+                    {
+                        if (sq.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE)
+                        {
+                            uint si = sq.CandidateInstanceID();
+                            uint sp = sq.CandidatePrimitiveIndex();
+                            float2 sb = sq.CandidateTriangleBarycentrics();
+                            float3 sv0, sv1, sv2;
+                            float2 suv0, suv1, suv2;
+                            float3 sn0, sn1, sn2;
+                            read_hit_triangle(si, sp, vertexData, indices,
+                                sv0, sv1, sv2, suv0, suv1, suv2, sn0, sn1, sn2);
+                            float sw = 1.0 - sb.x - sb.y;
+                            float2 suv = sw * suv0 + sb.x * suv1 + sb.y * suv2;
+                            PtInstanceMeta sm = instance_meta[si];
+                            GpuMaterial smat = materials[sm.material_slot];
+                            if (mat_albedo_alpha(smat, suv) >= 0.5)
+                            {
+                                sq.CommitNonOpaqueTriangleHit();
+                                break;
+                            }
+                        }
+                    }
+                    if (sq.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
+                        al_shadow = 0.0;
+                }
+
+                float3 al_brdf = eval_brdf(surf, hit_normal, view_dir, L_dir);
+                float p_brdf_al = eval_brdf_pdf(surf, hit_normal, view_dir, L_dir);
+                float p_nee_al = nee_pdf_point(num_lights);
+                total_radiance += throughput * al_brdf * L_radiance * al_shadow
+                    * p_nee_al / max(p_nee_al * p_nee_al + p_brdf_al * p_brdf_al, 1e-20);
+            }
+
+            // ---- Emissive triangle NEE (binding 9) ----
+            // Uniformly pick one emissive triangle, uniformly sample its
+            // surface, and evaluate direct lighting with MIS.
+            if (num_emissive > 0u)
+            {
+                uint ei = uint(rand_float(seed) * float(num_emissive));
+                ei = min(ei, num_emissive - 1u);
+                PtEmissiveTri et = ptEmissive[ei];
+
+                // Uniformly sample a point on the triangle via barycentric coords
+                float r1 = sqrt(rand_float(seed));
+                float r2 = rand_float(seed);
+                float b1 = 1.0 - r1;
+                float b2 = r2 * r1;
+                float b0 = 1.0 - b1 - b2;
+                float3 et_pt = b0 * et.v0.xyz + b1 * et.v1.xyz + b2 * et.v2.xyz;
+                float3 et_n = et.normal.xyz;
+
+                float3 to_light = et_pt - hit_pos;
+                float dist2 = dot(to_light, to_light);
+                float dist = sqrt(dist2);
+                float3 L_dir = to_light / max(dist, 1e-8);
+                float cos_light = abs(dot(et_n, -L_dir));
+
+                // PDF: p(point) = 1 / (num_emissive * area);
+                // Jacobian to solid angle: d^2 / |cos_light|
+                float p_nee_et = (1.0 / max(float(num_emissive) * et.area, 1e-8))
+                               * dist2 / max(cos_light, 1e-8);
+
+                float et_shadow = 1.0;
+                if (dot(hit_normal, L_dir) > 0.0 && cos_light > 1e-4)
+                {
+                    RayDesc sr;
+                    sr.Origin = hit_pos + 0.0001 * L_dir;
+                    sr.Direction = L_dir;
+                    sr.TMin = 0.001;
+                    sr.TMax = max(dist - 0.001, 0.001);
+                    RayQuery<RAY_FLAG_SKIP_CLOSEST_HIT_SHADER> sq;
+                    sq.TraceRayInline(tlas, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER, 0xFF, sr);
+                    while (sq.Proceed())
+                    {
+                        if (sq.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE)
+                        {
+                            uint si = sq.CandidateInstanceID();
+                            uint sp = sq.CandidatePrimitiveIndex();
+                            float2 sb = sq.CandidateTriangleBarycentrics();
+                            float3 sv0, sv1, sv2;
+                            float2 suv0, suv1, suv2;
+                            float3 sn0, sn1, sn2;
+                            read_hit_triangle(si, sp, vertexData, indices,
+                                sv0, sv1, sv2, suv0, suv1, suv2, sn0, sn1, sn2);
+                            float sw = 1.0 - sb.x - sb.y;
+                            float2 suv = sw * suv0 + sb.x * suv1 + sb.y * suv2;
+                            PtInstanceMeta sm = instance_meta[si];
+                            GpuMaterial smat = materials[sm.material_slot];
+                            if (mat_albedo_alpha(smat, suv) >= 0.5)
+                            {
+                                sq.CommitNonOpaqueTriangleHit();
+                                break;
+                            }
+                        }
+                    }
+                    if (sq.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
+                        et_shadow = 0.0;
+                }
+
+                float3 et_brdf = eval_brdf(surf, hit_normal, view_dir, L_dir);
+                float p_brdf_et = eval_brdf_pdf(surf, hit_normal, view_dir, L_dir);
+                total_radiance += throughput * et_brdf * et.radiance.rgb * et_shadow
+                    * p_nee_et / max(p_nee_et * p_nee_et + p_brdf_et * p_brdf_et, 1e-20);
+            }
 
             // Russian roulette termination.
             float p = max(max(throughput.r, throughput.g), throughput.b);
@@ -562,44 +1004,86 @@ public float3 TraceRadiance(
                 break;
             throughput /= surv;
 
-            // Sample next direction. Mixture of cosine-hemisphere (diffuse)
-            // and GGX NDF (specular), chosen by `prob_diffuse = roughness` -
-            // smoother surfaces favor the specular lobe. Throughput is scaled
-            // by BRDF*cos / pdf so the estimate stays unbiased. Mirrors truvis
-            // `RtMaterialSampler::sample_diffuse`.
-            float prob_diffuse = surf.roughness;
-            float3 new_dir;
-            float brdf_pdf;
-            if (rand_float(seed) < prob_diffuse)
+            // Sample next direction. For transmissive surfaces (glass) use
+            // Fresnel split between mirror reflection and refraction; for
+            // opaque surfaces use the standard diffuse/GGX BRDF sampling.
+            if (surf.transmission > 0.0 && surf.metallic < 0.5)
             {
-                float u1 = rand_float(seed);
-                float u2 = rand_float(seed);
-                new_dir = cosine_hemisphere_sample(hit_normal, u1, u2);
-                // Combined pdf: prob_diffuse * diffuse_pdf + (1-prob) * spec_pdf.
-                brdf_pdf = eval_brdf_pdf(surf, hit_normal, view_dir, new_dir);
+                // ---- Glass: Fresnel reflection / refraction ----
+                float cos_theta = max(dot(hit_normal, view_dir), 0.0);
+                float F = fresnel_dielectric(cos_theta, surf.ior);
+
+                if (rand_float(seed) < F)
+                {
+                    // Reflection: mirror direction. PDF = F (Russian roulette
+                    // selection probability), cancels F term from mirror BRDF.
+                    float3 refl_dir = reflect(-view_dir, hit_normal);
+                    dir = refl_dir;
+                    pos = hit_pos + 0.0001 * dir;
+                    // throughput unchanged (F * throughput / F = throughput)
+                }
+                else
+                {
+                    // Refraction: Snell's law (air → material).
+                    // I = dir (toward surface), N = hit_normal (facing outward).
+                    float eta_out_in = 1.0 / surf.ior;
+                    float3 refr_dir = refract(dir, hit_normal, eta_out_in);
+
+                    // Total internal reflection check
+                    if (dot(refr_dir, refr_dir) < 0.001)
+                    {
+                        float3 refl_dir = reflect(-view_dir, hit_normal);
+                        dir = refl_dir;
+                        pos = hit_pos + 0.0001 * dir;
+                    }
+                    else
+                    {
+                        // Transmit through the surface
+                        dir = normalize(refr_dir);
+                        pos = hit_pos - 0.0001 * dir; // offset inside material
+                        // Thin-surface Beer's law: trans_color tints the
+                        // transmitted radiance. Divide by (1 - F) to
+                        // compensate for Russian roulette selection probability.
+                        throughput *= surf.trans_color / max(1.0 - F, 1e-7);
+                    }
+                }
             }
             else
             {
-                float real_roughness = surf.roughness * surf.roughness;
-                float3 h = ggx_sample(seed, real_roughness, hit_normal);
-                new_dir = reflect(-view_dir, h);
-                // Reject directions below the surface (can happen with rough
-                // GGX samples on near-grazing angles).
-                if (dot(hit_normal, new_dir) <= 0.0)
+                // ---- Opaque surface: diffuse/GGX BRDF sampling ----
+                float prob_diffuse = surf.roughness;
+                float3 new_dir;
+                float brdf_pdf;
+                if (rand_float(seed) < prob_diffuse)
+                {
+                    float u1 = rand_float(seed);
+                    float u2 = rand_float(seed);
+                    new_dir = cosine_hemisphere_sample(hit_normal, u1, u2);
+                    brdf_pdf = eval_brdf_pdf(surf, hit_normal, view_dir, new_dir);
+                }
+                else
+                {
+                    float real_roughness = surf.roughness * surf.roughness;
+                    float3 h = ggx_sample(seed, real_roughness, hit_normal);
+                    new_dir = reflect(-view_dir, h);
+                    // Reject directions below the surface (can happen with rough
+                    // GGX samples on near-grazing angles).
+                    if (dot(hit_normal, new_dir) <= 0.0)
+                        break;
+                    brdf_pdf = eval_brdf_pdf(surf, hit_normal, view_dir, new_dir);
+                }
+
+                if (brdf_pdf <= 1e-7)
                     break;
-                brdf_pdf = eval_brdf_pdf(surf, hit_normal, view_dir, new_dir);
+
+                float3 brdf_cos_new = eval_brdf(surf, hit_normal, view_dir, new_dir);
+                throughput *= brdf_cos_new / brdf_pdf;
+
+                // Offset origin along the new direction (truvis convention) to
+                // avoid self-intersection on the next TraceRay.
+                pos = hit_pos + 0.0001 * new_dir;
+                dir = new_dir;
             }
-
-            if (brdf_pdf <= 1e-7)
-                break;
-
-            float3 brdf_cos_new = eval_brdf(surf, hit_normal, view_dir, new_dir);
-            throughput *= brdf_cos_new / brdf_pdf;
-
-            // Offset origin along the new direction (truvis convention) to
-            // avoid self-intersection on the next TraceRay.
-            pos = hit_pos + 0.0001 * new_dir;
-            dir = new_dir;
         }
         else
         {

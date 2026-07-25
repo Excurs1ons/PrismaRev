@@ -12,7 +12,7 @@ use anyhow::Context as _;
 use ash::vk;
 
 use crate::context::VulkanContext;
-use crate::descriptor::{DescriptorLayout, DescriptorPool, FrameUBO, FrameUBOData, GpuLight};
+use crate::descriptor::{DescriptorLayout, DescriptorPool, FrameUBO, FrameUBOData, GpuLight, PtAnalyticLight};
 use crate::egui_overlay::EguiOverlay;
 use crate::ibl::IblResources;
 use crate::managers::{
@@ -76,6 +76,9 @@ pub struct FrameInput<'a> {
     /// Maximum iterations (samples per pixel) for path tracing.
     /// 0 = accumulate forever (default).
     pub pt_max_iterations: u32,
+    /// Analytic lights for path tracing (point/spot/area/directional).
+    /// Passed via SSBO to the PT compute shader for multi-light NEE.
+    pub pt_lights: &'a [PtAnalyticLight],
 }
 
 /// GPU session that owns the long-lived Vulkan runtime objects (device,
@@ -830,6 +833,7 @@ impl GraphRenderer {
             pt_ray_max_distance,
             pt_max_iterations,
             exposure,
+            pt_lights,
         } = input;
         let light_view_proj = *light_view_proj;
         let inv_projection = *inv_projection;
@@ -903,6 +907,7 @@ impl GraphRenderer {
                 light_dir: frame_data.light_direction,
                 light_color: frame_data.light_color,
                 exposure: *exposure,
+                pt_lights,
             };
             let render_ctx = crate::render_graph::RenderContext {
                 device,
@@ -1045,6 +1050,7 @@ impl GraphRenderer {
         pt_ray_max_distance: f32,
         pt_max_iterations: u32,
         exposure: f32,
+        pt_lights: &[PtAnalyticLight],
     ) -> anyhow::Result<bool> {
         let ctx = match self.begin_frame()? {
             Some(c) => c,
@@ -1068,6 +1074,7 @@ impl GraphRenderer {
             pt_ray_max_distance,
             pt_max_iterations,
             exposure,
+            pt_lights,
         };
         let exec_result = self.execute(&ctx, &input);
         let out_of_date = self.present(&ctx)?;

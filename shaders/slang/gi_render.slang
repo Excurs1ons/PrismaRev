@@ -10,7 +10,7 @@
 //
 // Requires: VK_KHR_ray_query (hardware ray tracing).
 
-import path_integrator;
+#include "path_integrator.slang"
 
 // ---- Push constants ----
 struct RenderPush
@@ -89,7 +89,7 @@ void renderMain(uint3 tid : SV_DispatchThreadID)
             origin, dir,
             tlas, vertexData, indices,
             push.light_dir.xyz, push.light_color.xyz,
-            push.params.z, 1000.0, seed);
+            0u, 0u, push.params.z, 1000.0, seed);
 
         accum += L;
     }

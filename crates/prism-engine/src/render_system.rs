@@ -14,7 +14,7 @@
 use std::sync::Mutex;
 
 use prism_ecs::World;
-use prism_render::{DrawItem, FrameUBOData, GpuLight, GraphRenderer, Mesh, RenderMode};
+use prism_render::{DrawItem, FrameUBOData, GpuLight, GraphRenderer, Mesh, PtAnalyticLight, PT_LIGHT_MAX, RenderMode};
 
 use crate::camera::Camera;
 use crate::dirty_router::DirtyRouter;
@@ -330,6 +330,9 @@ pub struct SceneChanges {
     pub light_view_proj: [[f32; 4]; 4],
     /// Point lights collected from the ECS world (up to `LIGHT_MAX`).
     pub lights: Vec<GpuLight>,
+    /// Analytic lights for path tracing (directional + point + spot).
+    /// Populated from ECS DirectionalLight + PointLight components.
+    pub pt_lights: Vec<PtAnalyticLight>,
     /// Exposure multiplier from the camera entity. Applied to the final HDR color
     /// before tonemapping. Replaces the global `RenderSettings.exposure`.
     pub exposure: f32,
@@ -421,7 +424,27 @@ fn collect_scene_changes(
         });
     }
 
-    // 4. Light-space view-projection (shadow map).
+    // 4. Build pt_lights from ECS PointLight components.
+    // Directional light (sun) is handled separately via push-constant NEE
+    // with MIS weighting; it is NOT added to pt_lights to avoid double-counting.
+    let mut pt_lights: Vec<PtAnalyticLight> = Vec::new();
+    for (entity, pl) in world.query::<PointLight>() {
+        if pt_lights.len() >= PT_LIGHT_MAX as usize {
+            break;
+        }
+        let pos = world
+            .get::<Transform>(entity)
+            .map(|t| t.translation)
+            .unwrap_or(pl.position);
+        let radiance = [
+            pl.color[0] * pl.intensity * LUX_TO_RADIANCE_SCALE,
+            pl.color[1] * pl.intensity * LUX_TO_RADIANCE_SCALE,
+            pl.color[2] * pl.intensity * LUX_TO_RADIANCE_SCALE,
+        ];
+        pt_lights.push(PtAnalyticLight::point(pos, radiance, pl.range));
+    }
+
+    // 5. Light-space view-projection (shadow map).
     let light_view_proj = light_view_proj(&light_direction, 30.0, &eye);
 
     Ok(SceneChanges {
@@ -436,6 +459,7 @@ fn collect_scene_changes(
         light_color,
         light_view_proj,
         lights,
+        pt_lights,
         exposure,
     })
 }
@@ -496,6 +520,7 @@ pub fn render_system(
         light_color,
         light_view_proj,
         lights,
+        ref pt_lights,
         exposure,
     } = scene;
     let light_count = lights.len() as f32;
@@ -551,6 +576,7 @@ pub fn render_system(
         pt_ray_max_distance,
         pt_max_iterations,
         exposure,
+        pt_lights,
     };
     renderer
         .execute(&ctx, &input)

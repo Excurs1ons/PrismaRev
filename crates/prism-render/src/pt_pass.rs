@@ -17,11 +17,14 @@
 //! When either changes by more than a small epsilon the accumulation buffers
 //! are cleared (reset flag set in the shader).
 
+use std::ptr;
+
 use anyhow::Context as _;
 use ash::vk;
 
 use crate::compute::ComputePipeline;
 use crate::context::VulkanContext;
+use crate::descriptor::{PtAnalyticLight, ReSTIRReservoir, PT_LIGHT_MAX};
 use crate::render_graph::{
     GraphResources, PassInfo, PassKind, RenderContext, RenderGraphBuilder, RenderPassNode,
     RenderSettings, ResourceUsage, PT_COLOR_H, ResourceType,
@@ -77,6 +80,28 @@ pub struct PathTracePass {
     // handle for descriptor writes.
     materials_buffer: Option<vk::Buffer>,
 
+    // Lights SSBO (binding 8) — HOST_VISIBLE | HOST_COHERENT storage buffer
+    // for PtAnalyticLight[PT_LIGHT_MAX]. Created once, written each frame.
+    lights_buffer: vk::Buffer,
+    lights_memory: vk::DeviceMemory,
+    lights_mapped: *mut u8,
+
+    // Emissive triangle SSBO (binding 9) — device-local storage buffer built
+    // from `set_emissive`. Read-only during PT dispatch; owned directly by
+    // the pass (not through PtScene).
+    emissive_buffer: Option<vk::Buffer>,
+    emissive_memory: Option<vk::DeviceMemory>,
+    emissive_count: u32,
+
+    // ReSTIR DI reservoir ping-pong buffers (bindings 10/11).
+    // Two storage buffers, each sized for (width × height) ReSTIRReservoir
+    // entries. Each frame one serves as prev (read, b10) and the other as
+    // curr (write, b11); they swap roles every frame.
+    reservoir_buffers: [vk::Buffer; 2],
+    reservoir_memories: [vk::DeviceMemory; 2],
+    reservoir_size: vk::DeviceSize, // current buffer size in bytes
+    reservoir_swap: usize,          // index of curr buffer (0 or 1) for this frame
+
     // State tracking
     img_width: u32,
     img_height: u32,
@@ -122,6 +147,10 @@ impl PathTracePass {
             b(5, vk::DescriptorType::STORAGE_IMAGE, vk::ShaderStageFlags::COMPUTE),
             b(6, vk::DescriptorType::STORAGE_BUFFER, vk::ShaderStageFlags::COMPUTE),
             b(7, vk::DescriptorType::STORAGE_BUFFER, vk::ShaderStageFlags::COMPUTE),
+            b(8, vk::DescriptorType::STORAGE_BUFFER, vk::ShaderStageFlags::COMPUTE),
+            b(9, vk::DescriptorType::STORAGE_BUFFER, vk::ShaderStageFlags::COMPUTE),
+            b(10, vk::DescriptorType::STORAGE_BUFFER, vk::ShaderStageFlags::COMPUTE), // prevReservoir (read)
+            b(11, vk::DescriptorType::STORAGE_BUFFER, vk::ShaderStageFlags::COMPUTE), // currReservoir (write)
         ];
 
         // All bindings get UPDATE_AFTER_BIND + PARTIALLY_BOUND because
@@ -130,21 +159,29 @@ impl PathTracePass {
         // validation complains about updating in-use descriptor sets.
         let binding_flags = [
             vk::DescriptorBindingFlags::UPDATE_AFTER_BIND
-                | vk::DescriptorBindingFlags::PARTIALLY_BOUND,
+                | vk::DescriptorBindingFlags::PARTIALLY_BOUND,  // b0  accumImage
             vk::DescriptorBindingFlags::UPDATE_AFTER_BIND
-                | vk::DescriptorBindingFlags::PARTIALLY_BOUND,
+                | vk::DescriptorBindingFlags::PARTIALLY_BOUND,  // b1  sampleCount
             vk::DescriptorBindingFlags::UPDATE_AFTER_BIND
-                | vk::DescriptorBindingFlags::PARTIALLY_BOUND,
+                | vk::DescriptorBindingFlags::PARTIALLY_BOUND,  // b2  TLAS
             vk::DescriptorBindingFlags::UPDATE_AFTER_BIND
-                | vk::DescriptorBindingFlags::PARTIALLY_BOUND,
+                | vk::DescriptorBindingFlags::PARTIALLY_BOUND,  // b3  vertexData
             vk::DescriptorBindingFlags::UPDATE_AFTER_BIND
-                | vk::DescriptorBindingFlags::PARTIALLY_BOUND,
+                | vk::DescriptorBindingFlags::PARTIALLY_BOUND,  // b4  indices
             vk::DescriptorBindingFlags::UPDATE_AFTER_BIND
-                | vk::DescriptorBindingFlags::PARTIALLY_BOUND,
+                | vk::DescriptorBindingFlags::PARTIALLY_BOUND,  // b5  outputImage
             vk::DescriptorBindingFlags::UPDATE_AFTER_BIND
-                | vk::DescriptorBindingFlags::PARTIALLY_BOUND,
+                | vk::DescriptorBindingFlags::PARTIALLY_BOUND,  // b6  instance_meta
             vk::DescriptorBindingFlags::UPDATE_AFTER_BIND
-                | vk::DescriptorBindingFlags::PARTIALLY_BOUND,
+                | vk::DescriptorBindingFlags::PARTIALLY_BOUND,  // b7  materials
+            vk::DescriptorBindingFlags::UPDATE_AFTER_BIND
+                | vk::DescriptorBindingFlags::PARTIALLY_BOUND,  // b8  ptLights
+            vk::DescriptorBindingFlags::UPDATE_AFTER_BIND
+                | vk::DescriptorBindingFlags::PARTIALLY_BOUND,  // b9  ptEmissive
+            vk::DescriptorBindingFlags::UPDATE_AFTER_BIND
+                | vk::DescriptorBindingFlags::PARTIALLY_BOUND,  // b10 prevReservoir
+            vk::DescriptorBindingFlags::UPDATE_AFTER_BIND
+                | vk::DescriptorBindingFlags::PARTIALLY_BOUND,  // b11 currReservoir
         ];
         let mut flags_info =
             vk::DescriptorSetLayoutBindingFlagsCreateInfo::default()
@@ -163,7 +200,7 @@ impl PathTracePass {
 
         let pool_sizes = [
             vk::DescriptorPoolSize { ty: vk::DescriptorType::STORAGE_IMAGE, descriptor_count: 3 },
-            vk::DescriptorPoolSize { ty: vk::DescriptorType::STORAGE_BUFFER, descriptor_count: 4 },
+            vk::DescriptorPoolSize { ty: vk::DescriptorType::STORAGE_BUFFER, descriptor_count: 8 },
             vk::DescriptorPoolSize { ty: vk::DescriptorType::ACCELERATION_STRUCTURE_KHR, descriptor_count: 1 },
         ];
         let ds_pool = unsafe {
@@ -194,6 +231,36 @@ impl PathTracePass {
         let (oi, ov, om) = make_pt_output_image(device, mem_props, 1, 1)
             .context("PathTracePass: output image")?;
 
+        // Create persistent HOST_VISIBLE lights buffer for PtAnalyticLight[]
+        let light_buf_size = (PT_LIGHT_MAX as vk::DeviceSize) * std::mem::size_of::<PtAnalyticLight>() as vk::DeviceSize;
+        let light_buf_create = vk::BufferCreateInfo::default()
+            .size(light_buf_size)
+            .usage(vk::BufferUsageFlags::STORAGE_BUFFER)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE);
+        let lights_buffer = unsafe { device.create_buffer(&light_buf_create, None) }
+            .context("PathTracePass: create lights buffer")?;
+        let light_mem_reqs = unsafe { device.get_buffer_memory_requirements(lights_buffer) };
+        let light_mem_type = crate::render_pass::find_memory_type(
+            &context.physical_device_memory_properties,
+            light_mem_reqs.memory_type_bits,
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+        )
+        .context("PathTracePass: no suitable memory for lights buffer")?;
+        let light_mem_alloc = vk::MemoryAllocateInfo::default()
+            .allocation_size(light_mem_reqs.size)
+            .memory_type_index(light_mem_type);
+        let lights_memory = unsafe { device.allocate_memory(&light_mem_alloc, None) }
+            .context("PathTracePass: allocate lights memory")?;
+        unsafe { device.bind_buffer_memory(lights_buffer, lights_memory, 0) }
+            .context("PathTracePass: bind lights memory")?;
+        let lights_mapped = unsafe { device.map_memory(lights_memory, 0, light_buf_size, vk::MemoryMapFlags::empty()) }
+            .context("PathTracePass: map lights memory")? as *mut u8;
+
+        // Write descriptor for the lights SSBO (binding 8, initially zeroed)
+        unsafe {
+            ptr::write_bytes(lights_mapped, 0, light_buf_size as usize);
+        }
+
         Ok(Self {
             pipeline: None,
             ds_layout,
@@ -214,6 +281,16 @@ impl PathTracePass {
             output_memory: om,
             pt_scene: None,
             materials_buffer: None,
+            lights_buffer,
+            lights_memory,
+            lights_mapped,
+            emissive_buffer: None,
+            emissive_memory: None,
+            emissive_count: 0,
+            reservoir_buffers: [vk::Buffer::null(), vk::Buffer::null()],
+            reservoir_memories: [vk::DeviceMemory::null(), vk::DeviceMemory::null()],
+            reservoir_size: 0,
+            reservoir_swap: 0,
             img_width: 1,
             img_height: 1,
             frame_counter: 0,
@@ -300,6 +377,113 @@ impl PathTracePass {
         self.ibl_layout = ibl_layout;
         // Force pipeline rebuild to pick up the 3-set layout.
         self.pipeline = None;
+    }
+
+    /// Build (or rebuild) the emissive triangle SSBO from actual geometry +
+    /// material data. Must be called after `set_geometry` so the scene
+    /// instances are fully built; the material bytes come from the scene's
+    /// actual material data (not placeholder).
+    ///
+    /// Destroys any previous emissive buffer and triggers an accumulation reset.
+    pub fn set_emissive(
+        &mut self,
+        context: &VulkanContext,
+        instances: &[crate::bake_common::PtGeometryInstance],
+        materials_bytes: &[u8],
+    ) {
+        use crate::bake_common::create_emissive_buffer;
+        // Destroy previous buffer.
+        let device = &context.device;
+        if let Some(eb) = self.emissive_buffer.take() {
+            if let Some(em) = self.emissive_memory.take() {
+                unsafe {
+                    device.destroy_buffer(eb, None);
+                    device.free_memory(em, None);
+                }
+            }
+        }
+        let (buf, mem, count) = create_emissive_buffer(context, instances, materials_bytes);
+        self.emissive_buffer = buf;
+        self.emissive_memory = mem;
+        self.emissive_count = count;
+        if count > 0 {
+            log::info!("PathTracePass: {} emissive triangles uploaded", count);
+        }
+        // Reset accumulation so the new emissive data takes effect immediately.
+        self.accum_dirty = true;
+    }
+
+    /// Ensure the ReSTIR reservoir ping-pong buffers are large enough for
+    /// the given width × height. Re-allocates (destroys + creates) when the
+    /// image size grows; does NOT shrink.
+    fn ensure_reservoir_buffers(&mut self, device: &ash::Device,
+        context: &VulkanContext, width: u32, height: u32) {
+        let needed = (width as u64) * (height as u64) * std::mem::size_of::<ReSTIRReservoir>() as u64;
+        if needed <= self.reservoir_size {
+            return;
+        }
+        // Destroy previous
+        for i in 0..2 {
+            if self.reservoir_buffers[i] != vk::Buffer::null() {
+                unsafe {
+                    device.destroy_buffer(self.reservoir_buffers[i], None);
+                    device.free_memory(self.reservoir_memories[i], None);
+                }
+            }
+        }
+        // Create two device-local storage buffers
+        let buf_info = vk::BufferCreateInfo::default()
+            .size(needed)
+            .usage(vk::BufferUsageFlags::STORAGE_BUFFER)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE);
+        for i in 0..2 {
+            let buf = unsafe { device.create_buffer(&buf_info, None) }
+                .expect("ensure_reservoir_buffers: create_buffer");
+            let mem_reqs = unsafe { device.get_buffer_memory_requirements(buf) };
+            let mem_type = crate::buffer::find_memory_type(
+                &context,
+                mem_reqs.memory_type_bits,
+                vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            ).expect("ensure_reservoir_buffers: no suitable memory type");
+            let alloc = vk::MemoryAllocateInfo::default()
+                .allocation_size(mem_reqs.size)
+                .memory_type_index(mem_type);
+            let mem = unsafe { device.allocate_memory(&alloc, None) }
+                .expect("ensure_reservoir_buffers: allocate_memory");
+            unsafe { device.bind_buffer_memory(buf, mem, 0) }
+                .expect("ensure_reservoir_buffers: bind_buffer_memory");
+            self.reservoir_buffers[i] = buf;
+            self.reservoir_memories[i] = mem;
+        }
+        self.reservoir_size = needed;
+        self.reservoir_swap = 0;
+        // Force pipeline rebuild so it picks up the new buffer handles.
+        self.pipeline = None;
+        log::info!("ReSTIR reservoir buffers: {} bytes each", needed);
+    }
+
+    /// Write the PT analytic light list into the lights SSBO (binding 8).
+    ///
+    /// Copies up to `PT_LIGHT_MAX` lights into the mapped HOST_VISIBLE buffer
+    /// and zeros the remaining entries. The pass owns this buffer - no external
+    /// descriptor wiring needed beyond the initial `update_ds` call.
+    /// `GraphRenderer::execute` calls this before dispatch each frame.
+    pub fn set_lights(&mut self, lights: &[PtAnalyticLight]) {
+        let max_lights = PT_LIGHT_MAX as usize;
+        let count = lights.len().min(max_lights);
+        let light_size = std::mem::size_of::<PtAnalyticLight>();
+        unsafe {
+            ptr::copy_nonoverlapping(
+                lights.as_ptr() as *const u8,
+                self.lights_mapped,
+                count * light_size,
+            );
+            // Zero remaining entries
+            if count < max_lights {
+                let dst = self.lights_mapped.add(count * light_size);
+                ptr::write_bytes(dst, 0, (max_lights - count) * light_size);
+            }
+        }
     }
 
     /// Request an accumulation-buffer reset on the next frame. Call this when a
@@ -465,6 +649,19 @@ impl PathTracePass {
             .buffer(mbuf).offset(0).range(vk::WHOLE_SIZE);
         let matbi = vk::DescriptorBufferInfo::default()
             .buffer(self.materials_buffer.unwrap_or(vk::Buffer::null())).offset(0).range(vk::WHOLE_SIZE);
+        let lbi = vk::DescriptorBufferInfo::default()
+            .buffer(self.lights_buffer).offset(0).range(vk::WHOLE_SIZE);
+        let ebi = vk::DescriptorBufferInfo::default()
+            .buffer(self.emissive_buffer.unwrap_or(vk::Buffer::null())).offset(0).range(vk::WHOLE_SIZE);
+        // ReSTIR reservoir buffers (ping-pong, b10/b11).
+        // Swap roles each frame: b10 gets the buffer written last frame (prev),
+        // b11 gets the buffer to write this frame (curr).
+        let prev_buf = self.reservoir_buffers[1 - self.reservoir_swap];
+        let curr_buf = self.reservoir_buffers[self.reservoir_swap];
+        let prev_bi = vk::DescriptorBufferInfo::default()
+            .buffer(prev_buf).offset(0).range(vk::WHOLE_SIZE);
+        let curr_bi = vk::DescriptorBufferInfo::default()
+            .buffer(curr_buf).offset(0).range(vk::WHOLE_SIZE);
 
         let writes = vec![
             vk::WriteDescriptorSet::default().dst_set(self.ds).dst_binding(0)
@@ -481,6 +678,14 @@ impl PathTracePass {
                 .descriptor_type(vk::DescriptorType::STORAGE_BUFFER).buffer_info(std::slice::from_ref(&mbi)),
             vk::WriteDescriptorSet::default().dst_set(self.ds).dst_binding(7)
                 .descriptor_type(vk::DescriptorType::STORAGE_BUFFER).buffer_info(std::slice::from_ref(&matbi)),
+            vk::WriteDescriptorSet::default().dst_set(self.ds).dst_binding(8)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER).buffer_info(std::slice::from_ref(&lbi)),
+            vk::WriteDescriptorSet::default().dst_set(self.ds).dst_binding(9)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER).buffer_info(std::slice::from_ref(&ebi)),
+            vk::WriteDescriptorSet::default().dst_set(self.ds).dst_binding(10)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER).buffer_info(std::slice::from_ref(&prev_bi)),
+            vk::WriteDescriptorSet::default().dst_set(self.ds).dst_binding(11)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER).buffer_info(std::slice::from_ref(&curr_bi)),
         ];
         unsafe { device.update_descriptor_sets(&writes, &[]); }
 
@@ -515,8 +720,29 @@ impl PathTracePass {
         self.pt_scene = None;
         self.materials_buffer = None;
         unsafe {
+            device.unmap_memory(self.lights_memory);
+            device.destroy_buffer(self.lights_buffer, None);
+            device.free_memory(self.lights_memory, None);
             device.destroy_descriptor_set_layout(self.ds_layout, None);
             device.destroy_descriptor_pool(self.ds_pool, None);
+        }
+        // Destroy emissive SSBO.
+        if let Some(eb) = self.emissive_buffer.take() {
+            if let Some(em) = self.emissive_memory.take() {
+                unsafe {
+                    device.destroy_buffer(eb, None);
+                    device.free_memory(em, None);
+                }
+            }
+        }
+        // Destroy ReSTIR reservoir buffers.
+        for i in 0..2 {
+            if self.reservoir_buffers[i] != vk::Buffer::null() {
+                unsafe {
+                    device.destroy_buffer(self.reservoir_buffers[i], None);
+                    device.free_memory(self.reservoir_memories[i], None);
+                }
+            }
         }
         // Clear the cached device handle so Drop::drop becomes a no-op
         // (graph_renderer calls destroy() explicitly after device_wait_idle).
@@ -562,6 +788,13 @@ impl RenderPassNode for PathTracePass {
 
         // Resize accumulation buffers if needed
         self.resize_images(device, &ctx.context.physical_device_memory_properties, w, h)?;
+        // Resize ReSTIR reservoir ping-pong buffers if needed
+        self.ensure_reservoir_buffers(device, &ctx.context, w, h);
+
+        // Write analytic lights into the SSBO (binding 8) — do this before
+        // borrowing `self.pipeline` so the mutable borrow for set_lights
+        // doesn't conflict with the immutable `pl` borrow below.
+        self.set_lights(ctx.frame.pt_lights);
 
         // Pipeline
         self.ensure_pipeline(device)?;
@@ -696,6 +929,8 @@ impl RenderPassNode for PathTracePass {
             params: [w, h, ctx.frame.pt_max_bounces, params_w],
             ray_max_distance: ctx.frame.pt_ray_max_distance,
             max_iterations: ctx.frame.pt_max_iterations,
+            num_lights: ctx.frame.pt_lights.len() as u32,
+            num_emissive: self.emissive_count,
         };
         unsafe {
             device.cmd_push_constants(cmd, pl.layout, vk::ShaderStageFlags::COMPUTE,
@@ -709,6 +944,9 @@ impl RenderPassNode for PathTracePass {
         let gx = (w + 15) / 16;
         let gy = (h + 15) / 16;
         unsafe { device.cmd_dispatch(cmd, gx, gy, 1); }
+
+        // Advance reservoir swap index for next frame
+        self.reservoir_swap = (self.reservoir_swap + 1) & 1;
 
         self.frame_counter = frame_count.wrapping_add(1);
 
@@ -978,11 +1216,12 @@ mod tests {
     use super::*;
     #[test]
     fn push_constant_size() {
-        // The auto-generated PtPush is 136 bytes (repr(C)). The shader's std140
-        // block rounds to 144 — covered by PT_PUSH_RANGE_SIZE (see ensure_pipeline).
+        // The auto-generated PtPush is 144 bytes (repr(C)) — matches the
+        // shader's std140 block size. PT_PUSH_RANGE_SIZE (see ensure_pipeline)
+        // must also be 144 for the VkPushConstantRange.
         assert_eq!(
             std::mem::size_of::<shader_bindings::pt_render::PtPush>(),
-            136,
+            144,
             "shader_bindings::pt_render::PtPush (repr(C))"
         );
     }

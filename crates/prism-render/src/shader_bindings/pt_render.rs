@@ -30,6 +30,14 @@ pub const INSTANCE_META_SET: u32 = 0;
 pub const INSTANCE_META_BINDING: u32 = 6; // UNIFORM_BUFFER
 pub const MATERIALS_SET: u32 = 0;
 pub const MATERIALS_BINDING: u32 = 7; // UNIFORM_BUFFER
+pub const PT_LIGHTS_SET: u32 = 0;
+pub const PT_LIGHTS_BINDING: u32 = 8; // UNIFORM_BUFFER
+pub const PT_EMISSIVE_SET: u32 = 0;
+pub const PT_EMISSIVE_BINDING: u32 = 9; // UNIFORM_BUFFER
+pub const PREV_RESERVOIR_SET: u32 = 0;
+pub const PREV_RESERVOIR_BINDING: u32 = 10; // UNIFORM_BUFFER
+pub const CURR_RESERVOIR_SET: u32 = 0;
+pub const CURR_RESERVOIR_BINDING: u32 = 11; // UNIFORM_BUFFER
 
 // --- descriptor set 1 ---
 pub const GLOBAL_SAMPLERS_SET: u32 = 1;
@@ -59,4 +67,8 @@ pub struct PtPush {
     pub ray_max_distance: f32,
     /// offset 132, size 4
     pub max_iterations: u32,
+    /// offset 136, size 4
+    pub num_lights: u32,
+    /// offset 140, size 4
+    pub num_emissive: u32,
 }

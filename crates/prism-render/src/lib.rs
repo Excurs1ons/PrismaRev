@@ -61,6 +61,7 @@ pub use capabilities::RayTracingCaps;
 pub use context::VulkanContext;
 pub use descriptor::{
     DescriptorLayout, DescriptorPool, FrameUBO, FrameUBOData, GpuLight, LIGHT_MAX,
+    PtAnalyticLight, PT_LIGHT_MAX, PtEmissiveTri, PT_EMISSIVE_MAX, ReSTIRReservoir,
 };
 pub use egui_overlay::EguiOverlay;
 pub use gi::{

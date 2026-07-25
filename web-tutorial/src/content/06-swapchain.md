@@ -60,6 +60,58 @@ current_frame = (current_frame + 1) % FRAMES_IN_FLIGHT;
 踩坑记第 6 条：如果所有帧共用一个命令缓冲，`vkResetCommandBuffer` 会报「commandBuffer must not be in the pending state」。引擎为 `FRAMES_IN_FLIGHT` 个 frame 各准备一份命令缓冲，fence 保证不会在 GPU 还用着时重置。
 :::
 
+## 原理探微：Vulkan 同步模型的思维模型
+
+初看上面的三重同步对象（image_available / render_finished / in_flight_fences），容易混淆。背后的**思维模型**其实就两个问题：
+
+### GPU 内同步 vs CPU↔GPU 同步
+
+| 场景 | 用 | 原因 |
+|------|----|------|
+| acquire 完成 → 开始画 | **信号量**（semaphore） | GPU 单元间传递：一个队列画完 → 另一个队列读 |
+| 画完 → 上屏 | **信号量**（semaphore） | GPU 队列之间（graphics → present） |
+| CPU 等 GPU 画完这一帧 | **Fence** | 阻塞 CPU 直到 GPU 完成，用于重复使用命令缓冲 |
+
+关键区别：**信号量是 GPU 侧的轻量「门闩」，不阻塞 CPU**；**Fence 是 CPU 侧的同步点，可以 wait**。引擎的 `wait_for_fences` 阻塞 CPU，等 GPU 消费完这一帧的命令缓冲后才能重置它。
+
+### Timeline Semaphore：Vulkan 1.2 的更优选择
+
+Vulkan 1.2 引入的**时间线信号量**可以替代 binary semaphore + fence 的组合。时间线信号量的值是单调递增的整数（类似帧号），而非二进制的 0/1：
+
+```
+// 传统方式：binary semaphore + fence × N 帧
+// 时间线方式：一个时间线信号量，用信号值标记帧边界
+// 好处：无需 per-frame 创建多个信号量/fence，reset 也更灵活
+```
+
+引擎当前使用传统 binary semaphore + fence 方案（兼容性更广），但设计上随时可升级到时间线信号量。理解这一点有助于阅读 Vulkan 社区的现代代码。
+
+## 原理探微：Frame-in-Flight 为什么需要 N 帧并行
+
+引擎设 `FRAMES_IN_FLIGHT = 2`（两帧在飞行）。为什么是 2 而不是 1 或 3？
+
+### 单帧（N=1）的问题
+
+```
+CPU: 录制帧0  ──wait── 录制帧1  ──wait── 录制帧2  ...
+GPU:          帧0       ──空闲── 帧1       ──空闲── 帧2
+```
+
+CPU 每录完一帧都要等 GPU 画完，GPU 画完的空档 CPU 没事干。**GPU 利用率不到 50%**——瓶颈在 CPU 等待。
+
+### 双帧（N=2）的流水线
+
+```
+CPU: 录制帧0 ── 录制帧1 ── 录制帧2 ── 录制帧3 ...
+GPU:          帧0       ── 帧1       ── 帧2       ── 帧3
+```
+
+CPU 录帧 N 时，GPU 同时在画帧 N-1。两者并行工作，GPU 利用率接近 100%。引擎的 fence 确保 CPU 不会超前 GPU 超过 2 帧——如果 GPU 慢了，CPU 会在 `wait_for_fences` 阻塞。
+
+### 三帧（N=3）的边际收益递减
+
+三帧让 CPU 更不容易被 GPU 阻塞，但多了 1 帧的输入延迟（latency），对交互式操作（相机旋转、点击响应）不友好。引擎选择 N=2 是**延迟与吞吐量的平衡点**。
+
 ## 交换链重建：必须传 old_swapchain
 
 用户拖拽改变窗口大小，swapchain 的尺寸就失效了，必须重建。关键坑（踩坑记第 4 条）：

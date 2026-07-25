@@ -1,263 +1,6 @@
 {
     "parameters": [
         {
-            "name": "accumImage",
-            "binding": {"kind": "descriptorTableSlot", "index": 0},
-            "format": "rgba32f",
-            "type": {
-                "kind": "resource",
-                "baseShape": "texture2D",
-                "access": "readWrite",
-                "resultType": {
-                    "kind": "vector",
-                    "elementCount": 4,
-                    "elementType": {
-                        "kind": "scalar",
-                        "scalarType": "float32"
-                    }
-                }
-            }
-        },
-        {
-            "name": "sampleCount",
-            "binding": {"kind": "descriptorTableSlot", "index": 1},
-            "format": "r32ui",
-            "type": {
-                "kind": "resource",
-                "baseShape": "texture2D",
-                "access": "readWrite",
-                "resultType": {
-                    "kind": "scalar",
-                    "scalarType": "uint32"
-                }
-            }
-        },
-        {
-            "name": "tlas",
-            "binding": {"kind": "descriptorTableSlot", "index": 2},
-            "type": {
-                "kind": "resource",
-                "baseShape": "accelerationStructure"
-            }
-        },
-        {
-            "name": "vertexData",
-            "binding": {"kind": "descriptorTableSlot", "index": 3},
-            "type": {
-                "kind": "resource",
-                "baseShape": "byteAddressBuffer"
-            }
-        },
-        {
-            "name": "indices",
-            "binding": {"kind": "descriptorTableSlot", "index": 4},
-            "type": {
-                "kind": "resource",
-                "baseShape": "structuredBuffer",
-                "resultType": {
-                    "kind": "scalar",
-                    "scalarType": "uint32"
-                }
-            }
-        },
-        {
-            "name": "outputImage",
-            "binding": {"kind": "descriptorTableSlot", "index": 5},
-            "format": "rgba32f",
-            "type": {
-                "kind": "resource",
-                "baseShape": "texture2D",
-                "access": "readWrite",
-                "resultType": {
-                    "kind": "vector",
-                    "elementCount": 4,
-                    "elementType": {
-                        "kind": "scalar",
-                        "scalarType": "float32"
-                    }
-                }
-            }
-        },
-        {
-            "name": "push",
-            "binding": {"kind": "pushConstantBuffer", "index": 0},
-            "type": {
-                "kind": "constantBuffer",
-                "elementType": {
-                    "kind": "struct",
-                    "name": "PtPush",
-                    "fields": [
-                        {
-                            "name": "inv_view_proj",
-                            "type": {
-                                "kind": "matrix",
-                                "rowCount": 4,
-                                "columnCount": 4,
-                                "elementType": {
-                                    "kind": "scalar",
-                                    "scalarType": "float32"
-                                }
-                            },
-                            "binding": {"kind": "uniform", "offset": 0, "size": 64}
-                        },
-                        {
-                            "name": "camera_pos",
-                            "type": {
-                                "kind": "vector",
-                                "elementCount": 4,
-                                "elementType": {
-                                    "kind": "scalar",
-                                    "scalarType": "float32"
-                                }
-                            },
-                            "binding": {"kind": "uniform", "offset": 64, "size": 16}
-                        },
-                        {
-                            "name": "light_dir",
-                            "type": {
-                                "kind": "vector",
-                                "elementCount": 4,
-                                "elementType": {
-                                    "kind": "scalar",
-                                    "scalarType": "float32"
-                                }
-                            },
-                            "binding": {"kind": "uniform", "offset": 80, "size": 16}
-                        },
-                        {
-                            "name": "light_color",
-                            "type": {
-                                "kind": "vector",
-                                "elementCount": 4,
-                                "elementType": {
-                                    "kind": "scalar",
-                                    "scalarType": "float32"
-                                }
-                            },
-                            "binding": {"kind": "uniform", "offset": 96, "size": 16}
-                        },
-                        {
-                            "name": "params",
-                            "type": {
-                                "kind": "vector",
-                                "elementCount": 4,
-                                "elementType": {
-                                    "kind": "scalar",
-                                    "scalarType": "uint32"
-                                }
-                            },
-                            "binding": {"kind": "uniform", "offset": 112, "size": 16}
-                        },
-                        {
-                            "name": "ray_max_distance",
-                            "type": {
-                                "kind": "scalar",
-                                "scalarType": "float32"
-                            },
-                            "binding": {"kind": "uniform", "offset": 128, "size": 4}
-                        },
-                        {
-                            "name": "max_iterations",
-                            "type": {
-                                "kind": "scalar",
-                                "scalarType": "uint32"
-                            },
-                            "binding": {"kind": "uniform", "offset": 132, "size": 4}
-                        }
-                    ]
-                },
-                "containerVarLayout": {
-                    "binding": {"kind": "pushConstantBuffer", "index": 0}
-                },
-                "elementVarLayout": {
-                    "type": {
-                        "kind": "struct",
-                        "name": "PtPush",
-                        "fields": [
-                            {
-                                "name": "inv_view_proj",
-                                "type": {
-                                    "kind": "matrix",
-                                    "rowCount": 4,
-                                    "columnCount": 4,
-                                    "elementType": {
-                                        "kind": "scalar",
-                                        "scalarType": "float32"
-                                    }
-                                },
-                                "binding": {"kind": "uniform", "offset": 0, "size": 64}
-                            },
-                            {
-                                "name": "camera_pos",
-                                "type": {
-                                    "kind": "vector",
-                                    "elementCount": 4,
-                                    "elementType": {
-                                        "kind": "scalar",
-                                        "scalarType": "float32"
-                                    }
-                                },
-                                "binding": {"kind": "uniform", "offset": 64, "size": 16}
-                            },
-                            {
-                                "name": "light_dir",
-                                "type": {
-                                    "kind": "vector",
-                                    "elementCount": 4,
-                                    "elementType": {
-                                        "kind": "scalar",
-                                        "scalarType": "float32"
-                                    }
-                                },
-                                "binding": {"kind": "uniform", "offset": 80, "size": 16}
-                            },
-                            {
-                                "name": "light_color",
-                                "type": {
-                                    "kind": "vector",
-                                    "elementCount": 4,
-                                    "elementType": {
-                                        "kind": "scalar",
-                                        "scalarType": "float32"
-                                    }
-                                },
-                                "binding": {"kind": "uniform", "offset": 96, "size": 16}
-                            },
-                            {
-                                "name": "params",
-                                "type": {
-                                    "kind": "vector",
-                                    "elementCount": 4,
-                                    "elementType": {
-                                        "kind": "scalar",
-                                        "scalarType": "uint32"
-                                    }
-                                },
-                                "binding": {"kind": "uniform", "offset": 112, "size": 16}
-                            },
-                            {
-                                "name": "ray_max_distance",
-                                "type": {
-                                    "kind": "scalar",
-                                    "scalarType": "float32"
-                                },
-                                "binding": {"kind": "uniform", "offset": 128, "size": 4}
-                            },
-                            {
-                                "name": "max_iterations",
-                                "type": {
-                                    "kind": "scalar",
-                                    "scalarType": "uint32"
-                                },
-                                "binding": {"kind": "uniform", "offset": 132, "size": 4}
-                            }
-                        ]
-                    },
-                    "binding": {"kind": "uniform", "offset": 0, "size": 144}
-                }
-            }
-        },
-        {
             "name": "instance_meta",
             "binding": {"kind": "descriptorTableSlot", "index": 6},
             "type": {
@@ -461,6 +204,138 @@
             }
         },
         {
+            "name": "ptLights",
+            "binding": {"kind": "descriptorTableSlot", "index": 8},
+            "type": {
+                "kind": "resource",
+                "baseShape": "structuredBuffer",
+                "resultType": {
+                    "kind": "struct",
+                    "name": "PtAnalyticLight",
+                    "fields": [
+                        {
+                            "name": "position_kind",
+                            "type": {
+                                "kind": "vector",
+                                "elementCount": 4,
+                                "elementType": {
+                                    "kind": "scalar",
+                                    "scalarType": "float32"
+                                }
+                            },
+                            "binding": {"kind": "uniform", "offset": 0, "size": 16}
+                        },
+                        {
+                            "name": "direction_params",
+                            "type": {
+                                "kind": "vector",
+                                "elementCount": 4,
+                                "elementType": {
+                                    "kind": "scalar",
+                                    "scalarType": "float32"
+                                }
+                            },
+                            "binding": {"kind": "uniform", "offset": 16, "size": 16}
+                        },
+                        {
+                            "name": "color_params",
+                            "type": {
+                                "kind": "vector",
+                                "elementCount": 4,
+                                "elementType": {
+                                    "kind": "scalar",
+                                    "scalarType": "float32"
+                                }
+                            },
+                            "binding": {"kind": "uniform", "offset": 32, "size": 16}
+                        }
+                    ]
+                }
+            }
+        },
+        {
+            "name": "ptEmissive",
+            "binding": {"kind": "descriptorTableSlot", "index": 9},
+            "type": {
+                "kind": "resource",
+                "baseShape": "structuredBuffer",
+                "resultType": {
+                    "kind": "struct",
+                    "name": "PtEmissiveTri",
+                    "fields": [
+                        {
+                            "name": "v0",
+                            "type": {
+                                "kind": "vector",
+                                "elementCount": 4,
+                                "elementType": {
+                                    "kind": "scalar",
+                                    "scalarType": "float32"
+                                }
+                            },
+                            "binding": {"kind": "uniform", "offset": 0, "size": 16}
+                        },
+                        {
+                            "name": "v1",
+                            "type": {
+                                "kind": "vector",
+                                "elementCount": 4,
+                                "elementType": {
+                                    "kind": "scalar",
+                                    "scalarType": "float32"
+                                }
+                            },
+                            "binding": {"kind": "uniform", "offset": 16, "size": 16}
+                        },
+                        {
+                            "name": "v2",
+                            "type": {
+                                "kind": "vector",
+                                "elementCount": 4,
+                                "elementType": {
+                                    "kind": "scalar",
+                                    "scalarType": "float32"
+                                }
+                            },
+                            "binding": {"kind": "uniform", "offset": 32, "size": 16}
+                        },
+                        {
+                            "name": "normal",
+                            "type": {
+                                "kind": "vector",
+                                "elementCount": 4,
+                                "elementType": {
+                                    "kind": "scalar",
+                                    "scalarType": "float32"
+                                }
+                            },
+                            "binding": {"kind": "uniform", "offset": 48, "size": 16}
+                        },
+                        {
+                            "name": "radiance",
+                            "type": {
+                                "kind": "vector",
+                                "elementCount": 4,
+                                "elementType": {
+                                    "kind": "scalar",
+                                    "scalarType": "float32"
+                                }
+                            },
+                            "binding": {"kind": "uniform", "offset": 64, "size": 16}
+                        },
+                        {
+                            "name": "area",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "float32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 80, "size": 4}
+                        }
+                    ]
+                }
+            }
+        },
+        {
             "name": "envCube",
             "binding": {"kind": "descriptorTableSlot", "space": 2, "index": 0},
             "type": {
@@ -473,6 +348,388 @@
                         "kind": "scalar",
                         "scalarType": "float32"
                     }
+                }
+            }
+        },
+        {
+            "name": "accumImage",
+            "binding": {"kind": "descriptorTableSlot", "index": 0},
+            "format": "rgba32f",
+            "type": {
+                "kind": "resource",
+                "baseShape": "texture2D",
+                "access": "readWrite",
+                "resultType": {
+                    "kind": "vector",
+                    "elementCount": 4,
+                    "elementType": {
+                        "kind": "scalar",
+                        "scalarType": "float32"
+                    }
+                }
+            }
+        },
+        {
+            "name": "sampleCount",
+            "binding": {"kind": "descriptorTableSlot", "index": 1},
+            "format": "r32ui",
+            "type": {
+                "kind": "resource",
+                "baseShape": "texture2D",
+                "access": "readWrite",
+                "resultType": {
+                    "kind": "scalar",
+                    "scalarType": "uint32"
+                }
+            }
+        },
+        {
+            "name": "tlas",
+            "binding": {"kind": "descriptorTableSlot", "index": 2},
+            "type": {
+                "kind": "resource",
+                "baseShape": "accelerationStructure"
+            }
+        },
+        {
+            "name": "vertexData",
+            "binding": {"kind": "descriptorTableSlot", "index": 3},
+            "type": {
+                "kind": "resource",
+                "baseShape": "byteAddressBuffer"
+            }
+        },
+        {
+            "name": "indices",
+            "binding": {"kind": "descriptorTableSlot", "index": 4},
+            "type": {
+                "kind": "resource",
+                "baseShape": "structuredBuffer",
+                "resultType": {
+                    "kind": "scalar",
+                    "scalarType": "uint32"
+                }
+            }
+        },
+        {
+            "name": "outputImage",
+            "binding": {"kind": "descriptorTableSlot", "index": 5},
+            "format": "rgba32f",
+            "type": {
+                "kind": "resource",
+                "baseShape": "texture2D",
+                "access": "readWrite",
+                "resultType": {
+                    "kind": "vector",
+                    "elementCount": 4,
+                    "elementType": {
+                        "kind": "scalar",
+                        "scalarType": "float32"
+                    }
+                }
+            }
+        },
+        {
+            "name": "prevReservoir",
+            "binding": {"kind": "descriptorTableSlot", "index": 10},
+            "type": {
+                "kind": "resource",
+                "baseShape": "structuredBuffer",
+                "resultType": {
+                    "kind": "struct",
+                    "name": "ReSTIRReservoir",
+                    "fields": [
+                        {
+                            "name": "light_idx",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "uint32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 0, "size": 4}
+                        },
+                        {
+                            "name": "M",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "float32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 4, "size": 4}
+                        },
+                        {
+                            "name": "W",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "float32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 8, "size": 4}
+                        },
+                        {
+                            "name": "target_pdf",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "float32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 12, "size": 4}
+                        }
+                    ]
+                }
+            }
+        },
+        {
+            "name": "currReservoir",
+            "binding": {"kind": "descriptorTableSlot", "index": 11},
+            "type": {
+                "kind": "resource",
+                "baseShape": "structuredBuffer",
+                "access": "readWrite",
+                "resultType": {
+                    "kind": "struct",
+                    "name": "ReSTIRReservoir",
+                    "fields": [
+                        {
+                            "name": "light_idx",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "uint32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 0, "size": 4}
+                        },
+                        {
+                            "name": "M",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "float32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 4, "size": 4}
+                        },
+                        {
+                            "name": "W",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "float32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 8, "size": 4}
+                        },
+                        {
+                            "name": "target_pdf",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "float32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 12, "size": 4}
+                        }
+                    ]
+                }
+            }
+        },
+        {
+            "name": "push",
+            "binding": {"kind": "pushConstantBuffer", "index": 0},
+            "type": {
+                "kind": "constantBuffer",
+                "elementType": {
+                    "kind": "struct",
+                    "name": "PtPush",
+                    "fields": [
+                        {
+                            "name": "inv_view_proj",
+                            "type": {
+                                "kind": "matrix",
+                                "rowCount": 4,
+                                "columnCount": 4,
+                                "elementType": {
+                                    "kind": "scalar",
+                                    "scalarType": "float32"
+                                }
+                            },
+                            "binding": {"kind": "uniform", "offset": 0, "size": 64}
+                        },
+                        {
+                            "name": "camera_pos",
+                            "type": {
+                                "kind": "vector",
+                                "elementCount": 4,
+                                "elementType": {
+                                    "kind": "scalar",
+                                    "scalarType": "float32"
+                                }
+                            },
+                            "binding": {"kind": "uniform", "offset": 64, "size": 16}
+                        },
+                        {
+                            "name": "light_dir",
+                            "type": {
+                                "kind": "vector",
+                                "elementCount": 4,
+                                "elementType": {
+                                    "kind": "scalar",
+                                    "scalarType": "float32"
+                                }
+                            },
+                            "binding": {"kind": "uniform", "offset": 80, "size": 16}
+                        },
+                        {
+                            "name": "light_color",
+                            "type": {
+                                "kind": "vector",
+                                "elementCount": 4,
+                                "elementType": {
+                                    "kind": "scalar",
+                                    "scalarType": "float32"
+                                }
+                            },
+                            "binding": {"kind": "uniform", "offset": 96, "size": 16}
+                        },
+                        {
+                            "name": "params",
+                            "type": {
+                                "kind": "vector",
+                                "elementCount": 4,
+                                "elementType": {
+                                    "kind": "scalar",
+                                    "scalarType": "uint32"
+                                }
+                            },
+                            "binding": {"kind": "uniform", "offset": 112, "size": 16}
+                        },
+                        {
+                            "name": "ray_max_distance",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "float32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 128, "size": 4}
+                        },
+                        {
+                            "name": "max_iterations",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "uint32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 132, "size": 4}
+                        },
+                        {
+                            "name": "num_lights",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "uint32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 136, "size": 4}
+                        },
+                        {
+                            "name": "num_emissive",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "uint32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 140, "size": 4}
+                        }
+                    ]
+                },
+                "containerVarLayout": {
+                    "binding": {"kind": "pushConstantBuffer", "index": 0}
+                },
+                "elementVarLayout": {
+                    "type": {
+                        "kind": "struct",
+                        "name": "PtPush",
+                        "fields": [
+                            {
+                                "name": "inv_view_proj",
+                                "type": {
+                                    "kind": "matrix",
+                                    "rowCount": 4,
+                                    "columnCount": 4,
+                                    "elementType": {
+                                        "kind": "scalar",
+                                        "scalarType": "float32"
+                                    }
+                                },
+                                "binding": {"kind": "uniform", "offset": 0, "size": 64}
+                            },
+                            {
+                                "name": "camera_pos",
+                                "type": {
+                                    "kind": "vector",
+                                    "elementCount": 4,
+                                    "elementType": {
+                                        "kind": "scalar",
+                                        "scalarType": "float32"
+                                    }
+                                },
+                                "binding": {"kind": "uniform", "offset": 64, "size": 16}
+                            },
+                            {
+                                "name": "light_dir",
+                                "type": {
+                                    "kind": "vector",
+                                    "elementCount": 4,
+                                    "elementType": {
+                                        "kind": "scalar",
+                                        "scalarType": "float32"
+                                    }
+                                },
+                                "binding": {"kind": "uniform", "offset": 80, "size": 16}
+                            },
+                            {
+                                "name": "light_color",
+                                "type": {
+                                    "kind": "vector",
+                                    "elementCount": 4,
+                                    "elementType": {
+                                        "kind": "scalar",
+                                        "scalarType": "float32"
+                                    }
+                                },
+                                "binding": {"kind": "uniform", "offset": 96, "size": 16}
+                            },
+                            {
+                                "name": "params",
+                                "type": {
+                                    "kind": "vector",
+                                    "elementCount": 4,
+                                    "elementType": {
+                                        "kind": "scalar",
+                                        "scalarType": "uint32"
+                                    }
+                                },
+                                "binding": {"kind": "uniform", "offset": 112, "size": 16}
+                            },
+                            {
+                                "name": "ray_max_distance",
+                                "type": {
+                                    "kind": "scalar",
+                                    "scalarType": "float32"
+                                },
+                                "binding": {"kind": "uniform", "offset": 128, "size": 4}
+                            },
+                            {
+                                "name": "max_iterations",
+                                "type": {
+                                    "kind": "scalar",
+                                    "scalarType": "uint32"
+                                },
+                                "binding": {"kind": "uniform", "offset": 132, "size": 4}
+                            },
+                            {
+                                "name": "num_lights",
+                                "type": {
+                                    "kind": "scalar",
+                                    "scalarType": "uint32"
+                                },
+                                "binding": {"kind": "uniform", "offset": 136, "size": 4}
+                            },
+                            {
+                                "name": "num_emissive",
+                                "type": {
+                                    "kind": "scalar",
+                                    "scalarType": "uint32"
+                                },
+                                "binding": {"kind": "uniform", "offset": 140, "size": 4}
+                            }
+                        ]
+                    },
+                    "binding": {"kind": "uniform", "offset": 0, "size": 144}
                 }
             }
         }
@@ -497,6 +754,34 @@
             ],
             "threadGroupSize": [16, 16, 1],
             "bindings": [
+                {
+                    "name": "instance_meta",
+                    "binding": {"kind": "descriptorTableSlot", "index": 6, "used": 1}
+                },
+                {
+                    "name": "materials",
+                    "binding": {"kind": "descriptorTableSlot", "index": 7, "used": 1}
+                },
+                {
+                    "name": "globalSamplers",
+                    "binding": {"kind": "descriptorTableSlot", "space": 1, "index": 0, "used": 1}
+                },
+                {
+                    "name": "bindlessSrvs",
+                    "binding": {"kind": "descriptorTableSlot", "space": 1, "index": 1, "used": 1}
+                },
+                {
+                    "name": "ptLights",
+                    "binding": {"kind": "descriptorTableSlot", "index": 8, "used": 1}
+                },
+                {
+                    "name": "ptEmissive",
+                    "binding": {"kind": "descriptorTableSlot", "index": 9, "used": 1}
+                },
+                {
+                    "name": "envCube",
+                    "binding": {"kind": "descriptorTableSlot", "space": 2, "index": 0, "used": 1}
+                },
                 {
                     "name": "accumImage",
                     "binding": {"kind": "descriptorTableSlot", "index": 0, "used": 1},
@@ -525,28 +810,16 @@
                     "format": "rgba32f"
                 },
                 {
+                    "name": "prevReservoir",
+                    "binding": {"kind": "descriptorTableSlot", "index": 10, "used": 1}
+                },
+                {
+                    "name": "currReservoir",
+                    "binding": {"kind": "descriptorTableSlot", "index": 11, "used": 1}
+                },
+                {
                     "name": "push",
                     "binding": {"kind": "pushConstantBuffer", "index": 0}
-                },
-                {
-                    "name": "instance_meta",
-                    "binding": {"kind": "descriptorTableSlot", "index": 6, "used": 1}
-                },
-                {
-                    "name": "materials",
-                    "binding": {"kind": "descriptorTableSlot", "index": 7, "used": 1}
-                },
-                {
-                    "name": "globalSamplers",
-                    "binding": {"kind": "descriptorTableSlot", "space": 1, "index": 0, "used": 1}
-                },
-                {
-                    "name": "bindlessSrvs",
-                    "binding": {"kind": "descriptorTableSlot", "space": 1, "index": 1, "used": 1}
-                },
-                {
-                    "name": "envCube",
-                    "binding": {"kind": "descriptorTableSlot", "space": 2, "index": 0, "used": 1}
                 }
             ]
         }

@@ -25,7 +25,7 @@ use ash::vk;
 
 use crate::capabilities::RayTracingCaps;
 use crate::context::VulkanContext;
-use crate::descriptor::{FrameUBO, GpuLight};
+use crate::descriptor::{FrameUBO, GpuLight, PtAnalyticLight};
 use crate::managers::{MeshHandle, RenderMeshManager};
 
 /// A typed handle to a graph-managed resource (image, buffer).
@@ -408,6 +408,9 @@ pub struct GraphFrame<'a> {
     /// ScenePass (via FrameUBOData) and PathTracePass (via push constant) apply
     /// the same exposure value from the camera entity.
     pub exposure: f32,
+    /// Analytic lights for path tracing (point/spot/area/directional).
+    /// Written into the PT lights SSBO for multi-light NEE.
+    pub pt_lights: &'a [PtAnalyticLight],
 }
 
 /// Context passed to each pass's `execute`.
