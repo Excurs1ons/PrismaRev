@@ -823,11 +823,17 @@ impl App {
             let bindless_set = renderer.texture_manager().bindless().set;
             let bindless_layout = renderer.texture_manager().bindless().layout;
             let materials_buffer = renderer.material_manager().buffer();
+            // IBL environment cubemap (set 2) for HDR sky on ray miss.
+            let ibl_set = renderer.ibl_descriptor_set();
+            let ibl_layout = renderer.ibl_descriptor_set_layout();
             if let Some(pt_pass) = renderer.graph_mut().pass_mut::<PathTracePass>() {
                 // Wire the shared material SSBO + bindless texture table so the
                 // path tracer can do `materials[slot]` + `bindlessSrvs[idx]`
                 // exactly like scene_frag.slang.
                 pt_pass.set_material_resources(materials_buffer, bindless_set, bindless_layout);
+
+                // Wire the IBL environment cubemap (set 2) for HDR sky on ray miss.
+                pt_pass.set_ibl_resources(ibl_set, ibl_layout);
 
                 let t_pt = std::time::Instant::now();
                 match prism_render::bake_common::flatten_instances_from_store(

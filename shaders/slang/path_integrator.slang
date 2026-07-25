@@ -35,6 +35,10 @@ SamplerState globalSamplers[];
 [[vk::binding(1, 1)]]
 Texture2D bindlessSrvs[];
 
+// Set 2: IBL environment cubemap (HDR sky sampled on ray miss).
+[[vk::binding(0, 2)]]
+SamplerCube envCube;
+
 static const uint SAMPLER_LINEAR_WRAP = 0u;
 
 // ---- Pseudo-random number generation (Wang hash) ----
@@ -78,14 +82,6 @@ public float3 cosine_hemisphere_sample(float3 n, float u1, float u2)
     float3 B = cross(n, T);
 
     return local_dir.x * T + local_dir.y * B + local_dir.z * n;
-}
-
-// ---- Procedural sky radiance ----
-// Bright blue sky above (zenith), hazy horizon, dark ground below.
-public float3 sky_radiance(float3 dir)
-{
-    float t = clamp(dir.y, 0.0, 1.0);
-    return lerp(float3(0.55, 0.60, 0.65), float3(0.25, 0.45, 0.90), t);
 }
 
 // ---- Per-instance metadata (mirrors `PtInstanceMeta` in pt_pass.rs) ----
@@ -233,7 +229,25 @@ public float3 TraceRadiance(
 
             // Direct sun contribution at this bounce.
             float ndotl = max(dot(hit_normal, light_dir), 0.0);
-            total_radiance += throughput * hit_albedo * light_color * ndotl;
+
+            // Shadow ray: trace towards the sun to test occlusion.
+            float shadow = 1.0;
+            if (ndotl > 0.0)
+            {
+                RayDesc shadow_ray;
+                shadow_ray.Origin = hit_pos + 0.002 * hit_normal;
+                shadow_ray.Direction = light_dir;
+                shadow_ray.TMin = 0.001;
+                shadow_ray.TMax = 1000.0;
+                RayQuery<RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER> sq;
+                sq.TraceRayInline(tlas,
+                    RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER,
+                    0xFF, shadow_ray);
+                while (sq.Proceed()) { }
+                if (sq.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
+                    shadow = 0.0;
+            }
+            total_radiance += throughput * hit_albedo * light_color * ndotl * shadow;
 
             // Prepare for next bounce.
             throughput *= hit_albedo;
@@ -257,12 +271,12 @@ public float3 TraceRadiance(
             dir = cosine_hemisphere_sample(hit_normal, u1, u2);
 
             // Offset origin to avoid self-intersection.
-            pos = hit_pos + 0.001 * hit_normal;
+            pos = hit_pos + 0.01 * hit_normal;
         }
         else
         {
-            // Missed the scene: sky radiance.
-            total_radiance += throughput * sky_radiance(dir);
+            // Missed the scene: HDR environment map (IBL envCube).
+            total_radiance += throughput * envCube.SampleLevel(dir, 0.0).rgb;
             break;
         }
     }

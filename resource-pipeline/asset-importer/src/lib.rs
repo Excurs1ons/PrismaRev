@@ -99,6 +99,19 @@ impl std::fmt::Debug for ImportResult {
 }
 
 // ---------------------------------------------------------------------------
+// Import File Result (returned by ImportPipeline::import_file)
+// ---------------------------------------------------------------------------
+
+/// Result of a single `import_file` call.
+pub struct ImportFileResult {
+    /// `true` when the file was actually imported; `false` when cache hit.
+    pub was_imported: bool,
+    /// When `was_imported == true`, the importer's intermediate output data.
+    /// `None` when the file was cached.
+    pub intermediate_data: Option<Vec<u8>>,
+}
+
+// ---------------------------------------------------------------------------
 // Importer Trait
 // ---------------------------------------------------------------------------
 
@@ -212,14 +225,16 @@ impl ImportPipeline {
     /// Import a single file.
     ///
     /// If the file is unchanged (matching hash in import cache), the import
-    /// is skipped. Returns `true` if the file was imported, `false` if cached.
+    /// is skipped. Returns [`ImportFileResult`] with `was_imported` indicating
+    /// whether the file was actually processed, and `intermediate_data` carrying
+    /// the importer's output for downstream cooking.
     pub fn import_file(
         &self,
         source_path: &Path,
         db: &mut AssetDatabase,
         cache: &mut ImportCache,
         settings: Option<Value>,
-    ) -> Result<bool, ImportError> {
+    ) -> Result<ImportFileResult, ImportError> {
         let normalized = normalize_relative_path(source_path);
         let data = std::fs::read(source_path)?;
         let hash = xxhash_rust::xxh3::xxh3_64(&data);
@@ -237,7 +252,10 @@ impl ImportPipeline {
         // Check cache.
         if cache.is_up_to_date(&normalized, hash, settings_hash, importer.version()) {
             tracing::debug!("  ~ cached: {normalized}");
-            return Ok(false);
+            return Ok(ImportFileResult {
+                was_imported: false,
+                intermediate_data: None,
+            });
         }
 
         // Run import.
@@ -262,7 +280,10 @@ impl ImportPipeline {
         // Update cache.
         cache.record(&normalized, hash, settings_hash, id, importer.version());
 
-        Ok(true)
+        Ok(ImportFileResult {
+            was_imported: true,
+            intermediate_data: Some(result.output_data),
+        })
     }
 
     /// Import all files in a directory tree.
@@ -275,8 +296,8 @@ impl ImportPipeline {
         let mut summary = ImportSummary::default();
         walk_directory(dir, &mut |path| {
             match self.import_file(&path, db, cache, None) {
-                Ok(true) => summary.imported += 1,
-                Ok(false) => summary.cached += 1,
+                Ok(r) if r.was_imported => summary.imported += 1,
+                Ok(_) => summary.cached += 1,
                 Err(ImportError::NoImporter(_)) => summary.skipped += 1,
                 Err(e) => {
                     tracing::warn!("  ! {}: {e}", path.display());
@@ -825,12 +846,12 @@ mod tests {
         let mut cache = ImportCache::new();
 
         // First import.
-        let imported = pipeline.import_file(&path, &mut db, &mut cache, None).unwrap();
-        assert!(imported);
+        let r1 = pipeline.import_file(&path, &mut db, &mut cache, None).unwrap();
+        assert!(r1.was_imported);
 
         // Second import (cached).
-        let imported = pipeline.import_file(&path, &mut db, &mut cache, None).unwrap();
-        assert!(!imported);
+        let r2 = pipeline.import_file(&path, &mut db, &mut cache, None).unwrap();
+        assert!(!r2.was_imported);
 
         std::fs::remove_file(&path).ok();
     }
@@ -851,12 +872,132 @@ mod tests {
         let mut cache = ImportCache::new();
 
         pipeline.import_file(&path, &mut db, &mut cache, None).unwrap();
-
-        // Database should have one texture record.
         assert_eq!(db.len(), 1);
         let r = db.records().next().unwrap();
         assert_eq!(r.asset_type, AssetType::Texture);
         assert_eq!(r.importer_name, "texture-importer");
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    // ── Real glTF / GLB import test ──────────────────────────────────
+
+    /// Build a minimal valid GLB file in memory.
+    ///
+    /// Contains one triangle mesh (3 vertices, 3 unsigned-short indices),
+    /// no material, no textures.
+    fn create_minimal_glb_bytes() -> Vec<u8> {
+        // Positions: right triangle in XY plane, Z=0.
+        let positions: &[f32] = &[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+        let indices: &[u16] = &[0, 1, 2];
+
+        let bin_data_size = positions.len() * 4 + indices.len() * 2; // 36 + 6 = 42
+        let bin_padding = (4 - (bin_data_size % 4)) % 4;
+        let bin_chunk_total = 8 + bin_data_size + bin_padding; // includes chunk-header
+
+        let json = serde_json::json!({
+            "asset": { "version": "2.0", "generator": "prismarev-test" },
+            "scene": 0,
+            "scenes": [{ "nodes": [0] }],
+            "nodes": [{ "mesh": 0 }],
+            "meshes": [{
+                "primitives": [{
+                    "attributes": { "POSITION": 0 },
+                    "indices": 1
+                }]
+            }],
+            "accessors": [
+                {
+                    "bufferView": 0,
+                    "componentType": 5126, // FLOAT
+                    "count": 3,
+                    "type": "VEC3",
+                    "min": [0.0, 0.0, 0.0],
+                    "max": [1.0, 1.0, 0.0]
+                },
+                {
+                    "bufferView": 1,
+                    "componentType": 5123, // UNSIGNED_SHORT
+                    "count": 3,
+                    "type": "SCALAR"
+                }
+            ],
+            "bufferViews": [
+                { "buffer": 0, "byteOffset": 0, "byteLength": 36 },
+                { "buffer": 0, "byteOffset": 36, "byteLength": 6 }
+            ],
+            "buffers": [{ "byteLength": 42 }]
+        });
+
+        let json_string = serde_json::to_string(&json).unwrap();
+        let json_bytes = json_string.as_bytes();
+        let json_padding = (4 - (json_bytes.len() % 4)) % 4;
+        let json_chunk_total = 8 + json_bytes.len() + json_padding;
+
+        let total_len = 12 + json_chunk_total + bin_chunk_total;
+
+        let mut glb = Vec::with_capacity(total_len);
+
+        // GLB header
+        glb.extend_from_slice(b"glTF");                    // magic
+        glb.extend_from_slice(&2u32.to_le_bytes());        // version
+        glb.extend_from_slice(&(total_len as u32).to_le_bytes()); // length
+
+        // JSON chunk
+        glb.extend_from_slice(&((json_bytes.len() + json_padding) as u32).to_le_bytes());
+        glb.extend_from_slice(b"JSON");
+        glb.extend_from_slice(json_bytes);
+        for _ in 0..json_padding {
+            glb.push(0x20); // space padding
+        }
+
+        // BIN chunk
+        glb.extend_from_slice(&((bin_data_size + bin_padding) as u32).to_le_bytes());
+        glb.extend_from_slice(b"BIN\0");
+        for &p in positions {
+            glb.extend_from_slice(&p.to_le_bytes());
+        }
+        for &i in indices {
+            glb.extend_from_slice(&i.to_le_bytes());
+        }
+        for _ in 0..bin_padding {
+            glb.push(0x00);
+        }
+
+        glb
+    }
+
+    #[test]
+    fn gltf_importer_imports_real_glb() {
+        let imp = GltfImporter;
+        let dir = std::env::temp_dir();
+        let path = dir.join("test_triangle.glb");
+
+        let glb_bytes = create_minimal_glb_bytes();
+        std::fs::write(&path, &glb_bytes).unwrap();
+
+        let ctx = ImportContext {
+            source_path: path.clone(),
+            source_hash: xxhash_rust::xxh3::xxh3_64(&glb_bytes),
+            settings: serde_json::Value::Null,
+            db: Arc::new(AssetDatabase::new()),
+        };
+        let result = imp.import(&ctx).unwrap();
+        assert_eq!(result.asset_type, AssetType::Mesh);
+        assert!(!result.output_data.is_empty(), "intermediate should have data");
+
+        // Validate RMXI header in output.
+        assert_eq!(&result.output_data[..4], b"RMXI");
+        let verts = u32::from_le_bytes(result.output_data[5..9].try_into().unwrap());
+        let idxs = u32::from_le_bytes(result.output_data[9..13].try_into().unwrap());
+        assert_eq!(verts, 3, "real .glb should yield 3 vertices");
+        assert_eq!(idxs, 3, "real .glb should yield 3 indices");
+
+        let meta = result.metadata.unwrap();
+        assert_eq!(meta["vertex_count"], 3);
+        assert_eq!(meta["index_count"], 3);
+        assert!(meta["has_normals"].as_bool().unwrap_or(false) == false);
+        assert!(meta["has_texcoords"].as_bool().unwrap_or(false) == false);
 
         std::fs::remove_file(&path).ok();
     }

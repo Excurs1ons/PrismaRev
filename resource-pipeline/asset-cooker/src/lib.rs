@@ -193,6 +193,28 @@ const RTXI_MAGIC: &[u8; 4] = b"RTXI";
 /// Maximum mip levels for a single texture.
 const MAX_MIP_LEVELS: u32 = 16;
 
+// ---------------------------------------------------------------------------
+// RTEX format byte constants
+// ---------------------------------------------------------------------------
+
+/// Uncompressed RGBA8 (4 bytes per pixel).
+const RTEX_FORMAT_RGBA8: u8 = 0;
+/// BC7 (64 bits per 4×4 block = 16 bytes per block). UNORM / SRGB
+/// distinction is handled by the runtime Vulkan image view.
+const RTEX_FORMAT_BC7: u8 = 1;
+#[allow(dead_code)]
+/// BC5 (two-channel RG normal map, 16 bytes per 4×4 block).
+const RTEX_FORMAT_BC5: u8 = 2;
+#[allow(dead_code)]
+/// BC1 / DXT1 (RGB, optional 1-bit alpha, 8 bytes per 4×4 block).
+const RTEX_FORMAT_BC1: u8 = 3;
+#[allow(dead_code)]
+/// BC3 / DXT5 (RGBA, 16 bytes per 4×4 block).
+const RTEX_FORMAT_BC3: u8 = 4;
+#[allow(dead_code)]
+/// BC6H (HDR RGB, 16 bytes per 4×4 block).
+const RTEX_FORMAT_BC6H: u8 = 5;
+
 /// Cooks texture data by reconstructing the RGBA image, generating a mip
 /// chain (box-filtered), and packing into a runtime-ready binary:
 ///
@@ -223,17 +245,17 @@ impl TextureCooker {
         let mut mips = Vec::new();
         mips.push((width, height, rgba.to_vec()));
 
-        let mut w = width;
-        let mut h = height;
+        let mut src_w = width;
+        let mut src_h = height;
         let mut prev = rgba.to_vec();
 
         loop {
-            w = (w / 2).max(1);
-            h = (h / 2).max(1);
-            let mut next = Vec::with_capacity(w as usize * h as usize * 4);
+            let dst_w = (src_w / 2).max(1);
+            let dst_h = (src_h / 2).max(1);
+            let mut next = Vec::with_capacity(dst_w as usize * dst_h as usize * 4);
 
-            for y in 0..h {
-                for x in 0..w {
+            for y in 0..dst_h {
+                for x in 0..dst_w {
                     // 2×2 box filter.
                     let mut r = 0u32;
                     let mut g = 0u32;
@@ -245,8 +267,9 @@ impl TextureCooker {
                         for dx in 0..2 {
                             let sx = x * 2 + dx;
                             let sy = y * 2 + dy;
-                            if sx < w * 2 && sy < h * 2 {
-                                let idx = ((sy * w * 2) + sx) as usize * 4;
+                            // Guard against source dimensions (not the target).
+                            if sx < src_w && sy < src_h {
+                                let idx = ((sy * src_w) + sx) as usize * 4;
                                 r += prev[idx] as u32;
                                 g += prev[idx + 1] as u32;
                                 b += prev[idx + 2] as u32;
@@ -263,15 +286,81 @@ impl TextureCooker {
                 }
             }
 
-            mips.push((w, h, next.clone()));
+            mips.push((dst_w, dst_h, next.clone()));
             prev = next;
+            src_w = dst_w;
+            src_h = dst_h;
 
-            if mips.len() >= MAX_MIP_LEVELS as usize || (w == 1 && h == 1) {
+            if mips.len() >= MAX_MIP_LEVELS as usize || (dst_w == 1 && dst_h == 1) {
                 break;
             }
         }
 
         mips
+    }
+
+    /// Compress a single RGBA8 mip level to BC7 using ctt.
+    ///
+    /// Returns raw BC7 block data (ceil(w/4) × ceil(h/4) × 16 bytes).
+    /// `quality` maps 0–100 to the ctt quality ladder.
+    fn compress_bc7(width: u32, height: u32, rgba: &[u8], quality: u8) -> Result<Vec<u8>, CookError> {
+        use ctt::encoders::Encoder;
+        use ctt::*;
+
+        let ctt_quality = match quality {
+            0..=20 => Quality::UltraFast,
+            21..=40 => Quality::VeryFast,
+            41..=60 => Quality::Fast,
+            61..=80 => Quality::Basic,
+            81..=95 => Quality::Slow,
+            _ => Quality::VerySlow,
+        };
+
+        let surface = Surface {
+            data: rgba.to_vec(),
+            width,
+            height,
+            depth: 1,
+            stride: width * 4,
+            slice_stride: 0,
+            format: Format::R8G8B8A8_UNORM,
+            color_space: ColorSpace::Linear,
+            alpha: AlphaMode::Opaque,
+        };
+        let image = Image {
+            surfaces: vec![vec![surface]],
+            kind: TextureKind::Texture2D,
+        };
+
+        let result = convert(
+            image,
+            ConvertSettings {
+                format: Some(TargetFormat::Compressed {
+                    format: Format::BC7_UNORM_BLOCK,
+                    encoder: Encoder::Auto,
+                }),
+                container: Container::Raw,
+                quality: ctt_quality,
+                ..Default::default()
+            },
+        )
+        .map_err(|e| CookError::CookFailed(format!("BC7 compression failed: {e}")))?;
+
+        match result {
+            PipelineOutput::Raw(img) => {
+                if img.surfaces.is_empty()
+                    || img.surfaces[0].is_empty()
+                {
+                    return Err(CookError::CookFailed(
+                        "BC7 compression returned empty surface".into(),
+                    ));
+                }
+                Ok(img.surfaces[0][0].data.clone())
+            }
+            _ => Err(CookError::CookFailed(
+                "BC7 compression: expected Raw output, got encoded".into(),
+            )),
+        }
     }
 
     fn write_rtex(mips: &[(u32, u32, Vec<u8>)], format: u8) -> Vec<u8> {
@@ -324,8 +413,32 @@ impl Cooker for TextureCooker {
             return Err(CookError::CookFailed("Zero-dimension texture".into()));
         }
 
-        let mips = Self::generate_mips(w, h, rgba);
-        let cooked_data = Self::write_rtex(&mips, 0); // format RGBA8
+        let mips_rgba = Self::generate_mips(w, h, rgba);
+
+        // Decide format byte and optionally compress each mip level.
+        let (format, mips): (u8, Vec<(u32, u32, Vec<u8>)>) = match ctx.settings.texture.compression {
+            profile::TextureCompression::Rgba8 | profile::TextureCompression::None => {
+                (RTEX_FORMAT_RGBA8, mips_rgba)
+            }
+            profile::TextureCompression::Bc7 => {
+                let quality = ctx.settings.texture.quality;
+                let compressed: Result<Vec<_>, CookError> = mips_rgba
+                    .iter()
+                    .map(|(mw, mh, data)| {
+                        let blocks = Self::compress_bc7(*mw, *mh, data, quality)?;
+                        Ok::<_, CookError>((*mw, *mh, blocks))
+                    })
+                    .collect();
+                (RTEX_FORMAT_BC7, compressed?)
+            }
+            other => {
+                // Unsupported compression format for now.
+                tracing::warn!("Compression format {other:?} not yet implemented, falling back to RGBA8");
+                (RTEX_FORMAT_RGBA8, mips_rgba)
+            }
+        };
+
+        let cooked_data = Self::write_rtex(&mips, format);
 
         // Textures with mip chains should NOT be separately compressed —
         // the mip data is already tightly packed.
@@ -334,6 +447,87 @@ impl Cooker for TextureCooker {
             compress: false,
         })
     }
+}
+
+// ---------------------------------------------------------------------------
+// RTEX decoder — cooked runtime texture → structured mip data
+// ---------------------------------------------------------------------------
+
+/// Parsed RTEX cooked texture data.
+#[derive(Debug, Clone)]
+pub struct RtexInfo {
+    pub width: u32,
+    pub height: u32,
+    pub mip_levels: u32,
+    pub format: u8,
+    pub mip_data: Vec<Vec<u8>>,
+}
+
+/// Decode a cooked RTEX blob back into structured mip data.
+///
+/// This is the inverse of [`TextureCooker::write_rtex`]. Returns `None` if
+/// the data is malformed.
+pub fn decode_rtex(data: &[u8]) -> Option<RtexInfo> {
+    if data.len() < 18 || &data[..4] != RTEX_MAGIC {
+        return None;
+    }
+    if data[4] != 1 {
+        return None; // unknown version
+    }
+    let width = u32::from_le_bytes(data[5..9].try_into().ok()?);
+    let height = u32::from_le_bytes(data[9..13].try_into().ok()?);
+    let mip_levels = u32::from_le_bytes(data[13..17].try_into().ok()?);
+    let format = data[17];
+    if mip_levels == 0 || mip_levels > MAX_MIP_LEVELS {
+        return None;
+    }
+
+    let offset_table_start = 18usize;
+    let offset_table_size = mip_levels as usize * 4;
+    let header_size = offset_table_start + offset_table_size;
+    if data.len() < header_size {
+        return None;
+    }
+
+    // Read offset table.
+    let mut offsets = Vec::with_capacity(mip_levels as usize);
+    for i in 0..mip_levels as usize {
+        let off = u32::from_le_bytes(
+            data[offset_table_start + i * 4..][..4].try_into().ok()?,
+        );
+        offsets.push(off as usize);
+    }
+
+    // Extract each mip's data.
+    let mut mip_data = Vec::with_capacity(mip_levels as usize);
+    for i in 0..mip_levels as usize {
+        let start = offsets[i];
+        let end = if i + 1 < mip_levels as usize {
+            offsets[i + 1]
+        } else {
+            data.len()
+        };
+        if start >= end || end > data.len() {
+            return None;
+        }
+        mip_data.push(data[start..end].to_vec());
+    }
+
+    Some(RtexInfo {
+        width,
+        height,
+        mip_levels,
+        format,
+        mip_data,
+    })
+}
+
+/// Parse an RTXI intermediate blob and return the raw RGBA8 pixel data (mip 0).
+///
+/// Returns `(width, height, pixels)` where `pixels` is tightly-packed RGBA8.
+pub fn parse_rtexi_pixels(data: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
+    TextureCooker::parse_intermediate(data)
+        .map(|(w, h, px)| (w, h, px.to_vec()))
 }
 
 // ---------------------------------------------------------------------------
@@ -368,9 +562,18 @@ impl MeshCooker {
     }
 
     fn write_rmes(vert_count: u32, idx_count: u32, uv_channels: u32, intermediate: &[u8]) -> Vec<u8> {
-        let stride = (3 + 3 + uv_channels * 2) as u32; // floats per vertex
-        let vert_data_size = vert_count as usize * stride as usize * 4;
+        let pos_data_size = vert_count as usize * 3 * 4;
         let idx_data_size = idx_count as usize * 4;
+        let uv_data_size = uv_channels as usize * vert_count as usize * 2 * 4;
+
+        // Detect whether normals are present by checking the actual data size.
+        // RMXI: header(17) + positions + [normals] + [uv] + indices
+        let expected_with_normals = 17 + pos_data_size + vert_count as usize * 3 * 4 + uv_data_size + idx_data_size;
+        let has_normals = intermediate.len() >= expected_with_normals;
+
+        let nrm_floats: u32 = if has_normals { 3 } else { 0 };
+        let stride = (3 + nrm_floats + uv_channels * 2) as u32; // floats per vertex
+        let vert_data_size = vert_count as usize * stride as usize * 4;
         let header_size = 33usize;
 
         let mut buf = Vec::with_capacity(header_size + vert_data_size + idx_data_size);
@@ -383,9 +586,18 @@ impl MeshCooker {
         buf.extend_from_slice(&(stride * 4).to_le_bytes()); // stride in bytes
 
         let pos_off = header_size as u32;
-        let nrm_off = pos_off + vert_count * 3 * 4;
+        let nrm_off = if has_normals {
+            pos_off + vert_count * 3 * 4
+        } else {
+            0
+        };
         let uv0_off = if uv_channels > 0 {
-            nrm_off + vert_count * 3 * 4
+            let base = if has_normals {
+                nrm_off + vert_count * 3 * 4
+            } else {
+                pos_off + vert_count * 3 * 4
+            };
+            base
         } else {
             0
         };
@@ -395,10 +607,9 @@ impl MeshCooker {
         buf.extend_from_slice(&uv0_off.to_le_bytes());
 
         // Copy vertex/index data from intermediate (after 17-byte header).
-        let vert_start = 17usize;
-        let vert_end = vert_start + vert_data_size;
+        let vert_end = 17 + vert_data_size;
         if vert_end <= intermediate.len() {
-            buf.extend_from_slice(&intermediate[vert_start..vert_end]);
+            buf.extend_from_slice(&intermediate[17..vert_end]);
         }
         let idx_start = vert_end;
         let idx_end = idx_start + idx_data_size;
@@ -439,6 +650,96 @@ impl Cooker for MeshCooker {
             compress: true,
         })
     }
+}
+
+// ---------------------------------------------------------------------------
+// RMES decoder — cooked runtime mesh → structured vertex/index data
+// ---------------------------------------------------------------------------
+
+/// Parsed RMES cooked mesh data.
+#[derive(Debug, Clone)]
+pub struct RmesInfo {
+    pub vert_count: u32,
+    pub idx_count: u32,
+    pub uv_channels: u32,
+    pub stride_bytes: u32,
+    pub vertex_data: Vec<u8>,
+    pub index_data: Vec<u8>,
+}
+
+/// Decode a cooked RMES blob back into structured vertex/index data.
+///
+/// This is the inverse of [`MeshCooker::write_rmes`]. Returns `None` if the
+/// data is malformed.
+pub fn decode_rmes(data: &[u8]) -> Option<RmesInfo> {
+    if data.len() < 33 || &data[..4] != RMES_MAGIC {
+        return None;
+    }
+    if data[4] != 1 {
+        return None; // unknown version
+    }
+    let vert_count = u32::from_le_bytes(data[5..9].try_into().ok()?);
+    let idx_count = u32::from_le_bytes(data[9..13].try_into().ok()?);
+    let uv_channels = u32::from_le_bytes(data[13..17].try_into().ok()?);
+    let stride_bytes = u32::from_le_bytes(data[17..21].try_into().ok()?) as usize;
+    let _pos_offset = u32::from_le_bytes(data[21..25].try_into().ok()?);
+    let _nrm_offset = u32::from_le_bytes(data[25..29].try_into().ok()?);
+    let _uv0_offset = u32::from_le_bytes(data[29..33].try_into().ok()?);
+
+    let vert_data_size = vert_count as usize * stride_bytes;
+    let idx_data_size = idx_count as usize * 4;
+    let header_size = 33usize;
+
+    if data.len() < header_size + vert_data_size + idx_data_size {
+        return None;
+    }
+
+    let vertex_data = data[header_size..header_size + vert_data_size].to_vec();
+    let index_data = data[header_size + vert_data_size..header_size + vert_data_size + idx_data_size]
+        .to_vec();
+
+    Some(RmesInfo {
+        vert_count,
+        idx_count,
+        uv_channels,
+        stride_bytes: stride_bytes as u32,
+        vertex_data,
+        index_data,
+    })
+}
+
+/// Parse an RMXI intermediate header and return vertex/index metadata plus
+/// the raw vertex-data and index-data slices.
+///
+/// Returns `(vert_count, idx_count, uv_channels, vertex_bytes, index_bytes)`.
+pub fn parse_rmxi_info(data: &[u8]) -> Option<(u32, u32, u32, Vec<u8>, Vec<u8>)> {
+    if data.len() < 17 || &data[..4] != RMXI_MAGIC {
+        return None;
+    }
+    let vert_count = u32::from_le_bytes(data[5..9].try_into().ok()?);
+    let idx_count = u32::from_le_bytes(data[9..13].try_into().ok()?);
+    let uv_channels = u32::from_le_bytes(data[13..17].try_into().ok()?);
+
+    let pos_data_size = vert_count as usize * 3 * 4;
+    let idx_data_size = idx_count as usize * 4;
+    let uv_data_size = uv_channels as usize * vert_count as usize * 2 * 4;
+
+    // Detect normals presence from data size.
+    let expected_with_normals = 17 + pos_data_size + vert_count as usize * 3 * 4 + uv_data_size + idx_data_size;
+    let has_normals = data.len() >= expected_with_normals;
+
+    let nrm_floats: usize = if has_normals { 3 } else { 0 };
+    let stride_floats = 3 + nrm_floats + uv_channels as usize * 2;
+    let vert_data_size = vert_count as usize * stride_floats * 4;
+
+    if data.len() < 17 + vert_data_size + idx_data_size {
+        return None;
+    }
+
+    let vert_data = data[17..17 + vert_data_size].to_vec();
+    let idx_data = data[17 + vert_data_size..17 + vert_data_size + idx_data_size].to_vec();
+
+    Some((vert_count, idx_count, uv_channels, vert_data, idx_data))
 }
 
 // ---------------------------------------------------------------------------
@@ -781,7 +1082,7 @@ mod tests {
         assert_eq!(levels, 3);
 
         // Format.
-        assert_eq!(result.cooked_data[17], 0); // RGBA8
+        assert_eq!(result.cooked_data[17], RTEX_FORMAT_RGBA8); // RGBA8
 
         // Offsets table (levels * 4 bytes after header).
         let off_pos = 18usize;
@@ -938,5 +1239,351 @@ mod tests {
         let found = reg.find_for_type(AssetType::Texture);
         assert!(found.is_some());
         assert_eq!(found.unwrap().name(), "texture-cooker");
+    }
+
+    // ── Round-trip: cook → decode → assert ───────────────────────────
+
+    #[test]
+    fn binary_cooker_roundtrip() {
+        let input = b"some binary payload";
+        let cooker = BinaryCooker;
+        let settings = profile::CookSettings::default();
+        let id = AssetId::from_raw((1u64 << 32) | 1);
+        let record = asset_db::AssetRecord::new(id, "data.bin".into(), AssetType::Binary, "raw");
+        let ctx = CookContext {
+            record: &record,
+            imported_data: input,
+            settings: &settings,
+        };
+        let result = cooker.cook(&ctx).unwrap();
+        // Binary cooker is pass-through; cooked data must be identical.
+        assert_eq!(result.cooked_data, input);
+    }
+
+    #[test]
+    fn texture_cooker_roundtrip() {
+        // Build a small 8×6 gradient RGBA8 image.
+        let w = 8u32;
+        let h = 6u32;
+        let mut pixels = Vec::with_capacity((w * h * 4) as usize);
+        for y in 0..h {
+            for x in 0..w {
+                pixels.push((x * 32) as u8); // R varies with x
+                pixels.push((y * 42) as u8); // G varies with y
+                pixels.push(128u8); // B constant
+                pixels.push(255u8); // A opaque
+            }
+        }
+
+        let intermediate = make_texture_intermediate(w, h, &pixels);
+        let cooker = TextureCooker;
+        let settings = profile::CookSettings::default();
+        let id = AssetId::from_raw((1u64 << 32) | 99);
+        let record = asset_db::AssetRecord::new(id, "tex.png".into(), AssetType::Texture, "texture-importer");
+        let ctx = CookContext {
+            record: &record,
+            imported_data: &intermediate,
+            settings: &settings,
+        };
+        let result = cooker.cook(&ctx).unwrap();
+
+        // Decode RTEX back.
+        let rtex = decode_rtex(&result.cooked_data).expect("should decode RTEX");
+        assert_eq!(rtex.width, w);
+        assert_eq!(rtex.height, h);
+        assert_eq!(rtex.format, RTEX_FORMAT_RGBA8); // RGBA8
+        assert!(rtex.mip_levels >= 1);
+
+        // Mip0 must be byte-identical to the input pixels (cooker copies mip0 verbatim).
+        assert_eq!(
+            rtex.mip_data[0], pixels,
+            "mip0 must match input pixels exactly"
+        );
+
+        // Mip chain must be non-empty and each successive level must be
+        // smaller (or equal at 1×1).
+        for i in 1..rtex.mip_levels as usize {
+            assert!(
+                rtex.mip_data[i].len() < rtex.mip_data[i - 1].len(),
+                "mip{} ({}B) must be smaller than mip{} ({}B)",
+                i, rtex.mip_data[i].len(),
+                i - 1, rtex.mip_data[i - 1].len(),
+            );
+        }
+    }
+
+    #[test]
+    fn texture_decoder_rejects_bad_data() {
+        assert!(decode_rtex(b"garbage").is_none());
+        assert!(decode_rtex(b"RTEX").is_none()); // too short
+        // Wrong version.
+        let mut bad = vec![b'R', b'T', b'E', b'X', 99];
+        bad.resize(20, 0);
+        assert!(decode_rtex(&bad).is_none());
+    }
+
+    #[test]
+    fn mesh_cooker_roundtrip() {
+        // Build an RMXI intermediate with 3 vertices (a triangle).
+        let verts = 3u32;
+        let idxs = 3u32;
+        let uv_channels = 1u32;
+        let stride_floats = (3 + 3 + 2) as usize; // pos + nrm + uv
+
+        let mut intermediate = Vec::new();
+        intermediate.extend_from_slice(b"RMXI");
+        intermediate.push(1); // version
+        intermediate.extend_from_slice(&verts.to_le_bytes());
+        intermediate.extend_from_slice(&idxs.to_le_bytes());
+        intermediate.extend_from_slice(&uv_channels.to_le_bytes());
+
+        // Positions: a simple triangle
+        let pos: [[f32; 3]; 3] = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+        // Normals: all pointing up
+        let nrm = [0.0f32, 0.0, 1.0];
+        // UVs
+        let uv: [[f32; 2]; 3] = [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]];
+
+        for i in 0..verts as usize {
+            intermediate.extend_from_slice(&pos[i][0].to_le_bytes());
+            intermediate.extend_from_slice(&pos[i][1].to_le_bytes());
+            intermediate.extend_from_slice(&pos[i][2].to_le_bytes());
+            intermediate.extend_from_slice(&nrm[0].to_le_bytes());
+            intermediate.extend_from_slice(&nrm[1].to_le_bytes());
+            intermediate.extend_from_slice(&nrm[2].to_le_bytes());
+            intermediate.extend_from_slice(&uv[i][0].to_le_bytes());
+            intermediate.extend_from_slice(&uv[i][1].to_le_bytes());
+        }
+        // Indices
+        for i in 0..idxs {
+            intermediate.extend_from_slice(&i.to_le_bytes());
+        }
+
+        let pw = &intermediate;
+        let expected_vert_size = verts as usize * stride_floats * 4;
+        let expected_idx_size = idxs as usize * 4;
+
+        // Cook.
+        let cooker = MeshCooker;
+        let settings = profile::CookSettings::default();
+        let id = AssetId::from_raw((1u64 << 32) | 200);
+        let record = asset_db::AssetRecord::new(id, "mesh.gltf".into(), AssetType::Mesh, "gltf-importer");
+        let ctx = CookContext {
+            record: &record,
+            imported_data: pw,
+            settings: &settings,
+        };
+        let result = cooker.cook(&ctx).unwrap();
+
+        // Decode RMES.
+        let rmes = decode_rmes(&result.cooked_data).expect("should decode RMES");
+        assert_eq!(rmes.vert_count, verts);
+        assert_eq!(rmes.idx_count, idxs);
+        assert_eq!(rmes.uv_channels, uv_channels);
+
+        // Vertex data must match the intermediate (after its 17-byte header).
+        let expected_vert = &intermediate[17..17 + expected_vert_size];
+        assert_eq!(
+            rmes.vertex_data, expected_vert,
+            "RMES vertex data must match RMXI vertex data"
+        );
+
+        // Index data must match.
+        let expected_idx = &intermediate[17 + expected_vert_size..17 + expected_vert_size + expected_idx_size];
+        assert_eq!(
+            rmes.index_data, expected_idx,
+            "RMES index data must match RMXI index data"
+        );
+    }
+
+    #[test]
+    fn mesh_decoder_rejects_bad_data() {
+        assert!(decode_rmes(b"garbage").is_none());
+        // Wrong version.
+        let mut bad = vec![b'R', b'M', b'E', b'S', 99];
+        bad.resize(40, 0);
+        assert!(decode_rmes(&bad).is_none());
+    }
+
+    #[test]
+    fn decode_rtex_handles_known_asset() {
+        // Use the same pattern as texture_cooker_generates_mips test.
+        let pixels = std::iter::repeat([255u8, 0, 0, 255])
+            .take(4 * 4)
+            .flatten()
+            .collect::<Vec<_>>();
+        let intermediate = make_texture_intermediate(4, 4, &pixels);
+        let cooker = TextureCooker;
+        let settings = profile::CookSettings::default();
+        let id = AssetId::from_raw((1u64 << 32) | 99);
+        let record = asset_db::AssetRecord::new(id, "tex.png".into(), AssetType::Texture, "texture-importer");
+        let ctx = CookContext {
+            record: &record,
+            imported_data: &intermediate,
+            settings: &settings,
+        };
+        let result = cooker.cook(&ctx).unwrap();
+
+        let rtex = decode_rtex(&result.cooked_data).unwrap();
+        assert_eq!(rtex.width, 4);
+        assert_eq!(rtex.height, 4);
+        assert_eq!(rtex.mip_levels, 3);
+        assert_eq!(rtex.format, RTEX_FORMAT_RGBA8);
+        assert_eq!(rtex.mip_data.len(), 3);
+        // mip0 = 4*4*4 = 64 bytes
+        assert_eq!(rtex.mip_data[0].len(), 64);
+        // mip1 = 2*2*4 = 16 bytes
+        assert_eq!(rtex.mip_data[1].len(), 16);
+        // mip2 = 1*1*4 = 4 bytes
+        assert_eq!(rtex.mip_data[2].len(), 4);
+    }
+
+    #[test]
+    fn parse_rtexi_pixels_roundtrip() {
+        let mut pixels = Vec::new();
+        for i in 0..16 {
+            pixels.push(i as u8);
+        }
+        // 4 channels, so 2×2 image with 4 bytes per pixel = 16 bytes.
+        let intermediate = make_texture_intermediate(2, 2, &pixels);
+
+        let (w, h, parsed) = parse_rtexi_pixels(&intermediate).unwrap();
+        assert_eq!(w, 2);
+        assert_eq!(h, 2);
+        assert_eq!(parsed, pixels);
+    }
+
+    // ── BC7 compression tests ────────────────────────────────────────
+
+    /// Helper: create a CookContext for testing with the given compression setting.
+    struct TestCtx {
+        record: asset_db::AssetRecord,
+        settings: profile::CookSettings,
+    }
+
+    impl TestCtx {
+        fn new(compression: profile::TextureCompression) -> Self {
+            let id = AssetId::from_raw((1u64 << 32) | 99);
+            Self {
+                record: asset_db::AssetRecord::new(id, "tex.png".into(), AssetType::Texture, "texture-importer"),
+                settings: profile::CookSettings {
+                    texture: profile::TextureSettings {
+                        compression,
+                        quality: 50, // Fast quality
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            }
+        }
+
+        fn ctx<'a>(&'a self, intermediate: &'a [u8]) -> CookContext<'a> {
+            CookContext {
+                record: &self.record,
+                imported_data: intermediate,
+                settings: &self.settings,
+            }
+        }
+    }
+
+    #[test]
+    fn texture_cooker_bc7_format_byte() {
+        let pixels = std::iter::repeat([255u8, 0, 0, 255])
+            .take(4 * 4)
+            .flatten()
+            .collect::<Vec<_>>();
+        let intermediate = make_texture_intermediate(4, 4, &pixels);
+        let cooker = TextureCooker;
+        let tc = TestCtx::new(profile::TextureCompression::Bc7);
+        let result = cooker.cook(&tc.ctx(&intermediate)).unwrap();
+
+        // Must be RTEX with format byte = BC7.
+        assert_eq!(&result.cooked_data[..4], b"RTEX");
+        assert_eq!(result.cooked_data[17], RTEX_FORMAT_BC7);
+        // Must not be compressible (mip-packed).
+        assert!(!result.compress);
+    }
+
+    #[test]
+    fn texture_cooker_bc7_block_count() {
+        // 8×8 RGBA8 → 2×2 BC7 blocks = 4 blocks × 16 bytes = 64 bytes.
+        let pixels = vec![128u8; 8 * 8 * 4];
+        let intermediate = make_texture_intermediate(8, 8, &pixels);
+        let cooker = TextureCooker;
+        let tc = TestCtx::new(profile::TextureCompression::Bc7);
+        let result = cooker.cook(&tc.ctx(&intermediate)).unwrap();
+
+        // Decode and inspect mip0 data size.
+        let rtex = decode_rtex(&result.cooked_data).expect("should decode BC7 RTEX");
+        assert_eq!(rtex.format, RTEX_FORMAT_BC7);
+        assert_eq!(rtex.width, 8);
+        assert_eq!(rtex.height, 8);
+
+        // Mip0: 8×8 → ceil(8/4)×ceil(8/4) = 2×2 blocks = 4 blocks × 16 = 64 bytes.
+        assert_eq!(rtex.mip_data[0].len(), 4 * 16, "mip0 BC7 block count");
+    }
+
+    #[test]
+    fn texture_cooker_bc7_roundtrip() {
+        // 4×4 RGBA8 = exactly 1 BC7 block.
+        let pixels = vec![128u8; 4 * 4 * 4];
+        let intermediate = make_texture_intermediate(4, 4, &pixels);
+        let cooker = TextureCooker;
+        let tc = TestCtx::new(profile::TextureCompression::Bc7);
+        let result = cooker.cook(&tc.ctx(&intermediate)).unwrap();
+
+        // Decode and verify structure.
+        let rtex = decode_rtex(&result.cooked_data).expect("should decode BC7 RTEX");
+        assert_eq!(rtex.format, RTEX_FORMAT_BC7);
+        assert_eq!(rtex.width, 4);
+        assert_eq!(rtex.height, 4);
+        // Mip0 = 1 BC7 block = 16 bytes.
+        assert_eq!(rtex.mip_data[0].len(), 16);
+        // At least 2 mip levels (4→2→1 = 3 levels but BC7 block size floors).
+        assert!(rtex.mip_levels >= 2, "should have at least 2 mip levels, got {}", rtex.mip_levels);
+        // Mip levels must exist (size can be same for BC7 when
+        // different-resolution textures produce same block count).
+        assert!(!rtex.mip_data[0].is_empty());
+        assert!(!rtex.mip_data[1].is_empty());
+    }
+
+    #[test]
+    fn texture_cooker_bc7_non_square() {
+        // 6×4 RGBA8 → ceil(6/4)×ceil(4/4) = 2×1 BC7 blocks = 2 blocks × 16 = 32 bytes.
+        let pixels = vec![200u8; 6 * 4 * 4];
+        let intermediate = make_texture_intermediate(6, 4, &pixels);
+        let cooker = TextureCooker;
+        let tc = TestCtx::new(profile::TextureCompression::Bc7);
+        let result = cooker.cook(&tc.ctx(&intermediate)).unwrap();
+
+        let rtex = decode_rtex(&result.cooked_data).expect("should decode non-square BC7 RTEX");
+        assert_eq!(rtex.format, RTEX_FORMAT_BC7);
+        assert_eq!(rtex.width, 6);
+        assert_eq!(rtex.height, 4);
+
+        // Mip0 = 2×1 blocks = 2 × 16 = 32 bytes.
+        assert_eq!(rtex.mip_data[0].len(), 2 * 16, "non-square BC7 mip0 block count");
+    }
+
+    #[test]
+    fn texture_cooker_rgba8_still_default() {
+        // Default profile compression (Rgba8) must produce RGBA8 output.
+        let pixels = vec![255u8; 4 * 4 * 4];
+        let intermediate = make_texture_intermediate(4, 4, &pixels);
+        let cooker = TextureCooker;
+
+        let id = AssetId::from_raw((1u64 << 32) | 99);
+        let record = asset_db::AssetRecord::new(id, "tex.png".into(), AssetType::Texture, "texture-importer");
+        let settings = profile::CookSettings::default(); // Rgba8
+        let ctx = CookContext {
+            record: &record,
+            imported_data: &intermediate,
+            settings: &settings,
+        };
+        let result = cooker.cook(&ctx).unwrap();
+
+        // Must be RGBA8 format.
+        assert_eq!(&result.cooked_data[..4], b"RTEX");
+        assert_eq!(result.cooked_data[17], RTEX_FORMAT_RGBA8);
     }
 }

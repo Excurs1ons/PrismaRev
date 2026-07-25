@@ -861,27 +861,27 @@ impl IblResources {
         let descriptor_set_layout = unsafe {
             device.create_descriptor_set_layout(
                 &vk::DescriptorSetLayoutCreateInfo::default().bindings(&[
-                    vk::DescriptorSetLayoutBinding {
-                        binding: 0,
-                        descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-                        descriptor_count: 1,
-                        stage_flags: vk::ShaderStageFlags::FRAGMENT,
-                        ..Default::default()
-                    },
-                    vk::DescriptorSetLayoutBinding {
-                        binding: 1,
-                        descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-                        descriptor_count: 1,
-                        stage_flags: vk::ShaderStageFlags::FRAGMENT,
-                        ..Default::default()
-                    },
-                    vk::DescriptorSetLayoutBinding {
-                        binding: 2,
-                        descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-                        descriptor_count: 1,
-                        stage_flags: vk::ShaderStageFlags::FRAGMENT,
-                        ..Default::default()
-                    },
+	                    vk::DescriptorSetLayoutBinding {
+	                        binding: 0,
+	                        descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+	                        descriptor_count: 1,
+	                        stage_flags: vk::ShaderStageFlags::FRAGMENT | vk::ShaderStageFlags::COMPUTE,
+	                        ..Default::default()
+	                    },
+	                    vk::DescriptorSetLayoutBinding {
+	                        binding: 1,
+	                        descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+	                        descriptor_count: 1,
+	                        stage_flags: vk::ShaderStageFlags::FRAGMENT | vk::ShaderStageFlags::COMPUTE,
+	                        ..Default::default()
+	                    },
+	                    vk::DescriptorSetLayoutBinding {
+	                        binding: 2,
+	                        descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+	                        descriptor_count: 1,
+	                        stage_flags: vk::ShaderStageFlags::FRAGMENT | vk::ShaderStageFlags::COMPUTE,
+	                        ..Default::default()
+	                    },
                 ]),
                 None,
             )

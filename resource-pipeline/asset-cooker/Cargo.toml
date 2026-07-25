@@ -17,6 +17,7 @@ tracing = "0.1"
 anyhow = { workspace = true }
 image = { workspace = true }
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
+ctt = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"

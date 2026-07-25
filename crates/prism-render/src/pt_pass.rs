@@ -58,6 +58,11 @@ pub struct PathTracePass {
     bindless_set: vk::DescriptorSet,
     bindless_layout: vk::DescriptorSetLayout,
 
+    // IBL environment cubemap (set 2) - sampled on ray miss for HDR sky.
+    // Wired via `set_ibl_resources`. Not owned.
+    ibl_set: vk::DescriptorSet,
+    ibl_layout: vk::DescriptorSetLayout,
+
     // Accumulation buffers (persistent across frames)
     accum_image: vk::Image,
     accum_view: vk::ImageView,
@@ -197,6 +202,8 @@ impl PathTracePass {
             ds,
             bindless_set: vk::DescriptorSet::null(),
             bindless_layout: vk::DescriptorSetLayout::null(),
+            ibl_set: vk::DescriptorSet::null(),
+            ibl_layout: vk::DescriptorSetLayout::null(),
             accum_image: ai,
             accum_view: av,
             accum_memory: am,
@@ -281,6 +288,20 @@ impl PathTracePass {
         self.pipeline = None;
     }
 
+    /// Wire the IBL environment cubemap descriptor set (set 2) so the shader
+    /// can sample envCube on ray miss for HDR sky. Must be called before the
+    /// first frame so the pipeline layout includes set 2.
+    pub fn set_ibl_resources(
+        &mut self,
+        ibl_set: vk::DescriptorSet,
+        ibl_layout: vk::DescriptorSetLayout,
+    ) {
+        self.ibl_set = ibl_set;
+        self.ibl_layout = ibl_layout;
+        // Force pipeline rebuild to pick up the 3-set layout.
+        self.pipeline = None;
+    }
+
     fn resize_images(
         &mut self,
         device: &ash::Device,
@@ -332,9 +353,13 @@ impl PathTracePass {
         const SPV: &[u8] = include_bytes!("../../../shaders/pt_render.comp.spv");
         let mod_ = shader::load_shader_module(device, SPV).context("PathTracePass: load spv")?;
         let entry = std::ffi::CString::new("ptMain").unwrap();
-        // Two sets: set 0 = PT-local (accum/output/TLAS/vertex/index/meta/
-        // materials), set 1 = shared bindless texture table (samplers + SRVs).
-        let layouts = [self.ds_layout, self.bindless_layout];
+        // Three sets: set 0 = PT-local (accum/output/TLAS/vertex/index/meta/
+        // materials), set 1 = shared bindless texture table (samplers + SRVs),
+        // set 2 = IBL environment cubemap (HDR sky).
+        let mut layouts = vec![self.ds_layout, self.bindless_layout];
+        if self.ibl_layout != vk::DescriptorSetLayout::null() {
+            layouts.push(self.ibl_layout);
+        }
         let push = [vk::PushConstantRange {
             stage_flags: vk::ShaderStageFlags::COMPUTE,
             offset: 0,
@@ -616,8 +641,13 @@ impl RenderPassNode for PathTracePass {
         // Update descriptors
         self.update_ds(device);
 
-        // Bind: set 0 = PT-local, set 1 = shared bindless texture table.
-        let sets = [self.ds, self.bindless_set];
+        // Bind: set 0 = PT-local, set 1 = shared bindless texture table,
+        // set 2 = IBL environment cubemap (if wired).
+        let sets = if self.ibl_set != vk::DescriptorSet::null() {
+            vec![self.ds, self.bindless_set, self.ibl_set]
+        } else {
+            vec![self.ds, self.bindless_set]
+        };
         unsafe {
             device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pl.pipeline);
             device.cmd_bind_descriptor_sets(cmd, vk::PipelineBindPoint::COMPUTE, pl.layout,

@@ -394,6 +394,15 @@ impl GraphRenderer {
         self.egui_overlay.as_mut()
     }
 
+    /// IBL descriptor set + layout for the environment cubemap (set 2).
+    /// Used by PathTracePass and ScenePass for HDR sky / indirect lighting.
+    pub fn ibl_descriptor_set(&self) -> vk::DescriptorSet {
+        self.ibl.descriptor_set
+    }
+    pub fn ibl_descriptor_set_layout(&self) -> vk::DescriptorSetLayout {
+        self.ibl.descriptor_set_layout
+    }
+
     pub fn register_mesh(&mut self, input: &MeshUploadInput) -> anyhow::Result<MeshHandle> {
         self.mesh_manager.register(
             &self.runtime.context,
