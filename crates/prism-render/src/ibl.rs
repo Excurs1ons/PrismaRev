@@ -1000,8 +1000,15 @@ impl IblResources {
     }
 }
 
-impl Drop for IblResources {
-    fn drop(&mut self) {
+impl IblResources {
+    /// Explicitly destroy all GPU resources. Matches the RAII pattern used by
+    /// the rest of the renderer — `GraphRenderer::destroy` calls this so the
+    /// device handle is valid regardless of struct field-drop ordering.
+    pub fn destroy(&mut self) {
+        // Guard: zero out handles so re-entrant Drop (if any) is safe.
+        if self.descriptor_set_layout == vk::DescriptorSetLayout::null() {
+            return;
+        }
         unsafe {
             // env cube
             self.device.destroy_image_view(self.image_view, None);
@@ -1041,6 +1048,22 @@ impl Drop for IblResources {
             self.device
                 .destroy_descriptor_set_layout(self.descriptor_set_layout, None);
         }
+        // Null out handles so re-entrant Drop is safe.
+        self.descriptor_set_layout = vk::DescriptorSetLayout::null();
+        self.image = vk::Image::null();
+        self.image_view = vk::ImageView::null();
+        self.irradiance_image = vk::Image::null();
+        self.irradiance_image_view = vk::ImageView::null();
+        self.prefiltered_image = vk::Image::null();
+        self.prefiltered_image_view = vk::ImageView::null();
+        self.brdf_image = vk::Image::null();
+        self.brdf_image_view = vk::ImageView::null();
+    }
+}
+
+impl Drop for IblResources {
+    fn drop(&mut self) {
+        self.destroy();
     }
 }
 

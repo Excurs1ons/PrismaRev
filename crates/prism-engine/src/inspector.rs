@@ -350,6 +350,7 @@ impl Inspector {
             .interactable(false)
             .show(ctx, |ui| {
                 hint_frame.show(ui, |ui| {
+                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
                     ui.colored_label(egui::Color32::from_gray(180), perf_text);
                 });
             });

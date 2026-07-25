@@ -87,7 +87,6 @@ pub struct FrameInput<'a> {
 /// engine can move it (and the [`RenderGraph`]) onto a separate thread without
 /// moving scene-level managers and GUI state.
 pub struct RenderRuntime {
-    pub context: Arc<VulkanContext>,
     pub command_pool: vk::CommandPool,
     pub command_buffers: Vec<vk::CommandBuffer>,
     #[allow(dead_code)]
@@ -95,6 +94,12 @@ pub struct RenderRuntime {
     #[allow(dead_code)]
     pub descriptor_pool: DescriptorPool,
     pub frame_ubos: Vec<FrameUBO>,
+    /// **Must be the last field** — Rust drops struct fields in declaration
+    /// order, so `context` (which owns the `ash::Device`) is destroyed *last*,
+    /// after all child Vulkan objects (`descriptor_layout`, `descriptor_pool`,
+    /// `frame_ubos`) have been cleaned up. Without this ordering the device is
+    /// freed first and subsequent drops use a dangling handle → access violation.
+    pub context: Arc<VulkanContext>,
 }
 
 impl RenderRuntime {
@@ -136,27 +141,24 @@ impl RenderRuntime {
             .context("allocate command buffers")?;
 
         Ok(Self {
-            context,
             command_pool,
             command_buffers,
             descriptor_layout,
             descriptor_pool,
             frame_ubos,
+            context, // last — dropped last via declaration order
         })
     }
 }
 
 pub struct GraphRenderer {
     swapchain: Option<Swapchain>,
-    /// Long-lived GPU session (device, command pool, descriptors, UBOs).
-    /// Survives swapchain recreation — see [`RenderRuntime`].
-    runtime: RenderRuntime,
     mesh_manager: RenderMeshManager,
     texture_manager: RenderTextureManager,
     material_manager: RenderMaterialManager,
     // Owned for RAII; IBL cubemap + descriptor set are consumed via the
-    // descriptor set handle stored in `scene_pass`.
-    #[allow(dead_code)]
+    // descriptor set handle stored in `scene_pass`. Explicitly destroyed
+    // in `destroy()` so the device handle is valid during cleanup.
     ibl: IblResources,
     /// Scene-level GI probe volume resources (set 5). Survives swapchain
     /// recreation; only rebuilt on scene/level change.
@@ -180,6 +182,15 @@ pub struct GraphRenderer {
     /// COLOR_ATTACHMENT_OPTIMAL -> PRESENT_SRC_KHR transition. When `None`,
     /// `render` falls back to an explicit pipeline barrier for the transition.
     egui_overlay: Option<EguiOverlay>,
+    /// Long-lived GPU session (device, command pool, descriptors, UBOs).
+    /// Survives swapchain recreation — see [`RenderRuntime`].
+    ///
+    /// **Must be the last field** — Rust drops struct fields in declaration
+    /// order, so `runtime` (which owns the `Arc<VulkanContext>`) is destroyed
+    /// *last*, after all other Vulkan-dependent fields have been cleaned up.
+    /// This prevents the `ash::Device` from being freed while sibling-field
+    /// drops still reference it.
+    runtime: RenderRuntime,
 }
 
 /// Per-frame context returned by [`GraphRenderer::begin_frame`], consumed by
@@ -1068,6 +1079,9 @@ impl GraphRenderer {
     pub fn destroy(&mut self) {
         let device = &self.runtime.context.device;
         unsafe { device.device_wait_idle() }.ok();
+
+        // Destroy IBL resources (env/irradiance/prefiltered cubes, BRDF LUT).
+        self.ibl.destroy();
 
         // Destroy scene managers.
         self.material_manager.destroy(device);

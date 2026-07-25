@@ -37,3 +37,6 @@ assets/ibr/
 # not committed). The manifest file assets/scenes.toml itself stays tracked.
 assets/scenes/*
 !assets/scenes/*.toml
+
+# Deepwork session state
+.slim/deepwork/

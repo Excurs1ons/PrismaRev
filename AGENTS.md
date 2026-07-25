@@ -41,8 +41,9 @@ Conventions) before touching any matrix/coordinate math — deviating from those
   At `cmd_push_constants` call sites, reference `shader_bindings::module::Struct` directly —
   no type alias, no re-export, no intermediate module.
 - `xtask/src/shader_bindgen.rs` reads `shaders/reflection/*.json` and emits
-  `crates/prism-render/src/shader_bindings.rs` — one `pub mod` per Slang module.
-  Run after recompiling shaders: `cd xtask && cargo run --bin shader-bindgen -- ../shaders/reflection ../crates/prism-render/src/shader_bindings.rs`
+  one `.rs` file per shader module into `crates/prism-render/src/shader_bindings/`.
+  Run after recompiling shaders:
+  `cd xtask && cargo run --bin shader-bindgen -- ../shaders/reflection ../crates/prism-render/src/shader_bindings`
 - Each generated module contains:
   - Entry-point name constants (`ENTRY_VERTEX_MAIN`, etc.)
   - Descriptor set/binding constants
@@ -55,6 +56,12 @@ Conventions) before touching any matrix/coordinate math — deviating from those
 - If a Slang shader lacks `emit_reflection` in `compile.sh`, add it so the bindgen covers it.
 - Do NOT add hand-written `#[repr(C)]` push-constant structs. If the bindgen can't cover a
   case, extend `shader_bindgen.rs` (it should parse all Slang reflection field types).
+- The codegen uses plain `std::fmt` string formatting, **not** `syn`/`quote`. This is
+  intentional: the generated output is simple (consts + flat `#[repr(C)]` structs), so
+  `format!` is clearer than `quote!` and avoids pulling `proc-macro2`/`syn`/`quote` into
+  the xtask dependency tree (reducing compile time for the tool). Only reach for `syn`/`quote`
+  when the codegen needs to parse or transform existing Rust code, or emit deeply nested
+  generics/traits — none of which this tool does.
 
 ## Coordinate & matrix conventions (do not mix up)
 - Right-handed; camera looks down **−Z**; +X right, +Y up, +Z toward viewer.
