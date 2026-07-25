@@ -120,9 +120,38 @@ impl PathTracePass {
             b(7, vk::DescriptorType::STORAGE_BUFFER, vk::ShaderStageFlags::COMPUTE),
         ];
 
+        // All bindings get UPDATE_AFTER_BIND + PARTIALLY_BOUND because
+        // update_ds() is called every frame while previous-frame command
+        // buffers may still be in flight. Without these flags Vulkan
+        // validation complains about updating in-use descriptor sets.
+        let binding_flags = [
+            vk::DescriptorBindingFlags::UPDATE_AFTER_BIND
+                | vk::DescriptorBindingFlags::PARTIALLY_BOUND,
+            vk::DescriptorBindingFlags::UPDATE_AFTER_BIND
+                | vk::DescriptorBindingFlags::PARTIALLY_BOUND,
+            vk::DescriptorBindingFlags::UPDATE_AFTER_BIND
+                | vk::DescriptorBindingFlags::PARTIALLY_BOUND,
+            vk::DescriptorBindingFlags::UPDATE_AFTER_BIND
+                | vk::DescriptorBindingFlags::PARTIALLY_BOUND,
+            vk::DescriptorBindingFlags::UPDATE_AFTER_BIND
+                | vk::DescriptorBindingFlags::PARTIALLY_BOUND,
+            vk::DescriptorBindingFlags::UPDATE_AFTER_BIND
+                | vk::DescriptorBindingFlags::PARTIALLY_BOUND,
+            vk::DescriptorBindingFlags::UPDATE_AFTER_BIND
+                | vk::DescriptorBindingFlags::PARTIALLY_BOUND,
+            vk::DescriptorBindingFlags::UPDATE_AFTER_BIND
+                | vk::DescriptorBindingFlags::PARTIALLY_BOUND,
+        ];
+        let mut flags_info =
+            vk::DescriptorSetLayoutBindingFlagsCreateInfo::default()
+                .binding_flags(&binding_flags);
+
         let ds_layout = unsafe {
             device.create_descriptor_set_layout(
-                &vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings),
+                &vk::DescriptorSetLayoutCreateInfo::default()
+                    .flags(vk::DescriptorSetLayoutCreateFlags::UPDATE_AFTER_BIND_POOL)
+                    .bindings(&bindings)
+                    .push_next(&mut flags_info),
                 None,
             )
         }
@@ -135,7 +164,9 @@ impl PathTracePass {
         ];
         let ds_pool = unsafe {
             device.create_descriptor_pool(
-                &vk::DescriptorPoolCreateInfo::default().max_sets(1).pool_sizes(&pool_sizes),
+                &vk::DescriptorPoolCreateInfo::default()
+                    .flags(vk::DescriptorPoolCreateFlags::UPDATE_AFTER_BIND)
+                    .max_sets(1).pool_sizes(&pool_sizes),
                 None,
             )
         }

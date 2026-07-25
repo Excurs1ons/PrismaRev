@@ -800,17 +800,21 @@ fn transition_ao_images_to_shader_read(
     unsafe { device.end_command_buffer(cmd) }.context("GtaoPass: end transition cmd")?;
 
     let submit = vk::SubmitInfo::default().command_buffers(std::slice::from_ref(&cmd));
+    let fence = unsafe {
+        device
+            .create_fence(&vk::FenceCreateInfo::default(), None)
+            .context("GtaoPass: create transition fence")?
+    };
     unsafe {
-        device.queue_submit(
-            context.graphics_queue,
-            std::slice::from_ref(&submit),
-            vk::Fence::null(),
-        )
+        device
+            .queue_submit(context.graphics_queue, std::slice::from_ref(&submit), fence)
+            .context("GtaoPass: submit transition")?;
+        device
+            .wait_for_fences(&[fence], true, u64::MAX)
+            .context("GtaoPass: wait transition fence")?;
+        device.destroy_fence(fence, None);
+        device.free_command_buffers(command_pool, std::slice::from_ref(&cmd));
     }
-    .context("GtaoPass: submit transition")?;
-    unsafe { device.queue_wait_idle(context.graphics_queue) }
-        .context("GtaoPass: wait transition")?;
-    unsafe { device.free_command_buffers(command_pool, std::slice::from_ref(&cmd)) };
     Ok(())
 }
 

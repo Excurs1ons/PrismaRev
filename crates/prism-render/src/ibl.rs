@@ -696,7 +696,8 @@ impl IblResources {
         let img_create_ms = t_img_create.elapsed().as_millis();
         log::info!("  IBL phase: create images + alloc + fill staging: {}ms", img_create_ms);
         let t_upload = std::time::Instant::now();
-        submit_and_wait(&device, queue, command_pool, cmd);
+        submit_and_wait(&device, queue, command_pool, cmd)
+            .context("IBL upload submit")?;
         let upload_ms = t_upload.elapsed().as_millis();
         log::info!("  IBL phase: upload + submit + wait: {}ms", upload_ms);
 
@@ -1593,14 +1594,25 @@ fn submit_and_wait(
     queue: vk::Queue,
     pool: vk::CommandPool,
     cmd: vk::CommandBuffer,
-) {
+) -> anyhow::Result<()> {
     let cmd_arr = [cmd];
     let submit = vk::SubmitInfo::default().command_buffers(&cmd_arr);
+    let fence = unsafe {
+        device
+            .create_fence(&vk::FenceCreateInfo::default(), None)
+            .context("IBL submit_and_wait: create fence")?
+    };
     unsafe {
-        let _ = device.queue_submit(queue, &[submit], vk::Fence::null());
-        let _ = device.queue_wait_idle(queue);
+        device
+            .queue_submit(queue, &[submit], fence)
+            .context("IBL submit_and_wait: queue_submit")?;
+        device
+            .wait_for_fences(&[fence], true, u64::MAX)
+            .context("IBL submit_and_wait: wait_for_fences")?;
+        device.destroy_fence(fence, None);
         device.free_command_buffers(pool, &cmd_arr);
     }
+    Ok(())
 }
 
 fn find_memory_type(

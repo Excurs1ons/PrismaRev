@@ -357,13 +357,19 @@ impl SceneScope {
             device.end_command_buffer(cmd_buf)?;
         }
         let submit = vk::SubmitInfo::default().command_buffers(std::slice::from_ref(&cmd_buf));
+        let fence = unsafe {
+            device
+                .create_fence(&vk::FenceCreateInfo::default(), None)
+                .context("SceneScope: create upload fence")?
+        };
         unsafe {
-            device.queue_submit(
-                context.graphics_queue,
-                std::slice::from_ref(&submit),
-                vk::Fence::null(),
-            )?;
-            device.queue_wait_idle(context.graphics_queue)?;
+            device
+                .queue_submit(context.graphics_queue, std::slice::from_ref(&submit), fence)
+                .context("SceneScope: submit probe volume upload")?;
+            device
+                .wait_for_fences(&[fence], true, u64::MAX)
+                .context("SceneScope: wait for upload fence")?;
+            device.destroy_fence(fence, None);
         }
         unsafe {
             device.free_command_buffers(cmd_pool, std::slice::from_ref(&cmd_buf));

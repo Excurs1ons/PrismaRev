@@ -132,7 +132,7 @@ impl BlasEntry {
                 &mut size_info,
             );
         }
-        log::info!(
+        log::trace!(
             "BLAS build: tri_count={} as_size={} scratch={} verts={} vaddr={:#x} iaddr={:#x}",
             tri_count,
             size_info.acceleration_structure_size,
@@ -215,7 +215,8 @@ impl BlasEntry {
             );
             device.end_command_buffer(cmd)?;
         }
-        submit_and_wait(device, context.graphics_queue, command_pool, cmd);
+        submit_and_wait(device, context.graphics_queue, command_pool, cmd)
+            .context("BLAS build submit_and_wait")?;
 
         unsafe {
             device.destroy_buffer(scratch_buffer, None);
@@ -241,6 +242,227 @@ impl Drop for BlasEntry {
             self.device.free_memory(self.memory, None);
         }
     }
+}
+
+/// Parameters for building a single BLAS within a batch.
+pub struct BlasBuildParams {
+    pub vertex_addr: vk::DeviceAddress,
+    pub index_addr: vk::DeviceAddress,
+    pub vertex_count: u32,
+    pub tri_count: u32,
+}
+
+impl BlasEntry {
+    /// Build many BLAS structures, submitted in **chunks** so no single GPU
+    /// burst exceeds the Windows TDR timeout (~2 s).
+    ///
+    /// All AS buffers + scratch are allocated up front; builds are recorded
+    /// in batches of at most [`CHUNK_SIZE`] and each batch gets its own
+    /// submit+fence-wait.  This avoids both the per-instance submit overhead
+    /// (405 separate submits) and a single 5 second GPU burst.
+    const CHUNK_SIZE: usize = 64;
+
+    pub fn build_batch(
+        context: &VulkanContext,
+        command_pool: vk::CommandPool,
+        params: &[BlasBuildParams],
+    ) -> anyhow::Result<Vec<Self>> {
+        let device = &context.device;
+        let as_fn = context
+            .acceleration_structure_fn
+            .as_ref()
+            .context("acceleration structure extension not enabled")?;
+
+        if params.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // ---- 1. Get build sizes for every BLAS, find max scratch. ----
+        let mut as_sizes = Vec::with_capacity(params.len());
+        let mut max_scratch: vk::DeviceSize = 0;
+        for p in params {
+            let geom = full_geom(p);
+            let build_info = vk::AccelerationStructureBuildGeometryInfoKHR::default()
+                .ty(vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL)
+                .flags(vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_TRACE)
+                .geometries(std::slice::from_ref(&geom));
+
+            let mut size_info = vk::AccelerationStructureBuildSizesInfoKHR::default();
+            unsafe {
+                as_fn.get_acceleration_structure_build_sizes(
+                    vk::AccelerationStructureBuildTypeKHR::DEVICE,
+                    &build_info,
+                    &[p.tri_count],
+                    &mut size_info,
+                );
+            }
+            as_sizes.push(size_info);
+            if size_info.build_scratch_size > max_scratch {
+                max_scratch = size_info.build_scratch_size;
+            }
+        }
+
+        // ---- 2. Allocate one scratch buffer (max size across all chunks). ----
+        let (scratch_buffer, scratch_memory) = buffer::create_buffer(
+            context,
+            max_scratch,
+            BufferUsage::STORAGE_BUFFER | BufferUsage::SHADER_DEVICE_ADDRESS,
+            MemoryProperties::DEVICE_LOCAL,
+        )?;
+        let scratch_addr = unsafe {
+            device.get_buffer_device_address(
+                &vk::BufferDeviceAddressInfo::default().buffer(scratch_buffer),
+            )
+        };
+
+        // ---- 3. Allocate AS buffers and create BLAS handles for ALL at once. ----
+        let mut entries: Vec<Self> = Vec::with_capacity(params.len());
+        for size_info in &as_sizes {
+            let (as_buffer, as_memory) = buffer::create_buffer(
+                context,
+                size_info.acceleration_structure_size,
+                BufferUsage::ACCELERATION_STRUCTURE_STORAGE_KHR
+                    | BufferUsage::SHADER_DEVICE_ADDRESS,
+                MemoryProperties::DEVICE_LOCAL,
+            )?;
+
+            let create_info = vk::AccelerationStructureCreateInfoKHR::default()
+                .buffer(as_buffer)
+                .offset(0)
+                .size(size_info.acceleration_structure_size)
+                .ty(vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL);
+            let handle = unsafe { as_fn.create_acceleration_structure(&create_info, None) }
+                .context("create BLAS in batch")?;
+
+            let addr_info = vk::AccelerationStructureDeviceAddressInfoKHR::default()
+                .acceleration_structure(handle);
+            let device_address =
+                unsafe { as_fn.get_acceleration_structure_device_address(&addr_info) };
+
+            // Temporary placeholder — we'll fix up handle/address after building.
+            // (The handle is already valid; we just need the struct for the build.)
+            entries.push(Self {
+                handle,
+                device_address,
+                device: device.clone(),
+                as_fn: as_fn.clone(),
+                buffer: as_buffer,
+                memory: as_memory,
+            });
+        }
+
+        // ---- 4. Submit in chunks (each chunk < TDR timeout). ----
+        let mut chunk_start = 0;
+        while chunk_start < params.len() {
+            let chunk_end = (chunk_start + Self::CHUNK_SIZE).min(params.len());
+
+            let cmd = allocate_one_shot(device, command_pool)?;
+            unsafe {
+                device.begin_command_buffer(
+                    cmd,
+                    &vk::CommandBufferBeginInfo::default()
+                        .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
+                )?;
+            }
+
+            for i in chunk_start..chunk_end {
+                let p = &params[i];
+                let entry = &entries[i];
+                let geom = full_geom(p);
+
+                let build_info = vk::AccelerationStructureBuildGeometryInfoKHR::default()
+                    .ty(vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL)
+                    .flags(vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_TRACE)
+                    .geometries(std::slice::from_ref(&geom))
+                    .dst_acceleration_structure(entry.handle)
+                    .scratch_data(vk::DeviceOrHostAddressKHR {
+                        device_address: scratch_addr,
+                    });
+
+                let range = vk::AccelerationStructureBuildRangeInfoKHR {
+                    primitive_count: p.tri_count,
+                    primitive_offset: 0,
+                    first_vertex: 0,
+                    transform_offset: 0,
+                };
+                let ranges = [range];
+
+                unsafe {
+                    as_fn.cmd_build_acceleration_structures(
+                        cmd,
+                        std::slice::from_ref(&build_info),
+                        &[&ranges],
+                    );
+                    device.cmd_pipeline_barrier(
+                        cmd,
+                        vk::PipelineStageFlags::ACCELERATION_STRUCTURE_BUILD_KHR,
+                        vk::PipelineStageFlags::ACCELERATION_STRUCTURE_BUILD_KHR,
+                        vk::DependencyFlags::empty(),
+                        &[vk::MemoryBarrier::default()
+                            .src_access_mask(vk::AccessFlags::ACCELERATION_STRUCTURE_WRITE_KHR)
+                            .dst_access_mask(vk::AccessFlags::ACCELERATION_STRUCTURE_READ_KHR)],
+                        &[],
+                        &[],
+                    );
+                }
+            }
+
+            unsafe { device.end_command_buffer(cmd)? };
+
+            let fence = unsafe {
+                device
+                    .create_fence(&vk::FenceCreateInfo::default(), None)
+                    .context("build_blas_batch: create fence")?
+            };
+            let cmds = [cmd];
+            let submit = vk::SubmitInfo::default().command_buffers(&cmds);
+            unsafe {
+                device
+                    .queue_submit(context.graphics_queue, std::slice::from_ref(&submit), fence)
+                    .context("build_blas_batch: queue_submit")?;
+                device
+                    .wait_for_fences(&[fence], true, u64::MAX)
+                    .context("build_blas_batch: wait_for_fences")?;
+                device.destroy_fence(fence, None);
+                device.free_command_buffers(command_pool, &cmds);
+            }
+
+            chunk_start = chunk_end;
+        }
+
+        // ---- 5. Clean up scratch. ----
+        unsafe {
+            device.destroy_buffer(scratch_buffer, None);
+            device.free_memory(scratch_memory, None);
+        }
+
+        Ok(entries)
+    }
+}
+
+/// Helper: build the `VkAccelerationStructureGeometryKHR` for a single param.
+fn full_geom(p: &BlasBuildParams) -> vk::AccelerationStructureGeometryKHR<'_> {
+    vk::AccelerationStructureGeometryKHR::default()
+        .geometry_type(vk::GeometryTypeKHR::TRIANGLES)
+        .geometry(vk::AccelerationStructureGeometryDataKHR {
+            triangles: vk::AccelerationStructureGeometryTrianglesDataKHR {
+                vertex_format: vk::Format::R32G32B32_SFLOAT,
+                vertex_data: vk::DeviceOrHostAddressConstKHR {
+                    device_address: p.vertex_addr,
+                },
+                vertex_stride: std::mem::size_of::<crate::mesh::Vertex>() as vk::DeviceSize,
+                max_vertex: p.vertex_count.saturating_sub(1),
+                index_type: if p.index_addr != 0 {
+                    vk::IndexType::UINT32
+                } else {
+                    vk::IndexType::NONE_KHR
+                },
+                index_data: vk::DeviceOrHostAddressConstKHR {
+                    device_address: p.index_addr,
+                },
+                ..Default::default()
+            },
+        })
 }
 
 /// A built top-level acceleration structure — rebuilt per frame from instances.
@@ -370,7 +592,7 @@ impl Tlas {
                 &mut size_info,
             );
         }
-        log::info!(
+        log::trace!(
             "TLAS build: instances={} as_size={} scratch={} blas_addr={:#x}",
             instances.len(),
             size_info.acceleration_structure_size,
@@ -452,7 +674,8 @@ impl Tlas {
             );
             device.end_command_buffer(cmd)?;
         }
-        submit_and_wait(device, context.graphics_queue, command_pool, cmd);
+        submit_and_wait(device, context.graphics_queue, command_pool, cmd)
+            .context("TLAS build submit_and_wait")?;
 
         unsafe {
             device.destroy_buffer(scratch_buffer, None);
@@ -506,12 +729,23 @@ fn submit_and_wait(
     queue: vk::Queue,
     pool: vk::CommandPool,
     cmd: vk::CommandBuffer,
-) {
+) -> anyhow::Result<()> {
     let cmds = [cmd];
     let submit = vk::SubmitInfo::default().command_buffers(&cmds);
+    let fence = unsafe {
+        device
+            .create_fence(&vk::FenceCreateInfo::default(), None)
+            .context("submit_and_wait: create fence")?
+    };
     unsafe {
-        let _result = device.queue_submit(queue, std::slice::from_ref(&submit), vk::Fence::null());
-        let _ = device.queue_wait_idle(queue);
+        device
+            .queue_submit(queue, std::slice::from_ref(&submit), fence)
+            .context("submit_and_wait: queue_submit")?;
+        device
+            .wait_for_fences(&[fence], true, u64::MAX)
+            .context("submit_and_wait: wait_for_fences")?;
+        device.destroy_fence(fence, None);
         device.free_command_buffers(pool, &cmds);
     }
+    Ok(())
 }

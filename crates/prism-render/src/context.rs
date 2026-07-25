@@ -357,6 +357,12 @@ fn create_device(
         vk12.descriptor_binding_sampled_image_update_after_bind = vk::TRUE;
         vk12.descriptor_binding_variable_descriptor_count = vk::TRUE;
         vk12.shader_sampled_image_array_non_uniform_indexing = vk::TRUE;
+        // PathTracePass (and potentially other compute passes) updates
+        // STORAGE_IMAGE and STORAGE_BUFFER descriptors every frame while
+        // previous-frame command buffers are still in flight, which requires
+        // the descriptor-binding-level update-after-bind feature.
+        vk12.descriptor_binding_storage_image_update_after_bind = vk::TRUE;
+        vk12.descriptor_binding_storage_buffer_update_after_bind = vk::TRUE;
     }
     if rt_caps.timeline_semaphore {
         vk12.timeline_semaphore = vk::TRUE;
@@ -372,6 +378,10 @@ fn create_device(
     // Layer 2-4: RT features only when the caps say they're supported.
     if rt_caps.acceleration_structure {
         accel_features.acceleration_structure = vk::TRUE;
+        // PathTracePass updates the TLAS descriptor (binding 2) every frame;
+        // this sub-feature is required when the descriptor set uses
+        // UPDATE_AFTER_BIND on ACCELERATION_STRUCTURE bindings.
+        accel_features.descriptor_binding_acceleration_structure_update_after_bind = vk::TRUE;
         features2 = features2.push_next(&mut accel_features);
     }
     if rt_caps.ray_tracing_pipeline {

@@ -547,9 +547,22 @@ fn main() -> Result<()> {
         context.device.end_command_buffer(cmd_buf)?;
     }
     let submit = vk::SubmitInfo::default().command_buffers(std::slice::from_ref(&cmd_buf));
+    let fence = unsafe {
+        context
+            .device
+            .create_fence(&vk::FenceCreateInfo::default(), None)
+            .context("create bake-image fence")?
+    };
     unsafe {
-        context.device.queue_submit(context.graphics_queue, std::slice::from_ref(&submit), vk::Fence::null())?;
-        context.device.queue_wait_idle(context.graphics_queue)?;
+        context
+            .device
+            .queue_submit(context.graphics_queue, std::slice::from_ref(&submit), fence)
+            .context("submit bake-image dispatch")?;
+        context
+            .device
+            .wait_for_fences(&[fence], true, u64::MAX)
+            .context("wait for bake-image fence")?;
+        context.device.destroy_fence(fence, None);
     }
     log::info!("  compute dispatch complete");
 
@@ -593,9 +606,22 @@ fn main() -> Result<()> {
         context.device.end_command_buffer(cmd_buf2)?;
     }
     let submit2 = vk::SubmitInfo::default().command_buffers(std::slice::from_ref(&cmd_buf2));
+    let fence2 = unsafe {
+        context
+            .device
+            .create_fence(&vk::FenceCreateInfo::default(), None)
+            .context("create bake-image readback fence")?
+    };
     unsafe {
-        context.device.queue_submit(context.graphics_queue, std::slice::from_ref(&submit2), vk::Fence::null())?;
-        context.device.queue_wait_idle(context.graphics_queue)?;
+        context
+            .device
+            .queue_submit(context.graphics_queue, std::slice::from_ref(&submit2), fence2)
+            .context("submit bake-image readback")?;
+        context
+            .device
+            .wait_for_fences(&[fence2], true, u64::MAX)
+            .context("wait for bake-image readback fence")?;
+        context.device.destroy_fence(fence2, None);
     }
 
     // Read back floats

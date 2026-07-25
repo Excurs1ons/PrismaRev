@@ -660,5 +660,260 @@ gltf 引用的子集是 72 张全 4K（1.89 GB PNG -> 4.5 GB RGBA8），已经�
 
 5. **假设要先用最小代价验证再深入**。排查中假设过三个错误根因（NaN from 退化三角形 / `-O` 优化 bug / StructuredBuffer 替换），每个都消耗一次完整 GPU 烘焙（~30 秒）。其中 StructuredBuffer 方案没算清 std140 会把 float3 填充到 16 字节、stride 从 56 变 80，反而更糟。改 layout 前先算清内存影响。
 
-6. **slangc bug 的识别特征**：产生"数学上不可能"的值 + 通道独立腐败 + 同一 buffer 的部分加载异常。这类 bug 与 §13（Slang 给 opaque 运行时数组加非法 `ArrayStride`）同属编译器正确性问题，`spirv-val` 抓不到（SPIR-V 合法但语义错），只能靠运行时数据不变量（DC ≥ 0）发现。
+	6. **slangc bug 的识别特征**：产生"数学上不可能"的值 + 通道独立腐败 + 同一 buffer 的部分加载异常。这类 bug 与 §13（Slang 给 opaque 运行时数组加非法 `ArrayStride`）同属编译器正确性问题，`spirv-val` 抓不到（SPIR-V 合法但语义错），只能靠运行时数据不变量（DC ≥ 0）发现。
+
+## 34. 设备丢失 (Device Lost) 排查：围栏同步 + TDR + BLAS 索引双倍偏移
+
+**背景**：Sponza 场景加载（405 个实例）在 BLAS/TLAS 构建阶段触发 `VK_ERROR_DEVICE_LOST`。初看是 `queue_wait_idle` 同步问题，实际有三层嵌套。
+
+### 34.1 第一层：`queue_wait_idle` + 空围栏是不可靠的同步模式
+
+**现象**：`vkFreeCommandBuffers(): pCommandBuffers[0] is in use` 验证错误 → 设备丢失。
+
+**问题**：`submit_and_wait` 辅助函数用 `vkQueueSubmit(queue, &submit, VK_NULL_HANDLE)` + `vkQueueWaitIdle(queue)` 来等待 GPU 完成。`queue_wait_idle` 在 Windows 驱动上可能在校验完成前返回，导致命令缓冲区在 GPU 仍在执行时被释放。验证层捕获到释放 in-use 命令缓冲区，驱动程序内部状态被破坏，最终发生设备丢失。
+
+**修复**：全部替换为专用围栏模式：
+```rust
+// ❌ 不可靠
+device.queue_submit(queue, &submit, vk::Fence::null());
+device.queue_wait_idle(queue);
+device.free_command_buffers(pool, &cmds);
+
+// ✅ 可靠
+let fence = device.create_fence(&vk::FenceCreateInfo::default(), None)?;
+device.queue_submit(queue, &submit, fence)?;
+device.wait_for_fences(&[fence], true, u64::MAX)?;
+device.destroy_fence(fence, None);
+device.free_command_buffers(pool, &cmds);
+```
+
+**教训**：
+- `queue_wait_idle` 不是 `wait_for_fences` 的替代品。它在某些驱动上可能返回过早，而 `wait_for_fences` 保证该特定提交已完成。
+- `buffer::upload_to_buffer` 已有正确的围栏模式（注释里明确写了为什么不用 `queue_wait_idle`），但 `acceleration_structure.rs`、`ibl.rs`、`gtao.rs`、`scene_scope.rs` 各有独立的 `submit_and_wait` 副本，且都用错了。**Vulkan 辅助函数容易滋生碎片化的错误副本**，应该统一到一个共享帮助函数中。
+- `queue_wait_idle` 唯一合适的用途是程序退出前的"排空（drain）"：在释放所有资源之前确保 GPU 空闲。
+
+**受影响的代码位置**（6 处，全部修复）：
+
+| 文件 | 函数/位置 | 用途 |
+|------|-----------|------|
+| `acceleration_structure.rs` | `submit_and_wait` | BLAS + TLAS 构建 |
+| `ibl.rs` | `submit_and_wait` | IBL 上传 |
+| `gtao.rs` | `transition_ao_images_to_shader_read` | GTAO 图像转换 |
+| `scene_scope.rs` | `upload_probe_volume` | GI 探测体积上传 |
+| `prism_bake_gi.rs` | 两处内联 | 烘焙读取回 |
+| `prism_bake_image.rs` | 两处内联 | 图像读取回 |
+
+### 34.2 第二层：405 次独立 BLAS 构建触发 Windows TDR
+
+**现象**：围栏修复后验证错误消失，但设备丢失仍在发生，且耗时从 ~200ms 变为 ~5s。新的耗时恰好是将每个 BLAS 构建提交到 GPU 并等待单个围栏所需的时间总和。
+
+**问题**：405 个 BLAS 构建分别提交（每个都有 fence create/submit/wait/free/destroy），产生了 ~5 秒的连续执行时间。`batch upload submit+wait` 约 750ms（同数据量的纹理上传）提示 BLAS 构建不应该比纹理上传慢 6 倍。
+
+**第一次修复——单次批量提交**：将所有 405 个 BLAS 构建记录到单个命令缓冲区中，提交一次，等待一次。这消除了 ~405× 的提交开销，但连续 GPU 执行时间仍然是 ~5 秒，触发了 Windows TDR（默认 2 秒超时）。
+
+**第二次修复——分块提交**：将 405 个 BLAS 构建分成每组 64 个的批次（7 个批次），每一批用一个命令缓冲区 + 一次提交 + 一次围栏等待。这样每批的 GPU 执行时间 < 2 秒，TDR 不会触发，同时提交开销只有 7 次而非 405 次。
+
+**教训**：
+- Windows TDR（超时检测与恢复）会在 GPU 连续超过 2 秒无响应时重置 GPU。大块 GPU 工作（数百个 BLAS 构建、大型计算分发）必须分成更小的批次，每个批次之间有围栏等待，让操作系统有机会与 GPU 通信。
+- 围栏等待不仅仅是 CPU-GPU 同步原语——它们也是 TDR 规避机制：GPU 在围栏信号处写入时间戳，驱动程序借此确认 GPU 仍在运转。
+- 批量提交到单个命令缓冲区 + 单个围栏等待，与逐个提交 + 逐个等待相比，CPU 开销更低（1 个分配/释放 vs 405 个）。最佳方案是**分块批量**：将工作分块，使每块执行时间 < 2 秒，但块数 << 资源数。
+
+**分块策略对比**：
+
+| 策略 | CPU 开销 | GPU 突发 | TDR？ |
+|------|----------|----------|-------|
+| 逐个构建（405 次提交） | 极高（405× 围栏/缓冲区） | 短（~12ms） | 否 |
+| 全量批量（1 次提交） | 低（1× 围栏/缓冲区） | 长（~5s） | **是** |
+| **分块（64/块，7 次提交）** | **低（7× 围栏/缓冲区）** | **适中（~700ms）** | **否** |
+
+### 34.3 第三层（根因）：组合索引缓冲区中的索引偏移导致 GPU 越界读取
+
+**现象**：分块后设备丢失仍然存在，但执行时间未变（仍是 ~5 秒 GPU 时间），说明问题不是 TDR。
+
+**根因**：`build_pt_scene` 将所有实例的顶点和索引连接到一个组合缓冲区中，索引被偏移了 `vertex_base`（每个实例在组合顶点数组中的起始位置）。然后对每个实例调用 `BlasEntry::build_at(vertex_addr=组合偏移处地址, index_addr=组合索引偏移处地址, vertex_count=实例顶点数)`。
+
+在 BLAS 几何中：
+- 顶点缓冲区从 `vaddr = vbase + vertex_base × stride` 开始（实例的第一个顶点）
+- 索引缓冲区包含 `original_index + vertex_base`（偏移后的值）
+- GPU 计算顶点位置：`vaddr + (original_index + vertex_base) × stride`
+- = `(vbase + vertex_base × stride) + (original_index + vertex_base) × stride`
+- = `vbase + (2 × vertex_base + original_index) × stride` ← **双倍偏移！**
+
+对于后面的实例（`vertex_base` 较大），`2 × vertex_base + original_index` 轻松超过总顶点数，导致越界 GPU 内存读取 → GPU 页错误 → 设备丢失！
+
+旧的 `queue_wait_idle` 代码没有实际执行 BLAS 构建（立即返回），所以这个 bug 从未被触发。围栏修复让它暴露了。
+
+**修复**：将 `vertex_addr` 设置为组合缓冲区基地址（`vbase`），将 `vertex_count`（作为 `max_vertex`）设置为总顶点数。由于索引值已经是相对于 `vbase` 的（`vertex_base + original_index`），GPU 能正确计算：
+`vbase + (vertex_base + original_index) × stride` ✓
+
+**教训**：
+- **`queue_wait_idle` 返回过早会隐藏 GPU 错误**。旧的代码可能用了几周都没发现这个 BLAS 寻址 bug，因为 GPU 从来没有实际执行过 BLAS 构建——提交被吞掉了，验证层是唯一抱怨的。切换到正确围栏同步，所有累积的 GPU 错误立刻变为设备丢失。
+- **"围栏修复导致新问题"往往是旧 bug 被暴露了**。先后出现的现象（验证错误 → 耗时变长 → 设备丢失）是同一个根本原因（索引偏移）经过不同同步层后的不同表现。
+- **验证层错误 vs 设备丢失**：验证层错误提示 API 滥用（释放 in-use 缓冲区），但不一定直接导致崩溃。设备丢失是 GPU 处于不可恢复状态。先修验证层错误，再处理设备丢失。
+- 写索引连接循环时要检查相对偏移 vs 绝对基地址的一致性。特别是当同一缓冲区被 GPU 的不同单元（BLAS 构建、着色器内存访问）以不同方式解读时，每个消费者的偏移约定必须独立验证。
+- `BlasEntry::build_at` 的设计（接受 `vertex_addr` 但根据 `vertex_count` 推断 `max_vertex`）让调用者有义务传递正确的基地址。如果调用者传递的是偏移地址，`max_vertex` 必须是相对于该偏移地址的（即实例的本地 `vertex_count - 1`）；如果传递的是组合基地址，`max_vertex` 必须是总顶点数。**这个"相对谁？"的约定没有在 API 文档中说明**，是两个消费者之间的不匹配。更好的设计：`BlasBuildParams` 要求显式传递 `max_vertex`（而非 `vertex_count`），迫使调用者思考自己在做什么。
+
+### 34.4 排查逻辑
+
+```
+设备丢失
+├─ 验证层：vkFreeCommandBuffers in-use
+│  └─ queue_wait_idle 返回过早 → 替换为围栏 ✓
+│
+└─ 设备丢失（围栏修复后仍然）
+   ├─ 耗时 ~5s → 怀疑 TDR
+   │  ├─ 单次批量提交 → 仍然 ~5s + 设备丢失
+   │  └─ 分块 64/批 → 耗时不变 + 设备丢失仍然
+   │     └─ 不是 TDR，是 GPU 执行时崩溃
+   │
+   └─ BLAS 寻址错误 → 索引双倍偏移 ✓
+      └─ 旧代码从未真正执行 BLAS（queue_wait_idle 返回过早），
+         bug 被隐藏。围栏修复暴露了它。
+```
+
+### 34.5 总结
+
+| 层 | 现象 | 根因 | 修复 |
+|----|------|------|------|
+| 同步 | `vkFreeCommandBuffers in-use` 验证错误 | `queue_wait_idle` 返回过早 | 替换为专用围栏 |
+| GPU 时间 | 围栏修复后 ~5s 执行时间 | 405 次独立提交，每次 12ms | 分块批量（64/块，7 次提交） |
+| GPU 崩溃 | 设备丢失持续发生 | BLAS 索引偏移双倍 `vertex_base` | `vertex_addr` 使用组合基地址 |
+
+这三层中的每一层都可能被误认为是根本原因，但实际上只有上层症状。真正的 bug（索引偏移）在旧的同步代码下一直被隐藏。**围栏修复是诊断工具，不是最终修复**——它揭示了真正的问题。
+
+## 35. 描述符集每帧更新需 `UPDATE_AFTER_BIND` 标志
+
+**背景**：`PathTracePass` 每帧调用 `update_ds()` 写入全部描述符（bindings 0-7），因为几何/材质/输出资源在帧间可能变化（TLAS 重建、accum 图像 resize 等）。描述符集布局创建时没有设置 `UPDATE_AFTER_BIND`，导致 Vulkan 验证层报错：
+
+```
+vkUpdateDescriptorSets(): dstBinding (0) was created with VkDescriptorBindingFlags(0),
+but VkDescriptorSet ... is in use by VkCommandBuffer ...
+```
+
+**根因**：PathTracePass 的描述符集在 `new()` 时创建，布局用默认 flag（= 无更新后绑定）。但 `execute()` 每帧调用 `update_ds()` 时，上一帧的命令缓冲区可能仍在飞行（pending），写入正在被 GPU 引用的描述符集违反 Vulkan 规范。
+
+**修复**：
+- 描述符集布局绑定标志加 `UPDATE_AFTER_BIND | PARTIALLY_BOUND`
+- 布局创建加 `UPDATE_AFTER_BIND_POOL` flag
+- 池创建加 `UPDATE_AFTER_BIND` flag
+
+```rust
+// 修改前
+let ds_layout = device.create_descriptor_set_layout(
+    &vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings), None)?;
+
+// 修改后
+let binding_flags = [
+    vk::DescriptorBindingFlags::UPDATE_AFTER_BIND
+        | vk::DescriptorBindingFlags::PARTIALLY_BOUND,
+    // ... 每个 binding 相同
+];
+let mut flags_info = vk::DescriptorSetLayoutBindingFlagsCreateInfo::default()
+    .binding_flags(&binding_flags);
+let ds_layout = device.create_descriptor_set_layout(
+    &vk::DescriptorSetLayoutCreateInfo::default()
+        .flags(vk::DescriptorSetLayoutCreateFlags::UPDATE_AFTER_BIND_POOL)
+        .bindings(&bindings)
+        .push_next(&mut flags_info), None)?;
+let ds_pool = device.create_descriptor_pool(
+    &vk::DescriptorPoolCreateInfo::default()
+        .flags(vk::DescriptorPoolCreateFlags::UPDATE_AFTER_BIND)  // 池也要
+        .max_sets(1).pool_sizes(&pool_sizes), None)?;
+```
+
+**哪类描述符集需要 `UPDATE_AFTER_BIND`**：
+| 使用模式 | 需要 UAB？ | 替代方案 |
+|----------|-----------|----------|
+| 只在初始化时写入一次，之后只读 | 不需要 | — |
+| 每帧写入相同 set，但只有一帧飞行（单缓冲） | 不需要 | 若 `wait_idle` 或围栏保证 |
+| 每帧写入相同 set，多帧并行（双/三缓冲） | **需要** | 或每帧分配新 set（开销大） |
+| 只更新设置了 `UPDATE_AFTER_BIND` 的 binding | 仅该 binding | 其他 binding 仍受限 |
+| 用到 `PARTIALLY_BOUND`（有未绑定的描述符槽） | 推荐 | — |
+
+**教训**：
+- 描述符集的绑定标志不是可选的锦上添花——当更新模式涉及"写入正在 GPU 使用的 set"时，它们是强制性的。
+- `BindlessTextureTable` 已正确使用这些标志。`PathTracePass`（以及将来类似的时间性累积/重建每帧资源的 pass）必须遵循相同模式。
+- 一个识别信号：如果 `execute()` 里调了 `update_descriptor_sets()`，几乎肯定需要 `UPDATE_AFTER_BIND`。
+
+## 36. `fix_spv` 遗漏：所有 import `path_integrator.slang` 的 compute shader 也需要 ArrayStride 修复
+
+**背景**：`compile.sh` 对 `scene_frag.frag.spv` 调用了 `fix_spv`（line 130），但三个 compute shader（`pt_render.comp.spv`、`gi_bake.comp.spv`、`gi_render.comp.spv`）编译后没有调用 `fix_spv`。导致 `pt_render.comp.spv` 加载时触发 SPIR-V 验证错误：
+
+```
+vkCreateShaderModule(): pCreateInfo->pCode (spirv-val produced an error):
+Invalid explicit layout decorations on type for operand '580[%580]'
+  %bindlessSrvs = OpVariable %_ptr_UniformConstant__runtimearr_579 UniformConstant
+```
+
+**根因**：`path_integrator.slang` 声明了 bindless 纹理/采样器 runtime array：
+```slang
+[[vk::binding(0, 1)]]
+SamplerState globalSamplers[];
+[[vk::binding(1, 1)]]
+Texture2D bindlessSrvs[];
+```
+Slang 编译器对这些 runtime array 的 opaque 元素类型生成非法的 `OpDecorate ArrayStride <n>` 装饰。`fix_spirv.py` 可以剥离这些非法装饰，但：
+
+- `scene_frag.slang` 直接声明了相同 binding（line 78-85），但被 `fix_spv` 修复了 ✅
+- `pt_render.slang` 通过 `import path_integrator` 间接声明相同 binding，但没有 `fix_spv` ❌
+
+`compile.sh` 当初加 `fix_spv` 时只考虑了 rasterizer 的 fragment shader，遗漏了后来添加的 compute shader。
+
+**修复**：为所有 import `path_integrator` 的 compute shader 添加 `fix_spv` 调用：
+```bash
+# compile.sh line 152-168
+fix_spv "$OUT/gi_bake.comp.spv"
+fix_spv "$OUT/gi_render.comp.spv"
+fix_spv "$OUT/pt_render.comp.spv"
+```
+
+**教训**：
+- `fix_spv` 不是针对特定文件名，而是针对**任何包含 bindless runtime array 声明**的 SPIR-V 模块。添加新的 slang 文件时，如果它声明或 import 了 `SamplerState[]` / `Texture2D[]` 等 opaque runtime array，就必须加上 `fix_spv`。
+- 一个简单的判断规则：如果 `.slang` 文件包含 `globalSamplers[]` 或 `bindlessSrvs[]` 声明，或者 import 了包含这些声明的模块（`path_integrator.slang`），则编译后需要 `fix_spv`。
+- Slang 的 runtime array ArrayStride bug 影响所有使用 bindless 纹理的 compute shader，不只是 fragment shader。§13 提到的是 fragment shader 的复现，§33 提到 slangc 数据腐败——这里是第三个变种：编译器生成的 SPIR-V 被 `spirv-val` 拒绝。
+
+## 37. `UPDATE_AFTER_BIND` 需要对应描述符类型的设备子功能启用
+
+**背景**：§35 给 `PathTracePass` 的 descriptor set layout 加上了 `UPDATE_AFTER_BIND | PARTIALLY_BOUND` 标志，结果 `vkCreateDescriptorSetLayout` 报错：
+
+```
+pBindingFlags[0] includes VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT
+but pBindings[0].descriptorType is VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
+but descriptorBindingStorageImageUpdateAfterBind was not enabled.
+```
+
+同样的报错重复了 bindings 0-7，三种描述符类型各对应不同的 feature bit。
+
+**根因**：`UPDATE_AFTER_BIND` 是一个绑定级别的标志，但 Vulkan 要求对每种描述符**类型**在设备创建时启用对应的子功能。只加 layout/pool flag 不够——Vulkan 1.2 的 `PhysicalDeviceVulkan12Features` 里有一组粒度很细的 `descriptorBinding<Type>UpdateAfterBind` 字段，每个控制一种描述符类型的 update-after-bind 行为。
+
+**修复**：在 `context.rs` 的设备创建处，对 `PathTracePass` 用到的三种描述符类型启用对应的 feature：
+
+| 描述符类型 | Vulkan feature 字段 | 所在结构体 |
+|-----------|-------------------|-----------|
+| `VK_DESCRIPTOR_TYPE_STORAGE_IMAGE` | `descriptor_binding_storage_image_update_after_bind` | `PhysicalDeviceVulkan12Features` |
+| `VK_DESCRIPTOR_TYPE_STORAGE_BUFFER` | `descriptor_binding_storage_buffer_update_after_bind` | `PhysicalDeviceVulkan12Features` |
+| `VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR` | `descriptor_binding_acceleration_structure_update_after_bind` | `PhysicalDeviceAccelerationStructureFeaturesKHR` |
+
+```rust
+// 在 descriptor_indexing 块内
+vk12.descriptor_binding_storage_image_update_after_bind = vk::TRUE;
+vk12.descriptor_binding_storage_buffer_update_after_bind = vk::TRUE;
+
+// 在 acceleration_structure 块内
+accel_features.descriptor_binding_acceleration_structure_update_after_bind = vk::TRUE;
+```
+
+**为什么之前 `BindlessTextureTable` 没有触发这个问题？**
+
+`BindlessTextureTable` 只有两种描述符类型：`SAMPLER` 和 `SAMPLED_IMAGE`。对 `SAMPLED_IMAGE` 来说需要的子功能是 `descriptor_binding_sampled_image_update_after_bind`，而它已经在 `if rt_caps.descriptor_indexing` 块中被启用了（当初就是为了 bindless 加的）。所以 bindless table 一切正常。
+
+`PathTracePass` 额外使用了 `STORAGE_IMAGE`、`STORAGE_BUFFER`、`ACCELERATION_STRUCTURE_KHR`，每种都需要单独启用其 update-after-bind 子功能。Vulkan 的 feature 设计故意做到类型级别的粒度——你可以让 sampled image 支持 update-after-bind 而 storage image 不支持，如果应用只需要 bindless 纹理的话。
+
+**教训**：
+- `UPDATE_AFTER_BIND` 涉及**三层**启用，缺一不可：
+  1. **设备功能**：`PhysicalDeviceVulkan12Features` 或对应扩展 feature 结构体中的 `descriptorBinding<Type>UpdateAfterBind`
+  2. **布局 flag**：`DescriptorSetLayoutCreateFlags::UPDATE_AFTER_BIND_POOL` + `DescriptorSetLayoutBindingFlagsCreateInfo` 里的 `UPDATE_AFTER_BIND_BIT`
+  3. **池 flag**：`DescriptorPoolCreateFlags::UPDATE_AFTER_BIND`
+- 新增描述符类型到 update-after-bind set 时，先查对应的 `descriptorBinding<Type>UpdateAfterBind` 是否已在设备创建处启用——这是最常见的遗漏点。
+- `BindlessTextureTable::required_features()` 返回了它需要的 feature 集，但 `PathTracePass` 没有对应的 `required_features()` 方法。实践中，每个需要特殊 device feature 的模块应该暴露一个 `required_features()`，然后在设备创建处汇总启用。
 

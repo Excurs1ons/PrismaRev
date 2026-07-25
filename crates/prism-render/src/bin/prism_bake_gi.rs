@@ -554,9 +554,22 @@ fn main() -> Result<()> {
         context.device.end_command_buffer(cmd_buf)?;
     }
     let submit = vk::SubmitInfo::default().command_buffers(std::slice::from_ref(&cmd_buf));
+    let fence = unsafe {
+        context
+            .device
+            .create_fence(&vk::FenceCreateInfo::default(), None)
+            .context("create bake-gi fence")?
+    };
     unsafe {
-        context.device.queue_submit(context.graphics_queue, std::slice::from_ref(&submit), vk::Fence::null())?;
-        context.device.queue_wait_idle(context.graphics_queue)?;
+        context
+            .device
+            .queue_submit(context.graphics_queue, std::slice::from_ref(&submit), fence)
+            .context("submit bake-gi dispatch")?;
+        context
+            .device
+            .wait_for_fences(&[fence], true, u64::MAX)
+            .context("wait for bake-gi fence")?;
+        context.device.destroy_fence(fence, None);
     }
     log::info!("  compute dispatch complete");
 
@@ -606,9 +619,22 @@ fn main() -> Result<()> {
         context.device.end_command_buffer(cmd_buf2)?;
     }
     let submit2 = vk::SubmitInfo::default().command_buffers(std::slice::from_ref(&cmd_buf2));
+    let fence2 = unsafe {
+        context
+            .device
+            .create_fence(&vk::FenceCreateInfo::default(), None)
+            .context("create bake-gi readback fence")?
+    };
     unsafe {
-        context.device.queue_submit(context.graphics_queue, std::slice::from_ref(&submit2), vk::Fence::null())?;
-        context.device.queue_wait_idle(context.graphics_queue)?;
+        context
+            .device
+            .queue_submit(context.graphics_queue, std::slice::from_ref(&submit2), fence2)
+            .context("submit bake-gi readback")?;
+        context
+            .device
+            .wait_for_fences(&[fence2], true, u64::MAX)
+            .context("wait for bake-gi readback fence")?;
+        context.device.destroy_fence(fence2, None);
     }
     let pixels: Vec<f32> = unsafe {
         let ptr = context.device.map_memory(staging_mem, 0, readback_size, vk::MemoryMapFlags::empty())?;

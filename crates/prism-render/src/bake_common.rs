@@ -384,7 +384,7 @@ pub fn build_pt_scene(
     instances: &[PtGeometryInstance],
     materials_bytes: &[u8],
 ) -> Result<PtScene> {
-    use crate::acceleration_structure::{BlasEntry, Tlas, TlasInstance};
+    use crate::acceleration_structure::{BlasBuildParams, BlasEntry, Tlas, TlasInstance};
 
     let device = &context.device;
     if instances.is_empty() {
@@ -434,25 +434,41 @@ pub fn build_pt_scene(
     let (matbuf, matmem) = create_storage_buffer(context, materials_bytes)
         .context("build_pt_scene: materials buffer")?;
 
-    // ---- 2. One BLAS per instance.
-    let vertex_stride = std::mem::size_of::<Vertex>() as vk::DeviceAddress;
+    // ---- 2. Build all BLAS in one batch (single submit + wait).
     let index_stride = 4u32 as vk::DeviceAddress;
-    let mut blas_entries: Vec<BlasEntry> = Vec::with_capacity(instances.len());
+    let total_verts = all_verts.len() as u32;
+
+    // Gather build params for every instance.
+    //
+    // IMPORTANT — vertex_addr is the *combined* buffer base, NOT the
+    // per-instance offset, because the index buffer stores remapped values
+    // (original_index + vertex_base).  Using the instance offset would
+    // double-count vertex_base and read out of bounds on later instances,
+    // causing a GPU fault + device lost.
+    let build_params: Vec<BlasBuildParams> = instances
+        .iter()
+        .zip(meta.iter())
+        .map(|(inst, m)| {
+            let tri_count = if inst.indices.len() > 0 {
+                inst.indices.len() as u32 / 3
+            } else {
+                inst.vertices.len() as u32 / 3
+            };
+            BlasBuildParams {
+                vertex_addr: vbase_addr,
+                index_addr: ibase_addr + (m.index_base as vk::DeviceAddress) * index_stride,
+                vertex_count: total_verts,
+                tri_count,
+            }
+        })
+        .collect();
+
+    let blas_entries = BlasEntry::build_batch(context, command_pool, &build_params)
+        .context("build_pt_scene: batch BLAS build")?;
+
     let mut blas_addrs: Vec<vk::DeviceAddress> = Vec::with_capacity(instances.len());
     let mut tlas_instances: Vec<TlasInstance> = Vec::with_capacity(instances.len());
-    for (i, inst) in instances.iter().enumerate() {
-        let m = &meta[i];
-        let vaddr = vbase_addr + (m.vertex_base as vk::DeviceAddress) * vertex_stride;
-        let iaddr = ibase_addr + (m.index_base as vk::DeviceAddress) * index_stride;
-        let blas = BlasEntry::build_at(
-            context,
-            command_pool,
-            vaddr,
-            iaddr,
-            inst.vertices.len() as u32,
-            inst.indices.len() as u32,
-        )
-        .with_context(|| format!("build_pt_scene: BLAS for instance {i}"))?;
+    for (i, blas) in blas_entries.iter().enumerate() {
         blas_addrs.push(blas.device_address);
         tlas_instances.push(TlasInstance {
             transform: [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0],
@@ -461,7 +477,6 @@ pub fn build_pt_scene(
             instance_shader_binding_table_record_offset: 0,
             flags: vk::GeometryInstanceFlagsKHR::TRIANGLE_FACING_CULL_DISABLE,
         });
-        blas_entries.push(blas);
     }
 
     let tlas = Tlas::build(context, command_pool, &tlas_instances, &blas_addrs)
