@@ -251,6 +251,11 @@ pub struct App {
     /// `true` while ALT is held and has temporarily released a locked pointer,
     /// so releasing ALT re-locks (distinct from a full ESC exit).
     alt_temp_release: bool,
+    /// Set when the window regains focus (Focused(true)). The very next
+    /// left-click on the 3D scene will be treated as a "focus the window"
+    /// gesture instead of entering pointer lock, so switching away and
+    /// clicking back doesn't auto-grab the cursor.
+    focus_return_click: bool,
     /// Audio engine for spatial and UI sounds. Initialised (or gracefully
     /// skipped on failure) after the window is ready. `None` = silent mode.
     audio: Option<AudioEngine>,
@@ -309,6 +314,7 @@ impl App {
             pointer_locked: false,
             lock_before_inspector: false,
             alt_temp_release: false,
+            focus_return_click: false,
             audio: None,
             render_mode: RenderMode::Raster,
             pt_max_bounces: 3,
@@ -1093,6 +1099,17 @@ impl ApplicationHandler for App {
                 // cursor state when they return, and so stale mouse delta can't
                 // accumulate while the window is inactive and cause a camera
                 // jump on re-entry.
+                self.focus_return_click = false;
+                if self.pointer_locked {
+                    self.set_locked(false);
+                }
+            }
+            WindowEvent::Focused(true) => {
+                // Window regained focus. Mark the next click as a "focus the
+                // window" gesture so it doesn't auto-enter pointer lock and
+                // immediately catch stale mouse movement. Safety-net unlock
+                // in case Focused(false) wasn't delivered on this platform.
+                self.focus_return_click = true;
                 if self.pointer_locked {
                     self.set_locked(false);
                 }
@@ -1118,11 +1135,17 @@ impl ApplicationHandler for App {
                         return;
                     }
                     // Left-click on the 3D scene (not a UI panel) enters
-                    // FPS-style pointer lock if not already locked and the
-                    // inspector isn't open.
+                    // FPS-style pointer lock if not already locked, the
+                    // inspector isn't open, and this isn't the first click
+                    // after a focus-return (which should just focus the
+                    // window, not grab the cursor).
                     if !self.pointer_locked && !self.ui_modal_open() {
-                        self.set_locked(true);
-                        return;
+                        if self.focus_return_click {
+                            self.focus_return_click = false;
+                        } else {
+                            self.set_locked(true);
+                            return;
+                        }
                     }
                 }
                 self.input_state.handle_mouse_button(button.into(), state);
