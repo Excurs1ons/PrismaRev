@@ -337,6 +337,9 @@ impl App {
             debug_rt: 0,
             scene_store: prism_asset::SceneStore::new(),
             resource_manager: ResourceManager::new(),
+            mesh_asset_cache: std::collections::HashMap::new(),
+            mat_asset_cache: std::collections::HashMap::new(),
+            tex_asset_cache: std::collections::HashMap::new(),
             scene_loaded: false,
             current_scene_name: None,
             mesh_map: std::collections::HashMap::new(),
@@ -1063,6 +1066,154 @@ impl App {
         );
     }
 
+    /// Resolve unloaded mesh / material assets referenced by `MeshRenderer`
+    /// components into the renderer's GPU managers.
+    ///
+    /// For each entity with a `MeshRenderer` whose sibling `MeshRef` (or
+    /// `MaterialRef`) has `generation == 0` (unresolved), this method:
+    ///   1. Looks up the asset path -> `AssetId` via the path manifest.
+    ///   2. Loads the typed asset (`MeshAsset` / `MaterialAsset` + its
+    ///      texture dependencies) from the `.pak` through the
+    ///      `ResourceManager`.
+    ///   3. Uploads the asset to the renderer (caching by `AssetId` so the
+    ///      same mesh isn't uploaded twice).
+    ///   4. Writes the resulting render handle / material slot back into
+    ///      `MeshRef` / `MaterialRef` and bumps `generation` to 1.
+    ///
+    /// Errors are logged and the offending entity is left at `generation ==
+    /// 0` so a subsequent call can retry (e.g. after a hot-reload).
+    ///
+    /// Returns the number of entities that were resolved this pass.
+    pub fn resolve_scene_assets(&mut self) -> usize {        // Collect the work first so we don't hold a `&mut World` borrow while
+        // we touch `&mut self.resource_manager` / `&mut self.renderer`.
+        let pending: Vec<(prism_ecs::Entity, String, String)> = match self.world.as_ref() {
+            Some(world) => {
+                use crate::scene::components::{MaterialRef, MeshRef, MeshRenderer};
+                let mut out = Vec::new();
+                for (entity, mr) in world.query::<MeshRenderer>() {
+                    let mesh_unresolved = world
+                        .get::<MeshRef>(entity)
+                        .map(|r| r.generation == 0)
+                        .unwrap_or(true);
+                    let mat_unresolved = world
+                        .get::<MaterialRef>(entity)
+                        .map(|r| r.generation == 0)
+                        .unwrap_or(true);
+                    if mesh_unresolved || mat_unresolved {
+                        out.push((entity, mr.mesh_path.clone(), mr.material_path.clone()));
+                    }
+                }
+                out
+            }
+            None => return 0,
+        };
+
+        if pending.is_empty() {
+            return 0;
+        }
+
+        let Some(renderer) = self.renderer.as_mut() else {
+            log::debug!("resolve_scene_assets: no renderer yet, deferring");
+            return 0;
+        };
+
+        // Split the mutable fields we need so we can call the resolve helpers
+        // without re-borrowing `self`. The helpers take `(&mut ResourceManager,
+        // &mut GraphRenderer, &mut HashMap caches, ...)` instead of `&mut Self`
+        // to side-step the borrow-check conflict (`self.renderer.as_mut()` and
+        // `&mut self.resource_manager` can't both be live at once).
+        let resource_manager = &mut self.resource_manager;
+        let mesh_cache = &mut self.mesh_asset_cache;
+        let mat_cache = &mut self.mat_asset_cache;
+        let tex_cache = &mut self.tex_asset_cache;
+
+        // One batched uploader for all the GPU uploads this pass - same pattern
+        // as `load_demo_scene`.
+        let ctx = renderer.context_arc();
+        let cmd_pool = renderer.command_pool();
+        let mut uploader =
+            match prism_render::batch::BatchUploader::new(&ctx, cmd_pool) {
+                Ok(u) => u,
+                Err(e) => {
+                    log::error!("resolve_scene_assets: BatchUploader::new failed: {e}");
+                    return 0;
+                }
+            };
+
+        let mut resolved = 0usize;
+        let mut errors = 0usize;
+        for (entity, mesh_path, mat_path) in &pending {
+            let mut ok = true;
+
+            // --- Mesh ---
+            if !mesh_path.is_empty() {
+                if let Some(mesh_handle) = resolve_mesh_asset(
+                    resource_manager,
+                    mesh_cache,
+                    renderer,
+                    &mut uploader,
+                    mesh_path,
+                ) {
+                    if let Some(world) = self.world.as_mut() {
+                        if let Some(mr) = world.get_mut::<crate::scene::components::MeshRef>(*entity)
+                        {
+                            mr.render_handle = mesh_handle;
+                            mr.generation = 1;
+                        }
+                    }
+                } else {
+                    ok = false;
+                }
+            }
+
+            // --- Material ---
+            if !mat_path.is_empty() {
+                if let Some(slot) = resolve_material_asset(
+                    resource_manager,
+                    mat_cache,
+                    tex_cache,
+                    renderer,
+                    &mut uploader,
+                    mat_path,
+                ) {
+                    if let Some(world) = self.world.as_mut() {
+                        if let Some(mr) =
+                            world.get_mut::<crate::scene::components::MaterialRef>(*entity)
+                        {
+                            mr.material_slot = slot;
+                            mr.generation = 1;
+                        }
+                    }
+                } else {
+                    ok = false;
+                }
+            }
+
+            if ok {
+                resolved += 1;
+            } else {
+                errors += 1;
+            }
+        }
+
+        // Flush the batched upload (single submit + fence wait).
+        if let Err(e) = uploader.finish(renderer.graphics_queue()) {
+            log::error!("resolve_scene_assets: BatchUploader::finish failed: {e}");
+        }
+        if let Err(e) = renderer.flush_materials() {
+            log::warn!("resolve_scene_assets: flush_materials failed: {e}");
+        }
+
+        if resolved > 0 {
+            log::info!(
+                "resolve_scene_assets: resolved {} entity(ies) ({} failed)",
+                resolved,
+                errors
+            );
+        }
+        resolved
+    }
+
     /// Enable or disable FPS-style pointer lock. When `locked` is `true` the
     /// cursor is hidden and confined to the window so the camera can follow the
     /// mouse directly; when `false` the cursor is shown and freed. No-op on
@@ -1091,6 +1242,321 @@ impl App {
             }
         }
         log::info!("pointer lock = {}", locked);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Free-function asset resolvers
+//
+// These live outside `impl App` so the borrow checker can see that
+// `&mut ResourceManager`, `&mut HashMap caches`, and `&mut GraphRenderer`
+// are disjoint borrows of distinct fields. Calling them as `&mut self`
+// methods triggers E0499 because `self.renderer.as_mut()` and
+// `&mut self.resource_manager` are both `&mut self` projections.
+// ---------------------------------------------------------------------------
+
+/// Resolve a mesh asset path to a render `MeshHandle`, using the cache when
+/// possible. Returns `None` on lookup / load / decode failure (logged at
+/// warn level). See [`App::resolve_scene_assets`] for the orchestration.
+fn resolve_mesh_asset(
+    resource_manager: &mut ResourceManager,
+    mesh_cache: &mut std::collections::HashMap<prism_asset_core::AssetId, prism_render::managers::MeshHandle>,
+    renderer: &mut GraphRenderer,
+    uploader: &mut prism_render::batch::BatchUploader<'_>,
+    path: &str,
+) -> Option<prism_render::managers::MeshHandle> {
+    let id = resource_manager.id_by_path(path).or_else(|| {
+        log::warn!("resolve_mesh_asset: path '{path}' not in manifest");
+        None
+    })?;
+
+    // Cache hit?
+    if let Some(&h) = mesh_cache.get(&id) {
+        return Some(h);
+    }
+
+    // Load + decode the cooked RMES.
+    let handle = resource_manager
+        .load_with_deps::<prism_asset_runtime::MeshAsset>(id)
+        .map_err(|e| {
+            log::warn!("resolve_mesh_asset: load '{path}' failed: {e}");
+        })
+        .ok()?;
+    let mesh = resource_manager
+        .get(handle)
+        .map_err(|e| {
+            log::warn!("resolve_mesh_asset: get '{path}' failed: {e}");
+        })
+        .ok()?;
+
+    // De-interleave the RMES vertex data into the split-array layout the
+    // renderer expects. RMES stores positions(3f32) | normals(3f32) |
+    // uv0(2f32) per vertex (no tangents); we generate a default [1,0,0,1]
+    // tangent when the source has none.
+    let info = &mesh.info;
+    let stride = info.stride_bytes as usize;
+    if stride == 0 || stride % 4 != 0 {
+        log::warn!(
+            "resolve_mesh_asset: bad stride {} for '{path}'",
+            info.stride_bytes
+        );
+        return None;
+    }
+    let vert_count = info.vert_count as usize;
+    let float_stride = stride / 4;
+
+    // RMES layout (cooked by MeshCooker): pos(3) | nrm(3) | uv0(2) = 8 floats
+    // (when uv_channels >= 1). For uv_channels == 0 the layout is pos(3) |
+    // nrm(3) = 6 floats. We don't have explicit field offsets in RmesInfo,
+    // so we reconstruct based on uv_channels.
+    let pos_floats = 3;
+    let nrm_floats = 3;
+    let uv_floats = if info.uv_channels >= 1 { 2 } else { 0 };
+    let expected_float_stride = pos_floats + nrm_floats + uv_floats;
+    if float_stride != expected_float_stride {
+        log::warn!(
+            "resolve_mesh_asset: stride mismatch for '{path}' (got {} floats, expected {})",
+            float_stride,
+            expected_float_stride
+        );
+        return None;
+    }
+    if info.vertex_data.len() < vert_count * stride {
+        log::warn!("resolve_mesh_asset: vertex buffer truncated for '{path}'");
+        return None;
+    }
+    if info.index_data.len() < info.idx_count as usize * 4 {
+        log::warn!("resolve_mesh_asset: index buffer truncated for '{path}'");
+        return None;
+    }
+
+    let mut positions = Vec::with_capacity(vert_count);
+    let mut normals = Vec::with_capacity(vert_count);
+    let mut uvs = Vec::with_capacity(vert_count);
+    let mut tangents = Vec::with_capacity(vert_count);
+    for v in 0..vert_count {
+        let base = v * float_stride;
+        let row = &info.vertex_data[base * 4..(base + float_stride) * 4];
+        let read3 = |off: usize| -> [f32; 3] {
+            [
+                f32::from_le_bytes([row[off * 4], row[off * 4 + 1], row[off * 4 + 2], row[off * 4 + 3]]),
+                f32::from_le_bytes([row[off * 4 + 4], row[off * 4 + 5], row[off * 4 + 6], row[off * 4 + 7]]),
+                f32::from_le_bytes([row[off * 4 + 8], row[off * 4 + 9], row[off * 4 + 10], row[off * 4 + 11]]),
+            ]
+        };
+        positions.push(read3(0));
+        normals.push(read3(3));
+        if uv_floats == 2 {
+            let off = 6;
+            uvs.push([
+                f32::from_le_bytes([row[off * 4], row[off * 4 + 1], row[off * 4 + 2], row[off * 4 + 3]]),
+                f32::from_le_bytes([row[off * 4 + 4], row[off * 4 + 5], row[off * 4 + 6], row[off * 4 + 7]]),
+            ]);
+        } else {
+            uvs.push([0.0, 0.0]);
+        }
+        // Default tangent (no tangent stream in RMES yet): +X, +handedness.
+        tangents.push([1.0, 0.0, 0.0, 1.0]);
+    }
+
+    let mut indices = Vec::with_capacity(info.idx_count as usize);
+    for i in 0..info.idx_count as usize {
+        let off = i * 4;
+        indices.push(u32::from_le_bytes([
+            info.index_data[off],
+            info.index_data[off + 1],
+            info.index_data[off + 2],
+            info.index_data[off + 3],
+        ]));
+    }
+
+    let input = prism_render::managers::MeshUploadInput {
+        positions,
+        normals,
+        colors: vec![],
+        uvs,
+        tangents,
+        indices,
+    };
+    match renderer.register_mesh_into(uploader, &input) {
+        Ok(h) => {
+            mesh_cache.insert(id, h);
+            Some(h)
+        }
+        Err(e) => {
+            log::warn!("resolve_mesh_asset: register_mesh_into '{path}' failed: {e}");
+            None
+        }
+    }
+}
+
+/// Resolve a material asset path to a material SSBO slot, using the cache
+/// when possible. Texture dependencies are loaded + uploaded on first
+/// encounter and cached by `AssetId`.
+#[allow(clippy::too_many_arguments)]
+fn resolve_material_asset(
+    resource_manager: &mut ResourceManager,
+    mat_cache: &mut std::collections::HashMap<prism_asset_core::AssetId, (u32, prism_render::managers::MaterialHandle)>,
+    tex_cache: &mut std::collections::HashMap<prism_asset_core::AssetId, u32>,
+    renderer: &mut GraphRenderer,
+    uploader: &mut prism_render::batch::BatchUploader<'_>,
+    path: &str,
+) -> Option<u32> {
+    let id = resource_manager.id_by_path(path).or_else(|| {
+        log::warn!("resolve_material_asset: path '{path}' not in manifest");
+        None
+    })?;
+
+    // Cache hit?
+    if let Some(&(slot, _)) = mat_cache.get(&id) {
+        return Some(slot);
+    }
+
+    // Load + decode the cooked RMAT.
+    let handle = resource_manager
+        .load_with_deps::<prism_asset_runtime::MaterialAsset>(id)
+        .map_err(|e| {
+            log::warn!("resolve_material_asset: load '{path}' failed: {e}");
+        })
+        .ok()?;
+    let mat = resource_manager
+        .get(handle)
+        .map_err(|e| {
+            log::warn!("resolve_material_asset: get '{path}' failed: {e}");
+        })
+        .ok()?;
+
+    // Unpack the 18-float scalar array (see MATERIAL_SCALAR_COUNT docs).
+    let s = mat.scalars();
+    let base_color = [s[0], s[1], s[2], s[3]];
+    let metallic = s[4];
+    let roughness = s[5];
+    let emissive = [s[6], s[7], s[8]];
+    let emissive_strength = s[9];
+    let normal_scale = s[10];
+    let occlusion_strength = s[11];
+    let transmission = s[12];
+    let ior = s[13];
+    let translucency = s[14];
+    let anisotropy = s[15];
+    let clearcoat = s[16];
+    let clearcoat_roughness = s[17];
+
+    // Resolve each of the 5 texture slots (albedo/normal/mr/emissive/occlusion).
+    let tex_ids = mat.texture_ids();
+    let albedo_tex = resolve_texture_asset(resource_manager, tex_cache, renderer, uploader, tex_ids[0]);
+    let normal_tex = resolve_texture_asset(resource_manager, tex_cache, renderer, uploader, tex_ids[1]);
+    let mr_tex = resolve_texture_asset(resource_manager, tex_cache, renderer, uploader, tex_ids[2]);
+    let emissive_tex = resolve_texture_asset(resource_manager, tex_cache, renderer, uploader, tex_ids[3]);
+    let occlusion_tex = resolve_texture_asset(resource_manager, tex_cache, renderer, uploader, tex_ids[4]);
+
+    let input = prism_render::managers::MaterialUploadInput {
+        base_color,
+        metallic,
+        roughness,
+        emissive,
+        albedo_tex,
+        normal_tex,
+        metallic_roughness_tex: mr_tex,
+        emissive_tex,
+        occlusion_tex,
+        normal_scale,
+        occlusion_strength,
+        transmission,
+        ior,
+        translucency,
+        anisotropy,
+        clearcoat,
+        clearcoat_roughness,
+        emissive_strength,
+    };
+    match renderer.register_material(input) {
+        Ok(h) => {
+            let slot = renderer.material_slot(h)?;
+            mat_cache.insert(id, (slot, h));
+            Some(slot)
+        }
+        Err(e) => {
+            log::warn!("resolve_material_asset: register_material '{path}' failed: {e}");
+            None
+        }
+    }
+}
+
+/// Resolve a single texture dependency to a bindless SRV slot, with cache +
+/// magenta fallback. Called once per material texture slot.
+fn resolve_texture_asset(
+    resource_manager: &mut ResourceManager,
+    tex_cache: &mut std::collections::HashMap<prism_asset_core::AssetId, u32>,
+    renderer: &mut GraphRenderer,
+    uploader: &mut prism_render::batch::BatchUploader<'_>,
+    tex_id_opt: Option<prism_asset_core::AssetId>,
+) -> Option<u32> {
+    let tex_id = tex_id_opt?;
+    if let Some(&slot) = tex_cache.get(&tex_id) {
+        return Some(slot);
+    }
+    let tex_handle = resource_manager
+        .load_with_deps::<prism_asset_runtime::TextureAsset>(tex_id)
+        .map_err(|e| {
+            log::warn!("resolve_texture_asset: load {tex_id} failed: {e}");
+        })
+        .ok()?;
+    let tex = resource_manager
+        .get(tex_handle)
+        .map_err(|e| {
+            log::warn!("resolve_texture_asset: get {tex_id} failed: {e}");
+        })
+        .ok()?;
+
+    // Use mip 0 only for now. BC-compressed formats are not supported by the
+    // runtime upload path; fall back to a 1x1 magenta texture so the material
+    // is still visible.
+    let mip0 = tex.info.mip_data.first().cloned().unwrap_or_default();
+    let magenta = || {
+        prism_render::managers::TextureUploadInput {
+            width: 1,
+            height: 1,
+            format: prism_render::managers::TextureFormat::Rgba8,
+            pixels: vec![255, 0, 255, 255],
+        }
+    };
+
+    let input = if mip0.is_empty() {
+        log::warn!("resolve_texture_asset: texture {tex_id} has no mip 0; using magenta fallback");
+        magenta()
+    } else {
+        let bpp = prism_render::managers::TextureFormat::Rgba8Srgb.bytes_per_pixel();
+        let expected = (tex.info.width as usize) * (tex.info.height as usize) * bpp;
+        if mip0.len() != expected {
+            log::warn!(
+                "resolve_texture_asset: texture {tex_id} mip0 size {} != {}x{}x{} ({}); using magenta fallback",
+                mip0.len(),
+                tex.info.width,
+                tex.info.height,
+                bpp,
+                expected
+            );
+            magenta()
+        } else {
+            prism_render::managers::TextureUploadInput {
+                width: tex.info.width,
+                height: tex.info.height,
+                format: prism_render::managers::TextureFormat::Rgba8Srgb,
+                pixels: mip0,
+            }
+        }
+    };
+    match renderer.register_texture_into(uploader, &input) {
+        Ok(h) => {
+            let slot = renderer.texture_srv(h).0;
+            tex_cache.insert(tex_id, slot);
+            Some(slot)
+        }
+        Err(e) => {
+            log::warn!("resolve_texture_asset: register_texture_into {tex_id} failed: {e}");
+            None
+        }
     }
 }
 
@@ -1646,6 +2112,11 @@ impl App {
                 }
             }
         }
+
+        // Resolve any unloaded mesh/material assets (path -> .pak -> GPU).
+        // Cheap when nothing is pending: just a query over `MeshRenderer`
+        // entities. Returns the count of newly resolved entities (logged).
+        self.resolve_scene_assets();
 
         let now = Instant::now();
         let dt = match self.last_frame {
