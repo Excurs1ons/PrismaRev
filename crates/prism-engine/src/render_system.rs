@@ -18,6 +18,8 @@ use prism_render::{DrawItem, FrameUBOData, GpuLight, GraphRenderer, Mesh, PtAnal
 
 use crate::camera::Camera;
 use crate::dirty_router::DirtyRouter;
+use crate::scene;
+use crate::scene::components as scene_comp;
 
 /// Pre-scale factor that replaces the old GPU-side `exposure / PI` unit
 /// conversion. Lux (or candela) is multiplied by this on the CPU so the shader
@@ -401,36 +403,33 @@ fn collect_scene_changes(
     let proj32 = projection[3][2];
     let _ = projection;
 
-    // 2. Directional light (first enabled entity). The intensity is pre-scaled
-    //    by LUX_TO_RADIANCE_SCALE so the shader receives effective radiance and
-    //    `exposure` is a pure post-composition multiplier.
-    let light_direction = world
-        .query::<DirectionalLight>()
-        .find(|(_, l)| l.enabled)
+    // 2. Directional light (first enabled entity queried from new scene
+    //    components). The intensity is pre-scaled by LUX_TO_RADIANCE_SCALE
+    //    so the shader receives effective radiance and `exposure` is a pure
+    //    post-composition multiplier.
+    let dir_light = world.query::<scene_comp::DirectionalLight>().next();
+    let light_direction = dir_light
         .map(|(_, l)| {
             let d = euler_xyz_deg_to_dir(l.euler_xyz);
             [d[0], d[1], d[2], l.intensity * LUX_TO_RADIANCE_SCALE]
         })
         .unwrap_or(fallback_dir);
-    let light_color = world
-        .query::<DirectionalLight>()
-        .find(|(_, l)| l.enabled)
+    let light_color = dir_light
         .map(|(_, l)| [l.color[0], l.color[1], l.color[2], l.ambient])
         .unwrap_or(fallback_col);
 
-    // 3. Point lights (up to LIGHT_MAX). Only enabled lights contribute.
+    // 3. Point lights (up to LIGHT_MAX) from new scene components. Position
+    //    comes from the sibling LocalTransform; if absent the light is skipped
+    //    (a point light without a position makes no sense in the new system).
     let mut lights: Vec<GpuLight> = Vec::new();
-    for (entity, pl) in world.query::<PointLight>() {
-        if !pl.enabled {
-            continue;
-        }
+    for (entity, pl) in world.query::<scene_comp::PointLight>() {
         if lights.len() >= prism_render::LIGHT_MAX as usize {
             break;
         }
-        let pos = world
-            .get::<Transform>(entity)
-            .map(|t| t.translation)
-            .unwrap_or(pl.position);
+        let pos = match world.get::<scene_comp::LocalTransform>(entity) {
+            Some(t) => t.translation,
+            None => continue, // no position → skip
+        };
         lights.push(GpuLight {
             position: [pos[0], pos[1], pos[2], pl.range],
             // Pre-scale by the same lux-to-radiance factor so the shader
@@ -444,21 +443,18 @@ fn collect_scene_changes(
         });
     }
 
-    // 4. Build pt_lights from enabled ECS PointLight components.
+    // 4. Build pt_lights from enabled ECS PointLight components (scene).
     // Directional light (sun) is handled separately via push-constant NEE
     // with MIS weighting; it is NOT added to pt_lights to avoid double-counting.
     let mut pt_lights: Vec<PtAnalyticLight> = Vec::new();
-    for (entity, pl) in world.query::<PointLight>() {
-        if !pl.enabled {
-            continue;
-        }
+    for (entity, pl) in world.query::<scene_comp::PointLight>() {
         if pt_lights.len() >= PT_LIGHT_MAX as usize {
             break;
         }
-        let pos = world
-            .get::<Transform>(entity)
-            .map(|t| t.translation)
-            .unwrap_or(pl.position);
+        let pos = match world.get::<scene_comp::LocalTransform>(entity) {
+            Some(t) => t.translation,
+            None => continue,
+        };
         let radiance = [
             pl.color[0] * pl.intensity * LUX_TO_RADIANCE_SCALE,
             pl.color[1] * pl.intensity * LUX_TO_RADIANCE_SCALE,
@@ -520,6 +516,9 @@ pub fn render_system(
     pt_ray_max_distance: f32,
     pt_max_iterations: u32,
 ) -> anyhow::Result<()> {
+    // 0. Recompute world transforms from local transforms (hierarchy tree).
+    scene::systems::hierarchy::hierarchy_system(world);
+
     // 1. Collect per-frame scene state from the ECS world (camera, lights).
     let scene = collect_scene_changes(world, renderer)?;
     let dirty_flags = with_dirty_router(|r| r.update(&scene));
@@ -566,15 +565,9 @@ pub fn render_system(
         _pad3: 0.0,
     };
 
-    // 3. Build the flat draw list from ECS entities with RenderInstance.
-    let draw_items: Vec<DrawItem> = world
-        .query::<RenderInstance>()
-        .map(|(_, inst)| DrawItem {
-            mesh: inst.mesh,
-            model: inst.model,
-            material: Some(inst.material_slot),
-        })
-        .collect();
+    // 3. Build the flat draw list from ECS entities using the new scene
+    //    render system (WorldTransform + MeshRef + MaterialRef + Active).
+    let draw_items: Vec<DrawItem> = scene::systems::render::scene_render_system(world);
 
     // 4. Drive the render-graph phase API (begin_frame → execute → present).
     let ctx = match renderer.begin_frame()? {

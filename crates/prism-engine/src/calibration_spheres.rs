@@ -15,17 +15,19 @@
 //!   plastic - matte diffuse + weak tight specular (dielectric F0 ~0.04)
 //!   stone   - rough diffuse, no visible specular highlight
 //!
-//! The spheres are spawned as ECS entities with a [`RenderInstance`] component
-//! (replacing the old flat `SceneDrawItem` push), so they live in the ECS world
-//! alongside other geometry. They use the same bindless PBR path; no texture
-//! slots are bound (`u32::MAX`) so the scalar `base_color` / `metallic` /
-//! `roughness` drive the BRDF directly.
+//! The spheres are spawned as ECS entities with new scene components
+//! (MeshRef + MaterialRef + LocalTransform + WorldTransform), so they live in
+//! the ECS world alongside other geometry. They use the same bindless PBR path;
+//! no texture slots are bound (u32::MAX) so the scalar `base_color` /
+//! `metallic` / `roughness` drive the BRDF directly.
 
 use prism_ecs::World;
 use prism_render::managers::{MaterialUploadInput, MeshHandle, MeshUploadInput};
 use prism_render::GraphRenderer;
 
-use crate::render_system::RenderInstance;
+use crate::scene::components::{
+    LocalTransform, MaterialRef, MeshRef, SceneAssetId, WorldTransform,
+};
 
 /// Spacing between sphere centres along the X axis (world units).
 const SPHERE_SPACING: f32 = 2.2;
@@ -217,14 +219,21 @@ pub fn spawn_calibration_spheres(
 
         let x = origin_x + i as f32 * SPHERE_SPACING;
         let entity = world.spawn();
-        world.insert(
-            entity,
-            RenderInstance {
-                mesh,
-                material_slot: slot,
-                model: translation_matrix(x, origin_y, origin_z),
-            },
-        );
+        world.insert(entity, MeshRef {
+            asset_id: SceneAssetId::generate(),
+            render_handle: mesh,
+            generation: 1,
+        });
+        world.insert(entity, MaterialRef {
+            asset_id: SceneAssetId::generate(),
+            material_slot: slot,
+            generation: 1,
+        });
+        world.insert(entity, LocalTransform {
+            translation: [x, origin_y, origin_z],
+            ..Default::default()
+        });
+        world.insert(entity, WorldTransform(translation_matrix(x, origin_y, origin_z)));
         log::debug!(
             "calibration sphere[{}] '{}': bc={:?} m={} r={} -> slot {}",
             i,

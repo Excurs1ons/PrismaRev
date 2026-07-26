@@ -24,8 +24,10 @@ use prism_render::{DebugMode, GraphRenderer, NormalSpace, PathTracePass, RenderM
 
 use crate::camera::{Camera, FlyCamera};
 use crate::input::{InputState, MouseButton};
-use crate::render_system::{
-    render_system, DirectionalLight, MeshManager, PointLight, RenderInstance, Transform,
+use crate::render_system::{render_system, MeshManager};
+use crate::scene::components::{
+    Active, DirectionalLight as SceneDirLight, LocalTransform, MeshRef, MaterialRef,
+    PointLight as ScenePtLight, SceneAssetId, WorldTransform,
 };
 
 /// Parse a `key = "value"` TOML line (after the `key` prefix has been stripped)
@@ -115,47 +117,38 @@ fn load_env_bytes() -> Option<Vec<u8>> {
 fn create_default_scene(world: &mut World) {
     // Directional light (single entity). Drives the per-frame UBO's
     // `light_direction` / `light_color` / ambient factor. Its orientation is an
-    // XYZ Euler triple (`DirectionalLight::euler_xyz`); the render path derives
+    // XYZ Euler triple (`SceneDirLight::euler_xyz`); the render path derives
     // the world-space direction from it. Editable at runtime via the inspector.
     let dir_entity = world.spawn();
-    world.insert(dir_entity, DirectionalLight::default());
+    world.insert(dir_entity, SceneDirLight::default());
+    // Mark active so the render system picks it up.
+    world.insert(dir_entity, Active(true));
 
-    // A few point lights so the PBR scene has local highlights. Positions may be
-    // overridden by a sibling `Transform` at render time. Editable via the
-    // inspector.
-    let point_lights = [
-        PointLight {
-            position: [2.0, 3.0, 2.0],
-            range: 12.0,
-            color: [1.0, 0.2, 0.2],
-            intensity: 150.0,
-            enabled: true,
-        },
-        PointLight {
-            position: [-2.0, 3.0, -2.0],
-            range: 12.0,
-            color: [0.2, 1.0, 0.2],
-            intensity: 150.0,
-            enabled: true,
-        },
-        PointLight {
-            position: [0.0, 4.0, 4.0],
-            range: 12.0,
-            color: [0.2, 0.2, 1.0],
-            intensity: 150.0,
-            enabled: true,
-        },
+    // A few point lights so the PBR scene has local highlights. Position comes
+    // from a sibling `LocalTransform` (separate component); the light component
+    // itself stores only color/intensity/range.
+    let point_positions = [
+        [2.0, 3.0, 2.0],
+        [-2.0, 3.0, -2.0],
+        [0.0, 4.0, 4.0],
     ];
-    for pl in point_lights {
+    let point_colors = [
+        [1.0, 0.2, 0.2],
+        [0.2, 1.0, 0.2],
+        [0.2, 0.2, 1.0],
+    ];
+    for (pos, color) in point_positions.iter().zip(point_colors.iter()) {
         let entity = world.spawn();
-        world.insert(
-            entity,
-            Transform {
-                translation: pl.position,
-                ..Default::default()
-            },
-        );
-        world.insert(entity, pl);
+        world.insert(entity, LocalTransform {
+            translation: *pos,
+            ..Default::default()
+        });
+        world.insert(entity, ScenePtLight {
+            color: *color,
+            intensity: 150.0,
+            range: 12.0,
+        });
+        world.insert(entity, Active(true));
     }
 
     // Camera entity (free-fly by default). Editable at runtime via the
@@ -802,8 +795,8 @@ impl App {
         log::info!("flush materials: {}ms", t_flush.elapsed().as_millis());
 
         // 5. Spawn ECS entities for each scene instance. Each instance becomes
-        // an entity with a `RenderInstance` component (mesh handle + material
-        // slot + world transform), replacing the old flat `Vec<SceneDrawItem>`.
+        // an entity with new scene components (MeshRef + MaterialRef +
+        // WorldTransform + Active), replacing the old RenderInstance.
         // This lets scene geometry live in the ECS world alongside other entities
         // (camera, lights, calibration spheres, ...) and be queried/manipulated.
         let t_ents = std::time::Instant::now();
@@ -818,14 +811,19 @@ impl App {
                 continue;
             };
             let entity = world.spawn();
-            world.insert(
-                entity,
-                RenderInstance {
-                    mesh,
-                    material_slot,
-                    model: inst.transform,
-                },
-            );
+            world.insert(entity, MeshRef {
+                asset_id: SceneAssetId::generate(),
+                render_handle: mesh,
+                generation: 1,
+            });
+            world.insert(entity, MaterialRef {
+                asset_id: SceneAssetId::generate(),
+                material_slot,
+                generation: 1,
+            });
+            world.insert(entity, WorldTransform(inst.transform));
+            // MeshRef + MaterialRef entities are active by default (no explicit
+            // Active component needed — the render system defaults to true).
         }
         log::info!("spawn entities: {}ms", t_ents.elapsed().as_millis());
 
@@ -923,7 +921,7 @@ impl App {
             self.scene_store.meshes().count(),
             self.scene_store.materials().count(),
             self.scene_store.textures().count(),
-            world.query::<RenderInstance>().count(),
+            world.query::<MeshRef>().count(),
         );
         log::info!("load_demo_scene total: {}ms", t_total.elapsed().as_millis());
     }
@@ -1566,7 +1564,7 @@ impl App {
         let elapsed = self.start.elapsed().as_secs_f32();
         if !self.ui_modal_open() {
             if let Some(world) = self.world.as_mut() {
-                for (_, transform) in world.query_mut::<Transform>() {
+                for (_, transform) in world.query_mut::<LocalTransform>() {
                     let angle = elapsed * 0.5; // 0.5 rad/s ≈ 29°/s
                     let half = angle * 0.5;
                     transform.rotation = [0.0, half.sin(), 0.0, half.cos()];

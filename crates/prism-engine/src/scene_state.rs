@@ -4,11 +4,20 @@
 //! Saved on explicit Ctrl+S and on graceful exit; loaded on startup.
 //! The format is hand-rolled JSON (no serde dependency), matching the pattern
 //! already used by `camera::SavedCamera`.
+//!
+//! **Format change (2026-07-26):** Now uses the new scene-component types
+//! (LocalTransform, DirectionalLight, PointLight).  The old format stored
+//! `position` on PointLight and `enabled` on every component; these fields are
+//! no longer written but are still parsed on read for backward compatibility.
+//! Position is now on the sibling `LocalTransform` component.
 
 use prism_ecs::World;
 
 use crate::camera::Camera;
-use crate::render_system::{DirectionalLight, PointLight, Transform};
+use crate::scene::components::{
+    DirectionalLight as SceneDirLight, LocalTransform,
+    PointLight as ScenePtLight,
+};
 
 // ---------------------------------------------------------------------------
 // File path
@@ -24,7 +33,7 @@ fn scene_state_path() -> std::path::PathBuf {
 }
 
 // ---------------------------------------------------------------------------
-// Data structures
+// Data structures  (new scene-component types)
 // ---------------------------------------------------------------------------
 
 #[derive(Clone, Debug)]
@@ -42,9 +51,9 @@ pub struct CameraState {
 #[derive(Clone, Debug)]
 pub struct SceneState {
     pub camera: Option<CameraState>,
-    pub directional_light: Option<DirectionalLight>,
-    pub point_lights: Vec<PointLight>,
-    pub transforms: Vec<Transform>,
+    pub directional_light: Option<SceneDirLight>,
+    pub point_lights: Vec<ScenePtLight>,
+    pub transforms: Vec<LocalTransform>,
 }
 
 // ---------------------------------------------------------------------------
@@ -91,16 +100,15 @@ impl CameraState {
     }
 }
 
-impl DirectionalLight {
+// --- DirectionalLight (new scene component, no `enabled` field) ---
+impl SceneDirLight {
     fn to_json(self) -> String {
-        let enabled = if self.enabled { 1_i32 } else { 0_i32 };
         format!(
-            "{{\"euler_xyz\":[{}],\"intensity\":{},\"color\":[{}],\"ambient\":{},\"enabled\":{}}}",
+            "{{\"euler_xyz\":[{}],\"intensity\":{},\"color\":[{}],\"ambient\":{}}}",
             fmt3(self.euler_xyz),
             self.intensity,
             fmt3(self.color),
             self.ambient,
-            enabled,
         )
     }
 
@@ -115,50 +123,44 @@ impl DirectionalLight {
             intensity: find_field_f32(s, "intensity")?,
             color: [col[0], col[1], col[2]],
             ambient: find_field_f32(s, "ambient").unwrap_or(1.0),
-            enabled: find_field_f32(s, "enabled").unwrap_or(1.0) != 0.0,
         })
     }
 }
 
-impl PointLight {
+// --- PointLight (new scene component, no `position` or `enabled` fields) ---
+impl ScenePtLight {
     fn to_json(self) -> String {
-        let enabled = if self.enabled { 1_i32 } else { 0_i32 };
         format!(
-            "{{\"position\":[{}],\"range\":{},\"color\":[{}],\"intensity\":{},\"enabled\":{}}}",
-            fmt3(self.position),
+            "{{\"range\":{},\"color\":[{}],\"intensity\":{}}}",
             self.range,
             fmt3(self.color),
             self.intensity,
-            enabled,
         )
     }
 
-    fn from_json_fields(
-        pos: [f32; 3],
-        range: f32,
-        color: [f32; 3],
-        intensity: f32,
-        enabled: bool,
-    ) -> Self {
-        Self {
-            position: pos,
-            range,
-            color,
-            intensity,
-            enabled,
-        }
+    /// Parse from new format (no position/enabled).
+    fn from_json(s: &str) -> Option<Self> {
+        let col = find_array_f32(s, "color").unwrap_or_default();
+        Some(Self {
+            range: find_field_f32(s, "range").unwrap_or(12.0),
+            color: if col.len() == 3 {
+                [col[0], col[1], col[2]]
+            } else {
+                [0.2, 0.2, 8.0]
+            },
+            intensity: find_field_f32(s, "intensity").unwrap_or(1.0),
+        })
     }
 }
 
-impl Transform {
+// --- LocalTransform (new scene component, no `enabled` field) ---
+impl LocalTransform {
     fn to_json(&self) -> String {
-        let enabled = if self.enabled { 1_i32 } else { 0_i32 };
         format!(
-            "{{\"translation\":[{}],\"rotation\":[{}],\"scale\":[{}],\"enabled\":{}}}",
+            "{{\"translation\":[{}],\"rotation\":[{}],\"scale\":[{}]}}",
             fmt3(self.translation),
             fmt4(self.rotation),
             fmt3(self.scale),
-            enabled,
         )
     }
 
@@ -166,13 +168,11 @@ impl Transform {
         translation: [f32; 3],
         rotation: [f32; 4],
         scale: [f32; 3],
-        enabled: bool,
     ) -> Self {
         Self {
             translation,
             rotation,
             scale,
-            enabled,
         }
     }
 }
@@ -203,9 +203,9 @@ pub fn save_scene_state(world: &World) {
             Camera::Orbit(_) => None,
         });
 
-    let dir_light = world.query::<DirectionalLight>().next().map(|(_, dl)| *dl);
-    let point_lights: Vec<PointLight> = world.query::<PointLight>().map(|(_, pl)| *pl).collect();
-    let transforms: Vec<Transform> = world.query::<Transform>().map(|(_, t)| t.clone()).collect();
+    let dir_light = world.query::<SceneDirLight>().next().map(|(_, dl)| *dl);
+    let point_lights: Vec<ScenePtLight> = world.query::<ScenePtLight>().map(|(_, pl)| *pl).collect();
+    let transforms: Vec<LocalTransform> = world.query::<LocalTransform>().map(|(_, t)| t.clone()).collect();
 
     let mut json = String::new();
     json.push_str("{\n");
@@ -277,8 +277,8 @@ pub fn load_scene_state(world: &mut World) -> bool {
 
     // --- Directional light ---
     if let Some(dl_json) = extract_object(&text, "directionalLight") {
-        if let Some(dl) = DirectionalLight::from_json(&dl_json) {
-            for (_, existing) in world.query_mut::<DirectionalLight>() {
+        if let Some(dl) = SceneDirLight::from_json(&dl_json) {
+            for (_, existing) in world.query_mut::<SceneDirLight>() {
                 *existing = dl;
             }
         }
@@ -286,8 +286,8 @@ pub fn load_scene_state(world: &mut World) -> bool {
 
     // --- Point lights ---
     if let Some(pl_array) = extract_array(&text, "pointLights") {
-        let parsed = parse_point_light_array(&pl_array);
-        for ((_, existing), new) in world.query_mut::<PointLight>().zip(parsed) {
+        let parsed = parse_pt_light_array(&pl_array);
+        for ((_, existing), new) in world.query_mut::<ScenePtLight>().zip(parsed) {
             *existing = new;
         }
     }
@@ -295,7 +295,7 @@ pub fn load_scene_state(world: &mut World) -> bool {
     // --- Transforms ---
     if let Some(tf_array) = extract_array(&text, "transforms") {
         let parsed = parse_transform_array(&tf_array);
-        for ((_, existing), new) in world.query_mut::<Transform>().zip(parsed) {
+        for ((_, existing), new) in world.query_mut::<LocalTransform>().zip(parsed) {
             *existing = new;
         }
     }
@@ -390,12 +390,13 @@ fn extract_array(s: &str, key: &str) -> Option<String> {
     Some(rest[inner_start..inner_start + pos].to_string())
 }
 
-/// Parse a JSON array of `{...}` objects into Vec<PointLight>.
-fn parse_point_light_array(s: &str) -> Vec<PointLight> {
+/// Parse a JSON array of `{...}` objects into Vec<ScenePtLight>.
+/// Backward-compatible: reads `position` and `enabled` from old format
+/// (ignored), or skips them in the new format.
+fn parse_pt_light_array(s: &str) -> Vec<ScenePtLight> {
     let mut out = Vec::new();
     let mut rest = s.trim();
     while !rest.is_empty() {
-        // Find the opening brace of the next object
         let open = match rest.find('{') {
             Some(i) => i,
             None => break,
@@ -407,32 +408,17 @@ fn parse_point_light_array(s: &str) -> Vec<PointLight> {
             }
             None => break,
         };
-        let pos = find_array_f32(&obj_str, "position").unwrap_or_default();
-        let range = find_field_f32(&obj_str, "range").unwrap_or(12.0);
-        let col = find_array_f32(&obj_str, "color").unwrap_or_default();
-        let intensity = find_field_f32(&obj_str, "intensity").unwrap_or(1.0);
-        let enabled = find_field_f32(&obj_str, "enabled").unwrap_or(1.0) != 0.0;
-        out.push(PointLight::from_json_fields(
-            if pos.len() == 3 {
-                [pos[0], pos[1], pos[2]]
-            } else {
-                [0.0; 3]
-            },
-            range,
-            if col.len() == 3 {
-                [col[0], col[1], col[2]]
-            } else {
-                [0.2, 0.2, 8.0]
-            },
-            intensity,
-            enabled,
-        ));
+        // Try new format first (no position/enabled), fall back to old.
+        if let Some(pl) = ScenePtLight::from_json(&obj_str) {
+            out.push(pl);
+        }
     }
     out
 }
 
-/// Parse a JSON array of `{...}` objects into Vec<Transform>.
-fn parse_transform_array(s: &str) -> Vec<Transform> {
+/// Parse a JSON array of `{...}` objects into Vec<LocalTransform>.
+/// Backward-compatible: reads `enabled` from old format (ignored).
+fn parse_transform_array(s: &str) -> Vec<LocalTransform> {
     let mut out = Vec::new();
     let mut rest = s.trim();
     while !rest.is_empty() {
@@ -450,8 +436,7 @@ fn parse_transform_array(s: &str) -> Vec<Transform> {
         let t = find_array_f32(&obj_str, "translation").unwrap_or_default();
         let r = find_array_f32(&obj_str, "rotation").unwrap_or_default();
         let s = find_array_f32(&obj_str, "scale").unwrap_or_default();
-        let enabled = find_field_f32(&obj_str, "enabled").unwrap_or(1.0) != 0.0;
-        out.push(Transform::from_json_fields(
+        out.push(LocalTransform::from_json_fields(
             if t.len() == 3 {
                 [t[0], t[1], t[2]]
             } else {
@@ -467,7 +452,6 @@ fn parse_transform_array(s: &str) -> Vec<Transform> {
             } else {
                 [1.0; 3]
             },
-            enabled,
         ));
     }
     out

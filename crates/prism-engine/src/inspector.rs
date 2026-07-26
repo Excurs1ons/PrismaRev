@@ -17,7 +17,9 @@ use prism_ecs::{Entity, World};
 use prism_render::RenderMode;
 
 use crate::camera::Camera;
-use crate::render_system::{DirectionalLight, PointLight, Transform};
+use crate::scene::components::{
+    self as scene_comp, Active, LocalTransform, PointLight as ScenePtLight,
+};
 
 /// egui-driven inspector for live-editing scene + camera parameters.
 pub struct Inspector {
@@ -402,12 +404,12 @@ impl Inspector {
         let mut entries: Vec<(Entity, String)> = Vec::new();
         // Specific component types first — they take priority over generic
         // "transform" when an entity carries multiple component types.
-        for (e, _) in world.query::<PointLight>() {
+        for (e, _) in world.query::<ScenePtLight>() {
             if ids.insert(e.id()) {
                 entries.push((e, format!("Entity {} (point light)", e.id())));
             }
         }
-        for (e, _) in world.query::<DirectionalLight>() {
+        for (e, _) in world.query::<scene_comp::DirectionalLight>() {
             if ids.insert(e.id()) {
                 entries.push((e, format!("Entity {} (dir light)", e.id())));
             }
@@ -417,8 +419,8 @@ impl Inspector {
                 entries.push((e, format!("Entity {} (camera)", e.id())));
             }
         }
-        // Generic Transform fallback — only for entities not already listed.
-        for (e, _) in world.query::<Transform>() {
+        // Generic LocalTransform fallback — only for entities not already listed.
+        for (e, _) in world.query::<LocalTransform>() {
             if ids.insert(e.id()) {
                 entries.push((e, format!("Entity {} (transform)", e.id())));
             }
@@ -453,12 +455,19 @@ impl Inspector {
         if ui.checkbox(&mut is_active, "Active").changed() {
             world.set_active(entity, is_active);
         }
+        // Also toggle the new-style Active component for scene system consistency.
+        if let Some(a) = world.get_mut::<Active>(entity) {
+            a.0 = is_active;
+        } else if is_active {
+            // Entity is alive but has no Active component; add a default one.
+            world.insert(entity, Active(true));
+        }
         ui.heading(format!("Entity {}", entity.id()));
         ui.separator();
 
         // Refresh the euler-rotation cache when the selection changed.
         if self.rotation_cached_for != Some(entity) {
-            if let Some(t) = world.get::<Transform>(entity) {
+            if let Some(t) = world.get::<LocalTransform>(entity) {
                 self.rotation_euler_deg = quat_to_euler_deg(t.rotation);
             }
             self.rotation_cached_for = Some(entity);
@@ -466,50 +475,37 @@ impl Inspector {
 
         // Refresh the directional-light Euler cache when selection changes.
         if self.dir_light_cached_for != Some(entity) {
-            if let Some(dl) = world.get::<DirectionalLight>(entity) {
+            if let Some(dl) = world.get::<scene_comp::DirectionalLight>(entity) {
                 self.dir_light_euler_deg = dl.euler_xyz;
             }
             self.dir_light_cached_for = Some(entity);
         }
 
-        // --- Transform ---
-        if let Some(t) = world.get::<Transform>(entity) {
-            let mut enabled = t.enabled;
+        // --- Transform (LocalTransform) ---
+        if world.get::<LocalTransform>(entity).is_some() {
             ui.horizontal(|ui| {
-                ui.checkbox(&mut enabled, "Transform");
+                ui.label("Transform");
             });
-            // Write back enabled change in a tight scope
-            if let Some(t) = world.get_mut::<Transform>(entity) {
-                t.enabled = enabled;
-            }
             ui.collapsing("", |ui| {
                 self.transform_editor(ui, world, entity);
             });
         }
 
         // --- Point Light ---
-        if let Some(pl) = world.get::<PointLight>(entity) {
-            let mut enabled = pl.enabled;
+        if world.get::<ScenePtLight>(entity).is_some() {
             ui.horizontal(|ui| {
-                ui.checkbox(&mut enabled, "Point Light");
+                ui.label("Point Light");
             });
-            if let Some(pl) = world.get_mut::<PointLight>(entity) {
-                pl.enabled = enabled;
-            }
             ui.collapsing("", |ui| {
                 point_light_editor(ui, world, entity);
             });
         }
 
         // --- Directional Light ---
-        if let Some(dl) = world.get::<DirectionalLight>(entity) {
-            let mut enabled = dl.enabled;
+        if world.get::<scene_comp::DirectionalLight>(entity).is_some() {
             ui.horizontal(|ui| {
-                ui.checkbox(&mut enabled, "Directional Light");
+                ui.label("Directional Light");
             });
-            if let Some(dl) = world.get_mut::<DirectionalLight>(entity) {
-                dl.enabled = enabled;
-            }
             ui.collapsing("", |ui| {
                 self.dir_light_editor(ui, world, entity);
             });
@@ -531,7 +527,7 @@ impl Inspector {
     }
 
     fn transform_editor(&mut self, ui: &mut Ui, world: &mut World, entity: Entity) {
-        let Some(t) = world.get_mut::<Transform>(entity) else {
+        let Some(t) = world.get_mut::<LocalTransform>(entity) else {
             return;
         };
         ui.label("Translation");
@@ -643,7 +639,7 @@ fn camera_editor_inline(ui: &mut Ui, world: &mut World, entity: Entity) {
 
 impl Inspector {
     fn dir_light_editor(&mut self, ui: &mut Ui, world: &mut World, entity: Entity) {
-        let Some(dl) = world.get_mut::<DirectionalLight>(entity) else {
+        let Some(dl) = world.get_mut::<scene_comp::DirectionalLight>(entity) else {
             return;
         };
         // XYZ Euler angles (degrees): X = pitch, Y = yaw, Z = roll.
@@ -696,15 +692,12 @@ impl Inspector {
 }
 
 fn point_light_editor(ui: &mut Ui, world: &mut World, entity: Entity) {
-    let Some(pl) = world.get_mut::<PointLight>(entity) else {
+    let Some(pl) = world.get_mut::<ScenePtLight>(entity) else {
         return;
     };
-    ui.label("Position");
-    ui.horizontal(|ui| {
-        ui.add(DragValue::new(&mut pl.position[0]).speed(0.1));
-        ui.add(DragValue::new(&mut pl.position[1]).speed(0.1));
-        ui.add(DragValue::new(&mut pl.position[2]).speed(0.1));
-    });
+    // Position is now on the sibling LocalTransform component, edited in the
+    // Transform section above.
+    ui.label("Range / Color / Intensity");
     ui.add(egui::Slider::new(&mut pl.range, 0.1..=100.0).text("Range"));
     let mut color_rgb = [pl.color[0], pl.color[1], pl.color[2]];
     let color_changed = ui
