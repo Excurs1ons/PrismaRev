@@ -776,6 +776,10 @@ impl RenderPassNode for PathTracePass {
         if ctx.frame.render_mode != crate::render_graph::RenderMode::PathTrace {
             return Ok(());
         }
+        if !ctx.frame.has_camera {
+            log::debug!("PathTracePass: no camera, skipping (PostPass reads SCENE_COLOR_H)");
+            return Ok(());
+        }
         if self.pt_scene.is_none() || self.materials_buffer.is_none() {
             log::debug!("PathTracePass: no geometry/materials, skipping");
             return Ok(());

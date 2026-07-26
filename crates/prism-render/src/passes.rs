@@ -1977,10 +1977,13 @@ impl RenderPassNode for ScenePass {
         // clear value is irrelevant (the fragment shader overwrites every
         // pixel); use opaque black. The count must be >= the highest cleared
         // attachment index + 1 (VUID-VkRenderPassBeginInfo-clearValueCount-00902).
+        // Color attachment 0 uses the frame's clear_color (from the app-level
+        // `clear_color` parameter) so the "no camera" fallback shows gray etc.
+        let cc = ctx.frame.clear_color;
         let clear_values = [
             vk::ClearValue {
                 color: vk::ClearColorValue {
-                    float32: [0.0, 0.0, 0.0, 1.0],
+                    float32: [cc[0], cc[1], cc[2], cc[3]],
                 },
             },
             vk::ClearValue {
@@ -2014,14 +2017,18 @@ impl RenderPassNode for ScenePass {
         // env descriptor set and writes no depth, so scene geometry drawn
         // afterwards always occludes it. Runs before the scene pipeline is
         // (re)bound below.
-        if let Err(e) = self.skybox.draw(
-            ctx.device,
-            ctx.cmd,
-            self.render_pass.unwrap(),
-            self.extent,
-            &ctx.frame.inv_view_rot,
-        ) {
-            log::warn!("SkyboxPass draw failed (skybox skipped): {e:#}");
+        // Skipped when no usable Camera entity exists so the gray clear color
+        // shows through (consistent with the "No Camera" HUD overlay).
+        if ctx.frame.has_camera {
+            if let Err(e) = self.skybox.draw(
+                ctx.device,
+                ctx.cmd,
+                self.render_pass.unwrap(),
+                self.extent,
+                &ctx.frame.inv_view_rot,
+            ) {
+                log::warn!("SkyboxPass draw failed (skybox skipped): {e:#}");
+            }
         }
 
         // Re-bind the scene pipeline + all descriptor sets AFTER the skybox

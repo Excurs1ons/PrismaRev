@@ -16,10 +16,10 @@ use std::sync::Mutex;
 use prism_ecs::World;
 use prism_render::{DrawItem, FrameUBOData, GpuLight, GraphRenderer, Mesh, PtAnalyticLight, PT_LIGHT_MAX, RenderMode};
 
-use crate::camera::Camera;
 use crate::dirty_router::DirtyRouter;
 use crate::scene;
 use crate::scene::components as scene_comp;
+use crate::scene::components::Camera;
 
 /// Pre-scale factor that replaces the old GPU-side `exposure / PI` unit
 /// conversion. Lux (or candela) is multiplied by this on the CPU so the shader
@@ -355,6 +355,10 @@ pub struct SceneChanges {
     /// Exposure multiplier from the camera entity. Applied to the final HDR color
     /// before tonemapping. Replaces the global `RenderSettings.exposure`.
     pub exposure: f32,
+    /// Whether a usable Camera entity was found in the ECS world. When `false`,
+    /// the renderer should skip camera-dependent draws (skybox, PT rays) and
+    /// fall back to the clear color (gray), consistent with the "No Camera" HUD.
+    pub has_camera: bool,
 }
 
 /// Read the ECS [`World`] and the [`GraphRenderer`] orientation, then produce
@@ -368,34 +372,42 @@ fn collect_scene_changes(
     world: &mut World,
     renderer: &GraphRenderer,
 ) -> anyhow::Result<SceneChanges> {
-    // Fallback light values for empty worlds (no DirectionalLight entity).
-    // The w component (intensity) is pre-scaled by LUX_TO_RADIANCE_SCALE so
-    // the shader receives effective radiance directly.
+    // A missing or disabled directional light must not silently inject light.
+    // Keep a valid direction for shadow-matrix math, but use zero direct and
+    // ambient intensity.
     let fallback_dir = [
         -std::f32::consts::FRAC_1_SQRT_2,
         std::f32::consts::FRAC_1_SQRT_2,
         0.0,
-        3.0 * LUX_TO_RADIANCE_SCALE,
+        0.0,
     ];
-    let fallback_col = [1.0, 1.0, 1.0, 1.0];
+    let fallback_col = [1.0, 1.0, 1.0, 0.0];
 
     // 1. Camera — first enabled entity with a Camera component.
-    let (view_proj, eye, view, projection, exposure) = {
+    let (view_proj, eye, view, projection, exposure, has_camera) = {
         let camera_entity = world
             .query::<Camera>()
-            .find(|(_, c)| c.enabled())
-            .map(|(e, _)| e)
-            .ok_or_else(|| anyhow::anyhow!("no Camera entity in ECS world"))?;
-        let camera = world
-            .get_mut::<Camera>(camera_entity)
-            .ok_or_else(|| anyhow::anyhow!("Camera entity has no Camera component"))?;
+            .find(|(_, c)| c.enabled)
+            .map(|(e, _)| e);
         let (display_aspect, surface_rotation) = renderer.orientation();
-        camera.set_aspect(display_aspect);
-        let proj = camera.projection();
-        let mut vp = camera.view_proj();
-        vp = mat_mul(&surface_rotation, &vp);
-        let exposure = camera.exposure();
-        (vp, camera.eye(), camera.view(), proj, exposure)
+        // Write the aspect onto the Camera data component (runtime cache),
+        // tracking resize / orientation even if the app's resize handler
+        // hasn't fired yet.
+        if let Some(cam_entity) = camera_entity {
+            if let Some(cam) = world.get_mut::<Camera>(cam_entity) {
+                cam.aspect = display_aspect;
+            }
+        }
+        match scene::systems::camera::compute_camera_output(world, &surface_rotation) {
+            Some(out) => {
+                (out.view_proj, out.eye, out.view, out.projection, out.exposure, true)
+            }
+            None => {
+                log::warn!("no usable Camera entity — using fallback");
+                let fb = scene::systems::camera::fallback_camera_output(&surface_rotation, display_aspect);
+                (fb.view_proj, fb.eye, fb.view, fb.projection, fb.exposure, false)
+            }
+        }
     };
 
     let inv_projection = mat_inverse(&projection);
@@ -407,15 +419,15 @@ fn collect_scene_changes(
     //    components). The intensity is pre-scaled by LUX_TO_RADIANCE_SCALE
     //    so the shader receives effective radiance and `exposure` is a pure
     //    post-composition multiplier.
-    let dir_light = world.query::<scene_comp::DirectionalLight>().next();
+    let dir_light = scene::systems::lights::collect_directional_light(world);
     let light_direction = dir_light
-        .map(|(_, l)| {
+        .map(|l| {
             let d = euler_xyz_deg_to_dir(l.euler_xyz);
             [d[0], d[1], d[2], l.intensity * LUX_TO_RADIANCE_SCALE]
         })
         .unwrap_or(fallback_dir);
     let light_color = dir_light
-        .map(|(_, l)| [l.color[0], l.color[1], l.color[2], l.ambient])
+        .map(|l| [l.color[0], l.color[1], l.color[2], l.ambient])
         .unwrap_or(fallback_col);
 
     // 3. Point lights (up to LIGHT_MAX) from new scene components. Position
@@ -423,6 +435,9 @@ fn collect_scene_changes(
     //    (a point light without a position makes no sense in the new system).
     let mut lights: Vec<GpuLight> = Vec::new();
     for (entity, pl) in world.query::<scene_comp::PointLight>() {
+        if !scene::systems::lights::component_is_active(world, entity) {
+            continue;
+        }
         if lights.len() >= prism_render::LIGHT_MAX as usize {
             break;
         }
@@ -448,6 +463,9 @@ fn collect_scene_changes(
     // with MIS weighting; it is NOT added to pt_lights to avoid double-counting.
     let mut pt_lights: Vec<PtAnalyticLight> = Vec::new();
     for (entity, pl) in world.query::<scene_comp::PointLight>() {
+        if !scene::systems::lights::component_is_active(world, entity) {
+            continue;
+        }
         if pt_lights.len() >= PT_LIGHT_MAX as usize {
             break;
         }
@@ -480,6 +498,7 @@ fn collect_scene_changes(
         lights,
         pt_lights,
         exposure,
+        has_camera,
     })
 }
 
@@ -544,6 +563,7 @@ pub fn render_system(
         lights,
         ref pt_lights,
         exposure,
+        has_camera,
     } = scene;
     let light_count = lights.len() as f32;
 
@@ -594,6 +614,8 @@ pub fn render_system(
         exposure,
         pt_lights,
         pt_accum_dirty: dirty_flags.directional_light,
+        has_camera,
+        clear_color,
     };
     renderer
         .execute(&ctx, &input)
@@ -603,7 +625,7 @@ pub fn render_system(
             e
         })?;
     let _ = renderer.present(&ctx)?;
-    let _ = (clear_color, show_ui);
+    let _ = show_ui;
     Ok(())
 }
 

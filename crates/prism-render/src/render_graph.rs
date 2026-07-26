@@ -414,6 +414,14 @@ pub struct GraphFrame<'a> {
     /// When `true`, the path tracer should reset its accumulation next frame.
     /// Set when directional-light properties change.
     pub pt_accum_dirty: bool,
+    /// Whether a usable Camera entity was found. When `false`, the skybox and
+    /// PT pass should be skipped so the clear color (gray) shows through.
+    pub has_camera: bool,
+    /// Clear color for the scene color attachment. Applied by ScenePass on
+    /// render-pass begin; visible when the skybox and scene geometry are
+    /// absent or transparent (e.g. no-camera fallback). Matches the app-level
+    /// `clear_color` parameter passed to `render_system`.
+    pub clear_color: [f32; 4],
 }
 
 /// Context passed to each pass's `execute`.

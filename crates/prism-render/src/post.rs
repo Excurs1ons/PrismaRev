@@ -526,16 +526,19 @@ impl RenderPassNode for PostPass {
         resources: &mut GraphResources,
     ) -> anyhow::Result<()> {
         // Pick the input RT based on the render mode and debug viewer (Tab).
-        // In path-trace mode we read PT_COLOR_H instead of SCENE_COLOR_H.
+        // In path-trace mode we read PT_COLOR_H instead of SCENE_COLOR_H,
+        // unless no usable Camera exists — in that case the PT pass was skipped
+        // so fall back to SCENE_COLOR_H (the gray clear color from ScenePass).
         // Debug modes 1 (depth) and 2 (normal) always read from scene output.
         let is_pt = ctx.frame.render_mode == RenderMode::PathTrace;
+        let has_camera = ctx.frame.has_camera;
         let (handle, image_layout) = match ctx.frame.debug_rt {
             1 => (
                 SCENE_DEPTH_H,
                 vk::ImageLayout::DEPTH_STENCIL_READ_ONLY_OPTIMAL,
             ),
             2 => (SCENE_NORMAL_H, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL),
-            _ if is_pt => (PT_COLOR_H, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL),
+            _ if is_pt && has_camera => (PT_COLOR_H, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL),
             _ => (SCENE_COLOR_H, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL),
         };
         let input_view = match resources.published_view(handle) {

@@ -22,12 +22,10 @@ use prism_audio::{AudioConfig, AudioEngine};
 use prism_ecs::World;
 use prism_render::{DebugMode, GraphRenderer, NormalSpace, PathTracePass, RenderMode};
 
-use crate::camera::{Camera, FlyCamera};
 use crate::input::{InputState, MouseButton};
 use crate::render_system::{render_system, MeshManager};
 use crate::scene::components::{
-    Active, DirectionalLight as SceneDirLight, LocalTransform, MeshRef, MaterialRef,
-    PointLight as ScenePtLight, SceneAssetId, WorldTransform,
+    Camera, LocalTransform, MeshRef, MaterialRef, SceneAssetId, WorldTransform,
 };
 
 /// Parse a `key = "value"` TOML line (after the `key` prefix has been stripped)
@@ -102,65 +100,86 @@ fn load_env_bytes() -> Option<Vec<u8>> {
     None
 }
 
-// ---------------------------------------------------------------------------
-// Default scene contents
-// ---------------------------------------------------------------------------
-
-/// Populate the ECS `world` with the default scene contents: a directional
-/// light and a few point lights. The camera lives as a `World` resource (see
-/// `ensure_window`); actual geometry comes from the glTF scene loaded via
-/// `load_scene_from_manifest` / `load_demo_scene` (the real "main scene"), not
-/// from hardcoded demo meshes.
-///
-/// This replaces the old `create_test_scene`, which baked sphere/cube demo
-/// meshes into the world and was tightly coupled to `App` (see task notes).
-fn create_default_scene(world: &mut World) {
-    // Directional light (single entity). Drives the per-frame UBO's
-    // `light_direction` / `light_color` / ambient factor. Its orientation is an
-    // XYZ Euler triple (`SceneDirLight::euler_xyz`); the render path derives
-    // the world-space direction from it. Editable at runtime via the inspector.
-    let dir_entity = world.spawn();
-    world.insert(dir_entity, SceneDirLight::default());
-    // Mark active so the render system picks it up.
-    world.insert(dir_entity, Active(true));
-
-    // A few point lights so the PBR scene has local highlights. Position comes
-    // from a sibling `LocalTransform` (separate component); the light component
-    // itself stores only color/intensity/range.
-    let point_positions = [
-        [2.0, 3.0, 2.0],
-        [-2.0, 3.0, -2.0],
-        [0.0, 4.0, 4.0],
-    ];
-    let point_colors = [
-        [1.0, 0.2, 0.2],
-        [0.2, 1.0, 0.2],
-        [0.2, 0.2, 1.0],
-    ];
-    for (pos, color) in point_positions.iter().zip(point_colors.iter()) {
-        let entity = world.spawn();
-        world.insert(entity, LocalTransform {
-            translation: *pos,
-            ..Default::default()
-        });
-        world.insert(entity, ScenePtLight {
-            color: *color,
-            intensity: 150.0,
-            range: 12.0,
-        });
-        world.insert(entity, Active(true));
-    }
-
-    // Camera entity (free-fly by default). Editable at runtime via the
-    // inspector like any other scene object.
-    let camera_entity = world.spawn();
-    world.insert(camera_entity, Camera::Fly(FlyCamera::new(16.0 / 9.0)));
-}
+// Runtime ECS entities must originate from scene data; do not inject defaults.
 
 /// Persist the current ECS state (including Camera resource) to scene_state.json.
 fn save_scene_state_file(world: &prism_ecs::World) {
     crate::scene_state::save_scene_state(world);
     log::info!("scene state saved");
+}
+
+/// Register every scene component type the inspector should expose.
+///
+/// Order controls display position in the editor (lower = higher). Ranges leave
+/// room for future components to slot in without renumbering. Adding a new
+/// component = `impl Inspect` (in `scene::inspect`) + one line here; the
+/// inspector code itself never changes.
+fn register_scene_components(editor: &mut prism_editor::Editor) {
+    use crate::scene::components::*;
+    // Identity + transform first.
+    editor.register::<Name>(100);
+    editor.register::<LocalTransform>(110);
+    editor.register::<TransformDirty>(115);
+    editor.register::<WorldTransform>(120);
+    editor.register::<Active>(130);
+    // Hierarchy.
+    editor.register::<Parent>(200);
+    editor.register::<Children>(210);
+    // Render refs (read-only).
+    editor.register::<MeshRef>(300);
+    editor.register::<MaterialRef>(310);
+    // Lighting.
+    editor.register::<DirectionalLight>(400);
+    editor.register::<PointLight>(410);
+    editor.register::<SpotLight>(420);
+    // Camera + controller.
+    editor.register::<Camera>(500);
+    editor.register::<FlyCameraController>(510);
+    // Scene membership (read-only).
+    editor.register::<SceneMember>(900);
+}
+
+/// `prism-editor` hierarchy adapter backed by the scene's `Parent` / `Children`
+/// / `Name` components. Lets the editor draw the entity tree without naming
+/// those types itself (keeps the dependency arrow one-way).
+struct SceneHierarchy;
+
+impl prism_editor::inspector::Hierarchy for SceneHierarchy {
+    fn roots(&self, world: &prism_ecs::World) -> Vec<prism_ecs::Entity> {
+        use crate::scene::components::{LocalTransform, Name, Parent};
+        // Roots = entities with a LocalTransform or Name but no Parent. Use
+        // LocalTransform as the primary axis (every placed entity has one);
+        // also include named entities without a transform so they stay visible.
+        let mut roots: Vec<prism_ecs::Entity> = world
+            .query_inactive_inclusive::<LocalTransform>()
+            .filter(|(e, _)| world.get::<Parent>(*e).is_none())
+            .map(|(e, _)| e)
+            .collect();
+        let named: Vec<prism_ecs::Entity> = world
+            .query_inactive_inclusive::<Name>()
+            .filter(|(e, _)| {
+                world.get::<Parent>(*e).is_none()
+                    && world.get::<LocalTransform>(*e).is_none()
+            })
+            .map(|(e, _)| e)
+            .collect();
+        roots.extend(named);
+        roots.sort_by_key(|e| e.id());
+        roots
+    }
+
+    fn children(&self, world: &prism_ecs::World, entity: prism_ecs::Entity) -> Vec<prism_ecs::Entity> {
+        use crate::scene::components::Children;
+        world
+            .get::<Children>(entity)
+            .map(|c| c.0.clone())
+            .unwrap_or_default()
+    }
+
+    fn name(&self, world: &prism_ecs::World, entity: prism_ecs::Entity) -> Option<String> {
+        use crate::scene::components::Name;
+        world.get::<Name>(entity).map(|n| n.0.clone())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -227,13 +246,15 @@ pub struct App {
     /// When `true`, scene-manifest camera positioning is skipped so the
     /// user's last viewpoint is preserved across restarts.
     camera_state_restored: bool,
-    /// Real-time scene parameter inspector (egui). Toggled with F1.
-    inspector: crate::inspector::Inspector,
+    /// Real-time scene editor (egui): inspector + debug + render-settings.
+    /// Toggled with F1. Hosts the entity tree + auto-recognised component
+    /// editors (see `prism-editor`).
+    editor: prism_editor::Editor,
     /// Render-graph visualizer (egui). Toggled with F2. Read-only pipeline
     /// diagram + live per-pass state. Shares the same `EguiOverlay` as the
     /// inspector; when both are open their UIs run inside a single
     /// `run_ui` closure (see `render_one_frame`).
-    render_graph_viz: crate::render_graph_viz::RenderGraphViz,
+    render_graph_viz: prism_editor::RenderGraphViz,
     /// FPS-style pointer-lock: when `true` the cursor is hidden and grabbed and
     /// the camera follows the mouse directly (no button held). Toggled by
     /// left-click (enter), ESC (exit), holding ALT (temporary release).
@@ -302,8 +323,13 @@ impl App {
             tex_map: std::collections::HashMap::new(),
             fatal_error: None,
             camera_state_restored: false,
-            inspector: crate::inspector::Inspector::new(),
-            render_graph_viz: crate::render_graph_viz::RenderGraphViz::new(),
+            editor: {
+                let mut e = prism_editor::Editor::new();
+                register_scene_components(&mut e);
+                e.set_hierarchy(SceneHierarchy);
+                e
+            },
+            render_graph_viz: prism_editor::RenderGraphViz::new(),
             pointer_locked: false,
             lock_before_inspector: false,
             alt_temp_release: false,
@@ -406,18 +432,16 @@ impl App {
             (t_after_renderer - t_renderer).as_millis(),
         );
 
-        // --- Build default ECS scene (lights + camera) ---
-        let mut world = World::new();
-        create_default_scene(&mut world);
+        // Start empty: only scene loading paths may create ECS entities.
+        let world = World::new();
         let t_after_world = std::time::Instant::now();
 
         self.world = Some(world);
         self.window = Some(window);
         self.renderer = Some(renderer);
 
-        // Restore the saved scene state (camera, lights, transforms) from
-        // scene_state.json. Overrides the default camera and ECS data.
-        // Must happen before scene-from-manifest placement below.
+        // Restore saved values only onto existing entities. At this point the
+        // empty world guarantees persisted state cannot synthesize entities.
         let mut state_loaded = false;
         if let Some(world) = self.world.as_mut() {
             state_loaded = crate::scene_state::load_scene_state(world);
@@ -529,26 +553,74 @@ impl App {
                 continue;
             }
             log::info!("loading scene '{}' from {:?}", name, path);
+
+            // Two scene-file formats are supported:
+            //   - `.rscn`  : cooked binary consumed by the new scene system
+            //                (`SceneLoader`). Spawns camera + lights + mesh
+            //                entities directly into the ECS. This is the
+            //                preferred path - the scene file owns placement.
+            //   - `.gltf`  : legacy glTF import via `try_load_gltf` +
+            //                `load_demo_scene`. Kept as a fallback.
+            let is_rscn = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.eq_ignore_ascii_case("rscn"))
+                .unwrap_or(false);
+
+            if is_rscn {
+                if self.load_scene_from_rscn(&path) {
+                    self.current_scene_name = Some(name.clone());
+                    return;
+                }
+                continue;
+            }
+
             if let Some(scene) = self.try_load_gltf(&path) {
                 // Record the scene name so the baked-GI loader can reject a
                 // `.bin` baked for a different scene.
                 self.current_scene_name = Some(name.clone());
                 self.load_demo_scene(scene);
-                // Place the free-fly camera for an architectural interior
-                // (Sponza-scale), looking toward the origin. But only when no
-                // saved camera state was restored — the user's last viewpoint
-                // should be preserved across restarts.
-                if !self.camera_state_restored {
-                    if let Some(world) = self.world.as_mut() {
-                        if let Some((_, camera)) = world.query_mut::<Camera>().next() {
-                            camera.set_position([0.0, 2.5, 18.0]);
-                        }
-                    }
-                }
                 return;
             }
         }
         log::info!("no resolvable scene in manifest; using procedural demo only");
+    }
+
+    /// Spawn a cooked RSCN scene (`SceneLoader`) into the ECS world.
+    ///
+    /// On success, re-applies any persisted `scene_state.json` so the user's
+    /// last-known camera position / light parameters land on the freshly
+    /// spawned entities (the initial `load_scene_state` at startup ran on an
+    /// empty world and could not patch a camera that did not yet exist).
+    fn load_scene_from_rscn(&mut self, path: &std::path::Path) -> bool {
+        let Some(world) = self.world.as_mut() else {
+            log::debug!("load_scene_from_rscn: no world yet, deferring");
+            return false;
+        };
+        let mut loader = crate::scene::loader::SceneLoader::new();
+        match loader.load_and_spawn(
+            world,
+            crate::scene::loader::SceneSource::CookedFile(path.to_path_buf()),
+        ) {
+            Ok(inst) => {
+                log::info!(
+                    "rscn scene loaded: {} entities ({} roots) from {:?}",
+                    inst.all_entities.len(),
+                    inst.root_entities.len(),
+                    path,
+                );
+                // Now that scene entities exist, re-apply persisted state so
+                // the saved camera viewpoint + light edits take effect.
+                if self.camera_state_restored {
+                    let _ = crate::scene_state::load_scene_state(world);
+                }
+                true
+            }
+            Err(e) => {
+                log::warn!("load_scene_from_rscn: {}: {e}", path.display());
+                false
+            }
+        }
     }
 
     // ---- P0: scene loading (commit 10) ---------------------------------
@@ -796,9 +868,7 @@ impl App {
 
         // 5. Spawn ECS entities for each scene instance. Each instance becomes
         // an entity with new scene components (MeshRef + MaterialRef +
-        // WorldTransform + Active), replacing the old RenderInstance.
-        // This lets scene geometry live in the ECS world alongside other entities
-        // (camera, lights, calibration spheres, ...) and be queried/manipulated.
+        // WorldTransform). Every entity created here originates in scene data.
         let t_ents = std::time::Instant::now();
         let world = self.world.as_mut().unwrap();
         for (_inst_h, inst) in self.scene_store.instances() {
@@ -827,24 +897,10 @@ impl App {
         }
         log::info!("spawn entities: {}ms", t_ents.elapsed().as_millis());
 
-        // 6. Spawn BRDF calibration spheres as ECS entities
-        // (white/black/gold/aluminum/plastic/stone) so the PBR pipeline can be
-        // eyeballed against reference materials. These share a single UV-sphere
-        // mesh and use scalar material values (no textures), so any visual
-        // discrepancy is attributable to the BRDF, not asset loading.
-        if let Err(e) = crate::calibration_spheres::spawn_calibration_spheres(
-            renderer,
-            world,
-            0.0,
-            1.0,
-            0.0,
-        ) {
-            log::warn!("calibration spheres failed: {e}");
-        }
-
+        // Runtime calibration spheres are disabled because they are not scene assets.
         self.scene_loaded = true;
 
-        // 7. Upload per-instance world-space geometry to the real-time PT pass.
+        // 6. Upload per-instance world-space geometry to the real-time PT pass.
         // The PT pass builds a per-instance BLAS + one TLAS whose
         // `instanceCustomIndex` carries the instance index (looked up in the
         // shader to fetch the per-instance material slot). Each instance keeps
@@ -1085,8 +1141,11 @@ impl ApplicationHandler for App {
                 if size.width > 0 && size.height > 0 {
                     let aspect = size.width as f32 / size.height as f32;
                     if let Some(world) = self.world.as_mut() {
-                        if let Some((_, camera)) = world.query_mut::<Camera>().next() {
-                            camera.set_aspect(aspect);
+                        // Write the aspect onto the Camera data component so the
+                        // projection (derived each frame in render_system) stays
+                        // in sync with the surface.
+                        for (_, cam) in world.query_mut::<Camera>() {
+                            cam.aspect = aspect;
                         }
                     }
                 }
@@ -1291,8 +1350,8 @@ impl ApplicationHandler for App {
                         } else if code == KeyCode::F1 {
                             // Toggle the egui inspector panel. First activation
                             // also lazily creates the EguiOverlay.
-                            self.inspector.toggle();
-                            if self.inspector.show {
+                            self.editor.toggle();
+                            if self.editor.inspector.show {
                                 // Opening the inspector: remember whether the
                                 // pointer was locked so we can restore it on
                                 // close, then free the cursor for UI interaction.
@@ -1304,7 +1363,7 @@ impl ApplicationHandler for App {
                                 if let Some(renderer) = self.renderer.as_mut() {
                                     if let Err(e) = renderer.ensure_egui_overlay() {
                                         log::error!("failed to init egui overlay: {e}");
-                                        self.inspector.show = false;
+                                        self.editor.inspector.show = false;
                                     }
                                 }
                             } else if self.lock_before_inspector && !self.render_graph_viz.show {
@@ -1331,7 +1390,7 @@ impl ApplicationHandler for App {
                                         self.render_graph_viz.show = false;
                                     }
                                 }
-                            } else if self.lock_before_inspector && !self.inspector.show {
+                            } else if self.lock_before_inspector && !self.editor.inspector.show {
                                 // Closing the viz: re-lock only if the inspector
                                 // isn't still holding the cursor.
                                 self.lock_before_inspector = false;
@@ -1340,12 +1399,12 @@ impl ApplicationHandler for App {
                         } else if code == KeyCode::F3 {
                             // Toggle the performance HUD independently of F1/F2.
                             // Does NOT affect cursor lock (unlike F1/F2).
-                            self.inspector.toggle_perf();
-                            if self.inspector.show_perf {
+                            self.editor.toggle_perf();
+                            if self.editor.inspector.show_perf {
                                 if let Some(renderer) = self.renderer.as_mut() {
                                     if let Err(e) = renderer.ensure_egui_overlay() {
                                         log::error!("failed to init egui overlay: {e}");
-                                        self.inspector.show_perf = false;
+                                        self.editor.inspector.show_perf = false;
                                     }
                                 }
                             }
@@ -1449,13 +1508,15 @@ impl App {
     /// lock and scene animation so input goes to the UI whenever a panel is
     /// visible.
     fn ui_modal_open(&self) -> bool {
-        self.inspector.show || self.render_graph_viz.show
+        self.editor.inspector.show || self.render_graph_viz.show
     }
 
     /// Whether any egui overlay (including the performance HUD) is visible
     /// and needs per-frame egui rendering. Wider than [`Self::ui_modal_open`].
     fn any_ui_visible(&self) -> bool {
-        self.inspector.show || self.render_graph_viz.show || self.inspector.show_perf
+        self.editor.inspector.show
+            || self.render_graph_viz.show
+            || self.editor.inspector.show_perf
     }
 
     /// Hit-test a pointer against the debug overlay and apply the resulting
@@ -1538,33 +1599,48 @@ impl App {
             None => 1.0 / 60.0,
         };
         self.last_frame = Some(now);
-        // Update frame-time metrics on the inspector.
-        self.inspector.dt = dt;
-        self.inspector.frame_time_ms = self.inspector.frame_time_ms * 0.9 + dt * 1000.0 * 0.1;
-        self.inspector.fps = if dt > 0.0 { 1.0 / dt } else { 0.0 };
-        // Read PT frame count from the renderer (0 when not in PT mode).
-        if let Some(renderer) = self.renderer.as_ref() {
-            self.inspector.pt_frame_count = renderer.pt_frame_count().unwrap_or(0);
-        }
-        // Update camera from input state (ECS entity component). When pointer
-        // lock is active the camera follows the mouse directly; otherwise the
-        // camera falls back to its right-drag look behavior.
+        // Update frame-time metrics on the editor's perf HUD. The smoothed
+        // frame time uses an exponential moving average (tau ~= 10 frames).
+        let frame_time_ms = self.editor.inspector.frame_time_ms * 0.9 + dt * 1000.0 * 0.1;
+        let fps = if dt > 0.0 { 1.0 / dt } else { 0.0 };
+        let pt_frame_count = self
+            .renderer
+            .as_ref()
+            .and_then(|r| r.pt_frame_count())
+            .unwrap_or(0);
+        self.editor.sync_metrics(dt, frame_time_ms, fps, pt_frame_count);
+        // Update camera from input state. When pointer lock is active the
+        // camera follows the mouse directly; otherwise it falls back to its
+        // right-drag look behavior. The controller system writes
+        // yaw/pitch/translation onto the FlyCameraController + LocalTransform
+        // data components and returns the entity it touched (used to skip the
+        // demo-spin animation for that entity).
         let look_active = self.pointer_locked;
-        if let Some(world) = self.world.as_mut() {
-            if let Some((_, camera)) = world.query_mut::<Camera>().next() {
-                camera.update(&self.input_state, dt, look_active);
-            }
-        }
+        let camera_entity_touched: Option<prism_ecs::Entity> = if let Some(world) = self.world.as_mut() {
+            crate::scene::systems::camera::camera_controller_system(
+                world,
+                &self.input_state,
+                dt,
+                look_active,
+            )
+        } else {
+            None
+        };
         // Clear transient input state for the next frame.
         self.input_state.begin_frame();
 
-        // Animate cubes: rotate around Y axis. Paused while any UI panel is
-        // open so user edits to `Transform.rotation` aren't overwritten each
-        // frame.
+        // Legacy demo animation: spin every transformable entity around Y.
+        // Paused while any UI panel is open so inspector edits to
+        // `Transform.rotation` aren't overwritten, and skipped for camera
+        // entities (whose orientation is owned by the scene file + input
+        // loop, not this animation).
         let elapsed = self.start.elapsed().as_secs_f32();
         if !self.ui_modal_open() {
             if let Some(world) = self.world.as_mut() {
-                for (_, transform) in world.query_mut::<LocalTransform>() {
+                for (entity, transform) in world.query_mut::<LocalTransform>() {
+                    if Some(entity) == camera_entity_touched {
+                        continue;
+                    }
                     let angle = elapsed * 0.5; // 0.5 rad/s ≈ 29°/s
                     let half = angle * 0.5;
                     transform.rotation = [0.0, half.sin(), 0.0, half.cos()];
@@ -1579,19 +1655,31 @@ impl App {
         // viz (F2) are open we must run both UIs inside a single `run_ui`
         // closure - otherwise the second call clobbers the first.
         if self.any_ui_visible() {
-            self.inspector.debug_flags = self.debug_flags;
-            self.inspector.show_ui = self.show_ui;
-            self.inspector.tonemap_mode = self.tonemap_mode;
-            // Sync render settings from app to inspector so the UI reflects
-            // the current state (including keyboard-driven changes).
-            self.inspector.render_mode = self.render_mode;
-            self.inspector.pt_max_bounces = self.pt_max_bounces;
-            self.inspector.pt_ray_max_distance = self.pt_ray_max_distance;
-            self.inspector.pt_max_iterations = self.pt_max_iterations;
+            // Sync app -> editor (debug flags, tonemap, render settings, perf
+            // metrics). The editor mirrors these and pushes edits back below.
+            self.editor.sync_debug(self.debug_flags, self.tonemap_mode, self.show_ui);
+            self.editor.sync_render(
+                self.render_mode,
+                self.pt_max_bounces,
+                self.pt_ray_max_distance,
+                self.pt_max_iterations,
+            );
+            // (Per-frame metrics were already synced in the update phase above.)
+            // Sync camera presence + exposure onto the editor so the
+            // Debug-window slider reflects the live camera value and the
+            // "No Camera" overlay shows when no camera exists.
+            if let Some(world) = self.world.as_ref() {
+                if let Some((_, cam)) = world.query::<Camera>().next() {
+                    self.editor.inspector.has_camera = true;
+                    self.editor.inspector.exposure = cam.exposure;
+                } else {
+                    self.editor.inspector.has_camera = false;
+                }
+            }
             // Refresh the viz's per-frame snapshot while `&GraphRenderer` is
             // borrowable (the egui closure only holds plain data).
             let window = self.window.clone();
-            let inspector = &mut self.inspector;
+            let editor = &mut self.editor;
             let viz = &mut self.render_graph_viz;
             let world = self.world.as_mut();
             let renderer = self.renderer.as_mut();
@@ -1602,31 +1690,33 @@ impl App {
                 }
                 if let Some(overlay) = renderer.egui_overlay_mut() {
                     overlay.run_ui(window, |ctx| {
-                        inspector.perf_hud(ctx);
-                        if inspector.show {
-                            inspector.ui(ctx, world);
-                        }
+                        // The editor draws perf HUD + entities + editor +
+                        // debug + render-settings; the render-graph viz draws
+                        // its own window. Both share this single `run_ui`
+                        // closure (a second `run_ui` would clobber the first).
+                        editor.run_ctx(ctx, world);
                         if viz.show {
                             viz.ui(ctx);
                         }
                     });
                 }
             }
-            // Push UI-edited tonemap selection back to the app so the `T` key
-            // and the inspector stay in sync.
-            self.tonemap_mode = self.inspector.tonemap_mode;
-            // Push UI-edited render settings back to the app. Detect changes
-            // to PT-affecting parameters and request an accumulation reset so
-            // the path tracer converges against the new settings instead of
-            // averaging them with stale frames.
+            // Push UI-edited tonemap + render settings back to the app.
+            self.tonemap_mode = self.editor.inspector.tonemap_mode;
             let prev_pt_max_bounces = self.pt_max_bounces;
             let prev_pt_ray_max_distance = self.pt_ray_max_distance;
             let prev_pt_max_iterations = self.pt_max_iterations;
             let prev_render_mode = self.render_mode;
-            self.render_mode = self.inspector.render_mode;
-            self.pt_max_bounces = self.inspector.pt_max_bounces;
-            self.pt_ray_max_distance = self.inspector.pt_ray_max_distance;
-            self.pt_max_iterations = self.inspector.pt_max_iterations;
+            self.render_mode = self.editor.inspector.render_mode;
+            self.pt_max_bounces = self.editor.inspector.pt_max_bounces;
+            self.pt_ray_max_distance = self.editor.inspector.pt_ray_max_distance;
+            self.pt_max_iterations = self.editor.inspector.pt_max_iterations;
+            // Push the Debug-window exposure back to the camera entity.
+            if let Some(world) = self.world.as_mut() {
+                if let Some((_, cam)) = world.query_mut::<Camera>().next() {
+                    cam.exposure = self.editor.inspector.exposure;
+                }
+            }
             if self.render_mode == RenderMode::PathTrace
                 && (self.pt_max_bounces != prev_pt_max_bounces
                     || self.pt_ray_max_distance != prev_pt_ray_max_distance

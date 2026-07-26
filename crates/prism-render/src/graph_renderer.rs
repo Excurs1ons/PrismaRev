@@ -82,6 +82,14 @@ pub struct FrameInput<'a> {
     /// When `true`, the path tracer should reset its accumulation next frame.
     /// Set when directional-light properties (intensity/color/direction) change.
     pub pt_accum_dirty: bool,
+    /// Whether a usable Camera entity was found. When `false`, passes should
+    /// skip camera-dependent work (skybox, PT rays) and leave the clear color.
+    pub has_camera: bool,
+    /// Clear color for the scene color attachment. Applied when the render pass
+    /// begins; shows through where no skybox or geometry is drawn. Default gray
+    /// `[0.5, 0.5, 0.5, 1.0]` lets the user distinguish "nothing drew" from
+    /// black.
+    pub clear_color: [f32; 4],
 }
 
 /// GPU session that owns the long-lived Vulkan runtime objects (device,
@@ -838,6 +846,8 @@ impl GraphRenderer {
             exposure,
             pt_lights,
             pt_accum_dirty,
+            has_camera,
+            clear_color,
         } = input;
         let light_view_proj = *light_view_proj;
         let inv_projection = *inv_projection;
@@ -913,6 +923,8 @@ impl GraphRenderer {
                 exposure: *exposure,
                 pt_lights,
                 pt_accum_dirty: *pt_accum_dirty,
+                has_camera: *has_camera,
+                clear_color: *clear_color,
             };
             let render_ctx = crate::render_graph::RenderContext {
                 device,
@@ -1081,6 +1093,8 @@ impl GraphRenderer {
             exposure,
             pt_lights,
             pt_accum_dirty: true,
+            has_camera: true,
+            clear_color: [0.5, 0.5, 0.5, 1.0],
         };
         let exec_result = self.execute(&ctx, &input);
         let out_of_date = self.present(&ctx)?;

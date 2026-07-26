@@ -33,6 +33,14 @@ impl Entity {
     pub fn generation(self) -> u32 {
         self.generation
     }
+
+    /// Construct an entity handle from raw parts. Intended for sentinel uses
+    /// (e.g. the editor's per-component-type euler cache, which needs a stable
+    /// key not tied to any real entity); normal entity creation goes through
+    /// [`World::spawn`].
+    pub fn from_raw(id: u32, generation: u32) -> Self {
+        Self { id, generation }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -208,6 +216,22 @@ impl World {
             })
     }
 
+    /// Like [`Self::query`], but **includes** inactive entities.
+    ///
+    /// Iterates all alive entities that have component `T`, regardless of the
+    /// per-entity `active` flag. Used by the editor's entity-tree to show
+    /// disabled entities in the hierarchy.
+    pub fn query_inactive_inclusive<T: Component>(&self) -> impl Iterator<Item = (Entity, &T)> {
+        let entities = &self.entities;
+        let pool = self.pools.get(&TypeId::of::<T>());
+        pool.into_iter()
+            .flat_map(move |p| pool_downcast_ref::<T>(p.as_ref()).iter())
+            .filter_map(move |(id, value)| {
+                let generation = *entities.get(id as usize)?;
+                Some((Entity { id, generation }, value))
+            })
+    }
+
     /// Iterate over all `(entity, &mut T)` pairs for a single component type.
     /// Inactive entities are skipped.
     pub fn query_mut<T: Component>(&mut self) -> impl Iterator<Item = (Entity, &mut T)> {
@@ -330,7 +354,36 @@ impl World {
         }))
     }
 
-    // --- Resources (global, singleton data not tied to an entity) ---
+    // --- Component-type enumeration (for editor auto-recognition) ---------
+
+    /// Iterate over every component type currently stored in the world, yielding
+    /// `(TypeId, type_name)`. This is the foundation of the editor's
+    /// "auto-recognition" inspector: it can list every component on an entity
+    /// without hardcoding the component types.
+    ///
+    /// Order is unspecified (driven by `HashMap` iteration); callers that need
+    /// a stable order must sort. Only types that have at least one live
+    /// component instance are yielded - types whose pool is empty are still
+    /// yielded (a pool is created on first `insert` and never removed).
+    pub fn iter_component_types(&self) -> impl Iterator<Item = (TypeId, &'static str)> + '_ {
+        self.pools
+            .iter()
+            .map(|(type_id, pool)| (*type_id, pool.type_name()))
+    }
+
+    /// True if `entity` has a component of the erased `type_id`. Used together
+    /// with [`World::iter_component_types`] to enumerate an entity's components
+    /// without knowing their concrete types.
+    pub fn has_component(&self, entity: Entity, type_id: TypeId) -> bool {
+        if !self.is_alive(entity) {
+            return false;
+        }
+        self.pools
+            .get(&type_id)
+            .is_some_and(|pool| pool.contains(entity.id))
+    }
+
+    // --- Resources (global, singleton data not tied to an entity) ---------
 
     /// Insert a global resource, replacing any existing one of the same type.
     /// Resources are singletons keyed by type: `Camera`, `RenderState`, etc.
@@ -371,10 +424,19 @@ impl Default for World {
 // Component pool (type-erased storage)
 // ---------------------------------------------------------------------------
 
-/// Type-erased view of a pool: only what [`World::despawn`] needs. Inherits
-/// `Any` so typed accessors can still downcast back to [`ComponentPool<T>`].
+/// Type-erased view of a pool. Inherits `Any` so typed accessors can still
+/// downcast back to [`ComponentPool<T>`].
+///
+/// The `contains` / `type_name` methods exist to let the editor
+/// (`prism-editor`) enumerate which component types an entity has without
+/// knowing the concrete types - this is the foundation of the "auto-recognition,
+/// no hardcoding" inspector. They are not used by the core ECS itself.
 trait ErasedPool: Any {
     fn remove(&mut self, id: u32);
+    /// True if `id` currently has a component in this pool.
+    fn contains(&self, id: u32) -> bool;
+    /// Stable Rust type name (`std::any::type_name::<T>()`), for display.
+    fn type_name(&self) -> &'static str;
 }
 
 /// Sparse-set storage for one component type.
@@ -465,11 +527,28 @@ impl<T: 'static> ComponentPool<T> {
             .copied()
             .zip(self.dense.iter_mut())
     }
+
+    /// True if `id` has a component in this pool. Mirrors the lookup logic of
+    /// [`ComponentPool::get`] but without returning the value.
+    fn contains(&self, id: u32) -> bool {
+        match self.sparse.get(id as usize).copied() {
+            Some(idx) => (idx as usize) < self.dense.len(),
+            None => false,
+        }
+    }
 }
 
 impl<T: 'static> ErasedPool for ComponentPool<T> {
     fn remove(&mut self, id: u32) {
         self.remove(id); // drops the value
+    }
+
+    fn contains(&self, id: u32) -> bool {
+        ComponentPool::contains(self, id)
+    }
+
+    fn type_name(&self) -> &'static str {
+        std::any::type_name::<T>()
     }
 }
 
