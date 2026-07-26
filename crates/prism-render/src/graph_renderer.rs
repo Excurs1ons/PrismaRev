@@ -565,7 +565,7 @@ impl GraphRenderer {
     /// (prevents silent wrong-scene GI). A `None`/empty name skips the check
     /// (e.g. procedural scenes).
     pub fn load_probe_volume_file(&mut self, path: &std::path::Path, scene_name: Option<&str>) -> bool {
-        let data = match prism_asset::load_probe_volume(path) {
+        let data = match crate::probe_loader::load_probe_volume(path) {
             Ok(d) => d,
             Err(e) => {
                 log::info!(

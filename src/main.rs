@@ -10,7 +10,7 @@ fn main() -> anyhow::Result<()> {
     init_logger();
     log::info!("PrismaRev starting");
     prism_engine::App::run()?;
-    log::info!("PrismaRev exited cleanly");
+    log::info!("PrismaRev exited");
     Ok(())
 }
 

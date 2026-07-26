@@ -18,8 +18,8 @@ use prism_editor::{euler_deg_to_quat, quat_to_euler_deg, Inspect, InspectCtx};
 
 use super::components::{
     Active, Camera, Children, DirectionalLight, FlyCameraController, LocalTransform, MaterialRef,
-    MeshRef, Name, Parent, PointLight, SceneMember, Skybox, SpotLight, TransformDirty,
-    WorldTransform,
+    MeshRef, MeshRenderer, Name, Parent, PointLight, SceneMember, Skybox, SpotLight,
+    TransformDirty, WorldTransform,
 };
 
 // ---------------------------------------------------------------------------
@@ -154,6 +154,23 @@ impl Inspect for MaterialRef {
 impl Inspect for Active {
     fn inspect_ui(&mut self, ui: &mut Ui, _ctx: &mut InspectCtx) {
         ui.checkbox(&mut self.0, "Active");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Authoring-time helpers
+// ---------------------------------------------------------------------------
+
+impl Inspect for MeshRenderer {
+    fn inspect_ui(&mut self, ui: &mut Ui, _ctx: &mut InspectCtx) {
+        ui.horizontal(|ui| {
+            ui.label("Mesh path:");
+            ui.text_edit_singleline(&mut self.mesh_path);
+        });
+        ui.horizontal(|ui| {
+            ui.label("Material path:");
+            ui.text_edit_singleline(&mut self.material_path);
+        });
     }
 }
 

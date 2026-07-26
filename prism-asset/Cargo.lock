@@ -814,9 +814,11 @@ dependencies = [
 name = "prism-asset-runtime"
 version = "0.1.0"
 dependencies = [
+ "prism-asset-cooker",
  "prism-asset-core",
  "prism-asset-package",
  "serde",
+ "serde_json",
  "tempfile",
  "thiserror 1.0.69",
  "tokio",

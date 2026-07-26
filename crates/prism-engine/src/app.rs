@@ -28,6 +28,8 @@ use crate::scene::components::{
     Camera, LocalTransform, MeshRef, MaterialRef, SceneAssetId, WorldTransform,
 };
 
+use prism_asset_runtime::ResourceManager;
+
 /// Parse a `key = "value"` TOML line (after the `key` prefix has been stripped)
 /// and return the unquoted string value. Handles optional surrounding
 /// whitespace and single or double quotes.
@@ -42,61 +44,66 @@ fn split_toml_string(rest: &str) -> Option<String> {
     Some(s.trim().to_string())
 }
 
-/// Locate and read the equirectangular HDR environment map for image-based
-/// lighting. Scans the `assets/` directory (and exe-relative variants) for any
-/// `*.hdr` file — so the resource can keep its own name (e.g.
-/// `valley_of_desolation_1k.hdr`) instead of being renamed. An explicit
-/// `env.hdr` is preferred if present; otherwise the first `.hdr` (in
-/// deterministic order) is used. Returns `None` if no file is found — the
+/// Read the scene manifest (`scenes.toml`) and extract the environment map
+/// bytes for IBL.  Looks for the first `.rscn` scene with a v2 header that
+/// carries a skybox HDR path, resolves it relative to the scene file, and
+/// reads the HDR file.  Returns `None` if no scene or no HDR is found — the
 /// renderer then uses a procedural fallback environment.
-fn load_env_bytes() -> Option<Vec<u8>> {
-    use std::path::PathBuf;
+fn load_env_from_scene_manifest() -> Option<Vec<u8>> {
+    let candidate_dirs = [
+        std::path::PathBuf::from("assets"),
+        std::path::PathBuf::from("crates/prism-engine/assets"),
+    ];
+    let manifest_path = candidate_dirs
+        .iter()
+        .map(|d| d.join("scenes.toml"))
+        .find(|p| p.exists())?;
+    let manifest_dir = manifest_path.parent()?.to_path_buf();
 
-    let mut dirs: Vec<PathBuf> = vec![PathBuf::from("assets")];
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            dirs.push(dir.join("assets"));
-            dirs.push(dir.join("../../../assets"));
+    let text = std::fs::read_to_string(&manifest_path).ok()?;
+
+    // Minimal TOML parse for `[[scenes]]` entries (same logic as
+    // `load_scene_from_manifest`).
+    let mut scene_paths: Vec<std::path::PathBuf> = Vec::new();
+    for raw_line in text.lines() {
+        let line = raw_line.trim();
+        if line.starts_with("[[scenes]]") {
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("path") {
+            if let Some(v) = split_toml_string(rest) {
+                let p = std::path::PathBuf::from(&v);
+                let p = if p.is_absolute() {
+                    p
+                } else {
+                    manifest_dir.join(&p)
+                };
+                scene_paths.push(p);
+            }
         }
     }
 
-    let mut candidates: Vec<PathBuf> = Vec::new();
-    for dir in &dirs {
-        if let Ok(entries) = std::fs::read_dir(dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                let is_hdr = path
-                    .extension()
-                    .and_then(|s| s.to_str())
-                    .map(|s| s.eq_ignore_ascii_case("hdr"))
-                    .unwrap_or(false);
-                if is_hdr {
-                    candidates.push(path);
+    for path in &scene_paths {
+        let is_rscn = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.eq_ignore_ascii_case("rscn"))
+            .unwrap_or(false);
+        if !is_rscn || !path.exists() {
+            continue;
+        }
+        if let Some(hdr_rel) = crate::scene::loader::read_env_path_from_rscn(path) {
+            let hdr_path = path.parent().map(|d| d.join(&hdr_rel)).unwrap_or_else(|| std::path::PathBuf::from(&hdr_rel));
+            match std::fs::read(&hdr_path) {
+                Ok(bytes) => {
+                    log::info!("loaded environment map from scene: {}", hdr_path.display());
+                    return Some(bytes);
                 }
+                Err(e) => log::warn!("failed to read HDR {}: {e}", hdr_path.display()),
             }
         }
     }
-
-    // Prefer an explicit "env.hdr"; otherwise use the first .hdr found.
-    candidates.sort();
-    if let Some(idx) = candidates.iter().position(|p| {
-        p.file_name()
-            .map(|n| n.eq_ignore_ascii_case("env.hdr"))
-            .unwrap_or(false)
-    }) {
-        candidates.swap(0, idx);
-    }
-
-    for path in &candidates {
-        match std::fs::read(path) {
-            Ok(bytes) => {
-                log::info!("loaded environment map: {}", path.display());
-                return Some(bytes);
-            }
-            Err(e) => log::warn!("failed to read {}: {e}", path.display()),
-        }
-    }
-    log::info!("no environment map found in assets/; using procedural fallback");
+    log::info!("no environment map in scene manifest; using procedural fallback");
     None
 }
 
@@ -122,6 +129,7 @@ fn register_scene_components(editor: &mut prism_editor::Editor) {
     editor.register::<TransformDirty>(115);
     editor.register::<WorldTransform>(120);
     editor.register::<Active>(130);
+    editor.register::<MeshRenderer>(135);
     // Hierarchy.
     editor.register::<Parent>(200);
     editor.register::<Children>(210);
@@ -135,6 +143,8 @@ fn register_scene_components(editor: &mut prism_editor::Editor) {
     // Camera + controller.
     editor.register::<Camera>(500);
     editor.register::<FlyCameraController>(510);
+    // Skybox.
+    editor.register::<Skybox>(600);
     // Scene membership (read-only).
     editor.register::<SceneMember>(900);
 }
@@ -197,9 +207,6 @@ pub struct App {
     /// Timestamp of the previous frame, used to compute per-frame `dt` for the
     /// free-fly camera. `None` until the first frame.
     last_frame: Option<Instant>,
-    /// Optional equirectangular HDR environment map bytes (`.hdr`), threaded
-    /// from the platform entry point into the renderer for image-based lighting.
-    env_bytes: Option<Vec<u8>>,
     /// Currently selected PBR debug visualization mode.
     debug_mode: DebugMode,
     /// Coordinate space for the `Normal` debug mode.
@@ -220,6 +227,20 @@ pub struct App {
     /// populated either from a glTF file or from the procedural fallback.
     /// The renderer's `Render*Manager`s consume this on `App::load_demo_scene`.
     scene_store: prism_asset::SceneStore,
+    /// Runtime resource manager for the .pak asset pipeline.
+    ///
+    /// Loads `scenes.pak` at startup (best-effort). Provides path-to-ID
+    /// resolution and typed asset loading for the new asset system. When the
+    /// `.pak` is absent (no CLI build yet) this is empty - the legacy
+    /// `scene_store` path continues to work.
+    resource_manager: ResourceManager,
+    /// AssetId -> render mesh handle cache (avoids re-uploading the same
+    /// mesh for multiple entities referencing the same asset).
+    mesh_asset_cache: std::collections::HashMap<prism_asset_core::AssetId, prism_render::managers::MeshHandle>,
+    /// AssetId -> (material slot, material handle) cache.
+    mat_asset_cache: std::collections::HashMap<prism_asset_core::AssetId, (u32, prism_render::managers::MaterialHandle)>,
+    /// AssetId -> bindless SRV slot cache for textures.
+    tex_asset_cache: std::collections::HashMap<prism_asset_core::AssetId, u32>,
     /// Set to `true` once `App::load_demo_scene` has run; subsequent
     /// `resumed` callbacks reuse the registered resources instead of
     /// re-creating them.
@@ -308,7 +329,6 @@ impl App {
             needs_resize: false,
             start: Instant::now(),
             last_frame: None,
-            env_bytes: None,
             debug_mode: DebugMode::Final,
             normal_space: NormalSpace::World,
             debug_flags: DEFAULT_PBR_FLAGS,
@@ -316,6 +336,7 @@ impl App {
             tonemap_mode: 0,
             debug_rt: 0,
             scene_store: prism_asset::SceneStore::new(),
+            resource_manager: ResourceManager::new(),
             scene_loaded: false,
             current_scene_name: None,
             mesh_map: std::collections::HashMap::new(),
@@ -342,24 +363,16 @@ impl App {
         }
     }
 
-    /// Create and run the application on a new event loop (desktop). Loads the
-    /// environment map from `assets/env.hdr` (if present) for IBL.
+    /// Create and run the application on a new event loop (desktop).
+    /// The environment map is loaded from the scene system (scenes.toml →
+    /// RSCN v2 header → HDR path).
     pub fn run() -> anyhow::Result<()> {
-        let env_bytes = load_env_bytes();
-        Self::run_on_event_loop_with_env(EventLoop::new()?, env_bytes)
+        Self::run_on_event_loop_with_env_and_scene(EventLoop::new()?, None)
     }
 
     /// Run the application on an existing event loop (used by Android).
     pub fn run_on_event_loop(event_loop: EventLoop<()>) -> anyhow::Result<()> {
-        Self::run_on_event_loop_with_env(event_loop, None)
-    }
-
-    /// Run on an existing event loop with an explicit environment map payload.
-    pub fn run_on_event_loop_with_env(
-        event_loop: EventLoop<()>,
-        env_bytes: Option<Vec<u8>>,
-    ) -> anyhow::Result<()> {
-        Self::run_on_event_loop_with_env_and_scene(event_loop, env_bytes, None)
+        Self::run_on_event_loop_with_env_and_scene(event_loop, None)
     }
 
     /// Variant that also threads an in-memory glTF scene (the bytes
@@ -370,11 +383,9 @@ impl App {
     /// contents to the renderer on the first `resumed` callback.
     pub fn run_on_event_loop_with_env_and_scene(
         event_loop: EventLoop<()>,
-        env_bytes: Option<Vec<u8>>,
         scene_glb: Option<Vec<u8>>,
     ) -> anyhow::Result<()> {
         let mut app = App::new();
-        app.env_bytes = env_bytes;
         if let Some(bytes) = scene_glb {
             match app.scene_store.load_gltf_bytes(&bytes, None) {
                 Ok(h) => log::info!("App: preloaded glTF scene {:?}", h),
@@ -416,11 +427,14 @@ impl App {
         let extensions_ref: Vec<&str> = extensions.iter().map(|s| s.as_str()).collect();
 
         let t_renderer = std::time::Instant::now();
+        // Load environment map from the scene system (scene manifest → RSCN
+        // v2 header → HDR path → file bytes).
+        let env_bytes = load_env_from_scene_manifest();
         let renderer = GraphRenderer::new(
             extensions_ref,
             window.as_ref(),
             window.as_ref(),
-            self.env_bytes.clone(),
+            env_bytes,
         )
         .expect("failed to create renderer");
         let t_after_renderer = std::time::Instant::now();
@@ -449,6 +463,10 @@ impl App {
         self.camera_state_restored = state_loaded;
 
         log::info!("startup: world+state: {}ms", t_after_world.elapsed().as_millis());
+
+        // Load the .pak resource package (best-effort; the pipeline may not have
+        // been built yet — the legacy glTF path handles that case).
+        self.load_resource_package();
 
         // Load a glTF scene from the asset manifest (if present + resolvable)
         // and upload it to the renderer managers. Keeps the legacy cube demo
@@ -1007,6 +1025,42 @@ impl App {
                 None
             }
         }
+    }
+
+    /// Attempt to load the .pak resource package and its path manifest.
+    ///
+    /// Both files are optional — when absent (no CLI `build` run yet) the
+    /// engine continues with the legacy glTF path. This method logs at
+    /// `info` on success and `warn` on failure (never errors fatally).
+    fn load_resource_package(&mut self) {
+        const PAK_PATH: &str = "assets/scenes.pak";
+        const MANIFEST_PATH: &str = "assets/scenes.pak.meta.json";
+
+        if !std::path::Path::new(PAK_PATH).exists() {
+            log::info!(
+                "no .pak found at {PAK_PATH}; resource manager stays empty (legacy glTF path)"
+            );
+            return;
+        }
+
+        // Load the package.
+        if let Err(e) = self.resource_manager.load_package(PAK_PATH) {
+            log::warn!("failed to load resource package {PAK_PATH}: {e}");
+            return;
+        }
+
+        // Load the path manifest.
+        if let Err(e) = self.resource_manager.load_path_manifest(MANIFEST_PATH) {
+            log::warn!(
+                "failed to load path manifest {MANIFEST_PATH}: {e} \
+                 (asset resolution by path won't work)"
+            );
+        }
+
+        log::info!(
+            "resource package loaded: {} assets registered",
+            self.resource_manager.asset_count(),
+        );
     }
 
     /// Enable or disable FPS-style pointer lock. When `locked` is `true` the

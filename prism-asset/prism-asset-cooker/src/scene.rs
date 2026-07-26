@@ -6,12 +6,14 @@
 //! the hierarchy, topological-sorts entities parent-first, and serialises
 //! each entity into a compact record.
 //!
-//! ## RSCN binary format
+//! ## RSCN binary format (version 2)
 //!
 //! ```text
 //! [magic:4]        b"RSCN"
-//! [version:1]      1
+//! [version:1]      2
 //! [count:4]        u32 LE — number of entities
+//! [env_len:2]      u16 LE — byte length of skybox HDR path (0 = no skybox)
+//! [env_path:N]     UTF-8 path (omitted if len == 0)
 //!
 //! For each entity (parent-first topological order):
 //!   [name_len:2]     u16 LE — byte length of name (0 = unnamed)
@@ -20,7 +22,8 @@
 //!   [tx:12]          f32[3] — translation (X, Y, Z)
 //!   [rot:16]         f32[4] — quaternion (X, Y, Z, W)
 //!   [scale:12]       f32[3] — scale (X, Y, Z)
-//!   [flags:1]        bitmask: bit0=mesh, bit1=material, bit2=light, bit3=camera
+//!   [flags:1]        bitmask: bit0=mesh, bit1=material, bit2=light, bit3=camera,
+//!                           bit4=skybox
 //!
 //!   [if has_mesh]
 //!     [path_len:2]   u16 LE
@@ -42,6 +45,11 @@
 //!     [fov_y:4]      f32 degrees
 //!     [near:4]       f32
 //!     [far:4]        f32
+//!
+//!   [if has_skybox]
+//!     [path_len:2]   u16 LE — byte length of HDR path
+//!     [path:..]      UTF-8 relative HDR path
+//!     [enabled:1]    u8 (0 = disabled, 1 = enabled)
 //! ```
 
 use prism_asset_core::AssetType;
@@ -54,13 +62,16 @@ use crate::{CookContext, CookError, CookResult, Cooker};
 // ---------------------------------------------------------------------------
 
 const RSCN_MAGIC: &[u8; 4] = b"RSCN";
-const RSCN_VERSION: u8 = 1;
+/// RSCN format version.
+/// RSCN format version.  v2 adds the skybox HDR path in the header.
+const RSCN_VERSION: u8 = 2;
 
 /// Component flags (bits in the per-entity flags byte).
-const FLAG_HAS_MESH: u8 = 0b0001;
-const FLAG_HAS_MATERIAL: u8 = 0b0010;
-const FLAG_HAS_LIGHT: u8 = 0b0100;
-const FLAG_HAS_CAMERA: u8 = 0b1000;
+const FLAG_HAS_MESH: u8 = 0b00001;
+const FLAG_HAS_MATERIAL: u8 = 0b00010;
+const FLAG_HAS_LIGHT: u8 = 0b00100;
+const FLAG_HAS_CAMERA: u8 = 0b01000;
+const FLAG_HAS_SKYBOX: u8 = 0b10000;
 
 // ---------------------------------------------------------------------------
 // Light type bytes (written into the serialised light record)
@@ -177,6 +188,9 @@ impl SceneCooker {
         if entity.camera.is_some() {
             flags |= FLAG_HAS_CAMERA;
         }
+        if entity.skybox.is_some() {
+            flags |= FLAG_HAS_SKYBOX;
+        }
         buf.push(flags);
 
         // Mesh path.
@@ -220,6 +234,15 @@ impl SceneCooker {
             buf.extend_from_slice(&camera.near.to_le_bytes());
             buf.extend_from_slice(&camera.far.to_le_bytes());
         }
+
+        // Skybox.
+        if let Some(skybox) = &entity.skybox {
+            let bytes = skybox.hdr_path.as_bytes();
+            let len = bytes.len().min(u16::MAX as usize) as u16;
+            buf.extend_from_slice(&len.to_le_bytes());
+            buf.extend_from_slice(&bytes[..len as usize]);
+            buf.push(if skybox.enabled { 1 } else { 0 });
+        }
     }
 
     /// Compute the parent index for the entity at `idx` in the sorted order.
@@ -261,14 +284,31 @@ impl Cooker for SceneCooker {
         // Topological sort.
         let order = Self::topological_sort(&scene.entities);
 
-        // Build the binary output.
-        // Estimate: header (9) + per entity ~80 bytes average.
-        let mut buf = Vec::with_capacity(9 + entity_count as usize * 80);
+        // Skybox HDR path (v2 header field).
+        // Extracted from the first entity that has a skybox component.
+        let env_path: &str = scene
+            .entities
+            .iter()
+            .find_map(|e| e.skybox.as_ref())
+            .map(|s| s.hdr_path.as_str())
+            .unwrap_or("");
+        let env_path_bytes = env_path.as_bytes();
+        let env_path_len = env_path_bytes.len().min(u16::MAX as usize) as u16;
 
-        // Header.
+        // Build the binary output.
+        // Estimate: header (11) + env path + per entity ~80 bytes average.
+        let mut buf = Vec::with_capacity(11 + env_path_len as usize + entity_count as usize * 80);
+
+        // Header: magic + version + entity count.
         buf.extend_from_slice(RSCN_MAGIC);
         buf.push(RSCN_VERSION);
         buf.extend_from_slice(&entity_count.to_le_bytes());
+
+        // v2: skybox HDR path (length-prefixed).
+        buf.extend_from_slice(&env_path_len.to_le_bytes());
+        if env_path_len > 0 {
+            buf.extend_from_slice(&env_path_bytes[..env_path_len as usize]);
+        }
 
         // Serialise each entity in sorted order.
         for &idx in &order {
@@ -292,6 +332,8 @@ impl Cooker for SceneCooker {
 pub struct RscnHeader {
     pub version: u8,
     pub entity_count: u32,
+    /// Skybox HDR path (empty if no skybox).  Present since RSCN v2.
+    pub env_path: String,
 }
 
 /// Parse the RSCN header from a cooked scene blob.
@@ -306,13 +348,30 @@ pub fn parse_rscn_header(data: &[u8]) -> Option<RscnHeader> {
         return None;
     }
     let version = data[4];
-    if version != RSCN_VERSION {
+    if version < 1 || version > RSCN_VERSION {
         return None;
     }
     let entity_count = u32::from_le_bytes(data[5..9].try_into().ok()?);
+
+    // v2+: skybox HDR path after entity count.
+    let mut env_path = String::new();
+    if version >= 2 {
+        if data.len() < 11 {
+            return None;
+        }
+        let env_len = u16::from_le_bytes(data[9..11].try_into().ok()?) as usize;
+        if data.len() < 11 + env_len {
+            return None;
+        }
+        if env_len > 0 {
+            env_path = String::from_utf8_lossy(&data[11..11 + env_len]).into_owned();
+        }
+    }
+
     Some(RscnHeader {
         version,
         entity_count,
+        env_path,
     })
 }
 
@@ -400,7 +459,7 @@ mod tests {
 
         // Verify RSCN magic.
         assert_eq!(&result.cooked_data[..4], b"RSCN");
-        assert_eq!(result.cooked_data[4], 1); // version
+        assert_eq!(result.cooked_data[4], 2); // version (v2 = skybox support)
         assert!(result.compress);
 
         // Entity count.
@@ -419,7 +478,10 @@ mod tests {
 
         // Walk entities in order, extracting parent indexes.
         let data = &result.cooked_data;
-        let mut off = 9usize; // skip header
+        let mut off = 9usize; // skip magic + version + entity_count
+        // v2 header: skip env_len + env_path.
+        let env_len = u16::from_le_bytes(data[off..off + 2].try_into().unwrap()) as usize;
+        off += 2 + env_len;
         let mut parents = Vec::new();
 
         for _ in 0..header.entity_count {
@@ -560,7 +622,7 @@ mod tests {
         assert_eq!(header.entity_count, 1);
 
         // The data should have some size (not just the header).
-        assert!(result.cooked_data.len() > 9);
+        assert!(result.cooked_data.len() > 11);
     }
 
     #[test]

@@ -24,6 +24,35 @@ pub struct SceneJson {
 }
 
 // ---------------------------------------------------------------------------
+// SkyboxJson
+// ---------------------------------------------------------------------------
+
+/// Skybox / environment map component definition.
+///
+/// Attached to an entity in the scene (typically one skybox entity per scene).
+/// The `hdr_path` is resolved at cook time: the cooker looks up the HDR asset
+/// in the asset database and bakes its `AssetId` into the RSCN binary.  At
+/// runtime the engine loads the HDR via the asset system for IBL and renders
+/// it as the background sky.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkyboxJson {
+    /// Relative path to the equirectangular HDR environment map
+    /// (e.g. `"../valley_of_desolation_1k.hdr"`).
+    ///
+    /// The cooker resolves this to an `AssetId` at cook time.  In the future
+    /// this field will be replaced by a direct `env_asset_id: u64` reference
+    /// once the full asset pipeline is wired.
+    pub hdr_path: String,
+    /// Whether the skybox is enabled (default `true`).
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+// ---------------------------------------------------------------------------
 // EntityJson
 // ---------------------------------------------------------------------------
 
@@ -51,6 +80,9 @@ pub struct EntityJson {
     /// Camera component.
     #[serde(default)]
     pub camera: Option<CameraJson>,
+    /// Skybox / environment map component.
+    #[serde(default)]
+    pub skybox: Option<SkyboxJson>,
     // Future component fields can be added here with `#[serde(default)]`.
 }
 

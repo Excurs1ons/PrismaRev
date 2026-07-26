@@ -19,8 +19,12 @@
 //!
 //! ```text
 //! [magic:4]        b"RSCN"
-//! [version:1]      1
+//! [version:1]      1 or 2
 //! [count:4]        u32 LE — number of entities
+//!
+//! (v2 only)
+//! [env_len:2]      u16 LE — byte length of skybox HDR path (0 = no skybox)
+//! [env_path:N]     UTF-8 path (omitted if len == 0)
 //!
 //! Per entity (parent-first topological order):
 //!   [name_len:2]   u16 LE — byte length of name (0 = unnamed)
@@ -29,13 +33,15 @@
 //!   [tx:12]        f32[3] LE
 //!   [rot:16]       f32[4] LE  quaternion (X, Y, Z, W)
 //!   [scale:12]     f32[3] LE
-//!   [flags:1]      bitmask: bit0=mesh, bit1=material, bit2=light, bit3=camera
+//!   [flags:1]      bitmask: bit0=mesh, bit1=material, bit2=light, bit3=camera,
+//!                           bit4=skybox
 //!
 //!   [if mesh]      path_len[2] + path (UTF-8, no NUL terminator)
 //!   [if material]  path_len[2] + path
 //!   [if light]     type[1] + color[12] + intensity[4] + range[4]
 //!                  + inner_cone[4] + outer_cone[4]
 //!   [if camera]    fov[4] + near[4] + far[4]
+//!   [if skybox]    path_len[2] + path (UTF-8) + enabled[1]
 //! ```
 
 use std::path::PathBuf;
@@ -49,10 +55,11 @@ use super::helpers::HierarchyHelper;
 // Component flags (must match the cooker's constants)
 // ---------------------------------------------------------------------------
 
-const FLAG_HAS_MESH: u8 = 0b0001;
-const FLAG_HAS_MATERIAL: u8 = 0b0010;
-const FLAG_HAS_LIGHT: u8 = 0b0100;
-const FLAG_HAS_CAMERA: u8 = 0b1000;
+const FLAG_HAS_MESH: u8 = 0b00001;
+const FLAG_HAS_MATERIAL: u8 = 0b00010;
+const FLAG_HAS_LIGHT: u8 = 0b00100;
+const FLAG_HAS_CAMERA: u8 = 0b01000;
+const FLAG_HAS_SKYBOX: u8 = 0b10000;
 
 // ---------------------------------------------------------------------------
 // Light type bytes in the RSCN light record
@@ -122,6 +129,9 @@ pub(crate) struct ParsedEntity {
     pub(crate) camera_fov: f32,
     pub(crate) camera_near: f32,
     pub(crate) camera_far: f32,
+    pub(crate) has_skybox: bool,
+    pub(crate) skybox_hdr_path: String,
+    pub(crate) skybox_enabled: bool,
 }
 
 impl ParsedEntity {
@@ -147,6 +157,9 @@ impl ParsedEntity {
             camera_fov: 60.0,
             camera_near: 0.1,
             camera_far: 1000.0,
+            has_skybox: false,
+            skybox_hdr_path: String::new(),
+            skybox_enabled: true,
         }
     }
 }
@@ -155,23 +168,45 @@ impl ParsedEntity {
 // RSCN parser
 // ---------------------------------------------------------------------------
 
-/// Parse an RSCN binary blob into a list of entities.
+/// Result of parsing an RSCN binary blob.
+#[derive(Debug)]
+pub(crate) struct ParsedRscn {
+    pub(crate) entities: Vec<ParsedEntity>,
+}
+
+/// Parse an RSCN binary blob into entities + header info.
 ///
 /// Returns `Err` with a human-readable message on format errors.
-pub(crate) fn parse_rscn(data: &[u8]) -> Result<Vec<ParsedEntity>, String> {
+pub(crate) fn parse_rscn(data: &[u8]) -> Result<ParsedRscn, String> {
     if data.len() < 9 {
         return Err("RSCN data too short".into());
     }
     if &data[..4] != b"RSCN" {
         return Err("bad RSCN magic".into());
     }
-    if data[4] != 1 {
-        return Err(format!("unsupported RSCN version {}", data[4]));
+    let version = data[4];
+    if version < 1 || version > 2 {
+        return Err(format!("unsupported RSCN version {}", version));
     }
 
     let count = u32::from_le_bytes(data[5..9].try_into().unwrap()) as usize;
-    let mut entities = Vec::with_capacity(count);
     let mut offset = 9usize;
+
+    // v2: skip skybox HDR path in header (used by read_env_path_from_rscn
+    // for the app layer; the per-entity skybox data is parsed below).
+    if version >= 2 {
+        if offset + 2 > data.len() {
+            return Err("unexpected end of RSCN data (env_len)".into());
+        }
+        let env_len = u16::from_le_bytes(data[offset..offset + 2].try_into().unwrap()) as usize;
+        offset += 2;
+        if offset + env_len > data.len() {
+            return Err("unexpected end of RSCN data (env_path)".into());
+        }
+        offset += env_len;
+    }
+
+    let mut entities = Vec::with_capacity(count);
 
     for _ in 0..count {
         if offset + 2 > data.len() {
@@ -306,10 +341,104 @@ pub(crate) fn parse_rscn(data: &[u8]) -> Result<Vec<ParsedEntity>, String> {
             offset += 4;
         }
 
+        if flags & FLAG_HAS_SKYBOX != 0 {
+            if offset + 2 > data.len() {
+                return Err("unexpected end (skybox path_len)".into());
+            }
+            let plen =
+                u16::from_le_bytes(data[offset..offset + 2].try_into().unwrap()) as usize;
+            offset += 2;
+            if offset + plen + 1 > data.len() {
+                return Err("unexpected end (skybox path)".into());
+            }
+            ent.has_skybox = true;
+            ent.skybox_hdr_path =
+                String::from_utf8_lossy(&data[offset..offset + plen]).into_owned();
+            offset += plen;
+            ent.skybox_enabled = data[offset] != 0;
+            offset += 1;
+        }
+
         entities.push(ent);
     }
 
-    Ok(entities)
+    Ok(ParsedRscn {
+        entities,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Quaternion -> yaw/pitch conversion (for scene-loaded cameras)
+// ---------------------------------------------------------------------------
+
+/// Convert a scene entity's rotation quaternion `(x, y, z, w)` into the
+/// `(yaw, pitch)` pair used by [`FlyCameraController`].
+///
+/// The free-fly forward (see `forward` in `scene::systems::camera`) is
+/// `[cos(yaw)·cos(pitch), sin(pitch), -sin(yaw)·cos(pitch)]`. The camera's
+/// world-space forward is the entity's quaternion applied to the −Z basis,
+/// `R·(0,0,-1)`. Inverting the forward formula gives:
+///   - `pitch = asin(forward.y)`
+///   - `yaw   = atan2(-forward.z, forward.x)`
+///
+/// Note this means an identity quaternion (forward = (0,0,−1)) maps to
+/// `yaw = π/2, pitch = 0` - the value the free-fly controller needs to look
+/// down −Z. Roll is discarded (the free-fly camera has no roll). Matches the
+/// right-handed conventions in `README.md` (+X right, +Y up, +Z toward
+/// viewer, camera looks down −Z).
+fn quat_to_yaw_pitch(quat: [f32; 4]) -> (f32, f32) {
+    let [qx, qy, qz, qw] = quat;
+    // Normalize to avoid degenerate input skewing the result.
+    let n = (qx * qx + qy * qy + qz * qz + qw * qw).sqrt();
+    if n < 1e-6 {
+        log::warn!("scene camera quaternion is degenerate (|q|≈0); using identity");
+        return (std::f32::consts::FRAC_PI_2, 0.0);
+    }
+    let (qx, qy, qz, qw) = (qx / n, qy / n, qz / n, qw / n);
+    // forward = R · (0,0,-1), where R is the quaternion's rotation matrix.
+    // Column 2 of R is `R·(0,0,1)` = `[2(xz+wy), 2(yz-wx), 1-2(x²+y²)]`;
+    // negating it gives `R·(0,0,-1)`. (Same matrix as `LocalTransform::to_model_matrix`.)
+    let forward = [
+        -2.0 * (qx * qz + qw * qy),
+        -2.0 * (qy * qz - qw * qx),
+        -(1.0 - 2.0 * (qx * qx + qy * qy)),
+    ];
+    let pitch = forward[1].clamp(-1.0, 1.0).asin();
+    let yaw = (-forward[2]).atan2(forward[0]);
+    (yaw, pitch)
+}
+
+// ---------------------------------------------------------------------------
+// Public helpers for env path extraction
+// ---------------------------------------------------------------------------
+
+/// Read the skybox HDR path from a cooked RSCN file (v2 header).
+///
+/// Returns `None` if the file cannot be read, is not a valid RSCN, or has no
+/// skybox configured.  This is used by the app layer to pre-load the
+/// environment map **before** the renderer is created.
+pub fn read_env_path_from_rscn(path: &std::path::Path) -> Option<String> {
+    let data = std::fs::read(path).ok()?;
+    if data.len() < 11 {
+        return None;
+    }
+    if &data[..4] != b"RSCN" {
+        return None;
+    }
+    let version = data[4];
+    if version < 2 {
+        return None; // v1 has no env path
+    }
+    let env_len = u16::from_le_bytes(data[9..11].try_into().ok()?) as usize;
+    if env_len == 0 || data.len() < 11 + env_len {
+        return None;
+    }
+    let path = String::from_utf8_lossy(&data[11..11 + env_len]).into_owned();
+    if path.is_empty() {
+        None
+    } else {
+        Some(path)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -356,18 +485,24 @@ impl SceneLoader {
     pub(crate) fn spawn_from_parsed(
         &self,
         world: &mut World,
-        parsed: &[ParsedEntity],
+        parsed: &ParsedRscn,
         scene_id: SceneAssetId,
     ) -> Result<SceneInstance, String> {
-        // Phase 1: spawn all entities, insert scene + transform components.
-        let mut entities: Vec<Entity> = Vec::with_capacity(parsed.len());
-        for pe in parsed {
+        let parsed_entities = &parsed.entities;
+        // Phase 1: spawn all entities, insert scene & transform components.
+        let mut entities: Vec<Entity> = Vec::with_capacity(parsed_entities.len());
+        for pe in parsed_entities {
             let entity = world.spawn();
             entities.push(entity);
 
             // Always-added components.
             world.insert(entity, SceneMember(scene_id));
             world.insert(entity, Active(true));
+            // Optional human-readable name (empty string -> no Name component,
+            // the inspector falls back to the raw entity id).
+            if !pe.name.is_empty() {
+                world.insert(entity, Name(pe.name.clone()));
+            }
 
             // Local transform.
             let local = LocalTransform {
@@ -380,26 +515,39 @@ impl SceneLoader {
             // Initial world transform = local (will be recomputed by hierarchy system).
             world.insert(entity, WorldTransform(local.to_model_matrix()));
 
-            // Mesh reference (stub handle — real resolution Phase 5/6).
+            // Mesh reference (generation 0 = unresolved; resolved by
+            // resolve_assets_system once the .pak runtime is wired).
             if pe.has_mesh {
                 world.insert(
                     entity,
                     MeshRef {
                         asset_id: SceneAssetId::generate(),
                         render_handle: prism_render::managers::MeshHandle::default(),
-                        generation: 1,
+                        generation: 0,
                     },
                 );
             }
 
-            // Material reference (stub slot 0).
+            // Material reference (unresolved).
             if pe.has_material {
                 world.insert(
                     entity,
                     MaterialRef {
                         asset_id: SceneAssetId::generate(),
                         material_slot: 0,
-                        generation: 1,
+                        generation: 0,
+                    },
+                );
+            }
+
+            // MeshRenderer bundle — inserted when both mesh and material are
+            // present. Carries the path strings for later resolution.
+            if pe.has_mesh && pe.has_material {
+                world.insert(
+                    entity,
+                    MeshRenderer {
+                        mesh_path: pe.mesh_path.clone(),
+                        material_path: pe.material_path.clone(),
                     },
                 );
             }
@@ -446,20 +594,56 @@ impl SceneLoader {
 
             // Camera component.
             if pe.has_camera {
+                // Data component: projection + exposure + runtime aspect cache.
+                // `aspect` is a placeholder; `app.rs` writes the real value on
+                // the first resize / orientation change.
                 world.insert(
                     entity,
                     Camera {
                         fov_y_degrees: pe.camera_fov,
                         near: pe.camera_near,
                         far: pe.camera_far,
+                        ..Camera::default()
                     },
+                );
+                // Free-fly input controller. yaw/pitch are derived from the
+                // entity's quaternion so the scene file fully determines the
+                // initial viewpoint; the camera position lives on the sibling
+                // LocalTransform (translation). `move_speed`/`look_sensitivity`
+                // keep their defaults.
+                let (yaw, pitch) = quat_to_yaw_pitch(pe.rotation);
+                world.insert(
+                    entity,
+                    FlyCameraController {
+                        yaw,
+                        pitch,
+                        ..FlyCameraController::default()
+                    },
+                );
+            }
+
+            // Skybox component (the skybox entity is a regular entity in the
+            // entities array; its Skybox component is inserted here).
+            if pe.has_skybox {
+                world.insert(
+                    entity,
+                    Skybox {
+                        env_asset: SceneAssetId::from_raw(0),
+                        hdr_path: pe.skybox_hdr_path.clone(),
+                        enabled: pe.skybox_enabled,
+                    },
+                );
+                log::trace!(
+                    "skybox component inserted: hdr_path={}, enabled={}",
+                    pe.skybox_hdr_path,
+                    pe.skybox_enabled
                 );
             }
         }
 
         // Phase 2: build hierarchy via HierarchyHelper (must happen after all
         // entities exist so that parent indices resolve).
-        for (i, pe) in parsed.iter().enumerate() {
+        for (i, pe) in parsed_entities.iter().enumerate() {
             if let Some(parent_idx) = pe.parent {
                 let parent_idx = parent_idx as usize;
                 if parent_idx < entities.len() {
@@ -500,18 +684,21 @@ mod tests {
 
     // ── helpers ───────────────────────────────────────────────────────
 
-    /// Build RSCN bytes from a simple description.
+    /// Build RSCN bytes (v2 format) from a simple description.
     ///
     /// Each entity tuple: `(name, parent_idx, translation, rotation, scale,
     /// has_mesh, mesh_path, has_material, mat_path, has_light, light_type,
     /// light_color, light_intensity, light_range, has_camera, camera_fov,
-    /// camera_near, camera_far)`.
+    /// camera_near, camera_far, has_skybox, skybox_hdr_path, skybox_enabled)`.
     #[allow(clippy::too_many_arguments)]
     fn make_rscn(entities: &[RscnEntity]) -> Vec<u8> {
         let mut buf = Vec::new();
         buf.extend_from_slice(b"RSCN");
-        buf.push(1); // version
+        buf.push(2); // version 2 (v2 = skybox support in header + per-entity)
         buf.extend_from_slice(&(entities.len() as u32).to_le_bytes());
+
+        // v2 header: env_len(2) + env_path (empty = no skybox at header level).
+        buf.extend_from_slice(&0u16.to_le_bytes());
 
         for e in entities {
             // Name.
@@ -540,6 +727,7 @@ mod tests {
             if e.has_material { flags |= FLAG_HAS_MATERIAL; }
             if e.has_light { flags |= FLAG_HAS_LIGHT; }
             if e.has_camera { flags |= FLAG_HAS_CAMERA; }
+            if e.has_skybox { flags |= FLAG_HAS_SKYBOX; }
             buf.push(flags);
 
             // Mesh path.
@@ -574,6 +762,14 @@ mod tests {
                 buf.extend_from_slice(&e.camera_near.to_le_bytes());
                 buf.extend_from_slice(&e.camera_far.to_le_bytes());
             }
+
+            // Skybox.
+            if e.has_skybox {
+                let path_bytes = e.skybox_hdr_path.as_bytes();
+                buf.extend_from_slice(&(path_bytes.len() as u16).to_le_bytes());
+                buf.extend_from_slice(path_bytes);
+                buf.push(if e.skybox_enabled { 1 } else { 0 });
+            }
         }
 
         buf
@@ -600,6 +796,9 @@ mod tests {
         camera_fov: f32,
         camera_near: f32,
         camera_far: f32,
+        has_skybox: bool,
+        skybox_hdr_path: &'static str,
+        skybox_enabled: bool,
     }
 
     fn simple_entity(name: &'static str, parent: Option<u32>) -> RscnEntity {
@@ -624,6 +823,9 @@ mod tests {
             camera_fov: 0.0,
             camera_near: 0.0,
             camera_far: 0.0,
+            has_skybox: false,
+            skybox_hdr_path: "",
+            skybox_enabled: true,
         }
     }
 
@@ -634,9 +836,9 @@ mod tests {
         let e = simple_entity("Root", None);
         let bytes = make_rscn(&[e]);
         let parsed = parse_rscn(&bytes).unwrap();
-        assert_eq!(parsed.len(), 1);
-        assert_eq!(parsed[0].name, "Root");
-        assert!(parsed[0].parent.is_none());
+        assert_eq!(parsed.entities.len(), 1);
+        assert_eq!(parsed.entities[0].name, "Root");
+        assert!(parsed.entities[0].parent.is_none());
     }
 
     #[test]
@@ -645,11 +847,11 @@ mod tests {
         let child = simple_entity("Child", Some(0));
         let bytes = make_rscn(&[root, child]);
         let parsed = parse_rscn(&bytes).unwrap();
-        assert_eq!(parsed.len(), 2);
-        assert_eq!(parsed[0].name, "Root");
-        assert!(parsed[0].parent.is_none());
-        assert_eq!(parsed[1].name, "Child");
-        assert_eq!(parsed[1].parent, Some(0));
+        assert_eq!(parsed.entities.len(), 2);
+        assert_eq!(parsed.entities[0].name, "Root");
+        assert!(parsed.entities[0].parent.is_none());
+        assert_eq!(parsed.entities[1].name, "Child");
+        assert_eq!(parsed.entities[1].parent, Some(0));
     }
 
     #[test]
@@ -662,9 +864,9 @@ mod tests {
         };
         let bytes = make_rscn(&[e]);
         let parsed = parse_rscn(&bytes).unwrap();
-        assert_eq!(parsed[0].translation, [1.0, 2.0, 3.0]);
-        assert_eq!(parsed[0].rotation, [0.0, 0.0, 0.0, 1.0]);
-        assert_eq!(parsed[0].scale, [2.0, 2.0, 2.0]);
+        assert_eq!(parsed.entities[0].translation, [1.0, 2.0, 3.0]);
+        assert_eq!(parsed.entities[0].rotation, [0.0, 0.0, 0.0, 1.0]);
+        assert_eq!(parsed.entities[0].scale, [2.0, 2.0, 2.0]);
     }
 
     #[test]
@@ -678,10 +880,10 @@ mod tests {
         };
         let bytes = make_rscn(&[e]);
         let parsed = parse_rscn(&bytes).unwrap();
-        assert!(parsed[0].has_mesh);
-        assert_eq!(parsed[0].mesh_path, "models/box.gltf");
-        assert!(parsed[0].has_material);
-        assert_eq!(parsed[0].material_path, "materials/plastic.mat");
+        assert!(parsed.entities[0].has_mesh);
+        assert_eq!(parsed.entities[0].mesh_path, "models/box.gltf");
+        assert!(parsed.entities[0].has_material);
+        assert_eq!(parsed.entities[0].material_path, "materials/plastic.mat");
     }
 
     #[test]
@@ -695,9 +897,9 @@ mod tests {
         };
         let bytes = make_rscn(&[e]);
         let parsed = parse_rscn(&bytes).unwrap();
-        assert!(parsed[0].has_light);
-        assert_eq!(parsed[0].light_type, 0);
-        assert_eq!(parsed[0].light_color[0], 1.0);
+        assert!(parsed.entities[0].has_light);
+        assert_eq!(parsed.entities[0].light_type, 0);
+        assert_eq!(parsed.entities[0].light_color[0], 1.0);
     }
 
     #[test]
@@ -711,8 +913,8 @@ mod tests {
         };
         let bytes = make_rscn(&[e]);
         let parsed = parse_rscn(&bytes).unwrap();
-        assert!(parsed[0].has_camera);
-        assert_eq!(parsed[0].camera_fov, 60.0);
+        assert!(parsed.entities[0].has_camera);
+        assert_eq!(parsed.entities[0].camera_fov, 60.0);
     }
 
     #[test]
@@ -723,7 +925,7 @@ mod tests {
         };
         let bytes = make_rscn(&[e]);
         let parsed = parse_rscn(&bytes).unwrap();
-        assert_eq!(parsed[0].name, "");
+        assert_eq!(parsed.entities[0].name, "");
     }
 
     #[test]
@@ -1003,6 +1205,87 @@ mod tests {
         assert_eq!(inst.root_entities.len(), 1);
     }
 
+    #[test]
+    fn spawn_camera_emits_renderer_and_data_components() {
+        // Camera at [1,2,3], identity rotation (looks down −Z), 60° fov.
+        let e = RscnEntity {
+            translation: [1.0, 2.0, 3.0],
+            has_camera: true,
+            camera_fov: 60.0,
+            camera_near: 0.1,
+            camera_far: 1000.0,
+            ..simple_entity("Cam", None)
+        };
+        let bytes = make_rscn(&[e]);
+        let parsed = parse_rscn(&bytes).unwrap();
+
+        let mut world = World::new();
+        let loader = SceneLoader::new();
+        let sid = SceneAssetId::generate();
+        let inst = loader.spawn_from_parsed(&mut world, &parsed, sid).unwrap();
+
+        let entity = inst.all_entities[0];
+
+        // Data component (read by scene::systems::camera::collect_camera).
+        let data = world
+            .get::<Camera>(entity)
+            .expect("scene::components::Camera should be present");
+        assert_eq!(data.fov_y_degrees, 60.0);
+        assert_eq!(data.near, 0.1);
+        assert_eq!(data.far, 1000.0);
+
+        // Free-fly controller (yaw/pitch derived from the entity quaternion).
+        // Position lives on the sibling LocalTransform, not on the controller.
+        let ctrl = world
+            .get::<FlyCameraController>(entity)
+            .expect("FlyCameraController should be present");
+        // Identity quaternion -> forward (0,0,-1) -> yaw=π/2, pitch=0.
+        assert!((ctrl.yaw - std::f32::consts::FRAC_PI_2).abs() < 1e-5);
+        assert!(ctrl.pitch.abs() < 1e-5);
+
+        // Position is the LocalTransform translation.
+        let lt = world
+            .get::<LocalTransform>(entity)
+            .expect("LocalTransform should be present");
+        assert_eq!(lt.translation, [1.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn spawn_camera_yaw_from_quaternion() {
+        // 90° rotation about +Y: quaternion (0, sin45, 0, cos45). A −Z forward
+        // rotated +90° about Y points to −X, which FlyCamera expresses as
+        // yaw=π (forward = [cos(π), 0, -sin(π)] = [-1, 0, 0]).
+        let sqrt2_inv = std::f32::consts::FRAC_PI_4.sin(); // sin(45°)
+        let e = RscnEntity {
+            rotation: [0.0, sqrt2_inv, 0.0, sqrt2_inv],
+            has_camera: true,
+            camera_fov: 60.0,
+            camera_near: 0.1,
+            camera_far: 1000.0,
+            ..simple_entity("CamYaw", None)
+        };
+        let bytes = make_rscn(&[e]);
+        let parsed = parse_rscn(&bytes).unwrap();
+
+        let mut world = World::new();
+        let loader = SceneLoader::new();
+        let inst = loader
+            .spawn_from_parsed(&mut world, &parsed, SceneAssetId::generate())
+            .unwrap();
+
+        let ctrl = world
+            .get::<FlyCameraController>(inst.all_entities[0])
+            .expect("FlyCameraController should be present");
+        // ±π alias to the same direction; normalize to [0, π] for compare.
+        let yaw_abs = ctrl.yaw.abs();
+        assert!(
+            (yaw_abs - std::f32::consts::PI).abs() < 1e-4,
+            "yaw={}",
+            ctrl.yaw
+        );
+        assert!(ctrl.pitch.abs() < 1e-5);
+    }
+
     // ── integration via load_and_spawn ──────────────────────────────
 
     #[test]
@@ -1018,5 +1301,52 @@ mod tests {
 
         assert_eq!(inst.all_entities.len(), 1);
         assert_eq!(inst.root_entities.len(), 1);
+    }
+
+    /// Smoke-test the engine-builtin default scene committed at
+    /// `assets/scenes/default.rscn`. Ignored by default because it depends on
+    /// the repo working-tree layout (run from the repo root); run with:
+    ///   `cargo test -p prism-engine load_committed_default_rscn -- --ignored --nocapture`
+    /// Guards against the cooked scene drifting out of sync with the loader.
+    #[test]
+    #[ignore]
+    fn load_committed_default_rscn() {
+        // Search both the repo root and the crate dir so the test works
+        // regardless of which directory `cargo test` was invoked from.
+        let candidates = [
+            std::path::PathBuf::from("assets/scenes/default.rscn"),
+            std::path::PathBuf::from("../../assets/scenes/default.rscn"),
+        ];
+        let path = candidates
+            .iter()
+            .find(|p| p.exists())
+            .cloned()
+            .unwrap_or_else(|| candidates[0].clone());
+        if !path.exists() {
+            eprintln!("skipping: {} not found (cwd mismatch)", path.display());
+            return;
+        }
+        let mut world = World::new();
+        let mut loader = SceneLoader::new();
+        let inst = loader
+            .load_and_spawn(&mut world, SceneSource::CookedFile(path.into()))
+            .expect("default.rscn should parse");
+
+        // 6 entities: 1 skybox + 1 camera + 1 directional light + 3 point lights.
+        assert_eq!(inst.all_entities.len(), 6);
+
+        // Exactly one camera entity, with a FlyCameraController + Camera data
+        // component + LocalTransform (position lives on the transform).
+        let cameras: Vec<_> = world.query::<Camera>().collect();
+        assert_eq!(cameras.len(), 1, "expected exactly one camera");
+
+        // The camera should be positioned at [0, 2.5, 18] (per default.scene.json).
+        let cam_entity = cameras[0].0;
+        let lt = world
+            .get::<LocalTransform>(cam_entity)
+            .expect("camera should have a LocalTransform");
+        assert_eq!(lt.translation, [0.0, 2.5, 18.0]);
+        // And it should carry a free-fly controller.
+        assert!(world.get::<FlyCameraController>(cam_entity).is_some());
     }
 }

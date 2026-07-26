@@ -128,10 +128,11 @@ impl SceneScope {
         self.upload_probe_volume(info, dims, pixels)
     }
 
-    /// Upload probe volume from a `ProbeVolumeData` (loaded via prism-asset).
-    /// Converts the per-probe coefficient layout into the 3D texture's
-    /// coefficient-major depth-slice layout and calls `recreate_probe_volume`.
-    pub fn from_probe_data(&mut self, data: &prism_asset::ProbeVolumeData) -> Result<()> {
+    /// Upload probe volume from a `ProbeVolumeData` (loaded via
+    /// [`crate::probe_loader`]). Converts the per-probe coefficient layout into
+    /// the 3D texture's coefficient-major depth-slice layout and calls
+    /// `recreate_probe_volume`.
+    pub fn from_probe_data(&mut self, data: &crate::probe_loader::ProbeVolumeData) -> Result<()> {
         anyhow::ensure!(
             data.is_valid(),
             "SceneScope::from_probe_data: invalid ProbeVolumeData (dims={:?}, coeffs.len()={})",
@@ -146,7 +147,7 @@ impl SceneScope {
     /// Convert `ProbeVolumeData` (per-probe coefficient array) into the 3D
     /// texture pixel layout: `dims[0] x dims[1] x (dims[2]*9)` RGBA32F.
     /// Coefficient c occupies depth slice `[c*dims.z, (c+1)*dims.z)`.
-    fn probe_data_to_pixels(data: &prism_asset::ProbeVolumeData) -> Vec<f32> {
+    fn probe_data_to_pixels(data: &crate::probe_loader::ProbeVolumeData) -> Vec<f32> {
         let dx = data.dims[0] as usize;
         let dy = data.dims[1] as usize;
         let dz = data.dims[2] as usize;

@@ -768,7 +768,13 @@ impl RenderPassNode for PathTracePass {
             handle: PT_COLOR_H,
             access: vk::AccessFlags::SHADER_WRITE,
             stage: vk::PipelineStageFlags::COMPUTE_SHADER,
-            layout: vk::ImageLayout::GENERAL,
+            // Declared as SHADER_READ_ONLY_OPTIMAL (not GENERAL) so that when this
+            // pass is skipped (e.g. no camera) the state tracker always reads the
+            // same layout that PostPass wants, avoiding a trampoline barrier with a
+            // stale old_layout (the image was never actually transitioned to GENERAL).
+            // The actual post-dispatch GENERAL→SHADER_READ_ONLY_OPTIMAL transition
+            // is emitted manually inside `execute`.
+            layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
         });
     }
 
@@ -950,6 +956,28 @@ impl RenderPassNode for PathTracePass {
         let gx = (w + 15) / 16;
         let gy = (h + 15) / 16;
         unsafe { device.cmd_dispatch(cmd, gx, gy, 1); }
+
+        // Post-dispatch barrier: PT_COLOR_H GENERAL → SHADER_READ_ONLY_OPTIMAL
+        // so PostPass can sample it. Must be manual because the write edge
+        // declares SHADER_READ_ONLY_OPTIMAL as the post-pass layout (to avoid
+        // stale-tracker barriers when the pass is skipped).
+        let out_to_read = vk::ImageMemoryBarrier::default()
+            .image(self.output_image)
+            .old_layout(vk::ImageLayout::GENERAL)
+            .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+            .subresource_range(vk::ImageSubresourceRange {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                base_mip_level: 0, level_count: 1, base_array_layer: 0, layer_count: 1,
+            })
+            .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+            .dst_access_mask(vk::AccessFlags::SHADER_READ);
+        unsafe {
+            device.cmd_pipeline_barrier(cmd,
+                vk::PipelineStageFlags::COMPUTE_SHADER,
+                vk::PipelineStageFlags::FRAGMENT_SHADER,
+                vk::DependencyFlags::empty(), &[], &[],
+                std::slice::from_ref(&out_to_read));
+        }
 
         // Advance reservoir swap index for next frame
         self.reservoir_swap = (self.reservoir_swap + 1) & 1;

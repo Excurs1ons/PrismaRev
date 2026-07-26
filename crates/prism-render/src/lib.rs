@@ -42,6 +42,7 @@ pub mod passes;
 pub mod pbr_push;
 pub mod pipeline;
 pub mod post;
+pub mod probe_loader;
 pub mod pt_pass;
 pub mod render_graph;
 pub mod render_pass;
@@ -76,6 +77,7 @@ pub use passes::{ScenePass, ShadowMapPass};
 pub use pbr_push::{DebugMode, NormalSpace};
 pub use pipeline::GraphicsPipeline;
 pub use post::PostPass;
+pub use probe_loader::{load_probe_volume, save_probe_volume, ProbeVolumeData};
 pub use pt_pass::PathTracePass;
 pub use render_graph::{
     DrawItem, PassInfo, PassKind, RenderGraphSnapshot, RenderMode, RenderSettings, ResourceHandle,

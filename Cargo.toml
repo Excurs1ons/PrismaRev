@@ -22,6 +22,7 @@ members = [
     "crates/prism-render",
     "crates/prism-asset",
     "crates/prism-engine",
+    "crates/prism-editor",
     "crates/prism-android",
     "crates/prism-audio",
 ]
@@ -59,11 +60,27 @@ env_logger = "0.11"
 # Error handling
 anyhow = "1"
 
+# Serialization / async / errors. These keys are also resolved by the
+# independent `prism-asset/` workspace crates when they are path-dependended
+# from this root workspace (e.g. prism-asset-runtime used by prism-engine).
+# Keep versions in sync with prism-asset/Cargo.toml `[workspace.dependencies]`.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+bincode = "1.3"
+tokio = { version = "1", features = ["full"] }
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+zstd = { version = "0.13", features = ["experimental"] }
+thiserror = "1"
+path-clean = "1"
+clap = { version = "4", features = ["derive"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "tga", "bmp", "hdr", "exr"] }
+ctt = { version = "0.5", default-features = false, features = ["encoder-bc7enc", "ispc-prebuilt"] }
+unicode-width = "0.2"
+
 # Asset / scene loading
 # `gltf` crate version is the crate's release stream (1.4 = current), not the
-# glTF spec version — the crate loads glTF 2.0 regardless of its own version.
+# glTF spec version - the crate loads glTF 2.0 regardless of its own version.
 gltf = { version = "1.4", features = ["KHR_materials_transmission", "KHR_materials_emissive_strength", "KHR_materials_ior", "extensions"] }
-image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 slotmap = "1.0"
 rayon = "1.10"
 

@@ -9,8 +9,6 @@ pub mod camera_controller;
 pub mod crash_dialog;
 pub mod dirty_router;
 pub mod input;
-pub mod inspector;
-pub mod render_graph_viz;
 pub mod render_system;
 pub mod scene;
 pub mod scene_state;

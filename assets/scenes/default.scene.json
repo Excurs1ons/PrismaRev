@@ -1,0 +1,92 @@
+{
+  "version": 1,
+  "entities": [
+    {
+      "name": "Skybox",
+      "parent": null,
+      "transform": {
+        "translation": [0.0, 0.0, 0.0],
+        "rotation": [0.0, 0.0, 0.0, 1.0],
+        "scale": [1.0, 1.0, 1.0]
+      },
+      "skybox": {
+        "hdr_path": "../valley_of_desolation_1k.hdr",
+        "enabled": true
+      }
+    },
+    {
+      "name": "Camera",
+      "parent": null,
+      "transform": {
+        "translation": [0.0, 2.5, 18.0],
+        "rotation": [-0.068948, 0.0, 0.0, 0.99762],
+        "scale": [1.0, 1.0, 1.0]
+      },
+      "camera": {
+        "type": "perspective",
+        "fov_y_degrees": 60.0,
+        "near": 0.01,
+        "far": 1000.0
+      }
+    },
+    {
+      "name": "Sun",
+      "parent": null,
+      "transform": {
+        "translation": [0.0, 0.0, 0.0],
+        "rotation": [0.0, 0.0, 0.0, 1.0],
+        "scale": [1.0, 1.0, 1.0]
+      },
+      "light": {
+        "type": "directional",
+        "color": [1.0, 1.0, 1.0],
+        "intensity": 100000.0
+      }
+    },
+    {
+      "name": "PointLightRed",
+      "parent": null,
+      "transform": {
+        "translation": [2.0, 3.0, 2.0],
+        "rotation": [0.0, 0.0, 0.0, 1.0],
+        "scale": [1.0, 1.0, 1.0]
+      },
+      "light": {
+        "type": "point",
+        "color": [1.0, 0.2, 0.2],
+        "intensity": 150.0,
+        "range": 12.0
+      }
+    },
+    {
+      "name": "PointLightGreen",
+      "parent": null,
+      "transform": {
+        "translation": [-2.0, 3.0, -2.0],
+        "rotation": [0.0, 0.0, 0.0, 1.0],
+        "scale": [1.0, 1.0, 1.0]
+      },
+      "light": {
+        "type": "point",
+        "color": [0.2, 1.0, 0.2],
+        "intensity": 150.0,
+        "range": 12.0
+      }
+    },
+    {
+      "name": "PointLightBlue",
+      "parent": null,
+      "transform": {
+        "translation": [0.0, 4.0, 4.0],
+        "rotation": [0.0, 0.0, 0.0, 1.0],
+        "scale": [1.0, 1.0, 1.0]
+      },
+      "light": {
+        "type": "point",
+        "color": [0.2, 0.2, 1.0],
+        "intensity": 150.0,
+        "range": 12.0
+      }
+    }
+  ]
+}

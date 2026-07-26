@@ -16,7 +16,7 @@
 //! [`refresh_from`] snapshots the graph + per-pass live state into owned plain
 //! data *before* `run_ui`, so the closure only touches `&self`.
 //!
-//! [`Inspector`]: crate::inspector::Inspector
+//! [`Inspector`]: crate::Inspector
 
 use egui::{Color32, Context, FontId, Painter, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, Vec2};
 use prism_render::{
@@ -146,10 +146,10 @@ impl RenderGraphViz {
         });
     }
 
-    /// The actual egui layout. `pub(crate)` so `App::render_one_frame` can call
-    /// it directly when co-hosting with the inspector inside a single
+    /// The actual egui layout. `pub` so the host (`App::render_one_frame`) can
+    /// call it directly when co-hosting with the inspector inside a single
     /// `run_ui` closure.
-    pub(crate) fn ui(&self, ctx: &Context) {
+    pub fn ui(&self, ctx: &Context) {
         // Semi-transparent dark frame shared with the inspector so both panels
         // read as the same overlay family.
         let window_frame = egui::Frame {

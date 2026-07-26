@@ -471,9 +471,9 @@ float mis_weight(float p_a, float p_b)
 struct ReSTIRReservoir
 {
     uint  light_idx;
-    float M;
-    float W;
-    float target_pdf; // π(selected), used for effective pdf = W/(M·π(y))
+    float M;          // Number of proposals represented by this reservoir.
+    float W;          // Sum of unnormalised RIS weights.
+    float target_pdf; // Unnormalised target at the reservoir's shading point.
 };
 
 // ---- ReSTIR: resolve light direction + radiance + distance from index ---
@@ -550,7 +550,7 @@ float restir_target_pdf(SurfaceMaterial s, float3 n, float3 view_dir,
     float3 L_dir, float3 L_radiance)
 {
     float3 brdf = eval_brdf(s, n, view_dir, L_dir);
-    return dot(brdf * L_radiance, float3(0.2126, 0.7152, 0.0722));
+    return max(dot(brdf * L_radiance, float3(0.2126, 0.7152, 0.0722)), 0.0);
 }
 
 // RIS initial sampling: evaluate M candidate lights, build reservoir.
@@ -567,6 +567,11 @@ ReSTIRReservoir restir_ris_init(
 
     for (uint i = 0u; i < M; i++)
     {
+        // M counts every proposal, including zero-contribution candidates.
+        // Counting only accepted candidates biases the reservoir toward bright
+        // lights and makes the final normalisation unstable in shadows.
+        r.M += 1.0;
+
         // Random candidate
         uint li = uint(rand_float(seed) * float(total));
         li = min(li, total - 1u);
@@ -579,11 +584,18 @@ ReSTIRReservoir restir_ris_init(
         if (n_dot_l <= 0.0 || dot(L_rad, L_rad) < 1e-10) continue;
 
         float target = restir_target_pdf(s, n, view_dir, L_dir, L_rad);
+        if (!(target > 0.0) || target != target || target >= 1e30) continue;
 
         // RIS weight update
         float w = target / max(p_init, 1e-38);
+        if (!(w > 0.0) || w != w || w >= 1e30) continue;
         r.W += w;
-        r.M += 1.0;
+        if (r.W != r.W || r.W >= 1e30)
+        {
+            r.W = 0.0;
+            r.target_pdf = 0.0;
+            continue;
+        }
 
         if (rand_float(seed) < w / max(r.W, 1e-38))
         {
@@ -591,36 +603,69 @@ ReSTIRReservoir restir_ris_init(
             r.target_pdf = target;
         }
     }
-    // If no valid candidate found, set a sane default.
-    if (r.M < 0.5) { r.light_idx = 0; r.target_pdf = 1.0; r.W = 0.0; r.M = 1.0; }
     return r;
 }
 
-// Combine two reservoirs (used for temporal + spatial reuse).
-// `b_scale` = weight of the second reservoir (typically 1.0 for temporal,
-// 1.0 for each spatial neighbor).
-ReSTIRReservoir restir_combine(ReSTIRReservoir a, ReSTIRReservoir b,
-    float b_scale, inout uint seed)
+// Re-evaluate a temporal/spatial reservoir at the current shading point before
+// merging it. A source reservoir's stored target belongs to its old point and
+// cannot be copied directly. source_m_cap also prevents unbounded history
+// growth while preserving the source reservoir's average weight.
+ReSTIRReservoir restir_combine_at_point(
+    ReSTIRReservoir current, ReSTIRReservoir source,
+    SurfaceMaterial s, float3 n, float3 view_dir, float3 hit_pos,
+    float3 sun_dir, float3 sun_radiance, uint num_lights,
+    float source_m_cap, inout uint seed)
 {
-    ReSTIRReservoir r;
-    r.M = a.M + b.M * b_scale;
-    r.W = a.W + b.W * b_scale;
-    r.light_idx = a.light_idx;
-    r.target_pdf = a.target_pdf;
+    if (source.light_idx > num_lights ||
+        !(source.M > 0.0) || source.M != source.M || source.M >= 1e30 ||
+        !(source.W > 0.0) || source.W != source.W || source.W >= 1e30 ||
+        !(source.target_pdf > 0.0) || source.target_pdf != source.target_pdf ||
+        source.target_pdf >= 1e30)
+        return current;
 
-    float p_accept = (b.W * b_scale) / max(r.W, 1e-38);
-    if (rand_float(seed) < p_accept)
+    float3 L_dir, L_rad;
+    float dist2;
+    restir_resolve_light(source.light_idx, hit_pos, L_dir, L_rad, dist2,
+        sun_dir, sun_radiance);
+    if (dot(n, L_dir) <= 0.0 || dot(L_rad, L_rad) < 1e-10)
+        return current;
+
+    float target_current = restir_target_pdf(s, n, view_dir, L_dir, L_rad);
+    if (!(target_current > 0.0) || target_current != target_current ||
+        target_current >= 1e30)
+        return current;
+
+    float represented_m = min(source.M, source_m_cap);
+    float history_scale = represented_m / source.M;
+    float candidate_w = target_current * (source.W / source.target_pdf) * history_scale;
+    if (!(candidate_w > 0.0) || candidate_w != candidate_w || candidate_w >= 1e30)
+        return current;
+
+    float combined_w = current.W + candidate_w;
+    if (combined_w != combined_w || combined_w >= 1e30)
+        return current;
+
+    current.M += represented_m;
+    current.W = combined_w;
+    if (rand_float(seed) < candidate_w / max(combined_w, 1e-38))
     {
-        r.light_idx = b.light_idx;
-        r.target_pdf = b.target_pdf;
+        current.light_idx = source.light_idx;
+        current.target_pdf = target_current;
     }
-    return r;
+    return current;
 }
 
-// Compute effective ReSTIR pdf for MIS w/ BRDF sampling.
-float restir_effective_pdf(ReSTIRReservoir r)
+// Final RIS normalisation. This is a multiplier on the selected sample's RGB
+// contribution, not a directional PDF and therefore must not be added to the
+// BRDF PDF.
+float restir_resampling_weight(ReSTIRReservoir r)
 {
-    return max(r.target_pdf / max(r.W, 1e-38), 1e-8);
+    if (!(r.M > 0.0) || !(r.W > 0.0) || !(r.target_pdf > 0.0))
+        return 0.0;
+    float weight = r.W / max(r.M * r.target_pdf, 1e-38);
+    if (weight != weight || weight >= 1e30)
+        return 0.0;
+    return max(weight, 0.0);
 }
 
 // ---- Core path tracing function ----

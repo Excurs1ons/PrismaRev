@@ -5,6 +5,7 @@
 pub mod components;
 pub mod helpers;
 pub mod hot_reload;
+pub mod inspect;
 pub mod loader;
 
 pub mod systems;

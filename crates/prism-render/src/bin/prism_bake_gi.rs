@@ -721,7 +721,7 @@ fn main() -> Result<()> {
     }
     let global_hit_ratio = if hr_count > 0 { hr_sum / hr_count as f32 } else { 0.0 };
 
-    let probe_data = prism_asset::ProbeVolumeData {
+    let probe_data = prism_render::probe_loader::ProbeVolumeData {
         origin,
         spacing,
         dims,
@@ -767,7 +767,8 @@ fn main() -> Result<()> {
     if let Some(parent) = output_path.parent() {
         std::fs::create_dir_all(parent).ok();
     }
-    prism_asset::save_probe_volume(&output_path, &probe_data).context("write probe volume .bin")?;
+    prism_render::probe_loader::save_probe_volume(&output_path, &probe_data)
+        .context("write probe volume .bin")?;
     log::info!(
         "  wrote {} ({} probes, {} coeffs, scene='{}', hit_ratio={:.3})",
         output_path.display(),

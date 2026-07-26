@@ -9,6 +9,10 @@ description = "Application layer and main loop for PrismaRev"
 prism-ecs = { path = "../prism-ecs" }
 prism-render = { path = "../prism-render" }
 prism-asset = { path = "../prism-asset" }
+prism-asset-core = { path = "../../prism-asset/prism-asset-core" }
+prism-asset-runtime = { path = "../../prism-asset/prism-asset-runtime" }
+prism-asset-cooker = { path = "../../prism-asset/prism-asset-cooker" }
+prism-editor = { path = "../prism-editor" }
 
 prism-audio = { path = "../prism-audio" }
 ash = { workspace = true }

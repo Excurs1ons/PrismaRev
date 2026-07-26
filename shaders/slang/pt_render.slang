@@ -32,6 +32,8 @@
 // ---- ReSTIR constants ----
 static const uint RESTIR_M = 8u;               // RIS candidates per pixel
 static const uint RESTIR_SPATIAL_SAMPLES = 4u; // spatial reuse neighbors
+static const float RESTIR_TEMPORAL_M_CAP = 32.0;
+static const float RESTIR_SPATIAL_M_CAP = 8.0;
 
 // ---- Push constants ----
 struct PtPush
@@ -77,9 +79,6 @@ RWStructuredBuffer<ReSTIRReservoir> currReservoir;
 
 [[vk::push_constant]]
 PtPush push;
-
-// ---- Groupshared memory for ReSTIR spatial reuse ----
-groupshared ReSTIRReservoir gs_reservoirs[16][16];
 
 // ---- Ray generation ----
 void generate_ray(uint px, uint py, float jx, float jy,
@@ -165,67 +164,6 @@ bool trace_primary_ray(float3 origin, float3 dir, float ray_max_distance,
     return true;
 }
 
-// ---- Evaluate a single light for ReSTIR (bounce 0 direct) ----
-float3 eval_direct_light(uint light_idx, float3 hit_pos, float3 hit_normal,
-    float3 view_dir, SurfaceMaterial surf, float3 sun_dir, float3 sun_radiance,
-    float ray_max_distance, out float out_pdf)
-{
-    // Resolve the selected light
-    float3 L_dir, L_rad;
-    float dist2;
-    restir_resolve_light(light_idx, hit_pos, L_dir, L_rad, dist2,
-        sun_dir, sun_radiance);
-
-    out_pdf = 0.0;
-    if (dot(L_rad, L_rad) < 1e-10 || dot(hit_normal, L_dir) <= 0.0)
-        return float3(0.0);
-
-    // Shadow ray
-    float shadow = 1.0;
-    {
-        RayDesc sr;
-        sr.Origin = hit_pos + 0.0001 * L_dir;
-        sr.Direction = L_dir;
-        sr.TMin = 0.001;
-        sr.TMax = ray_max_distance;
-        RayQuery<RAY_FLAG_SKIP_CLOSEST_HIT_SHADER> sq;
-        sq.TraceRayInline(tlas, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER, 0xFF, sr);
-        while (sq.Proceed())
-        {
-            if (sq.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE)
-            {
-                uint si = sq.CandidateInstanceID();
-                uint sp = sq.CandidatePrimitiveIndex();
-                float2 sb = sq.CandidateTriangleBarycentrics();
-                float3 sv0, sv1, sv2;
-                float2 suv0, suv1, suv2;
-                float3 sn0, sn1, sn2;
-                read_hit_triangle(si, sp, vertexData, indices,
-                    sv0, sv1, sv2, suv0, suv1, suv2, sn0, sn1, sn2);
-                float sw = 1.0 - sb.x - sb.y;
-                float2 suv = sw * suv0 + sb.x * suv1 + sb.y * suv2;
-                PtInstanceMeta sm = instance_meta[si];
-                GpuMaterial smat = materials[sm.material_slot];
-                if (mat_albedo_alpha(smat, suv) >= 0.5)
-                {
-                    sq.CommitNonOpaqueTriangleHit();
-                    break;
-                }
-            }
-        }
-        if (sq.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
-            shadow = 0.0;
-    }
-
-    float3 brdf = eval_brdf(surf, hit_normal, view_dir, L_dir);
-    float p_brdf = eval_brdf_pdf(surf, hit_normal, view_dir, L_dir);
-
-    // PDF for ReSTIR-selected light = restir_eff_pdf from the reservoir.
-    // The caller provides it via out_pdf and composites MIS weight.
-    // Here we just return the BRDF*radiance*shadow term.
-    return brdf * L_rad * shadow;
-}
-
 // ---- Compute entry point ----
 [shader("compute")]
 [numthreads(16, 16, 1)]
@@ -295,32 +233,43 @@ void ptMain(uint3 tid : SV_DispatchThreadID)
 
         uint linear_idx = pixel.y * push.params.x + pixel.x;
 
-        // Temporal reuse (always combine with previous, no reprojection)
-        ReSTIRReservoir prev = prevReservoir[linear_idx];
-        reservoir = restir_combine(reservoir, prev, 1.0, seed);
-
-        // Groupshared write + barrier for spatial reuse
-        uint2 ltid = uint2(tid.x & 15u, tid.y & 15u);
-        gs_reservoirs[ltid.y][ltid.x] = reservoir;
-        GroupMemoryBarrierWithGroupSync();
-
-        // Spatial reuse from random neighbors within the thread group
-        [unroll]
-        for (uint si = 0u; si < RESTIR_SPATIAL_SAMPLES; si++)
+        // Reuse only completed reservoirs from the previous frame. The old
+        // groupshared path placed a group barrier inside divergent control
+        // flow (sky pixels, edge threads and frozen pixels can return early),
+        // which is undefined and can expose partially written reservoirs.
+        if (reset == 0u && frame_count > 0u)
         {
-            uint2 nbr = uint2(
-                (ltid.x + 1u + uint(rand_float(seed) * 14.0)) & 15u,
-                (ltid.y + 1u + uint(rand_float(seed) * 14.0)) & 15u);
-            ReSTIRReservoir nbr_r = gs_reservoirs[nbr.y][nbr.x];
-            reservoir = restir_combine(reservoir, nbr_r, 1.0, seed);
+            ReSTIRReservoir prev = prevReservoir[linear_idx];
+            reservoir = restir_combine_at_point(
+                reservoir, prev, surf, hit_normal, view_dir, hit_pos,
+                push.light_dir.xyz, sun_radiance, push.num_lights,
+                RESTIR_TEMPORAL_M_CAP, seed);
+
+            // Spatial reuse from random previous-frame neighbors. Each source
+            // is re-evaluated against the current material, normal and point.
+            [unroll]
+            for (uint si = 0u; si < RESTIR_SPATIAL_SAMPLES; si++)
+            {
+                int2 offset = int2(
+                    int(rand_float(seed) * 17.0) - 8,
+                    int(rand_float(seed) * 17.0) - 8);
+                int2 nbr_pixel = clamp(int2(pixel) + offset,
+                    int2(0, 0), int2(int(w) - 1, int(h) - 1));
+                uint nbr_idx = uint(nbr_pixel.y) * w + uint(nbr_pixel.x);
+                ReSTIRReservoir nbr_r = prevReservoir[nbr_idx];
+                reservoir = restir_combine_at_point(
+                    reservoir, nbr_r, surf, hit_normal, view_dir, hit_pos,
+                    push.light_dir.xyz, sun_radiance, push.num_lights,
+                    RESTIR_SPATIAL_M_CAP, seed);
+            }
         }
 
         // Write reservoir for next frame's temporal reuse
         currReservoir[linear_idx] = reservoir;
 
         // ---- ReSTIR-selected direct light ----
-        float restir_eff_pdf = restir_effective_pdf(reservoir);
-        if (restir_eff_pdf > 0.0)
+        float restir_weight = restir_resampling_weight(reservoir);
+        if (restir_weight > 0.0)
         {
             float3 L_dir, L_rad;
             float dist2;
@@ -335,7 +284,10 @@ void ptMain(uint3 tid : SV_DispatchThreadID)
                 sr.Origin = hit_pos + 0.0001 * L_dir;
                 sr.Direction = L_dir;
                 sr.TMin = 0.001;
-                sr.TMax = push.ray_max_distance;
+                float light_distance = sqrt(max(dist2, 0.0));
+                sr.TMax = dist2 >= 1e9 ? push.ray_max_distance
+                    : min(push.ray_max_distance,
+                        max(light_distance - 0.001, 0.001));
                 RayQuery<RAY_FLAG_SKIP_CLOSEST_HIT_SHADER> sq;
                 sq.TraceRayInline(tlas, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER, 0xFF, sr);
                 while (sq.Proceed())
@@ -365,69 +317,8 @@ void ptMain(uint3 tid : SV_DispatchThreadID)
                     shadow = 0.0;
 
                 float3 brdf_re = eval_brdf(surf, hit_normal, view_dir, L_dir);
-                float p_brdf_re = eval_brdf_pdf(surf, hit_normal, view_dir, L_dir);
                 total_radiance += throughput * brdf_re * L_rad * shadow
-                    / max(restir_eff_pdf + p_brdf_re, 1e-20);
-            }
-
-            // ---- Point-light NEE fallback when ReSTIR-selected light is occluded ----
-            // ReSTIR tends to select the sun even in shadow (target = BRDF*radiance
-            // doesn't account for visibility). When occluded the contribution is 0, so
-            // we sample one random analytic light as a fallback to keep shadow regions
-            // from converging to only 10%-of-frames point-light samples.
-            if (shadow < 0.5 && push.num_lights > 0u)
-            {
-                uint fli = uint(rand_float(seed) * float(push.num_lights));
-                fli = min(fli, push.num_lights - 1u);
-                float3 fl_dir, fl_rad;
-                float fl_dist2;
-                restir_resolve_light(fli + 1u, hit_pos, fl_dir, fl_rad, fl_dist2,
-                    push.light_dir.xyz, sun_radiance);
-                if (dot(fl_rad, fl_rad) > 1e-10 && dot(hit_normal, fl_dir) > 0.0)
-                {
-                    float fl_shadow = 1.0;
-                    RayDesc fsr;
-                    fsr.Origin = hit_pos + 0.0001 * fl_dir;
-                    fsr.Direction = fl_dir;
-                    fsr.TMin = 0.001;
-                    fsr.TMax = push.ray_max_distance;
-                    RayQuery<RAY_FLAG_SKIP_CLOSEST_HIT_SHADER> fsq;
-                    fsq.TraceRayInline(tlas, RAY_FLAG_SKIP_CLOSEST_HIT_SHADER, 0xFF, fsr);
-                    while (fsq.Proceed())
-                    {
-                        if (fsq.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE)
-                        {
-                            uint fi = fsq.CandidateInstanceID();
-                            uint fp = fsq.CandidatePrimitiveIndex();
-                            float2 fb = fsq.CandidateTriangleBarycentrics();
-                            float3 fv0, fv1, fv2;
-                            float2 fuv0, fuv1, fuv2;
-                            float3 fn0, fn1, fn2;
-                            read_hit_triangle(fi, fp, vertexData, indices,
-                                fv0, fv1, fv2, fuv0, fuv1, fuv2, fn0, fn1, fn2);
-                            float fw = 1.0 - fb.x - fb.y;
-                            float2 fuv = fw * fuv0 + fb.x * fuv1 + fb.y * fuv2;
-                            PtInstanceMeta fm = instance_meta[fi];
-                            GpuMaterial fmat = materials[fm.material_slot];
-                            if (mat_albedo_alpha(fmat, fuv) >= 0.5)
-                            {
-                                fsq.CommitNonOpaqueTriangleHit();
-                                break;
-                            }
-                        }
-                    }
-                    if (fsq.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
-                        fl_shadow = 0.0;
-
-                    if (fl_shadow > 0.0)
-                    {
-                        float p_nee_fl = 1.0 / max(float(push.num_lights), 1.0);
-                        float3 brdf_fl = eval_brdf(surf, hit_normal, view_dir, fl_dir);
-                        float p_brdf_fl = eval_brdf_pdf(surf, hit_normal, view_dir, fl_dir);
-                        total_radiance += throughput * brdf_fl * fl_rad * fl_shadow
-                            / max(p_nee_fl + p_brdf_fl, 1e-20);
-                    }
-                }
+                    * restir_weight;
             }
         }
 
@@ -758,7 +649,25 @@ void ptMain(uint3 tid : SV_DispatchThreadID)
     {
         // ---- Primary ray missed: HDR sky ----
         total_radiance += throughput * envCube.SampleLevel(dir, 0.0).rgb;
+
+        // Do not leave a stale geometry reservoir behind a sky pixel. Such a
+        // reservoir can otherwise leak across moving silhouettes via reuse.
+        ReSTIRReservoir empty_reservoir;
+        empty_reservoir.light_idx = 0u;
+        empty_reservoir.M = 0.0;
+        empty_reservoir.W = 0.0;
+        empty_reservoir.target_pdf = 0.0;
+        uint linear_idx = pixel.y * push.params.x + pixel.x;
+        currReservoir[linear_idx] = empty_reservoir;
     }
+
+    // Reject invalid transport values before they poison the persistent
+    // accumulation buffer. Negative RGB is non-physical for this integrator.
+    bool finite_radiance = all(total_radiance == total_radiance)
+        && all(abs(total_radiance) < float3(1e30));
+    if (!finite_radiance)
+        total_radiance = float3(0.0);
+    total_radiance = max(total_radiance, float3(0.0));
 
     // ---- Firefly clamp: prevent individual bright samples from creating
     // persistent sparkles in the accumulation. The bound 50.0 corresponds to

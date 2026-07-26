@@ -654,6 +654,380 @@ impl Importer for JsonImporter {
 }
 
 // ---------------------------------------------------------------------------
+// Material Importer (.mat.json -> RMATI intermediate)
+// ---------------------------------------------------------------------------
+
+/// Intermediate material format magic: "RMATI" (Resource Material Intermediate).
+/// 5 bytes so it is distinct from the 4-byte RMAT runtime magic.
+const MATERIAL_INTERMEDIATE_MAGIC: &[u8; 5] = b"RMATI";
+
+/// Texture slots referenced by a material. The order is fixed and matches the
+/// RMATI/RMAT binary layout (5 slots). Names match the `MaterialJson` fields.
+const MATERIAL_TEX_SLOTS: [&str; 5] = [
+    "albedo_tex",
+    "normal_tex",
+    "metallic_roughness_tex",
+    "emissive_tex",
+    "occlusion_tex",
+];
+
+/// Authoring schema for `.mat.json` files.
+///
+/// Texture fields are relative asset paths (resolved to `AssetId` dependencies
+/// at import time). All scalar fields are optional with sensible defaults.
+#[derive(Debug, Clone, serde::Deserialize)]
+struct MaterialJson {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default = "default_base_color")]
+    base_color: [f32; 4],
+    #[serde(default)]
+    metallic: f32,
+    #[serde(default = "default_roughness")]
+    roughness: f32,
+    #[serde(default)]
+    emissive: [f32; 3],
+    #[serde(default)]
+    emissive_strength: f32,
+    #[serde(default = "default_one")]
+    normal_scale: f32,
+    #[serde(default = "default_one")]
+    occlusion_strength: f32,
+    #[serde(default)]
+    transmission: f32,
+    #[serde(default = "default_ior")]
+    ior: f32,
+    #[serde(default)]
+    translucency: f32,
+    #[serde(default)]
+    anisotropy: f32,
+    #[serde(default)]
+    clearcoat: f32,
+    #[serde(default)]
+    clearcoat_roughness: f32,
+    #[serde(default)]
+    albedo_tex: Option<String>,
+    #[serde(default)]
+    normal_tex: Option<String>,
+    #[serde(default)]
+    metallic_roughness_tex: Option<String>,
+    #[serde(default)]
+    emissive_tex: Option<String>,
+    #[serde(default)]
+    occlusion_tex: Option<String>,
+}
+
+fn default_base_color() -> [f32; 4] {
+    [0.8, 0.8, 0.8, 1.0]
+}
+fn default_roughness() -> f32 {
+    0.5
+}
+fn default_one() -> f32 {
+    1.0
+}
+fn default_ior() -> f32 {
+    1.5
+}
+
+/// Imports `.mat.json` material definition files.
+///
+/// Produces an RMATI intermediate blob (magic + version + scalars + 5 texture
+/// path records) and resolves the texture paths to `AssetId` dependencies via
+/// `ctx.db.id_by_path`. Textures that don't resolve are dropped with a warning
+/// (the material still imports; the slot is left empty at runtime).
+///
+/// Intermediate format (all little-endian):
+/// ```text
+/// [magic:5]   b"RMATI"
+/// [version:1] 1
+/// [scalars]   base_color[4] + metallic + roughness + emissive[3]
+///             + emissive_strength + normal_scale + occlusion_strength
+///             + transmission + ior + translucency + anisotropy
+///             + clearcoat + clearcoat_roughness   (each f32 LE, 18 floats total)
+/// per slot (5x):
+///   [present:1]   0 or 1
+///   [if present]  [path_len:u16][path bytes UTF-8]
+/// ```
+pub struct MaterialImporter;
+
+impl MaterialImporter {
+    /// Serialize scalars + 5 texture-path records into the RMATI blob.
+    fn write_intermediate(mat: &MaterialJson, tex_paths: &[Option<String>; 5]) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(64);
+        buf.extend_from_slice(MATERIAL_INTERMEDIATE_MAGIC);
+        buf.push(1); // version
+
+        // 16 scalar floats (64 bytes).
+        buf.extend_from_slice(&mat.base_color[0].to_le_bytes());
+        buf.extend_from_slice(&mat.base_color[1].to_le_bytes());
+        buf.extend_from_slice(&mat.base_color[2].to_le_bytes());
+        buf.extend_from_slice(&mat.base_color[3].to_le_bytes());
+        buf.extend_from_slice(&mat.metallic.to_le_bytes());
+        buf.extend_from_slice(&mat.roughness.to_le_bytes());
+        buf.extend_from_slice(&mat.emissive[0].to_le_bytes());
+        buf.extend_from_slice(&mat.emissive[1].to_le_bytes());
+        buf.extend_from_slice(&mat.emissive[2].to_le_bytes());
+        buf.extend_from_slice(&mat.emissive_strength.to_le_bytes());
+        buf.extend_from_slice(&mat.normal_scale.to_le_bytes());
+        buf.extend_from_slice(&mat.occlusion_strength.to_le_bytes());
+        buf.extend_from_slice(&mat.transmission.to_le_bytes());
+        buf.extend_from_slice(&mat.ior.to_le_bytes());
+        buf.extend_from_slice(&mat.translucency.to_le_bytes());
+        buf.extend_from_slice(&mat.anisotropy.to_le_bytes());
+        buf.extend_from_slice(&mat.clearcoat.to_le_bytes());
+        buf.extend_from_slice(&mat.clearcoat_roughness.to_le_bytes());
+
+        // 5 texture path records.
+        for slot in tex_paths {
+            match slot {
+                Some(path) => {
+                    let bytes = path.as_bytes();
+                    buf.push(1); // present
+                    let len = bytes.len().min(u16::MAX as usize) as u16;
+                    buf.extend_from_slice(&len.to_le_bytes());
+                    buf.extend_from_slice(&bytes[..len as usize]);
+                }
+                None => buf.push(0), // absent
+            }
+        }
+
+        buf
+    }
+}
+
+impl Importer for MaterialImporter {
+    fn name(&self) -> &'static str {
+        "material-importer"
+    }
+
+    fn version(&self) -> u32 {
+        1
+    }
+
+    fn can_import(&self, path: &Path) -> bool {
+        // `.mat.json` or `.mat` files. We match `.mat.json` so plain JSON files
+        // still fall through to JsonImporter; bare `.mat` is also accepted.
+        let name = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        if name.ends_with(".mat.json") {
+            return true;
+        }
+        path.extension()
+            .and_then(|e| e.to_str())
+            .map_or(false, |e| e.eq_ignore_ascii_case("mat"))
+    }
+
+    fn import(&self, ctx: &ImportContext) -> Result<ImportResult, ImportError> {
+        let text = std::fs::read_to_string(&ctx.source_path)?;
+        let mat: MaterialJson = serde_json::from_str(&text).map_err(|e| {
+            ImportError::ImportFailed(format!("material JSON parse failed: {e}"))
+        })?;
+
+        // Collect the 5 texture paths in slot order.
+        let raw_paths: [Option<String>; 5] = [
+            mat.albedo_tex.clone(),
+            mat.normal_tex.clone(),
+            mat.metallic_roughness_tex.clone(),
+            mat.emissive_tex.clone(),
+            mat.occlusion_tex.clone(),
+        ];
+
+        // Resolve each path to an AssetId dependency via the database.
+        let mut dependencies: Vec<AssetId> = Vec::new();
+        let mut resolved_paths: [Option<String>; 5] = [None, None, None, None, None];
+        for (i, path_opt) in raw_paths.iter().enumerate() {
+            if let Some(path) = path_opt {
+                let normalized = path.replace('\\', "/");
+                match ctx.db.id_by_path(&normalized) {
+                    Some(id) => {
+                        dependencies.push(id);
+                        resolved_paths[i] = Some(normalized);
+                    }
+                    None => {
+                        // The texture asset isn't registered yet; warn and leave
+                        // the slot empty. The material still imports.
+                        tracing::warn!(
+                            "material importer: texture '{}' not in DB (slot '{}'); leaving empty",
+                            normalized,
+                            MATERIAL_TEX_SLOTS[i]
+                        );
+                    }
+                }
+            }
+        }
+
+        let output_data = Self::write_intermediate(&mat, &resolved_paths);
+
+        let metadata = serde_json::json!({
+            "name": mat.name.clone().unwrap_or_default(),
+            "texture_slots": resolved_paths.iter().map(|p| p.is_some()).collect::<Vec<_>>(),
+            "dependency_count": dependencies.len(),
+        });
+
+        Ok(ImportResult {
+            asset_type: AssetType::Material,
+            dependencies,
+            output_data,
+            metadata: Some(metadata),
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Shader Importer (.slang -> RSLI intermediate)
+// ---------------------------------------------------------------------------
+
+/// Intermediate shader format magic: "RSLI" (Resource Slang Intermediate).
+const SHADER_INTERMEDIATE_MAGIC: &[u8; 4] = b"RSLI";
+
+/// Infer the Slang entry-point name and stage from a source filename.
+///
+/// Convention (matches `shaders/compile.sh`):
+/// - `*_vert.slang`  -> `vertexMain`   / `vertex`
+/// - `*_frag.slang`  -> `fragmentMain` / `fragment`
+/// - `*_comp.slang`  -> `computeMain`  / `compute`
+/// - `*_geom.slang`  -> `geometryMain` / `geometry`
+/// - `*_hull.slang`  -> `hullMain`     / `hull`
+/// - `*_domain.slang`-> `domainMain`   / `domain`
+/// - `pt_*.slang` / `gi_*.slang` (compute) -> `ptMain` / `compute`
+///
+/// Returns `None` for unrecognized names; the caller falls back to defaults.
+fn infer_entry_stage_from_name(file_stem: &str) -> Option<(&'static str, &'static str)> {
+    let stem = file_stem.to_lowercase();
+    if stem.ends_with("_vert") {
+        Some(("vertexMain", "vertex"))
+    } else if stem.ends_with("_frag") {
+        Some(("fragmentMain", "fragment"))
+    } else if stem.ends_with("_comp") {
+        Some(("computeMain", "compute"))
+    } else if stem.ends_with("_geom") {
+        Some(("geometryMain", "geometry"))
+    } else if stem.ends_with("_hull") {
+        Some(("hullMain", "hull"))
+    } else if stem.ends_with("_domain") {
+        Some(("domainMain", "domain"))
+    } else if stem.starts_with("pt_") {
+        // Path-tracing compute shaders use `ptMain` per compile.sh.
+        Some(("ptMain", "compute"))
+    } else {
+        None
+    }
+}
+
+/// Look up `key` in the importer settings JSON (an object), returning its
+/// string value if present.
+fn setting_str(settings: &Value, key: &str) -> Option<String> {
+    settings
+        .get(key)
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_owned())
+}
+
+/// Imports `.slang` shader source files.
+///
+/// Produces an RSLI intermediate blob that carries the entry-point name,
+/// stage, profile, and raw source bytes. The cooker later feeds these to
+/// `slangc` to produce SPIR-V.
+///
+/// Entry-point / stage / profile are resolved in this priority order:
+/// 1. `settings["slang_entry"]` / `["slang_stage"]` / `["slang_profile"]`
+///    (per-asset import overrides passed by the editor / CLI).
+/// 2. Filename convention (see [`infer_entry_stage_from_name`]).
+/// 3. Defaults: entry = `vertexMain`, stage = `vertex`, profile = `spirv_1_5`.
+///
+/// Intermediate format (all little-endian):
+/// ```text
+/// [magic:4]        b"RSLI"
+/// [version:1]      1
+/// [entry_len:u16]  + entry bytes (UTF-8)
+/// [stage_len:u16]  + stage bytes (UTF-8)
+/// [profile_len:u16]+ profile bytes (UTF-8)
+/// [source_len:u32] + source bytes (raw .slang content)
+/// ```
+pub struct ShaderImporter;
+
+impl ShaderImporter {
+    fn write_intermediate(entry: &str, stage: &str, profile: &str, source: &[u8]) -> Vec<u8> {
+        let entry_b = entry.as_bytes();
+        let stage_b = stage.as_bytes();
+        let profile_b = profile.as_bytes();
+        let cap = 4 + 1 + 2 + entry_b.len() + 2 + stage_b.len() + 2 + profile_b.len() + 4 + source.len();
+        let mut buf = Vec::with_capacity(cap);
+        buf.extend_from_slice(SHADER_INTERMEDIATE_MAGIC);
+        buf.push(1); // version
+
+        let entry_len = entry_b.len().min(u16::MAX as usize) as u16;
+        buf.extend_from_slice(&entry_len.to_le_bytes());
+        buf.extend_from_slice(&entry_b[..entry_len as usize]);
+
+        let stage_len = stage_b.len().min(u16::MAX as usize) as u16;
+        buf.extend_from_slice(&stage_len.to_le_bytes());
+        buf.extend_from_slice(&stage_b[..stage_len as usize]);
+
+        let profile_len = profile_b.len().min(u16::MAX as usize) as u16;
+        buf.extend_from_slice(&profile_len.to_le_bytes());
+        buf.extend_from_slice(&profile_b[..profile_len as usize]);
+
+        buf.extend_from_slice(&(source.len() as u32).to_le_bytes());
+        buf.extend_from_slice(source);
+        buf
+    }
+}
+
+impl Importer for ShaderImporter {
+    fn name(&self) -> &'static str {
+        "shader-importer"
+    }
+
+    fn version(&self) -> u32 {
+        1
+    }
+
+    fn can_import(&self, path: &Path) -> bool {
+        path.extension()
+            .and_then(|e| e.to_str())
+            .map_or(false, |e| e.eq_ignore_ascii_case("slang"))
+    }
+
+    fn import(&self, ctx: &ImportContext) -> Result<ImportResult, ImportError> {
+        let source = std::fs::read(&ctx.source_path)?;
+
+        let file_stem = ctx
+            .source_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
+
+        // Resolve entry / stage / profile.
+        let (default_entry, default_stage) =
+            infer_entry_stage_from_name(file_stem).unwrap_or(("vertexMain", "vertex"));
+        let entry = setting_str(&ctx.settings, "slang_entry").unwrap_or_else(|| default_entry.to_owned());
+        let stage = setting_str(&ctx.settings, "slang_stage").unwrap_or_else(|| default_stage.to_owned());
+        let profile = setting_str(&ctx.settings, "slang_profile").unwrap_or_else(|| "spirv_1_5".to_owned());
+
+        let output_data = Self::write_intermediate(&entry, &stage, &profile, &source);
+
+        let metadata = serde_json::json!({
+            "entry": entry,
+            "stage": stage,
+            "profile": profile,
+            "source_size": source.len(),
+        });
+
+        Ok(ImportResult {
+            asset_type: AssetType::Shader,
+            dependencies: Vec::new(),
+            output_data,
+            metadata: Some(metadata),
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Default Registry
 // ---------------------------------------------------------------------------
 
@@ -662,6 +1036,8 @@ pub fn default_importer_registry() -> ImporterRegistry {
     let mut reg = ImporterRegistry::new();
     reg.register(Box::new(TextureImporter));
     reg.register(Box::new(GltfImporter));
+    reg.register(Box::new(MaterialImporter));
+    reg.register(Box::new(ShaderImporter));
     reg.register(Box::new(JsonImporter));
     reg.register(Box::new(RawImporter)); // catch-all last
     reg
@@ -1000,6 +1376,226 @@ mod tests {
         assert_eq!(meta["index_count"], 3);
         assert!(meta["has_normals"].as_bool().unwrap_or(false) == false);
         assert!(meta["has_texcoords"].as_bool().unwrap_or(false) == false);
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    // -------------------------------------------------------------------
+    // Material Importer
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn material_importer_accepts_mat_extensions() {
+        let imp = MaterialImporter;
+        assert!(imp.can_import(Path::new("plastic.mat.json")));
+        assert!(imp.can_import(Path::new("plastic.mat")));
+        assert!(imp.can_import(Path::new("PLASTIC.MAT")));
+        // Plain .json falls through to JsonImporter.
+        assert!(!imp.can_import(Path::new("data.json")));
+        assert!(!imp.can_import(Path::new("data.txt")));
+    }
+
+    #[test]
+    fn material_importer_roundtrip_with_textures() {
+        let imp = MaterialImporter;
+        let dir = std::env::temp_dir();
+        let path = dir.join("test_material.mat.json");
+
+        // Register two texture asset records in the DB so the importer can
+        // resolve their paths to AssetId dependencies.
+        let mut db = AssetDatabase::new();
+        let albedo_id = db.generate_id();
+        let occ_id = db.generate_id();
+        db.insert(prism_asset_db::AssetRecord::new(
+            albedo_id,
+            "textures/albedo.png".into(),
+            AssetType::Texture,
+            "texture-importer",
+        ))
+        .unwrap();
+        db.insert(prism_asset_db::AssetRecord::new(
+            occ_id,
+            "textures/occlusion.png".into(),
+            AssetType::Texture,
+            "texture-importer",
+        ))
+        .unwrap();
+
+        let json = r#"{
+            "name": "test_plastic",
+            "base_color": [0.9, 0.1, 0.1, 1.0],
+            "metallic": 0.0,
+            "roughness": 0.6,
+            "emissive": [0.05, 0.0, 0.0],
+            "emissive_strength": 2.0,
+            "normal_scale": 1.2,
+            "occlusion_strength": 0.9,
+            "transmission": 0.1,
+            "ior": 1.45,
+            "clearcoat": 0.5,
+            "albedo_tex": "textures/albedo.png",
+            "occlusion_tex": "textures/occlusion.png"
+        }"#;
+        std::fs::write(&path, json).unwrap();
+
+        let ctx = ImportContext {
+            source_path: path.clone(),
+            source_hash: 0,
+            settings: Value::Null,
+            db: Arc::new(db),
+        };
+        let result = imp.import(&ctx).unwrap();
+        assert_eq!(result.asset_type, AssetType::Material);
+        // Two texture deps resolved.
+        assert_eq!(result.dependencies.len(), 2);
+        assert_eq!(result.dependencies[0], albedo_id);
+        assert_eq!(result.dependencies[1], occ_id);
+
+        // Intermediate must start with RMATI magic.
+        assert_eq!(&result.output_data[..5], b"RMATI");
+        assert_eq!(result.output_data[5], 1); // version
+
+        // Metadata carries the slot presence flags.
+        let meta = result.metadata.unwrap();
+        let slots = meta["texture_slots"].as_array().unwrap();
+        assert_eq!(slots.len(), 5);
+        assert_eq!(slots[0].as_bool().unwrap(), true); // albedo
+        assert_eq!(slots[1].as_bool().unwrap(), false); // normal
+        assert_eq!(slots[4].as_bool().unwrap(), true); // occlusion
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn material_importer_handles_unresolved_texture() {
+        // A texture path not present in the DB should be dropped (warn), not
+        // abort the import. The material still imports with that slot empty.
+        let imp = MaterialImporter;
+        let dir = std::env::temp_dir();
+        let path = dir.join("test_material_missing_tex.mat.json");
+
+        let json = r#"{
+            "base_color": [0.5, 0.5, 0.5, 1.0],
+            "albedo_tex": "textures/missing.png"
+        }"#;
+        std::fs::write(&path, json).unwrap();
+
+        let ctx = ImportContext {
+            source_path: path.clone(),
+            source_hash: 0,
+            settings: Value::Null,
+            db: Arc::new(AssetDatabase::new()),
+        };
+        let result = imp.import(&ctx).unwrap();
+        assert_eq!(result.asset_type, AssetType::Material);
+        // Unresolved -> 0 deps, material still imports.
+        assert!(result.dependencies.is_empty());
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn material_importer_uses_defaults_for_missing_scalars() {
+        let imp = MaterialImporter;
+        let dir = std::env::temp_dir();
+        let path = dir.join("test_material_defaults.mat.json");
+
+        // Empty object -> all defaults.
+        std::fs::write(&path, "{}").unwrap();
+
+        let ctx = ImportContext {
+            source_path: path.clone(),
+            source_hash: 0,
+            settings: Value::Null,
+            db: Arc::new(AssetDatabase::new()),
+        };
+        let result = imp.import(&ctx).unwrap();
+        assert_eq!(result.asset_type, AssetType::Material);
+        // 78 bytes minimum (5 magic + 1 version + 72 scalars), no textures.
+        assert!(result.output_data.len() >= 78);
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    // -------------------------------------------------------------------
+    // Shader Importer
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn shader_importer_accepts_slang() {
+        let imp = ShaderImporter;
+        assert!(imp.can_import(Path::new("mesh_vert.slang")));
+        assert!(imp.can_import(Path::new("scene_frag.SLANG")));
+        assert!(!imp.can_import(Path::new("data.json")));
+        assert!(!imp.can_import(Path::new("data.txt")));
+    }
+
+    #[test]
+    fn shader_importer_infers_entry_from_filename() {
+        let imp = ShaderImporter;
+        let dir = std::env::temp_dir();
+        let path = dir.join("test_vert.slang");
+        std::fs::write(&path, b"// dummy shader\n").unwrap();
+
+        let ctx = ImportContext {
+            source_path: path.clone(),
+            source_hash: 0,
+            settings: Value::Null,
+            db: Arc::new(AssetDatabase::new()),
+        };
+        let result = imp.import(&ctx).unwrap();
+        assert_eq!(result.asset_type, AssetType::Shader);
+        assert_eq!(&result.output_data[..4], b"RSLI");
+
+        let meta = result.metadata.unwrap();
+        assert_eq!(meta["entry"], "vertexMain");
+        assert_eq!(meta["stage"], "vertex");
+        assert_eq!(meta["profile"], "spirv_1_5");
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn shader_importer_pt_prefix_uses_pt_main() {
+        // pt_* shaders use the `ptMain` entry per compile.sh convention.
+        assert_eq!(
+            infer_entry_stage_from_name("pt_render"),
+            Some(("ptMain", "compute"))
+        );
+        assert_eq!(
+            infer_entry_stage_from_name("gi_bake_comp"),
+            Some(("computeMain", "compute"))
+        );
+        assert_eq!(
+            infer_entry_stage_from_name("scene_frag"),
+            Some(("fragmentMain", "fragment"))
+        );
+        assert_eq!(infer_entry_stage_from_name("unknown"), None);
+    }
+
+    #[test]
+    fn shader_importer_respects_settings_overrides() {
+        let imp = ShaderImporter;
+        let dir = std::env::temp_dir();
+        let path = dir.join("test_custom.slang");
+        std::fs::write(&path, b"// dummy").unwrap();
+
+        let settings = serde_json::json!({
+            "slang_entry": "myEntry",
+            "slang_stage": "compute",
+            "slang_profile": "spirv_1_4"
+        });
+        let ctx = ImportContext {
+            source_path: path.clone(),
+            source_hash: 0,
+            settings,
+            db: Arc::new(AssetDatabase::new()),
+        };
+        let result = imp.import(&ctx).unwrap();
+        let meta = result.metadata.unwrap();
+        assert_eq!(meta["entry"], "myEntry");
+        assert_eq!(meta["stage"], "compute");
+        assert_eq!(meta["profile"], "spirv_1_4");
 
         std::fs::remove_file(&path).ok();
     }

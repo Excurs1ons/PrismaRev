@@ -34,6 +34,14 @@ mod hot_reload;
 pub use hot_reload::{HotReloadWatcher, HotReloadEvent};
 
 // ---------------------------------------------------------------------------
+// Typed asset wrappers (RTEX/RMES/RMAT/SPIR-V/RSCN decoders)
+// ---------------------------------------------------------------------------
+
+pub mod typed;
+
+pub use typed::{MaterialAsset, MeshAsset, SceneAsset, ShaderAsset, TextureAsset};
+
+// ---------------------------------------------------------------------------
 // Errors
 // ---------------------------------------------------------------------------
 
@@ -62,6 +70,12 @@ pub enum RuntimeError {
     TypeMismatch {
         expected: &'static str,
         got: AssetType,
+    },
+
+    #[error("Failed to deserialize {asset_type:?}: {reason}")]
+    DeserializeFailed {
+        asset_type: AssetType,
+        reason: String,
     },
 
     #[error("I/O error: {0}")]
@@ -202,8 +216,13 @@ impl MemoryTracker {
 pub struct ResourceManager {
     /// Slot array indexed by handle index.
     slots: Vec<Slot>,
-    /// Map from AssetId → slot index.
+    /// Map from AssetId -> slot index.
     id_map: HashMap<AssetId, u32>,
+    /// Map from source-relative path -> AssetId, populated by
+    /// [`Self::load_path_manifest`]. Lets the engine resolve scene
+    /// `mesh_path`/`material_path` strings to runtime `AssetId`s. Empty when
+    /// no manifest has been loaded (path-based lookup is unavailable).
+    path_map: HashMap<String, AssetId>,
     /// Loaded package readers.
     packages: Vec<PackageReader>,
     /// Next free slot index.
@@ -220,6 +239,7 @@ impl ResourceManager {
         Self {
             slots: Vec::new(),
             id_map: HashMap::new(),
+            path_map: HashMap::new(),
             packages: Vec::new(),
             next_slot: 1, // 0 reserved for null handle
             memory: MemoryTracker::new(),
@@ -335,6 +355,79 @@ impl ResourceManager {
         let reader = PackageReader::open_async(path).await?;
         self.register_package(reader);
         Ok(())
+    }
+
+    /// Load a path manifest (`.pak.meta.json` written by `prism-asset-cli build`)
+    /// so the engine can resolve source-relative asset paths to runtime
+    /// `AssetId`s.
+    ///
+    /// The manifest is the **only** runtime source of path->id mapping: the
+    /// `.pak` binary itself stores only `AssetId`s (paths are an editor-side
+    /// concept). Without this call, [`Self::id_by_path`] always returns
+    /// `None`.
+    ///
+    /// The manifest format (produced by `cmd_build`) is a JSON object with an
+    /// `assets` array, each entry having `id` (hex string) and `path` (string).
+    pub fn load_path_manifest(&mut self, path: impl AsRef<Path>) -> Result<(), RuntimeError> {
+        let text = std::fs::read_to_string(path.as_ref()).map_err(|e| {
+            RuntimeError::DeserializeFailed {
+                asset_type: AssetType::Binary,
+                reason: format!("read path manifest: {e}"),
+            }
+        })?;
+        self.load_path_manifest_from_str(&text)
+    }
+
+    /// Same as [`Self::load_path_manifest`] but parses an in-memory JSON string.
+    pub fn load_path_manifest_from_str(&mut self, text: &str) -> Result<(), RuntimeError> {
+        let json: serde_json::Value = serde_json::from_str(text).map_err(|e| {
+            RuntimeError::DeserializeFailed {
+                asset_type: AssetType::Binary,
+                reason: format!("parse path manifest JSON: {e}"),
+            }
+        })?;
+
+        let assets = json
+            .get("assets")
+            .and_then(|a| a.as_array())
+            .ok_or_else(|| RuntimeError::DeserializeFailed {
+                asset_type: AssetType::Binary,
+                reason: "manifest missing 'assets' array".into(),
+            })?;
+
+        let mut added = 0usize;
+        for entry in assets {
+            let id_str = entry.get("id").and_then(|v| v.as_str());
+            let path = entry.get("path").and_then(|v| v.as_str());
+            let (Some(id_str), Some(path)) = (id_str, path) else {
+                continue;
+            };
+            // `id` is a hex string like "0x0000000100000001".
+            let raw = if let Some(stripped) = id_str.strip_prefix("0x") {
+                u64::from_str_radix(stripped, 16)
+            } else {
+                u64::from_str_radix(id_str, 16)
+            }
+            .map_err(|e| RuntimeError::DeserializeFailed {
+                asset_type: AssetType::Binary,
+                reason: format!("manifest asset id '{id_str}' is not hex: {e}"),
+            })?;
+            let id = AssetId::from_raw(raw);
+            self.path_map.insert(path.to_owned(), id);
+            added += 1;
+        }
+
+        tracing::info!("Loaded path manifest: {} entries", added);
+        Ok(())
+    }
+
+    /// Resolve a source-relative asset path to its runtime `AssetId`.
+    ///
+    /// Returns `None` when no manifest has been loaded or the path isn't
+    /// registered. The lookup is case-sensitive and expects forward-slash
+    /// separators (matching the manifest written by `prism-asset-cli build`).
+    pub fn id_by_path(&self, path: &str) -> Option<AssetId> {
+        self.path_map.get(path).copied()
     }
 
     /// Register an already-open package reader.
@@ -1179,5 +1272,169 @@ mod tests {
 
         rm.unload_id(id).unwrap();
         assert_eq!(rm.memory_usage(), 0);
+    }
+
+    // -------------------------------------------------------------------
+    // Typed asset decoders (TextureAsset / MeshAsset / MaterialAsset /
+    // ShaderAsset / SceneAsset)
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn shader_asset_validates_spirv_magic() {
+        // Build a minimal "SPIR-V" buffer: magic + padding.
+        let mut spv = Vec::new();
+        spv.extend_from_slice(&0x0723_0203u32.to_le_bytes());
+        spv.extend_from_slice(&[0u8; 16]);
+
+        let asset = ShaderAsset::from_bytes(&spv).unwrap();
+        assert_eq!(asset.spirv.len(), spv.len());
+        assert_eq!(&asset.spirv[..4], &spv[..4]);
+    }
+
+    #[test]
+    fn shader_asset_rejects_bad_magic() {
+        let bad = b"XXXXgarbage";
+        assert!(ShaderAsset::from_bytes(bad).is_err());
+    }
+
+    #[test]
+    fn shader_asset_rejects_short_input() {
+        assert!(ShaderAsset::from_bytes(&[1u8, 2, 3]).is_err());
+    }
+
+    #[test]
+    fn shader_asset_into_bytes_roundtrips() {
+        let mut spv = Vec::new();
+        spv.extend_from_slice(&0x0723_0203u32.to_le_bytes());
+        spv.extend_from_slice(&[0u8; 8]);
+        let asset = ShaderAsset::from_bytes(&spv).unwrap();
+        let back = asset.into_bytes();
+        assert_eq!(back, spv);
+    }
+
+    #[test]
+    fn scene_asset_validates_rscn_magic() {
+        // Minimal RSCN: magic + version 2 + entity_count 0 + env_len 0.
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"RSCN");
+        bytes.push(2); // version
+        bytes.extend_from_slice(&0u32.to_le_bytes()); // entity_count
+        bytes.extend_from_slice(&0u16.to_le_bytes()); // env_len
+
+        let asset = SceneAsset::from_bytes(&bytes).unwrap();
+        assert_eq!(asset.bytes, bytes);
+        assert_eq!(asset.into_bytes(), bytes);
+    }
+
+    #[test]
+    fn scene_asset_rejects_bad_magic() {
+        assert!(SceneAsset::from_bytes(b"XXXX").is_err());
+        assert!(SceneAsset::from_bytes(b"RSC").is_err()); // too short
+    }
+
+    #[test]
+    fn material_asset_decodes_cooked_rmat() {
+        // Build an RMAT blob by hand: magic + version + 18 scalars + 5 absent slots.
+        let mut buf = Vec::new();
+        buf.extend_from_slice(b"RMAT");
+        buf.push(1); // version
+        let scalars: [f32; prism_asset_cooker::MATERIAL_SCALAR_COUNT] = [
+            0.8, 0.8, 0.8, 1.0, // base_color
+            0.2, 0.5, // metallic, roughness
+            0.0, 0.0, 0.0, // emissive
+            1.0, 1.0, 1.0, // emissive_strength, normal_scale, occlusion_strength
+            0.0, 1.5, 0.0, 0.0, // transmission, ior, translucency, anisotropy
+            0.0, 0.0, // clearcoat, clearcoat_roughness
+        ];
+        for s in scalars {
+            buf.extend_from_slice(&s.to_le_bytes());
+        }
+        for _ in 0..5 {
+            buf.push(0); // absent
+        }
+
+        let asset = MaterialAsset::from_bytes(&buf).unwrap();
+        assert_eq!(asset.scalars(), &scalars);
+        for slot in asset.texture_ids() {
+            assert!(slot.is_none());
+        }
+    }
+
+    #[test]
+    fn material_asset_rejects_bad_magic() {
+        assert!(MaterialAsset::from_bytes(b"XXXX").is_err());
+    }
+
+    #[test]
+    fn texture_asset_rejects_bad_magic() {
+        assert!(TextureAsset::from_bytes(b"XXXX").is_err());
+    }
+
+    #[test]
+    fn mesh_asset_rejects_bad_magic() {
+        assert!(MeshAsset::from_bytes(b"XXXX").is_err());
+    }
+
+    #[test]
+    fn typed_asset_types_match_asset_type() {
+        assert_eq!(TextureAsset::asset_type(), AssetType::Texture);
+        assert_eq!(MeshAsset::asset_type(), AssetType::Mesh);
+        assert_eq!(MaterialAsset::asset_type(), AssetType::Material);
+        assert_eq!(ShaderAsset::asset_type(), AssetType::Shader);
+        assert_eq!(SceneAsset::asset_type(), AssetType::Scene);
+    }
+
+    // -------------------------------------------------------------------
+    // Path manifest -> id_by_path lookup
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn path_manifest_resolves_paths_to_ids() {
+        let mut rm = ResourceManager::new();
+        // No manifest -> always None.
+        assert!(rm.id_by_path("meshes/cube.gltf").is_none());
+
+        let manifest = r#"{
+            "pak": "scenes.pak",
+            "format": "RPAK",
+            "version": 1,
+            "asset_count": 2,
+            "total_size": 1024,
+            "assets": [
+                { "id": "0x0000000100000001", "path": "meshes/cube.gltf", "type": "mesh" },
+                { "id": "0x0000000100000002", "path": "materials/red.mat.json", "type": "material" }
+            ]
+        }"#;
+        rm.load_path_manifest_from_str(manifest).unwrap();
+
+        let mesh_id = rm.id_by_path("meshes/cube.gltf").unwrap();
+        assert_eq!(mesh_id, AssetId::from_raw(0x0000_0001_0000_0001));
+        let mat_id = rm.id_by_path("materials/red.mat.json").unwrap();
+        assert_eq!(mat_id, AssetId::from_raw(0x0000_0001_0000_0002));
+        // Unknown path -> None.
+        assert!(rm.id_by_path("nonexistent.png").is_none());
+    }
+
+    #[test]
+    fn path_manifest_handles_id_without_0x_prefix() {
+        let mut rm = ResourceManager::new();
+        let manifest = r#"{
+            "assets": [
+                { "id": "deadbeef", "path": "a.png" }
+            ]
+        }"#;
+        rm.load_path_manifest_from_str(manifest).unwrap();
+        assert_eq!(
+            rm.id_by_path("a.png"),
+            Some(AssetId::from_raw(0xdead_beef))
+        );
+    }
+
+    #[test]
+    fn path_manifest_rejects_bad_json() {
+        let mut rm = ResourceManager::new();
+        assert!(rm.load_path_manifest_from_str("not json").is_err());
+        // Missing 'assets' key.
+        assert!(rm.load_path_manifest_from_str(r#"{"foo": 1}"#).is_err());
     }
 }

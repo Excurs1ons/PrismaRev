@@ -6,8 +6,10 @@
 //! | Transform | `LocalTransform`, `WorldTransform`, `TransformDirty` |
 //! | Render    | `MeshRef`, `MaterialRef`, `Active` |
 //! | Lighting  | `DirectionalLight`, `PointLight`, `SpotLight` |
-//! | Camera    | `Camera` |
+//! | Camera    | `Camera`, `FlyCameraController` |
+//! | Skybox    | `Skybox` |
 //! | Scene     | `SceneMember` |
+//! | Identity  | `Name` |
 
 use prism_ecs::Entity;
 use prism_render::managers::MeshHandle;
@@ -163,6 +165,32 @@ impl Default for Active {
 }
 
 // ---------------------------------------------------------------------------
+// Authoring-time helpers
+// ---------------------------------------------------------------------------
+
+/// Authoring-time bundle marker for a renderable entity.
+///
+/// Inserted by [`SceneLoader`](crate::scene::loader::SceneLoader) during
+/// scene spawn when an entity carries both a mesh path and a material path.
+/// This component does **not** participate in render queries — the actual
+/// rendering data lives on [`MeshRef`] and [`MaterialRef`] — but provides a
+/// convenient handle for inspector editing and future hot-reload.
+#[derive(Debug, Clone)]
+pub struct MeshRenderer {
+    pub mesh_path: String,
+    pub material_path: String,
+}
+
+impl MeshRenderer {
+    pub fn has_mesh(&self) -> bool {
+        !self.mesh_path.is_empty()
+    }
+    pub fn has_material(&self) -> bool {
+        !self.material_path.is_empty()
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Lighting
 // ---------------------------------------------------------------------------
 
@@ -242,12 +270,30 @@ impl Default for SpotLight {
 // Camera
 // ---------------------------------------------------------------------------
 
-/// Perspective camera parameters.
+/// Perspective camera parameters (data component).
+///
+/// Holds the editor-editable projection + exposure fields. The runtime view
+/// matrix is computed each frame by [`super::systems::camera`] from this
+/// component plus a sibling [`FlyCameraController`] (or future controller)
+/// and the entity's [`WorldTransform`].
+///
+/// `aspect` is a runtime cache written by the app on resize; it is exposed in
+/// the inspector as read-mostly. `enabled` gates whether the renderer picks
+/// this camera.
 #[derive(Debug, Clone)]
 pub struct Camera {
     pub fov_y_degrees: f32,
     pub near: f32,
     pub far: f32,
+    /// Exposure multiplier applied to the final HDR color before tonemapping.
+    /// Default 1.0 = no scaling; range [0, 5] via inspector slider.
+    pub exposure: f32,
+    /// Current aspect ratio (width / height). Written by the app on resize /
+    /// orientation change; the projection matrix is derived from it each frame.
+    pub aspect: f32,
+    /// When `false` the camera is skipped during scene collection (the
+    /// renderer falls back to the next available camera).
+    pub enabled: bool,
 }
 
 impl Default for Camera {
@@ -256,6 +302,91 @@ impl Default for Camera {
             fov_y_degrees: 60.0,
             near: 0.1,
             far: 1000.0,
+            exposure: 1.0,
+            aspect: 16.0 / 9.0,
+            enabled: true,
+        }
+    }
+}
+
+/// Free-fly camera input controller (data component).
+///
+/// Splits the runtime/input-owned fields off the old `FlyCamera` enum variant:
+/// `yaw`/`pitch` are written each frame by [`super::systems::camera`] from
+/// input, while `move_speed`/`look_sensitivity` are editor-editable. The
+/// camera position lives on the sibling [`LocalTransform`] (and its derived
+/// [`WorldTransform`]), so this component carries no position of its own.
+#[derive(Debug, Clone, Copy)]
+pub struct FlyCameraController {
+    /// Yaw around +Y (rad). 0 = looking down -Z (matches `FlyCamera`).
+    pub yaw: f32,
+    /// Pitch above/below the horizon (rad). 0 = horizontal.
+    pub pitch: f32,
+    /// Base translation speed (world units / second) at boost = 1.
+    pub move_speed: f32,
+    /// Mouse look sensitivity (rad per pixel).
+    pub look_sensitivity: f32,
+}
+
+impl Default for FlyCameraController {
+    fn default() -> Self {
+        Self {
+            yaw: 0.0,
+            pitch: 0.0,
+            move_speed: 5.0,
+            look_sensitivity: 0.005,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Identification
+// ---------------------------------------------------------------------------
+
+/// Human-readable entity name (data component).
+///
+/// Optional: entities without a `Name` are displayed in the inspector by their
+/// raw id. Populated by the scene loader from the cooked `.rscn` name field;
+/// editable from the inspector at runtime (not persisted to the scene file).
+#[derive(Debug, Clone)]
+pub struct Name(pub String);
+
+// ---------------------------------------------------------------------------
+// Skybox
+// ---------------------------------------------------------------------------
+
+/// Skybox / environment map component.
+///
+/// When an entity with this component exists in the scene, the engine loads
+/// the referenced HDR asset for image-based lighting (IBL) and renders it as
+/// the background sky.  The HDR is referenced through the asset system via
+/// `env_asset`; `hdr_path` is a transitional cache populated at load time from
+/// the cooked RSCN data (will be removed once the full .pak runtime is wired).
+///
+/// Typically there is exactly one skybox entity per scene.
+#[derive(Debug, Clone)]
+pub struct Skybox {
+    /// Asset ID of the HDR environment map in the resource system.
+    ///
+    /// The cooker resolves the authoring path to a stable `AssetId`; at
+    /// runtime the engine loads the HDR through this ID.
+    pub env_asset: SceneAssetId,
+    /// Transitional: resolved HDR file path (populated from RSCN at load
+    /// time).  Will be removed once the .pak runtime provides on-demand
+    /// asset loading by `SceneAssetId`.
+    pub hdr_path: String,
+    /// When `false` the skybox entity is disabled: no IBL from the HDR and
+    /// no sky rendering (the renderer falls back to its procedural
+    /// environment or a solid clear colour).
+    pub enabled: bool,
+}
+
+impl Default for Skybox {
+    fn default() -> Self {
+        Self {
+            env_asset: SceneAssetId::from_raw(0),
+            hdr_path: String::new(),
+            enabled: true,
         }
     }
 }

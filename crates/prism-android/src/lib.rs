@@ -29,47 +29,10 @@ fn android_main(app: AndroidApp) {
     // silently dying. Must happen before the event loop starts.
     prism_engine::crash_dialog::register_android_app(&app);
 
-    // Read the equirectangular HDR environment map from the APK assets (if
-    // bundled). Scans for any *.hdr by name so the resource keeps its own
-    // filename; missing asset → procedural fallback inside the renderer.
-    let env_bytes = {
-        let mgr = app.asset_manager();
-        let mut chosen: Option<std::ffi::CString> = None;
-        if let Some(dir) = mgr.open_dir(c"") {
-            for name in dir {
-                if name
-                    .to_string_lossy()
-                    .to_ascii_lowercase()
-                    .ends_with(".hdr")
-                {
-                    chosen = Some(name);
-                    break;
-                }
-            }
-        }
-        chosen.and_then(|name| {
-            let label = name.to_string_lossy().into_owned();
-            mgr.open(&name).and_then(|mut asset| match asset.buffer() {
-                Ok(buf) if !buf.is_empty() => {
-                    log::info!("loaded env asset {} ({} bytes)", label, buf.len());
-                    Some(buf.to_vec())
-                }
-                Ok(_) => {
-                    log::warn!("env asset {} is empty; using procedural fallback", label);
-                    None
-                }
-                Err(e) => {
-                    log::warn!(
-                        "failed to read env asset {} ({e}); using procedural fallback",
-                        label
-                    );
-                    None
-                }
-            })
-        })
-    };
+    // Environment map is now loaded from the scene system (RSCN v2 header).
+    // No need to pre-scan APK assets for .hdr files.
 
-    // P0 (commit 11): also try to load a pre-bundled glTF scene
+    // P0 (commit 11): try to load a pre-bundled glTF scene
     // (`assets/scenes/cornell-box.glb`) from the APK. The glTF loader
     // handles the `.glb` header and embedded images; missing file or
     // parse error are non-fatal so the engine can fall back to the
@@ -116,6 +79,6 @@ fn android_main(app: AndroidApp) {
         .build()
         .expect("failed to build Android event loop");
 
-    prism_engine::App::run_on_event_loop_with_env_and_scene(event_loop, env_bytes, scene_glb)
+    prism_engine::App::run_on_event_loop_with_env_and_scene(event_loop, scene_glb)
         .expect("App::run_on_event_loop_with_env_and_scene failed");
 }

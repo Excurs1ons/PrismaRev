@@ -744,6 +744,416 @@ pub fn parse_rmxi_info(data: &[u8]) -> Option<(u32, u32, u32, Vec<u8>, Vec<u8>)>
 }
 
 // ---------------------------------------------------------------------------
+// Material Cooker (RMATI intermediate -> RMAT runtime format)
+// ---------------------------------------------------------------------------
+
+/// RMATI intermediate material magic (from the importer). 5 bytes so it is
+/// distinct from the 4-byte RMAT runtime magic.
+const RMATI_MAGIC: &[u8; 5] = b"RMATI";
+/// RMAT runtime material magic (cooked, packed into .pak).
+pub const RMAT_MAGIC: &[u8; 4] = b"RMAT";
+
+/// Number of scalar floats in the material header (18 floats = 72 bytes).
+///
+/// Layout: base_color[4], metallic, roughness, emissive[3], emissive_strength,
+/// normal_scale, occlusion_strength, transmission, ior, translucency,
+/// anisotropy, clearcoat, clearcoat_roughness.
+pub const MATERIAL_SCALAR_COUNT: usize = 18;
+const MATERIAL_SCALAR_SIZE: usize = MATERIAL_SCALAR_COUNT * 4;
+
+/// Cooks material data by translating the RMATI intermediate (texture paths)
+/// into the RMAT runtime format (texture `AssetId` dependencies).
+///
+/// Runtime format (all little-endian):
+/// ```text
+/// [magic:4]       b"RMAT"
+/// [version:1]     1
+/// [scalars]       18 f32 LE (72 bytes) - same layout as RMATI
+/// per slot (5x):
+///   [present:1]   0 or 1
+///   [if present]  [asset_id:u64 LE]  - texture AssetId
+/// ```
+pub struct MaterialCooker;
+
+impl MaterialCooker {
+    /// Parse the RMATI header + scalars + 5 texture path records.
+    ///
+    /// Returns `(scalars: [f32; 18], tex_paths: [Option<String>; 5])` or `None`
+    /// on malformed input.
+    fn parse_intermediate(data: &[u8]) -> Option<([f32; MATERIAL_SCALAR_COUNT], [Option<String>; 5])> {
+        // Header: magic(5) + version(1) + scalars(72) = 78 bytes minimum.
+        const MAGIC_LEN: usize = 5;
+        if data.len() < MAGIC_LEN + 1 + MATERIAL_SCALAR_SIZE || &data[..MAGIC_LEN] != RMATI_MAGIC {
+            return None;
+        }
+        let _version = data[MAGIC_LEN];
+        let mut scalars = [0f32; MATERIAL_SCALAR_COUNT];
+        for i in 0..MATERIAL_SCALAR_COUNT {
+            let off = MAGIC_LEN + 1 + i * 4;
+            scalars[i] = f32::from_le_bytes(data[off..off + 4].try_into().ok()?);
+        }
+
+        let mut tex_paths: [Option<String>; 5] = [None, None, None, None, None];
+        let mut pos = MAGIC_LEN + 1 + MATERIAL_SCALAR_SIZE;
+        for slot in tex_paths.iter_mut() {
+            if pos >= data.len() {
+                return None;
+            }
+            let present = data[pos];
+            pos += 1;
+            if present == 1 {
+                if pos + 2 > data.len() {
+                    return None;
+                }
+                let len = u16::from_le_bytes([data[pos], data[pos + 1]]) as usize;
+                pos += 2;
+                if pos + len > data.len() {
+                    return None;
+                }
+                let s = std::str::from_utf8(&data[pos..pos + len]).ok()?.to_owned();
+                pos += len;
+                *slot = Some(s);
+            }
+        }
+
+        Some((scalars, tex_paths))
+    }
+
+    fn write_rmat(scalars: &[f32; MATERIAL_SCALAR_COUNT], tex_ids: &[Option<AssetId>; 5]) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(5 + MATERIAL_SCALAR_SIZE + 5 * 9);
+        buf.extend_from_slice(RMAT_MAGIC);
+        buf.push(1); // version
+        for s in scalars {
+            buf.extend_from_slice(&s.to_le_bytes());
+        }
+        for id in tex_ids {
+            match id {
+                Some(id) => {
+                    buf.push(1);
+                    buf.extend_from_slice(&id.into_raw().to_le_bytes());
+                }
+                None => buf.push(0),
+            }
+        }
+        buf
+    }
+}
+
+impl Cooker for MaterialCooker {
+    fn name(&self) -> &'static str {
+        "material-cooker"
+    }
+
+    fn can_cook(&self, asset_type: AssetType) -> bool {
+        matches!(asset_type, AssetType::Material)
+    }
+
+    fn cook(&self, ctx: &CookContext) -> Result<CookResult, CookError> {
+        let (scalars, tex_paths) = Self::parse_intermediate(ctx.imported_data).ok_or_else(|| {
+            CookError::CookFailed("Invalid material intermediate: missing RMATI header".into())
+        })?;
+
+        // The importer already resolved texture paths to AssetId dependencies
+        // stored on the record. We walk the path records in slot order and
+        // look each up in the dependency list by matching path -> id via db.
+        // However, dependencies is just Vec<AssetId> without path info, so we
+        // re-resolve paths against the database here (the db is not on
+        // CookContext). Instead, we rely on record.dependencies preserving the
+        // slot order from the importer. Map them positionally.
+        let deps = &ctx.record.dependencies;
+        let mut tex_ids: [Option<AssetId>; 5] = [None, None, None, None, None];
+        let mut dep_idx = 0;
+        for (i, path_opt) in tex_paths.iter().enumerate() {
+            if path_opt.is_some() {
+                if dep_idx < deps.len() {
+                    tex_ids[i] = Some(deps[dep_idx]);
+                    dep_idx += 1;
+                } else {
+                    tracing::warn!(
+                        "material cooker: slot {} expected a dependency but record has only {} (path='{}'); leaving empty",
+                        i,
+                        deps.len(),
+                        path_opt.as_deref().unwrap_or("")
+                    );
+                }
+            }
+        }
+
+        let cooked_data = Self::write_rmat(&scalars, &tex_ids);
+
+        Ok(CookResult {
+            cooked_data,
+            compress: true,
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// RMAT decoder - cooked runtime material -> structured data
+// ---------------------------------------------------------------------------
+
+/// Parsed RMAT cooked material data.
+#[derive(Debug, Clone)]
+pub struct RmatInfo {
+    /// 18 scalar floats in slot order (see [`MATERIAL_SCALAR_COUNT`] docs).
+    pub scalars: [f32; MATERIAL_SCALAR_COUNT],
+    /// 5 texture slots, each `Some(AssetId)` or `None`.
+    pub texture_ids: [Option<AssetId>; 5],
+}
+
+/// Decode a cooked RMAT blob back into structured material data.
+///
+/// This is the inverse of [`MaterialCooker::write_rmat`]. Returns `None` if the
+/// data is malformed.
+pub fn decode_rmat(data: &[u8]) -> Option<RmatInfo> {
+    let header = 5 + MATERIAL_SCALAR_SIZE;
+    if data.len() < header || &data[..4] != RMAT_MAGIC {
+        return None;
+    }
+    if data[4] != 1 {
+        return None; // unknown version
+    }
+    let mut scalars = [0f32; MATERIAL_SCALAR_COUNT];
+    for i in 0..MATERIAL_SCALAR_COUNT {
+        let off = 5 + i * 4;
+        scalars[i] = f32::from_le_bytes(data[off..off + 4].try_into().ok()?);
+    }
+
+    let mut texture_ids: [Option<AssetId>; 5] = [None, None, None, None, None];
+    let mut pos = header;
+    for slot in texture_ids.iter_mut() {
+        if pos >= data.len() {
+            return None;
+        }
+        let present = data[pos];
+        pos += 1;
+        if present == 1 {
+            if pos + 8 > data.len() {
+                return None;
+            }
+            let raw = u64::from_le_bytes(data[pos..pos + 8].try_into().ok()?);
+            pos += 8;
+            *slot = Some(AssetId::from_raw(raw));
+        }
+    }
+
+    Some(RmatInfo {
+        scalars,
+        texture_ids,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Shader Cooker (RSLI intermediate -> SPIR-V via slangc)
+// ---------------------------------------------------------------------------
+
+/// RSLI intermediate shader magic (from the importer).
+const RSLI_MAGIC: &[u8; 4] = b"RSLI";
+/// SPIR-V magic number (little-endian first word). Used to sanity-check the
+/// compiler output.
+const SPIRV_MAGIC_LE: u32 = 0x0723_0203;
+
+/// Parsed RSLI intermediate header + source.
+#[derive(Debug, Clone)]
+struct RsliInfo {
+    entry: String,
+    stage: String,
+    profile: String,
+    source: Vec<u8>,
+}
+
+/// Cooks `.slang` shader sources into SPIR-V by invoking `slangc` at cook
+/// time.
+///
+/// The cooker receives the RSLI intermediate (entry / stage / profile +
+/// source bytes) produced by [`ShaderImporter`]. It writes the source to a
+/// temporary file (so `#include` resolution works), invokes `slangc`, and
+/// returns the raw SPIR-V bytes as the cooked data.
+///
+/// `slangc` is located via the `SLANGC` env var, falling back to `slangc` on
+/// `PATH`. Compilation flags mirror `shaders/compile.sh`:
+///   `-profile <profile> -target spirv -entry <entry> -stage <stage>
+///    -fvk-use-entrypoint-name -o <out.spv>`
+///
+/// The cooked data is the raw SPIR-V bytecode (no wrapper) - the runtime
+/// loads it directly via `vkCreateShaderModule`.
+pub struct ShaderCooker;
+
+impl ShaderCooker {
+    fn parse_intermediate(data: &[u8]) -> Option<RsliInfo> {
+        // Header: magic(4) + version(1) = 5 bytes minimum.
+        if data.len() < 5 || &data[..4] != RSLI_MAGIC {
+            return None;
+        }
+        let _version = data[4];
+        let mut pos = 5;
+
+        let read_str = |buf: &[u8], pos: &mut usize| -> Option<String> {
+            if *pos + 2 > buf.len() {
+                return None;
+            }
+            let len = u16::from_le_bytes([buf[*pos], buf[*pos + 1]]) as usize;
+            *pos += 2;
+            if *pos + len > buf.len() {
+                return None;
+            }
+            let s = std::str::from_utf8(&buf[*pos..*pos + len]).ok()?.to_owned();
+            *pos += len;
+            Some(s)
+        };
+
+        let entry = read_str(data, &mut pos)?;
+        let stage = read_str(data, &mut pos)?;
+        let profile = read_str(data, &mut pos)?;
+
+        if pos + 4 > data.len() {
+            return None;
+        }
+        let source_len = u32::from_le_bytes([
+            data[pos],
+            data[pos + 1],
+            data[pos + 2],
+            data[pos + 3],
+        ]) as usize;
+        pos += 4;
+        if pos + source_len > data.len() {
+            return None;
+        }
+        let source = data[pos..pos + source_len].to_vec();
+
+        Some(RsliInfo {
+            entry,
+            stage,
+            profile,
+            source,
+        })
+    }
+
+    /// Resolve the slangc binary path: `SLANGC` env var, else `slangc` on PATH.
+    fn slangc_path() -> String {
+        std::env::var("SLANGC").unwrap_or_else(|_| "slangc".to_owned())
+    }
+
+    /// Invoke slangc on `source` written to a temp file, returning the SPIR-V
+    /// bytes on success.
+    fn compile(rsli: &RsliInfo) -> Result<Vec<u8>, CookError> {
+        // Write source to a temp file so #include / module resolution works.
+        let tmp_dir = std::env::temp_dir();
+        let source_path = tmp_dir.join(format!(
+            "prismarev_shader_cook_{}.slang",
+            std::process::id()
+        ));
+        let out_path = tmp_dir.join(format!(
+            "prismarev_shader_cook_{}.spv",
+            std::process::id()
+        ));
+
+        // RAII guard: removes temp files on drop, success or error.
+        struct TempGuard {
+            paths: Vec<std::path::PathBuf>,
+        }
+        impl Drop for TempGuard {
+            fn drop(&mut self) {
+                for p in &self.paths {
+                    let _ = std::fs::remove_file(p);
+                }
+            }
+        }
+        let _guard = TempGuard {
+            paths: vec![source_path.clone(), out_path.clone()],
+        };
+
+        std::fs::write(&source_path, &rsli.source)
+            .map_err(|e| CookError::CookFailed(format!("write temp shader source: {e}")))?;
+
+        let slangc = Self::slangc_path();
+        let output = std::process::Command::new(&slangc)
+            .arg(&source_path)
+            .arg("-profile")
+            .arg(&rsli.profile)
+            .arg("-target")
+            .arg("spirv")
+            .arg("-entry")
+            .arg(&rsli.entry)
+            .arg("-stage")
+            .arg(&rsli.stage)
+            .arg("-fvk-use-entrypoint-name")
+            .arg("-o")
+            .arg(&out_path)
+            .output()
+            .map_err(|e| {
+                CookError::CookFailed(format!(
+                    "failed to invoke slangc ({slangc}): {e}. \
+                     Set SLANGC env var or ensure slangc is on PATH."
+                ))
+            })?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(CookError::CookFailed(format!(
+                "slangc failed (entry='{}', stage='{}', profile='{}'): {stderr}",
+                rsli.entry, rsli.stage, rsli.profile
+            )));
+        }
+
+        let spv = std::fs::read(&out_path).map_err(|e| {
+            CookError::CookFailed(format!(
+                "slangc succeeded but output .spv missing at {}: {e}",
+                out_path.display()
+            ))
+        })?;
+
+        // Sanity check: SPIR-V starts with the magic 0x07230203 (LE).
+        if spv.len() < 4 {
+            return Err(CookError::CookFailed(
+                "slangc produced empty/short SPIR-V".into(),
+            ));
+        }
+        let magic = u32::from_le_bytes([spv[0], spv[1], spv[2], spv[3]]);
+        if magic != SPIRV_MAGIC_LE {
+            return Err(CookError::CookFailed(format!(
+                "slangc output is not valid SPIR-V (magic={:#010x}, expected {:#010x})",
+                magic, SPIRV_MAGIC_LE
+            )));
+        }
+
+        Ok(spv)
+    }
+}
+
+impl Cooker for ShaderCooker {
+    fn name(&self) -> &'static str {
+        "shader-cooker"
+    }
+
+    fn can_cook(&self, asset_type: AssetType) -> bool {
+        matches!(asset_type, AssetType::Shader)
+    }
+
+    fn cook(&self, ctx: &CookContext) -> Result<CookResult, CookError> {
+        let rsli = Self::parse_intermediate(ctx.imported_data).ok_or_else(|| {
+            CookError::CookFailed("Invalid shader intermediate: missing RSLI header".into())
+        })?;
+
+        let spv = Self::compile(&rsli)?;
+        tracing::info!(
+            "shader-cooker: compiled {} (entry='{}', stage='{}', profile='{}') -> {} bytes SPIR-V",
+            ctx.record.path,
+            rsli.entry,
+            rsli.stage,
+            rsli.profile,
+            spv.len()
+        );
+
+        Ok(CookResult {
+            cooked_data: spv,
+            // SPIR-V doesn't compress well; skip zstd overhead.
+            compress: false,
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Default Registry
 // ---------------------------------------------------------------------------
 
@@ -753,6 +1163,8 @@ pub fn default_cooker_registry() -> CookerRegistry {
     reg.register(Box::new(BinaryCooker));
     reg.register(Box::new(TextureCooker));
     reg.register(Box::new(MeshCooker));
+    reg.register(Box::new(MaterialCooker));
+    reg.register(Box::new(ShaderCooker));
     reg.register(Box::new(scene::SceneCooker));
     reg
 }
@@ -1587,5 +1999,200 @@ mod tests {
         // Must be RGBA8 format.
         assert_eq!(&result.cooked_data[..4], b"RTEX");
         assert_eq!(result.cooked_data[17], RTEX_FORMAT_RGBA8);
+    }
+
+    // -------------------------------------------------------------------
+    // Material cooker round-trip
+    // -------------------------------------------------------------------
+
+    /// Build an RMATI intermediate blob by hand (mirrors the importer output).
+    fn make_rmati(
+        scalars: &[f32; MATERIAL_SCALAR_COUNT],
+        tex_paths: &[Option<String>; 5],
+    ) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(b"RMATI");
+        buf.push(1); // version
+        for s in scalars {
+            buf.extend_from_slice(&s.to_le_bytes());
+        }
+        for slot in tex_paths {
+            match slot {
+                Some(p) => {
+                    buf.push(1);
+                    let b = p.as_bytes();
+                    let len = b.len().min(u16::MAX as usize) as u16;
+                    buf.extend_from_slice(&len.to_le_bytes());
+                    buf.extend_from_slice(&b[..len as usize]);
+                }
+                None => buf.push(0),
+            }
+        }
+        buf
+    }
+
+    #[test]
+    fn material_cooker_roundtrip_no_textures() {
+        let scalars = [
+            0.8, 0.8, 0.8, 1.0, // base_color
+            0.2, 0.5, // metallic, roughness
+            0.0, 0.0, 0.0, // emissive
+            1.0, 1.0, 1.0, // emissive_strength, normal_scale, occlusion_strength
+            0.0, 1.5, 0.0, 0.0, // transmission, ior, translucency, anisotropy
+            0.0, 0.0, // clearcoat, clearcoat_roughness
+        ];
+        let tex_paths: [Option<String>; 5] = [None, None, None, None, None];
+        let intermediate = make_rmati(&scalars, &tex_paths);
+
+        let cooker = MaterialCooker;
+        assert!(cooker.can_cook(AssetType::Material));
+        assert!(!cooker.can_cook(AssetType::Mesh));
+
+        let id = AssetId::from_raw((1u64 << 32) | 7);
+        let record = make_record(id, vec![], "test.mat.json");
+        let settings = profile::CookSettings::default();
+        let ctx = CookContext {
+            record: &record,
+            imported_data: &intermediate,
+            settings: &settings,
+        };
+        let result = cooker.cook(&ctx).unwrap();
+        assert!(result.compress);
+
+        // Decode and verify.
+        let info = decode_rmat(&result.cooked_data).expect("decode_rmat");
+        assert_eq!(info.scalars, scalars);
+        for slot in &info.texture_ids {
+            assert!(slot.is_none());
+        }
+    }
+
+    #[test]
+    fn material_cooker_roundtrip_with_textures() {
+        let scalars = [
+            1.0, 0.0, 0.0, 1.0, // base_color (red)
+            0.0, 1.0, // metallic, roughness
+            0.1, 0.0, 0.0, // emissive
+            2.0, 1.5, 0.8, // emissive_strength, normal_scale, occlusion_strength
+            0.0, 1.45, 0.0, 0.0, // transmission, ior, translucency, anisotropy
+            1.0, 0.1, // clearcoat, clearcoat_roughness
+        ];
+        // Only albedo + occlusion textures present.
+        let tex_paths: [Option<String>; 5] = [
+            Some("textures/albedo.png".into()),
+            None,
+            None,
+            None,
+            Some("textures/occlusion.png".into()),
+        ];
+        let intermediate = make_rmati(&scalars, &tex_paths);
+
+        // The importer would have resolved these two paths to two AssetId deps
+        // stored on the record, in slot order (albedo first, occlusion second).
+        let tex_id_albedo = AssetId::from_raw((1u64 << 32) | 100);
+        let tex_id_occlusion = AssetId::from_raw((1u64 << 32) | 101);
+        let id = AssetId::from_raw((1u64 << 32) | 7);
+        let record = make_record(id, vec![tex_id_albedo, tex_id_occlusion], "test.mat.json");
+        let settings = profile::CookSettings::default();
+        let ctx = CookContext {
+            record: &record,
+            imported_data: &intermediate,
+            settings: &settings,
+        };
+        let result = MaterialCooker.cook(&ctx).unwrap();
+
+        let info = decode_rmat(&result.cooked_data).expect("decode_rmat");
+        assert_eq!(info.scalars, scalars);
+        assert_eq!(info.texture_ids[0], Some(tex_id_albedo));
+        assert!(info.texture_ids[1].is_none());
+        assert!(info.texture_ids[2].is_none());
+        assert!(info.texture_ids[3].is_none());
+        assert_eq!(info.texture_ids[4], Some(tex_id_occlusion));
+    }
+
+    #[test]
+    fn material_cooker_rejects_bad_magic() {
+        let settings = profile::CookSettings::default();
+        let id = AssetId::from_raw((1u64 << 32) | 7);
+        let record = make_record(id, vec![], "test.mat.json");
+        let ctx = CookContext {
+            record: &record,
+            imported_data: b"XXXXgarbage",
+            settings: &settings,
+        };
+        assert!(MaterialCooker.cook(&ctx).is_err());
+    }
+
+    #[test]
+    fn decode_rmat_rejects_bad_magic() {
+        assert!(decode_rmat(b"XXXX").is_none());
+    }
+
+    // -------------------------------------------------------------------
+    // Shader cooker (intermediate parsing only; compile needs slangc)
+    // -------------------------------------------------------------------
+
+    /// Build an RSLI intermediate blob by hand (mirrors the importer output).
+    fn make_rsli(entry: &str, stage: &str, profile: &str, source: &[u8]) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(b"RSLI");
+        buf.push(1); // version
+        let e = entry.as_bytes();
+        buf.extend_from_slice(&(e.len() as u16).to_le_bytes());
+        buf.extend_from_slice(e);
+        let s = stage.as_bytes();
+        buf.extend_from_slice(&(s.len() as u16).to_le_bytes());
+        buf.extend_from_slice(s);
+        let p = profile.as_bytes();
+        buf.extend_from_slice(&(p.len() as u16).to_le_bytes());
+        buf.extend_from_slice(p);
+        buf.extend_from_slice(&(source.len() as u32).to_le_bytes());
+        buf.extend_from_slice(source);
+        buf
+    }
+
+    #[test]
+    fn shader_cooker_parses_intermediate() {
+        let intermediate = make_rsli("vertexMain", "vertex", "spirv_1_5", b"// dummy");
+        let info = ShaderCooker::parse_intermediate(&intermediate).expect("parse RSLI");
+        assert_eq!(info.entry, "vertexMain");
+        assert_eq!(info.stage, "vertex");
+        assert_eq!(info.profile, "spirv_1_5");
+        assert_eq!(info.source, b"// dummy");
+    }
+
+    #[test]
+    fn shader_cooker_rejects_bad_magic() {
+        let settings = profile::CookSettings::default();
+        let id = AssetId::from_raw((1u64 << 32) | 9);
+        let record = make_record(id, vec![], "test.slang");
+        let ctx = CookContext {
+            record: &record,
+            imported_data: b"XXXXgarbage",
+            settings: &settings,
+        };
+        assert!(ShaderCooker.cook(&ctx).is_err());
+    }
+
+    #[test]
+    fn shader_cooker_rejects_bad_intermediate() {
+        // Truncated RSLI: magic + version + partial header.
+        let settings = profile::CookSettings::default();
+        let id = AssetId::from_raw((1u64 << 32) | 9);
+        let record = make_record(id, vec![], "test.slang");
+        let ctx = CookContext {
+            record: &record,
+            imported_data: b"RSLI\x01\x01\x00",
+            settings: &settings,
+        };
+        assert!(ShaderCooker.cook(&ctx).is_err());
+    }
+
+    #[test]
+    fn shader_cooker_can_cook_shader_only() {
+        let cooker = ShaderCooker;
+        assert!(cooker.can_cook(AssetType::Shader));
+        assert!(!cooker.can_cook(AssetType::Mesh));
+        assert!(!cooker.can_cook(AssetType::Material));
     }
 }

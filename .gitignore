@@ -36,8 +36,12 @@ assets/ibr/
 
 # Scene model assets (large; referenced via assets/scenes.toml virtual mapping,
 # not committed). The manifest file assets/scenes.toml itself stays tracked.
+# Engine-builtin cooked scenes + their sources (.rscn / .scene.json) are small
+# and committed so the default scene loads without external assets.
 assets/scenes/*
 !assets/scenes/*.toml
+!assets/scenes/*.rscn
+!assets/scenes/*.scene.json
 
 # Deepwork session state
 .slim/deepwork/
