@@ -4,7 +4,7 @@
 //! Each [`MaterialData`] the engine hands in gets a stable slot index in
 //! the material SSBO. The slot is what the shader uses to look up the
 //! material parameters; the material handle itself is just CPU-side
-//! identity used by the engine to translate `prism_asset::MaterialHandle`
+//! identity used by the engine to translate asset material handles
 //! into a render-side handle.
 //!
 //! ## Layout

@@ -20,7 +20,6 @@ resolver = "2"
 members = [
     "crates/prism-ecs",
     "crates/prism-render",
-    "crates/prism-asset",
     "crates/prism-engine",
     "crates/prism-editor",
     "crates/prism-android",

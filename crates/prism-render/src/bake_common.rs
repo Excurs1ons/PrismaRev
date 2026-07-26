@@ -23,11 +23,11 @@ pub const SCENE_MANIFEST: &str = "assets/scenes.toml";
 // Scene loading + flattening
 // -------------------------------------------------------------------
 
-/// Pick the glTF to bake/render: explicit CLI path, else the first existing
-/// scene in `assets/scenes.toml`. Returns `(path, scene_name)`.
+/// Pick the scene to bake/render: explicit CLI path (glTF or RSCN), else the
+/// first existing scene in `assets/scenes.toml`. Returns `(path, scene_name)`.
 pub fn resolve_scene_path(cli: Option<&Path>) -> Result<(std::path::PathBuf, String)> {
     if let Some(p) = cli {
-        anyhow::ensure!(p.exists(), "glTF path does not exist: {}", p.display());
+        anyhow::ensure!(p.exists(), "scene path does not exist: {}", p.display());
         let name = p
             .file_stem()
             .and_then(|s| s.to_str())
@@ -61,7 +61,7 @@ pub fn resolve_scene_path(cli: Option<&Path>) -> Result<(std::path::PathBuf, Str
             return Ok((p, name));
         }
     }
-    anyhow::bail!("no existing scene found in {SCENE_MANIFEST}; pass a glTF path explicitly")
+    anyhow::bail!("no existing scene found in {SCENE_MANIFEST}; pass a scene path explicitly")
 }
 
 fn split_toml_string(rest: &str) -> Option<String> {
@@ -72,63 +72,268 @@ fn split_toml_string(rest: &str) -> Option<String> {
     Some(s.trim().to_string())
 }
 
-/// Load a glTF scene and flatten every instance into ONE world-space mesh.
-/// Vertex color carries the material base color (albedo source).
-pub fn load_scene_geometry(path: &Path) -> Result<SceneGeometry> {
-    let mut store = prism_asset::SceneStore::new();
-    let _scene = store.load_gltf(path)?;
-    flatten_from_store(&store)
-}
+// -------------------------------------------------------------------
+// glTF scene loading (feature-gated for baking binaries)
+// -------------------------------------------------------------------
 
-/// Flatten an already-loaded [`prism_asset::SceneStore`] into world-space
-/// vertex data. Same logic as [`load_scene_geometry`] but works on a
-/// pre-populated store (used by the real-time PT pass).
-pub fn flatten_from_store(store: &prism_asset::SceneStore) -> Result<SceneGeometry> {
-    let mut vertices: Vec<Vertex> = Vec::new();
-    let mut indices: Vec<u32> = Vec::new();
-    let mut aabb_min = [f32::MAX; 3];
-    let mut aabb_max = [f32::MIN; 3];
+#[cfg(feature = "gltf")]
+mod gltf_loading {
+    use std::path::Path;
 
-    for (_h, inst) in store.instances() {
-        let Some(mesh) = store.mesh(inst.mesh) else { continue };
-        let albedo = store
-            .material(inst.material)
-            .map(|m| [m.base_color[0], m.base_color[1], m.base_color[2]])
-            .unwrap_or([0.8, 0.8, 0.8]);
-        let xf = inst.transform;
-        let base = vertices.len() as u32;
+    use anyhow::{Context, Result};
 
-        for i in 0..mesh.positions.len() {
-            let world = transform_point(xf, mesh.positions[i]);
-            for a in 0..3 {
-                aabb_min[a] = aabb_min[a].min(world[a]);
-                aabb_max[a] = aabb_max[a].max(world[a]);
+    use super::{PtGeometryInstance, SceneGeometry, Vertex, normalize3, transform_point};
+
+    /// Load a glTF scene and flatten every instance into ONE world-space mesh.
+    /// Vertex color carries the material base color (albedo source).
+    pub fn load_gltf_flat_geometry(path: &Path) -> Result<SceneGeometry> {
+        let (doc, buffers, _) = gltf::import(path).context("glTF import")?;
+        let mut vertices: Vec<Vertex> = Vec::new();
+        let mut indices: Vec<u32> = Vec::new();
+        let mut aabb_min = [f32::MAX; 3];
+        let mut aabb_max = [f32::MIN; 3];
+
+        for scene in doc.scenes() {
+            for node in scene.nodes() {
+                flatten_node_flat(
+                    &node,
+                    &buffers,
+                    &mut vertices,
+                    &mut indices,
+                    &mut aabb_min,
+                    &mut aabb_max,
+                    gltf::math::Matrix4::identity(),
+                );
             }
-            let normal = mesh.normals.get(i).copied().unwrap_or([0.0, 1.0, 0.0]);
-            let wn = normalize3(transform_dir(xf, normal));
-            vertices.push(Vertex {
-                position: world,
-                normal: wn,
-                color: albedo,
-                uv: mesh.uvs.get(i).copied().unwrap_or([0.0, 0.0]),
-                tangent: mesh.tangents.get(i).copied().unwrap_or([1.0, 0.0, 0.0, 1.0]),
-            });
         }
 
-        if mesh.is_indexed() {
-            for idx in &mesh.indices {
-                indices.push(base + idx);
+        anyhow::ensure!(!vertices.is_empty(), "scene produced no geometry");
+        Ok((vertices, indices, aabb_min, aabb_max))
+    }
+
+    fn flatten_node_flat(
+        node: &gltf::Node,
+        buffers: &[gltf::buffer::Data],
+        vertices: &mut Vec<Vertex>,
+        indices: &mut Vec<u32>,
+        aabb_min: &mut [f32; 3],
+        aabb_max: &mut [f32; 3],
+        parent_xf: gltf::math::Matrix4,
+    ) {
+        let local: [[f32; 4]; 4] = node.transform().matrix().into();
+        let xf = mult4x4(parent_xf, local);
+
+        if let Some(mesh) = node.mesh() {
+            let base = vertices.len() as u32;
+            for primitive in mesh.primitives() {
+                let reader = primitive.reader(|b| Some(&buffers[b.index()]));
+
+                let positions: Vec<[f32; 3]> = reader
+                    .read_positions()
+                    .map(|iter| iter.collect())
+                    .unwrap_or_default();
+                let normals: Vec<[f32; 3]> = reader
+                    .read_normals()
+                    .map(|iter| iter.collect())
+                    .unwrap_or_else(|| vec![[0.0, 1.0, 0.0]; positions.len()]);
+                let uvs: Vec<[f32; 2]> = reader
+                    .read_tex_coords(0)
+                    .map(|t| t.into_f32().collect())
+                    .unwrap_or_else(|| vec![[0.0, 0.0]; positions.len()]);
+                let prim_indices: Vec<u32> = reader
+                    .read_indices()
+                    .map(|iter| iter.into_u32().collect())
+                    .unwrap_or_default();
+
+                // Material colour for this primitive.
+                let albedo = primitive
+                    .material()
+                    .pbr_metallic_roughness()
+                    .base_color_factor()
+                    .into();
+
+                for (i, pos) in positions.iter().enumerate() {
+                    let world = transform_point(xf, *pos);
+                    for a in 0..3 {
+                        aabb_min[a] = aabb_min[a].min(world[a]);
+                        aabb_max[a] = aabb_max[a].max(world[a]);
+                    }
+                    let n = normals.get(i).copied().unwrap_or([0.0, 1.0, 0.0]);
+                    let wn = normalize3(transform_dir(xf, n));
+                    vertices.push(Vertex {
+                        position: world,
+                        normal: wn,
+                        color: albedo,
+                        uv: uvs.get(i).copied().unwrap_or([0.0, 0.0]),
+                        tangent: [1.0, 0.0, 0.0, 1.0],
+                    });
+                }
+                for idx in &prim_indices {
+                    indices.push(base + idx);
+                }
             }
-        } else {
-            for i in 0..mesh.positions.len() as u32 {
-                indices.push(base + i);
-            }
+        }
+
+        for child in node.children() {
+            flatten_node_flat(&child, buffers, vertices, indices, aabb_min, aabb_max, xf);
         }
     }
 
-    anyhow::ensure!(!vertices.is_empty(), "scene produced no geometry");
-    Ok((vertices, indices, aabb_min, aabb_max))
+    /// Load a glTF scene and flatten into **per-instance** geometry for
+    /// baking / offline path tracing.
+    pub fn load_gltf_instances(path: &Path) -> Result<(Vec<PtGeometryInstance>, Vec<MaterialScratch>)> {
+        let (doc, buffers, _) = gltf::import(path).context("glTF import")?;
+        let mut instances: Vec<PtGeometryInstance> = Vec::new();
+        let mut materials: Vec<MaterialScratch> = Vec::new();
+        let mut mat_map: std::collections::HashMap<usize, u32> = std::collections::HashMap::new();
+
+        for scene in doc.scenes() {
+            for node in scene.nodes() {
+                flatten_node_inst(
+                    &node,
+                    &buffers,
+                    &mut instances,
+                    &mut materials,
+                    &mut mat_map,
+                    gltf::math::Matrix4::identity(),
+                );
+            }
+        }
+
+        Ok((instances, materials))
+    }
+
+    fn flatten_node_inst(
+        node: &gltf::Node,
+        buffers: &[gltf::buffer::Data],
+        instances: &mut Vec<PtGeometryInstance>,
+        materials: &mut Vec<MaterialScratch>,
+        mat_map: &mut std::collections::HashMap<usize, u32>,
+        parent_xf: gltf::math::Matrix4,
+    ) {
+        let local: [[f32; 4]; 4] = node.transform().matrix().into();
+        let xf = mult4x4(parent_xf, local);
+
+        if let Some(mesh) = node.mesh() {
+            for primitive in mesh.primitives() {
+                let reader = primitive.reader(|b| Some(&buffers[b.index()]));
+
+                let positions: Vec<[f32; 3]> = reader
+                    .read_positions()
+                    .map(|iter| iter.collect())
+                    .unwrap_or_default();
+                let normals: Vec<[f32; 3]> = reader
+                    .read_normals()
+                    .map(|iter| iter.collect())
+                    .unwrap_or_else(|| vec![[0.0, 1.0, 0.0]; positions.len()]);
+                let uvs: Vec<[f32; 2]> = reader
+                    .read_tex_coords(0)
+                    .map(|t| t.into_f32().collect())
+                    .unwrap_or_else(|| vec![[0.0, 0.0]; positions.len()]);
+                let prim_indices: Vec<u32> = reader
+                    .read_indices()
+                    .map(|iter| iter.into_u32().collect())
+                    .unwrap_or_default();
+
+                // Resolve material slot.
+                let gltf_mat = primitive.material();
+                let mat_idx = gltf_mat.index().unwrap_or(0);
+                let slot = *mat_map.entry(mat_idx).or_insert_with(|| {
+                    let pbr = gltf_mat.pbr_metallic_roughness();
+                    let slot = materials.len() as u32;
+                    materials.push(MaterialScratch {
+                        base_color: pbr.base_color_factor().into(),
+                        metallic: pbr.metallic_factor(),
+                        roughness: pbr.roughness_factor(),
+                        emissive: gltf_mat.emissive_factor().into(),
+                    });
+                    slot
+                });
+
+                let mut verts: Vec<Vertex> = Vec::with_capacity(positions.len());
+                for (i, pos) in positions.iter().enumerate() {
+                    let world = transform_point(xf, *pos);
+                    let n = normals.get(i).copied().unwrap_or([0.0, 1.0, 0.0]);
+                    let wn = normalize3(transform_dir(xf, n));
+                    verts.push(Vertex {
+                        position: world,
+                        normal: wn,
+                        color: [0.0; 3], // unused by PT; material SSBO carries it
+                        uv: uvs.get(i).copied().unwrap_or([0.0, 0.0]),
+                        tangent: [1.0, 0.0, 0.0, 1.0],
+                    });
+                }
+
+                let idx: Vec<u32> = if prim_indices.is_empty() {
+                    (0..positions.len() as u32).collect()
+                } else {
+                    prim_indices
+                };
+
+                if !verts.is_empty() && !idx.is_empty() {
+                    instances.push(PtGeometryInstance {
+                        vertices: verts,
+                        indices: idx,
+                        material_slot: slot,
+                    });
+                }
+            }
+        }
+
+        for child in node.children() {
+            flatten_node_inst(&child, buffers, instances, materials, mat_map, xf);
+        }
+    }
+
+    /// Scratch material data extracted from glTF, sufficient to build a
+    /// scalar GpuMaterial SSBO entry.
+    pub struct MaterialScratch {
+        pub base_color: [f32; 4],
+        pub metallic: f32,
+        pub roughness: f32,
+        pub emissive: [f32; 3],
+    }
+
+    fn mult4x4(a: gltf::math::Matrix4, b: gltf::math::Matrix4) -> gltf::math::Matrix4 {
+        // gltf::math::Matrix4 is a 4×4 column-major array.
+        let mut out = gltf::math::Matrix4::identity();
+        for col in 0..4 {
+            for row in 0..4 {
+                let mut sum = 0.0;
+                for k in 0..4 {
+                    sum += a[k][col] * b[row][k];
+                }
+                out[row][col] = sum;
+            }
+        }
+        out
+    }
+
+    fn transform_dir(xf: gltf::math::Matrix4, d: [f32; 3]) -> [f32; 3] {
+        // Use the parent_xf as [[f32;4];4] but with no translation.
+        // We have xf as Matrix4 ([[f32;4];4]).
+        let m: [[f32; 4]; 4] = xf.into();
+        [
+            m[0][0] * d[0] + m[1][0] * d[1] + m[2][0] * d[2],
+            m[0][1] * d[0] + m[1][1] * d[1] + m[2][1] * d[2],
+            m[0][2] * d[0] + m[1][2] * d[1] + m[2][2] * d[2],
+        ]
+    }
 }
+
+#[cfg(feature = "gltf")]
+pub use gltf_loading::*;
+
+// -------------------------------------------------------------------
+// ECS-based instance flattening (runtime PT pass)
+// -------------------------------------------------------------------
+
+// (placeholder for ECS-based world walk; the function lives in the engine
+// crate where MeshRef/MaterialRef components are defined.)
+
+// -------------------------------------------------------------------
+// Per-instance PT geometry types
+// -------------------------------------------------------------------
 
 /// One ray-traceable scene instance: its own world-space vertex/index data
 /// and the material SSBO slot the path tracer looks up via the TLAS
@@ -146,166 +351,6 @@ pub struct PtGeometryInstance {
     pub indices: Vec<u32>,
     /// Index into the `GpuMaterial[]` SSBO (`RenderMaterialManager`).
     pub material_slot: u32,
-}
-
-/// Flatten a [`prism_asset::SceneStore`] into **per-instance** geometry for
-/// the real-time path tracer, resolving each instance's `material_slot` from
-/// `mat_map` (the asset `MaterialHandle` -> SSBO slot map built during scene
-/// load). Each instance keeps its own vertices/indices/transform so the PT
-/// pass can build a per-instance BLAS and carry the material slot through the
-/// TLAS custom index.
-///
-/// `mat_map` maps the asset `MaterialHandle` (from `inst.material`) to the
-/// SSBO slot returned by `GraphRenderer::material_slot`. Instances whose
-/// material isn't in the map are skipped with a warning.
-pub fn flatten_instances_from_store(
-    store: &prism_asset::SceneStore,
-    mat_map: &std::collections::HashMap<prism_asset::MaterialHandle, u32>,
-) -> Result<Vec<PtGeometryInstance>> {
-    let mut out: Vec<PtGeometryInstance> = Vec::new();
-    for (_h, inst) in store.instances() {
-        let Some(mesh) = store.mesh(inst.mesh) else {
-            log::warn!("flatten_instances_from_store: instance mesh missing; skipping");
-            continue;
-        };
-        let Some(&material_slot) = mat_map.get(&inst.material) else {
-            log::warn!(
-                "flatten_instances_from_store: material {:?} not in mat_map; skipping instance",
-                inst.material
-            );
-            continue;
-        };
-
-        // Bake world-space vertices (transform applied) so the BLAS holds
-        // world-space geometry and the TLAS transform can be identity.
-        let mut vertices: Vec<Vertex> = Vec::with_capacity(mesh.positions.len());
-        let xf = inst.transform;
-        for i in 0..mesh.positions.len() {
-            let world = transform_point(xf, mesh.positions[i]);
-            let normal = mesh.normals.get(i).copied().unwrap_or([0.0, 1.0, 0.0]);
-            let wn = normalize3(transform_dir(xf, normal));
-            vertices.push(Vertex {
-                position: world,
-                normal: wn,
-                // color is unused by the path tracer now (albedo comes from the
-                // material SSBO + bindless texture); keep base_color as a
-                // fallback for the GI baker's vertex-color path.
-                color: store
-                    .material(inst.material)
-                    .map(|m| [m.base_color[0], m.base_color[1], m.base_color[2]])
-                    .unwrap_or([0.8, 0.8, 0.8]),
-                uv: mesh.uvs.get(i).copied().unwrap_or([0.0, 0.0]),
-                tangent: mesh.tangents.get(i).copied().unwrap_or([1.0, 0.0, 0.0, 1.0]),
-            });
-        }
-
-        let indices: Vec<u32> = if mesh.is_indexed() {
-            mesh.indices.clone()
-        } else {
-            (0..mesh.positions.len() as u32).collect()
-        };
-
-        if vertices.is_empty() || indices.is_empty() {
-            continue;
-        }
-
-        out.push(PtGeometryInstance {
-            vertices,
-            indices,
-            material_slot,
-        });
-    }
-
-    anyhow::ensure!(!out.is_empty(), "scene produced no PT instances");
-    Ok(out)
-}
-
-/// Build a scalar-only `GpuMaterial[]` SSBO (no textures) from a
-/// [`prism_asset::SceneStore`], returning the packed bytes plus a
-/// `MaterialHandle -> slot` map. Each material's `base_color` carries the
-/// albedo; all texture indices are `u32::MAX` so the shader falls back to the
-/// scalar (the offline tools don't register textures in a bindless table).
-///
-/// Used by the offline GI/image bakers so they can satisfy the path tracer's
-/// material-SSBO + `flatten_instances_from_store` contract without a full
-/// `RenderMaterialManager`. The returned bytes are suitable for
-/// [`create_storage_buffer`].
-pub fn build_scalar_material_ssbo(
-    store: &prism_asset::SceneStore,
-) -> Result<(
-    Vec<u8>,
-    std::collections::HashMap<prism_asset::MaterialHandle, u32>,
-)> {
-    use crate::managers::MaterialUploadInput;
-
-    let mut bytes: Vec<u8> = Vec::new();
-    let mut mat_map: std::collections::HashMap<prism_asset::MaterialHandle, u32> =
-        std::collections::HashMap::new();
-    for (h, m) in store.materials() {
-        let slot = mat_map.len() as u32;
-        mat_map.insert(h, slot);
-        let input = MaterialUploadInput {
-            base_color: m.base_color,
-            metallic: m.metallic,
-            roughness: m.roughness,
-            emissive: m.emissive,
-            albedo_tex: None,
-            normal_tex: None,
-            metallic_roughness_tex: None,
-            emissive_tex: None,
-            occlusion_tex: None,
-            normal_scale: m.normal_scale,
-            occlusion_strength: m.occlusion_strength,
-            transmission: m.transmission,
-            ior: m.ior,
-            translucency: m.translucency,
-            anisotropy: m.anisotropy,
-            clearcoat: m.clearcoat,
-            clearcoat_roughness: m.clearcoat_roughness,
-            emissive_strength: m.emissive_strength,
-        };
-        let gpu: crate::managers::material_manager::GpuMaterial = input.to_gpu();
-        let raw = unsafe {
-            std::slice::from_raw_parts(
-                &gpu as *const _ as *const u8,
-                std::mem::size_of_val(&gpu),
-            )
-        };
-        bytes.extend_from_slice(raw);
-    }
-    // SSBO must have at least one entry so `materials[0]` is valid even if the
-    // scene has no materials (degenerate).
-    if bytes.is_empty() {
-        let gpu = MaterialUploadInput {
-            base_color: [0.8, 0.8, 0.8, 1.0],
-            metallic: 0.0,
-            roughness: 0.5,
-            emissive: [0.0; 3],
-            albedo_tex: None,
-            normal_tex: None,
-            metallic_roughness_tex: None,
-            emissive_tex: None,
-            occlusion_tex: None,
-            normal_scale: 1.0,
-            occlusion_strength: 1.0,
-            transmission: 0.0,
-            ior: 1.5,
-            translucency: 0.0,
-            anisotropy: 0.0,
-            clearcoat: 0.0,
-            clearcoat_roughness: 0.0,
-            emissive_strength: 1.0,
-        }
-        .to_gpu();
-        let raw = unsafe {
-            std::slice::from_raw_parts(
-                &gpu as *const _ as *const u8,
-                std::mem::size_of_val(&gpu),
-            )
-        };
-        bytes.extend_from_slice(raw);
-    }
-    Ok((bytes, mat_map))
 }
 
 /// Per-instance metadata mirroring `PtInstanceMeta` in `pt_pass.rs` /
@@ -371,6 +416,10 @@ impl Drop for PtScene {
     }
 }
 
+// -------------------------------------------------------------------
+// Emissive triangle extraction
+// -------------------------------------------------------------------
+
 /// Extract emissive triangles from scene instances + materials bytes.
 ///
 /// Iterates over all instances, checks each instance's material for emissive
@@ -390,10 +439,8 @@ pub fn build_emissive_triangles(
     for inst in instances {
         let mat_offset = (inst.material_slot as usize) * MAT_SIZE;
         if mat_offset + 32 > materials_bytes.len() {
-            continue; // out of bounds, skip
+            continue;
         }
-        // Read emissive radiance = metallic_roughness_emissive.z * .w
-        // at byte offset 16 + 8 (z) and 16 + 12 (w) in GpuMaterial.
         let slice = &materials_bytes[mat_offset..mat_offset + 32];
         let emissive = f32::from_ne_bytes([slice[24], slice[25], slice[26], slice[27]]);
         let strength = f32::from_ne_bytes([slice[28], slice[29], slice[30], slice[31]]);
@@ -401,8 +448,6 @@ pub fn build_emissive_triangles(
         if rad <= 0.0 {
             continue;
         }
-        // Iterate over the instance's triangles to find emissive ones
-        // (all triangles share the same material emissive).
         let tri_count = inst.indices.len() / 3;
         for ti in 0..tri_count {
             if out.len() >= PT_EMISSIVE_MAX as usize {
@@ -414,7 +459,6 @@ pub fn build_emissive_triangles(
             let v0 = inst.vertices[i0].position;
             let v1 = inst.vertices[i1].position;
             let v2 = inst.vertices[i2].position;
-            // Shading normal (face normal, unweighted average)
             let e1 = [v1[0] - v0[0], v1[1] - v0[1], v1[2] - v0[2]];
             let e2 = [v2[0] - v0[0], v2[1] - v0[1], v2[2] - v0[2]];
             let nx = e1[1] * e2[2] - e1[2] * e2[1];
@@ -468,14 +512,15 @@ pub fn create_emissive_buffer(
     }
 }
 
+// -------------------------------------------------------------------
+// BLAS / TLAS build
+// -------------------------------------------------------------------
+
 /// Build a [`PtScene`] from per-instance geometry + a materials SSBO byte
 /// buffer. Creates a combined vertex/index buffer, one BLAS per instance
 /// (pointing at its slice of the combined buffers), a TLAS whose
 /// `instanceCustomIndex` carries the instance index, and the
 /// `instance_meta` + `materials` SSBOs.
-///
-/// `materials_bytes` is the raw `GpuMaterial[]` bytes (e.g. from
-/// [`build_scalar_material_ssbo`] or `RenderMaterialManager`).
 pub fn build_pt_scene(
     context: &VulkanContext,
     command_pool: vk::CommandPool,
@@ -533,23 +578,14 @@ pub fn build_pt_scene(
         .context("build_pt_scene: materials buffer")?;
 
     // ---- 2. Build all BLAS in one batch (single submit + wait).
-
-    // ---- 2. Build all BLAS in one batch (single submit + wait).
     let index_stride = 4u32 as vk::DeviceAddress;
     let total_verts = all_verts.len() as u32;
 
-    // Gather build params for every instance.
-    //
-    // IMPORTANT — vertex_addr is the *combined* buffer base, NOT the
-    // per-instance offset, because the index buffer stores remapped values
-    // (original_index + vertex_base).  Using the instance offset would
-    // double-count vertex_base and read out of bounds on later instances,
-    // causing a GPU fault + device lost.
     let build_params: Vec<BlasBuildParams> = instances
         .iter()
         .zip(meta.iter())
         .map(|(inst, m)| {
-            let tri_count = if inst.indices.len() > 0 {
+            let tri_count = if !inst.indices.is_empty() {
                 inst.indices.len() as u32 / 3
             } else {
                 inst.vertices.len() as u32 / 3
@@ -605,6 +641,10 @@ pub fn build_pt_scene(
         device: Some(device.clone()),
     })
 }
+
+// -------------------------------------------------------------------
+// Procedural test geometry
+// -------------------------------------------------------------------
 
 /// A closed unit cube centered at the origin (side length 4, so [-2,2]^3),
 /// 12 triangles, white albedo. Used to validate the ray-query bake path

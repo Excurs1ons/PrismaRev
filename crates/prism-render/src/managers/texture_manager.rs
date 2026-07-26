@@ -32,9 +32,9 @@ use crate::bindless::{BindlessTextureTable, TextureHandle};
 use crate::buffer::create_and_upload_image;
 use crate::context::VulkanContext;
 
-// Local handle. The engine layer translates `prism_asset::TextureHandle`
+// Local handle. The engine layer translates asset texture handles
 // into this when it calls `RenderTextureManager::reserve` so the render
-// crate stays free of `prism-asset` types.
+// crate stays decoupled from the asset pipeline.
 new_key_type! {
     /// Slotmap handle into [`RenderTextureManager`].
     pub struct TextureHandleSlot;
@@ -46,7 +46,7 @@ new_key_type! {
 pub type AssetTextureHandle = TextureHandleSlot;
 
 /// Plain-data texture description used at the manager boundary. The
-/// engine layer translates `prism_asset::TextureData` into this.
+/// engine layer translates asset texture data into this.
 #[derive(Debug, Clone)]
 pub struct TextureUploadInput {
     pub width: u32,

@@ -25,6 +25,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use ash::vk;
 
+#[cfg(feature = "gltf")]
 use prism_render::bake_common;
 use prism_render::context::VulkanContext;
 
@@ -133,32 +134,10 @@ fn main() -> Result<()> {
     // registered in a bindless table here, so materials are scalar-only
     // (albedo_idx = INVALID -> base_color fallback) - matches the previous
     // vertex-color behaviour of the offline renderer.
-    let mut store = prism_asset::SceneStore::new();
-    let instances: Vec<bake_common::PtGeometryInstance> = if let Some(ref p) = args.scene {
-        log::info!("  scene: {}", p.display());
-        store.load_gltf(p).context("load glTF")?;
-        let (mat_bytes, mat_map) = bake_common::build_scalar_material_ssbo(&store)
-            .context("build scalar material SSBO")?;
-        // materials SSBO is bound separately below; flatten needs mat_map only.
-        let _ = mat_bytes;
-        bake_common::flatten_instances_from_store(&store, &mat_map)
-            .context("flatten instances")?
-    } else {
-        // Use test cube if no scene specified (single instance, slot 0).
-        log::info!("  scene: test cube");
-        let (v, i, _, _) = bake_common::test_cube_geometry();
-        vec![bake_common::PtGeometryInstance {
-            vertices: v,
-            indices: i,
-            material_slot: 0,
-        }]
-    };
-    let (mat_bytes, _) = if store.materials().count() > 0 {
-        bake_common::build_scalar_material_ssbo(&store)?
-    } else {
-        // Single neutral material for the test cube path.
-        bake_common::build_scalar_material_ssbo(&store)?
-    };
+    #[cfg(feature = "gltf")]
+    let (instances, mat_bytes) = load_scene_image_data(args.scene.as_deref())?;
+    #[cfg(not(feature = "gltf"))]
+    anyhow::bail!("prism-bake-image requires the `gltf` feature (enable with `legacy-bake`)");
     log::info!("  geometry: {} instances", instances.len());
 
     let scene = bake_common::build_pt_scene(&context, cmd_pool, &instances, &mat_bytes)
@@ -888,5 +867,96 @@ fn linear_to_srgb(c: f32) -> f32 {
         c * 12.92
     } else {
         1.055 * c.powf(1.0 / 2.4) - 0.055
+    }
+}
+
+#[cfg(feature = "gltf")]
+fn load_scene_image_data(
+    scene_path: Option<&std::path::Path>,
+) -> anyhow::Result<(
+    Vec<prism_render::bake_common::PtGeometryInstance>,
+    Vec<u8>,
+)> {
+    use prism_render::bake_common;
+    use prism_render::managers::{material_manager::GpuMaterial, MaterialUploadInput};
+
+    if let Some(p) = scene_path {
+        log::info!("  scene: {}", p.display());
+        let (instances, materials) = bake_common::load_gltf_instances(p)?;
+
+        let mut mat_bytes: Vec<u8> = Vec::new();
+        for mat in &materials {
+            let input = MaterialUploadInput {
+                base_color: mat.base_color,
+                metallic: mat.metallic,
+                roughness: mat.roughness,
+                emissive: mat.emissive,
+                albedo_tex: None,
+                normal_tex: None,
+                metallic_roughness_tex: None,
+                emissive_tex: None,
+                occlusion_tex: None,
+                normal_scale: 1.0,
+                occlusion_strength: 1.0,
+                transmission: 0.0,
+                ior: 1.5,
+                translucency: 0.0,
+                anisotropy: 0.0,
+                clearcoat: 0.0,
+                clearcoat_roughness: 0.0,
+                emissive_strength: 1.0,
+            };
+            let gpu: GpuMaterial = input.to_gpu();
+            let raw = unsafe {
+                std::slice::from_raw_parts(&gpu as *const _ as *const u8, std::mem::size_of_val(&gpu))
+            };
+            mat_bytes.extend_from_slice(raw);
+        }
+        if mat_bytes.is_empty() {
+            mat_bytes = make_fallback_mat_bytes();
+        }
+        Ok((instances, mat_bytes))
+    } else {
+        // Use test cube if no scene specified (single instance, slot 0).
+        log::info!("  scene: test cube");
+        let (v, i, _, _) = bake_common::test_cube_geometry();
+        Ok((
+            vec![bake_common::PtGeometryInstance {
+                vertices: v,
+                indices: i,
+                material_slot: 0,
+            }],
+            make_fallback_mat_bytes(),
+        ))
+    }
+}
+
+#[cfg(feature = "gltf")]
+fn make_fallback_mat_bytes() -> Vec<u8> {
+    use prism_render::managers::{material_manager::GpuMaterial, MaterialUploadInput};
+    let input = MaterialUploadInput {
+        base_color: [0.8, 0.8, 0.8, 1.0],
+        metallic: 0.0,
+        roughness: 0.5,
+        emissive: [0.0; 3],
+        albedo_tex: None,
+        normal_tex: None,
+        metallic_roughness_tex: None,
+        emissive_tex: None,
+        occlusion_tex: None,
+        normal_scale: 1.0,
+        occlusion_strength: 1.0,
+        transmission: 0.0,
+        ior: 1.5,
+        translucency: 0.0,
+        anisotropy: 0.0,
+        clearcoat: 0.0,
+        clearcoat_roughness: 0.0,
+        emissive_strength: 1.0,
+    };
+    let gpu: GpuMaterial = input.to_gpu();
+    unsafe {
+        std::slice::from_raw_parts(&gpu as *const _ as *const u8, std::mem::size_of_val(&gpu))
+            .to_vec()
     }
 }

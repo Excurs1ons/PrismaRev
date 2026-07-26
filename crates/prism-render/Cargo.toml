@@ -14,6 +14,8 @@ name = "prism-bake-image"
 path = "src/bin/prism_bake_image.rs"
 
 [features]
+legacy-bake = ["gltf"]
+gltf = ["dep:gltf"]
 
 [dependencies]
 ash = { workspace = true }
@@ -26,6 +28,6 @@ slotmap = { workspace = true }
 egui = { workspace = true }
 egui-winit = { workspace = true }
 egui-ash-renderer = { workspace = true }
-prism-asset = { path = "../prism-asset" }
 env_logger = { workspace = true }
 image = { workspace = true, features = ["hdr"] }
+gltf = { version = "1.4", optional = true }

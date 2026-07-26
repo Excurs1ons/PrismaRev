@@ -1,5 +1,5 @@
 //! `RenderMeshManager` — device-local vertex/index buffers keyed by
-//! `prism_asset::MeshHandle`.
+//! an opaque handle type.
 //!
 //! The manager owns a `Mesh` per handle and exposes the underlying
 //! `vk::Buffer` / `vk::DeviceAddress` to the renderer for the draw loop. A
@@ -19,20 +19,17 @@ use slotmap::{new_key_type, SlotMap};
 use crate::context::VulkanContext;
 use crate::mesh::Mesh;
 
-// Local handle. The engine layer translates `prism_asset::MeshHandle` into
-// this when it calls `RenderMeshManager::register` so the render crate
-// stays free of `prism-asset` types. The two handle types are not
-// interchangeable at the type level; a function that takes a
-// `prism_render::MeshHandle` cannot accidentally accept a
-// `prism_asset::MeshHandle`.
+// Local handle. The engine layer translates asset mesh handles into
+// this when it calls `RenderMeshManager::register` so the render
+// crate stays decoupled from the asset pipeline.
 new_key_type! {
     /// Slotmap handle into [`RenderMeshManager`].
     pub struct MeshHandle;
 }
 
 /// Plain-data mesh description used at the manager boundary. The
-/// `prism-engine` layer translates `prism_asset::MeshData` into this so
-/// `prism-render` stays free of `prism-asset` types.
+/// engine layer translates asset mesh data into this so
+/// the render crate stays decoupled from the asset pipeline.
 #[derive(Debug, Clone)]
 pub struct MeshUploadInput {
     pub positions: Vec<[f32; 3]>,

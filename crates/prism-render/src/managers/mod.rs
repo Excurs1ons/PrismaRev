@@ -6,8 +6,8 @@
 //! method, matching the contract the rest of `prism-render` follows.
 //!
 //! These managers consume *local* input structs (defined next to them) so
-//! `prism-render` does not depend on `prism-asset`. The engine layer
-//! converts `prism_asset::MeshData` etc. into these inputs at the seam.
+//! the render crate stays decoupled from the asset pipeline. The engine layer
+//! converts asset data into these inputs at the seam.
 
 pub mod material_manager;
 pub mod mesh_manager;

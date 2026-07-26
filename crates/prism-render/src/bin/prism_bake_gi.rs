@@ -20,6 +20,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use ash::vk;
 
+#[cfg(feature = "gltf")]
 use prism_render::bake_common;
 use prism_render::context::VulkanContext;
 
@@ -78,45 +79,10 @@ fn main() -> Result<()> {
     // index -> instance_meta -> material slot), so we build the same
     // per-instance geometry the real-time PT pass uses. The AABB is derived
     // from the flattened vertices for the probe grid.
-    let mut store = prism_asset::SceneStore::new();
-    let (instances, aabb_min, aabb_max, scene_name) =
-        if std::env::var("PRISM_BAKE_TEST_CUBE").is_ok()
-            || cli_gltf.as_deref().map(|p| p == std::path::Path::new("cube")).unwrap_or(false)
-        {
-            log::info!("  TEST MODE: procedural cube");
-            let (v, i, mn, mx) = bake_common::test_cube_geometry();
-            (
-                vec![bake_common::PtGeometryInstance {
-                    vertices: v,
-                    indices: i,
-                    material_slot: 0,
-                }],
-                mn,
-                mx,
-                "test_cube".to_string(),
-            )
-        } else {
-            let (scene_path, scene_name) = bake_common::resolve_scene_path(cli_gltf.as_deref())?;
-            log::info!("  scene: {} ({})", scene_path.display(), scene_name);
-            store.load_gltf(&scene_path).context("load glTF")?;
-            let (mat_bytes, mat_map) =
-                bake_common::build_scalar_material_ssbo(&store).context("build material SSBO")?;
-            let _ = mat_bytes; // bound separately below
-            let insts = bake_common::flatten_instances_from_store(&store, &mat_map)
-                .context("flatten instances")?;
-            // AABB from the per-instance vertices.
-            let mut mn = [f32::MAX; 3];
-            let mut mx = [f32::MIN; 3];
-            for inst in &insts {
-                for v in &inst.vertices {
-                    for a in 0..3 {
-                        mn[a] = mn[a].min(v.position[a]);
-                        mx[a] = mx[a].max(v.position[a]);
-                    }
-                }
-            }
-            (insts, mn, mx, scene_name)
-        };
+    #[cfg(feature = "gltf")]
+    let (instances, mat_bytes, aabb_min, aabb_max, scene_name) = load_scene_data(cli_gltf.as_deref())?;
+    #[cfg(not(feature = "gltf"))]
+    anyhow::bail!("prism-bake-gi requires the `gltf` feature (enable with `legacy-bake`)");
     let total_verts: usize = instances.iter().map(|i| i.vertices.len()).sum();
     let total_indices: usize = instances.iter().map(|i| i.indices.len()).sum();
     log::info!(
@@ -136,11 +102,6 @@ fn main() -> Result<()> {
     );
 
     // ---- 5. Build per-instance BLAS/TLAS + materials SSBO ----
-    let (mat_bytes, _) = if store.materials().count() > 0 {
-        bake_common::build_scalar_material_ssbo(&store)?
-    } else {
-        bake_common::build_scalar_material_ssbo(&store)?
-    };
     let scene = bake_common::build_pt_scene(&context, cmd_pool, &instances, &mat_bytes)
         .context("build PT scene")?;
     log::info!(
@@ -833,4 +794,123 @@ fn hr_max(probe_count: usize, hit_ratios: &[f32]) -> f32 {
         if h >= 0.0 { m = m.max(h); }
     }
     m
+}
+
+#[cfg(feature = "gltf")]
+fn load_scene_data(
+    cli_gltf: Option<&std::path::Path>,
+) -> anyhow::Result<(
+    Vec<prism_render::bake_common::PtGeometryInstance>,
+    Vec<u8>,
+    [f32; 3],
+    [f32; 3],
+    String,
+)> {
+    use prism_render::bake_common;
+
+    if std::env::var("PRISM_BAKE_TEST_CUBE").is_ok()
+        || cli_gltf.map(|p| p == std::path::Path::new("cube")).unwrap_or(false)
+    {
+        log::info!("  TEST MODE: procedural cube");
+        let (v, i, mn, mx) = bake_common::test_cube_geometry();
+        let mat_bytes = build_single_material_ssbo([0.8, 0.8, 0.8, 1.0]);
+        return Ok((
+            vec![bake_common::PtGeometryInstance {
+                vertices: v,
+                indices: i,
+                material_slot: 0,
+            }],
+            mat_bytes,
+            mn,
+            mx,
+            "test_cube".to_string(),
+        ));
+    }
+
+    let (scene_path, scene_name) = bake_common::resolve_scene_path(cli_gltf)?;
+    log::info!("  scene: {} ({})", scene_path.display(), scene_name);
+
+    let (instances, materials) = bake_common::load_gltf_instances(&scene_path)?;
+
+    // Build scalar material SSBO from the glTF materials.
+    let mut mat_bytes: Vec<u8> = Vec::new();
+    for mat in &materials {
+        let input = prism_render::managers::MaterialUploadInput {
+            base_color: mat.base_color,
+            metallic: mat.metallic,
+            roughness: mat.roughness,
+            albedo_tex: None,
+            normal_tex: None,
+            metallic_roughness_tex: None,
+            emissive_tex: None,
+            occlusion_tex: None,
+            emissive: mat.emissive,
+            normal_scale: 1.0,
+            occlusion_strength: 1.0,
+            transmission: 0.0,
+            ior: 1.5,
+            translucency: 0.0,
+            anisotropy: 0.0,
+            clearcoat: 0.0,
+            clearcoat_roughness: 0.0,
+            emissive_strength: 1.0,
+        };
+        let gpu: prism_render::managers::material_manager::GpuMaterial = input.to_gpu();
+        let raw = unsafe {
+            std::slice::from_raw_parts(
+                &gpu as *const _ as *const u8,
+                std::mem::size_of_val(&gpu),
+            )
+        };
+        mat_bytes.extend_from_slice(raw);
+    }
+    if mat_bytes.is_empty() {
+        mat_bytes = build_single_material_ssbo([0.8, 0.8, 0.8, 1.0]);
+    }
+
+    // AABB from the per-instance vertices.
+    let mut mn = [f32::MAX; 3];
+    let mut mx = [f32::MIN; 3];
+    for inst in &instances {
+        for v in &inst.vertices {
+            for a in 0..3 {
+                mn[a] = mn[a].min(v.position[a]);
+                mx[a] = mx[a].max(v.position[a]);
+            }
+        }
+    }
+
+    Ok((instances, mat_bytes, mn, mx, scene_name))
+}
+
+#[cfg(feature = "gltf")]
+fn build_single_material_ssbo(base_color: [f32; 4]) -> Vec<u8> {
+    let input = prism_render::managers::MaterialUploadInput {
+        base_color,
+        metallic: 0.0,
+        roughness: 0.5,
+        emissive: [0.0; 3],
+        albedo_tex: None,
+        normal_tex: None,
+        metallic_roughness_tex: None,
+        emissive_tex: None,
+        occlusion_tex: None,
+        normal_scale: 1.0,
+        occlusion_strength: 1.0,
+        transmission: 0.0,
+        ior: 1.5,
+        translucency: 0.0,
+        anisotropy: 0.0,
+        clearcoat: 0.0,
+        clearcoat_roughness: 0.0,
+        emissive_strength: 1.0,
+    };
+    let gpu: prism_render::managers::material_manager::GpuMaterial = input.to_gpu();
+    unsafe {
+        std::slice::from_raw_parts(
+            &gpu as *const _ as *const u8,
+            std::mem::size_of_val(&gpu),
+        )
+        .to_vec()
+    }
 }
