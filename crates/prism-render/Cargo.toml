@@ -5,18 +5,6 @@ edition.workspace = true
 license.workspace = true
 description = "Vulkan rendering backend for PrismaRev"
 
-[[bin]]
-name = "prism-bake-gi"
-path = "src/bin/prism_bake_gi.rs"
-
-[[bin]]
-name = "prism-bake-image"
-path = "src/bin/prism_bake_image.rs"
-
-[features]
-legacy-bake = ["gltf"]
-gltf = ["dep:gltf"]
-
 [dependencies]
 ash = { workspace = true }
 ash-window = { workspace = true }
@@ -30,4 +18,3 @@ egui-winit = { workspace = true }
 egui-ash-renderer = { workspace = true }
 env_logger = { workspace = true }
 image = { workspace = true, features = ["hdr"] }
-gltf = { version = "1.4", optional = true }

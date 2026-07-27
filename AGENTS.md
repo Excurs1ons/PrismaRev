@@ -8,8 +8,6 @@ Conventions) before touching any matrix/coordinate math — deviating from those
 - `crates/prism-ecs` — ECS core (Entity/Component/World/Query).
 - `crates/prism-render` — Vulkan backend: context, swapchain, render-graph passes (`passes.rs`),
   `GraphRenderer` driver (`graph_renderer.rs`), IBL cubemap (`ibl.rs`), bindless/PBR.
-- `crates/prism-asset` — runtime asset/scene loading (glTF, HDR). Used for development fast-iteration;
-  superseded by `prism-asset/*` for production builds.
 - `crates/prism-engine` — app layer + winit main loop, egui inspector.
 - `crates/prism-android` — Android port.
 - `src/main.rs` — binary entry (depends on `prism-engine`).

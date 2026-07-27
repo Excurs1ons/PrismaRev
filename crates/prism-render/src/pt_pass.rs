@@ -309,8 +309,8 @@ impl PathTracePass {
     /// buffers, and one TLAS whose `instanceCustomIndex` carries the instance
     /// index (0..N) used to look up `PtInstanceMeta` -> `material_slot`.
     ///
-    /// `instances` is produced by `bake_common::flatten_instances_from_store`
-    /// (scene) plus the ECS `RenderInstance` walk (calibration spheres).
+    /// `instances` is produced by the engine crate's ECS walk of
+    /// `MeshRef`/`MaterialRef` entities.
     pub fn set_geometry(
         &mut self,
         context: &VulkanContext,
