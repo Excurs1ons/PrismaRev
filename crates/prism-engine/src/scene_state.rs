@@ -27,12 +27,11 @@ const SCENE_STATE_VERSION: u32 = 3;
 // ---------------------------------------------------------------------------
 
 fn scene_state_path() -> std::path::PathBuf {
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            return dir.join("scene_state.json");
-        }
+    if let Some(dir) = crate::config::app_data_dir() {
+        dir.join("scene_state.json")
+    } else {
+        std::path::PathBuf::from("scene_state.json")
     }
-    std::path::PathBuf::from("scene_state.json")
 }
 
 // ---------------------------------------------------------------------------

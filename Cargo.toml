@@ -77,6 +77,7 @@ clap = { version = "4", features = ["derive"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "tga", "bmp", "hdr", "exr"] }
 ctt = { version = "0.5", default-features = false, features = ["encoder-bc7enc", "ispc-prebuilt"] }
 unicode-width = "0.2"
+dirs = "5"
 
 # Asset / scene loading
 # `gltf` crate version is the crate's release stream (1.4 = current), not the

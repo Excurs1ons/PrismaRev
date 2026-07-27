@@ -26,6 +26,7 @@ egui = { workspace = true }
 egui-winit = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 toml = { workspace = true }
+dirs = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [

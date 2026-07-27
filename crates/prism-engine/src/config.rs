@@ -181,3 +181,21 @@ impl Default for AppConfig {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// App data directory (like Unity's Application.persistentDataPath)
+// ---------------------------------------------------------------------------
+
+/// Returns the platform-specific data directory for the application
+/// (e.g., `%APPDATA%\Excurs1ons\PrismaRev\` on Windows).
+///
+/// Reads company/app name from `assets/settings.toml`.  Creates the directory
+/// if it doesn't exist.  Returns `None` if the platform data dir cannot be
+/// determined (unlikely on desktop, possible on unusual platforms).
+pub fn app_data_dir() -> Option<std::path::PathBuf> {
+    let cfg = AppConfig::load();
+    let base = dirs::data_dir()?;
+    let dir = base.join(&cfg.app.company).join(&cfg.app.name);
+    std::fs::create_dir_all(&dir).ok()?;
+    Some(dir)
+}
