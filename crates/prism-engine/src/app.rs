@@ -105,7 +105,7 @@ struct SceneManifest {
 ///
 /// The manifest maps logical scene names to filesystem paths so no large
 /// asset is committed and no path is hardcoded in code.
-fn load_scene_from_manifest(rm: &ResourceManager, world: &mut World) -> Option<String> {
+fn load_scene_from_manifest(rm: &mut ResourceManager, world: &mut World) -> Option<String> {
     const CANDIDATE_DIRS: &[&str] = &["assets", "crates/prism-engine/assets"];
 
     let manifest_path = CANDIDATE_DIRS
@@ -201,7 +201,7 @@ fn load_scene_from_manifest(rm: &ResourceManager, world: &mut World) -> Option<S
 
 /// Load a cooked RSCN scene from the ResourceManager (.pak).
 fn load_scene_from_rm(
-    rm: &ResourceManager,
+    rm: &mut ResourceManager,
     world: &mut World,
     asset_path: &str,
 ) -> Result<crate::scene::loader::SceneInstance, anyhow::Error> {
@@ -549,7 +549,7 @@ impl App {
         // Load a scene from the scene manifest (scenes.toml) if present.
         // Tries the ResourceManager (.pak) first, falls back to loose files.
         if let Some(world) = self.world.as_mut() {
-            if let Some(name) = load_scene_from_manifest(&self.resource_manager, world) {
+            if let Some(name) = load_scene_from_manifest(&mut self.resource_manager, world) {
                 self.current_scene_name = Some(name);
             }
         }
