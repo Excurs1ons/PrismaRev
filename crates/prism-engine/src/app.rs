@@ -216,7 +216,10 @@ fn load_scene_from_rm(
         .with_context(|| format!("get scene '{}'", asset_path))?;
     let mut loader = crate::scene::loader::SceneLoader::new();
     loader
-        .load_and_spawn(world, crate::scene::loader::SceneSource::RawCooked(asset.0.clone()))
+        .load_and_spawn(
+            world,
+            crate::scene::loader::SceneSource::RawCooked(asset.bytes.clone()),
+        )
         .map_err(|e| anyhow::anyhow!("{e}"))
 }
 
