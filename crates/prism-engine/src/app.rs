@@ -30,60 +30,31 @@ use crate::scene::components::{
 
 use prism_asset_runtime::ResourceManager;
 
-/// Parse a `key = "value"` TOML line (after the `key` prefix has been stripped)
-/// and return the unquoted string value. Handles optional surrounding
-/// whitespace and single or double quotes.
-fn split_toml_string(rest: &str) -> Option<String> {
-    // `rest` is what follows `name`/`path` on the line, e.g. ` = "sponza"`.
-    // Trim, drop the `=` and surrounding whitespace, then strip one pair of
-    // matching quotes (single or double).
-    let s = rest.trim();
-    let s = s.strip_prefix('=')?.trim();
-    let s = s.strip_prefix('"').or_else(|| s.strip_prefix('\''))?;
-    let s = s.strip_suffix('"').or_else(|| s.strip_suffix('\''))?;
-    Some(s.trim().to_string())
-}
+/// Load environment map bytes from the first scene in `scenes.toml`.
+///
+/// Reads the RSCN v2 header to find the skybox HDR path, then loads the HDR
+/// file from disk.  This runs **before** the renderer is created (and before
+/// the .pak is loaded), so it always reads loose files.
+fn load_env_from_manifest() -> Option<Vec<u8>> {
+    const CANDIDATE_DIRS: &[&str] = &["assets", "crates/prism-engine/assets"];
 
-/// Read the scene manifest (`scenes.toml`) and extract the environment map
-/// bytes for IBL.  Looks for the first `.rscn` scene with a v2 header that
-/// carries a skybox HDR path, resolves it relative to the scene file, and
-/// reads the HDR file.  Returns `None` if no scene or no HDR is found — the
-/// renderer then uses a procedural fallback environment.
-fn load_env_from_scene_manifest() -> Option<Vec<u8>> {
-    let candidate_dirs = [
-        std::path::PathBuf::from("assets"),
-        std::path::PathBuf::from("crates/prism-engine/assets"),
-    ];
-    let manifest_path = candidate_dirs
+    let manifest_path = CANDIDATE_DIRS
         .iter()
-        .map(|d| d.join("scenes.toml"))
+        .map(|d| std::path::Path::new(d).join("scenes.toml"))
         .find(|p| p.exists())?;
-    let manifest_dir = manifest_path.parent()?.to_path_buf();
+    let manifest_dir = manifest_path.parent()?;
 
     let text = std::fs::read_to_string(&manifest_path).ok()?;
+    let manifest: SceneManifest = toml::from_str(&text).ok()?;
 
-    // Minimal TOML parse for `[[scenes]]` entries (same logic as
-    // `load_scene_from_manifest`).
-    let mut scene_paths: Vec<std::path::PathBuf> = Vec::new();
-    for raw_line in text.lines() {
-        let line = raw_line.trim();
-        if line.starts_with("[[scenes]]") {
-            continue;
-        }
-        if let Some(rest) = line.strip_prefix("path") {
-            if let Some(v) = split_toml_string(rest) {
-                let p = std::path::PathBuf::from(&v);
-                let p = if p.is_absolute() {
-                    p
-                } else {
-                    manifest_dir.join(&p)
-                };
-                scene_paths.push(p);
-            }
-        }
-    }
+    for entry in &manifest.scenes {
+        let path = std::path::PathBuf::from(&entry.path);
+        let path = if path.is_absolute() {
+            path
+        } else {
+            manifest_dir.join(&path)
+        };
 
-    for path in &scene_paths {
         let is_rscn = path
             .extension()
             .and_then(|e| e.to_str())
@@ -92,27 +63,172 @@ fn load_env_from_scene_manifest() -> Option<Vec<u8>> {
         if !is_rscn || !path.exists() {
             continue;
         }
-        if let Some(hdr_rel) = crate::scene::loader::read_env_path_from_rscn(path) {
-            let hdr_path = path.parent().map(|d| d.join(&hdr_rel)).unwrap_or_else(|| std::path::PathBuf::from(&hdr_rel));
+
+        // Read the HDR path from the RSCN v2 header, then load the HDR file.
+        if let Some(hdr_rel) = crate::scene::loader::read_env_path_from_rscn(&path) {
+            let hdr_path = path
+                .parent()
+                .map(|d| d.join(&hdr_rel))
+                .unwrap_or_else(|| std::path::PathBuf::from(&hdr_rel));
             match std::fs::read(&hdr_path) {
                 Ok(bytes) => {
                     log::info!("loaded environment map from scene: {}", hdr_path.display());
                     return Some(bytes);
                 }
-                Err(e) => log::warn!("failed to read HDR {}: {e}", hdr_path.display()),
+                Err(e) => {
+                    log::warn!("env map HDR {} not readable: {e}", hdr_path.display());
+                }
             }
         }
     }
+
     log::info!("no environment map in scene manifest; using procedural fallback");
     None
 }
 
-// Runtime ECS entities must originate from scene data; do not inject defaults.
+/// A single entry in the `scenes.toml` manifest.
+#[derive(serde::Deserialize)]
+struct SceneManifestEntry {
+    name: String,
+    path: String,
+}
 
-/// Persist the current ECS state (including Camera resource) to scene_state.json.
-fn save_scene_state_file(world: &prism_ecs::World) {
-    crate::scene_state::save_scene_state(world);
-    log::info!("scene state saved");
+/// The top-level scene manifest structure.
+#[derive(serde::Deserialize)]
+struct SceneManifest {
+    scenes: Vec<SceneManifestEntry>,
+}
+
+/// Read `assets/scenes.toml`, pick the first scene whose RSCN path exists
+/// (either in the ResourceManager's .pak or on-disk for dev), load it via
+/// the SceneLoader, and register it into the renderer.
+///
+/// The manifest maps logical scene names to filesystem paths so no large
+/// asset is committed and no path is hardcoded in code.
+fn load_scene_from_manifest(rm: &ResourceManager, world: &mut World) -> Option<String> {
+    const CANDIDATE_DIRS: &[&str] = &["assets", "crates/prism-engine/assets"];
+
+    let manifest_path = CANDIDATE_DIRS
+        .iter()
+        .map(|d| std::path::Path::new(d).join("scenes.toml"))
+        .find(|p| p.exists());
+
+    let manifest_path = match manifest_path {
+        Some(p) => p,
+        None => {
+            let cwd = std::env::current_dir()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|_| "<unknown>".into());
+            log::info!("no assets/scenes.toml found (cwd={cwd}); using procedural demo only");
+            return None;
+        }
+    };
+
+    let text = match std::fs::read_to_string(&manifest_path) {
+        Ok(t) => t,
+        Err(e) => {
+            log::warn!("failed to read scene manifest {:?}: {e}", manifest_path);
+            return None;
+        }
+    };
+
+    log::info!(
+        "scene manifest: {:?} ({} bytes)",
+        manifest_path,
+        text.len()
+    );
+
+    let manifest: SceneManifest = match toml::from_str(&text) {
+        Ok(m) => m,
+        Err(e) => {
+            log::warn!("scene manifest parse error: {e}");
+            return None;
+        }
+    };
+
+    log::info!("scene manifest parsed: {} scene(s) listed", manifest.scenes.len());
+
+    let manifest_dir = manifest_path.parent().map(|p| p.to_path_buf());
+
+    for entry in &manifest.scenes {
+        let path = std::path::PathBuf::from(&entry.path);
+        let path = if path.is_absolute() {
+            path
+        } else {
+            manifest_dir.as_ref().map(|d| d.join(&path)).unwrap_or(path)
+        };
+
+        let is_rscn = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.eq_ignore_ascii_case("rscn"))
+            .unwrap_or(false);
+        if !is_rscn {
+            log::info!("scene '{}': skipping non-RSCN path {:?}", entry.name, path);
+            continue;
+        }
+
+        // Try ResourceManager first (shipped .pak), fallback to loose file (dev).
+        let loaded = if rm.id_by_path(&entry.path).is_some() {
+            load_scene_from_rm(rm, world, &entry.path)
+        } else if path.exists() {
+            load_scene_from_file(world, &path)
+        } else {
+            log::info!("scene '{}' -> {:?} not found in .pak or on disk", entry.name, path);
+            continue;
+        };
+
+        match loaded {
+            Ok(inst) => {
+                log::info!(
+                    "scene '{}' loaded: {} entities ({} roots)",
+                    entry.name,
+                    inst.all_entities.len(),
+                    inst.root_entities.len(),
+                );
+                return Some(entry.name.clone());
+            }
+            Err(e) => {
+                log::warn!("scene '{}' failed to load: {e}", entry.name);
+                continue;
+            }
+        }
+    }
+
+    log::info!("no resolvable scene in manifest; using procedural demo only");
+    None
+}
+
+/// Load a cooked RSCN scene from the ResourceManager (.pak).
+fn load_scene_from_rm(
+    rm: &ResourceManager,
+    world: &mut World,
+    asset_path: &str,
+) -> Result<crate::scene::loader::SceneInstance, anyhow::Error> {
+    let id = rm
+        .id_by_path(asset_path)
+        .ok_or_else(|| anyhow::anyhow!("scene '{}' not found in RM", asset_path))?;
+    let handle = rm
+        .load_with_deps::<prism_asset_runtime::SceneAsset>(id)
+        .with_context(|| format!("load scene '{}'", asset_path))?;
+    let asset = rm
+        .get::<prism_asset_runtime::SceneAsset>(handle)
+        .with_context(|| format!("get scene '{}'", asset_path))?;
+    let mut loader = crate::scene::loader::SceneLoader::new();
+    loader
+        .load_and_spawn(world, crate::scene::loader::SceneSource::RawCooked(asset.0.clone()))
+        .map_err(|e| anyhow::anyhow!("{e}"))
+}
+
+/// Load a cooked RSCN scene from a loose file (dev convenience).
+fn load_scene_from_file(
+    world: &mut World,
+    path: &std::path::Path,
+) -> Result<crate::scene::loader::SceneInstance, anyhow::Error> {
+    let mut loader = crate::scene::loader::SceneLoader::new();
+    loader
+        .load_and_spawn(world, crate::scene::loader::SceneSource::CookedFile(path.to_path_buf()))
+        .map_err(|e| anyhow::anyhow!("{e}"))
 }
 
 /// Register every scene component type the inspector should expose.
@@ -390,8 +506,8 @@ impl App {
 
         let t_renderer = std::time::Instant::now();
         // Load environment map from the scene system (scene manifest → RSCN
-        // v2 header → HDR path → file bytes).
-        let env_bytes = load_env_from_scene_manifest();
+        // v2 header → HDR path → file bytes).  Renderer needs this at creation.
+        let env_bytes = load_env_from_manifest();
         let renderer = GraphRenderer::new(
             extensions_ref,
             window.as_ref(),
@@ -430,10 +546,13 @@ impl App {
         // been built yet).
         self.load_resource_package();
 
-        // Load a glTF scene from the asset manifest (if present + resolvable)
-        // and upload it to the renderer managers. Keeps the legacy cube demo
-        // running alongside it.
-        self.load_scene_from_manifest();
+        // Load a scene from the scene manifest (scenes.toml) if present.
+        // Tries the ResourceManager (.pak) first, falls back to loose files.
+        if let Some(world) = self.world.as_mut() {
+            if let Some(name) = load_scene_from_manifest(&self.resource_manager, world) {
+                self.current_scene_name = Some(name);
+            }
+        }
 
         // Start the audio engine (best-effort; silent mode on failure).
         let audio_config = AudioConfig {
@@ -453,146 +572,6 @@ impl App {
 
         log::info!("startup total (incl. scene): {}ms", t_start.elapsed().as_millis());
     }
-
-    /// Read `assets/scenes.toml`, pick the first scene whose `path` exists on
-    /// disk, load it via the glTF loader, and register it into the renderer.
-    /// The manifest maps logical scene names to filesystem paths (which may be
-    /// absolute dev paths), so no large asset is committed and no path is
-    /// hardcoded in code.
-    fn load_scene_from_manifest(&mut self) {
-        let candidate_dirs = [
-            std::path::PathBuf::from("assets"),
-            std::path::PathBuf::from("crates/prism-engine/assets"),
-        ];
-
-        let cwd = std::env::current_dir()
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|_| "<unknown>".into());
-        let manifest_path = candidate_dirs
-            .iter()
-            .map(|d| d.join("scenes.toml"))
-            .find(|p| p.exists());
-        let Some(manifest_path) = manifest_path else {
-            log::info!(
-                "no assets/scenes.toml found (cwd={}); using procedural demo only",
-                cwd
-            );
-            return;
-        };
-
-        let Ok(text) = std::fs::read_to_string(&manifest_path) else {
-            log::warn!("failed to read scene manifest {:?}", manifest_path);
-            return;
-        };
-        log::info!(
-            "scene manifest: {:?} (cwd={}, {} bytes)",
-            manifest_path,
-            cwd,
-            text.len()
-        );
-
-        // Minimal TOML parse for our fixed schema:
-        //   [[scenes]]
-        //   name = "..."
-        //   path = "..."
-        // (We avoid a serde/toml dependency for this one tiny file.)
-        let manifest_dir = manifest_path.parent().map(|p| p.to_path_buf());
-        let mut current_name: Option<String> = None;
-        let mut scenes: Vec<(String, std::path::PathBuf)> = Vec::new();
-        for raw_line in text.lines() {
-            let line = raw_line.trim();
-            if line.starts_with("[[scenes]]") {
-                current_name = None;
-                continue;
-            }
-            if let Some(rest) = line.strip_prefix("name") {
-                if let Some(v) = split_toml_string(rest) {
-                    current_name = Some(v);
-                }
-            } else if let Some(rest) = line.strip_prefix("path") {
-                if let Some(v) = split_toml_string(rest) {
-                    let path = std::path::PathBuf::from(&v);
-                    // Resolve relative paths against the manifest directory.
-                    let path = if path.is_absolute() {
-                        path
-                    } else {
-                        manifest_dir.as_ref().map(|d| d.join(&path)).unwrap_or(path)
-                    };
-                    let name = current_name.clone().unwrap_or_else(|| "unnamed".into());
-                    scenes.push((name, path));
-                }
-            }
-        }
-
-        log::info!("scene manifest parsed: {} scene(s) listed", scenes.len());
-
-        for (name, path) in scenes {
-            let exists = path.exists();
-            log::info!("scene '{}' -> {:?} (exists={})", name, path, exists);
-            if !exists {
-                continue;
-            }
-            log::info!("loading scene '{}' from {:?}", name, path);
-
-            // Two scene-file formats are supported:
-            //   - `.rscn`  : cooked binary consumed by the new scene system
-            //                (`SceneLoader`). Spawns camera + lights + mesh
-            //                entities directly into the ECS. This is the
-            //                preferred path - the scene file owns placement.
-            let is_rscn = path
-                .extension()
-                .and_then(|e| e.to_str())
-                .map(|e| e.eq_ignore_ascii_case("rscn"))
-                .unwrap_or(false);
-
-            if is_rscn {
-                if self.load_scene_from_rscn(&path) {
-                    self.current_scene_name = Some(name.clone());
-                    return;
-                }
-                continue;
-            }
-        }
-        log::info!("no resolvable scene in manifest; using procedural demo only");
-    }
-
-    /// Spawn a cooked RSCN scene (`SceneLoader`) into the ECS world.
-    ///
-    /// On success, re-applies any persisted `scene_state.json` so the user's
-    /// last-known camera position / light parameters land on the freshly
-    /// spawned entities (the initial `load_scene_state` at startup ran on an
-    /// empty world and could not patch a camera that did not yet exist).
-    fn load_scene_from_rscn(&mut self, path: &std::path::Path) -> bool {
-        let Some(world) = self.world.as_mut() else {
-            log::debug!("load_scene_from_rscn: no world yet, deferring");
-            return false;
-        };
-        let mut loader = crate::scene::loader::SceneLoader::new();
-        match loader.load_and_spawn(
-            world,
-            crate::scene::loader::SceneSource::CookedFile(path.to_path_buf()),
-        ) {
-            Ok(inst) => {
-                log::info!(
-                    "rscn scene loaded: {} entities ({} roots) from {:?}",
-                    inst.all_entities.len(),
-                    inst.root_entities.len(),
-                    path,
-                );
-                // Now that scene entities exist, re-apply persisted state so
-                // the saved camera viewpoint + light edits take effect.
-                if self.camera_state_restored {
-                    let _ = crate::scene_state::load_scene_state(world);
-                }
-                true
-            }
-            Err(e) => {
-                log::warn!("load_scene_from_rscn: {}: {e}", path.display());
-                false
-            }
-        }
-    }
-
 
     /// Attempt to load the .pak resource package and its path manifest.
     ///

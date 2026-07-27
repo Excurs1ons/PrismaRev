@@ -413,13 +413,12 @@ fn quat_to_yaw_pitch(quat: [f32; 4]) -> (f32, f32) {
 // Public helpers for env path extraction
 // ---------------------------------------------------------------------------
 
-/// Read the skybox HDR path from a cooked RSCN file (v2 header).
+/// Read the skybox HDR path from cooked RSCN bytes (v2 header).
 ///
-/// Returns `None` if the file cannot be read, is not a valid RSCN, or has no
-/// skybox configured.  This is used by the app layer to pre-load the
-/// environment map **before** the renderer is created.
-pub fn read_env_path_from_rscn(path: &std::path::Path) -> Option<String> {
-    let data = std::fs::read(path).ok()?;
+/// Returns `None` if the data is not valid RSCN v2+ or has no skybox configured.
+/// Used by the app layer to pre-load the environment map from either the
+/// ResourceManager or a loose file.
+pub fn read_env_path_from_rscn_bytes(data: &[u8]) -> Option<String> {
     if data.len() < 11 {
         return None;
     }
@@ -440,6 +439,15 @@ pub fn read_env_path_from_rscn(path: &std::path::Path) -> Option<String> {
     } else {
         Some(path)
     }
+}
+
+/// Read the skybox HDR path from a cooked RSCN **file** (v2 header).
+///
+/// Convenience wrapper around [`read_env_path_from_rscn_bytes`] that reads the
+/// file from disk first.
+pub fn read_env_path_from_rscn(path: &std::path::Path) -> Option<String> {
+    let data = std::fs::read(path).ok()?;
+    read_env_path_from_rscn_bytes(&data)
 }
 
 // ---------------------------------------------------------------------------
