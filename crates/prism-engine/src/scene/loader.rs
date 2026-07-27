@@ -46,8 +46,9 @@
 
 use std::path::PathBuf;
 
+use prism_asset_runtime::{MeshAsset, ResourceManager};
 use prism_ecs::{Entity, World};
-use prism_render::mesh::Vertex;
+use prism_render::managers::GpuMaterial;
 
 use super::components::*;
 use super::helpers::HierarchyHelper;
@@ -1382,15 +1383,13 @@ pub fn collect_bake_instances(
 )> {
     use std::collections::HashMap;
 
-    use prism_asset_runtime::MeshAsset;
     use prism_render::bake_common::PtGeometryInstance;
-    use prism_render::managers::GpuMaterial;
 
     let mut instances: Vec<PtGeometryInstance> = Vec::new();
     let mut mat_cache: HashMap<String, u32> = HashMap::new();
     let mut gpu_materials: Vec<GpuMaterial> = Vec::new();
 
-    for (entity, mr, wt) in world.query2::<MeshRenderer, WorldTransform>() {
+    for (_entity, mr, wt) in world.query2::<MeshRenderer, WorldTransform>() {
         // Resolve material slot.
         let material_slot = if !mr.material_path.is_empty() {
             *mat_cache

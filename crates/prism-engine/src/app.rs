@@ -11,6 +11,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
+use anyhow::Context;
 use winit::application::ApplicationHandler;
 use winit::event::{DeviceEvent, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
@@ -20,12 +21,12 @@ use winit::window::{Window, WindowId};
 
 use prism_audio::{AudioConfig, AudioEngine};
 use prism_ecs::World;
-use prism_render::{DebugMode, GraphRenderer, NormalSpace, PathTracePass, RenderMode};
+use prism_render::{DebugMode, GraphRenderer, NormalSpace, RenderMode};
 
 use crate::input::{InputState, MouseButton};
 use crate::render_system::{render_system, MeshManager};
 use crate::scene::components::{
-    Camera, LocalTransform, MeshRef, MaterialRef, SceneAssetId, WorldTransform,
+    Camera, LocalTransform,
 };
 
 use prism_asset_runtime::ResourceManager;
@@ -472,8 +473,8 @@ impl App {
 
     /// Run the application on an existing event loop (used by Android).
     pub fn run_on_event_loop(event_loop: EventLoop<()>) -> anyhow::Result<()> {
-        let app = App::new();
-        event_loop.run_app(app)?;
+        let mut app = App::new();
+        event_loop.run_app(&mut app)?;
         Ok(())
     }
 
@@ -1484,7 +1485,7 @@ impl ApplicationHandler for App {
                         {
                             // Ctrl+S: manually save scene state
                             if let Some(world) = self.world.as_ref() {
-                                save_scene_state_file(world);
+                                crate::scene_state::save_scene_state(world);
                             }
                         }
                     }
@@ -1541,7 +1542,7 @@ impl ApplicationHandler for App {
             // Persist ECS scene state (camera, lights, transforms) for the
             // next launch. No-op when world is not yet initialised.
             if let Some(world) = self.world.as_ref() {
-                save_scene_state_file(world);
+                crate::scene_state::save_scene_state(world);
             }
 
             // Wait for the GPU to finish any in-flight work (e.g. the last

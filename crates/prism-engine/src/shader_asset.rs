@@ -7,6 +7,7 @@
 //! this module is for content / user shaders or offline tools that already have
 //! a [`ResourceManager`] open.
 
+use anyhow::Context;
 use prism_asset_runtime::{ResourceManager, ShaderAsset};
 
 /// Load a `VkShaderModule` from a [`ShaderAsset`] inside a loaded `.pak`.
