@@ -1,7 +1,7 @@
 use crate::camera::OrbitCamera;
-use crate::input::{InputState, MouseButton};
+use crate::input::{InputManager, MouseButton};
 
-/// Reads InputState and applies orbit/zoom to an OrbitCamera.
+/// Reads InputManager and applies orbit/zoom to an OrbitCamera.
 pub struct OrbitCameraController {
     pub sensitivity: f32,
     pub scroll_sensitivity: f32,
@@ -17,7 +17,7 @@ impl Default for OrbitCameraController {
 }
 
 impl OrbitCameraController {
-    pub fn update(&self, camera: &mut OrbitCamera, input: &InputState) {
+    pub fn update(&self, camera: &mut OrbitCamera, input: &InputManager) {
         // Left mouse drag → orbit
         if input.mouse_held(MouseButton::Left) {
             let d = input.mouse_delta();
@@ -51,7 +51,7 @@ mod tests {
     fn left_drag_updates_theta_and_phi() {
         let mut camera = OrbitCamera::new(16.0 / 9.0);
         let ctrl = OrbitCameraController::default();
-        let mut input = InputState::new();
+        let mut input = InputManager::new();
 
         // Press left button and move mouse right + down
         input.handle_mouse_button(MouseButton::Left, ElementState::Pressed);
@@ -71,7 +71,7 @@ mod tests {
     fn no_drag_does_not_affect_camera() {
         let mut camera = OrbitCamera::new(16.0 / 9.0);
         let ctrl = OrbitCameraController::default();
-        let input = InputState::new();
+        let input = InputManager::new();
 
         let old_theta = camera.theta;
         let old_phi = camera.phi;
@@ -87,7 +87,7 @@ mod tests {
     fn scroll_up_zooms_in() {
         let mut camera = OrbitCamera::new(16.0 / 9.0);
         let ctrl = OrbitCameraController::default();
-        let mut input = InputState::new();
+        let mut input = InputManager::new();
 
         input.handle_scroll(MouseScrollDelta::LineDelta(0.0, 5.0));
         let old_dist = camera.distance;
@@ -101,7 +101,7 @@ mod tests {
     fn scroll_down_zooms_out() {
         let mut camera = OrbitCamera::new(16.0 / 9.0);
         let ctrl = OrbitCameraController::default();
-        let mut input = InputState::new();
+        let mut input = InputManager::new();
 
         input.handle_scroll(MouseScrollDelta::LineDelta(0.0, -3.0));
         let old_dist = camera.distance;
@@ -114,7 +114,7 @@ mod tests {
     fn phi_clamped_to_avoid_gimbal_lock() {
         let mut camera = OrbitCamera::new(16.0 / 9.0);
         let ctrl = OrbitCameraController::default();
-        let mut input = InputState::new();
+        let mut input = InputManager::new();
 
         // Drag upward to push phi past 0.01
         input.handle_mouse_button(MouseButton::Left, ElementState::Pressed);
@@ -129,7 +129,7 @@ mod tests {
     fn distance_clamped_to_range() {
         let mut camera = OrbitCamera::new(16.0 / 9.0);
         let ctrl = OrbitCameraController::default();
-        let mut input = InputState::new();
+        let mut input = InputManager::new();
 
         // Extreme zoom in
         input.handle_scroll(MouseScrollDelta::LineDelta(0.0, 9999.0));

@@ -16,7 +16,7 @@
 
 use prism_ecs::World;
 
-use crate::input::InputState;
+use crate::input::InputManager;
 use crate::scene::components::{
     Camera, FlyCameraController, LocalTransform, WorldTransform,
 };
@@ -133,7 +133,7 @@ pub fn compute_camera_output(
 /// demo-spin animation for that entity).
 pub fn camera_controller_system(
     world: &mut World,
-    input: &InputState,
+    input: &InputManager,
     dt: f32,
     look_active: bool,
 ) -> Option<prism_ecs::Entity> {

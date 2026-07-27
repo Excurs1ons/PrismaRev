@@ -1,4 +1,4 @@
-use winit::event::{ElementState, MouseScrollDelta, TouchPhase};
+use winit::event::{ElementState, MouseScrollDelta, TouchPhase, WindowEvent};
 use winit::keyboard::{KeyCode as WinitKeyCode, PhysicalKey};
 
 /// Abstract key code (maps to winit PhysicalKey for keyboard).
@@ -110,9 +110,22 @@ pub struct TouchEvent {
     pub position: [f64; 2],
 }
 
-/// Per-frame input snapshot (ECS Resource).
+/// Per-frame input state and winit event processor.
+///
+/// Owns the raw input state (held keys, mouse position, transient just-pressed
+/// events) and the pointer-lock state machine.  Keyboard shortcuts that trigger
+/// app- or editor-level actions are handled by the caller — this struct only
+/// tracks which keys are pressed.
+///
+/// ## Usage
+/// 1. Call [`handle_window_event`](Self::handle_window_event) from the app's
+///    `window_event` to route winit events through the input state machine.
+/// 2. Call [`begin_frame`](Self::begin_frame) at the end of each frame to
+///    clear transient state.
+/// 3. Query helpers (`key_held`, `mouse_delta`, etc.) during the frame's
+///    update logic.
 #[derive(Default)]
-pub struct InputState {
+pub struct InputManager {
     // Persistent (accumulated across frames)
     keys_held: rustc_hash::FxHashSet<KeyCode>,
     mouse_buttons_held: rustc_hash::FxHashSet<MouseButton>,
@@ -125,9 +138,21 @@ pub struct InputState {
     mouse_delta: [f64; 2],
     scroll_delta: f64,
     touches: Vec<TouchEvent>,
+
+    // Pointer-lock state
+    /// Whether the cursor is hidden + grabbed for FPS-style look.
+    pub pointer_locked: bool,
+    /// Whether ALT is held and has temporarily released a locked pointer.
+    pub alt_temp_release: bool,
+    /// Set when the window regains focus; the next left-click focuses the
+    /// window instead of entering pointer lock.
+    pub focus_return_click: bool,
+    /// Whether the pointer was locked before the inspector/visualizer was
+    /// opened, so it can be re-locked when the UI closes.
+    pub lock_before_inspector: bool,
 }
 
-impl InputState {
+impl InputManager {
     pub fn new() -> Self {
         Self::default()
     }
@@ -168,7 +193,8 @@ impl InputState {
         &self.touches
     }
 
-    // --- Event handlers (called by App) ---
+    // --- Low-level event handlers (insert raw data) ---
+
     pub fn handle_keyboard(&mut self, physical_key: PhysicalKey, state: ElementState) {
         let key = KeyCode::from(physical_key);
         match state {
@@ -192,9 +218,6 @@ impl InputState {
     }
 
     /// Set the pointer position without accumulating delta.
-    ///
-    /// Call on touch-start so the first subsequent move produces a correct
-    /// delta instead of a jump from the last known position.
     pub fn set_mouse_position(&mut self, position: [f64; 2]) {
         self.mouse_position = position;
     }
@@ -226,6 +249,179 @@ impl InputState {
             position,
         });
     }
+
+    // --- Pointer lock ---
+
+    /// Set or release the pointer lock (cursor grab).  Resets accumulated
+    /// mouse delta after the transition so the view doesn't jump.
+    pub fn set_locked(&mut self, locked: bool, window: Option<&winit::window::Window>) {
+        self.pointer_locked = locked;
+        #[cfg(not(target_os = "android"))]
+        if let Some(window) = window {
+            if locked {
+                window.set_cursor_visible(false);
+                if let Err(e) = window.set_cursor_grab(winit::window::CursorGrabMode::Confined) {
+                    log::warn!("failed to grab cursor (pointer lock): {e}");
+                }
+                self.begin_frame();
+            } else {
+                window.set_cursor_visible(true);
+                if let Err(e) = window.set_cursor_grab(winit::window::CursorGrabMode::None) {
+                    log::warn!("failed to release cursor grab: {e}");
+                }
+                self.begin_frame();
+            }
+        }
+        log::info!("pointer lock = {}", locked);
+    }
+
+    // -----------------------------------------------------------------------
+    // High-level window event dispatch
+    // -----------------------------------------------------------------------
+
+    /// Process a winit [`WindowEvent`], updating raw input state and managing
+    /// pointer lock.
+    ///
+    /// Handles the following events:
+    /// - `CloseRequested` → exits the event loop.
+    /// - `Focused` → manages `focus_return_click` and auto-releases pointer
+    ///   lock on focus loss.
+    /// - `MouseInput` → raw mouse button state + left-click pointer-lock entry.
+    /// - `CursorMoved` → mouse position.
+    /// - `MouseWheel` → scroll delta.
+    /// - `Touch` → mapped to mouse events.
+    /// - `KeyboardInput` → raw keyboard state + ESC/ALT pointer-lock control.
+    ///
+    /// Events that are not input-related (e.g. `Resized`, `RedrawRequested`)
+    /// are **not** handled — the caller should process them after this call.
+    ///
+    /// Returns `true` if the event was fully handled and the caller should not
+    /// process it further.
+    pub fn handle_window_event(
+        &mut self,
+        event: &WindowEvent,
+        event_loop: &winit::event_loop::ActiveEventLoop,
+        window: &winit::window::Window,
+    ) -> bool {
+        match event {
+            WindowEvent::CloseRequested => {
+                log::info!("close requested, exiting");
+                event_loop.exit();
+                true
+            }
+
+            WindowEvent::Focused(false) => {
+                self.focus_return_click = false;
+                if self.pointer_locked {
+                    self.set_locked(false, Some(window));
+                }
+                true
+            }
+            WindowEvent::Focused(true) => {
+                self.focus_return_click = true;
+                if self.pointer_locked {
+                    self.set_locked(false, Some(window));
+                }
+                true
+            }
+
+            WindowEvent::MouseInput { state, button, .. } => {
+                if *state == ElementState::Pressed
+                    && *button == winit::event::MouseButton::Left
+                {
+                    // Left-click on the 3D scene enters pointer lock.
+                    if !self.pointer_locked {
+                        if self.focus_return_click {
+                            self.focus_return_click = false;
+                        } else {
+                            self.set_locked(true, Some(window));
+                            return true;
+                        }
+                    }
+                }
+                self.handle_mouse_button((*button).into(), *state);
+                true
+            }
+
+            WindowEvent::CursorMoved { position, .. } => {
+                self.handle_mouse_move([position.x, position.y]);
+                true
+            }
+
+            WindowEvent::MouseWheel { delta, .. } => {
+                self.handle_scroll(*delta);
+                true
+            }
+
+            WindowEvent::Touch(touch) => {
+                let pos = [touch.location.x, touch.location.y];
+                match touch.phase {
+                    TouchPhase::Started => {
+                        self.set_mouse_position(pos);
+                        self.handle_mouse_button(MouseButton::Left, ElementState::Pressed);
+                    }
+                    TouchPhase::Moved => {
+                        self.handle_mouse_move(pos);
+                    }
+                    TouchPhase::Ended | TouchPhase::Cancelled => {
+                        self.handle_mouse_button(MouseButton::Left, ElementState::Released);
+                    }
+                }
+                true
+            }
+
+            WindowEvent::KeyboardInput {
+                event:
+                    winit::event::KeyEvent {
+                        physical_key,
+                        state,
+                        ..
+                    },
+                ..
+            } => {
+                if *state == ElementState::Pressed {
+                    if let PhysicalKey::Code(code) = physical_key {
+                        // ESC toggles pointer lock off (takes priority over
+                        // anything else).
+                        if *code == WinitKeyCode::Escape {
+                            if self.pointer_locked {
+                                self.set_locked(false, Some(window));
+                                self.alt_temp_release = false;
+                            }
+                            self.handle_keyboard(*physical_key, *state);
+                            return true;
+                        }
+                        // Holding ALT temporarily releases a locked pointer.
+                        if *code == WinitKeyCode::AltLeft
+                            || *code == WinitKeyCode::AltRight
+                        {
+                            if self.pointer_locked {
+                                self.set_locked(false, Some(window));
+                                self.alt_temp_release = true;
+                            }
+                            self.handle_keyboard(*physical_key, *state);
+                            return true;
+                        }
+                    }
+                }
+                // Released ALT: re-lock if it was a temp release.
+                if *state == ElementState::Released {
+                    if let PhysicalKey::Code(code) = physical_key {
+                        if (*code == WinitKeyCode::AltLeft || *code == WinitKeyCode::AltRight)
+                            && self.alt_temp_release
+                        {
+                            self.set_locked(true, Some(window));
+                            self.alt_temp_release = false;
+                        }
+                    }
+                }
+                self.handle_keyboard(*physical_key, *state);
+                true
+            }
+
+            _ => false,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -240,7 +436,7 @@ mod tests {
 
     #[test]
     fn new_is_empty() {
-        let s = InputState::new();
+        let s = InputManager::new();
         assert!(!s.key_held(KeyCode::KeyW));
         assert!(!s.mouse_held(MouseButton::Left));
         assert_eq!(s.mouse_delta(), [0.0; 2]);
@@ -251,7 +447,7 @@ mod tests {
 
     #[test]
     fn key_press_adds_held_and_just_pressed() {
-        let mut s = InputState::new();
+        let mut s = InputManager::new();
         s.handle_keyboard(phys(WinitKeyCode::KeyW), ElementState::Pressed);
         assert!(s.key_held(KeyCode::KeyW));
         assert!(s.key_just_pressed(KeyCode::KeyW));
@@ -259,7 +455,7 @@ mod tests {
 
     #[test]
     fn key_held_survives_begin_frame() {
-        let mut s = InputState::new();
+        let mut s = InputManager::new();
         s.handle_keyboard(phys(WinitKeyCode::KeyW), ElementState::Pressed);
         s.begin_frame();
         assert!(s.key_held(KeyCode::KeyW));
@@ -268,7 +464,7 @@ mod tests {
 
     #[test]
     fn key_just_released_on_release() {
-        let mut s = InputState::new();
+        let mut s = InputManager::new();
         s.handle_keyboard(phys(WinitKeyCode::KeyW), ElementState::Pressed);
         s.begin_frame();
         s.handle_keyboard(phys(WinitKeyCode::KeyW), ElementState::Released);
@@ -278,7 +474,7 @@ mod tests {
 
     #[test]
     fn duplicate_key_press_does_not_double_just_pressed() {
-        let mut s = InputState::new();
+        let mut s = InputManager::new();
         s.handle_keyboard(phys(WinitKeyCode::KeyW), ElementState::Pressed);
         s.handle_keyboard(phys(WinitKeyCode::KeyW), ElementState::Pressed); // duplicate
         assert!(s.key_held(KeyCode::KeyW));
@@ -287,7 +483,7 @@ mod tests {
 
     #[test]
     fn mouse_delta_accumulates_and_resets() {
-        let mut s = InputState::new();
+        let mut s = InputManager::new();
         s.handle_mouse_move([100.0, 200.0]);
         assert_eq!(s.mouse_delta(), [100.0, 200.0]);
         assert_eq!(s.mouse_position(), [100.0, 200.0]);
@@ -303,7 +499,7 @@ mod tests {
 
     #[test]
     fn scroll_line_delta() {
-        let mut s = InputState::new();
+        let mut s = InputManager::new();
         s.handle_scroll(MouseScrollDelta::LineDelta(0.0, 3.0));
         assert!((s.scroll_delta() - 3.0).abs() < 1e-9);
         s.handle_scroll(MouseScrollDelta::LineDelta(0.0, -1.0));
@@ -312,7 +508,7 @@ mod tests {
 
     #[test]
     fn scroll_pixel_delta() {
-        let mut s = InputState::new();
+        let mut s = InputManager::new();
         s.handle_scroll(MouseScrollDelta::PixelDelta(
             winit::dpi::PhysicalPosition::new(0.0, 42.0),
         ));
@@ -321,7 +517,7 @@ mod tests {
 
     #[test]
     fn mouse_button_held_and_just_pressed() {
-        let mut s = InputState::new();
+        let mut s = InputManager::new();
         s.handle_mouse_button(MouseButton::Left, ElementState::Pressed);
         assert!(s.mouse_held(MouseButton::Left));
 
@@ -332,7 +528,7 @@ mod tests {
 
     #[test]
     fn mouse_button_release_clears_held() {
-        let mut s = InputState::new();
+        let mut s = InputManager::new();
         s.handle_mouse_button(MouseButton::Left, ElementState::Pressed);
         s.begin_frame();
         s.handle_mouse_button(MouseButton::Left, ElementState::Released);
@@ -341,7 +537,7 @@ mod tests {
 
     #[test]
     fn touch_events_accumulate_and_clear() {
-        let mut s = InputState::new();
+        let mut s = InputManager::new();
         s.handle_touch(1, TouchPhase::Started, [10.0, 20.0]);
         s.handle_touch(2, TouchPhase::Moved, [30.0, 40.0]);
         assert_eq!(s.touches().len(), 2);
@@ -354,7 +550,7 @@ mod tests {
 
     #[test]
     fn begin_frame_clears_all_transient() {
-        let mut s = InputState::new();
+        let mut s = InputManager::new();
         s.handle_keyboard(phys(WinitKeyCode::Space), ElementState::Pressed);
         s.handle_mouse_button(MouseButton::Right, ElementState::Pressed);
         s.handle_mouse_move([50.0, 60.0]);

@@ -4,7 +4,7 @@
 //! window, builds a [`Renderer`], creates an ECS [`World`] with a test scene
 //! of three cubes, and drives [`render_system`] each frame.
 //!
-//! Input events are routed to [`InputState`], and the free-fly [`Camera`]
+//! Input events are routed to [`InputManager`], and the free-fly [`Camera`]
 //! reads the input state (WASD + QE/Space/Ctrl to move, right-drag to look)
 //! every frame.
 
@@ -15,7 +15,6 @@ use anyhow::Context;
 use winit::application::ApplicationHandler;
 use winit::event::{DeviceEvent, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
-use winit::keyboard::KeyCode;
 use winit::raw_window_handle::HasDisplayHandle;
 use winit::window::{Window, WindowId};
 
@@ -23,7 +22,7 @@ use prism_audio::{AudioConfig, AudioEngine};
 use prism_ecs::World;
 use prism_render::{DebugMode, GraphRenderer, NormalSpace, RenderMode};
 
-use crate::input::{InputState, MouseButton};
+use crate::input::InputManager;
 use crate::render_system::{render_system, MeshManager};
 use crate::scene::components::{
     Camera, LocalTransform,
@@ -321,7 +320,7 @@ pub struct App {
     renderer: Option<GraphRenderer>,
     world: Option<World>,
     mesh_manager: MeshManager,
-    input_state: InputState,
+    input_manager: InputManager,
     needs_resize: bool,
     start: Instant,
     /// Timestamp of the previous frame, used to compute per-frame `dt` for the
@@ -379,21 +378,6 @@ pub struct App {
     /// inspector; when both are open their UIs run inside a single
     /// `run_ui` closure (see `render_one_frame`).
     render_graph_viz: prism_editor::RenderGraphViz,
-    /// FPS-style pointer-lock: when `true` the cursor is hidden and grabbed and
-    /// the camera follows the mouse directly (no button held). Toggled by
-    /// left-click (enter), ESC (exit), holding ALT (temporary release).
-    pointer_locked: bool,
-    /// Whether the pointer was locked right before the inspector (F1) was
-    /// opened, so it can be re-locked when the inspector closes.
-    lock_before_inspector: bool,
-    /// `true` while ALT is held and has temporarily released a locked pointer,
-    /// so releasing ALT re-locks (distinct from a full ESC exit).
-    alt_temp_release: bool,
-    /// Set when the window regains focus (Focused(true)). The very next
-    /// left-click on the 3D scene will be treated as a "focus the window"
-    /// gesture instead of entering pointer lock, so switching away and
-    /// clicking back doesn't auto-grab the cursor.
-    focus_return_click: bool,
     /// Audio engine for spatial and UI sounds. Initialised (or gracefully
     /// skipped on failure) after the window is ready. `None` = silent mode.
     audio: Option<AudioEngine>,
@@ -430,7 +414,7 @@ impl App {
             renderer: None,
             world: None,
             mesh_manager: MeshManager::new(),
-            input_state: InputState::new(),
+            input_manager: InputManager::new(),
             needs_resize: false,
             start: Instant::now(),
             last_frame: None,
@@ -454,10 +438,6 @@ impl App {
                 e
             },
             render_graph_viz: prism_editor::RenderGraphViz::new(),
-            pointer_locked: false,
-            lock_before_inspector: false,
-            alt_temp_release: false,
-            focus_return_click: false,
             audio: None,
             render_mode: RenderMode::Raster,
             pt_max_bounces: 3,
@@ -786,40 +766,9 @@ impl App {
         }
         resolved
     }
-
-    /// Enable or disable FPS-style pointer lock. When `locked` is `true` the
-    /// cursor is hidden and confined to the window so the camera can follow the
-    /// mouse directly; when `false` the cursor is shown and freed. No-op on
-    /// platforms without a window cursor (e.g. Android).
-    fn set_locked(&mut self, locked: bool) {
-        self.pointer_locked = locked;
-        #[cfg(not(target_os = "android"))]
-        if let Some(window) = self.window.as_ref() {
-            if locked {
-                window.set_cursor_visible(false);
-                if let Err(e) = window.set_cursor_grab(winit::window::CursorGrabMode::Confined) {
-                    log::warn!("failed to grab cursor (pointer lock): {e}");
-                }
-                // Drop any motion accumulated while the cursor was visible so
-                // the view doesn't snap on the first locked frame — only
-                // post-lock mouse delta should rotate the camera.
-                self.input_state.begin_frame();
-            } else {
-                window.set_cursor_visible(true);
-                if let Err(e) = window.set_cursor_grab(winit::window::CursorGrabMode::None) {
-                    log::warn!("failed to release cursor grab: {e}");
-                }
-                // Drop any accumulated motion so the view doesn't jump when the
-                // cursor is freed / re-locked.
-                self.input_state.begin_frame();
-            }
-        }
-        log::info!("pointer lock = {}", locked);
-    }
 }
 
-// ---------------------------------------------------------------------------
-// Free-function asset resolvers
+    /// Free-function asset resolvers
 //
 // These live outside `impl App` so the borrow checker can see that
 // `&mut ResourceManager`, `&mut HashMap caches`, and `&mut GraphRenderer`
@@ -1202,322 +1151,164 @@ impl ApplicationHandler for App {
             }
         }
 
-        match event {
-            WindowEvent::CloseRequested => {
-                log::info!("close requested, exiting");
-                event_loop.exit();
+        // Let InputManager process raw input and pointer lock.
+        let window_ref = self.window.as_ref().map(|w| w.as_ref());
+        if let Some(window) = window_ref {
+            self.input_manager
+                .handle_window_event(&event, event_loop, window);
+        }
+
+        // After InputManager has updated raw state, check for editor shortcuts.
+        if let WindowEvent::KeyboardInput {
+            event:
+                winit::event::KeyEvent {
+                    physical_key,
+                    state,
+                    ..
+                },
+            ..
+        } = &event
+        {
+            if *state == winit::event::ElementState::Pressed {
+                let input = &self.input_manager;
+                let code = match physical_key {
+                    winit::keyboard::PhysicalKey::Code(c) => c,
+                    _ => return,
+                };
+
+                let shift = input.key_held(crate::input::KeyCode::ShiftLeft)
+                    || input.key_held(crate::input::KeyCode::ShiftRight);
+                let selected = match (code, shift) {
+                    (winit::keyboard::KeyCode::Digit1, false) => Some(0u32),
+                    (winit::keyboard::KeyCode::Digit2, false) => Some(1),
+                    (winit::keyboard::KeyCode::Digit3, false) => Some(2),
+                    (winit::keyboard::KeyCode::Digit4, false) => Some(3),
+                    (winit::keyboard::KeyCode::Digit5, false) => Some(4),
+                    (winit::keyboard::KeyCode::Digit6, false) => Some(5),
+                    (winit::keyboard::KeyCode::Digit7, false) => Some(6),
+                    (winit::keyboard::KeyCode::Digit8, false) => Some(7),
+                    (winit::keyboard::KeyCode::Digit9, false) => Some(8),
+                    (winit::keyboard::KeyCode::Digit0, false) => Some(9),
+                    (winit::keyboard::KeyCode::Digit1, true) => Some(10),
+                    (winit::keyboard::KeyCode::Digit2, true) => Some(11),
+                    (winit::keyboard::KeyCode::Digit3, true) => Some(12),
+                    (winit::keyboard::KeyCode::Digit4, true) => Some(13),
+                    (winit::keyboard::KeyCode::Digit5, true) => Some(14),
+                    _ => None,
+                };
+                if let Some(bit) = selected {
+                    self.debug_flags = if self.debug_flags == (1u32 << bit) {
+                        0
+                    } else {
+                        1u32 << bit
+                    };
+                    log::info!(
+                        "PBR isolate = {} (flags=0x{:x})",
+                        self.pbr_flag_labels(),
+                        self.debug_flags
+                    );
+                } else if *code == winit::keyboard::KeyCode::Tab {
+                    self.debug_rt = (self.debug_rt + 1) % 3;
+                    let name = match self.debug_rt {
+                        0 => "normal (HDR tonemap)",
+                        1 => "depth (linearized)",
+                        2 => "normal (view-space)",
+                        _ => "?",
+                    };
+                    log::info!("debug RT = {} ({})", self.debug_rt, name);
+                } else if *code == winit::keyboard::KeyCode::KeyT {
+                    self.tonemap_mode = if self.tonemap_mode == 0 { 1 } else { 0 };
+                    log::info!("tonemap mode = {} ({})",
+                        self.tonemap_mode,
+                        if self.tonemap_mode == 1 { "ACES" } else { "Reinhard" });
+                } else if *code == winit::keyboard::KeyCode::KeyH {
+                    self.show_ui = !self.show_ui;
+                } else if *code == winit::keyboard::KeyCode::F1 {
+                    self.editor.toggle();
+                    if self.editor.inspector.show {
+                        self.input_manager.lock_before_inspector =
+                            self.input_manager.pointer_locked;
+                        self.input_manager.alt_temp_release = false;
+                        if self.input_manager.pointer_locked {
+                            self.input_manager.set_locked(false, self.window.as_deref());
+                        }
+                        if let Some(renderer) = self.renderer.as_mut() {
+                            if let Err(e) = renderer.ensure_egui_overlay() {
+                                log::error!("failed to init egui overlay: {e}");
+                                self.editor.inspector.show = false;
+                            }
+                        }
+                    } else if self.input_manager.lock_before_inspector
+                        && !self.render_graph_viz.show
+                    {
+                        self.input_manager.lock_before_inspector = false;
+                        self.input_manager.set_locked(true, self.window.as_deref());
+                    }
+                } else if *code == winit::keyboard::KeyCode::F2 {
+                    self.render_graph_viz.toggle();
+                    if self.render_graph_viz.show {
+                        self.input_manager.lock_before_inspector =
+                            self.input_manager.pointer_locked;
+                        self.input_manager.alt_temp_release = false;
+                        if self.input_manager.pointer_locked {
+                            self.input_manager.set_locked(false, self.window.as_deref());
+                        }
+                        if let Some(renderer) = self.renderer.as_mut() {
+                            if let Err(e) = renderer.ensure_egui_overlay() {
+                                log::error!("failed to init egui overlay: {e}");
+                                self.render_graph_viz.show = false;
+                            }
+                        }
+                    } else if self.input_manager.lock_before_inspector
+                        && !self.editor.inspector.show
+                    {
+                        self.input_manager.lock_before_inspector = false;
+                        self.input_manager.set_locked(true, self.window.as_deref());
+                    }
+                } else if *code == winit::keyboard::KeyCode::F3 {
+                    self.editor.toggle_perf();
+                    if self.editor.inspector.show_perf {
+                        if let Some(renderer) = self.renderer.as_mut() {
+                            if let Err(e) = renderer.ensure_egui_overlay() {
+                                log::error!("failed to init egui overlay: {e}");
+                                self.editor.inspector.show_perf = false;
+                            }
+                        }
+                    }
+                } else if *code == winit::keyboard::KeyCode::KeyS
+                    && (input.key_held(crate::input::KeyCode::ControlLeft)
+                        || input.key_held(crate::input::KeyCode::ControlRight))
+                {
+                    if let Some(world) = self.world.as_ref() {
+                        crate::scene_state::save_scene_state(world);
+                    }
+                }
             }
+            return;
+        }
+
+        // Events not handled by InputManager or the shortcut block above.
+        match event {
             WindowEvent::Resized(size) => {
                 self.needs_resize = true;
                 log::info!(
                     "Resized: {}x{} aspect={:.4}",
-                    size.width,
-                    size.height,
+                    size.width, size.height,
                     if size.height > 0 {
                         size.width as f32 / size.height as f32
-                    } else {
-                        0.0
-                    },
+                    } else { 0.0 },
                 );
                 if size.width > 0 && size.height > 0 {
                     let aspect = size.width as f32 / size.height as f32;
                     if let Some(world) = self.world.as_mut() {
-                        // Write the aspect onto the Camera data component so the
-                        // projection (derived each frame in render_system) stays
-                        // in sync with the surface.
                         for (_, cam) in world.query_mut::<Camera>() {
                             cam.aspect = aspect;
                         }
                     }
                 }
             }
-            WindowEvent::Focused(false) => {
-                // Window lost focus (ALT+TAB, click another window, etc).
-                // Auto-release pointer lock so the user isn't stuck in a locked
-                // cursor state when they return, and so stale mouse delta can't
-                // accumulate while the window is inactive and cause a camera
-                // jump on re-entry.
-                self.focus_return_click = false;
-                if self.pointer_locked {
-                    self.set_locked(false);
-                }
-            }
-            WindowEvent::Focused(true) => {
-                // Window regained focus. Mark the next click as a "focus the
-                // window" gesture so it doesn't auto-enter pointer lock and
-                // immediately catch stale mouse movement. Safety-net unlock
-                // in case Focused(false) wasn't delivered on this platform.
-                self.focus_return_click = true;
-                if self.pointer_locked {
-                    self.set_locked(false);
-                }
-            }
             WindowEvent::RedrawRequested => {
                 self.render_one_frame();
-            }
-            WindowEvent::MouseInput { state, button, .. } => {
-                // Left-click: try the debug overlay first; if it consumes the
-                // click, don't also start a camera drag.
-                if state == winit::event::ElementState::Pressed
-                    && button == winit::event::MouseButton::Left
-                {
-                    let pos = self.input_state.mouse_position();
-                    let ext = self.renderer.as_ref().map(|r| r.extent());
-                    log::trace!(
-                        "MOUSE_DEBUG pos=({:.1},{:.1}) extent={:?}",
-                        pos[0],
-                        pos[1],
-                        ext.map(|e| (e.width, e.height)),
-                    );
-                    if self.handle_overlay_click(pos[0] as f32, pos[1] as f32) {
-                        return;
-                    }
-                    // Left-click on the 3D scene (not a UI panel) enters
-                    // FPS-style pointer lock if not already locked, the
-                    // inspector isn't open, and this isn't the first click
-                    // after a focus-return (which should just focus the
-                    // window, not grab the cursor).
-                    if !self.pointer_locked && !self.ui_modal_open() {
-                        if self.focus_return_click {
-                            self.focus_return_click = false;
-                        } else {
-                            self.set_locked(true);
-                            return;
-                        }
-                    }
-                }
-                self.input_state.handle_mouse_button(button.into(), state);
-            }
-            WindowEvent::CursorMoved { position, .. } => {
-                self.input_state.handle_mouse_move([position.x, position.y]);
-            }
-            WindowEvent::MouseWheel { delta, .. } => {
-                self.input_state.handle_scroll(delta);
-            }
-            WindowEvent::Touch(touch) => {
-                // Map single-touch drag to a left mouse drag so the existing
-                // orbit controller works unchanged on touch devices.
-                let pos = [touch.location.x, touch.location.y];
-                match touch.phase {
-                    winit::event::TouchPhase::Started => {
-                        self.input_state.set_mouse_position(pos);
-                        let ext = self.renderer.as_ref().map(|r| r.extent());
-                        let orient = self.renderer.as_ref().map(|r| r.orientation());
-                        log::debug!(
-                            "TOUCH_DEBUG touch.location=({:.1},{:.1}) extent={:?} \
-                             orientation_aspect={:.4} rotation={:?}",
-                            pos[0],
-                            pos[1],
-                            ext.map(|e| (e.width, e.height)),
-                            orient.map(|o| o.0).unwrap_or(1.0),
-                            orient.map(|o| o.1),
-                        );
-                        if self.handle_overlay_click(pos[0] as f32, pos[1] as f32) {
-                            // Consumed by the overlay; don't start a camera drag.
-                        } else {
-                            self.input_state.handle_mouse_button(
-                                MouseButton::Left,
-                                winit::event::ElementState::Pressed,
-                            );
-                        }
-                    }
-                    winit::event::TouchPhase::Moved => {
-                        self.input_state.handle_mouse_move(pos);
-                    }
-                    winit::event::TouchPhase::Ended | winit::event::TouchPhase::Cancelled => {
-                        self.input_state.handle_mouse_button(
-                            MouseButton::Left,
-                            winit::event::ElementState::Released,
-                        );
-                    }
-                }
-            }
-            WindowEvent::KeyboardInput {
-                event:
-                    winit::event::KeyEvent {
-                        physical_key,
-                        state,
-                        ..
-                    },
-                ..
-            } => {
-                if state == winit::event::ElementState::Pressed {
-                    if let winit::keyboard::PhysicalKey::Code(code) = physical_key {
-                        // ESC toggles pointer lock off. This is independent of
-                        // any modifier and takes priority over the debug keys.
-                        if code == KeyCode::Escape {
-                            if self.pointer_locked {
-                                self.set_locked(false);
-                                self.alt_temp_release = false;
-                            }
-                            self.input_state.handle_keyboard(physical_key, state);
-                            return;
-                        }
-                        // Holding ALT temporarily releases a locked pointer so
-                        // the user can move the cursor freely; releasing ALT
-                        // re-locks (handled in the Released branch below).
-                        if code == KeyCode::AltLeft || code == KeyCode::AltRight {
-                            if self.pointer_locked && !self.ui_modal_open() {
-                                self.set_locked(false);
-                                self.alt_temp_release = true;
-                            }
-                            self.input_state.handle_keyboard(physical_key, state);
-                            return;
-                        }
-                        // Single-select PBR component visualization. Each digit
-                        // maps 1:1 to a `PBR_FLAG_*` constant in
-                        // `scene_frag.slang` (by declaration order); pressing it
-                        // clears the others and isolates that one component as a
-                        // grayscale render (see the shader's isolate path).
-                        // Shift selects the high group (Shift+1..Shift+4).
-                        let shift = self.input_state.key_held(crate::input::KeyCode::ShiftLeft)
-                            || self.input_state.key_held(crate::input::KeyCode::ShiftRight);
-                        let selected = match (code, shift) {
-                            (KeyCode::Digit1, false) => Some(0u32),  // Direct
-                            (KeyCode::Digit2, false) => Some(1),     // Shadow
-                            (KeyCode::Digit3, false) => Some(2),     // Specular
-                            (KeyCode::Digit4, false) => Some(3),     // Metallic
-                            (KeyCode::Digit5, false) => Some(4),     // Roughness
-                            (KeyCode::Digit6, false) => Some(5),     // DiffuseIBL
-                            (KeyCode::Digit7, false) => Some(6),     // SpecularIBL
-                            (KeyCode::Digit8, false) => Some(7),     // MultiLight
-                            (KeyCode::Digit9, false) => Some(8),     // AO (GTAO)
-                            (KeyCode::Digit0, false) => Some(9),     // Emissive
-                            (KeyCode::Digit1, true) => Some(10),     // Transmission
-                            (KeyCode::Digit2, true) => Some(11),     // Translucency
-                            (KeyCode::Digit3, true) => Some(12),     // Anisotropy
-                            (KeyCode::Digit4, true) => Some(13),     // ClearCoat
-                            (KeyCode::Digit5, true) => Some(14),     // GI (probe volume)
-                            _ => None,
-                        };
-                        if let Some(bit) = selected {
-                            // Single-select: pressing the same key again toggles
-                            // it off (back to black); a different key switches.
-                            self.debug_flags = if self.debug_flags == (1u32 << bit) {
-                                0
-                            } else {
-                                1u32 << bit
-                            };
-                            log::info!(
-                                "PBR isolate = {} (flags=0x{:x})",
-                                self.pbr_flag_labels(),
-                                self.debug_flags
-                            );
-                        } else if code == KeyCode::Tab {
-                            // Cycle the PostPass debug render-target viewer:
-                            // 0 = normal HDR, 1 = linearized depth, 2 = normal.
-                            self.debug_rt = (self.debug_rt + 1) % 3;
-                            let name = match self.debug_rt {
-                                0 => "normal (HDR tonemap)",
-                                1 => "depth (linearized)",
-                                2 => "normal (view-space)",
-                                _ => "?",
-                            };
-                            log::info!("debug RT = {} ({})", self.debug_rt, name);
-                        } else if code == KeyCode::KeyT {
-                            // Toggle tonemap mode: 0 = Reinhard, 1 = ACES Narkowicz.
-                            self.tonemap_mode = if self.tonemap_mode == 0 { 1 } else { 0 };
-                            log::info!(
-                                "tonemap mode = {} ({})",
-                                self.tonemap_mode,
-                                if self.tonemap_mode == 1 {
-                                    "ACES"
-                                } else {
-                                    "Reinhard"
-                                }
-                            );
-                        } else if code == KeyCode::KeyH {
-                            self.show_ui = !self.show_ui;
-                        } else if code == KeyCode::F1 {
-                            // Toggle the egui inspector panel. First activation
-                            // also lazily creates the EguiOverlay.
-                            self.editor.toggle();
-                            if self.editor.inspector.show {
-                                // Opening the inspector: remember whether the
-                                // pointer was locked so we can restore it on
-                                // close, then free the cursor for UI interaction.
-                                self.lock_before_inspector = self.pointer_locked;
-                                self.alt_temp_release = false;
-                                if self.pointer_locked {
-                                    self.set_locked(false);
-                                }
-                                if let Some(renderer) = self.renderer.as_mut() {
-                                    if let Err(e) = renderer.ensure_egui_overlay() {
-                                        log::error!("failed to init egui overlay: {e}");
-                                        self.editor.inspector.show = false;
-                                    }
-                                }
-                            } else if self.lock_before_inspector && !self.render_graph_viz.show {
-                                // Closing the inspector: re-lock if it was
-                                // locked before we opened it - but only if no
-                                // other UI panel (F2 viz) is still open.
-                                self.lock_before_inspector = false;
-                                self.set_locked(true);
-                            }
-                        } else if code == KeyCode::F2 {
-                            // Toggle the render-graph visualizer. Same overlay
-                            // lifecycle as F1: lazily create the EguiOverlay on
-                            // first open and free the cursor for UI interaction.
-                            self.render_graph_viz.toggle();
-                            if self.render_graph_viz.show {
-                                self.lock_before_inspector = self.pointer_locked;
-                                self.alt_temp_release = false;
-                                if self.pointer_locked {
-                                    self.set_locked(false);
-                                }
-                                if let Some(renderer) = self.renderer.as_mut() {
-                                    if let Err(e) = renderer.ensure_egui_overlay() {
-                                        log::error!("failed to init egui overlay: {e}");
-                                        self.render_graph_viz.show = false;
-                                    }
-                                }
-                            } else if self.lock_before_inspector && !self.editor.inspector.show {
-                                // Closing the viz: re-lock only if the inspector
-                                // isn't still holding the cursor.
-                                self.lock_before_inspector = false;
-                                self.set_locked(true);
-                            }
-                        } else if code == KeyCode::F3 {
-                            // Toggle the performance HUD independently of F1/F2.
-                            // Does NOT affect cursor lock (unlike F1/F2).
-                            self.editor.toggle_perf();
-                            if self.editor.inspector.show_perf {
-                                if let Some(renderer) = self.renderer.as_mut() {
-                                    if let Err(e) = renderer.ensure_egui_overlay() {
-                                        log::error!("failed to init egui overlay: {e}");
-                                        self.editor.inspector.show_perf = false;
-                                    }
-                                }
-                            }
-                        } else if code == KeyCode::KeyS
-                            && (self
-                                .input_state
-                                .key_held(crate::input::KeyCode::ControlLeft)
-                                || self
-                                    .input_state
-                                    .key_held(crate::input::KeyCode::ControlRight))
-                        {
-                            // Ctrl+S: manually save scene state
-                            if let Some(world) = self.world.as_ref() {
-                                crate::scene_state::save_scene_state(world);
-                            }
-                        }
-                    }
-                }
-                self.input_state.handle_keyboard(physical_key, state);
-                // Released ALT: if it had temporarily released a locked pointer
-                // (and the inspector isn't open), re-lock immediately.
-                if state == winit::event::ElementState::Released {
-                    if let winit::keyboard::PhysicalKey::Code(code) = physical_key {
-                        if (code == KeyCode::AltLeft || code == KeyCode::AltRight)
-                            && self.alt_temp_release
-                            && !self.ui_modal_open()
-                        {
-                            self.set_locked(true);
-                            self.alt_temp_release = false;
-                        }
-                    }
-                }
             }
             _ => {}
         }
@@ -1537,11 +1328,11 @@ impl ApplicationHandler for App {
             // to jump after unlocking (eg. closing the inspector) if a motion
             // event arrives between set_locked(begin_frame) and the next
             // camera update.
-            if !self.pointer_locked {
+            if !self.input_manager.pointer_locked {
                 return;
             }
-            let pos = self.input_state.mouse_position();
-            self.input_state
+            let pos = self.input_manager.mouse_position();
+            self.input_manager
                 .handle_mouse_move([pos[0] + delta.0, pos[1] + delta.1]);
         }
     }
@@ -1550,8 +1341,8 @@ impl ApplicationHandler for App {
         if event_loop.exiting() {
             // Free the cursor if it was locked, so the user isn't left with a
             // hidden/grabbed pointer after the window closes.
-            if self.pointer_locked {
-                self.set_locked(false);
+            if self.input_manager.pointer_locked {
+                self.input_manager.set_locked(false, self.window.as_ref().map(|w| w.as_ref()));
             }
             // Persist ECS scene state (camera, lights, transforms) for the
             // next launch. No-op when world is not yet initialised.
@@ -1713,11 +1504,11 @@ impl App {
         // yaw/pitch/translation onto the FlyCameraController + LocalTransform
         // data components and returns the entity it touched (used to skip the
         // demo-spin animation for that entity).
-        let look_active = self.pointer_locked;
+        let look_active = self.input_manager.pointer_locked;
         let camera_entity_touched: Option<prism_ecs::Entity> = if let Some(world) = self.world.as_mut() {
             crate::scene::systems::camera::camera_controller_system(
                 world,
-                &self.input_state,
+                &self.input_manager,
                 dt,
                 look_active,
             )
@@ -1725,7 +1516,7 @@ impl App {
             None
         };
         // Clear transient input state for the next frame.
-        self.input_state.begin_frame();
+        self.input_manager.begin_frame();
 
         // Legacy demo animation: spin every transformable entity around Y.
         // Paused while any UI panel is open so inspector edits to

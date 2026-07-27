@@ -99,6 +99,15 @@ Conventions) before touching any matrix/coordinate math — deviating from those
 - Use the `log` crate (`log::trace!`/`warn!`/...). Verbose pass tracing uses `log::trace!`.
   `RUST_LOG` is set by `run.ps1` (default `info`); respect it, don't `eprintln!` for routine flow.
 
+## Editor workflow rules
+- **NEVER manually fix brace/delimiter mismatches.** If a file has an unclosed
+  delimiter or brace mismatch after an edit, do not attempt to count braces or
+  patch the file yourself. Ask the user for help — the risk of introducing
+  further structural corruption is high and wastes time.
+- When the file is too large for the edit tool, write a Python script to a temp
+  file and execute it, rather than attempting multi-line string replacements in
+  the shell.
+
 ## Platform constraints
 - Desktop/CI compiles shaders; **Android ships prebuilt `.spv`** (no slangc on device).
 - `.cargo/config.toml` wires the `aarch64-linux-android` linker; `rust-toolchain.toml` pins the
