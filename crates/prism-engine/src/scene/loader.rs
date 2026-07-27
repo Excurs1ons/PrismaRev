@@ -47,6 +47,7 @@
 use std::path::PathBuf;
 
 use prism_ecs::{Entity, World};
+use prism_render::mesh::Vertex;
 
 use super::components::*;
 use super::helpers::HierarchyHelper;
@@ -108,16 +109,16 @@ pub struct SceneInstance {
 /// docs).  `name` is currently stored for debug/inspector use only.
 #[derive(Debug)]
 #[allow(dead_code)]
-pub(crate) struct ParsedEntity {
-    pub(crate) name: String,
-    pub(crate) parent: Option<u32>,
-    pub(crate) translation: [f32; 3],
-    pub(crate) rotation: [f32; 4],
-    pub(crate) scale: [f32; 3],
-    pub(crate) has_mesh: bool,
-    pub(crate) mesh_path: String,
-    pub(crate) has_material: bool,
-    pub(crate) material_path: String,
+pub struct ParsedEntity {
+    pub name: String,
+    pub parent: Option<u32>,
+    pub translation: [f32; 3],
+    pub rotation: [f32; 4],
+    pub scale: [f32; 3],
+    pub has_mesh: bool,
+    pub mesh_path: String,
+    pub has_material: bool,
+    pub material_path: String,
     pub(crate) has_light: bool,
     pub(crate) light_type: u8,
     pub(crate) light_color: [f32; 3],
@@ -170,14 +171,14 @@ impl ParsedEntity {
 
 /// Result of parsing an RSCN binary blob.
 #[derive(Debug)]
-pub(crate) struct ParsedRscn {
-    pub(crate) entities: Vec<ParsedEntity>,
+pub struct ParsedRscn {
+    pub entities: Vec<ParsedEntity>,
 }
 
 /// Parse an RSCN binary blob into entities + header info.
 ///
 /// Returns `Err` with a human-readable message on format errors.
-pub(crate) fn parse_rscn(data: &[u8]) -> Result<ParsedRscn, String> {
+pub fn parse_rscn(data: &[u8]) -> Result<ParsedRscn, String> {
     if data.len() < 9 {
         return Err("RSCN data too short".into());
     }
@@ -1348,5 +1349,322 @@ mod tests {
         assert_eq!(lt.translation, [0.0, 2.5, 18.0]);
         // And it should carry a free-fly controller.
         assert!(world.get::<FlyCameraController>(cam_entity).is_some());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Standalone scene geometry extraction for offline baking
+// ---------------------------------------------------------------------------
+
+/// Load a packaged scene + its RSCN file and flatten into per-instance
+/// path-tracer geometry + material SSBO bytes.
+///
+/// This is the headless entry point used by `prism-bake-gi`.  It creates a
+/// temporary `ResourceManager`, reads the RSCN from disk, walks every entity,
+/// resolves mesh + material assets from the `.pak`, and returns:
+///
+/// - `instances` — one [`PtGeometryInstance`] per scene entity that has
+///   a mesh + material (world-space vertices, no per-instance transform).
+/// - `materials_bytes` — a flat `GpuMaterial[96]` array (one entry per
+///   unique material path, indexed by `PtGeometryInstance::material_slot`).
+pub fn extract_scene_geometry(
+    pak_path: &std::path::Path,
+    rscn_path: &std::path::Path,
+) -> anyhow::Result<(
+    Vec<prism_render::bake_common::PtGeometryInstance>,
+    Vec<u8>,
+)> {
+    use std::collections::HashMap;
+
+    use prism_asset_runtime::{MeshAsset, ResourceManager};
+    use prism_render::bake_common::PtGeometryInstance;
+    use prism_render::managers::GpuMaterial;
+
+    // 1. Set up resource manager + load the package.
+    let mut rm = ResourceManager::new();
+    rm.load_package(pak_path)
+        .map_err(|e| anyhow::anyhow!("load_package {}: {e}", pak_path.display()))?;
+
+    // 2. Read + parse the RSCN file.
+    let rscn_bytes =
+        std::fs::read(rscn_path).map_err(|e| anyhow::anyhow!("read RSCN {}: {e}", rscn_path.display()))?;
+    let scene = parse_rscn(&rscn_bytes)
+        .map_err(|e| anyhow::anyhow!("parse_rscn {}: {e}", rscn_path.display()))?;
+
+    // 3. Build world transforms by walking the parent chain.
+    let n = scene.entities.len();
+    let mut world_matrices: Vec<[[f32; 4]; 4]> = Vec::with_capacity(n);
+    for i in 0..n {
+        let e = &scene.entities[i];
+        let local = local_to_matrix(e.translation, e.rotation, e.scale);
+        match e.parent {
+            Some(pidx) if (pidx as usize) < i => {
+                // Parent already processed (parent-first order).
+                world_matrices.push(mul_mat4(&world_matrices[pidx as usize], &local));
+            }
+            _ => world_matrices.push(local),
+        }
+    }
+
+    // 4. Walk entities, gather geometries + materials.
+    let mut instances: Vec<PtGeometryInstance> = Vec::new();
+    let mut mat_cache: HashMap<String, u32> = HashMap::new(); // path -> slot
+    let mut gpu_materials: Vec<GpuMaterial> = Vec::new();
+
+    for (i, entity) in scene.entities.iter().enumerate() {
+        if !entity.has_mesh {
+            continue;
+        }
+
+        // Resolve material slot first (or create a default).
+        let material_slot = if entity.has_material && !entity.material_path.is_empty() {
+            *mat_cache
+                .entry(entity.material_path.clone())
+                .or_insert_with(|| {
+                    let slot = gpu_materials.len() as u32;
+                    // Load the material asset.
+                    let mat = load_material_for_bake(&mut rm, &entity.material_path);
+                    gpu_materials.push(
+                        mat.map(|r_info| rmat_to_gpu(&r_info))
+                            .unwrap_or_else(|| default_gpu_material()),
+                    );
+                    slot
+                })
+        } else {
+            *mat_cache
+                .entry(String::new())
+                .or_insert_with(|| {
+                    let slot = gpu_materials.len() as u32;
+                    gpu_materials.push(default_gpu_material());
+                    slot
+                })
+        };
+
+        // Load the mesh asset.
+        let Some(mesh_info) = load_mesh_for_bake(&mut rm, &entity.mesh_path) else {
+            log::warn!("extract_scene_geometry: skipping entity with missing mesh '{}'", entity.mesh_path);
+            continue;
+        };
+
+        // Extract positions from interleaved vertex data.
+        let stride = mesh_info.stride_bytes as usize;
+        let vert_count = mesh_info.vert_count as usize;
+        let idx_count = mesh_info.idx_count as usize;
+        if vert_count == 0 || idx_count == 0 {
+            continue;
+        }
+
+        let world = &world_matrices[i];
+
+        // Read positions and transform to world space.
+        let mut vertices = Vec::with_capacity(vert_count);
+        for vi in 0..vert_count {
+            let off = vi * stride;
+            let px = f32::from_le_bytes(
+                mesh_info.vertex_data[off..off + 4].try_into().unwrap(),
+            );
+            let py = f32::from_le_bytes(
+                mesh_info.vertex_data[off + 4..off + 8].try_into().unwrap(),
+            );
+            let pz = f32::from_le_bytes(
+                mesh_info.vertex_data[off + 8..off + 12].try_into().unwrap(),
+            );
+            let wp = transform_point(world, [px, py, pz]);
+
+            // Read normal if the stride is large enough (position 12 bytes +
+            // normal 12 bytes = 24 bytes minimum when normals exist).
+            let normal = if stride >= 24 {
+                let nx = f32::from_le_bytes(
+                    mesh_info.vertex_data[off + 12..off + 16].try_into().unwrap(),
+                );
+                let ny = f32::from_le_bytes(
+                    mesh_info.vertex_data[off + 16..off + 20].try_into().unwrap(),
+                );
+                let nz = f32::from_le_bytes(
+                    mesh_info.vertex_data[off + 20..off + 24].try_into().unwrap(),
+                );
+                let wn = transform_normal(world, [nx, ny, nz]);
+                [wn[0], wn[1], wn[2]]
+            } else {
+                [0.0, 0.0, 0.0]
+            };
+
+            // Read UV if present (position 12 + optional normal 12 = 24, then UVs).
+            let uv = if stride >= 24 + 8 && mesh_info.uv_channels > 0 {
+                let u = f32::from_le_bytes(
+                    mesh_info.vertex_data[off + 24..off + 28].try_into().unwrap(),
+                );
+                let v = f32::from_le_bytes(
+                    mesh_info.vertex_data[off + 28..off + 32].try_into().unwrap(),
+                );
+                [u, v]
+            } else {
+                [0.0, 0.0]
+            };
+
+            vertices.push(prism_render::mesh::Vertex {
+                position: [wp[0], wp[1], wp[2]],
+                normal,
+                color: [1.0, 1.0, 1.0],
+                uv,
+                tangent: [1.0, 0.0, 0.0, 1.0],
+            });
+        }
+
+        // Read indices.
+        let indices: Vec<u32> = mesh_info
+            .index_data
+            .chunks_exact(4)
+            .map(|c| u32::from_le_bytes(c.try_into().unwrap()))
+            .collect();
+
+        instances.push(PtGeometryInstance {
+            vertices,
+            indices,
+            material_slot,
+        });
+    }
+
+    // Serialise GpuMaterial array to bytes.
+    let mat_bytes: Vec<u8> = unsafe {
+        let ptr = gpu_materials.as_ptr() as *const u8;
+        std::slice::from_raw_parts(ptr, gpu_materials.len() * 96).to_vec()
+    };
+
+    Ok((instances, mat_bytes))
+}
+
+// -------------------------------------------------------------------
+// Internal helpers for extract_scene_geometry
+// -------------------------------------------------------------------
+
+/// Build a 4×4 column-major matrix from SRT.
+fn local_to_matrix(t: [f32; 3], q: [f32; 4], s: [f32; 3]) -> [[f32; 4]; 4] {
+    let [x, y, z, w] = q;
+    let xx = x * x;
+    let yy = y * y;
+    let zz = z * z;
+    let xy = x * y;
+    let xz = x * z;
+    let yz = y * z;
+    let wx = w * x;
+    let wy = w * y;
+    let wz = w * z;
+
+    // Rotation matrix from quaternion (column-major).
+    let r: [[f32; 4]; 4] = [
+        [1.0 - 2.0 * (yy + zz), 2.0 * (xy + wz), 2.0 * (xz - wy), 0.0],
+        [2.0 * (xy - wz), 1.0 - 2.0 * (xx + zz), 2.0 * (yz + wx), 0.0],
+        [2.0 * (xz + wy), 2.0 * (yz - wx), 1.0 - 2.0 * (xx + yy), 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ];
+
+    // Scale matrix.
+    let sm: [[f32; 4]; 4] = [
+        [s[0], 0.0, 0.0, 0.0],
+        [0.0, s[1], 0.0, 0.0],
+        [0.0, 0.0, s[2], 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ];
+
+    // Translation matrix.
+    let tm: [[f32; 4]; 4] = [
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [t[0], t[1], t[2], 1.0],
+    ];
+
+    // T * R * S
+    mul_mat4(&tm, &mul_mat4(&r, &sm))
+}
+
+/// Column-major 4×4 multiply.
+fn mul_mat4(a: &[[f32; 4]; 4], b: &[[f32; 4]; 4]) -> [[f32; 4]; 4] {
+    let mut out = [[0.0f32; 4]; 4];
+    for c in 0..4 {
+        for r in 0..4 {
+            for k in 0..4 {
+                out[c][r] += a[k][r] * b[c][k];
+            }
+        }
+    }
+    out
+}
+
+/// Transform a 3D point by a column-major 4×4 matrix (w=1).
+fn transform_point(m: &[[f32; 4]; 4], p: [f32; 3]) -> [f32; 3] {
+    let x = m[0][0] * p[0] + m[1][0] * p[1] + m[2][0] * p[2] + m[3][0];
+    let y = m[0][1] * p[0] + m[1][1] * p[1] + m[2][1] * p[2] + m[3][1];
+    let z = m[0][2] * p[0] + m[1][2] * p[1] + m[2][2] * p[2] + m[3][2];
+    [x, y, z]
+}
+
+/// Transform a 3D normal by the upper-left 3×3 of the matrix (no translation).
+fn transform_normal(m: &[[f32; 4]; 4], n: [f32; 3]) -> [f32; 3] {
+    let x = m[0][0] * n[0] + m[1][0] * n[1] + m[2][0] * n[2];
+    let y = m[0][1] * n[0] + m[1][1] * n[1] + m[2][1] * n[2];
+    let z = m[0][2] * n[0] + m[1][2] * n[1] + m[2][2] * n[2];
+    let len = (x * x + y * y + z * z).sqrt().max(1e-8);
+    [x / len, y / len, z / len]
+}
+
+/// Load a `MeshAsset` from the resource manager given its path.
+fn load_mesh_for_bake(
+    rm: &mut ResourceManager,
+    path: &str,
+) -> Option<prism_asset_runtime::RmesInfo> {
+    let id = rm.id_by_path(path)?;
+    let handle = rm.load_with_deps::<MeshAsset>(id).ok()?;
+    let asset = rm.get::<MeshAsset>(handle).ok()?;
+    Some(asset.info)
+}
+
+/// Load a `MaterialAsset` from the resource manager given its path.
+fn load_material_for_bake(
+    rm: &mut ResourceManager,
+    path: &str,
+) -> Option<prism_asset_runtime::RmatInfo> {
+    use prism_asset_runtime::MaterialAsset;
+    let id = rm.id_by_path(path)?;
+    let handle = rm.load_with_deps::<MaterialAsset>(id).ok()?;
+    let asset = rm.get::<MaterialAsset>(handle).ok()?;
+    Some(asset.info)
+}
+
+/// Convert `RmatInfo` scalars into a `GpuMaterial` (texture slots = u32::MAX).
+fn rmat_to_gpu(info: &prism_asset_runtime::RmatInfo) -> GpuMaterial {
+    let s = &info.scalars;
+    GpuMaterial {
+        base_color: [s[0], s[1], s[2], s[3]],
+        metallic_roughness_emissive: [s[4], s[5], s[6], s[9]],
+        albedo_idx: u32::MAX,
+        normal_idx: u32::MAX,
+        metallic_roughness_idx: u32::MAX,
+        emissive_idx: u32::MAX,
+        transmission_factor: [s[12], s[13], s[14], s[15]],
+        clearcoat: [s[16], s[17], 0.0, 0.0],
+        transmission_tex_idx: u32::MAX,
+        occlusion_idx: u32::MAX,
+        normal_scale: s[10],
+        occlusion_strength: s[11],
+    }
+}
+
+/// Default material (pink error colour so missing materials are obvious).
+fn default_gpu_material() -> GpuMaterial {
+    GpuMaterial {
+        base_color: [1.0, 0.0, 1.0, 1.0],
+        metallic_roughness_emissive: [0.0, 0.5, 0.0, 0.0],
+        albedo_idx: u32::MAX,
+        normal_idx: u32::MAX,
+        metallic_roughness_idx: u32::MAX,
+        emissive_idx: u32::MAX,
+        transmission_factor: [0.0, 1.5, 0.0, 0.0],
+        clearcoat: [0.0, 0.0, 0.0, 0.0],
+        transmission_tex_idx: u32::MAX,
+        occlusion_idx: u32::MAX,
+        normal_scale: 1.0,
+        occlusion_strength: 1.0,
     }
 }

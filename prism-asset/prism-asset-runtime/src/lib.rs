@@ -41,6 +41,8 @@ pub mod typed;
 
 pub use typed::{MaterialAsset, MeshAsset, SceneAsset, ShaderAsset, TextureAsset};
 
+pub use prism_asset_cooker::{RmatInfo, RmesInfo};
+
 // ---------------------------------------------------------------------------
 // Errors
 // ---------------------------------------------------------------------------
