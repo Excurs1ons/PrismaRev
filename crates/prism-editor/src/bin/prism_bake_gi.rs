@@ -20,7 +20,10 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use ash::vk;
 
-use prism_engine::scene::loader::extract_scene_geometry;
+use prism_asset_runtime::ResourceManager;
+use prism_ecs::World;
+use prism_engine::scene::loader::{collect_bake_instances, SceneLoader};
+use prism_engine::scene::systems::hierarchy::hierarchy_system;
 use prism_render::bake_common;
 use prism_render::context::VulkanContext;
 
@@ -59,9 +62,23 @@ fn main() -> Result<()> {
     log::info!("  rscn:   {}", rscn_path.display());
     log::info!("  rays per probe: {}, max bounces: {}", NUM_RAYS, MAX_BOUNCE);
 
-    // ---- 1. Load scene via asset pipeline ----
-    let (instances, mat_bytes) = extract_scene_geometry(&pak_path, &rscn_path)
-        .context("extract scene geometry from asset pipeline")?;
+    // ---- 1. Load scene into ECS and collect bake instances ----
+    let mut world = World::new();
+    let mut rm = ResourceManager::new();
+    rm.load_package(&pak_path)
+        .with_context(|| format!("load package {}", pak_path.display()))?;
+
+    let source = prism_engine::scene::loader::SceneSource::CookedFile(rscn_path.clone());
+    let mut loader = SceneLoader::new();
+    loader
+        .load_and_spawn(&mut world, source)
+        .map_err(|e| anyhow::anyhow!("load scene into ECS: {e}"))?;
+
+    // Run hierarchy system to compute WorldTransform from LocalTransform + Parent.
+    hierarchy_system(&mut world);
+
+    let (instances, mat_bytes) = collect_bake_instances(&world, &mut rm)
+        .context("collect bake instances from ECS")?;
     let total_verts: usize = instances.iter().map(|i| i.vertices.len()).sum();
     let total_indices: usize = instances.iter().map(|i| i.indices.len()).sum();
     log::info!(
