@@ -406,6 +406,8 @@ pub struct App {
     /// Maximum iterations (samples per pixel) for path tracing.
     /// 0 = accumulate forever (default).
     pt_max_iterations: u32,
+    /// Application configuration loaded from `assets/settings.toml`.
+    config: crate::config::AppConfig,
 }
 
 /// Default PBR mode. `debug_flags == 0` means **normal full-PBR rendering**:
@@ -461,6 +463,7 @@ impl App {
             pt_max_bounces: 3,
             pt_ray_max_distance: 1000.0,
             pt_max_iterations: 0,
+            config: crate::config::AppConfig::load(),
         }
     }
 
@@ -483,13 +486,36 @@ impl App {
         if self.window.is_some() {
             return;
         }
+        let cfg = &self.config.window;
+
+        let mut attrs = Window::default_attributes()
+            .with_title(&cfg.title)
+            .with_inner_size(winit::dpi::LogicalSize::new(cfg.width as f64, cfg.height as f64))
+            .with_resizable(cfg.resizable)
+            .with_maximized(cfg.maximized)
+            .with_visible(cfg.visible)
+            .with_decorations(cfg.decorations);
+
+        if let Some(w) = cfg.min_width {
+            if let Some(h) = cfg.min_height {
+                attrs = attrs.with_min_inner_size(winit::dpi::LogicalSize::new(w as f64, h as f64));
+            }
+        }
+        if let Some(w) = cfg.max_width {
+            if let Some(h) = cfg.max_height {
+                attrs = attrs.with_max_inner_size(winit::dpi::LogicalSize::new(w as f64, h as f64));
+            }
+        }
+        if let (Some(x), Some(y)) = (cfg.position_x, cfg.position_y) {
+            attrs = attrs.with_position(winit::dpi::LogicalPosition::new(x as f64, y as f64));
+        }
+        if cfg.fullscreen {
+            attrs = attrs.with_fullscreen(Some(winit::window::Fullscreen::Borderless(None)));
+        }
+
         let window = Arc::new(
             event_loop
-                .create_window(
-                    Window::default_attributes()
-                        .with_title("PrismaRev")
-                        .with_inner_size(winit::dpi::LogicalSize::new(1600, 900)),
-                )
+                .create_window(attrs)
                 .expect("failed to create window"),
         );
         let t_after_win = std::time::Instant::now();

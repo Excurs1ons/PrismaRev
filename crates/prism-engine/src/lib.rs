@@ -6,6 +6,7 @@ pub mod audio;
 pub mod calibration_spheres;
 pub mod camera;
 pub mod camera_controller;
+pub mod config;
 pub mod crash_dialog;
 pub mod dirty_router;
 pub mod input;
