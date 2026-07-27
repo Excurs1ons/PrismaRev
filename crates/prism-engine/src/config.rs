@@ -12,7 +12,38 @@ use serde::Deserialize;
 #[derive(Deserialize)]
 pub struct AppConfig {
     #[serde(default)]
+    pub app: AppInfo,
+    #[serde(default)]
     pub window: WindowConfig,
+}
+
+// ---------------------------------------------------------------------------
+// App identity (company name, app name — like Unity's PlayerSettings)
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub struct AppInfo {
+    #[serde(default = "default_company")]
+    pub company: String,
+    #[serde(default = "default_app_name")]
+    pub name: String,
+}
+
+impl Default for AppInfo {
+    fn default() -> Self {
+        Self {
+            company: default_company(),
+            name: default_app_name(),
+        }
+    }
+}
+
+fn default_company() -> String {
+    "Excurs1ons".to_string()
+}
+
+fn default_app_name() -> String {
+    "PrismaRev".to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -145,6 +176,7 @@ impl AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
+            app: AppInfo::default(),
             window: WindowConfig::default(),
         }
     }
