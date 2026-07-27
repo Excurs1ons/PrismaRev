@@ -1168,18 +1168,6 @@ impl ApplicationHandler for App {
         }
     }
 
-    fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
-        // The window's surface is about to become invalid (Android onPause /
-        // screen lock). Drop surface-dependent resources now so we don't
-        // touch a dead VkSurfaceKHR on the next frame. Device-bound resources
-        // are retained by the renderer for fast resume.
-        if let Some(renderer) = self.renderer.as_mut() {
-            renderer.suspend_surface();
-        }
-        // NOTE: keep self.window — on Android the winit window handle remains
-        // valid across suspend; only the underlying surface needs rebuilding.
-    }
-
     fn window_event(
         &mut self,
         event_loop: &ActiveEventLoop,
@@ -1591,6 +1579,18 @@ impl ApplicationHandler for App {
         if let Some(window) = &self.window {
             window.request_redraw();
         }
+    }
+
+    fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
+        // The window's surface is about to become invalid (Android onPause /
+        // screen lock). Drop surface-dependent resources now so we don't
+        // touch a dead VkSurfaceKHR on the next frame. Device-bound resources
+        // are retained by the renderer for fast resume.
+        if let Some(renderer) = self.renderer.as_mut() {
+            renderer.suspend_surface();
+        }
+        // NOTE: keep self.window — on Android the winit window handle remains
+        // valid across suspend; only the underlying surface needs rebuilding.
     }
 }
 
