@@ -1,9 +1,12 @@
 //! Shader module loading from SPIR-V bytecode.
 //!
 //! SPIR-V shaders are compiled offline from Slang via `slangc` (see
-//! `shaders/compile.sh`) and can be loaded either from file (for development
-//! iteration) or from embedded byte slices (for shipping - the renderer embeds
-//! the default shaders at compile time).
+//! `shaders/compile.sh`).  Built-in shaders are embedded at compile time via
+//! `include_bytes!` (the default path).  Content / user shaders can be loaded
+//! from the asset pipeline via [`super::shader_asset::load_shader_module_from_rm`].
+//!
+//! See also `crates/prism-engine/src/shader_asset.rs` for the RM-based entry
+//! point.
 
 use anyhow::Context as _;
 use ash::vk;
@@ -37,16 +40,6 @@ pub fn load_shader_module(device: &ash::Device, code: &[u8]) -> anyhow::Result<v
     let module = unsafe { device.create_shader_module(&create_info, None) }
         .context("create shader module")?;
     Ok(module)
-}
-
-/// Load a shader module from a `.spv` file on disk.
-pub fn load_shader_module_from_file(
-    device: &ash::Device,
-    spv_path: &std::path::Path,
-) -> anyhow::Result<vk::ShaderModule> {
-    let code = std::fs::read(spv_path)
-        .with_context(|| format!("read SPIR-V file '{}'", spv_path.display()))?;
-    load_shader_module(device, &code)
 }
 
 /// Build a `VkPipelineShaderStageCreateInfo` from a shader module and entry

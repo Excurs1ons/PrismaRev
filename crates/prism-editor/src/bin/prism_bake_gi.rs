@@ -398,10 +398,8 @@ fn main() -> Result<()> {
     }
 
     // ---- 11. Create compute pipeline ----
-    let spv_path = std::path::Path::new("shaders/gi_bake.comp.spv");
-    let spv_bytes = std::fs::read(spv_path)
-        .with_context(|| format!("read {} (compile shaders first: shaders/compile.sh)", spv_path.display()))?;
-    let shader_module = prism_render::shader::load_shader_module(&context.device, &spv_bytes)
+    const GI_BAKE_SPV: &[u8] = include_bytes!("../../../shaders/gi_bake.comp.spv");
+    let shader_module = prism_render::shader::load_shader_module(&context.device, GI_BAKE_SPV)
         .context("create gi_bake shader module")?;
 
     #[repr(C)]

@@ -12,6 +12,7 @@ pub mod input;
 pub mod render_system;
 pub mod scene;
 pub mod scene_state;
+pub mod shader_asset;
 
 pub use app::App;
 pub use render_system::{
