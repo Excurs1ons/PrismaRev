@@ -1,54 +1,37 @@
-//! PrismaRev engine entry point.
+//! PrismaRev binary entry point.
+//!
+//! Initialises logging, creates the application, and runs the event loop.
+//! Application logic lives in [`crate::app::App`]; this file only sets up the
+//! process-level environment.
 
-// In release builds, use the Windows GUI subsystem so no console window pops
-// up when double-clicking the exe. Debug builds keep the console for logs.
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+mod app;
 
-use std::io::{IsTerminal, Write};
-
-fn main() -> anyhow::Result<()> {
-    init_logger();
-    log::info!("PrismaRev starting");
-    prism_engine::App::run()?;
-    log::info!("PrismaRev exited");
-    Ok(())
+/// Helper: register ECS types so the debug inspector can reflect them.
+fn register_engine_types() {
+    prism_ecs::register::<prism_engine::scene::components::Name>();
+    prism_ecs::register::<prism_engine::scene::components::LocalTransform>();
+    prism_ecs::register::<prism_engine::scene::components::WorldTransform>();
+    prism_ecs::register::<prism_engine::scene::components::Active>();
+    prism_ecs::register::<prism_engine::scene::components::Parent>();
+    prism_ecs::register::<prism_engine::scene::components::Children>();
+    prism_ecs::register::<prism_engine::scene::components::MeshRef>();
+    prism_ecs::register::<prism_engine::scene::components::MaterialRef>();
+    prism_ecs::register::<prism_engine::scene::components::DirectionalLight>();
+    prism_ecs::register::<prism_engine::scene::components::PointLight>();
+    prism_ecs::register::<prism_engine::scene::components::SpotLight>();
+    prism_ecs::register::<prism_engine::scene::components::Camera>();
+    prism_ecs::register::<prism_engine::scene::components::FlyCameraController>();
+    prism_ecs::register::<prism_engine::scene::components::Skybox>();
+    prism_ecs::register::<prism_engine::scene::components::SceneMember>();
+    prism_ecs::register::<prism_engine::scene::components::TransformDirty>();
+    prism_ecs::register::<prism_engine::scene::components::MeshRenderer>();
 }
 
-/// Initialize logging. When a console is attached logs go to stderr; when
-/// launched by double-click (no console) logs are written to `prismarev.log`
-/// next to the executable so they don't block on a missing stderr handle.
-fn init_logger() {
-    let use_file = !std::io::stderr().is_terminal();
-    let target = if use_file {
-        let path = std::env::current_exe()
-            .ok()
-            .and_then(|p| p.parent().map(|d| d.join("prismarev.log")))
-            .unwrap_or_else(|| std::path::PathBuf::from("prismarev.log"));
-        match std::fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .open(&path)
-        {
-            Ok(f) => env_logger::Target::Pipe(Box::new(f)),
-            Err(_) => env_logger::Target::Stderr,
-        }
-    } else {
-        env_logger::Target::Stderr
-    };
+fn main() -> anyhow::Result<()> {
+    env_logger::init();
 
-    let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
-        .format_timestamp_millis()
-        .target(target)
-        .format(|buf, record| {
-            writeln!(
-                buf,
-                "[{} {:5} {}] {}",
-                buf.timestamp_millis(),
-                record.level(),
-                record.target(),
-                record.args()
-            )
-        })
-        .try_init();
+    // Register ECS types so the editor inspector can reflect them.
+    register_engine_types();
+
+    app::App::run()
 }

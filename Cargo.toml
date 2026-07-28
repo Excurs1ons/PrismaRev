@@ -11,6 +11,17 @@ path = "src/main.rs"
 
 [dependencies]
 prism-engine = { path = "crates/prism-engine" }
+prism-ecs = { path = "crates/prism-ecs" }
+prism-render = { path = "crates/prism-render" }
+prism-editor = { path = "crates/prism-editor" }
+prism-audio = { path = "crates/prism-audio" }
+prism-asset-core = { path = "prism-asset/prism-asset-core" }
+prism-asset-runtime = { path = "prism-asset/prism-asset-runtime" }
+winit = { workspace = true }
+ash-window = { workspace = true }
+raw-window-handle = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+toml = { workspace = true }
 log = { workspace = true }
 env_logger = { workspace = true }
 anyhow = { workspace = true }

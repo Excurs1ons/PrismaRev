@@ -1,22 +1,17 @@
 //! ECS-driven rendering system for the RenderGraph path.
 //!
-//! Defines the ECS components and resources needed for the rendering pipeline
-//! and the [`render_system`] function that queries the ECS world each frame,
-//! builds a flat [`DrawItem`] list, and submits it to [`GraphRenderer::render`].
-//!
-//! ## Components
-//!
-//! | Component | Description |
-//! |-----------|-------------|
-//! | [`Transform`] | Translation + rotation + scale → model matrix |
-//! | [`MeshHandle`] | Index into an externally-owned mesh list |
+//! Defines the [`SceneChanges`] snapshot struct (camera, lights, derived
+//! matrices) and the main [`render_system`] function that queries the ECS world
+//! each frame, builds a flat draw list, and submits it to
+//! [`GraphRenderer::render`].
 
 use std::sync::Mutex;
 
 use prism_ecs::World;
-use prism_render::{DrawItem, FrameUBOData, GpuLight, GraphRenderer, Mesh, PtAnalyticLight, PT_LIGHT_MAX, RenderMode};
+use prism_render::{DrawItem, FrameUBOData, GpuLight, GraphRenderer, PtAnalyticLight, PT_LIGHT_MAX};
 
 use crate::dirty_router::DirtyRouter;
+use crate::render_settings::RenderSettings;
 use crate::scene;
 use crate::scene::components as scene_comp;
 use crate::scene::components::Camera;
@@ -27,308 +22,14 @@ use crate::scene::components::Camera;
 /// brightness multiplier applied to the final composed HDR color.
 const LUX_TO_RADIANCE_SCALE: f32 = 1.0 / (10_000.0 * std::f32::consts::PI);
 
-/// Module-level [`DirtyRouter`] that persists across frames.
-///
-/// Initialized lazily on the first call to [`render_system`]; each subsequent
-/// frame compares the new [`SceneChanges`] against the previous snapshot and
-/// produces [`DirtyFlags`], which are stored in [`FrameInput`] for the rest of
-/// the render pipeline to act on.
-static SCENE_DIRTY_ROUTER: Mutex<Option<DirtyRouter>> = Mutex::new(None);
-
-/// Lazy-init the dirty router (first call creates it; subsequent calls return
-/// the existing instance).
-fn with_dirty_router<F, R>(f: F) -> R
-where
-    F: FnOnce(&mut DirtyRouter) -> R,
-{
-    let mut guard = SCENE_DIRTY_ROUTER.lock().unwrap();
-    let router = guard.get_or_insert_with(DirtyRouter::new);
-    f(router)
-}
-
 // ---------------------------------------------------------------------------
-// ECS Components
+// SceneChanges
 // ---------------------------------------------------------------------------
 
-/// Per-entity transform: translation, rotation (quaternion), scale.
-/// Converts to a model matrix for rendering.
-#[derive(Debug, Clone)]
-pub struct Transform {
-    pub translation: [f32; 3],
-    pub rotation: [f32; 4], // (x, y, z, w) quaternion
-    pub scale: [f32; 3],
-    /// When `false` the entity still exists in the ECS but is skipped by
-    /// systems that process transforms (animation, physics, etc.).
-    pub enabled: bool,
-}
-
-impl Default for Transform {
-    fn default() -> Self {
-        Self {
-            translation: [0.0; 3],
-            rotation: [0.0, 0.0, 0.0, 1.0], // identity quaternion
-            scale: [1.0; 3],
-            enabled: true,
-        }
-    }
-}
-
-impl Transform {
-    /// Build a 4×4 model matrix from translation × rotation × scale.
-    ///
-    /// Column-major layout for direct use as a GLSL `mat4`.
-    /// The rotation is a quaternion (x, y, z, w).
-    pub fn to_model_matrix(&self) -> [[f32; 4]; 4] {
-        let [qx, qy, qz, qw] = self.rotation;
-        let xx = qx * qx;
-        let yy = qy * qy;
-        let zz = qz * qz;
-        let xy = qx * qy;
-        let xz = qx * qz;
-        let yz = qy * qz;
-        let wx = qw * qx;
-        let wy = qw * qy;
-        let wz = qw * qz;
-
-        let [sx, sy, sz] = self.scale;
-        let [tx, ty, tz] = self.translation;
-
-        [
-            [
-                sx * (1.0 - 2.0 * (yy + zz)),
-                sx * 2.0 * (xy + wz),
-                sx * 2.0 * (xz - wy),
-                0.0,
-            ],
-            [
-                sy * 2.0 * (xy - wz),
-                sy * (1.0 - 2.0 * (xx + zz)),
-                sy * 2.0 * (yz + wx),
-                0.0,
-            ],
-            [
-                sz * 2.0 * (xz + wy),
-                sz * 2.0 * (yz - wx),
-                sz * (1.0 - 2.0 * (xx + yy)),
-                0.0,
-            ],
-            [tx, ty, tz, 1.0],
-        ]
-    }
-}
-
-/// PBR surface material, used to route an entity through the PBR + IBL
-/// pipeline instead of the default Blinn-Phong path.
-#[derive(Debug, Clone)]
-pub struct PbrMaterial {
-    pub albedo: [f32; 3],
-    pub metallic: f32,
-    pub roughness: f32,
-    /// When `false` the material is treated as invisible (the entity using
-    /// this material will not produce a draw call).
-    pub enabled: bool,
-}
-
-impl Default for PbrMaterial {
-    fn default() -> Self {
-        // Gold: fully metallic, moderately rough.
-        Self {
-            albedo: [1.0, 0.78, 0.34],
-            metallic: 1.0,
-            roughness: 0.3,
-            enabled: true,
-        }
-    }
-}
-
-/// A scene object that can be rendered: mesh + material + world transform.
+/// Snapshot of all per-frame scene data (camera, lights, derived matrices).
 ///
-/// Spawned as an ECS entity by [`load_demo_scene`] in place of the old flat
-/// `Vec<SceneDrawItem>`, so scene geometry lives in the ECS world and can be
-/// queried/manipulated like any other entity.
-#[derive(Debug, Clone)]
-pub struct RenderInstance {
-    /// Render-side mesh handle (from `RenderMeshManager`).
-    pub mesh: prism_render::managers::MeshHandle,
-    /// Index into the material SSBO.
-    pub material_slot: u32,
-    /// Column-major 4×4 world transform from the glTF instance.
-    pub model: [[f32; 4]; 4],
-}
-
-/// Index into an externally-owned list of GPU meshes.
-#[derive(Debug, Clone, Copy)]
-pub struct MeshHandle(pub usize);
-
-/// Directional (infinite) light. The first one found in the world drives the
-/// per-frame UBO's `light_direction` / `light_color` / ambient factor.
-///
-/// Orientation is stored as **XYZ Euler angles in degrees** (x = pitch around
-/// X, y = yaw around Y, z = roll around Z), matching the engine's right-handed
-/// coordinate convention (+Y up, camera looks down -Z). The render path derives
-/// the world-space direction vector from these angles via
-/// [`euler_xyz_deg_to_dir`]; storing angles (not a direction vector) keeps the
-/// inspector editable and the serialization human-readable.
-#[derive(Debug, Clone, Copy)]
-pub struct DirectionalLight {
-    /// XYZ Euler angles (degrees): x = pitch (around X), y = yaw (around Y),
-    /// z = roll (around Z). The direction TO the light is derived from these.
-    pub euler_xyz: [f32; 3],
-    /// Direct light illuminance in **lux** (physical unit). The shader divides
-    /// by PI to convert illuminance to radiance. Typical values: 100k = bright
-    /// sunlight, 10k = overcast, 1k = indoor office, 100 = dim indoor.
-    pub intensity: f32,
-    /// RGB light color, linear, typically in [0,1] per channel.
-    pub color: [f32; 3],
-    /// IBL ambient factor packed into `FrameUBOData.light_color.w`.
-    pub ambient: f32,
-    /// When `false` the light is skipped during scene collection and the
-    /// frame UBO receives fallback (dark) values, effectively turning the
-    /// sun off.
-    pub enabled: bool,
-}
-
-impl Default for DirectionalLight {
-    fn default() -> Self {
-        // pitch=45°, yaw=-45°, roll=0° - matches the pre-refactor hard-coded
-        // direction [-1, 1, 0] (upper-left, 45° diagonal in the XY plane).
-        // intensity = 100k lux (bright daylight); ambient = 1.0 so IBL
-        // energy is at full strength (no artificial dimming).
-        Self {
-            euler_xyz: [45.0, -45.0, 0.0],
-            intensity: 100_000.0,
-            color: [1.0, 1.0, 1.0],
-            ambient: 1.0,
-            enabled: true,
-        }
-    }
-}
-
-/// Convert XYZ Euler angles (degrees) to a unit direction vector (direction
-/// TO the light), in world space.
-///
-/// Conventions (see `README.md` §Coordinate Conventions):
-/// - Right-handed; +Y up; camera looks down -Z.
-/// - Euler order **Rx(pitch) · Ry(yaw) · Rz(roll)** (rotate X first, then Y,
-///   then Z) in column-major `mat4` form `[col][row]`.
-/// - The base direction is `+Z` (yaw = 0 points toward +Z, matching the legacy
-///   `pitch_yaw_deg_to_dir`). Roll rotates the result around Z (no effect on a
-///   pure direction, retained for completeness of the Euler representation).
-///
-/// With `roll = 0` this reduces exactly to `[cp·sy, sp, cp·cy]`, so existing
-/// scenes keep their current appearance.
-pub fn euler_xyz_deg_to_dir(e: [f32; 3]) -> [f32; 3] {
-    let p = e[0].to_radians();
-    let y = e[1].to_radians();
-    let r = e[2].to_radians();
-    let (sp, cp) = p.sin_cos();
-    let (sy, cy) = y.sin_cos();
-    // `r` (roll around Z) is part of the Euler representation but does not
-    // change the direction of a pure +Z base vector, so it is intentionally
-    // unused here.
-    let _ = r;
-
-    // Direction TO the light = R · (0,0,1) with R = Rx(p)·Ry(y)·Rz(r) in the
-    // engine's right-handed, column-major convention (+Y up, camera looks down
-    // -Z). For a +Z base vector this reduces to:
-    //   x = cp·sy,  y = sp,  z = cp·cy
-    // which with roll = 0 is exactly the legacy `pitch_yaw_deg_to_dir`, so
-    // existing scenes keep their current appearance.
-    let x = cp * sy;
-    let yy = sp;
-    let z = cp * cy;
-    let len = (x * x + yy * yy + z * z).sqrt().max(1e-8);
-    [x / len, yy / len, z / len]
-}
-
-/// Inverse of [`euler_xyz_deg_to_dir`]: derive XYZ Euler angles (degrees) from a
-/// direction vector. Used as a helper (e.g. for serialization round-tripping or
-/// future import paths). Pitch is clamped to (-90°, 90°).
-pub fn dir_to_euler_xyz_deg(d: [f32; 3]) -> [f32; 3] {
-    let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt().max(1e-8);
-    let n = [d[0] / len, d[1] / len, d[2] / len];
-    let pitch = n[1].asin().to_degrees();
-    let yaw = n[0].atan2(n[2]).to_degrees();
-    let roll = 0.0;
-    [pitch, yaw, roll]
-}
-
-/// Point light. Collected each frame into the ScenePass light SSBO (up to
-/// `LIGHT_MAX`). Position may be overridden by a sibling `Transform` component
-/// when present (see `render_system`); otherwise the raw `position` is used.
-#[derive(Debug, Clone, Copy)]
-pub struct PointLight {
-    /// World-space position (used directly unless a `Transform` is present).
-    pub position: [f32; 3],
-    /// Attenuation radius (packed into `GpuLight.position.w`).
-    pub range: f32,
-    /// RGB color, linear, typically in [0,1] per channel (tint).
-    pub color: [f32; 3],
-    /// Luminous intensity in **candela** (physical unit). The shader applies
-    /// inverse-square attenuation (1/dist^2) to convert to illuminance (lux),
-    /// then divides by PI for radiance. Typical indoor bulb ~100-300 cd.
-    pub intensity: f32,
-    /// When `false` the light is skipped during scene collection and does
-    /// not contribute to shading.
-    pub enabled: bool,
-}
-
-impl Default for PointLight {
-    fn default() -> Self {
-        Self {
-            position: [0.0, 4.0, 4.0],
-            range: 12.0,
-            color: [0.2, 0.2, 8.0],
-            intensity: 100.0,
-            enabled: true,
-        }
-    }
-}
-
-/// Owns the GPU meshes and resolves [`MeshHandle`] indices to them.
-pub struct MeshManager {
-    meshes: Vec<Mesh>,
-}
-
-impl MeshManager {
-    pub fn new() -> Self {
-        Self { meshes: Vec::new() }
-    }
-
-    pub fn add(&mut self, mesh: Mesh) -> MeshHandle {
-        let handle = MeshHandle(self.meshes.len());
-        self.meshes.push(mesh);
-        handle
-    }
-
-    pub fn get(&self, handle: MeshHandle) -> Option<&Mesh> {
-        self.meshes.get(handle.0)
-    }
-
-    pub fn into_meshes(self) -> Vec<Mesh> {
-        self.meshes
-    }
-}
-
-impl Default for MeshManager {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-// ---------------------------------------------------------------------------
-// SceneChanges — per-frame ECS snapshot (PR-S1)
-// ---------------------------------------------------------------------------
-
-/// Per-frame data extracted from the ECS [`World`] each frame.
-///
-/// Built by [`collect_scene_changes`] and consumed by [`render_system`] to
-/// populate [`FrameInput`] + [`FrameUBOData`].  This is the **data boundary**
-/// between the CPU update (ECS queries + camera math + light resolution) and
-/// the GPU render pipeline.
-///
-/// Future phases (PR-S2 DirtyRouter, PR-S3 SceneReadView) will track diffs
-/// against this snapshot to avoid redundant uploads.
+/// Produced by [`collect_scene_changes`] and consumed by [`render_system`] to
+/// build the [`FrameUBOData`] and [`FrameInput`].
 #[derive(Clone)]
 pub struct SceneChanges {
     pub view_proj: [[f32; 4]; 4],
@@ -350,31 +51,23 @@ pub struct SceneChanges {
     /// Point lights collected from the ECS world (up to `LIGHT_MAX`).
     pub lights: Vec<GpuLight>,
     /// Analytic lights for path tracing (directional + point + spot).
-    /// Populated from ECS DirectionalLight + PointLight components.
     pub pt_lights: Vec<PtAnalyticLight>,
-    /// Exposure multiplier from the camera entity. Applied to the final HDR color
-    /// before tonemapping. Replaces the global `RenderSettings.exposure`.
+    /// Exposure multiplier from the camera entity.
     pub exposure: f32,
-    /// Whether a usable Camera entity was found in the ECS world. When `false`,
-    /// the renderer should skip camera-dependent draws (skybox, PT rays) and
-    /// fall back to the clear color (gray), consistent with the "No Camera" HUD.
+    /// Whether a usable Camera entity was found in the ECS world.
     pub has_camera: bool,
 }
 
+// ---------------------------------------------------------------------------
+// Scene collection
+// ---------------------------------------------------------------------------
+
 /// Read the ECS [`World`] and the [`GraphRenderer`] orientation, then produce
 /// a [`SceneChanges`] snapshot for the current frame.
-///
-/// This replaces the inline camera/light extraction that was previously
-/// scattered through [`render_system`]; moving it to a dedicated function
-/// creates a clean **scene-update** boundary and makes it possible to later
-/// diff against the previous frame (DirtyRouter / PR-S2).
 fn collect_scene_changes(
     world: &mut World,
     renderer: &GraphRenderer,
 ) -> anyhow::Result<SceneChanges> {
-    // A missing or disabled directional light must not silently inject light.
-    // Keep a valid direction for shadow-matrix math, but use zero direct and
-    // ambient intensity.
     let fallback_dir = [
         -std::f32::consts::FRAC_1_SQRT_2,
         std::f32::consts::FRAC_1_SQRT_2,
@@ -390,21 +83,19 @@ fn collect_scene_changes(
             .find(|(_, c)| c.enabled)
             .map(|(e, _)| e);
         let (display_aspect, surface_rotation) = renderer.orientation();
-        // Write the aspect onto the Camera data component (runtime cache),
-        // tracking resize / orientation even if the app's resize handler
-        // hasn't fired yet.
         if let Some(cam_entity) = camera_entity {
             if let Some(cam) = world.get_mut::<Camera>(cam_entity) {
                 cam.aspect = display_aspect;
             }
         }
         match scene::systems::camera::compute_camera_output(world, &surface_rotation) {
-            Some(out) => {
-                (out.view_proj, out.eye, out.view, out.projection, out.exposure, true)
-            }
+            Some(out) => (out.view_proj, out.eye, out.view, out.projection, out.exposure, true),
             None => {
                 log::warn!("no usable Camera entity — using fallback");
-                let fb = scene::systems::camera::fallback_camera_output(&surface_rotation, display_aspect);
+                let fb = scene::systems::camera::fallback_camera_output(
+                    &surface_rotation,
+                    display_aspect,
+                );
                 (fb.view_proj, fb.eye, fb.view, fb.projection, fb.exposure, false)
             }
         }
@@ -415,10 +106,7 @@ fn collect_scene_changes(
     let proj32 = projection[3][2];
     let _ = projection;
 
-    // 2. Directional light (first enabled entity queried from new scene
-    //    components). The intensity is pre-scaled by LUX_TO_RADIANCE_SCALE
-    //    so the shader receives effective radiance and `exposure` is a pure
-    //    post-composition multiplier.
+    // 2. Directional light.
     let dir_light = scene::systems::lights::collect_directional_light(world);
     let light_direction = dir_light
         .map(|l| {
@@ -430,9 +118,7 @@ fn collect_scene_changes(
         .map(|l| [l.color[0], l.color[1], l.color[2], l.ambient])
         .unwrap_or(fallback_col);
 
-    // 3. Point lights (up to LIGHT_MAX) from new scene components. Position
-    //    comes from the sibling LocalTransform; if absent the light is skipped
-    //    (a point light without a position makes no sense in the new system).
+    // 3. Point lights (up to LIGHT_MAX).
     let mut lights: Vec<GpuLight> = Vec::new();
     for (entity, pl) in world.query::<scene_comp::PointLight>() {
         if !scene::systems::lights::component_is_active(world, entity) {
@@ -443,12 +129,10 @@ fn collect_scene_changes(
         }
         let pos = match world.get::<scene_comp::LocalTransform>(entity) {
             Some(t) => t.translation,
-            None => continue, // no position → skip
+            None => continue,
         };
         lights.push(GpuLight {
             position: [pos[0], pos[1], pos[2], pl.range],
-            // Pre-scale by the same lux-to-radiance factor so the shader
-            // receives effective radiance directly (no exposure in light math).
             color: [
                 pl.color[0] * pl.intensity * LUX_TO_RADIANCE_SCALE,
                 pl.color[1] * pl.intensity * LUX_TO_RADIANCE_SCALE,
@@ -458,9 +142,7 @@ fn collect_scene_changes(
         });
     }
 
-    // 4. Build pt_lights from enabled ECS PointLight components (scene).
-    // Directional light (sun) is handled separately via push-constant NEE
-    // with MIS weighting; it is NOT added to pt_lights to avoid double-counting.
+    // 4. Build pt_lights from enabled PointLight components.
     let mut pt_lights: Vec<PtAnalyticLight> = Vec::new();
     for (entity, pl) in world.query::<scene_comp::PointLight>() {
         if !scene::systems::lights::component_is_active(world, entity) {
@@ -506,41 +188,32 @@ fn collect_scene_changes(
 // Render system
 // ---------------------------------------------------------------------------
 
+/// Clear color (neutral gray — distinguishable from black/white to make it
+/// obvious when nothing drew).
+const CLEAR_COLOR: [f32; 4] = [0.5, 0.5, 0.5, 1.0];
+
 /// Run the ECS-driven rendering pipeline through the RenderGraph-based
 /// [`GraphRenderer`].
 ///
-/// 1. Computes the display-oriented view-projection (with surface rotation).
-/// 2. Builds the per-frame [`FrameUBOData`] (camera + light).
-/// 3. Builds a flat [`DrawItem`] list from the loaded glTF scene.
-/// 4. Computes the light-space view-projection for the shadow map.
+/// 1. Recomputes world transforms (hierarchy system).
+/// 2. Collects per-frame scene state (camera, lights).
+/// 3. Diffs against the previous frame via [`DirtyRouter`].
+/// 4. Builds the per-frame UBO and draw-item list.
 /// 5. Submits everything via [`GraphRenderer::render`].
 ///
-/// Returns `Err` only when [`GraphRenderer::render`] fails. Swapchain
-/// out-of-date (and other transient conditions) are handled inside `render`
-/// and surface as `Ok(false)`; this function propagates the `render` error
-/// unchanged so the caller can decide whether it is fatal.
-#[allow(clippy::too_many_arguments)]
+/// Returns `Err` only when [`GraphRenderer::render`] fails.
 pub fn render_system(
     renderer: &mut GraphRenderer,
     world: &mut World,
-    clear_color: [f32; 4],
-    debug_mode: u32,
-    normal_space: u32,
-    debug_flags: u32,
-    show_ui: bool,
-    tonemap_mode: u32,
-    debug_rt: u32,
-    render_mode: RenderMode,
-    pt_max_bounces: u32,
-    pt_ray_max_distance: f32,
-    pt_max_iterations: u32,
+    settings: &RenderSettings,
+    dirty_router: &mut DirtyRouter,
 ) -> anyhow::Result<()> {
     // 0. Recompute world transforms from local transforms (hierarchy tree).
     scene::systems::hierarchy::hierarchy_system(world);
 
     // 1. Collect per-frame scene state from the ECS world (camera, lights).
     let scene = collect_scene_changes(world, renderer)?;
-    let dirty_flags = with_dirty_router(|r| r.update(&scene));
+    let dirty_flags = dirty_router.update(&scene);
     if dirty_flags.any() {
         log::trace!(
             "dirty_flags: camera={} dir_light={} point_lights={}",
@@ -567,7 +240,7 @@ pub fn render_system(
     } = scene;
     let light_count = lights.len() as f32;
 
-    // 2. Build the per-frame UBO (merges scene data with renderer state).
+    // 2. Build the per-frame UBO.
     let frame_data = FrameUBOData {
         view_proj,
         camera_position: [eye[0], eye[1], eye[2], light_count],
@@ -575,7 +248,7 @@ pub fn render_system(
         light_color,
         view,
         light_view_proj,
-        tonemap_mode,
+        tonemap_mode: settings.tonemap_mode,
         viewport_size: {
             let e = renderer.extent();
             [e.width as f32, e.height as f32]
@@ -585,11 +258,10 @@ pub fn render_system(
         _pad3: 0.0,
     };
 
-    // 3. Build the flat draw list from ECS entities using the new scene
-    //    render system (WorldTransform + MeshRef + MaterialRef + Active).
+    // 3. Build the flat draw list from ECS entities.
     let draw_items: Vec<DrawItem> = scene::systems::render::scene_render_system(world);
 
-    // 4. Drive the render-graph phase API (begin_frame → execute → present).
+    // 4. Drive the render-graph phase API.
     let ctx = match renderer.begin_frame()? {
         Some(c) => c,
         None => return Ok(()),
@@ -599,57 +271,74 @@ pub fn render_system(
         frame_data: &frame_data,
         light_view_proj,
         inv_projection,
-        debug_mode,
-        normal_space,
-        debug_flags,
-        tonemap_mode,
-        debug_rt,
+        debug_mode: settings.debug_mode as u32,
+        normal_space: settings.normal_space as u32,
+        debug_flags: settings.debug_flags,
+        tonemap_mode: settings.tonemap_mode,
+        debug_rt: settings.debug_rt,
         proj22,
         proj32,
         lights: &lights,
-        render_mode,
-        pt_max_bounces,
-        pt_ray_max_distance,
-        pt_max_iterations,
+        render_mode: settings.render_mode,
+        pt_max_bounces: settings.pt_max_bounces,
+        pt_ray_max_distance: settings.pt_ray_max_distance,
+        pt_max_iterations: settings.pt_max_iterations,
         exposure,
         pt_lights,
         pt_accum_dirty: dirty_flags.directional_light,
         has_camera,
-        clear_color,
+        clear_color: CLEAR_COLOR,
     };
     renderer
         .execute(&ctx, &input)
         .map_err(|e| {
-            // Recording error: still call present() to signal the fence.
             let _ = renderer.present(&ctx);
             e
         })?;
     let _ = renderer.present(&ctx)?;
-    let _ = show_ui;
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Euler angle ↔ direction helpers
+// ---------------------------------------------------------------------------
+
+/// Convert XYZ Euler angles (degrees) to a unit direction vector (direction
+/// TO the light), in world space.
+pub fn euler_xyz_deg_to_dir(e: [f32; 3]) -> [f32; 3] {
+    let p = e[0].to_radians();
+    let y = e[1].to_radians();
+    let r = e[2].to_radians();
+    let (sp, cp) = p.sin_cos();
+    let (sy, cy) = y.sin_cos();
+    let _ = r;
+    let x = cp * sy;
+    let yy = sp;
+    let z = cp * cy;
+    let len = (x * x + yy * yy + z * z).sqrt().max(1e-8);
+    [x / len, yy / len, z / len]
+}
+
+/// Inverse of [`euler_xyz_deg_to_dir`]: derive XYZ Euler angles (degrees) from
+/// a direction vector.
+pub fn dir_to_euler_xyz_deg(d: [f32; 3]) -> [f32; 3] {
+    let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt().max(1e-8);
+    let n = [d[0] / len, d[1] / len, d[2] / len];
+    let pitch = n[1].asin().to_degrees();
+    let yaw = n[0].atan2(n[2]).to_degrees();
+    [pitch, yaw, 0.0]
+}
+
+// ---------------------------------------------------------------------------
+// Matrix helpers
+// ---------------------------------------------------------------------------
+
 /// Build an orthographic light-space view-projection matrix.
-///
-/// `light_dir` is the direction TO the light (normalized). We place the light
-/// at `center + light_dir * distance` and look back toward `center`, with an
-/// up vector chosen to avoid degeneracy, then apply an orthographic projection
-/// spanning `[-half, half]` in x/y and a depth range around `distance`.
-///
-/// `center` is typically the camera position - centering the shadow frustum on
-/// the viewer means geometry near the camera always falls inside the ortho box,
-/// so it both casts and receives shadows. A frustum fixed at the world origin
-/// would leave anything outside `[-half, half]` treated as lit (see
-/// `scene_frag.slang::sample_shadow`'s out-of-bounds early-out).
 fn light_view_proj(light_dir: &[f32; 4], half: f32, center: &[f32; 3]) -> [[f32; 4]; 4] {
     let l = [light_dir[0], light_dir[1], light_dir[2]];
     let len = (l[0] * l[0] + l[1] * l[1] + l[2] * l[2]).max(1e-6);
     let l = [l[0] / len, l[1] / len, l[2] / len];
 
-    // Light position: AT the light (direction TO the light is `l`), looking
-    // back toward `center`. Eye = center + l * dist (NOT center - l: placing it
-    // on the anti-light side would render the shadow map from the dark side and
-    // flip every shadow to the wrong, lit side).
     let dist = half * 2.0;
     let eye = [
         center[0] + l[0] * dist,
@@ -666,7 +355,6 @@ fn light_view_proj(light_dir: &[f32; 4], half: f32, center: &[f32; 3]) -> [[f32;
     let right = norm3(cross3(fwd, up));
     let true_up = cross3(right, fwd);
 
-    // View matrix (world -> light space), column-major.
     let view = [
         [right[0], true_up[0], -fwd[0], 0.0],
         [right[1], true_up[1], -fwd[1], 0.0],
@@ -674,18 +362,6 @@ fn light_view_proj(light_dir: &[f32; 4], half: f32, center: &[f32; 3]) -> [[f32;
         [-dot3(right, eye), -dot3(true_up, eye), dot3(fwd, eye), 1.0],
     ];
 
-    // Orthographic projection. The light looks down -fwd, so scene geometry
-    // sits at negative view-space z (in front of the light). We map the depth
-    // range [near, far] to Vulkan's [0, 1] clip depth with the standard 0..1
-    // orthographic form:
-    //   clip.z = -z/(f-n) - n/(f-n)   (for view_z = -z, z in [n, f])
-    // `dist` is the light-to-center distance, so `center` sits at view_z =
-    // -dist. near must be SMALLER than that or the whole scene is clipped by
-    // the near plane (shadow map stays cleared -> nothing is ever shadowed).
-    // Use near = 0.5*dist (center lands at ~0.17 depth, well inside) and far =
-    // 3*dist to cover geometry behind the center. `ortho_half = half` (the
-    // function parameter, independent of `dist`) sets the x/y extent.
-    // Column-major.
     let ortho_half = half;
     let inv = 1.0 / ortho_half;
     let n = 0.5 * dist;
@@ -700,7 +376,6 @@ fn light_view_proj(light_dir: &[f32; 4], half: f32, center: &[f32; 3]) -> [[f32;
     mat_mul(&proj, &view)
 }
 
-/// Column-major 4×4 matrix multiply: `out = a * b`.
 fn mat_mul(a: &[[f32; 4]; 4], b: &[[f32; 4]; 4]) -> [[f32; 4]; 4] {
     let mut out = [[0.0f32; 4]; 4];
     for i in 0..4 {
@@ -715,13 +390,7 @@ fn mat_mul(a: &[[f32; 4]; 4], b: &[[f32; 4]; 4]) -> [[f32; 4]; 4] {
     out
 }
 
-/// Column-major 4×4 matrix inverse via cofactor / adjugate. Used to derive
-/// `inv_projection` for the GTAO pass (clip -> view reconstruction). Returns
-/// the identity matrix if `m` is singular (det ~= 0), which would only happen
-/// for a degenerate projection - safe fallback that produces no occlusion.
 fn mat_inverse(m: &[[f32; 4]; 4]) -> [[f32; 4]; 4] {
-    // Compute the 16 cofactors of the column-major matrix `m`. `m[col][row]`
-    // in code = m_{row, col} in math notation.
     let m00 = m[0][0];
     let m01 = m[0][1];
     let m02 = m[0][2];
@@ -739,7 +408,6 @@ fn mat_inverse(m: &[[f32; 4]; 4]) -> [[f32; 4]; 4] {
     let m32 = m[3][2];
     let m33 = m[3][3];
 
-    // 2×2 minors of the upper-left 3×3-ish blocks; full 4×4 cofactor expansion.
     let c00 = (m11 * (m22 * m33 - m23 * m32)) - (m12 * (m21 * m33 - m23 * m31))
         + (m13 * (m21 * m32 - m22 * m31));
     let c01 = -((m10 * (m22 * m33 - m23 * m32)) - (m12 * (m20 * m33 - m23 * m30))
@@ -751,7 +419,6 @@ fn mat_inverse(m: &[[f32; 4]; 4]) -> [[f32; 4]; 4] {
 
     let det = m00 * c00 + m01 * c01 + m02 * c02 + m03 * c03;
     if det.abs() < 1e-12 {
-        // Singular - return identity (GTAO will see no occlusion).
         return [
             [1.0, 0.0, 0.0, 0.0],
             [0.0, 1.0, 0.0, 0.0],
@@ -761,7 +428,6 @@ fn mat_inverse(m: &[[f32; 4]; 4]) -> [[f32; 4]; 4] {
     }
     let inv_det = 1.0 / det;
 
-    // Remaining 12 cofactors.
     let c10 = -((m01 * (m22 * m33 - m23 * m32)) - (m02 * (m21 * m33 - m23 * m31))
         + (m03 * (m21 * m32 - m22 * m31)));
     let c11 = (m00 * (m22 * m33 - m23 * m32)) - (m02 * (m20 * m33 - m23 * m30))
@@ -789,8 +455,6 @@ fn mat_inverse(m: &[[f32; 4]; 4]) -> [[f32; 4]; 4] {
     let c33 = (m00 * (m11 * m22 - m12 * m21)) - (m01 * (m10 * m22 - m12 * m20))
         + (m02 * (m10 * m21 - m11 * m20));
 
-    // Adjugate (transpose of the cofactor matrix) * inv_det, in column-major
-    // layout: out[col][row] = cofactor[row][col] * inv_det.
     [
         [c00 * inv_det, c10 * inv_det, c20 * inv_det, c30 * inv_det],
         [c01 * inv_det, c11 * inv_det, c21 * inv_det, c31 * inv_det],
