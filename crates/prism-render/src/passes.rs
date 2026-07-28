@@ -181,18 +181,26 @@ impl RenderPassNode for ShadowMapPass {
             }
         };
 
-        // Lazy-init pipeline + render pass + framebuffer on first execute.
-        if self.pipeline.is_none() {
+        // Lazy-init pipeline + render pass + framebuffer.  If warmup already
+        // created pipeline + render_pass, only the framebuffer still needs to
+        // be created (it depends on `shadow_view` from the graph resources,
+        // which are only available during execute).
+        if self.framebuffer.is_none() {
             let device = ctx.device;
             self.device = Some(device.clone());
 
-            let render_pass = Self::create_render_pass(device, vk::Format::D32_SFLOAT)?;
-            self.render_pass = Some(render_pass);
+            // Render pass — shared between warmup and execute.
+            if self.render_pass.is_none() {
+                let render_pass = Self::create_render_pass(device, vk::Format::D32_SFLOAT)?;
+                self.render_pass = Some(render_pass);
+            }
+            let rp = self.render_pass.unwrap();
 
+            // Framebuffer — always needs the per-execute shadow_view.
             let framebuffer = unsafe {
                 device.create_framebuffer(
                     &vk::FramebufferCreateInfo::default()
-                        .render_pass(render_pass)
+                        .render_pass(rp)
                         .attachments(std::slice::from_ref(&shadow_view))
                         .width(size)
                         .height(size)
@@ -203,82 +211,70 @@ impl RenderPassNode for ShadowMapPass {
             .context("create shadow framebuffer")?;
             self.framebuffer = Some(framebuffer);
 
-            const VERT_SPV: &[u8] = include_bytes!("../../../shaders/shadow_depth.vert.spv");
-            const FRAG_SPV: &[u8] = include_bytes!("../../../shaders/shadow_depth.frag.spv");
-            let vert_module =
-                shader::load_shader_module(device, VERT_SPV).context("load shadow vert module")?;
-            let frag_module =
-                shader::load_shader_module(device, FRAG_SPV).context("load shadow frag module")?;
+            // Pipeline — may already exist when warmup ran ahead of time.
+            if self.pipeline.is_none() {
+                const VERT_SPV: &[u8] = include_bytes!("../../../shaders/shadow_depth.vert.spv");
+                const FRAG_SPV: &[u8] =
+                    include_bytes!("../../../shaders/shadow_depth.frag.spv");
+                let vert_module = shader::load_shader_module(device, VERT_SPV)
+                    .context("load shadow vert module")?;
+                let frag_module = shader::load_shader_module(device, FRAG_SPV)
+                    .context("load shadow frag module")?;
 
-            let vert_entry = std::ffi::CString::new("vertexMain").unwrap();
-            let frag_entry = std::ffi::CString::new("fragmentMain").unwrap();
-            let vert_stage = shader::shader_stage(
-                vk::ShaderStageFlags::VERTEX,
-                vert_module,
-                vert_entry.as_c_str(),
-            );
-            let frag_stage = shader::shader_stage(
-                vk::ShaderStageFlags::FRAGMENT,
-                frag_module,
-                frag_entry.as_c_str(),
-            );
-            let shader_stages = [vert_stage, frag_stage];
+                let vert_entry = std::ffi::CString::new("vertexMain").unwrap();
+                let frag_entry = std::ffi::CString::new("fragmentMain").unwrap();
+                let vert_stage = shader::shader_stage(
+                    vk::ShaderStageFlags::VERTEX,
+                    vert_module,
+                    vert_entry.as_c_str(),
+                );
+                let frag_stage = shader::shader_stage(
+                    vk::ShaderStageFlags::FRAGMENT,
+                    frag_module,
+                    frag_entry.as_c_str(),
+                );
+                let shader_stages = [vert_stage, frag_stage];
 
-            let binding_desc = Vertex::binding_description();
-            // The shadow vertex shader (`shadow_depth.slang::vertexMain`) only
-            // consumes `position` (location 0). Declare just that one attribute
-            // so the validation layer doesn't warn that normal/color/uv/tangent
-            // (locations 1-4) are bound but unconsumed. The vertex buffer stride
-            // is unchanged (still the full `Vertex`), so the bound vertex buffer
-            // from the mesh upload works as-is.
-            let position_attr = vk::VertexInputAttributeDescription::default()
-                .location(0)
-                .binding(0)
-                .format(vk::Format::R32G32B32_SFLOAT)
-                .offset(0);
+                let binding_desc = Vertex::binding_description();
+                let position_attr = vk::VertexInputAttributeDescription::default()
+                    .location(0)
+                    .binding(0)
+                    .format(vk::Format::R32G32B32_SFLOAT)
+                    .offset(0);
 
-            let push = [vk::PushConstantRange::default()
-                .stage_flags(vk::ShaderStageFlags::VERTEX)
-                .offset(0)
-                .size(std::mem::size_of::<shader_bindings::shadow_depth::ShadowPush>() as u32)];
+                let push = [vk::PushConstantRange::default()
+                    .stage_flags(vk::ShaderStageFlags::VERTEX)
+                    .offset(0)
+                    .size(std::mem::size_of::<shader_bindings::shadow_depth::ShadowPush>() as u32)];
 
-            // Depth-only pipeline: NO face cull + depth bias. Cull is NONE so
-            // single-sided geometry (Sponza's ceilings/walls, whose back faces
-            // point toward the light when it shines through an interior) still
-            // writes depth - front-cull would drop those back faces entirely
-            // and the ceiling would stop blocking light. Depth bias stays on
-            // to fight the self-shadow acne that NONE cull reintroduces.
-            let pipeline = GraphicsPipeline::new(&PipelineDesc {
-                device,
-                shader_stages: &shader_stages,
-                vertex_binding_desc: std::slice::from_ref(&binding_desc),
-                vertex_attr_descs: std::slice::from_ref(&position_attr),
-                descriptor_set_layouts: &[],
-                push_constant_ranges: &push,
-                render_pass,
-                subpass: 0,
-                cull_mode: Some(vk::CullModeFlags::NONE),
-                depth_bias_enable: Some(true),
-                // D32_SFLOAT: the constant factor is scaled by the format's
-                // minimum representable delta (~2^-23). A moderate constant +
-                // slope bias fights self-shadow acne; the shader's normal bias
-                // (offsetting the receiver along the normal) handles the rest,
-                // so these can stay smaller than a pure depth-bias setup.
-                depth_bias_constant_factor: Some(32.0),
-                depth_bias_slope_factor: Some(4.0),
-                depth_write_enable: Some(true),
-                color_attachment_count: Some(0),
-                color_blend_attachments: None,
-            })
-            .context("create shadow depth-only pipeline")?;
+                // Depth-only pipeline: NO face cull + depth bias.
+                let pipeline = GraphicsPipeline::new(&PipelineDesc {
+                    device,
+                    shader_stages: &shader_stages,
+                    vertex_binding_desc: std::slice::from_ref(&binding_desc),
+                    vertex_attr_descs: std::slice::from_ref(&position_attr),
+                    descriptor_set_layouts: &[],
+                    push_constant_ranges: &push,
+                    render_pass: rp,
+                    subpass: 0,
+                    cull_mode: Some(vk::CullModeFlags::NONE),
+                    depth_bias_enable: Some(true),
+                    depth_bias_constant_factor: Some(32.0),
+                    depth_bias_slope_factor: Some(4.0),
+                    depth_write_enable: Some(true),
+                    color_attachment_count: Some(0),
+                    color_blend_attachments: None,
+                })
+                .context("create shadow depth-only pipeline")?;
 
-            unsafe {
-                device.destroy_shader_module(vert_module, None);
-                device.destroy_shader_module(frag_module, None);
-            }
+                unsafe {
+                    device.destroy_shader_module(vert_module, None);
+                    device.destroy_shader_module(frag_module, None);
+                }
 
-            self.pipeline = Some(pipeline);
-        }
+                self.pipeline = Some(pipeline);
+            } // if self.pipeline.is_none()
+        } // if self.framebuffer.is_none()
 
         let pipeline = self.pipeline.as_ref().unwrap();
         let render_pass = self.render_pass.unwrap();
@@ -389,6 +385,79 @@ impl RenderPassNode for ShadowMapPass {
             size,
             size
         );
+        Ok(())
+    }
+
+    fn warmup(&mut self, device: &ash::Device, _context: &VulkanContext) -> Result<()> {
+        if self.pipeline.is_some() {
+            return Ok(());
+        }
+        self.device = Some(device.clone());
+
+        // Render pass — same layout as `execute` uses.
+        let render_pass =
+            Self::create_render_pass(device, vk::Format::D32_SFLOAT)?;
+        self.render_pass = Some(render_pass);
+
+        // Pipeline — load shader modules, create depth-only pipeline.
+        const VERT_SPV: &[u8] = include_bytes!("../../../shaders/shadow_depth.vert.spv");
+        const FRAG_SPV: &[u8] = include_bytes!("../../../shaders/shadow_depth.frag.spv");
+        let vert_module =
+            shader::load_shader_module(device, VERT_SPV).context("warmup: load shadow vert")?;
+        let frag_module =
+            shader::load_shader_module(device, FRAG_SPV).context("warmup: load shadow frag")?;
+
+        let vert_entry = std::ffi::CString::new("vertexMain").unwrap();
+        let frag_entry = std::ffi::CString::new("fragmentMain").unwrap();
+        let vert_stage = shader::shader_stage(
+            vk::ShaderStageFlags::VERTEX,
+            vert_module,
+            vert_entry.as_c_str(),
+        );
+        let frag_stage = shader::shader_stage(
+            vk::ShaderStageFlags::FRAGMENT,
+            frag_module,
+            frag_entry.as_c_str(),
+        );
+        let shader_stages = [vert_stage, frag_stage];
+
+        let binding_desc = Vertex::binding_description();
+        let position_attr = vk::VertexInputAttributeDescription::default()
+            .location(0)
+            .binding(0)
+            .format(vk::Format::R32G32B32_SFLOAT)
+            .offset(0);
+
+        let push = [vk::PushConstantRange::default()
+            .stage_flags(vk::ShaderStageFlags::VERTEX)
+            .offset(0)
+            .size(std::mem::size_of::<shader_bindings::shadow_depth::ShadowPush>() as u32)];
+
+        let pipeline = GraphicsPipeline::new(&PipelineDesc {
+            device,
+            shader_stages: &shader_stages,
+            vertex_binding_desc: std::slice::from_ref(&binding_desc),
+            vertex_attr_descs: std::slice::from_ref(&position_attr),
+            descriptor_set_layouts: &[],
+            push_constant_ranges: &push,
+            render_pass,
+            subpass: 0,
+            cull_mode: Some(vk::CullModeFlags::NONE),
+            depth_bias_enable: Some(true),
+            depth_bias_constant_factor: Some(32.0),
+            depth_bias_slope_factor: Some(4.0),
+            depth_write_enable: Some(true),
+            color_attachment_count: Some(0),
+            color_blend_attachments: None,
+        })
+        .context("warmup: shadow depth-only pipeline")?;
+
+        unsafe {
+            device.destroy_shader_module(vert_module, None);
+            device.destroy_shader_module(frag_module, None);
+        }
+
+        self.pipeline = Some(pipeline);
         Ok(())
     }
 
@@ -2229,6 +2298,14 @@ impl RenderPassNode for ScenePass {
             inputs: Vec::new(),
             outputs: vec![self.out_depth_h, self.out_normal_h, self.out_color_h],
         }
+    }
+
+    fn warmup(&mut self, device: &ash::Device, context: &VulkanContext) -> Result<()> {
+        if self.pipeline.is_some() {
+            return Ok(());
+        }
+        self.ensure_render_pass(context)?;
+        self.ensure_pipeline(device)
     }
 }
 

@@ -670,6 +670,14 @@ impl GraphRenderer {
         self.swapchain.is_some()
     }
 
+    /// Pre‑compile all lazy‑created pipelines so the first frame does not
+    /// stall on pipeline creation. Call once after construction, before any
+    /// [`execute`](Self::execute).
+    pub fn warmup_pipelines(&mut self) -> anyhow::Result<()> {
+        let ctx = self.context();
+        self.graph.warmup_passes(&ctx.device, ctx)
+    }
+
     pub fn suspend_surface(&mut self) {
         let device = &self.runtime.context.device;
         unsafe { device.device_wait_idle() }.ok();

@@ -463,6 +463,17 @@ pub trait RenderPassNode: std::any::Any {
     /// passes to read by handle.
     fn execute(&mut self, ctx: &RenderContext, resources: &mut GraphResources) -> Result<()>;
 
+    /// Pre‑create pipelines / shader modules at load time so the first frame
+    /// doesn't pay pipeline‑compilation cost. Default is a no‑op; passes with
+    /// lazy pipelines override this.
+    fn warmup(
+        &mut self,
+        _device: &ash::Device,
+        _context: &crate::context::VulkanContext,
+    ) -> Result<()> {
+        Ok(())
+    }
+
     /// Read-only snapshot of this pass's declared resource edges + coarse kind,
     /// for the render-graph visualizer. Default returns an "unknown" pass with
     /// no edges; concrete passes override to populate `kind`/`inputs`/`outputs`.
@@ -915,6 +926,20 @@ impl RenderGraph {
     /// time). Exposed read-only for the visualizer's header summary.
     pub fn settings(&self) -> &RenderSettings {
         &self.settings
+    }
+
+    /// Call [`warmup`](RenderPassNode::warmup) on every registered pass.
+    /// Designed to be called once after graph construction so that lazy
+    /// pipelines are compiled ahead of the first frame.
+    pub fn warmup_passes(
+        &mut self,
+        device: &ash::Device,
+        context: &crate::context::VulkanContext,
+    ) -> Result<()> {
+        for pass in &mut self.passes {
+            pass.warmup(device, context)?;
+        }
+        Ok(())
     }
 
     /// Iterator over all declared graph resources (depth/color attachments,

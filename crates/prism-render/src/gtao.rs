@@ -920,5 +920,12 @@ impl RenderPassNode for GtaoPass {
             outputs: Vec::new(),
         }
     }
+
+    fn warmup(&mut self, device: &ash::Device, _context: &VulkanContext) -> Result<()> {
+        if self.pipeline.is_some() {
+            return Ok(());
+        }
+        self.ensure_pipeline(device)
+    }
 }
 

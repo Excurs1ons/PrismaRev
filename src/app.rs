@@ -266,6 +266,12 @@ impl App {
             Err(e) => log::warn!("audio engine failed to start, running silent: {e}"),
         }
 
+        // Pre‑compile all lazy‑created GPU pipelines so the first frame
+        // doesn't stall on pipeline creation.
+        if let Err(e) = ctx.renderer.warmup_pipelines() {
+            log::warn!("pipeline warmup failed (continuing): {e:#}");
+        }
+
         self.engine_context = Some(ctx);
     }
 

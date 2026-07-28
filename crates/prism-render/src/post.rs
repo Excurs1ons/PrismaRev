@@ -611,6 +611,16 @@ impl RenderPassNode for PostPass {
             outputs: Vec::new(),
         }
     }
+
+    fn warmup(&mut self, device: &ash::Device, _context: &VulkanContext) -> Result<()> {
+        if self.pipeline.is_some() {
+            return Ok(());
+        }
+        if self.render_pass.is_none() {
+            self.render_pass = Some(create_render_pass(device, self.color_format)?);
+        }
+        self.ensure_pipeline(device)
+    }
 }
 
 /// Create the PostPass render pass: 1 swapchain-format color attachment

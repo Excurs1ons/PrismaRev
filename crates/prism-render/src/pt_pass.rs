@@ -1001,6 +1001,13 @@ impl RenderPassNode for PathTracePass {
             outputs: vec![PT_COLOR_H],
         }
     }
+
+    fn warmup(&mut self, device: &ash::Device, _context: &VulkanContext) -> Result<()> {
+        if self.pipeline.is_some() {
+            return Ok(());
+        }
+        self.ensure_pipeline(device)
+    }
 }
 
 // ---- helpers ----
