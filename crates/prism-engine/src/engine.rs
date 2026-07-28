@@ -50,6 +50,8 @@ use crate::input::InputManager;
 use crate::render_settings::RenderSettings;
 use crate::render_system::render_system;
 use crate::scene;
+use crate::scene::editor;
+use prism_editor::Editor;
 
 // ===========================================================================
 // RuntimeInitPhase — when a registered callback fires
@@ -298,13 +300,13 @@ impl Engine {
 
     /// Create an `Engine` and run all init phases (convenience for simple apps).
     ///
-    /// Equivalent to calling `new()` then `pre_init(())` → `init_core()` →
-    /// `init_config()` → `init_resources()` → `init_scene()` →
+    /// Equivalent to calling `empty()` then `pre_init(())` → `init_core(editor)`
+    /// → `init_config()` → `init_resources()` → `init_scene()` →
     /// `runtime_initialize()` in sequence.
-    pub fn new() -> Self {
+    pub fn new(editor: &mut Editor) -> Self {
         let mut engine = Self::empty();
         engine.pre_init(&());
-        engine.init_core();
+        engine.init_core(editor);
         engine.init_config();
         engine.init_resources();
         engine.init_scene();
@@ -387,14 +389,16 @@ impl Engine {
         self.run_init_phase(RuntimeInitPhase::PreInit);
     }
 
-    /// **Phase 1** — Core subsystem init: ECS type registration, configuration
-    /// loading, platform services.
+    /// **Phase 1** — Core subsystem init: register scene components with the
+    /// editor, register ECS type info, configure platform services.
     ///
     /// UE: `Init()` / `PostEngineInit` · Unity: `SubsystemRegistration`.
     ///
     /// After this phase the ECS world is ready for component/spawn operations.
     /// The resource package is **not** yet loaded.
-    pub fn init_core(&mut self) {
+    pub fn init_core(&mut self, editor: &mut Editor) {
+        editor::register_components(editor);
+        editor.set_hierarchy(crate::scene::editor::SceneHierarchy);
         self.run_init_phase(RuntimeInitPhase::Subsystems);
     }
 
@@ -593,8 +597,3 @@ impl Engine {
     }
 }
 
-impl Default for Engine {
-    fn default() -> Self {
-        Self::new()
-    }
-}

@@ -3,6 +3,7 @@
 //! See `docs/plans/2026-07-25-modern-scene-system-design.md`.
 
 pub mod components;
+pub mod editor;
 pub mod helpers;
 pub mod hot_reload;
 pub mod inspect;

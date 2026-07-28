@@ -133,67 +133,6 @@ impl EngineContext {
 }
 
 // ===========================================================================
-// Editor component registration + hierarchy adapter
-// ===========================================================================
-
-fn register_scene_components(editor: &mut Editor) {
-    editor.register::<Name>(100);
-    editor.register::<LocalTransform>(110);
-    editor.register::<TransformDirty>(115);
-    editor.register::<WorldTransform>(120);
-    editor.register::<Active>(130);
-    editor.register::<MeshRenderer>(135);
-    editor.register::<Parent>(200);
-    editor.register::<Children>(210);
-    editor.register::<MeshRef>(300);
-    editor.register::<MaterialRef>(310);
-    editor.register::<DirectionalLight>(400);
-    editor.register::<PointLight>(410);
-    editor.register::<SpotLight>(420);
-    editor.register::<Camera>(500);
-    editor.register::<FlyCameraController>(510);
-    editor.register::<Skybox>(600);
-    editor.register::<SceneMember>(900);
-}
-
-struct SceneHierarchy;
-
-impl prism_editor::inspector::Hierarchy for SceneHierarchy {
-    fn roots(&self, world: &prism_ecs::World) -> Vec<prism_ecs::Entity> {
-        let mut roots: Vec<prism_ecs::Entity> = world
-            .query_inactive_inclusive::<LocalTransform>()
-            .filter(|(e, _)| world.get::<Parent>(*e).is_none())
-            .map(|(e, _)| e)
-            .collect();
-        let named: Vec<prism_ecs::Entity> = world
-            .query_inactive_inclusive::<Name>()
-            .filter(|(e, _)| {
-                world.get::<Parent>(*e).is_none() && world.get::<LocalTransform>(*e).is_none()
-            })
-            .map(|(e, _)| e)
-            .collect();
-        roots.extend(named);
-        roots.sort_by_key(|e| e.id());
-        roots
-    }
-
-    fn children(
-        &self,
-        world: &prism_ecs::World,
-        entity: prism_ecs::Entity,
-    ) -> Vec<prism_ecs::Entity> {
-        world
-            .get::<Children>(entity)
-            .map(|c| c.0.clone())
-            .unwrap_or_default()
-    }
-
-    fn name(&self, world: &prism_ecs::World, entity: prism_ecs::Entity) -> Option<String> {
-        world.get::<Name>(entity).map(|n| n.0.clone())
-    }
-}
-
-// ===========================================================================
 // App
 // ===========================================================================
 
@@ -237,13 +176,14 @@ impl App {
         // custom setup between phases, exactly like UE's PreInit/Init/PostInit
         // or Unity's [RuntimeInitializeOnLoadMethod].
         let mut engine = Engine::empty();
+        let mut editor = Editor::new();
 
         // Phase 0 – PreInit
         engine.pre_init(&());
 
-        // Phase 1 – Subsystem registration
-        //   e.g. register custom ECS components, asset importers.
-        engine.init_core();
+        // Phase 1 – Subsystem registration (auto-registers all scene components
+        //   with the editor, sets up the scene hierarchy adapter).
+        engine.init_core(&mut editor);
 
         // Phase 2 – Configuration
         engine.init_config();
@@ -256,10 +196,6 @@ impl App {
 
         // Phase 5 – Runtime startup callbacks
         engine.runtime_initialize();
-
-        let mut editor = Editor::new();
-        register_scene_components(&mut editor);
-        editor.set_hierarchy(SceneHierarchy);
 
         Self {
             config: AppConfig::load(),
