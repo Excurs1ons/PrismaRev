@@ -46,16 +46,22 @@ mod tests {
         let mut world = World::new();
         let e = world.spawn();
         world.insert(e, WorldTransform([[1.0; 4]; 4]));
-        world.insert(e, MeshRef {
-            asset_id: SceneAssetId::generate(),
-            render_handle: MeshHandle::default(),
-            generation: 1,
-        });
-        world.insert(e, MaterialRef {
-            asset_id: SceneAssetId::generate(),
-            material_slot: 2,
-            generation: 1,
-        });
+        world.insert(
+            e,
+            MeshRef {
+                asset_id: SceneAssetId::generate(),
+                render_handle: MeshHandle::default(),
+                generation: 1,
+            },
+        );
+        world.insert(
+            e,
+            MaterialRef {
+                asset_id: SceneAssetId::generate(),
+                material_slot: 2,
+                generation: 1,
+            },
+        );
         // No Active → defaults to true.
 
         let items = scene_render_system(&world);
@@ -68,16 +74,22 @@ mod tests {
         let mut world = World::new();
         let e = world.spawn();
         world.insert(e, WorldTransform([[1.0; 4]; 4]));
-        world.insert(e, MeshRef {
-            asset_id: SceneAssetId::generate(),
-            render_handle: MeshHandle::default(),
-            generation: 1,
-        });
-        world.insert(e, MaterialRef {
-            asset_id: SceneAssetId::generate(),
-            material_slot: 0,
-            generation: 1,
-        });
+        world.insert(
+            e,
+            MeshRef {
+                asset_id: SceneAssetId::generate(),
+                render_handle: MeshHandle::default(),
+                generation: 1,
+            },
+        );
+        world.insert(
+            e,
+            MaterialRef {
+                asset_id: SceneAssetId::generate(),
+                material_slot: 0,
+                generation: 1,
+            },
+        );
         world.insert(e, Active(false));
 
         let items = scene_render_system(&world);
@@ -101,16 +113,22 @@ mod tests {
         for _ in 0..3 {
             let e = world.spawn();
             world.insert(e, WorldTransform([[1.0; 4]; 4]));
-            world.insert(e, MeshRef {
-                asset_id: SceneAssetId::generate(),
-                render_handle: MeshHandle::default(),
-                generation: 1,
-            });
-            world.insert(e, MaterialRef {
-                asset_id: SceneAssetId::generate(),
-                material_slot: 0,
-                generation: 1,
-            });
+            world.insert(
+                e,
+                MeshRef {
+                    asset_id: SceneAssetId::generate(),
+                    render_handle: MeshHandle::default(),
+                    generation: 1,
+                },
+            );
+            world.insert(
+                e,
+                MaterialRef {
+                    asset_id: SceneAssetId::generate(),
+                    material_slot: 0,
+                    generation: 1,
+                },
+            );
         }
 
         let items = scene_render_system(&world);
@@ -135,16 +153,22 @@ mod tests {
             [4.0, 5.0, 6.0, 1.0],
         ];
         world.insert(e, WorldTransform(model));
-        world.insert(e, MeshRef {
-            asset_id: SceneAssetId::generate(),
-            render_handle: MeshHandle::default(),
-            generation: 1,
-        });
-        world.insert(e, MaterialRef {
-            asset_id: SceneAssetId::generate(),
-            material_slot: 0,
-            generation: 1,
-        });
+        world.insert(
+            e,
+            MeshRef {
+                asset_id: SceneAssetId::generate(),
+                render_handle: MeshHandle::default(),
+                generation: 1,
+            },
+        );
+        world.insert(
+            e,
+            MaterialRef {
+                asset_id: SceneAssetId::generate(),
+                material_slot: 0,
+                generation: 1,
+            },
+        );
 
         let items = scene_render_system(&world);
         assert_eq!(items[0].model, model);

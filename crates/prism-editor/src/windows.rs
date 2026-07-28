@@ -59,10 +59,7 @@ pub fn debug_window(ctx: &Context, insp: &mut Inspector) {
                     egui::Color32::from_rgb(80, 80, 80)
                 };
                 ui.horizontal(|ui| {
-                    ui.colored_label(
-                        color,
-                        format!("{} [key {} | bit {}]", name, key_label, bit),
-                    );
+                    ui.colored_label(color, format!("{} [key {} | bit {}]", name, key_label, bit));
                     ui.label(format!("- {}", desc));
                 });
             }
@@ -81,7 +78,10 @@ pub fn debug_window(ctx: &Context, insp: &mut Inspector) {
                 {
                     insp.tonemap_mode = 0;
                 }
-                if ui.selectable_label(insp.tonemap_mode == 1, "ACES").clicked() {
+                if ui
+                    .selectable_label(insp.tonemap_mode == 1, "ACES")
+                    .clicked()
+                {
                     insp.tonemap_mode = 1;
                 }
             });
@@ -122,10 +122,7 @@ pub fn render_settings_window(ctx: &Context, insp: &mut Inspector) {
                     insp.render_mode = RenderMode::Raster;
                 }
                 if ui
-                    .selectable_label(
-                        insp.render_mode == RenderMode::PathTrace,
-                        "Path Tracing",
-                    )
+                    .selectable_label(insp.render_mode == RenderMode::PathTrace, "Path Tracing")
                     .clicked()
                 {
                     insp.render_mode = RenderMode::PathTrace;
@@ -134,9 +131,7 @@ pub fn render_settings_window(ctx: &Context, insp: &mut Inspector) {
             if insp.render_mode == RenderMode::PathTrace {
                 ui.separator();
                 ui.label("PT Settings");
-                ui.add(
-                    egui::Slider::new(&mut insp.pt_max_bounces, 1..=16).text("Max Bounces"),
-                );
+                ui.add(egui::Slider::new(&mut insp.pt_max_bounces, 1..=16).text("Max Bounces"));
                 ui.add(
                     egui::Slider::new(&mut insp.pt_ray_max_distance, 5.0..=2000.0)
                         .text("Ray Max Distance")

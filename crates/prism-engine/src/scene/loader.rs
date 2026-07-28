@@ -230,7 +230,11 @@ pub fn parse_rscn(data: &[u8]) -> Result<ParsedRscn, String> {
             return Err("unexpected end (parent)".into());
         }
         let parent_raw = i32::from_le_bytes(data[offset..offset + 4].try_into().unwrap());
-        let parent = if parent_raw < 0 { None } else { Some(parent_raw as u32) };
+        let parent = if parent_raw < 0 {
+            None
+        } else {
+            Some(parent_raw as u32)
+        };
         offset += 4;
 
         // Transform: tx(12) + rot(16) + scale(12) = 40 bytes.
@@ -298,8 +302,7 @@ pub fn parse_rscn(data: &[u8]) -> Result<ParsedRscn, String> {
                 return Err("unexpected end (mat path)".into());
             }
             ent.has_material = true;
-            ent.material_path =
-                String::from_utf8_lossy(&data[offset..offset + plen]).into_owned();
+            ent.material_path = String::from_utf8_lossy(&data[offset..offset + plen]).into_owned();
             offset += plen;
         }
 
@@ -317,16 +320,13 @@ pub fn parse_rscn(data: &[u8]) -> Result<ParsedRscn, String> {
                 f32::from_le_bytes(data[offset + 8..offset + 12].try_into().unwrap()),
             ];
             offset += 12;
-            ent.light_intensity =
-                f32::from_le_bytes(data[offset..offset + 4].try_into().unwrap());
+            ent.light_intensity = f32::from_le_bytes(data[offset..offset + 4].try_into().unwrap());
             offset += 4;
             ent.light_range = f32::from_le_bytes(data[offset..offset + 4].try_into().unwrap());
             offset += 4;
-            ent.light_inner_cone =
-                f32::from_le_bytes(data[offset..offset + 4].try_into().unwrap());
+            ent.light_inner_cone = f32::from_le_bytes(data[offset..offset + 4].try_into().unwrap());
             offset += 4;
-            ent.light_outer_cone =
-                f32::from_le_bytes(data[offset..offset + 4].try_into().unwrap());
+            ent.light_outer_cone = f32::from_le_bytes(data[offset..offset + 4].try_into().unwrap());
             offset += 4;
         }
 
@@ -347,8 +347,7 @@ pub fn parse_rscn(data: &[u8]) -> Result<ParsedRscn, String> {
             if offset + 2 > data.len() {
                 return Err("unexpected end (skybox path_len)".into());
             }
-            let plen =
-                u16::from_le_bytes(data[offset..offset + 2].try_into().unwrap()) as usize;
+            let plen = u16::from_le_bytes(data[offset..offset + 2].try_into().unwrap()) as usize;
             offset += 2;
             if offset + plen + 1 > data.len() {
                 return Err("unexpected end (skybox path)".into());
@@ -364,9 +363,7 @@ pub fn parse_rscn(data: &[u8]) -> Result<ParsedRscn, String> {
         entities.push(ent);
     }
 
-    Ok(ParsedRscn {
-        entities,
-    })
+    Ok(ParsedRscn { entities })
 }
 
 // ---------------------------------------------------------------------------
@@ -478,8 +475,8 @@ impl SceneLoader {
         let (bytes, scene_id) = match source {
             SceneSource::RawCooked(bytes) => (bytes, SceneAssetId::generate()),
             SceneSource::CookedFile(path) => {
-                let bytes =
-                    std::fs::read(&path).map_err(|e| format!("failed to read {}: {e}", path.display()))?;
+                let bytes = std::fs::read(&path)
+                    .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
                 (bytes, SceneAssetId::generate())
             }
         };
@@ -733,11 +730,21 @@ mod tests {
 
             // Flags.
             let mut flags: u8 = 0;
-            if e.has_mesh { flags |= FLAG_HAS_MESH; }
-            if e.has_material { flags |= FLAG_HAS_MATERIAL; }
-            if e.has_light { flags |= FLAG_HAS_LIGHT; }
-            if e.has_camera { flags |= FLAG_HAS_CAMERA; }
-            if e.has_skybox { flags |= FLAG_HAS_SKYBOX; }
+            if e.has_mesh {
+                flags |= FLAG_HAS_MESH;
+            }
+            if e.has_material {
+                flags |= FLAG_HAS_MATERIAL;
+            }
+            if e.has_light {
+                flags |= FLAG_HAS_LIGHT;
+            }
+            if e.has_camera {
+                flags |= FLAG_HAS_CAMERA;
+            }
+            if e.has_skybox {
+                flags |= FLAG_HAS_SKYBOX;
+            }
             buf.push(flags);
 
             // Mesh path.
@@ -991,7 +998,10 @@ mod tests {
         // Check hierarchy.
         let child_entity = inst.all_entities[1];
         assert!(world.get::<Parent>(child_entity).is_some());
-        assert_eq!(world.get::<Parent>(child_entity).unwrap().0, inst.all_entities[0]);
+        assert_eq!(
+            world.get::<Parent>(child_entity).unwrap().0,
+            inst.all_entities[0]
+        );
     }
 
     #[test]
@@ -1377,10 +1387,7 @@ mod tests {
 pub fn collect_bake_instances(
     world: &World,
     rm: &mut ResourceManager,
-) -> anyhow::Result<(
-    Vec<prism_render::bake_common::PtGeometryInstance>,
-    Vec<u8>,
-)> {
+) -> anyhow::Result<(Vec<prism_render::bake_common::PtGeometryInstance>, Vec<u8>)> {
     use std::collections::HashMap;
 
     use prism_render::bake_common::PtGeometryInstance;
@@ -1433,14 +1440,11 @@ pub fn collect_bake_instances(
         let mut vertices = Vec::with_capacity(vert_count);
         for vi in 0..vert_count {
             let off = vi * stride;
-            let px =
-                f32::from_le_bytes(mesh_info.vertex_data[off..off + 4].try_into().unwrap());
-            let py = f32::from_le_bytes(
-                mesh_info.vertex_data[off + 4..off + 8].try_into().unwrap(),
-            );
-            let pz = f32::from_le_bytes(
-                mesh_info.vertex_data[off + 8..off + 12].try_into().unwrap(),
-            );
+            let px = f32::from_le_bytes(mesh_info.vertex_data[off..off + 4].try_into().unwrap());
+            let py =
+                f32::from_le_bytes(mesh_info.vertex_data[off + 4..off + 8].try_into().unwrap());
+            let pz =
+                f32::from_le_bytes(mesh_info.vertex_data[off + 8..off + 12].try_into().unwrap());
             let wp = transform_point(world_mat, [px, py, pz]);
 
             let normal = if stride >= 24 {

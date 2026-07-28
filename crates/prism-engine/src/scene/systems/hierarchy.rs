@@ -52,10 +52,7 @@ pub fn hierarchy_system(world: &mut World) {
 fn visit_children(world: &mut World, parent: Entity, parent_world: [[f32; 4]; 4]) {
     // Clone the children list so we don't hold a borrow on `world` during the
     // recursive calls that may mutate components.
-    let children = world
-        .get::<Children>(parent)
-        .cloned()
-        .unwrap_or_default();
+    let children = world.get::<Children>(parent).cloned().unwrap_or_default();
 
     for child in children.0 {
         if !world.is_alive(child) {
@@ -134,14 +131,32 @@ mod tests {
     fn nested_hierarchy() {
         let mut world = World::new();
         let gp = world.spawn(); // grandparent
-        let p = world.spawn();  // parent
-        let c = world.spawn();  // child
+        let p = world.spawn(); // parent
+        let c = world.spawn(); // child
 
-        world.insert(gp, LocalTransform { translation: [1.0, 0.0, 0.0], ..Default::default() });
+        world.insert(
+            gp,
+            LocalTransform {
+                translation: [1.0, 0.0, 0.0],
+                ..Default::default()
+            },
+        );
         world.insert(gp, WorldTransform([[0.0; 4]; 4]));
-        world.insert(p, LocalTransform { translation: [0.0, 2.0, 0.0], ..Default::default() });
+        world.insert(
+            p,
+            LocalTransform {
+                translation: [0.0, 2.0, 0.0],
+                ..Default::default()
+            },
+        );
         world.insert(p, WorldTransform([[0.0; 4]; 4]));
-        world.insert(c, LocalTransform { translation: [0.0, 0.0, 3.0], ..Default::default() });
+        world.insert(
+            c,
+            LocalTransform {
+                translation: [0.0, 0.0, 3.0],
+                ..Default::default()
+            },
+        );
         world.insert(c, WorldTransform([[0.0; 4]; 4]));
 
         HierarchyHelper::reparent(&mut world, p, Some(gp));
@@ -168,7 +183,13 @@ mod tests {
 
         world.insert(parent, LocalTransform::default());
         world.insert(parent, WorldTransform([[0.0; 4]; 4]));
-        world.insert(child, LocalTransform { translation: [5.0, 0.0, 0.0], ..Default::default() });
+        world.insert(
+            child,
+            LocalTransform {
+                translation: [5.0, 0.0, 0.0],
+                ..Default::default()
+            },
+        );
         world.insert(child, WorldTransform([[0.0; 4]; 4]));
 
         HierarchyHelper::reparent(&mut world, child, Some(parent));
@@ -213,9 +234,21 @@ mod tests {
         let r1 = world.spawn();
         let r2 = world.spawn();
 
-        world.insert(r1, LocalTransform { translation: [10.0, 0.0, 0.0], ..Default::default() });
+        world.insert(
+            r1,
+            LocalTransform {
+                translation: [10.0, 0.0, 0.0],
+                ..Default::default()
+            },
+        );
         world.insert(r1, WorldTransform([[0.0; 4]; 4]));
-        world.insert(r2, LocalTransform { translation: [0.0, 20.0, 0.0], ..Default::default() });
+        world.insert(
+            r2,
+            LocalTransform {
+                translation: [0.0, 20.0, 0.0],
+                ..Default::default()
+            },
+        );
         world.insert(r2, WorldTransform([[0.0; 4]; 4]));
 
         hierarchy_system(&mut world);

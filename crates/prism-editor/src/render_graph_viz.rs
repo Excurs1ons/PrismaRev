@@ -19,13 +19,13 @@
 //! [`Inspector`]: crate::Inspector
 
 use egui::{Color32, Context, FontId, Painter, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, Vec2};
-use prism_render::{
-    GraphRenderer, PassInfo, PassKind, RenderGraphSnapshot, ResourceHandle, RenderSettings,
-    ResourceType, ShadowMode,
-};
 use prism_render::gtao::GtaoPass;
 use prism_render::passes::{ScenePass, ShadowMapPass};
 use prism_render::post::PostPass;
+use prism_render::{
+    GraphRenderer, PassInfo, PassKind, RenderGraphSnapshot, RenderSettings, ResourceHandle,
+    ResourceType, ShadowMode,
+};
 
 /// Read-only render-graph visualizer (toggled with F2).
 #[derive(Default)]
@@ -88,11 +88,14 @@ impl RenderGraphViz {
                 if let Some(pass) = graph.pass_ref::<ScenePass>() {
                     let e = pass.extent();
                     d.extent = Some([e.width, e.height]);
-                    d.formats.push(("color (HDR)".into(), format!("{:?}", pass.color_format())));
-                    d.formats.push(("normal (MRT)".into(), format!("{:?}", pass.normal_format())));
+                    d.formats
+                        .push(("color (HDR)".into(), format!("{:?}", pass.color_format())));
+                    d.formats
+                        .push(("normal (MRT)".into(), format!("{:?}", pass.normal_format())));
                     d.image_count = Some(pass.image_count());
                     d.notes.push("forward PBR + skybox + gizmo".into());
-                    d.notes.push("samples IBL set, shadow view, prev-frame AO".into());
+                    d.notes
+                        .push("samples IBL set, shadow view, prev-frame AO".into());
                     let [color, normal, depth] = pass.out_handles();
                     d.outputs = vec![color, normal, depth];
                 }
@@ -101,18 +104,23 @@ impl RenderGraphViz {
                 if let Some(pass) = graph.pass_ref::<GtaoPass>() {
                     let e = pass.extent();
                     d.extent = Some([e.width, e.height]);
-                    d.formats.push(("AO (R8)".into(), format!("{:?}", GtaoPass::ao_format())));
+                    d.formats
+                        .push(("AO (R8)".into(), format!("{:?}", GtaoPass::ao_format())));
                     d.notes.push("half-resolution screen-space AO".into());
-                    d.notes.push("double-buffered; 1-frame latency to ScenePass".into());
+                    d.notes
+                        .push("double-buffered; 1-frame latency to ScenePass".into());
                 }
             }
             PassKind::Post => {
                 if let Some(pass) = graph.pass_ref::<PostPass>() {
                     let e = pass.extent();
                     d.extent = Some([e.width, e.height]);
-                    d.formats.push(("swapchain".into(), format!("{:?}", pass.color_format())));
-                    d.notes.push("fullscreen-triangle tonemap HDR -> sRGB".into());
-                    d.notes.push("writes swapchain (not a graph resource)".into());
+                    d.formats
+                        .push(("swapchain".into(), format!("{:?}", pass.color_format())));
+                    d.notes
+                        .push("fullscreen-triangle tonemap HDR -> sRGB".into());
+                    d.notes
+                        .push("writes swapchain (not a graph resource)".into());
                 }
             }
             PassKind::Pt => {
@@ -205,7 +213,11 @@ impl RenderGraphViz {
             ui.separator();
             ui.label(format!(
                 "gbuffer_hi: {}",
-                if s.gbuffer_high_precision { "on" } else { "off" }
+                if s.gbuffer_high_precision {
+                    "on"
+                } else {
+                    "off"
+                }
             ));
             ui.separator();
             ui.label(format!(
@@ -223,11 +235,7 @@ impl RenderGraphViz {
     fn graph_canvas(&self, ui: &mut Ui, snapshot: &RenderGraphSnapshot) {
         // Build a quick handle -> ResourceInfo lookup for edge labels.
         let res_lookup: std::collections::HashMap<ResourceHandle, &prism_render::ResourceInfo> =
-            snapshot
-                .resources
-                .iter()
-                .map(|r| (r.handle, r))
-                .collect();
+            snapshot.resources.iter().map(|r| (r.handle, r)).collect();
 
         let n = snapshot.passes.len().max(1);
         // Layout constants.
@@ -245,10 +253,7 @@ impl RenderGraphViz {
         let node_rects: Vec<Rect> = (0..n)
             .map(|i| {
                 let y = origin.y + (i as f32) * v_gap;
-                Rect::from_min_size(
-                    Pos2::new(origin.x + 8.0, y),
-                    Vec2::new(node_w, node_h),
-                )
+                Rect::from_min_size(Pos2::new(origin.x + 8.0, y), Vec2::new(node_w, node_h))
             })
             .collect();
 
@@ -268,16 +273,18 @@ impl RenderGraphViz {
                 if c_idx <= producer_idx {
                     continue; // only forward edges
                 }
-                let producer_center_bottom =
-                    node_rects[producer_idx].center_bottom();
+                let producer_center_bottom = node_rects[producer_idx].center_bottom();
                 // Spread consumer connection points across the top edge by input index.
                 let consumer = &snapshot.passes[c_idx];
-                let input_idx = consumer.inputs.iter().position(|h| *h == out_h).unwrap_or(0);
+                let input_idx = consumer
+                    .inputs
+                    .iter()
+                    .position(|h| *h == out_h)
+                    .unwrap_or(0);
                 let input_count = consumer.inputs.len().max(1);
                 let t = (input_idx as f32 + 0.5) / input_count as f32;
                 let consumer_top = Pos2::new(
-                    node_rects[c_idx].left()
-                        + t * node_rects[c_idx].width(),
+                    node_rects[c_idx].left() + t * node_rects[c_idx].width(),
                     node_rects[c_idx].top(),
                 );
                 let color = edge_color(out_h);

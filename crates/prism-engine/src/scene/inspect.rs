@@ -41,7 +41,11 @@ impl Inspect for Name {
 
 impl Inspect for Parent {
     fn inspect_ui(&mut self, ui: &mut Ui, _ctx: &mut InspectCtx) {
-        ui.label(format!("Parent entity: id={} gen={}", self.0.id(), self.0.generation()));
+        ui.label(format!(
+            "Parent entity: id={} gen={}",
+            self.0.id(),
+            self.0.generation()
+        ));
     }
 }
 
@@ -49,7 +53,11 @@ impl Inspect for Children {
     fn inspect_ui(&mut self, ui: &mut Ui, _ctx: &mut InspectCtx) {
         ui.label(format!("{} child(ren)", self.0.len()));
         for (i, child) in self.0.iter().enumerate() {
-            ui.label(format!("  [{i}] id={} gen={}", child.id(), child.generation()));
+            ui.label(format!(
+                "  [{i}] id={} gen={}",
+                child.id(),
+                child.generation()
+            ));
         }
     }
 }
@@ -185,10 +193,7 @@ impl Inspect for DirectionalLight {
         // dir_light_euler_deg cache).
         let entity = ctx.current_entity.unwrap_or_else(|| sentinel_entity());
         let key = (entity, TypeId::of::<Self>());
-        let euler = ctx
-            .euler_cache
-            .entry(key)
-            .or_insert_with(|| self.euler_xyz);
+        let euler = ctx.euler_cache.entry(key).or_insert_with(|| self.euler_xyz);
         // Pitch / Yaw / Roll (degrees): X = pitch [-90,90], Y/Z = yaw/roll.
         ui.label("Pitch / Yaw / Roll (degrees)");
         let mut changed = false;
@@ -272,12 +277,18 @@ impl Inspect for SpotLight {
         }
         ui.add(egui::Slider::new(&mut self.intensity, 0.0..=2000.0).text("Intensity (cd)"));
         ui.add(
-            egui::Slider::new(&mut self.inner_cone_angle, 0.0..=std::f32::consts::FRAC_PI_2)
-                .text("Inner cone (rad)"),
+            egui::Slider::new(
+                &mut self.inner_cone_angle,
+                0.0..=std::f32::consts::FRAC_PI_2,
+            )
+            .text("Inner cone (rad)"),
         );
         ui.add(
-            egui::Slider::new(&mut self.outer_cone_angle, 0.0..=std::f32::consts::FRAC_PI_2)
-                .text("Outer cone (rad)"),
+            egui::Slider::new(
+                &mut self.outer_cone_angle,
+                0.0..=std::f32::consts::FRAC_PI_2,
+            )
+            .text("Outer cone (rad)"),
         );
     }
 }
@@ -288,9 +299,7 @@ impl Inspect for SpotLight {
 
 impl Inspect for Camera {
     fn inspect_ui(&mut self, ui: &mut Ui, _ctx: &mut InspectCtx) {
-        ui.add(
-            egui::Slider::new(&mut self.fov_y_degrees, 10.0..=170.0).text("FOV Y (deg)"),
-        );
+        ui.add(egui::Slider::new(&mut self.fov_y_degrees, 10.0..=170.0).text("FOV Y (deg)"));
         ui.add(egui::Slider::new(&mut self.near, 0.001..=5.0).text("z near"));
         ui.add(egui::Slider::new(&mut self.far, 10.0..=100_000.0).text("z far"));
         ui.add(
@@ -306,8 +315,11 @@ impl Inspect for Camera {
 impl Inspect for FlyCameraController {
     fn inspect_ui(&mut self, ui: &mut Ui, _ctx: &mut InspectCtx) {
         ui.add(
-            egui::Slider::new(&mut self.yaw, -std::f32::consts::TAU..=std::f32::consts::TAU)
-                .text("Yaw (rad)"),
+            egui::Slider::new(
+                &mut self.yaw,
+                -std::f32::consts::TAU..=std::f32::consts::TAU,
+            )
+            .text("Yaw (rad)"),
         );
         ui.add(
             egui::Slider::new(
@@ -318,8 +330,7 @@ impl Inspect for FlyCameraController {
         );
         ui.add(egui::Slider::new(&mut self.move_speed, 0.1..=50.0).text("Move speed"));
         ui.add(
-            egui::Slider::new(&mut self.look_sensitivity, 0.0001..=0.01)
-                .text("Look sensitivity"),
+            egui::Slider::new(&mut self.look_sensitivity, 0.0001..=0.01).text("Look sensitivity"),
         );
     }
 }
@@ -339,6 +350,36 @@ impl Inspect for SceneMember {
     fn inspect_ui(&mut self, ui: &mut Ui, _ctx: &mut InspectCtx) {
         ui.label(format!("scene asset id: {:#x}", self.0 .0));
     }
+}
+
+// ---------------------------------------------------------------------------
+// Registration
+// ---------------------------------------------------------------------------
+
+/// Register all [`Inspect`][prism_editor::Inspect] component editors with
+/// the given [`ComponentRegistry`][prism_editor::ComponentRegistry].
+///
+/// Called once from engine initialisation.  Types whose `Inspect` impl is
+/// registered here get a full egui editor UI in the inspector; types
+/// without one just show a read‑only label.
+pub fn register_inspect_fns(registry: &mut prism_editor::ComponentRegistry) {
+    registry.register::<Name>(100);
+    registry.register::<Active>(110);
+    registry.register::<LocalTransform>(120);
+    registry.register::<MeshRenderer>(130);
+    registry.register::<DirectionalLight>(140);
+    registry.register::<PointLight>(150);
+    registry.register::<SpotLight>(160);
+    registry.register::<Camera>(170);
+    registry.register::<FlyCameraController>(180);
+    registry.register::<Skybox>(190);
+    registry.register::<Parent>(200);
+    registry.register::<Children>(210);
+    registry.register::<WorldTransform>(300);
+    registry.register::<TransformDirty>(310);
+    registry.register::<MeshRef>(320);
+    registry.register::<MaterialRef>(330);
+    registry.register::<SceneMember>(400);
 }
 
 // ---------------------------------------------------------------------------

@@ -75,7 +75,9 @@ mod tests {
         HierarchyHelper::reparent(&mut world, child, Some(parent));
 
         assert_eq!(world.get::<Parent>(child), Some(&Parent(parent)));
-        let children = world.get::<Children>(parent).expect("parent should have Children");
+        let children = world
+            .get::<Children>(parent)
+            .expect("parent should have Children");
         assert!(children.0.contains(&child));
     }
 

@@ -17,9 +17,7 @@
 use prism_ecs::World;
 
 use crate::input::InputManager;
-use crate::scene::components::{
-    Camera, FlyCameraController, LocalTransform, WorldTransform,
-};
+use crate::scene::components::{Camera, FlyCameraController, LocalTransform, WorldTransform};
 
 /// Return the first [`Camera`] component found in the world.
 ///
@@ -47,17 +45,16 @@ pub struct CameraOutput {
 ///
 /// The fallback places the viewer at `(0, 0, 5)` looking toward the origin with
 /// a 75° FOV, 16:9 aspect, and exposure 1.0.
-pub fn fallback_camera_output(
-    surface_rotation: &[[f32; 4]; 4],
-    aspect: f32,
-) -> CameraOutput {
+pub fn fallback_camera_output(surface_rotation: &[[f32; 4]; 4], aspect: f32) -> CameraOutput {
     let eye = [0.0, 0.0, 5.0];
     // Simple look-at: eye at (0,0,5), target at origin, +Y up.
     // Right-handed, camera looks down -Z per engine convention.
-    let view = [[1.0, 0.0, 0.0, 0.0],
-                [0.0, 1.0, 0.0, 0.0],
-                [0.0, 0.0, 1.0, 0.0],
-                [0.0, 0.0, -5.0, 1.0]];
+    let view = [
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [0.0, 0.0, -5.0, 1.0],
+    ];
     // Standard perspective: 75° FOV, 16:9-ish aspect, near=0.01, far=500.
     let fov_y = 75.0_f32.to_radians();
     let inv_tan = 1.0 / (fov_y * 0.5).tan();
@@ -92,9 +89,7 @@ pub fn compute_camera_output(
     world: &World,
     surface_rotation: &[[f32; 4]; 4],
 ) -> Option<CameraOutput> {
-    let (entity, cam) = world
-        .query::<Camera>()
-        .find(|(_, c)| c.enabled)?;
+    let (entity, cam) = world.query::<Camera>().find(|(_, c)| c.enabled)?;
     let ctrl = world.get::<FlyCameraController>(entity)?;
     let world_tf = world.get::<WorldTransform>(entity)?;
 
@@ -102,11 +97,7 @@ pub fn compute_camera_output(
     // column-major matrix). For a root camera this equals LocalTransform
     // translation; for a nested camera the hierarchy system already baked the
     // parent transform in.
-    let eye = [
-        world_tf.0[3][0],
-        world_tf.0[3][1],
-        world_tf.0[3][2],
-    ];
+    let eye = [world_tf.0[3][0], world_tf.0[3][1], world_tf.0[3][2]];
 
     let proj = perspective(cam);
     let view = fly_view(eye, ctrl.yaw, ctrl.pitch);
@@ -359,9 +350,23 @@ mod tests {
     fn multiple_cameras_returns_first() {
         let mut world = World::new();
         let e1 = world.spawn();
-        world.insert(e1, Camera { fov_y_degrees: 60.0, ..Camera::default() });
+        world.insert(
+            e1,
+            Camera {
+                fov_y_degrees: 60.0,
+                ..Camera::default()
+            },
+        );
         let e2 = world.spawn();
-        world.insert(e2, Camera { fov_y_degrees: 90.0, near: 0.1, far: 100.0, ..Camera::default() });
+        world.insert(
+            e2,
+            Camera {
+                fov_y_degrees: 90.0,
+                near: 0.1,
+                far: 100.0,
+                ..Camera::default()
+            },
+        );
 
         let cam = collect_camera(&world).unwrap();
         // ECS query order is deterministic - first inserted should be first.

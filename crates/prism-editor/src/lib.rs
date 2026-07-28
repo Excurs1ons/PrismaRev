@@ -93,8 +93,7 @@ impl InspectCtx {
     /// Forget any cached state for `entity` (call when the selection changes
     /// away from it). Keeps the cache from growing unbounded.
     pub fn forget(&mut self, entity: Entity) {
-        self.euler_cache
-            .retain(|&(e, _), _| e != entity);
+        self.euler_cache.retain(|&(e, _), _| e != entity);
     }
 }
 
@@ -109,7 +108,9 @@ impl Default for InspectCtx {
 // ---------------------------------------------------------------------------
 
 /// A type-erased editor entry: knows how to borrow one component type off an
-/// entity and run its [`Inspect`] UI.
+/// entity and run its [`Inspect`] UI.  Components without a registered inspect
+/// function still appear in the inspector with a read-only label.
+#[derive(Clone)]
 pub struct RegisteredComponent {
     pub type_id: TypeId,
     pub type_name: &'static str,
@@ -117,36 +118,52 @@ pub struct RegisteredComponent {
     /// components can slot in between existing ones without renumbering.
     pub order: u32,
     /// Type-erased dispatch: borrows `T` off `entity` mutably and calls
-    /// `T::inspect_ui`. No-op if the entity has no such component.
-    pub inspect: fn(&mut World, Entity, &mut Ui, &mut InspectCtx),
+    /// `T::inspect_ui`.  `None` for components discovered from the world that
+    /// have no registered inspect function — the inspector shows a read-only
+    /// label instead.
+    pub inspect: Option<fn(&mut World, Entity, &mut Ui, &mut InspectCtx)>,
 }
 
 /// Registry of all component editors the inspector knows about.
 ///
-/// Built once at app startup (`App::new`) by calling
-/// [`ComponentRegistry::register`] for each component type that should appear
-/// in the inspector. The inspector then queries the registry - never the
-/// concrete types - so adding a new component only requires an `impl Inspect`
-/// plus one `register::<T>` line; the inspector code itself never changes.
+/// The inspector auto-discovers component types from the ECS [`World`] via
+/// [`World::iter_component_types`], so **types do not need to be registered
+/// just to be visible**.  Register only types that have a custom [`Inspect`]
+/// implementation for an editable UI.
+///
+/// Built once at app startup by calling [`ComponentRegistry::register`] for
+/// each component type with a custom inspector.  The inspector then queries
+/// the registry — never the concrete types — so adding a new component only
+/// requires an `impl Inspect` plus one `register::<T>` line.
 pub struct ComponentRegistry {
     entries: Vec<RegisteredComponent>,
+    /// Fast TypeId → entry lookup for the auto-discovery path.
+    by_type_id: HashMap<TypeId, RegisteredComponent>,
 }
 
 impl ComponentRegistry {
     pub fn new() -> Self {
-        Self { entries: Vec::new() }
+        Self {
+            entries: Vec::new(),
+            by_type_id: HashMap::new(),
+        }
     }
 
     /// Register an editor for `T` at the given display `order`.
+    ///
+    /// Types with a registered inspect function get a full egui editor UI in
+    /// the inspector.  Types without one just show a read‑only type name.
     pub fn register<T: Inspect>(&mut self, order: u32) {
         let entry = RegisteredComponent {
             type_id: TypeId::of::<T>(),
             type_name: std::any::type_name::<T>(),
             order,
-            inspect: inspect_dispatch::<T>,
+            inspect: Some(inspect_dispatch::<T>),
         };
-        self.entries.push(entry);
-        // Keep entries sorted by order so `entries_for` can early-exit.
+        self.by_type_id.insert(entry.type_id, entry.clone());
+        // Keep display-order list for iteration.
+        self.entries.clear();
+        self.entries.extend(self.by_type_id.values().cloned());
         self.entries.sort_by_key(|e| e.order);
     }
 
@@ -156,13 +173,34 @@ impl ComponentRegistry {
     }
 
     /// Return the entries the given `entity` actually has, in display order.
-    /// Uses [`World::has_component`] so the inspector never hardcodes a
-    /// component-type probe.
-    pub fn entries_for(&self, world: &World, entity: Entity) -> Vec<&RegisteredComponent> {
-        self.entries
-            .iter()
-            .filter(|e| world.has_component(entity, e.type_id))
-            .collect()
+    /// Uses [`World::iter_component_types`] to discover all components on the
+    /// entity, then looks up registered inspect functions for each.
+    /// Components without an inspect function still appear (read-only label).
+    pub fn entries_for(&self, world: &World, entity: Entity) -> Vec<RegisteredComponent> {
+        let mut result: Vec<RegisteredComponent> = world
+            .iter_component_types()
+            .filter(|(type_id, _)| world.has_component(entity, *type_id))
+            .map(|(type_id, type_name)| {
+                // If we have a registered inspect function, merge it in.
+                if let Some(reg) = self.by_type_id.get(&type_id) {
+                    reg.clone()
+                } else {
+                    RegisteredComponent {
+                        type_id,
+                        type_name,
+                        order: 500,
+                        inspect: None,
+                    }
+                }
+            })
+            .collect();
+        result.sort_by_key(|e| e.order);
+        result
+    }
+
+    /// Look up a registered component by [`TypeId`].
+    pub fn lookup(&self, type_id: &TypeId) -> Option<&RegisteredComponent> {
+        self.by_type_id.get(type_id)
     }
 }
 
@@ -248,8 +286,13 @@ impl Editor {
         world: &mut World,
     ) {
         overlay.run_ui(window, |ctx| {
-            self.inspector
-                .ui(ctx, world, &self.registry, &mut self.ctx, self.hierarchy.as_ref());
+            self.inspector.ui(
+                ctx,
+                world,
+                &self.registry,
+                &mut self.ctx,
+                self.hierarchy.as_ref(),
+            );
         });
     }
 
@@ -257,19 +300,18 @@ impl Editor {
     /// wants to drive the egui context itself, e.g. co-hosting with the
     /// render-graph visualizer inside its own `run_ui` closure).
     pub fn run_ctx(&mut self, ctx: &egui::Context, world: &mut World) {
-        self.inspector
-            .ui(ctx, world, &self.registry, &mut self.ctx, self.hierarchy.as_ref());
+        self.inspector.ui(
+            ctx,
+            world,
+            &self.registry,
+            &mut self.ctx,
+            self.hierarchy.as_ref(),
+        );
     }
 
     /// Sync per-frame metrics from the host. `App` calls this each frame
     /// before `run` so the perf HUD / debug window show fresh numbers.
-    pub fn sync_metrics(
-        &mut self,
-        dt: f32,
-        frame_time_ms: f32,
-        fps: f32,
-        pt_frame_count: u32,
-    ) {
+    pub fn sync_metrics(&mut self, dt: f32, frame_time_ms: f32, fps: f32, pt_frame_count: u32) {
         let insp = &mut self.inspector;
         insp.dt = dt;
         insp.frame_time_ms = frame_time_ms;

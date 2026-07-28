@@ -50,7 +50,6 @@ use crate::input::InputManager;
 use crate::render_settings::RenderSettings;
 use crate::render_system::render_system;
 use crate::scene;
-use crate::scene::editor;
 use prism_editor::Editor;
 
 // ===========================================================================
@@ -397,8 +396,8 @@ impl Engine {
     /// After this phase the ECS world is ready for component/spawn operations.
     /// The resource package is **not** yet loaded.
     pub fn init_core(&mut self, editor: &mut Editor) {
-        editor::register_components(editor);
-        editor.set_hierarchy(crate::scene::editor::SceneHierarchy);
+        scene::inspect::register_inspect_fns(&mut editor.registry);
+        editor.set_hierarchy(crate::scene::SceneHierarchy);
         self.run_init_phase(RuntimeInitPhase::Subsystems);
     }
 
@@ -508,12 +507,7 @@ impl Engine {
         renderer: &mut GraphRenderer,
         settings: &RenderSettings,
     ) -> Result<(), anyhow::Error> {
-        render_system(
-            renderer,
-            &mut self.world,
-            settings,
-            &mut self.dirty_router,
-        )
+        render_system(renderer, &mut self.world, settings, &mut self.dirty_router)
     }
 
     /// Post-render: UI overlay output, debug drawing.
@@ -596,4 +590,3 @@ impl Engine {
         self.current_scene_name.as_deref()
     }
 }
-

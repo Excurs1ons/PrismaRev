@@ -364,9 +364,7 @@ impl Inspector {
     ) {
         // Forget stale euler cache when the selection changes.
         // (Keep current entity's cache; drop others to bound growth.)
-        inspect_ctx
-            .euler_cache
-            .retain(|&(e, _), _| e == entity);
+        inspect_ctx.euler_cache.retain(|&(e, _), _| e == entity);
         // Tell the Inspect impls which entity they're editing so per-entity
         // caches (euler angles) can be keyed correctly.
         inspect_ctx.current_entity = Some(entity);
@@ -380,8 +378,8 @@ impl Inspector {
         ui.heading(format!("Entity {}", entity.id()));
         ui.separator();
 
-        // Auto-recognise: iterate every registered component this entity has,
-        // in display order, and run its editor inside a collapsing header.
+        // Auto-recognise: discover all component types from the world and show
+        // an editable UI for those with registered inspect functions.
         let entries = registry.entries_for(world, entity);
         for entry in &entries {
             // Header label = short type name (last path segment).
@@ -391,11 +389,15 @@ impl Inspector {
                 .next()
                 .unwrap_or(entry.type_name);
             ui.collapsing(label, |ui| {
-                (entry.inspect)(world, entity, ui, inspect_ctx);
+                if let Some(inspect) = entry.inspect {
+                    (inspect)(world, entity, ui, inspect_ctx);
+                } else {
+                    ui.label("(no editor — read‑only)");
+                }
             });
         }
         if entries.is_empty() {
-            ui.label("(no editable components)");
+            ui.label("(no components)");
         }
     }
 }

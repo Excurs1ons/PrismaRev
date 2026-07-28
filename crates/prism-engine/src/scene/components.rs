@@ -107,9 +107,24 @@ impl LocalTransform {
         let [sx, sy, sz] = self.scale;
         let [tx, ty, tz] = self.translation;
         [
-            [sx * (1.0 - 2.0 * (yy + zz)), sx * 2.0 * (xy + wz), sx * 2.0 * (xz - wy), 0.0],
-            [sy * 2.0 * (xy - wz), sy * (1.0 - 2.0 * (xx + zz)), sy * 2.0 * (yz + wx), 0.0],
-            [sz * 2.0 * (xz + wy), sz * 2.0 * (yz - wx), sz * (1.0 - 2.0 * (xx + yy)), 0.0],
+            [
+                sx * (1.0 - 2.0 * (yy + zz)),
+                sx * 2.0 * (xy + wz),
+                sx * 2.0 * (xz - wy),
+                0.0,
+            ],
+            [
+                sy * 2.0 * (xy - wz),
+                sy * (1.0 - 2.0 * (xx + zz)),
+                sy * 2.0 * (yz + wx),
+                0.0,
+            ],
+            [
+                sz * 2.0 * (xz + wy),
+                sz * 2.0 * (yz - wx),
+                sz * (1.0 - 2.0 * (xx + yy)),
+                0.0,
+            ],
             [tx, ty, tz, 1.0],
         ]
     }
