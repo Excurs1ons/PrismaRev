@@ -323,7 +323,7 @@ pub fn render_system(
         clear_color: CLEAR_COLOR,
         ui_overlay: &crate::ui::render::convert_ui_draw_list_to_overlay(world),
     };
-    renderer.execute(&ctx, &input).map_err(|e| {
+    renderer.execute(&ctx, &input, None).map_err(|e| {
         let _ = renderer.present(&ctx);
         e
     })?;

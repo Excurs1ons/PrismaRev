@@ -22,6 +22,7 @@ use crate::render_graph::{
     RenderSettings, ResourceHandle, ResourceType, ResourceUsage, ShadowMode, SCENE_COLOR_H,
     SCENE_DEPTH_H, SCENE_NORMAL_H,
 };
+use crate::context::VulkanContext;
 use crate::shader;
 use crate::shader_bindings;
 use crate::VulkanContext;

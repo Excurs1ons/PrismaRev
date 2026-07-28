@@ -1,8 +1,8 @@
 //! PrismaRev engine library: rendering systems, ECS components, asset resolution,
 //! scene management, and editor integration.
 //!
-//! This is a **pure library crate** — it does not own the event loop or define an
-//! application shell.  Application-level code (winit `ApplicationHandler`) lives in
+//! This is a **pure logic crate** — it has no window-system dependency.  The
+//! event loop, window creation, and platform-specific input dispatch live in
 //! `src/app.rs` (the binary crate).
 
 pub mod app;

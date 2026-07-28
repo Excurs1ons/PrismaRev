@@ -13,7 +13,7 @@
             android:theme="@style/AppTheme"
             android:configChanges="orientation|keyboardHidden|screenSize"
             android:screenOrientation="landscape">
-            <meta-data android:name="android.app.lib_name" android:value="prism_android" />
+            <meta-data android:name="android.app.lib_name" android:value="prism_app" />
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

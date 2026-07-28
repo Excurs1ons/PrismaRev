@@ -66,7 +66,7 @@ pub use descriptor::{
     DescriptorLayout, DescriptorPool, FrameUBO, FrameUBOData, GpuLight, LIGHT_MAX,
     PtAnalyticLight, PT_LIGHT_MAX, PtEmissiveTri, PT_EMISSIVE_MAX, ReSTIRReservoir,
 };
-pub use egui_overlay::EguiOverlay;
+pub use egui_overlay::{EguiFrame, EguiGpu};
 pub use gi::{
     eval_sh9, sample_probe_irradiance, sh_basis, trilinear_weights, world_to_probe_coord,
     ProbeVolumeInfo, SH_COEFF_COUNT,

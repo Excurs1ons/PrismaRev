@@ -38,7 +38,7 @@ impl OrbitCameraController {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use winit::event::{ElementState, MouseScrollDelta};
+    use crate::input::ElementState;
 
     #[test]
     fn default_sensitivity_values() {
@@ -89,7 +89,7 @@ mod tests {
         let ctrl = OrbitCameraController::default();
         let mut input = InputManager::new();
 
-        input.handle_scroll(MouseScrollDelta::LineDelta(0.0, 5.0));
+        input.handle_scroll(5.0);
         let old_dist = camera.distance;
         ctrl.update(&mut camera, &input);
 
@@ -103,7 +103,7 @@ mod tests {
         let ctrl = OrbitCameraController::default();
         let mut input = InputManager::new();
 
-        input.handle_scroll(MouseScrollDelta::LineDelta(0.0, -3.0));
+        input.handle_scroll(-3.0);
         let old_dist = camera.distance;
         ctrl.update(&mut camera, &input);
 
@@ -132,12 +132,12 @@ mod tests {
         let mut input = InputManager::new();
 
         // Extreme zoom in
-        input.handle_scroll(MouseScrollDelta::LineDelta(0.0, 9999.0));
+        input.handle_scroll(9999.0);
         ctrl.update(&mut camera, &input);
         assert!(camera.distance >= 0.1);
 
         // Extreme zoom out
-        input.handle_scroll(MouseScrollDelta::LineDelta(0.0, -9999.0));
+        input.handle_scroll(-9999.0);
         ctrl.update(&mut camera, &input);
         assert!(camera.distance <= 1000.0);
     }
