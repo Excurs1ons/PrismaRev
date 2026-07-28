@@ -1,87 +1,191 @@
-//! [`Engine`] — the core engine lifecycle object.
+//! [`Engine`] — the core simulation engine.
 //!
-//! Owns the ECS [`World`], asset resolver, dirty-router, and all per-frame
-//! state that persists across window suspend/resume.
+//! Owns the ECS [`World`] and runs game‑logic phases (`fixed_update`,
+//! `update`, `late_update`).  **No** rendering, asset resolution, or
+//! dirty‑routing lives here — those belong to [`RenderContext`].
 //!
-//! ## Lifecycle phases (Unity/UE-style)
+//! ## Lifecycle phases (call in order)
 //!
 //! ```text
-//!   new
-//!   │
-//!   ├─ pre_init(config)                    ─── PreInit / EnginePreInit
-//!   │   └─ run_init_callbacks(PreInit)
-//!   │
-//!   ├─ init_core()                        ─── InitSubsystems / PostEngineInit
-//!   │   ├─ register ECS type info
-//!   │   └─ run_init_callbacks(Subsystems)
-//!   │
-//!   ├─ init_config()                      ─── LoadConfig
-//!   │   └─ ... reserved
-//!   │
-//!   ├─ init_resources()                   ─── LoadResources / CookedContent
-//!   │   ├─ load resource package (.pak)
-//!   │   └─ run_init_callbacks(Resources)
-//!   │
-//!   ├─ init_scene()                       ─── LoadScene / BeginPlay
-//!   │   ├─ restore persisted scene state
-//!   │   ├─ load scene from manifest
-//!   │   └─ run_init_callbacks(SceneLoaded)
-//!   │
-//!   └─ runtime_initialize()              ─── RuntimeInitializeOnLoad
-//!       └─ run_init_callbacks(RuntimeStart)
+//!   empty / new
+//!     ├─ pre_init(config)         ─── PreInit
+//!     ├─ init_core(editor)        ─── register Inspect fns + hierarchy
+//!     ├─ init_config()            ─── (reserved)
+//!     ├─ init_resources(pak)      ─── load .pak → ResourceManager
+//!     ├─ init_scene()             ─── load scene → World
+//!     └─ runtime_initialize()    ─── final hook
 //!
-//!   [per frame: fixed_update → update → late_update → pre_render → render → post_render]
+//!   [per frame:
+//!       fixed_update → update → late_update  (called N times per render frame)]
 //!
-//!   pre_shutdown()                       ─── OnApplicationQuit
-//!   shutdown(renderer)                   ─── OnDestroy
-//!   post_shutdown()                      ─── FinishDestroy
+//!   pre_shutdown → post_shutdown
 //! ```
 //!
-//! Callers can `register_init(phase, |engine| { ... })` at any point before
-//! that phase runs, emulating Unity's `[RuntimeInitializeOnLoadMethod]`.
+//! The application drives the render pipeline separately via
+//! [`FramePacket`]s extracted after each sim tick.
 
-use prism_asset_runtime::{ResourceManager, SceneAsset};
 use prism_ecs::World;
-use prism_render::GraphRenderer;
 
-use crate::asset_resolver::GpuAssetResolver;
-use crate::dirty_router::DirtyRouter;
 use crate::input::InputManager;
-use crate::render_settings::RenderSettings;
-use crate::render_system::render_system;
-use crate::scene;
-use prism_editor::Editor;
 
 // ===========================================================================
-// RuntimeInitPhase — when a registered callback fires
+// Engine
 // ===========================================================================
 
-/// Initialisation phases against which external code can register callbacks
-/// via [`Engine::register_init`], analogous to Unity's
-/// [`RuntimeInitializeOnLoadMethod`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum RuntimeInitPhase {
-    /// Before any engine subsystems are set up.
-    /// Corresponds to Unity's `BeforeSplashScreen`.
-    PreInit,
-    /// After core subsystem registration, before resource loading.
-    /// Corresponds to Unity's `SubsystemRegistration`.
-    Subsystems,
-    /// After the resource package (`.pak`) is loaded, before scene loading.
-    /// Corresponds to use-cases that need asset IDs but not scene entities.
-    Resources,
-    /// After the startup scene is loaded, before the first frame.
-    /// Corresponds to Unity's `AfterSceneLoad`.
-    SceneLoaded,
-    /// After everything is ready and the game loop is about to begin.
-    /// Corresponds to Unity's `RuntimeInitializeOnLoadMethod` with no arg
-    /// (default `AfterSceneLoad` runs here).
-    RuntimeStart,
+/// Simulation engine — owns the ECS [`World`] and exposes game‑logic phases.
+///
+/// All rendering concerns (asset upload, draw‑list building, GPU submission)
+/// are handled by the application's `RenderContext`.
+pub struct Engine {
+    world: World,
+    current_scene_name: Option<String>,
+}
+
+impl Engine {
+    // ======================================================================
+    // Construction
+    // ======================================================================
+
+    /// Create an `Engine` and run all init phases (convenience).
+    ///
+    /// Loads resources from the given resource manager, then loads the scene.
+    pub fn new(
+        editor: &mut prism_editor::Editor,
+        rm: &mut prism_asset_runtime::ResourceManager,
+    ) -> Self {
+        let mut engine = Self::empty();
+        engine.pre_init(&());
+        engine.init_core(editor);
+        engine.init_config();
+        engine.init_resources();
+        engine.init_scene(rm);
+        engine.runtime_initialize();
+        engine
+    }
+
+    /// Create an empty engine — no init phases run.
+    pub fn empty() -> Self {
+        Self {
+            world: World::new(),
+            current_scene_name: None,
+        }
+    }
+
+    // ======================================================================
+    // Init phases (call in order)
+    // ======================================================================
+
+    /// **Phase 0** — Pre-init: reserved for low‑level configuration.
+    pub fn pre_init(&mut self, _config: &()) {}
+
+    /// **Phase 1** — Core subsystem init: register Inspect fns + hierarchy.
+    pub fn init_core(&mut self, editor: &mut prism_editor::Editor) {
+        crate::scene::inspect::register_inspect_fns(&mut editor.registry);
+        editor.set_hierarchy(crate::scene::SceneHierarchy);
+    }
+
+    /// **Phase 2** — Configuration loading (reserved).
+    pub fn init_config(&mut self) {}
+
+    /// **Phase 3** — Resource package loading.
+    ///
+    /// Loads the `.pak` resource package into a standalone `ResourceManager`
+    /// (owned by the caller).  The `ResourceManager` is **not** stored here
+    /// because the engine does no GPU uploads — see [`RenderContext`].
+    pub fn init_resources(&mut self) {
+        // Engine no longer owns GpuAssetResolver; caller holds ResourceManager.
+    }
+
+    /// **Phase 4** — Scene loading.
+    ///
+    /// Restores persisted scene state and loads the first scene from the
+    /// manifest.  Requires a [`ResourceManager`] for `.pak`‑backed scenes.
+    pub fn init_scene(&mut self, rm: &mut prism_asset_runtime::ResourceManager) {
+        crate::scene_state::load_scene_state(&mut self.world);
+        self.current_scene_name =
+            load_scene_from_manifest(rm, &mut self.world);
+    }
+
+    /// **Phase 5** — Runtime init: final "everything is ready" hook.
+    pub fn runtime_initialize(&mut self) {}
+
+    // ======================================================================
+    // Frame tick phases
+    // ======================================================================
+
+    /// Fixed‑timestep update: physics, deterministic simulation.
+    ///
+    /// Unity `FixedUpdate()` · UE sub‑stepped tick.
+    pub fn fixed_update(&mut self, fixed_dt: f32, input_manager: &InputManager) {
+        let look_active = input_manager.pointer_locked;
+        crate::scene::systems::camera::camera_controller_system(
+            &mut self.world,
+            input_manager,
+            fixed_dt,
+            look_active,
+        );
+    }
+
+    /// Variable‑timestep per‑frame update: game logic, camera, input.
+    ///
+    /// Unity `Update()` · UE `Tick()`.
+    pub fn update(&mut self, dt: f32, input_manager: &InputManager) {
+        let look_active = input_manager.pointer_locked;
+        crate::scene::systems::camera::camera_controller_system(
+            &mut self.world,
+            input_manager,
+            dt,
+            look_active,
+        );
+    }
+
+    /// Late update: audio sync, IK, camera‑relative effects.
+    ///
+    /// Unity `LateUpdate()`.
+    pub fn late_update(&mut self) {}
+
+    // ======================================================================
+    // Shutdown
+    // ======================================================================
+
+    /// Pre‑shutdown: save state, flush pending work.
+    pub fn pre_shutdown(&mut self) {}
+
+    /// Final cleanup after shutdown.
+    pub fn post_shutdown(&mut self) {}
+
+    // ======================================================================
+    // Suspend / resume (platform lifecycle)
+    // ======================================================================
+
+    /// Called when the platform surface is suspended (e.g. Android onPause).
+    pub fn on_suspend(&mut self) {}
+
+    /// Called when the platform surface is resumed (e.g. Android onResume).
+    pub fn on_resume(&mut self) {}
+
+    // ======================================================================
+    // Accessors
+    // ======================================================================
+
+    pub fn world(&self) -> &World {
+        &self.world
+    }
+
+    pub fn world_mut(&mut self) -> &mut World {
+        &mut self.world
+    }
+
+    pub fn current_scene_name(&self) -> Option<&str> {
+        self.current_scene_name.as_deref()
+    }
 }
 
 // ===========================================================================
-// Manifest helpers (shared by env / scene loading)
+// Manifest helpers (moved from old engine.rs, kept for scene loading)
 // ===========================================================================
+
+use prism_asset_runtime::{ResourceManager, SceneAsset};
 
 #[derive(serde::Deserialize)]
 struct SceneManifestEntry {
@@ -96,23 +200,8 @@ struct SceneManifest {
 
 const CANDIDATE_DIRS: &[&str] = &["assets", "crates/prism-engine/assets"];
 
-fn find_and_parse_manifest() -> Option<(std::path::PathBuf, SceneManifest)> {
-    let manifest_path = CANDIDATE_DIRS
-        .iter()
-        .map(|d| std::path::Path::new(d).join("scenes.toml"))
-        .find(|p| p.exists())?;
-    let manifest_dir = manifest_path.parent()?.to_path_buf();
-    let text = std::fs::read_to_string(&manifest_path).ok()?;
-    let manifest: SceneManifest = toml::from_str(&text).ok()?;
-    log::info!(
-        "scene manifest: {:?} ({} entries)",
-        manifest_path,
-        manifest.scenes.len()
-    );
-    Some((manifest_dir, manifest))
-}
-
 /// Load environment map bytes from the first scene in `scenes.toml`.
+/// Used during renderer construction; does not need the ECS world.
 pub fn load_env_bytes_from_manifest() -> Option<Vec<u8>> {
     let (manifest_dir, manifest) = find_and_parse_manifest()?;
     for entry in &manifest.scenes {
@@ -142,6 +231,22 @@ pub fn load_env_bytes_from_manifest() -> Option<Vec<u8>> {
     }
     log::info!("no environment map in scene manifest; using procedural fallback");
     None
+}
+
+fn find_and_parse_manifest() -> Option<(std::path::PathBuf, SceneManifest)> {
+    let manifest_path = CANDIDATE_DIRS
+        .iter()
+        .map(|d| std::path::Path::new(d).join("scenes.toml"))
+        .find(|p| p.exists())?;
+    let manifest_dir = manifest_path.parent()?.to_path_buf();
+    let text = std::fs::read_to_string(&manifest_path).ok()?;
+    let manifest: SceneManifest = toml::from_str(&text).ok()?;
+    log::info!(
+        "scene manifest: {:?} ({} entries)",
+        manifest_path,
+        manifest.scenes.len()
+    );
+    Some((manifest_dir, manifest))
 }
 
 fn load_scene_from_manifest(rm: &mut ResourceManager, world: &mut World) -> Option<String> {
@@ -260,333 +365,4 @@ fn load_scene_from_file(
             crate::scene::loader::SceneSource::CookedFile(path.to_path_buf()),
         )
         .map_err(|e| anyhow::anyhow!("{e}"))
-}
-
-// ===========================================================================
-// Engine — core lifecycle
-// ===========================================================================
-
-/// Core engine instance with Unity/UE-style lifecycle phases and a
-/// [`RuntimeInitializeOnLoadMethod`]-style callback registry.
-///
-/// See the module-level docs for the full init pipeline illustration.
-pub struct Engine {
-    world: World,
-    asset_resolver: GpuAssetResolver,
-    dirty_router: DirtyRouter,
-    current_scene_name: Option<String>,
-
-    /// Registered init-phase callbacks (drained after each phase executes).
-    init_callbacks: [Vec<Box<dyn FnOnce(&mut World, &mut GpuAssetResolver)>>; 5],
-}
-
-// Index helper: map RuntimeInitPhase → usize into the callbacks array.
-fn phase_idx(p: RuntimeInitPhase) -> usize {
-    use RuntimeInitPhase::*;
-    match p {
-        PreInit => 0,
-        Subsystems => 1,
-        Resources => 2,
-        SceneLoaded => 3,
-        RuntimeStart => 4,
-    }
-}
-
-impl Engine {
-    // ======================================================================
-    // Construction / one-shot default
-    // ======================================================================
-
-    /// Create an `Engine` and run all init phases (convenience for simple apps).
-    ///
-    /// Equivalent to calling `empty()` then `pre_init(())` → `init_core(editor)`
-    /// → `init_config()` → `init_resources()` → `init_scene()` →
-    /// `runtime_initialize()` in sequence.
-    pub fn new(editor: &mut Editor) -> Self {
-        let mut engine = Self::empty();
-        engine.pre_init(&());
-        engine.init_core(editor);
-        engine.init_config();
-        engine.init_resources();
-        engine.init_scene();
-        engine.runtime_initialize();
-        engine
-    }
-
-    /// Create an empty engine — no init phases run.
-    ///
-    /// Call the granular init methods in whatever order your application
-    /// needs, interleaving your own setup between them:
-    ///
-    /// ```ignore
-    /// let mut engine = Engine::empty();
-    /// engine.pre_init(my_config);
-    /// // my custom setup A
-    /// engine.init_core();
-    /// // register custom ECS components
-    /// engine.register_init(Subsystems, |world, _| { … });
-    /// engine.init_config();
-    /// engine.init_resources();
-    /// // my custom setup B
-    /// engine.register_init(SceneLoaded, |world, assets| { … });
-    /// engine.init_scene();
-    /// engine.runtime_initialize();
-    /// ```
-    pub fn empty() -> Self {
-        Self {
-            world: World::new(),
-            asset_resolver: GpuAssetResolver::new(),
-            dirty_router: DirtyRouter::new(),
-            current_scene_name: None,
-            init_callbacks: Default::default(),
-        }
-    }
-
-    // ======================================================================
-    // RuntimeInitializeOnLoad callback registry
-    // ======================================================================
-
-    /// Register a callback to run when the engine reaches `phase` during
-    /// initialisation, mirroring Unity's `[RuntimeInitializeOnLoadMethod]`.
-    ///
-    /// Callbacks are *drained* — each fires at most once, when that phase
-    /// executes.  Register before the target phase runs (typically during
-    /// an earlier phase or before any init begins).
-    pub fn register_init<F>(&mut self, phase: RuntimeInitPhase, f: F)
-    where
-        F: FnOnce(&mut World, &mut GpuAssetResolver) + 'static,
-    {
-        self.init_callbacks[phase_idx(phase)].push(Box::new(f));
-    }
-
-    /// Execute (drain) all callbacks registered for `phase`.
-    fn run_init_phase(&mut self, phase: RuntimeInitPhase) {
-        let callbacks = std::mem::take(&mut self.init_callbacks[phase_idx(phase)]);
-        if !callbacks.is_empty() {
-            log::debug!(
-                "Engine: running {} init callback(s) for {:?}",
-                callbacks.len(),
-                phase
-            );
-        }
-        for cb in callbacks {
-            cb(&mut self.world, &mut self.asset_resolver);
-        }
-    }
-
-    // ======================================================================
-    // Init phases (call in order)
-    // ======================================================================
-
-    /// **Phase 0** — Pre-init: low-level subsystem configuration.
-    ///
-    /// UE: `PreInit()` · Unity: `BeforeSplashScreen` / `InitializeOnLoad`.
-    ///
-    /// Runs registered `PreInit` callbacks.  No engine subsystems or
-    /// resources are available yet.
-    pub fn pre_init(&mut self, _config: &()) {
-        self.run_init_phase(RuntimeInitPhase::PreInit);
-    }
-
-    /// **Phase 1** — Core subsystem init: register scene components with the
-    /// editor, register ECS type info, configure platform services.
-    ///
-    /// UE: `Init()` / `PostEngineInit` · Unity: `SubsystemRegistration`.
-    ///
-    /// After this phase the ECS world is ready for component/spawn operations.
-    /// The resource package is **not** yet loaded.
-    pub fn init_core(&mut self, editor: &mut Editor) {
-        scene::inspect::register_inspect_fns(&mut editor.registry);
-        editor.set_hierarchy(crate::scene::SceneHierarchy);
-        self.run_init_phase(RuntimeInitPhase::Subsystems);
-    }
-
-    /// **Phase 2** — Configuration loading.
-    ///
-    /// UE: `LoadConfig()`.
-    ///
-    /// Reserved for engine-config / renderer-config / user-config parsing.
-    /// Currently a no-op; exists so the lifecycle slot is defined.
-    pub fn init_config(&mut self) {
-        // Future: load engine config, renderer overrides, etc.
-    }
-
-    /// **Phase 3** — Resource loading: mount packages, load the `.pak`.
-    ///
-    /// UE: `LoadCookedContent()` / `PackageLoader::Mount`.
-    ///
-    /// After this phase asset handles are valid and can be resolved.
-    /// Runs registered `Resources` callbacks.
-    pub fn init_resources(&mut self) {
-        self.asset_resolver.load_resource_package();
-        self.run_init_phase(RuntimeInitPhase::Resources);
-    }
-
-    /// **Phase 4** — Scene loading: restore persisted state, load the
-    /// manifest scene.
-    ///
-    /// UE: `BeginPlay()` · Unity: `Awake` / `OnEnable` / scene load.
-    ///
-    /// After this phase the world is populated with scene entities.
-    /// Runs registered `SceneLoaded` callbacks.
-    pub fn init_scene(&mut self) {
-        crate::scene_state::load_scene_state(&mut self.world);
-        self.current_scene_name =
-            load_scene_from_manifest(&mut self.asset_resolver.resource_manager, &mut self.world);
-        self.run_init_phase(RuntimeInitPhase::SceneLoaded);
-    }
-
-    /// **Phase 5** — Runtime init: final "everything is ready" hook.
-    ///
-    /// Unity's default (no-arg) `[RuntimeInitializeOnLoadMethod]`.
-    ///
-    /// Runs after the scene is loaded and all other init phases are done.
-    /// The game loop is about to start.
-    pub fn runtime_initialize(&mut self) {
-        self.run_init_phase(RuntimeInitPhase::RuntimeStart);
-    }
-
-    // ======================================================================
-    // Frame tick phases
-    // ======================================================================
-
-    /// Fixed-timestep update: physics, simulation, deterministic systems.
-    ///
-    /// Unity `FixedUpdate()` · UE sub-stepped tick.
-    ///
-    /// Called 0..N times per frame depending on the fixed-timestep
-    /// accumulator maintained by the application.
-    pub fn fixed_update(&mut self, fixed_dt: f32, input_manager: &InputManager) {
-        let look_active = input_manager.pointer_locked;
-        crate::scene::systems::camera::camera_controller_system(
-            &mut self.world,
-            input_manager,
-            fixed_dt,
-            look_active,
-        );
-    }
-
-    /// Variable-timestep per-frame update: game logic, camera, input.
-    ///
-    /// Unity `Update()` · UE `Tick()`.
-    pub fn update(&mut self, dt: f32, input_manager: &InputManager) {
-        let look_active = input_manager.pointer_locked;
-        crate::scene::systems::camera::camera_controller_system(
-            &mut self.world,
-            input_manager,
-            dt,
-            look_active,
-        );
-    }
-
-    /// Late update: audio sync, IK, camera-relative effects.
-    ///
-    /// Unity `LateUpdate()`.
-    pub fn late_update(&mut self) {
-        // Reserved: audio-sync, IK, follow cameras, etc.
-    }
-
-    // ======================================================================
-    // Render pipeline phases
-    // ======================================================================
-
-    /// Prepare for rendering: resolve pending mesh/material assets.
-    ///
-    /// Unity `OnPreRender()`.
-    pub fn pre_render(&mut self, renderer: &mut GraphRenderer, _settings: &RenderSettings) {
-        self.asset_resolver
-            .resolve_scene_assets(&mut self.world, renderer);
-    }
-
-    /// Submit one render frame.
-    ///
-    /// The renderer must have a valid swapchain.  Preceded by [`pre_render`],
-    /// followed by [`post_render`].
-    pub fn render(
-        &mut self,
-        renderer: &mut GraphRenderer,
-        settings: &RenderSettings,
-    ) -> Result<(), anyhow::Error> {
-        render_system(renderer, &mut self.world, settings, &mut self.dirty_router)
-    }
-
-    /// Post-render: UI overlay output, debug drawing.
-    ///
-    /// Unity `OnPostRender()`.
-    ///
-    /// The renderer may still be used for lightweight operations (egui
-    /// platform output, debug lines).
-    pub fn post_render(&mut self, _renderer: &mut GraphRenderer) {
-        // Reserved: debug drawing, overlay compositing.
-    }
-
-    // ======================================================================
-    // Shutdown phases
-    // ======================================================================
-
-    /// Save persistent scene state (camera, transforms, lights).
-    ///
-    /// Unity `OnApplicationQuit()`.
-    pub fn pre_shutdown(&mut self) {
-        crate::scene_state::save_scene_state(&self.world);
-    }
-
-    /// GPU shutdown: wait for all queued work to complete.
-    ///
-    /// Unity `OnDestroy()` · UE `EndPlay()`.
-    ///
-    /// Call this while the renderer is still alive.  After this returns the
-    /// app can safely destroy the renderer and window.
-    pub fn shutdown(&mut self, renderer: &GraphRenderer) {
-        unsafe {
-            renderer.context().device.device_wait_idle().ok();
-        }
-    }
-
-    /// Final cleanup after the renderer / window are destroyed.
-    ///
-    /// UE `FinishDestroy()`.
-    pub fn post_shutdown(&mut self) {
-        // Reserved: CPU-side resource cleanup that depends on GPU context.
-    }
-
-    // ======================================================================
-    // Platform lifecycle
-    // ======================================================================
-
-    /// Called when the application is suspended (Android onPause).
-    pub fn on_suspend(&mut self) {
-        log::debug!("engine: suspend");
-    }
-
-    /// Called when the application resumes after suspend (Android onResume).
-    pub fn on_resume(&mut self) {
-        log::debug!("engine: resume");
-    }
-
-    // ======================================================================
-    // Accessors
-    // ======================================================================
-
-    pub fn world(&self) -> &World {
-        &self.world
-    }
-    pub fn world_mut(&mut self) -> &mut World {
-        &mut self.world
-    }
-    pub fn asset_resolver(&self) -> &GpuAssetResolver {
-        &self.asset_resolver
-    }
-    pub fn asset_resolver_mut(&mut self) -> &mut GpuAssetResolver {
-        &mut self.asset_resolver
-    }
-    pub fn dirty_router(&self) -> &DirtyRouter {
-        &self.dirty_router
-    }
-    pub fn dirty_router_mut(&mut self) -> &mut DirtyRouter {
-        &mut self.dirty_router
-    }
-    pub fn current_scene_name(&self) -> Option<&str> {
-        self.current_scene_name.as_deref()
-    }
 }

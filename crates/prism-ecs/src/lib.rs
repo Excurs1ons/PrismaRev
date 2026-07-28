@@ -47,12 +47,12 @@ impl Entity {
 // Component
 // ---------------------------------------------------------------------------
 
-/// Marker for component types. Components must be `'static` data so they can be
-/// stored in type-erased pools and downcast back on query.
-pub trait Component: 'static {}
+/// Marker for component types. Components must be `'static + Send` so they can
+/// be stored in type-erased pools and safely sent across threads.
+pub trait Component: 'static + Send {}
 
-// Blanket impl: any plain `'static` data is a component. No boilerplate needed.
-impl<T: 'static> Component for T {}
+// Blanket impl: any plain `'static + Send` data is a component.
+impl<T: 'static + Send> Component for T {}
 
 // ---------------------------------------------------------------------------
 // World
@@ -82,8 +82,14 @@ pub struct World {
     pools: HashMap<TypeId, Box<dyn ErasedPool>>,
     /// Global singleton resources, keyed by type. Used for data like `Camera`
     /// or `RenderState` that doesn't belong to any single entity.
-    resources: HashMap<TypeId, Box<dyn Any>>,
+    resources: HashMap<TypeId, Box<dyn Any + Send>>,
 }
+
+// Safe: all component data is `Send`, and ErasedPool only stores `Send` types.
+// Pools/resources are accessed under `&self`/`&mut self` with no interior
+// mutability, so shared `&World` across threads (Sync) is also safe.
+unsafe impl Send for World {}
+unsafe impl Sync for World {}
 
 impl World {
     pub fn new() -> Self {
@@ -387,7 +393,7 @@ impl World {
 
     /// Insert a global resource, replacing any existing one of the same type.
     /// Resources are singletons keyed by type: `Camera`, `RenderState`, etc.
-    pub fn insert_resource<R: 'static>(&mut self, resource: R) {
+    pub fn insert_resource<R: 'static + Send>(&mut self, resource: R) {
         self.resources.insert(TypeId::of::<R>(), Box::new(resource));
     }
 
@@ -405,8 +411,8 @@ impl World {
             .and_then(|b| b.downcast_mut::<R>())
     }
 
-    /// Remove a resource, returning the owned value.
-    pub fn remove_resource<R: 'static>(&mut self) -> Option<R> {
+    /// Remove a global resource by type, returning it if it existed.
+    pub fn remove_resource<R: 'static + Send>(&mut self) -> Option<R> {
         self.resources
             .remove(&TypeId::of::<R>())
             .and_then(|b| b.downcast::<R>().ok())
@@ -431,7 +437,9 @@ impl Default for World {
 /// (`prism-editor`) enumerate which component types an entity has without
 /// knowing the concrete types - this is the foundation of the "auto-recognition,
 /// no hardcoding" inspector. They are not used by the core ECS itself.
-trait ErasedPool: Any {
+///
+/// `Send + 'static` required so [`World`] can be moved across threads.
+trait ErasedPool: Any + Send + 'static {
     fn remove(&mut self, id: u32);
     /// True if `id` currently has a component in this pool.
     fn contains(&self, id: u32) -> bool;
@@ -538,7 +546,7 @@ impl<T: 'static> ComponentPool<T> {
     }
 }
 
-impl<T: 'static> ErasedPool for ComponentPool<T> {
+impl<T: 'static + Send> ErasedPool for ComponentPool<T> {
     fn remove(&mut self, id: u32) {
         self.remove(id); // drops the value
     }

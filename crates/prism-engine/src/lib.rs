@@ -22,3 +22,5 @@ pub mod scene_state;
 pub mod shader_asset;
 
 pub use render_system::{euler_xyz_deg_to_dir, render_system};
+
+pub use engine::Engine;

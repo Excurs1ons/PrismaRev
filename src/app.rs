@@ -1,44 +1,47 @@
 //! Application main loop — [`App`] implements winit's [`ApplicationHandler`].
 //!
-//! Lifecycle (Unity/UE naming mapped to our phases):
+//! **Architecture:**
 //!
 //! ```text
-//! App::new
-//!   ├─ Engine::new         (Awake)
-//!   ├─ engine.pre_init     (Start)
-//!   ├─ engine.init         (Start cont.)
-//!   └─ engine.post_init    (BeginPlay)
-//!
-//! resumed ──► ensure_engine_context (create window + renderer)
-//!
-//! RedrawRequested (per frame):
-//!   ├─ engine.fixed_update (FixedUpdate, 0..N)
-//!   ├─ engine.update       (Update)
-//!   ├─ engine.late_update  (LateUpdate)
-//!   ├─ sync_editor         (egui tessellation)
-//!   ├─ engine.pre_render   (OnPreRender)
-//!   ├─ engine.render       (OnRenderObject)
-//!   └─ engine.post_render  (OnPostRender)
-//!
-//! about_to_wait (exiting):
-//!   ├─ engine.pre_shutdown (OnApplicationQuit)
-//!   ├─ engine.shutdown     (OnDestroy)
-//!   └─ engine.post_shutdown (FinishDestroy)
+//!           about_to_wait (game logic)        RedrawRequested (render)
+//!                │                                   │
+//!     engine.fixed_update × N                    resolve assets
+//!     engine.update                               render_system(renderer, &frame_packet, …)
+//!     engine.late_update                          present
+//!     extract_frame_packet ───► frame_packet ──►
+//!     request_redraw                               ^
+//!                │                                   │
 //! ```
 //!
-//! The engine's per-frame state (ECS world, assets) persists across Android
-//! suspend/resume; the window and renderer are recreated on each `resumed`.
+//! The frame packet is the only bridge between logic and render — no direct
+//! World access in the render path. This decouples the sim rate from the
+//! display refresh rate and makes it trivial to move the sim to a background
+//! thread in the future.
+//!
+//! **Init** (all single-threaded in `App::new`):
+//!
+//! ```text
+//!   Engine::empty
+//!     ├─ pre_init         ──── PreInit
+//!     ├─ init_core        ──── SubsystemRegistration
+//!     ├─ init_config      ──── LoadConfig
+//!     ├─ init_resources   ──── (no-op; caller creates ResourceManager)
+//!     ├─ init_scene(rm)   ──── load scene → World
+//!     └─ runtime_init     ──── RuntimeInitializeOnLoad
+//! ```
 
 use std::sync::Arc;
 use std::time::Instant;
 
 use prism_audio::{AudioConfig, AudioEngine};
 use prism_editor::{Editor, RenderGraphViz};
+use prism_engine::asset_resolver::GpuAssetResolver;
 use prism_engine::config::AppConfig;
+use prism_engine::dirty_router::DirtyRouter;
 use prism_engine::engine::load_env_bytes_from_manifest;
-use prism_engine::input::{self, InputManager};
+use prism_engine::input::InputManager;
 use prism_engine::render_settings::RenderSettings;
-use prism_engine::scene::components::Camera;
+use prism_engine::render_system::{extract_frame_packet, render_system, FramePacket};
 use prism_engine::Engine;
 use prism_render::GraphRenderer;
 use prism_render::RenderMode;
@@ -50,11 +53,11 @@ use winit::raw_window_handle::HasDisplayHandle;
 use winit::window::{Window, WindowId};
 
 // ===========================================================================
-// EngineContext — window + renderer (suspend-resume scope)
+// EngineContext — window + renderer + render resources (suspend-resume scope)
 // ===========================================================================
 
-/// Window and renderer — created on first `resumed` and destroyed on
-/// `suspended`.  The [`Engine`] lives independently.
+/// Window, renderer, and per-frame render state — created on first `resumed`
+/// and destroyed on `suspended`.  The [`Engine`] lives independently.
 struct EngineContext {
     window: Arc<Window>,
     renderer: GraphRenderer,
@@ -140,11 +143,24 @@ pub struct App {
     // ---------- engine (persists across suspend) ----------
     engine: Engine,
 
+    // ---------- render resources (persist, shared) ----------
+    asset_resolver: GpuAssetResolver,
+    dirty_router: DirtyRouter,
+
     // ---------- per-frame state ----------
     render_settings: RenderSettings,
     input_manager: InputManager,
     editor: Editor,
     render_graph_viz: RenderGraphViz,
+    /// Cached render packet from the last sim tick.
+    /// Produced in `about_to_wait`, consumed in `RedrawRequested`.
+    frame_packet: Option<FramePacket>,
+
+    // ---------- cached window orientation ----------
+    display_aspect: f32,
+    // (surface_rotation is queried from renderer each frame via
+    //  `renderer.orientation()` — no caching needed when the renderer
+    //  is on the same thread.)
 
     // ---------- suspend-resume scope ----------
     engine_context: Option<EngineContext>,
@@ -152,7 +168,7 @@ pub struct App {
     // ---------- timing ----------
     start: Instant,
     last_frame: Option<Instant>,
-    // Fixed-timestep accumulator (physics)
+    /// Fixed-timestep accumulator (physics).
     fixed_accumulator: f32,
     fixed_dt: f32,
 
@@ -167,44 +183,48 @@ pub struct App {
 impl App {
     pub fn new() -> Self {
         // === Fine-grained init phases ===
-        //
-        // Using Engine::empty() + explicit phases so callers can interleave
-        // custom setup between phases, exactly like UE's PreInit/Init/PostInit
-        // or Unity's [RuntimeInitializeOnLoadMethod].
         let mut engine = Engine::empty();
         let mut editor = Editor::new();
 
         // Phase 0 – PreInit
         engine.pre_init(&());
 
-        // Phase 1 – Subsystem registration (auto-registers all scene components
-        //   with the editor, sets up the scene hierarchy adapter).
+        // Phase 1 – Subsystem registration
         engine.init_core(&mut editor);
 
         // Phase 2 – Configuration
         engine.init_config();
 
-        // Phase 3 – Resource loading (.pak)
+        // Phase 3 – Resource loading (caller creates ResourceManager)
         engine.init_resources();
+        let mut asset_resolver = GpuAssetResolver::new();
+        asset_resolver.load_resource_package();
 
-        // Phase 4 – Scene loading
-        engine.init_scene();
+        // Phase 4 – Scene loading (uses asset_resolver's ResourceManager)
+        engine.init_scene(&mut asset_resolver.resource_manager);
 
         // Phase 5 – Runtime startup callbacks
         engine.runtime_initialize();
 
+        // --- Render resources ---
+        let dirty_router = DirtyRouter::new();
+
         Self {
             config: AppConfig::load(),
             engine,
+            asset_resolver,
+            dirty_router,
             render_settings: RenderSettings::default(),
             input_manager: InputManager::new(),
             editor,
             render_graph_viz: RenderGraphViz::new(),
+            frame_packet: None,
+            display_aspect: 16.0 / 9.0,
             engine_context: None,
             start: Instant::now(),
             last_frame: None,
             fixed_accumulator: 0.0,
-            fixed_dt: 1.0 / 60.0, // 60 Hz fixed timestep
+            fixed_dt: 1.0 / 60.0,
             needs_resize: false,
             fatal_error: None,
             audio: None,
@@ -250,7 +270,7 @@ impl App {
     }
 
     // -----------------------------------------------------------------------
-    // Frame phases
+    // Sim phases (called from about_to_wait)
     // -----------------------------------------------------------------------
 
     /// Update frame-timing metrics.
@@ -262,7 +282,6 @@ impl App {
         };
         self.last_frame = Some(now);
 
-        // Accumulate for fixed-step.
         self.fixed_accumulator += dt;
 
         // Update perf metrics.
@@ -292,7 +311,15 @@ impl App {
         self.input_manager.begin_frame();
     }
 
-    /// Sync egui editor state with engine world.
+    /// Post-sim audio sync.
+    fn post_sim_audio(&mut self) {
+        if let Some(audio) = self.audio.as_mut() {
+            audio.update();
+            prism_engine::audio::sync_audio_sources(audio, self.engine.world_mut());
+        }
+    }
+
+    /// Egui UI sync (needs the engine context for window + renderer).
     fn sync_editor(&mut self) {
         let Some(ref mut ctx) = self.engine_context else {
             return;
@@ -310,8 +337,8 @@ impl App {
             self.render_settings.pt_max_iterations,
         );
 
-        // Sync camera presence + exposure.
-        if let Some((_, cam)) = self.engine.world().query::<Camera>().next() {
+        // Sync camera presence + exposure (read from world).
+        if let Some((_, cam)) = self.engine.world().query::<prism_engine::scene::components::Camera>().next() {
             self.editor.inspector.has_camera = true;
             self.editor.inspector.exposure = cam.exposure;
         } else {
@@ -354,12 +381,55 @@ impl App {
         }
 
         // Push exposure back.
-        if let Some((_, cam)) = self.engine.world_mut().query_mut::<Camera>().next() {
+        if let Some((_, cam)) = self.engine.world_mut().query_mut::<prism_engine::scene::components::Camera>().next() {
             cam.exposure = self.editor.inspector.exposure;
         }
     }
 
-    /// Pre-render → render → post-render pipeline.
+    /// Run a complete sim tick: game logic → audio → extract → cache.
+    fn tick_sim(&mut self) {
+        let dt = self.frame_begin();
+
+        // Tick phases (Unity order).
+        self.run_fixed_updates();           // FixedUpdate (0..N)
+        self.run_update(dt);                 // Update (1×)
+        self.engine.late_update();           // LateUpdate
+
+        // Audio.
+        self.post_sim_audio();
+
+        // Egui tessellation (needs engine context for window).
+        if self.any_ui_visible() {
+            self.sync_editor();
+        }
+
+        // Extract render data.
+        let (aspect, rotation) = self
+            .engine_context
+            .as_ref()
+            .map(|ctx| ctx.renderer.orientation())
+            .unwrap_or_else(|| (self.display_aspect, [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]]));
+        self.frame_packet = Some(extract_frame_packet(
+            self.engine.world_mut(),
+            aspect,
+            &rotation,
+        ));
+
+        // Post-frame UI output.
+        self.frame_end();
+    }
+
+    // -----------------------------------------------------------------------
+    // Render phases (called from RedrawRequested)
+    // -----------------------------------------------------------------------
+
+    /// Pre-render: resolve pending mesh/material assets.
+    fn resolve_pending_assets(&mut self, renderer: &mut GraphRenderer) {
+        self.asset_resolver
+            .resolve_scene_assets(self.engine.world_mut(), renderer);
+    }
+
+    /// Render the cached frame packet.
     fn render_frame(&mut self) {
         let Some(ref mut ctx) = self.engine_context else {
             return;
@@ -377,18 +447,25 @@ impl App {
             }
         }
 
-        // === Render pipeline ===
-        self.engine
-            .pre_render(&mut ctx.renderer, &self.render_settings);
-        if let Err(e) = self.engine.render(&mut ctx.renderer, &self.render_settings) {
+        // Resolve pending assets (needs World + renderer).
+        self.resolve_pending_assets(&mut ctx.renderer);
+
+        // Render the pre-extracted packet.
+        let Some(ref packet) = self.frame_packet else {
+            return;
+        };
+        if let Err(e) = render_system(
+            &mut ctx.renderer,
+            packet,
+            &self.render_settings,
+            &mut self.dirty_router,
+        ) {
             log::error!("Fatal render error: {e}");
             self.fatal_error = Some(format!("{e:#}"));
-            return;
         }
-        self.engine.post_render(&mut ctx.renderer);
     }
 
-    /// Post-frame: egui platform output + audio.
+    /// Post-frame: egui platform output.
     fn frame_end(&mut self) {
         if !self.any_ui_visible() {
             return;
@@ -398,12 +475,6 @@ impl App {
         };
         if let Some(overlay) = ctx.renderer.egui_overlay_mut() {
             overlay.apply_platform_output(ctx.window.as_ref());
-        }
-
-        // Advance audio engine.
-        if let Some(audio) = self.audio.as_mut() {
-            audio.update();
-            prism_engine::audio::sync_audio_sources(audio, self.engine.world_mut());
         }
     }
 
@@ -421,21 +492,9 @@ impl App {
 
     fn pbr_flag_names() -> &'static [&'static str; 15] {
         &[
-            "Direct",
-            "Shadow",
-            "Specular",
-            "Metallic",
-            "Roughness",
-            "DiffuseIBL",
-            "SpecularIBL",
-            "MultiLight",
-            "AO",
-            "Emissive",
-            "Transmission",
-            "Translucency",
-            "Anisotropy",
-            "ClearCoat",
-            "GI",
+            "Direct", "Shadow", "Specular", "Metallic", "Roughness",
+            "DiffuseIBL", "SpecularIBL", "MultiLight", "AO", "Emissive",
+            "Transmission", "Translucency", "Anisotropy", "ClearCoat", "GI",
         ]
     }
 
@@ -635,11 +694,7 @@ impl ApplicationHandler for App {
                     }
                     KeyCode::KeyT => {
                         self.render_settings.tonemap_mode =
-                            if self.render_settings.tonemap_mode == 0 {
-                                1
-                            } else {
-                                0
-                            };
+                            if self.render_settings.tonemap_mode == 0 { 1 } else { 0 };
                         log::info!("tonemap mode = {}", self.render_settings.tonemap_mode);
                     }
                     KeyCode::F1 => {
@@ -673,31 +728,17 @@ impl ApplicationHandler for App {
             WindowEvent::Resized(size) => {
                 self.needs_resize = true;
                 if size.width > 0 && size.height > 0 {
-                    let aspect = size.width as f32 / size.height as f32;
-                    for (_, cam) in self.engine.world_mut().query_mut::<Camera>() {
-                        cam.aspect = aspect;
+                    self.display_aspect = size.width as f32 / size.height as f32;
+                    for (_, cam) in self.engine.world_mut().query_mut::<prism_engine::scene::components::Camera>() {
+                        cam.aspect = self.display_aspect;
                     }
                 }
             }
             WindowEvent::RedrawRequested => {
-                // === Full frame lifecycle ===
-                let dt = self.frame_begin();
-
-                // Tick phases (Unity order).
-                self.run_fixed_updates(); // FixedUpdate (0..N)
-                self.run_update(dt); // Update (1×)
-                self.engine.late_update(); // LateUpdate (1×)
-
-                // Egui tessellation (between update and render).
-                if self.any_ui_visible() {
-                    self.sync_editor();
-                }
-
-                // Render pipeline.
-                self.render_frame(); // pre_render → render → post_render
-
-                // Post-frame.
-                self.frame_end(); // egui output + audio
+                // === Render phase only ===
+                // Game logic already ran in about_to_wait; here we just render
+                // the cached frame packet.
+                self.render_frame();
             }
             _ => {}
         }
@@ -728,16 +769,21 @@ impl ApplicationHandler for App {
             }
 
             // === Shutdown phases ===
-            self.engine.pre_shutdown(); // save state
-            if let Some(ref ctx) = self.engine_context {
-                self.engine.shutdown(&ctx.renderer); // GPU sync
-            }
-            self.engine_context = None; // drop renderer + window
-            self.engine.post_shutdown(); // final cleanup
+            self.engine.pre_shutdown();
+            // engine_context (renderer + window) dropped here.
+            self.engine_context = None;
+            self.engine.post_shutdown();
 
             return;
         }
+
+        // === Game loop tick (sim) ===
+        // Run logic whenever the event loop is idle. This decouples the sim
+        // rate from the display refresh rate — the sim can tick more often
+        // than the render, or less often.
         if self.engine_context.is_some() {
+            self.tick_sim();
+            // Request a redraw so the render phase picks up the new packet.
             if let Some(ref ctx) = self.engine_context {
                 ctx.window.request_redraw();
             }

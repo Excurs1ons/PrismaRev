@@ -5,11 +5,10 @@
 //! each frame, builds a flat draw list, and submits it to
 //! [`GraphRenderer::render`].
 
-use std::sync::Mutex;
-
 use prism_ecs::World;
-use prism_render::{DrawItem, FrameUBOData, GpuLight, GraphRenderer, PtAnalyticLight, PT_LIGHT_MAX};
-
+use prism_render::{
+    DrawItem, FrameUBOData, GpuLight, GraphRenderer, PtAnalyticLight, PT_LIGHT_MAX,
+};
 use crate::dirty_router::DirtyRouter;
 use crate::render_settings::RenderSettings;
 use crate::scene;
@@ -59,15 +58,54 @@ pub struct SceneChanges {
 }
 
 // ---------------------------------------------------------------------------
+// Extract frame packet (sim phase)
+// ---------------------------------------------------------------------------
+
+/// Run the extract phase: hierarchy update + scene changes + draw-item list,
+/// producing a [`FramePacket`] for later consumption by [`render_system`].
+///
+/// **This is the API the sim (game‑logic) thread calls.**  [`render_system`]
+/// consumes the packet without accessing the ECS world.
+pub fn extract_frame_packet(
+    world: &mut World,
+    display_aspect: f32,
+    surface_rotation: &[[f32; 4]; 4],
+) -> FramePacket {
+    // 0. Recompute world transforms from local transforms (hierarchy tree).
+    scene::systems::hierarchy::hierarchy_system(world);
+
+    // 1. Collect per-frame scene state (needs orientation).
+    let scene = collect_scene_changes(world, display_aspect, surface_rotation);
+
+    // 2. Build the flat draw list.
+    let draw_items: Vec<DrawItem> = scene::systems::render::scene_render_system(world);
+
+    FramePacket { scene, draw_items }
+}
+
+// ---------------------------------------------------------------------------
+// FramePacket
+// ---------------------------------------------------------------------------
+
+/// Per-tick extract result: camera/light snapshot + draw items.
+/// Produced by [`extract_frame_packet`], consumed by [`render_system`].
+#[derive(Clone)]
+pub struct FramePacket {
+    pub scene: SceneChanges,
+    pub draw_items: Vec<DrawItem>,
+}
+
+// ---------------------------------------------------------------------------
 // Scene collection
 // ---------------------------------------------------------------------------
 
-/// Read the ECS [`World`] and the [`GraphRenderer`] orientation, then produce
+/// Read the ECS [`World`] and the orientation parameters, then produce
 /// a [`SceneChanges`] snapshot for the current frame.
 fn collect_scene_changes(
     world: &mut World,
-    renderer: &GraphRenderer,
-) -> anyhow::Result<SceneChanges> {
+    display_aspect: f32,
+    surface_rotation: &[[f32; 4]; 4],
+) -> SceneChanges {
     let fallback_dir = [
         -std::f32::consts::FRAC_1_SQRT_2,
         std::f32::consts::FRAC_1_SQRT_2,
@@ -82,18 +120,17 @@ fn collect_scene_changes(
             .query::<Camera>()
             .find(|(_, c)| c.enabled)
             .map(|(e, _)| e);
-        let (display_aspect, surface_rotation) = renderer.orientation();
         if let Some(cam_entity) = camera_entity {
             if let Some(cam) = world.get_mut::<Camera>(cam_entity) {
                 cam.aspect = display_aspect;
             }
         }
-        match scene::systems::camera::compute_camera_output(world, &surface_rotation) {
+        match scene::systems::camera::compute_camera_output(world, surface_rotation) {
             Some(out) => (out.view_proj, out.eye, out.view, out.projection, out.exposure, true),
             None => {
                 log::warn!("no usable Camera entity — using fallback");
                 let fb = scene::systems::camera::fallback_camera_output(
-                    &surface_rotation,
+                    surface_rotation,
                     display_aspect,
                 );
                 (fb.view_proj, fb.eye, fb.view, fb.projection, fb.exposure, false)
@@ -166,7 +203,7 @@ fn collect_scene_changes(
     // 5. Light-space view-projection (shadow map).
     let light_view_proj = light_view_proj(&light_direction, 30.0, &eye);
 
-    Ok(SceneChanges {
+    SceneChanges {
         view_proj,
         eye,
         view,
@@ -181,7 +218,7 @@ fn collect_scene_changes(
         pt_lights,
         exposure,
         has_camera,
-    })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -192,28 +229,26 @@ fn collect_scene_changes(
 /// obvious when nothing drew).
 const CLEAR_COLOR: [f32; 4] = [0.5, 0.5, 0.5, 1.0];
 
-/// Run the ECS-driven rendering pipeline through the RenderGraph-based
-/// [`GraphRenderer`].
+/// Consume a pre-extracted [`FramePacket`] and drive the GPU.
 ///
-/// 1. Recomputes world transforms (hierarchy system).
-/// 2. Collects per-frame scene state (camera, lights).
-/// 3. Diffs against the previous frame via [`DirtyRouter`].
-/// 4. Builds the per-frame UBO and draw-item list.
-/// 5. Submits everything via [`GraphRenderer::render`].
+/// **Each call is stateless with respect to the ECS world.**  The simulation
+/// thread owns [`World`](prism_ecs::World) and produces the packet; this
+/// function reads only the packet and the renderer.
 ///
 /// Returns `Err` only when [`GraphRenderer::render`] fails.
 pub fn render_system(
     renderer: &mut GraphRenderer,
-    world: &mut World,
+    packet: &FramePacket,
     settings: &RenderSettings,
     dirty_router: &mut DirtyRouter,
 ) -> anyhow::Result<()> {
-    // 0. Recompute world transforms from local transforms (hierarchy tree).
-    scene::systems::hierarchy::hierarchy_system(world);
+    let FramePacket {
+        scene: ref scene,
+        draw_items: ref draw_items,
+    } = *packet;
 
-    // 1. Collect per-frame scene state from the ECS world (camera, lights).
-    let scene = collect_scene_changes(world, renderer)?;
-    let dirty_flags = dirty_router.update(&scene);
+    // 1. Diff against the previous frame via DirtyRouter.
+    let dirty_flags = dirty_router.update(scene);
     if dirty_flags.any() {
         log::trace!(
             "dirty_flags: camera={} dir_light={} point_lights={}",
@@ -233,7 +268,7 @@ pub fn render_system(
         light_direction,
         light_color,
         light_view_proj,
-        lights,
+        ref lights,
         ref pt_lights,
         exposure,
         has_camera,
@@ -242,59 +277,54 @@ pub fn render_system(
 
     // 2. Build the per-frame UBO.
     let frame_data = FrameUBOData {
-        view_proj,
+        view_proj: *view_proj,
         camera_position: [eye[0], eye[1], eye[2], light_count],
-        light_direction,
-        light_color,
-        view,
-        light_view_proj,
+        light_direction: *light_direction,
+        light_color: *light_color,
+        view: *view,
+        light_view_proj: *light_view_proj,
         tonemap_mode: settings.tonemap_mode,
         viewport_size: {
             let e = renderer.extent();
             [e.width as f32, e.height as f32]
         },
-        exposure,
+        exposure: *exposure,
         _pad2: [0.0; 3],
         _pad3: 0.0,
     };
 
-    // 3. Build the flat draw list from ECS entities.
-    let draw_items: Vec<DrawItem> = scene::systems::render::scene_render_system(world);
-
-    // 4. Drive the render-graph phase API.
+    // 3. Drive the render-graph phase API.
     let ctx = match renderer.begin_frame()? {
         Some(c) => c,
         None => return Ok(()),
     };
     let input = prism_render::FrameInput {
-        draw_items: &draw_items,
+        draw_items,
         frame_data: &frame_data,
-        light_view_proj,
-        inv_projection,
+        light_view_proj: *light_view_proj,
+        inv_projection: *inv_projection,
         debug_mode: settings.debug_mode as u32,
         normal_space: settings.normal_space as u32,
         debug_flags: settings.debug_flags,
         tonemap_mode: settings.tonemap_mode,
         debug_rt: settings.debug_rt,
-        proj22,
-        proj32,
-        lights: &lights,
+        proj22: *proj22,
+        proj32: *proj32,
+        lights,
         render_mode: settings.render_mode,
         pt_max_bounces: settings.pt_max_bounces,
         pt_ray_max_distance: settings.pt_ray_max_distance,
         pt_max_iterations: settings.pt_max_iterations,
-        exposure,
+        exposure: *exposure,
         pt_lights,
         pt_accum_dirty: dirty_flags.directional_light,
-        has_camera,
+        has_camera: *has_camera,
         clear_color: CLEAR_COLOR,
     };
-    renderer
-        .execute(&ctx, &input)
-        .map_err(|e| {
-            let _ = renderer.present(&ctx);
-            e
-        })?;
+    renderer.execute(&ctx, &input).map_err(|e| {
+        let _ = renderer.present(&ctx);
+        e
+    })?;
     let _ = renderer.present(&ctx)?;
     Ok(())
 }
