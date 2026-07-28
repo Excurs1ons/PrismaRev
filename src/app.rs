@@ -34,16 +34,12 @@ use std::time::Instant;
 
 use prism_audio::{AudioConfig, AudioEngine};
 use prism_editor::{Editor, RenderGraphViz};
-use prism_engine::Engine;
 use prism_engine::config::AppConfig;
 use prism_engine::engine::load_env_bytes_from_manifest;
 use prism_engine::input::{self, InputManager};
 use prism_engine::render_settings::RenderSettings;
-use prism_engine::scene::components::{
-    Active, Camera, Children, DirectionalLight, FlyCameraController, LocalTransform,
-    MaterialRef, MeshRef, MeshRenderer, Name, Parent, PointLight, SceneMember, Skybox,
-    SpotLight, TransformDirty, WorldTransform,
-};
+use prism_engine::scene::components::Camera;
+use prism_engine::Engine;
 use prism_render::GraphRenderer;
 use prism_render::RenderMode;
 use winit::application::ApplicationHandler;
@@ -208,7 +204,7 @@ impl App {
             start: Instant::now(),
             last_frame: None,
             fixed_accumulator: 0.0,
-            fixed_dt: 1.0 / 60.0,                      // 60 Hz fixed timestep
+            fixed_dt: 1.0 / 60.0, // 60 Hz fixed timestep
             needs_resize: false,
             fatal_error: None,
             audio: None,
@@ -285,8 +281,7 @@ impl App {
     /// Fixed-timestep update (0..N per frame).
     fn run_fixed_updates(&mut self) {
         while self.fixed_accumulator >= self.fixed_dt {
-            self.engine
-                .fixed_update(self.fixed_dt, &self.input_manager);
+            self.engine.fixed_update(self.fixed_dt, &self.input_manager);
             self.fixed_accumulator -= self.fixed_dt;
         }
     }
@@ -385,16 +380,12 @@ impl App {
         // === Render pipeline ===
         self.engine
             .pre_render(&mut ctx.renderer, &self.render_settings);
-        if let Err(e) = self
-            .engine
-            .render(&mut ctx.renderer, &self.render_settings)
-        {
+        if let Err(e) = self.engine.render(&mut ctx.renderer, &self.render_settings) {
             log::error!("Fatal render error: {e}");
             self.fatal_error = Some(format!("{e:#}"));
             return;
         }
-        self.engine
-            .post_render(&mut ctx.renderer);
+        self.engine.post_render(&mut ctx.renderer);
     }
 
     /// Post-frame: egui platform output + audio.
@@ -421,9 +412,7 @@ impl App {
     // -----------------------------------------------------------------------
 
     fn any_ui_visible(&self) -> bool {
-        self.editor.inspector.show
-            || self.render_graph_viz.show
-            || self.editor.inspector.show_perf
+        self.editor.inspector.show || self.render_graph_viz.show || self.editor.inspector.show_perf
     }
 
     // -----------------------------------------------------------------------
@@ -635,8 +624,7 @@ impl ApplicationHandler for App {
 
                 match code {
                     KeyCode::Tab => {
-                        self.render_settings.debug_rt =
-                            (self.render_settings.debug_rt + 1) % 3;
+                        self.render_settings.debug_rt = (self.render_settings.debug_rt + 1) % 3;
                         let name = match self.render_settings.debug_rt {
                             0 => "normal (HDR tonemap)",
                             1 => "depth (linearized)",
@@ -652,10 +640,7 @@ impl ApplicationHandler for App {
                             } else {
                                 0
                             };
-                        log::info!(
-                            "tonemap mode = {}",
-                            self.render_settings.tonemap_mode
-                        );
+                        log::info!("tonemap mode = {}", self.render_settings.tonemap_mode);
                     }
                     KeyCode::F1 => {
                         self.toggle_editor_panel(&mut self.editor.inspector.show, |_, _| {});
@@ -699,9 +684,9 @@ impl ApplicationHandler for App {
                 let dt = self.frame_begin();
 
                 // Tick phases (Unity order).
-                self.run_fixed_updates();           // FixedUpdate (0..N)
-                self.run_update(dt);                // Update (1×)
-                self.engine.late_update();          // LateUpdate (1×)
+                self.run_fixed_updates(); // FixedUpdate (0..N)
+                self.run_update(dt); // Update (1×)
+                self.engine.late_update(); // LateUpdate (1×)
 
                 // Egui tessellation (between update and render).
                 if self.any_ui_visible() {
@@ -709,10 +694,10 @@ impl ApplicationHandler for App {
                 }
 
                 // Render pipeline.
-                self.render_frame();                // pre_render → render → post_render
+                self.render_frame(); // pre_render → render → post_render
 
                 // Post-frame.
-                self.frame_end();                   // egui output + audio
+                self.frame_end(); // egui output + audio
             }
             _ => {}
         }
@@ -743,12 +728,12 @@ impl ApplicationHandler for App {
             }
 
             // === Shutdown phases ===
-            self.engine.pre_shutdown();             // save state
+            self.engine.pre_shutdown(); // save state
             if let Some(ref ctx) = self.engine_context {
-                self.engine.shutdown(&ctx.renderer);  // GPU sync
+                self.engine.shutdown(&ctx.renderer); // GPU sync
             }
-            self.engine_context = None;             // drop renderer + window
-            self.engine.post_shutdown();            // final cleanup
+            self.engine_context = None; // drop renderer + window
+            self.engine.post_shutdown(); // final cleanup
 
             return;
         }
