@@ -15,26 +15,49 @@ use super::components::{
 
 /// Register every scene component type with the editor.
 ///
-/// Priorities are loosely ordered: transforms first, then built-in
-/// components, finally user-facing game components.
+/// Priorities are auto-assigned within each group so callers don't need to
+/// pick magic numbers.  Each group starts at the given base priority and
+/// increments by 5 per type within it.
+#[macro_export]
+macro_rules! register_engine_types {
+    ($editor:expr, [$_base:expr => $($ty:ty),+ $(,)?] $(, [$base:expr => $($t:ty),+ $(,)?])* ) => {{
+        let mut _p = $_base;
+        $(
+            $editor.register::<$ty>(_p);
+            _p += 5;
+        )+
+        $(
+            let mut p = $base;
+            $(
+                $editor.register::<$t>(p);
+                p += 5;
+            )+
+        )*
+    }};
+}
+pub use crate::register_engine_types;
+
+/// Register every scene component type with the editor.
+///
+/// Groups are ordered by editor priority category; within each group types
+/// are ordered by logical dependency (transforms first, etc.).
 pub fn register_components(editor: &mut Editor) {
-    editor.register::<Name>(100);
-    editor.register::<LocalTransform>(110);
-    editor.register::<TransformDirty>(115);
-    editor.register::<WorldTransform>(120);
-    editor.register::<Active>(130);
-    editor.register::<MeshRenderer>(135);
-    editor.register::<Parent>(200);
-    editor.register::<Children>(210);
-    editor.register::<MeshRef>(300);
-    editor.register::<MaterialRef>(310);
-    editor.register::<DirectionalLight>(400);
-    editor.register::<PointLight>(410);
-    editor.register::<SpotLight>(420);
-    editor.register::<Camera>(500);
-    editor.register::<FlyCameraController>(510);
-    editor.register::<Skybox>(600);
-    editor.register::<SceneMember>(900);
+    register_engine_types!(editor,
+        // Transforms & rendering basics
+        [100 => Name, LocalTransform, TransformDirty, WorldTransform, Active, MeshRenderer],
+        // Hierarchy
+        [200 => Parent, Children],
+        // Asset references
+        [300 => MeshRef, MaterialRef],
+        // Lights
+        [400 => DirectionalLight, PointLight, SpotLight],
+        // Camera
+        [500 => Camera, FlyCameraController],
+        // Rendering extras
+        [600 => Skybox],
+        // Metadata
+        [900 => SceneMember],
+    );
 }
 
 /// Scene hierarchy adapter for the editor inspector.
