@@ -2,6 +2,7 @@
 .*/
 !.github/
 !.claude/skills/
+!.agents/skills/
 
 # Rust build artifacts
 /target

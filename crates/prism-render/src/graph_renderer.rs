@@ -13,7 +13,7 @@ use ash::vk;
 
 use crate::context::VulkanContext;
 use crate::descriptor::{DescriptorLayout, DescriptorPool, FrameUBO, FrameUBOData, GpuLight, PtAnalyticLight};
-use crate::egui_overlay::EguiOverlay;
+use crate::egui_overlay::{EguiFrame, EguiGpu};
 use crate::ibl::IblResources;
 use crate::managers::{
     AssetTextureHandle, MaterialHandle, MaterialUploadInput, MeshHandle, MeshUploadInput,
@@ -194,11 +194,12 @@ pub struct GraphRenderer {
     shadow_view: vk::ImageView,
     #[allow(dead_code)]
     color_format: vk::Format,
-    /// Optional egui overlay rendered on top of the ScenePass output. When
-    /// present, `render` records it after ScenePass and it owns the
-    /// COLOR_ATTACHMENT_OPTIMAL -> PRESENT_SRC_KHR transition. When `None`,
-    /// `render` falls back to an explicit pipeline barrier for the transition.
-    egui_overlay: Option<EguiOverlay>,
+    /// Optional egui overlay (GPU-only) rendered on top of the ScenePass
+    /// output. Created lazily on the render thread. When present, `execute`
+    /// records it after ScenePass and it owns the COLOR_ATTACHMENT_OPTIMAL
+    /// -> PRESENT_SRC_KHR transition. When `None`, `execute` falls back to
+    /// an explicit pipeline barrier.
+    egui_gpu: Option<EguiGpu>,
     /// True when no surface is available (headless / CI / server mode).
     is_headless: bool,
     /// Offscreen target for headless mode — owned device-local image +
@@ -383,7 +384,7 @@ impl GraphRenderer {
             shadow_sampler,
             shadow_view,
             color_format,
-            egui_overlay: None,
+            egui_gpu: None,
             is_headless: false,
             offscreen: None,
         })
@@ -606,24 +607,23 @@ impl GraphRenderer {
         })
     }
 
-    /// Lazily create the egui overlay if it doesn't exist yet, then return a
-    /// mutable reference to it. Called by `App` when the inspector is first
-    /// shown. Uses the same `in_flight_frames` count as the renderer (2).
-    pub fn ensure_egui_overlay(&mut self) -> anyhow::Result<&mut EguiOverlay> {
-        if self.egui_overlay.is_none() {
-            let overlay = EguiOverlay::new(&self.runtime.context, self.color_format, 2)?;
-            self.egui_overlay = Some(overlay);
+    /// Lazily create the egui GPU overlay if it doesn't exist yet, then return
+    /// a mutable reference to it. Called on the render thread when an
+    /// [`EguiFrame`] is available but no GPU resources have been allocated yet.
+    /// Uses the same `in_flight_frames` count as the renderer (2).
+    pub fn ensure_egui_gpu(&mut self) -> anyhow::Result<&mut EguiGpu> {
+        if self.egui_gpu.is_none() {
+            let gpu = EguiGpu::new(&self.runtime.context, self.color_format, 2)?;
+            self.egui_gpu = Some(gpu);
         }
-        Ok(self.egui_overlay.as_mut().expect("just ensured"))
+        Ok(self.egui_gpu.as_mut().expect("just ensured"))
     }
 
-    /// Access the egui overlay (if created). Used by `App` to forward window
-    /// events and run the UI each frame.
-    pub fn egui_overlay(&self) -> Option<&EguiOverlay> {
-        self.egui_overlay.as_ref()
+    pub fn egui_gpu(&self) -> Option<&EguiGpu> {
+        self.egui_gpu.as_ref()
     }
-    pub fn egui_overlay_mut(&mut self) -> Option<&mut EguiOverlay> {
-        self.egui_overlay.as_mut()
+    pub fn egui_gpu_mut(&mut self) -> Option<&mut EguiGpu> {
+        self.egui_gpu.as_mut()
     }
 
     /// IBL descriptor set + layout for the environment cubemap (set 2).
@@ -849,13 +849,8 @@ impl GraphRenderer {
     /// stall on pipeline creation. Call once after construction, before any
     /// [`execute`](Self::execute).
     pub fn warmup_pipelines(&mut self) -> anyhow::Result<()> {
-        let device = &self.runtime.context.device as *const _;
-        let context = &*self.runtime.context as *const _;
-        // SAFETY: warmup_passes only uses the device and context for creating
-        // pipelines (Vulkan objects) and does not touch self.graph in a way
-        // that reads or writes self.runtime.
-        self.graph
-            .warmup_passes(unsafe { &*device }, unsafe { &*context })
+        let device = self.runtime.context.device.clone();
+        self.graph.warmup_passes(&device, &self.runtime.context)
     }
 
     pub fn suspend_surface(&mut self) {
@@ -929,8 +924,8 @@ impl GraphRenderer {
                 }
             }
         }
-        if let Some(overlay) = self.egui_overlay.as_mut() {
-            overlay.drop_target();
+        if let Some(gpu) = self.egui_gpu.as_mut() {
+            gpu.drop_target();
         }
 
         if let Some(sw) = self.swapchain.as_mut() {
@@ -1047,6 +1042,7 @@ impl GraphRenderer {
         &mut self,
         ctx: &FrameCtx,
         input: &FrameInput<'_>,
+        egui_frame: Option<&EguiFrame>,
     ) -> anyhow::Result<()> {
         let device = &ctx.device;
         let cmd = ctx.cmd;
@@ -1169,31 +1165,37 @@ impl GraphRenderer {
         }
 
         // --- Transition swapchain image to PRESENT_SRC_KHR ---
-        let egui_has_pending = self
-            .egui_overlay
-            .as_ref()
-            .map(|o| o.has_pending())
-            .unwrap_or(false);
-        if record.is_ok() && egui_has_pending {
-            if let Some(sw) = self.swapchain.as_ref() {
-                if let Some(overlay) = self.egui_overlay.as_mut() {
-                    record = overlay
-                        .record(
-                            device,
-                            self.runtime.command_pool,
-                            self.runtime.context.graphics_queue,
-                            cmd,
-                            &sw.views,
-                            image_index,
-                            extent,
-                        )
-                        .context("egui overlay record");
+        //
+        // If an EguiFrame was provided from the main thread, use the egui
+        // overlay render pass (which handles the barrier implicitly).  If no
+        // egui frame is available, insert an explicit barrier instead.
+        if record.is_ok() {
+            if let Some(ef) = egui_frame {
+                // Ensure the GPU overlay exists (lazy create).
+                if self.egui_gpu.is_none() {
+                    let gpu = EguiGpu::new(&self.runtime.context, self.color_format, 2)
+                        .context("create egui gpu overlay")?;
+                    self.egui_gpu = Some(gpu);
                 }
-            } else {
-                record = Err(anyhow::anyhow!("egui overlay: swapchain missing"));
-            }
-        } else if record.is_ok() {
-            if let Some(sw) = self.swapchain.as_ref() {
+                if let Some(sw) = self.swapchain.as_ref() {
+                    if let Some(gpu) = self.egui_gpu.as_mut() {
+                        record = gpu
+                            .record(
+                                device,
+                                self.runtime.command_pool,
+                                self.runtime.context.graphics_queue,
+                                cmd,
+                                &sw.views,
+                                image_index,
+                                extent,
+                                ef,
+                            )
+                            .context("egui gpu record");
+                    }
+                } else {
+                    record = Err(anyhow::anyhow!("egui: swapchain missing"));
+                }
+            } else if let Some(sw) = self.swapchain.as_ref() {
                 let image = sw.images[image_index as usize];
                 let barrier = vk::ImageMemoryBarrier::default()
                     .old_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
@@ -1349,7 +1351,7 @@ impl GraphRenderer {
             has_camera: true,
             clear_color: [0.5, 0.5, 0.5, 1.0],
         };
-        let exec_result = self.execute(&ctx, &input);
+        let exec_result = self.execute(&ctx, &input, None);
         let out_of_date = self.present(&ctx)?;
         exec_result?; // propagate recording error after fence is safe
         Ok(out_of_date)
@@ -1407,9 +1409,9 @@ impl GraphRenderer {
             shadow.destroy(device);
         }
 
-        // Destroy egui overlay (its render pass, framebuffers, renderer).
-        if let Some(overlay) = self.egui_overlay.as_mut() {
-            overlay.destroy();
+        // Destroy egui gpu overlay (its render pass, framebuffers, renderer).
+        if let Some(gpu) = self.egui_gpu.as_mut() {
+            gpu.destroy();
         }
 
         // Destroy shadow sampler.
@@ -1432,6 +1434,14 @@ impl GraphRenderer {
         }
     }
 }
+
+// SAFETY: After splitting out egui_winit::State (moved to EguiCpu on the main
+// thread), all remaining fields of GraphRenderer hold only ash/Vulkan handles
+// (vk::*, ash::Device → u64 wrappers Send+Sync), Arc<VulkanContext> (Send+Sync
+// because all inner fields are vulkan handles), or container types whose
+// elements are Send.  These fields are accessed exclusively from the render
+// thread, so there is no concurrent &mut mutation.
+unsafe impl Send for GraphRenderer {}
 
 impl Drop for GraphRenderer {
     fn drop(&mut self) {

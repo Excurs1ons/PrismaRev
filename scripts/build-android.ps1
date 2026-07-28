@@ -36,12 +36,12 @@ if (-not $env:ANDROID_NDK_HOME -and -not $env:ANDROID_HOME) {
 
 # ---- Build Rust .so --------------------------------------------------------
 
-Write-Host "Building prism-android for $target..."
+Write-Host "Building prism-app (Android cdylib) for $target..."
 
 cargo ndk `
     -t arm64-v8a `
     -o $JniLibsDir `
-    build --release -p prism-android
+    build --release -p prism-app
 
 if ($LASTEXITCODE -ne 0) {
     Write-Error "cargo ndk failed"

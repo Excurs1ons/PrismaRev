@@ -6,8 +6,8 @@
 //! state (formats, extents, image counts), and the active `RenderSettings`.
 //!
 //! Mirrors the [`Inspector`] pattern: a [`RenderGraphViz`] struct runs Phase-1
-//! (`overlay.run_ui`) inside `App::render_one_frame`. Because
-//! `EguiOverlay::run_ui` overwrites its cached pending frame, only one `run_ui`
+//! (inside `EguiCpu::run_ui`) in `App::render_one_frame`. Because
+//! `EguiCpu::run_ui` overwrites its cached pending frame, only one `run_ui`
 //! call may run per frame - when both F1 (inspector) and F2 (viz) are open,
 //! `App::render_one_frame` routes both UIs through a single `run_ui` closure
 //! (see `app.rs`).
@@ -51,7 +51,7 @@ impl RenderGraphViz {
     }
 
     /// Snapshot the renderer's graph + per-pass live state into owned plain
-    /// data. Called from `App::render_one_frame` *before* `EguiOverlay::run_ui`
+    /// data. Called from `App::render_one_frame` *before* `EguiCpu::run_ui`
     /// while `&GraphRenderer` is borrowable. Cheap: clones only small
     /// declarative metadata, never Vulkan handles.
     pub fn refresh_from(&mut self, renderer: &GraphRenderer) {
@@ -133,25 +133,6 @@ impl RenderGraphViz {
             PassKind::Unknown => {}
         }
         d
-    }
-
-    /// Phase 1: run the viz UI through the egui overlay. Called before
-    /// `GraphRenderer::render`. The caller must have already invoked
-    /// [`refresh_from`] this frame (or accept that the viz shows last frame's
-    /// snapshot on the very first open).
-    pub fn run(
-        &mut self,
-        overlay: &mut prism_render::EguiOverlay,
-        window: &winit::window::Window,
-        renderer: &GraphRenderer,
-    ) {
-        if !self.show {
-            return;
-        }
-        self.refresh_from(renderer);
-        overlay.run_ui(window, |ctx| {
-            self.ui(ctx);
-        });
     }
 
     /// The actual egui layout. `pub` so the host (`App::render_one_frame`) can

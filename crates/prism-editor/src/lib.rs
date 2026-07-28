@@ -282,28 +282,9 @@ impl Editor {
         self.inspector.toggle_perf();
     }
 
-    /// Run the inspector UI through the egui overlay. Called before
-    /// `GraphRenderer::render` so `world` is mutably borrowable.
-    pub fn run(
-        &mut self,
-        overlay: &mut prism_render::EguiOverlay,
-        window: &winit::window::Window,
-        world: &mut World,
-    ) {
-        overlay.run_ui(window, |ctx| {
-            self.inspector.ui(
-                ctx,
-                world,
-                &self.registry,
-                &mut self.ctx,
-                self.hierarchy.as_ref(),
-            );
-        });
-    }
-
-    /// Run a bare egui context pass without an overlay (used when the host
-    /// wants to drive the egui context itself, e.g. co-hosting with the
-    /// render-graph visualizer inside its own `run_ui` closure).
+    /// Run the inspector UI with a bare egui context and a mutable World.
+    /// The host calls this from inside its own `egui::Context::run` closure
+    /// (which is now managed by `EguiCpu` on the main thread).
     pub fn run_ctx(&mut self, ctx: &egui::Context, world: &mut World) {
         // --- Asset inspector (shows current inspected_asset if set) ---
         if let Some(asset) = &mut self.inspected_asset {

@@ -9,7 +9,7 @@ Conventions) before touching any matrix/coordinate math — deviating from those
 - `crates/prism-render` — Vulkan backend: context, swapchain, render-graph passes (`passes.rs`),
   `GraphRenderer` driver (`graph_renderer.rs`), IBL cubemap (`ibl.rs`), bindless/PBR.
 - `crates/prism-engine` — app layer + winit main loop, egui inspector.
-- `crates/prism-android` — Android port.
+- `crates/prism-app` — platform layer (winit event loop, window, Android entry).
 - `src/main.rs` — binary entry (depends on `prism-engine`).
 - `shaders/` — Slang sources in `slang/`, compiled `.spv` + `reflection/*.json` next to them.
 - `xtask/` — **excluded** from default workspace; desktop/CI only (needs `slangc`).

@@ -1003,7 +1003,7 @@ impl RenderPassNode for PathTracePass {
         }
     }
 
-    fn warmup(&mut self, device: &ash::Device, _context: &VulkanContext) -> Result<()> {
+    fn warmup(&mut self, device: &ash::Device, _context: &VulkanContext) -> anyhow::Result<()> {
         if self.pipeline.is_some() {
             return Ok(());
         }

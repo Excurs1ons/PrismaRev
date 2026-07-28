@@ -1,31 +1,16 @@
 [package]
-name = "prismarev"
+name = "prisma"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "PrismaRev game engine"
+description = "Prisma game engine,but revised with rust."
 
 [[bin]]
-name = "prismarev"
+name = "prisma"
 path = "src/main.rs"
 
 [dependencies]
-prism-engine = { path = "crates/prism-engine" }
-prism-ecs = { path = "crates/prism-ecs" }
-prism-render = { path = "crates/prism-render" }
-prism-editor = { path = "crates/prism-editor" }
-prism-audio = { path = "crates/prism-audio" }
-prism-asset-core = { path = "prism-asset/prism-asset-core" }
-prism-asset-runtime = { path = "prism-asset/prism-asset-runtime" }
-prism-asset-types = { path = "prism-asset/prism-asset-types" }
-winit = { workspace = true }
-ash-window = { workspace = true }
-raw-window-handle = { workspace = true }
-serde = { workspace = true, features = ["derive"] }
-toml = { workspace = true }
-log = { workspace = true }
-env_logger = { workspace = true }
-anyhow = { workspace = true }
+prism-app = { path = "crates/prism-app" }
 
 [workspace]
 resolver = "2"
@@ -33,9 +18,10 @@ members = [
     "crates/prism-ecs",
     "crates/prism-render",
     "crates/prism-engine",
+    "crates/prism-app",
+    "crates/prism-platform",
     "crates/prism-editor",
     "crates/prism-bake-gi",
-    "crates/prism-android",
     "crates/prism-audio",
 ]
 # xtask (Slang reflection -> Rust binding codegen) is a build-time tool run only
@@ -55,7 +41,13 @@ ash-window = "0.13"
 raw-window-handle = "0.6"
 
 # Window / events
-winit = "0.30"
+winit = { version = "0.30", features = ["android-game-activity"] }
+
+# Physics (Rapier)
+rapier3d = { version = "0.34", default-features = false, features = ["dim3", "f32", "std"] }
+
+# Inter-thread communication
+flume = "0.11"
 
 # egui (real-time inspector UI). egui-ash-renderer 0.11 targets ash 0.38 and
 # egui 0.33; egui-winit 0.33 matches egui 0.33 and winit 0.30. Kept at the
@@ -88,7 +80,6 @@ path-clean = "1"
 clap = { version = "4", features = ["derive"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "tga", "bmp", "hdr", "exr"] }
 ctt = { version = "0.5", default-features = false, features = ["encoder-bc7enc", "ispc-prebuilt"] }
-unicode-width = "0.2"
 dirs = "5"
 
 # Asset / scene loading
@@ -96,7 +87,6 @@ dirs = "5"
 # glTF spec version - the crate loads glTF 2.0 regardless of its own version.
 gltf = { version = "1.4", features = ["KHR_materials_transmission", "KHR_materials_emissive_strength", "KHR_materials_ior", "extensions"] }
 slotmap = "1.0"
-rayon = "1.10"
 
 [profile.dev]
 opt-level = 1          # ash/Vulkan has a lot of codegen; light opt keeps debug builds usable
