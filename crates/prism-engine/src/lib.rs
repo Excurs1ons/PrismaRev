@@ -19,7 +19,6 @@ pub mod dirty_router;
 pub mod ecs;
 pub mod engine;
 pub mod input;
-pub(crate) mod platform;
 pub mod render_settings;
 pub mod render_system;
 pub mod scene;
@@ -28,6 +27,6 @@ pub mod util;
 pub mod shader_asset;
 pub mod ui;
 
-pub use app::{AppBuilder, DefaultSubsystems, LegacyApp, ScheduleLabel, Subsystem, System};
+pub use app::{AppBuilder, DefaultSubsystems, ScheduleLabel, Subsystem, System};
 pub use engine::Engine;
 pub use render_system::{euler_xyz_deg_to_dir, render_system};

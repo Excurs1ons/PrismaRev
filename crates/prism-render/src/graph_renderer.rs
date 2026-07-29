@@ -543,7 +543,7 @@ impl GraphRenderer {
             shadow_sampler,
             shadow_view,
             color_format,
-            egui_overlay: None,
+            egui_gpu: None,
             is_headless: true,
             offscreen: Some(offscreen),
         })

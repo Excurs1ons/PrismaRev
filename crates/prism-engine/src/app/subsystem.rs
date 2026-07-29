@@ -136,10 +136,9 @@ impl AppBuilder {
             .and_then(|b| b.downcast_mut::<T>())
     }
 
-    /// 构建并运行 App（暂未接入，当前使用 LegacyApp::run()）。
+    /// 构建并运行 App（暂未接入）。
     pub fn run(self) {
-        log::info!("AppBuilder::run() — Subsystem模式尚未接入，使用 LegacyApp 替代");
-        crate::app::legacy::LegacyApp::run().expect("LegacyApp failed");
+        log::info!("AppBuilder::run() — Subsystem模式尚未接入，框架待集成");
     }
 
     pub fn world(&self) -> &World {
