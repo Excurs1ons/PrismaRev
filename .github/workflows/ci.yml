@@ -5,11 +5,11 @@ name: CI
 #   - desktop Rust build + test (prism-ecs / prism-render / prism-engine)
 #   - xtask build + shader-binding codegen regression (no-drift check)
 #   - Slang shader compile (.slang -> .spv + reflection JSON) via slangc
-#   - Android cdylib cross-compile (prism-android, aarch64-linux-android)
+#   - Android cdylib cross-compile (prism-app, aarch64-linux-android)
 #   - Android APK assemble (Gradle + cargo-ndk)
 #
 # Design notes:
-#   * prism-android depends on android-activity, which only compiles for the
+#   * prism-app depends on android-activity, which only compiles for the
 #     aarch64-linux-android target — it is EXCLUDED from the desktop job and
 #     built only in the android jobs.
 #   * xtask is a workspace-excluded build tool; it is built/run from its own dir.
@@ -55,11 +55,11 @@ jobs:
       - name: rustfmt --check
         run: cargo fmt --all -- --check
 
-      # Desktop crates only (prism-android needs the NDK target).
+      # Desktop crates only (prism-app needs the NDK target for Android).
       - name: clippy (desktop crates)
         run: >
           cargo clippy
-          -p prism-ecs -p prism-render -p prism-engine -p prismarev
+          -p prism-ecs -p prism-render -p prism-engine -p prism-platform -p prisma
           --all-targets -- -D warnings
 
       # xtask is workspace-excluded, so --all/-p don't reach it. Check it here.
@@ -98,12 +98,12 @@ jobs:
       - name: Build (desktop crates)
         run: >
           cargo build --locked
-          -p prism-ecs -p prism-render -p prism-engine -p prismarev
+          -p prism-ecs -p prism-render -p prism-engine -p prism-platform -p prisma
 
       - name: Test (desktop crates)
         run: >
           cargo test --locked
-          -p prism-ecs -p prism-render -p prism-engine -p prismarev
+          -p prism-ecs -p prism-render -p prism-engine -p prism-platform -p prisma
 
   # ---------------------------------------------------------------------------
   # 3. Slang shaders: compile to SPIR-V + reflection, then verify the committed
@@ -229,11 +229,11 @@ jobs:
         with:
           key: ${{ env.CACHE_VERSION }}-android-rust
 
-      - name: Build prism-android cdylib (arm64-v8a, release)
+      - name: Build prism-app cdylib (arm64-v8a, release)
         run: >
           cargo ndk -t arm64-v8a
           -o android/app/src/main/jniLibs
-          build --release --locked -p prism-android
+          build --release --locked -p prism-app
 
       - name: Upload jniLibs (.so)
         uses: actions/upload-artifact@v4
