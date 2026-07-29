@@ -513,9 +513,9 @@ impl SceneLoader {
 
             // Local transform.
             let local = LocalTransform {
-                translation: pe.translation,
-                rotation: pe.rotation,
-                scale: pe.scale,
+                translation: pe.translation.into(),
+                rotation: glam::Quat::from_xyzw(pe.rotation[0], pe.rotation[1], pe.rotation[2], pe.rotation[3]),
+                scale: pe.scale.into(),
             };
             world.insert(entity, local.clone());
 
@@ -566,8 +566,8 @@ impl SceneLoader {
                         world.insert(
                             entity,
                             DirectionalLight {
-                                euler_xyz: [0.0, 0.0, 0.0],
-                                color: pe.light_color,
+                                euler_xyz: glam::Vec3::ZERO,
+                                color: pe.light_color.into(),
                                 intensity: pe.light_intensity,
                                 ambient: 1.0,
                             },
@@ -577,7 +577,7 @@ impl SceneLoader {
                         world.insert(
                             entity,
                             PointLight {
-                                color: pe.light_color,
+                                color: pe.light_color.into(),
                                 intensity: pe.light_intensity,
                                 range: pe.light_range,
                             },
@@ -587,7 +587,7 @@ impl SceneLoader {
                         world.insert(
                             entity,
                             SpotLight {
-                                color: pe.light_color,
+                                color: pe.light_color.into(),
                                 intensity: pe.light_intensity,
                                 range: pe.light_range,
                                 inner_cone_angle: pe.light_inner_cone,
@@ -1445,7 +1445,7 @@ pub fn collect_bake_instances(
                 f32::from_le_bytes(mesh_info.vertex_data[off + 4..off + 8].try_into().unwrap());
             let pz =
                 f32::from_le_bytes(mesh_info.vertex_data[off + 8..off + 12].try_into().unwrap());
-            let wp = transform_point(world_mat, [px, py, pz]);
+            let wp = world_mat.transform_point3(glam::Vec3::new(px, py, pz));
 
             let normal = if stride >= 24 {
                 let nx = f32::from_le_bytes(
@@ -1463,7 +1463,7 @@ pub fn collect_bake_instances(
                         .try_into()
                         .unwrap(),
                 );
-                let wn = transform_normal(world_mat, [nx, ny, nz]);
+                let wn = world_mat.transform_vector3(glam::Vec3::new(nx, ny, nz));
                 [wn[0], wn[1], wn[2]]
             } else {
                 [0.0, 0.0, 0.0]
@@ -1519,22 +1519,7 @@ pub fn collect_bake_instances(
 // Internal helpers for collect_bake_instances
 // -------------------------------------------------------------------
 
-/// Transform a 3D point by a column-major 4×4 matrix (w=1).
-fn transform_point(m: &[[f32; 4]; 4], p: [f32; 3]) -> [f32; 3] {
-    let x = m[0][0] * p[0] + m[1][0] * p[1] + m[2][0] * p[2] + m[3][0];
-    let y = m[0][1] * p[0] + m[1][1] * p[1] + m[2][1] * p[2] + m[3][1];
-    let z = m[0][2] * p[0] + m[1][2] * p[1] + m[2][2] * p[2] + m[3][2];
-    [x, y, z]
-}
-
-/// Transform a 3D normal by the upper-left 3×3 of the matrix (no translation).
-fn transform_normal(m: &[[f32; 4]; 4], n: [f32; 3]) -> [f32; 3] {
-    let x = m[0][0] * n[0] + m[1][0] * n[1] + m[2][0] * n[2];
-    let y = m[0][1] * n[0] + m[1][1] * n[1] + m[2][1] * n[2];
-    let z = m[2][0] * n[0] + m[2][1] * n[1] + m[2][2] * n[2];
-    let len = (x * x + y * y + z * z).sqrt().max(1e-8);
-    [x / len, y / len, z / len]
-}
+// (transform_point / transform_normal replaced by glam Mat4 methods)
 
 /// Load a `MeshAsset` from the resource manager given its path.
 fn load_mesh_for_bake(

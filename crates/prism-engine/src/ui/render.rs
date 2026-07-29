@@ -83,11 +83,11 @@ pub fn ui_render_system(world: &mut World) {
 ///
 /// 从 world 的 `ScreenSize` resource 读取屏幕尺寸。
 pub fn convert_ui_draw_list_to_overlay(world: &World) -> prism_render::UiOverlayInput {
-    let screen = world.get::<ScreenSize>().copied().unwrap_or(ScreenSize::new(1920, 1080));
+    let screen = world.get_resource::<ScreenSize>().copied().unwrap_or(ScreenSize { width: 1920.0, height: 1080.0 });
     let w = screen.width as f32;
     let h = screen.height as f32;
 
-    let Some(draw_list) = world.get::<UiDrawList>() else {
+    let Some(draw_list) = world.get_resource::<UiDrawList>() else {
         return prism_render::UiOverlayInput::default();
     };
 
@@ -101,7 +101,7 @@ pub fn convert_ui_draw_list_to_overlay(world: &World) -> prism_render::UiOverlay
         let y1 = ((h - (py + ph)) / h) * 2.0 - 1.0;
         // NDC border radius (approximate).
         let br_ndc = q.border_radius / w.max(h) * 2.0;
-        quads.push(prism_render::UiQuad {
+        quads.push(prism_render::ui_overlay::UiQuad {
             rect: [x0, y1, x1, y0], // NDC [xmin, ymin, xmax, ymax]
             color: q.color,
             border_radius: br_ndc,

@@ -89,7 +89,7 @@ pub struct App {
 
     // ---------- per-frame state ----------
     display_aspect: f32,
-    surface_rotation: [[f32; 4]; 4],
+    surface_rotation: glam::Mat4,
 
     // ---------- input (main thread) ----------
     input: InputManager,
@@ -156,12 +156,7 @@ impl App {
             render_graph_viz: RenderGraphViz::new(),
             render_settings: RenderSettings::default(),
             display_aspect: 16.0 / 9.0,
-            surface_rotation: [
-                [1.0, 0.0, 0.0, 0.0],
-                [0.0, 1.0, 0.0, 0.0],
-                [0.0, 0.0, 1.0, 0.0],
-                [0.0, 0.0, 0.0, 1.0],
-            ],
+            surface_rotation: glam::Mat4::IDENTITY,
             input: InputManager::new(),
             audio: AudioEngine::new(prism_audio::AudioConfig::default()).ok(),
             io_thread: None,

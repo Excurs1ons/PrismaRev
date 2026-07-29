@@ -8,6 +8,7 @@ description = "egui editor UI for PrismaRev (inspector, debug, render settings, 
 [dependencies]
 prism-ecs = { path = "../prism-ecs" }
 prism-render = { path = "../prism-render" }
+glam.workspace = true
 prism-asset-core = { path = "../../prism-asset/prism-asset-core", features = ["asset-data"] }
 prism-asset-types = { path = "../../prism-asset/prism-asset-types" }
 egui = { workspace = true }

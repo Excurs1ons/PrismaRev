@@ -189,19 +189,14 @@ impl Engine {
         world.insert(
             entity,
             LocalTransform {
-                translation: [0.0, 0.0, 0.0],
-                rotation: [0.0, 0.0, 0.0, 1.0],
-                scale: [1.0; 3],
+                translation: glam::Vec3::ZERO,
+                rotation: glam::Quat::IDENTITY,
+                scale: glam::Vec3::ONE,
             },
         );
         world.insert(
             entity,
-            WorldTransform([
-                [1.0, 0.0, 0.0, 0.0],
-                [0.0, 1.0, 0.0, 0.0],
-                [0.0, 0.0, 1.0, 0.0],
-                [0.0, 0.0, 0.0, 1.0],
-            ]),
+            WorldTransform(glam::Mat4::IDENTITY),
         );
         world.insert(
             entity,
@@ -358,12 +353,12 @@ impl Engine {
         world.insert(
             entity,
             LocalTransform {
-                translation: [0.0, 2.0, 5.0],
-                rotation: [0.0, 0.0, 0.0, 1.0],
-                scale: [1.0; 3],
+                translation: glam::Vec3::new(0.0, 2.0, 5.0),
+                rotation: glam::Quat::IDENTITY,
+                scale: glam::Vec3::ONE,
             },
         );
-        world.insert(entity, WorldTransform([[1.0; 4]; 4]));
+        world.insert(entity, WorldTransform(glam::Mat4::IDENTITY));
         world.insert(
             entity,
             Camera {
@@ -593,7 +588,7 @@ fn default_schedule() -> Schedule {
     s.add_system("demo::orbit_camera", |world, dt| {
         for (_, transform) in world.query_mut::<Transform>() {
             // yaw
-            transform.rotation[1] += dt * 0.3;
+            transform.rotation.y += dt * 0.3;
         }
     });
 

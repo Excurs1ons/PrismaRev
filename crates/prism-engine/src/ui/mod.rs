@@ -35,7 +35,7 @@ pub use components::*;
 pub use input::{ui_input_system, UiInputState};
 pub use layout::{ui_layout_system, ScreenSize};
 pub use panel_base::PanelBase;
-pub use render::{ui_render_system, UiDrawList, UiQuad, UiTextCmd};
+pub use render::{ui_render_system, convert_ui_draw_list_to_overlay, UiDrawList, UiQuad, UiTextCmd};
 
 use crate::util::timer::{TimerClient, TimerParams};
 

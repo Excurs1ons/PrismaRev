@@ -171,4 +171,10 @@ echo "  pt_render :: ptMain -> pt_render.comp.spv"
 fix_spv "$OUT/pt_render.comp.spv"
 emit_reflection pt_render ptMain compute
 
+# ui_overlay: vertex + fragment (coloured quads on top of the scene output).
+# Self-contained pipeline (no bindless/IBL).
+compile_stage ui_overlay vertexMain vertex
+compile_stage ui_overlay fragmentMain fragment
+emit_reflection ui_overlay vertexMain vertex fragmentMain fragment
+
 echo "All Slang shaders compiled. SPIR-V in $OUT, reflection JSON in $REFL"

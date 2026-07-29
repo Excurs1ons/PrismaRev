@@ -118,17 +118,17 @@ fn render_one_frame(
 
     let extent = renderer.extent();
     let frame_data = FrameUBOData {
-        view_proj: scene.view_proj,
+        view_proj: scene.view_proj.to_cols_array_2d(),
         camera_position: [
             scene.eye[0],
             scene.eye[1],
             scene.eye[2],
             scene.lights.len() as f32,
         ],
-        light_direction: scene.light_direction,
-        light_color: scene.light_color,
-        view: scene.view,
-        light_view_proj: scene.light_view_proj,
+        light_direction: scene.light_direction.to_array(),
+        light_color: scene.light_color.to_array(),
+        view: scene.view.to_cols_array_2d(),
+        light_view_proj: scene.light_view_proj.to_cols_array_2d(),
         tonemap_mode: settings.tonemap_mode,
         viewport_size: [extent.width as f32, extent.height as f32],
         exposure: scene.exposure,
@@ -139,8 +139,8 @@ fn render_one_frame(
     let input = FrameInput {
         draw_items,
         frame_data: &frame_data,
-        light_view_proj: scene.light_view_proj,
-        inv_projection: scene.inv_projection,
+        light_view_proj: scene.light_view_proj.to_cols_array_2d(),
+        inv_projection: scene.inv_projection.to_cols_array_2d(),
         debug_mode: settings.debug_mode as u32,
         normal_space: settings.normal_space as u32,
         debug_flags: settings.debug_flags,
@@ -158,6 +158,7 @@ fn render_one_frame(
         pt_accum_dirty: dirty_flags.directional_light,
         has_camera: scene.has_camera,
         clear_color: CLEAR_COLOR,
+        ui_overlay: None,
     };
 
     let ctx = match renderer.begin_frame()? {

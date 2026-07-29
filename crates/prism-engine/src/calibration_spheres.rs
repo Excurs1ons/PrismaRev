@@ -161,13 +161,8 @@ fn uv_sphere(segments: u32, rings: u32) -> MeshUploadInput {
 }
 
 /// Build a column-major 4x4 translation matrix (no rotation/scale).
-fn translation_matrix(x: f32, y: f32, z: f32) -> [[f32; 4]; 4] {
-    [
-        [1.0, 0.0, 0.0, 0.0],
-        [0.0, 1.0, 0.0, 0.0],
-        [0.0, 0.0, 1.0, 0.0],
-        [x, y, z, 1.0],
-    ]
+fn translation_matrix(x: f32, y: f32, z: f32) -> glam::Mat4 {
+    glam::Mat4::from_translation(glam::Vec3::new(x, y, z))
 }
 
 /// Register a single UV-sphere mesh + six calibration materials with the
@@ -230,7 +225,7 @@ pub fn spawn_calibration_spheres(
             generation: 1,
         });
         world.insert(entity, LocalTransform {
-            translation: [x, origin_y, origin_z],
+            translation: glam::Vec3::new(x, origin_y, origin_z),
             ..Default::default()
         });
         world.insert(entity, WorldTransform(translation_matrix(x, origin_y, origin_z)));

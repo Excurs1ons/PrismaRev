@@ -28,5 +28,5 @@ anyhow = "1"
 path-clean = "1"
 clap = { version = "4", features = ["derive"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "tga", "bmp", "hdr", "exr"] }
-ctt = { version = "0.5", default-features = false, features = ["encoder-bc7enc"] }
+ctt = { version = "0.5", default-features = false, features = ["encoder-bc7enc", "ispc-prebuilt"] }
 unicode-width = "0.2"

@@ -55,7 +55,7 @@ pub struct UiOverlay {
 impl UiOverlay {
     pub fn new(context: &VulkanContext) -> Result<Self> {
         let device = context.device.clone();
-        let render_pass = Self::create_render_pass(&device, context.surface_format)?;
+        let render_pass = Self::create_render_pass(&device, vk::Format::B8G8R8A8_SRGB)?;
 
         let init_vertices = 1024u32;
         let buf_size = VERTEX_SIZE * init_vertices as u64;

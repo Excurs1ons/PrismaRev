@@ -237,6 +237,7 @@ checksum = "0c119cc328a986d0bae3a1753941595f1dc6a0f2d938b5f49edf8937bd606fa9"
 dependencies = [
  "bytemuck",
  "ctt-bc7enc-rdo",
+ "ctt-intel-texture-compressor",
  "ddsfile",
  "fast_image_resize",
  "flate2",
@@ -254,6 +255,36 @@ name = "ctt-bc7enc-rdo"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1a4ad8fcbfcafc39a9e02bfb344fd517dd0bcd7adabcc25de19e9703eb3b99a3"
+dependencies = [
+ "ctt-bc7enc-rdo-prebuilt",
+ "ispc-build-utils",
+]
+
+[[package]]
+name = "ctt-bc7enc-rdo-prebuilt"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f27a2776bbafcc2d335c0621aa9dbd40ecfecdb02a636d3fcd2a2379f96f7472"
+dependencies = [
+ "ispc-build-utils",
+]
+
+[[package]]
+name = "ctt-intel-texture-compressor"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "452985b4223f1a68da0722161ff9a7dbb33bcb32cd30f341b541fd980c58fb26"
+dependencies = [
+ "cc",
+ "ctt-intel-texture-compressor-prebuilt",
+ "ispc-build-utils",
+]
+
+[[package]]
+name = "ctt-intel-texture-compressor-prebuilt"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aa4031e53991b02e2b9fb903f3bb458ab9a2afcec99320800d4d4092dc43d33c"
 dependencies = [
  "ispc-build-utils",
 ]

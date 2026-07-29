@@ -9,21 +9,6 @@ use prism_ecs::{Entity, World};
 
 use crate::scene::components::*;
 
-/// Column-major 4×4 matrix multiply: `out = a * b`.
-fn mat_mul(a: &[[f32; 4]; 4], b: &[[f32; 4]; 4]) -> [[f32; 4]; 4] {
-    let mut out = [[0.0f32; 4]; 4];
-    for i in 0..4 {
-        for j in 0..4 {
-            let mut sum = 0.0f32;
-            for k in 0..4 {
-                sum += a[k][j] * b[i][k];
-            }
-            out[i][j] = sum;
-        }
-    }
-    out
-}
-
 /// Recompute [`WorldTransform`] for every entity in the hierarchy.
 ///
 /// - Roots (entities without [`Parent`]) get `WorldTransform = LocalTransform`.
@@ -49,7 +34,7 @@ pub fn hierarchy_system(world: &mut World) {
 }
 
 /// Recursively visit children, compute and store their world transform.
-fn visit_children(world: &mut World, parent: Entity, parent_world: [[f32; 4]; 4]) {
+fn visit_children(world: &mut World, parent: Entity, parent_world: glam::Mat4) {
     // Clone the children list so we don't hold a borrow on `world` during the
     // recursive calls that may mutate components.
     let children = world.get::<Children>(parent).cloned().unwrap_or_default();
@@ -60,7 +45,7 @@ fn visit_children(world: &mut World, parent: Entity, parent_world: [[f32; 4]; 4]
         }
         if let Some(local) = world.get::<LocalTransform>(child).cloned() {
             let local_mat = local.to_model_matrix();
-            let world_mat = mat_mul(&parent_world, &local_mat);
+            let world_mat = parent_world * local_mat;
             world.insert(child, WorldTransform(world_mat));
             visit_children(world, child, world_mat);
         }
@@ -82,15 +67,15 @@ mod tests {
         let mut world = World::new();
         let e = world.spawn();
         world.insert(e, LocalTransform::default());
-        world.insert(e, WorldTransform([[0.0; 4]; 4])); // dummy
+        world.insert(e, WorldTransform(glam::Mat4::ZERO)); // dummy
 
         hierarchy_system(&mut world);
 
         let wt = world.get::<WorldTransform>(e).unwrap().0;
-        assert_eq!(wt[0][0], 1.0);
-        assert_eq!(wt[1][1], 1.0);
-        assert_eq!(wt[2][2], 1.0);
-        assert_eq!(wt[3][3], 1.0);
+        assert_eq!(wt.x_axis[0], 1.0);
+        assert_eq!(wt.y_axis[1], 1.0);
+        assert_eq!(wt.z_axis[2], 1.0);
+        assert_eq!(wt.w_axis[3], 1.0);
     }
 
     #[test]
@@ -102,19 +87,19 @@ mod tests {
         world.insert(
             parent,
             LocalTransform {
-                translation: [2.0, 0.0, 0.0],
+                translation: glam::Vec3::new(2.0, 0.0, 0.0),
                 ..Default::default()
             },
         );
-        world.insert(parent, WorldTransform([[0.0; 4]; 4]));
+        world.insert(parent, WorldTransform(glam::Mat4::ZERO));
         world.insert(
             child,
             LocalTransform {
-                translation: [0.0, 3.0, 0.0],
+                translation: glam::Vec3::new(0.0, 3.0, 0.0),
                 ..Default::default()
             },
         );
-        world.insert(child, WorldTransform([[0.0; 4]; 4]));
+        world.insert(child, WorldTransform(glam::Mat4::ZERO));
 
         HierarchyHelper::reparent(&mut world, child, Some(parent));
         hierarchy_system(&mut world);
@@ -137,27 +122,27 @@ mod tests {
         world.insert(
             gp,
             LocalTransform {
-                translation: [1.0, 0.0, 0.0],
+                translation: glam::Vec3::new(1.0, 0.0, 0.0),
                 ..Default::default()
             },
         );
-        world.insert(gp, WorldTransform([[0.0; 4]; 4]));
+        world.insert(gp, WorldTransform(glam::Mat4::ZERO));
         world.insert(
             p,
             LocalTransform {
-                translation: [0.0, 2.0, 0.0],
+                translation: glam::Vec3::new(0.0, 2.0, 0.0),
                 ..Default::default()
             },
         );
-        world.insert(p, WorldTransform([[0.0; 4]; 4]));
+        world.insert(p, WorldTransform(glam::Mat4::ZERO));
         world.insert(
             c,
             LocalTransform {
-                translation: [0.0, 0.0, 3.0],
+                translation: glam::Vec3::new(0.0, 0.0, 3.0),
                 ..Default::default()
             },
         );
-        world.insert(c, WorldTransform([[0.0; 4]; 4]));
+        world.insert(c, WorldTransform(glam::Mat4::ZERO));
 
         HierarchyHelper::reparent(&mut world, p, Some(gp));
         HierarchyHelper::reparent(&mut world, c, Some(p));
@@ -182,15 +167,15 @@ mod tests {
         let child = world.spawn();
 
         world.insert(parent, LocalTransform::default());
-        world.insert(parent, WorldTransform([[0.0; 4]; 4]));
+        world.insert(parent, WorldTransform(glam::Mat4::ZERO));
         world.insert(
             child,
             LocalTransform {
-                translation: [5.0, 0.0, 0.0],
+                translation: glam::Vec3::new(5.0, 0.0, 0.0),
                 ..Default::default()
             },
         );
-        world.insert(child, WorldTransform([[0.0; 4]; 4]));
+        world.insert(child, WorldTransform(glam::Mat4::ZERO));
 
         HierarchyHelper::reparent(&mut world, child, Some(parent));
         world.despawn(parent); // parent dead
@@ -209,7 +194,7 @@ mod tests {
         // (the dummy value we set).
         let cw = world.get::<WorldTransform>(child).unwrap().0;
         // Still the dummy value since hierarchy_system didn't update it.
-        assert_eq!(cw[0][0], 0.0);
+        assert_eq!(cw.x_axis[0], 0.0);
     }
 
     #[test]
@@ -237,25 +222,25 @@ mod tests {
         world.insert(
             r1,
             LocalTransform {
-                translation: [10.0, 0.0, 0.0],
+                translation: glam::Vec3::new(10.0, 0.0, 0.0),
                 ..Default::default()
             },
         );
-        world.insert(r1, WorldTransform([[0.0; 4]; 4]));
+        world.insert(r1, WorldTransform(glam::Mat4::ZERO));
         world.insert(
             r2,
             LocalTransform {
-                translation: [0.0, 20.0, 0.0],
+                translation: glam::Vec3::new(0.0, 20.0, 0.0),
                 ..Default::default()
             },
         );
-        world.insert(r2, WorldTransform([[0.0; 4]; 4]));
+        world.insert(r2, WorldTransform(glam::Mat4::ZERO));
 
         hierarchy_system(&mut world);
 
         let wt1 = world.get::<WorldTransform>(r1).unwrap().0;
-        assert!((wt1[3][0] - 10.0).abs() < 1e-6);
+        assert!((wt1.w_axis[0] - 10.0).abs() < 1e-6);
         let wt2 = world.get::<WorldTransform>(r2).unwrap().0;
-        assert!((wt2[3][1] - 20.0).abs() < 1e-6);
+        assert!((wt2.w_axis[1] - 20.0).abs() < 1e-6);
     }
 }

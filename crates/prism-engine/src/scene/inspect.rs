@@ -88,7 +88,10 @@ impl Inspect for LocalTransform {
         let euler = ctx
             .euler_cache
             .entry(key)
-            .or_insert_with(|| quat_to_euler_deg(self.rotation));
+            .or_insert_with(|| {
+                let (x, y, z) = self.rotation.to_euler(glam::EulerRot::XYZ);
+                [x.to_degrees(), y.to_degrees(), z.to_degrees()]
+            });
         let mut changed = false;
         ui.horizontal(|ui| {
             ui.label("X");
@@ -105,7 +108,12 @@ impl Inspect for LocalTransform {
                 .changed();
         });
         if changed {
-            self.rotation = euler_deg_to_quat(*euler);
+            self.rotation = glam::Quat::from_euler(
+                glam::EulerRot::XYZ,
+                euler[0].to_radians(),
+                euler[1].to_radians(),
+                euler[2].to_radians(),
+            );
         }
 
         // Scale.
@@ -127,7 +135,7 @@ impl Inspect for WorldTransform {
         for col in 0..4 {
             ui.label(format!(
                 "  col{}: [{:.3}, {:.3}, {:.3}, {:.3}]",
-                col, self.0[col][0], self.0[col][1], self.0[col][2], self.0[col][3]
+                col, self.0.col(col).x, self.0.col(col).y, self.0.col(col).z, self.0.col(col).w
             ));
         }
     }
@@ -193,7 +201,7 @@ impl Inspect for DirectionalLight {
         // dir_light_euler_deg cache).
         let entity = ctx.current_entity.unwrap_or_else(|| sentinel_entity());
         let key = (entity, TypeId::of::<Self>());
-        let euler = ctx.euler_cache.entry(key).or_insert_with(|| self.euler_xyz);
+        let euler = ctx.euler_cache.entry(key).or_insert_with(|| self.euler_xyz.into());
         // Pitch / Yaw / Roll (degrees): X = pitch [-90,90], Y/Z = yaw/roll.
         ui.label("Pitch / Yaw / Roll (degrees)");
         let mut changed = false;
@@ -224,10 +232,10 @@ impl Inspect for DirectionalLight {
                 .changed();
         });
         if changed {
-            self.euler_xyz = *euler;
+            self.euler_xyz = (*euler).into();
         }
 
-        let mut color_rgb = [self.color[0], self.color[1], self.color[2]];
+        let mut color_rgb: [f32; 3] = self.color.into();
         let color_changed = ui
             .horizontal(|ui| {
                 ui.label("Color");
@@ -236,7 +244,7 @@ impl Inspect for DirectionalLight {
             .inner
             .changed();
         if color_changed {
-            self.color = color_rgb;
+            self.color = color_rgb.into();
         }
         ui.add(egui::Slider::new(&mut self.intensity, 0.0..=150_000.0).text("Intensity (lux)"));
         ui.add(egui::Slider::new(&mut self.ambient, 0.0..=3.0).text("Ambient (IBL)"));
@@ -246,7 +254,7 @@ impl Inspect for DirectionalLight {
 impl Inspect for PointLight {
     fn inspect_ui(&mut self, ui: &mut Ui, _ctx: &mut InspectCtx) {
         ui.add(egui::Slider::new(&mut self.range, 0.1..=100.0).text("Range"));
-        let mut color_rgb = [self.color[0], self.color[1], self.color[2]];
+        let mut color_rgb: [f32; 3] = self.color.into();
         let color_changed = ui
             .horizontal(|ui| {
                 ui.label("Color");
@@ -255,7 +263,7 @@ impl Inspect for PointLight {
             .inner
             .changed();
         if color_changed {
-            self.color = color_rgb;
+            self.color = color_rgb.into();
         }
         ui.add(egui::Slider::new(&mut self.intensity, 0.0..=2000.0).text("Intensity (cd)"));
     }
@@ -264,7 +272,7 @@ impl Inspect for PointLight {
 impl Inspect for SpotLight {
     fn inspect_ui(&mut self, ui: &mut Ui, _ctx: &mut InspectCtx) {
         ui.add(egui::Slider::new(&mut self.range, 0.1..=100.0).text("Range"));
-        let mut color_rgb = [self.color[0], self.color[1], self.color[2]];
+        let mut color_rgb: [f32; 3] = self.color.into();
         let color_changed = ui
             .horizontal(|ui| {
                 ui.label("Color");
@@ -273,7 +281,7 @@ impl Inspect for SpotLight {
             .inner
             .changed();
         if color_changed {
-            self.color = color_rgb;
+            self.color = color_rgb.into();
         }
         ui.add(egui::Slider::new(&mut self.intensity, 0.0..=2000.0).text("Intensity (cd)"));
         ui.add(

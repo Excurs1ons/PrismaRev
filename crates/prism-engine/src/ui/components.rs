@@ -5,16 +5,14 @@
 //! Layout System 读取 Style → 写入 ComputedLayout
 //! Render System 读取 ComputedLayout + Text → 生成绘制命令
 
-use prism_ecs::Component;
-
 // ── 标记组件 ─────────────────────────────────────────────────
 
 /// **标记**：此 Entity 是 UI 元素。Layout System 只查询有此组件的实体。
-#[derive(Clone, Copy, Debug, Component)]
+#[derive(Clone, Copy, Debug)]
 pub struct Node;
 
 /// **父子关系**：UI 子元素指向父元素 Entity。
-#[derive(Clone, Copy, Debug, Component)]
+#[derive(Clone, Copy, Debug)]
 pub struct UiParent(pub prism_ecs::Entity);
 
 // ── 锚点系统 ─────────────────────────────────────────────────
@@ -73,7 +71,7 @@ pub struct Margin {
 // ── Style ─────────────────────────────────────────────────────
 
 /// UI 元素的视觉和布局属性。
-#[derive(Clone, Component, Debug)]
+#[derive(Clone, Debug)]
 pub struct Style {
     /// 固定宽度（px）。`None` = 由锚点决定。
     pub width: Option<f32>,
@@ -127,7 +125,7 @@ impl Style {
 // ── ComputedLayout ────────────────────────────────────────────
 
 /// **Layout System 输出**：最终屏幕空间矩形（像素）。
-#[derive(Clone, Copy, Component, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct ComputedLayout {
     /// 屏幕空间边界 `[left, top, width, height]`
     pub rect: [f32; 4],
@@ -143,7 +141,7 @@ impl ComputedLayout {
 // ── Text ──────────────────────────────────────────────────────
 
 /// 文本内容。
-#[derive(Clone, Component, Debug)]
+#[derive(Clone, Debug)]
 pub struct Text {
     pub content: String,
     pub font_size: f32,
@@ -173,7 +171,7 @@ pub enum TextAlign {
 // ── Interaction ───────────────────────────────────────────────
 
 /// 交互状态（由 Input System 每帧更新）。
-#[derive(Clone, Copy, Component, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct Interaction {
     pub hovered: bool,
     pub pressed: bool,

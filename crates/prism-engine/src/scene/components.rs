@@ -71,70 +71,34 @@ impl Default for Children {
 /// Local transform relative to the parent entity (or world-space for roots).
 #[derive(Debug, Clone)]
 pub struct LocalTransform {
-    pub translation: [f32; 3],
-    /// Quaternion (x, y, z, w).  Identity = `[0, 0, 0, 1]`.
-    pub rotation: [f32; 4],
-    pub scale: [f32; 3],
+    pub translation: glam::Vec3,
+    /// Quaternion.  Identity = `glam::Quat::IDENTITY`.
+    pub rotation: glam::Quat,
+    pub scale: glam::Vec3,
 }
 
 impl Default for LocalTransform {
     fn default() -> Self {
         Self {
-            translation: [0.0; 3],
-            rotation: [0.0, 0.0, 0.0, 1.0],
-            scale: [1.0; 3],
+            translation: glam::Vec3::ZERO,
+            rotation: glam::Quat::IDENTITY,
+            scale: glam::Vec3::ONE,
         }
     }
 }
 
 impl LocalTransform {
-    /// Build a column-major 4×4 model matrix: `T × R × S`.
-    ///
-    /// The rotation is a quaternion `(x, y, z, w)` converted to a 3×3 rotation
-    /// matrix via the standard formula.  The result is suitable for use as a
-    /// GLSL `mat4` (column-major, `[col][row]` indexing).
-    pub fn to_model_matrix(&self) -> [[f32; 4]; 4] {
-        let [qx, qy, qz, qw] = self.rotation;
-        let xx = qx * qx;
-        let yy = qy * qy;
-        let zz = qz * qz;
-        let xy = qx * qy;
-        let xz = qx * qz;
-        let yz = qy * qz;
-        let wx = qw * qx;
-        let wy = qw * qy;
-        let wz = qw * qz;
-        let [sx, sy, sz] = self.scale;
-        let [tx, ty, tz] = self.translation;
-        [
-            [
-                sx * (1.0 - 2.0 * (yy + zz)),
-                sx * 2.0 * (xy + wz),
-                sx * 2.0 * (xz - wy),
-                0.0,
-            ],
-            [
-                sy * 2.0 * (xy - wz),
-                sy * (1.0 - 2.0 * (xx + zz)),
-                sy * 2.0 * (yz + wx),
-                0.0,
-            ],
-            [
-                sz * 2.0 * (xz + wy),
-                sz * 2.0 * (yz - wx),
-                sz * (1.0 - 2.0 * (xx + yy)),
-                0.0,
-            ],
-            [tx, ty, tz, 1.0],
-        ]
+    /// Build a model matrix: `T × R × S`.
+    pub fn to_model_matrix(&self) -> glam::Mat4 {
+        glam::Mat4::from_scale_rotation_translation(self.scale, self.rotation, self.translation)
     }
 }
 
 /// World-space transform computed by [`HierarchySystem`].
 ///
-/// Column-major 4×4 matrix.  Updated each frame during the `update` phase.
+/// Updated each frame during the `update` phase.
 #[derive(Debug, Clone, Copy)]
-pub struct WorldTransform(pub [[f32; 4]; 4]);
+pub struct WorldTransform(pub glam::Mat4);
 
 /// Optional dirty marker for subtree-optimised recompute (future use).
 #[derive(Debug, Clone, Copy, Default)]
@@ -216,9 +180,9 @@ impl MeshRenderer {
 #[derive(Debug, Clone, Copy)]
 pub struct DirectionalLight {
     /// XYZ Euler angles (degrees): pitch (X), yaw (Y), roll (Z).
-    pub euler_xyz: [f32; 3],
+    pub euler_xyz: glam::Vec3,
     /// Linear RGB colour, typically `[0, 1]`.
-    pub color: [f32; 3],
+    pub color: glam::Vec3,
     /// Illuminance in **lux** (physical unit).
     pub intensity: f32,
     /// IBL ambient factor.
@@ -228,8 +192,8 @@ pub struct DirectionalLight {
 impl Default for DirectionalLight {
     fn default() -> Self {
         Self {
-            euler_xyz: [45.0, -45.0, 0.0],
-            color: [1.0, 1.0, 1.0],
+            euler_xyz: glam::Vec3::new(45.0, -45.0, 0.0),
+            color: glam::Vec3::ONE,
             intensity: 100_000.0,
             ambient: 1.0,
         }
@@ -240,7 +204,7 @@ impl Default for DirectionalLight {
 #[derive(Debug, Clone, Copy)]
 pub struct PointLight {
     /// Linear RGB colour.
-    pub color: [f32; 3],
+    pub color: glam::Vec3,
     /// Luminous intensity in **candela**.
     pub intensity: f32,
     /// Attenuation radius (world units).
@@ -250,7 +214,7 @@ pub struct PointLight {
 impl Default for PointLight {
     fn default() -> Self {
         Self {
-            color: [1.0; 3],
+            color: glam::Vec3::ONE,
             intensity: 100.0,
             range: 12.0,
         }
@@ -260,7 +224,7 @@ impl Default for PointLight {
 /// Spot light.
 #[derive(Debug, Clone, Copy)]
 pub struct SpotLight {
-    pub color: [f32; 3],
+    pub color: glam::Vec3,
     pub intensity: f32,
     pub range: f32,
     /// Inner cone half-angle (radians).
@@ -272,7 +236,7 @@ pub struct SpotLight {
 impl Default for SpotLight {
     fn default() -> Self {
         Self {
-            color: [1.0; 3],
+            color: glam::Vec3::ONE,
             intensity: 100.0,
             range: 20.0,
             inner_cone_angle: 0.436, // ~25°
