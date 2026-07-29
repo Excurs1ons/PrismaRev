@@ -18,6 +18,7 @@ prism-audio = { path = "../prism-audio" }
 prism-asset-core = { path = "../../prism-asset/prism-asset-core" }
 prism-asset-runtime = { path = "../../prism-asset/prism-asset-runtime" }
 prism-ecs = { path = "../prism-ecs" }
+glam.workspace = true
 rapier3d.workspace = true
 flume.workspace = true
 

@@ -14,6 +14,8 @@
 //! y-flip projection, depth range [0,1]. See `README.md` §Coordinate
 //! Conventions and `DESIGN.md`.
 
+use glam::{Mat4, Quat, Vec3};
+
 use prism_ecs::World;
 
 use crate::input::InputManager;
@@ -30,10 +32,10 @@ pub fn collect_camera(world: &World) -> Option<Camera> {
 
 /// Runtime camera output produced each frame by [`compute_camera_output`].
 pub struct CameraOutput {
-    pub view_proj: [[f32; 4]; 4],
-    pub view: [[f32; 4]; 4],
-    pub projection: [[f32; 4]; 4],
-    pub eye: [f32; 3],
+    pub view_proj: Mat4,
+    pub view: Mat4,
+    pub projection: Mat4,
+    pub eye: Vec3,
     pub exposure: f32,
     /// The entity the camera was sourced from (for downstream look-ups).
     pub entity: prism_ecs::Entity,
@@ -45,29 +47,29 @@ pub struct CameraOutput {
 ///
 /// The fallback places the viewer at `(0, 0, 5)` looking toward the origin with
 /// a 75° FOV, 16:9 aspect, and exposure 1.0.
-pub fn fallback_camera_output(surface_rotation: &[[f32; 4]; 4], aspect: f32) -> CameraOutput {
-    let eye = [0.0, 0.0, 5.0];
+pub fn fallback_camera_output(surface_rotation: &Mat4, aspect: f32) -> CameraOutput {
+    let eye = Vec3::new(0.0, 0.0, 5.0);
     // Simple look-at: eye at (0,0,5), target at origin, +Y up.
     // Right-handed, camera looks down -Z per engine convention.
-    let view = [
+    let view = Mat4::from_cols_array_2d(&[
         [1.0, 0.0, 0.0, 0.0],
         [0.0, 1.0, 0.0, 0.0],
         [0.0, 0.0, 1.0, 0.0],
         [0.0, 0.0, -5.0, 1.0],
-    ];
+    ]);
     // Standard perspective: 75° FOV, 16:9-ish aspect, near=0.01, far=500.
     let fov_y = 75.0_f32.to_radians();
     let inv_tan = 1.0 / (fov_y * 0.5).tan();
     let near = 0.01;
     let far = 500.0;
-    let mut proj = [[0.0f32; 4]; 4];
-    proj[0][0] = inv_tan / aspect;
-    proj[1][1] = -inv_tan;
-    proj[2][2] = far / (near - far);
-    proj[2][3] = -1.0;
-    proj[3][2] = near * far / (near - far);
+    let mut proj = Mat4::ZERO;
+    proj.col_mut(0).x = inv_tan / aspect;
+    proj.col_mut(1).y = -inv_tan;
+    proj.col_mut(2).z = far / (near - far);
+    proj.col_mut(2).w = -1.0;
+    proj.col_mut(3).z = near * far / (near - far);
 
-    let vp = mat_mul(surface_rotation, &mat_mul(&proj, &view));
+    let vp = *surface_rotation * proj * view;
 
     CameraOutput {
         view_proj: vp,
@@ -87,7 +89,7 @@ pub fn fallback_camera_output(surface_rotation: &[[f32; 4]; 4], aspect: f32) -> 
 /// `render_system`). Returns `None` if no usable camera exists.
 pub fn compute_camera_output(
     world: &World,
-    surface_rotation: &[[f32; 4]; 4],
+    surface_rotation: &Mat4,
 ) -> Option<CameraOutput> {
     let (entity, cam) = world.query::<Camera>().find(|(_, c)| c.enabled)?;
     let ctrl = world.get::<FlyCameraController>(entity)?;
@@ -97,11 +99,12 @@ pub fn compute_camera_output(
     // column-major matrix). For a root camera this equals LocalTransform
     // translation; for a nested camera the hierarchy system already baked the
     // parent transform in.
-    let eye = [world_tf.0[3][0], world_tf.0[3][1], world_tf.0[3][2]];
+    let col3 = world_tf.0.col(3);
+    let eye = Vec3::new(col3.x, col3.y, col3.z);
 
     let proj = perspective(cam);
     let view = fly_view(eye, ctrl.yaw, ctrl.pitch);
-    let vp = mat_mul(surface_rotation, &mat_mul(&proj, &view));
+    let vp = *surface_rotation * proj * view;
 
     Some(CameraOutput {
         view_proj: vp,
@@ -183,46 +186,32 @@ pub fn camera_controller_system(
     };
     let f = forward(yaw, pitch);
     let r = right(yaw);
-    let up = [0.0, 1.0, 0.0];
-    let mut movev = [0.0f32; 3];
+    let up = Vec3::Y;
+    let mut movev = Vec3::ZERO;
     if input.key_held(KeyCode::KeyW) {
-        for (mv, v) in movev.iter_mut().zip(f.iter()) {
-            *mv += v;
-        }
+        movev += f;
     }
     if input.key_held(KeyCode::KeyS) {
-        for (mv, v) in movev.iter_mut().zip(f.iter()) {
-            *mv -= v;
-        }
+        movev -= f;
     }
     if input.key_held(KeyCode::KeyD) {
-        for (mv, v) in movev.iter_mut().zip(r.iter()) {
-            *mv += v;
-        }
+        movev += r;
     }
     if input.key_held(KeyCode::KeyA) {
-        for (mv, v) in movev.iter_mut().zip(r.iter()) {
-            *mv -= v;
-        }
+        movev -= r;
     }
     if input.key_held(KeyCode::Space) || input.key_held(KeyCode::KeyE) {
-        for (mv, v) in movev.iter_mut().zip(up.iter()) {
-            *mv += v;
-        }
+        movev += up;
     }
     if input.key_held(KeyCode::ControlLeft) || input.key_held(KeyCode::KeyQ) {
-        for (mv, v) in movev.iter_mut().zip(up.iter()) {
-            *mv -= v;
-        }
+        movev -= up;
     }
 
     if let Some(t) = world.get_mut::<LocalTransform>(cam_entity) {
-        let ml = (movev[0] * movev[0] + movev[1] * movev[1] + movev[2] * movev[2]).sqrt();
+        let ml = movev.length();
         if ml > 1e-6 {
             let inv = speed / ml;
-            for (p, mv) in t.translation.iter_mut().zip(movev.iter()) {
-                *p += mv * inv;
-            }
+            t.translation += movev * inv;
         }
     }
 
@@ -242,10 +231,10 @@ pub fn camera_controller_system(
 /// `yaw=0` looks down +X; `yaw = π/2` looks down -Z (the convention the scene
 /// loader uses when converting an identity quaternion, which must face -Z per
 /// `README.md`).
-fn forward(yaw: f32, pitch: f32) -> [f32; 3] {
+fn forward(yaw: f32, pitch: f32) -> Vec3 {
     let (s_y, c_y) = yaw.sin_cos();
     let (s_p, c_p) = pitch.sin_cos();
-    [c_y * c_p, s_p, -s_y * c_p]
+    Vec3::new(c_y * c_p, s_p, -s_y * c_p)
 }
 
 /// Unit right vector, derived from yaw only (not forward × worldUp).
@@ -254,63 +243,34 @@ fn forward(yaw: f32, pitch: f32) -> [f32; 3] {
 /// is +X (orthonormal with `forward` at every yaw). Building it from yaw keeps
 /// it well-defined at any pitch - including straight up/down (pitch = ±π/2) -
 /// where `forward × worldUp` would degenerate to zero.
-fn right(yaw: f32) -> [f32; 3] {
+fn right(yaw: f32) -> Vec3 {
     let (s_y, c_y) = yaw.sin_cos();
-    [s_y, 0.0, c_y]
+    Vec3::new(s_y, 0.0, c_y)
 }
 
 /// Column-major view matrix for a free-fly camera at `eye` with `yaw`/`pitch`.
-fn fly_view(eye: [f32; 3], yaw: f32, pitch: f32) -> [[f32; 4]; 4] {
-    let f = forward(yaw, pitch);
-    let fl = (f[0] * f[0] + f[1] * f[1] + f[2] * f[2]).sqrt();
-    let f = [f[0] / fl, f[1] / fl, f[2] / fl];
+fn fly_view(eye: Vec3, yaw: f32, pitch: f32) -> Mat4 {
+    let f = forward(yaw, pitch).normalize();
     let r = right(yaw);
-    // Re-orthogonalize up = right × forward.
-    let up = [
-        r[1] * f[2] - r[2] * f[1],
-        r[2] * f[0] - r[0] * f[2],
-        r[0] * f[1] - r[1] * f[0],
-    ];
-    [
-        [r[0], up[0], -f[0], 0.0],
-        [r[1], up[1], -f[1], 0.0],
-        [r[2], up[2], -f[2], 0.0],
-        [
-            -(r[0] * eye[0] + r[1] * eye[1] + r[2] * eye[2]),
-            -(up[0] * eye[0] + up[1] * eye[1] + up[2] * eye[2]),
-            f[0] * eye[0] + f[1] * eye[1] + f[2] * eye[2],
-            1.0,
-        ],
-    ]
+    let u = r.cross(f);
+    Mat4::from_cols(
+        glam::vec4(r.x, u.x, -f.x, 0.0),
+        glam::vec4(r.y, u.y, -f.y, 0.0),
+        glam::vec4(r.z, u.z, -f.z, 0.0),
+        glam::vec4(-r.dot(eye), -u.dot(eye), f.dot(eye), 1.0),
+    )
 }
 
 /// Column-major projection matrix (Vulkan y-flip, depth range [0,1]).
-fn perspective(cam: &Camera) -> [[f32; 4]; 4] {
+fn perspective(cam: &Camera) -> Mat4 {
     let fov_y = cam.fov_y_degrees.to_radians();
     let inv_tan = 1.0 / (fov_y * 0.5).tan();
-    let mut p = [[0.0f32; 4]; 4];
-    p[0][0] = inv_tan / cam.aspect;
-    p[1][1] = -inv_tan;
-    p[2][2] = cam.far / (cam.near - cam.far);
-    // Column-major: p[col][row]. p[2][3] = column 2, row 3 = contribution of
-    // z_view to gl_Position.w. Must be -1 so w_clip = -z_view (perspective div).
-    p[2][3] = -1.0;
-    // p[3][2] = column 3, row 2 = contribution of w_view(=1) to gl_Position.z.
-    p[3][2] = cam.near * cam.far / (cam.near - cam.far);
-    p
-}
-
-/// 4×4 matrix multiply `a × b` (column-major, `[col][row]` indexing).
-fn mat_mul(a: &[[f32; 4]; 4], b: &[[f32; 4]; 4]) -> [[f32; 4]; 4] {
-    let mut out = [[0.0f32; 4]; 4];
-    for i in 0..4 {
-        for j in 0..4 {
-            for k in 0..4 {
-                out[i][j] += a[k][j] * b[i][k];
-            }
-        }
-    }
-    out
+    Mat4::from_cols(
+        glam::vec4(inv_tan / cam.aspect, 0.0, 0.0, 0.0),
+        glam::vec4(0.0, -inv_tan, 0.0, 0.0),
+        glam::vec4(0.0, 0.0, cam.far / (cam.near - cam.far), -1.0),
+        glam::vec4(0.0, 0.0, cam.near * cam.far / (cam.near - cam.far), 0.0),
+    )
 }
 
 // ---------------------------------------------------------------------------

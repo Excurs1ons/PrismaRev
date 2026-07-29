@@ -92,7 +92,8 @@ pub struct FrameInput<'a> {
     /// black.
     pub clear_color: [f32; 4],
     /// UI overlay draw commands (filled by engine's ui_render_system).
-    pub ui_overlay: &'a crate::ui_overlay::UiOverlayInput,
+    /// `None` in headless mode.
+    pub ui_overlay: Option<&'a crate::ui_overlay::UiOverlayInput>,
 }
 
 /// GPU session that owns the long-lived Vulkan runtime objects (device,
@@ -1350,6 +1351,7 @@ impl GraphRenderer {
             pt_accum_dirty: true,
             has_camera: true,
             clear_color: [0.5, 0.5, 0.5, 1.0],
+            ui_overlay: None,
         };
         let exec_result = self.execute(&ctx, &input, None);
         let out_of_date = self.present(&ctx)?;

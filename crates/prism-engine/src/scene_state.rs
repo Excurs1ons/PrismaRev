@@ -13,6 +13,8 @@
 //! `crate::camera::Camera` enum. `fov_y` is still serialized in radians for
 //! backward-compat with v2 files.
 
+use glam::{Quat, Vec3};
+
 use prism_ecs::{Entity, World};
 
 use crate::scene::components::{
@@ -40,7 +42,7 @@ fn scene_state_path() -> std::path::PathBuf {
 
 #[derive(Clone, Debug)]
 pub struct CameraState {
-    pub position: [f32; 3],
+    pub position: Vec3,
     pub yaw: f32,
     pub pitch: f32,
     pub fov_y: f32,
@@ -61,18 +63,21 @@ pub struct SceneState {
 #[derive(Clone, Debug)]
 struct SavedPointLight {
     light: ScenePtLight,
-    position: Option<[f32; 3]>,
+    position: Option<Vec3>,
     active: bool,
 }
 // ---------------------------------------------------------------------------
 // Serialisation (hand-rolled JSON — no serde)
 // ---------------------------------------------------------------------------
 
-fn fmt3(a: [f32; 3]) -> String {
-    format!("{},{},{}", a[0], a[1], a[2])
+fn fmt3(a: Vec3) -> String {
+    format!("{},{},{}", a.x, a.y, a.z)
 }
-fn fmt4(a: [f32; 4]) -> String {
-    format!("{},{},{},{}", a[0], a[1], a[2], a[3])
+fn fmt4(a: Quat) -> String {
+    format!("{},{},{}", a.x, a.y, a.z)
+}
+fn fmt4_vec(a: glam::Vec4) -> String {
+    format!("{},{},{},{}", a.x, a.y, a.z, a.w)
 }
 
 impl CameraState {
@@ -96,7 +101,7 @@ impl CameraState {
             return None;
         }
         Some(Self {
-            position: [pos[0], pos[1], pos[2]],
+            position: Vec3::new(pos[0], pos[1], pos[2]),
             yaw: find_field_f32(s, "yaw")?,
             pitch: find_field_f32(s, "pitch")?,
             fov_y: find_field_f32(s, "fov_y").unwrap_or(std::f32::consts::FRAC_PI_4),
@@ -127,9 +132,9 @@ impl SceneDirLight {
             return None;
         }
         Some(Self {
-            euler_xyz: [euler[0], euler[1], euler[2]],
+            euler_xyz: Vec3::new(euler[0], euler[1], euler[2]),
             intensity: find_field_f32(s, "intensity")?,
-            color: [col[0], col[1], col[2]],
+            color: Vec3::new(col[0], col[1], col[2]),
             ambient: find_field_f32(s, "ambient").unwrap_or(1.0),
         })
     }
@@ -142,9 +147,9 @@ impl ScenePtLight {
         Some(Self {
             range: find_field_f32(s, "range").unwrap_or(12.0),
             color: if col.len() == 3 {
-                [col[0], col[1], col[2]]
+                Vec3::new(col[0], col[1], col[2])
             } else {
-                [1.0; 3]
+                Vec3::ONE
             },
             intensity: find_field_f32(s, "intensity").unwrap_or(1.0),
         })
@@ -169,7 +174,7 @@ impl SavedPointLight {
 
     fn from_json(s: &str) -> Option<Self> {
         let position = find_array_f32(s, "position")
-            .and_then(|value| (value.len() == 3).then(|| [value[0], value[1], value[2]]));
+            .and_then(|value| (value.len() == 3).then(|| Vec3::new(value[0], value[1], value[2])));
         Some(Self {
             light: ScenePtLight::from_json(s)?,
             position,
@@ -190,7 +195,7 @@ impl LocalTransform {
         )
     }
 
-    fn from_json_fields(translation: [f32; 3], rotation: [f32; 4], scale: [f32; 3]) -> Self {
+    fn from_json_fields(translation: Vec3, rotation: Quat, scale: Vec3) -> Self {
         Self {
             translation,
             rotation,
@@ -569,19 +574,19 @@ fn parse_transform_array(s: &str) -> Vec<LocalTransform> {
         let s = find_array_f32(&obj_str, "scale").unwrap_or_default();
         out.push(LocalTransform::from_json_fields(
             if t.len() == 3 {
-                [t[0], t[1], t[2]]
+                glam::Vec3::new(t[0], t[1], t[2])
             } else {
-                [0.0; 3]
+                glam::Vec3::ZERO
             },
             if r.len() == 4 {
-                [r[0], r[1], r[2], r[3]]
+                glam::Quat::from_xyzw(r[0], r[1], r[2], r[3])
             } else {
-                [0.0, 0.0, 0.0, 1.0]
+                glam::Quat::IDENTITY
             },
             if s.len() == 3 {
-                [s[0], s[1], s[2]]
+                glam::Vec3::new(s[0], s[1], s[2])
             } else {
-                [1.0; 3]
+                glam::Vec3::ONE
             },
         ));
     }
