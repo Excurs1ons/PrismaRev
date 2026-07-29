@@ -20,6 +20,9 @@ log = { workspace = true }
 anyhow = { workspace = true }
 rustc-hash = "2"
 ash = { workspace = true }
+ash-window = { workspace = true }
+winit = { workspace = true }
+raw-window-handle = { workspace = true }
 egui = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

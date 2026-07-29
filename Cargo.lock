@@ -3206,6 +3206,7 @@ dependencies = [
  "android-activity",
  "anyhow",
  "ash",
+ "ash-window",
  "dirs",
  "egui",
  "jni 0.21.1",
@@ -3219,11 +3220,13 @@ dependencies = [
  "prism-editor",
  "prism-render",
  "rapier3d",
+ "raw-window-handle",
  "rustc-hash",
  "serde",
  "serde_json",
  "toml",
  "windows-sys 0.59.0",
+ "winit",
 ]
 
 [[package]]
