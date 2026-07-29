@@ -1,15 +1,9 @@
 //! PrismaRev binary entry point.
 //!
 //! Initialises logging, creates the application, and runs the event loop.
-//! Application logic lives in [`crate::app::App`]; this file only sets up the
-//! process-level environment.
-//!
-//! ECS component types are auto‑registered on first `World::insert` – no
-//! explicit registration is required.
-
-mod app;
+//! The engine's [`LegacyApp`] drives the event loop via winit's `ApplicationHandler`.
 
 fn main() -> anyhow::Result<()> {
     env_logger::init();
-    app::App::run()
+    prism_engine::LegacyApp::run()
 }

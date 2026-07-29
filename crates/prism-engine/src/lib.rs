@@ -23,6 +23,6 @@ pub mod scene;
 pub mod scene_state;
 pub mod shader_asset;
 
-pub use app::{App, AppBuilder, DefaultSubsystems, ScheduleLabel, Subsystem, System};
+pub use app::{AppBuilder, DefaultSubsystems, LegacyApp, ScheduleLabel, Subsystem, System};
 pub use engine::Engine;
 pub use render_system::{euler_xyz_deg_to_dir, render_system};
