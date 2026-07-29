@@ -26,6 +26,7 @@
 
 use prism_ecs::World;
 
+use crate::ecs::schedule::Schedule;
 use crate::input::InputManager;
 
 // ===========================================================================
@@ -39,6 +40,8 @@ use crate::input::InputManager;
 pub struct Engine {
     world: World,
     current_scene_name: Option<String>,
+    /// Ordered ECS system schedule — runs on every [`update`](Self::update).
+    schedule: Schedule,
 }
 
 impl Engine {
@@ -68,6 +71,7 @@ impl Engine {
         Self {
             world: World::new(),
             current_scene_name: None,
+            schedule: Schedule::new(),
         }
     }
 
@@ -107,7 +111,114 @@ impl Engine {
     }
 
     /// **Phase 5** — Runtime init: final "everything is ready" hook.
-    pub fn runtime_initialize(&mut self) {}
+    ///
+    /// Spawns a fallback camera if none exists, and registers default ECS
+    /// systems on the [`Schedule`](crate::ecs::schedule::Schedule).
+    pub fn runtime_initialize(&mut self) {
+        // ── fallback camera ──────────────────────────────────────────
+        let has_camera = self.world.query::<crate::scene::components::Camera>().next().is_some();
+        if !has_camera {
+            Self::spawn_default_camera(&mut self.world);
+        }
+
+        // ── register AssetServer as ECS resource ─────────────────────
+        let asset_server = crate::asset::AssetServer::new();
+        self.world.insert_resource(asset_server);
+
+        // ── default schedule ─────────────────────────────────────────
+        self.schedule = default_schedule();
+    }
+
+    /// Spawn a demo cube entity into the world.
+    ///
+    /// Uploads the procedural cube mesh and a default material to the
+    /// renderer, then spawns an entity with `MeshRef`+`MaterialRef` (the
+    /// existing extraction path) plus `MeshRenderer` (the future authoring
+    /// path).  Called from [`LegacyApp::on_resumed`] after the renderer is
+    /// created.
+    pub fn spawn_demo_cube(
+        world: &mut World,
+        renderer: &mut prism_render::GraphRenderer,
+    ) -> anyhow::Result<()> {
+        use prism_render::managers::{MaterialUploadInput, MeshUploadInput};
+        use crate::scene::components::*;
+
+        // Upload cube mesh.
+        let cpu_mesh = crate::asset::procedural::make_cube();
+        let upload = MeshUploadInput {
+            positions: cpu_mesh.positions,
+            normals: cpu_mesh.normals,
+            colors: Vec::new(), // all white
+            uvs: cpu_mesh.uvs,
+            tangents: Vec::new(),
+            indices: cpu_mesh.indices,
+        };
+        let mesh_handle = renderer.register_mesh(&upload)?;
+
+        // Register default material.
+        let mat_input = MaterialUploadInput {
+            base_color: [0.8, 0.8, 0.8, 1.0],
+            metallic: 0.0,
+            roughness: 0.5,
+            emissive: [0.0; 3],
+            albedo_tex: None,
+            normal_tex: None,
+            metallic_roughness_tex: None,
+            emissive_tex: None,
+            occlusion_tex: None,
+            normal_scale: 1.0,
+            occlusion_strength: 1.0,
+            transmission: 0.0,
+            ior: 1.5,
+            translucency: 0.0,
+            anisotropy: 0.0,
+            clearcoat: 0.0,
+            clearcoat_roughness: 0.0,
+            emissive_strength: 1.0,
+        };
+        let mat_handle = renderer.register_material(mat_input)?;
+        let mat_slot = renderer
+            .material_slot(mat_handle)
+            .ok_or_else(|| anyhow::anyhow!("no material slot for demo cube"))?;
+
+        // Spawn cube entity at origin.
+        let entity = world.spawn();
+        world.insert(
+            entity,
+            LocalTransform {
+                translation: [0.0, 0.0, 0.0],
+                rotation: [0.0, 0.0, 0.0, 1.0],
+                scale: [1.0; 3],
+            },
+        );
+        world.insert(
+            entity,
+            WorldTransform([
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ]),
+        );
+        world.insert(
+            entity,
+            MeshRef {
+                asset_id: crate::scene::components::SceneAssetId::generate(),
+                render_handle: mesh_handle,
+                generation: 1,
+            },
+        );
+        world.insert(
+            entity,
+            MaterialRef {
+                asset_id: crate::scene::components::SceneAssetId::generate(),
+                material_slot: mat_slot,
+                generation: 1,
+            },
+        );
+        log::info!("ECS: spawned demo cube entity");
+        Ok(())
+    }
 
     // ======================================================================
     // Frame tick phases
@@ -137,6 +248,9 @@ impl Engine {
             dt,
             look_active,
         );
+
+        // Run the ECS system schedule (user‑registered + built‑in systems).
+        self.schedule.run(&mut self.world, dt);
     }
 
     /// Late update: audio sync, IK, camera‑relative effects.
@@ -178,6 +292,53 @@ impl Engine {
 
     pub fn current_scene_name(&self) -> Option<&str> {
         self.current_scene_name.as_deref()
+    }
+
+    /// Mutable access to the ECS system schedule.
+    pub fn schedule_mut(&mut self) -> &mut Schedule {
+        &mut self.schedule
+    }
+
+    // ── default camera spawn ───────────────────────────────────────
+
+    /// Spawn a fallback camera + controller + transform entity.
+    /// Called automatically when no Camera entity exists at runtime init.
+    fn spawn_default_camera(world: &mut World) {
+        use crate::scene::components::{
+            Camera, FlyCameraController, LocalTransform, WorldTransform,
+        };
+
+        let entity = world.spawn();
+        world.insert(
+            entity,
+            LocalTransform {
+                translation: [0.0, 2.0, 5.0],
+                rotation: [0.0, 0.0, 0.0, 1.0],
+                scale: [1.0; 3],
+            },
+        );
+        world.insert(entity, WorldTransform([[1.0; 4]; 4]));
+        world.insert(
+            entity,
+            Camera {
+                fov_y_degrees: 60.0,
+                near: 0.1,
+                far: 1000.0,
+                exposure: 1.0,
+                aspect: 16.0 / 9.0,
+                enabled: true,
+            },
+        );
+        world.insert(
+            entity,
+            FlyCameraController {
+                yaw: 0.0,
+                pitch: 0.0,
+                move_speed: 5.0,
+                look_sensitivity: 0.005,
+            },
+        );
+        log::info!("ECS: spawned default camera entity");
     }
 }
 
@@ -365,4 +526,30 @@ fn load_scene_from_file(
             crate::scene::loader::SceneSource::CookedFile(path.to_path_buf()),
         )
         .map_err(|e| anyhow::anyhow!("{e}"))
+}
+
+// ===========================================================================
+// Default ECS schedule
+// ===========================================================================
+
+/// Build the default system schedule.
+///
+/// Registered systems run in order on every [`Engine::update`] tick.
+/// Consumers can extend or replace the schedule via
+/// [`Engine::schedule_mut`].
+fn default_schedule() -> Schedule {
+    use crate::ecs::components::Transform;
+    use crate::ecs::schedule::Schedule;
+
+    let mut s = Schedule::new();
+
+    // Demo: slowly orbit the default camera around Y.
+    s.add_system("demo::orbit_camera", |world, dt| {
+        for (_, transform) in world.query_mut::<Transform>() {
+            // yaw
+            transform.rotation[1] += dt * 0.3;
+        }
+    });
+
+    s
 }

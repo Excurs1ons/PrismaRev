@@ -38,6 +38,7 @@ pub mod hdr;
 pub mod ibl;
 pub mod managers;
 pub mod mesh;
+pub mod offscreen;
 pub mod passes;
 pub mod pbr_push;
 pub mod pipeline;

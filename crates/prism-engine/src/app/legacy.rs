@@ -508,6 +508,12 @@ impl AppDriver for LegacyApp {
             if let Err(e) = renderer.warmup_pipelines() {
                 log::warn!("pipeline warmup failed (continuing): {e:#}");
             }
+
+            // Spawn demo cube for visual reference.
+            if let Err(e) = Engine::spawn_demo_cube(self.engine.world_mut(), &mut renderer) {
+                log::warn!("demo cube spawn failed (continuing): {e:#}");
+            }
+
             self.renderer = Some(renderer);
 
             self.init_audio();

@@ -6,6 +6,7 @@
 //! `src/app.rs` (the binary crate).
 
 pub mod app;
+pub mod asset;
 pub mod asset_resolver;
 pub mod asset_server;
 pub mod audio;
@@ -15,6 +16,7 @@ pub mod camera_controller;
 pub mod config;
 pub mod crash_dialog;
 pub mod dirty_router;
+pub mod ecs;
 pub mod engine;
 pub mod input;
 pub(crate) mod platform;

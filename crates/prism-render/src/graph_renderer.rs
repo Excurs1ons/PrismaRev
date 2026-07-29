@@ -20,6 +20,7 @@ use crate::managers::{
     RenderMaterialManager, RenderMeshManager, RenderTextureManager, TextureUploadInput,
 };
 use crate::mesh::Vertex;
+use crate::offscreen::OffscreenTarget;
 use crate::passes::ScenePass;
 use crate::pt_pass::PathTracePass;
 use crate::render_graph::{
@@ -196,8 +197,14 @@ pub struct GraphRenderer {
     /// COLOR_ATTACHMENT_OPTIMAL -> PRESENT_SRC_KHR transition. When `None`,
     /// `render` falls back to an explicit pipeline barrier for the transition.
     egui_overlay: Option<EguiOverlay>,
+    /// True when no surface is available (headless / CI / server mode).
+    is_headless: bool,
+    /// Offscreen target for headless mode — owned device-local image +
+    /// host-visible staging buffer. `None` in windowed mode.
+    offscreen: Option<OffscreenTarget>,
+
+    // ── last field ──────────────────────────────────────────────────
     /// Long-lived GPU session (device, command pool, descriptors, UBOs).
-    /// Survives swapchain recreation — see [`RenderRuntime`].
     ///
     /// **Must be the last field** — Rust drops struct fields in declaration
     /// order, so `runtime` (which owns the `Arc<VulkanContext>`) is destroyed
@@ -375,6 +382,8 @@ impl GraphRenderer {
             shadow_view,
             color_format,
             egui_overlay: None,
+            is_headless: false,
+            offscreen: None,
         })
     }
     // -------------------------------------------------------------------
@@ -392,6 +401,170 @@ impl GraphRenderer {
     }
     pub fn graphics_queue(&self) -> vk::Queue {
         self.runtime.context.graphics_queue
+    }
+
+    /// Whether this renderer was created in headless mode (no window surface).
+    pub fn is_headless(&self) -> bool {
+        self.is_headless
+    }
+
+    // ── headless mode ──────────────────────────────────────────────
+
+    /// Create a headless `GraphRenderer` — no window surface or swapchain.
+    /// Useful for CI tests, dedicated servers, and offline asset baking.
+    ///
+    /// `env_bytes` is optional IBL environment map data (`None` = default sky).
+    pub fn headless_new(env_bytes: Option<Vec<u8>>) -> anyhow::Result<Self> {
+        let context = Arc::new(VulkanContext::new(&[])?);
+        let offscreen = OffscreenTarget::new(&context)?;
+        let color_format = offscreen.format;
+
+        // Runtime with 2 command buffers (minimal for headless ops).
+        let runtime = RenderRuntime::new(context.clone(), 2)?;
+
+        // Headless mode still builds the full render graph so the
+        // graph's topology is validated even without a display.
+        let resolver = RenderSettings::default().resolve_shadow(&context.rt_caps);
+        let settings = RenderSettings {
+            shadow_mode: resolver,
+            ray_tracing_enabled: false,
+            ..Default::default()
+        };
+
+        let ibl = IblResources::new(
+            context.clone(),
+            runtime.command_pool,
+            context.graphics_queue,
+            env_bytes,
+        )
+        .context("create IBL resources (headless)")?;
+
+        let mut texture_manager =
+            RenderTextureManager::new(&context, runtime.command_pool, context.graphics_queue, 1024)
+                .context("create RenderTextureManager (headless)")?;
+        let material_manager =
+            RenderMaterialManager::new(&context).context("create RenderMaterialManager (headless)")?;
+        let mesh_manager = RenderMeshManager::new();
+
+        let shadow_sampler = unsafe {
+            context.device.create_sampler(
+                &vk::SamplerCreateInfo::default()
+                    .mag_filter(vk::Filter::LINEAR)
+                    .min_filter(vk::Filter::LINEAR)
+                    .mipmap_mode(vk::SamplerMipmapMode::LINEAR)
+                    .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                    .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                    .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                    .compare_enable(true)
+                    .compare_op(vk::CompareOp::LESS)
+                    .border_color(vk::BorderColor::FLOAT_OPAQUE_WHITE)
+                    .unnormalized_coordinates(false),
+                None,
+            )
+        }
+        .context("create shadow comparison sampler (headless)")?;
+
+        // Graph: Shadow -> Scene -> GTAO -> PathTrace -> Post.
+        let mut shadow_pass = crate::passes::ShadowMapPass::new();
+        let mut builder = RenderGraphBuilder::new().settings(&settings);
+        shadow_pass.setup(&mut builder, &settings);
+        let shadow_handle = shadow_pass.shadow_map_handle();
+        builder.add_pass(Box::new(shadow_pass));
+        let mut graph = builder.build();
+        graph
+            .allocate_resources(&context.device, &context.physical_device_memory_properties)
+            .context("allocate graph resources (headless)")?;
+        let shadow_view = graph
+            .image_view(shadow_handle)
+            .context("shadow map view not found (headless)")?;
+
+        let frame_ubo_buffers: Vec<vk::Buffer> =
+            runtime.frame_ubos.iter().map(|u| u.buffer).collect();
+        let bindless = texture_manager.bindless_mut();
+        let materials_buffer = material_manager.buffer();
+
+        let brdf_handle = bindless
+            .register(ibl.brdf_image_view())
+            .context("register BRDF LUT into bindless table (headless)")?;
+
+        let mut scene_pass = ScenePass::new(color_format);
+        let scene_scope =
+            SceneScope::new(context.clone()).context("SceneScope::new (headless)")?;
+        scene_pass
+            .set_resources(
+                &context,
+                ibl.descriptor_set,
+                ibl.descriptor_set_layout,
+                shadow_view,
+                shadow_sampler,
+                bindless.set,
+                bindless.layout,
+                materials_buffer,
+                &frame_ubo_buffers,
+                brdf_handle.0,
+                scene_scope.descriptor_set,
+                scene_scope.descriptor_set_layout,
+            )
+            .context("ScenePass::set_resources (headless)")?;
+
+        let gtao_pass = crate::gtao::GtaoPass::new(
+            &context,
+            runtime.command_pool,
+            offscreen.extent,
+        )
+        .context("GtaoPass::new (headless)")?;
+
+        let frame_count = 2u32;
+        let post_pass =
+            crate::post::PostPass::new(&context, color_format, frame_count)
+                .context("PostPass::new (headless)")?;
+
+        let pt_pass =
+            PathTracePass::new(&context).context("PathTracePass::new (headless)")?;
+
+        graph.add_pass(Box::new(scene_pass));
+        graph.add_pass(Box::new(gtao_pass));
+        graph.add_pass(Box::new(pt_pass));
+        graph.add_pass(Box::new(post_pass));
+
+        Ok(Self {
+            swapchain: None,
+            runtime,
+            mesh_manager,
+            texture_manager,
+            material_manager,
+            ibl,
+            scene_scope,
+            graph,
+            settings,
+            shadow_sampler,
+            shadow_view,
+            color_format,
+            egui_overlay: None,
+            is_headless: true,
+            offscreen: Some(offscreen),
+        })
+    }
+
+    /// Clear the offscreen image to `color`, copy to the host-visible buffer,
+    /// and wait for the GPU.  Only valid in headless mode.
+    pub fn clear_offscreen(&mut self, color: [f32; 4]) -> anyhow::Result<()> {
+        let target = self
+            .offscreen
+            .as_mut()
+            .context("clear_offscreen called but no OffscreenTarget (not headless?)")?;
+        target.clear_and_copy(&self.runtime.context, color)
+    }
+
+    /// Read back pixel data from the offscreen target.
+    /// Returns RGBA bytes, 256 × 256 = 262144 bytes.
+    /// Only valid after [`clear_offscreen`](Self::clear_offscreen).
+    pub fn readback_pixels(&self) -> anyhow::Result<Vec<u8>> {
+        let target = self
+            .offscreen
+            .as_ref()
+            .context("readback_pixels called but no OffscreenTarget")?;
+        target.readback(&self.runtime.context)
     }
 
     /// Immutable borrow of the render graph (passes + declared resources +
@@ -684,6 +857,9 @@ impl GraphRenderer {
     }
 
     pub fn suspend_surface(&mut self) {
+        if self.is_headless {
+            return;
+        }
         let device = &self.runtime.context.device;
         unsafe { device.device_wait_idle() }.ok();
         if let Some(mut sw) = self.swapchain.take() {
@@ -697,7 +873,7 @@ impl GraphRenderer {
         window: &dyn raw_window_handle::HasDisplayHandle,
         window_handle: &dyn raw_window_handle::HasWindowHandle,
     ) -> anyhow::Result<()> {
-        if self.swapchain.is_some() {
+        if self.is_headless || self.swapchain.is_some() {
             return Ok(());
         }
         let swapchain = Swapchain::new(&self.runtime.context, window, window_handle)?;
@@ -707,6 +883,9 @@ impl GraphRenderer {
     }
 
     pub fn recreate_swapchain(&mut self) -> anyhow::Result<()> {
+        if self.is_headless {
+            return Ok(());
+        }
         // Wait for the GPU to finish all in-flight work BEFORE destroying any
         // framebuffers. The previous frame's command buffer references both
         // the ScenePass framebuffers and the egui overlay framebuffers; without
@@ -774,7 +953,40 @@ impl GraphRenderer {
     /// swapchain out-of-date returns `Ok(None)` — the caller should return
     /// early (the swapchain was recreated internally). On real error returns
     /// `Err`.
+    ///
+    /// In headless mode always returns the command buffer from the runtime
+    /// pool (no acquire needed).
     pub fn begin_frame(&mut self) -> anyhow::Result<Option<FrameCtx>> {
+        let device = self.runtime.context.device.clone();
+
+        // Headless: no acquire, just grab cmd buf[0].
+        if self.is_headless {
+            let cmd = self.runtime.command_buffers[0];
+            unsafe { device.reset_command_buffer(cmd, vk::CommandBufferResetFlags::empty()) }
+                .context("reset command buffer (headless)")?;
+            let begin_info = vk::CommandBufferBeginInfo::default()
+                .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+            unsafe { device.begin_command_buffer(cmd, &begin_info) }
+                .context("begin command buffer (headless)")?;
+
+            // Re-use the offscreen target extent as a stand-in.
+            let extent = self
+                .offscreen
+                .as_ref()
+                .map(|o| o.extent)
+                .unwrap_or(vk::Extent2D { width: 256, height: 256 });
+
+            return Ok(Some(FrameCtx {
+                device,
+                cmd,
+                image_index: 0,
+                frame_index: 0,
+                extent,
+                fence: vk::Fence::null(),
+                image_available: vk::Semaphore::null(),
+                render_finished: vk::Semaphore::null(),
+            }));
+        }
         let device = self.runtime.context.device.clone();
 
         // --- Acquire next image ---
@@ -1026,7 +1238,31 @@ impl GraphRenderer {
     /// in-flight fence (reset during [`begin_frame`]) must be signaled so the
     /// next frame does not hang. Returns `true` when the swapchain was
     /// recreated (out-of-date on present).
+    /// Phase 3/3: submit and present.  In headless mode this is a no-op
+    /// (the offscreen target owns its own command-submission path).
     pub fn present(&mut self, ctx: &FrameCtx) -> anyhow::Result<bool> {
+        // Headless: just submit with a fence-out but skip present.
+        if self.is_headless {
+            let cmd_bufs = [ctx.cmd];
+            let submit = vk::SubmitInfo::default().command_buffers(&cmd_bufs);
+            unsafe {
+                self.runtime
+                    .context
+                    .device
+                    .queue_submit(self.runtime.context.graphics_queue, &[submit], ctx.fence)
+            }
+            .context("headless queue submit")?;
+            if ctx.fence != vk::Fence::null() {
+                unsafe {
+                    self.runtime
+                        .context
+                        .device
+                        .wait_for_fences(&[ctx.fence], true, u64::MAX)
+                }
+                .context("headless wait for fence")?;
+            }
+            return Ok(false);
+        }
         let wait_semaphores = [ctx.image_available];
         let wait_stages = [vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
         let signal_semaphores = [ctx.render_finished];
@@ -1185,6 +1421,11 @@ impl GraphRenderer {
         // Destroy swapchain.
         if let Some(mut sw) = self.swapchain.take() {
             unsafe { sw.destroy(device) };
+        }
+
+        // Destroy offscreen target (headless mode).
+        if let Some(mut target) = self.offscreen.take() {
+            unsafe { target.destroy(device) };
         }
     }
 }
