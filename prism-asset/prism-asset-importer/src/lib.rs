@@ -1,16 +1,16 @@
 //! # prism-asset-importer
 //!
-//! Importer framework for the PrismaRev 资源 管线
+//! PrismaRev 资源管道的导入器框架
 //!
-//! Importers translate 源 files (`.png`, `.gltf`, `.wav`, etc.) into
-//! intermediate data that the cooker later converts into 运行时 格式
+//! 导入器将源文件（`.png`、`.gltf`、`.wav` 等）转换为中间数据，
+//! 随后由烹饪器转换为运行时格式。
 //!
-//! The 导入 管线 is:
+//! 导入管线如下：
 //!
 //! ```text
-//! 源 File → [Importer] → ImportResult (intermediate data)
+//! 源文件 → [Importer] → ImportResult（中间数据）
 //!   ↓
-//! [AssetDatabase] record created/updated
+//! [AssetDatabase] 记录已创建/更新
 //! ```
 
 use prism_asset_core::{AssetId, AssetType};

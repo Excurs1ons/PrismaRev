@@ -1,8 +1,7 @@
-//! 描述符 集合 布局 池 and 集合 management.
+//! 描述符集合布局、池和集合管理。
 //!
-//! The 帧 UBO lives at 描述符 集合 0, 绑定 0 顶点 + 片元 阶段
-//! Each 帧 gets its own 描述符 集合 so we can 更新 the UBO without
-//! 管线 stalls.
+//! 帧 UBO 位于描述符集 0、绑定 0（顶点+片元阶段）。
+//! 每帧都有其自己的描述符集，这样无需管线停顿即可更新 UBO。
 
 use anyhow::Context as _;
 use ash::vk;
@@ -10,7 +9,7 @@ use ash::vk;
 use crate::buffer::{self, BufferUsage, MemoryProperties};
 use crate::context::VulkanContext;
 
-/// 布局 for the 相机 UBO 描述符 集合 集合 = 0, 绑定 = 0).
+/// 相机 UBO 描述符集的布局（集合 = 0，绑定 = 0）。
 pub struct DescriptorLayout {
     pub layout: vk::DescriptorSetLayout,
     /// Cloned 设备 handle kept so 放置 can free the 布局 (RAII).

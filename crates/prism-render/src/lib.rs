@@ -1,23 +1,23 @@
-//! Vulkan 渲染 backend for PrismaRev.
+//! PrismaRev Vulkan 渲染后端
 //!
-//! 内置 on [`ash`] (thin Vulkan bindings). Milestone 2 provides a 完整
-//! 光栅化 管线 渲染 pass graphics 管线 网格 buffers,
-//! 描述符 sets, and 相机 UBO — enough to 渲染 ECS-driven geometry.
+//! 基于 [`ash`]（轻量 Vulkan 绑定）构建。里程碑 2 提供了完整的
+//! 光栅化管线：渲染 pass、图形管线、网格缓冲区、
+//! 描述符集和相机 UBO——足以渲染 ECS 驱动的几何体。
 //!
-//! ## Modules
+//! ## 模块
 //!
-//! | 模块 | Purpose |
+//! | 模块 | 用途 |
 //! |--------|---------|
-//! | [`capabilities`] | Ray-tracing 能力 detection |
-//! | [`context`] | Vulkan 实例 设备 queues |
-//! | 交换链 | 交换链 + acquire/present sync |
-//! | [`render_pass`] | 渲染 pass + framebuffers |
-//! | 着色器 | SPIR-V 着色器 模块 loading |
-//! | 缓冲区 | 缓冲区 分配 & staging upload |
-//! | 网格 | Vertex/index 缓冲区 网格 类型 |
-//! | 管线 | Graphics 管线 |
-//! | 描述符 | 描述符 集合 布局 池 UBO |
-//! | [`render_graph`] | Modular render-pass 图 (new 管线 |
+//! | [`capabilities`] | 光线追踪能力检测 |
+//! | [`context`] | Vulkan 实例、设备、队列 |
+//! | swapchain | 交换链 + acquire/present 同步 |
+//! | [`render_pass`] | 渲染 pass + 帧缓冲 |
+//! | shader | SPIR-V 着色器模块加载 |
+//! | buffer | 缓冲区分配和暂存上传 |
+//! | mesh | 顶点/索引缓冲区与网格类型 |
+//! | pipeline | 图形管线 |
+//! | descriptor | 描述符集合、布局、池、UBO |
+//! | [`render_graph`] | 模块化渲染 pass 图（新版管线） |
 //! | [`passes`] | Individual render-pass implementations |
 
 pub mod acceleration_structure;

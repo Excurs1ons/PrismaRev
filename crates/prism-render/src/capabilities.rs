@@ -1,18 +1,16 @@
-//! Hardware ray-tracing 能力 detection.
+//! 硬件光线追踪能力检测。
 //!
-//! Before the 逻辑 设备 is created we probe the 物理 设备 for
-//! ray-tracing support: which extensions are advertised, and whether the
-//! 特性 链 actually reports them as supported. The 结果
-//! ([`RayTracingCaps`]) drives conditional extension/feature enabling in
-//! [`crate::context`].
+//! 在创建逻辑设备之前，我们探测物理设备的光线追踪支持：
+//! 哪些扩展已公告，以及特性链是否实际报告它们受支持。
+//! 结果（[`RayTracingCaps`]）驱动 [`crate::context`] 中的条件性扩展/特性启用。
 //!
-//! The detection is layered:
+//! 检测是分层的：
 //!
 //! ```text
-//! 层 4 VK_KHR_ray_query inline rays in any 着色器 阶段
-//! 层 3 VK_KHR_ray_tracing_pipeline RT-core 管线 完整 SBT)
-//! 层 2 VK_KHR_acceleration_structure + deferred_host_operations
-//! 层 1 Vulkan 1.2 promoted features (buffer_device_address, descriptor_indexing, timeline_semaphore)
+//! 第 4 层 VK_KHR_ray_query 在任何着色器阶段中的内联光线
+//! 第 3 层 VK_KHR_ray_tracing_pipeline RT 核心管线（完整 SBT）
+//! 第 2 层 VK_KHR_acceleration_structure + deferred_host_operations
+//! 第 1 层 Vulkan 1.2 提升特性（buffer_device_address、descriptor_indexing、timeline_semaphore）
 //! ```
 //!
 //! An 扩展 is only considered *usable* when **both** the 扩展 is

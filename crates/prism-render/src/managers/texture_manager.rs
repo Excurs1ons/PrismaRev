@@ -1,23 +1,18 @@
-//! `RenderTextureManager` — RGBA8 textures backed by the bindless SRV 表
+//! `RenderTextureManager` — 由无绑定 SRV 表支持的 RGBA8 纹理
 //!
-//! The 管理器 owns every texture's device-local 图像 + 内存 + 图像
-//! 视图 and the 槽 it occupies in the bindless 描述符 集合 A
-//! permanent 1×1 magenta 回退 is registered in 槽 0 at construction
-//! 时间 so a misregistered / not-yet-uploaded handle never produces an
-//! unbound-descriptor 读取 The renderer's 着色器 path checks for
-//! `TextureHandle::INVALID` and returns the 回退 颜色 the
-//! CPU-side `get_srv` always returns a real 槽
+//! 管理器拥有每个纹理的设备本地图像+内存+图像视图，
+//! 以及它在无绑定描述符集中占用的槽位。
+//! 构造时在槽 0 注册了一个永久的 1×1 洋红色回退，
+//! 因此未注册/尚未上传的句柄永远不会产生未绑定描述符读取。
+//! 渲染器的着色器路径检查 `TextureHandle::INVALID` 并返回回退颜色，
+//! CPU 端的 `get_srv` 始终返回真实槽位。
 //!
-//! P0 scope 提交 3):
-//! - `RenderTextureManager::new` constructs the bindless 表 and
-//! registers a 回退 视图 in 槽 0.
-//! - `register` accepts a CPU-side 纹理 and records the bindless
-//! 槽 the actual Vulkan image/view is constructed by the 渲染器
-//! in 提交 9 (which has 访问 to the per-frame 命令 池 and
-//! graphics 队列 and the resulting `ImageView` is wired in here via
-//! `attach_image_view`. This split keeps the 管理器 Vulkan-agnostic
-//! enough that 提交 3 can 编译 and unit-test without dragging in
-//! staging-buffer / 屏障 代码
+//! P0 范围（提交 3）：
+//! - `RenderTextureManager::new` 构建无绑定表并在槽 0 注册回退视图。
+//! - `register` 接受 CPU 端纹理并记录无绑定槽位。
+//!   实际的 Vulkan 图像/视图由渲染器在提交 9 中构建（可访问每帧命令池和图形队列），
+//!   结果 `ImageView` 通过 `attach_image_view` 在此连接。
+//!   这种分离使管理器足够 Vulkan 无关，提交 3 无需拖入暂存缓冲区/屏障代码即可编译和单元测试。
 //!
 //! P0 scope 提交 9): the `register` path will be replaced with an
 //! end-to-end 图像 upload 图像 + 内存 + 视图 + bindless 写入 in

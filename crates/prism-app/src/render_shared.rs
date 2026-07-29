@@ -1,18 +1,16 @@
-//! Cross-thread shared 状态 between the main 逻辑 线程 and the
-//! 渲染 线程
+//! 主逻辑线程与渲染线程之间的跨线程共享状态
 //!
-//! # Design
+//! # 设计
 //!
-//! Both [`FramePacket`] and [`EguiFrame`] are overwritten each 帧
-//! - **Main thread** writes the latest data before the 渲染 线程 reads it.
-//! - **Render thread** reads the latest data each 迭代 and processes it.
-//! - No 阻塞 the 渲染 线程 always uses whatever is latest.
+//! [`FramePacket`] 和 [`EguiFrame`] 每帧都会被覆盖：
+//! - **主线程**在渲染线程读取前写入最新数据。
+//! - **渲染线程**每轮迭代读取最新数据并处理。
+//! - 无阻塞——渲染线程始终使用最新的可用数据。
 //!
-//! `running` is an [`AtomicBool`] the main 线程 sets to `false` to 信号
-//! the 渲染 线程 to exit.
+//! `running` 是一个 [`AtomicBool`]，主线程将其设为 `false` 以通知渲染线程退出。
 //!
-//! [`RenderStats`] flows in the opposite direction 渲染 线程 → main
-//! 线程 as does `pt_reset_requested` (main 线程 → 渲染 线程
+//! [`RenderStats`] 流向相反方向（渲染线程 → 主线程），
+//! `pt_reset_requested` 同理（主线程 → 渲染线程）。
 
 use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 use std::sync::Mutex;
@@ -21,18 +19,17 @@ use prism_engine::render_system::FramePacket;
 use prism_render::EguiFrame;
 
 // ---------------------------------------------------------------------------
-// RenderStats — 渲染 线程 → main 线程
+// RenderStats — 渲染线程 → 主线程
 // ---------------------------------------------------------------------------
 
-/// Per-frame 渲染 metrics produced by the 渲染 线程 and consumed by
-/// the main 线程 for the 编辑器 HUD.
+/// 渲染线程产生的每帧渲染指标，由主线程消费以显示编辑器 HUD。
 #[derive(Clone, Debug, Default)]
 pub struct RenderStats {
-    /// 总计 时间 from begin_frame → present in ms.
+    /// 从 begin_frame 到 present 的总时间（毫秒）
     pub frame_time_ms: f32,
-    /// Smoothed frames per 秒
+    /// 平滑后的每秒帧数
     pub fps: f32,
-    /// 当前 path-tracing 样本 count (None = no PT pass
+    /// 当前路径追踪采样数（None = 无 PT 通道）
     pub pt_frame_count: Option<u32>,
 }
 
@@ -40,15 +37,15 @@ pub struct RenderStats {
 // RenderShared
 // ---------------------------------------------------------------------------
 
-/// Shared 状态 between main 线程 (writer) and 渲染 线程 (reader).
+/// 主线程（写入者）与渲染线程（读取者）之间的共享状态。
 pub struct RenderShared {
-    /// 集合 `false` by main 线程 to 信号 the 渲染 线程 to exit.
+    /// 由主线程设为 `false` 以通知渲染线程退出。
     pub running: Arc<AtomicBool>,
-    /// Latest 帧 packet from the game 循环 (main → 渲染
+    /// 来自游戏循环的最新帧数据包（主线程→渲染线程）
     pub packet: Mutex<Option<FramePacket>>,
-    /// Latest tessellated egui 帧 (main → 渲染
+    /// 最新的已细分 egui 帧（主线程→渲染线程）
     pub egui_frame: Mutex<Option<EguiFrame>>,
-    /// Latest 渲染 stats from the 渲染 线程 渲染 → main).
+    /// 来自渲染线程的最新渲染统计（渲染→主线程）。
     pub render_stats: Mutex<RenderStats>,
     /// 集合 `true` by main 线程 to request PT accumulation reset.
     pub pt_reset_requested: AtomicBool,

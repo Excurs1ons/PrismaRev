@@ -1,22 +1,22 @@
-//! Baked 全局光照 probe-volume 二进制 loader/saver.
+//! 烘焙全局光照探测器体积的二进制加载器/保存器。
 //!
-//! Migrated here from the legacy dev-mode `prism-asset` crate so the 全局光照
-//! 运行时 has 零 dependencies on that crate. The on-disk 格式 is
-//! unchanged (PRPV magic, version 2); existing `.bin` files continue to 加载
+//! 从旧版开发模式 `prism-asset` crate 迁移至此，使全局光照运行时
+//! 完全不依赖该 crate。磁盘格式不变（PRPV 魔数，版本 2）；
+//! 现有的 `.bin` 文件继续可加载。
 //!
-//! File 格式 (little-endian):
+//! 文件格式（小端序）：
 //!
-//! | 偏移 | 大小 | Field |
-//!|-------:|-----:|-------|
-//! | 0 | 4 | Magic `b"PRPV"` |
-//! | 4 | 4 | Version `u32` 当前 2) |
-//! | 8 | 12 | Origin `[f32; 3]` |
-//! | 20 | 12 | Spacing `[f32; 3]` |
-//! | 32 | 12 | Dims `[u32; 3]` |
-//! | 44 | 4 | Coeff 格式 `u32` (0 = f32, 1 = f16 - reserved) |
-//! | 48 | 64 | Scene name `[u8; 64]` (null-padded UTF-8) |
-//! | 112 | 4 | 全局 hit 比率 `f32` (mean per-probe; -1 = unknown) |
-//! | 116 | N | Coeff body: `dims.x*dims.y*dims.z*9*3` f32 values RGB per coeff) |
+//! | 偏移 | 大小 | 字段 |
+//! |-------:|-----:|-------|
+//! | 0 | 4 | 魔数 `b"PRPV"` |
+//! | 4 | 4 | 版本 `u32`（当前为 2） |
+//! | 8 | 12 | 原点 `[f32; 3]` |
+//! | 20 | 12 | 间距 `[f32; 3]` |
+//! | 32 | 12 | 维度 `[u32; 3]` |
+//! | 44 | 4 | 系数格式 `u32`（0 = f32，1 = f16 - 预留） |
+//! | 48 | 64 | 场景名称 `[u8; 64]`（空填充 UTF-8） |
+//! | 112 | 4 | 全局命中率 `f32`（每个探测器的均值；-1 = 未知） |
+//! | 116 | N | 系数字段：`dims.x*dims.y*dims.z*9*3` 个 f32 值（每个系数 RGB） |
 //!
 //! Header = 116 字节 Body = `probe_count * 9 * 3 * 4` 字节 (f32).
 

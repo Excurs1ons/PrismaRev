@@ -1,21 +1,19 @@
-//! Real-time path tracing 计算 pass — 1 sample/frame with temporal accumulation.
+//! 实时路径追踪计算通道——每帧 1 个样本，带时间累积。
 //!
-//! [`PathTracePass`] dispatches a 计算 着色器 that traces one 射线 per 像素
-//! each 帧 via `VK_KHR_ray_query`, accumulates the radiance across frames,
-//! and writes the resolved (accum/count) 结果 to the `PT_COLOR_H` 图
-//! 资源 that `PostPass` reads for tonemapping.
+//! [`PathTracePass`] 分派一个计算着色器，每像素每帧通过 `VK_KHR_ray_query`
+//! 追踪一条光线，跨帧累积辐射度，并将解析后的（累积量/计数）结果写入
+//! `PT_COLOR_H` 图资源，`PostPass` 读取该资源进行色调映射。
 //!
-//! ## Hot-switching
+//! ## 热切换
 //!
-//! All PT resources 管线 accumulation buffers, flattened geometry BLAS/TLAS)
-//! are created once per scene and kept alive. When `RenderMode::PathTrace` is
-//! 激活 the pass dispatches; when 光栅化 is 激活 the pass is a no-op.
+//! 所有 PT 资源（管线累积缓冲区、展平几何体 BLAS/TLAS）针对每个场景
+//! 创建一次并保持存活。当 `RenderMode::PathTrace` 激活时，通道分派；
+//! 当光栅化激活时，通道为空操作。
 //!
-//! ## Camera-motion reset
+//! ## 相机运动重置
 //!
-//! The pass tracks the previous-frame 相机 position and view-projection.
-//! When either changes by more than a small epsilon the accumulation buffers
-//! are cleared (reset flag 集合 in the 着色器
+//! 通道跟踪上一帧的相机位置和视图投影矩阵。
+//! 当任一变化超过小阈值时，累积缓冲区被清除（着色器中的重置标志被设置）。
 
 use std::ptr;
 

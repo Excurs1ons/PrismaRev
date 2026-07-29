@@ -1,13 +1,13 @@
-//! Typed 资源 wrappers with `impl 资源 for each cooked 格式
+//! 类型化资源包装器，包含每个烘焙格式的 `impl Resource`。
 //!
-//! Each 类型 here is the 运行时 representation of a cooked 资源 (RTEX, RMES,
-//! RMAT, SPIR-V RSCN). `ResourceManager::load::<T>(id)` / `get::<T>(handle)`
-//! use these impls to 反序列化 the raw `.pak` 字节 into structured data.
+//! 这里的每个类型都是烘焙资源（RTEX、RMES、RMAT、SPIR-V、RSCN）的运行时表示。
+//! `ResourceManager::load::<T>(id)` / `get::<T>(handle)` 使用这些 impl
+//! 将原始 `.pak` 字节反序列化为结构化数据。
 //!
-//! The decoders live in `prism-asset-cooker` (`decode_rtex`, `decode_rmes`,
-//! `decode_rmat`) and are re-used here - the 运行时 never re-implements a
-//! 二进制 格式 The RSCN scene 格式 is parsed lazily by the engine's
-//! `SceneLoader`, so `SceneAsset` just holds the raw 字节
+//! 解码器位于 `prism-asset-cooker` 中（`decode_rtex`、`decode_rmes`、
+//! `decode_rmat`），在此被复用——运行时从不重新实现二进制格式。
+//! RSCN 场景格式由引擎的 `SceneLoader` 惰性解析，
+//! 因此 `SceneAsset` 仅持有原始字节。
 
 use prism_asset_core::{AssetId, AssetType};
 use prism_asset_cooker::{

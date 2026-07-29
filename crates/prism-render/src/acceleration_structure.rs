@@ -1,10 +1,10 @@
-//! 加速度 structure (BLAS/TLAS) 构建器 for 射线 tracing.
+//! 加速结构（BLAS/TLAS）构建器，用于光线追踪。
 //!
-//! Builds bottom-level 加速度 structures (BLAS) from 网格 vertex/index
-//! buffers, and a top-level 加速度 structure (TLAS) from 实例
-//! transforms. The TLAS is what RayQuery shaders 跟踪 against.
+//! 从网格顶点/索引缓冲区构建底层加速结构（BLAS），
+//! 从实例变换构建顶层加速结构（TLAS）。
+//! TLAS 是 RayQuery 着色器要追踪的结构。
 //!
-//! Requires `VK_KHR_acceleration_structure` + `buffer_device_address`.
+//! 需要 `VK_KHR_acceleration_structure` + `buffer_device_address`。
 
 use anyhow::Context as _;
 use ash::vk;

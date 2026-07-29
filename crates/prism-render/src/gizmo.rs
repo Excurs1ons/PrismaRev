@@ -1,8 +1,8 @@
-//! World-space XYZ orientation gizmo (always-on-top 调试 helper).
+//! 世界空间 XYZ 方向辅助工具（始终置顶的调试辅助）。
 //!
-//! Draws three colored arrows from the scene origin — X = red, Y = 绿色
-//! Z = blue — so the viewer can 读取 the 世界 axes at a glance. Rendered with
-//! the 深度 test 禁用 so it is never occluded by the 3D scene.
+//! 从场景原点绘制三个彩色箭头——X = 红色，Y = 绿色，Z = 蓝色——
+//! 使观察者一目了然地读取世界坐标轴。禁用深度测试渲染，
+//! 因此不会被 3D 场景遮挡。
 
 use std::ffi::CString;
 use std::mem::size_of;

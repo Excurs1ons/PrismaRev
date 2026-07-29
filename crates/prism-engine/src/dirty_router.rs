@@ -1,10 +1,10 @@
-//! Frame-to-frame dirty tracking for [`SceneChanges`] (PR-S2).
+//! 帧间脏数据追踪，用于 [`SceneChanges`]（PR-S2）。
 //!
-//! [`DirtyRouter`] stores the 上一个 frame's [`SceneChanges`] and compares
-//! each field on 更新 to produce [`DirtyFlags`]. Downstream consumers
-//! (PR-S3 SceneReadView / PR-S4 Upload phase) use the flags to skip 冗余
-//! GPU uploads — e.g. reupload the 光源 缓冲区 only when `POINT_LIGHTS` is
-//! dirty, re-bind the 相机 UBO only when 相机 is dirty, etc.
+//! [`DirtyRouter`] 存储上一帧的 [`SceneChanges`]，
+//! 并在更新时比较每个字段以生成 [`DirtyFlags`]。
+//! 下游消费者（PR-S3 SceneReadView / PR-S4 上传阶段）使用这些标志跳过
+//! 冗余的 GPU 上传——例如仅在 `POINT_LIGHTS` 变脏时重新上传光源缓冲区，
+//! 仅在相机变脏时重新绑定相机 UBO 等。
 
 use crate::render_system::SceneChanges;
 
@@ -12,18 +12,17 @@ use crate::render_system::SceneChanges;
 // DirtyFlags
 // ---------------------------------------------------------------------------
 
-/// 集合 of scene fields that changed between consecutive frames.
+/// 连续帧之间发生变化的场景字段集合。
 ///
-/// Zero-latency: computed synchronously during [`DirtyRouter::update`] before
-/// any 渲染 功 starts, so the prepare / 渲染 phases can act on the
-/// 当前 frame's dirtiness immediately (no one-frame lag).
+/// 零延迟：在 [`DirtyRouter::update`] 期间同步计算，早于任何渲染工作开始，
+/// 因此准备/渲染阶段可以立即作用于当前帧的脏数据（无帧延迟）。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DirtyFlags {
-    /// 相机 (view-proj, eye, 视图 投影 or any derived value).
+    /// 相机（view-proj、eye、视图投影或任何派生值）。
     pub camera: bool,
-    /// Directional 光源 direction, 颜色 or intensity.
+    /// 方向光的方向、颜色或强度。
     pub directional_light: bool,
-    /// Point-light 列表 (count, positions, colours, ranges).
+    /// 点光源列表（数量、位置、颜色、范围）。
     pub point_lights: bool,
 }
 

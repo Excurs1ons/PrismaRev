@@ -1,18 +1,17 @@
-//! 资源 类型 classification.
+//! 资源类型分类。
 
 use serde::{Deserialize, Serialize};
 
-/// High-level classification of an asset's data 格式
+/// 资源数据格式的高级分类。
 ///
-/// The discriminant is stored as a `u32` in the 二进制 .pak 格式 so the
-/// 运行时 can 分发 to the correct loader without consulting a 字符串
-/// 表
+/// 判别值以 `u32` 形式存储在二进制 .pak 格式中，
+/// 因此运行时无需借助字符串表即可分派到正确的加载器。
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum AssetType {
-    /// Raw 二进制 blob — the 运行时 loads it as `Vec<u8>`.
+    /// 原始二进制数据块——运行时将其加载为 `Vec<u8>`。
     Binary = 0,
-    /// GPU 纹理 / 图像
+    /// GPU 纹理/图像
     Texture = 1,
     /// Geometric 网格 顶点 + 索引 data).
     Mesh = 2,

@@ -1,4 +1,4 @@
-/// Abstract 调 代码 (platform-independent).
+/// 抽象按键码（平台无关）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum KeyCode {
     KeyW,

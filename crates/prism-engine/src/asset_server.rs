@@ -41,7 +41,7 @@ pub struct AssetServer {
 }
 
 impl AssetServer {
-    /// 创建 a new 资源 server rooted at the project's `assets/` directory.
+    /// 创建一个新的资源服务器，根目录为项目的 `assets/` 目录。
     pub fn new(asset_root: PathBuf, data_root: PathBuf) -> Self {
         Self {
             asset_root,

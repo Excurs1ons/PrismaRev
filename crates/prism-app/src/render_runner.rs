@@ -1,9 +1,8 @@
-//! 渲染 线程 — receives [`FramePacket`] + [`EguiFrame`] from the main
-//! 线程 and drives [`GraphRenderer`] (begin_frame → 执行 → present).
+//! 渲染线程——从主线程接收 [`FramePacket`] + [`EguiFrame`]，
+//! 并驱动 [`GraphRenderer`]（begin_frame → 执行 → present）。
 //!
-//! The 渲染 线程 is spawned by [`App`](crate::app::App) after pre-resolving
-//! scene assets on the main 线程 It runs until the main 线程 sets the
-//! `running` flag to `false`.
+//! 渲染线程由 [`App`](crate::app::App) 在主线程预解析场景资源后启动。
+//! 运行直到主线程将 `running` 标志设为 `false`。
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -15,29 +14,29 @@ use prism_render::{EguiFrame, FrameInput, FrameUBOData, GraphRenderer};
 
 use crate::render_shared::{RenderShared, RenderStats};
 
-/// Neutral gray 清空 颜色 — distinguishable from black/white.
+/// 中性灰清除色——可与黑色/白色区分。
 const CLEAR_COLOR: [f32; 4] = [0.5, 0.5, 0.5, 1.0];
 
-/// Smoothing factor for 帧率 计数器 (lower = smoother).
+/// 帧率计数器的平滑因子（值越低越平滑）。
 const FPS_ALPHA: f32 = 0.05;
 
-/// Entry point for the 渲染 线程
+/// 渲染线程入口点
 ///
-/// Takes 所有权 of the [`GraphRenderer`] (must be Send) and a shared 状态
-/// 通道 Loops: wait for packet → 构建 输入 → begin/execute/present.
-/// Exits when `shared.running` becomes `false`.
+/// 获取 [`GraphRenderer`]（必须实现 Send）的所有权和共享状态通道。
+/// 循环：等待 packet → 构建输入 → begin/execute/present。
+/// 当 `shared.running` 变为 `false` 时退出。
 pub fn render_thread_main(mut renderer: GraphRenderer, shared: Arc<RenderShared>) {
     let mut dirty_router = DirtyRouter::new();
     let settings = RenderSettings::default();
 
     log::info!("Render thread started");
 
-    // 帧 timing
+    // 帧计时
     let mut smoothed_fps = 0.0f32;
     let mut frame_count: u64 = 0;
 
     while shared.running.load(std::sync::atomic::Ordering::Relaxed) {
-        // Check PT reset request from main 线程
+        // 检查来自主线程的 PT 重置请求
         if shared.take_pt_reset() {
             renderer.request_pt_reset();
         }

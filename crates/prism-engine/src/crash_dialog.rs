@@ -1,18 +1,15 @@
-//! Native fatal-error 崩溃 对话框
+//! 原生致命错误崩溃对话框
 //!
-//! When the 渲染器 hits an unrecoverable 错误 设备 lost, 验证
-//! fatal, 交换链 cannot be recreated, ...) we want to 表面 it to the
-//! user once and stop, instead of spamming the 对数 every 帧 This 模块
-//! shows a **native modal dialog** with two actions:
+//! 当渲染器遇到不可恢复的错误（设备丢失、验证失败、
+//! 无法重建交换链等）时，我们想一次性向用户呈现错误信息并停止，
+//! 而不是每帧刷日志。此模块显示一个**原生模态对话框**，提供两个操作：
 //!
-//! - **Copy & Exit** (also copies the 完整 错误 text to the clipboard so the
-//!   user can paste it into a bug report)
-//! - **Exit**
+//! - **复制并退出**（同时将完整错误文本复制到剪贴板，方便用户粘贴到错误报告中）
+//! - **退出**
 //!
-//! Each platform uses its own native 对话框 API so we don't pull in a heavy
-//! cross-platform 对话框 crate:
+//! 每个平台使用其原生对话框 API，避免引入笨重的跨平台对话框 crate：
 //!
-//! | Platform | 对话框 | Clipboard |
+//! | 平台 | 对话框 | 剪贴板 |
 //! |----------|--------|-----------|
 //! | Windows | `MessageBoxW` (`MB_YESNO`) | `OpenClipboard` / `SetClipboardData` |
 //! | macOS | `osascript` (`display 对话框 | `pbcopy` |
@@ -20,7 +17,7 @@
 //! | Android | `AlertDialog` via JNI on the UI 线程 | (no 复制 text is in logcat) |
 //!
 //! The 对话框 blocks the calling 线程 (the winit event-loop / main 线程
-//! until the user confirms, which naturally "suspends" the 渲染 循环 After
+//! 直到用户确认，这自然"暂停"了渲染循环。
 //! confirmation the 调用者 tears 下 the 事件 循环
 //!
 //! ## Android

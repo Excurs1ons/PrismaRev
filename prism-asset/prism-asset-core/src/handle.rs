@@ -1,18 +1,17 @@
-//! Runtime-safe handle types.
+//! 运行时安全的句柄类型。
 //!
-//! `Handle<T>` is a generation-counted 索引 into a 运行时 槽 数组 It is
-//! the primary way 运行时 代码 references loaded assets. The generation guard
-//! prevents use-after-free bugs where a handle outlives its 资源
+//! `Handle<T>` 是一个代际计数的运行时槽数组索引。它是运行时代码引用已加载资源的主要方式。
+//! 代际守卫防止了句柄比其资源存活更久的释放后使用错误。
 //!
-//! The handle 空间 is split into two regions:
-//! - **Static** 索引 < `MAX_STATIC`): well-known / 回退 assets.
-//! - **Dynamic**: loaded at 运行时
+//! 句柄空间分为两个区域：
+//! - **静态**（索引 < `MAX_STATIC`）：众所周知/回退资源。
+//! - **动态**：在运行时加载。
 
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
 
-/// 最大 索引 value reserved for 静态 / well-known handles.
+/// 为静态/众所周知句柄保留的最大索引值。
 /// Everything above this is a dynamically-loaded 资源
 pub const MAX_STATIC_INDEX: u32 = 1024;
 

@@ -1,20 +1,18 @@
-//! Render-graph visualizer (egui, F2).
+//! 渲染图可视化工具（egui，F2 切换）。
 //!
-//! A read-only 窗口 that draws the live render-graph 管线 pass nodes in
-//! 执行 order, the graph-managed resources (attachments) they produce /
-//! consume, the edges between them via the well-known handles, per-pass live
-//! 状态 (formats, extents, 图像 counts), and the 激活 `RenderSettings`.
+//! 一个只读窗口，用于绘制实时的渲染图管线传递节点（按执行顺序排列）、
+//! 它们产生/消费的图管理资源（附件）、通过已知句柄连接的边、
+//! 每个传递的实时状态（格式、尺寸、图像计数）以及激活的 `RenderSettings`。
 //!
-//! Mirrors the 检查器 模式 a [`RenderGraphViz`] 结构体 runs Phase-1
-//! (inside `EguiCpu::run_ui`) in `App::render_one_frame`. Because
-//! `EguiCpu::run_ui` overwrites its cached pending 帧 only one `run_ui`
-//! 调用 may run per 帧 - when both F1 检查器 and F2 (viz) are 打开
-//! `App::render_one_frame` routes both UIs through a single `run_ui` 闭包
-//! (see `app.rs`).
+//! 遵循检查器模式：在 `App::render_one_frame` 中，[`RenderGraphViz`] 结构体
+//! 在 Phase-1（`EguiCpu::run_ui` 内部）运行。由于 `EguiCpu::run_ui` 会覆盖其
+//! 缓存的待处理帧，每帧只能运行一个 `run_ui` 调用——
+//! 当 F1 检查器和 F2（可视化工具）同时打开时，
+//! `App::render_one_frame` 将两个 UI 通过单个 `run_ui` 闭包路由（见 `app.rs`）。
 //!
-//! The viz never borrows `GraphRenderer` inside the egui 闭包 Instead,
-//! [`refresh_from`] snapshots the 图 + per-pass live 状态 into owned plain
-//! data *before* `run_ui`, so the 闭包 only touches `&self`.
+//! 可视化工具绝不借用 egui 闭包内的 `GraphRenderer`。相反，
+//! [`refresh_from`] 在 `run_ui` *之前*将图结构 + 每个传递的实时状态快照为
+//! 自有纯数据，因此闭包仅访问 `&self`。
 //!
 //! 检查器 crate::Inspector
 

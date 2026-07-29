@@ -1,28 +1,28 @@
-//! [`Engine`] — the core simulation engine.
+//! [`Engine`] — 核心模拟引擎。
 //!
-//! Owns the ECS 世界 and runs game‑logic phases (`fixed_update`,
-//! 更新 `late_update`). **No** 渲染 资源 分辨率 or
-//! dirty‑routing lives here — those belong to [`RenderContext`].
+//! 拥有 ECS 世界并运行游戏逻辑阶段（`fixed_update`、
+//! `update`、`late_update`）。**不**包含渲染、资源解析
+//! 或脏数据路由——那些属于 [`RenderContext`]。
 //!
-//! ## Lifecycle phases 调用 in order)
+//! ## 生命周期阶段（按顺序调用）
 //!
 //! ```text
-//! 空 / new
-//!     ├─ pre_init(config)         ─── PreInit
-//!     ├─ init_core(editor)        ─── register Inspect fns + hierarchy
-//!     ├─ init_config()            ─── (reserved)
-//! ├─ init_resources(pak) ─── 加载 .pak → ResourceManager
-//! ├─ init_scene() ─── 加载 scene → 世界
-//!     └─ runtime_initialize()    ─── final hook
+//! empty / new
+//!     ├─ pre_init(config)            ─── PreInit
+//!     ├─ init_core(editor)           ─── 注册 Inspect 函数 + 层次结构
+//!     ├─ init_config()               ─── （预留）
+//!     ├─ init_resources(pak)         ─── 加载 .pak → ResourceManager
+//!     ├─ init_scene()                ─── 加载场景 → 世界
+//!     └─ runtime_initialize()        ─── 最终钩子
 //!
-//! [per 帧
-//! fixed_update → 更新 → late_update (called N times per 渲染 帧
+//! [每帧]
+//! fixed_update → update → late_update（每渲染帧调用 N 次）
 //!
 //!   pre_shutdown → post_shutdown
 //! ```
 //!
-//! The application drives the 渲染 管线 separately via
-//! [`FramePacket`]s extracted after each sim tick.
+//! 应用程序通过每次模拟 tick 后提取的 [`FramePacket`]
+//! 分别驱动渲染管线。
 
 use prism_ecs::World;
 
@@ -33,10 +33,10 @@ use crate::input::InputManager;
 // Engine
 // ===========================================================================
 
-/// Simulation engine — owns the ECS 世界 and exposes game‑logic phases.
+/// 模拟引擎——拥有 ECS 世界并暴露游戏逻辑阶段。
 ///
-/// All 渲染 concerns 资源 upload, draw‑list building, GPU submission)
-/// are handled by the application's `RenderContext`.
+/// 所有渲染相关的关注点（资源上传、绘制列表构建、GPU 提交）
+/// 由应用程序的 `RenderContext` 处理。
 pub struct Engine {
     world: World,
     current_scene_name: Option<String>,
@@ -137,7 +137,7 @@ impl Engine {
     /// Uploads the procedural cube 网格 and a 默认 材质 to the
     /// 渲染器 then spawns an 实体 with `MeshRef`+`MaterialRef` (the
     /// existing extraction path) plus `MeshRenderer` (the future authoring
-    /// path). Called from [`LegacyApp::on_resumed`] after the 渲染器 is
+    /// 路径）。从 [`LegacyApp::on_resumed`] 在渲染器创建后调用。
     /// created.
     pub fn spawn_demo_cube(
         world: &mut World,

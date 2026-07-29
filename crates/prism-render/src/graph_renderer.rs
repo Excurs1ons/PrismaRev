@@ -1,10 +1,9 @@
-//! RenderGraph-based 渲染器 driver.
+//! 基于 RenderGraph 的渲染器驱动程序。
 //!
-//! [`GraphRenderer`] replaces the legacy 渲染器 for the running app.
-//! It owns the Vulkan context, 交换链 命令 池 + per-frame 命令
-//! buffers, 帧 UBOs, IBL resources, and the three scene managers 网格
-//! 纹理 材质 It builds a [`RenderGraph`] with a [`ShadowMapPass`]
-//! and a [`ScenePass`], executes it each 帧 and presents to the 交换链
+//! [`GraphRenderer`] 取代了旧版渲染器。它拥有 Vulkan 上下文、
+//! 交换链、命令池 + 每帧命令缓冲区、帧 UBO、IBL 资源以及三个场景管理器
+//!（网格、纹理、材质）。它构建包含 [`ShadowMapPass`] 和 [`ScenePass`]
+//! 的 [`RenderGraph`]，每帧执行并呈现到交换链。
 
 use std::sync::Arc;
 

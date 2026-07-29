@@ -1,9 +1,8 @@
-//! ECS-driven 渲染 系统 for the RenderGraph path.
+//! 用于 RenderGraph 路径的 ECS 驱动渲染系统
 //!
-//! Defines the [`SceneChanges`] 快照 结构体 相机 lights, derived
-//! matrices) and the main [`render_system`] 函数 that queries the ECS 世界
-//! each 帧 builds a flat 绘制 列表 and submits it to
-//! [`GraphRenderer::render`].
+//! 定义了 [`SceneChanges`] 快照结构体（相机、光源、派生矩阵）
+//! 以及主 [`render_system`] 函数，它每帧查询 ECS 世界，
+//! 构建平面绘制列表并提交给 [`GraphRenderer::render`]。
 
 use glam::{self, Mat4, Vec3, Vec4};
 
@@ -18,10 +17,9 @@ use crate::scene;
 use crate::scene::components as scene_comp;
 use crate::scene::components::Camera;
 
-/// Pre-scale factor that replaces the old GPU-side `exposure / PI` unit
-/// conversion. Lux (or candela) is multiplied by this on the CPU so the 着色器
-/// receives effective radiance directly. `exposure` then becomes a pure
-/// brightness multiplier applied to the final composed 高动态范围 颜色
+/// 预缩放因子，取代旧的 GPU 端 `exposure / PI` 单位转换。
+/// 勒克斯（或坎德拉）在 CPU 上乘以此因子，使着色器直接接收有效辐射度。
+/// `exposure` 随后成为应用于最终合成 HDR 颜色的纯亮度乘数。
 const LUX_TO_RADIANCE_SCALE: f32 = 1.0 / (10_000.0 * std::f32::consts::PI);
 
 // ---------------------------------------------------------------------------
@@ -239,7 +237,7 @@ const CLEAR_COLOR: Vec4 = Vec4::new(0.5, 0.5, 0.5, 1.0);
 ///
 /// **Each 调用 is stateless with respect to the ECS world.** The simulation
 /// 线程 owns [`World`](prism_ecs::World) and produces the packet; this
-/// 函数 reads only the packet and the 渲染器
+/// 函数仅读取数据包和渲染器
 ///
 /// Returns `Err` only when [`GraphRenderer::render`] fails.
 pub fn render_system(

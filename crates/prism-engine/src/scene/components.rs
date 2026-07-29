@@ -1,15 +1,15 @@
-//! ECS components for the modern scene 系统
+//! 现代场景系统的 ECS 组件
 //!
-//! | Category  | Components |
+//! | 类别       | 组件 |
 //! |-----------|------------|
-//! | Hierarchy | `Parent`, `Children` |
-//! | 变换 | `LocalTransform`, `WorldTransform`, `TransformDirty` |
-//! | 渲染 | `MeshRef`, `MaterialRef`, 激活 |
-//! | Lighting  | `DirectionalLight`, `PointLight`, `SpotLight` |
-//! | 相机 | 相机 `FlyCameraController` |
-//! | Skybox    | `Skybox` |
-//! | Scene     | `SceneMember` |
-//! | Identity  | `Name` |
+//! | 层次结构  | `Parent`, `Children` |
+//! | 变换     | `LocalTransform`, `WorldTransform`, `TransformDirty` |
+//! | 渲染     | `MeshRef`, `MaterialRef`, `Active` |
+//! | 光源     | `DirectionalLight`, `PointLight`, `SpotLight` |
+//! | 相机     | `Camera`, `FlyCameraController` |
+//! | 天空盒   | `Skybox` |
+//! | 场景     | `SceneMember` |
+//! | 标识     | `Name` |
 
 use prism_ecs::Entity;
 use prism_render::managers::MeshHandle;
@@ -18,12 +18,11 @@ use prism_render::managers::MeshHandle;
 // SceneAssetId
 // ---------------------------------------------------------------------------
 
-/// A 64-bit 资源 identifier that mirrors [`prism_asset_core::AssetId`].
+/// 一个 64 位资源标识符，镜像 [`prism_asset_core::AssetId`]。
 ///
-/// This is a 局部 复制 so the scene 模块 does not depend on the
-/// independent `prism-asset-core` 工作区 It will be replaced by the real
-/// `AssetId` once the .pak 运行时 管线 (DESIGN.md §10.11 G1–G3) connects
-/// the two workspaces.
+/// 这是本地副本，以便场景模块不依赖于独立的 `prism-asset-core` 工作区。
+/// 一旦 .pak 运行时管线（DESIGN.md §10.11 G1–G3）连接两个工作区，
+/// 它将被真正的 `AssetId` 替换。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SceneAssetId(pub u64);
 
@@ -257,7 +256,7 @@ impl Default for SpotLight {
 /// and the entity's [`WorldTransform`].
 ///
 /// 宽高比 is a 运行时 cache written by the app on 调整大小 it is exposed in
-/// the 检查器 as read-mostly. 启用 gates whether the 渲染器 picks
+/// 检查器视为只读。启用标志控制渲染器是否拾取
 /// this 相机
 #[derive(Debug, Clone)]
 pub struct Camera {
@@ -355,7 +354,7 @@ pub struct Skybox {
     /// 资源 loading by `SceneAssetId`.
     pub hdr_path: String,
     /// When `false` the skybox 实体 is 禁用 no IBL from the 高动态范围 and
-    /// no sky 渲染 (the 渲染器 falls 后 to its procedural
+    /// 无天空盒渲染（渲染器回退到其程序化
     /// environment or a 固体 清空 颜色
     pub enabled: bool,
 }

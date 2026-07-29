@@ -2,17 +2,17 @@ use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 // ---------------------------------------------------------------------------
-// 全局 原子 计数器 for AssetId::generate()
+// 用于 AssetId::generate() 的全局原子计数器
 // ---------------------------------------------------------------------------
 
-/// Process-global serial 计数器 used by [`AssetId::generate`].
+/// [`AssetId::generate`] 使用的进程全局序列计数器。
 static NEXT_SERIAL: AtomicU64 = AtomicU64::new(1);
 
 // ---------------------------------------------------------------------------
-// AssetId – globally 唯一 u64-based
+// AssetId – 全局唯一的基于 u64 的标识符
 // ---------------------------------------------------------------------------
 
-/// A globally 唯一 64-bit 资源 identifier.
+/// 一个全局唯一的 64 位资源标识符。
 ///
 /// The high 32 bits 编码 a **generation** (monotonically increasing 纪元
 /// the low 32 bits 编码 a **serial** within that generation.

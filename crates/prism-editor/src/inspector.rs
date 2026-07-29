@@ -1,16 +1,13 @@
-//! Entity-tree 检查器 面板
+//! 实体树检查器面板
 //!
-//! Displays the scene as a **nested tree** (roots -> children via the
-//! `Parent`/`Children` components) and an auto-recognised 分量 编辑器 for
-//! the selected 实体 No 分量 类型 is hardcoded here: the 编辑器 iterates
-//! the [`ComponentRegistry`](crate::ComponentRegistry) entries the host
-//! registered and shows whichever ones the selected 实体 actually has.
+//! 将场景显示为**嵌套树**（根节点 → 子节点，通过 `Parent`/`Children` 组件），
+//! 并为所选实体提供自动识别的组件编辑器。
+//! 此处没有硬编码任何组件类型：编辑器遍历宿主注册的 [`ComponentRegistry`](crate::ComponentRegistry) 条目，
+//! 并显示所选实体实际拥有的组件。
 //!
-//! The 树 traversal itself is also type-erased: because `prism-editor` cannot
-//! name the `Parent` / `Children` / `Name` 分量 types (they live in
-//! `prism-engine`), the host supplies a [`Hierarchy`] 实现 that
-//! answers the structural queries. This keeps `prism-editor` free of any
-//! `prism-engine` dependency.
+//! 树遍历本身也是类型擦除的：因为 `prism-editor` 无法命名 `Parent`/`Children`/`Name` 组件类型
+//!（它们位于 `prism-engine` 中），所以宿主提供一个 [`Hierarchy`] 实现来回答结构查询。
+//! 这使 `prism-editor` 免于依赖 `prism-engine`。
 
 use egui::{Context, Ui};
 use prism_ecs::{Entity, World};
@@ -22,12 +19,11 @@ use crate::InspectCtx;
 // Hierarchy 抽象 (structural queries the host must implement)
 // ---------------------------------------------------------------------------
 
-/// Structural scene queries the 检查器 needs to 绘制 the 实体 树
+/// 检查器绘制实体树所需的结构化场景查询。
 ///
-/// Implemented by the host (`prism-engine`) so `prism-editor` can traverse the
-/// hierarchy and 渲染 实体 names without naming the `Parent` / `Children` /
-/// `Name` 分量 types directly. This is the seam that keeps the dependency
-/// arrow one-way: `prism-engine -> prism-editor`, never the 反转
+/// 由宿主（`prism-engine`）实现，以便 `prism-editor` 可以遍历层次结构
+/// 并渲染实体名称，而无需直接命名 `Parent`/`Children`/`Name` 组件类型。
+/// 这是保持依赖方向单一（`prism-engine → prism-editor`，绝不反向）的接口。
 pub trait Hierarchy {
     /// Root entities of the scene (entities with no `Parent`), in a 稳定
     /// display order (e.g. by 实体 id).

@@ -1,13 +1,13 @@
-//! 向前 + post-process passes for the main scene 渲染
+//! 主场景渲染的前向+后处理通道
 //!
-//! * [`ScenePass`] - PBR 向前 pass writing the 交换链 颜色 (post-tonemap)
-//! + a view-space 法线 MRT consumed by [`crate::gtao::GtaoPass`].
-//! * [`ShadowMapPass`] - depth-only shadow 映射表 for directional 光源
-//! * [`SkyboxPass`] - env cubemap background (drawn by ScenePass).
+//! * [`ScenePass`] - PBR 前向通道，写入交换链颜色（色调映射后）
+//!   + 视图空间法线 MRT，由 [`crate::gtao::GtaoPass`] 消费。
+//! * [`ShadowMapPass`] - 方向光的纯深度阴影映射
+//! * [`SkyboxPass`] - 环境立方体贴图背景（由 ScenePass 绘制）。
 //!
-//! Dead passes removed: GBuffer, SHARC, RayQuery, Lighting, Post (stub).
-//! Tonemapping currently runs inline in `scene_frag.slang`; a real PostPass
-//! will be reintroduced when the HDR-intermediate-target refactor lands.
+//! 已移除的死亡通道：GBuffer、SHARC、RayQuery、Lighting、Post（存根）。
+//! 色调映射当前在 `scene_frag.slang` 中内联运行；
+//! 当 HDR 中间目标重构落地时，将重新引入真正的 PostPass。
 
 use anyhow::Context as _;
 use anyhow::Result;
@@ -26,18 +26,15 @@ use crate::context::VulkanContext;
 use crate::shader;
 use crate::shader_bindings;
 
-/// Rasterized shadow 映射表 — the depth-only 回退 for the hybrid adaptive
-/// shadow 系统 (`docs/DESIGN.md` §2.3).
+/// 光栅化阴影映射——混合自适应阴影系统的纯深度后备方案（`docs/DESIGN.md` §2.3）。
 ///
-/// When `VK_KHR_ray_query` is unavailable (or RT is 禁用 the 渲染器
-/// selects this pass instead of [`RayQueryPass`]. It renders the scene's
-/// 深度 from the light's point of 视图 into a 深度 纹理 the lighting
-/// pass later samples that 纹理 (with a 比较 采样器 to decide lit
-/// vs shadowed.
+/// 当 `VK_KHR_ray_query` 不可用（或 RT 被禁用）时，渲染器选择此通道
+/// 而非 [`RayQueryPass`]。它从光源视角将场景深度渲染到深度纹理中，
+/// 光照通道稍后对该纹理进行采样（使用比较采样器来判断被照亮还是被遮挡）。
 ///
-/// The 管线 is depth-only (`color_attachment_count = 0`), uses
-/// front-face 剔除 + slope/constant 深度 bias to reduce shadow acne and
-/// peter-panning, and feeds the light-space 矩阵 via 推送 constants (no UBO).
+/// 该管线为纯深度管线（`color_attachment_count = 0`），
+/// 使用正面剔除 + 坡度/常量深度偏移以减少阴影痤疮和彼得潘现象，
+/// 并通过推送常量（无 UBO）传递光源空间矩阵。
 pub struct ShadowMapPass {
     /// Shadow 映射表 深度 附件 handle (created in `setup`).
     pub shadow_map: ResourceHandle,

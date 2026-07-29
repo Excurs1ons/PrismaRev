@@ -1,21 +1,19 @@
-//! Graphics 管线 creation.
+//! 图形管线创建。
 //!
-//! Builds a [`GraphicsPipeline`] for the 标准 PrismaRev forward-rendering
-//! path: 顶点 输入 (position + 法线 + 颜色 推送 constants for 模型
-//! 变换 a single 描述符 集合 for the 帧 UBO, 深度 test +
-//! back-face 剔除 no multisampling, one 颜色 附件 with Alpha
-//! 混合
+//! 为标准 PrismaRev 前向渲染路径构建 [`GraphicsPipeline`]：
+//! 顶点输入（位置+法线+颜色）、模型变换的推送常量、
+//! 帧 UBO 的单个描述符集、深度测试+背面剔除、
+//! 无多重采样、一个带 Alpha 混合的颜色附件。
 //!
-//! 视口 and scissor are 动力学 so the 管线 does not need to be
-//! recreated on 窗口 调整大小
+//! 视口和裁剪矩形是动态的，因此窗口调整大小时无需重建管线。
 
 use anyhow::Context as _;
 use ash::vk;
 
-/// Parameters for creating a [`GraphicsPipeline`].
+/// 创建 [`GraphicsPipeline`] 的参数。
 ///
-/// Groups the previously-too many individual arguments into a single 结构体
-/// so callers don't need to pass 8 positional parameters.
+/// 将之前过多的独立参数组合为单个结构体，
+/// 使调用者无需传递 8 个位置参数。
 ///
 /// The optional raster/depth fields (`cull_mode`, `depth_bias_*`,
 /// `depth_write_enable`, `color_attachment_count`) 默认 to the legacy

@@ -1,20 +1,18 @@
 //! # prism-asset-runtime
 //!
-//! Lightweight 运行时 资源 loader that depends only on `prism-asset-core` and
-//! `prism-asset-package`.
+//! 轻量级运行时资源加载器，仅依赖 `prism-asset-core` 和 `prism-asset-package`。
 //!
-//! This crate is the only consumer-facing API for game 代码 It provides
-//! a [`ResourceManager`] that loads `.pak` packages and resolves [`Handle<T>`]
-//! references from [`AssetId`] queries.
+//! 此 crate 是游戏代码唯一面向消费者的 API。它提供 [`ResourceManager`]，
+//! 用于加载 `.pak` 包并通过 [`AssetId`] 查询解析 [`Handle<T>`] 引用。
 //!
-//! ## Design constraints
+//! ## 设计约束
 //!
-//! - No 源 file paths at 运行时 — all 访问 is via [`AssetId`].
-//! - No dependency on any 编辑器 crate (`prism-asset-db`, `prism-asset-importer`, ...).
-//! - 同步 + 异步 loading.
-//! - 内存 budget 控制 with LRU eviction (Phase 3).
-//! - 热 reload support via file watcher (Phase 3, 特性 `hot-reload`).
-//! - Streaming reads for large assets (Phase 3, 特性 `streaming`).
+//! - 运行时无源文件路径——所有访问均通过 [`AssetId`]。
+//! - 不依赖任何编辑器 crate（`prism-asset-db`、`prism-asset-importer` 等）。
+//! - 支持同步 + 异步加载。
+//! - 通过 LRU 淘汰控制内存预算（阶段 3）。
+//! - 通过文件监视器支持热重载（阶段 3，特性 `hot-reload`）。
+//! - 大资源流式读取（阶段 3，特性 `streaming`）。
 
 use prism_asset_core::{AnyHandle, AssetId, AssetType, Handle};
 use prism_asset_package::PackageReader;

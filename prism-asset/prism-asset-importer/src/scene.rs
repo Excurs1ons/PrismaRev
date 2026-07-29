@@ -1,12 +1,10 @@
-//! Scene JSON 格式 — the authoritative 源 格式 for the scene 系统
+//! Scene JSON 格式——场景系统的权威源格式。
 //!
-//! A `.scene.json` file is a human-readable, diffable, version-controllable
-//! representation of a scene's 实体 hierarchy and 分量 data. The
-//! [`SceneCooker`] converts this into a 二进制 [`CookedScene`] for 运行时
-//! consumption.
+//! `.scene.json` 文件是场景的实体层次结构和组件数据的人类可读、
+//! 可差异比较、可版本控制的表示形式。
+//! [`SceneCooker`] 将其转换为二进制 [`CookedScene`] 供运行时使用。
 //!
-//! See `docs/plans/2026-07-25-modern-scene-system-design.md` §3 for the 完整
-//! schema 规格
+//! 完整的模式规格参见 `docs/plans/2026-07-25-modern-scene-system-design.md` §3。
 
 use serde::{Deserialize, Serialize};
 

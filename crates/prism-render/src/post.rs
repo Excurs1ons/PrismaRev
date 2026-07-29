@@ -1,23 +1,19 @@
-//! Post-processing pass - 色调映射 高动态范围 scene 颜色 -> sRGB 交换链
+//! 后处理通道——HDR 场景色调映射 → sRGB 交换链
 //!
-//! Fullscreen-triangle 片元 pass that samples the ScenePass's 高动态范围
-//! intermediate 颜色 附件 applies Reinhard or ACES tonemapping (per
-//! `tonemap_mode`), and writes the 结果 to the 交换链 图像 Replaces the
-//! inline 色调映射 that used to live in `scene_frag.slang` so the scene 输出
-//! stays 线性 高动态范围 (consumable by future post effects: 泛光 时域抗锯齿 etc.).
+//! 全屏三角形片元通道，对 ScenePass 的 HDR 中间颜色附件进行采样，
+//! 应用 Reinhard 或 ACES 色调映射（根据 `tonemap_mode`），
+//! 并将结果写入交换链图像。取代了之前位于 `scene_frag.slang` 中的内联色调映射，
+//! 使场景输出保持线性 HDR（可被未来的后处理效果使用：泛光、时域抗锯齿等）。
 //!
-//! ## Resources
-//! - One 描述符 集合 绑定 the 高动态范围 颜色 as a combined 图像 采样器
-//! - Owns its 渲染 pass + 管线 (1 颜色 附件 = 交换链 格式
-//! no 深度
-//! - The 高动态范围 输入 视图 is updated every 帧 via `set_input` (the ScenePass
-//! rotates one 高动态范围 图像 per 交换链 槽 matching the 帧缓冲 it
-//!   just wrote).
+//! ## 资源
+//! - 一个描述符集，将 HDR 颜色绑定为组合图像采样器
+//! - 拥有自己的渲染通道+管线（1 个颜色附件 = 交换链格式，无深度）
+//! - HDR 输入视图每帧通过 `set_input` 更新（ScenePass 每交换链槽轮换一个 HDR 图像，
+//!   匹配其刚写入的帧缓冲）。
 //!
-//! ## 布局 transitions recorded in 执行
-//! 1. 屏障 高动态范围 `COLOR_ATTACHMENT_OPTIMAL -> SHADER_READ_ONLY_OPTIMAL`
-//! 2. 屏障 交换链 `UNDEFINED -> COLOR_ATTACHMENT_OPTIMAL` (via the
-//! 渲染 pass `initial_layout`, which the GPU transitions as part of the
+//! ## `execute` 中记录的布局转换
+//! 1. 屏障：HDR `COLOR_ATTACHMENT_OPTIMAL → SHADER_READ_ONLY_OPTIMAL`
+//! 2. 屏障：交换链 `UNDEFINED → COLOR_ATTACHMENT_OPTIMAL`（通过渲染通道的
 //! 加载 op).
 //! 3. 开始 渲染 pass (writes 交换链 绘制 fullscreen triangle, 结束
 //! 4. The 调用者 (GraphRenderer::render) barriers 交换链

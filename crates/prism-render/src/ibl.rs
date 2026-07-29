@@ -1,16 +1,14 @@
-//! Image-based lighting resources for the PBR 中键 cube.
+//! 基于图像的光照（IBL）资源，用于 PBR 渲染。
 //!
-//! The user's equirectangular 高动态范围 environment 映射表 (or a procedural 回退
-//! is converted into a floating-point **cubemap** (6 faces + 完整 mip 链 on
-//! the CPU at 加载 时间 The PBR 着色器 samples the cubemap by reflection
-//! direction, which has no pole singularity and no seam — so reflections stay
-//! 稳定 as the 视图 or 对象 rotates (the old equirect sampling flickered
-//! 近 the poles). This is "real" IBL from the user's 资源
+//! 用户的等距柱状投影 HDR 环境贴图（或程序化回退）在加载时被转换为
+//! 浮点**立方体贴图**（6 个面 + 完整 mip 链）。PBR 着色器通过反射方向
+//! 对立方体贴图进行采样，这没有极点奇异性也无接缝——因此反射在视图或对象
+//! 旋转时保持稳定（旧的等距柱状采样在极点附近闪烁）。这是来自用户资源的"真实"IBL。
 //!
-//! Additionally, three real IBL resources are computed from the equirect:
-//! - Diffuse irradiance cubemap (cosine-weighted hemisphere convolution)
-//! - Prefiltered environment 映射表 (GGX importance sampling, per-mip)
-//! - BRDF integration LUT (2D, split-sum)
+//! 此外，从等距柱状贴图计算出三个真实 IBL 资源：
+//! - 漫反射辐照度立方体贴图（余弦加权半球卷积）
+//! - 预滤波环境贴图（逐 mip 层级的 GGX 重要性采样）
+//! - BRDF 积分 LUT（2D，分割求和）
 
 use anyhow::Context as _;
 use ash::vk;

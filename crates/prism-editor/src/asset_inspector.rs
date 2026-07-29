@@ -1,9 +1,9 @@
-//! # AssetInspector — 外部 编辑器 UI for `AssetData` types
+//! # AssetInspector——`AssetData` 类型的外部编辑器 UI
 //!
-//! Analogous to Unity's `AssetInspector` / `[CustomEditor]`, each concrete
-//! 资源 类型 gets a 分发 函数 registered via `inventory`.
-//! The 编辑器 dispatches from the 类型 tag to the appropriate 检查器
-//! without the 运行时 crate knowing anything about egui.
+//! 类似于 Unity 的 `AssetInspector` / `[CustomEditor]`。
+//! 每个具体的资源类型通过 `inventory` 注册一个分派函数。
+//! 编辑器从类型标记分派到相应的检查器，
+//! 运行时 crate 无需了解 egui 的任何细节。
 
 use prism_asset_core::{AssetData, LoadedAsset};
 use prism_asset_types::{CubeDef, MaterialDef, TextureDef};
@@ -11,21 +11,21 @@ use prism_asset_types::{CubeDef, MaterialDef, TextureDef};
 use egui::Ui;
 
 // ---------------------------------------------------------------------------
-// Type-erased 分发 entry (fn 指针 so it's const-init + Send+Sync)
+// 类型擦除的分派入口（fn 指针，因此是 const-init + Send+Sync）
 // ---------------------------------------------------------------------------
 
-/// A registered 检查器 that erases the 类型 参数
+/// 一个已注册的检查器，擦除了类型参数。
 pub struct AssetInspectorEntry {
-    /// The `typetag` name (e.g. 材质
+    /// `typetag` 名称（例如 "材质"）
     pub type_name: &'static str,
-    /// Erased 分发 receives `&mut dyn AssetData` and downcasts.
+    /// 擦除的分派函数，接收 `&mut dyn AssetData` 并向下转型。
     pub inspect_fn: fn(&mut dyn AssetData, &mut Ui) -> bool,
 }
 
-// `inventory` 集合 of all registered inspectors.
+// `inventory` 收集所有已注册的检查器。
 inventory::collect!(AssetInspectorEntry);
 
-/// Helper macro to register an 检查器 函数
+/// 注册检查器函数的辅助宏
 #[macro_export]
 macro_rules! register_asset_inspector {
     ($type_name:literal, $ty:ty, $inspect_fn:path) => {

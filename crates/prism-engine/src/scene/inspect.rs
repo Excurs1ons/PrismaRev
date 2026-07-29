@@ -1,15 +1,14 @@
-//! `Inspect` implementations for scene components.
+//! 场景组件的 `Inspect` 实现。
 //!
-//! Each `impl Inspect` lives 下一个 to the 分量 definitions (in the same
-//! 模块 树 and draws the egui 编辑器 for that 分量 The
-//! [`crate::App`] registers every 类型 here into the editor's
-//! `ComponentRegistry` at startup; the 检查器 then auto-discovers which
-//! components an 实体 has and runs the matching 编辑器 - with 零
-//! component-type hardcoding in the 检查器 itself.
+//! 每个 `impl Inspect` 位于组件定义旁边（在同一模块树中），
+//! 并为该组件绘制 egui 编辑器。
+//! [`crate::App`] 在启动时将这里的每个类型注册到编辑器的
+//! `ComponentRegistry` 中；然后检查器自动发现实体拥有哪些组件
+//! 并运行匹配的编辑器——检查器本身对组件类型零硬编码。
 //!
-//! Read-only components (`WorldTransform`, `Parent`, `Children`, `SceneMember`,
-//! `MeshRef`, `MaterialRef`) implement `Inspect` with a non-mutating display so
-//! they show 上 in the 编辑器 for debugging but can't be edited from there.
+//! 只读组件（`WorldTransform`、`Parent`、`Children`、`SceneMember`、
+//! `MeshRef`、`MaterialRef`）以非可变显示实现 `Inspect`，
+//! 因此在编辑器中显示用于调试，但不能从那里编辑。
 
 use std::any::TypeId;
 

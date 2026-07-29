@@ -1,9 +1,8 @@
-//! PrismaRev engine 库 渲染 systems, ECS components, 资源 分辨率
-//! scene management, and 编辑器 integration.
+//! PrismaRev 引擎库：渲染系统、ECS 组件、资源解析、
+//! 场景管理和编辑器集成。
 //!
-//! This is a **pure 逻辑 crate** — it has no window-system dependency. The
-//! 事件 循环 窗口 creation, and platform-specific 输入 分发 live in
-//! `src/app.rs` (the 二进制 crate).
+//! 这是一个**纯逻辑 crate**——不依赖任何窗口系统。
+//! 事件循环、窗口创建和平台相关的输入分发位于 `src/app.rs`（二进制 crate）中。
 
 pub mod app;
 pub mod asset;

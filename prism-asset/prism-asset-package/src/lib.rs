@@ -1,18 +1,18 @@
 //! # prism-asset-package
 //!
-//! The `.pak` 二进制 archive 格式 for the PrismaRev 资源 管线
+//! PrismaRev 资源管道的 `.pak` 二进制归档格式
 //!
-//! ## 格式 overview
+//! ## 格式概览
 //!
 //! ```text
 //! ┌─────────────────────────────┐
-//! │ PackageHeader (32 字节 │
+//! │ PackageHeader（32 字节）       │
 //! ├─────────────────────────────┤
-//! │ 资源 Registry [n] │ ← 连续 `RuntimeAssetRecord` 数组
+//! │ 资源注册表 [n]             │ ← 连续的 `RuntimeAssetRecord` 数组
 //! ├─────────────────────────────┤
-//! │ Dependency 数组 [m] │ ← flat 数组 of AssetId (u64)
+//! │ 依赖数组 [m]               │ ← AssetId (u64) 的平面数组
 //! ├─────────────────────────────┤
-//! │ Data Chunks │ ← 资源 payloads, optionally zstd-compressed
+//! │ 数据块                      │ ← 资源有效载荷，可选 zstd 压缩
 //! └─────────────────────────────┘
 //! ```
 //!

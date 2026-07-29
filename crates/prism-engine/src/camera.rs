@@ -1,15 +1,14 @@
-//! Legacy orbit 相机
+//! 旧版轨道相机
 //!
-//! Retained for 引用 / future re-integration but **not** wired into the
-//! ECS or the 渲染器 The 激活 相机 path is the data-component 流程 in
-//! [`crate::scene::systems::camera`] 相机 + `FlyCameraController` +
-//! `WorldTransform`).
+//! 保留供参考/未来重新集成，但**不**接入 ECS 或渲染器。
+//! 当前激活的相机路径是 [`crate::scene::systems::camera`] 中的数据组件流程
+//!（`Camera` + `FlyCameraController` + `WorldTransform`）。
 //!
-//! `OrbitCamera` is a self-contained 结构体 with its own view/projection math
-//! (spherical coordinates around a 目标 It is kept as a standalone 类型 so
-//! the math can be reused if an orbit controller 分量 is added later.
+//! `OrbitCamera` 是一个自包含的结构体，拥有自己的视图/投影数学
+//!（围绕目标点的球面坐标）。它作为独立类型保留，
+//! 以便将来添加轨道控制器组件时可以复用其数学计算。
 
-/// Orbit 相机 spherical coordinates around a 目标 point.
+/// 围绕目标点的球面坐标轨道相机。
 pub struct OrbitCamera {
     pub target: [f32; 3],
     pub distance: f32,

@@ -1,18 +1,18 @@
-//! PrismaRev platform application 层
+//! PrismaRev 平台应用层
 //!
-//! Owns the 事件 循环 窗口 and 帧 orchestration — the glue between
-//! platform 输入 (winit), the engine (ECS / 逻辑 and the 渲染器 Vulkan
+//! 拥有事件循环、窗口和帧编排——连接平台输入（winit）、
+//! 引擎（ECS/逻辑）和渲染器（Vulkan）的胶水层。
 //!
-//! ## Architecture (multi-threaded)
+//! ## 架构（多线程）
 //!
 //! ```text
-//! Main 线程 渲染 线程
+//! 主线程                       渲染线程
 //!   ────────────                        ────────────
 //! about_to_wait: 循环
 //!     engine.fixed_update × N              wait_for_packet()
 //!     engine.update                        begin_frame()
-//! engine.late_update 执行
-//!     audio.update                         present()    ← vsync here
+//!     engine.late_update                   execute()
+//!     audio.update                         present()    ← 垂直同步在此
 //!     extract_frame_packet ──packet──►   │
 //!     egui_cpu.run_ui ──egui_frame──►    │
 //!     apply_platform_output

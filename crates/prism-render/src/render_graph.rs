@@ -1,21 +1,17 @@
-//! Modular render-pass 图 for PrismaRev.
+//! PrismaRev 的模块化渲染通道图。
 //!
-//! Replaces the legacy monolithic 渲染器 Each 渲染 阶段 (GBuffer,
-//! RayQuery, SHARC 全局光照 Lighting, Post) is a [`RenderPassNode`] that declares
-//! its inputs/outputs and an 执行 方法 Passes are registered into a
-//! [`RenderGraph`] which manages transient 资源 分配 and 执行
-//! order.
+//! 取代旧版整体式渲染器。每个渲染阶段（GBuffer、RayQuery、SHARC GI、Lighting、Post）
+//! 是一个 [`RenderPassNode`]，声明其输入/输出和一个执行方法。
+//! 通道注册到 [`RenderGraph`] 中，该图管理临时资源分配和执行顺序。
 //!
-//! ## Design
+//! ## 设计
 //!
-//! - **Passes are trait objects** — can be added/removed at 运行时 特性
-//! toggles: RT on/off, 全局光照 众数 switching).
-//! - **Resource handles are typed IDs** — the 图 owns the actual Vulkan
-//! resources; passes 引用 them by handle, not by raw `vk::Image`.
-//! - **Transient attachments** use `LAZILY_ALLOCATED` 内存 for TBDR
-//! 效率 (see `transient.rs`).
-//! - **Subpass fusion** — passes that 读取 each other's GBuffer can be fused
-//! into a single renderpass to avoid tile 内存 writeback.
+//! - **通道是 trait 对象**——可在运行时添加/移除（特性开关：RT 开/关、GI 模式切换）。
+//! - **资源句柄是类型化 ID**——图拥有实际的 Vulkan 资源；通道通过句柄引用它们，
+//!   而非原始 `vk::Image`。
+//! - **临时附件**使用 `LAZILY_ALLOCATED` 内存以实现 TBDR 效率（参见 `transient.rs`）。
+//! - **子通道融合**——读取彼此 GBuffer 的通道可以融合到单个渲染通道中，
+//!   以避免瓦片内存回写。
 
 use std::collections::HashMap;
 use std::time::Instant;

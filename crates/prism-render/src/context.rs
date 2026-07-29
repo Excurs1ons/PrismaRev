@@ -1,8 +1,7 @@
-//! Vulkan 设备 context: 实例 物理 设备 逻辑 设备 queues.
+//! Vulkan 设备上下文：实例、物理设备、逻辑设备、队列。
 //!
-//! Owns the long-lived Vulkan handles needed before any 渲染 can happen.
-//! 交换链 and per-frame resources live in [`crate::swapchain`] and
-//! [`crate::renderer`].
+//! 拥有任何渲染发生前所需的长期 Vulkan 句柄。
+//! 交换链和每帧资源位于 [`crate::swapchain`] 和 [`crate::renderer`] 中。
 
 use std::ffi::{c_char, CStr, CString};
 use std::os::raw::c_void;
@@ -11,7 +10,7 @@ use ash::vk;
 
 use crate::capabilities::{self, RayTracingCaps};
 
-/// 验证 layers requested on 调试 builds / when the loader is present.
+/// 调试构建/当加载器存在时请求的验证层。
 const VALIDATION_LAYERS: [&str; 1] = ["VK_LAYER_KHRONOS_validation"];
 
 /// All the long-lived Vulkan 状态 the 渲染器 needs to do anything.

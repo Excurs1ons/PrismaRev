@@ -1,4 +1,4 @@
-//! 音频 engine — owns the Firewheel context and manages 声音 playback.
+//! 音频引擎 — 拥有 Firewheel 上下文并管理声音播放。
 
 use std::num::NonZeroU32;
 use std::time::Duration;
@@ -12,29 +12,29 @@ use firewheel::nodes::sampler::*;
 
 use crate::error::AudioError;
 
-/// Decoded 音频 data ready for playback.
+/// 解码后的音频数据，可供播放。
 #[derive(Clone)]
 pub struct AudioData {
-    /// Interleaved f32 samples (e.g. L,R,L,R for 立体声
+    /// 交错排列的 f32 采样（例如立体声为 L,R,L,R）
     pub samples: Vec<f32>,
-    /// 样本 rate in Hz (e.g. 44100).
+    /// 采样率，单位 Hz（例如 44100）。
     pub sample_rate: u32,
-    /// Number of channels (1 = 单声道 2 = 立体声
+    /// 声道数（1 = 单声道，2 = 立体声）
     pub channels: u16,
-    /// 总计 持续时间
+    /// 总持续时间
     pub duration: Duration,
 }
 
-/// Handle to 控制 a playing 声音
+/// 控制正在播放的声音的句柄
 ///
-/// Use [`AudioEngine`] methods to 控制 playback:
-/// `engine.stop(&handle)`, `engine.set_volume(&handle, 0.5)`, etc.
+/// 使用 [`AudioEngine`] 的方法来控制播放：
+/// `engine.stop(&handle)`, `engine.set_volume(&handle, 0.5)` 等。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct PlaybackHandle(u64);
 
 impl PlaybackHandle {
-    /// Returns `false` when this handle was produced by a failed `play()` 调用
-    /// (e.g. 空 音频 or 图 错误 and will never refer to a real 声音
+    /// 当此句柄由失败的 `play()` 调用产生时返回 `false`
+    ///（例如音频为空或图形错误，且永远不会指向真实的声音）
     pub fn is_valid(&self) -> bool {
         self.0 != 0
     }
@@ -42,16 +42,16 @@ impl PlaybackHandle {
 
 // ---------------------------------------------------------------------------
 
-/// 配置 for the 音频 engine.
+/// 音频引擎的配置。
 #[derive(Clone)]
 pub struct AudioConfig {
-    /// Preferred 音频 设备 name. `None` = 系统 默认
+    /// 首选音频设备名称。`None` = 系统默认。
     pub device_name: Option<String>,
-    /// 输出 样本 rate 默认 44100).
+    /// 输出采样率。默认 44100。
     pub sample_rate: u32,
-    /// Number of 输出 channels 默认 2 = 立体声
+    /// 输出声道数。默认 2 = 立体声。
     pub channels: u16,
-    /// Master 音量 0.0–1.0 默认 1.0).
+    /// 主音量 0.0–1.0。默认 1.0。
     pub master_volume: f32,
 }
 
@@ -71,22 +71,22 @@ impl Default for AudioConfig {
 struct ActiveSound {
     handle: PlaybackHandle,
     node_id: NodeID,
-    /// 局部 复制 so we can 调用 `sync_*_event()`.
+    /// 本地副本，用于调用 `sync_*_event()`。
     sampler: SamplerNode,
 }
 
-/// The main 音频 engine.
+/// 主音频引擎。
 ///
 /// ```ignore
 /// let mut engine = AudioEngine::new(AudioConfig::default())?;
-/// engine.update(); // 调用 each 帧
+/// engine.update(); // 每帧调用
 ///
 /// let snd = engine.play(&my_audio);
 /// engine.set_volume(&snd, 0.5);
 /// ```
 pub struct AudioEngine {
     ctx: FirewheelContext,
-    /// Kept alive so the 音频 stream continues; 放置 order matters.
+    /// 保持存活以确保音频流持续；放置顺序很重要。
     _stream: Option<CpalStream>,
     active: Vec<ActiveSound>,
     next_id: u64,
@@ -95,10 +95,9 @@ pub struct AudioEngine {
 }
 
 impl AudioEngine {
-    /// 创建 a new 音频 engine and start the 音频 stream.
+    /// 创建新的音频引擎并启动音频流。
     ///
-    /// If the 音频 设备 cannot be opened, a 警告 is logged but the engine
-    /// still runs (silent 众数 — the game should never 崩溃 due to 音频
+    /// 如果音频设备无法打开，会记录警告，但引擎仍会运行（静默模式——游戏不应因音频而崩溃）。
     pub fn new(config: AudioConfig) -> Result<Self, AudioError> {
         let channels = config.channels;
 
@@ -108,7 +107,7 @@ impl AudioEngine {
             ..Default::default()
         });
 
-        // Attempt to activate the cpal 音频 stream.
+        // 尝试激活 cpal 音频流。
         let stream = match Self::try_start_stream(&mut ctx, &config) {
             Ok(stream) => {
                 ::log::info!(
@@ -169,11 +168,11 @@ impl AudioEngine {
         CpalStream::new(ctx, cpal_config).map_err(|e| AudioError::Init(e.to_string()))
     }
 
-    /// Must be called once per 帧 (preferably at the 结束
+    /// 必须每帧调用一次（最好在帧结束时）。
     ///
-    /// Removes finished sounds and advances the Firewheel context.
+    /// 移除已播放完成的声音并推进 Firewheel 上下文。
     pub fn update(&mut self) {
-        // Garbage-collect sounds that have finished playing.
+        // 清理已播放完成的声音。
         self.active.retain(|s| {
             let alive = self
                 .ctx
@@ -196,7 +195,7 @@ impl AudioEngine {
         let _ = self.ctx.update();
     }
 
-    /// Play a decoded 声音 Returns a handle for playback 控制
+    /// 播放解码后的声音。返回播放控制句柄。
     pub fn play(&mut self, audio: &AudioData) -> PlaybackHandle {
         let id = PlaybackHandle(self.next_id);
         self.next_id += 1;
@@ -208,7 +207,7 @@ impl AudioEngine {
             return id;
         }
 
-        // 转换 interleaved → planar for DecodedAudioF32.
+        // 将交错格式转换为平面格式，用于 DecodedAudioF32。
         let mut planar: Vec<Vec<f32>> = vec![vec![0.0f32; num_frames]; channels];
         for (i, &sample) in audio.samples.iter().enumerate() {
             let ch = i % channels;
@@ -224,12 +223,12 @@ impl AudioEngine {
             }
         };
 
-        // 构建 the 样本 资源 as ArcGc<dyn SampleResource>.
+        // 将样本资源构建为 ArcGc<dyn SampleResource>。
         let decoded_f32 = symphonium::DecodedAudioF32::new(planar, sample_rate, sample_rate);
         let decoded: symphonium::DecodedAudio = decoded_f32.into();
         let resource = firewheel::dyn_symphonium_resource(decoded);
 
-        // 创建 a 采样器 node with initial 状态
+        // 创建带有初始状态的采样器节点。
         let sampler = SamplerNode {
             volume: Volume::from_percent(self.master_volume * 100.0),
             play: Notify::new(true),
@@ -253,11 +252,11 @@ impl AudioEngine {
             }
         };
 
-        // 队列 the 样本 资源
+        // 将样本资源加入队列。
         self.ctx
             .queue_event_for(node_id, SamplerNode::set_dyn_sample_event(resource));
 
-        // Connect to the 图 输出 立体声 pair).
+        // 连接到图形输出（立体声对）。
         let out = self.ctx.graph_out_node_id();
         if let Err(e) = self.ctx.connect_stereo(node_id, out, false) {
             ::log::error!("Failed to connect sampler to graph output: {e}");
@@ -274,7 +273,7 @@ impl AudioEngine {
         id
     }
 
-    /// Stop a 声音 immediately.
+    /// 立即停止声音。
     pub fn stop(&mut self, handle: &PlaybackHandle) {
         if let Some(idx) = self.active.iter().position(|s| s.handle == *handle) {
             let _ = self.ctx.remove_node(self.active[idx].node_id);
@@ -282,7 +281,7 @@ impl AudioEngine {
         }
     }
 
-    /// 集合 音量 (0.0 = silent, 1.0 = original) for a playing 声音
+    /// 设置正在播放的声音的音量（0.0 = 静音，1.0 = 原始音量）
     pub fn set_volume(&mut self, handle: &PlaybackHandle, volume: f32) {
         let Some(s) = self
             .active
@@ -297,7 +296,7 @@ impl AudioEngine {
             .queue_event_for(s.node_id, s.sampler.sync_volume_event());
     }
 
-    /// Pause a 声音 (freezes playback position).
+    /// 暂停声音（冻结播放位置）。
     pub fn pause(&mut self, handle: &PlaybackHandle) {
         let Some(s) = self
             .active
@@ -311,7 +310,7 @@ impl AudioEngine {
             .queue_event_for(s.node_id, s.sampler.sync_play_event());
     }
 
-    /// Resume a paused 声音
+    /// 恢复暂停的声音
     pub fn resume(&mut self, handle: &PlaybackHandle) {
         let Some(s) = self
             .active
@@ -325,7 +324,7 @@ impl AudioEngine {
             .queue_event_for(s.node_id, s.sampler.sync_play_event());
     }
 
-    /// Check whether a 声音 is currently playing.
+    /// 检查声音当前是否正在播放。
     pub fn is_playing(&self, handle: &PlaybackHandle) -> bool {
         let Some(s) = self.active.iter().find(|s| s.handle == *handle) else {
             return false;
@@ -342,24 +341,24 @@ impl AudioEngine {
             .is_some_and(|ps| ps.playback_state == PlaybackState::Playing)
     }
 
-    /// Stop all currently playing sounds immediately.
+    /// 立即停止所有正在播放的声音。
     pub fn stop_all(&mut self) {
         for s in self.active.drain(..) {
             let _ = self.ctx.remove_node(s.node_id);
         }
     }
 
-    /// 集合 master 音量 (0.0–1.0). Affects subsequently played sounds.
+    /// 设置主音量（0.0–1.0）。影响后续播放的声音。
     pub fn set_master_volume(&mut self, volume: f32) {
         self.master_volume = volume.clamp(0.0, 1.0);
     }
 
-    /// 当前 master 音量
+    /// 当前主音量
     pub fn master_volume(&self) -> f32 {
         self.master_volume
     }
 
-    /// Whether the 音频 stream is running.
+    /// 音频流是否正在运行。
     pub fn is_active(&self) -> bool {
         self._stream.is_some()
     }

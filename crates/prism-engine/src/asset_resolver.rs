@@ -1,10 +1,8 @@
-//! GPU 资源 resolver — on-demand 加载 + cache + upload for 网格 / 材质 /
-//! 纹理 assets from a `.pak` 资源 包
+//! GPU 资源解析器——从 `.pak` 资源包按需加载+缓存+上传网格/材质/纹理资源。
 //!
-//! Owns the [`ResourceManager`] 运行时 资源 DB), three typed caches (so the
-//! same mesh/material/texture is never uploaded twice), and exposes
-//! [`resolve_scene_assets`] which queries an ECS 世界 for pending
-//! [`MeshRenderer`] entities and resolves them into GPU handles.
+//! 拥有 [`ResourceManager`]（运行时资源数据库）、三个类型化缓存（确保同一网格/材质/纹理
+//! 不会重复上传），并提供 [`resolve_scene_assets`] 方法查询 ECS 世界中
+//! 待处理的 [`MeshRenderer`] 实体，将其解析为 GPU 句柄。
 
 use std::collections::HashMap;
 

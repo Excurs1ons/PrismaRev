@@ -1,13 +1,12 @@
 //! # prism-asset-db
 //!
-//! Editor-side 资源 database that tracks all imported assets in a project.
+//! 编辑器端资源数据库，追踪项目中所有导入的资源。
 //!
-//! The database lives at `Project/Library/AssetDatabase.json` and maps every
-//! file under `Assets/` to its 稳定 [`AssetId`], [`AssetType`], importer
-//! 配置 and dependency 图
+//! 数据库位于 `Project/Library/AssetDatabase.json`，将 `Assets/` 下的每个文件
+//! 映射到其稳定的 [`AssetId`]、[`AssetType`]、导入器配置和依赖图。
 //!
-//! A companion `Project/Library/import_cache.json` records file hashes so the
-//! 管线 can skip re-importing unchanged files 增量 构建
+//! 配套的 `Project/Library/import_cache.json` 记录文件哈希，
+//! 使管道可以跳过未变更文件的重新导入，实现增量构建。
 
 use prism_asset_core::{AssetId, AssetType};
 use std::collections::HashMap;

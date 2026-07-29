@@ -1,17 +1,16 @@
-//! Batched staging uploader.
+//! 批量暂存上传器。
 //!
-//! [`BatchUploader`] records many 缓冲区 / 图像 copies into a single
-//! one-time-submit 命令 缓冲区 then flushes them with one
-//! `vkQueueSubmit` + one `vkWaitForFences`. This replaces the per-resource
-//! submit-and-wait 模式 used by [`crate::buffer::upload_to_buffer`] and
-//! [`crate::buffer::create_and_upload_image`] during scene 加载 where
-//! hundreds of round-trips (Sponza: ~880) dominated 加载 时间
+//! [`BatchUploader`] 将多次缓冲区/图像复制记录到单个一次性提交的命令缓冲区中，
+//! 然后通过一次 `vkQueueSubmit` + 一次 `vkWaitForFences` 刷新。
+//! 这取代了场景加载期间 [`crate::buffer::upload_to_buffer`] 和
+//! [`crate::buffer::create_and_upload_image`] 使用的逐资源提交等待模式，
+//! 该模式下数百次往返（Sponza: ~880）主导了加载时间。
 //!
 //! 用法
 //! ```ignore
 //! let mut uploader = BatchUploader::new(&context, command_pool)?;
 //! uploader.upload_buffer(device_buffer, data)?;
-//! uploader.upload_image(image, 宽度 高度 mip_levels, pixels)?;
+//! uploader.upload_image(image, width, height, mip_levels, pixels)?;
 //! uploader.finish(graphics_queue)?; // single submit + wait, then cleanup
 //! ```
 //!

@@ -1,19 +1,19 @@
-//! 四元数 <-> Euler-angle 角度 conversions for the 检查器
+//! 四元数 ↔ 欧拉角转换，用于检查器
 //!
-//! Used by components whose 旋转 is stored as a 四元数 (awkward to edit
-//! directly): the 检查器 edits Euler 角度 and converts. Tait-Bryan XYZ
-//! convention - good enough for 检查器 edits, not numerically 最优 近
-//! gimbal lock.
+//! 用于旋转存储为四元数（直接编辑不便）的组件：
+//! 检查器编辑欧拉角并进行转换。
+//! 使用 Tait-Bryan XYZ 约定——对检查器编辑足够好，
+//! 但在万向节锁附近不是数值最优的。
 
-/// 转换 a 四元数 `(x, y, z, w)` to Euler angles in 角度
-/// `(roll, 音高 yaw)` using a Tait-Bryan XYZ convention.
+/// 将四元数 `(x, y, z, w)` 转换为欧拉角（角度制）
+/// `(roll, pitch, yaw)`，使用 Tait-Bryan XYZ 约定。
 pub fn quat_to_euler_deg(q: [f32; 4]) -> [f32; 3] {
     let [x, y, z, w] = q;
     // Roll (x-axis)
     let sinr_cosp = 2.0 * (w * x + y * z);
     let cosr_cosp = 1.0 - 2.0 * (x * x + y * y);
     let roll = sinr_cosp.atan2(cosr_cosp);
-    // 音高 (y-axis)
+    // Pitch（绕 Y 轴）
     let sinp = 2.0 * (w * y - z * x);
     let pitch = if sinp.abs() >= 1.0 {
         std::f32::consts::FRAC_PI_2.copysign(sinp)
@@ -27,7 +27,7 @@ pub fn quat_to_euler_deg(q: [f32; 4]) -> [f32; 3] {
     [roll.to_degrees(), pitch.to_degrees(), yaw.to_degrees()]
 }
 
-/// 转换 Euler angles in 角度 `(roll, 音高 yaw)` to a 四元数
+/// 将欧拉角（角度制）`(roll, pitch, yaw)` 转换为四元数
 /// `(x, y, z, w)`.
 pub fn euler_deg_to_quat(e: [f32; 3]) -> [f32; 4] {
     let (r, p, y) = (e[0].to_radians(), e[1].to_radians(), e[2].to_radians());

@@ -1,17 +1,15 @@
-//! 光源 collectors — 查询 the ECS 世界 for 激活 光源 components.
+//! 光源收集器——查询 ECS 世界中激活的光源组件。
 //!
-//! These are called each 帧 by `app.rs` to populate the [`GraphFrame`]'s
-//! 光源 data. Each collector returns the *first N* 启用 lights (or all,
-//! for spot lights — typically few enough).
+//! 这些函数每帧由 `app.rs` 调用，以填充 [`GraphFrame`] 的光源数据。
+//! 每个收集器返回*前 N 个*启用的光源（对于聚光灯则返回全部——通常数量不多）。
 
 use prism_ecs::World;
 use prism_render::LIGHT_MAX;
 
 use crate::scene::components::*;
 
-/// Component-level 可见性 `World::query` already excludes entities made
-/// 未激活 through `World::set_active`; this handles the scene 激活
-/// 分量 used by the 检查器 and scene loader.
+/// 组件级可见性。`World::query` 已排除通过 `World::set_active` 设为未激活的实体；
+/// 此函数处理检查器和场景加载器使用的场景 `Active` 组件。
 pub(crate) fn component_is_active(world: &World, entity: prism_ecs::Entity) -> bool {
     world
         .get::<Active>(entity)
@@ -21,7 +19,7 @@ pub(crate) fn component_is_active(world: &World, entity: prism_ecs::Entity) -> b
 
 /// Return the 第一个 [`DirectionalLight`] in the 世界 if any.
 ///
-/// Typically there is one sun; the 渲染器 uses the 第一个 one 找到
+/// 通常只有一个太阳光；渲染器使用找到的第一个。
 pub fn collect_directional_light(world: &World) -> Option<DirectionalLight> {
     world
         .query::<DirectionalLight>()

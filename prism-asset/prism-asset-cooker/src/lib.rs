@@ -1,14 +1,14 @@
 //! # prism-asset-cooker
 //!
-//! Cooker framework for the PrismaRev 资源 管线
+//! PrismaRev 资源管线的烹饪器框架
 //!
-//! Cookers translate intermediate 导入 data into runtime-ready 二进制
-//! 格式 which is then packed into a .pak archive.
+//! 烹饪器将中间导入数据转换为运行时就绪的二进制格式，
+//! 然后打包为 .pak 存档。
 //!
-//! The cooking 管线 is:
+//! 烹饪管线如下：
 //!
 //! ```text
-//! ImportResult (intermediate data) → [Cooker] → .pak data → [PackageBuilder]
+//! ImportResult（中间数据）→ [Cooker] → .pak data → [PackageBuilder]
 //! ```
 
 use prism_asset_core::{AssetId, AssetType};

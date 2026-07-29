@@ -1,21 +1,18 @@
-//! Scene loader — parses RSCN 二进制 cooked scenes and spawns ECS entities.
+//! 场景加载器——解析 RSCN 二进制烘焙场景并生成 ECS 实体。
 //!
-//! ## Architecture
+//! ## 架构
 //!
-//! The [`SceneLoader`] accepts [`SceneSource`] inputs at three levels:
-//! - **`RawCooked(Vec<u8>)`** — RSCN 字节 already in 内存 (from a `.pak`
-//! 资源 via `ResourceManager`, or from a programmatic fixture).
-//! - **`CookedFile(PathBuf)`** — loose RSCN 二进制 file on disk (dev convenience).
+//! [`SceneLoader`] 在三个层级接受 [`SceneSource`] 输入：
+//! - **`RawCooked(Vec<u8>)`** — 已在内存中的 RSCN 字节（来自 `.pak` 资源的 `ResourceManager`，或来自程序化固定数据）。
+//! - **`CookedFile(PathBuf)`** — 磁盘上的松散 RSCN 二进制文件（开发者便利）。
 //!
-//! All paths converge to [`SceneLoader::spawn_from_cooked`], which is the sole
-//! 函数 that touches the ECS 世界 This keeps the core spawning 逻辑
-//! testable and independent of I/O.
+//! 所有路径汇聚到 [`SceneLoader::spawn_from_cooked`]，
+//! 这是唯一接触 ECS 世界的函数。这使核心生成逻辑可测试且独立于 I/O。
 //!
-//! ## RSCN 二进制 格式
+//! ## RSCN 二进制格式
 //!
-//! The 格式 is the 输出 of [`prism_asset_cooker::scene::SceneCooker`] in the
-//! independent `prism-asset` 工作区 We parse it directly here with no
-//! cross-workspace dependency:
+//! 该格式是独立 `prism-asset` 工作区中 [`prism_asset_cooker::scene::SceneCooker`]
+//! 的输出。我们在此直接解析，无跨工作区依赖：
 //!
 //! ```text
 //! [magic:4]        b"RSCN"

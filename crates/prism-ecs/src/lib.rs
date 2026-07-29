@@ -1,12 +1,11 @@
-//! PrismaRev ECS core.
+//! PrismaRev ECS 核心库
 //!
-//! A minimal, data-oriented Entity-Component-System. Entities are cheap 整数
-//! handles, components are plain data stored in type-indexed 稀疏 maps, and
-//! systems are ordinary functions that 查询 the 世界 for 分量 slices.
+//! 一个最小化的、数据导向的实体-组件-系统（Entity-Component-System）。
+//! 实体是廉价的整数句柄，组件是以类型索引稀疏映射存储的纯数据，
+//! 系统则是查询世界中组件切片的普通函数。
 //!
-//! This is a 骨架 for milestone 1: the API shape is final so later
-//! milestones can 槽 [`RenderSystem`], etc. in, but the engine core does not
-//! drive 渲染 through it yet.
+//! 这是里程碑 1 的框架代码：API 形态已最终确定，后续里程碑可以插入
+//! [`RenderSystem`] 等系统，但引擎核心目前尚未通过它驱动渲染。
 
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
@@ -15,8 +14,8 @@ use std::collections::HashMap;
 // 实体
 // ---------------------------------------------------------------------------
 
-/// A lightweight handle to a game 对象 Carries a generation so that stale
-/// handles 左 over after deletion are distinguishable from recycled ones.
+/// 一个轻量级的游戏对象句柄。携带代（generation）信息，
+/// 使得删除后遗留的过期句柄能够与回收再利用的句柄区分开。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Entity {
     id: u32,

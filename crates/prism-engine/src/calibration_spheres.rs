@@ -1,18 +1,16 @@
-//! BRDF 校准 spheres - a 行 of 引用 materials for eyeballing
-//! whether the PBR 管线 produces correct results.
+//! BRDF 校准球——一排参考材质，用于目测 PBR 管线是否正确。
 //!
-//! Six spheres are placed along the +X axis at startup so each classic PBR
-//! 引用 材质 can be compared side-by-side against its expected
-//! appearance (white/gold/aluminum/plastic/stone/black). The spheres share a
-//! single UV-sphere 网格 and differ only in 材质 parameters, so any visual
-//! discrepancy between them is attributable to the BRDF, not geometry.
+//! 启动时沿 +X 轴放置六个球体，以便将每个经典 PBR 参考材质
+//! 与其预期外观（白色/金色/铝/塑料/石头/黑色）并排比较。
+//! 这些球共享同一个 UV 球体网格，仅材质参数不同，
+//! 因此它们之间的任何视觉差异归因于 BRDF，而非几何体。
 //!
-//! Expected results (under correct BRDF + 线性 高动态范围 管线
-//! white - flat mid-grey, no blown highlights, 软体 specular
-//! black - very dark, only a tight specular highlight 可见
-//! gold - 温 yellow metallic, coloured specular, no diffuse
-//! aluminum- bright neutral Metal sharp specular, no diffuse
-//!   plastic - matte diffuse + weak tight specular (dielectric F0 ~0.04)
+//! 预期结果（在正确的 BRDF + 线性 HDR 管线下）：
+//!   white - 平坦中灰色，无过曝高光，柔和镜面反射
+//!   black - 非常暗，仅有紧凑的镜面高光可见
+//!   gold - 暖黄色金属，有色镜面反射，无漫反射
+//!   aluminum - 明亮中性金属，锐利镜面反射，无漫反射
+//!   plastic - 哑光漫反射 + 弱而紧的镜面反射（电介质 F0 ~0.04）
 //! stone - 粗略 diffuse, no 可见 specular highlight
 //!
 //! The spheres are spawned as ECS entities with new scene components

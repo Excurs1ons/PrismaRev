@@ -1,17 +1,15 @@
-//! egui 编辑器 UI for PrismaRev.
+//! PrismaRev 的 egui 编辑器 UI
 //!
-//! Houses the 检查器 实体 树 + auto-recognised 分量 editors),
-//! the 调试 / render-settings Windows and the 性能 HUD. The crate
-//! defines the [`Inspect`] trait + [`ComponentRegistry`] that let the engine
-//! register 分量 editors without the 检查器 hardcoding any 分量
-//! 类型 - this is the "auto-recognition, no hardcoding" foundation.
+//! 包含检查器、实体树+自动识别的组件编辑器、
+//! 调试/渲染设置窗口和性能 HUD。此 crate 定义了
+//! [`Inspect`] trait 和 [`ComponentRegistry`]，让引擎无需在检查器中
+//! 硬编码任何组件类型即可注册组件编辑器——这就是"自动识别，无需硬编码"的基础。
 //!
-//! Architecture: `prism-editor` depends only on `prism-ecs` (World/Entity) and
-//! `prism-render` (RenderMode 类型 The concrete `impl Inspect for X` blocks
-//! live in `prism-engine` 下一个 to the 分量 definitions (orphan 规则
-//! permits this because the trait is defined here). `prism-engine` registers
-//! its components into a `ComponentRegistry` at startup and hands the registry
-//! to [`Inspector::run`].
+//! 架构：`prism-editor` 只依赖 `prism-ecs`（World/Entity）和
+//! `prism-render`（RenderMode 类型）。具体的 `impl Inspect for X` 块
+//! 位于 `prism-engine` 中组件定义的旁边（孤儿规则允许这样做，
+//! 因为 trait 在此定义）。`prism-engine` 在启动时将组件注册到
+//! `ComponentRegistry` 中，并将注册表交给 [`Inspector::run`]。
 
 use prism_asset_core::LoadedAsset;
 use std::any::TypeId;

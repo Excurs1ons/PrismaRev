@@ -1,18 +1,16 @@
-//! SceneCooker — converts `.scene.json` intermediate data into a 紧凑
-//! runtime-ready scene 二进制 ("RSCN" 格式
+//! SceneCooker——将 `.scene.json` 中间数据转换为紧凑的运行时就绪场景二进制格式（"RSCN" 格式）。
 //!
-//! The intermediate data is expected to be the raw UTF-8 字节 of a 有效
-//! `.scene.json` file. The cooker parses it into [`SceneJson`], validates
-//! the hierarchy, topological-sorts entities parent-first, and serialises
-//! each 实体 into a 紧凑 record.
+//! 中间数据应为有效 `.scene.json` 文件的原始 UTF-8 字节。
+//! 烹饪器将其解析为 [`SceneJson`]，验证层次结构，
+//! 对实体进行拓扑排序（父节点优先），并将每个实体序列化为紧凑记录。
 //!
-//! ## RSCN 二进制 格式 (version 2)
+//! ## RSCN 二进制格式（版本 2）
 //!
 //! ```text
 //! [magic:4]        b"RSCN"
 //! [version:1]      2
-//! [count:4]        u32 LE — number of entities
-//! [env_len:2] u16 LE — byte 长度 of skybox 高动态范围 path (0 = no skybox)
+//! [count:4]        u32 LE — 实体数量
+//! [env_len:2]      u16 LE — 天空盒 HDR 路径的字节长度（0 = 无天空盒）
 //! [env_path:N]     UTF-8 path (omitted if len == 0)
 //!
 //! For each 实体 (parent-first topological order):

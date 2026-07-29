@@ -1,11 +1,11 @@
 //! # prism-asset-core
 //!
-//! Foundation types for the PrismaRev 资源 管线
+//! PrismaRev 资源管道的基础类型
 //!
-//! Provides the primitive building blocks shared by every other crate in the
-//! 管线 [`AssetId`], [`AssetGuid`], [`AssetType`], [`Handle<T>`],
-//! [`AssetRef`], and the ScriptableObject-style [`AssetData`](asset_data::AssetData)
-//! trait with [`AssetHandle<T>`](asset_data::AssetHandle).
+//! 提供管道中所有其他 crate 共享的原始构建块：
+//! [`AssetId`]、[`AssetGuid`]、[`AssetType`]、[`Handle<T>`]、
+//! [`AssetRef`]，以及 ScriptableObject 风格的 [`AssetData`](asset_data::AssetData)
+//! trait 和 [`AssetHandle<T>`](asset_data::AssetHandle)。
 
 #[cfg(feature = "asset-data")]
 pub mod asset_data;

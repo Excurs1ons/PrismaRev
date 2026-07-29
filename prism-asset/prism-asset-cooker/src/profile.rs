@@ -1,15 +1,15 @@
-//! # 烹饪 配置 系统
+//! # 烹饪配置系统
 //!
-//! Platform-aware cooking 配置 with file-based profiles, 继承
-//! deep merging, priority overrides, and 稳定 哈希 计算
+//! 支持平台的烹饪配置，包含基于文件的配置文件、继承、
+//! 深度合并、优先级覆盖和稳定哈希计算。
 //!
-//! ## Priority (highest → lowest)
+//! ## 优先级（从高到低）
 //!
-//! 1. CLI overrides (command-line arguments)
-//! 2. Asset-level overrides (per-record settings)
-//! 3. 激活 project 配置 (CLI `--profile` or `active.json`)
-//! 4. Platform 默认 配置 (derived from `--platform`)
-//! 5. `base.json` (optional, lowest)
+//! 1. CLI 覆盖（命令行参数）
+//! 2. 资源级覆盖（逐记录设置）
+//! 3. 激活的项目配置（CLI `--profile` 或 `active.json`）
+//! 4. 平台默认配置（从 `--platform` 派生）
+//! 5. `base.json`（可选，最低优先级）
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

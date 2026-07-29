@@ -1,7 +1,7 @@
-//! PrismaRev platform 抽象
+//! PrismaRev 平台抽象层
 //!
-//! 窗口 系统 接口 Vulkan 表面 creation, and 输入 事件 routing.
-//! Has no application-specific 逻辑 — the game 循环 lives in `prism-app`.
+//! 提供窗口系统接口、Vulkan 表面创建和输入事件路由。
+//! 不包含任何应用特定逻辑——游戏循环位于 `prism-app` 中。
 
 mod input;
 mod context;

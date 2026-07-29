@@ -1,13 +1,13 @@
-//! 计算 管线 creation.
+//! 计算管线创建。
 //!
-//! Minimal 包装器 around `vk::Pipeline` + `vk::PipelineLayout` for 计算
-//! shaders. Used by the 全局光照 baker (ray-query probe-volume bake) and future
-//! DDGI real-time 更新 pass
+//! 围绕 `vk::Pipeline` + `vk::PipelineLayout` 的最小包装器，用于计算着色器。
+//! 由全局光照烘焙器（射线查询探测器体积烘焙）和未来的
+//! DDGI 实时更新通道使用。
 
 use anyhow::Context as _;
 use ash::vk;
 
-/// A compiled 计算 管线 with its 布局
+/// 一个已编译的计算管线及其布局
 pub struct ComputePipeline {
     pub pipeline: vk::Pipeline,
     pub layout: vk::PipelineLayout,

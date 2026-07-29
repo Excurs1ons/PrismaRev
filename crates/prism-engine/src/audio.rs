@@ -1,22 +1,21 @@
-//! ECS 音频 integration.
+//! ECS 音频集成。
 //!
-//! Provides the [`AudioSource`] ECS 分量 and the [`sync_audio_sources`]
-//! 函数 that bridges ECS 状态 and the [`AudioEngine`] each 帧
+//! 提供 [`AudioSource`] ECS 组件和 [`sync_audio_sources`] 函数，
+//! 每帧桥接 ECS 状态与 [`AudioEngine`]。
 
 use prism_audio::{AudioData, AudioEngine, PlaybackHandle};
 use prism_ecs::World;
 
-/// ECS 分量 for playing 音频 on an 实体
+/// 用于在实体上播放音频的 ECS 组件
 ///
-/// Each 帧 [`sync_audio_sources`] reads every 实体 that carries this
-/// 分量 and drives [`AudioEngine`] methods accordingly:
+/// 每帧 [`sync_audio_sources`] 读取每个带有此组件的实体，
+/// 并相应驱动 [`AudioEngine`] 的方法：
 ///
-/// * `playing && handle is None` → start playback
-/// * `playing && handle 存在 → 更新 音量
-/// * `!playing && handle 存在 → stop
+/// * `playing && handle is None` → 开始播放
+/// * `playing && handle 存在` → 更新音量
+/// * `!playing && handle 存在` → 停止
 pub struct AudioSource {
-    /// The 音频 片段 to play. 集合 to `None` to keep the 分量 alive
-    /// without a 片段 (useful for reserving a 槽
+    /// 要播放的音频片段。设为 `None` 可保持组件存活但不带片段（用于预留槽位）。
     pub data: Option<AudioData>,
 
     /// 音量 level, 0.0 (silent) to 1.0 (original), clamped.
@@ -33,7 +32,7 @@ pub struct AudioSource {
 }
 
 impl AudioSource {
-    /// 创建 a new `AudioSource` ready to play.
+    /// 创建一个新的 `AudioSource`，可供播放。
     pub fn new(data: AudioData) -> Self {
         Self {
             data: Some(data),
@@ -66,7 +65,7 @@ pub fn sync_audio_sources(engine: &mut AudioEngine, world: &mut World) {
         if src.playing {
             if let Some(ref data) = src.data {
                 if src.handle.is_none() {
-                    // Start a new playback.
+                    // 开始新的播放。
                     let handle = engine.play(data);
                     if handle.is_valid() {
                         engine.set_volume(&handle, src.volume);

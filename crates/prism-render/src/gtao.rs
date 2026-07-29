@@ -1,23 +1,21 @@
-//! GTAO (Ground-Truth Ambient 遮挡 pass
+//! GTAO（真实环境光遮蔽）通道
 //!
-//! Half-resolution screen-space 环境光遮蔽 pass that runs AFTER `ScenePass` (which
-//! writes the D32_SFLOAT 深度 + the R16G16B16A16 view-space 法线 MRT). The
-//! pass reads 深度 (+ optional 法线 and writes a single-channel R8_UNORM
-//! 环境光遮蔽 纹理 `ScenePass` samples **last frame's** 环境光遮蔽 输出 (1-frame 延迟
-//! to attenuate the IBL diffuse + specular terms.
+//! 半分辨率屏幕空间环境光遮蔽通道，在 `ScenePass` 之后运行（ScenePass 写入
+//! D32_SFLOAT 深度和 R16G16B16A16 视图空间法线 MRT）。此通道读取深度
+//!（+ 可选法线）并写入单通道 R8_UNORM 环境光遮蔽纹理。
+//! `ScenePass` 采样**上一帧的**环境光遮蔽输出（1 帧延迟）以衰减 IBL 漫反射+镜面反射项。
 //!
-//! ## Resources
-//! - Two R8_UNORM 环境光遮蔽 images (double-buffered by frame-in-flight 索引 so the
-//! scene can 读取 `ao[(frame+1)%2]` 最后一个 frame's 输出 while the GTAO pass
-//! writes `ao[frame]` (this frame's 输出 without in-flight hazards.
-//! - Four 描述符 sets: per frame-index, 集合 0 = depth+sampler and
-//! 集合 1 = normal+sampler (matching the Slang shader's two-set 布局
-//! - Owns its 渲染 pass + 管线 (1 颜色 附件 no 深度
+//! ## 资源
+//! - 两个 R8_UNORM 环境光遮蔽图像（通过处理中帧索引双缓冲，因此场景可以读取
+//!   `ao[(frame+1)%2]`（上一帧的输出），而 GTAO 通道写入 `ao[frame]`（当前帧的输出），
+//!   无处理中风险）。
+//! - 四个描述符集：按帧索引，集 0 = 深度+采样器，集 1 = 法线+采样器（匹配 Slang 着色器的双集布局）。
+//! - 拥有自己的渲染通道+管线（1 个颜色附件，无深度）。
 //!
-//! ## 布局 transitions recorded in 执行
-//! 1. 屏障 深度 `DEPTH_STENCIL_ATTACHMENT_OPTIMAL -> DEPTH_STENCIL_READ_ONLY_OPTIMAL`
-//! 2. 屏障 法线 `COLOR_ATTACHMENT_OPTIMAL -> SHADER_READ_ONLY_OPTIMAL`
-//! 3. 开始 渲染 pass (writes `ao[frame]`)
+//! ## `execute` 中记录的布局转换
+//! 1. 屏障：深度 `DEPTH_STENCIL_ATTACHMENT_OPTIMAL → DEPTH_STENCIL_READ_ONLY_OPTIMAL`
+//! 2. 屏障：法线 `COLOR_ATTACHMENT_OPTIMAL → SHADER_READ_ONLY_OPTIMAL`
+//! 3. 开始渲染通道（写入 `ao[frame]`）
 //! 4. 结束 渲染 pass
 //! 5. 屏障 `ao[frame]` `COLOR_ATTACHMENT_OPTIMAL -> SHADER_READ_ONLY_OPTIMAL`
 //!

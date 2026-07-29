@@ -1,18 +1,18 @@
-//! egui 叠加 rendered as the final pass on 顶部 of the ScenePass 输出
+//! egui 叠加层，作为 ScenePass 输出之上的最终通道渲染
 //!
-//! Architecture (after render-thread split)
+//! 架构（渲染线程拆分后）
 //! ----------------------------------------
-//! [`EguiCpu`] lives on the main 线程 (winit + egui context), [`EguiGpu`]
-//! lives on the 渲染 线程 inside [`GraphRenderer`]. They communicate via
-//! [`EguiFrame`] — a Send+Sync 快照 of tessellated egui 输出
+//! [`EguiCpu`] 位于主线程（winit + egui 上下文），[`EguiGpu`]
+//! 位于 [`GraphRenderer`] 内的渲染线程。它们通过 [`EguiFrame`]
+//! 通信——已细分的 egui 输出的 Send+Sync 快照。
 //!
-//! *Main 线程 (EguiCpu)*
+//! *主线程 (EguiCpu)*
 //!     run_ui(window, ui_closure) → EguiFrame
-//! handle_window_event(window, 事件 → bool
+//!     handle_window_event(window, event) → bool
 //!     apply_platform_output(window)
 //!
-//! *Render 线程 (EguiGpu)*
-//! record(device, cmd, 帧 → upload textures + cmd_draw
+//! *渲染线程 (EguiGpu)*
+//!     record(device, cmd, frame) → upload textures + cmd_draw
 
 use anyhow::{Context as _, Result};
 use ash::vk;

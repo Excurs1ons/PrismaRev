@@ -1,9 +1,8 @@
-//! IO 线程 — reads .pak files and deserialises assets in the background.
+//! IO 线程——在后台读取 .pak 文件并反序列化资源。
 //!
-//! The main 线程 sends [`IoRequest`]s and receives [`IoResult`]s through
-//! `flume` channels.
+//! 主线程通过 `flume` 通道发送 [`IoRequest`] 并接收 [`IoResult`]。
 //!
-//! GPU upload tasks are sent separately through [`RenderShared::gpu_uploads`].
+//! GPU 上传任务通过 [`RenderShared::gpu_uploads`] 单独发送。
 
 use flume::{Receiver, Sender};
 
@@ -22,8 +21,8 @@ pub enum IoRequest {
 pub enum IoResult {
     AssetLoaded {
         id: AssetId,
-        /// 不透明 blob — the 资源 data after deserialisation.
-        /// The main 线程 integrates this into the ECS 世界
+        /// 不透明二进制数据——反序列化后的资源数据。
+        /// 主线程将其整合到 ECS 世界中。
         data: Vec<u8>,
     },
     PackageLoaded {
@@ -38,8 +37,7 @@ pub enum IoResult {
 
 // ── GPU upload 任务 ───────────────────────────────────────────────────
 
-/// A 任务 that the main 线程 enqueues for the 渲染 线程 to 执行
-/// (creating Vulkan resources from CPU-side 资源 data).
+/// 主线程入队、供渲染线程执行的任务（从 CPU 端资源数据创建 Vulkan 资源）。
 #[derive(Debug, Clone)]
 pub enum GpuUploadTask {
     CreateMesh {

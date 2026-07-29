@@ -1,23 +1,23 @@
-//! # Engine 资源 management — Handle + AssetManager + AssetServer
+//! # 引擎资源管理——Handle + AssetManager + AssetServer
 //!
-//! Provides a generational-index-based [`Handle<T>`] and its owning
-//! [`AssetManager<T>`] for typed, CPU-side 资源 data 网格 材质
-//! 纹理 etc.). The top-level [`AssetServer`] is registered as an ECS
-//! [`Resource`](prism_ecs::World::insert_resource) and powers the
-//! [`MeshRenderer`](crate::ecs::components::MeshRenderer) extraction path.
+//! 提供基于代际索引的 [`Handle<T>`] 及其拥有者
+//! [`AssetManager<T>`]，用于类型化的 CPU 端资源数据（网格、材质、
+//! 纹理等）。顶层 [`AssetServer`] 注册为 ECS
+//! [`资源`](prism_ecs::World::insert_resource)，驱动
+//! [`MeshRenderer`](crate::ecs::components::MeshRenderer) 提取路径。
 //!
-//! ## Architecture
+//! ## 架构
 //!
 //! ```text
-//! Handle<T> ─── generational 索引 (u64) — cheap to 复制
+//! Handle<T> ─── 代际索引 (u64) — 复制成本低
 //!       │
-//!   AssetManager<T> ─── Vec<Slot<T>> — O(1) get/insert/remove
+//!   AssetManager<T> ─── Vec<Slot<T>> — O(1) 获取/插入/移除
 //!       │
-//! AssetServer ─── ECS 资源 holds typed managers
+//! AssetServer ─── ECS 资源持有类型化管理器
 //!       │
-//! Engine runtime_initialize() → populates 默认 assets
+//! Engine runtime_initialize() → 填充默认资源
 //!       │
-//!   scene_render_system → resolves Handle → GPU handle → DrawItem
+//!   scene_render_system → 解析 Handle → GPU handle → DrawItem
 //! ```
 
 pub mod procedural;

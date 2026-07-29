@@ -1,16 +1,16 @@
 use std::fmt;
 use std::hash::{Hash, Hasher};
 
-/// A 稳定 128-bit GUID for 源 assets.
+/// 源资源的稳定 128 位 GUID。
 ///
-/// Unlike [`AssetId`](crate::AssetId), which is a 运行时 槽 索引 with
-/// generation 计数器 `AssetGuid` is designed to be:
+/// 与 [`AssetId`](crate::AssetId)（一个带代计数器的运行时槽索引）不同，
+/// `AssetGuid` 的设计目标是：
 ///
-/// - **Stable** — survives renames and moves (stored in the 资源 file itself)
-/// - **Content-independent** — does not change when the 资源 is edited
-/// - **Globally unique** — 随机 v4-style generation via the `uuid` crate
+/// - **稳定**——重命名和移动后不变（存储在资源文件本身中）
+/// - **内容无关**——编辑资源时不会改变
+/// - **全局唯一**——通过 `uuid` crate 随机 v4 风格生成
 ///
-/// This is the identity used by `AssetHandle<T>` for cross-file references.
+/// 这是 `AssetHandle<T>` 用于跨文件引用的标识。
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct AssetGuid(pub [u8; 16]);
 

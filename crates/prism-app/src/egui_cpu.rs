@@ -1,7 +1,7 @@
 //! CPU-side egui — lives on the main 线程 (winit 事件 循环 side).
 //!
 //! [`EguiCpu`] owns the egui context and winit 状态 runs the UI 闭包
-//! tessellates the shapes, and produces an [`EguiFrame`] for the 渲染 线程
+//! 细分形状，并为渲染线程生成 [`EguiFrame`]。
 
 use prism_render::EguiFrame;
 use winit::window::Window;
@@ -51,7 +51,7 @@ impl EguiCpu {
     }
 
     /// Run the egui UI 闭包 tessellate shapes, and return an [`EguiFrame`]
-    /// for the 渲染 线程 Also stashes [`egui::PlatformOutput`] for later
+    /// 供渲染线程使用。同时缓存 [`egui::PlatformOutput`] 供后续
     /// application via [`apply_platform_output`].
     pub fn run_ui(&mut self, window: &Window, mut ui: impl FnMut(&egui::Context)) -> EguiFrame {
         self.ensure_state(window);

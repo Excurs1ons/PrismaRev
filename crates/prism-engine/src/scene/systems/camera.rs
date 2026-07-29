@@ -1,18 +1,17 @@
-//! 相机 systems.
+//! 相机系统
 //!
-//! Splits the old `crate::camera::Camera` 枚举 (which mixed 编辑器 fields with
-//! 运行时 状态 into pure data components 相机 + [`FlyCameraController`])
-//! and free functions that derive the 运行时 view/projection matrices from
-//! them each 帧
+//! 将旧的 `crate::camera::Camera` 枚举（混入了编辑器字段和运行时状态）
+//! 拆分为纯数据组件（`Camera` + [`FlyCameraController`]）和
+//! 每帧从中派生运行时视图/投影矩阵的自由函数。
 //!
-//! - [`camera_controller_system`] applies 输入 to a `FlyCameraController` +
-//!   sibling `LocalTransform` (writes yaw/pitch/translation).
-//! - [`compute_camera_output`] reads 相机 + `FlyCameraController` +
-//! `WorldTransform` and produces the matrices the 渲染器 needs.
+//! - [`camera_controller_system`] 将输入应用于 `FlyCameraController` +
+//!   同级 `LocalTransform`（写入偏航/俯仰/平移）。
+//! - [`compute_camera_output`] 读取 `Camera` + `FlyCameraController` +
+//! `WorldTransform` 并生成渲染器所需的矩阵。
 //!
-//! 坐标系 convention: right-handed, +Y 上 相机 looks 下 -Z. Vulkan
-//! y-flip 投影 深度 range [0,1]. See `README.md` §Coordinate
-//! Conventions and `DESIGN.md`.
+//! 坐标系约定：右手系，+Y 向上，相机看向 −Z 方向。
+//! Vulkan y-flip 投影，深度范围 [0,1]。
+//! 参见 `README.md` §Coordinate Conventions 和 `DESIGN.md`。
 
 use glam::{Mat4, Quat, Vec3};
 
