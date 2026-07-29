@@ -1,6 +1,7 @@
-//! LegacyApp — 将现有 `src/app.rs` 整体迁入引擎库
+//! LegacyApp — engine main application, using `AppDriver` + `WindowSubsystem`.
 //!
-//! 下一步：逐步拆解成 `WinitSubsystem` / `RenderSubsystem` / `EditorSubsystem`。
+//! Implements `AppDriver` (abstracted over winit) so the rest of the engine
+//! never imports winit for lifecycle.  Owns all engine subsystems.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -8,90 +9,26 @@ use std::time::Instant;
 
 use prism_audio::{AudioConfig, AudioEngine};
 use prism_editor::{Editor, RenderGraphViz};
-use prism_render::GraphRenderer;
-use prism_render::RenderMode;
-use winit::application::ApplicationHandler;
+use prism_render::{GraphRenderer, RenderMode};
 use winit::event::{DeviceEvent, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, EventLoop};
-use winit::keyboard::PhysicalKey;
+use winit::event_loop::ActiveEventLoop;
 use winit::raw_window_handle::HasDisplayHandle;
 use winit::window::{Window, WindowId};
 
-use crate::input;
+use crate::app::window::WindowSubsystem;
 use crate::asset_resolver::GpuAssetResolver;
 use crate::asset_server::AssetServer;
 use crate::config::AppConfig;
 use crate::dirty_router::DirtyRouter;
 use crate::engine::{load_env_bytes_from_manifest, Engine};
-use crate::input::InputManager;
+use crate::input;
+use crate::platform::{AppDriver, Platform, PlatformContext};
 use crate::render_settings::RenderSettings;
 use crate::render_system::{extract_frame_packet, render_system, FramePacket};
 
-// ===========================================================================
-// EngineContext — window + renderer（suspend-resume scope）
-// ===========================================================================
-
-struct EngineContext {
-    window: Arc<Window>,
-    renderer: GraphRenderer,
-}
-
-impl EngineContext {
-    fn new(event_loop: &ActiveEventLoop, config: &AppConfig) -> Self {
-        let t_start = Instant::now();
-
-        let cfg = &config.window;
-        let mut attrs = Window::default_attributes()
-            .with_title(&cfg.title)
-            .with_inner_size(winit::dpi::LogicalSize::new(cfg.width as f64, cfg.height as f64))
-            .with_resizable(cfg.resizable)
-            .with_maximized(cfg.maximized)
-            .with_visible(cfg.visible)
-            .with_decorations(cfg.decorations);
-        if let (Some(w), Some(h)) = (cfg.min_width, cfg.min_height) {
-            attrs = attrs.with_min_inner_size(winit::dpi::LogicalSize::new(w as f64, h as f64));
-        }
-        if let (Some(w), Some(h)) = (cfg.max_width, cfg.max_height) {
-            attrs = attrs.with_max_inner_size(winit::dpi::LogicalSize::new(w as f64, h as f64));
-        }
-        if let (Some(x), Some(y)) = (cfg.position_x, cfg.position_y) {
-            attrs = attrs.with_position(winit::dpi::LogicalPosition::new(x as f64, y as f64));
-        }
-        if cfg.fullscreen {
-            attrs = attrs.with_fullscreen(Some(winit::window::Fullscreen::Borderless(None)));
-        }
-
-        let window = Arc::new(event_loop.create_window(attrs).expect("failed to create window"));
-        let t_after_win = Instant::now();
-
-        let display_handle = window.display_handle().expect("get display handle").into();
-        let ext_ptrs = ash_window::enumerate_required_extensions(display_handle)
-            .expect("enumerate required extensions");
-        let extensions: Vec<String> = ext_ptrs
-            .iter()
-            .map(|p| unsafe { std::ffi::CStr::from_ptr(*p) }.to_string_lossy().into_owned())
-            .collect();
-        let extensions_ref: Vec<&str> = extensions.iter().map(|s| s.as_str()).collect();
-
-        let t_renderer = Instant::now();
-        let env_bytes = load_env_bytes_from_manifest();
-        let renderer = GraphRenderer::new(extensions_ref, window.as_ref(), window.as_ref(), env_bytes)
-            .expect("failed to create renderer");
-        let t_after_renderer = Instant::now();
-
-        log::info!(
-            "EngineContext: window {}ms, renderer {}ms",
-            (t_after_win - t_start).as_millis(),
-            (t_after_renderer - t_renderer).as_millis(),
-        );
-
-        Self { window, renderer }
-    }
-}
-
-// ===========================================================================
+// =========================================================================
 // LegacyApp
-// ===========================================================================
+// =========================================================================
 
 pub struct LegacyApp {
     // startup-only
@@ -106,7 +43,6 @@ pub struct LegacyApp {
 
     // per-frame state
     render_settings: RenderSettings,
-    input_manager: InputManager,
     editor: Editor,
     render_graph_viz: RenderGraphViz,
     frame_packet: Option<FramePacket>,
@@ -114,8 +50,11 @@ pub struct LegacyApp {
     // cached window orientation
     display_aspect: f32,
 
-    // suspend-resume scope
-    engine_context: Option<EngineContext>,
+    // window + input (suspend-resume scope)
+    window_subsystem: WindowSubsystem,
+
+    // renderer (suspend-resume scope; dropped before window_subsystem)
+    renderer: Option<GraphRenderer>,
 
     // timing
     start: Instant,
@@ -168,12 +107,12 @@ impl LegacyApp {
             asset_resolver,
             dirty_router,
             render_settings: RenderSettings::default(),
-            input_manager: InputManager::new(),
             editor,
             render_graph_viz: RenderGraphViz::new(),
             frame_packet: None,
             display_aspect: 16.0 / 9.0,
-            engine_context: None,
+            window_subsystem: WindowSubsystem::new(),
+            renderer: None,
             start: Instant::now(),
             last_frame: None,
             fixed_accumulator: 0.0,
@@ -186,37 +125,56 @@ impl LegacyApp {
     }
 
     pub fn run() -> anyhow::Result<()> {
-        let event_loop = EventLoop::new()?;
-        let mut app = Self::new();
-        event_loop.run_app(&mut app)?;
-        Ok(())
+        Platform::run(Self::new())
     }
 
-    fn ensure_engine_context(&mut self, event_loop: &ActiveEventLoop) {
-        if self.engine_context.is_some() {
-            return;
-        }
-        let mut ctx = EngineContext::new(event_loop, &self.config);
+    // ── helpers ─────────────────────────────────────────────────────
 
-        let audio_config = AudioConfig {
+    fn create_renderer(window: &Arc<Window>) -> GraphRenderer {
+        let t0 = Instant::now();
+        let display_handle = window
+            .display_handle()
+            .expect("get display handle")
+            .into();
+        let ext_ptrs = ash_window::enumerate_required_extensions(display_handle)
+            .expect("enumerate required extensions");
+        let extensions: Vec<String> = ext_ptrs
+            .iter()
+            .map(|p| {
+                unsafe { std::ffi::CStr::from_ptr(*p) }
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        let extensions_ref: Vec<&str> = extensions.iter().map(|s| s.as_str()).collect();
+        let env_bytes = load_env_bytes_from_manifest();
+        let renderer = GraphRenderer::new(
+            extensions_ref,
+            window.as_ref(),
+            window.as_ref(),
+            env_bytes,
+        )
+        .expect("failed to create renderer");
+        log::info!("Renderer created in {}ms", t0.elapsed().as_millis());
+        renderer
+    }
+
+    fn init_audio(&mut self) {
+        let config = AudioConfig {
             sample_rate: 44100,
             channels: 2,
             ..Default::default()
         };
-        match AudioEngine::new(audio_config) {
+        match AudioEngine::new(config) {
             Ok(audio) => {
                 log::info!("audio engine started");
                 self.audio = Some(audio);
             }
             Err(e) => log::warn!("audio engine failed to start, running silent: {e}"),
         }
-
-        if let Err(e) = ctx.renderer.warmup_pipelines() {
-            log::warn!("pipeline warmup failed (continuing): {e:#}");
-        }
-
-        self.engine_context = Some(ctx);
     }
+
+    // ── frame lifecycle ────────────────────────────────────────────
 
     fn frame_begin(&mut self) -> f32 {
         let now = Instant::now();
@@ -227,27 +185,31 @@ impl LegacyApp {
         self.last_frame = Some(now);
         self.fixed_accumulator += dt;
 
-        let frame_time_ms = self.editor.inspector.frame_time_ms * 0.9 + dt * 1000.0 * 0.1;
+        let frame_time_ms =
+            self.editor.inspector.frame_time_ms * 0.9 + dt * 1000.0 * 0.1;
         let fps = if dt > 0.0 { 1.0 / dt } else { 0.0 };
         let pt_frame_count = self
-            .engine_context
+            .renderer
             .as_ref()
-            .and_then(|c| c.renderer.pt_frame_count())
+            .and_then(|r| r.pt_frame_count())
             .unwrap_or(0);
-        self.editor.sync_metrics(dt, frame_time_ms, fps, pt_frame_count);
+        self.editor
+            .sync_metrics(dt, frame_time_ms, fps, pt_frame_count);
         dt
     }
 
     fn run_fixed_updates(&mut self) {
         while self.fixed_accumulator >= self.fixed_dt {
-            self.engine.fixed_update(self.fixed_dt, &self.input_manager);
+            self.engine
+                .fixed_update(self.fixed_dt, self.window_subsystem.input_manager());
             self.fixed_accumulator -= self.fixed_dt;
         }
     }
 
     fn run_update(&mut self, dt: f32) {
-        self.engine.update(dt, &self.input_manager);
-        self.input_manager.begin_frame();
+        self.engine
+            .update(dt, self.window_subsystem.input_manager());
+        self.window_subsystem.input_manager_mut().begin_frame();
     }
 
     fn post_sim_audio(&mut self) {
@@ -257,8 +219,12 @@ impl LegacyApp {
         }
     }
 
+    // ── editor ─────────────────────────────────────────────────────
+
     fn sync_editor(&mut self) {
-        let Some(ref mut ctx) = self.engine_context else { return };
+        let Some(ref mut renderer) = self.renderer else {
+            return;
+        };
 
         self.editor.sync_debug(
             self.render_settings.debug_flags,
@@ -272,7 +238,12 @@ impl LegacyApp {
             self.render_settings.pt_max_iterations,
         );
 
-        if let Some((_, cam)) = self.engine.world().query::<crate::scene::components::Camera>().next() {
+        if let Some((_, cam)) = self
+            .engine
+            .world()
+            .query::<crate::scene::components::Camera>()
+            .next()
+        {
             self.editor.inspector.has_camera = true;
             self.editor.inspector.exposure = cam.exposure;
         } else {
@@ -280,11 +251,11 @@ impl LegacyApp {
         }
 
         if self.render_graph_viz.show {
-            self.render_graph_viz.refresh_from(&ctx.renderer);
+            self.render_graph_viz.refresh_from(renderer);
         }
 
-        let window = ctx.window.clone();
-        if let Some(overlay) = ctx.renderer.egui_overlay_mut() {
+        let window = self.window_subsystem.window().unwrap().clone();
+        if let Some(overlay) = renderer.egui_overlay_mut() {
             overlay.run_ui(&window, |egui_ctx| {
                 self.editor.run_ctx(egui_ctx, self.engine.world_mut());
                 if self.render_graph_viz.show {
@@ -293,11 +264,12 @@ impl LegacyApp {
             });
         }
 
-        self.render_settings.tonemap_mode = self.editor.inspector.tonemap_mode;
         let prev_render_mode = self.render_settings.render_mode;
         let prev_pt_bounces = self.render_settings.pt_max_bounces;
         let prev_pt_dist = self.render_settings.pt_ray_max_distance;
         let prev_pt_iter = self.render_settings.pt_max_iterations;
+
+        self.render_settings.tonemap_mode = self.editor.inspector.tonemap_mode;
         self.render_settings.render_mode = self.editor.inspector.render_mode;
         self.render_settings.pt_max_bounces = self.editor.inspector.pt_max_bounces;
         self.render_settings.pt_ray_max_distance = self.editor.inspector.pt_ray_max_distance;
@@ -309,66 +281,41 @@ impl LegacyApp {
                 || self.render_settings.pt_max_iterations != prev_pt_iter
                 || self.render_settings.render_mode != prev_render_mode)
         {
-            ctx.renderer.request_pt_reset();
+            renderer.request_pt_reset();
         }
 
-        if let Some((_, cam)) = self.engine.world_mut().query_mut::<crate::scene::components::Camera>().next() {
+        if let Some((_, cam)) = self
+            .engine
+            .world_mut()
+            .query_mut::<crate::scene::components::Camera>()
+            .next()
+        {
             cam.exposure = self.editor.inspector.exposure;
         }
     }
 
-    fn tick_sim(&mut self) {
-        let dt = self.frame_begin();
-        self.run_fixed_updates();
-        self.run_update(dt);
-        self.engine.late_update();
-        self.post_sim_audio();
-
-        if self.any_ui_visible() {
-            self.sync_editor();
-        }
-
-        let (aspect, rotation) = self
-            .engine_context
-            .as_ref()
-            .map(|ctx| ctx.renderer.orientation())
-            .unwrap_or_else(|| (self.display_aspect, [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]]));
-        self.frame_packet = Some(extract_frame_packet(self.engine.world_mut(), aspect, &rotation));
-
-        self.frame_end();
-    }
-
-    fn resolve_pending_assets(&mut self, renderer: &mut GraphRenderer) {
-        self.asset_resolver.resolve_scene_assets(self.engine.world_mut(), renderer);
-    }
+    // ── rendering ──────────────────────────────────────────────────
 
     fn render_frame(&mut self) {
         if self.fatal_error.is_some() {
             return;
         }
-        let Some(ref mut ctx) = self.engine_context else {
+        let Some(ref mut renderer) = self.renderer else {
             return;
         };
-        if !ctx.renderer.has_swapchain() {
+        if !renderer.has_swapchain() {
             return;
         }
 
         if self.needs_resize {
             self.needs_resize = false;
-            if let Err(e) = ctx.renderer.recreate_swapchain() {
+            if let Err(e) = renderer.recreate_swapchain() {
                 log::debug!("swapchain recreate deferred: {e}");
                 return;
             }
         }
 
-        // Workaround: release ctx borrow before calling methods on self by
-        // extracting what we need from engine_context.
-        let renderer_ptr: *mut GraphRenderer = &mut ctx.renderer;
-        drop(ctx); // end the mutable borrow of self.engine_context
-        // Safety: renderer_ptr points to ctx.renderer which is behind
-        // self.engine_context. We won't access self.engine_context again
-        // until after using the renderer.
-        let renderer = unsafe { &mut *renderer_ptr };
+        // No borrow conflict: renderer and asset_resolver are separate fields.
         self.asset_resolver
             .resolve_scene_assets(self.engine.world_mut(), renderer);
 
@@ -387,16 +334,28 @@ impl LegacyApp {
     }
 
     fn frame_end(&mut self) {
-        if !self.any_ui_visible() { return; }
-        let Some(ref mut ctx) = self.engine_context else { return };
-        if let Some(overlay) = ctx.renderer.egui_overlay_mut() {
-            overlay.apply_platform_output(ctx.window.as_ref());
+        if !self.any_ui_visible() {
+            return;
+        }
+        let Some(ref mut renderer) = self.renderer else {
+            return;
+        };
+        if let Some(overlay) = renderer.egui_overlay_mut() {
+            if let Some(window) = self.window_subsystem.window_ref() {
+                overlay.apply_platform_output(window);
+            }
         }
     }
 
+    // ── UI ─────────────────────────────────────────────────────────
+
     fn any_ui_visible(&self) -> bool {
-        self.editor.inspector.show || self.render_graph_viz.show || self.editor.inspector.show_perf
+        self.editor.inspector.show
+            || self.render_graph_viz.show
+            || self.editor.inspector.show_perf
     }
+
+    // ── keyboard / debug ───────────────────────────────────────────
 
     fn pbr_flag_names() -> &'static [&'static str; 15] {
         &[
@@ -438,19 +397,24 @@ impl LegacyApp {
     }
 
     fn toggle_editor_panel<F>(&mut self, panel_open: &mut bool, init_egui: F)
-    where F: FnOnce(&mut Editor, &mut RenderGraphViz),
+    where
+        F: FnOnce(&mut Editor, &mut RenderGraphViz),
     {
         let was_open = *panel_open;
         *panel_open = !*panel_open;
 
         if *panel_open && !was_open {
-            self.input_manager.lock_before_inspector = self.input_manager.pointer_locked;
-            self.input_manager.alt_temp_release = false;
-            if self.input_manager.pointer_locked {
-                self.input_manager.set_locked(false, self.engine_context.as_ref().map(|c| c.window.as_ref()));
+            let window_clone = self.window_subsystem.window().cloned();
+        let im = self.window_subsystem.input_manager_mut();
+        im.lock_before_inspector = im.pointer_locked;
+        im.alt_temp_release = false;
+        if im.pointer_locked {
+            if let Some(ref w) = window_clone {
+                im.set_locked(false, Some(w.as_ref()));
             }
-            if let Some(ref mut ctx) = self.engine_context {
-                if let Err(e) = ctx.renderer.ensure_egui_overlay() {
+        }
+            if let Some(ref mut renderer) = self.renderer {
+                if let Err(e) = renderer.ensure_egui_overlay() {
                     log::error!("failed to init egui overlay: {e}");
                     *panel_open = false;
                     return;
@@ -458,20 +422,67 @@ impl LegacyApp {
             }
             init_egui(&mut self.editor, &mut self.render_graph_viz);
         } else if !*panel_open && was_open {
-            if self.input_manager.lock_before_inspector
+            if self.window_subsystem.input_manager().lock_before_inspector
                 && !self.editor.inspector.show
                 && !self.render_graph_viz.show
             {
-                self.input_manager.lock_before_inspector = false;
-                self.input_manager.set_locked(true, self.engine_context.as_ref().map(|c| c.window.as_ref()));
+                let window_clone = self.window_subsystem.window().cloned();
+                let im = self.window_subsystem.input_manager_mut();
+                if let Some(ref w) = window_clone {
+                    im.set_locked(true, Some(w.as_ref()));
+                }
+                im.lock_before_inspector = false;
             }
         }
     }
 
-    fn show_fatal_dialog(&mut self, event_loop: &ActiveEventLoop) {
-        let message = self.fatal_error.take().unwrap_or_else(|| "An unknown fatal error occurred.".to_string());
-        let _choice = crate::crash_dialog::show_crash_dialog("PrismaRev - Fatal Error", &message);
-        event_loop.exit();
+    // ── fatal error ────────────────────────────────────────────────
+
+    fn show_fatal_dialog(&mut self, ctx: &PlatformContext) {
+        let message = self
+            .fatal_error
+            .take()
+            .unwrap_or_else(|| "An unknown fatal error occurred.".to_string());
+        let _choice =
+            crate::crash_dialog::show_crash_dialog("PrismaRev - Fatal Error", &message);
+        ctx.exit();
+    }
+
+    // ── simulation tick ────────────────────────────────────────────
+
+    fn tick_sim(&mut self) {
+        let dt = self.frame_begin();
+        self.run_fixed_updates();
+        self.run_update(dt);
+        self.engine.late_update();
+        self.post_sim_audio();
+
+        if self.any_ui_visible() {
+            self.sync_editor();
+        }
+
+        let (aspect, rotation) = self
+            .renderer
+            .as_ref()
+            .map(|r| r.orientation())
+            .unwrap_or_else(|| {
+                (
+                    self.display_aspect,
+                    [
+                        [1.0, 0.0, 0.0, 0.0],
+                        [0.0, 1.0, 0.0, 0.0],
+                        [0.0, 0.0, 1.0, 0.0],
+                        [0.0, 0.0, 0.0, 1.0],
+                    ],
+                )
+            });
+        self.frame_packet = Some(extract_frame_packet(
+            self.engine.world_mut(),
+            aspect,
+            &rotation,
+        ));
+
+        self.frame_end();
     }
 }
 
@@ -481,22 +492,38 @@ impl Default for LegacyApp {
     }
 }
 
-// ===========================================================================
-// ApplicationHandler
-// ===========================================================================
+// =========================================================================
+// AppDriver implementation
+// =========================================================================
 
-impl ApplicationHandler for LegacyApp {
-    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if self.engine_context.is_none() {
-            self.ensure_engine_context(event_loop);
+impl AppDriver for LegacyApp {
+    fn on_resumed(&mut self, ctx: &PlatformContext) {
+        // First resume — create window, renderer, audio
+        if self.window_subsystem.window().is_none() {
+            let window_cfg = &self.config.window;
+            self.window_subsystem.create_window(ctx, window_cfg);
+
+            let window = self.window_subsystem.window().unwrap().clone();
+            let mut renderer = Self::create_renderer(&window);
+            if let Err(e) = renderer.warmup_pipelines() {
+                log::warn!("pipeline warmup failed (continuing): {e:#}");
+            }
+            self.renderer = Some(renderer);
+
+            self.init_audio();
             self.engine.on_resume();
             return;
         }
 
-        let Some(ref mut ctx) = self.engine_context else { return };
-        if ctx.renderer.has_swapchain() { return; }
-
-        match ctx.renderer.resume_surface(ctx.window.as_ref(), ctx.window.as_ref()) {
+        // Resume from suspend
+        let Some(ref mut renderer) = self.renderer else {
+            return;
+        };
+        if renderer.has_swapchain() {
+            return;
+        }
+        let window = self.window_subsystem.window().unwrap().clone();
+        match renderer.resume_surface(window.as_ref(), window.as_ref()) {
             Ok(()) => {
                 log::info!("resume_surface ok");
                 self.engine.on_resume();
@@ -506,38 +533,44 @@ impl ApplicationHandler for LegacyApp {
         }
     }
 
-    fn window_event(
+    fn on_window_event(
         &mut self,
-        event_loop: &ActiveEventLoop,
+        ctx: &PlatformContext,
         _window_id: WindowId,
-        event: WindowEvent,
+        event: &WindowEvent,
     ) {
         if self.fatal_error.is_some() {
-            self.show_fatal_dialog(event_loop);
+            self.show_fatal_dialog(ctx);
             return;
         }
 
+        // ── egui overlay handling ──────────────────────────────────
         let egui_consumed = self
-            .engine_context
+            .renderer
             .as_mut()
-            .and_then(|ctx| {
-                let w: &Window = ctx.window.as_ref();
-                let handled = ctx.renderer
-                    .egui_overlay_mut()
-                    .map(|overlay| overlay.handle_window_event(w, &event));
-                handled
+            .and_then(|r| {
+                let w = self.window_subsystem.window()?;
+                r.egui_overlay_mut()
+                    .map(|overlay| overlay.handle_window_event(w.as_ref(), &event))
             })
             .unwrap_or(false);
         if egui_consumed {
             return;
         }
 
-        if let Some(ref ctx) = self.engine_context {
-            self.input_manager.handle_window_event(&event, event_loop, ctx.window.as_ref());
-        }
+        // ── input ──────────────────────────────────────────────────
+        let event_loop: &ActiveEventLoop = ctx.inner;
+        self.window_subsystem
+            .handle_window_event(event_loop, event);
 
+        // ── keyboard shortcuts ─────────────────────────────────────
         if let WindowEvent::KeyboardInput {
-            event: winit::event::KeyEvent { physical_key, state: winit::event::ElementState::Pressed, .. },
+            event:
+                winit::event::KeyEvent {
+                    physical_key,
+                    state: winit::event::ElementState::Pressed,
+                    ..
+                },
             ..
         } = &event
         {
@@ -545,36 +578,55 @@ impl ApplicationHandler for LegacyApp {
                 winit::keyboard::PhysicalKey::Code(c) => *c,
                 _ => return,
             };
-            let shift = self.input_manager.key_held(crate::input::KeyCode::ShiftLeft)
-     || self.input_manager.key_held(crate::input::KeyCode::ShiftRight);
-            let ctrl = self.input_manager.key_held(crate::input::KeyCode::ControlLeft)
-                || self.input_manager.key_held(crate::input::KeyCode::ControlRight);
+            let im = self.window_subsystem.input_manager();
+            let shift =
+                im.key_held(input::KeyCode::ShiftLeft) || im.key_held(input::KeyCode::ShiftRight);
+            let ctrl = im.key_held(input::KeyCode::ControlLeft)
+                || im.key_held(input::KeyCode::ControlRight);
+            drop(im);
 
             if let Some(bit) = Self::pbr_debug_key_to_bit(code, shift) {
                 self.render_settings.debug_flags =
-                    if self.render_settings.debug_flags == (1u32 << bit) { 0 } else { 1u32 << bit };
-                log::info!("PBR isolate = {} (flags=0x{:x})", self.pbr_flag_label(), self.render_settings.debug_flags);
+                    if self.render_settings.debug_flags == (1u32 << bit) {
+                        0
+                    } else {
+                        1u32 << bit
+                    };
+                log::info!(
+                    "PBR isolate = {} (flags=0x{:x})",
+                    self.pbr_flag_label(),
+                    self.render_settings.debug_flags
+                );
                 return;
             }
 
             match code {
                 winit::keyboard::KeyCode::Tab => {
-                    self.render_settings.debug_rt = (self.render_settings.debug_rt + 1) % 3;
+                    self.render_settings.debug_rt =
+                        (self.render_settings.debug_rt + 1) % 3;
                     let name = match self.render_settings.debug_rt {
                         0 => "normal (HDR tonemap)",
                         1 => "depth (linearized)",
                         2 => "normal (view-space)",
                         _ => "?",
                     };
-                    log::info!("debug RT = {} ({})", self.render_settings.debug_rt, name);
+                    log::info!(
+                        "debug RT = {} ({})",
+                        self.render_settings.debug_rt,
+                        name
+                    );
                 }
                 winit::keyboard::KeyCode::KeyT => {
-                    self.render_settings.tonemap_mode = if self.render_settings.tonemap_mode == 0 {
-                        1
-                    } else {
-                        0
-                    };
-                    log::info!("tonemap mode = {}", self.render_settings.tonemap_mode);
+                    self.render_settings.tonemap_mode =
+                        if self.render_settings.tonemap_mode == 0 {
+                            1
+                        } else {
+                            0
+                        };
+                    log::info!(
+                        "tonemap mode = {}",
+                        self.render_settings.tonemap_mode
+                    );
                 }
                 winit::keyboard::KeyCode::F1 => {
                     self.editor.inspector.show = !self.editor.inspector.show;
@@ -585,8 +637,8 @@ impl ApplicationHandler for LegacyApp {
                 winit::keyboard::KeyCode::F3 => {
                     self.editor.toggle_perf();
                     if self.editor.inspector.show_perf {
-                        if let Some(ref mut ctx) = self.engine_context {
-                            if let Err(e) = ctx.renderer.ensure_egui_overlay() {
+                        if let Some(ref mut renderer) = self.renderer {
+                            if let Err(e) = renderer.ensure_egui_overlay() {
                                 log::error!("failed to init egui overlay: {e}");
                                 self.editor.inspector.show_perf = false;
                             }
@@ -601,12 +653,17 @@ impl ApplicationHandler for LegacyApp {
             return;
         }
 
+        // ── window events ──────────────────────────────────────────
         match event {
             WindowEvent::Resized(size) => {
                 self.needs_resize = true;
                 if size.width > 0 && size.height > 0 {
                     self.display_aspect = size.width as f32 / size.height as f32;
-                    for (_, cam) in self.engine.world_mut().query_mut::<crate::scene::components::Camera>() {
+                    for (_, cam) in self
+                        .engine
+                        .world_mut()
+                        .query_mut::<crate::scene::components::Camera>()
+                    {
                         cam.aspect = self.display_aspect;
                     }
                 }
@@ -616,38 +673,48 @@ impl ApplicationHandler for LegacyApp {
         }
     }
 
-    fn device_event(&mut self, _event_loop: &ActiveEventLoop, _device_id: winit::event::DeviceId, event: DeviceEvent) {
-        if let DeviceEvent::MouseMotion { delta } = event {
-            if !self.input_manager.pointer_locked { return; }
-            let pos = self.input_manager.mouse_position();
-            self.input_manager.handle_mouse_move([pos[0] + delta.0, pos[1] + delta.1]);
-        }
+    fn on_device_event(
+        &mut self,
+        _ctx: &PlatformContext,
+        _device_id: winit::event::DeviceId,
+        event: &DeviceEvent,
+    ) {
+        self.window_subsystem.handle_device_event(event);
     }
 
-    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        if event_loop.exiting() {
-            if self.input_manager.pointer_locked {
-                let window = self.engine_context.as_ref().map(|c| c.window.as_ref());
-                self.input_manager.set_locked(false, window);
-            }
-            self.engine.pre_shutdown();
-            self.engine_context = None;
-            self.engine.post_shutdown();
+    fn on_suspended(&mut self, _ctx: &PlatformContext) {
+        if let Some(ref mut renderer) = self.renderer {
+            renderer.suspend_surface();
+        }
+        self.engine.on_suspend();
+    }
+
+    fn on_about_to_wait(&mut self, ctx: &PlatformContext) {
+        if ctx.exiting() {
+            // Cleanup — will be dropped by on_exiting
             return;
         }
 
-        if self.engine_context.is_some() {
+        if self.window_subsystem.window().is_some() {
             self.tick_sim();
-            if let Some(ref ctx) = self.engine_context {
-                ctx.window.request_redraw();
+            if let Some(ref window) = self.window_subsystem.window() {
+                window.request_redraw();
             }
         }
     }
 
-    fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
-        if let Some(ref mut ctx) = self.engine_context {
-            ctx.renderer.suspend_surface();
+    fn on_exiting(&mut self, _ctx: &PlatformContext) {
+        let window_clone = self.window_subsystem.window().cloned();
+        if self.window_subsystem.input_manager().pointer_locked {
+            let im = self.window_subsystem.input_manager_mut();
+            if let Some(ref w) = window_clone {
+                im.set_locked(false, Some(w.as_ref()));
+            }
         }
-        self.engine.on_suspend();
+        self.engine.pre_shutdown();
+        // Drop renderer before window (field order guarantees this).
+        self.renderer = None;
+        self.window_subsystem = WindowSubsystem::new();
+        self.engine.post_shutdown();
     }
 }

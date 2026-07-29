@@ -17,6 +17,7 @@ pub mod crash_dialog;
 pub mod dirty_router;
 pub mod engine;
 pub mod input;
+pub(crate) mod platform;
 pub mod render_settings;
 pub mod render_system;
 pub mod scene;
