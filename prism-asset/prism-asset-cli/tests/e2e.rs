@@ -1,14 +1,14 @@
-//! End-to-end integration test for the resource pipeline.
+//! End-to-end integration test for the 资源 管线
 //!
-//! Covers the full lifecycle with **real assets** from the Sponza scene:
+//! Covers the 完整 lifecycle with **real assets** from the Sponza scene:
 //!
-//!   init → import → build → validate → runtime load → assert
+//! init → 导入 → 构建 → validate → 运行时 加载 → assert
 //!
-//! Texture asset: a genuine 4 K Sponza PBR base-colour PNG (~11 MB) that
-//! exercises the real image decoder, mip-chain generator, and RTEX cooking
-//! code paths any production project would use.
+//! 纹理 资源 a genuine 4 K Sponza PBR base-colour PNG (~11 MB) that
+//! exercises the real 图像 decoder, mip-chain 生成器 and RTEX cooking
+//! 代码 paths any production project would use.
 //!
-//! Mesh and JSON assets are real files created at test time since the
+//! 网格 and JSON assets are real files created at test 时间 since the
 //! Sponza glTF (140 MB .bin + 137 textures) is too heavy for a unit test.
 
 use std::collections::HashMap;
@@ -28,7 +28,7 @@ use prism_asset_runtime::{EvictionPolicy, ResourceManager};
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Create a temporary project directory with the given name.
+/// 创建 a temporary project directory with the given name.
 fn create_project(name: &str) -> (tempfile::TempDir, PathBuf) {
     let dir = tempfile::tempdir().expect("create temp dir");
     let root = dir.path().join(name);
@@ -37,7 +37,7 @@ fn create_project(name: &str) -> (tempfile::TempDir, PathBuf) {
     (dir, root)
 }
 
-/// Write a test asset file.
+/// 写入 a test 资源 file.
 fn write_asset(root: &Path, rel_path: &str, data: &[u8]) -> PathBuf {
     let full = root.join("Assets").join(rel_path);
     if let Some(parent) = full.parent() {
@@ -47,7 +47,7 @@ fn write_asset(root: &Path, rel_path: &str, data: &[u8]) -> PathBuf {
     full
 }
 
-/// Copy an external file into the test Assets/ directory.
+/// 复制 an 外部 file into the test Assets/ directory.
 fn copy_external_asset(root: &Path, src: &Path, rel_dst: &str) -> PathBuf {
     let dst = root.join("Assets").join(rel_dst);
     if let Some(parent) = dst.parent() {
@@ -74,9 +74,9 @@ fn collect_files(dir: &Path) -> Vec<PathBuf> {
     files
 }
 
-/// Build a minimal valid GLB file in memory.
+/// 构建 a minimal 有效 GLB file in 内存
 ///
-/// One triangle mesh (3 vertices, 3 unsigned-short indices), no material,
+/// One triangle 网格 (3 顶点 3 unsigned-short indices), no 材质
 /// no textures.
 fn create_minimal_glb_bytes() -> Vec<u8> {
     let positions: &[f32] = &[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
@@ -155,7 +155,7 @@ fn create_minimal_glb_bytes() -> Vec<u8> {
     glb
 }
 
-/// Find an asset record whose stored path contains the given suffix.
+/// 查找 an 资源 record whose stored path 包含 the given suffix.
 fn find_id_by_suffix<'a>(db: &'a AssetDatabase, suffix: &str) -> Option<AssetId> {
     db.records().find_map(|r| {
         if r.path.ends_with(suffix) { Some(r.id) } else { None }
@@ -163,25 +163,25 @@ fn find_id_by_suffix<'a>(db: &'a AssetDatabase, suffix: &str) -> Option<AssetId>
 }
 
 // ---------------------------------------------------------------------------
-// Real asset source paths (Sponza scene)
+// Real 资源 源 paths (Sponza scene)
 // ---------------------------------------------------------------------------
 
 /// Root of the downloaded Sponza scene (configured in `assets/scenes.toml`).
 const SPONZA_DIR: &str = "D:/Download/main_sponza/main_sponza";
 
 /// A real 4 K PBR base-colour PNG from the Sponza scene (~11 MB).  Picked as
-/// the smallest BaseColor texture so the test stays reasonably fast while
-/// still exercising the full production texture pipeline.
+/// the smallest BaseColor 纹理 so the test stays reasonably fast while
+/// still exercising the 完整 production 纹理 管线
 const SPONZA_TEXTURE: &str = "textures/metal_door_01_BaseColor.png";
 
 // ---------------------------------------------------------------------------
-// E2E Test: full pipeline with real Sponza texture
+// E2E Test: 完整 管线 with real Sponza 纹理
 // ---------------------------------------------------------------------------
 
 #[test]
 fn e2e_full_pipeline() {
     // ======================================================================
-    // 1. SETUP: create project with real + generated assets
+    // 1. SETUP: 创建 project with real + generated assets
     // ======================================================================
     let (_dir, root) = create_project("sponza-e2e");
 
@@ -191,7 +191,7 @@ fn e2e_full_pipeline() {
     let assets_dir = root.join("Assets");
     let library_dir = root.join("Library");
 
-    // --- Real Sponza 4 K texture ---
+    // --- Real Sponza 4 K 纹理 ---
     let sponza_tex_src = Path::new(SPONZA_DIR).join(SPONZA_TEXTURE);
     assert!(
         sponza_tex_src.exists(),
@@ -211,11 +211,11 @@ fn e2e_full_pipeline() {
     assert_eq!(files.len(), 3, "should have 3 source files");
 
     // ======================================================================
-    // 2. IMPORT: run ImportPipeline on all files, capture intermediate data
+    // 2. 导入 run ImportPipeline on all files, capture intermediate data
     //
-    // NOTE: import_file stores the full absolute path (forward-slash
-    // normalized) in the database, NOT a relative path.  All lookups
-    // below use suffix matching to work around that.
+    // 音符 import_file stores the 完整 绝对 path (forward-slash
+    // 归一化 in the database, NOT a 相对 path. All lookups
+    // below use suffix matching to 功 around that.
     // ======================================================================
     let importer_reg = Arc::new(default_importer_registry());
     let import_pipeline = ImportPipeline::new(importer_reg);
@@ -224,7 +224,7 @@ fn e2e_full_pipeline() {
     let mut cache = ImportCache::new();
     let mut intermediate_data: HashMap<AssetId, Vec<u8>> = HashMap::new();
 
-    // Import the real Sponza texture.
+    // 导入 the real Sponza 纹理
     let r1 = import_pipeline
         .import_file(&sponza_path, &mut db, &mut cache, None)
         .expect("import Sponza texture");
@@ -235,7 +235,7 @@ fn e2e_full_pipeline() {
         intermediate_data.insert(id, data);
     }
 
-    // Import the JSON file.
+    // 导入 the JSON file.
     let json_file = assets_dir.join("test.json");
     let r2 = import_pipeline
         .import_file(&json_file, &mut db, &mut cache, None)
@@ -247,7 +247,7 @@ fn e2e_full_pipeline() {
         intermediate_data.insert(id, data);
     }
 
-    // Import the GLB file.
+    // 导入 the GLB file.
     let r3 = import_pipeline
         .import_file(&glb_path, &mut db, &mut cache, None)
         .expect("import GLB");
@@ -262,7 +262,7 @@ fn e2e_full_pipeline() {
     assert_eq!(db.len(), 3, "database should have 3 records after import");
     assert!(cache.len() > 0, "import cache should have entries");
 
-    // Verify each record has the correct asset type and importer.
+    // 验证 each record has the correct 资源 类型 and importer.
     for record in db.records() {
         if record.path.ends_with("metal_door_01_BaseColor.png") {
             assert_eq!(record.asset_type, AssetType::Texture);
@@ -280,21 +280,21 @@ fn e2e_full_pipeline() {
         assert!(record.source_hash != 0, "source hash should be set");
     }
 
-    // Verify we captured intermediate data for all three assets.
+    // 验证 we captured intermediate data for all three assets.
     assert_eq!(
         intermediate_data.len(),
         3,
         "should have intermediate data for all assets"
     );
 
-    // Save and reload the database (simulates persistence).
+    // 保存 and reload the database (simulates persistence).
     let db_path = library_dir.join("AssetDatabase.json");
     db.save(&db_path).expect("save database");
     let db_loaded = AssetDatabase::load(&db_path).expect("reload database");
     assert_eq!(db_loaded.len(), 3, "reloaded database should have 3 records");
 
     // ======================================================================
-    // 3. COOK + BUILD: run CookPipeline with real intermediate data → .pak
+    // 3. 烹饪 + 构建 run CookPipeline with real intermediate data → .pak
     // ======================================================================
     let cooker_reg = default_cooker_registry();
     let cook_pipeline = CookPipeline::new(cooker_reg);
@@ -312,11 +312,11 @@ fn e2e_full_pipeline() {
     let pak_bytes = builder.build().expect("build .pak");
     assert!(pak_bytes.len() > 50, ".pak should be non-trivial size");
 
-    // Save .pak to disk for runtime loading.
+    // 保存 .pak to disk for 运行时 loading.
     let pak_path = root.join("game.pak");
     std::fs::write(&pak_path, &pak_bytes).expect("write .pak");
 
-    // ── Write a .pak.meta.json alongside the .pak for inspection ──────
+    // ── 写入 a .pak.meta.json alongside the .pak for inspection ──────
     {
         let reader_for_meta = PackageReader::from_bytes(&pak_bytes)
             .expect("read back .pak for metadata");
@@ -365,7 +365,7 @@ fn e2e_full_pipeline() {
     }
 
     // ======================================================================
-    // 4. VALIDATE: verify .pak structure with PackageReader
+    // 4. VALIDATE: 验证 .pak structure with PackageReader
     // ======================================================================
     let reader = PackageReader::from_bytes(&pak_bytes).expect("read .pak from bytes");
     assert_eq!(&reader.header().magic, b"RPAK", "magic should be RPAK");
@@ -373,7 +373,7 @@ fn e2e_full_pipeline() {
     assert_eq!(reader.asset_count(), 3, "should have 3 assets in .pak");
     assert_eq!(reader.records().len(), 3, "should have 3 records in registry");
 
-    // Verify we can read each asset's cooked data back.
+    // 验证 we can 读取 each asset's cooked data 后
     for record in db_loaded.records() {
         let data: Vec<u8> = reader
             .read_asset_data(record.id)
@@ -382,7 +382,7 @@ fn e2e_full_pipeline() {
         assert!(!data.is_empty(), "asset data should not be empty");
     }
 
-    // --- Verify cooked texture format ---
+    // --- 验证 cooked 纹理 格式 ---
     let tex_id = find_id_by_suffix(&db_loaded, "metal_door_01_BaseColor.png")
         .expect("texture in db after reload");
     let tex_data = reader
@@ -390,12 +390,12 @@ fn e2e_full_pipeline() {
         .expect("read texture from .pak")
         .unwrap();
     assert_eq!(&tex_data[..4], b"RTEX", "cooked texture should have RTEX header");
-    // A real 4 K texture (e.g. 4096×4096) should produce 13 mip levels
+    // A real 4 K 纹理 (e.g. 4096×4096) should produce 13 mip levels
     // (4096→2048→1024→512→256→128→64→32→16→8→4→2→1).
     let tex_width = u32::from_le_bytes(tex_data[5..9].try_into().unwrap());
     let tex_height = u32::from_le_bytes(tex_data[9..13].try_into().unwrap());
     let tex_mips = u32::from_le_bytes(tex_data[13..17].try_into().unwrap());
-    // The Sponza metal_door_01 texture is 4096×4096 → log2(4096) = 12 → 13 mips.
+    // The Sponza metal_door_01 纹理 is 4096×4096 → log2(4096) = 12 → 13 mips.
     assert_eq!(
         tex_width, 4096,
         "Sponza metal door basecolor should be 4K"
@@ -409,7 +409,7 @@ fn e2e_full_pipeline() {
         "4096×4096 texture should produce 13 mip levels"
     );
 
-    // --- Verify cooked mesh format ---
+    // --- 验证 cooked 网格 格式 ---
     let mesh_id = find_id_by_suffix(&db_loaded, "subdir/model.glb")
         .expect("mesh in db after reload");
     let mesh_data = reader
@@ -422,8 +422,8 @@ fn e2e_full_pipeline() {
     assert_eq!(verts, 3, "triangle should have 3 vertices");
     assert_eq!(idxs, 3, "triangle should have 3 indices");
 
-    // ── Round-trip: decode cooked data back → compare vs intermediate ──
-    // Texture: RTEX mip0 must match RTXI pixels byte-for-byte.
+    // ── Round-trip: 解码 cooked data 后 → 比较 vs intermediate ──
+    // 纹理 RTEX mip0 must 匹配 RTXI pixels byte-for-byte.
     {
         let rtxi = intermediate_data
             .get(&tex_id)
@@ -446,7 +446,7 @@ fn e2e_full_pipeline() {
             "RTEX mip0 must match RTXI pixels (texture cook round-trip)"
         );
 
-        // Optional: save decoded mip0 as PNG for visual inspection.
+        // Optional: 保存 decoded mip0 as PNG for visual inspection.
         let png_path = pak_path.with_extension("decoded.png");
         if let Err(e) = image::save_buffer(
             &png_path,
@@ -461,7 +461,7 @@ fn e2e_full_pipeline() {
         }
     }
 
-    // Mesh: RMES vertex/index data must match RMXI data byte-for-byte.
+    // 网格 RMES vertex/index data must 匹配 RMXI data byte-for-byte.
     {
         let rmxi = intermediate_data
             .get(&mesh_id)
@@ -473,19 +473,19 @@ fn e2e_full_pipeline() {
         assert_eq!(rmes.vert_count, 3);
         assert_eq!(rmes.idx_count, 3);
 
-        // Vertex data (positions + normals + UVs) must match.
+        // 顶点 data (positions + normals + UVs) must 匹配
         assert_eq!(
             rmes.vertex_data, rmxi_vert,
             "RMES vertex data must match RMXI (mesh cook round-trip)"
         );
-        // Index data must match.
+        // 索引 data must 匹配
         assert_eq!(
             rmes.index_data, rmxi_idx,
             "RMES index data must match RMXI (mesh cook round-trip)"
         );
     }
 
-    // Binary: cooked data must be identical to intermediate data.
+    // 二进制 cooked data must be 相同 to intermediate data.
     {
         let bin_id = find_id_by_suffix(&db_loaded, "test.json")
             .expect("json asset in db after reload");
@@ -503,7 +503,7 @@ fn e2e_full_pipeline() {
     }
 
     // ======================================================================
-    // 5. RUNTIME LOAD: use ResourceManager to load the .pak
+    // 5. 运行时 加载 use ResourceManager to 加载 the .pak
     // ======================================================================
     let mut rm = ResourceManager::new();
     rm.set_memory_budget(200 * 1024 * 1024); // 200 MB (a 4K RGBA8 texture is ~67 MB)
@@ -512,7 +512,7 @@ fn e2e_full_pipeline() {
     assert_eq!(rm.asset_count(), 3, "runtime should have 3 assets");
     assert_eq!(rm.package_count(), 1, "runtime should have 1 package");
 
-    // Load and verify each asset.
+    // 加载 and 验证 each 资源
     let records: Vec<(AssetId, String)> = db_loaded
         .records()
         .map(|r| (r.id, r.path.clone()))
@@ -527,7 +527,7 @@ fn e2e_full_pipeline() {
         assert!(!data.is_empty(), "loaded data should not be empty");
     }
 
-    // Verify memory tracking.
+    // 验证 内存 tracking.
     assert!(rm.memory_usage() > 0, "memory usage should be > 0 after loading");
     assert!(
         rm.memory_usage() <= 200 * 1024 * 1024,
@@ -535,7 +535,7 @@ fn e2e_full_pipeline() {
     );
 
     // ======================================================================
-    // 6. UNLOAD + RE-LOAD: verify handle generations
+    // 6. UNLOAD + RE-LOAD: 验证 handle generations
     // ======================================================================
     let id = records[0].0;
     let handle: Handle<Vec<u8>> = rm.load(id).unwrap();
@@ -550,7 +550,7 @@ fn e2e_full_pipeline() {
     assert!(err.is_err(), "old handle should fail generation check");
 
     // ======================================================================
-    // 7. DEPENDENCY LOADING: verify topological load
+    // 7. DEPENDENCY LOADING: 验证 topological 加载
     // ======================================================================
     let dep_id = AssetId::from_raw((2u64 << 32) | 1);
     let root_id = AssetId::from_raw((2u64 << 32) | 2);
@@ -575,7 +575,7 @@ fn e2e_full_pipeline() {
     assert_eq!(dep_data, b"dep data", "dep data should match");
 
     // ======================================================================
-    // 8. MEMORY BUDGET / EVICTION
+    // 8. 内存 BUDGET / EVICTION
     // ======================================================================
     let small_id = AssetId::from_raw((3u64 << 32) | 1);
     let mut b3 = PackageBuilder::new();
@@ -645,7 +645,7 @@ fn e2e_full_pipeline() {
     assert_eq!(chunks.len(), 3, "should be 3 chunks (100+100+50)");
 
     // ======================================================================
-    // 10. HOT-RELOAD (manual trigger)
+    // 10. HOT-RELOAD (manual 触发器
     // ======================================================================
     {
         use prism_asset_runtime::HotReloadWatcher;
@@ -686,7 +686,7 @@ fn e2e_full_pipeline() {
     }
 
     // ======================================================================
-    // 11. CLI COMMANDS (simulate via library calls)
+    // 11. CLI COMMANDS (simulate via 库 calls)
     // ======================================================================
 
     let reader2 = PackageReader::open(&pak_path).expect("validate .pak");
@@ -706,7 +706,7 @@ fn e2e_full_pipeline() {
 }
 
 // ---------------------------------------------------------------------------
-// E2E Test: incremental import (cache hit)
+// E2E Test: 增量 导入 (cache hit)
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -724,13 +724,13 @@ fn e2e_incremental_import() {
 
     let file = assets_dir.join("cached.bin");
 
-    // First import — should run (not cached).
+    // 第一个 导入 — should run (not cached).
     let r1 = pipeline
         .import_file(&file, &mut db, &mut cache, None)
         .expect("first import");
     assert!(r1.was_imported, "first import should run (not cached)");
 
-    // Second import — should be cached.
+    // 秒 导入 — should be cached.
     let r2 = pipeline
         .import_file(&file, &mut db, &mut cache, None)
         .expect("second import");
@@ -745,7 +745,7 @@ fn e2e_incremental_import() {
 }
 
 // ---------------------------------------------------------------------------
-// E2E Test: empty project
+// E2E Test: 空 project
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -768,7 +768,7 @@ fn e2e_empty_project() {
 }
 
 // ---------------------------------------------------------------------------
-// E2E Test: package corruption detection
+// E2E Test: 包 corruption detection
 // ---------------------------------------------------------------------------
 
 #[test]

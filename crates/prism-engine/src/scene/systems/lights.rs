@@ -1,7 +1,7 @@
-//! Light collectors — query the ECS [`World`] for active light components.
+//! 光源 collectors — 查询 the ECS 世界 for 激活 光源 components.
 //!
-//! These are called each frame by `app.rs` to populate the [`GraphFrame`]'s
-//! light data.  Each collector returns the *first N* enabled lights (or all,
+//! These are called each 帧 by `app.rs` to populate the [`GraphFrame`]'s
+//! 光源 data. Each collector returns the *first N* 启用 lights (or all,
 //! for spot lights — typically few enough).
 
 use prism_ecs::World;
@@ -9,9 +9,9 @@ use prism_render::LIGHT_MAX;
 
 use crate::scene::components::*;
 
-/// Component-level visibility. `World::query` already excludes entities made
-/// inactive through `World::set_active`; this handles the scene `Active`
-/// component used by the inspector and scene loader.
+/// Component-level 可见性 `World::query` already excludes entities made
+/// 未激活 through `World::set_active`; this handles the scene 激活
+/// 分量 used by the 检查器 and scene loader.
 pub(crate) fn component_is_active(world: &World, entity: prism_ecs::Entity) -> bool {
     world
         .get::<Active>(entity)
@@ -19,9 +19,9 @@ pub(crate) fn component_is_active(world: &World, entity: prism_ecs::Entity) -> b
         .unwrap_or(true)
 }
 
-/// Return the first [`DirectionalLight`] in the world, if any.
+/// Return the 第一个 [`DirectionalLight`] in the 世界 if any.
 ///
-/// Typically there is one sun; the renderer uses the first one found.
+/// Typically there is one sun; the 渲染器 uses the 第一个 one 找到
 pub fn collect_directional_light(world: &World) -> Option<DirectionalLight> {
     world
         .query::<DirectionalLight>()
@@ -29,7 +29,7 @@ pub fn collect_directional_light(world: &World) -> Option<DirectionalLight> {
         .map(|(_, light)| *light)
 }
 
-/// Collect point lights, up to [`LIGHT_MAX`] (currently 64).
+/// Collect point lights, 上 to [`LIGHT_MAX`] (currently 64).
 pub fn collect_point_lights(world: &World) -> Vec<PointLight> {
     world
         .query::<PointLight>()
@@ -41,8 +41,8 @@ pub fn collect_point_lights(world: &World) -> Vec<PointLight> {
 
 /// Collect spot lights.
 ///
-/// Spot lights are not yet in the renderer's GPU-light limit (they use a
-/// different SSBO layout in the forward+ path).  Return all of them.
+/// Spot lights are not yet in the renderer's GPU-light 限制 (they use a
+/// different SSBO 布局 in the forward+ path). Return all of them.
 pub fn collect_spot_lights(world: &World) -> Vec<SpotLight> {
     world
         .query::<SpotLight>()
@@ -109,7 +109,7 @@ mod tests {
     #[test]
     fn point_lights_respect_max() {
         let mut world = World::new();
-        // Insert LIGHT_MAX + 5 point lights.
+        // 插入 LIGHT_MAX + 5 point lights.
         let extra = LIGHT_MAX + 5;
         for _ in 0..extra {
             let e = world.spawn();

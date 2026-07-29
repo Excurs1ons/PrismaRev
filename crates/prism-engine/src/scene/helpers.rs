@@ -7,15 +7,15 @@ use prism_ecs::{Entity, World};
 
 use super::components::{Children, Parent};
 
-/// Safe API for managing the entity hierarchy.
+/// Safe API for managing the 实体 hierarchy.
 pub struct HierarchyHelper;
 
 impl HierarchyHelper {
-    /// Set `entity`'s parent to `new_parent`.
+    /// 集合 `entity`'s parent to `new_parent`.
     ///
-    /// - `Some(parent)` attaches the entity under `parent`.
-    /// - `None` detaches the entity (it becomes a root node).
-    /// - Updates both old and new parent's [`Children`] list.
+    /// - `Some(parent)` attaches the 实体 under `parent`.
+    /// - `None` detaches the 实体 (it becomes a root node).
+    /// - Updates both old and new parent's [`Children`] 列表
     /// - Self-parent is rejected (logged and ignored).
     /// - Dead entities are rejected (logged and ignored).
     pub fn reparent(world: &mut World, entity: Entity, new_parent: Option<Entity>) {
@@ -24,7 +24,7 @@ impl HierarchyHelper {
             return;
         }
 
-        // 1. Remove from old parent's Children list.
+        // 1. 移除 from old parent's Children 列表
         if let Some(old_parent) = world.get::<Parent>(entity).map(|p| p.0) {
             if let Some(children) = world.get_mut::<Children>(old_parent) {
                 children.0.retain(|e| *e != entity);
@@ -52,7 +52,7 @@ impl HierarchyHelper {
         }
     }
 
-    /// Return `true` if `entity` has at least one child.
+    /// Return `true` if 实体 has at least one child.
     pub fn has_children(world: &World, entity: Entity) -> bool {
         world
             .get::<Children>(entity)

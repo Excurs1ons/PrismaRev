@@ -1,16 +1,16 @@
 //! `RenderMeshManager` — device-local vertex/index buffers keyed by
-//! an opaque handle type.
+//! an 不透明 handle 类型
 //!
-//! The manager owns a `Mesh` per handle and exposes the underlying
-//! `vk::Buffer` / `vk::DeviceAddress` to the renderer for the draw loop. A
+//! The 管理器 owns a 网格 per handle and exposes the underlying
+//! `vk::Buffer` / `vk::DeviceAddress` to the 渲染器 for the 绘制 循环 A
 //! `MeshHandle` that returns `None` from `get()` is treated as "not on the
-//! GPU yet" by the renderer (it falls back to the magenta-fallback path
+//! GPU yet" by the 渲染器 (it falls 后 to the magenta-fallback path
 //! used for textures).
 //!
-//! P0 scope: synchronous upload via the existing `buffer::create_buffer` +
-//! `buffer::upload_to_buffer` helpers. No timeline semaphore, no per-FIF
-//! staging — the renderer waits on the implicit queue submit. A future
-//! pass replaces this with a timeline-driven async path.
+//! P0 scope: 同步 upload via the existing `buffer::create_buffer` +
+//! `buffer::upload_to_buffer` helpers. No 时间线 信号量 no per-FIF
+//! staging — the 渲染器 waits on the implicit 队列 submit. A future
+//! pass replaces this with a timeline-driven 异步 path.
 
 use anyhow::Context as _;
 use ash::vk;
@@ -19,46 +19,46 @@ use slotmap::{new_key_type, SlotMap};
 use crate::context::VulkanContext;
 use crate::mesh::Mesh;
 
-// Local handle. The engine layer translates asset mesh handles into
-// this when it calls `RenderMeshManager::register` so the render
-// crate stays decoupled from the asset pipeline.
+// 局部 handle. The engine 层 translates 资源 网格 handles into
+// this when it calls `RenderMeshManager::register` so the 渲染
+// crate stays decoupled from the 资源 管线
 new_key_type! {
     /// Slotmap handle into [`RenderMeshManager`].
     pub struct MeshHandle;
 }
 
-/// Plain-data mesh description used at the manager boundary. The
-/// engine layer translates asset mesh data into this so
-/// the render crate stays decoupled from the asset pipeline.
+/// Plain-data 网格 描述 used at the 管理器 boundary. The
+/// engine 层 translates 资源 网格 data into this so
+/// the 渲染 crate stays decoupled from the 资源 管线
 #[derive(Debug, Clone)]
 pub struct MeshUploadInput {
     pub positions: Vec<[f32; 3]>,
     pub normals: Vec<[f32; 3]>,
-    /// Per-vertex color (the legacy `Vertex` format has an RGB color slot;
-    /// procedural meshes can use it as albedo fallback when no texture is
-    /// bound). Empty vector means "all white".
+    /// Per-vertex 颜色 (the legacy 顶点 格式 has an RGB 颜色 槽
+    /// procedural meshes can use it as albedo 回退 when no 纹理 is
+    /// bound). 空 向量 means "all white".
     pub colors: Vec<[f32; 3]>,
     pub uvs: Vec<[f32; 2]>,
-    /// Per-vertex tangents (xyz = direction, w = handedness sign +1/-1).
+    /// Per-vertex tangents (xyz = direction, w = handedness 符号 +1/-1).
     pub tangents: Vec<[f32; 4]>,
     pub indices: Vec<u32>,
 }
 
-/// One GPU-uploaded mesh plus the data the renderer needs to draw it.
+/// One GPU-uploaded 网格 plus the data the 渲染器 needs to 绘制 it.
 pub struct UploadedMesh {
-    /// The underlying Vulkan buffer + memory, owned here.
+    /// The underlying Vulkan 缓冲区 + 内存 owned here.
     pub mesh: Mesh,
 }
 
 impl UploadedMesh {
     /// Convenience: number of triangles to feed `cmd_draw_indexed`. For
-    /// non-indexed meshes this returns 0; the renderer detects that case
+    /// non-indexed meshes this returns 0; the 渲染器 detects that case
     /// and uses `cmd_draw` with `vertex_count` instead.
     pub fn index_count(&self) -> u32 {
         self.mesh.index_count
     }
 
-    /// Convenience: vertex count.
+    /// Convenience: 顶点 count.
     pub fn vertex_count(&self) -> u32 {
         self.mesh.vertex_count
     }
@@ -68,12 +68,12 @@ impl UploadedMesh {
     }
 }
 
-/// Manager of GPU meshes. Constructed once per renderer and shared via
-/// `&mut`. All public methods are `&mut self` because descriptor writes and
-/// buffer creation are inherently mutating.
+/// 管理器 of GPU meshes. Constructed once per 渲染器 and shared via
+/// `&mut`. All 公开 methods are `&mut self` because 描述符 writes and
+/// 缓冲区 creation are inherently mutating.
 pub struct RenderMeshManager {
     meshes: SlotMap<MeshHandle, UploadedMesh>,
-    /// Whether `destroy()` has run. The `Drop` impl asserts this.
+    /// Whether 销毁 has run. The 放置 impl asserts this.
     destroyed: bool,
 }
 
@@ -100,14 +100,14 @@ impl RenderMeshManager {
         self.meshes.is_empty()
     }
 
-    /// Translate `input` into the legacy interleaved `Vertex` layout, then
-    /// upload vertex + (optional) index buffers through a staging buffer.
-    /// Returns the handle the renderer uses to look the mesh up later.
+    /// Translate 输入 into the legacy interleaved 顶点 布局 then
+    /// upload 顶点 + (optional) 索引 buffers through a staging 缓冲区
+    /// Returns the handle the 渲染器 uses to look the 网格 上 later.
     ///
     /// `command_pool` / `graphics_queue` are the same ones `Mesh::new` takes
-    /// today; using the graphics queue keeps the upload path identical to
-    /// the legacy code (the transfer-queue async path lands in a later
-    /// pass).
+    /// today; using the graphics 队列 keeps the upload path 相同 to
+    /// the legacy 代码 (the transfer-queue 异步 path lands in a later
+    /// pass
     pub fn register(
         &mut self,
         context: &VulkanContext,
@@ -135,8 +135,8 @@ impl RenderMeshManager {
 
     /// Like [`register`](Self::register) but records into a shared
     /// [`BatchUploader`](crate::batch::BatchUploader) so many meshes can be
-    /// uploaded with a single submit + fence. The caller must finish the
-    /// uploader before drawing.
+    /// uploaded with a single submit + 围栏 The 调用者 must finish the
+    /// uploader before 绘制
     pub fn register_into(
         &mut self,
         context: &VulkanContext,
@@ -155,12 +155,12 @@ impl RenderMeshManager {
         Ok(handle)
     }
 
-    /// Read-only access to a registered mesh.
+    /// Read-only 访问 to a registered 网格
     pub fn get(&self, handle: MeshHandle) -> Option<&UploadedMesh> {
         self.meshes.get(handle)
     }
 
-    /// Drop a single mesh and release its GPU resources. Subsequent calls
+    /// 放置 a single 网格 and 释放 its GPU resources. Subsequent calls
     /// to `get` with the same handle return `None`.
     pub fn unregister(&mut self, device: &ash::Device, handle: MeshHandle) {
         if let Some(mut uploaded) = self.meshes.remove(handle) {
@@ -168,9 +168,9 @@ impl RenderMeshManager {
         }
     }
 
-    /// Release every GPU resource. The caller is responsible for ensuring
-    /// no in-flight command buffer still references these buffers. After
-    /// this call the manager is empty.
+    /// 释放 every GPU 资源 The 调用者 is responsible for ensuring
+    /// no in-flight 命令 缓冲区 still references these buffers. After
+    /// this 调用 the 管理器 is 空
     pub fn destroy(&mut self, device: &ash::Device) {
         for (_, mut uploaded) in self.meshes.drain() {
             unsafe { uploaded.mesh.destroy(device) };
@@ -188,10 +188,10 @@ impl Drop for RenderMeshManager {
     }
 }
 
-/// Translate `MeshUploadInput` into the interleaved `Vertex` layout. Missing
-/// UVs / colors / tangents are filled with safe defaults so the GPU vertex
-/// format is always well-defined (the shader treats "no UVs" as
-/// "sample the magenta fallback" via the same INVALID-handle path used for
+/// Translate `MeshUploadInput` into the interleaved 顶点 布局 缺少
+/// UVs / colors / tangents are filled with safe defaults so the GPU 顶点
+/// 格式 is always well-defined (the 着色器 treats "no UVs" as
+/// 样本 the magenta 回退 via the same INVALID-handle path used for
 /// textures).
 fn build_vertices(input: &MeshUploadInput) -> Vec<crate::mesh::Vertex> {
     let n = input.positions.len();
@@ -229,7 +229,7 @@ mod tests {
         };
         let v = build_vertices(&input);
         assert_eq!(v.len(), 2);
-        // Missing normal/uv/tangent fill with safe defaults.
+        // 缺少 normal/uv/tangent fill with safe defaults.
         assert_eq!(v[0].normal, [0.0, 1.0, 0.0]);
         assert_eq!(v[1].normal, [0.0, 1.0, 0.0]);
         assert_eq!(v[0].uv, [0.5, 0.5]);

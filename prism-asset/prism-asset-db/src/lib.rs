@@ -1,13 +1,13 @@
 //! # prism-asset-db
 //!
-//! Editor-side asset database that tracks all imported assets in a project.
+//! Editor-side 资源 database that tracks all imported assets in a project.
 //!
 //! The database lives at `Project/Library/AssetDatabase.json` and maps every
-//! file under `Assets/` to its stable [`AssetId`], [`AssetType`], importer
-//! configuration, and dependency graph.
+//! file under `Assets/` to its 稳定 [`AssetId`], [`AssetType`], importer
+//! 配置 and dependency 图
 //!
 //! A companion `Project/Library/import_cache.json` records file hashes so the
-//! pipeline can skip re-importing unchanged files (incremental build).
+//! 管线 can skip re-importing unchanged files 增量 构建
 
 use prism_asset_core::{AssetId, AssetType};
 use std::collections::HashMap;
@@ -39,49 +39,49 @@ pub enum DatabaseError {
 }
 
 // ---------------------------------------------------------------------------
-// Asset State
+// 资源 状态
 // ---------------------------------------------------------------------------
 
-/// Lifecycle state of an asset in the database.
+/// Lifecycle 状态 of an 资源 in the database.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AssetState {
-    /// Asset is present and usable.
+    /// 资源 is present and usable.
     Normal,
-    /// Source file exists but the asset has missing dependencies.
+    /// 源 file 存在 but the 资源 has 缺少 dependencies.
     Missing,
-    /// Asset was deleted (tombstone).
+    /// 资源 was deleted (tombstone).
     Deleted,
 }
 
 // ---------------------------------------------------------------------------
-// Asset Record
+// 资源 Record
 // ---------------------------------------------------------------------------
 
-/// A single entry in the asset database.
+/// A single entry in the 资源 database.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AssetRecord {
-    /// Globally unique ID.
+    /// Globally 唯一 ID.
     pub id: AssetId,
-    /// Path relative to the `Assets/` directory, using `/` separators.
+    /// Path 相对 to the `Assets/` directory, using `/` separators.
     pub path: String,
-    /// The high-level asset type.
+    /// The high-level 资源 类型
     pub asset_type: AssetType,
     /// Name of the importer that created this record.
     pub importer_name: String,
-    /// xxh3 hash of the source file contents.
+    /// xxh3 哈希 of the 源 file contents.
     pub source_hash: u64,
-    /// xxh3 hash of the import settings JSON.
+    /// xxh3 哈希 of the 导入 settings JSON.
     pub import_settings_hash: u64,
     /// IDs of assets this one depends on.
     pub dependencies: Vec<AssetId>,
-    /// Current state.
+    /// 当前 状态
     pub state: AssetState,
-    /// Monotonically increasing version counter.
+    /// Monotonically increasing version 计数器
     pub version: u32,
 }
 
 impl AssetRecord {
-    /// Create a new record.
+    /// 创建 a new record.
     pub fn new(
         id: AssetId,
         path: String,
@@ -103,45 +103,45 @@ impl AssetRecord {
 }
 
 // ---------------------------------------------------------------------------
-// Import Cache Entry
+// 导入 Cache Entry
 // ---------------------------------------------------------------------------
 
-/// One entry in the import cache, keyed by source file path.
+/// One entry in the 导入 cache, keyed by 源 file path.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImportCacheEntry {
-    /// xxh3 hash of the source file.
+    /// xxh3 哈希 of the 源 file.
     pub source_hash: u64,
-    /// xxh3 hash of the import settings.
+    /// xxh3 哈希 of the 导入 settings.
     pub settings_hash: u64,
-    /// Asset ID that was produced.
+    /// 资源 ID that was produced.
     pub asset_id: AssetId,
     /// Importer version that produced this entry.
     pub importer_version: u32,
 }
 
 // ---------------------------------------------------------------------------
-// Asset Database
+// 资源 Database
 // ---------------------------------------------------------------------------
 
-/// The editor-side asset database.
+/// The editor-side 资源 database.
 ///
-/// This is the authoritative source of truth for "what assets exist" in the
-/// editor. The runtime never touches it.
+/// This is the authoritative 源 of truth for "what assets exist" in the
+/// 编辑器 The 运行时 never touches it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AssetDatabase {
-    /// All asset records.
+    /// All 资源 records.
     records: Vec<AssetRecord>,
-    /// Index: relative path → AssetId.
+    /// 索引 相对 path → AssetId.
     #[serde(skip)]
     path_index: HashMap<String, AssetId>,
-    /// Current maximum serial value (for ID generation).
+    /// 当前 最大 serial value (for ID generation).
     next_serial: u64,
-    /// Generation epoch.
+    /// Generation 纪元
     generation: u32,
 }
 
 impl AssetDatabase {
-    /// Create an empty database.
+    /// 创建 an 空 database.
     pub fn new() -> Self {
         Self {
             records: Vec::new(),
@@ -160,7 +160,7 @@ impl AssetDatabase {
         self.records.len()
     }
 
-    /// Returns `true` if the database is empty.
+    /// Returns `true` if the database is 空
     pub fn is_empty(&self) -> bool {
         self.records.is_empty()
     }
@@ -175,7 +175,7 @@ impl AssetDatabase {
         self.records.iter_mut()
     }
 
-    /// Get a record by ID (linear scan — databases are small in the editor).
+    /// Get a record by ID 线性 scan — databases are small in the 编辑器
     pub fn get(&self, id: AssetId) -> Option<&AssetRecord> {
         self.records.iter().find(|r| r.id == id)
     }
@@ -185,7 +185,7 @@ impl AssetDatabase {
         self.records.iter_mut().find(|r| r.id == id)
     }
 
-    /// Find an asset by its relative path.
+    /// 查找 an 资源 by its 相对 path.
     pub fn get_by_path(&self, path: &str) -> Option<&AssetRecord> {
         let normalized = normalize_path(path);
         self.path_index
@@ -193,7 +193,7 @@ impl AssetDatabase {
             .and_then(|id| self.get(*id))
     }
 
-    /// Find an asset ID by relative path.
+    /// 查找 an 资源 ID by 相对 path.
     pub fn id_by_path(&self, path: &str) -> Option<AssetId> {
         let normalized = normalize_path(path);
         self.path_index.get(&normalized).copied()
@@ -203,13 +203,13 @@ impl AssetDatabase {
     // Mutators
     // ------------------------------------------------------------------
 
-    /// Insert or update an asset record. Returns the assigned ID.
+    /// 插入 or 更新 an 资源 record. Returns the assigned ID.
     ///
-    /// If a record with the same path already exists, its `id` is reused.
+    /// If a record with the same path already 存在 its `id` is reused.
     pub fn insert(&mut self, record: AssetRecord) -> Result<AssetId, DatabaseError> {
         let normalized = normalize_path(&record.path);
 
-        // Check for duplicate path.
+        // Check for 重复 path.
         if let Some(existing_id) = self.path_index.get(&normalized) {
             if *existing_id != record.id {
                 return Err(DatabaseError::DuplicatePath(PathBuf::from(&record.path)));
@@ -219,7 +219,7 @@ impl AssetDatabase {
         let id = record.id;
         self.path_index.insert(normalized, id);
 
-        // Replace if exists, else push.
+        // 替换 if 存在 else 推送
         if let Some(existing) = self.records.iter_mut().find(|r| r.id == id) {
             *existing = record;
         } else {
@@ -229,7 +229,7 @@ impl AssetDatabase {
         Ok(id)
     }
 
-    /// Remove a record (marks as tombstone).
+    /// 移除 a record (marks as tombstone).
     pub fn remove(&mut self, id: AssetId) -> Option<AssetRecord> {
         let pos = self.records.iter().position(|r| r.id == id)?;
         let mut record = self.records.swap_remove(pos);
@@ -239,7 +239,7 @@ impl AssetDatabase {
         Some(record)
     }
 
-    /// Generate a fresh asset ID.
+    /// Generate a fresh 资源 ID.
     pub fn generate_id(&mut self) -> AssetId {
         let serial = self.next_serial;
         self.next_serial += 1;
@@ -248,7 +248,7 @@ impl AssetDatabase {
         )
     }
 
-    /// Current serial.
+    /// 当前 serial.
     pub fn current_serial(&self) -> u64 {
         self.next_serial
     }
@@ -257,7 +257,7 @@ impl AssetDatabase {
     // Persistence
     // ------------------------------------------------------------------
 
-    /// Load the database from a JSON file.
+    /// 加载 the database from a JSON file.
     pub fn load(path: impl AsRef<Path>) -> Result<Self, DatabaseError> {
         let content = std::fs::read_to_string(path.as_ref())?;
         let mut db: Self = serde_json::from_str(&content)?;
@@ -265,7 +265,7 @@ impl AssetDatabase {
         Ok(db)
     }
 
-    /// Async load via tokio.
+    /// 异步 加载 via tokio.
     pub async fn load_async(path: impl AsRef<Path> + Send) -> Result<Self, DatabaseError> {
         let content = tokio::fs::read_to_string(path.as_ref()).await?;
         let mut db: Self = serde_json::from_str(&content)?;
@@ -273,14 +273,14 @@ impl AssetDatabase {
         Ok(db)
     }
 
-    /// Save the database to a JSON file.
+    /// 保存 the database to a JSON file.
     pub fn save(&self, path: impl AsRef<Path>) -> Result<(), DatabaseError> {
         let content = serde_json::to_string_pretty(self)?;
         std::fs::write(path.as_ref(), content)?;
         Ok(())
     }
 
-    /// Async save via tokio.
+    /// 异步 保存 via tokio.
     pub async fn save_async(&self, path: impl AsRef<Path> + Send) -> Result<(), DatabaseError> {
         let content = serde_json::to_string_pretty(self)?;
         tokio::fs::write(path.as_ref(), content).await?;
@@ -309,12 +309,12 @@ impl Default for AssetDatabase {
 }
 
 // ---------------------------------------------------------------------------
-// Import Cache
+// 导入 Cache
 // ---------------------------------------------------------------------------
 
-/// Incremental import cache.
+/// 增量 导入 cache.
 ///
-/// Maps source file paths (relative to `Assets/`) to their last-known hash
+/// Maps 源 file paths 相对 to `Assets/`) to their last-known 哈希
 /// and the importer version that processed them.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ImportCache {
@@ -339,7 +339,7 @@ impl ImportCache {
 
     /// Check if a file needs re-importing.
     ///
-    /// Returns `true` if the file is unchanged (same hash + same settings hash
+    /// Returns `true` if the file is unchanged (same 哈希 + same settings 哈希
     /// + same importer version).
     pub fn is_up_to_date(
         &self,
@@ -356,7 +356,7 @@ impl ImportCache {
         })
     }
 
-    /// Record a successful import.
+    /// Record a successful 导入
     pub fn record(
         &mut self,
         path: &str,
@@ -383,26 +383,26 @@ impl ImportCache {
         self.entries.get(&normalized)
     }
 
-    /// Remove a cache entry.
+    /// 移除 a cache entry.
     pub fn remove(&mut self, path: &str) {
         let normalized = normalize_path(path);
         self.entries.remove(&normalized);
     }
 
-    /// Load from JSON file.
+    /// 加载 from JSON file.
     pub fn load(path: impl AsRef<Path>) -> Result<Self, DatabaseError> {
         let content = std::fs::read_to_string(path.as_ref())?;
         Ok(serde_json::from_str(&content)?)
     }
 
-    /// Save to JSON file.
+    /// 保存 to JSON file.
     pub fn save(&self, path: impl AsRef<Path>) -> Result<(), DatabaseError> {
         let content = serde_json::to_string_pretty(self)?;
         std::fs::write(path.as_ref(), content)?;
         Ok(())
     }
 
-    /// Async save.
+    /// 异步 保存
     pub async fn save_async(&self, path: impl AsRef<Path> + Send) -> Result<(), DatabaseError> {
         let content = serde_json::to_string_pretty(self)?;
         tokio::fs::write(path.as_ref(), content).await?;
@@ -414,7 +414,7 @@ impl ImportCache {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Normalize a path: `/` separators, no trailing slash, no `./` prefix.
+/// 归一化 a path: `/` separators, no trailing slash, no `./` prefix.
 pub fn normalize_path(path: &str) -> String {
     let mut result: String = path.replace('\\', "/").trim().to_string();
     // Strip leading `./`
@@ -491,7 +491,7 @@ mod tests {
     #[test]
     fn roundtrip_json() {
         let mut db = make_db();
-        // Add a second record so we have multiple
+        // Add a 秒 record so we have multiple
         let id2 = db.generate_id();
         let r2 = AssetRecord::new(id2, "tex/albedo.png".into(), AssetType::Texture, "img");
         db.insert(r2).unwrap();

@@ -1,9 +1,9 @@
-//! Mesh type: vertex + index buffers on the GPU.
+//! 网格 类型 顶点 + 索引 buffers on the GPU.
 //!
-//! A [`Mesh`] owns device-local vertex/index buffers and knows how to upload
-//! data through a staging buffer. The vertex format is interleaved
-//! `(position, normal, color, uv, tangent)` — see [`Vertex`]. `uv` + `tangent`
-//! support the PBR debug `Normal` (Tangent space) view.
+//! A 网格 owns device-local vertex/index buffers and knows how to upload
+//! data through a staging 缓冲区 The 顶点 格式 is interleaved
+//! `(position, 法线 颜色 uv 切线 — see 顶点 uv + 切线
+//! support the PBR 调试 法线 切线 空间 视图
 
 use anyhow::Context as _;
 use ash::vk;
@@ -11,9 +11,9 @@ use ash::vk;
 use crate::buffer::{self, BufferUsage, MemoryProperties};
 use crate::context::VulkanContext;
 
-/// A single vertex: position + normal + color + uv + tangent (interleaved).
-/// `tangent` is vec4: xyz = tangent direction, w = handedness sign (+1/-1)
-/// used to reconstruct the bitangent as `cross(N, T) * tangent.w`.
+/// A single 顶点 position + 法线 + 颜色 + uv + 切线 (interleaved).
+/// 切线 is vec4: xyz = 切线 direction, w = handedness 符号 (+1/-1)
+/// used to reconstruct the 副切线 as `cross(N, T) * tangent.w`.
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub struct Vertex {
@@ -25,7 +25,7 @@ pub struct Vertex {
 }
 
 impl Vertex {
-    /// Binding description: one interleaved vertex buffer.
+    /// 绑定 描述 one interleaved 顶点 缓冲区
     pub fn binding_description() -> vk::VertexInputBindingDescription {
         vk::VertexInputBindingDescription::default()
             .binding(0)
@@ -33,8 +33,8 @@ impl Vertex {
             .input_rate(vk::VertexInputRate::VERTEX)
     }
 
-    /// Attribute descriptions:
-    /// position (loc 0), normal (loc 1), color (loc 2), uv (loc 3), tangent (loc 4).
+    /// 属性 descriptions:
+    /// position (loc 0), 法线 (loc 1), 颜色 (loc 2), uv (loc 3), 切线 (loc 4).
     pub fn attribute_descriptions() -> [vk::VertexInputAttributeDescription; 5] {
         let f = std::mem::size_of::<f32>() as u32;
         let position = vk::VertexInputAttributeDescription::default()
@@ -66,7 +66,7 @@ impl Vertex {
     }
 }
 
-/// A GPU mesh: vertex buffer (+ optional index buffer) and draw metadata.
+/// A GPU 网格 顶点 缓冲区 (+ optional 索引 缓冲区 and 绘制 metadata.
 pub struct Mesh {
     pub vertex_buffer: vk::Buffer,
     pub vertex_memory: vk::DeviceMemory,
@@ -78,8 +78,8 @@ pub struct Mesh {
 }
 
 impl Mesh {
-    /// Device address of the vertex buffer (for acceleration structure builds).
-    /// Requires the buffer was created with `SHADER_DEVICE_ADDRESS` usage.
+    /// 设备 address of the 顶点 缓冲区 (for 加速度 structure builds).
+    /// Requires the 缓冲区 was created with `SHADER_DEVICE_ADDRESS` 用法
     pub fn vertex_buffer_device_address(&self, device: &ash::Device) -> vk::DeviceAddress {
         unsafe {
             device.get_buffer_device_address(
@@ -88,8 +88,8 @@ impl Mesh {
         }
     }
 
-    /// Device address of the index buffer (for acceleration structure builds).
-    /// Returns 0 if the mesh has no index buffer.
+    /// 设备 address of the 索引 缓冲区 (for 加速度 structure builds).
+    /// Returns 0 if the 网格 has no 索引 缓冲区
     pub fn index_buffer_device_address(&self, device: &ash::Device) -> vk::DeviceAddress {
         self.index_buffer
             .map(|buf| unsafe {
@@ -99,11 +99,11 @@ impl Mesh {
             .unwrap_or(0)
     }
 
-    /// Create a mesh from a slice of vertices and (optional) indices.
+    /// 创建 a 网格 from a 切片 of 顶点 and (optional) indices.
     ///
-    /// Uploads data through a temporary staging buffer. The staging command
-    /// buffer uses `command_pool` (which must belong to the graphics queue
-    /// family). After this returns the data is resident in device-local memory.
+    /// Uploads data through a temporary staging 缓冲区 The staging 命令
+    /// 缓冲区 uses `command_pool` (which must belong to the graphics 队列
+    /// family). After this returns the data is resident in device-local 内存
     pub fn new(
         context: &VulkanContext,
         command_pool: vk::CommandPool,
@@ -113,8 +113,8 @@ impl Mesh {
     ) -> anyhow::Result<Self> {
         let vertex_size = std::mem::size_of_val(vertices) as vk::DeviceSize;
 
-        // Vertex buffer (device-local). Include SHADER_DEVICE_ADDRESS +
-        // ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR so the same buffer can
+        // 顶点 缓冲区 (device-local). Include SHADER_DEVICE_ADDRESS +
+        // ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR so the same 缓冲区 can
         // be used for BLAS builds without reallocation.
         let (vertex_buffer, vertex_memory) = buffer::create_buffer(
             context,
@@ -145,7 +145,7 @@ impl Mesh {
         }
         .context("upload vertex data")?;
 
-        // Index buffer (optional).
+        // 索引 缓冲区 (optional).
         let (index_buffer, index_memory, index_count) = if let Some(indices) = indices {
             let index_size = std::mem::size_of_val(indices) as vk::DeviceSize;
             let (buf, mem) = buffer::create_buffer(
@@ -194,9 +194,9 @@ impl Mesh {
 
     /// Like [`new`](Self::new) but records the staging copies into a
     /// [`BatchUploader`](crate::batch::BatchUploader) instead of submitting
-    /// its own command buffer + fence per upload. The caller is responsible
+    /// its own 命令 缓冲区 + 围栏 per upload. The 调用者 is responsible
     /// for finishing the uploader (which submits once and waits) before the
-    /// mesh is drawn.
+    /// 网格 is drawn.
     pub fn new_into(
         context: &VulkanContext,
         uploader: &mut crate::batch::BatchUploader<'_>,
@@ -263,13 +263,13 @@ impl Mesh {
         })
     }
 
-    /// Destroy the GPU resources for this mesh.
+    /// 销毁 the GPU resources for this 网格
     ///
-    /// # Safety
+    /// # 安全性
     ///
-    /// `device` must be a valid `ash::Device` that created these resources.
-    /// Must not be called while the mesh is still in use by any submitted
-    /// command buffer.
+    /// 设备 must be a 有效 `ash::Device` that created these resources.
+    /// Must not be called while the 网格 is still in use by any submitted
+    /// 命令 缓冲区
     pub unsafe fn destroy(&mut self, device: &ash::Device) {
         unsafe { device.destroy_buffer(self.vertex_buffer, None) };
         unsafe { device.free_memory(self.vertex_memory, None) };
@@ -288,7 +288,7 @@ mod tests {
 
     #[test]
     fn vertex_stride_is_60() {
-        // position(3) + normal(3) + color(3) + uv(2) + tangent(4) = 15 floats = 60 bytes.
+        // position(3) + normal(3) + color(3) + uv(2) + tangent(4) = 15 floats = 60 字节
         assert_eq!(std::mem::size_of::<Vertex>(), 60);
         assert_eq!(Vertex::binding_description().stride, 60);
     }

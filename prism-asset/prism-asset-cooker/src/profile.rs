@@ -1,14 +1,14 @@
-//! # Cook Profile System
+//! # 烹饪 配置 系统
 //!
-//! Platform-aware cooking configuration with file-based profiles, inheritance,
-//! deep merging, priority overrides, and stable hash computation.
+//! Platform-aware cooking 配置 with file-based profiles, 继承
+//! deep merging, priority overrides, and 稳定 哈希 计算
 //!
 //! ## Priority (highest → lowest)
 //!
 //! 1. CLI overrides (command-line arguments)
 //! 2. Asset-level overrides (per-record settings)
-//! 3. Active project profile (CLI `--profile` or `active.json`)
-//! 4. Platform default profile (derived from `--platform`)
+//! 3. 激活 project 配置 (CLI `--profile` or `active.json`)
+//! 4. Platform 默认 配置 (derived from `--platform`)
 //! 5. `base.json` (optional, lowest)
 
 use serde::{Deserialize, Serialize};
@@ -43,18 +43,18 @@ pub enum ProfileError {
 // Core Enums
 // ===========================================================================
 
-/// Texture compression format.
+/// 纹理 压缩 格式
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum TextureCompression {
     None,
-    /// Uncompressed RGBA8 (default).
+    /// Uncompressed RGBA8 默认
     Rgba8,
     /// BC1-5 (DXT1/3/5) — desktop D3D.
     Bc1,
     Bc3,
     Bc5,
-    /// BC6H / BC7 — desktop HDR / high quality.
+    /// BC6H / BC7 — desktop 高动态范围 / high quality.
     Bc6H,
     Bc7,
     /// ASTC — mobile (Android/iOS).
@@ -62,7 +62,7 @@ pub enum TextureCompression {
     Astc6x6,
     Astc8x8,
     Astc12x12,
-    /// ETC2 — Android fallback.
+    /// ETC2 — Android 回退
     Etc2Rgba,
 }
 
@@ -72,7 +72,7 @@ impl Default for TextureCompression {
     }
 }
 
-/// Target platform identifier.
+/// 目标 platform identifier.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Platform {
@@ -106,10 +106,10 @@ impl Platform {
 }
 
 // ===========================================================================
-// Settings Structs (final merged configuration)
+// Settings Structs (final merged 配置
 // ===========================================================================
 
-/// Texture cooking settings.
+/// 纹理 cooking settings.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TextureSettings {
@@ -130,7 +130,7 @@ impl Default for TextureSettings {
     }
 }
 
-/// Mesh cooking settings.
+/// 网格 cooking settings.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct MeshSettings {
@@ -149,7 +149,7 @@ impl Default for MeshSettings {
     }
 }
 
-/// Shader cooking settings (stub).
+/// 着色器 cooking settings (stub).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ShaderSettings {
@@ -164,7 +164,7 @@ impl Default for ShaderSettings {
     }
 }
 
-/// Package-level compression settings.
+/// Package-level 压缩 settings.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CompressionSettings {
@@ -181,9 +181,9 @@ impl Default for CompressionSettings {
     }
 }
 
-/// Final merged runtime cooking settings.
+/// Final merged 运行时 cooking settings.
 ///
-/// All resolver and override logic has been applied before constructing this.
+/// All resolver and 覆盖 逻辑 has been applied before constructing this.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CookSettings {
     pub platform: String,
@@ -212,27 +212,27 @@ impl Default for CookSettings {
 }
 
 impl CookSettings {
-    /// Compute a stable, deterministic hash for incremental-build caching.
+    /// 计算 a 稳定 确定性 哈希 for incremental-build caching.
     pub fn settings_hash(&self) -> u64 {
-        // Deterministic JSON serialization (no extra whitespace, sorted keys).
+        // 确定性 JSON serialization (no extra whitespace, 已排序 keys).
         let json = serde_json::to_string(self).expect("CookSettings should always serialize");
         xxhash_rust::xxh3::xxh3_64(json.as_bytes())
     }
 }
 
 // ===========================================================================
-// Profile Struct (JSON-deserializable, partial)
+// 配置 结构体 (JSON-deserializable, 部分
 // ===========================================================================
 
-/// A single profile file. Every field is optional — only the fields that
-/// should override the base/parent are present.
+/// A single 配置 file. Every field is optional — only the fields that
+/// should 覆盖 the base/parent are present.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CookProfile {
-    /// Optional parent profile name for inheritance.
+    /// Optional parent 配置 name for 继承
     #[serde(skip_serializing_if = "Option::is_none")]
     pub base: Option<String>,
 
-    /// Optional profile version for format evolution.
+    /// Optional 配置 version for 格式 evolution.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<u32>,
 
@@ -262,7 +262,7 @@ pub struct CookProfile {
     pub custom: HashMap<String, serde_json::Value>,
 }
 
-/// CLI-level overrides that sit above the project profile.
+/// CLI-level overrides that sit above the project 配置
 #[derive(Debug, Default, Clone)]
 pub struct CliOverrides {
     pub platform: Option<String>,
@@ -276,21 +276,21 @@ pub struct CliOverrides {
 }
 
 // ===========================================================================
-// Profile Manager
+// 配置 管理器
 // ===========================================================================
 
-/// Loads, resolves inheritance chains, merges, and computes final CookSettings.
+/// Loads, resolves 继承 chains, merges, and computes final CookSettings.
 pub struct ProfileManager {
-    /// Directory containing profile JSON files.
+    /// Directory containing 配置 JSON files.
     profiles_dir: PathBuf,
     /// In-memory cache of parsed profiles (name → CookProfile).
     loaded: HashMap<String, CookProfile>,
 }
 
 impl ProfileManager {
-    /// Create a new manager that looks for profiles under `profiles_dir`.
+    /// 创建 a new 管理器 that looks for profiles under `profiles_dir`.
     ///
-    /// No files are loaded until [`load_profile`] or [`resolve`] is called.
+    /// No files are loaded until [`load_profile`] or 解析 is called.
     pub fn new<P: Into<PathBuf>>(profiles_dir: P) -> Self {
         Self {
             profiles_dir: profiles_dir.into(),
@@ -298,15 +298,15 @@ impl ProfileManager {
         }
     }
 
-    /// Load a single profile file by name (without `.json` suffix).
+    /// 加载 a single 配置 file by name (without `.json` suffix).
     pub fn load_profile(&mut self, name: &str) -> Result<CookProfile, ProfileError> {
-        // Check built-in cache FIRST (only built-ins are cached).
+        // Check built-in cache 第一个 (only built-ins are cached).
         if let Some(cached) = self.loaded.get(name) {
             return Ok(cached.clone());
         }
 
         // Check for a user file. Not cached to avoid shadowing the built-in
-        // when a user profile inherits via `base: "desktop"`.
+        // when a user 配置 inherits via `base: "desktop"`.
         let file_path = self.profiles_dir.join(format!("{name}.json"));
         if file_path.exists() {
             let raw = std::fs::read_to_string(&file_path)
@@ -319,7 +319,7 @@ impl ProfileManager {
             return Ok(profile);
         }
 
-        // Fall back to built-in default.
+        // Fall 后 to built-in 默认
         if let Some(builtin) = BUILTIN_DEFAULTS.get(name) {
             let profile = (*builtin).clone();
             self.loaded.insert(name.to_owned(), profile.clone());
@@ -329,12 +329,12 @@ impl ProfileManager {
         Err(ProfileError::NotFound(name.to_owned()))
     }
 
-    /// Resolve a profile name into the final merged CookSettings, applying
-    /// inheritance and the priority chain.
+    /// 解析 a 配置 name into the final merged CookSettings, applying
+    /// 继承 and the priority 链
     ///
-    /// Inheritance detection: a cycle-detection set tracking the current chain
-    /// of base→child profile names is maintained. If a name repeats, it's an
-    /// error.
+    /// 继承 detection: a cycle-detection 集合 tracking the 当前 链
+    /// of base→child 配置 names is maintained. If a name repeats, it's an
+    /// 错误
     pub fn resolve(&mut self, profile_name: &str) -> Result<CookSettings, ProfileError> {
         let mut seen = Vec::new();
         self.resolve_internal(profile_name, &mut seen)
@@ -353,16 +353,16 @@ impl ProfileManager {
 
         let profile = self.load_profile(name)?;
 
-        // Start with default settings.
+        // Start with 默认 settings.
         let mut settings = CookSettings::default();
 
-        // If there's a base, merge it first.
+        // If there's a base, merge it 第一个
         if let Some(ref base_name) = profile.base {
             let base_settings = self.resolve_internal(base_name, seen)?;
             settings = deep_merge(settings, base_settings);
         }
 
-        // Overlay this profile's fields.
+        // 叠加 this profile's fields.
         if let Some(ref p) = profile.platform {
             settings.platform = p.clone();
         }
@@ -390,7 +390,7 @@ impl ProfileManager {
         Ok(settings)
     }
 
-    /// Apply CLI overrides on top of resolved CookSettings.
+    /// Apply CLI overrides on 顶部 of resolved CookSettings.
     pub fn apply_cli_overrides(
         settings: &mut CookSettings,
         overrides: &CliOverrides,
@@ -417,7 +417,7 @@ impl ProfileManager {
         Ok(())
     }
 
-    /// List all available profile names (built-in + user files).
+    /// 列表 all available 配置 names (built-in + user files).
     pub fn list_profiles(&self) -> Vec<String> {
         let mut names: Vec<String> = BUILTIN_DEFAULTS.keys().map(|s| s.to_string()).collect();
 
@@ -438,14 +438,14 @@ impl ProfileManager {
         names
     }
 
-    /// Show the fully resolved settings for a profile.
+    /// Show the fully resolved settings for a 配置
     pub fn show(&mut self, name: &str) -> Result<CookSettings, ProfileError> {
         self.resolve(name)
     }
 }
 
 // ===========================================================================
-// Built-in Default Profiles
+// Built-in 默认 Profiles
 // ===========================================================================
 
 static BUILTIN_DEFAULTS: LazyLock<HashMap<&'static str, CookProfile>> = LazyLock::new(|| {
@@ -574,9 +574,9 @@ fn deep_merge<T: Mergeable>(mut target: T, source: T) -> T {
     target
 }
 
-/// Trait for partial-overlay merging (Struct field by field).
+/// trait for partial-overlay merging 结构体 field by field).
 ///
-/// Only non-default/Some fields from `source` overwrite `self`.
+/// Only non-default/Some fields from 源 overwrite `self`.
 trait Mergeable: Sized {
     fn merge_from(&mut self, source: Self);
 }
@@ -601,10 +601,10 @@ impl Mergeable for TextureSettings {
             self.compression = source.compression;
         }
         if source.generate_mips != true || source != TextureSettings::default() {
-            // Always respect an explicit setting.
+            // Always respect an explicit 设置
             self.generate_mips = source.generate_mips;
         }
-        // Compare to default quality (80) to detect explicit source values.
+        // 比较 to 默认 quality (80) to detect explicit 源 values.
         if source != TextureSettings::default() {
             self.quality = source.quality;
             self.max_size = source.max_size;
@@ -817,7 +817,7 @@ mod tests {
         let dir = std::env::temp_dir().join(&unique);
         std::fs::create_dir_all(&dir).ok();
 
-        // Write a custom profile that inherits from built-in "desktop".
+        // 写入 a 自定义 配置 that inherits from built-in "desktop".
         let user_profile = serde_json::json!({
             "base": "desktop",
             "texture": {
@@ -841,7 +841,7 @@ mod tests {
 
     #[test]
     fn profile_priority_chain() {
-        // CLI overrides > resolved profile.
+        // CLI overrides > resolved 配置
         let dir = std::env::temp_dir().join("priority_test");
         let mut mgr = ProfileManager::new(&dir);
         let mut settings = mgr.resolve("android").unwrap();
@@ -855,7 +855,7 @@ mod tests {
         ProfileManager::apply_cli_overrides(&mut settings, &cli).unwrap();
 
         assert_eq!(settings.texture.compression, TextureCompression::Bc7);
-        // Other android settings preserved.
+        // Other Android settings preserved.
         assert!(settings.streaming);
         assert_eq!(settings.chunk_size, 32 * 1024);
     }

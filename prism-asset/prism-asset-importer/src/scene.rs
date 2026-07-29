@@ -1,12 +1,12 @@
-//! Scene JSON format — the authoritative source format for the scene system.
+//! Scene JSON 格式 — the authoritative 源 格式 for the scene 系统
 //!
 //! A `.scene.json` file is a human-readable, diffable, version-controllable
-//! representation of a scene's entity hierarchy and component data.  The
-//! [`SceneCooker`] converts this into a binary [`CookedScene`] for runtime
+//! representation of a scene's 实体 hierarchy and 分量 data. The
+//! [`SceneCooker`] converts this into a 二进制 [`CookedScene`] for 运行时
 //! consumption.
 //!
-//! See `docs/plans/2026-07-25-modern-scene-system-design.md` §3 for the full
-//! schema specification.
+//! See `docs/plans/2026-07-25-modern-scene-system-design.md` §3 for the 完整
+//! schema 规格
 
 use serde::{Deserialize, Serialize};
 
@@ -17,9 +17,9 @@ use serde::{Deserialize, Serialize};
 /// The root of a `.scene.json` file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SceneJson {
-    /// Format version (current = 1).
+    /// 格式 version 当前 = 1).
     pub version: u32,
-    /// All entities in the scene (ordered topologically at cook time).
+    /// All entities in the scene 有序 topologically at 烹饪 时间
     pub entities: Vec<EntityJson>,
 }
 
@@ -27,23 +27,23 @@ pub struct SceneJson {
 // SkyboxJson
 // ---------------------------------------------------------------------------
 
-/// Skybox / environment map component definition.
+/// Skybox / environment 映射表 分量 定义
 ///
-/// Attached to an entity in the scene (typically one skybox entity per scene).
-/// The `hdr_path` is resolved at cook time: the cooker looks up the HDR asset
-/// in the asset database and bakes its `AssetId` into the RSCN binary.  At
-/// runtime the engine loads the HDR via the asset system for IBL and renders
+/// Attached to an 实体 in the scene (typically one skybox 实体 per scene).
+/// The `hdr_path` is resolved at 烹饪 时间 the cooker looks 上 the 高动态范围 资源
+/// in the 资源 database and bakes its `AssetId` into the RSCN 二进制 At
+/// 运行时 the engine loads the 高动态范围 via the 资源 系统 for IBL and renders
 /// it as the background sky.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkyboxJson {
-    /// Relative path to the equirectangular HDR environment map
+    /// 相对 path to the equirectangular 高动态范围 environment 映射表
     /// (e.g. `"../valley_of_desolation_1k.hdr"`).
     ///
-    /// The cooker resolves this to an `AssetId` at cook time.  In the future
-    /// this field will be replaced by a direct `env_asset_id: u64` reference
-    /// once the full asset pipeline is wired.
+    /// The cooker resolves this to an `AssetId` at 烹饪 时间 In the future
+    /// this field will be replaced by a direct `env_asset_id: u64` 引用
+    /// once the 完整 资源 管线 is wired.
     pub hdr_path: String,
-    /// Whether the skybox is enabled (default `true`).
+    /// Whether the skybox is 启用 默认 `true`).
     #[serde(default = "default_true")]
     pub enabled: bool,
 }
@@ -56,50 +56,50 @@ fn default_true() -> bool {
 // EntityJson
 // ---------------------------------------------------------------------------
 
-/// One entity in the scene.
+/// One 实体 in the scene.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EntityJson {
-    /// Optional human-readable name (for debug / inspector).
+    /// Optional human-readable name (for 调试 / 检查器
     #[serde(default)]
     pub name: Option<String>,
-    /// Index of the parent entity in the `entities` array, or `null` for root.
+    /// 索引 of the parent 实体 in the `entities` 数组 or `null` for root.
     #[serde(default)]
     pub parent: Option<u32>,
-    /// Local transform (required — defaults to identity if not present, but
+    /// 局部 变换 (required — defaults to identity if not present, but
     /// the field is always present in well-formed scene files).
     pub transform: TransformJson,
-    /// Relative path to the mesh asset (cooked to an `AssetRef` at cook time).
+    /// 相对 path to the 网格 资源 (cooked to an `AssetRef` at 烹饪 时间
     #[serde(default)]
     pub mesh: Option<String>,
-    /// Relative path to the material asset.
+    /// 相对 path to the 材质 资源
     #[serde(default)]
     pub material: Option<String>,
-    /// Light component (directional, point, or spot).
+    /// 光源 分量 (directional, point, or spot).
     #[serde(default)]
     pub light: Option<LightJson>,
-    /// Camera component.
+    /// 相机 分量
     #[serde(default)]
     pub camera: Option<CameraJson>,
-    /// Skybox / environment map component.
+    /// Skybox / environment 映射表 分量
     #[serde(default)]
     pub skybox: Option<SkyboxJson>,
-    // Future component fields can be added here with `#[serde(default)]`.
+    // future 分量 fields can be added here with `#[serde(default)]`.
 }
 
 // ---------------------------------------------------------------------------
 // TransformJson
 // ---------------------------------------------------------------------------
 
-/// Local transform component.
+/// 局部 变换 分量
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransformJson {
-    /// Translation in world units (right-handed: +X right, +Y up, +Z toward viewer).
+    /// 平移 in 世界 units (right-handed: +X 右 +Y 上 +Z toward viewer).
     #[serde(default)]
     pub translation: [f32; 3],
-    /// Rotation as a quaternion `(x, y, z, w)`.  Identity = `[0, 0, 0, 1]`.
+    /// 旋转 as a 四元数 `(x, y, z, w)`. Identity = `[0, 0, 0, 1]`.
     #[serde(default = "identity_quat")]
     pub rotation: [f32; 4],
-    /// Uniform / non-uniform scale factor.
+    /// uniform / non-uniform 音阶 factor.
     #[serde(default = "one_vec3")]
     pub scale: [f32; 3],
 }
@@ -115,25 +115,25 @@ fn one_vec3() -> [f32; 3] {
 // LightJson
 // ---------------------------------------------------------------------------
 
-/// Light component.
+/// 光源 分量
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LightJson {
-    /// Light type: `"directional"`, `"point"`, or `"spot"`.
+    /// 光源 类型 `"directional"`, `"point"`, or `"spot"`.
     #[serde(rename = "type")]
     pub light_type: String,
-    /// Linear RGB colour, typically `[0, 1]`.
+    /// 线性 RGB 颜色 typically `[0, 1]`.
     #[serde(default = "white_rgb")]
     pub color: [f32; 3],
-    /// Intensity in physical units (lux for directional, candela for point/spot).
+    /// Intensity in 物理 units (lux for directional, candela for point/spot).
     #[serde(default = "one_f32")]
     pub intensity: f32,
-    /// Attenuation radius (point / spot only).
+    /// Attenuation 半径 (point / spot only).
     #[serde(default)]
     pub range: Option<f32>,
-    /// Inner cone half-angle in radians (spot only).
+    /// Inner cone half-angle in 弧度 (spot only).
     #[serde(default)]
     pub inner_cone_angle: Option<f32>,
-    /// Outer cone half-angle in radians (spot only).
+    /// Outer cone half-angle in 弧度 (spot only).
     #[serde(default)]
     pub outer_cone_angle: Option<f32>,
 }
@@ -149,19 +149,19 @@ fn one_f32() -> f32 {
 // CameraJson
 // ---------------------------------------------------------------------------
 
-/// Perspective camera component.
+/// 透视 相机 分量
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CameraJson {
-    /// Camera type: `"perspective"` (only option for now).
+    /// 相机 类型 透视 (only 选项 for now).
     #[serde(rename = "type", default = "default_camera_type")]
     pub camera_type: String,
-    /// Vertical field of view in degrees.
+    /// 垂直 field of 视图 in 角度
     #[serde(default = "default_fov")]
     pub fov_y_degrees: f32,
-    /// Near clip plane distance.
+    /// 近 片段 平面 距离
     #[serde(default = "default_near")]
     pub near: f32,
-    /// Far clip plane distance.
+    /// 远 片段 平面 距离
     #[serde(default = "default_far")]
     pub far: f32,
 }
@@ -180,17 +180,17 @@ fn default_far() -> f32 {
 }
 
 // ---------------------------------------------------------------------------
-// Validation
+// 验证
 // ---------------------------------------------------------------------------
 
 /// Validate a parsed [`SceneJson`] for structural correctness:
 ///
-/// - Every `parent` index must be in bounds for the entity list.
-/// - No entity may be its own parent.
+/// - Every `parent` 索引 must be in bounds for the 实体 列表
+/// - No 实体 may be its own parent.
 /// - No dependency cycles (via DFS).
 ///
-/// Returns `Ok(())` on success, or `Err` with a human-readable description of
-/// the first problem found.
+/// Returns `Ok(())` on 成功 or `Err` with a human-readable 描述 of
+/// the 第一个 problem 找到
 pub fn validate_scene(scene: &SceneJson) -> Result<(), String> {
     let n = scene.entities.len();
     if n == 0 {
@@ -227,7 +227,7 @@ pub fn validate_scene(scene: &SceneJson) -> Result<(), String> {
             match colour[p] {
                 0 => dfs(p, entities, colour, path)?,
                 1 => {
-                    // Cycle found — build a readable path.
+                    // Cycle 找到 — 构建 a readable path.
                     let cycle_start = path.iter().position(|&x| x == p).unwrap_or(0);
                     let cycle: Vec<String> = path[cycle_start..]
                         .iter()

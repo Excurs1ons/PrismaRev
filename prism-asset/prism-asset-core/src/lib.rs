@@ -1,9 +1,9 @@
 //! # prism-asset-core
 //!
-//! Foundation types for the PrismaRev Resource Pipeline.
+//! Foundation types for the PrismaRev 资源 管线
 //!
 //! Provides the primitive building blocks shared by every other crate in the
-//! pipeline: [`AssetId`], [`AssetGuid`], [`AssetType`], [`Handle<T>`],
+//! 管线 [`AssetId`], [`AssetGuid`], [`AssetType`], [`Handle<T>`],
 //! [`AssetRef`], and the ScriptableObject-style [`AssetData`](asset_data::AssetData)
 //! trait with [`AssetHandle<T>`](asset_data::AssetHandle).
 

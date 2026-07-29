@@ -1,19 +1,19 @@
-//! Shader asset loading via the ResourceManager pipeline.
+//! 着色器 资源 loading via the ResourceManager 管线
 //!
-//! Provides [`load_shader_module_from_rm`] as the canonical way to load a
-//! SPIR-V shader that has been packaged as a [`ShaderAsset`] inside a `.pak`
+//! Provides [`load_shader_module_from_rm`] as the canonical way to 加载 a
+//! SPIR-V 着色器 that has been packaged as a [`ShaderAsset`] inside a `.pak`
 //! file.  Built-in engine shaders should still use
 //! [`prism_render::shader::load_shader_module`] together with `include_bytes!`;
-//! this module is for content / user shaders or offline tools that already have
-//! a [`ResourceManager`] open.
+//! this 模块 is for content / user shaders or offline tools that already have
+//! a [`ResourceManager`] 打开
 
 use anyhow::Context;
 use prism_asset_runtime::{ResourceManager, ShaderAsset};
 
-/// Load a `VkShaderModule` from a [`ShaderAsset`] inside a loaded `.pak`.
+/// 加载 a `VkShaderModule` from a [`ShaderAsset`] inside a loaded `.pak`.
 ///
-/// `asset_path` is the virtual path used at cook time
-/// (e.g. `"shaders/gi_bake.comp.spv"`).  The SPIR-V magic is validated by
+/// `asset_path` is the virtual path used at 烹饪 时间
+/// (e.g. `"shaders/gi_bake.comp.spv"`). The SPIR-V magic is validated by
 /// [`ShaderAsset::from_bytes`].
 pub fn load_shader_module_from_rm(
     device: &ash::Device,

@@ -1,23 +1,23 @@
-//! Vulkan rendering backend for PrismaRev.
+//! Vulkan 渲染 backend for PrismaRev.
 //!
-//! Built on [`ash`] (thin Vulkan bindings). Milestone 2 provides a full
-//! rasterization pipeline: render pass, graphics pipeline, mesh buffers,
-//! descriptor sets, and camera UBO — enough to render ECS-driven geometry.
+//! 内置 on [`ash`] (thin Vulkan bindings). Milestone 2 provides a 完整
+//! 光栅化 管线 渲染 pass graphics 管线 网格 buffers,
+//! 描述符 sets, and 相机 UBO — enough to 渲染 ECS-driven geometry.
 //!
 //! ## Modules
 //!
-//! | Module | Purpose |
+//! | 模块 | Purpose |
 //! |--------|---------|
-//! | [`capabilities`] | Ray-tracing capability detection |
-//! | [`context`] | Vulkan instance, device, queues |
-//! | [`swapchain`] | Swapchain + acquire/present sync |
-//! | [`render_pass`] | Render pass + framebuffers |
-//! | [`shader`] | SPIR-V shader module loading |
-//! | [`buffer`] | Buffer allocation & staging upload |
-//! | [`mesh`] | Vertex/index buffer mesh type |
-//! | [`pipeline`] | Graphics pipeline |
-//! | [`descriptor`] | Descriptor set layout, pool, UBO |
-//! | [`render_graph`] | Modular render-pass graph (new pipeline) |
+//! | [`capabilities`] | Ray-tracing 能力 detection |
+//! | [`context`] | Vulkan 实例 设备 queues |
+//! | 交换链 | 交换链 + acquire/present sync |
+//! | [`render_pass`] | 渲染 pass + framebuffers |
+//! | 着色器 | SPIR-V 着色器 模块 loading |
+//! | 缓冲区 | 缓冲区 分配 & staging upload |
+//! | 网格 | Vertex/index 缓冲区 网格 类型 |
+//! | 管线 | Graphics 管线 |
+//! | 描述符 | 描述符 集合 布局 池 UBO |
+//! | [`render_graph`] | Modular render-pass 图 (new 管线 |
 //! | [`passes`] | Individual render-pass implementations |
 
 pub mod acceleration_structure;
@@ -49,14 +49,14 @@ pub mod render_graph;
 pub mod render_pass;
 pub mod scene_scope;
 pub mod shader;
-/// Slang-reflection-generated binding constants (set/binding indices, entry
+/// Slang-reflection-generated 绑定 constants (set/binding indices, entry
 /// point names, push-constant sizes). Regenerate with `xtask/shader-bindgen`
 /// after recompiling shaders on a host with slangc - see shaders/compile.sh.
 pub mod shader_bindings;
 pub mod swapchain;
 pub mod ui_overlay;
 
-// SceneDrawItem is the engine<->renderer exchange type for resolved draws.
+// SceneDrawItem is the engine<->renderer 交换 类型 for resolved draws.
 pub use graph_renderer::SceneDrawItem;
 
 pub use buffer::create_buffer;

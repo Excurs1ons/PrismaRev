@@ -1,6 +1,6 @@
-//! Fallback crash dialog for platforms without a native dialog backend.
+//! 回退 崩溃 对话框 for platforms without a native 对话框 backend.
 //!
-//! Prints the error to stderr and returns `Exit`. No clipboard.
+//! Prints the 错误 to stderr and returns `Exit`. No clipboard.
 
 use super::CrashChoice;
 

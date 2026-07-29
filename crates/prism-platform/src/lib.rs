@@ -1,7 +1,7 @@
-//! PrismaRev platform abstraction.
+//! PrismaRev platform 抽象
 //!
-//! Window system interface, Vulkan surface creation, and input event routing.
-//! Has no application-specific logic — the game loop lives in `prism-app`.
+//! 窗口 系统 接口 Vulkan 表面 creation, and 输入 事件 routing.
+//! Has no application-specific 逻辑 — the game 循环 lives in `prism-app`.
 
 mod input;
 mod context;

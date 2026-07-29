@@ -1,22 +1,22 @@
 //! PrismaRev ECS core.
 //!
-//! A minimal, data-oriented Entity-Component-System. Entities are cheap integer
-//! handles, components are plain data stored in type-indexed sparse maps, and
-//! systems are ordinary functions that query the world for component slices.
+//! A minimal, data-oriented Entity-Component-System. Entities are cheap 整数
+//! handles, components are plain data stored in type-indexed 稀疏 maps, and
+//! systems are ordinary functions that 查询 the 世界 for 分量 slices.
 //!
-//! This is a skeleton for milestone 1: the API shape is final so later
-//! milestones can slot [`RenderSystem`], etc. in, but the engine core does not
-//! drive rendering through it yet.
+//! This is a 骨架 for milestone 1: the API shape is final so later
+//! milestones can 槽 [`RenderSystem`], etc. in, but the engine core does not
+//! drive 渲染 through it yet.
 
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
 
 // ---------------------------------------------------------------------------
-// Entity
+// 实体
 // ---------------------------------------------------------------------------
 
-/// A lightweight handle to a game object. Carries a generation so that stale
-/// handles left over after deletion are distinguishable from recycled ones.
+/// A lightweight handle to a game 对象 Carries a generation so that stale
+/// handles 左 over after deletion are distinguishable from recycled ones.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Entity {
     id: u32,
@@ -24,19 +24,19 @@ pub struct Entity {
 }
 
 impl Entity {
-    /// Raw index into the entity allocator. Stable for the entity's lifetime.
+    /// Raw 索引 into the 实体 allocator. 稳定 for the entity's 生命周期
     pub fn id(self) -> u32 {
         self.id
     }
 
-    /// Monotonically increasing version; bumped each time the slot is recycled.
+    /// Monotonically increasing version; bumped each 时间 the 槽 is recycled.
     pub fn generation(self) -> u32 {
         self.generation
     }
 
-    /// Construct an entity handle from raw parts. Intended for sentinel uses
-    /// (e.g. the editor's per-component-type euler cache, which needs a stable
-    /// key not tied to any real entity); normal entity creation goes through
+    /// Construct an 实体 handle from raw parts. Intended for sentinel uses
+    /// (e.g. the editor's per-component-type euler cache, which needs a 稳定
+    /// 调 not tied to any real 实体 法线 实体 creation goes through
     /// [`World::spawn`].
     pub fn from_raw(id: u32, generation: u32) -> Self {
         Self { id, generation }
@@ -44,48 +44,48 @@ impl Entity {
 }
 
 // ---------------------------------------------------------------------------
-// Component
+// 分量
 // ---------------------------------------------------------------------------
 
-/// Marker for component types. Components must be `'static + Send` so they can
+/// Marker for 分量 types. Components must be 静态 + Send` so they can
 /// be stored in type-erased pools and safely sent across threads.
 pub trait Component: 'static + Send {}
 
-// Blanket impl: any plain `'static + Send` data is a component.
+// Blanket impl: any plain 静态 + Send` data is a 分量
 impl<T: 'static + Send> Component for T {}
 
 // ---------------------------------------------------------------------------
-// World
+// 世界
 // ---------------------------------------------------------------------------
 
-/// Central storage for all entities and their components.
+/// Central 存储 for all entities and their components.
 ///
-/// Component data lives in [`ComponentPool`]s keyed by [`TypeId`]. Each pool is
-/// a sparse map from entity id -> value, so adding/removing components is cheap
-/// and entities can have arbitrary component combinations (no archetypes yet).
+/// 分量 data lives in [`ComponentPool`]s keyed by [`TypeId`]. Each 池 is
+/// a 稀疏 映射表 from 实体 id -> value, so adding/removing components is cheap
+/// and entities can have arbitrary 分量 combinations (no archetypes yet).
 pub struct World {
-    /// Entity slots. Each slot holds the generation the slot currently
-    /// represents: for a live entity it matches that entity's generation;
-    /// for a freed/recyclable slot it holds the generation the *next*
+    /// 实体 slots. Each 槽 holds the generation the 槽 currently
+    /// represents: for a live 实体 it matches that entity's generation;
+    /// for a freed/recyclable 槽 it holds the generation the *next*
     /// recycled handle will have (old + 1), so stale handles stay dead.
     entities: Vec<u32>,
-    /// Parallel to `entities`: whether each live entity is active (i.e.
-    /// should be included in queries).  Inactive entities remain in the
-    /// world but are skipped by all query iterators.
+    /// 并行 to `entities`: whether each live 实体 is 激活 (i.e.
+    /// should be included in queries). 未激活 entities remain in the
+    /// 世界 but are skipped by all 查询 iterators.
     active: Vec<bool>,
     /// Indices of freed slots available for reuse.
     free: Vec<u32>,
-    /// Component storage, one pool per type. Pools are stored type-erased as
-    /// `dyn ErasedPool` (which is also `Any`) so [`Self::despawn`] can drop a
-    /// component without knowing its concrete type, while typed accessors
-    /// downcast back to [`ComponentPool<T>`].
+    /// 分量 存储 one 池 per 类型 Pools are stored type-erased as
+    /// `dyn ErasedPool` (which is also `Any`) so [`Self::despawn`] can 放置 a
+    /// 分量 without knowing its concrete 类型 while typed accessors
+    /// downcast 后 to [`ComponentPool<T>`].
     pools: HashMap<TypeId, Box<dyn ErasedPool>>,
-    /// Global singleton resources, keyed by type. Used for data like `Camera`
-    /// or `RenderState` that doesn't belong to any single entity.
+    /// 全局 单例 resources, keyed by 类型 Used for data like 相机
+    /// or `RenderState` that doesn't belong to any single 实体
     resources: HashMap<TypeId, Box<dyn Any + Send>>,
 }
 
-// Safe: all component data is `Send`, and ErasedPool only stores `Send` types.
+// Safe: all 分量 data is `Send`, and ErasedPool only stores `Send` types.
 // Pools/resources are accessed under `&self`/`&mut self` with no interior
 // mutability, so shared `&World` across threads (Sync) is also safe.
 unsafe impl Send for World {}
@@ -102,10 +102,10 @@ impl World {
         }
     }
 
-    /// Allocate a fresh entity handle (starts active).
+    /// Allocate a fresh 实体 handle (starts 激活
     pub fn spawn(&mut self) -> Entity {
         if let Some(id) = self.free.pop() {
-            // Recycle a freed slot. despawn stored the next generation number
+            // Recycle a freed 槽 销毁 stored the 下一个 generation number
             // here (old + 1) so a recycled handle is distinguishable from the
             // stale one that was just freed.
             let generation = self.entities[id as usize];
@@ -119,38 +119,38 @@ impl World {
         }
     }
 
-    /// Mark an entity as deleted; its slot becomes recyclable and its
+    /// Mark an 实体 as deleted; its 槽 becomes recyclable and its
     /// components are dropped.
     pub fn despawn(&mut self, entity: Entity) {
         if self.is_alive(entity) {
-            // Drop all components for this entity from every pool. Each pool
-            // is `dyn ErasedPool`, so this needs no concrete type.
+            // 放置 all components for this 实体 from every 池 Each 池
+            // is `dyn ErasedPool`, so this needs no concrete 类型
             for pool in self.pools.values_mut() {
                 pool.remove(entity.id);
             }
-            // Store the *next* generation so the slot can be recycled with a
+            // 存储 the *next* generation so the 槽 can be recycled with a
             // fresh, distinguishable handle (old handle stays dead because
-            // is_alive compares for exact equality).
+            // is_alive compares for 精确 equality).
             self.entities[entity.id as usize] = entity.generation + 1;
             self.free.push(entity.id);
         }
     }
 
-    /// True if `entity` refers to a currently-live slot.
+    /// True if 实体 refers to a currently-live 槽
     pub fn is_alive(&self, entity: Entity) -> bool {
         self.entities
             .get(entity.id as usize)
             .is_some_and(|&gen| gen == entity.generation)
     }
 
-    /// True if the entity is alive and active. Inactive entities are excluded
+    /// True if the 实体 is alive and 激活 未激活 entities are excluded
     /// from queries so they effectively stop participating in all systems.
     pub fn is_active(&self, entity: Entity) -> bool {
         self.is_alive(entity)
             && self.active.get(entity.id as usize).copied().unwrap_or(true)
     }
 
-    /// Set the active state of a live entity. Has no effect on dead entities.
+    /// 集合 the 激活 状态 of a live 实体 Has no 效果 on dead entities.
     pub fn set_active(&mut self, entity: Entity, value: bool) {
         if self.is_alive(entity) {
             if let Some(slot) = self.active.get_mut(entity.id as usize) {
@@ -159,8 +159,8 @@ impl World {
         }
     }
 
-    /// Attach a component value to `entity`, replacing any existing one of the
-    /// same type. No-op (and logged) if the entity is not alive.
+    /// Attach a 分量 value to 实体 replacing any existing one of the
+    /// same 类型 No-op (and logged) if the 实体 is not alive.
     pub fn insert<T: Component>(&mut self, entity: Entity, component: T) {
         if !self.is_alive(entity) {
             log::trace!("insert on dead entity {entity:?} ignored");
@@ -172,7 +172,7 @@ impl World {
             .or_insert_with(|| Box::new(ComponentPool::<T>::new()));
         pool_downcast_mut::<T>(pool.as_mut()).insert(entity.id, component);
     }
-    /// Borrow a component, if present.
+    /// 借用 a 分量 if present.
     pub fn get<T: Component>(&self, entity: Entity) -> Option<&T> {
         if !self.is_alive(entity) {
             return None;
@@ -182,7 +182,7 @@ impl World {
             .and_then(|pool| pool_downcast_ref::<T>(pool.as_ref()).get(entity.id))
     }
 
-    /// Mutably borrow a component, if present.
+    /// Mutably 借用 a 分量 if present.
     pub fn get_mut<T: Component>(&mut self, entity: Entity) -> Option<&mut T> {
         if !self.is_alive(entity) {
             return None;
@@ -192,7 +192,7 @@ impl World {
             .and_then(|pool| pool_downcast_mut::<T>(pool.as_mut()).get_mut(entity.id))
     }
 
-    /// Remove a component type from `entity`, returning the owned value.
+    /// 移除 a 分量 类型 from 实体 returning the owned value.
     pub fn remove<T: Component>(&mut self, entity: Entity) -> Option<T> {
         if !self.is_alive(entity) {
             return None;
@@ -202,10 +202,10 @@ impl World {
             .and_then(|pool| pool_downcast_mut::<T>(pool.as_mut()).remove(entity.id))
     }
 
-    /// Iterate over all `(entity, &T)` pairs for a single component type.
+    /// Iterate over all 实体 &T)` pairs for a single 分量 类型
     ///
-    /// Lazily walks the component's dense storage; the entity generation is
-    /// read directly from `self.entities` (no per-query clone). Inactive
+    /// Lazily walks the component's 稠密 存储 the 实体 generation is
+    /// 读取 directly from `self.entities` (no per-query clone). 未激活
     /// entities are skipped.
     pub fn query<T: Component>(&self) -> impl Iterator<Item = (Entity, &T)> {
         let entities = &self.entities;
@@ -222,11 +222,11 @@ impl World {
             })
     }
 
-    /// Like [`Self::query`], but **includes** inactive entities.
+    /// Like [`Self::query`], but **includes** 未激活 entities.
     ///
-    /// Iterates all alive entities that have component `T`, regardless of the
-    /// per-entity `active` flag. Used by the editor's entity-tree to show
-    /// disabled entities in the hierarchy.
+    /// Iterates all alive entities that have 分量 `T`, regardless of the
+    /// per-entity 激活 flag. Used by the editor's entity-tree to show
+    /// 禁用 entities in the hierarchy.
     pub fn query_inactive_inclusive<T: Component>(&self) -> impl Iterator<Item = (Entity, &T)> {
         let entities = &self.entities;
         let pool = self.pools.get(&TypeId::of::<T>());
@@ -238,8 +238,8 @@ impl World {
             })
     }
 
-    /// Iterate over all `(entity, &mut T)` pairs for a single component type.
-    /// Inactive entities are skipped.
+    /// Iterate over all 实体 &mut T)` pairs for a single 分量 类型
+    /// 未激活 entities are skipped.
     pub fn query_mut<T: Component>(&mut self) -> impl Iterator<Item = (Entity, &mut T)> {
         let entities = &self.entities;
         let active_ptr: *const Vec<bool> = &self.active;
@@ -248,7 +248,7 @@ impl World {
             .flat_map(move |p| pool_downcast_mut::<T>(p.as_mut()).iter_mut())
             .filter_map(move |(id, value)| {
                 let generation = *entities.get(id as usize)?;
-                // SAFETY: self.active is not mutated during the iteration.
+                // 安全性 self.active is not mutated during the 迭代
                 if !unsafe { &*active_ptr }.get(id as usize).copied().unwrap_or(true) {
                     return None;
                 }
@@ -257,8 +257,8 @@ impl World {
     }
 
     /// Lazily iterate over entities that have **both** `A` and `B`, yielding
-    /// `(entity, &A, &B)`. This is a sparse-set join: it walks pool `A` and
-    /// probes pool `B` for each entity id, allocating nothing. Inactive
+    /// 实体 &A, &B)`. This is a sparse-set join: it walks 池 `A` and
+    /// probes 池 `B` for each 实体 id, allocating nothing. 未激活
     /// entities are skipped.
     pub fn query2<A: Component, B: Component>(&self) -> impl Iterator<Item = (Entity, &A, &B)> {
         let entities = &self.entities;
@@ -286,7 +286,7 @@ impl World {
     }
 
     /// Lazily iterate over entities that have `A`, `B`, and `C` simultaneously.
-    /// Inactive entities are skipped.
+    /// 未激活 entities are skipped.
     pub fn query3<A: Component, B: Component, C: Component>(
         &self,
     ) -> impl Iterator<Item = (Entity, &A, &B, &C)> {
@@ -321,25 +321,25 @@ impl World {
         })
     }
 
-    /// Mutable two-component query: `(entity, &mut A, &B)`. The first component
-    /// is mutable, the second is shared. This is the common pattern for
-    /// systems that write to a transform while reading a mesh/handle. Returns
-    /// a lazy iterator (no allocation).
+    /// Mutable two-component 查询 实体 &mut A, &B)`. The 第一个 分量
+    /// is mutable, the 秒 is shared. This is the common 模式 for
+    /// systems that 写入 to a 变换 while reading a mesh/handle. Returns
+    /// a lazy 迭代器 (no 分配
     ///
-    /// # Safety argument
+    /// # 安全性 argument
     ///
-    /// The borrow checker can't see that `pools[A]` and `pools[B]` are
+    /// The 借用 checker can't see that `pools[A]` and `pools[B]` are
     /// disjoint `HashMap` entries (different `TypeId` keys). We use raw pointers
-    /// to obtain both borrows simultaneously. This is sound because:
-    /// - A and B are distinct types, so their pools never alias.
-    /// - The `&mut self` borrow prevents any other access to `pools` for the
-    ///   lifetime of the returned references.
+    /// to obtain both borrows simultaneously. This is 声音 because:
+    /// - A and B are 不同 types, so their pools never alias.
+    /// - The `&mut self` 借用 prevents any other 访问 to `pools` for the
+    /// 生命周期 of the returned references.
     pub fn query2_mut<A: Component, B: Component>(
         &mut self,
     ) -> Box<dyn Iterator<Item = (Entity, &mut A, &B)> + '_> {
         let generation_for = &self.entities;
         let active_ptr: *const Vec<bool> = &self.active;
-        // SAFETY: see above. A and B have different TypeIds, so the two pool
+        // 安全性 see above. A and B have different TypeIds, so the two 池
         // entries are disjoint and cannot alias.
         let pools_ptr: *mut HashMap<TypeId, Box<dyn ErasedPool>> = &mut self.pools;
         let pool_a = unsafe { (*pools_ptr).get_mut(&TypeId::of::<A>()) }
@@ -360,24 +360,24 @@ impl World {
         }))
     }
 
-    // --- Component-type enumeration (for editor auto-recognition) ---------
+    // --- Component-type enumeration (for 编辑器 auto-recognition) ---------
 
-    /// Iterate over every component type currently stored in the world, yielding
+    /// Iterate over every 分量 类型 currently stored in the 世界 yielding
     /// `(TypeId, type_name)`. This is the foundation of the editor's
-    /// "auto-recognition" inspector: it can list every component on an entity
-    /// without hardcoding the component types.
+    /// "auto-recognition" 检查器 it can 列表 every 分量 on an 实体
+    /// without hardcoding the 分量 types.
     ///
-    /// Order is unspecified (driven by `HashMap` iteration); callers that need
-    /// a stable order must sort. Only types that have at least one live
-    /// component instance are yielded - types whose pool is empty are still
-    /// yielded (a pool is created on first `insert` and never removed).
+    /// Order is unspecified (driven by `HashMap` 迭代 callers that need
+    /// a 稳定 order must 排序 Only types that have at least one live
+    /// 分量 实例 are yielded - types whose 池 is 空 are still
+    /// yielded (a 池 is created on 第一个 插入 and never removed).
     pub fn iter_component_types(&self) -> impl Iterator<Item = (TypeId, &'static str)> + '_ {
         self.pools
             .iter()
             .map(|(type_id, pool)| (*type_id, pool.type_name()))
     }
 
-    /// True if `entity` has a component of the erased `type_id`. Used together
+    /// True if 实体 has a 分量 of the erased `type_id`. Used together
     /// with [`World::iter_component_types`] to enumerate an entity's components
     /// without knowing their concrete types.
     pub fn has_component(&self, entity: Entity, type_id: TypeId) -> bool {
@@ -389,29 +389,29 @@ impl World {
             .is_some_and(|pool| pool.contains(entity.id))
     }
 
-    // --- Resources (global, singleton data not tied to an entity) ---------
+    // --- Resources 全局 单例 data not tied to an 实体 ---------
 
-    /// Insert a global resource, replacing any existing one of the same type.
-    /// Resources are singletons keyed by type: `Camera`, `RenderState`, etc.
+    /// 插入 a 全局 资源 replacing any existing one of the same 类型
+    /// Resources are singletons keyed by 类型 相机 `RenderState`, etc.
     pub fn insert_resource<R: 'static + Send>(&mut self, resource: R) {
         self.resources.insert(TypeId::of::<R>(), Box::new(resource));
     }
 
-    /// Borrow a global resource by type, if it exists.
+    /// 借用 a 全局 资源 by 类型 if it 存在
     pub fn get_resource<R: 'static>(&self) -> Option<&R> {
         self.resources
             .get(&TypeId::of::<R>())
             .and_then(|b| b.downcast_ref::<R>())
     }
 
-    /// Mutably borrow a global resource by type, if it exists.
+    /// Mutably 借用 a 全局 资源 by 类型 if it 存在
     pub fn get_resource_mut<R: 'static>(&mut self) -> Option<&mut R> {
         self.resources
             .get_mut(&TypeId::of::<R>())
             .and_then(|b| b.downcast_mut::<R>())
     }
 
-    /// Remove a global resource by type, returning it if it existed.
+    /// 移除 a 全局 资源 by 类型 returning it if it existed.
     pub fn remove_resource<R: 'static + Send>(&mut self) -> Option<R> {
         self.resources
             .remove(&TypeId::of::<R>())
@@ -427,32 +427,32 @@ impl Default for World {
 }
 
 // ---------------------------------------------------------------------------
-// Component pool (type-erased storage)
+// 分量 池 (type-erased 存储
 // ---------------------------------------------------------------------------
 
-/// Type-erased view of a pool. Inherits `Any` so typed accessors can still
-/// downcast back to [`ComponentPool<T>`].
+/// Type-erased 视图 of a 池 Inherits `Any` so typed accessors can still
+/// downcast 后 to [`ComponentPool<T>`].
 ///
-/// The `contains` / `type_name` methods exist to let the editor
-/// (`prism-editor`) enumerate which component types an entity has without
+/// The 包含 / `type_name` methods exist to let the 编辑器
+/// (`prism-editor`) enumerate which 分量 types an 实体 has without
 /// knowing the concrete types - this is the foundation of the "auto-recognition,
-/// no hardcoding" inspector. They are not used by the core ECS itself.
+/// no hardcoding" 检查器 They are not used by the core ECS itself.
 ///
-/// `Send + 'static` required so [`World`] can be moved across threads.
+/// `Send + 静态 required so 世界 can be moved across threads.
 trait ErasedPool: Any + Send + 'static {
     fn remove(&mut self, id: u32);
-    /// True if `id` currently has a component in this pool.
+    /// True if `id` currently has a 分量 in this 池
     fn contains(&self, id: u32) -> bool;
-    /// Stable Rust type name (`std::any::type_name::<T>()`), for display.
+    /// 稳定 Rust 类型 name (`std::any::type_name::<T>()`), for display.
     fn type_name(&self) -> &'static str;
 }
 
-/// Sparse-set storage for one component type.
+/// Sparse-set 存储 for one 分量 类型
 ///
-/// Components are stored contiguously in `dense` (cache-friendly, no per-
-/// component heap allocation or type erasure). `dense_entities[i]` is the
-/// entity id of `dense[i]`; `sparse[id]` maps entity id -> index in `dense`
-/// (`SPARSE_NONE` means "not present"). Iteration walks `dense` directly, so
+/// Components are stored contiguously in 稠密 (cache-friendly, no per-
+/// 分量 堆 分配 or 类型 erasure). `dense_entities[i]` is the
+/// 实体 id of `dense[i]`; `sparse[id]` maps 实体 id -> 索引 in 稠密
+/// (`SPARSE_NONE` means "not present"). 迭代 walks 稠密 directly, so
 /// queries are allocation-free and cache-coherent.
 struct ComponentPool<T> {
     dense: Vec<T>,
@@ -460,7 +460,7 @@ struct ComponentPool<T> {
     sparse: Vec<u32>,
 }
 
-/// Sentinel stored in `sparse` for entity ids that have no component.
+/// Sentinel stored in 稀疏 for 实体 ids that have no 分量
 const SPARSE_NONE: u32 = u32::MAX;
 
 impl<T: 'static> ComponentPool<T> {
@@ -505,9 +505,9 @@ impl<T: 'static> ComponentPool<T> {
         }
     }
 
-    /// Remove and return the component for `id`, if present. Uses `swap_remove`
-    /// so `dense` stays contiguous; the moved-last entity's sparse entry is
-    /// patched to its new index.
+    /// 移除 and return the 分量 for `id`, if present. Uses `swap_remove`
+    /// so 稠密 stays 连续 the moved-last entity's 稀疏 entry is
+    /// patched to its new 索引
     fn remove(&mut self, id: u32) -> Option<T> {
         let idx = *self.sparse.get(id as usize)?;
         if idx == SPARSE_NONE || idx as usize >= self.dense.len() {
@@ -536,7 +536,7 @@ impl<T: 'static> ComponentPool<T> {
             .zip(self.dense.iter_mut())
     }
 
-    /// True if `id` has a component in this pool. Mirrors the lookup logic of
+    /// True if `id` has a 分量 in this 池 Mirrors the lookup 逻辑 of
     /// [`ComponentPool::get`] but without returning the value.
     fn contains(&self, id: u32) -> bool {
         match self.sparse.get(id as usize).copied() {
@@ -659,7 +659,7 @@ mod tests {
         let e = world.spawn();
         world.despawn(e);
         world.insert(e, Position(0.0, 0.0));
-        // recycled slot should not receive the stale insert
+        // recycled 槽 should not receive the stale 插入
         let e2 = world.spawn();
         assert_eq!(world.get::<Position>(e2), None);
     }
@@ -680,7 +680,7 @@ mod tests {
         world.insert(a, Position(1.0, 0.0));
         world.insert(a, Velocity(0.5, 0.0));
         world.insert(b, Position(2.0, 0.0));
-        // b has no Velocity, _c has neither
+        // b has no 速度 _c has neither
         world.insert(_c, Position(3.0, 0.0));
 
         let results: Vec<_> = world.query2::<Position, Velocity>().collect();
@@ -699,7 +699,7 @@ mod tests {
         world.insert(a, Position(1.0, 0.0));
         world.insert(a, Velocity(0.5, 0.0));
         world.insert(a, Health(100));
-        // b is missing Health
+        // b is 缺少 Health
         world.insert(b, Position(2.0, 0.0));
         world.insert(b, Velocity(1.0, 0.0));
 
@@ -728,7 +728,7 @@ mod tests {
         let mut world = World::new();
         let a = world.spawn();
         world.insert(a, Position(0.0, 0.0));
-        // No entity has Velocity at all
+        // No 实体 has 速度 at all
         assert!(world.query2::<Position, Velocity>().next().is_none());
     }
 

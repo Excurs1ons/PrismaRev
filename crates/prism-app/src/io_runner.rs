@@ -1,6 +1,6 @@
-//! IO thread — reads .pak files and deserialises assets in the background.
+//! IO 线程 — reads .pak files and deserialises assets in the background.
 //!
-//! The main thread sends [`IoRequest`]s and receives [`IoResult`]s through
+//! The main 线程 sends [`IoRequest`]s and receives [`IoResult`]s through
 //! `flume` channels.
 //!
 //! GPU upload tasks are sent separately through [`RenderShared::gpu_uploads`].
@@ -22,8 +22,8 @@ pub enum IoRequest {
 pub enum IoResult {
     AssetLoaded {
         id: AssetId,
-        /// Opaque blob — the asset data after deserialisation.
-        /// The main thread integrates this into the ECS World.
+        /// 不透明 blob — the 资源 data after deserialisation.
+        /// The main 线程 integrates this into the ECS 世界
         data: Vec<u8>,
     },
     PackageLoaded {
@@ -36,10 +36,10 @@ pub enum IoResult {
     },
 }
 
-// ── GPU upload task ───────────────────────────────────────────────────
+// ── GPU upload 任务 ───────────────────────────────────────────────────
 
-/// A task that the main thread enqueues for the render thread to execute
-/// (creating Vulkan resources from CPU-side asset data).
+/// A 任务 that the main 线程 enqueues for the 渲染 线程 to 执行
+/// (creating Vulkan resources from CPU-side 资源 data).
 #[derive(Debug, Clone)]
 pub enum GpuUploadTask {
     CreateMesh {
@@ -56,10 +56,10 @@ pub enum GpuUploadTask {
     },
 }
 
-// ── Thread entry point ────────────────────────────────────────────────
+// ── 线程 entry point ────────────────────────────────────────────────
 
-/// Run the IO event loop. Blocks on `rx` until [`IoRequest::Shutdown`]
-/// is received or the channel is closed.
+/// Run the IO 事件 循环 Blocks on `rx` until [`IoRequest::Shutdown`]
+/// is received or the 通道 is closed.
 pub fn io_thread_main(
     rx: Receiver<IoRequest>,
     result_tx: Sender<IoResult>,

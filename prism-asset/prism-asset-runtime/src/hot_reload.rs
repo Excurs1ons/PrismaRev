@@ -1,10 +1,10 @@
-//! Hot-reload support for the resource pipeline.
+//! Hot-reload support for the 资源 管线
 //!
 //! Uses a simple polling approach (checks file metadata at intervals) so it
 //! works on all platforms including Android/Termux without requiring inotify
 //! or any OS-specific file-watch API.
 //!
-//! This module is only compiled with the `hot-reload` feature enabled.
+//! This 模块 is only compiled with the `hot-reload` 特性 启用
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -33,58 +33,58 @@ pub enum HotReloadError {
 pub enum HotReloadEvent {
     /// A `.pak` file was modified — assets inside should be reloaded.
     PakModified(PathBuf),
-    /// An unexpected watch error occurred.
+    /// An unexpected watch 错误 occurred.
     WatchError(String),
 }
 
 // ---------------------------------------------------------------------------
-// Hot Reload Watcher
+// 热 Reload Watcher
 // ---------------------------------------------------------------------------
 
-/// Polls one or more `.pak` files for changes at a configurable interval.
+/// Polls one or more `.pak` files for changes at a 可配置 间隔
 ///
-/// When a file's modification time changes, a [`HotReloadEvent::PakModified`]
-/// event is emitted on the receiver channel.
+/// When a file's modification 时间 changes, a [`HotReloadEvent::PakModified`]
+/// 事件 is emitted on the receiver 通道
 ///
-/// ## Usage
+/// ## 用法
 ///
 /// ```ignore
 /// let watcher = HotReloadWatcher::watch_file("game.pak", Duration::from_secs(1))?;
 /// let mut rm = ResourceManager::new();
 ///
-/// // In your game loop:
-/// for event in watcher.receiver().try_iter() {
-///     if let HotReloadEvent::PakModified(path) = event {
+/// // In your game 循环
+/// for 事件 in watcher.receiver().try_iter() {
+/// if let HotReloadEvent::PakModified(path) = 事件 {
 ///         rm.on_pak_changed(&path)?;
 ///     }
 /// }
 /// ```
 pub struct HotReloadWatcher {
-    /// Channel receiver for polling events.
+    /// 通道 receiver for polling events.
     rx: mpsc::Receiver<HotReloadEvent>,
-    /// Join handle for the polling thread (kept alive).
+    /// Join handle for the polling 线程 (kept alive).
     #[allow(dead_code)]
     handle: thread::JoinHandle<()>,
-    /// Shared stop signal.
+    /// Shared stop 信号
     stop: Arc<Mutex<bool>>,
 }
 
 impl HotReloadWatcher {
-    /// Create a new polling watcher for a single `.pak` file.
+    /// 创建 a new polling watcher for a single `.pak` file.
     pub fn watch_file(path: impl Into<PathBuf>, interval: Duration) -> Result<Self, HotReloadError> {
         let path: PathBuf = path.into();
         let paths = vec![path];
         Self::watch_files(paths, interval)
     }
 
-    /// Create a new polling watcher for multiple `.pak` files.
+    /// 创建 a new polling watcher for multiple `.pak` files.
     pub fn watch_files(paths: Vec<PathBuf>, interval: Duration) -> Result<Self, HotReloadError> {
         let (tx, rx) = mpsc::channel::<HotReloadEvent>();
         let tx_clone = tx.clone();
         let stop = Arc::new(Mutex::new(false));
         let stop_clone = stop.clone();
 
-        // Snapshot of modification times at start.
+        // 快照 of modification times at start.
         let mut mtimes: HashMap<PathBuf, SystemTime> = HashMap::new();
         for p in &paths {
             if let Ok(meta) = std::fs::metadata(p) {
@@ -136,12 +136,12 @@ impl HotReloadWatcher {
         Ok(Self { rx, handle, stop })
     }
 
-    /// Get a reference to the event receiver.
+    /// Get a 引用 to the 事件 receiver.
     pub fn receiver(&self) -> &mpsc::Receiver<HotReloadEvent> {
         &self.rx
     }
 
-    /// Stop the polling thread. The watcher is no longer usable after this.
+    /// Stop the polling 线程 The watcher is no longer usable after this.
     pub fn stop(&mut self) {
         if let Ok(mut flag) = self.stop.lock() {
             *flag = true;
@@ -172,7 +172,7 @@ mod tests {
         let pak = builder.build().unwrap();
         fs::write(&pak_path, &pak).unwrap();
 
-        // Ensure a clock-tick boundary so the subsequent write has a distinct
+        // Ensure a clock-tick boundary so the subsequent 写入 has a 不同
         // mtime even on filesystems with 1-second granularity (Android/Termux
         // FUSE, etc.).
         sleep(Duration::from_secs(1));

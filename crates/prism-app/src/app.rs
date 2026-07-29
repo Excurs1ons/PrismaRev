@@ -1,11 +1,11 @@
-//! [`App`] — platform application layer, owns the winit [`ApplicationHandler`].
+//! [`App`] — platform application 层 owns the winit [`ApplicationHandler`].
 //!
-//! # Architecture (render thread = background)
+//! # Architecture 渲染 线程 = background)
 //!
 //! ```text
-//!   Main thread (winit events)         Render thread
+//! Main 线程 (winit events) 渲染 线程
 //!   ──────────────────────────         ──────────────
-//!   about_to_wait:                      loop:
+//! about_to_wait: 循环
 //!     engine.fixed_update × N             take_packet()
 //!     engine.update                       begin_frame()
 //!     engine.late_update                  execute(packet, egui_frame)
@@ -14,8 +14,8 @@
 //!     egui_cpu.run_ui ──egui_frame──►
 //! ```
 //!
-//! The render thread runs independently of window events.  Vsync blocks only
-//! the render thread — the main thread keeps ticking.
+//! The 渲染 线程 runs independently of 窗口 events. Vsync blocks only
+//! the 渲染 线程 — the main 线程 keeps ticking.
 //!
 //! **Init** (all single-threaded in `App::new` + `resumed`):
 //! ```text
@@ -24,7 +24,7 @@
 //!     → init_scene → runtime_initialize
 //!   [resumed]:
 //!     PlatformContext → warmup pipelines → resolve_scene_assets
-//!     → into_parts → spawn render thread
+//! → into_parts → 生成 渲染 线程
 //! ```
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -62,50 +62,50 @@ use crate::render_shared::RenderShared;
 
 /// Application shell implementing winit's [`ApplicationHandler`].
 pub struct App {
-    // ---------- startup config ----------
+    // ---------- startup 配置 ----------
     config: AppConfig,
 
-    // ---------- engine (main thread) ----------
+    // ---------- engine (main 线程 ----------
     engine: Option<Engine>,
     asset_resolver: GpuAssetResolver,
 
-    // ---------- render thread ----------
+    // ---------- 渲染 线程 ----------
     render_shared: Option<Arc<RenderShared>>,
     render_running: Option<Arc<AtomicBool>>,
     render_thread: Option<JoinHandle<()>>,
 
-    // ---------- window context (before into_parts) ----------
+    // ---------- 窗口 context (before into_parts) ----------
     platform: Option<PlatformContext>,
-    /// Window separated from renderer after `into_parts`.
+    /// 窗口 separated from 渲染器 after `into_parts`.
     window: Option<Arc<winit::window::Window>>,
 
-    // ---------- egui (main thread) ----------
+    // ---------- egui (main 线程 ----------
     egui_cpu: EguiCpu,
 
-    // ---------- editor / debug ----------
+    // ---------- 编辑器 / 调试 ----------
     editor: Editor,
     render_graph_viz: RenderGraphViz,
     render_settings: RenderSettings,
 
-    // ---------- per-frame state ----------
+    // ---------- per-frame 状态 ----------
     display_aspect: f32,
     surface_rotation: glam::Mat4,
 
-    // ---------- input (main thread) ----------
+    // ---------- 输入 (main 线程 ----------
     input: InputManager,
 
-    // ---------- audio (main thread) ----------
+    // ---------- 音频 (main 线程 ----------
     audio: Option<AudioEngine>,
 
-    // ---------- resize ----------
+    // ---------- 调整大小 ----------
     needs_resize: bool,
 
-    // ---------- io thread ----------
+    // ---------- io 线程 ----------
     io_thread: Option<JoinHandle<()>>,
     io_tx: Option<flume::Sender<crate::io_runner::IoRequest>>,
     io_rx: Option<flume::Receiver<crate::io_runner::IoResult>>,
 
-    // ---------- audio decode thread ----------
+    // ---------- 音频 解码 线程 ----------
     audio_decode_thread: Option<JoinHandle<()>>,
     audio_decode_tx: Option<flume::Sender<crate::audio_decode_runner::DecodeRequest>>,
     audio_decode_rx: Option<flume::Receiver<crate::audio_decode_runner::DecodeResult>>,
@@ -128,10 +128,10 @@ impl App {
         // Phase 1 – Subsystem registration
         engine.init_core(&mut editor);
 
-        // Phase 2 – Configuration
+        // Phase 2 – 配置
         engine.init_config();
 
-        // Phase 3 – Resource loading
+        // Phase 3 – 资源 loading
         engine.init_resources();
         let mut asset_resolver = GpuAssetResolver::new();
         asset_resolver.load_resource_package();
@@ -139,7 +139,7 @@ impl App {
         // Phase 4 – Scene loading
         engine.init_scene(&mut asset_resolver.resource_manager);
 
-        // Phase 5 – Runtime startup callbacks
+        // Phase 5 – 运行时 startup callbacks
         engine.runtime_initialize();
 
         Self {
@@ -172,7 +172,7 @@ impl App {
     }
 
     // -----------------------------------------------------------------------
-    // Render thread lifecycle
+    // 渲染 线程 lifecycle
     // -----------------------------------------------------------------------
 
     fn start_render_thread(&mut self) {
@@ -182,10 +182,10 @@ impl App {
         let (window, renderer) = platform.into_parts();
         self.window = Some(window);
 
-        // Create shared state.
+        // 创建 shared 状态
         let (shared, running) = RenderShared::new();
 
-        // Spawn the render thread.
+        // 生成 the 渲染 线程
         let shared_clone = shared.clone();
         let thread = std::thread::Builder::new()
             .name("render".into())
@@ -198,12 +198,12 @@ impl App {
     }
 
     fn stop_render_thread(&mut self) {
-        // Signal render thread to stop.
+        // 信号 渲染 线程 to stop.
         if let Some(ref running) = self.render_running {
             running.store(false, Ordering::Relaxed);
         }
 
-        // Join the thread.
+        // Join the 线程
         if let Some(handle) = self.render_thread.take() {
             if handle.join().is_err() {
                 log::error!("render thread panicked");
@@ -214,7 +214,7 @@ impl App {
     }
 
     // -----------------------------------------------------------------------
-    // IO thread lifecycle
+    // IO 线程 lifecycle
     // -----------------------------------------------------------------------
 
     fn start_io_thread(&mut self) {
@@ -241,7 +241,7 @@ impl App {
     }
 
     // -----------------------------------------------------------------------
-    // Audio decode thread lifecycle
+    // 音频 解码 线程 lifecycle
     // -----------------------------------------------------------------------
 
     fn start_audio_decode_thread(&mut self) {
@@ -270,7 +270,7 @@ impl App {
     }
 
     // -----------------------------------------------------------------------
-    // Platform context (window + renderer) lifecycle
+    // Platform context 窗口 + 渲染器 lifecycle
     // -----------------------------------------------------------------------
 
     fn ensure_platform(&mut self, event_loop: &ActiveEventLoop) {
@@ -281,15 +281,15 @@ impl App {
         let env_bytes = load_env_bytes_from_manifest();
         let mut ctx = PlatformContext::new(event_loop, &self.config.window, env_bytes);
 
-        // Pre‑compile all lazy‑created GPU pipelines so the first frame
-        // doesn't stall on pipeline creation.
+        // Pre‑compile all lazy‑created GPU pipelines so the 第一个 帧
+        // doesn't stall on 管线 creation.
         if let Err(e) = ctx.warmup_pipelines() {
             log::warn!("pipeline warmup failed (continuing): {e:#}");
         }
 
-        // Pre‑resolve all scene assets **before** the render thread starts,
-        // since `resolve_scene_assets` needs both `&mut World` and
-        // `&mut GraphRenderer` on the same thread.
+        // Pre‑resolve all scene assets **before** the 渲染 线程 starts,
+        // since `resolve_scene_assets` needs both `&mut 世界 and
+        // `&mut GraphRenderer` on the same 线程
         if let Some(ref mut engine) = self.engine {
             let count = self
                 .asset_resolver
@@ -303,7 +303,7 @@ impl App {
     }
 
     // -----------------------------------------------------------------------
-    // Game loop (main thread)
+    // Game 循环 (main 线程
     // -----------------------------------------------------------------------
 
     fn tick_sim(&mut self) {
@@ -314,25 +314,25 @@ impl App {
             return;
         };
 
-        // --- Input begin frame (clear transient state) ---
+        // --- 输入 开始 帧 清空 transient 状态 ---
         self.input.begin_frame();
 
         // --- Fixed timestep ---
         let dt = 1.0 / 60.0;
         engine.fixed_update(dt, &self.input);
 
-        // --- Variable timestep update ---
+        // --- 变量 timestep 更新 ---
         engine.update(dt, &self.input);
 
-        // --- Late update ---
+        // --- Late 更新 ---
         engine.late_update();
 
-        // --- Audio ---
+        // --- 音频 ---
         if let Some(ref mut audio) = self.audio {
             audio.update();
         }
 
-        // --- Drain audio decode results ---
+        // --- Drain 音频 解码 results ---
         if let Some(ref rx) = self.audio_decode_rx {
             while let Ok(result) = rx.try_recv() {
                 match result {
@@ -348,7 +348,7 @@ impl App {
             }
         }
 
-        // --- Extract frame packet → render thread ---
+        // --- Extract 帧 packet → 渲染 线程 ---
         let packet = extract_frame_packet(
             engine.world_mut(),
             self.display_aspect,
@@ -358,7 +358,7 @@ impl App {
     }
 
     // -----------------------------------------------------------------------
-    // Egui / editor (main thread)
+    // Egui / 编辑器 (main 线程
     // -----------------------------------------------------------------------
 
     fn run_editor_ui(&mut self) {
@@ -373,7 +373,7 @@ impl App {
             return;
         };
 
-        // Sync debug / render settings.
+        // Sync 调试 / 渲染 settings.
         self.editor.sync_debug(
             self.render_settings.debug_flags,
             self.render_settings.tonemap_mode,
@@ -386,7 +386,7 @@ impl App {
             self.render_settings.pt_max_iterations,
         );
 
-        // Read render stats from render thread.
+        // 读取 渲染 stats from 渲染 线程
         let stats = shared.read_render_stats();
         self.editor.sync_metrics(
             1.0 / 60.0,                                 // dt (fixed)
@@ -395,7 +395,7 @@ impl App {
             stats.pt_frame_count.unwrap_or(0),
         );
 
-        // Run egui UI — borrow World + editor first for the closure.
+        // Run egui UI — 借用 世界 + 编辑器 第一个 for the 闭包
         let (world, editor) = {
             let eng = self.engine.as_mut().expect("engine alive");
             (eng.world_mut(), &mut self.editor)
@@ -407,7 +407,7 @@ impl App {
             }
         });
 
-        // Push UI-edited values back.
+        // 推送 UI-edited values 后
         self.render_settings.tonemap_mode = self.editor.inspector.tonemap_mode;
         let prev_render_mode = self.render_settings.render_mode;
         let prev_pt_bounces = self.render_settings.pt_max_bounces;
@@ -428,10 +428,10 @@ impl App {
             shared.request_pt_reset();
         }
 
-        // Send egui frame to render thread.
+        // Send egui 帧 to 渲染 线程
         shared.send_egui_frame(frame);
 
-        // Apply platform output (cursor, clipboard).
+        // Apply platform 输出 (cursor, clipboard).
         self.egui_cpu.apply_platform_output(window);
     }
 
@@ -446,12 +446,12 @@ impl App {
     }
 
     // -----------------------------------------------------------------------
-    // PBR debug helpers
+    // PBR 调试 helpers
     // -----------------------------------------------------------------------
 
     /// Route a [`WindowEvent`] into the [`InputManager`].
     ///
-    /// Handles keyboard input (both press and release). Cursor/mouse/scroll
+    /// Handles 键盘 输入 (both press and 释放 Cursor/mouse/scroll
     /// events are handled inline in [`window_event`](Self::window_event).
     fn route_window_event_to_input(&mut self, event: &WindowEvent) {
         if let WindowEvent::KeyboardInput {
@@ -516,7 +516,7 @@ impl App {
     }
 
     // -------------------------------------------------------------------
-    // winit → engine input conversion
+    // winit → engine 输入 conversion
     // -------------------------------------------------------------------
 
     fn winit_key_to_engine(code: KeyCode) -> Option<EngKeyCode> {
@@ -590,15 +590,15 @@ impl Default for App {
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.platform.is_none() {
-            // First resume: create platform + render thread.
+            // 第一个 resume: 创建 platform + 渲染 线程
             self.ensure_platform(event_loop);
             self.start_render_thread();
             return;
         }
 
-        // Recreate surface after suspend (Android).
+        // Recreate 表面 after suspend Android
         // TODO: implement resume_surface after into_parts
-        // For now, log and continue.
+        // For now, 对数 and continue.
         log::info!("resumed (surface already active)");
     }
 
@@ -613,24 +613,24 @@ impl ApplicationHandler for App {
             return;
         }
 
-        // Forward events to egui first.
+        // 向前 events to egui 第一个
         if self.any_ui_visible() {
             if let Some(ref window) = self.window {
                 let consumed = self.egui_cpu.handle_window_event(window, &event);
                 if consumed {
-                    // Still route input to InputManager so held-key state stays
-                    // consistent even when egui consumes the event.
+                    // Still route 输入 to InputManager so held-key 状态 stays
+                    // 一致 even when egui consumes the 事件
                     self.route_window_event_to_input(&event);
                     return;
                 }
             }
         }
 
-        // Route window event → InputManager (always, even for repeat events
+        // Route 窗口 事件 → InputManager (always, even for repeat events
         // that shortcuts don't handle).
         self.route_window_event_to_input(&event);
 
-        // Keyboard shortcuts (pressed-only).
+        // 键盘 shortcuts (pressed-only).
         if let WindowEvent::KeyboardInput {
             event:
                 winit::event::KeyEvent {
@@ -646,8 +646,8 @@ impl ApplicationHandler for App {
                     winit::keyboard::PhysicalKey::Code(c) => *c,
                     _ => return,
                 };
-                // Keyboard state — query egui modifier state or keep simple.
-                // For now, assume shift=ctrl=false for debug shortcuts.
+                // 键盘 状态 — 查询 egui modifier 状态 or keep simple.
+                // For now, assume shift=ctrl=false for 调试 shortcuts.
                 let (shift, _ctrl) = (false, false);
 
                 if let Some(bit) = Self::pbr_debug_key_to_bit(code, shift) {
@@ -697,7 +697,7 @@ impl ApplicationHandler for App {
             return;
         }
 
-        // Non-keyboard window events.
+        // Non-keyboard 窗口 events.
         match &event {
             WindowEvent::CursorMoved { position, .. } => {
                 self.input
@@ -734,10 +734,10 @@ impl ApplicationHandler for App {
         _device_id: winit::event::DeviceId,
         event: DeviceEvent,
     ) {
-        // In pointer-lock mode, mouse motion arrives as raw device deltas.
+        // In pointer-lock 众数 鼠标 motion arrives as raw 设备 deltas.
         if let DeviceEvent::MouseMotion { delta: (dx, dy) } = event {
             if self.input.pointer_locked {
-                // Accumulate into a virtual absolute position so
+                // Accumulate into a virtual 绝对 position so
                 // InputManager::mouse_delta() reflects the raw delta.
                 let cur = self.input.mouse_position();
                 self.input
@@ -748,20 +748,20 @@ impl ApplicationHandler for App {
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         if event_loop.exiting() {
-            // === Background thread shutdown (ORDER MATTERS) ===
-            // 1. IO thread first (no more asset requests).
+            // === Background 线程 shutdown (ORDER MATTERS) ===
+            // 1. IO 线程 第一个 (no more 资源 requests).
             self.stop_io_thread();
-            // 2. Audio decode thread.
+            // 2. 音频 解码 线程
             self.stop_audio_decode_thread();
-            // 2. Stop the render thread.
+            // 2. Stop the 渲染 线程
             self.stop_render_thread();
             // 3. Engine pre-shutdown.
             if let Some(ref mut engine) = self.engine {
                 engine.pre_shutdown();
             }
-            // 4. Drop audio engine (stops audio stream before platform/engine).
+            // 4. 放置 音频 engine (stops 音频 stream before platform/engine).
             self.audio.take();
-            // 5. Drop platform (renderer + window).
+            // 5. 放置 platform 渲染器 + 窗口
             self.platform = None;
             self.window = None;
             // 6. Engine post-shutdown.
@@ -771,13 +771,13 @@ impl ApplicationHandler for App {
             return;
         }
 
-        // Game loop tick (main thread).
+        // Game 循环 tick (main 线程
         self.tick_sim();
 
-        // Run egui UI (main thread).
+        // Run egui UI (main 线程
         self.run_editor_ui();
 
-        // Update last_frame for dt calculation.
+        // 更新 last_frame for dt 计算
         self.last_frame = Some(Instant::now());
     }
 
@@ -786,10 +786,10 @@ impl ApplicationHandler for App {
         self.stop_io_thread();
         self.stop_audio_decode_thread();
 
-        // Stop the render thread.
+        // Stop the 渲染 线程
         self.stop_render_thread();
 
-        // Suspend surface.
+        // Suspend 表面
         if let Some(ref mut ctx) = self.platform {
             ctx.suspend_surface();
         }

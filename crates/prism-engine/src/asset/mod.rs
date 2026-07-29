@@ -1,21 +1,21 @@
-//! # Engine asset management — Handle + AssetManager + AssetServer
+//! # Engine 资源 management — Handle + AssetManager + AssetServer
 //!
 //! Provides a generational-index-based [`Handle<T>`] and its owning
-//! [`AssetManager<T>`] for typed, CPU-side asset data (mesh, material,
-//! texture, etc.).  The top-level [`AssetServer`] is registered as an ECS
+//! [`AssetManager<T>`] for typed, CPU-side 资源 data 网格 材质
+//! 纹理 etc.). The top-level [`AssetServer`] is registered as an ECS
 //! [`Resource`](prism_ecs::World::insert_resource) and powers the
 //! [`MeshRenderer`](crate::ecs::components::MeshRenderer) extraction path.
 //!
 //! ## Architecture
 //!
 //! ```text
-//!   Handle<T>   ─── generational index (u64) — cheap to copy
+//! Handle<T> ─── generational 索引 (u64) — cheap to 复制
 //!       │
 //!   AssetManager<T> ─── Vec<Slot<T>> — O(1) get/insert/remove
 //!       │
-//!   AssetServer ─── ECS resource, holds typed managers
+//! AssetServer ─── ECS 资源 holds typed managers
 //!       │
-//!   Engine runtime_initialize() → populates default assets
+//! Engine runtime_initialize() → populates 默认 assets
 //!       │
 //!   scene_render_system → resolves Handle → GPU handle → DrawItem
 //! ```
@@ -34,13 +34,13 @@ pub use types::{MaterialAsset, MeshAsset};
 // Handle
 // ===========================================================================
 
-/// A generational index into an [`AssetManager`].
+/// A generational 索引 into an [`AssetManager`].
 ///
 /// Packed as a single `u64`:
-/// - bits 0–31: slot index
+/// - bits 0–31: 槽 索引
 /// - bits 32–63: generation (version)
 ///
-/// Cheap `Copy + Clone + Send + Sync`.
+/// Cheap 复制 + Clone + Send + Sync`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Handle<T> {
     raw: u64,
@@ -51,7 +51,7 @@ impl<T> Handle<T> {
     const INDEX_MASK: u64 = 0x0000_0000_FFFF_FFFF;
     const GENERATION_SHIFT: u64 = 32;
 
-    /// Index portion of the handle (slot position in the manager).
+    /// 索引 portion of the handle 槽 position in the 管理器
     pub fn index(&self) -> u32 {
         (self.raw & Self::INDEX_MASK) as u32
     }
@@ -61,7 +61,7 @@ impl<T> Handle<T> {
         (self.raw >> Self::GENERATION_SHIFT) as u32
     }
 
-    /// Pack index + generation into a handle.
+    /// 打包 索引 + generation into a handle.
     fn pack(index: u32, generation: u32) -> Self {
         Self {
             raw: (index as u64) | ((generation as u64) << Self::GENERATION_SHIFT),
@@ -87,11 +87,11 @@ impl<T> Default for Handle<T> {
 }
 
 // ===========================================================================
-// Slot
+// 槽
 // ===========================================================================
 
-/// One slot in an [`AssetManager`]. A free slot carries no value; an occupied
-/// slot carries the asset value and its generation.
+/// One 槽 in an [`AssetManager`]. A free 槽 carries no value; an occupied
+/// 槽 carries the 资源 value and its generation.
 enum Slot<T> {
     Free { next_free: u32 },
     Occupied { value: T, generation: u32 },
@@ -101,21 +101,21 @@ enum Slot<T> {
 // AssetManager<T>
 // ===========================================================================
 
-/// Typed, generational-indexed pool of CPU-side assets.
+/// Typed, generational-indexed 池 of CPU-side assets.
 ///
-/// `load()` inserts a value and returns a [`Handle<T>`]; `get()` retrieves a
-/// shared reference; `remove()` releases the slot for reuse.  The generation
-/// counter on each slot prevents use-after-free bugs.
+/// 加载 inserts a value and returns a [`Handle<T>`]; `get()` retrieves a
+/// shared 引用 移除 releases the 槽 for reuse. The generation
+/// 计数器 on each 槽 prevents use-after-free bugs.
 pub struct AssetManager<T> {
     slots: Vec<Slot<T>>,
     free_head: u32,
-    /// Monotonically increasing allocator stamp — handed out as the 'index'
-    /// when slots grow.  Not the same as the per-slot generation.
+    /// Monotonically increasing allocator stamp — handed out as the 索引
+    /// when slots 增长 Not the same as the per-slot generation.
     next_id: u32,
 }
 
 impl<T> AssetManager<T> {
-    /// Empty manager with no pre-allocated capacity.
+    /// 空 管理器 with no pre-allocated 容量
     pub fn new() -> Self {
         Self {
             slots: Vec::new(),
@@ -124,7 +124,7 @@ impl<T> AssetManager<T> {
         }
     }
 
-    /// Insert a value, returning a stable [`Handle<T>`].
+    /// 插入 a value, returning a 稳定 [`Handle<T>`].
     pub fn insert(&mut self, value: T) -> Handle<T> {
         if let Some(id) = self.try_reclaim() {
             let generation = self.generation_for(id);
@@ -141,8 +141,8 @@ impl<T> AssetManager<T> {
         }
     }
 
-    /// Borrow an asset by handle. Returns `None` if the handle is stale or
-    /// the slot is empty.
+    /// 借用 an 资源 by handle. Returns `None` if the handle is stale or
+    /// the 槽 is 空
     pub fn get(&self, handle: Handle<T>) -> Option<&T> {
         let idx = handle.index() as usize;
         match self.slots.get(idx) {
@@ -153,7 +153,7 @@ impl<T> AssetManager<T> {
         }
     }
 
-    /// Mutably borrow an asset by handle.
+    /// Mutably 借用 an 资源 by handle.
     pub fn get_mut(&mut self, handle: Handle<T>) -> Option<&mut T> {
         let idx = handle.index() as usize;
         match self.slots.get_mut(idx) {
@@ -164,8 +164,8 @@ impl<T> AssetManager<T> {
         }
     }
 
-    /// Remove an asset, freeing its slot for reuse.  Returns the value if
-    /// the handle was valid.
+    /// 移除 an 资源 freeing its 槽 for reuse. Returns the value if
+    /// the handle was 有效
     pub fn remove(&mut self, handle: Handle<T>) -> Option<T> {
         let idx = handle.index() as usize;
         match self.slots.get_mut(idx) {
@@ -188,7 +188,7 @@ impl<T> AssetManager<T> {
         }
     }
 
-    /// True if the handle currently points to a live asset.
+    /// True if the handle currently points to a live 资源
     pub fn is_alive(&self, handle: Handle<T>) -> bool {
         self.get(handle).is_some()
     }
@@ -211,7 +211,7 @@ impl<T> AssetManager<T> {
         })
     }
 
-    // -- internal helpers ------------------------------------------------
+    // -- 内部 helpers ------------------------------------------------
 
     fn try_reclaim(&mut self) -> Option<u32> {
         if self.free_head == u32::MAX {
@@ -243,12 +243,12 @@ impl<T> Default for AssetManager<T> {
 }
 
 // ===========================================================================
-// AssetServer (ECS resource)
+// AssetServer (ECS 资源
 // ===========================================================================
 
-/// Top-level engine asset server, stored as an ECS resource.
+/// Top-level engine 资源 server, stored as an ECS 资源
 ///
-/// Owns the typed asset managers and provides convenience accessors.
+/// Owns the typed 资源 managers and provides convenience accessors.
 pub struct AssetServer {
     pub meshes: AssetManager<MeshAsset>,
     pub materials: AssetManager<MaterialAsset>,
@@ -262,7 +262,7 @@ impl AssetServer {
         }
     }
 
-    /// Convenience: insert a mesh asset and register it with the GPU manager.
+    /// Convenience: 插入 a 网格 资源 and register it with the GPU 管理器
     pub fn insert_mesh(&mut self, mesh: MeshAsset) -> Handle<MeshAsset> {
         self.meshes.insert(mesh)
     }
@@ -287,11 +287,11 @@ impl Default for AssetServer {
 }
 
 // ===========================================================================
-// Handle type aliases
+// Handle 类型 aliases
 // ===========================================================================
 
-/// Handle to a CPU-side mesh asset.
+/// Handle to a CPU-side 网格 资源
 pub type MeshId = Handle<MeshAsset>;
 
-/// Handle to a CPU-side material asset.
+/// Handle to a CPU-side 材质 资源
 pub type MaterialId = Handle<MaterialAsset>;

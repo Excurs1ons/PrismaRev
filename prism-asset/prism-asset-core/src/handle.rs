@@ -1,31 +1,31 @@
 //! Runtime-safe handle types.
 //!
-//! `Handle<T>` is a generation-counted index into a runtime slot array. It is
-//! the primary way runtime code references loaded assets. The generation guard
-//! prevents use-after-free bugs where a handle outlives its asset.
+//! `Handle<T>` is a generation-counted 索引 into a 运行时 槽 数组 It is
+//! the primary way 运行时 代码 references loaded assets. The generation guard
+//! prevents use-after-free bugs where a handle outlives its 资源
 //!
-//! The handle space is split into two regions:
-//! - **Static** (index < `MAX_STATIC`): well-known / fallback assets.
-//! - **Dynamic**: loaded at runtime.
+//! The handle 空间 is split into two regions:
+//! - **Static** 索引 < `MAX_STATIC`): well-known / 回退 assets.
+//! - **Dynamic**: loaded at 运行时
 
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
 
-/// Maximum index value reserved for static / well-known handles.
-/// Everything above this is a dynamically-loaded asset.
+/// 最大 索引 value reserved for 静态 / well-known handles.
+/// Everything above this is a dynamically-loaded 资源
 pub const MAX_STATIC_INDEX: u32 = 1024;
 
-/// A generation-counted handle to a runtime resource of type `T`.
+/// A generation-counted handle to a 运行时 资源 of 类型 `T`.
 ///
-/// `Handle<T>` is `Copy`, `Send`, `Sync` and has the same size as `u64`.
+/// `Handle<T>` is 复制 `Send`, `Sync` and has the same 大小 as `u64`.
 pub struct Handle<T: ?Sized> {
-    /// Packed: index in the low 32 bits, generation in the high 32 bits.
+    /// Packed: 索引 in the low 32 bits, generation in the high 32 bits.
     packed: u64,
     _marker: PhantomData<*const T>,
 }
 
-// Manual Clone/Copy to avoid deriving T: Clone/T: Copy bounds.
+// Manual Clone/Copy to avoid deriving T: Clone/T: 复制 bounds.
 impl<T: ?Sized> Clone for Handle<T> {
     fn clone(&self) -> Self {
         *self
@@ -50,7 +50,7 @@ impl<T: ?Sized> Handle<T> {
     const INDEX_MASK: u64 = 0x0000_0000_FFFF_FFFF;
     const GENERATION_SHIFT: u64 = 32;
 
-    /// Create a new handle from an index and generation.
+    /// 创建 a new handle from an 索引 and generation.
     #[inline]
     pub const fn new(index: u32, generation: u32) -> Self {
         Self {
@@ -59,25 +59,25 @@ impl<T: ?Sized> Handle<T> {
         }
     }
 
-    /// The slot index this handle points to.
+    /// The 槽 索引 this handle points to.
     #[inline]
     pub const fn index(self) -> u32 {
         (self.packed & Self::INDEX_MASK) as u32
     }
 
-    /// The generation of the slot this handle was created for.
+    /// The generation of the 槽 this handle was created for.
     #[inline]
     pub const fn generation(self) -> u32 {
         (self.packed >> Self::GENERATION_SHIFT) as u32
     }
 
-    /// Returns `true` if this handle points to a static / well-known asset.
+    /// Returns `true` if this handle points to a 静态 / well-known 资源
     #[inline]
     pub fn is_static(self) -> bool {
         self.index() < MAX_STATIC_INDEX
     }
 
-    /// A null/invalid handle (index 0, generation 0).
+    /// A null/invalid handle 索引 0, generation 0).
     #[inline]
     pub const fn null() -> Self {
         Self {
@@ -92,13 +92,13 @@ impl<T: ?Sized> Handle<T> {
         self.packed == 0
     }
 
-    /// Unpack into the raw components (index, generation).
+    /// 解包 into the raw components 索引 generation).
     #[inline]
     pub const fn into_raw_parts(self) -> (u32, u32) {
         (self.index(), self.generation())
     }
 
-    /// Pack from raw components. Inverse of [`into_raw_parts`](Self::into_raw_parts).
+    /// 打包 from raw components. Inverse of [`into_raw_parts`](Self::into_raw_parts).
     #[inline]
     pub const fn from_raw_parts(index: u32, generation: u32) -> Self {
         Self::new(index, generation)
@@ -125,20 +125,20 @@ impl<T: ?Sized> Default for Handle<T> {
 }
 
 // ---------------------------------------------------------------------------
-// Type-erased handle (for heterogeneous storage)
+// Type-erased handle (for heterogeneous 存储
 // ---------------------------------------------------------------------------
 
-/// A type-erased handle. Use this in collections that store handles of mixed
-/// types (e.g. the runtime's asset slot array).
+/// A type-erased handle. Use this in collections that 存储 handles of mixed
+/// types (e.g. the runtime's 资源 槽 数组
 ///
-/// Convert to/from a typed `Handle<T>` via `From` / `Into`.
+/// 转换 to/from a typed `Handle<T>` via `From` / `Into`.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct AnyHandle {
     packed: u64,
 }
 
 impl AnyHandle {
-    /// Create from raw packed value.
+    /// 创建 from raw packed value.
     #[inline]
     pub const fn from_raw(raw: u64) -> Self {
         Self { packed: raw }
@@ -150,7 +150,7 @@ impl AnyHandle {
         self.packed
     }
 
-    /// The slot index.
+    /// The 槽 索引
     #[inline]
     pub fn index(self) -> u32 {
         (self.packed & 0x0000_0000_FFFF_FFFF) as u32
@@ -199,10 +199,10 @@ impl fmt::Debug for AnyHandle {
 }
 
 // ---------------------------------------------------------------------------
-// Type alias for asset handles
+// 类型 alias for 资源 handles
 // ---------------------------------------------------------------------------
 
-/// A handle to any asset type (type-erased, stored alongside a type tag).
+/// A handle to any 资源 类型 (type-erased, stored alongside a 类型 tag).
 pub type AnyAsset = AnyHandle;
 
 // ---------------------------------------------------------------------------

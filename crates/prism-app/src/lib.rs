@@ -1,25 +1,25 @@
-//! PrismaRev platform application layer.
+//! PrismaRev platform application 层
 //!
-//! Owns the event loop, window, and frame orchestration — the glue between
-//! platform input (winit), the engine (ECS / logic), and the renderer (Vulkan).
+//! Owns the 事件 循环 窗口 and 帧 orchestration — the glue between
+//! platform 输入 (winit), the engine (ECS / 逻辑 and the 渲染器 Vulkan
 //!
 //! ## Architecture (multi-threaded)
 //!
 //! ```text
-//!   Main thread                         Render thread
+//! Main 线程 渲染 线程
 //!   ────────────                        ────────────
-//!   about_to_wait:                       loop:
+//! about_to_wait: 循环
 //!     engine.fixed_update × N              wait_for_packet()
 //!     engine.update                        begin_frame()
-//!     engine.late_update                   execute()
+//! engine.late_update 执行
 //!     audio.update                         present()    ← vsync here
 //!     extract_frame_packet ──packet──►   │
 //!     egui_cpu.run_ui ──egui_frame──►    │
 //!     apply_platform_output
 //!
-//!   resumed():  create PlatformContext → resolve_scene_assets
-//!               → into_parts() → spawn render thread
-//!   suspended(): stop render thread, suspend surface
+//! resumed(): 创建 PlatformContext → resolve_scene_assets
+//! → into_parts() → 生成 渲染 线程
+//! suspended(): stop 渲染 线程 suspend 表面
 //! ```
 
 mod app;
@@ -32,7 +32,7 @@ mod render_shared;
 
 pub use app::App;
 
-/// Desktop entry — creates a winit event loop and runs the application.
+/// Desktop entry — creates a winit 事件 循环 and runs the application.
 ///
 /// Initialises [`env_logger`] and panics on fatal errors — no caller-side
 /// boilerplate needed.
@@ -44,7 +44,7 @@ pub fn run() {
         .expect("fatal application error");
 }
 
-/// Shared entry — runs the application on a pre-built winit event loop.
+/// Shared entry — runs the application on a pre-built winit 事件 循环
 ///
 /// Used by both the desktop [`run()`] and the Android `android_main` entry.
 pub fn run_on_event_loop(

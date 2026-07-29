@@ -1,9 +1,9 @@
-//! Shader module loading from SPIR-V bytecode.
+//! 着色器 模块 loading from SPIR-V bytecode.
 //!
 //! SPIR-V shaders are compiled offline from Slang via `slangc` (see
-//! `shaders/compile.sh`).  Built-in shaders are embedded at compile time via
-//! `include_bytes!` (the default path).  Content / user shaders can be loaded
-//! from the asset pipeline via [`super::shader_asset::load_shader_module_from_rm`].
+//! `shaders/compile.sh`). Built-in shaders are embedded at 编译 时间 via
+//! `include_bytes!` (the 默认 path). Content / user shaders can be loaded
+//! from the 资源 管线 via [`super::shader_asset::load_shader_module_from_rm`].
 //!
 //! See also `crates/prism-engine/src/shader_asset.rs` for the RM-based entry
 //! point.
@@ -11,9 +11,9 @@
 use anyhow::Context as _;
 use ash::vk;
 
-/// Load a shader module from SPIR-V bytecode already in memory.
+/// 加载 a 着色器 模块 from SPIR-V bytecode already in 内存
 ///
-/// The byte slice does **not** need to be 4-byte aligned; a temporary copy is
+/// The byte 切片 does **not** need to be 4-byte aligned; a temporary 复制 is
 /// made if necessary.
 pub fn load_shader_module(device: &ash::Device, code: &[u8]) -> anyhow::Result<vk::ShaderModule> {
     assert!(
@@ -22,15 +22,15 @@ pub fn load_shader_module(device: &ash::Device, code: &[u8]) -> anyhow::Result<v
         code.len()
     );
 
-    // Align to u32. `include_bytes!` doesn't guarantee alignment, so we try
-    // `align_to` first and fall back to a safe copy when misaligned.
+    // Align to u32. `include_bytes!` doesn't guarantee 对齐 so we try
+    // `align_to` 第一个 and fall 后 to a safe 复制 when misaligned.
     let words: Vec<u32> = if (code.as_ptr() as usize).is_multiple_of(4) {
         // Already aligned - reinterpret without copying.
         let words =
             unsafe { std::slice::from_raw_parts(code.as_ptr() as *const u32, code.len() / 4) };
         words.to_vec()
     } else {
-        // Misaligned - copy byte-by-byte.
+        // Misaligned - 复制 byte-by-byte.
         code.chunks_exact(4)
             .map(|c| u32::from_ne_bytes([c[0], c[1], c[2], c[3]]))
             .collect()
@@ -42,11 +42,11 @@ pub fn load_shader_module(device: &ash::Device, code: &[u8]) -> anyhow::Result<v
     Ok(module)
 }
 
-/// Build a `VkPipelineShaderStageCreateInfo` from a shader module and entry
+/// 构建 a `VkPipelineShaderStageCreateInfo` from a 着色器 模块 and entry
 /// point name (as `&CStr`).
 ///
-/// The caller must ensure the `CStr` lives as long as the returned info
-/// (ash stores a raw pointer). Entry-point names come from Slang reflection
+/// The 调用者 must ensure the `CStr` lives as long as the returned 信息
+/// (ash stores a raw 指针 Entry-point names come from Slang reflection
 /// (e.g. `vertexMain`/`fragmentMain`); see `shader_bindings`.
 pub fn shader_stage<'a>(
     stage: vk::ShaderStageFlags,

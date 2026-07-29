@@ -1,11 +1,11 @@
 //! # prism-asset-cooker
 //!
-//! Cooker framework for the PrismaRev Resource Pipeline.
+//! Cooker framework for the PrismaRev 资源 管线
 //!
-//! Cookers translate intermediate import data into runtime-ready binary
-//! format, which is then packed into a .pak archive.
+//! Cookers translate intermediate 导入 data into runtime-ready 二进制
+//! 格式 which is then packed into a .pak archive.
 //!
-//! The cooking pipeline is:
+//! The cooking 管线 is:
 //!
 //! ```text
 //! ImportResult (intermediate data) → [Cooker] → .pak data → [PackageBuilder]
@@ -40,16 +40,16 @@ pub enum CookError {
 }
 
 // ---------------------------------------------------------------------------
-// Cook Context & Result
+// 烹饪 Context & 结果
 // ---------------------------------------------------------------------------
 
 /// Context provided to a cooker.
 pub struct CookContext<'a> {
-    /// The asset record from the database.
+    /// The 资源 record from the database.
     pub record: &'a AssetRecord,
     /// The imported intermediate data.
     pub imported_data: &'a [u8],
-    /// Final merged cooking settings for this build.
+    /// Final merged cooking settings for this 构建
     pub settings: &'a profile::CookSettings,
 }
 
@@ -62,11 +62,11 @@ impl std::fmt::Debug for CookContext<'_> {
     }
 }
 
-/// Result of a cooking operation.
+/// 结果 of a cooking 操作
 pub struct CookResult {
-    /// The cooked binary data ready for packaging.
+    /// The cooked 二进制 data ready for packaging.
     pub cooked_data: Vec<u8>,
-    /// Whether to compress this asset in the .pak.
+    /// Whether to 压缩 this 资源 in the .pak.
     pub compress: bool,
 }
 
@@ -80,18 +80,18 @@ impl std::fmt::Debug for CookResult {
 }
 
 // ---------------------------------------------------------------------------
-// Cooker Trait
+// Cooker trait
 // ---------------------------------------------------------------------------
 
-/// A pluggable cooker that converts intermediate data into runtime format.
+/// A 可插拔 cooker that converts intermediate data into 运行时 格式
 pub trait Cooker: Send + Sync {
-    /// Unique name for this cooker.
+    /// 唯一 name for this cooker.
     fn name(&self) -> &'static str;
 
-    /// Return `true` if this cooker can handle the given asset type.
+    /// Return `true` if this cooker can handle the given 资源 类型
     fn can_cook(&self, asset_type: AssetType) -> bool;
 
-    /// Perform the cooking step.
+    /// 执行 the cooking step.
     fn cook(&self, ctx: &CookContext) -> Result<CookResult, CookError>;
 }
 
@@ -130,12 +130,12 @@ impl CookerRegistry {
         self.cookers.is_empty()
     }
 
-    /// Find a cooker by name.
+    /// 查找 a cooker by name.
     pub fn get(&self, name: &str) -> Option<&dyn Cooker> {
         self.by_name.get(name).map(|&idx| self.cookers[idx].as_ref())
     }
 
-    /// Find the first cooker that can handle a given asset type.
+    /// 查找 the 第一个 cooker that can handle a given 资源 类型
     pub fn find_for_type(&self, asset_type: AssetType) -> Option<&dyn Cooker> {
         self.cookers
             .iter()
@@ -160,10 +160,10 @@ impl Default for CookerRegistry {
 // ===========================================================================
 
 // ---------------------------------------------------------------------------
-// Binary Cooker (pass-through)
+// 二进制 Cooker (pass-through)
 // ---------------------------------------------------------------------------
 
-/// Cooks binary assets by passing data through unchanged.
+/// Cooks 二进制 assets by passing data through unchanged.
 pub struct BinaryCooker;
 
 impl Cooker for BinaryCooker {
@@ -184,40 +184,40 @@ impl Cooker for BinaryCooker {
 }
 
 // ---------------------------------------------------------------------------
-// Texture Cooker — decodes intermediate RTXI → generates mip chain → RTEX
+// 纹理 Cooker — decodes intermediate RTXI → generates mip 链 → RTEX
 // ---------------------------------------------------------------------------
 
-/// RTEX header magic (cooked runtime texture).
+/// RTEX header magic (cooked 运行时 纹理
 const RTEX_MAGIC: &[u8; 4] = b"RTEX";
 /// RTXI magic from the importer intermediate.
 const RTXI_MAGIC: &[u8; 4] = b"RTXI";
-/// Maximum mip levels for a single texture.
+/// 最大 mip levels for a single 纹理
 const MAX_MIP_LEVELS: u32 = 16;
 
 // ---------------------------------------------------------------------------
-// RTEX format byte constants
+// RTEX 格式 byte constants
 // ---------------------------------------------------------------------------
 
-/// Uncompressed RGBA8 (4 bytes per pixel).
+/// Uncompressed RGBA8 (4 字节 per 像素
 const RTEX_FORMAT_RGBA8: u8 = 0;
-/// BC7 (64 bits per 4×4 block = 16 bytes per block). UNORM / SRGB
-/// distinction is handled by the runtime Vulkan image view.
+/// BC7 (64 bits per 4×4 块 = 16 字节 per 块 UNORM / sRGB
+/// distinction is handled by the 运行时 Vulkan 图像 视图
 const RTEX_FORMAT_BC7: u8 = 1;
 #[allow(dead_code)]
-/// BC5 (two-channel RG normal map, 16 bytes per 4×4 block).
+/// BC5 (two-channel RG 法线 映射表 16 字节 per 4×4 块
 const RTEX_FORMAT_BC5: u8 = 2;
 #[allow(dead_code)]
-/// BC1 / DXT1 (RGB, optional 1-bit alpha, 8 bytes per 4×4 block).
+/// BC1 / DXT1 RGB optional 1-bit Alpha 8 字节 per 4×4 块
 const RTEX_FORMAT_BC1: u8 = 3;
 #[allow(dead_code)]
-/// BC3 / DXT5 (RGBA, 16 bytes per 4×4 block).
+/// BC3 / DXT5 RGBA 16 字节 per 4×4 块
 const RTEX_FORMAT_BC3: u8 = 4;
 #[allow(dead_code)]
-/// BC6H (HDR RGB, 16 bytes per 4×4 block).
+/// BC6H 高动态范围 RGB 16 字节 per 4×4 块
 const RTEX_FORMAT_BC6H: u8 = 5;
 
-/// Cooks texture data by reconstructing the RGBA image, generating a mip
-/// chain (box-filtered), and packing into a runtime-ready binary:
+/// Cooks 纹理 data by reconstructing the RGBA 图像 generating a mip
+/// 链 (box-filtered), and packing into a runtime-ready 二进制
 ///
 /// ```text
 /// [magic:4][version:1][width:4][height:4][mip_levels:4][format:1]
@@ -232,7 +232,7 @@ impl TextureCooker {
         }
         let w = u32::from_le_bytes(data[4..8].try_into().ok()?);
         let h = u32::from_le_bytes(data[8..12].try_into().ok()?);
-        // Skip byte 12 (channels) and byte 13 (format).
+        // Skip byte 12 (channels) and byte 13 格式
         let pixels_start = 14usize;
         let expected = w as usize * h as usize * 4;
         if data.len() < pixels_start + expected {
@@ -241,7 +241,7 @@ impl TextureCooker {
         Some((w, h, &data[pixels_start..pixels_start + expected]))
     }
 
-    /// Generate a mip chain using simple 2×2 box filtering.
+    /// Generate a mip 链 using simple 2×2 盒 filtering.
     fn generate_mips(width: u32, height: u32, rgba: &[u8]) -> Vec<(u32, u32, Vec<u8>)> {
         let mut mips = Vec::new();
         mips.push((width, height, rgba.to_vec()));
@@ -257,7 +257,7 @@ impl TextureCooker {
 
             for y in 0..dst_h {
                 for x in 0..dst_w {
-                    // 2×2 box filter.
+                    // 2×2 盒 滤波器
                     let mut r = 0u32;
                     let mut g = 0u32;
                     let mut b = 0u32;
@@ -268,7 +268,7 @@ impl TextureCooker {
                         for dx in 0..2 {
                             let sx = x * 2 + dx;
                             let sy = y * 2 + dy;
-                            // Guard against source dimensions (not the target).
+                            // Guard against 源 dimensions (not the 目标
                             if sx < src_w && sy < src_h {
                                 let idx = ((sy * src_w) + sx) as usize * 4;
                                 r += prev[idx] as u32;
@@ -300,9 +300,9 @@ impl TextureCooker {
         mips
     }
 
-    /// Compress a single RGBA8 mip level to BC7 using ctt.
+    /// 压缩 a single RGBA8 mip level to BC7 using ctt.
     ///
-    /// Returns raw BC7 block data (ceil(w/4) × ceil(h/4) × 16 bytes).
+    /// Returns raw BC7 块 data (ceil(w/4) × ceil(h/4) × 16 字节
     /// `quality` maps 0–100 to the ctt quality ladder.
     #[cfg(feature = "texture-compression")]
     fn compress_bc7(width: u32, height: u32, rgba: &[u8], quality: u8) -> Result<Vec<u8>, CookError> {
@@ -379,11 +379,11 @@ impl TextureCooker {
         buf.extend_from_slice(&levels.to_le_bytes());
         buf.push(format); // 0 = RGBA8
 
-        // Reserve space for offsets.
+        // 预留 空间 for offsets.
         let offset_pos = buf.len();
         buf.resize(offset_pos + levels as usize * 4, 0);
 
-        // Write mip data and record offsets.
+        // 写入 mip data and record offsets.
         let mut mip_start = header_size as u32;
         for (i, mip) in mips.iter().enumerate() {
             let off = &mut buf[offset_pos + i * 4..offset_pos + (i + 1) * 4];
@@ -417,7 +417,7 @@ impl Cooker for TextureCooker {
 
         let mips_rgba = Self::generate_mips(w, h, rgba);
 
-        // Decide format byte and optionally compress each mip level.
+        // Decide 格式 byte and optionally 压缩 each mip level.
         let (format, mips): (u8, Vec<(u32, u32, Vec<u8>)>) = match ctx.settings.texture.compression {
             profile::TextureCompression::Rgba8 | profile::TextureCompression::None => {
                 (RTEX_FORMAT_RGBA8, mips_rgba)
@@ -440,7 +440,7 @@ impl Cooker for TextureCooker {
                 (RTEX_FORMAT_RGBA8, mips_rgba)
             }
             other => {
-                // Unsupported compression format for now.
+                // Unsupported 压缩 格式 for now.
                 tracing::warn!("Compression format {other:?} not yet implemented, falling back to RGBA8");
                 (RTEX_FORMAT_RGBA8, mips_rgba)
             }
@@ -458,10 +458,10 @@ impl Cooker for TextureCooker {
 }
 
 // ---------------------------------------------------------------------------
-// RTEX decoder — cooked runtime texture → structured mip data
+// RTEX decoder — cooked 运行时 纹理 → structured mip data
 // ---------------------------------------------------------------------------
 
-/// Parsed RTEX cooked texture data.
+/// Parsed RTEX cooked 纹理 data.
 #[derive(Debug, Clone)]
 pub struct RtexInfo {
     pub width: u32,
@@ -471,7 +471,7 @@ pub struct RtexInfo {
     pub mip_data: Vec<Vec<u8>>,
 }
 
-/// Decode a cooked RTEX blob back into structured mip data.
+/// 解码 a cooked RTEX blob 后 into structured mip data.
 ///
 /// This is the inverse of [`TextureCooker::write_rtex`]. Returns `None` if
 /// the data is malformed.
@@ -497,7 +497,7 @@ pub fn decode_rtex(data: &[u8]) -> Option<RtexInfo> {
         return None;
     }
 
-    // Read offset table.
+    // 读取 偏移 表
     let mut offsets = Vec::with_capacity(mip_levels as usize);
     for i in 0..mip_levels as usize {
         let off = u32::from_le_bytes(
@@ -530,25 +530,25 @@ pub fn decode_rtex(data: &[u8]) -> Option<RtexInfo> {
     })
 }
 
-/// Parse an RTXI intermediate blob and return the raw RGBA8 pixel data (mip 0).
+/// Parse an RTXI intermediate blob and return the raw RGBA8 像素 data (mip 0).
 ///
-/// Returns `(width, height, pixels)` where `pixels` is tightly-packed RGBA8.
+/// Returns 宽度 高度 pixels)` where `pixels` is tightly-packed RGBA8.
 pub fn parse_rtexi_pixels(data: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
     TextureCooker::parse_intermediate(data)
         .map(|(w, h, px)| (w, h, px.to_vec()))
 }
 
 // ---------------------------------------------------------------------------
-// Mesh Cooker — validates RMXI intermediate → serialises RMES runtime format
+// 网格 Cooker — validates RMXI intermediate → serialises RMES 运行时 格式
 // ---------------------------------------------------------------------------
 
-/// RMES cooked mesh magic.
+/// RMES cooked 网格 magic.
 const RMES_MAGIC: &[u8; 4] = b"RMES";
-/// RMXI intermediate mesh magic.
+/// RMXI intermediate 网格 magic.
 const RMXI_MAGIC: &[u8; 4] = b"RMXI";
 
-/// Cooks mesh data by validating the intermediate format and packing into a
-/// runtime-ready binary:
+/// Cooks 网格 data by validating the intermediate 格式 and packing into a
+/// runtime-ready 二进制
 ///
 /// ```text
 /// [rmes_magic:4][version:1][vert_count:4][idx_count:4][uv_count:4]
@@ -574,8 +574,8 @@ impl MeshCooker {
         let idx_data_size = idx_count as usize * 4;
         let uv_data_size = uv_channels as usize * vert_count as usize * 2 * 4;
 
-        // Detect whether normals are present by checking the actual data size.
-        // RMXI: header(17) + positions + [normals] + [uv] + indices
+        // Detect whether normals are present by checking the actual data 大小
+        // RMXI: header(17) + positions + [normals] + uv + indices
         let expected_with_normals = 17 + pos_data_size + vert_count as usize * 3 * 4 + uv_data_size + idx_data_size;
         let has_normals = intermediate.len() >= expected_with_normals;
 
@@ -614,7 +614,7 @@ impl MeshCooker {
         buf.extend_from_slice(&nrm_off.to_le_bytes());
         buf.extend_from_slice(&uv0_off.to_le_bytes());
 
-        // Copy vertex/index data from intermediate (after 17-byte header).
+        // 复制 vertex/index data from intermediate (after 17-byte header).
         let vert_end = 17 + vert_data_size;
         if vert_end <= intermediate.len() {
             buf.extend_from_slice(&intermediate[17..vert_end]);
@@ -661,10 +661,10 @@ impl Cooker for MeshCooker {
 }
 
 // ---------------------------------------------------------------------------
-// RMES decoder — cooked runtime mesh → structured vertex/index data
+// RMES decoder — cooked 运行时 网格 → structured vertex/index data
 // ---------------------------------------------------------------------------
 
-/// Parsed RMES cooked mesh data.
+/// Parsed RMES cooked 网格 data.
 #[derive(Debug, Clone)]
 pub struct RmesInfo {
     pub vert_count: u32,
@@ -675,7 +675,7 @@ pub struct RmesInfo {
     pub index_data: Vec<u8>,
 }
 
-/// Decode a cooked RMES blob back into structured vertex/index data.
+/// 解码 a cooked RMES blob 后 into structured vertex/index data.
 ///
 /// This is the inverse of [`MeshCooker::write_rmes`]. Returns `None` if the
 /// data is malformed.
@@ -732,7 +732,7 @@ pub fn parse_rmxi_info(data: &[u8]) -> Option<(u32, u32, u32, Vec<u8>, Vec<u8>)>
     let idx_data_size = idx_count as usize * 4;
     let uv_data_size = uv_channels as usize * vert_count as usize * 2 * 4;
 
-    // Detect normals presence from data size.
+    // Detect normals presence from data 大小
     let expected_with_normals = 17 + pos_data_size + vert_count as usize * 3 * 4 + uv_data_size + idx_data_size;
     let has_normals = data.len() >= expected_with_normals;
 
@@ -751,44 +751,44 @@ pub fn parse_rmxi_info(data: &[u8]) -> Option<(u32, u32, u32, Vec<u8>, Vec<u8>)>
 }
 
 // ---------------------------------------------------------------------------
-// Material Cooker (RMATI intermediate -> RMAT runtime format)
+// 材质 Cooker (RMATI intermediate -> RMAT 运行时 格式
 // ---------------------------------------------------------------------------
 
-/// RMATI intermediate material magic (from the importer). 5 bytes so it is
-/// distinct from the 4-byte RMAT runtime magic.
+/// RMATI intermediate 材质 magic (from the importer). 5 字节 so it is
+/// 不同 from the 4-byte RMAT 运行时 magic.
 const RMATI_MAGIC: &[u8; 5] = b"RMATI";
-/// RMAT runtime material magic (cooked, packed into .pak).
+/// RMAT 运行时 材质 magic (cooked, packed into .pak).
 pub const RMAT_MAGIC: &[u8; 4] = b"RMAT";
 
-/// Number of scalar floats in the material header (18 floats = 72 bytes).
+/// Number of 标量 floats in the 材质 header (18 floats = 72 字节
 ///
-/// Layout: base_color[4], metallic, roughness, emissive[3], emissive_strength,
+/// 布局 base_color[4], metallic, roughness, emissive[3], emissive_strength,
 /// normal_scale, occlusion_strength, transmission, ior, translucency,
-/// anisotropy, clearcoat, clearcoat_roughness.
+/// 各向异性 clearcoat, clearcoat_roughness.
 pub const MATERIAL_SCALAR_COUNT: usize = 18;
 const MATERIAL_SCALAR_SIZE: usize = MATERIAL_SCALAR_COUNT * 4;
 
-/// Cooks material data by translating the RMATI intermediate (texture paths)
-/// into the RMAT runtime format (texture `AssetId` dependencies).
+/// Cooks 材质 data by translating the RMATI intermediate 纹理 paths)
+/// into the RMAT 运行时 格式 纹理 `AssetId` dependencies).
 ///
-/// Runtime format (all little-endian):
+/// 运行时 格式 (all little-endian):
 /// ```text
 /// [magic:4]       b"RMAT"
 /// [version:1]     1
-/// [scalars]       18 f32 LE (72 bytes) - same layout as RMATI
-/// per slot (5x):
+/// [scalars] 18 f32 LE (72 字节 - same 布局 as RMATI
+/// per 槽 (5x):
 ///   [present:1]   0 or 1
-///   [if present]  [asset_id:u64 LE]  - texture AssetId
+/// [if present] [asset_id:u64 LE] - 纹理 AssetId
 /// ```
 pub struct MaterialCooker;
 
 impl MaterialCooker {
-    /// Parse the RMATI header + scalars + 5 texture path records.
+    /// Parse the RMATI header + scalars + 5 纹理 path records.
     ///
     /// Returns `(scalars: [f32; 18], tex_paths: [Option<String>; 5])` or `None`
-    /// on malformed input.
+    /// on malformed 输入
     fn parse_intermediate(data: &[u8]) -> Option<([f32; MATERIAL_SCALAR_COUNT], [Option<String>; 5])> {
-        // Header: magic(5) + version(1) + scalars(72) = 78 bytes minimum.
+        // Header: magic(5) + version(1) + scalars(72) = 78 字节 最小
         const MAGIC_LEN: usize = 5;
         if data.len() < MAGIC_LEN + 1 + MATERIAL_SCALAR_SIZE || &data[..MAGIC_LEN] != RMATI_MAGIC {
             return None;
@@ -860,13 +860,13 @@ impl Cooker for MaterialCooker {
             CookError::CookFailed("Invalid material intermediate: missing RMATI header".into())
         })?;
 
-        // The importer already resolved texture paths to AssetId dependencies
-        // stored on the record. We walk the path records in slot order and
-        // look each up in the dependency list by matching path -> id via db.
-        // However, dependencies is just Vec<AssetId> without path info, so we
+        // The importer already resolved 纹理 paths to AssetId dependencies
+        // stored on the record. We walk the path records in 槽 order and
+        // look each 上 in the dependency 列表 by matching path -> id via db.
+        // However, dependencies is just Vec<AssetId> without path 信息 so we
         // re-resolve paths against the database here (the db is not on
         // CookContext). Instead, we rely on record.dependencies preserving the
-        // slot order from the importer. Map them positionally.
+        // 槽 order from the importer. 映射表 them positionally.
         let deps = &ctx.record.dependencies;
         let mut tex_ids: [Option<AssetId>; 5] = [None, None, None, None, None];
         let mut dep_idx = 0;
@@ -896,19 +896,19 @@ impl Cooker for MaterialCooker {
 }
 
 // ---------------------------------------------------------------------------
-// RMAT decoder - cooked runtime material -> structured data
+// RMAT decoder - cooked 运行时 材质 -> structured data
 // ---------------------------------------------------------------------------
 
-/// Parsed RMAT cooked material data.
+/// Parsed RMAT cooked 材质 data.
 #[derive(Debug, Clone)]
 pub struct RmatInfo {
-    /// 18 scalar floats in slot order (see [`MATERIAL_SCALAR_COUNT`] docs).
+    /// 18 标量 floats in 槽 order (see [`MATERIAL_SCALAR_COUNT`] docs).
     pub scalars: [f32; MATERIAL_SCALAR_COUNT],
-    /// 5 texture slots, each `Some(AssetId)` or `None`.
+    /// 5 纹理 slots, each `Some(AssetId)` or `None`.
     pub texture_ids: [Option<AssetId>; 5],
 }
 
-/// Decode a cooked RMAT blob back into structured material data.
+/// 解码 a cooked RMAT blob 后 into structured 材质 data.
 ///
 /// This is the inverse of [`MaterialCooker::write_rmat`]. Returns `None` if the
 /// data is malformed.
@@ -951,16 +951,16 @@ pub fn decode_rmat(data: &[u8]) -> Option<RmatInfo> {
 }
 
 // ---------------------------------------------------------------------------
-// Shader Cooker (RSLI intermediate -> SPIR-V via slangc)
+// 着色器 Cooker (RSLI intermediate -> SPIR-V via slangc)
 // ---------------------------------------------------------------------------
 
-/// RSLI intermediate shader magic (from the importer).
+/// RSLI intermediate 着色器 magic (from the importer).
 const RSLI_MAGIC: &[u8; 4] = b"RSLI";
-/// SPIR-V magic number (little-endian first word). Used to sanity-check the
-/// compiler output.
+/// SPIR-V magic number (little-endian 第一个 word). Used to sanity-check the
+/// compiler 输出
 const SPIRV_MAGIC_LE: u32 = 0x0723_0203;
 
-/// Parsed RSLI intermediate header + source.
+/// Parsed RSLI intermediate header + 源
 #[derive(Debug, Clone)]
 struct RsliInfo {
     entry: String,
@@ -969,26 +969,26 @@ struct RsliInfo {
     source: Vec<u8>,
 }
 
-/// Cooks `.slang` shader sources into SPIR-V by invoking `slangc` at cook
-/// time.
+/// Cooks Slang 着色器 sources into SPIR-V by invoking `slangc` at 烹饪
+/// 时间
 ///
-/// The cooker receives the RSLI intermediate (entry / stage / profile +
-/// source bytes) produced by [`ShaderImporter`]. It writes the source to a
-/// temporary file (so `#include` resolution works), invokes `slangc`, and
-/// returns the raw SPIR-V bytes as the cooked data.
+/// The cooker receives the RSLI intermediate (entry / 阶段 / 配置 +
+/// 源 字节 produced by [`ShaderImporter`]. It writes the 源 to a
+/// temporary file (so `#include` 分辨率 works), invokes `slangc`, and
+/// returns the raw SPIR-V 字节 as the cooked data.
 ///
-/// `slangc` is located via the `SLANGC` env var, falling back to `slangc` on
-/// `PATH`. Compilation flags mirror `shaders/compile.sh`:
-///   `-profile <profile> -target spirv -entry <entry> -stage <stage>
+/// `slangc` is located via the `SLANGC` env var, falling 后 to `slangc` on
+/// `PATH`. 编译 flags mirror `shaders/compile.sh`:
+/// `-profile 配置 -target SPIR-V -entry <entry> -stage 阶段
 ///    -fvk-use-entrypoint-name -o <out.spv>`
 ///
-/// The cooked data is the raw SPIR-V bytecode (no wrapper) - the runtime
+/// The cooked data is the raw SPIR-V bytecode (no 包装器 - the 运行时
 /// loads it directly via `vkCreateShaderModule`.
 pub struct ShaderCooker;
 
 impl ShaderCooker {
     fn parse_intermediate(data: &[u8]) -> Option<RsliInfo> {
-        // Header: magic(4) + version(1) = 5 bytes minimum.
+        // Header: magic(4) + version(1) = 5 字节 最小
         if data.len() < 5 || &data[..4] != RSLI_MAGIC {
             return None;
         }
@@ -1036,15 +1036,15 @@ impl ShaderCooker {
         })
     }
 
-    /// Resolve the slangc binary path: `SLANGC` env var, else `slangc` on PATH.
+    /// 解析 the slangc 二进制 path: `SLANGC` env var, else `slangc` on PATH.
     fn slangc_path() -> String {
         std::env::var("SLANGC").unwrap_or_else(|_| "slangc".to_owned())
     }
 
-    /// Invoke slangc on `source` written to a temp file, returning the SPIR-V
-    /// bytes on success.
+    /// 调用 slangc on 源 written to a temp file, returning the SPIR-V
+    /// 字节 on 成功
     fn compile(rsli: &RsliInfo) -> Result<Vec<u8>, CookError> {
-        // Write source to a temp file so #include / module resolution works.
+        // 写入 源 to a temp file so #include / 模块 分辨率 works.
         let tmp_dir = std::env::temp_dir();
         let source_path = tmp_dir.join(format!(
             "prismarev_shader_cook_{}.slang",
@@ -1055,7 +1055,7 @@ impl ShaderCooker {
             std::process::id()
         ));
 
-        // RAII guard: removes temp files on drop, success or error.
+        // RAII guard: removes temp files on 放置 成功 or 错误
         struct TempGuard {
             paths: Vec<std::path::PathBuf>,
         }
@@ -1154,17 +1154,17 @@ impl Cooker for ShaderCooker {
 
         Ok(CookResult {
             cooked_data: spv,
-            // SPIR-V doesn't compress well; skip zstd overhead.
+            // SPIR-V doesn't 压缩 well; skip zstd 开销
             compress: false,
         })
     }
 }
 
 // ---------------------------------------------------------------------------
-// Default Registry
+// 默认 Registry
 // ---------------------------------------------------------------------------
 
-/// Build the default cooker registry with all built-in cookers.
+/// 构建 the 默认 cooker registry with all built-in cookers.
 pub fn default_cooker_registry() -> CookerRegistry {
     let mut reg = CookerRegistry::new();
     reg.register(Box::new(BinaryCooker));
@@ -1177,11 +1177,11 @@ pub fn default_cooker_registry() -> CookerRegistry {
 }
 
 // ---------------------------------------------------------------------------
-// Cook Pipeline
+// 烹饪 管线
 // ===========================================================================
 
-/// High-level cooking pipeline that processes all assets through cookers and
-/// builds a .pak package.
+/// High-level cooking 管线 that processes all assets through cookers and
+/// builds a .pak 包
 pub struct CookPipeline {
     registry: CookerRegistry,
 }
@@ -1195,10 +1195,10 @@ impl CookPipeline {
         &self.registry
     }
 
-    /// Cook all assets from a database and build a .pak file.
+    /// 烹饪 all assets from a database and 构建 a .pak file.
     ///
-    /// `asset_data` is a map from AssetId to the raw imported bytes.
-    /// The cook pipeline handles topological sorting of dependencies.
+    /// `asset_data` is a 映射表 from AssetId to the raw imported 字节
+    /// The 烹饪 管线 handles topological sorting of dependencies.
     pub fn cook_all(
         &self,
         db: &prism_asset_db::AssetDatabase,
@@ -1208,7 +1208,7 @@ impl CookPipeline {
     ) -> Result<CookSummary, CookError> {
         let mut summary = CookSummary::default();
 
-        // Collect records in dependency order (topological sort).
+        // Collect records in dependency order (topological 排序
         let order = topological_sort(db);
 
         for &id in &order {
@@ -1246,7 +1246,7 @@ impl CookPipeline {
     }
 }
 
-/// Summary of a cooking run.
+/// 摘要 of a cooking run.
 #[derive(Debug, Default, Clone)]
 pub struct CookSummary {
     pub cooked: u32,
@@ -1254,21 +1254,21 @@ pub struct CookSummary {
 }
 
 // ===========================================================================
-// Topological Sort
+// Topological 排序
 // ===========================================================================
 
-/// Compute a topological ordering of assets based on their dependencies.
+/// 计算 a topological ordering of assets based on their dependencies.
 ///
-/// Returns asset IDs in an order where all dependencies appear before their
-/// dependents. Cycles are broken by emitting a warning and still including
-/// the asset (the cycle participants are appended at the end).
+/// Returns 资源 IDs in an order where all dependencies appear before their
+/// dependents. Cycles are broken by emitting a 警告 and still including
+/// the 资源 (the cycle participants are appended at the 结束
 pub fn topological_sort(db: &prism_asset_db::AssetDatabase) -> Vec<AssetId> {
     let all_ids: Vec<AssetId> = db.records().map(|r| r.id).collect();
     if all_ids.is_empty() {
         return Vec::new();
     }
 
-    // DFS-based topological sort with cycle detection.
+    // DFS-based topological 排序 with cycle detection.
     let mut visited = std::collections::HashSet::new();
     let mut result = Vec::with_capacity(all_ids.len());
     let mut temp_mark = std::collections::HashSet::new();
@@ -1447,7 +1447,7 @@ mod tests {
         let pipeline = CookPipeline::new(reg);
         let settings = profile::CookSettings::default();
 
-        // No data for the asset.
+        // No data for the 资源
         let asset_data = HashMap::new();
         let mut builder = PackageBuilder::new();
         let summary = pipeline.cook_all(&db, &asset_data, &mut builder, &settings).unwrap();
@@ -1455,7 +1455,7 @@ mod tests {
         assert_eq!(summary.skipped, 1);
     }
 
-    // ── Texture Cooker new tests ─────────────────────────────────────
+    // ── 纹理 Cooker new tests ─────────────────────────────────────
 
     fn make_texture_intermediate(w: u32, h: u32, rgba: &[u8]) -> Vec<u8> {
         let mut buf = Vec::with_capacity(14 + rgba.len());
@@ -1470,7 +1470,7 @@ mod tests {
 
     #[test]
     fn texture_cooker_generates_mips() {
-        // 4×4 RGBA red image.
+        // 4×4 RGBA red 图像
         let pixels = std::iter::repeat([255u8, 0, 0, 255])
             .take(4 * 4)
             .flatten()
@@ -1488,7 +1488,7 @@ mod tests {
         };
         let result = cooker.cook(&ctx).unwrap();
 
-        // Verify RTEX magic.
+        // 验证 RTEX magic.
         assert_eq!(&result.cooked_data[..4], b"RTEX");
         assert_eq!(result.cooked_data[4], 1); // version
 
@@ -1502,19 +1502,19 @@ mod tests {
         let levels = u32::from_le_bytes(result.cooked_data[13..17].try_into().unwrap());
         assert_eq!(levels, 3);
 
-        // Format.
+        // 格式
         assert_eq!(result.cooked_data[17], RTEX_FORMAT_RGBA8); // RGBA8
 
-        // Offsets table (levels * 4 bytes after header).
+        // Offsets 表 (levels * 4 字节 after header).
         let off_pos = 18usize;
         let mip0_off = u32::from_le_bytes(result.cooked_data[off_pos..off_pos + 4].try_into().unwrap());
         let mip1_off = u32::from_le_bytes(result.cooked_data[off_pos + 4..off_pos + 8].try_into().unwrap());
         let mip2_off = u32::from_le_bytes(result.cooked_data[off_pos + 8..off_pos + 12].try_into().unwrap());
 
-        // Mip0: 4*4*4 = 64 bytes starting at header (18 + 12 = 30)
+        // Mip0: 4*4*4 = 64 字节 starting at header (18 + 12 = 30)
         assert_eq!(mip0_off, 30);
         assert_eq!(mip1_off, 30 + 64);
-        // Mip1: 2*2*4 = 16 bytes
+        // Mip1: 2*2*4 = 16 字节
         assert_eq!(mip2_off, 30 + 64 + 16);
 
         // Not compressible (mip-packed).
@@ -1550,7 +1550,7 @@ mod tests {
         assert!(cooker.cook(&ctx).is_err());
     }
 
-    // ── Mesh Cooker new tests ────────────────────────────────────────
+    // ── 网格 Cooker new tests ────────────────────────────────────────
 
     fn make_mesh_intermediate(verts: u32, idxs: u32, uv_channels: u32) -> Vec<u8> {
         let stride = (3 + 3 + uv_channels * 2) as usize;
@@ -1563,7 +1563,7 @@ mod tests {
         buf.extend_from_slice(&verts.to_le_bytes());
         buf.extend_from_slice(&idxs.to_le_bytes());
         buf.extend_from_slice(&uv_channels.to_le_bytes());
-        // Fill vertex data (positions + normals + uv).
+        // Fill 顶点 data (positions + normals + uv
         for _ in 0..verts {
             for _ in 0..stride {
                 buf.extend_from_slice(&0.0f32.to_le_bytes());
@@ -1590,7 +1590,7 @@ mod tests {
         };
         let result = cooker.cook(&ctx).unwrap();
 
-        // Verify RMES magic.
+        // 验证 RMES magic.
         assert_eq!(&result.cooked_data[..4], b"RMES");
         assert_eq!(result.cooked_data[4], 1); // version
 
@@ -1662,7 +1662,7 @@ mod tests {
         assert_eq!(found.unwrap().name(), "texture-cooker");
     }
 
-    // ── Round-trip: cook → decode → assert ───────────────────────────
+    // ── Round-trip: 烹饪 → 解码 → assert ───────────────────────────
 
     #[test]
     fn binary_cooker_roundtrip() {
@@ -1677,13 +1677,13 @@ mod tests {
             settings: &settings,
         };
         let result = cooker.cook(&ctx).unwrap();
-        // Binary cooker is pass-through; cooked data must be identical.
+        // 二进制 cooker is pass-through; cooked data must be 相同
         assert_eq!(result.cooked_data, input);
     }
 
     #[test]
     fn texture_cooker_roundtrip() {
-        // Build a small 8×6 gradient RGBA8 image.
+        // 构建 a small 8×6 gradient RGBA8 图像
         let w = 8u32;
         let h = 6u32;
         let mut pixels = Vec::with_capacity((w * h * 4) as usize);
@@ -1708,21 +1708,21 @@ mod tests {
         };
         let result = cooker.cook(&ctx).unwrap();
 
-        // Decode RTEX back.
+        // 解码 RTEX 后
         let rtex = decode_rtex(&result.cooked_data).expect("should decode RTEX");
         assert_eq!(rtex.width, w);
         assert_eq!(rtex.height, h);
         assert_eq!(rtex.format, RTEX_FORMAT_RGBA8); // RGBA8
         assert!(rtex.mip_levels >= 1);
 
-        // Mip0 must be byte-identical to the input pixels (cooker copies mip0 verbatim).
+        // Mip0 must be byte-identical to the 输入 pixels (cooker copies mip0 verbatim).
         assert_eq!(
             rtex.mip_data[0], pixels,
             "mip0 must match input pixels exactly"
         );
 
-        // Mip chain must be non-empty and each successive level must be
-        // smaller (or equal at 1×1).
+        // Mip 链 must be non-empty and each successive level must be
+        // smaller (or 等于 at 1×1).
         for i in 1..rtex.mip_levels as usize {
             assert!(
                 rtex.mip_data[i].len() < rtex.mip_data[i - 1].len(),
@@ -1745,7 +1745,7 @@ mod tests {
 
     #[test]
     fn mesh_cooker_roundtrip() {
-        // Build an RMXI intermediate with 3 vertices (a triangle).
+        // 构建 an RMXI intermediate with 3 顶点 (a triangle).
         let verts = 3u32;
         let idxs = 3u32;
         let uv_channels = 1u32;
@@ -1760,7 +1760,7 @@ mod tests {
 
         // Positions: a simple triangle
         let pos: [[f32; 3]; 3] = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
-        // Normals: all pointing up
+        // Normals: all pointing 上
         let nrm = [0.0f32, 0.0, 1.0];
         // UVs
         let uv: [[f32; 2]; 3] = [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]];
@@ -1784,7 +1784,7 @@ mod tests {
         let expected_vert_size = verts as usize * stride_floats * 4;
         let expected_idx_size = idxs as usize * 4;
 
-        // Cook.
+        // 烹饪
         let cooker = MeshCooker;
         let settings = profile::CookSettings::default();
         let id = AssetId::from_raw((1u64 << 32) | 200);
@@ -1796,20 +1796,20 @@ mod tests {
         };
         let result = cooker.cook(&ctx).unwrap();
 
-        // Decode RMES.
+        // 解码 RMES.
         let rmes = decode_rmes(&result.cooked_data).expect("should decode RMES");
         assert_eq!(rmes.vert_count, verts);
         assert_eq!(rmes.idx_count, idxs);
         assert_eq!(rmes.uv_channels, uv_channels);
 
-        // Vertex data must match the intermediate (after its 17-byte header).
+        // 顶点 data must 匹配 the intermediate (after its 17-byte header).
         let expected_vert = &intermediate[17..17 + expected_vert_size];
         assert_eq!(
             rmes.vertex_data, expected_vert,
             "RMES vertex data must match RMXI vertex data"
         );
 
-        // Index data must match.
+        // 索引 data must 匹配
         let expected_idx = &intermediate[17 + expected_vert_size..17 + expected_vert_size + expected_idx_size];
         assert_eq!(
             rmes.index_data, expected_idx,
@@ -1828,7 +1828,7 @@ mod tests {
 
     #[test]
     fn decode_rtex_handles_known_asset() {
-        // Use the same pattern as texture_cooker_generates_mips test.
+        // Use the same 模式 as texture_cooker_generates_mips test.
         let pixels = std::iter::repeat([255u8, 0, 0, 255])
             .take(4 * 4)
             .flatten()
@@ -1851,11 +1851,11 @@ mod tests {
         assert_eq!(rtex.mip_levels, 3);
         assert_eq!(rtex.format, RTEX_FORMAT_RGBA8);
         assert_eq!(rtex.mip_data.len(), 3);
-        // mip0 = 4*4*4 = 64 bytes
+        // mip0 = 4*4*4 = 64 字节
         assert_eq!(rtex.mip_data[0].len(), 64);
-        // mip1 = 2*2*4 = 16 bytes
+        // mip1 = 2*2*4 = 16 字节
         assert_eq!(rtex.mip_data[1].len(), 16);
-        // mip2 = 1*1*4 = 4 bytes
+        // mip2 = 1*1*4 = 4 字节
         assert_eq!(rtex.mip_data[2].len(), 4);
     }
 
@@ -1865,7 +1865,7 @@ mod tests {
         for i in 0..16 {
             pixels.push(i as u8);
         }
-        // 4 channels, so 2×2 image with 4 bytes per pixel = 16 bytes.
+        // 4 channels, so 2×2 图像 with 4 字节 per 像素 = 16 字节
         let intermediate = make_texture_intermediate(2, 2, &pixels);
 
         let (w, h, parsed) = parse_rtexi_pixels(&intermediate).unwrap();
@@ -1874,9 +1874,9 @@ mod tests {
         assert_eq!(parsed, pixels);
     }
 
-    // ── BC7 compression tests ────────────────────────────────────────
+    // ── BC7 压缩 tests ────────────────────────────────────────
 
-    /// Helper: create a CookContext for testing with the given compression setting.
+    /// Helper: 创建 a CookContext for 测试 with the given 压缩 设置
     struct TestCtx {
         record: prism_asset_db::AssetRecord,
         settings: profile::CookSettings,
@@ -1918,7 +1918,7 @@ mod tests {
         let tc = TestCtx::new(profile::TextureCompression::Bc7);
         let result = cooker.cook(&tc.ctx(&intermediate)).unwrap();
 
-        // Must be RTEX with format byte = BC7.
+        // Must be RTEX with 格式 byte = BC7.
         assert_eq!(&result.cooked_data[..4], b"RTEX");
         assert_eq!(result.cooked_data[17], RTEX_FORMAT_BC7);
         // Must not be compressible (mip-packed).
@@ -1927,50 +1927,50 @@ mod tests {
 
     #[test]
     fn texture_cooker_bc7_block_count() {
-        // 8×8 RGBA8 → 2×2 BC7 blocks = 4 blocks × 16 bytes = 64 bytes.
+        // 8×8 RGBA8 → 2×2 BC7 blocks = 4 blocks × 16 字节 = 64 字节
         let pixels = vec![128u8; 8 * 8 * 4];
         let intermediate = make_texture_intermediate(8, 8, &pixels);
         let cooker = TextureCooker;
         let tc = TestCtx::new(profile::TextureCompression::Bc7);
         let result = cooker.cook(&tc.ctx(&intermediate)).unwrap();
 
-        // Decode and inspect mip0 data size.
+        // 解码 and inspect mip0 data 大小
         let rtex = decode_rtex(&result.cooked_data).expect("should decode BC7 RTEX");
         assert_eq!(rtex.format, RTEX_FORMAT_BC7);
         assert_eq!(rtex.width, 8);
         assert_eq!(rtex.height, 8);
 
-        // Mip0: 8×8 → ceil(8/4)×ceil(8/4) = 2×2 blocks = 4 blocks × 16 = 64 bytes.
+        // Mip0: 8×8 → ceil(8/4)×ceil(8/4) = 2×2 blocks = 4 blocks × 16 = 64 字节
         assert_eq!(rtex.mip_data[0].len(), 4 * 16, "mip0 BC7 block count");
     }
 
     #[test]
     fn texture_cooker_bc7_roundtrip() {
-        // 4×4 RGBA8 = exactly 1 BC7 block.
+        // 4×4 RGBA8 = exactly 1 BC7 块
         let pixels = vec![128u8; 4 * 4 * 4];
         let intermediate = make_texture_intermediate(4, 4, &pixels);
         let cooker = TextureCooker;
         let tc = TestCtx::new(profile::TextureCompression::Bc7);
         let result = cooker.cook(&tc.ctx(&intermediate)).unwrap();
 
-        // Decode and verify structure.
+        // 解码 and 验证 structure.
         let rtex = decode_rtex(&result.cooked_data).expect("should decode BC7 RTEX");
         assert_eq!(rtex.format, RTEX_FORMAT_BC7);
         assert_eq!(rtex.width, 4);
         assert_eq!(rtex.height, 4);
-        // Mip0 = 1 BC7 block = 16 bytes.
+        // Mip0 = 1 BC7 块 = 16 字节
         assert_eq!(rtex.mip_data[0].len(), 16);
-        // At least 2 mip levels (4→2→1 = 3 levels but BC7 block size floors).
+        // At least 2 mip levels (4→2→1 = 3 levels but BC7 块 大小 floors).
         assert!(rtex.mip_levels >= 2, "should have at least 2 mip levels, got {}", rtex.mip_levels);
-        // Mip levels must exist (size can be same for BC7 when
-        // different-resolution textures produce same block count).
+        // Mip levels must exist 大小 can be same for BC7 when
+        // different-resolution textures produce same 块 count).
         assert!(!rtex.mip_data[0].is_empty());
         assert!(!rtex.mip_data[1].is_empty());
     }
 
     #[test]
     fn texture_cooker_bc7_non_square() {
-        // 6×4 RGBA8 → ceil(6/4)×ceil(4/4) = 2×1 BC7 blocks = 2 blocks × 16 = 32 bytes.
+        // 6×4 RGBA8 → ceil(6/4)×ceil(4/4) = 2×1 BC7 blocks = 2 blocks × 16 = 32 字节
         let pixels = vec![200u8; 6 * 4 * 4];
         let intermediate = make_texture_intermediate(6, 4, &pixels);
         let cooker = TextureCooker;
@@ -1982,13 +1982,13 @@ mod tests {
         assert_eq!(rtex.width, 6);
         assert_eq!(rtex.height, 4);
 
-        // Mip0 = 2×1 blocks = 2 × 16 = 32 bytes.
+        // Mip0 = 2×1 blocks = 2 × 16 = 32 字节
         assert_eq!(rtex.mip_data[0].len(), 2 * 16, "non-square BC7 mip0 block count");
     }
 
     #[test]
     fn texture_cooker_rgba8_still_default() {
-        // Default profile compression (Rgba8) must produce RGBA8 output.
+        // 默认 配置 压缩 (Rgba8) must produce RGBA8 输出
         let pixels = vec![255u8; 4 * 4 * 4];
         let intermediate = make_texture_intermediate(4, 4, &pixels);
         let cooker = TextureCooker;
@@ -2003,16 +2003,16 @@ mod tests {
         };
         let result = cooker.cook(&ctx).unwrap();
 
-        // Must be RGBA8 format.
+        // Must be RGBA8 格式
         assert_eq!(&result.cooked_data[..4], b"RTEX");
         assert_eq!(result.cooked_data[17], RTEX_FORMAT_RGBA8);
     }
 
     // -------------------------------------------------------------------
-    // Material cooker round-trip
+    // 材质 cooker round-trip
     // -------------------------------------------------------------------
 
-    /// Build an RMATI intermediate blob by hand (mirrors the importer output).
+    /// 构建 an RMATI intermediate blob by hand (mirrors the importer 输出
     fn make_rmati(
         scalars: &[f32; MATERIAL_SCALAR_COUNT],
         tex_paths: &[Option<String>; 5],
@@ -2066,7 +2066,7 @@ mod tests {
         let result = cooker.cook(&ctx).unwrap();
         assert!(result.compress);
 
-        // Decode and verify.
+        // 解码 and 验证
         let info = decode_rmat(&result.cooked_data).expect("decode_rmat");
         assert_eq!(info.scalars, scalars);
         for slot in &info.texture_ids {
@@ -2084,7 +2084,7 @@ mod tests {
             0.0, 1.45, 0.0, 0.0, // transmission, ior, translucency, anisotropy
             1.0, 0.1, // clearcoat, clearcoat_roughness
         ];
-        // Only albedo + occlusion textures present.
+        // Only albedo + 遮挡 textures present.
         let tex_paths: [Option<String>; 5] = [
             Some("textures/albedo.png".into()),
             None,
@@ -2095,7 +2095,7 @@ mod tests {
         let intermediate = make_rmati(&scalars, &tex_paths);
 
         // The importer would have resolved these two paths to two AssetId deps
-        // stored on the record, in slot order (albedo first, occlusion second).
+        // stored on the record, in 槽 order (albedo 第一个 遮挡 秒
         let tex_id_albedo = AssetId::from_raw((1u64 << 32) | 100);
         let tex_id_occlusion = AssetId::from_raw((1u64 << 32) | 101);
         let id = AssetId::from_raw((1u64 << 32) | 7);
@@ -2136,10 +2136,10 @@ mod tests {
     }
 
     // -------------------------------------------------------------------
-    // Shader cooker (intermediate parsing only; compile needs slangc)
+    // 着色器 cooker (intermediate parsing only; 编译 needs slangc)
     // -------------------------------------------------------------------
 
-    /// Build an RSLI intermediate blob by hand (mirrors the importer output).
+    /// 构建 an RSLI intermediate blob by hand (mirrors the importer 输出
     fn make_rsli(entry: &str, stage: &str, profile: &str, source: &[u8]) -> Vec<u8> {
         let mut buf = Vec::new();
         buf.extend_from_slice(b"RSLI");
@@ -2183,7 +2183,7 @@ mod tests {
 
     #[test]
     fn shader_cooker_rejects_bad_intermediate() {
-        // Truncated RSLI: magic + version + partial header.
+        // Truncated RSLI: magic + version + 部分 header.
         let settings = profile::CookSettings::default();
         let id = AssetId::from_raw((1u64 << 32) | 9);
         let record = make_record(id, vec![], "test.slang");

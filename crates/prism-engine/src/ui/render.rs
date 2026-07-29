@@ -99,7 +99,7 @@ pub fn convert_ui_draw_list_to_overlay(world: &World) -> prism_render::UiOverlay
         let y0 = ((h - py) / h) * 2.0 - 1.0;  // flip Y
         let x1 = ((px + pw) / w) * 2.0 - 1.0;
         let y1 = ((h - (py + ph)) / h) * 2.0 - 1.0;
-        // NDC border radius (approximate).
+        // NDC border 半径 近似
         let br_ndc = q.border_radius / w.max(h) * 2.0;
         quads.push(prism_render::ui_overlay::UiQuad {
             rect: [x0, y1, x1, y0], // NDC [xmin, ymin, xmax, ymax]

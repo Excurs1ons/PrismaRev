@@ -1,20 +1,20 @@
-//! Scene loader — parses RSCN binary cooked scenes and spawns ECS entities.
+//! Scene loader — parses RSCN 二进制 cooked scenes and spawns ECS entities.
 //!
 //! ## Architecture
 //!
 //! The [`SceneLoader`] accepts [`SceneSource`] inputs at three levels:
-//! - **`RawCooked(Vec<u8>)`** — RSCN bytes already in memory (from a `.pak`
-//!   asset via `ResourceManager`, or from a programmatic fixture).
-//! - **`CookedFile(PathBuf)`** — loose RSCN binary file on disk (dev convenience).
+//! - **`RawCooked(Vec<u8>)`** — RSCN 字节 already in 内存 (from a `.pak`
+//! 资源 via `ResourceManager`, or from a programmatic fixture).
+//! - **`CookedFile(PathBuf)`** — loose RSCN 二进制 file on disk (dev convenience).
 //!
 //! All paths converge to [`SceneLoader::spawn_from_cooked`], which is the sole
-//! function that touches the ECS [`World`].  This keeps the core spawning logic
+//! 函数 that touches the ECS 世界 This keeps the core spawning 逻辑
 //! testable and independent of I/O.
 //!
-//! ## RSCN binary format
+//! ## RSCN 二进制 格式
 //!
-//! The format is the output of [`prism_asset_cooker::scene::SceneCooker`] in the
-//! independent `prism-asset` workspace.  We parse it directly here with no
+//! The 格式 is the 输出 of [`prism_asset_cooker::scene::SceneCooker`] in the
+//! independent `prism-asset` 工作区 We parse it directly here with no
 //! cross-workspace dependency:
 //!
 //! ```text
@@ -23,24 +23,24 @@
 //! [count:4]        u32 LE — number of entities
 //!
 //! (v2 only)
-//! [env_len:2]      u16 LE — byte length of skybox HDR path (0 = no skybox)
+//! [env_len:2] u16 LE — byte 长度 of skybox 高动态范围 path (0 = no skybox)
 //! [env_path:N]     UTF-8 path (omitted if len == 0)
 //!
-//! Per entity (parent-first topological order):
-//!   [name_len:2]   u16 LE — byte length of name (0 = unnamed)
+//! Per 实体 (parent-first topological order):
+//! [name_len:2] u16 LE — byte 长度 of name (0 = unnamed)
 //!   [name:N]       UTF-8 name (omitted if len == 0)
-//!   [parent:4]     i32 LE — index into entity array, or -1 for root
+//! [parent:4] i32 LE — 索引 into 实体 数组 or -1 for root
 //!   [tx:12]        f32[3] LE
-//!   [rot:16]       f32[4] LE  quaternion (X, Y, Z, W)
+//! [rot:16] f32[4] LE 四元数 (X, Y, Z, W)
 //!   [scale:12]     f32[3] LE
 //!   [flags:1]      bitmask: bit0=mesh, bit1=material, bit2=light, bit3=camera,
 //!                           bit4=skybox
 //!
-//!   [if mesh]      path_len[2] + path (UTF-8, no NUL terminator)
-//!   [if material]  path_len[2] + path
-//!   [if light]     type[1] + color[12] + intensity[4] + range[4]
+//! [if 网格 path_len[2] + path (UTF-8, no NUL terminator)
+//! [if 材质 path_len[2] + path
+//! [if 光源 type[1] + color[12] + intensity[4] + range[4]
 //!                  + inner_cone[4] + outer_cone[4]
-//!   [if camera]    fov[4] + near[4] + far[4]
+//! [if 相机 fov[4] + near[4] + far[4]
 //!   [if skybox]    path_len[2] + path (UTF-8) + enabled[1]
 //! ```
 
@@ -54,7 +54,7 @@ use super::components::*;
 use super::helpers::HierarchyHelper;
 
 // ---------------------------------------------------------------------------
-// Component flags (must match the cooker's constants)
+// 分量 flags (must 匹配 the cooker's constants)
 // ---------------------------------------------------------------------------
 
 const FLAG_HAS_MESH: u8 = 0b00001;
@@ -64,7 +64,7 @@ const FLAG_HAS_CAMERA: u8 = 0b01000;
 const FLAG_HAS_SKYBOX: u8 = 0b10000;
 
 // ---------------------------------------------------------------------------
-// Light type bytes in the RSCN light record
+// 光源 类型 字节 in the RSCN 光源 record
 // ---------------------------------------------------------------------------
 
 const LIGHT_DIRECTIONAL: u8 = 0;
@@ -74,39 +74,39 @@ const LIGHT_POINT: u8 = 1;
 const LIGHT_SPOT: u8 = 2;
 
 // ---------------------------------------------------------------------------
-// SceneSource — what to load
+// SceneSource — what to 加载
 // ---------------------------------------------------------------------------
 
-/// Describes where to find scene data.
+/// Describes where to 查找 scene data.
 pub enum SceneSource {
-    /// In-memory RSCN binary (e.g. from a `.pak` asset via `ResourceManager`).
+    /// In-memory RSCN 二进制 (e.g. from a `.pak` 资源 via `ResourceManager`).
     RawCooked(Vec<u8>),
-    /// Loose RSCN binary file on disk (dev convenience).
+    /// Loose RSCN 二进制 file on disk (dev convenience).
     CookedFile(PathBuf),
 }
 
 // ---------------------------------------------------------------------------
-// SceneInstance — result of a load
+// SceneInstance — 结果 of a 加载
 // ---------------------------------------------------------------------------
 
-/// The result of loading and spawning a scene.
+/// The 结果 of loading and spawning a scene.
 pub struct SceneInstance {
     /// Generated or provided scene ID.
     pub scene_id: SceneAssetId,
     /// Entities that have no parent (roots of the scene hierarchy).
     pub root_entities: Vec<Entity>,
-    /// Every entity that was spawned, in spawn order.
+    /// Every 实体 that was spawned, in 生成 order.
     pub all_entities: Vec<Entity>,
 }
 
 // ---------------------------------------------------------------------------
-// ParsedRscnEntity — intermediate deserialised from the binary stream
+// ParsedRscnEntity — intermediate deserialised from the 二进制 stream
 // ---------------------------------------------------------------------------
 
-/// One entity decoded from the RSCN byte stream, before ECS insertion.
-/// One entity decoded from the RSCN byte stream.
+/// One 实体 decoded from the RSCN byte stream, before ECS insertion.
+/// One 实体 decoded from the RSCN byte stream.
 ///
-/// The fields correspond one-to-one with the RSCN on-disk format (see module
+/// The fields correspond one-to-one with the RSCN on-disk 格式 (see 模块
 /// docs).  `name` is currently stored for debug/inspector use only.
 #[derive(Debug)]
 #[allow(dead_code)]
@@ -170,15 +170,15 @@ impl ParsedEntity {
 // RSCN parser
 // ---------------------------------------------------------------------------
 
-/// Result of parsing an RSCN binary blob.
+/// 结果 of parsing an RSCN 二进制 blob.
 #[derive(Debug)]
 pub struct ParsedRscn {
     pub entities: Vec<ParsedEntity>,
 }
 
-/// Parse an RSCN binary blob into entities + header info.
+/// Parse an RSCN 二进制 blob into entities + header 信息
 ///
-/// Returns `Err` with a human-readable message on format errors.
+/// Returns `Err` with a human-readable 消息 on 格式 errors.
 pub fn parse_rscn(data: &[u8]) -> Result<ParsedRscn, String> {
     if data.len() < 9 {
         return Err("RSCN data too short".into());
@@ -194,8 +194,8 @@ pub fn parse_rscn(data: &[u8]) -> Result<ParsedRscn, String> {
     let count = u32::from_le_bytes(data[5..9].try_into().unwrap()) as usize;
     let mut offset = 9usize;
 
-    // v2: skip skybox HDR path in header (used by read_env_path_from_rscn
-    // for the app layer; the per-entity skybox data is parsed below).
+    // v2: skip skybox 高动态范围 path in header (used by read_env_path_from_rscn
+    // for the app 层 the per-entity skybox data is parsed below).
     if version >= 2 {
         if offset + 2 > data.len() {
             return Err("unexpected end of RSCN data (env_len)".into());
@@ -237,7 +237,7 @@ pub fn parse_rscn(data: &[u8]) -> Result<ParsedRscn, String> {
         };
         offset += 4;
 
-        // Transform: tx(12) + rot(16) + scale(12) = 40 bytes.
+        // 变换 tx(12) + rot(16) + scale(12) = 40 字节
         if offset + 40 > data.len() {
             return Err("unexpected end (transform)".into());
         }
@@ -367,36 +367,36 @@ pub fn parse_rscn(data: &[u8]) -> Result<ParsedRscn, String> {
 }
 
 // ---------------------------------------------------------------------------
-// Quaternion -> yaw/pitch conversion (for scene-loaded cameras)
+// 四元数 -> yaw/pitch conversion (for scene-loaded cameras)
 // ---------------------------------------------------------------------------
 
-/// Convert a scene entity's rotation quaternion `(x, y, z, w)` into the
-/// `(yaw, pitch)` pair used by [`FlyCameraController`].
+/// 转换 a scene entity's 旋转 四元数 `(x, y, z, w)` into the
+/// `(yaw, 音高 pair used by [`FlyCameraController`].
 ///
-/// The free-fly forward (see `forward` in `scene::systems::camera`) is
+/// The free-fly 向前 (see 向前 in `scene::systems::camera`) is
 /// `[cos(yaw)·cos(pitch), sin(pitch), -sin(yaw)·cos(pitch)]`. The camera's
-/// world-space forward is the entity's quaternion applied to the −Z basis,
-/// `R·(0,0,-1)`. Inverting the forward formula gives:
-///   - `pitch = asin(forward.y)`
+/// world-space 向前 is the entity's 四元数 applied to the −Z basis,
+/// `R·(0,0,-1)`. Inverting the 向前 formula gives:
+/// - 音高 = asin(forward.y)`
 ///   - `yaw   = atan2(-forward.z, forward.x)`
 ///
-/// Note this means an identity quaternion (forward = (0,0,−1)) maps to
-/// `yaw = π/2, pitch = 0` - the value the free-fly controller needs to look
-/// down −Z. Roll is discarded (the free-fly camera has no roll). Matches the
-/// right-handed conventions in `README.md` (+X right, +Y up, +Z toward
-/// viewer, camera looks down −Z).
+/// 音符 this means an identity 四元数 向前 = (0,0,−1)) maps to
+/// `yaw = π/2, 音高 = 0` - the value the free-fly controller needs to look
+/// 下 −Z. Roll is discarded (the free-fly 相机 has no roll). Matches the
+/// right-handed conventions in `README.md` (+X 右 +Y 上 +Z toward
+/// viewer, 相机 looks 下 −Z).
 fn quat_to_yaw_pitch(quat: [f32; 4]) -> (f32, f32) {
     let [qx, qy, qz, qw] = quat;
-    // Normalize to avoid degenerate input skewing the result.
+    // 归一化 to avoid degenerate 输入 skewing the 结果
     let n = (qx * qx + qy * qy + qz * qz + qw * qw).sqrt();
     if n < 1e-6 {
         log::warn!("scene camera quaternion is degenerate (|q|≈0); using identity");
         return (std::f32::consts::FRAC_PI_2, 0.0);
     }
     let (qx, qy, qz, qw) = (qx / n, qy / n, qz / n, qw / n);
-    // forward = R · (0,0,-1), where R is the quaternion's rotation matrix.
-    // Column 2 of R is `R·(0,0,1)` = `[2(xz+wy), 2(yz-wx), 1-2(x²+y²)]`;
-    // negating it gives `R·(0,0,-1)`. (Same matrix as `LocalTransform::to_model_matrix`.)
+    // 向前 = R · (0,0,-1), where R is the quaternion's 旋转 矩阵
+    // 列 2 of R is `R·(0,0,1)` = `[2(xz+wy), 2(yz-wx), 1-2(x²+y²)]`;
+    // negating it gives `R·(0,0,-1)`. (Same 矩阵 as `LocalTransform::to_model_matrix`.)
     let forward = [
         -2.0 * (qx * qz + qw * qy),
         -2.0 * (qy * qz - qw * qx),
@@ -408,13 +408,13 @@ fn quat_to_yaw_pitch(quat: [f32; 4]) -> (f32, f32) {
 }
 
 // ---------------------------------------------------------------------------
-// Public helpers for env path extraction
+// 公开 helpers for env path extraction
 // ---------------------------------------------------------------------------
 
-/// Read the skybox HDR path from cooked RSCN bytes (v2 header).
+/// 读取 the skybox 高动态范围 path from cooked RSCN 字节 (v2 header).
 ///
-/// Returns `None` if the data is not valid RSCN v2+ or has no skybox configured.
-/// Used by the app layer to pre-load the environment map from either the
+/// Returns `None` if the data is not 有效 RSCN v2+ or has no skybox configured.
+/// Used by the app 层 to pre-load the environment 映射表 from either the
 /// ResourceManager or a loose file.
 pub fn read_env_path_from_rscn_bytes(data: &[u8]) -> Option<String> {
     if data.len() < 11 {
@@ -439,10 +439,10 @@ pub fn read_env_path_from_rscn_bytes(data: &[u8]) -> Option<String> {
     }
 }
 
-/// Read the skybox HDR path from a cooked RSCN **file** (v2 header).
+/// 读取 the skybox 高动态范围 path from a cooked RSCN **file** (v2 header).
 ///
-/// Convenience wrapper around [`read_env_path_from_rscn_bytes`] that reads the
-/// file from disk first.
+/// Convenience 包装器 around [`read_env_path_from_rscn_bytes`] that reads the
+/// file from disk 第一个
 pub fn read_env_path_from_rscn(path: &std::path::Path) -> Option<String> {
     let data = std::fs::read(path).ok()?;
     read_env_path_from_rscn_bytes(&data)
@@ -452,12 +452,12 @@ pub fn read_env_path_from_rscn(path: &std::path::Path) -> Option<String> {
 // SceneLoader
 // ---------------------------------------------------------------------------
 
-/// Loads cooked scenes into the ECS [`World`].
+/// Loads cooked scenes into the ECS 世界
 ///
-/// Usage:
+/// 用法
 /// ```ignore
 /// let mut loader = SceneLoader::new();
-/// let instance = loader.load_and_spawn(&mut world, source)?;
+/// let 实例 = loader.load_and_spawn(&mut 世界 源
 /// ```
 pub struct SceneLoader;
 
@@ -466,7 +466,7 @@ impl SceneLoader {
         Self
     }
 
-    /// High-level entry: accept any [`SceneSource`] and spawn into the world.
+    /// High-level entry: accept any [`SceneSource`] and 生成 into the 世界
     pub fn load_and_spawn(
         &mut self,
         world: &mut World,
@@ -485,7 +485,7 @@ impl SceneLoader {
         self.spawn_from_parsed(world, &parsed, scene_id)
     }
 
-    /// Core spawn: convert parsed RSCN entities into ECS components.
+    /// Core 生成 转换 parsed RSCN entities into ECS components.
     ///
     /// This is the single path that creates entities — all `SceneSource`
     /// variants converge here.
@@ -496,7 +496,7 @@ impl SceneLoader {
         scene_id: SceneAssetId,
     ) -> Result<SceneInstance, String> {
         let parsed_entities = &parsed.entities;
-        // Phase 1: spawn all entities, insert scene & transform components.
+        // Phase 1: 生成 all entities, 插入 scene & 变换 components.
         let mut entities: Vec<Entity> = Vec::with_capacity(parsed_entities.len());
         for pe in parsed_entities {
             let entity = world.spawn();
@@ -505,13 +505,13 @@ impl SceneLoader {
             // Always-added components.
             world.insert(entity, SceneMember(scene_id));
             world.insert(entity, Active(true));
-            // Optional human-readable name (empty string -> no Name component,
-            // the inspector falls back to the raw entity id).
+            // Optional human-readable name 空 字符串 -> no Name 分量
+            // the 检查器 falls 后 to the raw 实体 id).
             if !pe.name.is_empty() {
                 world.insert(entity, Name(pe.name.clone()));
             }
 
-            // Local transform.
+            // 局部 变换
             let local = LocalTransform {
                 translation: pe.translation.into(),
                 rotation: glam::Quat::from_xyzw(pe.rotation[0], pe.rotation[1], pe.rotation[2], pe.rotation[3]),
@@ -519,11 +519,11 @@ impl SceneLoader {
             };
             world.insert(entity, local.clone());
 
-            // Initial world transform = local (will be recomputed by hierarchy system).
+            // Initial 世界 变换 = 局部 (will be recomputed by hierarchy 系统
             world.insert(entity, WorldTransform(local.to_model_matrix()));
 
-            // Mesh reference (generation 0 = unresolved; resolved by
-            // resolve_assets_system once the .pak runtime is wired).
+            // 网格 引用 (generation 0 = unresolved; resolved by
+            // resolve_assets_system once the .pak 运行时 is wired).
             if pe.has_mesh {
                 world.insert(
                     entity,
@@ -535,7 +535,7 @@ impl SceneLoader {
                 );
             }
 
-            // Material reference (unresolved).
+            // 材质 引用 (unresolved).
             if pe.has_material {
                 world.insert(
                     entity,
@@ -547,8 +547,8 @@ impl SceneLoader {
                 );
             }
 
-            // MeshRenderer bundle — inserted when both mesh and material are
-            // present. Carries the path strings for later resolution.
+            // MeshRenderer bundle — inserted when both 网格 and 材质 are
+            // present. Carries the path strings for later 分辨率
             if pe.has_mesh && pe.has_material {
                 world.insert(
                     entity,
@@ -559,7 +559,7 @@ impl SceneLoader {
                 );
             }
 
-            // Light component.
+            // 光源 分量
             if pe.has_light {
                 match pe.light_type {
                     LIGHT_DIRECTIONAL => {
@@ -599,11 +599,11 @@ impl SceneLoader {
                 }
             }
 
-            // Camera component.
+            // 相机 分量
             if pe.has_camera {
-                // Data component: projection + exposure + runtime aspect cache.
-                // `aspect` is a placeholder; `app.rs` writes the real value on
-                // the first resize / orientation change.
+                // Data 分量 投影 + exposure + 运行时 宽高比 cache.
+                // 宽高比 is a placeholder; `app.rs` writes the real value on
+                // the 第一个 调整大小 / orientation change.
                 world.insert(
                     entity,
                     Camera {
@@ -613,10 +613,10 @@ impl SceneLoader {
                         ..Camera::default()
                     },
                 );
-                // Free-fly input controller. yaw/pitch are derived from the
-                // entity's quaternion so the scene file fully determines the
-                // initial viewpoint; the camera position lives on the sibling
-                // LocalTransform (translation). `move_speed`/`look_sensitivity`
+                // Free-fly 输入 controller. yaw/pitch are derived from the
+                // entity's 四元数 so the scene file fully determines the
+                // initial viewpoint; the 相机 position lives on the sibling
+                // LocalTransform 平移 `move_speed`/`look_sensitivity`
                 // keep their defaults.
                 let (yaw, pitch) = quat_to_yaw_pitch(pe.rotation);
                 world.insert(
@@ -629,8 +629,8 @@ impl SceneLoader {
                 );
             }
 
-            // Skybox component (the skybox entity is a regular entity in the
-            // entities array; its Skybox component is inserted here).
+            // Skybox 分量 (the skybox 实体 is a regular 实体 in the
+            // entities 数组 its Skybox 分量 is inserted here).
             if pe.has_skybox {
                 world.insert(
                     entity,
@@ -648,8 +648,8 @@ impl SceneLoader {
             }
         }
 
-        // Phase 2: build hierarchy via HierarchyHelper (must happen after all
-        // entities exist so that parent indices resolve).
+        // Phase 2: 构建 hierarchy via HierarchyHelper (must happen after all
+        // entities exist so that parent indices 解析
         for (i, pe) in parsed_entities.iter().enumerate() {
             if let Some(parent_idx) = pe.parent {
                 let parent_idx = parent_idx as usize;
@@ -691,9 +691,9 @@ mod tests {
 
     // ── helpers ───────────────────────────────────────────────────────
 
-    /// Build RSCN bytes (v2 format) from a simple description.
+    /// 构建 RSCN 字节 (v2 格式 from a simple 描述
     ///
-    /// Each entity tuple: `(name, parent_idx, translation, rotation, scale,
+    /// Each 实体 元组 `(name, parent_idx, 平移 旋转 音阶
     /// has_mesh, mesh_path, has_material, mat_path, has_light, light_type,
     /// light_color, light_intensity, light_range, has_camera, camera_fov,
     /// camera_near, camera_far, has_skybox, skybox_hdr_path, skybox_enabled)`.
@@ -704,7 +704,7 @@ mod tests {
         buf.push(2); // version 2 (v2 = skybox support in header + per-entity)
         buf.extend_from_slice(&(entities.len() as u32).to_le_bytes());
 
-        // v2 header: env_len(2) + env_path (empty = no skybox at header level).
+        // v2 header: env_len(2) + env_path 空 = no skybox at header level).
         buf.extend_from_slice(&0u16.to_le_bytes());
 
         for e in entities {
@@ -717,7 +717,7 @@ mod tests {
             let parent: i32 = e.parent.map(|p| p as i32).unwrap_or(-1);
             buf.extend_from_slice(&parent.to_le_bytes());
 
-            // Transform.
+            // 变换
             for &v in &e.translation {
                 buf.extend_from_slice(&v.to_le_bytes());
             }
@@ -747,21 +747,21 @@ mod tests {
             }
             buf.push(flags);
 
-            // Mesh path.
+            // 网格 path.
             if e.has_mesh {
                 let path_bytes = e.mesh_path.as_bytes();
                 buf.extend_from_slice(&(path_bytes.len() as u16).to_le_bytes());
                 buf.extend_from_slice(path_bytes);
             }
 
-            // Material path.
+            // 材质 path.
             if e.has_material {
                 let path_bytes = e.material_path.as_bytes();
                 buf.extend_from_slice(&(path_bytes.len() as u16).to_le_bytes());
                 buf.extend_from_slice(path_bytes);
             }
 
-            // Light.
+            // 光源
             if e.has_light {
                 buf.push(e.light_type);
                 for &v in &e.light_color {
@@ -773,7 +773,7 @@ mod tests {
                 buf.extend_from_slice(&e.light_outer_cone.to_le_bytes());
             }
 
-            // Camera.
+            // 相机
             if e.has_camera {
                 buf.extend_from_slice(&e.camera_fov.to_le_bytes());
                 buf.extend_from_slice(&e.camera_near.to_le_bytes());
@@ -1051,7 +1051,7 @@ mod tests {
         let inst = loader.spawn_from_parsed(&mut world, &parsed, sid).unwrap();
 
         let wt = world.get::<WorldTransform>(inst.all_entities[0]).unwrap();
-        // Identity model matrix.
+        // Identity 模型 矩阵
         assert_eq!(wt.0[0][0], 1.0);
         assert_eq!(wt.0[3][3], 1.0);
     }
@@ -1204,7 +1204,7 @@ mod tests {
 
     #[test]
     fn spawn_rejects_dead_parent() {
-        // Entity with parent index beyond the entity array.
+        // 实体 with parent 索引 beyond the 实体 数组
         // This is a malformed scene — the loader checks bounds.
         let child = RscnEntity {
             parent: Some(999),
@@ -1218,7 +1218,7 @@ mod tests {
         let sid = SceneAssetId::generate();
         let inst = loader.spawn_from_parsed(&mut world, &parsed, sid).unwrap();
 
-        // The orphan entity should exist but have no Parent component.
+        // The orphan 实体 should exist but have no Parent 分量
         assert_eq!(inst.all_entities.len(), 1);
         assert!(world.get::<Parent>(inst.all_entities[0]).is_none());
         // It should be counted as a root since it has no Parent.
@@ -1227,7 +1227,7 @@ mod tests {
 
     #[test]
     fn spawn_camera_emits_renderer_and_data_components() {
-        // Camera at [1,2,3], identity rotation (looks down −Z), 60° fov.
+        // 相机 at [1,2,3], identity 旋转 (looks 下 −Z), 60° 视场角
         let e = RscnEntity {
             translation: [1.0, 2.0, 3.0],
             has_camera: true,
@@ -1246,7 +1246,7 @@ mod tests {
 
         let entity = inst.all_entities[0];
 
-        // Data component (read by scene::systems::camera::collect_camera).
+        // Data 分量 读取 by scene::systems::camera::collect_camera).
         let data = world
             .get::<Camera>(entity)
             .expect("scene::components::Camera should be present");
@@ -1254,16 +1254,16 @@ mod tests {
         assert_eq!(data.near, 0.1);
         assert_eq!(data.far, 1000.0);
 
-        // Free-fly controller (yaw/pitch derived from the entity quaternion).
+        // Free-fly controller (yaw/pitch derived from the 实体 四元数
         // Position lives on the sibling LocalTransform, not on the controller.
         let ctrl = world
             .get::<FlyCameraController>(entity)
             .expect("FlyCameraController should be present");
-        // Identity quaternion -> forward (0,0,-1) -> yaw=π/2, pitch=0.
+        // Identity 四元数 -> 向前 (0,0,-1) -> yaw=π/2, pitch=0.
         assert!((ctrl.yaw - std::f32::consts::FRAC_PI_2).abs() < 1e-5);
         assert!(ctrl.pitch.abs() < 1e-5);
 
-        // Position is the LocalTransform translation.
+        // Position is the LocalTransform 平移
         let lt = world
             .get::<LocalTransform>(entity)
             .expect("LocalTransform should be present");
@@ -1272,9 +1272,9 @@ mod tests {
 
     #[test]
     fn spawn_camera_yaw_from_quaternion() {
-        // 90° rotation about +Y: quaternion (0, sin45, 0, cos45). A −Z forward
+        // 90° 旋转 about +Y: 四元数 (0, sin45, 0, cos45). A −Z 向前
         // rotated +90° about Y points to −X, which FlyCamera expresses as
-        // yaw=π (forward = [cos(π), 0, -sin(π)] = [-1, 0, 0]).
+        // yaw=π 向前 = [cos(π), 0, -sin(π)] = [-1, 0, 0]).
         let sqrt2_inv = std::f32::consts::FRAC_PI_4.sin(); // sin(45°)
         let e = RscnEntity {
             rotation: [0.0, sqrt2_inv, 0.0, sqrt2_inv],
@@ -1296,7 +1296,7 @@ mod tests {
         let ctrl = world
             .get::<FlyCameraController>(inst.all_entities[0])
             .expect("FlyCameraController should be present");
-        // ±π alias to the same direction; normalize to [0, π] for compare.
+        // ±π alias to the same direction; 归一化 to [0, π] for 比较
         let yaw_abs = ctrl.yaw.abs();
         assert!(
             (yaw_abs - std::f32::consts::PI).abs() < 1e-4,
@@ -1323,15 +1323,15 @@ mod tests {
         assert_eq!(inst.root_entities.len(), 1);
     }
 
-    /// Smoke-test the engine-builtin default scene committed at
-    /// `assets/scenes/default.rscn`. Ignored by default because it depends on
-    /// the repo working-tree layout (run from the repo root); run with:
+    /// Smoke-test the engine-builtin 默认 scene committed at
+    /// `assets/scenes/default.rscn`. Ignored by 默认 because it depends on
+    /// the repo working-tree 布局 (run from the repo root); run with:
     ///   `cargo test -p prism-engine load_committed_default_rscn -- --ignored --nocapture`
     /// Guards against the cooked scene drifting out of sync with the loader.
     #[test]
     #[ignore]
     fn load_committed_default_rscn() {
-        // Search both the repo root and the crate dir so the test works
+        // 搜索 both the repo root and the crate dir so the test works
         // regardless of which directory `cargo test` was invoked from.
         let candidates = [
             std::path::PathBuf::from("assets/scenes/default.rscn"),
@@ -1352,15 +1352,15 @@ mod tests {
             .load_and_spawn(&mut world, SceneSource::CookedFile(path.into()))
             .expect("default.rscn should parse");
 
-        // 6 entities: 1 skybox + 1 camera + 1 directional light + 3 point lights.
+        // 6 entities: 1 skybox + 1 相机 + 1 directional 光源 + 3 point lights.
         assert_eq!(inst.all_entities.len(), 6);
 
-        // Exactly one camera entity, with a FlyCameraController + Camera data
-        // component + LocalTransform (position lives on the transform).
+        // Exactly one 相机 实体 with a FlyCameraController + 相机 data
+        // 分量 + LocalTransform (position lives on the 变换
         let cameras: Vec<_> = world.query::<Camera>().collect();
         assert_eq!(cameras.len(), 1, "expected exactly one camera");
 
-        // The camera should be positioned at [0, 2.5, 18] (per default.scene.json).
+        // The 相机 should be positioned at [0, 2.5, 18] (per default.scene.json).
         let cam_entity = cameras[0].0;
         let lt = world
             .get::<LocalTransform>(cam_entity)
@@ -1372,18 +1372,18 @@ mod tests {
 }
 
 // ---------------------------------------------------------------------------
-// ECS-driven scene geometry collection for offline baking
+// ECS-driven scene geometry 集合 for offline baking
 // ---------------------------------------------------------------------------
 
-/// Collect geometry + material data from the ECS world for offline baking.
+/// Collect geometry + 材质 data from the ECS 世界 for offline baking.
 ///
 /// Queries all entities with [`MeshRenderer`] + [`WorldTransform`] components,
-/// loads their CPU vertex data via [`ResourceManager`], and returns:
+/// loads their CPU 顶点 data via [`ResourceManager`], and returns:
 ///
-/// - `instances` — one [`PtGeometryInstance`] per entity that carries
-///   a mesh + material (world-space vertices from `WorldTransform`).
-/// - `materials_bytes` — a flat `GpuMaterial[96]` array (one entry per
-///   unique material path, indexed by `PtGeometryInstance::material_slot`).
+/// - `instances` — one [`PtGeometryInstance`] per 实体 that carries
+/// a 网格 + 材质 (world-space 顶点 from `WorldTransform`).
+/// - `materials_bytes` — a flat `GpuMaterial[96]` 数组 (one entry per
+/// 唯一 材质 path, indexed by `PtGeometryInstance::material_slot`).
 pub fn collect_bake_instances(
     world: &World,
     rm: &mut ResourceManager,
@@ -1397,7 +1397,7 @@ pub fn collect_bake_instances(
     let mut gpu_materials: Vec<GpuMaterial> = Vec::new();
 
     for (_entity, mr, wt) in world.query2::<MeshRenderer, WorldTransform>() {
-        // Resolve material slot.
+        // 解析 材质 槽
         let material_slot = if !mr.material_path.is_empty() {
             *mat_cache
                 .entry(mr.material_path.clone())
@@ -1419,7 +1419,7 @@ pub fn collect_bake_instances(
             })
         };
 
-        // Get the CPU vertex data for this mesh.
+        // Get the CPU 顶点 data for this 网格
         let Some(mesh_info) = load_mesh_for_bake(rm, &mr.mesh_path) else {
             log::warn!(
                 "collect_bake_instances: skipping entity with missing mesh '{}'",
@@ -1516,12 +1516,12 @@ pub fn collect_bake_instances(
 }
 
 // -------------------------------------------------------------------
-// Internal helpers for collect_bake_instances
+// 内部 helpers for collect_bake_instances
 // -------------------------------------------------------------------
 
 // (transform_point / transform_normal replaced by glam Mat4 methods)
 
-/// Load a `MeshAsset` from the resource manager given its path.
+/// 加载 a `MeshAsset` from the 资源 管理器 given its path.
 fn load_mesh_for_bake(
     rm: &mut ResourceManager,
     path: &str,
@@ -1532,7 +1532,7 @@ fn load_mesh_for_bake(
     Some(asset.info)
 }
 
-/// Load a `MaterialAsset` from the resource manager given its path.
+/// 加载 a `MaterialAsset` from the 资源 管理器 given its path.
 fn load_material_for_bake(
     rm: &mut ResourceManager,
     path: &str,
@@ -1544,7 +1544,7 @@ fn load_material_for_bake(
     Some(asset.info)
 }
 
-/// Convert `RmatInfo` scalars into a `GpuMaterial` (texture slots = u32::MAX).
+/// 转换 `RmatInfo` scalars into a `GpuMaterial` 纹理 slots = u32::MAX).
 fn rmat_to_gpu(info: &prism_asset_runtime::RmatInfo) -> GpuMaterial {
     let s = &info.scalars;
     GpuMaterial {
@@ -1563,7 +1563,7 @@ fn rmat_to_gpu(info: &prism_asset_runtime::RmatInfo) -> GpuMaterial {
     }
 }
 
-/// Default material (pink error colour so missing materials are obvious).
+/// 默认 材质 (pink 错误 颜色 so 缺少 materials are obvious).
 fn default_gpu_material() -> GpuMaterial {
     GpuMaterial {
         base_color: [1.0, 0.0, 1.0, 1.0],

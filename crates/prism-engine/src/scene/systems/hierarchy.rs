@@ -1,21 +1,21 @@
-//! Hierarchy system — computes [`WorldTransform`] for every entity.
+//! Hierarchy 系统 — computes [`WorldTransform`] for every 实体
 //!
-//! Walks the scene tree from root entities (no [`Parent`]) in DFS order,
+//! Walks the scene 树 from root entities (no [`Parent`]) in DFS order,
 //! accumulating parent transforms: `world_child = world_parent × local_child`.
 //!
-//! Run once per frame **after** any local-transform or reparenting changes.
+//! Run once per 帧 **after** any local-transform or reparenting changes.
 
 use prism_ecs::{Entity, World};
 
 use crate::scene::components::*;
 
-/// Recompute [`WorldTransform`] for every entity in the hierarchy.
+/// Recompute [`WorldTransform`] for every 实体 in the hierarchy.
 ///
 /// - Roots (entities without [`Parent`]) get `WorldTransform = LocalTransform`.
 /// - Children get `WorldTransform = parent_WorldTransform × local_Transform`.
 ///
-/// This function is intended to be called once per frame, after all local
-/// transform changes have been applied.
+/// This 函数 is intended to be called once per 帧 after all 局部
+/// 变换 changes have been applied.
 pub fn hierarchy_system(world: &mut World) {
     // Collect root entities that have a LocalTransform.
     let roots: Vec<Entity> = world
@@ -33,9 +33,9 @@ pub fn hierarchy_system(world: &mut World) {
     }
 }
 
-/// Recursively visit children, compute and store their world transform.
+/// Recursively visit children, 计算 and 存储 their 世界 变换
 fn visit_children(world: &mut World, parent: Entity, parent_world: glam::Mat4) {
-    // Clone the children list so we don't hold a borrow on `world` during the
+    // Clone the children 列表 so we don't hold a 借用 on 世界 during the
     // recursive calls that may mutate components.
     let children = world.get::<Children>(parent).cloned().unwrap_or_default();
 
@@ -105,7 +105,7 @@ mod tests {
         hierarchy_system(&mut world);
 
         let cw = world.get::<WorldTransform>(child).unwrap().0;
-        // Expect translation = [2, 3, 0]
+        // Expect 平移 = [2, 3, 0]
         assert!((cw[3][0] - 2.0).abs() < 1e-6, "child x = {}", cw[3][0]);
         assert!((cw[3][1] - 3.0).abs() < 1e-6, "child y = {}", cw[3][1]);
         assert!((cw[3][2] - 0.0).abs() < 1e-6, "child z = {}", cw[3][2]);
@@ -161,7 +161,7 @@ mod tests {
 
     #[test]
     fn orphan_uses_local_transform() {
-        // Entity with Parent pointing to a dead entity → treated as root.
+        // 实体 with Parent pointing to a dead 实体 → treated as root.
         let mut world = World::new();
         let parent = world.spawn();
         let child = world.spawn();
@@ -181,19 +181,19 @@ mod tests {
         world.despawn(parent); // parent dead
         hierarchy_system(&mut world);
 
-        // Child's parent is dead — it has no live parent chain, so
-        // hierarchy_system treats it as root (no Parent component → root).
-        // But the Parent component still exists! The despawn only removes
-        // the entity, not the components on other entities.
+        // Child's parent is dead — it has no live parent 链 so
+        // hierarchy_system treats it as root (no Parent 分量 → root).
+        // But the Parent 分量 still 存在 The 销毁 only removes
+        // the 实体 not the components on other entities.
         //
         // So the child still says Parent(dead_entity). Since the parent is
         // dead, visit_children won't reach it from the root. But the child
-        // won't be in the roots list because it HAS a Parent component.
+        // won't be in the roots 列表 because it HAS a Parent 分量
         //
-        // Result: child's WorldTransform stays as whatever it was before
-        // (the dummy value we set).
+        // 结果 child's WorldTransform stays as whatever it was before
+        // (the dummy value we 集合
         let cw = world.get::<WorldTransform>(child).unwrap().0;
-        // Still the dummy value since hierarchy_system didn't update it.
+        // Still the dummy value since hierarchy_system didn't 更新 it.
         assert_eq!(cw.x_axis[0], 0.0);
     }
 
@@ -205,7 +205,7 @@ mod tests {
 
     #[test]
     fn single_entity_no_transform() {
-        // Entity without LocalTransform — should be skipped silently.
+        // 实体 without LocalTransform — should be skipped silently.
         let mut world = World::new();
         let e = world.spawn();
         // No LocalTransform

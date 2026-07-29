@@ -1,4 +1,4 @@
-//! Audio engine — owns the Firewheel context and manages sound playback.
+//! 音频 engine — owns the Firewheel context and manages 声音 playback.
 
 use std::num::NonZeroU32;
 use std::time::Duration;
@@ -12,29 +12,29 @@ use firewheel::nodes::sampler::*;
 
 use crate::error::AudioError;
 
-/// Decoded audio data ready for playback.
+/// Decoded 音频 data ready for playback.
 #[derive(Clone)]
 pub struct AudioData {
-    /// Interleaved f32 samples (e.g. L,R,L,R for stereo).
+    /// Interleaved f32 samples (e.g. L,R,L,R for 立体声
     pub samples: Vec<f32>,
-    /// Sample rate in Hz (e.g. 44100).
+    /// 样本 rate in Hz (e.g. 44100).
     pub sample_rate: u32,
-    /// Number of channels (1 = mono, 2 = stereo).
+    /// Number of channels (1 = 单声道 2 = 立体声
     pub channels: u16,
-    /// Total duration.
+    /// 总计 持续时间
     pub duration: Duration,
 }
 
-/// Handle to control a playing sound.
+/// Handle to 控制 a playing 声音
 ///
-/// Use [`AudioEngine`] methods to control playback:
+/// Use [`AudioEngine`] methods to 控制 playback:
 /// `engine.stop(&handle)`, `engine.set_volume(&handle, 0.5)`, etc.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct PlaybackHandle(u64);
 
 impl PlaybackHandle {
-    /// Returns `false` when this handle was produced by a failed `play()` call
-    /// (e.g. empty audio or graph error) and will never refer to a real sound.
+    /// Returns `false` when this handle was produced by a failed `play()` 调用
+    /// (e.g. 空 音频 or 图 错误 and will never refer to a real 声音
     pub fn is_valid(&self) -> bool {
         self.0 != 0
     }
@@ -42,16 +42,16 @@ impl PlaybackHandle {
 
 // ---------------------------------------------------------------------------
 
-/// Configuration for the audio engine.
+/// 配置 for the 音频 engine.
 #[derive(Clone)]
 pub struct AudioConfig {
-    /// Preferred audio device name. `None` = system default.
+    /// Preferred 音频 设备 name. `None` = 系统 默认
     pub device_name: Option<String>,
-    /// Output sample rate (default: 44100).
+    /// 输出 样本 rate 默认 44100).
     pub sample_rate: u32,
-    /// Number of output channels (default: 2 = stereo).
+    /// Number of 输出 channels 默认 2 = 立体声
     pub channels: u16,
-    /// Master volume 0.0–1.0 (default: 1.0).
+    /// Master 音量 0.0–1.0 默认 1.0).
     pub master_volume: f32,
 }
 
@@ -71,22 +71,22 @@ impl Default for AudioConfig {
 struct ActiveSound {
     handle: PlaybackHandle,
     node_id: NodeID,
-    /// Local copy so we can call `sync_*_event()`.
+    /// 局部 复制 so we can 调用 `sync_*_event()`.
     sampler: SamplerNode,
 }
 
-/// The main audio engine.
+/// The main 音频 engine.
 ///
 /// ```ignore
 /// let mut engine = AudioEngine::new(AudioConfig::default())?;
-/// engine.update();  // call each frame
+/// engine.update(); // 调用 each 帧
 ///
 /// let snd = engine.play(&my_audio);
 /// engine.set_volume(&snd, 0.5);
 /// ```
 pub struct AudioEngine {
     ctx: FirewheelContext,
-    /// Kept alive so the audio stream continues; drop order matters.
+    /// Kept alive so the 音频 stream continues; 放置 order matters.
     _stream: Option<CpalStream>,
     active: Vec<ActiveSound>,
     next_id: u64,
@@ -95,10 +95,10 @@ pub struct AudioEngine {
 }
 
 impl AudioEngine {
-    /// Create a new audio engine and start the audio stream.
+    /// 创建 a new 音频 engine and start the 音频 stream.
     ///
-    /// If the audio device cannot be opened, a warning is logged but the engine
-    /// still runs (silent mode) — the game should never crash due to audio.
+    /// If the 音频 设备 cannot be opened, a 警告 is logged but the engine
+    /// still runs (silent 众数 — the game should never 崩溃 due to 音频
     pub fn new(config: AudioConfig) -> Result<Self, AudioError> {
         let channels = config.channels;
 
@@ -108,7 +108,7 @@ impl AudioEngine {
             ..Default::default()
         });
 
-        // Attempt to activate the cpal audio stream.
+        // Attempt to activate the cpal 音频 stream.
         let stream = match Self::try_start_stream(&mut ctx, &config) {
             Ok(stream) => {
                 ::log::info!(
@@ -169,7 +169,7 @@ impl AudioEngine {
         CpalStream::new(ctx, cpal_config).map_err(|e| AudioError::Init(e.to_string()))
     }
 
-    /// Must be called once per frame (preferably at the end).
+    /// Must be called once per 帧 (preferably at the 结束
     ///
     /// Removes finished sounds and advances the Firewheel context.
     pub fn update(&mut self) {
@@ -196,7 +196,7 @@ impl AudioEngine {
         let _ = self.ctx.update();
     }
 
-    /// Play a decoded sound. Returns a handle for playback control.
+    /// Play a decoded 声音 Returns a handle for playback 控制
     pub fn play(&mut self, audio: &AudioData) -> PlaybackHandle {
         let id = PlaybackHandle(self.next_id);
         self.next_id += 1;
@@ -208,7 +208,7 @@ impl AudioEngine {
             return id;
         }
 
-        // Convert interleaved → planar for DecodedAudioF32.
+        // 转换 interleaved → planar for DecodedAudioF32.
         let mut planar: Vec<Vec<f32>> = vec![vec![0.0f32; num_frames]; channels];
         for (i, &sample) in audio.samples.iter().enumerate() {
             let ch = i % channels;
@@ -224,12 +224,12 @@ impl AudioEngine {
             }
         };
 
-        // Build the sample resource as ArcGc<dyn SampleResource>.
+        // 构建 the 样本 资源 as ArcGc<dyn SampleResource>.
         let decoded_f32 = symphonium::DecodedAudioF32::new(planar, sample_rate, sample_rate);
         let decoded: symphonium::DecodedAudio = decoded_f32.into();
         let resource = firewheel::dyn_symphonium_resource(decoded);
 
-        // Create a sampler node with initial state.
+        // 创建 a 采样器 node with initial 状态
         let sampler = SamplerNode {
             volume: Volume::from_percent(self.master_volume * 100.0),
             play: Notify::new(true),
@@ -253,11 +253,11 @@ impl AudioEngine {
             }
         };
 
-        // Queue the sample resource.
+        // 队列 the 样本 资源
         self.ctx
             .queue_event_for(node_id, SamplerNode::set_dyn_sample_event(resource));
 
-        // Connect to the graph output (stereo pair).
+        // Connect to the 图 输出 立体声 pair).
         let out = self.ctx.graph_out_node_id();
         if let Err(e) = self.ctx.connect_stereo(node_id, out, false) {
             ::log::error!("Failed to connect sampler to graph output: {e}");
@@ -274,7 +274,7 @@ impl AudioEngine {
         id
     }
 
-    /// Stop a sound immediately.
+    /// Stop a 声音 immediately.
     pub fn stop(&mut self, handle: &PlaybackHandle) {
         if let Some(idx) = self.active.iter().position(|s| s.handle == *handle) {
             let _ = self.ctx.remove_node(self.active[idx].node_id);
@@ -282,7 +282,7 @@ impl AudioEngine {
         }
     }
 
-    /// Set volume (0.0 = silent, 1.0 = original) for a playing sound.
+    /// 集合 音量 (0.0 = silent, 1.0 = original) for a playing 声音
     pub fn set_volume(&mut self, handle: &PlaybackHandle, volume: f32) {
         let Some(s) = self
             .active
@@ -297,7 +297,7 @@ impl AudioEngine {
             .queue_event_for(s.node_id, s.sampler.sync_volume_event());
     }
 
-    /// Pause a sound (freezes playback position).
+    /// Pause a 声音 (freezes playback position).
     pub fn pause(&mut self, handle: &PlaybackHandle) {
         let Some(s) = self
             .active
@@ -311,7 +311,7 @@ impl AudioEngine {
             .queue_event_for(s.node_id, s.sampler.sync_play_event());
     }
 
-    /// Resume a paused sound.
+    /// Resume a paused 声音
     pub fn resume(&mut self, handle: &PlaybackHandle) {
         let Some(s) = self
             .active
@@ -325,7 +325,7 @@ impl AudioEngine {
             .queue_event_for(s.node_id, s.sampler.sync_play_event());
     }
 
-    /// Check whether a sound is currently playing.
+    /// Check whether a 声音 is currently playing.
     pub fn is_playing(&self, handle: &PlaybackHandle) -> bool {
         let Some(s) = self.active.iter().find(|s| s.handle == *handle) else {
             return false;
@@ -349,17 +349,17 @@ impl AudioEngine {
         }
     }
 
-    /// Set master volume (0.0–1.0). Affects subsequently played sounds.
+    /// 集合 master 音量 (0.0–1.0). Affects subsequently played sounds.
     pub fn set_master_volume(&mut self, volume: f32) {
         self.master_volume = volume.clamp(0.0, 1.0);
     }
 
-    /// Current master volume.
+    /// 当前 master 音量
     pub fn master_volume(&self) -> f32 {
         self.master_volume
     }
 
-    /// Whether the audio stream is running.
+    /// Whether the 音频 stream is running.
     pub fn is_active(&self) -> bool {
         self._stream.is_some()
     }

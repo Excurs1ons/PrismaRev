@@ -1,8 +1,8 @@
-//! macOS crash dialog: `osascript` (AppleScript `display dialog`) + `pbcopy`.
+//! macOS 崩溃 对话框 `osascript` (AppleScript `display 对话框 + `pbcopy`.
 //!
-//! Invokes `/usr/bin/osascript` with a `display dialog ... buttons {"Copy & Exit", "Exit"}`
-//! script. `display dialog` is modal and blocks until the user picks a button.
-//! `pbcopy` fills the pasteboard with the error text.
+//! Invokes `/usr/bin/osascript` with a `display 对话框 ... buttons 复制 & Exit", "Exit"}`
+//! script. `display 对话框 is modal and blocks until the user picks a 按钮
+//! `pbcopy` fills the pasteboard with the 错误 text.
 
 use std::io::Write;
 use std::process::Command;
@@ -10,15 +10,15 @@ use std::process::Command;
 use super::CrashChoice;
 
 pub fn show(title: &str, message: &str) -> CrashChoice {
-    // Escape double-quotes and backslashes for the AppleScript string literal.
+    // Escape double-quotes and backslashes for the AppleScript 字符串 literal.
     let esc = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"");
     let title_e = esc(title);
-    // Replace literal newlines with AppleScript newline concatenation so the
-    // dialog shows real line breaks instead of a single run-on line.
+    // 替换 literal newlines with AppleScript newline concatenation so the
+    // 对话框 shows real line breaks instead of a single run-on line.
     let msg_e = esc(message).replace('\n', "\" & return & \"");
 
-    // "Copy & Exit" is the default (first button). `giving up after 0` means
-    // "no timeout" here is not used; we let it block.
+    // 复制 & Exit" is the 默认 第一个 按钮 `giving 上 after 0` means
+    // "no 超时 here is not used; we let it 块
     let script = format!(
         "display dialog \"{msg_e}\" with title \"{title_e}\" \
          buttons {{\"Copy & Exit\", \"Exit\"}} default button \"Copy & Exit\" \
@@ -27,7 +27,7 @@ pub fn show(title: &str, message: &str) -> CrashChoice {
 
     match run_osascript(&script) {
         Ok(output) => {
-            // `osascript` prints `button returned:Copy & Exit` to stdout.
+            // `osascript` prints 按钮 returned:Copy & Exit` to stdout.
             if output.contains("Copy & Exit") {
                 CrashChoice::CopyAndExit
             } else {

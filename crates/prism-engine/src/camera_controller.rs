@@ -18,15 +18,15 @@ impl Default for OrbitCameraController {
 
 impl OrbitCameraController {
     pub fn update(&self, camera: &mut OrbitCamera, input: &InputManager) {
-        // Left mouse drag → orbit
+        // 左 鼠标 拖拽 → orbit
         if input.mouse_held(MouseButton::Left) {
             let d = input.mouse_delta();
             camera.theta -= d[0] as f32 * self.sensitivity;
             camera.phi -= d[1] as f32 * self.sensitivity;
-            // Clamp elevation to avoid gimbal lock
+            // 限定 elevation to avoid gimbal lock
             camera.phi = camera.phi.clamp(0.01, std::f32::consts::PI - 0.01);
         }
-        // Scroll → zoom
+        // 滚动 → zoom
         let scroll = input.scroll_delta() as f32;
         if scroll.abs() > 0.0 {
             camera.distance *= 1.0 - scroll * self.scroll_sensitivity;
@@ -53,7 +53,7 @@ mod tests {
         let ctrl = OrbitCameraController::default();
         let mut input = InputManager::new();
 
-        // Press left button and move mouse right + down
+        // Press 左 按钮 and 移动 鼠标 右 + 下
         input.handle_mouse_button(MouseButton::Left, ElementState::Pressed);
         input.handle_mouse_move([100.0, 50.0]); // delta = [100, 50]
 
@@ -61,9 +61,9 @@ mod tests {
         let old_phi = camera.phi;
         ctrl.update(&mut camera, &input);
 
-        // theta decreases with rightward drag (positive delta x)
+        // theta decreases with rightward 拖拽 正 delta x)
         assert!(camera.theta < old_theta);
-        // phi decreases with downward drag (positive delta y)
+        // phi decreases with downward 拖拽 正 delta y)
         assert!(camera.phi < old_phi);
     }
 
@@ -93,7 +93,7 @@ mod tests {
         let old_dist = camera.distance;
         ctrl.update(&mut camera, &input);
 
-        // Positive scroll = zoom in (distance decreases)
+        // 正 滚动 = zoom in 距离 decreases)
         assert!(camera.distance < old_dist);
     }
 
@@ -116,7 +116,7 @@ mod tests {
         let ctrl = OrbitCameraController::default();
         let mut input = InputManager::new();
 
-        // Drag upward to push phi past 0.01
+        // 拖拽 upward to 推送 phi past 0.01
         input.handle_mouse_button(MouseButton::Left, ElementState::Pressed);
         input.handle_mouse_move([0.0, -50000.0]); // huge upward drag
         ctrl.update(&mut camera, &input);

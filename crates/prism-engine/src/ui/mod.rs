@@ -3,7 +3,7 @@
 //! # 架构
 //!
 //! ```text
-//! UI Entity = Node + Style + ComputedLayout + (Text | Interaction)
+//! UI 实体 = Node + Style + ComputedLayout + (Text | Interaction)
 //!
 //! [Layout System]    读取 Style → 写入 ComputedLayout
 //! [Render System]    读取 ComputedLayout + Text → 生成 UiDrawList

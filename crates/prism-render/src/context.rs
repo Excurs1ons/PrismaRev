@@ -1,7 +1,7 @@
-//! Vulkan device context: instance, physical device, logical device, queues.
+//! Vulkan 设备 context: 实例 物理 设备 逻辑 设备 queues.
 //!
-//! Owns the long-lived Vulkan handles needed before any rendering can happen.
-//! Swapchain and per-frame resources live in [`crate::swapchain`] and
+//! Owns the long-lived Vulkan handles needed before any 渲染 can happen.
+//! 交换链 and per-frame resources live in [`crate::swapchain`] and
 //! [`crate::renderer`].
 
 use std::ffi::{c_char, CStr, CString};
@@ -11,44 +11,44 @@ use ash::vk;
 
 use crate::capabilities::{self, RayTracingCaps};
 
-/// Validation layers requested on debug builds / when the loader is present.
+/// 验证 layers requested on 调试 builds / when the loader is present.
 const VALIDATION_LAYERS: [&str; 1] = ["VK_LAYER_KHRONOS_validation"];
 
-/// All the long-lived Vulkan state the renderer needs to do anything.
+/// All the long-lived Vulkan 状态 the 渲染器 needs to do anything.
 pub struct VulkanContext {
     pub entry: ash::Entry,
     pub instance: ash::Instance,
     pub physical_device: vk::PhysicalDevice,
     pub device: ash::Device,
 
-    /// Queue family index that supports both graphics and presentation.
+    /// 队列 family 索引 that supports both graphics and presentation.
     pub graphics_queue_family: u32,
     pub graphics_queue: vk::Queue,
 
-    /// Properties of the chosen physical device, kept for swapchain queries.
+    /// Properties of the chosen 物理 设备 kept for 交换链 queries.
     pub physical_device_properties: vk::PhysicalDeviceProperties,
     pub physical_device_memory_properties: vk::PhysicalDeviceMemoryProperties,
 
-    /// Probed ray-tracing capabilities of the chosen physical device.
-    /// All fields are `false` on non-RT hardware; callers can branch freely.
+    /// Probed ray-tracing capabilities of the chosen 物理 设备
+    /// All fields are `false` on non-RT hardware; callers can 分支 freely.
     pub rt_caps: RayTracingCaps,
 
-    /// Acceleration structure function pointers (loaded when the
-    /// `VK_KHR_acceleration_structure` extension is enabled; `None` otherwise).
+    /// 加速度 structure 函数 pointers (loaded when the
+    /// `VK_KHR_acceleration_structure` 扩展 is 启用 `None` otherwise).
     pub acceleration_structure_fn: Option<ash::khr::acceleration_structure::Device>,
 
-    /// Device extension names that were actually enabled (RT extensions are
+    /// 设备 扩展 names that were actually 启用 (RT extensions are
     /// conditional; the rest are always-on). Stored for later RT modules.
     enabled_extensions: Vec<CString>,
 
-    // Held for drop ordering / FFI lifetime.
+    // Held for 放置 ordering / FFI 生命周期
     _debug_messenger: Option<vk::DebugUtilsMessengerEXT>,
 }
 
 impl VulkanContext {
-    /// Create the instance and device.
+    /// 创建 the 实例 and 设备
     ///
-    /// `window_extensions` are the instance extensions the surface needs
+    /// `window_extensions` are the 实例 extensions the 表面 needs
     /// (obtained via [`ash_window::enumerate_required_extensions`]).
     pub fn new(window_extensions: &[&str]) -> anyhow::Result<Self> {
         use anyhow::Context as _;
@@ -68,8 +68,8 @@ impl VulkanContext {
         let physical_device_memory_properties =
             unsafe { instance.get_physical_device_memory_properties(physical_device) };
 
-        // Probe ray-tracing capabilities *before* device creation so we can
-        // conditionally enable extensions and chain the right feature structs.
+        // Probe ray-tracing capabilities *before* 设备 creation so we can
+        // conditionally enable extensions and 链 the 右 特性 structs.
         let rt_caps = unsafe { capabilities::probe(&instance, physical_device) };
         log::info!("RT capabilities: {rt_caps}");
 
@@ -86,7 +86,7 @@ impl VulkanContext {
 
         let graphics_queue = unsafe { device.get_device_queue(graphics_queue_family, 0) };
 
-        // Load RT extension function pointers if the extension was enabled.
+        // 加载 RT 扩展 函数 pointers if the 扩展 was 启用
         let acceleration_structure_fn = if rt_caps.acceleration_structure {
             Some(ash::khr::acceleration_structure::Device::new(
                 &instance, &device,
@@ -111,7 +111,7 @@ impl VulkanContext {
         })
     }
 
-    /// Name an object in the debug layer (no-op outside debug builds / no layer).
+    /// Name an 对象 in the 调试 层 (no-op outside 调试 builds / no 层
     pub fn name_object(&self, ty: vk::ObjectType, handle: u64, name: &str) {
         if self._debug_messenger.is_some() {
             let ext = ash::ext::debug_utils::Device::new(&self.instance, &self.device);
@@ -130,16 +130,16 @@ impl VulkanContext {
         }
     }
 
-    /// Names of the device extensions that were enabled at device creation.
+    /// Names of the 设备 extensions that were 启用 at 设备 creation.
     /// `VK_KHR_swapchain` is included only for windowed contexts (a headless
-    /// context like the GI baker enables no surface, so swapchain is omitted);
+    /// context like the 全局光照 baker enables no 表面 so 交换链 is omitted);
     /// RT extensions are included when the hardware supports them. Used by RT
-    /// modules to decide which code path to take.
+    /// modules to decide which 代码 path to take.
     pub fn enabled_extension_names(&self) -> &[CString] {
         &self.enabled_extensions
     }
 
-    /// Convenience: was a specific device extension enabled?
+    /// Convenience: was a specific 设备 扩展 启用
     pub fn has_extension(&self, name: &CStr) -> bool {
         self.enabled_extensions.iter().any(|c| c.as_c_str() == name)
     }
@@ -148,12 +148,12 @@ impl VulkanContext {
 impl Drop for VulkanContext {
     fn drop(&mut self) {
         unsafe {
-            // Destroy the debug messenger *before* the instance. The old code
-            // guarded the destroy on `debug_utils_instance()`, which itself
+            // 销毁 the 调试 messenger *before* the 实例 The old 代码
+            // guarded the 销毁 on `debug_utils_instance()`, which itself
             // checks `self._debug_messenger.is_some()` -- but we `take()` the
-            // messenger first, so the guard saw `None` and the messenger leaked
-            // (VUID-vkDestroyInstance-instance-00629). Build the ext handle
-            // unconditionally; it's a no-op when the extension isn't enabled.
+            // messenger 第一个 so the guard saw `None` and the messenger leaked
+            // (VUID-vkDestroyInstance-instance-00629). 构建 the ext handle
+            // unconditionally; it's a no-op when the 扩展 isn't 启用
             if let Some(messenger) = self._debug_messenger.take() {
                 let ext = ash::ext::debug_utils::Instance::new(&self.entry, &self.instance);
                 ext.destroy_debug_utils_messenger(messenger, None);
@@ -165,7 +165,7 @@ impl Drop for VulkanContext {
 }
 
 // ---------------------------------------------------------------------------
-// instance
+// 实例
 // ---------------------------------------------------------------------------
 
 fn create_instance(
@@ -182,8 +182,8 @@ fn create_instance(
         .engine_version(vk::make_api_version(0, 0, 1, 0))
         .api_version(vk::API_VERSION_1_2);
 
-    // Instance extensions: surface + platform. Debug utils only in debug builds
-    // (it's a debugging aid; the validation layer warns if enabled in release).
+    // 实例 extensions: 表面 + platform. 调试 utils only in 调试 builds
+    // (it's a debugging aid; the 验证 层 warns if 启用 in 释放
     let mut extension_names: Vec<CString> = window_extensions
         .iter()
         .map(|s| CString::new(*s).unwrap())
@@ -193,7 +193,7 @@ fn create_instance(
     }
     let extension_ptrs: Vec<*const c_char> = extension_names.iter().map(|c| c.as_ptr()).collect();
 
-    // Validation layers only in debug builds.
+    // 验证 layers only in 调试 builds.
     let enabled_layers: Vec<CString> = if enable_debug {
         VALIDATION_LAYERS
             .iter()
@@ -218,7 +218,7 @@ fn create_instance(
 }
 
 // ---------------------------------------------------------------------------
-// physical device
+// 物理 设备
 // ---------------------------------------------------------------------------
 
 fn pick_physical_device(instance: &ash::Instance) -> anyhow::Result<vk::PhysicalDevice> {
@@ -226,10 +226,10 @@ fn pick_physical_device(instance: &ash::Instance) -> anyhow::Result<vk::Physical
     let devices = unsafe { instance.enumerate_physical_devices() }
         .context("failed to enumerate physical devices")?;
 
-    // Prefer a discrete GPU, fall back to anything with a graphics queue.
-    // Bonus points for ray-tracing support: if two GPUs tie on device type,
+    // Prefer a 离散 GPU, fall 后 to anything with a graphics 队列
+    // Bonus points for ray-tracing support: if two GPUs tie on 设备 类型
     // the one with RT wins. RT is *not* required -- a non-RT GPU is still
-    // selected and simply renders via the raster path.
+    // selected and simply renders via the 光栅化 path.
     let mut best = None;
     let mut best_score = -1i32;
     for device in devices {
@@ -240,20 +240,20 @@ fn pick_physical_device(instance: &ash::Instance) -> anyhow::Result<vk::Physical
             vk::PhysicalDeviceType::VIRTUAL_GPU => 1,
             _ => 0,
         };
-        // Must have a graphics queue family or it's useless to us.
+        // Must have a graphics 队列 family or it's useless to us.
         if pick_graphics_queue_family(instance, device).is_some() && score > best_score {
             best_score = score;
             best = Some(device);
         }
     }
     let device = best.ok_or_else(|| anyhow::anyhow!("no GPU with a graphics queue found"))?;
-    // The path-trace pass uses a 144-byte push-constant block (PtPushConstants,
-    // padded per std140: the trailing `ray_max_distance` float rounds the struct
-    // up to a 16-byte multiple). Vulkan only guarantees 128 bytes, so verify
-    // the device actually supports more before we write past the guaranteed
+    // The path-trace pass uses a 144-byte push-constant 块 (PtPushConstants,
+    // padded per std140: the trailing `ray_max_distance` 浮点数 rounds the 结构体
+    // 上 to a 16-byte multiple). Vulkan only guarantees 128 字节 so 验证
+    // the 设备 actually supports more before we 写入 past the guaranteed
     // range. All desktop GPUs and modern mobile parts advertise 256; very old
-    // / emulator devices may only do 128 and would silently truncate the PT
-    // push constants.
+    // / emulator devices may only do 128 and would silently 截断 the PT
+    // 推送 constants.
     let props = unsafe { instance.get_physical_device_properties(device) };
     let max_pc = props.limits.max_push_constants_size;
     anyhow::ensure!(
@@ -278,7 +278,7 @@ fn pick_graphics_queue_family(
 }
 
 // ---------------------------------------------------------------------------
-// device
+// 设备
 // ---------------------------------------------------------------------------
 
 fn create_device(
@@ -294,40 +294,40 @@ fn create_device(
         .queue_family_index(graphics_queue_family)
         .queue_priorities(&priorities)];
 
-    // Query the available legacy features (validation layer wants this) and
-    // mirror the ones we need into the Features2 chain.
+    // 查询 the available legacy features 验证 层 wants this) and
+    // mirror the ones we need into the Features2 链
     let available_features = unsafe { instance.get_physical_device_features(physical_device) };
     let legacy_features = vk::PhysicalDeviceFeatures {
         shader_clip_distance: available_features.shader_clip_distance,
-        // MRT pipelines (ScenePass writes color + view-space normal) use
-        // different blend states per attachment (color = alpha blend, normal =
-        // no blend). Vulkan requires `independentBlend` for that; without it
-        // every attachment must share the same blend config. Universally
-        // supported on desktop + modern Android.
+        // MRT pipelines (ScenePass writes 颜色 + view-space 法线 use
+        // different 混合 states per 附件 颜色 = Alpha 混合 法线 =
+        // no 混合 Vulkan requires `independentBlend` for that; without it
+        // every 附件 must share the same 混合 配置 Universally
+        // supported on desktop + modern Android
         independent_blend: available_features.independent_blend,
         ..vk::PhysicalDeviceFeatures::default()
     };
 
-    // --- Build the extension list: swapchain (windowed only) + RT (conditional) ---
-    // VK_KHR_swapchain requires VK_KHR_surface on the instance; a headless
-    // context (baker) enables no surface instance extensions, so requesting
-    // swapchain there trips validation. Only enable it when a surface exists.
+    // --- 构建 the 扩展 列表 交换链 (windowed only) + RT (conditional) ---
+    // VK_KHR_swapchain requires VK_KHR_surface on the 实例 a headless
+    // context (baker) enables no 表面 实例 extensions, so requesting
+    // 交换链 there trips 验证 Only enable it when a 表面 存在
     let mut enabled_extensions: Vec<CString> = Vec::new();
     if has_surface {
         enabled_extensions.push(ash::khr::swapchain::NAME.into());
     }
     // `cmd_pipeline_barrier2` / `ImageMemoryBarrier2` (used unconditionally in
-    // `buffer.rs` for texture uploads and mip generation) come from
-    // VK_KHR_synchronization2. We target a Vulkan 1.2 instance, where the core
+    // `buffer.rs` for 纹理 uploads and mip generation) come from
+    // VK_KHR_synchronization2. We 目标 a Vulkan 1.2 实例 where the core
     // `vkCmdPipelineBarrier2` symbol is not exposed; only the `...KHR` variant is
-    // available once this extension is enabled. `buffer.rs` therefore drives the
-    // barrier through `ash::khr::synchronization2::Device`, which resolves the
-    // KHR entry point. The extension must be enabled here or that fails to load.
+    // available once this 扩展 is 启用 `buffer.rs` therefore drives the
+    // 屏障 through `ash::khr::synchronization2::Device`, which resolves the
+    // KHR entry point. The 扩展 must be 启用 here or that fails to 加载
     enabled_extensions.push(ash::khr::synchronization2::NAME.into());
     // `cmd_blit_image2` (used by mip generation in `buffer.rs`) is a Vulkan 1.3
-    // core symbol not exposed on a 1.2 device; it is promoted from
-    // VK_KHR_copy_commands2. Enable the extension so the KHR entry point loads,
-    // and call it through `ash::khr::copy_commands2::Device` in `buffer.rs`.
+    // core symbol not exposed on a 1.2 设备 it is promoted from
+    // VK_KHR_copy_commands2. Enable the 扩展 so the KHR entry point loads,
+    // and 调用 it through `ash::khr::copy_commands2::Device` in `buffer.rs`.
     enabled_extensions.push(ash::khr::copy_commands2::NAME.into());
     for rt_ext in capabilities::rt_extension_names(rt_caps) {
         enabled_extensions.push(rt_ext.into());
@@ -335,46 +335,46 @@ fn create_device(
     let extension_ptrs: Vec<*const c_char> =
         enabled_extensions.iter().map(|c| c.as_ptr()).collect();
 
-    // --- Build the VkPhysicalDeviceFeatures2 pNext chain ---
-    // Each feature struct is declared out here so it outlives the create_info
-    // borrow (same pattern as validation_features in create_instance).
+    // --- 构建 the VkPhysicalDeviceFeatures2 pNext 链 ---
+    // Each 特性 结构体 is declared out here so it outlives the create_info
+    // 借用 (same 模式 as validation_features in create_instance).
     let mut vk11 = vk::PhysicalDeviceVulkan11Features::default();
     let mut vk12 = vk::PhysicalDeviceVulkan12Features::default();
     let mut accel_features = vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default();
     let mut rt_pipeline_features = vk::PhysicalDeviceRayTracingPipelineFeaturesKHR::default();
     let mut ray_query_features = vk::PhysicalDeviceRayQueryFeaturesKHR::default();
-    // `synchronization2` is a Vulkan 1.3 promoted feature. On this 1.2 device
+    // `synchronization2` is a Vulkan 1.3 promoted 特性 On this 1.2 设备
     // it is only available via the VK_KHR_synchronization2 *feature* (not just
-    // the extension): enabling the extension exposes the entry points, but the
-    // feature bit must also be turned on or `vkCmdPipelineBarrier2KHR` is
-    // illegal. `buffer.rs` issues these barriers unconditionally for texture
+    // the 扩展 enabling the 扩展 exposes the entry points, but the
+    // 特性 bit must also be turned on or `vkCmdPipelineBarrier2KHR` is
+    // illegal. `buffer.rs` issues these barriers unconditionally for 纹理
     // upload + mip generation.
     let mut sync2_features = vk::PhysicalDeviceSynchronization2FeaturesKHR::default();
 
-    // Vulkan 1.1 feature: shaderDrawParameters is needed when a shader
-    // references SV_VertexID (DrawParameters SPIR-V capability). The skybox
-    // vertex shader uses vid%8 to select cube corners without a vertex buffer.
+    // Vulkan 1.1 特性 shaderDrawParameters is needed when a 着色器
+    // references SV_VertexID (DrawParameters SPIR-V 能力 The skybox
+    // 顶点 着色器 uses vid%8 to select cube corners without a 顶点 缓冲区
     vk11.shader_draw_parameters = vk::TRUE;
 
-    // Layer 1: Vulkan 1.2 promoted features that RT depends on.
+    // 层 1: Vulkan 1.2 promoted features that RT depends on.
     if rt_caps.buffer_device_address {
         vk12.buffer_device_address = vk::TRUE;
     }
     if rt_caps.descriptor_indexing {
         vk12.descriptor_indexing = vk::TRUE;
         // Bindless (see bindless.rs): a runtime-sized, partially-bound,
-        // update-after-bind array of sampled images indexed by u32 handle.
-        // These sub-features are all part of Vulkan 1.2 descriptor indexing;
-        // enabling them here lets BindlessTextureTable allocate its set.
+        // update-after-bind 数组 of sampled images indexed by u32 handle.
+        // These sub-features are all part of Vulkan 1.2 描述符 indexing;
+        // enabling them here lets BindlessTextureTable allocate its 集合
         vk12.runtime_descriptor_array = vk::TRUE;
         vk12.descriptor_binding_partially_bound = vk::TRUE;
         vk12.descriptor_binding_sampled_image_update_after_bind = vk::TRUE;
         vk12.descriptor_binding_variable_descriptor_count = vk::TRUE;
         vk12.shader_sampled_image_array_non_uniform_indexing = vk::TRUE;
-        // PathTracePass (and potentially other compute passes) updates
-        // STORAGE_IMAGE and STORAGE_BUFFER descriptors every frame while
-        // previous-frame command buffers are still in flight, which requires
-        // the descriptor-binding-level update-after-bind feature.
+        // PathTracePass (and potentially other 计算 passes) updates
+        // STORAGE_IMAGE and STORAGE_BUFFER descriptors every 帧 while
+        // previous-frame 命令 buffers are still in flight, which requires
+        // the descriptor-binding-level update-after-bind 特性
         vk12.descriptor_binding_storage_image_update_after_bind = vk::TRUE;
         vk12.descriptor_binding_storage_buffer_update_after_bind = vk::TRUE;
     }
@@ -389,11 +389,11 @@ fn create_device(
         .push_next(&mut vk12)
         .push_next(&mut sync2_features);
 
-    // Layer 2-4: RT features only when the caps say they're supported.
+    // 层 2-4: RT features only when the caps say they're supported.
     if rt_caps.acceleration_structure {
         accel_features.acceleration_structure = vk::TRUE;
-        // PathTracePass updates the TLAS descriptor (binding 2) every frame;
-        // this sub-feature is required when the descriptor set uses
+        // PathTracePass updates the TLAS 描述符 绑定 2) every 帧
+        // this sub-feature is required when the 描述符 集合 uses
         // UPDATE_AFTER_BIND on ACCELERATION_STRUCTURE bindings.
         accel_features.descriptor_binding_acceleration_structure_update_after_bind = vk::TRUE;
         features2 = features2.push_next(&mut accel_features);
@@ -429,7 +429,7 @@ fn create_device(
 }
 
 // ---------------------------------------------------------------------------
-// debug messenger
+// 调试 messenger
 // ---------------------------------------------------------------------------
 
 fn setup_debug_messenger(

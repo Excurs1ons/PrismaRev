@@ -1,26 +1,26 @@
-//! Graphics pipeline creation.
+//! Graphics 管线 creation.
 //!
-//! Builds a [`GraphicsPipeline`] for the standard PrismaRev forward-rendering
-//! path: vertex input (position + normal + color), push constants for model
-//! transform, a single descriptor set for the frame UBO, depth test +
-//! back-face culling, no multisampling, one color attachment with alpha
-//! blending.
+//! Builds a [`GraphicsPipeline`] for the 标准 PrismaRev forward-rendering
+//! path: 顶点 输入 (position + 法线 + 颜色 推送 constants for 模型
+//! 变换 a single 描述符 集合 for the 帧 UBO, 深度 test +
+//! back-face 剔除 no multisampling, one 颜色 附件 with Alpha
+//! 混合
 //!
-//! Viewport and scissor are dynamic so the pipeline does not need to be
-//! recreated on window resize.
+//! 视口 and scissor are 动力学 so the 管线 does not need to be
+//! recreated on 窗口 调整大小
 
 use anyhow::Context as _;
 use ash::vk;
 
 /// Parameters for creating a [`GraphicsPipeline`].
 ///
-/// Groups the previously-too many individual arguments into a single struct
+/// Groups the previously-too many individual arguments into a single 结构体
 /// so callers don't need to pass 8 positional parameters.
 ///
 /// The optional raster/depth fields (`cull_mode`, `depth_bias_*`,
-/// `depth_write_enable`, `color_attachment_count`) default to the legacy
-/// behavior when `None`. Shadow-map pipelines set them to override culling,
-/// enable depth bias, and drop color output.
+/// `depth_write_enable`, `color_attachment_count`) 默认 to the legacy
+/// behavior when `None`. Shadow-map pipelines 集合 them to 覆盖 剔除
+/// enable 深度 bias, and 放置 颜色 输出
 pub struct PipelineDesc<'a> {
     pub device: &'a ash::Device,
     pub shader_stages: &'a [vk::PipelineShaderStageCreateInfo<'a>],
@@ -30,47 +30,47 @@ pub struct PipelineDesc<'a> {
     pub push_constant_ranges: &'a [vk::PushConstantRange],
     pub render_pass: vk::RenderPass,
     pub subpass: u32,
-    /// Override the cull mode (default `BACK`).
+    /// 覆盖 the cull 众数 默认 后
     pub cull_mode: Option<vk::CullModeFlags>,
-    /// Enable depth bias (default `false`). Used by shadow pipelines to
+    /// Enable 深度 bias 默认 `false`). Used by shadow pipelines to
     /// avoid self-shadow acne.
     pub depth_bias_enable: Option<bool>,
-    /// Depth bias constant factor (default 0). Only used when
+    /// 深度 bias 常量 factor 默认 0). Only used when
     /// `depth_bias_enable` is `Some(true)`.
     pub depth_bias_constant_factor: Option<f32>,
-    /// Depth bias slope factor (default 0).
+    /// 深度 bias slope factor 默认 0).
     pub depth_bias_slope_factor: Option<f32>,
-    /// Override depth write enable (default `true`).
+    /// 覆盖 深度 写入 enable 默认 `true`).
     pub depth_write_enable: Option<bool>,
-    /// Number of color attachments the render pass subpass uses (default 1).
-    /// Set to `Some(0)` for a depth-only pipeline (e.g. shadow map): the
-    /// color blend state then carries zero attachments.
+    /// Number of 颜色 attachments the 渲染 pass 子 pass uses 默认 1).
+    /// 集合 to `Some(0)` for a depth-only 管线 (e.g. shadow 映射表 the
+    /// 颜色 混合 状态 then carries 零 attachments.
     pub color_attachment_count: Option<u32>,
-    /// Explicit per-attachment blend states for MRT pipelines. When `Some`,
+    /// Explicit per-attachment 混合 states for MRT pipelines. When `Some`,
     /// this overrides `color_attachment_count` (the count is taken from the
-    /// slice length). Pass one entry per color attachment the subpass writes;
+    /// 切片 长度 pass one entry per 颜色 附件 the 子 pass writes;
     /// the i-th entry configures `SV_Target{i}`. Use this for MRT pipelines
-    /// (e.g. ScenePass writes color + view-normal) where each target needs a
-    /// different blend config (color = alpha blend, normal = no blend).
+    /// (e.g. ScenePass writes 颜色 + view-normal) where each 目标 needs a
+    /// different 混合 配置 颜色 = Alpha 混合 法线 = no 混合
     pub color_blend_attachments: Option<&'a [vk::PipelineColorBlendAttachmentState]>,
 }
 
-/// A compiled graphics pipeline with its layout.
+/// A compiled graphics 管线 with its 布局
 pub struct GraphicsPipeline {
     pub pipeline: vk::Pipeline,
     pub layout: vk::PipelineLayout,
-    /// Cloned device handle kept so [`Drop`] can free the pipeline without an
-    /// explicit `destroy` call (RAII).
+    /// Cloned 设备 handle kept so 放置 can free the 管线 without an
+    /// explicit 销毁 调用 (RAII).
     device: ash::Device,
 }
 
 impl GraphicsPipeline {
-    /// Create the graphics pipeline.
+    /// 创建 the graphics 管线
     ///
     /// All parameters are provided via [`PipelineDesc`]. `render_pass` and
-    /// `subpass` identify where this pipeline is used. `descriptor_set_layouts`
-    /// are the layouts for the pipeline's descriptor sets. `push_constant_ranges`
-    /// define the push constant regions accessible from shader stages.
+    /// 子 pass identify where this 管线 is used. `descriptor_set_layouts`
+    /// are the layouts for the pipeline's 描述符 sets. `push_constant_ranges`
+    /// define the 推送 常量 regions accessible from 着色器 stages.
     pub fn new(desc: &PipelineDesc) -> anyhow::Result<Self> {
         let device = desc.device;
         let shader_stages = desc.shader_stages;
@@ -80,39 +80,39 @@ impl GraphicsPipeline {
         let push_constant_ranges = desc.push_constant_ranges;
         let render_pass = desc.render_pass;
         let subpass = desc.subpass;
-        // --- Pipeline layout ---
+        // --- 管线 布局 ---
         let layout_info = vk::PipelineLayoutCreateInfo::default()
             .set_layouts(descriptor_set_layouts)
             .push_constant_ranges(push_constant_ranges);
         let layout = unsafe { device.create_pipeline_layout(&layout_info, None) }
             .context("create pipeline layout")?;
 
-        // --- Vertex input ---
+        // --- 顶点 输入 ---
         let vertex_input_info = vk::PipelineVertexInputStateCreateInfo::default()
             .vertex_binding_descriptions(vertex_binding_desc)
             .vertex_attribute_descriptions(vertex_attr_descs);
 
-        // --- Input assembly ---
+        // --- 输入 assembly ---
         let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
             .topology(vk::PrimitiveTopology::TRIANGLE_LIST)
             .primitive_restart_enable(false);
 
-        // --- Viewport & scissor (dynamic) ---
-        // State is set dynamically via cmd_set_viewport/cmd_set_scissor so the
-        // pipeline does not need recreation when the window is resized.
+        // --- 视口 & scissor 动力学 ---
+        // 状态 is 集合 dynamically via cmd_set_viewport/cmd_set_scissor so the
+        // 管线 does not need recreation when the 窗口 is resized.
         let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
         let dynamic_state =
             vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
 
-        // Dummy viewport state (required by the API, but overridden by dynamic).
+        // Dummy 视口 状态 (required by the API, but overridden by 动力学
         let viewport_state = vk::PipelineViewportStateCreateInfo::default()
             .viewport_count(1)
             .scissor_count(1);
 
         // --- Rasterizer ---
         // `cull_mode` and `depth_bias_*` are optional overrides so shadow-map
-        // pipelines can flip culling and apply slope/constant depth bias to
-        // avoid self-shadow acne. Legacy callers pass `None` -> default BACK /
+        // pipelines can flip 剔除 and apply slope/constant 深度 bias to
+        // avoid self-shadow acne. Legacy callers pass `None` -> 默认 后 /
         // no bias.
         let rasterizer = vk::PipelineRasterizationStateCreateInfo::default()
             .depth_clamp_enable(false)
@@ -120,9 +120,9 @@ impl GraphicsPipeline {
             .polygon_mode(vk::PolygonMode::FILL)
             .line_width(1.0)
             .cull_mode(desc.cull_mode.unwrap_or(vk::CullModeFlags::BACK))
-            // View matrix is now a proper rotation (det +1); the projection's
-            // y-flip (Vulkan NDC) is the single remaining reflection, so front
-            // faces wind counter-clockwise in clip space.
+            // 视图 矩阵 is now a proper 旋转 (det +1); the projection's
+            // y-flip Vulkan NDC) is the single remaining reflection, so 前
+            // faces wind counter-clockwise in 片段 空间
             .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
             .depth_bias_enable(desc.depth_bias_enable.unwrap_or(false))
             .depth_bias_constant_factor(desc.depth_bias_constant_factor.unwrap_or(0.0))
@@ -134,17 +134,17 @@ impl GraphicsPipeline {
             .rasterization_samples(vk::SampleCountFlags::TYPE_1);
 
         // --- Depth/stencil ---
-        // `depth_write_enable` is an optional override; shadow-map pipelines
-        // may disable color writes but keep depth writes, so it defaults true.
+        // `depth_write_enable` is an optional 覆盖 shadow-map pipelines
+        // may disable 颜色 writes but keep 深度 writes, so it defaults true.
         let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
             .depth_test_enable(true)
             .depth_write_enable(desc.depth_write_enable.unwrap_or(true))
             .depth_compare_op(vk::CompareOp::LESS);
 
-        // --- Color blend ---
-        // `color_blend_attachments` (when provided) drives the full MRT blend
-        // state; otherwise `color_attachment_count` selects 0 (depth-only) or 1
-        // (single attachment with the legacy alpha-blend config below).
+        // --- 颜色 混合 ---
+        // `color_blend_attachments` (when provided) drives the 完整 MRT 混合
+        // 状态 otherwise `color_attachment_count` selects 0 (depth-only) or 1
+        // (single 附件 with the legacy alpha-blend 配置 below).
         let color_blend_attachment = vk::PipelineColorBlendAttachmentState::default()
             .color_write_mask(vk::ColorComponentFlags::RGBA)
             .blend_enable(true)
@@ -172,7 +172,7 @@ impl GraphicsPipeline {
             }
         };
 
-        // --- Pipeline create ---
+        // --- 管线 创建 ---
         let pipeline_info = vk::GraphicsPipelineCreateInfo::default()
             .stages(shader_stages)
             .vertex_input_state(&vertex_input_info)

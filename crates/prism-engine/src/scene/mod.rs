@@ -1,4 +1,4 @@
-//! Modern scene system — ECS components, loading, hierarchy, and systems.
+//! Modern scene 系统 — ECS components, loading, hierarchy, and systems.
 //!
 //! See `docs/plans/2026-07-25-modern-scene-system-design.md`.
 
@@ -12,10 +12,10 @@ pub mod loader;
 
 pub mod systems;
 
-/// Scene hierarchy adapter for the editor inspector.
+/// Scene hierarchy 适配器 for the 编辑器 检查器
 ///
 /// Roots: entities with [`LocalTransform`] or [`Name`] but no [`Parent`].
-/// Children: via [`Children`] component.
+/// Children: via [`Children`] 分量
 pub struct SceneHierarchy;
 
 impl prism_editor::inspector::Hierarchy for SceneHierarchy {

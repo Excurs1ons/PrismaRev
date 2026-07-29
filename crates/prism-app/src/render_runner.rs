@@ -1,8 +1,8 @@
-//! Render thread — receives [`FramePacket`] + [`EguiFrame`] from the main
-//! thread and drives [`GraphRenderer`] (begin_frame → execute → present).
+//! 渲染 线程 — receives [`FramePacket`] + [`EguiFrame`] from the main
+//! 线程 and drives [`GraphRenderer`] (begin_frame → 执行 → present).
 //!
-//! The render thread is spawned by [`App`](crate::app::App) after pre-resolving
-//! scene assets on the main thread.  It runs until the main thread sets the
+//! The 渲染 线程 is spawned by [`App`](crate::app::App) after pre-resolving
+//! scene assets on the main 线程 It runs until the main 线程 sets the
 //! `running` flag to `false`.
 
 use std::sync::Arc;
@@ -15,16 +15,16 @@ use prism_render::{EguiFrame, FrameInput, FrameUBOData, GraphRenderer};
 
 use crate::render_shared::{RenderShared, RenderStats};
 
-/// Neutral gray clear color — distinguishable from black/white.
+/// Neutral gray 清空 颜色 — distinguishable from black/white.
 const CLEAR_COLOR: [f32; 4] = [0.5, 0.5, 0.5, 1.0];
 
-/// Smoothing factor for FPS counter (lower = smoother).
+/// Smoothing factor for 帧率 计数器 (lower = smoother).
 const FPS_ALPHA: f32 = 0.05;
 
-/// Entry point for the render thread.
+/// Entry point for the 渲染 线程
 ///
-/// Takes ownership of the [`GraphRenderer`] (must be Send) and a shared state
-/// channel.  Loops: wait for packet → build input → begin/execute/present.
+/// Takes 所有权 of the [`GraphRenderer`] (must be Send) and a shared 状态
+/// 通道 Loops: wait for packet → 构建 输入 → begin/execute/present.
 /// Exits when `shared.running` becomes `false`.
 pub fn render_thread_main(mut renderer: GraphRenderer, shared: Arc<RenderShared>) {
     let mut dirty_router = DirtyRouter::new();
@@ -32,12 +32,12 @@ pub fn render_thread_main(mut renderer: GraphRenderer, shared: Arc<RenderShared>
 
     log::info!("Render thread started");
 
-    // Frame timing
+    // 帧 timing
     let mut smoothed_fps = 0.0f32;
     let mut frame_count: u64 = 0;
 
     while shared.running.load(std::sync::atomic::Ordering::Relaxed) {
-        // Check PT reset request from main thread.
+        // Check PT reset request from main 线程
         if shared.take_pt_reset() {
             renderer.request_pt_reset();
         }
@@ -63,7 +63,7 @@ pub fn render_thread_main(mut renderer: GraphRenderer, shared: Arc<RenderShared>
             log::error!("Render thread error: {e:#}");
         }
 
-        // Compute render stats.
+        // 计算 渲染 stats.
         let elapsed = frame_start.elapsed();
         let frame_time_ms = elapsed.as_secs_f32() * 1000.0;
 
@@ -83,7 +83,7 @@ pub fn render_thread_main(mut renderer: GraphRenderer, shared: Arc<RenderShared>
             pt_frame_count: pt_count,
         });
 
-        // Throttle if no egui frame pending to avoid 100% CPU spin when idle.
+        // Throttle if no egui 帧 pending to avoid 100% CPU spin when idle.
         if shared.take_egui_frame().is_none() && frame_time_ms < 1.0 {
             std::thread::sleep(std::time::Duration::from_micros(500));
         }
@@ -94,8 +94,8 @@ pub fn render_thread_main(mut renderer: GraphRenderer, shared: Arc<RenderShared>
     drop(renderer);
 }
 
-/// Render one frame: build [`FrameInput`] from a [`FramePacket`] then drive
-/// the three-phase API (begin → execute → present).
+/// 渲染 one 帧 构建 [`FrameInput`] from a [`FramePacket`] then drive
+/// the three-phase API 开始 → 执行 → present).
 fn render_one_frame(
     renderer: &mut GraphRenderer,
     packet: &FramePacket,

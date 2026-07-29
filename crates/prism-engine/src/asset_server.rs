@@ -2,13 +2,13 @@
 //!
 //! Two loading pipelines:
 //!
-//! 1. **Assets** (`load` / `load_erased`): typed `AssetData` types with GUID,
+//! 1. **Assets** 加载 / `load_erased`): typed `AssetData` types with GUID,
 //!    dependency tracking, and polymorphic deserialization. These live in
-//!    `assets/` and are tracked by the editor's asset browser.
+//! `assets/` and are tracked by the editor's 资源 browser.
 //!
 //! 2. **Data** (`load_json` / `load_toml`): plain serializable types without
-//!    any asset metadata. These are config files (`config/`, `presets/`)
-//!    loaded at startup with no editor tracking.
+//! any 资源 metadata. These are 配置 files (`config/`, `presets/`)
+//! loaded at startup with no 编辑器 tracking.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -21,27 +21,27 @@ use serde::Serialize;
 // AssetServer
 // ---------------------------------------------------------------------------
 
-/// Two-pipe loader for editable asset definitions and plain data files.
+/// Two-pipe loader for editable 资源 definitions and plain data files.
 ///
-/// # Asset pipe (`load<T: AssetData>`)
+/// # 资源 pipe (`load<T: AssetData>`)
 ///
 /// Assets are identified by [`AssetGuid`] and stored as JSON files with
-/// `typetag`-annotated type info. The editor tracks them, resolves
+/// `typetag`-annotated 类型 信息 The 编辑器 tracks them, resolves
 /// [`AssetHandle<T>`] cross-references, and provides inspectors.
 ///
 /// # Data pipe (`load_json<T: DeserializeOwned>`)
 ///
-/// Plain configuration files — no GUID, no cross-references, no editor
-/// tracking. Just deserialize and return.
+/// Plain 配置 files — no GUID, no cross-references, no 编辑器
+/// tracking. Just 反序列化 and return.
 pub struct AssetServer {
-    /// Root directory for asset files (`.json` with `typetag` metadata).
+    /// Root directory for 资源 files (`.json` with `typetag` metadata).
     asset_root: PathBuf,
-    /// Root directory for data / config files.
+    /// Root directory for data / 配置 files.
     data_root: PathBuf,
 }
 
 impl AssetServer {
-    /// Create a new asset server rooted at the project's `assets/` directory.
+    /// 创建 a new 资源 server rooted at the project's `assets/` directory.
     pub fn new(asset_root: PathBuf, data_root: PathBuf) -> Self {
         Self {
             asset_root,
@@ -50,12 +50,12 @@ impl AssetServer {
     }
 
     // ------------------------------------------------------------------
-    // Asset pipe (type safe)
+    // 资源 pipe 类型 safe)
     // ------------------------------------------------------------------
 
-    /// Load a typed asset by its relative path (without extension).
+    /// 加载 a typed 资源 by its 相对 path (without 扩展
     ///
-    /// The file must be a JSON file with a `"type"` field matching
+    /// The file must be a JSON file with a 类型 field matching
     /// `T`'s `typetag` registration.
     pub fn load<T: AssetData + DeserializeOwned>(
         &self,
@@ -64,15 +64,15 @@ impl AssetServer {
         let path = self.resolve_asset(relative)?;
         let bytes = std::fs::read(&path)?;
 
-        // Deserialize directly as the concrete type.
+        // 反序列化 directly as the concrete 类型
         let asset: T = serde_json::from_slice(&bytes)?;
         Ok(Arc::new(asset))
     }
 
-    /// Load a typed asset and return it as a type-erased box.
+    /// 加载 a typed 资源 and return it as a type-erased 盒
     ///
-    /// This is the editor's primary entry point — it can open *any*
-    /// asset type without compile-time knowledge.
+    /// This is the editor's primary entry point — it can 打开 *any*
+    /// 资源 类型 without compile-time knowledge.
     pub fn load_erased(&self, relative: impl AsRef<Path>) -> anyhow::Result<LoadedAsset> {
         let relative = relative.as_ref();
         let path = self.resolve_asset(relative)?;
@@ -86,7 +86,7 @@ impl AssetServer {
         })
     }
 
-    /// Resolve an [`AssetHandle`] by loading its referenced asset.
+    /// 解析 an [`AssetHandle`] by loading its referenced 资源
     pub fn resolve<T: AssetData + DeserializeOwned>(
         &self,
         handle: &mut AssetHandle<T>,
@@ -96,7 +96,7 @@ impl AssetServer {
         Ok(())
     }
 
-    /// Save a typed asset to disk.
+    /// 保存 a typed 资源 to disk.
     pub fn save<T: AssetData + Serialize>(
         &self,
         relative: impl AsRef<Path>,
@@ -112,7 +112,7 @@ impl AssetServer {
     // Data pipe (plain serialization)
     // ------------------------------------------------------------------
 
-    /// Load a plain JSON file — no asset metadata, no GUID, no tracking.
+    /// 加载 a plain JSON file — no 资源 metadata, no GUID, no tracking.
     pub fn load_json<T: DeserializeOwned>(
         &self,
         relative: impl AsRef<Path>,
@@ -122,7 +122,7 @@ impl AssetServer {
         Ok(serde_json::from_slice(&bytes)?)
     }
 
-    /// Load a TOML config file.
+    /// 加载 a TOML 配置 file.
     pub fn load_toml<T: DeserializeOwned>(
         &self,
         relative: impl AsRef<Path>,
@@ -132,7 +132,7 @@ impl AssetServer {
         Ok(toml::from_str(&text)?)
     }
 
-    /// Save a plain JSON file.
+    /// 保存 a plain JSON file.
     pub fn save_json<T: Serialize>(
         &self,
         relative: impl AsRef<Path>,
@@ -145,10 +145,10 @@ impl AssetServer {
     }
 
     // ------------------------------------------------------------------
-    // Path resolution
+    // Path 分辨率
     // ------------------------------------------------------------------
 
-    /// Resolve an asset path (`.json` extension appended).
+    /// 解析 an 资源 path (`.json` 扩展 appended).
     fn resolve_asset(&self, relative: impl AsRef<Path>) -> anyhow::Result<PathBuf> {
         let mut path = self.asset_root.join(relative.as_ref());
         if path.extension().is_none() {
@@ -157,17 +157,17 @@ impl AssetServer {
         Ok(path)
     }
 
-    /// Resolve a data file path (extension kept as-is).
+    /// 解析 a data file path 扩展 kept as-is).
     fn resolve_data(&self, relative: impl AsRef<Path>) -> anyhow::Result<PathBuf> {
         Ok(self.data_root.join(relative.as_ref()))
     }
 
-    /// Current asset root path.
+    /// 当前 资源 root path.
     pub fn asset_root(&self) -> &Path {
         &self.asset_root
     }
 
-    /// Current data root path.
+    /// 当前 data root path.
     pub fn data_root(&self) -> &Path {
         &self.data_root
     }

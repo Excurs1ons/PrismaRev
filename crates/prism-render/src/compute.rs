@@ -1,13 +1,13 @@
-//! Compute pipeline creation.
+//! 计算 管线 creation.
 //!
-//! Minimal wrapper around `vk::Pipeline` + `vk::PipelineLayout` for compute
-//! shaders. Used by the GI baker (ray-query probe-volume bake) and future
-//! DDGI real-time update pass.
+//! Minimal 包装器 around `vk::Pipeline` + `vk::PipelineLayout` for 计算
+//! shaders. Used by the 全局光照 baker (ray-query probe-volume bake) and future
+//! DDGI real-time 更新 pass
 
 use anyhow::Context as _;
 use ash::vk;
 
-/// A compiled compute pipeline with its layout.
+/// A compiled 计算 管线 with its 布局
 pub struct ComputePipeline {
     pub pipeline: vk::Pipeline,
     pub layout: vk::PipelineLayout,
@@ -15,11 +15,11 @@ pub struct ComputePipeline {
 }
 
 impl ComputePipeline {
-    /// Create a compute pipeline from a SPIR-V shader module.
+    /// 创建 a 计算 管线 from a SPIR-V 着色器 模块
     ///
-    /// * `entry_point` — shader entry name (e.g. `"bakeMain"`).
-    /// * `set_layouts` — descriptor set layouts the shader expects.
-    /// * `push_ranges` — optional push constant ranges.
+    /// * `entry_point` — 着色器 entry name (e.g. `"bakeMain"`).
+    /// * `set_layouts` — 描述符 集合 layouts the 着色器 expects.
+    /// * `push_ranges` — optional 推送 常量 ranges.
     pub fn new(
         device: &ash::Device,
         shader_module: vk::ShaderModule,

@@ -1,55 +1,55 @@
-//! SceneCooker — converts `.scene.json` intermediate data into a compact
-//! runtime-ready scene binary ("RSCN" format).
+//! SceneCooker — converts `.scene.json` intermediate data into a 紧凑
+//! runtime-ready scene 二进制 ("RSCN" 格式
 //!
-//! The intermediate data is expected to be the raw UTF-8 bytes of a valid
+//! The intermediate data is expected to be the raw UTF-8 字节 of a 有效
 //! `.scene.json` file. The cooker parses it into [`SceneJson`], validates
 //! the hierarchy, topological-sorts entities parent-first, and serialises
-//! each entity into a compact record.
+//! each 实体 into a 紧凑 record.
 //!
-//! ## RSCN binary format (version 2)
+//! ## RSCN 二进制 格式 (version 2)
 //!
 //! ```text
 //! [magic:4]        b"RSCN"
 //! [version:1]      2
 //! [count:4]        u32 LE — number of entities
-//! [env_len:2]      u16 LE — byte length of skybox HDR path (0 = no skybox)
+//! [env_len:2] u16 LE — byte 长度 of skybox 高动态范围 path (0 = no skybox)
 //! [env_path:N]     UTF-8 path (omitted if len == 0)
 //!
-//! For each entity (parent-first topological order):
-//!   [name_len:2]     u16 LE — byte length of name (0 = unnamed)
-//!   [name:name_len]  UTF-8 name bytes (omitted if len == 0)
-//!   [parent:4]       i32 LE — index in the entity array, or -1 for root
-//!   [tx:12]          f32[3] — translation (X, Y, Z)
-//!   [rot:16]         f32[4] — quaternion (X, Y, Z, W)
-//!   [scale:12]       f32[3] — scale (X, Y, Z)
+//! For each 实体 (parent-first topological order):
+//! [name_len:2] u16 LE — byte 长度 of name (0 = unnamed)
+//! [name:name_len] UTF-8 name 字节 (omitted if len == 0)
+//! [parent:4] i32 LE — 索引 in the 实体 数组 or -1 for root
+//! [tx:12] f32[3] — 平移 (X, Y, Z)
+//! [rot:16] f32[4] — 四元数 (X, Y, Z, W)
+//! [scale:12] f32[3] — 音阶 (X, Y, Z)
 //!   [flags:1]        bitmask: bit0=mesh, bit1=material, bit2=light, bit3=camera,
 //!                           bit4=skybox
 //!
 //!   [if has_mesh]
 //!     [path_len:2]   u16 LE
-//!     [path:..]      UTF-8 relative asset path
+//! [path:..] UTF-8 相对 资源 path
 //!
 //!   [if has_material]
 //!     [path_len:2]   u16 LE
-//!     [path:..]      UTF-8 relative asset path
+//! [path:..] UTF-8 相对 资源 path
 //!
 //!   [if has_light]
 //!     [light_type:1] 0=directional, 1=point, 2=spot
-//!     [color:12]     f32[3] linear RGB
+//! [color:12] f32[3] 线性 RGB
 //!     [intensity:4]  f32
 //!     [range:4]      f32 (0 = unlimited)
-//!     [inner_cone:4] f32 radians (0 = directional/point)
-//!     [outer_cone:4] f32 radians (0 = directional/point)
+//! [inner_cone:4] f32 弧度 (0 = directional/point)
+//! [outer_cone:4] f32 弧度 (0 = directional/point)
 //!
 //!   [if has_camera]
-//!     [fov_y:4]      f32 degrees
+//! [fov_y:4] f32 角度
 //!     [near:4]       f32
 //!     [far:4]        f32
 //!
 //!   [if has_skybox]
-//!     [path_len:2]   u16 LE — byte length of HDR path
-//!     [path:..]      UTF-8 relative HDR path
-//!     [enabled:1]    u8 (0 = disabled, 1 = enabled)
+//! [path_len:2] u16 LE — byte 长度 of 高动态范围 path
+//! [path:..] UTF-8 相对 高动态范围 path
+//! [enabled:1] u8 (0 = 禁用 1 = 启用
 //! ```
 
 use prism_asset_core::AssetType;
@@ -62,11 +62,11 @@ use crate::{CookContext, CookError, CookResult, Cooker};
 // ---------------------------------------------------------------------------
 
 const RSCN_MAGIC: &[u8; 4] = b"RSCN";
-/// RSCN format version.
-/// RSCN format version.  v2 adds the skybox HDR path in the header.
+/// RSCN 格式 version.
+/// RSCN 格式 version. v2 adds the skybox 高动态范围 path in the header.
 const RSCN_VERSION: u8 = 2;
 
-/// Component flags (bits in the per-entity flags byte).
+/// 分量 flags (bits in the per-entity flags byte).
 const FLAG_HAS_MESH: u8 = 0b00001;
 const FLAG_HAS_MATERIAL: u8 = 0b00010;
 const FLAG_HAS_LIGHT: u8 = 0b00100;
@@ -74,7 +74,7 @@ const FLAG_HAS_CAMERA: u8 = 0b01000;
 const FLAG_HAS_SKYBOX: u8 = 0b10000;
 
 // ---------------------------------------------------------------------------
-// Light type bytes (written into the serialised light record)
+// 光源 类型 字节 (written into the serialised 光源 record)
 // ---------------------------------------------------------------------------
 
 const LIGHT_DIRECTIONAL: u8 = 0;
@@ -85,11 +85,11 @@ const LIGHT_SPOT: u8 = 2;
 // SceneCooker
 // ---------------------------------------------------------------------------
 
-/// Cooks a `.scene.json` intermediate into a packed RSCN binary blob.
+/// Cooks a `.scene.json` intermediate into a packed RSCN 二进制 blob.
 pub struct SceneCooker;
 
 impl SceneCooker {
-    /// Parse the intermediate JSON bytes into a [`SceneJson`].
+    /// Parse the intermediate JSON 字节 into a [`SceneJson`].
     fn parse_intermediate(data: &[u8]) -> Result<SceneJson, CookError> {
         let scene: SceneJson =
             serde_json::from_slice(data).map_err(|e| CookError::CookFailed(format!("Scene JSON parse error: {e}")))?;
@@ -100,10 +100,10 @@ impl SceneCooker {
         Ok(scene)
     }
 
-    /// Topological sort: return entity indices in parent-first order.
+    /// Topological 排序 return 实体 indices in parent-first order.
     ///
-    /// Root entities (no parent) appear first, then their children, then
-    /// grandchildren, etc. Entities at the same depth maintain their original
+    /// Root entities (no parent) appear 第一个 then their children, then
+    /// grandchildren, etc. Entities at the same 深度 maintain their original
     /// order.
     fn topological_sort(entities: &[EntityJson]) -> Vec<usize> {
         let n = entities.len();
@@ -124,7 +124,7 @@ impl SceneCooker {
             visited[idx] = true;
             order.push(idx);
 
-            // Find children of this entity.
+            // 查找 children of this 实体
             for child in (0..n).rev() {
                 if !visited[child] && entities[child].parent == Some(idx as u32) {
                     queue.push(child);
@@ -132,7 +132,7 @@ impl SceneCooker {
             }
         }
 
-        // Append any disconnected / cycle-participant entities not yet visited.
+        // 追加 any disconnected / cycle-participant entities not yet visited.
         for i in 0..n {
             if !visited[i] {
                 order.push(i);
@@ -142,7 +142,7 @@ impl SceneCooker {
         order
     }
 
-    /// Serialize a single [`EntityJson`] into the output buffer.
+    /// 序列化 a single [`EntityJson`] into the 输出 缓冲区
     fn write_entity(buf: &mut Vec<u8>, entity: &EntityJson, parent: i32) {
         // Name (length-prefixed).
         match &entity.name {
@@ -157,10 +157,10 @@ impl SceneCooker {
             }
         }
 
-        // Parent index (i32, -1 for root).
+        // Parent 索引 (i32, -1 for root).
         buf.extend_from_slice(&parent.to_le_bytes());
 
-        // Transform.
+        // 变换
         buf.extend_from_slice(&entity.transform.translation[0].to_le_bytes());
         buf.extend_from_slice(&entity.transform.translation[1].to_le_bytes());
         buf.extend_from_slice(&entity.transform.translation[2].to_le_bytes());
@@ -193,7 +193,7 @@ impl SceneCooker {
         }
         buf.push(flags);
 
-        // Mesh path.
+        // 网格 path.
         if let Some(path) = &entity.mesh {
             let bytes = path.as_bytes();
             let len = bytes.len().min(u16::MAX as usize) as u16;
@@ -201,7 +201,7 @@ impl SceneCooker {
             buf.extend_from_slice(&bytes[..len as usize]);
         }
 
-        // Material path.
+        // 材质 path.
         if let Some(path) = &entity.material {
             let bytes = path.as_bytes();
             let len = bytes.len().min(u16::MAX as usize) as u16;
@@ -209,7 +209,7 @@ impl SceneCooker {
             buf.extend_from_slice(&bytes[..len as usize]);
         }
 
-        // Light.
+        // 光源
         if let Some(light) = &entity.light {
             let light_type_byte = match light.light_type.to_lowercase().as_str() {
                 "point" => LIGHT_POINT,
@@ -228,7 +228,7 @@ impl SceneCooker {
             buf.extend_from_slice(&light.outer_cone_angle.unwrap_or(0.0).to_le_bytes());
         }
 
-        // Camera.
+        // 相机
         if let Some(camera) = &entity.camera {
             buf.extend_from_slice(&camera.fov_y_degrees.to_le_bytes());
             buf.extend_from_slice(&camera.near.to_le_bytes());
@@ -245,11 +245,11 @@ impl SceneCooker {
         }
     }
 
-    /// Compute the parent index for the entity at `idx` in the sorted order.
+    /// 计算 the parent 索引 for the 实体 at `idx` in the 已排序 order.
     ///
-    /// Returns `-1` if root, or the position of the parent in the sorted
-    /// `order` slice. Since the sort is parent-first, the parent is guaranteed
-    /// to already have been assigned its final index.
+    /// Returns `-1` if root, or the position of the parent in the 已排序
+    /// `order` 切片 Since the 排序 is parent-first, the parent is guaranteed
+    /// to already have been assigned its final 索引
     fn parent_index_in_order(
         idx: usize,
         entities: &[EntityJson],
@@ -259,7 +259,7 @@ impl SceneCooker {
             None => -1,
             Some(p) => {
                 let p = p as usize;
-                // Find the position of parent in the sorted order.
+                // 查找 the position of parent in the 已排序 order.
                 order.iter().position(|&i| i == p).unwrap_or(0) as i32
             }
         }
@@ -281,11 +281,11 @@ impl Cooker for SceneCooker {
 
         let entity_count = scene.entities.len() as u32;
 
-        // Topological sort.
+        // Topological 排序
         let order = Self::topological_sort(&scene.entities);
 
-        // Skybox HDR path (v2 header field).
-        // Extracted from the first entity that has a skybox component.
+        // Skybox 高动态范围 path (v2 header field).
+        // Extracted from the 第一个 实体 that has a skybox 分量
         let env_path: &str = scene
             .entities
             .iter()
@@ -295,22 +295,22 @@ impl Cooker for SceneCooker {
         let env_path_bytes = env_path.as_bytes();
         let env_path_len = env_path_bytes.len().min(u16::MAX as usize) as u16;
 
-        // Build the binary output.
-        // Estimate: header (11) + env path + per entity ~80 bytes average.
+        // 构建 the 二进制 输出
+        // Estimate: header (11) + env path + per 实体 ~80 字节 平均
         let mut buf = Vec::with_capacity(11 + env_path_len as usize + entity_count as usize * 80);
 
-        // Header: magic + version + entity count.
+        // Header: magic + version + 实体 count.
         buf.extend_from_slice(RSCN_MAGIC);
         buf.push(RSCN_VERSION);
         buf.extend_from_slice(&entity_count.to_le_bytes());
 
-        // v2: skybox HDR path (length-prefixed).
+        // v2: skybox 高动态范围 path (length-prefixed).
         buf.extend_from_slice(&env_path_len.to_le_bytes());
         if env_path_len > 0 {
             buf.extend_from_slice(&env_path_bytes[..env_path_len as usize]);
         }
 
-        // Serialise each entity in sorted order.
+        // Serialise each 实体 in 已排序 order.
         for &idx in &order {
             let parent = Self::parent_index_in_order(idx, &scene.entities, &order);
             Self::write_entity(&mut buf, &scene.entities[idx], parent);
@@ -324,15 +324,15 @@ impl Cooker for SceneCooker {
 }
 
 // ---------------------------------------------------------------------------
-// Public helpers for runtime decoding
+// 公开 helpers for 运行时 decoding
 // ---------------------------------------------------------------------------
 
-/// Minimal header info parsed from an RSCN blob.
+/// Minimal header 信息 parsed from an RSCN blob.
 #[derive(Debug, Clone)]
 pub struct RscnHeader {
     pub version: u8,
     pub entity_count: u32,
-    /// Skybox HDR path (empty if no skybox).  Present since RSCN v2.
+    /// Skybox 高动态范围 path 空 if no skybox). Present since RSCN v2.
     pub env_path: String,
 }
 
@@ -353,7 +353,7 @@ pub fn parse_rscn_header(data: &[u8]) -> Option<RscnHeader> {
     }
     let entity_count = u32::from_le_bytes(data[5..9].try_into().ok()?);
 
-    // v2+: skybox HDR path after entity count.
+    // v2+: skybox 高动态范围 path after 实体 count.
     let mut env_path = String::new();
     if version >= 2 {
         if data.len() < 11 {
@@ -408,7 +408,7 @@ mod tests {
         cooker.cook(&ctx)
     }
 
-    // ── sample scene JSON ────────────────────────────────────────────
+    // ── 样本 scene JSON ────────────────────────────────────────────
 
     const SCENE_JSON: &str = r#"{
         "version": 1,
@@ -457,12 +457,12 @@ mod tests {
         let intermediate = make_intermediate(&scene);
         let result = cook_scene_json(&intermediate).unwrap();
 
-        // Verify RSCN magic.
+        // 验证 RSCN magic.
         assert_eq!(&result.cooked_data[..4], b"RSCN");
         assert_eq!(result.cooked_data[4], 2); // version (v2 = skybox support)
         assert!(result.compress);
 
-        // Entity count.
+        // 实体 count.
         let count = u32::from_le_bytes(result.cooked_data[5..9].try_into().unwrap());
         assert_eq!(count, 4);
     }
@@ -494,7 +494,7 @@ mod tests {
             off += 4;
             parents.push(parent);
 
-            // Transform: tx(12) + rot(16) + scale(12).
+            // 变换 tx(12) + rot(16) + scale(12).
             off += 40;
 
             // Flags.
@@ -522,7 +522,7 @@ mod tests {
             }
         }
 
-        // Every non-root parent must be an earlier entity.
+        // Every non-root parent must be an earlier 实体
         for (i, &p) in parents.iter().enumerate() {
             if p != -1 {
                 assert!(
@@ -590,7 +590,7 @@ mod tests {
 
     #[test]
     fn scene_cooker_with_nameless_entity() {
-        // Entity with no name field.
+        // 实体 with no name field.
         let json = br#"{
             "version": 1,
             "entities": [{
@@ -605,7 +605,7 @@ mod tests {
 
     #[test]
     fn scene_cooker_light_and_camera_roundtrip_size() {
-        // Single entity with both light and camera.
+        // Single 实体 with both 光源 and 相机
         let json = br#"{
             "version": 1,
             "entities": [{
@@ -621,7 +621,7 @@ mod tests {
         let header = parse_rscn_header(&result.cooked_data).unwrap();
         assert_eq!(header.entity_count, 1);
 
-        // The data should have some size (not just the header).
+        // The data should have some 大小 (not just the header).
         assert!(result.cooked_data.len() > 11);
     }
 

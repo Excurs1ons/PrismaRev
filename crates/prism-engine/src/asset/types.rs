@@ -1,7 +1,7 @@
-//! CPU-side asset data types for the engine's procedural asset pipeline.
+//! CPU-side 资源 data types for the engine's procedural 资源 管线
 //!
 //! These are the **raw** mesh/material data that sits on the CPU until the
-//! renderer uploads them to the GPU (via `RenderMeshManager` /
+//! 渲染器 uploads them to the GPU (via `RenderMeshManager` /
 //! `RenderMaterialManager`).  The handles pointing here live in
 //! [`MeshRenderer`](crate::ecs::components::MeshRenderer).
 
@@ -9,10 +9,10 @@
 // MeshAsset
 // ===========================================================================
 
-/// CPU-side mesh data (positions, normals, UVs, indices).
+/// CPU-side 网格 data (positions, normals, UVs, indices).
 ///
-/// Designed to be cheap to clone if needed; the procedural factory
-/// functions produce this once and the asset manager owns it.
+/// Designed to be cheap to clone if needed; the procedural 工厂
+/// functions produce this once and the 资源 管理器 owns it.
 #[derive(Debug, Clone)]
 pub struct MeshAsset {
     pub positions: Vec<[f32; 3]>,
@@ -22,7 +22,7 @@ pub struct MeshAsset {
 }
 
 impl MeshAsset {
-    /// Create a mesh asset from raw vertex data.
+    /// 创建 a 网格 资源 from raw 顶点 data.
     pub fn new(
         positions: Vec<[f32; 3]>,
         normals: Vec<[f32; 3]>,
@@ -42,10 +42,10 @@ impl MeshAsset {
 // MaterialAsset
 // ===========================================================================
 
-/// CPU-side material parameters.
+/// CPU-side 材质 parameters.
 #[derive(Debug, Clone)]
 pub struct MaterialAsset {
-    /// Linear RGB base colour.
+    /// 线性 RGB base 颜色
     pub base_color: [f32; 3],
     /// Metallic factor [0, 1].
     pub metallic: f32,

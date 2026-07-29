@@ -1,17 +1,17 @@
-//! End-to-end serialization round-trip tests for concrete asset types.
+//! End-to-end serialization round-trip tests for concrete 资源 types.
 //!
-//! These verify:
+//! These 验证
 //! - Typetag polymorphic deserialization (`Box<dyn AssetData>`)
 //! - Concrete typed deserialization (`AssetServer::load<T>`)
-//! - Field integrity after round-trip
-//! - Asset file loading from real file system
+//! - Field 完整性 after round-trip
+//! - 资源 file loading from real file 系统
 
 use prism_asset_core::AssetData;
 use prism_asset_core::AssetGuid;
 use prism_asset_types::{CubeDef, MaterialDef};
 
-/// Repository-root asset directory.
-/// Tests are compiled from `prism-asset/prism-asset-types/`, so we back out.
+/// Repository-root 资源 directory.
+/// Tests are compiled from `prism-asset/prism-asset-types/`, so we 后 out.
 const ASSET_DIR: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../assets/definitions/"
@@ -27,18 +27,18 @@ fn asset_path(file: &str) -> String {
 // Typetag polymorphic round-trip
 // ---------------------------------------------------------------------------
 
-/// Deserialize each asset type as `Box<dyn AssetData>`, verify type info.
+/// 反序列化 each 资源 类型 as `Box<dyn AssetData>`, 验证 类型 信息
 fn round_trip_as_erased(path: &str) {
     let bytes = std::fs::read(path).expect("read asset file");
     let asset: Box<dyn AssetData> =
         serde_json::from_slice(&bytes).expect("deserialize as erased");
 
-    // Must have a non-empty display name (set by `impl_asset_data!`).
+    // Must have a non-empty display name 集合 by `impl_asset_data!`).
     let name = asset.display_name();
     assert!(!name.is_empty(), "display_name should not be empty");
 }
 
-/// Deserialize as concrete type, check display_name.
+/// 反序列化 as concrete 类型 check display_name.
 fn round_trip_concrete<T>(path: &str)
 where
     T: AssetData + serde::de::DeserializeOwned + std::fmt::Debug,

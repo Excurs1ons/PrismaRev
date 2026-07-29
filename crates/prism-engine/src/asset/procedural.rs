@@ -1,7 +1,7 @@
-//! Procedural mesh and material factories.
+//! Procedural 网格 and 材质 factories.
 //!
 //! Utility functions that generate [`MeshAsset`] and [`MaterialAsset`] data
-//! for testing, demo scenes, and fallback rendering.
+//! for 测试 demo scenes, and 回退 渲染
 
 use crate::asset::types::{MaterialAsset, MeshAsset};
 
@@ -9,16 +9,16 @@ use crate::asset::types::{MaterialAsset, MeshAsset};
 // Unit cube (1×1×1 centred at origin)
 // ===========================================================================
 
-/// A unit cube with 24 unique vertices (4 per face × 6 faces), 36 indices.
+/// A unit cube with 24 唯一 顶点 (4 per face × 6 faces), 36 indices.
 /// Normals are face-aligned; UVs span [0,1] per face.
 pub fn make_cube() -> MeshAsset {
-    // Each face has its own set of 4 vertices so face normals are flat.
+    // Each face has its own 集合 of 4 顶点 so face normals are flat.
     let (positions, uvs): (Vec<[f32; 3]>, Vec<[f32; 2]>) = {
         let mut p = Vec::with_capacity(24);
         let mut u = Vec::with_capacity(24);
-        // Front (+Z), Back (-Z), Top (+Y), Bottom (-Y), Right (+X), Left (-X)
+        // 前 (+Z), 后 (-Z), 顶部 (+Y), 底部 (-Y), 右 (+X), 左 (-X)
         let face_data: [([f32; 3], [f32; 3], [[f32; 3]; 4], [[f32; 2]; 4]); 6] = [
-            // (normal, tangent, positions, uvs)
+            // 法线 切线 positions, uvs)
             (
                 [0.0, 0.0, 1.0],
                 [1.0, 0.0, 0.0],
@@ -139,10 +139,10 @@ pub fn make_cube() -> MeshAsset {
 }
 
 // ===========================================================================
-// Default material
+// 默认 材质
 // ===========================================================================
 
-/// A neutral grey PBR material (metallic 0.0, roughness 0.5).
+/// A neutral grey PBR 材质 (metallic 0.0, roughness 0.5).
 pub fn default_material() -> MaterialAsset {
     MaterialAsset::new([0.8, 0.8, 0.8], 0.0, 0.5)
 }

@@ -1,42 +1,42 @@
-//! Asset type classification.
+//! 资源 类型 classification.
 
 use serde::{Deserialize, Serialize};
 
-/// High-level classification of an asset's data format.
+/// High-level classification of an asset's data 格式
 ///
-/// The discriminant is stored as a `u32` in the binary .pak format so the
-/// runtime can dispatch to the correct loader without consulting a string
-/// table.
+/// The discriminant is stored as a `u32` in the 二进制 .pak 格式 so the
+/// 运行时 can 分发 to the correct loader without consulting a 字符串
+/// 表
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum AssetType {
-    /// Raw binary blob — the runtime loads it as `Vec<u8>`.
+    /// Raw 二进制 blob — the 运行时 loads it as `Vec<u8>`.
     Binary = 0,
-    /// GPU texture / image.
+    /// GPU 纹理 / 图像
     Texture = 1,
-    /// Geometric mesh (vertex + index data).
+    /// Geometric 网格 顶点 + 索引 data).
     Mesh = 2,
-    /// GPU material parameter block + shader bindings.
+    /// GPU 材质 参数 块 + 着色器 bindings.
     Material = 3,
-    /// Shader source or compiled bytecode.
+    /// 着色器 源 or compiled bytecode.
     Shader = 4,
-    /// Prefab — a reusable entity template.
+    /// Prefab — a reusable 实体 模板
     Prefab = 5,
-    /// Complete scene graph.
+    /// 完整 scene 图
     Scene = 6,
-    /// Audio clip (PCM, Ogg, etc.).
+    /// 音频 片段 (PCM, Ogg, etc.).
     Audio = 7,
-    /// Fallback for unrecognised formats.
+    /// 回退 for unrecognised formats.
     Unknown = 0xFF,
 }
 
 impl AssetType {
-    /// Return `true` if this type is known (not `Unknown`).
+    /// Return `true` if this 类型 is known (not `Unknown`).
     pub fn is_known(self) -> bool {
         self != AssetType::Unknown
     }
 
-    /// Human-readable label.
+    /// Human-readable 标签
     pub fn label(self) -> &'static str {
         match self {
             AssetType::Binary => "binary",
@@ -51,7 +51,7 @@ impl AssetType {
         }
     }
 
-    /// Build an `AssetType` from its raw `u32` discriminant.
+    /// 构建 an `AssetType` from its raw `u32` discriminant.
     pub fn from_u32(v: u32) -> Self {
         match v {
             0 => AssetType::Binary,
@@ -71,26 +71,26 @@ impl AssetType {
         self as u32
     }
 
-    /// Infer asset type from a file extension (lowercase, without leading dot).
+    /// Infer 资源 类型 from a file 扩展 (lowercase, without leading 点积
     pub fn from_extension(ext: &str) -> Self {
         match ext.to_lowercase().as_str() {
-            // Binary
+            // 二进制
             "bin" | "bytes" => AssetType::Binary,
             // Textures / images
             "png" | "jpg" | "jpeg" | "tga" | "bmp" | "hdr" | "exr" | "ktx" | "ktx2" | "dds" => {
                 AssetType::Texture
             }
-            // Mesh / geometry
+            // 网格 / geometry
             "gltf" | "glb" | "fbx" | "obj" | "stl" | "ply" => AssetType::Mesh,
-            // Material
+            // 材质
             "mat" | "material" => AssetType::Material,
-            // Shader
+            // 着色器
             "slang" | "hlsl" | "glsl" | "spv" | "wgsl" => AssetType::Shader,
             // Prefab
             "prefab" => AssetType::Prefab,
             // Scene
             "scene" => AssetType::Scene,
-            // Audio
+            // 音频
             "wav" | "mp3" | "ogg" | "flac" | "aac" | "m4a" => AssetType::Audio,
             _ => AssetType::Unknown,
         }
@@ -98,14 +98,14 @@ impl AssetType {
 }
 
 // ---------------------------------------------------------------------------
-// AssetRef – editor-side reference to another asset
+// AssetRef – editor-side 引用 to another 资源
 // ---------------------------------------------------------------------------
 
-/// A lightweight editor-side reference to another asset.
+/// A lightweight editor-side 引用 to another 资源
 ///
-/// Unlike `Handle<T>`, this is serializable and contains only the stable
-/// identity, never a runtime slot index. Use this in JSON metadata, importer
-/// dependency lists, and prefab asset references.
+/// Unlike `Handle<T>`, this is serializable and 包含 only the 稳定
+/// identity, never a 运行时 槽 索引 Use this in JSON metadata, importer
+/// dependency lists, and prefab 资源 references.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AssetRef {
     pub id: crate::AssetId,
@@ -113,7 +113,7 @@ pub struct AssetRef {
 }
 
 impl AssetRef {
-    /// Create a new reference.
+    /// 创建 a new 引用
     pub fn new(id: crate::AssetId, asset_type: AssetType) -> Self {
         Self { id, asset_type }
     }

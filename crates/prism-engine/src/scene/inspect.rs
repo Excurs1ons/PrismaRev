@@ -1,15 +1,15 @@
 //! `Inspect` implementations for scene components.
 //!
-//! Each `impl Inspect` lives next to the component definitions (in the same
-//! module tree) and draws the egui editor for that component. The
-//! [`crate::App`] registers every type here into the editor's
-//! `ComponentRegistry` at startup; the inspector then auto-discovers which
-//! components an entity has and runs the matching editor - with zero
-//! component-type hardcoding in the inspector itself.
+//! Each `impl Inspect` lives 下一个 to the 分量 definitions (in the same
+//! 模块 树 and draws the egui 编辑器 for that 分量 The
+//! [`crate::App`] registers every 类型 here into the editor's
+//! `ComponentRegistry` at startup; the 检查器 then auto-discovers which
+//! components an 实体 has and runs the matching 编辑器 - with 零
+//! component-type hardcoding in the 检查器 itself.
 //!
 //! Read-only components (`WorldTransform`, `Parent`, `Children`, `SceneMember`,
 //! `MeshRef`, `MaterialRef`) implement `Inspect` with a non-mutating display so
-//! they show up in the editor for debugging but can't be edited from there.
+//! they show 上 in the 编辑器 for debugging but can't be edited from there.
 
 use std::any::TypeId;
 
@@ -63,12 +63,12 @@ impl Inspect for Children {
 }
 
 // ---------------------------------------------------------------------------
-// Transform
+// 变换
 // ---------------------------------------------------------------------------
 
 impl Inspect for LocalTransform {
     fn inspect_ui(&mut self, ui: &mut Ui, ctx: &mut InspectCtx) {
-        // Translation.
+        // 平移
         ui.label("Translation");
         ui.horizontal(|ui| {
             ui.label("X");
@@ -79,9 +79,9 @@ impl Inspect for LocalTransform {
             ui.add(egui::DragValue::new(&mut self.translation[2]).speed(0.05));
         });
 
-        // Rotation: edit Euler degrees via the ctx cache (the stored value is a
-        // quaternion, awkward to edit directly). Refresh the cache from the
-        // component when the entry is missing.
+        // 旋转 edit Euler 角度 via the ctx cache (the stored value is a
+        // 四元数 awkward to edit directly). Refresh the cache from the
+        // 分量 when the entry is 缺少
         ui.label("Rotation (Euler, degrees)");
         let entity = ctx.current_entity.unwrap_or_else(|| sentinel_entity());
         let key = (entity, TypeId::of::<Self>());
@@ -116,7 +116,7 @@ impl Inspect for LocalTransform {
             );
         }
 
-        // Scale.
+        // 音阶
         ui.label("Scale");
         ui.horizontal(|ui| {
             ui.label("X");
@@ -148,7 +148,7 @@ impl Inspect for TransformDirty {
 }
 
 // ---------------------------------------------------------------------------
-// Render references (read-only)
+// 渲染 references (read-only)
 // ---------------------------------------------------------------------------
 
 impl Inspect for MeshRef {
@@ -196,13 +196,13 @@ impl Inspect for MeshRenderer {
 
 impl Inspect for DirectionalLight {
     fn inspect_ui(&mut self, ui: &mut Ui, ctx: &mut InspectCtx) {
-        // euler_xyz is already degrees - edit directly but cache so the
-        // DragValue keeps its drag state across frames (matches the old
+        // euler_xyz is already 角度 - edit directly but cache so the
+        // DragValue keeps its 拖拽 状态 across frames (matches the old
         // dir_light_euler_deg cache).
         let entity = ctx.current_entity.unwrap_or_else(|| sentinel_entity());
         let key = (entity, TypeId::of::<Self>());
         let euler = ctx.euler_cache.entry(key).or_insert_with(|| self.euler_xyz.into());
-        // Pitch / Yaw / Roll (degrees): X = pitch [-90,90], Y/Z = yaw/roll.
+        // 音高 / Yaw / Roll 角度 X = 音高 [-90,90], Y/Z = yaw/roll.
         ui.label("Pitch / Yaw / Roll (degrees)");
         let mut changed = false;
         ui.horizontal(|ui| {
@@ -302,7 +302,7 @@ impl Inspect for SpotLight {
 }
 
 // ---------------------------------------------------------------------------
-// Camera + controller
+// 相机 + controller
 // ---------------------------------------------------------------------------
 
 impl Inspect for Camera {
@@ -364,12 +364,12 @@ impl Inspect for SceneMember {
 // Registration
 // ---------------------------------------------------------------------------
 
-/// Register all [`Inspect`][prism_editor::Inspect] component editors with
+/// Register all [`Inspect`][prism_editor::Inspect] 分量 editors with
 /// the given [`ComponentRegistry`][prism_editor::ComponentRegistry].
 ///
 /// Called once from engine initialisation.  Types whose `Inspect` impl is
-/// registered here get a full egui editor UI in the inspector; types
-/// without one just show a read‑only label.
+/// registered here get a 完整 egui 编辑器 UI in the 检查器 types
+/// without one just show a read‑only 标签
 pub fn register_inspect_fns(registry: &mut prism_editor::ComponentRegistry) {
     registry.register::<Name>(100);
     registry.register::<Active>(110);
@@ -394,9 +394,9 @@ pub fn register_inspect_fns(registry: &mut prism_editor::ComponentRegistry) {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// A sentinel entity used as the euler-cache fallback when the ctx's
-/// `current_entity` is unset (e.g. in tests). Normal inspector flow always sets
-/// `current_entity` to the selected entity before dispatching.
+/// A sentinel 实体 used as the euler-cache 回退 when the ctx's
+/// `current_entity` is unset (e.g. in tests). 法线 检查器 流程 always sets
+/// `current_entity` to the selected 实体 before dispatching.
 fn sentinel_entity() -> prism_ecs::Entity {
     prism_ecs::Entity::from_raw(u32::MAX, u32::MAX)
 }

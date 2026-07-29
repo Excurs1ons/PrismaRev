@@ -1,15 +1,15 @@
-//! Image-based lighting resources for the PBR middle cube.
+//! Image-based lighting resources for the PBR 中键 cube.
 //!
-//! The user's equirectangular HDR environment map (or a procedural fallback)
-//! is converted into a floating-point **cubemap** (6 faces + full mip chain) on
-//! the CPU at load time. The PBR shader samples the cubemap by reflection
+//! The user's equirectangular 高动态范围 environment 映射表 (or a procedural 回退
+//! is converted into a floating-point **cubemap** (6 faces + 完整 mip 链 on
+//! the CPU at 加载 时间 The PBR 着色器 samples the cubemap by reflection
 //! direction, which has no pole singularity and no seam — so reflections stay
-//! stable as the view or object rotates (the old equirect sampling flickered
-//! near the poles). This is "real" IBL from the user's resource.
+//! 稳定 as the 视图 or 对象 rotates (the old equirect sampling flickered
+//! 近 the poles). This is "real" IBL from the user's 资源
 //!
 //! Additionally, three real IBL resources are computed from the equirect:
 //! - Diffuse irradiance cubemap (cosine-weighted hemisphere convolution)
-//! - Prefiltered environment map (GGX importance sampling, per-mip)
+//! - Prefiltered environment 映射表 (GGX importance sampling, per-mip)
 //! - BRDF integration LUT (2D, split-sum)
 
 use anyhow::Context as _;
@@ -53,7 +53,7 @@ pub struct IblResources {
     brdf_memory: vk::DeviceMemory,
     brdf_staging: vk::Buffer,
     brdf_staging_memory: vk::DeviceMemory,
-    // descriptor pool
+    // 描述符 池
     descriptor_pool: vk::DescriptorPool,
 }
 
@@ -66,7 +66,7 @@ const PREFILTERED_SAMPLES: u32 = 128;
 const BRDF_LUT_SIZE: u32 = 512;
 const BRDF_LUT_SAMPLES: u32 = 1024;
 
-// IBL disk cache paths (relative to working directory).
+// IBL disk cache paths 相对 to working directory).
 const IBL_CACHE_DIR: &str = "assets/ibr";
 const BRDF_CACHE_FILE: &str = "brdf_lut_512.bin";
 const ENV_CUBE_CACHE_FILE: &str = "cube_512.bin";
@@ -83,7 +83,7 @@ impl IblResources {
         let device = context.device.clone();
         let mem_props = &context.physical_device_memory_properties;
 
-        // 1. Obtain linear RGBA float equirect data (decode file or synthesize).
+        // 1. Obtain 线性 RGBA 浮点数 equirect data 解码 file or synthesize).
         let t_hdr = std::time::Instant::now();
         let (rgba_f32, width, height) = match &env_bytes {
             Some(bytes) => {
@@ -105,7 +105,7 @@ impl IblResources {
         let hdr_decode_ms = t_hdr.elapsed().as_millis();
         log::info!("  IBL phase: HDR decode: {}ms", hdr_decode_ms);
 
-        // Compute env content hash for disk cache (only when .hdr was loaded).
+        // 计算 env content 哈希 for disk cache (only when 高动态范围 was loaded).
         let env_hash = env_bytes.as_ref().map(|b| env_content_hash(b));
         if let Some(ref hash) = env_hash {
             let _ = ensure_cache_dir(hash);
@@ -136,7 +136,7 @@ impl IblResources {
             (max_dim as f32).log2().floor() as u32 + 1
         };
 
-        // 1c. Convolve the three IBL resources on the CPU (or load from cache).
+        // 1c. Convolve the three IBL resources on the CPU (or 加载 from cache).
         let t_irr = std::time::Instant::now();
         let irradiance_rgba: Vec<f32> = if let Some(ref hash) = env_hash {
             let path = cache_path(hash, IRRADIANCE_CACHE_FILE);
@@ -183,7 +183,7 @@ impl IblResources {
         let pref_ms = t_pre.elapsed().as_millis();
         let t_brdf = std::time::Instant::now();
 
-        // BRDF LUT — no env dependency, always check disk first.
+        // BRDF LUT — no env dependency, always check disk 第一个
         let brdf_rg: Vec<f32> = {
             let _ = ensure_cache_dir("");
             let path = cache_path("", BRDF_CACHE_FILE);
@@ -212,7 +212,7 @@ impl IblResources {
         }
         log::info!("  IBL phase: convolve total: {}ms", irrad_ms + pref_ms + brdf_ms);
 
-        // 2. Create all images.
+        // 2. 创建 all images.
         // 2a. Environment cubemap (existing).
         let image_info = vk::ImageCreateInfo {
             image_type: vk::ImageType::TYPE_2D,
@@ -377,7 +377,7 @@ impl IblResources {
         let prefiltered_memory = allocate_device_memory(&device, mem_props, prefiltered_mem_req)?;
         unsafe { device.bind_image_memory(prefiltered_image, prefiltered_memory, 0) }?;
 
-        // 2d. BRDF LUT (512x512, RG16_SFLOAT, 1 layer).
+        // 2d. BRDF LUT (512x512, RG16_SFLOAT, 1 层
         let brdf_size = (BRDF_LUT_SIZE * BRDF_LUT_SIZE) as usize;
         let brdf_staging_size = (brdf_size * 4) as u64; // 2 half-floats per texel = 4 bytes
         let (brdf_staging, brdf_staging_memory) =
@@ -424,11 +424,11 @@ impl IblResources {
         let brdf_memory = allocate_device_memory(&device, mem_props, brdf_mem_req)?;
         unsafe { device.bind_image_memory(brdf_image, brdf_memory, 0) }?;
 
-        // 3. One-shot command buffer: upload all resources.
+        // 3. One-shot 命令 缓冲区 upload all resources.
         let cmd = allocate_temp_command_buffer(&device, command_pool)?;
         unsafe { device.begin_command_buffer(cmd, &vk::CommandBufferBeginInfo::default())? };
 
-        // 3a. Env cube: transition all mips, copy mip0, generate mip chain.
+        // 3a. Env cube: 过渡 all mips, 复制 mip0, generate mip 链
         transition_image(
             &device,
             cmd,
@@ -465,7 +465,7 @@ impl IblResources {
             )
         };
 
-        // Generate mip chain for env cube.
+        // Generate mip 链 for env cube.
         if mip_levels > 1 {
             transition_image(
                 &device,
@@ -702,9 +702,9 @@ impl IblResources {
         log::info!("  IBL phase: upload + submit + wait: {}ms", upload_ms);
 
         let t_views = std::time::Instant::now();
-        // 4. Create image views + samplers.
+        // 4. 创建 图像 views + samplers.
 
-        // 4a. Env cube view + sampler.
+        // 4a. Env cube 视图 + 采样器
         let image_view = unsafe {
             device.create_image_view(
                 &vk::ImageViewCreateInfo {
@@ -742,7 +742,7 @@ impl IblResources {
             )
         }?;
 
-        // 4b. Irradiance cube view + sampler.
+        // 4b. Irradiance cube 视图 + 采样器
         let irradiance_image_view = unsafe {
             device.create_image_view(
                 &vk::ImageViewCreateInfo {
@@ -780,7 +780,7 @@ impl IblResources {
             )
         }?;
 
-        // 4c. Prefiltered cube view + sampler.
+        // 4c. Prefiltered cube 视图 + 采样器
         let prefiltered_image_view = unsafe {
             device.create_image_view(
                 &vk::ImageViewCreateInfo {
@@ -818,7 +818,7 @@ impl IblResources {
             )
         }?;
 
-        // 4d. BRDF LUT view + sampler.
+        // 4d. BRDF LUT 视图 + 采样器
         let brdf_image_view = unsafe {
             device.create_image_view(
                 &vk::ImageViewCreateInfo {
@@ -856,8 +856,8 @@ impl IblResources {
             )
         }?;
 
-        // 5. Descriptor set (set 2) with 3 bindings: envCube, irradianceCube, prefilteredCube.
-        // brdfLUT is registered separately in the bindless texture table.
+        // 5. 描述符 集合 集合 2) with 3 bindings: envCube, irradianceCube, prefilteredCube.
+        // brdfLUT is registered separately in the bindless 纹理 表
         let descriptor_set_layout = unsafe {
             device.create_descriptor_set_layout(
                 &vk::DescriptorSetLayoutCreateInfo::default().bindings(&[
@@ -984,28 +984,28 @@ impl IblResources {
 }
 
 impl IblResources {
-    /// Cubemap image view (for registering into the bindless texture table).
+    /// Cubemap 图像 视图 (for registering into the bindless 纹理 表
     pub fn image_view(&self) -> vk::ImageView {
         self.image_view
     }
 
-    /// Cubemap sampler (for registering into the bindless texture table).
+    /// Cubemap 采样器 (for registering into the bindless 纹理 表
     pub fn sampler(&self) -> vk::Sampler {
         self.sampler
     }
 
-    /// BRDF LUT image view (for registering into the bindless texture table).
+    /// BRDF LUT 图像 视图 (for registering into the bindless 纹理 表
     pub fn brdf_image_view(&self) -> vk::ImageView {
         self.brdf_image_view
     }
 }
 
 impl IblResources {
-    /// Explicitly destroy all GPU resources. Matches the RAII pattern used by
-    /// the rest of the renderer — `GraphRenderer::destroy` calls this so the
-    /// device handle is valid regardless of struct field-drop ordering.
+    /// Explicitly 销毁 all GPU resources. Matches the RAII 模式 used by
+    /// the rest of the 渲染器 — `GraphRenderer::destroy` calls this so the
+    /// 设备 handle is 有效 regardless of 结构体 field-drop ordering.
     pub fn destroy(&mut self) {
-        // Guard: zero out handles so re-entrant Drop (if any) is safe.
+        // Guard: 零 out handles so re-entrant 放置 (if any) is safe.
         if self.descriptor_set_layout == vk::DescriptorSetLayout::null() {
             return;
         }
@@ -1042,13 +1042,13 @@ impl IblResources {
             self.device.destroy_buffer(self.brdf_staging, None);
             self.device.free_memory(self.brdf_staging_memory, None);
             self.device.destroy_sampler(self.brdf_sampler, None);
-            // descriptor pool + layout
+            // 描述符 池 + 布局
             self.device
                 .destroy_descriptor_pool(self.descriptor_pool, None);
             self.device
                 .destroy_descriptor_set_layout(self.descriptor_set_layout, None);
         }
-        // Null out handles so re-entrant Drop is safe.
+        // Null out handles so re-entrant 放置 is safe.
         self.descriptor_set_layout = vk::DescriptorSetLayout::null();
         self.image = vk::Image::null();
         self.image_view = vk::ImageView::null();
@@ -1071,20 +1071,20 @@ impl Drop for IblResources {
 // IBL disk cache helpers
 // ---------------------------------------------------------------------------
 
-/// Ensure the IBL cache subdirectory exists, creating it if needed.
+/// Ensure the IBL cache subdirectory 存在 creating it if needed.
 fn ensure_cache_dir(subdir: &str) -> Option<std::path::PathBuf> {
     let path = std::path::PathBuf::from(IBL_CACHE_DIR).join(subdir);
     std::fs::create_dir_all(&path).ok()?;
     Some(path)
 }
 
-/// Build a full cache path from hash subdir and filename.
+/// 构建 a 完整 cache path from 哈希 subdir and filename.
 fn cache_path(hash: &str, filename: &str) -> std::path::PathBuf {
     std::path::PathBuf::from(IBL_CACHE_DIR).join(hash).join(filename)
 }
 
-/// Deterministic content hash of the raw `.hdr` file bytes.
-/// Used as subdirectory name so a changed env map produces a new cache.
+/// 确定性 content 哈希 of the raw 高动态范围 file 字节
+/// Used as subdirectory name so a changed env 映射表 produces a new cache.
 fn env_content_hash(bytes: &[u8]) -> String {
     let mut hasher = DefaultHasher::new();
     use std::hash::Hash;
@@ -1092,11 +1092,11 @@ fn env_content_hash(bytes: &[u8]) -> String {
     format!("{:016x}", hasher.finish())
 }
 
-/// Save `data` (f32 slice) to `path` as `u32 LE count + f32 LE × count`.
+/// 保存 `data` (f32 切片 to `path` as `u32 LE count + f32 LE × count`.
 fn save_f32_cache(path: &Path, data: &[f32]) {
     use std::io::Write;
     let count = data.len() as u32;
-    // SAFETY: reinterpreting &[f32] as &[u8] is safe.
+    // 安全性 reinterpreting &[f32] as &[u8] is safe.
     let bytes = unsafe {
         std::slice::from_raw_parts(data.as_ptr() as *const u8, data.len() * 4)
     };
@@ -1109,8 +1109,8 @@ fn save_f32_cache(path: &Path, data: &[f32]) {
     }
 }
 
-/// Load an f32 cache file written by `save_f32_cache`. Returns `None` on any
-/// error (missing file, wrong size, I/O error).
+/// 加载 an f32 cache file written by `save_f32_cache`. Returns `None` on any
+/// 错误 缺少 file, wrong 大小 I/O 错误
 fn load_f32_cache(path: &Path) -> Option<Vec<f32>> {
     let raw = std::fs::read(path).ok()?;
     if raw.len() < 4 {
@@ -1121,7 +1121,7 @@ fn load_f32_cache(path: &Path) -> Option<Vec<f32>> {
         return None;
     }
     let mut out = vec![0.0f32; count];
-    // SAFETY: raw bytes were written by our own save function.
+    // 安全性 raw 字节 were written by our own 保存 函数
     unsafe {
         std::ptr::copy_nonoverlapping(
             raw.as_ptr().add(4) as *const f32,
@@ -1165,9 +1165,9 @@ fn convolve_irradiance(eq: &[f32], eq_w: u32, eq_h: u32, face_size: u32) -> Vec<
                     let cos_theta = theta.cos();
                     for pj in 0..phi_steps {
                         let phi = (pj as f32 + 0.5) * inv_phi * 2.0 * std::f32::consts::PI;
-                        // Sample direction in local tangent space (hemisphere around z)
+                        // 样本 direction in 局部 切线 空间 (hemisphere around z)
                         let l_local = [sin_theta * phi.cos(), sin_theta * phi.sin(), cos_theta];
-                        // Transform to world
+                        // 变换 to 世界
                         let l = [
                             t[0] * l_local[0] + b[0] * l_local[1] + n[0] * l_local[2],
                             t[1] * l_local[0] + b[1] * l_local[1] + n[1] * l_local[2],
@@ -1203,8 +1203,8 @@ fn convolve_irradiance(eq: &[f32], eq_w: u32, eq_h: u32, face_size: u32) -> Vec<
     out
 }
 
-/// GGX importance-sampled prefiltered environment map.
-/// Returns one RGBA f32 buffer per mip level.
+/// GGX importance-sampled prefiltered environment 映射表
+/// Returns one RGBA f32 缓冲区 per mip level.
 fn convolve_prefiltered(
     eq: &[f32],
     eq_w: u32,
@@ -1216,9 +1216,9 @@ fn convolve_prefiltered(
     for mip in 0..mip_levels {
         let fs = (face_size >> mip).max(1);
         // Epic's split-sum IBL spec: mip level maps linearly to *perceptual*
-        // roughness, but GGX uses alpha = roughness^2, so the actual roughness
-        // fed to the importance sampler is (mip / (mips-1))^2. The sampling
-        // side (sample_specular) must invert this: lod = sqrt(roughness) * MAX.
+        // roughness, but GGX uses Alpha = roughness^2, so the actual roughness
+        // fed to the importance 采样器 is (mip / (mips-1))^2. The sampling
+        // side (sample_specular) must invert this: lod = sqrt(roughness) * 最大值
         let roughness = if mip_levels > 1 {
             let t = mip as f32 / (mip_levels - 1) as f32;
             t * t
@@ -1241,7 +1241,7 @@ fn convolve_prefiltered(
                     for i in 0..PREFILTERED_SAMPLES {
                         let xi = hammersley(i, PREFILTERED_SAMPLES);
                         let h_local = importance_sample_ggx(xi, roughness);
-                        // Reflect view (which = n in local tangent space) around h
+                        // 反射 视图 (which = n in 局部 切线 空间 around h
                         // v_local = [0, 0, 1], so:
                         // l_local = 2 * dot(v_local, h_local) * h_local - v_local
                         let v_dot_h = h_local[2]; // since v_local = [0,0,1]
@@ -1253,7 +1253,7 @@ fn convolve_prefiltered(
                         if l_local[2] <= 0.0 {
                             continue;
                         }
-                        // Transform to world
+                        // 变换 to 世界
                         let l = [
                             t[0] * l_local[0] + b[0] * l_local[1] + n[0] * l_local[2],
                             t[1] * l_local[0] + b[1] * l_local[1] + n[1] * l_local[2],
@@ -1283,8 +1283,8 @@ fn convolve_prefiltered(
     out
 }
 
-/// Compute the BRDF integration LUT (split-sum approximation).
-/// Returns RG f32 data for the 2D texture (512x512).
+/// 计算 the BRDF integration LUT (split-sum approximation).
+/// Returns RG f32 data for the 2D 纹理 (512x512).
 fn compute_brdf_lut(size: u32) -> Vec<f32> {
     let mut out = vec![0.0f32; (size * size * 2) as usize];
     let inv_size = 1.0 / size as f32;
@@ -1301,7 +1301,7 @@ fn compute_brdf_lut(size: u32) -> Vec<f32> {
             for i in 0..BRDF_LUT_SAMPLES {
                 let xi = hammersley(i, BRDF_LUT_SAMPLES);
                 let h = importance_sample_ggx(xi, roughness);
-                // Reflect view around h
+                // 反射 视图 around h
                 let v_dot_h = v[0] * h[0] + v[1] * h[1] + v[2] * h[2];
                 let l = [
                     2.0 * v_dot_h * h[0] - v[0],
@@ -1313,7 +1313,7 @@ fn compute_brdf_lut(size: u32) -> Vec<f32> {
                 let v_dot_h = v_dot_h.max(0.0);
 
                 if n_dot_l > 0.0 {
-                    // Geometry function (Smith GGX)
+                    // Geometry 函数 (Smith GGX)
                     let k = (roughness + 1.0) * (roughness + 1.0) / 8.0;
                     let g_v = n_dot_v / (n_dot_v * (1.0 - k) + k);
                     let g_l = n_dot_l / (n_dot_l * (1.0 - k) + k);
@@ -1338,7 +1338,7 @@ fn compute_brdf_lut(size: u32) -> Vec<f32> {
 // Math helpers for convolution
 // ---------------------------------------------------------------------------
 
-/// Build an orthonormal tangent frame from a normal vector.
+/// 构建 an orthonormal 切线 帧 from a 法线 向量
 fn build_tangent_frame(n: [f32; 3]) -> ([f32; 3], [f32; 3]) {
     let up = if n[1].abs() < 0.9999 {
         [0.0, 1.0, 0.0]
@@ -1372,7 +1372,7 @@ fn radical_inverse_vdc(mut bits: u32) -> f32 {
     bits as f32 * 2.328_306_4e-10
 }
 
-/// GGX importance sample direction in tangent space (z = up).
+/// GGX importance 样本 direction in 切线 空间 (z = 上
 fn importance_sample_ggx(xi: [f32; 2], roughness: f32) -> [f32; 3] {
     let a = roughness * roughness;
     let a2 = a * a;
@@ -1383,11 +1383,11 @@ fn importance_sample_ggx(xi: [f32; 2], roughness: f32) -> [f32; 3] {
 }
 
 // ---------------------------------------------------------------------------
-// Helpers from the existing implementation
+// Helpers from the existing 实现
 // ---------------------------------------------------------------------------
 
-/// Build a cubemap (6 faces × `face_size`² RGBA) from an equirectangular HDR
-/// buffer by sampling it per cube-texel direction.
+/// 构建 a cubemap (6 faces × `face_size`² RGBA from an equirectangular 高动态范围
+/// 缓冲区 by sampling it per cube-texel direction.
 fn generate_cubemap(eq: &[f32], eq_w: u32, eq_h: u32, face_size: u32) -> Vec<f32> {
     let mut out = vec![0.0f32; (6 * face_size * face_size * 4) as usize];
     for f in 0..6u32 {
@@ -1408,7 +1408,7 @@ fn generate_cubemap(eq: &[f32], eq_w: u32, eq_h: u32, face_size: u32) -> Vec<f32
     out
 }
 
-/// Cube face → world direction, matching Vulkan `samplerCube` face selection.
+/// Cube face → 世界 direction, matching Vulkan `samplerCube` face selection.
 fn cube_direction(face: u32, u: f32, v: f32) -> [f32; 3] {
     match face {
         0 => [1.0, -v, -u],  // +X
@@ -1425,7 +1425,7 @@ fn normalize3(d: [f32; 3]) -> [f32; 3] {
     [d[0] / len, d[1] / len, d[2] / len]
 }
 
-/// Bilinear sample of an equirectangular RGBA-float buffer.
+/// Bilinear 样本 of an equirectangular RGBA-float 缓冲区
 fn sample_equirect_bilinear(eq: &[f32], w: u32, h: u32, u: f32, v: f32) -> [f32; 4] {
     let fw = w as f32;
     let fh = h as f32;
@@ -1527,7 +1527,7 @@ fn transition_image(
     };
 }
 
-/// Build a COLOR `ImageSubresourceRange` for [`transition_image_single`].
+/// 构建 a 颜色 `ImageSubresourceRange` for [`transition_image_single`].
 fn color_subresource(
     base_mip: u32,
     level_count: u32,
@@ -1542,7 +1542,7 @@ fn color_subresource(
         .layer_count(layer_count)
 }
 
-/// Transition a single image with an explicit subresource range (for
+/// 过渡 a single 图像 with an explicit subresource range (for
 /// non-cube images).
 fn transition_image_single(
     device: &ash::Device,
@@ -1718,7 +1718,7 @@ fn create_staging_buffer(
     Ok((buffer, memory))
 }
 
-/// IEEE-754 single -> half (round to nearest even).
+/// IEEE-754 single -> half 舍入 to nearest even).
 fn f32_to_f16(x: f32) -> u16 {
     let bits = x.to_bits();
     let sign = ((bits >> 16) & 0x8000) as u16;
@@ -1759,7 +1759,7 @@ fn f32_to_f16(x: f32) -> u16 {
 }
 
 /// Procedural equirectangular environment (gradient sky + sun) used when no
-/// `.hdr` asset is supplied.
+/// 高动态范围 资源 is supplied.
 fn procedural_equirect(width: u32, height: u32) -> (Vec<f32>, u32, u32) {
     let mut data = vec![0.0f32; (width * height * 4) as usize];
     for y in 0..height {

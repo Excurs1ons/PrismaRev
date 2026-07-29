@@ -1,32 +1,32 @@
-//! ECS component type aliases and factory helpers.
+//! ECS 分量 类型 aliases and 工厂 helpers.
 //!
-//! Re-exports the engine's standard components so consumers can write
+//! Re-exports the engine's 标准 components so consumers can 写入
 //! `use crate::ecs::components::*` instead of
 //! `use crate::scene::components::{...}`.
 //!
 //! # Base components
 //!
-//! | Alias | Canonical type |
+//! | Alias | Canonical 类型 |
 //! |-------|----------------|
-//! | [`Transform`] | [`LocalTransform`](crate::scene::components::LocalTransform) |
-//! | [`Camera`]   | [`Camera`](crate::scene::components::Camera) |
+//! | 变换 | [`LocalTransform`](crate::scene::components::LocalTransform) |
+//! | 相机 | [`Camera`](crate::scene::components::Camera) |
 //! | [`Name`]     | [`Name`](crate::scene::components::Name) |
 
 pub use crate::scene::components::{
     Camera, DirectionalLight, LocalTransform, Name, PointLight, SpotLight,
 };
 
-/// Convenience: the engine's standard game-object transform.
+/// Convenience: the engine's 标准 game-object 变换
 pub type Transform = LocalTransform;
 
 // ---------------------------------------------------------------------------
 // MeshRenderer
 // ---------------------------------------------------------------------------
 
-/// A renderable entity with a mesh and material, referenced by handle.
+/// A renderable 实体 with a 网格 and 材质 referenced by handle.
 ///
-/// This is the high-level authoring component.  At extraction time the
-/// render system resolves the handles to GPU resources and produces
+/// This is the high-level authoring 分量 At extraction 时间 the
+/// 渲染 系统 resolves the handles to GPU resources and produces
 /// [`DrawItem`]s.
 #[derive(Debug, Clone)]
 pub struct MeshRenderer {

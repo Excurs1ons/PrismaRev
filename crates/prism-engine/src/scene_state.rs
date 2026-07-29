@@ -1,16 +1,16 @@
 //! Scene-state persistence: save/restore inspector-editable parameters
-//! (transforms, lights, camera) to/from a JSON file.
+//! (transforms, lights, 相机 to/from a JSON file.
 //!
 //! Saved on explicit Ctrl+S and on graceful exit; loaded on startup.
-//! The format is hand-rolled JSON (no serde dependency).
+//! The 格式 is hand-rolled JSON (no serde dependency).
 //!
-//! **Format version 2:** Point-light position and active state are serialized
-//! together with the light. This preserves the entity/component relationship
-//! instead of pairing independent component arrays by iteration order.
+//! **Format version 2:** Point-light position and 激活 状态 are serialized
+//! together with the 光源 This preserves the entity/component relationship
+//! instead of pairing independent 分量 arrays by 迭代 order.
 //!
-//! **Format version 3:** Camera state is sourced from the data components
-//! (`Camera` + `FlyCameraController` + `LocalTransform`) instead of the old
-//! `crate::camera::Camera` enum. `fov_y` is still serialized in radians for
+//! **Format version 3:** 相机 状态 is sourced from the data components
+//! 相机 + `FlyCameraController` + `LocalTransform`) instead of the old
+//! `crate::camera::Camera` 枚举 `fov_y` is still serialized in 弧度 for
 //! backward-compat with v2 files.
 
 use glam::{Quat, Vec3};
@@ -113,7 +113,7 @@ impl CameraState {
     }
 }
 
-// --- DirectionalLight (new scene component, no `enabled` field) ---
+// --- DirectionalLight (new scene 分量 no 启用 field) ---
 impl SceneDirLight {
     fn to_json(self) -> String {
         format!(
@@ -184,7 +184,7 @@ impl SavedPointLight {
         })
     }
 }
-// --- LocalTransform (new scene component, no `enabled` field) ---
+// --- LocalTransform (new scene 分量 no 启用 field) ---
 impl LocalTransform {
     fn to_json(&self) -> String {
         format!(
@@ -205,17 +205,17 @@ impl LocalTransform {
 }
 
 // ---------------------------------------------------------------------------
-// Save / load
+// 保存 / 加载
 // ---------------------------------------------------------------------------
 
-/// Query the ECS world + camera and write the JSON file.
+/// 查询 the ECS 世界 + 相机 and 写入 the JSON file.
 pub fn save_scene_state(world: &World) {
     use std::fmt::Write;
 
-    // Camera state is composed from the data components on the first Camera
-    // entity: position from LocalTransform, yaw/pitch/move_speed/look_sensitivity
-    // from FlyCameraController, fov/near/far from Camera. (Position lives on
-    // the transform since the controller refactor - see scene::systems::camera.)
+    // 相机 状态 is composed from the data components on the 第一个 相机
+    // 实体 position from LocalTransform, yaw/pitch/move_speed/look_sensitivity
+    // from FlyCameraController, fov/near/far from 相机 (Position lives on
+    // the 变换 since the controller refactor - see scene::systems::camera.)
     let camera_state: Option<CameraState> = world
         .query::<Camera>()
         .next()
@@ -253,12 +253,12 @@ pub fn save_scene_state(world: &World) {
     json.push_str("{\n");
     let _ = writeln!(json, "\"version\":{SCENE_STATE_VERSION},");
 
-    // Camera
+    // 相机
     if let Some(cs) = &camera_state {
         let _ = writeln!(json, "\"camera\":{},", cs.to_json());
     }
 
-    // Directional light
+    // Directional 光源
     if let Some(dl) = &dir_light {
         let _ = writeln!(json, "\"directionalLight\":{},", (*dl).to_json());
     }
@@ -291,9 +291,9 @@ pub fn save_scene_state(world: &World) {
     }
 }
 
-/// Read the JSON file and apply saved values to the ECS world (camera
-/// lives as a resource inside the world).
-/// Returns `true` if a state was loaded (so callers can skip default placement).
+/// 读取 the JSON file and apply saved values to the ECS 世界 相机
+/// lives as a 资源 inside the 世界
+/// Returns `true` if a 状态 was loaded (so callers can skip 默认 placement).
 pub fn load_scene_state(world: &mut World) -> bool {
     let path = scene_state_path();
     let text = match std::fs::read_to_string(&path) {
@@ -306,8 +306,8 @@ pub fn load_scene_state(world: &mut World) -> bool {
     true
 }
 
-/// Apply already-read scene-state text. Kept separate from file I/O so state
-/// reconciliation can be tested without touching the executable directory.
+/// Apply already-read scene-state text. Kept separate from file I/O so 状态
+/// reconciliation can be tested without touching the 可执行文件 directory.
 fn apply_scene_state(world: &mut World, text: &str) {
     use std::collections::HashSet;
 
@@ -316,12 +316,12 @@ fn apply_scene_state(world: &mut World, text: &str) {
         .map(|array| parse_transform_array(&array))
         .unwrap_or_default();
 
-    // --- Camera (data components on the first Camera entity) ---
+    // --- 相机 (data components on the 第一个 相机 实体 ---
     if let Some(cs) = extract_object(&text, "camera").and_then(|json| CameraState::from_json(&json))
     {
-        // Find the camera entity with an immutable borrow first, so the
-        // subsequent per-component `get_mut` calls don't overlap the query's
-        // borrow of `world`.
+        // 查找 the 相机 实体 with an immutable 借用 第一个 so the
+        // subsequent per-component `get_mut` calls don't 重叠 the query's
+        // 借用 of 世界
         let cam_entity = world.query::<Camera>().next().map(|(e, _)| e);
         if let Some(cam_entity) = cam_entity {
             if let Some(cam) = world.get_mut::<Camera>(cam_entity) {
@@ -341,7 +341,7 @@ fn apply_scene_state(world: &mut World, text: &str) {
         }
     }
 
-    // --- Directional light ---
+    // --- Directional 光源 ---
     if let Some(dl_json) = extract_object(&text, "directionalLight") {
         if let Some(dl) = SceneDirLight::from_json(&dl_json) {
             for (_, existing) in world.query_mut::<SceneDirLight>() {
@@ -362,7 +362,7 @@ fn apply_scene_state(world: &mut World, text: &str) {
     if let Some(pl_array) = extract_array(&text, "pointLights") {
         let mut parsed = parse_pt_light_array(&pl_array);
 
-        // Version 1 wrote point-light and transform arrays independently. At
+        // Version 1 wrote point-light and 变换 arrays independently. At
         // startup the point-light transforms occupied the leading slots, so
         // recover those positions before applying the remaining transforms.
         if version < SCENE_STATE_VERSION {
@@ -377,8 +377,8 @@ fn apply_scene_state(world: &mut World, text: &str) {
             }
         }
 
-        // Persisted state is authoritative only for existing scene lights.
-        // Never create an entity for an unmatched saved record.
+        // Persisted 状态 is authoritative only for existing scene lights.
+        // Never 创建 an 实体 for an unmatched saved record.
         for entity in old_point_entities.iter().copied() {
             world.remove::<ScenePtLight>(entity);
         }
@@ -436,7 +436,7 @@ fn apply_scene_state(world: &mut World, text: &str) {
 // keep scene_state.rs self-contained).
 // ---------------------------------------------------------------------------
 
-/// Find `[a,b,c]` following `key` in a JSON-ish string.
+/// 查找 `[a,b,c]` following 调 in a JSON-ish 字符串
 fn find_array_f32(s: &str, key: &str) -> Option<Vec<f32>> {
     let after = s.find(key)? + key.len();
     let rest = &s[after..];
@@ -450,7 +450,7 @@ fn find_array_f32(s: &str, key: &str) -> Option<Vec<f32>> {
     Some(out)
 }
 
-/// Find a bare `f32` following `"key":` in a JSON-ish string.
+/// 查找 a bare `f32` following 调 in a JSON-ish 字符串
 fn find_field_f32(s: &str, key: &str) -> Option<f32> {
     let needle = format!("\"{key}\":");
     let pos = s.find(&needle)? + needle.len();
@@ -461,7 +461,7 @@ fn find_field_f32(s: &str, key: &str) -> Option<f32> {
     rest[..end].trim().parse::<f32>().ok()
 }
 
-/// Find a bare boolean following `"key":` in a JSON-ish string.
+/// 查找 a bare 布尔 following 调 in a JSON-ish 字符串
 fn find_field_bool(s: &str, key: &str) -> Option<bool> {
     let needle = format!("\"{key}\":");
     let pos = s.find(&needle)? + needle.len();
@@ -472,7 +472,7 @@ fn find_field_bool(s: &str, key: &str) -> Option<bool> {
     rest[..end].trim().parse::<bool>().ok()
 }
 
-/// Extract the JSON object `{...}` for a top-level key. Returns the inner
+/// Extract the JSON 对象 `{...}` for a top-level 调 Returns the inner
 /// content (without the outer braces) so `from_json` can parse it.
 fn extract_object(s: &str, key: &str) -> Option<String> {
     let needle = format!("\"{key}\":");
@@ -501,7 +501,7 @@ fn extract_object(s: &str, key: &str) -> Option<String> {
     Some(rest[inner_start..inner_start + pos].to_string())
 }
 
-/// Extract a JSON array `[...]` for a key.
+/// Extract a JSON 数组 `[...]` for a 调
 fn extract_array(s: &str, key: &str) -> Option<String> {
     let needle = format!("\"{key}\":");
     let start = s.find(&needle)? + needle.len();
@@ -529,7 +529,7 @@ fn extract_array(s: &str, key: &str) -> Option<String> {
     Some(rest[inner_start..inner_start + pos].to_string())
 }
 
-/// Parse point lights from version 2 or the legacy position/enabled format.
+/// Parse point lights from version 2 or the legacy position/enabled 格式
 fn parse_pt_light_array(s: &str) -> Vec<SavedPointLight> {
     let mut out = Vec::new();
     let mut rest = s.trim();
@@ -552,8 +552,8 @@ fn parse_pt_light_array(s: &str) -> Vec<SavedPointLight> {
     out
 }
 
-/// Parse a JSON array of `{...}` objects into Vec<LocalTransform>.
-/// Backward-compatible: reads `enabled` from old format (ignored).
+/// Parse a JSON 数组 of `{...}` objects into Vec<LocalTransform>.
+/// Backward-compatible: reads 启用 from old 格式 (ignored).
 fn parse_transform_array(s: &str) -> Vec<LocalTransform> {
     let mut out = Vec::new();
     let mut rest = s.trim();
@@ -593,7 +593,7 @@ fn parse_transform_array(s: &str) -> Vec<LocalTransform> {
     out
 }
 
-/// Extract a single `{...}` object from the start of a string, returning
+/// Extract a single `{...}` 对象 from the start of a 字符串 returning
 /// (inner_content, bytes_consumed) including the braces.
 fn extract_object_nested(s: &str) -> Option<(String, usize)> {
     let s = s.trim();

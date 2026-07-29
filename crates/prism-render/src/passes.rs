@@ -1,8 +1,8 @@
-//! Forward + post-process passes for the main scene render.
+//! 向前 + post-process passes for the main scene 渲染
 //!
-//! * [`ScenePass`] - PBR forward pass writing the swapchain color (post-tonemap)
-//!   + a view-space normal MRT consumed by [`crate::gtao::GtaoPass`].
-//! * [`ShadowMapPass`] - depth-only shadow map for directional light.
+//! * [`ScenePass`] - PBR 向前 pass writing the 交换链 颜色 (post-tonemap)
+//! + a view-space 法线 MRT consumed by [`crate::gtao::GtaoPass`].
+//! * [`ShadowMapPass`] - depth-only shadow 映射表 for directional 光源
 //! * [`SkyboxPass`] - env cubemap background (drawn by ScenePass).
 //!
 //! Dead passes removed: GBuffer, SHARC, RayQuery, Lighting, Post (stub).
@@ -26,35 +26,35 @@ use crate::context::VulkanContext;
 use crate::shader;
 use crate::shader_bindings;
 
-/// Rasterized shadow map — the depth-only fallback for the hybrid adaptive
-/// shadow system (`docs/DESIGN.md` §2.3).
+/// Rasterized shadow 映射表 — the depth-only 回退 for the hybrid adaptive
+/// shadow 系统 (`docs/DESIGN.md` §2.3).
 ///
-/// When `VK_KHR_ray_query` is unavailable (or RT is disabled) the renderer
+/// When `VK_KHR_ray_query` is unavailable (or RT is 禁用 the 渲染器
 /// selects this pass instead of [`RayQueryPass`]. It renders the scene's
-/// depth from the light's point of view into a depth texture; the lighting
-/// pass later samples that texture (with a comparison sampler) to decide lit
+/// 深度 from the light's point of 视图 into a 深度 纹理 the lighting
+/// pass later samples that 纹理 (with a 比较 采样器 to decide lit
 /// vs shadowed.
 ///
-/// The pipeline is depth-only (`color_attachment_count = 0`), uses
-/// front-face culling + slope/constant depth bias to reduce shadow acne and
-/// peter-panning, and feeds the light-space matrix via push constants (no UBO).
+/// The 管线 is depth-only (`color_attachment_count = 0`), uses
+/// front-face 剔除 + slope/constant 深度 bias to reduce shadow acne and
+/// peter-panning, and feeds the light-space 矩阵 via 推送 constants (no UBO).
 pub struct ShadowMapPass {
-    /// Shadow map depth attachment handle (created in `setup`).
+    /// Shadow 映射表 深度 附件 handle (created in `setup`).
     pub shadow_map: ResourceHandle,
-    /// Square shadow map resolution (e.g. 2048).
+    /// Square shadow 映射表 分辨率 (e.g. 2048).
     shadow_size: u32,
-    /// Depth-only graphics pipeline (lazy-created on first `execute`).
+    /// Depth-only graphics 管线 (lazy-created on 第一个 执行
     pipeline: Option<GraphicsPipeline>,
-    /// Shadow render pass (depth-only).
+    /// Shadow 渲染 pass (depth-only).
     render_pass: Option<vk::RenderPass>,
-    /// Framebuffer wrapping the shadow map depth view.
+    /// 帧缓冲 wrapping the shadow 映射表 深度 视图
     framebuffer: Option<vk::Framebuffer>,
-    /// Cloned device handle for `Drop`.
+    /// Cloned 设备 handle for 放置
     device: Option<ash::Device>,
 }
 
-/// Square shadow map resolution. 2048 is a reasonable desktop/mobile default;
-/// raise for quality, lower for bandwidth on weak GPUs.
+/// Square shadow 映射表 分辨率 2048 is a reasonable desktop/mobile 默认
+/// raise for quality, lower for 带宽 on weak GPUs.
 const SHADOW_MAP_SIZE: u32 = 2048;
 
 
@@ -71,12 +71,12 @@ impl ShadowMapPass {
         }
     }
 
-    /// Shadow map resource handle (for the lighting pass to read).
+    /// Shadow 映射表 资源 handle (for the lighting pass to 读取
     pub fn shadow_map_handle(&self) -> ResourceHandle {
         self.shadow_map
     }
 
-    /// Square shadow map extent (`shadow_size` x `shadow_size`). Exposed for
+    /// Square shadow 映射表 extent (`shadow_size` x `shadow_size`). Exposed for
     /// the render-graph visualizer.
     pub fn shadow_extent(&self) -> vk::Extent2D {
         vk::Extent2D {
@@ -85,14 +85,14 @@ impl ShadowMapPass {
         }
     }
 
-    /// Create a depth-only render pass (single depth attachment, no color).
+    /// 创建 a depth-only 渲染 pass (single 深度 附件 no 颜色
     ///
     /// Uses `DEPTH_STENCIL_ATTACHMENT_OPTIMAL` / `DEPTH_STENCIL_READ_ONLY_OPTIMAL`
     /// rather than the separate-depth-only layouts: the latter require the
-    /// `separateDepthStencilLayouts` Vulkan 1.2 feature, which we don't enable
+    /// `separateDepthStencilLayouts` Vulkan 1.2 特性 which we don't enable
     /// (it's optional and not uniformly available on mobile). The combined
-    /// layouts are valid for a `D32_SFLOAT` (depth-only) image with the depth
-    /// aspect masked in the view.
+    /// layouts are 有效 for a `D32_SFLOAT` (depth-only) 图像 with the 深度
+    /// 宽高比 masked in the 视图
     fn create_render_pass(
         device: &ash::Device,
         depth_format: vk::Format,
@@ -105,11 +105,11 @@ impl ShadowMapPass {
             .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
             .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
             // `UNDEFINED` + LOAD_OP_CLEAR is the Vulkan-idiomatic way to say
-            // "discard incoming contents, I'll clear": the render pass performs
-            // the implicit `any -> DEPTH_STENCIL_ATTACHMENT_OPTIMAL` transition.
-            // This removes the need for the hand-rolled `UNDEFINED -> ATTACHMENT`
+            // "discard incoming contents, I'll 清空 the 渲染 pass performs
+            // the implicit `any -> DEPTH_STENCIL_ATTACHMENT_OPTIMAL` 过渡
+            // This removes the need for the hand-rolled `UNDEFINED -> 附件
             // `cmd_pipeline_barrier` that used to precede `cmd_begin_render_pass`
-            // (the image is graph-managed and re-cleared every frame, so there
+            // (the 图像 is graph-managed and re-cleared every 帧 so there
             // is nothing to preserve between frames).
             .initial_layout(vk::ImageLayout::UNDEFINED)
             .final_layout(vk::ImageLayout::DEPTH_STENCIL_READ_ONLY_OPTIMAL);
@@ -123,7 +123,7 @@ impl ShadowMapPass {
             .depth_stencil_attachment(&depth_ref);
 
         // Wait for any prior shadow-map sampling to finish reading before we
-        // write depth again.
+        // 写入 深度 again.
         let dependency = vk::SubpassDependency::default()
             .src_subpass(vk::SUBPASS_EXTERNAL)
             .dst_subpass(0)
@@ -166,9 +166,9 @@ impl RenderPassNode for ShadowMapPass {
     }
 
     fn execute(&mut self, ctx: &RenderContext, resources: &mut GraphResources) -> Result<()> {
-        // Only render when the rasterized shadow path is active. The graph
-        // builder adds this pass only for `ShadowMode::Raster`, but guard
-        // anyway so a misconfigured graph can't waste a depth pass.
+        // Only 渲染 when the rasterized shadow path is 激活 The 图
+        // 构建器 adds this pass only for `ShadowMode::Raster`, but guard
+        // anyway so a misconfigured 图 can't waste a 深度 pass
         if ctx.frame.shadow_mode != ShadowMode::Raster {
             return Ok(());
         }
@@ -182,22 +182,22 @@ impl RenderPassNode for ShadowMapPass {
             }
         };
 
-        // Lazy-init pipeline + render pass + framebuffer.  If warmup already
-        // created pipeline + render_pass, only the framebuffer still needs to
-        // be created (it depends on `shadow_view` from the graph resources,
-        // which are only available during execute).
+        // Lazy-init 管线 + 渲染 pass + 帧缓冲 If warmup already
+        // created 管线 + render_pass, only the 帧缓冲 still needs to
+        // be created (it depends on `shadow_view` from the 图 resources,
+        // which are only available during 执行
         if self.framebuffer.is_none() {
             let device = ctx.device;
             self.device = Some(device.clone());
 
-            // Render pass — shared between warmup and execute.
+            // 渲染 pass — shared between warmup and 执行
             if self.render_pass.is_none() {
                 let render_pass = Self::create_render_pass(device, vk::Format::D32_SFLOAT)?;
                 self.render_pass = Some(render_pass);
             }
             let rp = self.render_pass.unwrap();
 
-            // Framebuffer — always needs the per-execute shadow_view.
+            // 帧缓冲 — always needs the per-execute shadow_view.
             let framebuffer = unsafe {
                 device.create_framebuffer(
                     &vk::FramebufferCreateInfo::default()
@@ -212,7 +212,7 @@ impl RenderPassNode for ShadowMapPass {
             .context("create shadow framebuffer")?;
             self.framebuffer = Some(framebuffer);
 
-            // Pipeline — may already exist when warmup ran ahead of time.
+            // 管线 — may already exist when warmup ran ahead of 时间
             if self.pipeline.is_none() {
                 const VERT_SPV: &[u8] = include_bytes!("../../../shaders/shadow_depth.vert.spv");
                 const FRAG_SPV: &[u8] =
@@ -248,7 +248,7 @@ impl RenderPassNode for ShadowMapPass {
                     .offset(0)
                     .size(std::mem::size_of::<shader_bindings::shadow_depth::ShadowPush>() as u32)];
 
-                // Depth-only pipeline: NO face cull + depth bias.
+                // Depth-only 管线 NO face cull + 深度 bias.
                 let pipeline = GraphicsPipeline::new(&PipelineDesc {
                     device,
                     shader_stages: &shader_stages,
@@ -282,11 +282,11 @@ impl RenderPassNode for ShadowMapPass {
         let framebuffer = self.framebuffer.unwrap();
 
         // The shadow map's `UNDEFINED -> DEPTH_STENCIL_ATTACHMENT_OPTIMAL`
-        // transition used to live here as a hand-rolled `cmd_pipeline_barrier`.
-        // It is now handled implicitly by the render pass: the attachment
-        // `initial_layout = UNDEFINED` + `LOAD_OP_CLEAR` lets Vulkan perform
-        // the transition inside `cmd_begin_render_pass` (see `create_render_pass`).
-        // `shadow_img` is therefore no longer needed in this function body.
+        // 过渡 used to live here as a hand-rolled `cmd_pipeline_barrier`.
+        // It is now handled implicitly by the 渲染 pass the 附件
+        // `initial_layout = UNDEFINED` + `LOAD_OP_CLEAR` lets Vulkan 执行
+        // the 过渡 inside `cmd_begin_render_pass` (see `create_render_pass`).
+        // `shadow_img` is therefore no longer needed in this 函数 body.
         let _ = resources.image(self.shadow_map).unwrap_or_default();
 
         let clear = vk::ClearValue {
@@ -395,12 +395,12 @@ impl RenderPassNode for ShadowMapPass {
         }
         self.device = Some(device.clone());
 
-        // Render pass — same layout as `execute` uses.
+        // 渲染 pass — same 布局 as 执行 uses.
         let render_pass =
             Self::create_render_pass(device, vk::Format::D32_SFLOAT)?;
         self.render_pass = Some(render_pass);
 
-        // Pipeline — load shader modules, create depth-only pipeline.
+        // 管线 — 加载 着色器 modules, 创建 depth-only 管线
         const VERT_SPV: &[u8] = include_bytes!("../../../shaders/shadow_depth.vert.spv");
         const FRAG_SPV: &[u8] = include_bytes!("../../../shaders/shadow_depth.frag.spv");
         let vert_module =
@@ -474,18 +474,18 @@ impl RenderPassNode for ShadowMapPass {
 }
 
 impl ShadowMapPass {
-    /// Tear down all GPU resources (framebuffer, render pass, pipeline/layout).
+    /// Tear 下 all GPU resources 帧缓冲 渲染 pass pipeline/layout).
     ///
     /// Called from [`GraphRenderer::destroy`] on shutdown **before** the
-    /// `Arc<VulkanContext>` reference count drops to zero. Without this explicit
-    /// call, `ShadowMapPass` relies on its `Drop` impl — but Rust's struct field
-    /// drop order means the graph (and thus this pass) is dropped *after* the
+    /// `Arc<VulkanContext>` 引用 count drops to 零 Without this explicit
+    /// 调用 `ShadowMapPass` relies on its 放置 impl — but Rust's 结构体 field
+    /// 放置 order means the 图 (and thus this pass is dropped *after* the
     /// `Arc<VulkanContext>` holders (`runtime`/`ibl`/`scene_scope`), at which
-    /// point the device handle is already stale and calling
-    /// `destroy_framebuffer` / `destroy_render_pass` on it causes an access
+    /// point the 设备 handle is already stale and calling
+    /// `destroy_framebuffer` / `destroy_render_pass` on it causes an 访问
     /// violation.
     ///
-    /// After this call `self.device` is `None`, so the subsequent `Drop` becomes
+    /// After this 调用 `self.device` is `None`, so the subsequent 放置 becomes
     /// a no-op.
     pub fn destroy(&mut self, device: &ash::Device) {
         if let Some(fb) = self.framebuffer.take() {
@@ -494,7 +494,7 @@ impl ShadowMapPass {
         if let Some(rp) = self.render_pass.take() {
             unsafe { device.destroy_render_pass(rp, None) };
         }
-        // GraphicsPipeline::Drop frees the pipeline + layout.
+        // GraphicsPipeline::Drop frees the 管线 + 布局
         self.pipeline = None;
         self.device = None;
     }
@@ -509,7 +509,7 @@ impl Drop for ShadowMapPass {
             if let Some(rp) = self.render_pass.take() {
                 unsafe { device.destroy_render_pass(rp, None) };
             }
-            // GraphicsPipeline's own Drop frees the pipeline + layout.
+            // GraphicsPipeline's own 放置 frees the 管线 + 布局
         }
     }
 }
@@ -518,33 +518,33 @@ impl Drop for ShadowMapPass {
 /// scene.
 ///
 /// Reuses the env cubemap already produced by [`crate::ibl::IblResources`] from
-/// the user-supplied `.hdr` (e.g. `kloppenheim_05_4k.hdr`) — there is no
-/// separate loader: the skybox is just that env map rendered at the far plane.
+/// the user-supplied 高动态范围 (e.g. `kloppenheim_05_4k.hdr`) — there is no
+/// separate loader: the skybox is just that env 映射表 rendered at the 远 平面
 ///
-/// The cube is generated in the vertex shader from `SV_VertexID` (no vertex
-/// buffer is bound). The vertex stage strips the camera translation (by
-/// rotating the corner with the inverse-view rotation, w=0) so the box stays
-/// at infinity, then places it at NDC z=1 (far plane). The pipeline disables
-/// depth writes and uses `LESS_OR_EQUAL` depth test, so the sky only shows
+/// The cube is generated in the 顶点 着色器 from `SV_VertexID` (no 顶点
+/// 缓冲区 is bound). The 顶点 阶段 strips the 相机 平移 (by
+/// rotating the corner with the inverse-view 旋转 w=0) so the 盒 stays
+/// at 无穷 then places it at NDC z=1 远 平面 The 管线 disables
+/// 深度 writes and uses `LESS_OR_EQUAL` 深度 test, so the sky only shows
 /// where no scene geometry has drawn.
 ///
-/// Descriptor set layout (mirrors `skybox.slang`):
-///   set 2, binding 0 - IBL environment cubemap (SamplerCube, combined)
+/// 描述符 集合 布局 (mirrors `skybox.slang`):
+/// 集合 2, 绑定 0 - IBL environment cubemap (SamplerCube, combined)
 pub struct SkyboxPass {
-    /// IBL env cubemap descriptor set (set 0 binding 0). Borrowed from
+    /// IBL env cubemap 描述符 集合 集合 0 绑定 0). Borrowed from
     /// `IblResources`; not owned by `SkyboxPass`.
     ibl_descriptor_set: vk::DescriptorSet,
-    /// IBL descriptor set layout (borrowed from `IblResources`). Contains
-    /// bindings 0=envCube, 1=irradiance, 2=prefiltered; the skybox shader
-    /// only reads binding 0 (envCube).
+    /// IBL 描述符 集合 布局 (borrowed from `IblResources`). 包含
+    /// bindings 0=envCube, 1=irradiance, 2=prefiltered; the skybox 着色器
+    /// only reads 绑定 0 (envCube).
     ibl_layout: vk::DescriptorSetLayout,
-    /// Owned pipeline + layout (created lazily on first `execute`).
+    /// Owned 管线 + 布局 (created lazily on 第一个 执行
     pipeline: Option<GraphicsPipeline>,
-    /// Render pass the current `pipeline` was built against (to detect when a
-    /// rebuild is needed, e.g. after a swapchain recreate rebuilds the
-    /// ScenePass render pass).
+    /// 渲染 pass the 当前 管线 was 内置 against (to detect when a
+    /// rebuild is needed, e.g. after a 交换链 recreate rebuilds the
+    /// ScenePass 渲染 pass
     built_for_render_pass: Option<vk::RenderPass>,
-    /// Cached device handle for Drop.
+    /// Cached 设备 handle for 放置
     device: Option<ash::Device>,
 }
 
@@ -559,26 +559,26 @@ impl SkyboxPass {
         }
     }
 
-    /// Build (once) the skybox pipeline.
+    /// 构建 (once) the skybox 管线
     fn ensure_pipeline(&mut self, device: &ash::Device) -> Result<()> {
         if self.pipeline.is_some() {
             return Ok(());
         }
         self.device = Some(device.clone());
 
-        // The render pass + color/depth formats are provided at draw time via
-        // `execute_with` because the skybox must render into the *same*
-        // framebuffer the ScenePass uses. We can't build a fixed pipeline
-        // here without that render pass, so the pipeline is created lazily
-        // inside `execute_with` (which has the render pass).
+        // The 渲染 pass + color/depth formats are provided at 绘制 时间 via
+        // `execute_with` because the skybox must 渲染 into the *same*
+        // 帧缓冲 the ScenePass uses. We can't 构建 a fixed 管线
+        // here without that 渲染 pass so the 管线 is created lazily
+        // inside `execute_with` (which has the 渲染 pass
         Ok(())
     }
 
-    /// Draw the skybox into the currently-bound render pass (begun by the
-    /// caller, `ScenePass`). `render_pass` + `extent` are needed to lazily
-    /// create the pipeline. `inv_view_rot` is the inverse view rotation
-    /// (world <- view), used to rotate the view-space look direction into
-    /// world space for cubemap sampling.
+    /// 绘制 the skybox into the currently-bound 渲染 pass (begun by the
+    /// 调用者 `ScenePass`). `render_pass` + `extent` are needed to lazily
+    /// 创建 the 管线 `inv_view_rot` is the inverse 视图 旋转
+    /// 世界 <- 视图 used to 旋转 the view-space look direction into
+    /// 世界 空间 for cubemap sampling.
     pub fn draw(
         &mut self,
         device: &ash::Device,
@@ -589,12 +589,12 @@ impl SkyboxPass {
     ) -> Result<()> {
         self.ensure_pipeline(device)?;
 
-        // Lazily (re)build the pipeline if the render pass differs (e.g. after
-        // a swapchain recreate that rebuilt ScenePass' render pass).
+        // Lazily (re)build the 管线 if the 渲染 pass differs (e.g. after
+        // a 交换链 recreate that rebuilt ScenePass' 渲染 pass
         let rebuild = self.built_for_render_pass != Some(render_pass);
         if rebuild {
-            // Drop the old pipeline via GraphicsPipeline::Drop (which destroys
-            // the pipeline + layout). Do NOT call destroy_pipeline manually -
+            // 放置 the old 管线 via GraphicsPipeline::Drop (which destroys
+            // the 管线 + 布局 Do NOT 调用 destroy_pipeline manually -
             // that double-frees.
             self.pipeline = None;
 
@@ -619,22 +619,22 @@ impl SkyboxPass {
             );
             let shader_stages = [vert_stage, frag_stage];
 
-            // No vertex buffer: positions come from SV_VertexID in the shader.
+            // No 顶点 缓冲区 positions come from SV_VertexID in the 着色器
             let binding_descs: [vk::VertexInputBindingDescription; 0] = [];
             let attr_descs: [vk::VertexInputAttributeDescription; 0] = [];
 
-            // Push constants: SkyboxPush struct (108 bytes in the compiled
-            // shader; round up to 128 for alignment margin).
+            // 推送 constants: SkyboxPush 结构体 (108 字节 in the compiled
+            // 着色器 舍入 上 to 128 for 对齐 margin).
             let push = [vk::PushConstantRange::default()
                 .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
                 .offset(0)
                 .size(128)];
 
-            // MRT blend state: ScenePass's render pass now has 2 color
-            // attachments (color + view-normal). Every pipeline bound inside
-            // that render pass must declare a matching attachmentCount, so the
-            // skybox pipeline lists 2 blend states even though it only writes
-            // SV_Target0. attachment 1's write mask is 0 so the normal target
+            // MRT 混合 状态 ScenePass's 渲染 pass now has 2 颜色
+            // attachments 颜色 + view-normal). Every 管线 bound inside
+            // that 渲染 pass must declare a matching attachmentCount, so the
+            // skybox 管线 lists 2 混合 states even though it only writes
+            // SV_Target0. 附件 1's 写入 遮罩 is 0 so the 法线 目标
             // is untouched (the cleared value remains for sky pixels).
             let blend_attachments = [
                 vk::PipelineColorBlendAttachmentState::default()
@@ -658,8 +658,8 @@ impl SkyboxPass {
                 depth_bias_enable: None,
                 depth_bias_constant_factor: None,
                 depth_bias_slope_factor: None,
-                // Disable depth write so the sky never occludes scene geometry;
-                // depth test LEQUAL lets it draw where depth == 1.0 (cleared).
+                // Disable 深度 写入 so the sky never occludes scene geometry;
+                // 深度 test LEQUAL lets it 绘制 where 深度 == 1.0 (cleared).
                 depth_write_enable: Some(false),
                 color_attachment_count: None,
                 color_blend_attachments: Some(&blend_attachments),
@@ -678,9 +678,9 @@ impl SkyboxPass {
 
         unsafe {
             device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.pipeline);
-            // Bind the IBL set at set 0. The IBL layout has bindings
-            // 0=envCube, 1=irradiance, 2=prefiltered; the skybox shader
-            // only reads binding 0 (envCube).
+            // Bind the IBL 集合 at 集合 0. The IBL 布局 has bindings
+            // 0=envCube, 1=irradiance, 2=prefiltered; the skybox 着色器
+            // only reads 绑定 0 (envCube).
             device.cmd_bind_descriptor_sets(
                 cmd,
                 vk::PipelineBindPoint::GRAPHICS,
@@ -690,8 +690,8 @@ impl SkyboxPass {
                 &[],
             );
 
-            // Push `invViewRot` (inverse view rotation) as the SkyboxPush
-            // (128-byte range; only the first mat4 is used by the shader).
+            // 推送 `invViewRot` (inverse 视图 旋转 as the SkyboxPush
+            // (128-byte range; only the 第一个 mat4 is used by the 着色器
             let mut push_data = [0u8; 128];
             push_data[..64].copy_from_slice(std::slice::from_raw_parts(
                 inv_view_rot as *const _ as *const u8,
@@ -705,22 +705,22 @@ impl SkyboxPass {
                 &push_data,
             );
 
-            // 36 vertices (12 triangles) over the 8 cube corners. No index
-            // buffer is bound; the vertex shader selects the corner by vid%8.
+            // 36 顶点 (12 triangles) over the 8 cube corners. No 索引
+            // 缓冲区 is bound; the 顶点 着色器 selects the corner by vid%8.
             device.cmd_draw(cmd, 36, 1, 0, 0);
         }
 
         Ok(())
     }
 
-    /// Tear down GPU resources.
+    /// Tear 下 GPU resources.
     ///
     /// `GraphicsPipeline` owns its own Vulkan handles and destroys them in its
-    /// `Drop` impl, so we just drop the `Option` here -- do NOT call
-    /// `destroy_pipeline` manually (that double-frees, since `Drop` would then
-    /// destroy the same handle again).
+    /// 放置 impl, so we just 放置 the 选项 here -- do NOT 调用
+    /// `destroy_pipeline` manually (that double-frees, since 放置 would then
+    /// 销毁 the same handle again).
     pub fn destroy(&mut self, _device: &ash::Device) {
-        // Dropping `pipeline` runs `GraphicsPipeline::drop`, which calls
+        // Dropping 管线 runs `GraphicsPipeline::drop`, which calls
         // `destroy_pipeline` + `destroy_pipeline_layout`.
         self.pipeline = None;
         self.device = None;
@@ -730,8 +730,8 @@ impl SkyboxPass {
 impl Drop for SkyboxPass {
     fn drop(&mut self) {
         // `GraphicsPipeline::drop` handles destroy_pipeline + destroy_layout,
-        // so just drop the Option. We gate on `self.device` so that an
-        // un-initialized `SkyboxPass` (device=None) doesn't drop a pipeline
+        // so just 放置 the 选项 We gate on `self.device` so that an
+        // un-initialized `SkyboxPass` (device=None) doesn't 放置 a 管线
         // that was never created.
         if self.device.take().is_some() {
             self.pipeline = None;
@@ -739,61 +739,61 @@ impl Drop for SkyboxPass {
     }
 }
 
-/// Forward scene pass (bindless PBR + neutral ambient + shadow map) targeting
-/// the swapchain.
+/// 向前 scene pass (bindless PBR + neutral ambient + shadow 映射表 targeting
+/// the 交换链
 ///
-/// Descriptor set layout (mirrors `scene_frag.slang`):
-///   set 0 - per-frame UBO (binding 0) + material SSBO (binding 1)
-///            one descriptor set per frame-in-flight (UBO buffer differs)
-///   set 1 - bindless texture table (samplers + SRV array, owned by
+/// 描述符 集合 布局 (mirrors `scene_frag.slang`):
+/// 集合 0 - per-frame UBO 绑定 0) + 材质 SSBO 绑定 1)
+/// one 描述符 集合 per frame-in-flight (UBO 缓冲区 differs)
+/// 集合 1 - bindless 纹理 表 (samplers + SRV 数组 owned by
 ///            `RenderTextureManager::bindless`)
-///   set 2 - IBL resources (3 combined image samplers: env, irradiance, prefiltered)
-///   set 3 - shadow map (SAMPLED_IMAGE + comparison SAMPLER)
-///   set 4 - previous-frame GTAO R8 visibility texture (combined image sampler)
+/// 集合 2 - IBL resources (3 combined 图像 samplers: env, irradiance, prefiltered)
+/// 集合 3 - shadow 映射表 (SAMPLED_IMAGE + 比较 采样器
+/// 集合 4 - previous-frame GTAO R8 可见性 纹理 (combined 图像 采样器
 pub struct ScenePass {
-    /// HDR intermediate color format (the ScenePass no longer targets the
-    /// swapchain directly; PostPass tonemaps HDR -> swapchain).
+    /// 高动态范围 intermediate 颜色 格式 (the ScenePass no longer targets the
+    /// 交换链 directly; PostPass tonemaps 高动态范围 -> 交换链
     color_format: vk::Format,
-    /// Format of the view-space normal MRT attachment (SV_Target1). Written by
-    /// the scene fragment shader and read by the GTAO pass.
+    /// 格式 of the view-space 法线 MRT 附件 (SV_Target1). Written by
+    /// the scene 片元 着色器 and 读取 by the GTAO pass
     normal_format: vk::Format,
-    /// Bindless handle for the BRDF LUT (registered in the bindless texture table).
+    /// Bindless handle for the BRDF LUT (registered in the bindless 纹理 表
     brdf_handle: u32,
-    /// One framebuffer per swapchain image. With N swapchain images and N
-    /// frames in flight, several command buffers can reference their
+    /// One 帧缓冲 per 交换链 图像 With N 交换链 images and N
+    /// frames in flight, several 命令 buffers can 引用 their
     /// respective framebuffers concurrently - so we can't keep just one
-    /// rotating framebuffer (destroying it while a prior frame's command
-    /// buffer still references it triggers
+    /// rotating 帧缓冲 (destroying it while a prior frame's 命令
+    /// 缓冲区 still references it triggers
     /// VUID-vkDestroyFramebuffer-framebuffer-00892 and cascades into a
     /// device-lost). Indexed by `image_index` from `acquire_next_image`.
     framebuffers: Vec<Option<vk::Framebuffer>>,
-    /// One HDR color image per swapchain image (the ScenePass render target,
+    /// One 高动态范围 颜色 图像 per 交换链 图像 (the ScenePass 渲染 目标
     /// replacing the old direct-to-swapchain path). Reused by PostPass as its
-    /// sampled input.
+    /// sampled 输入
     color_images: Vec<Option<crate::render_pass::NormalImage>>,
-    /// One depth image per swapchain image (each framebuffer references its
-    /// own depth view). Parallel to `framebuffers`.
+    /// One 深度 图像 per 交换链 图像 (each 帧缓冲 references its
+    /// own 深度 视图 并行 to `framebuffers`.
     depth_images: Vec<Option<crate::render_pass::DepthImage>>,
-    /// One view-space normal image per swapchain image (MRT SV_Target1). Same
-    /// per-slot lifetime as `depth_images`: rebuilt only when its swapchain
-    /// view changes.
+    /// One view-space 法线 图像 per 交换链 图像 (MRT SV_Target1). Same
+    /// per-slot 生命周期 as `depth_images`: rebuilt only when its 交换链
+    /// 视图 changes.
     normal_images: Vec<Option<crate::render_pass::NormalImage>>,
-    /// Cached image_index validity markers (one per slot). `set_target` uses
-    /// `framebuffers[idx].is_some()` as the "current" check; this field is
-    /// kept for parity with the old swapchain-view tracking pattern.
+    /// Cached image_index validity markers (one per 槽 `set_target` uses
+    /// `framebuffers[idx].is_some()` as the 当前 check; this field is
+    /// kept for parity with the old swapchain-view tracking 模式
     target_views: Vec<vk::ImageView>,
-    /// Number of swapchain images. Set by `set_image_count` (called from
-    /// `GraphRenderer::recreate_swapchain` after the swapchain is recreated)
-    /// and used by `ensure_target` so the per-image framebuffer vectors are
-    /// sized correctly. Decouples framebuffer (re)creation from
-    /// `GraphRenderer`'s per-frame call sequence.
+    /// Number of 交换链 images. 集合 by `set_image_count` (called from
+    /// `GraphRenderer::recreate_swapchain` after the 交换链 is recreated)
+    /// and used by `ensure_target` so the per-image 帧缓冲 vectors are
+    /// sized correctly. Decouples 帧缓冲 (re)creation from
+    /// `GraphRenderer`'s per-frame 调用 sequence.
     image_count: usize,
-    /// Graph resource handles for this pass's outputs, created in `setup` and
-    /// published (view registered) in `execute` so downstream passes
-    /// (`GtaoPass`, `PostPass`) read them by handle instead of `GraphRenderer`
-    /// poking into `ScenePass` internals. The graph does not allocate the
+    /// 图 资源 handles for this pass's outputs, created in `setup` and
+    /// published 视图 registered) in 执行 so downstream passes
+    /// (`GtaoPass`, `PostPass`) 读取 them by handle instead of `GraphRenderer`
+    /// poking into `ScenePass` internals. The 图 does not allocate the
     /// underlying images (ScenePass still owns its framebuffers in PR-1);
-    /// only the handle->view mapping lives in `GraphResources`.
+    /// only the handle->view 映射 lives in `GraphResources`.
     out_color_h: ResourceHandle,
     out_depth_h: ResourceHandle,
     out_normal_h: ResourceHandle,
@@ -801,69 +801,69 @@ pub struct ScenePass {
     render_pass: Option<vk::RenderPass>,
     pipeline: Option<GraphicsPipeline>,
     ibl_descriptor_set: vk::DescriptorSet,
-    /// IBL descriptor set layout (borrowed from `IblResources`). Used by the
-    /// skybox pass to build its pipeline layout.
+    /// IBL 描述符 集合 布局 (borrowed from `IblResources`). Used by the
+    /// skybox pass to 构建 its 管线 布局
     ibl_layout: vk::DescriptorSetLayout,
     shadow_ds_layout: Option<vk::DescriptorSetLayout>,
     shadow_descriptor_set: vk::DescriptorSet,
     shadow_ds_pool: Option<vk::DescriptorPool>,
-    /// set 0 - per-frame-in-flight descriptor sets binding the frame UBO
-    /// (binding 0) + the material SSBO (binding 1). Indexed by
-    /// `frame_index` (frame-in-flight, 0..N), NOT swapchain image_index.
+    /// 集合 0 - per-frame-in-flight 描述符 sets 绑定 the 帧 UBO
+    /// 绑定 0) + the 材质 SSBO 绑定 1). Indexed by
+    /// `frame_index` (frame-in-flight, 0..N), NOT 交换链 image_index.
     frame_sets: Vec<vk::DescriptorSet>,
-    /// set 0 layout (frame UBO + materials SSBO). Owned + destroyed on drop.
+    /// 集合 0 布局 帧 UBO + materials SSBO). Owned + destroyed on 放置
     frame_set_layout: Option<vk::DescriptorSetLayout>,
-    /// Pool backing `frame_sets`. Owned + destroyed on drop.
+    /// 池 backing `frame_sets`. Owned + destroyed on 放置
     frame_set_pool: Option<vk::DescriptorPool>,
-    /// set 1 - bindless texture table descriptor set (from
+    /// 集合 1 - bindless 纹理 表 描述符 集合 (from
     /// `RenderTextureManager::bindless()`). Not owned by ScenePass.
     bindless_set: vk::DescriptorSet,
-    /// set 1 layout (from `BindlessTextureTable::layout`). Borrowed for
+    /// 集合 1 布局 (from `BindlessTextureTable::layout`). Borrowed for
     /// pipeline-layout creation; not destroyed by ScenePass.
     bindless_layout: vk::DescriptorSetLayout,
-    /// Light SSBO (set 0 binding 2): host-visible buffer holding up to
-    /// `LIGHT_MAX` hard-coded point lights. Shared across all frame sets.
+    /// 光源 SSBO 集合 0 绑定 2): host-visible 缓冲区 holding 上 to
+    /// `LIGHT_MAX` hard-coded point lights. Shared across all 帧 sets.
     light_buffer: vk::Buffer,
     light_memory: vk::DeviceMemory,
-    /// set 4 - previous-frame GTAO R8 visibility texture (combined image
-    /// sampler). One descriptor set per frame-in-flight so updating the AO
-    /// view for frame N doesn't disturb frame N-1's still-in-flight set.
+    /// 集合 4 - previous-frame GTAO R8 可见性 纹理 (combined 图像
+    /// 采样器 One 描述符 集合 per frame-in-flight so updating the 环境光遮蔽
+    /// 视图 for 帧 N doesn't disturb 帧 N-1's still-in-flight 集合
     ao_ds_layout: Option<vk::DescriptorSetLayout>,
-    /// One AO descriptor set per frame-in-flight (parallels `frame_sets`).
+    /// One 环境光遮蔽 描述符 集合 per frame-in-flight (parallels `frame_sets`).
     ao_descriptor_sets: Vec<vk::DescriptorSet>,
     ao_ds_pool: Option<vk::DescriptorPool>,
     ao_sampler: vk::Sampler,
-    /// The AO view currently bound to each frame-in-flight's AO descriptor
-    /// set. Tracked so we skip redundant descriptor rewrites.
+    /// The 环境光遮蔽 视图 currently bound to each frame-in-flight's 环境光遮蔽 描述符
+    /// 集合 Tracked so we skip 冗余 描述符 rewrites.
     ao_views: Vec<vk::ImageView>,
-    /// Last time the AO_PROBE debug line in `set_ao` was logged; throttled to
-    /// once per second so it doesn't flood the log at frame rate.
+    /// 最后一个 时间 the AO_PROBE 调试 line in `set_ao` was logged; throttled to
+    /// once per 秒 so it doesn't flood the 对数 at 帧 rate.
     last_probe_log: Instant,
-    /// set 5 - probe volume GI (borrowed from `SceneScope`, scene-level).
-    /// binding 0: 3D texture (SAMPLED_IMAGE), binding 1: ProbeVolumeInfo UBO.
+    /// 集合 5 - probe 音量 全局光照 (borrowed from `SceneScope`, scene-level).
+    /// 绑定 0: 3D 纹理 (SAMPLED_IMAGE), 绑定 1: ProbeVolumeInfo UBO.
     gi_descriptor_set: vk::DescriptorSet,
-    /// GI descriptor set layout (borrowed from `SceneScope`). Used for
+    /// 全局光照 描述符 集合 布局 (borrowed from `SceneScope`). Used for
     /// pipeline-layout creation; NOT destroyed by ScenePass.
     gi_layout: vk::DescriptorSetLayout,
-    /// Skybox background pass (draws the IBL env cubemap). Owns its pipeline +
-    /// set-2 (IBL env) layout; borrows the IBL descriptor set.
+    /// Skybox background pass (draws the IBL env cubemap). Owns its 管线 +
+    /// set-2 (IBL env) 布局 borrows the IBL 描述符 集合
     skybox: SkyboxPass,
-    /// World-space XYZ orientation gizmo, drawn on top of the scene (depth
-    /// test disabled). Built lazily once the render pass exists.
+    /// World-space XYZ orientation gizmo, drawn on 顶部 of the scene 深度
+    /// test 禁用 内置 lazily once the 渲染 pass 存在
     gizmo: Option<Gizmo>,
     device: Option<ash::Device>,
 }
 impl ScenePass {
     pub fn new(_swapchain_color_format: vk::Format) -> Self {
         Self {
-            // HDR intermediate target (linear). PostPass tonemaps this to the
-            // sRGB swapchain. The old `_swapchain_color_format` argument is
+            // 高动态范围 intermediate 目标 线性 PostPass tonemaps this to the
+            // sRGB 交换链 The old `_swapchain_color_format` argument is
             // kept for API stability; PostPass owns the swapchain-format
-            // pipeline + render pass.
+            // 管线 + 渲染 pass
             color_format: vk::Format::R16G16B16A16_SFLOAT,
-            // R16G16B16A16_SFLOAT: signed float so view-space normals (which
-            // can be negative in any axis) store without bias/packing. 4th
-            // channel unused (shader writes 0).
+            // R16G16B16A16_SFLOAT: 有符号 浮点数 so view-space normals (which
+            // can be 负 in any axis) 存储 without bias/packing. 4th
+            // 通道 unused 着色器 writes 0).
             normal_format: vk::Format::R16G16B16A16_SFLOAT,
             brdf_handle: u32::MAX,
             framebuffers: Vec::new(),
@@ -907,31 +907,31 @@ impl ScenePass {
         }
     }
 
-    /// Ensure the framebuffer for `image_index` exists and is built against the
-    /// current extent. Returns the framebuffer handle via
-    /// `self.framebuffers[image_index]` (read by `execute`).
+    /// Ensure the 帧缓冲 for `image_index` 存在 and is 内置 against the
+    /// 当前 extent. Returns the 帧缓冲 handle via
+    /// `self.framebuffers[image_index]` 读取 by 执行
     ///
-    /// With N swapchain images and N frames in flight, several command buffers
-    /// can be in flight at once - each referencing its own framebuffer. So we
-    /// keep **one framebuffer per swapchain image** (plus its own HDR color +
-    /// depth + normal image) and only rebuild an entry when the extent changed.
-    /// This avoids destroying a framebuffer that a prior (still in-flight)
-    /// command buffer references (VUID-vkDestroyFramebuffer-framebuffer-00892).
+    /// With N 交换链 images and N frames in flight, several 命令 buffers
+    /// can be in flight at once - each referencing its own 帧缓冲 So we
+    /// keep **one 帧缓冲 per 交换链 image** (plus its own 高动态范围 颜色 +
+    /// 深度 + 法线 图像 and only rebuild an entry when the extent changed.
+    /// This avoids destroying a 帧缓冲 that a prior (still in-flight)
+    /// 命令 缓冲区 references (VUID-vkDestroyFramebuffer-framebuffer-00892).
     ///
     /// `image_index` is the value returned by `acquire_next_image`;
-    /// `image_count` is `swapchain.views.len()` (so we can size the per-slot
-    /// vectors on the first call or after a recreate).
+    /// `image_count` is `swapchain.views.len()` (so we can 大小 the per-slot
+    /// vectors on the 第一个 调用 or after a recreate).
     pub fn set_image_count(&mut self, image_count: usize) {
         self.image_count = image_count;
     }
 
-    /// Idempotent per-frame (re)creation of this swapchain image's
-    /// framebuffer + HDR/depth/normal attachments. Called from `ScenePass::
-    /// execute` (driven by the `RenderGraph`) so framebuffer lifecycle no
-    /// longer depends on `GraphRenderer` calling `set_target` every frame.
-    /// Rebuilds only the entry for `image_index` when it is missing or the
-    /// swapchain changed; safe against in-flight framebuffers (mirrors the
-    /// old `set_target` contract).
+    /// Idempotent per-frame (re)creation of this 交换链 image's
+    /// 帧缓冲 + HDR/depth/normal attachments. Called from `ScenePass::
+    /// 执行 (driven by the `RenderGraph`) so 帧缓冲 lifecycle no
+    /// longer depends on `GraphRenderer` calling `set_target` every 帧
+    /// Rebuilds only the entry for `image_index` when it is 缺少 or the
+    /// 交换链 changed; safe against in-flight framebuffers (mirrors the
+    /// old `set_target` 契约
     pub fn ensure_target(
         &mut self,
         device: &ash::Device,
@@ -959,15 +959,15 @@ impl ScenePass {
             return Ok(());
         }
 
-        // The render pass must exist before we build a framebuffer against it.
-        // `ensure_render_pass` is idempotent (early-returns once set).
+        // The 渲染 pass must exist before we 构建 a 帧缓冲 against it.
+        // `ensure_render_pass` is idempotent (early-returns once 集合
         self.ensure_render_pass(context)?;
 
-        // If the swapchain image count changed (recreate with a different
-        // image count) or the extent changed, tear everything down and resize
-        // the per-image vectors. This is the only place we destroy framebuffers
+        // If the 交换链 图像 count changed (recreate with a different
+        // 图像 count) or the extent changed, tear everything 下 and 调整大小
+        // the per-image vectors. This is the only place we 销毁 framebuffers
         // wholesale; per-frame we only (re)build the single entry for this
-        // `image_index` - so an in-flight frame's framebuffer is never touched.
+        // `image_index` - so an in-flight frame's 帧缓冲 is never touched.
         let swapchain_changed = self.target_views.len() != image_count || self.extent != extent;
         if swapchain_changed {
             self.drop_target(device);
@@ -979,15 +979,15 @@ impl ScenePass {
             self.normal_images = (0..image_count).map(|_| None).collect();
         }
 
-        // Build this image's framebuffer + color + depth + normal if not
-        // already current.
+        // 构建 this image's 帧缓冲 + 颜色 + 深度 + 法线 if not
+        // already 当前
         let already_current = self.framebuffers[idx].is_some();
         if !already_current {
             let rp = self
                 .render_pass
                 .context("ScenePass: render_pass missing in set_target")?;
 
-            // Replace the HDR color image for this slot.
+            // 替换 the 高动态范围 颜色 图像 for this 槽
             let color_image =
                 crate::render_pass::NormalImage::new(context, extent, self.color_format)
                     .context("ScenePass: create HDR color image")?;
@@ -996,7 +996,7 @@ impl ScenePass {
             }
             self.color_images[idx] = Some(color_image);
 
-            // Replace the depth image for this slot (create new, destroy old).
+            // 替换 the 深度 图像 for this 槽 创建 new, 销毁 old).
             let depth_image = crate::render_pass::DepthImage::new(context, extent)
                 .context("ScenePass: create depth image")?;
             if let Some(mut old) = self.depth_images[idx].take() {
@@ -1004,7 +1004,7 @@ impl ScenePass {
             }
             self.depth_images[idx] = Some(depth_image);
 
-            // Replace the view-space normal MRT image for this slot.
+            // 替换 the view-space 法线 MRT 图像 for this 槽
             let normal_image =
                 crate::render_pass::NormalImage::new(context, extent, self.normal_format)
                     .context("ScenePass: create normal image")?;
@@ -1013,9 +1013,9 @@ impl ScenePass {
             }
             self.normal_images[idx] = Some(normal_image);
 
-            // Destroy the old framebuffer for this slot BEFORE creating the
-            // new one (order doesn't matter for validation here since both
-            // reference the same slot, but destroy-old-first is tidy).
+            // 销毁 the old 帧缓冲 for this 槽 BEFORE creating the
+            // new one (order doesn't matter for 验证 here since both
+            // 引用 the same 槽 but destroy-old-first is tidy).
             if let Some(old_fb) = self.framebuffers[idx].take() {
                 unsafe { device.destroy_framebuffer(old_fb, None) };
             }
@@ -1023,7 +1023,7 @@ impl ScenePass {
             let color = self.color_images[idx].as_ref().unwrap();
             let depth = self.depth_images[idx].as_ref().unwrap();
             let normal = self.normal_images[idx].as_ref().unwrap();
-            // Render pass attachment order: [color, depth, normal].
+            // 渲染 pass 附件 order: 颜色 深度 法线
             let attachments = [color.view, depth.view, normal.view];
             let fb = unsafe {
                 device.create_framebuffer(
@@ -1042,35 +1042,35 @@ impl ScenePass {
         Ok(())
     }
 
-    /// Drop the swapchain-derived framebuffers + depth images.
+    /// 放置 the swapchain-derived framebuffers + 深度 images.
     ///
-    /// Must be called **before** the swapchain is recreated (and from
-    /// `set_target` when the swapchain changes): each framebuffer wraps a
-    /// swapchain image view + depth view, and `Swapchain::recreate` destroys
+    /// Must be called **before** the 交换链 is recreated (and from
+    /// `set_target` when the 交换链 changes): each 帧缓冲 wraps a
+    /// 交换链 图像 视图 + 深度 视图 and `Swapchain::recreate` destroys
     /// the old views. Destroying the views while the framebuffers still
-    /// reference them triggers `vkDestroyImageView` validation errors which
-    /// cascade into a device-lost on the next submit.
+    /// 引用 them triggers `vkDestroyImageView` 验证 errors which
+    /// cascade into a device-lost on the 下一个 submit.
     ///
-    /// Framebuffers are destroyed before their depth images (each framebuffer
-    /// references its depth view as an attachment). The render pass + pipeline
-    /// are kept (they don't reference swapchain views); `set_target` rebuilds
-    /// the framebuffers + depth on the next frame.
+    /// Framebuffers are destroyed before their 深度 images (each 帧缓冲
+    /// references its 深度 视图 as an 附件 The 渲染 pass + 管线
+    /// are kept (they don't 引用 交换链 views); `set_target` rebuilds
+    /// the framebuffers + 深度 on the 下一个 帧
     pub fn drop_target(&mut self, device: &ash::Device) {
-        // Framebuffers first (they reference color + depth + normal views).
+        // Framebuffers 第一个 (they 引用 颜色 + 深度 + 法线 views).
         for fb in self.framebuffers.drain(..).flatten() {
             unsafe { device.destroy_framebuffer(fb, None) };
         }
-        // Then HDR color images.
+        // Then 高动态范围 颜色 images.
         for color in self.color_images.drain(..).flatten() {
             let mut c = color;
             unsafe { c.destroy(device) };
         }
-        // Then depth images (destroys each depth view).
+        // Then 深度 images (destroys each 深度 视图
         for depth in self.depth_images.drain(..).flatten() {
             let mut d = depth;
             unsafe { d.destroy(device) };
         }
-        // Then view-space normal MRT images.
+        // Then view-space 法线 MRT images.
         for normal in self.normal_images.drain(..).flatten() {
             let mut n = normal;
             unsafe { n.destroy(device) };
@@ -1082,24 +1082,24 @@ impl ScenePass {
         };
     }
 
-    /// Tear down ALL ScenePass GPU resources (framebuffers, depth images,
-    /// render pass, pipeline, shadow descriptor set layout + pool).
+    /// Tear 下 ALL ScenePass GPU resources (framebuffers, 深度 images,
+    /// 渲染 pass 管线 shadow 描述符 集合 布局 + 池
     ///
     /// Called from `GraphRenderer::destroy` on shutdown. After this the
-    /// ScenePass is empty; `device_wait_idle` must already have been called by
-    /// the caller so no command buffers are in flight.
+    /// ScenePass is 空 `device_wait_idle` must already have been called by
+    /// the 调用者 so no 命令 buffers are in flight.
     pub fn destroy(&mut self, device: &ash::Device) {
-        // Framebuffers + depth images (swapchain-derived).
+        // Framebuffers + 深度 images (swapchain-derived).
         self.drop_target(device);
 
-        // Render pass.
+        // 渲染 pass
         if let Some(rp) = self.render_pass.take() {
             unsafe { device.destroy_render_pass(rp, None) };
         }
-        // Pipeline (frees pipeline + layout via GraphicsPipeline::Drop).
+        // 管线 (frees 管线 + 布局 via GraphicsPipeline::Drop).
         self.pipeline = None;
 
-        // set 0: frame UBO + materials SSBO layout + pool (sets freed with pool).
+        // 集合 0: 帧 UBO + materials SSBO 布局 + 池 (sets freed with 池
         if let Some(layout) = self.frame_set_layout.take() {
             unsafe { device.destroy_descriptor_set_layout(layout, None) };
         }
@@ -1108,8 +1108,8 @@ impl ScenePass {
         }
         self.frame_sets.clear();
 
-        // Shadow descriptor set layout + pool (the set itself is freed with
-        // the pool).
+        // Shadow 描述符 集合 布局 + 池 (the 集合 itself is freed with
+        // the 池
         if let Some(layout) = self.shadow_ds_layout.take() {
             unsafe { device.destroy_descriptor_set_layout(layout, None) };
         }
@@ -1117,7 +1117,7 @@ impl ScenePass {
             unsafe { device.destroy_descriptor_pool(pool, None) };
         }
         self.shadow_descriptor_set = vk::DescriptorSet::null();
-        // Light SSBO.
+        // 光源 SSBO.
         if self.light_buffer != vk::Buffer::null() {
             unsafe { device.destroy_buffer(self.light_buffer, None) };
             self.light_buffer = vk::Buffer::null();
@@ -1126,12 +1126,12 @@ impl ScenePass {
             unsafe { device.free_memory(self.light_memory, None) };
             self.light_memory = vk::DeviceMemory::null();
         }
-        // Skybox pass (its own pipeline + set-2 layout).
+        // Skybox pass (its own 管线 + set-2 布局
         self.skybox.destroy(device);
-        // Gizmo (its own pipeline + vertex buffer; Drop frees them).
+        // Gizmo (its own 管线 + 顶点 缓冲区 放置 frees them).
         self.gizmo = None;
 
-        // set 4: AO descriptor set layout + pool + sampler.
+        // 集合 4: 环境光遮蔽 描述符 集合 布局 + 池 + 采样器
         if let Some(layout) = self.ao_ds_layout.take() {
             unsafe { device.destroy_descriptor_set_layout(layout, None) };
         }
@@ -1145,24 +1145,24 @@ impl ScenePass {
         self.ao_descriptor_sets.clear();
         self.ao_views.clear();
 
-        // set 5 (GI probe volume) is borrowed from SceneScope — not destroyed here.
+        // 集合 5 全局光照 probe 音量 is borrowed from SceneScope — not destroyed here.
         self.gi_descriptor_set = vk::DescriptorSet::null();
         self.gi_layout = vk::DescriptorSetLayout::null();
 
         self.device = None;
     }
-    /// Wire all external resources the ScenePass needs:
-    /// - IBL cubemap descriptor set (set 2)
-    /// - shadow map view + comparison sampler (set 3)
-    /// - bindless texture table set + layout (set 1)
-    /// - material SSBO buffer + per-frame UBO buffers (set 0, one set per
-    ///   frame-in-flight so each frame's UBO buffer is bound without runtime
-    ///   descriptor rewrites)
-    /// - light SSBO buffer (set 0 binding 2, hard-coded point lights)
-    /// - GI probe volume descriptor set + layout (set 5, borrowed from SceneScope)
+    /// Wire all 外部 resources the ScenePass needs:
+    /// - IBL cubemap 描述符 集合 集合 2)
+    /// - shadow 映射表 视图 + 比较 采样器 集合 3)
+    /// - bindless 纹理 表 集合 + 布局 集合 1)
+    /// - 材质 SSBO 缓冲区 + per-frame UBO buffers 集合 0, one 集合 per
+    /// frame-in-flight so each frame's UBO 缓冲区 is bound without 运行时
+    /// 描述符 rewrites)
+    /// - 光源 SSBO 缓冲区 集合 0 绑定 2, hard-coded point lights)
+    /// - 全局光照 probe 音量 描述符 集合 + 布局 集合 5, borrowed from SceneScope)
     ///
-    /// `frame_ubo_buffers` length determines the frame-in-flight count (== set0
-    /// set count). `materials_buffer` is the `RenderMaterialManager` SSBO.
+    /// `frame_ubo_buffers` 长度 determines the frame-in-flight count (== set0
+    /// 集合 count). `materials_buffer` is the `RenderMaterialManager` SSBO.
     #[allow(clippy::too_many_arguments)]
     pub fn set_resources(
         &mut self,
@@ -1187,15 +1187,15 @@ impl ScenePass {
         self.brdf_handle = brdf_handle;
         self.gi_descriptor_set = gi_descriptor_set;
         self.gi_layout = gi_layout;
-        // Skybox reuses the IBL env cubemap descriptor set + layout (set 0).
+        // Skybox reuses the IBL env cubemap 描述符 集合 + 布局 集合 0).
         self.skybox = SkyboxPass::new(ibl_descriptor_set, ibl_layout);
 
-        // ---- set 0: per-frame UBO (binding 0) + materials SSBO (binding 1)
-        //           + light SSBO (binding 2) ----
-        // One descriptor set per frame-in-flight; each binds its own UBO
-        // buffer at binding 0 and the (shared) materials SSBO at binding 1
-        // and the (shared) light SSBO at binding 2.
-        // Built once here; never rewritten at runtime.
+        // ---- 集合 0: per-frame UBO 绑定 0) + materials SSBO 绑定 1)
+        // + 光源 SSBO 绑定 2) ----
+        // One 描述符 集合 per frame-in-flight; each binds its own UBO
+        // 缓冲区 at 绑定 0 and the (shared) materials SSBO at 绑定 1
+        // and the (shared) 光源 SSBO at 绑定 2.
+        // 内置 once here; never rewritten at 运行时
         let frame_set_bindings = [
             vk::DescriptorSetLayoutBinding::default()
                 .binding(0)
@@ -1221,7 +1221,7 @@ impl ScenePass {
         }
         .context("ScenePass: create set0 (frame+materials+lights) layout")?;
 
-        // Tear down any prior set0 layout/pool/sets (e.g. on re-init).
+        // Tear 下 any prior set0 layout/pool/sets (e.g. on re-init).
         if let Some(old) = self.frame_set_layout.take() {
             unsafe { device.destroy_descriptor_set_layout(old, None) };
         }
@@ -1231,8 +1231,8 @@ impl ScenePass {
         self.frame_sets.clear();
 
         let fif_count = frame_ubo_buffers.len();
-        // Pool needs: UNIFORM_BUFFER fif_count, STORAGE_BUFFER for materials fif_count,
-        // STORAGE_BUFFER for lights fif_count = 2*fif_count total STORAGE_BUFFER.
+        // 池 needs: UNIFORM_BUFFER fif_count, STORAGE_BUFFER for materials fif_count,
+        // STORAGE_BUFFER for lights fif_count = 2*fif_count 总计 STORAGE_BUFFER.
         let frame_pool = unsafe {
             device.create_descriptor_pool(
                 &vk::DescriptorPoolCreateInfo::default()
@@ -1263,11 +1263,11 @@ impl ScenePass {
         }
         .context("ScenePass: allocate set0 sets")?;
 
-        // ---- Light SSBO (binding 2) ----
-        // Create a host-visible, coherent buffer for up to `LIGHT_MAX` point
-        // lights. Shared across all frame sets. The buffer is zero-initialized
-        // here; `ScenePass::update_lights` rewrites the contents every frame
-        // from the ECS `PointLight` query (see `render_system`).
+        // ---- 光源 SSBO 绑定 2) ----
+        // 创建 a host-visible, coherent 缓冲区 for 上 to `LIGHT_MAX` point
+        // lights. Shared across all 帧 sets. The 缓冲区 is zero-initialized
+        // here; `ScenePass::update_lights` rewrites the contents every 帧
+        // from the ECS `PointLight` 查询 (see `render_system`).
         let light_ssbo_size = (crate::descriptor::LIGHT_MAX as vk::DeviceSize) * 32;
         let (light_buffer, light_memory) = crate::buffer::create_buffer(
             context,
@@ -1278,8 +1278,8 @@ impl ScenePass {
         )
         .context("ScenePass: create light SSBO buffer")?;
 
-        // Zero-initialize so the first frame (before any `update_lights` call)
-        // doesn't read garbage.
+        // Zero-initialize so the 第一个 帧 (before any `update_lights` 调用
+        // doesn't 读取 garbage.
         let light_ptr = unsafe {
             device.map_memory(
                 light_memory,
@@ -1294,7 +1294,7 @@ impl ScenePass {
         }
         unsafe { device.unmap_memory(light_memory) };
 
-        // Destroy old light buffer if any.
+        // 销毁 old 光源 缓冲区 if any.
         if self.light_buffer != vk::Buffer::null() {
             unsafe { device.destroy_buffer(self.light_buffer, None) };
         }
@@ -1304,8 +1304,8 @@ impl ScenePass {
         self.light_buffer = light_buffer;
         self.light_memory = light_memory;
 
-        // Write each set: binding 0 = this frame's UBO, binding 1 = materials SSBO,
-        // binding 2 = light SSBO.
+        // 写入 each 集合 绑定 0 = this frame's UBO, 绑定 1 = materials SSBO,
+        // 绑定 2 = 光源 SSBO.
         let ubo_size = std::mem::size_of::<crate::descriptor::FrameUBOData>() as vk::DeviceSize;
         let mat_ssbo_size = vk::WHOLE_SIZE; // SSBO: whole buffer is fine.
         let mat_info = vk::DescriptorBufferInfo::default()
@@ -1316,7 +1316,7 @@ impl ScenePass {
             .buffer(light_buffer)
             .offset(0)
             .range(vk::WHOLE_SIZE);
-        // Collect all per-frame UBO infos first so the `writes` slice
+        // Collect all per-frame UBO infos 第一个 so the `writes` 切片
         // references below don't conflict with mutating `ubo_infos`.
         let ubo_infos: Vec<vk::DescriptorBufferInfo> = frame_ubo_buffers
             .iter()
@@ -1357,7 +1357,7 @@ impl ScenePass {
         self.frame_set_pool = Some(frame_pool);
         self.frame_sets = sets;
 
-        // ---- set 3: shadow map (SAMPLED_IMAGE + comparison SAMPLER) ----
+        // ---- 集合 3: shadow 映射表 (SAMPLED_IMAGE + 比较 采样器 ----
         let shadow_bindings = [
             vk::DescriptorSetLayoutBinding::default()
                 .binding(0)
@@ -1439,11 +1439,11 @@ impl ScenePass {
         self.shadow_ds_pool = Some(pool);
         self.shadow_descriptor_set = ds;
 
-        // ---- set 4: previous-frame GTAO R8 visibility (combined image sampler) ----
-        // The AO view is updated every frame by `set_ao` (GraphRenderer passes
-        // the GTAO pass's double-buffered view for the frame the scene reads).
-        // Here we only create the layout + pool + sampler + descriptor set; the
-        // image_info write happens in `set_ao` once a view is available.
+        // ---- 集合 4: previous-frame GTAO R8 可见性 (combined 图像 采样器 ----
+        // The 环境光遮蔽 视图 is updated every 帧 by `set_ao` (GraphRenderer passes
+        // the GTAO pass's double-buffered 视图 for the 帧 the scene reads).
+        // Here we only 创建 the 布局 + 池 + 采样器 + 描述符 集合 the
+        // image_info 写入 happens in `set_ao` once a 视图 is available.
         let ao_bindings = [vk::DescriptorSetLayoutBinding::default()
             .binding(0)
             .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
@@ -1457,7 +1457,7 @@ impl ScenePass {
         }
         .context("ScenePass: create set4 (AO) ds layout")?;
 
-        // Tear down any prior set4 layout/pool/sampler (e.g. on re-init).
+        // Tear 下 any prior set4 layout/pool/sampler (e.g. on re-init).
         if let Some(old) = self.ao_ds_layout.take() {
             unsafe { device.destroy_descriptor_set_layout(old, None) };
         }
@@ -1486,8 +1486,8 @@ impl ScenePass {
         }
         .context("ScenePass: create AO sampler")?;
 
-        // One AO descriptor set per frame-in-flight so `set_ao` can update
-        // frame N's set without disturbing frame N-1's still-in-flight set
+        // One 环境光遮蔽 描述符 集合 per frame-in-flight so `set_ao` can 更新
+        // 帧 N's 集合 without disturbing 帧 N-1's still-in-flight 集合
         // (VUID-vkUpdateDescriptorSets-None-03047). The frame-in-flight count
         // matches `frame_ubo_buffers.len()` (== `frame_sets.len()`).
         let ao_fif = frame_ubo_buffers.len() as u32;
@@ -1520,26 +1520,26 @@ impl ScenePass {
         self.ao_sampler = ao_sampler;
         self.ao_descriptor_sets = ao_sets;
         self.ao_views = vec![vk::ImageView::null(); ao_fif as usize];
-        // The actual image_info write happens in `set_ao` once the GTAO pass
-        // produces its first AO view. Until then the descriptors point at null;
-        // `PBR_FLAG_AO` is off by default so nothing samples it.
+        // The actual image_info 写入 happens in `set_ao` once the GTAO pass
+        // produces its 第一个 环境光遮蔽 视图 Until then the descriptors point at null;
+        // `PBR_FLAG_AO` is off by 默认 so nothing samples it.
 
-        // set 5 (GI probe volume) is borrowed from SceneScope — already wired
+        // 集合 5 全局光照 probe 音量 is borrowed from SceneScope — already wired
         // via `gi_descriptor_set` / `gi_layout` parameters above.
 
         Ok(())
     }
 
-    /// Update the set 4 AO descriptor for `frame_index` to point at `view`
-    /// (the previous frame's GTAO output). Called every frame from
+    /// 更新 the 集合 4 环境光遮蔽 描述符 for `frame_index` to point at 视图
+    /// (the 上一个 frame's GTAO 输出 Called every 帧 from
     /// `GraphRenderer::render` BEFORE `scene_pass.execute`. Skips the
-    /// descriptor write when `view` matches the currently-bound view for this
+    /// 描述符 写入 when 视图 matches the currently-bound 视图 for this
     /// frame-in-flight.
     pub fn set_ao(&mut self, device: &ash::Device, frame_index: u32, view: vk::ImageView) {
         let i = (frame_index as usize) % self.ao_descriptor_sets.len();
-        // TEMP PROBE: confirm set_ao runs with valid inputs. Throttled to once
-        // per second so the log isn't flooded at frame rate; emitted at
-        // `trace!` so it stays quiet under the default `info` filter.
+        // TEMP PROBE: confirm set_ao runs with 有效 inputs. Throttled to once
+        // per 秒 so the 对数 isn't flooded at 帧 rate; emitted at
+        // 跟踪 so it stays quiet under the 默认 信息 滤波器
         if self.last_probe_log.elapsed().as_secs_f32() >= 1.0 {
             self.last_probe_log = Instant::now();
             log::trace!(
@@ -1557,10 +1557,10 @@ impl ScenePass {
         }
         self.ao_views[i] = view;
         if view == vk::ImageView::null() {
-            // No AO yet (first frame or GTAO disabled) - leave the descriptor
+            // No 环境光遮蔽 yet 第一个 帧 or GTAO 禁用 - leave the 描述符
             // unbound. The shader's `aoTex.SampleLevel` is only reached when
-            // PBR_FLAG_AO is set, which the app leaves off until the user
-            // toggles it (by which time `view` is non-null).
+            // PBR_FLAG_AO is 集合 which the app leaves off until the user
+            // toggles it (by which 时间 视图 is non-null).
             return;
         }
         let image_info = vk::DescriptorImageInfo::default()
@@ -1575,8 +1575,8 @@ impl ScenePass {
         unsafe { device.update_descriptor_sets(&[write], &[]) };
     }
 
-    /// Borrow the HDR color image view for `image_index`. Consumed by the
-    /// PostPass as its sampled input.
+    /// 借用 the 高动态范围 颜色 图像 视图 for `image_index`. Consumed by the
+    /// PostPass as its sampled 输入
     pub fn color_view(&self, image_index: u32) -> Option<vk::ImageView> {
         self.color_images
             .get(image_index as usize)
@@ -1584,8 +1584,8 @@ impl ScenePass {
             .map(|c| c.view)
     }
 
-    /// Borrow the HDR color image handle for `image_index`. The PostPass needs
-    /// the image to record its SHADER_READ_ONLY_OPTIMAL layout barrier.
+    /// 借用 the 高动态范围 颜色 图像 handle for `image_index`. The PostPass needs
+    /// the 图像 to record its SHADER_READ_ONLY_OPTIMAL 布局 屏障
     pub fn color_image(&self, image_index: u32) -> Option<vk::Image> {
         self.color_images
             .get(image_index as usize)
@@ -1593,8 +1593,8 @@ impl ScenePass {
             .map(|c| c.image)
     }
 
-    /// Borrow the depth image view for `image_index` (the slot ScenePass just
-    /// rendered into). The GTAO pass samples it after ScenePass stores depth.
+    /// 借用 the 深度 图像 视图 for `image_index` (the 槽 ScenePass just
+    /// rendered into). The GTAO pass samples it after ScenePass stores 深度
     pub fn depth_view(&self, image_index: u32) -> Option<vk::ImageView> {
         self.depth_images
             .get(image_index as usize)
@@ -1602,9 +1602,9 @@ impl ScenePass {
             .map(|d| d.view)
     }
 
-    /// Borrow the depth image handle for `image_index`. The GTAO pass needs the
-    /// image (not just the view) to record its DEPTH_STENCIL_READ_ONLY_OPTIMAL
-    /// layout barrier before sampling.
+    /// 借用 the 深度 图像 handle for `image_index`. The GTAO pass needs the
+    /// 图像 (not just the 视图 to record its DEPTH_STENCIL_READ_ONLY_OPTIMAL
+    /// 布局 屏障 before sampling.
     pub fn depth_image(&self, image_index: u32) -> Option<vk::Image> {
         self.depth_images
             .get(image_index as usize)
@@ -1612,8 +1612,8 @@ impl ScenePass {
             .map(|d| d.image)
     }
 
-    /// Borrow the view-space normal MRT view for `image_index`. Consumed by
-    /// the GTAO pass when its `mode == 0` (normal MRT path).
+    /// 借用 the view-space 法线 MRT 视图 for `image_index`. Consumed by
+    /// the GTAO pass when its 众数 == 0` 法线 MRT path).
     pub fn normal_view(&self, image_index: u32) -> Option<vk::ImageView> {
         self.normal_images
             .get(image_index as usize)
@@ -1621,9 +1621,9 @@ impl ScenePass {
             .map(|n| n.view)
     }
 
-    /// Borrow the view-space normal MRT image handle for `image_index`. The
-    /// GTAO pass needs the image to record its SHADER_READ_ONLY_OPTIMAL layout
-    /// barrier before sampling.
+    /// 借用 the view-space 法线 MRT 图像 handle for `image_index`. The
+    /// GTAO pass needs the 图像 to record its SHADER_READ_ONLY_OPTIMAL 布局
+    /// 屏障 before sampling.
     pub fn normal_image(&self, image_index: u32) -> Option<vk::Image> {
         self.normal_images
             .get(image_index as usize)
@@ -1632,42 +1632,42 @@ impl ScenePass {
     }
 
     /// The full-resolution extent the scene was rendered at. The GTAO pass
-    /// uses this (halved) to size its own viewport + AO textures.
+    /// uses this (halved) to 大小 its own 视口 + 环境光遮蔽 textures.
     pub fn extent(&self) -> vk::Extent2D {
         self.extent
     }
 
-    /// HDR intermediate color format (the scene target PostPass tonemaps).
+    /// 高动态范围 intermediate 颜色 格式 (the scene 目标 PostPass tonemaps).
     /// Exposed for the render-graph visualizer.
     pub fn color_format(&self) -> vk::Format {
         self.color_format
     }
 
-    /// View-space normal MRT format (read by GTAO). Exposed for the viz.
+    /// View-space 法线 MRT 格式 读取 by GTAO). Exposed for the viz.
     pub fn normal_format(&self) -> vk::Format {
         self.normal_format
     }
 
-    /// Number of swapchain images (framebuffers / HDR color / depth / normal
+    /// Number of 交换链 images (framebuffers / 高动态范围 颜色 / 深度 / 法线
     /// slots are all sized to this). Exposed for the viz.
     pub fn image_count(&self) -> usize {
         self.image_count
     }
 
-    /// The three well-known output handles (`[color, normal, depth]`), in the
+    /// The three well-known 输出 handles 颜色 法线 深度 in the
     /// same order `setup` declares them. Exposed for the viz's edge labels.
     pub fn out_handles(&self) -> [ResourceHandle; 3] {
         [self.out_color_h, self.out_normal_h, self.out_depth_h]
     }
 
-    /// Rewrite the point-light SSBO from a fresh `&[GpuLight]` slice. Called
-    /// every frame from `GraphRenderer::render` with the lights collected by
-    /// `render_system` from the ECS world. Unused slots (between `lights.len()`
-    /// and `LIGHT_MAX`) are zeroed so the shader doesn't read stale data.
+    /// Rewrite the point-light SSBO from a fresh `&[GpuLight]` 切片 Called
+    /// every 帧 from `GraphRenderer::render` with the lights collected by
+    /// `render_system` from the ECS 世界 Unused slots (between `lights.len()`
+    /// and `LIGHT_MAX`) are zeroed so the 着色器 doesn't 读取 stale data.
     ///
-    /// The buffer is `HOST_VISIBLE | HOST_COHERENT`, so this is a plain map +
-    /// copy + unmap. Safe to call before the SSBO is first bound (the descriptor
-    /// points at the same buffer regardless of its contents).
+    /// The 缓冲区 is `HOST_VISIBLE | HOST_COHERENT`, so this is a plain 映射表 +
+    /// 复制 + unmap. Safe to 调用 before the SSBO is 第一个 bound (the 描述符
+    /// points at the same 缓冲区 regardless of its contents).
     pub fn update_lights(
         &mut self,
         device: &ash::Device,
@@ -1675,7 +1675,7 @@ impl ScenePass {
     ) -> Result<()> {
         if self.light_memory == vk::DeviceMemory::null() {
             // SSBO not allocated yet (set_resources not called). Nothing to do;
-            // the first frame after set_resources will see zeros.
+            // the 第一个 帧 after set_resources will see zeros.
             return Ok(());
         }
         let total_bytes = (crate::descriptor::LIGHT_MAX as usize) * 32;
@@ -1688,7 +1688,7 @@ impl ScenePass {
             )
         }
         .context("ScenePass::update_lights: map")?;
-        // Zero the whole buffer, then copy in the active lights. Cheaper than
+        // 零 the whole 缓冲区 then 复制 in the 激活 lights. Cheaper than
         // tracking which slots changed, and keeps unused slots well-defined.
         unsafe {
             std::ptr::write_bytes(ptr as *mut u8, 0, total_bytes);
@@ -1710,7 +1710,7 @@ impl ScenePass {
         let device = &context.device;
         self.device = Some(device.clone());
 
-        // attachment 0: swapchain color (HDR lit color, post-tonemap).
+        // 附件 0: 交换链 颜色 高动态范围 lit 颜色 post-tonemap).
         let color_attachment = vk::AttachmentDescription::default()
             .format(self.color_format)
             .samples(vk::SampleCountFlags::TYPE_1)
@@ -1719,10 +1719,10 @@ impl ScenePass {
             .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
             .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
             .initial_layout(vk::ImageLayout::UNDEFINED)
-            // Leave the swapchain image in COLOR_ATTACHMENT_OPTIMAL so a
-            // subsequent egui overlay pass can load it and transition it to
-            // PRESENT_SRC_KHR. When the egui overlay is disabled, the caller
-            // (GraphRenderer::render) records a fallback pipeline barrier to
+            // Leave the 交换链 图像 in COLOR_ATTACHMENT_OPTIMAL so a
+            // subsequent egui 叠加 pass can 加载 it and 过渡 it to
+            // PRESENT_SRC_KHR. When the egui 叠加 is 禁用 the 调用者
+            // (GraphRenderer::render) records a 回退 管线 屏障 to
             // PRESENT_SRC_KHR after this pass ends.
             .final_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
 
@@ -1730,9 +1730,9 @@ impl ScenePass {
             .attachment(0)
             .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
 
-        // attachment 1: scene depth (D32_SFLOAT). STORE because the GTAO pass
+        // 附件 1: scene 深度 (D32_SFLOAT). 存储 because the GTAO pass
         // samples it after ScenePass (it was DONT_CARE before GTAO existed).
-        // Final layout is DEPTH_STENCIL_ATTACHMENT_OPTIMAL; the GTAO pass
+        // Final 布局 is DEPTH_STENCIL_ATTACHMENT_OPTIMAL; the GTAO pass
         // transitions it to DEPTH_STENCIL_READ_ONLY_OPTIMAL before sampling.
         let depth_attachment = vk::AttachmentDescription::default()
             .format(vk::Format::D32_SFLOAT)
@@ -1748,8 +1748,8 @@ impl ScenePass {
             .attachment(1)
             .layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
 
-        // attachment 2: view-space normal MRT (R16G16B16A16_SFLOAT). STORE so
-        // the GTAO pass can sample it. Final COLOR_ATTACHMENT_OPTIMAL; the GTAO
+        // 附件 2: view-space 法线 MRT (R16G16B16A16_SFLOAT). 存储 so
+        // the GTAO pass can 样本 it. Final COLOR_ATTACHMENT_OPTIMAL; the GTAO
         // pass transitions it to SHADER_READ_ONLY_OPTIMAL before sampling.
         let normal_attachment = vk::AttachmentDescription::default()
             .format(self.normal_format)
@@ -1798,8 +1798,8 @@ impl ScenePass {
             .context("ScenePass: create render pass")?;
         self.render_pass = Some(rp);
 
-        // Lazily build the world-space gizmo pipeline against this render pass
-        // (the gizmo draws inside the same render pass, on top of the scene).
+        // Lazily 构建 the world-space gizmo 管线 against this 渲染 pass
+        // (the gizmo draws inside the same 渲染 pass on 顶部 of the scene).
         if self.gizmo.is_none() {
             self.gizmo = Some(Gizmo::new(context, rp).context("ScenePass: create gizmo")?);
         }
@@ -1813,10 +1813,10 @@ impl ScenePass {
             .render_pass
             .context("ScenePass: render_pass not created before pipeline")?;
 
-        // Vertex: reuse mesh_vert.vert.spv (MeshPush{model}, 64 bytes). The pipeline
-        // pushes PbrBindlessPushConstants (96 bytes); the vertex stage only
-        // reads the first 64 bytes (model), which Vulkan permits.
-        // Fragment: scene_frag.frag.spv (bindless PBR + shadow).
+        // 顶点 reuse mesh_vert.vert.spv (MeshPush{model}, 64 字节 The 管线
+        // pushes PbrBindlessPushConstants (96 字节 the 顶点 阶段 only
+        // reads the 第一个 64 字节 模型 which Vulkan permits.
+        // 片元 scene_frag.frag.spv (bindless PBR + shadow).
         const VERT_SPV: &[u8] = include_bytes!("../../../shaders/mesh_vert.vert.spv");
         const FRAG_SPV: &[u8] = include_bytes!("../../../shaders/scene_frag.frag.spv");
         let vert_module =
@@ -1841,28 +1841,28 @@ impl ScenePass {
         let binding_desc = Vertex::binding_description();
         let attr_descs = Vertex::attribute_descriptions();
 
-        // set 0: frame UBO (binding 0) + materials SSBO (binding 1).
+        // 集合 0: 帧 UBO 绑定 0) + materials SSBO 绑定 1).
         let set0_layout = self
             .frame_set_layout
             .context("ScenePass: set0 (frame+materials) layout not set (call set_resources)")?;
-        // set 1: bindless texture table (samplers + SRV array).
+        // 集合 1: bindless 纹理 表 (samplers + SRV 数组
         let set1_layout = self.bindless_layout;
-        // set 2: IBL resources (3 combined image samplers: env, irradiance, prefiltered).
-        // Use the IBL's own descriptor set layout (set via `set_resources`) so the
-        // stage flags match exactly (`FRAGMENT | COMPUTE` — the path-tracing pass
-        // samples the same IBL cubemap in a compute shader). Creating a separate
-        // layout with mismatched stage flags would trigger VUID-vkCmdBindDescriptorSets-
+        // 集合 2: IBL resources (3 combined 图像 samplers: env, irradiance, prefiltered).
+        // Use the IBL's own 描述符 集合 布局 集合 via `set_resources`) so the
+        // 阶段 flags 匹配 exactly 片元 | 计算 — the path-tracing pass
+        // samples the same IBL cubemap in a 计算 着色器 Creating a separate
+        // 布局 with mismatched 阶段 flags would 触发器 VUID-vkCmdBindDescriptorSets-
         // pDescriptorSets-00358.
         let set2_layout = self.ibl_layout;
-        // set 3: shadow map (SAMPLED_IMAGE + SAMPLER).
+        // 集合 3: shadow 映射表 (SAMPLED_IMAGE + 采样器
         let set3_layout = self
             .shadow_ds_layout
             .context("ScenePass: shadow ds layout not set")?;
-        // set 4: previous-frame GTAO R8 visibility (combined image sampler).
+        // 集合 4: previous-frame GTAO R8 可见性 (combined 图像 采样器
         let set4_layout = self
             .ao_ds_layout
             .context("ScenePass: set4 (AO) layout not set (call set_resources)")?;
-        // set 5: probe volume GI (SAMPLED_IMAGE + UBO), borrowed from SceneScope.
+        // 集合 5: probe 音量 全局光照 (SAMPLED_IMAGE + UBO), borrowed from SceneScope.
         let set5_layout = self.gi_layout;
 
         let set_layouts = [
@@ -1874,7 +1874,7 @@ impl ScenePass {
             set5_layout,
         ];
 
-        // Push constants: PbrBindlessPushConstants (96 bytes, VERTEX|FRAGMENT).
+        // 推送 constants: PbrBindlessPushConstants (96 字节 VERTEX|FRAGMENT).
         // Matches scene_frag.slang::PbrBindlessPush and Rust
         // PbrBindlessPushConstants.
         let push = [vk::PushConstantRange::default()
@@ -1882,9 +1882,9 @@ impl ScenePass {
             .offset(0)
             .size(128)];
 
-        // MRT blend state: two color attachments.
-        //   attachment 0 (color)     - alpha blend (legacy behavior).
-        //   attachment 1 (view norm) - no blend, write RGBA through.
+        // MRT 混合 状态 two 颜色 attachments.
+        // 附件 0 颜色 - Alpha 混合 (legacy behavior).
+        // 附件 1 视图 norm) - no 混合 写入 RGBA through.
         let blend_attachments = [
             vk::PipelineColorBlendAttachmentState::default()
                 .color_write_mask(vk::ColorComponentFlags::RGBA)
@@ -1921,9 +1921,9 @@ impl ScenePass {
 
         unsafe { device.destroy_shader_module(vert_module, None) };
         unsafe { device.destroy_shader_module(frag_module, None) };
-        // set2_layout (IBL) is borrowed from `IblResources` (set via
-        // `set_resources`) — do NOT destroy it here. `IblResources` owns the
-        // layout lifetime; it outlives all passes.
+        // set2_layout (IBL) is borrowed from `IblResources` 集合 via
+        // `set_resources`) — do NOT 销毁 it here. `IblResources` owns the
+        // 布局 生命周期 it outlives all passes.
         // set0/set1/set3 are owned elsewhere (frame_set_layout /
         // BindlessTextureTable / shadow_ds_layout).
 
@@ -1937,11 +1937,11 @@ impl RenderPassNode for ScenePass {
     }
 
     fn setup(&mut self, graph: &mut RenderGraphBuilder, _settings: &RenderSettings) {
-        // Declare output handles (well-known, so downstream passes read our
-        // depth / normal / HDR views by handle). The graph does NOT allocate
+        // Declare 输出 handles (well-known, so downstream passes 读取 our
+        // 深度 / 法线 / 高动态范围 views by handle). The 图 does NOT allocate
         // the underlying images in PR-1 (ScenePass still owns its
-        // framebuffers); only the handle->view mapping is published in
-        // `execute`.
+        // framebuffers); only the handle->view 映射 is published in
+        // 执行
         graph.create_resource_at(
             SCENE_DEPTH_H,
             ResourceType::DepthAttachment {
@@ -1978,13 +1978,13 @@ impl RenderPassNode for ScenePass {
         self.out_normal_h = SCENE_NORMAL_H;
         self.out_color_h = SCENE_COLOR_H;
 
-        // Declare write edges so the render graph's layout cache records the
-        // layout this pass leaves each attachment in (matching the render pass
-        // `final_layout`). Downstream `GtaoPass` / `PostPass` read edges then
-        // trigger the ATTACHMENT -> READ_ONLY / SHADER_READ_ONLY barriers
-        // automatically, with `src` stage/access taken from these write edges.
-        // No barrier is emitted for the writes themselves: ScenePass's render
-        // pass performs the UNDEFINED -> ATTACHMENT transitions via
+        // Declare 写入 edges so the 渲染 graph's 布局 cache records the
+        // 布局 this pass leaves each 附件 in (matching the 渲染 pass
+        // `final_layout`). Downstream `GtaoPass` / `PostPass` 读取 edges then
+        // 触发器 the 附件 -> READ_ONLY / SHADER_READ_ONLY barriers
+        // automatically, with `src` stage/access taken from these 写入 edges.
+        // No 屏障 is emitted for the writes themselves: ScenePass's 渲染
+        // pass performs the UNDEFINED -> 附件 transitions via
         // `initial_layout` (see `create_render_pass`).
         graph.write_usage(ResourceUsage {
             handle: SCENE_DEPTH_H,
@@ -2007,12 +2007,12 @@ impl RenderPassNode for ScenePass {
     }
 
     fn execute(&mut self, ctx: &RenderContext, resources: &mut GraphResources) -> Result<()> {
-        // Framebuffer + HDR/depth/normal lifecycle now owned here (driven by
-        // the graph), not by `GraphRenderer::render`. `ensure_target` is
-        // idempotent: (re)builds only the slot for `image_index` when missing
-        // or the swapchain changed. `set_ao` rebinds the previous-frame GTAO
-        // visibility view (1-frame latency); `update_lights` rewrites the
-        // point-light SSBO from the ECS-collected lights for this frame.
+        // 帧缓冲 + HDR/depth/normal lifecycle now owned here (driven by
+        // the 图 not by `GraphRenderer::render`. `ensure_target` is
+        // idempotent: (re)builds only the 槽 for `image_index` when 缺少
+        // or the 交换链 changed. `set_ao` rebinds the previous-frame GTAO
+        // 可见性 视图 (1-frame 延迟 `update_lights` rewrites the
+        // point-light SSBO from the ECS-collected lights for this 帧
         self.ensure_target(ctx.device, ctx.context, ctx.image_index, ctx.extent)?;
         self.set_ao(ctx.device, ctx.frame_index, ctx.frame.ao_view);
         self.update_lights(ctx.device, ctx.frame.lights)?;
@@ -2021,10 +2021,10 @@ impl RenderPassNode for ScenePass {
         self.ensure_pipeline(ctx.device)?;
 
         let rp = self.render_pass.unwrap();
-        // Pick the per-swapchain-image framebuffer. Indexed by `image_index`
-        // (NOT `frame_index`): with N swapchain images and 2 frames in flight,
-        // several command buffers reference different framebuffers
-        // concurrently, so each swapchain image has its own.
+        // Pick the per-swapchain-image 帧缓冲 Indexed by `image_index`
+        // (NOT `frame_index`): with N 交换链 images and 2 frames in flight,
+        // several 命令 buffers 引用 different framebuffers
+        // concurrently, so each 交换链 图像 has its own.
         let idx = ctx.image_index as usize;
         let fb = self
             .framebuffers
@@ -2034,21 +2034,21 @@ impl RenderPassNode for ScenePass {
             .context("ScenePass: no framebuffer for image_index (call set_target first)")?;
         let pipeline = self.pipeline.as_ref().unwrap();
 
-        // Resolve the per-frame descriptor set now (used after the skybox draw,
-        // when we re-bind the scene pipeline + descriptors).
+        // 解析 the per-frame 描述符 集合 now (used after the skybox 绘制
+        // when we re-bind the scene 管线 + descriptors).
         let frame_set = self
             .frame_sets
             .get(ctx.frame_index as usize)
             .copied()
             .context("ScenePass: no set0 descriptor set for frame_index (call set_resources)")?;
 
-        // Clear values indexed by attachment number: 0 = HDR color, 1 = depth,
-        // 2 = view-space normal MRT. Even though attachment 2 is cleared, its
-        // clear value is irrelevant (the fragment shader overwrites every
-        // pixel); use opaque black. The count must be >= the highest cleared
-        // attachment index + 1 (VUID-VkRenderPassBeginInfo-clearValueCount-00902).
-        // Color attachment 0 uses the frame's clear_color (from the app-level
-        // `clear_color` parameter) so the "no camera" fallback shows gray etc.
+        // 清空 values indexed by 附件 number: 0 = 高动态范围 颜色 1 = 深度
+        // 2 = view-space 法线 MRT. Even though 附件 2 is cleared, its
+        // 清空 value is irrelevant (the 片元 着色器 overwrites every
+        // 像素 use 不透明 black. The count must be >= the highest cleared
+        // 附件 索引 + 1 (VUID-VkRenderPassBeginInfo-clearValueCount-00902).
+        // 颜色 附件 0 uses the frame's clear_color (from the app-level
+        // `clear_color` 参数 so the "no 相机 回退 shows gray etc.
         let cc = ctx.frame.clear_color;
         let clear_values = [
             vk::ClearValue {
@@ -2083,12 +2083,12 @@ impl RenderPassNode for ScenePass {
                 .cmd_begin_render_pass(ctx.cmd, &begin_info, vk::SubpassContents::INLINE)
         };
 
-        // Draw the skybox first (background). It uses its own pipeline + IBL
-        // env descriptor set and writes no depth, so scene geometry drawn
-        // afterwards always occludes it. Runs before the scene pipeline is
+        // 绘制 the skybox 第一个 (background). It uses its own 管线 + IBL
+        // env 描述符 集合 and writes no 深度 so scene geometry drawn
+        // afterwards always occludes it. Runs before the scene 管线 is
         // (re)bound below.
-        // Skipped when no usable Camera entity exists so the gray clear color
-        // shows through (consistent with the "No Camera" HUD overlay).
+        // Skipped when no usable 相机 实体 存在 so the gray 清空 颜色
+        // shows through 一致 with the "No 相机 HUD 叠加
         if ctx.frame.has_camera {
             if let Err(e) = self.skybox.draw(
                 ctx.device,
@@ -2101,22 +2101,22 @@ impl RenderPassNode for ScenePass {
             }
         }
 
-        // Re-bind the scene pipeline + all descriptor sets AFTER the skybox
-        // draw. The skybox binds its own pipeline (different layout) + IBL
-        // descriptor set at set 0, which invalidates the scene's descriptor
-        // bindings (pipeline-layout compatibility: a pipeline bind with an
-        // incompatible layout voids previously-bound sets at the differing
+        // Re-bind the scene 管线 + all 描述符 sets AFTER the skybox
+        // 绘制 The skybox binds its own 管线 (different 布局 + IBL
+        // 描述符 集合 at 集合 0, which invalidates the scene's 描述符
+        // bindings (pipeline-layout 兼容性 a 管线 bind with an
+        // incompatible 布局 voids previously-bound sets at the differing
         // indices). Without this re-bind, the scene's `cmd_draw_indexed`
-        // fires with set 0 still holding the skybox's combined-image-sampler
-        // instead of the frame UBO, triggering
-        // VUID-vkCmdDrawIndexed-None-08600 and producing a black screen.
+        // fires with 集合 0 still holding the skybox's combined-image-sampler
+        // instead of the 帧 UBO, triggering
+        // VUID-vkCmdDrawIndexed-None-08600 and producing a black 屏幕
         unsafe {
             ctx.device.cmd_bind_pipeline(
                 ctx.cmd,
                 vk::PipelineBindPoint::GRAPHICS,
                 pipeline.pipeline,
             );
-            // set 0: frame UBO + materials SSBO + light SSBO
+            // 集合 0: 帧 UBO + materials SSBO + 光源 SSBO
             ctx.device.cmd_bind_descriptor_sets(
                 ctx.cmd,
                 vk::PipelineBindPoint::GRAPHICS,
@@ -2125,7 +2125,7 @@ impl RenderPassNode for ScenePass {
                 std::slice::from_ref(&frame_set),
                 &[],
             );
-            // set 1: bindless texture table
+            // 集合 1: bindless 纹理 表
             ctx.device.cmd_bind_descriptor_sets(
                 ctx.cmd,
                 vk::PipelineBindPoint::GRAPHICS,
@@ -2134,7 +2134,7 @@ impl RenderPassNode for ScenePass {
                 std::slice::from_ref(&self.bindless_set),
                 &[],
             );
-            // set 2: IBL cubemap
+            // 集合 2: IBL cubemap
             ctx.device.cmd_bind_descriptor_sets(
                 ctx.cmd,
                 vk::PipelineBindPoint::GRAPHICS,
@@ -2143,7 +2143,7 @@ impl RenderPassNode for ScenePass {
                 std::slice::from_ref(&self.ibl_descriptor_set),
                 &[],
             );
-            // set 3: shadow map
+            // 集合 3: shadow 映射表
             ctx.device.cmd_bind_descriptor_sets(
                 ctx.cmd,
                 vk::PipelineBindPoint::GRAPHICS,
@@ -2152,10 +2152,10 @@ impl RenderPassNode for ScenePass {
                 std::slice::from_ref(&self.shadow_descriptor_set),
                 &[],
             );
-            // set 4: previous-frame GTAO visibility (combined image sampler).
-            // Bound every frame; only sampled when PBR_FLAG_AO is set. Uses
-            // the per-frame-in-flight descriptor set so updating the view for
-            // frame N doesn't disturb frame N-1's still-in-flight set.
+            // 集合 4: previous-frame GTAO 可见性 (combined 图像 采样器
+            // Bound every 帧 only sampled when PBR_FLAG_AO is 集合 Uses
+            // the per-frame-in-flight 描述符 集合 so updating the 视图 for
+            // 帧 N doesn't disturb 帧 N-1's still-in-flight 集合
             let ao_set = self
                 .ao_descriptor_sets
                 .get(ctx.frame_index as usize)
@@ -2169,7 +2169,7 @@ impl RenderPassNode for ScenePass {
                 std::slice::from_ref(&ao_set),
                 &[],
             );
-            // set 5: probe volume GI (scene-level, static — same set every frame).
+            // 集合 5: probe 音量 全局光照 (scene-level, 静态 — same 集合 every 帧
             ctx.device.cmd_bind_descriptor_sets(
                 ctx.cmd,
                 vk::PipelineBindPoint::GRAPHICS,
@@ -2213,21 +2213,21 @@ impl RenderPassNode for ScenePass {
                 ctx.device
                     .cmd_bind_vertex_buffers(ctx.cmd, 0, &vertex_buffers, &offsets);
 
-                // Push per-draw constants: model + material SSBO slot. The
+                // 推送 per-draw constants: 模型 + 材质 SSBO 槽 The
                 // remaining fields (albedo_idx/normal_idx) are
-                // unused by scene_frag.slang (it reads texture indices
-                // from the SSBO record, not the push constant) so we set them
-                // to INVALID. env_handle carries the BRDF LUT bindless handle.
+                // unused by scene_frag.slang (it reads 纹理 indices
+                // from the SSBO record, not the 推送 常量 so we 集合 them
+                // to 无效 env_handle carries the BRDF LUT bindless handle.
                 // material_slot comes from DrawItem.material
-                // (already resolved to an SSBO slot in app.rs); None -> slot 0
-                // (the fallback material).
+                // (already resolved to an SSBO 槽 in app.rs); None -> 槽 0
+                // (the 回退 材质
                 let pc = crate::shader_bindings::scene_frag::PbrBindlessPush {
                     model: item.model,
                     material_slot: item.material.unwrap_or(0),
                     env_handle: self.brdf_handle,
                     albedo_idx: u32::MAX,
                     normal_idx: u32::MAX,
-                    // PBR component toggles from the app (15-bit bitmask).
+                    // PBR 分量 toggles from the app (15-bit bitmask).
                     debug_flags: ctx.frame.debug_flags,
                     _padding: [0; 3],
                 };
@@ -2253,8 +2253,8 @@ impl RenderPassNode for ScenePass {
             }
         }
 
-        // Draw the world-space XYZ gizmo on top of the scene (its pipeline has
-        // depth test disabled, so it is never occluded). Uses the same
+        // 绘制 the world-space XYZ gizmo on 顶部 of the scene (its 管线 has
+        // 深度 test 禁用 so it is never occluded). Uses the same
         // view-projection the scene was drawn with.
         if let Some(gizmo) = &self.gizmo {
             gizmo.draw(ctx.cmd, &ctx.frame.view_proj);
@@ -2262,8 +2262,8 @@ impl RenderPassNode for ScenePass {
 
         unsafe { ctx.device.cmd_end_render_pass(ctx.cmd) };
 
-        // Publish our output views under the handles declared in `setup` so
-        // downstream passes (`GtaoPass`, `PostPass`) read them by handle
+        // 发布 our 输出 views under the handles declared in `setup` so
+        // downstream passes (`GtaoPass`, `PostPass`) 读取 them by handle
         // instead of `GraphRenderer` reaching into ScenePass internals.
         let idx = ctx.image_index;
         if let (Some(v), Some(i)) = (self.color_view(idx), self.color_image(idx)) {
@@ -2293,9 +2293,9 @@ impl RenderPassNode for ScenePass {
             index: usize::MAX,
             name: self.name().to_string(),
             kind: PassKind::Scene,
-            // Shadow view / IBL / previous-frame AO are bound via `set_resources`
+            // Shadow 视图 / IBL / previous-frame 环境光遮蔽 are bound via `set_resources`
             // / `set_ao` and bypass `GraphResources`, so they aren't listed as
-            // graph edges here - the viz surfaces them as human-readable notes.
+            // 图 edges here - the viz surfaces them as human-readable notes.
             inputs: Vec::new(),
             outputs: vec![self.out_depth_h, self.out_normal_h, self.out_color_h],
         }
@@ -2312,11 +2312,11 @@ impl RenderPassNode for ScenePass {
 
 impl Drop for ScenePass {
     fn drop(&mut self) {
-        // Safety net: if `destroy` wasn't called explicitly, tear down using
-        // the cached device handle. `destroy` is the preferred path (it runs
+        // 安全性 net: if 销毁 wasn't called explicitly, tear 下 using
+        // the cached 设备 handle. 销毁 is the preferred path (it runs
         // after `device_wait_idle`); this only fires on leaks / early drops.
         if let Some(device) = self.device.take() {
-            // `drop_target` drains framebuffers + depth images.
+            // `drop_target` drains framebuffers + 深度 images.
             for fb in self.framebuffers.drain(..).flatten() {
                 unsafe { device.destroy_framebuffer(fb, None) };
             }
@@ -2327,9 +2327,9 @@ impl Drop for ScenePass {
             if let Some(rp) = self.render_pass.take() {
                 unsafe { device.destroy_render_pass(rp, None) };
             }
-            // GraphicsPipeline::Drop frees the pipeline + layout.
+            // GraphicsPipeline::Drop frees the 管线 + 布局
             self.pipeline = None;
-            // set 0 (frame UBO + materials SSBO) layout + pool.
+            // 集合 0 帧 UBO + materials SSBO) 布局 + 池
             if let Some(layout) = self.frame_set_layout.take() {
                 unsafe { device.destroy_descriptor_set_layout(layout, None) };
             }
@@ -2342,18 +2342,18 @@ impl Drop for ScenePass {
             if let Some(pool) = self.shadow_ds_pool.take() {
                 unsafe { device.destroy_descriptor_pool(pool, None) };
             }
-            // Light SSBO.
+            // 光源 SSBO.
             if self.light_buffer != vk::Buffer::null() {
                 unsafe { device.destroy_buffer(self.light_buffer, None) };
             }
             if self.light_memory != vk::DeviceMemory::null() {
                 unsafe { device.free_memory(self.light_memory, None) };
             }
-            // Skybox pass (its own pipeline + set-2 layout).
+            // Skybox pass (its own 管线 + set-2 布局
             self.skybox.destroy(&device);
-            // Gizmo (its own pipeline + vertex buffer; Drop frees them).
+            // Gizmo (its own 管线 + 顶点 缓冲区 放置 frees them).
             self.gizmo = None;
-            // set 5 (GI probe volume) is borrowed from SceneScope — not destroyed here.
+            // 集合 5 全局光照 probe 音量 is borrowed from SceneScope — not destroyed here.
         }
     }
 }

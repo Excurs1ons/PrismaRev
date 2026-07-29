@@ -1,18 +1,18 @@
-//! Cross-thread shared state between the main (logic) thread and the
-//! render thread.
+//! Cross-thread shared 状态 between the main 逻辑 线程 and the
+//! 渲染 线程
 //!
 //! # Design
 //!
-//! Both [`FramePacket`] and [`EguiFrame`] are overwritten each frame:
-//! - **Main thread** writes the latest data before the render thread reads it.
-//! - **Render thread** reads the latest data each iteration and processes it.
-//! - No blocking: the render thread always uses whatever is latest.
+//! Both [`FramePacket`] and [`EguiFrame`] are overwritten each 帧
+//! - **Main thread** writes the latest data before the 渲染 线程 reads it.
+//! - **Render thread** reads the latest data each 迭代 and processes it.
+//! - No 阻塞 the 渲染 线程 always uses whatever is latest.
 //!
-//! `running` is an [`AtomicBool`] the main thread sets to `false` to signal
-//! the render thread to exit.
+//! `running` is an [`AtomicBool`] the main 线程 sets to `false` to 信号
+//! the 渲染 线程 to exit.
 //!
-//! [`RenderStats`] flows in the opposite direction (render thread → main
-//! thread), as does `pt_reset_requested` (main thread → render thread).
+//! [`RenderStats`] flows in the opposite direction 渲染 线程 → main
+//! 线程 as does `pt_reset_requested` (main 线程 → 渲染 线程
 
 use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 use std::sync::Mutex;
@@ -21,18 +21,18 @@ use prism_engine::render_system::FramePacket;
 use prism_render::EguiFrame;
 
 // ---------------------------------------------------------------------------
-// RenderStats — render thread → main thread
+// RenderStats — 渲染 线程 → main 线程
 // ---------------------------------------------------------------------------
 
-/// Per-frame rendering metrics produced by the render thread and consumed by
-/// the main thread for the editor HUD.
+/// Per-frame 渲染 metrics produced by the 渲染 线程 and consumed by
+/// the main 线程 for the 编辑器 HUD.
 #[derive(Clone, Debug, Default)]
 pub struct RenderStats {
-    /// Total time from begin_frame → present in ms.
+    /// 总计 时间 from begin_frame → present in ms.
     pub frame_time_ms: f32,
-    /// Smoothed frames per second.
+    /// Smoothed frames per 秒
     pub fps: f32,
-    /// Current path-tracing sample count (None = no PT pass).
+    /// 当前 path-tracing 样本 count (None = no PT pass
     pub pt_frame_count: Option<u32>,
 }
 
@@ -40,25 +40,25 @@ pub struct RenderStats {
 // RenderShared
 // ---------------------------------------------------------------------------
 
-/// Shared state between main thread (writer) and render thread (reader).
+/// Shared 状态 between main 线程 (writer) and 渲染 线程 (reader).
 pub struct RenderShared {
-    /// Set `false` by main thread to signal the render thread to exit.
+    /// 集合 `false` by main 线程 to 信号 the 渲染 线程 to exit.
     pub running: Arc<AtomicBool>,
-    /// Latest frame packet from the game loop (main → render).
+    /// Latest 帧 packet from the game 循环 (main → 渲染
     pub packet: Mutex<Option<FramePacket>>,
-    /// Latest tessellated egui frame (main → render).
+    /// Latest tessellated egui 帧 (main → 渲染
     pub egui_frame: Mutex<Option<EguiFrame>>,
-    /// Latest render stats from the render thread (render → main).
+    /// Latest 渲染 stats from the 渲染 线程 渲染 → main).
     pub render_stats: Mutex<RenderStats>,
-    /// Set `true` by main thread to request PT accumulation reset.
+    /// 集合 `true` by main 线程 to request PT accumulation reset.
     pub pt_reset_requested: AtomicBool,
-    /// Pending GPU upload tasks (main thread → render thread).
-    /// The render thread drains this at the start of each frame.
+    /// Pending GPU upload tasks (main 线程 → 渲染 线程
+    /// The 渲染 线程 drains this at the start of each 帧
     pub gpu_uploads: Mutex<Vec<super::io_runner::GpuUploadTask>>,
 }
 
 impl RenderShared {
-    /// Create a new shared state with `running = true`.
+    /// 创建 a new shared 状态 with `running = true`.
     pub fn new() -> (Arc<Self>, Arc<AtomicBool>) {
         let running = Arc::new(AtomicBool::new(true));
         let shared = Arc::new(Self {
@@ -73,53 +73,53 @@ impl RenderShared {
     }
 
     // -------------------------------------------------------------------
-    // Packet (main → render)
+    // Packet (main → 渲染
     // -------------------------------------------------------------------
 
-    /// Submit the latest frame packet (main thread → render thread).
+    /// Submit the latest 帧 packet (main 线程 → 渲染 线程
     pub fn send_packet(&self, packet: FramePacket) {
         *self.packet.lock().unwrap() = Some(packet);
     }
 
-    /// Submit the latest egui frame (main thread → render thread).
+    /// Submit the latest egui 帧 (main 线程 → 渲染 线程
     pub fn send_egui_frame(&self, frame: EguiFrame) {
         *self.egui_frame.lock().unwrap() = Some(frame);
     }
 
-    /// Take the latest frame packet (render thread).
+    /// Take the latest 帧 packet 渲染 线程
     pub fn take_packet(&self) -> Option<FramePacket> {
         self.packet.lock().unwrap().take()
     }
 
-    /// Take the latest egui frame (render thread).
+    /// Take the latest egui 帧 渲染 线程
     pub fn take_egui_frame(&self) -> Option<EguiFrame> {
         self.egui_frame.lock().unwrap().take()
     }
 
     // -------------------------------------------------------------------
-    // RenderStats (render → main)
+    // RenderStats 渲染 → main)
     // -------------------------------------------------------------------
 
-    /// Write latest render stats (render thread).
+    /// 写入 latest 渲染 stats 渲染 线程
     pub fn set_render_stats(&self, stats: RenderStats) {
         *self.render_stats.lock().unwrap() = stats;
     }
 
-    /// Read latest render stats (main thread).
+    /// 读取 latest 渲染 stats (main 线程
     pub fn read_render_stats(&self) -> RenderStats {
         self.render_stats.lock().unwrap().clone()
     }
 
     // -------------------------------------------------------------------
-    // PT reset (main → render)
+    // PT reset (main → 渲染
     // -------------------------------------------------------------------
 
-    /// Request PT accumulation reset (main thread).
+    /// Request PT accumulation reset (main 线程
     pub fn request_pt_reset(&self) {
         self.pt_reset_requested.store(true, Ordering::Relaxed);
     }
 
-    /// Take and clear PT reset flag (render thread).
+    /// Take and 清空 PT reset flag 渲染 线程
     pub fn take_pt_reset(&self) -> bool {
         self.pt_reset_requested.swap(false, Ordering::Relaxed)
     }

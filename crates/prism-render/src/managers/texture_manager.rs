@@ -1,28 +1,28 @@
-//! `RenderTextureManager` — RGBA8 textures backed by the bindless SRV table.
+//! `RenderTextureManager` — RGBA8 textures backed by the bindless SRV 表
 //!
-//! The manager owns every texture's device-local image + memory + image
-//! view, and the slot it occupies in the bindless descriptor set. A
-//! permanent 1×1 magenta fallback is registered in slot 0 at construction
-//! time so a misregistered / not-yet-uploaded handle never produces an
-//! unbound-descriptor read. The renderer's shader path checks for
-//! `TextureHandle::INVALID` and returns the fallback color; the
-//! CPU-side `get_srv` always returns a real slot.
+//! The 管理器 owns every texture's device-local 图像 + 内存 + 图像
+//! 视图 and the 槽 it occupies in the bindless 描述符 集合 A
+//! permanent 1×1 magenta 回退 is registered in 槽 0 at construction
+//! 时间 so a misregistered / not-yet-uploaded handle never produces an
+//! unbound-descriptor 读取 The renderer's 着色器 path checks for
+//! `TextureHandle::INVALID` and returns the 回退 颜色 the
+//! CPU-side `get_srv` always returns a real 槽
 //!
-//! P0 scope (commit 3):
-//! - `RenderTextureManager::new` constructs the bindless table and
-//!   registers a fallback view in slot 0.
-//! - `register` accepts a CPU-side texture and records the bindless
-//!   slot; the actual Vulkan image/view is constructed by the renderer
-//!   in commit 9 (which has access to the per-frame command pool and
-//!   graphics queue), and the resulting `ImageView` is wired in here via
-//!   `attach_image_view`. This split keeps the manager Vulkan-agnostic
-//!   enough that commit 3 can compile and unit-test without dragging in
-//!   staging-buffer / barrier code.
+//! P0 scope 提交 3):
+//! - `RenderTextureManager::new` constructs the bindless 表 and
+//! registers a 回退 视图 in 槽 0.
+//! - `register` accepts a CPU-side 纹理 and records the bindless
+//! 槽 the actual Vulkan image/view is constructed by the 渲染器
+//! in 提交 9 (which has 访问 to the per-frame 命令 池 and
+//! graphics 队列 and the resulting `ImageView` is wired in here via
+//! `attach_image_view`. This split keeps the 管理器 Vulkan-agnostic
+//! enough that 提交 3 can 编译 and unit-test without dragging in
+//! staging-buffer / 屏障 代码
 //!
-//! P0 scope (commit 9): the `register` path will be replaced with an
-//! end-to-end image upload (image + memory + view + bindless write in
-//! one call), using the existing `buffer::create_buffer` + a small
-//! one-shot command buffer helper.
+//! P0 scope 提交 9): the `register` path will be replaced with an
+//! end-to-end 图像 upload 图像 + 内存 + 视图 + bindless 写入 in
+//! one 调用 using the existing `buffer::create_buffer` + a small
+//! one-shot 命令 缓冲区 helper.
 
 use anyhow::Context as _;
 use ash::vk;
@@ -32,28 +32,28 @@ use crate::bindless::{BindlessTextureTable, TextureHandle};
 use crate::buffer::create_and_upload_image;
 use crate::context::VulkanContext;
 
-// Local handle. The engine layer translates asset texture handles
-// into this when it calls `RenderTextureManager::reserve` so the render
-// crate stays decoupled from the asset pipeline.
+// 局部 handle. The engine 层 translates 资源 纹理 handles
+// into this when it calls `RenderTextureManager::reserve` so the 渲染
+// crate stays decoupled from the 资源 管线
 new_key_type! {
     /// Slotmap handle into [`RenderTextureManager`].
     pub struct TextureHandleSlot;
 }
 
-/// Backwards-compatible alias for the slotmap-typed handle. Public so
-/// engine code can name it without depending on the new_key_type
+/// Backwards-compatible alias for the slotmap-typed handle. 公开 so
+/// engine 代码 can name it without depending on the new_key_type
 /// expansion directly.
 pub type AssetTextureHandle = TextureHandleSlot;
 
-/// Plain-data texture description used at the manager boundary. The
-/// engine layer translates asset texture data into this.
+/// Plain-data 纹理 描述 used at the 管理器 boundary. The
+/// engine 层 translates 资源 纹理 data into this.
 #[derive(Debug, Clone)]
 pub struct TextureUploadInput {
     pub width: u32,
     pub height: u32,
     pub format: TextureFormat,
-    /// Tightly packed rows, no padding. Length must be
-    /// `width * height * format.bytes_per_pixel()`.
+    /// Tightly packed rows, no 填充 长度 must be
+    /// 宽度 * 高度 * format.bytes_per_pixel()`.
     pub pixels: Vec<u8>,
 }
 
@@ -61,7 +61,7 @@ pub struct TextureUploadInput {
 pub enum TextureFormat {
     Rgba8,
     /// sRGB-encoded RGBA8 -> Vulkan `R8G8B8A8_SRGB`. Hardware performs the
-    /// sRGB->linear conversion on sample, so the shader receives linear values
+    /// sRGB->linear conversion on 样本 so the 着色器 receives 线性 values
     /// and must NOT apply a manual `pow(2.2)`. Used for albedo / emissive.
     Rgba8Srgb,
 }
@@ -73,7 +73,7 @@ impl TextureFormat {
         }
     }
 
-    /// The Vulkan image format to use for this texture kind.
+    /// The Vulkan 图像 格式 to use for this 纹理 kind.
     pub const fn vk_format(self) -> vk::Format {
         match self {
             TextureFormat::Rgba8 => vk::Format::R8G8B8A8_UNORM,
@@ -82,33 +82,33 @@ impl TextureFormat {
     }
 }
 
-/// A handle into the texture manager plus the bindless SRV slot assigned
-/// to it. The GPU image / memory / view are owned by the manager and freed
-/// in `destroy`.
+/// A handle into the 纹理 管理器 plus the bindless SRV 槽 assigned
+/// to it. The GPU 图像 / 内存 / 视图 are owned by the 管理器 and freed
+/// in 销毁
 pub struct UploadedTexture {
     pub srv: TextureHandle,
-    /// Width/height are stored here so the renderer can build the image
-    /// view info without keeping the input around.
+    /// Width/height are stored here so the 渲染器 can 构建 the 图像
+    /// 视图 信息 without keeping the 输入 around.
     pub width: u32,
     pub height: u32,
     pub mip_levels: u32,
-    /// Owned GPU objects. Kept so `destroy` can release them; the bindless
-    /// SRV descriptor merely references `view`.
+    /// Owned GPU objects. Kept so 销毁 can 释放 them; the bindless
+    /// SRV 描述符 merely references 视图
     pub image: vk::Image,
     pub memory: vk::DeviceMemory,
     pub view: vk::ImageView,
 }
 
-/// Manager of GPU textures. Owns the [`BindlessTextureTable`] and the
-/// bindless slot for every registered texture.
+/// 管理器 of GPU textures. Owns the [`BindlessTextureTable`] and the
+/// bindless 槽 for every registered 纹理
 pub struct RenderTextureManager {
     bindless: BindlessTextureTable,
     textures: SlotMap<AssetTextureHandle, UploadedTexture>,
-    /// Slot 0 of the bindless table is reserved for the magenta fallback
+    /// 槽 0 of the bindless 表 is reserved for the magenta 回退
     /// and is never reallocated.
     fallback_srv: TextureHandle,
-    /// Total slots the bindless table can hold. User textures start at
-    /// slot 1 (slot 0 is the fallback). The total is `fallback_capacity +
+    /// 总计 slots the bindless 表 can hold. User textures start at
+    /// 槽 1 槽 0 is the 回退 The 总计 is `fallback_capacity +
     /// user_capacity` to keep the math simple.
     #[allow(dead_code)]
     user_capacity: u32,
@@ -116,14 +116,14 @@ pub struct RenderTextureManager {
 }
 
 impl RenderTextureManager {
-    /// Construct a new manager with a 1×1 magenta fallback already in slot
-    /// 0 of the bindless table.
+    /// Construct a new 管理器 with a 1×1 magenta 回退 already in 槽
+    /// 0 of the bindless 表
     ///
-    /// `user_capacity` is the maximum number of user textures the manager
-    /// will accept; the fallback is allocated *in addition* to this.
-    /// The actual Vulkan image + view for the fallback is a real
-    /// 1×1 R8G8B8A8_UNORM image, so a missing-texture shader branch
-    /// still samples a sensible pixel.
+    /// `user_capacity` is the 最大 number of user textures the 管理器
+    /// will accept; the 回退 is allocated *in addition* to this.
+    /// The actual Vulkan 图像 + 视图 for the 回退 is a real
+    /// 1×1 R8G8B8A8_UNORM 图像 so a missing-texture 着色器 分支
+    /// still samples a sensible 像素
     pub fn new(
         context: &VulkanContext,
         command_pool: vk::CommandPool,
@@ -134,10 +134,10 @@ impl RenderTextureManager {
         let mut bindless = BindlessTextureTable::new(&context.device, total)
             .map_err(|e| anyhow::anyhow!("RenderTextureManager::new: bindless: {e}"))?;
 
-        // Magenta fallback: 1×1 opaque magenta (R=1,G=0,B=1,A=1) in the
-        // engine's linear working space (the shader applies sRGB→linear on
-        // sampled albedo; the fallback is only a "missing texture" marker so
-        // its exact color space is irrelevant). Written into bindless slot 0.
+        // Magenta 回退 1×1 不透明 magenta (R=1,G=0,B=1,A=1) in the
+        // engine's 线性 working 空间 (the 着色器 applies sRGB→linear on
+        // sampled albedo; the 回退 is only a 缺少 纹理 marker so
+        // its 精确 颜色 空间 is irrelevant). Written into bindless 槽 0.
         let magenta = [255u8, 0, 255, 255];
         let (fb_image, fb_memory, fb_view) = unsafe {
             create_and_upload_image(context, command_pool, graphics_queue, 1, 1, &magenta, 1, vk::Format::R8G8B8A8_UNORM)
@@ -147,7 +147,7 @@ impl RenderTextureManager {
             .register_with_handle(0, fb_view)
             .context("RenderTextureManager::new: register fallback in slot 0")?;
         let fallback_srv = TextureHandle(0);
-        // Keep the fallback GPU objects alive for the manager's lifetime.
+        // Keep the 回退 GPU objects alive for the manager's 生命周期
         let fallback_tex = UploadedTexture {
             srv: fallback_srv,
             width: 1,
@@ -159,9 +159,9 @@ impl RenderTextureManager {
         };
 
         let mut textures = SlotMap::with_key();
-        // Store the fallback under a dedicated key so `destroy` frees it.
-        // Its `srv` is fixed at slot 0 (register_with_handle advanced the
-        // table's `next` past 0), so user textures start at slot 1.
+        // 存储 the 回退 under a dedicated 调 so 销毁 frees it.
+        // Its `srv` is fixed at 槽 0 (register_with_handle advanced the
+        // table's 下一个 past 0), so user textures start at 槽 1.
         textures.insert(fallback_tex);
 
         Ok(Self {
@@ -173,26 +173,26 @@ impl RenderTextureManager {
         })
     }
 
-    /// The bindless SRV slot of the magenta fallback.
+    /// The bindless SRV 槽 of the magenta 回退
     pub fn fallback_srv(&self) -> TextureHandle {
         self.fallback_srv
     }
 
-    /// Raw bindless table — exposed so the renderer can bind the descriptor
-    /// set as part of its pipeline setup.
+    /// Raw bindless 表 — exposed so the 渲染器 can bind the 描述符
+    /// 集合 as part of its 管线 setup.
     pub fn bindless(&self) -> &BindlessTextureTable {
         &self.bindless
     }
 
-    /// Mut access to the bindless table for the renderer to write fallback
-    /// view / image view creation in commit 9.
+    /// Mut 访问 to the bindless 表 for the 渲染器 to 写入 回退
+    /// 视图 / 图像 视图 creation in 提交 9.
     pub fn bindless_mut(&mut self) -> &mut BindlessTextureTable {
         &mut self.bindless
     }
 
-    /// Upload a CPU-side texture to a device-local image, register its view
-    /// in the bindless SRV table, and return a handle. The handle maps to
-    /// the bindless slot via [`get_srv`](Self::get_srv).
+    /// Upload a CPU-side 纹理 to a device-local 图像 register its 视图
+    /// in the bindless SRV 表 and return a handle. The handle maps to
+    /// the bindless 槽 via [`get_srv`](Self::get_srv).
     pub fn reserve(
         &mut self,
         context: &VulkanContext,
@@ -238,7 +238,7 @@ impl RenderTextureManager {
         }
         .context("RenderTextureManager::reserve: upload texture")?;
 
-        // Reserve the next bindless SRV slot (slot 0 is the magenta fallback,
+        // 预留 the 下一个 bindless SRV 槽 槽 0 is the magenta 回退
         // already taken, so this returns 1, 2, ...).
         let srv = self
             .bindless
@@ -257,9 +257,9 @@ impl RenderTextureManager {
         Ok(handle)
     }
 
-    /// Like [`reserve`](Self::reserve) but records the image upload into a
+    /// Like [`reserve`](Self::reserve) but records the 图像 upload into a
     /// shared [`BatchUploader`](crate::batch::BatchUploader) so many textures
-    /// can be uploaded with a single submit + fence. The caller must finish
+    /// can be uploaded with a single submit + 围栏 The 调用者 must finish
     /// the uploader before sampling the textures.
     pub fn reserve_into(
         &mut self,
@@ -307,9 +307,9 @@ impl RenderTextureManager {
         Ok(handle)
     }
 
-    /// Translate an asset-side texture handle to its bindless SRV slot.
-    /// Returns `fallback_srv` (not `INVALID`) when the handle is unknown
-    /// so shaders can always sample something visible.
+    /// Translate an asset-side 纹理 handle to its bindless SRV 槽
+    /// Returns `fallback_srv` (not 无效 when the handle is unknown
+    /// so shaders can always 样本 something 可见
     pub fn get_srv(&self, handle: AssetTextureHandle) -> TextureHandle {
         self.textures
             .get(handle)
@@ -317,7 +317,7 @@ impl RenderTextureManager {
             .unwrap_or(self.fallback_srv)
     }
 
-    /// Drop a single entry and release its GPU image/memory/view.
+    /// 放置 a single entry and 释放 its GPU image/memory/view.
     pub fn unregister(&mut self, handle: AssetTextureHandle, device: &ash::Device) {
         if let Some(tex) = self.textures.remove(handle) {
             unsafe {
@@ -328,9 +328,9 @@ impl RenderTextureManager {
         }
     }
 
-    /// Release every entry (GPU image/memory/view + bindless slot). The
-    /// underlying bindless table is dropped when this manager is dropped,
-    /// which destroys the descriptor pool, set, layout, and 4 samplers.
+    /// 释放 every entry (GPU image/memory/view + bindless 槽 The
+    /// underlying bindless 表 is dropped when this 管理器 is dropped,
+    /// which destroys the 描述符 池 集合 布局 and 4 samplers.
     pub fn destroy(&mut self) {
         let device = self.bindless.device();
         for (_, tex) in self.textures.drain() {
@@ -376,10 +376,10 @@ mod tests {
 
     #[test]
     fn reserve_rejects_wrong_pixel_size() {
-        // We can't actually call `new` without a Vulkan device, so we
-        // test the validation path directly by constructing the
-        // manager with `unsafe` minimal state. Easier: validate via
-        // the bytes_per_pixel math at the call site.
+        // We can't actually 调用 `new` without a Vulkan 设备 so we
+        // test the 验证 path directly by constructing the
+        // 管理器 with `unsafe` minimal 状态 Easier: validate via
+        // the bytes_per_pixel math at the 调用 site.
         let bad = TextureUploadInput {
             width: 2,
             height: 2,

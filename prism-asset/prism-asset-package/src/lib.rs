@@ -1,25 +1,25 @@
 //! # prism-asset-package
 //!
-//! The `.pak` binary archive format for the PrismaRev resource pipeline.
+//! The `.pak` 二进制 archive 格式 for the PrismaRev 资源 管线
 //!
-//! ## Format overview
+//! ## 格式 overview
 //!
 //! ```text
 //! ┌─────────────────────────────┐
-//! │  PackageHeader (32 bytes)   │
+//! │ PackageHeader (32 字节 │
 //! ├─────────────────────────────┤
-//! │  Asset Registry [n]         │  ← contiguous `RuntimeAssetRecord` array
+//! │ 资源 Registry [n] │ ← 连续 `RuntimeAssetRecord` 数组
 //! ├─────────────────────────────┤
-//! │  Dependency Array [m]       │  ← flat array of AssetId (u64)
+//! │ Dependency 数组 [m] │ ← flat 数组 of AssetId (u64)
 //! ├─────────────────────────────┤
-//! │  Data Chunks                │  ← asset payloads, optionally zstd-compressed
+//! │ Data Chunks │ ← 资源 payloads, optionally zstd-compressed
 //! └─────────────────────────────┘
 //! ```
 //!
-//! - Magic: `b"RPAK"` (4 bytes)
+//! - Magic: `b"RPAK"` (4 字节
 //! - All multi-byte values are little-endian.
-//! - The header checksum covers everything from the next byte after the checksum
-//!   field through the end of the file (i.e. header[12..] + registry + deps + data).
+//! - The header 校验和 covers everything from the 下一个 byte after the 校验和
+//! field through the 结束 of the file (i.e. header[12..] + registry + deps + data).
 
 use prism_asset_core::{AssetId, AssetType};
 use std::io;
@@ -34,12 +34,12 @@ use xxhash_rust::xxh3::Xxh3;
 
 /// Magic identifier: `b"RPAK"`.
 pub const MAGIC: [u8; 4] = [b'R', b'P', b'A', b'K'];
-/// Current package format version.
+/// 当前 包 格式 version.
 pub const VERSION: u32 = 1;
 
-/// Flag: asset data is zstd-compressed in the data chunk.
+/// Flag: 资源 data is zstd-compressed in the data chunk.
 pub const FLAG_COMPRESSED: u32 = 1 << 0;
-/// Flag: asset data is intended for streaming (large, can be loaded in chunks).
+/// Flag: 资源 data is intended for streaming (large, can be loaded in chunks).
 pub const FLAG_STREAMED: u32 = 1 << 1;
 
 // ---------------------------------------------------------------------------
@@ -74,10 +74,10 @@ pub enum PackageError {
 // Header
 // ---------------------------------------------------------------------------
 
-/// On-disk package header (32 bytes + registry_offset/data_offset metadata).
+/// On-disk 包 header (32 字节 + registry_offset/data_offset metadata).
 ///
-/// Total fixed header size: 4 + 4 + 4 + 8 + 8 + 8 + 8 + 8 = 52 bytes
-/// followed by the asset registry array.
+/// 总计 fixed header 大小 4 + 4 + 4 + 8 + 8 + 8 + 8 + 8 = 52 字节
+/// followed by the 资源 registry 数组
 #[derive(Debug, Clone)]
 #[repr(C)]
 pub struct PackageHeader {
@@ -85,23 +85,23 @@ pub struct PackageHeader {
     pub version: u32,
     /// Number of assets in the registry.
     pub asset_count: u32,
-    /// Byte offset from file start to the asset registry.
+    /// Byte 偏移 from file start to the 资源 registry.
     pub registry_offset: u64,
-    /// Byte size of the asset registry.
+    /// Byte 大小 of the 资源 registry.
     pub registry_size: u64,
-    /// Byte offset from file start to the data chunk area.
+    /// Byte 偏移 from file start to the data chunk 面积
     pub data_offset: u64,
-    /// Byte size of the data chunk area (uncompressed).
+    /// Byte 大小 of the data chunk 面积 (uncompressed).
     pub data_size: u64,
-    /// xxh3-64 checksum of header[12..] + registry + deps + data.
+    /// xxh3-64 校验和 of header[12..] + registry + deps + data.
     pub checksum: u64,
 }
 
 impl PackageHeader {
-    /// Serialized header size in bytes (magic 4 + version 4 + ... + checksum 8 + padding).
+    /// Serialized header 大小 in 字节 (magic 4 + version 4 + ... + 校验和 8 + 填充
     pub const SERIALIZED_SIZE: u64 = 4 + 4 + 4 + 8 + 8 + 8 + 8 + 8; // 52
 
-    /// Compute the xxh3 checksum over the payload (everything after the checksum field).
+    /// 计算 the xxh3 校验和 over the payload (everything after the 校验和 field).
     fn compute_checksum(header_body: &[u8], registry: &[u8], deps: &[u8], data: &[u8]) -> u64 {
         let mut hasher = Xxh3::default();
         hasher.update(header_body);
@@ -111,7 +111,7 @@ impl PackageHeader {
         hasher.digest()
     }
 
-    /// Serialize the header to bytes (without checksum — caller computes it).
+    /// 序列化 the header to 字节 (without 校验和 — 调用者 computes it).
     fn to_bytes(&self) -> Vec<u8> {
         let mut buf = Vec::with_capacity(Self::SERIALIZED_SIZE as usize);
         buf.extend_from_slice(&self.magic);
@@ -125,7 +125,7 @@ impl PackageHeader {
         buf
     }
 
-    /// Deserialize from bytes (must be at least `SERIALIZED_SIZE`).
+    /// 反序列化 from 字节 (must be at least `SERIALIZED_SIZE`).
     fn from_bytes(bytes: &[u8]) -> Result<Self, PackageError> {
         if bytes.len() < Self::SERIALIZED_SIZE as usize {
             return Err(PackageError::Truncated(format!(
@@ -171,28 +171,28 @@ impl PackageHeader {
 }
 
 // ---------------------------------------------------------------------------
-// Runtime Asset Record
+// 运行时 资源 Record
 // ---------------------------------------------------------------------------
 
-/// On-disk record for one cooked asset in the package.
+/// On-disk record for one cooked 资源 in the 包
 ///
-/// Total size: 8 + 4 + 4 + 8 + 8 + 8 + 4 + 4 = 48 bytes.
+/// 总计 大小 8 + 4 + 4 + 8 + 8 + 8 + 4 + 4 = 48 字节
 #[derive(Debug, Clone)]
 #[repr(C)]
 pub struct RuntimeAssetRecord {
-    /// Asset ID (u64).
+    /// 资源 ID (u64).
     pub id: u64,
     /// AssetType discriminant (u32).
     pub type_id: u32,
     /// Flags: `FLAG_COMPRESSED`, `FLAG_STREAMED`, etc.
     pub flags: u32,
-    /// Byte offset of uncompressed data in the data chunk area.
+    /// Byte 偏移 of uncompressed data in the data chunk 面积
     pub offset: u64,
-    /// Uncompressed size in bytes.
+    /// Uncompressed 大小 in 字节
     pub size: u64,
-    /// Compressed size in bytes (0 when `!flags & FLAG_COMPRESSED`).
+    /// Compressed 大小 in 字节 (0 when `!flags & FLAG_COMPRESSED`).
     pub compressed_size: u64,
-    /// Start index into the flat dependency array.
+    /// Start 索引 into the flat dependency 数组
     pub dependency_start: u32,
     /// Number of dependency entries.
     pub dependency_count: u32,
@@ -256,10 +256,10 @@ impl RuntimeAssetRecord {
 }
 
 // ---------------------------------------------------------------------------
-// Package Builder
+// 包 构建器
 // ---------------------------------------------------------------------------
 
-/// A pending asset that will be written into the .pak.
+/// A pending 资源 that will be written into the .pak.
 struct PendingAsset {
     id: AssetId,
     asset_type: AssetType,
@@ -268,11 +268,11 @@ struct PendingAsset {
     dependencies: Vec<AssetId>,
 }
 
-/// Builder for creating `.pak` package files.
+/// 构建器 for creating `.pak` 包 files.
 ///
-/// Usage:
+/// 用法
 /// ```ignore
-/// let mut builder = PackageBuilder::new();
+/// let mut 构建器 = PackageBuilder::new();
 /// builder.add_asset(id, AssetType::Binary, data, &[]);
 /// builder.build_to_file("game.pak")?;
 /// ```
@@ -290,12 +290,12 @@ impl PackageBuilder {
         }
     }
 
-    /// Set the zstd compression level (1-22). 0 = no compression (default).
+    /// 集合 the zstd 压缩 level (1-22). 0 = no 压缩 默认
     pub fn set_compression(&mut self, level: i32) {
         self.compression_level = level;
     }
 
-    /// Add an asset to the package.
+    /// Add an 资源 to the 包
     pub fn add_asset(
         &mut self,
         id: AssetId,
@@ -322,9 +322,9 @@ impl PackageBuilder {
         self.assets.len()
     }
 
-    /// Build the .pak file in memory and return the raw bytes.
+    /// 构建 the .pak file in 内存 and return the raw 字节
     pub fn build(&mut self) -> Result<Vec<u8>, PackageError> {
-        // Compute compressed data if needed.
+        // 计算 compressed data if needed.
         let compressed_data: Vec<(Vec<u8>, u64)> = self
             .assets
             .iter()
@@ -339,7 +339,7 @@ impl PackageBuilder {
             })
             .collect::<Result<Vec<_>, PackageError>>()?;
 
-        // Build flat dependency array and record each asset's dependency range.
+        // 构建 flat dependency 数组 and record each asset's dependency range.
         let mut dep_array = Vec::<u64>::new();
         let mut records = Vec::<RuntimeAssetRecord>::new();
         let mut dep_start: u32 = 0;
@@ -393,7 +393,7 @@ impl PackageBuilder {
             };
         }
 
-        // Serialize registry + deps + data.
+        // 序列化 registry + deps + data.
         let registry_bytes: Vec<u8> = records.iter().flat_map(|r| r.to_bytes()).collect();
         let deps_bytes: Vec<u8> = dep_array
             .iter()
@@ -404,8 +404,8 @@ impl PackageBuilder {
             .flat_map(|(d, _)| d.clone())
             .collect();
 
-        // Compute the checksum over everything after the checksum field.
-        // The checksum covers header_body (everything after checksum) + registry + deps + data.
+        // 计算 the 校验和 over everything after the 校验和 field.
+        // The 校验和 covers header_body (everything after 校验和 + registry + deps + data.
         let hdr = PackageHeader {
             magic: MAGIC,
             version: VERSION,
@@ -417,16 +417,16 @@ impl PackageBuilder {
             checksum: 0, // placeholder
         };
         let header_bytes = hdr.to_bytes();
-        // header_body = bytes after the 8-byte checksum field
+        // header_body = 字节 after the 8-byte 校验和 field
         let checksum_field_end = 4 + 4 + 4 + 8 + 8 + 8 + 8; // 44 = end of data_size field
         let _header_body = &header_bytes[checksum_field_end..]; // actually we need header[12..]
-        // Let's be precise: checksum starts at offset 44, length 8.
-        // The checksum covers header[12..44] + registry + deps + data
+        // Let's be 精确 校验和 starts at 偏移 44, 长度 8.
+        // The 校验和 covers header[12..44] + registry + deps + data
         let header_prefix = &header_bytes[12..44]; // from after asset_count through data_size
 
         let checksum = PackageHeader::compute_checksum(header_prefix, &registry_bytes, &deps_bytes, &data_bytes);
 
-        // Write final header with checksum.
+        // 写入 final header with 校验和
         let mut final_hdr = hdr;
         final_hdr.checksum = checksum;
         let final_header_bytes = final_hdr.to_bytes();
@@ -451,7 +451,7 @@ impl PackageBuilder {
         Ok(output)
     }
 
-    /// Build and write to a file.
+    /// 构建 and 写入 to a file.
     pub fn build_to_file(&mut self, path: impl AsRef<Path>) -> Result<(), PackageError> {
         let bytes = self.build()?;
         std::fs::write(path.as_ref(), &bytes)?;
@@ -459,7 +459,7 @@ impl PackageBuilder {
         Ok(())
     }
 
-    /// Async: build and write to a file via tokio.
+    /// 异步 构建 and 写入 to a file via tokio.
     pub async fn build_to_file_async(&mut self, path: impl AsRef<Path> + Send) -> Result<(), PackageError> {
         let bytes = self.build()?;
         tokio::fs::write(path.as_ref(), &bytes).await?;
@@ -469,13 +469,13 @@ impl PackageBuilder {
 }
 
 // ---------------------------------------------------------------------------
-// Package Reader
+// 包 Reader
 // ---------------------------------------------------------------------------
 
-/// A loaded `.pak` package, ready for asset lookup and extraction.
+/// A loaded `.pak` 包 ready for 资源 lookup and extraction.
 ///
-/// The reader maps the file into memory at open time and provides zero-copy
-/// access to asset data where possible (uncompressed assets).
+/// The reader maps the file into 内存 at 打开 时间 and provides zero-copy
+/// 访问 to 资源 data where possible (uncompressed assets).
 #[derive(Debug, Clone)]
 pub struct PackageReader {
     header: PackageHeader,
@@ -485,23 +485,23 @@ pub struct PackageReader {
 }
 
 impl PackageReader {
-    /// Open a `.pak` file from disk and verify its integrity.
+    /// 打开 a `.pak` file from disk and 验证 its 完整性
     pub fn open(path: impl AsRef<Path>) -> Result<Self, PackageError> {
         let bytes = std::fs::read(path.as_ref())?;
         Self::from_bytes(&bytes)
     }
 
-    /// Async open via tokio.
+    /// 异步 打开 via tokio.
     pub async fn open_async(path: impl AsRef<Path> + Send) -> Result<Self, PackageError> {
         let bytes = tokio::fs::read(path.as_ref()).await?;
         Self::from_bytes(&bytes)
     }
 
-    /// Parse from an in-memory byte slice.
+    /// Parse from an in-memory byte 切片
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, PackageError> {
         let header = PackageHeader::from_bytes(bytes)?;
 
-        // Read registry.
+        // 读取 registry.
         let reg_start = header.registry_offset as usize;
         let reg_end = reg_start + header.registry_size as usize;
         if reg_end > bytes.len() {
@@ -519,7 +519,7 @@ impl PackageReader {
             off += consumed;
         }
 
-        // Read dependency array.
+        // 读取 dependency 数组
         let deps_start = reg_end;
         let deps_size = header.data_offset as usize - deps_start;
         if deps_start + deps_size > bytes.len() {
@@ -537,7 +537,7 @@ impl PackageReader {
             dependency_array.push(raw);
         }
 
-        // Verify checksum.
+        // 验证 校验和
         let _checksum_field_end = 4 + 4 + 4 + 8 + 8 + 8 + 8; // 44 = end of data_size
         let header_prefix = &bytes[12..44];
         let data_start = header.data_offset as usize;
@@ -564,12 +564,12 @@ impl PackageReader {
         })
     }
 
-    /// Header reference.
+    /// Header 引用
     pub fn header(&self) -> &PackageHeader {
         &self.header
     }
 
-    /// Number of assets in the package.
+    /// Number of assets in the 包
     pub fn asset_count(&self) -> usize {
         self.records.len()
     }
@@ -579,13 +579,13 @@ impl PackageReader {
         &self.records
     }
 
-    /// Find a record by asset ID.
+    /// 查找 a record by 资源 ID.
     pub fn find_record(&self, id: AssetId) -> Option<&RuntimeAssetRecord> {
         let raw = id.into_raw();
         self.records.iter().find(|r| r.id == raw)
     }
 
-    /// Find a record by raw u64 ID.
+    /// 查找 a record by raw u64 ID.
     pub fn find_record_by_raw(&self, id: u64) -> Option<&RuntimeAssetRecord> {
         self.records.iter().find(|r| r.id == id)
     }
@@ -597,10 +597,10 @@ impl PackageReader {
         &self.dependency_array[start..end]
     }
 
-    /// Read the uncompressed data for an asset.
+    /// 读取 the uncompressed data for an 资源
     ///
-    /// Returns `None` if the record is not found. Returns decompressed bytes
-    /// for compressed assets, or a slice of the mmap'd data for uncompressed ones.
+    /// Returns `None` if the record is not 找到 Returns decompressed 字节
+    /// for compressed assets, or a 切片 of the mmap'd data for uncompressed ones.
     pub fn read_asset_data(&self, id: AssetId) -> Result<Option<Vec<u8>>, PackageError> {
         let record = match self.find_record(id) {
             Some(r) => r,
@@ -609,7 +609,7 @@ impl PackageReader {
         self.read_asset_record_data(record).map(Some)
     }
 
-    /// Read data for a specific record.
+    /// 读取 data for a specific record.
     pub fn read_asset_record_data(&self, record: &RuntimeAssetRecord) -> Result<Vec<u8>, PackageError> {
         let data_start = self.header.data_offset as usize;
         let offset = data_start + record.offset as usize - self.header.data_offset as usize;
@@ -639,9 +639,9 @@ impl PackageReader {
         }
     }
 
-    /// Check integrity of the package (re-checksums the entire file body).
+    /// Check 完整性 of the 包 (re-checksums the entire file body).
     pub fn verify_integrity(&self) -> Result<(), PackageError> {
-        // Re-open from bytes to trigger full checksum verification.
+        // Re-open from 字节 to 触发器 完整 校验和 验证
         Self::from_bytes(&self.data).map(|_| ())
     }
 }

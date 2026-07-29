@@ -1,18 +1,18 @@
 use prism_asset_core::{impl_asset_data, AssetGuid};
 use serde::{Deserialize, Serialize};
 
-/// Cubemap texture source asset.
+/// Cubemap 纹理 源 资源
 ///
-/// References an equirectangular HDR file that gets cooked into a GPU
-/// cubemap for IBL / skybox use. No rendering parameters (intensity, tint,
-/// rotation) live here — those belong to the scene's lighting configuration.
+/// References an equirectangular 高动态范围 file that gets cooked into a GPU
+/// cubemap for IBL / skybox use. No 渲染 parameters (intensity, tint,
+/// 旋转 live here — those belong to the scene's lighting 配置
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct CubeDef {
-    /// Stable GUID.
+    /// 稳定 GUID.
     pub guid: AssetGuid,
-    /// Human-readable label.
+    /// Human-readable 标签
     pub label: String,
-    /// Path to equirectangular HDR source file (relative to asset library).
+    /// Path to equirectangular 高动态范围 源 file 相对 to 资源 库
     pub hdr_source: Option<String>,
 }
 

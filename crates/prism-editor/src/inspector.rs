@@ -1,14 +1,14 @@
-//! Entity-tree inspector panel.
+//! Entity-tree 检查器 面板
 //!
 //! Displays the scene as a **nested tree** (roots -> children via the
-//! `Parent`/`Children` components) and an auto-recognised component editor for
-//! the selected entity. No component type is hardcoded here: the editor iterates
+//! `Parent`/`Children` components) and an auto-recognised 分量 编辑器 for
+//! the selected 实体 No 分量 类型 is hardcoded here: the 编辑器 iterates
 //! the [`ComponentRegistry`](crate::ComponentRegistry) entries the host
-//! registered and shows whichever ones the selected entity actually has.
+//! registered and shows whichever ones the selected 实体 actually has.
 //!
-//! The tree traversal itself is also type-erased: because `prism-editor` cannot
-//! name the `Parent` / `Children` / `Name` component types (they live in
-//! `prism-engine`), the host supplies a [`Hierarchy`] implementation that
+//! The 树 traversal itself is also type-erased: because `prism-editor` cannot
+//! name the `Parent` / `Children` / `Name` 分量 types (they live in
+//! `prism-engine`), the host supplies a [`Hierarchy`] 实现 that
 //! answers the structural queries. This keeps `prism-editor` free of any
 //! `prism-engine` dependency.
 
@@ -19,33 +19,33 @@ use prism_render::RenderMode;
 use crate::InspectCtx;
 
 // ---------------------------------------------------------------------------
-// Hierarchy abstraction (structural queries the host must implement)
+// Hierarchy 抽象 (structural queries the host must implement)
 // ---------------------------------------------------------------------------
 
-/// Structural scene queries the inspector needs to draw the entity tree.
+/// Structural scene queries the 检查器 needs to 绘制 the 实体 树
 ///
 /// Implemented by the host (`prism-engine`) so `prism-editor` can traverse the
-/// hierarchy and render entity names without naming the `Parent` / `Children` /
-/// `Name` component types directly. This is the seam that keeps the dependency
-/// arrow one-way: `prism-engine -> prism-editor`, never the reverse.
+/// hierarchy and 渲染 实体 names without naming the `Parent` / `Children` /
+/// `Name` 分量 types directly. This is the seam that keeps the dependency
+/// arrow one-way: `prism-engine -> prism-editor`, never the 反转
 pub trait Hierarchy {
-    /// Root entities of the scene (entities with no `Parent`), in a stable
-    /// display order (e.g. by entity id).
+    /// Root entities of the scene (entities with no `Parent`), in a 稳定
+    /// display order (e.g. by 实体 id).
     fn roots(&self, world: &World) -> Vec<Entity>;
-    /// Children of `entity`, in display order. Empty for leaf entities.
+    /// Children of 实体 in display order. 空 for leaf entities.
     fn children(&self, world: &World, entity: Entity) -> Vec<Entity>;
-    /// Human-readable name for `entity`, or `None` to fall back to the raw id.
+    /// Human-readable name for 实体 or `None` to fall 后 to the raw id.
     fn name(&self, world: &World, entity: Entity) -> Option<String>;
 }
 
-/// A no-op hierarchy used when the host hasn't wired one up: treats every live
-/// entity as a root and names them by id. Keeps the inspector usable in tests.
+/// A no-op hierarchy used when the host hasn't wired one 上 treats every live
+/// 实体 as a root and names them by id. Keeps the 检查器 usable in tests.
 pub struct FlatHierarchy;
 
 impl Hierarchy for FlatHierarchy {
     fn roots(&self, world: &World) -> Vec<Entity> {
-        // Without component knowledge we can't enumerate live entities from
-        // prism-editor; return an empty list and let the host drive.
+        // Without 分量 knowledge we can't enumerate live entities from
+        // prism-editor; return an 空 列表 and let the host drive.
         let _ = world;
         Vec::new()
     }
@@ -58,44 +58,44 @@ impl Hierarchy for FlatHierarchy {
 }
 
 // ---------------------------------------------------------------------------
-// Inspector state
+// 检查器 状态
 // ---------------------------------------------------------------------------
 
-/// egui-driven inspector for live-editing scene + camera parameters.
+/// egui-driven 检查器 for live-editing scene + 相机 parameters.
 pub struct Inspector {
-    /// Whether the inspector panel is shown (toggled with F1).
+    /// Whether the 检查器 面板 is shown (toggled with F1).
     pub show: bool,
-    /// Whether the frame-time / FPS / PT performance HUD is shown (F3).
+    /// Whether the frame-time / 帧率 / PT 性能 HUD is shown (F3).
     pub show_perf: bool,
-    /// Currently selected entity in the tree.
+    /// Currently selected 实体 in the 树
     selected: Option<Entity>,
-    /// Current PBR debug flag bitmask (mirrors `App::debug_flags`).
+    /// 当前 PBR 调试 flag bitmask (mirrors `App::debug_flags`).
     pub debug_flags: u32,
-    /// Whether the UI overlay is active (H toggle).
+    /// Whether the UI 叠加 is 激活 (H toggle).
     pub show_ui: bool,
-    /// Tonemap mode (0 = Reinhard, 1 = ACES Narkowicz).
+    /// 色调映射 众数 (0 = Reinhard, 1 = ACES Narkowicz).
     pub tonemap_mode: u32,
-    /// Exposure multiplier. Synced from the camera entity each frame; pushed
-    /// back to the camera when edited in the Debug window.
+    /// Exposure multiplier. Synced from the 相机 实体 each 帧 pushed
+    /// 后 to the 相机 when edited in the 调试 窗口
     pub exposure: f32,
-    /// Whether a usable Camera entity exists in the ECS world. When `false`,
-    /// a centered "[ No Camera ]" overlay is drawn on top of the render.
+    /// Whether a usable 相机 实体 存在 in the ECS 世界 When `false`,
+    /// a centered "[ No 相机 ]" 叠加 is drawn on 顶部 of the 渲染
     pub has_camera: bool,
-    /// Render mode: Raster (PBR) or PathTrace.
+    /// 渲染 众数 光栅化 (PBR) or PathTrace.
     pub render_mode: RenderMode,
-    /// Maximum path depth (bounces) for path tracing.
+    /// 最大 path 深度 (bounces) for path tracing.
     pub pt_max_bounces: u32,
-    /// Max world-space length of PT primary + shadow rays.
+    /// 最大值 world-space 长度 of PT primary + shadow rays.
     pub pt_ray_max_distance: f32,
-    /// Maximum iterations (samples per pixel) for path tracing. 0 = accumulate.
+    /// 最大 iterations (samples per 像素 for path tracing. 0 = accumulate.
     pub pt_max_iterations: u32,
-    /// Frame-time delta (seconds) from the previous frame.
+    /// Frame-time delta (seconds) from the 上一个 帧
     pub dt: f32,
-    /// Smoothed frame time in milliseconds.
+    /// Smoothed 帧 时间 in milliseconds.
     pub frame_time_ms: f32,
-    /// Smoothed FPS.
+    /// Smoothed 帧率
     pub fps: f32,
-    /// Current PT accumulation frame count (samples per pixel).
+    /// 当前 PT accumulation 帧 count (samples per 像素
     pub pt_frame_count: u32,
 }
 
@@ -135,8 +135,8 @@ impl Inspector {
         self.show_perf = !self.show_perf;
     }
 
-    /// The actual egui layout. Called by [`crate::Editor::run`] inside the
-    /// egui overlay closure.
+    /// The actual egui 布局 Called by [`crate::Editor::run`] inside the
+    /// egui 叠加 闭包
     pub(crate) fn ui(
         &mut self,
         ctx: &Context,
@@ -156,7 +156,7 @@ impl Inspector {
             ..Default::default()
         };
 
-        // --- Entity tree (left) ---
+        // --- 实体 树 左 ---
         egui::Window::new("Entities")
             .id("inspector_entities".into())
             .default_pos([16.0, 16.0])
@@ -171,7 +171,7 @@ impl Inspector {
                 });
             });
 
-        // --- Editor panel (right) ---
+        // --- 编辑器 面板 右 ---
         egui::Window::new("Editor")
             .id("inspector_editor".into())
             .default_pos([270.0, 16.0])
@@ -190,16 +190,16 @@ impl Inspector {
                 });
             });
 
-        // Exposure sync: the camera's `exposure` field is the source of truth,
-        // but the editor never names the Camera type. The host (`App`) pushes
+        // Exposure sync: the camera's `exposure` field is the 源 of truth,
+        // but the 编辑器 never names the 相机 类型 The host (`App`) pushes
         // the live value into `self.exposure` before `ui` runs and pulls the
-        // edited value back afterwards - so nothing to do here. The Debug
-        // window below reads/writes `self.exposure` directly.
+        // edited value 后 afterwards - so nothing to do here. The 调试
+        // 窗口 below reads/writes `self.exposure` directly.
 
-        // --- Debug mode status ---
+        // --- 调试 众数 状态 ---
         crate::windows::debug_window(ctx, self);
 
-        // --- Render Settings ---
+        // --- 渲染 Settings ---
         crate::windows::render_settings_window(ctx, self);
 
         let hint_frame = egui::Frame {
@@ -219,7 +219,7 @@ impl Inspector {
             });
     }
 
-    /// Draw the bottom-left performance HUD.
+    /// 绘制 the bottom-left 性能 HUD.
     fn perf_hud(&self, ctx: &Context) {
         if !self.show_perf {
             return;
@@ -251,9 +251,9 @@ impl Inspector {
             });
     }
 
-    /// Centred "[ No Camera ]" overlay when no usable Camera entity exists.
-    /// Drawn on top of the gray fallback background so the user knows the
-    /// scene is alive but has no active camera.
+    /// Centred "[ No 相机 ]" 叠加 when no usable 相机 实体 存在
+    /// Drawn on 顶部 of the gray 回退 background so the user knows the
+    /// scene is alive but has no 激活 相机
     fn no_camera_overlay(&self, ctx: &Context) {
         if self.has_camera {
             return;
@@ -281,7 +281,7 @@ impl Inspector {
             });
     }
 
-    /// Render the entity tree recursively. Roots first, then each root's
+    /// 渲染 the 实体 树 recursively. Roots 第一个 then each root's
     /// children indented under a collapsing header.
     fn entity_tree(
         &mut self,
@@ -316,13 +316,13 @@ impl Inspector {
         let selected = self.selected == Some(entity);
 
         ui.horizontal(|ui| {
-            // Active toggle.
+            // 激活 toggle.
             let mut checked = is_active;
             if ui.checkbox(&mut checked, "").changed() {
                 world.set_active(entity, checked);
             }
-            // Component badges: one letter per registered component the entity
-            // has, so the tree doubles as a quick "what's on this entity" view.
+            // 分量 badges: one letter per registered 分量 the 实体
+            // has, so the 树 doubles as a quick "what's on this 实体 视图
             let badges: String = registry
                 .entries_for(world, entity)
                 .iter()
@@ -353,7 +353,7 @@ impl Inspector {
     }
 
     /// Edit the selected entity's components. Iterates the registry - no
-    /// component type is hardcoded.
+    /// 分量 类型 is hardcoded.
     fn entity_editor(
         &mut self,
         ui: &mut Ui,
@@ -363,13 +363,13 @@ impl Inspector {
         inspect_ctx: &mut InspectCtx,
     ) {
         // Forget stale euler cache when the selection changes.
-        // (Keep current entity's cache; drop others to bound growth.)
+        // (Keep 当前 entity's cache; 放置 others to bound growth.)
         inspect_ctx.euler_cache.retain(|&(e, _), _| e == entity);
-        // Tell the Inspect impls which entity they're editing so per-entity
+        // Tell the Inspect impls which 实体 they're editing so per-entity
         // caches (euler angles) can be keyed correctly.
         inspect_ctx.current_entity = Some(entity);
 
-        // Active toggle (generic - applies to every entity).
+        // 激活 toggle 泛型 - applies to every 实体
         let mut is_active = world.is_active(entity);
         if ui.checkbox(&mut is_active, "Active").changed() {
             world.set_active(entity, is_active);
@@ -378,11 +378,11 @@ impl Inspector {
         ui.heading(format!("Entity {}", entity.id()));
         ui.separator();
 
-        // Auto-recognise: discover all component types from the world and show
+        // Auto-recognise: discover all 分量 types from the 世界 and show
         // an editable UI for those with registered inspect functions.
         let entries = registry.entries_for(world, entity);
         for entry in &entries {
-            // Header label = short type name (last path segment).
+            // Header 标签 = short 类型 name 最后一个 path segment).
             let label = entry
                 .type_name
                 .rsplit("::")

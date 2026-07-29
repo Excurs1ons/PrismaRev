@@ -1,23 +1,23 @@
-//! Scene render system — collects [`DrawItem`]s from ECS entities.
+//! Scene 渲染 系统 — collects [`DrawItem`]s from ECS entities.
 //!
 //! Iterates entities that carry [`WorldTransform`], [`MeshRef`], and
-//! [`MaterialRef`] and are [`Active`].  The result is fed to
-//! [`prism_render`]'s [`GraphRenderer`] each frame.
+//! [`MaterialRef`] and are 激活 The 结果 is fed to
+//! [`prism_render`]'s [`GraphRenderer`] each 帧
 
 use prism_ecs::World;
 use prism_render::DrawItem;
 
 use crate::scene::components::*;
 
-/// Collect all visible draw items from the ECS [`World`].
+/// Collect all 可见 绘制 items from the ECS 世界
 ///
-/// An entity produces a `DrawItem` if and only if it has all of:
+/// An 实体 produces a `DrawItem` if and only if it has all of:
 /// - [`WorldTransform`]
 /// - [`MeshRef`]
 /// - [`MaterialRef`]
 /// - [`Active(true)`]
 ///
-/// Entities without an `Active` component default to active (the component
+/// Entities without an 激活 分量 默认 to 激活 (the 分量
 /// defaults to `true`).
 pub fn scene_render_system(world: &World) -> Vec<DrawItem> {
     world
@@ -62,7 +62,7 @@ mod tests {
                 generation: 1,
             },
         );
-        // No Active → defaults to true.
+        // No 激活 → defaults to true.
 
         let items = scene_render_system(&world);
         assert_eq!(items.len(), 1);
@@ -101,7 +101,7 @@ mod tests {
         let mut world = World::new();
         let e = world.spawn();
         world.insert(e, WorldTransform([[1.0; 4]; 4]));
-        // No MeshRef, no MaterialRef → no draw item.
+        // No MeshRef, no MaterialRef → no 绘制 item.
 
         let items = scene_render_system(&world);
         assert!(items.is_empty());

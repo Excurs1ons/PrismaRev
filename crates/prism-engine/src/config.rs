@@ -1,12 +1,12 @@
-//! Application configuration loaded from `assets/settings.toml`.
+//! Application 配置 loaded from `assets/settings.toml`.
 //!
 //! All fields have defaults via `#[serde(default = "...")]` so the file is
-//! entirely optional — missing sections/fields gracefully fall back.
+//! entirely optional — 缺少 sections/fields gracefully fall 后
 
 use serde::Deserialize;
 
 // ---------------------------------------------------------------------------
-// Top-level config
+// Top-level 配置
 // ---------------------------------------------------------------------------
 
 #[derive(Deserialize)]
@@ -47,7 +47,7 @@ fn default_app_name() -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Window defaults
+// 窗口 defaults
 // ---------------------------------------------------------------------------
 
 #[derive(Deserialize)]
@@ -150,8 +150,8 @@ const fn default_vsync() -> bool {
 const CONFIG_PATH: &str = "assets/settings.toml";
 
 impl AppConfig {
-    /// Load from `assets/settings.toml`, or return defaults if the file is
-    /// missing / unreadable.  Parse errors log a warning and fall back to
+    /// 加载 from `assets/settings.toml`, or return defaults if the file is
+    /// 缺少 / unreadable. Parse errors 对数 a 警告 and fall 后 to
     /// defaults.
     pub fn load() -> Self {
         let text = match std::fs::read_to_string(CONFIG_PATH) {
@@ -187,7 +187,7 @@ impl Default for AppConfig {
 // ---------------------------------------------------------------------------
 
 /// Returns the platform-specific data directory for the application
-/// (e.g., `%APPDATA%\Excurs1ons\PrismaRev\` on Windows).
+/// (e.g., `%APPDATA%\Excurs1ons\PrismaRev\` on Windows
 ///
 /// Reads company/app name from `assets/settings.toml`.  Creates the directory
 /// if it doesn't exist.  Returns `None` if the platform data dir cannot be

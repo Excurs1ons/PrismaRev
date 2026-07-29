@@ -1,5 +1,5 @@
 //! Winit → engine domain-type conversions, pointer-lock helpers, and
-//! input event routing.
+//! 输入 事件 routing.
 
 use prism_engine::input::{
     InputManager,
@@ -14,7 +14,7 @@ use winit::window::Window;
 // Winit → engine domain-type conversions
 // ===========================================================================
 
-/// Convert a winit [`PhysicalKey`] to an engine [`KeyCode`].
+/// 转换 a winit [`PhysicalKey`] to an engine [`KeyCode`].
 pub fn winit_key_to_engine(pk: winit::keyboard::PhysicalKey) -> EngKeyCode {
     use winit::keyboard::KeyCode as Wk;
     match pk {
@@ -55,7 +55,7 @@ pub fn winit_key_to_engine(pk: winit::keyboard::PhysicalKey) -> EngKeyCode {
     }
 }
 
-/// Convert a winit [`MouseButton`] to an engine [`MouseButton`].
+/// 转换 a winit [`MouseButton`] to an engine [`MouseButton`].
 pub fn winit_mouse_button_to_engine(b: winit::event::MouseButton) -> EngMouseButton {
     match b {
         winit::event::MouseButton::Left => EngMouseButton::Left,
@@ -67,7 +67,7 @@ pub fn winit_mouse_button_to_engine(b: winit::event::MouseButton) -> EngMouseBut
     }
 }
 
-/// Convert a winit [`ElementState`] to an engine [`ElementState`].
+/// 转换 a winit [`ElementState`] to an engine [`ElementState`].
 pub fn winit_state_to_engine(s: winit::event::ElementState) -> prism_engine::input::ElementState {
     match s {
         winit::event::ElementState::Pressed => prism_engine::input::ElementState::Pressed,
@@ -76,10 +76,10 @@ pub fn winit_state_to_engine(s: winit::event::ElementState) -> prism_engine::inp
 }
 
 // ===========================================================================
-// Pointer-lock helpers (cursor grab / visibility)
+// Pointer-lock helpers (cursor grab / 可见性
 // ===========================================================================
 
-/// Grab the cursor (hide + confine) for FPS-style pointer lock.
+/// Grab the cursor (hide + confine) for FPS-style 指针 lock.
 pub fn grab_pointer(window: &Window) {
     window.set_cursor_visible(false);
     if let Err(e) = window.set_cursor_grab(winit::window::CursorGrabMode::Confined) {
@@ -87,7 +87,7 @@ pub fn grab_pointer(window: &Window) {
     }
 }
 
-/// Release the cursor (show + unconfine).
+/// 释放 the cursor (show + unconfine).
 pub fn release_pointer(window: &Window) {
     window.set_cursor_visible(true);
     if let Err(e) = window.set_cursor_grab(winit::window::CursorGrabMode::None) {
@@ -96,11 +96,11 @@ pub fn release_pointer(window: &Window) {
 }
 
 // ===========================================================================
-// Input event routing (winit → engine)
+// 输入 事件 routing (winit → engine)
 // ===========================================================================
 
 /// Route a winit [`WindowEvent`] through the engine's [`InputManager`],
-/// updating raw input state and managing pointer-lock transitions that require
+/// updating raw 输入 状态 and managing pointer-lock transitions that require
 /// window-system operations.
 pub fn handle_input_event(
     input: &mut InputManager,

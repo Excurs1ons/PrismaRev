@@ -1,18 +1,18 @@
-//! Radiance RGBE (`.hdr`) loader for the IBL environment map.
+//! Radiance RGBE 高动态范围 loader for the IBL environment 映射表
 //!
-//! Decodes the standard 32-bit RLE RGBE format into a linear `Vec<f32>` RGBA
-//! buffer (values can exceed 1.0 — that's the point of HDR). The engine uploads
-//! this straight into a floating-point equirectangular texture; the PBR shader
+//! Decodes the 标准 32-bit RLE RGBE 格式 into a 线性 `Vec<f32>` RGBA
+//! 缓冲区 (values can exceed 1.0 — that's the point of 高动态范围 The engine uploads
+//! this 直通 into a floating-point equirectangular 纹理 the PBR 着色器
 //! samples it (with mips) for image-based lighting.
 
 use anyhow::{bail, Context as _};
 
-/// Decode a Radiance `.hdr` (RGBE) byte buffer into `(rgba_f32, width, height)`.
-/// `rgba_f32` is row-major, 4 floats per pixel (R,G,B,1).
+/// 解码 a Radiance 高动态范围 (RGBE) byte 缓冲区 into `(rgba_f32, 宽度 高度
+/// `rgba_f32` is row-major, 4 floats per 像素 (R,G,B,1).
 pub fn load_rgbe(bytes: &[u8]) -> anyhow::Result<(Vec<f32>, u32, u32)> {
     let mut pos = 0usize;
 
-    // --- Header: lines until the resolution line ("-Y H +X W"). ---
+    // --- Header: lines until the 分辨率 line ("-Y H +X W"). ---
     let mut width = 0u32;
     let mut height = 0u32;
     loop {
@@ -23,7 +23,7 @@ pub fn load_rgbe(bytes: &[u8]) -> anyhow::Result<(Vec<f32>, u32, u32)> {
         let line = &bytes[pos..pos + line_end];
         pos += line_end + 1;
         if line.first() == Some(&b'-') && line.starts_with(b"-Y") {
-            // Format: "-Y <H> +X <W>"
+            // 格式 "-Y <H> +X <W>"
             let mut it = line
                 .split(|&b| b == b' ' || b == b'\t')
                 .filter(|s| !s.is_empty());
@@ -57,7 +57,7 @@ pub fn load_rgbe(bytes: &[u8]) -> anyhow::Result<(Vec<f32>, u32, u32)> {
 
     for _y in 0..height as usize {
         // Detect RLE: a scanline starts with the 2-byte marker 0x02 0x02,
-        // followed by the scanline width (little-endian u16).
+        // followed by the scanline 宽度 (little-endian u16).
         let rle = bytes.get(pos..pos + 2) == Some(&[0x02, 0x02]);
         if rle {
             let marker_w = u16::from_be_bytes([bytes[pos + 2], bytes[pos + 3]]) as usize;
@@ -95,7 +95,7 @@ pub fn load_rgbe(bytes: &[u8]) -> anyhow::Result<(Vec<f32>, u32, u32)> {
                 }
             }
         } else {
-            // Uncompressed: 4 bytes per pixel, row-major.
+            // Uncompressed: 4 字节 per 像素 row-major.
             for _x in 0..width as usize {
                 let p = [
                     bytes[pos] as f32,
@@ -108,7 +108,7 @@ pub fn load_rgbe(bytes: &[u8]) -> anyhow::Result<(Vec<f32>, u32, u32)> {
             }
         }
 
-        // Convert this scanline's RGBE → float RGB, set A = 1.
+        // 转换 this scanline's RGBE → 浮点数 RGB 集合 A = 1.
         for x in 0..width as usize {
             let base = out + x * 4;
             let (r, g, b, e) = (rgba[base], rgba[base + 1], rgba[base + 2], rgba[base + 3]);
@@ -124,7 +124,7 @@ pub fn load_rgbe(bytes: &[u8]) -> anyhow::Result<(Vec<f32>, u32, u32)> {
     Ok((rgba, width, height))
 }
 
-/// Radiance RGBE → linear float RGB.
+/// Radiance RGBE → 线性 浮点数 RGB
 #[inline]
 fn rgbe_to_float(r: f32, g: f32, b: f32, e: f32) -> (f32, f32, f32) {
     if e == 0.0 {
@@ -153,9 +153,9 @@ mod tests {
 
     #[test]
     fn decode_rle_scanline() {
-        // Hand-built RLE RGBE file: 1 scanline, width 4.
-        // Scanline header: 0x02 0x02 then width (big-endian) = 4.
-        // Each channel is a single RLE run of 4 identical values.
+        // Hand-built RLE RGBE file: 1 scanline, 宽度 4.
+        // Scanline header: 0x02 0x02 then 宽度 (big-endian) = 4.
+        // Each 通道 is a single RLE run of 4 相同 values.
         let header = b"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 1 +X 4\n";
         let scanline = [
             0x02u8, 0x02, 0x00, 0x04, // RLE marker + width=4 (big-endian)
@@ -180,7 +180,7 @@ mod tests {
     #[test]
     fn decode_rle_literal_run() {
         // Locks the literal-run convention: a count byte <= 128 means exactly
-        // `count` literal values (NOT count+1). Width 4, all channels literal.
+        // `count` literal values (NOT count+1). 宽度 4, all channels literal.
         let header = b"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 1 +X 4\n";
         let scanline = [
             0x02u8, 0x02, 0x00, 0x04, // RLE marker + width=4 (big-endian)

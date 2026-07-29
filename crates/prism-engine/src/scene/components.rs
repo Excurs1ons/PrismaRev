@@ -1,12 +1,12 @@
-//! ECS components for the modern scene system.
+//! ECS components for the modern scene 系统
 //!
 //! | Category  | Components |
 //! |-----------|------------|
 //! | Hierarchy | `Parent`, `Children` |
-//! | Transform | `LocalTransform`, `WorldTransform`, `TransformDirty` |
-//! | Render    | `MeshRef`, `MaterialRef`, `Active` |
+//! | 变换 | `LocalTransform`, `WorldTransform`, `TransformDirty` |
+//! | 渲染 | `MeshRef`, `MaterialRef`, 激活 |
 //! | Lighting  | `DirectionalLight`, `PointLight`, `SpotLight` |
-//! | Camera    | `Camera`, `FlyCameraController` |
+//! | 相机 | 相机 `FlyCameraController` |
 //! | Skybox    | `Skybox` |
 //! | Scene     | `SceneMember` |
 //! | Identity  | `Name` |
@@ -18,11 +18,11 @@ use prism_render::managers::MeshHandle;
 // SceneAssetId
 // ---------------------------------------------------------------------------
 
-/// A 64-bit asset identifier that mirrors [`prism_asset_core::AssetId`].
+/// A 64-bit 资源 identifier that mirrors [`prism_asset_core::AssetId`].
 ///
-/// This is a local copy so the scene module does not depend on the
-/// independent `prism-asset-core` workspace.  It will be replaced by the real
-/// `AssetId` once the .pak runtime pipeline (DESIGN.md §10.11 G1–G3) connects
+/// This is a 局部 复制 so the scene 模块 does not depend on the
+/// independent `prism-asset-core` 工作区 It will be replaced by the real
+/// `AssetId` once the .pak 运行时 管线 (DESIGN.md §10.11 G1–G3) connects
 /// the two workspaces.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SceneAssetId(pub u64);
@@ -43,18 +43,18 @@ impl SceneAssetId {
 // Hierarchy
 // ---------------------------------------------------------------------------
 
-/// Reference to the parent entity.
+/// 引用 to the parent 实体
 ///
-/// Entities *without* a `Parent` component are **root nodes** in the scene
+/// Entities *without* a `Parent` 分量 are **root nodes** in the scene
 /// hierarchy.  Use [`HierarchyHelper`](super::helpers::HierarchyHelper) to
 /// change parenting — never mutate `Children` directly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Parent(pub Entity);
 
-/// Derived list of child entities.
+/// Derived 列表 of child entities.
 ///
 /// This is kept in sync by [`HierarchyHelper::reparent`]; do **not** modify
-/// it by hand.  Entities without this component have no children.
+/// it by hand. Entities without this 分量 have no children.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Children(pub Vec<Entity>);
 
@@ -65,14 +65,14 @@ impl Default for Children {
 }
 
 // ---------------------------------------------------------------------------
-// Transform
+// 变换
 // ---------------------------------------------------------------------------
 
-/// Local transform relative to the parent entity (or world-space for roots).
+/// 局部 变换 相对 to the parent 实体 (or world-space for roots).
 #[derive(Debug, Clone)]
 pub struct LocalTransform {
     pub translation: glam::Vec3,
-    /// Quaternion.  Identity = `glam::Quat::IDENTITY`.
+    /// 四元数 Identity = `glam::Quat::IDENTITY`.
     pub rotation: glam::Quat,
     pub scale: glam::Vec3,
 }
@@ -88,52 +88,52 @@ impl Default for LocalTransform {
 }
 
 impl LocalTransform {
-    /// Build a model matrix: `T × R × S`.
+    /// 构建 a 模型 矩阵 `T × R × S`.
     pub fn to_model_matrix(&self) -> glam::Mat4 {
         glam::Mat4::from_scale_rotation_translation(self.scale, self.rotation, self.translation)
     }
 }
 
-/// World-space transform computed by [`HierarchySystem`].
+/// World-space 变换 computed by [`HierarchySystem`].
 ///
-/// Updated each frame during the `update` phase.
+/// Updated each 帧 during the 更新 phase.
 #[derive(Debug, Clone, Copy)]
 pub struct WorldTransform(pub glam::Mat4);
 
-/// Optional dirty marker for subtree-optimised recompute (future use).
+/// Optional dirty marker for subtree-optimised recompute future use).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct TransformDirty(pub bool);
 
 // ---------------------------------------------------------------------------
-// Render references
+// 渲染 references
 // ---------------------------------------------------------------------------
 
-/// GPU mesh reference — resolved from an asset at spawn time.
+/// GPU 网格 引用 — resolved from an 资源 at 生成 时间
 #[derive(Debug, Clone, Copy)]
 pub struct MeshRef {
-    /// Stable asset ID (for hot-reload / debugging).
+    /// 稳定 资源 ID (for hot-reload / debugging).
     pub asset_id: SceneAssetId,
     /// GPU-side handle (resolved via [`RenderMeshManager`]).
     pub render_handle: MeshHandle,
-    /// Generation of the asset when resolved; bumped on hot-reload.
+    /// Generation of the 资源 when resolved; bumped on hot-reload.
     pub generation: u32,
 }
 
-/// GPU material slot reference.
+/// GPU 材质 槽 引用
 #[derive(Debug, Clone, Copy)]
 pub struct MaterialRef {
-    /// Stable asset ID.
+    /// 稳定 资源 ID.
     pub asset_id: SceneAssetId,
-    /// SSBO slot index from [`RenderMaterialManager`].
+    /// SSBO 槽 索引 from [`RenderMaterialManager`].
     pub material_slot: u32,
-    /// Generation at resolve time.
+    /// Generation at 解析 时间
     pub generation: u32,
 }
 
-/// Active state — whether the entity participates in rendering.
+/// 激活 状态 — whether the 实体 participates in 渲染
 ///
-/// Defaults to `true`.  Set to `false` to hide an entity without despawning it
-/// (the entity and its components remain in the world).
+/// Defaults to `true`. 集合 to `false` to hide an 实体 without despawning it
+/// (the 实体 and its components remain in the 世界
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Active(pub bool);
 
@@ -147,13 +147,13 @@ impl Default for Active {
 // Authoring-time helpers
 // ---------------------------------------------------------------------------
 
-/// Authoring-time bundle marker for a renderable entity.
+/// Authoring-time bundle marker for a renderable 实体
 ///
 /// Inserted by [`SceneLoader`](crate::scene::loader::SceneLoader) during
-/// scene spawn when an entity carries both a mesh path and a material path.
-/// This component does **not** participate in render queries — the actual
-/// rendering data lives on [`MeshRef`] and [`MaterialRef`] — but provides a
-/// convenient handle for inspector editing and future hot-reload.
+/// scene 生成 when an 实体 carries both a 网格 path and a 材质 path.
+/// This 分量 does **not** participate in 渲染 queries — the actual
+/// 渲染 data lives on [`MeshRef`] and [`MaterialRef`] — but provides a
+/// convenient handle for 检查器 editing and future hot-reload.
 #[derive(Debug, Clone)]
 pub struct MeshRenderer {
     pub mesh_path: String,
@@ -173,17 +173,17 @@ impl MeshRenderer {
 // Lighting
 // ---------------------------------------------------------------------------
 
-/// Directional (infinite) light.
+/// Directional 无限 光源
 ///
-/// Orientation is stored as XYZ Euler angles (degrees) so it round-trips
+/// Orientation is stored as XYZ Euler angles 角度 so it round-trips
 /// cleanly through `scene_state.json`.
 #[derive(Debug, Clone, Copy)]
 pub struct DirectionalLight {
-    /// XYZ Euler angles (degrees): pitch (X), yaw (Y), roll (Z).
+    /// XYZ Euler angles 角度 音高 (X), yaw (Y), roll (Z).
     pub euler_xyz: glam::Vec3,
-    /// Linear RGB colour, typically `[0, 1]`.
+    /// 线性 RGB 颜色 typically `[0, 1]`.
     pub color: glam::Vec3,
-    /// Illuminance in **lux** (physical unit).
+    /// Illuminance in **lux** 物理 unit).
     pub intensity: f32,
     /// IBL ambient factor.
     pub ambient: f32,
@@ -200,14 +200,14 @@ impl Default for DirectionalLight {
     }
 }
 
-/// Point light.
+/// Point 光源
 #[derive(Debug, Clone, Copy)]
 pub struct PointLight {
-    /// Linear RGB colour.
+    /// 线性 RGB 颜色
     pub color: glam::Vec3,
     /// Luminous intensity in **candela**.
     pub intensity: f32,
-    /// Attenuation radius (world units).
+    /// Attenuation 半径 世界 units).
     pub range: f32,
 }
 
@@ -221,15 +221,15 @@ impl Default for PointLight {
     }
 }
 
-/// Spot light.
+/// Spot 光源
 #[derive(Debug, Clone, Copy)]
 pub struct SpotLight {
     pub color: glam::Vec3,
     pub intensity: f32,
     pub range: f32,
-    /// Inner cone half-angle (radians).
+    /// Inner cone half-angle 弧度
     pub inner_cone_angle: f32,
-    /// Outer cone half-angle (radians).
+    /// Outer cone half-angle 弧度
     pub outer_cone_angle: f32,
 }
 
@@ -246,32 +246,32 @@ impl Default for SpotLight {
 }
 
 // ---------------------------------------------------------------------------
-// Camera
+// 相机
 // ---------------------------------------------------------------------------
 
-/// Perspective camera parameters (data component).
+/// 透视 相机 parameters (data 分量
 ///
-/// Holds the editor-editable projection + exposure fields. The runtime view
-/// matrix is computed each frame by [`super::systems::camera`] from this
-/// component plus a sibling [`FlyCameraController`] (or future controller)
+/// Holds the editor-editable 投影 + exposure fields. The 运行时 视图
+/// 矩阵 is computed each 帧 by [`super::systems::camera`] from this
+/// 分量 plus a sibling [`FlyCameraController`] (or future controller)
 /// and the entity's [`WorldTransform`].
 ///
-/// `aspect` is a runtime cache written by the app on resize; it is exposed in
-/// the inspector as read-mostly. `enabled` gates whether the renderer picks
-/// this camera.
+/// 宽高比 is a 运行时 cache written by the app on 调整大小 it is exposed in
+/// the 检查器 as read-mostly. 启用 gates whether the 渲染器 picks
+/// this 相机
 #[derive(Debug, Clone)]
 pub struct Camera {
     pub fov_y_degrees: f32,
     pub near: f32,
     pub far: f32,
-    /// Exposure multiplier applied to the final HDR color before tonemapping.
-    /// Default 1.0 = no scaling; range [0, 5] via inspector slider.
+    /// Exposure multiplier applied to the final 高动态范围 颜色 before tonemapping.
+    /// 默认 1.0 = no scaling; range [0, 5] via 检查器 滑动条
     pub exposure: f32,
-    /// Current aspect ratio (width / height). Written by the app on resize /
-    /// orientation change; the projection matrix is derived from it each frame.
+    /// 当前 宽高比 比率 宽度 / 高度 Written by the app on 调整大小 /
+    /// orientation change; the 投影 矩阵 is derived from it each 帧
     pub aspect: f32,
-    /// When `false` the camera is skipped during scene collection (the
-    /// renderer falls back to the next available camera).
+    /// When `false` the 相机 is skipped during scene 集合 (the
+    /// 渲染器 falls 后 to the 下一个 available 相机
     pub enabled: bool,
 }
 
@@ -288,22 +288,22 @@ impl Default for Camera {
     }
 }
 
-/// Free-fly camera input controller (data component).
+/// Free-fly 相机 输入 controller (data 分量
 ///
-/// Splits the runtime/input-owned fields off the old `FlyCamera` enum variant:
-/// `yaw`/`pitch` are written each frame by [`super::systems::camera`] from
-/// input, while `move_speed`/`look_sensitivity` are editor-editable. The
-/// camera position lives on the sibling [`LocalTransform`] (and its derived
-/// [`WorldTransform`]), so this component carries no position of its own.
+/// Splits the runtime/input-owned fields off the old `FlyCamera` 枚举 variant:
+/// `yaw`/`pitch` are written each 帧 by [`super::systems::camera`] from
+/// 输入 while `move_speed`/`look_sensitivity` are editor-editable. The
+/// 相机 position lives on the sibling [`LocalTransform`] (and its derived
+/// [`WorldTransform`]), so this 分量 carries no position of its own.
 #[derive(Debug, Clone, Copy)]
 pub struct FlyCameraController {
-    /// Yaw around +Y (rad). 0 = looking down -Z (matches `FlyCamera`).
+    /// Yaw around +Y (rad). 0 = looking 下 -Z (matches `FlyCamera`).
     pub yaw: f32,
-    /// Pitch above/below the horizon (rad). 0 = horizontal.
+    /// 音高 above/below the horizon (rad). 0 = 水平
     pub pitch: f32,
-    /// Base translation speed (world units / second) at boost = 1.
+    /// Base 平移 speed 世界 units / 秒 at boost = 1.
     pub move_speed: f32,
-    /// Mouse look sensitivity (rad per pixel).
+    /// 鼠标 look sensitivity (rad per 像素
     pub look_sensitivity: f32,
 }
 
@@ -322,11 +322,11 @@ impl Default for FlyCameraController {
 // Identification
 // ---------------------------------------------------------------------------
 
-/// Human-readable entity name (data component).
+/// Human-readable 实体 name (data 分量
 ///
-/// Optional: entities without a `Name` are displayed in the inspector by their
+/// Optional: entities without a `Name` are displayed in the 检查器 by their
 /// raw id. Populated by the scene loader from the cooked `.rscn` name field;
-/// editable from the inspector at runtime (not persisted to the scene file).
+/// editable from the 检查器 at 运行时 (not persisted to the scene file).
 #[derive(Debug, Clone)]
 pub struct Name(pub String);
 
@@ -334,29 +334,29 @@ pub struct Name(pub String);
 // Skybox
 // ---------------------------------------------------------------------------
 
-/// Skybox / environment map component.
+/// Skybox / environment 映射表 分量
 ///
-/// When an entity with this component exists in the scene, the engine loads
-/// the referenced HDR asset for image-based lighting (IBL) and renders it as
-/// the background sky.  The HDR is referenced through the asset system via
-/// `env_asset`; `hdr_path` is a transitional cache populated at load time from
-/// the cooked RSCN data (will be removed once the full .pak runtime is wired).
+/// When an 实体 with this 分量 存在 in the scene, the engine loads
+/// the referenced 高动态范围 资源 for image-based lighting (IBL) and renders it as
+/// the background sky. The 高动态范围 is referenced through the 资源 系统 via
+/// `env_asset`; `hdr_path` is a transitional cache populated at 加载 时间 from
+/// the cooked RSCN data (will be removed once the 完整 .pak 运行时 is wired).
 ///
-/// Typically there is exactly one skybox entity per scene.
+/// Typically there is exactly one skybox 实体 per scene.
 #[derive(Debug, Clone)]
 pub struct Skybox {
-    /// Asset ID of the HDR environment map in the resource system.
+    /// 资源 ID of the 高动态范围 environment 映射表 in the 资源 系统
     ///
-    /// The cooker resolves the authoring path to a stable `AssetId`; at
-    /// runtime the engine loads the HDR through this ID.
+    /// The cooker resolves the authoring path to a 稳定 `AssetId`; at
+    /// 运行时 the engine loads the 高动态范围 through this ID.
     pub env_asset: SceneAssetId,
-    /// Transitional: resolved HDR file path (populated from RSCN at load
-    /// time).  Will be removed once the .pak runtime provides on-demand
-    /// asset loading by `SceneAssetId`.
+    /// Transitional: resolved 高动态范围 file path (populated from RSCN at 加载
+    /// 时间 Will be removed once the .pak 运行时 provides on-demand
+    /// 资源 loading by `SceneAssetId`.
     pub hdr_path: String,
-    /// When `false` the skybox entity is disabled: no IBL from the HDR and
-    /// no sky rendering (the renderer falls back to its procedural
-    /// environment or a solid clear colour).
+    /// When `false` the skybox 实体 is 禁用 no IBL from the 高动态范围 and
+    /// no sky 渲染 (the 渲染器 falls 后 to its procedural
+    /// environment or a 固体 清空 颜色
     pub enabled: bool,
 }
 
@@ -374,7 +374,7 @@ impl Default for Skybox {
 // Scene management
 // ---------------------------------------------------------------------------
 
-/// Marks an entity as belonging to a specific scene.
+/// Marks an 实体 as belonging to a specific scene.
 ///
 /// Used for batch unload and multi-scene bookkeeping.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

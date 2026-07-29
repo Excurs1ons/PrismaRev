@@ -1,4 +1,4 @@
-// Prevents additional console window on Windows in release, DO NOT REMOVE!!
+// Prevents additional console 窗口 on Windows in 释放 DO NOT 移除
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {

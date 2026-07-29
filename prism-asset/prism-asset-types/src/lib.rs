@@ -1,18 +1,18 @@
 //! # prism-asset-types
 //!
-//! Concrete ScriptableObject-style asset definitions.
+//! Concrete ScriptableObject-style 资源 definitions.
 //!
-//! Each struct in this crate implements `AssetData` with a unique `typetag`
-//! name, enabling polymorphic serialization — the editor can open *any* asset
-//! file as `Box<dyn AssetData>` without knowing its type at compile time.
+//! Each 结构体 in this crate implements `AssetData` with a 唯一 `typetag`
+//! name, enabling polymorphic serialization — the 编辑器 can 打开 *any* 资源
+//! file as `Box<dyn AssetData>` without knowing its 类型 at 编译 时间
 //!
 //! ## Types
 //!
-//! | Type | typetag name | Description |
+//! | 类型 | typetag name | 描述 |
 //! |------|-------------|-------------|
-//! | [`CubeDef`] | `"cube"` | Cubemap texture source |
-//! | [`MaterialDef`] | `"material"` | PBR material definition |
-//! | [`TextureDef`] | `"texture"` | Texture source reference |
+//! | [`CubeDef`] | `"cube"` | Cubemap 纹理 源 |
+//! | [`MaterialDef`] | 材质 | PBR 材质 定义 |
+//! | [`TextureDef`] | 纹理 | 纹理 源 引用 |
 
 pub mod cube_def;
 pub mod material_def;

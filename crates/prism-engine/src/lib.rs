@@ -1,9 +1,9 @@
-//! PrismaRev engine library: rendering systems, ECS components, asset resolution,
-//! scene management, and editor integration.
+//! PrismaRev engine 库 渲染 systems, ECS components, 资源 分辨率
+//! scene management, and 编辑器 integration.
 //!
-//! This is a **pure logic crate** — it has no window-system dependency.  The
-//! event loop, window creation, and platform-specific input dispatch live in
-//! `src/app.rs` (the binary crate).
+//! This is a **pure 逻辑 crate** — it has no window-system dependency. The
+//! 事件 循环 窗口 creation, and platform-specific 输入 分发 live in
+//! `src/app.rs` (the 二进制 crate).
 
 pub mod app;
 pub mod asset;

@@ -1,9 +1,9 @@
-//! # AssetInspector — external editor UI for `AssetData` types
+//! # AssetInspector — 外部 编辑器 UI for `AssetData` types
 //!
 //! Analogous to Unity's `AssetInspector` / `[CustomEditor]`, each concrete
-//! asset type gets a dispatch function registered via `inventory`.
-//! The editor dispatches from the `"type"` tag to the appropriate inspector
-//! without the runtime crate knowing anything about egui.
+//! 资源 类型 gets a 分发 函数 registered via `inventory`.
+//! The 编辑器 dispatches from the 类型 tag to the appropriate 检查器
+//! without the 运行时 crate knowing anything about egui.
 
 use prism_asset_core::{AssetData, LoadedAsset};
 use prism_asset_types::{CubeDef, MaterialDef, TextureDef};
@@ -11,21 +11,21 @@ use prism_asset_types::{CubeDef, MaterialDef, TextureDef};
 use egui::Ui;
 
 // ---------------------------------------------------------------------------
-// Type-erased dispatch entry (fn pointer, so it's const-init + Send+Sync)
+// Type-erased 分发 entry (fn 指针 so it's const-init + Send+Sync)
 // ---------------------------------------------------------------------------
 
-/// A registered inspector that erases the type parameter.
+/// A registered 检查器 that erases the 类型 参数
 pub struct AssetInspectorEntry {
-    /// The `typetag` name (e.g. `"material"`).
+    /// The `typetag` name (e.g. 材质
     pub type_name: &'static str,
-    /// Erased dispatch: receives `&mut dyn AssetData` and downcasts.
+    /// Erased 分发 receives `&mut dyn AssetData` and downcasts.
     pub inspect_fn: fn(&mut dyn AssetData, &mut Ui) -> bool,
 }
 
-// `inventory` collection of all registered inspectors.
+// `inventory` 集合 of all registered inspectors.
 inventory::collect!(AssetInspectorEntry);
 
-/// Helper macro to register an inspector function.
+/// Helper macro to register an 检查器 函数
 #[macro_export]
 macro_rules! register_asset_inspector {
     ($type_name:literal, $ty:ty, $inspect_fn:path) => {
@@ -39,7 +39,7 @@ macro_rules! register_asset_inspector {
 }
 
 // ---------------------------------------------------------------------------
-// Concrete inspectors (static fn, no closure allocation)
+// Concrete inspectors 静态 fn, no 闭包 分配
 // ---------------------------------------------------------------------------
 
 fn inspect_material(data: &mut dyn AssetData, ui: &mut Ui) -> bool {
@@ -90,10 +90,10 @@ register_asset_inspector!("texture", TextureDef, inspect_texture);
 register_asset_inspector!("cube", CubeDef, inspect_cube);
 
 // ---------------------------------------------------------------------------
-// Public API
+// 公开 API
 // ---------------------------------------------------------------------------
 
-/// Look up and run the inspector for a loaded asset's type tag.
+/// Look 上 and run the 检查器 for a loaded asset's 类型 tag.
 pub fn inspect_asset(asset: &mut LoadedAsset, ui: &mut Ui) -> bool {
     let type_name = asset.data.display_name();
     for entry in inventory::iter::<AssetInspectorEntry> {

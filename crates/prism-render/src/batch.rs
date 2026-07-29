@@ -1,22 +1,22 @@
 //! Batched staging uploader.
 //!
-//! [`BatchUploader`] records many buffer / image copies into a single
-//! one-time-submit command buffer, then flushes them with one
+//! [`BatchUploader`] records many 缓冲区 / 图像 copies into a single
+//! one-time-submit 命令 缓冲区 then flushes them with one
 //! `vkQueueSubmit` + one `vkWaitForFences`. This replaces the per-resource
-//! submit-and-wait pattern used by [`crate::buffer::upload_to_buffer`] and
-//! [`crate::buffer::create_and_upload_image`] during scene load, where
-//! hundreds of round-trips (Sponza: ~880) dominated load time.
+//! submit-and-wait 模式 used by [`crate::buffer::upload_to_buffer`] and
+//! [`crate::buffer::create_and_upload_image`] during scene 加载 where
+//! hundreds of round-trips (Sponza: ~880) dominated 加载 时间
 //!
-//! Usage:
+//! 用法
 //! ```ignore
 //! let mut uploader = BatchUploader::new(&context, command_pool)?;
 //! uploader.upload_buffer(device_buffer, data)?;
-//! uploader.upload_image(image, width, height, mip_levels, pixels)?;
+//! uploader.upload_image(image, 宽度 高度 mip_levels, pixels)?;
 //! uploader.finish(graphics_queue)?; // single submit + wait, then cleanup
 //! ```
 //!
-//! The uploader is synchronous (it blocks on `finish`), which keeps the
-//! existing single-threaded load path simple. An async/timeline-semaphore
+//! The uploader is 同步 (it blocks on `finish`), which keeps the
+//! existing single-threaded 加载 path simple. An async/timeline-semaphore
 //! variant (like TruvisRenderer's `TextureUploadQueue`) is a follow-up.
 
 use anyhow::{Context as _, Result};
@@ -25,7 +25,7 @@ use ash::vk;
 use crate::buffer::{create_buffer, find_memory_type, BufferUsage, MemoryProperties};
 use crate::context::VulkanContext;
 
-/// A staging resource that must outlive the submitted command buffer and is
+/// A staging 资源 that must outlive the submitted 命令 缓冲区 and is
 /// destroyed together in [`BatchUploader::finish`].
 enum Deferred {
     Buffer {
@@ -34,8 +34,8 @@ enum Deferred {
     },
 }
 
-/// Records buffer/image staging copies into one command buffer, flusheded
-/// with a single submit + fence wait.
+/// Records buffer/image staging copies into one 命令 缓冲区 flusheded
+/// with a single submit + 围栏 wait.
 pub struct BatchUploader<'a> {
     context: &'a VulkanContext,
     command_pool: vk::CommandPool,
@@ -47,7 +47,7 @@ pub struct BatchUploader<'a> {
 }
 
 impl<'a> BatchUploader<'a> {
-    /// Allocate + begin a one-time-submit command buffer.
+    /// Allocate + 开始 a one-time-submit 命令 缓冲区
     pub fn new(context: &'a VulkanContext, command_pool: vk::CommandPool) -> Result<Self> {
         let device = &context.device;
         let cmd = unsafe {
@@ -82,8 +82,8 @@ impl<'a> BatchUploader<'a> {
         })
     }
 
-    /// Copy `data` into the device-local `destination_buffer` via a fresh
-    /// staging buffer. The staging buffer is kept alive until [`finish`].
+    /// 复制 `data` into the device-local `destination_buffer` via a fresh
+    /// staging 缓冲区 The staging 缓冲区 is kept alive until [`finish`].
     pub fn upload_buffer(
         &mut self,
         destination_buffer: vk::Buffer,
@@ -122,18 +122,18 @@ impl<'a> BatchUploader<'a> {
         Ok(())
     }
 
-    /// Create a device-local 2D image with the given `format`, upload `pixels`
-    /// (RGBA8, tightly packed) into mip 0 via a staging buffer, then blit the
-    /// mip chain. The image is transitioned to `SHADER_READ_ONLY_OPTIMAL` by
-    /// the time `finish` runs. Returns `(image, memory, view)`; the caller
+    /// 创建 a device-local 2D 图像 with the given 格式 upload `pixels`
+    /// (RGBA8, tightly packed) into mip 0 via a staging 缓冲区 then 块传 the
+    /// mip 链 The 图像 is transitioned to `SHADER_READ_ONLY_OPTIMAL` by
+    /// the 时间 `finish` runs. Returns 图像 内存 视图 the 调用者
     /// owns them.
     ///
-    /// Pass `R8G8B8A8_SRGB` for color textures (albedo/emissive) so the
-    /// hardware performs sRGB->linear on sample; `R8G8B8A8_UNORM` for data
+    /// pass `R8G8B8A8_SRGB` for 颜色 textures (albedo/emissive) so the
+    /// hardware performs sRGB->linear on 样本 `R8G8B8A8_UNORM` for data
     /// textures (normal/metallic-roughness/occlusion).
     ///
-    /// `mip_levels` should be `mip_level_count(width, height)` for a full
-    /// chain, or `1` to skip mip generation.
+    /// `mip_levels` should be `mip_level_count(width, 高度 for a 完整
+    /// 链 or `1` to skip mip generation.
     pub fn upload_image(
         &mut self,
         width: u32,
@@ -184,7 +184,7 @@ impl<'a> BatchUploader<'a> {
         unsafe { device.bind_image_memory(image, memory, 0) }
             .context("BatchUploader: bind image memory")?;
 
-        // Staging buffer for the base mip.
+        // Staging 缓冲区 for the base mip.
         let size = (width as vk::DeviceSize) * (height as vk::DeviceSize) * 4;
         let (staging, staging_memory) = create_buffer(
             self.context,
@@ -221,7 +221,7 @@ impl<'a> BatchUploader<'a> {
             },
         );
 
-        // Copy staging -> mip 0.
+        // 复制 staging -> mip 0.
         let copy = vk::BufferImageCopy::default()
             .image_subresource(
                 vk::ImageSubresourceLayers::default()
@@ -241,7 +241,7 @@ impl<'a> BatchUploader<'a> {
             );
         }
 
-        // Generate mip chain (mirrors buffer.rs but uses the shared cmd).
+        // Generate mip 链 (mirrors buffer.rs but uses the shared cmd).
         if mip_levels > 1 {
             barrier2(
                 &self.sync2,
@@ -304,7 +304,7 @@ impl<'a> BatchUploader<'a> {
                             .filter(vk::Filter::LINEAR),
                     );
                 }
-                // src level done -> shader read
+                // src level done -> 着色器 读取
                 barrier2(
                     &self.sync2,
                     self.cmd,
@@ -336,7 +336,7 @@ impl<'a> BatchUploader<'a> {
                     );
                 }
             }
-            // final level -> shader read
+            // final level -> 着色器 读取
             barrier2(
                 &self.sync2,
                 self.cmd,
@@ -352,7 +352,7 @@ impl<'a> BatchUploader<'a> {
                 },
             );
         } else {
-            // single mip: dst -> shader read
+            // single mip: dst -> 着色器 读取
             barrier2(
                 &self.sync2,
                 self.cmd,
@@ -388,8 +388,8 @@ impl<'a> BatchUploader<'a> {
         Ok((image, memory, view))
     }
 
-    /// End the command buffer, submit it once with a dedicated fence, wait
-    /// for completion, then destroy every staging resource. After this the
+    /// 结束 the 命令 缓冲区 submit it once with a dedicated 围栏 wait
+    /// for completion, then 销毁 every staging 资源 After this the
     /// uploader is consumed and cannot record more copies.
     pub fn finish(mut self, graphics_queue: vk::Queue) -> Result<()> {
         let device = &self.context.device;
@@ -423,10 +423,10 @@ impl<'a> BatchUploader<'a> {
 
 impl<'a> Drop for BatchUploader<'a> {
     fn drop(&mut self) {
-        // Safety: if `finish` was called, `started` is false and the command
-        // buffer has already been freed. If the uploader was dropped without
-        // finishing (early return on error), we must release the command
-        // buffer + staging resources ourselves so nothing leaks.
+        // 安全性 if `finish` was called, `started` is false and the 命令
+        // 缓冲区 has already been freed. If the uploader was dropped without
+        // finishing (early return on 错误 we must 释放 the 命令
+        // 缓冲区 + staging resources ourselves so nothing leaks.
         if self.started {
             let device = &self.context.device;
             unsafe {
@@ -446,7 +446,7 @@ impl<'a> Drop for BatchUploader<'a> {
     }
 }
 
-/// Compute the number of mip levels for a 2D texture of the given size.
+/// 计算 the number of mip levels for a 2D 纹理 of the given 大小
 /// Matches `buffer::create_and_upload_image` and `ibl::mip_extent`.
 pub fn mip_level_count(width: u32, height: u32) -> u32 {
     if width <= 1 || height <= 1 {
@@ -456,7 +456,7 @@ pub fn mip_level_count(width: u32, height: u32) -> u32 {
     }
 }
 
-/// Mip extent for a given level (each dimension halved, min 1).
+/// Mip extent for a given level (each 维度 halved, 最小值 1).
 fn mip_extent(width: u32, height: u32, level: u32) -> vk::Extent3D {
     vk::Extent3D {
         width: (width >> level).max(1),
@@ -465,7 +465,7 @@ fn mip_extent(width: u32, height: u32, level: u32) -> vk::Extent3D {
     }
 }
 
-/// A full image-layout transition described as sync + layout endpoints.
+/// A 完整 image-layout 过渡 described as sync + 布局 endpoints.
 struct ImageBarrier {
     old_layout: vk::ImageLayout,
     new_layout: vk::ImageLayout,
@@ -475,7 +475,7 @@ struct ImageBarrier {
     dst_access: vk::AccessFlags2,
 }
 
-/// Build a single-layer COLOR `ImageSubresourceRange` over `level_count` mips
+/// 构建 a single-layer 颜色 `ImageSubresourceRange` over `level_count` mips
 /// starting at `base_mip`, used by [`barrier2`].
 fn color_sub(base_mip: u32, level_count: u32) -> vk::ImageSubresourceRange {
     vk::ImageSubresourceRange::default()
@@ -485,8 +485,8 @@ fn color_sub(base_mip: u32, level_count: u32) -> vk::ImageSubresourceRange {
         .layer_count(1)
 }
 
-/// Record a synchronization2 image memory barrier on `cmd`. Helper used by
-/// the mip-generation blit loop in [`BatchUploader::upload_image`].
+/// Record a synchronization2 图像 内存 屏障 on `cmd`. Helper used by
+/// the mip-generation 块传 循环 in [`BatchUploader::upload_image`].
 fn barrier2(
     sync2: &ash::khr::synchronization2::Device,
     cmd: vk::CommandBuffer,

@@ -1,17 +1,17 @@
-//! Camera systems.
+//! 相机 systems.
 //!
-//! Splits the old `crate::camera::Camera` enum (which mixed editor fields with
-//! runtime state) into pure data components ([`Camera`] + [`FlyCameraController`])
-//! and free functions that derive the runtime view/projection matrices from
-//! them each frame.
+//! Splits the old `crate::camera::Camera` 枚举 (which mixed 编辑器 fields with
+//! 运行时 状态 into pure data components 相机 + [`FlyCameraController`])
+//! and free functions that derive the 运行时 view/projection matrices from
+//! them each 帧
 //!
-//! - [`camera_controller_system`] applies input to a `FlyCameraController` +
+//! - [`camera_controller_system`] applies 输入 to a `FlyCameraController` +
 //!   sibling `LocalTransform` (writes yaw/pitch/translation).
-//! - [`compute_camera_output`] reads `Camera` + `FlyCameraController` +
-//!   `WorldTransform` and produces the matrices the renderer needs.
+//! - [`compute_camera_output`] reads 相机 + `FlyCameraController` +
+//! `WorldTransform` and produces the matrices the 渲染器 needs.
 //!
-//! Coordinate convention: right-handed, +Y up, camera looks down -Z. Vulkan
-//! y-flip projection, depth range [0,1]. See `README.md` §Coordinate
+//! 坐标系 convention: right-handed, +Y 上 相机 looks 下 -Z. Vulkan
+//! y-flip 投影 深度 range [0,1]. See `README.md` §Coordinate
 //! Conventions and `DESIGN.md`.
 
 use glam::{Mat4, Quat, Vec3};
@@ -21,43 +21,43 @@ use prism_ecs::World;
 use crate::input::InputManager;
 use crate::scene::components::{Camera, FlyCameraController, LocalTransform, WorldTransform};
 
-/// Return the first [`Camera`] component found in the world.
+/// Return the 第一个 相机 分量 找到 in the 世界
 ///
-/// If there are multiple cameras (e.g. editor + game view), the ordering is
-/// determined by the ECS storage (typically insertion order). Returns `None`
-/// when no camera is present.
+/// If there are multiple cameras (e.g. 编辑器 + game 视图 the ordering is
+/// determined by the ECS 存储 (typically insertion order). Returns `None`
+/// when no 相机 is present.
 pub fn collect_camera(world: &World) -> Option<Camera> {
     world.query::<Camera>().next().map(|(_, c)| c.clone())
 }
 
-/// Runtime camera output produced each frame by [`compute_camera_output`].
+/// 运行时 相机 输出 produced each 帧 by [`compute_camera_output`].
 pub struct CameraOutput {
     pub view_proj: Mat4,
     pub view: Mat4,
     pub projection: Mat4,
     pub eye: Vec3,
     pub exposure: f32,
-    /// The entity the camera was sourced from (for downstream look-ups).
+    /// The 实体 the 相机 was sourced from (for downstream look-ups).
     pub entity: prism_ecs::Entity,
 }
 
-/// Return a fallback `CameraOutput` when no usable Camera entity exists in the
-/// ECS world. This avoids a fatal error — the engine renders a gray background
-/// and the egui overlay shows a "No Camera" hint.
+/// Return a 回退 `CameraOutput` when no usable 相机 实体 存在 in the
+/// ECS 世界 This avoids a fatal 错误 — the engine renders a gray background
+/// and the egui 叠加 shows a "No 相机 hint.
 ///
-/// The fallback places the viewer at `(0, 0, 5)` looking toward the origin with
-/// a 75° FOV, 16:9 aspect, and exposure 1.0.
+/// The 回退 places the viewer at `(0, 0, 5)` looking toward the origin with
+/// a 75° 视场角 16:9 宽高比 and exposure 1.0.
 pub fn fallback_camera_output(surface_rotation: &Mat4, aspect: f32) -> CameraOutput {
     let eye = Vec3::new(0.0, 0.0, 5.0);
-    // Simple look-at: eye at (0,0,5), target at origin, +Y up.
-    // Right-handed, camera looks down -Z per engine convention.
+    // Simple look-at: eye at (0,0,5), 目标 at origin, +Y 上
+    // Right-handed, 相机 looks 下 -Z per engine convention.
     let view = Mat4::from_cols_array_2d(&[
         [1.0, 0.0, 0.0, 0.0],
         [0.0, 1.0, 0.0, 0.0],
         [0.0, 0.0, 1.0, 0.0],
         [0.0, 0.0, -5.0, 1.0],
     ]);
-    // Standard perspective: 75° FOV, 16:9-ish aspect, near=0.01, far=500.
+    // 标准 透视 75° 视场角 16:9-ish 宽高比 near=0.01, far=500.
     let fov_y = 75.0_f32.to_radians();
     let inv_tan = 1.0 / (fov_y * 0.5).tan();
     let near = 0.01;
@@ -81,12 +81,12 @@ pub fn fallback_camera_output(surface_rotation: &Mat4, aspect: f32) -> CameraOut
     }
 }
 
-/// Find the first enabled `Camera` entity that also has a `FlyCameraController`
+/// 查找 the 第一个 启用 相机 实体 that also has a `FlyCameraController`
 /// and a `WorldTransform`, and derive its view/projection matrices.
 ///
-/// `surface_rotation` is the device-orientation matrix applied on top of the
+/// `surface_rotation` is the device-orientation 矩阵 applied on 顶部 of the
 /// view-projection (mirrors the old `mat_mul(&surface_rotation, &vp)` step in
-/// `render_system`). Returns `None` if no usable camera exists.
+/// `render_system`). Returns `None` if no usable 相机 存在
 pub fn compute_camera_output(
     world: &World,
     surface_rotation: &Mat4,
@@ -95,10 +95,10 @@ pub fn compute_camera_output(
     let ctrl = world.get::<FlyCameraController>(entity)?;
     let world_tf = world.get::<WorldTransform>(entity)?;
 
-    // Eye position = world-space translation (column 3, rows 0..3 of the
-    // column-major matrix). For a root camera this equals LocalTransform
-    // translation; for a nested camera the hierarchy system already baked the
-    // parent transform in.
+    // Eye position = world-space 平移 列 3, rows 0..3 of the
+    // column-major 矩阵 For a root 相机 this equals LocalTransform
+    // 平移 for a nested 相机 the hierarchy 系统 already baked the
+    // parent 变换 in.
     let col3 = world_tf.0.col(3);
     let eye = Vec3::new(col3.x, col3.y, col3.z);
 
@@ -116,15 +116,15 @@ pub fn compute_camera_output(
     })
 }
 
-/// Apply free-fly input for one frame to the first `FlyCameraController` +
-/// sibling `LocalTransform` found on a `Camera` entity.
+/// Apply free-fly 输入 for one 帧 to the 第一个 `FlyCameraController` +
+/// sibling `LocalTransform` 找到 on a 相机 实体
 ///
-/// `look_active` controls whether the camera rotates from mouse delta directly
-/// (pointer-lock mode) versus requiring a held right mouse button. Mirrors the
+/// `look_active` controls whether the 相机 rotates from 鼠标 delta directly
+/// (pointer-lock 众数 versus requiring a held 右 鼠标 按钮 Mirrors the
 /// old `FlyCamera::update_with_look` behaviour exactly.
 ///
 /// Returns `true` if a controller was updated (so callers can skip the legacy
-/// demo-spin animation for that entity).
+/// demo-spin 动画 for that 实体
 pub fn camera_controller_system(
     world: &mut World,
     input: &InputManager,
@@ -133,9 +133,9 @@ pub fn camera_controller_system(
 ) -> Option<prism_ecs::Entity> {
     use crate::input::{KeyCode, MouseButton};
 
-    // Find the first camera entity with a controller. We collect the entity id
-    // first so the &self borrow for the query ends before the &mut borrows for
-    // the component writes.
+    // 查找 the 第一个 相机 实体 with a controller. We collect the 实体 id
+    // 第一个 so the &self 借用 for the 查询 ends before the &mut borrows for
+    // the 分量 writes.
     let cam_entity = world
         .query::<Camera>()
         .find(|(_, c)| c.enabled)
@@ -145,21 +145,21 @@ pub fn camera_controller_system(
     let move_speed;
     let look_sensitivity;
     {
-        // Scope the &mut borrow of ctrl so we can later borrow LocalTransform.
+        // Scope the &mut 借用 of ctrl so we can later 借用 LocalTransform.
         // Look: either right-drag (non-locked) or direct mouse-follow (locked).
         let effective_look = look_active || input.mouse_held(MouseButton::Right);
         if effective_look {
             let d = input.mouse_delta();
             ctrl.yaw -= d[0] as f32 * ctrl.look_sensitivity;
             ctrl.pitch -= d[1] as f32 * ctrl.look_sensitivity;
-            // Clamp just shy of straight up/down. The yaw-based `right()` keeps
-            // the basis well-defined at any pitch, and ~89° reads as "looking
-            // straight up" while avoiding pole-crossing roll.
+            // 限定 just shy of 直通 up/down. The yaw-based 右 keeps
+            // the basis well-defined at any 音高 and ~89° reads as "looking
+            // 直通 上 while avoiding pole-crossing roll.
             let lim = std::f32::consts::FRAC_PI_2 - 0.02;
             ctrl.pitch = ctrl.pitch.clamp(-lim, lim);
         }
 
-        // Mouse wheel adjusts base move speed.
+        // 鼠标 wheel adjusts base 移动 speed.
         let scroll = input.scroll_delta() as f32;
         if scroll.abs() > 0.0 {
             ctrl.move_speed *= 1.0 - scroll * 0.1;
@@ -169,10 +169,10 @@ pub fn camera_controller_system(
         look_sensitivity = ctrl.look_sensitivity;
     }
 
-    // Translation: WASD/QE/Space/Ctrl relative to the yaw/pitch basis. Position
+    // 平移 WASD/QE/Space/Ctrl 相对 to the yaw/pitch basis. Position
     // lives on the sibling LocalTransform (roots) - nested cameras use the
-    // WorldTransform derived by the hierarchy system and shouldn't be moved by
-    // input directly, so we only write to LocalTransform.
+    // WorldTransform derived by the hierarchy 系统 and shouldn't be moved by
+    // 输入 directly, so we only 写入 to LocalTransform.
     let boost = if input.key_held(KeyCode::ShiftLeft) || input.key_held(KeyCode::ShiftRight) {
         4.0
     } else {
@@ -215,8 +215,8 @@ pub fn camera_controller_system(
         }
     }
 
-    // Touch `look_sensitivity` so the compiler doesn't warn about it being
-    // unused when the look branch above didn't run - it is read indirectly via
+    // 触摸 `look_sensitivity` so the compiler doesn't warn about it being
+    // unused when the look 分支 above didn't run - it is 读取 indirectly via
     // ctrl.look_sensitivity. (No-op; kept for clarity.)
     let _ = look_sensitivity;
 
@@ -225,11 +225,11 @@ pub fn camera_controller_system(
 
 // --- fly-camera math (ported from the deleted `FlyCamera`) ---------------
 
-/// Unit forward vector from yaw/pitch.
+/// Unit 向前 向量 from yaw/pitch.
 ///
-/// `forward = [cos(yaw)·cos(pitch), sin(pitch), -sin(yaw)·cos(pitch)]`.
-/// `yaw=0` looks down +X; `yaw = π/2` looks down -Z (the convention the scene
-/// loader uses when converting an identity quaternion, which must face -Z per
+/// 向前 = [cos(yaw)·cos(pitch), sin(pitch), -sin(yaw)·cos(pitch)]`.
+/// `yaw=0` looks 下 +X; `yaw = π/2` looks 下 -Z (the convention the scene
+/// loader uses when converting an identity 四元数 which must face -Z per
 /// `README.md`).
 fn forward(yaw: f32, pitch: f32) -> Vec3 {
     let (s_y, c_y) = yaw.sin_cos();
@@ -237,18 +237,18 @@ fn forward(yaw: f32, pitch: f32) -> Vec3 {
     Vec3::new(c_y * c_p, s_p, -s_y * c_p)
 }
 
-/// Unit right vector, derived from yaw only (not forward × worldUp).
+/// Unit 右 向量 derived from yaw only (not 向前 × worldUp).
 ///
-/// `right = [sin(yaw), 0, cos(yaw)]`; at `yaw=0` this is +Z, at `yaw=π/2` it
-/// is +X (orthonormal with `forward` at every yaw). Building it from yaw keeps
-/// it well-defined at any pitch - including straight up/down (pitch = ±π/2) -
-/// where `forward × worldUp` would degenerate to zero.
+/// 右 = [sin(yaw), 0, cos(yaw)]`; at `yaw=0` this is +Z, at `yaw=π/2` it
+/// is +X (orthonormal with 向前 at every yaw). Building it from yaw keeps
+/// it well-defined at any 音高 - including 直通 up/down 音高 = ±π/2) -
+/// where 向前 × worldUp` would degenerate to 零
 fn right(yaw: f32) -> Vec3 {
     let (s_y, c_y) = yaw.sin_cos();
     Vec3::new(s_y, 0.0, c_y)
 }
 
-/// Column-major view matrix for a free-fly camera at `eye` with `yaw`/`pitch`.
+/// Column-major 视图 矩阵 for a free-fly 相机 at `eye` with `yaw`/`pitch`.
 fn fly_view(eye: Vec3, yaw: f32, pitch: f32) -> Mat4 {
     let f = forward(yaw, pitch).normalize();
     let r = right(yaw);
@@ -261,7 +261,7 @@ fn fly_view(eye: Vec3, yaw: f32, pitch: f32) -> Mat4 {
     )
 }
 
-/// Column-major projection matrix (Vulkan y-flip, depth range [0,1]).
+/// Column-major 投影 矩阵 Vulkan y-flip, 深度 range [0,1]).
 fn perspective(cam: &Camera) -> Mat4 {
     let fov_y = cam.fov_y_degrees.to_radians();
     let inv_tan = 1.0 / (fov_y * 0.5).tan();
@@ -329,7 +329,7 @@ mod tests {
         );
 
         let cam = collect_camera(&world).unwrap();
-        // ECS query order is deterministic - first inserted should be first.
+        // ECS 查询 order is 确定性 - 第一个 inserted should be 第一个
         assert_eq!(cam.fov_y_degrees, 60.0);
     }
 }

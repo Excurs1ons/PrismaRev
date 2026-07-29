@@ -1,15 +1,15 @@
-//! Offline GI probe-volume baker (GPU ray-query, multi-bounce path tracing).
+//! Offline 全局光照 probe-volume baker (GPU ray-query, multi-bounce path tracing).
 //!
-//! Usage: `prism-bake-gi [OUTPUT] [PAK] [RSCN]`
-//!   OUTPUT — probe-volume `.bin` path (default `assets/gi/probe_volume.bin`)
-//!   PAK    — path to a `.pak` asset package
+//! 用法 `prism-bake-gi 输出 [PAK] [RSCN]`
+//! 输出 — probe-volume `.bin` path 默认 `assets/gi/probe_volume.bin`)
+//! PAK — path to a `.pak` 资源 包
 //!   RSCN   — path to a `.rscn` cooked scene file
 //!
 //! Loads the scene via `prism-engine` → `prism-asset-runtime` (MeshAsset /
-//! MaterialAsset), flattens every instance into a single world-space mesh,
-//! builds a BLAS/TLAS, derives a probe grid from the scene AABB, dispatches
-//! a ray-query compute shader that traces multi-bounce paths and projects
-//! the radiance onto cosine-weighted SH coefficients, reads the result back,
+//! MaterialAsset), flattens every 实例 into a single world-space 网格
+//! builds a BLAS/TLAS, derives a probe 网格 from the scene AABB, dispatches
+//! a ray-query 计算 着色器 that traces multi-bounce paths and projects
+//! the radiance onto cosine-weighted SH coefficients, reads the 结果 后
 //! and writes a `.bin` probe-volume file.
 //!
 //! Requires hardware `VK_KHR_ray_query`.
@@ -27,16 +27,16 @@ use prism_engine::scene::systems::hierarchy::hierarchy_system;
 use prism_render::bake_common;
 use prism_render::context::VulkanContext;
 
-/// Number of ray directions per probe (Fibonacci sphere).
+/// Number of 射线 directions per probe (Fibonacci 球体
 const NUM_RAYS: u32 = 64;
-/// Maximum path depth (bounces) for path-traced GI.
+/// 最大 path 深度 (bounces) for path-traced 全局光照
 const MAX_BOUNCE: u32 = 3;
-/// Default output path.
+/// 默认 输出 path.
 const DEFAULT_OUTPUT: &str = "assets/gi/probe_volume.bin";
-/// Probe grid derivation: max probes per axis + target spacing (world units).
+/// Probe 网格 derivation: 最大值 probes per axis + 目标 spacing 世界 units).
 const MAX_DIM: u32 = 32;
 const TARGET_SPACING: f32 = 1.0;
-/// Padding around the scene AABB so edge probes sit just outside the walls.
+/// 填充 around the scene AABB so edge probes sit just outside the walls.
 const GRID_MARGIN: f32 = 1.0;
 
 fn main() -> Result<()> {
@@ -62,7 +62,7 @@ fn main() -> Result<()> {
     log::info!("  rscn:   {}", rscn_path.display());
     log::info!("  rays per probe: {}, max bounces: {}", NUM_RAYS, MAX_BOUNCE);
 
-    // ---- 1. Load scene into ECS and collect bake instances ----
+    // ---- 1. 加载 scene into ECS and collect bake instances ----
     let mut world = World::new();
     let mut rm = ResourceManager::new();
     rm.load_package(&pak_path)
@@ -74,7 +74,7 @@ fn main() -> Result<()> {
         .load_and_spawn(&mut world, source)
         .map_err(|e| anyhow::anyhow!("load scene into ECS: {e}"))?;
 
-    // Run hierarchy system to compute WorldTransform from LocalTransform + Parent.
+    // Run hierarchy 系统 to 计算 WorldTransform from LocalTransform + Parent.
     hierarchy_system(&mut world);
 
     let (instances, mat_bytes) = collect_bake_instances(&world, &mut rm)
@@ -89,7 +89,7 @@ fn main() -> Result<()> {
         total_indices / 3
     );
 
-    // Compute AABB from instances.
+    // 计算 AABB from instances.
     let mut aabb_min = [f32::MAX; 3];
     let mut aabb_max = [f32::MIN; 3];
     for inst in &instances {
@@ -102,7 +102,7 @@ fn main() -> Result<()> {
     }
     log::info!("  AABB: min {:?} max {:?}", aabb_min, aabb_max);
 
-    // ---- 2. Create headless Vulkan context ----
+    // ---- 2. 创建 headless Vulkan context ----
     let context = Arc::new(VulkanContext::new(&[]).context("create headless VulkanContext")?);
 
     if !context.rt_caps.has_ray_query() {
@@ -115,7 +115,7 @@ fn main() -> Result<()> {
     }
     log::info!("  ray query: supported");
 
-    // ---- 3. Command pool ----
+    // ---- 3. 命令 池 ----
     let cmd_pool = unsafe {
         context.device.create_command_pool(
             &vk::CommandPoolCreateInfo::default()
@@ -126,14 +126,14 @@ fn main() -> Result<()> {
     }
     .context("create command pool")?;
 
-    // ---- 4. Derive probe grid from the scene AABB ----
+    // ---- 4. Derive probe 网格 from the scene AABB ----
     let (origin, spacing, dims) = derive_grid(aabb_min, aabb_max);
     log::info!(
         "  probe grid: dims {:?} spacing {:?} origin {:?}",
         dims, spacing, origin
     );
 
-    // ---- 5. Build per-instance BLAS/TLAS + materials SSBO ----
+    // ---- 5. 构建 per-instance BLAS/TLAS + materials SSBO ----
     let scene = bake_common::build_pt_scene(&context, cmd_pool, &instances, &mat_bytes)
         .context("build PT scene")?;
     log::info!(
@@ -143,7 +143,7 @@ fn main() -> Result<()> {
     );
     log::info!("  BLAS + TLAS built");
 
-    // ---- 6. Probe volume 3D texture ----
+    // ---- 6. Probe 音量 3D 纹理 ----
     let tex_w = dims[0];
     let tex_h = dims[1];
     let tex_d = dims[2] * 9;
@@ -230,10 +230,10 @@ fn main() -> Result<()> {
         context.device.unmap_memory(info_memory);
     }
 
-    // ---- 8. Descriptor set layout + pool + set ----
-    // Set 0: b0=volume, b1=info UBO, b2=tlas, b3=vertex, b4=index,
+    // ---- 8. 描述符 集合 布局 + 池 + 集合 ----
+    // 集合 0: b0=volume, b1=info UBO, b2=tlas, b3=vertex, b4=index,
     //        b6=instance_meta, b7=materials
-    // Set 1: bindless (samplers + SRVs)
+    // 集合 1: bindless (samplers + SRVs)
     let bindings = [
         vk::DescriptorSetLayoutBinding::default()
             .binding(0)
@@ -319,7 +319,7 @@ fn main() -> Result<()> {
     ) }
     .context("allocate descriptor sets")?;
 
-    // ---- 9. Write descriptors ----
+    // ---- 9. 写入 descriptors ----
     let volume_write = vk::WriteDescriptorSet::default()
         .dst_set(ds_set[0])
         .dst_binding(0)
@@ -369,7 +369,7 @@ fn main() -> Result<()> {
             .update_descriptor_sets(&all_writes, &[]);
     }
 
-    // ---- 10. Dummy sampler + bindless writes ----
+    // ---- 10. Dummy 采样器 + bindless writes ----
     let dummy_sampler = unsafe {
         context.device.create_sampler(
             &vk::SamplerCreateInfo::default()
@@ -397,7 +397,7 @@ fn main() -> Result<()> {
             .update_descriptor_sets(&[bindless_write], &[]);
     }
 
-    // ---- 11. Create compute pipeline ----
+    // ---- 11. 创建 计算 管线 ----
     const GI_BAKE_SPV: &[u8] = include_bytes!("../../../shaders/gi_bake.comp.spv");
     let shader_module = prism_render::shader::load_shader_module(&context.device, GI_BAKE_SPV)
         .context("create gi_bake shader module")?;
@@ -428,7 +428,7 @@ fn main() -> Result<()> {
     .context("create compute pipeline")?;
     unsafe { context.device.destroy_shader_module(shader_module, None) };
 
-    // Build push constants.
+    // 构建 推送 constants.
     let light_dir_v = prism_render::gi::bake_euler_xyz_deg_to_dir(prism_render::gi::BAKE_DEFAULT_LIGHT_EULER);
     let push_constants = BakePush {
         light_dir: [light_dir_v[0], light_dir_v[1], light_dir_v[2], 0.0],
@@ -461,7 +461,7 @@ fn main() -> Result<()> {
                     .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
             )
             .context("begin cmd buf")?;
-        // Transition volume image to GENERAL layout.
+        // 过渡 音量 图像 to GENERAL 布局
         let barrier = vk::ImageMemoryBarrier2::default()
             .src_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
             .dst_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
@@ -491,7 +491,7 @@ fn main() -> Result<()> {
             &ds_set,
             &[],
         );
-        // Push constants.
+        // 推送 constants.
         let pc = push_constants;
         context.device.cmd_push_constants(
             cmd_buf,
@@ -502,9 +502,9 @@ fn main() -> Result<()> {
                 std::slice::from_raw_parts(&pc as *const _ as *const u8, std::mem::size_of_val(&pc))
             },
         );
-        // Dispatch.
+        // 分发
         context.device.cmd_dispatch(cmd_buf, total_workgroups, 1, 1);
-        // Barrier to make volume readable.
+        // 屏障 to make 音量 readable.
         let read_barrier = vk::ImageMemoryBarrier2::default()
             .src_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
             .dst_stage_mask(vk::PipelineStageFlags2::TRANSFER)
@@ -542,7 +542,7 @@ fn main() -> Result<()> {
     unsafe { context.device.queue_wait_idle(context.graphics_queue) }
         .context("queue wait idle")?;
 
-    // ---- 13. Read back probe volume ----
+    // ---- 13. 读取 后 probe 音量 ----
     let vol_bytes = (tex_w * tex_h * tex_d) as usize * 16;
     let (staging_buf, staging_mem) = prism_render::buffer::create_buffer(
         &context,
@@ -553,7 +553,7 @@ fn main() -> Result<()> {
     )
     .context("create staging buffer")?;
 
-    // Copy volume image to staging buffer.
+    // 复制 音量 图像 to staging 缓冲区
     let cmd_buf2 = unsafe { context.device.allocate_command_buffers(
         &vk::CommandBufferAllocateInfo::default()
             .command_pool(cmd_pool)
@@ -605,7 +605,7 @@ fn main() -> Result<()> {
     unsafe { context.device.queue_wait_idle(context.graphics_queue) }
         .context("queue wait idle2")?;
 
-    // Read staging buffer.
+    // 读取 staging 缓冲区
     let staging_ptr = unsafe {
         context
             .device
@@ -623,7 +623,7 @@ fn main() -> Result<()> {
         coeffs.push(c);
     }
 
-    // Compute hit ratios.
+    // 计算 hit ratios.
     let probe_count = (dims[0] * dims[1] * dims[2]) as usize;
     let total_slices = dims[2] * 9;
     let mut hit_ratios = Vec::with_capacity(probe_count);
@@ -632,12 +632,12 @@ fn main() -> Result<()> {
         let rem = p % (dims[0] * dims[1]);
         let slice_y = rem / dims[0];
         let slice_x = rem % dims[0];
-        // Each probe's first coefficient is at index p*9, stored at slice (9*probe_z + 0).
-        // The DC (0th SH coefficient) carries the average radiance; a negative value
-        // means the probe is inside solid geometry and should be flagged.
+        // Each probe's 第一个 coefficient is at 索引 p*9, stored at 切片 (9*probe_z + 0).
+        // The DC (0th SH coefficient) carries the 平均 radiance; a 负 value
+        // means the probe is inside 固体 geometry and should be flagged.
         let dc_index = p * 9; // first SH coefficient in coeffs[]
-        // The stored value in the 3D texture at position (x, y, z*9+0)
-        // coeffs is ordered by probe, so coeffs[dc_index] = DC of probe p.
+        // The stored value in the 3D 纹理 at position (x, y, z*9+0)
+        // coeffs is 有序 by probe, so coeffs[dc_index] = DC of probe p.
         let dc = coeffs[p * 9];
         hit_ratios.push(if dc >= 0.0 { 1.0 } else { 0.0 });
     }
@@ -669,7 +669,7 @@ fn main() -> Result<()> {
         probe_count
     );
 
-    // ---- 14. Write .bin ----
+    // ---- 14. 写入 .bin ----
     if let Some(parent) = output_path.parent() {
         std::fs::create_dir_all(parent).ok();
     }
@@ -679,8 +679,8 @@ fn main() -> Result<()> {
         .unwrap_or("unknown")
         .to_string();
 
-    // The probe_loader expects a ProbeVolume struct.
-    // Build from raw data.
+    // The probe_loader expects a ProbeVolume 结构体
+    // 构建 from raw data.
     let probe_data = prism_render::probe_loader::CookedProbeVolume {
         scene_name,
         origin: origin.into(),
@@ -724,7 +724,7 @@ fn main() -> Result<()> {
 }
 
 // -------------------------------------------------------------------
-// Probe grid derivation
+// Probe 网格 derivation
 // -------------------------------------------------------------------
 
 fn derive_grid(aabb_min: [f32; 3], aabb_max: [f32; 3]) -> ([f32; 3], [f32; 3], [u32; 3]) {

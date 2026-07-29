@@ -1,13 +1,13 @@
-//! Physics thread — owns the Rapier simulation world.
+//! Physics 线程 — owns the Rapier simulation 世界
 //!
-//! The main thread sends [`PhysicsStep`] (spawn/despawn/set-transform commands)
-//! and receives [`PhysicsResult`] (dynamic body transforms) each frame.
+//! The main 线程 sends [`PhysicsStep`] (spawn/despawn/set-transform commands)
+//! and receives [`PhysicsResult`] 动力学 body transforms) each 帧
 //!
 //! # Initial scope
 //!
-//! * Rigid bodies only (dynamic / kinematic / static)
-//! * Sphere / box / capsule / trimesh colliders
-//! * No joints, no CCD, no query pipeline
+//! * 刚体 bodies only 动力学 / 运动学 / 静态
+//! * 球体 / 盒 / capsule / trimesh colliders
+//! * No joints, no CCD, no 查询 管线
 
 use std::collections::HashMap;
 
@@ -21,7 +21,7 @@ use rapier3d::pipeline::PhysicsPipeline;
 
 use flume::{Receiver, Sender};
 
-/// Opaque entity identifier shared with the ECS world on the main thread.
+/// 不透明 实体 identifier shared with the ECS 世界 on the main 线程
 pub type EntityId = u64;
 
 // ── Commands (main → physics) ─────────────────────────────────────────
@@ -98,7 +98,7 @@ fn rapier_status(status: PhysicsBodyStatus) -> RigidBodyType {
     }
 }
 
-// ── Thread entry point ────────────────────────────────────────────────
+// ── 线程 entry point ────────────────────────────────────────────────
 
 pub fn physics_thread_main(
     step_rx: Receiver<PhysicsStep>,
@@ -118,7 +118,7 @@ pub fn physics_thread_main(
     let integration_params = IntegrationParameters::default();
     let mut physics_pipeline = PhysicsPipeline::new();
 
-    // Entity → Rapier handle map.
+    // 实体 → Rapier handle 映射表
     let mut entity_map: HashMap<EntityId, RigidBodyHandle> = HashMap::new();
 
     loop {
@@ -233,7 +233,7 @@ pub fn physics_thread_main(
             &(), // EventHandler
         );
 
-        // 3. Collect dynamic body transforms.
+        // 3. Collect 动力学 body transforms.
         let transforms: Vec<BodyTransform> = entity_map
             .iter()
             .filter_map(|(entity, handle)| {

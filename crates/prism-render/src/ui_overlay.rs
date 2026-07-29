@@ -1,11 +1,11 @@
-/// UI overlay — screen-space coloured quads on top of the scene.
+/// UI 叠加 — screen-space coloured quads on 顶部 of the scene.
 ///
 /// Architecture
 /// ------------
-/// Simple vertex+fragment pipeline (no descriptors). Each frame the engine
-/// fills [`UiOverlayInput`] from an ECS query, and [`UiOverlay::record`]
-/// uploads vertices and draws them as a final overlay pass after the
-/// post-process output (before the swapchain PRESENT barrier).
+/// Simple vertex+fragment 管线 (no descriptors). Each 帧 the engine
+/// fills [`UiOverlayInput`] from an ECS 查询 and [`UiOverlay::record`]
+/// uploads 顶点 and draws them as a final 叠加 pass after the
+/// post-process 输出 (before the 交换链 PRESENT 屏障
 
 use std::ffi::CString;
 use std::mem::size_of;
@@ -17,7 +17,7 @@ use crate::buffer::{create_buffer, BufferUsage, MemoryProperties};
 use crate::context::VulkanContext;
 use crate::shader_bindings::ui::*;
 
-/// A filled rectangle in NDC space.
+/// A filled rectangle in NDC 空间
 #[derive(Clone, Debug)]
 pub struct UiQuad {
     pub rect: [f32; 4],
@@ -25,7 +25,7 @@ pub struct UiQuad {
     pub border_radius: f32,
 }
 
-/// Per‑frame input from the engine.
+/// Per‑frame 输入 from the engine.
 #[derive(Clone, Default)]
 pub struct UiOverlayInput {
     pub quads: Vec<UiQuad>,
@@ -41,7 +41,7 @@ const MAX_QUADS: usize = 16_384;
 pub(crate) const VERTICES_PER_QUAD: u32 = 6;
 const VERTEX_SIZE: vk::DeviceSize = size_of::<UiVertex>() as vk::DeviceSize;
 
-/// GPU-side UI overlay.
+/// GPU-side UI 叠加
 pub struct UiOverlay {
     pipeline: Option<vk::Pipeline>,
     layout: Option<vk::PipelineLayout>,
@@ -177,7 +177,7 @@ impl UiOverlay {
         let dynamic_state_info = vk::PipelineDynamicStateCreateInfo::default()
             .dynamic_states(&dynamic_states);
 
-        // Pipeline state: no depth, alpha blend.
+        // 管线 状态 no 深度 Alpha 混合
         let rasterizer = vk::PipelineRasterizationStateCreateInfo::default()
             .cull_mode(vk::CullModeFlags::NONE)
             .front_face(vk::FrontFace::CLOCKWISE)
@@ -250,7 +250,7 @@ impl UiOverlay {
         Ok(())
     }
 
-    /// Record UI overlay draw commands into `cmd`.
+    /// Record UI 叠加 绘制 commands into `cmd`.
     pub fn record(
         &mut self,
         context: &VulkanContext,
@@ -267,7 +267,7 @@ impl UiOverlay {
         let vert_count = input.quads.len() as u32 * VERTICES_PER_QUAD;
         let vert_bytes = vert_count as usize * size_of::<UiVertex>();
 
-        // Upload vertex data.
+        // Upload 顶点 data.
         self.grow_buffer(context, vert_count)?;
         let data = self.build_vertex_data(input);
         unsafe {
@@ -278,7 +278,7 @@ impl UiOverlay {
             context.device.unmap_memory(self.vertex_memory);
         }
 
-        // Temporary framebuffer.
+        // Temporary 帧缓冲
         let fb = {
             let attachments = [target_view];
             let fb_info = vk::FramebufferCreateInfo::default()
@@ -291,7 +291,7 @@ impl UiOverlay {
                 .context("UiOverlay: framebuffer")?
         };
 
-        // Record draw.
+        // Record 绘制
         let rp_begin = vk::RenderPassBeginInfo::default()
             .render_pass(self.render_pass)
             .framebuffer(fb)

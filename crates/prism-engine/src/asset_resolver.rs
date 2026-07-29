@@ -1,9 +1,9 @@
-//! GPU asset resolver — on-demand load + cache + upload for mesh / material /
-//! texture assets from a `.pak` resource package.
+//! GPU 资源 resolver — on-demand 加载 + cache + upload for 网格 / 材质 /
+//! 纹理 assets from a `.pak` 资源 包
 //!
-//! Owns the [`ResourceManager`] (runtime asset DB), three typed caches (so the
+//! Owns the [`ResourceManager`] 运行时 资源 DB), three typed caches (so the
 //! same mesh/material/texture is never uploaded twice), and exposes
-//! [`resolve_scene_assets`] which queries an ECS [`World`] for pending
+//! [`resolve_scene_assets`] which queries an ECS 世界 for pending
 //! [`MeshRenderer`] entities and resolves them into GPU handles.
 
 use std::collections::HashMap;
@@ -23,18 +23,18 @@ use crate::scene::components::{MaterialRef, MeshRef, MeshRenderer};
 // GpuAssetResolver
 // ---------------------------------------------------------------------------
 
-/// On-demand asset loader + GPU uploader + cache.
+/// On-demand 资源 loader + GPU uploader + cache.
 ///
-/// Typical use per frame: call [`resolve_scene_assets`] to process any entities
-/// whose [`MeshRenderer`] paths haven't been uploaded yet — the resolve is
-/// cheap (a filtered ECS query) when nothing is pending.
+/// Typical use per 帧 调用 [`resolve_scene_assets`] to 进程 any entities
+/// whose [`MeshRenderer`] paths haven't been uploaded yet — the 解析 is
+/// cheap (a filtered ECS 查询 when nothing is pending.
 pub struct GpuAssetResolver {
     pub resource_manager: ResourceManager,
-    /// AssetId → render mesh handle cache.
+    /// AssetId → 渲染 网格 handle cache.
     mesh_cache: HashMap<AssetId, MeshHandle>,
-    /// AssetId → (material SSBO slot, material handle) cache.
+    /// AssetId → 材质 SSBO 槽 材质 handle) cache.
     mat_cache: HashMap<AssetId, (u32, MaterialHandle)>,
-    /// AssetId → bindless SRV slot cache.
+    /// AssetId → bindless SRV 槽 cache.
     tex_cache: HashMap<AssetId, u32>,
 }
 
@@ -49,12 +49,12 @@ impl GpuAssetResolver {
     }
 
     // -----------------------------------------------------------------------
-    // Package loading
+    // 包 loading
     // -----------------------------------------------------------------------
 
-    /// Attempt to load the `.pak` resource package and its path manifest.
+    /// Attempt to 加载 the `.pak` 资源 包 and its path manifest.
     ///
-    /// Both files are optional — when absent (no CLI `build` run yet) the
+    /// Both files are optional — when absent (no CLI 构建 run yet) the
     /// engine continues with only procedural geometry.
     pub fn load_resource_package(&mut self) {
         const PAK_PATH: &str = "assets/scenes.pak";
@@ -84,19 +84,19 @@ impl GpuAssetResolver {
     }
 
     // -----------------------------------------------------------------------
-    // Per-frame scene resolve
+    // Per-frame scene 解析
     // -----------------------------------------------------------------------
 
-    /// Resolve unloaded mesh / material assets referenced by [`MeshRenderer`]
+    /// 解析 unloaded 网格 / 材质 assets referenced by [`MeshRenderer`]
     /// components into the renderer's GPU managers.
     ///
-    /// Returns the number of entities that were resolved this pass.
+    /// Returns the number of entities that were resolved this pass
     pub fn resolve_scene_assets(
         &mut self,
         world: &mut World,
         renderer: &mut GraphRenderer,
     ) -> usize {
-        // Collect pending entities first so we don't borrow world & self
+        // Collect pending entities 第一个 so we don't 借用 世界 & self
         // simultaneously.
         let pending: Vec<(prism_ecs::Entity, String, String)> = {
             let mut out = Vec::new();
@@ -134,7 +134,7 @@ impl GpuAssetResolver {
         for (entity, mesh_path, mat_path) in &pending {
             let mut ok = true;
 
-            // --- Mesh ---
+            // --- 网格 ---
             if !mesh_path.is_empty() {
                 if let Some(mesh_handle) = self.resolve_mesh(mesh_path, renderer, &mut uploader) {
                     if let Some(mr) = world.get_mut::<MeshRef>(*entity) {
@@ -146,7 +146,7 @@ impl GpuAssetResolver {
                 }
             }
 
-            // --- Material ---
+            // --- 材质 ---
             if !mat_path.is_empty() {
                 if let Some(slot) =
                     self.resolve_material(mat_path, renderer, &mut uploader)
@@ -165,7 +165,7 @@ impl GpuAssetResolver {
             }
         }
 
-        // Flush batched upload.
+        // 刷新 batched upload.
         if let Err(e) = uploader.finish(renderer.graphics_queue()) {
             log::error!("resolve_scene_assets: BatchUploader::finish failed: {e}");
         }
@@ -180,10 +180,10 @@ impl GpuAssetResolver {
     }
 
     // -----------------------------------------------------------------------
-    // Internal resolve helpers
+    // 内部 解析 helpers
     // -----------------------------------------------------------------------
 
-    /// Resolve a mesh asset path → render `MeshHandle`, using the cache.
+    /// 解析 a 网格 资源 path → 渲染 `MeshHandle`, using the cache.
     fn resolve_mesh(
         &mut self,
         path: &str,
@@ -210,7 +210,7 @@ impl GpuAssetResolver {
             .map_err(|e| log::warn!("resolve_mesh: get '{path}' failed: {e}"))
             .ok()?;
 
-        // De-interleave RMES vertex data into split arrays.
+        // De-interleave RMES 顶点 data into split arrays.
         let info = &mesh.info;
         let stride = info.stride_bytes as usize;
         if stride == 0 || stride % 4 != 0 {
@@ -298,8 +298,8 @@ impl GpuAssetResolver {
         }
     }
 
-    /// Resolve a material asset path → material SSBO slot, using the cache.
-    /// Texture dependencies are loaded + uploaded on first encounter and cached
+    /// 解析 a 材质 资源 path → 材质 SSBO 槽 using the cache.
+    /// 纹理 dependencies are loaded + uploaded on 第一个 encounter and cached
     /// by `AssetId`.
     fn resolve_material(
         &mut self,
@@ -383,8 +383,8 @@ impl GpuAssetResolver {
         }
     }
 
-    /// Resolve a single texture dependency to a bindless SRV slot, with cache
-    /// + magenta fallback.
+    /// 解析 a single 纹理 dependency to a bindless SRV 槽 with cache
+    /// + magenta 回退
     fn resolve_texture(
         &mut self,
         tex_id_opt: Option<AssetId>,

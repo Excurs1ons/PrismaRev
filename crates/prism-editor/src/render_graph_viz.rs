@@ -1,22 +1,22 @@
 //! Render-graph visualizer (egui, F2).
 //!
-//! A read-only window that draws the live render-graph pipeline: pass nodes in
-//! execution order, the graph-managed resources (attachments) they produce /
+//! A read-only 窗口 that draws the live render-graph 管线 pass nodes in
+//! 执行 order, the graph-managed resources (attachments) they produce /
 //! consume, the edges between them via the well-known handles, per-pass live
-//! state (formats, extents, image counts), and the active `RenderSettings`.
+//! 状态 (formats, extents, 图像 counts), and the 激活 `RenderSettings`.
 //!
-//! Mirrors the [`Inspector`] pattern: a [`RenderGraphViz`] struct runs Phase-1
+//! Mirrors the 检查器 模式 a [`RenderGraphViz`] 结构体 runs Phase-1
 //! (inside `EguiCpu::run_ui`) in `App::render_one_frame`. Because
-//! `EguiCpu::run_ui` overwrites its cached pending frame, only one `run_ui`
-//! call may run per frame - when both F1 (inspector) and F2 (viz) are open,
-//! `App::render_one_frame` routes both UIs through a single `run_ui` closure
+//! `EguiCpu::run_ui` overwrites its cached pending 帧 only one `run_ui`
+//! 调用 may run per 帧 - when both F1 检查器 and F2 (viz) are 打开
+//! `App::render_one_frame` routes both UIs through a single `run_ui` 闭包
 //! (see `app.rs`).
 //!
-//! The viz never borrows `GraphRenderer` inside the egui closure. Instead,
-//! [`refresh_from`] snapshots the graph + per-pass live state into owned plain
-//! data *before* `run_ui`, so the closure only touches `&self`.
+//! The viz never borrows `GraphRenderer` inside the egui 闭包 Instead,
+//! [`refresh_from`] snapshots the 图 + per-pass live 状态 into owned plain
+//! data *before* `run_ui`, so the 闭包 only touches `&self`.
 //!
-//! [`Inspector`]: crate::Inspector
+//! 检查器 crate::Inspector
 
 use egui::{Color32, Context, FontId, Painter, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, Vec2};
 use prism_render::gtao::GtaoPass;
@@ -30,13 +30,13 @@ use prism_render::{
 /// Read-only render-graph visualizer (toggled with F2).
 #[derive(Default)]
 pub struct RenderGraphViz {
-    /// Whether the window is shown (toggled with F2).
+    /// Whether the 窗口 is shown (toggled with F2).
     pub show: bool,
-    /// Per-frame snapshot of the graph (passes + resources + settings),
-    /// refreshed in [`refresh_from`] before the egui closure runs.
+    /// Per-frame 快照 of the 图 (passes + resources + settings),
+    /// refreshed in [`refresh_from`] before the egui 闭包 runs.
     snapshot: Option<RenderGraphSnapshot>,
-    /// Live per-pass state captured alongside `snapshot`, as plain data so the
-    /// egui closure never touches `vk::*` handles.
+    /// Live per-pass 状态 captured alongside 快照 as plain data so the
+    /// egui 闭包 never touches `vk::*` handles.
     pass_details: Vec<PassDetail>,
 }
 
@@ -45,22 +45,22 @@ impl RenderGraphViz {
         Self::default()
     }
 
-    /// Toggle visibility (bound to F2 in `App::window_event`).
+    /// Toggle 可见性 (bound to F2 in `App::window_event`).
     pub fn toggle(&mut self) {
         self.show = !self.show;
     }
 
-    /// Snapshot the renderer's graph + per-pass live state into owned plain
+    /// 快照 the renderer's 图 + per-pass live 状态 into owned plain
     /// data. Called from `App::render_one_frame` *before* `EguiCpu::run_ui`
     /// while `&GraphRenderer` is borrowable. Cheap: clones only small
     /// declarative metadata, never Vulkan handles.
     pub fn refresh_from(&mut self, renderer: &GraphRenderer) {
         let graph = renderer.graph();
         let snapshot = graph.snapshot();
-        // Build per-pass live-state detail by downcasting each pass to its
-        // concrete type (immutable `pass_ref`). A pass whose type we don't
-        // match yields an empty `PassDetail` - the static `PassInfo` from the
-        // snapshot still drives the graph drawing.
+        // 构建 per-pass live-state 详情 by downcasting each pass to its
+        // concrete 类型 (immutable `pass_ref`). A pass whose 类型 we don't
+        // 匹配 yields an 空 `PassDetail` - the 静态 `PassInfo` from the
+        // 快照 still drives the 图 绘制
         let mut pass_details: Vec<PassDetail> = Vec::with_capacity(snapshot.passes.len());
         for p in &snapshot.passes {
             pass_details.push(Self::detail_for(graph, p));
@@ -69,9 +69,9 @@ impl RenderGraphViz {
         self.pass_details = pass_details;
     }
 
-    /// Build the live-state detail for one pass by downcasting via the graph's
+    /// 构建 the live-state 详情 for one pass by downcasting via the graph's
     /// immutable `pass_ref`. Pulls only cheap, already-tracked fields
-    /// (extent / format / image_count).
+    /// (extent / 格式 / image_count).
     fn detail_for(graph: &prism_render::render_graph::RenderGraph, p: &PassInfo) -> PassDetail {
         let mut d = PassDetail::default();
         match p.kind {
@@ -124,9 +124,9 @@ impl RenderGraphViz {
                 }
             }
             PassKind::Pt => {
-                // PathTracePass has no tracked metadata we can cheaply read
+                // PathTracePass has no tracked metadata we can cheaply 读取
                 // via pass_ref (its fields are mostly Vulkan handles). Show
-                // a placeholder note so the pass appears in the graph.
+                // a placeholder 音符 so the pass appears in the 图
                 d.notes.push("real-time PT compute (1 sample/frame)".into());
                 d.notes.push("temporal accumulation".into());
             }
@@ -135,12 +135,12 @@ impl RenderGraphViz {
         d
     }
 
-    /// The actual egui layout. `pub` so the host (`App::render_one_frame`) can
-    /// call it directly when co-hosting with the inspector inside a single
-    /// `run_ui` closure.
+    /// The actual egui 布局 `pub` so the host (`App::render_one_frame`) can
+    /// 调用 it directly when co-hosting with the 检查器 inside a single
+    /// `run_ui` 闭包
     pub fn ui(&self, ctx: &Context) {
-        // Semi-transparent dark frame shared with the inspector so both panels
-        // read as the same overlay family.
+        // Semi-transparent dark 帧 shared with the 检查器 so both panels
+        // 读取 as the same 叠加 family.
         let window_frame = egui::Frame {
             fill: Color32::from_black_alpha(200),
             stroke: Stroke::new(1.0_f32, Color32::from_gray(80)),
@@ -174,7 +174,7 @@ impl RenderGraphViz {
             });
     }
 
-    /// One-line summary of the active `RenderSettings`.
+    /// One-line 摘要 of the 激活 `RenderSettings`.
     fn settings_header(&self, ui: &mut Ui, s: &RenderSettings) {
         ui.label(
             egui::RichText::new("Render Settings")
@@ -210,16 +210,16 @@ impl RenderGraphViz {
         });
     }
 
-    /// Vertical column of pass nodes (top -> bottom = execution order) with
-    /// colored edges drawn between them for each graph resource. Drawn into a
-    /// `Painter` allocated by the UI; auto-sizes to the window width.
+    /// 垂直 列 of pass nodes 顶部 -> 底部 = 执行 order) with
+    /// colored edges drawn between them for each 图 资源 Drawn into a
+    /// `Painter` allocated by the UI; auto-sizes to the 窗口 宽度
     fn graph_canvas(&self, ui: &mut Ui, snapshot: &RenderGraphSnapshot) {
-        // Build a quick handle -> ResourceInfo lookup for edge labels.
+        // 构建 a quick handle -> ResourceInfo lookup for edge labels.
         let res_lookup: std::collections::HashMap<ResourceHandle, &prism_render::ResourceInfo> =
             snapshot.resources.iter().map(|r| (r.handle, r)).collect();
 
         let n = snapshot.passes.len().max(1);
-        // Layout constants.
+        // 布局 constants.
         let node_w = 200.0_f32;
         let node_h = 46.0_f32;
         let v_gap = 78.0_f32; // vertical space between node centers (room for edges + labels)
@@ -230,7 +230,7 @@ impl RenderGraphViz {
         let origin = response.rect.left_top();
         let painter = painter;
 
-        // Compute node rects (stacked vertically, left-aligned).
+        // 计算 node rects (stacked vertically, left-aligned).
         let node_rects: Vec<Rect> = (0..n)
             .map(|i| {
                 let y = origin.y + (i as f32) * v_gap;
@@ -238,12 +238,12 @@ impl RenderGraphViz {
             })
             .collect();
 
-        // Draw edges first so nodes sit on top. For each pass, for each output
-        // handle, find the downstream pass that lists it as an input and draw
-        // a colored curve from the producer's bottom to the consumer's top.
+        // 绘制 edges 第一个 so nodes sit on 顶部 For each pass for each 输出
+        // handle, 查找 the downstream pass that lists it as an 输入 and 绘制
+        // a colored 曲线 from the producer's 底部 to the consumer's 顶部
         for (producer_idx, pass) in snapshot.passes.iter().enumerate() {
             for &out_h in &pass.outputs {
-                // Find the consumer (first downstream pass with this handle in inputs).
+                // 查找 the 消费者 第一个 downstream pass with this handle in inputs).
                 let consumer_idx = snapshot
                     .passes
                     .iter()
@@ -255,7 +255,7 @@ impl RenderGraphViz {
                     continue; // only forward edges
                 }
                 let producer_center_bottom = node_rects[producer_idx].center_bottom();
-                // Spread consumer connection points across the top edge by input index.
+                // Spread 消费者 连接 points across the 顶部 edge by 输入 索引
                 let consumer = &snapshot.passes[c_idx];
                 let input_idx = consumer
                     .inputs
@@ -270,7 +270,7 @@ impl RenderGraphViz {
                 );
                 let color = edge_color(out_h);
                 draw_edge(&painter, producer_center_bottom, consumer_top, color);
-                // Label the edge near its midpoint with the resource kind + format.
+                // 标签 the edge 近 its midpoint with the 资源 kind + 格式
                 let mid = Pos2::new(
                     (producer_center_bottom.x + consumer_top.x) * 0.5,
                     (producer_center_bottom.y + consumer_top.y) * 0.5,
@@ -286,13 +286,13 @@ impl RenderGraphViz {
             }
         }
 
-        // Draw nodes.
+        // 绘制 nodes.
         for (i, pass) in snapshot.passes.iter().enumerate() {
             let rect = node_rects[i];
             let color = node_color(pass.kind);
             painter.rect_filled(rect, 4.0, Color32::from_black_alpha(180));
             painter.rect_stroke(rect, 4.0, Stroke::new(1.5_f32, color), StrokeKind::Inside);
-            // Pass name + kind chip.
+            // pass name + kind chip.
             painter.text(
                 rect.left_top() + Vec2::new(8.0, 4.0),
                 egui::Align2::LEFT_TOP,
@@ -300,7 +300,7 @@ impl RenderGraphViz {
                 FontId::proportional(13.0),
                 Color32::WHITE,
             );
-            // Execution index badge.
+            // 执行 索引 badge.
             let badge = format!("#{i}");
             painter.text(
                 rect.right_top() + Vec2::new(-6.0, 4.0),
@@ -309,7 +309,7 @@ impl RenderGraphViz {
                 FontId::proportional(11.0),
                 color,
             );
-            // Live state one-liner (extent / format).
+            // Live 状态 one-liner (extent / 格式
             if let Some(d) = self.pass_details.get(i) {
                 if let Some(summary) = d.one_liner() {
                     painter.text(
@@ -324,7 +324,7 @@ impl RenderGraphViz {
         }
     }
 
-    /// Collapsible per-pass detail list below the canvas.
+    /// Collapsible per-pass 详情 列表 below the canvas.
     fn pass_detail_list(&self, ui: &mut Ui, snapshot: &RenderGraphSnapshot) {
         ui.label(
             egui::RichText::new("Passes (live state)")
@@ -352,18 +352,18 @@ impl RenderGraphViz {
 }
 
 // ---------------------------------------------------------------------------
-// Per-pass live-state detail (plain data, no `vk::*` in the egui closure).
+// Per-pass live-state 详情 (plain data, no `vk::*` in the egui 闭包
 // ---------------------------------------------------------------------------
 
 #[derive(Default)]
 struct PassDetail {
     extent: Option<[u32; 2]>,
-    /// `(label, format_string)` pairs - multiple for passes with several
-    /// attachments (e.g. ScenePass has color + normal).
+    /// 标签 format_string)` pairs - multiple for passes with several
+    /// attachments (e.g. ScenePass has 颜色 + 法线
     formats: Vec<(String, String)>,
     image_count: Option<usize>,
-    /// Outputs discovered from the concrete pass (may differ from the static
-    /// `PassInfo::outputs` ordering - kept for the detail panel).
+    /// Outputs discovered from the concrete pass (may differ from the 静态
+    /// `PassInfo::outputs` ordering - kept for the 详情 面板
     #[allow(dead_code)]
     outputs: Vec<ResourceHandle>,
     notes: Vec<String>,
@@ -435,15 +435,15 @@ impl PassDetail {
 // Coloring + naming helpers for well-known resources and pass kinds.
 // ---------------------------------------------------------------------------
 
-/// Color-code edges by resource handle: the three ScenePass outputs (depth /
-/// normal / color) plus the shadow map. Unknown handles get a neutral gray.
+/// Color-code edges by 资源 handle: the three ScenePass outputs 深度 /
+/// 法线 / 颜色 plus the shadow 映射表 Unknown handles get a neutral gray.
 fn edge_color(h: ResourceHandle) -> Color32 {
     use prism_render::render_graph::{SCENE_COLOR_H, SCENE_DEPTH_H, SCENE_NORMAL_H};
-    // ShadowMapPass's handle is dynamic, but it's the only DepthAttachment
+    // ShadowMapPass's handle is 动力学 but it's the only DepthAttachment
     // produced by a Shadow-kind pass - callers identify it by handle value
-    // against the snapshot. Here we color by the well-known scene handles; the
-    // shadow edge falls through to the gray default (it isn't a graph edge
-    // anyway - ScenePass reads the shadow view via set_resources, not
+    // against the 快照 Here we 颜色 by the well-known scene handles; the
+    // shadow edge falls through to the gray 默认 (it isn't a 图 edge
+    // anyway - ScenePass reads the shadow 视图 via set_resources, not
     // GraphResources).
     if h == SCENE_DEPTH_H {
         Color32::from_rgb(240, 180, 60) // amber - depth
@@ -456,7 +456,7 @@ fn edge_color(h: ResourceHandle) -> Color32 {
     }
 }
 
-/// Human-readable label for an edge: resource kind + format if known.
+/// Human-readable 标签 for an edge: 资源 kind + 格式 if known.
 fn edge_label(
     h: ResourceHandle,
     res_lookup: &std::collections::HashMap<ResourceHandle, &prism_render::ResourceInfo>,
@@ -478,7 +478,7 @@ fn edge_label(
     }
 }
 
-/// Name a well-known resource handle; fall back to its numeric id.
+/// Name a well-known 资源 handle; fall 后 to its numeric id.
 fn handle_name(h: ResourceHandle) -> String {
     use prism_render::render_graph::{PT_COLOR_H, SCENE_COLOR_H, SCENE_DEPTH_H, SCENE_NORMAL_H};
     if h == SCENE_DEPTH_H {
@@ -494,7 +494,7 @@ fn handle_name(h: ResourceHandle) -> String {
     }
 }
 
-/// Node accent color by pass kind.
+/// Node accent 颜色 by pass kind.
 fn node_color(kind: PassKind) -> Color32 {
     match kind {
         PassKind::Shadow => Color32::from_rgb(220, 120, 120),
@@ -506,10 +506,10 @@ fn node_color(kind: PassKind) -> Color32 {
     }
 }
 
-/// Draw a smooth S-curve edge between two points (cubic Bezier sampled into a
+/// 绘制 a smooth S-curve edge between two points (cubic Bezier sampled into a
 /// polyline, then handed to `Painter::line`).
 fn draw_edge(painter: &Painter, from: Pos2, to: Pos2, color: Color32) {
-    // Control points pull the curve vertically (top->bottom flow).
+    // 控制 points pull the 曲线 vertically (top->bottom 流程
     let dy = (to.y - from.y).abs() * 0.5;
     let c1 = Pos2::new(from.x, from.y + dy);
     let c2 = Pos2::new(to.x, to.y - dy);

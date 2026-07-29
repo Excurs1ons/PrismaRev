@@ -1,8 +1,8 @@
-//! World-space XYZ orientation gizmo (always-on-top debug helper).
+//! World-space XYZ orientation gizmo (always-on-top 调试 helper).
 //!
-//! Draws three colored arrows from the scene origin — X = red, Y = green,
-//! Z = blue — so the viewer can read the world axes at a glance. Rendered with
-//! the depth test disabled, so it is never occluded by the 3D scene.
+//! Draws three colored arrows from the scene origin — X = red, Y = 绿色
+//! Z = blue — so the viewer can 读取 the 世界 axes at a glance. Rendered with
+//! the 深度 test 禁用 so it is never occluded by the 3D scene.
 
 use std::ffi::CString;
 use std::mem::size_of;
@@ -17,7 +17,7 @@ use crate::shader_bindings::gizmo::GizmoPush;
 const GIZMO_VERT_SPV: &[u8] = include_bytes!("../../../shaders/gizmo.vert.spv");
 const GIZMO_FRAG_SPV: &[u8] = include_bytes!("../../../shaders/gizmo.frag.spv");
 
-/// Per-vertex data for the gizmo: object-space position + color.
+/// Per-vertex data for the gizmo: object-space position + 颜色
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct GizmoVertex {
@@ -59,11 +59,11 @@ pub struct Gizmo {
 }
 
 impl Gizmo {
-    /// Build the gizmo geometry + pipeline for `render_pass`.
+    /// 构建 the gizmo geometry + 管线 for `render_pass`.
     pub fn new(context: &VulkanContext, render_pass: vk::RenderPass) -> anyhow::Result<Self> {
         let device = context.device.clone();
 
-        // --- Static geometry (generated once on the CPU) ---
+        // --- 静态 geometry (generated once on the CPU) ---
         let verts = generate_gizmo();
         let vertex_count = verts.len() as u32;
         let buf_size = (vertex_count as usize * size_of::<GizmoVertex>()) as vk::DeviceSize;
@@ -107,7 +107,7 @@ impl Gizmo {
         );
         let shader_stages = [vert_stage, frag_stage];
 
-        // --- Pipeline layout: push constant only (view_proj mat4) ---
+        // --- 管线 布局 推送 常量 only (view_proj mat4) ---
         let push_constant_ranges = [vk::PushConstantRange::default()
             .stage_flags(vk::ShaderStageFlags::VERTEX)
             .offset(0)
@@ -117,7 +117,7 @@ impl Gizmo {
         let layout = unsafe { device.create_pipeline_layout(&layout_info, None) }
             .context("create gizmo pipeline layout")?;
 
-        // --- Fixed-function state ---
+        // --- Fixed-function 状态 ---
         let binding_desc = [GizmoVertex::binding_description()];
         let attr_descs = GizmoVertex::attribute_descriptions();
         let vertex_input_info = vk::PipelineVertexInputStateCreateInfo::default()
@@ -143,18 +143,18 @@ impl Gizmo {
         let multisampling = vk::PipelineMultisampleStateCreateInfo::default()
             .sample_shading_enable(false)
             .rasterization_samples(vk::SampleCountFlags::TYPE_1);
-        // Depth OFF → always drawn on top of the scene.
+        // 深度 OFF → always drawn on 顶部 of the scene.
         let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
             .depth_test_enable(false)
             .depth_write_enable(false);
         let color_blend_attachment = vk::PipelineColorBlendAttachmentState::default()
             .color_write_mask(vk::ColorComponentFlags::RGBA)
             .blend_enable(false);
-        // The gizmo draws inside ScenePass's render pass, which now has 2
-        // color attachments (color + view-normal MRT). Every pipeline bound in
-        // that render pass must declare a matching attachmentCount, so we list
-        // 2 blend states: attachment 0 (color) writes RGBA, attachment 1
-        // (normal) has an empty write mask so the cleared value is preserved.
+        // The gizmo draws inside ScenePass's 渲染 pass which now has 2
+        // 颜色 attachments 颜色 + view-normal MRT). Every 管线 bound in
+        // that 渲染 pass must declare a matching attachmentCount, so we 列表
+        // 2 混合 states: 附件 0 颜色 writes RGBA 附件 1
+        // 法线 has an 空 写入 遮罩 so the cleared value is preserved.
         let blend_attachments = [
             color_blend_attachment,
             vk::PipelineColorBlendAttachmentState::default()
@@ -199,7 +199,7 @@ impl Gizmo {
         })
     }
 
-    /// Record the gizmo draw into `cmd`. Call between `begin_frame` and
+    /// Record the gizmo 绘制 into `cmd`. 调用 between `begin_frame` and
     /// `end_frame`, after the 3D scene draws.
     pub fn draw(&self, cmd: vk::CommandBuffer, view_proj: &[[f32; 4]; 4]) {
         let device = &self.device;
@@ -237,7 +237,7 @@ impl Drop for Gizmo {
 // Geometry generation
 // ---------------------------------------------------------------------------
 
-/// Build the three axis arrows (shaft box + cone head) as a triangle list.
+/// 构建 the three axis arrows (shaft 盒 + cone head) as a triangle 列表
 fn generate_gizmo() -> Vec<GizmoVertex> {
     let mut v = Vec::new();
     let len = 1.5f32; // shaft length
@@ -246,7 +246,7 @@ fn generate_gizmo() -> Vec<GizmoVertex> {
     let head_r = 0.13f32; // cone base radius
     let segs = 20u32; // cone radial segments
 
-    // (direction, perpendicular-1, perpendicular-2, color)
+    // (direction, perpendicular-1, perpendicular-2, 颜色
     type Axis = ([f32; 3], [f32; 3], [f32; 3], [f32; 3]);
     let axes: [Axis; 3] = [
         (
@@ -290,7 +290,7 @@ fn push_tri(v: &mut Vec<GizmoVertex>, a: [f32; 3], b: [f32; 3], c: [f32; 3], col
 }
 
 /// Geometry common to both shaft and cone: axis direction, two perpendicular
-/// vectors, length, and color. Extracted as a struct to avoid passing 6+
+/// vectors, 长度 and 颜色 Extracted as a 结构体 to avoid passing 6+
 /// positional arguments.
 struct AxisGeometry {
     dir: [f32; 3],
@@ -300,7 +300,7 @@ struct AxisGeometry {
     color: [f32; 3],
 }
 
-/// Push a thin axis-aligned box from the origin to `dir * len`.
+/// 推送 a thin axis-aligned 盒 from the origin to `dir * len`.
 fn push_shaft(v: &mut Vec<GizmoVertex>, geo: &AxisGeometry, t: f32) {
     let dir = geo.dir;
     let p1 = geo.p1;
@@ -343,7 +343,7 @@ fn push_shaft(v: &mut Vec<GizmoVertex>, geo: &AxisGeometry, t: f32) {
     push_tri(v, c010, c111, c110, color);
 }
 
-/// Push a cone (side + base cap) at the tip of the axis.
+/// 推送 a cone (side + base cap) at the tip of the axis.
 fn push_cone(v: &mut Vec<GizmoVertex>, geo: &AxisGeometry, head_len: f32, head_r: f32, segs: u32) {
     let dir = geo.dir;
     let p1 = geo.p1;

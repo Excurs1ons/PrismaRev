@@ -1,7 +1,7 @@
-//! PrismaRev binary entry point.
+//! PrismaRev 二进制 entry point.
 //!
-//! All the work happens in [`prism_app::run`].
-//! ECS component types are auto‑registered on first `World::insert` – no
+//! All the 功 happens in [`prism_app::run`].
+//! ECS 分量 types are auto‑registered on 第一个 `World::insert` – no
 //! explicit registration is required.
 
 fn main() {

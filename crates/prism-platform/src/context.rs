@@ -1,4 +1,4 @@
-//! [`PlatformContext`] — owns the window and renderer.
+//! [`PlatformContext`] — owns the 窗口 and 渲染器
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -9,7 +9,7 @@ use winit::event_loop::ActiveEventLoop;
 use winit::raw_window_handle::HasDisplayHandle;
 use winit::window::Window;
 
-/// Window, renderer, and platform resources — created on first `resumed` and
+/// 窗口 渲染器 and platform resources — created on 第一个 `resumed` and
 /// destroyed on `suspended`.
 pub struct PlatformContext {
     pub(crate) window: Arc<Window>,
@@ -17,7 +17,7 @@ pub struct PlatformContext {
 }
 
 impl PlatformContext {
-    /// Create a new platform context: window → Vulkan surface → renderer.
+    /// 创建 a new platform context: 窗口 → Vulkan 表面 → 渲染器
     pub fn new(
         event_loop: &ActiveEventLoop,
         window_cfg: &WindowConfig,
@@ -25,7 +25,7 @@ impl PlatformContext {
     ) -> Self {
         let t_start = Instant::now();
 
-        // --- Window ---
+        // --- 窗口 ---
         let mut attrs = Window::default_attributes()
             .with_title(&window_cfg.title)
             .with_inner_size(winit::dpi::LogicalSize::new(
@@ -57,7 +57,7 @@ impl PlatformContext {
         );
         let t_after_win = Instant::now();
 
-        // --- Renderer ---
+        // --- 渲染器 ---
         let display_handle = window.display_handle().expect("get display handle").into();
         let ext_ptrs = ash_window::enumerate_required_extensions(display_handle)
             .expect("enumerate required extensions");
@@ -96,7 +96,7 @@ impl PlatformContext {
         &mut self.renderer
     }
 
-    /// Mutable access to the underlying renderer.
+    /// Mutable 访问 to the underlying 渲染器
     pub fn renderer_mut(&mut self) -> &mut GraphRenderer {
         &mut self.renderer
     }
@@ -121,38 +121,38 @@ impl PlatformContext {
     // Lifecycle
     // -----------------------------------------------------------------------
 
-    /// Recreate the swapchain after resize.
+    /// Recreate the 交换链 after 调整大小
     pub fn recreate_swapchain(&mut self) -> Result<(), anyhow::Error> {
         self.renderer.recreate_swapchain().map_err(Into::into)
     }
 
-    /// Resume the Vulkan surface after suspend (Android).
+    /// Resume the Vulkan 表面 after suspend Android
     pub fn resume_surface(&mut self, event_loop: &ActiveEventLoop) -> Result<(), anyhow::Error> {
         self.renderer
             .resume_surface(self.window.as_ref(), self.window.as_ref())
     }
 
-    /// Suspend the Vulkan surface (Android).
+    /// Suspend the Vulkan 表面 Android
     pub fn suspend_surface(&mut self) {
         self.renderer.suspend_surface();
     }
 
     // -----------------------------------------------------------------------
-    // Thread separation — extract GraphRenderer
+    // 线程 separation — extract GraphRenderer
     // -----------------------------------------------------------------------
 
-    /// Extract the [`GraphRenderer`] from this context, leaving the window
-    /// behind.  Called on the main thread before spawning the render thread.
+    /// Extract the [`GraphRenderer`] from this context, leaving the 窗口
+    /// behind. Called on the main 线程 before spawning the 渲染 线程
     ///
-    /// After this call the [`PlatformContext`] can still provide the window
-    /// reference and surface lifecycle helpers, but no longer holds the
-    /// renderer.
+    /// After this 调用 the [`PlatformContext`] can still provide the 窗口
+    /// 引用 and 表面 lifecycle helpers, but no longer holds the
+    /// 渲染器
     pub fn into_parts(self) -> (Arc<Window>, GraphRenderer) {
         (self.window, self.renderer)
     }
 
     // -----------------------------------------------------------------------
-    // Pipeline / egui
+    // 管线 / egui
     // -----------------------------------------------------------------------
 
     /// Pre-compile all lazy-created GPU pipelines.

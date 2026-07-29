@@ -1,8 +1,8 @@
-//! Slang reflection -> Rust binding codegen for PrismaRev.
+//! Slang reflection -> Rust 绑定 codegen for PrismaRev.
 //!
 //! Reads the `reflection/*.json` emitted by `slangc -reflection-json`
-//! (see `shaders/compile.sh`) and generates a Rust module describing each
-//! shader's resource bindings: descriptor set/binding indices, resource kinds,
+//! (see `shaders/compile.sh`) and generates a Rust 模块 describing each
+//! shader's 资源 bindings: 描述符 set/binding indices, 资源 kinds,
 //! and push-constant sizes. The generated file is committed to the repo so the
 //! engine builds on hosts without slangc (Termux/Android).
 //!
@@ -10,8 +10,8 @@
 //!   cargo run -p xtask --bin shader-bindgen -- \
 //!     shaders/reflection crates/prism-render/src/shader_bindings.rs
 //!
-//! This is intentionally a standalone tool (NOT a build.rs) so the normal
-//! `cargo build` never needs slangc.
+//! This is intentionally a standalone tool (NOT a build.rs) so the 法线
+//! `cargo 构建 never needs slangc.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -39,7 +39,7 @@ struct Parameter {
 
 #[derive(Debug, Deserialize)]
 struct Binding {
-    /// e.g. "descriptorTableSlot", "pushConstantBuffer", "uniform".
+    /// e.g. "descriptorTableSlot", "pushConstantBuffer", uniform
     kind: String,
     #[serde(default)]
     index: u32,
@@ -55,12 +55,12 @@ struct TypeInfo {
     kind: Option<String>,
     #[serde(default, rename = "baseShape")]
     base_shape: Option<String>,
-    /// For struct types (constantBuffer → elementType → struct with fields).
+    /// For 结构体 types (constantBuffer → elementType → 结构体 with fields).
     #[serde(default, rename = "elementType")]
     element_type: Option<StructTypeInfo>,
 }
 
-/// Info about a struct type nested inside a parameter's type.
+/// 信息 about a 结构体 类型 nested inside a parameter's 类型
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)]
 struct StructTypeInfo {
@@ -72,7 +72,7 @@ struct StructTypeInfo {
     fields: Option<Vec<StructField>>,
 }
 
-/// A single field inside a struct definition in the reflection JSON.
+/// A single field inside a 结构体 定义 in the reflection JSON.
 #[derive(Debug, Deserialize)]
 struct StructField {
     name: String,
@@ -82,10 +82,10 @@ struct StructField {
     binding: FieldBinding,
 }
 
-/// Type info for a struct field (more detailed than TypeInfo).
+/// 类型 信息 for a 结构体 field (more detailed than TypeInfo).
 #[derive(Debug, Deserialize)]
 struct FieldType {
-    /// "scalar", "vector", "matrix"
+    /// 标量 向量 矩阵
     #[serde(default)]
     kind: String,
     /// "float32", "uint32", "int32"
@@ -100,12 +100,12 @@ struct FieldType {
     /// For matrices: 4
     #[serde(default, rename = "columnCount")]
     column_count: Option<u32>,
-    /// For vectors/matrices: the element type
+    /// For vectors/matrices: the element 类型
     #[serde(default, rename = "elementType")]
     element_type: Option<Box<FieldType>>,
 }
 
-/// Binding info for a struct field.
+/// 绑定 信息 for a 结构体 field.
 #[derive(Debug, Default, Deserialize)]
 struct FieldBinding {
     #[serde(default)]
@@ -123,7 +123,7 @@ struct EntryPoint {
     parameters: Vec<Parameter>,
 }
 
-/// Map a Slang reflection field type to its Rust type name.
+/// 映射表 a Slang reflection field 类型 to its Rust 类型 name.
 fn field_type_to_rust(ft: &FieldType) -> String {
     match ft.kind.as_str() {
         "scalar" => match ft.scalar_type.as_deref() {
@@ -157,7 +157,7 @@ fn field_type_to_rust(ft: &FieldType) -> String {
     }
 }
 
-/// Generate a Rust struct definition from reflected push constant fields.
+/// Generate a Rust 结构体 定义 from reflected 推送 常量 fields.
 fn emit_push_struct(struct_name: &str, fields: &[StructField]) -> String {
     let mut out = String::new();
     out.push_str(&format!(
@@ -168,7 +168,7 @@ fn emit_push_struct(struct_name: &str, fields: &[StructField]) -> String {
     out.push_str(&format!("pub struct {struct_name} {{\n"));
     for f in fields {
         let rust_type = field_type_to_rust(&f.ty);
-        // Emit doc comment showing the reflected offset+size for easy verification.
+        // 发射 doc 注释 showing the reflected offset+size for easy 验证
         let off = f.binding.offset.unwrap_or(0);
         let sz = f.binding.size.unwrap_or(0);
         out.push_str(&format!(
@@ -180,7 +180,7 @@ fn emit_push_struct(struct_name: &str, fields: &[StructField]) -> String {
     out
 }
 
-/// A resolved binding fact we care about for Rust codegen.
+/// A resolved 绑定 fact we care about for Rust codegen.
 struct ResolvedBinding {
     name: String,
     set: u32,
@@ -194,14 +194,14 @@ enum BindKind {
     PushConstant { size: u32 },
 }
 
-/// Fallback push-constant sizes for shaders whose slangc reflection omits the
-/// `size` field on the `pushConstantBuffer` parameter. Newer Slang releases
-/// (e.g. 2026.13.1) stopped emitting `size` on the parameter binding, so we
-/// keep fallback values here. Struct-level layout is now auto-generated from
+/// 回退 push-constant sizes for shaders whose slangc reflection omits the
+/// 大小 field on the `pushConstantBuffer` 参数 Newer Slang releases
+/// (e.g. 2026.13.1) stopped emitting 大小 on the 参数 绑定 so we
+/// keep 回退 values here. Struct-level 布局 is now auto-generated from
 /// the reflection JSON (see `emit_push_struct`).
 const PUSH_SIZE_FALLBACK: &[(&str, u32)] = &[
     ("overlay", 0),
-    // LightingPushConstants: 4×u32 + 4×f32 = 32 bytes.
+    // LightingPushConstants: 4×u32 + 4×f32 = 32 字节
     ("lighting", 32),
     // SharcQueryPushConstants: 7 fields padded to 48.
     ("sharc_query", 48),
@@ -227,16 +227,16 @@ impl BindKind {
 
 fn classify(p: &Parameter) -> Option<ResolvedBinding> {
     let b = p.binding.as_ref()?;
-    // Only emit descriptor-set slots and push-constant buffers. Slang also
+    // Only 发射 descriptor-set slots and push-constant buffers. Slang also
     // reflects vertex-shader `in` parameters (kind "vertexInput" / no
-    // descriptor binding) — those are not Vulkan descriptor bindings and must
+    // 描述符 绑定 — those are not Vulkan 描述符 bindings and must
     // be skipped.
     let kind = match b.kind.as_str() {
         "pushConstantBuffer" | "pushConstant" => BindKind::PushConstant {
             size: b.size.unwrap_or(0),
         },
         "descriptorTableSlot" | "uniform" => {
-            // Distinguish UBO vs texture via the type shape.
+            // Distinguish UBO vs 纹理 via the 类型 shape.
             let shape =
                 p.ty.as_ref()
                     .and_then(|t| t.base_shape.clone().or_else(|| t.kind.clone()))
@@ -252,7 +252,7 @@ fn classify(p: &Parameter) -> Option<ResolvedBinding> {
                 BindKind::UniformBuffer
             }
         }
-        // vertex inputs, stage inputs, etc. — not descriptor bindings
+        // 顶点 inputs, 阶段 inputs, etc. — not 描述符 bindings
         _ => return None,
     };
     Some(ResolvedBinding {
@@ -293,7 +293,7 @@ fn process_file(path: &Path) -> Result<(String, String)> {
         .to_string();
     let mod_name = shader.replace('-', "_");
 
-    // Gather global params + entry-point params.
+    // Gather 全局 params + entry-point params.
     let mut resolved: Vec<ResolvedBinding> = Vec::new();
     for p in &refl.parameters {
         if let Some(r) = classify(p) {
@@ -307,7 +307,7 @@ fn process_file(path: &Path) -> Result<(String, String)> {
             }
         }
     }
-    // Dedup by (set, binding, name).
+    // Dedup by 集合 绑定 name).
     resolved.sort_by(|a, b| (a.set, a.binding, &a.name).cmp(&(b.set, b.binding, &b.name)));
     resolved.dedup_by(|a, b| a.set == b.set && a.binding == b.binding && a.name == b.name);
 
@@ -333,14 +333,14 @@ fn process_file(path: &Path) -> Result<(String, String)> {
         }
     }
 
-    // Descriptor bindings grouped by set.
+    // 描述符 bindings grouped by 集合
     let mut by_set: BTreeMap<u32, Vec<&ResolvedBinding>> = BTreeMap::new();
     let mut push_size: Option<u32> = None;
     for r in &resolved {
         match &r.kind {
             BindKind::PushConstant { size } => {
-                // Real slangc omits `size` for some shaders; fall back to the
-                // known Rust-side layout (see pbr_push.rs + its tests).
+                // Real slangc omits 大小 for some shaders; fall 后 to the
+                // known Rust-side 布局 (see pbr_push.rs + its tests).
                 let sz = *size.max(&fallback_push_size(&shader));
                 push_size = Some(push_size.unwrap_or(0).max(sz));
             }
@@ -366,9 +366,9 @@ fn process_file(path: &Path) -> Result<(String, String)> {
         }
     }
 
-    // --- Auto-generated push-constant struct definitions ---
-    // Scan global and entry-point parameters for push-constant buffers whose
-    // types carry struct field info; emit a #[repr(C)] Rust struct for each.
+    // --- Auto-generated push-constant 结构体 definitions ---
+    // Scan 全局 and entry-point parameters for push-constant buffers whose
+    // types carry 结构体 field 信息 发射 a #[repr(C)] Rust 结构体 for each.
     // This replaces the hand-written push-constant structs in the engine.
     for p in &refl.parameters {
         if let Some(ety) = p
@@ -385,7 +385,7 @@ fn process_file(path: &Path) -> Result<(String, String)> {
             }
         }
     }
-    // Same for entry-point parameters (some shaders declare push constants
+    // Same for entry-point parameters (some shaders declare 推送 constants
     // at the entry-point level instead of globally).
     for ep in &refl.entry_points {
         for p in &ep.parameters {
@@ -444,7 +444,7 @@ fn main() -> Result<()> {
 
     for f in &files {
         let (mod_name, content) = process_file(f)?;
-        // Write per-shader file: {out_dir}/{mod_name}.rs
+        // 写入 per-shader file: {out_dir}/{mod_name}.rs
         let mod_path = out_dir.join(format!("{mod_name}.rs"));
         std::fs::write(&mod_path, &content)
             .with_context(|| format!("write {}", mod_path.display()))?;
@@ -452,7 +452,7 @@ fn main() -> Result<()> {
         mod_rs.push_str(&format!("pub mod {mod_name};\n"));
     }
 
-    // Write mod.rs
+    // 写入 mod.rs
     let mod_rs_path = out_dir.join("mod.rs");
     std::fs::write(&mod_rs_path, &mod_rs)
         .with_context(|| format!("write {}", mod_rs_path.display()))?;

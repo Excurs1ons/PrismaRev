@@ -1,12 +1,12 @@
-//! Push-constant layout shared between the PBR renderer and `pbr.frag`.
+//! Push-constant 布局 shared between the PBR 渲染器 and `pbr.frag`.
 //!
-//! Kept in its own module so the byte layout can be unit-tested against the
-//! GLSL `layout(push_constant)` block in `shaders/pbr.frag`.
+//! Kept in its own 模块 so the byte 布局 can be unit-tested against the
+//! GLSL `layout(push_constant)` 块 in `shaders/pbr.frag`.
 
-/// Selectable PBR debug visualization modes.
+/// Selectable PBR 调试 visualization modes.
 ///
-/// The numeric values match the `debug_mode` push constant consumed by
-/// `pbr.frag` and the overlay button order.
+/// The numeric values 匹配 the `debug_mode` 推送 常量 consumed by
+/// `pbr.frag` and the 叠加 按钮 order.
 #[repr(u32)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DebugMode {
@@ -29,7 +29,7 @@ impl DebugMode {
         DebugMode::Normal,
     ];
 
-    /// Short label used by the overlay UI.
+    /// Short 标签 used by the 叠加 UI.
     pub fn label(self) -> &'static str {
         match self {
             DebugMode::Final => "Final",
@@ -41,7 +41,7 @@ impl DebugMode {
         }
     }
 
-    /// Convert a `u32` (e.g. from push constants / input) to a `DebugMode`,
+    /// 转换 a `u32` (e.g. from 推送 constants / 输入 to a `DebugMode`,
     /// clamping out-of-range values to `Final`.
     pub fn from_u32(v: u32) -> Self {
         match v {
@@ -56,7 +56,7 @@ impl DebugMode {
     }
 }
 
-/// Coordinate space used by the `Normal` debug mode.
+/// 坐标系 空间 used by the 法线 调试 众数
 #[repr(u32)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NormalSpace {
@@ -66,7 +66,7 @@ pub enum NormalSpace {
 }
 
 impl NormalSpace {
-    /// Cycle to the next space (World → View → Tangent → World).
+    /// Cycle to the 下一个 空间 世界 → 视图 → 切线 → 世界
     pub fn next(self) -> NormalSpace {
         match self {
             NormalSpace::World => NormalSpace::View,
@@ -83,7 +83,7 @@ impl NormalSpace {
         }
     }
 
-    /// Convert a `u32` to a `NormalSpace`, clamping out-of-range to `World`.
+    /// 转换 a `u32` to a `NormalSpace`, clamping out-of-range to 世界
     pub fn from_u32(v: u32) -> Self {
         match v {
             0 => NormalSpace::World,

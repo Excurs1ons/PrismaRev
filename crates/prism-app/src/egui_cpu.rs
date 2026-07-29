@@ -1,19 +1,19 @@
-//! CPU-side egui — lives on the main thread (winit event loop side).
+//! CPU-side egui — lives on the main 线程 (winit 事件 循环 side).
 //!
-//! [`EguiCpu`] owns the egui context and winit state, runs the UI closure,
-//! tessellates the shapes, and produces an [`EguiFrame`] for the render thread.
+//! [`EguiCpu`] owns the egui context and winit 状态 runs the UI 闭包
+//! tessellates the shapes, and produces an [`EguiFrame`] for the 渲染 线程
 
 use prism_render::EguiFrame;
 use winit::window::Window;
 
-/// CPU-side egui: context + winit state.
+/// CPU-side egui: context + winit 状态
 ///
 /// NOT Send (holds `egui_winit::State` which references platform handles).
-/// Stays on the main thread alongside the winit event loop.
+/// Stays on the main 线程 alongside the winit 事件 循环
 pub struct EguiCpu {
     ctx: egui::Context,
     state: Option<egui_winit::State>,
-    /// Platform output stashed by `run_ui` for `apply_platform_output`.
+    /// Platform 输出 stashed by `run_ui` for `apply_platform_output`.
     pending_platform_output: Option<egui::PlatformOutput>,
 }
 
@@ -26,7 +26,7 @@ impl EguiCpu {
         }
     }
 
-    /// Lazily create the winit state on first use.
+    /// Lazily 创建 the winit 状态 on 第一个 use.
     fn ensure_state(&mut self, window: &Window) {
         if self.state.is_some() {
             return;
@@ -42,7 +42,7 @@ impl EguiCpu {
         self.state = Some(state);
     }
 
-    /// Forward a winit window event to egui. Returns whether egui consumed it.
+    /// 向前 a winit 窗口 事件 to egui. Returns whether egui consumed it.
     pub fn handle_window_event(&mut self, window: &Window, event: &winit::event::WindowEvent) -> bool {
         let Some(state) = self.state.as_mut() else {
             return false;
@@ -50,8 +50,8 @@ impl EguiCpu {
         state.on_window_event(window, event).consumed
     }
 
-    /// Run the egui UI closure, tessellate shapes, and return an [`EguiFrame`]
-    /// for the render thread.  Also stashes [`egui::PlatformOutput`] for later
+    /// Run the egui UI 闭包 tessellate shapes, and return an [`EguiFrame`]
+    /// for the 渲染 线程 Also stashes [`egui::PlatformOutput`] for later
     /// application via [`apply_platform_output`].
     pub fn run_ui(&mut self, window: &Window, mut ui: impl FnMut(&egui::Context)) -> EguiFrame {
         self.ensure_state(window);
@@ -69,7 +69,7 @@ impl EguiCpu {
 
         let primitives = self.ctx.tessellate(shapes, pixels_per_point);
 
-        // Stash platform output for windowing side-effects.
+        // Stash platform 输出 for windowing side-effects.
         self.pending_platform_output = Some(platform_output);
 
         EguiFrame {
@@ -79,7 +79,7 @@ impl EguiCpu {
         }
     }
 
-    /// Apply stashed platform output (cursor icon, clipboard, IME).
+    /// Apply stashed platform 输出 (cursor icon, clipboard, IME).
     pub fn apply_platform_output(&mut self, window: &Window) {
         let Some(output) = self.pending_platform_output.take() else {
             return;

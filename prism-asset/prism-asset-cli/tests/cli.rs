@@ -1,8 +1,8 @@
-//! Integration tests for the `prism-asset-cli` binary (std::process::Command).
+//! Integration tests for the `prism-asset-cli` 二进制 (std::process::Command).
 //!
-//! These tests build a minimal .pak, invoke the CLI binary, and verify its
-//! stdout / stderr output — ensuring the validate-shortcut and metadata
-//! features work as expected.
+//! These tests 构建 a minimal .pak, 调用 the CLI 二进制 and 验证 its
+//! stdout / stderr 输出 — ensuring the validate-shortcut and metadata
+//! features 功 as expected.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -14,21 +14,21 @@ use prism_asset_package::PackageBuilder;
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Locate the compiled prism-asset-cli binary.
+/// 定位 the compiled prism-asset-cli 二进制
 ///
-/// `cargo test` places the test executable in `target/debug/deps/`, while the
-/// CLI binary lives in `target/debug/` (or `target/debug/prism-asset-cli.exe` on
-/// Windows).  We walk up from the test exe to find it.
+/// `cargo test` places the test 可执行文件 in `target/debug/deps/`, while the
+/// CLI 二进制 lives in `target/debug/` (or `target/debug/prism-asset-cli.exe` on
+/// Windows We walk 上 from the test exe to 查找 it.
 fn cli_binary() -> PathBuf {
     let mut path = std::env::current_exe().expect("current exe");
-    // Pop the binary name, then the "deps" directory if present.
+    // 弹出 the 二进制 name, then the "deps" directory if present.
     path.pop(); // binary name
     if path.ends_with("deps") {
         path.pop(); // deps
     }
     path.push(if cfg!(windows) { "prism-asset-cli.exe" } else { "prism-asset-cli" });
     if !path.exists() {
-        // Fallback: maybe we're in a workspace target dir.
+        // 回退 maybe we're in a 工作区 目标 dir.
         path.pop();
         path.push("debug");
         path.push(if cfg!(windows) { "prism-asset-cli.exe" } else { "prism-asset-cli" });
@@ -37,7 +37,7 @@ fn cli_binary() -> PathBuf {
     path
 }
 
-/// Build a minimal valid .pak with a single asset.
+/// 构建 a minimal 有效 .pak with a single 资源
 fn build_minimal_pak(dir: &Path, name: &str) -> PathBuf {
     let id = AssetId::from_raw(0x1000_0001);
     let mut builder = PackageBuilder::new();
@@ -48,7 +48,7 @@ fn build_minimal_pak(dir: &Path, name: &str) -> PathBuf {
     pak_path
 }
 
-/// Run the CLI binary with the given arguments, returning (stdout, stderr).
+/// Run the CLI 二进制 with the given arguments, returning (stdout, stderr).
 fn run_cli(args: &[&str]) -> (String, String) {
     let output = Command::new(cli_binary())
         .args(args)
@@ -67,7 +67,7 @@ fn run_cli(args: &[&str]) -> (String, String) {
 #[test]
 fn cli_no_args_shows_help() {
     let (stdout, stderr) = run_cli(&[]);
-    // Should show usage text on stdout.
+    // Should show 用法 text on stdout.
     assert!(stdout.contains("Usage:"), "help text should contain Usage:\n{stdout}");
     assert!(stdout.contains("prism-asset-cli"), "help text should mention prism-asset-cli\n{stdout}");
     assert!(stderr.is_empty(), "no error expected on stderr:\n{stderr}");
@@ -76,12 +76,12 @@ fn cli_no_args_shows_help() {
 #[test]
 fn cli_nonexistent_pak_reports_error() {
     let (_stdout, stderr) = run_cli(&["C:/this/does/not/exist.pak"]);
-    // The validate command returns an error → should appear on stderr.
+    // The validate 命令 returns an 错误 → should appear on stderr.
     assert!(
         stderr.contains("error") || stderr.contains("Error"),
         "stderr should mention error:\n{stderr}"
     );
-    // The binary should exit non-zero, but we only check output text.
+    // The 二进制 should exit non-zero, but we only check 输出 text.
 }
 
 #[test]
@@ -89,7 +89,7 @@ fn cli_validate_with_meta_json_shows_asset_names() {
     let dir = tempfile::tempdir().expect("temp dir");
     let pak_path = build_minimal_pak(dir.path(), "game.pak");
 
-    // Write a .pak.meta.json alongside the .pak.
+    // 写入 a .pak.meta.json alongside the .pak.
     let meta = serde_json::json!({
         "pak": "game.pak",
         "format": "RPAK",
@@ -128,7 +128,7 @@ fn cli_validate_without_meta_json_shows_fallback() {
 
     assert!(stderr.is_empty(), "no error expected:\n{stderr}");
     assert!(stdout.contains("RPAK"), "should show magic:\n{stdout}");
-	    // Fallback label should mention "binary" and "asset".
+	    // 回退 标签 should mention 二进制 and 资源
 	    assert!(
 	        stdout.contains("binary") && stdout.contains("asset"),
 	        "fallback should mention asset type:\n{stdout}"

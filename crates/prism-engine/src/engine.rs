@@ -1,27 +1,27 @@
 //! [`Engine`] — the core simulation engine.
 //!
-//! Owns the ECS [`World`] and runs game‑logic phases (`fixed_update`,
-//! `update`, `late_update`).  **No** rendering, asset resolution, or
+//! Owns the ECS 世界 and runs game‑logic phases (`fixed_update`,
+//! 更新 `late_update`). **No** 渲染 资源 分辨率 or
 //! dirty‑routing lives here — those belong to [`RenderContext`].
 //!
-//! ## Lifecycle phases (call in order)
+//! ## Lifecycle phases 调用 in order)
 //!
 //! ```text
-//!   empty / new
+//! 空 / new
 //!     ├─ pre_init(config)         ─── PreInit
 //!     ├─ init_core(editor)        ─── register Inspect fns + hierarchy
 //!     ├─ init_config()            ─── (reserved)
-//!     ├─ init_resources(pak)      ─── load .pak → ResourceManager
-//!     ├─ init_scene()             ─── load scene → World
+//! ├─ init_resources(pak) ─── 加载 .pak → ResourceManager
+//! ├─ init_scene() ─── 加载 scene → 世界
 //!     └─ runtime_initialize()    ─── final hook
 //!
-//!   [per frame:
-//!       fixed_update → update → late_update  (called N times per render frame)]
+//! [per 帧
+//! fixed_update → 更新 → late_update (called N times per 渲染 帧
 //!
 //!   pre_shutdown → post_shutdown
 //! ```
 //!
-//! The application drives the render pipeline separately via
+//! The application drives the 渲染 管线 separately via
 //! [`FramePacket`]s extracted after each sim tick.
 
 use prism_ecs::World;
@@ -33,14 +33,14 @@ use crate::input::InputManager;
 // Engine
 // ===========================================================================
 
-/// Simulation engine — owns the ECS [`World`] and exposes game‑logic phases.
+/// Simulation engine — owns the ECS 世界 and exposes game‑logic phases.
 ///
-/// All rendering concerns (asset upload, draw‑list building, GPU submission)
+/// All 渲染 concerns 资源 upload, draw‑list building, GPU submission)
 /// are handled by the application's `RenderContext`.
 pub struct Engine {
     world: World,
     current_scene_name: Option<String>,
-    /// Ordered ECS system schedule — runs on every [`update`](Self::update).
+    /// 有序 ECS 系统 调度 — runs on every [`update`](Self::update).
     schedule: Schedule,
     /// 主线程定时器服务（每帧 tick）。
     timer: crate::util::timer::TimerService,
@@ -51,9 +51,9 @@ impl Engine {
     // Construction
     // ======================================================================
 
-    /// Create an `Engine` and run all init phases (convenience).
+    /// 创建 an `Engine` and run all init phases (convenience).
     ///
-    /// Loads resources from the given resource manager, then loads the scene.
+    /// Loads resources from the given 资源 管理器 then loads the scene.
     pub fn new(
         editor: &mut prism_editor::Editor,
         rm: &mut prism_asset_runtime::ResourceManager,
@@ -68,7 +68,7 @@ impl Engine {
         engine
     }
 
-    /// Create an empty engine — no init phases run.
+    /// 创建 an 空 engine — no init phases run.
     pub fn empty() -> Self {
         Self {
             world: World::new(),
@@ -79,10 +79,10 @@ impl Engine {
     }
 
     // ======================================================================
-    // Init phases (call in order)
+    // Init phases 调用 in order)
     // ======================================================================
 
-    /// **Phase 0** — Pre-init: reserved for low‑level configuration.
+    /// **Phase 0** — Pre-init: reserved for low‑level 配置
     pub fn pre_init(&mut self, _config: &()) {}
 
     /// **Phase 1** — Core subsystem init: register Inspect fns + hierarchy.
@@ -91,21 +91,21 @@ impl Engine {
         editor.set_hierarchy(crate::scene::SceneHierarchy);
     }
 
-    /// **Phase 2** — Configuration loading (reserved).
+    /// **Phase 2** — 配置 loading (reserved).
     pub fn init_config(&mut self) {}
 
-    /// **Phase 3** — Resource package loading.
+    /// **Phase 3** — 资源 包 loading.
     ///
-    /// Loads the `.pak` resource package into a standalone `ResourceManager`
-    /// (owned by the caller).  The `ResourceManager` is **not** stored here
+    /// Loads the `.pak` 资源 包 into a standalone `ResourceManager`
+    /// (owned by the 调用者 The `ResourceManager` is **not** stored here
     /// because the engine does no GPU uploads — see [`RenderContext`].
     pub fn init_resources(&mut self) {
-        // Engine no longer owns GpuAssetResolver; caller holds ResourceManager.
+        // Engine no longer owns GpuAssetResolver; 调用者 holds ResourceManager.
     }
 
     /// **Phase 4** — Scene loading.
     ///
-    /// Restores persisted scene state and loads the first scene from the
+    /// Restores persisted scene 状态 and loads the 第一个 scene from the
     /// manifest.  Requires a [`ResourceManager`] for `.pak`‑backed scenes.
     pub fn init_scene(&mut self, rm: &mut prism_asset_runtime::ResourceManager) {
         crate::scene_state::load_scene_state(&mut self.world);
@@ -113,31 +113,31 @@ impl Engine {
             load_scene_from_manifest(rm, &mut self.world);
     }
 
-    /// **Phase 5** — Runtime init: final "everything is ready" hook.
+    /// **Phase 5** — 运行时 init: final "everything is ready" hook.
     ///
-    /// Spawns a fallback camera if none exists, and registers default ECS
+    /// Spawns a 回退 相机 if none 存在 and registers 默认 ECS
     /// systems on the [`Schedule`](crate::ecs::schedule::Schedule).
     pub fn runtime_initialize(&mut self) {
-        // ── fallback camera ──────────────────────────────────────────
+        // ── 回退 相机 ──────────────────────────────────────────
         let has_camera = self.world.query::<crate::scene::components::Camera>().next().is_some();
         if !has_camera {
             Self::spawn_default_camera(&mut self.world);
         }
 
-        // ── register AssetServer as ECS resource ─────────────────────
+        // ── register AssetServer as ECS 资源 ─────────────────────
         let asset_server = crate::asset::AssetServer::new();
         self.world.insert_resource(asset_server);
 
-        // ── default schedule ─────────────────────────────────────────
+        // ── 默认 调度 ─────────────────────────────────────────
         self.schedule = default_schedule();
     }
 
-    /// Spawn a demo cube entity into the world.
+    /// 生成 a demo cube 实体 into the 世界
     ///
-    /// Uploads the procedural cube mesh and a default material to the
-    /// renderer, then spawns an entity with `MeshRef`+`MaterialRef` (the
+    /// Uploads the procedural cube 网格 and a 默认 材质 to the
+    /// 渲染器 then spawns an 实体 with `MeshRef`+`MaterialRef` (the
     /// existing extraction path) plus `MeshRenderer` (the future authoring
-    /// path).  Called from [`LegacyApp::on_resumed`] after the renderer is
+    /// path). Called from [`LegacyApp::on_resumed`] after the 渲染器 is
     /// created.
     pub fn spawn_demo_cube(
         world: &mut World,
@@ -146,7 +146,7 @@ impl Engine {
         use prism_render::managers::{MaterialUploadInput, MeshUploadInput};
         use crate::scene::components::*;
 
-        // Upload cube mesh.
+        // Upload cube 网格
         let cpu_mesh = crate::asset::procedural::make_cube();
         let upload = MeshUploadInput {
             positions: cpu_mesh.positions,
@@ -158,7 +158,7 @@ impl Engine {
         };
         let mesh_handle = renderer.register_mesh(&upload)?;
 
-        // Register default material.
+        // Register 默认 材质
         let mat_input = MaterialUploadInput {
             base_color: [0.8, 0.8, 0.8, 1.0],
             metallic: 0.0,
@@ -184,7 +184,7 @@ impl Engine {
             .material_slot(mat_handle)
             .ok_or_else(|| anyhow::anyhow!("no material slot for demo cube"))?;
 
-        // Spawn cube entity at origin.
+        // 生成 cube 实体 at origin.
         let entity = world.spawn();
         world.insert(
             entity,
@@ -251,10 +251,10 @@ impl Engine {
     }
 
     // ======================================================================
-    // Frame tick phases
+    // 帧 tick phases
     // ======================================================================
 
-    /// Fixed‑timestep update: physics, deterministic simulation.
+    /// Fixed‑timestep 更新 physics, 确定性 simulation.
     ///
     /// Unity `FixedUpdate()` · UE sub‑stepped tick.
     pub fn fixed_update(&mut self, fixed_dt: f32, input_manager: &InputManager) {
@@ -267,9 +267,9 @@ impl Engine {
         );
     }
 
-    /// Variable‑timestep per‑frame update: game logic, camera, input.
+    /// Variable‑timestep per‑frame 更新 game 逻辑 相机 输入
     ///
-    /// Unity `Update()` · UE `Tick()`.
+    /// Unity 更新 · UE `Tick()`.
     pub fn update(&mut self, dt: f32, input_manager: &InputManager) {
         let look_active = input_manager.pointer_locked;
         crate::scene::systems::camera::camera_controller_system(
@@ -287,14 +287,14 @@ impl Engine {
             left_held: input_manager.mouse_held(crate::input::MouseButton::Left),
         });
 
-        // Run the ECS system schedule (user‑registered + built‑in systems).
+        // Run the ECS 系统 调度 (user‑registered + built‑in systems).
         self.schedule.run(&mut self.world, dt);
 
-        // Tick the main‑thread timer (dispatch expired callbacks).
+        // Tick the main‑thread timer 分发 expired callbacks).
         self.timer.tick();
     }
 
-    /// Late update: audio sync, IK, camera‑relative effects.
+    /// Late 更新 音频 sync, 反向动力学 camera‑relative effects.
     ///
     /// Unity `LateUpdate()`.
     pub fn late_update(&mut self) {}
@@ -303,7 +303,7 @@ impl Engine {
     // Shutdown
     // ======================================================================
 
-    /// Pre‑shutdown: save state, flush pending work.
+    /// Pre‑shutdown: 保存 状态 刷新 pending 功
     pub fn pre_shutdown(&mut self) {}
 
     /// Final cleanup after shutdown.
@@ -313,10 +313,10 @@ impl Engine {
     // Suspend / resume (platform lifecycle)
     // ======================================================================
 
-    /// Called when the platform surface is suspended (e.g. Android onPause).
+    /// Called when the platform 表面 is suspended (e.g. Android onPause).
     pub fn on_suspend(&mut self) {}
 
-    /// Called when the platform surface is resumed (e.g. Android onResume).
+    /// Called when the platform 表面 is resumed (e.g. Android onResume).
     pub fn on_resume(&mut self) {}
 
     // ======================================================================
@@ -335,15 +335,15 @@ impl Engine {
         self.current_scene_name.as_deref()
     }
 
-    /// Mutable access to the ECS system schedule.
+    /// Mutable 访问 to the ECS 系统 调度
     pub fn schedule_mut(&mut self) -> &mut Schedule {
         &mut self.schedule
     }
 
-    // ── default camera spawn ───────────────────────────────────────
+    // ── 默认 相机 生成 ───────────────────────────────────────
 
-    /// Spawn a fallback camera + controller + transform entity.
-    /// Called automatically when no Camera entity exists at runtime init.
+    /// 生成 a 回退 相机 + controller + 变换 实体
+    /// Called automatically when no 相机 实体 存在 at 运行时 init.
     fn spawn_default_camera(world: &mut World) {
         use crate::scene::components::{
             Camera, FlyCameraController, LocalTransform, WorldTransform,
@@ -402,8 +402,8 @@ struct SceneManifest {
 
 const CANDIDATE_DIRS: &[&str] = &["assets", "crates/prism-engine/assets"];
 
-/// Load environment map bytes from the first scene in `scenes.toml`.
-/// Used during renderer construction; does not need the ECS world.
+/// 加载 environment 映射表 字节 from the 第一个 scene in `scenes.toml`.
+/// Used during 渲染器 construction; does not need the ECS 世界
 pub fn load_env_bytes_from_manifest() -> Option<Vec<u8>> {
     let (manifest_dir, manifest) = find_and_parse_manifest()?;
     for entry in &manifest.scenes {
@@ -570,13 +570,13 @@ fn load_scene_from_file(
 }
 
 // ===========================================================================
-// Default ECS schedule
+// 默认 ECS 调度
 // ===========================================================================
 
-/// Build the default system schedule.
+/// 构建 the 默认 系统 调度
 ///
 /// Registered systems run in order on every [`Engine::update`] tick.
-/// Consumers can extend or replace the schedule via
+/// Consumers can extend or 替换 the 调度 via
 /// [`Engine::schedule_mut`].
 fn default_schedule() -> Schedule {
     use crate::ecs::components::Transform;
@@ -584,7 +584,7 @@ fn default_schedule() -> Schedule {
 
     let mut s = Schedule::new();
 
-    // Demo: slowly orbit the default camera around Y.
+    // Demo: slowly orbit the 默认 相机 around Y.
     s.add_system("demo::orbit_camera", |world, dt| {
         for (_, transform) in world.query_mut::<Transform>() {
             // yaw
@@ -592,15 +592,15 @@ fn default_schedule() -> Schedule {
         }
     });
 
-    // ── UI Layout ─────────────────────────────────────────────
+    // ── UI 布局 ─────────────────────────────────────────────
     // 每帧重新计算所有 UI 元素的屏幕空间矩形。
     s.add_system("ui::layout", |world, _dt| crate::ui::ui_layout_system(world));
 
-    // ── UI Input ──────────────────────────────────────────────
+    // ── UI 输入 ──────────────────────────────────────────────
     // 命中测试，更新 Interaction 组件（需 layout 之后）。
     s.add_system("ui::input", |world, _dt| crate::ui::ui_input_system(world));
 
-    // ── UI Render ─────────────────────────────────────────────
+    // ── UI 渲染 ─────────────────────────────────────────────
     // 收集 UI 绘制命令为 UiDrawList resource。
     s.add_system("ui::render", |world, _dt| crate::ui::ui_render_system(world));
 

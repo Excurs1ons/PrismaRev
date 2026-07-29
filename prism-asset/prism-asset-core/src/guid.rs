@@ -1,27 +1,27 @@
 use std::fmt;
 use std::hash::{Hash, Hasher};
 
-/// A stable 128-bit GUID for source assets.
+/// A 稳定 128-bit GUID for 源 assets.
 ///
-/// Unlike [`AssetId`](crate::AssetId), which is a runtime slot index with
-/// generation counter, `AssetGuid` is designed to be:
+/// Unlike [`AssetId`](crate::AssetId), which is a 运行时 槽 索引 with
+/// generation 计数器 `AssetGuid` is designed to be:
 ///
-/// - **Stable** — survives renames and moves (stored in the asset file itself)
-/// - **Content-independent** — does not change when the asset is edited
-/// - **Globally unique** — random v4-style generation via the `uuid` crate
+/// - **Stable** — survives renames and moves (stored in the 资源 file itself)
+/// - **Content-independent** — does not change when the 资源 is edited
+/// - **Globally unique** — 随机 v4-style generation via the `uuid` crate
 ///
 /// This is the identity used by `AssetHandle<T>` for cross-file references.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct AssetGuid(pub [u8; 16]);
 
 impl AssetGuid {
-    /// Generate a new random GUID (v4-style UUID).
+    /// Generate a new 随机 GUID (v4-style UUID).
     pub fn new() -> Self {
         let u = uuid::Uuid::new_v4();
         Self(*u.as_bytes())
     }
 
-    /// Create a nil GUID (all zeroes). Use as a sentinel / "null" value.
+    /// 创建 a nil GUID (all zeroes). Use as a sentinel / "null" value.
     pub const fn nil() -> Self {
         Self([0u8; 16])
     }
@@ -31,7 +31,7 @@ impl AssetGuid {
         self.0 == [0u8; 16]
     }
 
-    /// Parse a UUID hex string (with or without hyphens).
+    /// Parse a UUID hex 字符串 (with or without hyphens).
     pub fn parse_str(s: &str) -> Result<Self, &'static str> {
         let hex: String = s
             .chars()
@@ -48,7 +48,7 @@ impl AssetGuid {
         Ok(Self(bytes))
     }
 
-    /// Convert to a hyphenated hex string.
+    /// 转换 to a hyphenated hex 字符串
     pub fn to_hyphenated(&self) -> String {
         self.to_string()
     }
@@ -68,7 +68,7 @@ impl fmt::Debug for AssetGuid {
 
 impl fmt::Display for AssetGuid {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Standard UUID hex format: 8-4-4-4-12
+        // 标准 UUID hex 格式 8-4-4-4-12
         let b = self.0;
         write!(
             f,
@@ -79,7 +79,7 @@ impl fmt::Display for AssetGuid {
     }
 }
 
-// Manual Hash so we don't rely on derive for [u8; 16].
+// Manual 哈希 so we don't rely on derive for [u8; 16].
 impl Hash for AssetGuid {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.0.hash(state);
@@ -87,7 +87,7 @@ impl Hash for AssetGuid {
 }
 
 // ---------------------------------------------------------------------------
-// Serde — serialize as a hex UUID string for human readability
+// Serde — 序列化 as a hex UUID 字符串 for human readability
 // ---------------------------------------------------------------------------
 
 impl serde::Serialize for AssetGuid {

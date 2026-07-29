@@ -1,34 +1,34 @@
-//! # AssetData — ScriptableObject-style type-tagged asset trait
+//! # AssetData — ScriptableObject-style type-tagged 资源 trait
 //!
 //! ## Design
 //!
-//! `AssetData` is the runtime face of an **editable asset definition**. It is
-//! intentionally minimal: only the serialisation contract + a display name.
-//! Everything editor-specific (inspector drawing, validation, dependency
-//! tracking) lives in the editor crate and is connected via external
-//! registries — never through this trait.
+//! `AssetData` is the 运行时 face of an **editable 资源 definition**. It is
+//! intentionally minimal: only the serialisation 契约 + a display name.
+//! Everything editor-specific 检查器 绘制 验证 dependency
+//! tracking) lives in the 编辑器 crate and is connected via 外部
+//! registries — never through this trait
 //!
 //! ## Registration
 //!
 //! Every concrete `impl AssetData for T` must be annotated with
-//! `#[typetag::serde(name = "type_name")]`. This lets the editor open *any*
-//! asset file without knowing its type at compile time — `serde_json` simply
-//! reads the `"type"` field and dispatches to the right `DeserializeOwned`.
+//! `#[typetag::serde(name = "type_name")]`. This lets the 编辑器 打开 *any*
+//! 资源 file without knowing its 类型 at 编译 时间 — `serde_json` simply
+//! reads the 类型 field and dispatches to the 右 `DeserializeOwned`.
 //!
-//! ## Usage
+//! ## 用法
 //!
 //! ```ignore
-//! #[derive(Serialize, Deserialize, Debug)]
-//! struct MyDef { value: f32 }
+//! #[derive(Serialize, 反序列化 调试
+//! 结构体 MyDef { value: f32 }
 //!
 //! #[typetag::serde(name = "my_def")]
 //! impl AssetData for MyDef {
-//!     fn display_name(&self) -> &'static str { "My Definition" }
+//! fn display_name(&self) -> &'static str { "My 定义 }
 //! }
 //!
-//! let bytes = std::fs::read("asset.json").unwrap();
-//! let asset: Box<dyn AssetData> = serde_json::from_slice(&bytes).unwrap();
-//! // asset is dynamically typed — the editor inspects it via AssetInspector<T>
+//! let 字节 = std::fs::read("asset.json").unwrap();
+//! let 资源 Box<dyn AssetData> = serde_json::from_slice(&bytes).unwrap();
+//! // 资源 is dynamically typed — the 编辑器 inspects it via AssetInspector<T>
 //! ```
 
 use std::fmt;
@@ -40,19 +40,19 @@ use crate::guid::AssetGuid;
 // AssetData trait
 // ---------------------------------------------------------------------------
 
-/// A ScriptableObject-style asset definition.
+/// A ScriptableObject-style 资源 定义
 ///
 /// Types implementing this trait are:
-/// - Serializable / deserializable with polymorphic type dispatch
-/// - Identified by a stable [`AssetGuid`](crate::guid::AssetGuid) (via a companion `.meta` file)
-/// - Editable in the editor without touching runtime code
+/// - Serializable / deserializable with polymorphic 类型 分发
+/// - Identified by a 稳定 [`AssetGuid`](crate::guid::AssetGuid) (via a companion `.meta` file)
+/// - Editable in the 编辑器 without touching 运行时 代码
 ///
-/// The trait is intentionally thin. Editor functionality (property panels,
-/// validation, dependency graph) is added externally via
-/// `AssetInspector<T>` implementations in the editor crate.
+/// The trait is intentionally thin. 编辑器 functionality 属性 panels,
+/// 验证 dependency 图 is added externally via
+/// `AssetInspector<T>` implementations in the 编辑器 crate.
 #[typetag::serde(tag = "type")]
 pub trait AssetData: fmt::Debug + Send + Sync + 'static {
-    /// Human-readable type name for the editor's asset browser.
+    /// Human-readable 类型 name for the editor's 资源 browser.
     fn display_name(&self) -> &'static str;
 
     /// Data version for migration support.
@@ -65,7 +65,7 @@ pub trait AssetData: fmt::Debug + Send + Sync + 'static {
     // These avoid requiring `Any` as a supertrait while still allowing
     // callers to downcast `dyn AssetData` to concrete types.
 
-    /// Returns the `TypeId` of the concrete type.
+    /// Returns the `TypeId` of the concrete 类型
     fn type_id(&self) -> std::any::TypeId {
         std::any::TypeId::of::<Self>()
     }
@@ -79,22 +79,22 @@ pub trait AssetData: fmt::Debug + Send + Sync + 'static {
 /// Convenience macro that combines `#[typetag::serde]` registration with the
 /// two required downcasting methods.
 ///
-/// # Usage
+/// # 用法
 ///
 /// ```ignore
 /// use prism_asset_core::{AssetData, impl_asset_data};
 ///
-/// #[derive(Serialize, Deserialize, Debug)]
-/// struct MyDef { value: f32 }
+/// #[derive(Serialize, 反序列化 调试
+/// 结构体 MyDef { value: f32 }
 ///
-/// impl_asset_data!(MyDef, "my_def", "My Definition");
+/// impl_asset_data!(MyDef, "my_def", "My 定义
 /// ```
 ///
 /// Expands to:
 /// ```ignore
 /// #[typetag::serde(name = "my_def")]
 /// impl AssetData for MyDef {
-///     fn display_name(&self) -> &'static str { "My Definition" }
+/// fn display_name(&self) -> &'static str { "My 定义 }
 ///     fn as_any(&self) -> &dyn std::any::Any { self }
 ///     fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
 /// }
@@ -119,11 +119,11 @@ macro_rules! impl_asset_data {
     };
 }
 
-/// Downcast `&dyn AssetData` to a concrete type.
+/// Downcast `&dyn AssetData` to a concrete 类型
 #[inline]
 pub fn downcast_ref<T: 'static>(data: &dyn AssetData) -> Option<&T> {
     if data.type_id() == std::any::TypeId::of::<T>() {
-        // SAFETY: TypeId check guarantees the type matches.
+        // 安全性 TypeId check guarantees the 类型 matches.
         unsafe {
             let ptr: *const dyn std::any::Any = data.as_any();
             Some(&*(ptr as *const T))
@@ -133,7 +133,7 @@ pub fn downcast_ref<T: 'static>(data: &dyn AssetData) -> Option<&T> {
     }
 }
 
-/// Downcast `&mut dyn AssetData` to a concrete type.
+/// Downcast `&mut dyn AssetData` to a concrete 类型
 #[inline]
 pub fn downcast_mut<T: 'static>(data: &mut dyn AssetData) -> Option<&mut T> {
     if data.type_id() == std::any::TypeId::of::<T>() {
@@ -147,29 +147,29 @@ pub fn downcast_mut<T: 'static>(data: &mut dyn AssetData) -> Option<&mut T> {
 }
 
 impl dyn AssetData {
-    /// Downcast `&dyn AssetData` to a concrete type.
+    /// Downcast `&dyn AssetData` to a concrete 类型
     #[inline]
     pub fn downcast_ref<T: 'static>(&self) -> Option<&T> {
         downcast_ref(self)
     }
 
-    /// Downcast `&mut dyn AssetData` to a concrete type.
+    /// Downcast `&mut dyn AssetData` to a concrete 类型
     #[inline]
     pub fn downcast_mut<T: 'static>(&mut self) -> Option<&mut T> {
         downcast_mut(self)
     }
 }
 
-/// A type-erased, loaded asset — the dynamic counterpart of `AssetHandle<T>`.
+/// A type-erased, loaded 资源 — the 动力学 counterpart of `AssetHandle<T>`.
 ///
-/// The editor uses this to inspect and display any asset without knowing its
-/// concrete type.
+/// The 编辑器 uses this to inspect and display any 资源 without knowing its
+/// concrete 类型
 pub struct LoadedAsset {
-    /// Stable identity.
+    /// 稳定 identity.
     pub guid: AssetGuid,
     /// Display path.
     pub path: String,
-    /// The deserialised definition.
+    /// The deserialised 定义
     pub data: Box<dyn AssetData>,
 }
 
@@ -177,28 +177,28 @@ pub struct LoadedAsset {
 // AssetHandle — typed, serializable cross-reference
 // ---------------------------------------------------------------------------
 
-/// A typed reference to another `AssetData` asset, identified by stable GUID.
+/// A typed 引用 to another `AssetData` 资源 identified by 稳定 GUID.
 ///
-/// `AssetHandle<T>` is the ScriptableObject-style equivalent of
-/// `AssetRef`. It serializes as a JSON object with a GUID
-/// string and a human-readable path, and deserializes without needing the
-/// target type to be loaded.
+/// `AssetHandle<T>` is the ScriptableObject-style 等价 of
+/// `AssetRef`. It serializes as a JSON 对象 with a GUID
+/// 字符串 and a human-readable path, and deserializes without needing the
+/// 目标 类型 to be loaded.
 ///
-/// # Type safety
+/// # 类型 安全性
 ///
-/// The `T` parameter is a compile-time marker only — it is not used during
-/// serialization and does not impose `T: Serialize + Deserialize` bounds.
+/// The `T` 参数 is a compile-time marker only — it is not used during
+/// serialization and does not impose `T: 序列化 + 反序列化 bounds.
 pub struct AssetHandle<T: AssetData + ?Sized> {
-    /// Stable GUID that survives renames.
+    /// 稳定 GUID that survives renames.
     pub guid: AssetGuid,
-    /// Human-readable path (relative to asset library root, no extension).
+    /// Human-readable path 相对 to 资源 库 root, no 扩展
     pub path: String,
-    /// The loaded runtime data, if this handle has been resolved.
+    /// The loaded 运行时 data, if this handle has been resolved.
     pub resolved: Option<Arc<T>>,
 }
 
 impl<T: AssetData + ?Sized> AssetHandle<T> {
-    /// Create a new handle referencing a specific GUID.
+    /// 创建 a new handle referencing a specific GUID.
     pub fn new(guid: AssetGuid, path: impl Into<String>) -> Self {
         Self {
             guid,
@@ -207,12 +207,12 @@ impl<T: AssetData + ?Sized> AssetHandle<T> {
         }
     }
 
-    /// Returns `true` when the backing asset is loaded in memory.
+    /// Returns `true` when the backing 资源 is loaded in 内存
     pub fn is_resolved(&self) -> bool {
         self.resolved.is_some()
     }
 
-    /// Access the resolved data, or `None` if not yet loaded.
+    /// 访问 the resolved data, or `None` if not yet loaded.
     pub fn resolved(&self) -> Option<&Arc<T>> {
         self.resolved.as_ref()
     }
@@ -258,7 +258,7 @@ impl<T: AssetData + ?Sized> fmt::Debug for AssetHandle<T> {
     }
 }
 
-// Serde: serialize only guid + path, ignore T and resolved data.
+// Serde: 序列化 only guid + path, ignore T and resolved data.
 impl<T: AssetData + ?Sized> serde::Serialize for AssetHandle<T> {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;

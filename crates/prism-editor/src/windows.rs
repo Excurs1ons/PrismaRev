@@ -1,16 +1,16 @@
-//! Debug and render-settings windows, plus the perf-HUD hint.
+//! 调试 and render-settings Windows plus the perf-HUD hint.
 //!
-//! These are non-entity-scoped editor windows: debug-mode flag display,
-//! tonemap selector, exposure slider, render-mode toggle, and path-tracer
+//! These are non-entity-scoped 编辑器 Windows debug-mode flag display,
+//! 色调映射 selector, exposure 滑动条 render-mode toggle, and path-tracer
 //! parameters. Migrated verbatim from the old `prism-engine::inspector` so the
-//! engine layer no longer carries any egui window code.
+//! engine 层 no longer carries any egui 窗口 代码
 
 use egui::Context;
 use prism_render::RenderMode;
 
 use crate::Inspector;
 
-/// The "Debug" window: PBR debug-mode flag display + tonemap + exposure slider.
+/// The 调试 窗口 PBR debug-mode flag display + 色调映射 + exposure 滑动条
 pub fn debug_window(ctx: &Context, insp: &mut Inspector) {
     let window_frame = egui::Frame {
         fill: egui::Color32::from_black_alpha(200),
@@ -31,8 +31,8 @@ pub fn debug_window(ctx: &Context, insp: &mut Inspector) {
             ui.heading("Debug Mode");
             ui.separator();
             ui.label("PBR component toggles (keys 1-9, Shift+1-5):");
-            // Ordered by key position; each row shows the bound key and the
-            // actual shader flag bit value. Bit order matches `PBR_FLAG_*` in
+            // 有序 by 调 position; each 行 shows the bound 调 and the
+            // actual 着色器 flag bit value. Bit order matches `PBR_FLAG_*` in
             // scene_frag.slang 1:1.
             let flags = [
                 ("Direct", "1", 0, "Direct diffuse/specular (dir light)"),
@@ -94,7 +94,7 @@ pub fn debug_window(ctx: &Context, insp: &mut Inspector) {
         });
 }
 
-/// The "Render Settings" window: raster/PT mode + path-tracer parameters.
+/// The 渲染 Settings" 窗口 raster/PT 众数 + path-tracer parameters.
 pub fn render_settings_window(ctx: &Context, insp: &mut Inspector) {
     let window_frame = egui::Frame {
         fill: egui::Color32::from_black_alpha(200),

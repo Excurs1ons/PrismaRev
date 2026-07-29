@@ -1,18 +1,18 @@
-//! egui overlay rendered as the final pass on top of the ScenePass output.
+//! egui 叠加 rendered as the final pass on 顶部 of the ScenePass 输出
 //!
 //! Architecture (after render-thread split)
 //! ----------------------------------------
-//! [`EguiCpu`] lives on the main thread (winit + egui context), [`EguiGpu`]
-//! lives on the render thread inside [`GraphRenderer`].  They communicate via
-//! [`EguiFrame`] — a Send+Sync snapshot of tessellated egui output.
+//! [`EguiCpu`] lives on the main 线程 (winit + egui context), [`EguiGpu`]
+//! lives on the 渲染 线程 inside [`GraphRenderer`]. They communicate via
+//! [`EguiFrame`] — a Send+Sync 快照 of tessellated egui 输出
 //!
-//! *Main thread (EguiCpu)*
+//! *Main 线程 (EguiCpu)*
 //!     run_ui(window, ui_closure) → EguiFrame
-//!     handle_window_event(window, event) → bool
+//! handle_window_event(window, 事件 → bool
 //!     apply_platform_output(window)
 //!
-//! *Render thread (EguiGpu)*
-//!     record(device, cmd, frame) → upload textures + cmd_draw
+//! *Render 线程 (EguiGpu)*
+//! record(device, cmd, 帧 → upload textures + cmd_draw
 
 use anyhow::{Context as _, Result};
 use ash::vk;
@@ -20,12 +20,12 @@ use ash::vk;
 use crate::context::VulkanContext;
 
 // ---------------------------------------------------------------------------
-// EguiFrame — cross-thread transfer
+// EguiFrame — cross-thread 传输
 // ---------------------------------------------------------------------------
 
-/// Tessellated egui output produced by [`EguiCpu`] on the main thread and
-/// consumed by [`EguiGpu::record`] on the render thread.  Send+Sync: all
-/// fields are heap-allocated (Vec, HashMap, String) or plain floats.
+/// Tessellated egui 输出 produced by [`EguiCpu`] on the main 线程 and
+/// consumed by [`EguiGpu::record`] on the 渲染 线程 Send+Sync: all
+/// fields are heap-allocated (Vec, HashMap, 字符串 or plain floats.
 #[derive(Clone)]
 pub struct EguiFrame {
     pub primitives: Vec<egui::ClippedPrimitive>,
@@ -33,35 +33,35 @@ pub struct EguiFrame {
     pub pixels_per_point: f32,
 }
 
-// SAFETY: All fields are owned heap data or plain floats; no unaliased
+// 安全性 All fields are owned 堆 data or plain floats; no unaliased
 // pointers or interior mutability.
 unsafe impl Send for EguiFrame {}
 unsafe impl Sync for EguiFrame {}
 
 // ---------------------------------------------------------------------------
-// EguiGpu — Vulkan-only egui rendering
+// EguiGpu — Vulkan-only egui 渲染
 // ---------------------------------------------------------------------------
 
-/// GPU-side egui overlay: render pass, framebuffers, egui-ash renderer.
+/// GPU-side egui 叠加 渲染 pass framebuffers, egui-ash 渲染器
 ///
-/// No winit state, no egui context — those live in [`EguiCpu`] on the main
-/// thread.  Created lazily inside [`GraphRenderer`] on the render thread.
+/// No winit 状态 no egui context — those live in [`EguiCpu`] on the main
+/// 线程 Created lazily inside [`GraphRenderer`] on the 渲染 线程
 pub struct EguiGpu {
     renderer: Option<egui_ash_renderer::Renderer>,
     render_pass: vk::RenderPass,
-    /// One framebuffer per swapchain image, rebuilt when views change.
+    /// One 帧缓冲 per 交换链 图像 rebuilt when views change.
     framebuffers: Vec<Option<vk::Framebuffer>>,
-    /// Cached swapchain views the framebuffers were built against.
+    /// Cached 交换链 views the framebuffers were 内置 against.
     target_views: Vec<vk::ImageView>,
     extent: vk::Extent2D,
     #[allow(dead_code)]
     color_format: vk::Format,
-    /// Cloned device handle for `Drop`.
+    /// Cloned 设备 handle for 放置
     device: ash::Device,
 }
 
 impl EguiGpu {
-    /// Create the overlay's Vulkan resources (render pass + egui renderer).
+    /// 创建 the overlay's Vulkan resources 渲染 pass + egui 渲染器
     pub fn new(context: &VulkanContext, color_format: vk::Format, in_flight_frames: usize) -> Result<Self> {
         let device = context.device.clone();
         let render_pass = Self::create_render_pass(&device, color_format)?;
@@ -70,8 +70,8 @@ impl EguiGpu {
             in_flight_frames,
             enable_depth_test: false,
             enable_depth_write: false,
-            // The swapchain format is a non-sRGB UNORM format, so the
-            // renderer must convert linear egui output to sRGB.
+            // The 交换链 格式 is a non-sRGB UNORM 格式 so the
+            // 渲染器 must 转换 线性 egui 输出 to sRGB
             srgb_framebuffer: false,
         };
         let renderer = egui_ash_renderer::Renderer::with_default_allocator(
@@ -131,9 +131,9 @@ impl EguiGpu {
         Ok(rp)
     }
 
-    /// Record an egui frame from pre-tessellated data.
+    /// Record an egui 帧 from pre-tessellated data.
     ///
-    /// `frame` is produced by [`EguiCpu::run_ui`] on the main thread.
+    /// 帧 is produced by [`EguiCpu::run_ui`] on the main 线程
     pub fn record(
         &mut self,
         device: &ash::Device,
@@ -145,7 +145,7 @@ impl EguiGpu {
         extent: vk::Extent2D,
         frame: &EguiFrame,
     ) -> Result<()> {
-        // Upload new/changed textures (font atlas on first frame).
+        // Upload new/changed textures (font atlas on 第一个 帧
         {
             let renderer = self
                 .renderer
@@ -156,7 +156,7 @@ impl EguiGpu {
                 .map_err(|e| anyhow::anyhow!("egui set_textures: {e:?}"))?;
         }
 
-        // (Re)build the framebuffer for this image if needed.
+        // (Re)build the 帧缓冲 for this 图像 if needed.
         let fb = self.ensure_framebuffer(device, swapchain_views, image_index, extent)?;
 
         let begin_info = vk::RenderPassBeginInfo::default()
@@ -170,7 +170,7 @@ impl EguiGpu {
             device.cmd_begin_render_pass(cmd, &begin_info, vk::SubpassContents::INLINE);
         }
 
-        // Draw
+        // 绘制
         {
             let renderer = self
                 .renderer
@@ -197,7 +197,7 @@ impl EguiGpu {
         Ok(())
     }
 
-    /// (Re)build the framebuffer for `image_index` if the swapchain views or
+    /// (Re)build the 帧缓冲 for `image_index` if the 交换链 views or
     /// extent changed. Mirrors `ScenePass::set_target`.
     fn ensure_framebuffer(
         &mut self,
@@ -242,7 +242,7 @@ impl EguiGpu {
         Ok(fb)
     }
 
-    /// Drop framebuffers (call on swapchain recreation).
+    /// 放置 framebuffers 调用 on 交换链 recreation).
     pub fn drop_target(&mut self) {
         let device = &self.device;
         for fb in self.framebuffers.iter_mut().flatten() {
@@ -252,7 +252,7 @@ impl EguiGpu {
         self.target_views.clear();
     }
 
-    /// Release all Vulkan resources.
+    /// 释放 all Vulkan resources.
     pub fn destroy(&mut self) {
         let device = self.device.clone();
         unsafe { device.device_wait_idle() }.ok();
