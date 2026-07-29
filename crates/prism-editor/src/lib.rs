@@ -13,6 +13,7 @@
 //! its components into a `ComponentRegistry` at startup and hands the registry
 //! to [`Inspector::run`].
 
+use prism_asset_core::LoadedAsset;
 use std::any::TypeId;
 use std::collections::HashMap;
 
@@ -239,6 +240,8 @@ fn inspect_dispatch<T: Inspect + Component>(
 pub struct Editor {
     pub inspector: Inspector,
     pub registry: ComponentRegistry,
+    /// Currently inspected asset (loaded via `AssetServer::load_erased`).
+    pub inspected_asset: Option<LoadedAsset>,
     ctx: InspectCtx,
     hierarchy: Box<dyn Hierarchy>,
 }
@@ -248,6 +251,7 @@ impl Editor {
         Self {
             inspector: Inspector::new(),
             registry: ComponentRegistry::new(),
+            inspected_asset: None,
             ctx: InspectCtx::new(),
             hierarchy: Box::new(FlatHierarchy),
         }
@@ -301,6 +305,28 @@ impl Editor {
     /// wants to drive the egui context itself, e.g. co-hosting with the
     /// render-graph visualizer inside its own `run_ui` closure).
     pub fn run_ctx(&mut self, ctx: &egui::Context, world: &mut World) {
+        // --- Asset inspector (shows current inspected_asset if set) ---
+        if let Some(asset) = &mut self.inspected_asset {
+            let window_frame = egui::Frame {
+                fill: egui::Color32::from_black_alpha(200),
+                stroke: egui::Stroke::new(1.0_f32, egui::Color32::from_gray(80)),
+                corner_radius: egui::CornerRadius::same(6u8),
+                inner_margin: egui::Margin::symmetric(8_i8, 4_i8),
+                ..Default::default()
+            };
+            egui::Window::new("Asset: ".to_string() + asset.data.display_name())
+                .id("inspector_asset".into())
+                .default_pos([620.0, 16.0])
+                .default_size([320.0, 320.0])
+                .resizable(true)
+                .movable(true)
+                .collapsible(true)
+                .frame(window_frame)
+                .show(ctx, |ui| {
+                    crate::asset_inspector::inspect_asset(asset, ui);
+                });
+        }
+
         self.inspector.ui(
             ctx,
             world,

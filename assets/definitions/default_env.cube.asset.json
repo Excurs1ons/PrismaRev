@@ -1,0 +1,6 @@
+{
+  "type": "cube",
+  "guid": "22222222-2222-4222-2222-222222222222",
+  "label": "Default Environment",
+  "hdr_source": "textures/sunset_puresky_4k.hdr"
+}

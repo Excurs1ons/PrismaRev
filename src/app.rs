@@ -30,12 +30,14 @@
 //!     └─ runtime_init     ──── RuntimeInitializeOnLoad
 //! ```
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
 use prism_audio::{AudioConfig, AudioEngine};
 use prism_editor::{Editor, RenderGraphViz};
 use prism_engine::asset_resolver::GpuAssetResolver;
+use prism_engine::asset_server::AssetServer;
 use prism_engine::config::AppConfig;
 use prism_engine::dirty_router::DirtyRouter;
 use prism_engine::engine::load_env_bytes_from_manifest;
@@ -178,6 +180,10 @@ pub struct App {
 
     // ---------- audio (persists across suspend) ----------
     audio: Option<AudioEngine>,
+
+    // ---------- asset editing (persists across suspend) ----------
+    /// ScriptableObject-style asset definitions loader.
+    asset_server: AssetServer,
 }
 
 impl App {
@@ -206,6 +212,20 @@ impl App {
         // Phase 5 – Runtime startup callbacks
         engine.runtime_initialize();
 
+        // --- Asset server (definition files) ---
+        let asset_server = AssetServer::new(
+            PathBuf::from("assets/definitions"),
+            PathBuf::from("assets/data"),
+        );
+
+        // Load a demo asset to test the asset inspector.
+        if let Ok(loaded) = asset_server.load_erased("default_material.asset.json") {
+            log::info!("Demo asset loaded: {}", loaded.data.display_name());
+            editor.inspected_asset = Some(loaded);
+        } else {
+            log::warn!("Demo asset file not found — run tests to generate it.");
+        }
+
         // --- Render resources ---
         let dirty_router = DirtyRouter::new();
 
@@ -228,6 +248,7 @@ impl App {
             needs_resize: false,
             fatal_error: None,
             audio: None,
+            asset_server,
         }
     }
 

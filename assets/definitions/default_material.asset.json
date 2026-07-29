@@ -1,0 +1,23 @@
+{
+  "type": "material",
+  "guid": "11111111-1111-4111-1111-111111111111",
+  "label": "Default Material",
+  "base_color": [0.8, 0.2, 0.2, 1.0],
+  "metallic": 0.0,
+  "roughness": 0.5,
+  "emissive": [0.0, 0.0, 0.0],
+  "normal_scale": 1.0,
+  "occlusion_strength": 1.0,
+  "albedo_map": null,
+  "normal_map": null,
+  "metallic_roughness_map": null,
+  "emissive_map": null,
+  "occlusion_map": null,
+  "env_map": null,
+  "transmission": 0.0,
+  "ior": 1.5,
+  "translucency": 0.0,
+  "anisotropy": 0.0,
+  "clearcoat": 0.0,
+  "clearcoat_roughness": 0.0
+}
