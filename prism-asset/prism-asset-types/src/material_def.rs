@@ -1,3 +1,4 @@
+use crate::CubeDef;
 use prism_asset_core::{impl_asset_data, AssetGuid, AssetHandle};
 use serde::{Deserialize, Serialize};
 
@@ -39,6 +40,10 @@ pub struct MaterialDef {
     pub emissive_map: Option<AssetHandle<TextureDef>>,
     pub occlusion_map: Option<AssetHandle<TextureDef>>,
 
+    // --- IBL reference ---
+    /// Cubemap for IBL environment lighting.
+    pub env_map: Option<AssetHandle<CubeDef>>,
+
     // --- Advanced PBR ---
     pub transmission: f32,
     pub ior: f32,
@@ -64,6 +69,8 @@ impl Default for MaterialDef {
             metallic_roughness_map: None,
             emissive_map: None,
             occlusion_map: None,
+            env_map: None,
+
             transmission: 0.0,
             ior: 1.5,
             translucency: 0.0,

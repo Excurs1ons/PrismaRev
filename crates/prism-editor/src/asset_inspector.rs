@@ -6,7 +6,7 @@
 //! without the runtime crate knowing anything about egui.
 
 use prism_asset_core::{AssetData, LoadedAsset};
-use prism_asset_types::{EnvironmentDef, MaterialDef, TextureDef};
+use prism_asset_types::{CubeDef, MaterialDef, TextureDef};
 
 use egui::Ui;
 
@@ -58,19 +58,6 @@ fn inspect_material(data: &mut dyn AssetData, ui: &mut Ui) -> bool {
     dirty
 }
 
-fn inspect_environment(data: &mut dyn AssetData, ui: &mut Ui) -> bool {
-    let Some(typed) = data.downcast_mut::<EnvironmentDef>() else {
-        return false;
-    };
-    let mut dirty = false;
-    ui.label("Environment Lighting");
-    ui.separator();
-    dirty |= ui
-        .add(egui::Slider::new(&mut typed.intensity, 0.0..=10.0).text("Intensity"))
-        .changed();
-    dirty
-}
-
 fn inspect_texture(data: &mut dyn AssetData, ui: &mut Ui) -> bool {
     let Some(typed) = data.downcast_mut::<TextureDef>() else {
         return false;
@@ -83,9 +70,24 @@ fn inspect_texture(data: &mut dyn AssetData, ui: &mut Ui) -> bool {
     dirty
 }
 
+fn inspect_cube(data: &mut dyn AssetData, ui: &mut Ui) -> bool {
+    let Some(typed) = data.downcast_mut::<CubeDef>() else {
+        return false;
+    };
+    let mut dirty = false;
+    ui.label("Cubemap Texture");
+    ui.separator();
+    ui.label(format!("Label: {}", typed.label));
+    ui.label(format!(
+        "HDR source: {}",
+        typed.hdr_source.as_deref().unwrap_or("(none)")
+    ));
+    dirty
+}
+
 register_asset_inspector!("material", MaterialDef, inspect_material);
-register_asset_inspector!("environment", EnvironmentDef, inspect_environment);
 register_asset_inspector!("texture", TextureDef, inspect_texture);
+register_asset_inspector!("cube", CubeDef, inspect_cube);
 
 // ---------------------------------------------------------------------------
 // Public API

@@ -8,14 +8,14 @@
 //!
 //! ## Types
 //!
-//! | Type | `typetag` name | Description |
-//! |------|----------------|-------------|
+//! | Type | typetag name | Description |
+//! |------|-------------|-------------|
+//! | [`CubeDef`] | `"cube"` | Cubemap texture source |
 //! | [`MaterialDef`] | `"material"` | PBR material definition |
 //! | [`TextureDef`] | `"texture"` | Texture source reference |
-//! | [`EnvironmentDef`] | `"environment"` | IBL environment preset |
 
-pub mod environment_def;
+pub mod cube_def;
 pub mod material_def;
 
-pub use environment_def::EnvironmentDef;
+pub use cube_def::CubeDef;
 pub use material_def::{MaterialDef, TextureDef};

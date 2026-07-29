@@ -3,7 +3,7 @@ name = "prism-asset-types"
 version.workspace = true
 edition = "2021"
 license.workspace = true
-description = "Concrete ScriptableObject-style asset definitions: MaterialDef, EnvironmentDef, etc."
+description = "Concrete ScriptableObject-style asset definitions: CubeDef, MaterialDef, TextureDef"
 
 [dependencies]
 prism-asset-core = { path = "../prism-asset-core", features = ["asset-data"] }
