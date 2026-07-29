@@ -6,6 +6,7 @@
 //! `src/app.rs` (the binary crate).
 
 pub mod asset_resolver;
+pub mod asset_server;
 pub mod audio;
 pub mod calibration_spheres;
 pub mod camera;

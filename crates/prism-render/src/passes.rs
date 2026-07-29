@@ -24,6 +24,7 @@ use crate::render_graph::{
 };
 use crate::shader;
 use crate::shader_bindings;
+use crate::VulkanContext;
 
 /// Rasterized shadow map — the depth-only fallback for the hybrid adaptive
 /// shadow system (`docs/DESIGN.md` §2.3).

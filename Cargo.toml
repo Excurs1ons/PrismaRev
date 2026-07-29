@@ -17,6 +17,7 @@ prism-editor = { path = "crates/prism-editor" }
 prism-audio = { path = "crates/prism-audio" }
 prism-asset-core = { path = "prism-asset/prism-asset-core" }
 prism-asset-runtime = { path = "prism-asset/prism-asset-runtime" }
+prism-asset-types = { path = "prism-asset/prism-asset-types" }
 winit = { workspace = true }
 ash-window = { workspace = true }
 raw-window-handle = { workspace = true }

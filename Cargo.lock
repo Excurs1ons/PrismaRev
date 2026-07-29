@@ -1910,6 +1910,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a257582fdcde896fd96463bf2d40eefea0580021c0712a0e2b028b60b47a837a"
 
 [[package]]
+name = "inventory"
+version = "0.3.24"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a4f0c30c76f2f4ccee3fe55a2435f691ca00c0e4bd87abe4f4a851b1d4dac39b"
+dependencies = [
+ "rustversion",
+]
+
+[[package]]
 name = "is_terminal_polyfill"
 version = "1.70.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2855,6 +2864,8 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 1.0.69",
+ "typetag",
+ "uuid",
 ]
 
 [[package]]
@@ -2919,6 +2930,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "prism-asset-types"
+version = "0.1.0"
+dependencies = [
+ "prism-asset-core",
+ "serde",
+ "serde_json",
+ "typetag",
+]
+
+[[package]]
 name = "prism-audio"
 version = "0.1.0"
 dependencies = [
@@ -2958,9 +2979,13 @@ dependencies = [
  "ash",
  "clap",
  "egui",
+ "inventory",
  "log",
+ "prism-asset-core",
+ "prism-asset-types",
  "prism-ecs",
  "prism-render",
+ "serde",
  "winit",
 ]
 
@@ -2981,6 +3006,7 @@ dependencies = [
  "prism-asset-cooker",
  "prism-asset-core",
  "prism-asset-runtime",
+ "prism-asset-types",
  "prism-audio",
  "prism-ecs",
  "prism-editor",
@@ -2988,6 +3014,7 @@ dependencies = [
  "raw-window-handle",
  "rustc-hash",
  "serde",
+ "serde_json",
  "toml",
  "windows-sys 0.59.0",
  "winit",
@@ -3016,9 +3043,21 @@ name = "prismarev"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "ash-window",
  "env_logger",
  "log",
+ "prism-asset-core",
+ "prism-asset-runtime",
+ "prism-asset-types",
+ "prism-audio",
+ "prism-ecs",
+ "prism-editor",
  "prism-engine",
+ "prism-render",
+ "raw-window-handle",
+ "serde",
+ "toml",
+ "winit",
 ]
 
 [[package]]
@@ -4095,6 +4134,30 @@ name = "typeid"
 version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bc7d623258602320d5c55d1bc22793b57daff0ec7efc270ea7d55ce1d5f5471c"
+
+[[package]]
+name = "typetag"
+version = "0.2.23"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c90e86058a30d42a1a928dfb4b49bb33c98c3a2b4909492e6b0881cd94798ec2"
+dependencies = [
+ "erased-serde",
+ "inventory",
+ "once_cell",
+ "serde",
+ "typetag-impl",
+]
+
+[[package]]
+name = "typetag-impl"
+version = "0.2.23"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f153acc4e99a5f2a5aefa09fb078be54e26271b2813f6041200b224c098d8328"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.3",
+]
 
 [[package]]
 name = "unicode-ident"

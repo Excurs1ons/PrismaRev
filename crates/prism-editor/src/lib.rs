@@ -17,9 +17,10 @@ use std::any::TypeId;
 use std::collections::HashMap;
 
 use egui::Ui;
-use prism_ecs::{Entity, World};
+use prism_ecs::{Component, Entity, World};
 use prism_render::RenderMode;
 
+pub mod asset_inspector;
 pub mod inspector;
 pub mod math;
 pub mod render_graph_viz;
@@ -153,7 +154,7 @@ impl ComponentRegistry {
     ///
     /// Types with a registered inspect function get a full egui editor UI in
     /// the inspector.  Types without one just show a read‑only type name.
-    pub fn register<T: Inspect>(&mut self, order: u32) {
+    pub fn register<T: Inspect + Component>(&mut self, order: u32) {
         let entry = RegisteredComponent {
             type_id: TypeId::of::<T>(),
             type_name: std::any::type_name::<T>(),
@@ -211,7 +212,7 @@ impl Default for ComponentRegistry {
 }
 
 /// Type-erased dispatch shim: borrow `T` mutably off `entity` and run its UI.
-fn inspect_dispatch<T: Inspect>(
+fn inspect_dispatch<T: Inspect + Component>(
     world: &mut World,
     entity: Entity,
     ui: &mut Ui,
@@ -253,7 +254,7 @@ impl Editor {
     }
 
     /// Convenience proxy for [`ComponentRegistry::register`].
-    pub fn register<T: Inspect>(&mut self, order: u32) {
+    pub fn register<T: Inspect + Component>(&mut self, order: u32) {
         self.registry.register::<T>(order);
     }
 

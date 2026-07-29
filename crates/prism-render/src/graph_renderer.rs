@@ -674,8 +674,13 @@ impl GraphRenderer {
     /// stall on pipeline creation. Call once after construction, before any
     /// [`execute`](Self::execute).
     pub fn warmup_pipelines(&mut self) -> anyhow::Result<()> {
-        let ctx = self.context();
-        self.graph.warmup_passes(&ctx.device, ctx)
+        let device = &self.runtime.context.device as *const _;
+        let context = &*self.runtime.context as *const _;
+        // SAFETY: warmup_passes only uses the device and context for creating
+        // pipelines (Vulkan objects) and does not touch self.graph in a way
+        // that reads or writes self.runtime.
+        self.graph
+            .warmup_passes(unsafe { &*device }, unsafe { &*context })
     }
 
     pub fn suspend_surface(&mut self) {

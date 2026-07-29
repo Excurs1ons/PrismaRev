@@ -8,7 +8,7 @@ description = "Runtime resource loader"
 [dependencies]
 prism-asset-core = { path = "../prism-asset-core" }
 prism-asset-package = { path = "../prism-asset-package" }
-prism-asset-cooker = { path = "../prism-asset-cooker" }
+prism-asset-cooker = { path = "../prism-asset-cooker", default-features = false }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }

@@ -304,6 +304,7 @@ impl TextureCooker {
     ///
     /// Returns raw BC7 block data (ceil(w/4) × ceil(h/4) × 16 bytes).
     /// `quality` maps 0–100 to the ctt quality ladder.
+    #[cfg(feature = "texture-compression")]
     fn compress_bc7(width: u32, height: u32, rgba: &[u8], quality: u8) -> Result<Vec<u8>, CookError> {
         use ctt::encoders::Encoder;
         use ctt::*;
@@ -421,6 +422,7 @@ impl Cooker for TextureCooker {
             profile::TextureCompression::Rgba8 | profile::TextureCompression::None => {
                 (RTEX_FORMAT_RGBA8, mips_rgba)
             }
+            #[cfg(feature = "texture-compression")]
             profile::TextureCompression::Bc7 => {
                 let quality = ctx.settings.texture.quality;
                 let compressed: Result<Vec<_>, CookError> = mips_rgba
@@ -431,6 +433,11 @@ impl Cooker for TextureCooker {
                     })
                     .collect();
                 (RTEX_FORMAT_BC7, compressed?)
+            }
+            #[cfg(not(feature = "texture-compression"))]
+            profile::TextureCompression::Bc7 => {
+                tracing::warn!("BC7 compression not available (compiled without texture-compression), falling back to RGBA8");
+                (RTEX_FORMAT_RGBA8, mips_rgba)
             }
             other => {
                 // Unsupported compression format for now.

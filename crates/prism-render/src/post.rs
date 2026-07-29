@@ -25,6 +25,7 @@
 //!    it via its own load+transition pass).
 
 use anyhow::Context as _;
+use anyhow::Result;
 use ash::vk;
 
 use crate::context::VulkanContext;

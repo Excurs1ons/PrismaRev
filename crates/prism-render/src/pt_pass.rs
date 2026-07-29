@@ -20,6 +20,7 @@
 use std::ptr;
 
 use anyhow::Context as _;
+use anyhow::Result;
 use ash::vk;
 
 use crate::compute::ComputePipeline;

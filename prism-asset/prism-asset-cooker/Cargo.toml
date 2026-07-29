@@ -18,7 +18,11 @@ tracing = "0.1"
 anyhow = { workspace = true }
 image = { workspace = true }
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
-ctt = { workspace = true }
+ctt = { workspace = true, optional = true }
+
+[features]
+default = ["texture-compression"]
+texture-compression = ["dep:ctt"]
 
 [dev-dependencies]
 tempfile = "3"
