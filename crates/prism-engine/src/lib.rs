@@ -5,6 +5,7 @@
 //! application shell.  Application-level code (winit `ApplicationHandler`) lives in
 //! `src/app.rs` (the binary crate).
 
+pub mod app;
 pub mod asset_resolver;
 pub mod asset_server;
 pub mod audio;
@@ -22,6 +23,6 @@ pub mod scene;
 pub mod scene_state;
 pub mod shader_asset;
 
-pub use render_system::{euler_xyz_deg_to_dir, render_system};
-
+pub use app::{App, AppBuilder, DefaultSubsystems, ScheduleLabel, Subsystem, System};
 pub use engine::Engine;
+pub use render_system::{euler_xyz_deg_to_dir, render_system};
