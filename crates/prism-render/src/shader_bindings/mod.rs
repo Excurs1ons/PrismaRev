@@ -11,3 +11,4 @@ pub mod pt_render;
 pub mod scene_frag;
 pub mod shadow_depth;
 pub mod skybox;
+pub mod ui;

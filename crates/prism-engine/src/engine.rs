@@ -42,6 +42,8 @@ pub struct Engine {
     current_scene_name: Option<String>,
     /// Ordered ECS system schedule — runs on every [`update`](Self::update).
     schedule: Schedule,
+    /// 主线程定时器服务（每帧 tick）。
+    timer: crate::util::timer::TimerService,
 }
 
 impl Engine {
@@ -72,6 +74,7 @@ impl Engine {
             world: World::new(),
             current_scene_name: None,
             schedule: Schedule::new(),
+            timer: crate::util::timer::TimerService::new(),
         }
     }
 
@@ -221,6 +224,38 @@ impl Engine {
     }
 
     // ======================================================================
+    // Timer API
+    // ======================================================================
+
+    /// 返回 TimerClient 引用（可 Clone，供面板等持有）。
+    pub fn timer_client(&self) -> &crate::util::timer::TimerClient {
+        &self.timer.client
+    }
+
+    /// 注册一个定时器。返回 u32 slot 索引（即 timer id）。
+    pub fn create_timer(
+        &self,
+        params: crate::util::timer::TimerParams,
+    ) -> crate::util::timer::TimerId {
+        self.timer.client.create_timer(params)
+    }
+
+    /// 暂停定时器。
+    pub fn pause_timer(&self, handle: crate::util::timer::TimerId) {
+        self.timer.client.pause(handle);
+    }
+
+    /// 恢复定时器。
+    pub fn resume_timer(&self, handle: crate::util::timer::TimerId) {
+        self.timer.client.resume(handle);
+    }
+
+    /// 销毁定时器。
+    pub fn destroy_timer(&self, handle: crate::util::timer::TimerId) {
+        self.timer.client.destroy(handle);
+    }
+
+    // ======================================================================
     // Frame tick phases
     // ======================================================================
 
@@ -249,8 +284,19 @@ impl Engine {
             look_active,
         );
 
+        // ── 填充 UI 输入状态 ──────────────────────────────────────
+        let pos = input_manager.mouse_position();
+        self.world.insert_resource(crate::ui::UiInputState {
+            cursor_pos: [pos[0] as f32, pos[1] as f32],
+            left_clicked: input_manager.mouse_just_pressed(crate::input::MouseButton::Left),
+            left_held: input_manager.mouse_held(crate::input::MouseButton::Left),
+        });
+
         // Run the ECS system schedule (user‑registered + built‑in systems).
         self.schedule.run(&mut self.world, dt);
+
+        // Tick the main‑thread timer (dispatch expired callbacks).
+        self.timer.tick();
     }
 
     /// Late update: audio sync, IK, camera‑relative effects.
@@ -550,6 +596,18 @@ fn default_schedule() -> Schedule {
             transform.rotation[1] += dt * 0.3;
         }
     });
+
+    // ── UI Layout ─────────────────────────────────────────────
+    // 每帧重新计算所有 UI 元素的屏幕空间矩形。
+    s.add_system("ui::layout", |world, _dt| crate::ui::ui_layout_system(world));
+
+    // ── UI Input ──────────────────────────────────────────────
+    // 命中测试，更新 Interaction 组件（需 layout 之后）。
+    s.add_system("ui::input", |world, _dt| crate::ui::ui_input_system(world));
+
+    // ── UI Render ─────────────────────────────────────────────
+    // 收集 UI 绘制命令为 UiDrawList resource。
+    s.add_system("ui::render", |world, _dt| crate::ui::ui_render_system(world));
 
     s
 }

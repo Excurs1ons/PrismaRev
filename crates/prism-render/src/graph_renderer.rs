@@ -91,6 +91,8 @@ pub struct FrameInput<'a> {
     /// `[0.5, 0.5, 0.5, 1.0]` lets the user distinguish "nothing drew" from
     /// black.
     pub clear_color: [f32; 4],
+    /// UI overlay draw commands (filled by engine's ui_render_system).
+    pub ui_overlay: &'a crate::ui_overlay::UiOverlayInput,
 }
 
 /// GPU session that owns the long-lived Vulkan runtime objects (device,
@@ -1074,6 +1076,7 @@ impl GraphRenderer {
             pt_accum_dirty,
             has_camera,
             clear_color,
+            ui_overlay,
         } = input;
         let light_view_proj = *light_view_proj;
         let inv_projection = *inv_projection;

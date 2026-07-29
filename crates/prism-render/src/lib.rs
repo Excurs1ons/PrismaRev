@@ -54,6 +54,7 @@ pub mod shader;
 /// after recompiling shaders on a host with slangc - see shaders/compile.sh.
 pub mod shader_bindings;
 pub mod swapchain;
+pub mod ui_overlay;
 
 // SceneDrawItem is the engine<->renderer exchange type for resolved draws.
 pub use graph_renderer::SceneDrawItem;
@@ -71,6 +72,7 @@ pub use gi::{
     ProbeVolumeInfo, SH_COEFF_COUNT,
 };
 pub use gizmo::Gizmo;
+pub use ui_overlay::{UiOverlay, UiOverlayInput};
 pub use graph_renderer::{FrameCtx, FrameInput, GraphRenderer};
 pub use gtao::{GtaoFrameInputs, GtaoPass};
 pub use mesh::{Mesh, Vertex};

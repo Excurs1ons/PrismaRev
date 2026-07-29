@@ -8,6 +8,7 @@
 use prism_ecs::World;
 use prism_render::{
     DrawItem, FrameUBOData, GpuLight, GraphRenderer, PtAnalyticLight, PT_LIGHT_MAX,
+    UiOverlayInput,
 };
 use crate::dirty_router::DirtyRouter;
 use crate::render_settings::RenderSettings;
@@ -320,6 +321,7 @@ pub fn render_system(
         pt_accum_dirty: dirty_flags.directional_light,
         has_camera: *has_camera,
         clear_color: CLEAR_COLOR,
+        ui_overlay: &crate::ui::render::convert_ui_draw_list_to_overlay(world),
     };
     renderer.execute(&ctx, &input).map_err(|e| {
         let _ = renderer.present(&ctx);

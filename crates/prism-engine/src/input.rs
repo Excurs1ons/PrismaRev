@@ -180,6 +180,9 @@ impl InputManager {
     pub fn mouse_held(&self, button: MouseButton) -> bool {
         self.mouse_buttons_held.contains(&button)
     }
+    pub fn mouse_just_pressed(&self, button: MouseButton) -> bool {
+        self.mouse_just_pressed.contains(&button)
+    }
     pub fn mouse_delta(&self) -> [f64; 2] {
         self.mouse_delta
     }
