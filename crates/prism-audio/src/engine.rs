@@ -243,7 +243,7 @@ impl AudioEngine {
             ..Default::default()
         };
 
-        let node_id = match self.ctx.add_node(sampler.clone(), Some(sampler_config)) {
+        let node_id = match self.ctx.add_node(sampler, Some(sampler_config)) {
             Ok(nid) => nid,
             Err(e) => {
                 ::log::error!("Failed to add sampler node to graph: {e}");

@@ -33,7 +33,7 @@ impl AudioFormat {
         }
     }
 
-    fn to_extension_hint(&self) -> &'static str {
+    fn to_extension_hint(self) -> &'static str {
         match self {
             Self::Wav => "wav",
             Self::Ogg => "ogg",
