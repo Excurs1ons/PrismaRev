@@ -1071,7 +1071,7 @@ impl GraphRenderer {
             pt_accum_dirty,
             has_camera,
             clear_color,
-            _ui_overlay,
+            ui_overlay: _,
         } = input;
         let light_view_proj = *light_view_proj;
         let inv_projection = *inv_projection;
