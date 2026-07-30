@@ -42,6 +42,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install ALSA headers (for prism-audio)
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+
       - name: Install Rust (stable + rustfmt + clippy)
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -88,7 +91,7 @@ jobs:
       - name: Install Vulkan loader + headers
         run: |
           sudo apt-get update
-          sudo apt-get install -y libvulkan-dev vulkan-tools
+          sudo apt-get install -y libvulkan-dev vulkan-tools libasound2-dev
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
