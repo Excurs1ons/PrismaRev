@@ -74,16 +74,16 @@ impl DirtyRouter {
         };
 
         let flags = DirtyFlags {
-            camera:   prev.view_proj       != new.view_proj
-                    || prev.eye            != new.eye
-                    || prev.view           != new.view
-                    || prev.projection     != new.projection
-                    || prev.inv_projection != new.inv_projection
-                    || prev.proj22         != new.proj22
-                    || prev.proj32         != new.proj32,
+            camera: prev.view_proj != new.view_proj
+                || prev.eye != new.eye
+                || prev.view != new.view
+                || prev.projection != new.projection
+                || prev.inv_projection != new.inv_projection
+                || prev.proj22 != new.proj22
+                || prev.proj32 != new.proj32,
             directional_light: prev.light_direction != new.light_direction
-                            || prev.light_color    != new.light_color
-                            || prev.light_view_proj != new.light_view_proj,
+                || prev.light_color != new.light_color
+                || prev.light_view_proj != new.light_view_proj,
             point_lights: prev.lights != new.lights,
         };
 

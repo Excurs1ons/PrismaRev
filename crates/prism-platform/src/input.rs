@@ -1,11 +1,7 @@
 //! Winit → engine domain-type conversions, pointer-lock helpers, and
 //! 输入 事件 routing.
 
-use prism_engine::input::{
-    InputManager,
-    KeyCode as EngKeyCode,
-    MouseButton as EngMouseButton,
-};
+use prism_engine::input::{InputManager, KeyCode as EngKeyCode, MouseButton as EngMouseButton};
 use winit::event::WindowEvent;
 use winit::event_loop::ActiveEventLoop;
 use winit::window::Window;
@@ -153,16 +149,14 @@ pub fn handle_input_event(
             input.handle_mouse_move([position.x, position.y]);
         }
 
-        WindowEvent::MouseWheel { delta, .. } => {
-            match delta {
-                winit::event::MouseScrollDelta::LineDelta(_x, y) => {
-                    input.handle_scroll(*y as f64);
-                }
-                winit::event::MouseScrollDelta::PixelDelta(pos) => {
-                    input.handle_scroll(pos.y);
-                }
+        WindowEvent::MouseWheel { delta, .. } => match delta {
+            winit::event::MouseScrollDelta::LineDelta(_x, y) => {
+                input.handle_scroll(*y as f64);
             }
-        }
+            winit::event::MouseScrollDelta::PixelDelta(pos) => {
+                input.handle_scroll(pos.y);
+            }
+        },
 
         WindowEvent::Touch(touch) => {
             let pos = [touch.location.x, touch.location.y];

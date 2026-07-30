@@ -32,17 +32,39 @@ pub struct Anchors {
 
 impl Anchors {
     /// 填满父容器
-    pub const STRETCH: Self = Self { min_x: 0.0, min_y: 0.0, max_x: 1.0, max_y: 1.0 };
+    pub const STRETCH: Self = Self {
+        min_x: 0.0,
+        min_y: 0.0,
+        max_x: 1.0,
+        max_y: 1.0,
+    };
     /// 左上角
-    pub const TOP_LEFT: Self = Self { min_x: 0.0, min_y: 0.0, max_x: 0.0, max_y: 0.0 };
+    pub const TOP_LEFT: Self = Self {
+        min_x: 0.0,
+        min_y: 0.0,
+        max_x: 0.0,
+        max_y: 0.0,
+    };
     /// 居中
-    pub const CENTER: Self = Self { min_x: 0.5, min_y: 0.5, max_x: 0.5, max_y: 0.5 };
+    pub const CENTER: Self = Self {
+        min_x: 0.5,
+        min_y: 0.5,
+        max_x: 0.5,
+        max_y: 0.5,
+    };
     /// 底部居中
-    pub const BOTTOM_CENTER: Self = Self { min_x: 0.5, min_y: 1.0, max_x: 0.5, max_y: 1.0 };
+    pub const BOTTOM_CENTER: Self = Self {
+        min_x: 0.5,
+        min_y: 1.0,
+        max_x: 0.5,
+        max_y: 1.0,
+    };
 }
 
 impl Default for Anchors {
-    fn default() -> Self { Self::STRETCH }
+    fn default() -> Self {
+        Self::STRETCH
+    }
 }
 
 /// Pivot —— 旋转/缩放/定位的中心点（归一化 0..=1）。
@@ -57,7 +79,11 @@ impl Pivot {
     pub const TOP_LEFT: Self = Self { x: 0.0, y: 0.0 };
 }
 
-impl Default for Pivot { fn default() -> Self { Self::CENTER } }
+impl Default for Pivot {
+    fn default() -> Self {
+        Self::CENTER
+    }
+}
 
 /// 边距（像素）。
 #[derive(Clone, Copy, Debug, Default)]
@@ -108,7 +134,9 @@ impl Default for Style {
 
 impl Style {
     /// 创建全屏填充的透明 UI 元素。
-    pub fn fullscreen() -> Self { Self::default() }
+    pub fn fullscreen() -> Self {
+        Self::default()
+    }
 
     /// 创建一个固定大小的 UI 元素（锚点居中）。
     pub fn fixed(w: f32, h: f32) -> Self {
@@ -132,10 +160,18 @@ pub struct ComputedLayout {
 }
 
 impl ComputedLayout {
-    pub fn left(&self) -> f32 { self.rect[0] }
-    pub fn top(&self) -> f32 { self.rect[1] }
-    pub fn width(&self) -> f32 { self.rect[2] }
-    pub fn height(&self) -> f32 { self.rect[3] }
+    pub fn left(&self) -> f32 {
+        self.rect[0]
+    }
+    pub fn top(&self) -> f32 {
+        self.rect[1]
+    }
+    pub fn width(&self) -> f32 {
+        self.rect[2]
+    }
+    pub fn height(&self) -> f32 {
+        self.rect[3]
+    }
 }
 
 // ── Text ──────────────────────────────────────────────────────

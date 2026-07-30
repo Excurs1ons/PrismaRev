@@ -145,8 +145,7 @@ impl World {
     /// True if the 实体 is alive and 激活 未激活 entities are excluded
     /// from queries so they effectively stop participating in all systems.
     pub fn is_active(&self, entity: Entity) -> bool {
-        self.is_alive(entity)
-            && self.active.get(entity.id as usize).copied().unwrap_or(true)
+        self.is_alive(entity) && self.active.get(entity.id as usize).copied().unwrap_or(true)
     }
 
     /// 集合 the 激活 状态 of a live 实体 Has no 效果 on dead entities.
@@ -248,7 +247,11 @@ impl World {
             .filter_map(move |(id, value)| {
                 let generation = *entities.get(id as usize)?;
                 // 安全性 self.active is not mutated during the 迭代
-                if !unsafe { &*active_ptr }.get(id as usize).copied().unwrap_or(true) {
+                if !unsafe { &*active_ptr }
+                    .get(id as usize)
+                    .copied()
+                    .unwrap_or(true)
+                {
                     return None;
                 }
                 Some((Entity { id, generation }, value))
@@ -352,7 +355,11 @@ impl World {
         Box::new(a.iter_mut().filter_map(move |(id, av)| {
             let bv = b.get(id)?;
             let generation = *generation_for.get(id as usize).unwrap_or(&0);
-            if !unsafe { &*active_ptr }.get(id as usize).copied().unwrap_or(true) {
+            if !unsafe { &*active_ptr }
+                .get(id as usize)
+                .copied()
+                .unwrap_or(true)
+            {
                 return None;
             }
             Some((Entity { id, generation }, av, bv))

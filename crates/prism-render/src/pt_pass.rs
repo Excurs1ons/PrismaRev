@@ -26,7 +26,7 @@ use crate::context::VulkanContext;
 use crate::descriptor::{PtAnalyticLight, ReSTIRReservoir, PT_LIGHT_MAX};
 use crate::render_graph::{
     GraphResources, PassInfo, PassKind, RenderContext, RenderGraphBuilder, RenderPassNode,
-    RenderSettings, ResourceUsage, PT_COLOR_H, ResourceType,
+    RenderSettings, ResourceType, ResourceUsage, PT_COLOR_H,
 };
 use crate::shader;
 use crate::shader_bindings;
@@ -138,18 +138,66 @@ impl PathTracePass {
         // b7: StructuredBuffer<GpuMaterial> materials (shared SSBO)
         // 集合 1 (bindless, bound separately): globalSamplers[] + bindlessSrvs[]
         let bindings = [
-            b(0, vk::DescriptorType::STORAGE_IMAGE, vk::ShaderStageFlags::COMPUTE),
-            b(1, vk::DescriptorType::STORAGE_IMAGE, vk::ShaderStageFlags::COMPUTE),
-            b(2, vk::DescriptorType::ACCELERATION_STRUCTURE_KHR, vk::ShaderStageFlags::COMPUTE),
-            b(3, vk::DescriptorType::STORAGE_BUFFER, vk::ShaderStageFlags::COMPUTE),
-            b(4, vk::DescriptorType::STORAGE_BUFFER, vk::ShaderStageFlags::COMPUTE),
-            b(5, vk::DescriptorType::STORAGE_IMAGE, vk::ShaderStageFlags::COMPUTE),
-            b(6, vk::DescriptorType::STORAGE_BUFFER, vk::ShaderStageFlags::COMPUTE),
-            b(7, vk::DescriptorType::STORAGE_BUFFER, vk::ShaderStageFlags::COMPUTE),
-            b(8, vk::DescriptorType::STORAGE_BUFFER, vk::ShaderStageFlags::COMPUTE),
-            b(9, vk::DescriptorType::STORAGE_BUFFER, vk::ShaderStageFlags::COMPUTE),
-            b(10, vk::DescriptorType::STORAGE_BUFFER, vk::ShaderStageFlags::COMPUTE), // prevReservoir (read)
-            b(11, vk::DescriptorType::STORAGE_BUFFER, vk::ShaderStageFlags::COMPUTE), // currReservoir (write)
+            b(
+                0,
+                vk::DescriptorType::STORAGE_IMAGE,
+                vk::ShaderStageFlags::COMPUTE,
+            ),
+            b(
+                1,
+                vk::DescriptorType::STORAGE_IMAGE,
+                vk::ShaderStageFlags::COMPUTE,
+            ),
+            b(
+                2,
+                vk::DescriptorType::ACCELERATION_STRUCTURE_KHR,
+                vk::ShaderStageFlags::COMPUTE,
+            ),
+            b(
+                3,
+                vk::DescriptorType::STORAGE_BUFFER,
+                vk::ShaderStageFlags::COMPUTE,
+            ),
+            b(
+                4,
+                vk::DescriptorType::STORAGE_BUFFER,
+                vk::ShaderStageFlags::COMPUTE,
+            ),
+            b(
+                5,
+                vk::DescriptorType::STORAGE_IMAGE,
+                vk::ShaderStageFlags::COMPUTE,
+            ),
+            b(
+                6,
+                vk::DescriptorType::STORAGE_BUFFER,
+                vk::ShaderStageFlags::COMPUTE,
+            ),
+            b(
+                7,
+                vk::DescriptorType::STORAGE_BUFFER,
+                vk::ShaderStageFlags::COMPUTE,
+            ),
+            b(
+                8,
+                vk::DescriptorType::STORAGE_BUFFER,
+                vk::ShaderStageFlags::COMPUTE,
+            ),
+            b(
+                9,
+                vk::DescriptorType::STORAGE_BUFFER,
+                vk::ShaderStageFlags::COMPUTE,
+            ),
+            b(
+                10,
+                vk::DescriptorType::STORAGE_BUFFER,
+                vk::ShaderStageFlags::COMPUTE,
+            ), // prevReservoir (read)
+            b(
+                11,
+                vk::DescriptorType::STORAGE_BUFFER,
+                vk::ShaderStageFlags::COMPUTE,
+            ), // currReservoir (write)
         ];
 
         // All bindings get UPDATE_AFTER_BIND + PARTIALLY_BOUND because
@@ -158,33 +206,32 @@ impl PathTracePass {
         // 验证 complains about updating in-use 描述符 sets.
         let binding_flags = [
             vk::DescriptorBindingFlags::UPDATE_AFTER_BIND
-                | vk::DescriptorBindingFlags::PARTIALLY_BOUND,  // b0  accumImage
+                | vk::DescriptorBindingFlags::PARTIALLY_BOUND, // b0  accumImage
             vk::DescriptorBindingFlags::UPDATE_AFTER_BIND
-                | vk::DescriptorBindingFlags::PARTIALLY_BOUND,  // b1  sampleCount
+                | vk::DescriptorBindingFlags::PARTIALLY_BOUND, // b1  sampleCount
             vk::DescriptorBindingFlags::UPDATE_AFTER_BIND
-                | vk::DescriptorBindingFlags::PARTIALLY_BOUND,  // b2  TLAS
+                | vk::DescriptorBindingFlags::PARTIALLY_BOUND, // b2  TLAS
             vk::DescriptorBindingFlags::UPDATE_AFTER_BIND
-                | vk::DescriptorBindingFlags::PARTIALLY_BOUND,  // b3  vertexData
+                | vk::DescriptorBindingFlags::PARTIALLY_BOUND, // b3  vertexData
             vk::DescriptorBindingFlags::UPDATE_AFTER_BIND
-                | vk::DescriptorBindingFlags::PARTIALLY_BOUND,  // b4  indices
+                | vk::DescriptorBindingFlags::PARTIALLY_BOUND, // b4  indices
             vk::DescriptorBindingFlags::UPDATE_AFTER_BIND
-                | vk::DescriptorBindingFlags::PARTIALLY_BOUND,  // b5  outputImage
+                | vk::DescriptorBindingFlags::PARTIALLY_BOUND, // b5  outputImage
             vk::DescriptorBindingFlags::UPDATE_AFTER_BIND
-                | vk::DescriptorBindingFlags::PARTIALLY_BOUND,  // b6  instance_meta
+                | vk::DescriptorBindingFlags::PARTIALLY_BOUND, // b6  instance_meta
             vk::DescriptorBindingFlags::UPDATE_AFTER_BIND
-                | vk::DescriptorBindingFlags::PARTIALLY_BOUND,  // b7  materials
+                | vk::DescriptorBindingFlags::PARTIALLY_BOUND, // b7  materials
             vk::DescriptorBindingFlags::UPDATE_AFTER_BIND
-                | vk::DescriptorBindingFlags::PARTIALLY_BOUND,  // b8  ptLights
+                | vk::DescriptorBindingFlags::PARTIALLY_BOUND, // b8  ptLights
             vk::DescriptorBindingFlags::UPDATE_AFTER_BIND
-                | vk::DescriptorBindingFlags::PARTIALLY_BOUND,  // b9  ptEmissive
+                | vk::DescriptorBindingFlags::PARTIALLY_BOUND, // b9  ptEmissive
             vk::DescriptorBindingFlags::UPDATE_AFTER_BIND
-                | vk::DescriptorBindingFlags::PARTIALLY_BOUND,  // b10 prevReservoir
+                | vk::DescriptorBindingFlags::PARTIALLY_BOUND, // b10 prevReservoir
             vk::DescriptorBindingFlags::UPDATE_AFTER_BIND
-                | vk::DescriptorBindingFlags::PARTIALLY_BOUND,  // b11 currReservoir
+                | vk::DescriptorBindingFlags::PARTIALLY_BOUND, // b11 currReservoir
         ];
         let mut flags_info =
-            vk::DescriptorSetLayoutBindingFlagsCreateInfo::default()
-                .binding_flags(&binding_flags);
+            vk::DescriptorSetLayoutBindingFlagsCreateInfo::default().binding_flags(&binding_flags);
 
         let ds_layout = unsafe {
             device.create_descriptor_set_layout(
@@ -198,15 +245,25 @@ impl PathTracePass {
         .context("PathTracePass: ds layout")?;
 
         let pool_sizes = [
-            vk::DescriptorPoolSize { ty: vk::DescriptorType::STORAGE_IMAGE, descriptor_count: 3 },
-            vk::DescriptorPoolSize { ty: vk::DescriptorType::STORAGE_BUFFER, descriptor_count: 8 },
-            vk::DescriptorPoolSize { ty: vk::DescriptorType::ACCELERATION_STRUCTURE_KHR, descriptor_count: 1 },
+            vk::DescriptorPoolSize {
+                ty: vk::DescriptorType::STORAGE_IMAGE,
+                descriptor_count: 3,
+            },
+            vk::DescriptorPoolSize {
+                ty: vk::DescriptorType::STORAGE_BUFFER,
+                descriptor_count: 8,
+            },
+            vk::DescriptorPoolSize {
+                ty: vk::DescriptorType::ACCELERATION_STRUCTURE_KHR,
+                descriptor_count: 1,
+            },
         ];
         let ds_pool = unsafe {
             device.create_descriptor_pool(
                 &vk::DescriptorPoolCreateInfo::default()
                     .flags(vk::DescriptorPoolCreateFlags::UPDATE_AFTER_BIND)
-                    .max_sets(1).pool_sizes(&pool_sizes),
+                    .max_sets(1)
+                    .pool_sizes(&pool_sizes),
                 None,
             )
         }
@@ -223,15 +280,16 @@ impl PathTracePass {
 
         // Placeholder images (1×1 — resized on 第一个 执行
         let mem_props = &context.physical_device_memory_properties;
-        let (ai, av, am) = make_accum_image(device, mem_props, 1, 1)
-            .context("PathTracePass: accum image")?;
+        let (ai, av, am) =
+            make_accum_image(device, mem_props, 1, 1).context("PathTracePass: accum image")?;
         let (si, sv, sm) = make_sample_count_image(device, mem_props, 1, 1)
             .context("PathTracePass: sample count image")?;
-        let (oi, ov, om) = make_pt_output_image(device, mem_props, 1, 1)
-            .context("PathTracePass: output image")?;
+        let (oi, ov, om) =
+            make_pt_output_image(device, mem_props, 1, 1).context("PathTracePass: output image")?;
 
         // 创建 persistent HOST_VISIBLE lights 缓冲区 for PtAnalyticLight[]
-        let light_buf_size = (PT_LIGHT_MAX as vk::DeviceSize) * std::mem::size_of::<PtAnalyticLight>() as vk::DeviceSize;
+        let light_buf_size = (PT_LIGHT_MAX as vk::DeviceSize)
+            * std::mem::size_of::<PtAnalyticLight>() as vk::DeviceSize;
         let light_buf_create = vk::BufferCreateInfo::default()
             .size(light_buf_size)
             .usage(vk::BufferUsageFlags::STORAGE_BUFFER)
@@ -252,8 +310,15 @@ impl PathTracePass {
             .context("PathTracePass: allocate lights memory")?;
         unsafe { device.bind_buffer_memory(lights_buffer, lights_memory, 0) }
             .context("PathTracePass: bind lights memory")?;
-        let lights_mapped = unsafe { device.map_memory(lights_memory, 0, light_buf_size, vk::MemoryMapFlags::empty()) }
-            .context("PathTracePass: map lights memory")? as *mut u8;
+        let lights_mapped = unsafe {
+            device.map_memory(
+                lights_memory,
+                0,
+                light_buf_size,
+                vk::MemoryMapFlags::empty(),
+            )
+        }
+        .context("PathTracePass: map lights memory")? as *mut u8;
 
         // 写入 描述符 for the lights SSBO 绑定 8, initially zeroed)
         unsafe {
@@ -340,10 +405,7 @@ impl PathTracePass {
         // 放置 the 上一个 scene (frees its buffers/BLAS/TLAS via 放置
         self.pt_scene = Some(scene);
 
-        log::info!(
-            "PathTracePass: {} instances uploaded",
-            instances.len()
-        );
+        log::info!("PathTracePass: {} instances uploaded", instances.len());
         Ok(())
     }
 
@@ -415,9 +477,15 @@ impl PathTracePass {
     /// Ensure the ReSTIR reservoir ping-pong buffers are large enough for
     /// the given 宽度 × 高度 Re-allocates (destroys + creates) when the
     /// 图像 大小 grows; does NOT 收缩
-    fn ensure_reservoir_buffers(&mut self, device: &ash::Device,
-        context: &VulkanContext, width: u32, height: u32) {
-        let needed = (width as u64) * (height as u64) * std::mem::size_of::<ReSTIRReservoir>() as u64;
+    fn ensure_reservoir_buffers(
+        &mut self,
+        device: &ash::Device,
+        context: &VulkanContext,
+        width: u32,
+        height: u32,
+    ) {
+        let needed =
+            (width as u64) * (height as u64) * std::mem::size_of::<ReSTIRReservoir>() as u64;
         if needed <= self.reservoir_size {
             return;
         }
@@ -443,7 +511,8 @@ impl PathTracePass {
                 &context,
                 mem_reqs.memory_type_bits,
                 vk::MemoryPropertyFlags::DEVICE_LOCAL,
-            ).expect("ensure_reservoir_buffers: no suitable memory type");
+            )
+            .expect("ensure_reservoir_buffers: no suitable memory type");
             let alloc = vk::MemoryAllocateInfo::default()
                 .allocation_size(mem_reqs.size)
                 .memory_type_index(mem_type);
@@ -508,7 +577,9 @@ impl PathTracePass {
         w: u32,
         h: u32,
     ) -> anyhow::Result<()> {
-        if w == 0 || h == 0 { return Ok(()); }
+        if w == 0 || h == 0 {
+            return Ok(());
+        }
         // Skip if 大小 hasn't changed — avoids unnecessary destroy+recreate
         // cycles and keeps the graph's 资源 references 有效 across frames.
         if self.img_width == w && self.img_height == h {
@@ -566,17 +637,25 @@ impl PathTracePass {
         }];
         let pl = ComputePipeline::new(device, mod_, entry.as_c_str(), &layouts, &push)
             .context("PathTracePass: pipeline")?;
-        unsafe { device.destroy_shader_module(mod_, None); }
+        unsafe {
+            device.destroy_shader_module(mod_, None);
+        }
         self.pipeline = Some(pl);
         Ok(())
     }
 
     fn should_reset(&self, pos: [f32; 3], ivp: [[f32; 4]; 4]) -> bool {
         const E: f32 = 1e-4;
-        let (Some(pp), Some(pv)) = (self.prev_camera_pos, self.prev_view_proj) else { return true; };
-        let dp = (pos[0]-pp[0]).abs() + (pos[1]-pp[1]).abs() + (pos[2]-pp[2]).abs();
+        let (Some(pp), Some(pv)) = (self.prev_camera_pos, self.prev_view_proj) else {
+            return true;
+        };
+        let dp = (pos[0] - pp[0]).abs() + (pos[1] - pp[1]).abs() + (pos[2] - pp[2]).abs();
         let mut dv = 0.0f32;
-        for c in 0..4 { for r in 0..4 { dv += (ivp[c][r] - pv[c][r]).abs(); } }
+        for c in 0..4 {
+            for r in 0..4 {
+                dv += (ivp[c][r] - pv[c][r]).abs();
+            }
+        }
         dp > E || dv > E
     }
 
@@ -587,22 +666,44 @@ impl PathTracePass {
             .old_layout(vk::ImageLayout::UNDEFINED)
             .new_layout(vk::ImageLayout::GENERAL)
             .subresource_range(vk::ImageSubresourceRange {
-                aspect_mask: vk::ImageAspectFlags::COLOR, base_mip_level: 0,
-                level_count: 1, base_array_layer: 0, layer_count: 1,
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                base_mip_level: 0,
+                level_count: 1,
+                base_array_layer: 0,
+                layer_count: 1,
             })
             .src_access_mask(vk::AccessFlags::empty())
             .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE);
         unsafe {
-            device.cmd_pipeline_barrier(cmd,
-                vk::PipelineStageFlags::TOP_OF_PIPE, vk::PipelineStageFlags::TRANSFER,
-                vk::DependencyFlags::empty(), &[], &[], std::slice::from_ref(&b1));
+            device.cmd_pipeline_barrier(
+                cmd,
+                vk::PipelineStageFlags::TOP_OF_PIPE,
+                vk::PipelineStageFlags::TRANSFER,
+                vk::DependencyFlags::empty(),
+                &[],
+                &[],
+                std::slice::from_ref(&b1),
+            );
         }
-        let cc = vk::ClearColorValue { float32: [0.0, 0.0, 0.0, 0.0] };
-        let sub = vk::ImageSubresourceRange {
-            aspect_mask: vk::ImageAspectFlags::COLOR, base_mip_level: 0,
-            level_count: 1, base_array_layer: 0, layer_count: 1,
+        let cc = vk::ClearColorValue {
+            float32: [0.0, 0.0, 0.0, 0.0],
         };
-        unsafe { device.cmd_clear_color_image(cmd, self.accum_image, vk::ImageLayout::GENERAL, &cc, &[sub]); }
+        let sub = vk::ImageSubresourceRange {
+            aspect_mask: vk::ImageAspectFlags::COLOR,
+            base_mip_level: 0,
+            level_count: 1,
+            base_array_layer: 0,
+            layer_count: 1,
+        };
+        unsafe {
+            device.cmd_clear_color_image(
+                cmd,
+                self.accum_image,
+                vk::ImageLayout::GENERAL,
+                &cc,
+                &[sub],
+            );
+        }
 
         // 过渡 样本 count to GENERAL
         let b2 = vk::ImageMemoryBarrier::default()
@@ -613,25 +714,41 @@ impl PathTracePass {
             .src_access_mask(vk::AccessFlags::empty())
             .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE);
         unsafe {
-            device.cmd_pipeline_barrier(cmd,
-                vk::PipelineStageFlags::TOP_OF_PIPE, vk::PipelineStageFlags::TRANSFER,
-                vk::DependencyFlags::empty(), &[], &[], std::slice::from_ref(&b2));
+            device.cmd_pipeline_barrier(
+                cmd,
+                vk::PipelineStageFlags::TOP_OF_PIPE,
+                vk::PipelineStageFlags::TRANSFER,
+                vk::DependencyFlags::empty(),
+                &[],
+                &[],
+                std::slice::from_ref(&b2),
+            );
         }
-        let cu = vk::ClearColorValue { uint32: [0, 0, 0, 0] };
-        unsafe { device.cmd_clear_color_image(cmd, self.sample_count_image, vk::ImageLayout::GENERAL, &cu, &[sub]); }
+        let cu = vk::ClearColorValue {
+            uint32: [0, 0, 0, 0],
+        };
+        unsafe {
+            device.cmd_clear_color_image(
+                cmd,
+                self.sample_count_image,
+                vk::ImageLayout::GENERAL,
+                &cu,
+                &[sub],
+            );
+        }
     }
 
     /// 更新 描述符 集合 bindings.
-    fn update_ds(
-        &self,
-        device: &ash::Device,
-    ) {
+    fn update_ds(&self, device: &ash::Device) {
         let ai = vk::DescriptorImageInfo::default()
-            .image_view(self.accum_view).image_layout(vk::ImageLayout::GENERAL);
+            .image_view(self.accum_view)
+            .image_layout(vk::ImageLayout::GENERAL);
         let si = vk::DescriptorImageInfo::default()
-            .image_view(self.sample_count_view).image_layout(vk::ImageLayout::GENERAL);
+            .image_view(self.sample_count_view)
+            .image_layout(vk::ImageLayout::GENERAL);
         let oi = vk::DescriptorImageInfo::default()
-            .image_view(self.output_view).image_layout(vk::ImageLayout::GENERAL);
+            .image_view(self.output_view)
+            .image_layout(vk::ImageLayout::GENERAL);
 
         // Geometry buffers come from the PtScene (vertex/index/instance_meta).
         // The materials 缓冲区 is the shared RenderMaterialManager SSBO (wired
@@ -641,63 +758,122 @@ impl PathTracePass {
             None => (vk::Buffer::null(), vk::Buffer::null(), vk::Buffer::null()),
         };
         let vbi = vk::DescriptorBufferInfo::default()
-            .buffer(vbuf).offset(0).range(vk::WHOLE_SIZE);
+            .buffer(vbuf)
+            .offset(0)
+            .range(vk::WHOLE_SIZE);
         let ibi = vk::DescriptorBufferInfo::default()
-            .buffer(ibuf).offset(0).range(vk::WHOLE_SIZE);
+            .buffer(ibuf)
+            .offset(0)
+            .range(vk::WHOLE_SIZE);
         let mbi = vk::DescriptorBufferInfo::default()
-            .buffer(mbuf).offset(0).range(vk::WHOLE_SIZE);
+            .buffer(mbuf)
+            .offset(0)
+            .range(vk::WHOLE_SIZE);
         let matbi = vk::DescriptorBufferInfo::default()
-            .buffer(self.materials_buffer.unwrap_or(vk::Buffer::null())).offset(0).range(vk::WHOLE_SIZE);
+            .buffer(self.materials_buffer.unwrap_or(vk::Buffer::null()))
+            .offset(0)
+            .range(vk::WHOLE_SIZE);
         let lbi = vk::DescriptorBufferInfo::default()
-            .buffer(self.lights_buffer).offset(0).range(vk::WHOLE_SIZE);
+            .buffer(self.lights_buffer)
+            .offset(0)
+            .range(vk::WHOLE_SIZE);
         let ebi = vk::DescriptorBufferInfo::default()
-            .buffer(self.emissive_buffer.unwrap_or(vk::Buffer::null())).offset(0).range(vk::WHOLE_SIZE);
+            .buffer(self.emissive_buffer.unwrap_or(vk::Buffer::null()))
+            .offset(0)
+            .range(vk::WHOLE_SIZE);
         // ReSTIR reservoir buffers (ping-pong, b10/b11).
         // 交换 roles each 帧 b10 gets the 缓冲区 written 最后一个 帧 (prev),
         // b11 gets the 缓冲区 to 写入 this 帧 (curr).
         let prev_buf = self.reservoir_buffers[1 - self.reservoir_swap];
         let curr_buf = self.reservoir_buffers[self.reservoir_swap];
         let prev_bi = vk::DescriptorBufferInfo::default()
-            .buffer(prev_buf).offset(0).range(vk::WHOLE_SIZE);
+            .buffer(prev_buf)
+            .offset(0)
+            .range(vk::WHOLE_SIZE);
         let curr_bi = vk::DescriptorBufferInfo::default()
-            .buffer(curr_buf).offset(0).range(vk::WHOLE_SIZE);
+            .buffer(curr_buf)
+            .offset(0)
+            .range(vk::WHOLE_SIZE);
 
         let writes = vec![
-            vk::WriteDescriptorSet::default().dst_set(self.ds).dst_binding(0)
-                .descriptor_type(vk::DescriptorType::STORAGE_IMAGE).image_info(std::slice::from_ref(&ai)),
-            vk::WriteDescriptorSet::default().dst_set(self.ds).dst_binding(1)
-                .descriptor_type(vk::DescriptorType::STORAGE_IMAGE).image_info(std::slice::from_ref(&si)),
-            vk::WriteDescriptorSet::default().dst_set(self.ds).dst_binding(3)
-                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER).buffer_info(std::slice::from_ref(&vbi)),
-            vk::WriteDescriptorSet::default().dst_set(self.ds).dst_binding(4)
-                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER).buffer_info(std::slice::from_ref(&ibi)),
-            vk::WriteDescriptorSet::default().dst_set(self.ds).dst_binding(5)
-                .descriptor_type(vk::DescriptorType::STORAGE_IMAGE).image_info(std::slice::from_ref(&oi)),
-            vk::WriteDescriptorSet::default().dst_set(self.ds).dst_binding(6)
-                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER).buffer_info(std::slice::from_ref(&mbi)),
-            vk::WriteDescriptorSet::default().dst_set(self.ds).dst_binding(7)
-                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER).buffer_info(std::slice::from_ref(&matbi)),
-            vk::WriteDescriptorSet::default().dst_set(self.ds).dst_binding(8)
-                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER).buffer_info(std::slice::from_ref(&lbi)),
-            vk::WriteDescriptorSet::default().dst_set(self.ds).dst_binding(9)
-                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER).buffer_info(std::slice::from_ref(&ebi)),
-            vk::WriteDescriptorSet::default().dst_set(self.ds).dst_binding(10)
-                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER).buffer_info(std::slice::from_ref(&prev_bi)),
-            vk::WriteDescriptorSet::default().dst_set(self.ds).dst_binding(11)
-                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER).buffer_info(std::slice::from_ref(&curr_bi)),
+            vk::WriteDescriptorSet::default()
+                .dst_set(self.ds)
+                .dst_binding(0)
+                .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+                .image_info(std::slice::from_ref(&ai)),
+            vk::WriteDescriptorSet::default()
+                .dst_set(self.ds)
+                .dst_binding(1)
+                .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+                .image_info(std::slice::from_ref(&si)),
+            vk::WriteDescriptorSet::default()
+                .dst_set(self.ds)
+                .dst_binding(3)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .buffer_info(std::slice::from_ref(&vbi)),
+            vk::WriteDescriptorSet::default()
+                .dst_set(self.ds)
+                .dst_binding(4)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .buffer_info(std::slice::from_ref(&ibi)),
+            vk::WriteDescriptorSet::default()
+                .dst_set(self.ds)
+                .dst_binding(5)
+                .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+                .image_info(std::slice::from_ref(&oi)),
+            vk::WriteDescriptorSet::default()
+                .dst_set(self.ds)
+                .dst_binding(6)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .buffer_info(std::slice::from_ref(&mbi)),
+            vk::WriteDescriptorSet::default()
+                .dst_set(self.ds)
+                .dst_binding(7)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .buffer_info(std::slice::from_ref(&matbi)),
+            vk::WriteDescriptorSet::default()
+                .dst_set(self.ds)
+                .dst_binding(8)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .buffer_info(std::slice::from_ref(&lbi)),
+            vk::WriteDescriptorSet::default()
+                .dst_set(self.ds)
+                .dst_binding(9)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .buffer_info(std::slice::from_ref(&ebi)),
+            vk::WriteDescriptorSet::default()
+                .dst_set(self.ds)
+                .dst_binding(10)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .buffer_info(std::slice::from_ref(&prev_bi)),
+            vk::WriteDescriptorSet::default()
+                .dst_set(self.ds)
+                .dst_binding(11)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .buffer_info(std::slice::from_ref(&curr_bi)),
         ];
-        unsafe { device.update_descriptor_sets(&writes, &[]); }
+        unsafe {
+            device.update_descriptor_sets(&writes, &[]);
+        }
 
         // 加速度 structure 写入 绑定 2) - done as a separate 调用
         // because its push_next 引用 must stay alive for the 更新 调用
-        if let Some(handle) = self.pt_scene.as_ref().and_then(|s| s.tlas.as_ref().map(|t| t.handle)) {
+        if let Some(handle) = self
+            .pt_scene
+            .as_ref()
+            .and_then(|s| s.tlas.as_ref().map(|t| t.handle))
+        {
             let mut as_info = vk::WriteDescriptorSetAccelerationStructureKHR::default()
                 .acceleration_structures(std::slice::from_ref(&handle));
-            let as_write = vk::WriteDescriptorSet::default().dst_set(self.ds).dst_binding(2)
+            let as_write = vk::WriteDescriptorSet::default()
+                .dst_set(self.ds)
+                .dst_binding(2)
                 .descriptor_type(vk::DescriptorType::ACCELERATION_STRUCTURE_KHR)
                 .descriptor_count(1)
                 .push_next(&mut as_info);
-            unsafe { device.update_descriptor_sets(&[as_write], &[]); }
+            unsafe {
+                device.update_descriptor_sets(&[as_write], &[]);
+            }
         }
     }
 
@@ -751,18 +927,29 @@ impl PathTracePass {
 
 impl Drop for PathTracePass {
     fn drop(&mut self) {
-        if let Some(d) = self.device.take() { self.destroy(&d); }
+        if let Some(d) = self.device.take() {
+            self.destroy(&d);
+        }
     }
 }
 
 impl RenderPassNode for PathTracePass {
-    fn name(&self) -> &str { "PathTracePass" }
+    fn name(&self) -> &str {
+        "PathTracePass"
+    }
 
     fn setup(&mut self, graph: &mut RenderGraphBuilder, _settings: &RenderSettings) {
-        graph.create_resource_at(PT_COLOR_H, ResourceType::StorageImage {
-            format: vk::Format::R32G32B32A32_SFLOAT,
-            extent: vk::Extent3D { width: 1, height: 1, depth: 1 },
-        });
+        graph.create_resource_at(
+            PT_COLOR_H,
+            ResourceType::StorageImage {
+                format: vk::Format::R32G32B32A32_SFLOAT,
+                extent: vk::Extent3D {
+                    width: 1,
+                    height: 1,
+                    depth: 1,
+                },
+            },
+        );
         graph.write_usage(ResourceUsage {
             handle: PT_COLOR_H,
             access: vk::AccessFlags::SHADER_WRITE,
@@ -777,7 +964,11 @@ impl RenderPassNode for PathTracePass {
         });
     }
 
-    fn execute(&mut self, ctx: &RenderContext, resources: &mut GraphResources) -> anyhow::Result<()> {
+    fn execute(
+        &mut self,
+        ctx: &RenderContext,
+        resources: &mut GraphResources,
+    ) -> anyhow::Result<()> {
         if ctx.frame.render_mode != crate::render_graph::RenderMode::PathTrace {
             return Ok(());
         }
@@ -816,9 +1007,8 @@ impl RenderPassNode for PathTracePass {
         // Reset on 相机 motion, explicit accum-dirty (geometry), or the
         // directional-light accumulation-dirty flag from the 帧 (intensity,
         // 颜色 or direction changed). Cleared after one 帧 in both cases.
-        let reset = self.should_reset(cam_xyz, inv_vp)
-            || self.accum_dirty
-            || ctx.frame.pt_accum_dirty;
+        let reset =
+            self.should_reset(cam_xyz, inv_vp) || self.accum_dirty || ctx.frame.pt_accum_dirty;
         self.accum_dirty = false;
 
         self.prev_camera_pos = Some(cam_xyz);
@@ -843,18 +1033,23 @@ impl RenderPassNode for PathTracePass {
             .new_layout(vk::ImageLayout::GENERAL)
             .subresource_range(vk::ImageSubresourceRange {
                 aspect_mask: vk::ImageAspectFlags::COLOR,
-                base_mip_level: 0, level_count: 1, base_array_layer: 0, layer_count: 1,
+                base_mip_level: 0,
+                level_count: 1,
+                base_array_layer: 0,
+                layer_count: 1,
             })
-            .src_access_mask(
-                vk::AccessFlags::TRANSFER_WRITE | vk::AccessFlags::SHADER_WRITE,
-            )
+            .src_access_mask(vk::AccessFlags::TRANSFER_WRITE | vk::AccessFlags::SHADER_WRITE)
             .dst_access_mask(vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE);
         unsafe {
-            device.cmd_pipeline_barrier(cmd,
+            device.cmd_pipeline_barrier(
+                cmd,
                 vk::PipelineStageFlags::TRANSFER | vk::PipelineStageFlags::COMPUTE_SHADER,
                 vk::PipelineStageFlags::COMPUTE_SHADER,
-                vk::DependencyFlags::empty(), &[], &[],
-                std::slice::from_ref(&accum_to_gen));
+                vk::DependencyFlags::empty(),
+                &[],
+                &[],
+                std::slice::from_ref(&accum_to_gen),
+            );
         }
 
         // 屏障 sampleCount → GENERAL 计算 写入
@@ -865,18 +1060,23 @@ impl RenderPassNode for PathTracePass {
             .new_layout(vk::ImageLayout::GENERAL)
             .subresource_range(vk::ImageSubresourceRange {
                 aspect_mask: vk::ImageAspectFlags::COLOR,
-                base_mip_level: 0, level_count: 1, base_array_layer: 0, layer_count: 1,
+                base_mip_level: 0,
+                level_count: 1,
+                base_array_layer: 0,
+                layer_count: 1,
             })
-            .src_access_mask(
-                vk::AccessFlags::TRANSFER_WRITE | vk::AccessFlags::SHADER_WRITE,
-            )
+            .src_access_mask(vk::AccessFlags::TRANSFER_WRITE | vk::AccessFlags::SHADER_WRITE)
             .dst_access_mask(vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE);
         unsafe {
-            device.cmd_pipeline_barrier(cmd,
+            device.cmd_pipeline_barrier(
+                cmd,
                 vk::PipelineStageFlags::TRANSFER | vk::PipelineStageFlags::COMPUTE_SHADER,
                 vk::PipelineStageFlags::COMPUTE_SHADER,
-                vk::DependencyFlags::empty(), &[], &[],
-                std::slice::from_ref(&sc_to_gen));
+                vk::DependencyFlags::empty(),
+                &[],
+                &[],
+                std::slice::from_ref(&sc_to_gen),
+            );
         }
 
         // 屏障 PT_COLOR_H → GENERAL 计算 写入
@@ -891,15 +1091,23 @@ impl RenderPassNode for PathTracePass {
             .new_layout(vk::ImageLayout::GENERAL)
             .subresource_range(vk::ImageSubresourceRange {
                 aspect_mask: vk::ImageAspectFlags::COLOR,
-                base_mip_level: 0, level_count: 1, base_array_layer: 0, layer_count: 1,
+                base_mip_level: 0,
+                level_count: 1,
+                base_array_layer: 0,
+                layer_count: 1,
             })
             .src_access_mask(vk::AccessFlags::empty())
             .dst_access_mask(vk::AccessFlags::SHADER_WRITE);
         unsafe {
-            device.cmd_pipeline_barrier(cmd,
-                vk::PipelineStageFlags::TOP_OF_PIPE, vk::PipelineStageFlags::COMPUTE_SHADER,
-                vk::DependencyFlags::empty(), &[], &[],
-                std::slice::from_ref(&out_to_gen));
+            device.cmd_pipeline_barrier(
+                cmd,
+                vk::PipelineStageFlags::TOP_OF_PIPE,
+                vk::PipelineStageFlags::COMPUTE_SHADER,
+                vk::DependencyFlags::empty(),
+                &[],
+                &[],
+                std::slice::from_ref(&out_to_gen),
+            );
         }
 
         // 更新 descriptors
@@ -914,8 +1122,14 @@ impl RenderPassNode for PathTracePass {
         };
         unsafe {
             device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pl.pipeline);
-            device.cmd_bind_descriptor_sets(cmd, vk::PipelineBindPoint::COMPUTE, pl.layout,
-                0, &sets, &[]);
+            device.cmd_bind_descriptor_sets(
+                cmd,
+                vk::PipelineBindPoint::COMPUTE,
+                pl.layout,
+                0,
+                &sets,
+                &[],
+            );
         }
 
         // 打包 reset into params.w bit 31
@@ -944,17 +1158,24 @@ impl RenderPassNode for PathTracePass {
             num_emissive: self.emissive_count,
         };
         unsafe {
-            device.cmd_push_constants(cmd, pl.layout, vk::ShaderStageFlags::COMPUTE,
-                0, std::slice::from_raw_parts(
+            device.cmd_push_constants(
+                cmd,
+                pl.layout,
+                vk::ShaderStageFlags::COMPUTE,
+                0,
+                std::slice::from_raw_parts(
                     &push as *const _ as *const u8,
                     std::mem::size_of::<shader_bindings::pt_render::PtPush>(),
-                ));
+                ),
+            );
         }
 
         // 分发 (16×16 线程 groups)
         let gx = (w + 15) / 16;
         let gy = (h + 15) / 16;
-        unsafe { device.cmd_dispatch(cmd, gx, gy, 1); }
+        unsafe {
+            device.cmd_dispatch(cmd, gx, gy, 1);
+        }
 
         // Post-dispatch 屏障 PT_COLOR_H GENERAL → SHADER_READ_ONLY_OPTIMAL
         // so PostPass can 样本 it. Must be manual because the 写入 edge
@@ -966,16 +1187,23 @@ impl RenderPassNode for PathTracePass {
             .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
             .subresource_range(vk::ImageSubresourceRange {
                 aspect_mask: vk::ImageAspectFlags::COLOR,
-                base_mip_level: 0, level_count: 1, base_array_layer: 0, layer_count: 1,
+                base_mip_level: 0,
+                level_count: 1,
+                base_array_layer: 0,
+                layer_count: 1,
             })
             .src_access_mask(vk::AccessFlags::SHADER_WRITE)
             .dst_access_mask(vk::AccessFlags::SHADER_READ);
         unsafe {
-            device.cmd_pipeline_barrier(cmd,
+            device.cmd_pipeline_barrier(
+                cmd,
                 vk::PipelineStageFlags::COMPUTE_SHADER,
                 vk::PipelineStageFlags::FRAGMENT_SHADER,
-                vk::DependencyFlags::empty(), &[], &[],
-                std::slice::from_ref(&out_to_read));
+                vk::DependencyFlags::empty(),
+                &[],
+                &[],
+                std::slice::from_ref(&out_to_read),
+            );
         }
 
         // Advance reservoir 交换 索引 for 下一个 帧
@@ -987,7 +1215,13 @@ impl RenderPassNode for PathTracePass {
         resources.set_image_view(PT_COLOR_H, self.output_view);
         resources.set_image(PT_COLOR_H, self.output_image);
 
-        log::trace!("PathTracePass: dispatch {}×{} reset={} frame={}", w, h, reset, self.frame_counter);
+        log::trace!(
+            "PathTracePass: dispatch {}×{} reset={} frame={}",
+            w,
+            h,
+            reset,
+            self.frame_counter
+        );
         Ok(())
     }
 
@@ -1011,72 +1245,143 @@ impl RenderPassNode for PathTracePass {
 
 // ---- helpers ----
 
-fn b(binding: u32, ty: vk::DescriptorType, stage: vk::ShaderStageFlags) -> vk::DescriptorSetLayoutBinding<'static> {
+fn b(
+    binding: u32,
+    ty: vk::DescriptorType,
+    stage: vk::ShaderStageFlags,
+) -> vk::DescriptorSetLayoutBinding<'static> {
     vk::DescriptorSetLayoutBinding::default()
-        .binding(binding).descriptor_type(ty).descriptor_count(1).stage_flags(stage)
+        .binding(binding)
+        .descriptor_type(ty)
+        .descriptor_count(1)
+        .stage_flags(stage)
 }
 
 fn make_accum_image(
-    device: &ash::Device, mem_props: &vk::PhysicalDeviceMemoryProperties,
-    w: u32, h: u32,
+    device: &ash::Device,
+    mem_props: &vk::PhysicalDeviceMemoryProperties,
+    w: u32,
+    h: u32,
 ) -> anyhow::Result<(vk::Image, vk::ImageView, vk::DeviceMemory)> {
-    make_image(device, mem_props, w, h, vk::Format::R32G32B32A32_SFLOAT,
-        vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_DST)
+    make_image(
+        device,
+        mem_props,
+        w,
+        h,
+        vk::Format::R32G32B32A32_SFLOAT,
+        vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_DST,
+    )
 }
 
 fn make_sample_count_image(
-    device: &ash::Device, mem_props: &vk::PhysicalDeviceMemoryProperties,
-    w: u32, h: u32,
+    device: &ash::Device,
+    mem_props: &vk::PhysicalDeviceMemoryProperties,
+    w: u32,
+    h: u32,
 ) -> anyhow::Result<(vk::Image, vk::ImageView, vk::DeviceMemory)> {
-    make_image(device, mem_props, w, h, vk::Format::R32_UINT,
-        vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_DST)
+    make_image(
+        device,
+        mem_props,
+        w,
+        h,
+        vk::Format::R32_UINT,
+        vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_DST,
+    )
 }
 
 fn make_pt_output_image(
-    device: &ash::Device, mem_props: &vk::PhysicalDeviceMemoryProperties,
-    w: u32, h: u32,
+    device: &ash::Device,
+    mem_props: &vk::PhysicalDeviceMemoryProperties,
+    w: u32,
+    h: u32,
 ) -> anyhow::Result<(vk::Image, vk::ImageView, vk::DeviceMemory)> {
-    make_image(device, mem_props, w, h, vk::Format::R32G32B32A32_SFLOAT,
-        vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED)
+    make_image(
+        device,
+        mem_props,
+        w,
+        h,
+        vk::Format::R32G32B32A32_SFLOAT,
+        vk::ImageUsageFlags::STORAGE
+            | vk::ImageUsageFlags::TRANSFER_DST
+            | vk::ImageUsageFlags::SAMPLED,
+    )
 }
 
 fn make_image(
-    device: &ash::Device, mem_props: &vk::PhysicalDeviceMemoryProperties,
-    w: u32, h: u32, fmt: vk::Format, usage: vk::ImageUsageFlags,
+    device: &ash::Device,
+    mem_props: &vk::PhysicalDeviceMemoryProperties,
+    w: u32,
+    h: u32,
+    fmt: vk::Format,
+    usage: vk::ImageUsageFlags,
 ) -> anyhow::Result<(vk::Image, vk::ImageView, vk::DeviceMemory)> {
-    let extent = vk::Extent3D { width: w.max(1), height: h.max(1), depth: 1 };
+    let extent = vk::Extent3D {
+        width: w.max(1),
+        height: h.max(1),
+        depth: 1,
+    };
     let img = unsafe {
-        device.create_image(&vk::ImageCreateInfo::default()
-            .image_type(vk::ImageType::TYPE_2D).format(fmt).extent(extent)
-            .mip_levels(1).array_layers(1).samples(vk::SampleCountFlags::TYPE_1)
-            .tiling(vk::ImageTiling::OPTIMAL).usage(usage)
-            .sharing_mode(vk::SharingMode::EXCLUSIVE), None)
+        device.create_image(
+            &vk::ImageCreateInfo::default()
+                .image_type(vk::ImageType::TYPE_2D)
+                .format(fmt)
+                .extent(extent)
+                .mip_levels(1)
+                .array_layers(1)
+                .samples(vk::SampleCountFlags::TYPE_1)
+                .tiling(vk::ImageTiling::OPTIMAL)
+                .usage(usage)
+                .sharing_mode(vk::SharingMode::EXCLUSIVE),
+            None,
+        )
     }?;
     let req = unsafe { device.get_image_memory_requirements(img) };
-    let mt = find_mem_type(mem_props, req.memory_type_bits, vk::MemoryPropertyFlags::DEVICE_LOCAL)
-        .ok_or_else(|| anyhow::anyhow!("no device-local memory"))?;
+    let mt = find_mem_type(
+        mem_props,
+        req.memory_type_bits,
+        vk::MemoryPropertyFlags::DEVICE_LOCAL,
+    )
+    .ok_or_else(|| anyhow::anyhow!("no device-local memory"))?;
     let mem = unsafe {
-        device.allocate_memory(&vk::MemoryAllocateInfo {
-            allocation_size: req.size, memory_type_index: mt, ..Default::default()
-        }, None)
+        device.allocate_memory(
+            &vk::MemoryAllocateInfo {
+                allocation_size: req.size,
+                memory_type_index: mt,
+                ..Default::default()
+            },
+            None,
+        )
     }?;
-    unsafe { device.bind_image_memory(img, mem, 0)?; }
+    unsafe {
+        device.bind_image_memory(img, mem, 0)?;
+    }
     let view = unsafe {
-        device.create_image_view(&vk::ImageViewCreateInfo::default()
-            .image(img).view_type(vk::ImageViewType::TYPE_2D).format(fmt)
-            .subresource_range(vk::ImageSubresourceRange {
-                aspect_mask: vk::ImageAspectFlags::COLOR,
-                base_mip_level: 0, level_count: 1, base_array_layer: 0, layer_count: 1,
-            }), None)
+        device.create_image_view(
+            &vk::ImageViewCreateInfo::default()
+                .image(img)
+                .view_type(vk::ImageViewType::TYPE_2D)
+                .format(fmt)
+                .subresource_range(vk::ImageSubresourceRange {
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    base_mip_level: 0,
+                    level_count: 1,
+                    base_array_layer: 0,
+                    layer_count: 1,
+                }),
+            None,
+        )
     }?;
     Ok((img, view, mem))
 }
 
 fn find_mem_type(
-    mp: &vk::PhysicalDeviceMemoryProperties, filter: u32, flags: vk::MemoryPropertyFlags,
+    mp: &vk::PhysicalDeviceMemoryProperties,
+    filter: u32,
+    flags: vk::MemoryPropertyFlags,
 ) -> Option<u32> {
-    (0..mp.memory_type_count).find(|&i|
-        (filter & (1 << i)) != 0 && mp.memory_types[i as usize].property_flags.contains(flags))
+    (0..mp.memory_type_count).find(|&i| {
+        (filter & (1 << i)) != 0 && mp.memory_types[i as usize].property_flags.contains(flags)
+    })
 }
 
 /// Column-major 4×4 矩阵 inverse (Cramer's 规则 transposed cofactor).

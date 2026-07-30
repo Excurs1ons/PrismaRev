@@ -3,9 +3,9 @@
 //! 每帧查询所有 `Node + ComputedLayout` 的实体，生成有序的 `UiDrawList`。
 //! `UiDrawList` 被设置到 `World` Resource 中，供 `GraphRenderer` 的 UI Pass 消费。
 
-use prism_ecs::World;
 use crate::ui::components::*;
 use crate::ui::ScreenSize;
+use prism_ecs::World;
 
 // ── 绘制命令 ─────────────────────────────────────────────────
 
@@ -46,9 +46,13 @@ pub fn ui_render_system(world: &mut World) {
 
     // 收集背景矩形
     for (entity, layout, style) in world.query2::<ComputedLayout, Style>() {
-        if !style.visible { continue; }
+        if !style.visible {
+            continue;
+        }
         let bg = style.background;
-        if bg[3] <= 0.0 { continue; } // 完全透明跳过
+        if bg[3] <= 0.0 {
+            continue;
+        } // 完全透明跳过
 
         draw_list.quads.push(UiQuad {
             rect: layout.rect,
@@ -60,7 +64,9 @@ pub fn ui_render_system(world: &mut World) {
 
     // 收集文本
     for (entity, layout, text) in world.query2::<ComputedLayout, Text>() {
-        if text.content.is_empty() { continue; }
+        if text.content.is_empty() {
+            continue;
+        }
 
         draw_list.texts.push(UiTextCmd {
             rect: layout.rect,
@@ -83,7 +89,13 @@ pub fn ui_render_system(world: &mut World) {
 ///
 /// 从 world 的 `ScreenSize` resource 读取屏幕尺寸。
 pub fn convert_ui_draw_list_to_overlay(world: &World) -> prism_render::UiOverlayInput {
-    let screen = world.get_resource::<ScreenSize>().copied().unwrap_or(ScreenSize { width: 1920.0, height: 1080.0 });
+    let screen = world
+        .get_resource::<ScreenSize>()
+        .copied()
+        .unwrap_or(ScreenSize {
+            width: 1920.0,
+            height: 1080.0,
+        });
     let w = screen.width as f32;
     let h = screen.height as f32;
 
@@ -94,9 +106,9 @@ pub fn convert_ui_draw_list_to_overlay(world: &World) -> prism_render::UiOverlay
     let mut quads = Vec::with_capacity(draw_list.quads.len());
     for q in &draw_list.quads {
         let [px, py, pw, ph] = q.rect; // pixel left, top, width, height
-        // NDC: [-1,1] x [-1,1], Y-up, origin center.
+                                       // NDC: [-1,1] x [-1,1], Y-up, origin center.
         let x0 = (px / w) * 2.0 - 1.0;
-        let y0 = ((h - py) / h) * 2.0 - 1.0;  // flip Y
+        let y0 = ((h - py) / h) * 2.0 - 1.0; // flip Y
         let x1 = ((px + pw) / w) * 2.0 - 1.0;
         let y1 = ((h - (py + ph)) / h) * 2.0 - 1.0;
         // NDC border 半径 近似

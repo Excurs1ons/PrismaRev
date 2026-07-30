@@ -115,8 +115,8 @@ impl Platform {
 pub struct TextureSettings {
     pub compression: TextureCompression,
     pub generate_mips: bool,
-    pub quality: u8,          // 0–100
-    pub max_size: u32,        // 0 = unlimited
+    pub quality: u8,   // 0–100
+    pub max_size: u32, // 0 = unlimited
 }
 
 impl Default for TextureSettings {
@@ -309,10 +309,9 @@ impl ProfileManager {
         // when a user 配置 inherits via `base: "desktop"`.
         let file_path = self.profiles_dir.join(format!("{name}.json"));
         if file_path.exists() {
-            let raw = std::fs::read_to_string(&file_path)
-                .map_err(|e| ProfileError::Io(e))?;
-            let profile: CookProfile = serde_json::from_str(&raw)
-                .map_err(|e| ProfileError::ParseError {
+            let raw = std::fs::read_to_string(&file_path).map_err(|e| ProfileError::Io(e))?;
+            let profile: CookProfile =
+                serde_json::from_str(&raw).map_err(|e| ProfileError::ParseError {
                     path: file_path.display().to_string(),
                     detail: e.to_string(),
                 })?;
@@ -451,8 +450,10 @@ impl ProfileManager {
 static BUILTIN_DEFAULTS: LazyLock<HashMap<&'static str, CookProfile>> = LazyLock::new(|| {
     let mut m = HashMap::new();
 
-        // ── base.json ────────────────────────────────────────────────
-        m.insert("base", CookProfile {
+    // ── base.json ────────────────────────────────────────────────
+    m.insert(
+        "base",
+        CookProfile {
             version: Some(1),
             texture: Some(TextureSettings {
                 compression: TextureCompression::Rgba8,
@@ -465,7 +466,9 @@ static BUILTIN_DEFAULTS: LazyLock<HashMap<&'static str, CookProfile>> = LazyLock
                 optimize: true,
                 generate_tangents: false,
             }),
-            shader: Some(ShaderSettings { target: "spirv".into() }),
+            shader: Some(ShaderSettings {
+                target: "spirv".into(),
+            }),
             compression: Some(CompressionSettings {
                 algorithm: "zstd".into(),
                 level: 3,
@@ -473,10 +476,13 @@ static BUILTIN_DEFAULTS: LazyLock<HashMap<&'static str, CookProfile>> = LazyLock
             streaming: Some(false),
             chunk_size: Some(64 * 1024),
             ..Default::default()
-        });
+        },
+    );
 
-        // ── desktop.json ─────────────────────────────────────────────
-        m.insert("desktop", CookProfile {
+    // ── desktop.json ─────────────────────────────────────────────
+    m.insert(
+        "desktop",
+        CookProfile {
             version: Some(1),
             base: Some("base".into()),
             platform: Some("desktop".into()),
@@ -493,10 +499,13 @@ static BUILTIN_DEFAULTS: LazyLock<HashMap<&'static str, CookProfile>> = LazyLock
             }),
             streaming: Some(false),
             ..Default::default()
-        });
+        },
+    );
 
-        // ── android.json ─────────────────────────────────────────────
-        m.insert("android", CookProfile {
+    // ── android.json ─────────────────────────────────────────────
+    m.insert(
+        "android",
+        CookProfile {
             version: Some(1),
             base: Some("base".into()),
             platform: Some("android".into()),
@@ -514,10 +523,13 @@ static BUILTIN_DEFAULTS: LazyLock<HashMap<&'static str, CookProfile>> = LazyLock
             streaming: Some(true),
             chunk_size: Some(32 * 1024),
             ..Default::default()
-        });
+        },
+    );
 
-        // ── ios.json ─────────────────────────────────────────────────
-        m.insert("ios", CookProfile {
+    // ── ios.json ─────────────────────────────────────────────────
+    m.insert(
+        "ios",
+        CookProfile {
             version: Some(1),
             base: Some("base".into()),
             platform: Some("ios".into()),
@@ -535,10 +547,13 @@ static BUILTIN_DEFAULTS: LazyLock<HashMap<&'static str, CookProfile>> = LazyLock
             streaming: Some(true),
             chunk_size: Some(32 * 1024),
             ..Default::default()
-        });
+        },
+    );
 
-        // ── embedded.json ────────────────────────────────────────────
-        m.insert("embedded", CookProfile {
+    // ── embedded.json ────────────────────────────────────────────
+    m.insert(
+        "embedded",
+        CookProfile {
             version: Some(1),
             base: Some("base".into()),
             platform: Some("embedded".into()),
@@ -560,10 +575,11 @@ static BUILTIN_DEFAULTS: LazyLock<HashMap<&'static str, CookProfile>> = LazyLock
             streaming: Some(true),
             chunk_size: Some(16 * 1024),
             ..Default::default()
-        });
+        },
+    );
 
-        m
-    });
+    m
+});
 
 // ===========================================================================
 // Deep Merge Helpers
@@ -740,16 +756,16 @@ mod tests {
         let cycle_json = serde_json::json!({
             "base": "cycle_self"
         });
-        std::fs::write(
-            cycle_dir.join("cycle_self.json"),
-            cycle_json.to_string(),
-        ).ok();
+        std::fs::write(cycle_dir.join("cycle_self.json"), cycle_json.to_string()).ok();
 
         let mut mgr = ProfileManager::new(&cycle_dir);
         let result = mgr.resolve("cycle_self");
         assert!(result.is_err(), "cycle must be detected");
         if let Err(ProfileError::Cycle(chain)) = result {
-            assert!(chain.contains("cycle_self"), "chain should include the cycle name");
+            assert!(
+                chain.contains("cycle_self"),
+                "chain should include the cycle name"
+            );
         } else {
             panic!("expected Cycle error");
         }
@@ -796,7 +812,10 @@ mod tests {
             ..Default::default()
         };
         ProfileManager::apply_cli_overrides(&mut settings, &overrides).unwrap();
-        assert_eq!(settings.custom.get("foo").and_then(|v| v.as_str()), Some("bar"));
+        assert_eq!(
+            settings.custom.get("foo").and_then(|v| v.as_str()),
+            Some("bar")
+        );
     }
 
     #[test]

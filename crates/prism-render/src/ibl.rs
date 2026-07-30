@@ -124,9 +124,15 @@ impl IblResources {
         };
         let cube_gen_ms = t_cube.elapsed().as_millis();
         if cube_gen_ms < 10 {
-            log::info!("  IBL phase: generate cubemap (6x512x512): {}ms (cached)", cube_gen_ms);
+            log::info!(
+                "  IBL phase: generate cubemap (6x512x512): {}ms (cached)",
+                cube_gen_ms
+            );
         } else {
-            log::info!("  IBL phase: generate cubemap (6x512x512): {}ms", cube_gen_ms);
+            log::info!(
+                "  IBL phase: generate cubemap (6x512x512): {}ms",
+                cube_gen_ms
+            );
         }
         let cube_texel_count = (6 * FACE_SIZE * FACE_SIZE) as usize;
         let mip_levels = {
@@ -165,17 +171,26 @@ impl IblResources {
                 mips
             } else {
                 let data = convolve_prefiltered(
-                    &rgba_f32, width, height, PREFILTERED_FACE_SIZE, PREFILTERED_MIP_LEVELS,
+                    &rgba_f32,
+                    width,
+                    height,
+                    PREFILTERED_FACE_SIZE,
+                    PREFILTERED_MIP_LEVELS,
                 );
                 for (mip, mip_data) in data.iter().enumerate() {
-                    let path = cache_path(hash, &format!("{}{}.bin", PREFILTERED_CACHE_PREFIX, mip));
+                    let path =
+                        cache_path(hash, &format!("{}{}.bin", PREFILTERED_CACHE_PREFIX, mip));
                     save_f32_cache(&path, mip_data);
                 }
                 data
             }
         } else {
             convolve_prefiltered(
-                &rgba_f32, width, height, PREFILTERED_FACE_SIZE, PREFILTERED_MIP_LEVELS,
+                &rgba_f32,
+                width,
+                height,
+                PREFILTERED_FACE_SIZE,
+                PREFILTERED_MIP_LEVELS,
             )
         };
         let pref_ms = t_pre.elapsed().as_millis();
@@ -194,21 +209,42 @@ impl IblResources {
         let brdf_ms = t_brdf.elapsed().as_millis();
 
         if irrad_ms < 10 {
-            log::info!("  IBL phase: convolve irradiance (6x64x64, 64 samples): {}ms (cached)", irrad_ms);
+            log::info!(
+                "  IBL phase: convolve irradiance (6x64x64, 64 samples): {}ms (cached)",
+                irrad_ms
+            );
         } else {
-            log::info!("  IBL phase: convolve irradiance (6x64x64, 64 samples): {}ms", irrad_ms);
+            log::info!(
+                "  IBL phase: convolve irradiance (6x64x64, 64 samples): {}ms",
+                irrad_ms
+            );
         }
         if pref_ms < 10 {
-            log::info!("  IBL phase: convolve prefiltered (5 mips): {}ms (cached)", pref_ms);
+            log::info!(
+                "  IBL phase: convolve prefiltered (5 mips): {}ms (cached)",
+                pref_ms
+            );
         } else {
-            log::info!("  IBL phase: convolve prefiltered (5 mips, 128x128x6x128 samples): {}ms", pref_ms);
+            log::info!(
+                "  IBL phase: convolve prefiltered (5 mips, 128x128x6x128 samples): {}ms",
+                pref_ms
+            );
         }
         if brdf_ms < 10 {
-            log::info!("  IBL phase: compute BRDF LUT (512x512, 1024 samples): {}ms (cached)", brdf_ms);
+            log::info!(
+                "  IBL phase: compute BRDF LUT (512x512, 1024 samples): {}ms (cached)",
+                brdf_ms
+            );
         } else {
-            log::info!("  IBL phase: compute BRDF LUT (512x512, 1024 samples): {}ms", brdf_ms);
+            log::info!(
+                "  IBL phase: compute BRDF LUT (512x512, 1024 samples): {}ms",
+                brdf_ms
+            );
         }
-        log::info!("  IBL phase: convolve total: {}ms", irrad_ms + pref_ms + brdf_ms);
+        log::info!(
+            "  IBL phase: convolve total: {}ms",
+            irrad_ms + pref_ms + brdf_ms
+        );
 
         // 2. 创建 all images.
         // 2a. Environment cubemap (existing).
@@ -692,10 +728,12 @@ impl IblResources {
 
         unsafe { device.end_command_buffer(cmd) }?;
         let img_create_ms = t_img_create.elapsed().as_millis();
-        log::info!("  IBL phase: create images + alloc + fill staging: {}ms", img_create_ms);
+        log::info!(
+            "  IBL phase: create images + alloc + fill staging: {}ms",
+            img_create_ms
+        );
         let t_upload = std::time::Instant::now();
-        submit_and_wait(&device, queue, command_pool, cmd)
-            .context("IBL upload submit")?;
+        submit_and_wait(&device, queue, command_pool, cmd).context("IBL upload submit")?;
         let upload_ms = t_upload.elapsed().as_millis();
         log::info!("  IBL phase: upload + submit + wait: {}ms", upload_ms);
 
@@ -859,27 +897,27 @@ impl IblResources {
         let descriptor_set_layout = unsafe {
             device.create_descriptor_set_layout(
                 &vk::DescriptorSetLayoutCreateInfo::default().bindings(&[
-	                    vk::DescriptorSetLayoutBinding {
-	                        binding: 0,
-	                        descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-	                        descriptor_count: 1,
-	                        stage_flags: vk::ShaderStageFlags::FRAGMENT | vk::ShaderStageFlags::COMPUTE,
-	                        ..Default::default()
-	                    },
-	                    vk::DescriptorSetLayoutBinding {
-	                        binding: 1,
-	                        descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-	                        descriptor_count: 1,
-	                        stage_flags: vk::ShaderStageFlags::FRAGMENT | vk::ShaderStageFlags::COMPUTE,
-	                        ..Default::default()
-	                    },
-	                    vk::DescriptorSetLayoutBinding {
-	                        binding: 2,
-	                        descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-	                        descriptor_count: 1,
-	                        stage_flags: vk::ShaderStageFlags::FRAGMENT | vk::ShaderStageFlags::COMPUTE,
-	                        ..Default::default()
-	                    },
+                    vk::DescriptorSetLayoutBinding {
+                        binding: 0,
+                        descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+                        descriptor_count: 1,
+                        stage_flags: vk::ShaderStageFlags::FRAGMENT | vk::ShaderStageFlags::COMPUTE,
+                        ..Default::default()
+                    },
+                    vk::DescriptorSetLayoutBinding {
+                        binding: 1,
+                        descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+                        descriptor_count: 1,
+                        stage_flags: vk::ShaderStageFlags::FRAGMENT | vk::ShaderStageFlags::COMPUTE,
+                        ..Default::default()
+                    },
+                    vk::DescriptorSetLayoutBinding {
+                        binding: 2,
+                        descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+                        descriptor_count: 1,
+                        stage_flags: vk::ShaderStageFlags::FRAGMENT | vk::ShaderStageFlags::COMPUTE,
+                        ..Default::default()
+                    },
                 ]),
                 None,
             )
@@ -947,7 +985,10 @@ impl IblResources {
         };
 
         let views_ms = t_views.elapsed().as_millis();
-        log::info!("  IBL phase: views + samplers + descriptors: {}ms", views_ms);
+        log::info!(
+            "  IBL phase: views + samplers + descriptors: {}ms",
+            views_ms
+        );
         Ok(Self {
             device,
             descriptor_set_layout,
@@ -1078,7 +1119,9 @@ fn ensure_cache_dir(subdir: &str) -> Option<std::path::PathBuf> {
 
 /// 构建 a 完整 cache path from 哈希 subdir and filename.
 fn cache_path(hash: &str, filename: &str) -> std::path::PathBuf {
-    std::path::PathBuf::from(IBL_CACHE_DIR).join(hash).join(filename)
+    std::path::PathBuf::from(IBL_CACHE_DIR)
+        .join(hash)
+        .join(filename)
 }
 
 /// 确定性 content 哈希 of the raw 高动态范围 file 字节
@@ -1095,9 +1138,7 @@ fn save_f32_cache(path: &Path, data: &[f32]) {
     use std::io::Write;
     let count = data.len() as u32;
     // 安全性 reinterpreting &[f32] as &[u8] is safe.
-    let bytes = unsafe {
-        std::slice::from_raw_parts(data.as_ptr() as *const u8, data.len() * 4)
-    };
+    let bytes = unsafe { std::slice::from_raw_parts(data.as_ptr() as *const u8, data.len() * 4) };
     match std::fs::File::create(path) {
         Ok(mut f) => {
             let _ = f.write_all(&count.to_le_bytes());
@@ -1121,11 +1162,7 @@ fn load_f32_cache(path: &Path) -> Option<Vec<f32>> {
     let mut out = vec![0.0f32; count];
     // 安全性 raw 字节 were written by our own 保存 函数
     unsafe {
-        std::ptr::copy_nonoverlapping(
-            raw.as_ptr().add(4) as *const f32,
-            out.as_mut_ptr(),
-            count,
-        );
+        std::ptr::copy_nonoverlapping(raw.as_ptr().add(4) as *const f32, out.as_mut_ptr(), count);
     }
     log::info!("  IBL cache: loaded {}", path.display());
     Some(out)

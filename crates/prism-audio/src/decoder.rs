@@ -81,9 +81,8 @@ pub fn decode_file(path: impl AsRef<Path>) -> Result<AudioData, AudioError> {
 
 fn decode_probed(probed: symphonium::ProbedAudioSource) -> Result<AudioData, AudioError> {
     let config = DecodeConfig::default();
-    let decoded: DecodedAudioF32 =
-        symphonium::decode_f32(probed, &config, None, None, None)
-            .map_err(|e| AudioError::Decode(e.to_string()))?;
+    let decoded: DecodedAudioF32 = symphonium::decode_f32(probed, &config, None, None, None)
+        .map_err(|e| AudioError::Decode(e.to_string()))?;
 
     if decoded.frames() == 0 {
         return Err(AudioError::Decode("Decoded zero samples".into()));

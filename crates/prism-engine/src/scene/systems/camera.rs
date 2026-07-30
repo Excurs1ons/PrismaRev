@@ -86,10 +86,7 @@ pub fn fallback_camera_output(surface_rotation: &Mat4, aspect: f32) -> CameraOut
 /// `surface_rotation` is the device-orientation 矩阵 applied on 顶部 of the
 /// view-projection (mirrors the old `mat_mul(&surface_rotation, &vp)` step in
 /// `render_system`). Returns `None` if no usable 相机 存在
-pub fn compute_camera_output(
-    world: &World,
-    surface_rotation: &Mat4,
-) -> Option<CameraOutput> {
+pub fn compute_camera_output(world: &World, surface_rotation: &Mat4) -> Option<CameraOutput> {
     let (entity, cam) = world.query::<Camera>().find(|(_, c)| c.enabled)?;
     let ctrl = world.get::<FlyCameraController>(entity)?;
     let world_tf = world.get::<WorldTransform>(entity)?;

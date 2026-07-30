@@ -19,14 +19,8 @@ pub enum DecodeRequest {
 
 #[derive(Clone)]
 pub enum DecodeResult {
-    Decoded {
-        request_id: u64,
-        data: AudioData,
-    },
-    Error {
-        request_id: u64,
-        message: String,
-    },
+    Decoded { request_id: u64, data: AudioData },
+    Error { request_id: u64, message: String },
 }
 
 impl std::fmt::Debug for DecodeResult {
@@ -37,7 +31,10 @@ impl std::fmt::Debug for DecodeResult {
                 .field("request_id", request_id)
                 .field("data", &"[AudioData]")
                 .finish(),
-            Self::Error { request_id, message } => f
+            Self::Error {
+                request_id,
+                message,
+            } => f
                 .debug_struct("DecodeResult::Error")
                 .field("request_id", request_id)
                 .field("message", message)
@@ -50,10 +47,7 @@ impl std::fmt::Debug for DecodeResult {
 
 /// Run the 音频 解码 事件 循环 Blocks on `rx` until
 /// [`DecodeRequest::Shutdown`] or 通道 关闭
-pub fn audio_decode_thread_main(
-    rx: Receiver<DecodeRequest>,
-    tx: Sender<DecodeResult>,
-) {
+pub fn audio_decode_thread_main(rx: Receiver<DecodeRequest>, tx: Sender<DecodeResult>) {
     log::info!("Audio decode thread started");
 
     loop {

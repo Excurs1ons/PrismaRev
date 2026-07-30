@@ -247,12 +247,9 @@ impl App {
         let (tx, rx) = flume::unbounded();
         let (result_tx, result_rx) = flume::bounded(8);
 
-
         let thread = std::thread::Builder::new()
             .name("audio-decode".into())
-            .spawn(move || {
-                crate::audio_decode_runner::audio_decode_thread_main(rx, result_tx)
-            })
+            .spawn(move || crate::audio_decode_runner::audio_decode_thread_main(rx, result_tx))
             .expect("failed to spawn audio decode thread");
 
         self.audio_decode_tx = Some(tx);
@@ -387,7 +384,7 @@ impl App {
         // 从渲染线程读取渲染统计数据
         let stats = shared.read_render_stats();
         self.editor.sync_metrics(
-            1.0 / 60.0,                                 // dt (fixed)
+            1.0 / 60.0, // dt (fixed)
             stats.frame_time_ms,
             stats.fps,
             stats.pt_frame_count.unwrap_or(0),
@@ -438,9 +435,7 @@ impl App {
     // -----------------------------------------------------------------------
 
     fn any_ui_visible(&self) -> bool {
-        self.editor.inspector.show
-            || self.render_graph_viz.show
-            || self.editor.inspector.show_perf
+        self.editor.inspector.show || self.render_graph_viz.show || self.editor.inspector.show_perf
     }
 
     // -----------------------------------------------------------------------
@@ -476,9 +471,21 @@ impl App {
 
     fn pbr_flag_names() -> &'static [&'static str; 15] {
         &[
-            "Direct", "Shadow", "Specular", "Metallic", "Roughness",
-            "DiffuseIBL", "SpecularIBL", "MultiLight", "AO", "Emissive",
-            "Transmission", "Translucency", "Anisotropy", "ClearCoat", "GI",
+            "Direct",
+            "Shadow",
+            "Specular",
+            "Metallic",
+            "Roughness",
+            "DiffuseIBL",
+            "SpecularIBL",
+            "MultiLight",
+            "AO",
+            "Emissive",
+            "Transmission",
+            "Translucency",
+            "Anisotropy",
+            "ClearCoat",
+            "GI",
         ]
     }
 
@@ -664,8 +671,7 @@ impl ApplicationHandler for App {
 
                 match code {
                     KeyCode::Tab => {
-                        self.render_settings.debug_rt =
-                            (self.render_settings.debug_rt + 1) % 3;
+                        self.render_settings.debug_rt = (self.render_settings.debug_rt + 1) % 3;
                         let name = match self.render_settings.debug_rt {
                             0 => "normal (HDR tonemap)",
                             1 => "depth (linearized)",
@@ -676,7 +682,11 @@ impl ApplicationHandler for App {
                     }
                     KeyCode::KeyT => {
                         self.render_settings.tonemap_mode =
-                            if self.render_settings.tonemap_mode == 0 { 1 } else { 0 };
+                            if self.render_settings.tonemap_mode == 0 {
+                                1
+                            } else {
+                                0
+                            };
                         log::info!("tonemap mode = {}", self.render_settings.tonemap_mode);
                     }
                     KeyCode::F1 => {
@@ -697,8 +707,7 @@ impl ApplicationHandler for App {
         // 非键盘窗口事件。
         match &event {
             WindowEvent::CursorMoved { position, .. } => {
-                self.input
-                    .handle_mouse_move([position.x, position.y]);
+                self.input.handle_mouse_move([position.x, position.y]);
             }
             WindowEvent::MouseInput { state, button, .. } => {
                 let eng_state = match state {
@@ -736,8 +745,7 @@ impl ApplicationHandler for App {
             if self.input.pointer_locked {
                 // 累加到一个虚拟的绝对位置，使 InputManager::mouse_delta() 反映原始增量。
                 let cur = self.input.mouse_position();
-                self.input
-                    .handle_mouse_move([cur[0] + dx, cur[1] + dy]);
+                self.input.handle_mouse_move([cur[0] + dx, cur[1] + dy]);
             }
         }
     }

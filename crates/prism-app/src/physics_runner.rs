@@ -62,10 +62,20 @@ pub enum PhysicsBodyStatus {
 
 #[derive(Debug, Clone)]
 pub enum ColliderDesc {
-    Sphere { radius: f32 },
-    Box { half_extents: [f32; 3] },
-    Capsule { half_height: f32, radius: f32 },
-    Trimesh { vertices: Vec<[f32; 3]>, indices: Vec<u32> },
+    Sphere {
+        radius: f32,
+    },
+    Box {
+        half_extents: [f32; 3],
+    },
+    Capsule {
+        half_height: f32,
+        radius: f32,
+    },
+    Trimesh {
+        vertices: Vec<[f32; 3]>,
+        indices: Vec<u32>,
+    },
 }
 
 // ── Results (physics → main) ──────────────────────────────────────────
@@ -100,10 +110,7 @@ fn rapier_status(status: PhysicsBodyStatus) -> RigidBodyType {
 
 // ── 线程 entry point ────────────────────────────────────────────────
 
-pub fn physics_thread_main(
-    step_rx: Receiver<PhysicsStep>,
-    result_tx: Sender<PhysicsResult>,
-) {
+pub fn physics_thread_main(step_rx: Receiver<PhysicsStep>, result_tx: Sender<PhysicsResult>) {
     log::info!("Physics thread started");
 
     let mut rigid_body_set = RigidBodySet::new();
@@ -145,17 +152,16 @@ pub fn physics_thread_main(
 
                     let collider = match shape {
                         ColliderDesc::Sphere { radius } => ColliderBuilder::ball(radius).build(),
-                        ColliderDesc::Box { half_extents } => {
-                            ColliderBuilder::cuboid(
-                                half_extents[0],
-                                half_extents[1],
-                                half_extents[2],
-                            )
-                            .build()
-                        }
-                        ColliderDesc::Capsule { half_height, radius } => {
-                            ColliderBuilder::capsule_y(half_height, radius).build()
-                        }
+                        ColliderDesc::Box { half_extents } => ColliderBuilder::cuboid(
+                            half_extents[0],
+                            half_extents[1],
+                            half_extents[2],
+                        )
+                        .build(),
+                        ColliderDesc::Capsule {
+                            half_height,
+                            radius,
+                        } => ColliderBuilder::capsule_y(half_height, radius).build(),
                         ColliderDesc::Trimesh { vertices, indices } => {
                             let rapier_vertices: Vec<Vector> = vertices
                                 .iter()
@@ -170,11 +176,7 @@ pub fn physics_thread_main(
                                 .build()
                         }
                     };
-                    collider_set.insert_with_parent(
-                        collider,
-                        body_handle,
-                        &mut rigid_body_set,
-                    );
+                    collider_set.insert_with_parent(collider, body_handle, &mut rigid_body_set);
                 }
                 PhysicsCommand::DespawnBody { entity } => {
                     if let Some(handle) = entity_map.remove(&entity) {
@@ -207,10 +209,7 @@ pub fn physics_thread_main(
                     if let Some(handle) = entity_map.get(&entity) {
                         if let Some(body) = rigid_body_set.get_mut(*handle) {
                             body.set_linvel(Vector::new(linear[0], linear[1], linear[2]), true);
-                            body.set_angvel(
-                                Vector::new(angular[0], angular[1], angular[2]),
-                                true,
-                            );
+                            body.set_angvel(Vector::new(angular[0], angular[1], angular[2]), true);
                         }
                     }
                 }

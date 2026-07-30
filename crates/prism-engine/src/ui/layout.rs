@@ -9,8 +9,8 @@
 //! - 锚点定义子边相对于父边的映射
 //! - 固定尺寸覆盖锚点拉伸
 
-use prism_ecs::World;
 use crate::ui::components::*;
+use prism_ecs::World;
 
 /// 屏幕尺寸 resource —— 每帧由 engine 更新。
 #[derive(Clone, Copy, Debug)]
@@ -21,15 +21,22 @@ pub struct ScreenSize {
 
 impl ScreenSize {
     pub fn new(width: u32, height: u32) -> Self {
-        Self { width: width as f32, height: height as f32 }
+        Self {
+            width: width as f32,
+            height: height as f32,
+        }
     }
 }
 
 /// Layout System —— 每帧运行，计算所有 UI 元素的屏幕空间矩形。
 pub fn ui_layout_system(world: &mut World) {
-    let screen = world.get_resource::<ScreenSize>()
+    let screen = world
+        .get_resource::<ScreenSize>()
         .copied()
-        .unwrap_or(ScreenSize { width: 1920.0, height: 1080.0 });
+        .unwrap_or(ScreenSize {
+            width: 1920.0,
+            height: 1080.0,
+        });
 
     // 先收集所有 Node+Style+ComputedLayout 实体及 Parent
     // 分两遍：第一遍处理无 Parent 的根节点，第二遍处理子节点
@@ -49,12 +56,13 @@ pub fn ui_layout_system(world: &mut World) {
 
         for (entity, parent_opt) in remaining.drain(..) {
             let parent_rect = match parent_opt {
-                Some(parent_entity) => {
-                    match world.get::<ComputedLayout>(parent_entity) {
-                        Some(layout) => layout.rect,
-                        None => { next_pass.push((entity, parent_opt)); continue; }
+                Some(parent_entity) => match world.get::<ComputedLayout>(parent_entity) {
+                    Some(layout) => layout.rect,
+                    None => {
+                        next_pass.push((entity, parent_opt));
+                        continue;
                     }
-                }
+                },
                 None => [0.0, 0.0, screen.width, screen.height],
             };
 
@@ -79,29 +87,33 @@ fn compute_rect(style: &Style, parent: [f32; 4]) -> [f32; 4] {
     let (px, py, pw, ph) = (parent[0], parent[1], parent[2], parent[3]);
 
     // 锚点 → 矩形四边
-    let anchor_left   = px + style.anchors.min_x * pw;
-    let anchor_right  = px + style.anchors.max_x * pw;
-    let anchor_top    = py + style.anchors.min_y * ph;
+    let anchor_left = px + style.anchors.min_x * pw;
+    let anchor_right = px + style.anchors.max_x * pw;
+    let anchor_top = py + style.anchors.min_y * ph;
     let anchor_bottom = py + style.anchors.max_y * ph;
 
     let margin = &style.margin;
 
     // 固定尺寸 vs 锚点拉伸
-    let w = style.width.unwrap_or_else(|| (anchor_right - anchor_left) - margin.left - margin.right);
-    let h = style.height.unwrap_or_else(|| (anchor_bottom - anchor_top) - margin.top - margin.bottom);
+    let w = style
+        .width
+        .unwrap_or_else(|| (anchor_right - anchor_left) - margin.left - margin.right);
+    let h = style
+        .height
+        .unwrap_or_else(|| (anchor_bottom - anchor_top) - margin.top - margin.bottom);
     let w = w.max(0.0);
     let h = h.max(0.0);
 
     // 锚点+边距决定矩形原点
     let raw_left = anchor_left + margin.left;
-    let raw_top  = anchor_top  + margin.top;
+    let raw_top = anchor_top + margin.top;
 
     // Pivot 偏移
     let pivot_offset_x = style.pivot.x * w;
     let pivot_offset_y = style.pivot.y * h;
 
     let left = raw_left - pivot_offset_x;
-    let top  = raw_top  - pivot_offset_y;
+    let top = raw_top - pivot_offset_y;
 
     [left, top, w, h]
 }
@@ -117,7 +129,7 @@ fn _anchor_point_rect(style: &Style, parent: [f32; 4]) -> [f32; 4] {
     let h = style.height.unwrap_or(0.0);
 
     let left = anchor_x - style.pivot.x * w + style.margin.left - style.margin.right;
-    let top  = anchor_y - style.pivot.y * h + style.margin.top  - style.margin.bottom;
+    let top = anchor_y - style.pivot.y * h + style.margin.top - style.margin.bottom;
 
     [left, top, w.max(0.0), h.max(0.0)]
 }

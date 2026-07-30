@@ -63,8 +63,7 @@ impl ProbeVolumeData {
 
     /// Validate 内部 consistency (coeffs 长度 matches dims).
     pub fn is_valid(&self) -> bool {
-        self.coeffs.len() == self.expected_coeff_count()
-            && self.dims.iter().all(|&d| d >= 1)
+        self.coeffs.len() == self.expected_coeff_count() && self.dims.iter().all(|&d| d >= 1)
     }
 }
 
@@ -95,7 +94,11 @@ pub fn load_probe_volume_from_bytes(bytes: &[u8]) -> io::Result<ProbeVolumeData>
     if bytes.len() < HEADER_SIZE {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            format!("file too small ({} bytes, need >= {})", bytes.len(), HEADER_SIZE),
+            format!(
+                "file too small ({} bytes, need >= {})",
+                bytes.len(),
+                HEADER_SIZE
+            ),
         ));
     }
 

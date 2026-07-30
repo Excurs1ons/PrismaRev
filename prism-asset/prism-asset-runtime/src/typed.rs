@@ -9,10 +9,10 @@
 //! RSCN 场景格式由引擎的 `SceneLoader` 惰性解析，
 //! 因此 `SceneAsset` 仅持有原始字节。
 
-use prism_asset_core::{AssetId, AssetType};
 use prism_asset_cooker::{
     decode_rmat, decode_rmes, decode_rtex, RmatInfo, RmesInfo, RtexInfo, MATERIAL_SCALAR_COUNT,
 };
+use prism_asset_core::{AssetId, AssetType};
 
 use crate::{Asset, RuntimeError};
 

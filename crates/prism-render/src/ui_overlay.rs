@@ -6,7 +6,6 @@
 /// fills [`UiOverlayInput`] from an ECS 查询 and [`UiOverlay::record`]
 /// uploads 顶点 and draws them as a final 叠加 pass after the
 /// post-process 输出 (before the 交换链 PRESENT 屏障
-
 use std::ffi::CString;
 use std::mem::size_of;
 
@@ -133,16 +132,24 @@ impl UiOverlay {
     ) -> Result<(vk::Pipeline, vk::PipelineLayout)> {
         const VERT_SPV: &[u8] = include_bytes!("../../../shaders/ui_overlay.vert.spv");
         const FRAG_SPV: &[u8] = include_bytes!("../../../shaders/ui_overlay.frag.spv");
-        let vert_module = crate::shader::load_shader_module(device, VERT_SPV)
-            .context("UiOverlay: load vert")?;
-        let frag_module = crate::shader::load_shader_module(device, FRAG_SPV)
-            .context("UiOverlay: load frag")?;
+        let vert_module =
+            crate::shader::load_shader_module(device, VERT_SPV).context("UiOverlay: load vert")?;
+        let frag_module =
+            crate::shader::load_shader_module(device, FRAG_SPV).context("UiOverlay: load frag")?;
 
         let vert_entry = CString::new(ENTRY_VERTEX_MAIN).unwrap();
         let frag_entry = CString::new(ENTRY_FRAGMENT_MAIN).unwrap();
         let shader_stages = [
-            crate::shader::shader_stage(vk::ShaderStageFlags::VERTEX, vert_module, vert_entry.as_c_str()),
-            crate::shader::shader_stage(vk::ShaderStageFlags::FRAGMENT, frag_module, frag_entry.as_c_str()),
+            crate::shader::shader_stage(
+                vk::ShaderStageFlags::VERTEX,
+                vert_module,
+                vert_entry.as_c_str(),
+            ),
+            crate::shader::shader_stage(
+                vk::ShaderStageFlags::FRAGMENT,
+                frag_module,
+                frag_entry.as_c_str(),
+            ),
         ];
 
         let layout_info = vk::PipelineLayoutCreateInfo::default();
@@ -174,8 +181,8 @@ impl UiOverlay {
             .primitive_restart_enable(false);
 
         let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
-        let dynamic_state_info = vk::PipelineDynamicStateCreateInfo::default()
-            .dynamic_states(&dynamic_states);
+        let dynamic_state_info =
+            vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
 
         // 管线 状态 no 深度 Alpha 混合
         let rasterizer = vk::PipelineRasterizationStateCreateInfo::default()
@@ -215,7 +222,11 @@ impl UiOverlay {
 
         let pipeline = unsafe {
             device
-                .create_graphics_pipelines(vk::PipelineCache::null(), std::slice::from_ref(&pipeline_info), None)
+                .create_graphics_pipelines(
+                    vk::PipelineCache::null(),
+                    std::slice::from_ref(&pipeline_info),
+                    None,
+                )
                 .map_err(|(_, e)| e)
         }
         .context("UiOverlay: graphics pipeline")?[0];
@@ -271,8 +282,14 @@ impl UiOverlay {
         self.grow_buffer(context, vert_count)?;
         let data = self.build_vertex_data(input);
         unsafe {
-            let ptr = context.device
-                .map_memory(self.vertex_memory, 0, vert_bytes as u64, vk::MemoryMapFlags::empty())
+            let ptr = context
+                .device
+                .map_memory(
+                    self.vertex_memory,
+                    0,
+                    vert_bytes as u64,
+                    vk::MemoryMapFlags::empty(),
+                )
                 .context("UiOverlay: map")?;
             std::ptr::copy_nonoverlapping(data.as_ptr(), ptr as *mut u8, data.len());
             context.device.unmap_memory(self.vertex_memory);
@@ -300,20 +317,36 @@ impl UiOverlay {
                 extent,
             });
         unsafe {
-            context.device.cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE);
-            context.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.pipeline.unwrap());
+            context
+                .device
+                .cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE);
+            context.device.cmd_bind_pipeline(
+                cmd,
+                vk::PipelineBindPoint::GRAPHICS,
+                self.pipeline.unwrap(),
+            );
 
             let vp = vk::Viewport::default()
-                .x(0.0).y(0.0)
-                .width(extent.width as f32).height(extent.height as f32)
-                .min_depth(0.0).max_depth(1.0);
+                .x(0.0)
+                .y(0.0)
+                .width(extent.width as f32)
+                .height(extent.height as f32)
+                .min_depth(0.0)
+                .max_depth(1.0);
             let sc = vk::Rect2D::default()
-                .offset(vk::Offset2D { x: 0, y: 0 }).extent(extent);
-            context.device.cmd_set_viewport(cmd, 0, std::slice::from_ref(&vp));
-            context.device.cmd_set_scissor(cmd, 0, std::slice::from_ref(&sc));
+                .offset(vk::Offset2D { x: 0, y: 0 })
+                .extent(extent);
+            context
+                .device
+                .cmd_set_viewport(cmd, 0, std::slice::from_ref(&vp));
+            context
+                .device
+                .cmd_set_scissor(cmd, 0, std::slice::from_ref(&sc));
 
             let bufs = [self.vertex_buffer];
-            context.device.cmd_bind_vertex_buffers(cmd, 0, &bufs, &[0u64]);
+            context
+                .device
+                .cmd_bind_vertex_buffers(cmd, 0, &bufs, &[0u64]);
             context.device.cmd_draw(cmd, vert_count, 1, 0, 0);
             context.device.cmd_end_render_pass(cmd);
             context.device.destroy_framebuffer(fb, None);

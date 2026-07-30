@@ -62,9 +62,11 @@ impl PlatformContext {
             .expect("enumerate required extensions");
         let extensions: Vec<String> = ext_ptrs
             .iter()
-            .map(|p| unsafe { std::ffi::CStr::from_ptr(*p) }
-                .to_string_lossy()
-                .into_owned())
+            .map(|p| {
+                unsafe { std::ffi::CStr::from_ptr(*p) }
+                    .to_string_lossy()
+                    .into_owned()
+            })
             .collect();
         let extensions_ref: Vec<&str> = extensions.iter().map(|s| s.as_str()).collect();
 
@@ -161,5 +163,4 @@ impl PlatformContext {
     pub fn request_pt_reset(&mut self) {
         self.renderer.request_pt_reset();
     }
-
 }

@@ -511,7 +511,12 @@ impl SceneLoader {
             // 局部 变换
             let local = LocalTransform {
                 translation: pe.translation.into(),
-                rotation: glam::Quat::from_xyzw(pe.rotation[0], pe.rotation[1], pe.rotation[2], pe.rotation[3]),
+                rotation: glam::Quat::from_xyzw(
+                    pe.rotation[0],
+                    pe.rotation[1],
+                    pe.rotation[2],
+                    pe.rotation[3],
+                ),
                 scale: pe.scale.into(),
             };
             world.insert(entity, local.clone());

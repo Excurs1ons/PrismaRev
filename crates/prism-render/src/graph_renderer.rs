@@ -11,7 +11,9 @@ use anyhow::Context as _;
 use ash::vk;
 
 use crate::context::VulkanContext;
-use crate::descriptor::{DescriptorLayout, DescriptorPool, FrameUBO, FrameUBOData, GpuLight, PtAnalyticLight};
+use crate::descriptor::{
+    DescriptorLayout, DescriptorPool, FrameUBO, FrameUBOData, GpuLight, PtAnalyticLight,
+};
 use crate::egui_overlay::{EguiFrame, EguiGpu};
 use crate::ibl::IblResources;
 use crate::managers::{
@@ -124,16 +126,12 @@ impl RenderRuntime {
     ///
     /// `cmd_buffer_count` determines how many 命令 buffers to allocate
     /// (one per 交换链 图像
-    fn new(
-        context: Arc<VulkanContext>,
-        cmd_buffer_count: u32,
-    ) -> anyhow::Result<Self> {
+    fn new(context: Arc<VulkanContext>, cmd_buffer_count: u32) -> anyhow::Result<Self> {
         let descriptor_layout =
             DescriptorLayout::new(&context.device).context("create descriptor layout")?;
         let frame_count = 2u32;
         let descriptor_pool =
-            DescriptorPool::new(&context.device, frame_count)
-                .context("create descriptor pool")?;
+            DescriptorPool::new(&context.device, frame_count).context("create descriptor pool")?;
         let descriptor_sets = descriptor_pool
             .allocate_sets(&context.device, &descriptor_layout, frame_count)
             .context("allocate descriptor sets")?;
@@ -327,8 +325,7 @@ impl GraphRenderer {
         let mut scene_pass = ScenePass::new(color_format);
         // Scene-level 全局光照 probe 音量 (SceneScope). Created before ScenePass
         // wiring so its 描述符 集合 + 布局 can be borrowed 集合 5).
-        let scene_scope = SceneScope::new(context.clone())
-            .context("SceneScope::new")?;
+        let scene_scope = SceneScope::new(context.clone()).context("SceneScope::new")?;
         scene_pass
             .set_resources(
                 &context,
@@ -445,8 +442,8 @@ impl GraphRenderer {
         let mut texture_manager =
             RenderTextureManager::new(&context, runtime.command_pool, context.graphics_queue, 1024)
                 .context("create RenderTextureManager (headless)")?;
-        let material_manager =
-            RenderMaterialManager::new(&context).context("create RenderMaterialManager (headless)")?;
+        let material_manager = RenderMaterialManager::new(&context)
+            .context("create RenderMaterialManager (headless)")?;
         let mesh_manager = RenderMeshManager::new();
 
         let shadow_sampler = unsafe {
@@ -491,8 +488,7 @@ impl GraphRenderer {
             .context("register BRDF LUT into bindless table (headless)")?;
 
         let mut scene_pass = ScenePass::new(color_format);
-        let scene_scope =
-            SceneScope::new(context.clone()).context("SceneScope::new (headless)")?;
+        let scene_scope = SceneScope::new(context.clone()).context("SceneScope::new (headless)")?;
         scene_pass
             .set_resources(
                 &context,
@@ -510,20 +506,15 @@ impl GraphRenderer {
             )
             .context("ScenePass::set_resources (headless)")?;
 
-        let gtao_pass = crate::gtao::GtaoPass::new(
-            &context,
-            runtime.command_pool,
-            offscreen.extent,
-        )
-        .context("GtaoPass::new (headless)")?;
+        let gtao_pass =
+            crate::gtao::GtaoPass::new(&context, runtime.command_pool, offscreen.extent)
+                .context("GtaoPass::new (headless)")?;
 
         let frame_count = 2u32;
-        let post_pass =
-            crate::post::PostPass::new(&context, color_format, frame_count)
-                .context("PostPass::new (headless)")?;
+        let post_pass = crate::post::PostPass::new(&context, color_format, frame_count)
+            .context("PostPass::new (headless)")?;
 
-        let pt_pass =
-            PathTracePass::new(&context).context("PathTracePass::new (headless)")?;
+        let pt_pass = PathTracePass::new(&context).context("PathTracePass::new (headless)")?;
 
         graph.add_pass(Box::new(scene_pass));
         graph.add_pass(Box::new(gtao_pass));
@@ -603,7 +594,11 @@ impl GraphRenderer {
         self.graph.pass_ref::<PathTracePass>().map(|pt| {
             let fc = pt.frame_count();
             let max = self.settings.pt_max_iterations;
-            if max > 0 && fc > max { max } else { fc }
+            if max > 0 && fc > max {
+                max
+            } else {
+                fc
+            }
         })
     }
 
@@ -772,9 +767,7 @@ impl GraphRenderer {
                 true
             }
             Err(e) => {
-                log::warn!(
-                    "GraphRenderer: failed to upload baked probe volume: {e:#}"
-                );
+                log::warn!("GraphRenderer: failed to upload baked probe volume: {e:#}");
                 false
             }
         }
@@ -919,7 +912,11 @@ impl GraphRenderer {
         // to half the 交换链 extent, so recreate them on 调整大小 too.
         if let Some(sw) = self.swapchain.as_ref() {
             if let Some(gtao) = self.graph.pass_mut::<crate::gtao::GtaoPass>() {
-                if let Err(e) = gtao.recreate_target(&self.runtime.context, self.runtime.command_pool, sw.extent) {
+                if let Err(e) = gtao.recreate_target(
+                    &self.runtime.context,
+                    self.runtime.command_pool,
+                    sw.extent,
+                ) {
                     log::warn!("GtaoPass recreate_target failed: {e:#}");
                 }
             }
@@ -971,7 +968,10 @@ impl GraphRenderer {
                 .offscreen
                 .as_ref()
                 .map(|o| o.extent)
-                .unwrap_or(vk::Extent2D { width: 256, height: 256 });
+                .unwrap_or(vk::Extent2D {
+                    width: 256,
+                    height: 256,
+                });
 
             return Ok(Some(FrameCtx {
                 device,
@@ -1013,8 +1013,7 @@ impl GraphRenderer {
             .context("reset command buffer")?;
         let begin_info = vk::CommandBufferBeginInfo::default()
             .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
-        unsafe { device.begin_command_buffer(cmd, &begin_info) }
-            .context("begin command buffer")?;
+        unsafe { device.begin_command_buffer(cmd, &begin_info) }.context("begin command buffer")?;
 
         Ok(Some(FrameCtx {
             device,
@@ -1251,10 +1250,11 @@ impl GraphRenderer {
             let cmd_bufs = [ctx.cmd];
             let submit = vk::SubmitInfo::default().command_buffers(&cmd_bufs);
             unsafe {
-                self.runtime
-                    .context
-                    .device
-                    .queue_submit(self.runtime.context.graphics_queue, &[submit], ctx.fence)
+                self.runtime.context.device.queue_submit(
+                    self.runtime.context.graphics_queue,
+                    &[submit],
+                    ctx.fence,
+                )
             }
             .context("headless queue submit")?;
             if ctx.fence != vk::Fence::null() {
@@ -1287,7 +1287,11 @@ impl GraphRenderer {
             .swapchain
             .as_mut()
             .context("present: no swapchain")?
-            .present(self.runtime.context.graphics_queue, ctx.image_index, ctx.render_finished)?;
+            .present(
+                self.runtime.context.graphics_queue,
+                ctx.image_index,
+                ctx.render_finished,
+            )?;
 
         if out_of_date {
             log::debug!("present out of date, recreating");

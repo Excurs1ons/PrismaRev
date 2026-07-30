@@ -15,10 +15,10 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use prism_asset_core::{AssetId, AssetType, Handle};
-use prism_asset_cooker::{default_cooker_registry, decode_rtex, parse_rtexi_pixels, CookPipeline};
-use prism_asset_cooker::{decode_rmes, parse_rmxi_info};
 use prism_asset_cooker::profile::CookSettings;
+use prism_asset_cooker::{decode_rmes, parse_rmxi_info};
+use prism_asset_cooker::{decode_rtex, default_cooker_registry, parse_rtexi_pixels, CookPipeline};
+use prism_asset_core::{AssetId, AssetType, Handle};
 use prism_asset_db::{AssetDatabase, ImportCache};
 use prism_asset_importer::{default_importer_registry, ImportPipeline};
 use prism_asset_package::{PackageBuilder, PackageReader};
@@ -158,7 +158,11 @@ fn create_minimal_glb_bytes() -> Vec<u8> {
 /// 查找 an 资源 record whose stored path 包含 the given suffix.
 fn find_id_by_suffix<'a>(db: &'a AssetDatabase, suffix: &str) -> Option<AssetId> {
     db.records().find_map(|r| {
-        if r.path.ends_with(suffix) { Some(r.id) } else { None }
+        if r.path.ends_with(suffix) {
+            Some(r.id)
+        } else {
+            None
+        }
     })
 }
 
@@ -200,7 +204,8 @@ fn e2e_full_pipeline() {
          Test output (persistent): {test_out}",
         sponza_tex_src.display(),
     );
-    let sponza_path = copy_external_asset(&root, &sponza_tex_src, "sponza/metal_door_01_BaseColor.png");
+    let sponza_path =
+        copy_external_asset(&root, &sponza_tex_src, "sponza/metal_door_01_BaseColor.png");
 
     // --- Generated assets ---
     write_asset(&root, "test.json", b"{\"name\": \"test\", \"value\": 42}");
@@ -228,7 +233,10 @@ fn e2e_full_pipeline() {
     let r1 = import_pipeline
         .import_file(&sponza_path, &mut db, &mut cache, None)
         .expect("import Sponza texture");
-    assert!(r1.was_imported, "Sponza texture should be imported (not cached)");
+    assert!(
+        r1.was_imported,
+        "Sponza texture should be imported (not cached)"
+    );
     if let Some(data) = r1.intermediate_data {
         let id = find_id_by_suffix(&db, "metal_door_01_BaseColor.png")
             .expect("Sponza texture in db after import");
@@ -242,8 +250,7 @@ fn e2e_full_pipeline() {
         .expect("import JSON");
     assert!(r2.was_imported, "JSON should be imported (not cached)");
     if let Some(data) = r2.intermediate_data {
-        let id = find_id_by_suffix(&db, "test.json")
-            .expect("JSON asset in db after import");
+        let id = find_id_by_suffix(&db, "test.json").expect("JSON asset in db after import");
         intermediate_data.insert(id, data);
     }
 
@@ -253,8 +260,7 @@ fn e2e_full_pipeline() {
         .expect("import GLB");
     assert!(r3.was_imported, "GLB should be imported (not cached)");
     if let Some(data) = r3.intermediate_data {
-        let id = find_id_by_suffix(&db, "subdir/model.glb")
-            .expect("GLB asset in db after import");
+        let id = find_id_by_suffix(&db, "subdir/model.glb").expect("GLB asset in db after import");
         intermediate_data.insert(id, data);
     }
 
@@ -291,7 +297,11 @@ fn e2e_full_pipeline() {
     let db_path = library_dir.join("AssetDatabase.json");
     db.save(&db_path).expect("save database");
     let db_loaded = AssetDatabase::load(&db_path).expect("reload database");
-    assert_eq!(db_loaded.len(), 3, "reloaded database should have 3 records");
+    assert_eq!(
+        db_loaded.len(),
+        3,
+        "reloaded database should have 3 records"
+    );
 
     // ======================================================================
     // 3. 烹饪 + 构建 run CookPipeline with real intermediate data → .pak
@@ -318,8 +328,8 @@ fn e2e_full_pipeline() {
 
     // ── 写入 a .pak.meta.json alongside the .pak for inspection ──────
     {
-        let reader_for_meta = PackageReader::from_bytes(&pak_bytes)
-            .expect("read back .pak for metadata");
+        let reader_for_meta =
+            PackageReader::from_bytes(&pak_bytes).expect("read back .pak for metadata");
         let mut assets = Vec::new();
         for record in db_loaded.records() {
             let info = reader_for_meta
@@ -357,10 +367,8 @@ fn e2e_full_pipeline() {
             "assets": assets,
         });
         let meta_path = pak_path.with_extension("pak.meta.json");
-        let meta_json = serde_json::to_string_pretty(&manifest)
-            .expect("serialize manifest");
-        std::fs::write(&meta_path, &meta_json)
-            .expect("write .pak.meta.json");
+        let meta_json = serde_json::to_string_pretty(&manifest).expect("serialize manifest");
+        std::fs::write(&meta_path, &meta_json).expect("write .pak.meta.json");
         eprintln!("   📋  Manifest: {}", meta_path.display());
     }
 
@@ -371,7 +379,11 @@ fn e2e_full_pipeline() {
     assert_eq!(&reader.header().magic, b"RPAK", "magic should be RPAK");
     assert_eq!(reader.header().version, 1, "version should be 1");
     assert_eq!(reader.asset_count(), 3, "should have 3 assets in .pak");
-    assert_eq!(reader.records().len(), 3, "should have 3 records in registry");
+    assert_eq!(
+        reader.records().len(),
+        3,
+        "should have 3 records in registry"
+    );
 
     // 验证 we can 读取 each asset's cooked data 后
     for record in db_loaded.records() {
@@ -389,34 +401,36 @@ fn e2e_full_pipeline() {
         .read_asset_data(tex_id)
         .expect("read texture from .pak")
         .unwrap();
-    assert_eq!(&tex_data[..4], b"RTEX", "cooked texture should have RTEX header");
+    assert_eq!(
+        &tex_data[..4],
+        b"RTEX",
+        "cooked texture should have RTEX header"
+    );
     // A real 4 K 纹理 (e.g. 4096×4096) should produce 13 mip levels
     // (4096→2048→1024→512→256→128→64→32→16→8→4→2→1).
     let tex_width = u32::from_le_bytes(tex_data[5..9].try_into().unwrap());
     let tex_height = u32::from_le_bytes(tex_data[9..13].try_into().unwrap());
     let tex_mips = u32::from_le_bytes(tex_data[13..17].try_into().unwrap());
     // The Sponza metal_door_01 纹理 is 4096×4096 → log2(4096) = 12 → 13 mips.
-    assert_eq!(
-        tex_width, 4096,
-        "Sponza metal door basecolor should be 4K"
-    );
-    assert_eq!(
-        tex_height, 4096,
-        "Sponza metal door basecolor should be 4K"
-    );
+    assert_eq!(tex_width, 4096, "Sponza metal door basecolor should be 4K");
+    assert_eq!(tex_height, 4096, "Sponza metal door basecolor should be 4K");
     assert_eq!(
         tex_mips, 13,
         "4096×4096 texture should produce 13 mip levels"
     );
 
     // --- 验证 cooked 网格 格式 ---
-    let mesh_id = find_id_by_suffix(&db_loaded, "subdir/model.glb")
-        .expect("mesh in db after reload");
+    let mesh_id =
+        find_id_by_suffix(&db_loaded, "subdir/model.glb").expect("mesh in db after reload");
     let mesh_data = reader
         .read_asset_data(mesh_id)
         .expect("read mesh from .pak")
         .unwrap();
-    assert_eq!(&mesh_data[..4], b"RMES", "cooked mesh should have RMES header");
+    assert_eq!(
+        &mesh_data[..4],
+        b"RMES",
+        "cooked mesh should have RMES header"
+    );
     let verts = u32::from_le_bytes(mesh_data[5..9].try_into().unwrap());
     let idxs = u32::from_le_bytes(mesh_data[9..13].try_into().unwrap());
     assert_eq!(verts, 3, "triangle should have 3 vertices");
@@ -428,8 +442,7 @@ fn e2e_full_pipeline() {
         let rtxi = intermediate_data
             .get(&tex_id)
             .expect("texture intermediate data should exist");
-        let (rtxi_w, rtxi_h, rtxi_pixels) = parse_rtexi_pixels(rtxi)
-            .expect("should parse RTXI");
+        let (rtxi_w, rtxi_h, rtxi_pixels) = parse_rtexi_pixels(rtxi).expect("should parse RTXI");
         assert_eq!(rtxi_w, 4096);
         assert_eq!(rtxi_h, 4096);
         assert_eq!(rtxi_pixels.len() as u64, 4096 * 4096 * 4);
@@ -466,8 +479,8 @@ fn e2e_full_pipeline() {
         let rmxi = intermediate_data
             .get(&mesh_id)
             .expect("mesh intermediate data should exist");
-        let (_mv, _mi, _muv, rmxi_vert, rmxi_idx) = parse_rmxi_info(rmxi)
-            .expect("should parse RMXI");
+        let (_mv, _mi, _muv, rmxi_vert, rmxi_idx) =
+            parse_rmxi_info(rmxi).expect("should parse RMXI");
 
         let rmes = decode_rmes(&mesh_data).expect("should decode RMES");
         assert_eq!(rmes.vert_count, 3);
@@ -487,8 +500,8 @@ fn e2e_full_pipeline() {
 
     // 二进制 cooked data must be 相同 to intermediate data.
     {
-        let bin_id = find_id_by_suffix(&db_loaded, "test.json")
-            .expect("json asset in db after reload");
+        let bin_id =
+            find_id_by_suffix(&db_loaded, "test.json").expect("json asset in db after reload");
         let bin_cooked = reader
             .read_asset_data(bin_id)
             .expect("read binary from .pak")
@@ -518,17 +531,20 @@ fn e2e_full_pipeline() {
         .map(|r| (r.id, r.path.clone()))
         .collect();
     for (id, path) in &records {
-        let handle: Handle<Vec<u8>> = rm.load(*id).unwrap_or_else(|_| {
-            panic!("should load asset {} ({})", id, path)
-        });
-        let data: Vec<u8> = rm.get(handle).unwrap_or_else(|_| {
-            panic!("should get data for asset {} ({})", id, path)
-        });
+        let handle: Handle<Vec<u8>> = rm
+            .load(*id)
+            .unwrap_or_else(|_| panic!("should load asset {} ({})", id, path));
+        let data: Vec<u8> = rm
+            .get(handle)
+            .unwrap_or_else(|_| panic!("should get data for asset {} ({})", id, path));
         assert!(!data.is_empty(), "loaded data should not be empty");
     }
 
     // 验证 内存 tracking.
-    assert!(rm.memory_usage() > 0, "memory usage should be > 0 after loading");
+    assert!(
+        rm.memory_usage() > 0,
+        "memory usage should be > 0 after loading"
+    );
     assert!(
         rm.memory_usage() <= 200 * 1024 * 1024,
         "memory usage should be within budget"
@@ -565,9 +581,7 @@ fn e2e_full_pipeline() {
     let mut rm2 = ResourceManager::new();
     rm2.load_package(&pak2_path).unwrap();
 
-    let root_handle: Handle<Vec<u8>> = rm2
-        .load_with_deps(root_id)
-        .expect("load root with deps");
+    let root_handle: Handle<Vec<u8>> = rm2.load_with_deps(root_id).expect("load root with deps");
     let root_data: Vec<u8> = rm2.get(root_handle).unwrap();
     assert_eq!(root_data, b"root data", "root data should match");
 
@@ -657,11 +671,19 @@ fn e2e_full_pipeline() {
             HotReloadWatcher::watch_file(&hr_path, std::time::Duration::from_millis(100))
                 .expect("create watcher");
         let rx = watcher.receiver();
-        assert!(rx.try_iter().next().is_none(), "no events before modification");
+        assert!(
+            rx.try_iter().next().is_none(),
+            "no events before modification"
+        );
 
         // Modify the file.
         let mut b5 = PackageBuilder::new();
-        b5.add_asset(records[0].0, AssetType::Binary, b"modified content".to_vec(), &[]);
+        b5.add_asset(
+            records[0].0,
+            AssetType::Binary,
+            b"modified content".to_vec(),
+            &[],
+        );
         let new_pak = b5.build().expect("build modified .pak");
         std::fs::write(&hr_path, &new_pak).expect("write modified .pak");
 
@@ -669,7 +691,8 @@ fn e2e_full_pipeline() {
         let mut event_seen = false;
         while started.elapsed() < std::time::Duration::from_secs(5) {
             if let Some(event) = rx.try_iter().next() {
-                if matches!(event, prism_asset_runtime::HotReloadEvent::PakModified(p) if p == hr_path) {
+                if matches!(event, prism_asset_runtime::HotReloadEvent::PakModified(p) if p == hr_path)
+                {
                     event_seen = true;
                     break;
                 }
@@ -694,9 +717,9 @@ fn e2e_full_pipeline() {
     assert_eq!(records2.len(), 3);
 
     let first_id = db_loaded.records().next().unwrap().id;
-    let record = reader2.find_record(first_id).unwrap_or_else(|| {
-        panic!("asset {first_id} should exist in .pak")
-    });
+    let record = reader2
+        .find_record(first_id)
+        .unwrap_or_else(|| panic!("asset {first_id} should exist in .pak"));
     assert!(record.size > 0, "record should have size > 0");
 
     let asset_list: Vec<_> = rm.assets().collect();

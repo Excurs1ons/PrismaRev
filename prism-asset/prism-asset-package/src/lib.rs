@@ -330,8 +330,9 @@ impl PackageBuilder {
             .iter()
             .map(|a| {
                 if self.compression_level > 0 {
-                    let compressed = zstd::encode_all(std::io::Cursor::new(&a.data), self.compression_level)
-                        .map_err(|e| PackageError::Compress(e.to_string()))?;
+                    let compressed =
+                        zstd::encode_all(std::io::Cursor::new(&a.data), self.compression_level)
+                            .map_err(|e| PackageError::Compress(e.to_string()))?;
                     Ok((compressed, a.data.len() as u64))
                 } else {
                     Ok((a.data.clone(), a.data.len() as u64))
@@ -395,10 +396,7 @@ impl PackageBuilder {
 
         // 序列化 registry + deps + data.
         let registry_bytes: Vec<u8> = records.iter().flat_map(|r| r.to_bytes()).collect();
-        let deps_bytes: Vec<u8> = dep_array
-            .iter()
-            .flat_map(|d| d.to_le_bytes())
-            .collect();
+        let deps_bytes: Vec<u8> = dep_array.iter().flat_map(|d| d.to_le_bytes()).collect();
         let data_bytes: Vec<u8> = compressed_data
             .iter()
             .flat_map(|(d, _)| d.clone())
@@ -420,11 +418,16 @@ impl PackageBuilder {
         // header_body = 字节 after the 8-byte 校验和 field
         let checksum_field_end = 4 + 4 + 4 + 8 + 8 + 8 + 8; // 44 = end of data_size field
         let _header_body = &header_bytes[checksum_field_end..]; // actually we need header[12..]
-        // Let's be 精确 校验和 starts at 偏移 44, 长度 8.
-        // The 校验和 covers header[12..44] + registry + deps + data
+                                                                // Let's be 精确 校验和 starts at 偏移 44, 长度 8.
+                                                                // The 校验和 covers header[12..44] + registry + deps + data
         let header_prefix = &header_bytes[12..44]; // from after asset_count through data_size
 
-        let checksum = PackageHeader::compute_checksum(header_prefix, &registry_bytes, &deps_bytes, &data_bytes);
+        let checksum = PackageHeader::compute_checksum(
+            header_prefix,
+            &registry_bytes,
+            &deps_bytes,
+            &data_bytes,
+        );
 
         // 写入 final header with 校验和
         let mut final_hdr = hdr;
@@ -432,9 +435,7 @@ impl PackageBuilder {
         let final_header_bytes = final_hdr.to_bytes();
 
         // Assemble final file.
-        let mut output = Vec::with_capacity(
-            (data_offset + data_size) as usize,
-        );
+        let mut output = Vec::with_capacity((data_offset + data_size) as usize);
         output.extend_from_slice(&final_header_bytes);
         output.extend_from_slice(&registry_bytes);
         output.extend_from_slice(&deps_bytes);
@@ -460,7 +461,10 @@ impl PackageBuilder {
     }
 
     /// 异步 构建 and 写入 to a file via tokio.
-    pub async fn build_to_file_async(&mut self, path: impl AsRef<Path> + Send) -> Result<(), PackageError> {
+    pub async fn build_to_file_async(
+        &mut self,
+        path: impl AsRef<Path> + Send,
+    ) -> Result<(), PackageError> {
         let bytes = self.build()?;
         tokio::fs::write(path.as_ref(), &bytes).await?;
         tracing::info!("Written .pak to {} (async)", path.as_ref().display());
@@ -531,9 +535,7 @@ impl PackageReader {
         let dep_count = deps_size / 8;
         let mut dependency_array = Vec::with_capacity(dep_count);
         for i in 0..dep_count {
-            let raw = u64::from_le_bytes(
-                deps_bytes[i * 8..(i + 1) * 8].try_into().unwrap(),
-            );
+            let raw = u64::from_le_bytes(deps_bytes[i * 8..(i + 1) * 8].try_into().unwrap());
             dependency_array.push(raw);
         }
 
@@ -548,7 +550,8 @@ impl PackageReader {
         let deps_slice = &deps_bytes;
         let data_slice = data_bytes;
 
-        let computed = PackageHeader::compute_checksum(header_prefix, reg_slice, deps_slice, data_slice);
+        let computed =
+            PackageHeader::compute_checksum(header_prefix, reg_slice, deps_slice, data_slice);
         if computed != header.checksum {
             return Err(PackageError::ChecksumMismatch {
                 computed,
@@ -610,7 +613,10 @@ impl PackageReader {
     }
 
     /// 读取 data for a specific record.
-    pub fn read_asset_record_data(&self, record: &RuntimeAssetRecord) -> Result<Vec<u8>, PackageError> {
+    pub fn read_asset_record_data(
+        &self,
+        record: &RuntimeAssetRecord,
+    ) -> Result<Vec<u8>, PackageError> {
         let data_start = self.header.data_offset as usize;
         let offset = data_start + record.offset as usize - self.header.data_offset as usize;
 

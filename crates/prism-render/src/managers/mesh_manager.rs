@@ -201,7 +201,11 @@ fn build_vertices(input: &MeshUploadInput) -> Vec<crate::mesh::Vertex> {
         let normal = input.normals.get(i).copied().unwrap_or([0.0, 1.0, 0.0]);
         let color = input.colors.get(i).copied().unwrap_or([1.0, 1.0, 1.0]);
         let uv = input.uvs.get(i).copied().unwrap_or([0.0, 0.0]);
-        let tangent = input.tangents.get(i).copied().unwrap_or([1.0, 0.0, 0.0, 1.0]);
+        let tangent = input
+            .tangents
+            .get(i)
+            .copied()
+            .unwrap_or([1.0, 0.0, 0.0, 1.0]);
         out.push(crate::mesh::Vertex {
             position: pos,
             normal,

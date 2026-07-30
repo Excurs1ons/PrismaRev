@@ -242,10 +242,7 @@ impl SceneScope {
 
         // ---- Upload via staging 缓冲区 ----
         let data_bytes: &[u8] = unsafe {
-            std::slice::from_raw_parts(
-                pixels.as_ptr() as *const u8,
-                std::mem::size_of_val(pixels),
-            )
+            std::slice::from_raw_parts(pixels.as_ptr() as *const u8, std::mem::size_of_val(pixels))
         };
         let staging_size = data_bytes.len() as vk::DeviceSize;
         let (staging_buf, staging_mem) = crate::buffer::create_buffer(
@@ -549,7 +546,10 @@ impl SceneScope {
     pub fn destroy(&mut self) {
         self.destroy_volume_resources();
         if self.descriptor_pool != vk::DescriptorPool::null() {
-            unsafe { self.device.destroy_descriptor_pool(self.descriptor_pool, None) };
+            unsafe {
+                self.device
+                    .destroy_descriptor_pool(self.descriptor_pool, None)
+            };
             self.descriptor_pool = vk::DescriptorPool::null();
         }
         if self.descriptor_set_layout != vk::DescriptorSetLayout::null() {

@@ -222,7 +222,6 @@ impl InputManager {
         self.pointer_locked = locked;
         self.begin_frame();
     }
-
 }
 
 #[cfg(test)]

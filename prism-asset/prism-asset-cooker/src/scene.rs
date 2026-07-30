@@ -89,11 +89,12 @@ pub struct SceneCooker;
 impl SceneCooker {
     /// Parse the intermediate JSON 字节 into a [`SceneJson`].
     fn parse_intermediate(data: &[u8]) -> Result<SceneJson, CookError> {
-        let scene: SceneJson =
-            serde_json::from_slice(data).map_err(|e| CookError::CookFailed(format!("Scene JSON parse error: {e}")))?;
+        let scene: SceneJson = serde_json::from_slice(data)
+            .map_err(|e| CookError::CookFailed(format!("Scene JSON parse error: {e}")))?;
 
         // Validate hierarchy.
-        validate_scene(&scene).map_err(|e| CookError::CookFailed(format!("Scene validation error: {e}")))?;
+        validate_scene(&scene)
+            .map_err(|e| CookError::CookFailed(format!("Scene validation error: {e}")))?;
 
         Ok(scene)
     }
@@ -109,9 +110,7 @@ impl SceneCooker {
         let mut visited = vec![false; n];
 
         // Collect roots.
-        let roots: Vec<usize> = (0..n)
-            .filter(|&i| entities[i].parent.is_none())
-            .collect();
+        let roots: Vec<usize> = (0..n).filter(|&i| entities[i].parent.is_none()).collect();
 
         // BFS from each root.
         let mut queue: Vec<usize> = roots;
@@ -248,11 +247,7 @@ impl SceneCooker {
     /// Returns `-1` if root, or the position of the parent in the 已排序
     /// `order` 切片 Since the 排序 is parent-first, the parent is guaranteed
     /// to already have been assigned its final 索引
-    fn parent_index_in_order(
-        idx: usize,
-        entities: &[EntityJson],
-        order: &[usize],
-    ) -> i32 {
+    fn parent_index_in_order(idx: usize, entities: &[EntityJson], order: &[usize]) -> i32 {
         match entities[idx].parent {
             None => -1,
             Some(p) => {
@@ -395,8 +390,12 @@ mod tests {
     fn cook_scene_json(json: &[u8]) -> Result<CookResult, CookError> {
         let cooker = SceneCooker;
         let id = AssetId::from_raw((1u64 << 32) | 300);
-        let record =
-            prism_asset_db::AssetRecord::new(id, "scene.scene".into(), AssetType::Scene, "scene-importer");
+        let record = prism_asset_db::AssetRecord::new(
+            id,
+            "scene.scene".into(),
+            AssetType::Scene,
+            "scene-importer",
+        );
         let settings = crate::profile::CookSettings::default();
         let ctx = CookContext {
             record: &record,
@@ -477,7 +476,7 @@ mod tests {
         // Walk entities in order, extracting parent indexes.
         let data = &result.cooked_data;
         let mut off = 9usize; // skip magic + version + entity_count
-        // v2 header: skip env_len + env_path.
+                              // v2 header: skip env_len + env_path.
         let env_len = u16::from_le_bytes(data[off..off + 2].try_into().unwrap()) as usize;
         off += 2 + env_len;
         let mut parents = Vec::new();

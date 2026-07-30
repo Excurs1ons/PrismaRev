@@ -35,14 +35,18 @@ pub use components::*;
 pub use input::{ui_input_system, UiInputState};
 pub use layout::{ui_layout_system, ScreenSize};
 pub use panel_base::PanelBase;
-pub use render::{ui_render_system, convert_ui_draw_list_to_overlay, UiDrawList, UiQuad, UiTextCmd};
+pub use render::{
+    convert_ui_draw_list_to_overlay, ui_render_system, UiDrawList, UiQuad, UiTextCmd,
+};
 
 use crate::util::timer::{TimerClient, TimerParams};
 
 /// UI 面板接口（将逐步被 ECS 组件方案取代）。
 pub trait Panel {
     /// 每帧更新。返回 `false` 表示面板请求关闭。
-    fn on_update(&mut self, _dt: f32) -> bool { true }
+    fn on_update(&mut self, _dt: f32) -> bool {
+        true
+    }
     /// 处理输入事件。
     fn on_event(&mut self, _event: &()) {}
     /// 面板关闭时的清理回调。

@@ -51,16 +51,10 @@ fn headless_clear_to_red_and_readback() {
         .expect("clear_offscreen failed");
 
     // 读取 后 the 像素 data.
-    let pixels = renderer
-        .readback_pixels()
-        .expect("readback_pixels failed");
+    let pixels = renderer.readback_pixels().expect("readback_pixels failed");
 
     // Offscreen 目标 is 256 × 256 × RGBA8 = 262 144 字节
-    assert_eq!(
-        pixels.len(),
-        256 * 256 * 4,
-        "unexpected pixel buffer size"
-    );
+    assert_eq!(pixels.len(), 256 * 256 * 4, "unexpected pixel buffer size");
 
     // Every 像素 should be (255, 0, 0, 255) — pure red.
     // 样本 the four corners + center to confirm uniformity.

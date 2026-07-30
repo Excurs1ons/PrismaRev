@@ -413,11 +413,7 @@ mod tests {
         let pi = std::f32::consts::PI;
         let mut sh = [[0.0f32; 3]; SH_COEFF_COUNT];
         sh[0] = [1.0, 2.0, 3.0];
-        for n in [
-            [1.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0],
-            [0.0, 0.0, 1.0],
-        ] {
+        for n in [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]] {
             let rad = eval_sh9(n, &sh);
             let irr = eval_sh9_irradiance(n, &sh);
             assert!(approx_eq3(irr, [rad[0] * pi, rad[1] * pi, rad[2] * pi]));
@@ -432,14 +428,13 @@ mod tests {
         let mut sh = [[0.0f32; 3]; SH_COEFF_COUNT];
         sh[1] = [0.5, 1.0, 1.5]; // Y lobe (y)
         let factor = 2.0 * std::f32::consts::PI / 3.0;
-        for n in [
-            [0.0, 1.0, 0.0],
-            [0.0, -1.0, 0.0],
-            [0.0, 0.3, 0.95],
-        ] {
+        for n in [[0.0, 1.0, 0.0], [0.0, -1.0, 0.0], [0.0, 0.3, 0.95]] {
             let rad = eval_sh9(n, &sh);
             let irr = eval_sh9_irradiance(n, &sh);
-            assert!(approx_eq3(irr, [rad[0] * factor, rad[1] * factor, rad[2] * factor]));
+            assert!(approx_eq3(
+                irr,
+                [rad[0] * factor, rad[1] * factor, rad[2] * factor]
+            ));
         }
     }
 
@@ -549,11 +544,7 @@ mod tests {
             }
         };
         let expected = [dc[0] * SH_C0 * pi, dc[1] * SH_C0 * pi, dc[2] * SH_C0 * pi];
-        for world in [
-            [0.0, 0.0, 0.0],
-            [1.5, 2.5, 0.5],
-            [3.0, 3.0, 3.0],
-        ] {
+        for world in [[0.0, 0.0, 0.0], [1.5, 2.5, 0.5], [3.0, 3.0, 3.0]] {
             for n in [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]] {
                 assert!(approx_eq3(
                     sample_probe_irradiance(world, n, &info, fetch),

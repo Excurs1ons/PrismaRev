@@ -4,8 +4,8 @@ use std::any::{Any, TypeId};
 use std::collections::HashMap;
 
 use prism_ecs::World;
-use winit::event_loop::ActiveEventLoop;
 use winit::event::{DeviceEvent, WindowEvent};
+use winit::event_loop::ActiveEventLoop;
 
 // ---------------------------------------------------------------------------
 // ScheduleLabel
@@ -57,11 +57,7 @@ pub trait Subsystem: Send + 'static {
     fn on_startup(&mut self) {}
 
     /// 窗口事件处理。返回 true 表示事件已消费，不再向下传递。
-    fn on_window_event(
-        &mut self,
-        _event: &WindowEvent,
-        _event_loop: &ActiveEventLoop,
-    ) -> bool {
+    fn on_window_event(&mut self, _event: &WindowEvent, _event_loop: &ActiveEventLoop) -> bool {
         false
     }
 
@@ -112,7 +108,11 @@ impl AppBuilder {
     }
 
     /// 在指定阶段添加系统函数。
-    pub fn add_systems(&mut self, label: ScheduleLabel, system: impl System + 'static) -> &mut Self {
+    pub fn add_systems(
+        &mut self,
+        label: ScheduleLabel,
+        system: impl System + 'static,
+    ) -> &mut Self {
         self.systems.push((label, Box::new(system)));
         self
     }

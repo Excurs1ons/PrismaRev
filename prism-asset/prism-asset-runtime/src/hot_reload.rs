@@ -71,7 +71,10 @@ pub struct HotReloadWatcher {
 
 impl HotReloadWatcher {
     /// 创建 a new polling watcher for a single `.pak` file.
-    pub fn watch_file(path: impl Into<PathBuf>, interval: Duration) -> Result<Self, HotReloadError> {
+    pub fn watch_file(
+        path: impl Into<PathBuf>,
+        interval: Duration,
+    ) -> Result<Self, HotReloadError> {
         let path: PathBuf = path.into();
         let paths = vec![path];
         Self::watch_files(paths, interval)
@@ -116,22 +119,20 @@ impl HotReloadWatcher {
                                 });
                                 if changed {
                                     mtimes.insert(p.clone(), new_mtime);
-                                    let _ = tx_clone
-                                        .send(HotReloadEvent::PakModified(p.clone()));
+                                    let _ = tx_clone.send(HotReloadEvent::PakModified(p.clone()));
                                 }
                             }
                         }
                         Err(e) => {
-                            let _ = tx_clone.send(HotReloadEvent::WatchError(
-                                format!("Cannot stat {}: {e}", p.display()),
-                            ));
+                            let _ = tx_clone.send(HotReloadEvent::WatchError(format!(
+                                "Cannot stat {}: {e}",
+                                p.display()
+                            )));
                         }
                     }
                 }
             })
-            .map_err(|e| {
-                HotReloadError::Io(std::io::Error::new(std::io::ErrorKind::Other, e))
-            })?;
+            .map_err(|e| HotReloadError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
 
         Ok(Self { rx, handle, stop })
     }

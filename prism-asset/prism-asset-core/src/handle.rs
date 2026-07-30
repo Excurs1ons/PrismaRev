@@ -193,7 +193,12 @@ impl<T: ?Sized> From<AnyHandle> for Handle<T> {
 
 impl fmt::Debug for AnyHandle {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "AnyHandle(index={}, gen={})", self.index(), self.generation())
+        write!(
+            f,
+            "AnyHandle(index={}, gen={})",
+            self.index(),
+            self.generation()
+        )
     }
 }
 

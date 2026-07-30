@@ -6,7 +6,6 @@
 
 #![allow(dead_code, non_snake_case)]
 
-
 /// Entry point names (for VkPipelineShaderStageCreateInfo).
 pub const ENTRY_PT_MAIN: &str = "ptMain"; // stage: COMPUTE
 

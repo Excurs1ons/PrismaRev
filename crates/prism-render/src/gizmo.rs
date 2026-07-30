@@ -203,15 +203,17 @@ impl Gizmo {
     /// `end_frame`, after the 3D scene draws.
     pub fn draw(&self, cmd: vk::CommandBuffer, view_proj: &[[f32; 4]; 4]) {
         let device = &self.device;
-        let push = GizmoPush { viewProj: *view_proj };
+        let push = GizmoPush {
+            viewProj: *view_proj,
+        };
         unsafe {
             device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.pipeline);
             device.cmd_push_constants(
-                cmd, self.layout, vk::ShaderStageFlags::VERTEX, 0,
-                std::slice::from_raw_parts(
-                    &push as *const _ as *const u8,
-                    size_of::<GizmoPush>(),
-                ),
+                cmd,
+                self.layout,
+                vk::ShaderStageFlags::VERTEX,
+                0,
+                std::slice::from_raw_parts(&push as *const _ as *const u8, size_of::<GizmoPush>()),
             );
             let buffers = [self.vertex_buffer];
             let offsets = [0u64];

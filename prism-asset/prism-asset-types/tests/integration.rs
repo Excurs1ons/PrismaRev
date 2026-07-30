@@ -12,10 +12,7 @@ use prism_asset_types::{CubeDef, MaterialDef};
 
 /// Repository-root 资源 directory.
 /// Tests are compiled from `prism-asset/prism-asset-types/`, so we 后 out.
-const ASSET_DIR: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../assets/definitions/"
-);
+const ASSET_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/definitions/");
 
 fn asset_path(file: &str) -> String {
     let mut p = ASSET_DIR.to_owned();
@@ -30,8 +27,7 @@ fn asset_path(file: &str) -> String {
 /// 反序列化 each 资源 类型 as `Box<dyn AssetData>`, 验证 类型 信息
 fn round_trip_as_erased(path: &str) {
     let bytes = std::fs::read(path).expect("read asset file");
-    let asset: Box<dyn AssetData> =
-        serde_json::from_slice(&bytes).expect("deserialize as erased");
+    let asset: Box<dyn AssetData> = serde_json::from_slice(&bytes).expect("deserialize as erased");
 
     // Must have a non-empty display name 集合 by `impl_asset_data!`).
     let name = asset.display_name();

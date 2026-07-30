@@ -30,8 +30,8 @@ pub mod compute;
 pub mod context;
 pub mod descriptor;
 pub mod egui_overlay;
-pub mod gizmo;
 pub mod gi;
+pub mod gizmo;
 pub mod graph_renderer;
 pub mod gtao;
 pub mod hdr;
@@ -63,8 +63,8 @@ pub use buffer::create_buffer;
 pub use capabilities::RayTracingCaps;
 pub use context::VulkanContext;
 pub use descriptor::{
-    DescriptorLayout, DescriptorPool, FrameUBO, FrameUBOData, GpuLight, LIGHT_MAX,
-    PtAnalyticLight, PT_LIGHT_MAX, PtEmissiveTri, PT_EMISSIVE_MAX, ReSTIRReservoir,
+    DescriptorLayout, DescriptorPool, FrameUBO, FrameUBOData, GpuLight, PtAnalyticLight,
+    PtEmissiveTri, ReSTIRReservoir, LIGHT_MAX, PT_EMISSIVE_MAX, PT_LIGHT_MAX,
 };
 pub use egui_overlay::{EguiFrame, EguiGpu};
 pub use gi::{
@@ -72,7 +72,6 @@ pub use gi::{
     ProbeVolumeInfo, SH_COEFF_COUNT,
 };
 pub use gizmo::Gizmo;
-pub use ui_overlay::{UiOverlay, UiOverlayInput};
 pub use graph_renderer::{FrameCtx, FrameInput, GraphRenderer};
 pub use gtao::{GtaoFrameInputs, GtaoPass};
 pub use mesh::{Mesh, Vertex};
@@ -89,3 +88,4 @@ pub use render_graph::{
 pub use render_pass::{DepthImage, Framebuffers, NormalImage, RenderPass};
 pub use shader::load_shader_module;
 pub use swapchain::Swapchain;
+pub use ui_overlay::{UiOverlay, UiOverlayInput};

@@ -58,10 +58,7 @@ pub enum GpuUploadTask {
 
 /// Run the IO 事件 循环 Blocks on `rx` until [`IoRequest::Shutdown`]
 /// is received or the 通道 is closed.
-pub fn io_thread_main(
-    rx: Receiver<IoRequest>,
-    result_tx: Sender<IoResult>,
-) {
+pub fn io_thread_main(rx: Receiver<IoRequest>, result_tx: Sender<IoResult>) {
     log::info!("IO thread started");
 
     loop {

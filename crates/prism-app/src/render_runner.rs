@@ -8,8 +8,8 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use prism_engine::dirty_router::DirtyRouter;
-use prism_engine::render_system::FramePacket;
 use prism_engine::render_settings::RenderSettings;
+use prism_engine::render_system::FramePacket;
 use prism_render::{EguiFrame, FrameInput, FrameUBOData, GraphRenderer};
 
 use crate::render_shared::{RenderShared, RenderStats};
@@ -86,7 +86,6 @@ pub fn render_thread_main(mut renderer: GraphRenderer, shared: Arc<RenderShared>
         if shared.take_egui_frame().is_none() && frame_time_ms < 1.0 {
             std::thread::sleep(std::time::Duration::from_micros(500));
         }
-
     }
 
     log::info!("Render thread exiting — destroying renderer");
@@ -164,12 +163,10 @@ fn render_one_frame(
         Some(c) => c,
         None => return Ok(()),
     };
-    renderer
-        .execute(&ctx, &input, egui_frame)
-        .map_err(|e| {
-            let _ = renderer.present(&ctx);
-            e
-        })?;
+    renderer.execute(&ctx, &input, egui_frame).map_err(|e| {
+        let _ = renderer.present(&ctx);
+        e
+    })?;
     let _ = renderer.present(&ctx)?;
 
     Ok(())

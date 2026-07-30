@@ -146,9 +146,7 @@ impl GpuAssetResolver {
 
             // --- 材质 ---
             if !mat_path.is_empty() {
-                if let Some(slot) =
-                    self.resolve_material(mat_path, renderer, &mut uploader)
-                {
+                if let Some(slot) = self.resolve_material(mat_path, renderer, &mut uploader) {
                     if let Some(mr) = world.get_mut::<MaterialRef>(*entity) {
                         mr.material_slot = slot;
                         mr.generation = 1;

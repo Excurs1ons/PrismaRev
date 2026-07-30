@@ -60,7 +60,11 @@ fn main() -> Result<()> {
     log::info!("  output: {}", output_path.display());
     log::info!("  pak:    {}", pak_path.display());
     log::info!("  rscn:   {}", rscn_path.display());
-    log::info!("  rays per probe: {}, max bounces: {}", NUM_RAYS, MAX_BOUNCE);
+    log::info!(
+        "  rays per probe: {}, max bounces: {}",
+        NUM_RAYS,
+        MAX_BOUNCE
+    );
 
     // ---- 1. 加载 scene into ECS and collect bake instances ----
     let mut world = World::new();
@@ -77,8 +81,8 @@ fn main() -> Result<()> {
     // Run hierarchy 系统 to 计算 WorldTransform from LocalTransform + Parent.
     hierarchy_system(&mut world);
 
-    let (instances, mat_bytes) = collect_bake_instances(&world, &mut rm)
-        .context("collect bake instances from ECS")?;
+    let (instances, mat_bytes) =
+        collect_bake_instances(&world, &mut rm).context("collect bake instances from ECS")?;
     let total_verts: usize = instances.iter().map(|i| i.vertices.len()).sum();
     let total_indices: usize = instances.iter().map(|i| i.indices.len()).sum();
     log::info!(
@@ -130,7 +134,9 @@ fn main() -> Result<()> {
     let (origin, spacing, dims) = derive_grid(aabb_min, aabb_max);
     log::info!(
         "  probe grid: dims {:?} spacing {:?} origin {:?}",
-        dims, spacing, origin
+        dims,
+        spacing,
+        origin
     );
 
     // ---- 5. 构建 per-instance BLAS/TLAS + materials SSBO ----
@@ -160,9 +166,7 @@ fn main() -> Result<()> {
         .array_layers(1)
         .samples(vk::SampleCountFlags::TYPE_1)
         .tiling(vk::ImageTiling::OPTIMAL)
-        .usage(
-            vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_SRC,
-        )
+        .usage(vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_SRC)
         .sharing_mode(vk::SharingMode::EXCLUSIVE)
         .initial_layout(vk::ImageLayout::UNDEFINED);
     let volume_image = unsafe { context.device.create_image(&image_info, None) }
@@ -219,9 +223,10 @@ fn main() -> Result<()> {
     )
     .context("create info UBO")?;
     unsafe {
-        let ptr = context
-            .device
-            .map_memory(info_memory, 0, info_size, vk::MemoryMapFlags::empty())?;
+        let ptr =
+            context
+                .device
+                .map_memory(info_memory, 0, info_size, vk::MemoryMapFlags::empty())?;
         std::ptr::copy_nonoverlapping(
             &info as *const _ as *const u8,
             ptr as *mut u8,
@@ -281,9 +286,12 @@ fn main() -> Result<()> {
         .context("create ds layout")?;
     let bindless_layout_ci =
         vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindless_bindings);
-    let bindless_layout =
-        unsafe { context.device.create_descriptor_set_layout(&bindless_layout_ci, None) }
-            .context("create bindless layout")?;
+    let bindless_layout = unsafe {
+        context
+            .device
+            .create_descriptor_set_layout(&bindless_layout_ci, None)
+    }
+    .context("create bindless layout")?;
     let pool_sizes = [
         vk::DescriptorPoolSize {
             ty: vk::DescriptorType::STORAGE_IMAGE,
@@ -312,11 +320,13 @@ fn main() -> Result<()> {
     let ds_pool = unsafe { context.device.create_descriptor_pool(&pool_ci, None) }
         .context("create ds pool")?;
     let layouts = [ds_layout, bindless_layout];
-    let ds_set = unsafe { context.device.allocate_descriptor_sets(
-        &vk::DescriptorSetAllocateInfo::default()
-            .descriptor_pool(ds_pool)
-            .set_layouts(&layouts),
-    ) }
+    let ds_set = unsafe {
+        context.device.allocate_descriptor_sets(
+            &vk::DescriptorSetAllocateInfo::default()
+                .descriptor_pool(ds_pool)
+                .set_layouts(&layouts),
+        )
+    }
     .context("allocate descriptor sets")?;
 
     // ---- 9. 写入 descriptors ----
@@ -340,8 +350,10 @@ fn main() -> Result<()> {
         .dst_set(ds_set[0])
         .dst_binding(2)
         .descriptor_type(vk::DescriptorType::ACCELERATION_STRUCTURE_KHR)
-        .push_next(&mut vk::WriteDescriptorSetAccelerationStructureKHR::default()
-            .acceleration_structures(&[scene.tlas.as_ref().unwrap().acceleration_structure]));
+        .push_next(
+            &mut vk::WriteDescriptorSetAccelerationStructureKHR::default()
+                .acceleration_structures(&[scene.tlas.as_ref().unwrap().acceleration_structure]),
+        );
     let sb_writes: Vec<_> = [
         (3, scene.vertex_buffer),
         (4, scene.index_buffer),
@@ -364,9 +376,7 @@ fn main() -> Result<()> {
     let mut all_writes = vec![volume_write, info_write, tlas_write];
     all_writes.extend(sb_writes);
     unsafe {
-        context
-            .device
-            .update_descriptor_sets(&all_writes, &[]);
+        context.device.update_descriptor_sets(&all_writes, &[]);
     }
 
     // ---- 10. Dummy 采样器 + bindless writes ----
@@ -429,7 +439,8 @@ fn main() -> Result<()> {
     unsafe { context.device.destroy_shader_module(shader_module, None) };
 
     // 构建 推送 constants.
-    let light_dir_v = prism_render::gi::bake_euler_xyz_deg_to_dir(prism_render::gi::BAKE_DEFAULT_LIGHT_EULER);
+    let light_dir_v =
+        prism_render::gi::bake_euler_xyz_deg_to_dir(prism_render::gi::BAKE_DEFAULT_LIGHT_EULER);
     let push_constants = BakePush {
         light_dir: [light_dir_v[0], light_dir_v[1], light_dir_v[2], 0.0],
         light_color: [
@@ -447,11 +458,13 @@ fn main() -> Result<()> {
 
     let workgroup = 8u32;
     let total_workgroups = ((dims[0] * dims[1] * dims[2]) as f32 / workgroup as f32).ceil() as u32;
-    let cmd_buf = unsafe { context.device.allocate_command_buffers(
-        &vk::CommandBufferAllocateInfo::default()
-            .command_pool(cmd_pool)
-            .command_buffer_count(1),
-    ) }
+    let cmd_buf = unsafe {
+        context.device.allocate_command_buffers(
+            &vk::CommandBufferAllocateInfo::default()
+                .command_pool(cmd_pool)
+                .command_buffer_count(1),
+        )
+    }
     .context("allocate command buffer")?[0];
     unsafe {
         context
@@ -482,7 +495,9 @@ fn main() -> Result<()> {
             cmd_buf,
             &vk::DependencyInfo::default().image_memory_barriers(&[barrier]),
         );
-        context.device.cmd_bind_pipeline(cmd_buf, vk::PipelineBindPoint::COMPUTE, pipeline);
+        context
+            .device
+            .cmd_bind_pipeline(cmd_buf, vk::PipelineBindPoint::COMPUTE, pipeline);
         context.device.cmd_bind_descriptor_sets(
             cmd_buf,
             vk::PipelineBindPoint::COMPUTE,
@@ -539,26 +554,28 @@ fn main() -> Result<()> {
             .queue_submit(context.graphics_queue, &[submit], vk::Fence::null())
     }
     .context("queue submit")?;
-    unsafe { context.device.queue_wait_idle(context.graphics_queue) }
-        .context("queue wait idle")?;
+    unsafe { context.device.queue_wait_idle(context.graphics_queue) }.context("queue wait idle")?;
 
     // ---- 13. 读取 后 probe 音量 ----
     let vol_bytes = (tex_w * tex_h * tex_d) as usize * 16;
     let (staging_buf, staging_mem) = prism_render::buffer::create_buffer(
         &context,
         vol_bytes as vk::DeviceSize,
-        prism_render::buffer::BufferUsage::TRANSFER_DST | prism_render::buffer::BufferUsage::TRANSFER_SRC,
+        prism_render::buffer::BufferUsage::TRANSFER_DST
+            | prism_render::buffer::BufferUsage::TRANSFER_SRC,
         prism_render::buffer::MemoryProperties::HOST_VISIBLE
             | prism_render::buffer::MemoryProperties::HOST_COHERENT,
     )
     .context("create staging buffer")?;
 
     // 复制 音量 图像 to staging 缓冲区
-    let cmd_buf2 = unsafe { context.device.allocate_command_buffers(
-        &vk::CommandBufferAllocateInfo::default()
-            .command_pool(cmd_pool)
-            .command_buffer_count(1),
-    ) }
+    let cmd_buf2 = unsafe {
+        context.device.allocate_command_buffers(
+            &vk::CommandBufferAllocateInfo::default()
+                .command_pool(cmd_pool)
+                .command_buffer_count(1),
+        )
+    }
     .context("allocate cmd buf2")?[0];
     unsafe {
         context
@@ -597,9 +614,11 @@ fn main() -> Result<()> {
             .context("end cmd buf2")?;
     }
     unsafe {
-        context
-            .device
-            .queue_submit(context.graphics_queue, &[vk::SubmitInfo::default().command_buffers(&[cmd_buf2])], vk::Fence::null())
+        context.device.queue_submit(
+            context.graphics_queue,
+            &[vk::SubmitInfo::default().command_buffers(&[cmd_buf2])],
+            vk::Fence::null(),
+        )
     }
     .context("queue submit2")?;
     unsafe { context.device.queue_wait_idle(context.graphics_queue) }
@@ -607,14 +626,15 @@ fn main() -> Result<()> {
 
     // 读取 staging 缓冲区
     let staging_ptr = unsafe {
-        context
-            .device
-            .map_memory(staging_mem, 0, vol_bytes as vk::DeviceSize, vk::MemoryMapFlags::empty())
+        context.device.map_memory(
+            staging_mem,
+            0,
+            vol_bytes as vk::DeviceSize,
+            vk::MemoryMapFlags::empty(),
+        )
     }
     .context("map staging")?;
-    let raw: &[u8] = unsafe {
-        std::slice::from_raw_parts(staging_ptr, vol_bytes)
-    };
+    let raw: &[u8] = unsafe { std::slice::from_raw_parts(staging_ptr, vol_bytes) };
     let coeff_count = (tex_w * tex_h * dims[2]) as usize * 9; // 9 SH coeffs per (x,y,z)
     let mut coeffs = Vec::with_capacity(coeff_count);
     for i in 0..coeff_count {
@@ -636,8 +656,8 @@ fn main() -> Result<()> {
         // The DC (0th SH coefficient) carries the 平均 radiance; a 负 value
         // means the probe is inside 固体 geometry and should be flagged.
         let dc_index = p * 9; // first SH coefficient in coeffs[]
-        // The stored value in the 3D 纹理 at position (x, y, z*9+0)
-        // coeffs is 有序 by probe, so coeffs[dc_index] = DC of probe p.
+                              // The stored value in the 3D 纹理 at position (x, y, z*9+0)
+                              // coeffs is 有序 by probe, so coeffs[dc_index] = DC of probe p.
         let dc = coeffs[p * 9];
         hit_ratios.push(if dc >= 0.0 { 1.0 } else { 0.0 });
     }
@@ -658,7 +678,11 @@ fn main() -> Result<()> {
     };
     log::info!(
         "  SH DC coeff: min={:.3} max={:.3} avg={:.3}  inside-solid={} / {}",
-        dc_min, dc_max, dc_avg, inside_solid, probe_count
+        dc_min,
+        dc_max,
+        dc_avg,
+        inside_solid,
+        probe_count
     );
     log::info!(
         "  hit ratio: min {:.3} max {:.3} avg {:.3} inside-solid={} / {}",
@@ -703,12 +727,18 @@ fn main() -> Result<()> {
 
     // ---- Cleanup ----
     unsafe {
-        context.device.free_command_buffers(cmd_pool, &[cmd_buf, cmd_buf2]);
+        context
+            .device
+            .free_command_buffers(cmd_pool, &[cmd_buf, cmd_buf2]);
         context.device.destroy_command_pool(cmd_pool, None);
         context.device.destroy_sampler(dummy_sampler, None);
         context.device.destroy_descriptor_pool(ds_pool, None);
-        context.device.destroy_descriptor_set_layout(ds_layout, None);
-        context.device.destroy_descriptor_set_layout(bindless_layout, None);
+        context
+            .device
+            .destroy_descriptor_set_layout(ds_layout, None);
+        context
+            .device
+            .destroy_descriptor_set_layout(bindless_layout, None);
         context.device.destroy_image_view(volume_view, None);
         context.device.destroy_image(volume_image, None);
         context.device.free_memory(volume_memory, None);

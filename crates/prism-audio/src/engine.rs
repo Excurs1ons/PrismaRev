@@ -3,12 +3,12 @@
 use std::num::NonZeroU32;
 use std::time::Duration;
 
-use firewheel::*;
-use firewheel::cpal::{CpalConfig, CpalOutputConfig, CpalStream};
 use firewheel::core::channel_config::{ChannelCount, NonZeroChannelCount};
 use firewheel::core::diff::Notify;
 use firewheel::core::node::NodeID;
+use firewheel::cpal::{CpalConfig, CpalOutputConfig, CpalStream};
 use firewheel::nodes::sampler::*;
+use firewheel::*;
 
 use crate::error::AudioError;
 
@@ -102,8 +102,7 @@ impl AudioEngine {
         let channels = config.channels;
 
         let mut ctx = FirewheelContext::new(FirewheelConfig {
-            num_graph_outputs: ChannelCount::new(channels as u32)
-                .unwrap_or(ChannelCount::STEREO),
+            num_graph_outputs: ChannelCount::new(channels as u32).unwrap_or(ChannelCount::STEREO),
             ..Default::default()
         });
 
@@ -283,11 +282,7 @@ impl AudioEngine {
 
     /// 设置正在播放的声音的音量（0.0 = 静音，1.0 = 原始音量）
     pub fn set_volume(&mut self, handle: &PlaybackHandle, volume: f32) {
-        let Some(s) = self
-            .active
-            .iter_mut()
-            .find(|s| s.handle == *handle)
-        else {
+        let Some(s) = self.active.iter_mut().find(|s| s.handle == *handle) else {
             return;
         };
         let vol = volume.clamp(0.0, 1.0);
@@ -298,11 +293,7 @@ impl AudioEngine {
 
     /// 暂停声音（冻结播放位置）。
     pub fn pause(&mut self, handle: &PlaybackHandle) {
-        let Some(s) = self
-            .active
-            .iter_mut()
-            .find(|s| s.handle == *handle)
-        else {
+        let Some(s) = self.active.iter_mut().find(|s| s.handle == *handle) else {
             return;
         };
         *s.sampler.play = false;
@@ -312,11 +303,7 @@ impl AudioEngine {
 
     /// 恢复暂停的声音
     pub fn resume(&mut self, handle: &PlaybackHandle) {
-        let Some(s) = self
-            .active
-            .iter_mut()
-            .find(|s| s.handle == *handle)
-        else {
+        let Some(s) = self.active.iter_mut().find(|s| s.handle == *handle) else {
             return;
         };
         *s.sampler.play = true;

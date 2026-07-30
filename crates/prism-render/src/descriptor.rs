@@ -233,12 +233,12 @@ pub struct ReSTIRReservoir {
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct PtEmissiveTri {
-    pub v0: [f32; 4],        // .xyz = vertex 0
-    pub v1: [f32; 4],        // .xyz = vertex 1
-    pub v2: [f32; 4],        // .xyz = vertex 2
-    pub normal: [f32; 4],    // .xyz = shading normal
-    pub radiance: [f32; 4],  // .rgb = pre-scaled emissive radiance
-    pub area: f32,            // precomputed triangle area (for PDF)
+    pub v0: [f32; 4],       // .xyz = vertex 0
+    pub v1: [f32; 4],       // .xyz = vertex 1
+    pub v2: [f32; 4],       // .xyz = vertex 2
+    pub normal: [f32; 4],   // .xyz = shading normal
+    pub radiance: [f32; 4], // .rgb = pre-scaled emissive radiance
+    pub area: f32,          // precomputed triangle area (for PDF)
 }
 
 /// GPU data 布局 for the per-frame uniform 缓冲区
@@ -252,9 +252,9 @@ pub struct PtEmissiveTri {
 pub struct FrameUBOData {
     pub view_proj: [[f32; 4]; 4],       // 64 bytes, offset   0
     pub camera_position: [f32; 4],      // 16 bytes, offset  64 (xyz = camera pos, w = light_count)
-    pub light_direction: [f32; 4],      // 16 bytes, offset  80 (w = pre-scaled radiance = lux/(10000*PI))
-    pub light_color: [f32; 4],          // 16 bytes, offset  96 (w = ambient factor)
-    pub view: [[f32; 4]; 4],            // 64 bytes, offset 112 (world -> view)
+    pub light_direction: [f32; 4], // 16 bytes, offset  80 (w = pre-scaled radiance = lux/(10000*PI))
+    pub light_color: [f32; 4],     // 16 bytes, offset  96 (w = ambient factor)
+    pub view: [[f32; 4]; 4],       // 64 bytes, offset 112 (world -> view)
     pub light_view_proj: [[f32; 4]; 4], // 64 bytes, offset 176 (light-space VP for shadow map)
     /// 色调映射 operator selector, applied to the final 高动态范围 颜色 before the
     /// sRGB 交换链 编码 0 = Reinhard (`x/(x+1)`), 1 = ACES (Narkowicz).
@@ -262,15 +262,15 @@ pub struct FrameUBOData {
     pub tonemap_mode: u32, // offset 240
     /// Scene 颜色 视口 大小 in pixels (xy). Used by the 片元 着色器
     /// to derive screen-space UVs for sampling the screen-space 环境光遮蔽 纹理
-    pub viewport_size: [f32; 2],        // offset 244..251
+    pub viewport_size: [f32; 2], // offset 244..251
     /// Exposure multiplier applied as a uniform 音阶 to the final composed 高动态范围
     /// 颜色 before tonemapping. 默认 1.0 = no scaling; 检查器 滑动条
     /// lets the user brighten/darken the entire 图像 uniformly. 偏移 252.
-    pub exposure: f32,                    // offset 252
+    pub exposure: f32, // offset 252
     /// Pad to 272 字节 so the Rust `#[repr(C)]` 布局 matches the Slang
     /// std140 `FrameUBO` 结构体 大小 must be a multiple of 16).
-    pub _pad2: [f32; 3],                  // offset 256..267
-    pub _pad3: f32,                       // offset 268..271
+    pub _pad2: [f32; 3], // offset 256..267
+    pub _pad3: f32,                // offset 268..271
 }
 
 /// Per-frame UBO 缓冲区 and its 描述符 集合

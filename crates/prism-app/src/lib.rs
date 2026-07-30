@@ -38,18 +38,15 @@ pub use app::App;
 /// boilerplate needed.
 pub fn run() {
     let _ = env_logger::try_init();
-    let event_loop = winit::event_loop::EventLoop::new()
-        .expect("failed to create winit event loop");
-    run_on_event_loop(event_loop)
-        .expect("fatal application error");
+    let event_loop =
+        winit::event_loop::EventLoop::new().expect("failed to create winit event loop");
+    run_on_event_loop(event_loop).expect("fatal application error");
 }
 
 /// Shared entry — runs the application on a pre-built winit 事件 循环
 ///
 /// Used by both the desktop [`run()`] and the Android `android_main` entry.
-pub fn run_on_event_loop(
-    event_loop: winit::event_loop::EventLoop<()>,
-) -> anyhow::Result<()> {
+pub fn run_on_event_loop(event_loop: winit::event_loop::EventLoop<()>) -> anyhow::Result<()> {
     let mut app = App::new();
     event_loop.run_app(&mut app)?;
     Ok(())
@@ -79,6 +76,5 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
         .build()
         .expect("failed to build Android event loop");
 
-    run_on_event_loop(event_loop)
-        .expect("fatal application error");
+    run_on_event_loop(event_loop).expect("fatal application error");
 }

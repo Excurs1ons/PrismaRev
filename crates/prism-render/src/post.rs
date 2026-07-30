@@ -27,15 +27,13 @@ use ash::vk;
 use crate::context::VulkanContext;
 use crate::pipeline::{GraphicsPipeline, PipelineDesc};
 use crate::render_graph::{
-    GraphResources, PassInfo, PassKind, PT_COLOR_H, RenderContext, RenderGraphBuilder,
-    RenderMode, RenderPassNode, RenderSettings, ResourceUsage, SCENE_COLOR_H, SCENE_DEPTH_H,
+    GraphResources, PassInfo, PassKind, RenderContext, RenderGraphBuilder, RenderMode,
+    RenderPassNode, RenderSettings, ResourceUsage, PT_COLOR_H, SCENE_COLOR_H, SCENE_DEPTH_H,
     SCENE_NORMAL_H,
 };
 use crate::render_pass::find_memory_type;
 use crate::shader;
 use crate::shader_bindings;
-
-
 
 /// Fullscreen-triangle 色调映射 pass 高动态范围 scene 颜色 -> sRGB 交换链
 pub struct PostPass {
@@ -678,4 +676,3 @@ fn _memory_type_for_hdr(context: &VulkanContext, mem_type_bits: u32) -> anyhow::
     )
     .context("PostPass: no suitable memory type for HDR image")
 }
-

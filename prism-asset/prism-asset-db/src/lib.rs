@@ -81,12 +81,7 @@ pub struct AssetRecord {
 
 impl AssetRecord {
     /// 创建 a new record.
-    pub fn new(
-        id: AssetId,
-        path: String,
-        asset_type: AssetType,
-        importer_name: &str,
-    ) -> Self {
+    pub fn new(id: AssetId, path: String, asset_type: AssetType, importer_name: &str) -> Self {
         Self {
             id,
             path,
@@ -242,9 +237,7 @@ impl AssetDatabase {
     pub fn generate_id(&mut self) -> AssetId {
         let serial = self.next_serial;
         self.next_serial += 1;
-        AssetId::from_raw(
-            (u64::from(self.generation) << 32) | (serial & 0x0000_0000_FFFF_FFFF),
-        )
+        AssetId::from_raw((u64::from(self.generation) << 32) | (serial & 0x0000_0000_FFFF_FFFF))
     }
 
     /// 当前 serial.
@@ -445,7 +438,12 @@ mod tests {
     fn make_db() -> AssetDatabase {
         let mut db = AssetDatabase::new();
         let id = db.generate_id();
-        let record = AssetRecord::new(id, "meshes/cube.gltf".into(), AssetType::Mesh, "gltf-importer");
+        let record = AssetRecord::new(
+            id,
+            "meshes/cube.gltf".into(),
+            AssetType::Mesh,
+            "gltf-importer",
+        );
         db.insert(record).unwrap();
         db
     }
@@ -549,8 +547,13 @@ mod tests {
         let path = dir.join("test_asset_db.json");
         let mut db = AssetDatabase::new();
         let id = db.generate_id();
-        db.insert(AssetRecord::new(id, "test.bin".into(), AssetType::Binary, "raw"))
-            .unwrap();
+        db.insert(AssetRecord::new(
+            id,
+            "test.bin".into(),
+            AssetType::Binary,
+            "raw",
+        ))
+        .unwrap();
         db.save(&path).unwrap();
 
         let loaded = AssetDatabase::load(&path).unwrap();

@@ -526,23 +526,18 @@ impl Tlas {
         let packed: Vec<vk::AccelerationStructureInstanceKHR> = instances
             .iter()
             .zip(blas_addresses.iter())
-            .map(|(inst, &blas_addr)| {
-                vk::AccelerationStructureInstanceKHR {
-                    transform: vk::TransformMatrixKHR {
-                        matrix: inst.transform,
-                    },
-                    instance_custom_index_and_mask: vk::Packed24_8::new(
-                        inst.custom_index,
-                        inst.mask,
-                    ),
-                    instance_shader_binding_table_record_offset_and_flags: vk::Packed24_8::new(
-                        inst.instance_shader_binding_table_record_offset,
-                        inst.flags.as_raw() as u8,
-                    ),
-                    acceleration_structure_reference: vk::AccelerationStructureReferenceKHR {
-                        device_handle: blas_addr,
-                    },
-                }
+            .map(|(inst, &blas_addr)| vk::AccelerationStructureInstanceKHR {
+                transform: vk::TransformMatrixKHR {
+                    matrix: inst.transform,
+                },
+                instance_custom_index_and_mask: vk::Packed24_8::new(inst.custom_index, inst.mask),
+                instance_shader_binding_table_record_offset_and_flags: vk::Packed24_8::new(
+                    inst.instance_shader_binding_table_record_offset,
+                    inst.flags.as_raw() as u8,
+                ),
+                acceleration_structure_reference: vk::AccelerationStructureReferenceKHR {
+                    device_handle: blas_addr,
+                },
             })
             .collect();
 

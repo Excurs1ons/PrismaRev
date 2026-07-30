@@ -12,8 +12,11 @@
 //! [`RenderStats`] 流向相反方向（渲染线程 → 主线程），
 //! `pt_reset_requested` 同理（主线程 → 渲染线程）。
 
-use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 use std::sync::Mutex;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 
 use prism_engine::render_system::FramePacket;
 use prism_render::EguiFrame;

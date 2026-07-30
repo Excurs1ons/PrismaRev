@@ -181,7 +181,9 @@ pub fn create_emissive_buffer(
         let mut b = Vec::with_capacity(tris.len() * size_of::<PtEmissiveTri>());
         for tri in &tris {
             let ptr = tri as *const PtEmissiveTri as *const u8;
-            b.extend_from_slice(unsafe { std::slice::from_raw_parts(ptr, size_of::<PtEmissiveTri>()) });
+            b.extend_from_slice(unsafe {
+                std::slice::from_raw_parts(ptr, size_of::<PtEmissiveTri>())
+            });
         }
         b
     };

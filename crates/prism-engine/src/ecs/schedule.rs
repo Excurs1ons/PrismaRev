@@ -27,7 +27,9 @@ pub struct Schedule {
 impl Schedule {
     /// 空 调度
     pub fn new() -> Self {
-        Self { systems: Vec::new() }
+        Self {
+            systems: Vec::new(),
+        }
     }
 
     /// 追加 a 系统 with a 调试 标签

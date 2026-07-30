@@ -89,7 +89,10 @@ fn kv(key_en: &str, key_cn: &str, value: &str, key_en_width: usize) {
 // ---------------------------------------------------------------------------
 
 #[derive(Parser)]
-#[command(name = "prism-asset-cli", about = "PrismaRev Resource Pipeline CLI\n资源管线命令行工具")]
+#[command(
+    name = "prism-asset-cli",
+    about = "PrismaRev Resource Pipeline CLI\n资源管线命令行工具"
+)]
 #[command(args_conflicts_with_subcommands = true)]
 struct Cli {
     /// .pak file to inspect / validate (shorthand for `validate`).
@@ -200,7 +203,10 @@ fn cmd_init(dir: &Path) -> anyhow::Result<()> {
     let cache = ImportCache::new();
     cache.save(&cache_path(dir))?;
 
-    println!("✅  Resource pipeline initialized / 资源管线已初始化: {}", dir.display());
+    println!(
+        "✅  Resource pipeline initialized / 资源管线已初始化: {}",
+        dir.display()
+    );
     println!("   Assets/    –  Place source files here / 放置源文件");
     println!("   Library/   –  Database & import cache / 数据库和导入缓存");
     Ok(())
@@ -209,7 +215,9 @@ fn cmd_init(dir: &Path) -> anyhow::Result<()> {
 fn cmd_scan(root: &Path, _cli: &Cli) -> anyhow::Result<()> {
     let assets = assets_dir(root);
     if !assets.exists() {
-        anyhow::bail!("Assets/ directory not found / 目录不存在. Run 'prism-asset-cli init' first.");
+        anyhow::bail!(
+            "Assets/ directory not found / 目录不存在. Run 'prism-asset-cli init' first."
+        );
     }
 
     let mut db = AssetDatabase::load(&db_path(root))?;
@@ -227,10 +235,7 @@ fn cmd_scan(root: &Path, _cli: &Cli) -> anyhow::Result<()> {
             return;
         }
 
-        let extension = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("");
+        let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("");
         let asset_type = AssetType::from_extension(extension);
 
         let id = db.generate_id();
@@ -240,14 +245,20 @@ fn cmd_scan(root: &Path, _cli: &Cli) -> anyhow::Result<()> {
     });
 
     db.save(&db_path(root))?;
-    println!("✅  Scan complete / 扫描完成: {} new/新增, {} total/总计", scanned, db.len());
+    println!(
+        "✅  Scan complete / 扫描完成: {} new/新增, {} total/总计",
+        scanned,
+        db.len()
+    );
     Ok(())
 }
 
 fn cmd_import(root: &Path, _force: bool, _cli: &Cli) -> anyhow::Result<()> {
     let assets = assets_dir(root);
     if !assets.exists() {
-        anyhow::bail!("Assets/ directory not found / 目录不存在. Run 'prism-asset-cli init' first.");
+        anyhow::bail!(
+            "Assets/ directory not found / 目录不存在. Run 'prism-asset-cli init' first."
+        );
     }
 
     let mut db = AssetDatabase::load(&db_path(root))?;
@@ -309,7 +320,9 @@ fn cmd_build(
     _cli: &Cli,
 ) -> anyhow::Result<()> {
     if !db_path(root).exists() {
-        anyhow::bail!("No AssetDatabase.json found / 未找到数据库. Run 'prism-asset-cli scan' first.");
+        anyhow::bail!(
+            "No AssetDatabase.json found / 未找到数据库. Run 'prism-asset-cli scan' first."
+        );
     }
 
     let db = AssetDatabase::load(&db_path(root))?;
@@ -417,8 +430,18 @@ fn cmd_validate(pak_path: &Path) -> anyhow::Result<()> {
 
     let magic_str = std::str::from_utf8(&reader.header().magic).unwrap_or("????");
     kv("📦  Magic", "标识", magic_str, 12);
-    kv("🔢  Version", "版本", &format!("{}", reader.header().version), 12);
-    kv("📊  Assets", "资源", &format!("{}", reader.asset_count()), 12);
+    kv(
+        "🔢  Version",
+        "版本",
+        &format!("{}", reader.header().version),
+        12,
+    );
+    kv(
+        "📊  Assets",
+        "资源",
+        &format!("{}", reader.asset_count()),
+        12,
+    );
     kv(
         "📏  Size",
         "大小",
@@ -452,17 +475,18 @@ fn cmd_validate(pak_path: &Path) -> anyhow::Result<()> {
     const COL_SIZE: usize = 12;
     const COL_CSIZE: usize = 12;
     const COL_RATIO: usize = 12;
-	    // Header 行 — bilingual, EN padded to 5 so `/` aligns.
-	    let hdr = |en: &str, cn: &str, w: usize| pad_display(&format!("{} / {}", pad_display(en, 5), cn), w);
-	    println!(
-	        "  {}  {}  {}  {}  {}  {}",
-	        hdr("ID", "标识", COL_ID),
-	        hdr("Type", "类型", COL_TYPE),
-	        hdr("Size", "大小", COL_SIZE),
-	        hdr("Comp", "压缩", COL_CSIZE),
-	        hdr("Ratio", "比率", COL_RATIO),
-	        "Name / 名称",
-	    );
+    // Header 行 — bilingual, EN padded to 5 so `/` aligns.
+    let hdr =
+        |en: &str, cn: &str, w: usize| pad_display(&format!("{} / {}", pad_display(en, 5), cn), w);
+    println!(
+        "  {}  {}  {}  {}  {}  {}",
+        hdr("ID", "标识", COL_ID),
+        hdr("Type", "类型", COL_TYPE),
+        hdr("Size", "大小", COL_SIZE),
+        hdr("Comp", "压缩", COL_CSIZE),
+        hdr("Ratio", "比率", COL_RATIO),
+        "Name / 名称",
+    );
     // Separator — all columns same 宽度
     println!(
         "  {}  {}  {}  {}  {}  {}",
@@ -538,7 +562,9 @@ fn cmd_validate(pak_path: &Path) -> anyhow::Result<()> {
 
 fn cmd_list(root: &Path, _cli: &Cli) -> anyhow::Result<()> {
     if !db_path(root).exists() {
-        anyhow::bail!("No AssetDatabase.json found / 未找到数据库. Run 'prism-asset-cli scan' first.");
+        anyhow::bail!(
+            "No AssetDatabase.json found / 未找到数据库. Run 'prism-asset-cli scan' first."
+        );
     }
 
     let db = AssetDatabase::load(&db_path(root))?;
@@ -579,7 +605,16 @@ fn cmd_inspect(root: &Path, id_or_path: &str) -> anyhow::Result<()> {
             kv("State", "状态", &format!("{:?}", r.state), 11);
             kv("Version", "版本", &r.version.to_string(), 11);
             kv("Source Hash", "哈希", &format!("{:#x}", r.source_hash), 11);
-            kv("Deps", "依赖", &format!("{} assets / {} 个资源", r.dependencies.len(), r.dependencies.len()), 11);
+            kv(
+                "Deps",
+                "依赖",
+                &format!(
+                    "{} assets / {} 个资源",
+                    r.dependencies.len(),
+                    r.dependencies.len()
+                ),
+                11,
+            );
             for dep in &r.dependencies {
                 if let Some(dep_record) = db.get(*dep) {
                     println!("  → {}  {}", dep, dep_record.path);

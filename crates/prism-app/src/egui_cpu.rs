@@ -43,7 +43,11 @@ impl EguiCpu {
     }
 
     /// 向前 a winit 窗口 事件 to egui. Returns whether egui consumed it.
-    pub fn handle_window_event(&mut self, window: &Window, event: &winit::event::WindowEvent) -> bool {
+    pub fn handle_window_event(
+        &mut self,
+        window: &Window,
+        event: &winit::event::WindowEvent,
+    ) -> bool {
         let Some(state) = self.state.as_mut() else {
             return false;
         };

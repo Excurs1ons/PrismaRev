@@ -6,16 +6,15 @@
 
 use glam::{self, Mat4, Vec3, Vec4};
 
-use prism_ecs::World;
-use prism_render::{
-    DrawItem, FrameUBOData, GpuLight, GraphRenderer, PtAnalyticLight, PT_LIGHT_MAX,
-    UiOverlayInput,
-};
 use crate::dirty_router::DirtyRouter;
 use crate::render_settings::RenderSettings;
 use crate::scene;
 use crate::scene::components as scene_comp;
 use crate::scene::components::Camera;
+use prism_ecs::World;
+use prism_render::{
+    DrawItem, FrameUBOData, GpuLight, GraphRenderer, PtAnalyticLight, UiOverlayInput, PT_LIGHT_MAX,
+};
 
 /// 预缩放因子，取代旧的 GPU 端 `exposure / PI` 单位转换。
 /// 勒克斯（或坎德拉）在 CPU 上乘以此因子，使着色器直接接收有效辐射度。
@@ -84,7 +83,11 @@ pub fn extract_frame_packet(
     // 3. 构建 the UI 叠加 from the ECS 世界 (includes UiQuad/TextCmd).
     let ui_overlay = crate::ui::convert_ui_draw_list_to_overlay(world);
 
-    FramePacket { scene, draw_items, ui_overlay }
+    FramePacket {
+        scene,
+        draw_items,
+        ui_overlay,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -130,14 +133,28 @@ fn collect_scene_changes(
             }
         }
         match scene::systems::camera::compute_camera_output(world, surface_rotation) {
-            Some(out) => (out.view_proj, out.eye, out.view, out.projection, out.exposure, true),
+            Some(out) => (
+                out.view_proj,
+                out.eye,
+                out.view,
+                out.projection,
+                out.exposure,
+                true,
+            ),
             None => {
                 log::warn!("no usable Camera entity — using fallback");
                 let fb = scene::systems::camera::fallback_camera_output(
                     surface_rotation,
                     display_aspect,
                 );
-                (fb.view_proj, fb.eye, fb.view, fb.projection, fb.exposure, false)
+                (
+                    fb.view_proj,
+                    fb.eye,
+                    fb.view,
+                    fb.projection,
+                    fb.exposure,
+                    false,
+                )
             }
         }
     };
@@ -201,7 +218,11 @@ fn collect_scene_changes(
             pl.color.y * pl.intensity * LUX_TO_RADIANCE_SCALE,
             pl.color.z * pl.intensity * LUX_TO_RADIANCE_SCALE,
         );
-        pt_lights.push(PtAnalyticLight::point(pos.into(), radiance.into(), pl.range));
+        pt_lights.push(PtAnalyticLight::point(
+            pos.into(),
+            radiance.into(),
+            pl.range,
+        ));
     }
 
     // 5. Light-space view-projection (shadow 映射表
@@ -377,8 +398,7 @@ fn light_view_proj(light_dir: &Vec4, half: f32, center: &Vec3) -> Mat4 {
         glam::vec4(right.y, true_up.y, -fwd.y, 0.0),
         glam::vec4(right.z, true_up.z, -fwd.z, 0.0),
         glam::vec4(-right.dot(eye), -true_up.dot(eye), fwd.dot(eye), 1.0),
-    )
-    * Mat4::from_cols(
+    ) * Mat4::from_cols(
         glam::vec4(half.recip(), 0.0, 0.0, 0.0),
         glam::vec4(0.0, half.recip(), 0.0, 0.0),
         glam::vec4(0.0, 0.0, -1.0 / (2.5 * dist), 0.0),

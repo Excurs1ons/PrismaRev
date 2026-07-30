@@ -58,10 +58,7 @@ impl OffscreenTarget {
                     .array_layers(1)
                     .samples(vk::SampleCountFlags::TYPE_1)
                     .tiling(vk::ImageTiling::OPTIMAL)
-                    .usage(
-                        vk::ImageUsageFlags::TRANSFER_DST
-                            | vk::ImageUsageFlags::TRANSFER_SRC,
-                    ),
+                    .usage(vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::TRANSFER_SRC),
                 None,
             )
         }
@@ -104,8 +101,7 @@ impl OffscreenTarget {
         let mem_type = find_memory_type(
             context,
             mem_reqs.memory_type_bits,
-            vk::MemoryPropertyFlags::HOST_VISIBLE
-                | vk::MemoryPropertyFlags::HOST_COHERENT,
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
         )
         .context("no host-visible memory type for readback buffer")?;
 
@@ -143,7 +139,11 @@ impl OffscreenTarget {
 
     /// 清空 the offscreen 图像 to 颜色 复制 it to the host-visible
     /// 缓冲区 and wait for the GPU. Afterwards 调用 [`readback`](Self::readback).
-    pub fn clear_and_copy(&mut self, context: &VulkanContext, color: [f32; 4]) -> anyhow::Result<()> {
+    pub fn clear_and_copy(
+        &mut self,
+        context: &VulkanContext,
+        color: [f32; 4],
+    ) -> anyhow::Result<()> {
         let device = &context.device;
 
         // ---- one-shot 命令 缓冲区 ----
@@ -161,7 +161,9 @@ impl OffscreenTarget {
 
         // UNDEFINED → TRANSFER_DST_OPTIMAL
         image_barrier(
-            device, cmd, self.image,
+            device,
+            cmd,
+            self.image,
             vk::ImageLayout::UNDEFINED,
             vk::ImageLayout::TRANSFER_DST_OPTIMAL,
             vk::AccessFlags::empty(),
@@ -191,7 +193,9 @@ impl OffscreenTarget {
 
         // TRANSFER_DST_OPTIMAL → TRANSFER_SRC_OPTIMAL (for 复制
         image_barrier(
-            device, cmd, self.image,
+            device,
+            cmd,
+            self.image,
             vk::ImageLayout::TRANSFER_DST_OPTIMAL,
             vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
             vk::AccessFlags::TRANSFER_WRITE,

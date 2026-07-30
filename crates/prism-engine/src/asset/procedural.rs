@@ -118,14 +118,7 @@ pub fn make_cube() -> MeshAsset {
     let indices: Vec<u32> = {
         let mut idx = Vec::with_capacity(36);
         for base in (0..24).step_by(4) {
-            idx.extend_from_slice(&[
-                base,
-                base + 1,
-                base + 2,
-                base + 2,
-                base + 3,
-                base,
-            ]);
+            idx.extend_from_slice(&[base, base + 1, base + 2, base + 2, base + 3, base]);
         }
         idx
     };

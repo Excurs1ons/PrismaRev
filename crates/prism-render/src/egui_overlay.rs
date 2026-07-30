@@ -62,7 +62,11 @@ pub struct EguiGpu {
 
 impl EguiGpu {
     /// 创建 the overlay's Vulkan resources 渲染 pass + egui 渲染器
-    pub fn new(context: &VulkanContext, color_format: vk::Format, in_flight_frames: usize) -> Result<Self> {
+    pub fn new(
+        context: &VulkanContext,
+        color_format: vk::Format,
+        in_flight_frames: usize,
+    ) -> Result<Self> {
         let device = context.device.clone();
         let render_pass = Self::create_render_pass(&device, color_format)?;
 
@@ -88,13 +92,19 @@ impl EguiGpu {
             render_pass,
             framebuffers: Vec::new(),
             target_views: Vec::new(),
-            extent: vk::Extent2D { width: 0, height: 0 },
+            extent: vk::Extent2D {
+                width: 0,
+                height: 0,
+            },
             color_format,
             device,
         })
     }
 
-    fn create_render_pass(device: &ash::Device, color_format: vk::Format) -> Result<vk::RenderPass> {
+    fn create_render_pass(
+        device: &ash::Device,
+        color_format: vk::Format,
+    ) -> Result<vk::RenderPass> {
         let color_attachment = vk::AttachmentDescription::default()
             .format(color_format)
             .samples(vk::SampleCountFlags::TYPE_1)
@@ -209,7 +219,8 @@ impl EguiGpu {
         let need_rebuild = self.framebuffers.len() != swapchain_views.len()
             || self.extent.width != extent.width
             || self.extent.height != extent.height
-            || self.target_views.get(image_index as usize) != swapchain_views.get(image_index as usize);
+            || self.target_views.get(image_index as usize)
+                != swapchain_views.get(image_index as usize);
 
         if need_rebuild {
             for fb in self.framebuffers.iter().flatten() {

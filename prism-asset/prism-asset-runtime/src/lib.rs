@@ -29,7 +29,7 @@ use thiserror::Error;
 mod hot_reload;
 
 #[cfg(feature = "hot-reload")]
-pub use hot_reload::{HotReloadWatcher, HotReloadEvent};
+pub use hot_reload::{HotReloadEvent, HotReloadWatcher};
 
 // ---------------------------------------------------------------------------
 // Typed 资源 wrappers (RTEX/RMES/RMAT/SPIR-V/RSCN decoders)
@@ -57,11 +57,7 @@ pub enum RuntimeError {
     Package(#[from] prism_asset_package::PackageError),
 
     #[error("Handle generation mismatch for slot {index}: expected {expected}, got {got}")]
-    GenerationMismatch {
-        index: u32,
-        expected: u32,
-        got: u32,
-    },
+    GenerationMismatch { index: u32, expected: u32, got: u32 },
 
     #[error("Slot {index} is empty")]
     SlotEmpty { index: u32 },
@@ -380,12 +376,11 @@ impl ResourceManager {
 
     /// Same as [`Self::load_path_manifest`] but parses an in-memory JSON 字符串
     pub fn load_path_manifest_from_str(&mut self, text: &str) -> Result<(), RuntimeError> {
-        let json: serde_json::Value = serde_json::from_str(text).map_err(|e| {
-            RuntimeError::DeserializeFailed {
+        let json: serde_json::Value =
+            serde_json::from_str(text).map_err(|e| RuntimeError::DeserializeFailed {
                 asset_type: AssetType::Binary,
                 reason: format!("parse path manifest JSON: {e}"),
-            }
-        })?;
+            })?;
 
         let assets = json
             .get("assets")
@@ -445,10 +440,7 @@ impl ResourceManager {
 
             if index as usize >= self.slots.len() {
                 // Extend the vec to include this 索引
-                self.slots.resize(
-                    index as usize + 1,
-                    Slot::new(0),
-                );
+                self.slots.resize(index as usize + 1, Slot::new(0));
             }
             self.slots[index as usize] = Slot {
                 generation: 0,
@@ -548,7 +540,7 @@ impl ResourceManager {
         load_order: &mut Vec<AssetId>,
     ) -> Result<(), RuntimeError> {
         match visited.get(&id) {
-            Some(&true) => return Ok(()),      // already processed
+            Some(&true) => return Ok(()), // already processed
             Some(&false) => {
                 // Cycle detected — just warn and skip this 分支
                 tracing::warn!("Dependency cycle detected involving {id}");
@@ -587,9 +579,7 @@ impl ResourceManager {
 
     /// 加载 raw 字节 for an 资源 without going through 资源 trait
     fn load_raw_bytes(&mut self, id: AssetId) -> Result<Vec<u8>, RuntimeError> {
-        let slot_index = self
-            .slot_index(id)
-            .ok_or(RuntimeError::NotFound(id))?;
+        let slot_index = self.slot_index(id).ok_or(RuntimeError::NotFound(id))?;
 
         // If already loaded, return a 复制
         {
@@ -643,9 +633,7 @@ impl ResourceManager {
     fn get_raw_bytes(&self, id: AssetId) -> Result<Vec<u8>, RuntimeError> {
         let slot_index = self.slot_index(id).ok_or(RuntimeError::NotFound(id))?;
         let slot = &self.slots[slot_index as usize];
-        slot.data
-            .clone()
-            .ok_or(RuntimeError::NotLoaded(id))
+        slot.data.clone().ok_or(RuntimeError::NotLoaded(id))
     }
 
     /// 加载 an 资源 by ID and return a typed handle.
@@ -653,9 +641,7 @@ impl ResourceManager {
     /// 第一个 访问 reads the data from the .pak and caches it. Subsequent
     /// calls return immediately.
     pub fn load<T: Asset + 'static>(&mut self, id: AssetId) -> Result<Handle<T>, RuntimeError> {
-        let slot_index = self
-            .slot_index(id)
-            .ok_or(RuntimeError::NotFound(id))?;
+        let slot_index = self.slot_index(id).ok_or(RuntimeError::NotFound(id))?;
 
         // If data is already loaded, 更新 访问 时间 and return handle.
         {
@@ -783,7 +769,10 @@ impl ResourceManager {
             });
         }
         slot.last_access = Instant::now();
-        let data = slot.data.as_ref().ok_or(RuntimeError::NotLoaded(slot.asset_id))?;
+        let data = slot
+            .data
+            .as_ref()
+            .ok_or(RuntimeError::NotLoaded(slot.asset_id))?;
         T::from_bytes(data).map_err(|_| RuntimeError::TypeMismatch {
             expected: std::any::type_name::<T>(),
             got: slot.asset_type,
@@ -822,7 +811,10 @@ impl ResourceManager {
             }
         }
         self.memory.current = 0;
-        tracing::info!("Unloaded all assets (memory freed: {})", self.memory.current);
+        tracing::info!(
+            "Unloaded all assets (memory freed: {})",
+            self.memory.current
+        );
     }
 
     /// Unload an 资源 by ID (convenience).
@@ -1424,10 +1416,7 @@ mod tests {
             ]
         }"#;
         rm.load_path_manifest_from_str(manifest).unwrap();
-        assert_eq!(
-            rm.id_by_path("a.png"),
-            Some(AssetId::from_raw(0xdead_beef))
-        );
+        assert_eq!(rm.id_by_path("a.png"), Some(AssetId::from_raw(0xdead_beef)));
     }
 
     #[test]

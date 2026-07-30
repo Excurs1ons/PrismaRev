@@ -240,7 +240,10 @@ pub fn validate_scene(scene: &SceneJson) -> Result<(), String> {
                     return Err(format!(
                         "Cycle detected: {} → {}",
                         cycle.join(" → "),
-                        entities[p].name.as_deref().unwrap_or(&format!("<entity {}>", p))
+                        entities[p]
+                            .name
+                            .as_deref()
+                            .unwrap_or(&format!("<entity {}>", p))
                     ));
                 }
                 _ => {}

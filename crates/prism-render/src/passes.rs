@@ -14,6 +14,7 @@ use anyhow::Result;
 use ash::vk;
 use std::time::Instant;
 
+use crate::context::VulkanContext;
 use crate::gizmo::Gizmo;
 use crate::mesh::Vertex;
 use crate::pipeline::{GraphicsPipeline, PipelineDesc};
@@ -22,7 +23,6 @@ use crate::render_graph::{
     RenderSettings, ResourceHandle, ResourceType, ResourceUsage, ShadowMode, SCENE_COLOR_H,
     SCENE_DEPTH_H, SCENE_NORMAL_H,
 };
-use crate::context::VulkanContext;
 use crate::shader;
 use crate::shader_bindings;
 
@@ -53,8 +53,6 @@ pub struct ShadowMapPass {
 /// Square shadow 映射表 分辨率 2048 is a reasonable desktop/mobile 默认
 /// raise for quality, lower for 带宽 on weak GPUs.
 const SHADOW_MAP_SIZE: u32 = 2048;
-
-
 
 impl ShadowMapPass {
     pub fn new() -> Self {
@@ -212,8 +210,7 @@ impl RenderPassNode for ShadowMapPass {
             // 管线 — may already exist when warmup ran ahead of 时间
             if self.pipeline.is_none() {
                 const VERT_SPV: &[u8] = include_bytes!("../../../shaders/shadow_depth.vert.spv");
-                const FRAG_SPV: &[u8] =
-                    include_bytes!("../../../shaders/shadow_depth.frag.spv");
+                const FRAG_SPV: &[u8] = include_bytes!("../../../shaders/shadow_depth.frag.spv");
                 let vert_module = shader::load_shader_module(device, VERT_SPV)
                     .context("load shadow vert module")?;
                 let frag_module = shader::load_shader_module(device, FRAG_SPV)
@@ -393,8 +390,7 @@ impl RenderPassNode for ShadowMapPass {
         self.device = Some(device.clone());
 
         // 渲染 pass — same 布局 as 执行 uses.
-        let render_pass =
-            Self::create_render_pass(device, vk::Format::D32_SFLOAT)?;
+        let render_pass = Self::create_render_pass(device, vk::Format::D32_SFLOAT)?;
         self.render_pass = Some(render_pass);
 
         // 管线 — 加载 着色器 modules, 创建 depth-only 管线
@@ -2354,5 +2350,3 @@ impl Drop for ScenePass {
         }
     }
 }
-
-

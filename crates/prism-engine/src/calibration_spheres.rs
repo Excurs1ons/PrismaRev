@@ -118,10 +118,7 @@ fn uv_sphere(segments: u32, rings: u32) -> MeshUploadInput {
             // 法线 = 归一化 position (unit 球体 -> already unit).
             normals.push([x, y, z]);
             // uv u wraps with longitude, v goes pole-to-pole.
-            uvs.push([
-                j as f32 / lon_steps as f32,
-                i as f32 / rings as f32,
-            ]);
+            uvs.push([j as f32 / lon_steps as f32, i as f32 / rings as f32]);
             // 切线 dP/dphi = (-sin_t*sin_p, 0, sin_t*cos_p), 归一化
             // Degenerate at the poles (sin_t -> 0); fall 后 to +X there.
             // w = handedness +1 (UVs are not mirrored on a uv 球体
@@ -206,27 +203,39 @@ pub fn spawn_calibration_spheres(
             emissive_strength: 1.0,
         };
         let handle = renderer.register_material(input)?;
-        let slot = renderer.material_slot(handle).ok_or_else(|| {
-            anyhow::anyhow!("calibration sphere {}: no material slot", mat.name)
-        })?;
+        let slot = renderer
+            .material_slot(handle)
+            .ok_or_else(|| anyhow::anyhow!("calibration sphere {}: no material slot", mat.name))?;
 
         let x = origin_x + i as f32 * SPHERE_SPACING;
         let entity = world.spawn();
-        world.insert(entity, MeshRef {
-            asset_id: SceneAssetId::generate(),
-            render_handle: mesh,
-            generation: 1,
-        });
-        world.insert(entity, MaterialRef {
-            asset_id: SceneAssetId::generate(),
-            material_slot: slot,
-            generation: 1,
-        });
-        world.insert(entity, LocalTransform {
-            translation: glam::Vec3::new(x, origin_y, origin_z),
-            ..Default::default()
-        });
-        world.insert(entity, WorldTransform(translation_matrix(x, origin_y, origin_z)));
+        world.insert(
+            entity,
+            MeshRef {
+                asset_id: SceneAssetId::generate(),
+                render_handle: mesh,
+                generation: 1,
+            },
+        );
+        world.insert(
+            entity,
+            MaterialRef {
+                asset_id: SceneAssetId::generate(),
+                material_slot: slot,
+                generation: 1,
+            },
+        );
+        world.insert(
+            entity,
+            LocalTransform {
+                translation: glam::Vec3::new(x, origin_y, origin_z),
+                ..Default::default()
+            },
+        );
+        world.insert(
+            entity,
+            WorldTransform(translation_matrix(x, origin_y, origin_z)),
+        );
         log::debug!(
             "calibration sphere[{}] '{}': bc={:?} m={} r={} -> slot {}",
             i,

@@ -84,13 +84,10 @@ impl Inspect for LocalTransform {
         ui.label("Rotation (Euler, degrees)");
         let entity = ctx.current_entity.unwrap_or_else(|| sentinel_entity());
         let key = (entity, TypeId::of::<Self>());
-        let euler = ctx
-            .euler_cache
-            .entry(key)
-            .or_insert_with(|| {
-                let (x, y, z) = self.rotation.to_euler(glam::EulerRot::XYZ);
-                [x.to_degrees(), y.to_degrees(), z.to_degrees()]
-            });
+        let euler = ctx.euler_cache.entry(key).or_insert_with(|| {
+            let (x, y, z) = self.rotation.to_euler(glam::EulerRot::XYZ);
+            [x.to_degrees(), y.to_degrees(), z.to_degrees()]
+        });
         let mut changed = false;
         ui.horizontal(|ui| {
             ui.label("X");
@@ -134,7 +131,11 @@ impl Inspect for WorldTransform {
         for col in 0..4 {
             ui.label(format!(
                 "  col{}: [{:.3}, {:.3}, {:.3}, {:.3}]",
-                col, self.0.col(col).x, self.0.col(col).y, self.0.col(col).z, self.0.col(col).w
+                col,
+                self.0.col(col).x,
+                self.0.col(col).y,
+                self.0.col(col).z,
+                self.0.col(col).w
             ));
         }
     }
@@ -200,7 +201,10 @@ impl Inspect for DirectionalLight {
         // dir_light_euler_deg cache).
         let entity = ctx.current_entity.unwrap_or_else(|| sentinel_entity());
         let key = (entity, TypeId::of::<Self>());
-        let euler = ctx.euler_cache.entry(key).or_insert_with(|| self.euler_xyz.into());
+        let euler = ctx
+            .euler_cache
+            .entry(key)
+            .or_insert_with(|| self.euler_xyz.into());
         // 音高 / Yaw / Roll 角度 X = 音高 [-90,90], Y/Z = yaw/roll.
         ui.label("Pitch / Yaw / Roll (degrees)");
         let mut changed = false;

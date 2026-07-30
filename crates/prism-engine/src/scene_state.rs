@@ -216,10 +216,8 @@ pub fn save_scene_state(world: &World) {
     // 实体 position from LocalTransform, yaw/pitch/move_speed/look_sensitivity
     // from FlyCameraController, fov/near/far from 相机 (Position lives on
     // the 变换 since the controller refactor - see scene::systems::camera.)
-    let camera_state: Option<CameraState> = world
-        .query::<Camera>()
-        .next()
-        .and_then(|(entity, cam)| {
+    let camera_state: Option<CameraState> =
+        world.query::<Camera>().next().and_then(|(entity, cam)| {
             let ctrl = world.get::<FlyCameraController>(entity)?;
             let lt = world.get::<LocalTransform>(entity)?;
             Some(CameraState {

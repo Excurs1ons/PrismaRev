@@ -45,7 +45,9 @@ impl ComputePipeline {
         let pipeline = unsafe {
             device.create_compute_pipelines(
                 vk::PipelineCache::null(),
-                &[vk::ComputePipelineCreateInfo::default().stage(stage).layout(layout)],
+                &[vk::ComputePipelineCreateInfo::default()
+                    .stage(stage)
+                    .layout(layout)],
                 None,
             )
         }

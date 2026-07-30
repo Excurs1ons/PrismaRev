@@ -29,7 +29,10 @@ struct SlotMap<T> {
 
 impl<T> SlotMap<T> {
     fn new() -> Self {
-        Self { slots: Vec::new(), free: Vec::new() }
+        Self {
+            slots: Vec::new(),
+            free: Vec::new(),
+        }
     }
 
     fn insert(&mut self, value: T) -> u32 {
@@ -72,9 +75,19 @@ struct TimerState {
     group: Option<u32>,
 }
 
-struct WorkerCmd { id: u32, deadline: Instant }
-struct RegMsg { id: u32, group_id: Option<u32>, params: TimerParams, deadline: Instant }
-struct FireEvent { id: u32 }
+struct WorkerCmd {
+    id: u32,
+    deadline: Instant,
+}
+struct RegMsg {
+    id: u32,
+    group_id: Option<u32>,
+    params: TimerParams,
+    deadline: Instant,
+}
+struct FireEvent {
+    id: u32,
+}
 
 const SLEEP_CHUNK: Duration = Duration::from_millis(50);
 
@@ -113,7 +126,12 @@ impl TimerClient {
         };
         let deadline = Instant::now() + params.delay;
         let group_id = params.group_id;
-        let _ = self.reg_tx.send(RegMsg { id, group_id, params, deadline });
+        let _ = self.reg_tx.send(RegMsg {
+            id,
+            group_id,
+            params,
+            deadline,
+        });
         let _ = self.cmd_tx.send(WorkerCmd { id, deadline });
         id
     }
@@ -141,7 +159,10 @@ impl TimerClient {
             st.paused = false;
             st.remaining
         };
-        let _ = self.cmd_tx.send(WorkerCmd { id, deadline: Instant::now() + remaining });
+        let _ = self.cmd_tx.send(WorkerCmd {
+            id,
+            deadline: Instant::now() + remaining,
+        });
     }
 
     pub fn destroy_group(&self, group: u32) {
@@ -177,7 +198,11 @@ impl TimerService {
         thread::spawn(move || worker_loop(cmd_rx, fire_tx, worker_state));
 
         Self {
-            client: TimerClient { cmd_tx, reg_tx, state },
+            client: TimerClient {
+                cmd_tx,
+                reg_tx,
+                state,
+            },
             fire_rx,
             reg_rx,
             params: SlotMap::new(),
@@ -205,24 +230,46 @@ impl TimerService {
         // 2. 收集到期事件
         let mut fired = Vec::new();
         while let Ok(ev) = self.fire_rx.try_recv() {
-            let alive = self.client.state.lock()
-                .map(|s| s.get(ev.id).map(|st| st.alive && !st.paused).unwrap_or(false))
+            let alive = self
+                .client
+                .state
+                .lock()
+                .map(|s| {
+                    s.get(ev.id)
+                        .map(|st| st.alive && !st.paused)
+                        .unwrap_or(false)
+                })
                 .unwrap_or(false);
-            if alive { fired.push(ev.id); }
+            if alive {
+                fired.push(ev.id);
+            }
         }
 
         // 3. 派发回调 & 重新调度 interval
         for id in fired {
-            let ok = self.client.state.lock()
+            let ok = self
+                .client
+                .state
+                .lock()
                 .map(|s| s.get(id).map(|st| st.alive && !st.paused).unwrap_or(false))
                 .unwrap_or(false);
-            if !ok { continue; }
+            if !ok {
+                continue;
+            }
 
             if let Some(p) = self.params.get_mut(id) {
                 (p.callback)();
                 if let Some(period) = p.interval {
-                    self.client.state.lock().unwrap().get_mut(id).map(|st| st.remaining = period);
-                    let _ = self.client.cmd_tx.send(WorkerCmd { id, deadline: Instant::now() + period });
+                    self.client
+                        .state
+                        .lock()
+                        .unwrap()
+                        .get_mut(id)
+                        .map(|st| st.remaining = period);
+                    let _ = self.client.cmd_tx.send(WorkerCmd {
+                        id,
+                        deadline: Instant::now() + period,
+                    });
                 } else {
                     self.client.state.lock().unwrap().remove(id);
                     self.params.remove(id);
@@ -246,25 +293,39 @@ fn worker_loop(
             let deadline = cmd.deadline;
             loop {
                 let now = Instant::now();
-                if now >= deadline { break; }
+                if now >= deadline {
+                    break;
+                }
                 thread::sleep(std::cmp::min(deadline - now, SLEEP_CHUNK));
 
-                let stop = st.lock().map(|mut s| match s.get_mut(cmd.id) {
-                    Some(ts) if !ts.alive => true,
-                    Some(ts) if ts.paused => {
-                        ts.remaining = deadline.saturating_duration_since(Instant::now());
-                        true
-                    }
-                    Some(_) => false,
-                    None => true,
-                }).unwrap_or(true);
-                if stop { return; }
+                let stop = st
+                    .lock()
+                    .map(|mut s| match s.get_mut(cmd.id) {
+                        Some(ts) if !ts.alive => true,
+                        Some(ts) if ts.paused => {
+                            ts.remaining = deadline.saturating_duration_since(Instant::now());
+                            true
+                        }
+                        Some(_) => false,
+                        None => true,
+                    })
+                    .unwrap_or(true);
+                if stop {
+                    return;
+                }
             }
 
-            let ok = st.lock()
-                .map(|s| s.get(cmd.id).map(|ts| ts.alive && !ts.paused).unwrap_or(false))
+            let ok = st
+                .lock()
+                .map(|s| {
+                    s.get(cmd.id)
+                        .map(|ts| ts.alive && !ts.paused)
+                        .unwrap_or(false)
+                })
                 .unwrap_or(false);
-            if ok { let _ = ft.send(FireEvent { id: cmd.id }); }
+            if ok {
+                let _ = ft.send(FireEvent { id: cmd.id });
+            }
         });
     }
 }
@@ -284,7 +345,10 @@ pub struct TimerSet {
 
 impl TimerSet {
     pub fn new(client: TimerClient) -> Self {
-        Self { client, ids: Vec::new() }
+        Self {
+            client,
+            ids: Vec::new(),
+        }
     }
 
     pub fn create_timer(&mut self, params: TimerParams) -> u32 {
@@ -299,16 +363,28 @@ impl TimerSet {
     }
 
     pub fn clear(&mut self) {
-        for &id in &self.ids { self.client.destroy(id); }
+        for &id in &self.ids {
+            self.client.destroy(id);
+        }
         self.ids.clear();
     }
 
-    pub fn pause(&self, id: u32)  { self.client.pause(id); }
-    pub fn resume(&self, id: u32) { self.client.resume(id); }
-    pub fn inner(&self) -> &TimerClient { &self.client }
-    pub fn inner_mut(&mut self) -> &mut TimerClient { &mut self.client }
+    pub fn pause(&self, id: u32) {
+        self.client.pause(id);
+    }
+    pub fn resume(&self, id: u32) {
+        self.client.resume(id);
+    }
+    pub fn inner(&self) -> &TimerClient {
+        &self.client
+    }
+    pub fn inner_mut(&mut self) -> &mut TimerClient {
+        &mut self.client
+    }
 }
 
 impl Drop for TimerSet {
-    fn drop(&mut self) { self.clear(); }
+    fn drop(&mut self) {
+        self.clear();
+    }
 }

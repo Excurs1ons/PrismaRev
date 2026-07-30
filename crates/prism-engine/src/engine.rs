@@ -109,8 +109,7 @@ impl Engine {
     /// manifest.  Requires a [`ResourceManager`] for `.pak`‑backed scenes.
     pub fn init_scene(&mut self, rm: &mut prism_asset_runtime::ResourceManager) {
         crate::scene_state::load_scene_state(&mut self.world);
-        self.current_scene_name =
-            load_scene_from_manifest(rm, &mut self.world);
+        self.current_scene_name = load_scene_from_manifest(rm, &mut self.world);
     }
 
     /// **Phase 5** — 运行时 init: final "everything is ready" hook.
@@ -119,7 +118,11 @@ impl Engine {
     /// systems on the [`Schedule`](crate::ecs::schedule::Schedule).
     pub fn runtime_initialize(&mut self) {
         // ── 回退 相机 ──────────────────────────────────────────
-        let has_camera = self.world.query::<crate::scene::components::Camera>().next().is_some();
+        let has_camera = self
+            .world
+            .query::<crate::scene::components::Camera>()
+            .next()
+            .is_some();
         if !has_camera {
             Self::spawn_default_camera(&mut self.world);
         }
@@ -143,8 +146,8 @@ impl Engine {
         world: &mut World,
         renderer: &mut prism_render::GraphRenderer,
     ) -> anyhow::Result<()> {
-        use prism_render::managers::{MaterialUploadInput, MeshUploadInput};
         use crate::scene::components::*;
+        use prism_render::managers::{MaterialUploadInput, MeshUploadInput};
 
         // Upload cube 网格
         let cpu_mesh = crate::asset::procedural::make_cube();
@@ -194,10 +197,7 @@ impl Engine {
                 scale: glam::Vec3::ONE,
             },
         );
-        world.insert(
-            entity,
-            WorldTransform(glam::Mat4::IDENTITY),
-        );
+        world.insert(entity, WorldTransform(glam::Mat4::IDENTITY));
         world.insert(
             entity,
             MeshRef {
@@ -594,7 +594,9 @@ fn default_schedule() -> Schedule {
 
     // ── UI 布局 ─────────────────────────────────────────────
     // 每帧重新计算所有 UI 元素的屏幕空间矩形。
-    s.add_system("ui::layout", |world, _dt| crate::ui::ui_layout_system(world));
+    s.add_system("ui::layout", |world, _dt| {
+        crate::ui::ui_layout_system(world)
+    });
 
     // ── UI 输入 ──────────────────────────────────────────────
     // 命中测试，更新 Interaction 组件（需 layout 之后）。
@@ -602,7 +604,9 @@ fn default_schedule() -> Schedule {
 
     // ── UI 渲染 ─────────────────────────────────────────────
     // 收集 UI 绘制命令为 UiDrawList resource。
-    s.add_system("ui::render", |world, _dt| crate::ui::ui_render_system(world));
+    s.add_system("ui::render", |world, _dt| {
+        crate::ui::ui_render_system(world)
+    });
 
     s
 }

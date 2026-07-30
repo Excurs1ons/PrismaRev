@@ -40,8 +40,6 @@ use crate::render_pass::find_memory_type;
 use crate::shader;
 use crate::shader_bindings;
 
-
-
 /// Per-frame-in-flight inputs the GTAO pass needs to 样本 内置 by
 /// `GraphRenderer::render` from `ScenePass` accessors and passed to
 /// `GtaoPass::execute` alongside the 命令 缓冲区
@@ -927,4 +925,3 @@ impl RenderPassNode for GtaoPass {
         self.ensure_pipeline(device)
     }
 }
-

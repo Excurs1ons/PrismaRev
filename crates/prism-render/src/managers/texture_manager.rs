@@ -135,7 +135,16 @@ impl RenderTextureManager {
         // its 精确 颜色 空间 is irrelevant). Written into bindless 槽 0.
         let magenta = [255u8, 0, 255, 255];
         let (fb_image, fb_memory, fb_view) = unsafe {
-            create_and_upload_image(context, command_pool, graphics_queue, 1, 1, &magenta, 1, vk::Format::R8G8B8A8_UNORM)
+            create_and_upload_image(
+                context,
+                command_pool,
+                graphics_queue,
+                1,
+                1,
+                &magenta,
+                1,
+                vk::Format::R8G8B8A8_UNORM,
+            )
         }
         .context("RenderTextureManager::new: create magenta fallback")?;
         bindless
@@ -282,7 +291,13 @@ impl RenderTextureManager {
 
         let mip_levels = crate::batch::mip_level_count(input.width, input.height);
         let (image, memory, view) = uploader
-            .upload_image(input.width, input.height, mip_levels, &input.pixels, input.format.vk_format())
+            .upload_image(
+                input.width,
+                input.height,
+                mip_levels,
+                &input.pixels,
+                input.format.vk_format(),
+            )
             .context("RenderTextureManager::reserve_into: upload texture")?;
 
         let srv = self

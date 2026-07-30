@@ -26,12 +26,20 @@ fn cli_binary() -> PathBuf {
     if path.ends_with("deps") {
         path.pop(); // deps
     }
-    path.push(if cfg!(windows) { "prism-asset-cli.exe" } else { "prism-asset-cli" });
+    path.push(if cfg!(windows) {
+        "prism-asset-cli.exe"
+    } else {
+        "prism-asset-cli"
+    });
     if !path.exists() {
         // 回退 maybe we're in a 工作区 目标 dir.
         path.pop();
         path.push("debug");
-        path.push(if cfg!(windows) { "prism-asset-cli.exe" } else { "prism-asset-cli" });
+        path.push(if cfg!(windows) {
+            "prism-asset-cli.exe"
+        } else {
+            "prism-asset-cli"
+        });
     }
     assert!(path.exists(), "CLI binary not found: {}", path.display());
     path
@@ -68,8 +76,14 @@ fn run_cli(args: &[&str]) -> (String, String) {
 fn cli_no_args_shows_help() {
     let (stdout, stderr) = run_cli(&[]);
     // Should show 用法 text on stdout.
-    assert!(stdout.contains("Usage:"), "help text should contain Usage:\n{stdout}");
-    assert!(stdout.contains("prism-asset-cli"), "help text should mention prism-asset-cli\n{stdout}");
+    assert!(
+        stdout.contains("Usage:"),
+        "help text should contain Usage:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("prism-asset-cli"),
+        "help text should mention prism-asset-cli\n{stdout}"
+    );
     assert!(stderr.is_empty(), "no error expected on stderr:\n{stderr}");
 }
 
@@ -114,8 +128,14 @@ fn cli_validate_with_meta_json_shows_asset_names() {
 
     assert!(stderr.is_empty(), "no error expected:\n{stderr}");
     assert!(stdout.contains("RPAK"), "should show magic:\n{stdout}");
-    assert!(stdout.contains("my_asset.bin"), "should show asset name from metadata:\n{stdout}");
-    assert!(stdout.contains("binary"), "should show asset type:\n{stdout}");
+    assert!(
+        stdout.contains("my_asset.bin"),
+        "should show asset name from metadata:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("binary"),
+        "should show asset type:\n{stdout}"
+    );
 }
 
 #[test]
@@ -128,11 +148,11 @@ fn cli_validate_without_meta_json_shows_fallback() {
 
     assert!(stderr.is_empty(), "no error expected:\n{stderr}");
     assert!(stdout.contains("RPAK"), "should show magic:\n{stdout}");
-	    // 回退 标签 should mention 二进制 and 资源
-	    assert!(
-	        stdout.contains("binary") && stdout.contains("asset"),
-	        "fallback should mention asset type:\n{stdout}"
-	    );
+    // 回退 标签 should mention 二进制 and 资源
+    assert!(
+        stdout.contains("binary") && stdout.contains("asset"),
+        "fallback should mention asset type:\n{stdout}"
+    );
     // Tip about rebuilding should appear.
     assert!(
         stdout.contains("Tip / 提示"),
@@ -148,13 +168,19 @@ fn cli_validate_subcommand_works() {
     let (stdout, stderr) = run_cli(&["validate", &pak_path.to_string_lossy()]);
 
     assert!(stderr.is_empty(), "no error expected:\n{stderr}");
-    assert!(stdout.contains("RPAK"), "validate subcommand should show magic:\n{stdout}");
+    assert!(
+        stdout.contains("RPAK"),
+        "validate subcommand should show magic:\n{stdout}"
+    );
     assert!(stdout.contains("1"), "should show 1 asset:\n{stdout}");
 }
 
 #[test]
 fn cli_help_subcommand_shows_help() {
     let (stdout, stderr) = run_cli(&["help"]);
-    assert!(stdout.contains("Usage:"), "help subcommand should show usage:\n{stdout}");
+    assert!(
+        stdout.contains("Usage:"),
+        "help subcommand should show usage:\n{stdout}"
+    );
     assert!(stderr.is_empty(), "no error on stderr:\n{stderr}");
 }

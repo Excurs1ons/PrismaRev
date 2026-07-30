@@ -163,7 +163,10 @@ impl ImporterRegistry {
         let idx = self.importers.len();
         self.importers.push(importer);
         self.by_name.insert(name, idx);
-        tracing::info!("Registered importer: {name} v{}", self.importers[idx].version());
+        tracing::info!(
+            "Registered importer: {name} v{}",
+            self.importers[idx].version()
+        );
     }
 
     /// Number of registered importers.
@@ -177,12 +180,17 @@ impl ImporterRegistry {
 
     /// 查找 an importer by name.
     pub fn get(&self, name: &str) -> Option<&dyn Importer> {
-        self.by_name.get(name).map(|&idx| self.importers[idx].as_ref())
+        self.by_name
+            .get(name)
+            .map(|&idx| self.importers[idx].as_ref())
     }
 
     /// 查找 the 第一个 importer that can handle a given file.
     pub fn find_for_path(&self, path: &Path) -> Option<&dyn Importer> {
-        self.importers.iter().find(|imp| imp.can_import(path)).map(|b| b.as_ref())
+        self.importers
+            .iter()
+            .find(|imp| imp.can_import(path))
+            .map(|b| b.as_ref())
     }
 
     /// Iterate all registered importers.
@@ -241,9 +249,8 @@ impl ImportPipeline {
         let data = std::fs::read(source_path)?;
         let hash = xxhash_rust::xxh3::xxh3_64(&data);
         let settings = settings.unwrap_or(Value::Null);
-        let settings_hash = xxhash_rust::xxh3::xxh3_64(
-            serde_json::to_string(&settings)?.as_bytes(),
-        );
+        let settings_hash =
+            xxhash_rust::xxh3::xxh3_64(serde_json::to_string(&settings)?.as_bytes());
 
         // 查找 importer.
         let importer = self
@@ -271,8 +278,11 @@ impl ImportPipeline {
         let result = importer.import(&ctx)?;
 
         // 更新 database.
-        let id = db.id_by_path(&normalized).unwrap_or_else(|| db.generate_id());
-        let mut record = AssetRecord::new(id, normalized.clone(), result.asset_type, importer.name());
+        let id = db
+            .id_by_path(&normalized)
+            .unwrap_or_else(|| db.generate_id());
+        let mut record =
+            AssetRecord::new(id, normalized.clone(), result.asset_type, importer.name());
         record.source_hash = hash;
         record.import_settings_hash = settings_hash;
         record.dependencies = result.dependencies;
@@ -296,8 +306,9 @@ impl ImportPipeline {
         cache: &mut ImportCache,
     ) -> ImportSummary {
         let mut summary = ImportSummary::default();
-        walk_directory(dir, &mut |path| {
-            match self.import_file(&path, db, cache, None) {
+        walk_directory(
+            dir,
+            &mut |path| match self.import_file(&path, db, cache, None) {
                 Ok(r) if r.was_imported => summary.imported += 1,
                 Ok(_) => summary.cached += 1,
                 Err(ImportError::NoImporter(_)) => summary.skipped += 1,
@@ -305,8 +316,8 @@ impl ImportPipeline {
                     tracing::warn!("  ! {}: {e}", path.display());
                     summary.errors += 1;
                 }
-            }
-        });
+            },
+        );
         summary
     }
 }
@@ -374,12 +385,7 @@ enum TexIntermediateFormat {
 pub struct TextureImporter;
 
 impl TextureImporter {
-    fn write_intermediate(
-        width: u32,
-        height: u32,
-        channels: u8,
-        rgba_pixels: &[u8],
-    ) -> Vec<u8> {
+    fn write_intermediate(width: u32, height: u32, channels: u8, rgba_pixels: &[u8]) -> Vec<u8> {
         let mut buf = Vec::with_capacity(12 + rgba_pixels.len());
         buf.extend_from_slice(TEXTURE_INTERMEDIATE_MAGIC);
         buf.extend_from_slice(&width.to_le_bytes());
@@ -427,7 +433,8 @@ impl Importer for TextureImporter {
 
         let output_data = Self::write_intermediate(w, h, channels, &rgba);
 
-        let ext = ctx.source_path
+        let ext = ctx
+            .source_path
             .extension()
             .and_then(|e| e.to_str())
             .unwrap_or("unknown")
@@ -521,14 +528,28 @@ impl GltfImporter {
         buf
     }
 
-    fn read_gltf(path: &Path) -> Result<(Vec<[f32; 3]>, Option<Vec<[f32; 3]>>, Option<Vec<[f32; 2]>>, Vec<u32>), ImportError> {
+    fn read_gltf(
+        path: &Path,
+    ) -> Result<
+        (
+            Vec<[f32; 3]>,
+            Option<Vec<[f32; 3]>>,
+            Option<Vec<[f32; 2]>>,
+            Vec<u32>,
+        ),
+        ImportError,
+    > {
         let (document, buffers, _images) = gltf::import(path)
             .map_err(|e| ImportError::ImportFailed(format!("glTF parse failed: {e}")))?;
 
         // Take the 第一个 网格 第一个 primitive.
-        let mesh = document.meshes().next()
+        let mesh = document
+            .meshes()
+            .next()
             .ok_or_else(|| ImportError::ImportFailed("No meshes found in glTF".into()))?;
-        let primitive = mesh.primitives().next()
+        let primitive = mesh
+            .primitives()
+            .next()
             .ok_or_else(|| ImportError::ImportFailed("No primitives found in glTF mesh".into()))?;
 
         let reader = primitive.reader(|buffer| Some(&buffers[buffer.index()]));
@@ -823,9 +844,8 @@ impl Importer for MaterialImporter {
 
     fn import(&self, ctx: &ImportContext) -> Result<ImportResult, ImportError> {
         let text = std::fs::read_to_string(&ctx.source_path)?;
-        let mat: MaterialJson = serde_json::from_str(&text).map_err(|e| {
-            ImportError::ImportFailed(format!("material JSON parse failed: {e}"))
-        })?;
+        let mat: MaterialJson = serde_json::from_str(&text)
+            .map_err(|e| ImportError::ImportFailed(format!("material JSON parse failed: {e}")))?;
 
         // Collect the 5 纹理 paths in 槽 order.
         let raw_paths: [Option<String>; 5] = [
@@ -955,7 +975,8 @@ impl ShaderImporter {
         let entry_b = entry.as_bytes();
         let stage_b = stage.as_bytes();
         let profile_b = profile.as_bytes();
-        let cap = 4 + 1 + 2 + entry_b.len() + 2 + stage_b.len() + 2 + profile_b.len() + 4 + source.len();
+        let cap =
+            4 + 1 + 2 + entry_b.len() + 2 + stage_b.len() + 2 + profile_b.len() + 4 + source.len();
         let mut buf = Vec::with_capacity(cap);
         buf.extend_from_slice(SHADER_INTERMEDIATE_MAGIC);
         buf.push(1); // version
@@ -1005,9 +1026,12 @@ impl Importer for ShaderImporter {
         // 解析 entry / 阶段 / 配置
         let (default_entry, default_stage) =
             infer_entry_stage_from_name(file_stem).unwrap_or(("vertexMain", "vertex"));
-        let entry = setting_str(&ctx.settings, "slang_entry").unwrap_or_else(|| default_entry.to_owned());
-        let stage = setting_str(&ctx.settings, "slang_stage").unwrap_or_else(|| default_stage.to_owned());
-        let profile = setting_str(&ctx.settings, "slang_profile").unwrap_or_else(|| "spirv_1_5".to_owned());
+        let entry =
+            setting_str(&ctx.settings, "slang_entry").unwrap_or_else(|| default_entry.to_owned());
+        let stage =
+            setting_str(&ctx.settings, "slang_stage").unwrap_or_else(|| default_stage.to_owned());
+        let profile =
+            setting_str(&ctx.settings, "slang_profile").unwrap_or_else(|| "spirv_1_5".to_owned());
 
         let output_data = Self::write_intermediate(&entry, &stage, &profile, &source);
 
@@ -1131,10 +1155,14 @@ mod tests {
         let path = dir.join("test_tex.png");
 
         // 写入 a real 2×2 PNG via the 图像 crate.
-        let img = image::RgbaImage::from_raw(2, 2, vec![
-            255, 0, 0, 255,   0, 255, 0, 255,
-            0, 0, 255, 255, 255, 255, 255, 255,
-        ]).unwrap();
+        let img = image::RgbaImage::from_raw(
+            2,
+            2,
+            vec![
+                255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
+            ],
+        )
+        .unwrap();
         img.save(&path).unwrap();
 
         let ctx = ImportContext {
@@ -1224,11 +1252,15 @@ mod tests {
         let mut cache = ImportCache::new();
 
         // 第一个 导入
-        let r1 = pipeline.import_file(&path, &mut db, &mut cache, None).unwrap();
+        let r1 = pipeline
+            .import_file(&path, &mut db, &mut cache, None)
+            .unwrap();
         assert!(r1.was_imported);
 
         // 秒 导入 (cached).
-        let r2 = pipeline.import_file(&path, &mut db, &mut cache, None).unwrap();
+        let r2 = pipeline
+            .import_file(&path, &mut db, &mut cache, None)
+            .unwrap();
         assert!(!r2.was_imported);
 
         std::fs::remove_file(&path).ok();
@@ -1249,7 +1281,9 @@ mod tests {
         let mut db = AssetDatabase::new();
         let mut cache = ImportCache::new();
 
-        pipeline.import_file(&path, &mut db, &mut cache, None).unwrap();
+        pipeline
+            .import_file(&path, &mut db, &mut cache, None)
+            .unwrap();
         assert_eq!(db.len(), 1);
         let r = db.records().next().unwrap();
         assert_eq!(r.asset_type, AssetType::Texture);
@@ -1317,8 +1351,8 @@ mod tests {
         let mut glb = Vec::with_capacity(total_len);
 
         // GLB header
-        glb.extend_from_slice(b"glTF");                    // magic
-        glb.extend_from_slice(&2u32.to_le_bytes());        // version
+        glb.extend_from_slice(b"glTF"); // magic
+        glb.extend_from_slice(&2u32.to_le_bytes()); // version
         glb.extend_from_slice(&(total_len as u32).to_le_bytes()); // length
 
         // JSON chunk
@@ -1362,7 +1396,10 @@ mod tests {
         };
         let result = imp.import(&ctx).unwrap();
         assert_eq!(result.asset_type, AssetType::Mesh);
-        assert!(!result.output_data.is_empty(), "intermediate should have data");
+        assert!(
+            !result.output_data.is_empty(),
+            "intermediate should have data"
+        );
 
         // Validate RMXI header in 输出
         assert_eq!(&result.output_data[..4], b"RMXI");

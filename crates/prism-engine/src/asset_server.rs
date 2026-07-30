@@ -113,20 +113,14 @@ impl AssetServer {
     // ------------------------------------------------------------------
 
     /// 加载 a plain JSON file — no 资源 metadata, no GUID, no tracking.
-    pub fn load_json<T: DeserializeOwned>(
-        &self,
-        relative: impl AsRef<Path>,
-    ) -> anyhow::Result<T> {
+    pub fn load_json<T: DeserializeOwned>(&self, relative: impl AsRef<Path>) -> anyhow::Result<T> {
         let path = self.resolve_data(relative)?;
         let bytes = std::fs::read(&path)?;
         Ok(serde_json::from_slice(&bytes)?)
     }
 
     /// 加载 a TOML 配置 file.
-    pub fn load_toml<T: DeserializeOwned>(
-        &self,
-        relative: impl AsRef<Path>,
-    ) -> anyhow::Result<T> {
+    pub fn load_toml<T: DeserializeOwned>(&self, relative: impl AsRef<Path>) -> anyhow::Result<T> {
         let path = self.resolve_data(relative)?;
         let text = std::fs::read_to_string(&path)?;
         Ok(toml::from_str(&text)?)

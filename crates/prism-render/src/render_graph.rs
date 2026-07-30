@@ -538,8 +538,14 @@ impl ResourceStateTracker {
         access: vk::AccessFlags,
         stage: vk::PipelineStageFlags,
     ) {
-        self.states
-            .insert((handle, image_index), ResourceState { layout, access, stage });
+        self.states.insert(
+            (handle, image_index),
+            ResourceState {
+                layout,
+                access,
+                stage,
+            },
+        );
     }
 
     /// Batch-apply 写入 edges from a pass each 写入 edge records the 布局
@@ -573,7 +579,11 @@ impl ResourceStateTracker {
         last_writers: &HashMap<ResourceHandle, ResourceUsage>,
         image_index: u32,
         resources: &GraphResources,
-    ) -> (Vec<vk::ImageMemoryBarrier<'_>>, vk::PipelineStageFlags, vk::PipelineStageFlags) {
+    ) -> (
+        Vec<vk::ImageMemoryBarrier<'_>>,
+        vk::PipelineStageFlags,
+        vk::PipelineStageFlags,
+    ) {
         let mut barriers: Vec<vk::ImageMemoryBarrier> = Vec::new();
         let mut max_src_stage = vk::PipelineStageFlags::empty();
         let mut max_dst_stage = vk::PipelineStageFlags::empty();
@@ -598,7 +608,10 @@ impl ResourceStateTracker {
 
             let (src_access, src_stage) = match last_writers.get(&handle) {
                 Some(w) => (w.access, w.stage),
-                None => (vk::AccessFlags::empty(), vk::PipelineStageFlags::TOP_OF_PIPE),
+                None => (
+                    vk::AccessFlags::empty(),
+                    vk::PipelineStageFlags::TOP_OF_PIPE,
+                ),
             };
 
             let aspect = aspect_mask_for_layout(re.usage.layout);

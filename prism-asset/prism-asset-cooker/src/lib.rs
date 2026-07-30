@@ -132,7 +132,9 @@ impl CookerRegistry {
 
     /// 查找 a cooker by name.
     pub fn get(&self, name: &str) -> Option<&dyn Cooker> {
-        self.by_name.get(name).map(|&idx| self.cookers[idx].as_ref())
+        self.by_name
+            .get(name)
+            .map(|&idx| self.cookers[idx].as_ref())
     }
 
     /// 查找 the 第一个 cooker that can handle a given 资源 类型
@@ -200,9 +202,6 @@ const MAX_MIP_LEVELS: u32 = 16;
 
 /// Uncompressed RGBA8 (4 字节 per 像素
 const RTEX_FORMAT_RGBA8: u8 = 0;
-/// BC7 (64 bits per 4×4 块 = 16 字节 per 块 UNORM / sRGB
-/// distinction is handled by the 运行时 Vulkan 图像 视图
-const RTEX_FORMAT_BC7: u8 = 1;
 #[allow(dead_code)]
 /// BC5 (two-channel RG 法线 映射表 16 字节 per 4×4 块
 const RTEX_FORMAT_BC5: u8 = 2;
@@ -300,71 +299,6 @@ impl TextureCooker {
         mips
     }
 
-    /// 压缩 a single RGBA8 mip level to BC7 using ctt.
-    ///
-    /// Returns raw BC7 块 data (ceil(w/4) × ceil(h/4) × 16 字节
-    /// `quality` maps 0–100 to the ctt quality ladder.
-    #[cfg(feature = "texture-compression")]
-    fn compress_bc7(width: u32, height: u32, rgba: &[u8], quality: u8) -> Result<Vec<u8>, CookError> {
-        use ctt::encoders::Encoder;
-        use ctt::*;
-
-        let ctt_quality = match quality {
-            0..=20 => Quality::UltraFast,
-            21..=40 => Quality::VeryFast,
-            41..=60 => Quality::Fast,
-            61..=80 => Quality::Basic,
-            81..=95 => Quality::Slow,
-            _ => Quality::VerySlow,
-        };
-
-        let surface = Surface {
-            data: rgba.to_vec(),
-            width,
-            height,
-            depth: 1,
-            stride: width * 4,
-            slice_stride: 0,
-            format: Format::R8G8B8A8_UNORM,
-            color_space: ColorSpace::Linear,
-            alpha: AlphaMode::Opaque,
-        };
-        let image = Image {
-            surfaces: vec![vec![surface]],
-            kind: TextureKind::Texture2D,
-        };
-
-        let result = convert(
-            image,
-            ConvertSettings {
-                format: Some(TargetFormat::Compressed {
-                    format: Format::BC7_UNORM_BLOCK,
-                    encoder: Encoder::Auto,
-                }),
-                container: Container::Raw,
-                quality: ctt_quality,
-                ..Default::default()
-            },
-        )
-        .map_err(|e| CookError::CookFailed(format!("BC7 compression failed: {e}")))?;
-
-        match result {
-            PipelineOutput::Raw(img) => {
-                if img.surfaces.is_empty()
-                    || img.surfaces[0].is_empty()
-                {
-                    return Err(CookError::CookFailed(
-                        "BC7 compression returned empty surface".into(),
-                    ));
-                }
-                Ok(img.surfaces[0][0].data.clone())
-            }
-            _ => Err(CookError::CookFailed(
-                "BC7 compression: expected Raw output, got encoded".into(),
-            )),
-        }
-    }
-
     fn write_rtex(mips: &[(u32, u32, Vec<u8>)], format: u8) -> Vec<u8> {
         let levels = mips.len() as u32;
         // Header: magic(4) + version(1) + w(4) + h(4) + levels(4) + format(1) + offsets(levels*4)
@@ -406,10 +340,9 @@ impl Cooker for TextureCooker {
     }
 
     fn cook(&self, ctx: &CookContext) -> Result<CookResult, CookError> {
-        let (w, h, rgba) = Self::parse_intermediate(ctx.imported_data)
-            .ok_or_else(|| CookError::CookFailed(
-                "Invalid texture intermediate: missing RTXI header".into()
-            ))?;
+        let (w, h, rgba) = Self::parse_intermediate(ctx.imported_data).ok_or_else(|| {
+            CookError::CookFailed("Invalid texture intermediate: missing RTXI header".into())
+        })?;
 
         if w == 0 || h == 0 {
             return Err(CookError::CookFailed("Zero-dimension texture".into()));
@@ -417,31 +350,16 @@ impl Cooker for TextureCooker {
 
         let mips_rgba = Self::generate_mips(w, h, rgba);
 
-        // Decide 格式 byte and optionally 压缩 each mip level.
-        let (format, mips): (u8, Vec<(u32, u32, Vec<u8>)>) = match ctx.settings.texture.compression {
+        // Decide 格式 byte — only RGBA8 is currently supported.
+        let (format, mips): (u8, Vec<(u32, u32, Vec<u8>)>) = match ctx.settings.texture.compression
+        {
             profile::TextureCompression::Rgba8 | profile::TextureCompression::None => {
                 (RTEX_FORMAT_RGBA8, mips_rgba)
             }
-            #[cfg(feature = "texture-compression")]
-            profile::TextureCompression::Bc7 => {
-                let quality = ctx.settings.texture.quality;
-                let compressed: Result<Vec<_>, CookError> = mips_rgba
-                    .iter()
-                    .map(|(mw, mh, data)| {
-                        let blocks = Self::compress_bc7(*mw, *mh, data, quality)?;
-                        Ok::<_, CookError>((*mw, *mh, blocks))
-                    })
-                    .collect();
-                (RTEX_FORMAT_BC7, compressed?)
-            }
-            #[cfg(not(feature = "texture-compression"))]
-            profile::TextureCompression::Bc7 => {
-                tracing::warn!("BC7 compression not available (compiled without texture-compression), falling back to RGBA8");
-                (RTEX_FORMAT_RGBA8, mips_rgba)
-            }
             other => {
-                // Unsupported 压缩 格式 for now.
-                tracing::warn!("Compression format {other:?} not yet implemented, falling back to RGBA8");
+                tracing::warn!(
+                    "Compression format {other:?} not yet implemented, falling back to RGBA8"
+                );
                 (RTEX_FORMAT_RGBA8, mips_rgba)
             }
         };
@@ -500,9 +418,7 @@ pub fn decode_rtex(data: &[u8]) -> Option<RtexInfo> {
     // 读取 偏移 表
     let mut offsets = Vec::with_capacity(mip_levels as usize);
     for i in 0..mip_levels as usize {
-        let off = u32::from_le_bytes(
-            data[offset_table_start + i * 4..][..4].try_into().ok()?,
-        );
+        let off = u32::from_le_bytes(data[offset_table_start + i * 4..][..4].try_into().ok()?);
         offsets.push(off as usize);
     }
 
@@ -534,8 +450,7 @@ pub fn decode_rtex(data: &[u8]) -> Option<RtexInfo> {
 ///
 /// Returns 宽度 高度 pixels)` where `pixels` is tightly-packed RGBA8.
 pub fn parse_rtexi_pixels(data: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
-    TextureCooker::parse_intermediate(data)
-        .map(|(w, h, px)| (w, h, px.to_vec()))
+    TextureCooker::parse_intermediate(data).map(|(w, h, px)| (w, h, px.to_vec()))
 }
 
 // ---------------------------------------------------------------------------
@@ -569,14 +484,20 @@ impl MeshCooker {
         Some((vert_count, idx_count, uv_channels, _version as u32))
     }
 
-    fn write_rmes(vert_count: u32, idx_count: u32, uv_channels: u32, intermediate: &[u8]) -> Vec<u8> {
+    fn write_rmes(
+        vert_count: u32,
+        idx_count: u32,
+        uv_channels: u32,
+        intermediate: &[u8],
+    ) -> Vec<u8> {
         let pos_data_size = vert_count as usize * 3 * 4;
         let idx_data_size = idx_count as usize * 4;
         let uv_data_size = uv_channels as usize * vert_count as usize * 2 * 4;
 
         // Detect whether normals are present by checking the actual data 大小
         // RMXI: header(17) + positions + [normals] + uv + indices
-        let expected_with_normals = 17 + pos_data_size + vert_count as usize * 3 * 4 + uv_data_size + idx_data_size;
+        let expected_with_normals =
+            17 + pos_data_size + vert_count as usize * 3 * 4 + uv_data_size + idx_data_size;
         let has_normals = intermediate.len() >= expected_with_normals;
 
         let nrm_floats: u32 = if has_normals { 3 } else { 0 };
@@ -640,14 +561,13 @@ impl Cooker for MeshCooker {
 
     fn cook(&self, ctx: &CookContext) -> Result<CookResult, CookError> {
         let (vert_count, idx_count, uv_channels, _ver) =
-            Self::parse_intermediate(ctx.imported_data)
-                .ok_or_else(|| CookError::CookFailed(
-                    "Invalid mesh intermediate: missing RMXI header".into()
-                ))?;
+            Self::parse_intermediate(ctx.imported_data).ok_or_else(|| {
+                CookError::CookFailed("Invalid mesh intermediate: missing RMXI header".into())
+            })?;
 
         if vert_count == 0 || idx_count == 0 {
             return Err(CookError::CookFailed(
-                "Empty mesh (no vertices or indices)".into()
+                "Empty mesh (no vertices or indices)".into(),
             ));
         }
 
@@ -703,8 +623,8 @@ pub fn decode_rmes(data: &[u8]) -> Option<RmesInfo> {
     }
 
     let vertex_data = data[header_size..header_size + vert_data_size].to_vec();
-    let index_data = data[header_size + vert_data_size..header_size + vert_data_size + idx_data_size]
-        .to_vec();
+    let index_data =
+        data[header_size + vert_data_size..header_size + vert_data_size + idx_data_size].to_vec();
 
     Some(RmesInfo {
         vert_count,
@@ -733,7 +653,8 @@ pub fn parse_rmxi_info(data: &[u8]) -> Option<(u32, u32, u32, Vec<u8>, Vec<u8>)>
     let uv_data_size = uv_channels as usize * vert_count as usize * 2 * 4;
 
     // Detect normals presence from data 大小
-    let expected_with_normals = 17 + pos_data_size + vert_count as usize * 3 * 4 + uv_data_size + idx_data_size;
+    let expected_with_normals =
+        17 + pos_data_size + vert_count as usize * 3 * 4 + uv_data_size + idx_data_size;
     let has_normals = data.len() >= expected_with_normals;
 
     let nrm_floats: usize = if has_normals { 3 } else { 0 };
@@ -787,7 +708,9 @@ impl MaterialCooker {
     ///
     /// Returns `(scalars: [f32; 18], tex_paths: [Option<String>; 5])` or `None`
     /// on malformed 输入
-    fn parse_intermediate(data: &[u8]) -> Option<([f32; MATERIAL_SCALAR_COUNT], [Option<String>; 5])> {
+    fn parse_intermediate(
+        data: &[u8],
+    ) -> Option<([f32; MATERIAL_SCALAR_COUNT], [Option<String>; 5])> {
         // Header: magic(5) + version(1) + scalars(72) = 78 字节 最小
         const MAGIC_LEN: usize = 5;
         if data.len() < MAGIC_LEN + 1 + MATERIAL_SCALAR_SIZE || &data[..MAGIC_LEN] != RMATI_MAGIC {
@@ -826,7 +749,10 @@ impl MaterialCooker {
         Some((scalars, tex_paths))
     }
 
-    fn write_rmat(scalars: &[f32; MATERIAL_SCALAR_COUNT], tex_ids: &[Option<AssetId>; 5]) -> Vec<u8> {
+    fn write_rmat(
+        scalars: &[f32; MATERIAL_SCALAR_COUNT],
+        tex_ids: &[Option<AssetId>; 5],
+    ) -> Vec<u8> {
         let mut buf = Vec::with_capacity(5 + MATERIAL_SCALAR_SIZE + 5 * 9);
         buf.extend_from_slice(RMAT_MAGIC);
         buf.push(1); // version
@@ -856,9 +782,10 @@ impl Cooker for MaterialCooker {
     }
 
     fn cook(&self, ctx: &CookContext) -> Result<CookResult, CookError> {
-        let (scalars, tex_paths) = Self::parse_intermediate(ctx.imported_data).ok_or_else(|| {
-            CookError::CookFailed("Invalid material intermediate: missing RMATI header".into())
-        })?;
+        let (scalars, tex_paths) =
+            Self::parse_intermediate(ctx.imported_data).ok_or_else(|| {
+                CookError::CookFailed("Invalid material intermediate: missing RMATI header".into())
+            })?;
 
         // The importer already resolved 纹理 paths to AssetId dependencies
         // stored on the record. We walk the path records in 槽 order and
@@ -1016,12 +943,8 @@ impl ShaderCooker {
         if pos + 4 > data.len() {
             return None;
         }
-        let source_len = u32::from_le_bytes([
-            data[pos],
-            data[pos + 1],
-            data[pos + 2],
-            data[pos + 3],
-        ]) as usize;
+        let source_len =
+            u32::from_le_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]) as usize;
         pos += 4;
         if pos + source_len > data.len() {
             return None;
@@ -1050,10 +973,7 @@ impl ShaderCooker {
             "prismarev_shader_cook_{}.slang",
             std::process::id()
         ));
-        let out_path = tmp_dir.join(format!(
-            "prismarev_shader_cook_{}.spv",
-            std::process::id()
-        ));
+        let out_path = tmp_dir.join(format!("prismarev_shader_cook_{}.spv", std::process::id()));
 
         // RAII guard: removes temp files on 放置 成功 or 错误
         struct TempGuard {
@@ -1234,7 +1154,11 @@ impl CookPipeline {
                 }
             };
 
-            let ctx = CookContext { record, imported_data: data, settings };
+            let ctx = CookContext {
+                record,
+                imported_data: data,
+                settings,
+            };
             let result = cooker.cook(&ctx)?;
 
             let deps: Vec<AssetId> = record.dependencies.clone();
@@ -1416,7 +1340,8 @@ mod tests {
     fn full_cook_pipeline() {
         let mut db = AssetDatabase::new();
         let id = db.generate_id();
-        let record = prism_asset_db::AssetRecord::new(id, "test.bin".into(), AssetType::Binary, "raw");
+        let record =
+            prism_asset_db::AssetRecord::new(id, "test.bin".into(), AssetType::Binary, "raw");
         db.insert(record).unwrap();
 
         let reg = default_cooker_registry();
@@ -1427,7 +1352,9 @@ mod tests {
         asset_data.insert(id, b"cook me".to_vec());
 
         let mut builder = PackageBuilder::new();
-        let summary = pipeline.cook_all(&db, &asset_data, &mut builder, &settings).unwrap();
+        let summary = pipeline
+            .cook_all(&db, &asset_data, &mut builder, &settings)
+            .unwrap();
         assert_eq!(summary.cooked, 1);
         assert_eq!(summary.skipped, 0);
 
@@ -1439,9 +1366,13 @@ mod tests {
     fn cook_pipeline_skips_missing_data() {
         let mut db = AssetDatabase::new();
         let id = db.generate_id();
-        db.insert(
-            prism_asset_db::AssetRecord::new(id, "missing.bin".into(), AssetType::Binary, "raw")
-        ).unwrap();
+        db.insert(prism_asset_db::AssetRecord::new(
+            id,
+            "missing.bin".into(),
+            AssetType::Binary,
+            "raw",
+        ))
+        .unwrap();
 
         let reg = default_cooker_registry();
         let pipeline = CookPipeline::new(reg);
@@ -1450,7 +1381,9 @@ mod tests {
         // No data for the 资源
         let asset_data = HashMap::new();
         let mut builder = PackageBuilder::new();
-        let summary = pipeline.cook_all(&db, &asset_data, &mut builder, &settings).unwrap();
+        let summary = pipeline
+            .cook_all(&db, &asset_data, &mut builder, &settings)
+            .unwrap();
         assert_eq!(summary.cooked, 0);
         assert_eq!(summary.skipped, 1);
     }
@@ -1479,7 +1412,12 @@ mod tests {
         let cooker = TextureCooker;
 
         let id = AssetId::from_raw((1u64 << 32) | 99);
-        let record = prism_asset_db::AssetRecord::new(id, "tex.png".into(), AssetType::Texture, "texture-importer");
+        let record = prism_asset_db::AssetRecord::new(
+            id,
+            "tex.png".into(),
+            AssetType::Texture,
+            "texture-importer",
+        );
         let settings = profile::CookSettings::default();
         let ctx = CookContext {
             record: &record,
@@ -1507,9 +1445,18 @@ mod tests {
 
         // Offsets 表 (levels * 4 字节 after header).
         let off_pos = 18usize;
-        let mip0_off = u32::from_le_bytes(result.cooked_data[off_pos..off_pos + 4].try_into().unwrap());
-        let mip1_off = u32::from_le_bytes(result.cooked_data[off_pos + 4..off_pos + 8].try_into().unwrap());
-        let mip2_off = u32::from_le_bytes(result.cooked_data[off_pos + 8..off_pos + 12].try_into().unwrap());
+        let mip0_off =
+            u32::from_le_bytes(result.cooked_data[off_pos..off_pos + 4].try_into().unwrap());
+        let mip1_off = u32::from_le_bytes(
+            result.cooked_data[off_pos + 4..off_pos + 8]
+                .try_into()
+                .unwrap(),
+        );
+        let mip2_off = u32::from_le_bytes(
+            result.cooked_data[off_pos + 8..off_pos + 12]
+                .try_into()
+                .unwrap(),
+        );
 
         // Mip0: 4*4*4 = 64 字节 starting at header (18 + 12 = 30)
         assert_eq!(mip0_off, 30);
@@ -1526,7 +1473,12 @@ mod tests {
         let cooker = TextureCooker;
         let settings = profile::CookSettings::default();
         let id = AssetId::from_raw((1u64 << 32) | 99);
-        let record = prism_asset_db::AssetRecord::new(id, "tex.png".into(), AssetType::Texture, "texture-importer");
+        let record = prism_asset_db::AssetRecord::new(
+            id,
+            "tex.png".into(),
+            AssetType::Texture,
+            "texture-importer",
+        );
         let ctx = CookContext {
             record: &record,
             imported_data: b"garbage data",
@@ -1541,7 +1493,12 @@ mod tests {
         let intermediate = make_texture_intermediate(0, 0, &[]);
         let settings = profile::CookSettings::default();
         let id = AssetId::from_raw((1u64 << 32) | 99);
-        let record = prism_asset_db::AssetRecord::new(id, "tex.png".into(), AssetType::Texture, "texture-importer");
+        let record = prism_asset_db::AssetRecord::new(
+            id,
+            "tex.png".into(),
+            AssetType::Texture,
+            "texture-importer",
+        );
         let ctx = CookContext {
             record: &record,
             imported_data: &intermediate,
@@ -1582,7 +1539,12 @@ mod tests {
         let settings = profile::CookSettings::default();
 
         let id = AssetId::from_raw((1u64 << 32) | 200);
-        let record = prism_asset_db::AssetRecord::new(id, "mesh.gltf".into(), AssetType::Mesh, "gltf-importer");
+        let record = prism_asset_db::AssetRecord::new(
+            id,
+            "mesh.gltf".into(),
+            AssetType::Mesh,
+            "gltf-importer",
+        );
         let ctx = CookContext {
             record: &record,
             imported_data: &intermediate,
@@ -1617,7 +1579,12 @@ mod tests {
         let cooker = MeshCooker;
         let settings = profile::CookSettings::default();
         let id = AssetId::from_raw((1u64 << 32) | 200);
-        let record = prism_asset_db::AssetRecord::new(id, "mesh.gltf".into(), AssetType::Mesh, "gltf-importer");
+        let record = prism_asset_db::AssetRecord::new(
+            id,
+            "mesh.gltf".into(),
+            AssetType::Mesh,
+            "gltf-importer",
+        );
         let ctx = CookContext {
             record: &record,
             imported_data: b"garbage",
@@ -1632,7 +1599,12 @@ mod tests {
         let intermediate = make_mesh_intermediate(0, 0, 0);
         let settings = profile::CookSettings::default();
         let id = AssetId::from_raw((1u64 << 32) | 200);
-        let record = prism_asset_db::AssetRecord::new(id, "mesh.gltf".into(), AssetType::Mesh, "gltf-importer");
+        let record = prism_asset_db::AssetRecord::new(
+            id,
+            "mesh.gltf".into(),
+            AssetType::Mesh,
+            "gltf-importer",
+        );
         let ctx = CookContext {
             record: &record,
             imported_data: &intermediate,
@@ -1670,7 +1642,8 @@ mod tests {
         let cooker = BinaryCooker;
         let settings = profile::CookSettings::default();
         let id = AssetId::from_raw((1u64 << 32) | 1);
-        let record = prism_asset_db::AssetRecord::new(id, "data.bin".into(), AssetType::Binary, "raw");
+        let record =
+            prism_asset_db::AssetRecord::new(id, "data.bin".into(), AssetType::Binary, "raw");
         let ctx = CookContext {
             record: &record,
             imported_data: input,
@@ -1700,7 +1673,12 @@ mod tests {
         let cooker = TextureCooker;
         let settings = profile::CookSettings::default();
         let id = AssetId::from_raw((1u64 << 32) | 99);
-        let record = prism_asset_db::AssetRecord::new(id, "tex.png".into(), AssetType::Texture, "texture-importer");
+        let record = prism_asset_db::AssetRecord::new(
+            id,
+            "tex.png".into(),
+            AssetType::Texture,
+            "texture-importer",
+        );
         let ctx = CookContext {
             record: &record,
             imported_data: &intermediate,
@@ -1727,8 +1705,10 @@ mod tests {
             assert!(
                 rtex.mip_data[i].len() < rtex.mip_data[i - 1].len(),
                 "mip{} ({}B) must be smaller than mip{} ({}B)",
-                i, rtex.mip_data[i].len(),
-                i - 1, rtex.mip_data[i - 1].len(),
+                i,
+                rtex.mip_data[i].len(),
+                i - 1,
+                rtex.mip_data[i - 1].len(),
             );
         }
     }
@@ -1737,7 +1717,7 @@ mod tests {
     fn texture_decoder_rejects_bad_data() {
         assert!(decode_rtex(b"garbage").is_none());
         assert!(decode_rtex(b"RTEX").is_none()); // too short
-        // Wrong version.
+                                                 // Wrong version.
         let mut bad = vec![b'R', b'T', b'E', b'X', 99];
         bad.resize(20, 0);
         assert!(decode_rtex(&bad).is_none());
@@ -1788,7 +1768,12 @@ mod tests {
         let cooker = MeshCooker;
         let settings = profile::CookSettings::default();
         let id = AssetId::from_raw((1u64 << 32) | 200);
-        let record = prism_asset_db::AssetRecord::new(id, "mesh.gltf".into(), AssetType::Mesh, "gltf-importer");
+        let record = prism_asset_db::AssetRecord::new(
+            id,
+            "mesh.gltf".into(),
+            AssetType::Mesh,
+            "gltf-importer",
+        );
         let ctx = CookContext {
             record: &record,
             imported_data: pw,
@@ -1810,7 +1795,8 @@ mod tests {
         );
 
         // 索引 data must 匹配
-        let expected_idx = &intermediate[17 + expected_vert_size..17 + expected_vert_size + expected_idx_size];
+        let expected_idx =
+            &intermediate[17 + expected_vert_size..17 + expected_vert_size + expected_idx_size];
         assert_eq!(
             rmes.index_data, expected_idx,
             "RMES index data must match RMXI index data"
@@ -1837,7 +1823,12 @@ mod tests {
         let cooker = TextureCooker;
         let settings = profile::CookSettings::default();
         let id = AssetId::from_raw((1u64 << 32) | 99);
-        let record = prism_asset_db::AssetRecord::new(id, "tex.png".into(), AssetType::Texture, "texture-importer");
+        let record = prism_asset_db::AssetRecord::new(
+            id,
+            "tex.png".into(),
+            AssetType::Texture,
+            "texture-importer",
+        );
         let ctx = CookContext {
             record: &record,
             imported_data: &intermediate,
@@ -1874,118 +1865,6 @@ mod tests {
         assert_eq!(parsed, pixels);
     }
 
-    // ── BC7 压缩 tests ────────────────────────────────────────
-
-    /// Helper: 创建 a CookContext for 测试 with the given 压缩 设置
-    struct TestCtx {
-        record: prism_asset_db::AssetRecord,
-        settings: profile::CookSettings,
-    }
-
-    impl TestCtx {
-        fn new(compression: profile::TextureCompression) -> Self {
-            let id = AssetId::from_raw((1u64 << 32) | 99);
-            Self {
-                record: prism_asset_db::AssetRecord::new(id, "tex.png".into(), AssetType::Texture, "texture-importer"),
-                settings: profile::CookSettings {
-                    texture: profile::TextureSettings {
-                        compression,
-                        quality: 50, // Fast quality
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                },
-            }
-        }
-
-        fn ctx<'a>(&'a self, intermediate: &'a [u8]) -> CookContext<'a> {
-            CookContext {
-                record: &self.record,
-                imported_data: intermediate,
-                settings: &self.settings,
-            }
-        }
-    }
-
-    #[test]
-    fn texture_cooker_bc7_format_byte() {
-        let pixels = std::iter::repeat([255u8, 0, 0, 255])
-            .take(4 * 4)
-            .flatten()
-            .collect::<Vec<_>>();
-        let intermediate = make_texture_intermediate(4, 4, &pixels);
-        let cooker = TextureCooker;
-        let tc = TestCtx::new(profile::TextureCompression::Bc7);
-        let result = cooker.cook(&tc.ctx(&intermediate)).unwrap();
-
-        // Must be RTEX with 格式 byte = BC7.
-        assert_eq!(&result.cooked_data[..4], b"RTEX");
-        assert_eq!(result.cooked_data[17], RTEX_FORMAT_BC7);
-        // Must not be compressible (mip-packed).
-        assert!(!result.compress);
-    }
-
-    #[test]
-    fn texture_cooker_bc7_block_count() {
-        // 8×8 RGBA8 → 2×2 BC7 blocks = 4 blocks × 16 字节 = 64 字节
-        let pixels = vec![128u8; 8 * 8 * 4];
-        let intermediate = make_texture_intermediate(8, 8, &pixels);
-        let cooker = TextureCooker;
-        let tc = TestCtx::new(profile::TextureCompression::Bc7);
-        let result = cooker.cook(&tc.ctx(&intermediate)).unwrap();
-
-        // 解码 and inspect mip0 data 大小
-        let rtex = decode_rtex(&result.cooked_data).expect("should decode BC7 RTEX");
-        assert_eq!(rtex.format, RTEX_FORMAT_BC7);
-        assert_eq!(rtex.width, 8);
-        assert_eq!(rtex.height, 8);
-
-        // Mip0: 8×8 → ceil(8/4)×ceil(8/4) = 2×2 blocks = 4 blocks × 16 = 64 字节
-        assert_eq!(rtex.mip_data[0].len(), 4 * 16, "mip0 BC7 block count");
-    }
-
-    #[test]
-    fn texture_cooker_bc7_roundtrip() {
-        // 4×4 RGBA8 = exactly 1 BC7 块
-        let pixels = vec![128u8; 4 * 4 * 4];
-        let intermediate = make_texture_intermediate(4, 4, &pixels);
-        let cooker = TextureCooker;
-        let tc = TestCtx::new(profile::TextureCompression::Bc7);
-        let result = cooker.cook(&tc.ctx(&intermediate)).unwrap();
-
-        // 解码 and 验证 structure.
-        let rtex = decode_rtex(&result.cooked_data).expect("should decode BC7 RTEX");
-        assert_eq!(rtex.format, RTEX_FORMAT_BC7);
-        assert_eq!(rtex.width, 4);
-        assert_eq!(rtex.height, 4);
-        // Mip0 = 1 BC7 块 = 16 字节
-        assert_eq!(rtex.mip_data[0].len(), 16);
-        // At least 2 mip levels (4→2→1 = 3 levels but BC7 块 大小 floors).
-        assert!(rtex.mip_levels >= 2, "should have at least 2 mip levels, got {}", rtex.mip_levels);
-        // Mip levels must exist 大小 can be same for BC7 when
-        // different-resolution textures produce same 块 count).
-        assert!(!rtex.mip_data[0].is_empty());
-        assert!(!rtex.mip_data[1].is_empty());
-    }
-
-    #[test]
-    fn texture_cooker_bc7_non_square() {
-        // 6×4 RGBA8 → ceil(6/4)×ceil(4/4) = 2×1 BC7 blocks = 2 blocks × 16 = 32 字节
-        let pixels = vec![200u8; 6 * 4 * 4];
-        let intermediate = make_texture_intermediate(6, 4, &pixels);
-        let cooker = TextureCooker;
-        let tc = TestCtx::new(profile::TextureCompression::Bc7);
-        let result = cooker.cook(&tc.ctx(&intermediate)).unwrap();
-
-        let rtex = decode_rtex(&result.cooked_data).expect("should decode non-square BC7 RTEX");
-        assert_eq!(rtex.format, RTEX_FORMAT_BC7);
-        assert_eq!(rtex.width, 6);
-        assert_eq!(rtex.height, 4);
-
-        // Mip0 = 2×1 blocks = 2 × 16 = 32 字节
-        assert_eq!(rtex.mip_data[0].len(), 2 * 16, "non-square BC7 mip0 block count");
-    }
-
     #[test]
     fn texture_cooker_rgba8_still_default() {
         // 默认 配置 压缩 (Rgba8) must produce RGBA8 输出
@@ -1994,7 +1873,12 @@ mod tests {
         let cooker = TextureCooker;
 
         let id = AssetId::from_raw((1u64 << 32) | 99);
-        let record = prism_asset_db::AssetRecord::new(id, "tex.png".into(), AssetType::Texture, "texture-importer");
+        let record = prism_asset_db::AssetRecord::new(
+            id,
+            "tex.png".into(),
+            AssetType::Texture,
+            "texture-importer",
+        );
         let settings = profile::CookSettings::default(); // Rgba8
         let ctx = CookContext {
             record: &record,

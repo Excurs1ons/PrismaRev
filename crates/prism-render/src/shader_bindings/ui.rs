@@ -7,7 +7,7 @@
 #![allow(dead_code, non_snake_case)]
 
 /// Entry point names (for VkPipelineShaderStageCreateInfo).
-pub const ENTRY_VERTEX_MAIN: &str = "vertexMain";   // stage: VERTEX
+pub const ENTRY_VERTEX_MAIN: &str = "vertexMain"; // stage: VERTEX
 pub const ENTRY_FRAGMENT_MAIN: &str = "fragmentMain"; // stage: FRAGMENT
 
 /// Push-constant block size in bytes (reflected).
