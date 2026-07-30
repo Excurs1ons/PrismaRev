@@ -13,6 +13,9 @@
 //! [AssetDatabase] 记录已创建/更新
 //! ```
 
+// CI: clippy lints, fix when time permits.
+#![allow(clippy::doc_lazy_continuation)]
+
 use prism_asset_core::{AssetId, AssetType};
 use prism_asset_db::{AssetDatabase, AssetRecord, ImportCache};
 use std::collections::HashMap;
@@ -593,7 +596,7 @@ impl Importer for GltfImporter {
     fn can_import(&self, path: &Path) -> bool {
         path.extension()
             .and_then(|e| e.to_str())
-            .map_or(false, |e| {
+            .is_some_and(|e| {
                 e.eq_ignore_ascii_case("gltf") || e.eq_ignore_ascii_case("glb")
             })
     }
@@ -651,7 +654,7 @@ impl Importer for JsonImporter {
     fn can_import(&self, path: &Path) -> bool {
         path.extension()
             .and_then(|e| e.to_str())
-            .map_or(false, |e| e.eq_ignore_ascii_case("json"))
+            .is_some_and(|e| e.eq_ignore_ascii_case("json"))
     }
 
     fn import(&self, ctx: &ImportContext) -> Result<ImportResult, ImportError> {
@@ -839,7 +842,7 @@ impl Importer for MaterialImporter {
         }
         path.extension()
             .and_then(|e| e.to_str())
-            .map_or(false, |e| e.eq_ignore_ascii_case("mat"))
+            .is_some_and(|e| e.eq_ignore_ascii_case("mat"))
     }
 
     fn import(&self, ctx: &ImportContext) -> Result<ImportResult, ImportError> {
@@ -955,7 +958,7 @@ fn setting_str(settings: &Value, key: &str) -> Option<String> {
 ///
 /// Entry-point / 阶段 / 配置 are resolved in this priority order:
 /// 1. `settings["slang_entry"]` / `["slang_stage"]` / `["slang_profile"]`
-/// (per-asset 导入 overrides passed by the 编辑器 / CLI).
+///   (per-asset 导入 overrides passed by the 编辑器 / CLI).
 /// 2. Filename convention (see [`infer_entry_stage_from_name`]).
 /// 3. Defaults: entry = `vertexMain`, 阶段 = 顶点 配置 = `spirv_1_5`.
 ///
@@ -1011,7 +1014,7 @@ impl Importer for ShaderImporter {
     fn can_import(&self, path: &Path) -> bool {
         path.extension()
             .and_then(|e| e.to_str())
-            .map_or(false, |e| e.eq_ignore_ascii_case("slang"))
+            .is_some_and(|e| e.eq_ignore_ascii_case("slang"))
     }
 
     fn import(&self, ctx: &ImportContext) -> Result<ImportResult, ImportError> {

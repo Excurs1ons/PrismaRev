@@ -423,7 +423,7 @@ impl ProfileManager {
         if let Ok(entries) = std::fs::read_dir(&self.profiles_dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                if path.extension().map_or(false, |e| e == "json") {
+                if path.extension().is_some_and(|e| e == "json") {
                     if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
                         if !names.contains(&stem.to_owned()) {
                             names.push(stem.to_owned());
