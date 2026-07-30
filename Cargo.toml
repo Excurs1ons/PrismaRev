@@ -23,6 +23,14 @@ members = [
     "crates/prism-editor",
     "crates/prism-build-pipeline",
     "crates/prism-audio",
+    "crates/prism-asset-core",
+    "crates/prism-asset-package",
+    "crates/prism-asset-db",
+    "crates/prism-asset-importer",
+    "crates/prism-asset-cooker",
+    "crates/prism-asset-runtime",
+    "crates/prism-asset-cli",
+    "crates/prism-asset-types",
 ]
 # xtask (Slang reflection -> Rust binding codegen) is a build-time tool run only
 # on desktop/CI hosts that have slangc. Excluded so it never enters the default
@@ -84,6 +92,7 @@ clap = { version = "4", features = ["derive"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "tga", "bmp", "hdr", "exr"] }
 ctt = { version = "0.5", default-features = false, features = ["encoder-bc7enc", "ispc-prebuilt"] }
 dirs = "5"
+unicode-width = "0.2"
 
 # Asset / scene loading
 # `gltf` crate version is the crate's release stream (1.4 = current), not the
