@@ -5,6 +5,10 @@ edition.workspace = true
 license.workspace = true
 description = "Offline build pipeline: GI bake, asset cooking, etc."
 
+[[bin]]
+name = "prism-build-pipeline"
+path = "src/main.rs"
+
 [dependencies]
 prism-ecs = { path = "../prism-ecs" }
 prism-engine = { path = "../prism-engine" }
@@ -13,3 +17,5 @@ prism-asset-runtime = { path = "../../prism-asset/prism-asset-runtime" }
 ash = { workspace = true }
 anyhow = { workspace = true }
 log = { workspace = true }
+env_logger = { workspace = true }
+clap = { workspace = true }

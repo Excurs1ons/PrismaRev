@@ -22,7 +22,6 @@ members = [
     "crates/prism-platform",
     "crates/prism-editor",
     "crates/prism-build-pipeline",
-    "crates/prism-build-pipeline-cli",
     "crates/prism-audio",
 ]
 # xtask (Slang reflection -> Rust binding codegen) is a build-time tool run only
