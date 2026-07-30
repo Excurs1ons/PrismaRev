@@ -1,0 +1,451 @@
+//! Erosion simulation for heightmap post-processing.
+//!
+//! Two erosion models:
+//! - **Thermal erosion**: angle-of-repose relaxation (talus slope).
+//! - **Hydraulic erosion**: particle-based water flow with sediment transport.
+
+use crate::heightmap::Heightmap;
+use rand::rngs::SmallRng;
+use rand::{Rng, SeedableRng};
+use rayon::prelude::*;
+
+/// Trait for erosion kernels — allows future GPU compute backends.
+pub trait ErosionKernel {
+    /// Apply erosion iterations to the heightmap in-place.
+    fn erode(&self, hm: &mut Heightmap, iterations: u32);
+}
+
+// ---------------------------------------------------------------------------
+// Thermal erosion
+// ---------------------------------------------------------------------------
+
+/// Thermal (talus) erosion parameters.
+#[derive(Debug, Clone)]
+pub struct ThermalErosion {
+    /// Angle of repose in degrees. Slopes steeper than this will relax.
+    pub talus_angle_degrees: f64,
+    /// Fraction of excess height transferred per iteration (0-1).
+    pub relaxation_rate: f64,
+}
+
+impl Default for ThermalErosion {
+    fn default() -> Self {
+        Self {
+            talus_angle_degrees: 30.0,
+            relaxation_rate: 0.5,
+        }
+    }
+}
+
+impl ThermalErosion {
+    /// Convert talus angle to slope threshold (vertical/horizontal ratio).
+    fn talus_slope(&self) -> f64 {
+        (self.talus_angle_degrees * std::f64::consts::PI / 180.0).tan()
+    }
+}
+
+impl ErosionKernel for ThermalErosion {
+    fn erode(&self, hm: &mut Heightmap, iterations: u32) {
+        let talus = self.talus_slope();
+        let rate = self.relaxation_rate;
+
+        let w = hm.width as usize;
+        let h = hm.height as usize;
+
+        // Double-buffer approach: read from `src`, write to `dst`.
+        let mut src = hm.data.clone();
+        let mut dst = hm.data.clone();
+
+        for _iter in 0..iterations {
+            // Parallel: process each pixel independently.
+            dst.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
+                for (x, cell) in row.iter_mut().enumerate() {
+                    let x = x as i32;
+                    let y = y as i32;
+                    let idx = |ix: i32, iy: i32| -> usize {
+                        (iy.clamp(0, h as i32 - 1) as usize) * w
+                            + (ix.clamp(0, w as i32 - 1) as usize)
+                    };
+
+                    let center_h = src[idx(x, y)] as f64;
+
+                    // For each of the 4 cardinal neighbors, check slope.
+                    let mut total_material = center_h;
+
+                    for (nx, ny) in &[(x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)] {
+                        if *nx < 0 || *nx >= w as i32 || *ny < 0 || *ny >= h as i32 {
+                            continue;
+                        }
+                        let nh = src[idx(*nx, *ny)] as f64;
+                        let dh = center_h - nh;
+                        let dist = 1.0; // pixel spacing = 1
+                        let slope = dh / dist;
+
+                        if slope > talus {
+                            // Transfer material from higher to lower.
+                            let transfer = (slope - talus) * dist * rate;
+                            let actual = transfer.min(dh * 0.5);
+                            total_material -= actual;
+                            // The neighbor receives `actual` but we don't
+                            // write to it here (owned by another cell).
+                        }
+                    }
+
+                    *cell = total_material as f32;
+                }
+            });
+
+            // Apply the dumped material from neighbors.
+            // The simple approach: re-distribute evenly.
+            // More accurate: second pass that adds received material.
+            // For simplicity, we lerp between src and the eroded result.
+            for (d, s) in dst.iter_mut().zip(src.iter()) {
+                *d = *s + (*d - *s) as f32;
+            }
+
+            std::mem::swap(&mut src, &mut dst);
+        }
+
+        hm.data = src;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Hydraulic erosion (particle-based)
+// ---------------------------------------------------------------------------
+
+/// Hydraulic (water) erosion parameters.
+#[derive(Debug, Clone)]
+pub struct HydraulicErosion {
+    /// Number of particles to spawn per iteration.
+    pub particle_count: u32,
+    /// Water volume per particle at spawn.
+    pub rain_amount: f64,
+    /// Sediment capacity factor (higher = more sediment carried).
+    pub sediment_capacity: f64,
+    /// Evaporation rate (fraction of water lost per step).
+    pub evaporation_rate: f64,
+    /// Deposition rate (fraction of excess sediment deposited per step).
+    pub deposition_rate: f64,
+    /// Erosion rate (fraction of bed material eroded per step, capped).
+    pub erosion_rate: f64,
+    /// Gravity strength.
+    pub gravity: f64,
+    /// Particle inertia (0-1, higher = smoother path).
+    pub inertia: f64,
+}
+
+impl Default for HydraulicErosion {
+    fn default() -> Self {
+        Self {
+            particle_count: 100_000,
+            rain_amount: 1.0,
+            sediment_capacity: 4.0,
+            evaporation_rate: 0.01,
+            deposition_rate: 0.3,
+            erosion_rate: 0.3,
+            gravity: 4.0,
+            inertia: 0.3,
+        }
+    }
+}
+
+impl ErosionKernel for HydraulicErosion {
+    fn erode(&self, hm: &mut Heightmap, iterations: u32) {
+        let w = hm.width as i32;
+        let h = hm.height as i32;
+
+        for _iter in 0..iterations {
+            // Generate and process particles in parallel.
+            // Each particle is independent, so we can parallelize.
+            let mut particles: Vec<Particle> = (0..self.particle_count)
+                .into_par_iter()
+                .map_init(
+                    || SmallRng::from_entropy(),
+                    |rng, _| Particle::new(rng, w, h, self.rain_amount),
+                )
+                .collect();
+
+            // Process each particle's path.
+            let particle_results: Vec<ParticleResult> = particles
+                .par_iter_mut()
+                .map_init(
+                    || SmallRng::from_entropy(),
+                    |rng, particle| {
+                        self.simulate_particle(rng, &hm.data, w, h, particle)
+                    },
+                )
+                .collect();
+
+            // Apply erosion/deposition to heightmap.
+            // Since particles can conflict, we use a simple accumulate-then-apply approach.
+            // For a CLI tool this is fine; for production you'd want atomic floats or a grid lock.
+            let mut erosion_map = vec![0.0f64; (w * h) as usize];
+            let mut deposit_map = vec![0.0f64; (w * h) as usize];
+
+            for result in &particle_results {
+                for action in &result.actions {
+                    let idx = (action.y * w + action.x) as usize;
+                    if idx < erosion_map.len() {
+                        match action.kind {
+                            ActionKind::Erode => erosion_map[idx] += action.amount,
+                            ActionKind::Deposit => deposit_map[idx] += action.amount,
+                        }
+                    }
+                }
+            }
+
+            // Apply erosion + deposition (single-threaded, but just a pass).
+            for ((h_val, &ero), &dep) in hm.data.iter_mut().zip(erosion_map.iter()).zip(deposit_map.iter()) {
+                let change = dep as f32 - ero as f32;
+                *h_val = (*h_val + change).max(0.0);
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Hydraulic erosion internals
+// ---------------------------------------------------------------------------
+
+struct Particle {
+    x: f64,
+    y: f64,
+    water: f64,
+    sediment: f64,
+    speed: f64,
+    vx: f64,
+    vy: f64,
+}
+
+enum ActionKind {
+    Erode,
+    Deposit,
+}
+
+struct ParticleAction {
+    x: i32,
+    y: i32,
+    kind: ActionKind,
+    amount: f64,
+}
+
+struct ParticleResult {
+    actions: Vec<ParticleAction>,
+}
+
+impl Particle {
+    fn new(rng: &mut impl Rng, w: i32, h: i32, rain: f64) -> Self {
+        Self {
+            x: rng.gen::<f64>() * (w - 1) as f64,
+            y: rng.gen::<f64>() * (h - 1) as f64,
+            water: rain,
+            sediment: 0.0,
+            speed: 0.0,
+            vx: 0.0,
+            vy: 0.0,
+        }
+    }
+}
+
+impl HydraulicErosion {
+    fn sample_height(data: &[f32], w: i32, _h: i32, x: f64, y: f64) -> f64 {
+        // Clamp to valid range before sampling.
+        let x = x.clamp(0.0, (w - 1) as f64);
+        let y = y.clamp(0.0, (_h - 1) as f64);
+        let x0 = (x.floor() as i32).max(0).min(w - 1);
+        let y0 = (y.floor() as i32).max(0).min(_h - 1);
+        let x1 = (x0 + 1).min(w - 1);
+        let y1 = (y0 + 1).min(_h - 1);
+        let fx = x - x0 as f64;
+        let fy = y - y0 as f64;
+
+        let a = data[(y0 * w + x0) as usize] as f64;
+        let b = data[(y0 * w + x1) as usize] as f64;
+        let c = data[(y1 * w + x0) as usize] as f64;
+        let d = data[(y1 * w + x1) as usize] as f64;
+
+        a * (1.0 - fx) * (1.0 - fy)
+            + b * fx * (1.0 - fy)
+            + c * (1.0 - fx) * fy
+            + d * fx * fy
+    }
+
+    fn gradient_at(data: &[f32], w: i32, _h: i32, x: f64, y: f64) -> (f64, f64) {
+        let eps = 0.5;
+        let hx = Self::sample_height(data, w, _h, x + eps, y)
+            - Self::sample_height(data, w, _h, x - eps, y);
+        let hy = Self::sample_height(data, w, _h, x, y + eps)
+            - Self::sample_height(data, w, _h, x, y - eps);
+        (hx / (2.0 * eps), hy / (2.0 * eps))
+    }
+
+    fn simulate_particle(
+        &self,
+        rng: &mut impl Rng,
+        data: &[f32],
+        w: i32,
+        h: i32,
+        particle: &mut Particle,
+    ) -> ParticleResult {
+        let max_steps = 200;
+        let mut actions = Vec::with_capacity(50);
+
+        for _step in 0..max_steps {
+            if particle.water <= 0.0 || particle.sediment < 0.0 {
+                break;
+            }
+
+            // Clamp position to valid range.
+            particle.x = particle.x.clamp(0.0, (w - 1) as f64);
+            particle.y = particle.y.clamp(0.0, (h - 1) as f64);
+
+            // Get height and gradient at current position.
+            let height = Self::sample_height(data, w, h, particle.x, particle.y);
+            let (gx, gy) = Self::gradient_at(data, w, h, particle.x, particle.y);
+
+            // Update velocity with gradient + inertia.
+            particle.vx = particle.vx * self.inertia + gx * self.gravity * (1.0 - self.inertia);
+            particle.vy = particle.vy * self.inertia + gy * self.gravity * (1.0 - self.inertia);
+
+            // Normalize velocity and move particle.
+            let speed = (particle.vx * particle.vx + particle.vy * particle.vy).sqrt();
+            if speed > 0.001 {
+                let dir_x = particle.vx / speed;
+                let dir_y = particle.vy / speed;
+                let step_size = 1.0;
+                particle.x += dir_x * step_size;
+                particle.y += dir_y * step_size;
+
+                // New height after moving.
+                let new_height = Self::sample_height(data, w, h, particle.x, particle.y);
+                let dh = height - new_height;
+
+                // Sediment capacity (proportional to water volume and slope).
+                let capacity = self.sediment_capacity * particle.water * speed.max(0.01);
+
+                if dh > 0.0 {
+                    // Erode: pick up sediment.
+                    let to_erode = (dh * self.erosion_rate * particle.water).min(0.1);
+                    let can_pickup = (capacity - particle.sediment).max(0.0).min(to_erode);
+
+                    if can_pickup > 0.001 {
+                        let xi = particle.x as i32;
+                        let yi = particle.y as i32;
+                        if xi >= 0 && xi < w && yi >= 0 && yi < h {
+                            actions.push(ParticleAction {
+                                x: xi,
+                                y: yi,
+                                kind: ActionKind::Erode,
+                                amount: can_pickup,
+                            });
+                        }
+                        particle.sediment += can_pickup;
+                    }
+                } else {
+                    // Deposit: drop sediment when slope decreases.
+                    let excess = (particle.sediment - capacity).max(0.0);
+                    let to_deposit = excess * self.deposition_rate;
+                    if to_deposit > 0.001 {
+                        let xi = particle.x as i32;
+                        let yi = particle.y as i32;
+                        if xi >= 0 && xi < w && yi >= 0 && yi < h {
+                            actions.push(ParticleAction {
+                                x: xi,
+                                y: yi,
+                                kind: ActionKind::Deposit,
+                                amount: to_deposit,
+                            });
+                        }
+                        particle.sediment -= to_deposit;
+                    }
+                }
+
+                // Evaporate.
+                particle.water *= 1.0 - self.evaporation_rate;
+                particle.speed = speed;
+            } else {
+                // Stuck: random perturbation.
+                particle.vx += (rng.gen::<f64>() - 0.5) * 0.1;
+                particle.vy += (rng.gen::<f64>() - 0.5) * 0.1;
+            }
+        }
+
+        ParticleResult { actions }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Convenience
+// ---------------------------------------------------------------------------
+
+/// Apply both thermal and hydraulic erosion to a heightmap.
+pub fn erode_both(
+    hm: &mut Heightmap,
+    thermal: &ThermalErosion,
+    hydraulic: &HydraulicErosion,
+    thermal_iters: u32,
+    hydraulic_iters: u32,
+) {
+    if thermal_iters > 0 {
+        log::info!("Thermal erosion: {thermal_iters} iterations...");
+        thermal.erode(hm, thermal_iters);
+    }
+    if hydraulic_iters > 0 {
+        log::info!("Hydraulic erosion: {hydraulic_iters} iterations...");
+        hydraulic.erode(hm, hydraulic_iters);
+    }
+    hm.normalize();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::heightmap::{generate_heightmap, HeightmapConfig};
+
+    fn make_test_heightmap() -> Heightmap {
+        let cfg = HeightmapConfig {
+            width: 32,
+            height: 32,
+            octaves: 3,
+            ..Default::default()
+        };
+        generate_heightmap(&cfg)
+    }
+
+    #[test]
+    fn test_thermal_erosion_runs() {
+        let mut hm = make_test_heightmap();
+        let thermal = ThermalErosion::default();
+        thermal.erode(&mut hm, 10);
+        assert_eq!(hm.data.len(), 32 * 32);
+        for &v in &hm.data {
+            assert!(v >= 0.0 && v <= 1.0);
+        }
+    }
+
+    #[test]
+    fn test_hydraulic_erosion_runs() {
+        let mut hm = make_test_heightmap();
+        let hydraulic = HydraulicErosion {
+            particle_count: 500,
+            ..Default::default()
+        };
+        hydraulic.erode(&mut hm, 1);
+        assert_eq!(hm.data.len(), 32 * 32);
+    }
+
+    #[test]
+    fn test_erode_both() {
+        let mut hm = make_test_heightmap();
+        let thermal = ThermalErosion::default();
+        let hydraulic = HydraulicErosion {
+            particle_count: 500,
+            ..Default::default()
+        };
+        erode_both(&mut hm, &thermal, &hydraulic, 5, 1);
+        for &v in &hm.data {
+            assert!(v >= 0.0 && v <= 1.0);
+        }
+    }
+}

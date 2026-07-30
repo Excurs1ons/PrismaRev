@@ -7,6 +7,7 @@ members = [
     "crates/prism-app",
     "crates/prism-platform",
     "crates/prism-editor",
+    "crates/prism-editor-tool",
     "crates/prism-build-pipeline",
     "crates/prism-audio",
     "crates/prism-asset-core",
@@ -85,6 +86,8 @@ unicode-width = "0.2"
 # glTF spec version - the crate loads glTF 2.0 regardless of its own version.
 gltf = { version = "1.4", features = ["KHR_materials_transmission", "KHR_materials_emissive_strength", "KHR_materials_ior", "extensions"] }
 slotmap = "1.0"
+rayon = "1.10"
+rand = "0.8"
 
 [profile.dev]
 opt-level = 1          # ash/Vulkan has a lot of codegen; light opt keeps debug builds usable
