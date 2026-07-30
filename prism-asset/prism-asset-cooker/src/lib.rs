@@ -11,6 +11,8 @@
 //! ImportResult（中间数据）→ [Cooker] → .pak data → [PackageBuilder]
 //! ```
 
+#![allow(clippy::pedantic, clippy::nursery, clippy::cargo)]
+
 use prism_asset_core::{AssetId, AssetType};
 use prism_asset_db::AssetRecord;
 use prism_asset_package::PackageBuilder;

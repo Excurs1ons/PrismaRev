@@ -5,8 +5,10 @@
 //! 数据库位于 `Project/Library/AssetDatabase.json`，将 `Assets/` 下的每个文件
 //! 映射到其稳定的 [`AssetId`]、[`AssetType`]、导入器配置和依赖图。
 //!
-//! 配套的 `Project/Library/import_cache.json` 记录文件哈希，
-//! 使管道可以跳过未变更文件的重新导入，实现增量构建。
+//! 数据库位于 `Project/Library/AssetDatabase.json`，将 `Assets/` 下的每个文件
+//! 映射到导入的 AssetId 和元数据。
+
+#![allow(clippy::pedantic, clippy::nursery, clippy::cargo)]
 
 use prism_asset_core::{AssetId, AssetType};
 use std::collections::HashMap;

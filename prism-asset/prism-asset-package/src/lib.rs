@@ -19,7 +19,7 @@
 //! - Magic: `b"RPAK"` (4 字节
 //! - All multi-byte values are little-endian.
 //! - The header 校验和 covers everything from the 下一个 byte after the 校验和
-//! field through the 结束 of the file (i.e. header[12..] + registry + deps + data).
+//!   field through the 结束 of the file (i.e. header[12..] + registry + deps + data).
 
 use prism_asset_core::{AssetId, AssetType};
 use std::io;
@@ -527,9 +527,9 @@ impl PackageReader {
         let deps_start = reg_end;
         let deps_size = header.data_offset as usize - deps_start;
         if deps_start + deps_size > bytes.len() {
-            return Err(PackageError::Truncated(format!(
-                "dependency array extends past file"
-            )));
+            return Err(PackageError::Truncated(
+                "dependency array extends past file".into(),
+            ));
         }
         let deps_bytes = &bytes[deps_start..deps_start + deps_size];
         let dep_count = deps_size / 8;

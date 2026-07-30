@@ -7,6 +7,8 @@
 //! 这是里程碑 1 的框架代码：API 形态已最终确定，后续里程碑可以插入
 //! [`RenderSystem`] 等系统，但引擎核心目前尚未通过它驱动渲染。
 
+#![deny(warnings)]
+
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
 

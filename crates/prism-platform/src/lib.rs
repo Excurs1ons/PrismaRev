@@ -3,6 +3,8 @@
 //! 提供窗口系统接口、Vulkan 表面创建和输入事件路由。
 //! 不包含任何应用特定逻辑——游戏循环位于 `prism-app` 中。
 
+#![deny(warnings)]
+
 mod context;
 mod input;
 

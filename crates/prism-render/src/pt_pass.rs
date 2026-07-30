@@ -1454,6 +1454,7 @@ fn mat_inverse(m: &[[f32; 4]; 4]) -> [[f32; 4]; 4] {
 
 #[cfg(test)]
 mod mat_inverse_tests {
+    #![allow(clippy::approx_constant, clippy::needless_range_loop)]
     use super::mat_inverse;
 
     fn mul(a: &[[f32; 4]; 4], b: &[[f32; 4]; 4]) -> [[f32; 4]; 4] {

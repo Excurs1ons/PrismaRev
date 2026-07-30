@@ -17,9 +17,11 @@
 //! | mesh | 顶点/索引缓冲区与网格类型 |
 //! | pipeline | 图形管线 |
 //! | descriptor | 描述符集合、布局、池、UBO |
-//! | [`render_graph`] | 模块化渲染 pass 图（新版管线） |
-//! | [`passes`] | Individual render-pass implementations
+//! Vulkan renderer for PrismaRev — the GPU half of the engine.
+//! Architecture: [`render_graph::RenderGraph`] drives [`RenderPassNode`] exec.
 
+// Crate-level lint enforcement (applies only to this crate, not deps).
+#![deny(warnings)]
 // New clippy lints in Rust 1.97 — pre-existing issues, fix when time permits.
 #![allow(
     clippy::missing_safety_doc,

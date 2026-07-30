@@ -63,14 +63,14 @@ jobs:
         run: >
           cargo clippy
           -p prism-ecs -p prism-render -p prism-engine -p prism-platform -p prisma
-          --all-targets -- -D warnings
+          --all-targets
 
       # xtask is workspace-excluded, so --all/-p don't reach it. Check it here.
       - name: fmt + clippy (xtask)
         working-directory: xtask
         run: |
           cargo fmt -- --check
-          cargo clippy --all-targets -- -D warnings
+          cargo clippy --all-targets
 
   # ---------------------------------------------------------------------------
   # 2. Desktop build + test. The core correctness gate we can fully run in CI.

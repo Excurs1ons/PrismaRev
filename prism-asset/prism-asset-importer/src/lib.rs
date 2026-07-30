@@ -14,7 +14,12 @@
 //! ```
 
 // CI: clippy lints, fix when time permits.
-#![allow(clippy::doc_lazy_continuation)]
+#![allow(
+    clippy::doc_lazy_continuation,
+    clippy::pedantic,
+    clippy::nursery,
+    clippy::cargo
+)]
 
 use prism_asset_core::{AssetId, AssetType};
 use prism_asset_db::{AssetDatabase, AssetRecord, ImportCache};
