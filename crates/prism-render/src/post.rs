@@ -21,6 +21,7 @@
 //! it via its own load+transition pass
 
 use crate::prelude::*;
+use anyhow::Context as _;
 use ash::vk;
 
 use crate::context::VulkanContext;

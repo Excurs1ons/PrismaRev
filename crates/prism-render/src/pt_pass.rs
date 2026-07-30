@@ -18,6 +18,7 @@
 use std::ptr;
 
 use crate::prelude::*;
+use anyhow::Context as _;
 use ash::vk;
 
 use crate::compute::ComputePipeline;
