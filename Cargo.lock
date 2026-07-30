@@ -2952,8 +2952,7 @@ dependencies = [
  "flume",
  "glam 0.29.3",
  "log",
- "prism-asset-core",
- "prism-asset-runtime",
+ "prism-asset",
  "prism-audio",
  "prism-ecs",
  "prism-editor",
@@ -2965,128 +2964,27 @@ dependencies = [
 ]
 
 [[package]]
-name = "prism-asset-cli"
+name = "prism-asset"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bincode",
  "clap",
+ "gltf",
  "image",
- "prism-asset-cooker",
- "prism-asset-core",
- "prism-asset-db",
- "prism-asset-importer",
- "prism-asset-package",
- "prism-asset-runtime",
+ "path-clean",
  "serde",
  "serde_json",
  "tempfile",
+ "thiserror 1.0.69",
  "tokio",
  "tracing",
  "tracing-subscriber",
- "unicode-width",
- "xxhash-rust",
-]
-
-[[package]]
-name = "prism-asset-cooker"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "image",
- "prism-asset-core",
- "prism-asset-db",
- "prism-asset-importer",
- "prism-asset-package",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
- "xxhash-rust",
-]
-
-[[package]]
-name = "prism-asset-core"
-version = "0.1.0"
-dependencies = [
- "bincode",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
  "typetag",
+ "unicode-width",
  "uuid",
-]
-
-[[package]]
-name = "prism-asset-db"
-version = "0.1.0"
-dependencies = [
- "path-clean",
- "prism-asset-core",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "prism-asset-importer"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "gltf",
- "image",
- "prism-asset-core",
- "prism-asset-db",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
- "xxhash-rust",
-]
-
-[[package]]
-name = "prism-asset-package"
-version = "0.1.0"
-dependencies = [
- "prism-asset-core",
- "serde",
- "tempfile",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
  "xxhash-rust",
  "zstd",
-]
-
-[[package]]
-name = "prism-asset-runtime"
-version = "0.1.0"
-dependencies = [
- "prism-asset-cooker",
- "prism-asset-core",
- "prism-asset-package",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "prism-asset-types"
-version = "0.1.0"
-dependencies = [
- "prism-asset-core",
- "serde",
- "serde_json",
- "typetag",
 ]
 
 [[package]]
@@ -3109,10 +3007,12 @@ dependencies = [
  "clap",
  "env_logger",
  "log",
- "prism-asset-runtime",
+ "prism-asset",
  "prism-ecs",
  "prism-engine",
  "prism-render",
+ "rand",
+ "rayon",
 ]
 
 [[package]]
@@ -3133,8 +3033,7 @@ dependencies = [
  "glam 0.29.3",
  "inventory",
  "log",
- "prism-asset-core",
- "prism-asset-types",
+ "prism-asset",
  "prism-ecs",
  "prism-render",
  "serde",
@@ -3167,10 +3066,7 @@ dependencies = [
  "glam 0.29.3",
  "jni 0.21.1",
  "log",
- "prism-asset-cooker",
- "prism-asset-core",
- "prism-asset-runtime",
- "prism-asset-types",
+ "prism-asset",
  "prism-audio",
  "prism-ecs",
  "prism-editor",

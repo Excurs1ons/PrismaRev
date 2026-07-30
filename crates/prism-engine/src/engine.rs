@@ -56,7 +56,7 @@ impl Engine {
     /// Loads resources from the given 资源 管理器 then loads the scene.
     pub fn new(
         editor: &mut prism_editor::Editor,
-        rm: &mut prism_asset_runtime::ResourceManager,
+        rm: &mut prism_asset::runtime::ResourceManager,
     ) -> Self {
         let mut engine = Self::empty();
         engine.pre_init(&());
@@ -107,7 +107,7 @@ impl Engine {
     ///
     /// Restores persisted scene 状态 and loads the 第一个 scene from the
     /// manifest.  Requires a [`ResourceManager`] for `.pak`‑backed scenes.
-    pub fn init_scene(&mut self, rm: &mut prism_asset_runtime::ResourceManager) {
+    pub fn init_scene(&mut self, rm: &mut prism_asset::runtime::ResourceManager) {
         crate::scene_state::load_scene_state(&mut self.world);
         self.current_scene_name = load_scene_from_manifest(rm, &mut self.world);
     }
@@ -387,7 +387,7 @@ impl Engine {
 // Manifest helpers (moved from old engine.rs, kept for scene loading)
 // ===========================================================================
 
-use prism_asset_runtime::{ResourceManager, SceneAsset};
+use prism_asset::runtime::{ResourceManager, SceneAsset};
 
 #[derive(serde::Deserialize)]
 struct SceneManifestEntry {

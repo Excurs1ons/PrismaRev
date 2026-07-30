@@ -8,7 +8,7 @@
 //! a [`ResourceManager`] 打开
 
 use anyhow::Context;
-use prism_asset_runtime::{ResourceManager, ShaderAsset};
+use prism_asset::runtime::{ResourceManager, ShaderAsset};
 
 /// 加载 a `VkShaderModule` from a [`ShaderAsset`] inside a loaded `.pak`.
 ///

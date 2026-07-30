@@ -11,7 +11,7 @@
 //! 因为 trait 在此定义）。`prism-engine` 在启动时将组件注册到
 //! `ComponentRegistry` 中，并将注册表交给 [`Inspector::run`]。
 
-use prism_asset_core::LoadedAsset;
+use prism_asset::core::LoadedAsset;
 use std::any::TypeId;
 use std::collections::HashMap;
 

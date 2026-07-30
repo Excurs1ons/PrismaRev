@@ -5,8 +5,8 @@
 //! 编辑器从类型标记分派到相应的检查器，
 //! 运行时 crate 无需了解 egui 的任何细节。
 
-use prism_asset_core::{AssetData, LoadedAsset};
-use prism_asset_types::{CubeDef, MaterialDef, TextureDef};
+use prism_asset::core::{AssetData, LoadedAsset};
+use prism_asset::types::{CubeDef, MaterialDef, TextureDef};
 
 use egui::Ui;
 

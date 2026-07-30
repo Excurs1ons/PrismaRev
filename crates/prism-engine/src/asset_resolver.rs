@@ -6,8 +6,8 @@
 
 use std::collections::HashMap;
 
-use prism_asset_core::AssetId;
-use prism_asset_runtime::ResourceManager;
+use prism_asset::core::AssetId;
+use prism_asset::runtime::ResourceManager;
 use prism_ecs::World;
 use prism_render::batch::BatchUploader;
 use prism_render::managers::{
@@ -197,7 +197,7 @@ impl GpuAssetResolver {
 
         let handle = self
             .resource_manager
-            .load_with_deps::<prism_asset_runtime::MeshAsset>(id)
+            .load_with_deps::<prism_asset::runtime::MeshAsset>(id)
             .map_err(|e| log::warn!("resolve_mesh: load '{path}' failed: {e}"))
             .ok()?;
         let mesh = self
@@ -314,7 +314,7 @@ impl GpuAssetResolver {
 
         let handle = self
             .resource_manager
-            .load_with_deps::<prism_asset_runtime::MaterialAsset>(id)
+            .load_with_deps::<prism_asset::runtime::MaterialAsset>(id)
             .map_err(|e| log::warn!("resolve_material: load '{path}' failed: {e}"))
             .ok()?;
         let mat = self
@@ -394,7 +394,7 @@ impl GpuAssetResolver {
 
         let tex_handle = self
             .resource_manager
-            .load_with_deps::<prism_asset_runtime::TextureAsset>(tex_id)
+            .load_with_deps::<prism_asset::runtime::TextureAsset>(tex_id)
             .map_err(|e| log::warn!("resolve_texture: load {tex_id} failed: {e}"))
             .ok()?;
         let tex = self

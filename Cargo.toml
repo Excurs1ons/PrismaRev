@@ -10,14 +10,7 @@ members = [
     "crates/prism-editor-tool",
     "crates/prism-build-pipeline",
     "crates/prism-audio",
-    "crates/prism-asset-core",
-    "crates/prism-asset-package",
-    "crates/prism-asset-db",
-    "crates/prism-asset-importer",
-    "crates/prism-asset-cooker",
-    "crates/prism-asset-runtime",
-    "crates/prism-asset-cli",
-    "crates/prism-asset-types",
+    "crates/prism-asset",
 ]
 # xtask (Slang reflection -> Rust binding codegen) is a build-time tool run only
 # on desktop/CI hosts that have slangc. Excluded so it never enters the default

@@ -13,7 +13,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use prism_asset_core::{AssetData, AssetGuid, AssetHandle, LoadedAsset};
+use prism_asset::core::{AssetData, AssetGuid, AssetHandle, LoadedAsset};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 

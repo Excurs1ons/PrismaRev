@@ -6,7 +6,7 @@
 
 use flume::{Receiver, Sender};
 
-use prism_asset_core::AssetId;
+use prism_asset::core::AssetId;
 
 // ── Messages ──────────────────────────────────────────────────────────
 

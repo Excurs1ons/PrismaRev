@@ -8,10 +8,7 @@ description = "Application layer and main loop for PrismaRev"
 [dependencies]
 prism-ecs = { path = "../prism-ecs" }
 prism-render = { path = "../prism-render" }
-prism-asset-core = { path = "../prism-asset-core", features = ["asset-data"] }
-prism-asset-runtime = { path = "../prism-asset-runtime" }
-prism-asset-cooker = { path = "../prism-asset-cooker", default-features = false }
-prism-asset-types = { path = "../prism-asset-types" }
+prism-asset = { path = "../prism-asset", default-features = false, features = ["runtime", "cooker", "package", "importer", "db"] }
 prism-editor = { path = "../prism-editor" }
 
 prism-audio = { path = "../prism-audio" }

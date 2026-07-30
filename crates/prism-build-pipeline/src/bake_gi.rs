@@ -14,7 +14,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use ash::vk;
 
-use prism_asset_runtime::ResourceManager;
+use prism_asset::runtime::ResourceManager;
 use prism_ecs::World;
 use prism_engine::scene::loader::{collect_bake_instances, SceneLoader};
 use prism_engine::scene::systems::hierarchy::hierarchy_system;

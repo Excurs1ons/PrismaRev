@@ -11,7 +11,7 @@
 //!
 //! ## RSCN 二进制格式
 //!
-//! 该格式是独立 `prism-asset` 工作区中 [`prism_asset_cooker::scene::SceneCooker`]
+//! 该格式是独立 `prism-asset` 工作区中 [`prism_asset::cooker::scene::SceneCooker`]
 //! 的输出。我们在此直接解析，无跨工作区依赖：
 //!
 //! ```text
@@ -43,7 +43,7 @@
 
 use std::path::PathBuf;
 
-use prism_asset_runtime::{MeshAsset, ResourceManager};
+use prism_asset::runtime::{MeshAsset, ResourceManager};
 use prism_ecs::{Entity, World};
 use prism_render::managers::GpuMaterial;
 
@@ -1528,7 +1528,7 @@ pub fn collect_bake_instances(
 fn load_mesh_for_bake(
     rm: &mut ResourceManager,
     path: &str,
-) -> Option<prism_asset_runtime::RmesInfo> {
+) -> Option<prism_asset::runtime::RmesInfo> {
     let id = rm.id_by_path(path)?;
     let handle = rm.load_with_deps::<MeshAsset>(id).ok()?;
     let asset = rm.get::<MeshAsset>(handle).ok()?;
@@ -1539,8 +1539,8 @@ fn load_mesh_for_bake(
 fn load_material_for_bake(
     rm: &mut ResourceManager,
     path: &str,
-) -> Option<prism_asset_runtime::RmatInfo> {
-    use prism_asset_runtime::MaterialAsset;
+) -> Option<prism_asset::runtime::RmatInfo> {
+    use prism_asset::runtime::MaterialAsset;
     let id = rm.id_by_path(path)?;
     let handle = rm.load_with_deps::<MaterialAsset>(id).ok()?;
     let asset = rm.get::<MaterialAsset>(handle).ok()?;
@@ -1548,7 +1548,7 @@ fn load_material_for_bake(
 }
 
 /// 转换 `RmatInfo` scalars into a `GpuMaterial` 纹理 slots = u32::MAX).
-fn rmat_to_gpu(info: &prism_asset_runtime::RmatInfo) -> GpuMaterial {
+fn rmat_to_gpu(info: &prism_asset::runtime::RmatInfo) -> GpuMaterial {
     let s = &info.scalars;
     GpuMaterial {
         base_color: [s[0], s[1], s[2], s[3]],

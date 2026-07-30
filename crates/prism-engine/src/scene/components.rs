@@ -18,7 +18,7 @@ use prism_render::managers::MeshHandle;
 // SceneAssetId
 // ---------------------------------------------------------------------------
 
-/// 一个 64 位资源标识符，镜像 [`prism_asset_core::AssetId`]。
+/// 一个 64 位资源标识符，镜像 [`prism_asset::core::AssetId`]。
 ///
 /// 这是本地副本，以便场景模块不依赖于独立的 `prism-asset-core` 工作区。
 /// 一旦 .pak 运行时管线（DESIGN.md §10.11 G1–G3）连接两个工作区，

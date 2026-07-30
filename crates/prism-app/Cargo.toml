@@ -15,8 +15,7 @@ prism-render = { path = "../prism-render" }
 prism-platform = { path = "../prism-platform" }
 prism-editor = { path = "../prism-editor" }
 prism-audio = { path = "../prism-audio" }
-prism-asset-core = { path = "../prism-asset-core" }
-prism-asset-runtime = { path = "../prism-asset-runtime" }
+prism-asset = { path = "../prism-asset", default-features = false, features = ["core", "runtime"] }
 prism-ecs = { path = "../prism-ecs" }
 glam.workspace = true
 rapier3d.workspace = true

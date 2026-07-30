@@ -13,9 +13,11 @@ path = "src/main.rs"
 prism-ecs = { path = "../prism-ecs" }
 prism-engine = { path = "../prism-engine" }
 prism-render = { path = "../prism-render" }
-prism-asset-runtime = { path = "../prism-asset-runtime" }
+prism-asset = { path = "../prism-asset", default-features = false, features = ["runtime"] }
 ash = { workspace = true }
 anyhow = { workspace = true }
 log = { workspace = true }
 env_logger = { workspace = true }
 clap = { workspace = true }
+rayon = "1"
+rand = "0.8"

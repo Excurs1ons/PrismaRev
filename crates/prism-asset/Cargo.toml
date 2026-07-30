@@ -1,0 +1,59 @@
+[package]
+name = "prism-asset"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Unified asset pipeline: core types, runtime, cooker, package, importer, DB, CLI"
+
+[[bin]]
+name = "prism-asset-cli"
+path = "src/cli_main.rs"
+required-features = ["cli"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+uuid = { version = "1", features = ["v4"] }
+
+typetag = { version = "0.2", optional = true }
+
+tokio = { workspace = true, optional = true }
+tracing = { version = "0.1", optional = true }
+
+image = { workspace = true, optional = true }
+anyhow = { workspace = true, optional = true }
+
+zstd = { workspace = true, optional = true }
+
+gltf = { version = "1.4", optional = true }
+
+path-clean = { workspace = true, optional = true }
+
+clap = { workspace = true, optional = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
+unicode-width = { workspace = true, optional = true }
+
+xxhash-rust = { version = "0.8", features = ["xxh3"], optional = true }
+
+[features]
+default = ["runtime", "cooker", "package", "db", "importer", "cli", "types"]
+asset-data = ["dep:typetag"]
+core = []
+runtime = ["dep:tokio", "dep:tracing", "core"]
+cooker = ["runtime", "dep:image", "dep:anyhow", "dep:xxhash-rust"]
+package = ["core", "dep:zstd"]
+importer = ["cooker", "dep:gltf"]
+db = ["core", "dep:path-clean"]
+cli = [
+    "runtime", "db", "package", "importer", "cooker",
+    "dep:clap", "dep:tracing-subscriber", "dep:unicode-width",
+]
+hot-reload = ["runtime"]
+types = ["core", "asset-data"]
+
+[dev-dependencies]
+tempfile = "3"
+image = { workspace = true }
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+bincode = { workspace = true }
