@@ -531,6 +531,7 @@ impl GltfImporter {
         buf
     }
 
+    #[allow(clippy::type_complexity)]
     fn read_gltf(
         path: &Path,
     ) -> Result<
@@ -567,11 +568,9 @@ impl GltfImporter {
         let normals = reader.read_normals().map(|iter| iter.collect::<Vec<_>>());
 
         // TexCoords (optional, 通道 0).
-        let texcoords = if let Some(tc) = reader.read_tex_coords(0) {
-            Some(tc.into_f32().collect::<Vec<_>>())
-        } else {
-            None
-        };
+        let texcoords = reader
+            .read_tex_coords(0)
+            .map(|tc| tc.into_f32().collect::<Vec<_>>());
 
         // Indices (required for triangle meshes).
         let indices: Vec<u32> = reader
