@@ -136,6 +136,7 @@ impl AssetIdGenerator {
     }
 
     /// Allocate the 下一个 资源 ID (monotonically increasing).
+    #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> AssetId {
         let serial = self.next_serial;
         self.next_serial += 1;
