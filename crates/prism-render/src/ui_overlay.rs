@@ -36,6 +36,7 @@ struct UiVertex {
     color: [f32; 4],
 }
 
+#[allow(dead_code)]
 const MAX_QUADS: usize = 16_384;
 pub(crate) const VERTICES_PER_QUAD: u32 = 6;
 const VERTEX_SIZE: vk::DeviceSize = size_of::<UiVertex>() as vk::DeviceSize;
@@ -128,7 +129,7 @@ impl UiOverlay {
     fn create_pipeline(
         device: &ash::Device,
         render_pass: vk::RenderPass,
-        extent: vk::Extent2D,
+        _extent: vk::Extent2D,
     ) -> Result<(vk::Pipeline, vk::PipelineLayout)> {
         const VERT_SPV: &[u8] = include_bytes!("../../../shaders/ui_overlay.vert.spv");
         const FRAG_SPV: &[u8] = include_bytes!("../../../shaders/ui_overlay.frag.spv");
