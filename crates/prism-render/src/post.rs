@@ -383,8 +383,8 @@ impl PostPass {
             .render_pass
             .context("PostPass: render_pass not created before pipeline")?;
 
-        const VERT_SPV: &[u8] = include_bytes!("../../../shaders/post.vert.spv");
-        const FRAG_SPV: &[u8] = include_bytes!("../../../shaders/post.frag.spv");
+        const VERT_SPV: &[u8] = include_bytes!("../../../assets/shaders/post.vert.spv");
+        const FRAG_SPV: &[u8] = include_bytes!("../../../assets/shaders/post.frag.spv");
         let vert_module =
             shader::load_shader_module(device, VERT_SPV).context("PostPass: load vert")?;
         let frag_module =

@@ -131,8 +131,8 @@ impl UiOverlay {
         render_pass: vk::RenderPass,
         _extent: vk::Extent2D,
     ) -> Result<(vk::Pipeline, vk::PipelineLayout)> {
-        const VERT_SPV: &[u8] = include_bytes!("../../../shaders/ui_overlay.vert.spv");
-        const FRAG_SPV: &[u8] = include_bytes!("../../../shaders/ui_overlay.frag.spv");
+        const VERT_SPV: &[u8] = include_bytes!("../../../assets/shaders/ui_overlay.vert.spv");
+        const FRAG_SPV: &[u8] = include_bytes!("../../../assets/shaders/ui_overlay.frag.spv");
         let vert_module =
             crate::shader::load_shader_module(device, VERT_SPV).context("UiOverlay: load vert")?;
         let frag_module =

@@ -527,8 +527,8 @@ impl GtaoPass {
             .render_pass
             .context("GtaoPass: render_pass not created before pipeline")?;
 
-        const VERT_SPV: &[u8] = include_bytes!("../../../shaders/gtao.vert.spv");
-        const FRAG_SPV: &[u8] = include_bytes!("../../../shaders/gtao.frag.spv");
+        const VERT_SPV: &[u8] = include_bytes!("../../../assets/shaders/gtao.vert.spv");
+        const FRAG_SPV: &[u8] = include_bytes!("../../../assets/shaders/gtao.frag.spv");
         let vert_module =
             shader::load_shader_module(device, VERT_SPV).context("GtaoPass: load vert")?;
         let frag_module =

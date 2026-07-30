@@ -619,7 +619,7 @@ impl PathTracePass {
         if self.pipeline.is_some() {
             return Ok(());
         }
-        const SPV: &[u8] = include_bytes!("../../../shaders/pt_render.comp.spv");
+        const SPV: &[u8] = include_bytes!("../../../assets/shaders/pt_render.comp.spv");
         let mod_ = shader::load_shader_module(device, SPV).context("PathTracePass: load spv")?;
         let entry = std::ffi::CString::new("ptMain").unwrap();
         // Three sets: 集合 0 = PT-local (accum/output/TLAS/vertex/index/meta/

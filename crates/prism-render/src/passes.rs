@@ -209,8 +209,8 @@ impl RenderPassNode for ShadowMapPass {
 
             // 管线 — may already exist when warmup ran ahead of 时间
             if self.pipeline.is_none() {
-                const VERT_SPV: &[u8] = include_bytes!("../../../shaders/shadow_depth.vert.spv");
-                const FRAG_SPV: &[u8] = include_bytes!("../../../shaders/shadow_depth.frag.spv");
+                const VERT_SPV: &[u8] = include_bytes!("../../../assets/shaders/shadow_depth.vert.spv");
+                const FRAG_SPV: &[u8] = include_bytes!("../../../assets/shaders/shadow_depth.frag.spv");
                 let vert_module = shader::load_shader_module(device, VERT_SPV)
                     .context("load shadow vert module")?;
                 let frag_module = shader::load_shader_module(device, FRAG_SPV)
@@ -394,8 +394,8 @@ impl RenderPassNode for ShadowMapPass {
         self.render_pass = Some(render_pass);
 
         // 管线 — 加载 着色器 modules, 创建 depth-only 管线
-        const VERT_SPV: &[u8] = include_bytes!("../../../shaders/shadow_depth.vert.spv");
-        const FRAG_SPV: &[u8] = include_bytes!("../../../shaders/shadow_depth.frag.spv");
+        const VERT_SPV: &[u8] = include_bytes!("../../../assets/shaders/shadow_depth.vert.spv");
+        const FRAG_SPV: &[u8] = include_bytes!("../../../assets/shaders/shadow_depth.frag.spv");
         let vert_module =
             shader::load_shader_module(device, VERT_SPV).context("warmup: load shadow vert")?;
         let frag_module =
@@ -591,8 +591,8 @@ impl SkyboxPass {
             // that double-frees.
             self.pipeline = None;
 
-            const VERT_SPV: &[u8] = include_bytes!("../../../shaders/skybox.vert.spv");
-            const FRAG_SPV: &[u8] = include_bytes!("../../../shaders/skybox.frag.spv");
+            const VERT_SPV: &[u8] = include_bytes!("../../../assets/shaders/skybox.vert.spv");
+            const FRAG_SPV: &[u8] = include_bytes!("../../../assets/shaders/skybox.frag.spv");
             let vert_module =
                 shader::load_shader_module(device, VERT_SPV).context("SkyboxPass: load vert")?;
             let frag_module =
@@ -1810,8 +1810,8 @@ impl ScenePass {
         // pushes PbrBindlessPushConstants (96 字节 the 顶点 阶段 only
         // reads the 第一个 64 字节 模型 which Vulkan permits.
         // 片元 scene_frag.frag.spv (bindless PBR + shadow).
-        const VERT_SPV: &[u8] = include_bytes!("../../../shaders/mesh_vert.vert.spv");
-        const FRAG_SPV: &[u8] = include_bytes!("../../../shaders/scene_frag.frag.spv");
+        const VERT_SPV: &[u8] = include_bytes!("../../../assets/shaders/mesh_vert.vert.spv");
+        const FRAG_SPV: &[u8] = include_bytes!("../../../assets/shaders/scene_frag.frag.spv");
         let vert_module =
             shader::load_shader_module(device, VERT_SPV).context("ScenePass: load vert")?;
         let frag_module =

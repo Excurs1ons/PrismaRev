@@ -192,9 +192,9 @@ jobs:
             git diff -- crates/prism-render/src/shader_bindings.rs
             drift=1
           fi
-          if ! git diff --quiet -- 'shaders/*.spv'; then
-            echo "::error::Committed .spv drift from .slang sources. Run shaders/compile.sh and commit."
-            git diff --stat -- 'shaders/*.spv'
+          if ! git diff --quiet -- 'assets/shaders/*.spv'; then
+            echo "::error::Committed .spv drift from .slang sources. Run assets/shaders/compile.sh and commit."
+            git diff --stat -- 'assets/shaders/*.spv'
             drift=1
           fi
           if [ "$drift" -ne 0 ]; then exit 1; fi

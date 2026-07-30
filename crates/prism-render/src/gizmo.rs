@@ -14,8 +14,8 @@ use crate::buffer::{create_buffer, BufferUsage, MemoryProperties};
 use crate::context::VulkanContext;
 use crate::shader_bindings::gizmo::GizmoPush;
 
-const GIZMO_VERT_SPV: &[u8] = include_bytes!("../../../shaders/gizmo.vert.spv");
-const GIZMO_FRAG_SPV: &[u8] = include_bytes!("../../../shaders/gizmo.frag.spv");
+const GIZMO_VERT_SPV: &[u8] = include_bytes!("../../../assets/shaders/gizmo.vert.spv");
+const GIZMO_FRAG_SPV: &[u8] = include_bytes!("../../../assets/shaders/gizmo.frag.spv");
 
 /// Per-vertex data for the gizmo: object-space position + 颜色
 #[repr(C)]
