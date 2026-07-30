@@ -25,7 +25,6 @@
 //! SHADER_READ_ONLY_OPTIMAL until the GTAO pass writes it again two frames
 //! later (its 渲染 pass also uses `initial_layout = UNDEFINED`).
 
-use crate::types::*;
 use anyhow::Context as _;
 use ash::vk;
 use std::time::Instant;
