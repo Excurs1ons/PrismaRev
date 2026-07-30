@@ -514,7 +514,7 @@ mod tests {
         // 远 beyond the 网格 -> snaps to the far-corner probe.
         let (base, w) = trilinear_weights([100.0, -50.0, 999.0], [4, 4, 4]);
         assert_eq!(base, [2, 0, 2]);
-        assert!(approx_eq(w[5], 0.0)); // (just exercise clamping)
+        assert!(approx_eq(w[5], 1.0)); // all weight concentrates at the far-corner probe
         let sum: f32 = w.iter().sum();
         assert!(approx_eq(sum, 1.0));
     }
