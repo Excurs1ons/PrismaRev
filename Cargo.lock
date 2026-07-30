@@ -3145,6 +3145,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "prism-launcher"
+version = "0.1.0"
+dependencies = [
+ "prism-app",
+]
+
+[[package]]
 name = "prism-platform"
 version = "0.1.0"
 dependencies = [
@@ -3175,13 +3182,6 @@ dependencies = [
  "raw-window-handle",
  "slotmap",
  "winit",
-]
-
-[[package]]
-name = "prisma"
-version = "0.1.0"
-dependencies = [
- "prism-app",
 ]
 
 [[package]]

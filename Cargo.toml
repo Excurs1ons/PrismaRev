@@ -1,20 +1,7 @@
-[package]
-name = "prisma"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
-description = "Prisma game engine,but revised with rust."
-
-[[bin]]
-name = "prisma"
-path = "src/main.rs"
-
-[dependencies]
-prism-app = { path = "crates/prism-app" }
-
 [workspace]
 resolver = "2"
 members = [
+    "crates/prism-launcher",
     "crates/prism-ecs",
     "crates/prism-render",
     "crates/prism-engine",
