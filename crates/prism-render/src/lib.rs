@@ -26,7 +26,7 @@
     clippy::doc_lazy_continuation,
     clippy::needless_borrow,
     clippy::manual_div_ceil,
-    clippy::too_many_arguments,
+    clippy::too_many_arguments
 )]
 
 pub mod acceleration_structure;
