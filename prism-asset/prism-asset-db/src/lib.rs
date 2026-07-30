@@ -341,7 +341,7 @@ impl ImportCache {
         importer_version: u32,
     ) -> bool {
         let normalized = normalize_path(path);
-        self.entries.get(&normalized).map_or(false, |e| {
+        self.entries.get(&normalized).is_some_and(|e| {
             e.source_hash == source_hash
                 && e.settings_hash == settings_hash
                 && e.importer_version == importer_version
