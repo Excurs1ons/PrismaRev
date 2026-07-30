@@ -39,8 +39,6 @@ pub use render::{
     convert_ui_draw_list_to_overlay, ui_render_system, UiDrawList, UiQuad, UiTextCmd,
 };
 
-use crate::util::timer::{TimerClient, TimerParams};
-
 /// UI 面板接口（将逐步被 ECS 组件方案取代）。
 pub trait Panel {
     /// 每帧更新。返回 `false` 表示面板请求关闭。

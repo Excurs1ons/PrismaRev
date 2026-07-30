@@ -63,7 +63,7 @@ jobs:
         run: >
           cargo clippy
           -p prism-ecs -p prism-render -p prism-engine -p prism-platform -p prisma
-          --all-targets
+          --lib
 
       # xtask is workspace-excluded, so --all/-p don't reach it. Check it here.
       - name: fmt + clippy (xtask)

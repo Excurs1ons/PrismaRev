@@ -45,7 +45,7 @@ pub fn ui_render_system(world: &mut World) {
     let mut draw_list = UiDrawList::default();
 
     // 收集背景矩形
-    for (entity, layout, style) in world.query2::<ComputedLayout, Style>() {
+    for (_entity, layout, style) in world.query2::<ComputedLayout, Style>() {
         if !style.visible {
             continue;
         }
@@ -63,7 +63,7 @@ pub fn ui_render_system(world: &mut World) {
     }
 
     // 收集文本
-    for (entity, layout, text) in world.query2::<ComputedLayout, Text>() {
+    for (_entity, layout, text) in world.query2::<ComputedLayout, Text>() {
         if text.content.is_empty() {
             continue;
         }

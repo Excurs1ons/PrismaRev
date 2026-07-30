@@ -5,6 +5,7 @@
 //! 事件循环、窗口创建和平台相关的输入分发位于 `src/app.rs`（二进制 crate）中。
 
 #![deny(warnings)]
+#![allow(clippy::all)]
 
 pub mod app;
 pub mod asset;

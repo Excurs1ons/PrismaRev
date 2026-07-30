@@ -124,11 +124,11 @@ impl PlatformContext {
 
     /// 调整大小时重建交换链
     pub fn recreate_swapchain(&mut self) -> Result<(), anyhow::Error> {
-        self.renderer.recreate_swapchain().map_err(Into::into)
+        self.renderer.recreate_swapchain()
     }
 
     /// Android suspend 后恢复 Vulkan 表面
-    pub fn resume_surface(&mut self, event_loop: &ActiveEventLoop) -> Result<(), anyhow::Error> {
+    pub fn resume_surface(&mut self, _event_loop: &ActiveEventLoop) -> Result<(), anyhow::Error> {
         self.renderer
             .resume_surface(self.window.as_ref(), self.window.as_ref())
     }

@@ -13,7 +13,7 @@
 use std::any::TypeId;
 
 use egui::Ui;
-use prism_editor::{euler_deg_to_quat, quat_to_euler_deg, Inspect, InspectCtx};
+use prism_editor::{Inspect, InspectCtx};
 
 use super::components::{
     Active, Camera, Children, DirectionalLight, FlyCameraController, LocalTransform, MaterialRef,

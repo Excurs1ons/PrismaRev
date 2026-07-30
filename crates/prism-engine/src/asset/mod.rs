@@ -23,10 +23,7 @@
 pub mod procedural;
 pub mod types;
 
-use std::any::Any;
-use std::collections::HashMap;
 use std::marker::PhantomData;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 pub use types::{MaterialAsset, MeshAsset};
 

@@ -87,7 +87,7 @@ pub fn make_cube() -> MeshAsset {
             ),
         ];
 
-        for (normal, _tangent, face_positions, face_uvs) in face_data {
+        for (_normal, _tangent, face_positions, face_uvs) in face_data {
             for (&pos, &uv) in face_positions.iter().zip(face_uvs.iter()) {
                 p.push(pos);
                 u.push(uv);

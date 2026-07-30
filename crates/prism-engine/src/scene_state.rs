@@ -76,6 +76,7 @@ fn fmt3(a: Vec3) -> String {
 fn fmt4(a: Quat) -> String {
     format!("{},{},{}", a.x, a.y, a.z)
 }
+#[allow(dead_code)]
 fn fmt4_vec(a: glam::Vec4) -> String {
     format!("{},{},{},{}", a.x, a.y, a.z, a.w)
 }

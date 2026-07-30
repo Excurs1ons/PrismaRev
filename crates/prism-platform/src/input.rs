@@ -128,16 +128,17 @@ pub fn handle_input_event(
         WindowEvent::MouseInput { state, button, .. } => {
             if *state == winit::event::ElementState::Pressed
                 && *button == winit::event::MouseButton::Left
+                && !input.pointer_locked
+                && input.focus_return_click
             {
-                if !input.pointer_locked {
-                    if input.focus_return_click {
-                        input.focus_return_click = false;
-                    } else {
-                        grab_pointer(window);
-                        input.set_locked(true);
-                        return;
-                    }
-                }
+                input.focus_return_click = false;
+            } else if *state == winit::event::ElementState::Pressed
+                && *button == winit::event::MouseButton::Left
+                && !input.pointer_locked
+            {
+                grab_pointer(window);
+                input.set_locked(true);
+                return;
             }
             input.handle_mouse_button(
                 winit_mouse_button_to_engine(*button),

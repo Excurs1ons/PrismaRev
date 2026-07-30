@@ -13,7 +13,7 @@
 //! Vulkan y-flip 投影，深度范围 [0,1]。
 //! 参见 `README.md` §Coordinate Conventions 和 `DESIGN.md`。
 
-use glam::{Mat4, Quat, Vec3};
+use glam::{Mat4, Vec3};
 
 use prism_ecs::World;
 

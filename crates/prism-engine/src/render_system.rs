@@ -268,8 +268,8 @@ pub fn render_system(
     dirty_router: &mut DirtyRouter,
 ) -> anyhow::Result<()> {
     let FramePacket {
-        scene: ref scene,
-        draw_items: ref draw_items,
+        ref scene,
+        ref draw_items,
         ref ui_overlay,
     } = *packet;
 
@@ -406,6 +406,7 @@ fn light_view_proj(light_dir: &Vec4, half: f32, center: &Vec3) -> Mat4 {
     )
 }
 
+#[allow(dead_code)]
 fn norm3(a: [f32; 3]) -> [f32; 3] {
     let l = (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).max(1e-8).sqrt();
     [a[0] / l, a[1] / l, a[2] / l]

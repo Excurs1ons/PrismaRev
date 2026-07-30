@@ -83,6 +83,7 @@ struct RegMsg {
     id: u32,
     group_id: Option<u32>,
     params: TimerParams,
+    #[allow(dead_code)]
     deadline: Instant,
 }
 struct FireEvent {
@@ -114,7 +115,7 @@ pub struct TimerClient {
 }
 
 impl TimerClient {
-    pub fn create_timer(&self, mut params: TimerParams) -> TimerId {
+    pub fn create_timer(&self, params: TimerParams) -> TimerId {
         let id = {
             let mut s = self.state.lock().unwrap();
             s.insert(TimerState {

@@ -29,7 +29,7 @@ pub fn ui_input_system(world: &mut World) {
     let cursor = state.cursor_pos;
 
     // 第一步：清空所有之前帧的状态
-    for (_, mut interaction) in world.query_mut::<Interaction>() {
+    for (_, interaction) in world.query_mut::<Interaction>() {
         interaction.clicked = false;
         interaction.hovered = false;
         interaction.pressed = false;
@@ -53,7 +53,7 @@ pub fn ui_input_system(world: &mut World) {
             && cursor[1] >= layout.rect[1]
             && cursor[1] <= layout.rect[1] + layout.rect[3];
 
-        if let Some(mut interaction) = world.get_mut::<Interaction>(entity) {
+        if let Some(interaction) = world.get_mut::<Interaction>(entity) {
             interaction.hovered = hit;
             if hit && state.left_clicked {
                 interaction.clicked = true;

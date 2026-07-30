@@ -42,7 +42,7 @@ impl Schedule {
 
     /// Run all registered systems in order.
     pub fn run(&mut self, world: &mut World, dt: f32) {
-        for (label, sys) in &mut self.systems {
+        for (_label, sys) in &mut self.systems {
             sys(world, dt);
         }
     }
