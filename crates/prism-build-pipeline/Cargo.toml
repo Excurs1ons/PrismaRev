@@ -1,0 +1,15 @@
+[package]
+name = "prism-build-pipeline"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Offline build pipeline: GI bake, asset cooking, etc."
+
+[dependencies]
+prism-ecs = { path = "../prism-ecs" }
+prism-engine = { path = "../prism-engine" }
+prism-render = { path = "../prism-render" }
+prism-asset-runtime = { path = "../../prism-asset/prism-asset-runtime" }
+ash = { workspace = true }
+anyhow = { workspace = true }
+log = { workspace = true }

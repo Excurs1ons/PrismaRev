@@ -3032,17 +3032,27 @@ dependencies = [
 ]
 
 [[package]]
-name = "prism-bake-gi"
+name = "prism-build-pipeline"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "ash",
- "env_logger",
  "log",
  "prism-asset-runtime",
  "prism-ecs",
  "prism-engine",
  "prism-render",
+]
+
+[[package]]
+name = "prism-build-pipeline-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "env_logger",
+ "log",
+ "prism-build-pipeline",
 ]
 
 [[package]]

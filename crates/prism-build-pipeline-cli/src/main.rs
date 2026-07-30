@@ -1,7 +1,7 @@
 //! CLI entry point for `prism-build-pipeline`.
 //!
 //! Subcommands:
-//!   bake-gi    — offline GI probe-volume baker (GPU ray-query)
+//!   bake-gi    — offline GI probe-volume baker (GPU ray-query, multi-bounce path tracing)
 //!   cook       — cook assets (delegates to prism-asset)
 //!   pack       — build .pak files (delegates to prism-asset)
 
@@ -58,7 +58,13 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Command::BakeGi { output, pak, rscn, rays, bounces } => {
+        Command::BakeGi {
+            output,
+            pak,
+            rscn,
+            rays,
+            bounces,
+        } => {
             let cfg = prism_build_pipeline::BakeGiConfig {
                 output_path: output.unwrap_or_else(|| PathBuf::from("assets/gi/probe_volume.bin")),
                 pak_path: pak.unwrap_or_else(|| PathBuf::from("assets/packed/scene.pak")),
@@ -71,12 +77,12 @@ fn main() -> Result<()> {
         }
         Command::Cook { input, output } => {
             log::info!("cook: {input:?} -> {output:?}");
-            // TODO: delegate to prism-asset-cooker
+            // TODO: delegate to prism-asset-cooker via prism-build-pipeline
             anyhow::bail!("cook not yet implemented; use prism-asset-cli directly")
         }
         Command::Pack { input, output } => {
             log::info!("pack: {input:?} -> {output:?}");
-            // TODO: delegate to prism-asset-package
+            // TODO: delegate to prism-asset-package via prism-build-pipeline
             anyhow::bail!("pack not yet implemented; use prism-asset-cli directly")
         }
     }
