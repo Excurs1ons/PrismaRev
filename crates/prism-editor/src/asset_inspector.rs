@@ -62,7 +62,7 @@ fn inspect_texture(data: &mut dyn AssetData, ui: &mut Ui) -> bool {
     let Some(typed) = data.downcast_mut::<TextureDef>() else {
         return false;
     };
-    let mut dirty = false;
+    let dirty = false;
     ui.label("Texture Source");
     ui.separator();
     ui.label(format!("Label: {}", typed.label));
@@ -74,7 +74,7 @@ fn inspect_cube(data: &mut dyn AssetData, ui: &mut Ui) -> bool {
     let Some(typed) = data.downcast_mut::<CubeDef>() else {
         return false;
     };
-    let mut dirty = false;
+    let dirty = false;
     ui.label("Cubemap Texture");
     ui.separator();
     ui.label(format!("Label: {}", typed.label));
