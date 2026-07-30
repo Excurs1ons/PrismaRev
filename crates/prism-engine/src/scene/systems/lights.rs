@@ -69,13 +69,13 @@ mod tests {
         let mut world = World::new();
         let e = world.spawn();
         let light = DirectionalLight {
-            color: [1.0, 0.0, 0.0],
+            color: [1.0, 0.0, 0.0].into(),
             ..Default::default()
         };
         world.insert(e, light);
         let result = collect_directional_light(&world);
         assert!(result.is_some());
-        assert_eq!(result.unwrap().color, [1.0, 0.0, 0.0]);
+        assert_eq!(result.unwrap().color, [1.0, 0.0, 0.0].into());
     }
 
     #[test]

@@ -106,10 +106,26 @@ mod tests {
 
         let cw = world.get::<WorldTransform>(child).unwrap().0;
         // Expect 平移 = [2, 3, 0]
-        assert!((cw[3][0] - 2.0).abs() < 1e-6, "child x = {}", cw[3][0]);
-        assert!((cw[3][1] - 3.0).abs() < 1e-6, "child y = {}", cw[3][1]);
-        assert!((cw[3][2] - 0.0).abs() < 1e-6, "child z = {}", cw[3][2]);
-        assert!((cw[3][3] - 1.0).abs() < 1e-6, "child w = {}", cw[3][3]);
+        assert!(
+            (cw.col(3)[0] - 2.0).abs() < 1e-6,
+            "child x = {}",
+            cw.col(3)[0]
+        );
+        assert!(
+            (cw.col(3)[1] - 3.0).abs() < 1e-6,
+            "child y = {}",
+            cw.col(3)[1]
+        );
+        assert!(
+            (cw.col(3)[2] - 0.0).abs() < 1e-6,
+            "child z = {}",
+            cw.col(3)[2]
+        );
+        assert!(
+            (cw.col(3)[3] - 1.0).abs() < 1e-6,
+            "child w = {}",
+            cw.col(3)[3]
+        );
     }
 
     #[test]
@@ -150,13 +166,13 @@ mod tests {
 
         // gp: [1,0,0], p: [1,2,0], c: [1,2,3]
         let pw = world.get::<WorldTransform>(p).unwrap().0;
-        assert!((pw[3][0] - 1.0).abs() < 1e-6, "p.x = {}", pw[3][0]);
-        assert!((pw[3][1] - 2.0).abs() < 1e-6, "p.y = {}", pw[3][1]);
+        assert!((pw.col(3)[0] - 1.0).abs() < 1e-6, "p.x = {}", pw.col(3)[0]);
+        assert!((pw.col(3)[1] - 2.0).abs() < 1e-6, "p.y = {}", pw.col(3)[1]);
 
         let cw = world.get::<WorldTransform>(c).unwrap().0;
-        assert!((cw[3][0] - 1.0).abs() < 1e-6, "c.x = {}", cw[3][0]);
-        assert!((cw[3][1] - 2.0).abs() < 1e-6, "c.y = {}", cw[3][1]);
-        assert!((cw[3][2] - 3.0).abs() < 1e-6, "c.z = {}", cw[3][2]);
+        assert!((cw.col(3)[0] - 1.0).abs() < 1e-6, "c.x = {}", cw.col(3)[0]);
+        assert!((cw.col(3)[1] - 2.0).abs() < 1e-6, "c.y = {}", cw.col(3)[1]);
+        assert!((cw.col(3)[2] - 3.0).abs() < 1e-6, "c.z = {}", cw.col(3)[2]);
     }
 
     #[test]

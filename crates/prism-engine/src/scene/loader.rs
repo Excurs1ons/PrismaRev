@@ -689,6 +689,7 @@ impl Default for SceneLoader {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use glam::Quat;
     use prism_ecs::World;
 
     // ── helpers ───────────────────────────────────────────────────────
@@ -1025,7 +1026,7 @@ mod tests {
     #[test]
     fn spawn_has_local_transform() {
         let e = RscnEntity {
-            translation: [10.0, 20.0, 30.0],
+            translation: [10.0, 20.0, 30.0].into(),
             ..simple_entity("Moved", None)
         };
         let bytes = make_rscn(&[e]);
@@ -1037,8 +1038,8 @@ mod tests {
         let inst = loader.spawn_from_parsed(&mut world, &parsed, sid).unwrap();
 
         let lt = world.get::<LocalTransform>(inst.all_entities[0]).unwrap();
-        assert_eq!(lt.translation, [10.0, 20.0, 30.0]);
-        assert_eq!(lt.rotation, [0.0, 0.0, 0.0, 1.0]);
+        assert_eq!(lt.translation, [10.0, 20.0, 30.0].into());
+        assert_eq!(lt.rotation, Quat::IDENTITY);
     }
 
     #[test]
@@ -1054,8 +1055,8 @@ mod tests {
 
         let wt = world.get::<WorldTransform>(inst.all_entities[0]).unwrap();
         // Identity 模型 矩阵
-        assert_eq!(wt.0[0][0], 1.0);
-        assert_eq!(wt.0[3][3], 1.0);
+        assert_eq!(wt.0.col(0)[0], 1.0);
+        assert_eq!(wt.0.col(3)[3], 1.0);
     }
 
     #[test]
@@ -1115,7 +1116,7 @@ mod tests {
 
         let dl = world.get::<DirectionalLight>(inst.all_entities[0]);
         assert!(dl.is_some(), "entity should have DirectionalLight");
-        assert_eq!(dl.unwrap().color, [1.0, 1.0, 1.0]);
+        assert_eq!(dl.unwrap().color, [1.0, 1.0, 1.0].into());
     }
 
     #[test]
@@ -1269,7 +1270,7 @@ mod tests {
         let lt = world
             .get::<LocalTransform>(entity)
             .expect("LocalTransform should be present");
-        assert_eq!(lt.translation, [1.0, 2.0, 3.0]);
+        assert_eq!(lt.translation, [1.0, 2.0, 3.0].into());
     }
 
     #[test]
@@ -1367,7 +1368,7 @@ mod tests {
         let lt = world
             .get::<LocalTransform>(cam_entity)
             .expect("camera should have a LocalTransform");
-        assert_eq!(lt.translation, [0.0, 2.5, 18.0]);
+        assert_eq!(lt.translation, [0.0, 2.5, 18.0].into());
         // And it should carry a free-fly controller.
         assert!(world.get::<FlyCameraController>(cam_entity).is_some());
     }

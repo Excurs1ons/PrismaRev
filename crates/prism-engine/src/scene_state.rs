@@ -399,7 +399,7 @@ fn apply_scene_state(world: &mut World, text: &str) {
                     world.insert(
                         entity,
                         LocalTransform {
-                            translation: position,
+                            translation: position.into(),
                             ..Default::default()
                         },
                     );
@@ -631,7 +631,7 @@ mod tests {
         world.insert(
             entity,
             LocalTransform {
-                translation: position,
+                translation: position.into(),
                 ..Default::default()
             },
         );
@@ -667,11 +667,11 @@ mod tests {
 
         assert_eq!(
             world.get::<LocalTransform>(object).unwrap().translation,
-            [1.0, 2.0, 3.0]
+            [1.0, 2.0, 3.0].into()
         );
         assert_eq!(
             world.get::<LocalTransform>(light).unwrap().translation,
-            [90.0, 90.0, 90.0]
+            [90.0, 90.0, 90.0].into()
         );
     }
 
@@ -694,12 +694,12 @@ mod tests {
         apply_scene_state(&mut world, json);
 
         let light = world.get::<ScenePtLight>(entity).unwrap();
-        assert_eq!(light.color, [1.0, 0.25, 0.5]);
+        assert_eq!(light.color, [1.0, 0.25, 0.5].into());
         assert_eq!(light.intensity, 42.0);
         assert_eq!(light.range, 8.0);
         assert_eq!(
             world.get::<LocalTransform>(entity).unwrap().translation,
-            [4.0, 5.0, 6.0]
+            [4.0, 5.0, 6.0].into()
         );
         assert_eq!(world.get::<Active>(entity), Some(&Active(false)));
     }
@@ -720,11 +720,11 @@ mod tests {
 
         assert_eq!(
             world.get::<LocalTransform>(light).unwrap().translation,
-            [4.0, 5.0, 6.0]
+            [4.0, 5.0, 6.0].into()
         );
         assert_eq!(
             world.get::<LocalTransform>(object).unwrap().translation,
-            [7.0, 8.0, 9.0]
+            [7.0, 8.0, 9.0].into()
         );
     }
 

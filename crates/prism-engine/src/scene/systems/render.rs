@@ -45,7 +45,10 @@ mod tests {
     fn entity_with_all_components_yields_draw_item() {
         let mut world = World::new();
         let e = world.spawn();
-        world.insert(e, WorldTransform([[1.0; 4]; 4]));
+        world.insert(
+            e,
+            WorldTransform(glam::Mat4::from_cols_array_2d(&[[1.0; 4]; 4])),
+        );
         world.insert(
             e,
             MeshRef {
@@ -73,7 +76,10 @@ mod tests {
     fn inactive_entity_is_skipped() {
         let mut world = World::new();
         let e = world.spawn();
-        world.insert(e, WorldTransform([[1.0; 4]; 4]));
+        world.insert(
+            e,
+            WorldTransform(glam::Mat4::from_cols_array_2d(&[[1.0; 4]; 4])),
+        );
         world.insert(
             e,
             MeshRef {
@@ -100,7 +106,10 @@ mod tests {
     fn entity_without_mesh_is_skipped() {
         let mut world = World::new();
         let e = world.spawn();
-        world.insert(e, WorldTransform([[1.0; 4]; 4]));
+        world.insert(
+            e,
+            WorldTransform(glam::Mat4::from_cols_array_2d(&[[1.0; 4]; 4])),
+        );
         // No MeshRef, no MaterialRef → no 绘制 item.
 
         let items = scene_render_system(&world);
@@ -112,7 +121,10 @@ mod tests {
         let mut world = World::new();
         for _ in 0..3 {
             let e = world.spawn();
-            world.insert(e, WorldTransform([[1.0; 4]; 4]));
+            world.insert(
+                e,
+                WorldTransform(glam::Mat4::from_cols_array_2d(&[[1.0; 4]; 4])),
+            );
             world.insert(
                 e,
                 MeshRef {
@@ -152,7 +164,7 @@ mod tests {
             [0.0, 0.0, 3.0, 0.0],
             [4.0, 5.0, 6.0, 1.0],
         ];
-        world.insert(e, WorldTransform(model));
+        world.insert(e, WorldTransform(glam::Mat4::from_cols_array_2d(&model)));
         world.insert(
             e,
             MeshRef {
