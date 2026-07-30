@@ -335,7 +335,7 @@ impl World {
     /// to obtain both borrows simultaneously. This is 声音 because:
     /// - A and B are 不同 types, so their pools never alias.
     /// - The `&mut self` 借用 prevents any other 访问 to `pools` for the
-    /// 生命周期 of the returned references.
+    ///   生命周期 of the returned references.
     pub fn query2_mut<A: Component, B: Component>(
         &mut self,
     ) -> Box<dyn Iterator<Item = (Entity, &mut A, &B)> + '_> {
