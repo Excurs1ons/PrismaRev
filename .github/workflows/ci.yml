@@ -55,6 +55,11 @@ jobs:
         with:
           key: ${{ env.CACHE_VERSION }}-lint
 
+      # clippy compiles prism-render, whose include_bytes! needs the .spv files
+      # (gitignored). Compile them before linting.
+      - name: Setup slang + compile shaders
+        uses: ./.github/actions/setup-slang
+
       - name: rustfmt --check
         run: cargo fmt --all -- --check
 
@@ -100,18 +105,8 @@ jobs:
 
       # .spv files are NOT committed (see .gitignore). Compile them here so the
       # include_bytes!-based build has SPIR-V to embed.
-      - name: Download slang ${{ env.SLANG_VERSION }} (linux-x86_64)
-        run: |
-          set -euo pipefail
-          url="https://github.com/shader-slang/slang/releases/download/v${SLANG_VERSION}/slang-${SLANG_VERSION}-linux-x86_64.tar.gz"
-          mkdir -p "$RUNNER_TEMP/slang"
-          curl -fsSL "$url" -o "$RUNNER_TEMP/slang.tar.gz"
-          tar xzf "$RUNNER_TEMP/slang.tar.gz" -C "$RUNNER_TEMP/slang"
-          echo "SLANGC=$RUNNER_TEMP/slang/bin/slangc" >> "$GITHUB_ENV"
-          echo "LD_LIBRARY_PATH=$RUNNER_TEMP/slang/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
-
-      - name: Compile Slang shaders (.spv + reflection JSON)
-        run: bash assets/shaders/compile.sh
+      - name: Setup slang + compile shaders
+        uses: ./.github/actions/setup-slang
 
       - name: Build (desktop crates)
         run: >
@@ -147,21 +142,11 @@ jobs:
         with:
             key: ${{ env.CACHE_VERSION }}-shaders
 
-      - name: Download slang ${{ env.SLANG_VERSION }} (linux-x86_64)
-        run: |
-          set -euo pipefail
-          url="https://github.com/shader-slang/slang/releases/download/v${SLANG_VERSION}/slang-${SLANG_VERSION}-linux-x86_64.tar.gz"
-          mkdir -p "$RUNNER_TEMP/slang"
-          curl -fsSL "$url" -o "$RUNNER_TEMP/slang.tar.gz"
-          tar xzf "$RUNNER_TEMP/slang.tar.gz" -C "$RUNNER_TEMP/slang"
-          echo "SLANGC=$RUNNER_TEMP/slang/bin/slangc" >> "$GITHUB_ENV"
-          echo "LD_LIBRARY_PATH=$RUNNER_TEMP/slang/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+      - name: Setup slang + compile shaders
+        uses: ./.github/actions/setup-slang
 
       - name: slangc version
         run: "$SLANGC -v"
-
-      - name: Compile Slang shaders (.spv + reflection JSON)
-        run: bash assets/shaders/compile.sh
 
       # Always upload the freshly compiled SPIR-V + reflection JSON (survives
       # even if the drift check below fails), so the artifacts can be committed

@@ -1,0 +1,25 @@
+name: Setup Slang
+description: Download slangc (linux-x86_64) and compile shaders to .spv + reflection
+inputs:
+  compile:
+    description: Whether to run assets/shaders/compile.sh after downloading slang
+    required: false
+    default: "true"
+runs:
+  using: composite
+  steps:
+    - name: Download slang ${{ env.SLANG_VERSION }} (linux-x86_64)
+      shell: bash
+      run: |
+        set -euo pipefail
+        url="https://github.com/shader-slang/slang/releases/download/v${SLANG_VERSION}/slang-${SLANG_VERSION}-linux-x86_64.tar.gz"
+        mkdir -p "$RUNNER_TEMP/slang"
+        curl -fsSL "$url" -o "$RUNNER_TEMP/slang.tar.gz"
+        tar xzf "$RUNNER_TEMP/slang.tar.gz" -C "$RUNNER_TEMP/slang"
+        echo "SLANGC=$RUNNER_TEMP/slang/bin/slangc" >> "$GITHUB_ENV"
+        echo "LD_LIBRARY_PATH=$RUNNER_TEMP/slang/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+
+    - name: Compile Slang shaders (.spv + reflection JSON)
+      if: ${{ inputs.compile == 'true' }}
+      shell: bash
+      run: bash assets/shaders/compile.sh
