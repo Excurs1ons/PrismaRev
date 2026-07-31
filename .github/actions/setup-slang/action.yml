@@ -8,6 +8,10 @@ inputs:
 runs:
   using: composite
   steps:
+    - name: Install SPIR-V tools (spirv-dis / spirv-as for fix_spirv.py)
+      shell: bash
+      run: sudo apt-get update && sudo apt-get install -y spirv-tools
+
     - name: Download slang ${{ env.SLANG_VERSION }} (linux-x86_64)
       shell: bash
       run: |
