@@ -323,7 +323,7 @@ fn process_file(path: &Path) -> Result<(String, String)> {
 
     // Entry points.
     if !refl.entry_points.is_empty() {
-        out.push_str("\n/// Entry point names (for VkPipelineShaderStageCreateInfo).\n");
+        out.push_str("/// Entry point names (for VkPipelineShaderStageCreateInfo).\n");
         for ep in &refl.entry_points {
             let stage = ep.stage.clone().unwrap_or_default().to_uppercase();
             let cname = to_screaming_snake(&ep.name);
