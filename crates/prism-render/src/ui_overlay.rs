@@ -14,7 +14,7 @@ use ash::vk;
 
 use crate::buffer::{create_buffer, BufferUsage, MemoryProperties};
 use crate::context::VulkanContext;
-use crate::shader_bindings::ui::*;
+use crate::shader_bindings::ui_overlay::*;
 
 /// A filled rectangle in NDC 空间
 #[derive(Clone, Debug)]
