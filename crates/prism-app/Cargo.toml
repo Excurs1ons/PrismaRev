@@ -29,4 +29,4 @@ env_logger = { workspace = true }
 anyhow = { workspace = true }
 
 [target.'cfg(target_os = "android")'.dependencies]
-android_logger = "0.14"
+android_logger = "0.15"

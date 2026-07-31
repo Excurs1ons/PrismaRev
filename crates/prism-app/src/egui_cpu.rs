@@ -57,11 +57,11 @@ impl EguiCpu {
     /// Run the egui UI 闭包 tessellate shapes, and return an [`EguiFrame`]
     /// 供渲染线程使用。同时缓存 [`egui::PlatformOutput`] 供后续
     /// application via [`apply_platform_output`].
-    pub fn run_ui(&mut self, window: &Window, mut ui: impl FnMut(&egui::Context)) -> EguiFrame {
+    pub fn run_ui(&mut self, window: &Window, mut ui: impl FnMut(&mut egui::Ui)) -> EguiFrame {
         self.ensure_state(window);
         let state = self.state.as_mut().expect("ensure_state ran");
         let input = state.take_egui_input(window);
-        let output = self.ctx.run(input, |ctx| ui(ctx));
+        let output = self.ctx.run_ui(input, |inner| ui(inner));
 
         let egui::FullOutput {
             platform_output,

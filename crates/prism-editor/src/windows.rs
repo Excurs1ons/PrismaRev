@@ -5,13 +5,13 @@
 //! parameters. Migrated verbatim from the old `prism-engine::inspector` so the
 //! engine 层 no longer carries any egui 窗口 代码
 
-use egui::Context;
+use egui::Ui;
 use prism_render::RenderMode;
 
 use crate::Inspector;
 
 /// The 调试 窗口 PBR debug-mode flag display + 色调映射 + exposure 滑动条
-pub fn debug_window(ctx: &Context, insp: &mut Inspector) {
+pub fn debug_window(ui: &mut Ui, insp: &mut Inspector) {
     let window_frame = egui::Frame {
         fill: egui::Color32::from_black_alpha(200),
         stroke: egui::Stroke::new(1.0_f32, egui::Color32::from_gray(80)),
@@ -27,7 +27,7 @@ pub fn debug_window(ctx: &Context, insp: &mut Inspector) {
         .movable(true)
         .collapsible(true)
         .frame(window_frame)
-        .show(ctx, |ui| {
+        .show(ui.ctx(), |ui| {
             ui.heading("Debug Mode");
             ui.separator();
             ui.label("PBR component toggles (keys 1-9, Shift+1-5):");
@@ -95,7 +95,7 @@ pub fn debug_window(ctx: &Context, insp: &mut Inspector) {
 }
 
 /// The 渲染 Settings" 窗口 raster/PT 众数 + path-tracer parameters.
-pub fn render_settings_window(ctx: &Context, insp: &mut Inspector) {
+pub fn render_settings_window(ui: &mut Ui, insp: &mut Inspector) {
     let window_frame = egui::Frame {
         fill: egui::Color32::from_black_alpha(200),
         stroke: egui::Stroke::new(1.0_f32, egui::Color32::from_gray(80)),
@@ -111,7 +111,7 @@ pub fn render_settings_window(ctx: &Context, insp: &mut Inspector) {
         .movable(true)
         .collapsible(true)
         .frame(window_frame)
-        .show(ctx, |ui| {
+        .show(ui.ctx(), |ui| {
             ui.heading("Render Mode");
             ui.separator();
             ui.horizontal(|ui| {

@@ -9,7 +9,7 @@
 //!（它们位于 `prism-engine` 中），所以宿主提供一个 [`Hierarchy`] 实现来回答结构查询。
 //! 这使 `prism-editor` 免于依赖 `prism-engine`。
 
-use egui::{Context, Ui};
+use egui::Ui;
 use prism_ecs::{Entity, World};
 use prism_render::RenderMode;
 
@@ -135,14 +135,14 @@ impl Inspector {
     /// egui 叠加 闭包
     pub(crate) fn ui(
         &mut self,
-        ctx: &Context,
+        ui: &mut Ui,
         world: &mut World,
         registry: &crate::ComponentRegistry,
         inspect_ctx: &mut InspectCtx,
         hierarchy: &dyn Hierarchy,
     ) {
-        self.perf_hud(ctx);
-        self.no_camera_overlay(ctx);
+        self.perf_hud(ui);
+        self.no_camera_overlay(ui);
 
         let window_frame = egui::Frame {
             fill: egui::Color32::from_black_alpha(200),
@@ -161,7 +161,7 @@ impl Inspector {
             .movable(true)
             .collapsible(true)
             .frame(window_frame)
-            .show(ctx, |ui| {
+            .show(ui.ctx(), |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     self.entity_tree(ui, world, registry, hierarchy);
                 });
@@ -176,7 +176,7 @@ impl Inspector {
             .movable(true)
             .collapsible(true)
             .frame(window_frame)
-            .show(ctx, |ui| {
+            .show(ui.ctx(), |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     if let Some(entity) = self.selected {
                         self.entity_editor(ui, world, entity, registry, inspect_ctx);
@@ -193,10 +193,10 @@ impl Inspector {
         // 窗口 below reads/writes `self.exposure` directly.
 
         // --- 调试 众数 状态 ---
-        crate::windows::debug_window(ctx, self);
+        crate::windows::debug_window(ui, self);
 
         // --- 渲染 Settings ---
-        crate::windows::render_settings_window(ctx, self);
+        crate::windows::render_settings_window(ui, self);
 
         let hint_frame = egui::Frame {
             fill: egui::Color32::from_black_alpha(100),
@@ -208,7 +208,7 @@ impl Inspector {
             .anchor(egui::Align2::RIGHT_BOTTOM, [-8.0, -8.0])
             .movable(false)
             .interactable(false)
-            .show(ctx, |ui| {
+            .show(ui.ctx(), |ui| {
                 hint_frame.show(ui, |ui| {
                     ui.label("F1: inspector  |  F3: perf  |  Ctrl+S: save");
                 });
@@ -216,7 +216,7 @@ impl Inspector {
     }
 
     /// 绘制 the bottom-left 性能 HUD.
-    fn perf_hud(&self, ctx: &Context) {
+    fn perf_hud(&self, ui: &mut Ui) {
         if !self.show_perf {
             return;
         }
@@ -239,7 +239,7 @@ impl Inspector {
             .anchor(egui::Align2::LEFT_BOTTOM, [8.0, -8.0])
             .movable(false)
             .interactable(false)
-            .show(ctx, |ui| {
+            .show(ui.ctx(), |ui| {
                 hint_frame.show(ui, |ui| {
                     ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
                     ui.colored_label(egui::Color32::from_gray(180), perf_text);
@@ -250,7 +250,7 @@ impl Inspector {
     /// Centred "[ No 相机 ]" 叠加 when no usable 相机 实体 存在
     /// Drawn on 顶部 of the gray 回退 background so the user knows the
     /// scene is alive but has no 激活 相机
-    fn no_camera_overlay(&self, ctx: &Context) {
+    fn no_camera_overlay(&self, ui: &mut Ui) {
         if self.has_camera {
             return;
         }
@@ -265,7 +265,7 @@ impl Inspector {
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .movable(false)
             .interactable(false)
-            .show(ctx, |ui| {
+            .show(ui.ctx(), |ui| {
                 label_frame.show(ui, |ui| {
                     ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
                     ui.heading(

@@ -16,6 +16,8 @@
 
 use std::sync::{Arc, Condvar, Mutex};
 
+use jni::jni_sig;
+use jni::jni_str;
 use jni::objects::{JObject, JString, JValue};
 use jni::sys::{jint, JNI_OK};
 use jni::JavaVM;
@@ -38,39 +40,6 @@ pub fn show(title: &str, message: &str) -> CrashChoice {
     // `activity_as_ptr()` and remain 有效 for the 进程 生命周期 We only
     // 触摸 them from the main 线程 which is the 线程 that registered.
     let vm = unsafe { JavaVM::from_raw(handles.vm_ptr as *mut _) };
-    let vm = match vm {
-        Ok(v) => v,
-        Err(e) => {
-            log::warn!("failed to wrap JavaVM: {e}");
-            return CrashChoice::Exit;
-        }
-    };
-
-    let mut env = match vm.attach_current_thread() {
-        Ok(e) => e,
-        Err(e) => {
-            log::warn!("AttachCurrentThread failed: {e}");
-            return CrashChoice::Exit;
-        }
-    };
-
-    let activity = unsafe { JObject::from_raw(handles.activity_ptr as *mut _) };
-
-    // 构建 JNI strings for title / 消息
-    let j_title = match env.new_string(title) {
-        Ok(s) => s,
-        Err(e) => {
-            log::warn!("new_string(title) failed: {e}");
-            return CrashChoice::Exit;
-        }
-    };
-    let j_message = match env.new_string(message) {
-        Ok(s) => s,
-        Err(e) => {
-            log::warn!("new_string(message) failed: {e}");
-            return CrashChoice::Exit;
-        }
-    };
 
     // 同步 块 this 线程 until the dialog's OK 按钮 fires.
     let done: Arc<(Mutex<bool>, Condvar)> = Arc::new((Mutex::new(false), Condvar::new()));
@@ -89,15 +58,23 @@ pub fn show(title: &str, message: &str) -> CrashChoice {
     // We catch any 异常 and fall 后 to plain exit.
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        show_alert_dialog(&mut env, &activity, &j_title, &j_message, &done_clone)
+        vm.attach_current_thread(|env| {
+            let activity = unsafe { JObject::from_raw(env, handles.activity_ptr as *mut _) };
+            let j_title = env.new_string(title)?;
+            let j_message = env.new_string(message)?;
+            show_alert_dialog(env, &activity, &j_title, &j_message, &done_clone)
+        })
     }));
     if let Err(p) = result {
         log::warn!("AlertDialog JNI panic: {p:?}");
         return CrashChoice::Exit;
     }
-    if let Err(e) = result.unwrap() {
-        log::warn!("AlertDialog JNI failed: {e}");
-        return CrashChoice::Exit;
+    match result.unwrap() {
+        Ok(()) => {}
+        Err(e) => {
+            log::warn!("AlertDialog JNI failed: {e}");
+            return CrashChoice::Exit;
+        }
     }
 
     // 块 until the OK 按钮 回调 sets `done`.
@@ -114,14 +91,12 @@ pub fn show(title: &str, message: &str) -> CrashChoice {
 /// we 调用 后 into Rust through a registered native 方法 that signals
 /// `done`.
 fn show_alert_dialog(
-    env: &mut jni::AttachGuard<'_>,
+    env: &mut jni::Env<'_>,
     activity: &JObject,
     title: &JString,
     message: &JString,
     done: &Arc<(Mutex<bool>, Condvar)>,
 ) -> jni::errors::Result<()> {
-    use jni::objects::GlobalRef;
-
     // We need a way for the OK 按钮 点击 to 信号 Rust. The cleanest
     // approach without registering a native 方法 on a Java class is to
     // subclass `OnClickListener` — but JNI can't subclass Java classes
@@ -137,33 +112,33 @@ fn show_alert_dialog(
     // This keeps the 实现 robust on every Android version without
     // fragile reflection.
 
-    let builder_class = env.find_class("android/app/AlertDialog$Builder")?;
+    let builder_class = env.find_class(jni_str!("android/app/AlertDialog$Builder"))?;
     let builder = env.new_object(
         builder_class,
-        "(Landroid/content/Context;)V",
+        jni_sig!("(Landroid/content/Context;)V"),
         &[JValue::Object(activity)],
     )?;
 
     // setTitle(title)
     env.call_method(
         &builder,
-        "setTitle",
-        "(Ljava/lang/CharSequence;)Landroid/app/AlertDialog$Builder;",
+        jni_str!("setTitle"),
+        jni_sig!("(Ljava/lang/CharSequence;)Landroid/app/AlertDialog$Builder;"),
         &[JValue::Object(title)],
     )?;
     // setMessage(message)
     env.call_method(
         &builder,
-        "setMessage",
-        "(Ljava/lang/CharSequence;)Landroid/app/AlertDialog$Builder;",
+        jni_str!("setMessage"),
+        jni_sig!("(Ljava/lang/CharSequence;)Landroid/app/AlertDialog$Builder;"),
         &[JValue::Object(message)],
     )?;
     // setCancelable(false)
     env.call_method(
         &builder,
-        "setCancelable",
-        "(Z)Landroid/app/AlertDialog$Builder;",
-        &[JValue::Bool(0)],
+        jni_str!("setCancelable"),
+        jni_sig!("(Z)Landroid/app/AlertDialog$Builder;"),
+        &[JValue::Bool(false)],
     )?;
 
     // 构建 a 正 ("OK") 按钮 We pass a null 监听器 — tapping the
@@ -173,21 +148,25 @@ fn show_alert_dialog(
     let ok_label = env.new_string("OK")?;
     env.call_method(
         &builder,
-        "setPositiveButton",
-        "(Ljava/lang/CharSequence;Landroid/content/DialogInterface$OnClickListener;)\
-         Landroid/app/AlertDialog$Builder;",
+        jni_str!("setPositiveButton"),
+        jni_sig!("(Ljava/lang/CharSequence;Landroid/content/DialogInterface$OnClickListener;)Landroid/app/AlertDialog$Builder;"),
         &[JValue::Object(&ok_label), JValue::Object(&null_listener)],
     )?;
 
     // 创建 -> AlertDialog
-    let dialog = env.call_method(&builder, "create", "()Landroid/app/AlertDialog;", &[])?;
+    let dialog = env.call_method(
+        &builder,
+        jni_str!("create"),
+        jni_sig!("()Landroid/app/AlertDialog;"),
+        &[],
+    )?;
     let dialog_obj = dialog.l()?;
 
     // show()
-    env.call_method(&dialog_obj, "show", "()V", &[])?;
+    env.call_method(&dialog_obj, jni_str!("show"), jni_sig!("()V"), &[])?;
 
     // Keep a 全局 ref so the 对话框 isn't GC'd before the user dismisses it.
-    let _global: GlobalRef = env.new_global_ref(&dialog_obj)?;
+    let _global = env.new_global_ref(dialog_obj)?;
 
     // 信号 `done` immediately: the user will tap OK and the Activity will
     // be finished by the 调用者 (event_loop.exit() + 进程 termination).

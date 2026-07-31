@@ -8,7 +8,6 @@ description = "Platform abstraction — window system, Vulkan surface, input rou
 [dependencies]
 prism-engine = { path = "../prism-engine" }
 prism-render = { path = "../prism-render" }
-glam.workspace = true
 
 winit = { workspace = true }
 ash-window = { workspace = true }

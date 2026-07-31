@@ -207,8 +207,9 @@ mod tests {
     #[test]
     fn roundtrip_bincode() {
         let id = AssetId::generate();
-        let bytes = bincode::serialize(&id).unwrap();
-        let back: AssetId = bincode::deserialize(&bytes).unwrap();
+        let bytes = bincode::serde::encode_to_vec(id, bincode::config::standard()).unwrap();
+        let (back, _): (AssetId, usize) =
+            bincode::serde::decode_from_slice(&bytes, bincode::config::standard()).unwrap();
         assert_eq!(id, back);
     }
 

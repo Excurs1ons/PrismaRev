@@ -16,7 +16,7 @@
 //!
 //! 检查器 crate::Inspector
 
-use egui::{Color32, Context, FontId, Painter, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, Vec2};
+use egui::{Color32, FontId, Painter, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, Vec2};
 use prism_render::gtao::GtaoPass;
 use prism_render::passes::{ScenePass, ShadowMapPass};
 use prism_render::post::PostPass;
@@ -136,7 +136,7 @@ impl RenderGraphViz {
     /// The actual egui 布局 `pub` so the host (`App::render_one_frame`) can
     /// 调用 it directly when co-hosting with the 检查器 inside a single
     /// `run_ui` 闭包
-    pub fn ui(&self, ctx: &Context) {
+    pub fn ui(&self, ui: &mut Ui) {
         // Semi-transparent dark 帧 shared with the 检查器 so both panels
         // 读取 as the same 叠加 family.
         let window_frame = egui::Frame {
@@ -155,7 +155,7 @@ impl RenderGraphViz {
             .movable(true)
             .collapsible(true)
             .frame(window_frame)
-            .show(ctx, |ui| {
+            .show(ui.ctx(), |ui| {
                 if self.snapshot.is_none() {
                     ui.label(
                         egui::RichText::new("No graph snapshot yet (refresh next frame).")

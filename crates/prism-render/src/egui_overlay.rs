@@ -47,7 +47,7 @@ unsafe impl Sync for EguiFrame {}
 /// No winit 状态 no egui context — those live in [`EguiCpu`] on the main
 /// 线程 Created lazily inside [`GraphRenderer`] on the 渲染 线程
 pub struct EguiGpu {
-    renderer: Option<egui_ash_renderer::Renderer>,
+    renderer: Option<egui_ash_renderer::Renderer<egui_ash_renderer::allocator::DefaultAllocator>>,
     render_pass: vk::RenderPass,
     /// One 帧缓冲 per 交换链 图像 rebuilt when views change.
     framebuffers: Vec<Option<vk::Framebuffer>>,
@@ -82,7 +82,7 @@ impl EguiGpu {
             &context.instance,
             context.physical_device,
             device.clone(),
-            render_pass,
+            egui_ash_renderer::RenderMode::RenderPass(render_pass),
             options,
         )
         .map_err(|e| anyhow::anyhow!("egui-ash-renderer init: {e:?}"))?;

@@ -11,10 +11,6 @@ prism-render = { path = "../prism-render" }
 glam.workspace = true
 prism-asset = { path = "../prism-asset", features = ["core"] }
 egui = { workspace = true }
-winit = { workspace = true }
-log = { workspace = true }
 anyhow = { workspace = true }
 ash = { workspace = true }
-clap = { workspace = true }
-serde = { version = "1", features = ["derive"] }
 inventory = "0.3"

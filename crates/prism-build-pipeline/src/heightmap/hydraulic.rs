@@ -9,7 +9,7 @@
 //! - 海平面以下侵蚀倍率 `sea_erosion_factor`
 
 use super::{ErosionParams, Heightmap, Particle};
-use rand::Rng;
+use rand::RngExt;
 use rayon::prelude::*;
 use std::f64;
 
@@ -79,13 +79,13 @@ pub fn hydraulic_erosion(hm: &mut Heightmap, params: &ErosionParams) {
 
 /// 随机生成粒子。
 fn spawn_particles(count: usize, w: usize, h: usize) -> Vec<Particle> {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let mut particles = Vec::with_capacity(count);
     for _ in 0..count {
-        let x = rng.gen::<f64>() * (w - 1) as f64;
-        let y = rng.gen::<f64>() * (h - 1) as f64;
+        let x = rng.random::<f64>() * (w - 1) as f64;
+        let y = rng.random::<f64>() * (h - 1) as f64;
         // 初始水量小幅随机，让粒子有差异
-        let water = 0.8 + rng.gen::<f64>() * 0.4;
+        let water = 0.8 + rng.random::<f64>() * 0.4;
         let mut p = Particle::new(x, y);
         p.water = water;
         particles.push(p);
@@ -129,7 +129,7 @@ fn process_particle(
             (dir_x / len, dir_y / len)
         } else {
             // 梯度为零时随机漫步
-            let angle = rand::thread_rng().gen::<f64>() * 2.0 * f64::consts::PI;
+            let angle = rand::rng().random::<f64>() * 2.0 * f64::consts::PI;
             (angle.cos(), angle.sin())
         };
 
@@ -162,18 +162,8 @@ fn process_particle(
             // 沉积
             let deposit = (p.sediment - capacity) * deposition_rate;
             p.sediment -= deposit;
-            // 在当前像元沉积
-            let px = p.x as usize;
-            let py = p.y as usize;
-            if py < h && px < w {
-                buf[py * w + px] += deposit;
-            }
-            // 沉积也加一点到新位置
-            let nx = new_x as usize;
-            let ny = new_y as usize;
-            if ny < h && nx < w {
-                buf[ny * w + nx] += deposit * 0.5;
-            }
+            // 在当前像元区域沉积（带权重扩散，避免椒盐噪点）
+            scatter(buf, p.x, p.y, deposit, w, h);
         } else {
             // 侵蚀
             let mut erode_amount = (capacity - p.sediment) * erosion_rate;
@@ -186,11 +176,7 @@ fn process_particle(
             }
 
             p.sediment += erode_amount;
-            let px = p.x as usize;
-            let py = p.y as usize;
-            if py < h && px < w {
-                buf[py * w + px] -= erode_amount;
-            }
+            scatter(buf, p.x, p.y, -erode_amount, w, h);
         }
 
         // 7. 更新水量与位置
@@ -200,6 +186,32 @@ fn process_particle(
 
         if p.water < 0.001 {
             break;
+        }
+    }
+}
+
+/// 把 `amount` 按距离权重扩散到 `(x, y)` 周围 3×3 邻域。
+///
+/// 中心权重最大，四邻次之，四角最小；逐像元直接读写会产生椒盐噪点，
+/// 扩散写让侵蚀/沉积作用在连续区域，保留大尺度形态。
+fn scatter(buf: &mut [f64], x: f64, y: f64, amount: f64, w: usize, h: usize) {
+    let cx = x as usize;
+    let cy = y as usize;
+    // 3×3 内核：中心 4/9、四邻 1/9、四角 1/18（近似高斯）
+    let weights = [
+        (cx.wrapping_sub(1), cy.wrapping_sub(1), 1.0 / 18.0),
+        (cx, cy.wrapping_sub(1), 1.0 / 9.0),
+        (cx + 1, cy.wrapping_sub(1), 1.0 / 18.0),
+        (cx.wrapping_sub(1), cy, 1.0 / 9.0),
+        (cx, cy, 4.0 / 9.0),
+        (cx + 1, cy, 1.0 / 9.0),
+        (cx.wrapping_sub(1), cy + 1, 1.0 / 18.0),
+        (cx, cy + 1, 1.0 / 9.0),
+        (cx + 1, cy + 1, 1.0 / 18.0),
+    ];
+    for (px, py, weight) in weights {
+        if px < w && py < h {
+            buf[py * w + px] += amount * weight;
         }
     }
 }

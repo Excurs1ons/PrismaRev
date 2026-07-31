@@ -403,10 +403,10 @@ impl App {
             let eng = self.engine.as_mut().expect("engine alive");
             (eng.world_mut(), &mut self.editor)
         };
-        let frame = self.egui_cpu.run_ui(window, |egui_ctx| {
-            editor.run_ctx(egui_ctx, world);
+        let frame = self.egui_cpu.run_ui(window, |ui| {
+            editor.run_ctx(ui, world);
             if self.render_graph_viz.show {
-                self.render_graph_viz.ui(egui_ctx);
+                self.render_graph_viz.ui(ui);
             }
         });
 

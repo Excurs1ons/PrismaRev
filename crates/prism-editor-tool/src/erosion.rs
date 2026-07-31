@@ -6,7 +6,7 @@
 
 use crate::heightmap::Heightmap;
 use rand::rngs::SmallRng;
-use rand::{Rng, SeedableRng};
+use rand::{Rng, RngExt, SeedableRng};
 use rayon::prelude::*;
 
 /// Trait for erosion kernels — allows future GPU compute backends.
@@ -160,17 +160,19 @@ impl ErosionKernel for HydraulicErosion {
             // Each particle is independent, so we can parallelize.
             let mut particles: Vec<Particle> = (0..self.particle_count)
                 .into_par_iter()
-                .map_init(SmallRng::from_entropy, |rng, _| {
-                    Particle::new(rng, w, h, self.rain_amount)
-                })
+                .map_init(
+                    || SmallRng::from_rng(&mut rand::rng()),
+                    |rng, _| Particle::new(rng, w, h, self.rain_amount),
+                )
                 .collect();
 
             // Process each particle's path.
             let particle_results: Vec<ParticleResult> = particles
                 .par_iter_mut()
-                .map_init(SmallRng::from_entropy, |rng, particle| {
-                    self.simulate_particle(rng, &hm.data, w, h, particle)
-                })
+                .map_init(
+                    || SmallRng::from_rng(&mut rand::rng()),
+                    |rng, particle| self.simulate_particle(rng, &hm.data, w, h, particle),
+                )
                 .collect();
 
             // Apply erosion/deposition to heightmap.
@@ -238,8 +240,8 @@ struct ParticleResult {
 impl Particle {
     fn new(rng: &mut impl Rng, w: i32, h: i32, rain: f64) -> Self {
         Self {
-            x: rng.gen::<f64>() * (w - 1) as f64,
-            y: rng.gen::<f64>() * (h - 1) as f64,
+            x: rng.random::<f64>() * (w - 1) as f64,
+            y: rng.random::<f64>() * (h - 1) as f64,
             water: rain,
             sediment: 0.0,
             speed: 0.0,
@@ -364,8 +366,8 @@ impl HydraulicErosion {
                 particle.speed = speed;
             } else {
                 // Stuck: random perturbation.
-                particle.vx += (rng.gen::<f64>() - 0.5) * 0.1;
-                particle.vy += (rng.gen::<f64>() - 0.5) * 0.1;
+                particle.vx += (rng.random::<f64>() - 0.5) * 0.1;
+                particle.vy += (rng.random::<f64>() - 0.5) * 0.1;
             }
         }
 

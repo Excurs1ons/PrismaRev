@@ -283,7 +283,7 @@ impl Editor {
     /// Run the 检查器 UI with a bare egui context and a mutable 世界
     /// The host calls this from inside its own `egui::Context::run` 闭包
     /// (which is now managed by `EguiCpu` on the main 线程
-    pub fn run_ctx(&mut self, ctx: &egui::Context, world: &mut World) {
+    pub fn run_ctx(&mut self, ui: &mut egui::Ui, world: &mut World) {
         // --- 资源 检查器 (shows 当前 inspected_asset if 集合 ---
         if let Some(asset) = &mut self.inspected_asset {
             let window_frame = egui::Frame {
@@ -301,13 +301,13 @@ impl Editor {
                 .movable(true)
                 .collapsible(true)
                 .frame(window_frame)
-                .show(ctx, |ui| {
+                .show(ui.ctx(), |ui| {
                     crate::asset_inspector::inspect_asset(asset, ui);
                 });
         }
 
         self.inspector.ui(
-            ctx,
+            ui,
             world,
             &self.registry,
             &mut self.ctx,
