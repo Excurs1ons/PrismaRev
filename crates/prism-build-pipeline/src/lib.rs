@@ -9,4 +9,4 @@ mod heightmap;
 
 pub use bake_gi::bake_gi;
 pub use bake_gi::BakeGiConfig;
-pub use heightmap::{Heightmap, ErosionParams, generate_eroded_heightmap};
+pub use heightmap::{generate_eroded_heightmap, ErosionParams, Heightmap};

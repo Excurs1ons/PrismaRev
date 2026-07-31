@@ -54,6 +54,7 @@ pub struct RenderShared {
     pub pt_reset_requested: AtomicBool,
     /// Pending GPU upload tasks (main 线程 → 渲染 线程
     /// The 渲染 线程 drains this at the start of each 帧
+    #[allow(dead_code)] // 骨架：GPU 上传队列尚未被渲染线程消费
     pub gpu_uploads: Mutex<Vec<super::io_runner::GpuUploadTask>>,
 }
 

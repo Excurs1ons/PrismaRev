@@ -130,8 +130,8 @@ impl SceneCooker {
         }
 
         // 追加 any disconnected / cycle-participant entities not yet visited.
-        for i in 0..n {
-            if !visited[i] {
+        for (i, v) in visited.iter().enumerate() {
+            if !v {
                 order.push(i);
             }
         }
@@ -341,7 +341,7 @@ pub fn parse_rscn_header(data: &[u8]) -> Option<RscnHeader> {
         return None;
     }
     let version = data[4];
-    if version < 1 || version > RSCN_VERSION {
+    if !(1..=RSCN_VERSION).contains(&version) {
         return None;
     }
     let entity_count = u32::from_le_bytes(data[5..9].try_into().ok()?);
@@ -396,7 +396,7 @@ mod tests {
             AssetType::Scene,
             "scene-importer",
         );
-        let settings = crate::profile::CookSettings::default();
+        let settings = crate::cooker::profile::CookSettings::default();
         let ctx = CookContext {
             record: &record,
             imported_data: json,

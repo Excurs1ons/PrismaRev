@@ -121,20 +121,15 @@ impl Slot {
 // ---------------------------------------------------------------------------
 
 /// The eviction 策略 when 内存 budget is exceeded.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum EvictionPolicy {
     /// No automatic eviction 调用者 must manage manually).
     None,
     /// Evict least-recently-accessed assets 第一个
+    #[default]
     Lru,
     /// Evict oldest-loaded assets 第一个
     Fifo,
-}
-
-impl Default for EvictionPolicy {
-    fn default() -> Self {
-        Self::Lru
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -203,12 +198,13 @@ impl MemoryTracker {
 /// ## Phase 3 features
 ///
 /// - **Memory budget**: 调用 [`set_memory_budget()`](ResourceManager::set_memory_budget)
-/// to cap 总计 loaded 字节 LRU or FIFO eviction.
+///   to cap 总计 loaded 字节 LRU or FIFO eviction.
 /// - **Hot reload**: enable with 特性 `hot-reload`, use
 ///   [`HotReloadWatcher`] to watch `.pak` files.
 /// - **Streaming**: 调用 [`read_stream()`](ResourceManager::read_stream) to
 ///   iterate over an asset's data in fixed-size chunks (zero-copy within a
-/// loaded 包
+///   loaded 包).
+///
 pub struct ResourceManager {
     /// 槽 数组 indexed by handle 索引
     slots: Vec<Slot>,
@@ -447,7 +443,7 @@ impl ResourceManager {
                 asset_id,
                 asset_type: AssetType::from_u32(record.type_id),
                 data: None,
-                handle: AnyHandle::from_raw((0u64 << 32) | index as u64),
+                handle: AnyHandle::from_raw(index as u64),
                 last_access: Instant::now(),
                 size_bytes: record.size, // track uncompressed size
             };
@@ -1341,9 +1337,7 @@ mod tests {
         for s in scalars {
             buf.extend_from_slice(&s.to_le_bytes());
         }
-        for _ in 0..5 {
-            buf.push(0); // absent
-        }
+        buf.extend(std::iter::repeat_n(0, 5)); // absent
 
         let asset = MaterialAsset::from_bytes(&buf).unwrap();
         assert_eq!(asset.scalars(), &scalars);

@@ -136,9 +136,7 @@ fn create_minimal_glb_bytes() -> Vec<u8> {
     glb.extend_from_slice(&((json_bytes.len() + json_padding) as u32).to_le_bytes());
     glb.extend_from_slice(b"JSON");
     glb.extend_from_slice(json_bytes);
-    for _ in 0..json_padding {
-        glb.push(0x20);
-    }
+    glb.extend_from_slice(&vec![0x20; json_padding]);
 
     glb.extend_from_slice(&((bin_data_size + bin_padding) as u32).to_le_bytes());
     glb.extend_from_slice(b"BIN\0");
@@ -148,15 +146,13 @@ fn create_minimal_glb_bytes() -> Vec<u8> {
     for &i in indices {
         glb.extend_from_slice(&i.to_le_bytes());
     }
-    for _ in 0..bin_padding {
-        glb.push(0x00);
-    }
+    glb.extend_from_slice(&vec![0x00; bin_padding]);
 
     glb
 }
 
 /// 查找 an 资源 record whose stored path 包含 the given suffix.
-fn find_id_by_suffix<'a>(db: &'a AssetDatabase, suffix: &str) -> Option<AssetId> {
+fn find_id_by_suffix(db: &AssetDatabase, suffix: &str) -> Option<AssetId> {
     db.records().find_map(|r| {
         if r.path.ends_with(suffix) {
             Some(r.id)
@@ -182,7 +178,13 @@ const SPONZA_TEXTURE: &str = "textures/metal_door_01_BaseColor.png";
 // E2E Test: 完整 管线 with real Sponza 纹理
 // ---------------------------------------------------------------------------
 
+/// E2E Test: 完整 管线 with real Sponza 纹理
+///
+/// **需要外部数据**：Sponza 场景需按 `assets/scenes.toml` 下载，
+/// 且纹理路径指向 [`SPONZA_DIR`]。默认 `#[ignore]`——运行前请先
+/// 下载场景，然后用 `cargo test -p prism-asset --test e2e -- --ignored e2e_full_pipeline` 手动执行。
 #[test]
+#[ignore = "requires downloaded Sponza scene (see SPONZA_DIR)"]
 fn e2e_full_pipeline() {
     // ======================================================================
     // 1. SETUP: 创建 project with real + generated assets
@@ -266,7 +268,7 @@ fn e2e_full_pipeline() {
 
     // Assert database has 3 records.
     assert_eq!(db.len(), 3, "database should have 3 records after import");
-    assert!(cache.len() > 0, "import cache should have entries");
+    assert!(!cache.is_empty(), "import cache should have entries");
 
     // 验证 each record has the correct 资源 类型 and importer.
     for record in db.records() {

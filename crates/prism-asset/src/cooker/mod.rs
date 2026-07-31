@@ -503,7 +503,7 @@ impl MeshCooker {
         let has_normals = intermediate.len() >= expected_with_normals;
 
         let nrm_floats: u32 = if has_normals { 3 } else { 0 };
-        let stride = (3 + nrm_floats + uv_channels * 2) as u32; // floats per vertex
+        let stride = 3 + nrm_floats + uv_channels * 2; // floats per vertex
         let vert_data_size = vert_count as usize * stride as usize * 4;
         let header_size = 33usize;
 
@@ -523,12 +523,11 @@ impl MeshCooker {
             0
         };
         let uv0_off = if uv_channels > 0 {
-            let base = if has_normals {
+            if has_normals {
                 nrm_off + vert_count * 3 * 4
             } else {
                 pos_off + vert_count * 3 * 4
-            };
-            base
+            }
         } else {
             0
         };
@@ -642,7 +641,9 @@ pub fn decode_rmes(data: &[u8]) -> Option<RmesInfo> {
 /// the raw vertex-data and index-data slices.
 ///
 /// Returns `(vert_count, idx_count, uv_channels, vertex_bytes, index_bytes)`.
-pub fn parse_rmxi_info(data: &[u8]) -> Option<(u32, u32, u32, Vec<u8>, Vec<u8>)> {
+pub type RmxiInfo = (u32, u32, u32, Vec<u8>, Vec<u8>);
+
+pub fn parse_rmxi_info(data: &[u8]) -> Option<RmxiInfo> {
     if data.len() < 17 || &data[..4] != RMXI_MAGIC {
         return None;
     }
@@ -720,9 +721,9 @@ impl MaterialCooker {
         }
         let _version = data[MAGIC_LEN];
         let mut scalars = [0f32; MATERIAL_SCALAR_COUNT];
-        for i in 0..MATERIAL_SCALAR_COUNT {
+        for (i, scalar) in scalars.iter_mut().enumerate() {
             let off = MAGIC_LEN + 1 + i * 4;
-            scalars[i] = f32::from_le_bytes(data[off..off + 4].try_into().ok()?);
+            *scalar = f32::from_le_bytes(data[off..off + 4].try_into().ok()?);
         }
 
         let mut tex_paths: [Option<String>; 5] = [None, None, None, None, None];
@@ -850,9 +851,9 @@ pub fn decode_rmat(data: &[u8]) -> Option<RmatInfo> {
         return None; // unknown version
     }
     let mut scalars = [0f32; MATERIAL_SCALAR_COUNT];
-    for i in 0..MATERIAL_SCALAR_COUNT {
+    for (i, scalar) in scalars.iter_mut().enumerate() {
         let off = 5 + i * 4;
-        scalars[i] = f32::from_le_bytes(data[off..off + 4].try_into().ok()?);
+        *scalar = f32::from_le_bytes(data[off..off + 4].try_into().ok()?);
     }
 
     let mut texture_ids: [Option<AssetId>; 5] = [None, None, None, None, None];
@@ -1342,8 +1343,7 @@ mod tests {
     fn full_cook_pipeline() {
         let mut db = AssetDatabase::new();
         let id = db.generate_id();
-        let record =
-            crate::db::AssetRecord::new(id, "test.bin".into(), AssetType::Binary, "raw");
+        let record = crate::db::AssetRecord::new(id, "test.bin".into(), AssetType::Binary, "raw");
         db.insert(record).unwrap();
 
         let reg = default_cooker_registry();
@@ -1406,8 +1406,7 @@ mod tests {
     #[test]
     fn texture_cooker_generates_mips() {
         // 4×4 RGBA red 图像
-        let pixels = std::iter::repeat([255u8, 0, 0, 255])
-            .take(4 * 4)
+        let pixels = std::iter::repeat_n([255u8, 0, 0, 255], 4 * 4)
             .flatten()
             .collect::<Vec<_>>();
         let intermediate = make_texture_intermediate(4, 4, &pixels);
@@ -1541,12 +1540,8 @@ mod tests {
         let settings = profile::CookSettings::default();
 
         let id = AssetId::from_raw((1u64 << 32) | 200);
-        let record = crate::db::AssetRecord::new(
-            id,
-            "mesh.gltf".into(),
-            AssetType::Mesh,
-            "gltf-importer",
-        );
+        let record =
+            crate::db::AssetRecord::new(id, "mesh.gltf".into(), AssetType::Mesh, "gltf-importer");
         let ctx = CookContext {
             record: &record,
             imported_data: &intermediate,
@@ -1581,12 +1576,8 @@ mod tests {
         let cooker = MeshCooker;
         let settings = profile::CookSettings::default();
         let id = AssetId::from_raw((1u64 << 32) | 200);
-        let record = crate::db::AssetRecord::new(
-            id,
-            "mesh.gltf".into(),
-            AssetType::Mesh,
-            "gltf-importer",
-        );
+        let record =
+            crate::db::AssetRecord::new(id, "mesh.gltf".into(), AssetType::Mesh, "gltf-importer");
         let ctx = CookContext {
             record: &record,
             imported_data: b"garbage",
@@ -1601,12 +1592,8 @@ mod tests {
         let intermediate = make_mesh_intermediate(0, 0, 0);
         let settings = profile::CookSettings::default();
         let id = AssetId::from_raw((1u64 << 32) | 200);
-        let record = crate::db::AssetRecord::new(
-            id,
-            "mesh.gltf".into(),
-            AssetType::Mesh,
-            "gltf-importer",
-        );
+        let record =
+            crate::db::AssetRecord::new(id, "mesh.gltf".into(), AssetType::Mesh, "gltf-importer");
         let ctx = CookContext {
             record: &record,
             imported_data: &intermediate,
@@ -1644,8 +1631,7 @@ mod tests {
         let cooker = BinaryCooker;
         let settings = profile::CookSettings::default();
         let id = AssetId::from_raw((1u64 << 32) | 1);
-        let record =
-            crate::db::AssetRecord::new(id, "data.bin".into(), AssetType::Binary, "raw");
+        let record = crate::db::AssetRecord::new(id, "data.bin".into(), AssetType::Binary, "raw");
         let ctx = CookContext {
             record: &record,
             imported_data: input,
@@ -1770,12 +1756,8 @@ mod tests {
         let cooker = MeshCooker;
         let settings = profile::CookSettings::default();
         let id = AssetId::from_raw((1u64 << 32) | 200);
-        let record = crate::db::AssetRecord::new(
-            id,
-            "mesh.gltf".into(),
-            AssetType::Mesh,
-            "gltf-importer",
-        );
+        let record =
+            crate::db::AssetRecord::new(id, "mesh.gltf".into(), AssetType::Mesh, "gltf-importer");
         let ctx = CookContext {
             record: &record,
             imported_data: pw,
@@ -1817,8 +1799,7 @@ mod tests {
     #[test]
     fn decode_rtex_handles_known_asset() {
         // Use the same 模式 as texture_cooker_generates_mips test.
-        let pixels = std::iter::repeat([255u8, 0, 0, 255])
-            .take(4 * 4)
+        let pixels = std::iter::repeat_n([255u8, 0, 0, 255], 4 * 4)
             .flatten()
             .collect::<Vec<_>>();
         let intermediate = make_texture_intermediate(4, 4, &pixels);

@@ -10,11 +10,11 @@
 //! let result = generate_eroded_heightmap(hm, &params);
 //! ```
 
-mod thermal;
 mod hydraulic;
+mod thermal;
 
-pub use thermal::thermal_erosion;
 pub use hydraulic::hydraulic_erosion;
+pub use thermal::thermal_erosion;
 
 use std::f64;
 
@@ -39,12 +39,20 @@ pub struct Heightmap {
 impl Heightmap {
     /// 从 `Vec<f64>` 创建，自动计算 min/max。
     pub fn new(width: usize, height: usize, data: Vec<f64>) -> Self {
-        assert_eq!(data.len(), width * height, "data length must match width × height");
+        assert_eq!(
+            data.len(),
+            width * height,
+            "data length must match width × height"
+        );
         let mut min_h = f64::MAX;
         let mut max_h = f64::MIN;
         for &v in &data {
-            if v < min_h { min_h = v; }
-            if v > max_h { max_h = v; }
+            if v < min_h {
+                min_h = v;
+            }
+            if v > max_h {
+                max_h = v;
+            }
         }
         Self {
             width,
@@ -67,8 +75,12 @@ impl Heightmap {
     pub fn set(&mut self, x: usize, y: usize, value: f64) {
         let idx = y * self.width + x;
         self.data[idx] = value;
-        if value < self.min_height { self.min_height = value; }
-        if value > self.max_height { self.max_height = value; }
+        if value < self.min_height {
+            self.min_height = value;
+        }
+        if value > self.max_height {
+            self.max_height = value;
+        }
     }
 
     /// 双线性插值采样（支持浮点坐标）。
@@ -98,7 +110,9 @@ impl Heightmap {
     /// 转换为相对高度：所有值减去 `min_height`，使最小值变为 0。
     pub fn to_relative(&mut self) {
         let min = self.min_height;
-        if min == 0.0 { return; }
+        if min == 0.0 {
+            return;
+        }
         for v in self.data.iter_mut() {
             *v -= min;
         }
@@ -108,7 +122,9 @@ impl Heightmap {
 
     /// 恢复绝对高度：所有值加上保存的最小值。
     pub fn from_relative(&mut self, saved_min: f64) {
-        if saved_min == 0.0 { return; }
+        if saved_min == 0.0 {
+            return;
+        }
         for v in self.data.iter_mut() {
             *v += saved_min;
         }
@@ -119,7 +135,9 @@ impl Heightmap {
     /// 无量纲化：缩放到 [0, 1] 范围。
     pub fn normalize(&mut self) {
         let range = self.max_height - self.min_height;
-        if range <= 0.0 { return; }
+        if range <= 0.0 {
+            return;
+        }
         for v in self.data.iter_mut() {
             *v = (*v - self.min_height) / range;
         }
@@ -228,7 +246,8 @@ pub(crate) struct Particle {
 impl Particle {
     pub fn new(x: f64, y: f64) -> Self {
         Self {
-            x, y,
+            x,
+            y,
             velocity_x: 0.0,
             velocity_y: 0.0,
             water: 1.0,
@@ -337,9 +356,9 @@ mod tests {
         let data = vec![0.0, 50.0, 100.0, 200.0];
         let mut hm = Heightmap::new(2, 2, data);
         hm.normalize();
-        assert!((hm.get(3) - 1.0).abs() < 1e-10);
+        assert!((hm.get(1, 1) - 1.0).abs() < 1e-10);
         hm.denormalize(-1000.0, 9000.0);
-        assert!((hm.get(0) - (-1000.0)).abs() < 1e-10);
-        assert!((hm.get(3) - 9000.0).abs() < 1e-10);
+        assert!((hm.get(0, 0) - (-1000.0)).abs() < 1e-10);
+        assert!((hm.get(1, 1) - 9000.0).abs() < 1e-10);
     }
 }

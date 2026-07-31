@@ -3,6 +3,13 @@
 //! 主线程通过 `flume` 通道发送 [`IoRequest`] 并接收 [`IoResult`]。
 //!
 //! GPU 上传任务通过 [`RenderShared::gpu_uploads`] 单独发送。
+//!
+//! # 状态：骨架（半接线）
+//!
+//! 消息类型完整，`io_thread_main` 已被 `App::start_io_thread` 启动，
+//! 但资源加载系统尚未调用，多数变体暂未构造。保留以抑制 dead_code 警告。
+
+#![allow(dead_code)]
 
 use flume::{Receiver, Sender};
 

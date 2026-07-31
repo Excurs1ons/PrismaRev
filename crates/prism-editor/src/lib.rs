@@ -366,7 +366,9 @@ mod tests {
     /// Two trivial 分量 types used only by these tests. Implementing
     /// `Inspect` is enough to make them registerable; the UI body is unused
     /// (we never 调用 `inspect_ui` here).
+    #[allow(dead_code)]
     struct Foo(u32);
+    #[allow(dead_code)]
     struct Bar(String);
     impl Inspect for Foo {
         fn inspect_ui(&mut self, _ui: &mut Ui, _ctx: &mut InspectCtx) {}

@@ -33,7 +33,8 @@ frame_*.ppm
 tools/slang/
 
 # Precomputed IBL convolution cache (auto-generated; see docs/lessons-learned.md §32)
-assets/ibr/
+# `**/` prefix so it matches at any depth (e.g. crates/prism-render/assets/ibr/)
+**/assets/ibr/
 
 # Scene model assets (large; referenced via assets/scenes.toml virtual mapping,
 # not committed). The manifest file assets/scenes.toml itself stays tracked.

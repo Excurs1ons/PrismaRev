@@ -100,7 +100,7 @@ impl ErosionKernel for ThermalErosion {
             // More accurate: second pass that adds received material.
             // For simplicity, we lerp between src and the eroded result.
             for (d, s) in dst.iter_mut().zip(src.iter()) {
-                *d = *s + (*d - *s) as f32;
+                *d = *s + (*d - *s);
             }
 
             std::mem::swap(&mut src, &mut dst);
@@ -160,21 +160,17 @@ impl ErosionKernel for HydraulicErosion {
             // Each particle is independent, so we can parallelize.
             let mut particles: Vec<Particle> = (0..self.particle_count)
                 .into_par_iter()
-                .map_init(
-                    || SmallRng::from_entropy(),
-                    |rng, _| Particle::new(rng, w, h, self.rain_amount),
-                )
+                .map_init(SmallRng::from_entropy, |rng, _| {
+                    Particle::new(rng, w, h, self.rain_amount)
+                })
                 .collect();
 
             // Process each particle's path.
             let particle_results: Vec<ParticleResult> = particles
                 .par_iter_mut()
-                .map_init(
-                    || SmallRng::from_entropy(),
-                    |rng, particle| {
-                        self.simulate_particle(rng, &hm.data, w, h, particle)
-                    },
-                )
+                .map_init(SmallRng::from_entropy, |rng, particle| {
+                    self.simulate_particle(rng, &hm.data, w, h, particle)
+                })
                 .collect();
 
             // Apply erosion/deposition to heightmap.
@@ -196,7 +192,12 @@ impl ErosionKernel for HydraulicErosion {
             }
 
             // Apply erosion + deposition (single-threaded, but just a pass).
-            for ((h_val, &ero), &dep) in hm.data.iter_mut().zip(erosion_map.iter()).zip(deposit_map.iter()) {
+            for ((h_val, &ero), &dep) in hm
+                .data
+                .iter_mut()
+                .zip(erosion_map.iter())
+                .zip(deposit_map.iter())
+            {
                 let change = dep as f32 - ero as f32;
                 *h_val = (*h_val + change).max(0.0);
             }
@@ -265,10 +266,7 @@ impl HydraulicErosion {
         let c = data[(y1 * w + x0) as usize] as f64;
         let d = data[(y1 * w + x1) as usize] as f64;
 
-        a * (1.0 - fx) * (1.0 - fy)
-            + b * fx * (1.0 - fy)
-            + c * (1.0 - fx) * fy
-            + d * fx * fy
+        a * (1.0 - fx) * (1.0 - fy) + b * fx * (1.0 - fy) + c * (1.0 - fx) * fy + d * fx * fy
     }
 
     fn gradient_at(data: &[f32], w: i32, _h: i32, x: f64, y: f64) -> (f64, f64) {
@@ -420,7 +418,7 @@ mod tests {
         thermal.erode(&mut hm, 10);
         assert_eq!(hm.data.len(), 32 * 32);
         for &v in &hm.data {
-            assert!(v >= 0.0 && v <= 1.0);
+            assert!((0.0..=1.0).contains(&v));
         }
     }
 
@@ -445,7 +443,7 @@ mod tests {
         };
         erode_both(&mut hm, &thermal, &hydraulic, 5, 1);
         for &v in &hm.data {
-            assert!(v >= 0.0 && v <= 1.0);
+            assert!((0.0..=1.0).contains(&v));
         }
     }
 }

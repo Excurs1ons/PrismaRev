@@ -2,16 +2,14 @@ name: CI
 
 # Full-coverage build/verify pipeline for PrismaRev:
 #   - fmt + clippy (fast gate)
-#   - desktop Rust build + test (prism-ecs / prism-render / prism-engine)
+#   - desktop Rust build + test (prism-ecs / prism-render / prism-engine / prism-platform)
 #   - xtask build + shader-binding codegen regression (no-drift check)
 #   - Slang shader compile (.slang -> .spv + reflection JSON) via slangc
-#   - Android cdylib cross-compile (prism-app, aarch64-linux-android)
-#   - Android APK assemble (Gradle + cargo-ndk)
 #
 # Design notes:
 #   * prism-app depends on android-activity, which only compiles for the
 #     aarch64-linux-android target — it is EXCLUDED from the desktop job and
-#     built only in the android jobs.
+#     built on-device / via the Tauri launcher instead.
 #   * xtask is a workspace-excluded build tool; it is built/run from its own dir.
 #   * slangc is a glibc binary (no Termux); CI runs it on ubuntu-latest.
 
@@ -62,12 +60,12 @@ jobs:
       - name: clippy (desktop crates)
         run: >
           cargo clippy
-          -p prism-ecs -p prism-render -p prism-engine -p prism-platform -p prisma
+          -p prism-ecs -p prism-render -p prism-engine -p prism-platform
           --lib
 
       # xtask is workspace-excluded, so --all/-p don't reach it. Check it here.
       - name: fmt + clippy (xtask)
-        working-directory: xtask
+        working-directory: crates/xtask
         run: |
           cargo fmt -- --check
           cargo clippy --all-targets
@@ -101,12 +99,12 @@ jobs:
       - name: Build (desktop crates)
         run: >
           cargo build --locked
-          -p prism-ecs -p prism-render -p prism-engine -p prism-platform -p prisma
+          -p prism-ecs -p prism-render -p prism-engine -p prism-platform
 
       - name: Test (desktop crates)
         run: >
           cargo test --locked
-          -p prism-ecs -p prism-render -p prism-engine -p prism-platform -p prisma
+          -p prism-ecs -p prism-render -p prism-engine -p prism-platform
 
   # ---------------------------------------------------------------------------
   # 3. Slang shaders: compile to SPIR-V + reflection, then verify the committed
@@ -148,7 +146,7 @@ jobs:
         run: "$SLANGC -v"
 
       - name: Compile Slang shaders (.spv + reflection JSON)
-        run: bash shaders/compile.sh
+        run: bash assets/shaders/compile.sh
 
       # Always upload the freshly compiled SPIR-V + reflection JSON (survives
       # even if the drift check below fails), so the artifacts can be committed
@@ -159,8 +157,8 @@ jobs:
         with:
           name: spirv
           path: |
-            shaders/*.spv
-            shaders/reflection/*.json
+            assets/shaders/*.spv
+            assets/shaders/reflection/*.json
           if-no-files-found: warn
 
       # Debug artifact: always upload the real slangc-produced reflection JSON
@@ -171,14 +169,14 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: slang-reflection-real
-          path: shaders/reflection/*.json
+          path: assets/shaders/reflection/*.json
           if-no-files-found: warn
 
       - name: Regenerate Rust shader bindings from fresh reflection
         run: |
-          cd xtask
+          cd crates/xtask
           cargo run --locked --bin shader-bindgen -- \
-            ../shaders/reflection ../crates/prism-render/src/shader_bindings.rs
+            ../../assets/shaders/reflection ../../crates/prism-render/src/shader_bindings
 
       - name: Fail if committed bindings / SPIR-V drift from source
         run: |
@@ -187,9 +185,9 @@ jobs:
           # the generated Rust bindings. Any drift means someone edited a
           # shader without recompiling — fail loudly.
           drift=0
-          if ! git diff --quiet -- crates/prism-render/src/shader_bindings.rs; then
-            echo "::error::shader_bindings.rs is out of date. Run shaders/compile.sh + xtask and commit."
-            git diff -- crates/prism-render/src/shader_bindings.rs
+          if ! git diff --quiet -- crates/prism-render/src/shader_bindings/; then
+            echo "::error::shader_bindings/ is out of date. Run assets/shaders/compile.sh + xtask and commit."
+            git diff -- crates/prism-render/src/shader_bindings/
             drift=1
           fi
           if ! git diff --quiet -- 'assets/shaders/*.spv'; then

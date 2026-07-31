@@ -10,9 +10,10 @@
 //! redundantly creating thousands of 相同 samplers.
 //!
 //! Shaders 样本 like:
-//! Slang
+//!
+//! ```slang
 //! Texture2D tex = bindless_srvs[NonUniformResourceIndex(handle.index)];
-//! tex.Sample(global_samplers[sampler_type], uv
+//! tex.Sample(global_samplers[sampler_type], uv);
 //! ```
 //!
 //! ## 无效 handle 回退

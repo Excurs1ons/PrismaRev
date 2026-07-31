@@ -209,8 +209,10 @@ impl RenderPassNode for ShadowMapPass {
 
             // 管线 — may already exist when warmup ran ahead of 时间
             if self.pipeline.is_none() {
-                const VERT_SPV: &[u8] = include_bytes!("../../../assets/shaders/shadow_depth.vert.spv");
-                const FRAG_SPV: &[u8] = include_bytes!("../../../assets/shaders/shadow_depth.frag.spv");
+                const VERT_SPV: &[u8] =
+                    include_bytes!("../../../assets/shaders/shadow_depth.vert.spv");
+                const FRAG_SPV: &[u8] =
+                    include_bytes!("../../../assets/shaders/shadow_depth.frag.spv");
                 let vert_module = shader::load_shader_module(device, VERT_SPV)
                     .context("load shadow vert module")?;
                 let frag_module = shader::load_shader_module(device, FRAG_SPV)

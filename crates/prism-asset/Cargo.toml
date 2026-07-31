@@ -37,7 +37,7 @@ unicode-width = { workspace = true, optional = true }
 xxhash-rust = { version = "0.8", features = ["xxh3"], optional = true }
 
 [features]
-default = ["runtime", "cooker", "package", "db", "importer", "cli", "types"]
+default = ["runtime", "cooker", "package", "db", "importer", "cli", "types", "streaming", "hot-reload"]
 asset-data = ["dep:typetag"]
 core = []
 runtime = ["dep:tokio", "dep:tracing", "core"]
@@ -50,6 +50,7 @@ cli = [
     "dep:clap", "dep:tracing-subscriber", "dep:unicode-width",
 ]
 hot-reload = ["runtime"]
+streaming = ["runtime"]
 types = ["core", "asset-data"]
 
 [dev-dependencies]

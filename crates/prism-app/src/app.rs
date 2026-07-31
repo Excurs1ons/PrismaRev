@@ -100,13 +100,19 @@ pub struct App {
     needs_resize: bool,
 
     // ---------- IO 线程 ----------
+    #[allow(dead_code)] // 骨架：资源加载接入前 io_rx 暂未消费
     io_thread: Option<JoinHandle<()>>,
+    #[allow(dead_code)] // 骨架：start_io_thread 尚未被调用
     io_tx: Option<flume::Sender<crate::io_runner::IoRequest>>,
+    #[allow(dead_code)] // 骨架：资源加载接入前 io_rx 暂未消费
     io_rx: Option<flume::Receiver<crate::io_runner::IoResult>>,
 
     // ---------- 音频解码线程 ----------
+    #[allow(dead_code)] // 骨架：start_audio_decode_thread 尚未被调用
     audio_decode_thread: Option<JoinHandle<()>>,
+    #[allow(dead_code)] // 骨架：start_audio_decode_thread 尚未被调用
     audio_decode_tx: Option<flume::Sender<crate::audio_decode_runner::DecodeRequest>>,
+    #[allow(dead_code)] // 骨架：音频播放接入前 audio_decode_rx 暂未消费
     audio_decode_rx: Option<flume::Receiver<crate::audio_decode_runner::DecodeResult>>,
 
     // ---------- lifecycle ----------
@@ -216,6 +222,7 @@ impl App {
     // IO 线程生命周期
     // -----------------------------------------------------------------------
 
+    #[allow(dead_code)] // 骨架：资源加载系统接入前暂未调用
     fn start_io_thread(&mut self) {
         let (tx, rx) = flume::unbounded();
         let (result_tx, result_rx) = flume::bounded(16);
@@ -243,6 +250,7 @@ impl App {
     // 音频解码线程生命周期
     // -----------------------------------------------------------------------
 
+    #[allow(dead_code)] // 骨架：音频播放系统接入前暂未调用
     fn start_audio_decode_thread(&mut self) {
         let (tx, rx) = flume::unbounded();
         let (result_tx, result_rx) = flume::bounded(8);

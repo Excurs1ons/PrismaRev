@@ -722,8 +722,8 @@ pub fn bake_gi(cfg: &BakeGiConfig) -> Result<()> {
 
     let probe_data = prism_render::probe_loader::ProbeVolumeData {
         scene_name,
-        origin: origin.into(),
-        spacing: spacing.into(),
+        origin,
+        spacing,
         dims: [dims[0], dims[1], dims[2]],
         coeffs: rgb_coeffs,
         global_hit_ratio,

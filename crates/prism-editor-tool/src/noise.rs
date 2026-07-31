@@ -24,7 +24,7 @@ fn hash2(p: [f64; 2]) -> f64 {
 #[allow(dead_code)]
 #[inline]
 fn hash1(n: f64) -> f64 {
-    let x = n * 0.3183099;
+    let x = n * std::f64::consts::FRAC_1_PI;
     (n * 17.0 * x.fract()).fract().abs()
 }
 
@@ -38,10 +38,14 @@ pub fn noised_2d(p: [f64; 2]) -> [f64; 3] {
     let w = [p[0] - i[0], p[1] - i[1]];
 
     // Quintic blend for C2 continuity (IQ's preferred).
-    let u = [w[0] * w[0] * w[0] * (w[0] * (w[0] * 6.0 - 15.0) + 10.0),
-             w[1] * w[1] * w[1] * (w[1] * (w[1] * 6.0 - 15.0) + 10.0)];
-    let du = [30.0 * w[0] * w[0] * (w[0] * (w[0] - 2.0) + 1.0),
-              30.0 * w[1] * w[1] * (w[1] * (w[1] - 2.0) + 1.0)];
+    let u = [
+        w[0] * w[0] * w[0] * (w[0] * (w[0] * 6.0 - 15.0) + 10.0),
+        w[1] * w[1] * w[1] * (w[1] * (w[1] * 6.0 - 15.0) + 10.0),
+    ];
+    let du = [
+        30.0 * w[0] * w[0] * (w[0] * (w[0] - 2.0) + 1.0),
+        30.0 * w[1] * w[1] * (w[1] * (w[1] - 2.0) + 1.0),
+    ];
 
     let a = hash2(i);
     let b = hash2([i[0] + 1.0, i[1]]);
@@ -64,7 +68,10 @@ pub fn noised_2d(p: [f64; 2]) -> [f64; 3] {
 pub fn noise_2d(p: [f64; 2]) -> f64 {
     let i = [p[0].floor(), p[1].floor()];
     let w = [p[0] - i[0], p[1] - i[1]];
-    let u = [w[0] * w[0] * (3.0 - 2.0 * w[0]), w[1] * w[1] * (3.0 - 2.0 * w[1])];
+    let u = [
+        w[0] * w[0] * (3.0 - 2.0 * w[0]),
+        w[1] * w[1] * (3.0 - 2.0 * w[1]),
+    ];
 
     let a = hash2(i);
     let b = hash2([i[0] + 1.0, i[1]]);
@@ -190,8 +197,10 @@ pub fn ridge_noise(p: [f64; 2], octaves: u32, gain: f64, lacunarity: f64) -> f64
 #[allow(dead_code)]
 pub fn domain_repeat(p: [f64; 2], r: f64) -> ([f64; 2], [i64; 2]) {
     let id = [(p[0] / r).floor() as i64, (p[1] / r).floor() as i64];
-    let local = [p[0] - id[0] as f64 * r - r * 0.5,
-                 p[1] - id[1] as f64 * r - r * 0.5];
+    let local = [
+        p[0] - id[0] as f64 * r - r * 0.5,
+        p[1] - id[1] as f64 * r - r * 0.5,
+    ];
     (local, id)
 }
 
@@ -225,16 +234,18 @@ pub fn generate_parallel(
     let aspect = width as f64 / height as f64;
     let mut data = vec![0.0f32; (width * height) as usize];
 
-    data.par_chunks_mut(width as usize).enumerate().for_each(|(y, row)| {
-        for (x, cell) in row.iter_mut().enumerate() {
-            // Normalized UV: [-1, 1] with aspect correction.
-            let uv = [
-                (x as f64 / width as f64) * 2.0 - 1.0 * aspect,
-                (y as f64 / height as f64) * 2.0 - 1.0,
-            ];
-            *cell = f([uv[0] * frequency, uv[1] * frequency]) as f32;
-        }
-    });
+    data.par_chunks_mut(width as usize)
+        .enumerate()
+        .for_each(|(y, row)| {
+            for (x, cell) in row.iter_mut().enumerate() {
+                // Normalized UV: [-1, 1] with aspect correction.
+                let uv = [
+                    (x as f64 / width as f64) * 2.0 - 1.0 * aspect,
+                    (y as f64 / height as f64) * 2.0 - 1.0,
+                ];
+                *cell = f([uv[0] * frequency, uv[1] * frequency]) as f32;
+            }
+        });
 
     data
 }
@@ -249,7 +260,7 @@ mod tests {
         for x in 0..10 {
             for y in 0..10 {
                 let v = noise_2d([x as f64 * 0.3, y as f64 * 0.3]);
-                assert!(v >= -1.0 && v <= 1.0, "noise out of range: {v}");
+                assert!((-1.0..=1.0).contains(&v), "noise out of range: {v}");
             }
         }
     }
@@ -257,7 +268,7 @@ mod tests {
     #[test]
     fn test_fbm_range() {
         let v = fbm_2d([1.5, 2.7], 4, 0.5, 2.0);
-        assert!(v >= -2.0 && v <= 2.0);
+        assert!((-2.0..=2.0).contains(&v));
     }
 
     #[test]
@@ -276,7 +287,7 @@ mod tests {
 
     #[test]
     fn test_noised_derivative_finite() {
-        let n = noised_2d([3.14, 2.71]);
+        let n = noised_2d([std::f64::consts::PI, 2.71]);
         assert!(n[1].is_finite());
         assert!(n[2].is_finite());
     }

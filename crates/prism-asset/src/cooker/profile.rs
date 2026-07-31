@@ -46,9 +46,11 @@ pub enum ProfileError {
 /// 纹理 压缩 格式
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+#[derive(Default)]
 pub enum TextureCompression {
     None,
     /// Uncompressed RGBA8 默认
+    #[default]
     Rgba8,
     /// BC1-5 (DXT1/3/5) — desktop D3D.
     Bc1,
@@ -64,12 +66,6 @@ pub enum TextureCompression {
     Astc12x12,
     /// ETC2 — Android 回退
     Etc2Rgba,
-}
-
-impl Default for TextureCompression {
-    fn default() -> Self {
-        Self::Rgba8
-    }
 }
 
 /// 目标 platform identifier.
@@ -94,7 +90,7 @@ impl Platform {
         }
     }
 
-    pub fn from_str(s: &str) -> Self {
+    pub fn parse(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "desktop" => Platform::Desktop,
             "android" => Platform::Android,
@@ -309,7 +305,7 @@ impl ProfileManager {
         // when a user 配置 inherits via `base: "desktop"`.
         let file_path = self.profiles_dir.join(format!("{name}.json"));
         if file_path.exists() {
-            let raw = std::fs::read_to_string(&file_path).map_err(|e| ProfileError::Io(e))?;
+            let raw = std::fs::read_to_string(&file_path).map_err(ProfileError::Io)?;
             let profile: CookProfile =
                 serde_json::from_str(&raw).map_err(|e| ProfileError::ParseError {
                     path: file_path.display().to_string(),
@@ -383,7 +379,7 @@ impl ProfileManager {
         if let Some(v) = profile.chunk_size {
             settings.chunk_size = v;
         }
-        settings.custom.extend(profile.custom.clone().into_iter());
+        settings.custom.extend(profile.custom.clone());
 
         seen.pop();
         Ok(settings)
@@ -412,7 +408,7 @@ impl ProfileManager {
         if let Some(l) = overrides.compression_level {
             settings.compression.level = l;
         }
-        settings.custom.extend(overrides.custom.clone().into_iter());
+        settings.custom.extend(overrides.custom.clone());
         Ok(())
     }
 
@@ -616,7 +612,7 @@ impl Mergeable for TextureSettings {
         if source.compression != TextureCompression::default() {
             self.compression = source.compression;
         }
-        if source.generate_mips != true || source != TextureSettings::default() {
+        if !source.generate_mips || source != TextureSettings::default() {
             // Always respect an explicit 设置
             self.generate_mips = source.generate_mips;
         }
@@ -661,13 +657,13 @@ impl Mergeable for CookSettings {
         self.mesh.merge_from(source.mesh);
         self.shader.merge_from(source.shader);
         self.compression.merge_from(source.compression);
-        if source.streaming != false {
+        if source.streaming {
             self.streaming = source.streaming;
         }
         if source.chunk_size != 64 * 1024 {
             self.chunk_size = source.chunk_size;
         }
-        self.custom.extend(source.custom.into_iter());
+        self.custom.extend(source.custom);
     }
 }
 

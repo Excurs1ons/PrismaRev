@@ -18,9 +18,9 @@
 //! // 播放
 //! let handle = engine.play(&data);
 //!
-//! // 控制音量
-//! handle.set_volume(0.5);
-//! // handle.stop();
+//! // 控制音量（引擎管理句柄）
+//! engine.set_volume(&handle, 0.5);
+//! // engine.stop(&handle);
 //!
 //! // 每帧更新
 //! engine.update();

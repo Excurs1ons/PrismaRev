@@ -111,12 +111,13 @@ impl HotReloadWatcher {
                     match std::fs::metadata(p) {
                         Ok(meta) => {
                             if let Ok(new_mtime) = meta.modified() {
-                                let changed = mtimes.get(p).map_or(true, |&old| {
-                                    new_mtime
+                                let changed = match mtimes.get(p) {
+                                    Some(&old) => new_mtime
                                         .duration_since(old)
                                         .map(|d| d.as_millis() > 100)
-                                        .unwrap_or(true)
-                                });
+                                        .unwrap_or(true),
+                                    None => true,
+                                };
                                 if changed {
                                     mtimes.insert(p.clone(), new_mtime);
                                     let _ = tx_clone.send(HotReloadEvent::PakModified(p.clone()));
@@ -132,7 +133,7 @@ impl HotReloadWatcher {
                     }
                 }
             })
-            .map_err(|e| HotReloadError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
+            .map_err(|e| HotReloadError::Io(std::io::Error::other(e)))?;
 
         Ok(Self { rx, handle, stop })
     }

@@ -198,10 +198,10 @@ fn cmd_init(dir: &Path) -> anyhow::Result<()> {
     std::fs::create_dir_all(&library)?;
 
     let db = AssetDatabase::new();
-    db.save(&db_path(dir))?;
+    db.save(db_path(dir))?;
 
     let cache = ImportCache::new();
-    cache.save(&cache_path(dir))?;
+    cache.save(cache_path(dir))?;
 
     println!(
         "✅  Resource pipeline initialized / 资源管线已初始化: {}",
@@ -220,7 +220,7 @@ fn cmd_scan(root: &Path, _cli: &Cli) -> anyhow::Result<()> {
         );
     }
 
-    let mut db = AssetDatabase::load(&db_path(root))?;
+    let mut db = AssetDatabase::load(db_path(root))?;
     let mut scanned = 0u32;
 
     walk_directory(&assets, &mut |path| {
@@ -244,7 +244,7 @@ fn cmd_scan(root: &Path, _cli: &Cli) -> anyhow::Result<()> {
         scanned += 1;
     });
 
-    db.save(&db_path(root))?;
+    db.save(db_path(root))?;
     println!(
         "✅  Scan complete / 扫描完成: {} new/新增, {} total/总计",
         scanned,
@@ -261,8 +261,8 @@ fn cmd_import(root: &Path, _force: bool, _cli: &Cli) -> anyhow::Result<()> {
         );
     }
 
-    let mut db = AssetDatabase::load(&db_path(root))?;
-    let mut cache = ImportCache::load(&cache_path(root))?;
+    let mut db = AssetDatabase::load(db_path(root))?;
+    let mut cache = ImportCache::load(cache_path(root))?;
 
     let registry = Arc::new(default_importer_registry());
     let pipeline = ImportPipeline::new(registry);
@@ -292,7 +292,7 @@ fn cmd_import(root: &Path, _force: bool, _cli: &Cli) -> anyhow::Result<()> {
     let paths: Vec<String> = db.records().map(|r| r.path.clone()).collect();
 
     for relative in &paths {
-        let source_path = assets.join(&relative);
+        let source_path = assets.join(relative);
         if !source_path.exists() {
             continue;
         }
@@ -303,8 +303,8 @@ fn cmd_import(root: &Path, _force: bool, _cli: &Cli) -> anyhow::Result<()> {
         }
     }
 
-    db.save(&db_path(root))?;
-    cache.save(&cache_path(root))?;
+    db.save(db_path(root))?;
+    cache.save(cache_path(root))?;
 
     println!(
         "✅  Import complete / 导入完成: {imported} imported/导入, {cached} cached/缓存, {count} total/总计"
@@ -325,7 +325,7 @@ fn cmd_build(
         );
     }
 
-    let db = AssetDatabase::load(&db_path(root))?;
+    let db = AssetDatabase::load(db_path(root))?;
     if db.is_empty() {
         anyhow::bail!("No assets to build / 没有可构建的资源. Run 'prism-asset-cli scan' first.");
     }
@@ -479,13 +479,12 @@ fn cmd_validate(pak_path: &Path) -> anyhow::Result<()> {
     let hdr =
         |en: &str, cn: &str, w: usize| pad_display(&format!("{} / {}", pad_display(en, 5), cn), w);
     println!(
-        "  {}  {}  {}  {}  {}  {}",
+        "  {}  {}  {}  {}  {}  Name / 名称",
         hdr("ID", "标识", COL_ID),
         hdr("Type", "类型", COL_TYPE),
         hdr("Size", "大小", COL_SIZE),
         hdr("Comp", "压缩", COL_CSIZE),
         hdr("Ratio", "比率", COL_RATIO),
-        "Name / 名称",
     );
     // Separator — all columns same 宽度
     println!(
@@ -567,7 +566,7 @@ fn cmd_list(root: &Path, _cli: &Cli) -> anyhow::Result<()> {
         );
     }
 
-    let db = AssetDatabase::load(&db_path(root))?;
+    let db = AssetDatabase::load(db_path(root))?;
     println!("📋  Assets / 资源 ({} records / 条):", db.len());
     for record in db.records() {
         let type_label = format!("{:?}", record.asset_type);
@@ -586,7 +585,7 @@ fn cmd_inspect(root: &Path, id_or_path: &str) -> anyhow::Result<()> {
         anyhow::bail!("No AssetDatabase.json found / 未找到数据库.");
     }
 
-    let db = AssetDatabase::load(&db_path(root))?;
+    let db = AssetDatabase::load(db_path(root))?;
 
     // Try to parse as numeric ID 第一个
     let record = if let Ok(num) = id_or_path.parse::<u64>() {

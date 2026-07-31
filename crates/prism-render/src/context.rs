@@ -192,15 +192,28 @@ fn create_instance(
     }
     let extension_ptrs: Vec<*const c_char> = extension_names.iter().map(|c| c.as_ptr()).collect();
 
-    // 验证 layers only in 调试 builds.
-    let enabled_layers: Vec<CString> = if enable_debug {
-        VALIDATION_LAYERS
-            .iter()
-            .map(|s| CString::new(*s).unwrap())
-            .collect()
-    } else {
-        Vec::new()
-    };
+    // 验证 layers only in 调试 builds — and only when actually installed.
+    // 无条件请求会导致无 layer 的环境（如无 validation 包的 Termux/CI）
+    // 在 create_instance 阶段直接失败；先枚举可用 layer 再启用。
+    let mut enabled_layers: Vec<CString> = Vec::new();
+    if enable_debug {
+        let available = unsafe { entry.enumerate_instance_layer_properties() }
+            .map(|props| {
+                props.iter().any(|p| {
+                    let name = unsafe { CStr::from_ptr(p.layer_name.as_ptr()) };
+                    VALIDATION_LAYERS.contains(&name.to_str().unwrap_or(""))
+                })
+            })
+            .unwrap_or(false);
+        if available {
+            enabled_layers = VALIDATION_LAYERS
+                .iter()
+                .map(|s| CString::new(*s).unwrap())
+                .collect();
+        } else {
+            log::warn!("validation layers requested but not available; continuing without");
+        }
+    }
     let layer_ptrs: Vec<*const c_char> = enabled_layers.iter().map(|c| c.as_ptr()).collect();
 
     let mut create_info = vk::InstanceCreateInfo::default()

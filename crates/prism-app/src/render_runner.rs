@@ -163,10 +163,11 @@ fn render_one_frame(
         Some(c) => c,
         None => return Ok(()),
     };
-    renderer.execute(&ctx, &input, egui_frame).map_err(|e| {
-        let _ = renderer.present(&ctx);
-        e
-    })?;
+    renderer
+        .execute(&ctx, &input, egui_frame)
+        .inspect_err(|_| {
+            let _ = renderer.present(&ctx);
+        })?;
     let _ = renderer.present(&ctx)?;
 
     Ok(())

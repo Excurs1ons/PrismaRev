@@ -71,7 +71,7 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
 
     prism_engine::crash_dialog::register_android_app(&app);
 
-    let event_loop = winit::event_loop::EventLoopBuilder::new()
+    let event_loop = winit::event_loop::EventLoop::builder()
         .with_android_app(app)
         .build()
         .expect("failed to build Android event loop");

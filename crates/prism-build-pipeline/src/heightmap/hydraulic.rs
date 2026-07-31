@@ -8,7 +8,7 @@
 //! - 沉积容量硬上限 `max_capacity`
 //! - 海平面以下侵蚀倍率 `sea_erosion_factor`
 
-use super::{Heightmap, ErosionParams, Particle};
+use super::{ErosionParams, Heightmap, Particle};
 use rand::Rng;
 use rayon::prelude::*;
 use std::f64;
@@ -35,23 +35,24 @@ pub fn hydraulic_erosion(hm: &mut Heightmap, params: &ErosionParams) {
     let n_threads = rayon::current_num_threads().max(1);
 
     // 2. 局部修改缓冲区（每线程一个）
-    let mut local_bufs: Vec<Vec<f64>> = (0..n_threads)
-        .map(|_| vec![0.0_f64; w * h])
-        .collect();
+    let mut local_bufs: Vec<Vec<f64>> = (0..n_threads).map(|_| vec![0.0_f64; w * h]).collect();
 
     // 3. 并行处理粒子
     // 将粒子分块，每块有自己的局部缓冲区
     let chunk_size = (n_particles / n_threads).max(1);
     {
         let hm_ref: &Heightmap = &*hm;
-        local_bufs.par_iter_mut().enumerate().for_each(|(thread_idx, buf)| {
-            let start = thread_idx * chunk_size;
-            let end = (start + chunk_size).min(n_particles);
-            for i in start..end {
-                let mut p = particles[i].clone();
-                process_particle(&mut p, hm_ref, buf, params, w, h, sea_level);
-            }
-        });
+        local_bufs
+            .par_iter_mut()
+            .enumerate()
+            .for_each(|(thread_idx, buf)| {
+                let start = thread_idx * chunk_size;
+                let end = (start + chunk_size).min(n_particles);
+                for p in &particles[start..end] {
+                    let mut p = p.clone();
+                    process_particle(&mut p, hm_ref, buf, params, w, h, sea_level);
+                }
+            });
     }
 
     // 4. 合并修改到高度图
@@ -67,8 +68,12 @@ pub fn hydraulic_erosion(hm: &mut Heightmap, params: &ErosionParams) {
     hm.min_height = f64::MAX;
     hm.max_height = f64::MIN;
     for &v in &hm.data {
-        if v < hm.min_height { hm.min_height = v; }
-        if v > hm.max_height { hm.max_height = v; }
+        if v < hm.min_height {
+            hm.min_height = v;
+        }
+        if v > hm.max_height {
+            hm.max_height = v;
+        }
     }
 }
 
@@ -129,7 +134,8 @@ fn process_particle(
         };
 
         // 3. 速度更新与钳制
-        p.speed = (p.speed + gravity * (height_here - safe_sample(hm, p.x + dx, p.y + dy, w, h))).max(0.0);
+        p.speed = (p.speed + gravity * (height_here - safe_sample(hm, p.x + dx, p.y + dy, w, h)))
+            .max(0.0);
         p.speed = p.speed.min(max_vel);
 
         p.velocity_x = dx * p.speed;
@@ -148,8 +154,8 @@ fn process_particle(
         let height_diff = height_here - height_new;
 
         // 5. 沉积容量
-        let capacity = (capacity_factor * p.speed * (height_diff.abs().max(min_slope)) * p.water)
-            .min(max_cap);
+        let capacity =
+            (capacity_factor * p.speed * (height_diff.abs().max(min_slope)) * p.water).min(max_cap);
 
         // 6. 侵蚀 / 沉积
         if p.sediment > capacity || height_diff < 0.0 {
@@ -216,8 +222,16 @@ fn gradient(hm: &Heightmap, x: f64, y: f64, w: usize, h: usize) -> (f64, f64) {
     let h_d = safe_sample(hm, x, y0, w, h);
     let h_u = safe_sample(hm, x, y1, w, h);
 
-    let gx = if (x1 - x0).abs() > 1e-12 { (h_r - h_l) / (x1 - x0) } else { 0.0 };
-    let gy = if (y1 - y0).abs() > 1e-12 { (h_u - h_d) / (y1 - y0) } else { 0.0 };
+    let gx = if (x1 - x0).abs() > 1e-12 {
+        (h_r - h_l) / (x1 - x0)
+    } else {
+        0.0
+    };
+    let gy = if (y1 - y0).abs() > 1e-12 {
+        (h_u - h_d) / (y1 - y0)
+    } else {
+        0.0
+    };
 
     (gx, gy)
 }
@@ -244,7 +258,11 @@ mod tests {
         };
         hydraulic_erosion(&mut hm, &params);
         // 应该有变化（侵蚀在底部沉积）
-        let changed = hm.data.iter().zip(hm_orig.iter()).any(|(a, b)| (a - b).abs() > 1.0);
+        let changed = hm
+            .data
+            .iter()
+            .zip(hm_orig.iter())
+            .any(|(a, b)| (a - b).abs() > 1.0);
         assert!(changed, "erosion should change terrain");
     }
 
@@ -261,7 +279,11 @@ mod tests {
         hydraulic_erosion(&mut hm, &params);
         // 平坦地形应几乎不变
         for &v in &hm.data {
-            assert!(v.abs() < 1.0, "flat terrain should stay near zero (no gradient), got {}", v);
+            assert!(
+                v.abs() < 1.0,
+                "flat terrain should stay near zero (no gradient), got {}",
+                v
+            );
         }
     }
 }

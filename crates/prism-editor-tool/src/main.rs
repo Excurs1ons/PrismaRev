@@ -143,11 +143,28 @@ fn main() -> Result<()> {
             seed,
             threads,
         } => cmd_heightmap(
-            output, width, height, octaves, frequency, gain, lacunarity,
-            ridge, warp_strength, ridge_classic,
-            cliff, cliff_center, cliff_width, cliff_amount,
-            &erosion, thermal_iters, hydraulic_iters, talus_angle,
-            particles, rain_amount, seed, threads,
+            output,
+            width,
+            height,
+            octaves,
+            frequency,
+            gain,
+            lacunarity,
+            ridge,
+            warp_strength,
+            ridge_classic,
+            cliff,
+            cliff_center,
+            cliff_width,
+            cliff_amount,
+            &erosion,
+            thermal_iters,
+            hydraulic_iters,
+            talus_angle,
+            particles,
+            rain_amount,
+            seed,
+            threads,
         ),
     }
 }
@@ -207,10 +224,15 @@ fn cmd_heightmap(
 
     log::info!(
         "Generating heightmap: {}x{}, {} octaves, ridge={}, cliff={}",
-        width, height, octaves, ridge, cliff
+        width,
+        height,
+        octaves,
+        ridge,
+        cliff
     );
     let mut hm = heightmap::generate_heightmap(&gen_cfg);
-    log::info!("Heightmap generated (range: {:.4}–{:.4})",
+    log::info!(
+        "Heightmap generated (range: {:.4}–{:.4})",
         hm.data.iter().copied().fold(f32::MAX, f32::min),
         hm.data.iter().copied().fold(f32::MIN, f32::max),
     );
@@ -233,7 +255,9 @@ fn cmd_heightmap(
                 ..Default::default()
             };
             hydraulic.erode(&mut hm, hydraulic_iters);
-            log::info!("Hydraulic erosion complete ({hydraulic_iters} iters, {particles} particles)");
+            log::info!(
+                "Hydraulic erosion complete ({hydraulic_iters} iters, {particles} particles)"
+            );
         }
         "both" => {
             let thermal = erosion::ThermalErosion {
@@ -245,15 +269,24 @@ fn cmd_heightmap(
                 rain_amount,
                 ..Default::default()
             };
-            erosion::erode_both(&mut hm, &thermal, &hydraulic, thermal_iters, hydraulic_iters);
-            log::info!("Both erosion complete (thermal={thermal_iters}, hydraulic={hydraulic_iters})");
+            erosion::erode_both(
+                &mut hm,
+                &thermal,
+                &hydraulic,
+                thermal_iters,
+                hydraulic_iters,
+            );
+            log::info!(
+                "Both erosion complete (thermal={thermal_iters}, hydraulic={hydraulic_iters})"
+            );
         }
-        other => anyhow::bail!("unknown erosion type '{other}', expected: none, thermal, hydraulic, both"),
+        other => anyhow::bail!(
+            "unknown erosion type '{other}', expected: none, thermal, hydraulic, both"
+        ),
     }
 
     // Detect format from extension, fall back to EXR.
-    let fmt = export::format_from_extension(&output)
-        .unwrap_or_else(|_| export::ExportFormat::Exr);
+    let fmt = export::format_from_extension(&output).unwrap_or(export::ExportFormat::Exr);
 
     export::export_heightmap(&hm, &output, fmt)?;
 

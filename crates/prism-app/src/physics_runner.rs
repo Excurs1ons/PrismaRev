@@ -8,6 +8,13 @@
 //! * 刚体 bodies only 动力学 / 运动学 / 静态
 //! * 球体 / 盒 / capsule / trimesh colliders
 //! * No joints, no CCD, no 查询 管线
+//!
+//! # 状态：骨架（未接线）
+//!
+//! 线程/消息骨架已就位，但尚未被 `App` 启动与消费；
+//! 待 ECS 物理系统接入后再启用。保留以抑制 dead_code 警告。
+
+#![allow(dead_code)]
 
 use std::collections::HashMap;
 
@@ -128,12 +135,7 @@ pub fn physics_thread_main(step_rx: Receiver<PhysicsStep>, result_tx: Sender<Phy
     // 实体 → Rapier handle 映射表
     let mut entity_map: HashMap<EntityId, RigidBodyHandle> = HashMap::new();
 
-    loop {
-        let step = match step_rx.recv() {
-            Ok(s) => s,
-            Err(_) => break, // channel closed → exit
-        };
-
+    while let Ok(step) = step_rx.recv() {
         // 1. Apply commands.
         for cmd in step.commands {
             match cmd {

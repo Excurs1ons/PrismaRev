@@ -24,7 +24,11 @@ impl Heightmap {
     /// Create a new heightmap from raw data.
     pub fn new(width: u32, height: u32, data: Vec<f32>) -> Self {
         assert_eq!(data.len(), (width * height) as usize);
-        Self { width, height, data }
+        Self {
+            width,
+            height,
+            data,
+        }
     }
 
     /// Create an empty heightmap (zero-initialized).
@@ -74,8 +78,12 @@ impl Heightmap {
         let mut min_val = f32::MAX;
         let mut max_val = f32::MIN;
         for &v in &self.data {
-            if v < min_val { min_val = v; }
-            if v > max_val { max_val = v; }
+            if v < min_val {
+                min_val = v;
+            }
+            if v > max_val {
+                max_val = v;
+            }
         }
         let range = max_val - min_val;
         if range > 1e-10 {
@@ -99,10 +107,26 @@ impl Heightmap {
     pub fn gradient(&self, x: u32, y: u32) -> (f32, f32) {
         let w = self.width;
         let h = self.height;
-        let left = if x == 0 { self.get(0, y) } else { self.get(x - 1, y) };
-        let right = if x >= w - 1 { self.get(w - 1, y) } else { self.get(x + 1, y) };
-        let up = if y == 0 { self.get(x, 0) } else { self.get(x, y - 1) };
-        let down = if y >= h - 1 { self.get(x, h - 1) } else { self.get(x, y + 1) };
+        let left = if x == 0 {
+            self.get(0, y)
+        } else {
+            self.get(x - 1, y)
+        };
+        let right = if x >= w - 1 {
+            self.get(w - 1, y)
+        } else {
+            self.get(x + 1, y)
+        };
+        let up = if y == 0 {
+            self.get(x, 0)
+        } else {
+            self.get(x, y - 1)
+        };
+        let down = if y >= h - 1 {
+            self.get(x, h - 1)
+        } else {
+            self.get(x, y + 1)
+        };
         ((right - left) * 0.5, (down - up) * 0.5)
     }
 
@@ -229,10 +253,18 @@ pub fn generate_heightmap(cfg: &HeightmapConfig) -> Heightmap {
         let amount = cfg.cliff_amount;
         for v in &mut hm.data {
             let t = (*v - center) / width;
-            let smooth = if t < -1.0 { 0.0 } else if t > 1.0 { 1.0 } else {
+            let smooth = if t < -1.0 {
+                0.0
+            } else if t > 1.0 {
+                1.0
+            } else {
                 t * 0.5 + 0.5
             };
-            let cliff = if smooth <= 0.0 { 0.0 } else if smooth >= 1.0 { 1.0 } else {
+            let cliff = if smooth <= 0.0 {
+                0.0
+            } else if smooth >= 1.0 {
+                1.0
+            } else {
                 smooth * smooth * (3.0 - 2.0 * smooth)
             };
             *v += amount * cliff;
@@ -259,7 +291,7 @@ mod tests {
         assert_eq!(hm.data.len(), 64 * 64);
         // All values should be in [0, 1].
         for &v in &hm.data {
-            assert!(v >= 0.0 && v <= 1.0, "value {v} out of [0,1]");
+            assert!((0.0..=1.0).contains(&v), "value {v} out of [0,1]");
         }
     }
 
@@ -275,7 +307,7 @@ mod tests {
         let hm = generate_heightmap(&cfg);
         assert_eq!(hm.data.len(), 64 * 64);
         for &v in &hm.data {
-            assert!(v >= 0.0 && v <= 1.0);
+            assert!((0.0..=1.0).contains(&v));
         }
     }
 
@@ -308,7 +340,7 @@ mod tests {
         cfg.cliff_amount = 0.3;
         let hm = generate_heightmap(&cfg);
         for &v in &hm.data {
-            assert!(v >= 0.0 && v <= 1.0);
+            assert!((0.0..=1.0).contains(&v));
         }
     }
 }

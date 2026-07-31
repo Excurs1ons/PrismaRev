@@ -3,7 +3,7 @@
 //! 基于休止角的材料滑动，优先用于削平极端陡坡。
 //! 可完全并行，使用双缓冲避免写冲突。
 
-use super::{Heightmap, ErosionParams, clone_data};
+use super::{clone_data, ErosionParams, Heightmap};
 use rayon::prelude::*;
 
 /// 执行一轮热力侵蚀。
@@ -19,50 +19,14 @@ pub fn thermal_erosion(hm: &mut Heightmap, params: &ErosionParams) {
 
     let mut dst = clone_data(&hm.data);
 
-    // 并行处理每个像元
+    // 双缓冲：src = hm.data（只读），dst = 写入。
+    // 每个像元独立计算净变化（流出 + 流入），rayon 并行无竞争。
     dst.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
-        for x in 0..w {
-            // 对于每个邻域像元，只要高度差超过阈值，转移材料
-            // 不需要 tracking total_in
-
-            // 遍历 4 或 8 邻域
-            for (dx, dy) in &NEIGHBORS_4 {
-                let nx = x as isize + dx;
-                let ny = y as isize + dy;
-                if nx < 0 || nx >= w as isize || ny < 0 || ny >= h as isize {
-                    continue;
-                }
-                let nx = nx as usize;
-                let ny = ny as usize;
-                let neighbor_h = hm.get(nx, ny);
-                let diff = src_h - neighbor_h;
-
-                if diff > max_diff {
-                    let amount = (diff - max_diff) * strength * 0.5;
-                    row[x] -= amount;
-                    // total_in += amount; — unused, kept for debugging
-                }
-            }
-
-            // 来自邻域流入的和已经在 row[x] 中减去了流出，
-            // 但我们还需要处理从邻域流入的量。
-            // 实际上使用双缓冲：row[x] = 当前像元的新值
-            // (已在上面减去了流出的量，下面加回流入的量)
-        }
-    });
-
-    // 第二遍：计算流入
-    // 更简单的双缓冲方法：
-    // 1. 遍历所有像元，计算每个像元的净变化
-    // 2. 使用独立的缓冲区
-
-    // 重新实现更清晰的双缓冲
-    for y in 0..h {
-        for x in 0..w {
-            let idx = y * w + x;
-            let src_h = hm.data[idx];
+        for (x, cell) in row.iter_mut().enumerate() {
+            let src_h = hm.data[y * w + x];
             let mut net_change: f64 = 0.0;
 
+            // 自身流出的量：当前像元高于邻域且超过休止角阈值
             for &(dx, dy) in &NEIGHBORS_4 {
                 let nx = x as isize + dx;
                 let ny = y as isize + dy;
@@ -76,13 +40,11 @@ pub fn thermal_erosion(hm: &mut Heightmap, params: &ErosionParams) {
 
                 if diff > max_diff {
                     let amount = (diff - max_diff) * strength * 0.5;
-                    // 当前像元失去 amount
                     net_change -= amount;
-                    // 邻域获得 amount（由邻域自己的迭代处理）
                 }
             }
 
-            // 处理邻域给当前像元的流入
+            // 邻域流入当前像元的量：邻域高于当前像元且超过休止角阈值
             for &(dx, dy) in &NEIGHBORS_4 {
                 let nx = x as isize + dx;
                 let ny = y as isize + dy;
@@ -96,14 +58,13 @@ pub fn thermal_erosion(hm: &mut Heightmap, params: &ErosionParams) {
 
                 if diff > max_diff {
                     let amount = (diff - max_diff) * strength * 0.5;
-                    // 邻域流出的量流入当前像元
                     net_change += amount;
                 }
             }
 
-            dst[idx] = hm.data[idx] + net_change;
+            *cell = hm.data[y * w + x] + net_change;
         }
-    }
+    });
 
     hm.data = dst;
 

@@ -1364,9 +1364,7 @@ mod tests {
         glb.extend_from_slice(&((json_bytes.len() + json_padding) as u32).to_le_bytes());
         glb.extend_from_slice(b"JSON");
         glb.extend_from_slice(json_bytes);
-        for _ in 0..json_padding {
-            glb.push(0x20); // space padding
-        }
+        glb.extend_from_slice(&vec![0x20; json_padding]); // space padding
 
         // BIN chunk
         glb.extend_from_slice(&((bin_data_size + bin_padding) as u32).to_le_bytes());
@@ -1377,9 +1375,7 @@ mod tests {
         for &i in indices {
             glb.extend_from_slice(&i.to_le_bytes());
         }
-        for _ in 0..bin_padding {
-            glb.push(0x00);
-        }
+        glb.extend_from_slice(&vec![0x00; bin_padding]);
 
         glb
     }
@@ -1416,8 +1412,8 @@ mod tests {
         let meta = result.metadata.unwrap();
         assert_eq!(meta["vertex_count"], 3);
         assert_eq!(meta["index_count"], 3);
-        assert!(meta["has_normals"].as_bool().unwrap_or(false) == false);
-        assert!(meta["has_texcoords"].as_bool().unwrap_or(false) == false);
+        assert!(!meta["has_normals"].as_bool().unwrap_or(false));
+        assert!(!meta["has_texcoords"].as_bool().unwrap_or(false));
 
         std::fs::remove_file(&path).ok();
     }
@@ -1501,9 +1497,9 @@ mod tests {
         let meta = result.metadata.unwrap();
         let slots = meta["texture_slots"].as_array().unwrap();
         assert_eq!(slots.len(), 5);
-        assert_eq!(slots[0].as_bool().unwrap(), true); // albedo
-        assert_eq!(slots[1].as_bool().unwrap(), false); // normal
-        assert_eq!(slots[4].as_bool().unwrap(), true); // occlusion
+        assert!(slots[0].as_bool().unwrap()); // albedo
+        assert!(!slots[1].as_bool().unwrap()); // normal
+        assert!(slots[4].as_bool().unwrap()); // occlusion
 
         std::fs::remove_file(&path).ok();
     }

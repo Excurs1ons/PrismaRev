@@ -334,7 +334,7 @@ mod tests {
 
     impl<'de> serde::Deserialize<'de> for TestAsset {
         fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-            use serde::de::{self, MapAccess, Visitor};
+            use serde::de::{MapAccess, Visitor};
             struct V;
             impl<'de> Visitor<'de> for V {
                 type Value = TestAsset;
@@ -411,10 +411,12 @@ mod tests {
 
     #[test]
     fn downcast() {
-        let asset: Box<dyn AssetData> = Box::new(TestAsset { value: 3.14 });
+        let asset: Box<dyn AssetData> = Box::new(TestAsset {
+            value: std::f32::consts::PI,
+        });
         let down = asset.downcast_ref::<TestAsset>();
         assert!(down.is_some());
-        assert!((down.unwrap().value - 3.14).abs() < 1e-6);
+        assert!((down.unwrap().value - std::f32::consts::PI).abs() < 1e-6);
     }
 
     #[test]
