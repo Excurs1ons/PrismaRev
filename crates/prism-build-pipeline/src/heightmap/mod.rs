@@ -11,9 +11,11 @@
 //! ```
 
 mod hydraulic;
+mod terrain;
 mod thermal;
 
 pub use hydraulic::hydraulic_erosion;
+pub use terrain::generate_terrain;
 pub use thermal::thermal_erosion;
 
 use std::f64;

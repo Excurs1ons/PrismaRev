@@ -137,7 +137,27 @@ cargo test  -p prism-ecs -p prism-render -p prism-engine -p prism-platform
 - **热力侵蚀**：休止角材料滑动，双缓冲 + rayon 并行，削平极端陡坡。
 - **水力侵蚀**：粒子法（`Particle` 携带水量/泥沙/速度），rayon 分块并行 + 每线程局部缓冲合并；速度钳制、沉积容量上限、海平面以下侵蚀倍率控制稳定性。
 - 全参数化 `ErosionParams`，支持 JSON/TOML 预设。
-- 以库 API 形式暴露（`prism_build_pipeline::heightmap`），供 CLI / 编辑器工具调用。
+- 初始地形：seed 化值噪声 + FBM（域扭曲），输出 [0,1] 相对高度。
+- **CLI 一键生成**：`prism-build-pipeline heightmap` 子命令，输出 raw f32 高度数据：
+
+```sh
+# 512×512、默认高程范围（−11 km ~ +8.85 km）、70% 海洋
+cargo run -p prism-build-pipeline -- heightmap --width 512 --height 512 --seed 42
+
+# 自定义：全陆地 + 更高侵蚀强度
+cargo run -p prism-build-pipeline -- heightmap --width 1024 --height 1024 \
+  --min-elevation 0 --max-elevation 4000 --sea-level 0.1 \
+  --iterations 200 --particles 500000 --talus-angle 38
+
+# 常用参数
+#   --output      输出 .raw 路径（f32 小端，width×height 采样）
+#   --seed        随机种子（同 seed → 同地形）
+#   --sea-level   海平面分位 0.0~1.0（0.7 ≈ 地球 71% 海洋，默认）
+#   --min/max-elevation  高程范围（米）
+#   --iterations / --particles / --talus-angle  侵蚀强度
+```
+
+raw 文件可用 Python/Blender/Unity 等直接读取：`np.fromfile(path, dtype='<f4').reshape(h, w)`。
 
 ## 测试
 

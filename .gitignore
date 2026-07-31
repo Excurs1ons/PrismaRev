@@ -47,3 +47,4 @@ assets/scenes/*
 
 # Deepwork session state
 .slim/deepwork/
+assets/heightmaps/

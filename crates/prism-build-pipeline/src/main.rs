@@ -4,6 +4,7 @@
 //!   bake-gi    — offline GI probe-volume baker (GPU ray-query, multi-bounce path tracing)
 //!   cook       — cook assets (delegates to prism-asset)
 //!   pack       — build .pak files (delegates to prism-asset)
+//!   heightmap  — generate + erode a procedural heightmap, write raw f32
 
 use std::path::PathBuf;
 
@@ -50,6 +51,43 @@ enum Command {
         #[arg(long, default_value = "assets/packed/game.pak")]
         output: PathBuf,
     },
+    /// Generate a procedural heightmap (fbm terrain + hydraulic/thermal erosion)
+    ///
+    /// Writes raw f32 little-endian samples (width × height) — load in
+    /// Python/numpy, Blender, or any tool that reads raw height data.
+    Heightmap {
+        /// Output .raw path (default: assets/heightmaps/terrain.raw)
+        #[arg(long, default_value = "assets/heightmaps/terrain.raw")]
+        output: PathBuf,
+        /// Terrain width in texels [default: 512]
+        #[arg(long, default_value_t = 512)]
+        width: usize,
+        /// Terrain height in texels [default: 512]
+        #[arg(long, default_value_t = 512)]
+        height: usize,
+        /// RNG seed (same seed → same terrain) [default: 0x5EED]
+        #[arg(long, default_value_t = 0x5EED)]
+        seed: u64,
+        /// Minimum elevation in meters (default: −11 000 m, Marianas)
+        #[arg(long, default_value_t = -11_000.0)]
+        min_elevation: f64,
+        /// Maximum elevation in meters (default: +8 850 m, Everest)
+        #[arg(long, default_value_t = 8_850.0)]
+        max_elevation: f64,
+        /// Erosion iterations [default: 100]
+        #[arg(long, default_value_t = 100)]
+        iterations: usize,
+        /// Hydraulic particle count [default: 200 000]
+        #[arg(long, default_value_t = 200_000)]
+        particles: usize,
+        /// Thermal talus angle in degrees [default: 35]
+        #[arg(long, default_value_t = 35.0)]
+        talus_angle: f64,
+        /// Sea level as fraction of the relative height range (0.0 = all land,
+        /// 1.0 = all ocean; 0.7 ≈ Earth's 71% ocean) [default: 0.7]
+        #[arg(long, default_value_t = 0.7)]
+        sea_level: f64,
+    },
 }
 
 fn main() -> Result<()> {
@@ -84,6 +122,95 @@ fn main() -> Result<()> {
             log::info!("pack: {input:?} -> {output:?}");
             // TODO: delegate to prism-asset-package via prism-build-pipeline
             anyhow::bail!("pack not yet implemented; use prism-asset-cli directly")
+        }
+        Command::Heightmap {
+            output,
+            width,
+            height,
+            seed,
+            min_elevation,
+            max_elevation,
+            iterations,
+            particles,
+            talus_angle,
+            sea_level,
+        } => {
+            let t0 = std::time::Instant::now();
+
+            // 1. 初始地形（fbm 噪声合成，[0,1] 相对高度）
+            let terrain = prism_build_pipeline::generate_terrain(width, height, seed);
+            log::info!(
+                "terrain: {}x{} seed={seed:#x} range=[{:.0}, {:.0}]",
+                width,
+                height,
+                terrain.min_height,
+                terrain.max_height
+            );
+
+            // 2. 水力 + 热力侵蚀
+            let params = prism_build_pipeline::ErosionParams {
+                iterations,
+                particle_count: particles,
+                talus_angle,
+                ..Default::default()
+            };
+            let hm = prism_build_pipeline::generate_eroded_heightmap(terrain, &params);
+            log::info!(
+                "eroded in {:?}: min={:.1} max={:.1} sea_level={:.1}",
+                t0.elapsed(),
+                hm.min_height,
+                hm.max_height,
+                hm.sea_level
+            );
+
+            // 3. 映射到真实高程范围（如 −11 km ~ +8.85 km）
+            //    侵蚀后相对高度并非 [0,1] 且分布偏斜（水力削平谷底），
+            //    先归一化，再用「分位数」定位海平面——对归一化数据排序，
+            //    取第 sea_frac 百分位的值作为海平面，保证海底/陆地比例
+            //    严格等于 sea_level 设定（0 m 恰为海平面）。
+            //    陆地段加 gamma 拉伸（<1 压低矮处展开）避免 99% 陆地挤在低处。
+            let sea_frac = sea_level.clamp(0.001, 0.999);
+            const LAND_GAMMA: f64 = 0.5;
+            let mut abs = hm;
+            abs.normalize();
+            let mut sorted: Vec<f64> = abs.data.clone();
+            sorted.sort_by(|a, b| a.total_cmp(b));
+            let sea_threshold = sorted[((sorted.len() - 1) as f64 * sea_frac) as usize];
+            for v in abs.data.iter_mut() {
+                if *v <= sea_threshold {
+                    *v = min_elevation + (*v / sea_threshold) * (0.0 - min_elevation);
+                } else {
+                    let t = ((*v - sea_threshold) / (1.0 - sea_threshold)).powf(LAND_GAMMA);
+                    *v = t * max_elevation;
+                }
+            }
+            abs.min_height = min_elevation;
+            abs.max_height = max_elevation;
+            abs.sea_level = 0.0; // 绝对高程下海平面 = 0 m
+            log::info!(
+                "absolute elevation: min={:.1} m, max={:.1} m, sea_level={:.1} m (sea fraction {:.0}%)",
+                abs.min_height,
+                abs.max_height,
+                abs.sea_level,
+                sea_frac * 100.0
+            );
+
+            // 4. 写出 f32 LE raw
+            if let Some(parent) = output.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            let mut buf = Vec::with_capacity(abs.data.len() * 4);
+            for &v in &abs.data {
+                buf.extend_from_slice(&(v as f32).to_le_bytes());
+            }
+            std::fs::write(&output, buf)?;
+            log::info!(
+                "wrote {} samples ({} bytes) to {}",
+                abs.data.len(),
+                abs.data.len() * 4,
+                output.display()
+            );
+            Ok(())
         }
     }
 }
