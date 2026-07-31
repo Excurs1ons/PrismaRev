@@ -33,7 +33,7 @@ PrismaRev/
 │   ├── prism-launcher/        # Tauri launcher（桌面壳 + Android APK 打包，独立 workspace）
 │   └── xtask/                 # 构建工具：Slang reflection → Rust 绑定代码生成（桌面/CI 专用，排除在默认 workspace 外）
 ├── assets/
-│   ├── shaders/               # Slang 源码（slang/）、编译产物 .spv + reflection/*.json
+│   ├── shaders/               # Slang 源码（slang/）、编译产物 .spv（不提交）+ reflection/*.json
 │   ├── scenes/                # 场景资产（glTF 等）
 │   └── ...
 ├── docs/DESIGN.md             # 权威设计蓝图
@@ -104,13 +104,13 @@ cargo test  -p prism-ecs -p prism-render -p prism-engine -p prism-platform
 
 - `prism-app` 以 `cdylib` 暴露 `android_main` JNI 入口；`.cargo/config.toml` 将链接器指向 NDK 的 clang wrapper。
 - `crates/prism-launcher`（Tauri）负责 APK 打包：`pnpm tauri android build`（`build_debug.sh` / `build_release.sh`）。
-- 无 slangc 环境：Android 直接携带预编译 `.spv`，着色器编译只在桌面/CI 进行。
+- 无 slangc 环境：Android 携带预编译 `.spv`（从 CI `spirv` artifact 获取），着色器编译只在桌面/CI 进行。
 
 ## 着色器管线
 
 - 着色器用 **Slang** 编写（`assets/shaders/slang/*.slang`），入口 `vertexMain` / `fragmentMain`。
 - `bash assets/shaders/compile.sh` 调用 slangc 编译为 `.spv` + reflection JSON。
-- `.spv` **提交进仓库**并被 `include_bytes!` 使用——编辑 `.slang` 后必须重编译并提交，否则运行的是陈旧 SPIR-V。
+- `.spv` **不提交仓库**（gitignore），由 `assets/shaders/compile.sh` 在桌面/CI 生成并被 `include_bytes!` 使用——编辑 `.slang` 后必须重编译，否则运行的是陈旧 SPIR-V。无 slangc 的主机（Termux/Android）从 CI `spirv` artifact 获取预编译 `.spv`。
 - reflection JSON 驱动 `xtask` 的 `shader-bindgen`，生成 `crates/prism-render/src/shader_bindings.rs`：入口名常量、descriptor set/binding 常量、`#[repr(C)]` push-constant 结构。
 - **CI 漂移守卫**：重新生成的绑定/SPIR-V 若与提交版本不一致则 CI 失败（`shaders` job）。
 
@@ -176,7 +176,7 @@ cargo clippy --all-targets   # 零警告门禁
 |-----|------|
 | `lint` | `cargo fmt --check` + clippy（桌面 crates + xtask，零警告） |
 | `desktop` | 桌面 crates 的 `cargo build --locked` + `cargo test --locked` |
-| `shaders` | slangc 编译 `.slang` → `.spv` + reflection，重新生成 Rust 绑定，**漂移守卫**（提交产物与新鲜编译不一致即失败） |
+| `shaders` | slangc 编译 `.slang` → `.spv` + reflection，重新生成 Rust 绑定，**漂移守卫**（提交的绑定与新鲜编译不一致即失败；`.spv` 不提交，每次由编译步骤新鲜生成） |
 
 ## License
 

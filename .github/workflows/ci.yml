@@ -25,6 +25,8 @@ env:
   RUST_BACKTRACE: 1
   # Bump to force-refresh caches when toolchains change.
   CACHE_VERSION: v1
+  # Slang release used to compile shaders (both desktop + shaders jobs).
+  SLANG_VERSION: "2026.13.1"
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -96,6 +98,21 @@ jobs:
         with:
           key: ${{ env.CACHE_VERSION }}-desktop
 
+      # .spv files are NOT committed (see .gitignore). Compile them here so the
+      # include_bytes!-based build has SPIR-V to embed.
+      - name: Download slang ${{ env.SLANG_VERSION }} (linux-x86_64)
+        run: |
+          set -euo pipefail
+          url="https://github.com/shader-slang/slang/releases/download/v${SLANG_VERSION}/slang-${SLANG_VERSION}-linux-x86_64.tar.gz"
+          mkdir -p "$RUNNER_TEMP/slang"
+          curl -fsSL "$url" -o "$RUNNER_TEMP/slang.tar.gz"
+          tar xzf "$RUNNER_TEMP/slang.tar.gz" -C "$RUNNER_TEMP/slang"
+          echo "SLANGC=$RUNNER_TEMP/slang/bin/slangc" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$RUNNER_TEMP/slang/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+
+      - name: Compile Slang shaders (.spv + reflection JSON)
+        run: bash assets/shaders/compile.sh
+
       - name: Build (desktop crates)
         run: >
           cargo build --locked
@@ -114,8 +131,6 @@ jobs:
     name: slang compile + binding drift
     runs-on: ubuntu-latest
     needs: lint
-    env:
-      SLANG_VERSION: "2026.13.1"
     steps:
       - uses: actions/checkout@v4
 
@@ -178,22 +193,18 @@ jobs:
           cargo run --locked --bin shader-bindgen -- \
             ../../assets/shaders/reflection ../../crates/prism-render/src/shader_bindings
 
-      - name: Fail if committed bindings / SPIR-V drift from source
+      - name: Fail if committed bindings drift from source
         run: |
-          # .spv are include_bytes!'d into the Rust build, so committed SPIR-V
-          # MUST match what slangc produces from the .slang sources. Same for
-          # the generated Rust bindings. Any drift means someone edited a
-          # shader without recompiling — fail loudly.
+          # The generated Rust bindings are committed and MUST match what
+          # bindgen produces from the freshly compiled reflection JSON. Any
+          # drift means someone edited a shader without regenerating — fail.
+          # (.spv files are not committed; their freshness is enforced by the
+          # compile step above — this job recompiles them on every run.)
           drift=0
           if ! git diff --quiet -- crates/prism-render/src/shader_bindings/; then
             echo "::error::shader_bindings/ is out of date. Run assets/shaders/compile.sh + xtask and commit."
             git diff -- crates/prism-render/src/shader_bindings/
             drift=1
           fi
-          if ! git diff --quiet -- 'assets/shaders/*.spv'; then
-            echo "::error::Committed .spv drift from .slang sources. Run assets/shaders/compile.sh and commit."
-            git diff --stat -- 'assets/shaders/*.spv'
-            drift=1
-          fi
           if [ "$drift" -ne 0 ]; then exit 1; fi
-          echo "Shader bindings and SPIR-V are up to date."
+          echo "Shader bindings are up to date."
