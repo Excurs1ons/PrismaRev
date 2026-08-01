@@ -51,6 +51,8 @@ assets/scenes/*
 !assets/scenes/*.rscn
 !assets/scenes/*.scene.json
 
+assets/external
+!assets/external/readme.md
 # Deepwork session state
 .slim/deepwork/
 assets/heightmaps/
