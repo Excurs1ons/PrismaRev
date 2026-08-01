@@ -972,7 +972,7 @@ impl RenderPassNode for PathTracePass {
             return Ok(());
         }
         if !ctx.frame.has_camera {
-            log::debug!("PathTracePass: no camera, skipping (PostPass reads SCENE_COLOR_H)");
+            log::debug!("PathTracePass: no camera, skipping (PostPass reads FORWARD_COLOR_H)");
             return Ok(());
         }
         if self.pt_scene.is_none() || self.materials_buffer.is_none() {
@@ -1557,17 +1557,6 @@ mod mat_inverse_tests {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn push_constant_size() {
-        // The auto-generated PtPush is 144 字节 (repr(C)) — matches the
-        // shader's std140 块 大小 PT_PUSH_RANGE_SIZE (see ensure_pipeline)
-        // must also be 144 for the VkPushConstantRange.
-        assert_eq!(
-            std::mem::size_of::<shader_bindings::pt_render::PtPush>(),
-            144,
-            "shader_bindings::pt_render::PtPush (repr(C))"
-        );
-    }
-}
+#[path = "pt_pass_tests.rs"]
+mod tests;
+

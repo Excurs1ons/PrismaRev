@@ -29,15 +29,15 @@ use crate::managers::{MeshHandle, RenderMeshManager};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ResourceHandle(pub u32);
 
-/// Well-known graph-edge 资源 handles published by `ScenePass` and 读取
+/// Well-known graph-edge 资源 handles published by `ForwardPass` and 读取
 /// by downstream passes (`GtaoPass`, `PostPass`). Fixed (not counter-based)
 /// so a pass added later can 引用 them without knowing the upstream
 /// pass's 内部 handle field. The graph's `next_handle` 计数器 is kept
 /// below this range (see `create_resource_at`), so there is no 碰撞
-pub const SCENE_DEPTH_H: ResourceHandle = ResourceHandle(1000);
-pub const SCENE_NORMAL_H: ResourceHandle = ResourceHandle(1001);
-pub const SCENE_COLOR_H: ResourceHandle = ResourceHandle(1002);
-/// PT (path tracing) 输出 颜色 — replaces SCENE_COLOR_H when
+pub const FORWARD_DEPTH_H: ResourceHandle = ResourceHandle(1000);
+pub const FORWARD_NORMAL_H: ResourceHandle = ResourceHandle(1001);
+pub const FORWARD_COLOR_H: ResourceHandle = ResourceHandle(1002);
+/// PT (path tracing) 输出 颜色 — replaces FORWARD_COLOR_H when
 /// `RenderSettings.render_mode == PathTrace`. Written by PathTracePass
 /// as a storage+sampled 图像 读取 by PostPass for tonemapping.
 pub const PT_COLOR_H: ResourceHandle = ResourceHandle(1003);
@@ -133,7 +133,7 @@ impl ResourceLifecycle {
 /// 渲染 众数 selector — 完整 rasterized PBR vs real-time path tracing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum RenderMode {
-    /// 标准 rasterized PBR 管线 (ScenePass + ShadowMap + GTAO + Post).
+    /// 标准 rasterized PBR 管线 (ForwardPass + ShadowMap + GTAO + Post).
     #[default]
     Raster,
     /// Real-time path tracing (PathTracePass 计算 + Post).
@@ -146,7 +146,7 @@ pub enum RenderMode {
 pub enum PassKind {
     /// Rasterized depth-only shadow 映射表 (`ShadowMapPass`).
     Shadow,
-    /// 向前 PBR scene 渲染 (`ScenePass`).
+    /// 向前 PBR scene 渲染 (`ForwardPass`).
     Scene,
     /// Half-resolution screen-space ambient 遮挡 (`GtaoPass`).
     Gtao,
@@ -353,10 +353,10 @@ pub struct GraphFrame<'a> {
     /// scene) so the axes track the 相机
     pub view_proj: [[f32; 4]; 4],
     /// Point lights collected from the ECS this 帧 rewritten into the
-    /// scene shader's 光源 SSBO. Forwarded to `ScenePass::execute` so it can
+    /// scene shader's 光源 SSBO. Forwarded to `ForwardPass::execute` so it can
     /// 更新 its 描述符 集合 without `GraphRenderer` poking it directly.
     pub lights: &'a [GpuLight],
-    /// Previous-frame GTAO 可见性 视图 (1-frame 延迟 `ScenePass`
+    /// Previous-frame GTAO 可见性 视图 (1-frame 延迟 `ForwardPass`
     /// binds this as its 环境光遮蔽 输入 it reads `ao[(frame + 1) % 2]` written by
     /// `GtaoPass` 最后一个 帧 Forwarded via `GraphFrame` so the 图 not
     /// `GraphRenderer`, owns the cross-pass wiring.
@@ -378,11 +378,11 @@ pub struct GraphFrame<'a> {
     pub inv_projection: [[f32; 4]; 4],
     /// 交换链 图像 views for the 当前 帧 Forwarded so `PostPass`
     /// can (re)build its per-swapchain-image framebuffers inside 执行
-    /// (mirroring `ScenePass::ensure_target`), instead of relying on
+    /// (mirroring `ForwardPass::ensure_target`), instead of relying on
     /// `GraphRenderer` to 调用 `set_target` every 帧
     pub swapchain_views: &'a [vk::ImageView],
     /// 激活 渲染 众数 光栅化 vs PathTrace). Passes check this to decide
-    /// whether to run (ScenePass skips in PT 众数 PathTracePass skips in
+    /// whether to run (ForwardPass skips in PT 众数 PathTracePass skips in
     /// 光栅化 众数
     pub render_mode: RenderMode,
     /// Path tracing 最大值 bounces.
@@ -403,7 +403,7 @@ pub struct GraphFrame<'a> {
     pub light_color: [f32; 4],
     /// Exposure multiplier applied to the final 高动态范围 颜色 before tonemapping.
     /// Forwarded from [`FrameInput`](crate::graph_renderer::FrameInput) so both
-    /// ScenePass (via FrameUBOData) and PathTracePass (via 推送 常量 apply
+    /// ForwardPass (via FrameUBOData) and PathTracePass (via 推送 常量 apply
     /// the same exposure value from the 相机 实体
     pub exposure: f32,
     /// Analytic lights for path tracing (point/spot/area/directional).
@@ -415,7 +415,7 @@ pub struct GraphFrame<'a> {
     /// Whether a usable 相机 实体 was 找到 When `false`, the skybox and
     /// PT pass should be skipped so the 清空 颜色 (gray) shows through.
     pub has_camera: bool,
-    /// 清空 颜色 for the scene 颜色 附件 Applied by ScenePass on
+    /// 清空 颜色 for the scene 颜色 附件 Applied by ForwardPass on
     /// render-pass 开始 可见 when the skybox and scene geometry are
     /// absent or 透明 (e.g. no-camera 回退 Matches the app-level
     /// `clear_color` 参数 passed to `render_system`.
@@ -433,7 +433,7 @@ pub struct RenderContext<'a> {
     /// `frame_index` (which is the frame-in-flight 索引 with N 交换链
     /// images and 2 frames in flight, `frame_index` cycles 0..2 while
     /// `image_index` cycles 0..N. Passes that own per-swapchain-image resources
-    /// (e.g. `ScenePass`'s framebuffers) 索引 by this, not `frame_index`.
+    /// (e.g. `ForwardPass`'s framebuffers) 索引 by this, not `frame_index`.
     pub image_index: u32,
     /// 当前 交换链 extent.
     pub extent: vk::Extent2D,
@@ -678,7 +678,7 @@ pub struct GraphResource {
 
 /// 资源 表 passed to passes at 执行 时间
 /// Besides the graph-owned images (allocated in `allocate_resources`), it
-/// carries **pass-exported views + images** (e.g. `ScenePass` publishes its
+/// carries **pass-exported views + images** (e.g. `ForwardPass` publishes its
 /// 深度 / 法线 / 高动态范围 views AND images here so downstream passes like
 /// `GtaoPass` / `PostPass` can 读取 them by handle). This is the minimal
 /// graph-edge 资源 handoff for PR-1: the 图 does not own the
@@ -814,7 +814,7 @@ impl RenderGraphBuilder {
     }
 
     /// 创建 a transient 资源 at a specific handle (e.g. a well-known
-    /// graph-edge handle like `SCENE_DEPTH_H`). Used so downstream passes can
+    /// graph-edge handle like `FORWARD_DEPTH_H`). Used so downstream passes can
     /// 引用 a publisher's 输出 without knowing its 内部 field.
     pub fn create_resource_at(&mut self, handle: ResourceHandle, res_type: ResourceType) {
         self.resources.insert(
@@ -918,7 +918,7 @@ pub struct RenderGraph {
     edges: Vec<ResourceEdge>,
     /// Per-`(handle, image_index)` 资源 状态 tracker, persisted across
     /// frames so cross-frame reads (e.g. GTAO's double-buffered 环境光遮蔽 keep their
-    /// 布局 Keyed by `image_index` because `ScenePass`/`PostPass` own
+    /// 布局 Keyed by `image_index` because `ForwardPass`/`PostPass` own
     /// per-swapchain-image attachments under the same handle.
     state_tracker: ResourceStateTracker,
     /// `[first_write, last_read]` span per 资源 for the visualizer and
@@ -1011,7 +1011,7 @@ impl RenderGraph {
         }
     }
 
-    /// 追加 a pass to an already-built 图 (e.g. ScenePass / GtaoPass /
+    /// 追加 a pass to an already-built 图 (e.g. ForwardPass / GtaoPass /
     /// PostPass, registered after the shadow map's resources are allocated so
     /// the scene can bind the shadow 视图 Runs `setup` on the new pass
     /// (merging its declared resources into the 图 and appends it to the
@@ -1122,7 +1122,7 @@ impl RenderGraph {
     /// pass's own 渲染 pass performs that 过渡 via `final_layout`).
     ///
     /// 音符 cross-frame reads (e.g. GTAO's double-buffered 环境光遮蔽 fed 后 to
-    /// `ScenePass`) and the 交换链 `-> PRESENT_SRC_KHR` 过渡 are NOT
+    /// `ForwardPass`) and the 交换链 `-> PRESENT_SRC_KHR` 过渡 are NOT
     /// 图 edges and remain manual (see the pass-level comments). The 布局
     /// cache only tracks the four graph-flow handles (shadow / scene 深度 /
     /// 法线 / 高动态范围 颜色
@@ -1483,37 +1483,6 @@ fn find_memory_type(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
+#[path = "render_graph_tests.rs"]
+mod tests;
 
-    #[test]
-    fn resource_handle_invalid() {
-        assert_eq!(ResourceHandle::INVALID.0, u32::MAX);
-    }
-
-    #[test]
-    fn builder_creates_resources() {
-        let mut builder = RenderGraphBuilder::new();
-        let h = builder.create_resource(ResourceType::ColorAttachment {
-            format: vk::Format::A2B10G10R10_UNORM_PACK32,
-            extent: vk::Extent2D {
-                width: 1920,
-                height: 1080,
-            },
-            sample_count: vk::SampleCountFlags::TYPE_1,
-        });
-        assert_eq!(h.0, 0);
-        assert!(builder.resources.contains_key(&h));
-    }
-
-    #[test]
-    fn settings_default_is_high_precision_gbuffer() {
-        // P0 默认 flipped to `true`: world-space normals from 法线
-        // maps need Rgba16F precision in GBuffer A. See Plan §4.3.
-        let s = RenderSettings::default();
-        assert!(s.gbuffer_high_precision);
-        assert!(!s.ray_tracing_enabled);
-        assert_eq!(s.ray_query_resolution_scale, 0.5);
-        assert_eq!(s.sharc_capacity, 1 << 20);
-    }
-}
