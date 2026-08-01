@@ -224,7 +224,9 @@ impl RenderTexture {
     pub(crate) fn needs_render(&self) -> bool {
         let update_due = match self.update_mode {
             RtUpdateMode::OnLoad => !self.initialized, // 首次调度渲染一次，之后停更
-            RtUpdateMode::Realtime => self.period == 0 || self.frame_counter % self.period == 0,
+            RtUpdateMode::Realtime => {
+                self.period == 0 || self.frame_counter.is_multiple_of(self.period)
+            }
             RtUpdateMode::OnDemand => self.pending_update,
         };
         let init_due = !self.initialized && self.init_shader.is_some();
