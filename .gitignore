@@ -18,8 +18,13 @@ android/build/
 android/app/build/
 android/app/src/main/jniLibs/
 
-# Screenshot / debug capture artifacts
+# Screenshot / debug capture artifacts.
+# NOTE: this is a blanket rule, so app icons must be re-included explicitly —
+# they are build inputs (tauri.conf.json `bundle.icon`, Android res/mipmap-*),
+# and a missing icons/32x32.png fails `tauri android build` at codegen.
 *.png
+!launcher/src-tauri/icons/*.png
+!launcher/src-tauri/gen/android/app/src/main/res/**/*.png
 
 # Runtime logs
 app_err.log
