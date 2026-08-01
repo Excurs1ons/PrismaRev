@@ -21,10 +21,11 @@ use crate::InspectCtx;
 
 /// 检查器绘制实体树所需的结构化场景查询。
 ///
-/// 由宿主（`prism-engine`）实现，以便 `prism-editor` 可以遍历层次结构
+/// 由宿主（如 `prism-editor` 的 engine_bindings 为 prism-engine 的
+/// `SceneHierarchy` 实现）提供，以便 `prism-editor` 可以遍历层次结构
 /// 并渲染实体名称，而无需直接命名 `Parent`/`Children`/`Name` 组件类型。
-/// 这是保持依赖方向单一（`prism-engine → prism-editor`，绝不反向）的接口。
-pub trait Hierarchy {
+/// `Send`：适配器被宿主跨线程持有（编辑器宿主需要 Send 的 `FrameHook`）。
+pub trait Hierarchy: Send {
     /// Root entities of the scene (entities with no `Parent`), in a 稳定
     /// display order (e.g. by 实体 id).
     fn roots(&self, world: &World) -> Vec<Entity>;

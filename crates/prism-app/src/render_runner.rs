@@ -1,4 +1,4 @@
-//! 渲染线程——从主线程接收 [`FramePacket`] + [`EguiFrame`]，
+//! 渲染线程——从主线程接收 [`FramePacket`] 与叠加层消息，
 //! 并驱动 [`GraphRenderer`]（begin_frame → 执行 → present）。
 //!
 //! 渲染线程由 [`App`](crate::app::App) 在主线程预解析场景资源后启动。
@@ -10,7 +10,7 @@ use std::time::Instant;
 use prism_engine::dirty_router::DirtyRouter;
 use prism_engine::render_settings::RenderSettings;
 use prism_engine::render_system::FramePacket;
-use prism_render::{EguiFrame, FrameInput, FrameUBOData, GraphRenderer};
+use prism_render::{FrameInput, FrameUBOData, GraphRenderer};
 
 use crate::render_shared::{RenderShared, RenderStats};
 
@@ -42,7 +42,12 @@ pub fn render_thread_main(mut renderer: GraphRenderer, shared: Arc<RenderShared>
         }
 
         let packet = shared.take_packet();
-        let egui_frame = shared.take_egui_frame();
+        // 应用主线程投递的叠加层消息（如"新 egui 帧"）。
+        let overlay_messages = shared.take_overlay_messages();
+        let has_overlay_messages = !overlay_messages.is_empty();
+        for msg in overlay_messages {
+            renderer.apply_overlay_message(msg);
+        }
 
         // If no packet yet, spin-wait briefly.
         let Some(packet) = packet else {
@@ -55,7 +60,6 @@ pub fn render_thread_main(mut renderer: GraphRenderer, shared: Arc<RenderShared>
         if let Err(e) = render_one_frame(
             &mut renderer,
             &packet,
-            egui_frame.as_ref(),
             &mut dirty_router,
             &settings,
         ) {
@@ -82,8 +86,8 @@ pub fn render_thread_main(mut renderer: GraphRenderer, shared: Arc<RenderShared>
             pt_frame_count: pt_count,
         });
 
-        // Throttle if no egui 帧 pending to avoid 100% CPU spin when idle.
-        if shared.take_egui_frame().is_none() && frame_time_ms < 1.0 {
+        // Throttle if no 叠加层消息 pending to avoid 100% CPU spin when idle.
+        if !has_overlay_messages && frame_time_ms < 1.0 {
             std::thread::sleep(std::time::Duration::from_micros(500));
         }
     }
@@ -97,7 +101,6 @@ pub fn render_thread_main(mut renderer: GraphRenderer, shared: Arc<RenderShared>
 fn render_one_frame(
     renderer: &mut GraphRenderer,
     packet: &FramePacket,
-    egui_frame: Option<&EguiFrame>,
     dirty_router: &mut DirtyRouter,
     settings: &RenderSettings,
 ) -> anyhow::Result<()> {
@@ -164,7 +167,7 @@ fn render_one_frame(
         None => return Ok(()),
     };
     renderer
-        .execute(&ctx, &input, egui_frame)
+        .execute(&ctx, &input)
         .inspect_err(|_| {
             let _ = renderer.present(&ctx);
         })?;

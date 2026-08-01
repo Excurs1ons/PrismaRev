@@ -3,8 +3,9 @@
 //! [`EguiCpu`] owns the egui context and winit 状态 runs the UI 闭包
 //! 细分形状，并为渲染线程生成 [`EguiFrame`]。
 
-use prism_render::EguiFrame;
 use winit::window::Window;
+
+use crate::egui_frame::EguiFrame;
 
 /// CPU-side egui: context + winit 状态
 ///

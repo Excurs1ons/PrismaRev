@@ -2,10 +2,14 @@
 //!
 //! # 设计
 //!
-//! [`FramePacket`] 和 [`EguiFrame`] 每帧都会被覆盖：
+//! [`FramePacket`] 每帧都会被覆盖：
 //! - **主线程**在渲染线程读取前写入最新数据。
 //! - **渲染线程**每轮迭代读取最新数据并处理。
 //! - 无阻塞——渲染线程始终使用最新的可用数据。
+//!
+//! 外部叠加层（编辑器 egui 等）的 CPU 帧数据经 [`overlay_messages`]
+//! 传递：主线程把类型擦除的闭包（[`OverlayMessage`]）入队，渲染线程
+//! 在每帧开始时取出并应用到叠加层。
 //!
 //! `running` 是一个 [`AtomicBool`]，主线程将其设为 `false` 以通知渲染线程退出。
 //!
@@ -19,7 +23,7 @@ use std::sync::{
 };
 
 use prism_engine::render_system::FramePacket;
-use prism_render::EguiFrame;
+use prism_render::external_overlay::OverlayMessage;
 
 // ---------------------------------------------------------------------------
 // RenderStats — 渲染线程 → 主线程
@@ -46,8 +50,8 @@ pub struct RenderShared {
     pub running: Arc<AtomicBool>,
     /// 来自游戏循环的最新帧数据包（主线程→渲染线程）
     pub packet: Mutex<Option<FramePacket>>,
-    /// 最新的已细分 egui 帧（主线程→渲染线程）
-    pub egui_frame: Mutex<Option<EguiFrame>>,
+    /// 投递给外部叠加层的类型擦除消息队列（主线程→渲染线程）
+    pub overlay_messages: Mutex<Vec<OverlayMessage>>,
     /// 来自渲染线程的最新渲染统计（渲染→主线程）。
     pub render_stats: Mutex<RenderStats>,
     /// 集合 `true` by main 线程 to request PT accumulation reset.
@@ -65,7 +69,7 @@ impl RenderShared {
         let shared = Arc::new(Self {
             running: running.clone(),
             packet: Mutex::new(None),
-            egui_frame: Mutex::new(None),
+            overlay_messages: Mutex::new(Vec::new()),
             render_stats: Mutex::new(RenderStats::default()),
             pt_reset_requested: AtomicBool::new(false),
             gpu_uploads: Mutex::new(Vec::new()),
@@ -82,9 +86,15 @@ impl RenderShared {
         *self.packet.lock().unwrap() = Some(packet);
     }
 
-    /// Submit the latest egui 帧 (main 线程 → 渲染 线程
-    pub fn send_egui_frame(&self, frame: EguiFrame) {
-        *self.egui_frame.lock().unwrap() = Some(frame);
+    /// 入队一条叠加层消息（主线程 → 渲染线程）。
+    ///
+    /// 消息是类型擦除的闭包：渲染线程在每帧开始时取出并应用到
+    /// 外部叠加层（如"这是新的 egui 帧"）。
+    pub fn send_overlay_message(
+        &self,
+        msg: OverlayMessage,
+    ) {
+        self.overlay_messages.lock().unwrap().push(msg);
     }
 
     /// Take the latest 帧 packet 渲染 线程
@@ -92,9 +102,9 @@ impl RenderShared {
         self.packet.lock().unwrap().take()
     }
 
-    /// Take the latest egui 帧 渲染 线程
-    pub fn take_egui_frame(&self) -> Option<EguiFrame> {
-        self.egui_frame.lock().unwrap().take()
+    /// 取走所有排队中的叠加层消息（渲染线程）。
+    pub fn take_overlay_messages(&self) -> Vec<OverlayMessage> {
+        std::mem::take(&mut *self.overlay_messages.lock().unwrap())
     }
 
     // -------------------------------------------------------------------

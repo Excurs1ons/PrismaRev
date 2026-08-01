@@ -8,8 +8,7 @@ description = "Application layer and main loop for PrismaRev"
 [dependencies]
 prism-ecs = { path = "../prism-ecs" }
 prism-render = { path = "../prism-render" }
-prism-asset = { path = "../prism-asset", default-features = false, features = ["runtime", "cooker", "package", "importer", "db"] }
-prism-editor = { path = "../prism-editor" }
+prism-asset = { path = "../prism-asset", default-features = false, features = ["runtime", "cooker", "package", "importer", "db", "asset-data"] }
 
 prism-audio = { path = "../prism-audio" }
 glam.workspace = true
@@ -18,7 +17,6 @@ anyhow = { workspace = true }
 rustc-hash = "2"
 ash = { workspace = true }
 winit = { workspace = true }
-egui = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 toml = { workspace = true }

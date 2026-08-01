@@ -172,19 +172,25 @@ fn get_device_info() -> Result<serde_json::Value, String> {
     }))
 }
 
-/// 启动游戏:移动端通过 Kotlin plugin 启动 GameActivity;桌面端直接拉起 prismarev 二进制
+/// 启动游戏:移动端通过 Kotlin plugin 启动 GameActivity;桌面端直接拉起
+/// prismarev 二进制。`config` 为可选 LaunchConfig JSON(场景/日志级别等),
+/// 经 `PRISMREV_LAUNCH_CONFIG` env(桌面)或 files 目录文件(Android)传递。
 #[cfg(mobile)]
 #[tauri::command]
-fn launch_game(state: tauri::State<NativeApi>) -> Result<(), String> {
-    state.call::<serde_json::Value>("launch_game", ()).map(|_| ())
+fn launch_game(state: tauri::State<NativeApi>, config: Option<String>) -> Result<(), String> {
+    state
+        .call::<serde_json::Value>("launch_game", serde_json::json!({ "config": config }))
+        .map(|_| ())
 }
 
 #[cfg(not(mobile))]
 #[tauri::command]
-fn launch_game() -> Result<(), String> {
-    std::process::Command::new("prismarev")
-        .spawn()
-        .map_err(|e| e.to_string())?;
+fn launch_game(config: Option<String>) -> Result<(), String> {
+    let mut cmd = std::process::Command::new("prismarev");
+    if let Some(c) = config {
+        cmd.env("PRISMREV_LAUNCH_CONFIG", c);
+    }
+    cmd.spawn().map_err(|e| e.to_string())?;
     Ok(())
 }
 

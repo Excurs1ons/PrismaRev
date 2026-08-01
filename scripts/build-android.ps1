@@ -1,14 +1,16 @@
 #!/usr/bin/env pwsh
 <#
 .SYNOPSIS
-    Build PrismaRev for Android arm64-v8a: compile Rust cdylib via cargo-ndk,
-    then assemble the APK via Gradle.
+    Build PrismaRev for Android arm64-v8a: compile the game Rust cdylib
+    (`game/` → `libprism_android.so`) via cargo-ndk, then assemble the APK
+    via Gradle (Tauri hub + GameActivity in `launcher/src-tauri/gen/android`).
 #>
 $ErrorActionPreference = "Stop"
 
-$ProjectRoot = Split-Path -LiteralPath $PSScriptRoot -Parent
-$AndroidDir  = Join-Path -LiteralPath $ProjectRoot "android"
-$JniLibsDir  = Join-Path -LiteralPath $AndroidDir "app\src\main\jniLibs"
+$ProjectRoot = Split-Path -Parent $PSScriptRoot
+$AndroidDir  = Join-Path $ProjectRoot "launcher\src-tauri\gen\android"
+$JniLibsDir  = Join-Path $AndroidDir "app\src\main\jniLibs"
+$GameManifest = Join-Path $ProjectRoot "game\Cargo.toml"
 
 # ---- Prerequisites ---------------------------------------------------------
 
@@ -21,27 +23,95 @@ if ($installed -notcontains $target) {
 }
 
 # 2. cargo-ndk
-$ndkVer = cargo ndk --version 2>$null
+cargo ndk --version 2>$null | Out-Null
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Installing cargo-ndk..."
     cargo install cargo-ndk
 }
 
-# 3. ANDROID_NDK_HOME or ANDROID_HOME
-if (-not $env:ANDROID_NDK_HOME -and -not $env:ANDROID_HOME) {
-    Write-Warning "Neither ANDROID_NDK_HOME nor ANDROID_HOME is set."
-    Write-Warning "Set one of them to your NDK installation path."
+# 3. NDK: honor ANDROID_NDK_HOME, else fall back to the newest NDK under
+#    ANDROID_HOME\ndk. The env var is frequently stale on dev machines, so
+#    validate it (must contain toolchains\llvm) before trusting it.
+function Get-NdkRoot {
+    $candidates = @()
+    if ($env:ANDROID_NDK_HOME) { $candidates += $env:ANDROID_NDK_HOME }
+    if ($env:ANDROID_HOME) {
+        $ndkBase = Join-Path $env:ANDROID_HOME "ndk"
+        if (Test-Path $ndkBase) {
+            $candidates += Get-ChildItem $ndkBase -Directory | Sort-Object Name -Descending | ForEach-Object { $_.FullName }
+        }
+    }
+    foreach ($c in $candidates) {
+        if (Test-Path (Join-Path $c "toolchains\llvm")) {
+            return $c
+        }
+    }
+    return $null
+}
+
+$ndkRoot = Get-NdkRoot
+if (-not $ndkRoot) {
+    Write-Warning "No usable NDK found (checked ANDROID_NDK_HOME and ANDROID_HOME\ndk\*)."
+    Write-Warning "Install the NDK via Android Studio SDK Manager and set ANDROID_NDK_HOME."
     exit 1
+}
+# cargo-ndk reads ANDROID_NDK_HOME itself, so override it with the validated
+# path — otherwise a stale value wins and cargo-ndk fails on version detection.
+$env:ANDROID_NDK_HOME = $ndkRoot
+Write-Host "Using NDK: $ndkRoot"
+
+# 4. cargo-ndk platform (API level) = the manifest's minSdk. The .so must not
+#    link symbols newer than minSdk, so do NOT just take the newest sysroot.
+#    Floor is 26 (libaaudio appears there; cargo-ndk's own default of 21 fails
+#    to link with "-laaudio not found"). If the NDK is too old for minSdk, fall
+#    back to its newest available level.
+$minSdk = 31
+$gradleFile = Join-Path $AndroidDir "app\build.gradle.kts"
+if (Test-Path $gradleFile) {
+    $m = Select-String -Path $gradleFile -Pattern 'minSdk\s*=\s*(\d+)' | Select-Object -First 1
+    if ($m) { $minSdk = [int]$m.Matches[0].Groups[1].Value }
+}
+$apiLevel = [Math]::Max($minSdk, 26)
+$sysrootLib = Join-Path $ndkRoot "toolchains\llvm\prebuilt\windows-x86_64\sysroot\usr\lib\aarch64-linux-android"
+if (Test-Path $sysrootLib) {
+    $available = Get-ChildItem $sysrootLib -Directory |
+        Where-Object { $_.Name -match '^\d+$' } |
+        ForEach-Object { [int]$_.Name } |
+        Sort-Object -Descending
+    if ($available -and ($available -notcontains $apiLevel)) {
+        $apiLevel = $available | Select-Object -First 1
+        Write-Warning "NDK sysroot has no API $minSdk; using $apiLevel instead."
+    }
+}
+Write-Host "cargo-ndk platform (API level): $apiLevel  (manifest minSdk = $minSdk)"
+
+# ---- Shaders ---------------------------------------------------------------
+
+# .spv files are include_bytes!-ed at compile time and gitignored; make sure
+# they exist before building (Android hosts have no slangc — compile on a
+# desktop/CI host first, or fetch the CI `spirv` artifact).
+if (Get-Command slangc -ErrorAction SilentlyContinue) {
+    Write-Host "Compiling shaders..."
+    bash (Join-Path $ProjectRoot "assets\shaders\compile.sh")
+} else {
+    $spv = Get-ChildItem (Join-Path $ProjectRoot "assets\shaders\*.spv") -ErrorAction SilentlyContinue
+    if (-not $spv) {
+        Write-Warning "No .spv files found and slangc is unavailable."
+        Write-Warning "Compile shaders on a desktop host first, or download the CI spirv artifact."
+        exit 1
+    }
+    Write-Host "Using prebuilt .spv ($($spv.Count) files)."
 }
 
 # ---- Build Rust .so --------------------------------------------------------
 
-Write-Host "Building prism-app (Android cdylib) for $target..."
+Write-Host "Building game (prismarev cdylib) for $target..."
 
 cargo ndk `
+    -P $apiLevel `
     -t arm64-v8a `
     -o $JniLibsDir `
-    build --release -p prism-app
+    build --release --manifest-path $GameManifest -p prismarev
 
 if ($LASTEXITCODE -ne 0) {
     Write-Error "cargo ndk failed"
@@ -50,32 +120,33 @@ if ($LASTEXITCODE -ne 0) {
 
 Write-Host "Rust .so built successfully."
 
-# ---- Assemble APK via Gradle -----------------------------------------------
+# ---- Assemble APK via the Tauri CLI ----------------------------------------
 
-$Gradlew = Join-Path -LiteralPath $AndroidDir "gradlew"
-if (-not (Test-Path -LiteralPath $Gradlew)) {
-    Write-Host ""
-    Write-Host "Gradle wrapper not found. Generate it with one of these methods:"
-    Write-Host "  1) Open $AndroidDir in Android Studio (auto-generates wrapper)"
-    Write-Host "  2) Run: gradle wrapper --gradle-version 8.11.1"
-    Write-Host "  3) Run: cd android && gradle wrapper"
-    Write-Host ""
-    Write-Host "After the wrapper exists, run this script again."
-    Write-Host "The .so file is ready at: $JniLibsDir"
-    exit 0
-}
-
-Write-Host "Running Gradle assembleDebug..."
-Push-Location -LiteralPath $AndroidDir
+# Do NOT call `gradlew assembleDebug` directly: the Gradle `rust` plugin's
+# rustBuild* tasks shell out to `pnpm tauri android android-studio-script` to
+# build the launcher's own .so, and that only resolves when the Tauri CLI (or
+# Android Studio) is the process launching Gradle. Driving Gradle from here
+# fails with "A problem occurred starting process 'command 'pnpm.bat''".
+# The Tauri CLI runs the same Gradle build and picks up the .so we just wrote
+# into jniLibs/.
+$LauncherDir = Join-Path $ProjectRoot "launcher"
+Write-Host "Assembling APK via Tauri CLI (pnpm tauri android build)..."
+Push-Location $LauncherDir
 try {
-    & $Gradlew assembleDebug
+    pnpm tauri android build --debug --target aarch64
     if ($LASTEXITCODE -ne 0) {
-        Write-Error "Gradle build failed"
+        Write-Error "tauri android build failed"
         exit 1
     }
-    Write-Host "APK: $AndroidDir\app\build\outputs\apk\debug\app-debug.apk"
 } finally {
     Pop-Location
+}
+
+$apk = Join-Path $AndroidDir "app\build\outputs\apk\universal\debug\app-universal-debug.apk"
+if (Test-Path $apk) {
+    Write-Host "APK: $apk"
+} else {
+    Write-Warning "Expected APK not found at $apk (check the Tauri CLI output above)."
 }
 
 Write-Host "Build complete."

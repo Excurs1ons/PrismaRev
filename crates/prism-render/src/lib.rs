@@ -40,7 +40,7 @@ pub mod capabilities;
 pub mod compute;
 pub mod context;
 pub mod descriptor;
-pub mod egui_overlay;
+pub mod external_overlay;
 pub mod forward_pass;
 pub mod gi;
 pub mod gizmo;
@@ -82,7 +82,7 @@ pub use descriptor::{
     DescriptorLayout, DescriptorPool, FrameUBO, FrameUBOData, GpuLight, PtAnalyticLight,
     PtEmissiveTri, ReSTIRReservoir, LIGHT_MAX, PT_EMISSIVE_MAX, PT_LIGHT_MAX,
 };
-pub use egui_overlay::{EguiFrame, EguiGpu};
+pub use external_overlay::{OverlayRecordCtx, SwapchainOverlay};
 pub use gi::{
     eval_sh9, sample_probe_irradiance, sh_basis, trilinear_weights, world_to_probe_coord,
     ProbeVolumeInfo, SH_COEFF_COUNT,

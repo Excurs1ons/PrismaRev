@@ -8,21 +8,11 @@
 //!
 //! 桌面端由 launcher/ 以 `prismarev` 二进制 spawn（hub 模式）；可读
 //! `PRISMREV_LAUNCH_CONFIG` env 覆盖启动配置（见 `LaunchConfig`）。
+//! Android 入口在 `lib.rs`（cdylib `libprism_android.so`）。
 
 #![deny(warnings)]
 
-mod intro;
-
-use prism_engine::config::AppConfig;
-
 fn main() {
     // 构造应用（完成引擎初始化），注册 intro 的 ECS 内容后启动。
-    let mut app = prism_app::app(AppConfig::load());
-    {
-        let world = app.engine_mut().world_mut();
-        let state = intro::spawn_ui(world, intro::IntroConfig::default());
-        world.insert_resource(state);
-    }
-    app.add_system("intro::advance", intro::advance);
-    app.run();
+    prism_android::build_app().run();
 }

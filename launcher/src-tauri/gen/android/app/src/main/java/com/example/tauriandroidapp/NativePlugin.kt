@@ -31,6 +31,12 @@ class VibrateArgs {
   var duration: Long = 200
 }
 
+@InvokeArg
+class LaunchArgs {
+  /** LaunchConfig JSON（场景/日志级别等）；null = 游戏默认。 */
+  var config: String? = null
+}
+
 /**
  * 自定义 Tauri Mobile Plugin:调用 Android 原生 API
  *
@@ -187,10 +193,17 @@ class NativePlugin(private val activity: Activity) : Plugin(activity) {
    * 启动游戏:从启动器(Tauri webview)跳转到 Vulkan 游戏 Activity。
    * 通过显式 Intent 启动 com.prismarev.MainActivity(GameActivity),
    * 由 GameActivity 加载 libprism_android.so 运行渲染器。
+   * 可选 `config`（LaunchConfig JSON）先落盘到 app files 目录,
+   * 游戏 Rust 侧从同一位置读取（android-activity internal_data_path）。
    */
   @Command
   fun launch_game(invoke: Invoke) {
     try {
+      val args = invoke.parseArgs(LaunchArgs::class.java)
+      args.config?.let { cfg ->
+        val f = java.io.File(activity.filesDir, "launch_config.json")
+        f.writeText(cfg)
+      }
       val intent = Intent(activity, MainActivity::class.java)
       activity.startActivity(intent)
       invoke.resolve()

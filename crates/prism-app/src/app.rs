@@ -8,10 +8,10 @@
 //! about_to_wait: 循环
 //!     engine.fixed_update × N             take_packet()
 //!     engine.update                       begin_frame()
-//!     engine.late_update                  execute(packet, egui_frame)
+//!     engine.late_update                  execute(packet)
 //!     audio.update                        present()
 //!     extract_frame_packet ──packet──►
-//!     egui_cpu.run_ui ──egui_frame──►
+//!     frame_hook.on_tick ──overlay_msg──►
 //! ```
 //!
 //! 渲染线程独立于窗口事件运行。垂直同步仅阻塞渲染线程——主线程继续执行。
@@ -32,7 +32,6 @@ use std::thread::JoinHandle;
 use std::time::Instant;
 
 use prism_audio::AudioEngine;
-use prism_editor::{Editor, RenderGraphViz};
 use prism_engine::asset_resolver::GpuAssetResolver;
 use prism_engine::config::AppConfig;
 use prism_engine::engine::load_env_bytes_from_manifest;
@@ -44,14 +43,13 @@ use prism_engine::render_settings::RenderSettings;
 use prism_engine::render_system::extract_frame_packet;
 use prism_engine::Engine;
 use prism_platform::PlatformContext;
-use prism_render::RenderMode;
 use winit::application::ApplicationHandler;
 use winit::event::{DeviceEvent, MouseScrollDelta, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::KeyCode;
 use winit::window::WindowId;
 
-use crate::egui_cpu::EguiCpu;
+use crate::hook::FrameHook;
 use crate::render_runner::render_thread_main;
 use crate::render_shared::RenderShared;
 
@@ -78,12 +76,8 @@ pub struct App {
     /// `into_parts` 后窗口与渲染器分离。
     window: Option<Arc<winit::window::Window>>,
 
-    // ---------- egui（主线程） ----------
-    egui_cpu: EguiCpu,
-
-    // ---------- 编辑器/调试 ----------
-    editor: Editor,
-    render_graph_viz: RenderGraphViz,
+    // ---------- 帧钩子（编辑器等宿主注入） ----------
+    frame_hook: Option<Box<dyn FrameHook>>,
     render_settings: RenderSettings,
 
     // ---------- 每帧状态 ----------
@@ -135,13 +129,11 @@ impl App {
     /// [`Self::run`]（桌面）或 [`Self::run_on`]（Android）启动事件循环。
     pub fn with_config(config: AppConfig) -> Self {
         let mut engine = Engine::empty();
-        let mut editor = Editor::new();
 
         // Phase 0 – PreInit
         engine.pre_init(&());
 
         // Phase 1 – Subsystem registration
-        engine.init_core(&mut editor);
 
         // Phase 2 – 配置
         engine.init_config();
@@ -166,9 +158,7 @@ impl App {
             render_thread: None,
             platform: None,
             window: None,
-            egui_cpu: EguiCpu::new(),
-            editor,
-            render_graph_viz: RenderGraphViz::new(),
+            frame_hook: None,
             render_settings: RenderSettings::default(),
             display_aspect: 16.0 / 9.0,
             surface_rotation: glam::Mat4::IDENTITY,
@@ -213,10 +203,20 @@ impl App {
         self
     }
 
+    /// 注入帧钩子（编辑器等宿主）。钩子在渲染线程启动前被询问外部
+    /// 叠加层工厂，之后每帧收到 tick 与窗口事件转发。
+    pub fn with_frame_hook(mut self, hook: impl FrameHook + 'static) -> Self {
+        self.frame_hook = Some(Box::new(hook));
+        self
+    }
+
     /// 启动事件循环（桌面入口，自建 winit EventLoop）。
     ///
     /// 内部构造 EventLoop 并交给 [`Self::run_on`]；致命错误直接 panic。
     pub fn run(self) {
+        // 用户项目入口没有额外初始化步骤——env_logger 在这里兜底
+        // （try_init 幂等：已初始化时静默失败）。
+        let _ = env_logger::try_init();
         let event_loop = winit::event_loop::EventLoop::new().expect("failed to create event loop");
         self.run_on(event_loop).expect("fatal application error");
     }
@@ -235,8 +235,16 @@ impl App {
         let platform = self.platform.take().expect("platform not created");
 
         // 从 PlatformContext 中提取 GraphRenderer。
-        let (window, renderer) = platform.into_parts();
+        let (window, mut renderer) = platform.into_parts();
         self.window = Some(window);
+
+        // 帧钩子提供的叠加层工厂在启动渲染线程前调用一次：overlay 被
+        // 移到渲染线程（GPU 资源由实现方在 record 时懒创建）。
+        if let Some(hook) = self.frame_hook.as_ref() {
+            if let Some(factory) = hook.overlay() {
+                renderer.set_external_overlay(factory());
+            }
+        }
 
         // 创建共享状态
         let (shared, running) = RenderShared::new();
@@ -422,92 +430,6 @@ impl App {
     }
 
     // -----------------------------------------------------------------------
-    // Egui / 编辑器（主线程）
-    // -----------------------------------------------------------------------
-
-    fn run_editor_ui(&mut self) {
-        if !self.any_ui_visible() {
-            return;
-        }
-
-        let Some(ref shared) = self.render_shared else {
-            return;
-        };
-        let Some(ref window) = self.window else {
-            return;
-        };
-
-        // 同步调试/渲染设置。
-        self.editor.sync_debug(
-            self.render_settings.debug_flags,
-            self.render_settings.tonemap_mode,
-            true,
-        );
-        self.editor.sync_render(
-            self.render_settings.render_mode,
-            self.render_settings.pt_max_bounces,
-            self.render_settings.pt_ray_max_distance,
-            self.render_settings.pt_max_iterations,
-        );
-
-        // 从渲染线程读取渲染统计数据
-        let stats = shared.read_render_stats();
-        self.editor.sync_metrics(
-            1.0 / 60.0, // dt (fixed)
-            stats.frame_time_ms,
-            stats.fps,
-            stats.pt_frame_count.unwrap_or(0),
-        );
-
-        // Run egui UI — 借用 世界 + 编辑器 第一个 for the 闭包
-        let (world, editor) = {
-            let eng = self.engine.as_mut().expect("engine alive");
-            (eng.world_mut(), &mut self.editor)
-        };
-        let frame = self.egui_cpu.run_ui(window, |ui| {
-            editor.run_ctx(ui, world);
-            if self.render_graph_viz.show {
-                self.render_graph_viz.ui(ui);
-            }
-        });
-
-        // 推送 UI 编辑后的值
-        self.render_settings.tonemap_mode = self.editor.inspector.tonemap_mode;
-        let prev_render_mode = self.render_settings.render_mode;
-        let prev_pt_bounces = self.render_settings.pt_max_bounces;
-        let prev_pt_dist = self.render_settings.pt_ray_max_distance;
-        let prev_pt_iter = self.render_settings.pt_max_iterations;
-        self.render_settings.render_mode = self.editor.inspector.render_mode;
-        self.render_settings.pt_max_bounces = self.editor.inspector.pt_max_bounces;
-        self.render_settings.pt_ray_max_distance = self.editor.inspector.pt_ray_max_distance;
-        self.render_settings.pt_max_iterations = self.editor.inspector.pt_max_iterations;
-
-        // Request PT accumulation reset when parameters change.
-        if self.render_settings.render_mode == RenderMode::PathTrace
-            && (self.render_settings.pt_max_bounces != prev_pt_bounces
-                || self.render_settings.pt_ray_max_distance != prev_pt_dist
-                || self.render_settings.pt_max_iterations != prev_pt_iter
-                || self.render_settings.render_mode != prev_render_mode)
-        {
-            shared.request_pt_reset();
-        }
-
-        // 发送 egui 帧到渲染线程
-        shared.send_egui_frame(frame);
-
-        // 应用平台输出（光标、剪贴板）。
-        self.egui_cpu.apply_platform_output(window);
-    }
-
-    // -----------------------------------------------------------------------
-    // UI helpers
-    // -----------------------------------------------------------------------
-
-    fn any_ui_visible(&self) -> bool {
-        self.editor.inspector.show || self.render_graph_viz.show || self.editor.inspector.show_perf
-    }
-
-    // -----------------------------------------------------------------------
     // PBR 调试 helpers
     // -----------------------------------------------------------------------
 
@@ -687,13 +609,12 @@ impl ApplicationHandler for App {
             return;
         }
 
-        // 先将事件转发给 egui
-        if self.any_ui_visible() {
+        // 先将事件转发给帧钩子（编辑器 egui 等）；被消费则不再走应用
+        // 自身的快捷键处理（输入仍会路由到 InputManager 保持按键状态一致）。
+        if let Some(hook) = self.frame_hook.as_mut() {
             if let Some(ref window) = self.window {
-                let consumed = self.egui_cpu.handle_window_event(window, &event);
+                let consumed = hook.on_window_event(window, &event);
                 if consumed {
-                    // 仍然将输入路由到 InputManager，以保持按键状态一致，
-                    // 即使 egui 消费了该事件。
                     self.route_window_event_to_input(&event);
                     return;
                 }
@@ -757,15 +678,6 @@ impl ApplicationHandler for App {
                                 0
                             };
                         log::info!("tonemap mode = {}", self.render_settings.tonemap_mode);
-                    }
-                    KeyCode::F1 => {
-                        self.editor.inspector.show = !self.editor.inspector.show;
-                    }
-                    KeyCode::F2 => {
-                        self.render_graph_viz.show = !self.render_graph_viz.show;
-                    }
-                    KeyCode::F3 => {
-                        self.editor.toggle_perf();
                     }
                     _ => {}
                 }
@@ -847,8 +759,23 @@ impl ApplicationHandler for App {
         // 游戏循环 tick（主线程）
         self.tick_sim();
 
-        // 运行 egui UI（主线程）
-        self.run_editor_ui();
+        // 帧钩子（编辑器 egui 等）— 主线程
+        if let Some(hook) = self.frame_hook.as_mut() {
+            if let Some(ref window) = self.window {
+                if let Some(ref shared) = self.render_shared {
+                    if let Some(ref mut engine) = self.engine {
+                        let stats = shared.read_render_stats();
+                        hook.on_tick(
+                            window,
+                            engine.world_mut(),
+                            &mut self.render_settings,
+                            &stats,
+                            shared,
+                        );
+                    }
+                }
+            }
+        }
 
         // 更新 last_frame 用于 dt 计算
         self.last_frame = Some(Instant::now());

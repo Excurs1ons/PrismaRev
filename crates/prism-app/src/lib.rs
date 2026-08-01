@@ -31,6 +31,21 @@
 //! UI 用引擎自研 ECS 组件 UI（`Node` / `Style` / `Text`），随主渲染
 //! 通道每帧绘制——不依赖 egui。
 //!
+//! ## 中性扩展点（编辑器 / 调试宿主）
+//!
+//! 本 crate 不依赖 egui、也不依赖 prism-editor。外部宿主（如
+//! `prism-editor-host`）通过 [`App::with_frame_hook`] 注入 [`FrameHook`]：
+//!
+//! - [`FrameHook::on_window_event`]：抢先消费窗口事件（返回 `true` 表示吃掉）；
+//! - [`FrameHook::on_tick`]：每帧访问 world / 渲染设置 / 统计，并可经
+//!   [`RenderShared::send_overlay_message`] 向渲染线程投递**类型擦除**的
+//!   overlay 消息；
+//! - [`FrameHook::overlay`]：提供渲染线程侧的
+//!   `prism_render::external_overlay::SwapchainOverlay` 工厂。
+//!
+//! 加编辑器功能时**不要**把 egui / prism-editor 依赖加回本 crate——扩展
+//! hook 接口即可。
+//!
 //! ## 架构（多线程）
 //!
 //! ```text
@@ -42,8 +57,7 @@
 //!     engine.late_update                   execute()
 //!     audio.update                         present()    ← 垂直同步在此
 //!     extract_frame_packet ──packet──►   │
-//!     egui_cpu.run_ui ──egui_frame──►    │
-//!     apply_platform_output
+//!     frame_hook.on_tick ──overlay_msg──►│
 //!
 //! resumed(): 创建 PlatformContext → resolve_scene_assets
 //! → into_parts() → 生成 渲染 线程
@@ -52,7 +66,7 @@
 
 mod app;
 mod audio_decode_runner;
-mod egui_cpu;
+mod hook;
 mod io_runner;
 mod physics_runner;
 mod render_runner;
@@ -61,43 +75,46 @@ mod render_shared;
 use prism_engine::config::AppConfig;
 
 pub use app::App;
+pub use hook::FrameHook;
+pub use render_shared::{RenderShared, RenderStats};
 
 /// 创建应用并完成全部引擎初始化（配置加载、场景、运行时 init）。
 ///
 /// 用户项目在此之后注册 ECS 内容（`add_system` / `insert_resource` /
 /// `engine_mut`），然后 [`App::run`]（桌面）或 [`App::run_on`]（Android）。
+/// 编辑器等宿主可用 [`App::with_frame_hook`] 注入 [`FrameHook`]。
 pub fn app(config: AppConfig) -> App {
     App::with_config(config)
 }
 
-/// Desktop demo entry — creates a winit 事件 循环 and runs the application.
-///
-/// 默认配置 + 演示内容（orbit_camera demo system）；初始化 [`env_logger`]
-/// 并 panic on fatal errors — no caller-side boilerplate needed.
-/// 真实游戏项目请用 [`app`] + builder 方法。
-pub fn run() {
-    let _ = env_logger::try_init();
-    let mut app = App::with_config(AppConfig::load());
-    app.add_system("demo::orbit_camera", prism_engine::orbit_camera_demo_system);
-    app.run()
-}
-
-/// Shared entry — runs the application on a pre-built winit 事件 循环
-///
-/// Used by the Android `android_main` entry（演示内容与 [`run`] 相同）。
-pub fn run_on_event_loop(event_loop: winit::event_loop::EventLoop<()>) -> anyhow::Result<()> {
-    let mut app = App::with_config(AppConfig::load());
-    app.add_system("demo::orbit_camera", prism_engine::orbit_camera_demo_system);
-    app.run_on(event_loop)
-}
-
 // ===========================================================================
-// Android JNI entry point
+// Android entry helper
 // ===========================================================================
 
+/// 在 Android 上运行已构建的 [`App`]（供用户项目的 `android_main` 调用）。
+///
+/// 用户项目的 cdylib 导出 `#[no_mangle] fn android_main(...)`，在此调用
+/// 本函数，JNI 样板（android_logger、crash handler、EventLoop 构建）由
+/// 本函数包办：
+///
+/// ```no_run
+/// use prism_app::{app, run_on_android};
+/// use prism_engine::config::AppConfig;
+///
+/// #[cfg(target_os = "android")]
+/// #[no_mangle]
+/// fn android_main(android_app: winit::platform::android::activity::AndroidApp) {
+///     // ...注册 ECS 内容（add_system / insert_resource）...
+///     run_on_android(app(AppConfig::load()), android_app).expect("fatal application error");
+/// }
+/// ```
+///
+/// 与桌面 [`App::run`] 等价，但使用外部传入的 winit EventLoop。
 #[cfg(target_os = "android")]
-#[no_mangle]
-fn android_main(app: winit::platform::android::activity::AndroidApp) {
+pub fn run_on_android(
+    app: App,
+    android_app: winit::platform::android::activity::AndroidApp,
+) -> anyhow::Result<()> {
     use winit::platform::android::EventLoopBuilderExtAndroid;
 
     android_logger::init_once(
@@ -108,12 +125,12 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
 
     log::info!("PrismaRev Android starting");
 
-    prism_engine::crash_dialog::register_android_app(&app);
+    prism_engine::crash_dialog::register_android_app(&android_app);
 
     let event_loop = winit::event_loop::EventLoop::builder()
-        .with_android_app(app)
+        .with_android_app(android_app)
         .build()
         .expect("failed to build Android event loop");
 
-    run_on_event_loop(event_loop).expect("fatal application error");
+    app.run_on(event_loop)
 }

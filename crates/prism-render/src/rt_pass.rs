@@ -29,8 +29,10 @@ pub struct RtPreviewPass {
     /// 克隆的 device（Drop 时销毁）。
     device: Option<ash::Device>,
     color_format: vk::Format,
-    /// bindless 表 layout（set 1），由 GraphRenderer 注入（管线创建用）。
+    /// bindless 表 layout（本 pass 的 set 0），由 GraphRenderer 注入（管线创建用）。
     bindless_layout: Option<vk::DescriptorSetLayout>,
+    /// bindless 表 set（execute 时绑定 set 0）。
+    bindless_set: Option<vk::DescriptorSet>,
     render_pass: Option<vk::RenderPass>,
     /// per-swapchain-image framebuffers（复用 post/ui_overlay 模式）。
     framebuffers: Vec<Option<vk::Framebuffer>>,
@@ -45,6 +47,7 @@ impl RtPreviewPass {
             device: Some(context.device.clone()),
             color_format,
             bindless_layout: None,
+            bindless_set: None,
             render_pass: None,
             framebuffers: Vec::new(),
             target_views: Vec::new(),
@@ -59,6 +62,11 @@ impl RtPreviewPass {
     /// 注入 bindless 表 layout（GraphRenderer 构建 graph 后调用）。
     pub fn set_bindless_layout(&mut self, layout: vk::DescriptorSetLayout) {
         self.bindless_layout = Some(layout);
+    }
+
+    /// 注入 bindless 表 set（execute 时绑定 set 0）。
+    pub fn set_bindless_set(&mut self, set: vk::DescriptorSet) {
+        self.bindless_set = Some(set);
     }
 
     fn ensure_render_pass(&mut self, device: &ash::Device) -> anyhow::Result<()> {
@@ -241,6 +249,20 @@ impl RenderPassNode for RtPreviewPass {
         unsafe {
             device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.pipeline)
         };
+        // set 0 = bindless 表（rt_preview.slang 的 BINDLESS_SRVS）。
+        let bindless_set = self
+            .bindless_set
+            .context("RtPreviewPass: set_bindless_set not called")?;
+        unsafe {
+            device.cmd_bind_descriptor_sets(
+                cmd,
+                vk::PipelineBindPoint::GRAPHICS,
+                pipeline.layout,
+                0,
+                std::slice::from_ref(&bindless_set),
+                &[],
+            );
+        }
         let push = RtPreviewPush {
             textureHandle: slot,
         };

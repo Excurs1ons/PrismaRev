@@ -9,7 +9,7 @@
 - **Vulkan 渲染管线**：RenderGraph + pass 节点架构（`RenderPassNode`），`GraphRenderer` 驱动；GBuffer / Shadow / Lighting / Post 等 pass 组合，能力探测自动升降级。
 - **PBR + IBL**：HDR 环境光、漫反射辐照度 + 预滤波镜面反射 cubemap。
 - **Bindless 纹理表**：set 0 = frame UBO/materials/lights，set 1 = bindless 纹理，set 2 = IBL，set 3 = 阴影贴图。
-- **调试与编辑器**：egui inspector（实体/渲染设置/烘焙控制），屏幕空间调试视图模式（bitmap 字体 HUD + 命中测试），世界空间 XYZ gizmo。
+- **调试与编辑器**：egui inspector（实体/渲染设置/烘焙控制），屏幕空间调试视图模式（bitmap 字体 HUD + 命中测试），世界空间 XYZ gizmo；编辑器完全独立于用户项目依赖链（见 §编辑器与用户项目分离）。
 - **全链路**：acquire → record → submit → present 在桌面与 Android 端到端跑通，验证层在 debug 构建下启用。
 - **后台线程架构**：IO / 音频解码 / 物理三线程框架（flume 消息传递）。
 - **资源管线**：`prism-asset` 统一资产管线（Import → Cook → Package → Runtime），glTF 2.0 加载、纹理/mesh 烘焙、CookProfile 平台配置、`.pak` 打包与热重载。
@@ -22,10 +22,11 @@ PrismaRev/
 ├── crates/
 │   ├── prism-ecs/             # ECS 核心（Entity / Component / World / Query）
 │   ├── prism-render/          # Vulkan 后端（context、swapchain、RenderGraph passes、IBL、bindless）
-│   ├── prism-engine/          # 应用层（AppDriver、winit 事件循环、主循环编排）
+│   ├── prism-engine/          # 引擎层（World / 渲染系统 / 场景加载；无 egui）
 │   ├── prism-platform/        # 平台抽象（窗口系统、Vulkan surface、输入路由）
-│   ├── prism-app/             # 平台应用层（事件循环 / 窗口 / 帧编排；Android `android_main` 入口）
-│   ├── prism-editor/          # egui 编辑器 UI（inspector、调试、渲染设置、烘焙）
+│   ├── prism-app/             # 平台应用层（事件循环 / 窗口 / 帧编排；中性 `FrameHook` 扩展点）
+│   ├── prism-editor/          # egui 编辑器 UI（inspector、调试、渲染设置、烘焙 + engine 绑定）
+│   ├── prism-editor-host/     # 编辑器宿主（唯一见到 egui 的 crate：EditorHook + egui overlay + editor_demo）
 │   ├── prism-editor-tool/     # 编辑器工具（高度图生成器、地形工具等）
 │   ├── prism-build-pipeline/  # 离线构建管线（GI 烘焙、资产烹饪、高度图生成器 CLI）
 │   ├── prism-audio/           # 音频子系统（Firewheel）
@@ -36,10 +37,19 @@ PrismaRev/
 │   ├── scenes/                # 场景资产（glTF 等）
 │   └── ...
 ├── launcher/                  # Tauri 桌面壳 + Android APK 打包（独立 workspace）
+├── game/                      # 用户游戏项目（`prismarev` 桌面 bin + Android `libprism_android.so`；独立 workspace）
 ├── docs/DESIGN.md             # 权威设计蓝图
 ├── scripts/                   # run.ps1 / build-android.ps1（高度图分析脚本在 scripts/scratch/）
-└── Cargo.toml                 # workspace（crates/xtask 排除在外；launcher/ 独立）
+└── Cargo.toml                 # workspace（crates/xtask 排除在外；launcher/ 与 game/ 独立）
 ```
+
+### 编辑器与用户项目分离
+
+用户项目的依赖链**不含 egui 与编辑器**：`game → prism-app → prism-engine → {prism-ecs, prism-render, prism-asset}`。
+编辑器通过两个中性扩展点接入：主线程 `prism_app::FrameHook`（事件/每帧回调）与渲染线程
+`prism_render::external_overlay::SwapchainOverlay`（覆盖层录制）；两者之间的 UI 数据以类型擦除的
+`OverlayMessage`（`Box<dyn FnOnce(&mut dyn SwapchainOverlay) + Send>`）穿过 `RenderShared`。
+编辑器构建的入口是 `prism-editor-host`（`cargo run --bin editor_demo`）。
 
 ## 坐标约定
 
@@ -98,13 +108,27 @@ cargo build -p prism-ecs -p prism-render -p prism-engine -p prism-platform
 cargo test  -p prism-ecs -p prism-render -p prism-engine -p prism-platform
 ```
 
-当前桌面以库形式构建/测试（渲染、ECS、平台层均作为库链接）。可执行入口为 `launcher/`（Tauri 桌面壳）：`cd launcher && pnpm tauri dev`。验证层在 debug 构建下启用，`RUST_LOG=info`（或 `debug`）查看诊断。`scripts/run.ps1` 提供 Windows 一键脚本（自动重新编译 Slang 着色器后 `cargo build`）。
+当前根 workspace 无可执行 bin（渲染、ECS、平台层均作为库链接），可执行入口有三个：
+
+- `launcher/`（Tauri 桌面壳，游戏启动器）：`cd launcher && pnpm tauri dev`，点 Play 启动 `prismarev`。
+- `game/`（用户游戏项目）：`cd game && cargo run`。
+- 编辑器：`cargo run --bin editor_demo`（prism-editor-host；F1 inspector / F2 render-graph / F3 perf HUD）。
+
+启动器通过 `PRISMREV_LAUNCH_CONFIG` 环境变量（桌面）或 `filesDir/launch_config.json`（Android）向游戏
+传 JSON 启动参数（`{ "scene": "...", "log_level": "..." }`，见 `game/src/launch_config.rs`）。
+验证层在 debug 构建下启用，`RUST_LOG=info`（或 `debug`）查看诊断。`scripts/run.ps1` 提供 Windows 一键
+脚本（自动重新编译 Slang 着色器后 `cargo build`）。
 
 ### Android
 
-- `prism-app` 以 `cdylib` 暴露 `android_main` JNI 入口；`.cargo/config.toml` 将链接器指向 NDK 的 clang wrapper。
-- `launcher/`（Tauri）负责 APK 打包：`pnpm tauri android build`（`launcher/build_debug.sh` / `build_release.sh`）。
-- 无 slangc 环境：Android 携带预编译 `.spv`（从 CI `spirv` artifact 获取），着色器编译只在桌面/CI 进行。
+- 用户项目 `game/` 以 `cdylib` 输出 `libprism_android.so` 并暴露 `android_main` JNI 入口
+  （内部调用 `prism_app::run_on_android`）；`.cargo/config.toml` 将链接器指向 NDK 的 clang wrapper。
+- APK 内有两个 Activity：Tauri 启动器 WebView（launcher）与 `com.prismarev.MainActivity`
+  （`GameActivity`，独立 `:game` 进程，`android.app.lib_name = prism_android`）。
+- 打包：`scripts/build-android.ps1`（自动探测 NDK 与 API level，`cargo ndk -P <api> -t arm64-v8a`
+  构建 game 到 `jniLibs/`，再 gradle `assembleDebug`）；或 `launcher/` 下 `pnpm tauri android build`。
+- 无 slangc 环境：Android 携带预编译 `.spv`（`include_bytes!` 编译期嵌入，从 CI `spirv` artifact 获取），
+  着色器编译只在桌面/CI 进行。
 
 ## 着色器管线
 

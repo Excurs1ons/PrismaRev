@@ -33,7 +33,7 @@ use xxhash_rust::xxh3::Xxh3;
 // ---------------------------------------------------------------------------
 
 /// Magic identifier: `b"RPAK"`.
-pub const MAGIC: [u8; 4] = [b'R', b'P', b'A', b'K'];
+pub const MAGIC: [u8; 4] = *b"RPAK";
 /// 当前 包 格式 version.
 pub const VERSION: u32 = 1;
 

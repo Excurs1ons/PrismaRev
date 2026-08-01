@@ -1,10 +1,9 @@
-//! 场景组件的 `Inspect` 实现。
+//! prism-engine 场景组件的 `Inspect` 实现 + 层次结构适配器。
 //!
-//! 每个 `impl Inspect` 位于组件定义旁边（在同一模块树中），
-//! 并为该组件绘制 egui 编辑器。
-//! [`crate::App`] 在启动时将这里的每个类型注册到编辑器的
-//! `ComponentRegistry` 中；然后检查器自动发现实体拥有哪些组件
-//! 并运行匹配的编辑器——检查器本身对组件类型零硬编码。
+//! 这些 `impl Inspect` 原本位于 `prism-engine`（组件定义旁），编辑器
+//! 逻辑完全拆出后迁移到这里：孤儿规则要求 trait 与其实现同 crate，
+//! 而 `Inspect` 定义在 prism-editor——因此依赖方向反转为
+//! `prism-editor → prism-engine`（无环：prism-engine 不再依赖 editor）。
 //!
 //! 只读组件（`WorldTransform`、`Parent`、`Children`、`SceneMember`、
 //! `MeshRef`、`MaterialRef`）以非可变显示实现 `Inspect`，
@@ -13,13 +12,15 @@
 use std::any::TypeId;
 
 use egui::Ui;
-use prism_editor::{Inspect, InspectCtx};
-
-use super::components::{
+use prism_ecs::{Entity, World};
+use prism_engine::scene::components::{
     Active, Camera, Children, DirectionalLight, FlyCameraController, LocalTransform, MaterialRef,
     MeshRef, MeshRenderer, Name, Parent, PointLight, SceneMember, Skybox, SpotLight,
     TransformDirty, WorldTransform,
 };
+use prism_engine::scene::SceneHierarchy;
+
+use crate::{ComponentRegistry, Hierarchy, Inspect, InspectCtx};
 
 // ---------------------------------------------------------------------------
 // Identity
@@ -82,7 +83,7 @@ impl Inspect for LocalTransform {
         // 四元数 awkward to edit directly). Refresh the cache from the
         // 分量 when the entry is 缺少
         ui.label("Rotation (Euler, degrees)");
-        let entity = ctx.current_entity.unwrap_or_else(|| sentinel_entity());
+        let entity = ctx.current_entity.unwrap_or_else(sentinel_entity);
         let key = (entity, TypeId::of::<Self>());
         let euler = ctx.euler_cache.entry(key).or_insert_with(|| {
             let (x, y, z) = self.rotation.to_euler(glam::EulerRot::XYZ);
@@ -199,7 +200,7 @@ impl Inspect for DirectionalLight {
         // euler_xyz is already 角度 - edit directly but cache so the
         // DragValue keeps its 拖拽 状态 across frames (matches the old
         // dir_light_euler_deg cache).
-        let entity = ctx.current_entity.unwrap_or_else(|| sentinel_entity());
+        let entity = ctx.current_entity.unwrap_or_else(sentinel_entity);
         let key = (entity, TypeId::of::<Self>());
         let euler = ctx
             .euler_cache
@@ -364,16 +365,55 @@ impl Inspect for SceneMember {
 }
 
 // ---------------------------------------------------------------------------
+// Hierarchy 适配器
+// ---------------------------------------------------------------------------
+
+/// Scene hierarchy 适配器 for the 编辑器 检查器
+///
+/// Roots: entities with [`LocalTransform`] or [`Name`] but no [`Parent`].
+/// Children: via [`Children`] 分量
+impl Hierarchy for SceneHierarchy {
+    fn roots(&self, world: &World) -> Vec<Entity> {
+        let mut roots: Vec<Entity> = world
+            .query_inactive_inclusive::<LocalTransform>()
+            .filter(|(e, _)| world.get::<Parent>(*e).is_none())
+            .map(|(e, _)| e)
+            .collect();
+        let named: Vec<Entity> = world
+            .query_inactive_inclusive::<Name>()
+            .filter(|(e, _)| {
+                world.get::<Parent>(*e).is_none() && world.get::<LocalTransform>(*e).is_none()
+            })
+            .map(|(e, _)| e)
+            .collect();
+        roots.extend(named);
+        roots.sort_by_key(|e| e.id());
+        roots
+    }
+
+    fn children(&self, world: &World, entity: Entity) -> Vec<Entity> {
+        world
+            .get::<Children>(entity)
+            .map(|c| c.0.clone())
+            .unwrap_or_default()
+    }
+
+    fn name(&self, world: &World, entity: Entity) -> Option<String> {
+        world.get::<Name>(entity).map(|n| n.0.clone())
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Registration
 // ---------------------------------------------------------------------------
 
-/// Register all [`Inspect`][prism_editor::Inspect] 分量 editors with
-/// the given [`ComponentRegistry`][prism_editor::ComponentRegistry].
+/// Register all 引擎场景组件的 [`Inspect`] 分量 editors with
+/// the given [`ComponentRegistry`].
 ///
-/// Called once from engine initialisation.  Types whose `Inspect` impl is
-/// registered here get a 完整 egui 编辑器 UI in the 检查器 types
-/// without one just show a read‑only 标签
-pub fn register_inspect_fns(registry: &mut prism_editor::ComponentRegistry) {
+/// Called once by the 编辑器宿主 (prism-editor-host) at startup.  Types
+/// whose `Inspect` impl is registered here get a 完整 egui 编辑器 UI
+/// in the 检查器 types without one just show a read‑only 标签
+pub fn register_engine_inspect_fns(registry: &mut ComponentRegistry) {
     registry.register::<Name>(100);
     registry.register::<Active>(110);
     registry.register::<LocalTransform>(120);

@@ -349,7 +349,7 @@ pub fn render_system(
         clear_color: CLEAR_COLOR.to_array(),
         ui_overlay: Some(ui_overlay),
     };
-    renderer.execute(&ctx, &input, None).map_err(|e| {
+    renderer.execute(&ctx, &input).map_err(|e| {
         let _ = renderer.present(&ctx);
         e
     })?;

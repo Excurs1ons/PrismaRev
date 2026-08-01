@@ -14,7 +14,7 @@ use crate::context::VulkanContext;
 use crate::descriptor::{
     DescriptorLayout, DescriptorPool, FrameUBO, FrameUBOData, GpuLight, PtAnalyticLight,
 };
-use crate::egui_overlay::{EguiFrame, EguiGpu};
+use crate::external_overlay::{OverlayMessage, SwapchainOverlay};
 use crate::ibl::IblResources;
 use crate::managers::{
     AssetTextureHandle, MaterialHandle, MaterialUploadInput, MeshHandle, MeshUploadInput,
@@ -192,12 +192,12 @@ pub struct GraphRenderer {
     shadow_view: vk::ImageView,
     #[allow(dead_code)]
     color_format: vk::Format,
-    /// Optional egui 叠加 (GPU-only) rendered on 顶部 of the ForwardPass
-    /// 输出 Created lazily on the 渲染 线程 When present, 执行
-    /// records it after ForwardPass and it owns the COLOR_ATTACHMENT_OPTIMAL
-    /// -> PRESENT_SRC_KHR 过渡 When `None`, 执行 falls 后 to
-    /// an explicit 管线 屏障
-    egui_gpu: Option<EguiGpu>,
+    /// Optional 外部叠加层（编辑器 egui 等）rendered on 顶部 of the ECS UI
+    /// 叠加 When present, 执行 records it after the ECS UI overlay and it
+    /// owns the COLOR_ATTACHMENT_OPTIMAL -> PRESENT_SRC_KHR 过渡. The
+    /// 实现 is injected by the app 层 (eg 编辑器 host) — this 渲染器
+    /// knows nothing about egui.
+    external_overlay: Option<Box<dyn SwapchainOverlay>>,
     /// ECS UI 叠加 (GPU-only) — quads + fontdue glyph text, rendered on 顶部
     /// of the ForwardPass 输出 (below the egui 编辑器 overlay). Created lazily
     /// on the 渲染 线程 when the 引擎 sends UI 命令
@@ -385,6 +385,7 @@ impl GraphRenderer {
         // 消费端：全屏采样 RT（bindless）→ swapchain，验证 RT 闭环。
         let mut rt_preview_pass = crate::rt_pass::RtPreviewPass::new(&context, color_format);
         rt_preview_pass.set_bindless_layout(bindless.layout);
+        rt_preview_pass.set_bindless_set(bindless.set);
 
         // Register all passes into the 图 in 执行 order.
         // Shadow -> Scene -> GTAO -> RenderTextures -> PathTrace -> Post -> RtPreview.
@@ -415,7 +416,7 @@ impl GraphRenderer {
             shadow_sampler,
             shadow_view,
             color_format,
-            egui_gpu: None,
+            external_overlay: None,
             ui_overlay: None,
             is_headless: false,
             offscreen: None,
@@ -588,7 +589,7 @@ impl GraphRenderer {
             shadow_sampler,
             shadow_view,
             color_format,
-            egui_gpu: None,
+            external_overlay: None,
             ui_overlay: None,
             is_headless: true,
             offscreen: Some(offscreen),
@@ -657,23 +658,18 @@ impl GraphRenderer {
         })
     }
 
-    /// Lazily 创建 the egui GPU 叠加 if it doesn't exist yet, then return
-    /// a mutable 引用 to it. Called on the 渲染 线程 when an
-    /// [`EguiFrame`] is available but no GPU resources have been allocated yet.
-    /// Uses the same `in_flight_frames` count as the 渲染器 (2).
-    pub fn ensure_egui_gpu(&mut self) -> anyhow::Result<&mut EguiGpu> {
-        if self.egui_gpu.is_none() {
-            let gpu = EguiGpu::new(&self.runtime.context, self.color_format, 2)?;
-            self.egui_gpu = Some(gpu);
-        }
-        Ok(self.egui_gpu.as_mut().expect("just ensured"))
+    /// 注入外部叠加层（编辑器 egui 等）。主线程在启动渲染线程前调用；
+    /// overlay 的 GPU 资源由实现方在 `record` 时懒创建。
+    pub fn set_external_overlay(&mut self, overlay: Box<dyn SwapchainOverlay>) {
+        self.external_overlay = Some(overlay);
     }
 
-    pub fn egui_gpu(&self) -> Option<&EguiGpu> {
-        self.egui_gpu.as_ref()
-    }
-    pub fn egui_gpu_mut(&mut self) -> Option<&mut EguiGpu> {
-        self.egui_gpu.as_mut()
+    /// 把一条类型擦除的消息（如"新 egui 帧"）投递给外部叠加层。
+    /// 渲染线程从 shared 通路取出消息后调用；无叠加层时静默丢弃。
+    pub fn apply_overlay_message(&mut self, msg: OverlayMessage) {
+        if let Some(overlay) = self.external_overlay.as_mut() {
+            msg(overlay.as_mut());
+        }
     }
 
     /// IBL 描述符 集合 + 布局 for the environment cubemap 集合 2).
@@ -995,12 +991,15 @@ impl GraphRenderer {
                 }
             }
         }
-        if let Some(gpu) = self.egui_gpu.as_mut() {
-            gpu.drop_target();
-        }
-
         if let Some(sw) = self.swapchain.as_mut() {
             sw.recreate(&self.runtime.context)?;
+        }
+
+        // 通知外部叠加层：per-swapchain framebuffers 已按新 views 重建。
+        if let Some(sw) = self.swapchain.as_ref() {
+            if let Some(overlay) = self.external_overlay.as_mut() {
+                overlay.on_swapchain_views_changed(&sw.views, sw.extent);
+            }
         }
 
         // All per-swapchain-image attachments (ForwardPass HDR/depth/normal,
@@ -1111,12 +1110,7 @@ impl GraphRenderer {
     /// Recording errors are captured and returned, but the 命令 缓冲区 is
     /// **always ended** — even on 失败 — so that [`present`] can submit a
     /// 部分 缓冲区 and keep the in-flight 围栏 signaled.
-    pub fn execute(
-        &mut self,
-        ctx: &FrameCtx,
-        input: &FrameInput<'_>,
-        egui_frame: Option<&EguiFrame>,
-    ) -> anyhow::Result<()> {
+    pub fn execute(&mut self, ctx: &FrameCtx, input: &FrameInput<'_>) -> anyhow::Result<()> {
         let device = &ctx.device;
         let cmd = ctx.cmd;
         let frame = ctx.frame_index as usize;
@@ -1244,7 +1238,10 @@ impl GraphRenderer {
         // COLOR_ATTACHMENT_OPTIMAL → PRESENT_SRC_KHR 过渡; when egui 也
         // records 之后, an explicit 屏障 converts 后 to
         // COLOR_ATTACHMENT_OPTIMAL for the egui pass.
-        let mut ui_rendered = false;
+        //
+        // 图 末尾 pass（RtPreview）final = PRESENT_SRC_KHR，所以 swapchain
+        // image 在 graph 后已是展示布局；UI/egui render pass 期望
+        // COLOR_ATTACHMENT_OPTIMAL 初始布局 → 各自 record 前都要显式转回。
         if record.is_ok() {
             let has_ui = ui_overlay
                 .is_some_and(|o| !o.quads.is_empty() || !o.texts.is_empty());
@@ -1259,32 +1256,8 @@ impl GraphRenderer {
                 }
                 if let Some(sw) = self.swapchain.as_ref() {
                     if let Some(gpu) = self.ui_overlay.as_mut() {
-                        record = gpu
-                            .record(
-                                &self.runtime.context,
-                                cmd,
-                                extent,
-                                sw.views[image_index as usize],
-                                ui_overlay.unwrap(),
-                            )
-                            .context("ui overlay record");
-                        ui_rendered = record.is_ok();
-                    }
-                }
-            }
-        }
-
-        // --- 过渡 交换链 图像 to PRESENT_SRC_KHR ---
-        //
-        // If an EguiFrame was provided from the main 线程 use the egui
-        // 叠加 渲染 pass (which handles the 屏障 implicitly). If no
-        // egui 帧 is available, 插入 an explicit 屏障 instead.
-        if record.is_ok() {
-            if let Some(ef) = egui_frame {
-                // ECS UI 画完后 image 在 PRESENT_SRC_KHR；egui 的 render pass
-                // 需要 COLOR_ATTACHMENT_OPTIMAL 初始布局 → 转回。
-                if ui_rendered {
-                    if let Some(sw) = self.swapchain.as_ref() {
+                        // PRESENT_SRC_KHR → COLOR_ATTACHMENT_OPTIMAL（UI 覆盖
+                        // 在 graph 输出之上，必须 LOAD 保留背景）。
                         let image = sw.images[image_index as usize];
                         let barrier = vk::ImageMemoryBarrier::default()
                             .old_layout(vk::ImageLayout::PRESENT_SRC_KHR)
@@ -1299,7 +1272,7 @@ impl GraphRenderer {
                                 base_array_layer: 0,
                                 layer_count: 1,
                             })
-                            .src_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
+                            .src_access_mask(vk::AccessFlags::NONE)
                             .dst_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE);
                         unsafe {
                             device.cmd_pipeline_barrier(
@@ -1312,61 +1285,81 @@ impl GraphRenderer {
                                 std::slice::from_ref(&barrier),
                             );
                         }
-                    }
-                }
-                // Ensure the GPU 叠加 存在 (lazy 创建
-                if self.egui_gpu.is_none() {
-                    let gpu = EguiGpu::new(&self.runtime.context, self.color_format, 2)
-                        .context("create egui gpu overlay")?;
-                    self.egui_gpu = Some(gpu);
-                }
-                if let Some(sw) = self.swapchain.as_ref() {
-                    if let Some(gpu) = self.egui_gpu.as_mut() {
                         record = gpu
                             .record(
-                                device,
-                                self.runtime.command_pool,
-                                self.runtime.context.graphics_queue,
+                                &self.runtime.context,
                                 cmd,
-                                &sw.views,
-                                image_index,
                                 extent,
-                                ef,
+                                sw.views[image_index as usize],
+                                ui_overlay.unwrap(),
                             )
-                            .context("egui gpu record");
+                            .context("ui overlay record");
                     }
-                } else {
-                    record = Err(anyhow::anyhow!("egui: swapchain missing"));
-                }
-            } else if let Some(sw) = self.swapchain.as_ref() {
-                let image = sw.images[image_index as usize];
-                let barrier = vk::ImageMemoryBarrier::default()
-                    .old_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-                    .new_layout(vk::ImageLayout::PRESENT_SRC_KHR)
-                    .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                    .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                    .image(image)
-                    .subresource_range(vk::ImageSubresourceRange {
-                        aspect_mask: vk::ImageAspectFlags::COLOR,
-                        base_mip_level: 0,
-                        level_count: 1,
-                        base_array_layer: 0,
-                        layer_count: 1,
-                    })
-                    .src_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
-                    .dst_access_mask(vk::AccessFlags::MEMORY_READ);
-                unsafe {
-                    device.cmd_pipeline_barrier(
-                        cmd,
-                        vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-                        vk::PipelineStageFlags::BOTTOM_OF_PIPE,
-                        vk::DependencyFlags::empty(),
-                        &[],
-                        &[],
-                        std::slice::from_ref(&barrier),
-                    );
                 }
             }
+        }
+
+        // --- 过渡 交换链 图像 to PRESENT_SRC_KHR ---
+        //
+        // 外部叠加层（如编辑器 egui）在 ECS UI 之后 record：image 此时
+        // 已是 PRESENT_SRC_KHR（graph 末尾 RtPreview 或 ECS UI 的 final
+        // layout），叠加 render pass 期望 COLOR_ATTACHMENT_OPTIMAL 初始
+        // 布局 → record 前显式转回。无叠加时无需任何转换。
+        if record.is_ok() {
+            let overlay_has_content = self
+                .external_overlay
+                .as_ref()
+                .is_some_and(|o| o.has_content());
+            if overlay_has_content {
+                if let Some(sw) = self.swapchain.as_ref() {
+                    let image = sw.images[image_index as usize];
+                    let barrier = vk::ImageMemoryBarrier::default()
+                        .old_layout(vk::ImageLayout::PRESENT_SRC_KHR)
+                        .new_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                        .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                        .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                        .image(image)
+                        .subresource_range(vk::ImageSubresourceRange {
+                            aspect_mask: vk::ImageAspectFlags::COLOR,
+                            base_mip_level: 0,
+                            level_count: 1,
+                            base_array_layer: 0,
+                            layer_count: 1,
+                        })
+                        .src_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
+                        .dst_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE);
+                    unsafe {
+                        device.cmd_pipeline_barrier(
+                            cmd,
+                            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                            vk::DependencyFlags::empty(),
+                            &[],
+                            &[],
+                            std::slice::from_ref(&barrier),
+                        );
+                    }
+                }
+                if let Some(sw) = self.swapchain.as_ref() {
+                    if let Some(overlay) = self.external_overlay.as_mut() {
+                        let oc = crate::external_overlay::OverlayRecordCtx {
+                            device,
+                            context: &self.runtime.context,
+                            command_pool: self.runtime.command_pool,
+                            graphics_queue: self.runtime.context.graphics_queue,
+                            cmd,
+                            swapchain_views: &sw.views,
+                            image_index,
+                            extent,
+                            color_format: self.color_format,
+                        };
+                        record = overlay.record(&oc).context("external overlay record");
+                    }
+                } else {
+                    record = Err(anyhow::anyhow!("external overlay: swapchain missing"));
+                }
+            }
+            // 无叠加：image 已是 PRESENT_SRC_KHR，即展示布局，无需转换。
         }
 
         // --- 结束 命令 缓冲区 (always attempted) ---
@@ -1500,7 +1493,7 @@ impl GraphRenderer {
             clear_color: [0.5, 0.5, 0.5, 1.0],
             ui_overlay: None,
         };
-        let exec_result = self.execute(&ctx, &input, None);
+        let exec_result = self.execute(&ctx, &input);
         let out_of_date = self.present(&ctx)?;
         exec_result?; // propagate recording error after fence is safe
         Ok(out_of_date)
@@ -1558,9 +1551,9 @@ impl GraphRenderer {
             shadow.destroy(device);
         }
 
-        // 销毁 egui gpu 叠加 (its 渲染 pass framebuffers, 渲染器
-        if let Some(gpu) = self.egui_gpu.as_mut() {
-            gpu.destroy();
+        // 销毁外部叠加层（egui 编辑器等：render pass/framebuffers/渲染器）。
+        if let Some(overlay) = self.external_overlay.as_mut() {
+            overlay.destroy();
         }
 
         // 销毁 shadow 采样器

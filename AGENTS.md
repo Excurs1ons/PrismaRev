@@ -8,10 +8,17 @@ Conventions) before touching any matrix/coordinate math — deviating from those
 - `crates/prism-ecs` — ECS core (Entity/Component/World/Query).
 - `crates/prism-render` — Vulkan backend: context, swapchain, render-graph passes (`forward_pass.rs`/`shadow_map_pass.rs`/`skybox_pass.rs`),
   `GraphRenderer` driver (`graph_renderer.rs`), IBL cubemap (`ibl.rs`), bindless/PBR.
-- `crates/prism-engine` — app layer + main loop, egui inspector.
-- `crates/prism-app` — platform layer (winit event loop, window, Android entry).
+  **egui-free**; hosts inject UI via the neutral `SwapchainOverlay` trait (`external_overlay.rs`).
+- `crates/prism-engine` — engine layer: ECS scene/components, render settings, own ECS UI. **egui-free.**
+- `crates/prism-app` — platform layer (winit event loop, window, `FrameHook` extension point,
+  `run_on_android` helper). **egui-free**; the Android JNI entry lives in the user project.
 - `crates/prism-platform` — platform abstraction (window system, Vulkan surface, input routing).
-- `crates/prism-editor` — egui editor UI (inspector, debug views, render settings, baking).
+- `crates/prism-editor` — egui editor UI (inspector, debug views, render settings, baking) +
+  `engine_bindings.rs` (`impl Inspect` for engine components, `Hierarchy` adapter).
+  Depends on `prism-engine` (direction is editor → engine, never the reverse).
+- `crates/prism-editor-host` — **editor host**: wires egui into `prism-app` via `FrameHook` +
+  `SwapchainOverlay` (`EguiCpu`/`EguiFrame`/`EguiOverlay`/`EditorHook`). Owns all egui deps;
+  `editor_app(config)` / `run()`, demo bin `editor_demo`. The only crate that sees egui.
 - `crates/prism-editor-tool` — editor tools (heightmap generator CLI, terrain utilities).
 - `crates/prism-build-pipeline` — offline build pipeline (GI baking, asset cooking, heightmap CLI).
 - `crates/prism-audio` — audio subsystem.
@@ -19,18 +26,43 @@ Conventions) before touching any matrix/coordinate math — deviating from those
   with feature flags (`core`/`runtime`/`cooker`/`package`/`importer`/`db`/`cli`/`types`/`streaming`/
   `hot-reload`); CLI bin is `prism-asset-cli` (`src/cli_main.rs`). See DESIGN.md §10.
 - `launcher/` — Tauri 2 desktop shell + Android APK packaging; **own standalone workspace**, NOT a root member.
-- `game/` — 用户游戏项目（`prismarev` 桌面二进制，含 keyframe 开场 intro screen）；**own standalone workspace**, NOT a root member.
+- `game/` — 用户游戏项目（`prismarev` 桌面二进制 + Android cdylib `libprism_android.so`；
+  keyframe 开场 intro、`launch_config.rs` hub 传参、`lib.rs` 的 `android_main`）；
+  **own standalone workspace**, NOT a root member.
 - `crates/xtask` — **excluded** from default workspace; desktop/CI only (needs `slangc`).
 - `assets/shaders/` — Slang sources in `slang/`, compiled `.spv` (gitignored, not committed) +
   `reflection/*.json` next to them.
+
+## Editor / user-project separation (do not regress)
+The user project's dependency chain must stay **egui-free and editor-free**:
+`game → prism-app → prism-engine → {prism-ecs, prism-render, prism-asset}`.
+- Never add `prism-editor`, `prism-editor-host`, `egui`, `egui-winit` or `egui-ash-renderer`
+  to `prism-app` / `prism-engine` / `prism-render`. Verify with
+  `cd game && cargo tree | grep egui` (must print nothing).
+- Editor UI reaches the engine only through two neutral extension points:
+  - `prism_app::FrameHook` (main thread: `on_tick`, `on_window_event`, `overlay` factory);
+  - `prism_render::external_overlay::SwapchainOverlay` (render thread: `record` into the
+    swapchain image; GPU resources created lazily by the implementor).
+- Main → render thread UI data crosses as a **type-erased** `OverlayMessage`
+  (`Box<dyn FnOnce(&mut dyn SwapchainOverlay) + Send>`) via `RenderShared`; the implementor
+  downcasts with `as_any_mut()`. `prism-app` never names an egui type.
+- `impl Inspect` for engine components lives in `prism-editor/src/engine_bindings.rs`
+  (orphan rule: the trait is editor-side). Register via `register_engine_inspect_fns`.
+- egui `TexturesDelta` is **incremental**: when queueing overlay frames, merge the deltas of an
+  unconsumed frame instead of overwriting it, or the font-atlas upload is lost
+  (`BadTexture(Managed(0))` on the render thread).
 
 ## Build / check / test
 - Build: `scripts/run.ps1` (Windows; sets `VK_SDK`, `RUST_LOG`, runs `bash assets/shaders/compile.sh` then `cargo build`).
   Note: the root workspace has **no runnable bin** — the desktop entry is the Tauri app in `launcher/`
   (`cd launcher && pnpm tauri dev`), which spawns the game binary `prismarev` (built in `game/`: `cd game && cargo run`).
+- Editor: `cargo run --bin editor_demo` (in the root workspace) — `prism-editor-host` drives the
+  same `prism-app` loop with the egui editor hooked in (F1 inspector, F2 render-graph, F3 perf HUD).
 - Checks: `cargo check -p prism-render`, `cargo build`, `cargo test`.
 - `crates/xtask` is excluded from the workspace — run it explicitly from a desktop host; do not add it to default `members`.
 - Prism-asset (a member of this workspace): `cargo test -p prism-asset`.
+- The `game/` and `launcher/` standalone workspaces need their own `cargo build` / `cargo clippy`
+  runs — a root-workspace build does **not** cover them.
 
 ## Shaders (important gotcha)
 - Shaders are **Slang** (`assets/shaders/slang/*.slang`), compiled with `slangc` to `.spv`.
@@ -123,7 +155,47 @@ Conventions) before touching any matrix/coordinate math — deviating from those
 
 ## Platform constraints
 - Desktop/CI compiles shaders; **Android ships prebuilt `.spv`** (no slangc on device).
+  `.spv` are `include_bytes!`-embedded at compile time, so there is no runtime shader
+  asset to ship/fallback — but the aarch64 build host must have them.
 - `.cargo/config.toml` wires the `aarch64-linux-android` linker; `rust-toolchain.toml` pins the
   stable toolchain. Android build: `scripts/build-android.ps1`.
 - Keep changes Vulkan-validation-clean; the project is sensitive to framebuffer/descriptor
   lifetime ordering (see lessons in `docs/lessons-learned.md`).
+
+## Android packaging chain (game + launcher in one APK)
+- The `android_main` JNI entry lives in the **user project** (`game/src/lib.rs`), not in
+  `prism-app`; it calls `prism_app::run_on_android(build_app(), android_app)`.
+  `game`'s `[lib]` is `name = "prism_android"`, `crate-type = ["lib", "cdylib"]` — the `lib`
+  half is required so `src/main.rs` can link it on desktop (a bare `cdylib` cannot be).
+- The APK holds **two** Activities in separate processes: the Tauri launcher WebView
+  (`com.example.tauriandroidapp.MainActivity`) and the game
+  (`com.prismarev.MainActivity` = `GameActivity`, `android:process=":game"`,
+  `android.app.lib_name = prism_android` → loads `libprism_android.so`).
+- `scripts/build-android.ps1`: probes the NDK (validating `toolchains\llvm`; tolerates a stale
+  `ANDROID_NDK_HOME` by **overwriting** it with the validated path, since cargo-ndk reads that env
+  var itself), derives the cargo-ndk API level from the manifest's `minSdk`, compiles shaders if
+  `slangc` exists (else requires prebuilt `.spv`), runs
+  `cargo ndk -P <api> -t arm64-v8a -o <jniLibs> build --release --manifest-path game/Cargo.toml`,
+  then assembles the APK via `pnpm tauri android build --debug --target aarch64`.
+  - **`-P <api>` must be ≥ 26** — `libaaudio.so` does not exist in older sysroots (cargo-ndk's
+    default of 21 → `-laaudio not found`). Use `minSdk`, not the newest sysroot: linking against a
+    higher API than `minSdk` would break on the oldest supported devices.
+  - Don't call `gradlew assembleDebug` directly. The Gradle `rust` plugin's `rustBuild*` tasks
+    shell out to `pnpm tauri android android-studio-script`, which only resolves when the Tauri
+    CLI (or Android Studio) launched Gradle — otherwise it fails with
+    "A problem occurred starting process 'command 'pnpm.bat''".
+  - The script targets Windows PowerShell 5.1 too: `Split-Path`/`Join-Path` reject `-LiteralPath`
+    in these parameter sets there, so keep path args positional (same as `scripts/run.ps1`).
+- Launch parameters (hub → game): `game/src/launch_config.rs`. Desktop passes JSON via the
+  `PRISMREV_LAUNCH_CONFIG` env var; Android writes `filesDir/launch_config.json` from Kotlin
+  (`NativePlugin.launch_game`) and `android_main` reads it via `AndroidApp::internal_data_path()`,
+  then re-exports it into the same env var so both paths converge on one parser.
+- `launcher/src-tauri/gen/android/` is **committed with local customizations** (minSdk 31,
+  arm64-v8a-only `abiFilters`, `signingConfigs`, `packaging` excludes, `games-activity` dep,
+  the second Activity). Do NOT regenerate `settings.gradle` / `app/build.gradle.kts` via
+  `tauri android init` — that overwrites them with template versions and silently loses all of it.
+  `tauri.settings.gradle` and `app/tauri.build.gradle.kts` are gitignored and generated by
+  `tauri android dev/build`; if Gradle complains they don't exist, run a `tauri android build` once.
+- App icons are build inputs, not screenshots: the blanket `*.png` ignore in `.gitignore` has
+  explicit `!` re-includes for `launcher/src-tauri/icons/*.png` and the Android `res/mipmap-*`
+  PNGs. A missing `icons/32x32.png` fails `tauri android build` inside `generate_context!`.

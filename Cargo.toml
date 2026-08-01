@@ -7,6 +7,7 @@ members = [
     "crates/prism-app",
     "crates/prism-platform",
     "crates/prism-editor",
+    "crates/prism-editor-host",
     "crates/prism-editor-tool",
     "crates/prism-build-pipeline",
     "crates/prism-audio",

@@ -9,7 +9,6 @@
 //! ```text
 //! empty / new
 //!     ├─ pre_init(config)            ─── PreInit
-//!     ├─ init_core(editor)           ─── 注册 Inspect 函数 + 层次结构
 //!     ├─ init_config()               ─── （预留）
 //!     ├─ init_resources(pak)         ─── 加载 .pak → ResourceManager
 //!     ├─ init_scene()                ─── 加载场景 → 世界
@@ -54,13 +53,9 @@ impl Engine {
     /// 创建 an `Engine` and run all init phases (convenience).
     ///
     /// Loads resources from the given 资源 管理器 then loads the scene.
-    pub fn new(
-        editor: &mut prism_editor::Editor,
-        rm: &mut prism_asset::runtime::ResourceManager,
-    ) -> Self {
+    pub fn new(rm: &mut prism_asset::runtime::ResourceManager) -> Self {
         let mut engine = Self::empty();
         engine.pre_init(&());
-        engine.init_core(editor);
         engine.init_config();
         engine.init_resources();
         engine.init_scene(rm);
@@ -84,12 +79,6 @@ impl Engine {
 
     /// **Phase 0** — Pre-init: reserved for low‑level 配置
     pub fn pre_init(&mut self, _config: &()) {}
-
-    /// **Phase 1** — Core subsystem init: register Inspect fns + hierarchy.
-    pub fn init_core(&mut self, editor: &mut prism_editor::Editor) {
-        crate::scene::inspect::register_inspect_fns(&mut editor.registry);
-        editor.set_hierarchy(crate::scene::SceneHierarchy);
-    }
 
     /// **Phase 2** — 配置 loading (reserved).
     pub fn init_config(&mut self) {}

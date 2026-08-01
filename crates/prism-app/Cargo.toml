@@ -6,14 +6,14 @@ license.workspace = true
 description = "Platform application layer — owns the event loop, window, and frame orchestration"
 
 [lib]
-# rlib for desktop linking; cdylib for Android `android_main` JNI entry.
-crate-type = ["lib", "cdylib"]
+# rlib for desktop linking; Android `android_main` JNI entry lives in the
+# user project's cdylib (see `run_android_app`), not here.
+crate-type = ["lib"]
 
 [dependencies]
 prism-engine = { path = "../prism-engine" }
 prism-render = { path = "../prism-render" }
 prism-platform = { path = "../prism-platform" }
-prism-editor = { path = "../prism-editor" }
 prism-audio = { path = "../prism-audio" }
 prism-asset = { path = "../prism-asset", default-features = false, features = ["core", "runtime"] }
 prism-ecs = { path = "../prism-ecs" }
@@ -22,8 +22,6 @@ rapier3d.workspace = true
 flume.workspace = true
 
 winit = { workspace = true }
-egui = { workspace = true }
-egui-winit = { workspace = true }
 log = { workspace = true }
 env_logger = { workspace = true }
 anyhow = { workspace = true }

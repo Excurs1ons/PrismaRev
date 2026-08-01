@@ -1,42 +1,19 @@
-//! egui 叠加层，作为 ForwardPass 输出之上的最终通道渲染
+//! egui 叠加层——作为 ForwardPass 输出之上的最终通道渲染。
 //!
 //! 架构（渲染线程拆分后）
 //! ----------------------------------------
-//! [`EguiCpu`] 位于主线程（winit + egui 上下文），[`EguiGpu`]
-//! 位于 [`GraphRenderer`] 内的渲染线程。它们通过 [`EguiFrame`]
-//! 通信——已细分的 egui 输出的 Send+Sync 快照。
-//!
-//! *主线程 (EguiCpu)*
-//!     run_ui(window, ui_closure) → EguiFrame
-//!     handle_window_event(window, event) → bool
-//!     apply_platform_output(window)
-//!
-//! *渲染线程 (EguiGpu)*
-//!     record(device, cmd, frame) → upload textures + cmd_draw
+//! [`EguiCpu`]（本 crate，主线程）→ [`EguiFrame`] 快照 → 类型擦除消息
+//! → [`EguiOverlay`]（渲染线程）。[`EguiOverlay`] 实现 prism-render 的
+//! 中性 [`SwapchainOverlay`] trait：GPU 资源（[`EguiGpu`]）在 `record`
+//! 时懒创建，帧数据经 `set_frame` 从主线程喂入。
 
 use anyhow::{Context as _, Result};
 use ash::vk;
 
-use crate::context::VulkanContext;
+use prism_render::context::VulkanContext;
+use prism_render::external_overlay::{OverlayRecordCtx, SwapchainOverlay};
 
-// ---------------------------------------------------------------------------
-// EguiFrame — cross-thread 传输
-// ---------------------------------------------------------------------------
-
-/// Tessellated egui 输出 produced by [`EguiCpu`] on the main 线程 and
-/// consumed by [`EguiGpu::record`] on the 渲染 线程 Send+Sync: all
-/// fields are heap-allocated (Vec, HashMap, 字符串 or plain floats.
-#[derive(Clone)]
-pub struct EguiFrame {
-    pub primitives: Vec<egui::ClippedPrimitive>,
-    pub textures_delta: egui::TexturesDelta,
-    pub pixels_per_point: f32,
-}
-
-// 安全性 All fields are owned 堆 data or plain floats; no unaliased
-// pointers or interior mutability.
-unsafe impl Send for EguiFrame {}
-unsafe impl Sync for EguiFrame {}
+use crate::egui_frame::EguiFrame;
 
 // ---------------------------------------------------------------------------
 // EguiGpu — Vulkan-only egui 渲染
@@ -45,7 +22,7 @@ unsafe impl Sync for EguiFrame {}
 /// GPU-side egui 叠加 渲染 pass framebuffers, egui-ash 渲染器
 ///
 /// No winit 状态 no egui context — those live in [`EguiCpu`] on the main
-/// 线程 Created lazily inside [`GraphRenderer`] on the 渲染 线程
+/// 线程 Created lazily inside [`EguiOverlay`] on the 渲染 线程
 pub struct EguiGpu {
     renderer: Option<egui_ash_renderer::Renderer<egui_ash_renderer::allocator::DefaultAllocator>>,
     render_pass: vk::RenderPass,
@@ -144,17 +121,15 @@ impl EguiGpu {
     /// Record an egui 帧 from pre-tessellated data.
     ///
     /// 帧 is produced by [`EguiCpu::run_ui`] on the main 线程
-    pub fn record(
-        &mut self,
-        device: &ash::Device,
-        command_pool: vk::CommandPool,
-        graphics_queue: vk::Queue,
-        cmd: vk::CommandBuffer,
-        swapchain_views: &[vk::ImageView],
-        image_index: u32,
-        extent: vk::Extent2D,
-        frame: &EguiFrame,
-    ) -> Result<()> {
+    pub fn record(&mut self, ctx: &OverlayRecordCtx<'_>, frame: &EguiFrame) -> Result<()> {
+        let device = ctx.device;
+        let command_pool = ctx.command_pool;
+        let graphics_queue = ctx.graphics_queue;
+        let cmd = ctx.cmd;
+        let swapchain_views = ctx.swapchain_views;
+        let image_index = ctx.image_index;
+        let extent = ctx.extent;
+
         // Upload new/changed textures (font atlas on 第一个 帧
         {
             let renderer = self
@@ -281,5 +256,82 @@ impl EguiGpu {
 impl Drop for EguiGpu {
     fn drop(&mut self) {
         self.destroy();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// EguiOverlay — SwapchainOverlay 适配
+// ---------------------------------------------------------------------------
+
+/// 中性 [`SwapchainOverlay`] 的 egui 实现：持有待绘制帧 + 懒创建的 GPU。
+///
+/// 主线程构造（纯 CPU），渲染线程 record。帧经 [`Self::set_frame`]
+/// （由类型擦除消息闭包调用）喂入。
+pub struct EguiOverlay {
+    /// 懒创建：第一个帧到达且要 record 时才建 GPU 资源。
+    gpu: Option<EguiGpu>,
+    /// 待绘制的帧（record 后清空）。
+    pending: Option<EguiFrame>,
+}
+
+impl EguiOverlay {
+    pub fn new() -> Self {
+        Self {
+            gpu: None,
+            pending: None,
+        }
+    }
+
+    /// 喂入一个新帧（主线程消息闭包调用）。
+    ///
+    /// 若上一帧尚未被渲染线程消费，则合并纹理增量：egui 的
+    /// `TexturesDelta.set` 是"自上次 run 以来"的增量，单槽覆盖会
+    /// 丢掉字体图集等初始上传（渲染线程的渲染器从未见过该纹理 →
+    /// `BadTexture`）。合并保证所有纹理更新最终送达渲染线程。
+    pub fn set_frame(&mut self, frame: EguiFrame) {
+        if let Some(prev) = self.pending.take() {
+            let mut merged = frame;
+            merged.textures_delta.set.extend(prev.textures_delta.set);
+            merged.textures_delta.free.extend(prev.textures_delta.free);
+            self.pending = Some(merged);
+        } else {
+            self.pending = Some(frame);
+        }
+    }
+}
+
+impl Default for EguiOverlay {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SwapchainOverlay for EguiOverlay {
+    fn has_content(&self) -> bool {
+        self.pending.is_some()
+    }
+
+    fn record(&mut self, ctx: &OverlayRecordCtx<'_>) -> Result<()> {
+        let Some(frame) = self.pending.take() else {
+            return Ok(());
+        };
+        if self.gpu.is_none() {
+            let gpu =
+                EguiGpu::new(ctx.context, ctx.color_format, 2).context("create egui gpu overlay")?;
+            self.gpu = Some(gpu);
+        }
+        let gpu = self.gpu.as_mut().expect("just ensured");
+        gpu.record(ctx, &frame).context("egui overlay record")
+    }
+
+    fn on_swapchain_views_changed(&mut self, _views: &[vk::ImageView], _extent: vk::Extent2D) {
+        // EguiGpu::ensure_framebuffer 每次 record 时检测 view/extent 变化
+        // 自动重建；这里无需额外动作。
+    }
+
+    fn destroy(&mut self) {
+        if let Some(mut gpu) = self.gpu.take() {
+            gpu.destroy();
+        }
     }
 }

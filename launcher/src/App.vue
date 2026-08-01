@@ -11,7 +11,9 @@ async function play() {
   launching.value = true;
   error.value = "";
   try {
-    await invoke("launch_game");
+    // LaunchConfig JSON：hub 场景选择（当前仅 intro；未来在此扩展选项）。
+    const config = JSON.stringify({ scene: "intro" });
+    await invoke("launch_game", { config });
     // 游戏 Activity 已启动,启动器转入后台;返回时必须可交互,
     // 否则会一直停在"启动中…"且按钮 disabled(表现为无响应)。
     launching.value = false;

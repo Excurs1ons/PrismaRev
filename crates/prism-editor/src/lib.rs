@@ -5,11 +5,12 @@
 //! [`Inspect`] trait 和 [`ComponentRegistry`]，让引擎无需在检查器中
 //! 硬编码任何组件类型即可注册组件编辑器——这就是"自动识别，无需硬编码"的基础。
 //!
-//! 架构：`prism-editor` 只依赖 `prism-ecs`（World/Entity）和
-//! `prism-render`（RenderMode 类型）。具体的 `impl Inspect for X` 块
-//! 位于 `prism-engine` 中组件定义的旁边（孤儿规则允许这样做，
-//! 因为 trait 在此定义）。`prism-engine` 在启动时将组件注册到
-//! `ComponentRegistry` 中，并将注册表交给 [`Inspector::run`]。
+//! 架构：`prism-editor` 依赖 `prism-ecs`（World/Entity）、
+//! `prism-render`（RenderMode 类型）和 `prism-engine`（场景组件类型）。
+//! 具体的 `impl Inspect for X` 块位于 [`engine_bindings`]（孤儿规则要求
+//! trait 与其实现同 crate，因此引擎组件的 Inspect 实现随编辑器一起维护）。
+//! 编辑器宿主（prism-editor-host）在启动时把 [`engine_bindings::register_engine_inspect_fns`]
+//! 注册进 [`ComponentRegistry`]，并设置场景层次结构适配器。
 
 use prism_asset::core::LoadedAsset;
 use std::any::TypeId;
@@ -20,6 +21,7 @@ use prism_ecs::{Component, Entity, World};
 use prism_render::RenderMode;
 
 pub mod asset_inspector;
+pub mod engine_bindings;
 pub mod inspector;
 pub mod math;
 pub mod render_graph_viz;
