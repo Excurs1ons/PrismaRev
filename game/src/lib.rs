@@ -13,7 +13,7 @@ use prism_engine::config::AppConfig;
 /// 构造应用：引擎自动加载 `assets/scenes/intro.scene.json` 中的 intro 实体，
 /// 本项目只注册 `intro::advance` system 驱动动画。
 pub fn build_app() -> prism_app::App {
-    let mut app = prism_app::app(AppConfig::load())
+    let mut app = prism_app::app()
         .with_subsystem(prism_app::Subsystem::Render)
         .with_subsystem(prism_app::Subsystem::Audio);
     app.add_system("intro::advance", intro::advance);
@@ -26,10 +26,6 @@ pub fn build_app() -> prism_app::App {
 
 /// GameActivity 加载本库后调用的入口。
 #[cfg(target_os = "android")]
-#[no_mangle]
 fn android_main(android_app: winit::platform::android::activity::AndroidApp) {
-    if let Some(json) = prism_engine::launch_config::LaunchConfig::read_android_file(&android_app) {
-        std::env::set_var("PRISMREV_LAUNCH_CONFIG", json);
-    }
     prism_app::run_on_android(build_app(), android_app).expect("fatal application error");
 }

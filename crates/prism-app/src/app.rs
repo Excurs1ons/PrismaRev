@@ -62,15 +62,34 @@ use crate::render_shared::RenderShared;
 pub enum Subsystem {
     /// 渲染子系统（窗口 + Vulkan + 渲染线程）。
     Render,
-    /// 音频子系统（AudioEngine）。
+    /// 音频引擎（AudioEngine + 音频解码线程）。
     Audio,
+    /// 物理模拟（Rapier 后台线程）。
+    Physics,
+    /// 网络子系统
+    Network,
+    /// 场景系统
+    Scene,
+    /// 资源系统
+    Asset,
+    AI,
+    UI,
+    Animation,
+
 }
 
 impl Subsystem {
-    fn bit(self) -> u8 {
+    fn bit(self) -> u32 {
         match self {
-            Subsystem::Render => 0b01,
-            Subsystem::Audio => 0b10,
+            Subsystem::Render => 1 << 0,
+            Subsystem::Audio => 1 << 1,
+            Subsystem::Physics => 1 << 2,
+            Subsystem::Network => 1 << 3,
+            Subsystem::Scene => 1 << 4,
+            Subsystem::Asset => 1 << 5,
+            Subsystem::AI => 1 << 6,
+            Subsystem::UI => 1 << 7,
+            Subsystem::Animation => 1 << 8,
         }
     }
 }
@@ -85,7 +104,7 @@ pub struct App {
     config: AppConfig,
 
     /// 已启用的子系统位掩码。
-    subsystems: u8,
+    subsystems: u32,
 
     // ---------- 引擎（主线程） ----------
     engine: Option<Engine>,
@@ -114,25 +133,12 @@ pub struct App {
 
     // ---------- 音频（主线程） ----------
     audio: Option<AudioEngine>,
+    audio_decode_thread: Option<JoinHandle<()>>,
+    audio_decode_tx: Option<flume::Sender<crate::audio_decode_runner::DecodeRequest>>,
+    audio_decode_rx: Option<flume::Receiver<crate::audio_decode_runner::DecodeResult>>,
 
     // ---------- 窗口大小调整 ----------
     needs_resize: bool,
-
-    // ---------- IO 线程 ----------
-    #[allow(dead_code)] // 骨架：资源加载接入前 io_rx 暂未消费
-    io_thread: Option<JoinHandle<()>>,
-    #[allow(dead_code)] // 骨架：start_io_thread 尚未被调用
-    io_tx: Option<flume::Sender<crate::io_runner::IoRequest>>,
-    #[allow(dead_code)] // 骨架：资源加载接入前 io_rx 暂未消费
-    io_rx: Option<flume::Receiver<crate::io_runner::IoResult>>,
-
-    // ---------- 音频解码线程 ----------
-    #[allow(dead_code)] // 骨架：start_audio_decode_thread 尚未被调用
-    audio_decode_thread: Option<JoinHandle<()>>,
-    #[allow(dead_code)] // 骨架：start_audio_decode_thread 尚未被调用
-    audio_decode_tx: Option<flume::Sender<crate::audio_decode_runner::DecodeRequest>>,
-    #[allow(dead_code)] // 骨架：音频播放接入前 audio_decode_rx 暂未消费
-    audio_decode_rx: Option<flume::Receiver<crate::audio_decode_runner::DecodeResult>>,
 
     // ---------- lifecycle ----------
     fatal_error: Option<String>,
@@ -190,9 +196,6 @@ impl App {
             surface_rotation: glam::Mat4::IDENTITY,
             input: InputManager::new(),
             audio: None,
-            io_thread: None,
-            io_tx: None,
-            io_rx: None,
             audio_decode_thread: None,
             audio_decode_tx: None,
             audio_decode_rx: None,
@@ -238,19 +241,32 @@ impl App {
 
     /// 显式声明需要启用某个引擎子系统。
     ///
-    /// 不调用此方法则对应子系统不创建（无窗口、无音频等）。
+    /// 不调用此方法则对应子系统不创建（无窗口、无音频、无物理等）。
     pub fn with_subsystem(mut self, subsystem: Subsystem) -> Self {
+        let bit = subsystem.bit();
+        if self.subsystems & bit != 0 {
+            return self; // 已启用，跳过
+        }
+        self.subsystems |= bit;
+
         match subsystem {
             Subsystem::Render => {
-                self.subsystems |= Subsystem::Render.bit();
+                // 渲染在 resumed() 时条件创建
+            }
+            Subsystem::Physics => {
+                // 物理线程在 resumed() 后条件启动
+                // 当前骨架：待 ECS 物理系统接入后实现
+                log::info!("physics subsystem requested (skeleton — not yet wired)");
             }
             Subsystem::Audio => {
-                self.subsystems |= Subsystem::Audio.bit();
                 self.audio = AudioEngine::new(prism_audio::AudioConfig::default()).ok();
                 if self.audio.is_none() {
                     log::warn!("audio subsystem requested but failed to initialize");
                 }
-            }
+                self.start_audio_decode_thread();
+            },
+            Subsystem::Network | Subsystem::Scene | Subsystem::Asset => todo!(),
+            Subsystem::AI | Subsystem::UI | Subsystem::Animation => todo!()
         }
         self
     }
@@ -348,38 +364,9 @@ impl App {
     }
 
     // -----------------------------------------------------------------------
-    // IO 线程生命周期
-    // -----------------------------------------------------------------------
-
-    #[allow(dead_code)] // 骨架：资源加载系统接入前暂未调用
-    fn start_io_thread(&mut self) {
-        let (tx, rx) = flume::unbounded();
-        let (result_tx, result_rx) = flume::bounded(16);
-
-        let thread = std::thread::Builder::new()
-            .name("io".into())
-            .spawn(move || crate::io_runner::io_thread_main(rx, result_tx))
-            .expect("failed to spawn IO thread");
-
-        self.io_tx = Some(tx);
-        self.io_rx = Some(result_rx);
-        self.io_thread = Some(thread);
-    }
-
-    fn stop_io_thread(&mut self) {
-        if let Some(tx) = self.io_tx.take() {
-            let _ = tx.send(crate::io_runner::IoRequest::Shutdown);
-        }
-        if let Some(handle) = self.io_thread.take() {
-            let _ = handle.join();
-        }
-    }
-
-    // -----------------------------------------------------------------------
     // 音频解码线程生命周期
     // -----------------------------------------------------------------------
 
-    #[allow(dead_code)] // 骨架：音频播放系统接入前暂未调用
     fn start_audio_decode_thread(&mut self) {
         let (tx, rx) = flume::unbounded();
         let (result_tx, result_rx) = flume::bounded(8);
@@ -808,11 +795,9 @@ impl ApplicationHandler for App {
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         if event_loop.exiting() {
             // === 后台线程关闭（顺序很重要） ===
-            // 1. 先停 IO 线程（不再有资源请求）
-            self.stop_io_thread();
-            // 2. 停音频解码线程
+            // 1. 停音频解码线程
             self.stop_audio_decode_thread();
-            // 3. 停渲染线程
+            // 2. 停渲染线程
             self.stop_render_thread();
             // 4. 引擎预关闭
             if let Some(ref mut engine) = self.engine {
@@ -861,7 +846,6 @@ impl ApplicationHandler for App {
         }
 
         // 停止后台线程。
-        self.stop_io_thread();
         self.stop_audio_decode_thread();
 
         // 停止渲染线程

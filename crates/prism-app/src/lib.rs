@@ -83,8 +83,8 @@ pub use render_shared::{RenderShared, RenderStats};
 /// 用户项目在此之后注册 ECS 内容（`add_system` / `insert_resource` /
 /// `engine_mut`），然后 [`App::run`]（桌面）或 [`App::run_on`]（Android）。
 /// 编辑器等宿主可用 [`App::with_frame_hook`] 注入 [`FrameHook`]。
-pub fn app(config: AppConfig) -> App {
-    App::with_config(config)
+pub fn app() -> App {
+    App::with_config(AppConfig::load())
 }
 
 // ===========================================================================
