@@ -153,7 +153,7 @@ impl Style {
 // ── ComputedLayout ────────────────────────────────────────────
 
 /// **Layout System 输出**：最终屏幕空间矩形（像素）。
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct ComputedLayout {
     /// 屏幕空间边界 `[left, top, width, height]`
     pub rect: [f32; 4],

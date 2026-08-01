@@ -5,7 +5,7 @@ Vulkan 上下文和 swapchain 就绪后，我们开始设计**渲染架构**。P
 :::info 本章对应 DESIGN
 - 2.2 模块化 = pass 即节点；新增特性 = 新增一个 pass，不改动既有节点。
 - 2.1 TBDR 友好：中间 RT 默认 transient/lazy 分配、`DONT_CARE` store、重 pass 半分辨率。
-- 第 4 节当前落点：`render_graph.rs` + `passes.rs`。
+- 第 4 节当前落点：`render_graph.rs` + `forward_pass.rs` / `shadow_map_pass.rs` / `skybox_pass.rs`。
 :::
 
 ## RenderGraph：pass 即节点
@@ -37,18 +37,18 @@ pub trait RenderPassNode {
 
 ## 真实存在的 pass 节点
 
-引擎当前实现了三个核心 pass + 一条可选的光追路径，全部在 `passes.rs`（2276 行）：
+引擎当前实现了三个核心 pass + 一条可选的光追路径，全部在 `forward_pass.rs` / `shadow_map_pass.rs` / `skybox_pass.rs`：
 
 | Pass | 职责 | 备注 |
 |------|------|------|
 | `ShadowMapPass` | 深度阴影（方向光） | CullMode=NONE + depth bias 防自阴影 |
-| `ScenePass` | **前向 PBR MRT**：颜色+法线 | 写入 HDR 中间 target（`R16G16B16A16_SFLOAT`），绑定最多 6 个描述符集 |
-| `SkyboxPass` | IBL 环境 Cubemap 背景 | 内嵌于 ScenePass，共享渲染通道 |
-| `GtaoPass` | 半分辨率屏幕空间环境光遮蔽 | 消耗 ScenePass 产出的视图空间法线，双帧缓冲时序稳定 |
+| `ForwardPass` | **前向 PBR MRT**：颜色+法线 | 写入 HDR 中间 target（`R16G16B16A16_SFLOAT`），绑定最多 6 个描述符集 |
+| `SkyboxPass` | IBL 环境 Cubemap 背景 | 内嵌于 ForwardPass，共享渲染通道 |
+| `GtaoPass` | 半分辨率屏幕空间环境光遮蔽 | 消耗 ForwardPass 产出的视图空间法线，双帧缓冲时序稳定 |
 | `PostPass` | Tone mapping（HDR→sRGB） | 从 HDR 中间 target 采样，输出到交换链 |
 
 :::warn 已移除的历史 pass
-旧版教程记载的 GBufferPass、RayQueryPass、SharcPass（SHARC GI）、LightingPass 均已被移除（见 `passes.rs` 第 8 行注释 "Dead passes removed: GBuffer, SHARC, RayQuery, Lighting, Post (stub)"）。场景渲染已从前向 PBR MRT 替代了延迟管线，GI 改用探针体积（见第 11 章），光线追踪通过独立的 `PathTracePass` 实现。
+旧版教程记载的 GBufferPass、RayQueryPass、SharcPass（SHARC GI）、LightingPass 均已被移除（旧 `passes.rs` 头部注释记载 "Dead passes removed: GBuffer, SHARC, RayQuery, Lighting, Post (stub)"）。场景渲染已从前向 PBR MRT 替代了延迟管线，GI 改用探针体积（见第 11 章），光线追踪通过独立的 `PathTracePass` 实现。
 :::
 
 ### ShadowMapPass（深度阴影）
@@ -68,12 +68,12 @@ for item in ctx.frame.draw_list {
 }
 ```
 
-### ScenePass（前向 PBR MRT）
+### ForwardPass（前向 PBR MRT）
 
 当前引擎的主力 pass。它不直接写交换链，而是渲染到 **HDR 中间 target**（`R16G16B16A16_SFLOAT`，线性空间），配合 **MRT** 同时输出颜色和视图空间法线：
 
 ```
-ScenePass 输出:
+ForwardPass 输出:
   attachment 0: color  (R16G16B16A16_SFLOAT, HDR 线性)
   attachment 1: normal (R16G16B16A16_SFLOAT, 视图空间法线)
   depth:       D32_SFLOAT (共享 depth 缓冲)
@@ -83,7 +83,7 @@ ScenePass 输出:
 
 | Set | 内容 | 提供者 |
 |-----|------|--------|
-| 0 | 帧 UBO (b0) + 材质 SSBO (b1) + 光源 SSBO (b2) | `ScenePass` 创建 |
+| 0 | 帧 UBO (b0) + 材质 SSBO (b1) + 光源 SSBO (b2) | `ForwardPass` 创建 |
 | 1 | Bindless 纹理表（SRV + sampler） | `RenderTextureManager` |
 | 2 | IBL 环境 Cubemap（env/irradiance/prefiltered） | `IblResources` |
 | 3 | 阴影贴图（SAMPLED_IMAGE + 比较 sampler） | `GraphRenderer` 传递 |
@@ -92,25 +92,25 @@ ScenePass 输出:
 
 **共 6 个描述符集**——这是 Vulkan 实现层面的现实：功能越多，绑定越多。
 
-ScenePass 内部还嵌入了 `SkyboxPass`（IBL 环境 Cubemap 背景，用 `LESS_OR_EQUAL` 深度测试画在远处）和 `Gizmo`（世界轴指示器，不写深度，画在最上层）。
+ForwardPass 内部还嵌入了 `SkyboxPass`（IBL 环境 Cubemap 背景，用 `LESS_OR_EQUAL` 深度测试画在远处）和 `Gizmo`（世界轴指示器，不写深度，画在最上层）。
 
 ### GtaoPass（环境光遮蔽）
 
-在 ScenePass 之后运行的**半分辨率** AO pass。它读取 ScenePass MRT 的视图空间法线 attachment，估算相邻像素间的遮挡程度。使用双帧缓冲（交替 AO 纹理做时序累积）获得时间稳定性。
+在 ForwardPass 之后运行的**半分辨率** AO pass。它读取 ForwardPass MRT 的视图空间法线 attachment，估算相邻像素间的遮挡程度。使用双帧缓冲（交替 AO 纹理做时序累积）获得时间稳定性。
 
 ```rust
 // GtaoFrameInputs：跨帧传递的 AO 数据
 pub struct GtaoFrameInputs {
     pub current_ao: vk::ImageView,     // 当前帧 AO 结果
     pub previous_ao: vk::ImageView,    // 上一帧（时序混合用）
-    pub scene_normal: ResourceHandle,  // ScenePass 的法线 handle
-    pub scene_depth: ResourceHandle,   // ScenePass 的深度 handle
+    pub scene_normal: ResourceHandle,  // ForwardPass 的法线 handle
+    pub scene_depth: ResourceHandle,   // ForwardPass 的深度 handle
 }
 ```
 
 ### PostPass（色调映射）
 
-读取 ScenePass 的 HDR 颜色 `ResourceHandle`（`SCENE_COLOR_H = 1002`），执行 ACES tone mapping 后输出到交换链 sRGB。
+读取 ForwardPass 的 HDR 颜色 `ResourceHandle`（`FORWARD_COLOR_H = 1002`），执行 ACES tone mapping 后输出到交换链 sRGB。
 
 ---
 
@@ -145,13 +145,13 @@ Pass A: 输出 RT1 ──→ Pass B: 读 RT1
 
 ### 已知句柄常量
 
-ScenePass 的三个输出（`SCENE_COLOR_H`、`SCENE_NORMAL_H`、`SCENE_DEPTH_H`）和 PathTracePass 的输出（`PT_COLOR_H`）用了**固定 handle 值**（1000-1003），而不是由图自动分配。这样后置的 `GtaoPass`/`PostPass` 在写代码时可以硬编码 `SCENE_NORMAL_H` 引用上游，无需在运行时查询 pass 的输出 slot：
+ForwardPass 的三个输出（`FORWARD_COLOR_H`、`FORWARD_NORMAL_H`、`FORWARD_DEPTH_H`）和 PathTracePass 的输出（`PT_COLOR_H`）用了**固定 handle 值**（1000-1003），而不是由图自动分配。这样后置的 `GtaoPass`/`PostPass` 在写代码时可以硬编码 `FORWARD_NORMAL_H` 引用上游，无需在运行时查询 pass 的输出 slot：
 
 ```rust
 // render_graph.rs 中的常量
-pub const SCENE_DEPTH_H: ResourceHandle = ResourceHandle(1000);
-pub const SCENE_NORMAL_H: ResourceHandle = ResourceHandle(1001);
-pub const SCENE_COLOR_H: ResourceHandle = ResourceHandle(1002);
+pub const FORWARD_DEPTH_H: ResourceHandle = ResourceHandle(1000);
+pub const FORWARD_NORMAL_H: ResourceHandle = ResourceHandle(1001);
+pub const FORWARD_COLOR_H: ResourceHandle = ResourceHandle(1002);
 pub const PT_COLOR_H: ResourceHandle = ResourceHandle(1003);
 ```
 
@@ -175,10 +175,10 @@ tex.Sample(global_samplers[sampler_type], uv);
 
 :::exercise
 1. 读 `crates/prism-render/src/render_graph.rs` 的模块注释，画出 `RenderPassNode` 的「声明 IO → 注册 → execute」生命周期。
-2. 读 `passes.rs` 的 `ScenePass`，列出它的 6 个描述符集绑定，说明每一个在着色器（`scene_frag.slang`）里对应什么。
-3. 在 `passes.rs` 中找到 `RenderSettings` 的 `render_mode` 字段，理解前向 vs 路径追踪的切换逻辑。
+2. 读 `forward_pass.rs` 的 `ForwardPass`，列出它的 6 个描述符集绑定，说明每一个在着色器（`scene_frag.slang`）里对应什么。
+3. 在 `forward_pass.rs` 中找到 `RenderSettings` 的 `render_mode` 字段，理解前向 vs 路径追踪的切换逻辑。
 4. 读 `shaders/slang/scene_frag.slang` 与 `shaders/compile.sh`，理解 Slang → SPIR-V 的编译命令及 push-constant 布局。
-5. 对比 `GtaoPass` 的分辨率与 ScenePass：为什么 AO 可以是半分辨率？（提示：AO 是低频信号）
+5. 对比 `GtaoPass` 的分辨率与 ForwardPass：为什么 AO 可以是半分辨率？（提示：AO 是低频信号）
 :::
 
 ECS 数据层和资产管线已在前面章节铺垫完成，下一章我们深入 PBR 光照模型。

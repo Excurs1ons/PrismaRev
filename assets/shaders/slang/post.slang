@@ -1,7 +1,7 @@
 // Post-process pass - fullscreen-triangle tonemap (Reinhard / ACES) from the
 // offscreen HDR color attachment into the sRGB swapchain.
 //
-// The ScenePass renders the lit scene into an R16G16B16A16_SFLOAT HDR image;
+// The ForwardPass renders the lit scene into an R16G16B16A16_SFLOAT HDR image;
 // this pass samples that image, applies the selectable tonemap operator, and
 // writes the result to the swapchain (an sRGB format, so the hardware encodes
 // the linear output to sRGB on write).
@@ -53,7 +53,7 @@ public void vertexMain(
     );
     clipPos = float4(pos, 0.0, 1.0);
     // Vulkan NDC y = -1 is the top; UV.y = 0 at the top. Match the framebuffer
-    // top-left origin so the HDR image keeps the ScenePass orientation.
+    // top-left origin so the HDR image keeps the ForwardPass orientation.
     uv = pos * 0.5 + 0.5;
 }
 

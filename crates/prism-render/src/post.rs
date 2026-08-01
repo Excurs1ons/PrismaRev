@@ -1,6 +1,6 @@
 //! 后处理通道——HDR 场景色调映射 → sRGB 交换链
 //!
-//! 全屏三角形片元通道，对 ScenePass 的 HDR 中间颜色附件进行采样，
+//! 全屏三角形片元通道，对 ForwardPass 的 HDR 中间颜色附件进行采样，
 //! 应用 Reinhard 或 ACES 色调映射（根据 `tonemap_mode`），
 //! 并将结果写入交换链图像。取代了之前位于 `scene_frag.slang` 中的内联色调映射，
 //! 使场景输出保持线性 HDR（可被未来的后处理效果使用：泛光、时域抗锯齿等）。
@@ -8,7 +8,7 @@
 //! ## 资源
 //! - 一个描述符集，将 HDR 颜色绑定为组合图像采样器
 //! - 拥有自己的渲染通道+管线（1 个颜色附件 = 交换链格式，无深度）
-//! - HDR 输入视图每帧通过 `set_input` 更新（ScenePass 每交换链槽轮换一个 HDR 图像，
+//! - HDR 输入视图每帧通过 `set_input` 更新（ForwardPass 每交换链槽轮换一个 HDR 图像，
 //!   匹配其刚写入的帧缓冲）。
 //!
 //! ## `execute` 中记录的布局转换
@@ -27,8 +27,8 @@ use crate::context::VulkanContext;
 use crate::pipeline::{GraphicsPipeline, PipelineDesc};
 use crate::render_graph::{
     GraphResources, PassInfo, PassKind, RenderContext, RenderGraphBuilder, RenderMode,
-    RenderPassNode, RenderSettings, ResourceUsage, PT_COLOR_H, SCENE_COLOR_H, SCENE_DEPTH_H,
-    SCENE_NORMAL_H,
+    RenderPassNode, RenderSettings, ResourceUsage, PT_COLOR_H, FORWARD_COLOR_H, FORWARD_DEPTH_H,
+    FORWARD_NORMAL_H,
 };
 use crate::render_pass::find_memory_type;
 use crate::shader;
@@ -43,7 +43,7 @@ pub struct PostPass {
     /// One 帧缓冲 per 交换链 图像 (each wraps its 交换链 视图
     framebuffers: Vec<Option<vk::Framebuffer>>,
     /// Cached 交换链 views the framebuffers were 内置 against (for
-    /// rebuild detection, mirroring ScenePass's 模式
+    /// rebuild detection, mirroring ForwardPass's 模式
     target_views: Vec<vk::ImageView>,
     extent: vk::Extent2D,
     pipeline: Option<GraphicsPipeline>,
@@ -160,7 +160,7 @@ impl PostPass {
     }
 
     /// Ensure the 帧缓冲 for `image_index` 存在 and is 内置 against the
-    /// 当前 交换链 views + extent. Mirrors ScenePass::set_target's
+    /// 当前 交换链 views + extent. Mirrors ForwardPass::set_target's
     /// per-slot rebuild 逻辑 (only rebuild an entry when its 视图 changes, so
     /// in-flight framebuffers are never touched).
     pub fn set_target(
@@ -223,7 +223,7 @@ impl PostPass {
     }
 
     /// 放置 the swapchain-derived framebuffers (called before 交换链
-    /// recreate, mirroring ScenePass::drop_target).
+    /// recreate, mirroring ForwardPass::drop_target).
     pub fn drop_target(&mut self, device: &ash::Device) {
         for fb in self.framebuffers.drain(..).flatten() {
             unsafe { device.destroy_framebuffer(fb, None) };
@@ -266,7 +266,7 @@ impl PostPass {
         unsafe { device.update_descriptor_sets(&[write], &[]) };
     }
 
-    /// Record the PostPass into `cmd`. Must run AFTER ScenePass (which leaves
+    /// Record the PostPass into `cmd`. Must run AFTER ForwardPass (which leaves
     /// the 高动态范围 颜色 in COLOR_ATTACHMENT_OPTIMAL). The 调用者 barriers the
     /// 交换链 to PRESENT_SRC_KHR (or the egui 叠加 handles it) after this.
     /// `frame_index` selects the per-frame-in-flight 描述符 集合 `image_index`
@@ -473,7 +473,7 @@ impl RenderPassNode for PostPass {
     }
 
     fn setup(&mut self, graph: &mut RenderGraphBuilder, _settings: &RenderSettings) {
-        // 高动态范围 输入 is published by ScenePass under SCENE_COLOR_H; 读取 in
+        // 高动态范围 输入 is published by ForwardPass under FORWARD_COLOR_H; 读取 in
         // 执行 PostPass owns no graph-managed resources of its own.
         //
         // Declare the 读取 edge so the 渲染 图 inserts the
@@ -481,7 +481,7 @@ impl RenderPassNode for PostPass {
         // automatically before this pass (replacing the hand-rolled
         // `cmd_pipeline_barrier` that used to live in 执行
         graph.read_usage(ResourceUsage {
-            handle: SCENE_COLOR_H,
+            handle: FORWARD_COLOR_H,
             access: vk::AccessFlags::SHADER_READ,
             stage: vk::PipelineStageFlags::FRAGMENT_SHADER,
             layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
@@ -501,13 +501,13 @@ impl RenderPassNode for PostPass {
         // and 法线 to read-only layouts, so this is usually a cache hit and
         // emits no extra 屏障
         graph.read_usage(ResourceUsage {
-            handle: SCENE_DEPTH_H,
+            handle: FORWARD_DEPTH_H,
             access: vk::AccessFlags::SHADER_READ,
             stage: vk::PipelineStageFlags::FRAGMENT_SHADER,
             layout: vk::ImageLayout::DEPTH_STENCIL_READ_ONLY_OPTIMAL,
         });
         graph.read_usage(ResourceUsage {
-            handle: SCENE_NORMAL_H,
+            handle: FORWARD_NORMAL_H,
             access: vk::AccessFlags::SHADER_READ,
             stage: vk::PipelineStageFlags::FRAGMENT_SHADER,
             layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
@@ -520,20 +520,20 @@ impl RenderPassNode for PostPass {
         resources: &mut GraphResources,
     ) -> anyhow::Result<()> {
         // Pick the 输入 RT based on the 渲染 众数 and 调试 viewer (Tab).
-        // In path-trace 众数 we 读取 PT_COLOR_H instead of SCENE_COLOR_H,
+        // In path-trace 众数 we 读取 PT_COLOR_H instead of FORWARD_COLOR_H,
         // unless no usable 相机 存在 — in that case the PT pass was skipped
-        // so fall 后 to SCENE_COLOR_H (the gray 清空 颜色 from ScenePass).
+        // so fall 后 to FORWARD_COLOR_H (the gray 清空 颜色 from ForwardPass).
         // 调试 modes 1 深度 and 2 法线 always 读取 from scene 输出
         let is_pt = ctx.frame.render_mode == RenderMode::PathTrace;
         let has_camera = ctx.frame.has_camera;
         let (handle, image_layout) = match ctx.frame.debug_rt {
             1 => (
-                SCENE_DEPTH_H,
+                FORWARD_DEPTH_H,
                 vk::ImageLayout::DEPTH_STENCIL_READ_ONLY_OPTIMAL,
             ),
-            2 => (SCENE_NORMAL_H, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL),
+            2 => (FORWARD_NORMAL_H, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL),
             _ if is_pt && has_camera => (PT_COLOR_H, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL),
-            _ => (SCENE_COLOR_H, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL),
+            _ => (FORWARD_COLOR_H, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL),
         };
         let input_view = match resources.published_view(handle) {
             Some(v) => v,
@@ -547,7 +547,7 @@ impl RenderPassNode for PostPass {
             .unwrap_or(vk::Image::null());
 
         // (Re)build this 交换链 image's 帧缓冲 if 缺少 or the
-        // 交换链 changed - mirrors `ScenePass::ensure_target`. Before PR-1
+        // 交换链 changed - mirrors `ForwardPass::ensure_target`. Before PR-1
         // this was `GraphRenderer`'s 作业 (it called `set_target` every 帧
         // now the 图 drives it so the 帧缓冲 lifecycle is owned here.
         self.set_target(
@@ -599,8 +599,8 @@ impl RenderPassNode for PostPass {
             index: usize::MAX,
             name: self.name().to_string(),
             kind: PassKind::Post,
-            // 高动态范围 颜色 comes from ScenePass via SCENE_COLOR_H.
-            inputs: vec![SCENE_COLOR_H],
+            // 高动态范围 颜色 comes from ForwardPass via FORWARD_COLOR_H.
+            inputs: vec![FORWARD_COLOR_H],
             // PostPass writes the 交换链 (not a graph-managed 资源
             outputs: Vec::new(),
         }
@@ -664,7 +664,7 @@ fn create_render_pass(device: &ash::Device, format: vk::Format) -> anyhow::Resul
 
 // Re-export the memory-type finder so this 模块 is self-contained for
 // future HDR-image helpers (currently none - the 高动态范围 图像 is owned by
-// ScenePass). Kept here as a placeholder 导入 to avoid an unused 警告
+// ForwardPass). Kept here as a placeholder 导入 to avoid an unused 警告
 // if no callers use it.
 #[allow(dead_code)]
 fn _memory_type_for_hdr(context: &VulkanContext, mem_type_bits: u32) -> anyhow::Result<u32> {

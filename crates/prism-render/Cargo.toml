@@ -17,3 +17,4 @@ egui = { workspace = true }
 egui-winit = { workspace = true }
 egui-ash-renderer = { workspace = true }
 image = { workspace = true, features = ["hdr"] }
+fontdue = "0.9"

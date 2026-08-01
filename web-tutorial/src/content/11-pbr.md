@@ -183,21 +183,21 @@ PBR + IBL 之后，物体看起来已经很好了，但角落和裂缝处缺少�
 引擎的 **GTAO（Ground-Truth Ambient Occlusion）** 在 `gtao.rs` 中实现，特点：
 
 - **半分辨率**：AO 是低频信号，无需全分辨率，节约带宽
-- **后 ScenePass**：读取 ScenePass MRT 的视图空间法线和深度
+- **后 ForwardPass**：读取 ForwardPass MRT 的视图空间法线和深度
 - **双帧缓冲**：交替写入两个 R8 纹理，时序累积抗闪烁
-- **前一帧采样**：ScenePass 采样上一帧的 AO 结果（1 帧延迟，对静态场景无感知影响）
+- **前一帧采样**：ForwardPass 采样上一帧的 AO 结果（1 帧延迟，对静态场景无感知影响）
 
 ```rust
 // GtaoFrameInputs
 pub struct GtaoFrameInputs {
     pub current_ao: vk::ImageView,
     pub previous_ao: vk::ImageView,
-    pub scene_normal: ResourceHandle,  // 从 ScenePass MRT 读取
+    pub scene_normal: ResourceHandle,  // 从 ForwardPass MRT 读取
     pub scene_depth: ResourceHandle,
 }
 ```
 
-GTAO 的结果通过 set 4 传递给 ScenePass，衰减 IBL 的漫反射和镜面项。
+GTAO 的结果通过 set 4 传递给 ForwardPass，衰减 IBL 的漫反射和镜面项。
 
 ---
 
@@ -207,7 +207,7 @@ GTAO 的结果通过 set 4 传递给 ScenePass，衰减 IBL 的漫反射和镜�
 
 - 场景中放置一个**规则网格**的球谐探针（order-2 SH，9 系数）
 - 离线烘焙器（`bin/prism_bake_gi.rs`）计算间接光照并写入 3D 纹理
-- 运行时通过 set 5 传递给 ScenePass：binding 0 = 3D 纹理，binding 1 = ProbeVolumeInfo UBO
+- 运行时通过 set 5 传递给 ForwardPass：binding 0 = 3D 纹理，binding 1 = ProbeVolumeInfo UBO
 - 生产者和消费者解耦：同一数据布局既可被离线烘焙器写入，也可被未来的实时 DDGI 更新
 
 ```hlsl
@@ -227,7 +227,7 @@ float3 irradiance = SampleProbeVolumeIrradiance(world_position, surface_normal);
 // 相机移动时自动重置累积缓冲
 ```
 
-切换方式：`RenderSettings.render_mode` 在 `RenderMode::Raster` 和 `RenderMode::PathTrace` 之间切换。启用 PT 时，`PathTracePass` 替代 `ScenePass + GtaoPass` 写入 `PT_COLOR_H`，`PostPass` 仍负责 tone mapping。
+切换方式：`RenderSettings.render_mode` 在 `RenderMode::Raster` 和 `RenderMode::PathTrace` 之间切换。启用 PT 时，`PathTracePass` 替代 `ForwardPass + GtaoPass` 写入 `PT_COLOR_H`，`PostPass` 仍负责 tone mapping。
 
 ---
 

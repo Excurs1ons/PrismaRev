@@ -1,9 +1,9 @@
 //! GTAO（真实环境光遮蔽）通道
 //!
-//! 半分辨率屏幕空间环境光遮蔽通道，在 `ScenePass` 之后运行（ScenePass 写入
+//! 半分辨率屏幕空间环境光遮蔽通道，在 `ForwardPass` 之后运行（ForwardPass 写入
 //! D32_SFLOAT 深度和 R16G16B16A16 视图空间法线 MRT）。此通道读取深度
 //!（+ 可选法线）并写入单通道 R8_UNORM 环境光遮蔽纹理。
-//! `ScenePass` 采样**上一帧的**环境光遮蔽输出（1 帧延迟）以衰减 IBL 漫反射+镜面反射项。
+//! `ForwardPass` 采样**上一帧的**环境光遮蔽输出（1 帧延迟）以衰减 IBL 漫反射+镜面反射项。
 //!
 //! ## 资源
 //! - 两个 R8_UNORM 环境光遮蔽图像（通过处理中帧索引双缓冲，因此场景可以读取
@@ -20,7 +20,7 @@
 //! 5. 屏障 `ao[frame]` `COLOR_ATTACHMENT_OPTIMAL -> SHADER_READ_ONLY_OPTIMAL`
 //!
 //! The 深度 + 法线 images return to their 附件 layouts at the start of
-//! the 下一个 frame's ScenePass (its 渲染 pass `initial_layout = UNDEFINED`
+//! the 下一个 frame's ForwardPass (its 渲染 pass `initial_layout = UNDEFINED`
 //! tolerates any incoming 布局 via `load_op = 清空 The 环境光遮蔽 图像 stays in
 //! SHADER_READ_ONLY_OPTIMAL until the GTAO pass writes it again two frames
 //! later (its 渲染 pass also uses `initial_layout = UNDEFINED`).
@@ -33,14 +33,14 @@ use crate::context::VulkanContext;
 use crate::pipeline::{GraphicsPipeline, PipelineDesc};
 use crate::render_graph::{
     GraphResources, PassInfo, PassKind, RenderContext, RenderGraphBuilder, RenderPassNode,
-    RenderSettings, ResourceUsage, SCENE_DEPTH_H, SCENE_NORMAL_H,
+    RenderSettings, ResourceUsage, FORWARD_DEPTH_H, FORWARD_NORMAL_H,
 };
 use crate::render_pass::find_memory_type;
 use crate::shader;
 use crate::shader_bindings;
 
 /// Per-frame-in-flight inputs the GTAO pass needs to 样本 内置 by
-/// `GraphRenderer::render` from `ScenePass` accessors and passed to
+/// `GraphRenderer::render` from `ForwardPass` accessors and passed to
 /// `GtaoPass::execute` alongside the 命令 缓冲区
 pub struct GtaoFrameInputs {
     /// 深度 图像 handle (for 布局 barriers).
@@ -370,7 +370,7 @@ impl GtaoPass {
         Ok(())
     }
 
-    /// Record the GTAO pass into `cmd`. Must run AFTER `ScenePass::execute`
+    /// Record the GTAO pass into `cmd`. Must run AFTER `ForwardPass::execute`
     /// (which leaves 深度 in DEPTH_STENCIL_ATTACHMENT_OPTIMAL and 法线 in
     /// COLOR_ATTACHMENT_OPTIMAL).
     pub fn execute(
@@ -476,9 +476,9 @@ impl GtaoPass {
         unsafe { device.cmd_end_render_pass(cmd) };
 
         // ---- 屏障 ao[i] -> SHADER_READ_ONLY_OPTIMAL ----
-        // GRAPH-EDGE 异常 this is a cross-frame delayed edge. `ScenePass`
+        // GRAPH-EDGE 异常 this is a cross-frame delayed edge. `ForwardPass`
         // reads this 环境光遮蔽 图像 *next frame* (1-frame 延迟 wired via
-        // `GraphFrame.ao_view` -> `ScenePass::set_ao`, NOT via a 图
+        // `GraphFrame.ao_view` -> `ForwardPass::set_ao`, NOT via a 图
         // `read_usage` edge), so the 渲染 图 cannot express or 调度
         // this 屏障 It stays manual. SHADER_READ_ONLY_OPTIMAL stays 有效
         // until the GTAO pass writes this 槽 again (2 frames later), whose
@@ -733,7 +733,7 @@ fn create_render_pass(device: &ash::Device) -> anyhow::Result<vk::RenderPass> {
 /// GRAPH-EDGE 异常 this is a one-shot resource-creation 过渡 not
 /// a per-frame 图 edge. The 渲染 图 only tracks layouts for graph-flow
 /// handles (shadow / scene 深度 / 法线 / 高动态范围 颜色 the 环境光遮蔽 images are
-/// `GtaoPass`-private and fed 后 to `ScenePass` via a side-channel
+/// `GtaoPass`-private and fed 后 to `ForwardPass` via a side-channel
 /// (`GraphFrame.ao_view`), so the 图 never sees them.
 fn transition_ao_images_to_shader_read(
     context: &VulkanContext,
@@ -810,8 +810,8 @@ impl RenderPassNode for GtaoPass {
     }
 
     fn setup(&mut self, graph: &mut RenderGraphBuilder, _settings: &RenderSettings) {
-        // Inputs (depth/normal views) are published by ScenePass under the
-        // well-known SCENE_DEPTH_H / SCENE_NORMAL_H handles; GTAO reads them
+        // Inputs (depth/normal views) are published by ForwardPass under the
+        // well-known FORWARD_DEPTH_H / FORWARD_NORMAL_H handles; GTAO reads them
         // from `resources` in 执行 No graph-managed resources of its own.
         //
         // Declare the 读取 edges so the 渲染 图 inserts the
@@ -819,13 +819,13 @@ impl RenderPassNode for GtaoPass {
         // barriers automatically before this pass (replacing the hand-rolled
         // `cmd_pipeline_barrier` that used to live in `draw_ao`).
         graph.read_usage(ResourceUsage {
-            handle: SCENE_DEPTH_H,
+            handle: FORWARD_DEPTH_H,
             access: vk::AccessFlags::SHADER_READ,
             stage: vk::PipelineStageFlags::FRAGMENT_SHADER,
             layout: vk::ImageLayout::DEPTH_STENCIL_READ_ONLY_OPTIMAL,
         });
         graph.read_usage(ResourceUsage {
-            handle: SCENE_NORMAL_H,
+            handle: FORWARD_NORMAL_H,
             access: vk::AccessFlags::SHADER_READ,
             stage: vk::PipelineStageFlags::FRAGMENT_SHADER,
             layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
@@ -837,17 +837,17 @@ impl RenderPassNode for GtaoPass {
         ctx: &RenderContext,
         resources: &mut GraphResources,
     ) -> anyhow::Result<()> {
-        let depth_view = match resources.published_view(SCENE_DEPTH_H) {
+        let depth_view = match resources.published_view(FORWARD_DEPTH_H) {
             Some(v) => v,
             None => {
-                log::warn!("GtaoPass: no ScenePass depth view published; skipping");
+                log::warn!("GtaoPass: no ForwardPass depth view published; skipping");
                 return Ok(());
             }
         };
-        let normal_view = match resources.published_view(SCENE_NORMAL_H) {
+        let normal_view = match resources.published_view(FORWARD_NORMAL_H) {
             Some(v) => v,
             None => {
-                log::warn!("GtaoPass: no ScenePass normal view published; skipping");
+                log::warn!("GtaoPass: no ForwardPass normal view published; skipping");
                 return Ok(());
             }
         };
@@ -868,16 +868,16 @@ impl RenderPassNode for GtaoPass {
             );
         }
         // The images themselves are needed only for the 布局 barriers; reuse
-        // the view's 图像 handle via the ScenePass-published 视图 (vkImageView
+        // the view's 图像 handle via the ForwardPass-published 视图 (vkImageView
         // carries the 图像 We pass the same handle for 图像 + 视图 the
         // 屏障 only needs a 有效 图像 and `vk::Image` from a 视图 is not
-        // directly available here, so we use the ScenePass-published 图像 via
+        // directly available here, so we use the ForwardPass-published 图像 via
         // the 资源 table's 图像 (if present) else fall 后 to the 视图
         let depth_image = resources
-            .published_image(SCENE_DEPTH_H)
+            .published_image(FORWARD_DEPTH_H)
             .unwrap_or(vk::Image::null());
         let normal_image = resources
-            .published_image(SCENE_NORMAL_H)
+            .published_image(FORWARD_NORMAL_H)
             .unwrap_or(vk::Image::null());
 
         // 更新 the 深度 + 法线 描述符 sets for this frame-in-flight.
@@ -909,9 +909,9 @@ impl RenderPassNode for GtaoPass {
             index: usize::MAX,
             name: self.name().to_string(),
             kind: PassKind::Gtao,
-            // 深度 + 法线 come from ScenePass via the well-known handles.
-            inputs: vec![SCENE_DEPTH_H, SCENE_NORMAL_H],
-            // 环境光遮蔽 is consumed by ScenePass via `set_ao` (1-frame 延迟 not a
+            // 深度 + 法线 come from ForwardPass via the well-known handles.
+            inputs: vec![FORWARD_DEPTH_H, FORWARD_NORMAL_H],
+            // 环境光遮蔽 is consumed by ForwardPass via `set_ao` (1-frame 延迟 not a
             // 图 edge - surfaced as a 音符 by the viz instead.
             outputs: Vec::new(),
         }

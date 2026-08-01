@@ -335,7 +335,13 @@ impl RenderPassNode for RenderTextureScheduler {
                         });
                     let barriers = [barrier];
                     let dep = vk::DependencyInfo::default().image_memory_barriers(&barriers);
-                    unsafe { device.cmd_pipeline_barrier2(cmd, &dep) };
+                    // `vkCmdPipelineBarrier2` (1.3 core) is not exported on a 1.2
+                    // 实例 — use the KHR 包装器 like `buffer.rs` does.
+                    let sync2 = ash::khr::synchronization2::Device::new(
+                        &ctx.context.instance,
+                        &ctx.context.device,
+                    );
+                    unsafe { sync2.cmd_pipeline_barrier2(cmd, &dep) };
 
                     let clear = vk::ClearValue {
                         color: vk::ClearColorValue {

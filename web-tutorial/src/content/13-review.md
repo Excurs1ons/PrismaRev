@@ -22,7 +22,7 @@
                     FrameInput + DrawItem 列表
                                           │
          GraphRenderer: begin_frame → render → present
-           ShadowMapPass → ScenePass(PBR MRT) → GtaoPass → PostPass
+           ShadowMapPass → ForwardPass(PBR MRT) → GtaoPass → PostPass
            (或 PathTracePass 替代前向链)
                                           │
                     acquire → record → submit → present（swapchain）
@@ -38,7 +38,7 @@
 |-------|------|--------|
 | `prism-ecs` | 实体/组件/世界的纯数据模型与查询 | 渲染、窗口、IO |
 | `prism-asset` | 运行时：glTF 2.0 加载 + `SceneStore` + `BatchUploader` + Bindless 纹理表 CPU 端 | Vulkan 上传细节 |
-| `prism-render` | Vulkan 后端：**`render_graph` + `passes`（ScenePass/ShadowMapPass/GtaoPass/PostPass）/ `bindless` / `capabilities` / managers / context / swapchain / `ibl` / `gi` / `pt_pass` / `gtao`** | 游戏逻辑、窗口事件 |
+| `prism-render` | Vulkan 后端：**`render_graph` + `passes`（ForwardPass/ShadowMapPass/GtaoPass/PostPass）/ `bindless` / `capabilities` / managers / context / swapchain / `ibl` / `gi` / `pt_pass` / `gtao`** | 游戏逻辑、窗口事件 |
 | `prism-engine` | winit 主循环、`App`、相机、输入、`render_system`、`DirtyRouter`、`SceneChanges` | 平台差异（交给 winit） |
 | `prism-android` | Android cdylib 入口（`android-game-activity`） | 任何引擎逻辑 |
 | `prism-audio` | 音频子系统（`cpal` 后端），`AudioEngine` + `AudioSource` ECS 组件 | 渲染、窗口 |
@@ -54,7 +54,7 @@
 :::
 
 :::info 当前落点 vs 过渡态
-DESIGN 第 4 节列出的当前落点：`render_graph.rs` + `passes.rs`（ScenePass/ShadowMapPass/GtaoPass/PostPass）、`bindless.rs`、`ibl.rs`、`gi.rs`、`gtao.rs`、`pt_pass.rs`、`capabilities.rs`、`dirty_router.rs`。应用层通过 `GraphRenderer`（`begin_frame` → `render` → `present`）驱动每帧流程，ECS 场景变更经 `SceneChanges` + `DirtyRouter` 同步到 GPU。Legacy 单体 `renderer.rs` 已被完全移除。方向已锁定在 RenderGraph + SceneChanges 数据流，无需平台分支。
+DESIGN 第 4 节列出的当前落点：`render_graph.rs` + `forward_pass.rs` / `shadow_map_pass.rs` / `skybox_pass.rs`（ForwardPass/ShadowMapPass/GtaoPass/PostPass）、`bindless.rs`、`ibl.rs`、`gi.rs`、`gtao.rs`、`pt_pass.rs`、`capabilities.rs`、`dirty_router.rs`。应用层通过 `GraphRenderer`（`begin_frame` → `render` → `present`）驱动每帧流程，ECS 场景变更经 `SceneChanges` + `DirtyRouter` 同步到 GPU。Legacy 单体 `renderer.rs` 已被完全移除。方向已锁定在 RenderGraph + SceneChanges 数据流，无需平台分支。
 :::
 
 ![引擎架构总览图（待替换为真实架构图）](/assets/placeholder/arch.svg)

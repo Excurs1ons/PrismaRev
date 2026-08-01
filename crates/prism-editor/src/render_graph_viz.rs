@@ -18,7 +18,8 @@
 
 use egui::{Color32, FontId, Painter, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, Vec2};
 use prism_render::gtao::GtaoPass;
-use prism_render::passes::{ScenePass, ShadowMapPass};
+use prism_render::forward_pass::ForwardPass;
+use prism_render::shadow_map_pass::ShadowMapPass;
 use prism_render::post::PostPass;
 use prism_render::{
     GraphRenderer, PassInfo, PassKind, RenderGraphSnapshot, RenderSettings, ResourceHandle,
@@ -82,8 +83,8 @@ impl RenderGraphViz {
                     d.notes.push("front-face cull + depth bias".into());
                 }
             }
-            PassKind::Scene => {
-                if let Some(pass) = graph.pass_ref::<ScenePass>() {
+            PassKind::Forward => {
+                if let Some(pass) = graph.pass_ref::<ForwardPass>() {
                     let e = pass.extent();
                     d.extent = Some([e.width, e.height]);
                     d.formats
@@ -106,7 +107,7 @@ impl RenderGraphViz {
                         .push(("AO (R8)".into(), format!("{:?}", GtaoPass::ao_format())));
                     d.notes.push("half-resolution screen-space AO".into());
                     d.notes
-                        .push("double-buffered; 1-frame latency to ScenePass".into());
+                        .push("double-buffered; 1-frame latency to ForwardPass".into());
                 }
             }
             PassKind::Post => {
@@ -360,7 +361,7 @@ impl RenderGraphViz {
 struct PassDetail {
     extent: Option<[u32; 2]>,
     /// 标签 format_string)` pairs - multiple for passes with several
-    /// attachments (e.g. ScenePass has 颜色 + 法线
+    /// attachments (e.g. ForwardPass has 颜色 + 法线
     formats: Vec<(String, String)>,
     image_count: Option<usize>,
     /// Outputs discovered from the concrete pass (may differ from the 静态
@@ -436,21 +437,21 @@ impl PassDetail {
 // Coloring + naming helpers for well-known resources and pass kinds.
 // ---------------------------------------------------------------------------
 
-/// Color-code edges by 资源 handle: the three ScenePass outputs 深度 /
+/// Color-code edges by 资源 handle: the three ForwardPass outputs 深度 /
 /// 法线 / 颜色 plus the shadow 映射表 Unknown handles get a neutral gray.
 fn edge_color(h: ResourceHandle) -> Color32 {
-    use prism_render::render_graph::{SCENE_COLOR_H, SCENE_DEPTH_H, SCENE_NORMAL_H};
+    use prism_render::render_graph::{FORWARD_COLOR_H, FORWARD_DEPTH_H, FORWARD_NORMAL_H};
     // ShadowMapPass's handle is 动力学 but it's the only DepthAttachment
     // produced by a Shadow-kind pass - callers identify it by handle value
     // against the 快照 Here we 颜色 by the well-known scene handles; the
     // shadow edge falls through to the gray 默认 (it isn't a 图 edge
-    // anyway - ScenePass reads the shadow 视图 via set_resources, not
+    // anyway - ForwardPass reads the shadow 视图 via set_resources, not
     // GraphResources).
-    if h == SCENE_DEPTH_H {
+    if h == FORWARD_DEPTH_H {
         Color32::from_rgb(240, 180, 60) // amber - depth
-    } else if h == SCENE_NORMAL_H {
+    } else if h == FORWARD_NORMAL_H {
         Color32::from_rgb(120, 220, 120) // green - normal
-    } else if h == SCENE_COLOR_H {
+    } else if h == FORWARD_COLOR_H {
         Color32::from_rgb(90, 200, 240) // cyan - HDR color
     } else {
         Color32::from_gray(150)
@@ -481,12 +482,12 @@ fn edge_label(
 
 /// Name a well-known 资源 handle; fall 后 to its numeric id.
 fn handle_name(h: ResourceHandle) -> String {
-    use prism_render::render_graph::{PT_COLOR_H, SCENE_COLOR_H, SCENE_DEPTH_H, SCENE_NORMAL_H};
-    if h == SCENE_DEPTH_H {
+    use prism_render::render_graph::{PT_COLOR_H, FORWARD_COLOR_H, FORWARD_DEPTH_H, FORWARD_NORMAL_H};
+    if h == FORWARD_DEPTH_H {
         "scene depth".into()
-    } else if h == SCENE_NORMAL_H {
+    } else if h == FORWARD_NORMAL_H {
         "scene normal".into()
-    } else if h == SCENE_COLOR_H {
+    } else if h == FORWARD_COLOR_H {
         "scene color (HDR)".into()
     } else if h == PT_COLOR_H {
         "PT output color".into()
@@ -499,7 +500,7 @@ fn handle_name(h: ResourceHandle) -> String {
 fn node_color(kind: PassKind) -> Color32 {
     match kind {
         PassKind::Shadow => Color32::from_rgb(220, 120, 120),
-        PassKind::Scene => Color32::from_rgb(120, 180, 240),
+        PassKind::Forward => Color32::from_rgb(120, 180, 240),
         PassKind::Gtao => Color32::from_rgb(180, 140, 220),
         PassKind::Post => Color32::from_rgb(120, 220, 180),
         PassKind::Pt => Color32::from_rgb(240, 200, 80),

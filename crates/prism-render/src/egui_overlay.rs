@@ -1,4 +1,4 @@
-//! egui 叠加层，作为 ScenePass 输出之上的最终通道渲染
+//! egui 叠加层，作为 ForwardPass 输出之上的最终通道渲染
 //!
 //! 架构（渲染线程拆分后）
 //! ----------------------------------------
@@ -208,7 +208,7 @@ impl EguiGpu {
     }
 
     /// (Re)build the 帧缓冲 for `image_index` if the 交换链 views or
-    /// extent changed. Mirrors `ScenePass::set_target`.
+    /// extent changed. Mirrors `ForwardPass::set_target`.
     fn ensure_framebuffer(
         &mut self,
         device: &ash::Device,

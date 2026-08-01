@@ -80,7 +80,7 @@ PrismaRev/
 ### prism-render（ash 0.38）
 - `VulkanContext` —— instance（验证层 + debug messenger）、物理设备选择、逻辑设备、图形队列。
 - `Swapchain` —— surface、swapchain + image views、帧同步：`MAX_FRAMES_IN_FLIGHT` acquire 信号量（旋转、fence 守护）、每 swapchain 镜像一个 render-finished 信号量（按 image index 索引）、`image_in_flight` fence 追踪防止复用镜像的命令缓冲被覆盖。
-- `GraphRenderer` —— RenderGraph 驱动（`scene_pass` 直接渲染到 swapchain，pass 按 `RenderPassNode` 的 setup/execute 声明资源与记录命令）。
+- `GraphRenderer` —— RenderGraph 驱动（`forward_pass` 渲染到 HDR 中间目标，`post_pass` 色调映射到 swapchain，pass 按 `RenderPassNode` 的 setup/execute 声明资源与记录命令）。
 
 ### prism-engine / prism-app
 - `AppDriver` trait + `Platform::run()`；winit `ApplicationHandler` 经 `WinitBridge` 翻译为 `AppDriver` 事件；`WindowSubsystem` 持有 `Arc<Window>` + `InputManager`。

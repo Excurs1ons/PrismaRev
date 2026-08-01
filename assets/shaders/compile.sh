@@ -90,7 +90,7 @@ fix_spv() {
 
 echo "Compiling Slang shaders (slangc = $SLANGC, profile = $PROFILE)..."
 
-# mesh_vert: vertex stage for the ScenePass (shared by all scene geometry).
+# mesh_vert: vertex stage for the ForwardPass (shared by all scene geometry).
 compile_stage mesh_vert vertexMain vertex
 emit_reflection mesh_vert vertexMain vertex
 
@@ -122,7 +122,7 @@ echo "  reflect skybox -> reflection/skybox.json"
   -o "$REFL/skybox.tmp.spv"
 rm -f "$REFL/skybox.tmp.spv"
 
-# scene_frag: fragment only (RenderGraph ScenePass bindless PBR + rasterized
+# scene_frag: fragment only (RenderGraph ForwardPass bindless PBR + rasterized
 # shadow map). Pairs with mesh_vert.vert.spv. The light-space view-projection
 # for the shadow map is read from the per-frame UBO (not push constants) so
 # the push constant stays under the 128-byte Vulkan limit.
@@ -137,7 +137,7 @@ compile_stage post fragmentMain fragment
 emit_reflection post vertexMain vertex fragmentMain fragment
 
 # gtao: vertex + fragment (half-res screen-space ambient occlusion). Reads the
-# ScenePass depth + view-normal MRT and writes an R8 visibility texture sampled
+# ForwardPass depth + view-normal MRT and writes an R8 visibility texture sampled
 # by the scene shader to attenuate IBL. Self-contained (no bindless/IBL).
 compile_stage gtao vertexMain vertex
 compile_stage gtao fragmentMain fragment

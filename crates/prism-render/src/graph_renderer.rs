@@ -2,7 +2,7 @@
 //!
 //! [`GraphRenderer`] 取代了旧版渲染器。它拥有 Vulkan 上下文、
 //! 交换链、命令池 + 每帧命令缓冲区、帧 UBO、IBL 资源以及三个场景管理器
-//!（网格、纹理、材质）。它构建包含 [`ShadowMapPass`] 和 [`ScenePass`]
+//!（网格、纹理、材质）。它构建包含 [`ShadowMapPass`] 和 [`ForwardPass`]
 //! 的 [`RenderGraph`]，每帧执行并呈现到交换链。
 
 use std::sync::Arc;
@@ -22,7 +22,7 @@ use crate::managers::{
 };
 use crate::mesh::Vertex;
 use crate::offscreen::OffscreenTarget;
-use crate::passes::ScenePass;
+use crate::forward_pass::ForwardPass;
 use crate::pt_pass::PathTracePass;
 use crate::render_graph::{
     DrawItem, GraphFrame, RenderGraph, RenderGraphBuilder, RenderMode, RenderPassNode,
@@ -172,14 +172,14 @@ pub struct GraphRenderer {
     texture_manager: RenderTextureManager,
     material_manager: RenderMaterialManager,
     // Owned for RAII; IBL cubemap + 描述符 集合 are consumed via the
-    // 描述符 集合 handle stored in `scene_pass`. Explicitly destroyed
+    // 描述符 集合 handle stored in `forward_pass`. Explicitly destroyed
     // in 销毁 so the 设备 handle is 有效 during cleanup.
     ibl: IblResources,
     /// Scene-level 全局光照 probe 音量 resources 集合 5). Survives 交换链
     /// recreation; only rebuilt on scene/level change.
     scene_scope: SceneScope,
     graph: RenderGraph,
-    /// All 渲染 passes (ShadowMapPass + ScenePass + GtaoPass + PostPass)
+    /// All 渲染 passes (ShadowMapPass + ForwardPass + GtaoPass + PostPass)
     /// are owned by the 图 and executed in registration order. The
     /// `GraphRenderer` no longer pokes individual passes; it drives them via
     /// `graph.execute` and reaches into them only for lifecycle ops
@@ -187,17 +187,21 @@ pub struct GraphRenderer {
     settings: RenderSettings,
     shadow_sampler: vk::Sampler,
     // Captured from the graph's allocated shadow 映射表 consumed via the
-    // 描述符 集合 in `scene_pass`.
+    // 描述符 集合 in `forward_pass`.
     #[allow(dead_code)]
     shadow_view: vk::ImageView,
     #[allow(dead_code)]
     color_format: vk::Format,
-    /// Optional egui 叠加 (GPU-only) rendered on 顶部 of the ScenePass
+    /// Optional egui 叠加 (GPU-only) rendered on 顶部 of the ForwardPass
     /// 输出 Created lazily on the 渲染 线程 When present, 执行
-    /// records it after ScenePass and it owns the COLOR_ATTACHMENT_OPTIMAL
+    /// records it after ForwardPass and it owns the COLOR_ATTACHMENT_OPTIMAL
     /// -> PRESENT_SRC_KHR 过渡 When `None`, 执行 falls 后 to
     /// an explicit 管线 屏障
     egui_gpu: Option<EguiGpu>,
+    /// ECS UI 叠加 (GPU-only) — quads + fontdue glyph text, rendered on 顶部
+    /// of the ForwardPass 输出 (below the egui 编辑器 overlay). Created lazily
+    /// on the 渲染 线程 when the 引擎 sends UI 命令
+    ui_overlay: Option<crate::ui_overlay::UiOverlay>,
     /// True when no 表面 is available (headless / CI / server 众数
     is_headless: bool,
     /// Offscreen 目标 for headless 众数 — owned device-local 图像 +
@@ -287,8 +291,8 @@ impl GraphRenderer {
         // 构建 图 with ShadowMapPass. 调用 setup() on the pass before
         // adding it so it registers its shadow-map 资源 then allocate the
         // graph's Vulkan resources (the shadow 映射表 深度 图像 and fetch its
-        // 图像 视图 for the ScenePass to 样本
-        let mut shadow_pass = crate::passes::ShadowMapPass::new();
+        // 图像 视图 for the ForwardPass to 样本
+        let mut shadow_pass = crate::shadow_map_pass::ShadowMapPass::new();
         let mut builder = RenderGraphBuilder::new().settings(&settings);
         shadow_pass.setup(&mut builder, &settings);
         let shadow_handle = shadow_pass.shadow_map_handle();
@@ -303,10 +307,10 @@ impl GraphRenderer {
             .image_view(shadow_handle)
             .context("shadow map view not found")?;
 
-        // 创建 scene_pass and wire its resources: IBL 集合 shadow 映射表 视图 +
+        // 创建 forward_pass and wire its resources: IBL 集合 shadow 映射表 视图 +
         // 比较 采样器 bindless 纹理 表 材质 SSBO, and the
         // per-frame UBO buffers (one set0 描述符 集合 per frame-in-flight).
-        // ScenePass is executed directly by GraphRenderer (it targets the
+        // ForwardPass is executed directly by GraphRenderer (it targets the
         // 交换链 not a graph-managed 资源
         let frame_ubo_buffers: Vec<vk::Buffer> =
             runtime.frame_ubos.iter().map(|u| u.buffer).collect();
@@ -322,11 +326,11 @@ impl GraphRenderer {
             brdf_handle.0
         );
 
-        let mut scene_pass = ScenePass::new(color_format);
-        // Scene-level 全局光照 probe 音量 (SceneScope). Created before ScenePass
+        let mut forward_pass = ForwardPass::new(color_format);
+        // Scene-level 全局光照 probe 音量 (SceneScope). Created before ForwardPass
         // wiring so its 描述符 集合 + 布局 can be borrowed 集合 5).
         let scene_scope = SceneScope::new(context.clone()).context("SceneScope::new")?;
-        scene_pass
+        forward_pass
             .set_resources(
                 &context,
                 ibl.descriptor_set,
@@ -341,9 +345,9 @@ impl GraphRenderer {
                 scene_scope.descriptor_set,
                 scene_scope.descriptor_set_layout,
             )
-            .context("ScenePass: set_resources")?;
+            .context("ForwardPass: set_resources")?;
 
-        // GTAO pass half-resolution screen-space 环境光遮蔽 Runs after ScenePass
+        // GTAO pass half-resolution screen-space 环境光遮蔽 Runs after ForwardPass
         // every 帧 and produces a double-buffered R8 环境光遮蔽 纹理 the scene
         // samples (1-frame 延迟 to attenuate IBL diffuse + specular.
         let swapchain_extent = swapchain.extent;
@@ -384,7 +388,14 @@ impl GraphRenderer {
 
         // Register all passes into the 图 in 执行 order.
         // Shadow -> Scene -> GTAO -> RenderTextures -> PathTrace -> Post -> RtPreview.
-        graph.add_pass(Box::new(scene_pass));
+        graph.add_pass(Box::new(forward_pass));
+        // 启动路径：同步 per-swapchain-image 槽位数。`ForwardPass::execute` 的
+        // `ensure_target` 按 `image_count` 建 framebuffer，`recreate_swapchain`
+        // 只覆盖后续重建——首次创建必须在这里初始化，否则 `set_target` 里
+        // `idx >= image_count` 的守卫会静默跳过，永远建不出 framebuffer。
+        if let Some(scene) = graph.pass_mut::<ForwardPass>() {
+            scene.set_image_count(swapchain.views.len());
+        }
         graph.add_pass(Box::new(gtao_pass));
         graph.add_pass(Box::new(rt_scheduler));
         graph.add_pass(Box::new(pt_pass));
@@ -405,6 +416,7 @@ impl GraphRenderer {
             shadow_view,
             color_format,
             egui_gpu: None,
+            ui_overlay: None,
             is_headless: false,
             offscreen: None,
         })
@@ -488,7 +500,7 @@ impl GraphRenderer {
         .context("create shadow comparison sampler (headless)")?;
 
         // 图 Shadow -> Scene -> GTAO -> PathTrace -> Post.
-        let mut shadow_pass = crate::passes::ShadowMapPass::new();
+        let mut shadow_pass = crate::shadow_map_pass::ShadowMapPass::new();
         let mut builder = RenderGraphBuilder::new().settings(&settings);
         shadow_pass.setup(&mut builder, &settings);
         let shadow_handle = shadow_pass.shadow_map_handle();
@@ -510,9 +522,9 @@ impl GraphRenderer {
             .register(ibl.brdf_image_view())
             .context("register BRDF LUT into bindless table (headless)")?;
 
-        let mut scene_pass = ScenePass::new(color_format);
+        let mut forward_pass = ForwardPass::new(color_format);
         let scene_scope = SceneScope::new(context.clone()).context("SceneScope::new (headless)")?;
-        scene_pass
+        forward_pass
             .set_resources(
                 &context,
                 ibl.descriptor_set,
@@ -527,7 +539,7 @@ impl GraphRenderer {
                 scene_scope.descriptor_set,
                 scene_scope.descriptor_set_layout,
             )
-            .context("ScenePass::set_resources (headless)")?;
+            .context("ForwardPass::set_resources (headless)")?;
 
         let gtao_pass =
             crate::gtao::GtaoPass::new(&context, runtime.command_pool, offscreen.extent)
@@ -557,7 +569,7 @@ impl GraphRenderer {
             "RT demo: 4x4 bitmap render texture registered (headless) -> {rt_demo_handle:?}"
         );
 
-        graph.add_pass(Box::new(scene_pass));
+        graph.add_pass(Box::new(forward_pass));
         graph.add_pass(Box::new(gtao_pass));
         graph.add_pass(Box::new(rt_scheduler));
         graph.add_pass(Box::new(pt_pass));
@@ -577,6 +589,7 @@ impl GraphRenderer {
             shadow_view,
             color_format,
             egui_gpu: None,
+            ui_overlay: None,
             is_headless: true,
             offscreen: Some(offscreen),
         })
@@ -664,7 +677,7 @@ impl GraphRenderer {
     }
 
     /// IBL 描述符 集合 + 布局 for the environment cubemap 集合 2).
-    /// Used by PathTracePass and ScenePass for 高动态范围 sky / 间接 lighting.
+    /// Used by PathTracePass and ForwardPass for 高动态范围 sky / 间接 lighting.
     pub fn ibl_descriptor_set(&self) -> vk::DescriptorSet {
         self.ibl.descriptor_set
     }
@@ -909,7 +922,13 @@ impl GraphRenderer {
             return Ok(());
         }
         let swapchain = Swapchain::new(&self.runtime.context, window, window_handle)?;
+        // 恢复路径与启动路径同样需要同步 ForwardPass 的 per-image 槽位数
+        // （见 `GraphRenderer::new` 里的注释）。
+        let image_count = swapchain.views.len();
         self.swapchain = Some(swapchain);
+        if let Some(scene) = self.graph.pass_mut::<ForwardPass>() {
+            scene.set_image_count(image_count);
+        }
         log::info!("GraphRenderer resumed");
         Ok(())
     }
@@ -920,13 +939,13 @@ impl GraphRenderer {
         }
         // Wait for the GPU to finish all in-flight 功 BEFORE destroying any
         // framebuffers. The 上一个 frame's 命令 缓冲区 references both
-        // the ScenePass framebuffers and the egui 叠加 framebuffers; without
+        // the ForwardPass framebuffers and the egui 叠加 framebuffers; without
         // this wait, vkDestroyFramebuffer fires while a 命令 缓冲区 is still
         // executing (VUID-vkDestroyFramebuffer-framebuffer-00892).
         unsafe { self.runtime.context.device.device_wait_idle() }
             .context("recreate_swapchain: device_wait_idle")?;
 
-        // 放置 the ScenePass 帧缓冲 + 深度 图像 BEFORE the 交换链 is
+        // 放置 the ForwardPass 帧缓冲 + 深度 图像 BEFORE the 交换链 is
         // recreated: the 帧缓冲 wraps a 交换链 图像 视图 and
         // `Swapchain::recreate` destroys the old views. Destroying the views
         // while the 帧缓冲 still references them triggers a 验证
@@ -936,10 +955,10 @@ impl GraphRenderer {
         // This is the single entry point for 交换链 recreation - the
         // acquire/present out-of-date paths in 渲染 also route through
         // here so the 帧缓冲 is always torn 下 第一个
-        if let Some(scene) = self.graph.pass_mut::<ScenePass>() {
+        if let Some(scene) = self.graph.pass_mut::<ForwardPass>() {
             scene.drop_target(&self.runtime.context.device);
             // Re-size the per-image 帧缓冲 vectors for the new 交换链
-            // 图像 count. `ScenePass::execute` rebuilds any 缺少 槽 via
+            // 图像 count. `ForwardPass::execute` rebuilds any 缺少 槽 via
             // `ensure_target` on the 下一个 帧
             if let Some(sw) = self.swapchain.as_ref() {
                 scene.set_image_count(sw.views.len());
@@ -984,7 +1003,7 @@ impl GraphRenderer {
             sw.recreate(&self.runtime.context)?;
         }
 
-        // All per-swapchain-image attachments (ScenePass HDR/depth/normal,
+        // All per-swapchain-image attachments (ForwardPass HDR/depth/normal,
         // PostPass 帧缓冲 were just rebuilt, so the 渲染 graph's cached
         // 图像 layouts are stale. 清空 them so the 第一个 帧 after
         // recreate re-transitions from UNDEFINED instead of trusting a 布局
@@ -1126,7 +1145,7 @@ impl GraphRenderer {
             pt_accum_dirty,
             has_camera,
             clear_color,
-            ui_overlay: _,
+            ui_overlay,
         } = input;
         let light_view_proj = *light_view_proj;
         let inv_projection = *inv_projection;
@@ -1218,6 +1237,43 @@ impl GraphRenderer {
             record = self.graph.execute(&render_ctx).context("graph execute");
         }
 
+        // --- ECS UI 叠加 (quads + fontdue glyph text) ---
+        //
+        // Recorded between the 渲染 图 output and the egui 编辑器 overlay
+        // (or the explicit PRESENT 屏障). Its render pass owns the
+        // COLOR_ATTACHMENT_OPTIMAL → PRESENT_SRC_KHR 过渡; when egui 也
+        // records 之后, an explicit 屏障 converts 后 to
+        // COLOR_ATTACHMENT_OPTIMAL for the egui pass.
+        let mut ui_rendered = false;
+        if record.is_ok() {
+            let has_ui = ui_overlay
+                .is_some_and(|o| !o.quads.is_empty() || !o.texts.is_empty());
+            if has_ui {
+                if self.ui_overlay.is_none() {
+                    let gpu = crate::ui_overlay::UiOverlay::new(
+                        &self.runtime.context,
+                        self.runtime.command_pool,
+                    )
+                    .context("create ui overlay")?;
+                    self.ui_overlay = Some(gpu);
+                }
+                if let Some(sw) = self.swapchain.as_ref() {
+                    if let Some(gpu) = self.ui_overlay.as_mut() {
+                        record = gpu
+                            .record(
+                                &self.runtime.context,
+                                cmd,
+                                extent,
+                                sw.views[image_index as usize],
+                                ui_overlay.unwrap(),
+                            )
+                            .context("ui overlay record");
+                        ui_rendered = record.is_ok();
+                    }
+                }
+            }
+        }
+
         // --- 过渡 交换链 图像 to PRESENT_SRC_KHR ---
         //
         // If an EguiFrame was provided from the main 线程 use the egui
@@ -1225,6 +1281,39 @@ impl GraphRenderer {
         // egui 帧 is available, 插入 an explicit 屏障 instead.
         if record.is_ok() {
             if let Some(ef) = egui_frame {
+                // ECS UI 画完后 image 在 PRESENT_SRC_KHR；egui 的 render pass
+                // 需要 COLOR_ATTACHMENT_OPTIMAL 初始布局 → 转回。
+                if ui_rendered {
+                    if let Some(sw) = self.swapchain.as_ref() {
+                        let image = sw.images[image_index as usize];
+                        let barrier = vk::ImageMemoryBarrier::default()
+                            .old_layout(vk::ImageLayout::PRESENT_SRC_KHR)
+                            .new_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                            .image(image)
+                            .subresource_range(vk::ImageSubresourceRange {
+                                aspect_mask: vk::ImageAspectFlags::COLOR,
+                                base_mip_level: 0,
+                                level_count: 1,
+                                base_array_layer: 0,
+                                layer_count: 1,
+                            })
+                            .src_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
+                            .dst_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE);
+                        unsafe {
+                            device.cmd_pipeline_barrier(
+                                cmd,
+                                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                                vk::DependencyFlags::empty(),
+                                &[],
+                                &[],
+                                std::slice::from_ref(&barrier),
+                            );
+                        }
+                    }
+                }
                 // Ensure the GPU 叠加 存在 (lazy 创建
                 if self.egui_gpu.is_none() {
                     let gpu = EguiGpu::new(&self.runtime.context, self.color_format, 2)
@@ -1430,15 +1519,15 @@ impl GraphRenderer {
         self.texture_manager.destroy();
         self.mesh_manager.destroy(device);
 
-        // 销毁 ScenePass (framebuffers, 深度 images, 渲染 pass
+        // 销毁 ForwardPass (framebuffers, 深度 images, 渲染 pass
         // 管线 shadow 描述符 集合 Without this, vkDestroyDevice
         // reports leaked VkImage/VkDeviceMemory/VkImageView/VkRenderPass.
-        if let Some(scene) = self.graph.pass_mut::<ScenePass>() {
+        if let Some(scene) = self.graph.pass_mut::<ForwardPass>() {
             scene.destroy(device);
         }
 
         // 销毁 scene-level 全局光照 probe 音量 (SceneScope). Must happen AFTER
-        // ScenePass::destroy (ScenePass borrows the 描述符 集合
+        // ForwardPass::destroy (ForwardPass borrows the 描述符 集合
         self.scene_scope.destroy();
 
         // 销毁 GTAO pass 环境光遮蔽 images, 渲染 pass 管线 描述符
@@ -1465,7 +1554,7 @@ impl GraphRenderer {
         // context-holders (runtime/ibl/scene_scope) *before* the 图 — if
         // ShadowMapPass relied on its 放置 alone, the 设备 handle would be
         // stale by the 时间 it ran, causing leaked resources + 访问 violation.
-        if let Some(shadow) = self.graph.pass_mut::<crate::passes::ShadowMapPass>() {
+        if let Some(shadow) = self.graph.pass_mut::<crate::shadow_map_pass::ShadowMapPass>() {
             shadow.destroy(device);
         }
 

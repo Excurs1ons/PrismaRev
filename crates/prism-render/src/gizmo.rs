@@ -150,7 +150,7 @@ impl Gizmo {
         let color_blend_attachment = vk::PipelineColorBlendAttachmentState::default()
             .color_write_mask(vk::ColorComponentFlags::RGBA)
             .blend_enable(false);
-        // The gizmo draws inside ScenePass's 渲染 pass which now has 2
+        // The gizmo draws inside ForwardPass's 渲染 pass which now has 2
         // 颜色 attachments 颜色 + view-normal MRT). Every 管线 bound in
         // that 渲染 pass must declare a matching attachmentCount, so we 列表
         // 2 混合 states: 附件 0 颜色 writes RGBA 附件 1

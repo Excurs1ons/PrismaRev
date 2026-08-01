@@ -167,7 +167,7 @@ Vulkan 渲染循环的核心是**同步原语的正确配对**。最容易出错
 
 **原因（按顺序排查）**：
 1. **shader 源文件名/编译脚本错误让 `.spv` 根本没重编**：`compile.sh` 有 `set -euo pipefail`，中途某个 shader 源文件名不对（如 `scene.slang` 实际是 `scene.vert.slang`/`scene.frag.slang`）会让脚本提前 `exit`，**后续 shader（含 bindless）没被重新生成**，磁盘上还是改之前的旧 `.spv`。profile 名字也要对：当前 slangc 接受 `spirv_1_5`，拒绝旧名 `sspirv_1_5`。
-2. **改错了 shader 文件**：sponza 走的是 `GraphRenderer` → `ScenePass`（`scene_bindless.frag.spv`）直连 swapchain。`GBufferPass`/`LightingPass`/`PostPass` 当前**没被 GraphRenderer 连接**，改 `lighting.slang`/`post.slang` 全是无效功。
+2. **改错了 shader 文件**：sponza 走的是 `GraphRenderer` → `ForwardPass`（`scene_bindless.frag.spv`）直连 swapchain。`GBufferPass`/`LightingPass`/`PostPass` 当前**没被 GraphRenderer 连接**，改 `lighting.slang`/`post.slang` 全是无效功。
 3. **`include_bytes!` 是编译期打进二进制的**：必须 `cargo build` 重编 Rust 才能拾取新 `.spv`。
 
 **教训**：
@@ -197,7 +197,7 @@ Vulkan 渲染循环的核心是**同步原语的正确配对**。最容易出错
 | SPIR-V 合法性 | Slang 给 opaque 运行时数组加非法 `ArrayStride` | `spirv-val` 报 VUID-StandaloneSpirv |
 | 构建链路 | 编译脚本中途失败导致 `.spv` 没重编；改错文件 | `spirv-dis` 反编译核对常量 |
 | 色彩空间 | SRGB swapchain 二次 gamma 编码；IBL 灰常量 | unlit 输出 + 隔离 IBL |
-| 路径确认 | sponza 走 ScenePass 直连 swapchain，无 post | grep `include_bytes!` + `add_pass` |
+| 路径确认 | sponza 走 ForwardPass 直连 swapchain，无 post | grep `include_bytes!` + `add_pass` |
 
 **先确认实际路径，再改代码**：所有"改了没生效 / 归因错"都源于先入为主假设了渲染路径。改 shader 前先确认它确实被编译、被连接、被二进制包含。
 
@@ -255,23 +255,23 @@ X 方向自始没有翻转，本就正确，所以错位只在垂直方向——
 
 ## 20. MRT 改动必须同步改所有"在同一 render pass 里绘制的"pipeline 的 blend state
 
-**问题**：ScenePass 从 1 个 color attachment 改成 2 个（HDR color + view-space normal MRT）后，验证层报：
+**问题**：ForwardPass 从 1 个 color attachment 改成 2 个（HDR color + view-space normal MRT）后，验证层报：
 ```
 vkCreateGraphicsPipelines(): pCreateInfos[0].pColorBlendState->pAttachments[1] is different
 than pAttachments[0] and independentBlend feature was not enabled.
 VUID-VkPipelineColorBlendStateCreateInfo-pAttachments-00605
 ```
 
-**原因**：SkyboxPass 和 Gizmo 都在 ScenePass 的 render pass 里绘制（`ScenePass::execute` 先画 skybox，最后画 gizmo）。它们各自创建 pipeline 时只声明 1 个 blend attachment（`color_attachment_count: None` -> 默认 1），但 render pass 的 subpass 现在有 2 个 color attachment。Vulkan 规定：pipeline 的 `VkPipelineColorBlendStateCreateInfo::attachmentCount` 必须等于 subpass 的 `colorAttachmentCount`。原来 1 个 attachment 时凑巧一致；改 MRT 后就破了。
+**原因**：SkyboxPass 和 Gizmo 都在 ForwardPass 的 render pass 里绘制（`ForwardPass::execute` 先画 skybox，最后画 gizmo）。它们各自创建 pipeline 时只声明 1 个 blend attachment（`color_attachment_count: None` -> 默认 1），但 render pass 的 subpass 现在有 2 个 color attachment。Vulkan 规定：pipeline 的 `VkPipelineColorBlendStateCreateInfo::attachmentCount` 必须等于 subpass 的 `colorAttachmentCount`。原来 1 个 attachment 时凑巧一致；改 MRT 后就破了。
 
 **教训**：
-- **render pass 的 attachment 数是所有"在其中绘制的"pipeline 的公约数**。改 ScenePass 的 attachment 数，必须同步改 SkyboxPass、Gizmo 的 blend state 数，哪怕它们只写 attachment 0（attachment 1 的 `colorWriteMask = 0` 即可"占位不写"）。
+- **render pass 的 attachment 数是所有"在其中绘制的"pipeline 的公约数**。改 ForwardPass 的 attachment 数，必须同步改 SkyboxPass、Gizmo 的 blend state 数，哪怕它们只写 attachment 0（attachment 1 的 `colorWriteMask = 0` 即可"占位不写"）。
 - 不想每个 pipeline 都写满全量 blend state 的话，启用 `independentBlend` feature（`PhysicalDeviceFeatures::independent_blend`，桌面+现代 Android 通用支持）就能让每个 attachment 用不同 blend config。本项目选了"启用 feature + 各 pipeline 写满"双保险。
 - `GraphicsPipeline::new`（`pipeline.rs`）原本只支持 0/1 个 attachment（`slice::from_ref`），为 MRT 扩展成接受 `color_blend_attachments: Option<&[...]>` 切片。
 
 ## 21. `vkCmdBeginRenderPass` 的 `clearValueCount` 必须 >= 最大被 CLEAR 的 attachment index + 1
 
-**问题**：ScenePass 改 3 attachment（color + depth + normal）后报：
+**问题**：ForwardPass 改 3 attachment（color + depth + normal）后报：
 ```
 vkCmdBeginRenderPass(): pRenderPassBegin->clearValueCount is 2 but there must be at least
 3 entries... VUID-VkRenderPassBeginInfo-clearValueCount-00902
@@ -283,7 +283,7 @@ vkCmdBeginRenderPass(): pRenderPassBegin->clearValueCount is 2 but there must be
 
 ## 22. 采样 depth attachment 必须给 image 加 `SAMPLED` usage
 
-**问题**：GTAO pass 采样 ScenePass 的 D32_SFLOAT depth 时报：
+**问题**：GTAO pass 采样 ForwardPass 的 D32_SFLOAT depth 时报：
 ```
 vkUpdateDescriptorSets(): pDescriptorWrites[0].pImageInfo[0].imageView was created with
 VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, but descriptorType is VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE.
@@ -294,12 +294,12 @@ VUID-VkWriteDescriptorSet-descriptorType-00337
 
 **教训**：
 - Vulkan image 的 usage flags 在 **创建时** 固定，事后不能加。任何"既要当 attachment 又要被采样"的 image（depth、normal MRT、HDR color），创建时 usage 就要 `| SAMPLED`。
-- 同理 GTAO 要采样 normal MRT，`NormalImage::new` 的 usage 直接写 `COLOR_ATTACHMENT | SAMPLED`；PostPass 要采样 HDR color，ScenePass 的 color image 也是 `COLOR_ATTACHMENT | SAMPLED`（复用 `NormalImage` helper）。
+- 同理 GTAO 要采样 normal MRT，`NormalImage::new` 的 usage 直接写 `COLOR_ATTACHMENT | SAMPLED`；PostPass 要采样 HDR color，ForwardPass 的 color image 也是 `COLOR_ATTACHMENT | SAMPLED`（复用 `NormalImage` helper）。
 - depth attachment 改成 `STORE_OP_STORE`（原来是 `DONT_CARE`）才能把内容保留到 pass 结束后被采样。
 
 ## 23. 每帧重写的 descriptor set 必须 per-frame-in-flight，不能全局共享
 
-**问题**：ScenePass 的 AO descriptor set（set 4，每帧指向上一帧 GTAO 输出）和 PostPass 的 HDR-input descriptor set 都报：
+**问题**：ForwardPass 的 AO descriptor set（set 4，每帧指向上一帧 GTAO 输出）和 PostPass 的 HDR-input descriptor set 都报：
 ```
 vkUpdateDescriptorSets(): dstSet is in use by VkCommandBuffer... in the pending state.
 VUID-vkUpdateDescriptorSets-None-03047
@@ -309,7 +309,7 @@ VUID-vkUpdateDescriptorSets-None-03047
 
 **教训**：
 - **任何每帧 `vkUpdateDescriptorSets` 重写的 descriptor set，都要按 frame-in-flight 分配 N 份**（本项目 N=2）。frame N 只更新 `sets[N]`，fence 等待保证该 set 不再被 GPU 使用。
-- 对比：shadow map descriptor set（ScenePass set 3）从不重写（view 在 `set_resources` 里固定一次），所以 1 份够用。判断标准是"这个 set 的 binding 会不会在运行期被 `update_descriptor_sets` 改"。
+- 对比：shadow map descriptor set（ForwardPass set 3）从不重写（view 在 `set_resources` 里固定一次），所以 1 份够用。判断标准是"这个 set 的 binding 会不会在运行期被 `update_descriptor_sets` 改"。
 - GTAO pass 的 depth/normal input descriptor 也是每帧重写，按 `[frame][set]` 二维分配（4 份：2 frame x 2 set，因为 shader 声明了 set 0 depth + set 1 normal）。
 
 ## 24. 新创建的 image 在被 descriptor 引用前必须先 transition 到声明的 layout
@@ -325,7 +325,7 @@ vkQueueSubmit(): command buffer expects VkImage ... to be in layout SHADER_READ_
 **教训**：
 - **跨帧依赖的 image（上一帧写、本帧读）创建后立刻 transition 到"读"layout**，让 descriptor 声明成立。GTAO 在 `new` 和 `recreate_target` 里用一次性 command buffer 把两个 AO image 从 `UNDEFINED` 转到 `SHADER_READ_ONLY_OPTIMAL`。
 - 被转的 image 后续被 GTAO render pass 写时，render pass 的 `initial_layout = UNDEFINED` 容忍任何 incoming layout（配合 `LOAD_OP_CLEAR`），所以预 transition 不会和后续写入冲突。
-- 对比：PostPass 读的 HDR color image 不需要预 transition -- 它总是被 ScenePass 先写（`COLOR_ATTACHMENT_OPTIMAL`）再被 PostPass 读，第一帧也是 scene 先跑。只有"读"发生在"写"之前的跨帧 image 才需要预 transition。
+- 对比：PostPass 读的 HDR color image 不需要预 transition -- 它总是被 ForwardPass 先写（`COLOR_ATTACHMENT_OPTIMAL`）再被 PostPass 读，第一帧也是 scene 先跑。只有"读"发生在"写"之前的跨帧 image 才需要预 transition。
 
 ## 25. Slang 没有 `gl_FragCoord`，用 `SV_Position` input
 
@@ -348,7 +348,7 @@ vkQueueSubmit(): command buffer expects VkImage ... to be in layout SHADER_READ_
 
 ## 27. 跨 pass 读 scene 输出：上一帧 AO x 本帧 IBL 的 1 帧延迟模式
 
-**背景**：GTAO 必须在 ScenePass 之后跑（它要读 scene 的 depth+normal），但 IBL 是在 ScenePass 内部算的。如果等 GTAO 算完再回 scene 重画 IBL，要么死锁要么多遍。
+**背景**：GTAO 必须在 ForwardPass 之后跑（它要读 scene 的 depth+normal），但 IBL 是在 ForwardPass 内部算的。如果等 GTAO 算完再回 scene 重画 IBL，要么死锁要么多遍。
 
 **方案**：GTAO 每帧产出 AO 写到 `ao[frame]`，scene 读 `ao[(frame+1)%2]`（上一帧 GTAO 的输出）。1 帧延迟，游戏通用做法。
 
@@ -357,15 +357,15 @@ vkQueueSubmit(): command buffer expects VkImage ... to be in layout SHADER_READ_
 - 镜头快速移动时 AO 会"拖影"一帧 -- 可接受；后续可加 temporal filter 抹平。
 - 半分辨率 GTAO + scene 用 linear sampler 上采样到全分辨率，GTAO 本身是低频信号，轻微模糊可接受。遵循 `DESIGN.md` 2.1 mobile-first（heavy pass 半分辨率，RayQuery 已有 `scale=0.5` 先例）。
 
-## 28. ScenePass 改渲染到中间 HDR target + 拆 PostPass：比想象中改动大
+## 28. ForwardPass 改渲染到中间 HDR target + 拆 PostPass：比想象中改动大
 
 **用户要求**："拆出 postpass，把 reinhard/aces 放在 postpass"。看似只是把 tonemap 从 `scene_frag.slang` 挪到新 pass，实际牵一发动全身：
 
-- ScenePass 不再直渲 swapchain，改成渲染到 `R16G16B16A16_SFLOAT` HDR 中间 target（每 swapchain image 一个，类似 depth image）。
+- ForwardPass 不再直渲 swapchain，改成渲染到 `R16G16B16A16_SFLOAT` HDR 中间 target（每 swapchain image 一个，类似 depth image）。
 - `set_target` 签名变（不再接 `swapchain_views`，改接 `image_count`），framebuffer attachments 从 `[swapchain_view, depth]` 变 `[hdr_view, depth, normal_view]`。
 - `color_format` 字段从 swapchain 格式变成 HDR 格式。
 - PostPass 新增：own render pass（swapchain 格式，`initial_layout = UNDEFINED` 容忍上一帧的 PRESENT_SRC_KHR）、per-swapchain-image framebuffer、per-frame-in-flight descriptor set（读 HDR view）、tonemap push constant。
-- `GraphRenderer::render` 帧流程从 `scene -> egui/barrier` 变成 `scene -> gtao -> post -> egui/barrier`，swapchain 的 `COLOR_ATTACHMENT_OPTIMAL -> PRESENT_SRC_KHR` 转移点从 ScenePass 后挪到 PostPass 后。
+- `GraphRenderer::render` 帧流程从 `scene -> egui/barrier` 变成 `scene -> gtao -> post -> egui/barrier`，swapchain 的 `COLOR_ATTACHMENT_OPTIMAL -> PRESENT_SRC_KHR` 转移点从 ForwardPass 后挪到 PostPass 后。
 
 **教训**：
 - **"把 X 拆到新 pass"往往伴随"原 pass 的输出目标改变"**，因为新 pass 要读原 pass 的输出作为输入 texture，原 pass 就不能再直写最终目标（swapchain）。先评估"原 pass 的 render target 要不要换成中间 target"，再动手。
@@ -385,7 +385,7 @@ GTAO+PostPass 集成时一次性暴露了 5 个验证错误，按修复顺序：
 **教训**：
 - 验证错误按 Vulkan 调用顺序报（创建 -> 记录 -> 提交），**前面的错误可能掩盖后面的**。修一个跑一次，别一次性猜所有错。
 - 错误 4（in-flight descriptor）最初被错误 3（usage 不匹配）的 noise 掩盖 -- 修完 3 才看清 4 是独立问题。每个 VUID 独立排查，别假设"都是 descriptor 引起的"。
-- `RUST_LOG=info,prism_render=trace` + 日志写文件（`target/debug/prismarev.log`，main.rs 的 logger 在非终端时自动落盘）是验证渲染管线的标准手段：grep `validation|ERROR|VUID` 计数，grep `ScenePass:|GtaoPass:|PostPass:` 确认各 pass 都在执行。
+- `RUST_LOG=info,prism_render=trace` + 日志写文件（`target/debug/prismarev.log`，main.rs 的 logger 在非终端时自动落盘）是验证渲染管线的标准手段：grep `validation|ERROR|VUID` 计数，grep `ForwardPass:|GtaoPass:|PostPass:` 确认各 pass 都在执行。
 
 ## 30. CI 漂移 / 工具链类教训（本次修 CI 全绿踩的坑）
 

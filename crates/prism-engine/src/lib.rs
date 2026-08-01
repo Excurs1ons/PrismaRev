@@ -30,5 +30,5 @@ pub mod ui;
 pub mod util;
 
 pub use app::{AppBuilder, DefaultSubsystems, ScheduleLabel, Subsystem, System};
-pub use engine::Engine;
+pub use engine::{orbit_camera_demo_system, Engine};
 pub use render_system::{euler_xyz_deg_to_dir, render_system};

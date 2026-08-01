@@ -147,7 +147,7 @@ pub enum PassKind {
     /// Rasterized depth-only shadow 映射表 (`ShadowMapPass`).
     Shadow,
     /// 向前 PBR scene 渲染 (`ForwardPass`).
-    Scene,
+    Forward,
     /// Half-resolution screen-space ambient 遮挡 (`GtaoPass`).
     Gtao,
     /// Fullscreen 色调映射 / present (`PostPass`).

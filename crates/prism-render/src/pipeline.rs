@@ -48,7 +48,7 @@ pub struct PipelineDesc<'a> {
     /// this overrides `color_attachment_count` (the count is taken from the
     /// 切片 长度 pass one entry per 颜色 附件 the 子 pass writes;
     /// the i-th entry configures `SV_Target{i}`. Use this for MRT pipelines
-    /// (e.g. ScenePass writes 颜色 + view-normal) where each 目标 needs a
+    /// (e.g. ForwardPass writes 颜色 + view-normal) where each 目标 needs a
     /// different 混合 配置 颜色 = Alpha 混合 法线 = no 混合
     pub color_blend_attachments: Option<&'a [vk::PipelineColorBlendAttachmentState]>,
 }

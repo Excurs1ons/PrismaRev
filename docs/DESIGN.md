@@ -48,7 +48,7 @@
 - 探测逻辑集中、可测试，不被散落到各 pass 里。
 
 > **阴影实现状态（2026-07-18）**：当前 MVP 已实现**单张光栅化阴影贴图**
-> （`ShadowMapPass` 深度预渲染 + `ScenePass` 用 comparison sampler 采样，
+> （`ShadowMapPass` 深度预渲染 + `ForwardPass` 用 comparison sampler 采样，
 > 见 `shaders/slang/shadow_depth.slang` / `scene_frag.slang`）。`RenderSettings::
 > shadow_mode` 支持 `Auto`/`Raster`/`RayQuery`/`None`，由 `resolve_shadow`
 > 按 `VK_KHR_ray_query` 能力自动选择。
@@ -74,11 +74,11 @@
 
 | 设计目标 | 当前落地 |
 |----------|----------|
-| 模块化管线 | `prism-render/src/render_graph.rs`（`RenderPassNode` 图）+ `passes.rs`。**现状（2026-07-20）**：`RenderGraph::execute()` 统一驱动四个 pass（`ShadowMapPass` -> `ScenePass` -> `GtaoPass` -> `PostPass`，按注册顺序线性执行）。passes 通过 `read_usage` / `write_usage` 声明图边依赖，graph 据此自动插入跨 pass 的 `vkCmdPipelineBarrier`（layout cache 按 `(handle, image_index)` 跨帧持久，`recreate_swapchain` 时 `reset_layouts`）。跨帧延迟边（GTAO 双缓冲 AO 回喂）与 swapchain->`PRESENT_SRC_KHR` 保留手动，标注为图边界特例。环检测已实现（`validate_edges`），执行顺序不重排（接线顺序见 `GraphRenderer::new`）。资源生命周期区间已声明，TBDR 内存 aliasing 待后续。|
+| 模块化管线 | `prism-render/src/render_graph.rs`（`RenderPassNode` 图）+ `forward_pass.rs` / `shadow_map_pass.rs` / `skybox_pass.rs`。**现状（2026-07-20）**：`RenderGraph::execute()` 统一驱动四个 pass（`ShadowMapPass` -> `ForwardPass` -> `GtaoPass` -> `PostPass`，按注册顺序线性执行）。passes 通过 `read_usage` / `write_usage` 声明图边依赖，graph 据此自动插入跨 pass 的 `vkCmdPipelineBarrier`（layout cache 按 `(handle, image_index)` 跨帧持久，`recreate_swapchain` 时 `reset_layouts`）。跨帧延迟边（GTAO 双缓冲 AO 回喂）与 swapchain->`PRESENT_SRC_KHR` 保留手动，标注为图边界特例。环检测已实现（`validate_edges`），执行顺序不重排（接线顺序见 `GraphRenderer::new`）。资源生命周期区间已声明，TBDR 内存 aliasing 待后续。|
 | bindless / 全平台统一 | `prism-render/src/bindless.rs`（分离 SRV + 全局 sampler 表） |
 | 资源管理解耦 | `crates/prism-asset`（运行时 glTF 2.0 加载器 + `SceneStore` + `MaterialManager`），后并入**离线预处理管线**（Import→Cook→Package→Runtime，见 §10）为同一 crate 的 feature 开关。当前两套路径并存，`.pak` 路径尚未接入引擎。 |
 | 移动端 GI | **Baked probe-volume GI**（2 阶 SH，9 系数 RGB16F，3D texture），非实时 SHARC。设计见 §6。SHARC 实时 slang 已移除，不再恢复（移动端跑不动每帧 ray 填 cache）。|
-| 阴影 / RT | 光栅化阴影贴图：`ShadowMapPass`（深度预渲染，见 `shadow_depth.slang`）+ `ScenePass`（comparison sampler 采样，见 `scene_frag.slang`） |
+| 阴影 / RT | 光栅化阴影贴图：`ShadowMapPass`（深度预渲染，见 `shadow_depth.slang`）+ `ForwardPass`（comparison sampler 采样，见 `scene_frag.slang`） |
 | 能力探测 | `prism-render/src/capabilities.rs`（集中探测，扩展中） |
 | 帧生命周期 | **未实现**。当前 `GraphRenderer::render()` 在一个函数内完成同步 → 绘制 → present。缺少 `begin_frame` / `update` / `prepare` / `render` / `present` / `end_frame` 阶段划分。设计见 §8。 |
 | 场景同步（CPU→GPU） | **基础实现**。`RenderMeshManager` / `RenderTextureManager` 各自由调用者手动触发上传，缺少统一的脏事件路由和 prepare 阶段批同步。设计见 §9。 |
@@ -96,7 +96,7 @@
 ## 6. Baked GI 与 RenderGraph 重构（规划）
 
 > 本节规格驱动 `RenderGraph` 的接口设计，避免"先空改架构再被 GI 打脸第二遍"。
-> GI 不是独立 pass，是 `ScenePass` 内部的一个 diffuse 间接光采样分支；但它反过来
+> GI 不是独立 pass，是 `ForwardPass` 内部的一个 diffuse 间接光采样分支；但它反过来
 > 要求图能区分**三类资源生命周期**，这是重构的核心约束。
 
 ### 6.1 资源分类与生命周期（图必须显式建模三类）
@@ -104,7 +104,7 @@
 | 类别 | 生命周期触发 | 示例 | 销毁责任 |
 |------|--------------|------|----------|
 | **场景级（scene）** | 场景/关卡加载/卸载时 | probe volume 3D texture、IBL env cube、材质表 | 场景管理器（非 swapchain 回调） |
-| **交换链级（swapchain）** | swapchain recreate（resize / 旋转 / 设备丢失恢复） | ScenePass 的 HDR color / depth / normal MRT，**按 swapchain image 数**分配 | 图的 recreate：先 drop 这些资源的 framebuffer，再 recreate swapchain（见 lessons §21、§29 的 device-lost 警告） |
+| **交换链级（swapchain）** | swapchain recreate（resize / 旋转 / 设备丢失恢复） | ForwardPass 的 HDR color / depth / normal MRT，**按 swapchain image 数**分配 | 图的 recreate：先 drop 这些资源的 framebuffer，再 recreate swapchain（见 lessons §21、§29 的 device-lost 警告） |
 | **帧级（frame）** | 每帧 in-flight | AO 双缓冲（GTAO 读上一帧、写本帧，1-frame latency）、per-frame-in-flight descriptor set | 图的帧循环（按 `frame_index`，不是 `image_index`） |
 
 **关键陷阱（提前标出）**：probe volume 3D texture 是**场景级**，绝不能挂到 swapchain recreate 回调上。换关卡才换，resize 不动。图需要一个 `SceneScope` 资源表，独立于 `SwapchainScope` / `FrameScope`。
@@ -130,16 +130,16 @@
 ### 6.3 Pass 拓扑（重构后）
 
 ```
-ShadowMapPass → ScenePass → GtaoPass → PostPass
+ShadowMapPass → ForwardPass → GtaoPass → PostPass
    (图边)         (图边)       (图边)
 ```
 
-- GI 不是独立 pass：是 `ScenePass` 内部一个 `if (flag(PBR_FLAG_GI))` 分支，采样 probe volume。
+- GI 不是独立 pass：是 `ForwardPass` 内部一个 `if (flag(PBR_FLAG_GI))` 分支，采样 probe volume。
 - 图边契约：
-  - `ShadowMapPass` 写 `shadow_map`（depth） → `ScenePass` 读。
-  - `ScenePass` 写 `hdr_color` / `normal_mrt` / `depth`（交换链级，按 image_index） →
+  - `ShadowMapPass` 写 `shadow_map`（depth） → `ForwardPass` 读。
+  - `ForwardPass` 写 `hdr_color` / `normal_mrt` / `depth`（交换链级，按 image_index） →
     `GtaoPass` 读 depth+normal；`PostPass` 读 hdr_color。
-  - `GtaoPass` 写 `ao[frame]`（帧级双缓冲） → `ScenePass`（下一帧读，`ao[(frame+1)%2]`，1-frame latency）。
+  - `GtaoPass` 写 `ao[frame]`（帧级双缓冲） → `ForwardPass`（下一帧读，`ao[(frame+1)%2]`，1-frame latency）。
     **跨帧依赖由 `GtaoPass::setup` 声明"读上一帧 AO / 写本帧 AO"，图据此不把 GTAO 排在它自己读的那个 slot 前面**；首帧上游 view 为 null，shader 不采样（PBR_FLAG_AO 默认 off）。
 
 ### 6.4 Baked GI 数据规格（PR-5 更新）
@@ -177,7 +177,7 @@ ShadowMapPass → ScenePass → GtaoPass → PostPass
 
 ### 6.6 迁移步骤（可拆 PR，每步独立可验证、CI 不红）
 
-- **PR-1：图资源模型 + ScenePass 进图（不改 shader）**。把 `ScenePass` 改造成
+- **PR-1：图资源模型 + ForwardPass 进图（不改 shader）**。把 `ForwardPass` 改造成
   `RenderPassNode`，HDR/depth/normal 改为图声明的交换链级资源；`GraphRenderer::render()`
   删掉手动 set_target / set_ao / execute 编排，改构造一次 `RenderContext` 调 `graph.execute(ctx)`。
   屏障先手工（pass 内显式），图只排顺序。行为不变 → CI 绿。
@@ -431,7 +431,7 @@ After Render  = present + end_frame
 - 在 `update` / `prepare` / `render` 阶段被 App 依次调用。
 - 持有自己的资源生命周期（如 `RtPipeline` 持有 RT working target、main view target）。
 
-当前 `ShadowMapPass` / `ScenePass` / `GtaoPass` / `PostPass` 顺序固定写死在 `GraphRenderer::new` 中，后续改为 App 在 `render` 钩子中按需添加 pass。
+当前 `ShadowMapPass` / `ForwardPass` / `GtaoPass` / `PostPass` 顺序固定写死在 `GraphRenderer::new` 中，后续改为 App 在 `render` 钩子中按需添加 pass。
 
 ### 8.5 迁移步骤
 

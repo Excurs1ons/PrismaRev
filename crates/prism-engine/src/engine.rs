@@ -132,7 +132,9 @@ impl Engine {
         self.world.insert_resource(asset_server);
 
         // ── 默认 调度 ─────────────────────────────────────────
-        self.schedule = default_schedule();
+        // 默认系统（UI 基础设施）**合并**进现有调度而非整体替换：
+        // 用户在 `runtime_initialize` 之前注册的 system 不会被冲掉。
+        self.schedule.merge_if_absent(default_schedule());
     }
 
     /// 生成 a demo cube 实体 into the 世界
@@ -285,6 +287,7 @@ impl Engine {
             cursor_pos: [pos[0] as f32, pos[1] as f32],
             left_clicked: input_manager.mouse_just_pressed(crate::input::MouseButton::Left),
             left_held: input_manager.mouse_held(crate::input::MouseButton::Left),
+            pressed_keys: input_manager.pressed_keys().to_vec(),
         });
 
         // Run the ECS 系统 调度 (user‑registered + built‑in systems).
@@ -578,19 +581,13 @@ fn load_scene_from_file(
 /// Registered systems run in order on every [`Engine::update`] tick.
 /// Consumers can extend or 替换 the 调度 via
 /// [`Engine::schedule_mut`].
+///
+/// 只含引擎基础设施（UI 布局/输入/渲染）；演示内容（如
+/// [`orbit_camera_demo_system`]）不在此列，由应用层按需显式注册。
 fn default_schedule() -> Schedule {
-    use crate::ecs::components::Transform;
     use crate::ecs::schedule::Schedule;
 
     let mut s = Schedule::new();
-
-    // Demo: slowly orbit the 默认 相机 around Y.
-    s.add_system("demo::orbit_camera", |world, dt| {
-        for (_, transform) in world.query_mut::<Transform>() {
-            // yaw
-            transform.rotation.y += dt * 0.3;
-        }
-    });
 
     // ── UI 布局 ─────────────────────────────────────────────
     // 每帧重新计算所有 UI 元素的屏幕空间矩形。
@@ -609,4 +606,16 @@ fn default_schedule() -> Schedule {
     });
 
     s
+}
+
+/// 演示用：绕 Y 轴缓慢旋转所有 `Transform`。
+///
+/// 默认调度**不**包含此系统（游戏项目不应继承"所有实体自动旋转"）；
+/// 需要演示行为的入口（如 `prism_app::run()`）显式注册它。
+pub fn orbit_camera_demo_system(world: &mut World, dt: f32) {
+    use crate::ecs::components::Transform;
+    for (_, transform) in world.query_mut::<Transform>() {
+        // yaw
+        transform.rotation.y += dt * 0.3;
+    }
 }

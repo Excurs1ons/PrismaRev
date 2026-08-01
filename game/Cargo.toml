@@ -1,0 +1,16 @@
+[package]
+name = "prismarev"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "PrismaRev 用户游戏项目——桌面二进制，由 launcher/ 以 `prismarev` spawn"
+
+# 独立 workspace（仿 launcher/ 先例），不挂根 PrismaRev workspace。
+[workspace]
+
+[dependencies]
+prism-app = { path = "../crates/prism-app" }
+prism-engine = { path = "../crates/prism-engine" }
+prism-ecs = { path = "../crates/prism-ecs" }
+keyframe = "1.1"
+log = "0.4"

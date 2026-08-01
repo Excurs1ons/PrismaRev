@@ -126,7 +126,7 @@ impl DepthImage {
             .samples(vk::SampleCountFlags::TYPE_1)
             .tiling(vk::ImageTiling::OPTIMAL)
             // DEPTH_STENCIL_ATTACHMENT for the scene 渲染 pass + SAMPLED so
-            // the GTAO pass can 读取 it 后 as a 纹理 after ScenePass
+            // the GTAO pass can 读取 it 后 as a 纹理 after ForwardPass
             // stores 深度
             .usage(vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | vk::ImageUsageFlags::SAMPLED)
             .sharing_mode(vk::SharingMode::EXCLUSIVE);
@@ -203,7 +203,7 @@ pub fn find_memory_type(
 }
 
 /// A 颜色 图像 + 视图 used as an MRT 附件 (e.g. the view-space 法线
-/// 目标 written by `ScenePass` and sampled by the GTAO pass Mirrors
+/// 目标 written by `ForwardPass` and sampled by the GTAO pass Mirrors
 /// [`DepthImage`] but for a `COLOR_ATTACHMENT | SAMPLED` 图像 with a
 /// caller-supplied 格式
 pub struct NormalImage {
@@ -215,7 +215,7 @@ pub struct NormalImage {
 impl NormalImage {
     /// 创建 a 颜色 图像 for the given extent + 格式 用法 is
     /// `COLOR_ATTACHMENT | SAMPLED` so the GTAO pass can 读取 it 后 as a
-    /// 纹理 after the ScenePass stores it.
+    /// 纹理 after the ForwardPass stores it.
     pub fn new(
         context: &VulkanContext,
         extent: vk::Extent2D,

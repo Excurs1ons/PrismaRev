@@ -1,6 +1,6 @@
 // GTAO (Ground-Truth Ambient Occlusion) pass - half-resolution screen-space AO.
 //
-// Runs as a fullscreen-triangle fragment pass AFTER the ScenePass (which writes
+// Runs as a fullscreen-triangle fragment pass AFTER the ForwardPass (which writes
 // the D32_SFLOAT depth + the R16G16B16A16 view-space normal MRT target). The
 // pass reads depth (+ optional normal) and writes a single-channel R8_UNORM AO
 // texture. The scene shader samples *last frame's* AO output (1-frame latency)

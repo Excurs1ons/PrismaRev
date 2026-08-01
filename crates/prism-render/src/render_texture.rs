@@ -6,7 +6,7 @@
 //!   由 [`RtUpdateMode`] 决定，执行由引擎的 [`crate::rt_scheduler::RenderTextureScheduler`]
 //!   统一调度（每帧遍历注册的 RT，按配置触发一次全屏 blit）。
 //! - **与 scene 零耦合**：内容来自绑定的更新 shader（[`RtShader`]），不读
-//!   ScenePass 任何输出；任何下游 shader 可经 bindless 句柄采样它。
+//!   ForwardPass 任何输出；任何下游 shader 可经 bindless 句柄采样它。
 //! - **初始化与更新分离**：[`set_init_shader`]（初始填充）先于 [`set_update_shader`]
 //!   （迭代计算）执行，各自独立判断。
 //!
@@ -464,7 +464,10 @@ impl RenderTexture {
             });
         let barriers = [barrier];
         let dep = vk::DependencyInfo::default().image_memory_barriers(&barriers);
-        unsafe { device.cmd_pipeline_barrier2(cmd, &dep) };
+        // `vkCmdPipelineBarrier2` (1.3 core) is not exported on a 1.2 实例 —
+        // use the KHR 包装器 like `buffer.rs` does (see `context.rs`).
+        let sync2 = ash::khr::synchronization2::Device::new(&context.instance, &context.device);
+        unsafe { sync2.cmd_pipeline_barrier2(cmd, &dep) };
 
         let copy = vk::BufferImageCopy::default()
             .buffer_offset(0)

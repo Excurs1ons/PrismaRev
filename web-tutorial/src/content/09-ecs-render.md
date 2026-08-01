@@ -113,7 +113,7 @@ DirtyRouter::update()    ← PR-S2：对比上一帧，产出 DirtyFlags
 FrameInput 构建           ← GraphRenderer::begin_frame
     │ 接收 FrameUBOData + DrawItem 列表 + GTAO inputs
     ▼
-GraphRenderer::render()  ← begin_frame → ScenePass/Gtao/Post → present
+GraphRenderer::render()  ← begin_frame → ForwardPass/Gtao/Post → present
     │ 遍历 draw_list，逐物体提交绘制调用
     ▼
 屏幕
@@ -159,13 +159,13 @@ graph_renderer.render(
     &FrameInput {
         ubo: frame_ubo_data,
         draw_list: scene_changes.draw_list,
-        gtao_inputs,  // ScenePass → GtaoPass 的 AO 数据
+        gtao_inputs,  // ForwardPass → GtaoPass 的 AO 数据
         ...
     },
 );
 ```
 
-`GraphRenderer` 内部驱动 `ShadowMapPass → ScenePass → GtaoPass → PostPass` 链（见第 7 章）。每帧遍历 `draw_list`，为每个 `DrawItem` 计算 model 矩阵、绑定点光源、录制绘制命令。
+`GraphRenderer` 内部驱动 `ShadowMapPass → ForwardPass → GtaoPass → PostPass` 链（见第 7 章）。每帧遍历 `draw_list`，为每个 `DrawItem` 计算 model 矩阵、绑定点光源、录制绘制命令。
 
 :::tip 系统即函数，世界即数据
 注意 `render_system` 是**普通函数**，不是某个「渲染器对象」的方法。它与 `World` 解耦：换一套逻辑只需换一个系统函数。这是 ECS 相比 OOP 的核心优势——逻辑可组合、可测试、无继承耦合。

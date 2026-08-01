@@ -113,7 +113,7 @@ total_radiance += throughput * brdf_re * L_rad * shadow
 ReSTIR 只是路径追踪的一部分。完整管线在 `pt_pass.rs`（`PathTracePass`）中实现，作为 `RenderPassNode` 接入 RenderGraph：
 
 ```
-前向 PBR 模式:  ShadowMapPass → ScenePass → GtaoPass → PostPass
+前向 PBR 模式:  ShadowMapPass → ForwardPass → GtaoPass → PostPass
 路径追踪模式:                                  PathTracePass → PostPass
 ```
 
@@ -198,7 +198,7 @@ SceneScope (scene_scope.rs)
   │  加载 3D 纹理 + ProbeVolumeInfo UBO
   │  绑定到 set 5 (GI descriptor set)
   ▼
-ScenePass (scene_frag.slang)
+ForwardPass (scene_frag.slang)
   │  set 5 binding 0: 3D 纹理 = SampleProbeVolumeIrradiance
   │  set 5 binding 1: ProbeVolumeInfo UBO (网格变换/步长/偏移)
   │  gi.slang: 世界坐标 → 网格坐标 → 三线性插值 → eval_sh9 → irradiance
@@ -267,7 +267,7 @@ pub fn build_multi_instance_tlas(
 - **Y 轴** → 绿色
 - **Z 轴** → 蓝色
 
-Gizmo 使用独立的 Vertex Buffer + Pipeline，**关闭深度测试**（始终显示在最上层）。适配 `ScenePass` 的 2 个 MRT attachment 的混合状态（只写入 attachment 0，attachment 1 的 write mask 为 0）。
+Gizmo 使用独立的 Vertex Buffer + Pipeline，**关闭深度测试**（始终显示在最上层）。适配 `ForwardPass` 的 2 个 MRT attachment 的混合状态（只写入 attachment 0，attachment 1 的 write mask 为 0）。
 
 ```rust
 pub struct Gizmo {
@@ -282,7 +282,7 @@ pub struct Gizmo {
 let pc = GizmoPush { viewProj: view_proj };
 ```
 
-Gizmo 通过 push constant 接收 `view_proj`，顶点 shader 直接输出变换后的位置，不需要每帧更新 GPU 缓冲。它内嵌于 `ScenePass` 中，在场景几何体绘制完成后、PostPass 之前渲染。
+Gizmo 通过 push constant 接收 `view_proj`，顶点 shader 直接输出变换后的位置，不需要每帧更新 GPU 缓冲。它内嵌于 `ForwardPass` 中，在场景几何体绘制完成后、PostPass 之前渲染。
 
 ---
 
@@ -292,7 +292,7 @@ Gizmo 通过 push constant 接收 `view_proj`，顶点 shader 直接输出变换
 
 | 模式 | Pass 链 | 适合 |
 |------|---------|------|
-| `Raster` | ShadowMapPass → ScenePass → GtaoPass → PostPass | 高性能，60fps+ |
+| `Raster` | ShadowMapPass → ForwardPass → GtaoPass → PostPass | 高性能，60fps+ |
 | `PathTrace` | PathTracePass → PostPass | 离线画质，静态场景 |
 | `PathTrace` (camera move) | 同上（自动重置累积） | 交互调试，看清噪点模式 |
 

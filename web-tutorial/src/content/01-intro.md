@@ -25,7 +25,7 @@ PrismaRev 的**权威设计蓝图**是 `docs/DESIGN.md`（它是「意图的真�
 它有两层架构特征：
 
 - **数据导向（ECS）**：游戏对象 = 整数句柄 + 纯数据组件 + 系统函数，契合 Rust 所有权。
-- **模块化渲染管线**：每个渲染阶段是一个 `RenderPassNode`（ShadowMapPass → ScenePass(PBR MRT) → GtaoPass → PostPass，可选 PathTracePass），通过 `RenderGraphBuilder` 组合；差异只来自**运行时能力探测**，不写平台分支。
+- **模块化渲染管线**：每个渲染阶段是一个 `RenderPassNode`（ShadowMapPass → ForwardPass(PBR MRT) → GtaoPass → PostPass，可选 PathTracePass），通过 `RenderGraphBuilder` 组合；差异只来自**运行时能力探测**，不写平台分支。
 
 ```
 PrismaRev/
@@ -48,8 +48,10 @@ prism-render/src/
 ├── context.rs            # Vulkan 实例/设备/队列 + 验证层
 ├── capabilities.rs       # ★ 运行时能力探测（RT 分层、descriptor indexing…）
 ├── render_graph.rs       # ★ RenderGraph + ResourceHandle + RenderPassNode trait
-├── passes.rs             # ★ RenderPassNode：ScenePass/ShadowMapPass/SkyboxPass
-├── gtao.rs               # GTAO 环境光遮蔽 pass（半分辨率，读取 ScenePass MRT）
+├── forward_pass.rs       # ★ 前向 PBR MRT 主 pass（内嵌 SkyboxPass）
+├── shadow_map_pass.rs    # 方向光深度阴影 pass
+├── skybox_pass.rs        # IBL 环境天空盒 pass（由 ForwardPass 持有）
+├── gtao.rs               # GTAO 环境光遮蔽 pass（半分辨率，读取 ForwardPass MRT）
 ├── pt_pass.rs            # 实时路径追踪 compute pass（ray_query）
 ├── gi.rs / scene_scope.rs # 探针体积 GI（离线烘焙 SH，运行时重建辐照度）
 ├── ibl.rs                # IBL 环境 cubemap 生成（HDR→irradiance→prefiltered→BRDF LUT）
@@ -73,10 +75,10 @@ README 停留在早期里程碑（M1–M4），把引擎讲成「清屏循环 �
 | 02–03 | Rust 基础 + Cargo 引入第三方库 | 工程基础 |
 | 04 | winit 窗口与事件循环 | `prism-engine` |
 | 05–06 | ash + Vulkan 上下文、Swapchain 与帧同步 | `context.rs` / `swapchain.rs` |
-| 07 | **RenderGraph 与 RenderPassNode**、ScenePass | `render_graph.rs` / `passes.rs` |
+| 07 | **RenderGraph 与 RenderPassNode**、ForwardPass | `render_graph.rs` / `forward_pass.rs` |
 | 08–09 | ECS 内核、ECS 驱动渲染 + SceneChanges + DirtyRouter | `prism-ecs` / `render_system` / `dirty_router` |
 | 10 | 资产管线：glTF + SceneStore + bindless + 离线管线 | `prism-asset` / `bindless.rs` / `prism-asset/` |
-| 11 | PBR + IBL + GTAO + Probe Volume GI + Path Tracing | `passes.rs` / `ibl.rs` / `gtao.rs` / `gi.rs` / `pt_pass.rs` |
+| 11 | PBR + IBL + GTAO + Probe Volume GI + Path Tracing | `forward_pass.rs` / `ibl.rs` / `gtao.rs` / `gi.rs` / `pt_pass.rs` |
 | 12 | Android 移植（统一管线，无平台分支） | `prism-android` |
 | 13 | 引擎架构复盘（对齐 DESIGN 三目标） | 全局 |
 

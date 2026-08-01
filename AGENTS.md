@@ -6,7 +6,7 @@ Conventions) before touching any matrix/coordinate math — deviating from those
 
 ## Layout
 - `crates/prism-ecs` — ECS core (Entity/Component/World/Query).
-- `crates/prism-render` — Vulkan backend: context, swapchain, render-graph passes (`passes.rs`),
+- `crates/prism-render` — Vulkan backend: context, swapchain, render-graph passes (`forward_pass.rs`/`shadow_map_pass.rs`/`skybox_pass.rs`),
   `GraphRenderer` driver (`graph_renderer.rs`), IBL cubemap (`ibl.rs`), bindless/PBR.
 - `crates/prism-engine` — app layer + main loop, egui inspector.
 - `crates/prism-app` — platform layer (winit event loop, window, Android entry).
@@ -19,6 +19,7 @@ Conventions) before touching any matrix/coordinate math — deviating from those
   with feature flags (`core`/`runtime`/`cooker`/`package`/`importer`/`db`/`cli`/`types`/`streaming`/
   `hot-reload`); CLI bin is `prism-asset-cli` (`src/cli_main.rs`). See DESIGN.md §10.
 - `launcher/` — Tauri 2 desktop shell + Android APK packaging; **own standalone workspace**, NOT a root member.
+- `game/` — 用户游戏项目（`prismarev` 桌面二进制，含 keyframe 开场 intro screen）；**own standalone workspace**, NOT a root member.
 - `crates/xtask` — **excluded** from default workspace; desktop/CI only (needs `slangc`).
 - `assets/shaders/` — Slang sources in `slang/`, compiled `.spv` (gitignored, not committed) +
   `reflection/*.json` next to them.
@@ -26,7 +27,7 @@ Conventions) before touching any matrix/coordinate math — deviating from those
 ## Build / check / test
 - Build: `scripts/run.ps1` (Windows; sets `VK_SDK`, `RUST_LOG`, runs `bash assets/shaders/compile.sh` then `cargo build`).
   Note: the root workspace has **no runnable bin** — the desktop entry is the Tauri app in `launcher/`
-  (`cd launcher && pnpm tauri dev`).
+  (`cd launcher && pnpm tauri dev`), which spawns the game binary `prismarev` (built in `game/`: `cd game && cargo run`).
 - Checks: `cargo check -p prism-render`, `cargo build`, `cargo test`.
 - `crates/xtask` is excluded from the workspace — run it explicitly from a desktop host; do not add it to default `members`.
 - Prism-asset (a member of this workspace): `cargo test -p prism-asset`.
@@ -80,11 +81,12 @@ Conventions) before touching any matrix/coordinate math — deviating from those
 
 ## Render-graph architecture rules
 - Passes implement `RenderPassNode` (`setup` declares resources; `execute` records commands).
-- `ScenePass` renders into the swapchain directly (owns its own framebuffers, one per swapchain
-  image; rebuilt only when its swapchain view changes). `GraphRenderer` owns the Vulkan context and
-  drives `graph.execute` + `scene_pass.execute` per frame.
+- `ForwardPass` renders into the HDR intermediate targets (color/depth/view-space normal MRT,
+  one per swapchain image; rebuilt only when its swapchain view changes); `PostPass` tonemaps to
+  the swapchain. `GraphRenderer` owns the Vulkan context and drives `graph.execute` +
+  `forward_pass.execute` per frame.
 - Resource lifetimes: framebuffers/depth must be destroyed **before** swapchain recreate
-  (`scene_pass.drop_target`) to avoid `VUID-vkDestroyFramebuffer-...` validation + device-lost.
+  (`forward_pass.drop_target`) to avoid `VUID-vkDestroyFramebuffer-...` validation + device-lost.
 - Descriptor set indices are fixed by the Slang layouts: set 0 = frame UBO/materials/lights,
   set 1 = bindless textures, set 2 = IBL (env/irradiance/prefiltered), set 3 = shadow map.
   Skybox reuses set 0 = IBL `envCube` (combined image sampler).

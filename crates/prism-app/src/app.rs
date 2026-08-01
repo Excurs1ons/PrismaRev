@@ -123,7 +123,17 @@ pub struct App {
 }
 
 impl App {
+    /// 无参构造 = 默认配置的完整引擎（无演示内容）。
     pub fn new() -> Self {
+        Self::with_config(AppConfig::load())
+    }
+
+    /// 用指定配置创建应用，并跑完所有引擎初始化阶段。
+    ///
+    /// 用户项目在此之后通过 [`Self::engine_mut`] / [`Self::add_system`] /
+    /// [`Self::insert_resource`] 注册自己的 ECS 内容，最后调用
+    /// [`Self::run`]（桌面）或 [`Self::run_on`]（Android）启动事件循环。
+    pub fn with_config(config: AppConfig) -> Self {
         let mut engine = Engine::empty();
         let mut editor = Editor::new();
 
@@ -148,7 +158,7 @@ impl App {
         engine.runtime_initialize();
 
         Self {
-            config: AppConfig::load(),
+            config,
             engine: Some(engine),
             asset_resolver,
             render_shared: None,
@@ -174,6 +184,47 @@ impl App {
             fatal_error: None,
             last_frame: None,
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // ECS 接入（用户项目）
+    // -----------------------------------------------------------------------
+
+    /// 完全 ECS 访问——world / schedule / timer 等入口都通过 `Engine`。
+    pub fn engine_mut(&mut self) -> &mut Engine {
+        self.engine.as_mut().expect("engine alive")
+    }
+
+    /// 注册一个 ECS system（等价于 `engine_mut().schedule_mut().add_system`）。
+    ///
+    /// 引擎默认调度（UI 基础设施）在构造时已并入，这里注册的系统
+    /// 在其之后按注册顺序每帧运行。
+    pub fn add_system<F>(&mut self, label: &str, f: F) -> &mut Self
+    where
+        F: FnMut(&mut prism_ecs::World, f32) + 'static,
+    {
+        self.engine_mut().schedule_mut().add_system(label, f);
+        self
+    }
+
+    /// 插入一个 ECS 资源（等价于 `engine_mut().world_mut().insert_resource`）。
+    pub fn insert_resource<R: 'static + Send>(&mut self, resource: R) -> &mut Self {
+        self.engine_mut().world_mut().insert_resource(resource);
+        self
+    }
+
+    /// 启动事件循环（桌面入口，自建 winit EventLoop）。
+    ///
+    /// 内部构造 EventLoop 并交给 [`Self::run_on`]；致命错误直接 panic。
+    pub fn run(self) {
+        let event_loop = winit::event_loop::EventLoop::new().expect("failed to create event loop");
+        self.run_on(event_loop).expect("fatal application error");
+    }
+
+    /// 在已构建的 winit EventLoop 上运行（Android 入口用）。
+    pub fn run_on(mut self, event_loop: winit::event_loop::EventLoop<()>) -> anyhow::Result<()> {
+        event_loop.run_app(&mut self)?;
+        Ok(())
     }
 
     // -----------------------------------------------------------------------
@@ -316,6 +367,16 @@ impl App {
         let Some(ref shared) = self.render_shared else {
             return;
         };
+
+        // --- 同步屏幕尺寸（ECS UI 布局依赖 ScreenSize resource） ---
+        if let Some(ref window) = self.window {
+            let (w, h) = window.inner_size().into();
+            if w > 0 && h > 0 {
+                engine
+                    .world_mut()
+                    .insert_resource(prism_engine::ui::ScreenSize::new(w, h));
+            }
+        }
 
         // --- 输入：帧开始，清空瞬时状态 ---
         self.input.begin_frame();

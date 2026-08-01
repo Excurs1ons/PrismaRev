@@ -311,7 +311,7 @@ fn create_device(
     let available_features = unsafe { instance.get_physical_device_features(physical_device) };
     let legacy_features = vk::PhysicalDeviceFeatures {
         shader_clip_distance: available_features.shader_clip_distance,
-        // MRT pipelines (ScenePass writes 颜色 + view-space 法线 use
+        // MRT pipelines (ForwardPass writes 颜色 + view-space 法线 use
         // different 混合 states per 附件 颜色 = Alpha 混合 法线 =
         // no 混合 Vulkan requires `independentBlend` for that; without it
         // every 附件 must share the same 混合 配置 Universally

@@ -41,6 +41,7 @@ pub mod compute;
 pub mod context;
 pub mod descriptor;
 pub mod egui_overlay;
+pub mod forward_pass;
 pub mod gi;
 pub mod gizmo;
 pub mod graph_renderer;
@@ -50,7 +51,6 @@ pub mod ibl;
 pub mod managers;
 pub mod mesh;
 pub mod offscreen;
-pub mod passes;
 pub mod pbr_push;
 pub mod pipeline;
 pub mod post;
@@ -63,10 +63,12 @@ pub mod rt_pass;
 pub mod rt_scheduler;
 pub mod scene_scope;
 pub mod shader;
+pub mod shadow_map_pass;
 /// Slang-reflection-generated 绑定 constants (set/binding indices, entry
 /// point names, push-constant sizes). Regenerate with `xtask/shader-bindgen`
 /// after recompiling shaders on a host with slangc - see shaders/compile.sh.
 pub mod shader_bindings;
+pub mod skybox_pass;
 pub mod swapchain;
 pub mod ui_overlay;
 
@@ -85,11 +87,12 @@ pub use gi::{
     eval_sh9, sample_probe_irradiance, sh_basis, trilinear_weights, world_to_probe_coord,
     ProbeVolumeInfo, SH_COEFF_COUNT,
 };
+pub use forward_pass::ForwardPass;
 pub use gizmo::Gizmo;
 pub use graph_renderer::{FrameCtx, FrameInput, GraphRenderer};
 pub use gtao::{GtaoFrameInputs, GtaoPass};
 pub use mesh::{Mesh, Vertex};
-pub use passes::{ScenePass, ShadowMapPass};
+pub use shadow_map_pass::ShadowMapPass;
 pub use pbr_push::{DebugMode, NormalSpace};
 pub use pipeline::GraphicsPipeline;
 pub use post::PostPass;

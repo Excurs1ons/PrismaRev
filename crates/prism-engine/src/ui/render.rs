@@ -119,5 +119,22 @@ pub fn convert_ui_draw_list_to_overlay(world: &World) -> prism_render::UiOverlay
             border_radius: br_ndc,
         });
     }
-    prism_render::UiOverlayInput { quads }
+
+    // 文本命令按像素坐标原样透传（record 时展开成逐字形四边形）。
+    let texts = draw_list
+        .texts
+        .iter()
+        .map(|t| prism_render::ui_overlay::UiTextInput {
+            rect: t.rect,
+            content: t.content.clone(),
+            font_size: t.font_size,
+            color: t.color,
+            alignment: match t.alignment {
+                TextAlign::Left => prism_render::ui_overlay::UiTextAlign::Left,
+                TextAlign::Center => prism_render::ui_overlay::UiTextAlign::Center,
+                TextAlign::Right => prism_render::ui_overlay::UiTextAlign::Right,
+            },
+        })
+        .collect();
+    prism_render::UiOverlayInput { quads, texts }
 }

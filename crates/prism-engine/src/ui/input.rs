@@ -7,7 +7,7 @@ use crate::ui::components::*;
 use prism_ecs::{Entity, World};
 
 /// 鼠标/触摸输入状态 —— 由 Engine 每帧从 `InputManager` 拷贝到 World。
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct UiInputState {
     /// 鼠标在窗口中的位置（像素）。
     pub cursor_pos: [f32; 2],
@@ -15,6 +15,8 @@ pub struct UiInputState {
     pub left_clicked: bool,
     /// 左键当前是否按住。
     pub left_held: bool,
+    /// 本帧新按下的按键列表（去重，任意键跳过等用）。
+    pub pressed_keys: Vec<crate::input::KeyCode>,
 }
 
 /// UI Input System —— 每帧运行，做命中测试更新 Interaction 组件。
@@ -22,7 +24,7 @@ pub struct UiInputState {
 /// 必须在 `ui::layout` 之后运行（需要 ComputedLayout 已经就绪）。
 pub fn ui_input_system(world: &mut World) {
     let state = match world.get_resource::<UiInputState>() {
-        Some(s) => *s,
+        Some(s) => s.clone(),
         None => return,
     };
 

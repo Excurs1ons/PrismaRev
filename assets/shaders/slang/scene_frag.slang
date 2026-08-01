@@ -1,11 +1,11 @@
-// ScenePass bindless PBR fragment stage.
+// ForwardPass bindless PBR fragment stage.
 //
 // This is the RenderGraph-path counterpart of `bindless.slang` (legacy
 // renderer): full PBR with material textures sampled through the bindless
 // SRV table + material SSBO, with real IBL (irradiance cubemap, prefiltered
 // environment map, and BRDF LUT) and the rasterized shadow map.
 //
-// Sets (must match `ScenePass::ensure_pipeline`):
+// Sets (must match `ForwardPass::ensure_pipeline`):
 //   set 0, binding 0 - per-frame UBO (FrameUBO, now carries lightViewProj)
 //   set 0, binding 1 - material SSBO (GpuMaterial[])
 //   set 0, binding 2 - point-light SSBO (GpuLight[])
@@ -29,7 +29,7 @@
 // MRT: the fragment stage now writes two color attachments:
 //   SV_Target0 - linear HDR lit color (PostPass tonemaps this -> swapchain)
 //   SV_Target1 - view-space normal (R16G16B16A16_SFLOAT, xyz unit, w=0)
-//                consumed by the GTAO pass that runs after ScenePass.
+//                consumed by the GTAO pass that runs after ForwardPass.
 //
 // Compile:
 //   slangc scene_frag.slang -profile spirv_1_5 -target spirv \

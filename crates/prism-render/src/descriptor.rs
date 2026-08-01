@@ -244,7 +244,7 @@ pub struct PtEmissiveTri {
 /// GPU data 布局 for the per-frame uniform 缓冲区
 ///
 /// Mirrors the Slang `FrameUBO` in `shaders/slang/common.slang` byte-for-byte
-/// (std140). The RenderGraph ScenePass reads `light_view_proj` here for the
+/// (std140). The RenderGraph ForwardPass reads `light_view_proj` here for the
 /// shadow-map 投影 (keeping it out of 推送 constants so the 推送
 /// 常量 块 stays under Vulkan's 128-byte 限制 the legacy shaders
 /// simply ignore the trailing field.
