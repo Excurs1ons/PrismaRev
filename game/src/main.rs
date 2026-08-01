@@ -8,11 +8,11 @@
 //!
 //! 桌面端由 launcher/ 以 `prismarev` 二进制 spawn（hub 模式）；可读
 //! `PRISMREV_LAUNCH_CONFIG` env 覆盖启动配置（见 `LaunchConfig`）。
-//! Android 入口在 `lib.rs`（cdylib `libprism_android.so`）。
+//! Android 入口在 `lib.rs`（cdylib `libgame.so`）。
 
 #![deny(warnings)]
 
 fn main() {
     // 构造应用（完成引擎初始化），注册 intro 的 ECS 内容后启动。
-    prism_android::build_app().run();
+    game::build_app().run();
 }

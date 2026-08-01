@@ -26,7 +26,7 @@ Conventions) before touching any matrix/coordinate math — deviating from those
   with feature flags (`core`/`runtime`/`cooker`/`package`/`importer`/`db`/`cli`/`types`/`streaming`/
   `hot-reload`); CLI bin is `prism-asset-cli` (`src/cli_main.rs`). See DESIGN.md §10.
 - `launcher/` — Tauri 2 desktop shell + Android APK packaging; **own standalone workspace**, NOT a root member.
-- `game/` — 用户游戏项目（`prismarev` 桌面二进制 + Android cdylib `libprism_android.so`；
+- `game/` — 用户游戏项目（`prismarev` 桌面二进制 + Android cdylib `libgame.so`；
   keyframe 开场 intro、`launch_config.rs` hub 传参、`lib.rs` 的 `android_main`）；
   **own standalone workspace**, NOT a root member.
 - `crates/xtask` — **excluded** from default workspace; desktop/CI only (needs `slangc`).
@@ -165,12 +165,12 @@ The user project's dependency chain must stay **egui-free and editor-free**:
 ## Android packaging chain (game + launcher in one APK)
 - The `android_main` JNI entry lives in the **user project** (`game/src/lib.rs`), not in
   `prism-app`; it calls `prism_app::run_on_android(build_app(), android_app)`.
-  `game`'s `[lib]` is `name = "prism_android"`, `crate-type = ["lib", "cdylib"]` — the `lib`
+  `game`'s `[lib]` is `name = "game"`, `crate-type = ["lib", "cdylib"]` — the `lib`
   half is required so `src/main.rs` can link it on desktop (a bare `cdylib` cannot be).
 - The APK holds **two** Activities in separate processes: the Tauri launcher WebView
   (`com.example.tauriandroidapp.MainActivity`) and the game
   (`com.prismarev.MainActivity` = `GameActivity`, `android:process=":game"`,
-  `android.app.lib_name = prism_android` → loads `libprism_android.so`).
+  `android.app.lib_name = game` → loads `libgame.so`).
 - `scripts/build-android.ps1`: probes the NDK (validating `toolchains\llvm`; tolerates a stale
   `ANDROID_NDK_HOME` by **overwriting** it with the validated path, since cargo-ndk reads that env
   var itself), derives the cargo-ndk API level from the manifest's `minSdk`, compiles shaders if

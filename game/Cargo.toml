@@ -8,11 +8,11 @@ description = "PrismaRev 用户游戏项目——桌面二进制，由 launcher/
 # 独立 workspace（仿 launcher/ 先例），不挂根 PrismaRev workspace。
 [workspace]
 
-# Android: GameActivity 加载 libprism_android.so（`android.app.lib_name`
-# 见 launcher gen/android Manifest），JNI `android_main` 在 src/lib.rs。
+# Android: GameActivity 加载 libgame.so（`android.app.lib_name` 见 launcher
+# gen/android Manifest），JNI `android_main` 在 src/lib.rs。
 # `lib` 类型供桌面 bin 链接 rlib；`cdylib` 仅 Android 打包时使用。
 [lib]
-name = "prism_android"
+name = "game"
 crate-type = ["lib", "cdylib"]
 
 [dependencies]

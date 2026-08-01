@@ -37,7 +37,7 @@ PrismaRev/
 │   ├── scenes/                # 场景资产（glTF 等）
 │   └── ...
 ├── launcher/                  # Tauri 桌面壳 + Android APK 打包（独立 workspace）
-├── game/                      # 用户游戏项目（`prismarev` 桌面 bin + Android `libprism_android.so`；独立 workspace）
+├── game/                      # 用户游戏项目（`prismarev` 桌面 bin + Android `libgame.so`；独立 workspace）
 ├── docs/DESIGN.md             # 权威设计蓝图
 ├── scripts/                   # run.ps1 / build-android.ps1（高度图分析脚本在 scripts/scratch/）
 └── Cargo.toml                 # workspace（crates/xtask 排除在外；launcher/ 与 game/ 独立）
@@ -121,10 +121,10 @@ cargo test  -p prism-ecs -p prism-render -p prism-engine -p prism-platform
 
 ### Android
 
-- 用户项目 `game/` 以 `cdylib` 输出 `libprism_android.so` 并暴露 `android_main` JNI 入口
+- 用户项目 `game/` 以 `cdylib` 输出 `libgame.so` 并暴露 `android_main` JNI 入口
   （内部调用 `prism_app::run_on_android`）；`.cargo/config.toml` 将链接器指向 NDK 的 clang wrapper。
 - APK 内有两个 Activity：Tauri 启动器 WebView（launcher）与 `com.prismarev.MainActivity`
-  （`GameActivity`，独立 `:game` 进程，`android.app.lib_name = prism_android`）。
+  （`GameActivity`，独立 `:game` 进程，`android.app.lib_name = game`）。
 - 打包：`scripts/build-android.ps1`（自动探测 NDK 与 API level，`cargo ndk -P <api> -t arm64-v8a`
   构建 game 到 `jniLibs/`，再 gradle `assembleDebug`）；或 `launcher/` 下 `pnpm tauri android build`。
 - 无 slangc 环境：Android 携带预编译 `.spv`（`include_bytes!` 编译期嵌入，从 CI `spirv` artifact 获取），

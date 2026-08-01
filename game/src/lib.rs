@@ -1,7 +1,7 @@
 //! PrismaRev 用户游戏项目库目标。
 //!
 //! 桌面端是纯二进制（`src/main.rs`），本 lib 目标只为 Android 服务：
-//! 导出 `android_main` JNI 入口，产出 `libprism_android.so` 由
+//! 导出 `android_main` JNI 入口，产出 `libgame.so` 由
 //! GameActivity 加载（launcher `gen/android` 的 Manifest `lib_name`）。
 //!
 //! 应用构建逻辑（`build_app`）在 main 与 android 入口间共享。

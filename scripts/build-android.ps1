@@ -2,7 +2,7 @@
 <#
 .SYNOPSIS
     Build PrismaRev for Android arm64-v8a: compile the game Rust cdylib
-    (`game/` → `libprism_android.so`) via cargo-ndk, then assemble the APK
+    (`game/` → `libgame.so`) via cargo-ndk, then assemble the APK
     via Gradle (Tauri hub + GameActivity in `launcher/src-tauri/gen/android`).
 #>
 $ErrorActionPreference = "Stop"
