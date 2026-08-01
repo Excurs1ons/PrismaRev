@@ -27,7 +27,7 @@ Conventions) before touching any matrix/coordinate math — deviating from those
   `hot-reload`); CLI bin is `prism-asset-cli` (`src/cli_main.rs`). See DESIGN.md §10.
 - `launcher/` — Tauri 2 desktop shell + Android APK packaging; **own standalone workspace**, NOT a root member.
 - `game/` — 用户游戏项目（`prismarev` 桌面二进制 + Android cdylib `libgame.so`；
-  keyframe 开场 intro、`launch_config.rs` hub 传参、`lib.rs` 的 `android_main`）；
+  keyframe 开场 intro、`register_scene("intro", ...)` 注册场景、`lib.rs` 的 `android_main`）；
   **own standalone workspace**, NOT a root member.
 - `crates/xtask` — **excluded** from default workspace; desktop/CI only (needs `slangc`).
 - `assets/shaders/` — Slang sources in `slang/`, compiled `.spv` (gitignored, not committed) +

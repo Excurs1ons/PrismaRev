@@ -62,6 +62,11 @@ pub struct App {
     // ---------- 启动配置 ----------
     config: AppConfig,
 
+    /// 是否启用渲染子系统（窗口 + Vulkan + 渲染线程）。
+    /// 默认 `false`；用户项目须显式调用 [`with_render_subsystem`](Self::with_render_subsystem)
+    /// 开启，否则引擎只提供控制台输出（无窗口、无 GPU 初始化）。
+    render_enabled: bool,
+
     // ---------- 引擎（主线程） ----------
     engine: Option<Engine>,
     asset_resolver: GpuAssetResolver,
@@ -75,6 +80,10 @@ pub struct App {
     platform: Option<PlatformContext>,
     /// `into_parts` 后窗口与渲染器分离。
     window: Option<Arc<winit::window::Window>>,
+
+    // ---------- 场景注册（用户项目通过 register_scene 注入） ----------
+    scene_registrations: Vec<(String, Box<dyn FnMut(&mut prism_ecs::World)>)>,
+    scene_systems: Vec<(String, Box<dyn FnMut(&mut prism_ecs::World, f32)>)>,
 
     // ---------- 帧钩子（编辑器等宿主注入） ----------
     frame_hook: Option<Box<dyn FrameHook>>,
@@ -151,6 +160,7 @@ impl App {
 
         Self {
             config,
+            render_enabled: false,
             engine: Some(engine),
             asset_resolver,
             render_shared: None,
@@ -159,6 +169,8 @@ impl App {
             platform: None,
             window: None,
             frame_hook: None,
+            scene_registrations: Vec::new(),
+            scene_systems: Vec::new(),
             render_settings: RenderSettings::default(),
             display_aspect: 16.0 / 9.0,
             surface_rotation: glam::Mat4::IDENTITY,
@@ -210,19 +222,109 @@ impl App {
         self
     }
 
+    /// 显式声明需要渲染子系统（窗口 + Vulkan + 渲染线程）。
+    ///
+    /// 不调用此方法则引擎只提供控制台输出（无窗口、无 GPU 初始化），
+    /// 适合无头服务器、CI 测试、批处理工具等场景。
+    pub fn with_render_subsystem(mut self) -> Self {
+        self.render_enabled = true;
+        self
+    }
+
+    /// 注册一个启动场景。
+    ///
+    /// `name` 与 [`LaunchConfig::scene`] 匹配，引擎在 [`run`](Self::run) /
+    /// [`run_on`](Self::run_on) 时自动调度对应的工厂函数。
+    ///
+    /// 工厂函数接收 `&mut World`，负责 spawn 场景实体、插入资源等。
+    pub fn register_scene<F>(mut self, name: &str, factory: F) -> Self
+    where
+        F: FnMut(&mut prism_ecs::World) + 'static,
+    {
+        self.scene_registrations.push((name.to_string(), Box::new(factory)));
+        self
+    }
+
+    /// 为已注册的场景添加一个 ECS system。
+    ///
+    /// 该系统在引擎默认调度（UI 布局/输入/渲染）之后按注册顺序每帧运行。
+    /// 在 [`run`](Self::run) / [`run_on`](Self::run_on) 时自动注册到调度器。
+    pub fn add_scene_system<F>(mut self, label: &str, f: F) -> Self
+    where
+        F: FnMut(&mut prism_ecs::World, f32) + 'static,
+    {
+        self.scene_systems.push((label.to_string(), Box::new(f)));
+        self
+    }
+
+    // -----------------------------------------------------------------------
+    // 启动配置 → 场景调度
+    // -----------------------------------------------------------------------
+
+    /// 解析启动配置，设置日志级别，查找并调用已注册的场景工厂。
+    fn dispatch_launch_scene(&mut self) {
+        let launch = prism_engine::launch_config::LaunchConfig::load();
+
+        // 日志级别覆盖需在 logger 初始化之后生效——RUST_LOG 在 `run` 的
+        // try_init 之前已被读取，这里再设一次让后续 logger 重新读取。
+        if let Some(level) = &launch.log_level {
+            std::env::set_var("RUST_LOG", level);
+        }
+
+        let Some(ref mut engine) = self.engine else {
+            log::warn!("engine not initialized; skipping scene dispatch");
+            return;
+        };
+
+        // 查找匹配的场景工厂
+        let mut matched = false;
+        for (name, factory) in &mut self.scene_registrations {
+            if name == &launch.scene {
+                log::info!("dispatching scene: {name}");
+                factory(engine.world_mut());
+                matched = true;
+                break;
+            }
+        }
+
+        if !matched {
+            log::warn!(
+                "unknown launch scene {:?}; registered scenes: [{}]",
+                launch.scene,
+                self.scene_registrations
+                    .iter()
+                    .map(|(n, _)| n.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            );
+        }
+
+        // 注册场景系统到引擎调度
+        for (label, system) in self.scene_systems.drain(..) {
+            engine.schedule_mut().add_system(&label, system);
+        }
+    }
+
     /// 启动事件循环（桌面入口，自建 winit EventLoop）。
     ///
-    /// 内部构造 EventLoop 并交给 [`Self::run_on`]；致命错误直接 panic。
+    /// 内部解析启动配置、调度已注册场景，然后构造 EventLoop
+    /// 并交给 [`Self::run_on`]；致命错误直接 panic。
     pub fn run(self) {
-        // 用户项目入口没有额外初始化步骤——env_logger 在这里兜底
-        // （try_init 幂等：已初始化时静默失败）。
+        // 日志兜底（try_init 幂等，已初始化时静默失败）。
         let _ = env_logger::try_init();
         let event_loop = winit::event_loop::EventLoop::new().expect("failed to create event loop");
         self.run_on(event_loop).expect("fatal application error");
     }
 
     /// 在已构建的 winit EventLoop 上运行（Android 入口用）。
+    ///
+    /// 启动前解析启动配置（`PRISMREV_LAUNCH_CONFIG` env）并调度已注册的场景。
+    ///
+    /// Android 的 `android_main` 应在调用本函数 **之前** 自行注入
+    /// `PRISMREV_LAUNCH_CONFIG` env（从 files 目录读取）。
     pub fn run_on(mut self, event_loop: winit::event_loop::EventLoop<()>) -> anyhow::Result<()> {
+        // 解析启动配置，设置日志级别，调度场景。
+        self.dispatch_launch_scene();
         event_loop.run_app(&mut self)?;
         Ok(())
     }
@@ -372,9 +474,6 @@ impl App {
         let Some(ref mut engine) = self.engine else {
             return;
         };
-        let Some(ref shared) = self.render_shared else {
-            return;
-        };
 
         // --- 同步屏幕尺寸（ECS UI 布局依赖 ScreenSize resource） ---
         if let Some(ref window) = self.window {
@@ -420,13 +519,15 @@ impl App {
             }
         }
 
-        // --- 提取帧数据包 → 发送到渲染线程 ---
-        let packet = extract_frame_packet(
-            engine.world_mut(),
-            self.display_aspect,
-            &self.surface_rotation,
-        );
-        shared.send_packet(packet);
+        // --- 提取帧数据包 → 发送到渲染线程（仅渲染启用时） ---
+        if let Some(ref shared) = self.render_shared {
+            let packet = extract_frame_packet(
+                engine.world_mut(),
+                self.display_aspect,
+                &self.surface_rotation,
+            );
+            shared.send_packet(packet);
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -585,6 +686,11 @@ impl Default for App {
 
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        if !self.render_enabled {
+            log::info!("render subsystem disabled — headless mode (no window, no GPU)");
+            return;
+        }
+
         if self.platform.is_none() {
             // 首次恢复：创建平台 + 渲染线程
             self.ensure_platform(event_loop);
@@ -782,6 +888,10 @@ impl ApplicationHandler for App {
     }
 
     fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
+        if !self.render_enabled {
+            return;
+        }
+
         // 停止后台线程。
         self.stop_io_thread();
         self.stop_audio_decode_thread();

@@ -21,12 +21,6 @@ prism-engine = { path = "../crates/prism-engine" }
 prism-ecs = { path = "../crates/prism-ecs" }
 keyframe = "1.1"
 log = "0.4"
-# build_app 在 prism-app 的 logger 兜底之前运行，先 try_init 让启动配置
-# 日志可见（幂等：已初始化时静默失败）。
-env_logger = "0.11"
-# LaunchConfig（hub 传参）的 JSON 解析。
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
 # android_main 签名类型；`android-game-activity` feature 经 prism-app 的
 # 依赖图统一启用，此处只需版本匹配。
 winit = "0.30"

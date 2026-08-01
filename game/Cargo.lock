@@ -2628,14 +2628,11 @@ dependencies = [
 name = "prismarev"
 version = "0.1.0"
 dependencies = [
- "env_logger",
  "keyframe",
  "log",
  "prism-app",
  "prism-ecs",
  "prism-engine",
- "serde",
- "serde_json",
  "winit",
 ]
 

@@ -21,6 +21,7 @@ pub mod dirty_router;
 pub mod ecs;
 pub mod engine;
 pub mod input;
+pub mod launch_config;
 pub mod render_settings;
 pub mod render_system;
 pub mod scene;

@@ -31,7 +31,9 @@ use prism_engine::config::AppConfig;
 ///
 /// 与 `prism_app::app` 相同，但注入了 [`EditorHook`]。
 pub fn editor_app(config: AppConfig) -> App {
-    prism_app::app(config).with_frame_hook(EditorHook::new())
+    prism_app::app(config)
+        .with_render_subsystem()
+        .with_frame_hook(EditorHook::new())
 }
 
 /// Desktop 编辑器入口——默认配置 + orbit camera 演示内容。

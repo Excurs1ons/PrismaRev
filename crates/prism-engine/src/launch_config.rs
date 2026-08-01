@@ -1,14 +1,14 @@
-//! 启动配置（hub → 游戏 传参）。
+//! 启动配置（hub → 游戏传参）。
 //!
 //! hub（Tauri launcher / Android hub）在拉起游戏前选择启动参数，经统一
-//! 的 JSON 通道传递，游戏侧 [`LaunchConfig::load`] 读取：
+//! 的 JSON 通道传递，引擎侧 [`LaunchConfig::load`] 自动读取：
 //!
 //! - **桌面**：launcher 以 `PRISMREV_LAUNCH_CONFIG` env 传入；
 //! - **Android**：hub 把同一份 JSON 写到 app files 目录的
 //!   `launch_config.json`（见 Kotlin `NativePlugin.launch_game`），
 //!   `android_main` 读入后注入 env，与桌面路径统一。
 //!
-//! 解析失败或缺省一律回退 [`Default`]，绝不阻止游戏启动。
+//! 解析失败或缺省一律回退 [`Default`]，绝不阻止引擎启动。
 
 use serde::{Deserialize, Serialize};
 
@@ -20,7 +20,7 @@ pub const ANDROID_CONFIG_FILE: &str = "launch_config.json";
 /// 启动配置。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LaunchConfig {
-    /// 启动场景。当前引擎只有 intro，未知值回退 intro。
+    /// 启动场景。引擎根据此字段查找已注册的场景并调度。
     #[serde(default = "default_scene")]
     pub scene: String,
     /// 日志级别覆盖（如 `"debug"` / `"warn"`）；`None` = 平台默认。
