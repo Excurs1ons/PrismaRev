@@ -55,10 +55,10 @@ env_logger = "0.11"
 # Error handling
 anyhow = "1"
 
-# Serialization / async / errors. These keys are also resolved by the
-# independent `prism-asset/` workspace crates when they are path-dependended
-# from this root workspace (e.g. prism-asset-runtime used by prism-engine).
-# Keep versions in sync with prism-asset/Cargo.toml `[workspace.dependencies]`.
+# Serialization / async / errors. These keys are shared with `crates/prism-asset`
+# (a member of this workspace); that crate declares the few it needs locally
+# (uuid, typetag, gltf, ...) and inherits the rest from here.
+# Keep versions consistent if any are overridden in prism-asset/Cargo.toml.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "1.1.4"

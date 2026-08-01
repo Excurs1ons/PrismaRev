@@ -11,8 +11,8 @@ use prism_asset::core::AssetGuid;
 use prism_asset::types::{CubeDef, MaterialDef};
 
 /// Repository-root 资源 directory.
-/// Tests are compiled from `prism-asset/prism-asset-types/`, so we 后 out.
-const ASSET_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/definitions/");
+/// Tests are compiled from `crates/prism-asset/`, so we back out two levels to the repo root.
+const ASSET_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/asset-defs/");
 
 fn asset_path(file: &str) -> String {
     let mut p = ASSET_DIR.to_owned();

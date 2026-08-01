@@ -76,7 +76,7 @@
 |----------|----------|
 | 模块化管线 | `prism-render/src/render_graph.rs`（`RenderPassNode` 图）+ `passes.rs`。**现状（2026-07-20）**：`RenderGraph::execute()` 统一驱动四个 pass（`ShadowMapPass` -> `ScenePass` -> `GtaoPass` -> `PostPass`，按注册顺序线性执行）。passes 通过 `read_usage` / `write_usage` 声明图边依赖，graph 据此自动插入跨 pass 的 `vkCmdPipelineBarrier`（layout cache 按 `(handle, image_index)` 跨帧持久，`recreate_swapchain` 时 `reset_layouts`）。跨帧延迟边（GTAO 双缓冲 AO 回喂）与 swapchain->`PRESENT_SRC_KHR` 保留手动，标注为图边界特例。环检测已实现（`validate_edges`），执行顺序不重排（接线顺序见 `GraphRenderer::new`）。资源生命周期区间已声明，TBDR 内存 aliasing 待后续。|
 | bindless / 全平台统一 | `prism-render/src/bindless.rs`（分离 SRV + 全局 sampler 表） |
-| 资源管理解耦 | `crates/prism-asset`（运行时 glTF 2.0 加载器 + `SceneStore` + `MaterialManager`），**新增** `prism-asset/*`（独立工作空间）提供离线预处理管线（Import→Cook→Package→Runtime，见 §10）。当前两套并存，`.pak` 路径尚未接入引擎。 |
+| 资源管理解耦 | `crates/prism-asset`（运行时 glTF 2.0 加载器 + `SceneStore` + `MaterialManager`），后并入**离线预处理管线**（Import→Cook→Package→Runtime，见 §10）为同一 crate 的 feature 开关。当前两套路径并存，`.pak` 路径尚未接入引擎。 |
 | 移动端 GI | **Baked probe-volume GI**（2 阶 SH，9 系数 RGB16F，3D texture），非实时 SHARC。设计见 §6。SHARC 实时 slang 已移除，不再恢复（移动端跑不动每帧 ray 填 cache）。|
 | 阴影 / RT | 光栅化阴影贴图：`ShadowMapPass`（深度预渲染，见 `shadow_depth.slang`）+ `ScenePass`（comparison sampler 采样，见 `scene_frag.slang`） |
 | 能力探测 | `prism-render/src/capabilities.rs`（集中探测，扩展中） |
@@ -532,33 +532,35 @@ pub struct SceneReadView<'a> {
 
 ---
 
-## 10. 资源管线 v2 —— 离线预处理管线（独立工作空间）
+## 10. 资源管线 v2 —— 离线预处理管线
 
-> 2026-07-25 新增。`prism-asset/` 是一个**独立工作空间**（不加入根 workspace
-> `members`），实现了编辑器侧的"导入 → 烹饪 → 打包 → 运行时加载"全流程管线，
-> 与现有 `crates/prism-asset` 运行时 glTF 加载路径并存，后续逐步取代之。
+> 2026-07-25 新增，2026-07-30 重构。原 7 个独立 crate 已合并为根 workspace 的
+> **单一成员 `crates/prism-asset`**（feature 开关对应原各 crate 职责：`core` / `runtime` /
+> `cooker` / `package` / `importer` / `db` / `cli` / `types` / `streaming` / `hot-reload`）。
+> 本节描述的是管线架构；代码按模块组织在
+> `crates/prism-asset/src/{core,runtime,cooker,package,db,importer,types}/`。
 
 ### 10.1 架构总览
 
 ```
 源文件 (Assets/)
     │
-    ▼  [Import]  ← prism-asset-importer + prism-asset-db
+    ▼  [Import]  ← importer 模块 + db 模块
   ┌─────────────┐
   │  中间格式     │  RTXI（纹理）、RMXI（网格）
   └──────┬──────┘
          │
-         ▼  [Cook]  ← prism-asset-cooker + profile
+         ▼  [Cook]  ← cooker 模块 + profile
   ┌─────────────┐
   │  运行时格式    │  RTEX（纹理 mip 链）、RMES（交错顶点）
   └──────┬──────┘
          │
-         ▼  [Package]  ← prism-asset-package
+         ▼  [Package]  ← package 模块
   ┌─────────────┐
   │  .pak 归档   │  RPAK 格式 + xxh3 校验和
   └──────┬──────┘
          │
-         ▼  [Runtime]  ← prism-asset-runtime
+         ▼  [Runtime]  ← runtime 模块
   ┌─────────────┐
   │  Handle<T>  │  懒加载 + 内存预算 + 依赖解析 + 热重载
   └─────────────┘
@@ -566,31 +568,31 @@ pub struct SceneReadView<'a> {
 
 **核心设计原则**：
 - **编辑器离线完成重计算**，运行时只读 `.pak`，零解码、零编码。
-- **运行时无编辑器依赖**（`prism-asset-runtime` 只依赖 `prism-asset-core` + `prism-asset-package`）。
+- **运行时无编辑器依赖**：`runtime` / `cooker` / `package` feature 不依赖 `db` / `importer`，
+  运行时构建保持精简。
 - **Handle<T> 与 ECS Entity 分离**：Handle 是资产生命周期概念（代沟计数 slot），
   Entity 是帧级 ECS 概念，二者不混用。
 
-### 10.2 7 个 crate 及其职责
+### 10.2 模块（feature）及其职责
 
-| crate | 职责 | 依赖 |
+| 模块（feature） | 职责 | 主要依赖 |
 |-------|------|------|
-| `prism-asset-core` | 基础类型：`AssetId`（64 bit gen+serial）、`AssetType`（8 分类）、`Handle<T>`（代沟计数）、`AssetRef` | serde, thiserror |
-| `prism-asset-db` | 编辑器资产数据库（JSON），文件→ID 索引 + 导入缓存（xxh3） | prism-asset-core |
-| `prism-asset-importer` | 导入器框架 + 内置 4 个 Importer：Texture（PNG→RTXI）、Gltf（→RMXI）、Json、Raw | prism-asset-core, prism-asset-db, image, gltf |
-| `prism-asset-cooker` | 烹饪器框架 + CookProfile 系统 + 3 个 Cooker：Texture（RTXI→RTEX+mip）、Mesh（RMXI→RMES）、Binary 直通 | prism-asset-core, prism-asset-db, prism-asset-package |
-| `prism-asset-package` | `.pak` 归档格式（RPAK），支持 zstd 压缩 + xxh3 校验和 + 依赖表 | prism-asset-core, zstd, xxhash-rust |
-| `prism-asset-runtime` | 运行时 `ResourceManager`：懒加载 `Handle<T>`、内存预算 LRU/FIFO、依赖递归解析、轮询式热重载 | prism-asset-core, prism-asset-package |
-| `prism-asset-cli` | 7 个子命令：`init` / `scan` / `import` / `build` / `validate` / `list` / `inspect` | 以上所有 + clap |
+| `core` | 基础类型：`AssetId`（64 bit gen+serial）、`AssetType`（8 分类）、`Handle<T>`（代沟计数）、`AssetRef` | serde, thiserror |
+| `db` | 编辑器资产数据库（JSON），文件→ID 索引 + 导入缓存（xxh3） | core |
+| `importer` | 导入器框架 + 内置 4 个 Importer：Texture（PNG→RTXI）、Gltf（→RMXI）、Json、Raw | core, db, image, gltf |
+| `cooker` | 烹饪器框架 + CookProfile 系统 + 3 个 Cooker：Texture（RTXI→RTEX+mip）、Mesh（RMXI→RMES）、Binary 直通 | core, db, package, image, xxhash-rust |
+| `package` | `.pak` 归档格式（RPAK），支持 zstd 压缩 + xxh3 校验和 + 依赖表 | core, zstd, xxhash-rust |
+| `runtime` | 运行时 `ResourceManager`：懒加载 `Handle<T>`、内存预算 LRU/FIFO、依赖递归解析、轮询式热重载 | core, package, tokio, tracing |
+| `cli` | CLI bin `prism-asset-cli`（`src/cli_main.rs`）：`init` / `scan` / `import` / `build` / `validate` / `list` / `inspect` | 以上所有 + clap |
 
-**工作空间配置**：`prism-asset/Cargo.toml` 定义独立 workspace，
-成员不加入根 workspace `members`。可独立构建：
+**工作空间配置**：`crates/prism-asset` 是根 workspace 的成员，通过 feature 开关组合。
 ```sh
-cd prism-asset && cargo build
-cargo test                       # 99 个测试全部通过
-cargo run -p prism-asset-cli -- init
+cargo build -p prism-asset
+cargo test -p prism-asset           # 资产管线测试全部通过
+cargo run -p prism-asset --bin prism-asset-cli -- init
 ```
 
-### 10.3 资源类型系统（prism-asset-core）
+### 10.3 资源类型系统（core 模块）
 
 **`AssetId`**（`id.rs`）：
 ```
@@ -635,7 +637,7 @@ Cooker 负责消费中间格式生成运行时格式。
 RTEX 的 mip 链由 Cooker 通过 2×2 box filter 生成（`TextureCooker::generate_mips`），
 运行时无需降采样。后期可替换为更高质量的 Kaiser/ Lanczos 滤波。
 
-### 10.6 .pak 归档格式（prism-asset-package）
+### 10.6 .pak 归档格式（package 模块）
 
 ```
 ┌─ PackageHeader ────────────────────────┬── 52 bytes ─┐
@@ -657,7 +659,7 @@ RTEX 的 mip 链由 Cooker 通过 2×2 box filter 生成（`TextureCooker::gener
 - **校验**：xxh3-64 覆盖 `header[12..] + registry + deps + data`
 - **读取**：`PackageReader` 零拷贝访问（未压缩 asset 直接 memcpy）
 
-### 10.7 Cook Profile 系统（prism-asset-cooker/src/profile.rs）
+### 10.7 Cook Profile 系统（cooker 模块，src/cooker/profile.rs）
 
 **优先级链**（高→低）：
 ```
@@ -691,7 +693,7 @@ RTEX 的 mip 链由 Cooker 通过 2×2 box filter 生成（`TextureCooker::gener
 - 内置配置由 `BUILTIN_DEFAULTS` 静态 `LazyLock<HashMap>` 承载，
   用户配置从磁盘 `profiles_dir/{name}.json` 加载
 
-### 10.8 运行时 ResourceManager（prism-asset-runtime）
+### 10.8 运行时 ResourceManager（runtime 模块）
 
 **核心流程**：
 1. `load_package("game.pak")` → 注册所有资产（填充 slot 数组 + `AssetId→index` 映射）
@@ -722,7 +724,7 @@ pub trait Asset: Sized + Send + 'static {
 ```
 内建 `impl Asset for Vec<u8>`（二进制 blob）。
 
-### 10.9 CLI 工具（prism-asset-cli）
+### 10.9 CLI 工具（cli 模块，bin: `prism-asset-cli`）
 
 | 命令 | 功能 |
 |------|------|
@@ -734,9 +736,9 @@ pub trait Asset: Sized + Send + 'static {
 | `list` | 列出数据库全部资产 |
 | `inspect <id>` | 查看单资产详情（依赖树可见） |
 
-### 10.10 与现有管线（prism-asset）的关系
+### 10.10 管线两套路径（同一 crate 内）
 
-| 维度 | 现有 `crates/prism-asset` | 新 `prism-asset/*` |
+| 维度 | 即时加载路径（`runtime`/`importer` feature） | 离线预处理路径（`cooker`/`package`/`db`/`cli` feature） |
 |------|--------------------------|--------------------------|
 | 定位 | 运行时 glTF/PNG/HDR 实时加载 | 编辑器离线预处理 → .pak |
 | 加载时机 | 应用启动时同步加载 | 编辑器离线构建，运行时按需懒加载 |
@@ -761,7 +763,7 @@ pub trait Asset: Sized + Send + 'static {
     `TextureUploadInput` 格式适配 → 走现有 `BatchUploader` 上传
   - `MeshDecoder`：解析 RMES header → 提取交错顶点 → `MeshUploadInput` 格式适配
   - `MaterialDecoder`：从 `.pak` 读取 cooked material 数据 → 填充 `MaterialUploadInput`
-  - 位置：`prism-render` 新模块或 `prism-asset-runtime` → `prism-render` 桥接层
+  - 位置：`prism-render` 新模块或 `crates/prism-asset` runtime 模块 → `prism-render` 桥接层
 
 - **[G2] Cooker 输出格式与引擎对接**：确保 `TextureCooker` 和 `MeshCooker` 输出的
   二进制格式能被 G1 的解码器正确解析，字段布局、字节对齐一一对应。
@@ -769,13 +771,13 @@ pub trait Asset: Sized + Send + 'static {
   - 添加端到端测试：cook → decode → 与现有加载结果逐字段相等
 
 - **[G3] ResourceManager → Engine 桥接**：
-  - `prism-engine` 引入 `prism-asset-runtime` 依赖
+  - `prism-engine` 经 `prism-asset`（`runtime` feature）接入 `ResourceManager`
   - 启动时检测 `game.pak` 是否存在，存在则通过 `ResourceManager` 加载
   - 加载完成后，将 `Handle<T>` 解析为 ECS Entity（现有 `load_demo_scene` 模式）
   - 走通全链路：CLI build → engine 启动 → 读取 .pak → GPU 渲染
 
 - **[G4] 构建脚本集成**：
-  - `run.ps1` / CI 脚本集成 `prism-asset-cli build` 步骤
+  - `run.ps1` / CI 脚本集成 `prism-asset-cli build` 步骤（`cargo run -p prism-asset --bin prism-asset-cli -- build ...`）
   - 开发模式跳过 `.pak` 构建（走 `prism-asset` 即时加载）
   - 发布模式强制先构建 `.pak` 再启动引擎
 
