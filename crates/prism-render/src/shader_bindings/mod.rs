@@ -8,6 +8,8 @@ pub mod gtao;
 pub mod mesh_vert;
 pub mod post;
 pub mod pt_render;
+pub mod rt_preview;
+pub mod rt_render;
 pub mod scene_frag;
 pub mod shadow_depth;
 pub mod skybox;

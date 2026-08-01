@@ -87,6 +87,13 @@ enum Command {
         /// 1.0 = all ocean; 0.7 ≈ Earth's 71% ocean) [default: 0.7]
         #[arg(long, default_value_t = 0.7)]
         sea_level: f64,
+        /// Terrain scale in meters per pixel (default 1.0 = 512px covers 512 m).
+        /// Larger values spread features over a bigger physical area.
+        #[arg(long, default_value_t = 1.0)]
+        terrain_scale: f64,
+        /// Skip erosion entirely; output the raw generated terrain.
+        #[arg(long)]
+        no_erode: bool,
     },
 }
 
@@ -134,11 +141,14 @@ fn main() -> Result<()> {
             particles,
             talus_angle,
             sea_level,
+            terrain_scale,
+            no_erode,
         } => {
             let t0 = std::time::Instant::now();
 
-            // 1. 初始地形（fbm 噪声合成，[0,1] 相对高度）
-            let terrain = prism_build_pipeline::generate_terrain(width, height, seed);
+            // 1. 生成初始地形：频率按物理地块尺度标定
+            let scale_m = width as f64 * terrain_scale;
+            let terrain = prism_build_pipeline::generate_terrain(width, height, seed, scale_m);
             log::info!(
                 "terrain: {}x{} seed={seed:#x} range=[{:.0}, {:.0}]",
                 width,
@@ -147,20 +157,25 @@ fn main() -> Result<()> {
                 terrain.max_height
             );
 
-            // 2. 水力 + 热力侵蚀
-            let params = prism_build_pipeline::ErosionParams {
+            // 2. 水力 + 热力侵蚀（--no-erode 时跳过）
+            let mut params = prism_build_pipeline::ErosionParams {
                 iterations,
                 particle_count: particles,
                 talus_angle,
                 ..Default::default()
             };
+            if no_erode {
+                params.iterations = 0;
+                params.thermal_pre_iterations = 0;
+            }
             let hm = prism_build_pipeline::generate_eroded_heightmap(terrain, &params);
             log::info!(
-                "eroded in {:?}: min={:.1} max={:.1} sea_level={:.1}",
+                "eroded in {:?}: min={:.1} max={:.1} sea_level={:.1}{}",
                 t0.elapsed(),
                 hm.min_height,
                 hm.max_height,
-                hm.sea_level
+                hm.sea_level,
+                if no_erode { " (erosion skipped)" } else { "" }
             );
 
             // 3. 映射到真实高程范围（如 −11 km ~ +8.85 km）

@@ -58,6 +58,9 @@ pub mod probe_loader;
 pub mod pt_pass;
 pub mod render_graph;
 pub mod render_pass;
+pub mod render_texture;
+pub mod rt_pass;
+pub mod rt_scheduler;
 pub mod scene_scope;
 pub mod shader;
 /// Slang-reflection-generated 绑定 constants (set/binding indices, entry

@@ -177,4 +177,17 @@ compile_stage ui_overlay vertexMain vertex
 compile_stage ui_overlay fragmentMain fragment
 emit_reflection ui_overlay vertexMain vertex fragmentMain fragment
 
+# rt_render: vertex + fragment — offscreen shader that renders a 4x4 bitmap
+# pattern (from a CPU-generated 16-bit value) into a RenderTexture. The shader
+# is target-agnostic; RenderToTexturePass binds the RT view as the attachment.
+compile_stage rt_render vertexMain vertex
+compile_stage rt_render fragmentMain fragment
+emit_reflection rt_render vertexMain vertex fragmentMain fragment
+
+# rt_preview: vertex + fragment — fullscreen consumer that samples the
+# RenderTexture through the bindless SRV table (Unity-style RT usage).
+compile_stage rt_preview vertexMain vertex
+compile_stage rt_preview fragmentMain fragment
+emit_reflection rt_preview vertexMain vertex fragmentMain fragment
+
 echo "All Slang shaders compiled. SPIR-V in $OUT, reflection JSON in $REFL"

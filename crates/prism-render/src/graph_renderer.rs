@@ -361,12 +361,35 @@ impl GraphRenderer {
         // 分发 Created with scene geometry later via set_geometry.
         let pt_pass = PathTracePass::new(&context).context("PathTracePass::new")?;
 
+        // CRT 调度器：统一渲染所有注册的 RenderTexture（Unity 式）。
+        // 演示 RT：4x4 位图图案（Realtime，每帧随机 16 位模式，CPU xorshift）。
+        let mut rt_scheduler = crate::rt_scheduler::RenderTextureScheduler::new(&context);
+        let mut rt_demo = crate::render_texture::RenderTexture::new(
+            &context,
+            bindless,
+            swapchain_extent,
+            vk::Format::R8G8B8A8_UNORM,
+        )
+        .context("RenderTexture::new")?;
+        rt_demo
+            .set_update_mode(crate::render_texture::RtUpdateMode::Realtime)
+            .set_period(1)
+            .set_update_shader(crate::render_texture::RtShader::BitmapPattern);
+        let rt_demo_handle = rt_scheduler.add(rt_demo);
+        log::info!("RT demo: 4x4 bitmap render texture registered -> {rt_demo_handle:?}");
+
+        // 消费端：全屏采样 RT（bindless）→ swapchain，验证 RT 闭环。
+        let mut rt_preview_pass = crate::rt_pass::RtPreviewPass::new(&context, color_format);
+        rt_preview_pass.set_bindless_layout(bindless.layout);
+
         // Register all passes into the 图 in 执行 order.
-        // Shadow -> Scene -> GTAO -> PathTrace -> Post.
+        // Shadow -> Scene -> GTAO -> RenderTextures -> PathTrace -> Post -> RtPreview.
         graph.add_pass(Box::new(scene_pass));
         graph.add_pass(Box::new(gtao_pass));
+        graph.add_pass(Box::new(rt_scheduler));
         graph.add_pass(Box::new(pt_pass));
         graph.add_pass(Box::new(post_pass));
+        graph.add_pass(Box::new(rt_preview_pass));
 
         Ok(Self {
             swapchain: Some(swapchain),
@@ -516,8 +539,27 @@ impl GraphRenderer {
 
         let pt_pass = PathTracePass::new(&context).context("PathTracePass::new (headless)")?;
 
+        // CRT 调度器（headless 也注册演示 RT，验证调度器在无窗口下跑通）。
+        let mut rt_scheduler = crate::rt_scheduler::RenderTextureScheduler::new(&context);
+        let mut rt_demo = crate::render_texture::RenderTexture::new(
+            &context,
+            bindless,
+            offscreen.extent,
+            vk::Format::R8G8B8A8_UNORM,
+        )
+        .context("RenderTexture::new (headless)")?;
+        rt_demo
+            .set_update_mode(crate::render_texture::RtUpdateMode::Realtime)
+            .set_period(1)
+            .set_update_shader(crate::render_texture::RtShader::BitmapPattern);
+        let rt_demo_handle = rt_scheduler.add(rt_demo);
+        log::info!(
+            "RT demo: 4x4 bitmap render texture registered (headless) -> {rt_demo_handle:?}"
+        );
+
         graph.add_pass(Box::new(scene_pass));
         graph.add_pass(Box::new(gtao_pass));
+        graph.add_pass(Box::new(rt_scheduler));
         graph.add_pass(Box::new(pt_pass));
         graph.add_pass(Box::new(post_pass));
 
@@ -918,6 +960,19 @@ impl GraphRenderer {
                     sw.extent,
                 ) {
                     log::warn!("GtaoPass recreate_target failed: {e:#}");
+                }
+            }
+            // CRT 调度器的 RenderTextures 跟随 swapchain 尺寸（演示 RT 全屏）。
+            if let Some(sched) = self
+                .graph
+                .pass_mut::<crate::rt_scheduler::RenderTextureScheduler>()
+            {
+                if let Err(e) = sched.resize_all(
+                    &self.runtime.context,
+                    self.texture_manager.bindless_mut(),
+                    sw.extent,
+                ) {
+                    log::warn!("RenderTextureScheduler resize_all failed: {e:#}");
                 }
             }
         }

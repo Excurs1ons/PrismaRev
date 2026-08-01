@@ -56,8 +56,20 @@ fn fbm(p: [f64; 2], octaves: u32, gain: f64, lacunarity: f64, seed: u64) -> f64 
 // 地形合成
 // ---------------------------------------------------------------------------
 
-/// 生成 [0, 1] 相对高度的初始地形（大尺度山体 + 中尺度山谷 + 小尺度细节）。
-pub fn generate_terrain(width: usize, height: usize, seed: u64) -> Heightmap {
+/// 生成 [0, 1] 相对高度的初始地形。
+///
+/// 频率按**物理地块尺度**标定：`scale_m` 是地块宽度（米）。
+/// 512 m 地块基准（`freq_scale = 1.0`）：
+/// - 低频骨架 `base`（~1.5 周期）：大尺度起伏约 340 m
+/// - 山脊层 `ridge` = 1 − |fbm|（~2.5 周期）：山脊间隔约 200 m
+/// - 细节层 `detail`（~10 周期）：谷地纹理约 50 m
+/// - 强域扭曲让山脊自然蜿蜒
+///
+/// 地块越大频率越低，保持相同的物理特征周期。
+pub fn generate_terrain(width: usize, height: usize, seed: u64, scale_m: f64) -> Heightmap {
+    // 频率标度：512 m 地块 → 1.0；1024 m → 0.5（相同物理周期）。
+    let freq = 512.0 / scale_m.max(1.0);
+
     // 每层用不同 seed 相位，避免各倍频对齐产生网格感。
     let seed_a = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15);
     let seed_b = seed.wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -68,13 +80,24 @@ pub fn generate_terrain(width: usize, height: usize, seed: u64) -> Heightmap {
         let ny = y as f64 / height as f64;
         for x in 0..width {
             let nx = x as f64 / width as f64;
-            // 域扭曲：用低频噪声偏移采样坐标，产生更自然的山脊走向。
-            let warp = 0.15 * fbm([nx * 2.0, ny * 2.0], 4, 0.5, 2.0, seed_a);
+            // 域扭曲：低频噪声偏移采样坐标，山脊走向随之蜿蜒。
+            let warp = 0.5 * fbm([nx * 2.0, ny * 2.0], 4, 0.5, 2.0, seed_a);
             let q = [nx + warp, ny + warp];
 
-            let e = 0.62 * fbm([q[0] * 4.0, q[1] * 4.0], 6, 0.5, 2.0, seed_a)
-                + 0.28 * fbm([q[0] * 12.0, q[1] * 12.0], 4, 0.5, 2.0, seed_b)
-                + 0.10 * fbm([q[0] * 36.0, q[1] * 36.0], 3, 0.5, 2.0, seed_c);
+            let base = fbm([q[0] * 1.5 * freq, q[1] * 1.5 * freq], 5, 0.5, 2.0, seed_a);
+            // 山脊噪声：|fbm| 取反 → f=0 处为脊线（1.0），两侧滑落（0.0）。
+            let ridge =
+                1.0 - fbm([q[0] * 2.5 * freq, q[1] * 2.5 * freq], 5, 0.5, 2.0, seed_b).abs();
+            let detail = fbm(
+                [q[0] * 10.0 * freq, q[1] * 10.0 * freq],
+                3,
+                0.5,
+                2.0,
+                seed_c,
+            );
+
+            // base ∈ [−1,1]；ridge ∈ [0,1] → 平移/缩放回 [−1,1]；detail ∈ [−1,1]
+            let e = 0.40 * base + 0.45 * (2.0 * ridge - 1.0) + 0.15 * detail;
             data.push(e);
         }
     }
@@ -95,7 +118,7 @@ mod tests {
 
     #[test]
     fn terrain_bounds_and_size() {
-        let hm = generate_terrain(128, 96, 42);
+        let hm = generate_terrain(128, 96, 42, 128.0);
         assert_eq!(hm.width, 128);
         assert_eq!(hm.height, 96);
         assert_eq!(hm.data.len(), 128 * 96);
@@ -108,8 +131,8 @@ mod tests {
 
     #[test]
     fn terrain_seed_variation() {
-        let a = generate_terrain(64, 64, 1);
-        let b = generate_terrain(64, 64, 2);
+        let a = generate_terrain(64, 64, 1, 64.0);
+        let b = generate_terrain(64, 64, 2, 64.0);
         let same = a
             .data
             .iter()
@@ -125,8 +148,8 @@ mod tests {
 
     #[test]
     fn terrain_deterministic() {
-        let a = generate_terrain(64, 64, 7);
-        let b = generate_terrain(64, 64, 7);
+        let a = generate_terrain(64, 64, 7, 64.0);
+        let b = generate_terrain(64, 64, 7, 64.0);
         assert_eq!(a.data, b.data);
     }
 }

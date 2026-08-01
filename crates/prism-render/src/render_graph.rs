@@ -154,6 +154,8 @@ pub enum PassKind {
     Post,
     /// Real-time path tracing 计算 pass (`PathTracePass`).
     Pt,
+    /// 离屏 RenderTexture 渲染 (`RenderToTexturePass`).
+    Rt,
     /// Unrecognized pass future / experimental).
     #[default]
     Unknown,
@@ -691,6 +693,11 @@ pub struct GraphResources {
     /// downstream passes that 发射 布局 barriers (which 引用 the 图像
     /// not the 视图
     pub images: HashMap<ResourceHandle, vk::Image>,
+    /// Pass-published scalar values (e.g. bindless slots), keyed by
+    /// `ResourceHandle`. Generic handle handoff for producers → consumers
+    /// that don't map to a Vulkan handle (see `RenderToTexturePass` → the
+    /// `TextureHandle` it publishes under `RT_OUTPUT_H`).
+    pub params: HashMap<ResourceHandle, u32>,
 }
 
 impl GraphResources {
@@ -720,6 +727,17 @@ impl GraphResources {
     /// 读取 an 图像 published by an upstream pass
     pub fn published_image(&self, h: ResourceHandle) -> Option<vk::Image> {
         self.images.get(&h).copied()
+    }
+
+    /// 发布 a scalar value under a handle (e.g. a bindless slot) so downstream
+    /// passes can 读取 it without knowing the producer's internals.
+    pub fn set_param(&mut self, h: ResourceHandle, value: u32) {
+        self.params.insert(h, value);
+    }
+
+    /// 读取 a scalar published by an upstream pass.
+    pub fn param(&self, h: ResourceHandle) -> Option<u32> {
+        self.params.get(&h).copied()
     }
 }
 
@@ -1113,6 +1131,7 @@ impl RenderGraph {
             resources: self.resources.clone(),
             image_views: HashMap::new(),
             images: HashMap::new(),
+            params: HashMap::new(),
         };
 
         // 快照 of pass_idx -> 写入 edges, so borrows of `self.edges` don't

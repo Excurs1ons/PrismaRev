@@ -124,9 +124,12 @@ impl RenderGraphViz {
             PassKind::Pt => {
                 // PathTracePass has no tracked metadata we can cheaply 读取
                 // via pass_ref (its fields are mostly Vulkan handles). Show
-                // a placeholder 音符 so the pass appears in the 图
                 d.notes.push("real-time PT compute (1 sample/frame)".into());
                 d.notes.push("temporal accumulation".into());
+            }
+            PassKind::Rt => {
+                d.notes
+                    .push("CRT scheduler: RenderTextures (Unity-style)".into());
             }
             PassKind::Unknown => {}
         }
@@ -500,6 +503,7 @@ fn node_color(kind: PassKind) -> Color32 {
         PassKind::Gtao => Color32::from_rgb(180, 140, 220),
         PassKind::Post => Color32::from_rgb(120, 220, 180),
         PassKind::Pt => Color32::from_rgb(240, 200, 80),
+        PassKind::Rt => Color32::from_rgb(80, 200, 240),
         PassKind::Unknown => Color32::from_gray(160),
     }
 }
