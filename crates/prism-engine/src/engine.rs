@@ -96,9 +96,12 @@ impl Engine {
     ///
     /// Restores persisted scene 状态 and loads the 第一个 scene from the
     /// manifest.  Requires a [`ResourceManager`] for `.pak`‑backed scenes.
+    /// 构建默认 [`ComponentRegistry`] 用于反序列化场景文件中的组件。
     pub fn init_scene(&mut self, rm: &mut prism_asset::runtime::ResourceManager) {
+        let mut registry = crate::scene::ComponentRegistry::new();
+        crate::scene::register_builtin_components(&mut registry);
         crate::scene_state::load_scene_state(&mut self.world);
-        self.current_scene_name = load_scene_from_manifest(rm, &mut self.world);
+        self.current_scene_name = load_scene_from_manifest(rm, &mut self.world, &registry);
     }
 
     /// **Phase 5** — 运行时 init: final "everything is ready" hook.
@@ -443,7 +446,7 @@ fn find_and_parse_manifest() -> Option<(std::path::PathBuf, SceneManifest)> {
     Some((manifest_dir, manifest))
 }
 
-fn load_scene_from_manifest(rm: &mut ResourceManager, world: &mut World) -> Option<String> {
+fn load_scene_from_manifest(rm: &mut ResourceManager, world: &mut World, registry: &crate::scene::ComponentRegistry) -> Option<String> {
     let manifest_path = CANDIDATE_DIRS
         .iter()
         .map(|d| std::path::Path::new(d).join("scenes.toml"))
@@ -483,19 +486,20 @@ fn load_scene_from_manifest(rm: &mut ResourceManager, world: &mut World) -> Opti
             .as_ref()
             .map(|d| d.join(&entry.path))
             .unwrap_or_else(|| std::path::PathBuf::from(&entry.path));
-        let is_rscn = path
+        let ext = path
             .extension()
             .and_then(|e| e.to_str())
-            .map(|e| e.eq_ignore_ascii_case("rscn"))
-            .unwrap_or(false);
-        if !is_rscn {
-            log::info!("scene '{}': skipping non-RSCN path {:?}", entry.name, path);
+            .map(|e| e.to_ascii_lowercase())
+            .unwrap_or_default();
+        let is_scene_file = ext == "rscn" || ext == "scene.json";
+        if !is_scene_file {
+            log::info!("scene '{}': skipping unsupported path {:?}", entry.name, path);
             continue;
         }
         let loaded = if rm.id_by_path(&entry.path).is_some() {
-            load_scene_from_rm(rm, world, &entry.path)
+            load_scene_from_rm(rm, world, &entry.path, registry)
         } else if path.exists() {
-            load_scene_from_file(world, &path)
+            load_scene_from_file(world, &path, registry)
         } else {
             log::info!(
                 "scene '{}' -> {:?} not found in .pak or on disk",
@@ -528,6 +532,7 @@ fn load_scene_from_rm(
     rm: &mut ResourceManager,
     world: &mut World,
     asset_path: &str,
+    registry: &crate::scene::ComponentRegistry,
 ) -> Result<crate::scene::loader::SceneInstance, anyhow::Error> {
     use anyhow::Context;
     let id = rm
@@ -544,6 +549,7 @@ fn load_scene_from_rm(
         .load_and_spawn(
             world,
             crate::scene::loader::SceneSource::RawCooked(asset.bytes.clone()),
+            registry,
         )
         .map_err(|e| anyhow::anyhow!("{e}"))
 }
@@ -551,13 +557,15 @@ fn load_scene_from_rm(
 fn load_scene_from_file(
     world: &mut World,
     path: &std::path::Path,
+    registry: &crate::scene::ComponentRegistry,
 ) -> Result<crate::scene::loader::SceneInstance, anyhow::Error> {
     let mut loader = crate::scene::loader::SceneLoader::new();
+    let source = match path.extension().and_then(|e| e.to_str()) {
+        Some("json") => crate::scene::loader::SceneSource::JsonFile(path.to_path_buf()),
+        _ => crate::scene::loader::SceneSource::CookedFile(path.to_path_buf()),
+    };
     loader
-        .load_and_spawn(
-            world,
-            crate::scene::loader::SceneSource::CookedFile(path.to_path_buf()),
-        )
+        .load_and_spawn(world, source, registry)
         .map_err(|e| anyhow::anyhow!("{e}"))
 }
 

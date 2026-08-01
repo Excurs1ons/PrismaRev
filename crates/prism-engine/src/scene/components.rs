@@ -13,6 +13,7 @@
 
 use prism_ecs::Entity;
 use prism_render::managers::MeshHandle;
+use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
 // SceneAssetId
@@ -23,7 +24,7 @@ use prism_render::managers::MeshHandle;
 /// 这是本地副本，以便场景模块不依赖于独立的 `prism-asset-core` 工作区。
 /// 一旦 .pak 运行时管线（DESIGN.md §10.11 G1–G3）连接两个工作区，
 /// 它将被真正的 `AssetId` 替换。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SceneAssetId(pub u64);
 
 impl SceneAssetId {
@@ -68,7 +69,7 @@ impl Default for Children {
 // ---------------------------------------------------------------------------
 
 /// 局部 变换 相对 to the parent 实体 (or world-space for roots).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LocalTransform {
     pub translation: glam::Vec3,
     /// 四元数 Identity = `glam::Quat::IDENTITY`.
@@ -133,7 +134,7 @@ pub struct MaterialRef {
 ///
 /// Defaults to `true`. 集合 to `false` to hide an 实体 without despawning it
 /// (the 实体 and its components remain in the 世界
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Active(pub bool);
 
 impl Default for Active {
@@ -176,7 +177,7 @@ impl MeshRenderer {
 ///
 /// Orientation is stored as XYZ Euler angles 角度 so it round-trips
 /// cleanly through `scene_state.json`.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct DirectionalLight {
     /// XYZ Euler angles 角度 音高 (X), yaw (Y), roll (Z).
     pub euler_xyz: glam::Vec3,
@@ -200,7 +201,7 @@ impl Default for DirectionalLight {
 }
 
 /// Point 光源
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct PointLight {
     /// 线性 RGB 颜色
     pub color: glam::Vec3,
@@ -221,7 +222,7 @@ impl Default for PointLight {
 }
 
 /// Spot 光源
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct SpotLight {
     pub color: glam::Vec3,
     pub intensity: f32,
@@ -258,7 +259,7 @@ impl Default for SpotLight {
 /// 宽高比 is a 运行时 cache written by the app on 调整大小 it is exposed in
 /// 检查器视为只读。启用标志控制渲染器是否拾取
 /// this 相机
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Camera {
     pub fov_y_degrees: f32,
     pub near: f32,
@@ -294,7 +295,7 @@ impl Default for Camera {
 /// 输入 while `move_speed`/`look_sensitivity` are editor-editable. The
 /// 相机 position lives on the sibling [`LocalTransform`] (and its derived
 /// [`WorldTransform`]), so this 分量 carries no position of its own.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct FlyCameraController {
     /// Yaw around +Y (rad). 0 = looking 下 -Z (matches `FlyCamera`).
     pub yaw: f32,
@@ -342,7 +343,7 @@ pub struct Name(pub String);
 /// the cooked RSCN data (will be removed once the 完整 .pak 运行时 is wired).
 ///
 /// Typically there is exactly one skybox 实体 per scene.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Skybox {
     /// 资源 ID of the 高动态范围 environment 映射表 in the 资源 系统
     ///

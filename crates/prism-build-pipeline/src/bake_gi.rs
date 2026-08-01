@@ -76,10 +76,12 @@ pub fn bake_gi(cfg: &BakeGiConfig) -> Result<()> {
     rm.load_package(&cfg.pak_path)
         .with_context(|| format!("load package {}", cfg.pak_path.display()))?;
 
+    let mut registry = prism_engine::scene::ComponentRegistry::new();
+    prism_engine::scene::register_builtin_components(&mut registry);
     let source = prism_engine::scene::loader::SceneSource::CookedFile(cfg.rscn_path.clone());
     let mut loader = SceneLoader::new();
     loader
-        .load_and_spawn(&mut world, source)
+        .load_and_spawn(&mut world, source, &registry)
         .map_err(|e| anyhow::anyhow!("load scene into ECS: {e}"))?;
 
     // Run hierarchy system to compute WorldTransform from LocalTransform + Parent.

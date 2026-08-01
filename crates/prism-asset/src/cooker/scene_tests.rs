@@ -47,21 +47,26 @@
                 "name": "Child",
                 "parent": 0,
                 "transform": { "translation": [2,0,0], "rotation": [0,0,0,1], "scale": [1,1,1] },
-                "mesh": "meshes/box.gltf",
-                "material": "materials/plastic.mat"
+                "components": {
+                    "prism_engine::scene::Active": true
+                }
             },
             {
                 "name": "Sun",
                 "parent": null,
                 "transform": { "translation": [10,10,10], "rotation": [0,0,0,1], "scale": [1,1,1] },
-                "light": { "type": "directional", "color": [1,0.95,0.9], "intensity": 3.0 },
-                "camera": { "type": "perspective", "fov_y_degrees": 60.0, "near": 0.1, "far": 1000.0 }
+                "components": {
+                    "prism_engine::scene::DirectionalLight": {"euler_xyz": [0,0,0], "color": [1,0.95,0.9], "intensity": 3.0, "ambient": 1.0},
+                    "prism_engine::scene::Camera": {"fov_y_degrees": 60.0, "near": 0.1, "far": 1000.0, "exposure": 1.0, "aspect": 1.777, "enabled": true}
+                }
             },
             {
                 "name": "Spotlight",
                 "parent": 2,
                 "transform": { "translation": [0,5,0], "rotation": [0,0,0,1], "scale": [1,1,1] },
-                "light": { "type": "spot", "color": [0.9,0.9,1], "intensity": 200.0, "range": 50.0, "inner_cone_angle": 0.2, "outer_cone_angle": 0.5 }
+                "components": {
+                    "prism_engine::scene::SpotLight": {"color": [0.9,0.9,1], "intensity": 200.0, "range": 50.0, "inner_cone_angle": 0.2, "outer_cone_angle": 0.6}
+                }
             }
         ]
     }"#;
@@ -84,7 +89,7 @@
 
         // 验证 RSCN magic.
         assert_eq!(&result.cooked_data[..4], b"RSCN");
-        assert_eq!(result.cooked_data[4], 2); // version (v2 = skybox support)
+        assert_eq!(result.cooked_data[4], 3); // v3
         assert!(result.compress);
 
         // 实体 count.
@@ -101,12 +106,9 @@
         let header = parse_rscn_header(&result.cooked_data).unwrap();
         assert_eq!(header.entity_count, 4);
 
-        // Walk entities in order, extracting parent indexes.
+        // Walk entities, extracting parent indexes.
         let data = &result.cooked_data;
         let mut off = 9usize; // skip magic + version + entity_count
-                              // v2 header: skip env_len + env_path.
-        let env_len = u16::from_le_bytes(data[off..off + 2].try_into().unwrap()) as usize;
-        off += 2 + env_len;
         let mut parents = Vec::new();
 
         for _ in 0..header.entity_count {
@@ -119,31 +121,19 @@
             off += 4;
             parents.push(parent);
 
-            // 变换 tx(12) + rot(16) + scale(12).
+            // Transform tx(12) + rot(16) + scale(12).
             off += 40;
 
-            // Flags.
-            let flags = data[off];
-            off += 1;
+            // Component count.
+            let comp_count = u16::from_le_bytes(data[off..off + 2].try_into().unwrap()) as usize;
+            off += 2;
 
-            // Skip optional components based on flags.
-            let skip_str = |off: &mut usize| {
-                let len = u16::from_le_bytes(data[*off..*off + 2].try_into().unwrap()) as usize;
-                *off += 2 + len;
-            };
-            if flags & FLAG_HAS_MESH != 0 {
-                skip_str(&mut off);
-            }
-            if flags & FLAG_HAS_MATERIAL != 0 {
-                skip_str(&mut off);
-            }
-            if flags & FLAG_HAS_LIGHT != 0 {
-                // type(1) + color(12) + intensity(4) + range(4) + inner_cone(4) + outer_cone(4)
-                off += 29;
-            }
-            if flags & FLAG_HAS_CAMERA != 0 {
-                // fov(4) + near(4) + far(4)
-                off += 12;
+            // Skip each component (id_len + id + data_len + data).
+            for _ in 0..comp_count {
+                let id_len = u16::from_le_bytes(data[off..off + 2].try_into().unwrap()) as usize;
+                off += 2 + id_len;
+                let data_len = u32::from_le_bytes(data[off..off + 4].try_into().unwrap()) as usize;
+                off += 4 + data_len;
             }
         }
 
@@ -165,7 +155,6 @@
 
     #[test]
     fn scene_cooker_rejects_invalid_hierarchy() {
-        // Self-parent.
         let json = br#"{
             "version": 1,
             "entities": [{
@@ -215,7 +204,6 @@
 
     #[test]
     fn scene_cooker_with_nameless_entity() {
-        // 实体 with no name field.
         let json = br#"{
             "version": 1,
             "entities": [{
@@ -230,15 +218,16 @@
 
     #[test]
     fn scene_cooker_light_and_camera_roundtrip_size() {
-        // Single 实体 with both 光源 and 相机
         let json = br#"{
             "version": 1,
             "entities": [{
                 "name": "CamLight",
                 "parent": null,
                 "transform": {},
-                "light": {"type": "point", "color": [1,0,0], "intensity": 100.0, "range": 20.0},
-                "camera": {"type": "perspective", "fov_y_degrees": 45.0, "near": 0.01, "far": 500.0}
+                "components": {
+                    "prism_engine::scene::PointLight": {"color": [1,0,0], "intensity": 100.0, "range": 20.0},
+                    "prism_engine::scene::Camera": {"fov_y_degrees": 45.0, "near": 0.01, "far": 500.0, "exposure": 1.0, "aspect": 1.777, "enabled": true}
+                }
             }]
         }"#;
         let result = cook_scene_json(json).unwrap();
@@ -247,7 +236,7 @@
         assert_eq!(header.entity_count, 1);
 
         // The data should have some 大小 (not just the header).
-        assert!(result.cooked_data.len() > 11);
+        assert!(result.cooked_data.len() > 9);
     }
 
     #[test]
@@ -262,7 +251,6 @@
 
     #[test]
     fn scene_cooker_topological_sort_depth() {
-        // Grandparent (0) → Parent (1) → Child (2)
         let json = br#"{
             "version": 1,
             "entities": [

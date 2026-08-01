@@ -5,10 +5,12 @@
 //! Layout System 读取 Style → 写入 ComputedLayout
 //! Render System 读取 ComputedLayout + Text → 生成绘制命令
 
+use serde::{Deserialize, Serialize};
+
 // ── 标记组件 ─────────────────────────────────────────────────
 
 /// **标记**：此 Entity 是 UI 元素。Layout System 只查询有此组件的实体。
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct Node;
 
 /// **父子关系**：UI 子元素指向父元素 Entity。
@@ -18,7 +20,7 @@ pub struct UiParent(pub prism_ecs::Entity);
 // ── 锚点系统 ─────────────────────────────────────────────────
 
 /// 锚点角 —— 定义子元素边相对于父边的位置（0..=1 归一化）。
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct Anchors {
     /// 水平起始角（0 = 父左，1 = 父右）
     pub min_x: f32,
@@ -68,7 +70,7 @@ impl Default for Anchors {
 }
 
 /// Pivot —— 旋转/缩放/定位的中心点（归一化 0..=1）。
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct Pivot {
     pub x: f32,
     pub y: f32,
@@ -86,7 +88,7 @@ impl Default for Pivot {
 }
 
 /// 边距（像素）。
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
 pub struct Margin {
     pub left: f32,
     pub right: f32,
@@ -97,7 +99,7 @@ pub struct Margin {
 // ── Style ─────────────────────────────────────────────────────
 
 /// UI 元素的视觉和布局属性。
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Style {
     /// 固定宽度（px）。`None` = 由锚点决定。
     pub width: Option<f32>,
@@ -153,7 +155,7 @@ impl Style {
 // ── ComputedLayout ────────────────────────────────────────────
 
 /// **Layout System 输出**：最终屏幕空间矩形（像素）。
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
 pub struct ComputedLayout {
     /// 屏幕空间边界 `[left, top, width, height]`
     pub rect: [f32; 4],
@@ -177,7 +179,7 @@ impl ComputedLayout {
 // ── Text ──────────────────────────────────────────────────────
 
 /// 文本内容。
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Text {
     pub content: String,
     pub font_size: f32,
@@ -196,7 +198,7 @@ impl Default for Text {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
 pub enum TextAlign {
     #[default]
     Center,

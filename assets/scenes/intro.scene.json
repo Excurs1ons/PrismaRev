@@ -1,0 +1,78 @@
+{
+  "version": 1,
+  "entities": [
+    {
+      "name": "intro_overlay",
+      "parent": null,
+      "transform": { "translation": [0,0,0], "rotation": [0,0,0,1], "scale": [1,1,1] },
+      "components": {
+        "prism_engine::ui::Node": {},
+        "prism_engine::ui::Style": { "background": [0,0,0,1] },
+        "prism_engine::ui::ComputedLayout": {}
+      }
+    },
+    {
+      "name": "intro_title",
+      "parent": null,
+      "transform": { "translation": [0,0,0], "rotation": [0,0,0,1], "scale": [1,1,1] },
+      "components": {
+        "prism_engine::ui::Node": {},
+        "prism_engine::ui::Style": {
+          "width": 900, "height": 108,
+          "anchors": { "min_x": 0.5, "min_y": 0.5, "max_x": 0.5, "max_y": 0.5 },
+          "pivot": { "x": 0.5, "y": 0.5 },
+          "margin": { "top": -16, "left": 0, "right": 0, "bottom": 0 }
+        },
+        "prism_engine::ui::ComputedLayout": {},
+        "prism_engine::ui::Text": {
+          "content": "PrismaRev",
+          "font_size": 84,
+          "color": [0.91, 0.925, 0.957, 1.0],
+          "alignment": "Center"
+        }
+      }
+    },
+    {
+      "name": "intro_subtitle",
+      "parent": null,
+      "transform": { "translation": [0,0,0], "rotation": [0,0,0,1], "scale": [1,1,1] },
+      "components": {
+        "prism_engine::ui::Node": {},
+        "prism_engine::ui::Style": {
+          "width": 900, "height": 42,
+          "anchors": { "min_x": 0.5, "min_y": 0.5, "max_x": 0.5, "max_y": 0.5 },
+          "pivot": { "x": 0.5, "y": 0.5 },
+          "margin": { "top": 48, "left": 0, "right": 0, "bottom": 0 }
+        },
+        "prism_engine::ui::ComputedLayout": {},
+        "prism_engine::ui::Text": {
+          "content": "Vulkan 实时渲染引擎",
+          "font_size": 18,
+          "color": [0.604, 0.651, 0.769, 1.0],
+          "alignment": "Center"
+        }
+      }
+    },
+    {
+      "name": "intro_prompt",
+      "parent": null,
+      "transform": { "translation": [0,0,0], "rotation": [0,0,0,1], "scale": [1,1,1] },
+      "components": {
+        "prism_engine::ui::Node": {},
+        "prism_engine::ui::Style": {
+          "width": 900, "height": 38,
+          "anchors": { "min_x": 0.5, "min_y": 1.0, "max_x": 0.5, "max_y": 1.0 },
+          "pivot": { "x": 0.5, "y": 0.5 },
+          "margin": { "top": -48, "left": 0, "right": 0, "bottom": 0 }
+        },
+        "prism_engine::ui::ComputedLayout": {},
+        "prism_engine::ui::Text": {
+          "content": "按任意键或点击继续",
+          "font_size": 14,
+          "color": [0.604, 0.651, 0.769, 1.0],
+          "alignment": "Center"
+        }
+      }
+    }
+  ]
+}

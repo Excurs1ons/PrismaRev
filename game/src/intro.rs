@@ -1,171 +1,28 @@
 //! 开场 intro screen：黑场淡出 → 标题上浮 → 停留 → 淡出，任意键/点击跳过。
 //!
-//! 纯 ECS UI：main 里调用 [`spawn_ui`] 生成 UI 实体（全屏黑场 + 标题/副标题/
-//! 提示三个文本实体），[`advance`] system 每帧推进 keyframe 动画并写回
-//! `Style` / `Text` 组件——布局由 `ui::layout` 系统消费，绘制由
-//! `ui::render` → overlay pass 消费，本模块不碰任何 egui。
-//!
-//! 动画值全部由 keyframe `AnimationSequence<f32>` 驱动——每条属性一条
-//! 时间轴（`keyframes!` 宏），一条曲线覆盖整个 intro（淡入→停留→淡出）；
-//! 跳过 = `advance_to(duration)` 直接快进到结尾。
+//! 实体由 `assets/scenes/intro.scene.json` 加载（4 个 UI 实体：黑场 + 标题 +
+//! 副标题 + 提示）。[`advance`] system 每帧按 `Name` 组件查找实体，推进
+//! keyframe 动画并写回 `Style` / `Text` 组件。
 
 use keyframe::functions::{EaseInCubic, EaseInOutCubic, EaseOutCubic};
 use keyframe::{keyframes, AnimationSequence};
 use prism_ecs::{Entity, World};
-use prism_engine::ui::{
-    Anchors, ComputedLayout, Margin, Node, Pivot, Style, Text, TextAlign, UiInputState,
-};
-
-/// intro 参数。
-#[derive(Clone, Debug)]
-pub struct IntroConfig {
-    /// 主标题。
-    pub title: String,
-    /// 副标题。
-    pub subtitle: String,
-    /// 底部跳过提示。
-    pub prompt: String,
-    /// 黑场淡出 + 标题上浮时长（秒）。
-    pub fade_in: f32,
-    /// 标题停留时长（秒）。
-    pub hold: f32,
-    /// 标题淡出时长（秒）。
-    pub fade_out: f32,
-}
-
-impl Default for IntroConfig {
-    fn default() -> Self {
-        Self {
-            title: "PrismaRev".into(),
-            subtitle: "Vulkan 实时渲染引擎".into(),
-            prompt: "按任意键或点击继续".into(),
-            fade_in: 0.9,
-            hold: 1.6,
-            fade_out: 0.6,
-        }
-    }
-}
+use prism_engine::scene::components::Name;
+use prism_engine::ui::{Style, Text, UiInputState};
 
 /// 标题初始位置（margin.top，CENTER 锚点下负值 = 中心上方）。
 const TITLE_BASE_MARGIN: f32 = -16.0;
 /// 副标题相对标题的纵向间距（px）。
 const SUBTITLE_OFFSET: f32 = 64.0;
 /// 跳过提示离底部的距离（px）。
-const PROMPT_BOTTOM_MARGIN: f32 = -48.0;
 
-/// 生成 intro 的 UI 实体并返回驱动状态（作为 World resource 插入）。
-pub fn spawn_ui(world: &mut World, cfg: IntroConfig) -> IntroState {
-    // 全屏黑场：STRETCH 锚点 + 纯黑背景。
-    let overlay_entity = world.spawn();
-    world.insert(overlay_entity, Node);
-    world.insert(
-        overlay_entity,
-        Style {
-            background: [0.0, 0.0, 0.0, 1.0],
-            ..Default::default()
-        },
-    );
-    world.insert(overlay_entity, ComputedLayout::default());
+/// 各实体的 `Name` 组件值（与 intro.scene.json 一致）。
+const ENTITY_OVERLAY: &str = "intro_overlay";
+const ENTITY_TITLE: &str = "intro_title";
+const ENTITY_SUBTITLE: &str = "intro_subtitle";
+const ENTITY_PROMPT: &str = "intro_prompt";
 
-    // 三个文本实体：固定宽度容器 + CENTER/BOTTOM_CENTER 锚点。
-    let title_entity = spawn_text(
-        world,
-        cfg.title.clone(),
-        84.0,
-        [232.0 / 255.0, 236.0 / 255.0, 244.0 / 255.0, 1.0],
-        TITLE_BASE_MARGIN,
-        Anchors::CENTER,
-    );
-    let subtitle_entity = spawn_text(
-        world,
-        cfg.subtitle.clone(),
-        18.0,
-        [154.0 / 255.0, 166.0 / 255.0, 196.0 / 255.0, 1.0],
-        TITLE_BASE_MARGIN + SUBTITLE_OFFSET,
-        Anchors::CENTER,
-    );
-    let prompt_entity = spawn_text(
-        world,
-        cfg.prompt.clone(),
-        14.0,
-        [154.0 / 255.0, 166.0 / 255.0, 196.0 / 255.0, 1.0],
-        PROMPT_BOTTOM_MARGIN,
-        Anchors::BOTTOM_CENTER,
-    );
-
-    let (fade_in, hold, fade_out) = (cfg.fade_in, cfg.hold, cfg.fade_out);
-    let hold_end = fade_in + hold;
-
-    // 每条属性一条时间轴：淡入 → 停留 → 淡出 的完整曲线。
-    let overlay = keyframes![
-        (1.0, 0.0, EaseInOutCubic),
-        (0.0, fade_in),
-        (0.0, hold_end + fade_out)
-    ];
-    let title_opacity = keyframes![
-        (0.0, 0.0, EaseOutCubic),
-        (1.0, fade_in),
-        (1.0, hold_end, EaseInCubic),
-        (0.0, hold_end + fade_out)
-    ];
-    let title_y = keyframes![
-        (24.0, 0.0, EaseOutCubic),
-        (0.0, fade_in),
-        (0.0, hold_end, EaseInCubic),
-        (-24.0, hold_end + fade_out)
-    ];
-
-    IntroState {
-        overlay,
-        title_opacity,
-        title_y,
-        skip: false,
-        overlay_entity,
-        title_entity,
-        subtitle_entity,
-        prompt_entity,
-    }
-}
-
-/// 生成一个文本 UI 实体：固定宽度容器 + 指定锚点/边距。
-fn spawn_text(
-    world: &mut World,
-    content: String,
-    font_size: f32,
-    color: [f32; 4],
-    top_margin: f32,
-    anchors: Anchors,
-) -> Entity {
-    let entity = world.spawn();
-    world.insert(entity, Node);
-    world.insert(
-        entity,
-        Style {
-            width: Some(900.0),
-            height: Some(font_size + 24.0),
-            anchors,
-            pivot: Pivot::CENTER,
-            margin: Margin {
-                top: top_margin,
-                ..Default::default()
-            },
-            ..Default::default()
-        },
-    );
-    world.insert(entity, ComputedLayout::default());
-    world.insert(
-        entity,
-        Text {
-            content,
-            font_size,
-            color,
-            alignment: TextAlign::Center,
-        },
-    );
-    entity
-}
-
-/// intro 状态（ECS World 资源）——持有动画时间轴 + 受控 UI 实体。
+/// intro 动画状态（ECS World 资源）——持有动画时间轴 + 受控 UI 实体。
 pub struct IntroState {
     /// 全屏黑场 alpha（1 = 全黑）。
     overlay: AnimationSequence<f32>,
@@ -186,7 +43,6 @@ impl IntroState {
     fn tick(&mut self, dt: f32) {
         if self.skip {
             self.skip = false;
-            // 跳过：快进到时间轴结尾，intro 直接结束。
             self.overlay.advance_to(self.overlay.duration());
             self.title_opacity.advance_to(self.title_opacity.duration());
             self.title_y.advance_to(self.title_y.duration());
@@ -201,11 +57,78 @@ impl IntroState {
     }
 }
 
+/// 在第一帧按 Name 查找场景实体，构造 IntroState。
+fn initialize_intro(world: &mut World) -> Option<IntroState> {
+    let mut entities: std::collections::HashMap<&str, Entity> = std::collections::HashMap::new();
+
+    for (entity, name) in world.query::<Name>() {
+        match name.0.as_str() {
+            ENTITY_OVERLAY => { entities.insert(ENTITY_OVERLAY, entity); }
+            ENTITY_TITLE => { entities.insert(ENTITY_TITLE, entity); }
+            ENTITY_SUBTITLE => { entities.insert(ENTITY_SUBTITLE, entity); }
+            ENTITY_PROMPT => { entities.insert(ENTITY_PROMPT, entity); }
+            _ => {}
+        }
+    }
+
+    let overlay_entity = *entities.get(ENTITY_OVERLAY)?;
+    let title_entity = *entities.get(ENTITY_TITLE)?;
+    let subtitle_entity = *entities.get(ENTITY_SUBTITLE)?;
+    let prompt_entity = *entities.get(ENTITY_PROMPT)?;
+
+    log::info!("intro: found all 4 UI entities");
+
+    let fade_in = 0.9;
+    let hold = 1.6;
+    let fade_out = 0.6;
+    let hold_end = fade_in + hold;
+
+    let overlay = keyframes![
+        (1.0, 0.0, EaseInOutCubic),
+        (0.0, fade_in),
+        (0.0, hold_end + fade_out)
+    ];
+    let title_opacity = keyframes![
+        (0.0, 0.0, EaseOutCubic),
+        (1.0, fade_in),
+        (1.0, hold_end, EaseInCubic),
+        (0.0, hold_end + fade_out)
+    ];
+    let title_y = keyframes![
+        (24.0, 0.0, EaseOutCubic),
+        (0.0, fade_in),
+        (0.0, hold_end, EaseInCubic),
+        (-24.0, hold_end + fade_out)
+    ];
+
+    Some(IntroState {
+        overlay,
+        title_opacity,
+        title_y,
+        skip: false,
+        overlay_entity,
+        title_entity,
+        subtitle_entity,
+        prompt_entity,
+    })
+}
+
 /// ECS system：每帧推进 intro 动画并写回 UI 组件。
 ///
+/// 第一帧按 `Name` 组件查找实体并创建 [`IntroState`] 作为 ECS resource。
 /// 跳过检测读 [`UiInputState`]（引擎每帧插入的输入快照）——任意键或点击。
 pub fn advance(world: &mut World, dt: f32) {
-    // 1. 跳过检测（不可变读输入快照）。
+    // 1. 惰性初始化：第一帧按 Name 查找实体。
+    if world.get_resource::<IntroState>().is_none() {
+        if let Some(state) = initialize_intro(world) {
+            world.insert_resource(state);
+        } else {
+            // 场景实体尚未就绪，等待下一帧。
+            return;
+        }
+    }
+
+    // 2. 跳过检测。
     let skip = world
         .get_resource::<UiInputState>()
         .is_some_and(|i| {
@@ -218,7 +141,7 @@ pub fn advance(world: &mut World, dt: f32) {
                 })
         });
 
-    // 2. 推进动画、取出本帧要写回的动画值与受控实体（借用在此结束）。
+    // 3. 推进动画、取出本帧要写回的动画值与受控实体。
     let (overlay_alpha, title_alpha, title_y, prompt_alpha, overlay_e, title_e, subtitle_e, prompt_e) = {
         let Some(state) = world.get_resource_mut::<IntroState>() else {
             return;
@@ -228,7 +151,6 @@ pub fn advance(world: &mut World, dt: f32) {
         }
         state.tick(dt);
         let title_alpha = state.title_opacity.now();
-        // 提示呼吸：停留阶段跳动，透明度跟随标题。
         let time = state.overlay.time() as f32;
         let pulse = 0.35 + 0.35 * ((time * 4.0).sin() * 0.5 + 0.5);
         (
@@ -243,7 +165,7 @@ pub fn advance(world: &mut World, dt: f32) {
         )
     };
 
-    // 3. 写回组件（Style 背景/边距 + Text 颜色）。
+    // 4. 写回组件。
     if let Some(style) = world.get_mut::<Style>(overlay_e) {
         style.background[3] = overlay_alpha;
     }

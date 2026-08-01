@@ -632,8 +632,9 @@
 
         let mut world = World::new();
         let mut loader = SceneLoader::new();
+        let registry = crate::scene::ComponentRegistry::new();
         let inst = loader
-            .load_and_spawn(&mut world, SceneSource::RawCooked(bytes))
+            .load_and_spawn(&mut world, SceneSource::RawCooked(bytes), &registry)
             .unwrap();
 
         assert_eq!(inst.all_entities.len(), 1);
@@ -665,8 +666,9 @@
         }
         let mut world = World::new();
         let mut loader = SceneLoader::new();
+        let registry = crate::scene::ComponentRegistry::new();
         let inst = loader
-            .load_and_spawn(&mut world, SceneSource::CookedFile(path.into()))
+            .load_and_spawn(&mut world, SceneSource::CookedFile(path.into()), &registry)
             .expect("default.rscn should parse");
 
         // 6 entities: 1 skybox + 1 相机 + 1 directional 光源 + 3 point lights.

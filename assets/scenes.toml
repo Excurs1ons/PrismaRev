@@ -6,15 +6,19 @@
 # is used. Edit `path` freely - it is never hardcoded in code.
 #
 # Two formats are supported:
-#   - `.rscn`  : cooked binary for the new scene system (SceneLoader). Spawns
-#                camera + lights directly into the ECS - the scene file owns
-#                camera placement. Preferred for engine-builtin scenes.
-#   - `.gltf`  : legacy glTF import (try_load_gltf + load_demo_scene).
-#
+#   - `.json`   : scene JSON (dev convenience, human-editable).
+#   - `.rscn`   : cooked binary (production).
+#   - `.gltf`   : legacy glTF import (try_load_gltf).
+
+# Intro scene (开场动画): 4 UI entities (overlay + title + subtitle + prompt).
+# The engine loads the FIRST entry whose path exists, so intro takes priority.
+[[scenes]]
+name = "intro"
+path = "scenes/intro.scene.json"
+
 # Engine-builtin default scene: a camera at [0, 2.5, 18] looking at the origin
 # plus a directional sun and three coloured point lights. Cooked from
-# default.scene.json via prism-asset-cooker's SceneCooker (re-cook with the
-# `cook_default_scene_to_disk` ignored test, see scene.rs).
+# default.scene.json via prism-asset-cooker's SceneCooker.
 
 [[scenes]]
 name = "default"

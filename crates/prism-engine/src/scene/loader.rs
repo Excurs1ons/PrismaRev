@@ -43,10 +43,12 @@
 
 use std::path::PathBuf;
 
+use prism_asset::importer::scene::SceneJson;
 use prism_asset::runtime::{MeshAsset, ResourceManager};
 use prism_ecs::{Entity, World};
 use prism_render::managers::GpuMaterial;
 
+use super::component_registry::ComponentRegistry;
 use super::components::*;
 use super::helpers::HierarchyHelper;
 
@@ -80,6 +82,8 @@ pub enum SceneSource {
     RawCooked(Vec<u8>),
     /// Loose RSCN 二进制 file on disk (dev convenience).
     CookedFile(PathBuf),
+    /// Loose `.scene.json` file on disk (dev convenience).
+    JsonFile(PathBuf),
 }
 
 // ---------------------------------------------------------------------------
@@ -464,22 +468,102 @@ impl SceneLoader {
     }
 
     /// High-level entry: accept any [`SceneSource`] and 生成 into the 世界
+    ///
+    /// `registry` 用于反序列化 `.scene.json` 中的组件。
     pub fn load_and_spawn(
         &mut self,
         world: &mut World,
         source: SceneSource,
+        registry: &ComponentRegistry,
     ) -> Result<SceneInstance, String> {
-        let (bytes, scene_id) = match source {
-            SceneSource::RawCooked(bytes) => (bytes, SceneAssetId::generate()),
+        let scene_id = SceneAssetId::generate();
+        match source {
+            SceneSource::RawCooked(bytes) => {
+                let parsed = parse_rscn(&bytes)?;
+                self.spawn_from_parsed(world, &parsed, scene_id)
+            }
             SceneSource::CookedFile(path) => {
                 let bytes = std::fs::read(&path)
                     .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
-                (bytes, SceneAssetId::generate())
+                let parsed = parse_rscn(&bytes)?;
+                self.spawn_from_parsed(world, &parsed, scene_id)
             }
-        };
+            SceneSource::JsonFile(path) => {
+                self.load_and_spawn_json(world, &path, scene_id, registry)
+            }
+        }
+    }
 
-        let parsed = parse_rscn(&bytes)?;
-        self.spawn_from_parsed(world, &parsed, scene_id)
+    /// 从 `.scene.json` 文件加载场景。
+    fn load_and_spawn_json(
+        &self,
+        world: &mut World,
+        path: &std::path::Path,
+        scene_id: SceneAssetId,
+        registry: &ComponentRegistry,
+    ) -> Result<SceneInstance, String> {
+        let text = std::fs::read_to_string(path)
+            .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
+        let scene: SceneJson = serde_json::from_str(&text)
+            .map_err(|e| format!("Scene JSON parse error in {}: {e}", path.display()))?;
+
+        let entity_count = scene.entities.len();
+        let mut entities: Vec<Entity> = Vec::with_capacity(entity_count);
+
+        // Phase 1: spawn all entities, insert transform + scene components.
+        for (_i, ej) in scene.entities.iter().enumerate() {
+            let entity = world.spawn();
+            entities.push(entity);
+
+            world.insert(entity, SceneMember(scene_id));
+            world.insert(entity, Active(true));
+
+            // Name
+            if let Some(name) = &ej.name {
+                world.insert(entity, Name(name.clone()));
+            }
+
+            // Transform
+            let local = LocalTransform {
+                translation: glam::Vec3::from(ej.transform.translation),
+                rotation: glam::Quat::from_xyzw(
+                    ej.transform.rotation[0],
+                    ej.transform.rotation[1],
+                    ej.transform.rotation[2],
+                    ej.transform.rotation[3],
+                ),
+                scale: glam::Vec3::from(ej.transform.scale),
+            };
+            world.insert(entity, local.clone());
+            world.insert(entity, WorldTransform(local.to_model_matrix()));
+
+            // Components via registry
+            for (comp_name, comp_data) in &ej.components {
+                registry.apply(world, entity, comp_name, comp_data);
+            }
+        }
+
+        // Phase 2: hierarchy
+        for (i, ej) in scene.entities.iter().enumerate() {
+            if let Some(parent_idx) = ej.parent {
+                let parent_idx = parent_idx as usize;
+                if parent_idx < entities.len() {
+                    HierarchyHelper::reparent(world, entities[i], Some(entities[parent_idx]));
+                }
+            }
+        }
+
+        let root_entities: Vec<Entity> = entities
+            .iter()
+            .copied()
+            .filter(|&e| world.get::<Parent>(e).is_none())
+            .collect();
+
+        Ok(SceneInstance {
+            scene_id,
+            root_entities,
+            all_entities: entities,
+        })
     }
 
     /// Core 生成 转换 parsed RSCN entities into ECS components.

@@ -10,32 +10,24 @@ pub mod intro;
 
 use prism_engine::config::AppConfig;
 
-/// 构造应用并注册 intro 场景（桌面 `main` 与 Android `android_main`
-/// 共用）。
-///
-/// 引擎自动按 `PRISMREV_LAUNCH_CONFIG` 环境变量调度 intro 场景。
+/// 构造应用：引擎自动加载 `assets/scenes/intro.scene.json` 中的 intro 实体，
+/// 本项目只注册 `intro::advance` system 驱动动画。
 pub fn build_app() -> prism_app::App {
-    prism_app::app(AppConfig::load())
+    let mut app = prism_app::app(AppConfig::load())
         .with_render_subsystem()
-        .register_scene("intro", |world| {
-            let state = intro::spawn_ui(world, intro::IntroConfig::default());
-            world.insert_resource(state);
-        })
-        .add_scene_system("intro::advance", intro::advance)
+        .with_audio_subsystem();
+    app.add_system("intro::advance", intro::advance);
+    app
 }
 
 // ===========================================================================
 // Android JNI entry point
 // ===========================================================================
 
-/// GameActivity 加载本库后调用的入口。JNI 样板（android_logger、crash
-/// handler、EventLoop）由 [`prism_app::run_on_android`] 提供，这里只负责
-/// 读取 hub 的启动配置文件并注入 env（引擎侧的 `run_on` 会从 env 解析）。
+/// GameActivity 加载本库后调用的入口。
 #[cfg(target_os = "android")]
 #[no_mangle]
 fn android_main(android_app: winit::platform::android::activity::AndroidApp) {
-    // hub（Kotlin NativePlugin.launch_game）把配置落盘到 app files 目录；
-    // 读入后注入 env，与桌面 `PRISMREV_LAUNCH_CONFIG` 路径统一。
     if let Some(json) = prism_engine::launch_config::LaunchConfig::read_android_file(&android_app) {
         std::env::set_var("PRISMREV_LAUNCH_CONFIG", json);
     }

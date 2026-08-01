@@ -33,7 +33,7 @@ raw-window-handle = "0.6"
 winit = { version = "0.30", features = ["android-game-activity"] }
 
 # Maths
-glam = "0.33.2"
+glam = { version = "0.33.2", features = ["serde"] }
 
 # Physics (Rapier)
 rapier3d = { version = "0.34", default-features = false, features = ["dim3", "f32", "std"] }

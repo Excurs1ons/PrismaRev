@@ -46,18 +46,16 @@
                 "name": "Sun",
                 "parent": null,
                 "transform": {"translation": [10,10,10], "rotation": [0,0,0,1], "scale": [1,1,1]},
-                "light": {"type": "directional", "color": [1,0.95,0.9], "intensity": 3.0},
-                "camera": {"type": "perspective", "fov_y_degrees": 60.0, "near": 0.1, "far": 1000.0}
+                "components": {
+                    "prism_engine::scene::DirectionalLight": {"euler_xyz": [0,0,0], "color": [1,0.95,0.9], "intensity": 3.0, "ambient": 1.0},
+                    "prism_engine::scene::Camera": {"fov_y_degrees": 60.0, "near": 0.1, "far": 1000.0, "exposure": 1.0, "aspect": 1.777, "enabled": true}
+                }
             }]
         }"#;
         let scene: SceneJson = serde_json::from_str(json).unwrap();
         let e = &scene.entities[0];
-        assert!(e.light.is_some());
-        assert!(e.camera.is_some());
-        assert_eq!(e.mesh, None);
-        let light = e.light.as_ref().unwrap();
-        assert_eq!(light.light_type, "directional");
-        assert_eq!(light.color, [1.0, 0.95, 0.9]);
+        assert!(e.components.contains_key("prism_engine::scene::DirectionalLight"));
+        assert!(e.components.contains_key("prism_engine::scene::Camera"));
     }
 
     #[test]
@@ -191,22 +189,13 @@
                 "name": "Spot",
                 "parent": null,
                 "transform": {},
-                "light": {
-                    "type": "spot",
-                    "color": [1, 0, 0],
-                    "intensity": 500.0,
-                    "range": 30.0,
-                    "inner_cone_angle": 0.3,
-                    "outer_cone_angle": 0.6
+                "components": {
+                    "prism_engine::scene::SpotLight": {"color": [1,0,0], "intensity": 500.0, "range": 30.0, "inner_cone_angle": 0.3, "outer_cone_angle": 0.6}
                 }
             }]
         }"#;
         let scene: SceneJson = serde_json::from_str(json).unwrap();
-        let light = scene.entities[0].light.as_ref().unwrap();
-        assert_eq!(light.light_type, "spot");
-        assert_eq!(light.range, Some(30.0));
-        assert_eq!(light.inner_cone_angle, Some(0.3));
-        assert_eq!(light.outer_cone_angle, Some(0.6));
+        assert!(scene.entities[0].components.contains_key("prism_engine::scene::SpotLight"));
     }
 
     #[test]

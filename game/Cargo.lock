@@ -1411,6 +1411,7 @@ checksum = "7f22fb22f065b308be0d8724e3706c7fa3fc2a6c7d6899df4cad7860e7a75436"
 dependencies = [
  "approx",
  "libm",
+ "serde_core",
 ]
 
 [[package]]

@@ -33,6 +33,7 @@ use prism_engine::config::AppConfig;
 pub fn editor_app(config: AppConfig) -> App {
     prism_app::app(config)
         .with_render_subsystem()
+        .with_audio_subsystem()
         .with_frame_hook(EditorHook::new())
 }
 

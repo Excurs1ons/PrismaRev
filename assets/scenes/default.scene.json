@@ -9,9 +9,11 @@
         "rotation": [0.0, 0.0, 0.0, 1.0],
         "scale": [1.0, 1.0, 1.0]
       },
-      "skybox": {
-        "hdr_path": "../valley_of_desolation_1k.hdr",
-        "enabled": true
+      "components": {
+        "prism_engine::scene::Skybox": {
+          "hdr_path": "../valley_of_desolation_1k.hdr",
+          "enabled": true
+        }
       }
     },
     {
@@ -22,11 +24,10 @@
         "rotation": [-0.068948, 0.0, 0.0, 0.99762],
         "scale": [1.0, 1.0, 1.0]
       },
-      "camera": {
-        "type": "perspective",
-        "fov_y_degrees": 60.0,
-        "near": 0.01,
-        "far": 1000.0
+      "components": {
+        "prism_engine::scene::Camera": {
+          "fov_y_degrees": 60.0, "near": 0.01, "far": 1000.0, "exposure": 1.0, "aspect": 1.777, "enabled": true
+        }
       }
     },
     {
@@ -37,10 +38,10 @@
         "rotation": [0.0, 0.0, 0.0, 1.0],
         "scale": [1.0, 1.0, 1.0]
       },
-      "light": {
-        "type": "directional",
-        "color": [1.0, 1.0, 1.0],
-        "intensity": 100000.0
+      "components": {
+        "prism_engine::scene::DirectionalLight": {
+          "euler_xyz": [0,0,0], "color": [1,1,1], "intensity": 100000.0, "ambient": 1.0
+        }
       }
     },
     {
@@ -51,11 +52,10 @@
         "rotation": [0.0, 0.0, 0.0, 1.0],
         "scale": [1.0, 1.0, 1.0]
       },
-      "light": {
-        "type": "point",
-        "color": [1.0, 0.2, 0.2],
-        "intensity": 150.0,
-        "range": 12.0
+      "components": {
+        "prism_engine::scene::PointLight": {
+          "color": [1.0, 0.2, 0.2], "intensity": 150.0, "range": 12.0
+        }
       }
     },
     {
@@ -66,11 +66,10 @@
         "rotation": [0.0, 0.0, 0.0, 1.0],
         "scale": [1.0, 1.0, 1.0]
       },
-      "light": {
-        "type": "point",
-        "color": [0.2, 1.0, 0.2],
-        "intensity": 150.0,
-        "range": 12.0
+      "components": {
+        "prism_engine::scene::PointLight": {
+          "color": [0.2, 1.0, 0.2], "intensity": 150.0, "range": 12.0
+        }
       }
     },
     {
@@ -81,11 +80,10 @@
         "rotation": [0.0, 0.0, 0.0, 1.0],
         "scale": [1.0, 1.0, 1.0]
       },
-      "light": {
-        "type": "point",
-        "color": [0.2, 0.2, 1.0],
-        "intensity": 150.0,
-        "range": 12.0
+      "components": {
+        "prism_engine::scene::PointLight": {
+          "color": [0.2, 0.2, 1.0], "intensity": 150.0, "range": 12.0
+        }
       }
     }
   ]
