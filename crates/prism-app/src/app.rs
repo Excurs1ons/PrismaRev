@@ -54,6 +54,28 @@ use crate::render_runner::render_thread_main;
 use crate::render_shared::RenderShared;
 
 // ===========================================================================
+// Subsystem 枚举
+// ===========================================================================
+
+/// 引擎子系统，用户项目通过 [`App::with_subsystem`] 显式声明。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Subsystem {
+    /// 渲染子系统（窗口 + Vulkan + 渲染线程）。
+    Render,
+    /// 音频子系统（AudioEngine）。
+    Audio,
+}
+
+impl Subsystem {
+    fn bit(self) -> u8 {
+        match self {
+            Subsystem::Render => 0b01,
+            Subsystem::Audio => 0b10,
+        }
+    }
+}
+
+// ===========================================================================
 // App
 // ===========================================================================
 
@@ -62,10 +84,8 @@ pub struct App {
     // ---------- 启动配置 ----------
     config: AppConfig,
 
-    /// 是否启用渲染子系统（窗口 + Vulkan + 渲染线程）。
-    /// 默认 `false`；用户项目须显式调用 [`with_render_subsystem`](Self::with_render_subsystem)
-    /// 开启，否则引擎只提供控制台输出（无窗口、无 GPU 初始化）。
-    render_enabled: bool,
+    /// 已启用的子系统位掩码。
+    subsystems: u8,
 
     // ---------- 引擎（主线程） ----------
     engine: Option<Engine>,
@@ -156,7 +176,7 @@ impl App {
 
         Self {
             config,
-            render_enabled: false,
+            subsystems: 0,
             engine: Some(engine),
             asset_resolver,
             render_shared: None,
@@ -216,24 +236,28 @@ impl App {
         self
     }
 
-    /// 显式声明需要渲染子系统（窗口 + Vulkan + 渲染线程）。
+    /// 显式声明需要启用某个引擎子系统。
     ///
-    /// 不调用此方法则引擎只提供控制台输出（无窗口、无 GPU 初始化），
-    /// 适合无头服务器、CI 测试、批处理工具等场景。
-    pub fn with_render_subsystem(mut self) -> Self {
-        self.render_enabled = true;
+    /// 不调用此方法则对应子系统不创建（无窗口、无音频等）。
+    pub fn with_subsystem(mut self, subsystem: Subsystem) -> Self {
+        match subsystem {
+            Subsystem::Render => {
+                self.subsystems |= Subsystem::Render.bit();
+            }
+            Subsystem::Audio => {
+                self.subsystems |= Subsystem::Audio.bit();
+                self.audio = AudioEngine::new(prism_audio::AudioConfig::default()).ok();
+                if self.audio.is_none() {
+                    log::warn!("audio subsystem requested but failed to initialize");
+                }
+            }
+        }
         self
     }
 
-    /// 显式声明需要音频子系统。
-    ///
-    /// 不调用此方法则引擎不创建音频引擎，不会打开任何音频设备。
-    pub fn with_audio_subsystem(mut self) -> Self {
-        self.audio = AudioEngine::new(prism_audio::AudioConfig::default()).ok();
-        if self.audio.is_none() {
-            log::warn!("audio subsystem requested but failed to initialize");
-        }
-        self
+    /// 检查是否启用了指定子系统。
+    pub fn has_subsystem(&self, subsystem: Subsystem) -> bool {
+        self.subsystems & subsystem.bit() != 0
     }
 
     // -----------------------------------------------------------------------
@@ -630,7 +654,7 @@ impl Default for App {
 
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if !self.render_enabled {
+        if !self.has_subsystem(Subsystem::Render) {
             log::info!("render subsystem disabled — headless mode (no window, no GPU)");
             return;
         }
@@ -832,7 +856,7 @@ impl ApplicationHandler for App {
     }
 
     fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
-        if !self.render_enabled {
+        if !self.has_subsystem(Subsystem::Render) {
             return;
         }
 

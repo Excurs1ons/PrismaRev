@@ -14,8 +14,8 @@ use prism_engine::config::AppConfig;
 /// 本项目只注册 `intro::advance` system 驱动动画。
 pub fn build_app() -> prism_app::App {
     let mut app = prism_app::app(AppConfig::load())
-        .with_render_subsystem()
-        .with_audio_subsystem();
+        .with_subsystem(prism_app::Subsystem::Render)
+        .with_subsystem(prism_app::Subsystem::Audio);
     app.add_system("intro::advance", intro::advance);
     app
 }

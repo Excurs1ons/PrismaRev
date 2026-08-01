@@ -32,8 +32,8 @@ use prism_engine::config::AppConfig;
 /// 与 `prism_app::app` 相同，但注入了 [`EditorHook`]。
 pub fn editor_app(config: AppConfig) -> App {
     prism_app::app(config)
-        .with_render_subsystem()
-        .with_audio_subsystem()
+        .with_subsystem(prism_app::Subsystem::Render)
+        .with_subsystem(prism_app::Subsystem::Audio)
         .with_frame_hook(EditorHook::new())
 }
 

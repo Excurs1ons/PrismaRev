@@ -74,7 +74,7 @@ mod render_shared;
 
 use prism_engine::config::AppConfig;
 
-pub use app::App;
+pub use app::{App, Subsystem};
 pub use hook::FrameHook;
 pub use render_shared::{RenderShared, RenderStats};
 
