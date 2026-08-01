@@ -393,8 +393,8 @@ impl GraphRenderer {
         // `ensure_target` 按 `image_count` 建 framebuffer，`recreate_swapchain`
         // 只覆盖后续重建——首次创建必须在这里初始化，否则 `set_target` 里
         // `idx >= image_count` 的守卫会静默跳过，永远建不出 framebuffer。
-        if let Some(scene) = graph.pass_mut::<ForwardPass>() {
-            scene.set_image_count(swapchain.views.len());
+        if let Some(forward_pass) = graph.pass_mut::<ForwardPass>() {
+            forward_pass.set_image_count(swapchain.views.len());
         }
         graph.add_pass(Box::new(gtao_pass));
         graph.add_pass(Box::new(rt_scheduler));
@@ -926,8 +926,8 @@ impl GraphRenderer {
         // （见 `GraphRenderer::new` 里的注释）。
         let image_count = swapchain.views.len();
         self.swapchain = Some(swapchain);
-        if let Some(scene) = self.graph.pass_mut::<ForwardPass>() {
-            scene.set_image_count(image_count);
+        if let Some(forward_pass) = self.graph.pass_mut::<ForwardPass>() {
+            forward_pass.set_image_count(image_count);
         }
         log::info!("GraphRenderer resumed");
         Ok(())
@@ -955,13 +955,13 @@ impl GraphRenderer {
         // This is the single entry point for 交换链 recreation - the
         // acquire/present out-of-date paths in 渲染 also route through
         // here so the 帧缓冲 is always torn 下 第一个
-        if let Some(scene) = self.graph.pass_mut::<ForwardPass>() {
-            scene.drop_target(&self.runtime.context.device);
+        if let Some(forward_pass) = self.graph.pass_mut::<ForwardPass>() {
+            forward_pass.drop_target(&self.runtime.context.device);
             // Re-size the per-image 帧缓冲 vectors for the new 交换链
             // 图像 count. `ForwardPass::execute` rebuilds any 缺少 槽 via
             // `ensure_target` on the 下一个 帧
             if let Some(sw) = self.swapchain.as_ref() {
-                scene.set_image_count(sw.views.len());
+                forward_pass.set_image_count(sw.views.len());
             }
         }
         // PostPass wraps 交换链 views too (its framebuffers 目标 the
@@ -1522,8 +1522,8 @@ impl GraphRenderer {
         // 销毁 ForwardPass (framebuffers, 深度 images, 渲染 pass
         // 管线 shadow 描述符 集合 Without this, vkDestroyDevice
         // reports leaked VkImage/VkDeviceMemory/VkImageView/VkRenderPass.
-        if let Some(scene) = self.graph.pass_mut::<ForwardPass>() {
-            scene.destroy(device);
+        if let Some(forward_pass) = self.graph.pass_mut::<ForwardPass>() {
+            forward_pass.destroy(device);
         }
 
         // 销毁 scene-level 全局光照 probe 音量 (SceneScope). Must happen AFTER
