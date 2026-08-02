@@ -238,12 +238,16 @@ impl RenderTexture {
         !self.initialized && self.init_shader.is_some()
     }
 
-    /// 本帧结束后推进状态（由调度器调用）。
-    pub(crate) fn end_frame(&mut self) {
-        if !self.initialized {
-            self.initialized = true;
-        }
+    /// 本帧渲染完成后调用（仅渲染帧）：标记初始化完成、清除待更新标记。
+    pub(crate) fn mark_rendered(&mut self) {
+        self.initialized = true;
         self.pending_update = false;
+    }
+
+    /// 每帧帧末无条件调用：推进帧计数器（period 判定依赖它）。
+    /// 注意：必须每帧 tick，否则 `Realtime + period > 1` 时计数器卡在
+    /// 非倍数上，RT 将永不再次渲染。
+    pub(crate) fn tick(&mut self) {
         self.frame_counter = self.frame_counter.wrapping_add(1);
     }
 
@@ -527,11 +531,140 @@ impl RenderTexture {
 
 impl Drop for RenderTexture {
     fn drop(&mut self) {
+        // 纯逻辑测试实例（见 tests::test_rt）image 为 null，无真实资源。
+        if self.image == vk::Image::null() {
+            return;
+        }
         unsafe {
             // 字段均为 new/resize 成功创建的非空句柄，直接销毁。
             self.device.destroy_image_view(self.view, None);
             self.device.destroy_image(self.image, None);
             self.device.free_memory(self.memory, None);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 纯逻辑测试构造：GPU 句柄全空（device 零值），仅验证更新状态机。
+    /// Drop 检测 null image 直接跳过资源销毁。device 零值本身是 UB 构造，
+    /// 但测试从不读它（只有状态机字段被访问），用 allow 显式豁免。
+    #[allow(invalid_value)]
+    fn test_rt(mode: RtUpdateMode, period: u32) -> RenderTexture {
+        RenderTexture {
+            // `mem::zeroed` 在 debug 构建会做 invalid_value 运行时检查并 abort；
+            // `MaybeUninit` 路径无运行时检查，配合上方 allow(invalid_value) 编译通过。
+            // 测试从不读 device（只有状态机字段被访问），Drop 见 image null 提前返回。
+            device: unsafe { std::mem::MaybeUninit::zeroed().assume_init() },
+            image: vk::Image::null(),
+            memory: vk::DeviceMemory::null(),
+            view: vk::ImageView::null(),
+            extent: vk::Extent2D {
+                width: 64,
+                height: 64,
+            },
+            format: vk::Format::R8G8B8A8_UNORM,
+            handle: TextureHandle(0),
+            update_mode: mode,
+            period,
+            update_shader: Some(RtShader::BitmapPattern),
+            init_shader: None,
+            frame_counter: 0,
+            initialized: false,
+            pending_update: false,
+            rng_state: 0x9E37_79B9,
+        }
+    }
+
+    /// 模拟调度器的一帧：判断 → 渲染 → 帧末推进。
+    fn simulate_frame(rt: &mut RenderTexture) -> bool {
+        let rendered = rt.needs_render();
+        if rendered {
+            rt.mark_rendered();
+        }
+        rt.tick();
+        rendered
+    }
+
+    #[test]
+    fn onload_renders_once_then_stops() {
+        let mut rt = test_rt(RtUpdateMode::OnLoad, 0);
+        assert!(simulate_frame(&mut rt)); // 首次调度渲染
+        for _ in 0..4 {
+            assert!(!simulate_frame(&mut rt)); // 之后停更
+        }
+    }
+
+    #[test]
+    fn realtime_period_zero_renders_every_frame() {
+        let mut rt = test_rt(RtUpdateMode::Realtime, 0);
+        for _ in 0..8 {
+            assert!(simulate_frame(&mut rt));
+        }
+    }
+
+    #[test]
+    fn realtime_period_2_renders_every_other_frame() {
+        // 回归测试：tick 曾在渲染帧才推进，period>1 时只渲染第一帧。
+        let mut rt = test_rt(RtUpdateMode::Realtime, 2);
+        let rendered: Vec<bool> = (0..8).map(|_| simulate_frame(&mut rt)).collect();
+        assert_eq!(
+            rendered,
+            vec![true, false, true, false, true, false, true, false]
+        );
+        assert_eq!(rt.frame_counter, 8); // 计数器每帧推进
+    }
+
+    #[test]
+    fn ondemand_requires_request_update() {
+        let mut rt = test_rt(RtUpdateMode::OnDemand, 0);
+        assert!(!simulate_frame(&mut rt)); // 默认不渲染
+        assert!(!simulate_frame(&mut rt));
+        rt.request_update();
+        assert!(simulate_frame(&mut rt)); // 标记后渲染一次
+        assert!(!simulate_frame(&mut rt)); // 清除后停更
+    }
+
+    #[test]
+    fn init_shader_priority_and_active_shader() {
+        let mut rt = test_rt(RtUpdateMode::OnLoad, 0);
+        assert_eq!(rt.active_shader(), Some(RtShader::BitmapPattern));
+        assert!(!rt.needs_init()); // 无 init_shader
+        rt.init_shader = Some(RtShader::BitmapPattern);
+        assert!(rt.needs_init());
+        assert_eq!(rt.active_shader(), Some(RtShader::BitmapPattern));
+        rt.mark_rendered();
+        assert!(!rt.needs_init()); // 初始化后回归 update_shader
+        assert_eq!(rt.active_shader(), Some(RtShader::BitmapPattern));
+    }
+
+    #[test]
+    fn shaderless_rt_stays_pending_until_shader_bound() {
+        // 未绑定 shader 的 RT：OnLoad 语义下 needs_render 一直为真，
+        // 调度器每帧尝试渲染（无 shader 则跳过），绑定后下一帧立即执行。
+        let mut rt = test_rt(RtUpdateMode::OnLoad, 0);
+        rt.update_shader = None;
+        rt.init_shader = None;
+        assert_eq!(rt.active_shader(), None);
+        assert!(rt.needs_render());
+        rt.tick();
+        assert!(rt.needs_render());
+        rt.update_shader = Some(RtShader::BitmapPattern);
+        assert_eq!(rt.active_shader(), Some(RtShader::BitmapPattern));
+        assert!(simulate_frame(&mut rt));
+        assert!(!simulate_frame(&mut rt)); // 渲染一次后停更
+    }
+
+    #[test]
+    fn xorshift_pattern_deterministic_and_varies() {
+        let mut a = test_rt(RtUpdateMode::Realtime, 0);
+        let mut b = test_rt(RtUpdateMode::Realtime, 0);
+        // 相同种子 → 相同序列（确定性）。
+        assert_eq!(a.next_pattern(), b.next_pattern());
+        let first = a.next_pattern();
+        let second = a.next_pattern();
+        assert_ne!(first, second); // xorshift32 序列不立即退化
     }
 }

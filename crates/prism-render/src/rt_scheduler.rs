@@ -301,11 +301,19 @@ impl RenderPassNode for RenderTextureScheduler {
         self.ensure_render_pass(device)?;
         self.drop_stale_framebuffers(device);
         let rp = self.render_pass.context("render pass missing")?;
+        let mut rendered = vec![false; self.rts.len()];
 
-        for i in 0..self.rts.len() {
-            let shader = self.rts[i].active_shader();
-            let needs = self.rts[i].needs_render();
+        // 第一阶段：快照每个 RT 的渲染决策（shader + 是否需要渲染）。
+        // 后续执行阶段要交错借用 `&mut self`（管线/framebuffer 创建）与
+        // `&mut self.rts[i]`（pattern 生成），先快照避免借用冲突。
+        let plan: Vec<(Option<RtShader>, bool)> = self
+            .rts
+            .iter()
+            .map(|rt| (rt.active_shader(), rt.needs_render()))
+            .collect();
 
+        // 第二阶段：按快照执行 blit。
+        for (i, &(shader, needs)) in plan.iter().enumerate() {
             if let Some(shader) = shader {
                 if needs {
                     let pipeline = self.ensure_pipeline(device, shader)?;
@@ -377,6 +385,7 @@ impl RenderPassNode for RenderTextureScheduler {
                     }
                     unsafe { device.cmd_draw(cmd, 3, 1, 0, 0) };
                     unsafe { device.cmd_end_render_pass(cmd) };
+                    rendered[i] = true;
                 }
             }
 
@@ -390,11 +399,13 @@ impl RenderPassNode for RenderTextureScheduler {
             );
         }
 
-        // 帧末推进状态（初始化标记 / 清除 pending / 计数器）。
-        for rt in self.rts.iter_mut() {
-            if rt.needs_render() {
-                rt.end_frame();
+        // 帧末推进状态：渲染帧标记初始化/清 pending，所有 RT 无条件 tick
+        // （计数器必须每帧推进，否则 Realtime+period 判定会卡死）。
+        for (i, rt) in self.rts.iter_mut().enumerate() {
+            if rendered[i] {
+                rt.mark_rendered();
             }
+            rt.tick();
         }
         Ok(())
     }
