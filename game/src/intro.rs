@@ -8,7 +8,7 @@ use keyframe::functions::{EaseInCubic, EaseInOutCubic, EaseOutCubic};
 use keyframe::{keyframes, AnimationSequence};
 use prism_ecs::{Entity, World};
 use prism_engine::scene::components::Name;
-use prism_engine::ui::{Style, Text, UiInputState};
+use prism_engine::ui::{ParticleSystem2D, ScreenSize, Style, Text, UiDrawList, UiInputState};
 
 /// 标题初始位置（margin.top，CENTER 锚点下负值 = 中心上方）。
 const TITLE_BASE_MARGIN: f32 = -16.0;
@@ -165,7 +165,35 @@ pub fn advance(world: &mut World, dt: f32) {
         )
     };
 
-    // 4. 写回组件。
+    // 4. 开屏雨滴（2D 粒子系统）：随标题淡入淡出，追加进 UI 绘制列表。
+    //    ui::render 已在 advance 之前生成本帧的 UiDrawList，这里只是扩展其
+    //    quads；随后 convert_ui_draw_list_to_overlay 会自动把它纳入叠加 pass。
+    {
+        let (w, h) = world
+            .get_resource::<ScreenSize>()
+            .map(|s| (s.width, s.height))
+            .unwrap_or((1920.0, 1080.0));
+
+        // 更新模拟（先释放 ScreenSize 只读借用，再取可变借用）。
+        if let Some(rain) = world.get_resource_mut::<ParticleSystem2D>() {
+            rain.set_bounds(w, h);
+            rain.intensity = title_alpha; // 雨随标题一起淡入/淡出
+            rain.update(dt);
+        }
+
+        // 取出本帧粒子四边形（owned，离开 get_resource 作用域即释放借用），
+        // 再追加进 UiDrawList，避免与上面的只读/可变借用产生冲突。
+        let rain_quads = world
+            .get_resource::<ParticleSystem2D>()
+            .map(|r| r.emit_quads());
+        if let Some(quads) = rain_quads {
+            if let Some(dl) = world.get_resource_mut::<UiDrawList>() {
+                dl.quads.extend(quads);
+            }
+        }
+    }
+
+    // 5. 写回组件。
     if let Some(style) = world.get_mut::<Style>(overlay_e) {
         style.background[3] = overlay_alpha;
     }

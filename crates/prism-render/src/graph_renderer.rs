@@ -178,6 +178,9 @@ pub struct GraphRenderer {
     /// Scene-level 全局光照 probe 音量 resources 集合 5). Survives 交换链
     /// recreation; only rebuilt on scene/level change.
     scene_scope: SceneScope,
+    /// 固定 bindless 槽位，持有当前 IBL 的 BRDF LUT 视图。`set_environment`
+    /// 重建 IBL 时用 `register_with_handle` 覆盖同一槽，避免 bindless 表增长。
+    brdf_bindless_slot: u32,
     graph: RenderGraph,
     /// All 渲染 passes (ShadowMapPass + ForwardPass + GtaoPass + PostPass)
     /// are owned by the 图 and executed in registration order. The
@@ -237,7 +240,9 @@ impl GraphRenderer {
         window_extensions: Vec<&str>,
         window: &dyn raw_window_handle::HasDisplayHandle,
         window_handle: &dyn raw_window_handle::HasWindowHandle,
-        env_bytes: Option<Vec<u8>>,
+        // 窗口模式：IBL 由场景 `EnvironmentLighting` 在加载时经 `set_environment`
+        // 驱动；此处忽略启动期 env_bytes（保持引擎「场景声明式光照」）。
+        _env_bytes: Option<Vec<u8>>,
     ) -> anyhow::Result<Self> {
         let context = Arc::new(VulkanContext::new(&window_extensions)?);
         let swapchain = Swapchain::new(&context, window, window_handle)?;
@@ -248,13 +253,18 @@ impl GraphRenderer {
         // recreation; the 运行时 is independent of scene-level resources.
         let runtime = RenderRuntime::new(context.clone(), swapchain.views.len() as u32)?;
 
-        let ibl = IblResources::new(
+        // IBL：开屏/无光照场景以廉价「中性空 IBL」启动（不做 CPU 预卷积，≈0ms）。
+        // 真正的 IBL 预卷积由 `set_environment` 在加载带光照的 3D 场景时按需重建。
+        // 描述符 集合 布局 共享创建一次，确保场景切换重建 IBL 时管线 布局 稳定。
+        let ibl_ds_layout =
+            crate::ibl::ibl_descriptor_set_layout(&context.device).context("create IBL ds layout")?;
+        let ibl = IblResources::new_empty(
             context.clone(),
             runtime.command_pool,
             context.graphics_queue,
-            env_bytes,
+            ibl_ds_layout,
         )
-        .context("create IBL resources")?;
+        .context("create empty IBL resources")?;
 
         let mut texture_manager =
             RenderTextureManager::new(&context, runtime.command_pool, context.graphics_queue, 1024)
@@ -363,11 +373,12 @@ impl GraphRenderer {
         // PathTracePass — real-time path tracing 计算 pass Always added;
         // checks RenderSettings.render_mode internally to decide whether to
         // 分发 Created with scene geometry later via set_geometry.
-        let pt_pass = PathTracePass::new(&context).context("PathTracePass::new")?;
+        // Path tracing is opt-in. A user project starts in raster mode and must
+        // explicitly request a PT renderer before this expensive pass is built.
 
         // CRT 调度器：统一渲染所有注册的 RenderTexture（Unity 式）。
         // 演示 RT：4x4 位图图案（Realtime，每帧随机 16 位模式，CPU xorshift）。
-        let mut rt_scheduler = crate::rt_scheduler::RenderTextureScheduler::new(&context);
+        let mut _rt_scheduler = crate::rt_scheduler::RenderTextureScheduler::new(&context);
         let mut rt_demo = crate::render_texture::RenderTexture::new(
             &context,
             bindless,
@@ -379,13 +390,13 @@ impl GraphRenderer {
             .set_update_mode(crate::render_texture::RtUpdateMode::Realtime)
             .set_period(1)
             .set_update_shader(crate::render_texture::RtShader::BitmapPattern);
-        let rt_demo_handle = rt_scheduler.add(rt_demo);
+        let rt_demo_handle = _rt_scheduler.add(rt_demo);
         log::info!("RT demo: 4x4 bitmap render texture registered -> {rt_demo_handle:?}");
 
         // 消费端：全屏采样 RT（bindless）→ swapchain，验证 RT 闭环。
-        let mut rt_preview_pass = crate::rt_pass::RtPreviewPass::new(&context, color_format);
-        rt_preview_pass.set_bindless_layout(bindless.layout);
-        rt_preview_pass.set_bindless_set(bindless.set);
+        let mut _rt_preview_pass = crate::rt_pass::RtPreviewPass::new(&context, color_format);
+        _rt_preview_pass.set_bindless_layout(bindless.layout);
+        _rt_preview_pass.set_bindless_set(bindless.set);
 
         // Register all passes into the 图 in 执行 order.
         // Shadow -> Scene -> GTAO -> RenderTextures -> PathTrace -> Post -> RtPreview.
@@ -398,10 +409,7 @@ impl GraphRenderer {
             forward_pass.set_image_count(swapchain.views.len());
         }
         graph.add_pass(Box::new(gtao_pass));
-        graph.add_pass(Box::new(rt_scheduler));
-        graph.add_pass(Box::new(pt_pass));
         graph.add_pass(Box::new(post_pass));
-        graph.add_pass(Box::new(rt_preview_pass));
 
         Ok(Self {
             swapchain: Some(swapchain),
@@ -411,6 +419,7 @@ impl GraphRenderer {
             material_manager,
             ibl,
             scene_scope,
+            brdf_bindless_slot: brdf_handle.0,
             graph,
             settings,
             shadow_sampler,
@@ -467,11 +476,14 @@ impl GraphRenderer {
             ..Default::default()
         };
 
+        let ibl_ds_layout =
+            crate::ibl::ibl_descriptor_set_layout(&context.device).context("create IBL ds layout (headless)")?;
         let ibl = IblResources::new(
             context.clone(),
             runtime.command_pool,
             context.graphics_queue,
             env_bytes,
+            ibl_ds_layout,
         )
         .context("create IBL resources (headless)")?;
 
@@ -550,10 +562,9 @@ impl GraphRenderer {
         let post_pass = crate::post::PostPass::new(&context, color_format, frame_count)
             .context("PostPass::new (headless)")?;
 
-        let pt_pass = PathTracePass::new(&context).context("PathTracePass::new (headless)")?;
 
         // CRT 调度器（headless 也注册演示 RT，验证调度器在无窗口下跑通）。
-        let mut rt_scheduler = crate::rt_scheduler::RenderTextureScheduler::new(&context);
+        let mut _rt_scheduler = crate::rt_scheduler::RenderTextureScheduler::new(&context);
         let mut rt_demo = crate::render_texture::RenderTexture::new(
             &context,
             bindless,
@@ -565,15 +576,13 @@ impl GraphRenderer {
             .set_update_mode(crate::render_texture::RtUpdateMode::Realtime)
             .set_period(1)
             .set_update_shader(crate::render_texture::RtShader::BitmapPattern);
-        let rt_demo_handle = rt_scheduler.add(rt_demo);
+        let rt_demo_handle = _rt_scheduler.add(rt_demo);
         log::info!(
             "RT demo: 4x4 bitmap render texture registered (headless) -> {rt_demo_handle:?}"
         );
 
         graph.add_pass(Box::new(forward_pass));
         graph.add_pass(Box::new(gtao_pass));
-        graph.add_pass(Box::new(rt_scheduler));
-        graph.add_pass(Box::new(pt_pass));
         graph.add_pass(Box::new(post_pass));
 
         Ok(Self {
@@ -584,6 +593,7 @@ impl GraphRenderer {
             material_manager,
             ibl,
             scene_scope,
+            brdf_bindless_slot: brdf_handle.0,
             graph,
             settings,
             shadow_sampler,
@@ -681,6 +691,51 @@ impl GraphRenderer {
         self.ibl.descriptor_set_layout
     }
 
+    /// 按场景重建 IBL。`env_bytes = Some(hdr)` 跑完整 CPU 预卷积；
+    /// `None` 重建为廉价中性空 IBL（与 `new_empty` 等价）。用于在「场景切换」
+    /// 时按需构建/移除光照，而不在引擎启动期无条件加载 3D IBL/GI。
+    ///
+    /// 共享的 set2 描述符 布局 保持稳定（`self.ibl.descriptor_set_layout`），
+    /// 仅替换 descriptor set 句柄与 BRDF LUT（覆盖同一 bindless 槽），
+    /// forward pass / skybox 管线 布局 无需重建。
+    pub fn set_environment(&mut self, env_bytes: Option<Vec<u8>>) -> anyhow::Result<()> {
+        // `None` = 无光照场景（开屏/UI）：走廉价中性空 IBL（new_empty，不卷积，≈0ms）。
+        // 共享 set2 描述符 布局 保持稳定。
+        let new_ibl = if let Some(bytes) = env_bytes {
+            IblResources::new(
+                self.runtime.context.clone(),
+                self.runtime.command_pool,
+                self.runtime.context.graphics_queue,
+                Some(bytes),
+                self.ibl.descriptor_set_layout,
+            )
+            .context("rebuild IBL resources for scene")?
+        } else {
+            IblResources::new_empty(
+                self.runtime.context.clone(),
+                self.runtime.command_pool,
+                self.runtime.context.graphics_queue,
+                self.ibl.descriptor_set_layout,
+            )
+            .context("rebuild empty IBL resources for scene")?
+        };
+        // 覆盖同一 bindless 槽的 BRDF LUT（表不增长）。
+        self.texture_manager
+            .bindless_mut()
+            .register_with_handle(self.brdf_bindless_slot, new_ibl.brdf_image_view())
+            .context("overwrite BRDF LUT bindless slot")?;
+
+        // 切换 forward pass / skybox 的 set2（布局共享，不重建管线）。
+        if let Some(fp) = self.graph.pass_mut::<ForwardPass>() {
+            fp.set_ibl(new_ibl.descriptor_set, self.brdf_bindless_slot);
+        }
+
+        // 销毁旧 IBL（不销毁共享 布局）后接管新的。
+        self.ibl.destroy();
+        self.ibl = new_ibl;
+        Ok(())
+    }
+
     pub fn register_mesh(&mut self, input: &MeshUploadInput) -> anyhow::Result<MeshHandle> {
         self.mesh_manager.register(
             &self.runtime.context,
@@ -759,6 +814,90 @@ impl GraphRenderer {
 
     pub fn mesh_manager(&self) -> &RenderMeshManager {
         &self.mesh_manager
+    }
+
+    /// GPU 侧资产解析：执行主线程准备好的上传请求，返回句柄。
+    ///
+    /// 在渲染线程调用（拥有 `&mut self`）。每个请求独立上传 mesh / 纹理 /
+    /// 材质：纹理先上传取 bindless 槽，再据此组装 `MaterialUploadInput` 上传材质。
+    /// 返回顺序与输入一致，调用方按实体配对写回 `World`。
+    ///
+    /// 输入为空时直接返回，避免无谓地创建 `BatchUploader` 命令缓冲。
+    pub fn apply_asset_requests(
+        &mut self,
+        requests: Vec<crate::asset_bridge::AssetResolveRequest>,
+    ) -> Vec<crate::asset_bridge::AssetResolveResult> {
+        if requests.is_empty() {
+            return Vec::new();
+        }
+
+        let ctx = self.context_arc();
+        let cmd_pool = self.command_pool();
+        let mut uploader = match crate::batch::BatchUploader::new(&ctx, cmd_pool) {
+            Ok(u) => u,
+            Err(e) => {
+                log::error!("apply_asset_requests: BatchUploader::new failed: {e}");
+                return Vec::new();
+            }
+        };
+
+        let mut results = Vec::with_capacity(requests.len());
+        for req in requests {
+            let mesh_handle = match &req.mesh {
+                Some(input) => self.register_mesh_into(&mut uploader, input).ok(),
+                None => None,
+            };
+
+            let material_slot = match &req.material {
+                Some(mat) => {
+                    let mut slots: [Option<u32>; 5] = [None; 5];
+                    for (i, tex) in mat.textures.iter().enumerate() {
+                        if let Some(t) = tex {
+                            if let Ok(h) = self.register_texture_into(&mut uploader, t) {
+                                slots[i] = Some(self.texture_srv(h).0);
+                            }
+                        }
+                    }
+                    let s = mat.scalars;
+                    let input = crate::managers::MaterialUploadInput {
+                        base_color: [s[0], s[1], s[2], s[3]],
+                        metallic: s[4],
+                        roughness: s[5],
+                        emissive: [s[6], s[7], s[8]],
+                        albedo_tex: slots[0],
+                        normal_tex: slots[1],
+                        metallic_roughness_tex: slots[2],
+                        emissive_tex: slots[3],
+                        occlusion_tex: slots[4],
+                        normal_scale: s[10],
+                        occlusion_strength: s[11],
+                        transmission: s[12],
+                        ior: s[13],
+                        translucency: s[14],
+                        anisotropy: s[15],
+                        clearcoat: s[16],
+                        clearcoat_roughness: s[17],
+                        emissive_strength: s[9],
+                    };
+                    self.register_material(input).ok().and_then(|h| self.material_slot(h))
+                }
+                None => None,
+            };
+
+            results.push(crate::asset_bridge::AssetResolveResult {
+                mesh_handle,
+                material_slot,
+            });
+        }
+
+        if let Err(e) = uploader.finish(self.graphics_queue()) {
+            log::error!("apply_asset_requests: BatchUploader::finish failed: {e}");
+        }
+        if let Err(e) = self.flush_materials() {
+            log::warn!("apply_asset_requests: flush_materials failed: {e}");
+        }
+
+        results
     }
 
     /// Read-only 访问 to the 纹理 管理器 (owns the bindless 纹理
@@ -1256,8 +1395,8 @@ impl GraphRenderer {
                 }
                 if let Some(sw) = self.swapchain.as_ref() {
                     if let Some(gpu) = self.ui_overlay.as_mut() {
-                        // PRESENT_SRC_KHR → COLOR_ATTACHMENT_OPTIMAL（UI 覆盖
-                        // 在 graph 输出之上，必须 LOAD 保留背景）。
+                        // PostPass leaves the swapchain image in PRESENT; turn it
+                        // back into a color attachment for the UI load pass.
                         let image = sw.images[image_index as usize];
                         let barrier = vk::ImageMemoryBarrier::default()
                             .old_layout(vk::ImageLayout::PRESENT_SRC_KHR)
@@ -1505,7 +1644,13 @@ impl GraphRenderer {
         unsafe { device.device_wait_idle() }.ok();
 
         // 销毁 IBL resources (env/irradiance/prefiltered cubes, BRDF LUT).
+        // 共享的 set2 描述符 布局 由 GraphRenderer 持有，此处单独销毁
+        // （在 ibl.destroy() 把字段置空前取出句柄）。
+        let ibl_ds_layout = self.ibl.descriptor_set_layout;
         self.ibl.destroy();
+        if ibl_ds_layout != vk::DescriptorSetLayout::null() {
+            unsafe { device.destroy_descriptor_set_layout(ibl_ds_layout, None) };
+        }
 
         // 销毁 scene managers.
         self.material_manager.destroy(device);

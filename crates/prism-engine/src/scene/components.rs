@@ -245,6 +245,46 @@ impl Default for SpotLight {
     }
 }
 
+/// 场景环境光照（IBL）声明式组件。
+///
+/// 引擎采用「场景声明式光照」：只有当场景显式携带此组件且 `env_map` 为 `Some` 时，
+/// 渲染器才在场景加载时构建 IBL 预卷积（CPU 卷积，约数 ms）。开屏等无 3D 光照
+/// 需求的场景不写此组件（或 `env_map = None`）→ 渲染器以廉价中性空 IBL 启动，
+/// 秒开、不加载 3D 环境贴图。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EnvironmentLighting {
+    /// 环境贴图（等距柱状 HDR）相对场景文件的路径。`None` 或缺失 = 不构建 IBL。
+    pub env_map: Option<String>,
+}
+
+impl Default for EnvironmentLighting {
+    fn default() -> Self {
+        Self { env_map: None }
+    }
+}
+
+/// 场景全局光照（GI probe 音量）声明式组件。
+///
+/// 仅当 `enabled = true` 且存在烘焙好的体积数据时，渲染器才上传真实 GI probe
+/// 音量；否则保留免费的 synthetic sky 占位（仅让 set5 描述符 合法）。无 3D 光照
+/// 需求的场景（如开屏）不写此组件。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GiConfig {
+    /// 是否启用真实 GI（替换 synthetic sky 占位）。
+    pub enabled: bool,
+    /// 烘焙 GI 体积数据相对场景文件的路径（可选）。
+    pub volume: Option<String>,
+}
+
+impl Default for GiConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            volume: None,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // 相机
 // ---------------------------------------------------------------------------

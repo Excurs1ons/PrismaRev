@@ -62,6 +62,8 @@ pub mod render_texture;
 pub mod rt_pass;
 pub mod rt_scheduler;
 pub mod scene_scope;
+/// 主线程(CPU) ↔ 渲染线程(GPU) 资产解析请求/结果桥接类型。
+pub mod asset_bridge;
 pub mod shader;
 pub mod shadow_map_pass;
 /// Slang-reflection-generated 绑定 constants (set/binding indices, entry

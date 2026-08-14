@@ -59,10 +59,13 @@
 //!     extract_frame_packet ──packet──►   │
 //!     frame_hook.on_tick ──overlay_msg──►│
 //!
-//! resumed(): 创建 PlatformContext → resolve_scene_assets
-//! → into_parts() → 生成 渲染 线程
-//! suspended(): stop 渲染 线程 suspend 表面
+//! resumed(): 主线程创建窗口（快速，~数毫秒）→ 生成 渲染 线程（内部异步
+//!   构建 GraphRenderer，~数百毫秒，不阻塞窗口事件）→ 立即返回
+//! suspended(): stop 渲染 线程（销毁渲染器、释放 Vulkan 表面）
 //! ```
+//!
+//! 启动期资产解析经 asset_requests/asset_results 通道完成：主线程 CPU 段
+//! 准备上传请求，渲染线程 GPU 段上传并回传句柄。
 
 mod app;
 mod audio_decode_runner;

@@ -109,6 +109,10 @@ pub fn register_builtin_components(registry: &mut ComponentRegistry) {
     registry.register::<PointLight>("prism_engine::scene::PointLight");
     registry.register::<SpotLight>("prism_engine::scene::SpotLight");
 
+    // ── 声明式光照（场景驱动 IBL / GI，避免引擎启动无条件加载）──
+    registry.register::<EnvironmentLighting>("prism_engine::scene::EnvironmentLighting");
+    registry.register::<GiConfig>("prism_engine::scene::GiConfig");
+
     // ── 相机 ──
     registry.register::<Camera>("prism_engine::scene::Camera");
     registry.register::<FlyCameraController>("prism_engine::scene::FlyCameraController");

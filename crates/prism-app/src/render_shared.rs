@@ -16,14 +16,34 @@
 //! [`RenderStats`] 流向相反方向（渲染线程 → 主线程），
 //! `pt_reset_requested` 同理（主线程 → 渲染线程）。
 
+use std::collections::HashMap;
 use std::sync::Mutex;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc,
+    Arc, OnceLock,
 };
+use std::time::Instant;
 
+use prism_ecs::Entity;
 use prism_engine::render_system::FramePacket;
+use prism_render::asset_bridge::{AssetResolveRequest, AssetResolveResult};
 use prism_render::external_overlay::OverlayMessage;
+use prism_render::GraphRenderer;
+
+/// 进程启动基准时刻，仅用于启动期诊断打印。
+static START_EPOCH: OnceLock<Instant> = OnceLock::new();
+
+/// 自进程启动起经过的毫秒数（单调）。
+pub fn startup_ms() -> u64 {
+    START_EPOCH
+        .get_or_init(Instant::now)
+        .elapsed()
+        .as_millis() as u64
+}
+
+/// 类型擦除的渲染器命令（主线程→渲染线程）：渲染线程每帧取出并应用到
+/// `&mut GraphRenderer`（如 `set_environment` 在场景切换时按需重建 IBL）。
+pub type RendererMessage = Box<dyn FnOnce(&mut GraphRenderer) + Send>;
 
 // ---------------------------------------------------------------------------
 // RenderStats — 渲染线程 → 主线程
@@ -52,14 +72,25 @@ pub struct RenderShared {
     pub packet: Mutex<Option<FramePacket>>,
     /// 投递给外部叠加层的类型擦除消息队列（主线程→渲染线程）
     pub overlay_messages: Mutex<Vec<OverlayMessage>>,
+    /// 投递给渲染器本身的类型擦除消息队列（主线程→渲染线程）。
+    /// 用于跨线程调用 [`GraphRenderer`] 方法（如 `set_environment` 在
+    /// 场景切换时按需重建 IBL），避免在渲染线程持有所有权时从主线程
+    /// 直接借用 `&mut GraphRenderer`。
+    pub renderer_messages: Mutex<Vec<RendererMessage>>,
     /// 来自渲染线程的最新渲染统计（渲染→主线程）。
     pub render_stats: Mutex<RenderStats>,
     /// 集合 `true` by main 线程 to request PT accumulation reset.
     pub pt_reset_requested: AtomicBool,
-    /// Pending GPU upload tasks (main 线程 → 渲染 线程
-    /// The 渲染 线程 drains this at the start of each 帧
-    #[allow(dead_code)] // 骨架：GPU 上传队列尚未被渲染线程消费
-    pub gpu_uploads: Mutex<Vec<super::io_runner::GpuUploadTask>>,
+    /// 资产上传请求队列（主线程 CPU 段 → 渲染线程 GPU 段）。
+    /// 主线程 `prepare_requests` 生成的纯数据请求在这里入队；
+    /// 渲染线程每帧取走并交给 `GraphRenderer::apply_asset_requests`。
+    pub asset_requests: Mutex<Vec<(Entity, AssetResolveRequest)>>,
+    /// 资产上传结果队列（渲染线程 GPU 段 → 主线程 CPU 段）。
+    /// 渲染线程完成上传后回传 `(Entity, AssetResolveResult)`；
+    /// 主线程每帧取走并写回 `MeshRef`/`MaterialRef`。
+    pub asset_results: Mutex<Vec<(Entity, AssetResolveResult)>>,
+    /// 启动期计时标记（主线程 + 渲染线程共享，仅用于启动诊断打印）。
+    pub startup_marks: Mutex<HashMap<&'static str, u64>>,
 }
 
 impl RenderShared {
@@ -70,9 +101,12 @@ impl RenderShared {
             running: running.clone(),
             packet: Mutex::new(None),
             overlay_messages: Mutex::new(Vec::new()),
+            renderer_messages: Mutex::new(Vec::new()),
             render_stats: Mutex::new(RenderStats::default()),
             pt_reset_requested: AtomicBool::new(false),
-            gpu_uploads: Mutex::new(Vec::new()),
+            asset_requests: Mutex::new(Vec::new()),
+            asset_results: Mutex::new(Vec::new()),
+            startup_marks: Mutex::new(HashMap::new()),
         });
         (shared, running)
     }
@@ -105,6 +139,95 @@ impl RenderShared {
     /// 取走所有排队中的叠加层消息（渲染线程）。
     pub fn take_overlay_messages(&self) -> Vec<OverlayMessage> {
         std::mem::take(&mut *self.overlay_messages.lock().unwrap())
+    }
+
+    // -------------------------------------------------------------------
+    // Renderer messages (main → 渲染线程)
+    // -------------------------------------------------------------------
+
+    /// 入队一条渲染器命令（主线程 → 渲染线程）。渲染线程在每帧开始时取出并
+    /// 应用到 `&mut GraphRenderer`。用于跨线程触发 `set_environment` 等。
+    pub fn send_renderer_message(&self, msg: RendererMessage) {
+        self.renderer_messages.lock().unwrap().push(msg);
+    }
+
+    /// 取走所有排队中的渲染器命令（渲染线程）。
+    pub fn take_renderer_messages(&self) -> Vec<RendererMessage> {
+        std::mem::take(&mut *self.renderer_messages.lock().unwrap())
+    }
+
+    // -------------------------------------------------------------------
+    // 资产解析（主线程 CPU 段 ↔ 渲染线程 GPU 段）
+    // -------------------------------------------------------------------
+
+    /// 入队一批资产上传请求（主线程 → 渲染线程）。
+    pub fn enqueue_asset_requests(&self, reqs: Vec<(Entity, AssetResolveRequest)>) {
+        if reqs.is_empty() {
+            return;
+        }
+        self.asset_requests.lock().unwrap().extend(reqs);
+    }
+
+    /// 取走所有排队中的资产上传请求（渲染线程）。
+    pub fn take_asset_requests(&self) -> Vec<(Entity, AssetResolveRequest)> {
+        std::mem::take(&mut *self.asset_requests.lock().unwrap())
+    }
+
+    /// 回传一批资产上传结果（渲染线程 → 主线程）。
+    pub fn push_asset_results(&self, results: Vec<(Entity, AssetResolveResult)>) {
+        if results.is_empty() {
+            return;
+        }
+        self.asset_results.lock().unwrap().extend(results);
+    }
+
+    /// 取走所有排队中的资产上传结果（主线程）。
+    pub fn take_asset_results(&self) -> Vec<(Entity, AssetResolveResult)> {
+        std::mem::take(&mut *self.asset_results.lock().unwrap())
+    }
+
+    // -------------------------------------------------------------------
+    // 启动计时（主线程 + 渲染线程共享）
+    // -------------------------------------------------------------------
+
+    /// 记录一个启动里程碑（相对进程启动时刻的毫秒数）。
+    pub fn mark(&self, key: &'static str) {
+        self.set_mark(key, startup_ms());
+    }
+
+    /// 写入一个指定毫秒数的启动里程碑（主线程一次性写入跨线程已知时刻）。
+    pub fn set_mark(&self, key: &'static str, ms: u64) {
+        self.startup_marks.lock().unwrap().insert(key, ms);
+    }
+
+    /// 首帧呈现后打印启动汇总。各里程碑在 `mark` 时收集，此处计算相对差值：
+    /// `event_loop_free`（resumed 返回，证明事件循环已解锁）、`window`
+    /// （建窗耗时）、`renderer`（渲染线程建渲染器耗时）、`warmup`（管线预热）、
+    /// `first_frame`（首帧呈现总耗时）。
+    pub fn print_startup_report(&self) {
+        let m = self.startup_marks.lock().unwrap();
+        let get = |k: &str| m.get(k).copied();
+        let resumed = match get("resumed_entry") {
+            Some(v) => v,
+            None => return,
+        };
+        let spawned = get("render_thread_spawned").unwrap_or(resumed);
+        let window_ms = get("window_built").map(|v| v.saturating_sub(resumed));
+        let renderer_ms = get("renderer_built").map(|v| v.saturating_sub(spawned));
+        let warmup_ms = get("warmup_done")
+            .zip(get("renderer_built"))
+            .map(|(w, r)| w.saturating_sub(r));
+        let first_frame_ms = get("first_frame").map(|v| v.saturating_sub(resumed));
+        let event_loop_free = spawned.saturating_sub(resumed);
+
+        log::info!(
+            "[startup] event_loop_free={}ms window={:?}ms renderer={:?}ms warmup={:?}ms first_frame={:?}ms",
+            event_loop_free,
+            window_ms,
+            renderer_ms,
+            warmup_ms,
+            first_frame_ms,
+        );
     }
 
     // -------------------------------------------------------------------

@@ -330,6 +330,69 @@ impl Engine {
         self.current_scene_name.as_deref()
     }
 
+    /// 解析「当前场景」声明式光照所需的环境贴图字节。
+    ///
+    /// 取代旧的 `load_env_bytes_from_manifest`（后者扫描 manifest 所有 `.rscn`，
+    /// 导致 UI 开屏也加载 3D 环境贴图）。新逻辑按 `current_scene_name` 定位场景：
+    /// - `.rscn`：复用 `read_env_path_from_rscn` 自动派生（向后兼容，default/sponza
+    ///   的 IBL 无需改场景即保留）。
+    /// - `.scene.json`：从已加载的 ECS 世界查询 `EnvironmentLighting` 组件；
+    ///   无该组件或 `env_map = None` → 返回 `None`（开屏等无光照场景不构建 IBL）。
+    pub fn current_scene_env_bytes(&self) -> Option<Vec<u8>> {
+        let name = self.current_scene_name.as_ref()?;
+        let (manifest_dir, manifest) = find_and_parse_manifest()?;
+        let entry = manifest.scenes.iter().find(|e| &e.name == name)?;
+        let path = manifest_dir.join(&entry.path);
+
+        if entry.path.ends_with(".rscn") {
+            if let Some(hdr_rel) = crate::scene::loader::read_env_path_from_rscn(&path) {
+                let hdr_path = path
+                    .parent()
+                    .map(|d| d.join(&hdr_rel))
+                    .unwrap_or_else(|| std::path::PathBuf::from(&hdr_rel));
+                match std::fs::read(&hdr_path) {
+                    Ok(bytes) => {
+                        log::info!("scene '{}' environment (rscn): {}", name, hdr_path.display());
+                        return Some(bytes);
+                    }
+                    Err(e) => log::warn!("env map {} not readable: {e}", hdr_path.display()),
+                }
+            }
+            return None;
+        }
+
+        if entry.path.ends_with(".scene.json") {
+            for (_, env) in self
+                .world
+                .query::<crate::scene::components::EnvironmentLighting>()
+            {
+                if let Some(env_map) = &env.env_map {
+                    let hdr_path = path
+                        .parent()
+                        .map(|d| d.join(env_map))
+                        .unwrap_or_else(|| std::path::PathBuf::from(env_map));
+                    match std::fs::read(&hdr_path) {
+                        Ok(bytes) => {
+                            log::info!(
+                                "scene '{}' environment (component): {}",
+                                name,
+                                hdr_path.display()
+                            );
+                            return Some(bytes);
+                        }
+                        Err(e) => {
+                            log::warn!("env map {} not readable: {e}", hdr_path.display())
+                            // 组件声明了 env_map 但文件缺失：视为无 IBL。
+                        }
+                    }
+                }
+                // 找到 EnvironmentLighting 组件但无 env_map（或文件缺失）→ 不构建 IBL。
+                return None;
+            }
+        }
+        None
+    }
+
     /// Mutable 访问 to the ECS 系统 调度
     pub fn schedule_mut(&mut self) -> &mut Schedule {
         &mut self.schedule
@@ -395,7 +458,44 @@ struct SceneManifest {
     scenes: Vec<SceneManifestEntry>,
 }
 
-const CANDIDATE_DIRS: &[&str] = &["assets", "crates/prism-engine/assets"];
+/// 不依赖当前工作目录地定位 `scenes.toml`：
+/// 依次在【当前目录及其各级父目录】与【可执行文件所在目录及其各级父目录】下，
+/// 尝试 `assets/scenes.toml` 与 `crates/prism-engine/assets/scenes.toml`。
+///
+/// 这样无论从仓库根还是 `game/` 子目录（如 `cd game && cargo run`）启动，
+/// 都能正确找到资源清单——之前 `cargo run` 把 cwd 设为 `game/`，导致
+/// `assets/scenes.toml` 找不到、回退到空场景而黑屏。
+fn find_manifest_path() -> Option<std::path::PathBuf> {
+    let rels = ["assets/scenes.toml", "crates/prism-engine/assets/scenes.toml"];
+    let mut bases: Vec<std::path::PathBuf> = Vec::new();
+    if let Ok(cwd) = std::env::current_dir() {
+        bases.push(cwd.clone());
+        let mut p = cwd.as_path();
+        while let Some(parent) = p.parent() {
+            bases.push(parent.to_path_buf());
+            p = parent;
+        }
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            bases.push(exe_dir.to_path_buf());
+            let mut p = exe_dir;
+            while let Some(parent) = p.parent() {
+                bases.push(parent.to_path_buf());
+                p = parent;
+            }
+        }
+    }
+    for base in bases {
+        for rel in rels {
+            let candidate = base.join(rel);
+            if candidate.exists() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
 
 /// 加载 environment 映射表 字节 from the 第一个 scene in `scenes.toml`.
 /// Used during 渲染器 construction; does not need the ECS 世界
@@ -431,10 +531,7 @@ pub fn load_env_bytes_from_manifest() -> Option<Vec<u8>> {
 }
 
 fn find_and_parse_manifest() -> Option<(std::path::PathBuf, SceneManifest)> {
-    let manifest_path = CANDIDATE_DIRS
-        .iter()
-        .map(|d| std::path::Path::new(d).join("scenes.toml"))
-        .find(|p| p.exists())?;
+    let manifest_path = find_manifest_path()?;
     let manifest_dir = manifest_path.parent()?.to_path_buf();
     let text = std::fs::read_to_string(&manifest_path).ok()?;
     let manifest: SceneManifest = toml::from_str(&text).ok()?;
@@ -447,10 +544,7 @@ fn find_and_parse_manifest() -> Option<(std::path::PathBuf, SceneManifest)> {
 }
 
 fn load_scene_from_manifest(rm: &mut ResourceManager, world: &mut World, registry: &crate::scene::ComponentRegistry) -> Option<String> {
-    let manifest_path = CANDIDATE_DIRS
-        .iter()
-        .map(|d| std::path::Path::new(d).join("scenes.toml"))
-        .find(|p| p.exists());
+    let manifest_path = find_manifest_path();
     let manifest_path = match manifest_path {
         Some(p) => p,
         None => {
@@ -486,12 +580,11 @@ fn load_scene_from_manifest(rm: &mut ResourceManager, world: &mut World, registr
             .as_ref()
             .map(|d| d.join(&entry.path))
             .unwrap_or_else(|| std::path::PathBuf::from(&entry.path));
-        let ext = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|e| e.to_ascii_lowercase())
-            .unwrap_or_default();
-        let is_scene_file = ext == "rscn" || ext == "scene.json";
+        // 注意：`Path::extension()` 只返回最后一个分量（如
+        // `intro.scene.json` 的 ext 是 `json`），因此不能用 `== "scene.json"`
+        // 判断。直接对清单里的原始路径后缀匹配，跨平台（含 Windows 混合分隔符）。
+        let is_scene_file =
+            entry.path.ends_with(".rscn") || entry.path.ends_with(".scene.json");
         if !is_scene_file {
             log::info!("scene '{}': skipping unsupported path {:?}", entry.name, path);
             continue;

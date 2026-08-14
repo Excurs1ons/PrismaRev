@@ -29,12 +29,14 @@ mod components;
 mod input;
 mod layout;
 mod panel_base;
+mod particles;
 mod render;
 
 pub use components::*;
 pub use input::{ui_input_system, UiInputState};
 pub use layout::{ui_layout_system, ScreenSize};
 pub use panel_base::PanelBase;
+pub use particles::{Particle2D, ParticleSystem2D, SpawnKind};
 pub use render::{
     convert_ui_draw_list_to_overlay, ui_render_system, UiDrawList, UiQuad, UiTextCmd,
 };

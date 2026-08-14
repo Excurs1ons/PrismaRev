@@ -16,14 +16,17 @@
 //!
 //! 渲染线程独立于窗口事件运行。垂直同步仅阻塞渲染线程——主线程继续执行。
 //!
-//! **初始化**（全部在 `App::new` + `resumed` 中单线程执行）：
+//! **初始化**（窗口在主线程快速创建，渲染器在渲染线程异步构建）：
 //! ```text
 //!   App::new:
 //!     Engine::empty → pre_init → init_core → init_config → init_resources
 //!     → init_scene → runtime_initialize
 //!   [resumed]:
-//!     PlatformContext → warmup pipelines → resolve_scene_assets
-//! → into_parts → 生成渲染线程
+//!     PlatformContext::create_window（主线程，~数毫秒）→ 计算扩展名/场景光照
+//!     → 生成渲染线程（窗口启动即返回，事件不被阻塞）
+//!   [渲染线程]:
+//!     GraphRenderer::new（~数百毫秒，不阻塞主线程）→ warmup → set_environment
+//!     → 进入帧循环；资源解析经 asset_requests/asset_results 通道异步完成
 //! ```
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -34,7 +37,6 @@ use std::time::Instant;
 use prism_audio::AudioEngine;
 use prism_engine::asset_resolver::GpuAssetResolver;
 use prism_engine::config::AppConfig;
-use prism_engine::engine::load_env_bytes_from_manifest;
 use prism_engine::input::{
     ElementState as EngElementState, InputManager, KeyCode as EngKeyCode,
     MouseButton as EngMouseButton,
@@ -42,15 +44,16 @@ use prism_engine::input::{
 use prism_engine::render_settings::RenderSettings;
 use prism_engine::render_system::extract_frame_packet;
 use prism_engine::Engine;
-use prism_platform::PlatformContext;
+use prism_platform::{required_vulkan_extensions, PlatformContext};
 use winit::application::ApplicationHandler;
 use winit::event::{DeviceEvent, MouseScrollDelta, WindowEvent};
-use winit::event_loop::ActiveEventLoop;
+use winit::event_loop::{ActiveEventLoop, ControlFlow};
 use winit::keyboard::KeyCode;
+use winit::raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use winit::window::WindowId;
 
 use crate::hook::FrameHook;
-use crate::render_runner::render_thread_main;
+use crate::render_runner::{render_thread_main, OverlayFactory, SendWindowHandles};
 use crate::render_shared::RenderShared;
 
 // ===========================================================================
@@ -115,9 +118,8 @@ pub struct App {
     render_running: Option<Arc<AtomicBool>>,
     render_thread: Option<JoinHandle<()>>,
 
-    // ---------- 窗口上下文（into_parts 之前） ----------
-    platform: Option<PlatformContext>,
-    /// `into_parts` 后窗口与渲染器分离。
+    // ---------- 窗口上下文 ----------
+    /// 主线程持有的窗口（`Arc` 与渲染线程共享）。`None` 表示尚未创建。
     window: Option<Arc<winit::window::Window>>,
 
     // ---------- 帧钩子（编辑器等宿主注入） ----------
@@ -188,7 +190,6 @@ impl App {
             render_shared: None,
             render_running: None,
             render_thread: None,
-            platform: None,
             window: None,
             frame_hook: None,
             render_settings: RenderSettings::default(),
@@ -317,29 +318,67 @@ impl App {
     // 渲染线程生命周期
     // -----------------------------------------------------------------------
 
-    fn start_render_thread(&mut self) {
-        let platform = self.platform.take().expect("platform not created");
-
-        // 从 PlatformContext 中提取 GraphRenderer。
-        let (window, mut renderer) = platform.into_parts();
-        self.window = Some(window);
-
-        // 帧钩子提供的叠加层工厂在启动渲染线程前调用一次：overlay 被
-        // 移到渲染线程（GPU 资源由实现方在 record 时懒创建）。
-        if let Some(hook) = self.frame_hook.as_ref() {
-            if let Some(factory) = hook.overlay() {
-                renderer.set_external_overlay(factory());
+    /// 在**渲染线程**异步构建 [`GraphRenderer`] 并启动帧循环。
+    ///
+    /// 主线程只持有已创建的窗口（`self.window`）。本函数计算场景光照、
+    /// Vulkan 扩展名、叠加层工厂，创建共享状态，然后 spawn 渲染线程——
+    /// 渲染线程内部才构建渲染器（~数百毫秒），因此 `resumed` 调用后能立即
+    /// 返回，窗口事件（关闭/移动/缩放）全程不被阻塞。
+    fn spawn_render_thread(&mut self) {
+        let window = match self.window.clone() {
+            Some(w) => w,
+            None => {
+                log::error!("spawn_render_thread: window not created");
+                return;
             }
-        }
+        };
+
+        // 场景声明式光照：纯 CPU 计算，无需渲染器（None → 廉价空 IBL）。
+        let scene_env = self
+            .engine
+            .as_ref()
+            .and_then(|e| e.current_scene_env_bytes());
+
+        // winit 的 `Window::window_handle()` 在**非窗口创建线程**上会失败
+        // （"the underlying handle is not available"），因此必须在主线程把原始
+        // 句柄取出来再跨线程传给渲染线程。原始 HWND 是进程级值，跨线程用于
+        // 创建 Vulkan 表面是安全的（见 `SendWindowHandles`）。
+        let handles = SendWindowHandles {
+            display: (&*window)
+                .display_handle()
+                .expect("get display handle")
+                .as_raw(),
+            window: (&*window)
+                .window_handle()
+                .expect("get window handle")
+                .as_raw(),
+        };
+
+        // Vulkan 实例扩展名（依赖窗口 display handle，便宜）。
+        let extensions = required_vulkan_extensions(&window);
+
+        // 外部叠加层工厂（编辑器 egui 等）——仅提供工厂，渲染线程建好
+        // 渲染器后调用一次产出叠加层（GPU 资源 record 时懒创建）。
+        let overlay_factory: Option<OverlayFactory> =
+            self.frame_hook.as_ref().and_then(|h| h.overlay());
 
         // 创建共享状态
         let (shared, running) = RenderShared::new();
 
-        // 启动渲染线程
+        // 启动渲染线程（渲染器在该线程内部构建，不阻塞主线程）
         let shared_clone = shared.clone();
         let thread = std::thread::Builder::new()
             .name("render".into())
-            .spawn(move || render_thread_main(renderer, shared_clone))
+            .spawn(move || {
+                render_thread_main(
+                    shared_clone,
+                    handles,
+                    extensions,
+                    scene_env,
+                    true,
+                    overlay_factory,
+                )
+            })
             .expect("failed to spawn render thread");
 
         self.render_shared = Some(shared);
@@ -393,95 +432,111 @@ impl App {
     // -----------------------------------------------------------------------
     // 平台上下文（窗口 + 渲染器）生命周期
     // -----------------------------------------------------------------------
-
-    fn ensure_platform(&mut self, event_loop: &ActiveEventLoop) {
-        if self.platform.is_some() {
-            return;
-        }
-
-        let env_bytes = load_env_bytes_from_manifest();
-        let mut ctx = PlatformContext::new(event_loop, &self.config.window, env_bytes);
-
-        // 预编译所有惰性创建的 GPU 管线，使第一帧不会被管线创建阻塞。
-        if let Err(e) = ctx.warmup_pipelines() {
-            log::warn!("pipeline warmup failed (continuing): {e:#}");
-        }
-
-        // 在渲染线程启动**之前**预解析所有场景资源，
-        // 因为 `resolve_scene_assets` 需要在同一线程上同时持有 `&mut World` 和 `&mut GraphRenderer`。
-        if let Some(ref mut engine) = self.engine {
-            let count = self
-                .asset_resolver
-                .resolve_scene_assets(engine.world_mut(), ctx.renderer_mut());
-            if count > 0 {
-                log::info!("pre‑resolved {count} scene assets");
-            }
-        }
-
-        self.platform = Some(ctx);
-    }
+    // 注意：窗口由主线程的 `PlatformContext::create_window` 创建（快速），
+    // 渲染器由 `spawn_render_thread` → 渲染线程内部构建（异步、不阻塞事件）。
 
     // -----------------------------------------------------------------------
     // 游戏循环（主线程）
     // -----------------------------------------------------------------------
 
     fn tick_sim(&mut self) {
-        let Some(ref mut engine) = self.engine else {
-            return;
-        };
+        // Poll mode runs continuously; simulation time must follow wall time,
+        // otherwise a fixed 1/60 step advances opening animations thousands of
+        // frames per second on an idle desktop.
+        let now = Instant::now();
+        let dt = self
+            .last_frame
+            .map(|previous| now.duration_since(previous).as_secs_f32())
+            .unwrap_or(1.0 / 60.0)
+            .clamp(0.0, 0.1);
+        // --- 引擎模拟（独立借用 self.engine，块结束即释放） ---
+        {
+            let Some(engine) = self.engine.as_mut() else {
+                return;
+            };
 
-        // --- 同步屏幕尺寸（ECS UI 布局依赖 ScreenSize resource） ---
-        if let Some(ref window) = self.window {
-            let (w, h) = window.inner_size().into();
-            if w > 0 && h > 0 {
-                engine
-                    .world_mut()
-                    .insert_resource(prism_engine::ui::ScreenSize::new(w, h));
+            // --- 同步屏幕尺寸（ECS UI 布局依赖 ScreenSize resource） ---
+            if let Some(ref window) = self.window {
+                let (w, h) = window.inner_size().into();
+                if w > 0 && h > 0 {
+                    engine
+                        .world_mut()
+                        .insert_resource(prism_engine::ui::ScreenSize::new(w, h));
+                }
             }
-        }
 
-        // --- 输入：帧开始，清空瞬时状态 ---
-        self.input.begin_frame();
+            // --- 输入：帧开始，清空瞬时状态 ---
+            self.input.begin_frame();
 
-        // --- Fixed timestep ---
-        let dt = 1.0 / 60.0;
-        engine.fixed_update(dt, &self.input);
+            // --- Fixed timestep ---
+            engine.fixed_update(dt, &self.input);
 
-        // --- 可变时间步长更新 ---
-        engine.update(dt, &self.input);
+            // --- 可变时间步长更新 ---
+            engine.update(dt, &self.input);
 
-        // --- 延迟更新 ---
-        engine.late_update();
+            // --- 延迟更新 ---
+            engine.late_update();
 
-        // --- 音频更新 ---
-        if let Some(ref mut audio) = self.audio {
-            audio.update();
-        }
+            // --- 音频更新 ---
+            if let Some(audio) = self.audio.as_mut() {
+                audio.update();
+            }
 
-        // --- 处理音频解码结果 ---
-        if let Some(ref rx) = self.audio_decode_rx {
-            while let Ok(result) = rx.try_recv() {
-                match result {
-                    crate::audio_decode_runner::DecodeResult::Decoded { data, .. } => {
-                        if let Some(ref mut engine) = self.audio {
-                            engine.play(&data);
+            // --- 处理音频解码结果 ---
+            if let Some(rx) = self.audio_decode_rx.as_ref() {
+                while let Ok(result) = rx.try_recv() {
+                    match result {
+                        crate::audio_decode_runner::DecodeResult::Decoded { data, .. } => {
+                            if let Some(audio) = self.audio.as_mut() {
+                                audio.play(&data);
+                            }
                         }
-                    }
-                    crate::audio_decode_runner::DecodeResult::Error { message, .. } => {
-                        log::warn!("Audio decode error: {message}");
+                        crate::audio_decode_runner::DecodeResult::Error { message, .. } => {
+                            log::warn!("Audio decode error: {message}");
+                        }
                     }
                 }
             }
-        }
+        } // engine 借用在此结束
+
+        // --- 资产解析：主线程 CPU 段准备请求 → 通道 → 渲染线程 GPU 段 ---
+        self.pump_asset_requests();
 
         // --- 提取帧数据包 → 发送到渲染线程（仅渲染启用时） ---
-        if let Some(ref shared) = self.render_shared {
+        if let (Some(shared), Some(engine)) = (self.render_shared.as_ref(), self.engine.as_mut()) {
             let packet = extract_frame_packet(
                 engine.world_mut(),
                 self.display_aspect,
                 &self.surface_rotation,
             );
             shared.send_packet(packet);
+        }
+    }
+
+    /// 每帧驱动跨线程资产解析：
+    /// 1. **CPU 段**（主线程）：扫描待解析 `MeshRenderer` 实体，加载 `.pak`
+    ///    + 解交织顶点/纹理像素，产出纯数据上传请求并入队（不碰渲染器）。
+    /// 2. **结果写回**（主线程）：取走渲染线程 GPU 段回传的句柄，写入
+    ///    `MeshRef`/`MaterialRef`（`generation = 1`）。
+    ///
+    /// 渲染器在渲染线程异步构建，故此函数可在首帧前安全地每帧调用——
+    /// 请求会暂存在通道中直到渲染器就绪。
+    fn pump_asset_requests(&mut self) {
+        let (Some(shared), Some(engine)) = (self.render_shared.as_ref(), self.engine.as_mut())
+        else {
+            return;
+        };
+
+        // CPU 段：扫描待解析实体并产出上传请求（纯数据，不碰渲染器）。
+        let reqs = self.asset_resolver.prepare_requests(engine.world_mut());
+        if !reqs.is_empty() {
+            shared.enqueue_asset_requests(reqs);
+        }
+
+        // GPU 段结果写回：渲染线程回传句柄，主线程写入组件。
+        let results = shared.take_asset_results();
+        if !results.is_empty() {
+            self.asset_resolver.apply_results(engine.world_mut(), &results);
         }
     }
 
@@ -641,21 +696,40 @@ impl Default for App {
 
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        // Drive simulation/extraction continuously. With the default Wait mode
+        // winit only re-enters `about_to_wait` after input/window events, which
+        // freezes animation when the user is idle.
+        event_loop.set_control_flow(ControlFlow::Poll);
         if !self.has_subsystem(Subsystem::Render) {
             log::info!("render subsystem disabled — headless mode (no window, no GPU)");
             return;
         }
 
-        if self.platform.is_none() {
-            // 首次恢复：创建平台 + 渲染线程
-            self.ensure_platform(event_loop);
-            self.start_render_thread();
+        let resumed_entry = crate::render_shared::startup_ms();
+
+        if self.window.is_none() {
+            // 主线程仅创建窗口（快速，~数毫秒），随后立即返回——窗口事件
+            // （关闭/移动/缩放）此刻起即可被 winit 派发，不被任何初始化阻塞。
+            let window = PlatformContext::create_window(event_loop, &self.config.window);
+            let window_built = crate::render_shared::startup_ms();
+
+            self.window = Some(window.clone());
+
+            // 渲染线程异步构建渲染器 + 启动帧循环（重量级初始化不阻塞主线程）。
+            self.spawn_render_thread();
+
+            // 记录启动里程碑：resumed 返回时刻 = event_loop_free（事件循环已解锁）。
+            let spawned = crate::render_shared::startup_ms();
+            if let Some(shared) = self.render_shared.as_ref() {
+                shared.set_mark("resumed_entry", resumed_entry);
+                shared.set_mark("window_built", window_built);
+                shared.set_mark("render_thread_spawned", spawned);
+            }
             return;
         }
 
-        // Android suspend 后重建表面
-        // TODO: into_parts 后实现 resume_surface
-        // 目前记录日志后继续。
+        // Android suspend 后重建表面：本设计在 suspended 时已停止渲染线程并
+        // 丢弃窗口，故此处会重新走上面的「首次恢复」分支。仅作占位日志。
         log::info!("resumed (surface already active)");
     }
 
@@ -665,6 +739,10 @@ impl ApplicationHandler for App {
         _window_id: WindowId,
         event: WindowEvent,
     ) {
+        if matches!(event, WindowEvent::CloseRequested) {
+            event_loop.exit();
+            return;
+        }
         if self.fatal_error.is_some() {
             self.show_fatal_dialog(event_loop);
             return;
@@ -805,8 +883,7 @@ impl ApplicationHandler for App {
             }
             // 5. 丢弃音频引擎（在平台/引擎之前停止音频流）
             self.audio.take();
-            // 6. 丢弃平台渲染器和窗口
-            self.platform = None;
+            // 6. 丢弃窗口（渲染器归渲染线程所有，已随渲染线程停止而销毁）
             self.window = None;
             // 7. 引擎后关闭
             if let Some(ref mut engine) = self.engine {
@@ -848,14 +925,9 @@ impl ApplicationHandler for App {
         // 停止后台线程。
         self.stop_audio_decode_thread();
 
-        // 停止渲染线程
+        // 停止渲染线程（渲染器归渲染线程所有，停止即释放 Vulkan 表面）。
         self.stop_render_thread();
 
-        // 暂停表面
-        if let Some(ref mut ctx) = self.platform {
-            ctx.suspend_surface();
-        }
-        self.platform = None;
         self.window = None;
     }
 }

@@ -634,7 +634,7 @@ fn create_render_pass(device: &ash::Device, format: vk::Format) -> anyhow::Resul
         .initial_layout(vk::ImageLayout::UNDEFINED)
         // Leave COLOR_ATTACHMENT_OPTIMAL so the egui 叠加 can 加载 it, or
         // the 调用者 can 屏障 to PRESENT_SRC_KHR.
-        .final_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
+        .final_layout(vk::ImageLayout::PRESENT_SRC_KHR);
 
     let color_ref = vk::AttachmentReference::default()
         .attachment(0)

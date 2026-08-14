@@ -376,6 +376,7 @@ pub struct UiOverlay {
     render_pass: vk::RenderPass,
     atlas: GlyphAtlas,
     device: ash::Device,
+    framebuffers: Vec<vk::Framebuffer>,
 }
 
 impl UiOverlay {
@@ -409,6 +410,7 @@ impl UiOverlay {
             render_pass,
             atlas,
             device,
+            framebuffers: Vec::new(),
         })
     }
 
@@ -609,10 +611,14 @@ impl UiOverlay {
             .depth_test_enable(false)
             .depth_write_enable(false);
 
+        let viewport_state = vk::PipelineViewportStateCreateInfo::default()
+            .viewport_count(1)
+            .scissor_count(1);
         let pipeline_info = vk::GraphicsPipelineCreateInfo::default()
             .stages(&shader_stages)
             .vertex_input_state(&vertex_input_info)
             .input_assembly_state(&input_assembly)
+            .viewport_state(&viewport_state)
             .rasterization_state(&rasterizer)
             .multisample_state(&multisampling)
             .depth_stencil_state(&depth_stencil)
@@ -822,8 +828,10 @@ impl UiOverlay {
                 .cmd_bind_vertex_buffers(cmd, 0, &bufs, &[0u64]);
             context.device.cmd_draw(cmd, vert_count, 1, 0, 0);
             context.device.cmd_end_render_pass(cmd);
-            context.device.destroy_framebuffer(fb, None);
         }
+        // Command buffers may still reference this framebuffer after recording;
+        // retain it until UiOverlay is destroyed after the device is idle.
+        self.framebuffers.push(fb);
 
         Ok(())
     }
@@ -923,6 +931,9 @@ impl Drop for UiOverlay {
             }
             self.device.destroy_descriptor_pool(self.descriptor_pool, None);
             self.device.destroy_descriptor_set_layout(self.set_layout, None);
+            for fb in self.framebuffers.drain(..) {
+                self.device.destroy_framebuffer(fb, None);
+            }
             self.device.destroy_render_pass(self.render_pass, None);
             self.device.destroy_buffer(self.vertex_buffer, None);
             self.device.free_memory(self.vertex_memory, None);

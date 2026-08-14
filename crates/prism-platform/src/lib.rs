@@ -9,4 +9,5 @@ mod context;
 mod input;
 
 pub use context::PlatformContext;
+pub use context::required_vulkan_extensions;
 pub use input::{grab_pointer, handle_input_event, release_pointer};

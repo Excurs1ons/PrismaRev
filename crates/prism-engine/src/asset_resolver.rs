@@ -1,19 +1,28 @@
-//! GPU 资源解析器——从 `.pak` 资源包按需加载+缓存+上传网格/材质/纹理资源。
+//! GPU 资源解析器——从 `.pak` 资源包按需加载+缓存网格/材质/纹理资源。
 //!
-//! 拥有 [`ResourceManager`]（运行时资源数据库）、三个类型化缓存（确保同一网格/材质/纹理
-//! 不会重复上传），并提供 [`resolve_scene_assets`] 方法查询 ECS 世界中
-//! 待处理的 [`MeshRenderer`] 实体，将其解析为 GPU 句柄。
+//! 拥有 [`ResourceManager`]（运行时资源数据库）与三个类型化缓存（确保同一网格/材质/纹理
+//! 不会重复上传），并提供 [`GpuAssetResolver::prepare_requests`] 方法查询 ECS 世界中
+//! 待处理的 [`MeshRenderer`] 实体，生成 GPU 上传请求。
+//!
+//! ## 异步模型（与渲染线程解耦）
+//!
+//! 资源解析被拆成两段，因为 `&mut World`（主线程）与 `&mut GraphRenderer`（渲染线程）
+//! 不能同处一线程：
+//! - **CPU 段（主线程）**：[`prepare_requests`] 查询待解析实体、加载 `.pak`、解交织顶点/
+//!   纹理像素，产出纯数据的 [`AssetResolveRequest`]。不触碰渲染器。
+//! - **GPU 段（渲染线程）**：`GraphRenderer::apply_asset_requests` 执行上传并回传句柄。
+//! - 主线程再消费结果，把句柄写回 `MeshRef`/`MaterialRef`。
+//!
+//! 这样启动期渲染器在渲染线程异步构建时，主线程仍可处理窗口事件（关闭/移动/缩放）。
 
-use std::collections::HashMap;
+use std::collections::HashSet;
 
 use prism_asset::core::AssetId;
-use prism_asset::runtime::ResourceManager;
+use prism_asset::runtime::{MeshAsset, MaterialAsset, ResourceManager, TextureAsset};
+use prism_ecs::Entity;
 use prism_ecs::World;
-use prism_render::batch::BatchUploader;
-use prism_render::managers::{
-    MaterialHandle, MeshHandle, MeshUploadInput, TextureFormat, TextureUploadInput,
-};
-use prism_render::GraphRenderer;
+use prism_render::asset_bridge::{AssetResolveRequest, MaterialResolveData};
+use prism_render::managers::{MeshUploadInput, TextureFormat, TextureUploadInput};
 
 use crate::scene::components::{MaterialRef, MeshRef, MeshRenderer};
 
@@ -23,26 +32,19 @@ use crate::scene::components::{MaterialRef, MeshRef, MeshRenderer};
 
 /// On-demand 资源 loader + GPU uploader + cache.
 ///
-/// Typical use per 帧 调用 [`resolve_scene_assets`] to 进程 any entities
-/// whose [`MeshRenderer`] paths haven't been uploaded yet — the 解析 is
-/// cheap (a filtered ECS 查询 when nothing is pending.
+/// 每帧调用 [`prepare_requests`] 收集待处理实体并产出上传请求（CPU 段）；
+/// GPU 上传由渲染线程异步完成。
 pub struct GpuAssetResolver {
     pub resource_manager: ResourceManager,
-    /// AssetId → 渲染 网格 handle cache.
-    mesh_cache: HashMap<AssetId, MeshHandle>,
-    /// AssetId → 材质 SSBO 槽 材质 handle) cache.
-    mat_cache: HashMap<AssetId, (u32, MaterialHandle)>,
-    /// AssetId → bindless SRV 槽 cache.
-    tex_cache: HashMap<AssetId, u32>,
+    /// 已投递上传请求的实体（去重：避免每帧重复 enqueue，直到结果写回 World）。
+    enqueued: HashSet<Entity>,
 }
 
 impl GpuAssetResolver {
     pub fn new() -> Self {
         Self {
             resource_manager: ResourceManager::new(),
-            mesh_cache: HashMap::new(),
-            mat_cache: HashMap::new(),
-            tex_cache: HashMap::new(),
+            enqueued: HashSet::new(),
         }
     }
 
@@ -82,21 +84,19 @@ impl GpuAssetResolver {
     }
 
     // -----------------------------------------------------------------------
-    // Per-frame scene 解析
+    // 主线程：CPU 段——收集待解析实体并产出上传请求
     // -----------------------------------------------------------------------
 
-    /// 解析 unloaded 网格 / 材质 assets referenced by [`MeshRenderer`]
-    /// components into the renderer's GPU managers.
+    /// 查询 ECS 世界中待处理的 [`MeshRenderer`] 实体，加载 `.pak` + 解交织，
+    /// 产出与 `World` 完全解耦的 [`AssetResolveRequest`]（纯数据，Send）。
     ///
-    /// Returns the number of entities that were resolved this pass
-    pub fn resolve_scene_assets(
-        &mut self,
-        world: &mut World,
-        renderer: &mut GraphRenderer,
-    ) -> usize {
-        // Collect pending entities 第一个 so we don't 借用 世界 & self
-        // simultaneously.
-        let pending: Vec<(prism_ecs::Entity, String, String)> = {
+    /// 不触碰 `GraphRenderer`——GPU 上传由渲染线程的 `apply_asset_requests` 完成。
+    /// 返回的请求由调用方通过 [`prism_app::RenderShared`] 通道交给渲染线程。
+    ///
+    /// 返回数量即本帧新投递的实体数。已 enqueue 但尚未写回结果的实体会被去重跳过。
+    pub fn prepare_requests(&mut self, world: &World) -> Vec<(Entity, AssetResolveRequest)> {
+        // 收集待处理实体（首个），避免同时借用世界 & self。
+        let pending: Vec<(Entity, String, String)> = {
             let mut out = Vec::new();
             for (entity, mr) in world.query::<MeshRenderer>() {
                 let mesh_unresolved = world
@@ -107,110 +107,92 @@ impl GpuAssetResolver {
                     .get::<MaterialRef>(entity)
                     .map(|r| r.generation == 0)
                     .unwrap_or(true);
-                if mesh_unresolved || mat_unresolved {
+                if (mesh_unresolved || mat_unresolved) && !self.enqueued.contains(&entity) {
                     out.push((entity, mr.mesh_path.clone(), mr.material_path.clone()));
+                    self.enqueued.insert(entity);
                 }
             }
             out
         };
 
         if pending.is_empty() {
-            return 0;
+            return Vec::new();
         }
 
-        let ctx = renderer.context_arc();
-        let cmd_pool = renderer.command_pool();
-        let mut uploader = match BatchUploader::new(&ctx, cmd_pool) {
-            Ok(u) => u,
-            Err(e) => {
-                log::error!("resolve_scene_assets: BatchUploader::new failed: {e}");
-                return 0;
-            }
-        };
+        let mut reqs = Vec::with_capacity(pending.len());
+        for (entity, mesh_path, mat_path) in pending {
+            let mesh = if !mesh_path.is_empty() {
+                self.load_mesh_inputs(&mesh_path)
+            } else {
+                None
+            };
+            let material = if !mat_path.is_empty() {
+                self.load_material_data(&mat_path)
+            } else {
+                None
+            };
+            reqs.push((entity, AssetResolveRequest { mesh, material }));
+        }
 
-        let mut resolved = 0usize;
-        for (entity, mesh_path, mat_path) in &pending {
-            let mut ok = true;
+        log::info!(
+            "prepare_requests: staged {} entit(y/ies) for async GPU upload",
+            reqs.len()
+        );
+        reqs
+    }
 
-            // --- 网格 ---
-            if !mesh_path.is_empty() {
-                if let Some(mesh_handle) = self.resolve_mesh(mesh_path, renderer, &mut uploader) {
-                    if let Some(mr) = world.get_mut::<MeshRef>(*entity) {
-                        mr.render_handle = mesh_handle;
-                        mr.generation = 1;
-                    }
-                } else {
-                    ok = false;
+    /// 结果写回后调用：解除该实体的 enqueue 去重标记，并写入 GPU 句柄。
+    ///
+    /// 必须在主线程调用（持有 `&mut World`）。
+    pub fn apply_results(
+        &mut self,
+        world: &mut World,
+        results: &[(Entity, prism_render::asset_bridge::AssetResolveResult)],
+    ) {
+        for (entity, result) in results {
+            if let Some(mr) = world.get_mut::<MeshRef>(*entity) {
+                if let Some(h) = result.mesh_handle {
+                    mr.render_handle = h;
+                    mr.generation = 1;
                 }
             }
-
-            // --- 材质 ---
-            if !mat_path.is_empty() {
-                if let Some(slot) = self.resolve_material(mat_path, renderer, &mut uploader) {
-                    if let Some(mr) = world.get_mut::<MaterialRef>(*entity) {
-                        mr.material_slot = slot;
-                        mr.generation = 1;
-                    }
-                } else {
-                    ok = false;
+            if let Some(mr) = world.get_mut::<MaterialRef>(*entity) {
+                if let Some(slot) = result.material_slot {
+                    mr.material_slot = slot;
+                    mr.generation = 1;
                 }
             }
-
-            if ok {
-                resolved += 1;
-            }
+            self.enqueued.remove(entity);
         }
-
-        // 刷新 batched upload.
-        if let Err(e) = uploader.finish(renderer.graphics_queue()) {
-            log::error!("resolve_scene_assets: BatchUploader::finish failed: {e}");
-        }
-        if let Err(e) = renderer.flush_materials() {
-            log::warn!("resolve_scene_assets: flush_materials failed: {e}");
-        }
-
-        if resolved > 0 {
-            log::info!("resolve_scene_assets: resolved {resolved} entity(ies)");
-        }
-        resolved
     }
 
     // -----------------------------------------------------------------------
-    // 内部 解析 helpers
+    // 内部 CPU 加载 helpers（纯数据，无渲染器依赖）
     // -----------------------------------------------------------------------
 
-    /// 解析 a 网格 资源 path → 渲染 `MeshHandle`, using the cache.
-    fn resolve_mesh(
-        &mut self,
-        path: &str,
-        renderer: &mut GraphRenderer,
-        uploader: &mut BatchUploader<'_>,
-    ) -> Option<MeshHandle> {
+    /// CPU 段：加载网格资源 + 解交织顶点 data → `MeshUploadInput`。
+    fn load_mesh_inputs(&mut self, path: &str) -> Option<MeshUploadInput> {
         let id = self.resource_manager.id_by_path(path).or_else(|| {
-            log::warn!("resolve_mesh: path '{path}' not in manifest");
+            log::warn!("load_mesh_inputs: path '{path}' not in manifest");
             None
         })?;
 
-        if let Some(&h) = self.mesh_cache.get(&id) {
-            return Some(h);
-        }
-
         let handle = self
             .resource_manager
-            .load_with_deps::<prism_asset::runtime::MeshAsset>(id)
-            .map_err(|e| log::warn!("resolve_mesh: load '{path}' failed: {e}"))
+            .load_with_deps::<MeshAsset>(id)
+            .map_err(|e| log::warn!("load_mesh_inputs: load '{path}' failed: {e}"))
             .ok()?;
         let mesh = self
             .resource_manager
             .get(handle)
-            .map_err(|e| log::warn!("resolve_mesh: get '{path}' failed: {e}"))
+            .map_err(|e| log::warn!("load_mesh_inputs: get '{path}' failed: {e}"))
             .ok()?;
 
         // De-interleave RMES 顶点 data into split arrays.
         let info = &mesh.info;
         let stride = info.stride_bytes as usize;
         if stride == 0 || stride % 4 != 0 {
-            log::warn!("resolve_mesh: bad stride {} for '{path}'", stride);
+            log::warn!("load_mesh_inputs: bad stride {} for '{path}'", stride);
             return None;
         }
         let vert_count = info.vert_count as usize;
@@ -222,17 +204,17 @@ impl GpuAssetResolver {
         let expected_float_stride = pos_floats + nrm_floats + uv_floats;
         if float_stride != expected_float_stride {
             log::warn!(
-                "resolve_mesh: stride mismatch for '{path}' \
+                "load_mesh_inputs: stride mismatch for '{path}' \
                  (got {float_stride} floats, expected {expected_float_stride})"
             );
             return None;
         }
         if info.vertex_data.len() < vert_count * stride {
-            log::warn!("resolve_mesh: vertex buffer truncated for '{path}'");
+            log::warn!("load_mesh_inputs: vertex buffer truncated for '{path}'");
             return None;
         }
         if info.index_data.len() < info.idx_count as usize * 4 {
-            log::warn!("resolve_mesh: index buffer truncated for '{path}'");
+            log::warn!("load_mesh_inputs: index buffer truncated for '{path}'");
             return None;
         }
 
@@ -273,134 +255,73 @@ impl GpuAssetResolver {
             ));
         }
 
-        let input = MeshUploadInput {
+        Some(MeshUploadInput {
             positions,
             normals,
             colors: vec![],
             uvs,
             tangents,
             indices,
-        };
-
-        match renderer.register_mesh_into(uploader, &input) {
-            Ok(h) => {
-                self.mesh_cache.insert(id, h);
-                Some(h)
-            }
-            Err(e) => {
-                log::warn!("resolve_mesh: register_mesh_into '{path}' failed: {e}");
-                None
-            }
-        }
+        })
     }
 
-    /// 解析 a 材质 资源 path → 材质 SSBO 槽 using the cache.
-    /// 纹理 dependencies are loaded + uploaded on 第一个 encounter and cached
-    /// by `AssetId`.
-    fn resolve_material(
-        &mut self,
-        path: &str,
-        renderer: &mut GraphRenderer,
-        uploader: &mut BatchUploader<'_>,
-    ) -> Option<u32> {
+    /// CPU 段：加载材质资源 → 18 个 PBR 标量 + 5 张纹理像素
+    /// （顺序：albedo, normal, metallic_roughness, emissive, occlusion）。
+    fn load_material_data(&mut self, path: &str) -> Option<MaterialResolveData> {
         let id = self.resource_manager.id_by_path(path).or_else(|| {
-            log::warn!("resolve_material: path '{path}' not in manifest");
+            log::warn!("load_material_data: path '{path}' not in manifest");
             None
         })?;
 
-        if let Some(&(slot, _)) = self.mat_cache.get(&id) {
-            return Some(slot);
-        }
-
         let handle = self
             .resource_manager
-            .load_with_deps::<prism_asset::runtime::MaterialAsset>(id)
-            .map_err(|e| log::warn!("resolve_material: load '{path}' failed: {e}"))
+            .load_with_deps::<MaterialAsset>(id)
+            .map_err(|e| log::warn!("load_material_data: load '{path}' failed: {e}"))
             .ok()?;
         let mat = self
             .resource_manager
             .get(handle)
-            .map_err(|e| log::warn!("resolve_material: get '{path}' failed: {e}"))
+            .map_err(|e| log::warn!("load_material_data: get '{path}' failed: {e}"))
             .ok()?;
 
         let s = mat.scalars();
-        let base_color = [s[0], s[1], s[2], s[3]];
-        let metallic = s[4];
-        let roughness = s[5];
-        let emissive = [s[6], s[7], s[8]];
-        let emissive_strength = s[9];
-        let normal_scale = s[10];
-        let occlusion_strength = s[11];
-        let transmission = s[12];
-        let ior = s[13];
-        let translucency = s[14];
-        let anisotropy = s[15];
-        let clearcoat = s[16];
-        let clearcoat_roughness = s[17];
-
-        let tex_ids = mat.texture_ids();
-        let albedo_tex = self.resolve_texture(tex_ids[0], renderer, uploader);
-        let normal_tex = self.resolve_texture(tex_ids[1], renderer, uploader);
-        let mr_tex = self.resolve_texture(tex_ids[2], renderer, uploader);
-        let emissive_tex = self.resolve_texture(tex_ids[3], renderer, uploader);
-        let occlusion_tex = self.resolve_texture(tex_ids[4], renderer, uploader);
-
-        let input = prism_render::managers::MaterialUploadInput {
-            base_color,
-            metallic,
-            roughness,
-            emissive,
-            albedo_tex,
-            normal_tex,
-            metallic_roughness_tex: mr_tex,
-            emissive_tex,
-            occlusion_tex,
-            normal_scale,
-            occlusion_strength,
-            transmission,
-            ior,
-            translucency,
-            anisotropy,
-            clearcoat,
-            clearcoat_roughness,
-            emissive_strength,
+        let scalars: [f32; 18] = match s.len() {
+            n if n >= 18 => {
+                let mut a = [0f32; 18];
+                a.copy_from_slice(&s[..18]);
+                a
+            }
+            n => {
+                log::warn!("load_material_data: expected >=18 scalars, got {n} for '{path}'");
+                let mut a = [0f32; 18];
+                a[..n.min(18)].copy_from_slice(&s[..n.min(18)]);
+                a
+            }
         };
 
-        match renderer.register_material(input) {
-            Ok(h) => {
-                let slot = renderer.material_slot(h)?;
-                self.mat_cache.insert(id, (slot, h));
-                Some(slot)
-            }
-            Err(e) => {
-                log::warn!("resolve_material: register_material '{path}' failed: {e}");
-                None
-            }
-        }
+        let tex_ids = mat.texture_ids();
+        let albedo = self.load_texture_data(tex_ids[0]);
+        let normal = self.load_texture_data(tex_ids[1]);
+        let mr = self.load_texture_data(tex_ids[2]);
+        let emissive = self.load_texture_data(tex_ids[3]);
+        let occlusion = self.load_texture_data(tex_ids[4]);
+        let textures = [albedo, normal, mr, emissive, occlusion];
+
+        Some(MaterialResolveData { scalars, textures })
     }
 
-    /// 解析 a single 纹理 dependency to a bindless SRV 槽 with cache
-    /// + magenta 回退
-    fn resolve_texture(
-        &mut self,
-        tex_id_opt: Option<AssetId>,
-        renderer: &mut GraphRenderer,
-        uploader: &mut BatchUploader<'_>,
-    ) -> Option<u32> {
+    /// CPU 段：加载单张纹理依赖 → `TextureUploadInput` 像素（或品红回退）。
+    fn load_texture_data(&mut self, tex_id_opt: Option<AssetId>) -> Option<TextureUploadInput> {
         let tex_id = tex_id_opt?;
-        if let Some(&slot) = self.tex_cache.get(&tex_id) {
-            return Some(slot);
-        }
-
         let tex_handle = self
             .resource_manager
-            .load_with_deps::<prism_asset::runtime::TextureAsset>(tex_id)
-            .map_err(|e| log::warn!("resolve_texture: load {tex_id} failed: {e}"))
+            .load_with_deps::<TextureAsset>(tex_id)
+            .map_err(|e| log::warn!("load_texture_data: load {tex_id} failed: {e}"))
             .ok()?;
         let tex = self
             .resource_manager
             .get(tex_handle)
-            .map_err(|e| log::warn!("resolve_texture: get {tex_id} failed: {e}"))
+            .map_err(|e| log::warn!("load_texture_data: get {tex_id} failed: {e}"))
             .ok()?;
 
         let mip0 = tex.info.mip_data.first().cloned().unwrap_or_default();
@@ -412,14 +333,14 @@ impl GpuAssetResolver {
         };
 
         let input = if mip0.is_empty() {
-            log::warn!("resolve_texture: texture {tex_id} has no mip 0; using magenta fallback");
+            log::warn!("load_texture_data: texture {tex_id} has no mip 0; using magenta fallback");
             magenta()
         } else {
             let bpp = TextureFormat::Rgba8Srgb.bytes_per_pixel();
             let expected = (tex.info.width as usize) * (tex.info.height as usize) * bpp;
             if mip0.len() != expected {
                 log::warn!(
-                    "resolve_texture: texture {tex_id} mip0 size {} != {}x{}x{} ({}); \
+                    "load_texture_data: texture {tex_id} mip0 size {} != {}x{}x{} ({}); \
                      using magenta fallback",
                     mip0.len(),
                     tex.info.width,
@@ -438,17 +359,7 @@ impl GpuAssetResolver {
             }
         };
 
-        match renderer.register_texture_into(uploader, &input) {
-            Ok(h) => {
-                let slot = renderer.texture_srv(h).0;
-                self.tex_cache.insert(tex_id, slot);
-                Some(slot)
-            }
-            Err(e) => {
-                log::warn!("resolve_texture: register_texture_into {tex_id} failed: {e}");
-                None
-            }
-        }
+        Some(input)
     }
 }
 

@@ -24,14 +24,13 @@ pub use egui_overlay::EguiOverlay;
 pub use editor_hook::EditorHook;
 
 use prism_app::App;
-use prism_engine::config::AppConfig;
 
 /// 编辑器应用：完整游戏引擎 + egui 编辑器宿主（检查器、实体树、
 /// 渲染设置、F1/F2/F3 快捷键）。
 ///
 /// 与 `prism_app::app` 相同，但注入了 [`EditorHook`]。
-pub fn editor_app(config: AppConfig) -> App {
-    prism_app::App::with_config(config)
+pub fn editor_app() -> App {
+    prism_app::app()
         .with_subsystem(prism_app::Subsystem::Render)
         .with_subsystem(prism_app::Subsystem::Audio)
         .with_frame_hook(EditorHook::new())
@@ -42,7 +41,7 @@ pub fn editor_app(config: AppConfig) -> App {
 /// 真实编辑器工作流从 [`editor_app`] 开始自己注册 ECS 内容。
 pub fn run() {
     let _ = env_logger::try_init();
-    let mut app = editor_app(AppConfig::load());
+    let mut app = editor_app();
     app.add_system("demo::orbit_camera", prism_engine::orbit_camera_demo_system);
     app.run()
 }

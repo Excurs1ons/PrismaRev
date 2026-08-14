@@ -10,8 +10,10 @@ use serde::{Deserialize, Serialize};
 // ── 标记组件 ─────────────────────────────────────────────────
 
 /// **标记**：此 Entity 是 UI 元素。Layout System 只查询有此组件的实体。
+///
+/// 定义为空花括号结构体（而非单元结构体），以便场景 JSON 用 `{}` 反序列化。
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
-pub struct Node;
+pub struct Node {}
 
 /// **父子关系**：UI 子元素指向父元素 Entity。
 #[derive(Clone, Copy, Debug)]
@@ -102,20 +104,28 @@ pub struct Margin {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Style {
     /// 固定宽度（px）。`None` = 由锚点决定。
+    #[serde(default)]
     pub width: Option<f32>,
     /// 固定高度（px）。`None` = 由锚点决定。
+    #[serde(default)]
     pub height: Option<f32>,
     /// 锚点。
+    #[serde(default)]
     pub anchors: Anchors,
     /// 枢轴（归一化，0..=1）。
+    #[serde(default)]
     pub pivot: Pivot,
     /// 边距偏移（px）。
+    #[serde(default)]
     pub margin: Margin,
     /// 背景色（RGBA，0..=1）。`[0;4]` = 透明。
+    #[serde(default)]
     pub background: [f32; 4],
     /// 边框圆角（px）。
+    #[serde(default)]
     pub border_radius: f32,
     /// 可见性。
+    #[serde(default)]
     pub visible: bool,
 }
 
@@ -158,6 +168,7 @@ impl Style {
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
 pub struct ComputedLayout {
     /// 屏幕空间边界 `[left, top, width, height]`
+    #[serde(default)]
     pub rect: [f32; 4],
 }
 

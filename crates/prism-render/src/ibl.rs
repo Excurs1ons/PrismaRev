@@ -71,12 +71,86 @@ const ENV_CUBE_CACHE_FILE: &str = "cube_512.bin";
 const IRRADIANCE_CACHE_FILE: &str = "irradiance_64.bin";
 const PREFILTERED_CACHE_PREFIX: &str = "prefiltered_mip";
 
+/// 共享的 IBL 描述符 集合 布局（集合 2）：3 个 COMBINED_IMAGE_SAMPLER
+/// 绑定（envCube / irradianceCube / prefilteredCube）。由 `GraphRenderer`
+/// 创建一次并传递给空/完整 IBL，确保 set2 布局在「场景切换重建 IBL」时
+/// 保持稳定，forward pass / skybox 管线 布局 无需重建。
+pub fn ibl_descriptor_set_layout(
+    device: &ash::Device,
+) -> anyhow::Result<vk::DescriptorSetLayout> {
+    let layout = unsafe {
+        device.create_descriptor_set_layout(
+            &vk::DescriptorSetLayoutCreateInfo::default().bindings(&[
+                vk::DescriptorSetLayoutBinding {
+                    binding: 0,
+                    descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+                    descriptor_count: 1,
+                    stage_flags: vk::ShaderStageFlags::FRAGMENT
+                        | vk::ShaderStageFlags::COMPUTE,
+                    ..Default::default()
+                },
+                vk::DescriptorSetLayoutBinding {
+                    binding: 1,
+                    descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+                    descriptor_count: 1,
+                    stage_flags: vk::ShaderStageFlags::FRAGMENT
+                        | vk::ShaderStageFlags::COMPUTE,
+                    ..Default::default()
+                },
+                vk::DescriptorSetLayoutBinding {
+                    binding: 2,
+                    descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+                    descriptor_count: 1,
+                    stage_flags: vk::ShaderStageFlags::FRAGMENT
+                        | vk::ShaderStageFlags::COMPUTE,
+                    ..Default::default()
+                },
+            ]),
+            None,
+        )
+    }?;
+    Ok(layout)
+}
+
+/// 分配一个 face×face×6 的中性立方体贴图（R16G16B16A16_SFLOAT，1 mip），
+/// 返回 (image, memory, staging, staging_memory)。用于廉价空 IBL。
+fn alloc_neutral_cube(
+    device: &ash::Device,
+    mem_props: &vk::PhysicalDeviceMemoryProperties,
+    face: u32,
+) -> anyhow::Result<(vk::Image, vk::DeviceMemory, vk::Buffer, vk::DeviceMemory)> {
+    let info = vk::ImageCreateInfo::default()
+        .image_type(vk::ImageType::TYPE_2D)
+        .format(vk::Format::R16G16B16A16_SFLOAT)
+        .extent(vk::Extent3D {
+            width: face,
+            height: face,
+            depth: 1,
+        })
+        .mip_levels(1)
+        .array_layers(6)
+        .samples(vk::SampleCountFlags::TYPE_1)
+        .tiling(vk::ImageTiling::OPTIMAL)
+        .usage(vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED)
+        .flags(vk::ImageCreateFlags::CUBE_COMPATIBLE)
+        .sharing_mode(vk::SharingMode::EXCLUSIVE);
+    let image = unsafe { device.create_image(&info, None) }?;
+    let mem_req = unsafe { device.get_image_memory_requirements(image) };
+    let memory = allocate_device_memory(device, mem_props, mem_req)?;
+    unsafe { device.bind_image_memory(image, memory, 0) }?;
+    let staging_size = (6 * face * face * 8) as u64;
+    let (staging, staging_memory) =
+        create_staging_buffer(device, mem_props, staging_size)?;
+    Ok((image, memory, staging, staging_memory))
+}
+
 impl IblResources {
     pub fn new(
         context: Arc<VulkanContext>,
         command_pool: vk::CommandPool,
         queue: vk::Queue,
         env_bytes: Option<Vec<u8>>,
+        ds_layout: vk::DescriptorSetLayout,
     ) -> anyhow::Result<Self> {
         let device = context.device.clone();
         let mem_props = &context.physical_device_memory_properties;
@@ -892,37 +966,9 @@ impl IblResources {
             )
         }?;
 
-        // 5. 描述符 集合 集合 2) with 3 bindings: envCube, irradianceCube, prefilteredCube.
-        // brdfLUT is registered separately in the bindless 纹理 表
-        let descriptor_set_layout = unsafe {
-            device.create_descriptor_set_layout(
-                &vk::DescriptorSetLayoutCreateInfo::default().bindings(&[
-                    vk::DescriptorSetLayoutBinding {
-                        binding: 0,
-                        descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-                        descriptor_count: 1,
-                        stage_flags: vk::ShaderStageFlags::FRAGMENT | vk::ShaderStageFlags::COMPUTE,
-                        ..Default::default()
-                    },
-                    vk::DescriptorSetLayoutBinding {
-                        binding: 1,
-                        descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-                        descriptor_count: 1,
-                        stage_flags: vk::ShaderStageFlags::FRAGMENT | vk::ShaderStageFlags::COMPUTE,
-                        ..Default::default()
-                    },
-                    vk::DescriptorSetLayoutBinding {
-                        binding: 2,
-                        descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-                        descriptor_count: 1,
-                        stage_flags: vk::ShaderStageFlags::FRAGMENT | vk::ShaderStageFlags::COMPUTE,
-                        ..Default::default()
-                    },
-                ]),
-                None,
-            )
-        }?;
-
+        // 5. 描述符 集合 集合 2)：3 绑定 envCube/irradianceCube/prefilteredCube。
+        // 布局由调用方共享传入（ds_layout），保证场景切换重建 IBL 时
+        // forward pass / skybox 管线 布局 稳定。brdfLUT 单独注册到 bindless 表。
         let descriptor_pool = unsafe {
             device.create_descriptor_pool(
                 &vk::DescriptorPoolCreateInfo::default()
@@ -939,7 +985,7 @@ impl IblResources {
             device.allocate_descriptor_sets(
                 &vk::DescriptorSetAllocateInfo::default()
                     .descriptor_pool(descriptor_pool)
-                    .set_layouts(&[descriptor_set_layout]),
+                    .set_layouts(&[ds_layout]),
             )
         }?[0];
 
@@ -991,7 +1037,366 @@ impl IblResources {
         );
         Ok(Self {
             device,
-            descriptor_set_layout,
+            descriptor_set_layout: ds_layout,
+            descriptor_set,
+            image,
+            image_view,
+            sampler,
+            memory,
+            staging,
+            staging_memory,
+            irradiance_image,
+            irradiance_image_view,
+            irradiance_sampler,
+            irradiance_memory,
+            irradiance_staging,
+            irradiance_staging_memory,
+            prefiltered_image,
+            prefiltered_image_view,
+            prefiltered_sampler,
+            prefiltered_memory,
+            prefiltered_staging,
+            prefiltered_staging_memory,
+            brdf_image,
+            brdf_image_view,
+            brdf_sampler,
+            brdf_memory,
+            brdf_staging,
+            brdf_staging_memory,
+            descriptor_pool,
+        })
+    }
+
+    /// 廉价中性 IBL：创建 1×1 的合法 cubemap / irradiance / prefiltered + BRDF LUT，
+    /// **不做任何 CPU 预卷积**（≈0ms）。用于「无光照」场景（开屏 UI），仅让
+    /// forward pass 的 set2 descriptor 合法；真实 IBL 由 `GraphRenderer::set_environment`
+    /// 在加载带光照的 3D 场景时按需重建（走完整 `new` 路径）。
+    pub fn new_empty(
+        context: Arc<VulkanContext>,
+        command_pool: vk::CommandPool,
+        queue: vk::Queue,
+        ds_layout: vk::DescriptorSetLayout,
+    ) -> anyhow::Result<Self> {
+        let device = context.device.clone();
+        let mem_props = &context.physical_device_memory_properties;
+        const F: u32 = 1u32;
+
+        // env / irradiance / prefiltered cube (1x1x6, 1 mip) — 中性灰（开屏无几何，不被采样）
+        let (image, memory, staging, staging_memory) =
+            alloc_neutral_cube(&device, mem_props, F)?;
+        let (irradiance_image, irradiance_memory, irradiance_staging, irradiance_staging_memory) =
+            alloc_neutral_cube(&device, mem_props, F)?;
+        let (prefiltered_image, prefiltered_memory, prefiltered_staging, prefiltered_staging_memory) =
+            alloc_neutral_cube(&device, mem_props, F)?;
+
+        let texels = (6 * F * F) as usize;
+        let neutral = vec![f32_to_f16(0.0f32); texels * 4];
+        unsafe {
+            let m = device.map_memory(staging_memory, 0, (texels * 8) as u64, vk::MemoryMapFlags::empty())? as *mut u16;
+            std::ptr::copy_nonoverlapping(neutral.as_ptr(), m, neutral.len());
+            device.unmap_memory(staging_memory);
+            let m = device.map_memory(irradiance_staging_memory, 0, (texels * 8) as u64, vk::MemoryMapFlags::empty())? as *mut u16;
+            std::ptr::copy_nonoverlapping(neutral.as_ptr(), m, neutral.len());
+            device.unmap_memory(irradiance_staging_memory);
+            let m = device.map_memory(prefiltered_staging_memory, 0, (texels * 8) as u64, vk::MemoryMapFlags::empty())? as *mut u16;
+            std::ptr::copy_nonoverlapping(neutral.as_ptr(), m, neutral.len());
+            device.unmap_memory(prefiltered_staging_memory);
+        }
+
+        // BRDF LUT (1x1, RG16) — 中性 (1,1) 回退。
+        let brdf_info = vk::ImageCreateInfo::default()
+            .image_type(vk::ImageType::TYPE_2D)
+            .format(vk::Format::R16G16_SFLOAT)
+            .extent(vk::Extent3D { width: F, height: F, depth: 1 })
+            .mip_levels(1)
+            .array_layers(1)
+            .samples(vk::SampleCountFlags::TYPE_1)
+            .tiling(vk::ImageTiling::OPTIMAL)
+            .usage(vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE);
+        let brdf_image = unsafe { device.create_image(&brdf_info, None) }?;
+        let brdf_mem_req = unsafe { device.get_image_memory_requirements(brdf_image) };
+        let brdf_memory = allocate_device_memory(&device, mem_props, brdf_mem_req)?;
+        unsafe { device.bind_image_memory(brdf_image, brdf_memory, 0) }?;
+        let brdf_staging_size = (F as u64 * F as u64 * 4) as u64;
+        let (brdf_staging, brdf_staging_memory) =
+            create_staging_buffer(&device, mem_props, brdf_staging_size)?;
+        {
+            let mapped = unsafe {
+                device.map_memory(
+                    brdf_staging_memory,
+                    0,
+                    brdf_staging_size,
+                    vk::MemoryMapFlags::empty(),
+                )? as *mut u16
+            };
+            let buf = vec![f32_to_f16(1.0f32); (F * F * 2) as usize];
+            unsafe {
+                std::ptr::copy_nonoverlapping(buf.as_ptr(), mapped, buf.len());
+                device.unmap_memory(brdf_staging_memory);
+            }
+        }
+
+        // 一次性上传 4 张图。
+        let cmd = allocate_temp_command_buffer(&device, command_pool)?;
+        unsafe { device.begin_command_buffer(cmd, &vk::CommandBufferBeginInfo::default())? };
+        let upload_cube = |img: vk::Image, stg: vk::Buffer| {
+            transition_image_single(
+                &device,
+                cmd,
+                img,
+                color_subresource(0, 1, 0, 6),
+                vk::ImageLayout::UNDEFINED,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            );
+            let copy = vk::BufferImageCopy {
+                buffer_offset: 0,
+                buffer_row_length: 0,
+                buffer_image_height: 0,
+                image_subresource: vk::ImageSubresourceLayers {
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    mip_level: 0,
+                    base_array_layer: 0,
+                    layer_count: 6,
+                },
+                image_offset: vk::Offset3D { x: 0, y: 0, z: 0 },
+                image_extent: vk::Extent3D { width: F, height: F, depth: 1 },
+            };
+            unsafe {
+                device.cmd_copy_buffer_to_image(
+                    cmd,
+                    stg,
+                    img,
+                    vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                    &[copy],
+                )
+            };
+            transition_image_single(
+                &device,
+                cmd,
+                img,
+                color_subresource(0, 1, 0, 6),
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            );
+        };
+        upload_cube(image, staging);
+        upload_cube(irradiance_image, irradiance_staging);
+        upload_cube(prefiltered_image, prefiltered_staging);
+        transition_image_single(
+            &device,
+            cmd,
+            brdf_image,
+            color_subresource(0, 1, 0, 1),
+            vk::ImageLayout::UNDEFINED,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+        );
+        {
+            let copy = vk::BufferImageCopy {
+                buffer_offset: 0,
+                buffer_row_length: 0,
+                buffer_image_height: 0,
+                image_subresource: vk::ImageSubresourceLayers {
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    mip_level: 0,
+                    base_array_layer: 0,
+                    layer_count: 1,
+                },
+                image_offset: vk::Offset3D { x: 0, y: 0, z: 0 },
+                image_extent: vk::Extent3D { width: F, height: F, depth: 1 },
+            };
+            unsafe {
+                device.cmd_copy_buffer_to_image(
+                    cmd,
+                    brdf_staging,
+                    brdf_image,
+                    vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                    &[copy],
+                )
+            };
+        }
+        transition_image_single(
+            &device,
+            cmd,
+            brdf_image,
+            color_subresource(0, 1, 0, 1),
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+        );
+        unsafe { device.end_command_buffer(cmd) }?;
+        submit_and_wait(&device, queue, command_pool, cmd)
+            .context("empty IBL upload submit")?;
+
+        // views + samplers (max_lod 1，因仅 1 mip)
+        let mk_sampler = || unsafe {
+            device
+                .create_sampler(
+                    &vk::SamplerCreateInfo::default()
+                        .mag_filter(vk::Filter::LINEAR)
+                        .min_filter(vk::Filter::LINEAR)
+                        .mipmap_mode(vk::SamplerMipmapMode::LINEAR)
+                        .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                        .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                        .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                        .anisotropy_enable(false)
+                        .min_lod(0.0)
+                        .max_lod(1.0),
+                    None,
+                )
+                .unwrap()
+        };
+        let image_view = unsafe {
+            device
+                .create_image_view(
+                    &vk::ImageViewCreateInfo {
+                        image,
+                        view_type: vk::ImageViewType::CUBE,
+                        format: vk::Format::R16G16B16A16_SFLOAT,
+                        subresource_range: vk::ImageSubresourceRange {
+                            aspect_mask: vk::ImageAspectFlags::COLOR,
+                            base_mip_level: 0,
+                            level_count: 1,
+                            base_array_layer: 0,
+                            layer_count: 6,
+                        },
+                        ..Default::default()
+                    },
+                    None,
+                )
+                .unwrap()
+        };
+        let sampler = mk_sampler();
+        let irradiance_image_view = unsafe {
+            device
+                .create_image_view(
+                    &vk::ImageViewCreateInfo {
+                        image: irradiance_image,
+                        view_type: vk::ImageViewType::CUBE,
+                        format: vk::Format::R16G16B16A16_SFLOAT,
+                        subresource_range: vk::ImageSubresourceRange {
+                            aspect_mask: vk::ImageAspectFlags::COLOR,
+                            base_mip_level: 0,
+                            level_count: 1,
+                            base_array_layer: 0,
+                            layer_count: 6,
+                        },
+                        ..Default::default()
+                    },
+                    None,
+                )
+                .unwrap()
+        };
+        let irradiance_sampler = mk_sampler();
+        let prefiltered_image_view = unsafe {
+            device
+                .create_image_view(
+                    &vk::ImageViewCreateInfo {
+                        image: prefiltered_image,
+                        view_type: vk::ImageViewType::CUBE,
+                        format: vk::Format::R16G16B16A16_SFLOAT,
+                        subresource_range: vk::ImageSubresourceRange {
+                            aspect_mask: vk::ImageAspectFlags::COLOR,
+                            base_mip_level: 0,
+                            level_count: 1,
+                            base_array_layer: 0,
+                            layer_count: 6,
+                        },
+                        ..Default::default()
+                    },
+                    None,
+                )
+                .unwrap()
+        };
+        let prefiltered_sampler = mk_sampler();
+        let brdf_image_view = unsafe {
+            device
+                .create_image_view(
+                    &vk::ImageViewCreateInfo {
+                        image: brdf_image,
+                        view_type: vk::ImageViewType::TYPE_2D,
+                        format: vk::Format::R16G16_SFLOAT,
+                        subresource_range: vk::ImageSubresourceRange {
+                            aspect_mask: vk::ImageAspectFlags::COLOR,
+                            base_mip_level: 0,
+                            level_count: 1,
+                            base_array_layer: 0,
+                            layer_count: 1,
+                        },
+                        ..Default::default()
+                    },
+                    None,
+                )
+                .unwrap()
+        };
+        let brdf_sampler = mk_sampler();
+
+        // 描述符 集合 (set2) — 复用共享布局 ds_layout。
+        let descriptor_pool = unsafe {
+            device
+                .create_descriptor_pool(
+                    &vk::DescriptorPoolCreateInfo::default()
+                        .max_sets(1)
+                        .pool_sizes(&[vk::DescriptorPoolSize {
+                            ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+                            descriptor_count: 3,
+                        }]),
+                    None,
+                )
+                .unwrap()
+        };
+        let descriptor_set = unsafe {
+            device
+                .allocate_descriptor_sets(
+                    &vk::DescriptorSetAllocateInfo::default()
+                        .descriptor_pool(descriptor_pool)
+                        .set_layouts(&[ds_layout]),
+                )
+                .unwrap()[0]
+        };
+        unsafe {
+            device.update_descriptor_sets(
+                &[
+                    vk::WriteDescriptorSet::default()
+                        .dst_set(descriptor_set)
+                        .dst_binding(0)
+                        .dst_array_element(0)
+                        .descriptor_count(1)
+                        .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                        .image_info(&[vk::DescriptorImageInfo {
+                            sampler,
+                            image_view,
+                            image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                        }]),
+                    vk::WriteDescriptorSet::default()
+                        .dst_set(descriptor_set)
+                        .dst_binding(1)
+                        .dst_array_element(0)
+                        .descriptor_count(1)
+                        .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                        .image_info(&[vk::DescriptorImageInfo {
+                            sampler: irradiance_sampler,
+                            image_view: irradiance_image_view,
+                            image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                        }]),
+                    vk::WriteDescriptorSet::default()
+                        .dst_set(descriptor_set)
+                        .dst_binding(2)
+                        .dst_array_element(0)
+                        .descriptor_count(1)
+                        .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                        .image_info(&[vk::DescriptorImageInfo {
+                            sampler: prefiltered_sampler,
+                            image_view: prefiltered_image_view,
+                            image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                        }]),
+                ],
+                &[],
+            )
+        };
+
+        Ok(Self {
+            device,
+            descriptor_set_layout: ds_layout,
             descriptor_set,
             image,
             image_view,
@@ -1081,11 +1486,9 @@ impl IblResources {
             self.device.destroy_buffer(self.brdf_staging, None);
             self.device.free_memory(self.brdf_staging_memory, None);
             self.device.destroy_sampler(self.brdf_sampler, None);
-            // 描述符 池 + 布局
+            // 描述符 池（集合 布局 由 GraphRenderer 共享持有，此处不销毁）
             self.device
                 .destroy_descriptor_pool(self.descriptor_pool, None);
-            self.device
-                .destroy_descriptor_set_layout(self.descriptor_set_layout, None);
         }
         // Null out handles so re-entrant 放置 is safe.
         self.descriptor_set_layout = vk::DescriptorSetLayout::null();

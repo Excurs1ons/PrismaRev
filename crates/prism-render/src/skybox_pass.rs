@@ -56,6 +56,12 @@ impl SkyboxPass {
         }
     }
 
+    /// 场景切换重建 IBL 时，更新当前绑定的 set2 描述符 集合 句柄
+    /// （管线布局共享，无需重建管线）。
+    pub fn set_descriptor_set(&mut self, set: vk::DescriptorSet) {
+        self.ibl_descriptor_set = set;
+    }
+
     /// 构建 (once) the skybox 管线
     fn ensure_pipeline(&mut self, device: &ash::Device) -> Result<()> {
         if self.pipeline.is_some() {
