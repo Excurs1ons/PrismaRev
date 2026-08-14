@@ -27,6 +27,7 @@ android/app/src/main/jniLibs/
 !launcher/src-tauri/gen/android/app/src/main/res/**/*.png
 
 # Runtime logs
+*.log
 app_err.log
 app_out.log
 
