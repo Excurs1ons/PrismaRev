@@ -32,7 +32,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use prism_audio::AudioEngine;
 use prism_engine::asset_resolver::GpuAssetResolver;
@@ -144,9 +144,15 @@ pub struct App {
 
     // ---------- lifecycle ----------
     fatal_error: Option<String>,
+    /// 后台挂起标志：`suspended()` 置位、`resumed()` 复位。置位期间
+    /// `about_to_wait` 跳过 `tick_sim`，防止后台空转烧电（T4）。
+    suspended: bool,
 
     // ---------- timing ----------
     last_frame: Option<Instant>,
+    /// Fixed-step accumulator in nanoseconds. Keeping this as an integer
+    /// avoids float drift and makes simulation time independent of event rate.
+    fixed_accumulator: Duration,
 }
 
 impl App {
@@ -202,7 +208,9 @@ impl App {
             audio_decode_rx: None,
             needs_resize: false,
             fatal_error: None,
+            suspended: false,
             last_frame: None,
+            fixed_accumulator: Duration::ZERO,
         }
     }
 
@@ -344,11 +352,11 @@ impl App {
         // 句柄取出来再跨线程传给渲染线程。原始 HWND 是进程级值，跨线程用于
         // 创建 Vulkan 表面是安全的（见 `SendWindowHandles`）。
         let handles = SendWindowHandles {
-            display: (&*window)
+            display: (*window)
                 .display_handle()
                 .expect("get display handle")
                 .as_raw(),
-            window: (&*window)
+            window: (*window)
                 .window_handle()
                 .expect("get window handle")
                 .as_raw(),
@@ -440,15 +448,16 @@ impl App {
     // -----------------------------------------------------------------------
 
     fn tick_sim(&mut self) {
-        // Poll mode runs continuously; simulation time must follow wall time,
-        // otherwise a fixed 1/60 step advances opening animations thousands of
-        // frames per second on an idle desktop.
+        // Poll mode may call this at any event rate. Time is measured once from
+        // the monotonic clock; input events must never determine simulation speed.
         let now = Instant::now();
-        let dt = self
+        let elapsed = self
             .last_frame
-            .map(|previous| now.duration_since(previous).as_secs_f32())
-            .unwrap_or(1.0 / 60.0)
-            .clamp(0.0, 0.1);
+            .map(|previous| now.saturating_duration_since(previous))
+            .unwrap_or(Duration::ZERO)
+            .min(Duration::from_millis(100));
+        self.fixed_accumulator += elapsed;
+        let dt = elapsed.as_secs_f32();
         // --- 引擎模拟（独立借用 self.engine，块结束即释放） ---
         {
             let Some(engine) = self.engine.as_mut() else {
@@ -468,8 +477,14 @@ impl App {
             // --- 输入：帧开始，清空瞬时状态 ---
             self.input.begin_frame();
 
-            // --- Fixed timestep ---
-            engine.fixed_update(dt, &self.input);
+            // --- Fixed timestep: integer nanosecond clock, capped catch-up ---
+            const FIXED_STEP: Duration = Duration::from_nanos(16_666_667);
+            let mut fixed_steps = 0;
+            while self.fixed_accumulator >= FIXED_STEP && fixed_steps < 8 {
+                engine.fixed_update(FIXED_STEP.as_secs_f32(), &self.input);
+                self.fixed_accumulator -= FIXED_STEP;
+                fixed_steps += 1;
+            }
 
             // --- 可变时间步长更新 ---
             engine.update(dt, &self.input);
@@ -700,6 +715,19 @@ impl ApplicationHandler for App {
         // winit only re-enters `about_to_wait` after input/window events, which
         // freezes animation when the user is idle.
         event_loop.set_control_flow(ControlFlow::Poll);
+
+        // 复位挂起标志（必须先于任何子系统门控——audio 恢复不依赖 Render）。
+        self.suspended = false;
+
+        // --- 音频子系统：恢复设备输出（T4）。若流已随 suspended 释放，
+        // 则以挂起前配置重建并重新注册回调（Firewheel 图/活动节点保留，
+        // 恢复即续播）；流仍活跃（如首次前台启动）则空操作。 ---
+        if self.has_subsystem(Subsystem::Audio) {
+            if let Some(audio) = self.audio.as_mut() {
+                audio.resume_stream();
+            }
+        }
+
         if !self.has_subsystem(Subsystem::Render) {
             log::info!("render subsystem disabled — headless mode (no window, no GPU)");
             return;
@@ -892,7 +920,12 @@ impl ApplicationHandler for App {
             return;
         }
 
-        // 游戏循环 tick（主线程）
+        // 游戏循环 tick（主线程）——后台挂起期间暂停模拟并提前返回（T4）：
+        // 不投喂 dt → 模拟冻结 → 后台进程 CPU 归零，且音频解码已随
+        // suspended 停止，无队列空转。
+        if self.suspended {
+            return;
+        }
         self.tick_sim();
 
         // 帧钩子（编辑器 egui 等）— 主线程
@@ -918,6 +951,17 @@ impl ApplicationHandler for App {
     }
 
     fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
+        // 置位挂起标志（必须先于任何子系统门控——audio 挂起不依赖 Render）。
+        self.suspended = true;
+
+        // --- 音频子系统：交还音频设备（T4）。drop cpal 流 → 停止回调线程；
+        // Firewheel 图与活动播放节点保留，恢复时以挂起前配置重新注册并续播。 ---
+        if self.has_subsystem(Subsystem::Audio) {
+            if let Some(audio) = self.audio.as_mut() {
+                audio.suspend_stream();
+            }
+        }
+
         if !self.has_subsystem(Subsystem::Render) {
             return;
         }

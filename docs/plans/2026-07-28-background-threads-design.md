@@ -203,6 +203,30 @@ App::about_to_wait() [exiting]:
   drop(audio) → stops cpal stream
 ```
 
+### 5.5 Suspend / Resume (T4)
+
+The cpal stream is a platform-mandated callback thread owned by the audio
+service (engine "registers, never holds"). `CpalStream` exposes no
+`pause`/`play` control, so returning the device on background is a full
+**release + re-register** cycle:
+
+```
+App::suspended():
+  audio.suspend_stream()   // drop(CpalStream) → callback stops, device released
+                           // FirewheelContext graph + active nodes are KEPT
+
+App::resumed():
+  audio.resume_stream()    // re-register callback from saved AudioConfig
+                           // playback continues (not restarts) — graph intact
+```
+
+- `AudioEngine` stores the `AudioConfig` it was constructed with; resume
+  reuses it, so device selection / sample rate are stable across background.
+- Suspend/resume run **before** the render-subsystem gate in `prism-app`:
+  audio-only builds (background player, no window) get the same lifecycle.
+- `App.suspended` flag additionally gates `about_to_wait → tick_sim`, so no
+  `dt` is fed while backgrounded (simulation frozen, backend CPU ~0).
+
 ## 6. Physics Thread (Rapier)
 
 ### 6.1 Purpose
@@ -422,6 +446,13 @@ new()                           IO thread started
 resumed() → ensure_platform()   (sync scene resolve)
 resumed() → start_render_thread Render thread started
                                 Physics thread started*
+suspended()                     audio.suspend_stream() → cpal callback stops
+                                stop_audio_decode_thread() → join
+                                stop_render_thread() → join
+                                window = None
+                                (suspended flag: tick_sim skipped)
+resumed() (again)               audio.resume_stream() → callback re-registered
+                                (re-enters start_render_thread path)
 about_to_wait() [exiting]       IO::Shutdown → join
                                 Decode::Shutdown → join
                                 stop_render_thread() → join

@@ -92,6 +92,8 @@ pub struct AudioEngine {
     next_id: u64,
     master_volume: f32,
     channels: u16,
+    /// 打开/重建音频流所用的配置（挂起时保留，恢复时复用）。
+    config: AudioConfig,
 }
 
 impl AudioEngine {
@@ -101,35 +103,67 @@ impl AudioEngine {
     pub fn new(config: AudioConfig) -> Result<Self, AudioError> {
         let channels = config.channels;
 
-        let mut ctx = FirewheelContext::new(FirewheelConfig {
+        let ctx = FirewheelContext::new(FirewheelConfig {
             num_graph_outputs: ChannelCount::new(channels as u32).unwrap_or(ChannelCount::STEREO),
             ..Default::default()
         });
 
-        // 尝试激活 cpal 音频流。
-        let stream = match Self::try_start_stream(&mut ctx, &config) {
-            Ok(stream) => {
-                ::log::info!(
-                    "Audio stream started ({} Hz, {} ch)",
-                    config.sample_rate,
-                    channels
-                );
-                Some(stream)
-            }
-            Err(e) => {
-                ::log::warn!("Audio stream failed to start, running silent: {e}");
-                None
-            }
-        };
-
-        Ok(Self {
+        let mut engine = Self {
             ctx,
-            _stream: stream,
+            _stream: None,
             active: Vec::new(),
             next_id: 1,
             master_volume: config.master_volume,
             channels,
-        })
+            config,
+        };
+
+        // 尝试激活 cpal 音频流（失败仅告警，静默运行——游戏不应因音频而崩溃）。
+        engine.arm_stream();
+        Ok(engine)
+    }
+
+    /// 尝试打开音频设备并注册 cpal 回调。失败仅告警并保持静默。
+    fn arm_stream(&mut self) {
+        match Self::try_start_stream(&mut self.ctx, &self.config) {
+            Ok(stream) => {
+                ::log::info!(
+                    "Audio stream started ({} Hz, {} ch)",
+                    self.config.sample_rate,
+                    self.channels
+                );
+                self._stream = Some(stream);
+            }
+            Err(e) => {
+                ::log::warn!("Audio stream failed to start, running silent: {e}");
+                self._stream = None;
+            }
+        }
+    }
+
+    /// 挂起音频输出：交还音频设备（丢弃 cpal 流），但保留 Firewheel 图与所有
+    /// 活动播放节点，以便恢复后「续播」而非「重播」。
+    ///
+    /// 平台背景切换（Android `onPause` / iOS 退后台）时由宿主（`prism-app`）
+    /// 调用。Firewheel 0.12 的 [`CpalStream`] 不暴露 pause/play 控制，挂起的
+    /// 唯一机制是 drop 流、恢复时重新注册回调——正是「平台强制线程只注册、
+    /// 不持有」的语义。流不存在时为空操作。
+    pub fn suspend_stream(&mut self) {
+        if self._stream.is_none() {
+            return;
+        }
+        ::log::debug!("Audio stream suspended (device released; graph kept)");
+        drop(self._stream.take());
+    }
+
+    /// 恢复音频输出：若流已被 [`Self::suspend_stream`] 释放，则以挂起前配置
+    /// 重新打开设备并注册回调；活动节点/音量/播放位置原样保留。流仍活跃时为
+    /// 空操作。
+    pub fn resume_stream(&mut self) {
+        if self._stream.is_some() {
+            return;
+        }
+        self.arm_stream();
     }
 
     fn try_start_stream(
