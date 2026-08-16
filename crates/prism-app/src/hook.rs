@@ -12,12 +12,18 @@ use winit::event::WindowEvent;
 use winit::window::Window;
 
 use crate::render_shared::{RenderShared, RenderStats};
+use prism_platform::PlatformEvent;
 
 /// 主线程上的帧钩子（编辑器 egui 等）。
 ///
 /// 注入方式：`app(config).with_frame_hook(EditorHook::new())`。
 /// 钩子全部方法都有默认实现——纯游戏宿主无需实现任何方法。
 pub trait FrameHook: Send {
+    /// 平台无关事件回调。新宿主应优先实现此方法，避免依赖 winit。
+    fn on_platform_event(&mut self, _window: &Window, _event: PlatformEvent) -> bool {
+        false
+    }
+
     /// 返回一个外部叠加层工厂（可选）。
     ///
     /// 渲染线程启动前调用一次：工厂产出的 [`SwapchainOverlay`] 被移到

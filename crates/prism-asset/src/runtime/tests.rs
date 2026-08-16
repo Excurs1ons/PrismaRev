@@ -354,7 +354,7 @@
         let mut buf = Vec::new();
         buf.extend_from_slice(b"RMAT");
         buf.push(1); // version
-        let scalars: [f32; crate::cooker::MATERIAL_SCALAR_COUNT] = [
+        let scalars: [f32; crate::formats::MATERIAL_SCALAR_COUNT] = [
             0.8, 0.8, 0.8, 1.0, // base_color
             0.2, 0.5, // metallic, roughness
             0.0, 0.0, 0.0, // emissive

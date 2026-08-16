@@ -1,10 +1,9 @@
-//! # 引擎资源管理——Handle + AssetManager + AssetServer
+//! # 编辑器/作者工具的本地资源句柄
 //!
 //! 提供基于代际索引的 [`Handle<T>`] 及其拥有者
 //! [`AssetManager<T>`]，用于类型化的 CPU 端资源数据（网格、材质、
-//! 纹理等）。顶层 [`AssetServer`] 注册为 ECS
-//! [`资源`](prism_ecs::World::insert_resource)，驱动
-//! [`MeshRenderer`](crate::ecs::components::MeshRenderer) 提取路径。
+//! 纹理等）。运行时资源读取统一由 `prism_asset::runtime::ResourceManager`
+//! 负责，本模块仅保留作者工具和旧场景组件使用的轻量句柄类型。
 //!
 //! ## 架构
 //!
@@ -13,11 +12,7 @@
 //!       │
 //!   AssetManager<T> ─── Vec<Slot<T>> — O(1) 获取/插入/移除
 //!       │
-//! AssetServer ─── ECS 资源持有类型化管理器
-//!       │
-//! Engine runtime_initialize() → 填充默认资源
-//!       │
-//!   scene_render_system → 解析 Handle → GPU handle → DrawItem
+//! AssetManager ─── 作者工具/场景编辑句柄
 //! ```
 
 pub mod procedural;
@@ -234,50 +229,6 @@ impl<T> AssetManager<T> {
 }
 
 impl<T> Default for AssetManager<T> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-// ===========================================================================
-// AssetServer (ECS 资源
-// ===========================================================================
-
-/// Top-level engine 资源 server, stored as an ECS 资源
-///
-/// Owns the typed 资源 managers and provides convenience accessors.
-pub struct AssetServer {
-    pub meshes: AssetManager<MeshAsset>,
-    pub materials: AssetManager<MaterialAsset>,
-}
-
-impl AssetServer {
-    pub fn new() -> Self {
-        Self {
-            meshes: AssetManager::new(),
-            materials: AssetManager::new(),
-        }
-    }
-
-    /// Convenience: 插入 a 网格 资源 and register it with the GPU 管理器
-    pub fn insert_mesh(&mut self, mesh: MeshAsset) -> Handle<MeshAsset> {
-        self.meshes.insert(mesh)
-    }
-
-    pub fn get_mesh(&self, handle: Handle<MeshAsset>) -> Option<&MeshAsset> {
-        self.meshes.get(handle)
-    }
-
-    pub fn insert_material(&mut self, mat: MaterialAsset) -> Handle<MaterialAsset> {
-        self.materials.insert(mat)
-    }
-
-    pub fn get_material(&self, handle: Handle<MaterialAsset>) -> Option<&MaterialAsset> {
-        self.materials.get(handle)
-    }
-}
-
-impl Default for AssetServer {
     fn default() -> Self {
         Self::new()
     }

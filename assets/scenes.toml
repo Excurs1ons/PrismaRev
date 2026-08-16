@@ -1,17 +1,17 @@
 # Virtual scene-asset manifest.
 #
-# Maps a logical scene name to a filesystem path. The engine loads the FIRST
-# entry whose `path` exists on disk, so you can list several (e.g. a portable
-# relative path first, then an absolute dev path) and only the available one
-# is used. Edit `path` freely - it is never hardcoded in code.
+# Maps a logical scene name to a scene asset path. The `path` is a lookup key
+# into the resource package's path manifest (assets/scenes.pak.meta.json): the
+# engine resolves it to an AssetId and loads the scene CONTENT from the .pak via
+# the ResourceManager. There is no disk-file fallback — scenes must be cooked
+# into assets/scenes.pak first (prism-asset-cli scan → import → build).
 #
-# Two formats are supported:
-#   - `.json`   : scene JSON (dev convenience, human-editable).
+# Supported scene content formats inside the package:
 #   - `.rscn`   : cooked binary (production).
-#   - `.gltf`   : legacy glTF import (try_load_gltf).
 
 # Intro scene (开场动画): 4 UI entities (overlay + title + subtitle + prompt).
-# The engine loads the FIRST entry whose path exists, so intro takes priority.
+# The engine loads the FIRST entry registered in the resource package, so intro
+# takes priority.
 [[scenes]]
 name = "intro"
 path = "scenes/intro.scene.json"

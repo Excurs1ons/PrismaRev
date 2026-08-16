@@ -22,6 +22,7 @@ use winit::raw_window_handle::{
     DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, RawDisplayHandle,
     RawWindowHandle, WindowHandle,
 };
+use prism_platform::SendWindowHandles;
 
 use crate::render_shared::{RenderShared, RenderStats};
 
@@ -33,13 +34,6 @@ use crate::render_shared::{RenderShared, RenderStats};
 /// `HWND` / Android 的 `ANativeWindow` 指针，display 句柄为空结构体），
 /// 在任意线程用于创建 Vulkan 表面都是安全的；且窗口生命周期覆盖整个渲染
 /// 线程，故此处显式标注 `Send` 是成立的。
-#[derive(Clone, Copy)]
-pub struct SendWindowHandles {
-    pub display: RawDisplayHandle,
-    pub window: RawWindowHandle,
-}
-unsafe impl Send for SendWindowHandles {}
-
 /// 把主线程提取的 [`RawDisplayHandle`]/[`RawWindowHandle`] 重新包装成
 /// `HasDisplayHandle`/`HasWindowHandle`，供渲染线程内的 `GraphRenderer::new`
 /// 使用。winit 的 `Window::window_handle()` 在**非创建线程**上会返回错误
@@ -163,7 +157,7 @@ pub fn render_thread_main(
                 requests.into_iter().unzip();
             let results = renderer.apply_asset_requests(stripped);
             let paired: Vec<(Entity, AssetResolveResult)> =
-                entities.into_iter().zip(results.into_iter()).collect();
+                entities.into_iter().zip(results).collect();
             shared.push_asset_results(paired);
         }
 
@@ -233,7 +227,7 @@ pub fn render_thread_main(
 }
 
 /// 渲染 one 帧 构建 [`FrameInput`] from a [`FramePacket`] then drive
-/// the three-phase API 开始 → 执行 → present).
+/// the five-phase API (begin → prepare → execute → present → end).
 fn render_one_frame(
     renderer: &mut GraphRenderer,
     packet: &FramePacket,
@@ -303,11 +297,14 @@ fn render_one_frame(
         None => return Ok(()),
     };
     renderer
-        .execute(&ctx, &input)
+        .prepare(&ctx, &input)
+        .and_then(|_| renderer.execute(&ctx, &input))
         .inspect_err(|_| {
             let _ = renderer.present(&ctx);
+            let _ = renderer.end_frame(&ctx, false);
         })?;
-    let _ = renderer.present(&ctx)?;
+    let presented = renderer.present(&ctx)?;
+    renderer.end_frame(&ctx, presented)?;
 
     Ok(())
 }

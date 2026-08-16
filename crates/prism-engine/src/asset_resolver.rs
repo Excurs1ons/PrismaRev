@@ -60,13 +60,8 @@ impl GpuAssetResolver {
         const PAK_PATH: &str = "assets/scenes.pak";
         const MANIFEST_PATH: &str = "assets/scenes.pak.meta.json";
 
-        if !std::path::Path::new(PAK_PATH).exists() {
-            log::info!("no .pak found at {PAK_PATH}; resource manager stays empty");
-            return;
-        }
-
         if let Err(e) = self.resource_manager.load_package(PAK_PATH) {
-            log::warn!("failed to load resource package {PAK_PATH}: {e}");
+            log::info!("resource package unavailable at {PAK_PATH}: {e}");
             return;
         }
 
@@ -81,6 +76,19 @@ impl GpuAssetResolver {
             "resource package loaded: {} assets registered",
             self.resource_manager.asset_count(),
         );
+    }
+
+    /// 从内存资源加载 `.pak` 及其路径 manifest。
+    pub fn load_resource_package_bytes(
+        &mut self,
+        pak_bytes: &[u8],
+        path_manifest_json: Option<&str>,
+    ) -> anyhow::Result<()> {
+        self.resource_manager.load_package_bytes(pak_bytes)?;
+        if let Some(manifest) = path_manifest_json {
+            self.resource_manager.load_path_manifest_from_str(manifest)?;
+        }
+        Ok(())
     }
 
     // -----------------------------------------------------------------------

@@ -3,9 +3,10 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use prism_engine::config::WindowConfig;
+use crate::WindowConfig;
 use winit::event_loop::ActiveEventLoop;
 use winit::raw_window_handle::HasDisplayHandle;
+use winit::raw_window_handle::{HasWindowHandle, RawDisplayHandle, RawWindowHandle};
 use winit::window::Window;
 
 /// 窗口上下文——在第一个 `resumed` 时创建，在 `suspended` 时销毁。
@@ -19,6 +20,23 @@ pub struct PlatformContext {
     pub(crate) window: Arc<Window>,
 }
 
+/// 在窗口创建线程提取、供渲染线程使用的原始句柄。
+#[derive(Clone, Copy)]
+pub struct SendWindowHandles {
+    pub display: RawDisplayHandle,
+    pub window: RawWindowHandle,
+}
+
+// Win32 HWND 和 Android ANativeWindow 是进程级句柄，窗口生命周期覆盖渲染线程。
+unsafe impl Send for SendWindowHandles {}
+
+pub fn raw_window_handles(window: &Window) -> anyhow::Result<SendWindowHandles> {
+    Ok(SendWindowHandles {
+        display: window.display_handle()?.as_raw(),
+        window: window.window_handle()?.as_raw(),
+    })
+}
+
 impl PlatformContext {
     /// 在**主线程**创建 winit 窗口（快速，不触碰 Vulkan / GPU）。
     ///
@@ -27,7 +45,7 @@ impl PlatformContext {
     pub fn create_window(
         event_loop: &ActiveEventLoop,
         window_cfg: &WindowConfig,
-    ) -> Arc<Window> {
+    ) -> Self {
         let t_start = Instant::now();
 
         let mut attrs = Window::default_attributes()
@@ -65,7 +83,7 @@ impl PlatformContext {
             (Instant::now() - t_start).as_millis(),
         );
 
-        window
+        Self { window }
     }
 
     // -----------------------------------------------------------------------
@@ -74,6 +92,10 @@ impl PlatformContext {
 
     pub fn window(&self) -> &Arc<Window> {
         &self.window
+    }
+
+    pub fn window_arc(&self) -> Arc<Window> {
+        Arc::clone(&self.window)
     }
 }
 

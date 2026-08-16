@@ -219,7 +219,6 @@ impl ForwardPass {
     /// Rebuilds only the entry for `image_index` when it is 缺少 or the
     /// 交换链 changed; safe against in-flight framebuffers (mirrors the
     /// old `set_target` 契约
-
     /// 场景切换时切换 IBL 描述符 集合 句柄与 BRDF LUT 的 bindless 槽。
     /// set2 布局共享（不重建），仅替换 set 句柄并同步 skybox pass 绑定的 set2。
     pub fn set_ibl(&mut self, descriptor_set: vk::DescriptorSet, brdf_handle: u32) {

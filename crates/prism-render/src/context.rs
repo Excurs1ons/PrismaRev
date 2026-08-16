@@ -301,6 +301,11 @@ fn create_device(
     has_surface: bool,
 ) -> anyhow::Result<(ash::Device, Vec<CString>)> {
     use anyhow::Context as _;
+    if !rt_caps.has_transfer_commands() {
+        anyhow::bail!(
+            "Vulkan device lacks required synchronization2/copy_commands2 support"
+        );
+    }
     let priorities = [1.0f32];
     let queue_create_infos = [vk::DeviceQueueCreateInfo::default()
         .queue_family_index(graphics_queue_family)
@@ -335,12 +340,16 @@ fn create_device(
     // available once this 扩展 is 启用 `buffer.rs` therefore drives the
     // 屏障 through `ash::khr::synchronization2::Device`, which resolves the
     // KHR entry point. The 扩展 must be 启用 here or that fails to 加载
-    enabled_extensions.push(ash::khr::synchronization2::NAME.into());
+    if rt_caps.synchronization2 {
+        enabled_extensions.push(ash::khr::synchronization2::NAME.into());
+    }
     // `cmd_blit_image2` (used by mip generation in `buffer.rs`) is a Vulkan 1.3
     // core symbol not exposed on a 1.2 设备 it is promoted from
     // VK_KHR_copy_commands2. Enable the 扩展 so the KHR entry point loads,
     // and 调用 it through `ash::khr::copy_commands2::Device` in `buffer.rs`.
-    enabled_extensions.push(ash::khr::copy_commands2::NAME.into());
+    if rt_caps.copy_commands2 {
+        enabled_extensions.push(ash::khr::copy_commands2::NAME.into());
+    }
     for rt_ext in capabilities::rt_extension_names(rt_caps) {
         enabled_extensions.push(rt_ext.into());
     }
@@ -394,7 +403,9 @@ fn create_device(
         vk12.timeline_semaphore = vk::TRUE;
     }
 
-    sync2_features.synchronization2 = vk::TRUE;
+    if rt_caps.synchronization2 {
+        sync2_features.synchronization2 = vk::TRUE;
+    }
     let mut features2 = vk::PhysicalDeviceFeatures2::default()
         .features(legacy_features)
         .push_next(&mut vk11)

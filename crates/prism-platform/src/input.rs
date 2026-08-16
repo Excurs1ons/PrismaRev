@@ -1,16 +1,95 @@
 //! Winit → engine domain-type conversions, pointer-lock helpers, and
 //! 输入 事件 routing.
 
-use prism_engine::input::{InputManager, KeyCode as EngKeyCode, MouseButton as EngMouseButton};
 use winit::event::WindowEvent;
+#[cfg(any())]
 use winit::event_loop::ActiveEventLoop;
 use winit::window::Window;
+#[cfg(any())]
+use prism_engine::input::{InputManager, KeyCode as EngKeyCode, MouseButton as EngMouseButton};
+
+/// 与窗口库无关的平台事件快照。
+///
+/// `prism-app` 和宿主扩展最终应消费此类型，而不是直接依赖 winit 的
+/// `WindowEvent`。暂时保留原始事件路由 API，以便分阶段迁移调用方。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PlatformEvent {
+    CloseRequested,
+    Focused(bool),
+    Resized { width: u32, height: u32 },
+    CursorMoved { x: f64, y: f64 },
+    MouseButton { button: u16, pressed: bool },
+    MouseWheel { delta: f64 },
+    Key { key: u32, pressed: bool },
+    Touch { x: f64, y: f64, phase: TouchPhase },
+    Other,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TouchPhase {
+    Started,
+    Moved,
+    Ended,
+    Cancelled,
+}
+
+/// 将 winit 事件转换成平台无关事件。
+pub fn to_platform_event(event: &WindowEvent) -> PlatformEvent {
+    match event {
+        WindowEvent::CloseRequested => PlatformEvent::CloseRequested,
+        WindowEvent::Focused(focused) => PlatformEvent::Focused(*focused),
+        WindowEvent::Resized(size) => PlatformEvent::Resized {
+            width: size.width,
+            height: size.height,
+        },
+        WindowEvent::CursorMoved { position, .. } => PlatformEvent::CursorMoved {
+            x: position.x,
+            y: position.y,
+        },
+        WindowEvent::MouseInput { state, button, .. } => PlatformEvent::MouseButton {
+            button: match button {
+                winit::event::MouseButton::Left => 0,
+                winit::event::MouseButton::Right => 1,
+                winit::event::MouseButton::Middle => 2,
+                winit::event::MouseButton::Back => 3,
+                winit::event::MouseButton::Forward => 4,
+                winit::event::MouseButton::Other(v) => *v,
+            },
+            pressed: *state == winit::event::ElementState::Pressed,
+        },
+        WindowEvent::MouseWheel { delta, .. } => PlatformEvent::MouseWheel {
+            delta: match delta {
+                winit::event::MouseScrollDelta::LineDelta(_, y) => *y as f64,
+                winit::event::MouseScrollDelta::PixelDelta(pos) => pos.y,
+            },
+        },
+        WindowEvent::KeyboardInput { event, .. } => PlatformEvent::Key {
+            key: match event.physical_key {
+                winit::keyboard::PhysicalKey::Code(code) => code as u32,
+                winit::keyboard::PhysicalKey::Unidentified(_) => u32::MAX,
+            },
+            pressed: event.state == winit::event::ElementState::Pressed,
+        },
+        WindowEvent::Touch(touch) => PlatformEvent::Touch {
+            x: touch.location.x,
+            y: touch.location.y,
+            phase: match touch.phase {
+                winit::event::TouchPhase::Started => TouchPhase::Started,
+                winit::event::TouchPhase::Moved => TouchPhase::Moved,
+                winit::event::TouchPhase::Ended => TouchPhase::Ended,
+                winit::event::TouchPhase::Cancelled => TouchPhase::Cancelled,
+            },
+        },
+        _ => PlatformEvent::Other,
+    }
+}
 
 // ===========================================================================
 // Winit → engine domain-type conversions
 // ===========================================================================
 
 /// 转换 a winit [`PhysicalKey`] to an engine [`KeyCode`].
+#[cfg(any())]
 pub fn winit_key_to_engine(pk: winit::keyboard::PhysicalKey) -> EngKeyCode {
     use winit::keyboard::KeyCode as Wk;
     match pk {
@@ -52,6 +131,7 @@ pub fn winit_key_to_engine(pk: winit::keyboard::PhysicalKey) -> EngKeyCode {
 }
 
 /// 转换 a winit [`MouseButton`] to an engine [`MouseButton`].
+#[cfg(any())]
 pub fn winit_mouse_button_to_engine(b: winit::event::MouseButton) -> EngMouseButton {
     match b {
         winit::event::MouseButton::Left => EngMouseButton::Left,
@@ -64,6 +144,7 @@ pub fn winit_mouse_button_to_engine(b: winit::event::MouseButton) -> EngMouseBut
 }
 
 /// 转换 a winit [`ElementState`] to an engine [`ElementState`].
+#[cfg(any())]
 pub fn winit_state_to_engine(s: winit::event::ElementState) -> prism_engine::input::ElementState {
     match s {
         winit::event::ElementState::Pressed => prism_engine::input::ElementState::Pressed,
@@ -98,6 +179,7 @@ pub fn release_pointer(window: &Window) {
 /// Route a winit [`WindowEvent`] through the engine's [`InputManager`],
 /// updating raw 输入 状态 and managing pointer-lock transitions that require
 /// window-system operations.
+#[cfg(any())]
 pub fn handle_input_event(
     input: &mut InputManager,
     window: &Window,
@@ -239,5 +321,31 @@ pub fn handle_input_event(
         }
 
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use winit::dpi::PhysicalSize;
+
+    #[test]
+    fn converts_resize_without_exposing_winit_types() {
+        let event = WindowEvent::Resized(PhysicalSize::new(1280, 720));
+        assert_eq!(
+            to_platform_event(&event),
+            PlatformEvent::Resized {
+                width: 1280,
+                height: 720
+            }
+        );
+    }
+
+    #[test]
+    fn converts_close_request() {
+        assert_eq!(
+            to_platform_event(&WindowEvent::CloseRequested),
+            PlatformEvent::CloseRequested
+        );
     }
 }

@@ -37,23 +37,19 @@ use std::time::{Duration, Instant};
 use prism_audio::AudioEngine;
 use prism_engine::asset_resolver::GpuAssetResolver;
 use prism_engine::config::AppConfig;
-use prism_engine::input::{
-    ElementState as EngElementState, InputManager, KeyCode as EngKeyCode,
-    MouseButton as EngMouseButton,
-};
+use prism_engine::input::InputManager;
 use prism_engine::render_settings::RenderSettings;
 use prism_engine::render_system::extract_frame_packet;
 use prism_engine::Engine;
 use prism_platform::{required_vulkan_extensions, PlatformContext};
 use winit::application::ApplicationHandler;
-use winit::event::{DeviceEvent, MouseScrollDelta, WindowEvent};
+use winit::event::{DeviceEvent, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow};
 use winit::keyboard::KeyCode;
-use winit::raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use winit::window::WindowId;
 
 use crate::hook::FrameHook;
-use crate::render_runner::{render_thread_main, OverlayFactory, SendWindowHandles};
+use crate::render_runner::{render_thread_main, OverlayFactory};
 use crate::render_shared::RenderShared;
 
 // ===========================================================================
@@ -120,7 +116,7 @@ pub struct App {
 
     // ---------- 窗口上下文 ----------
     /// 主线程持有的窗口（`Arc` 与渲染线程共享）。`None` 表示尚未创建。
-    window: Option<Arc<winit::window::Window>>,
+    platform: Option<PlatformContext>,
 
     // ---------- 帧钩子（编辑器等宿主注入） ----------
     frame_hook: Option<Box<dyn FrameHook>>,
@@ -158,7 +154,7 @@ pub struct App {
 impl App {
     /// 无参构造 = 默认配置的完整引擎（无演示内容）。
     pub fn new() -> Self {
-        Self::with_config(AppConfig::load())
+        Self::with_config(crate::load_config())
     }
 
     /// 用指定配置创建应用，并跑完所有引擎初始化阶段。
@@ -169,23 +165,16 @@ impl App {
     pub fn with_config(config: AppConfig) -> Self {
         let mut engine = Engine::empty();
 
-        // Phase 0 – PreInit
-        engine.pre_init(&());
-
         // Phase 1 – Subsystem registration
 
-        // Phase 2 – 配置
-        engine.init_config();
-
-        // Phase 3 – 资源 loading
-        engine.init_resources();
+        // 资源 loading：ResourceManager 由应用层持有并注入引擎。
         let mut asset_resolver = GpuAssetResolver::new();
         asset_resolver.load_resource_package();
 
-        // Phase 4 – Scene loading
+        // 场景 loading
         engine.init_scene(&mut asset_resolver.resource_manager);
 
-        // Phase 5 – 运行时 startup callbacks
+        // 运行时 startup callbacks
         engine.runtime_initialize();
 
         Self {
@@ -196,7 +185,7 @@ impl App {
             render_shared: None,
             render_running: None,
             render_thread: None,
-            window: None,
+            platform: None,
             frame_hook: None,
             render_settings: RenderSettings::default(),
             display_aspect: 16.0 / 9.0,
@@ -291,7 +280,9 @@ impl App {
 
     /// 解析启动配置，设置日志级别。
     fn apply_launch_config(&mut self) {
-        let launch = prism_engine::launch_config::LaunchConfig::load();
+        let launch = std::env::var(prism_engine::launch_config::ENV_KEY)
+            .map(|json| prism_engine::launch_config::LaunchConfig::from_json(&json))
+            .unwrap_or_default();
 
         // 日志级别覆盖需在 logger 初始化之后生效——RUST_LOG 在 `run` 的
         // try_init 之前已被读取，这里再设一次让后续 logger 重新读取。
@@ -328,12 +319,12 @@ impl App {
 
     /// 在**渲染线程**异步构建 [`GraphRenderer`] 并启动帧循环。
     ///
-    /// 主线程只持有已创建的窗口（`self.window`）。本函数计算场景光照、
+    /// 主线程只持有已创建的平台窗口。本函数计算场景光照、
     /// Vulkan 扩展名、叠加层工厂，创建共享状态，然后 spawn 渲染线程——
     /// 渲染线程内部才构建渲染器（~数百毫秒），因此 `resumed` 调用后能立即
     /// 返回，窗口事件（关闭/移动/缩放）全程不被阻塞。
     fn spawn_render_thread(&mut self) {
-        let window = match self.window.clone() {
+        let window = match self.platform.as_ref().map(PlatformContext::window_arc) {
             Some(w) => w,
             None => {
                 log::error!("spawn_render_thread: window not created");
@@ -342,25 +333,18 @@ impl App {
         };
 
         // 场景声明式光照：纯 CPU 计算，无需渲染器（None → 廉价空 IBL）。
-        let scene_env = self
-            .engine
-            .as_ref()
-            .and_then(|e| e.current_scene_env_bytes());
+        let scene_env = self.engine.as_ref().and_then(|engine| {
+            engine.current_scene_env_bytes_with_provider(
+                &mut self.asset_resolver.resource_manager,
+            )
+        });
 
         // winit 的 `Window::window_handle()` 在**非窗口创建线程**上会失败
         // （"the underlying handle is not available"），因此必须在主线程把原始
         // 句柄取出来再跨线程传给渲染线程。原始 HWND 是进程级值，跨线程用于
         // 创建 Vulkan 表面是安全的（见 `SendWindowHandles`）。
-        let handles = SendWindowHandles {
-            display: (*window)
-                .display_handle()
-                .expect("get display handle")
-                .as_raw(),
-            window: (*window)
-                .window_handle()
-                .expect("get window handle")
-                .as_raw(),
-        };
+        let handles = prism_platform::raw_window_handles(&window)
+            .expect("get raw window handles");
 
         // Vulkan 实例扩展名（依赖窗口 display handle，便宜）。
         let extensions = required_vulkan_extensions(&window);
@@ -465,7 +449,8 @@ impl App {
             };
 
             // --- 同步屏幕尺寸（ECS UI 布局依赖 ScreenSize resource） ---
-            if let Some(ref window) = self.window {
+            if let Some(ref platform) = self.platform {
+                let window = platform.window();
                 let (w, h) = window.inner_size().into();
                 if w > 0 && h > 0 {
                     engine
@@ -563,25 +548,62 @@ impl App {
     ///
     /// Handles 键盘 输入 (both press and 释放 Cursor/mouse/scroll
     /// events are handled inline in [`window_event`](Self::window_event).
-    fn route_window_event_to_input(&mut self, event: &WindowEvent) {
-        if let WindowEvent::KeyboardInput {
-            event:
-                winit::event::KeyEvent {
-                    physical_key,
-                    state,
-                    ..
-                },
-            ..
-        } = event
-        {
-            let eng_state = match state {
-                winit::event::ElementState::Pressed => EngElementState::Pressed,
-                winit::event::ElementState::Released => EngElementState::Released,
-            };
-            if let winit::keyboard::PhysicalKey::Code(code) = physical_key {
-                if let Some(eng_key) = Self::winit_key_to_engine(*code) {
-                    self.input.handle_keyboard(eng_key, eng_state);
+    fn route_window_event_to_input(&mut self, event_loop: &ActiveEventLoop, event: &WindowEvent) {
+        if let Some(platform) = self.platform.as_ref() {
+            let window = platform.window();
+            if let WindowEvent::KeyboardInput { event: key_event, .. } = event {
+                if let winit::keyboard::PhysicalKey::Code(code) = key_event.physical_key {
+                    use prism_engine::input::{ElementState, KeyCode as EngineKeyCode};
+                    let key = match code {
+                        winit::keyboard::KeyCode::KeyW => EngineKeyCode::KeyW, winit::keyboard::KeyCode::KeyA => EngineKeyCode::KeyA,
+                        winit::keyboard::KeyCode::KeyS => EngineKeyCode::KeyS, winit::keyboard::KeyCode::KeyD => EngineKeyCode::KeyD,
+                        winit::keyboard::KeyCode::KeyQ => EngineKeyCode::KeyQ, winit::keyboard::KeyCode::KeyE => EngineKeyCode::KeyE,
+                        winit::keyboard::KeyCode::Space => EngineKeyCode::Space, winit::keyboard::KeyCode::ShiftLeft => EngineKeyCode::ShiftLeft,
+                        winit::keyboard::KeyCode::ShiftRight => EngineKeyCode::ShiftRight, winit::keyboard::KeyCode::ControlLeft => EngineKeyCode::ControlLeft,
+                        winit::keyboard::KeyCode::ControlRight => EngineKeyCode::ControlRight, winit::keyboard::KeyCode::AltLeft => EngineKeyCode::AltLeft,
+                        winit::keyboard::KeyCode::AltRight => EngineKeyCode::AltRight, winit::keyboard::KeyCode::Escape => EngineKeyCode::Escape,
+                        winit::keyboard::KeyCode::Tab => EngineKeyCode::Tab, winit::keyboard::KeyCode::Enter => EngineKeyCode::Enter,
+                        winit::keyboard::KeyCode::ArrowUp => EngineKeyCode::ArrowUp, winit::keyboard::KeyCode::ArrowDown => EngineKeyCode::ArrowDown,
+                        winit::keyboard::KeyCode::ArrowLeft => EngineKeyCode::ArrowLeft, winit::keyboard::KeyCode::ArrowRight => EngineKeyCode::ArrowRight,
+                        winit::keyboard::KeyCode::Digit0 => EngineKeyCode::Digit0, winit::keyboard::KeyCode::Digit1 => EngineKeyCode::Digit1,
+                        winit::keyboard::KeyCode::Digit2 => EngineKeyCode::Digit2, winit::keyboard::KeyCode::Digit3 => EngineKeyCode::Digit3,
+                        winit::keyboard::KeyCode::Digit4 => EngineKeyCode::Digit4, winit::keyboard::KeyCode::Digit5 => EngineKeyCode::Digit5,
+                        winit::keyboard::KeyCode::Digit6 => EngineKeyCode::Digit6, winit::keyboard::KeyCode::Digit7 => EngineKeyCode::Digit7,
+                        winit::keyboard::KeyCode::Digit8 => EngineKeyCode::Digit8, winit::keyboard::KeyCode::Digit9 => EngineKeyCode::Digit9,
+                        other => EngineKeyCode::Other(other as u32),
+                    };
+                    self.input.handle_keyboard(key, if key_event.state == winit::event::ElementState::Pressed {
+                        ElementState::Pressed
+                    } else { ElementState::Released });
                 }
+            }
+            match prism_platform::to_platform_event(event) {
+                prism_platform::PlatformEvent::CloseRequested => event_loop.exit(),
+                prism_platform::PlatformEvent::Focused(focused) => {
+                    self.input.focus_return_click = !focused;
+                    if !focused && self.input.pointer_locked {
+                        prism_platform::release_pointer(window);
+                        self.input.set_locked(false);
+                    }
+                }
+                prism_platform::PlatformEvent::CursorMoved { x, y } => {
+                    self.input.handle_mouse_move([x, y]);
+                }
+                prism_platform::PlatformEvent::MouseWheel { delta } => {
+                    self.input.handle_scroll(delta);
+                }
+                prism_platform::PlatformEvent::MouseButton { button, pressed } => {
+                    use prism_engine::input::{ElementState, MouseButton};
+                    let button = match button { 0 => MouseButton::Left, 1 => MouseButton::Right,
+                        2 => MouseButton::Middle, 3 => MouseButton::Back, 4 => MouseButton::Forward,
+                        other => MouseButton::Other(other) };
+                    if pressed && button == MouseButton::Left && !self.input.pointer_locked {
+                        prism_platform::grab_pointer(window);
+                        self.input.set_locked(true);
+                    }
+                    self.input.handle_mouse_button(button, if pressed { ElementState::Pressed } else { ElementState::Released });
+                }
+                _ => {}
             }
         }
     }
@@ -637,57 +659,6 @@ impl App {
         })
     }
 
-    // -------------------------------------------------------------------
-    // winit → engine 输入 conversion
-    // -------------------------------------------------------------------
-
-    fn winit_key_to_engine(code: KeyCode) -> Option<EngKeyCode> {
-        Some(match code {
-            KeyCode::KeyW => EngKeyCode::KeyW,
-            KeyCode::KeyA => EngKeyCode::KeyA,
-            KeyCode::KeyS => EngKeyCode::KeyS,
-            KeyCode::KeyD => EngKeyCode::KeyD,
-            KeyCode::KeyQ => EngKeyCode::KeyQ,
-            KeyCode::KeyE => EngKeyCode::KeyE,
-            KeyCode::Space => EngKeyCode::Space,
-            KeyCode::ShiftLeft => EngKeyCode::ShiftLeft,
-            KeyCode::ShiftRight => EngKeyCode::ShiftRight,
-            KeyCode::ControlLeft => EngKeyCode::ControlLeft,
-            KeyCode::ControlRight => EngKeyCode::ControlRight,
-            KeyCode::AltLeft => EngKeyCode::AltLeft,
-            KeyCode::AltRight => EngKeyCode::AltRight,
-            KeyCode::Escape => EngKeyCode::Escape,
-            KeyCode::Tab => EngKeyCode::Tab,
-            KeyCode::Enter => EngKeyCode::Enter,
-            KeyCode::ArrowUp => EngKeyCode::ArrowUp,
-            KeyCode::ArrowDown => EngKeyCode::ArrowDown,
-            KeyCode::ArrowLeft => EngKeyCode::ArrowLeft,
-            KeyCode::ArrowRight => EngKeyCode::ArrowRight,
-            KeyCode::Digit0 => EngKeyCode::Digit0,
-            KeyCode::Digit1 => EngKeyCode::Digit1,
-            KeyCode::Digit2 => EngKeyCode::Digit2,
-            KeyCode::Digit3 => EngKeyCode::Digit3,
-            KeyCode::Digit4 => EngKeyCode::Digit4,
-            KeyCode::Digit5 => EngKeyCode::Digit5,
-            KeyCode::Digit6 => EngKeyCode::Digit6,
-            KeyCode::Digit7 => EngKeyCode::Digit7,
-            KeyCode::Digit8 => EngKeyCode::Digit8,
-            KeyCode::Digit9 => EngKeyCode::Digit9,
-            _ => return None,
-        })
-    }
-
-    fn winit_mouse_to_engine(button: &winit::event::MouseButton) -> EngMouseButton {
-        match button {
-            winit::event::MouseButton::Left => EngMouseButton::Left,
-            winit::event::MouseButton::Right => EngMouseButton::Right,
-            winit::event::MouseButton::Middle => EngMouseButton::Middle,
-            winit::event::MouseButton::Back => EngMouseButton::Back,
-            winit::event::MouseButton::Forward => EngMouseButton::Forward,
-            winit::event::MouseButton::Other(v) => EngMouseButton::Other(*v),
-        }
-    }
-
     fn show_fatal_dialog(&mut self, event_loop: &ActiveEventLoop) {
         let message = self
             .fatal_error
@@ -735,13 +706,30 @@ impl ApplicationHandler for App {
 
         let resumed_entry = crate::render_shared::startup_ms();
 
-        if self.window.is_none() {
+        if self.platform.is_none() {
             // 主线程仅创建窗口（快速，~数毫秒），随后立即返回——窗口事件
             // （关闭/移动/缩放）此刻起即可被 winit 派发，不被任何初始化阻塞。
-            let window = PlatformContext::create_window(event_loop, &self.config.window);
+            let window_config = prism_platform::WindowConfig {
+                title: self.config.window.title.clone(),
+                width: self.config.window.width,
+                height: self.config.window.height,
+                min_width: self.config.window.min_width,
+                min_height: self.config.window.min_height,
+                max_width: self.config.window.max_width,
+                max_height: self.config.window.max_height,
+                position_x: self.config.window.position_x,
+                position_y: self.config.window.position_y,
+                resizable: self.config.window.resizable,
+                fullscreen: self.config.window.fullscreen,
+                maximized: self.config.window.maximized,
+                visible: self.config.window.visible,
+                decorations: self.config.window.decorations,
+                vsync: self.config.window.vsync,
+            };
+            let platform = PlatformContext::create_window(event_loop, &window_config);
             let window_built = crate::render_shared::startup_ms();
 
-            self.window = Some(window.clone());
+            self.platform = Some(platform);
 
             // 渲染线程异步构建渲染器 + 启动帧循环（重量级初始化不阻塞主线程）。
             self.spawn_render_thread();
@@ -779,17 +767,20 @@ impl ApplicationHandler for App {
         // 先将事件转发给帧钩子（编辑器 egui 等）；被消费则不再走应用
         // 自身的快捷键处理（输入仍会路由到 InputManager 保持按键状态一致）。
         if let Some(hook) = self.frame_hook.as_mut() {
-            if let Some(ref window) = self.window {
-                let consumed = hook.on_window_event(window, &event);
+            if let Some(ref platform) = self.platform {
+                let window = platform.window();
+        let platform_event = prism_platform::to_platform_event(&event);
+        let consumed = hook.on_platform_event(window, platform_event)
+            || hook.on_window_event(window, &event);
                 if consumed {
-                    self.route_window_event_to_input(&event);
+                    self.route_window_event_to_input(event_loop, &event);
                     return;
                 }
             }
         }
 
         // 路由窗口事件 → InputManager（始终路由，包括快捷键未处理的重复事件）。
-        self.route_window_event_to_input(&event);
+        self.route_window_event_to_input(event_loop, &event);
 
         // 键盘快捷键（仅按下时触发）。
         if let WindowEvent::KeyboardInput {
@@ -852,33 +843,11 @@ impl ApplicationHandler for App {
             return;
         }
 
-        // 非键盘窗口事件。
-        match &event {
-            WindowEvent::CursorMoved { position, .. } => {
-                self.input.handle_mouse_move([position.x, position.y]);
-            }
-            WindowEvent::MouseInput { state, button, .. } => {
-                let eng_state = match state {
-                    winit::event::ElementState::Pressed => EngElementState::Pressed,
-                    winit::event::ElementState::Released => EngElementState::Released,
-                };
-                self.input
-                    .handle_mouse_button(Self::winit_mouse_to_engine(button), eng_state);
-            }
-            WindowEvent::MouseWheel { delta, .. } => {
-                let y = match delta {
-                    MouseScrollDelta::LineDelta(_, y) => *y as f64,
-                    MouseScrollDelta::PixelDelta(pos) => pos.y,
-                };
-                self.input.handle_scroll(y);
-            }
-            WindowEvent::Resized(size) => {
+        if let WindowEvent::Resized(size) = &event {
                 self.needs_resize = true;
                 if size.width > 0 && size.height > 0 {
                     self.display_aspect = size.width as f32 / size.height as f32;
                 }
-            }
-            _ => {}
         }
     }
 
@@ -912,7 +881,7 @@ impl ApplicationHandler for App {
             // 5. 丢弃音频引擎（在平台/引擎之前停止音频流）
             self.audio.take();
             // 6. 丢弃窗口（渲染器归渲染线程所有，已随渲染线程停止而销毁）
-            self.window = None;
+            self.platform = None;
             // 7. 引擎后关闭
             if let Some(ref mut engine) = self.engine {
                 engine.post_shutdown();
@@ -930,7 +899,8 @@ impl ApplicationHandler for App {
 
         // 帧钩子（编辑器 egui 等）— 主线程
         if let Some(hook) = self.frame_hook.as_mut() {
-            if let Some(ref window) = self.window {
+            if let Some(ref platform) = self.platform {
+                let window = platform.window();
                 if let Some(ref shared) = self.render_shared {
                     if let Some(ref mut engine) = self.engine {
                         let stats = shared.read_render_stats();
@@ -972,6 +942,6 @@ impl ApplicationHandler for App {
         // 停止渲染线程（渲染器归渲染线程所有，停止即释放 Vulkan 表面）。
         self.stop_render_thread();
 
-        self.window = None;
+        self.platform = None;
     }
 }

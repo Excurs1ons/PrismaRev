@@ -1,7 +1,7 @@
 //! 开场 intro screen：黑场淡出 → 标题上浮 → 停留 → 淡出，任意键/点击跳过。
 //!
 //! 实体由 `assets/scenes/intro.scene.json` 加载（4 个 UI 实体：黑场 + 标题 +
-//! 副标题 + 提示）。[`advance`] system 每帧按 `Name` 组件查找实体，推进
+//! 副标题 + 提示）。[`tick`] system 每帧按 `Name` 组件查找实体，推进
 //! keyframe 动画并写回 `Style` / `Text` 组件。
 
 use keyframe::functions::{EaseInCubic, EaseInOutCubic, EaseOutCubic};
@@ -30,7 +30,7 @@ pub struct IntroState {
     title_opacity: AnimationSequence<f32>,
     /// 标题纵向位移（px，>0 在下方，动画归零上浮）。
     title_y: AnimationSequence<f32>,
-    /// 跳过请求（`advance` 里置位并消费）。
+    /// 跳过请求（`tick` 里置位并消费）。
     skip: bool,
     overlay_entity: Entity,
     title_entity: Entity,
@@ -117,7 +117,7 @@ fn initialize_intro(world: &mut World) -> Option<IntroState> {
 ///
 /// 第一帧按 `Name` 组件查找实体并创建 [`IntroState`] 作为 ECS resource。
 /// 跳过检测读 [`UiInputState`]（引擎每帧插入的输入快照）——任意键或点击。
-pub fn advance(world: &mut World, dt: f32) {
+pub fn tick(world: &mut World, dt: f32) {
     // 1. 惰性初始化：第一帧按 Name 查找实体。
     if world.get_resource::<IntroState>().is_none() {
         if let Some(state) = initialize_intro(world) {
@@ -166,7 +166,7 @@ pub fn advance(world: &mut World, dt: f32) {
     };
 
     // 4. 开屏雨滴（2D 粒子系统）：随标题淡入淡出，追加进 UI 绘制列表。
-    //    ui::render 已在 advance 之前生成本帧的 UiDrawList，这里只是扩展其
+    //    ui::render 已在 tick 之前生成本帧的 UiDrawList，这里只是扩展其
     //    quads；随后 convert_ui_draw_list_to_overlay 会自动把它纳入叠加 pass。
     {
         let (w, h) = world

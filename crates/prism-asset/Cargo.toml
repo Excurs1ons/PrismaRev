@@ -38,9 +38,9 @@ xxhash-rust = { version = "0.8", features = ["xxh3"], optional = true }
 default = ["runtime", "cooker", "package", "db", "importer", "cli", "types", "streaming", "hot-reload"]
 asset-data = ["dep:typetag"]
 core = []
-runtime = ["dep:tokio", "dep:tracing", "core"]
-cooker = ["runtime", "dep:image", "dep:anyhow", "dep:xxhash-rust"]
-package = ["core", "dep:zstd"]
+runtime = ["dep:tokio", "dep:tracing", "core", "package"]
+cooker = ["core", "package", "db", "dep:image", "dep:anyhow", "dep:xxhash-rust"]
+package = ["core", "dep:zstd", "dep:xxhash-rust"]
 importer = ["cooker", "dep:gltf"]
 db = ["core"]
 cli = [

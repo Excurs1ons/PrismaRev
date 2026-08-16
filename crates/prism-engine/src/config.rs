@@ -150,9 +150,18 @@ const fn default_vsync() -> bool {
 const CONFIG_PATH: &str = "assets/settings.toml";
 
 impl AppConfig {
+    /// 从调用方提供的文本解析配置；不访问文件系统。
+    pub fn from_toml(text: &str) -> Self {
+        toml::from_str(text).unwrap_or_else(|e| {
+            log::warn!("settings.toml parse error: {e} — using defaults");
+            Self::default()
+        })
+    }
+
     /// 加载 from `assets/settings.toml`, or return defaults if the file is
     /// 缺少 / unreadable. Parse errors 对数 a 警告 and fall 后 to
     /// defaults.
+    #[deprecated(note = "use prism_app::load_config or AppConfig::from_toml")]
     pub fn load() -> Self {
         let text = match std::fs::read_to_string(CONFIG_PATH) {
             Ok(t) => t,
@@ -163,13 +172,7 @@ impl AppConfig {
                 return Self::default();
             }
         };
-        match toml::from_str(&text) {
-            Ok(cfg) => cfg,
-            Err(e) => {
-                log::warn!("settings.toml parse error: {e} — using defaults");
-                Self::default()
-            }
-        }
+        Self::from_toml(&text)
     }
 }
 
@@ -179,6 +182,26 @@ impl Default for AppConfig {
             app: AppInfo::default(),
             window: WindowConfig::default(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AppConfig;
+
+    #[test]
+    fn parses_in_memory_config_without_filesystem() {
+        let cfg = AppConfig::from_toml("[window]\nwidth = 1024\nheight = 576\n");
+        assert_eq!(cfg.window.width, 1024);
+        assert_eq!(cfg.window.height, 576);
+        assert_eq!(cfg.window.title, "PrismaRev");
+    }
+
+    #[test]
+    fn malformed_in_memory_config_uses_defaults() {
+        let cfg = AppConfig::from_toml("[window\nwidth = nope");
+        assert_eq!(cfg.window.width, 1600);
+        assert_eq!(cfg.window.height, 900);
     }
 }
 
@@ -193,7 +216,12 @@ impl Default for AppConfig {
 /// if it doesn't exist.  Returns `None` if the platform data dir cannot be
 /// determined (unlikely on desktop, possible on unusual platforms).
 pub fn app_data_dir() -> Option<std::path::PathBuf> {
-    let cfg = AppConfig::load();
+    let cfg = AppConfig::default();
+    app_data_dir_for(&cfg)
+}
+
+/// 根据调用方已加载的配置计算持久化目录，不读取文件系统中的配置。
+pub fn app_data_dir_for(cfg: &AppConfig) -> Option<std::path::PathBuf> {
     let base = dirs::data_dir()?;
     let dir = base.join(&cfg.app.company).join(&cfg.app.name);
     std::fs::create_dir_all(&dir).ok()?;

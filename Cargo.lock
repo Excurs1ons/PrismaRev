@@ -3247,7 +3247,6 @@ version = "0.1.0"
 dependencies = [
  "android-activity",
  "anyhow",
- "ash",
  "dirs",
  "glam 0.33.2",
  "jni",
@@ -3261,7 +3260,6 @@ dependencies = [
  "serde_json",
  "toml",
  "windows-sys 0.61.2",
- "winit",
 ]
 
 [[package]]
@@ -3271,7 +3269,6 @@ dependencies = [
  "anyhow",
  "ash-window",
  "log",
- "prism-engine",
  "prism-render",
  "raw-window-handle",
  "winit",

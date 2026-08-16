@@ -1239,6 +1239,11 @@ impl GraphRenderer {
         }))
     }
 
+    /// 准备阶段：在命令录制前批量同步 CPU 场景状态和 GPU 资源。
+    pub fn prepare(&mut self, _ctx: &FrameCtx, _input: &FrameInput<'_>) -> anyhow::Result<()> {
+        Ok(())
+    }
+
     /// Phase 2/3: record all 渲染 commands into the frame's 命令 缓冲区
     ///
     /// Updates the per-frame UBO, builds the [`GraphFrame`], executes the
@@ -1577,6 +1582,11 @@ impl GraphRenderer {
         Ok(out_of_date)
     }
 
+    /// 帧结束阶段：推进帧级状态并执行延迟回收。
+    pub fn end_frame(&mut self, _ctx: &FrameCtx, _presented: bool) -> anyhow::Result<()> {
+        Ok(())
+    }
+
     /// 渲染 a 帧 one-shot convenience that calls [`begin_frame`],
     /// 执行 and [`present`] in order.
     ///
@@ -1632,9 +1642,11 @@ impl GraphRenderer {
             clear_color: [0.5, 0.5, 0.5, 1.0],
             ui_overlay: None,
         };
+        self.prepare(&ctx, &input)?;
         let exec_result = self.execute(&ctx, &input);
         let out_of_date = self.present(&ctx)?;
         exec_result?; // propagate recording error after fence is safe
+        self.end_frame(&ctx, out_of_date)?;
         Ok(out_of_date)
     }
 

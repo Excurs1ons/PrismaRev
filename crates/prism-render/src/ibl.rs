@@ -1118,7 +1118,7 @@ impl IblResources {
         let brdf_mem_req = unsafe { device.get_image_memory_requirements(brdf_image) };
         let brdf_memory = allocate_device_memory(&device, mem_props, brdf_mem_req)?;
         unsafe { device.bind_image_memory(brdf_image, brdf_memory, 0) }?;
-        let brdf_staging_size = (F as u64 * F as u64 * 4) as u64;
+        let brdf_staging_size = F as u64 * F as u64 * 4;
         let (brdf_staging, brdf_staging_memory) =
             create_staging_buffer(&device, mem_props, brdf_staging_size)?;
         {

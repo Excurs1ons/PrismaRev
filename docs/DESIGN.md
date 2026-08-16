@@ -76,13 +76,13 @@
 |----------|----------|
 | 模块化管线 | `prism-render/src/render_graph.rs`（`RenderPassNode` 图）+ `forward_pass.rs` / `shadow_map_pass.rs` / `skybox_pass.rs`。**现状（2026-07-20）**：`RenderGraph::execute()` 统一驱动四个 pass（`ShadowMapPass` -> `ForwardPass` -> `GtaoPass` -> `PostPass`，按注册顺序线性执行）。passes 通过 `read_usage` / `write_usage` 声明图边依赖，graph 据此自动插入跨 pass 的 `vkCmdPipelineBarrier`（layout cache 按 `(handle, image_index)` 跨帧持久，`recreate_swapchain` 时 `reset_layouts`）。跨帧延迟边（GTAO 双缓冲 AO 回喂）与 swapchain->`PRESENT_SRC_KHR` 保留手动，标注为图边界特例。环检测已实现（`validate_edges`），执行顺序不重排（接线顺序见 `GraphRenderer::new`）。资源生命周期区间已声明，TBDR 内存 aliasing 待后续。|
 | bindless / 全平台统一 | `prism-render/src/bindless.rs`（分离 SRV + 全局 sampler 表） |
-| 资源管理解耦 | `crates/prism-asset`（运行时 glTF 2.0 加载器 + `SceneStore` + `MaterialManager`），后并入**离线预处理管线**（Import→Cook→Package→Runtime，见 §10）为同一 crate 的 feature 开关。当前两套路径并存，`.pak` 路径尚未接入引擎。 |
+| 资源管理解耦 | `crates/prism-asset` 统一提供 Import→Cook→Package→Runtime；引擎运行时只依赖 `runtime` feature，通过 `ResourceManager` 从 `.pak`/内存包读取。 |
 | 移动端 GI | **Baked probe-volume GI**（2 阶 SH，9 系数 RGB16F，3D texture），非实时 SHARC。设计见 §6。SHARC 实时 slang 已移除，不再恢复（移动端跑不动每帧 ray 填 cache）。|
 | 阴影 / RT | 光栅化阴影贴图：`ShadowMapPass`（深度预渲染，见 `shadow_depth.slang`）+ `ForwardPass`（comparison sampler 采样，见 `scene_frag.slang`） |
 | 能力探测 | `prism-render/src/capabilities.rs`（集中探测，扩展中） |
-| 帧生命周期 | **未实现**。当前 `GraphRenderer::render()` 在一个函数内完成同步 → 绘制 → present。缺少 `begin_frame` / `update` / `prepare` / `render` / `present` / `end_frame` 阶段划分。设计见 §8。 |
+| 帧生命周期 | `GraphRenderer` 已提供 `begin_frame` → `prepare` → `execute` → `present` → `end_frame` 阶段；旧 `render()` 仅作为兼容门面。细粒度 Runtime/Plugin 拆分仍待完成。 |
 | 场景同步（CPU→GPU） | **基础实现**。`RenderMeshManager` / `RenderTextureManager` 各自由调用者手动触发上传，缺少统一的脏事件路由和 prepare 阶段批同步。设计见 §9。 |
-| 只读场景视图 | **未实现**。Pass 直接引用 manager 内部状态，没有 `SceneReadView` 类只读访问层。设计见 §9。 |
+| 只读场景视图 | `prism-engine::scene::SceneReadView` 已覆盖环境资源路径和扁平 `DrawItem` 提取；相机/灯光快照仍在逐步迁移。 |
 
 ## 5. 反目标（明确不做什么）
 

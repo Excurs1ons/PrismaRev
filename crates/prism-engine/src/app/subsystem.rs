@@ -4,8 +4,6 @@ use std::any::{Any, TypeId};
 use std::collections::HashMap;
 
 use prism_ecs::World;
-use winit::event::{DeviceEvent, WindowEvent};
-use winit::event_loop::ActiveEventLoop;
 
 // ---------------------------------------------------------------------------
 // ScheduleLabel
@@ -46,25 +44,14 @@ where
 /// 完整的生命周期：
 /// 1. `build()` — 注册系统/资源
 /// 2. `on_startup()` — App 启动后
-/// 3. `on_window_event()` / `on_device_event()` — 窗口事件
-/// 4. `on_suspend()` / `on_resume()` — 平台生命周期
-/// 5. `on_shutdown()` — 关闭
+/// 3. `on_suspend()` / `on_resume()` — 平台生命周期（由应用层转发）
+/// 4. `on_shutdown()` — 关闭
 pub trait Subsystem: Send + 'static {
     /// 配置阶段：注册 Schedule 系统、插入资源。
     fn build(&self, app: &mut AppBuilder);
 
-    /// 启动时调用（EventLoop 已创建）。
+    /// 启动时调用（由应用层编排）。
     fn on_startup(&mut self) {}
-
-    /// 窗口事件处理。返回 true 表示事件已消费，不再向下传递。
-    fn on_window_event(&mut self, _event: &WindowEvent, _event_loop: &ActiveEventLoop) -> bool {
-        false
-    }
-
-    /// 设备事件处理。返回 true 表示已消费。
-    fn on_device_event(&mut self, _event: &DeviceEvent) -> bool {
-        false
-    }
 
     /// 平台挂起。
     fn on_suspend(&mut self) {}

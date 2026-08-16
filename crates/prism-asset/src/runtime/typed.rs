@@ -4,12 +4,11 @@
 //! `ResourceManager::load::<T>(id)` / `get::<T>(handle)` 使用这些 impl
 //! 将原始 `.pak` 字节反序列化为结构化数据。
 //!
-//! 解码器位于 `prism-asset-cooker` 中（`decode_rtex`、`decode_rmes`、
-//! `decode_rmat`），在此被复用——运行时从不重新实现二进制格式。
+//! 解码器位于共享的 [`crate::formats`] 模块中，运行时因此不依赖 cooker。
 //! RSCN 场景格式由引擎的 `SceneLoader` 惰性解析，
 //! 因此 `SceneAsset` 仅持有原始字节。
 
-use crate::cooker::{
+use crate::formats::{
     decode_rmat, decode_rmes, decode_rtex, RmatInfo, RmesInfo, RtexInfo, MATERIAL_SCALAR_COUNT,
 };
 use crate::core::{AssetId, AssetType};

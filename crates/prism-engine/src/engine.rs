@@ -1,29 +1,34 @@
 //! [`Engine`] — 核心模拟引擎。
 //!
-//! 拥有 ECS 世界并运行游戏逻辑阶段（`fixed_update`、
-//! `update`、`late_update`）。**不**包含渲染、资源解析
-//! 或脏数据路由——那些属于 [`RenderContext`]。
+//! 拥有 ECS 世界并运行游戏逻辑阶段（`fixed_update`、`update`、
+//! `late_update`）。**不**包含渲染、资源解析或脏数据路由——窗口、
+//! 渲染线程、音频线程等平台资源属于 `prism-app`；本引擎只做主线程
+//! 的纯逻辑模拟。
 //!
-//! ## 生命周期阶段（按顺序调用）
+//! ## 生命周期（实际参与初始化的阶段）
 //!
 //! ```text
 //! empty / new
-//!     ├─ pre_init(config)            ─── PreInit
-//!     ├─ init_config()               ─── （预留）
-//!     ├─ init_resources(pak)         ─── 加载 .pak → ResourceManager
-//!     ├─ init_scene()                ─── 加载场景 → 世界
-//!     └─ runtime_initialize()        ─── 最终钩子
+//!     ├─ init_scene(rm)          ─── 加载场景 → 世界
+//!     └─ runtime_initialize()    ─── 回退相机 + 默认 ECS 资源/调度
 //!
 //! [每帧]
-//! fixed_update → update → late_update（每渲染帧调用 N 次）
-//!
-//!   pre_shutdown → post_shutdown
+//! fixed_update → update → late_update
 //! ```
 //!
-//! 应用程序通过每次模拟 tick 后提取的 [`FramePacket`]
-//! 分别驱动渲染管线。
+//! **平台生命周期（挂起/恢复、线程 shutdown）不在这里。** 它们由
+//! `prism-app` 的 [`Subsystem`](https://docs.rs/prism-app/latest/prism_app/trait.Subsystem.html)
+//! 分层驱动：谁持有状态（线程/资源），谁接收对应的钩子。引擎自身
+//! 不持有任何需要清理的平台资源，因此没有空的线程/关闭钩子。
 
 use prism_ecs::World;
+
+impl crate::scene::EnvironmentProvider for prism_asset::runtime::ResourceManager {
+    fn load_environment(&mut self, asset_path: &str) -> Option<Vec<u8>> {
+        let id = self.id_by_path(asset_path)?;
+        self.load_with_deps_raw(id).ok()
+    }
+}
 
 use crate::ecs::schedule::Schedule;
 use crate::input::InputManager;
@@ -38,7 +43,8 @@ use crate::input::InputManager;
 /// 由应用程序的 `RenderContext` 处理。
 pub struct Engine {
     world: World,
-    current_scene_name: Option<String>,
+    /// 场景系统——拥有「当前场景」状态并负责场景加载。
+    scene: crate::scene::SceneManager,
     /// 有序 ECS 系统 调度 — runs on every [`update`](Self::update).
     schedule: Schedule,
     /// 主线程定时器服务（每帧 tick）。
@@ -50,64 +56,96 @@ impl Engine {
     // Construction
     // ======================================================================
 
-    /// 创建 an `Engine` and run all init phases (convenience).
+    /// 创建 `Engine` 并跑完所有边界初始化（便捷构造函数）。
     ///
-    /// Loads resources from the given 资源 管理器 then loads the scene.
+    /// Loads resources from the given [`ResourceManager`] then loads the scene.
     pub fn new(rm: &mut prism_asset::runtime::ResourceManager) -> Self {
         let mut engine = Self::empty();
-        engine.pre_init(&());
-        engine.init_config();
-        engine.init_resources();
         engine.init_scene(rm);
         engine.runtime_initialize();
         engine
     }
 
-    /// 创建 an 空 engine — no init phases run.
+    /// 创建空引擎——不运行任何初始化阶段。
     pub fn empty() -> Self {
         Self {
             world: World::new(),
-            current_scene_name: None,
+            scene: crate::scene::SceneManager::new(),
             schedule: Schedule::new(),
             timer: crate::util::timer::TimerService::new(),
         }
     }
 
     // ======================================================================
-    // Init phases 调用 in order)
+    // Init
     // ======================================================================
 
-    /// **Phase 0** — Pre-init: reserved for low‑level 配置
-    pub fn pre_init(&mut self, _config: &()) {}
-
-    /// **Phase 2** — 配置 loading (reserved).
-    pub fn init_config(&mut self) {}
-
-    /// **Phase 3** — 资源 包 loading.
+    /// 场景加载。
     ///
-    /// Loads the `.pak` 资源 包 into a standalone `ResourceManager`
-    /// (owned by the 调用者 The `ResourceManager` is **not** stored here
-    /// because the engine does no GPU uploads — see [`RenderContext`].
-    pub fn init_resources(&mut self) {
-        // Engine no longer owns GpuAssetResolver; 调用者 holds ResourceManager.
-    }
-
-    /// **Phase 4** — Scene loading.
+    /// 场景加载由**场景系统**负责（委托 [`crate::scene::SceneManager::load_first_from_manifest`]），
+    /// 引擎不再自行扫描 manifest。
     ///
-    /// Restores persisted scene 状态 and loads the 第一个 scene from the
-    /// manifest.  Requires a [`ResourceManager`] for `.pak`‑backed scenes.
-    /// 构建默认 [`ComponentRegistry`] 用于反序列化场景文件中的组件。
+    /// 存档由**用户项目**实现——引擎不在初始化时自动读取存档，只提供
+    /// [`Self::save_scene_state`] / [`Self::load_scene_state`] 原语供调用。
+    /// 资源解析（`.pak` → `ResourceManager`）由调用方完成并传入，引擎不持有。
     pub fn init_scene(&mut self, rm: &mut prism_asset::runtime::ResourceManager) {
+        // 运行时优先从资源包读取 manifest，避免依赖当前工作目录。
+        if let Some(id) = rm.id_by_path("scenes.toml") {
+            if let Ok(bytes) = rm.load_with_deps_raw(id) {
+                if let Ok(text) = std::str::from_utf8(&bytes) {
+                    self.init_scene_from_manifest_text(rm, text, None);
+                    return;
+                }
+            }
+        }
+
+        // 兼容开发环境：资源包缺少 manifest 时由场景系统读取文件。
         let mut registry = crate::scene::ComponentRegistry::new();
         crate::scene::register_builtin_components(&mut registry);
-        crate::scene_state::load_scene_state(&mut self.world);
-        self.current_scene_name = load_scene_from_manifest(rm, &mut self.world, &registry);
+        self.scene.load_first_from_manifest(rm, &mut self.world, &registry);
     }
 
-    /// **Phase 5** — 运行时 init: final "everything is ready" hook.
+    /// 从调用方提供的内存 manifest 初始化场景。
     ///
-    /// Spawns a 回退 相机 if none 存在 and registers 默认 ECS
-    /// systems on the [`Schedule`](crate::ecs::schedule::Schedule).
+    /// 这是 Android、打包运行时和测试环境的首选入口；引擎不会为该路径
+    /// 访问当前工作目录。
+    pub fn init_scene_from_manifest_text(
+        &mut self,
+        rm: &mut prism_asset::runtime::ResourceManager,
+        manifest_text: &str,
+        scene_name: Option<&str>,
+    ) -> Option<String> {
+        let mut registry = crate::scene::ComponentRegistry::new();
+        crate::scene::register_builtin_components(&mut registry);
+        self.scene.load_from_manifest_text(
+            rm,
+            &mut self.world,
+            &registry,
+            manifest_text,
+            scene_name,
+        )
+    }
+
+    /// 存档原语：将当前 ECS 世界状态写入 `scene_state.json`。
+    ///
+    /// 存档由**用户项目**实现——引擎初始化不再自动读取存档；用户代码在
+    /// 合适的时机（检查点、暂停菜单、退出前等）调用本方法。
+    pub fn save_scene_state(&self) {
+        crate::scene_state::save_scene_state(&self.world);
+    }
+
+    /// 读档原语：从 `scene_state.json` 恢复世界状态到 ECS 世界。
+    ///
+    /// 返回是否读取到了存档文件。由**用户项目**决定何时调用（如启动后、
+    /// 「继续游戏」入口）。
+    pub fn load_scene_state(&mut self) -> bool {
+        crate::scene_state::load_scene_state(&mut self.world)
+    }
+
+    /// 运行时初始化：所有「一切就绪」的收尾钩子。
+    ///
+    /// 若无相机实体则生成回退相机，并向 [`Schedule`](crate::ecs::schedule::Schedule)
+    /// 注册默认 ECS 系统与资源。
     pub fn runtime_initialize(&mut self) {
         // ── 回退 相机 ──────────────────────────────────────────
         let has_camera = self
@@ -118,10 +156,6 @@ impl Engine {
         if !has_camera {
             Self::spawn_default_camera(&mut self.world);
         }
-
-        // ── register AssetServer as ECS 资源 ─────────────────────
-        let asset_server = crate::asset::AssetServer::new();
-        self.world.insert_resource(asset_server);
 
         // ── 默认 调度 ─────────────────────────────────────────
         // 默认系统（UI 基础设施）**合并**进现有调度而非整体替换：
@@ -136,81 +170,81 @@ impl Engine {
     /// existing extraction path) plus `MeshRenderer` (the future authoring
     /// 路径）。从 [`LegacyApp::on_resumed`] 在渲染器创建后调用。
     /// created.
-    pub fn spawn_demo_cube(
-        world: &mut World,
-        renderer: &mut prism_render::GraphRenderer,
-    ) -> anyhow::Result<()> {
-        use crate::scene::components::*;
-        use prism_render::managers::{MaterialUploadInput, MeshUploadInput};
-
-        // Upload cube 网格
-        let cpu_mesh = crate::asset::procedural::make_cube();
-        let upload = MeshUploadInput {
-            positions: cpu_mesh.positions,
-            normals: cpu_mesh.normals,
-            colors: Vec::new(), // all white
-            uvs: cpu_mesh.uvs,
-            tangents: Vec::new(),
-            indices: cpu_mesh.indices,
-        };
-        let mesh_handle = renderer.register_mesh(&upload)?;
-
-        // Register 默认 材质
-        let mat_input = MaterialUploadInput {
-            base_color: [0.8, 0.8, 0.8, 1.0],
-            metallic: 0.0,
-            roughness: 0.5,
-            emissive: [0.0; 3],
-            albedo_tex: None,
-            normal_tex: None,
-            metallic_roughness_tex: None,
-            emissive_tex: None,
-            occlusion_tex: None,
-            normal_scale: 1.0,
-            occlusion_strength: 1.0,
-            transmission: 0.0,
-            ior: 1.5,
-            translucency: 0.0,
-            anisotropy: 0.0,
-            clearcoat: 0.0,
-            clearcoat_roughness: 0.0,
-            emissive_strength: 1.0,
-        };
-        let mat_handle = renderer.register_material(mat_input)?;
-        let mat_slot = renderer
-            .material_slot(mat_handle)
-            .ok_or_else(|| anyhow::anyhow!("no material slot for demo cube"))?;
-
-        // 生成 cube 实体 at origin.
-        let entity = world.spawn();
-        world.insert(
-            entity,
-            LocalTransform {
-                translation: glam::Vec3::ZERO,
-                rotation: glam::Quat::IDENTITY,
-                scale: glam::Vec3::ONE,
-            },
-        );
-        world.insert(entity, WorldTransform(glam::Mat4::IDENTITY));
-        world.insert(
-            entity,
-            MeshRef {
-                asset_id: crate::scene::components::SceneAssetId::generate(),
-                render_handle: mesh_handle,
-                generation: 1,
-            },
-        );
-        world.insert(
-            entity,
-            MaterialRef {
-                asset_id: crate::scene::components::SceneAssetId::generate(),
-                material_slot: mat_slot,
-                generation: 1,
-            },
-        );
-        log::info!("ECS: spawned demo cube entity");
-        Ok(())
-    }
+    // pub fn spawn_demo_cube(
+    //     world: &mut World,
+    //     renderer: &mut prism_render::GraphRenderer,
+    // ) -> anyhow::Result<()> {
+    //     use crate::scene::components::*;
+    //     use prism_render::managers::{MaterialUploadInput, MeshUploadInput};
+    // 
+    //     // Upload cube 网格
+    //     let cpu_mesh = crate::asset::procedural::make_cube();
+    //     let upload = MeshUploadInput {
+    //         positions: cpu_mesh.positions,
+    //         normals: cpu_mesh.normals,
+    //         colors: Vec::new(), // all white
+    //         uvs: cpu_mesh.uvs,
+    //         tangents: Vec::new(),
+    //         indices: cpu_mesh.indices,
+    //     };
+    //     let mesh_handle = renderer.register_mesh(&upload)?;
+    // 
+    //     // Register 默认 材质
+    //     let mat_input = MaterialUploadInput {
+    //         base_color: [0.8, 0.8, 0.8, 1.0],
+    //         metallic: 0.0,
+    //         roughness: 0.5,
+    //         emissive: [0.0; 3],
+    //         albedo_tex: None,
+    //         normal_tex: None,
+    //         metallic_roughness_tex: None,
+    //         emissive_tex: None,
+    //         occlusion_tex: None,
+    //         normal_scale: 1.0,
+    //         occlusion_strength: 1.0,
+    //         transmission: 0.0,
+    //         ior: 1.5,
+    //         translucency: 0.0,
+    //         anisotropy: 0.0,
+    //         clearcoat: 0.0,
+    //         clearcoat_roughness: 0.0,
+    //         emissive_strength: 1.0,
+    //     };
+    //     let mat_handle = renderer.register_material(mat_input)?;
+    //     let mat_slot = renderer
+    //         .material_slot(mat_handle)
+    //         .ok_or_else(|| anyhow::anyhow!("no material slot for demo cube"))?;
+    // 
+    //     // 生成 cube 实体 at origin.
+    //     let entity = world.spawn();
+    //     world.insert(
+    //         entity,
+    //         LocalTransform {
+    //             translation: glam::Vec3::ZERO,
+    //             rotation: glam::Quat::IDENTITY,
+    //             scale: glam::Vec3::ONE,
+    //         },
+    //     );
+    //     world.insert(entity, WorldTransform(glam::Mat4::IDENTITY));
+    //     world.insert(
+    //         entity,
+    //         MeshRef {
+    //             asset_id: crate::scene::components::SceneAssetId::generate(),
+    //             render_handle: mesh_handle,
+    //             generation: 1,
+    //         },
+    //     );
+    //     world.insert(
+    //         entity,
+    //         MaterialRef {
+    //             asset_id: crate::scene::components::SceneAssetId::generate(),
+    //             material_slot: mat_slot,
+    //             generation: 1,
+    //         },
+    //     );
+    //     log::info!("ECS: spawned demo cube entity");
+    //     Ok(())
+    // }
 
     // ======================================================================
     // Timer API
@@ -252,13 +286,9 @@ impl Engine {
     ///
     /// Unity `FixedUpdate()` · UE sub‑stepped tick.
     pub fn fixed_update(&mut self, fixed_dt: f32, input_manager: &InputManager) {
-        let look_active = input_manager.pointer_locked;
-        crate::scene::systems::camera::camera_controller_system(
-            &mut self.world,
-            input_manager,
-            fixed_dt,
-            look_active,
-        );
+        // Camera/input is variable-rate and is updated exactly once in
+        // `update`. Running it here as well double-consumed mouse deltas.
+        let _ = (fixed_dt, input_manager);
     }
 
     /// Variable‑timestep per‑frame 更新 game 逻辑 相机 输入
@@ -299,6 +329,9 @@ impl Engine {
     // ======================================================================
 
     /// Pre‑shutdown: 保存 状态 刷新 pending 功
+    ///
+    /// 平台资源（窗口、渲染/音频线程、音频引擎）由 `prism-app` 的 `App` 持有，
+    /// 关停顺序由 `App::about_to_wait` 编排；引擎只做逻辑侧收尾（当前无状态）。
     pub fn pre_shutdown(&mut self) {}
 
     /// Final cleanup after shutdown.
@@ -326,71 +359,48 @@ impl Engine {
         &mut self.world
     }
 
+    /// 当前场景名（由场景系统持有）；未加载任何 manifest 场景时为 `None`。
     pub fn current_scene_name(&self) -> Option<&str> {
-        self.current_scene_name.as_deref()
+        self.scene.current_scene_name()
     }
 
     /// 解析「当前场景」声明式光照所需的环境贴图字节。
     ///
-    /// 取代旧的 `load_env_bytes_from_manifest`（后者扫描 manifest 所有 `.rscn`，
-    /// 导致 UI 开屏也加载 3D 环境贴图）。新逻辑按 `current_scene_name` 定位场景：
-    /// - `.rscn`：复用 `read_env_path_from_rscn` 自动派生（向后兼容，default/sponza
-    ///   的 IBL 无需改场景即保留）。
-    /// - `.scene.json`：从已加载的 ECS 世界查询 `EnvironmentLighting` 组件；
-    ///   无该组件或 `env_map = None` → 返回 `None`（开屏等无光照场景不构建 IBL）。
-    pub fn current_scene_env_bytes(&self) -> Option<Vec<u8>> {
-        let name = self.current_scene_name.as_ref()?;
-        let (manifest_dir, manifest) = find_and_parse_manifest()?;
-        let entry = manifest.scenes.iter().find(|e| &e.name == name)?;
-        let path = manifest_dir.join(&entry.path);
+    /// 场景系统的职责（按 `current_scene_name` 定位场景），引擎仅转发。
+    /// 使用外部资源服务读取当前场景环境贴图，不访问文件系统。
+    pub fn current_scene_env_bytes_with_provider<P: crate::scene::EnvironmentProvider>(
+        &self,
+        provider: &mut P,
+    ) -> Option<Vec<u8>> {
+        self.scene
+            .current_scene_env_bytes_with_provider(
+                crate::scene::SceneReadView::new(&self.world),
+                provider,
+            )
+    }
 
-        if entry.path.ends_with(".rscn") {
-            if let Some(hdr_rel) = crate::scene::loader::read_env_path_from_rscn(&path) {
-                let hdr_path = path
-                    .parent()
-                    .map(|d| d.join(&hdr_rel))
-                    .unwrap_or_else(|| std::path::PathBuf::from(&hdr_rel));
-                match std::fs::read(&hdr_path) {
-                    Ok(bytes) => {
-                        log::info!("scene '{}' environment (rscn): {}", name, hdr_path.display());
-                        return Some(bytes);
-                    }
-                    Err(e) => log::warn!("env map {} not readable: {e}", hdr_path.display()),
-                }
-            }
-            return None;
-        }
+    /// 注入当前场景环境贴图，供渲染器启动或场景切换时使用。
+    pub fn set_scene_environment_bytes(&mut self, bytes: Option<Vec<u8>>) {
+        self.scene.set_environment_bytes(bytes);
+    }
 
-        if entry.path.ends_with(".scene.json") {
-            for (_, env) in self
-                .world
-                .query::<crate::scene::components::EnvironmentLighting>()
-            {
-                if let Some(env_map) = &env.env_map {
-                    let hdr_path = path
-                        .parent()
-                        .map(|d| d.join(env_map))
-                        .unwrap_or_else(|| std::path::PathBuf::from(env_map));
-                    match std::fs::read(&hdr_path) {
-                        Ok(bytes) => {
-                            log::info!(
-                                "scene '{}' environment (component): {}",
-                                name,
-                                hdr_path.display()
-                            );
-                            return Some(bytes);
-                        }
-                        Err(e) => {
-                            log::warn!("env map {} not readable: {e}", hdr_path.display())
-                            // 组件声明了 env_map 但文件缺失：视为无 IBL。
-                        }
-                    }
-                }
-                // 找到 EnvironmentLighting 组件但无 env_map（或文件缺失）→ 不构建 IBL。
-                return None;
-            }
-        }
-        None
+    /// 从运行时资源包按路径加载当前场景环境贴图。
+    ///
+    /// 环境贴图通常是未类型化的 HDR 二进制资产，因此这里只负责通过
+    /// `ResourceManager` 解析路径和读取原始字节，解码仍由渲染层负责。
+    pub fn load_scene_environment_from_path(
+        &mut self,
+        rm: &mut prism_asset::runtime::ResourceManager,
+        asset_path: &str,
+    ) -> anyhow::Result<()> {
+        let id = rm
+            .id_by_path(asset_path)
+            .ok_or_else(|| anyhow::anyhow!("environment asset not found: {asset_path}"))?;
+        let bytes = rm
+            .load_with_deps_raw(id)
+            .map_err(|e| anyhow::anyhow!("load environment asset '{asset_path}': {e}"))?;
+        self.set_scene_environment_bytes(Some(bytes));
+        Ok(())
     }
 
     /// Mutable 访问 to the ECS 系统 调度
@@ -441,230 +451,6 @@ impl Engine {
     }
 }
 
-// ===========================================================================
-// Manifest helpers (moved from old engine.rs, kept for scene loading)
-// ===========================================================================
-
-use prism_asset::runtime::{ResourceManager, SceneAsset};
-
-#[derive(serde::Deserialize)]
-struct SceneManifestEntry {
-    name: String,
-    path: String,
-}
-
-#[derive(serde::Deserialize)]
-struct SceneManifest {
-    scenes: Vec<SceneManifestEntry>,
-}
-
-/// 不依赖当前工作目录地定位 `scenes.toml`：
-/// 依次在【当前目录及其各级父目录】与【可执行文件所在目录及其各级父目录】下，
-/// 尝试 `assets/scenes.toml` 与 `crates/prism-engine/assets/scenes.toml`。
-///
-/// 这样无论从仓库根还是 `game/` 子目录（如 `cd game && cargo run`）启动，
-/// 都能正确找到资源清单——之前 `cargo run` 把 cwd 设为 `game/`，导致
-/// `assets/scenes.toml` 找不到、回退到空场景而黑屏。
-fn find_manifest_path() -> Option<std::path::PathBuf> {
-    let rels = ["assets/scenes.toml", "crates/prism-engine/assets/scenes.toml"];
-    let mut bases: Vec<std::path::PathBuf> = Vec::new();
-    if let Ok(cwd) = std::env::current_dir() {
-        bases.push(cwd.clone());
-        let mut p = cwd.as_path();
-        while let Some(parent) = p.parent() {
-            bases.push(parent.to_path_buf());
-            p = parent;
-        }
-    }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(exe_dir) = exe.parent() {
-            bases.push(exe_dir.to_path_buf());
-            let mut p = exe_dir;
-            while let Some(parent) = p.parent() {
-                bases.push(parent.to_path_buf());
-                p = parent;
-            }
-        }
-    }
-    for base in bases {
-        for rel in rels {
-            let candidate = base.join(rel);
-            if candidate.exists() {
-                return Some(candidate);
-            }
-        }
-    }
-    None
-}
-
-/// 加载 environment 映射表 字节 from the 第一个 scene in `scenes.toml`.
-/// Used during 渲染器 construction; does not need the ECS 世界
-pub fn load_env_bytes_from_manifest() -> Option<Vec<u8>> {
-    let (manifest_dir, manifest) = find_and_parse_manifest()?;
-    for entry in &manifest.scenes {
-        let path = manifest_dir.join(&entry.path);
-        if !path
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|e| e.eq_ignore_ascii_case("rscn"))
-            .unwrap_or(false)
-            || !path.exists()
-        {
-            continue;
-        }
-        if let Some(hdr_rel) = crate::scene::loader::read_env_path_from_rscn(&path) {
-            let hdr_path = path
-                .parent()
-                .map(|d| d.join(&hdr_rel))
-                .unwrap_or_else(|| std::path::PathBuf::from(&hdr_rel));
-            match std::fs::read(&hdr_path) {
-                Ok(bytes) => {
-                    log::info!("loaded environment map from scene: {}", hdr_path.display());
-                    return Some(bytes);
-                }
-                Err(e) => log::warn!("env map HDR {} not readable: {e}", hdr_path.display()),
-            }
-        }
-    }
-    log::info!("no environment map in scene manifest; using procedural fallback");
-    None
-}
-
-fn find_and_parse_manifest() -> Option<(std::path::PathBuf, SceneManifest)> {
-    let manifest_path = find_manifest_path()?;
-    let manifest_dir = manifest_path.parent()?.to_path_buf();
-    let text = std::fs::read_to_string(&manifest_path).ok()?;
-    let manifest: SceneManifest = toml::from_str(&text).ok()?;
-    log::info!(
-        "scene manifest: {:?} ({} entries)",
-        manifest_path,
-        manifest.scenes.len()
-    );
-    Some((manifest_dir, manifest))
-}
-
-fn load_scene_from_manifest(rm: &mut ResourceManager, world: &mut World, registry: &crate::scene::ComponentRegistry) -> Option<String> {
-    let manifest_path = find_manifest_path();
-    let manifest_path = match manifest_path {
-        Some(p) => p,
-        None => {
-            let cwd = std::env::current_dir()
-                .map(|p| p.display().to_string())
-                .unwrap_or_else(|_| "<unknown>".into());
-            log::info!("no assets/scenes.toml found (cwd={cwd}); using procedural demo only");
-            return None;
-        }
-    };
-    let text = match std::fs::read_to_string(&manifest_path) {
-        Ok(t) => t,
-        Err(e) => {
-            log::warn!("failed to read scene manifest {:?}: {e}", manifest_path);
-            return None;
-        }
-    };
-    log::info!("scene manifest: {:?} ({} bytes)", manifest_path, text.len());
-    let manifest: SceneManifest = match toml::from_str(&text) {
-        Ok(m) => m,
-        Err(e) => {
-            log::warn!("scene manifest parse error: {e}");
-            return None;
-        }
-    };
-    log::info!(
-        "scene manifest parsed: {} scene(s) listed",
-        manifest.scenes.len()
-    );
-    let manifest_dir = manifest_path.parent().map(|p| p.to_path_buf());
-    for entry in &manifest.scenes {
-        let path = manifest_dir
-            .as_ref()
-            .map(|d| d.join(&entry.path))
-            .unwrap_or_else(|| std::path::PathBuf::from(&entry.path));
-        // 注意：`Path::extension()` 只返回最后一个分量（如
-        // `intro.scene.json` 的 ext 是 `json`），因此不能用 `== "scene.json"`
-        // 判断。直接对清单里的原始路径后缀匹配，跨平台（含 Windows 混合分隔符）。
-        let is_scene_file =
-            entry.path.ends_with(".rscn") || entry.path.ends_with(".scene.json");
-        if !is_scene_file {
-            log::info!("scene '{}': skipping unsupported path {:?}", entry.name, path);
-            continue;
-        }
-        let loaded = if rm.id_by_path(&entry.path).is_some() {
-            load_scene_from_rm(rm, world, &entry.path, registry)
-        } else if path.exists() {
-            load_scene_from_file(world, &path, registry)
-        } else {
-            log::info!(
-                "scene '{}' -> {:?} not found in .pak or on disk",
-                entry.name,
-                path
-            );
-            continue;
-        };
-        match loaded {
-            Ok(inst) => {
-                log::info!(
-                    "scene '{}' loaded: {} entities ({} roots)",
-                    entry.name,
-                    inst.all_entities.len(),
-                    inst.root_entities.len()
-                );
-                return Some(entry.name.clone());
-            }
-            Err(e) => {
-                log::warn!("scene '{}' failed to load: {e}", entry.name);
-                continue;
-            }
-        }
-    }
-    log::info!("no resolvable scene in manifest; using procedural demo only");
-    None
-}
-
-fn load_scene_from_rm(
-    rm: &mut ResourceManager,
-    world: &mut World,
-    asset_path: &str,
-    registry: &crate::scene::ComponentRegistry,
-) -> Result<crate::scene::loader::SceneInstance, anyhow::Error> {
-    use anyhow::Context;
-    let id = rm
-        .id_by_path(asset_path)
-        .ok_or_else(|| anyhow::anyhow!("scene '{asset_path}' not found in RM"))?;
-    let handle = rm
-        .load_with_deps::<SceneAsset>(id)
-        .with_context(|| format!("load scene '{asset_path}'"))?;
-    let asset = rm
-        .get::<SceneAsset>(handle)
-        .with_context(|| format!("get scene '{asset_path}'"))?;
-    let mut loader = crate::scene::loader::SceneLoader::new();
-    loader
-        .load_and_spawn(
-            world,
-            crate::scene::loader::SceneSource::RawCooked(asset.bytes.clone()),
-            registry,
-        )
-        .map_err(|e| anyhow::anyhow!("{e}"))
-}
-
-fn load_scene_from_file(
-    world: &mut World,
-    path: &std::path::Path,
-    registry: &crate::scene::ComponentRegistry,
-) -> Result<crate::scene::loader::SceneInstance, anyhow::Error> {
-    let mut loader = crate::scene::loader::SceneLoader::new();
-    let source = match path.extension().and_then(|e| e.to_str()) {
-        Some("json") => crate::scene::loader::SceneSource::JsonFile(path.to_path_buf()),
-        _ => crate::scene::loader::SceneSource::CookedFile(path.to_path_buf()),
-    };
-    loader
-        .load_and_spawn(world, source, registry)
-        .map_err(|e| anyhow::anyhow!("{e}"))
-}
-
-// ===========================================================================
-// 默认 ECS 调度
-// ===========================================================================
 
 /// 构建 the 默认 系统 调度
 ///

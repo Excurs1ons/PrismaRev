@@ -38,6 +38,8 @@ pub struct RayTracingCaps {
     pub descriptor_indexing: bool,
     /// `timelineSemaphore` available (useful for long-running AS builds).
     pub timeline_semaphore: bool,
+    pub synchronization2: bool,
+    pub copy_commands2: bool,
 
     // -- 层 2: 加速度 structures (prerequisite for any RT) --
     /// `VK_KHR_acceleration_structure` 扩展 + 特性 available.
@@ -80,6 +82,12 @@ impl RayTracingCaps {
     pub fn has_ray_query(&self) -> bool {
         self.acceleration_structure && self.ray_query
     }
+
+    /// 纹理上传路径所需的扩展能力。该能力缺失时，设备创建应失败，
+    /// 以避免在上传阶段才触发无效的 Vulkan 命令。
+    pub fn has_transfer_commands(&self) -> bool {
+        self.synchronization2 && self.copy_commands2
+    }
 }
 
 impl std::fmt::Display for RayTracingCaps {
@@ -87,12 +95,14 @@ impl std::fmt::Display for RayTracingCaps {
         write!(
             f,
             "vulkan_1_2={} buffer_device_address={} descriptor_indexing={} \
-             timeline_semaphore={} accel_struct={} deferred_host={} \
+             timeline_semaphore={} synchronization2={} copy_commands2={} accel_struct={} deferred_host={} \
              rt_pipeline={} ray_query={}",
             self.vulkan_1_2,
             self.buffer_device_address,
             self.descriptor_indexing,
             self.timeline_semaphore,
+            self.synchronization2,
+            self.copy_commands2,
             self.acceleration_structure,
             self.deferred_host_operations,
             self.ray_tracing_pipeline,
@@ -165,6 +175,7 @@ pub unsafe fn probe(
     // --- api version ---
     let props = unsafe { instance.get_physical_device_properties(physical_device) };
     let vulkan_1_2 = props.api_version >= vk::API_VERSION_1_2;
+    let vulkan_1_3 = props.api_version >= vk::API_VERSION_1_3;
 
     // --- advertised extensions ---
     let ext_props = unsafe {
@@ -235,6 +246,10 @@ pub unsafe fn probe(
         buffer_device_address,
         descriptor_indexing,
         timeline_semaphore,
+        synchronization2: vulkan_1_3
+            || has_extension(&available, vk::KHR_SYNCHRONIZATION2_NAME.to_str().unwrap()),
+        copy_commands2: vulkan_1_3
+            || has_extension(&available, vk::KHR_COPY_COMMANDS2_NAME.to_str().unwrap()),
         acceleration_structure,
         deferred_host_operations,
         ray_tracing_pipeline,
@@ -252,4 +267,3 @@ pub unsafe fn probe(
 #[cfg(test)]
 #[path = "capabilities_tests.rs"]
 mod tests;
-

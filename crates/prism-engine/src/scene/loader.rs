@@ -43,7 +43,6 @@
 
 use std::path::PathBuf;
 
-use prism_asset::importer::scene::SceneJson;
 use prism_asset::runtime::{MeshAsset, ResourceManager};
 use prism_ecs::{Entity, World};
 use prism_render::managers::GpuMaterial;
@@ -51,6 +50,44 @@ use prism_render::managers::GpuMaterial;
 use super::component_registry::ComponentRegistry;
 use super::components::*;
 use super::helpers::HierarchyHelper;
+
+/// Runtime-owned DTO for the optional human-readable scene format.
+///
+/// Import/cook tooling may define richer source representations, but the
+/// engine only needs this small deserialization shape for development loads.
+#[derive(Debug, serde::Deserialize)]
+struct SceneJson {
+    entities: Vec<EntityJson>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct EntityJson {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    parent: Option<u32>,
+    transform: TransformJson,
+    #[serde(default)]
+    components: std::collections::HashMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct TransformJson {
+    #[serde(default)]
+    translation: [f32; 3],
+    #[serde(default = "identity_quat")]
+    rotation: [f32; 4],
+    #[serde(default = "one_vec3")]
+    scale: [f32; 3],
+}
+
+fn identity_quat() -> [f32; 4] {
+    [0.0, 0.0, 0.0, 1.0]
+}
+
+fn one_vec3() -> [f32; 3] {
+    [1.0; 3]
+}
 
 // ---------------------------------------------------------------------------
 // 分量 flags (must 匹配 the cooker's constants)
@@ -444,6 +481,7 @@ pub fn read_env_path_from_rscn_bytes(data: &[u8]) -> Option<String> {
 ///
 /// Convenience 包装器 around [`read_env_path_from_rscn_bytes`] that reads the
 /// file from disk 第一个
+#[cfg(feature = "legacy-disk-scenes")]
 pub fn read_env_path_from_rscn(path: &std::path::Path) -> Option<String> {
     let data = std::fs::read(path).ok()?;
     read_env_path_from_rscn_bytes(&data)

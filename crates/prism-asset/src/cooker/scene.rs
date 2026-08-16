@@ -4,9 +4,55 @@
 //! 不再有硬编码的 flags / mesh / material / light / camera / skybox 字段。
 
 use crate::core::AssetType;
-use crate::importer::scene::{validate_scene, EntityJson, SceneJson};
-
 use crate::cooker::{CookContext, CookError, CookResult, Cooker};
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SceneJson {
+    pub version: u32,
+    pub entities: Vec<EntityJson>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct EntityJson {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub parent: Option<u32>,
+    pub transform: TransformJson,
+    #[serde(default)]
+    pub components: std::collections::HashMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TransformJson {
+    #[serde(default)]
+    pub translation: [f32; 3],
+    #[serde(default = "identity_quat")]
+    pub rotation: [f32; 4],
+    #[serde(default = "one_vec3")]
+    pub scale: [f32; 3],
+}
+
+fn identity_quat() -> [f32; 4] { [0.0, 0.0, 0.0, 1.0] }
+fn one_vec3() -> [f32; 3] { [1.0; 3] }
+
+fn validate_scene(scene: &SceneJson) -> Result<(), String> {
+    if scene.entities.is_empty() {
+        return Err("Scene must contain at least one entity".into());
+    }
+    let count = scene.entities.len();
+    for (index, entity) in scene.entities.iter().enumerate() {
+        if let Some(parent) = entity.parent {
+            if parent as usize >= count {
+                return Err(format!("Entity {index}: parent index {parent} out of bounds"));
+            }
+            if parent as usize == index {
+                return Err(format!("Entity {index}: self-parent not allowed"));
+            }
+        }
+    }
+    Ok(())
+}
 
 // ---------------------------------------------------------------------------
 // RSCN constants

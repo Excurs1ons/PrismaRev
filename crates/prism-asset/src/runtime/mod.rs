@@ -39,7 +39,7 @@ pub mod typed;
 
 pub use typed::{MaterialAsset, MeshAsset, SceneAsset, ShaderAsset, TextureAsset};
 
-pub use crate::cooker::{RmatInfo, RmesInfo};
+pub use crate::formats::{RmatInfo, RmesInfo};
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -335,6 +335,13 @@ impl ResourceManager {
     /// 加载 and register all assets from a `.pak` file.
     pub fn load_package(&mut self, path: impl AsRef<Path>) -> Result<(), RuntimeError> {
         let reader = PackageReader::open(path)?;
+        self.register_package(reader);
+        Ok(())
+    }
+
+    /// 从内存中的 `.pak` 字节加载资源，供 Android asset/嵌入式宿主使用。
+    pub fn load_package_bytes(&mut self, bytes: &[u8]) -> Result<(), RuntimeError> {
+        let reader = PackageReader::from_bytes(bytes)?;
         self.register_package(reader);
         Ok(())
     }
@@ -970,4 +977,3 @@ impl Asset for Vec<u8> {
 
 #[cfg(test)]
 mod tests;
-

@@ -81,13 +81,26 @@ pub use app::{App, Subsystem};
 pub use hook::FrameHook;
 pub use render_shared::{RenderShared, RenderStats};
 
+/// 从应用资源目录读取配置；文件系统访问属于应用层，解析逻辑由 engine
+/// 的 `AppConfig::from_toml` 提供。
+pub fn load_config() -> AppConfig {
+    match std::fs::read_to_string("assets/settings.toml") {
+        Ok(text) => AppConfig::from_toml(&text),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => AppConfig::default(),
+        Err(error) => {
+            log::warn!("settings.toml: {error} - using defaults");
+            AppConfig::default()
+        }
+    }
+}
+
 /// 创建应用并完成全部引擎初始化（配置加载、场景、运行时 init）。
 ///
 /// 用户项目在此之后注册 ECS 内容（`add_system` / `insert_resource` /
 /// `engine_mut`），然后 [`App::run`]（桌面）或 [`App::run_on`]（Android）。
 /// 编辑器等宿主可用 [`App::with_frame_hook`] 注入 [`FrameHook`]。
 pub fn app() -> App {
-    App::with_config(AppConfig::load())
+    App::with_config(load_config())
 }
 
 // ===========================================================================
@@ -118,8 +131,6 @@ pub fn run_on_android(
     app: App,
     android_app: winit::platform::android::activity::AndroidApp,
 ) -> anyhow::Result<()> {
-    use winit::platform::android::EventLoopBuilderExtAndroid;
-
     android_logger::init_once(
         android_logger::Config::default()
             .with_max_level(log::LevelFilter::Debug)
@@ -130,10 +141,7 @@ pub fn run_on_android(
 
     prism_engine::crash_dialog::register_android_app(&android_app);
 
-    let event_loop = winit::event_loop::EventLoop::builder()
-        .with_android_app(android_app)
-        .build()
-        .expect("failed to build Android event loop");
+    let event_loop = prism_platform::build_android_event_loop(android_app)?;
 
     app.run_on(event_loop)
 }

@@ -11,15 +11,15 @@ pub mod intro;
 use prism_engine::ui::ParticleSystem2D;
 
 /// 构造应用：引擎自动加载 `assets/scenes/intro.scene.json` 中的 intro 实体，
-/// 本项目只注册 `intro::advance` system 驱动动画。
+/// 本项目只注册 `intro::tick` system 驱动动画。
 pub fn build_app() -> prism_app::App {
     let mut app = prism_app::app()
         .with_subsystem(prism_app::Subsystem::Render)
         .with_subsystem(prism_app::Subsystem::Audio);
     // 开屏雨滴：2D 粒子系统资源，尺寸随后每帧按 ScreenSize 更新，
-    // 由 `intro::advance` 驱动并按标题淡入淡出控制整体强度。
+    // 由 `intro::tick` 驱动并按标题淡入淡出控制整体强度。
     app.insert_resource(ParticleSystem2D::rain_preset(1920.0, 1080.0));
-    app.add_system("intro::advance", intro::advance);
+    app.add_system("intro::tick", intro::tick);
     app
 }
 

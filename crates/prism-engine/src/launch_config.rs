@@ -12,10 +12,8 @@
 
 use serde::{Deserialize, Serialize};
 
-/// 环境变量键（桌面 + Android 统一）。
-const ENV_KEY: &str = "PRISMREV_LAUNCH_CONFIG";
-/// Android hub 落盘文件名（Kotlin 侧 `launch_game` 写入）。
-pub const ANDROID_CONFIG_FILE: &str = "launch_config.json";
+/// 应用层使用的环境变量键。
+pub const ENV_KEY: &str = "PRISMREV_LAUNCH_CONFIG";
 
 /// 启动配置。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -42,38 +40,26 @@ fn default_scene() -> String {
 }
 
 impl LaunchConfig {
+    /// 从调用方提供的 JSON 解析；不访问环境变量或文件系统。
+    pub fn from_json(json: &str) -> Self {
+        serde_json::from_str(json).unwrap_or_else(|error| {
+            log::warn!("invalid launch config ({error}); using defaults");
+            Self::default()
+        })
+    }
+
     /// 序列化为传给 hub 的 JSON（launcher 侧构造传参用）。
     pub fn to_json(&self) -> String {
         serde_json::to_string(self).expect("LaunchConfig serializes")
     }
 
     /// 从环境读取并解析启动配置。缺失/非法一律回退默认。
+    #[deprecated(note = "read the source in prism-app and call LaunchConfig::from_json")]
     pub fn load() -> Self {
         match std::env::var(ENV_KEY) {
-            Ok(json) => match serde_json::from_str(&json) {
-                Ok(cfg) => {
-                    log::info!("launch config: {json}");
-                    cfg
-                }
-                Err(e) => {
-                    log::warn!("invalid {ENV_KEY} ({e}); using defaults");
-                    Self::default()
-                }
-            },
+            Ok(json) => Self::from_json(&json),
             Err(_) => Self::default(),
         }
     }
 
-    /// Android：hub（Kotlin）把 JSON 写到 app files 目录，
-    /// [`AndroidApp::internal_data_path`] 给出该目录。
-    #[cfg(target_os = "android")]
-    pub fn read_android_file(
-        app: &winit::platform::android::activity::AndroidApp,
-    ) -> Option<String> {
-        let dir = app.internal_data_path()?;
-        let path = dir.join(ANDROID_CONFIG_FILE);
-        let json = std::fs::read_to_string(&path).ok()?;
-        log::info!("android launch config file: {}", path.display());
-        Some(json)
-    }
 }

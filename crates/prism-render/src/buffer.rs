@@ -9,6 +9,37 @@ use ash::vk;
 
 use crate::context::VulkanContext;
 
+struct LegacySync2<'a> { device: &'a ash::Device }
+
+impl LegacySync2<'_> {
+    unsafe fn cmd_pipeline_barrier2(&self, cmd: vk::CommandBuffer, input: &[vk::ImageMemoryBarrier2<'_>]) {
+        let barriers: Vec<vk::ImageMemoryBarrier> = input.iter().map(|b|
+            vk::ImageMemoryBarrier::default()
+                .src_access_mask(vk::AccessFlags::from_raw(b.src_access_mask.as_raw() as u32))
+                .dst_access_mask(vk::AccessFlags::from_raw(b.dst_access_mask.as_raw() as u32))
+                .old_layout(b.old_layout).new_layout(b.new_layout)
+                .src_queue_family_index(b.src_queue_family_index)
+                .dst_queue_family_index(b.dst_queue_family_index)
+                .image(b.image).subresource_range(b.subresource_range)
+        ).collect();
+        let src = vk::PipelineStageFlags::from_raw(input.iter().fold(0, |v, b| v | b.src_stage_mask.as_raw() as u32));
+        let dst = vk::PipelineStageFlags::from_raw(input.iter().fold(0, |v, b| v | b.dst_stage_mask.as_raw() as u32));
+        self.device.cmd_pipeline_barrier(cmd, src, dst, vk::DependencyFlags::empty(), &[], &[], &barriers);
+    }
+}
+
+struct LegacyCopy2<'a> { device: &'a ash::Device }
+
+impl LegacyCopy2<'_> {
+    unsafe fn cmd_blit_image2(&self, cmd: vk::CommandBuffer, src_image: vk::Image, src_layout: vk::ImageLayout, dst_image: vk::Image, dst_layout: vk::ImageLayout, input: &[vk::ImageBlit2<'_>], filter: vk::Filter) {
+        let regions: Vec<vk::ImageBlit> = input.iter().map(|r|
+            vk::ImageBlit::default().src_subresource(r.src_subresource).src_offsets(r.src_offsets)
+                .dst_subresource(r.dst_subresource).dst_offsets(r.dst_offsets)
+        ).collect();
+        self.device.cmd_blit_image(cmd, src_image, src_layout, dst_image, dst_layout, &regions, filter);
+    }
+}
+
 /// Supported 缓冲区 用法 flags for [`create_buffer`].
 /// This is a bitmask; callers specify exactly which usages they need.
 pub type BufferUsage = vk::BufferUsageFlags;
@@ -215,10 +246,10 @@ pub unsafe fn create_and_upload_image(
     // 设备 the core `vkCmdPipelineBarrier2` symbol is not exposed, only the
     // `...KHR` variant. `ash`'s 设备 包装器 only loads the core symbol, so
     // we use the KHR 扩展 包装器 which resolves the KHR entry point.
-    let sync2 = ash::khr::synchronization2::Device::new(&context.instance, &context.device);
+    let sync2 = LegacySync2 { device };
     // `cmd_blit_image2` (mip generation) comes from VK_KHR_copy_commands2 on a
     // 1.2 设备 same reason as `sync2` above, use the KHR 包装器
-    let copy2 = ash::khr::copy_commands2::Device::new(&context.instance, &context.device);
+    let copy2 = LegacyCopy2 { device };
     let extent = vk::Extent3D {
         width,
         height,
@@ -310,7 +341,7 @@ pub unsafe fn create_and_upload_image(
         );
     sync2.cmd_pipeline_barrier2(
         cmd,
-        &vk::DependencyInfo::default().image_memory_barriers(&[undefined_to_dst]),
+        std::slice::from_ref(&undefined_to_dst),
     );
 
     let copy = vk::BufferImageCopy::default()
@@ -354,7 +385,7 @@ pub unsafe fn create_and_upload_image(
             );
         sync2.cmd_pipeline_barrier2(
             cmd,
-            &vk::DependencyInfo::default().image_memory_barriers(&[promote_mip0]),
+            std::slice::from_ref(&promote_mip0),
         );
 
         for mip in 1..mip_levels {
@@ -421,7 +452,7 @@ pub unsafe fn create_and_upload_image(
                 );
             sync2.cmd_pipeline_barrier2(
                 cmd,
-                &vk::DependencyInfo::default().image_memory_barriers(&[src_done]),
+                    std::slice::from_ref(&src_done),
             );
             // Prepare this destination level as the 下一个 源 (unless it is
             // the 最后一个 level, which stays TRANSFER_DST for the final 屏障
@@ -443,7 +474,7 @@ pub unsafe fn create_and_upload_image(
                     );
                 sync2.cmd_pipeline_barrier2(
                     cmd,
-                    &vk::DependencyInfo::default().image_memory_barriers(&[promote]),
+                    std::slice::from_ref(&promote),
                 );
             }
         }
@@ -466,7 +497,7 @@ pub unsafe fn create_and_upload_image(
             );
         sync2.cmd_pipeline_barrier2(
             cmd,
-            &vk::DependencyInfo::default().image_memory_barriers(&[dst_to_read]),
+            std::slice::from_ref(&dst_to_read),
         );
     } else {
         // mip_levels == 1: no blits, just 过渡 the single level to
@@ -487,7 +518,7 @@ pub unsafe fn create_and_upload_image(
             );
         sync2.cmd_pipeline_barrier2(
             cmd,
-            &vk::DependencyInfo::default().image_memory_barriers(&[dst_to_read]),
+            std::slice::from_ref(&dst_to_read),
         );
     }
 

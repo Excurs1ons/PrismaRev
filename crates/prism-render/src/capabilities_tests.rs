@@ -32,13 +32,23 @@
     }
 
     #[test]
-    fn caps_default_is_all_false() {
+fn caps_default_is_all_false() {
         let caps = RayTracingCaps::default();
         assert!(!caps.any_ray_tracing());
         assert!(!caps.has_rt_pipeline());
         assert!(!caps.has_ray_query());
         assert_eq!(caps.max_recursion_depth, 0);
-    }
+}
+
+#[test]
+fn transfer_commands_require_both_extensions() {
+    let mut caps = RayTracingCaps::default();
+    assert!(!caps.has_transfer_commands());
+    caps.synchronization2 = true;
+    assert!(!caps.has_transfer_commands());
+    caps.copy_commands2 = true;
+    assert!(caps.has_transfer_commands());
+}
 
     #[test]
     fn caps_any_ray_tracing_requires_accel_struct() {

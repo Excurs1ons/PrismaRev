@@ -78,7 +78,7 @@ pub fn extract_frame_packet(
     let scene = collect_scene_changes(world, display_aspect, surface_rotation);
 
     // 2. 构建 the flat 绘制 列表
-    let draw_items: Vec<DrawItem> = scene::systems::render::scene_render_system(world);
+    let draw_items: Vec<DrawItem> = scene::SceneReadView::new(world).draw_items();
 
     // 3. 构建 the UI 叠加 from the ECS 世界 (includes UiQuad/TextCmd).
     let ui_overlay = crate::ui::convert_ui_draw_list_to_overlay(world);
