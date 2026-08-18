@@ -301,11 +301,6 @@ fn create_device(
     has_surface: bool,
 ) -> anyhow::Result<(ash::Device, Vec<CString>)> {
     use anyhow::Context as _;
-    if !rt_caps.has_transfer_commands() {
-        anyhow::bail!(
-            "Vulkan device lacks required synchronization2/copy_commands2 support"
-        );
-    }
     let priorities = [1.0f32];
     let queue_create_infos = [vk::DeviceQueueCreateInfo::default()
         .queue_family_index(graphics_queue_family)

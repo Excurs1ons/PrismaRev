@@ -12,7 +12,8 @@ use crate::context::VulkanContext;
 struct LegacySync2<'a> { device: &'a ash::Device }
 
 impl LegacySync2<'_> {
-    unsafe fn cmd_pipeline_barrier2(&self, cmd: vk::CommandBuffer, input: &[vk::ImageMemoryBarrier2<'_>]) {
+    unsafe fn cmd_pipeline_barrier2(&self, cmd: vk::CommandBuffer, dep: &vk::DependencyInfo<'_>) {
+        let input = std::slice::from_raw_parts(dep.p_image_memory_barriers, dep.image_memory_barrier_count as usize);
         let barriers: Vec<vk::ImageMemoryBarrier> = input.iter().map(|b|
             vk::ImageMemoryBarrier::default()
                 .src_access_mask(vk::AccessFlags::from_raw(b.src_access_mask.as_raw() as u32))
@@ -28,15 +29,38 @@ impl LegacySync2<'_> {
     }
 }
 
+/// Converts `VK_KHR_copy_commands2` / Vulkan 1.3 `vkCmdBlitImage2` calls into
+/// the legacy `vkCmdBlitImage` command so the texture upload / mip-generation
+/// path works on a plain Vulkan 1.1 device (where `BlitImageInfo2` and the
+/// `...2` entry points are not core).
 struct LegacyCopy2<'a> { device: &'a ash::Device }
 
 impl LegacyCopy2<'_> {
-    unsafe fn cmd_blit_image2(&self, cmd: vk::CommandBuffer, src_image: vk::Image, src_layout: vk::ImageLayout, dst_image: vk::Image, dst_layout: vk::ImageLayout, input: &[vk::ImageBlit2<'_>], filter: vk::Filter) {
-        let regions: Vec<vk::ImageBlit> = input.iter().map(|r|
-            vk::ImageBlit::default().src_subresource(r.src_subresource).src_offsets(r.src_offsets)
-                .dst_subresource(r.dst_subresource).dst_offsets(r.dst_offsets)
-        ).collect();
-        self.device.cmd_blit_image(cmd, src_image, src_layout, dst_image, dst_layout, &regions, filter);
+    /// Mirrors `ash::Device::cmd_blit_image2`: takes the sync2-style
+    /// `BlitImageInfo2` and translates it down to legacy `vkCmdBlitImage`.
+    unsafe fn cmd_blit_image2(&self, cmd: vk::CommandBuffer, info: &vk::BlitImageInfo2<'_>) {
+        let regions: Vec<vk::ImageBlit> = std::slice::from_raw_parts(
+            info.p_regions,
+            info.region_count as usize,
+        )
+        .iter()
+        .map(|r| {
+            vk::ImageBlit::default()
+                .src_subresource(r.src_subresource)
+                .src_offsets(r.src_offsets)
+                .dst_subresource(r.dst_subresource)
+                .dst_offsets(r.dst_offsets)
+        })
+        .collect();
+        self.device.cmd_blit_image(
+            cmd,
+            info.src_image,
+            info.src_image_layout,
+            info.dst_image,
+            info.dst_image_layout,
+            &regions,
+            info.filter,
+        );
     }
 }
 
@@ -341,7 +365,7 @@ pub unsafe fn create_and_upload_image(
         );
     sync2.cmd_pipeline_barrier2(
         cmd,
-        std::slice::from_ref(&undefined_to_dst),
+        &vk::DependencyInfo::default().image_memory_barriers(std::slice::from_ref(&undefined_to_dst)),
     );
 
     let copy = vk::BufferImageCopy::default()
@@ -385,7 +409,7 @@ pub unsafe fn create_and_upload_image(
             );
         sync2.cmd_pipeline_barrier2(
             cmd,
-            std::slice::from_ref(&promote_mip0),
+            &vk::DependencyInfo::default().image_memory_barriers(std::slice::from_ref(&promote_mip0)),
         );
 
         for mip in 1..mip_levels {
@@ -452,7 +476,7 @@ pub unsafe fn create_and_upload_image(
                 );
             sync2.cmd_pipeline_barrier2(
                 cmd,
-                    std::slice::from_ref(&src_done),
+                    &vk::DependencyInfo::default().image_memory_barriers(std::slice::from_ref(&src_done)),
             );
             // Prepare this destination level as the 下一个 源 (unless it is
             // the 最后一个 level, which stays TRANSFER_DST for the final 屏障
@@ -474,7 +498,7 @@ pub unsafe fn create_and_upload_image(
                     );
                 sync2.cmd_pipeline_barrier2(
                     cmd,
-                    std::slice::from_ref(&promote),
+                    &vk::DependencyInfo::default().image_memory_barriers(std::slice::from_ref(&promote)),
                 );
             }
         }
@@ -497,7 +521,7 @@ pub unsafe fn create_and_upload_image(
             );
         sync2.cmd_pipeline_barrier2(
             cmd,
-            std::slice::from_ref(&dst_to_read),
+            &vk::DependencyInfo::default().image_memory_barriers(std::slice::from_ref(&dst_to_read)),
         );
     } else {
         // mip_levels == 1: no blits, just 过渡 the single level to
@@ -518,7 +542,7 @@ pub unsafe fn create_and_upload_image(
             );
         sync2.cmd_pipeline_barrier2(
             cmd,
-            std::slice::from_ref(&dst_to_read),
+            &vk::DependencyInfo::default().image_memory_barriers(std::slice::from_ref(&dst_to_read)),
         );
     }
 
