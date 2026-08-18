@@ -179,7 +179,9 @@ fn create_instance(
         .application_version(vk::make_api_version(0, 0, 1, 0))
         .engine_name(c"PrismaRev")
         .engine_version(vk::make_api_version(0, 0, 1, 0))
-        .api_version(vk::API_VERSION_1_2);
+        // Keep the instance contract at Vulkan 1.1. Optional 1.2/1.3
+        // capabilities are queried per-device and enabled only when present.
+        .api_version(vk::API_VERSION_1_1);
 
     // 实例 extensions: 表面 + platform. 调试 utils only in 调试 builds
     // (it's a debugging aid; the 验证 层 warns if 启用 in 释放
