@@ -37,10 +37,13 @@ PrismaRev/
 │   ├── scenes/                # 场景资产（glTF 等）
 │   └── ...
 ├── launcher/                  # Tauri 桌面壳 + Android APK 打包（独立 workspace）
-├── game/                      # 用户游戏项目（`prismarev` 桌面 bin + Android `libgame.so`；独立 workspace）
+├── projects/                  # 用户项目（各自独立 workspace）
+│   ├── game/                  # 用户游戏项目（`prismarev` + Android `libgame.so`）
+│   ├── sponza/                # Sponza 路径追踪样例项目
+│   └── editor/                # 独立编辑器项目
 ├── docs/DESIGN.md             # 权威设计蓝图
 ├── scripts/                   # run.ps1 / build-android.ps1（高度图分析脚本在 scripts/scratch/）
-└── Cargo.toml                 # workspace（crates/xtask 排除在外；launcher/ 与 game/ 独立）
+└── Cargo.toml                 # workspace（crates/xtask 排除在外；launcher/ 与 projects/ 独立）
 ```
 
 ### 编辑器与用户项目分离
@@ -49,7 +52,7 @@ PrismaRev/
 编辑器通过两个中性扩展点接入：主线程 `prism_app::FrameHook`（事件/每帧回调）与渲染线程
 `prism_render::external_overlay::SwapchainOverlay`（覆盖层录制）；两者之间的 UI 数据以类型擦除的
 `OverlayMessage`（`Box<dyn FnOnce(&mut dyn SwapchainOverlay) + Send>`）穿过 `RenderShared`。
-编辑器构建的入口是 `prism-editor-host`（`cargo run --bin editor_demo`）。
+编辑器入口位于独立用户项目（`cargo run --manifest-path projects/editor/Cargo.toml`）。
 
 ## 坐标约定
 
@@ -111,17 +114,17 @@ cargo test  -p prism-ecs -p prism-render -p prism-engine -p prism-platform
 当前根 workspace 无可执行 bin（渲染、ECS、平台层均作为库链接），可执行入口有三个：
 
 - `launcher/`（Tauri 桌面壳，游戏启动器）：`cd launcher && pnpm tauri dev`，点 Play 启动 `prismarev`。
-- `game/`（用户游戏项目）：`cd game && cargo run`。
-- 编辑器：`cargo run --bin editor_demo`（prism-editor-host；F1 inspector / F2 render-graph / F3 perf HUD）。
+- `projects/game/`（用户游戏项目）：`cargo run --manifest-path projects/game/Cargo.toml`。
+- 编辑器：`cargo run --manifest-path projects/editor/Cargo.toml`（F1 inspector / F2 render-graph / F3 perf HUD）。
 
 启动器通过 `PRISMREV_LAUNCH_CONFIG` 环境变量（桌面）或 `filesDir/launch_config.json`（Android）向游戏
-传 JSON 启动参数（`{ "scene": "...", "log_level": "..." }`，见 `game/src/launch_config.rs`）。
+传 JSON 启动参数（`{ "scene": "...", "log_level": "..." }`，见 `projects/game/src/launch_config.rs`）。
 验证层在 debug 构建下启用，`RUST_LOG=info`（或 `debug`）查看诊断。`scripts/run.ps1` 提供 Windows 一键
 脚本（自动重新编译 Slang 着色器后 `cargo build`）。
 
 ### Android
 
-- 用户项目 `game/` 以 `cdylib` 输出 `libgame.so` 并暴露 `android_main` JNI 入口
+- 用户项目 `projects/game/` 以 `cdylib` 输出 `libgame.so` 并暴露 `android_main` JNI 入口
   （内部调用 `prism_app::run_on_android`）；`.cargo/config.toml` 将链接器指向 NDK 的 clang wrapper。
 - APK 内有两个 Activity：Tauri 启动器 WebView（launcher）与 `com.prismarev.MainActivity`
   （`GameActivity`，独立 `:game` 进程，`android.app.lib_name = game`）。

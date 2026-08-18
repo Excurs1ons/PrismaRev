@@ -10,7 +10,7 @@
 //!   prism-editor（Inspect/Inspector/egui 面板）
 //! ```
 //!
-//! 依赖方向：用户项目（`game/`）永远不依赖本 crate——只有编辑器构建
+//! 依赖方向：用户项目（`projects/game/`）永远不依赖本 crate——只有编辑器构建
 //! （`editor_app` / [`run`]）才引入它。
 
 pub mod egui_cpu;

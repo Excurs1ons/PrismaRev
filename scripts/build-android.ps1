@@ -2,7 +2,7 @@
 <#
 .SYNOPSIS
     Build PrismaRev for Android arm64-v8a: compile the game Rust cdylib
-    (`game/` → `libgame.so`) via cargo-ndk, then assemble the APK
+    (`projects/game/` → `libgame.so`) via cargo-ndk, then assemble the APK
     via Gradle (Tauri hub + GameActivity in `launcher/src-tauri/gen/android`).
 #>
 $ErrorActionPreference = "Stop"
@@ -10,7 +10,7 @@ $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 $AndroidDir  = Join-Path $ProjectRoot "launcher\src-tauri\gen\android"
 $JniLibsDir  = Join-Path $AndroidDir "app\src\main\jniLibs"
-$GameManifest = Join-Path $ProjectRoot "game\Cargo.toml"
+$GameManifest = Join-Path $ProjectRoot "projects\game\Cargo.toml"
 
 # ---- Prerequisites ---------------------------------------------------------
 

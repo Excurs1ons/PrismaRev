@@ -12,8 +12,8 @@ name = "sponza"
 crate-type = ["lib", "cdylib"]
 
 [dependencies]
-prism-app = { path = "../crates/prism-app" }
-prism-engine = { path = "../crates/prism-engine" }
+prism-app = { path = "../../crates/prism-app" }
+prism-engine = { path = "../../crates/prism-engine" }
 
 [[bin]]
 name = "sponza"

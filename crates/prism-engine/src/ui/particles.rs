@@ -10,7 +10,7 @@
 //! `layer` 排序）再所有文本，因此把雨的 `layer` 设为 1，雨就落在黑场
 //! （layer 0）之上、标题文本之下。
 //!
-//! 用法（见 `game/src/intro.rs` 的开屏动画）：
+//! 用法（见 `projects/game/src/intro.rs` 的开屏动画）：
 //!
 //! ```ignore
 //! // 构造时插入资源（雨预设，尺寸随后每帧按 ScreenSize 更新）。
