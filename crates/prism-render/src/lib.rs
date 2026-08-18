@@ -73,6 +73,7 @@ pub mod shader_bindings;
 pub mod skybox_pass;
 pub mod swapchain;
 pub mod ui_overlay;
+pub(crate) mod vulkan_compat;
 
 // SceneDrawItem is the engine<->renderer 交换 类型 for resolved draws.
 pub use graph_renderer::SceneDrawItem;

@@ -23,6 +23,7 @@ use ash::vk;
 
 use crate::buffer::{create_buffer, find_memory_type, BufferUsage, MemoryProperties};
 use crate::context::VulkanContext;
+use crate::vulkan_compat::{LegacyCopy2, LegacySync2};
 
 /// A staging 资源 that must outlive the submitted 命令 缓冲区 and is
 /// destroyed together in [`BatchUploader::finish`].
@@ -39,8 +40,8 @@ pub struct BatchUploader<'a> {
     context: &'a VulkanContext,
     command_pool: vk::CommandPool,
     cmd: vk::CommandBuffer,
-    sync2: ash::khr::synchronization2::Device,
-    copy2: ash::khr::copy_commands2::Device,
+    sync2: LegacySync2<'a>,
+    copy2: LegacyCopy2<'a>,
     deferred: Vec<Deferred>,
     started: bool,
 }
@@ -67,8 +68,8 @@ impl<'a> BatchUploader<'a> {
         }
         .context("BatchUploader: begin command buffer")?;
 
-        let sync2 = ash::khr::synchronization2::Device::new(&context.instance, &context.device);
-        let copy2 = ash::khr::copy_commands2::Device::new(&context.instance, &context.device);
+        let sync2 = LegacySync2 { device: &context.device };
+        let copy2 = LegacyCopy2 { device: &context.device };
 
         Ok(Self {
             context,
@@ -487,7 +488,7 @@ fn color_sub(base_mip: u32, level_count: u32) -> vk::ImageSubresourceRange {
 /// Record a synchronization2 图像 内存 屏障 on `cmd`. Helper used by
 /// the mip-generation 块传 循环 in [`BatchUploader::upload_image`].
 fn barrier2(
-    sync2: &ash::khr::synchronization2::Device,
+    sync2: &LegacySync2<'_>,
     cmd: vk::CommandBuffer,
     image: vk::Image,
     subresource: vk::ImageSubresourceRange,
