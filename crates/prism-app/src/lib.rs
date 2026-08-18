@@ -81,6 +81,10 @@ pub use app::{App, Subsystem};
 pub use hook::FrameHook;
 pub use render_shared::{RenderShared, RenderStats};
 
+/// 用户项目 Android 入口所需的平台句柄；具体窗口库类型由 app 层封装。
+#[cfg(target_os = "android")]
+pub use winit::platform::android::activity::AndroidApp;
+
 /// 从应用资源目录读取配置；文件系统访问属于应用层，解析逻辑由 engine
 /// 的 `AppConfig::from_toml` 提供。
 pub fn load_config() -> AppConfig {
@@ -119,7 +123,7 @@ pub fn app() -> App {
 ///
 /// #[cfg(target_os = "android")]
 /// #[no_mangle]
-/// fn android_main(android_app: winit::platform::android::activity::AndroidApp) {
+/// fn android_main(android_app: prism_app::AndroidApp) {
 ///     // ...注册 ECS 内容（add_system / insert_resource）...
 ///     run_on_android(app(AppConfig::load()), android_app).expect("fatal application error");
 /// }

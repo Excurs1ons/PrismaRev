@@ -11,7 +11,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use prism_ecs::Entity;
+use prism_engine::ecs::Entity;
 use prism_engine::dirty_router::DirtyRouter;
 use prism_engine::render_settings::RenderSettings;
 use prism_engine::render_system::FramePacket;

@@ -29,6 +29,6 @@ pub fn build_app() -> prism_app::App {
 
 /// GameActivity 加载本库后调用的入口。
 #[cfg(target_os = "android")]
-fn android_main(android_app: winit::platform::android::activity::AndroidApp) {
+fn android_main(android_app: prism_app::AndroidApp) {
     prism_app::run_on_android(build_app(), android_app).expect("fatal application error");
 }

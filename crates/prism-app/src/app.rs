@@ -218,7 +218,7 @@ impl App {
     /// 在其之后按注册顺序每帧运行。
     pub fn add_system<F>(&mut self, label: &str, f: F) -> &mut Self
     where
-        F: FnMut(&mut prism_ecs::World, f32) + 'static,
+        F: FnMut(&mut prism_engine::ecs::World, f32) + 'static,
     {
         self.engine_mut().schedule_mut().add_system(label, f);
         self

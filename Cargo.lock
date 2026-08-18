@@ -3127,7 +3127,6 @@ dependencies = [
  "log",
  "prism-asset",
  "prism-audio",
- "prism-ecs",
  "prism-engine",
  "prism-platform",
  "prism-render",

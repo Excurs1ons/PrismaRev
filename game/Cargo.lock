@@ -2470,7 +2470,6 @@ dependencies = [
  "log",
  "prism-asset",
  "prism-audio",
- "prism-ecs",
  "prism-engine",
  "prism-platform",
  "prism-render",
@@ -2565,9 +2564,7 @@ dependencies = [
  "keyframe",
  "log",
  "prism-app",
- "prism-ecs",
  "prism-engine",
- "winit",
 ]
 
 [[package]]

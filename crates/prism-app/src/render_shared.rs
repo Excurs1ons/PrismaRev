@@ -24,7 +24,7 @@ use std::sync::{
 };
 use std::time::Instant;
 
-use prism_ecs::Entity;
+use prism_engine::ecs::Entity;
 use prism_engine::render_system::FramePacket;
 use prism_render::asset_bridge::{AssetResolveRequest, AssetResolveResult};
 use prism_render::external_overlay::OverlayMessage;

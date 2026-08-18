@@ -5,7 +5,7 @@
 //! UI 运行；渲染数据通过 [`RenderShared::send_overlay_message`] 以
 //! 类型擦除消息喂给渲染线程上的外部叠加层（[`SwapchainOverlay`]）。
 
-use prism_ecs::World;
+use prism_engine::ecs::World;
 use prism_engine::render_settings::RenderSettings;
 use prism_render::SwapchainOverlay;
 use winit::event::WindowEvent;

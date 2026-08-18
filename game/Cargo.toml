@@ -18,9 +18,5 @@ crate-type = ["lib", "cdylib"]
 [dependencies]
 prism-app = { path = "../crates/prism-app" }
 prism-engine = { path = "../crates/prism-engine" }
-prism-ecs = { path = "../crates/prism-ecs" }
 keyframe = "1.1"
 log = "0.4"
-# android_main 签名类型；`android-game-activity` feature 经 prism-app 的
-# 依赖图统一启用，此处只需版本匹配。
-winit = "0.30"

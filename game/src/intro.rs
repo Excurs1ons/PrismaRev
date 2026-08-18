@@ -6,7 +6,7 @@
 
 use keyframe::functions::{EaseInCubic, EaseInOutCubic, EaseOutCubic};
 use keyframe::{keyframes, AnimationSequence};
-use prism_ecs::{Entity, World};
+use prism_engine::ecs::{Entity, World};
 use prism_engine::scene::components::Name;
 use prism_engine::ui::{ParticleSystem2D, ScreenSize, Style, Text, UiDrawList, UiInputState};
 
