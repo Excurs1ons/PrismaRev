@@ -230,6 +230,18 @@ impl App {
         self
     }
 
+    /// 修改应用级渲染设置；用户项目可在启动时选择 Raster 或 PathTrace，
+    /// 不需要依赖编辑器或直接访问渲染器。
+    pub fn render_settings_mut(&mut self) -> &mut RenderSettings {
+        &mut self.render_settings
+    }
+
+    /// 以闭包配置应用级渲染设置。
+    pub fn with_render_settings(mut self, configure: impl FnOnce(&mut RenderSettings)) -> Self {
+        configure(&mut self.render_settings);
+        self
+    }
+
     /// 注入帧钩子（编辑器等宿主）。钩子在渲染线程启动前被询问外部
     /// 叠加层工厂，之后每帧收到 tick 与窗口事件转发。
     pub fn with_frame_hook(mut self, hook: impl FrameHook + 'static) -> Self {

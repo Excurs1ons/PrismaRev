@@ -1,0 +1,20 @@
+[package]
+name = "prismarev-sponza"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "PrismaRev Sponza path-tracing sample project"
+
+[workspace]
+
+[lib]
+name = "sponza"
+crate-type = ["lib", "cdylib"]
+
+[dependencies]
+prism-app = { path = "../crates/prism-app" }
+prism-engine = { path = "../crates/prism-engine" }
+
+[[bin]]
+name = "sponza"
+path = "src/main.rs"

@@ -4,7 +4,8 @@
 //! into a single 结构体 so [`render_system`] has a clean, 可扩展 参数
 //! instead of a growing 列表 of 标量 arguments.
 
-use prism_render::{DebugMode, NormalSpace, RenderMode};
+pub use prism_render::RenderMode;
+use prism_render::{DebugMode, NormalSpace};
 
 /// Aggregate of all per-frame 渲染 knobs.
 ///
