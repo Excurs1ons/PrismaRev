@@ -149,10 +149,17 @@ pub fn has_extension(available: &HashSet<String>, name: &str) -> bool {
 pub fn rt_extension_names(caps: &RayTracingCaps) -> Vec<&'static CStr> {
     let mut names = Vec::new();
     if caps.acceleration_structure {
+        // The instance targets Vulkan 1.1, so promoted Vulkan 1.2
+        // dependencies must still be enabled by their extension names.
+        names.push(vk::EXT_DESCRIPTOR_INDEXING_NAME);
+        names.push(vk::KHR_BUFFER_DEVICE_ADDRESS_NAME);
         names.push(vk::KHR_ACCELERATION_STRUCTURE_NAME);
         names.push(vk::KHR_DEFERRED_HOST_OPERATIONS_NAME);
     }
     if caps.ray_tracing_pipeline {
+        // Ray-tracing pipeline and ray-query both require SPIR-V 1.4.
+        names.push(vk::KHR_SPIRV_1_4_NAME);
+        names.push(vk::KHR_SHADER_FLOAT_CONTROLS_NAME);
         names.push(vk::KHR_RAY_TRACING_PIPELINE_NAME);
         names.push(vk::KHR_PIPELINE_LIBRARY_NAME);
     }
@@ -198,6 +205,19 @@ pub unsafe fn probe(
         &available,
         vk::KHR_DEFERRED_HOST_OPERATIONS_NAME.to_str().unwrap(),
     );
+    let has_descriptor_indexing_ext = has_extension(
+        &available,
+        vk::EXT_DESCRIPTOR_INDEXING_NAME.to_str().unwrap(),
+    );
+    let has_buffer_device_address_ext = has_extension(
+        &available,
+        vk::KHR_BUFFER_DEVICE_ADDRESS_NAME.to_str().unwrap(),
+    );
+    let has_spirv_1_4_ext = has_extension(&available, vk::KHR_SPIRV_1_4_NAME.to_str().unwrap());
+    let has_shader_float_controls_ext = has_extension(
+        &available,
+        vk::KHR_SHADER_FLOAT_CONTROLS_NAME.to_str().unwrap(),
+    );
 
     // --- 特性 链 查询 what the driver actually supports ---
     // We 链 Vulkan12Features + the three RT 特性 structs (when their
@@ -226,13 +246,22 @@ pub unsafe fn probe(
     let timeline_semaphore = vk12.timeline_semaphore == vk::TRUE;
 
     // 层 2: 加速度 structure (real only when ext + 特性 agree).
-    let acceleration_structure = has_accel_ext && accel_features.acceleration_structure == vk::TRUE;
+    let acceleration_structure = has_accel_ext
+        && has_deferred_ext
+        && has_descriptor_indexing_ext
+        && has_buffer_device_address_ext
+        && accel_features.acceleration_structure == vk::TRUE;
     let deferred_host_operations = has_deferred_ext;
 
     // 层 3/4: RT 管线 / 射线 查询 (independent of each other).
-    let ray_tracing_pipeline =
-        has_rt_pipeline_ext && rt_pipeline_features.ray_tracing_pipeline == vk::TRUE;
-    let ray_query = has_ray_query_ext && ray_query_features.ray_query == vk::TRUE;
+    let ray_tracing_pipeline = has_rt_pipeline_ext
+        && has_spirv_1_4_ext
+        && has_shader_float_controls_ext
+        && rt_pipeline_features.ray_tracing_pipeline == vk::TRUE;
+    let ray_query = has_ray_query_ext
+        && has_spirv_1_4_ext
+        && has_shader_float_controls_ext
+        && ray_query_features.ray_query == vk::TRUE;
 
     // --- RT 管线 properties (SBT 对齐 etc.) ---
     let mut rt_props = vk::PhysicalDeviceRayTracingPipelinePropertiesKHR::default();

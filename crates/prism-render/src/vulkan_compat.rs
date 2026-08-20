@@ -1,5 +1,13 @@
 use ash::{vk, Device};
 
+unsafe fn slice_from_raw_parts_or_empty<'a, T>(ptr: *const T, len: usize) -> &'a [T] {
+    if len == 0 {
+        &[]
+    } else {
+        std::slice::from_raw_parts(ptr, len)
+    }
+}
+
 pub(crate) struct LegacySync2<'a> {
     pub(crate) device: &'a Device,
 }
@@ -10,8 +18,10 @@ impl LegacySync2<'_> {
         cmd: vk::CommandBuffer,
         dep: &vk::DependencyInfo<'_>,
     ) {
-        let memory_input =
-            std::slice::from_raw_parts(dep.p_memory_barriers, dep.memory_barrier_count as usize);
+        let memory_input = slice_from_raw_parts_or_empty(
+            dep.p_memory_barriers,
+            dep.memory_barrier_count as usize,
+        );
         let memory: Vec<vk::MemoryBarrier> = memory_input
             .iter()
             .map(|b| {
@@ -20,7 +30,7 @@ impl LegacySync2<'_> {
                     .dst_access_mask(vk::AccessFlags::from_raw(b.dst_access_mask.as_raw() as u32))
             })
             .collect();
-        let input = std::slice::from_raw_parts(
+        let input = slice_from_raw_parts_or_empty(
             dep.p_image_memory_barriers,
             dep.image_memory_barrier_count as usize,
         );
@@ -38,7 +48,7 @@ impl LegacySync2<'_> {
                     .subresource_range(b.subresource_range)
             })
             .collect();
-        let buffer_input = std::slice::from_raw_parts(
+        let buffer_input = slice_from_raw_parts_or_empty(
             dep.p_buffer_memory_barriers,
             dep.buffer_memory_barrier_count as usize,
         );
@@ -91,7 +101,7 @@ impl LegacyCopy2<'_> {
         info: &vk::CopyBufferInfo2<'_>,
     ) {
         let regions: Vec<vk::BufferCopy> =
-            std::slice::from_raw_parts(info.p_regions, info.region_count as usize)
+            slice_from_raw_parts_or_empty(info.p_regions, info.region_count as usize)
                 .iter()
                 .map(|r| {
                     vk::BufferCopy::default()
@@ -110,7 +120,7 @@ impl LegacyCopy2<'_> {
         info: &vk::BlitImageInfo2<'_>,
     ) {
         let regions: Vec<vk::ImageBlit> =
-            std::slice::from_raw_parts(info.p_regions, info.region_count as usize)
+            slice_from_raw_parts_or_empty(info.p_regions, info.region_count as usize)
                 .iter()
                 .map(|r| {
                     vk::ImageBlit::default()

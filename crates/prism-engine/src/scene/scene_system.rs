@@ -253,7 +253,7 @@ impl SceneManager {
                 let cwd = std::env::current_dir()
                     .map(|p| p.display().to_string())
                     .unwrap_or_else(|_| "<unknown>".into());
-                log::info!("no assets/scenes.toml found (cwd={cwd}); using procedural demo only");
+                log::warn!("no assets/scenes.toml found (cwd={cwd}); no scene will be loaded");
                 return None;
             }
         };
@@ -321,7 +321,7 @@ impl SceneManager {
                 }
             }
         }
-        log::info!("no resolvable scene in manifest; using procedural demo only");
+        log::warn!("no resolvable scene in manifest; no scene will be loaded");
         None
     }
 }

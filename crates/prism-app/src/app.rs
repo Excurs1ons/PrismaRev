@@ -225,7 +225,7 @@ impl App {
     }
 
     /// 插入一个 ECS 资源（等价于 `engine_mut().world_mut().insert_resource`）。
-    pub fn insert_resource<R: 'static + Send>(&mut self, resource: R) -> &mut Self {
+    pub fn insert_resource<R: 'static + Send + Sync>(&mut self, resource: R) -> &mut Self {
         self.engine_mut().world_mut().insert_resource(resource);
         self
     }

@@ -61,7 +61,7 @@ impl GpuAssetResolver {
         const MANIFEST_PATH: &str = "assets/scenes.pak.meta.json";
 
         if let Err(e) = self.resource_manager.load_package(PAK_PATH) {
-            log::info!("resource package unavailable at {PAK_PATH}: {e}");
+            log::warn!("resource package unavailable at {PAK_PATH}: {e}; scene assets cannot load");
             return;
         }
 

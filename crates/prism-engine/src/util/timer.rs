@@ -331,8 +331,6 @@ fn worker_loop(
     }
 }
 
-unsafe impl Send for TimerService {}
-
 // ── TimerSet ─────────────────────────────────────────────────────────────
 
 /// TimerClient + 自动 id 缓存 + Drop 时自动批量销毁。

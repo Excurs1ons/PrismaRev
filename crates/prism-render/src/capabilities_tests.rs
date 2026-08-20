@@ -101,8 +101,12 @@ fn transfer_commands_require_both_extensions() {
             ..Default::default()
         };
         let names = rt_extension_names(&caps);
-        // accel + deferred + rt_pipeline + pipeline_library + ray_query
-        assert_eq!(names.len(), 5);
+        // Vulkan 1.1 also needs the promoted dependency extensions.
+        assert_eq!(names.len(), 9);
+        assert!(names.contains(&vk::EXT_DESCRIPTOR_INDEXING_NAME));
+        assert!(names.contains(&vk::KHR_BUFFER_DEVICE_ADDRESS_NAME));
+        assert!(names.contains(&vk::KHR_SPIRV_1_4_NAME));
+        assert!(names.contains(&vk::KHR_SHADER_FLOAT_CONTROLS_NAME));
         assert!(names.contains(&vk::KHR_ACCELERATION_STRUCTURE_NAME));
         assert!(names.contains(&vk::KHR_DEFERRED_HOST_OPERATIONS_NAME));
         assert!(names.contains(&vk::KHR_RAY_TRACING_PIPELINE_NAME));
@@ -124,8 +128,10 @@ fn transfer_commands_require_both_extensions() {
             ..Default::default()
         };
         let names = rt_extension_names(&caps);
-        // accel + deferred + ray_query (no rt_pipeline, no pipeline_library)
-        assert_eq!(names.len(), 3);
+        // accel + deferred + ray_query plus promoted dependencies.
+        assert_eq!(names.len(), 5);
+        assert!(names.contains(&vk::EXT_DESCRIPTOR_INDEXING_NAME));
+        assert!(names.contains(&vk::KHR_BUFFER_DEVICE_ADDRESS_NAME));
         assert!(names.contains(&vk::KHR_RAY_QUERY_NAME));
         assert!(!names.contains(&vk::KHR_RAY_TRACING_PIPELINE_NAME));
     }

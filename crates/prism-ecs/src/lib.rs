@@ -48,12 +48,12 @@ impl Entity {
 // 分量
 // ---------------------------------------------------------------------------
 
-/// Marker for 分量 types. Components must be 静态 + Send` so they can
+/// Marker for 分量 types. Components must be 静态 + Send + Sync so they can
 /// be stored in type-erased pools and safely sent across threads.
-pub trait Component: 'static + Send {}
+pub trait Component: 'static + Send + Sync {}
 
-// Blanket impl: any plain 静态 + Send` data is a 分量
-impl<T: 'static + Send> Component for T {}
+// Blanket impl: any plain 静态 + Send + Sync data is a 分量
+impl<T: 'static + Send + Sync> Component for T {}
 
 // ---------------------------------------------------------------------------
 // 世界
@@ -85,12 +85,6 @@ pub struct World {
     /// or `RenderState` that doesn't belong to any single 实体
     resources: HashMap<TypeId, Box<dyn Any + Send>>,
 }
-
-// Safe: all 分量 data is `Send`, and ErasedPool only stores `Send` types.
-// Pools/resources are accessed under `&self`/`&mut self` with no interior
-// mutability, so shared `&World` across threads (Sync) is also safe.
-unsafe impl Send for World {}
-unsafe impl Sync for World {}
 
 impl World {
     pub fn new() -> Self {
@@ -341,6 +335,11 @@ impl World {
     pub fn query2_mut<A: Component, B: Component>(
         &mut self,
     ) -> Box<dyn Iterator<Item = (Entity, &mut A, &B)> + '_> {
+        // The raw-pointer split below requires distinct component pools.
+        // Reject the same-type query before taking either borrow.
+        if TypeId::of::<A>() == TypeId::of::<B>() {
+            return Box::new(std::iter::empty());
+        }
         let generation_for = &self.entities;
         let active_ptr: *const Vec<bool> = &self.active;
         // 安全性 see above. A and B have different TypeIds, so the two 池
@@ -401,7 +400,7 @@ impl World {
 
     /// 插入 a 全局 资源 replacing any existing one of the same 类型
     /// Resources are singletons keyed by 类型 相机 `RenderState`, etc.
-    pub fn insert_resource<R: 'static + Send>(&mut self, resource: R) {
+    pub fn insert_resource<R: 'static + Send + Sync>(&mut self, resource: R) {
         self.resources.insert(TypeId::of::<R>(), Box::new(resource));
     }
 
@@ -420,7 +419,7 @@ impl World {
     }
 
     /// 移除 a 全局 资源 by 类型 returning it if it existed.
-    pub fn remove_resource<R: 'static + Send>(&mut self) -> Option<R> {
+    pub fn remove_resource<R: 'static + Send + Sync>(&mut self) -> Option<R> {
         self.resources
             .remove(&TypeId::of::<R>())
             .and_then(|b| b.downcast::<R>().ok())
@@ -554,7 +553,7 @@ impl<T: 'static> ComponentPool<T> {
     }
 }
 
-impl<T: 'static + Send> ErasedPool for ComponentPool<T> {
+impl<T: 'static + Send + Sync> ErasedPool for ComponentPool<T> {
     fn remove(&mut self, id: u32) {
         self.remove(id); // drops the value
     }

@@ -336,6 +336,24 @@ fn create_swapchain(
     }
     .context("get surface capabilities")?;
 
+    // `set_present_mode` is intentionally a lightweight setter and may be
+    // called before a surface is recreated (or with a mode unsupported by
+    // the current driver). Validate at the Vulkan boundary and fall back to
+    // FIFO, which the spec guarantees for every surface.
+    let present_modes = unsafe {
+        surface_ext.get_physical_device_surface_present_modes(context.physical_device, surface)
+    }
+    .context("get surface present modes")?;
+    let present_mode = if present_modes.contains(&present_mode) {
+        present_mode
+    } else {
+        log::warn!(
+            "present mode {:?} is unsupported; falling back to FIFO",
+            present_mode
+        );
+        vk::PresentModeKHR::FIFO
+    };
+
     let formats = unsafe {
         surface_ext.get_physical_device_surface_formats(context.physical_device, surface)
     }
