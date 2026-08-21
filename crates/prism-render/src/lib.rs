@@ -69,6 +69,9 @@ pub mod shader;
 /// point names, push-constant sizes). Regenerate with `xtask/shader-bindgen`
 /// after recompiling shaders on a host with slangc - see shaders/compile.sh.
 pub mod shader_bindings;
+pub mod asset_decoders;
+pub mod plugin;
+pub mod render_runtime;
 pub mod shadow_map_pass;
 pub mod skybox_pass;
 pub mod swapchain;

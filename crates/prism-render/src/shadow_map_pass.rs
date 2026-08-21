@@ -47,6 +47,8 @@ pub struct ShadowMapPass {
 /// Square shadow 映射表 分辨率 2048 is a reasonable desktop/mobile 默认
 /// raise for quality, lower for 带宽 on weak GPUs.
 const SHADOW_MAP_SIZE: u32 = 2048;
+/// CSM 级联数占位（DESIGN TODO）：当前单张正交阴影，后续扩展为多级联
+pub const SHADOW_CASCADE_COUNT: u32 = 1; // TODO(CSM): 扩展为 3-4 级联并按相机视锥切片
 
 impl ShadowMapPass {
     pub fn new() -> Self {
