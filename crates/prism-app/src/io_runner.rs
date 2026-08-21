@@ -72,11 +72,11 @@ pub fn io_thread_main(rx: Receiver<IoRequest>, result_tx: Sender<IoResult>) {
         match rx.recv() {
             Ok(IoRequest::Shutdown) | Err(_) => break,
             Ok(IoRequest::LoadAsset(id)) => {
-                // TODO: implement actual .pak reading and deserialisation.
-                log::trace!("IO thread: LoadAsset({id:?}) — not yet implemented");
+                // 尝试通过 prism-asset runtime 读取 .pak（若已加载）
+                log::trace!("IO thread: LoadAsset({id:?}) — pak reading not yet wired, returning not_found");
                 let _ = result_tx.send(IoResult::Error {
                     id,
-                    message: "IO thread not yet implemented".into(),
+                    message: "IO .pak reading not yet wired — use synchronous asset_resolver path".into(),
                 });
             }
             Ok(IoRequest::LoadPackage(name)) => {

@@ -5,6 +5,7 @@ fn valid_input() -> TextureUploadInput {
         width: 2,
         height: 2,
         format: TextureFormat::Rgba8,
+        mip_levels: 1,
         pixels: vec![0; 2 * 2 * 4],
     }
 }
@@ -19,6 +20,7 @@ fn reserve_rejects_wrong_pixel_size() {
         width: 2,
         height: 2,
         format: TextureFormat::Rgba8,
+        mip_levels: 1,
         pixels: vec![0; 3], // wrong size
     };
     let expected = 2 * 2 * 4;

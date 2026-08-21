@@ -24,6 +24,8 @@ pub struct DirtyFlags {
     pub directional_light: bool,
     /// 点光源列表（数量、位置、颜色、范围）。
     pub point_lights: bool,
+    /// 曝光/相机存在性（影响 tonemap）
+    pub exposure: bool,
 }
 
 impl DirtyFlags {
@@ -32,11 +34,12 @@ impl DirtyFlags {
             camera: true,
             directional_light: true,
             point_lights: true,
+            exposure: true,
         }
     }
 
     pub fn any(&self) -> bool {
-        self.camera || self.directional_light || self.point_lights
+        self.camera || self.directional_light || self.point_lights || self.exposure
     }
 
     pub fn none(&self) -> bool {
@@ -55,11 +58,22 @@ impl DirtyFlags {
 /// values actually changed.
 pub struct DirtyRouter {
     prev: Option<Box<SceneChanges>>,
+    prev_draw_count: usize,
 }
 
 impl DirtyRouter {
     pub fn new() -> Self {
-        Self { prev: None }
+        Self {
+            prev: None,
+            prev_draw_count: 0,
+        }
+    }
+
+    /// 追踪 draw_items 数量变化（instance/mesh 增删）
+    pub fn draw_count_dirty(&mut self, count: usize) -> bool {
+        let dirty = self.prev_draw_count != count;
+        self.prev_draw_count = count;
+        dirty
     }
 
     /// 比较 `new` against the 上一个 快照 and return [`DirtyFlags`].
@@ -70,6 +84,7 @@ impl DirtyRouter {
         let Some(ref prev) = self.prev else {
             // 第一个 帧 everything is dirty.
             self.prev = Some(Box::new(new.clone()));
+            self.prev_draw_count = 0; // 下一帧 draw_count 检测会触发
             return DirtyFlags::all();
         };
 
@@ -84,7 +99,9 @@ impl DirtyRouter {
             directional_light: prev.light_direction != new.light_direction
                 || prev.light_color != new.light_color
                 || prev.light_view_proj != new.light_view_proj,
-            point_lights: prev.lights != new.lights,
+            point_lights: prev.lights != new.lights || prev.pt_lights.len() != new.pt_lights.len(),
+            exposure: (prev.exposure - new.exposure).abs() > f32::EPSILON
+                || prev.has_camera != new.has_camera,
         };
 
         self.prev = Some(Box::new(new.clone()));

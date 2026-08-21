@@ -47,8 +47,10 @@ pub struct TextureUploadInput {
     pub width: u32,
     pub height: u32,
     pub format: TextureFormat,
+    /// KTX2 已含完整 mip 时 >1，否则 0 表示按 width/height 自动推导（仅 Rgba8）
+    pub mip_levels: u32,
     /// Tightly packed rows, no 填充 长度 must be
-    /// 宽度 * 高度 * format.bytes_per_pixel()`.
+    /// 宽度 * 高度 * format.bytes_per_pixel()`（压缩格式按块计算）。
     pub pixels: Vec<u8>,
 }
 
@@ -59,12 +61,79 @@ pub enum TextureFormat {
     /// sRGB->linear conversion on 样本 so the 着色器 receives 线性 values
     /// and must NOT apply a manual `pow(2.2)`. Used for albedo / emissive.
     Rgba8Srgb,
+    // ── 块压缩格式（DESIGN §7.2）：离线编码，运行时直接上传压缩块 ──
+    Bc7Unorm,
+    Bc7Srgb,
+    Bc5Unorm,
+    Bc4Unorm,
+    Bc6HUfloat,
+    Astc4x4Unorm,
+    Astc4x4Srgb,
+    Astc6x6Unorm,
+    Astc6x6Srgb,
+    Astc8x8Unorm,
+    Astc8x8Srgb,
+    Etc2R8G8B8A8Srgb,
 }
 
 impl TextureFormat {
     pub const fn bytes_per_pixel(self) -> usize {
         match self {
             TextureFormat::Rgba8 | TextureFormat::Rgba8Srgb => 4,
+            // 块压缩格式按像素平均字节数近似（仅用于估算，精确大小用 compressed_byte_len）
+            TextureFormat::Bc7Unorm | TextureFormat::Bc7Srgb => 1, // 4x4 block 16B = 1B/px
+            TextureFormat::Bc5Unorm => 1,
+            TextureFormat::Bc4Unorm => 1, // 实际 0.5B/px，这里取整用于校验宽松
+            TextureFormat::Bc6HUfloat => 1,
+            TextureFormat::Astc4x4Unorm | TextureFormat::Astc4x4Srgb => 1, // 8 bpp
+            TextureFormat::Astc6x6Unorm | TextureFormat::Astc6x6Srgb => 1, // 3.56 bpp 近似
+            TextureFormat::Astc8x8Unorm | TextureFormat::Astc8x8Srgb => 1,
+            TextureFormat::Etc2R8G8B8A8Srgb => 1,
+        }
+    }
+
+    pub const fn is_compressed(self) -> bool {
+        match self {
+            TextureFormat::Rgba8 | TextureFormat::Rgba8Srgb => false,
+            _ => true,
+        }
+    }
+
+    /// 精确的压缩块字节数（按 Vulkan 块大小计算）
+    pub fn compressed_byte_len(self, width: u32, height: u32) -> usize {
+        match self {
+            TextureFormat::Rgba8 | TextureFormat::Rgba8Srgb => (width as usize) * (height as usize) * 4,
+            TextureFormat::Bc7Unorm | TextureFormat::Bc7Srgb
+            | TextureFormat::Bc5Unorm | TextureFormat::Bc6HUfloat => {
+                let bw = (width + 3) / 4;
+                let bh = (height + 3) / 4;
+                (bw as usize) * (bh as usize) * 16
+            }
+            TextureFormat::Bc4Unorm => {
+                let bw = (width + 3) / 4;
+                let bh = (height + 3) / 4;
+                (bw as usize) * (bh as usize) * 8
+            }
+            TextureFormat::Astc4x4Unorm | TextureFormat::Astc4x4Srgb => {
+                let bw = (width + 3) / 4;
+                let bh = (height + 3) / 4;
+                (bw as usize) * (bh as usize) * 16
+            }
+            TextureFormat::Astc6x6Unorm | TextureFormat::Astc6x6Srgb => {
+                let bw = (width + 5) / 6;
+                let bh = (height + 5) / 6;
+                (bw as usize) * (bh as usize) * 16
+            }
+            TextureFormat::Astc8x8Unorm | TextureFormat::Astc8x8Srgb => {
+                let bw = (width + 7) / 8;
+                let bh = (height + 7) / 8;
+                (bw as usize) * (bh as usize) * 16
+            }
+            TextureFormat::Etc2R8G8B8A8Srgb => {
+                let bw = (width + 3) / 4;
+                let bh = (height + 3) / 4;
+                (bw as usize) * (bh as usize) * 16
+            }
         }
     }
 
@@ -73,6 +142,18 @@ impl TextureFormat {
         match self {
             TextureFormat::Rgba8 => vk::Format::R8G8B8A8_UNORM,
             TextureFormat::Rgba8Srgb => vk::Format::R8G8B8A8_SRGB,
+            TextureFormat::Bc7Unorm => vk::Format::BC7_UNORM_BLOCK,
+            TextureFormat::Bc7Srgb => vk::Format::BC7_SRGB_BLOCK,
+            TextureFormat::Bc5Unorm => vk::Format::BC5_UNORM_BLOCK,
+            TextureFormat::Bc4Unorm => vk::Format::BC4_UNORM_BLOCK,
+            TextureFormat::Bc6HUfloat => vk::Format::BC6H_UFLOAT_BLOCK,
+            TextureFormat::Astc4x4Unorm => vk::Format::ASTC_4X4_UNORM_BLOCK,
+            TextureFormat::Astc4x4Srgb => vk::Format::ASTC_4X4_SRGB_BLOCK,
+            TextureFormat::Astc6x6Unorm => vk::Format::ASTC_6X6_UNORM_BLOCK,
+            TextureFormat::Astc6x6Srgb => vk::Format::ASTC_6X6_SRGB_BLOCK,
+            TextureFormat::Astc8x8Unorm => vk::Format::ASTC_8X8_UNORM_BLOCK,
+            TextureFormat::Astc8x8Srgb => vk::Format::ASTC_8X8_SRGB_BLOCK,
+            TextureFormat::Etc2R8G8B8A8Srgb => vk::Format::ETC2_R8G8B8A8_SRGB_BLOCK,
         }
     }
 }
@@ -204,15 +285,25 @@ impl RenderTextureManager {
         graphics_queue: vk::Queue,
         input: &TextureUploadInput,
     ) -> anyhow::Result<AssetTextureHandle> {
-        let expected =
-            (input.width as usize) * (input.height as usize) * input.format.bytes_per_pixel();
-        if input.pixels.len() != expected {
+        let expected = if input.format.is_compressed() {
+            input.format.compressed_byte_len(input.width, input.height)
+        } else {
+            (input.width as usize) * (input.height as usize) * input.format.bytes_per_pixel()
+        };
+        // 压缩格式允许 mip 链时 pixels 更长，宽松校验：至少 base mip 大小
+        let valid = if input.format.is_compressed() {
+            input.pixels.len() >= expected
+        } else {
+            input.pixels.len() == expected
+        };
+        if !valid {
             anyhow::bail!(
-                "TextureUploadInput: pixel buffer size {} does not match {}x{}*{}",
+                "TextureUploadInput: pixel buffer size {} does not match {}x{}*{} (expected >= {})",
                 input.pixels.len(),
                 input.width,
                 input.height,
-                input.format.bytes_per_pixel()
+                input.format.bytes_per_pixel(),
+                expected
             );
         }
         if self.textures.len() as u32 > self.user_capacity {
@@ -223,7 +314,11 @@ impl RenderTextureManager {
         }
 
         // Upload pixels → VkImage + VkImageView (transferDst + SAMPLED).
-        let mip_levels = if input.width <= 1 || input.height <= 1 {
+        let mip_levels = if input.mip_levels != 0 {
+            input.mip_levels
+        } else if input.format.is_compressed() {
+            1 // 压缩格式 mip 由 KTX2 预生成，不做 blit 自动生成
+        } else if input.width <= 1 || input.height <= 1 {
             1
         } else {
             (input.width.max(input.height) as f32).log2().floor() as u32 + 1
@@ -271,15 +366,24 @@ impl RenderTextureManager {
         uploader: &mut crate::batch::BatchUploader<'_>,
         input: &TextureUploadInput,
     ) -> anyhow::Result<AssetTextureHandle> {
-        let expected =
-            (input.width as usize) * (input.height as usize) * input.format.bytes_per_pixel();
-        if input.pixels.len() != expected {
+        let expected = if input.format.is_compressed() {
+            input.format.compressed_byte_len(input.width, input.height)
+        } else {
+            (input.width as usize) * (input.height as usize) * input.format.bytes_per_pixel()
+        };
+        let valid = if input.format.is_compressed() {
+            input.pixels.len() >= expected
+        } else {
+            input.pixels.len() == expected
+        };
+        if !valid {
             anyhow::bail!(
-                "TextureUploadInput: pixel buffer size {} does not match {}x{}*{}",
+                "TextureUploadInput: pixel buffer size {} does not match {}x{}*{} (expected >= {})",
                 input.pixels.len(),
                 input.width,
                 input.height,
-                input.format.bytes_per_pixel()
+                input.format.bytes_per_pixel(),
+                expected
             );
         }
         if self.textures.len() as u32 > self.user_capacity {
@@ -289,7 +393,13 @@ impl RenderTextureManager {
             );
         }
 
-        let mip_levels = crate::batch::mip_level_count(input.width, input.height);
+        let mip_levels = if input.mip_levels != 0 {
+            input.mip_levels
+        } else if input.format.is_compressed() {
+            1
+        } else {
+            crate::batch::mip_level_count(input.width, input.height)
+        };
         let (image, memory, view) = uploader
             .upload_image(
                 input.width,

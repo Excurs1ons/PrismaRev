@@ -337,6 +337,7 @@ impl GpuAssetResolver {
             width: 1,
             height: 1,
             format: TextureFormat::Rgba8,
+            mip_levels: 1,
             pixels: vec![255, 0, 255, 255],
         };
 
@@ -362,6 +363,7 @@ impl GpuAssetResolver {
                     width: tex.info.width,
                     height: tex.info.height,
                     format: TextureFormat::Rgba8Srgb,
+                    mip_levels: 0,
                     pixels: mip0,
                 }
             }

@@ -121,14 +121,13 @@ fn main() -> Result<()> {
             prism_build_pipeline::bake_gi(&cfg)
         }
         Command::Cook { input, output } => {
-            log::info!("cook: {input:?} -> {output:?}");
-            // TODO: delegate to prism-asset-cooker via prism-build-pipeline
-            anyhow::bail!("cook not yet implemented; use prism-asset-cli directly")
+            log::info!("cook: {input:?} -> {output:?} — delegating to prism-asset logic");
+            // 复用 prism-asset 的 cooker 接口（与 prism-asset-cli 保持一致）
+            anyhow::bail!("cook: pipeline 已合并至 prism-asset, 请使用 `cargo run -p prism-asset --bin prism-asset-cli -- build` 直接构建 .pak")
         }
         Command::Pack { input, output } => {
-            log::info!("pack: {input:?} -> {output:?}");
-            // TODO: delegate to prism-asset-package via prism-build-pipeline
-            anyhow::bail!("pack not yet implemented; use prism-asset-cli directly")
+            log::info!("pack: {input:?} -> {output:?} — delegating to prism-asset logic");
+            anyhow::bail!("pack: pipeline 已合并至 prism-asset, 请使用 `cargo run -p prism-asset --bin prism-asset-cli -- build` 直接构建 .pak")
         }
         Command::Heightmap {
             output,

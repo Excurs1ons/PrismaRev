@@ -320,6 +320,12 @@ pub fn render_system(
         _pad3: 0.0,
     };
 
+    // 2.5. 扩展脏检测：draw_items 数量变化也视为场景脏（触发 BLAS/instance 更新）
+    let draw_count_dirty = dirty_router.draw_count_dirty(draw_items.len());
+    if draw_count_dirty {
+        log::trace!("dirty: draw_items count changed");
+    }
+
     // 3. Drive the render-graph phase API.
     let ctx = match renderer.begin_frame()? {
         Some(c) => c,
@@ -344,11 +350,16 @@ pub fn render_system(
         pt_max_iterations: settings.pt_max_iterations,
         exposure: *exposure,
         pt_lights,
-        pt_accum_dirty: dirty_flags.directional_light,
+        pt_accum_dirty: dirty_flags.directional_light || draw_count_dirty,
         has_camera: *has_camera,
         clear_color: CLEAR_COLOR.to_array(),
         ui_overlay: Some(ui_overlay),
     };
+    // §8 五阶段：prepare 阶段批量同步（当前实现 dirty 日志 + 未来上传点）
+    renderer.prepare(&ctx, &input).map_err(|e| {
+        let _ = renderer.present(&ctx);
+        e
+    })?;
     renderer.execute(&ctx, &input).map_err(|e| {
         let _ = renderer.present(&ctx);
         e

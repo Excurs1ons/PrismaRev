@@ -1240,7 +1240,16 @@ impl GraphRenderer {
     }
 
     /// 准备阶段：在命令录制前批量同步 CPU 场景状态和 GPU 资源。
-    pub fn prepare(&mut self, _ctx: &FrameCtx, _input: &FrameInput<'_>) -> anyhow::Result<()> {
+    /// 当前实现：校验输入 + 日志脏标记，为后续 DirtyDispatch 预留上传点。
+    pub fn prepare(&mut self, _ctx: &FrameCtx, input: &FrameInput<'_>) -> anyhow::Result<()> {
+        // 未来在此消费 DirtyFlags 并调度 RenderTextureManager / RenderMeshManager 等批量上传
+        // 当前仅做输入校验与同步点占位，保证五阶段调用链完整（DESIGN §8）
+        if input.pt_accum_dirty {
+            log::trace!("prepare: pt accum dirty — will reset accumulation");
+        }
+        if input.draw_items.is_empty() && !input.has_camera {
+            log::trace!("prepare: no draw_items and no camera — frame will clear only");
+        }
         Ok(())
     }
 

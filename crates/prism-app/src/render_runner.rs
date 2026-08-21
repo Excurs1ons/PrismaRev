@@ -238,12 +238,15 @@ fn render_one_frame(
     let draw_items = &packet.draw_items;
 
     let dirty_flags = dirty_router.update(scene);
-    if dirty_flags.any() {
+    let draw_count_dirty = dirty_router.draw_count_dirty(draw_items.len());
+    if dirty_flags.any() || draw_count_dirty {
         log::trace!(
-            "dirty_flags: camera={} dir_light={} point_lights={}",
+            "dirty_flags: camera={} dir_light={} point_lights={} exposure={} draw_count={}",
             dirty_flags.camera,
             dirty_flags.directional_light,
             dirty_flags.point_lights,
+            dirty_flags.exposure,
+            draw_count_dirty
         );
     }
 
@@ -286,7 +289,7 @@ fn render_one_frame(
         pt_max_iterations: settings.pt_max_iterations,
         exposure: scene.exposure,
         pt_lights: &scene.pt_lights,
-        pt_accum_dirty: dirty_flags.directional_light,
+        pt_accum_dirty: dirty_flags.directional_light || draw_count_dirty,
         has_camera: scene.has_camera,
         clear_color: CLEAR_COLOR,
         ui_overlay: Some(&packet.ui_overlay),

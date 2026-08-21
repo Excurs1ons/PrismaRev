@@ -275,8 +275,12 @@ impl App {
                 }
                 self.start_audio_decode_thread();
             },
-            Subsystem::Network | Subsystem::Scene | Subsystem::Asset => todo!(),
-            Subsystem::AI | Subsystem::UI | Subsystem::Animation => todo!()
+            Subsystem::Network | Subsystem::Scene | Subsystem::Asset => {
+                log::warn!("{:?} subsystem requested — not yet implemented, ignoring", subsystem)
+            }
+            Subsystem::AI | Subsystem::UI | Subsystem::Animation => {
+                log::warn!("{:?} subsystem requested — not yet implemented, ignoring", subsystem)
+            }
         }
         self
     }
