@@ -12,7 +12,7 @@ loading — and has become the primary bottleneck:
   milliseconds reading `.pak` files, deserializing, and uploading to GPU.
 - **Audio decode**: `decoder::decode_file()` is synchronous file I/O + symphonium
   decoding. Fine for short clips, blocking for streaming audio.
-- **Physics**: Not yet implemented, but adding a dedicated physics simulation
+- **Physics**: 已实现, but adding a dedicated physics simulation
   on the main thread would further compound the bottleneck.
 
 Goal: Move blocking work off the main thread with minimal architectural
@@ -84,7 +84,7 @@ enum IOResult {
 
 `ensure_platform()` calls `resolve_scene_assets()` before the render thread
 starts, because it needs both `&mut World` and `&mut GraphRenderer` on the
-same thread. The IO thread is not yet running at this point.
+same thread. The IO thread is 已 running at this point.
 
 **Runtime path** (new):
 

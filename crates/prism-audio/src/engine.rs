@@ -369,7 +369,7 @@ impl AudioEngine {
         }
     }
 
-    /// 设置主音量（0.0–1.0）。影响后续播放的声音。
+    /// 设置主音量（0.0–1.0）。影响下一步扩展播放的声音。
     pub fn set_master_volume(&mut self, volume: f32) {
         self.master_volume = volume.clamp(0.0, 1.0);
     }

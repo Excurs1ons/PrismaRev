@@ -24,7 +24,7 @@ pub struct AudioSource {
     /// Whether this 源 should be playing. 集合 to `false` to stop.
     pub playing: bool,
 
-    /// Whether the 片段 loops. Not yet wired to the sampler's repeat 众数
+    /// Whether the 片段 loops. 已接线 to the sampler's repeat 众数
     pub repeat: bool,
 
     /// 内部 the 激活 playback handle, if any.

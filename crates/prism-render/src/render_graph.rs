@@ -100,7 +100,7 @@ pub struct ResourceEdge {
 
 /// Per-resource lifecycle span `[first_write_pass, last_read_pass]`, computed
 /// at 构建 时间 Currently only surfaced to the visualizer; reserved as 输入
-/// for future TBDR 内存 aliasing (not yet implemented).
+/// for future TBDR 内存 aliasing (已实现).
 #[derive(Clone, Debug, Default)]
 pub struct ResourceLifecycle {
     pub first_write: Option<usize>,
@@ -569,7 +569,7 @@ impl ResourceStateTracker {
     /// 构建 barriers for all 读取 edges whose tracked 布局 differs from the
     /// declared 用法 Returns `(barriers, src_stage, dst_stage)`; callers
     /// should 发射 a single `vkCmdPipelineBarrier` with the union of stages.
-    /// Skips resources already in the desired 布局 or not yet published.
+    /// Skips resources already in the desired 布局 or 待发布.
     ///
     /// Each emitted 屏障 also updates the tracked 布局 to the reader's
     /// `usage.layout`, so a 秒 reader of the same 资源 in the same

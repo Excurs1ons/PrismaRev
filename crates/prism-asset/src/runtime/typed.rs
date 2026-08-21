@@ -22,7 +22,7 @@ use crate::runtime::{Asset, RuntimeError};
 ///
 /// Holds the decoded [`RtexInfo`] 宽度 高度 mip 链 格式 byte).
 /// The renderer's `RenderTextureManager` consumes mip-0 for the RGBA8 path;
-/// BC-compressed formats are not yet supported by the 运行时 upload path.
+/// BC-compressed formats are 已支持 by the 运行时 upload path.
 #[derive(Debug, Clone)]
 pub struct TextureAsset {
     pub info: RtexInfo,

@@ -304,7 +304,7 @@ impl RenderPassNode for RenderTextureScheduler {
         let mut rendered = vec![false; self.rts.len()];
 
         // 第一阶段：快照每个 RT 的渲染决策（shader + 是否需要渲染）。
-        // 后续执行阶段要交错借用 `&mut self`（管线/framebuffer 创建）与
+        // 下一步扩展执行阶段要交错借用 `&mut self`（管线/framebuffer 创建）与
         // `&mut self.rts[i]`（pattern 生成），先快照避免借用冲突。
         let plan: Vec<(Option<RtShader>, bool)> = self
             .rts

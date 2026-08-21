@@ -17,7 +17,7 @@ shaders/slang/gizmo.slang      # = gizmo.vert + gizmo.frag
 shaders/slang/overlay.slang    # = overlay.vert + overlay.frag
 shaders/slang/bindless.slang   # PBR 的 bindless 变体 (见第二节)
 shaders/compile.sh             # slangc 编译脚本 (.spv + reflection JSON)
-shaders/reflection/*.json      # 反射 JSON (桌面 slangc 生成；仓库内是占位样例)
+shaders/reflection/*.json      # 反射 JSON (桌面 slangc 生成；仓库内是预留样例)
 xtask/                         # 反射 JSON -> Rust 绑定 codegen 工具
 crates/prism-render/src/shader_bindings.rs  # @generated 绑定常量
 ```
@@ -46,7 +46,7 @@ Push constant 大小：mesh=64, pbr=92, gizmo=64, bindless=96。**与 Rust `#[re
 # 2) 编译 shader -> .spv + 反射 JSON
 export SLANGC=/path/to/slangc      # 或让 slangc 在 PATH 上
 bash shaders/compile.sh
-#   产出 shaders/*.spv 和 shaders/reflection/*.json（覆盖仓库里的占位样例）
+#   产出 shaders/*.spv 和 shaders/reflection/*.json（覆盖仓库里的预留样例）
 
 # 3) 从真实反射重新生成 Rust 绑定
 cd xtask
@@ -56,7 +56,7 @@ cargo run --bin shader-bindgen -- ../shaders/reflection ../crates/prism-render/s
 cd .. && cargo test -p prism-render
 ```
 
-> `shaders/reflection/*.json` 目前是**手写占位样例**（结构与 slangc `-reflection-json` 输出一致），让 xtask 和 CI 在没有 slangc 时也能跑通端到端。真实 slangc 产出会覆盖它们；若字段名有出入，调整 `xtask/src/shader_bindgen.rs` 的 serde 结构即可。
+> `shaders/reflection/*.json` 目前是**手写预留样例**（结构与 slangc `-reflection-json` 输出一致），让 xtask 和 CI 在没有 slangc 时也能跑通端到端。真实 slangc 产出会覆盖它们；若字段名有出入，调整 `xtask/src/shader_bindgen.rs` 的 serde 结构即可。
 
 ### xtask 为什么是独立 crate（不是 build.rs）
 - `build.rs` 每次 `cargo build` 都跑 → 会强制依赖 slangc → **手机端构建直接崩**。
@@ -86,8 +86,8 @@ Flags：`PARTIALLY_BOUND | UPDATE_AFTER_BIND | VARIABLE_DESCRIPTOR_COUNT`，配�
 当前 bindless 表已创建、IBL cubemap 已注册，但 **PBR pipeline 仍走老的 set-1 路径**。要切到 bindless：
 
 1. **编 bindless shader**：`compile.sh` 已包含 `bindless.slang`，产出 `bindless_pbr.frag.spv`（确认脚本里的 entry/stage）。
-2. **建 bindless PBR pipeline**：pipeline layout 用 `[descriptor_layout.layout(set0), <未用>(set1 占位或跳过), bindless.layout(set2)]`。
-   - 注意：Vulkan set 索引必须连续或用空 layout 填。若想让 bindless 表在 set 2，set 1 需要一个空 descriptor set layout 占位；或把 bindless 表改到 set 1（同时改 `bindless.slang` 的 `[[vk::binding(0,1)]]`）。**推荐后者**（少一个空集）。
+2. **建 bindless PBR pipeline**：pipeline layout 用 `[descriptor_layout.layout(set0), <未用>(set1 预留或跳过), bindless.layout(set2)]`。
+   - 注意：Vulkan set 索引必须连续或用空 layout 填。若想让 bindless 表在 set 2，set 1 需要一个空 descriptor set layout 预留；或把 bindless 表改到 set 1（同时改 `bindless.slang` 的 `[[vk::binding(0,1)]]`）。**推荐后者**（少一个空集）。
 3. **push constant** 换成 `PbrBindlessPushConstants`（range size 96），填入 `env_handle = renderer.ibl_bindless_handle().0`。
 4. **每帧绑定** bindless set：`cmd_bind_descriptor_sets(..., set_index, &[table.set], &[])`，替代原来绑 `ibl.descriptor_set`。
 5. **验证**：桌面跑起来对比 IBL 反射/高光是否与老路径一致；真机（Android Vulkan）确认设备支持这些 descriptor-indexing 子特性（多数新 GPU 支持，老 Mali/Adreno 可能缺 update-after-bind，需要 fallback 到老路径）。

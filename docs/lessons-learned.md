@@ -166,7 +166,7 @@ Vulkan 渲染循环的核心是**同步原语的正确配对**。最容易出错
 **问题**：反复改 `scene_bindless.slang` 的 IBL 常量，运行现象纹丝不动（"仍然灰白"）。
 
 **原因（按顺序排查）**：
-1. **shader 源文件名/编译脚本错误让 `.spv` 根本没重编**：`compile.sh` 有 `set -euo pipefail`，中途某个 shader 源文件名不对（如 `scene.slang` 实际是 `scene.vert.slang`/`scene.frag.slang`）会让脚本提前 `exit`，**后续 shader（含 bindless）没被重新生成**，磁盘上还是改之前的旧 `.spv`。profile 名字也要对：当前 slangc 接受 `spirv_1_5`，拒绝旧名 `sspirv_1_5`。
+1. **shader 源文件名/编译脚本错误让 `.spv` 根本没重编**：`compile.sh` 有 `set -euo pipefail`，中途某个 shader 源文件名不对（如 `scene.slang` 实际是 `scene.vert.slang`/`scene.frag.slang`）会让脚本提前 `exit`，**下一步扩展 shader（含 bindless）没被重新生成**，磁盘上还是改之前的旧 `.spv`。profile 名字也要对：当前 slangc 接受 `spirv_1_5`，拒绝旧名 `sspirv_1_5`。
 2. **改错了 shader 文件**：sponza 走的是 `GraphRenderer` → `ForwardPass`（`scene_bindless.frag.spv`）直连 swapchain。`GBufferPass`/`LightingPass`/`PostPass` 当前**没被 GraphRenderer 连接**，改 `lighting.slang`/`post.slang` 全是无效功。
 3. **`include_bytes!` 是编译期打进二进制的**：必须 `cargo build` 重编 Rust 才能拾取新 `.spv`。
 
@@ -265,7 +265,7 @@ VUID-VkPipelineColorBlendStateCreateInfo-pAttachments-00605
 **原因**：SkyboxPass 和 Gizmo 都在 ForwardPass 的 render pass 里绘制（`ForwardPass::execute` 先画 skybox，最后画 gizmo）。它们各自创建 pipeline 时只声明 1 个 blend attachment（`color_attachment_count: None` -> 默认 1），但 render pass 的 subpass 现在有 2 个 color attachment。Vulkan 规定：pipeline 的 `VkPipelineColorBlendStateCreateInfo::attachmentCount` 必须等于 subpass 的 `colorAttachmentCount`。原来 1 个 attachment 时凑巧一致；改 MRT 后就破了。
 
 **教训**：
-- **render pass 的 attachment 数是所有"在其中绘制的"pipeline 的公约数**。改 ForwardPass 的 attachment 数，必须同步改 SkyboxPass、Gizmo 的 blend state 数，哪怕它们只写 attachment 0（attachment 1 的 `colorWriteMask = 0` 即可"占位不写"）。
+- **render pass 的 attachment 数是所有"在其中绘制的"pipeline 的公约数**。改 ForwardPass 的 attachment 数，必须同步改 SkyboxPass、Gizmo 的 blend state 数，哪怕它们只写 attachment 0（attachment 1 的 `colorWriteMask = 0` 即可"预留不写"）。
 - 不想每个 pipeline 都写满全量 blend state 的话，启用 `independentBlend` feature（`PhysicalDeviceFeatures::independent_blend`，桌面+现代 Android 通用支持）就能让每个 attachment 用不同 blend config。本项目选了"启用 feature + 各 pipeline 写满"双保险。
 - `GraphicsPipeline::new`（`pipeline.rs`）原本只支持 0/1 个 attachment（`slice::from_ref`），为 MRT 扩展成接受 `color_blend_attachments: Option<&[...]>` 切片。
 
@@ -324,7 +324,7 @@ vkQueueSubmit(): command buffer expects VkImage ... to be in layout SHADER_READ_
 
 **教训**：
 - **跨帧依赖的 image（上一帧写、本帧读）创建后立刻 transition 到"读"layout**，让 descriptor 声明成立。GTAO 在 `new` 和 `recreate_target` 里用一次性 command buffer 把两个 AO image 从 `UNDEFINED` 转到 `SHADER_READ_ONLY_OPTIMAL`。
-- 被转的 image 后续被 GTAO render pass 写时，render pass 的 `initial_layout = UNDEFINED` 容忍任何 incoming layout（配合 `LOAD_OP_CLEAR`），所以预 transition 不会和后续写入冲突。
+- 被转的 image 下一步扩展被 GTAO render pass 写时，render pass 的 `initial_layout = UNDEFINED` 容忍任何 incoming layout（配合 `LOAD_OP_CLEAR`），所以预 transition 不会和下一步扩展写入冲突。
 - 对比：PostPass 读的 HDR color image 不需要预 transition -- 它总是被 ForwardPass 先写（`COLOR_ATTACHMENT_OPTIMAL`）再被 PostPass 读，第一帧也是 scene 先跑。只有"读"发生在"写"之前的跨帧 image 才需要预 transition。
 
 ## 25. Slang 没有 `gl_FragCoord`，用 `SV_Position` input
@@ -354,7 +354,7 @@ vkQueueSubmit(): command buffer expects VkImage ... to be in layout SHADER_READ_
 
 **教训**：
 - **跨 pass 数据依赖且有时序矛盾时，1 帧延迟是标准解法**。双缓冲 AO image（按 frame-in-flight），scene 读旧帧、GTAO 写新帧，互不干扰。
-- 镜头快速移动时 AO 会"拖影"一帧 -- 可接受；后续可加 temporal filter 抹平。
+- 镜头快速移动时 AO 会"拖影"一帧 -- 可接受；下一步扩展可加 temporal filter 抹平。
 - 半分辨率 GTAO + scene 用 linear sampler 上采样到全分辨率，GTAO 本身是低频信号，轻微模糊可接受。遵循 `DESIGN.md` 2.1 mobile-first（heavy pass 半分辨率，RayQuery 已有 `scale=0.5` 先例）。
 
 ## 28. ForwardPass 改渲染到中间 HDR target + 拆 PostPass：比想象中改动大
@@ -485,7 +485,7 @@ mesh upload (CPU):        168ms   (9%)
 
 剩下的大头已经是真活儿，不是冗余拷贝。
 
-### 31.6 后续优化方向（未做，按性价比排序）
+### 31.6 下一步扩展优化方向（未做，按性价比排序）
 
 0. **GPU 块压缩上传（最高性价比，根治内存）**：当前所有纹理按 `R8G8B8A8_UNORM` 上传，4.5 GB device-local + 4.5 GB host staging 是这套资产内存爆的根本原因（§15 已记录这是 PBR 色彩正确性缺陷）。改成 BC7（0.5 bytes/pixel）上传后：GPU 纹理 ~1.1 GB，staging ~1.1 GB，CPU 峰值砍到 ~2.3 GB。需要：(a) glTF 加载阶段对 RGBA8 做 BC7 编码（CPU 侧，可用 `bc7enc` crate）；(b) `TextureUploadInput` / `BatchUploader::upload_image` 支持 BC7 格式 + 不再生成 mip blit（BC 压缩后再做 blit 要重新编码）。**这条比下面的 decode images 优先级更高**，因为它解决的是内存（GB 级），不只是加载时间（秒级）。注意 albedo/emissive 应上传为 sRGB variant（`BC7_SRGB`），normal/MR 保持 UNORM（§15 的色彩空间缺陷一起修）。
 
@@ -497,7 +497,7 @@ mesh upload (CPU):        168ms   (9%)
 3. **batch upload submit+wait 522ms（低性价比）**：4.5 GB 像素 + 100 MB mesh 过 PCIe，已接近物理带宽上限。除非上 async / timeline semaphore 让上传和首帧渲染重叠（本项目 `BatchUploader` 注释里提到的 follow-up），否则压不动。改 async 是架构级改动。
 4. **懒加载 / 流式上传（架构级，最彻底）**：把"全量加载完再渲染"改成"先加载 mipmap 0 的低分辨率 + 首帧立即可见，后台流式补全高 mip"。需要改 `SceneStore` 的所有权模型和渲染管线的"纹理就绪"判定，工作量大，适合里程碑级重构。
 
-**当前 ~1.8s 对这套 4.5 GB RGBA8 极端资产已经合理（真实游戏场景会小得多，见 §31.7）**。本次的核心教训是 31.1：**先拆日志定位，再按规模指标找冗余拷贝**，不要凭感觉猜瓶颈。`to_rgba8` 的零拷贝快路径 + drain 上传是两个通用的"GB 级数据搬运"反模式修复，后续加新资源类型（音频、动画）时直接套用。
+**当前 ~1.8s 对这套 4.5 GB RGBA8 极端资产已经合理（真实游戏场景会小得多，见 §31.7）**。本次的核心教训是 31.1：**先拆日志定位，再按规模指标找冗余拷贝**，不要凭感觉猜瓶颈。`to_rgba8` 的零拷贝快路径 + drain 上传是两个通用的"GB 级数据搬运"反模式修复，下一步扩展加新资源类型（音频、动画）时直接套用。
 
 ### 31.7 测试资产不代表真实游戏负载（重要归因）
 
@@ -513,7 +513,7 @@ mesh upload (CPU):        168ms   (9%)
 
 gltf 引用的子集是 72 张全 4K（1.89 GB PNG -> 4.5 GB RGBA8），已经是极端情况。**没有任何真实游戏会给 Sponza 全 4K 纹理** -- Intel Sponza 2022 是为路径追踪参考图做的 4K 扫描资产，不是为实时渲染设计的。
 
-**真实游戏如何控制纹理内存**（引擎后续应支持，按优先级）：
+**真实游戏如何控制纹理内存**（引擎下一步扩展应支持，按优先级）：
 
 1. **GPU 块压缩（BC1/BC3/BC7/BCN）** -- §31.6 第 0 条已列。4096×4096 RGBA8 = 64 MB，BC7 = 16 MB（4:1），BC1 = 8 MB（8:1，无 alpha）。这是真实游戏纹理内存控制在 GB 级以下的根本手段。本项目当前全 RGBA8 上传是已知缺陷（§15），不只是色彩问题，也是内存问题。
 2. **mip chain 流式加载**：只加载可视距离需要的 mip。4K 纹理完整 mip chain = 21 MB，但只有最近物体的 1-2 张需要 4K，远处用 1K/512。真实游戏按"表面离玩家多近"动态选 mip，CPU/GPU 内存峰值远低于全量加载。
@@ -523,8 +523,8 @@ gltf 引用的子集是 72 张全 4K（1.89 GB PNG -> 4.5 GB RGBA8），已经�
 **对本项目的实际影响**：
 
 - 引擎本身**没有内存泄漏或浪费**（§31.2/§31.3 的冗余拷贝已修）。4.5 GB 是这套资产解压后的真实大小，任何引擎加载它都会面临同样的像素数据量。
-- 但引擎**缺真实游戏必备的纹理管线**：块压缩、流式加载、分辨率分级都没有。这是后续里程碑的工作，不是 bug。
-- **测试建议**：后续性能基线应该用 Crytek Sponza 或自制的"混合分辨率"场景，而不是 Intel Sponza 2022，否则优化决策会被极端资产带偏（例如为了 4.5 GB 去做 suballocator，但真实场景 0.4 GB 根本不需要）。
+- 但引擎**缺真实游戏必备的纹理管线**：块压缩、流式加载、分辨率分级都没有。这是下一步扩展里程碑的工作，不是 bug。
+- **测试建议**：下一步扩展性能基线应该用 Crytek Sponza 或自制的"混合分辨率"场景，而不是 Intel Sponza 2022，否则优化决策会被极端资产带偏（例如为了 4.5 GB 去做 suballocator，但真实场景 0.4 GB 根本不需要）。
 
 **教训**：性能优化的结论要和测试资产绑定。用极端资产（Intel Sponza 2022 全 4K）得到的瓶颈分布，不能直接外推到生产场景。每次记录耗时数字时，旁边要标明资产规模（"72 张 4K = 4.5 GB RGBA8"），否则后人会误以为"引擎加载 Sponza 要 1.8s"是普遍结论，而实际 Crytek Sponza 大概几百毫秒就进去了。
 
@@ -543,7 +543,7 @@ gltf 引用的子集是 72 张全 4K（1.89 GB PNG -> 4.5 GB RGBA8），已经�
 
 #### 32.2 磁盘缓存设计
 
-**核心思路**：将 CPU 卷积结果缓存到 `assets/ibr/` 目录，后续启动跳过计算直接加载 f32 原始数据回 `Vec<f32>`，Vulkan 上传管线（f16 转换 + staging buffer + submit）保持不变。
+**核心思路**：将 CPU 卷积结果缓存到 `assets/ibr/` 目录，下一步扩展启动跳过计算直接加载 f32 原始数据回 `Vec<f32>`，Vulkan 上传管线（f16 转换 + staging buffer + submit）保持不变。
 
 **缓存 key 方案**：
 
@@ -569,7 +569,7 @@ gltf 引用的子集是 72 张全 4K（1.89 GB PNG -> 4.5 GB RGBA8），已经�
 | 存储格式 | f32 原始数组（非 f16） | 写回时直接可用，不需转换；28MB 可接受 |
 | Hash 算法 | SipHash-1-3 而非 FNV/SHA | Rust std 内置，确定性，碰撞概率可忽略 |
 | 缓存粒度 | 逐文件（9 个文件）而非单一大包 | 增量失效：换 HDR 只重建 env 相关，保留 BRDF LUT |
-| 加载时机 | 同步阻塞（startup） | 当前 IBL 必须就绪才能渲染第一帧；异步后续 PR |
+| 加载时机 | 同步阻塞（startup） | 当前 IBL 必须就绪才能渲染第一帧；异步下一步扩展 PR |
 | 错误处理 | 任何 I/O 失败回退到重新计算 | 幂等：计算结果与缓存内容一致 |
 
 **为什么不用更复杂的方案**：
@@ -600,7 +600,7 @@ gltf 引用的子集是 72 张全 4K（1.89 GB PNG -> 4.5 GB RGBA8），已经�
 
 6. **"缓存失效"不是问题，依赖关系才是**：BRDF LUT 零依赖→永远有效；env 数据只依赖 .hdr 内容→内容 hash 驱动失效。不存在"我改了配置但缓存没刷新"的歧义。
 
-#### 32.6 后续方向（不在本次范围）
+#### 32.6 下一步扩展方向（不在本次范围）
 
 - **skybox 组件化**：将 HDR + 预计算 IBL 数据 + BRDF LUT 打包为一个可复用的 skybox 资源组件（ECS 或 asset），支持运行时切换环境贴图而不用重建 `IblResources`。
 - **GPU 卷积**：辐照度和预滤波可以用 compute shader 在 GPU 上完成（~5-10ms vs CPU ~900ms），并直接生成 Vulkan image 而非 CPU f32 staging，省掉 f16 转换 + 上传步骤。

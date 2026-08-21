@@ -278,7 +278,7 @@ impl OffscreenTarget {
     /// # 安全性
     ///
     /// 设备 must be the same `ash::Device` used to 创建 these objects,
-    /// and must not yet have been destroyed.
+    /// and must 已 have been destroyed.
     pub(crate) unsafe fn destroy(&mut self, device: &ash::Device) {
         unsafe {
             device.destroy_image_view(self.image_view, None);

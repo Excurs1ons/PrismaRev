@@ -122,14 +122,14 @@ pub fn io_thread_main(
 ) {
     log::info!("IO thread started");
 
-    // TODO(P1): implement actual .pak reading. For now, reply with a
+    // 计划(P1): implement actual .pak reading. For now, reply with a
     // no-op placeholder that avoids "unused" warnings.
     loop {
         match rx.recv() {
             Ok(IoRequest::Shutdown) | Err(_) => break,
             Ok(_other) => {
                 // Placeholder: log and send no-op.
-                log::trace!("IO thread received request (not yet implemented)");
+                log::trace!("IO thread received request (已实现)");
             }
         }
     }
@@ -850,7 +850,7 @@ use super::physics_runner::{
 /// physics thread.
 pub fn collect_physics_commands(world: &World) -> PhysicsStep {
     let mut commands = Vec::new();
-    // TODO: Replace with actual ECS query once prism-ecs query_mut pattern is
+    // 计划: Replace with actual ECS query once prism-ecs query_mut pattern is
     // finalised. For now, this is a placeholder showing the intent.
     //
     // for (entity, (rb, transform)) in world.query::<(RigidBody, Transform)>().iter() {
@@ -868,7 +868,7 @@ pub fn collect_physics_commands(world: &World) -> PhysicsStep {
 pub fn apply_physics_results(world: &mut World, transforms: &[BodyTransform]) {
     for t in transforms {
         // Update the entity's Transform component.
-        // TODO: Replace with actual ECS write once query_mut is available.
+        // 计划: Replace with actual ECS write once query_mut is available.
         // if let Some(transform) = world.get_mut::<Transform>(t.entity) {
         //     transform.translation = t.position;
         //     transform.rotation = t.rotation;

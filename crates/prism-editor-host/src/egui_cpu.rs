@@ -56,7 +56,7 @@ impl EguiCpu {
     }
 
     /// Run the egui UI 闭包 tessellate shapes, and return an [`EguiFrame`]
-    /// 供渲染线程使用。同时缓存 [`egui::PlatformOutput`] 供后续
+    /// 供渲染线程使用。同时缓存 [`egui::PlatformOutput`] 供下一步扩展
     /// application via [`apply_platform_output`].
     pub fn run_ui(&mut self, window: &Window, mut ui: impl FnMut(&mut egui::Ui)) -> EguiFrame {
         self.ensure_state(window);

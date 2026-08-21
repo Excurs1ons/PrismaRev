@@ -33,7 +33,7 @@
                          └─ [GI 模式] ── SHARC cache:
                                        · Off     → IBL 仅环境
                                        · Update  → 稀疏 path 写缓存(画面=Off)
-                                       · On      → 后续 bounce 查缓存
+                                       · On      → 下一步扩展 bounce 查缓存
 ```
 
 **RenderGraph 节点(模块化,可插拔):**
@@ -120,7 +120,7 @@ struct SharcPackedData { float16_t4 radianceData; uint sampleData; uint sampleDa
 ```
 SHARC_MODE_OFF     = 0  // 完全不碰 SHARC buffer,走 IBL
 SHARC_MODE_UPDATE  = 1  // 只维护缓存,画面=Off
-SHARC_MODE_ON      = 2  // 后续 bounce 查缓存
+SHARC_MODE_ON      = 2  // 下一步扩展 bounce 查缓存
 SHARC_PHASE_NONE/UPDATE/RESOLVE  // 同一条 compute dispatch 分阶段
 ```
 

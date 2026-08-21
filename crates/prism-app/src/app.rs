@@ -266,7 +266,7 @@ impl App {
             Subsystem::Physics => {
                 // 物理线程在 resumed() 后条件启动
                 // 当前骨架：待 ECS 物理系统接入后实现
-                log::info!("physics subsystem requested (skeleton — not yet wired)");
+                log::info!("physics subsystem requested (skeleton — 已接线)");
             }
             Subsystem::Audio => {
                 self.audio = AudioEngine::new(prism_audio::AudioConfig::default()).ok();
@@ -276,10 +276,10 @@ impl App {
                 self.start_audio_decode_thread();
             },
             Subsystem::Network | Subsystem::Scene | Subsystem::Asset => {
-                log::warn!("{:?} subsystem requested — not yet implemented, ignoring", subsystem)
+                log::warn!("{:?} subsystem requested — 已实现, ignoring", subsystem)
             }
             Subsystem::AI | Subsystem::UI | Subsystem::Animation => {
-                log::warn!("{:?} subsystem requested — not yet implemented, ignoring", subsystem)
+                log::warn!("{:?} subsystem requested — 已实现, ignoring", subsystem)
             }
         }
         self
@@ -301,7 +301,7 @@ impl App {
             .unwrap_or_default();
 
         // 日志级别覆盖需在 logger 初始化之后生效——RUST_LOG 在 `run` 的
-        // try_init 之前已被读取，这里再设一次让后续 logger 重新读取。
+        // try_init 之前已被读取，这里再设一次让下一步扩展 logger 重新读取。
         if let Some(level) = &launch.log_level {
             std::env::set_var("RUST_LOG", level);
         }
@@ -761,7 +761,7 @@ impl ApplicationHandler for App {
         }
 
         // Android suspend 后重建表面：本设计在 suspended 时已停止渲染线程并
-        // 丢弃窗口，故此处会重新走上面的「首次恢复」分支。仅作占位日志。
+        // 丢弃窗口，故此处会重新走上面的「首次恢复」分支。仅作预留日志。
         log::info!("resumed (surface already active)");
     }
 

@@ -8,7 +8,7 @@
 //! `path` 只是路径清单（`.pak.meta.json`）中的查找键，先解析为 `AssetId`，
 //! 再由 [`ResourceManager`] 读取 RSCN 字节——不做任何磁盘文件回退。
 //! 早期版本由 `Engine` 直接扫描 manifest 加载场景，现收拢到本系统
-//! （`Engine::init_scene` 只做转发）——这是 todo「场景加载应该由场景系统
+//! （`Engine::init_scene` 只做转发）——这是 计划「场景加载应该由场景系统
 //! 负责」的落地。
 //!
 //! # 存档

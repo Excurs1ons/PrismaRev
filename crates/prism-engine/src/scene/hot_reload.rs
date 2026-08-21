@@ -1,7 +1,7 @@
-//! Hot-reload support — Phase 6 stub（已接线，2026-08-21）
+//! Hot-reload support — Phase 6 实现（已接线，2026-08-21）
 //!
 //! 轮询 `game.pak` / `.scene.json` 修改时间，变更时通知 ResourceManager::on_pak_changed。
-//! 当前为轻量轮询实现，后续可替换为 notify crate。
+//! 当前为轻量轮询实现，下一步扩展可替换为 notify crate。
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};

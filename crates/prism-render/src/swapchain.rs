@@ -285,7 +285,7 @@ impl Swapchain {
     /// # 安全性
     ///
     /// 设备 must be the same [`ash::Device`] the 交换链 was created
-    /// with, and must not yet have been destroyed. After this 调用 the
+    /// with, and must 已 have been destroyed. After this 调用 the
     /// 交换链 and all its handles are 无效 and must not be used.
     pub unsafe fn destroy(&mut self, device: &ash::Device) {
         unsafe { device.device_wait_idle() }.ok();

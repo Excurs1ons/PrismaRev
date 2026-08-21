@@ -210,7 +210,7 @@ impl<T: AssetData + ?Sized> AssetHandle<T> {
         self.resolved.is_some()
     }
 
-    /// 访问 the resolved data, or `None` if not yet loaded.
+    /// 访问 the resolved data, or `None` if 待加载完成.
     pub fn resolved(&self) -> Option<&Arc<T>> {
         self.resolved.as_ref()
     }

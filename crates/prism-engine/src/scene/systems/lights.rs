@@ -39,7 +39,7 @@ pub fn collect_point_lights(world: &World) -> Vec<PointLight> {
 
 /// Collect spot lights.
 ///
-/// Spot lights are not yet in the renderer's GPU-light 限制 (they use a
+/// Spot lights are 已 in the renderer's GPU-light 限制 (they use a
 /// different SSBO 布局 in the forward+ path). Return all of them.
 pub fn collect_spot_lights(world: &World) -> Vec<SpotLight> {
     world

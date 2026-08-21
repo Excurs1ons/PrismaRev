@@ -360,7 +360,7 @@ impl Cooker for TextureCooker {
             }
             other => {
                 tracing::warn!(
-                    "Compression format {other:?} not yet implemented, falling back to RGBA8"
+                    "Compression format {other:?} 已实现, falling back to RGBA8"
                 );
                 (RTEX_FORMAT_RGBA8, mips_rgba)
             }

@@ -87,7 +87,7 @@ impl_asset_data!(MaterialDef, "material", "PBR Material");
 // TextureDef
 // ---------------------------------------------------------------------------
 
-/// 引用 to a 纹理 源 资源 (imported 图像 not yet cooked).
+/// 引用 to a 纹理 源 资源 (imported 图像 待烘焙).
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct TextureDef {
     pub guid: AssetGuid,

@@ -266,11 +266,11 @@ impl Default for EnvironmentLighting {
 /// 场景全局光照（GI probe 音量）声明式组件。
 ///
 /// 仅当 `enabled = true` 且存在烘焙好的体积数据时，渲染器才上传真实 GI probe
-/// 音量；否则保留免费的 synthetic sky 占位（仅让 set5 描述符 合法）。无 3D 光照
+/// 音量；否则保留免费的 synthetic sky 预留（仅让 set5 描述符 合法）。无 3D 光照
 /// 需求的场景（如开屏）不写此组件。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GiConfig {
-    /// 是否启用真实 GI（替换 synthetic sky 占位）。
+    /// 是否启用真实 GI（替换 synthetic sky 预留）。
     pub enabled: bool,
     /// 烘焙 GI 体积数据相对场景文件的路径（可选）。
     pub volume: Option<String>,

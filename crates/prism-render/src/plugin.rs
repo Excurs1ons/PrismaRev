@@ -1,7 +1,7 @@
-//! Render Plugin 模型（DESIGN §8.4 PR-L3 占位）
+//! Render Plugin 模型（DESIGN §8.4 PR-L3 预留）
 //!
 //! 每个 Plugin 在 setup 时向 RenderGraph 注册 pass 节点，在 update/prepare/render
-//! 阶段被 App 调用。当前提供 trait 定义 + 空白实现，后续将 Shadow/GTAO 等迁移为 Plugin。
+//! 阶段被 App 调用。当前提供 trait 定义 + 空白实现，下一步扩展将 Shadow/GTAO 等迁移为 Plugin。
 
 use crate::render_graph::{RenderGraphBuilder, RenderSettings};
 

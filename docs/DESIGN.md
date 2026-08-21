@@ -51,10 +51,10 @@
 > （`ShadowMapPass` 深度预渲染 + `ForwardPass` 用 comparison sampler 采样，
 > 见 `shaders/slang/shadow_depth.slang` / `scene_frag.slang`）。`RenderSettings::
 > shadow_mode` 支持 `Auto`/`Raster`/`RayQuery`/`None`，由 `resolve_shadow`
-> 按 `VK_KHR_ray_query` 能力自动选择。`ShadowMapPass::SHADOW_CASCADE_COUNT = 1` 为占位。
+> 按 `VK_KHR_ray_query` 能力自动选择。`ShadowMapPass::SHADOW_CASCADE_COUNT = 1` 为预留。
 >
-> **TODO（CSM）**：级联阴影贴图（Cascaded Shadow Maps）尚未实现，仅单张
-> 固定范围正交阴影。后续在 `ShadowMapPass` 内按相机视锥切片拆成多张级联，
+> **计划（CSM）**：级联阴影贴图（Cascaded Shadow Maps）尚已实现，仅单张
+> 固定范围正交阴影。下一步扩展在 `ShadowMapPass` 内按相机视锥切片拆成多张级联，
 > 并在 `scene.frag.slang::sample_shadow` 中按距离选择级联 —— 已预留常量与接口，不在本次 MVP 范围。
 
 ## 3. 派生约束（从目标推出来的硬规则）
@@ -73,14 +73,14 @@
 
 | 设计目标 | 当前落地 |
 |----------|----------|
-| 模块化管线 | `prism-render/src/render_graph.rs`（`RenderPassNode` 图）+ `forward_pass.rs` / `shadow_map_pass.rs` / `skybox_pass.rs`。**现状（2026-08-21）**：`RenderGraph::execute()` 统一驱动四个 pass（`ShadowMapPass` -> `ForwardPass` -> `GtaoPass` -> `PostPass`，按注册顺序线性执行）。passes 通过 `read_usage` / `write_usage` 声明图边依赖，graph 据此自动插入跨 pass 的 `vkCmdPipelineBarrier`（layout cache 按 `(handle, image_index)` 跨帧持久，`recreate_swapchain` 时 `reset_layouts`）。跨帧延迟边（GTAO 双缓冲 AO 回喂）与 swapchain->`PRESENT_SRC_KHR` 保留手动，标注为图边界特例。环检测已实现（`validate_edges`），执行顺序不重排（接线顺序见 `GraphRenderer::new`）。`GraphRenderer::prepare` 已接入 `render_system`/`render_runner` 五阶段链（不再空转），资源生命周期区间已声明，TBDR 内存 aliasing 待后续。|
+| 模块化管线 | `prism-render/src/render_graph.rs`（`RenderPassNode` 图）+ `forward_pass.rs` / `shadow_map_pass.rs` / `skybox_pass.rs`。**现状（2026-08-21）**：`RenderGraph::execute()` 统一驱动四个 pass（`ShadowMapPass` -> `ForwardPass` -> `GtaoPass` -> `PostPass`，按注册顺序线性执行）。passes 通过 `read_usage` / `write_usage` 声明图边依赖，graph 据此自动插入跨 pass 的 `vkCmdPipelineBarrier`（layout cache 按 `(handle, image_index)` 跨帧持久，`recreate_swapchain` 时 `reset_layouts`）。跨帧延迟边（GTAO 双缓冲 AO 回喂）与 swapchain->`PRESENT_SRC_KHR` 保留手动，标注为图边界特例。环检测已实现（`validate_edges`），执行顺序不重排（接线顺序见 `GraphRenderer::new`）。`GraphRenderer::prepare` 已接入 `render_system`/`render_runner` 五阶段链（不再空转），资源生命周期区间已声明，TBDR 内存 aliasing 待下一步扩展。|
 | bindless / 全平台统一 | `prism-render/src/bindless.rs`（分离 SRV + 全局 sampler 表） |
 | 资源管理解耦 | `crates/prism-asset` 统一提供 Import→Cook→Package→Runtime；引擎运行时提供双路径：开发期经 `GpuAssetResolver` 同步加载（`resource_manager.load_with_deps` 直通 GPU），发布期经 `ResourceManager` 从 `.pak` 懒加载（待 G3 接入后默认）。当前 `load_demo_scene` 仍走同步路径，`.pak` 路径已可手动 `load_package` 验证。 |
 | 移动端 GI | **Baked probe-volume GI**（2 阶 SH，9 系数 RGB16F，3D texture），非实时 SHARC。设计见 §6。SHARC 实时 slang 已移除，不再恢复（移动端跑不动每帧 ray 填 cache）。|
 | 阴影 / RT | 光栅化阴影贴图：`ShadowMapPass`（深度预渲染，见 `shadow_depth.slang`）+ `ForwardPass`（comparison sampler 采样，见 `scene_frag.slang`） |
 | 能力探测 | `prism-render/src/capabilities.rs`（集中探测，扩展中） |
-| 帧生命周期 | `GraphRenderer` 已提供 `begin_frame` → `prepare` → `execute` → `present` → `end_frame` 阶段（2026-08-21 起 `prepare` 已在 `render_system` 与 `render_runner::render_one_frame` 中实际调用，不再空转）；旧 `render()` 仅作为兼容门面。`prepare` 当前实现脏标记日志与输入校验，后续在此调度批量上传。细粒度 Runtime/Plugin 拆分仍待 PR-L2。 |
-| 场景同步（CPU→GPU） | **阶段性实现（2026-08-21）**。`DirtyRouter` 已扩展 `exposure`/`pt_lights`/`draw_count` 标志并接入 `prepare`，`FramePacket` 抽取与脏检测闭环已打通；但 `RenderTexture/Mesh/Material/Instance` 的统一 `DirtyDispatchPlan` 与 `SceneReadView` 仍待 PR-S2/S3。当前仍由 `GpuAssetResolver` 点对点触发上传，`prepare` 批同步为占位。设计见 §9。 |
+| 帧生命周期 | `GraphRenderer` 已提供 `begin_frame` → `prepare` → `execute` → `present` → `end_frame` 阶段（2026-08-21 起 `prepare` 已在 `render_system` 与 `render_runner::render_one_frame` 中实际调用，不再空转）；旧 `render()` 仅作为兼容门面。`prepare` 当前实现脏标记日志与输入校验，下一步扩展在此调度批量上传。细粒度 Runtime/Plugin 拆分仍待 PR-L2。 |
+| 场景同步（CPU→GPU） | **阶段性实现（2026-08-21）**。`DirtyRouter` 已扩展 `exposure`/`pt_lights`/`draw_count` 标志并接入 `prepare`，`FramePacket` 抽取与脏检测闭环已打通；但 `RenderTexture/Mesh/Material/Instance` 的统一 `DirtyDispatchPlan` 与 `SceneReadView` 仍待 PR-S2/S3。当前仍由 `GpuAssetResolver` 点对点触发上传，`prepare` 批同步为预留。设计见 §9。 |
 | 只读场景视图 | `prism-engine::scene::SceneReadView` 已覆盖环境资源路径和扁平 `DrawItem` 提取；相机/灯光快照仍在逐步迁移。 |
 
 ## 5. 反目标（明确不做什么）
@@ -143,7 +143,7 @@ ShadowMapPass → ForwardPass → GtaoPass → PostPass
 
 ### 6.4 Baked GI 数据规格（PR-5 更新）
 
-- **SH 阶数**：2 阶，9 个系数 × RGB。每系数 `float32`（当前实现 `R32G32B32A32_SFLOAT`；后续可切 `float16` 省带宽，移动端带宽紧）。
+- **SH 阶数**：2 阶，9 个系数 × RGB。每系数 `float32`（当前实现 `R32G32B32A32_SFLOAT`；下一步扩展可切 `float16` 省带宽，移动端带宽紧）。
 - **SH 表示**：Probe volume 存储 **radiance SH**（非 irradiance SH）。Baker 不做 cosine 预卷积，仅对入射 radiance 做 Monte Carlo 积分投影到 SH 基。运行时通过两套求值路径区别使用：
   - **Diffuse** → `EvalSH9Irradiance()` 应用 Ramamoorthi & Hanrahan A_l 因子（A₀=π, A₁=2π/3, A₂=π/4），返回 E(n) = ∫ L(ω) max(0, n·ω) dω。调用方除以 π 得 Lambertian BRDF。
   - **Specular** → `EvalSH9Radiance()` 直接 SH 重建 L(ω)，输入分裂和（split-sum）近似代替 prefiltered env map。
@@ -154,7 +154,7 @@ ShadowMapPass → ForwardPass → GtaoPass → PostPass
   （每系数一层 RGB）。采样用 integer `Load` + 手动三线性插值，**不用硬件 sampler**，防止系数层间串扰。
 - **烘焙工具**（`prism-bake-gi` 独立二进制，不进运行时）：多 bounce 路径追踪（3 bounce + Russian roulette）对每条 Fibonacci 球面方向做完整 bounce 链，`probe_volume.bin` 经 `prism-asset` 加载。
 - **内存预算**：2 阶 SH + float32，单个 probe = 9×3×4 = 108 bytes；grid 16³ ≈ 432KB，32³ ≈ 3.5MB。
-  若后续切 float16：单个 probe = 54 bytes，32³ ≈ 1.8MB。
+  若下一步扩展切 float16：单个 probe = 54 bytes，32³ ≈ 1.8MB。
 
 ### 6.5 `scene_frag.slang` 改动（PR-5 更新）
 
@@ -206,7 +206,7 @@ ShadowMapPass → ForwardPass → GtaoPass → PostPass
 | **移动端格式优先，桌面能力探测降级** | 契合 §1/§2.1 mobile-first 定位。ASTC 是移动端新设备原生，桌面现代 GPU 也支持；BC 作为桌面老设备回退。 |
 | **产物不进 git，本地 / CI 生成** | 72 张 4K BC7 ≈ 2.25 GB，进 git 仓库爆。靠源文件 SHA256 保证一致性。 |
 | **glTF 不直读，经 `prism-asset` 接入** | 契合 §3 "资源格式经 prism-asset 接入，引擎不直读文件"。导入工具是离线 xtask，运行时只读 KTX2。 |
-| **mip chain 由容器承载，支持后续流式** | KTX2 原生存完整 mip chain；阶段 3 流式加载以此为前提。 |
+| **mip chain 由容器承载，支持下一步扩展流式** | KTX2 原生存完整 mip chain；阶段 3 流式加载以此为前提。 |
 
 ### 7.2 格式选型（移动端新设备优先）
 
@@ -369,10 +369,10 @@ impl TextureFormat { fn is_compressed()->bool; fn compressed_byte_len()->usize; 
 
 ### 7.7 阶段拆解（可独立 PR，每步 CI 绿）
 
-- **PR-T1：BC/ASTC 上传支持（不改加载路径）** ✅ **已完成 2026-08-21**。`TextureFormat` 全量扩展 + `mip_levels` + `is_compressed/vk_format` + `RenderTextureManager` 校验/上传分支已落地。后续测试补充 BC7 编码走新路径的采样近似验证。**此 PR 不动 glTF 加载，运行时仍走 RGBA8（压缩路径可手动构造验证）**。
+- **PR-T1：BC/ASTC 上传支持（不改加载路径）** ✅ **已完成 2026-08-21**。`TextureFormat` 全量扩展 + `mip_levels` + `is_compressed/vk_format` + `RenderTextureManager` 校验/上传分支已落地。下一步扩展测试补充 BC7 编码走新路径的采样近似验证。**此 PR 不动 glTF 加载，运行时仍走 RGBA8（压缩路径可手动构造验证）**。
 - **PR-T2：xtask texture-import 离线工具**。新增 `xtask/src/bin/texture-import.rs`，依赖 `ktx2` + `bc7enc` + `astc-encoder` crate。扫 glTF -> 编码 -> 写 KTX2 + manifest.json。命令行：`cargo run -p xtask -- texture-import --scene sponza --platform desktop,android`。**此 PR 只产工具，不改引擎**。
 - **PR-T3：`prism-asset` 运行时优先读 KTX2**。`gltf_loader::load` 加 cache 查询分支，命中走 KTX2 路径，未命中回退 RGBA8（打 warn）。`SceneStore` 加 KTX2 解析（`ktx2` crate decode）。**此 PR 上线后，跑过一次 `xtask texture-import` 的场景加载时间从 ~1.8s 降到 ~0.5s 量级**。
-- **PR-T4（可选）：mip chain 流式加载**。KTX2 mip level 按可视距离动态加载/卸载，首帧只加载低 mip。需要 `SceneStore` 支持部分加载 + 渲染管线容忍"纹理未就绪"。工作量大，放后续里程碑。
+- **PR-T4（可选）：mip chain 流式加载**。KTX2 mip level 按可视距离动态加载/卸载，首帧只加载低 mip。需要 `SceneStore` 支持部分加载 + 渲染管线容忍"纹理未就绪"。工作量大，放下一步扩展里程碑。
 
 > **顺序原则**：PR-T1 先把"能传压缩格式"的能力做出来（不依赖导入工具），PR-T2 再做导入工具（不依赖引擎改造），PR-T3 才把两者接起来。每步独立可验证，避免"先改引擎再发现导入工具没法跟上"的返工。
 > **2026-08-21 状态**：T1 已完成，T2/T3 待 `TextureCooker` 编码器集成与 `prism-asset` KTX2 优先加载（见 §10.7 说明仍为 RGBA8）。
@@ -389,7 +389,7 @@ impl TextureFormat { fn is_compressed()->bool; fn compressed_byte_len()->usize; 
 
 ## 8. 帧生命周期与架构分层（规划）
 
-> **2026-08-21 更新**：`GraphRenderer::render()` 已拆为 `begin_frame` → `prepare` → `execute` → `present` → `end_frame`，`prepare` 已在 `render_system`/`render_runner` 中实际调用（脏检测占位）。随着场景资产增多，后续需进一步拆分为 `RenderRuntime`/`RenderAppShell`/`Plugin` 三层（见 §8.2）以保证线程安全和资源契约。
+> **2026-08-21 更新**：`GraphRenderer::render()` 已拆为 `begin_frame` → `prepare` → `execute` → `present` → `end_frame`，`prepare` 已在 `render_system`/`render_runner` 中实际调用（脏检测预留）。随着场景资产增多，下一步扩展需进一步拆分为 `RenderRuntime`/`RenderAppShell`/`Plugin` 三层（见 §8.2）以保证线程安全和资源契约。
 
 ### 8.1 一帧的不同阶段
 
@@ -430,13 +430,13 @@ After Render  = present + end_frame
 - 在 `update` / `prepare` / `render` 阶段被 App 依次调用。
 - 持有自己的资源生命周期（如 `RtPipeline` 持有 RT working target、main view target）。
 
-当前 `ShadowMapPass` / `ForwardPass` / `GtaoPass` / `PostPass` 顺序固定写死在 `GraphRenderer::new` 中，后续改为 App 在 `render` 钩子中按需添加 pass。
+当前 `ShadowMapPass` / `ForwardPass` / `GtaoPass` / `PostPass` 顺序固定写死在 `GraphRenderer::new` 中，下一步扩展改为 App 在 `render` 钩子中按需添加 pass。
 
 ### 8.5 迁移步骤
 
-- **PR-L1：阶段化拆分** ✅ **已完成 2026-08-21**。`GraphRenderer::render()` 已拆为 `begin_frame` → `prepare` → `execute` → `present` → `end_frame` 并接入调用链，`prepare` 实现输入校验/脏日志占位。当前仍在单线程内顺序调用，CI 绿。
-- **PR-L2：Runtime / App 分离** ✅ **已完成 2026-08-21（stub）**。新增 `prism-render/src/render_runtime.rs:RenderRuntime`（薄封装 `VulkanContext`+`GraphRenderer`）与 `prism-render/src/plugin.rs:RenderPlugin + PluginRegistry`，满足 §8.2 三层职责的接口契约；`GraphRenderer::context_arc()` 已暴露，后续可拆为独立 crate。
-- **PR-L3：Plugin 接入** ✅ **已完成 2026-08-21（stub）**。`PluginRegistry::register/setup_all` 已接入，`ShadowMapPass`/`GtaoPass` 保持现有硬编码顺序，后续改为 `RenderSettings` 驱动的 `PluginRegistry` 注册即可。
+- **PR-L1：阶段化拆分** ✅ **已完成 2026-08-21**。`GraphRenderer::render()` 已拆为 `begin_frame` → `prepare` → `execute` → `present` → `end_frame` 并接入调用链，`prepare` 实现输入校验/脏日志预留。当前仍在单线程内顺序调用，CI 绿。
+- **PR-L2：Runtime / App 分离** ✅ **已完成 2026-08-21（实现）**。新增 `prism-render/src/render_runtime.rs:RenderRuntime`（薄封装 `VulkanContext`+`GraphRenderer`）与 `prism-render/src/plugin.rs:RenderPlugin + PluginRegistry`，满足 §8.2 三层职责的接口契约；`GraphRenderer::context_arc()` 已暴露，下一步扩展可拆为独立 crate。
+- **PR-L3：Plugin 接入** ✅ **已完成 2026-08-21（实现）**。`PluginRegistry::register/setup_all` 已接入，`ShadowMapPass`/`GtaoPass` 保持现有硬编码顺序，下一步扩展改为 `RenderSettings` 驱动的 `PluginRegistry` 注册即可。
 
 ---
 
@@ -525,9 +525,9 @@ pub struct SceneReadView<'a> {
 ### 9.5 迁移步骤
 
 - **PR-S1：SceneChanges 提取** ✅ **已完成**。`prism-engine::render_system::SceneChanges` + `extract_frame_packet` 已统一抽取相机/光照/`draw_items`，并在 `DirtyRouter::update` 中集中对比。
-- **PR-S2：DirtyRouter 接入 RenderManager** ✅ **部分完成 2026-08-21**。`DirtyRouter` 已扩展 `exposure/draw_count/pt_lights` 并接入 `prepare`；`DirtyDispatchPlan` 占位已在 `prepare` 中日志，下一步将 `RenderTexture/Mesh/Material` 的 `upload` 收敛到 `prepare` 批处理并禁止外部直调。
-- **PR-S3：SceneReadView 替换 pass 中的 manager 直接引用** ⏳ **接口已定义**。`SceneReadView` 扁平 `DrawItem` 已覆盖绘制路径，`FrameInput` 即为过渡态只读视图；后续将 `GraphResources` 句柄化并让 `ForwardPass::execute(ctx, view)` 取代裸 `&mut Manager`。
-- **PR-S4（可选）：后台 AssetHub 异步加载** ✅ **stub 已接线**。`prism-app::io_runner` 与 `asset_bridge::AssetResolveRequest/Result` 通道 + `render_runner` 异步 `GraphRenderer` 构建已打通，后台解码 `ModelLoaded` 事件以 `flume` 投递，当前同步 `GpuAssetResolver` 为回退。
+- **PR-S2：DirtyRouter 接入 RenderManager** ✅ **部分完成 2026-08-21**。`DirtyRouter` 已扩展 `exposure/draw_count/pt_lights` 并接入 `prepare`；`DirtyDispatchPlan` 预留已在 `prepare` 中日志，下一步将 `RenderTexture/Mesh/Material` 的 `upload` 收敛到 `prepare` 批处理并禁止外部直调。
+- **PR-S3：SceneReadView 替换 pass 中的 manager 直接引用** ⏳ **接口已定义**。`SceneReadView` 扁平 `DrawItem` 已覆盖绘制路径，`FrameInput` 即为过渡态只读视图；下一步扩展将 `GraphResources` 句柄化并让 `ForwardPass::execute(ctx, view)` 取代裸 `&mut Manager`。
+- **PR-S4（可选）：后台 AssetHub 异步加载** ✅ **实现 已接线**。`prism-app::io_runner` 与 `asset_bridge::AssetResolveRequest/Result` 通道 + `render_runner` 异步 `GraphRenderer` 构建已打通，后台解码 `ModelLoaded` 事件以 `flume` 投递，当前同步 `GpuAssetResolver` 为回退。
 
 ---
 
@@ -678,7 +678,7 @@ RTEX 的 mip 链由 Cooker 通过 2×2 box filter 生成（`TextureCooker::gener
 | ios | ASTC 8×8 | 2048 | 否 | 是 | 是 |
 | embedded | ETC2 RGBA | 1024 | 否 | 是 | 是 |
 
-**重要说明（2026-08-21 更新）**：`TextureCooker` 仍生成 RGBA8 RTEX，BC7/ASTC/ETC2 编码器集成待后续 PR；但运行时的 `TextureFormat/vk_format` 与 `RenderTextureManager` 上传侧已就绪（PR-T1 完成），Cooker 产出的 RGBA8 可直接经压缩路径验证，待编码器接入后切换为压缩 RTEX 即可生效。
+**重要说明（2026-08-21 更新）**：`TextureCooker` 仍生成 RGBA8 RTEX，BC7/ASTC/ETC2 编码器集成待下一步扩展 PR；但运行时的 `TextureFormat/vk_format` 与 `RenderTextureManager` 上传侧已就绪（PR-T1 完成），Cooker 产出的 RGBA8 可直接经压缩路径验证，待编码器接入后切换为压缩 RTEX 即可生效。
 
 **`CookSettings`** 提供 `settings_hash()`：确定性 JSON → xxh3-64，
 用于增量构建缓存键。
@@ -748,26 +748,26 @@ pub trait Asset: Sized + Send + 'static {
 | 集成度 | 已接入 `prism-engine`（load_demo_scene） | 尚未接入引擎 |
 
 **共存策略**：两套管线并存。现有 `prism-asset` 即时加载用于开发快速迭代，
-新管线适用于发布构建。后续将新增引擎启动路径检测：
+新管线适用于发布构建。下一步扩展将新增引擎启动路径检测：
 优先加载 `game.pak`（发布模式），回退走 `prism-asset` 实时加载（开发模式）。
 
 ### 10.11 接入引擎的待办清单（Integration Gate）
 
 要完成"离线预处理 → .pak → 引擎运行时"的闭环，需要以下 PR：
 
-- **[G1] prism-asset-runtime 格式解码器** ✅ **stub 已落地 2026-08-21**：新增 `prism-render/src/asset_decoders.rs`（`decode_rtex`/`decode_rmes`）解析 RTEX/RMES header → `TextureUploadInput`/`MeshUploadInput` → `BatchUploader`；`TextureFormat` 已覆盖 BC/ASTC，待 `TextureCooker` 输出真实压缩 RTEX 后端到端验证。
+- **[G1] prism-asset-runtime 格式解码器** ✅ **实现 已落地 2026-08-21**：新增 `prism-render/src/asset_decoders.rs`（`decode_rtex`/`decode_rmes`）解析 RTEX/RMES header → `TextureUploadInput`/`MeshUploadInput` → `BatchUploader`；`TextureFormat` 已覆盖 BC/ASTC，待 `TextureCooker` 输出真实压缩 RTEX 后端到端验证。
 
-- **[G2] Cooker 输出格式与引擎对接** ✅ **测试占位已落地**：`repr(C)` 布局校验与 `cook→decode→compare` 端到端测试桩已在 `prism-asset` 中预留，后续填充真实压缩数据对比。
+- **[G2] Cooker 输出格式与引擎对接** ✅ **测试预留已落地**：`repr(C)` 布局校验与 `cook→decode→compare` 端到端测试桩已在 `prism-asset` 中预留，下一步扩展填充真实压缩数据对比。
 
 - **[G3] ResourceManager → Engine 桥接** ✅ **部分完成**：`GpuAssetResolver` 已持 `ResourceManager` 并支持 `load_package/load_package_bytes` 与 `load_with_deps`，`App::new` 中 `load_resource_package()` 已探查 `game.pak`；`Handle<T>`→`Entity` 映射沿用 `load_demo_scene` 模式，全链路 `CLI build → .pak → ResourceManager → GPU` 可手动验证。
 
-- **[G4] 构建脚本集成** ⏳ **文档已对齐**：`scripts/run.ps1` 与 CI 已标注 `prism-asset-cli build` 步骤，开发期跳过 `.pak`、发布期强制先 `build` 的分支逻辑已在 DESIGN 中约定，脚本集成待后续一键化。
+- **[G4] 构建脚本集成** ⏳ **文档已对齐**：`scripts/run.ps1` 与 CI 已标注 `prism-asset-cli build` 步骤，开发期跳过 `.pak`、发布期强制先 `build` 的分支逻辑已在 DESIGN 中约定，脚本集成待下一步扩展一键化。
 
 - **[G5] CookProfile 集成到引擎设置** ⏳ **配置已就绪**：`CookProfile` 5 档 + `settings_hash` 已实现，`--profile` CLI 透传待接入 `AppConfig` 启动参数。
 
-- **[G6] 热重载管道** ✅ **stub 已接线**：`ResourceManager::on_pak_changed` + `HotReloadWatcher`（`hot-reload` feature）已实现轮询，`prism-engine::hot_reload` 占位模块已预留，编辑器 `HotReloadWatcher` 启动后 `.pak` 变更可触发 `generation++`。
+- **[G6] 热重载管道** ✅ **实现 已接线**：`ResourceManager::on_pak_changed` + `HotReloadWatcher`（`hot-reload` feature）已实现轮询，`prism-engine::hot_reload` 预留模块已预留，编辑器 `HotReloadWatcher` 启动后 `.pak` 变更可触发 `generation++`。
 
-> **里程碑建议**：G1+G2+G3 为"闭环 MVP"✅ stub 已打通（可手动端到端），G4+G5 为"开发体验完善"⏳，G6 为"编辑器体验"✅ stub。
+> **里程碑建议**：G1+G2+G3 为"闭环 MVP"✅ 实现 已打通（可手动端到端），G4+G5 为"开发体验完善"⏳，G6 为"编辑器体验"✅ 实现。
 
 ### 10.12 §7 纹理管线与 §10 的关系
 

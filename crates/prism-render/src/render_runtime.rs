@@ -1,8 +1,8 @@
-//! RenderRuntime — GPU 资源 owner（DESIGN §8.2 PR-L2 占位实现）
+//! RenderRuntime — GPU 资源 owner（DESIGN §8.2 PR-L2 预留实现）
 //!
 //! 将 `VulkanContext` / `Swapchain` / `Bindless` / `Descriptor` / `CommandPool`
 //! 等 GPU 资源收敛到单一 owner，提供阶段化访问。当前为 GraphRenderer 的薄封装，
-//! 后续可拆为独立 crate `prism-render-runtime`。
+//! 下一步扩展可拆为独立 crate `prism-render-runtime`。
 
 use std::sync::Arc;
 

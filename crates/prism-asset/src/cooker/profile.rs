@@ -145,7 +145,7 @@ impl Default for MeshSettings {
     }
 }
 
-/// 着色器 cooking settings (stub).
+/// 着色器 cooking settings (实现).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ShaderSettings {

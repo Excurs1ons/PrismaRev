@@ -403,7 +403,7 @@ impl GraphRenderer {
         graph.add_pass(Box::new(forward_pass));
         // 启动路径：同步 per-swapchain-image 槽位数。`ForwardPass::execute` 的
         // `ensure_target` 按 `image_count` 建 framebuffer，`recreate_swapchain`
-        // 只覆盖后续重建——首次创建必须在这里初始化，否则 `set_target` 里
+        // 只覆盖下一步扩展重建——首次创建必须在这里初始化，否则 `set_target` 里
         // `idx >= image_count` 的守卫会静默跳过，永远建不出 framebuffer。
         if let Some(forward_pass) = graph.pass_mut::<ForwardPass>() {
             forward_pass.set_image_count(swapchain.views.len());
@@ -1240,10 +1240,10 @@ impl GraphRenderer {
     }
 
     /// 准备阶段：在命令录制前批量同步 CPU 场景状态和 GPU 资源。
-    /// 当前实现：校验输入 + 日志脏标记，为后续 DirtyDispatch 预留上传点。
+    /// 当前实现：校验输入 + 日志脏标记，为下一步扩展 DirtyDispatch 预留上传点。
     pub fn prepare(&mut self, _ctx: &FrameCtx, input: &FrameInput<'_>) -> anyhow::Result<()> {
         // 未来在此消费 DirtyFlags 并调度 RenderTextureManager / RenderMeshManager 等批量上传
-        // 当前仅做输入校验与同步点占位，保证五阶段调用链完整（DESIGN §8）
+        // 当前仅做输入校验与同步点预留，保证五阶段调用链完整（DESIGN §8）
         if input.pt_accum_dirty {
             log::trace!("prepare: pt accum dirty — will reset accumulation");
         }

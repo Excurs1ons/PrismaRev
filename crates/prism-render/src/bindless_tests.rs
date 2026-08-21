@@ -27,12 +27,12 @@ fn sampler_type_indices_are_sequential() {
 fn register_with_handle_advances_next_pointer() {
     // Mimic the relevant fields to exercise the bookkeeping 逻辑
     // without touching Vulkan
-    struct Stub {
+    struct 实现 {
         next: u32,
     }
     // 等价 of the 公开 方法 writes a 槽 and bumps 下一个
     // past it.
-    let mut s = Stub { next: 0 };
+    let mut s = 实现 { next: 0 };
     // Place 槽 0 (the 回退
     s.next = 1;
     // The 下一个 `register` 调用 must use 槽 1, not 0.

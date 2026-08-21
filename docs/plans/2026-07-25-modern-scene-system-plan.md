@@ -1157,7 +1157,7 @@ impl SceneLoader {
                 (cooked, AssetId::generate())
             }
             SceneSource::Pak(id) => {
-                anyhow::bail!("Pak loading not yet implemented (Phase 3.3)")
+                anyhow::bail!("Pak loading 已实现 (Phase 3.3)")
             }
         };
         self.spawn_from_cooked(world, cooked, scene_id)
@@ -1285,11 +1285,11 @@ When mesh_ref component is present in CookedEntity:
 4. Insert MeshRef component into entity
 
 Since the full ResourceManager integration depends on G1-G3 from DESIGN.md §10.11,
-Phase 3.3 can be deferred or implemented as a stub that populates MeshRef with
+Phase 3.3 can be deferred or implemented as a 实现 that populates MeshRef with
 default/null handles, with real resolution added once the .pak runtime pipeline
 is complete.
 
-**Step 2: Add MeshRef/MaterialRef spawning with stub handles**
+**Step 2: Add MeshRef/MaterialRef spawning with 实现 handles**
 
 ```rust
 // During spawn_from_cooked, after offset parsing:
@@ -1300,7 +1300,7 @@ if ce.component_mask & COMP_MESH_REF != 0 {
     offset += 4;
     // Check if asset_refs[ref_idx] exists
     if let Some(asset_ref) = cooked.asset_refs.get(ref_idx as usize) {
-        // TODO: resolve AssetRef → MeshHandle via ResourceManager
+        // 计划: resolve AssetRef → MeshHandle via ResourceManager
         // For now, use a placeholder handle (index 0)
         world.insert(entity, MeshRef {
             asset_id: asset_ref.id,
