@@ -377,4 +377,3 @@ impl Drop for RenderMaterialManager {
 #[cfg(test)]
 #[path = "material_manager_tests.rs"]
 mod tests;
-

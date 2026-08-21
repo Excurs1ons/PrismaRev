@@ -65,11 +65,11 @@ pub mod scene_scope;
 /// 主线程(CPU) ↔ 渲染线程(GPU) 资产解析请求/结果桥接类型。
 pub mod asset_bridge;
 pub mod shader;
-pub mod shadow_map_pass;
 /// Slang-reflection-generated 绑定 constants (set/binding indices, entry
 /// point names, push-constant sizes). Regenerate with `xtask/shader-bindgen`
 /// after recompiling shaders on a host with slangc - see shaders/compile.sh.
 pub mod shader_bindings;
+pub mod shadow_map_pass;
 pub mod skybox_pass;
 pub mod swapchain;
 pub mod ui_overlay;
@@ -86,16 +86,15 @@ pub use descriptor::{
     PtEmissiveTri, ReSTIRReservoir, LIGHT_MAX, PT_EMISSIVE_MAX, PT_LIGHT_MAX,
 };
 pub use external_overlay::{OverlayMessage, OverlayRecordCtx, SwapchainOverlay};
+pub use forward_pass::ForwardPass;
 pub use gi::{
     eval_sh9, sample_probe_irradiance, sh_basis, trilinear_weights, world_to_probe_coord,
     ProbeVolumeInfo, SH_COEFF_COUNT,
 };
-pub use forward_pass::ForwardPass;
 pub use gizmo::Gizmo;
 pub use graph_renderer::{FrameCtx, FrameInput, GraphRenderer};
 pub use gtao::{GtaoFrameInputs, GtaoPass};
 pub use mesh::{Mesh, Vertex};
-pub use shadow_map_pass::ShadowMapPass;
 pub use pbr_push::{DebugMode, NormalSpace};
 pub use pipeline::GraphicsPipeline;
 pub use post::PostPass;
@@ -107,5 +106,6 @@ pub use render_graph::{
 };
 pub use render_pass::{DepthImage, Framebuffers, NormalImage, RenderPass};
 pub use shader::load_shader_module;
+pub use shadow_map_pass::ShadowMapPass;
 pub use swapchain::Swapchain;
 pub use ui_overlay::{UiOverlay, UiOverlayInput};

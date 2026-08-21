@@ -374,4 +374,3 @@ impl Drop for RenderTextureManager {
 #[cfg(test)]
 #[path = "texture_manager_tests.rs"]
 mod tests;
-

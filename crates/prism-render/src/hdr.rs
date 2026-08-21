@@ -137,4 +137,3 @@ fn rgbe_to_float(r: f32, g: f32, b: f32, e: f32) -> (f32, f32, f32) {
 #[cfg(test)]
 #[path = "hdr_tests.rs"]
 mod tests;
-

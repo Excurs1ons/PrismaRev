@@ -379,4 +379,3 @@ impl Drop for BindlessTextureTable {
 #[cfg(test)]
 #[path = "bindless_tests.rs"]
 mod tests;
-

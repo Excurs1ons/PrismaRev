@@ -20,8 +20,8 @@ use crate::mesh::Vertex;
 use crate::pipeline::{GraphicsPipeline, PipelineDesc};
 use crate::render_graph::{
     GraphResources, PassInfo, PassKind, RenderContext, RenderGraphBuilder, RenderPassNode,
-    RenderSettings, ResourceHandle, ResourceType, ResourceUsage, FORWARD_COLOR_H,
-    FORWARD_DEPTH_H, FORWARD_NORMAL_H,
+    RenderSettings, ResourceHandle, ResourceType, ResourceUsage, FORWARD_COLOR_H, FORWARD_DEPTH_H,
+    FORWARD_NORMAL_H,
 };
 use crate::shader;
 use crate::skybox_pass::SkyboxPass;

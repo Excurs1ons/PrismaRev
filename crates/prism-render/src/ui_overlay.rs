@@ -95,7 +95,7 @@ struct CachedGlyph {
 /// （quad 背景仍正常绘制），并 log::warn。
 const FONT_CANDIDATES: &[(&str, u32)] = &[
     // Windows
-    ("C:/Windows/Fonts/msyh.ttc", 0), // 微软雅黑（含中文）
+    ("C:/Windows/Fonts/msyh.ttc", 0),   // 微软雅黑（含中文）
     ("C:/Windows/Fonts/simhei.ttf", 0), // 黑体（含中文）
     ("C:/Windows/Fonts/arial.ttf", 0),
     // Android
@@ -105,7 +105,10 @@ const FONT_CANDIDATES: &[(&str, u32)] = &[
     ("/system/fonts/Roboto-Regular.ttf", 0),
     // Linux
     ("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", 0),
-    ("/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf", 0),
+    (
+        "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
+        0,
+    ),
     ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 0),
     // macOS
     ("/System/Library/Fonts/PingFang.ttc", 0),
@@ -419,7 +422,11 @@ impl UiOverlay {
         device: &ash::Device,
         atlas_view: vk::ImageView,
         atlas_sampler: vk::Sampler,
-    ) -> Result<(vk::DescriptorSetLayout, vk::DescriptorPool, vk::DescriptorSet)> {
+    ) -> Result<(
+        vk::DescriptorSetLayout,
+        vk::DescriptorPool,
+        vk::DescriptorSet,
+    )> {
         let binding = vk::DescriptorSetLayoutBinding::default()
             .binding(GLYPH_ATLAS_BINDING)
             .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
@@ -731,7 +738,11 @@ impl UiOverlay {
                     vk::MemoryMapFlags::empty(),
                 )
                 .context("UiOverlay: map")?;
-            std::ptr::copy_nonoverlapping(vertices.as_ptr() as *const u8, ptr as *mut u8, vert_bytes);
+            std::ptr::copy_nonoverlapping(
+                vertices.as_ptr() as *const u8,
+                ptr as *mut u8,
+                vert_bytes,
+            );
             context.device.unmap_memory(self.vertex_memory);
         }
 
@@ -884,7 +895,14 @@ impl UiOverlay {
                 let v0 = gy as f32 * inv;
                 let u1 = (gx + gw) as f32 * inv;
                 let v1 = (gy + gh) as f32 * inv;
-                emit_quad(vertices, [x0, y0], [x1, y1], [u0, v0], [u1, v1], [r, g, b, a]);
+                emit_quad(
+                    vertices,
+                    [x0, y0],
+                    [x1, y1],
+                    [u0, v0],
+                    [u1, v1],
+                    [r, g, b, a],
+                );
             }
             cursor_x += glyph.advance;
         }

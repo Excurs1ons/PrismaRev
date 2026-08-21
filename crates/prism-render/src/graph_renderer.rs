@@ -15,6 +15,7 @@ use crate::descriptor::{
     DescriptorLayout, DescriptorPool, FrameUBO, FrameUBOData, GpuLight, PtAnalyticLight,
 };
 use crate::external_overlay::{OverlayMessage, SwapchainOverlay};
+use crate::forward_pass::ForwardPass;
 use crate::ibl::IblResources;
 use crate::managers::{
     AssetTextureHandle, MaterialHandle, MaterialUploadInput, MeshHandle, MeshUploadInput,
@@ -22,7 +23,6 @@ use crate::managers::{
 };
 use crate::mesh::Vertex;
 use crate::offscreen::OffscreenTarget;
-use crate::forward_pass::ForwardPass;
 use crate::pt_pass::PathTracePass;
 use crate::render_graph::{
     DrawItem, GraphFrame, RenderGraph, RenderGraphBuilder, RenderMode, RenderPassNode,
@@ -1387,8 +1387,7 @@ impl GraphRenderer {
         // image 在 graph 后已是展示布局；UI/egui render pass 期望
         // COLOR_ATTACHMENT_OPTIMAL 初始布局 → 各自 record 前都要显式转回。
         if record.is_ok() {
-            let has_ui = ui_overlay
-                .is_some_and(|o| !o.quads.is_empty() || !o.texts.is_empty());
+            let has_ui = ui_overlay.is_some_and(|o| !o.quads.is_empty() || !o.texts.is_empty());
             if has_ui {
                 if self.ui_overlay.is_none() {
                     let gpu = crate::ui_overlay::UiOverlay::new(
@@ -1704,7 +1703,10 @@ impl GraphRenderer {
         // context-holders (runtime/ibl/scene_scope) *before* the 图 — if
         // ShadowMapPass relied on its 放置 alone, the 设备 handle would be
         // stale by the 时间 it ran, causing leaked resources + 访问 violation.
-        if let Some(shadow) = self.graph.pass_mut::<crate::shadow_map_pass::ShadowMapPass>() {
+        if let Some(shadow) = self
+            .graph
+            .pass_mut::<crate::shadow_map_pass::ShadowMapPass>()
+        {
             shadow.destroy(device);
         }
 

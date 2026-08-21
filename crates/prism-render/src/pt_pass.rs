@@ -1559,4 +1559,3 @@ mod mat_inverse_tests {
 #[cfg(test)]
 #[path = "pt_pass_tests.rs"]
 mod tests;
-

@@ -2240,4 +2240,3 @@ fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
 #[cfg(test)]
 #[path = "ibl_tests.rs"]
 mod tests;
-

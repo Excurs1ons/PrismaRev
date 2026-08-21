@@ -27,8 +27,8 @@ use crate::context::VulkanContext;
 use crate::pipeline::{GraphicsPipeline, PipelineDesc};
 use crate::render_graph::{
     GraphResources, PassInfo, PassKind, RenderContext, RenderGraphBuilder, RenderMode,
-    RenderPassNode, RenderSettings, ResourceUsage, PT_COLOR_H, FORWARD_COLOR_H, FORWARD_DEPTH_H,
-    FORWARD_NORMAL_H,
+    RenderPassNode, RenderSettings, ResourceUsage, FORWARD_COLOR_H, FORWARD_DEPTH_H,
+    FORWARD_NORMAL_H, PT_COLOR_H,
 };
 use crate::render_pass::find_memory_type;
 use crate::shader;

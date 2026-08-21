@@ -220,4 +220,3 @@ fn build_vertices(input: &MeshUploadInput) -> Vec<crate::mesh::Vertex> {
 #[cfg(test)]
 #[path = "mesh_manager_tests.rs"]
 mod tests;
-
