@@ -12,7 +12,7 @@
 - **调试与编辑器**：egui inspector（实体/渲染设置/烘焙控制），屏幕空间调试视图模式（bitmap 字体 HUD + 命中测试），世界空间 XYZ gizmo；编辑器完全独立于用户项目依赖链（见 §编辑器与用户项目分离）。
 - **全链路**：acquire → record → submit → present 在桌面与 Android 端到端跑通，验证层在 debug 构建下启用。
 - **后台线程架构**：IO / 音频解码 / 物理三线程框架（flume 消息传递）。
-- **资源管线**：`prism-asset` 统一资产管线（Import → Cook → Package → Runtime），glTF 2.0 加载、纹理/mesh 烘焙、CookProfile 平台配置、`.pak` 打包与热重载。
+- **资源管线**：运行时 `prism-asset`（`.pak` / `ResourceManager` / 热重载）与构建期 `prism-cooker`（glTF 导入、纹理/mesh 烘焙、CookProfile、`prism-cook` CLI）分层；场景 schema 与 RSCN v4 在 `prism-scene`。
 - **离线构建**：`prism-build-pipeline` 提供 GI 烘焙与**参数化超高落差高度图生成器**（热力 + 水力侵蚀，−11 000 m ~ +8 850 m，CPU 多线程 / 可扩展 GPU compute）。
 
 ## 架构
@@ -21,8 +21,10 @@
 PrismaRev/
 ├── crates/
 │   ├── prism-ecs/             # ECS 核心（Entity / Component / World / Query）
+│   ├── prism-reflect/         # 运行时反射 + RTTIBin（egui/render-free）
+│   ├── prism-scene/           # 场景 schema：组件、ComponentRegistry、.scene.json、RSCN v4
 │   ├── prism-render/          # Vulkan 后端（context、swapchain、RenderGraph passes、IBL、bindless）
-│   ├── prism-engine/          # 引擎层（World / 渲染系统 / 场景加载；无 egui）
+│   ├── prism-engine/          # 运行时引擎（场景加载 / 渲染系统 / 资产解析；无 egui）
 │   ├── prism-platform/        # 平台抽象（窗口系统、Vulkan surface、输入路由）
 │   ├── prism-app/             # 平台应用层（事件循环 / 窗口 / 帧编排；中性 `FrameHook` 扩展点）
 │   ├── prism-editor/          # egui 编辑器 UI（inspector、调试、渲染设置、烘焙 + engine 绑定）
@@ -30,7 +32,8 @@ PrismaRev/
 │   ├── prism-editor-tool/     # 编辑器工具（高度图生成器、地形工具等）
 │   ├── prism-build-pipeline/  # 离线构建管线（GI 烘焙、资产烹饪、高度图生成器 CLI）
 │   ├── prism-audio/           # 音频子系统（Firewheel）
-│   ├── prism-asset/           # 统一资产管线（core / runtime / cooker / package / db / importer / CLI，feature 开关）
+│   ├── prism-asset/           # 运行时资产（AssetId/Handle、.pak、ResourceManager、streaming）
+│   ├── prism-cooker/          # 构建期资产管线（importer / cooker / db / CookProfile + prism-cook CLI）
 │   └── xtask/                 # 构建工具：Slang reflection → Rust 绑定代码生成（桌面/CI 专用，排除在默认 workspace 外）
 ├── assets/
 │   ├── shaders/               # Slang 源码（slang/）、编译产物 .spv（不提交）+ reflection/*.json
@@ -48,7 +51,7 @@ PrismaRev/
 
 ### 编辑器与用户项目分离
 
-用户项目的依赖链**不含 egui 与编辑器**：`game → prism-app → prism-engine → {prism-ecs, prism-render, prism-asset}`。
+用户项目的依赖链**不含 egui、编辑器或构建工具**：`game → prism-app → prism-engine → {prism-scene, prism-ecs, prism-render, prism-asset}`。
 编辑器通过两个中性扩展点接入：主线程 `prism_app::FrameHook`（事件/每帧回调）与渲染线程
 `prism_render::external_overlay::SwapchainOverlay`（覆盖层录制）；两者之间的 UI 数据以类型擦除的
 `OverlayMessage`（`Box<dyn FnOnce(&mut dyn SwapchainOverlay) + Send>`）穿过 `RenderShared`。
@@ -141,20 +144,24 @@ cargo test  -p prism-ecs -p prism-render -p prism-engine -p prism-platform
 - reflection JSON 驱动 `crates/xtask` 的 `shader-bindgen`，生成 `crates/prism-render/src/shader_bindings.rs`：入口名常量、descriptor set/binding 常量、`#[repr(C)]` push-constant 结构。
 - **CI 漂移守卫**：重新生成的绑定/SPIR-V 若与提交版本不一致则 CI 失败（`shaders` job）。
 
-## 资源管线（prism-asset）
+## 资源管线（prism-asset / prism-scene / prism-cooker）
 
-统一资产管线，单 crate 多模块：
+资产管线按职责分三层（不是旧的 7-crate 拆分）：
 
 ```
 [Source] → Importer → [Intermediate] → Cooker → [Cooked] → Package → [.pak] → Runtime
+             prism-cooker (build host)                         prism-asset (runtime)
+             prism-scene: components + schema + RSCN v4
 ```
 
-- **core**：`AssetData` / `AssetHandle` / `AssetGuid` / `AssetId`，宏定义资产类型。
-- **importer**：glTF 2.0 场景导入等。
-- **cooker**：平台化烘焙（CookProfile 继承 + CLI 覆盖，内置 base/desktop/android/ios/embedded）。
-- **package / db**：`.pak` 打包与资产数据库。
-- **runtime**：`ResourceManager` 读取 `.pak` 的消费侧 API（零依赖编辑器模块），支持热重载。
-- **CLI**：`prism-asset-cli` 子命令驱动导入/烘焙/打包。
+- **prism-scene**：场景组件、`ComponentRegistry`、`.scene.json` 作者格式、RSCN v4
+  （`type_id + schema_hash` + 按 `TypeDesc` 顺序的位置编码载荷）。cooker 与运行时共用同一 schema。
+- **prism-cooker**：glTF/场景/纹理等 importer、平台化 cooker（CookProfile 继承 + CLI 覆盖）、
+  资产数据库与 `prism-cook` CLI。
+- **prism-asset**：`AssetId`/`Handle`、`.pak` 读写、`ResourceManager`、streaming/hot-reload。
+  不包含 importer/cooker/db。
+- **CLI**：`prism-cook` 子命令驱动导入/烘焙/打包；`prism-build-pipeline cook` 可直接把
+  `.scene.json` 编成 `.rscn`。
 
 ## 高度图生成器（prism-build-pipeline）
 
@@ -190,7 +197,7 @@ raw 文件可用 Python/Blender/Unity 等直接读取：`np.fromfile(path, dtype
 
 ```sh
 cargo test -p prism-ecs      # ECS 单元测试（spawn/despawn/query/generation）
-cargo test -p prism-asset    # 资产管线测试（导入/烘焙/打包）
+cargo test -p prism-asset -p prism-scene -p prism-cooker  # 运行时格式 / RSCN / 构建工具
 cargo test -p prism-build-pipeline  # 侵蚀算法测试（陡坡变平、平坦地形不变）
 cargo clippy --all-targets   # 零警告门禁
 ```

@@ -3,9 +3,9 @@
 // ===========================================================================
 
     use super::*;
-    use crate::core::AssetId;
+    use prism_asset::core::AssetId;
     use crate::db::AssetDatabase;
-    use crate::package::PackageBuilder;
+    use prism_asset::package::PackageBuilder;
 
     fn make_record(id: AssetId, deps: Vec<AssetId>, path: &str) -> crate::db::AssetRecord {
         let mut r = crate::db::AssetRecord::new(id, path.into(), AssetType::Binary, "raw");

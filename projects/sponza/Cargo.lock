@@ -2506,7 +2506,9 @@ dependencies = [
  "prism-asset",
  "prism-audio",
  "prism-ecs",
+ "prism-reflect",
  "prism-render",
+ "prism-scene",
  "rustc-hash",
  "serde",
  "serde_json",
@@ -2527,6 +2529,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "prism-reflect"
+version = "0.1.0"
+dependencies = [
+ "glam 0.33.4",
+ "prism-reflect-derive",
+]
+
+[[package]]
+name = "prism-reflect-derive"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "prism-render"
 version = "0.1.0"
 dependencies = [
@@ -2539,6 +2558,18 @@ dependencies = [
  "raw-window-handle",
  "slotmap",
  "winit",
+]
+
+[[package]]
+name = "prism-scene"
+version = "0.1.0"
+dependencies = [
+ "glam 0.33.4",
+ "log",
+ "prism-ecs",
+ "prism-reflect",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

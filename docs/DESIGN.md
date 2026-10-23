@@ -533,11 +533,11 @@ pub struct SceneReadView<'a> {
 
 ## 10. 资源管线 v2 —— 离线预处理管线
 
-> 2026-07-25 新增，2026-07-30 重构。原 7 个独立 crate 已合并为根 workspace 的
-> **单一成员 `crates/prism-asset`**（feature 开关对应原各 crate 职责：`core` / `runtime` /
-> `cooker` / `package` / `importer` / `db` / `cli` / `types` / `streaming` / `hot-reload`）。
-> 本节描述的是管线架构；代码按模块组织在
-> `crates/prism-asset/src/{core,runtime,cooker,package,db,importer,types}/`。
+> 2026-07-25 新增，2026-10 分层重构。资产职责拆成三个 crate：
+> **`prism-asset`**（运行时 `.pak` / `ResourceManager`）、**`prism-scene`**
+> （组件 schema + `.scene.json` + RSCN v4 编解码）、**`prism-cooker`**
+> （importer / cooker / db / `prism-cook` CLI）。旧的 7-crate 拆分不再恢复。
+> 构建编排在 `prism-build-pipeline` 与编辑器中，不进入游戏运行时。
 
 ### 10.1 架构总览
 
@@ -549,17 +549,17 @@ pub struct SceneReadView<'a> {
   │  中间格式     │  RTXI（纹理）、RMXI（网格）
   └──────┬──────┘
          │
-         ▼  [Cook]  ← cooker 模块 + profile
+         ▼  [Cook]  ← prism-cooker（+ CookProfile）
   ┌─────────────┐
-  │  运行时格式    │  RTEX（纹理 mip 链）、RMES（交错顶点）
+  │  运行时格式    │  RTEX（纹理 mip 链）、RMES（交错顶点）、RSCN v4（场景）
   └──────┬──────┘
          │
-         ▼  [Package]  ← package 模块
+         ▼  [Package]  ← prism-asset::package
   ┌─────────────┐
   │  .pak 归档   │  RPAK 格式 + xxh3 校验和
   └──────┬──────┘
          │
-         ▼  [Runtime]  ← runtime 模块
+         ▼  [Runtime]  ← prism-asset::runtime
   ┌─────────────┐
   │  Handle<T>  │  懒加载 + 内存预算 + 依赖解析 + 热重载
   └─────────────┘
@@ -567,28 +567,30 @@ pub struct SceneReadView<'a> {
 
 **核心设计原则**：
 - **编辑器离线完成重计算**，运行时只读 `.pak`，零解码、零编码。
-- **运行时无编辑器依赖**：`runtime` / `cooker` / `package` feature 不依赖 `db` / `importer`，
-  运行时构建保持精简。
+- **运行时无构建工具依赖**：`prism-asset` 不依赖 `prism-cooker` / `prism-scene`；
+  `prism-cooker` 只在构建机/编辑器中使用。
+- **场景 schema 只有一份**：cooker 与运行时都通过 `prism-scene` 的
+  `ComponentRegistry` + `TypeDesc` 解释组件，RSCN v4 不按场景重复存 schema。
 - **Handle<T> 与 ECS Entity 分离**：Handle 是资产生命周期概念（代沟计数 slot），
   Entity 是帧级 ECS 概念，二者不混用。
 
-### 10.2 模块（feature）及其职责
+### 10.2 crate 分层及其职责
 
-| 模块（feature） | 职责 | 主要依赖 |
-|-------|------|------|
-| `core` | 基础类型：`AssetId`（64 bit gen+serial）、`AssetType`（8 分类）、`Handle<T>`（代沟计数）、`AssetRef` | serde, thiserror |
-| `db` | 编辑器资产数据库（JSON），文件→ID 索引 + 导入缓存（xxh3） | core |
-| `importer` | 导入器框架 + 内置 4 个 Importer：Texture（PNG→RTXI）、Gltf（→RMXI）、Json、Raw | core, db, image, gltf |
-| `cooker` | 烹饪器框架 + CookProfile 系统 + 3 个 Cooker：Texture（RTXI→RTEX+mip）、Mesh（RMXI→RMES）、Binary 直通 | core, db, package, image, xxhash-rust |
-| `package` | `.pak` 归档格式（RPAK），支持 zstd 压缩 + xxh3 校验和 + 依赖表 | core, zstd, xxhash-rust |
-| `runtime` | 运行时 `ResourceManager`：懒加载 `Handle<T>`、内存预算 LRU/FIFO、依赖递归解析、轮询式热重载 | core, package, tokio, tracing |
-| `cli` | CLI bin `prism-asset-cli`（`src/cli_main.rs`）：`init` / `scan` / `import` / `build` / `validate` / `list` / `inspect` | 以上所有 + clap |
+| crate | 角色 | 职责 | 主要依赖 |
+|-------|------|------|----------|
+| `prism-asset` | 运行时 | `AssetId`（64 bit gen+serial）、`AssetType`、`Handle<T>`、`.pak`（RPAK + zstd + xxh3）、`ResourceManager`（懒加载/预算/热重载）、streaming | serde, zstd, tokio（feature-gated） |
+| `prism-scene` | schema | 场景/UI 组件、`ComponentRegistry`、`.scene.json` 作者格式、RSCN v4 编解码 | `prism-ecs`、`prism-reflect`、serde |
+| `prism-cooker` | 构建期 | importer 框架、cooker 框架、CookProfile、资产数据库/导入缓存、`SceneCooker`、CLI `prism-cook` | `prism-asset`、`prism-scene`、image、gltf |
+| `prism-build-pipeline` | 编排 | `bake-gi`、`cook`、`heightmap` 等批处理入口；调用 cooker，不进入运行时 | `prism-cooker`、`prism-engine` |
 
-**工作空间配置**：`crates/prism-asset` 是根 workspace 的成员，通过 feature 开关组合。
+`prism-asset` 的 feature 只服务运行时裁剪（`runtime` / `package` / `types` /
+`streaming` / `hot-reload`），不再包含 `cooker` / `importer` / `db` / `cli`。
+构建工具消费 `prism-asset` 的 `core` / `package`，但不会反向进入游戏依赖链。
+
 ```sh
-cargo build -p prism-asset
-cargo test -p prism-asset           # 资产管线测试全部通过
-cargo run -p prism-asset --bin prism-asset-cli -- init
+cargo build -p prism-asset -p prism-scene -p prism-cooker
+cargo test  -p prism-asset -p prism-scene -p prism-cooker
+cargo run   -p prism-cooker --bin prism-cook -- init
 ```
 
 ### 10.3 资源类型系统（core 模块）
@@ -658,7 +660,7 @@ RTEX 的 mip 链由 Cooker 通过 2×2 box filter 生成（`TextureCooker::gener
 - **校验**：xxh3-64 覆盖 `header[12..] + registry + deps + data`
 - **读取**：`PackageReader` 零拷贝访问（未压缩 asset 直接 memcpy）
 
-### 10.7 Cook Profile 系统（cooker 模块，src/cooker/profile.rs）
+### 10.7 Cook Profile 系统（`prism-cooker`，src/cooker/profile.rs）
 
 **优先级链**（高→低）：
 ```
@@ -690,7 +692,7 @@ RTEX 的 mip 链由 Cooker 通过 2×2 box filter 生成（`TextureCooker::gener
 - 内置配置由 `BUILTIN_DEFAULTS` 静态 `LazyLock<HashMap>` 承载，
   用户配置从磁盘 `profiles_dir/{name}.json` 加载
 
-### 10.8 运行时 ResourceManager（runtime 模块）
+### 10.8 运行时 ResourceManager（`prism-asset::runtime`）
 
 **核心流程**：
 1. `load_package("game.pak")` → 注册所有资产（填充 slot 数组 + `AssetId→index` 映射）
@@ -721,7 +723,7 @@ pub trait Asset: Sized + Send + 'static {
 ```
 内建 `impl Asset for Vec<u8>`（二进制 blob）。
 
-### 10.9 CLI 工具（cli 模块，bin: `prism-asset-cli`）
+### 10.9 CLI 工具（`prism-cooker`，bin: `prism-cook`）
 
 | 命令 | 功能 |
 |------|------|
@@ -733,23 +735,27 @@ pub trait Asset: Sized + Send + 'static {
 | `list` | 列出数据库全部资产 |
 | `inspect <id>` | 查看单资产详情（依赖树可见） |
 
-### 10.10 管线两套路径（同一 crate 内）
+### 10.10 场景 cook 与运行时的接缝
 
-| 维度 | 即时加载路径（`runtime`/`importer` feature） | 离线预处理路径（`cooker`/`package`/`db`/`cli` feature） |
-|------|--------------------------|--------------------------|
-| 定位 | 运行时 glTF/PNG/HDR 实时加载 | 编辑器离线预处理 → .pak |
-| 加载时机 | 应用启动时同步加载 | 编辑器离线构建，运行时按需懒加载 |
-| 格式处理 | 解析 glTF → 直接 GPU 上传 | 三阶段 Import→Cook→Package |
-| 增量构建 | 无 | ImportCache(xxh3) + settings_hash |
-| 平台适配 | 无 | CookProfile（5 内置配置 + 继承链） |
-| 内存管理 | 无 | 预算 + LRU/FIFO 淘汰 |
-| 热重载 | 无 | 轮询式 `.pak` 热重载 |
-| Handle 类型 | slotmap key | 代沟计数 `Handle<T>` |
-| 集成度 | 已接入 `prism-engine`（load_demo_scene） | 尚未接入引擎 |
+场景资产走一条独立的类型化路径，不再把 JSON 塞进 RSCN：
 
-**共存策略**：两套管线并存。现有 `prism-asset` 即时加载用于开发快速迭代，
-新管线适用于发布构建。下一步扩展将新增引擎启动路径检测：
-优先加载 `game.pak`（发布模式），回退走 `prism-asset` 实时加载（开发模式）。
+```text
+.scene.json
+   │  prism-cooker::SceneCooker（parse + validate）
+   ▼
+prism-scene::rscn::encode_scene
+   │  type_id + schema_hash + 位置编码载荷
+   ▼
+.rscn  ──►  prism-engine::SceneLoader（decode_scene + ComponentRegistry）
+```
+
+- `prism-build-pipeline cook <input.scene.json>` 直接调用 `SceneCooker`；
+- 通用纹理/网格/二进制资产仍走 `prism-cook import/build`；
+- 运行时只读 `.rscn` / `.pak`，不依赖 `prism-cooker`；
+- 开发期也可以从松散的 `.rscn` 文件加载，路径由 `SceneSource` 决定。
+
+**开发模式与发布模式**：二者共用同一条运行时解码路径；区别只在资源来源
+（松散文件 vs `.pak`），不是两套格式。
 
 ### 10.11 接入引擎的待办清单（Integration Gate）
 
@@ -757,11 +763,11 @@ pub trait Asset: Sized + Send + 'static {
 
 - **[G1] prism-asset-runtime 格式解码器** ✅ **实现 已落地 2026-08-21**：新增 `prism-render/src/asset_decoders.rs`（`decode_rtex`/`decode_rmes`）解析 RTEX/RMES header → `TextureUploadInput`/`MeshUploadInput` → `BatchUploader`；`TextureFormat` 已覆盖 BC/ASTC，待 `TextureCooker` 输出真实压缩 RTEX 后端到端验证。
 
-- **[G2] Cooker 输出格式与引擎对接** ✅ **测试预留已落地**：`repr(C)` 布局校验与 `cook→decode→compare` 端到端测试桩已在 `prism-asset` 中预留，下一步扩展填充真实压缩数据对比。
+- **[G2] Cooker 输出格式与引擎对接** ✅ **场景链路已打通**：`SceneCooker` 产出 RSCN v4，`prism-engine` 的 `SceneLoader` 用同一份 `prism-scene` schema 解码；`prism-cooker` 中有真实 `.scene.json` 的 cook/decode 测试。纹理/网格的压缩数据端到端对比仍待补。
 
 - **[G3] ResourceManager → Engine 桥接** ✅ **部分完成**：`GpuAssetResolver` 已持 `ResourceManager` 并支持 `load_package/load_package_bytes` 与 `load_with_deps`，`App::new` 中 `load_resource_package()` 已探查 `game.pak`；`Handle<T>`→`Entity` 映射沿用 `load_demo_scene` 模式，全链路 `CLI build → .pak → ResourceManager → GPU` 可手动验证。
 
-- **[G4] 构建脚本集成** ⏳ **文档已对齐**：`scripts/run.ps1` 与 CI 已标注 `prism-asset-cli build` 步骤，开发期跳过 `.pak`、发布期强制先 `build` 的分支逻辑已在 DESIGN 中约定，脚本集成待下一步扩展一键化。
+- **[G4] 构建脚本集成** ⏳ **命令已对齐**：发布构建使用 `cargo run -p prism-cooker --bin prism-cook -- build`；泛资产走 `prism-cook`，场景走 `prism-build-pipeline cook`。`scripts/run.ps1` / CI 的一键化集成仍待补。
 
 - **[G5] CookProfile 集成到引擎设置** ⏳ **配置已就绪**：`CookProfile` 5 档 + `settings_hash` 已实现，`--profile` CLI 透传待接入 `AppConfig` 启动参数。
 

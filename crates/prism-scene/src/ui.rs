@@ -5,6 +5,7 @@
 //! Layout System 读取 Style → 写入 ComputedLayout
 //! Render System 读取 ComputedLayout + Text → 生成绘制命令
 
+use prism_reflect::{FieldType, Reflect, ReflectError, ReflectType, Value};
 use serde::{Deserialize, Serialize};
 
 // ── 标记组件 ─────────────────────────────────────────────────
@@ -12,7 +13,8 @@ use serde::{Deserialize, Serialize};
 /// **标记**：此 Entity 是 UI 元素。Layout System 只查询有此组件的实体。
 ///
 /// 定义为空花括号结构体（而非单元结构体），以便场景 JSON 用 `{}` 反序列化。
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, Reflect)]
+#[reflect(name = "prism_engine::ui::Node")]
 pub struct Node {}
 
 /// **父子关系**：UI 子元素指向父元素 Entity。
@@ -22,7 +24,8 @@ pub struct UiParent(pub prism_ecs::Entity);
 // ── 锚点系统 ─────────────────────────────────────────────────
 
 /// 锚点角 —— 定义子元素边相对于父边的位置（0..=1 归一化）。
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, Reflect)]
+#[reflect(name = "prism_engine::ui::Anchors")]
 pub struct Anchors {
     /// 水平起始角（0 = 父左，1 = 父右）
     pub min_x: f32,
@@ -72,7 +75,8 @@ impl Default for Anchors {
 }
 
 /// Pivot —— 旋转/缩放/定位的中心点（归一化 0..=1）。
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, Reflect)]
+#[reflect(name = "prism_engine::ui::Pivot")]
 pub struct Pivot {
     pub x: f32,
     pub y: f32,
@@ -90,7 +94,8 @@ impl Default for Pivot {
 }
 
 /// 边距（像素）。
-#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, Reflect)]
+#[reflect(name = "prism_engine::ui::Margin")]
 pub struct Margin {
     pub left: f32,
     pub right: f32,
@@ -101,7 +106,8 @@ pub struct Margin {
 // ── Style ─────────────────────────────────────────────────────
 
 /// UI 元素的视觉和布局属性。
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, Reflect)]
+#[reflect(name = "prism_engine::ui::Style")]
 pub struct Style {
     /// 固定宽度（px）。`None` = 由锚点决定。
     #[serde(default)]
@@ -165,7 +171,8 @@ impl Style {
 // ── ComputedLayout ────────────────────────────────────────────
 
 /// **Layout System 输出**：最终屏幕空间矩形（像素）。
-#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, Reflect)]
+#[reflect(name = "prism_engine::ui::ComputedLayout")]
 pub struct ComputedLayout {
     /// 屏幕空间边界 `[left, top, width, height]`
     #[serde(default)]
@@ -190,7 +197,8 @@ impl ComputedLayout {
 // ── Text ──────────────────────────────────────────────────────
 
 /// 文本内容。
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, Reflect)]
+#[reflect(name = "prism_engine::ui::Text")]
 pub struct Text {
     pub content: String,
     pub font_size: f32,
@@ -215,6 +223,31 @@ pub enum TextAlign {
     Center,
     Left,
     Right,
+}
+
+impl ReflectType for TextAlign {
+    fn field_type() -> FieldType {
+        FieldType::U8
+    }
+
+    fn to_value(&self) -> Value {
+        Value::U64(match self {
+            Self::Center => 0,
+            Self::Left => 1,
+            Self::Right => 2,
+        })
+    }
+
+    fn from_value(value: Value) -> Result<Self, ReflectError> {
+        match value.as_u64()? {
+            0 => Ok(Self::Center),
+            1 => Ok(Self::Left),
+            2 => Ok(Self::Right),
+            other => Err(ReflectError::BadData(format!(
+                "invalid TextAlign discriminant {other}"
+            ))),
+        }
+    }
 }
 
 // ── Interaction ───────────────────────────────────────────────

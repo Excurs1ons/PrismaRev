@@ -4,7 +4,7 @@
 //! |-----------|------------|
 //! | 层次结构  | `Parent`, `Children` |
 //! | 变换     | `LocalTransform`, `WorldTransform`, `TransformDirty` |
-//! | 渲染     | `MeshRef`, `MaterialRef`, `Active` |
+//! | 渲染     | `MeshRenderer`, `Active` |
 //! | 光源     | `DirectionalLight`, `PointLight`, `SpotLight` |
 //! | 相机     | `Camera`, `FlyCameraController` |
 //! | 天空盒   | `Skybox` |
@@ -12,20 +12,33 @@
 //! | 标识     | `Name` |
 
 use prism_ecs::Entity;
-use prism_render::managers::MeshHandle;
+use prism_reflect::{FieldType, Reflect, ReflectError, ReflectType, Value};
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
 // SceneAssetId
 // ---------------------------------------------------------------------------
 
-/// 一个 64 位资源标识符，镜像 [`prism_asset::core::AssetId`]。
+/// 场景 schema 使用的 64 位资源标识符。
 ///
-/// 这是本地副本，以便场景模块不依赖于独立的 `prism-asset-core` 工作区。
-/// 一旦 .pak 运行时管线（DESIGN.md §10.11 G1–G3）连接两个工作区，
-/// 它将被真正的 `AssetId` 替换。
+/// 与 `prism_asset::core::AssetId` 的二进制表示一致，但保留为本地类型，
+/// 使 `prism-scene` 不依赖运行时 `.pak` 代码。engine 在资产解析边界做转换。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SceneAssetId(pub u64);
+
+impl ReflectType for SceneAssetId {
+    fn field_type() -> FieldType {
+        FieldType::U64
+    }
+
+    fn to_value(&self) -> Value {
+        Value::U64(self.0)
+    }
+
+    fn from_value(value: Value) -> Result<Self, ReflectError> {
+        Ok(Self(value.as_u64()?))
+    }
+}
 
 impl SceneAssetId {
     pub const fn from_raw(raw: u64) -> Self {
@@ -69,7 +82,9 @@ impl Default for Children {
 // ---------------------------------------------------------------------------
 
 /// 局部 变换 相对 to the parent 实体 (or world-space for roots).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Reflect)]
+#[reflect(name = "prism_engine::scene::LocalTransform")]
+#[serde(default)]
 pub struct LocalTransform {
     pub translation: glam::Vec3,
     /// 四元数 Identity = `glam::Quat::IDENTITY`.
@@ -108,33 +123,12 @@ pub struct TransformDirty(pub bool);
 // 渲染 references
 // ---------------------------------------------------------------------------
 
-/// GPU 网格 引用 — resolved from an 资源 at 生成 时间
-#[derive(Debug, Clone, Copy)]
-pub struct MeshRef {
-    /// 稳定 资源 ID (for hot-reload / debugging).
-    pub asset_id: SceneAssetId,
-    /// GPU-side handle (resolved via [`RenderMeshManager`]).
-    pub render_handle: MeshHandle,
-    /// Generation of the 资源 when resolved; bumped on hot-reload.
-    pub generation: u32,
-}
-
-/// GPU 材质 槽 引用
-#[derive(Debug, Clone, Copy)]
-pub struct MaterialRef {
-    /// 稳定 资源 ID.
-    pub asset_id: SceneAssetId,
-    /// SSBO 槽 索引 from [`RenderMaterialManager`].
-    pub material_slot: u32,
-    /// Generation at 解析 时间
-    pub generation: u32,
-}
-
 /// 激活 状态 — whether the 实体 participates in 渲染
 ///
 /// Defaults to `true`. 集合 to `false` to hide an 实体 without despawning it
 /// (the 实体 and its components remain in the 世界
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Reflect)]
+#[reflect(name = "prism_engine::scene::Active")]
 pub struct Active(pub bool);
 
 impl Default for Active {
@@ -154,7 +148,9 @@ impl Default for Active {
 /// This 分量 does **not** participate in 渲染 queries — the actual
 /// 渲染 data lives on [`MeshRef`] and [`MaterialRef`] — but provides a
 /// convenient handle for 检查器 editing and future hot-reload.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Reflect)]
+#[reflect(name = "prism_engine::scene::MeshRenderer")]
+#[serde(default)]
 pub struct MeshRenderer {
     pub mesh_path: String,
     pub material_path: String,
@@ -177,7 +173,9 @@ impl MeshRenderer {
 ///
 /// Orientation is stored as XYZ Euler angles 角度 so it round-trips
 /// cleanly through `scene_state.json`.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Reflect)]
+#[reflect(name = "prism_engine::scene::DirectionalLight")]
+#[serde(default)]
 pub struct DirectionalLight {
     /// XYZ Euler angles 角度 音高 (X), yaw (Y), roll (Z).
     pub euler_xyz: glam::Vec3,
@@ -201,7 +199,9 @@ impl Default for DirectionalLight {
 }
 
 /// Point 光源
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Reflect)]
+#[reflect(name = "prism_engine::scene::PointLight")]
+#[serde(default)]
 pub struct PointLight {
     /// 线性 RGB 颜色
     pub color: glam::Vec3,
@@ -222,7 +222,9 @@ impl Default for PointLight {
 }
 
 /// Spot 光源
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Reflect)]
+#[reflect(name = "prism_engine::scene::SpotLight")]
+#[serde(default)]
 pub struct SpotLight {
     pub color: glam::Vec3,
     pub intensity: f32,
@@ -251,7 +253,9 @@ impl Default for SpotLight {
 /// 渲染器才在场景加载时构建 IBL 预卷积（CPU 卷积，约数 ms）。开屏等无 3D 光照
 /// 需求的场景不写此组件（或 `env_map = None`）→ 渲染器以廉价中性空 IBL 启动，
 /// 秒开、不加载 3D 环境贴图。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Reflect)]
+#[reflect(name = "prism_engine::scene::EnvironmentLighting")]
+#[serde(default)]
 pub struct EnvironmentLighting {
     /// 环境贴图（等距柱状 HDR）相对场景文件的路径。`None` 或缺失 = 不构建 IBL。
     pub env_map: Option<String>,
@@ -268,7 +272,9 @@ impl Default for EnvironmentLighting {
 /// 仅当 `enabled = true` 且存在烘焙好的体积数据时，渲染器才上传真实 GI probe
 /// 音量；否则保留免费的 synthetic sky 预留（仅让 set5 描述符 合法）。无 3D 光照
 /// 需求的场景（如开屏）不写此组件。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Reflect)]
+#[reflect(name = "prism_engine::scene::GiConfig")]
+#[serde(default)]
 pub struct GiConfig {
     /// 是否启用真实 GI（替换 synthetic sky 预留）。
     pub enabled: bool,
@@ -299,7 +305,9 @@ impl Default for GiConfig {
 /// 宽高比 is a 运行时 cache written by the app on 调整大小 it is exposed in
 /// 检查器视为只读。启用标志控制渲染器是否拾取
 /// this 相机
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Reflect)]
+#[reflect(name = "prism_engine::scene::Camera")]
+#[serde(default)]
 pub struct Camera {
     pub fov_y_degrees: f32,
     pub near: f32,
@@ -309,6 +317,7 @@ pub struct Camera {
     pub exposure: f32,
     /// 当前 宽高比 比率 宽度 / 高度 Written by the app on 调整大小 /
     /// orientation change; the 投影 矩阵 is derived from it each 帧
+    #[reflect(read_only)]
     pub aspect: f32,
     /// When `false` the 相机 is skipped during scene 集合 (the
     /// 渲染器 falls 后 to the 下一个 available 相机
@@ -335,7 +344,9 @@ impl Default for Camera {
 /// 输入 while `move_speed`/`look_sensitivity` are editor-editable. The
 /// 相机 position lives on the sibling [`LocalTransform`] (and its derived
 /// [`WorldTransform`]), so this 分量 carries no position of its own.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Reflect)]
+#[reflect(name = "prism_engine::scene::FlyCameraController")]
+#[serde(default)]
 pub struct FlyCameraController {
     /// Yaw around +Y (rad). 0 = looking 下 -Z (matches `FlyCamera`).
     pub yaw: f32,
@@ -367,8 +378,15 @@ impl Default for FlyCameraController {
 /// Optional: entities without a `Name` are displayed in the 检查器 by their
 /// raw id. Populated by the scene loader from the cooked `.rscn` name field;
 /// editable from the 检查器 at 运行时 (not persisted to the scene file).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Reflect)]
+#[reflect(name = "prism_engine::scene::Name")]
 pub struct Name(pub String);
+
+impl Default for Name {
+    fn default() -> Self {
+        Self(String::new())
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Skybox
@@ -383,7 +401,9 @@ pub struct Name(pub String);
 /// the cooked RSCN data (will be removed once the 完整 .pak 运行时 is wired).
 ///
 /// Typically there is exactly one skybox 实体 per scene.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Reflect)]
+#[reflect(name = "prism_engine::scene::Skybox")]
+#[serde(default)]
 pub struct Skybox {
     /// 资源 ID of the 高动态范围 environment 映射表 in the 资源 系统
     ///

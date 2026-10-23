@@ -2,92 +2,52 @@
 //!
 //! ## 架构
 //!
-//! [`SceneLoader`] 在三个层级接受 [`SceneSource`] 输入：
-//! - **`RawCooked(Vec<u8>)`** — 已在内存中的 RSCN 字节（来自 `.pak` 资源的 `ResourceManager`，或来自程序化固定数据）。
-//! - **`CookedFile(PathBuf)`** — 磁盘上的松散 RSCN 二进制文件（开发者便利）。
+//! [`SceneLoader`] 通过 [`SceneSource`] 接受三种输入：
+//! - **`RawCooked(Vec<u8>)`** — 已在内存中的 RSCN 字节（来自 `.pak` 资源的
+//!   `ResourceManager`，或来自程序化固定数据）。
+//! - **`CookedFile(PathBuf)`** — 磁盘上的松散 RSCN 文件（开发者便利）。
+//! - **`JsonFile(PathBuf)`** — 松散的 `.scene.json`（开发期直接加载作者格式）。
 //!
-//! 所有路径汇聚到 [`SceneLoader::spawn_from_cooked`]，
-//! 这是唯一接触 ECS 世界的函数。这使核心生成逻辑可测试且独立于 I/O。
+//! 前两者汇聚到 `spawn_from_bytes`：v4 走 `prism_scene::rscn::decode_scene`，
+//! 旧 v1/v2 走 `parse_rscn`。随后统一插入 ECS 组件并解析层级。
 //!
 //! ## RSCN 二进制格式
 //!
-//! 该格式是独立 `prism-asset` 工作区中 [`prism_asset::cooker::scene::SceneCooker`]
-//! 的输出。我们在此直接解析，无跨工作区依赖：
+//! v4 是唯一的 shipped 场景格式，由 `prism-cooker` 的 `SceneCooker` 从
+//! `.scene.json` 编出，codec 在 `prism-scene::rscn`：
 //!
 //! ```text
 //! [magic:4]        b"RSCN"
-//! [version:1]      1 or 2
-//! [count:4]        u32 LE — number of entities
+//! [version:1]      4
+//! [entities:4]     u32 LE
+//! [types:4]        u32 LE — (type_id, schema_hash) 表
+//!   [type_id:8][schema_hash:8] × types
 //!
-//! (v2 only)
-//! [env_len:2] u16 LE — byte 长度 of skybox 高动态范围 path (0 = no skybox)
-//! [env_path:N]     UTF-8 path (omitted if len == 0)
-//!
-//! Per 实体 (parent-first topological order):
-//! [name_len:2] u16 LE — byte 长度 of name (0 = unnamed)
-//!   [name:N]       UTF-8 name (omitted if len == 0)
-//! [parent:4] i32 LE — 索引 into 实体 数组 or -1 for root
-//!   [tx:12]        f32[3] LE
-//! [rot:16] f32[4] LE 四元数 (X, Y, Z, W)
-//!   [scale:12]     f32[3] LE
-//!   [flags:1]      bitmask: bit0=mesh, bit1=material, bit2=light, bit3=camera,
-//!                           bit4=skybox
-//!
-//! [if 网格 path_len[2] + path (UTF-8, no NUL terminator)
-//! [if 材质 path_len[2] + path
-//! [if 光源 type[1] + color[12] + intensity[4] + range[4]
-//!                  + inner_cone[4] + outer_cone[4]
-//! [if 相机 fov[4] + near[4] + far[4]
-//!   [if skybox]    path_len[2] + path (UTF-8) + enabled[1]
+//! Per entity (parent-first):
+//!   [name:str u16] [parent:i32] [translation:f32×3]
+//!   [rotation:f32×4] [scale:f32×3] [component_count:u16]
+//!     [type_id:u64] [payload_len:u32] [payload]
 //! ```
+//!
+//! 组件 payload 按 `TypeDesc::fields` 顺序位置编码，不含字段名；解码时用
+//! 编译进二进制的 `TypeDesc` 校验 `schema_hash`。场景组件通过
+//! [`prism_scene::ComponentRegistry`] 还原，GPU 句柄（`MeshRef` /
+//! `MaterialRef`）由本加载器在之后注入。
+//!
+//! 为兼容旧资产，[`parse_rscn`] 仍能读取 v1/v2 的扁平组件记录；新 cook
+//! 一律走 v4，不再生成旧格式。
 
 use std::path::PathBuf;
 
 use prism_asset::runtime::{MeshAsset, ResourceManager};
 use prism_ecs::{Entity, World};
 use prism_render::managers::GpuMaterial;
+use prism_scene::json::SceneJson;
+use prism_scene::rscn;
 
 use super::component_registry::ComponentRegistry;
 use super::components::*;
 use super::helpers::HierarchyHelper;
-
-/// Runtime-owned DTO for the optional human-readable scene format.
-///
-/// Import/cook tooling may define richer source representations, but the
-/// engine only needs this small deserialization shape for development loads.
-#[derive(Debug, serde::Deserialize)]
-struct SceneJson {
-    entities: Vec<EntityJson>,
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct EntityJson {
-    #[serde(default)]
-    name: Option<String>,
-    #[serde(default)]
-    parent: Option<u32>,
-    transform: TransformJson,
-    #[serde(default)]
-    components: std::collections::HashMap<String, serde_json::Value>,
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct TransformJson {
-    #[serde(default)]
-    translation: [f32; 3],
-    #[serde(default = "identity_quat")]
-    rotation: [f32; 4],
-    #[serde(default = "one_vec3")]
-    scale: [f32; 3],
-}
-
-fn identity_quat() -> [f32; 4] {
-    [0.0, 0.0, 0.0, 1.0]
-}
-
-fn one_vec3() -> [f32; 3] {
-    [1.0; 3]
-}
 
 // ---------------------------------------------------------------------------
 // 分量 flags (must 匹配 the cooker's constants)
@@ -141,8 +101,7 @@ pub struct SceneInstance {
 // ParsedRscnEntity — intermediate deserialised from the 二进制 stream
 // ---------------------------------------------------------------------------
 
-/// One 实体 decoded from the RSCN byte stream, before ECS insertion.
-/// One 实体 decoded from the RSCN byte stream.
+/// One entity decoded from a legacy RSCN v1/v2 byte stream, before ECS insertion.
 ///
 /// The fields correspond one-to-one with the RSCN on-disk 格式 (see 模块
 /// docs).  `name` is currently stored for debug/inspector use only.
@@ -218,6 +177,9 @@ pub struct ParsedRscn {
 ///
 /// Returns `Err` with a human-readable 消息 on 格式 errors.
 pub fn parse_rscn(data: &[u8]) -> Result<ParsedRscn, String> {
+    if rscn::is_v4(data) {
+        return Err("RSCN v4 requires the component registry (use SceneLoader::load_and_spawn)".into());
+    }
     if data.len() < 9 {
         return Err("RSCN data too short".into());
     }
@@ -449,12 +411,19 @@ fn quat_to_yaw_pitch(quat: [f32; 4]) -> (f32, f32) {
 // 公开 helpers for env path extraction
 // ---------------------------------------------------------------------------
 
-/// 读取 the skybox 高动态范围 path from cooked RSCN 字节 (v2 header).
+/// Read the skybox HDR path from cooked RSCN bytes (v4 component or v2 header).
 ///
-/// Returns `None` if the data is not 有效 RSCN v2+ or has no skybox configured.
+/// Returns `None` if the data is not valid RSCN v2+ or has no skybox configured.
 /// Used by the app 层 to pre-load the environment 映射表 from either the
 /// ResourceManager or a loose file.
 pub fn read_env_path_from_rscn_bytes(data: &[u8]) -> Option<String> {
+    if rscn::is_v4(data) {
+        let mut registry = ComponentRegistry::new();
+        super::component_registry::register_builtin_components(&mut registry);
+        return rscn::decode_scene(data, &registry)
+            .ok()
+            .and_then(|scene| scene.env_path());
+    }
     if data.len() < 11 {
         return None;
     }
@@ -477,7 +446,7 @@ pub fn read_env_path_from_rscn_bytes(data: &[u8]) -> Option<String> {
     }
 }
 
-/// 读取 the skybox 高动态范围 path from a cooked RSCN **file** (v2 header).
+/// Read the skybox HDR path from a cooked RSCN **file**.
 ///
 /// Convenience 包装器 around [`read_env_path_from_rscn_bytes`] that reads the
 /// file from disk 第一个
@@ -517,19 +486,142 @@ impl SceneLoader {
         let scene_id = SceneAssetId::generate();
         match source {
             SceneSource::RawCooked(bytes) => {
-                let parsed = parse_rscn(&bytes)?;
-                self.spawn_from_parsed(world, &parsed, scene_id)
+                self.spawn_from_bytes(world, &bytes, scene_id, registry)
             }
             SceneSource::CookedFile(path) => {
                 let bytes = std::fs::read(&path)
                     .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
-                let parsed = parse_rscn(&bytes)?;
-                self.spawn_from_parsed(world, &parsed, scene_id)
+                self.spawn_from_bytes(world, &bytes, scene_id, registry)
             }
             SceneSource::JsonFile(path) => {
                 self.load_and_spawn_json(world, &path, scene_id, registry)
             }
         }
+    }
+
+    /// Decode either RSCN v4 (schema-typed) or the legacy v1/v2 format.
+    fn spawn_from_bytes(
+        &self,
+        world: &mut World,
+        bytes: &[u8],
+        scene_id: SceneAssetId,
+        registry: &ComponentRegistry,
+    ) -> Result<SceneInstance, String> {
+        if rscn::is_v4(bytes) {
+            let decoded = rscn::decode_scene(bytes, registry)
+                .map_err(|e| format!("RSCN v4 decode error: {e}"))?;
+            self.spawn_from_decoded(world, &decoded, scene_id, registry)
+        } else {
+            let parsed = parse_rscn(bytes)?;
+            self.spawn_from_parsed(world, &parsed, scene_id)
+        }
+    }
+
+    /// Spawn entities from decoded RSCN v4 components.
+    ///
+    /// Authoring components (transforms, lights, camera, skybox, UI, …) are
+    /// applied through the registry. Render handles are attached afterwards by
+    /// the engine, keeping `prism-scene` free of GPU types.
+    fn spawn_from_decoded(
+        &self,
+        world: &mut World,
+        decoded: &rscn::DecodedScene,
+        scene_id: SceneAssetId,
+        registry: &ComponentRegistry,
+    ) -> Result<SceneInstance, String> {
+        let mut entities = Vec::with_capacity(decoded.entities.len());
+        for decoded_entity in &decoded.entities {
+            let entity = world.spawn();
+            entities.push(entity);
+            world.insert(entity, SceneMember(scene_id));
+            world.insert(entity, Active(true));
+
+            if !decoded_entity.name.is_empty() {
+                world.insert(entity, Name(decoded_entity.name.clone()));
+            }
+
+            let local = LocalTransform {
+                translation: decoded_entity.translation.into(),
+                rotation: glam::Quat::from_xyzw(
+                    decoded_entity.rotation[0],
+                    decoded_entity.rotation[1],
+                    decoded_entity.rotation[2],
+                    decoded_entity.rotation[3],
+                ),
+                scale: decoded_entity.scale.into(),
+            };
+            world.insert(entity, local.clone());
+            world.insert(entity, WorldTransform(local.to_model_matrix()));
+
+            for object in &decoded_entity.components {
+                registry.apply_object(world, entity, object);
+            }
+
+            // Runtime GPU handles are derived from the authoring bundle.
+            if let Some(renderer) = world.get::<MeshRenderer>(entity).cloned() {
+                if renderer.has_mesh() {
+                    world.insert(
+                        entity,
+                        MeshRef {
+                            asset_id: SceneAssetId::generate(),
+                            render_handle: prism_render::managers::MeshHandle::default(),
+                            generation: 0,
+                        },
+                    );
+                }
+                if renderer.has_material() {
+                    world.insert(
+                        entity,
+                        MaterialRef {
+                            asset_id: SceneAssetId::generate(),
+                            material_slot: 0,
+                            generation: 0,
+                        },
+                    );
+                }
+            }
+
+            // A cooked camera without an explicit controller gets the default
+            // free-fly controller, matching the legacy loader behaviour.
+            if world.get::<Camera>(entity).is_some()
+                && world.get::<FlyCameraController>(entity).is_none()
+            {
+                let (yaw, pitch) = quat_to_yaw_pitch(decoded_entity.rotation);
+                world.insert(
+                    entity,
+                    FlyCameraController {
+                        yaw,
+                        pitch,
+                        ..FlyCameraController::default()
+                    },
+                );
+            }
+        }
+
+        for (index, decoded_entity) in decoded.entities.iter().enumerate() {
+            if let Some(parent_index) = decoded_entity.parent {
+                let parent_index = parent_index as usize;
+                if parent_index < entities.len() {
+                    HierarchyHelper::reparent(
+                        world,
+                        entities[index],
+                        Some(entities[parent_index]),
+                    );
+                }
+            }
+        }
+
+        let root_entities: Vec<Entity> = entities
+            .iter()
+            .copied()
+            .filter(|&entity| world.get::<Parent>(entity).is_none())
+            .collect();
+
+        Ok(SceneInstance {
+            scene_id,
+            root_entities,
+            all_entities: entities,
+        })
     }
 
     /// 从 `.scene.json` 文件加载场景。

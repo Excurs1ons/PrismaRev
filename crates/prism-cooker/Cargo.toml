@@ -1,0 +1,44 @@
+[package]
+name = "prism-cooker"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Build-time asset cookers, importers, and asset database for PrismaRev"
+
+[[bin]]
+name = "prism-cook"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[features]
+default = ["cli"]
+cli = ["dep:clap", "dep:tracing-subscriber", "dep:unicode-width"]
+
+[dependencies]
+prism-asset = { path = "../prism-asset", default-features = false, features = ["core", "package"] }
+prism-scene = { path = "../prism-scene" }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+image = { workspace = true }
+gltf = { version = "1.4", optional = false }
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+tokio = { workspace = true }
+tracing = "0.1"
+
+clap = { workspace = true, optional = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
+unicode-width = { workspace = true, optional = true }
+
+[dev-dependencies]
+prism-asset = { path = "../prism-asset", default-features = false, features = [
+    "core",
+    "package",
+    "runtime",
+    "streaming",
+    "hot-reload",
+] }
+tempfile = "3"
+bincode = { workspace = true }

@@ -25,7 +25,10 @@
 //! );
 //! ```
 
-mod components;
+pub mod components {
+    //! UI schema components now live in `prism-scene`; re-export for path compatibility.
+    pub use prism_scene::ui::*;
+}
 mod input;
 mod layout;
 mod panel_base;

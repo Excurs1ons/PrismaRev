@@ -1,4 +1,4 @@
-//! # prism-asset-cli
+//! # prism-cook
 //!
 //! Command-line 接口 for the PrismaRev 资源 管线
 //!
@@ -6,31 +6,31 @@
 //!
 //! ```bash
 //! # Initialize a new project
-//! prism-asset-cli init
+//! prism-cook init
 //!
 //! # Scan the Assets/ directory
-//! prism-asset-cli scan
+//! prism-cook scan
 //!
 //! # 导入 all assets (run importers + cache)
-//! prism-asset-cli 导入
+//! prism-cook 导入
 //!
 //! # 构建 a .pak for distribution
-//! prism-asset-cli 构建 --output game.pak --compression 3
+//! prism-cook 构建 --output game.pak --compression 3
 //!
 //! # Validate an existing .pak
-//! prism-asset-cli validate game.pak
+//! prism-cook validate game.pak
 //!
 //! # 列表 registered assets
-//! prism-asset-cli 列表
+//! prism-cook 列表
 //!
 //! # Inspect a specific 资源
-//! prism-asset-cli inspect 10001
+//! prism-cook inspect 10001
 //! ```
 
-use prism_asset::cooker::{default_cooker_registry, profile, CookPipeline};
+use prism_cooker::cooker::{default_cooker_registry, profile, CookPipeline};
 use prism_asset::core::AssetType;
-use prism_asset::db::{AssetDatabase, ImportCache};
-use prism_asset::importer::{default_importer_registry, ImportPipeline};
+use prism_cooker::db::{AssetDatabase, ImportCache};
+use prism_cooker::importer::{default_importer_registry, ImportPipeline};
 use prism_asset::package::PackageBuilder;
 
 use clap::{Parser, Subcommand};
@@ -90,7 +90,7 @@ fn kv(key_en: &str, key_cn: &str, value: &str, key_en_width: usize) {
 
 #[derive(Parser)]
 #[command(
-    name = "prism-asset-cli",
+    name = "prism-cook",
     about = "PrismaRev Resource Pipeline CLI\n资源管线命令行工具"
 )]
 #[command(args_conflicts_with_subcommands = true)]
@@ -216,7 +216,7 @@ fn cmd_scan(root: &Path, _cli: &Cli) -> anyhow::Result<()> {
     let assets = assets_dir(root);
     if !assets.exists() {
         anyhow::bail!(
-            "Assets/ directory not found / 目录不存在. Run 'prism-asset-cli init' first."
+            "Assets/ directory not found / 目录不存在. Run 'prism-cook init' first."
         );
     }
 
@@ -239,7 +239,7 @@ fn cmd_scan(root: &Path, _cli: &Cli) -> anyhow::Result<()> {
         let asset_type = AssetType::from_extension(extension);
 
         let id = db.generate_id();
-        let record = prism_asset::db::AssetRecord::new(id, relative, asset_type, "raw");
+        let record = prism_cooker::db::AssetRecord::new(id, relative, asset_type, "raw");
         db.insert(record).unwrap();
         scanned += 1;
     });
@@ -257,7 +257,7 @@ fn cmd_import(root: &Path, _force: bool, _cli: &Cli) -> anyhow::Result<()> {
     let assets = assets_dir(root);
     if !assets.exists() {
         anyhow::bail!(
-            "Assets/ directory not found / 目录不存在. Run 'prism-asset-cli init' first."
+            "Assets/ directory not found / 目录不存在. Run 'prism-cook init' first."
         );
     }
 
@@ -278,7 +278,7 @@ fn cmd_import(root: &Path, _force: bool, _cli: &Cli) -> anyhow::Result<()> {
             let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
             let asset_type = AssetType::from_extension(ext);
             let id = db.generate_id();
-            let record = prism_asset::db::AssetRecord::new(id, relative, asset_type, "raw");
+            let record = prism_cooker::db::AssetRecord::new(id, relative, asset_type, "raw");
             db.insert(record).ok();
         }
     });
@@ -321,13 +321,13 @@ fn cmd_build(
 ) -> anyhow::Result<()> {
     if !db_path(root).exists() {
         anyhow::bail!(
-            "No AssetDatabase.json found / 未找到数据库. Run 'prism-asset-cli scan' first."
+            "No AssetDatabase.json found / 未找到数据库. Run 'prism-cook scan' first."
         );
     }
 
     let db = AssetDatabase::load(db_path(root))?;
     if db.is_empty() {
-        anyhow::bail!("No assets to build / 没有可构建的资源. Run 'prism-asset-cli scan' first.");
+        anyhow::bail!("No assets to build / 没有可构建的资源. Run 'prism-cook scan' first.");
     }
 
     // 加载 imported data: for now, just 读取 源 files.
@@ -553,7 +553,7 @@ fn cmd_validate(pak_path: &Path) -> anyhow::Result<()> {
     if meta_assets.is_empty() {
         println!();
         println!("💡  Tip / 提示:");
-        println!("     Rebuild with current prism-asset-cli to generate .pak.meta.json");
+        println!("     Rebuild with current prism-cook to generate .pak.meta.json");
         println!("     重新构建以生成可读的资产清单");
     }
     Ok(())
@@ -562,7 +562,7 @@ fn cmd_validate(pak_path: &Path) -> anyhow::Result<()> {
 fn cmd_list(root: &Path, _cli: &Cli) -> anyhow::Result<()> {
     if !db_path(root).exists() {
         anyhow::bail!(
-            "No AssetDatabase.json found / 未找到数据库. Run 'prism-asset-cli scan' first."
+            "No AssetDatabase.json found / 未找到数据库. Run 'prism-cook scan' first."
         );
     }
 

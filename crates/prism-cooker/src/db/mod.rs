@@ -1,4 +1,4 @@
-//! # prism-asset-db
+//! # prism-cooker::db
 //!
 //! 编辑器端资源数据库，追踪项目中所有导入的资源。
 //!
@@ -10,7 +10,7 @@
 
 #![allow(clippy::pedantic, clippy::nursery, clippy::cargo)]
 
-use crate::core::{AssetId, AssetType};
+use prism_asset::core::{AssetId, AssetType};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use thiserror::Error;

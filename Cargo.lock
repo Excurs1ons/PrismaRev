@@ -3138,20 +3138,14 @@ dependencies = [
 name = "prism-asset"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "bincode",
- "clap",
- "gltf",
- "image",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.19",
  "tokio",
  "tracing",
- "tracing-subscriber",
  "typetag",
- "unicode-width",
  "uuid",
  "xxhash-rust",
  "zstd",
@@ -3178,11 +3172,34 @@ dependencies = [
  "env_logger",
  "log",
  "prism-asset",
+ "prism-cooker",
  "prism-ecs",
  "prism-engine",
  "prism-render",
  "rand",
  "rayon",
+]
+
+[[package]]
+name = "prism-cooker"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bincode",
+ "clap",
+ "gltf",
+ "image",
+ "prism-asset",
+ "prism-scene",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.19",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "unicode-width",
+ "xxhash-rust",
 ]
 
 [[package]]
@@ -3253,7 +3270,9 @@ dependencies = [
  "prism-asset",
  "prism-audio",
  "prism-ecs",
+ "prism-reflect",
  "prism-render",
+ "prism-scene",
  "rustc-hash",
  "serde",
  "serde_json",
@@ -3274,6 +3293,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "prism-reflect"
+version = "0.1.0"
+dependencies = [
+ "glam 0.33.2",
+ "prism-reflect-derive",
+]
+
+[[package]]
+name = "prism-reflect-derive"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "prism-render"
 version = "0.1.0"
 dependencies = [
@@ -3286,6 +3322,18 @@ dependencies = [
  "raw-window-handle",
  "slotmap",
  "winit",
+]
+
+[[package]]
+name = "prism-scene"
+version = "0.1.0"
+dependencies = [
+ "glam 0.33.2",
+ "log",
+ "prism-ecs",
+ "prism-reflect",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

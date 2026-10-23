@@ -69,8 +69,8 @@ pub fn thermal_erosion(hm: &mut Heightmap, params: &ErosionParams) {
     hm.data = dst;
 
     // 更新 min/max
-    hm.min_height = hm.data.iter().cloned().fold(f64::MAX, f64::min);
-    hm.max_height = hm.data.iter().cloned().fold(f64::MIN, f64::max);
+    hm.min_height = hm.data.iter().cloned().fold(f64::INFINITY, f64::min);
+    hm.max_height = hm.data.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
 }
 
 /// 4 邻域偏移

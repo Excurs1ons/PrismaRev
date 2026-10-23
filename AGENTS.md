@@ -6,10 +6,17 @@ Conventions) before touching any matrix/coordinate math — deviating from those
 
 ## Layout
 - `crates/prism-ecs` — ECS core (Entity/Component/World/Query).
+- `crates/prism-reflect` — 运行时反射（`Reflect`/`TypeDesc`/`TypeRegistry`）+
+  自描述二进制 RTTIBin（`rtti_bin`）。egui-free，不依赖 engine/render。
+- `crates/prism-reflect-derive` — `#[derive(Reflect)]` 过程宏（仅编译期依赖）。
+- `crates/prism-scene` — 场景 schema 层：纯数据组件、`ComponentRegistry`、`.scene.json`
+  作者格式、RSCN v4 编解码。egui/render/audio-free；cooker 与 engine 共用这一份 schema。
 - `crates/prism-render` — Vulkan backend: context, swapchain, render-graph passes (`forward_pass.rs`/`shadow_map_pass.rs`/`skybox_pass.rs`),
   `GraphRenderer` driver (`graph_renderer.rs`), IBL cubemap (`ibl.rs`), bindless/PBR.
   **egui-free**; hosts inject UI via the neutral `SwapchainOverlay` trait (`external_overlay.rs`).
-- `crates/prism-engine` — engine layer: ECS scene/components, render settings, own ECS UI. **egui-free.**
+- `crates/prism-engine` — runtime engine: render systems/settings, asset resolver, audio hookup,
+  own ECS UI systems. Re-exports `prism-scene` types for path compatibility (`scene::components`,
+  `scene::component_registry`, `ui::components`). **egui-free.**
 - `crates/prism-app` — platform layer (winit event loop, window, `FrameHook` extension point,
   `run_on_android` helper). **egui-free**; the Android JNI entry lives in the user project.
 - `crates/prism-platform` — platform abstraction (window system, Vulkan surface, input routing).
@@ -22,9 +29,11 @@ Conventions) before touching any matrix/coordinate math — deviating from those
 - `crates/prism-editor-tool` — editor tools (heightmap generator CLI, terrain utilities).
 - `crates/prism-build-pipeline` — offline build pipeline (GI baking, asset cooking, heightmap CLI).
 - `crates/prism-audio` — audio subsystem.
-- `crates/prism-asset` — unified asset pipeline (Import → Cook → Package → Runtime) as ONE crate
-  with feature flags (`core`/`runtime`/`cooker`/`package`/`importer`/`db`/`cli`/`types`/`streaming`/
-  `hot-reload`); CLI bin is `prism-asset-cli` (`src/cli_main.rs`). See DESIGN.md §10.
+- `crates/prism-asset` — **runtime** asset layer only: `AssetId`/`Handle`, `.pak`
+  (`core`/`package`/`runtime`/`types`/`streaming`/`hot-reload`). No importer/cooker/db/CLI.
+- `crates/prism-cooker` — **build-time** layer: importers, cookers, asset database, CookProfile,
+  and the `prism-cook` CLI (`src/main.rs`). Depends on `prism-asset` + `prism-scene`; never
+  pulled into the game runtime. See DESIGN.md §10.
 - `launcher/` — Tauri 2 desktop shell + Android APK packaging; **own standalone workspace**, NOT a root member.
 - `projects/game/` — 用户游戏项目（`prismarev` 桌面二进制 + Android cdylib `libgame.so`；
   keyframe 开场 intro、`register_scene("intro", ...)` 注册场景、`lib.rs` 的 `android_main`）；
@@ -35,7 +44,8 @@ Conventions) before touching any matrix/coordinate math — deviating from those
 
 ## Editor / user-project separation (do not regress)
 The user project's dependency chain must stay **egui-free and editor-free**:
-`game → prism-app → prism-engine → {prism-ecs, prism-render, prism-asset}`.
+`game → prism-app → prism-engine → {prism-scene, prism-ecs, prism-render, prism-asset}`.
+`prism-cooker` / `prism-build-pipeline` are build-host only and must never appear in this chain.
 - Never add `prism-editor`, `prism-editor-host`, `egui`, `egui-winit` or `egui-ash-renderer`
   to `prism-app` / `prism-engine` / `prism-render`. Verify with
   `cd projects/game && cargo tree | grep egui` (must print nothing).
@@ -54,13 +64,17 @@ The user project's dependency chain must stay **egui-free and editor-free**:
 
 ## Build / check / test
 - Build: `scripts/run.ps1` (Windows; sets `VK_SDK`, `RUST_LOG`, runs `bash assets/shaders/compile.sh` then `cargo build`).
-  Note: the root workspace has **no runnable bin** — the desktop entry is the Tauri app in `launcher/`
+  Note: the root workspace has no **game/editor entry** binary — the desktop entry is the Tauri app in `launcher/`
   (`cd launcher && pnpm tauri dev`), which spawns the game binary `prismarev` (built in `projects/game/`: `cd projects/game && cargo run`).
 - Editor: `cargo run --manifest-path projects/editor/Cargo.toml` — the standalone editor
   project hosts the same `prism-app` loop with egui hooked in (F1 inspector, F2 render-graph, F3 perf HUD).
 - Checks: `cargo check -p prism-render`, `cargo build`, `cargo test`.
 - `crates/xtask` is excluded from the workspace — run it explicitly from a desktop host; do not add it to default `members`.
-- Prism-asset (a member of this workspace): `cargo test -p prism-asset`.
+- Prism-asset / scene / cooker: `cargo test -p prism-asset`, `cargo test -p prism-scene`,
+  `cargo test -p prism-cooker`.
+- Generic asset build: `cargo run -p prism-cooker --bin prism-cook -- build`.
+- Scene cook: `cargo run -p prism-build-pipeline -- cook assets/scenes/default.scene.json`
+  (writes `assets/cooked/default.rscn`; the old `prism-asset-cli` name is gone).
 - The `projects/game/`, `projects/sponza/`, `projects/editor/` and `launcher/` standalone workspaces need their own `cargo build` / `cargo clippy`
   runs — a root-workspace build does **not** cover them.
 
@@ -125,20 +139,51 @@ The user project's dependency chain must stay **egui-free and editor-free**:
 - Push-constant structs (`ScenePush`, `SkyboxPush`, `ShadowPassPushConstants`, ...) must match the
   `#[repr(C)]` Rust mirrors byte-for-byte.
 
-## Prism-asset architecture rules
-- Single workspace member `crates/prism-asset` with feature flags. The old 7-crate split
-  (`prism-asset-core`/`-db`/`-importer`/`-cooker`/`-package`/`-runtime`/`-cli`) was merged here —
-  do not re-add those crates; add modules behind features instead.
+## Reflection / RTTIBin rules
+- `prism-reflect` is the runtime schema layer; `prism-reflect-derive` only generates impls.
+  Keep both egui-free and free of engine/render dependencies.
+- `TypeId` is `fnv1a64(canonical type name)` — never use `std::any::TypeId` for persisted data.
+  Component derives must pin the scene-canonical name:
+  `#[reflect(name = "prism_engine::scene::Camera")]`, matching the `.scene.json` key.
+- Reflected types must implement `Default`; `from_object` starts from defaults, ignores
+  unknown fields, and keeps missing fields at their default (cross-version compatibility).
+- `read_only` is editor-only metadata: `set_field` rejects it, `set_field_force` (used by
+  deserialization) bypasses it.
+- Nested field types (other reflected structs, `glam::Vec3`/`Quat`, …) must be registered via
+  `ComponentRegistry::register_reflect_type::<T>()` before `rtti_bin::encode`, because the
+  encoder emits a full type table. Registering the outer component alone is not enough.
+- RTTIBin (full schema) is an **interchange/tool format** for the editor, standalone player and
+  external tools — not the shipped runtime scene format. Shipped RSCN must be compact:
+  `type_id + schema_hash` + positional payload, with the schema coming from the compiled
+  `TypeDesc`. `TypeId` hashes the name only; use `TypeDesc::schema_hash()` to detect field
+  changes and avoid a redundant schema copy per scene.
+- RSCN v4 is the **only** shipped scene format: `magic + version + (type_id, schema_hash) table +
+  entities`, with component payloads positional by `TypeDesc::fields` order. Do not reintroduce
+  per-component JSON strings or a full schema copy per scene. On decode, a schema-hash mismatch is
+  a hard error. RTTIBin remains the self-describing tool/interchange format.
+- Details and the byte layout: `docs/REFLECT.md`; code: `crates/prism-scene/src/rscn.rs`.
+
+## Scene / asset layering rules
+- Three responsibilities, three crates:
+  - `prism-scene` = schema/data + RSCN codec (no render/audio/asset IO);
+  - `prism-cooker` = importers/cookers/db/CLI (build tools);
+  - `prism-asset` = runtime `.pak`/`ResourceManager`.
+- Do **not** re-add the old 7-crate split (`prism-asset-core`/`-db`/`-importer`/`-cooker`/
+  `-package`/`-runtime`/`-cli`). The allowed split is the three roles above.
 - Pipeline stages: `[Source] → Importer → [Intermediate] → Cooker → [Cooked] → Package → [.pak] → Runtime`.
-- Handle types in the `core` module (`Handle<T>`, `AssetId`) are **distinct** from `prism_ecs::Entity`
-  and from `prism_asset`'s slotmap handles — never conflate them.
-- The runtime `ResourceManager` is the only consumer-facing API for game code reading `.pak` files.
-  It must not pull editor-only modules (`db`, `importer`) — the feature flags keep runtime builds lean.
-- CookProfile system (`crates/prism-asset/src/cooker/profile.rs`) drives platform-specific cooking via
-  5 built-in profiles (base/desktop/android/ios/embedded) with inheritance and CLI overrides.
-- When adding a new asset type: add to `AssetType` enum, implement `Importer` + `Cooker`,
-  wire into CLI commands.
-- Run tests: `cargo test -p prism-asset`.
+- Handle types in `prism-asset::core` (`Handle<T>`, `AssetId`) are **distinct** from
+  `prism_ecs::Entity` and from slotmap handles — never conflate them.
+- The runtime `ResourceManager` is the only consumer-facing API for game code reading `.pak`
+  files. It must not pull importer/cooker/db code.
+- CookProfile (`crates/prism-cooker/src/cooker/profile.rs`) drives platform cooking via 5 built-in
+  profiles (base/desktop/android/ios/embedded) with inheritance and CLI overrides.
+- When adding a new asset type: add to `AssetType`, implement `Importer` + `Cooker` in
+  `prism-cooker`, wire into the `prism-cook` CLI.
+- When adding a scene component: define it in `prism-scene/src/components.rs` (or `ui.rs`),
+  pin `#[reflect(name = "prism_engine::...")]`, and register it in
+  `register_builtin_components` via `register_reflect_serde` (or a custom JSON converter).
+  Then both cook and load share the schema automatically.
+- Run tests: `cargo test -p prism-asset -p prism-scene -p prism-cooker`.
 
 ## Logging
 - Use the `log` crate (`log::trace!`/`warn!`/...). Verbose pass tracing uses `log::trace!`.

@@ -1,14 +1,14 @@
-//! # prism-asset-runtime
+//! # prism-asset::runtime
 //!
-//! 轻量级运行时资源加载器，仅依赖 `prism-asset-core` 和 `prism-asset-package`。
+//! 轻量级运行时资源加载器，仅依赖 `prism-asset` 的 `core` 与 `package` 模块。
 //!
-//! 此 crate 是游戏代码唯一面向消费者的 API。它提供 [`ResourceManager`]，
+//! 此模块是游戏代码唯一面向消费者的资产读取 API。它提供 [`ResourceManager`]，
 //! 用于加载 `.pak` 包并通过 [`AssetId`] 查询解析 [`Handle<T>`] 引用。
 //!
 //! ## 设计约束
 //!
 //! - 运行时无源文件路径——所有访问均通过 [`AssetId`]。
-//! - 不依赖任何编辑器 crate（`prism-asset-db`、`prism-asset-importer` 等）。
+//! - 不依赖构建工具（`prism-cooker` 的 importer/cooker/db 等）。
 //! - 支持同步 + 异步加载。
 //! - 通过 LRU 淘汰控制内存预算（阶段 3）。
 //! - 通过文件监视器支持热重载（阶段 3，特性 `hot-reload`）。
@@ -356,7 +356,7 @@ impl ResourceManager {
         Ok(())
     }
 
-    /// 加载 a path manifest (`.pak.meta.json` written by `prism-asset-cli 构建
+    /// 加载 a path manifest (`.pak.meta.json` written by `prism-cook build`
     /// so the engine can 解析 source-relative 资源 paths to 运行时
     /// `AssetId`s.
     ///
@@ -423,7 +423,7 @@ impl ResourceManager {
     ///
     /// Returns `None` when no manifest has been loaded or the path isn't
     /// registered. The lookup is case-sensitive and expects forward-slash
-    /// separators (matching the manifest written by `prism-asset-cli 构建
+    /// separators (matching the manifest written by `prism-cook build`
     pub fn id_by_path(&self, path: &str) -> Option<AssetId> {
         self.path_map.get(path).copied()
     }

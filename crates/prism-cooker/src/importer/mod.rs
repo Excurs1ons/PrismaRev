@@ -1,4 +1,4 @@
-//! # prism-asset-importer
+//! # prism-cooker::importer
 //!
 //! PrismaRev 资源管道的导入器框架
 //!
@@ -21,7 +21,7 @@
     clippy::cargo
 )]
 
-use crate::core::{AssetId, AssetType};
+use prism_asset::core::{AssetId, AssetType};
 use crate::db::{AssetDatabase, AssetRecord, ImportCache};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

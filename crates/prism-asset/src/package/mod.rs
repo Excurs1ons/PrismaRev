@@ -1,4 +1,4 @@
-//! # prism-asset-package
+//! # prism-asset::package
 //!
 //! PrismaRev 资源管道的 `.pak` 二进制归档格式
 //!

@@ -1,0 +1,20 @@
+//! Scene schema layer: ECS scene components, the component registry, the
+//! authoring `.scene.json` shape, and the compact RSCN v4 cooked format.
+//!
+//! This crate is **runtime-agnostic**: it does not depend on Vulkan, audio,
+//! windowing, or the `.pak` runtime. The cooker uses it to turn authoring JSON
+//! into RSCN; the engine uses it to turn RSCN back into ECS components. Both
+//! sides therefore share one schema and one registry.
+
+pub mod components;
+pub mod helpers;
+pub mod json;
+pub mod registry;
+pub mod rscn;
+pub mod ui;
+
+pub use components::*;
+pub use helpers::HierarchyHelper;
+pub use json::{EntityJson, SceneJson, TransformJson};
+pub use registry::{register_builtin_components, ComponentRegistry};
+pub use rscn::{decode_scene, encode_scene, DecodedEntity, DecodedScene, RscnError};

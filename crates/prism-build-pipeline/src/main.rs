@@ -121,13 +121,42 @@ fn main() -> Result<()> {
             prism_build_pipeline::bake_gi(&cfg)
         }
         Command::Cook { input, output } => {
-            log::info!("cook: {input:?} -> {output:?} — delegating to prism-asset logic");
-            // 复用 prism-asset 的 cooker 接口（与 prism-asset-cli 保持一致）
-            anyhow::bail!("cook: pipeline 已合并至 prism-asset, 请使用 `cargo run -p prism-asset --bin prism-asset-cli -- build` 直接构建 .pak")
+            log::info!("cook: {input:?} -> {output:?}");
+            let data = std::fs::read(&input)
+                .map_err(|e| anyhow::anyhow!("cook: failed to read {}: {e}", input.display()))?;
+
+            let is_scene_json = input
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(|name| name.ends_with(".scene.json"))
+                .unwrap_or(false);
+            if !is_scene_json {
+                anyhow::bail!(
+                    "cook: {} is not a .scene.json; use `prism-cook` for generic assets",
+                    input.display()
+                );
+            }
+
+            let cooked = prism_cooker::cooker::scene::SceneCooker::default()
+                .cook_json_bytes(&data)?;
+            std::fs::create_dir_all(&output)?;
+            let stem = input
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("scene.scene.json")
+                .trim_end_matches(".scene.json");
+            let out_path = output.join(format!("{stem}.rscn"));
+            std::fs::write(&out_path, cooked)
+                .map_err(|e| anyhow::anyhow!("cook: failed to write {}: {e}", out_path.display()))?;
+            log::info!("cook: wrote {}", out_path.display());
+            Ok(())
         }
         Command::Pack { input, output } => {
-            log::info!("pack: {input:?} -> {output:?} — delegating to prism-asset logic");
-            anyhow::bail!("pack: pipeline 已合并至 prism-asset, 请使用 `cargo run -p prism-asset --bin prism-asset-cli -- build` 直接构建 .pak")
+            log::info!("pack: {input:?} -> {output:?}");
+            anyhow::bail!(
+                "pack: build the .pak with `cargo run -p prism-cooker --bin prism-cook -- build`                  (input: {})",
+                input.display()
+            )
         }
         Command::Heightmap {
             output,

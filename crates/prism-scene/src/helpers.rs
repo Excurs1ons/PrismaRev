@@ -5,7 +5,7 @@
 
 use prism_ecs::{Entity, World};
 
-use super::components::{Children, Parent};
+use crate::components::{Children, Parent};
 
 /// Safe API for managing the 实体 hierarchy.
 pub struct HierarchyHelper;

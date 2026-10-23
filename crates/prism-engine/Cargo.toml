@@ -11,6 +11,8 @@ legacy-disk-scenes = []
 
 [dependencies]
 prism-ecs = { path = "../prism-ecs" }
+prism-reflect = { path = "../prism-reflect" }
+prism-scene = { path = "../prism-scene" }
 prism-render = { path = "../prism-render" }
 prism-asset = { path = "../prism-asset", default-features = false, features = ["runtime"] }
 

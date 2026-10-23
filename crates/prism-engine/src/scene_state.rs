@@ -114,46 +114,58 @@ impl CameraState {
     }
 }
 
-// --- DirectionalLight (new scene 分量 no 启用 field) ---
-impl SceneDirLight {
-    fn to_json(self) -> String {
-        format!(
-            "{{\"euler_xyz\":[{}],\"intensity\":{},\"color\":[{}],\"ambient\":{}}}",
-            fmt3(self.euler_xyz),
-            self.intensity,
-            fmt3(self.color),
-            self.ambient,
-        )
-    }
-
-    fn from_json(s: &str) -> Option<Self> {
-        let euler = find_array_f32(s, "euler_xyz")?;
-        let col = find_array_f32(s, "color")?;
-        if euler.len() != 3 || col.len() != 3 {
-            return None;
-        }
-        Some(Self {
-            euler_xyz: Vec3::new(euler[0], euler[1], euler[2]),
-            intensity: find_field_f32(s, "intensity")?,
-            color: Vec3::new(col[0], col[1], col[2]),
-            ambient: find_field_f32(s, "ambient").unwrap_or(1.0),
-        })
-    }
+// --- DirectionalLight (new scene component; no enabled field) ---
+fn dir_light_to_json(light: &SceneDirLight) -> String {
+    format!(
+        "{{\"euler_xyz\":[{}],\"intensity\":{},\"color\":[{}],\"ambient\":{}}}",
+        fmt3(light.euler_xyz),
+        light.intensity,
+        fmt3(light.color),
+        light.ambient,
+    )
 }
 
-// --- PointLight + its sibling position/visibility components ---
-impl ScenePtLight {
-    fn from_json(s: &str) -> Option<Self> {
-        let col = find_array_f32(s, "color").unwrap_or_default();
-        Some(Self {
-            range: find_field_f32(s, "range").unwrap_or(12.0),
-            color: if col.len() == 3 {
-                Vec3::new(col[0], col[1], col[2])
-            } else {
-                Vec3::ONE
-            },
-            intensity: find_field_f32(s, "intensity").unwrap_or(1.0),
-        })
+fn dir_light_from_json(s: &str) -> Option<SceneDirLight> {
+    let euler = find_array_f32(s, "euler_xyz")?;
+    let col = find_array_f32(s, "color")?;
+    if euler.len() != 3 || col.len() != 3 {
+        return None;
+    }
+    Some(SceneDirLight {
+        euler_xyz: Vec3::new(euler[0], euler[1], euler[2]),
+        intensity: find_field_f32(s, "intensity")?,
+        color: Vec3::new(col[0], col[1], col[2]),
+        ambient: find_field_f32(s, "ambient").unwrap_or(1.0),
+    })
+}
+
+fn point_light_from_json(s: &str) -> Option<ScenePtLight> {
+    let col = find_array_f32(s, "color").unwrap_or_default();
+    Some(ScenePtLight {
+        range: find_field_f32(s, "range").unwrap_or(12.0),
+        color: if col.len() == 3 {
+            Vec3::new(col[0], col[1], col[2])
+        } else {
+            Vec3::ONE
+        },
+        intensity: find_field_f32(s, "intensity").unwrap_or(1.0),
+    })
+}
+
+fn local_transform_to_json(transform: &LocalTransform) -> String {
+    format!(
+        "{{\"translation\":[{}],\"rotation\":[{}],\"scale\":[{}]}}",
+        fmt3(transform.translation),
+        fmt4(transform.rotation),
+        fmt3(transform.scale),
+    )
+}
+
+fn local_transform_from_fields(translation: Vec3, rotation: Quat, scale: Vec3) -> LocalTransform {
+    LocalTransform {
+        translation,
+        rotation,
+        scale,
     }
 }
 
@@ -177,7 +189,7 @@ impl SavedPointLight {
         let position = find_array_f32(s, "position")
             .and_then(|value| (value.len() == 3).then(|| Vec3::new(value[0], value[1], value[2])));
         Some(Self {
-            light: ScenePtLight::from_json(s)?,
+            light: point_light_from_json(s)?,
             position,
             active: find_field_bool(s, "active")
                 .or_else(|| find_field_bool(s, "enabled"))
@@ -185,26 +197,6 @@ impl SavedPointLight {
         })
     }
 }
-// --- LocalTransform (new scene 分量 no 启用 field) ---
-impl LocalTransform {
-    fn to_json(&self) -> String {
-        format!(
-            "{{\"translation\":[{}],\"rotation\":[{}],\"scale\":[{}]}}",
-            fmt3(self.translation),
-            fmt4(self.rotation),
-            fmt3(self.scale),
-        )
-    }
-
-    fn from_json_fields(translation: Vec3, rotation: Quat, scale: Vec3) -> Self {
-        Self {
-            translation,
-            rotation,
-            scale,
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // 保存 / 加载
 // ---------------------------------------------------------------------------
@@ -259,7 +251,7 @@ pub fn save_scene_state(world: &World) {
 
     // Directional 光源
     if let Some(dl) = &dir_light {
-        let _ = writeln!(json, "\"directionalLight\":{},", (*dl).to_json());
+        let _ = writeln!(json, "\"directionalLight\":{},", dir_light_to_json(dl));
     }
 
     // Point lights
@@ -278,7 +270,7 @@ pub fn save_scene_state(world: &World) {
         if i > 0 {
             json.push(',');
         }
-        let _ = write!(json, "{}", t.to_json());
+        let _ = write!(json, "{}", local_transform_to_json(t));
     }
     json.push_str("]\n");
     json.push_str("}\n");
@@ -342,7 +334,7 @@ fn apply_scene_state(world: &mut World, text: &str) {
 
     // --- Directional 光源 ---
     if let Some(dl_json) = extract_object(&text, "directionalLight") {
-        if let Some(dl) = SceneDirLight::from_json(&dl_json) {
+        if let Some(dl) = dir_light_from_json(&dl_json) {
             for (_, existing) in world.query_mut::<SceneDirLight>() {
                 *existing = dl;
             }
@@ -571,7 +563,7 @@ fn parse_transform_array(s: &str) -> Vec<LocalTransform> {
         let t = find_array_f32(&obj_str, "translation").unwrap_or_default();
         let r = find_array_f32(&obj_str, "rotation").unwrap_or_default();
         let s = find_array_f32(&obj_str, "scale").unwrap_or_default();
-        out.push(LocalTransform::from_json_fields(
+        out.push(local_transform_from_fields(
             if t.len() == 3 {
                 glam::Vec3::new(t[0], t[1], t[2])
             } else {

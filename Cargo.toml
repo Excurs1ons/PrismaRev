@@ -2,6 +2,10 @@
 resolver = "2"
 members = [
     "crates/prism-ecs",
+    "crates/prism-reflect",
+    "crates/prism-reflect-derive",
+    "crates/prism-cooker",
+    "crates/prism-scene",
     "crates/prism-render",
     "crates/prism-engine",
     "crates/prism-app",
@@ -56,10 +60,10 @@ env_logger = "0.11"
 # Error handling
 anyhow = "1"
 
-# Serialization / async / errors. These keys are shared with `crates/prism-asset`
-# (a member of this workspace); that crate declares the few it needs locally
-# (uuid, typetag, gltf, ...) and inherits the rest from here.
-# Keep versions consistent if any are overridden in prism-asset/Cargo.toml.
+# Serialization / async / errors. These keys are shared with `prism-asset` and
+# `prism-cooker` (members of this workspace); those crates declare the few they
+# need locally (uuid, typetag, gltf, ...) and inherit the rest from here.
+# Keep versions consistent if any are overridden in their Cargo.toml files.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "1.1.4"

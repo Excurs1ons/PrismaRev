@@ -5,9 +5,20 @@
 //!
 //! See `docs/plans/2026-07-25-modern-scene-system-design.md`.
 
-pub mod component_registry;
-pub mod components;
-pub mod helpers;
+pub mod component_registry {
+    //! Compatibility re-export of [`prism_scene::registry`].
+    pub use prism_scene::registry::*;
+}
+pub mod runtime_components;
+pub mod components {
+    //! Scene-schema components (from `prism-scene`) plus runtime GPU refs.
+    pub use prism_scene::components::*;
+    pub use super::runtime_components::{MaterialRef, MeshRef};
+}
+pub mod helpers {
+    //! Compatibility re-export of [`prism_scene::helpers`].
+    pub use prism_scene::helpers::*;
+}
 pub mod hot_reload;
 pub mod loader;
 pub mod scene_system;

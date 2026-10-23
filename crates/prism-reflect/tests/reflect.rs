@@ -1,0 +1,252 @@
+//! prism-reflect 集成测试：派生、动态注册表、RTTIBin 往返。
+
+use prism_reflect::{rtti_bin, Reflect, ReflectError, TypeId, TypeRegistry, Value};
+
+#[derive(Debug, Default, Clone, PartialEq, Reflect)]
+struct Inner {
+    a: f32,
+    b: bool,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Reflect)]
+#[reflect(name = "test::Outer", version = 3)]
+struct Outer {
+    name: String,
+    pos: glam::Vec3,
+    items: Vec<f32>,
+    maybe: Option<String>,
+    inner: Inner,
+    #[reflect(skip)]
+    runtime_only: u64,
+    #[reflect(read_only)]
+    id: u32,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Reflect)]
+struct Tuple(pub bool, pub String);
+
+fn sample() -> Outer {
+    Outer {
+        name: "hello".into(),
+        pos: glam::Vec3::new(1.0, 2.0, 3.0),
+        items: vec![1.5, 2.5],
+        maybe: Some("opt".into()),
+        inner: Inner { a: 9.0, b: true },
+        runtime_only: 0,
+        id: 7,
+    }
+}
+
+fn registry() -> TypeRegistry {
+    let mut registry = TypeRegistry::new();
+    registry.register::<Outer>();
+    registry.register::<Inner>();
+    registry.register::<Tuple>();
+    registry.register::<glam::Vec3>();
+    registry
+}
+
+#[test]
+fn type_id_is_stable_and_const() {
+    const A: TypeId = TypeId::from_name("test::Outer");
+    const B: TypeId = TypeId::from_name("test::Outer");
+    const C: TypeId = TypeId::from_name("test::Other");
+    assert_eq!(A, B);
+    assert_ne!(A, C);
+    assert_eq!(A, TypeId::from_name("test::Outer"));
+}
+
+#[test]
+fn descriptor_has_fields_and_offsets() {
+    let desc = Outer::type_desc();
+    assert_eq!(desc.name, "test::Outer");
+    assert_eq!(desc.version, 3);
+    assert_eq!(desc.size, std::mem::size_of::<Outer>());
+    assert!(desc.field("pos").is_some());
+    assert!(desc.field("runtime_only").is_none());
+    assert!(desc.field("id").unwrap().read_only);
+    assert!(desc
+        .field("inner")
+        .unwrap()
+        .ty
+        .display_name()
+        .starts_with("struct"));
+}
+
+#[test]
+fn get_and_set_fields() {
+    let mut value = sample();
+
+    assert_eq!(value.get_field("name"), Some(Value::Str("hello".into())));
+    value.set_field("name", Value::Str("world".into())).unwrap();
+    assert_eq!(value.name, "world");
+
+    value
+        .set_field("items", Value::List(vec![Value::F64(4.0)]))
+        .unwrap();
+    assert_eq!(value.items, vec![4.0]);
+
+    value.set_field("maybe", Value::None).unwrap();
+    assert_eq!(value.maybe, None);
+
+    let inner = Value::Object(Inner { a: 1.0, b: false }.to_object());
+    value.set_field("inner", inner).unwrap();
+    assert_eq!(value.inner, Inner { a: 1.0, b: false });
+
+    let pos = Value::Object(glam::Vec3::new(4.0, 5.0, 6.0).to_object());
+    value.set_field("pos", pos).unwrap();
+    assert_eq!(value.pos, glam::Vec3::new(4.0, 5.0, 6.0));
+}
+
+#[test]
+fn set_rejects_unknown_and_read_only() {
+    let mut value = sample();
+    assert_eq!(
+        value.set_field("nope", Value::None),
+        Err(ReflectError::UnknownField("nope".into()))
+    );
+    assert_eq!(
+        value.set_field("id", Value::U64(1)),
+        Err(ReflectError::ReadOnly("id".into()))
+    );
+    // 反序列化路径忽略 read_only。
+    value.set_field_force("id", Value::U64(99)).unwrap();
+    assert_eq!(value.id, 99);
+}
+
+#[test]
+fn from_object_keeps_defaults_for_missing_and_skips_unknown() {
+    let mut object = sample().to_object();
+    object.fields.remove("name");
+    object
+        .fields
+        .insert("not_in_schema".into(), Value::Bool(true));
+
+    let restored = Outer::from_object(&object).unwrap();
+    assert_eq!(restored.name, ""); // Default 保留
+    assert_eq!(restored.pos, glam::Vec3::new(1.0, 2.0, 3.0));
+    assert_eq!(restored.id, 7); // read_only 字段经 force 路径恢复
+                                // skip 字段永远不会从对象恢复。
+    assert_eq!(restored.runtime_only, 0);
+}
+
+#[test]
+fn from_object_checks_type_id() {
+    let object = Inner { a: 1.0, b: true }.to_object();
+    let err = Outer::from_object(&object).unwrap_err();
+    assert!(matches!(err, ReflectError::TypeIdMismatch { .. }));
+}
+
+#[test]
+fn tuple_struct_uses_indices_as_names() {
+    let value = Tuple(true, "x".into());
+    let object = value.to_object();
+    assert_eq!(object.get("0"), Some(&Value::Bool(true)));
+    assert_eq!(object.get("1"), Some(&Value::Str("x".into())));
+
+    let restored = Tuple::from_object(&object).unwrap();
+    assert_eq!(restored, value);
+}
+
+#[test]
+fn registry_restores_without_static_type() {
+    let registry = registry();
+    let object = sample().to_object();
+
+    let any = registry.from_object(&object).unwrap();
+    let restored = any.downcast_ref::<Outer>().expect("downcast Outer");
+    assert_eq!(restored, &sample());
+
+    // 反向：Any -> Object。
+    let any: Box<dyn std::any::Any> = Box::new(sample());
+    let object2 = registry.to_object(any.as_ref()).expect("registered");
+    assert_eq!(object, object2);
+
+    assert!(registry.descriptor_by_name("test::Outer").is_some());
+    assert!(registry
+        .descriptor(TypeId::from_name("test::Outer"))
+        .is_some());
+    assert_eq!(registry.len(), 4);
+}
+
+#[test]
+fn rtti_bin_round_trip_and_determinism() {
+    let registry = registry();
+    let object = sample().to_object();
+
+    let bytes = rtti_bin::encode_one(&object, &registry).unwrap();
+    assert_eq!(&bytes[..4], &rtti_bin::MAGIC);
+
+    // 同一输入重复编码必须字节一致。
+    let bytes2 = rtti_bin::encode_one(&object, &registry).unwrap();
+    assert_eq!(bytes, bytes2);
+
+    let decoded = rtti_bin::decode(&bytes).unwrap();
+    assert_eq!(decoded.objects, vec![object.clone()]);
+    assert_eq!(decoded.type_table.len(), 3); // Outer + Inner + glam::Vec3
+    assert_eq!(
+        decoded
+            .type_table
+            .get_by_name("test::Outer")
+            .unwrap()
+            .version,
+        3
+    );
+
+    // 用注册表把解码结果还原成具体类型。
+    let any = registry.from_object(&decoded.objects[0]).unwrap();
+    assert_eq!(any.downcast_ref::<Outer>().unwrap(), &sample());
+
+    // 嵌套对象在类型表里存在。
+    assert!(decoded.type_table.get(Inner::type_desc().id).is_some());
+}
+
+#[test]
+fn rtti_bin_multiple_objects() {
+    let registry = registry();
+    let objects = vec![sample().to_object(), Inner { a: 2.0, b: false }.to_object()];
+
+    let bytes = rtti_bin::encode(&objects, &registry).unwrap();
+    let decoded = rtti_bin::decode(&bytes).unwrap();
+    assert_eq!(decoded.objects, objects);
+}
+
+#[test]
+fn rtti_bin_requires_registered_types() {
+    let registry = TypeRegistry::new();
+    let err = rtti_bin::encode_one(&sample().to_object(), &registry).unwrap_err();
+    assert!(matches!(err, rtti_bin::RttiError::NotRegistered(_)));
+}
+
+#[test]
+fn rtti_bin_rejects_bad_input() {
+    assert_eq!(
+        rtti_bin::decode(b"nope").unwrap_err(),
+        rtti_bin::RttiError::BadMagic
+    );
+
+    let registry = registry();
+    let mut bytes = rtti_bin::encode_one(&sample().to_object(), &registry).unwrap();
+    bytes.push(0);
+    assert_eq!(
+        rtti_bin::decode(&bytes).unwrap_err(),
+        rtti_bin::RttiError::TrailingBytes
+    );
+
+    // 截断。
+    let bytes = rtti_bin::encode_one(&sample().to_object(), &registry).unwrap();
+    let truncated = &bytes[..bytes.len() / 2];
+    assert!(rtti_bin::decode(truncated).is_err());
+}
+
+#[test]
+fn value_type_errors_are_reported() {
+    let mut value = sample();
+    let err = value
+        .set_field("items", Value::Str("x".into()))
+        .unwrap_err();
+    assert!(matches!(err, ReflectError::TypeMismatch { .. }));
+
+    let err = value.set_field("inner", Value::F64(1.0)).unwrap_err();
+    assert!(matches!(err, ReflectError::TypeMismatch { .. }));
+}

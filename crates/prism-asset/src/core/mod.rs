@@ -1,4 +1,4 @@
-//! # prism-asset-core
+//! # prism-asset::core
 //!
 //! PrismaRev 资源管道的基础类型
 //!

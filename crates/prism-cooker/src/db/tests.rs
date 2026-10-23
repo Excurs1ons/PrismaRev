@@ -96,7 +96,7 @@
 
     #[test]
     fn id_generator_works() {
-        let mut gen = crate::core::id::AssetIdGenerator::new(1, 0);
+        let mut gen = prism_asset::core::id::AssetIdGenerator::new(1, 0);
         let a = gen.next();
         let b = gen.next();
         assert!(b > a);

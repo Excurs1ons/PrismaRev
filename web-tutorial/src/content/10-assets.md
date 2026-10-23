@@ -1,6 +1,6 @@
 # 10 · 资产管线
 
-M3 的场景是代码里手写几个立方体。真实引擎要从**文件**加载——glTF 场景、PNG/JPEG 纹理、HDR 环境。这部分由**两层体系**支撑：运行时 `prism-asset` crate（游戏内加载）和同一 crate 内的离线资产管线模块（`importer`/`cooker`/`package`/`db`/`cli`，feature 开关）。
+M3 的场景是代码里手写几个立方体。真实引擎要从**文件**加载——glTF 场景、PNG/JPEG 纹理、HDR 环境。这部分按职责分成运行时（`prism-asset`）、场景 schema（`prism-scene`）和构建工具（`prism-cooker` / `prism-build-pipeline`）三层。
 
 :::info 里程碑 M5（资产管线）
 目标：编译着色器、加载 glTF 2.0 场景、解码图像纹理，把「美术产出的资源」变成「GPU 上的缓冲与图像」。本章聚焦 glTF 与图像两条主线，并在末尾介绍离线资产管线。
@@ -10,26 +10,28 @@ M3 的场景是代码里手写几个立方体。真实引擎要从**文件**加�
 
 ## 离线资产管线：prism-asset 的离线模块
 
-除了运行时加载，引擎还维护一套**离线资产管线**——`crates/prism-asset` 单一 crate 内通过 feature 开关组合的离线模块（`db` / `importer` / `cooker` / `package` / `cli`），专用于构建期资产处理：
+除了运行时加载，引擎还维护一套**构建期资产管线**。它被拆成职责明确的 crate，而不是把所有 feature 塞回运行时：
 
 ```
-crates/prism-asset/                ← 根 workspace 成员（feature 开关）
-├── src/core/                      # 核心类型：Handle<T>, AssetId, AssetType
-├── src/db/                        # 资产数据库（索引/元数据）
-├── src/importer/                  # 导入器：源文件 → Intermediate 表示
-├── src/cooker/                    # 烘焙器：Intermediate → 平台优化格式
-│   └── profile.rs                 # CookProfile 系统（5 个内置 profile）
-├── src/package/                   # 打包器：烘焙结果 → .pak 文件
-├── src/runtime/                   # 运行时读取 .pak（ResourceManager API）
-└── src/cli_main.rs                # CLI 入口（bin: prism-asset-cli）
+crates/prism-asset/                ← 运行时：AssetId / Handle / .pak / ResourceManager
+crates/prism-scene/                ← schema：组件 / ComponentRegistry / .scene.json / RSCN v4
+crates/prism-cooker/               ← 构建工具：importer / cooker / db / prism-cook CLI
+└── src/cooker/profile.rs          # CookProfile 系统（5 个内置 profile）
+crates/prism-build-pipeline/       ← 批处理编排：bake-gi / cook / heightmap
 ```
 
 **管线阶段**：`[Source] → Importer → [Intermediate] → Cooker → [Cooked] → Package → [.pak] → Runtime`
 
-**CookProfile 系统**（`src/cooker/profile.rs`）驱动平台特定的烘焙配置，内置 5 个 profile（base/desktop/android/ios/embedded），支持继承和 CLI 覆盖。不同平台可以输出不同格式（如 Android 用 KTX2 纹理压缩，桌面保留未压缩）。
+**CookProfile 系统**（`prism-cooker/src/cooker/profile.rs`）驱动平台特定的烘焙配置，内置 5 个 profile（base/desktop/android/ios/embedded），支持继承和 CLI 覆盖。不同平台可以输出不同格式（如 Android 用 ASTC 纹理压缩，桌面保留未压缩）。
 
-:::tip 为什么用 feature 开关而不是独立工作空间
-离线管线工具链依赖繁重（如 KTX-Software、meshoptimizer），不应拖慢主引擎编译。它最初是独立的 7-crate workspace，2026-07 重构后合并回 `crates/prism-asset`，用 feature（`cooker`/`importer`/`db`/`cli`）按需启用——纯运行时构建（`runtime`/`core` feature）不会编译这些重型依赖。构建/测试：`cargo build -p prism-asset && cargo test -p prism-asset`。
+场景使用 RSCN v4：`prism-cooker::SceneCooker` 把 `.scene.json` 编成
+`type_id + schema_hash + 位置编码载荷`，`prism-engine::SceneLoader` 用编译进运行时的
+`TypeDesc` 解码。运行时不需要构建工具，也不会为每个场景重复存一份 schema。
+
+:::tip 为什么构建工具单独成 crate
+离线管线依赖繁重（如 KTX-Software、meshoptimizer），不应拖慢主引擎或进入游戏运行时。
+`prism-asset` 只保留 `.pak` / `ResourceManager`；importer/cooker/db 在 `prism-cooker`，
+由 `prism-build-pipeline` 或编辑器调用。构建/测试：`cargo test -p prism-asset -p prism-scene -p prism-cooker`。
 :::
 
 ## 为什么需要资产层
@@ -175,7 +177,7 @@ fn load_scene_state(
 ## 动手练习
 
 :::exercise
-1. 读 `crates/prism-engine/src/scene/loader.rs`（运行时场景加载）和 `crates/prism-asset/src/importer/mod.rs`（离线导入）中的 glTF 处理代码，画出「glTF node → InstanceData」的映射关系。
+1. 读 `crates/prism-engine/src/scene/loader.rs`（运行时场景加载）和 `crates/prism-cooker/src/importer/mod.rs`（离线导入）中的 glTF 处理代码，画出「glTF node → InstanceData」的映射关系。
 2. 用 `image` crate 写一段代码：加载一张 PNG，打印它的宽/高/像素格式。
 3. 思考：`MeshData`（CPU 端）和 `MeshHandle`（引用）为什么必须分开？渲染层（`prism-render`）如何消费它们？
 4. 把一个真实的 `.glb` 拖进 `assets/`，跑引擎看模型是否出现——这是 M3 场景「被文件替代」的瞬间。

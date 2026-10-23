@@ -18,7 +18,6 @@ pub use hydraulic::hydraulic_erosion;
 pub use terrain::generate_terrain;
 pub use thermal::thermal_erosion;
 
-use std::f64;
 
 // ---------------------------------------------------------------------------
 // Heightmap
@@ -46,8 +45,8 @@ impl Heightmap {
             width * height,
             "data length must match width × height"
         );
-        let mut min_h = f64::MAX;
-        let mut max_h = f64::MIN;
+        let mut min_h = f64::INFINITY;
+        let mut max_h = f64::NEG_INFINITY;
         for &v in &data {
             if v < min_h {
                 min_h = v;

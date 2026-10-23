@@ -1,4 +1,4 @@
-//! Integration tests for the `prism-asset-cli` 二进制 (std::process::Command).
+//! Integration tests for the `prism-cook` 二进制 (std::process::Command).
 //!
 //! These tests 构建 a minimal .pak, 调用 the CLI 二进制 and 验证 its
 //! stdout / stderr 输出 — ensuring the validate-shortcut and metadata
@@ -14,10 +14,10 @@ use prism_asset::package::PackageBuilder;
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// 定位 the compiled prism-asset-cli 二进制
+/// 定位 the compiled prism-cook 二进制
 ///
 /// `cargo test` places the test 可执行文件 in `target/debug/deps/`, while the
-/// CLI 二进制 lives in `target/debug/` (or `target/debug/prism-asset-cli.exe` on
+/// CLI 二进制 lives in `target/debug/` (or `target/debug/prism-cook.exe` on
 /// Windows We walk 上 from the test exe to 查找 it.
 fn cli_binary() -> PathBuf {
     let mut path = std::env::current_exe().expect("current exe");
@@ -27,18 +27,18 @@ fn cli_binary() -> PathBuf {
         path.pop(); // deps
     }
     path.push(if cfg!(windows) {
-        "prism-asset-cli.exe"
+        "prism-cook.exe"
     } else {
-        "prism-asset-cli"
+        "prism-cook"
     });
     if !path.exists() {
         // 回退 maybe we're in a 工作区 目标 dir.
         path.pop();
         path.push("debug");
         path.push(if cfg!(windows) {
-            "prism-asset-cli.exe"
+            "prism-cook.exe"
         } else {
-            "prism-asset-cli"
+            "prism-cook"
         });
     }
     assert!(path.exists(), "CLI binary not found: {}", path.display());
@@ -61,7 +61,7 @@ fn run_cli(args: &[&str]) -> (String, String) {
     let output = Command::new(cli_binary())
         .args(args)
         .output()
-        .expect("failed to run prism-asset-cli");
+        .expect("failed to run prism-cook");
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -81,8 +81,8 @@ fn cli_no_args_shows_help() {
         "help text should contain Usage:\n{stdout}"
     );
     assert!(
-        stdout.contains("prism-asset-cli"),
-        "help text should mention prism-asset-cli\n{stdout}"
+        stdout.contains("prism-cook"),
+        "help text should mention prism-cook\n{stdout}"
     );
     assert!(stderr.is_empty(), "no error expected on stderr:\n{stderr}");
 }

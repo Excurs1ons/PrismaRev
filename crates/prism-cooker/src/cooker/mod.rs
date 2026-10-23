@@ -1,4 +1,4 @@
-//! # prism-asset-cooker
+//! # prism-cooker
 //!
 //! PrismaRev 资源管线的烹饪器框架
 //!
@@ -13,9 +13,9 @@
 
 #![allow(clippy::pedantic, clippy::nursery, clippy::cargo)]
 
-use crate::core::{AssetId, AssetType};
+use prism_asset::core::{AssetId, AssetType};
 use crate::db::AssetRecord;
-use crate::package::PackageBuilder;
+use prism_asset::package::PackageBuilder;
 use std::collections::HashMap;
 use thiserror::Error;
 
@@ -38,7 +38,7 @@ pub enum CookError {
     Io(#[from] std::io::Error),
 
     #[error("Package error: {0}")]
-    Package(#[from] crate::package::PackageError),
+    Package(#[from] prism_asset::package::PackageError),
 }
 
 // ---------------------------------------------------------------------------
@@ -1095,7 +1095,7 @@ pub fn default_cooker_registry() -> CookerRegistry {
     reg.register(Box::new(MeshCooker));
     reg.register(Box::new(MaterialCooker));
     reg.register(Box::new(ShaderCooker));
-    reg.register(Box::new(scene::SceneCooker));
+    reg.register(Box::new(scene::SceneCooker::default()));
     reg
 }
 

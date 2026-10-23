@@ -11,7 +11,7 @@
 use super::{ErosionParams, Heightmap, Particle};
 use rand::RngExt;
 use rayon::prelude::*;
-use std::f64;
+use std::f64::consts::PI;
 
 /// 执行一轮水力侵蚀。
 ///
@@ -65,8 +65,8 @@ pub fn hydraulic_erosion(hm: &mut Heightmap, params: &ErosionParams) {
     }
 
     // 5. 更新 min/max
-    hm.min_height = f64::MAX;
-    hm.max_height = f64::MIN;
+    hm.min_height = f64::INFINITY;
+    hm.max_height = f64::NEG_INFINITY;
     for &v in &hm.data {
         if v < hm.min_height {
             hm.min_height = v;
@@ -129,7 +129,7 @@ fn process_particle(
             (dir_x / len, dir_y / len)
         } else {
             // 梯度为零时随机漫步
-            let angle = rand::rng().random::<f64>() * 2.0 * f64::consts::PI;
+            let angle = rand::rng().random::<f64>() * 2.0 * PI;
             (angle.cos(), angle.sin())
         };
 
