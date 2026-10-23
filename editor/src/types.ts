@@ -36,6 +36,24 @@ export interface SceneTemplate {
   label: string;
 }
 
+/** 资产元信息（资产管理器用）。 */
+export interface AssetInfo {
+  path: string;
+  sizeBytes: number;
+  kind: "model" | "texture" | "env" | "scene" | "package" | "data" | "other";
+}
+
+/** 「某场景某字段引用了该资产」的记录。 */
+export interface AssetRef {
+  scene: string;
+  scenePath: string;
+  entity: string;
+  entityIndex: number;
+  component: string;
+  field: string;
+  value: string;
+}
+
 /** 快速添加实体的预设。 */
 export interface EntityPreset {
   id: string;

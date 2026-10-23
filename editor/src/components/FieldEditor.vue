@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { computed, inject } from "vue";
-import { ASSETS_KEY } from "../keys";
+import ColorField from "./ColorField.vue";
+import NumberField from "./NumberField.vue";
+import { ASSETS_KEY, ASSET_PICKER_KEY } from "../keys";
+import { isColorField } from "../format";
 import type { FieldSchema, JsonValue, Schema } from "../types";
 
 /**
@@ -8,8 +11,9 @@ import type { FieldSchema, JsonValue, Schema } from "../types";
  * 只作为类型/只读/嵌套结构体的提示。这样 `Name`（裸字符串）、
  * `Active`（裸布尔）这类「JSON 形状 ≠ 派生结构体」的组件也能正确编辑。
  *
- * `path` 是字段的稳定编辑路径（如 `components.X.font_size`），随每次改动
- * 一并向上抛，供宿主做「同一字段的连续输入合并成一次撤销」。
+ * `path` 是字段的稳定编辑路径（组件内相对路径，如 `anchors.min_x`），随每次
+ * 改动一并向上抛：宿主用它做「同字段连续输入合并成一次撤销」，
+ * 也用它调用 Rust 侧的**反射字段写入**。
  */
 const props = defineProps<{
   label?: string;
@@ -37,10 +41,18 @@ function kindOf(v: JsonValue | undefined): Kind {
 
 const hint = computed<FieldSchema | null>(() => props.field ?? null);
 const kind = computed(() => kindOf(props.value));
-const pathStr = computed(() => props.path ?? props.label ?? "");
+const pathStr = computed(() => props.path ?? "");
 
-// —— 资产引用：对「看起来是资源路径」的字符串字段给出候选列表 ——
+const isInteger = computed(() =>
+  ["i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64"].includes(hint.value?.kind ?? ""),
+);
+
+const isColor = computed(() => isColorField(hint.value?.name, props.value));
+
+// —— 资产引用：对「看起来是资源路径」的字符串字段给出候选与选择器 ——
 const assets = inject(ASSETS_KEY, null);
+const openAssetPicker = inject(ASSET_PICKER_KEY, null);
+
 const ASSET_EXTENSIONS = [
   ".gltf", ".glb", ".obj", ".fbx", ".bin",
   ".hdr", ".exr", ".png", ".jpg", ".ktx2",
@@ -56,14 +68,12 @@ const showAssetPicker = computed(() => {
   return value.length > 0 && ASSET_EXTENSIONS.some((ext) => value.endsWith(ext));
 });
 
-const assetOptions = computed(() => (assets?.value ?? []).slice(0, 1000));
+const assetOptions = computed(() =>
+  (assets?.value ?? []).map((asset) => asset.path).slice(0, 1000),
+);
 
 /** datalist 需要唯一 id；字段路径天然唯一。 */
 const listId = computed(() => `asset-${pathStr.value.replace(/[^a-zA-Z0-9_-]/g, "_")}`);
-
-const isInteger = computed(() =>
-  ["i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64"].includes(hint.value?.kind ?? ""),
-);
 
 const asArray = computed<JsonValue[]>(() => (Array.isArray(props.value) ? props.value : []));
 const asObject = computed<Record<string, JsonValue>>(() =>
@@ -168,9 +178,12 @@ function initFromNull() {
   setOp(defaultFor(h));
 }
 
-function onNumber(event: Event) {
-  set(Number((event.target as HTMLInputElement).value));
+async function pickAsset() {
+  if (!openAssetPicker) return;
+  const picked = await openAssetPicker((props.value as string) ?? "");
+  if (picked !== null && picked !== undefined) setOp(picked);
 }
+
 function onText(event: Event) {
   set((event.target as HTMLInputElement).value);
 }
@@ -187,7 +200,7 @@ function onBool(event: Event) {
         {{ label }}<span v-if="hint?.readOnly" class="ro"> ·只读</span>
       </div>
       <div class="hint">
-        {{ structFields.length ? '结构体' : '对象' }} · {{ objectEntries.length }} 字段
+        {{ structFields.length ? "结构体" : "对象" }} · {{ objectEntries.length }} 字段
       </div>
     </div>
     <div class="nested">
@@ -217,6 +230,20 @@ function onBool(event: Event) {
     </div>
   </div>
 
+  <!-- 颜色：取色盘 + 通道数值 + alpha -->
+  <div v-else-if="isColor">
+    <div class="row" :class="{ 'no-label': !label }">
+      <div v-if="label" class="label">
+        {{ label }}<span v-if="hint?.readOnly" class="ro"> ·只读</span>
+      </div>
+      <ColorField
+        :model-value="(value as number[])"
+        :disabled="hint?.readOnly"
+        @update:model-value="(v) => set(v)"
+      />
+    </div>
+  </div>
+
   <!-- 数组 / 列表 -->
   <div v-else-if="kind === 'array'">
     <div class="row" :class="{ 'no-label': !label }">
@@ -224,7 +251,7 @@ function onBool(event: Event) {
         {{ label }}<span v-if="hint?.readOnly" class="ro"> ·只读</span>
       </div>
       <div class="hint">
-        {{ hint?.kind === 'array' ? `定长 ${hint?.arrayLen ?? '?'}` : '列表' }} ·
+        {{ hint?.kind === "array" ? `定长 ${hint?.arrayLen ?? "?"}` : "列表" }} ·
         {{ asArray.length }} 项
       </div>
     </div>
@@ -251,7 +278,7 @@ function onBool(event: Event) {
     <div v-if="label" class="label">
       {{ label }}<span v-if="hint?.readOnly" class="ro"> ·只读</span>
     </div>
-    <div>
+    <div class="scalar">
       <input
         v-if="kind === 'bool'"
         type="checkbox"
@@ -259,13 +286,12 @@ function onBool(event: Event) {
         :disabled="hint?.readOnly"
         @change="onBool"
       />
-      <input
+      <NumberField
         v-else-if="kind === 'number'"
-        type="number"
-        :step="isInteger ? 1 : 'any'"
+        :model-value="(value as number)"
+        :integer="isInteger"
         :disabled="hint?.readOnly"
-        :value="(value as number)"
-        @input="onNumber"
+        @update:model-value="(v) => set(v)"
       />
       <template v-else-if="kind === 'string'">
         <input
@@ -275,6 +301,15 @@ function onBool(event: Event) {
           :value="(value as string)"
           @input="onText"
         />
+        <button
+          v-if="showAssetPicker"
+          class="ghost icon"
+          :disabled="hint?.readOnly"
+          title="资产管理器"
+          @click="pickAsset"
+        >
+          …
+        </button>
         <datalist v-if="showAssetPicker" :id="listId">
           <option v-for="asset in assetOptions" :key="asset" :value="asset" />
         </datalist>

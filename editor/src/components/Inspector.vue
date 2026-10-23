@@ -1,9 +1,16 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import FieldEditor from "./FieldEditor.vue";
+import * as api from "../api";
 import type { EntityJson, FieldSchema, JsonValue, Schema } from "../types";
 
-/** 单实体检查器：name / parent / transform + 任意组件（schema 驱动）。 */
+/**
+ * 单实体检查器：name / parent / transform + 任意组件（schema 驱动）。
+ *
+ * 组件字段的改动**先本地提交**（拖动/输入要即时），再交给 Rust 侧
+ * `set_component_field` 走反射写入：只读字段会被拒绝、值经反射类型校验，
+ * 返回规范化后的组件 JSON 回填（`reflect` 事件）。
+ */
 const props = defineProps<{
   entity: EntityJson;
   index: number;
@@ -15,9 +22,14 @@ const emit = defineEmits<{
   (e: "update", entity: EntityJson, editKey: string): void;
   (e: "remove", index: number): void;
   (e: "duplicate", index: number): void;
+  (e: "reflect", component: string, canonical: JsonValue): void;
+  (e: "rejected", message: string): void;
 }>();
 
 const addName = ref("");
+
+/** 每个组件一条请求序号，只应用最新一次反射写入的结果。 */
+const reflectSeq = new Map<string, number>();
 
 /** 离散操作的唯一编辑键（不做撤销合并）。 */
 let opSeq = 0;
@@ -48,20 +60,39 @@ function onParentChange(event: Event) {
   patch({ parent: Number.isFinite(raw) && raw >= 0 ? raw : null }, fieldKey("parent"));
 }
 
-function setTransform(
-  key: "translation" | "rotation" | "scale",
-  value: JsonValue,
-  path: string,
-) {
+function setTransform(key: "translation" | "rotation" | "scale", value: JsonValue, path: string) {
   patch({ transform: { ...props.entity.transform, [key]: value as number[] } }, fieldKey(path));
 }
 
+function componentValue(name: string): JsonValue {
+  return props.entity.components[name] as JsonValue;
+}
+
 function setComponent(name: string, value: JsonValue, path: string) {
+  const before = componentValue(name);
   emit(
     "update",
     { ...props.entity, components: { ...props.entity.components, [name]: value } },
-    path,
+    fieldKey(`components.${name}/${path}`),
   );
+  void reflectComponent(name, before, path, value);
+}
+
+/** 反射写入：成功后回填规范化值；失败则报告（通常是只读或类型不合法）。 */
+async function reflectComponent(
+  name: string,
+  before: JsonValue,
+  path: string,
+  after: JsonValue,
+) {
+  const seq = (reflectSeq.get(name) ?? 0) + 1;
+  reflectSeq.set(name, seq);
+  try {
+    const canonical = await api.setComponentField(name, before, path, after);
+    if (reflectSeq.get(name) === seq) emit("reflect", name, canonical);
+  } catch (e) {
+    if (reflectSeq.get(name) === seq) emit("rejected", `${e}`);
+  }
 }
 
 function removeComponent(name: string) {
@@ -81,10 +112,6 @@ function addComponent() {
     opKey(`add-component:${name}`),
   );
   addName.value = "";
-}
-
-function componentValue(name: string): JsonValue {
-  return props.entity.components[name] as JsonValue;
 }
 
 /** 组件 JSON 值本身不是结构体时（`Name` 裸字符串等），仅作类型提示。 */
@@ -188,7 +215,7 @@ const availableComponents = computed(() =>
     </header>
     <div class="card-body">
       <FieldEditor
-        :path="`components.${name}`"
+        path=""
         :value="componentValue(name)"
         :field="componentField(name)"
         :schema="schema"

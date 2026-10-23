@@ -10,7 +10,7 @@
 use std::collections::HashMap;
 
 use prism_ecs::{Entity, World};
-use prism_reflect::{Object, Reflect, TypeDesc, TypeId, TypeRegistry};
+use prism_reflect::{Object, Reflect, ReflectError, TypeDesc, TypeId, TypeRegistry, Value};
 use serde::{de::DeserializeOwned, Serialize};
 
 // ---------------------------------------------------------------------------
@@ -25,14 +25,20 @@ type JsonToObjectFn = Box<dyn Fn(&serde_json::Value) -> Option<Object> + Send + 
 /// 产出某个组件的**作者 JSON 默认形状**（编辑器「添加组件」用）。
 type DefaultJsonFn = Box<dyn Fn() -> serde_json::Value + Send + Sync>;
 
+/// 反射对象 → 作者 JSON（编辑器「基于反射改字段后写回」用）。
+type ObjectToJsonFn = Box<dyn Fn(&Object) -> Option<serde_json::Value> + Send + Sync>;
+
 type ReflectApplyFn = fn(&mut World, Entity, &Object) -> bool;
 type ReflectExtractFn = fn(&World, Entity) -> Option<Object>;
+/// 在反射对象上按字段名写入（`Object -> C -> set_field -> Object`）。
+type ReflectSetFn = fn(&mut Object, &str, Value) -> Result<(), ReflectError>;
 
 /// 一个组件的反射适配器：`Object <-> 具体 ECS 组件`。
 struct ReflectEntry {
     desc: &'static TypeDesc,
     apply: ReflectApplyFn,
     extract: ReflectExtractFn,
+    set_field: ReflectSetFn,
 }
 
 /// 组件反序列化注册表。
@@ -46,6 +52,7 @@ pub struct ComponentRegistry {
     reflect_entries: HashMap<TypeId, ReflectEntry>,
     name_to_id: HashMap<String, TypeId>,
     json_to_object: HashMap<String, JsonToObjectFn>,
+    object_to_json: HashMap<String, ObjectToJsonFn>,
     defaults: HashMap<String, DefaultJsonFn>,
 }
 
@@ -57,6 +64,7 @@ impl ComponentRegistry {
             reflect_entries: HashMap::new(),
             name_to_id: HashMap::new(),
             json_to_object: HashMap::new(),
+            object_to_json: HashMap::new(),
             defaults: HashMap::new(),
         }
     }
@@ -125,8 +133,32 @@ impl ComponentRegistry {
                         .get::<C>(entity)
                         .map(|component| <C as Reflect>::to_object(component))
                 },
+                set_field: |object, field, value| {
+                    let mut component = <C as Reflect>::from_object(object)?;
+                    component.set_field(field, value)?;
+                    *object = component.to_object();
+                    Ok(())
+                },
             },
         );
+    }
+
+    /// 在反射对象上按字段名写入，返回写入后的对象。
+    ///
+    /// 走的是 [`Reflect::set_field`]：`#[reflect(read_only)]` 字段会被拒绝，
+    /// 值类型也必须是该字段声明的反射类型。类型未注册时返回
+    /// [`ReflectError::NotRegistered`]。
+    pub fn set_object_field(
+        &self,
+        object: &mut Object,
+        field: &str,
+        value: Value,
+    ) -> Result<(), ReflectError> {
+        let entry = self
+            .reflect_entries
+            .get(&object.type_id)
+            .ok_or(ReflectError::NotRegistered(object.type_id))?;
+        (entry.set_field)(object, field, value)
     }
 
     /// 注册一个既支持 serde 反序列化、又支持反射的组件。
@@ -151,9 +183,32 @@ impl ComponentRegistry {
         );
         // 编辑器「添加组件」的默认作者 JSON：`C::default()` 的 serde 形状。
         self.defaults.insert(
-            key,
+            key.clone(),
             Box::new(|| serde_json::to_value(C::default()).unwrap_or(serde_json::Value::Null)),
         );
+        // 反射对象 → 作者 JSON（`Object -> C -> serde JSON`）。
+        self.object_to_json.insert(
+            key,
+            Box::new(|object| {
+                let component = <C as Reflect>::from_object(object).ok()?;
+                serde_json::to_value(component).ok()
+            }),
+        );
+    }
+
+    /// 手工登记「反射对象 → 作者 JSON」转换器。
+    ///
+    /// 用于 `Name` 这类 serde 形状与派生默认不一致的组件。
+    pub fn register_object_to_json<F>(&mut self, name: &str, f: F)
+    where
+        F: Fn(&Object) -> Option<serde_json::Value> + Send + Sync + 'static,
+    {
+        self.object_to_json.insert(name.to_string(), Box::new(f));
+    }
+
+    /// 反射对象 → 作者 JSON（未登记返回 `None`）。
+    pub fn object_to_json(&self, name: &str, object: &Object) -> Option<serde_json::Value> {
+        self.object_to_json.get(name).and_then(|f| f(object))
     }
 
     /// 为某个组件手工登记作者 JSON 默认形状。
@@ -313,6 +368,12 @@ pub fn register_builtin_components(registry: &mut ComponentRegistry) {
             .map(|s| Name(s.to_string()).to_object())
     });
     registry.set_default_json("prism_engine::scene::Name", serde_json::json!("entity"));
+    registry.register_object_to_json("prism_engine::scene::Name", |object| {
+        object
+            .get("0")
+            .and_then(|value| value.as_str().ok())
+            .map(|name| serde_json::json!(name))
+    });
 
     // ── 光源 ──
     registry.register_reflect_serde::<DirectionalLight>("prism_engine::scene::DirectionalLight");
@@ -452,5 +513,17 @@ mod tests {
             registry.default_json("prism_engine::scene::Name"),
             Some(serde_json::json!("entity"))
         );
+
+        // 每个组件都能「作者 JSON -> 反射对象 -> 作者 JSON」往返。
+        for name in &names {
+            let default = registry.default_json(name).unwrap();
+            let object = registry
+                .object_from_json(name, &default)
+                .unwrap_or_else(|| panic!("{name} default JSON is not convertable"));
+            let back = registry
+                .object_to_json(name, &object)
+                .unwrap_or_else(|| panic!("{name} has no object_to_json"));
+            assert_eq!(back, default, "{name} JSON/reflect round-trip mismatch");
+        }
     }
 }

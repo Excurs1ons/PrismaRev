@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, provide, ref, watch } from "vue";
+import AssetBrowser from "./components/AssetBrowser.vue";
+import AssetPicker from "./components/AssetPicker.vue";
 import HierarchyTree from "./components/HierarchyTree.vue";
 import Inspector from "./components/Inspector.vue";
 import * as api from "./api";
-import { ASSETS_KEY } from "./keys";
+import { ASSETS_KEY, ASSET_PICKER_KEY } from "./keys";
 import type {
+  AssetInfo,
   EntityJson,
   EntityPreset,
   JsonValue,
@@ -23,7 +26,7 @@ const projectRoot = ref("");
 const scenes = ref<SceneEntry[]>([]);
 const templates = ref<SceneTemplate[]>([]);
 const presets = ref<EntityPreset[]>([]);
-const assets = ref<string[]>([]);
+const assets = ref<AssetInfo[]>([]);
 provide(ASSETS_KEY, assets);
 
 const templateId = ref("camera");
@@ -63,6 +66,29 @@ const selectedEntity = computed<EntityJson | null>(() => {
 
 function fail(e: unknown) {
   error.value = `${e}`;
+}
+
+// ---------------------------------------------------------------------------
+// 资产管理器（模态选择器）
+// ---------------------------------------------------------------------------
+
+interface PickerState {
+  current: string;
+  resolve: (value: string | null) => void;
+}
+
+const pickerState = ref<PickerState | null>(null);
+
+function openAssetPicker(current: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    pickerState.value = { current, resolve };
+  });
+}
+provide(ASSET_PICKER_KEY, openAssetPicker);
+
+function resolvePicker(value: string | null) {
+  pickerState.value?.resolve(value);
+  pickerState.value = null;
 }
 
 // ---------------------------------------------------------------------------
@@ -116,7 +142,7 @@ function resetHistory(loaded: SceneDoc, path: string | null) {
 
 /**
  * 提交一个新文档版本。`editKey` 相同且间隔 <700ms 的连续编辑
- * （例如拖数字输入框）会合并成一次撤销。
+ * （例如拖数字框）会合并成一次撤销。
  */
 function commit(next: SceneDoc, editKey: string) {
   if (!doc.value) return;
@@ -129,6 +155,11 @@ function commit(next: SceneDoc, editKey: string) {
   doc.value = next;
   lastKey = editKey;
   lastTime = now;
+}
+
+/** 不记入历史的内部更新（反射写入回填规范化值）。 */
+function silentUpdate(next: SceneDoc) {
+  doc.value = next;
 }
 
 function undo() {
@@ -173,7 +204,7 @@ async function bootstrap() {
     if (presets.value.length) presetId.value = presets.value[0].id;
     await refreshScenes();
     // 资产列表是可选增强；失败不影响编辑。
-    assets.value = await api.listAssets().catch(() => []);
+    assets.value = await api.listAssetsInfo().catch(() => []);
     status.value = `项目根 ${projectRoot.value}`;
   } catch (e) {
     fail(e);
@@ -319,6 +350,20 @@ function onEntityUpdate(entity: EntityJson, editKey: string) {
   const entities = doc.value.entities.slice();
   entities[selected.value] = entity;
   commit({ ...doc.value, entities }, editKey);
+}
+
+/** 反射写入成功后的规范化回填（不新增撤销步）。 */
+function onComponentReflect(name: string, canonical: JsonValue) {
+  if (!doc.value || selected.value === null) return;
+  const entity = doc.value.entities[selected.value];
+  if (!entity) return;
+  if (JSON.stringify(entity.components[name]) === JSON.stringify(canonical)) return;
+  const entities = doc.value.entities.slice();
+  entities[selected.value] = {
+    ...entity,
+    components: { ...entity.components, [name]: canonical },
+  };
+  silentUpdate({ ...doc.value, entities });
 }
 
 function addEntity() {
@@ -484,6 +529,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
             <div v-if="!scenes.length" class="hint" style="padding: 8px">（无场景）</div>
           </div>
         </div>
+
         <div class="section grow">
           <div class="section-title">
             <span>层级</span>
@@ -509,6 +555,13 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
             />
           </div>
         </div>
+
+        <div class="section grow">
+          <div class="section-title"><span>资产</span></div>
+          <div class="section-body">
+            <AssetBrowser />
+          </div>
+        </div>
       </aside>
 
       <main class="editor-pane">
@@ -521,6 +574,8 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
           @update="onEntityUpdate"
           @remove="deleteEntity"
           @duplicate="duplicateEntity"
+          @reflect="onComponentReflect"
+          @rejected="fail"
         />
         <div v-else class="empty">打开或新建一个场景，然后在左侧选择一个实体。</div>
       </main>
@@ -534,5 +589,12 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
       </div>
       <pre class="log">{{ logText }}</pre>
     </div>
+
+    <AssetPicker
+      v-if="pickerState"
+      :current="pickerState.current"
+      @pick="resolvePicker"
+      @cancel="resolvePicker(null)"
+    />
   </div>
 </template>

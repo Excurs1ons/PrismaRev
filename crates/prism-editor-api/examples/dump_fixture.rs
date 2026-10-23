@@ -22,7 +22,7 @@ fn main() {
     let schema = prism_editor_api::build_schema();
     let templates = prism_editor_api::templates();
     let presets = prism_editor_api::entity_presets();
-    let assets = prism_editor_api::list_assets(&root).unwrap_or_default();
+    let asset_infos = prism_editor_api::list_assets_info(&root).unwrap_or_default();
 
     // 仓库里真实存在的场景文档。
     let mut docs = serde_json::Map::new();
@@ -63,7 +63,7 @@ fn main() {
         "schema": schema,
         "templates": templates,
         "presets": presets,
-        "assets": assets,
+        "assetInfos": asset_infos,
         "scenes": entries,
         "docs": docs,
         "templateDocs": template_docs,

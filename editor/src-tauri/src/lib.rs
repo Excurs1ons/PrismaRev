@@ -3,7 +3,7 @@
 //! 这里只做两件事：把 [`prism_editor_api`] 的能力包装成命令、装配窗口。
 //! 所有场景/schema 逻辑都在 `prism-editor-api`（可单测，不依赖 Tauri/egui）。
 
-use prism_editor_api::{EntityPreset, SceneEntry, SceneTemplate, Schema};
+use prism_editor_api::{AssetInfo, AssetRef, EntityPreset, SceneEntry, SceneTemplate, Schema};
 
 /// 组件属性面板的完整 schema（组件 + 嵌套结构体 + 默认值）。
 #[tauri::command]
@@ -47,6 +47,33 @@ fn editor_list_assets() -> Result<Vec<String>, String> {
 #[tauri::command]
 fn editor_validate_scene(doc: serde_json::Value) -> Result<(), String> {
     prism_editor_api::validate_scene_doc(&doc)
+}
+
+/// 资产元信息（路径 / 大小 / 分类）。
+#[tauri::command]
+fn editor_list_assets_info() -> Result<Vec<AssetInfo>, String> {
+    let root = prism_editor_api::find_project_root()?;
+    prism_editor_api::list_assets_info(&root)
+}
+
+/// 哪些场景的哪些字段引用了该资产（`path` 相对项目根）。
+#[tauri::command]
+fn editor_asset_usage(path: String) -> Result<Vec<AssetRef>, String> {
+    let root = prism_editor_api::find_project_root()?;
+    prism_editor_api::asset_usage(&root, &path)
+}
+
+/// **基于反射**写入单个组件字段：只读被拒、类型校验、返回规范化后的组件 JSON。
+///
+/// `path` 是组件内字段路径（`anchors.min_x` / `background[0]`），空串表示整体替换。
+#[tauri::command]
+fn editor_set_component_field(
+    component: String,
+    before: serde_json::Value,
+    path: String,
+    after: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    prism_editor_api::set_component_field(&component, &before, &path, &after)
 }
 
 /// 新建场景的初始文档（按模板 id；未知 id 回退到 camera）。
@@ -135,7 +162,10 @@ pub fn run() {
             editor_scene_templates,
             editor_entity_presets,
             editor_list_assets,
+            editor_list_assets_info,
+            editor_asset_usage,
             editor_validate_scene,
+            editor_set_component_field,
             editor_new_scene,
             editor_read_scene,
             editor_write_scene,

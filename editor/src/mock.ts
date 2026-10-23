@@ -1,4 +1,13 @@
-import type { EntityPreset, SceneDoc, SceneEntry, SceneTemplate, Schema } from "./types";
+import type {
+  AssetInfo,
+  AssetRef,
+  EntityPreset,
+  JsonValue,
+  SceneDoc,
+  SceneEntry,
+  SceneTemplate,
+  Schema,
+} from "./types";
 
 /**
  * 浏览器预览用的 **只读 fixture 后端**。
@@ -13,7 +22,7 @@ interface Fixture {
   schema: Schema;
   templates: SceneTemplate[];
   presets: EntityPreset[];
-  assets: string[];
+  assetInfos: AssetInfo[];
   scenes: SceneEntry[];
   docs: Record<string, SceneDoc>;
   templateDocs: Record<string, SceneDoc>;
@@ -39,6 +48,10 @@ async function fixture(): Promise<Fixture> {
   return cache;
 }
 
+function clone<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
 function fileNameOf(path: string): string {
   return path.slice(path.lastIndexOf("/") + 1);
 }
@@ -47,8 +60,47 @@ function stemOf(path: string): string {
   return fileNameOf(path).replace(/\.scene\.json$/, "");
 }
 
+function dirOf(path: string): string {
+  return path.slice(0, path.lastIndexOf("/"));
+}
+
 function sortScenes(scenes: SceneEntry[]) {
   scenes.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** 与 Rust 侧一致的路径归一化（折叠 `.` / `..`）。 */
+function resolvePath(base: string, value: string): string {
+  const joined = value.startsWith("/") ? value : `${base}/${value}`;
+  const parts: string[] = [];
+  for (const part of joined.split("/")) {
+    if (part === "" || part === ".") continue;
+    if (part === "..") {
+      parts.pop();
+      continue;
+    }
+    parts.push(part);
+  }
+  return parts.join("/");
+}
+
+function collectStrings(
+  value: JsonValue,
+  prefix: string,
+  visit: (field: string, text: string) => void,
+) {
+  if (typeof value === "string") {
+    visit(prefix, value);
+    return;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => collectStrings(item, `${prefix}[${index}]`, visit));
+    return;
+  }
+  if (value && typeof value === "object") {
+    for (const [key, item] of Object.entries(value)) {
+      collectStrings(item, prefix ? `${prefix}.${key}` : key, visit);
+    }
+  }
 }
 
 function validate(doc: SceneDoc | undefined) {
@@ -69,10 +121,6 @@ function validate(doc: SceneDoc | undefined) {
   });
 }
 
-function clone<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value)) as T;
-}
-
 async function handle(cmd: string, args: Record<string, unknown>): Promise<unknown> {
   const data = await fixture();
 
@@ -89,7 +137,9 @@ async function handle(cmd: string, args: Record<string, unknown>): Promise<unkno
     case "editor_entity_presets":
       return data.presets;
     case "editor_list_assets":
-      return data.assets;
+      return data.assetInfos.map((asset) => asset.path);
+    case "editor_list_assets_info":
+      return data.assetInfos;
     case "editor_validate_scene":
       validate(args.doc as SceneDoc);
       return null;
@@ -122,8 +172,7 @@ async function handle(cmd: string, args: Record<string, unknown>): Promise<unkno
     case "editor_rename_scene": {
       const path = String(args.path);
       const name = String(args.name).trim();
-      const dir = path.slice(0, path.lastIndexOf("/") + 1);
-      const target = `${dir}${name.replace(/\.scene\.json$/, "")}.scene.json`;
+      const target = `${dirOf(path)}/${name.replace(/\.scene\.json$/, "")}.scene.json`;
       if (target !== path && data.docs[target]) throw new Error("已存在同名场景");
       const doc = data.docs[path];
       if (!doc) throw new Error("场景不存在");
@@ -142,6 +191,52 @@ async function handle(cmd: string, args: Record<string, unknown>): Promise<unkno
       delete data.docs[path];
       data.scenes = data.scenes.filter((s) => s.path !== path);
       return null;
+    }
+    case "editor_asset_usage": {
+      const target = resolvePath("/preview", String(args.path));
+      const refs: AssetRef[] = [];
+      for (const entry of data.scenes) {
+        const doc = data.docs[entry.path];
+        if (!doc) continue;
+        const sceneDir = dirOf(entry.path);
+        doc.entities.forEach((entity, index) => {
+          for (const [component, payload] of Object.entries(entity.components ?? {})) {
+            collectStrings(payload as JsonValue, "", (field, value) => {
+              if (!value.trim()) return;
+              if (
+                resolvePath(sceneDir, value) === target ||
+                resolvePath("/preview", value) === target
+              ) {
+                refs.push({
+                  scene: entry.name,
+                  scenePath: entry.path,
+                  entity: entity.name ?? `#${index}`,
+                  entityIndex: index,
+                  component,
+                  field,
+                  value,
+                });
+              }
+            });
+          }
+        });
+      }
+      return refs;
+    }
+    case "editor_set_component_field": {
+      const component = String(args.component);
+      const path = String(args.path);
+      const type = data.schema.types.find((t) => t.name === component);
+      if (!type) throw new Error(`'${component}' 不是已注册的可反射组件`);
+      if (path) {
+        const root = path.split(/[.[]/)[0];
+        const field = type.fields.find((f) => f.name === root);
+        if (field?.readOnly) {
+          throw new Error(`字段 '${root}' 写入被拒绝: field '${root}' is read-only`);
+        }
+      }
+      // 预览模式不做真正的反射往返，仅回显（只读检查已尽量对齐 Rust 行为）。
+      return clone(args.after as JsonValue);
     }
     case "editor_cook_scene":
       return "（浏览器预览模式：未真正调用 prism-build-pipeline）\n请用 `cd editor && pnpm tauri dev` 或 `prism-build-pipeline` 执行。";

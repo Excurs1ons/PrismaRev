@@ -135,7 +135,7 @@ select:disabled {
 }
 
 .sidebar {
-  width: 280px;
+  width: 300px;
   flex: 0 0 auto;
   display: flex;
   flex-direction: column;
@@ -150,7 +150,8 @@ select:disabled {
   flex-direction: column;
 }
 .section.grow {
-  flex: 1 1 auto;
+  flex: 1 1 0;
+  min-height: 130px;
 }
 .section-title {
   display: flex;
@@ -342,4 +343,155 @@ select:disabled {
   white-space: pre-wrap;
   color: #cfd8ea;
   min-height: 0;
+}
+
+/* 标量控件行 */
+.scalar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.scalar input[type="text"] {
+  min-width: 0;
+}
+
+/* 拖动调值 */
+.num {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.num input {
+  cursor: ew-resize;
+  touch-action: none;
+}
+.num input:focus {
+  cursor: text;
+}
+.num.dragging input {
+  user-select: none;
+  border-color: var(--accent-2);
+}
+
+/* 取色盘 */
+.color {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.color-swatch {
+  flex: 0 0 auto;
+  width: 34px;
+  padding: 0;
+  height: 24px;
+  border: 1px solid var(--border);
+  background: transparent;
+  cursor: pointer;
+}
+.color-channels {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(52px, 1fr));
+  gap: 4px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.color-alpha {
+  flex: 0 0 64px;
+  padding: 0;
+}
+
+/* 资产管理器面板 */
+.badge {
+  flex: 0 0 auto;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+.path {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+.asset-detail {
+  border-top: 1px solid var(--border);
+  padding: 6px 8px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.usage {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 模态 */
+.modal-mask {
+  position: fixed;
+  inset: 0;
+  background: rgba(3, 5, 10, 0.62);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+}
+.modal {
+  width: min(720px, 90vw);
+  height: min(560px, 82vh);
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.55);
+}
+.modal > header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--border);
+}
+.modal > header .title {
+  font-weight: 600;
+}
+.modal-tools {
+  display: flex;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.modal-tools select {
+  flex: 0 0 110px;
+  width: auto;
+}
+.modal-list {
+  flex: 1 1 auto;
+  overflow: auto;
+  padding: 6px;
+  min-height: 0;
+}
+.modal > footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border);
+  min-width: 0;
+}
+.modal > footer .hint {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }

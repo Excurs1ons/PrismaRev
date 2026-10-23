@@ -1,4 +1,13 @@
-import type { EntityPreset, SceneDoc, SceneEntry, SceneTemplate, Schema } from "./types";
+import type {
+  AssetInfo,
+  AssetRef,
+  EntityPreset,
+  JsonValue,
+  SceneDoc,
+  SceneEntry,
+  SceneTemplate,
+  Schema,
+} from "./types";
 
 /**
  * Tauri 命令的类型化包装。
@@ -53,6 +62,29 @@ export function listAssets(): Promise<string[]> {
 /** 校验场景文档（不落盘），失败时抛出错误描述。 */
 export function validateScene(doc: SceneDoc): Promise<void> {
   return call<void>("editor_validate_scene", { doc });
+}
+
+/** 资产元信息（路径 / 大小 / 分类）。 */
+export function listAssetsInfo(): Promise<AssetInfo[]> {
+  return call<AssetInfo[]>("editor_list_assets_info");
+}
+
+/** 哪些场景字段引用了该资产。 */
+export function assetUsage(path: string): Promise<AssetRef[]> {
+  return call<AssetRef[]>("editor_asset_usage", { path });
+}
+
+/**
+ * **基于反射**写入组件字段：只读字段会被拒绝，值经反射类型校验，
+ * 返回规范化后的组件 JSON。
+ */
+export function setComponentField(
+  component: string,
+  before: JsonValue,
+  path: string,
+  after: JsonValue,
+): Promise<JsonValue> {
+  return call<JsonValue>("editor_set_component_field", { component, before, path, after });
 }
 
 /** 按模板新建场景文档。 */
