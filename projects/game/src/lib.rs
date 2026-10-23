@@ -10,8 +10,9 @@ pub mod intro;
 
 use prism_engine::ui::ParticleSystem2D;
 
-/// 构造应用：引擎自动加载 `assets/scenes/intro.scene.json` 中的 intro 实体，
-/// 本项目只注册 `intro::tick` system 驱动动画。
+/// 构造应用：引擎从 `assets/scenes.pak` 的路径清单加载 intro 场景实体
+/// （由 `assets/scenes/intro.scene.json` cook 而来），本项目只注册
+/// `intro::tick` system 驱动动画。
 pub fn build_app() -> prism_app::App {
     let mut app = prism_app::app()
         .with_subsystem(prism_app::Subsystem::Render)
@@ -30,5 +31,7 @@ pub fn build_app() -> prism_app::App {
 /// GameActivity 加载本库后调用的入口。
 #[cfg(target_os = "android")]
 fn android_main(android_app: prism_app::AndroidApp) {
-    prism_app::run_on_android(build_app(), android_app).expect("fatal application error");
+    // `run_on_android` stages APK assets and the launch config before calling
+    // `build_app`, so the engine can use the same `assets/...` paths as desktop.
+    prism_app::run_on_android(build_app, android_app).expect("fatal application error");
 }

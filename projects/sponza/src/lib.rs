@@ -19,5 +19,5 @@ pub fn build_app() -> prism_app::App {
 #[cfg(target_os = "android")]
 #[no_mangle]
 pub fn android_main(android_app: prism_app::AndroidApp) {
-    prism_app::run_on_android(build_app(), android_app).expect("fatal Sponza application error");
+    prism_app::run_on_android(build_app, android_app).expect("fatal Sponza application error");
 }

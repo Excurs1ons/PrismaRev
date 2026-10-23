@@ -2452,6 +2452,7 @@ dependencies = [
  "flume",
  "glam 0.33.4",
  "log",
+ "ndk",
  "prism-asset",
  "prism-audio",
  "prism-engine",

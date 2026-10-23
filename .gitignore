@@ -62,6 +62,12 @@ assets/scenes/*
 /assets/*.pak
 /assets/*.pak.meta.json
 
+# Generated copies staged into the Android APK game payload by build-android.ps1.
+# Static inputs such as the environment HDR stay tracked.
+launcher/src-tauri/gen/android/app/src/main/assets/game/*.pak
+launcher/src-tauri/gen/android/app/src/main/assets/game/*.pak.meta.json
+launcher/src-tauri/gen/android/app/src/main/assets/game/settings.toml
+
 assets/external
 !assets/external/readme.md
 # Deepwork session state

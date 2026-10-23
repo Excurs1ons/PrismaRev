@@ -774,7 +774,10 @@ prism-scene::rscn::encode_scene
 
 - **[G4] 构建脚本集成** ✅ **已落地**：`prism-build-pipeline build-scenes` 统一完成
   `scenes.toml → cooked RSCN → scenes.pak + path manifest`；泛资产仍走 `prism-cook build`，
-  `scripts/run.ps1` 在 `cargo build` 后自动调用它。CI 的资产构建步骤仍待补。
+  `scripts/run.ps1` 在 `cargo build` 后自动调用它。`scripts/build-android.ps1` 会生成并复制
+  `scenes.pak`/meta 到 APK 的 `assets/game/`；Android 启动时 `run_on_android` 再把
+  `game/` 复制到内部存储并切 cwd。
+  CI 的资产构建步骤仍待补。
 
 - **[G5] CookProfile 集成到引擎设置** ⏳ **配置已就绪**：`CookProfile` 5 档 + `settings_hash` 已实现，`--profile` CLI 透传待接入 `AppConfig` 启动参数。
 

@@ -103,6 +103,41 @@ if (Get-Command slangc -ErrorAction SilentlyContinue) {
     Write-Host "Using prebuilt .spv ($($spv.Count) files)."
 }
 
+# ---- Scene package + APK assets -------------------------------------------
+
+# The game runtime reads `assets/scenes.pak` from the filesystem. On Android
+# `run_on_android` copies the APK `game/` asset directory to `<filesDir>/assets`,
+# so the game payload must be shipped inside the APK. Keep it under a
+# subdirectory: the Tauri launcher also owns the asset root for its frontend.
+$AndroidAssets = Join-Path $AndroidDir "app\src\main\assets"
+$AndroidGameAssets = Join-Path $AndroidAssets "game"
+New-Item -ItemType Directory -Force -Path $AndroidGameAssets | Out-Null
+
+Write-Host "Building scene package (assets/scenes.pak)..."
+Push-Location $ProjectRoot
+try {
+    cargo run -q -p prism-build-pipeline -- build-scenes
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "scene package build failed"
+        exit 1
+    }
+} finally {
+    Pop-Location
+}
+
+Copy-Item (Join-Path $ProjectRoot "assets\scenes.pak") $AndroidGameAssets -Force
+Copy-Item (Join-Path $ProjectRoot "assets\scenes.pak.meta.json") $AndroidGameAssets -Force
+
+$Settings = Join-Path $ProjectRoot "assets\settings.toml"
+if (Test-Path $Settings) {
+    Copy-Item $Settings (Join-Path $AndroidGameAssets "settings.toml") -Force
+}
+
+$Environment = Join-Path $ProjectRoot "assets\valley_of_desolation_1k.hdr"
+if (Test-Path $Environment) {
+    Copy-Item $Environment $AndroidGameAssets -Force
+}
+
 # ---- Build Rust .so --------------------------------------------------------
 
 Write-Host "Building game (prismarev cdylib) for $target..."

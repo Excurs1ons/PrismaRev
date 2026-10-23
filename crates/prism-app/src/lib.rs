@@ -11,10 +11,9 @@
 //!
 //! ```no_run
 //! use prism_app::app;
-//! use prism_engine::config::AppConfig;
 //!
 //! fn main() {
-//!     let mut app = app(AppConfig::load());
+//!     let mut app = app();
 //!     app.insert_resource(MyState::default());
 //!     app.add_system("my::system", |world, dt| { /* ... */ });
 //!     app.run();
@@ -67,6 +66,8 @@
 //! 启动期资产解析经 asset_requests/asset_results 通道完成：主线程 CPU 段
 //! 准备上传请求，渲染线程 GPU 段上传并回传句柄。
 
+#[cfg(target_os = "android")]
+mod android_assets;
 mod app;
 mod audio_decode_runner;
 mod hook;
@@ -84,6 +85,13 @@ pub use render_shared::{RenderShared, RenderStats};
 /// 用户项目 Android 入口所需的平台句柄；具体窗口库类型由 app 层封装。
 #[cfg(target_os = "android")]
 pub use winit::platform::android::activity::AndroidApp;
+
+/// 把 APK assets 复制到内部存储并切换 cwd。
+///
+/// [`run_on_android`] 会在构造 [`App`] 前自动调用；若用户项目需要更早访问
+/// APK 资源，也可自行调用。
+#[cfg(target_os = "android")]
+pub use android_assets::init_android_assets;
 
 /// 从应用资源目录读取配置；文件系统访问属于应用层，解析逻辑由 engine
 /// 的 `AppConfig::from_toml` 提供。
@@ -111,30 +119,42 @@ pub fn app() -> App {
 // Android entry helper
 // ===========================================================================
 
-/// 在 Android 上运行已构建的 [`App`]（供用户项目的 `android_main` 调用）。
+/// 在 Android 上启动应用（供用户项目的 `android_main` 调用）。
+///
+/// 用户项目传入一个构造 [`App`] 的闭包，而不是已经构造好的 `App`：
+/// 本函数会先把 APK assets 复制到内部存储、切换 cwd、注入启动配置，
+/// 然后才调用闭包。这样闭包里的 [`app`] 能按与桌面完全相同的
+/// `assets/...` 路径加载 `scenes.pak`、`settings.toml` 和环境贴图。
 ///
 /// 用户项目的 cdylib 导出 `#[no_mangle] fn android_main(...)`，在此调用
-/// 本函数，JNI 样板（android_logger、crash handler、EventLoop 构建）由
-/// 本函数包办：
+/// 本函数，JNI 样板（android_logger、crash handler、AssetManager 拷贝、
+/// EventLoop 构建）由本函数包办：
 ///
 /// ```no_run
 /// use prism_app::{app, run_on_android};
-/// use prism_engine::config::AppConfig;
+///
+/// fn build_app() -> prism_app::App {
+///     let mut app = app();
+///     // ...注册 ECS 内容（add_system / insert_resource）...
+///     app
+/// }
 ///
 /// #[cfg(target_os = "android")]
 /// #[no_mangle]
 /// fn android_main(android_app: prism_app::AndroidApp) {
-///     // ...注册 ECS 内容（add_system / insert_resource）...
-///     run_on_android(app(AppConfig::load()), android_app).expect("fatal application error");
+///     run_on_android(build_app, android_app).expect("fatal application error");
 /// }
 /// ```
 ///
 /// 与桌面 [`App::run`] 等价，但使用外部传入的 winit EventLoop。
 #[cfg(target_os = "android")]
-pub fn run_on_android(
-    app: App,
+pub fn run_on_android<F>(
+    build_app: F,
     android_app: winit::platform::android::activity::AndroidApp,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<()>
+where
+    F: FnOnce() -> App,
+{
     android_logger::init_once(
         android_logger::Config::default()
             .with_max_level(log::LevelFilter::Debug)
@@ -145,7 +165,29 @@ pub fn run_on_android(
 
     prism_engine::crash_dialog::register_android_app(&android_app);
 
+    // The engine is filesystem-based; stage the APK asset tree before App
+    // construction so `assets/scenes.pak` etc. resolve exactly like desktop.
+    let data_dir = android_assets::init_android_assets(&android_app)?;
+    inject_launch_config(&data_dir);
+
+    let app = build_app();
     let event_loop = prism_platform::build_android_event_loop(android_app)?;
 
     app.run_on(event_loop)
+}
+
+/// Bridge the hub's `filesDir/launch_config.json` into the same env var used
+/// by desktop. An explicit env override wins.
+#[cfg(target_os = "android")]
+fn inject_launch_config(data_dir: &std::path::Path) {
+    if std::env::var_os(prism_engine::launch_config::ENV_KEY).is_some() {
+        return;
+    }
+
+    let path = data_dir.join("launch_config.json");
+    match std::fs::read_to_string(&path) {
+        Ok(json) => std::env::set_var(prism_engine::launch_config::ENV_KEY, json),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => log::warn!("read {}: {error}", path.display()),
+    }
 }

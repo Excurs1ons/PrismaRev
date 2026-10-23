@@ -214,7 +214,10 @@ The user project's dependency chain must stay **egui-free and editor-free**:
 
 ## Android packaging chain (game + launcher in one APK)
 - The `android_main` JNI entry lives in the **user project** (`projects/game/src/lib.rs`), not in
-  `prism-app`; it calls `prism_app::run_on_android(build_app(), android_app)`.
+  `prism-app`; it calls `prism_app::run_on_android(build_app, android_app)` with a builder closure.
+  `run_on_android` stages the APK `game/` asset directory into `<filesDir>/assets`, switches cwd to `<filesDir>`, and
+  injects `launch_config.json` **before** constructing the app, so `app()` sees the same
+  `assets/...` paths as desktop.
   `game`'s `[lib]` is `name = "game"`, `crate-type = ["lib", "cdylib"]` — the `lib`
   half is required so `src/main.rs` can link it on desktop (a bare `cdylib` cannot be).
 - The APK holds **two** Activities in separate processes: the Tauri launcher WebView
@@ -224,7 +227,9 @@ The user project's dependency chain must stay **egui-free and editor-free**:
 - `scripts/build-android.ps1`: probes the NDK (validating `toolchains\llvm`; tolerates a stale
   `ANDROID_NDK_HOME` by **overwriting** it with the validated path, since cargo-ndk reads that env
   var itself), derives the cargo-ndk API level from the manifest's `minSdk`, compiles shaders if
-  `slangc` exists (else requires prebuilt `.spv`), runs
+  `slangc` exists (else requires prebuilt `.spv`), runs `prism-build-pipeline build-scenes`,
+  copies `scenes.pak`/`.pak.meta.json` (plus `settings.toml` and the environment HDR) into
+  `launcher/src-tauri/gen/android/app/src/main/assets/game/`, runs
   `cargo ndk -P <api> -t arm64-v8a -o <jniLibs> build --release --manifest-path projects/game/Cargo.toml`,
   then assembles the APK via `pnpm tauri android build --debug --target aarch64`.
   - **`-P <api>` must be ≥ 26** — `libaaudio.so` does not exist in older sysroots (cargo-ndk's
