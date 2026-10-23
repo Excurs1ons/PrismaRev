@@ -93,10 +93,7 @@ impl TextureFormat {
     }
 
     pub const fn is_compressed(self) -> bool {
-        match self {
-            TextureFormat::Rgba8 | TextureFormat::Rgba8Srgb => false,
-            _ => true,
-        }
+        !matches!(self, TextureFormat::Rgba8 | TextureFormat::Rgba8Srgb)
     }
 
     /// 精确的压缩块字节数（按 Vulkan 块大小计算）
@@ -316,9 +313,8 @@ impl RenderTextureManager {
         // Upload pixels → VkImage + VkImageView (transferDst + SAMPLED).
         let mip_levels = if input.mip_levels != 0 {
             input.mip_levels
-        } else if input.format.is_compressed() {
-            1 // 压缩格式 mip 由 KTX2 预生成，不做 blit 自动生成
-        } else if input.width <= 1 || input.height <= 1 {
+        } else if input.format.is_compressed() || input.width <= 1 || input.height <= 1 {
+            // 压缩格式 mip 由 KTX2 预生成；1x1 也没有可生成的 mip。
             1
         } else {
             (input.width.max(input.height) as f32).log2().floor() as u32 + 1

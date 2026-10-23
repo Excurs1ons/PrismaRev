@@ -31,8 +31,10 @@ pub fn load_shader_module(device: &ash::Device, code: &[u8]) -> anyhow::Result<v
         words.to_vec()
     } else {
         // Misaligned - 复制 byte-by-byte.
-        code.chunks_exact(4)
-            .map(|c| u32::from_ne_bytes([c[0], c[1], c[2], c[3]]))
+        code.as_chunks::<4>()
+            .0
+            .iter()
+            .map(|chunk| u32::from_ne_bytes(*chunk))
             .collect()
     };
 

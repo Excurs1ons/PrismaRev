@@ -68,14 +68,8 @@ pub struct Parent(pub Entity);
 ///
 /// This is kept in sync by [`HierarchyHelper::reparent`]; do **not** modify
 /// it by hand. Entities without this 分量 have no children.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Children(pub Vec<Entity>);
-
-impl Default for Children {
-    fn default() -> Self {
-        Self(Vec::new())
-    }
-}
 
 // ---------------------------------------------------------------------------
 // 变换
@@ -253,7 +247,7 @@ impl Default for SpotLight {
 /// 渲染器才在场景加载时构建 IBL 预卷积（CPU 卷积，约数 ms）。开屏等无 3D 光照
 /// 需求的场景不写此组件（或 `env_map = None`）→ 渲染器以廉价中性空 IBL 启动，
 /// 秒开、不加载 3D 环境贴图。
-#[derive(Debug, Clone, Serialize, Deserialize, Reflect)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Reflect)]
 #[reflect(name = "prism_engine::scene::EnvironmentLighting")]
 #[serde(default)]
 pub struct EnvironmentLighting {
@@ -261,18 +255,12 @@ pub struct EnvironmentLighting {
     pub env_map: Option<String>,
 }
 
-impl Default for EnvironmentLighting {
-    fn default() -> Self {
-        Self { env_map: None }
-    }
-}
-
 /// 场景全局光照（GI probe 音量）声明式组件。
 ///
 /// 仅当 `enabled = true` 且存在烘焙好的体积数据时，渲染器才上传真实 GI probe
 /// 音量；否则保留免费的 synthetic sky 预留（仅让 set5 描述符 合法）。无 3D 光照
 /// 需求的场景（如开屏）不写此组件。
-#[derive(Debug, Clone, Serialize, Deserialize, Reflect)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Reflect)]
 #[reflect(name = "prism_engine::scene::GiConfig")]
 #[serde(default)]
 pub struct GiConfig {
@@ -280,15 +268,6 @@ pub struct GiConfig {
     pub enabled: bool,
     /// 烘焙 GI 体积数据相对场景文件的路径（可选）。
     pub volume: Option<String>,
-}
-
-impl Default for GiConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            volume: None,
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -378,15 +357,9 @@ impl Default for FlyCameraController {
 /// Optional: entities without a `Name` are displayed in the 检查器 by their
 /// raw id. Populated by the scene loader from the cooked `.rscn` name field;
 /// editable from the 检查器 at 运行时 (not persisted to the scene file).
-#[derive(Debug, Clone, Reflect)]
+#[derive(Debug, Clone, Default, Reflect)]
 #[reflect(name = "prism_engine::scene::Name")]
 pub struct Name(pub String);
-
-impl Default for Name {
-    fn default() -> Self {
-        Self(String::new())
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Skybox

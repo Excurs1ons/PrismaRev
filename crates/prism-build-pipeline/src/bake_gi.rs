@@ -720,7 +720,7 @@ pub fn bake_gi(cfg: &BakeGiConfig) -> Result<()> {
         .to_string();
 
     // Convert flat Vec<f32> coeffs to Vec<[f32; 3]> (RGB triplets).
-    let rgb_coeffs: Vec<[f32; 3]> = coeffs.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect();
+    let rgb_coeffs: Vec<[f32; 3]> = coeffs.as_chunks::<3>().0.to_vec();
 
     let probe_data = prism_render::probe_loader::ProbeVolumeData {
         scene_name,
