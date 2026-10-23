@@ -33,7 +33,7 @@
             android:process=":game"
             android:configChanges="orientation|keyboardHidden|screenSize"
             android:screenOrientation="landscape">
-            <meta-data android:name="android.app.lib_name" android:value="game" />
+            <meta-data android:name="android.app.lib_name" android:value="prisma" />
         </activity>
 
         <provider

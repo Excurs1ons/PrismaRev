@@ -2,7 +2,7 @@
 <#
 .SYNOPSIS
     Build PrismaRev for Android arm64-v8a: compile the game Rust cdylib
-    (`projects/game/` → `libgame.so`) via cargo-ndk, then assemble the APK
+    (`projects/game/` → `libprisma.so`) via cargo-ndk, then assemble the APK
     via Gradle (Tauri hub + GameActivity in `launcher/src-tauri/gen/android`).
 #>
 $ErrorActionPreference = "Stop"
@@ -140,7 +140,7 @@ if (Test-Path $Environment) {
 
 # ---- Build Rust .so --------------------------------------------------------
 
-Write-Host "Building game (prismarev cdylib) for $target..."
+Write-Host "Building game (prismarev package -> prisma cdylib) for $target..."
 
 cargo ndk `
     -P $apiLevel `

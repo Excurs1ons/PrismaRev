@@ -35,9 +35,9 @@ Conventions) before touching any matrix/coordinate math — deviating from those
   and the `prism-cook` CLI (`src/main.rs`). Depends on `prism-asset` + `prism-scene`; never
   pulled into the game runtime. See DESIGN.md §10.
 - `launcher/` — Tauri 2 desktop shell + Android APK packaging; **own standalone workspace**, NOT a root member.
-- `projects/game/` — 用户游戏项目（`prismarev` 桌面二进制 + Android cdylib `libgame.so`；
-  keyframe 开场 intro、`register_scene("intro", ...)` 注册场景、`lib.rs` 的 `android_main`）；
-  **own standalone workspace**, NOT a root member.
+- `projects/game/` — 用户游戏项目（`prisma` 桌面二进制 + Android cdylib `libprisma.so`；
+  package 名仍为 `prismarev`；keyframe 开场 intro、`register_scene("intro", ...)` 注册场景、
+  `lib.rs` 的 `android_main`）；**own standalone workspace**, NOT a root member.
 - `crates/xtask` — **excluded** from default workspace; desktop/CI only (needs `slangc`).
 - `assets/shaders/` — Slang sources in `slang/`, compiled `.spv` (gitignored, not committed) +
   `reflection/*.json` next to them.
@@ -65,7 +65,7 @@ The user project's dependency chain must stay **egui-free and editor-free**:
 ## Build / check / test
 - Build: `scripts/run.ps1` (Windows; sets `VK_SDK`, `RUST_LOG`, runs `bash assets/shaders/compile.sh`, `cargo build`, then `prism-build-pipeline build-scenes`).
   Note: the root workspace has no **game/editor entry** binary — the desktop entry is the Tauri app in `launcher/`
-  (`cd launcher && pnpm tauri dev`), which spawns the game binary `prismarev` (built in `projects/game/`: `cd projects/game && cargo run`).
+  (`cd launcher && pnpm tauri dev`), which spawns the game binary `prisma` (built in `projects/game/`: `cd projects/game && cargo run`).
 - Editor: `cargo run --manifest-path projects/editor/Cargo.toml` — the standalone editor
   project hosts the same `prism-app` loop with egui hooked in (F1 inspector, F2 render-graph, F3 perf HUD).
 - Checks: `cargo check -p prism-render`, `cargo build`, `cargo test`.
@@ -218,12 +218,13 @@ The user project's dependency chain must stay **egui-free and editor-free**:
   `run_on_android` stages the APK `game/` asset directory into `<filesDir>/assets`, switches cwd to `<filesDir>`, and
   injects `launch_config.json` **before** constructing the app, so `app()` sees the same
   `assets/...` paths as desktop.
-  `game`'s `[lib]` is `name = "game"`, `crate-type = ["lib", "cdylib"]` — the `lib`
-  half is required so `src/main.rs` can link it on desktop (a bare `cdylib` cannot be).
+  `prismarev`'s `[lib]` is `name = "prisma"`, `crate-type = ["lib", "cdylib"]`, and its `[[bin]]`
+  is `name = "prisma"` — the `lib` half is required so `src/main.rs` can link it on desktop
+  (a bare `cdylib` cannot be).
 - The APK holds **two** Activities in separate processes: the Tauri launcher WebView
   (`com.example.tauriandroidapp.MainActivity`) and the game
   (`com.prismarev.MainActivity` = `GameActivity`, `android:process=":game"`,
-  `android.app.lib_name = game` → loads `libgame.so`).
+  `android.app.lib_name = prisma` → loads `libprisma.so`).
 - `scripts/build-android.ps1`: probes the NDK (validating `toolchains\llvm`; tolerates a stale
   `ANDROID_NDK_HOME` by **overwriting** it with the validated path, since cargo-ndk reads that env
   var itself), derives the cargo-ndk API level from the manifest's `minSdk`, compiles shaders if

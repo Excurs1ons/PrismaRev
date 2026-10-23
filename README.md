@@ -41,7 +41,7 @@ PrismaRev/
 │   └── ...
 ├── launcher/                  # Tauri 桌面壳 + Android APK 打包（独立 workspace）
 ├── projects/                  # 用户项目（各自独立 workspace）
-│   ├── game/                  # 用户游戏项目（`prismarev` + Android `libgame.so`）
+│   ├── game/                  # 用户游戏项目（`prisma` + Android `libprisma.so`）
 │   ├── sponza/                # Sponza 路径追踪样例项目
 │   └── editor/                # 独立编辑器项目
 ├── docs/DESIGN.md             # 权威设计蓝图
@@ -116,7 +116,7 @@ cargo test  -p prism-ecs -p prism-render -p prism-engine -p prism-platform
 
 当前根 workspace 无可执行 bin（渲染、ECS、平台层均作为库链接），可执行入口有三个：
 
-- `launcher/`（Tauri 桌面壳，游戏启动器）：`cd launcher && pnpm tauri dev`，点 Play 启动 `prismarev`。
+- `launcher/`（Tauri 桌面壳，游戏启动器）：`cd launcher && pnpm tauri dev`，点 Play 启动 `prisma`。
 - `projects/game/`（用户游戏项目）：`cargo run --manifest-path projects/game/Cargo.toml`。
 - 编辑器：`cargo run --manifest-path projects/editor/Cargo.toml`（F1 inspector / F2 render-graph / F3 perf HUD）。
 
@@ -127,13 +127,13 @@ cargo test  -p prism-ecs -p prism-render -p prism-engine -p prism-platform
 
 ### Android
 
-- 用户项目 `projects/game/` 以 `cdylib` 输出 `libgame.so` 并暴露 `android_main` JNI 入口
+- 用户项目 `projects/game/` 以 `cdylib` 输出 `libprisma.so` 并暴露 `android_main` JNI 入口
   （内部调用 `prism_app::run_on_android`）；`.cargo/config.toml` 将链接器指向 NDK 的 clang wrapper。
 - `run_on_android` 在构造 App 前把 APK `game/` assets 复制到 `<filesDir>/assets` 并切换 cwd，
   因此 `assets/scenes.pak`、`assets/settings.toml` 等路径与桌面完全一致；启动配置从
   `filesDir/launch_config.json` 注入同一个 `PRISMREV_LAUNCH_CONFIG` 环境变量。
 - APK 内有两个 Activity：Tauri 启动器 WebView（launcher）与 `com.prismarev.MainActivity`
-  （`GameActivity`，独立 `:game` 进程，`android.app.lib_name = game`）。
+  （`GameActivity`，独立 `:game` 进程，`android.app.lib_name = prisma`）。
 - 打包：`scripts/build-android.ps1`（自动探测 NDK 与 API level，先生成 `scenes.pak` 并把运行时
   资源复制进 APK 的 `assets/game/`，再用 `cargo ndk -P <api> -t arm64-v8a` 构建 game 到 `jniLibs/`，
   最后 `pnpm tauri android build`）；也可在 `launcher/` 下单独执行 Tauri 构建。

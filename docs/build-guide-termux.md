@@ -90,7 +90,7 @@ cargo test --workspace                 # ~400 测试（含 CRT 状态机单测�
 
 注意：
 
-- 根 workspace **没有可运行的 bin**。桌面入口在 `game/`（`prismarev` 二进制，
+- 根 workspace **没有可运行的 bin**。桌面入口在 `game/`（`prisma` 二进制，
   独立 workspace：`cd game && cargo run`）；编辑器 demo 是 `cargo run --bin editor_demo`；
   Tauri 壳在 `launcher/`（独立 workspace）。
 - `game/`、`launcher/`、`crates/xtask` 不在根 workspace 的默认覆盖内——

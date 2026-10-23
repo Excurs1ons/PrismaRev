@@ -173,7 +173,7 @@ fn get_device_info() -> Result<serde_json::Value, String> {
 }
 
 /// 启动游戏:移动端通过 Kotlin plugin 启动 GameActivity;桌面端直接拉起
-/// prismarev 二进制。`config` 为可选 LaunchConfig JSON(场景/日志级别等),
+/// prisma 二进制。`config` 为可选 LaunchConfig JSON(场景/日志级别等),
 /// 经 `PRISMREV_LAUNCH_CONFIG` env(桌面)或 files 目录文件(Android)传递。
 #[cfg(mobile)]
 #[tauri::command]
@@ -186,7 +186,7 @@ fn launch_game(state: tauri::State<NativeApi>, config: Option<String>) -> Result
 #[cfg(not(mobile))]
 #[tauri::command]
 fn launch_game(config: Option<String>) -> Result<(), String> {
-    let mut cmd = std::process::Command::new("prismarev");
+    let mut cmd = std::process::Command::new("prisma");
     if let Some(c) = config {
         cmd.env("PRISMREV_LAUNCH_CONFIG", c);
     }
