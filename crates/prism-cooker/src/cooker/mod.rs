@@ -973,10 +973,10 @@ impl ShaderCooker {
         // 写入 源 to a temp file so #include / 模块 分辨率 works.
         let tmp_dir = std::env::temp_dir();
         let source_path = tmp_dir.join(format!(
-            "prismarev_shader_cook_{}.slang",
+            "prisma_shader_cook_{}.slang",
             std::process::id()
         ));
-        let out_path = tmp_dir.join(format!("prismarev_shader_cook_{}.spv", std::process::id()));
+        let out_path = tmp_dir.join(format!("prisma_shader_cook_{}.spv", std::process::id()));
 
         // RAII guard: removes temp files on 放置 成功 or 错误
         struct TempGuard {

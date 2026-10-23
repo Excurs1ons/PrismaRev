@@ -1,5 +1,5 @@
 [package]
-name = "prismarev"
+name = "prisma"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
@@ -8,16 +8,11 @@ description = "PrismaRev 用户游戏项目——桌面二进制 `prisma`，由 
 # 独立 workspace（仿 launcher/ 先例），不挂根 PrismaRev workspace。
 [workspace]
 
-# 桌面二进制名 `prisma`（package 名仍为 `prismarev`，供 cargo -p 选择）。
-[[bin]]
-name = "prisma"
-path = "src/main.rs"
-
-# Android: GameActivity 加载 libprisma.so（`android.app.lib_name` 见 launcher
-# gen/android Manifest），JNI `android_main` 在 src/lib.rs。
+# 产物名与 package 名一致：桌面二进制 `prisma` + Android cdylib `libprisma.so`
+# （`android.app.lib_name = prisma` 见 launcher gen/android Manifest），
+# JNI `android_main` 在 src/lib.rs。
 # `lib` 类型供桌面 bin 链接 rlib；`cdylib` 仅 Android 打包时使用。
 [lib]
-name = "prisma"
 crate-type = ["lib", "cdylib"]
 
 [dependencies]

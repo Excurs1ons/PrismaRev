@@ -87,7 +87,7 @@ fn create_minimal_glb_bytes() -> Vec<u8> {
     let bin_chunk_total = 8 + bin_data_size + bin_padding;
 
     let json = serde_json::json!({
-        "asset": { "version": "2.0", "generator": "prismarev-test" },
+        "asset": { "version": "2.0", "generator": "prisma-test" },
         "scene": 0,
         "scenes": [{ "nodes": [0] }],
         "nodes": [{ "mesh": 0 }],

@@ -48,7 +48,7 @@ fn roundtrip_bytes() {
 fn roundtrip_file() {
     let data = make_test_data();
     let dir = std::env::temp_dir();
-    let path = dir.join("prismarev_test_probe_volume.bin");
+    let path = dir.join("prisma_test_probe_volume.bin");
     save_probe_volume(&path, &data).unwrap();
     let loaded = load_probe_volume(&path).unwrap();
     assert_eq!(loaded.dims, data.dims);

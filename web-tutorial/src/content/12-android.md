@@ -11,8 +11,8 @@
 ```
 prism-ecs / prism-render / prism-asset / prism-engine   ← 完全不变
         │
-        ├── src/main.rs          (桌面)  → prismarev.exe
-        └── prism-android/       (Android) → cdylib → libprismarev.so → APK
+        ├── src/main.rs          (桌面)  → prisma.exe
+        └── prism-android/       (Android) → cdylib → libprisma.so → APK
 ```
 
 `prism-engine` 是纯 Rust 库；新增一个**极薄**的 `prism-android` crate（`crate-type = ["cdylib"]`）提供 Android 入口：

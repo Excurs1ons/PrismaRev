@@ -29,7 +29,7 @@ Cargo 会：
 :::info Cargo.lock 是什么
 - `Cargo.toml` 写的是**版本约束**（如 `anyhow = "1"`，表示 `>=1.0.0, <2.0.0`）。
 - `Cargo.lock` 把每个依赖**精确钉死**到某个版本（如 `anyhow 1.0.86`）。
-- **二进制 crate**（如引擎本体 `prismarev`）应提交 `Cargo.lock`——保证团队/CI 构建可复现。
+- **二进制 crate**（如引擎本体 `prisma`）应提交 `Cargo.lock`——保证团队/CI 构建可复现。
 - **库 crate**（如 `prism-ecs`）通常不提交，让使用者自己解析。
 引擎是含二进制的 workspace，所以根 `Cargo.lock` 是提交的。
 :::
@@ -63,7 +63,7 @@ fn run() -> Result<()> {
 
 ```bash
 RUST_LOG=info cargo run
-# 输出带时间戳/级别的日志： INFO  prismarev > PrismaRev starting
+# 输出带时间戳/级别的日志： INFO  prisma > PrismaRev starting
 ```
 
 关键概念：
@@ -78,7 +78,7 @@ RUST_LOG=info cargo run
 ```rust
 let use_file = !std::io::stderr().is_terminal();
 let target = if use_file {
-    // 写到 prismarev.log，避免向不存在的 stderr 写而卡死
+    // 写到 prisma.log，避免向不存在的 stderr 写而卡死
 } else {
     env_logger::Target::Stderr
 };

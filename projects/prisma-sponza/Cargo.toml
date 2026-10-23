@@ -1,5 +1,5 @@
 [package]
-name = "prismarev-sponza"
+name = "prisma-sponza"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
@@ -7,14 +7,11 @@ description = "PrismaRev Sponza path-tracing sample project"
 
 [workspace]
 
+# 产物名与 package 名一致：桌面二进制 `prisma-sponza` + Android cdylib `libprisma_sponza.so`
+# （JNI `android_main` 在 src/lib.rs）。
 [lib]
-name = "sponza"
 crate-type = ["lib", "cdylib"]
 
 [dependencies]
 prism-app = { path = "../../crates/prism-app" }
 prism-engine = { path = "../../crates/prism-engine" }
-
-[[bin]]
-name = "sponza"
-path = "src/main.rs"

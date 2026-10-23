@@ -2,7 +2,7 @@
 <#
 .SYNOPSIS
     Build PrismaRev for Android arm64-v8a: compile the game Rust cdylib
-    (`projects/game/` → `libprisma.so`) via cargo-ndk, then assemble the APK
+    (`projects/prisma/` → `libprisma.so`) via cargo-ndk, then assemble the APK
     via Gradle (Tauri hub + GameActivity in `launcher/src-tauri/gen/android`).
 #>
 $ErrorActionPreference = "Stop"
@@ -10,7 +10,7 @@ $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 $AndroidDir  = Join-Path $ProjectRoot "launcher\src-tauri\gen\android"
 $JniLibsDir  = Join-Path $AndroidDir "app\src\main\jniLibs"
-$GameManifest = Join-Path $ProjectRoot "projects\game\Cargo.toml"
+$GameManifest = Join-Path $ProjectRoot "projects\prisma\Cargo.toml"
 
 # ---- Prerequisites ---------------------------------------------------------
 
@@ -140,13 +140,13 @@ if (Test-Path $Environment) {
 
 # ---- Build Rust .so --------------------------------------------------------
 
-Write-Host "Building game (prismarev package -> prisma cdylib) for $target..."
+Write-Host "Building game (prisma crate) for $target..."
 
 cargo ndk `
     -P $apiLevel `
     -t arm64-v8a `
     -o $JniLibsDir `
-    build --release --manifest-path $GameManifest -p prismarev
+    build --release --manifest-path $GameManifest -p prisma
 
 if ($LASTEXITCODE -ne 0) {
     Write-Error "cargo ndk failed"

@@ -107,7 +107,7 @@ Flags：`PARTIALLY_BOUND | UPDATE_AFTER_BIND | VARIABLE_DESCRIPTOR_COUNT`，配�
 ## CI（.github/workflows/ci.yml）
 5 个 job，全并行（除依赖）：
 1. **lint** — fmt + clippy（report-only，因既有代码未格式化；可在仓库统一 `cargo fmt --all` 后收紧为 `-D warnings`）
-2. **desktop** — `cargo build` + `cargo test`（prism-ecs/render/engine/prismarev）
+2. **desktop** — `cargo build` + `cargo test`（prism-ecs/render/engine/prisma）
 3. **shaders** — slangc 编 `.spv` + 反射，xtask 重生成绑定，**drift guard**（spv/绑定与源码不符则 fail）
 4. **android-rust** — cargo-ndk 交叉编 `prism-android` arm64 cdylib（CI 上 `aarch64-linux-android` target）
 5. **android-apk** — Gradle assembleDebug，产出 debug APK（仅 push 到 master/dev 时跑，避免 PR 烧构建时长）

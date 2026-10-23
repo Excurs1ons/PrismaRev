@@ -382,7 +382,7 @@ pub struct SceneManifest {
 /// 依次在【当前目录及其各级父目录】与【可执行文件所在目录及其各级父目录】下，
 /// 尝试 `assets/scenes.toml` 与 `crates/prism-engine/assets/scenes.toml`。
 ///
-/// 这样无论从仓库根还是 `projects/game/` 子目录启动，
+/// 这样无论从仓库根还是 `projects/prisma/` 子目录启动，
 /// 都能正确找到资源清单——之前从用户项目目录启动时，导致
 /// `assets/scenes.toml` 找不到、回退到空场景而黑屏。
 fn find_manifest_path() -> Option<PathBuf> {

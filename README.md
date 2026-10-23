@@ -41,9 +41,9 @@ PrismaRev/
 │   └── ...
 ├── launcher/                  # Tauri 桌面壳 + Android APK 打包（独立 workspace）
 ├── projects/                  # 用户项目（各自独立 workspace）
-│   ├── game/                  # 用户游戏项目（`prisma` + Android `libprisma.so`）
-│   ├── sponza/                # Sponza 路径追踪样例项目
-│   └── editor/                # 独立编辑器项目
+│   ├── prisma/                # 用户游戏项目（`prisma` + Android `libprisma.so`）
+│   ├── prisma-sponza/         # Sponza 路径追踪样例项目
+│   └── prisma-editor/         # 独立编辑器项目
 ├── docs/DESIGN.md             # 权威设计蓝图
 ├── scripts/                   # run.ps1 / build-android.ps1（高度图分析脚本在 scripts/scratch/）
 └── Cargo.toml                 # workspace（crates/xtask 排除在外；launcher/ 与 projects/ 独立）
@@ -51,11 +51,11 @@ PrismaRev/
 
 ### 编辑器与用户项目分离
 
-用户项目的依赖链**不含 egui、编辑器或构建工具**：`game → prism-app → prism-engine → {prism-scene, prism-ecs, prism-render, prism-asset}`。
+用户项目的依赖链**不含 egui、编辑器或构建工具**：`prisma → prism-app → prism-engine → {prism-scene, prism-ecs, prism-render, prism-asset}`。
 编辑器通过两个中性扩展点接入：主线程 `prism_app::FrameHook`（事件/每帧回调）与渲染线程
 `prism_render::external_overlay::SwapchainOverlay`（覆盖层录制）；两者之间的 UI 数据以类型擦除的
 `OverlayMessage`（`Box<dyn FnOnce(&mut dyn SwapchainOverlay) + Send>`）穿过 `RenderShared`。
-编辑器入口位于独立用户项目（`cargo run --manifest-path projects/editor/Cargo.toml`）。
+编辑器入口位于独立用户项目（`cargo run --manifest-path projects/prisma-editor/Cargo.toml`）。
 
 ## 坐标约定
 
@@ -117,22 +117,22 @@ cargo test  -p prism-ecs -p prism-render -p prism-engine -p prism-platform
 当前根 workspace 无可执行 bin（渲染、ECS、平台层均作为库链接），可执行入口有三个：
 
 - `launcher/`（Tauri 桌面壳，游戏启动器）：`cd launcher && pnpm tauri dev`，点 Play 启动 `prisma`。
-- `projects/game/`（用户游戏项目）：`cargo run --manifest-path projects/game/Cargo.toml`。
-- 编辑器：`cargo run --manifest-path projects/editor/Cargo.toml`（F1 inspector / F2 render-graph / F3 perf HUD）。
+- `projects/prisma/`（用户游戏项目）：`cargo run --manifest-path projects/prisma/Cargo.toml`。
+- 编辑器：`cargo run --manifest-path projects/prisma-editor/Cargo.toml`（F1 inspector / F2 render-graph / F3 perf HUD）。
 
 启动器通过 `PRISMREV_LAUNCH_CONFIG` 环境变量（桌面）或 `filesDir/launch_config.json`（Android）向游戏
-传 JSON 启动参数（`{ "scene": "...", "log_level": "..." }`，见 `projects/game/src/launch_config.rs`）。
+传 JSON 启动参数（`{ "scene": "...", "log_level": "..." }`，见 `projects/prisma/src/launch_config.rs`）。
 验证层在 debug 构建下启用，`RUST_LOG=info`（或 `debug`）查看诊断。`scripts/run.ps1` 提供 Windows 一键
 脚本（自动重新编译 Slang 着色器后 `cargo build`）。
 
 ### Android
 
-- 用户项目 `projects/game/` 以 `cdylib` 输出 `libprisma.so` 并暴露 `android_main` JNI 入口
+- 用户项目 `projects/prisma/` 以 `cdylib` 输出 `libprisma.so` 并暴露 `android_main` JNI 入口
   （内部调用 `prism_app::run_on_android`）；`.cargo/config.toml` 将链接器指向 NDK 的 clang wrapper。
 - `run_on_android` 在构造 App 前把 APK `game/` assets 复制到 `<filesDir>/assets` 并切换 cwd，
   因此 `assets/scenes.pak`、`assets/settings.toml` 等路径与桌面完全一致；启动配置从
   `filesDir/launch_config.json` 注入同一个 `PRISMREV_LAUNCH_CONFIG` 环境变量。
-- APK 内有两个 Activity：Tauri 启动器 WebView（launcher）与 `com.prismarev.MainActivity`
+- APK 内有两个 Activity：Tauri 启动器 WebView（launcher）与 `com.prisma.MainActivity`
   （`GameActivity`，独立 `:game` 进程，`android.app.lib_name = prisma`）。
 - 打包：`scripts/build-android.ps1`（自动探测 NDK 与 API level，先生成 `scenes.pak` 并把运行时
   资源复制进 APK 的 `assets/game/`，再用 `cargo ndk -P <api> -t arm64-v8a` 构建 game 到 `jniLibs/`，

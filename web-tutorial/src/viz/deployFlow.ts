@@ -30,13 +30,13 @@ export function mountDeployFlow(host: HTMLElement): void {
     "cargo run",
     "prism-engine\n(winit 桌面后端)",
     "Vulkan Loader\n(vulkan-1.dll)",
-    "prismarev.exe\n(~3 MB)",
+    "prisma.exe\n(~3 MB)",
   ];
   const androidSteps = [
     "cargo ndk\n--target aarch64",
     "prism-android\n(winit android-game-activity)",
     "NDK clang 链接\n+ android-activity",
-    "Gradle →\nprismarev.apk",
+    "Gradle →\nprisma.apk",
   ];
 
   function node(x: number, y: number, w: number, h: number, label: string, active: boolean, color: string) {

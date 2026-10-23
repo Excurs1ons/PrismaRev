@@ -1,4 +1,4 @@
-package com.prismarev
+package com.prisma
 
 import com.google.androidgamesdk.GameActivity
 
