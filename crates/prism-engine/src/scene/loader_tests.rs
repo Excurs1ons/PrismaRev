@@ -623,6 +623,97 @@
         assert!(ctrl.pitch.abs() < 1e-5);
     }
 
+    // ── RSCN v4 ─────────────────────────────────────────────────────
+
+    #[test]
+    fn load_rscn_v4_applies_components_and_hierarchy() {
+        let json = br#"{
+            "version": 1,
+            "entities": [
+                {
+                    "name": "Root",
+                    "parent": null,
+                    "transform": {},
+                    "components": {
+                        "prism_engine::scene::Camera": { "fov_y_degrees": 70.0 }
+                    }
+                },
+                {
+                    "name": "Child",
+                    "parent": 0,
+                    "transform": { "translation": [1.0, 2.0, 3.0] },
+                    "components": {
+                        "prism_engine::scene::PointLight": {
+                            "color": [0.25, 0.5, 1.0],
+                            "intensity": 42.0,
+                            "range": 9.0
+                        }
+                    }
+                },
+                {
+                    "name": "Env",
+                    "parent": null,
+                    "transform": {},
+                    "components": {
+                        "prism_engine::scene::Skybox": {
+                            "hdr_path": "../env/test.hdr",
+                            "enabled": true
+                        }
+                    }
+                }
+            ]
+        }"#;
+        let scene: prism_scene::json::SceneJson = serde_json::from_slice(json).unwrap();
+        let mut registry = crate::scene::ComponentRegistry::new();
+        crate::scene::register_builtin_components(&mut registry);
+        let bytes = prism_scene::rscn::encode_scene(&scene, &registry).unwrap();
+
+        let mut world = World::new();
+        let mut loader = SceneLoader::new();
+        let inst = loader
+            .load_and_spawn(&mut world, SceneSource::RawCooked(bytes.clone()), &registry)
+            .unwrap();
+
+        assert_eq!(inst.all_entities.len(), 3);
+        assert_eq!(inst.root_entities.len(), 2);
+
+        // RSCN stores entities parent-first, but sibling/root order is not the
+        // authoring order. Resolve by name instead of assuming indices.
+        let find = |name: &str| {
+            *inst
+                .all_entities
+                .iter()
+                .find(|&&entity| {
+                    world
+                        .get::<Name>(entity)
+                        .is_some_and(|component| component.0 == name)
+                })
+                .unwrap_or_else(|| panic!("missing entity {name}"))
+        };
+        let root = find("Root");
+        let child = find("Child");
+        let env = find("Env");
+
+        assert_eq!(world.get::<Camera>(root).unwrap().fov_y_degrees, 70.0);
+        assert!(world.get::<FlyCameraController>(root).is_some());
+
+        assert_eq!(world.get::<PointLight>(child).unwrap().intensity, 42.0);
+        assert_eq!(
+            world.get::<LocalTransform>(child).unwrap().translation,
+            glam::Vec3::new(1.0, 2.0, 3.0)
+        );
+        assert_eq!(world.get::<Parent>(child).unwrap().0, root);
+        assert_eq!(
+            world.get::<Skybox>(env).unwrap().hdr_path,
+            "../env/test.hdr"
+        );
+
+        assert_eq!(
+            read_env_path_from_rscn_bytes(&bytes).as_deref(),
+            Some("../env/test.hdr")
+        );
+    }
+
     // ── integration via load_and_spawn ──────────────────────────────
 
     #[test]
