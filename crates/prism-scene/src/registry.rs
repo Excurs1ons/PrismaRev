@@ -11,7 +11,7 @@ use std::collections::HashMap;
 
 use prism_ecs::{Entity, World};
 use prism_reflect::{Object, Reflect, TypeDesc, TypeId, TypeRegistry};
-use serde::de::DeserializeOwned;
+use serde::{de::DeserializeOwned, Serialize};
 
 // ---------------------------------------------------------------------------
 // ComponentRegistry
@@ -21,6 +21,9 @@ type DeserializerFn =
     Box<dyn Fn(&mut World, Entity, &serde_json::Value) + Send + Sync>;
 
 type JsonToObjectFn = Box<dyn Fn(&serde_json::Value) -> Option<Object> + Send + Sync>;
+
+/// 产出某个组件的**作者 JSON 默认形状**（编辑器「添加组件」用）。
+type DefaultJsonFn = Box<dyn Fn() -> serde_json::Value + Send + Sync>;
 
 type ReflectApplyFn = fn(&mut World, Entity, &Object) -> bool;
 type ReflectExtractFn = fn(&World, Entity) -> Option<Object>;
@@ -43,6 +46,7 @@ pub struct ComponentRegistry {
     reflect_entries: HashMap<TypeId, ReflectEntry>,
     name_to_id: HashMap<String, TypeId>,
     json_to_object: HashMap<String, JsonToObjectFn>,
+    defaults: HashMap<String, DefaultJsonFn>,
 }
 
 impl ComponentRegistry {
@@ -53,6 +57,7 @@ impl ComponentRegistry {
             reflect_entries: HashMap::new(),
             name_to_id: HashMap::new(),
             json_to_object: HashMap::new(),
+            defaults: HashMap::new(),
         }
     }
 
@@ -131,19 +136,52 @@ impl ComponentRegistry {
     /// 转成紧凑的 RSCN 载荷。
     pub fn register_reflect_serde<C>(&mut self, name: &str)
     where
-        C: Reflect + DeserializeOwned + Send + Sync + 'static,
+        C: Reflect + DeserializeOwned + Serialize + Send + Sync + 'static,
     {
         self.register::<C>(name);
         self.register_reflect::<C>();
         let key = name.to_string();
         self.json_to_object.insert(
-            key,
+            key.clone(),
             Box::new(move |value| {
                 serde_json::from_value::<C>(value.clone())
                     .ok()
                     .map(|component| <C as Reflect>::to_object(&component))
             }),
         );
+        // 编辑器「添加组件」的默认作者 JSON：`C::default()` 的 serde 形状。
+        self.defaults.insert(
+            key,
+            Box::new(|| serde_json::to_value(C::default()).unwrap_or(serde_json::Value::Null)),
+        );
+    }
+
+    /// 为某个组件手工登记作者 JSON 默认形状。
+    ///
+    /// 用于 `Name` 这类 serde 形状与派生默认不一致的组件
+    /// （`register_reflect_serde` 无法覆盖）。
+    pub fn set_default_json(&mut self, name: &str, value: serde_json::Value) {
+        self.defaults
+            .insert(name.to_string(), Box::new(move || value.clone()));
+    }
+
+    /// 某个组件的作者 JSON 默认形状（编辑器「添加组件」用）。
+    ///
+    /// 未登记返回 `None`；调用方可回退到 `serde_json::Value::Object` 空表。
+    pub fn default_json(&self, name: &str) -> Option<serde_json::Value> {
+        self.defaults.get(name).map(|f| f())
+    }
+
+    /// 所有已登记组件的类型名（稳定顺序，供编辑器组件列表）。
+    pub fn component_names(&self) -> Vec<&'static str> {
+        let mut names: Vec<&'static str> = self
+            .reflect_entries
+            .values()
+            .map(|entry| entry.desc.name)
+            .collect();
+        names.sort_unstable();
+        names.dedup();
+        names
     }
 
     /// 为已有反射组件登记一个自定义 JSON → `Object` 转换器。
@@ -274,6 +312,7 @@ pub fn register_builtin_components(registry: &mut ComponentRegistry) {
             .as_str()
             .map(|s| Name(s.to_string()).to_object())
     });
+    registry.set_default_json("prism_engine::scene::Name", serde_json::json!("entity"));
 
     // ── 光源 ──
     registry.register_reflect_serde::<DirectionalLight>("prism_engine::scene::DirectionalLight");
@@ -380,5 +419,38 @@ mod tests {
         let entity = world.spawn();
         assert!(!registry.apply_object(&mut world, entity, &object));
         assert!(world.get::<Camera>(entity).is_none());
+    }
+
+    #[test]
+    fn builtin_components_expose_defaults_and_names() {
+        let mut registry = ComponentRegistry::new();
+        crate::registry::register_builtin_components(&mut registry);
+
+        // 每个内置组件都有「添加组件」默认值，且能反序列化回组件。
+        let names = registry.component_names();
+        assert!(names.contains(&"prism_engine::scene::Camera"));
+        for name in &names {
+            let default = registry
+                .default_json(name)
+                .unwrap_or_else(|| panic!("missing default for {name}"));
+            let mut world = World::new();
+            let entity = world.spawn();
+            registry.apply(&mut world, entity, name, &default);
+
+            // 走反射路径导出，形状应与默认一致（Name 走自定义转换器）。
+            if let Some(object) = registry.extract_object_by_name(&world, entity, name) {
+                assert_eq!(
+                    registry.object_from_json(name, &default),
+                    Some(object),
+                    "{name} default JSON does not round-trip"
+                );
+            }
+        }
+
+        // Name 的默认形状是裸字符串（自定义 JSON 形状）。
+        assert_eq!(
+            registry.default_json("prism_engine::scene::Name"),
+            Some(serde_json::json!("entity"))
+        );
     }
 }

@@ -40,6 +40,7 @@ PrismaRev/
 │   ├── scenes/                # 场景资产（glTF 等）
 │   └── ...
 ├── launcher/                  # Tauri 桌面壳 + Android APK 打包（独立 workspace）
+├── editor/                    # Tauri 2 + Vue 3 web UI 编辑器（场景/层级/组件编辑，独立 workspace）
 ├── projects/                  # 用户项目（各自独立 workspace）
 │   ├── prisma/                # 用户游戏项目（`prisma` + Android `libprisma.so`）
 │   ├── prisma-sponza/         # Sponza 路径追踪样例项目
@@ -114,11 +115,13 @@ cargo build -p prism-ecs -p prism-render -p prism-engine -p prism-platform
 cargo test  -p prism-ecs -p prism-render -p prism-engine -p prism-platform
 ```
 
-当前根 workspace 无可执行 bin（渲染、ECS、平台层均作为库链接），可执行入口有三个：
+当前根 workspace 无可执行 bin（渲染、ECS、平台层均作为库链接），可执行入口有四个：
 
 - `launcher/`（Tauri 桌面壳，游戏启动器）：`cd launcher && pnpm tauri dev`，点 Play 启动 `prisma`。
 - `projects/prisma/`（用户游戏项目）：`cargo run --manifest-path projects/prisma/Cargo.toml`。
-- 编辑器：`cargo run --manifest-path projects/prisma-editor/Cargo.toml`（F1 inspector / F2 render-graph / F3 perf HUD）。
+- egui 编辑器：`cargo run --manifest-path projects/prisma-editor/Cargo.toml`（F1 inspector / F2 render-graph / F3 perf HUD）。
+- web UI 编辑器：`cd editor && pnpm install && pnpm tauri dev`（Tauri 2 + Vue 3；Rust 侧只依赖
+  `prism-editor-api`，不引入 egui/Vulkan）。
 
 启动器通过 `PRISMREV_LAUNCH_CONFIG` 环境变量（桌面）或 `filesDir/launch_config.json`（Android）向游戏
 传 JSON 启动参数（`{ "scene": "...", "log_level": "..." }`，见 `projects/prisma/src/launch_config.rs`）。

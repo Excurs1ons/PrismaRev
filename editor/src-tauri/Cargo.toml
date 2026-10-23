@@ -1,0 +1,31 @@
+[package]
+name = "prisma-editor-app"
+version = "0.1.0"
+description = "PrismaRev web 编辑器（Tauri 2 外壳 + Rust 场景 API）"
+authors = ["PrismaRev"]
+edition = "2021"
+
+[lib]
+# `_lib` 后缀避免 bin/lib 同名（Windows 上会冲突）。
+name = "prisma_editor_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+# 编辑器后端：场景 schema + .scene.json 读写（egui/Vulkan-free）。
+prism-editor-api = { path = "../../crates/prism-editor-api" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# 独立 workspace：不挂根 PrismaRev workspace（与 launcher/ 一致）。
+[workspace]
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

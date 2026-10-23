@@ -27,6 +27,9 @@ Conventions) before touching any matrix/coordinate math — deviating from those
   `FrameHook` + `SwapchainOverlay` (`EguiCpu`/`EguiFrame`/`EguiOverlay`/`EditorHook`).
   Owns all egui deps; its runtime entry is hosted by `projects/prisma-editor`.
 - `crates/prism-editor-tool` — editor tools (heightmap generator CLI, terrain utilities).
+- `crates/prism-editor-api` — web 编辑器的**数据层**：把 `prism-scene` 组件注册表投影成
+  属性面板 schema + `.scene.json` 定位/读写/校验。egui-free、Vulkan-free，被 `editor/`
+  的 Tauri 命令直接调用；也是唯一允许 `editor/` 依赖的 crate。
 - `crates/prism-build-pipeline` — offline build pipeline (GI baking, asset cooking, heightmap CLI).
 - `crates/prism-audio` — audio subsystem.
 - `crates/prism-asset` — **runtime** asset layer only: `AssetId`/`Handle`, `.pak`
@@ -35,6 +38,9 @@ Conventions) before touching any matrix/coordinate math — deviating from those
   and the `prism-cook` CLI (`src/main.rs`). Depends on `prism-asset` + `prism-scene`; never
   pulled into the game runtime. See DESIGN.md §10.
 - `launcher/` — Tauri 2 desktop shell + Android APK packaging; **own standalone workspace**, NOT a root member.
+- `editor/` — **web UI 编辑器**（Tauri 2 + Vue 3 + Vite）：层级树 + schema 驱动的组件检查器，
+  直接编辑 `.scene.json`；Rust 侧只是 `prism-editor-api` 的薄命令封装。desktop-only，
+  **own standalone workspace**, NOT a root member.
 - `projects/prisma/` — 用户游戏项目（package/crate `prisma`；`prisma` 桌面二进制 + Android
   cdylib `libprisma.so`；keyframe 开场 intro、`register_scene("intro", ...)` 注册场景、
   `lib.rs` 的 `android_main`）；**own standalone workspace**, NOT a root member.
@@ -68,8 +74,10 @@ The user project's dependency chain must stay **egui-free and editor-free**:
 - Build: `scripts/run.ps1` (Windows; sets `VK_SDK`, `RUST_LOG`, runs `bash assets/shaders/compile.sh`, `cargo build`, then `prism-build-pipeline build-scenes`).
   Note: the root workspace has no **game/editor entry** binary — the desktop entry is the Tauri app in `launcher/`
   (`cd launcher && pnpm tauri dev`), which spawns the game binary `prisma` (built in `projects/prisma/`: `cd projects/prisma && cargo run`).
-- Editor: `cargo run --manifest-path projects/prisma-editor/Cargo.toml` — the standalone editor
+- egui Editor: `cargo run --manifest-path projects/prisma-editor/Cargo.toml` — the standalone editor
   project hosts the same `prism-app` loop with egui hooked in (F1 inspector, F2 render-graph, F3 perf HUD).
+- Web Editor: `cd editor && pnpm install && pnpm tauri dev` — Tauri 2 + Vue 3; the Rust side only
+  depends on `prism-editor-api` (no egui/Vulkan). Frontend checks: `cd editor && pnpm build`.
 - Checks: `cargo check -p prism-render`, `cargo build`, `cargo test`.
 - `crates/xtask` is excluded from the workspace — run it explicitly from a desktop host; do not add it to default `members`.
 - Prism-asset / scene / cooker: `cargo test -p prism-asset`, `cargo test -p prism-scene`,
@@ -82,8 +90,8 @@ The user project's dependency chain must stay **egui-free and editor-free**:
   (writes `assets/cooked/default.rscn`; the old `prism-asset-cli` name is gone).
 - Pack already-cooked files: `cargo run -p prism-build-pipeline -- pack assets/cooked`
   (writes `assets/packed/game.pak` + `.pak.meta.json`; low-level escape hatch).
-- The `projects/prisma/`, `projects/prisma-sponza/`, `projects/prisma-editor/` and `launcher/` standalone workspaces need their own `cargo build` / `cargo clippy`
-  runs — a root-workspace build does **not** cover them.
+- The `projects/prisma/`, `projects/prisma-sponza/`, `projects/prisma-editor/`, `launcher/` and `editor/` standalone workspaces need their own `cargo build` / `cargo clippy`
+  runs — a root-workspace build does **not** cover them. `editor/` additionally needs `pnpm`.
 
 ## Shaders (important gotcha)
 - Shaders are **Slang** (`assets/shaders/slang/*.slang`), compiled with `slangc` to `.spv`.

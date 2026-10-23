@@ -25,6 +25,13 @@ android/app/src/main/jniLibs/
 *.png
 !launcher/src-tauri/icons/*.png
 !launcher/src-tauri/gen/android/app/src/main/res/**/*.png
+!editor/src-tauri/icons/*.png
+
+# Node / Vite frontends (launcher + editor)
+node_modules/
+/editor/dist/
+# Tauri 生成的 capability schemas（tauri dev/build 写出）
+**/src-tauri/gen/schemas/
 
 # Runtime logs
 *.log
