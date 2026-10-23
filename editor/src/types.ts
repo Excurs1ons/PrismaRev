@@ -30,6 +30,12 @@ export interface SceneEntry {
   path: string;
 }
 
+/** 新建场景模板。 */
+export interface SceneTemplate {
+  id: string;
+  label: string;
+}
+
 export interface TransformJson {
   translation: number[];
   rotation: number[];

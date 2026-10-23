@@ -1,4 +1,4 @@
-import type { SceneEntry, SceneDoc, Schema } from "./types";
+import type { SceneDoc, SceneEntry, SceneTemplate, Schema } from "./types";
 
 /**
  * Tauri 命令的类型化包装。
@@ -27,7 +27,17 @@ export function listScenes(): Promise<SceneEntry[]> {
   return call<SceneEntry[]>("editor_list_scenes");
 }
 
-/** 读取场景文档。 */
+/** 可用的新建模板。 */
+export function fetchTemplates(): Promise<SceneTemplate[]> {
+  return call<SceneTemplate[]>("editor_scene_templates");
+}
+
+/** 按模板新建场景文档。 */
+export function newScene(template: string): Promise<SceneDoc> {
+  return call<SceneDoc>("editor_new_scene", { template });
+}
+
+/** 读取场景文档（已规范化）。 */
 export function readScene(path: string): Promise<SceneDoc> {
   return call<SceneDoc>("editor_read_scene", { path });
 }
@@ -37,7 +47,22 @@ export function writeScene(path: string, doc: SceneDoc): Promise<void> {
   return call<void>("editor_write_scene", { path, doc });
 }
 
-/** 新建场景文档。 */
-export function newScene(): Promise<SceneDoc> {
-  return call<SceneDoc>("editor_new_scene");
+/** 另存为新名字（不覆盖），返回新路径。 */
+export function writeSceneAs(name: string, doc: SceneDoc): Promise<string> {
+  return call<string>("editor_write_scene_as", { name, doc });
+}
+
+/** 重命名场景文件，返回新路径。 */
+export function renameScene(path: string, name: string): Promise<string> {
+  return call<string>("editor_rename_scene", { path, name });
+}
+
+/** 删除场景文件。 */
+export function deleteScene(path: string): Promise<void> {
+  return call<void>("editor_delete_scene", { path });
+}
+
+/** 把场景 cook 成 RSCN，返回命令输出。 */
+export function cookScene(path: string): Promise<string> {
+  return call<string>("editor_cook_scene", { path });
 }

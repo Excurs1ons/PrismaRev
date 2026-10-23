@@ -12,51 +12,73 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  (e: "update", entity: EntityJson): void;
+  (e: "update", entity: EntityJson, editKey: string): void;
   (e: "remove", index: number): void;
 }>();
 
 const addName = ref("");
 
+/** 离散操作的唯一编辑键（不做撤销合并）。 */
+let opSeq = 0;
+function opKey(label: string): string {
+  opSeq += 1;
+  return `entity.${props.index}/${label}#op${opSeq}`;
+}
+
+/** 字段编辑键：同键且间隔 <700ms 的连续输入合并为一次撤销。 */
+function fieldKey(path: string): string {
+  return `entity.${props.index}/${path}`;
+}
+
 function shortName(name: string): string {
   return name.split("::").pop() ?? name;
 }
 
-function patch(part: Partial<EntityJson>) {
-  emit("update", { ...props.entity, ...part });
+function patch(part: Partial<EntityJson>, editKey: string) {
+  emit("update", { ...props.entity, ...part }, editKey);
 }
 
 function setName(event: Event) {
-  patch({ name: (event.target as HTMLInputElement).value });
+  patch({ name: (event.target as HTMLInputElement).value }, fieldKey("name"));
 }
 
 function onParentChange(event: Event) {
   const raw = Number((event.target as HTMLSelectElement).value);
-  patch({ parent: Number.isFinite(raw) && raw >= 0 ? raw : null });
+  patch({ parent: Number.isFinite(raw) && raw >= 0 ? raw : null }, fieldKey("parent"));
 }
 
-function setTransform(key: "translation" | "rotation" | "scale", value: JsonValue) {
-  patch({ transform: { ...props.entity.transform, [key]: value as number[] } });
+function setTransform(
+  key: "translation" | "rotation" | "scale",
+  value: JsonValue,
+  path: string,
+) {
+  patch({ transform: { ...props.entity.transform, [key]: value as number[] } }, fieldKey(path));
 }
 
-function setComponent(name: string, value: JsonValue) {
-  emit("update", {
-    ...props.entity,
-    components: { ...props.entity.components, [name]: value },
-  });
+function setComponent(name: string, value: JsonValue, path: string) {
+  emit(
+    "update",
+    { ...props.entity, components: { ...props.entity.components, [name]: value } },
+    path,
+  );
 }
 
 function removeComponent(name: string) {
   const components = { ...props.entity.components };
   delete components[name];
-  emit("update", { ...props.entity, components });
+  emit("update", { ...props.entity, components }, opKey(`remove-component:${name}`));
 }
 
 function addComponent() {
   const name = addName.value;
   if (!name) return;
   const type = props.schema.types.find((t) => t.name === name);
-  setComponent(name, (type?.defaultJson as JsonValue) ?? {});
+  const value = (type?.defaultJson as JsonValue) ?? {};
+  emit(
+    "update",
+    { ...props.entity, components: { ...props.entity.components, [name]: value } },
+    opKey(`add-component:${name}`),
+  );
   addName.value = "";
 }
 
@@ -128,24 +150,27 @@ const availableComponents = computed(() =>
       <div class="hint" style="margin-bottom: 4px">transform（局部 · T×R×S）</div>
       <FieldEditor
         label="translation"
+        path="transform.translation"
         :value="entity.transform.translation"
         :field="vecField('translation', 3)"
         :schema="schema"
-        @update="(v) => setTransform('translation', v)"
+        @update="(v, p) => setTransform('translation', v, p)"
       />
       <FieldEditor
         label="rotation"
+        path="transform.rotation"
         :value="entity.transform.rotation"
         :field="vecField('rotation', 4)"
         :schema="schema"
-        @update="(v) => setTransform('rotation', v)"
+        @update="(v, p) => setTransform('rotation', v, p)"
       />
       <FieldEditor
         label="scale"
+        path="transform.scale"
         :value="entity.transform.scale"
         :field="vecField('scale', 3)"
         :schema="schema"
-        @update="(v) => setTransform('scale', v)"
+        @update="(v, p) => setTransform('scale', v, p)"
       />
     </div>
   </div>
@@ -159,10 +184,11 @@ const availableComponents = computed(() =>
     </header>
     <div class="card-body">
       <FieldEditor
+        :path="`components.${name}`"
         :value="componentValue(name)"
         :field="componentField(name)"
         :schema="schema"
-        @update="(v) => setComponent(name, v)"
+        @update="(v, p) => setComponent(name, v, p)"
       />
     </div>
   </div>

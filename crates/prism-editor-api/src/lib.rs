@@ -17,7 +17,8 @@ pub mod scene;
 pub mod schema;
 
 pub use scene::{
-    empty_scene_doc, find_project_root, list_scenes, read_scene_doc, scenes_dir, validate_scene_doc,
-    write_scene_doc, SceneEntry,
+    delete_scene, empty_scene_doc, find_project_root, list_scenes, read_scene_doc, rename_scene,
+    scene_path, scenes_dir, template_scene_doc, templates, validate_scene_doc, write_scene_as,
+    write_scene_doc, SceneEntry, SceneTemplate,
 };
 pub use schema::{build_schema, FieldSchema, Schema, TypeSchema};

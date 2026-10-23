@@ -92,14 +92,22 @@ select:disabled {
 .toolbar {
   display: flex;
   align-items: center;
-  gap: 10px;
+  flex-wrap: wrap;
+  gap: 8px;
   padding: 8px 12px;
   background: var(--panel);
   border-bottom: 1px solid var(--border);
   flex: 0 0 auto;
 }
-.toolbar .spacer {
-  flex: 1;
+.toolbar select {
+  width: auto;
+  min-width: 110px;
+}
+.sep {
+  width: 1px;
+  height: 20px;
+  background: var(--border);
+  margin: 0 2px;
 }
 .brand {
   font-weight: 700;
@@ -268,4 +276,35 @@ select:disabled {
   padding: 6px 10px;
   font-size: 12px;
   white-space: pre-wrap;
+}
+
+.logbar {
+  flex: 0 0 auto;
+  max-height: 30%;
+  display: flex;
+  flex-direction: column;
+  background: #0d1119;
+  border-top: 1px solid var(--border);
+}
+.logbar-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  border-bottom: 1px solid var(--border);
+}
+.log {
+  margin: 0;
+  padding: 8px 10px;
+  overflow: auto;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  color: #cfd8ea;
+  min-height: 0;
 }

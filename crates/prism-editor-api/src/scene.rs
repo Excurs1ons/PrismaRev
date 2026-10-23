@@ -108,33 +108,201 @@ pub fn write_scene_doc(path: &Path, doc: &serde_json::Value) -> Result<(), Strin
     std::fs::write(path, text).map_err(|e| format!("写入 {} 失败: {e}", path.display()))
 }
 
-/// 新建场景的初始文档：一个位于 `[0, 0, 10]` 的相机实体。
-///
-/// 相机组件默认值取自 `prism-scene` 注册表，避免与组件定义脱节。
+// ---------------------------------------------------------------------------
+// 场景名 / 路径
+// ---------------------------------------------------------------------------
+
+/// 校验场景逻辑名并拼出场景目录下的完整路径。
+pub fn scene_path(root: &Path, name: &str) -> Result<PathBuf, String> {
+    scene_file_in(&scenes_dir(root), name)
+}
+
+fn scene_file_in(dir: &Path, name: &str) -> Result<PathBuf, String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err("场景名不能为空".into());
+    }
+    const ILLEGAL: [char; 9] = ['/', '\\', ':', '*', '?', '"', '<', '>', '|'];
+    if trimmed.contains("..") || trimmed.contains(ILLEGAL) {
+        return Err(format!("非法的场景名 '{trimmed}'"));
+    }
+    let file = if trimmed.ends_with(&format!(".{SCENE_EXT}")) {
+        trimmed.to_string()
+    } else if let Some(stem) = trimmed.strip_suffix(".json") {
+        format!("{stem}.{SCENE_EXT}")
+    } else {
+        format!("{trimmed}.{SCENE_EXT}")
+    };
+    Ok(dir.join(file))
+}
+
+/// 以新名字另存场景（不覆盖已存在的同名文件），返回新路径。
+pub fn write_scene_as(root: &Path, name: &str, doc: &serde_json::Value) -> Result<PathBuf, String> {
+    let path = scene_path(root, name)?;
+    if path.exists() {
+        return Err(format!("已存在同名场景：{}", path.display()));
+    }
+    write_scene_doc(&path, doc)?;
+    Ok(path)
+}
+
+/// 重命名场景文件（同目录内），返回新路径。
+pub fn rename_scene(path: &Path, new_name: &str) -> Result<PathBuf, String> {
+    let dir = path.parent().ok_or_else(|| "场景路径没有父目录".to_string())?;
+    let target = scene_file_in(dir, new_name)?;
+    if target == path {
+        return Ok(target);
+    }
+    if target.exists() {
+        return Err(format!("已存在同名场景：{}", target.display()));
+    }
+    std::fs::rename(path, &target).map_err(|e| format!("重命名失败: {e}"))?;
+    Ok(target)
+}
+
+/// 删除场景文件。
+pub fn delete_scene(path: &Path) -> Result<(), String> {
+    std::fs::remove_file(path).map_err(|e| format!("删除 {} 失败: {e}", path.display()))
+}
+
+// ---------------------------------------------------------------------------
+// 场景模板
+// ---------------------------------------------------------------------------
+
+/// 一个内置场景模板。
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SceneTemplate {
+    pub id: String,
+    pub label: String,
+}
+
+/// 所有内置模板（顺序即 UI 展示顺序）。
+pub fn templates() -> Vec<SceneTemplate> {
+    [
+        ("camera", "相机"),
+        ("lit", "相机 + 光照"),
+        ("ui", "UI 叠层"),
+        ("empty", "空实体"),
+    ]
+    .into_iter()
+    .map(|(id, label)| SceneTemplate {
+        id: id.to_string(),
+        label: label.to_string(),
+    })
+    .collect()
+}
+
+/// 新建场景的初始文档（`camera` 模板：位于 `[0, 0, 10]` 的相机实体）。
 pub fn empty_scene_doc() -> serde_json::Value {
+    template_scene_doc("camera")
+}
+
+/// 按模板 id 生成场景文档；未知 id 回退到 `camera`。
+///
+/// 组件默认值来自 `prism-scene` 注册表（`default_json`），模板只覆盖差异字段，
+/// 避免与组件定义脱节。
+pub fn template_scene_doc(id: &str) -> serde_json::Value {
     use serde_json::json;
 
-    let camera_default = crate::build_schema()
-        .type_by_name("prism_engine::scene::Camera")
-        .and_then(|ty| ty.default_json.clone())
-        .unwrap_or_else(|| json!({}));
+    let camera = || component_default("prism_engine::scene::Camera");
 
-    json!({
-        "version": 1,
-        "entities": [
-            {
-                "name": "Camera",
-                "parent": null,
-                "transform": {
-                    "translation": [0.0, 0.0, 10.0],
-                    "rotation": [0.0, 0.0, 0.0, 1.0],
-                    "scale": [1.0, 1.0, 1.0],
-                },
-                "components": {
-                    "prism_engine::scene::Camera": camera_default,
-                },
-            }
+    let entities = match id {
+        "empty" => vec![entity("Entity", None, [0.0, 0.0, 0.0], json!({}))],
+        "lit" => vec![
+            entity("Camera", None, [0.0, 2.5, 18.0], json!({
+                "prism_engine::scene::Camera": camera(),
+            })),
+            entity("Sun", None, [0.0, 6.0, 0.0], json!({
+                "prism_engine::scene::DirectionalLight":
+                    component_default("prism_engine::scene::DirectionalLight"),
+            })),
+            entity("PointLight", None, [3.0, 3.0, 3.0], json!({
+                "prism_engine::scene::PointLight":
+                    component_default("prism_engine::scene::PointLight"),
+            })),
         ],
+        "ui" => vec![
+            entity("overlay", None, [0.0, 0.0, 0.0], json!({
+                "prism_engine::ui::Node": component_default("prism_engine::ui::Node"),
+                "prism_engine::ui::Style": merge(
+                    component_default("prism_engine::ui::Style"),
+                    json!({ "background": [0.0, 0.0, 0.0, 1.0] }),
+                ),
+                "prism_engine::ui::ComputedLayout":
+                    component_default("prism_engine::ui::ComputedLayout"),
+            })),
+            entity("title", Some(0), [0.0, 0.0, 0.0], json!({
+                "prism_engine::ui::Node": component_default("prism_engine::ui::Node"),
+                "prism_engine::ui::Style": merge(
+                    component_default("prism_engine::ui::Style"),
+                    json!({
+                        "width": 900.0,
+                        "height": 108.0,
+                        "anchors": { "min_x": 0.5, "min_y": 0.5, "max_x": 0.5, "max_y": 0.5 },
+                        "pivot": { "x": 0.5, "y": 0.5 },
+                    }),
+                ),
+                "prism_engine::ui::ComputedLayout":
+                    component_default("prism_engine::ui::ComputedLayout"),
+                "prism_engine::ui::Text": merge(
+                    component_default("prism_engine::ui::Text"),
+                    json!({
+                        "content": "PrismaRev",
+                        "font_size": 84.0,
+                        "color": [0.91, 0.925, 0.957, 1.0],
+                        "alignment": "Center",
+                    }),
+                ),
+            })),
+        ],
+        // "camera" 及未知 id
+        _ => vec![entity("Camera", None, [0.0, 0.0, 10.0], json!({
+            "prism_engine::scene::Camera": camera(),
+        }))],
+    };
+
+    json!({ "version": 1, "entities": entities })
+}
+
+fn component_default(name: &str) -> serde_json::Value {
+    crate::build_schema()
+        .type_by_name(name)
+        .and_then(|ty| ty.default_json.clone())
+        .unwrap_or_else(|| serde_json::json!({}))
+}
+
+fn merge(base: serde_json::Value, patch: serde_json::Value) -> serde_json::Value {
+    match (base, patch) {
+        (serde_json::Value::Object(mut base), serde_json::Value::Object(patch)) => {
+            for (key, value) in patch {
+                base.insert(key, value);
+            }
+            serde_json::Value::Object(base)
+        }
+        (_, patch) => patch,
+    }
+}
+
+fn transform(translation: [f32; 3]) -> serde_json::Value {
+    serde_json::json!({
+        "translation": translation,
+        "rotation": [0.0, 0.0, 0.0, 1.0],
+        "scale": [1.0, 1.0, 1.0],
+    })
+}
+
+fn entity(
+    name: &str,
+    parent: Option<u32>,
+    translation: [f32; 3],
+    components: serde_json::Value,
+) -> serde_json::Value {
+    serde_json::json!({
+        "name": name,
+        "parent": parent,
+        "transform": transform(translation),
+        "components": components,
     })
 }
 
@@ -205,6 +373,72 @@ mod tests {
         let bad = json!({ "version": 1, "entities": [] });
         assert!(write_scene_doc(&path, &bad).is_err());
         assert_eq!(read_scene_doc(&path).unwrap(), doc);
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn all_templates_validate_and_round_trip() {
+        let ids: Vec<String> = templates().into_iter().map(|t| t.id).collect();
+        assert!(ids.contains(&"camera".to_string()));
+        assert!(ids.contains(&"lit".to_string()));
+        assert!(ids.contains(&"ui".to_string()));
+
+        for id in ids {
+            let doc = template_scene_doc(&id);
+            validate_scene_doc(&doc)
+                .unwrap_or_else(|e| panic!("template '{id}' invalid: {e}"));
+
+            // 每个实体都必须有完整的 transform / components 形状。
+            for entity in doc["entities"].as_array().unwrap() {
+                assert!(entity["transform"].is_object());
+                assert!(entity["components"].is_object());
+            }
+
+            // 经 SceneJson 规范化后应保持不变（模板已是规范形状）。
+            let normalized: serde_json::Value =
+                serde_json::to_value(serde_json::from_value::<SceneJson>(doc.clone()).unwrap())
+                    .unwrap();
+            assert_eq!(normalized, doc, "template '{id}' is not normalized");
+        }
+
+        // 未知 id 回退到 camera。
+        assert_eq!(template_scene_doc("nope"), template_scene_doc("camera"));
+    }
+
+    #[test]
+    fn scene_names_are_validated() {
+        let root = temp_dir("names");
+        assert!(scene_path(&root, "My Scene").is_ok());
+        assert!(scene_path(&root, "level1").unwrap().ends_with("level1.scene.json"));
+        assert!(scene_path(&root, "level2.scene.json")
+            .unwrap()
+            .ends_with("level2.scene.json"));
+        assert!(scene_path(&root, "").is_err());
+        assert!(scene_path(&root, "../escape").is_err());
+        assert!(scene_path(&root, "a/b").is_err());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn write_as_rename_and_delete_roundtrip() {
+        let root = temp_dir("ops");
+
+        let path = write_scene_as(&root, "alpha", &empty_scene_doc()).unwrap();
+        assert!(path.exists());
+        // 同名不覆盖。
+        assert!(write_scene_as(&root, "alpha", &empty_scene_doc()).is_err());
+
+        let renamed = rename_scene(&path, "beta").unwrap();
+        assert!(!path.exists());
+        assert!(renamed.ends_with("beta.scene.json"));
+
+        let scenes = list_scenes(&root).unwrap();
+        assert_eq!(scenes.len(), 1);
+        assert_eq!(scenes[0].name, "beta");
+
+        delete_scene(&renamed).unwrap();
+        assert!(list_scenes(&root).unwrap().is_empty());
 
         std::fs::remove_dir_all(&root).ok();
     }

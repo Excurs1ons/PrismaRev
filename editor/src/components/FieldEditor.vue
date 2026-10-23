@@ -6,15 +6,22 @@ import type { FieldSchema, JsonValue, Schema } from "../types";
  * 递归字段编辑器：按 **JSON 值的运行时形状** 选控件，schema（`field`）
  * 只作为类型/只读/嵌套结构体的提示。这样 `Name`（裸字符串）、
  * `Active`（裸布尔）这类「JSON 形状 ≠ 派生结构体」的组件也能正确编辑。
+ *
+ * `path` 是字段的稳定编辑路径（如 `components.X.font_size`），随每次改动
+ * 一并向上抛，供宿主做「同一字段的连续输入合并成一次撤销」。
  */
 const props = defineProps<{
   label?: string;
+  path?: string;
   value: JsonValue;
   field?: FieldSchema | null;
   schema: Schema;
 }>();
 
-const emit = defineEmits<{ (e: "update", v: JsonValue): void }>();
+const emit = defineEmits<{ (e: "update", value: JsonValue, path: string): void }>();
+
+/** 离散操作（增删）用唯一后缀，避免与连续输入合并。 */
+let opSeq = 0;
 
 type Kind = "bool" | "number" | "string" | "object" | "array" | "null";
 
@@ -29,6 +36,7 @@ function kindOf(v: JsonValue | undefined): Kind {
 
 const hint = computed<FieldSchema | null>(() => props.field ?? null);
 const kind = computed(() => kindOf(props.value));
+const pathStr = computed(() => props.path ?? props.label ?? "");
 
 const isInteger = computed(() =>
   ["i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64"].includes(hint.value?.kind ?? ""),
@@ -61,6 +69,14 @@ function fieldFor(key: string): FieldSchema | null {
   return structFields.value.find((f) => f.name === key) ?? null;
 }
 
+function childPath(key: string): string {
+  return pathStr.value ? `${pathStr.value}.${key}` : key;
+}
+
+function itemPath(index: number): string {
+  return `${pathStr.value}[${index}]`;
+}
+
 /** 某字段的「零值」默认，用于「添加」操作。 */
 function defaultFor(field: FieldSchema | null): JsonValue {
   if (!field) return null;
@@ -88,38 +104,45 @@ function defaultFor(field: FieldSchema | null): JsonValue {
   }
 }
 
-function set(next: JsonValue) {
-  emit("update", next);
+/** `fromChild` 为嵌套编辑器冒泡上来的精确路径；为空则用本字段路径。 */
+function set(next: JsonValue, fromChild?: string) {
+  emit("update", next, fromChild ?? pathStr.value);
 }
 
-function setKey(key: string, value: JsonValue) {
-  set({ ...asObject.value, [key]: value });
+/** 离散操作：唯一后缀确保不被合并。 */
+function setOp(next: JsonValue) {
+  opSeq += 1;
+  emit("update", next, `${pathStr.value}#op${opSeq}`);
 }
 
-function setItem(index: number, value: JsonValue) {
+function setKey(key: string, value: JsonValue, childPathValue: string) {
+  set({ ...asObject.value, [key]: value }, childPathValue);
+}
+
+function setItem(index: number, value: JsonValue, childPathValue: string) {
   const next = [...asArray.value];
   next[index] = value;
-  set(next);
+  set(next, childPathValue);
 }
 
 function addItem() {
-  set([...asArray.value, defaultFor(hint.value?.inner ?? null)]);
+  setOp([...asArray.value, defaultFor(hint.value?.inner ?? null)]);
 }
 
 function removeItem(index: number) {
   const next = [...asArray.value];
   next.splice(index, 1);
-  set(next);
+  setOp(next);
 }
 
 /** 把 `null` 折叠成一个有意义的值（option → 内层默认）。 */
 function initFromNull() {
   const h = hint.value;
   if (h?.kind === "option" && h.inner) {
-    set(defaultFor(h.inner));
+    setOp(defaultFor(h.inner));
     return;
   }
-  set(defaultFor(h));
+  setOp(defaultFor(h));
 }
 
 function onNumber(event: Event) {
@@ -140,22 +163,29 @@ function onBool(event: Event) {
       <div v-if="label" class="label">
         {{ label }}<span v-if="hint?.readOnly" class="ro"> ·只读</span>
       </div>
-      <div class="hint">{{ structFields.length ? '结构体' : '对象' }} · {{ objectEntries.length }} 字段</div>
+      <div class="hint">
+        {{ structFields.length ? '结构体' : '对象' }} · {{ objectEntries.length }} 字段
+      </div>
     </div>
     <div class="nested">
       <FieldEditor
         v-for="entry in objectEntries"
         :key="entry.key"
         :label="entry.key"
+        :path="childPath(entry.key)"
         :value="entry.value"
         :field="fieldFor(entry.key)"
         :schema="schema"
-        @update="(v) => setKey(entry.key, v)"
+        @update="(v, p) => setKey(entry.key, v, p)"
       />
       <div v-for="f in missingKeys" :key="`missing-${f.name}`" class="row">
         <div class="label">{{ f.name }}</div>
         <div>
-          <button class="ghost icon" :disabled="f.readOnly" @click="setKey(f.name, defaultFor(f))">
+          <button
+            class="ghost icon"
+            :disabled="f.readOnly"
+            @click="setOp({ ...asObject, [f.name]: defaultFor(f) })"
+          >
             + 添加
           </button>
         </div>
@@ -179,10 +209,11 @@ function onBool(event: Event) {
       <div v-for="(item, i) in asArray" :key="i" class="array-row">
         <span class="idx">[{{ i }}]</span>
         <FieldEditor
+          :path="itemPath(i)"
           :value="item"
           :field="hint?.inner ?? null"
           :schema="schema"
-          @update="(v) => setItem(i, v)"
+          @update="(v, p) => setItem(i, v, p)"
         />
         <button class="ghost icon" :disabled="hint?.readOnly" title="删除" @click="removeItem(i)">
           −

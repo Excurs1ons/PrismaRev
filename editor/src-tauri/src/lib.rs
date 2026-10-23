@@ -1,9 +1,9 @@
 //! PrismaRev web 编辑器的 Tauri 外壳。
 //!
-//! 这里只做三件事：注册 [`prism_editor_api`] 暴露的命令、装配窗口、运行。
+//! 这里只做两件事：把 [`prism_editor_api`] 的能力包装成命令、装配窗口。
 //! 所有场景/schema 逻辑都在 `prism-editor-api`（可单测，不依赖 Tauri/egui）。
 
-use prism_editor_api::{SceneEntry, Schema};
+use prism_editor_api::{SceneEntry, SceneTemplate, Schema};
 
 /// 组件属性面板的完整 schema（组件 + 嵌套结构体 + 默认值）。
 #[tauri::command]
@@ -24,7 +24,19 @@ fn editor_list_scenes() -> Result<Vec<SceneEntry>, String> {
     prism_editor_api::list_scenes(&root)
 }
 
-/// 读取一个场景作者文档（原始 JSON）。
+/// 可用的新建场景模板。
+#[tauri::command]
+fn editor_scene_templates() -> Vec<SceneTemplate> {
+    prism_editor_api::templates()
+}
+
+/// 新建场景的初始文档（按模板 id；未知 id 回退到 camera）。
+#[tauri::command]
+fn editor_new_scene(template: String) -> serde_json::Value {
+    prism_editor_api::template_scene_doc(&template)
+}
+
+/// 读取一个场景作者文档（规范化 JSON）。
 #[tauri::command]
 fn editor_read_scene(path: String) -> Result<serde_json::Value, String> {
     prism_editor_api::read_scene_doc(std::path::Path::new(&path))
@@ -36,10 +48,62 @@ fn editor_write_scene(path: String, doc: serde_json::Value) -> Result<(), String
     prism_editor_api::write_scene_doc(std::path::Path::new(&path), &doc)
 }
 
-/// 新建场景的初始文档（一个相机实体）。
+/// 以新名字另存（不覆盖同名），返回新路径。
 #[tauri::command]
-fn editor_new_scene() -> serde_json::Value {
-    prism_editor_api::empty_scene_doc()
+fn editor_write_scene_as(name: String, doc: serde_json::Value) -> Result<String, String> {
+    let root = prism_editor_api::find_project_root()?;
+    prism_editor_api::write_scene_as(&root, &name, &doc)
+        .map(|path| path.to_string_lossy().into_owned())
+}
+
+/// 重命名场景文件，返回新路径。
+#[tauri::command]
+fn editor_rename_scene(path: String, name: String) -> Result<String, String> {
+    prism_editor_api::rename_scene(std::path::Path::new(&path), &name)
+        .map(|path| path.to_string_lossy().into_owned())
+}
+
+/// 删除场景文件。
+#[tauri::command]
+fn editor_delete_scene(path: String) -> Result<(), String> {
+    prism_editor_api::delete_scene(std::path::Path::new(&path))
+}
+
+/// 把场景 cook 成 RSCN（调用 `prism-build-pipeline cook`）。
+///
+/// 编辑器不链接 cook/build 流水线（那是 build-host 的依赖）；这里以子进程调用，
+/// 返回合并后的 stdout/stderr 供 UI 展示。
+#[tauri::command]
+fn editor_cook_scene(path: String) -> Result<String, String> {
+    let root = prism_editor_api::find_project_root()?;
+
+    let mut command = std::process::Command::new("cargo");
+    command
+        .args(["run", "-q", "-p", "prism-build-pipeline", "--", "cook", &path])
+        .current_dir(&root);
+    // Windows: 不弹控制台窗口。
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+
+    let output = command
+        .output()
+        .map_err(|e| format!("无法启动 cargo（cook 需要桌面 Rust 工具链）: {e}"))?;
+
+    let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+    text.push_str(&String::from_utf8_lossy(&output.stderr));
+
+    if output.status.success() {
+        Ok(text)
+    } else {
+        Err(format!(
+            "cook 失败 (exit {})：\n{}",
+            output.status.code().unwrap_or(-1),
+            text
+        ))
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -49,9 +113,14 @@ pub fn run() {
             editor_schema,
             editor_project_root,
             editor_list_scenes,
+            editor_scene_templates,
+            editor_new_scene,
             editor_read_scene,
             editor_write_scene,
-            editor_new_scene,
+            editor_write_scene_as,
+            editor_rename_scene,
+            editor_delete_scene,
+            editor_cook_scene,
         ])
         .run(tauri::generate_context!())
         .expect("error while running the PrismaRev editor");
