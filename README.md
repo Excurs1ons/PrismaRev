@@ -160,9 +160,10 @@ cargo test  -p prism-ecs -p prism-render -p prism-engine -p prism-platform
   资产数据库与 `prism-cook` CLI。
 - **prism-asset**：`AssetId`/`Handle`、`.pak` 读写、`ResourceManager`、streaming/hot-reload。
   不包含 importer/cooker/db。
-- **CLI**：`prism-cook` 子命令驱动导入/烘焙/打包；`prism-build-pipeline cook` 可直接把
-  `.scene.json` 编成 `.rscn`，`prism-build-pipeline pack <cooked-dir>` 把已 cook 的目录
-  打成 `.pak` 并写出路径清单。
+- **CLI**：`prism-cook` 子命令驱动导入/烘焙/打包。场景包的发布入口是
+  `prism-build-pipeline build-scenes`：读取 `assets/scenes.toml`，把场景 cook 到
+  `target/scene_pack/`，再生成运行时读取的 `assets/scenes.pak` + `.pak.meta.json`。
+  单场景可用 `cook`，通用目录打包可用 `pack`。
 
 ## 高度图生成器（prism-build-pipeline）
 

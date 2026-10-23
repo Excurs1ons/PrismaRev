@@ -3,6 +3,7 @@
 //! Subcommands:
 //!   bake-gi    — offline GI probe-volume baker (GPU ray-query, multi-bounce path tracing)
 //!   cook       — cook a `.scene.json` to RSCN v4 (delegates to prism-cooker)
+//!   build-scenes — cook `scenes.toml` entries and pack `scenes.pak`
 //!   pack       — pack a cooked directory into a `.pak` + path manifest
 //!   heightmap  — generate + erode a procedural heightmap, write raw f32
 
@@ -24,9 +25,9 @@ enum Command {
     BakeGi {
         /// Output .bin path (default: assets/gi/probe_volume.bin)
         output: Option<PathBuf>,
-        /// Path to .pak resource package (default: assets/packed/scene.pak)
+        /// Path to .pak resource package (default: assets/scenes.pak)
         pak: Option<PathBuf>,
-        /// Path to .rscn cooked scene file (default: assets/scenes/default.rscn)
+        /// Path to .rscn cooked scene file (default: target/scene_pack/scenes/default.rscn)
         rscn: Option<PathBuf>,
         /// Rays per probe [default: 64]
         #[arg(long, default_value_t = 64)]
@@ -42,6 +43,21 @@ enum Command {
         /// Output directory (default: assets/cooked)
         #[arg(long, default_value = "assets/cooked")]
         output: PathBuf,
+    },
+    /// Cook all scenes in `scenes.toml` and build the runtime `scenes.pak`
+    BuildScenes {
+        /// Scene manifest to read (default: assets/scenes.toml)
+        #[arg(long, default_value = "assets/scenes.toml")]
+        manifest: PathBuf,
+        /// Generated staging directory (default: target/scene_pack)
+        #[arg(long, default_value = "target/scene_pack")]
+        staging: PathBuf,
+        /// Output .pak path (default: assets/scenes.pak)
+        #[arg(long, default_value = "assets/scenes.pak")]
+        output: PathBuf,
+        /// zstd compression level (0-22, 0 = no compression)
+        #[arg(long, short = 'l', default_value_t = 3)]
+        compression: u32,
     },
     /// Build a .pak resource package from a directory of cooked files
     Pack {
@@ -115,8 +131,8 @@ fn main() -> Result<()> {
         } => {
             let cfg = prism_build_pipeline::BakeGiConfig {
                 output_path: output.unwrap_or_else(|| PathBuf::from("assets/gi/probe_volume.bin")),
-                pak_path: pak.unwrap_or_else(|| PathBuf::from("assets/packed/scene.pak")),
-                rscn_path: rscn.unwrap_or_else(|| PathBuf::from("assets/scenes/default.rscn")),
+                pak_path: pak.unwrap_or_else(|| PathBuf::from("assets/scenes.pak")),
+                rscn_path: rscn.unwrap_or_else(|| PathBuf::from("target/scene_pack/scenes/default.rscn")),
                 num_rays: rays,
                 max_bounce: bounces,
                 ..Default::default()
@@ -152,6 +168,31 @@ fn main() -> Result<()> {
             std::fs::write(&out_path, cooked)
                 .map_err(|e| anyhow::anyhow!("cook: failed to write {}: {e}", out_path.display()))?;
             log::info!("cook: wrote {}", out_path.display());
+            Ok(())
+        }
+        Command::BuildScenes {
+            manifest,
+            staging,
+            output,
+            compression,
+        } => {
+            log::info!(
+                "build-scenes: {} -> {} -> {}",
+                manifest.display(),
+                staging.display(),
+                output.display()
+            );
+            let summary =
+                prism_build_pipeline::build_scene_package(&manifest, &staging, &output, compression)?;
+            log::info!(
+                "build-scenes: {} scene(s), {} skipped; {} files, {} bytes -> {}; manifest {}",
+                summary.scenes,
+                summary.skipped,
+                summary.pack.asset_count,
+                summary.pack.total_bytes,
+                summary.pack.pak_bytes,
+                summary.pack.manifest_path.display()
+            );
             Ok(())
         }
         Command::Pack {

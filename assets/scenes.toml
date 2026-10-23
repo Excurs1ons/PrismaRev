@@ -4,8 +4,9 @@
 # into the resource package's path manifest (assets/scenes.pak.meta.json): the
 # engine resolves it to an AssetId and loads the scene CONTENT from the .pak via
 # the ResourceManager. There is no disk-file fallback — scenes must be cooked
-# into assets/scenes.pak first (`prism-cook` for generic assets, or
-# `prism-build-pipeline cook` for `.scene.json` → `.rscn`).
+# into assets/scenes.pak first. Use `prism-build-pipeline build-scenes`; it
+# cooks every entry below, copies this manifest into the package, and writes
+# the path manifest used by the runtime.
 #
 # Supported scene content formats inside the package:
 #   - `.rscn`   : cooked binary (production).
@@ -15,7 +16,7 @@
 # takes priority.
 [[scenes]]
 name = "intro"
-path = "scenes/intro.scene.json"
+path = "scenes/intro.rscn"
 
 # Engine-builtin default scene: a camera at [0, 2.5, 18] looking at the origin
 # plus a directional sun and three coloured point lights. Cooked from

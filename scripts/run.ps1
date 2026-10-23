@@ -39,6 +39,14 @@ Write-Host "构建 PrismaRev (debug)..."
 cargo build
 if ($LASTEXITCODE -ne 0) { Write-Error "构建失败"; exit 1 }
 
+# 生成运行时场景包：scenes.toml -> cooked RSCN -> assets/scenes.pak。
+# 游戏运行时只从该 .pak 的路径清单解析场景，因此开发启动前也必须生成。
+if (Test-Path "assets/scenes.toml") {
+    Write-Host "构建场景包 (assets/scenes.pak)..."
+    cargo run -q -p prism-build-pipeline -- build-scenes
+    if ($LASTEXITCODE -ne 0) { Write-Error "场景包构建失败"; exit 1 }
+}
+
 Write-Host ""
 Write-Host "构建完成。启动入口："
 Write-Host "  launcher/ (Tauri 桌面壳 + Android APK)：cd launcher && pnpm tauri dev"

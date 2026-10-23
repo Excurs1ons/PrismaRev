@@ -749,7 +749,10 @@ prism-scene::rscn::encode_scene
 .rscn  ──►  prism-engine::SceneLoader（decode_scene + ComponentRegistry）
 ```
 
-- `prism-build-pipeline cook <input.scene.json>` 直接调用 `SceneCooker`；
+- `prism-build-pipeline build-scenes` 读取 `assets/scenes.toml`，按其中的路径 cook 场景、
+  把 manifest 中 `.scene.json` 路径重写为 `.rscn` 后打进包，并产出运行时使用的
+  `assets/scenes.pak` + `.pak.meta.json`；这是发布入口；
+- `prism-build-pipeline cook <input.scene.json>` 单场景 cook，直接调用 `SceneCooker`；
 - 通用纹理/网格/二进制资产仍走 `prism-cook import/build`；
 - `prism-build-pipeline pack <cooked-dir>` 把已 cook 的目录打成 `.pak`，并写
   `.pak.meta.json` 路径清单（ID 按排序后的相对路径确定性分配）；
@@ -767,9 +770,11 @@ prism-scene::rscn::encode_scene
 
 - **[G2] Cooker 输出格式与引擎对接** ✅ **场景链路已打通**：`SceneCooker` 产出 RSCN v4，`prism-engine` 的 `SceneLoader` 用同一份 `prism-scene` schema 解码；`prism-cooker` 中有真实 `.scene.json` 的 cook/decode 测试。纹理/网格的压缩数据端到端对比仍待补。
 
-- **[G3] ResourceManager → Engine 桥接** ✅ **部分完成**：`GpuAssetResolver` 已持 `ResourceManager` 并支持 `load_package/load_package_bytes` 与 `load_with_deps`，`App::new` 中 `load_resource_package()` 已探查 `game.pak`；`Handle<T>`→`Entity` 映射沿用 `load_demo_scene` 模式，全链路 `CLI build → .pak → ResourceManager → GPU` 可手动验证。
+- **[G3] ResourceManager → Engine 桥接** ✅ **部分完成**：`GpuAssetResolver` 已持 `ResourceManager` 并支持 `load_package/load_package_bytes` 与 `load_with_deps`，`App::new` 中 `load_resource_package()` 已探查 `assets/scenes.pak`；`Handle<T>`→`Entity` 映射沿用 `load_demo_scene` 模式，全链路 `CLI build → .pak → ResourceManager → GPU` 可手动验证。
 
-- **[G4] 构建脚本集成** ⏳ **命令已对齐**：发布构建使用 `cargo run -p prism-cooker --bin prism-cook -- build`；泛资产走 `prism-cook`，场景走 `prism-build-pipeline cook`。`scripts/run.ps1` / CI 的一键化集成仍待补。
+- **[G4] 构建脚本集成** ✅ **已落地**：`prism-build-pipeline build-scenes` 统一完成
+  `scenes.toml → cooked RSCN → scenes.pak + path manifest`；泛资产仍走 `prism-cook build`，
+  `scripts/run.ps1` 在 `cargo build` 后自动调用它。CI 的资产构建步骤仍待补。
 
 - **[G5] CookProfile 集成到引擎设置** ⏳ **配置已就绪**：`CookProfile` 5 档 + `settings_hash` 已实现，`--profile` CLI 透传待接入 `AppConfig` 启动参数。
 

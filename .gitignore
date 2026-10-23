@@ -57,6 +57,11 @@ assets/scenes/*
 !assets/scenes/*.rscn
 !assets/scenes/*.scene.json
 
+# Generated scene staging + packages (`prism-build-pipeline build-scenes`).
+/assets/cooked/
+/assets/*.pak
+/assets/*.pak.meta.json
+
 assets/external
 !assets/external/readme.md
 # Deepwork session state

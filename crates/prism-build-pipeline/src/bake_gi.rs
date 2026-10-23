@@ -45,8 +45,8 @@ pub struct BakeGiConfig {
 impl Default for BakeGiConfig {
     fn default() -> Self {
         Self {
-            pak_path: PathBuf::from("assets/packed/scene.pak"),
-            rscn_path: PathBuf::from("assets/scenes/default.rscn"),
+            pak_path: PathBuf::from("assets/scenes.pak"),
+            rscn_path: PathBuf::from("target/scene_pack/scenes/default.rscn"),
             output_path: PathBuf::from("assets/gi/probe_volume.bin"),
             num_rays: 64,
             max_bounce: 3,

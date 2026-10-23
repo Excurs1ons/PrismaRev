@@ -182,7 +182,8 @@ component payload                    // 按 TypeDesc 字段顺序，不含字段
 
 `prism-asset` 只保留运行时 `.pak`、`AssetId`/`Handle`、`ResourceManager`，
 不再包含 cooker/importer/db/CLI。`prism-cook` 负责非场景资产；
-场景资产由 `prism-build-pipeline cook` 或编辑器调用 `SceneCooker`。
+场景资产由 `prism-build-pipeline build-scenes`（或单场景 `cook`）或编辑器调用
+`SceneCooker`，最终统一落在 `assets/scenes.pak`。
 
 ### serde 的定位
 

@@ -63,7 +63,7 @@ The user project's dependency chain must stay **egui-free and editor-free**:
   (`BadTexture(Managed(0))` on the render thread).
 
 ## Build / check / test
-- Build: `scripts/run.ps1` (Windows; sets `VK_SDK`, `RUST_LOG`, runs `bash assets/shaders/compile.sh` then `cargo build`).
+- Build: `scripts/run.ps1` (Windows; sets `VK_SDK`, `RUST_LOG`, runs `bash assets/shaders/compile.sh`, `cargo build`, then `prism-build-pipeline build-scenes`).
   Note: the root workspace has no **game/editor entry** binary — the desktop entry is the Tauri app in `launcher/`
   (`cd launcher && pnpm tauri dev`), which spawns the game binary `prismarev` (built in `projects/game/`: `cd projects/game && cargo run`).
 - Editor: `cargo run --manifest-path projects/editor/Cargo.toml` — the standalone editor
@@ -73,10 +73,13 @@ The user project's dependency chain must stay **egui-free and editor-free**:
 - Prism-asset / scene / cooker: `cargo test -p prism-asset`, `cargo test -p prism-scene`,
   `cargo test -p prism-cooker`.
 - Generic asset build: `cargo run -p prism-cooker --bin prism-cook -- build`.
-- Scene cook: `cargo run -p prism-build-pipeline -- cook assets/scenes/default.scene.json`
+- Scene package: `cargo run -p prism-build-pipeline -- build-scenes`
+  (cooks every `assets/scenes.toml` entry into `target/scene_pack/`, then writes
+  `assets/scenes.pak` + `.pak.meta.json`; this is the runtime package path).
+- One-off scene cook: `cargo run -p prism-build-pipeline -- cook assets/scenes/default.scene.json`
   (writes `assets/cooked/default.rscn`; the old `prism-asset-cli` name is gone).
 - Pack already-cooked files: `cargo run -p prism-build-pipeline -- pack assets/cooked`
-  (writes `assets/packed/game.pak` + `.pak.meta.json`).
+  (writes `assets/packed/game.pak` + `.pak.meta.json`; low-level escape hatch).
 - The `projects/game/`, `projects/sponza/`, `projects/editor/` and `launcher/` standalone workspaces need their own `cargo build` / `cargo clippy`
   runs — a root-workspace build does **not** cover them.
 
