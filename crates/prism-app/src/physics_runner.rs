@@ -169,10 +169,7 @@ pub fn physics_thread_main(step_rx: Receiver<PhysicsStep>, result_tx: Sender<Phy
                                 .iter()
                                 .map(|v| Vector::new(v[0], v[1], v[2]))
                                 .collect();
-                            let rapier_indices: Vec<[u32; 3]> = indices
-                                .chunks_exact(3)
-                                .map(|c| [c[0], c[1], c[2]])
-                                .collect();
+                            let rapier_indices: Vec<[u32; 3]> = indices.as_chunks::<3>().0.to_vec();
                             ColliderBuilder::trimesh(rapier_vertices, rapier_indices)
                                 .expect("Failed to build trimesh collider")
                                 .build()
