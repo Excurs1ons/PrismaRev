@@ -197,6 +197,22 @@ select:disabled {
   font-size: 11px;
 }
 
+.group {
+  margin: 6px 0 2px;
+  padding: 0 8px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+}
+.prefab-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .editor-pane {
   flex: 1 1 auto;
   overflow: auto;

@@ -39,10 +39,21 @@ Conventions) before touching any matrix/coordinate math — deviating from those
   pulled into the game runtime. See DESIGN.md §10.
 - `launcher/` — Tauri 2 desktop shell + Android APK packaging; **own standalone workspace**, NOT a root member.
 - `editor/` — **web UI 编辑器**（Tauri 2 + Vue 3 + Vite）：层级树 + schema 驱动的组件检查器、
-  撤销/重做（按字段合并连续输入）、模板新建、重命名/删除、以及 **Cook** 按钮。它直接编辑
-  `.scene.json`；Rust 侧只是 `prism-editor-api` 的薄命令封装，**不链接** cooker/build 流水线
-  （Cook 以子进程调用 `cargo run -p prism-build-pipeline -- cook <file>`）。desktop-only，
+  撤销/重做（按字段合并连续输入）、模板新建、重命名/删除、**Cook**、资产管理器
+  （检索/分类/引用位置）与**预制体**编辑。Rust 侧只是 `prism-editor-api` 的薄命令封装，
+  **不链接** cooker/build 流水线（Cook 以子进程调用
+  `cargo run -p prism-build-pipeline -- cook <file>`）。desktop-only，
   **own standalone workspace**, NOT a root member.
+  - 编辑器把**场景与预制体统一成「文档」**：同一 `{version, entities}` 形状，靠
+    `DocKind` 区分目录/后缀 —— 场景 `assets/scenes/*.scene.json`、预制体
+    `assets/prefabs/*.prefab.json`。因此层级树/检查器/撤销对两者完全通用；
+    「存为预制体」= 提取选中实体子树（`extract_subtree`），「插入」= `instantiate_prefab`
+    （追加到场景末尾、内部父索引平移、根挂到选中实体、名字去重）。当前是**复制式**实例化，
+    没有 prefab → 实例的反向链接/同步。
+  - 组件字段改动**先本地即时提交**（拖动/输入要跟手），再交给 `editor_set_component_field`
+    做**反射写入**：`from_object` 还原出组件 → `Reflect::set_field` 写字段（`#[reflect(read_only)]`
+    被拒、类型经反射校验）→ `object_to_json` 还原作者 JSON，成功则静默回填（不新增撤销步）。
+    因此枚举字符串（`TextAlign`）与单字段 newtype（`Name`）都按作者 JSON 形状工作。
 - `projects/prisma/` — 用户游戏项目（package/crate `prisma`；`prisma` 桌面二进制 + Android
   cdylib `libprisma.so`；keyframe 开场 intro、`register_scene("intro", ...)` 注册场景、
   `lib.rs` 的 `android_main`）；**own standalone workspace**, NOT a root member.

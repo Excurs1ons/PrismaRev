@@ -1,15 +1,14 @@
-//! 生成 web 编辑器「浏览器预览」用的 fixture：schema + 模板 + 预设 + 示例场景。
+//! 生成 web 编辑器「浏览器预览」用的 fixture：schema + 模板 + 预设 + 文档 + 资产。
 //!
 //! 全部由 `prism-editor-api` 的真实注册表产出，因此不会与 Rust 侧 schema 漂移。
-//! 仓库根目录运行：
 //!
 //! ```bash
-//! cd editor && pnpm fixture          # 等价于下方命令
-//! cargo run -q -p prism-editor-api --example dump_fixture > editor/public/demo.json
+//! cd editor && pnpm fixture
 //! ```
 
 use std::path::PathBuf;
 
+use prism_editor_api::DocKind;
 use serde_json::{json, Value};
 
 fn main() {
@@ -20,52 +19,67 @@ fn main() {
         .to_path_buf();
 
     let schema = prism_editor_api::build_schema();
-    let templates = prism_editor_api::templates();
     let presets = prism_editor_api::entity_presets();
     let asset_infos = prism_editor_api::list_assets_info(&root).unwrap_or_default();
 
-    // 仓库里真实存在的场景文档。
     let mut docs = serde_json::Map::new();
-    let mut entries: Vec<Value> = Vec::new();
-    if let Ok(listed) = prism_editor_api::list_scenes(&root) {
-        for entry in listed {
-            if let Ok(doc) = prism_editor_api::read_scene_doc(std::path::Path::new(&entry.path)) {
-                docs.insert(entry.path.clone(), doc);
-                entries.push(serde_json::to_value(&entry).expect("SceneEntry 可序列化"));
+    let mut documents = serde_json::Map::new();
+    let mut templates_by_kind = serde_json::Map::new();
+    let mut template_docs = serde_json::Map::new();
+
+    for kind in [DocKind::Scene, DocKind::Prefab] {
+        let key = match kind {
+            DocKind::Scene => "scene",
+            DocKind::Prefab => "prefab",
+        };
+
+        let mut entries: Vec<Value> = Vec::new();
+        if let Ok(listed) = prism_editor_api::list_docs(&root, kind) {
+            for entry in listed {
+                if let Ok(doc) = prism_editor_api::read_doc(std::path::Path::new(&entry.path)) {
+                    docs.insert(entry.path.clone(), doc);
+                    entries.push(serde_json::to_value(&entry).expect("SceneEntry 可序列化"));
+                }
             }
         }
-    }
 
-    // 合成一个更有层次的 demo 场景（lit 三个实体 + UI 两个实体，UI 挂父）。
-    let demo_path = root
-        .join("assets")
-        .join("scenes")
-        .join("demo.scene.json")
-        .to_string_lossy()
-        .into_owned();
-    docs.insert(demo_path.clone(), demo_scene());
-    entries.push(json!({
-        "name": "demo",
-        "fileName": "demo.scene.json",
-        "path": demo_path,
-    }));
+        // 合成一个更有层次的 demo 场景（lit 三个实体 + UI 两个实体）。
+        if kind == DocKind::Scene {
+            let demo_path = root
+                .join("assets")
+                .join("scenes")
+                .join("demo.scene.json")
+                .to_string_lossy()
+                .into_owned();
+            docs.insert(demo_path.clone(), demo_scene());
+            entries.push(json!({
+                "name": "demo",
+                "fileName": "demo.scene.json",
+                "path": demo_path,
+            }));
+        }
 
-    // 各模板的初始文档（预览模式「新建」用）。
-    let mut template_docs = serde_json::Map::new();
-    for template in &templates {
-        template_docs.insert(
-            template.id.clone(),
-            prism_editor_api::template_scene_doc(&template.id),
-        );
+        let templates = prism_editor_api::templates_for(kind);
+        let mut per_template = serde_json::Map::new();
+        for template in &templates {
+            per_template.insert(
+                template.id.clone(),
+                prism_editor_api::template_doc(kind, &template.id),
+            );
+        }
+
+        documents.insert(key.to_string(), Value::Array(entries));
+        templates_by_kind.insert(key.to_string(), json!(templates));
+        template_docs.insert(key.to_string(), Value::Object(per_template));
     }
 
     let fixture = json!({
         "schema": schema,
-        "templates": templates,
         "presets": presets,
         "assetInfos": asset_infos,
-        "scenes": entries,
+        "documents": documents,
         "docs": docs,
+        "templatesByKind": templates_by_kind,
         "templateDocs": template_docs,
     });
 

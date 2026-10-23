@@ -8,6 +8,7 @@ import * as api from "./api";
 import { ASSETS_KEY, ASSET_PICKER_KEY } from "./keys";
 import type {
   AssetInfo,
+  DocKind,
   EntityJson,
   EntityPreset,
   JsonValue,
@@ -24,14 +25,19 @@ const VALIDATE_DEBOUNCE_MS = 250;
 const schema = ref<Schema>({ types: [] });
 const projectRoot = ref("");
 const scenes = ref<SceneEntry[]>([]);
+const prefabs = ref<SceneEntry[]>([]);
 const templates = ref<SceneTemplate[]>([]);
 const presets = ref<EntityPreset[]>([]);
 const assets = ref<AssetInfo[]>([]);
 provide(ASSETS_KEY, assets);
 
-const templateId = ref("camera");
+/** 新建时的文档种类（工具栏）。 */
+const newKind = ref<DocKind>("scene");
+const templateId = ref("");
 const presetId = ref("empty");
 
+/** 当前打开文档的种类。 */
+const documentKind = ref<DocKind>("scene");
 const currentPath = ref<string | null>(null);
 const doc = ref<SceneDoc | null>(null);
 /** 上次保存/加载时的序列化快照，用于精确判断「是否有未保存改动」。 */
@@ -58,6 +64,7 @@ const canRedo = computed(() => future.value.length > 0);
 const hasDoc = computed(() => doc.value !== null);
 const hasPath = computed(() => currentPath.value !== null);
 const canSave = computed(() => hasDoc.value && validationError.value === "");
+const isScene = computed(() => documentKind.value === "scene");
 
 const selectedEntity = computed<EntityJson | null>(() => {
   if (!doc.value || selected.value === null) return null;
@@ -101,7 +108,7 @@ async function runValidation() {
     return;
   }
   try {
-    await api.validateScene(doc.value);
+    await api.validateDocument(doc.value);
     validationError.value = "";
   } catch (e) {
     validationError.value = `${e}`;
@@ -112,6 +119,11 @@ let validateTimer: number | undefined;
 watch(doc, () => {
   if (validateTimer !== undefined) window.clearTimeout(validateTimer);
   validateTimer = window.setTimeout(() => void runValidation(), VALIDATE_DEBOUNCE_MS);
+});
+
+watch(newKind, async () => {
+  templates.value = await api.documentTemplates(newKind.value);
+  templateId.value = templates.value[0]?.id ?? "";
 });
 
 // ---------------------------------------------------------------------------
@@ -128,11 +140,12 @@ function clampSelection() {
   }
 }
 
-function resetHistory(loaded: SceneDoc, path: string | null) {
+function resetHistory(loaded: SceneDoc, path: string | null, kind: DocKind) {
   past.value = [];
   future.value = [];
   doc.value = loaded;
   currentPath.value = path;
+  documentKind.value = kind;
   baseline.value = JSON.stringify(loaded);
   lastKey = "";
   lastTime = 0;
@@ -183,26 +196,31 @@ function redo() {
 }
 
 function confirmDiscard(): boolean {
-  return !dirty.value || window.confirm("当前场景有未保存改动，放弃它们？");
+  return !dirty.value || window.confirm("当前文档有未保存改动，放弃它们？");
 }
 
 // ---------------------------------------------------------------------------
-// 场景文件
+// 文档文件
 // ---------------------------------------------------------------------------
 
-async function refreshScenes() {
-  scenes.value = await api.listScenes();
+async function refreshDocuments() {
+  const [sceneList, prefabList] = await Promise.all([
+    api.listDocuments("scene"),
+    api.listDocuments("prefab"),
+  ]);
+  scenes.value = sceneList;
+  prefabs.value = prefabList;
 }
 
 async function bootstrap() {
   try {
     schema.value = await api.fetchSchema();
     projectRoot.value = await api.fetchProjectRoot();
-    templates.value = await api.fetchTemplates();
+    templates.value = await api.documentTemplates("scene");
+    templateId.value = templates.value[0]?.id ?? "";
     presets.value = await api.fetchPresets();
-    if (templates.value.length) templateId.value = templates.value[0].id;
     if (presets.value.length) presetId.value = presets.value[0].id;
-    await refreshScenes();
+    await refreshDocuments();
     // 资产列表是可选增强；失败不影响编辑。
     assets.value = await api.listAssetsInfo().catch(() => []);
     status.value = `项目根 ${projectRoot.value}`;
@@ -211,11 +229,11 @@ async function bootstrap() {
   }
 }
 
-async function openScene(entry: SceneEntry) {
+async function openDocument(entry: SceneEntry, kind: DocKind) {
   if (!confirmDiscard()) return;
   try {
-    const loaded = await api.readScene(entry.path);
-    resetHistory(loaded, entry.path);
+    const loaded = await api.readDocument(entry.path);
+    resetHistory(loaded, entry.path, kind);
     error.value = "";
     status.value = `已打开 ${entry.fileName}`;
   } catch (e) {
@@ -225,17 +243,18 @@ async function openScene(entry: SceneEntry) {
 
 async function reload() {
   if (!currentPath.value) return;
-  const entry = scenes.value.find((s) => s.path === currentPath.value);
-  if (entry) await openScene(entry);
+  const list = isScene.value ? scenes.value : prefabs.value;
+  const entry = list.find((s) => s.path === currentPath.value);
+  if (entry) await openDocument(entry, documentKind.value);
 }
 
-async function createScene() {
+async function createDocument() {
   if (!confirmDiscard()) return;
   try {
-    const fresh = await api.newScene(templateId.value);
-    resetHistory(fresh, null);
+    const fresh = await api.newDocument(newKind.value, templateId.value);
+    resetHistory(fresh, null, newKind.value);
     error.value = "";
-    status.value = "新场景（未保存）";
+    status.value = newKind.value === "scene" ? "新场景（未保存）" : "新预制体（未保存）";
   } catch (e) {
     fail(e);
   }
@@ -245,11 +264,11 @@ async function save(): Promise<boolean> {
   if (!doc.value) return false;
   if (!currentPath.value) return saveAs();
   try {
-    await api.writeScene(currentPath.value, doc.value);
+    await api.writeDocument(currentPath.value, doc.value);
     baseline.value = JSON.stringify(doc.value);
     error.value = "";
     status.value = `已保存 ${currentPath.value}`;
-    await refreshScenes();
+    await refreshDocuments();
     return true;
   } catch (e) {
     fail(e);
@@ -259,15 +278,16 @@ async function save(): Promise<boolean> {
 
 async function saveAs(): Promise<boolean> {
   if (!doc.value) return false;
-  const name = window.prompt("保存为场景名（不含 .scene.json）", "untitled");
+  const suffix = documentKind.value === "scene" ? ".scene.json" : ".prefab.json";
+  const name = window.prompt(`另存为（不含 ${suffix}）`, "untitled");
   if (!name) return false;
   try {
-    const path = await api.writeSceneAs(name, doc.value);
+    const path = await api.writeDocumentAs(documentKind.value, name, doc.value);
     currentPath.value = path;
     baseline.value = JSON.stringify(doc.value);
     error.value = "";
     status.value = `已另存为 ${path}`;
-    await refreshScenes();
+    await refreshDocuments();
     return true;
   } catch (e) {
     fail(e);
@@ -277,15 +297,16 @@ async function saveAs(): Promise<boolean> {
 
 async function renameCurrent() {
   if (!currentPath.value) return;
-  const current = scenes.value.find((s) => s.path === currentPath.value);
-  const name = window.prompt("新的场景名（不含 .scene.json）", current?.name ?? "");
+  const list = isScene.value ? scenes.value : prefabs.value;
+  const current = list.find((s) => s.path === currentPath.value);
+  const name = window.prompt("新名字（不含后缀）", current?.name ?? "");
   if (!name) return;
   try {
-    const path = await api.renameScene(currentPath.value, name);
+    const path = await api.renameDocument(currentPath.value, documentKind.value, name);
     currentPath.value = path;
     error.value = "";
     status.value = `已重命名为 ${path}`;
-    await refreshScenes();
+    await refreshDocuments();
   } catch (e) {
     fail(e);
   }
@@ -293,9 +314,9 @@ async function renameCurrent() {
 
 async function deleteCurrent() {
   if (!currentPath.value) return;
-  if (!window.confirm(`删除场景文件？\n${currentPath.value}`)) return;
+  if (!window.confirm(`删除文件？\n${currentPath.value}`)) return;
   try {
-    await api.deleteScene(currentPath.value);
+    await api.deleteDocument(currentPath.value);
     doc.value = null;
     currentPath.value = null;
     baseline.value = "";
@@ -305,14 +326,14 @@ async function deleteCurrent() {
     selected.value = null;
     error.value = "";
     status.value = "已删除";
-    await refreshScenes();
+    await refreshDocuments();
   } catch (e) {
     fail(e);
   }
 }
 
 async function cook() {
-  if (!doc.value) return;
+  if (!doc.value || !isScene.value) return;
   // cook 读的是磁盘上的文件，先落盘。
   if (dirty.value || !currentPath.value) {
     const ok = await save();
@@ -329,6 +350,48 @@ async function cook() {
     status.value = "cook 失败";
   } finally {
     busy.value = false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 预制体
+// ---------------------------------------------------------------------------
+
+async function insertPrefab(entry: SceneEntry) {
+  if (!doc.value) {
+    fail("请先打开一个场景");
+    return;
+  }
+  if (!isScene.value) {
+    fail("只能在场景中实例化预制体");
+    return;
+  }
+  busy.value = true;
+  try {
+    const result = await api.instantiatePrefab(doc.value, entry.path, selected.value);
+    commit(result.doc, `insert-prefab:${entry.path}#${Date.now()}`);
+    if (result.inserted.length) selected.value = result.inserted[0];
+    error.value = "";
+    status.value = `已实例化 ${entry.name}（${result.inserted.length} 个实体）`;
+  } catch (e) {
+    fail(e);
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function savePrefabFromEntity(index: number) {
+  if (!doc.value) return;
+  const entity = doc.value.entities[index];
+  const name = window.prompt("预制体名（不含 .prefab.json）", entity?.name ?? "prefab");
+  if (!name) return;
+  try {
+    const path = await api.createPrefabFromEntity(doc.value, index, name);
+    await refreshDocuments();
+    error.value = "";
+    status.value = `已保存预制体 ${path}`;
+  } catch (e) {
+    fail(e);
   }
 }
 
@@ -486,22 +549,26 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
       <button class="ghost icon" :disabled="!canUndo" title="撤销 (Ctrl+Z)" @click="undo">↶</button>
       <button class="ghost icon" :disabled="!canRedo" title="重做 (Ctrl+Shift+Z)" @click="redo">↷</button>
       <span class="sep" />
+      <select v-model="newKind" title="新建种类">
+        <option value="scene">场景</option>
+        <option value="prefab">预制体</option>
+      </select>
       <select v-model="templateId" title="新建模板" :disabled="!templates.length">
         <option v-for="t in templates" :key="t.id" :value="t.id">{{ t.label }}</option>
       </select>
-      <button @click="createScene">新建</button>
+      <button @click="createDocument">新建</button>
       <button :disabled="!hasPath" @click="renameCurrent">重命名</button>
       <button :disabled="!hasPath" @click="deleteCurrent">删除</button>
       <span class="sep" />
       <button :disabled="!hasDoc" @click="saveAs">另存为</button>
-      <button :disabled="!hasPath || busy" title="cook 成 RSCN" @click="cook">
+      <button :disabled="!hasPath || !isScene || busy" title="cook 成 RSCN" @click="cook">
         {{ busy ? "cook 中…" : "Cook" }}
       </button>
       <button :disabled="!hasPath || busy" @click="reload">重新加载</button>
       <button
         class="primary"
         :disabled="!canSave || busy"
-        :title="validationError ? '场景校验未通过' : 'Ctrl/Cmd+S'"
+        :title="validationError ? '文档校验未通过' : 'Ctrl/Cmd+S'"
         @click="save"
       >
         保存
@@ -509,24 +576,47 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
     </div>
 
     <div v-if="error" class="error">{{ error }}</div>
-    <div v-else-if="validationError" class="warn">场景校验未通过：{{ validationError }}</div>
+    <div v-else-if="validationError" class="warn">校验未通过：{{ validationError }}</div>
 
     <div class="body">
       <aside class="sidebar">
-        <div class="section">
-          <div class="section-title">场景</div>
+        <div class="section grow">
+          <div class="section-title">文档</div>
           <div class="section-body">
+            <div class="group">场景</div>
             <div
               v-for="s in scenes"
               :key="s.path"
               class="list-item"
               :class="{ active: s.path === currentPath }"
-              @click="openScene(s)"
+              @click="openDocument(s, 'scene')"
             >
               <span>{{ s.name }}</span>
               <span v-if="s.path === currentPath && dirty" class="muted" title="未保存">•</span>
             </div>
-            <div v-if="!scenes.length" class="hint" style="padding: 8px">（无场景）</div>
+            <div v-if="!scenes.length" class="hint" style="padding: 2px 8px">（无场景）</div>
+
+            <div class="group">预制体</div>
+            <div
+              v-for="p in prefabs"
+              :key="p.path"
+              class="list-item"
+              :class="{ active: p.path === currentPath }"
+              @click="openDocument(p, 'prefab')"
+            >
+              <span class="prefab-name">{{ p.name }}</span>
+              <button
+                class="ghost icon"
+                title="实例化到当前场景（挂在选中实体下）"
+                :disabled="!hasDoc || !isScene || busy"
+                @click.stop="insertPrefab(p)"
+              >
+                插入
+              </button>
+            </div>
+            <div v-if="!prefabs.length" class="hint" style="padding: 2px 8px">
+              （无预制体：选中实体后可「存为预制体」）
+            </div>
           </div>
         </div>
 
@@ -574,10 +664,11 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
           @update="onEntityUpdate"
           @remove="deleteEntity"
           @duplicate="duplicateEntity"
+          @save-prefab="savePrefabFromEntity"
           @reflect="onComponentReflect"
           @rejected="fail"
         />
-        <div v-else class="empty">打开或新建一个场景，然后在左侧选择一个实体。</div>
+        <div v-else class="empty">打开或新建一个场景/预制体，然后在左侧选择一个实体。</div>
       </main>
     </div>
 

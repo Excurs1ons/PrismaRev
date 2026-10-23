@@ -1,7 +1,9 @@
 import type {
   AssetInfo,
   AssetRef,
+  DocKind,
   EntityPreset,
+  InstantiateResult,
   JsonValue,
   SceneDoc,
   SceneEntry,
@@ -20,12 +22,12 @@ import type {
 
 interface Fixture {
   schema: Schema;
-  templates: SceneTemplate[];
   presets: EntityPreset[];
   assetInfos: AssetInfo[];
-  scenes: SceneEntry[];
+  documents: Record<DocKind, SceneEntry[]>;
   docs: Record<string, SceneDoc>;
-  templateDocs: Record<string, SceneDoc>;
+  templatesByKind: Record<DocKind, SceneTemplate[]>;
+  templateDocs: Record<DocKind, Record<string, SceneDoc>>;
 }
 
 let cache: Fixture | null = null;
@@ -39,10 +41,6 @@ async function fixture(): Promise<Fixture> {
     const loaded = (await response.json()) as Fixture;
     // 深拷贝，编辑不应污染 fixture 缓存。
     loaded.docs = JSON.parse(JSON.stringify(loaded.docs)) as Record<string, SceneDoc>;
-    loaded.templateDocs = JSON.parse(JSON.stringify(loaded.templateDocs)) as Record<
-      string,
-      SceneDoc
-    >;
     cache = loaded;
   }
   return cache;
@@ -56,16 +54,16 @@ function fileNameOf(path: string): string {
   return path.slice(path.lastIndexOf("/") + 1);
 }
 
-function stemOf(path: string): string {
-  return fileNameOf(path).replace(/\.scene\.json$/, "");
+function stemOf(path: string, kind: DocKind): string {
+  return fileNameOf(path).replace(new RegExp(`\\.${kind === "scene" ? "scene" : "prefab"}\\.json$`), "");
 }
 
 function dirOf(path: string): string {
   return path.slice(0, path.lastIndexOf("/"));
 }
 
-function sortScenes(scenes: SceneEntry[]) {
-  scenes.sort((a, b) => a.name.localeCompare(b.name));
+function sortEntries(entries: SceneEntry[]) {
+  entries.sort((a, b) => a.name.localeCompare(b.name));
 }
 
 /** 与 Rust 侧一致的路径归一化（折叠 `.` / `..`）。 */
@@ -106,7 +104,7 @@ function collectStrings(
 function validate(doc: SceneDoc | undefined) {
   if (!doc) throw new Error("空文档");
   if (!Array.isArray(doc.entities) || doc.entities.length === 0) {
-    throw new Error("scene must contain at least one entity");
+    throw new Error("文档至少要有一个实体");
   }
   const count = doc.entities.length;
   doc.entities.forEach((entity, index) => {
@@ -121,6 +119,84 @@ function validate(doc: SceneDoc | undefined) {
   });
 }
 
+/** 提取「根实体 + 后代」为预制体（与 Rust 的 extract_subtree 同语义）。 */
+function extractSubtree(doc: SceneDoc, root: number): SceneDoc {
+  validate(doc);
+  if (root < 0 || root >= doc.entities.length) throw new Error(`实体下标 ${root} 越界`);
+
+  const order: number[] = [];
+  const stack = [root];
+  while (stack.length) {
+    const index = stack.pop() as number;
+    if (order.includes(index)) continue;
+    order.push(index);
+    for (let child = doc.entities.length - 1; child >= 0; child--) {
+      if (doc.entities[child].parent === index && !order.includes(child)) stack.push(child);
+    }
+  }
+
+  const mapping = new Map<number, number>();
+  order.forEach((oldIndex, newIndex) => mapping.set(oldIndex, newIndex));
+
+  return {
+    version: 1,
+    entities: order.map((oldIndex) => {
+      const entity = clone(doc.entities[oldIndex]);
+      const parent = entity.parent;
+      entity.parent =
+        parent === null || parent === undefined ? null : (mapping.get(parent) ?? null);
+      return entity;
+    }),
+  };
+}
+
+/** 实例化预制体（与 Rust 的 instantiate_prefab 同语义）。 */
+function instantiatePrefab(
+  scene: SceneDoc,
+  prefab: SceneDoc,
+  parent: number | null,
+): InstantiateResult {
+  validate(scene);
+  validate(prefab);
+  if (parent !== null && (parent < 0 || parent >= scene.entities.length)) {
+    throw new Error(`父实体下标 ${parent} 越界`);
+  }
+
+  const base = scene.entities.length;
+  const names = scene.entities.map((entity) => entity.name ?? "");
+  const entities = scene.entities.map((entity) => clone(entity));
+  const inserted: number[] = [];
+
+  for (const prefabEntity of prefab.entities) {
+    const entity = clone(prefabEntity);
+    const baseName = entity.name ?? "entity";
+    let name = baseName;
+    let suffix = 2;
+    while (names.includes(name)) {
+      name = `${baseName}_${suffix}`;
+      suffix += 1;
+    }
+    names.push(name);
+    entity.name = name;
+
+    entity.parent =
+      prefabEntity.parent === null || prefabEntity.parent === undefined
+        ? parent
+        : base + prefabEntity.parent;
+
+    inserted.push(entities.length);
+    entities.push(entity);
+  }
+
+  return { doc: { version: scene.version ?? 1, entities }, inserted };
+}
+
+function documentPath(kind: DocKind, name: string): string {
+  const dir = kind === "scene" ? "scenes" : "prefabs";
+  const suffix = kind === "scene" ? "scene.json" : "prefab.json";
+  return `/preview/assets/${dir}/${name.replace(/\.(scene|prefab)?\.?json$/, "")}.${suffix}`;
+}
+
 async function handle(cmd: string, args: Record<string, unknown>): Promise<unknown> {
   const data = await fixture();
 
@@ -129,108 +205,106 @@ async function handle(cmd: string, args: Record<string, unknown>): Promise<unkno
       return data.schema;
     case "editor_project_root":
       return "/preview（浏览器预览）";
-    case "editor_list_scenes":
-      sortScenes(data.scenes);
-      return data.scenes;
-    case "editor_scene_templates":
-      return data.templates;
     case "editor_entity_presets":
       return data.presets;
     case "editor_list_assets":
       return data.assetInfos.map((asset) => asset.path);
     case "editor_list_assets_info":
       return data.assetInfos;
-    case "editor_validate_scene":
+    case "editor_validate_document":
       validate(args.doc as SceneDoc);
       return null;
-    case "editor_new_scene": {
-      const id = String(args.template ?? "camera");
-      return clone(data.templateDocs[id] ?? data.templateDocs.camera);
+
+    // ── 文档 ────────────────────────────────────────────────────────────
+    case "editor_list_documents": {
+      const kind = String(args.kind) as DocKind;
+      sortEntries(data.documents[kind]);
+      return data.documents[kind];
     }
-    case "editor_read_scene": {
-      const path = String(args.path);
-      const doc = data.docs[path];
-      if (!doc) throw new Error(`预览中没有该场景：${path}`);
+    case "editor_document_templates":
+      return data.templatesByKind[String(args.kind) as DocKind] ?? [];
+    case "editor_new_document": {
+      const kind = String(args.kind) as DocKind;
+      const template = String(args.template ?? "");
+      const table = data.templateDocs[kind] ?? {};
+      const doc = table[template] ?? Object.values(table)[0];
       return clone(doc);
     }
-    case "editor_write_scene": {
+    case "editor_read_document": {
       const path = String(args.path);
-      data.docs[path] = clone(args.doc as SceneDoc);
-      if (!data.scenes.some((s) => s.path === path)) {
-        data.scenes.push({ name: stemOf(path), fileName: fileNameOf(path), path });
-      }
+      const doc = data.docs[path];
+      if (!doc) throw new Error(`预览中没有该文档：${path}`);
+      return clone(doc);
+    }
+    case "editor_write_document": {
+      data.docs[String(args.path)] = clone(args.doc as SceneDoc);
       return null;
     }
-    case "editor_write_scene_as": {
-      const name = String(args.name).trim();
-      const path = `/preview/assets/scenes/${name.replace(/\.scene\.json$/, "")}.scene.json`;
-      if (data.docs[path]) throw new Error("已存在同名场景");
+    case "editor_write_document_as": {
+      const kind = String(args.kind) as DocKind;
+      const path = documentPath(kind, String(args.name));
+      if (data.docs[path]) throw new Error("已存在同名文档");
       data.docs[path] = clone(args.doc as SceneDoc);
-      data.scenes.push({ name: stemOf(path), fileName: fileNameOf(path), path });
+      data.documents[kind].push({ name: stemOf(path, kind), fileName: fileNameOf(path), path });
       return path;
     }
-    case "editor_rename_scene": {
+    case "editor_rename_document": {
+      const kind = String(args.kind) as DocKind;
       const path = String(args.path);
-      const name = String(args.name).trim();
-      const target = `${dirOf(path)}/${name.replace(/\.scene\.json$/, "")}.scene.json`;
-      if (target !== path && data.docs[target]) throw new Error("已存在同名场景");
+      const target = documentPath(kind, String(args.name));
+      if (target !== path && data.docs[target]) throw new Error("已存在同名文档");
       const doc = data.docs[path];
-      if (!doc) throw new Error("场景不存在");
+      if (!doc) throw new Error("文档不存在");
       delete data.docs[path];
       data.docs[target] = doc;
-      const entry = data.scenes.find((s) => s.path === path);
+      const entry = data.documents[kind].find((item) => item.path === path);
       if (entry) {
-        entry.name = stemOf(target);
+        entry.name = stemOf(target, kind);
         entry.fileName = fileNameOf(target);
         entry.path = target;
       }
       return target;
     }
-    case "editor_delete_scene": {
+    case "editor_delete_document": {
       const path = String(args.path);
       delete data.docs[path];
-      data.scenes = data.scenes.filter((s) => s.path !== path);
+      (["scene", "prefab"] as DocKind[]).forEach((kind) => {
+        data.documents[kind] = data.documents[kind].filter((item) => item.path !== path);
+      });
       return null;
     }
-    case "editor_asset_usage": {
-      const target = resolvePath("/preview", String(args.path));
-      const refs: AssetRef[] = [];
-      for (const entry of data.scenes) {
-        const doc = data.docs[entry.path];
-        if (!doc) continue;
-        const sceneDir = dirOf(entry.path);
-        doc.entities.forEach((entity, index) => {
-          for (const [component, payload] of Object.entries(entity.components ?? {})) {
-            collectStrings(payload as JsonValue, "", (field, value) => {
-              if (!value.trim()) return;
-              if (
-                resolvePath(sceneDir, value) === target ||
-                resolvePath("/preview", value) === target
-              ) {
-                refs.push({
-                  scene: entry.name,
-                  scenePath: entry.path,
-                  entity: entity.name ?? `#${index}`,
-                  entityIndex: index,
-                  component,
-                  field,
-                  value,
-                });
-              }
-            });
-          }
-        });
-      }
-      return refs;
+
+    // ── 预制体 ──────────────────────────────────────────────────────────
+    case "editor_create_prefab_from_entity": {
+      const doc = args.doc as SceneDoc;
+      const prefab = extractSubtree(doc, Number(args.entityIndex));
+      const path = documentPath("prefab", String(args.name));
+      if (data.docs[path]) throw new Error("已存在同名预制体");
+      data.docs[path] = prefab;
+      data.documents.prefab.push({
+        name: stemOf(path, "prefab"),
+        fileName: fileNameOf(path),
+        path,
+      });
+      return path;
     }
+    case "editor_instantiate_prefab": {
+      const prefabPath = String(args.prefabPath);
+      const prefab = data.docs[prefabPath];
+      if (!prefab) throw new Error(`预览中没有该预制体：${prefabPath}`);
+      const parent = args.parent === null || args.parent === undefined ? null : Number(args.parent);
+      return instantiatePrefab(args.scene as SceneDoc, prefab, parent);
+    }
+
+    // ── 反射字段写入 ─────────────────────────────────────────────────────
     case "editor_set_component_field": {
       const component = String(args.component);
       const path = String(args.path);
-      const type = data.schema.types.find((t) => t.name === component);
+      const type = data.schema.types.find((item) => item.name === component);
       if (!type) throw new Error(`'${component}' 不是已注册的可反射组件`);
       if (path) {
         const root = path.split(/[.[]/)[0];
-        const field = type.fields.find((f) => f.name === root);
+        const field = type.fields.find((item) => item.name === root);
         if (field?.readOnly) {
           throw new Error(`字段 '${root}' 写入被拒绝: field '${root}' is read-only`);
         }
@@ -238,6 +312,42 @@ async function handle(cmd: string, args: Record<string, unknown>): Promise<unkno
       // 预览模式不做真正的反射往返，仅回显（只读检查已尽量对齐 Rust 行为）。
       return clone(args.after as JsonValue);
     }
+
+    // ── 资产引用 ────────────────────────────────────────────────────────
+    case "editor_asset_usage": {
+      const target = resolvePath("/preview", String(args.path));
+      const refs: AssetRef[] = [];
+      for (const kind of ["scene", "prefab"] as DocKind[]) {
+        for (const entry of data.documents[kind]) {
+          const doc = data.docs[entry.path];
+          if (!doc) continue;
+          const sceneDir = dirOf(entry.path);
+          doc.entities.forEach((entity, index) => {
+            for (const [component, payload] of Object.entries(entity.components ?? {})) {
+              collectStrings(payload as JsonValue, "", (field, value) => {
+                if (!value.trim()) return;
+                if (
+                  resolvePath(sceneDir, value) === target ||
+                  resolvePath("/preview", value) === target
+                ) {
+                  refs.push({
+                    scene: entry.name,
+                    scenePath: entry.path,
+                    entity: entity.name ?? `#${index}`,
+                    entityIndex: index,
+                    component,
+                    field,
+                    value,
+                  });
+                }
+              });
+            }
+          });
+        }
+      }
+      return refs;
+    }
+
     case "editor_cook_scene":
       return "（浏览器预览模式：未真正调用 prism-build-pipeline）\n请用 `cd editor && pnpm tauri dev` 或 `prism-build-pipeline` 执行。";
     default:

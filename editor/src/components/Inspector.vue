@@ -22,6 +22,7 @@ const emit = defineEmits<{
   (e: "update", entity: EntityJson, editKey: string): void;
   (e: "remove", index: number): void;
   (e: "duplicate", index: number): void;
+  (e: "save-prefab", index: number): void;
   (e: "reflect", component: string, canonical: JsonValue): void;
   (e: "rejected", message: string): void;
 }>();
@@ -146,6 +147,13 @@ const availableComponents = computed(() =>
     <header>
       <span class="title">实体 #{{ index }}</span>
       <span class="spacer" />
+      <button
+        class="ghost icon"
+        title="把该实体及其子级保存为预制体"
+        @click="emit('save-prefab', index)"
+      >
+        存为预制体
+      </button>
       <button class="ghost icon" title="复制实体 (Ctrl+D)" @click="emit('duplicate', index)">
         复制
       </button>

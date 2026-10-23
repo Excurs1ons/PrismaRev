@@ -30,10 +30,19 @@ export interface SceneEntry {
   path: string;
 }
 
-/** 新建场景模板。 */
+/** 文档种类：场景 / 预制体（同一作者 JSON 形状）。 */
+export type DocKind = "scene" | "prefab";
+
+/** 新建文档模板。 */
 export interface SceneTemplate {
   id: string;
   label: string;
+}
+
+/** 预制体实例化结果。 */
+export interface InstantiateResult {
+  doc: SceneDoc;
+  inserted: number[];
 }
 
 /** 资产元信息（资产管理器用）。 */

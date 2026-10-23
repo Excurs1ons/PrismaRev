@@ -1001,6 +1001,26 @@
       "version": 1
     }
   },
+  "documents": {
+    "prefab": [],
+    "scene": [
+      {
+        "fileName": "default.scene.json",
+        "name": "default",
+        "path": "/data/data/com.termux/files/home/projects/PrismaRev/assets/scenes/default.scene.json"
+      },
+      {
+        "fileName": "intro.scene.json",
+        "name": "intro",
+        "path": "/data/data/com.termux/files/home/projects/PrismaRev/assets/scenes/intro.scene.json"
+      },
+      {
+        "fileName": "demo.scene.json",
+        "name": "demo",
+        "path": "/data/data/com.termux/files/home/projects/PrismaRev/assets/scenes/demo.scene.json"
+      }
+    ]
+  },
   "presets": [
     {
       "components": [],
@@ -1094,23 +1114,6 @@
         0.0,
         0.0
       ]
-    }
-  ],
-  "scenes": [
-    {
-      "fileName": "default.scene.json",
-      "name": "default",
-      "path": "/data/data/com.termux/files/home/projects/PrismaRev/assets/scenes/default.scene.json"
-    },
-    {
-      "fileName": "intro.scene.json",
-      "name": "intro",
-      "path": "/data/data/com.termux/files/home/projects/PrismaRev/assets/scenes/intro.scene.json"
-    },
-    {
-      "fileName": "demo.scene.json",
-      "name": "demo",
-      "path": "/data/data/com.termux/files/home/projects/PrismaRev/assets/scenes/demo.scene.json"
     }
   ],
   "schema": {
@@ -2057,334 +2060,656 @@
     ]
   },
   "templateDocs": {
-    "camera": {
-      "entities": [
-        {
-          "components": {
-            "prism_engine::scene::Camera": {
-              "aspect": 1.7777777910232544,
-              "enabled": true,
-              "exposure": 1.0,
-              "far": 1000.0,
-              "fov_y_degrees": 60.0,
-              "near": 0.10000000149011612
-            }
-          },
-          "name": "Camera",
-          "parent": null,
-          "transform": {
-            "rotation": [
-              0.0,
-              0.0,
-              0.0,
-              1.0
-            ],
-            "scale": [
-              1.0,
-              1.0,
-              1.0
-            ],
-            "translation": [
-              0.0,
-              0.0,
-              10.0
-            ]
-          }
-        }
-      ],
-      "version": 1
-    },
-    "empty": {
-      "entities": [
-        {
-          "components": {},
-          "name": "Entity",
-          "parent": null,
-          "transform": {
-            "rotation": [
-              0.0,
-              0.0,
-              0.0,
-              1.0
-            ],
-            "scale": [
-              1.0,
-              1.0,
-              1.0
-            ],
-            "translation": [
-              0.0,
-              0.0,
-              0.0
-            ]
-          }
-        }
-      ],
-      "version": 1
-    },
-    "lit": {
-      "entities": [
-        {
-          "components": {
-            "prism_engine::scene::Camera": {
-              "aspect": 1.7777777910232544,
-              "enabled": true,
-              "exposure": 1.0,
-              "far": 1000.0,
-              "fov_y_degrees": 60.0,
-              "near": 0.10000000149011612
-            }
-          },
-          "name": "Camera",
-          "parent": null,
-          "transform": {
-            "rotation": [
-              0.0,
-              0.0,
-              0.0,
-              1.0
-            ],
-            "scale": [
-              1.0,
-              1.0,
-              1.0
-            ],
-            "translation": [
-              0.0,
-              2.5,
-              18.0
-            ]
-          }
-        },
-        {
-          "components": {
-            "prism_engine::scene::DirectionalLight": {
-              "ambient": 1.0,
-              "color": [
-                1.0,
-                1.0,
-                1.0
-              ],
-              "euler_xyz": [
-                45.0,
-                -45.0,
-                0.0
-              ],
-              "intensity": 100000.0
-            }
-          },
-          "name": "Sun",
-          "parent": null,
-          "transform": {
-            "rotation": [
-              0.0,
-              0.0,
-              0.0,
-              1.0
-            ],
-            "scale": [
-              1.0,
-              1.0,
-              1.0
-            ],
-            "translation": [
-              0.0,
-              6.0,
-              0.0
-            ]
-          }
-        },
-        {
-          "components": {
-            "prism_engine::scene::PointLight": {
-              "color": [
-                1.0,
-                1.0,
-                1.0
-              ],
-              "intensity": 100.0,
-              "range": 12.0
-            }
-          },
-          "name": "PointLight",
-          "parent": null,
-          "transform": {
-            "rotation": [
-              0.0,
-              0.0,
-              0.0,
-              1.0
-            ],
-            "scale": [
-              1.0,
-              1.0,
-              1.0
-            ],
-            "translation": [
-              3.0,
-              3.0,
-              3.0
-            ]
-          }
-        }
-      ],
-      "version": 1
-    },
-    "ui": {
-      "entities": [
-        {
-          "components": {
-            "prism_engine::ui::ComputedLayout": {
-              "rect": [
+    "prefab": {
+      "camera": {
+        "entities": [
+          {
+            "components": {
+              "prism_engine::scene::Camera": {
+                "aspect": 1.7777777910232544,
+                "enabled": true,
+                "exposure": 1.0,
+                "far": 1000.0,
+                "fov_y_degrees": 60.0,
+                "near": 0.10000000149011612
+              },
+              "prism_engine::scene::FlyCameraController": {
+                "look_sensitivity": 0.004999999888241291,
+                "move_speed": 5.0,
+                "pitch": 0.0,
+                "yaw": 0.0
+              }
+            },
+            "name": "Camera",
+            "parent": null,
+            "transform": {
+              "rotation": [
                 0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ],
+              "translation": [
+                0.0,
+                0.0,
+                10.0
+              ]
+            }
+          }
+        ],
+        "version": 1
+      },
+      "empty": {
+        "entities": [
+          {
+            "components": {},
+            "name": "entity",
+            "parent": null,
+            "transform": {
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ],
+              "translation": [
                 0.0,
                 0.0,
                 0.0
               ]
+            }
+          }
+        ],
+        "version": 1
+      },
+      "mesh": {
+        "entities": [
+          {
+            "components": {
+              "prism_engine::scene::Active": true,
+              "prism_engine::scene::MeshRenderer": {
+                "material_path": "",
+                "mesh_path": ""
+              }
             },
-            "prism_engine::ui::Node": {},
-            "prism_engine::ui::Style": {
-              "anchors": {
-                "max_x": 1.0,
-                "max_y": 1.0,
-                "min_x": 0.0,
-                "min_y": 0.0
-              },
-              "background": [
+            "name": "Mesh",
+            "parent": null,
+            "transform": {
+              "rotation": [
                 0.0,
                 0.0,
                 0.0,
                 1.0
               ],
-              "border_radius": 0.0,
-              "height": null,
-              "margin": {
-                "bottom": 0.0,
-                "left": 0.0,
-                "right": 0.0,
-                "top": 0.0
-              },
-              "pivot": {
-                "x": 0.5,
-                "y": 0.5
-              },
-              "visible": true,
-              "width": null
-            }
-          },
-          "name": "overlay",
-          "parent": null,
-          "transform": {
-            "rotation": [
-              0.0,
-              0.0,
-              0.0,
-              1.0
-            ],
-            "scale": [
-              1.0,
-              1.0,
-              1.0
-            ],
-            "translation": [
-              0.0,
-              0.0,
-              0.0
-            ]
-          }
-        },
-        {
-          "components": {
-            "prism_engine::ui::ComputedLayout": {
-              "rect": [
-                0.0,
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ],
+              "translation": [
                 0.0,
                 0.0,
                 0.0
               ]
+            }
+          }
+        ],
+        "version": 1
+      },
+      "point_light": {
+        "entities": [
+          {
+            "components": {
+              "prism_engine::scene::PointLight": {
+                "color": [
+                  1.0,
+                  1.0,
+                  1.0
+                ],
+                "intensity": 100.0,
+                "range": 12.0
+              }
             },
-            "prism_engine::ui::Node": {},
-            "prism_engine::ui::Style": {
-              "anchors": {
-                "max_x": 0.5,
-                "max_y": 0.5,
-                "min_x": 0.5,
-                "min_y": 0.5
-              },
-              "background": [
+            "name": "PointLight",
+            "parent": null,
+            "transform": {
+              "rotation": [
                 0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ],
+              "translation": [
+                3.0,
+                3.0,
+                3.0
+              ]
+            }
+          }
+        ],
+        "version": 1
+      },
+      "skybox": {
+        "entities": [
+          {
+            "components": {
+              "prism_engine::scene::Skybox": {
+                "enabled": true,
+                "env_asset": 0,
+                "hdr_path": ""
+              }
+            },
+            "name": "Skybox",
+            "parent": null,
+            "transform": {
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ],
+              "translation": [
                 0.0,
                 0.0,
                 0.0
-              ],
-              "border_radius": 0.0,
-              "height": 108.0,
-              "margin": {
-                "bottom": 0.0,
-                "left": 0.0,
-                "right": 0.0,
-                "top": 0.0
-              },
-              "pivot": {
-                "x": 0.5,
-                "y": 0.5
-              },
-              "visible": true,
-              "width": 900.0
+              ]
+            }
+          }
+        ],
+        "version": 1
+      },
+      "sun": {
+        "entities": [
+          {
+            "components": {
+              "prism_engine::scene::DirectionalLight": {
+                "ambient": 1.0,
+                "color": [
+                  1.0,
+                  1.0,
+                  1.0
+                ],
+                "euler_xyz": [
+                  45.0,
+                  -45.0,
+                  0.0
+                ],
+                "intensity": 100000.0
+              }
             },
-            "prism_engine::ui::Text": {
-              "alignment": "Center",
-              "color": [
-                0.91,
-                0.925,
-                0.957,
+            "name": "Sun",
+            "parent": null,
+            "transform": {
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
                 1.0
               ],
-              "content": "PrismaRev",
-              "font_size": 84.0
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ],
+              "translation": [
+                0.0,
+                6.0,
+                0.0
+              ]
+            }
+          }
+        ],
+        "version": 1
+      },
+      "ui": {
+        "entities": [
+          {
+            "components": {
+              "prism_engine::ui::ComputedLayout": {
+                "rect": [
+                  0.0,
+                  0.0,
+                  0.0,
+                  0.0
+                ]
+              },
+              "prism_engine::ui::Node": {},
+              "prism_engine::ui::Style": {
+                "anchors": {
+                  "max_x": 1.0,
+                  "max_y": 1.0,
+                  "min_x": 0.0,
+                  "min_y": 0.0
+                },
+                "background": [
+                  0.0,
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "border_radius": 0.0,
+                "height": null,
+                "margin": {
+                  "bottom": 0.0,
+                  "left": 0.0,
+                  "right": 0.0,
+                  "top": 0.0
+                },
+                "pivot": {
+                  "x": 0.5,
+                  "y": 0.5
+                },
+                "visible": true,
+                "width": null
+              }
+            },
+            "name": "ui_node",
+            "parent": null,
+            "transform": {
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ],
+              "translation": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            }
+          }
+        ],
+        "version": 1
+      }
+    },
+    "scene": {
+      "camera": {
+        "entities": [
+          {
+            "components": {
+              "prism_engine::scene::Camera": {
+                "aspect": 1.7777777910232544,
+                "enabled": true,
+                "exposure": 1.0,
+                "far": 1000.0,
+                "fov_y_degrees": 60.0,
+                "near": 0.10000000149011612
+              }
+            },
+            "name": "Camera",
+            "parent": null,
+            "transform": {
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ],
+              "translation": [
+                0.0,
+                0.0,
+                10.0
+              ]
+            }
+          }
+        ],
+        "version": 1
+      },
+      "empty": {
+        "entities": [
+          {
+            "components": {},
+            "name": "Entity",
+            "parent": null,
+            "transform": {
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ],
+              "translation": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            }
+          }
+        ],
+        "version": 1
+      },
+      "lit": {
+        "entities": [
+          {
+            "components": {
+              "prism_engine::scene::Camera": {
+                "aspect": 1.7777777910232544,
+                "enabled": true,
+                "exposure": 1.0,
+                "far": 1000.0,
+                "fov_y_degrees": 60.0,
+                "near": 0.10000000149011612
+              }
+            },
+            "name": "Camera",
+            "parent": null,
+            "transform": {
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ],
+              "translation": [
+                0.0,
+                2.5,
+                18.0
+              ]
             }
           },
-          "name": "title",
-          "parent": 0,
-          "transform": {
-            "rotation": [
-              0.0,
-              0.0,
-              0.0,
-              1.0
-            ],
-            "scale": [
-              1.0,
-              1.0,
-              1.0
-            ],
-            "translation": [
-              0.0,
-              0.0,
-              0.0
-            ]
+          {
+            "components": {
+              "prism_engine::scene::DirectionalLight": {
+                "ambient": 1.0,
+                "color": [
+                  1.0,
+                  1.0,
+                  1.0
+                ],
+                "euler_xyz": [
+                  45.0,
+                  -45.0,
+                  0.0
+                ],
+                "intensity": 100000.0
+              }
+            },
+            "name": "Sun",
+            "parent": null,
+            "transform": {
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ],
+              "translation": [
+                0.0,
+                6.0,
+                0.0
+              ]
+            }
+          },
+          {
+            "components": {
+              "prism_engine::scene::PointLight": {
+                "color": [
+                  1.0,
+                  1.0,
+                  1.0
+                ],
+                "intensity": 100.0,
+                "range": 12.0
+              }
+            },
+            "name": "PointLight",
+            "parent": null,
+            "transform": {
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ],
+              "translation": [
+                3.0,
+                3.0,
+                3.0
+              ]
+            }
           }
-        }
-      ],
-      "version": 1
+        ],
+        "version": 1
+      },
+      "ui": {
+        "entities": [
+          {
+            "components": {
+              "prism_engine::ui::ComputedLayout": {
+                "rect": [
+                  0.0,
+                  0.0,
+                  0.0,
+                  0.0
+                ]
+              },
+              "prism_engine::ui::Node": {},
+              "prism_engine::ui::Style": {
+                "anchors": {
+                  "max_x": 1.0,
+                  "max_y": 1.0,
+                  "min_x": 0.0,
+                  "min_y": 0.0
+                },
+                "background": [
+                  0.0,
+                  0.0,
+                  0.0,
+                  1.0
+                ],
+                "border_radius": 0.0,
+                "height": null,
+                "margin": {
+                  "bottom": 0.0,
+                  "left": 0.0,
+                  "right": 0.0,
+                  "top": 0.0
+                },
+                "pivot": {
+                  "x": 0.5,
+                  "y": 0.5
+                },
+                "visible": true,
+                "width": null
+              }
+            },
+            "name": "overlay",
+            "parent": null,
+            "transform": {
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ],
+              "translation": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            }
+          },
+          {
+            "components": {
+              "prism_engine::ui::ComputedLayout": {
+                "rect": [
+                  0.0,
+                  0.0,
+                  0.0,
+                  0.0
+                ]
+              },
+              "prism_engine::ui::Node": {},
+              "prism_engine::ui::Style": {
+                "anchors": {
+                  "max_x": 0.5,
+                  "max_y": 0.5,
+                  "min_x": 0.5,
+                  "min_y": 0.5
+                },
+                "background": [
+                  0.0,
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "border_radius": 0.0,
+                "height": 108.0,
+                "margin": {
+                  "bottom": 0.0,
+                  "left": 0.0,
+                  "right": 0.0,
+                  "top": 0.0
+                },
+                "pivot": {
+                  "x": 0.5,
+                  "y": 0.5
+                },
+                "visible": true,
+                "width": 900.0
+              },
+              "prism_engine::ui::Text": {
+                "alignment": "Center",
+                "color": [
+                  0.91,
+                  0.925,
+                  0.957,
+                  1.0
+                ],
+                "content": "PrismaRev",
+                "font_size": 84.0
+              }
+            },
+            "name": "title",
+            "parent": 0,
+            "transform": {
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ],
+              "translation": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            }
+          }
+        ],
+        "version": 1
+      }
     }
   },
-  "templates": [
-    {
-      "id": "camera",
-      "label": "相机"
-    },
-    {
-      "id": "lit",
-      "label": "相机 + 光照"
-    },
-    {
-      "id": "ui",
-      "label": "UI 叠层"
-    },
-    {
-      "id": "empty",
-      "label": "空实体"
-    }
-  ]
+  "templatesByKind": {
+    "prefab": [
+      {
+        "id": "empty",
+        "label": "空实体"
+      },
+      {
+        "id": "camera",
+        "label": "相机"
+      },
+      {
+        "id": "sun",
+        "label": "平行光"
+      },
+      {
+        "id": "point_light",
+        "label": "点光源"
+      },
+      {
+        "id": "mesh",
+        "label": "网格"
+      },
+      {
+        "id": "skybox",
+        "label": "天空盒"
+      },
+      {
+        "id": "ui",
+        "label": "UI 元素"
+      }
+    ],
+    "scene": [
+      {
+        "id": "camera",
+        "label": "相机"
+      },
+      {
+        "id": "lit",
+        "label": "相机 + 光照"
+      },
+      {
+        "id": "ui",
+        "label": "UI 叠层"
+      },
+      {
+        "id": "empty",
+        "label": "空实体"
+      }
+    ]
+  }
 }
