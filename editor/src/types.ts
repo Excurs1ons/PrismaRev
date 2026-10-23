@@ -36,6 +36,15 @@ export interface SceneTemplate {
   label: string;
 }
 
+/** 快速添加实体的预设。 */
+export interface EntityPreset {
+  id: string;
+  label: string;
+  name: string;
+  components: string[];
+  translation: number[];
+}
+
 export interface TransformJson {
   translation: number[];
   rotation: number[];

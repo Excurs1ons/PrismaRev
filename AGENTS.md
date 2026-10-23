@@ -80,6 +80,10 @@ The user project's dependency chain must stay **egui-free and editor-free**:
   project hosts the same `prism-app` loop with egui hooked in (F1 inspector, F2 render-graph, F3 perf HUD).
 - Web Editor: `cd editor && pnpm install && pnpm tauri dev` — Tauri 2 + Vue 3; the Rust side only
   depends on `prism-editor-api` (no egui/Vulkan). Frontend checks: `cd editor && pnpm build`.
+  Browser-only preview (no Tauri): `cd editor && pnpm dev:web` — when `__TAURI_INTERNALS__` is
+  absent the frontend falls back to the read-only fixture `editor/public/demo.json`; regenerate it
+  with `cd editor && pnpm fixture` (it dumps `build_schema`/templates/presets/scenes from the real
+  registry, so it cannot drift from the Rust schema).
 - Checks: `cargo check -p prism-render`, `cargo build`, `cargo test`.
 - `crates/xtask` is excluded from the workspace — run it explicitly from a desktop host; do not add it to default `members`.
 - Prism-asset / scene / cooker: `cargo test -p prism-asset`, `cargo test -p prism-scene`,

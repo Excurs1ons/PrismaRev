@@ -5,8 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:web": "vite --host",
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview",
+    "fixture": "cargo run -q --manifest-path ../Cargo.toml -p prism-editor-api --example dump_fixture > public/demo.json",
     "tauri": "tauri"
   },
   "dependencies": {

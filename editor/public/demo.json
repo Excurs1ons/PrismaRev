@@ -1,0 +1,2114 @@
+{
+  "assets": [
+    "assets/asset-defs/default_env.cube.asset.json",
+    "assets/asset-defs/default_material.asset.json",
+    "assets/external/readme.md",
+    "assets/fbx/coord.fbm/1000_F_580705287_cpHqty4I38ZYkxXGsigExrbr2LGWphXW.jpg",
+    "assets/fbx/coord.fbm/20250620_030912023_iOS.jpg",
+    "assets/fbx/coord.fbm/genshin-impact-character-icons-png-17.png",
+    "assets/fbx/coord.fbx",
+    "assets/fbx/cornell-box.fbx",
+    "assets/fbx/cube-coord.fbx",
+    "assets/gi/probe_volume.bin",
+    "assets/scenes.pak",
+    "assets/scenes.pak.meta.json",
+    "assets/scenes.toml",
+    "assets/scenes/default.rscn",
+    "assets/scenes/default.scene.json",
+    "assets/scenes/intro.scene.json",
+    "assets/shaders/_gi_test.spv",
+    "assets/shaders/compile.sh",
+    "assets/shaders/fix_spirv.py",
+    "assets/shaders/gi_bake.comp.spv",
+    "assets/shaders/gi_render.comp.spv",
+    "assets/shaders/gizmo.frag.spv",
+    "assets/shaders/gizmo.vert.spv",
+    "assets/shaders/gtao.frag.spv",
+    "assets/shaders/gtao.vert.spv",
+    "assets/shaders/mesh_vert.vert.spv",
+    "assets/shaders/post.frag.spv",
+    "assets/shaders/post.vert.spv",
+    "assets/shaders/pt_render.comp.spv",
+    "assets/shaders/reflection/gizmo.json",
+    "assets/shaders/reflection/gtao.json",
+    "assets/shaders/reflection/mesh_vert.json",
+    "assets/shaders/reflection/post.json",
+    "assets/shaders/reflection/pt_render.json",
+    "assets/shaders/reflection/rt_preview.json",
+    "assets/shaders/reflection/rt_render.json",
+    "assets/shaders/reflection/scene_frag.json",
+    "assets/shaders/reflection/shadow_depth.json",
+    "assets/shaders/reflection/skybox.json",
+    "assets/shaders/reflection/ui_overlay.json",
+    "assets/shaders/rt_preview.frag.spv",
+    "assets/shaders/rt_preview.vert.spv",
+    "assets/shaders/rt_render.frag.spv",
+    "assets/shaders/rt_render.vert.spv",
+    "assets/shaders/scene_frag.frag.spv",
+    "assets/shaders/shadow_depth.frag.spv",
+    "assets/shaders/shadow_depth.vert.spv",
+    "assets/shaders/skybox.frag.spv",
+    "assets/shaders/skybox.vert.spv",
+    "assets/shaders/slang/common.slang",
+    "assets/shaders/slang/gi.slang",
+    "assets/shaders/slang/gi_bake.slang",
+    "assets/shaders/slang/gi_render.slang",
+    "assets/shaders/slang/gizmo.slang",
+    "assets/shaders/slang/gtao.slang",
+    "assets/shaders/slang/mesh_vert.slang",
+    "assets/shaders/slang/path_integrator.slang",
+    "assets/shaders/slang/post.slang",
+    "assets/shaders/slang/pt_render.slang",
+    "assets/shaders/slang/pt_render.spv",
+    "assets/shaders/slang/rt_preview.slang",
+    "assets/shaders/slang/rt_render.slang",
+    "assets/shaders/slang/scene_frag.slang",
+    "assets/shaders/slang/shadow_depth.slang",
+    "assets/shaders/slang/skybox.slang",
+    "assets/shaders/slang/ui_overlay.slang",
+    "assets/shaders/ui_overlay.frag.spv",
+    "assets/shaders/ui_overlay.vert.spv",
+    "assets/valley_of_desolation_1k.hdr"
+  ],
+  "docs": {
+    "/data/data/com.termux/files/home/projects/PrismaRev/assets/scenes/default.scene.json": {
+      "entities": [
+        {
+          "components": {
+            "prism_engine::scene::Skybox": {
+              "enabled": true,
+              "hdr_path": "../valley_of_desolation_1k.hdr"
+            }
+          },
+          "name": "Skybox",
+          "parent": null,
+          "transform": {
+            "rotation": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "translation": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        },
+        {
+          "components": {
+            "prism_engine::scene::Camera": {
+              "aspect": 1.777,
+              "enabled": true,
+              "exposure": 1.0,
+              "far": 1000.0,
+              "fov_y_degrees": 60.0,
+              "near": 0.01
+            }
+          },
+          "name": "Camera",
+          "parent": null,
+          "transform": {
+            "rotation": [
+              -0.06894800066947937,
+              0.0,
+              0.0,
+              0.9976199865341187
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "translation": [
+              0.0,
+              2.5,
+              18.0
+            ]
+          }
+        },
+        {
+          "components": {
+            "prism_engine::scene::DirectionalLight": {
+              "ambient": 1.0,
+              "color": [
+                1,
+                1,
+                1
+              ],
+              "euler_xyz": [
+                0,
+                0,
+                0
+              ],
+              "intensity": 100000.0
+            }
+          },
+          "name": "Sun",
+          "parent": null,
+          "transform": {
+            "rotation": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "translation": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        },
+        {
+          "components": {
+            "prism_engine::scene::PointLight": {
+              "color": [
+                1.0,
+                0.2,
+                0.2
+              ],
+              "intensity": 150.0,
+              "range": 12.0
+            }
+          },
+          "name": "PointLightRed",
+          "parent": null,
+          "transform": {
+            "rotation": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "translation": [
+              2.0,
+              3.0,
+              2.0
+            ]
+          }
+        },
+        {
+          "components": {
+            "prism_engine::scene::PointLight": {
+              "color": [
+                0.2,
+                1.0,
+                0.2
+              ],
+              "intensity": 150.0,
+              "range": 12.0
+            }
+          },
+          "name": "PointLightGreen",
+          "parent": null,
+          "transform": {
+            "rotation": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "translation": [
+              -2.0,
+              3.0,
+              -2.0
+            ]
+          }
+        },
+        {
+          "components": {
+            "prism_engine::scene::PointLight": {
+              "color": [
+                0.2,
+                0.2,
+                1.0
+              ],
+              "intensity": 150.0,
+              "range": 12.0
+            }
+          },
+          "name": "PointLightBlue",
+          "parent": null,
+          "transform": {
+            "rotation": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "translation": [
+              0.0,
+              4.0,
+              4.0
+            ]
+          }
+        }
+      ],
+      "version": 1
+    },
+    "/data/data/com.termux/files/home/projects/PrismaRev/assets/scenes/demo.scene.json": {
+      "entities": [
+        {
+          "components": {
+            "prism_engine::scene::Camera": {
+              "aspect": 1.7777777910232544,
+              "enabled": true,
+              "exposure": 1.0,
+              "far": 1000.0,
+              "fov_y_degrees": 60.0,
+              "near": 0.10000000149011612
+            }
+          },
+          "name": "Camera",
+          "parent": null,
+          "transform": {
+            "rotation": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "translation": [
+              0.0,
+              2.5,
+              18.0
+            ]
+          }
+        },
+        {
+          "components": {
+            "prism_engine::scene::DirectionalLight": {
+              "ambient": 1.0,
+              "color": [
+                1.0,
+                1.0,
+                1.0
+              ],
+              "euler_xyz": [
+                45.0,
+                -45.0,
+                0.0
+              ],
+              "intensity": 100000.0
+            }
+          },
+          "name": "Sun",
+          "parent": null,
+          "transform": {
+            "rotation": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "translation": [
+              0.0,
+              6.0,
+              0.0
+            ]
+          }
+        },
+        {
+          "components": {
+            "prism_engine::scene::PointLight": {
+              "color": [
+                1.0,
+                1.0,
+                1.0
+              ],
+              "intensity": 100.0,
+              "range": 12.0
+            }
+          },
+          "name": "PointLight",
+          "parent": null,
+          "transform": {
+            "rotation": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "translation": [
+              3.0,
+              3.0,
+              3.0
+            ]
+          }
+        },
+        {
+          "components": {
+            "prism_engine::ui::ComputedLayout": {
+              "rect": [
+                0.0,
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "prism_engine::ui::Node": {},
+            "prism_engine::ui::Style": {
+              "anchors": {
+                "max_x": 1.0,
+                "max_y": 1.0,
+                "min_x": 0.0,
+                "min_y": 0.0
+              },
+              "background": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "border_radius": 0.0,
+              "height": null,
+              "margin": {
+                "bottom": 0.0,
+                "left": 0.0,
+                "right": 0.0,
+                "top": 0.0
+              },
+              "pivot": {
+                "x": 0.5,
+                "y": 0.5
+              },
+              "visible": true,
+              "width": null
+            }
+          },
+          "name": "overlay",
+          "parent": null,
+          "transform": {
+            "rotation": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "translation": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        },
+        {
+          "components": {
+            "prism_engine::ui::ComputedLayout": {
+              "rect": [
+                0.0,
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "prism_engine::ui::Node": {},
+            "prism_engine::ui::Style": {
+              "anchors": {
+                "max_x": 0.5,
+                "max_y": 0.5,
+                "min_x": 0.5,
+                "min_y": 0.5
+              },
+              "background": [
+                0.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              "border_radius": 0.0,
+              "height": 108.0,
+              "margin": {
+                "bottom": 0.0,
+                "left": 0.0,
+                "right": 0.0,
+                "top": 0.0
+              },
+              "pivot": {
+                "x": 0.5,
+                "y": 0.5
+              },
+              "visible": true,
+              "width": 900.0
+            },
+            "prism_engine::ui::Text": {
+              "alignment": "Center",
+              "color": [
+                0.91,
+                0.925,
+                0.957,
+                1.0
+              ],
+              "content": "PrismaRev",
+              "font_size": 84.0
+            }
+          },
+          "name": "title",
+          "parent": 3,
+          "transform": {
+            "rotation": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "translation": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        }
+      ],
+      "version": 1
+    },
+    "/data/data/com.termux/files/home/projects/PrismaRev/assets/scenes/intro.scene.json": {
+      "entities": [
+        {
+          "components": {
+            "prism_engine::ui::ComputedLayout": {},
+            "prism_engine::ui::Node": {},
+            "prism_engine::ui::Style": {
+              "background": [
+                0,
+                0,
+                0,
+                1
+              ]
+            }
+          },
+          "name": "intro_overlay",
+          "parent": null,
+          "transform": {
+            "rotation": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "translation": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        },
+        {
+          "components": {
+            "prism_engine::ui::ComputedLayout": {},
+            "prism_engine::ui::Node": {},
+            "prism_engine::ui::Style": {
+              "anchors": {
+                "max_x": 0.5,
+                "max_y": 0.5,
+                "min_x": 0.5,
+                "min_y": 0.5
+              },
+              "height": 108,
+              "margin": {
+                "bottom": 0,
+                "left": 0,
+                "right": 0,
+                "top": -16
+              },
+              "pivot": {
+                "x": 0.5,
+                "y": 0.5
+              },
+              "width": 900
+            },
+            "prism_engine::ui::Text": {
+              "alignment": "Center",
+              "color": [
+                0.91,
+                0.925,
+                0.957,
+                1.0
+              ],
+              "content": "PrismaRev",
+              "font_size": 84
+            }
+          },
+          "name": "intro_title",
+          "parent": null,
+          "transform": {
+            "rotation": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "translation": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        },
+        {
+          "components": {
+            "prism_engine::ui::ComputedLayout": {},
+            "prism_engine::ui::Node": {},
+            "prism_engine::ui::Style": {
+              "anchors": {
+                "max_x": 0.5,
+                "max_y": 0.5,
+                "min_x": 0.5,
+                "min_y": 0.5
+              },
+              "height": 42,
+              "margin": {
+                "bottom": 0,
+                "left": 0,
+                "right": 0,
+                "top": 48
+              },
+              "pivot": {
+                "x": 0.5,
+                "y": 0.5
+              },
+              "width": 900
+            },
+            "prism_engine::ui::Text": {
+              "alignment": "Center",
+              "color": [
+                0.604,
+                0.651,
+                0.769,
+                1.0
+              ],
+              "content": "Vulkan 实时渲染引擎",
+              "font_size": 18
+            }
+          },
+          "name": "intro_subtitle",
+          "parent": null,
+          "transform": {
+            "rotation": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "translation": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        },
+        {
+          "components": {
+            "prism_engine::ui::ComputedLayout": {},
+            "prism_engine::ui::Node": {},
+            "prism_engine::ui::Style": {
+              "anchors": {
+                "max_x": 0.5,
+                "max_y": 1.0,
+                "min_x": 0.5,
+                "min_y": 1.0
+              },
+              "height": 38,
+              "margin": {
+                "bottom": 0,
+                "left": 0,
+                "right": 0,
+                "top": -48
+              },
+              "pivot": {
+                "x": 0.5,
+                "y": 0.5
+              },
+              "width": 900
+            },
+            "prism_engine::ui::Text": {
+              "alignment": "Center",
+              "color": [
+                0.604,
+                0.651,
+                0.769,
+                1.0
+              ],
+              "content": "按任意键或点击继续",
+              "font_size": 14
+            }
+          },
+          "name": "intro_prompt",
+          "parent": null,
+          "transform": {
+            "rotation": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "translation": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        }
+      ],
+      "version": 1
+    }
+  },
+  "presets": [
+    {
+      "components": [],
+      "id": "empty",
+      "label": "空实体",
+      "name": "entity",
+      "translation": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "components": [
+        "prism_engine::scene::Camera",
+        "prism_engine::scene::FlyCameraController"
+      ],
+      "id": "camera",
+      "label": "相机",
+      "name": "Camera",
+      "translation": [
+        0.0,
+        0.0,
+        10.0
+      ]
+    },
+    {
+      "components": [
+        "prism_engine::scene::DirectionalLight"
+      ],
+      "id": "sun",
+      "label": "平行光",
+      "name": "Sun",
+      "translation": [
+        0.0,
+        6.0,
+        0.0
+      ]
+    },
+    {
+      "components": [
+        "prism_engine::scene::PointLight"
+      ],
+      "id": "point_light",
+      "label": "点光源",
+      "name": "PointLight",
+      "translation": [
+        3.0,
+        3.0,
+        3.0
+      ]
+    },
+    {
+      "components": [
+        "prism_engine::scene::MeshRenderer",
+        "prism_engine::scene::Active"
+      ],
+      "id": "mesh",
+      "label": "网格",
+      "name": "Mesh",
+      "translation": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "components": [
+        "prism_engine::scene::Skybox"
+      ],
+      "id": "skybox",
+      "label": "天空盒",
+      "name": "Skybox",
+      "translation": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "components": [
+        "prism_engine::ui::Node",
+        "prism_engine::ui::Style",
+        "prism_engine::ui::ComputedLayout"
+      ],
+      "id": "ui",
+      "label": "UI 元素",
+      "name": "ui_node",
+      "translation": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    }
+  ],
+  "scenes": [
+    {
+      "fileName": "default.scene.json",
+      "name": "default",
+      "path": "/data/data/com.termux/files/home/projects/PrismaRev/assets/scenes/default.scene.json"
+    },
+    {
+      "fileName": "intro.scene.json",
+      "name": "intro",
+      "path": "/data/data/com.termux/files/home/projects/PrismaRev/assets/scenes/intro.scene.json"
+    },
+    {
+      "fileName": "demo.scene.json",
+      "name": "demo",
+      "path": "/data/data/com.termux/files/home/projects/PrismaRev/assets/scenes/demo.scene.json"
+    }
+  ],
+  "schema": {
+    "types": [
+      {
+        "defaultJson": true,
+        "fields": [
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "bool",
+            "name": "0",
+            "readOnly": false,
+            "structType": null
+          }
+        ],
+        "isComponent": true,
+        "name": "prism_engine::scene::Active",
+        "typeId": "f7e7a873c84d8bb9",
+        "version": 1
+      },
+      {
+        "defaultJson": {
+          "aspect": 1.7777777910232544,
+          "enabled": true,
+          "exposure": 1.0,
+          "far": 1000.0,
+          "fov_y_degrees": 60.0,
+          "near": 0.10000000149011612
+        },
+        "fields": [
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "f32",
+            "name": "fov_y_degrees",
+            "readOnly": false,
+            "structType": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "f32",
+            "name": "near",
+            "readOnly": false,
+            "structType": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "f32",
+            "name": "far",
+            "readOnly": false,
+            "structType": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "f32",
+            "name": "exposure",
+            "readOnly": false,
+            "structType": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "f32",
+            "name": "aspect",
+            "readOnly": true,
+            "structType": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "bool",
+            "name": "enabled",
+            "readOnly": false,
+            "structType": null
+          }
+        ],
+        "isComponent": true,
+        "name": "prism_engine::scene::Camera",
+        "typeId": "5dddbf61fd75d988",
+        "version": 1
+      },
+      {
+        "defaultJson": {
+          "ambient": 1.0,
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "euler_xyz": [
+            45.0,
+            -45.0,
+            0.0
+          ],
+          "intensity": 100000.0
+        },
+        "fields": [
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "struct",
+            "name": "euler_xyz",
+            "readOnly": false,
+            "structType": "glam::Vec3"
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "struct",
+            "name": "color",
+            "readOnly": false,
+            "structType": "glam::Vec3"
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "f32",
+            "name": "intensity",
+            "readOnly": false,
+            "structType": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "f32",
+            "name": "ambient",
+            "readOnly": false,
+            "structType": null
+          }
+        ],
+        "isComponent": true,
+        "name": "prism_engine::scene::DirectionalLight",
+        "typeId": "d1602fe14d2cfca7",
+        "version": 1
+      },
+      {
+        "defaultJson": {
+          "env_map": null
+        },
+        "fields": [
+          {
+            "arrayLen": null,
+            "inner": {
+              "arrayLen": null,
+              "inner": null,
+              "kind": "string",
+              "name": "",
+              "readOnly": false,
+              "structType": null
+            },
+            "kind": "option",
+            "name": "env_map",
+            "readOnly": false,
+            "structType": null
+          }
+        ],
+        "isComponent": true,
+        "name": "prism_engine::scene::EnvironmentLighting",
+        "typeId": "caaccf88a48e2a64",
+        "version": 1
+      },
+      {
+        "defaultJson": {
+          "look_sensitivity": 0.004999999888241291,
+          "move_speed": 5.0,
+          "pitch": 0.0,
+          "yaw": 0.0
+        },
+        "fields": [
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "f32",
+            "name": "yaw",
+            "readOnly": false,
+            "structType": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "f32",
+            "name": "pitch",
+            "readOnly": false,
+            "structType": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "f32",
+            "name": "move_speed",
+            "readOnly": false,
+            "structType": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "f32",
+            "name": "look_sensitivity",
+            "readOnly": false,
+            "structType": null
+          }
+        ],
+        "isComponent": true,
+        "name": "prism_engine::scene::FlyCameraController",
+        "typeId": "2cad563ae256f1a7",
+        "version": 1
+      },
+      {
+        "defaultJson": {
+          "enabled": false,
+          "volume": null
+        },
+        "fields": [
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "bool",
+            "name": "enabled",
+            "readOnly": false,
+            "structType": null
+          },
+          {
+            "arrayLen": null,
+            "inner": {
+              "arrayLen": null,
+              "inner": null,
+              "kind": "string",
+              "name": "",
+              "readOnly": false,
+              "structType": null
+            },
+            "kind": "option",
+            "name": "volume",
+            "readOnly": false,
+            "structType": null
+          }
+        ],
+        "isComponent": true,
+        "name": "prism_engine::scene::GiConfig",
+        "typeId": "c67b91dd81960499",
+        "version": 1
+      },
+      {
+        "defaultJson": {
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "translation": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "fields": [
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "struct",
+            "name": "translation",
+            "readOnly": false,
+            "structType": "glam::Vec3"
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "struct",
+            "name": "rotation",
+            "readOnly": false,
+            "structType": "glam::Quat"
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "struct",
+            "name": "scale",
+            "readOnly": false,
+            "structType": "glam::Vec3"
+          }
+        ],
+        "isComponent": true,
+        "name": "prism_engine::scene::LocalTransform",
+        "typeId": "bc85e59da7be831e",
+        "version": 1
+      },
+      {
+        "defaultJson": {
+          "material_path": "",
+          "mesh_path": ""
+        },
+        "fields": [
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "string",
+            "name": "mesh_path",
+            "readOnly": false,
+            "structType": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "string",
+            "name": "material_path",
+            "readOnly": false,
+            "structType": null
+          }
+        ],
+        "isComponent": true,
+        "name": "prism_engine::scene::MeshRenderer",
+        "typeId": "cd55793da2a77af9",
+        "version": 1
+      },
+      {
+        "defaultJson": "entity",
+        "fields": [
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "string",
+            "name": "0",
+            "readOnly": false,
+            "structType": null
+          }
+        ],
+        "isComponent": true,
+        "name": "prism_engine::scene::Name",
+        "typeId": "bd5f8e645a28dcc4",
+        "version": 1
+      },
+      {
+        "defaultJson": {
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "intensity": 100.0,
+          "range": 12.0
+        },
+        "fields": [
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "struct",
+            "name": "color",
+            "readOnly": false,
+            "structType": "glam::Vec3"
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "f32",
+            "name": "intensity",
+            "readOnly": false,
+            "structType": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "f32",
+            "name": "range",
+            "readOnly": false,
+            "structType": null
+          }
+        ],
+        "isComponent": true,
+        "name": "prism_engine::scene::PointLight",
+        "typeId": "0c6440c3439decd9",
+        "version": 1
+      },
+      {
+        "defaultJson": {
+          "enabled": true,
+          "env_asset": 0,
+          "hdr_path": ""
+        },
+        "fields": [
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "u64",
+            "name": "env_asset",
+            "readOnly": false,
+            "structType": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "string",
+            "name": "hdr_path",
+            "readOnly": false,
+            "structType": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "bool",
+            "name": "enabled",
+            "readOnly": false,
+            "structType": null
+          }
+        ],
+        "isComponent": true,
+        "name": "prism_engine::scene::Skybox",
+        "typeId": "336072f7a0f6c00d",
+        "version": 1
+      },
+      {
+        "defaultJson": {
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "inner_cone_angle": 0.4359999895095825,
+          "intensity": 100.0,
+          "outer_cone_angle": 0.8730000257492065,
+          "range": 20.0
+        },
+        "fields": [
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "struct",
+            "name": "color",
+            "readOnly": false,
+            "structType": "glam::Vec3"
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "f32",
+            "name": "intensity",
+            "readOnly": false,
+            "structType": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "f32",
+            "name": "range",
+            "readOnly": false,
+            "structType": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "f32",
+            "name": "inner_cone_angle",
+            "readOnly": false,
+            "structType": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "f32",
+            "name": "outer_cone_angle",
+            "readOnly": false,
+            "structType": null
+          }
+        ],
+        "isComponent": true,
+        "name": "prism_engine::scene::SpotLight",
+        "typeId": "4c3ca4800691ceb9",
+        "version": 1
+      },
+      {
+        "defaultJson": {
+          "rect": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "fields": [
+          {
+            "arrayLen": 4,
+            "inner": {
+              "arrayLen": null,
+              "inner": null,
+              "kind": "f32",
+              "name": "",
+              "readOnly": false,
+              "structType": null
+            },
+            "kind": "array",
+            "name": "rect",
+            "readOnly": false,
+            "structType": null
+          }
+        ],
+        "isComponent": true,
+        "name": "prism_engine::ui::ComputedLayout",
+        "typeId": "436ee7806dc9e522",
+        "version": 1
+      },
+      {
+        "defaultJson": {},
+        "fields": [],
+        "isComponent": true,
+        "name": "prism_engine::ui::Node",
+        "typeId": "b57558ae06e2e657",
+        "version": 1
+      },
+      {
+        "defaultJson": {
+          "anchors": {
+            "max_x": 1.0,
+            "max_y": 1.0,
+            "min_x": 0.0,
+            "min_y": 0.0
+          },
+          "background": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "border_radius": 0.0,
+          "height": null,
+          "margin": {
+            "bottom": 0.0,
+            "left": 0.0,
+            "right": 0.0,
+            "top": 0.0
+          },
+          "pivot": {
+            "x": 0.5,
+            "y": 0.5
+          },
+          "visible": true,
+          "width": null
+        },
+        "fields": [
+          {
+            "arrayLen": null,
+            "inner": {
+              "arrayLen": null,
+              "inner": null,
+              "kind": "f32",
+              "name": "",
+              "readOnly": false,
+              "structType": null
+            },
+            "kind": "option",
+            "name": "width",
+            "readOnly": false,
+            "structType": null
+          },
+          {
+            "arrayLen": null,
+            "inner": {
+              "arrayLen": null,
+              "inner": null,
+              "kind": "f32",
+              "name": "",
+              "readOnly": false,
+              "structType": null
+            },
+            "kind": "option",
+            "name": "height",
+            "readOnly": false,
+            "structType": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "struct",
+            "name": "anchors",
+            "readOnly": false,
+            "structType": "prism_engine::ui::Anchors"
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "struct",
+            "name": "pivot",
+            "readOnly": false,
+            "structType": "prism_engine::ui::Pivot"
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "struct",
+            "name": "margin",
+            "readOnly": false,
+            "structType": "prism_engine::ui::Margin"
+          },
+          {
+            "arrayLen": 4,
+            "inner": {
+              "arrayLen": null,
+              "inner": null,
+              "kind": "f32",
+              "name": "",
+              "readOnly": false,
+              "structType": null
+            },
+            "kind": "array",
+            "name": "background",
+            "readOnly": false,
+            "structType": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "f32",
+            "name": "border_radius",
+            "readOnly": false,
+            "structType": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "bool",
+            "name": "visible",
+            "readOnly": false,
+            "structType": null
+          }
+        ],
+        "isComponent": true,
+        "name": "prism_engine::ui::Style",
+        "typeId": "d3838ef0140aade8",
+        "version": 1
+      },
+      {
+        "defaultJson": {
+          "alignment": "Center",
+          "color": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "content": "",
+          "font_size": 16.0
+        },
+        "fields": [
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "string",
+            "name": "content",
+            "readOnly": false,
+            "structType": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "f32",
+            "name": "font_size",
+            "readOnly": false,
+            "structType": null
+          },
+          {
+            "arrayLen": 4,
+            "inner": {
+              "arrayLen": null,
+              "inner": null,
+              "kind": "f32",
+              "name": "",
+              "readOnly": false,
+              "structType": null
+            },
+            "kind": "array",
+            "name": "color",
+            "readOnly": false,
+            "structType": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "u8",
+            "name": "alignment",
+            "readOnly": false,
+            "structType": null
+          }
+        ],
+        "isComponent": true,
+        "name": "prism_engine::ui::Text",
+        "typeId": "23d04cf596bb7a50",
+        "version": 1
+      },
+      {
+        "defaultJson": null,
+        "fields": [
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "f32",
+            "name": "x",
+            "readOnly": false,
+            "structType": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "f32",
+            "name": "y",
+            "readOnly": false,
+            "structType": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "f32",
+            "name": "z",
+            "readOnly": false,
+            "structType": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "f32",
+            "name": "w",
+            "readOnly": false,
+            "structType": null
+          }
+        ],
+        "isComponent": false,
+        "name": "glam::Quat",
+        "typeId": "f24f44e7d1891c83",
+        "version": 1
+      },
+      {
+        "defaultJson": null,
+        "fields": [
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "f32",
+            "name": "x",
+            "readOnly": false,
+            "structType": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "f32",
+            "name": "y",
+            "readOnly": false,
+            "structType": null
+          }
+        ],
+        "isComponent": false,
+        "name": "glam::Vec2",
+        "typeId": "2ca0a8cb770d99bc",
+        "version": 1
+      },
+      {
+        "defaultJson": null,
+        "fields": [
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "f32",
+            "name": "x",
+            "readOnly": false,
+            "structType": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "f32",
+            "name": "y",
+            "readOnly": false,
+            "structType": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "f32",
+            "name": "z",
+            "readOnly": false,
+            "structType": null
+          }
+        ],
+        "isComponent": false,
+        "name": "glam::Vec3",
+        "typeId": "2ca0a9cb770d9b6f",
+        "version": 1
+      },
+      {
+        "defaultJson": null,
+        "fields": [
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "f32",
+            "name": "x",
+            "readOnly": false,
+            "structType": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "f32",
+            "name": "y",
+            "readOnly": false,
+            "structType": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "f32",
+            "name": "z",
+            "readOnly": false,
+            "structType": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "f32",
+            "name": "w",
+            "readOnly": false,
+            "structType": null
+          }
+        ],
+        "isComponent": false,
+        "name": "glam::Vec4",
+        "typeId": "2ca0a6cb770d9656",
+        "version": 1
+      },
+      {
+        "defaultJson": null,
+        "fields": [
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "f32",
+            "name": "min_x",
+            "readOnly": false,
+            "structType": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "f32",
+            "name": "min_y",
+            "readOnly": false,
+            "structType": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "f32",
+            "name": "max_x",
+            "readOnly": false,
+            "structType": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "f32",
+            "name": "max_y",
+            "readOnly": false,
+            "structType": null
+          }
+        ],
+        "isComponent": false,
+        "name": "prism_engine::ui::Anchors",
+        "typeId": "859c1958d64ca867",
+        "version": 1
+      },
+      {
+        "defaultJson": null,
+        "fields": [
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "f32",
+            "name": "left",
+            "readOnly": false,
+            "structType": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "f32",
+            "name": "right",
+            "readOnly": false,
+            "structType": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "f32",
+            "name": "top",
+            "readOnly": false,
+            "structType": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "f32",
+            "name": "bottom",
+            "readOnly": false,
+            "structType": null
+          }
+        ],
+        "isComponent": false,
+        "name": "prism_engine::ui::Margin",
+        "typeId": "252dde5e687a2c91",
+        "version": 1
+      },
+      {
+        "defaultJson": null,
+        "fields": [
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "f32",
+            "name": "x",
+            "readOnly": false,
+            "structType": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "f32",
+            "name": "y",
+            "readOnly": false,
+            "structType": null
+          }
+        ],
+        "isComponent": false,
+        "name": "prism_engine::ui::Pivot",
+        "typeId": "aee5e42df1c0107d",
+        "version": 1
+      }
+    ]
+  },
+  "templateDocs": {
+    "camera": {
+      "entities": [
+        {
+          "components": {
+            "prism_engine::scene::Camera": {
+              "aspect": 1.7777777910232544,
+              "enabled": true,
+              "exposure": 1.0,
+              "far": 1000.0,
+              "fov_y_degrees": 60.0,
+              "near": 0.10000000149011612
+            }
+          },
+          "name": "Camera",
+          "parent": null,
+          "transform": {
+            "rotation": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "translation": [
+              0.0,
+              0.0,
+              10.0
+            ]
+          }
+        }
+      ],
+      "version": 1
+    },
+    "empty": {
+      "entities": [
+        {
+          "components": {},
+          "name": "Entity",
+          "parent": null,
+          "transform": {
+            "rotation": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "translation": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        }
+      ],
+      "version": 1
+    },
+    "lit": {
+      "entities": [
+        {
+          "components": {
+            "prism_engine::scene::Camera": {
+              "aspect": 1.7777777910232544,
+              "enabled": true,
+              "exposure": 1.0,
+              "far": 1000.0,
+              "fov_y_degrees": 60.0,
+              "near": 0.10000000149011612
+            }
+          },
+          "name": "Camera",
+          "parent": null,
+          "transform": {
+            "rotation": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "translation": [
+              0.0,
+              2.5,
+              18.0
+            ]
+          }
+        },
+        {
+          "components": {
+            "prism_engine::scene::DirectionalLight": {
+              "ambient": 1.0,
+              "color": [
+                1.0,
+                1.0,
+                1.0
+              ],
+              "euler_xyz": [
+                45.0,
+                -45.0,
+                0.0
+              ],
+              "intensity": 100000.0
+            }
+          },
+          "name": "Sun",
+          "parent": null,
+          "transform": {
+            "rotation": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "translation": [
+              0.0,
+              6.0,
+              0.0
+            ]
+          }
+        },
+        {
+          "components": {
+            "prism_engine::scene::PointLight": {
+              "color": [
+                1.0,
+                1.0,
+                1.0
+              ],
+              "intensity": 100.0,
+              "range": 12.0
+            }
+          },
+          "name": "PointLight",
+          "parent": null,
+          "transform": {
+            "rotation": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "translation": [
+              3.0,
+              3.0,
+              3.0
+            ]
+          }
+        }
+      ],
+      "version": 1
+    },
+    "ui": {
+      "entities": [
+        {
+          "components": {
+            "prism_engine::ui::ComputedLayout": {
+              "rect": [
+                0.0,
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "prism_engine::ui::Node": {},
+            "prism_engine::ui::Style": {
+              "anchors": {
+                "max_x": 1.0,
+                "max_y": 1.0,
+                "min_x": 0.0,
+                "min_y": 0.0
+              },
+              "background": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "border_radius": 0.0,
+              "height": null,
+              "margin": {
+                "bottom": 0.0,
+                "left": 0.0,
+                "right": 0.0,
+                "top": 0.0
+              },
+              "pivot": {
+                "x": 0.5,
+                "y": 0.5
+              },
+              "visible": true,
+              "width": null
+            }
+          },
+          "name": "overlay",
+          "parent": null,
+          "transform": {
+            "rotation": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "translation": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        },
+        {
+          "components": {
+            "prism_engine::ui::ComputedLayout": {
+              "rect": [
+                0.0,
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "prism_engine::ui::Node": {},
+            "prism_engine::ui::Style": {
+              "anchors": {
+                "max_x": 0.5,
+                "max_y": 0.5,
+                "min_x": 0.5,
+                "min_y": 0.5
+              },
+              "background": [
+                0.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              "border_radius": 0.0,
+              "height": 108.0,
+              "margin": {
+                "bottom": 0.0,
+                "left": 0.0,
+                "right": 0.0,
+                "top": 0.0
+              },
+              "pivot": {
+                "x": 0.5,
+                "y": 0.5
+              },
+              "visible": true,
+              "width": 900.0
+            },
+            "prism_engine::ui::Text": {
+              "alignment": "Center",
+              "color": [
+                0.91,
+                0.925,
+                0.957,
+                1.0
+              ],
+              "content": "PrismaRev",
+              "font_size": 84.0
+            }
+          },
+          "name": "title",
+          "parent": 0,
+          "transform": {
+            "rotation": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "translation": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        }
+      ],
+      "version": 1
+    }
+  },
+  "templates": [
+    {
+      "id": "camera",
+      "label": "相机"
+    },
+    {
+      "id": "lit",
+      "label": "相机 + 光照"
+    },
+    {
+      "id": "ui",
+      "label": "UI 叠层"
+    },
+    {
+      "id": "empty",
+      "label": "空实体"
+    }
+  ]
+}

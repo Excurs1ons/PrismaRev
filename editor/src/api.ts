@@ -1,4 +1,4 @@
-import type { SceneDoc, SceneEntry, SceneTemplate, Schema } from "./types";
+import type { EntityPreset, SceneDoc, SceneEntry, SceneTemplate, Schema } from "./types";
 
 /**
  * Tauri 命令的类型化包装。
@@ -7,7 +7,15 @@ import type { SceneDoc, SceneEntry, SceneTemplate, Schema } from "./types";
  * `invoke` 的名字与参数映射，前端不重复实现任何 schema 逻辑。
  */
 
+/** 是否运行在 Tauri 宿主里（浏览器直接打开时为 false → 走预览 fixture）。 */
+const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+
 async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+  if (!inTauri) {
+    // 动态 import：Tauri 构建里这一个 chunk 不会被打进主包。
+    const mock = await import("./mock");
+    return mock.invoke<T>(cmd, args);
+  }
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<T>(cmd, args);
 }
@@ -30,6 +38,21 @@ export function listScenes(): Promise<SceneEntry[]> {
 /** 可用的新建模板。 */
 export function fetchTemplates(): Promise<SceneTemplate[]> {
   return call<SceneTemplate[]>("editor_scene_templates");
+}
+
+/** 快速添加实体的预设。 */
+export function fetchPresets(): Promise<EntityPreset[]> {
+  return call<EntityPreset[]>("editor_entity_presets");
+}
+
+/** `assets/` 下的候选路径（相对项目根）。 */
+export function listAssets(): Promise<string[]> {
+  return call<string[]>("editor_list_assets");
+}
+
+/** 校验场景文档（不落盘），失败时抛出错误描述。 */
+export function validateScene(doc: SceneDoc): Promise<void> {
+  return call<void>("editor_validate_scene", { doc });
 }
 
 /** 按模板新建场景文档。 */

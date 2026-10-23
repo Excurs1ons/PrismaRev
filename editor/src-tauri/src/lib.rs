@@ -3,7 +3,7 @@
 //! 这里只做两件事：把 [`prism_editor_api`] 的能力包装成命令、装配窗口。
 //! 所有场景/schema 逻辑都在 `prism-editor-api`（可单测，不依赖 Tauri/egui）。
 
-use prism_editor_api::{SceneEntry, SceneTemplate, Schema};
+use prism_editor_api::{EntityPreset, SceneEntry, SceneTemplate, Schema};
 
 /// 组件属性面板的完整 schema（组件 + 嵌套结构体 + 默认值）。
 #[tauri::command]
@@ -28,6 +28,25 @@ fn editor_list_scenes() -> Result<Vec<SceneEntry>, String> {
 #[tauri::command]
 fn editor_scene_templates() -> Vec<SceneTemplate> {
     prism_editor_api::templates()
+}
+
+/// 实体快速添加预设。
+#[tauri::command]
+fn editor_entity_presets() -> Vec<EntityPreset> {
+    prism_editor_api::entity_presets()
+}
+
+/// `assets/` 下的候选资产路径（相对项目根，`/` 分隔）。
+#[tauri::command]
+fn editor_list_assets() -> Result<Vec<String>, String> {
+    let root = prism_editor_api::find_project_root()?;
+    prism_editor_api::list_assets(&root)
+}
+
+/// 校验场景文档（不落盘）；失败返回首个错误描述。
+#[tauri::command]
+fn editor_validate_scene(doc: serde_json::Value) -> Result<(), String> {
+    prism_editor_api::validate_scene_doc(&doc)
 }
 
 /// 新建场景的初始文档（按模板 id；未知 id 回退到 camera）。
@@ -114,6 +133,9 @@ pub fn run() {
             editor_project_root,
             editor_list_scenes,
             editor_scene_templates,
+            editor_entity_presets,
+            editor_list_assets,
+            editor_validate_scene,
             editor_new_scene,
             editor_read_scene,
             editor_write_scene,

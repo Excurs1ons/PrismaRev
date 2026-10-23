@@ -1,18 +1,33 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, provide, ref, watch } from "vue";
 import HierarchyTree from "./components/HierarchyTree.vue";
 import Inspector from "./components/Inspector.vue";
 import * as api from "./api";
-import type { EntityJson, SceneDoc, SceneEntry, Schema, SceneTemplate } from "./types";
+import { ASSETS_KEY } from "./keys";
+import type {
+  EntityJson,
+  EntityPreset,
+  JsonValue,
+  SceneDoc,
+  SceneEntry,
+  SceneTemplate,
+  Schema,
+} from "./types";
 
 const HISTORY_LIMIT = 200;
 const COALESCE_MS = 700;
+const VALIDATE_DEBOUNCE_MS = 250;
 
 const schema = ref<Schema>({ types: [] });
 const projectRoot = ref("");
 const scenes = ref<SceneEntry[]>([]);
 const templates = ref<SceneTemplate[]>([]);
+const presets = ref<EntityPreset[]>([]);
+const assets = ref<string[]>([]);
+provide(ASSETS_KEY, assets);
+
 const templateId = ref("camera");
+const presetId = ref("empty");
 
 const currentPath = ref<string | null>(null);
 const doc = ref<SceneDoc | null>(null);
@@ -22,6 +37,7 @@ const baseline = ref<string>("");
 const selected = ref<number | null>(null);
 const status = ref("");
 const error = ref("");
+const validationError = ref("");
 const logText = ref("");
 const busy = ref(false);
 
@@ -38,6 +54,7 @@ const canUndo = computed(() => past.value.length > 0);
 const canRedo = computed(() => future.value.length > 0);
 const hasDoc = computed(() => doc.value !== null);
 const hasPath = computed(() => currentPath.value !== null);
+const canSave = computed(() => hasDoc.value && validationError.value === "");
 
 const selectedEntity = computed<EntityJson | null>(() => {
   if (!doc.value || selected.value === null) return null;
@@ -47,6 +64,29 @@ const selectedEntity = computed<EntityJson | null>(() => {
 function fail(e: unknown) {
   error.value = `${e}`;
 }
+
+// ---------------------------------------------------------------------------
+// 校验
+// ---------------------------------------------------------------------------
+
+async function runValidation() {
+  if (!doc.value) {
+    validationError.value = "";
+    return;
+  }
+  try {
+    await api.validateScene(doc.value);
+    validationError.value = "";
+  } catch (e) {
+    validationError.value = `${e}`;
+  }
+}
+
+let validateTimer: number | undefined;
+watch(doc, () => {
+  if (validateTimer !== undefined) window.clearTimeout(validateTimer);
+  validateTimer = window.setTimeout(() => void runValidation(), VALIDATE_DEBOUNCE_MS);
+});
 
 // ---------------------------------------------------------------------------
 // 文档 / 历史
@@ -71,6 +111,7 @@ function resetHistory(loaded: SceneDoc, path: string | null) {
   lastKey = "";
   lastTime = 0;
   selected.value = loaded.entities.length ? 0 : null;
+  void runValidation();
 }
 
 /**
@@ -127,8 +168,12 @@ async function bootstrap() {
     schema.value = await api.fetchSchema();
     projectRoot.value = await api.fetchProjectRoot();
     templates.value = await api.fetchTemplates();
+    presets.value = await api.fetchPresets();
     if (templates.value.length) templateId.value = templates.value[0].id;
+    if (presets.value.length) presetId.value = presets.value[0].id;
     await refreshScenes();
+    // 资产列表是可选增强；失败不影响编辑。
+    assets.value = await api.listAssets().catch(() => []);
     status.value = `项目根 ${projectRoot.value}`;
   } catch (e) {
     fail(e);
@@ -223,6 +268,7 @@ async function deleteCurrent() {
     doc.value = null;
     currentPath.value = null;
     baseline.value = "";
+    validationError.value = "";
     past.value = [];
     future.value = [];
     selected.value = null;
@@ -259,6 +305,15 @@ async function cook() {
 // 实体编辑
 // ---------------------------------------------------------------------------
 
+function uniqueName(base: string): string {
+  if (!doc.value) return base;
+  const names = new Set(doc.value.entities.map((entity) => entity.name));
+  if (!names.has(base)) return base;
+  let suffix = 2;
+  while (names.has(`${base}_${suffix}`)) suffix += 1;
+  return `${base}_${suffix}`;
+}
+
 function onEntityUpdate(entity: EntityJson, editKey: string) {
   if (!doc.value || selected.value === null) return;
   const entities = doc.value.entities.slice();
@@ -268,15 +323,50 @@ function onEntityUpdate(entity: EntityJson, editKey: string) {
 
 function addEntity() {
   if (!doc.value) return;
+  const preset = presets.value.find((p) => p.id === presetId.value);
+  const components: Record<string, JsonValue> = {};
+  for (const name of preset?.components ?? []) {
+    const type = schema.value.types.find((t) => t.name === name);
+    components[name] = (type?.defaultJson as JsonValue) ?? {};
+  }
   const entities = doc.value.entities.slice();
   entities.push({
-    name: `entity_${entities.length}`,
+    name: uniqueName(preset?.name ?? "entity"),
     parent: null,
-    transform: { translation: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] },
-    components: {},
+    transform: {
+      translation: (preset?.translation ?? [0, 0, 0]) as number[],
+      rotation: [0, 0, 0, 1],
+      scale: [1, 1, 1],
+    },
+    components,
   });
   commit({ ...doc.value, entities }, `add-entity#${entities.length}`);
   selected.value = entities.length - 1;
+}
+
+function duplicateEntity() {
+  if (!doc.value || selected.value === null) return;
+  const source = doc.value.entities[selected.value];
+  if (!source) return;
+
+  const sourceIndex = selected.value;
+  const copy = JSON.parse(JSON.stringify(source)) as EntityJson;
+  copy.name = uniqueName(`${source.name ?? "entity"}_copy`);
+
+  const insertAt = sourceIndex + 1;
+  const entities = doc.value.entities.slice();
+  entities.splice(insertAt, 0, copy);
+
+  // 插入点之后的父索引整体后移一位。
+  const remapped = entities.map((entity, index) => {
+    if (index <= sourceIndex) return entity;
+    const parent = entity.parent;
+    if (parent === null || parent === undefined) return entity;
+    return { ...entity, parent: parent >= insertAt ? parent + 1 : parent };
+  });
+
+  commit({ ...doc.value, entities: remapped }, `duplicate-entity#${insertAt}`);
+  selected.value = insertAt;
 }
 
 function deleteEntity(index: number) {
@@ -297,13 +387,34 @@ function deleteEntity(index: number) {
 // 快捷键
 // ---------------------------------------------------------------------------
 
+function isTextInput(target: EventTarget | null): boolean {
+  const element = target as HTMLElement | null;
+  if (!element) return false;
+  const tag = element.tagName?.toLowerCase();
+  return (
+    tag === "input" || tag === "textarea" || tag === "select" || element.isContentEditable === true
+  );
+}
+
 function onKey(event: KeyboardEvent) {
   const mod = event.ctrlKey || event.metaKey;
+
+  if (!mod && event.key === "Delete" && !isTextInput(event.target)) {
+    if (selected.value !== null && doc.value && doc.value.entities.length > 1) {
+      event.preventDefault();
+      deleteEntity(selected.value);
+    }
+    return;
+  }
+
   if (!mod) return;
   const key = event.key.toLowerCase();
   if (key === "s") {
     event.preventDefault();
     void save();
+  } else if (key === "d") {
+    event.preventDefault();
+    duplicateEntity();
   } else if (key === "z" && !event.shiftKey) {
     event.preventDefault();
     undo();
@@ -342,10 +453,18 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
         {{ busy ? "cook 中…" : "Cook" }}
       </button>
       <button :disabled="!hasPath || busy" @click="reload">重新加载</button>
-      <button class="primary" :disabled="!hasDoc || busy" title="Ctrl/Cmd+S" @click="save">保存</button>
+      <button
+        class="primary"
+        :disabled="!canSave || busy"
+        :title="validationError ? '场景校验未通过' : 'Ctrl/Cmd+S'"
+        @click="save"
+      >
+        保存
+      </button>
     </div>
 
     <div v-if="error" class="error">{{ error }}</div>
+    <div v-else-if="validationError" class="warn">场景校验未通过：{{ validationError }}</div>
 
     <div class="body">
       <aside class="sidebar">
@@ -369,7 +488,17 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
           <div class="section-title">
             <span>层级</span>
             <span class="spacer" />
-            <button class="ghost icon" :disabled="!hasDoc" title="新增实体" @click="addEntity">+</button>
+            <select v-model="presetId" class="mini" title="新增实体类型">
+              <option v-for="p in presets" :key="p.id" :value="p.id">{{ p.label }}</option>
+            </select>
+            <button
+              class="ghost icon"
+              :disabled="!hasDoc"
+              title="按所选类型新增实体"
+              @click="addEntity"
+            >
+              +
+            </button>
           </div>
           <div class="section-body">
             <HierarchyTree
@@ -391,6 +520,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
           :schema="schema"
           @update="onEntityUpdate"
           @remove="deleteEntity"
+          @duplicate="duplicateEntity"
         />
         <div v-else class="empty">打开或新建一个场景，然后在左侧选择一个实体。</div>
       </main>

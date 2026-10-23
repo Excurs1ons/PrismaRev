@@ -162,6 +162,13 @@ select:disabled {
   letter-spacing: 0.12em;
   color: var(--muted);
 }
+.section-title select {
+  width: auto;
+  text-transform: none;
+  letter-spacing: normal;
+  font-size: 11px;
+  padding: 2px 4px;
+}
 .section-body {
   overflow: auto;
   padding: 4px 6px 8px;
@@ -276,6 +283,34 @@ select:disabled {
   padding: 6px 10px;
   font-size: 12px;
   white-space: pre-wrap;
+}
+
+.warn {
+  color: #ffcf6b;
+  background: rgba(255, 207, 107, 0.08);
+  border-bottom: 1px solid rgba(255, 207, 107, 0.25);
+  padding: 6px 10px;
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+
+.tree-tools {
+  padding: 4px 8px 6px;
+}
+.tree-tools input {
+  font-size: 12px;
+  padding: 3px 7px;
+}
+.caret {
+  border: none;
+  background: transparent;
+  padding: 0 5px;
+  color: var(--muted);
+}
+.caret-spacer {
+  display: inline-block;
+  width: 18px;
+  flex: 0 0 auto;
 }
 
 .logbar {

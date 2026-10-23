@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, inject } from "vue";
+import { ASSETS_KEY } from "../keys";
 import type { FieldSchema, JsonValue, Schema } from "../types";
 
 /**
@@ -37,6 +38,28 @@ function kindOf(v: JsonValue | undefined): Kind {
 const hint = computed<FieldSchema | null>(() => props.field ?? null);
 const kind = computed(() => kindOf(props.value));
 const pathStr = computed(() => props.path ?? props.label ?? "");
+
+// —— 资产引用：对「看起来是资源路径」的字符串字段给出候选列表 ——
+const assets = inject(ASSETS_KEY, null);
+const ASSET_EXTENSIONS = [
+  ".gltf", ".glb", ".obj", ".fbx", ".bin",
+  ".hdr", ".exr", ".png", ".jpg", ".ktx2",
+  ".rscn", ".pak", ".scene.json",
+];
+const ASSET_FIELD_PATTERN = /(^|_)(path|file|map|volume|hdr)$/;
+
+const showAssetPicker = computed(() => {
+  if (kind.value !== "string") return false;
+  const name = hint.value?.name ?? "";
+  if (ASSET_FIELD_PATTERN.test(name)) return true;
+  const value = (props.value as string).toLowerCase();
+  return value.length > 0 && ASSET_EXTENSIONS.some((ext) => value.endsWith(ext));
+});
+
+const assetOptions = computed(() => (assets?.value ?? []).slice(0, 1000));
+
+/** datalist 需要唯一 id；字段路径天然唯一。 */
+const listId = computed(() => `asset-${pathStr.value.replace(/[^a-zA-Z0-9_-]/g, "_")}`);
 
 const isInteger = computed(() =>
   ["i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64"].includes(hint.value?.kind ?? ""),
@@ -244,13 +267,18 @@ function onBool(event: Event) {
         :value="(value as number)"
         @input="onNumber"
       />
-      <input
-        v-else-if="kind === 'string'"
-        type="text"
-        :disabled="hint?.readOnly"
-        :value="(value as string)"
-        @input="onText"
-      />
+      <template v-else-if="kind === 'string'">
+        <input
+          type="text"
+          :list="showAssetPicker ? listId : undefined"
+          :disabled="hint?.readOnly"
+          :value="(value as string)"
+          @input="onText"
+        />
+        <datalist v-if="showAssetPicker" :id="listId">
+          <option v-for="asset in assetOptions" :key="asset" :value="asset" />
+        </datalist>
+      </template>
       <template v-else>
         <span class="hint">null</span>
         <button class="ghost icon" :disabled="hint?.readOnly" @click="initFromNull">设置</button>

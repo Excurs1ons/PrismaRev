@@ -14,6 +14,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: "update", entity: EntityJson, editKey: string): void;
   (e: "remove", index: number): void;
+  (e: "duplicate", index: number): void;
 }>();
 
 const addName = ref("");
@@ -118,10 +119,13 @@ const availableComponents = computed(() =>
     <header>
       <span class="title">实体 #{{ index }}</span>
       <span class="spacer" />
+      <button class="ghost icon" title="复制实体 (Ctrl+D)" @click="emit('duplicate', index)">
+        复制
+      </button>
       <button
         class="ghost icon"
         :disabled="entities.length <= 1"
-        title="删除实体（至少保留一个）"
+        title="删除实体（至少保留一个，Delete）"
         @click="emit('remove', index)"
       >
         删除
