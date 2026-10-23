@@ -75,6 +75,11 @@ impl AssetType {
         match ext.to_lowercase().as_str() {
             // 二进制
             "bin" | "bytes" => AssetType::Binary,
+            // 已 cook 的运行时格式
+            "rscn" => AssetType::Scene,
+            "rtex" => AssetType::Texture,
+            "rmes" => AssetType::Mesh,
+            "rmat" => AssetType::Material,
             // Textures / images
             "png" | "jpg" | "jpeg" | "tga" | "bmp" | "hdr" | "exr" | "ktx" | "ktx2" | "dds" => {
                 AssetType::Texture

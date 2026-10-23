@@ -2,8 +2,8 @@
 //!
 //! Subcommands:
 //!   bake-gi    — offline GI probe-volume baker (GPU ray-query, multi-bounce path tracing)
-//!   cook       — cook assets (delegates to prism-asset)
-//!   pack       — build .pak files (delegates to prism-asset)
+//!   cook       — cook a `.scene.json` to RSCN v4 (delegates to prism-cooker)
+//!   pack       — pack a cooked directory into a `.pak` + path manifest
 //!   heightmap  — generate + erode a procedural heightmap, write raw f32
 
 use std::path::PathBuf;
@@ -43,13 +43,16 @@ enum Command {
         #[arg(long, default_value = "assets/cooked")]
         output: PathBuf,
     },
-    /// Build a .pak resource package
+    /// Build a .pak resource package from a directory of cooked files
     Pack {
         /// Input directory containing cooked assets
         input: PathBuf,
         /// Output .pak path (default: assets/packed/game.pak)
         #[arg(long, default_value = "assets/packed/game.pak")]
         output: PathBuf,
+        /// zstd compression level (0-22, 0 = no compression)
+        #[arg(long, short = 'l', default_value_t = 3)]
+        compression: u32,
     },
     /// Generate a procedural heightmap (fbm terrain + hydraulic/thermal erosion)
     ///
@@ -151,12 +154,21 @@ fn main() -> Result<()> {
             log::info!("cook: wrote {}", out_path.display());
             Ok(())
         }
-        Command::Pack { input, output } => {
+        Command::Pack {
+            input,
+            output,
+            compression,
+        } => {
             log::info!("pack: {input:?} -> {output:?}");
-            anyhow::bail!(
-                "pack: build the .pak with `cargo run -p prism-cooker --bin prism-cook -- build`                  (input: {})",
-                input.display()
-            )
+            let summary = prism_cooker::pack_directory(&input, &output, compression)?;
+            log::info!(
+                "pack: {} files, {} bytes uncompressed -> {} bytes; manifest {}",
+                summary.asset_count,
+                summary.total_bytes,
+                summary.pak_bytes,
+                summary.manifest_path.display()
+            );
+            Ok(())
         }
         Command::Heightmap {
             output,

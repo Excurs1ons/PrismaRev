@@ -41,6 +41,10 @@
         assert_eq!(AssetType::from_extension("spv"), AssetType::Shader);
         assert_eq!(AssetType::from_extension("prefab"), AssetType::Prefab);
         assert_eq!(AssetType::from_extension("scene"), AssetType::Scene);
+        assert_eq!(AssetType::from_extension("rscn"), AssetType::Scene);
+        assert_eq!(AssetType::from_extension("rtex"), AssetType::Texture);
+        assert_eq!(AssetType::from_extension("rmes"), AssetType::Mesh);
+        assert_eq!(AssetType::from_extension("rmat"), AssetType::Material);
     }
 
     #[test]

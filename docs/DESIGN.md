@@ -751,6 +751,8 @@ prism-scene::rscn::encode_scene
 
 - `prism-build-pipeline cook <input.scene.json>` 直接调用 `SceneCooker`；
 - 通用纹理/网格/二进制资产仍走 `prism-cook import/build`；
+- `prism-build-pipeline pack <cooked-dir>` 把已 cook 的目录打成 `.pak`，并写
+  `.pak.meta.json` 路径清单（ID 按排序后的相对路径确定性分配）；
 - 运行时只读 `.rscn` / `.pak`，不依赖 `prism-cooker`；
 - 开发期也可以从松散的 `.rscn` 文件加载，路径由 `SceneSource` 决定。
 

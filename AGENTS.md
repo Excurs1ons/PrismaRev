@@ -75,6 +75,8 @@ The user project's dependency chain must stay **egui-free and editor-free**:
 - Generic asset build: `cargo run -p prism-cooker --bin prism-cook -- build`.
 - Scene cook: `cargo run -p prism-build-pipeline -- cook assets/scenes/default.scene.json`
   (writes `assets/cooked/default.rscn`; the old `prism-asset-cli` name is gone).
+- Pack already-cooked files: `cargo run -p prism-build-pipeline -- pack assets/cooked`
+  (writes `assets/packed/game.pak` + `.pak.meta.json`).
 - The `projects/game/`, `projects/sponza/`, `projects/editor/` and `launcher/` standalone workspaces need their own `cargo build` / `cargo clippy`
   runs — a root-workspace build does **not** cover them.
 
