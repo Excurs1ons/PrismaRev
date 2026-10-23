@@ -297,6 +297,23 @@ path = "D:/external/model.gltf"
                 entry.path
             );
         }
+
+        // End-to-end: the packaged RSCN bytes must be loadable by the runtime
+        // decoder with the same component registry used by the game.
+        let scene_id = rm.id_by_path("scenes/intro.rscn").unwrap();
+        let scene_bytes = rm.load_with_deps_raw(scene_id).unwrap();
+        let mut registry = prism_engine::scene::ComponentRegistry::new();
+        prism_engine::scene::register_builtin_components(&mut registry);
+        let mut world = prism_ecs::World::new();
+        let mut loader = prism_engine::scene::loader::SceneLoader::new();
+        let instance = loader
+            .load_and_spawn(
+                &mut world,
+                prism_engine::scene::loader::SceneSource::RawCooked(scene_bytes),
+                &registry,
+            )
+            .unwrap();
+        assert_eq!(instance.all_entities.len(), 1);
     }
 
     #[test]
