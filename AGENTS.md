@@ -63,6 +63,8 @@ Conventions) before touching any matrix/coordinate math — deviating from those
     **dock 面板**（`PANELS` + `DockLayout` 的命名 slot），默认并入检查器 leaf 的 tab，
     可拖出浮动或重新分屏；不要再用带背景遮罩的 modal 实现窗口。
   - 实体/组件操作走右键菜单：层级行 → 复制 / 删除，组件卡头 → 复制组件 / 移除组件。
+    资产树/列表也支持右键（打开文档 / 新建文件夹 / 重命名·移动 / 复制路径 / 删除）；
+    所有右键菜单用 `clampMenuPosition` 限制在视口内。
     检查器顶部的复制/删除/存为预制体按钮已移除。预制体通过「层级实体拖到资产目录」
     (`prefab-drop` → `editor_create_prefab_at`) 保存，可落到任意 `assets/...` 目录，
     重名自动加 `-2` 后缀；`.prefab.json` 在资产树里递归枚举。反向拖 `.prefab.json`
