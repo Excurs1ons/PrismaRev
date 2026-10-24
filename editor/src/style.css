@@ -731,13 +731,18 @@ html.compact .dock-tab {
   font-size: 12px;
   padding: 3px 7px;
 }
-.asset-view-row {
+.asset-filter-row {
   display: flex;
   align-items: center;
   gap: 4px;
-  margin-top: 4px;
 }
-.asset-view-row select {
+.asset-filter-row input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.asset-filter-row select {
+  flex: 0 0 auto;
+  width: 76px;
   margin-top: 0;
   font-size: 11px;
   padding: 2px 4px;

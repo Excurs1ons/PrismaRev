@@ -724,9 +724,9 @@ onUnmounted(() => {
 <template>
   <div class="asset-browser">
     <div class="tree-tools">
-    <input v-model="search" type="text" :placeholder="`检索 ${total} 个资产…`" />
-    <div class="asset-view-row">
-      <select v-model="kind">
+    <div class="asset-filter-row">
+      <input v-model="search" type="text" :placeholder="`检索 ${total} 个资产…`" />
+      <select v-model="kind" title="按资产类型过滤">
         <option v-for="k in kinds" :key="k" :value="k">{{ KIND_LABELS[k] ?? k }}</option>
       </select>
       <div class="view-toggle">
