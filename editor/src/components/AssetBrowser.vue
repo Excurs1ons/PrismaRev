@@ -4,6 +4,7 @@ import { ChevronDown, ChevronRight, Plus } from "lucide-vue-next";
 import * as api from "../api";
 import { ASSETS_KEY } from "../keys";
 import { formatBytes } from "../format";
+import { clampMenuPosition } from "../contextMenu";
 import type { AssetInfo, AssetMutation, AssetRef } from "../types";
 
 /**
@@ -35,6 +36,7 @@ const search = ref("");
 const kind = ref("all");
 const selected = ref<AssetInfo | null>(null);
 const selectedNode = ref<{ path: string; name: string; dir: boolean } | null>(null);
+const assetMenu = ref<{ path: string; name: string; dir: boolean; x: number; y: number } | null>(null);
 const assetDirs = ref<string[]>([]);
 const usage = ref<AssetRef[]>([]);
 const usageError = ref("");
@@ -377,6 +379,63 @@ async function copyPath() {
   }
 }
 
+function openAssetMenu(node: TreeNode, event: MouseEvent) {
+  onRowClick(node);
+  const pos = clampMenuPosition(event.clientX, event.clientY, 190, 170);
+  assetMenu.value = {
+    path: node.path,
+    name: node.name,
+    dir: node.dir,
+    ...pos,
+  };
+}
+
+function openAssetMenuFromAsset(asset: AssetInfo, event: MouseEvent) {
+  selectAssetRow(asset);
+  const pos = clampMenuPosition(event.clientX, event.clientY, 190, 170);
+  assetMenu.value = {
+    path: asset.path.replace(/^assets\//, ""),
+    name: asset.path.split("/").pop() ?? asset.path,
+    dir: false,
+    ...pos,
+  };
+}
+
+function closeAssetMenu() {
+  assetMenu.value = null;
+}
+
+async function copyAssetPath(path: string) {
+  try {
+    await navigator.clipboard.writeText(projectPath(path));
+  } catch {
+    // 剪贴板不可用时忽略（浏览器权限）。
+  }
+}
+
+function runAssetMenu(action: "open" | "newdir" | "rename" | "delete" | "copy") {
+  const menu = assetMenu.value;
+  closeAssetMenu();
+  if (!menu) return;
+  if (action === "open") {
+    openSelected();
+    return;
+  }
+  if (action === "copy") {
+    void copyAssetPath(menu.path);
+    return;
+  }
+  if (action === "newdir") {
+    openNewDir();
+    return;
+  }
+  if (action === "rename") {
+    openRename();
+    return;
+  }
+  void askDelete();
+}
+
 const NODE_MIME = "application/x-prism-asset-node";
 
 /** 拖拽到字段：自定义 MIME，避免和层级树的拖拽互相干扰。 */
@@ -647,7 +706,18 @@ function notify(result: AssetMutation) {
 }
 
 onMounted(() => {
+  window.addEventListener("pointerdown", closeAssetMenu);
+  window.addEventListener("scroll", closeAssetMenu, true);
+  window.addEventListener("blur", closeAssetMenu);
+  window.addEventListener("resize", closeAssetMenu);
   void refreshAssets();
+});
+
+onUnmounted(() => {
+  window.removeEventListener("pointerdown", closeAssetMenu);
+  window.removeEventListener("scroll", closeAssetMenu, true);
+  window.removeEventListener("blur", closeAssetMenu);
+  window.removeEventListener("resize", closeAssetMenu);
 });
 </script>
 
@@ -737,6 +807,7 @@ onMounted(() => {
       @drop.stop.prevent="onDropFolder(row.node, $event)"
       @click="onRowClick(row.node)"
       @dblclick="onRowDoubleClick(row.node)"
+      @contextmenu.prevent.stop="openAssetMenu(row.node, $event)"
     >
       <span
         v-if="row.node.dir"
@@ -766,6 +837,7 @@ onMounted(() => {
       @dragstart="onDragStart(asset, $event)"
       @click="selectAssetRow(asset)"
       @dblclick="onAssetDoubleClick(asset)"
+      @contextmenu.prevent.stop="openAssetMenuFromAsset(asset, $event)"
     >
       <span class="badge">{{ asset.kind }}</span>
       <span class="path">{{ asset.path }}</span>
@@ -811,4 +883,34 @@ onMounted(() => {
     </button>
     <button class="ghost icon" style="margin-top: 4px" @click="copyPath">复制路径</button>
   </div>
+
+  <Teleport to="body">
+    <div
+      v-if="assetMenu"
+      class="entity-context-menu asset-context-menu"
+      :style="{ left: `${assetMenu.x}px`, top: `${assetMenu.y}px` }"
+      @pointerdown.stop
+      @click.stop
+      @contextmenu.prevent
+    >
+      <button
+        v-if="!assetMenu.dir && isDocumentPath(projectPath(assetMenu.path))"
+        @click="runAssetMenu('open')"
+      >
+        <span>打开文档</span>
+      </button>
+      <button v-if="assetMenu.dir" @click="runAssetMenu('newdir')">
+        <span>新建文件夹</span>
+      </button>
+      <button v-if="assetMenu.path" :disabled="opBusy" @click="runAssetMenu('rename')">
+        <span>重命名 / 移动</span>
+      </button>
+      <button @click="runAssetMenu('copy')">
+        <span>复制路径</span>
+      </button>
+      <button v-if="assetMenu.path" class="danger" :disabled="opBusy" @click="runAssetMenu('delete')">
+        <span>删除</span>
+      </button>
+    </div>
+  </Teleport>
 </template>

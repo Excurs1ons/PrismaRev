@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref } from "vue";
 import { ChevronDown, ChevronRight, Eye, EyeOff } from "lucide-vue-next";
+import { clampMenuPosition } from "../contextMenu";
 import type { EntityJson } from "../types";
 
 /**
@@ -55,7 +56,8 @@ const contextTarget = ref<{ index: number; x: number; y: number } | null>(null);
 
 function openContextMenu(index: number, event: MouseEvent) {
   if (!props.selected.includes(index)) emit("select", [index]);
-  contextTarget.value = { index, x: event.clientX, y: event.clientY };
+  const pos = clampMenuPosition(event.clientX, event.clientY, 190, 82);
+  contextTarget.value = { index, ...pos };
 }
 
 function closeContextMenu() {

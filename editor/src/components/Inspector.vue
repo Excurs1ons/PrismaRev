@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { X } from "lucide-vue-next";
+import { clampMenuPosition } from "../contextMenu";
 import FieldEditor from "./FieldEditor.vue";
 import * as api from "../api";
 import type { ComponentClipboard, EntityJson, FieldSchema, JsonValue, Schema } from "../types";
@@ -44,7 +45,8 @@ const filter = ref("");
 const componentMenu = ref<{ name: string; x: number; y: number } | null>(null);
 
 function openComponentMenu(name: string, event: MouseEvent) {
-  componentMenu.value = { name, x: event.clientX, y: event.clientY };
+  const pos = clampMenuPosition(event.clientX, event.clientY, 190, 82);
+  componentMenu.value = { name, ...pos };
 }
 
 function closeComponentMenu() {
