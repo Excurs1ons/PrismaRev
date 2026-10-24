@@ -330,6 +330,63 @@ select:disabled {
   flex: 0 0 auto;
 }
 
+/* 层级树拖拽 */
+.tree-row {
+  position: relative;
+}
+.tree-row.dragging {
+  opacity: 0.45;
+}
+.tree-row.drop-before::before,
+.tree-row.drop-after::after {
+  content: "";
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  height: 2px;
+  background: var(--accent-2);
+  border-radius: 2px;
+}
+.tree-row.drop-before::before {
+  top: -1px;
+}
+.tree-row.drop-after::after {
+  bottom: -1px;
+}
+.tree-row.drop-inside .list-item {
+  outline: 1px dashed var(--accent-2);
+  outline-offset: -1px;
+}
+.root-drop {
+  margin: 6px 8px 8px;
+  padding: 6px;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 11px;
+}
+.root-drop.active {
+  border-color: var(--accent-2);
+  color: var(--accent-2);
+}
+.list-item .label {
+  cursor: text;
+}
+.rename-input {
+  flex: 1 1 auto;
+  padding: 1px 4px;
+  font-size: 12px;
+}
+
+/* 组件剪贴板 */
+.clipboard .card-body {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-left: 2px solid var(--accent-2);
+}
+
 .logbar {
   flex: 0 0 auto;
   max-height: 30%;

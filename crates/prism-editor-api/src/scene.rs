@@ -487,6 +487,176 @@ fn entities_of(doc: &serde_json::Value) -> Result<&Vec<serde_json::Value>, Strin
         .ok_or_else(|| "文档缺少 entities 数组".to_string())
 }
 
+fn parent_of(entity: &serde_json::Value) -> Option<usize> {
+    entity
+        .get("parent")
+        .and_then(|value| value.as_u64())
+        .map(|parent| parent as usize)
+}
+
+/// 用新的实体数组重建文档（保留 `version`）。
+fn doc_with_entities(doc: &serde_json::Value, entities: Vec<serde_json::Value>) -> serde_json::Value {
+    let version = doc.get("version").cloned().unwrap_or(serde_json::json!(1));
+    serde_json::json!({ "version": version, "entities": entities })
+}
+
+/// `node` 是否位于 `ancestor` 的子树中（沿 parent 上溯）。
+fn is_descendant(entities: &[serde_json::Value], node: usize, ancestor: usize) -> bool {
+    let mut current = Some(node);
+    let mut guard = 0;
+    while let Some(index) = current {
+        if index == ancestor {
+            return true;
+        }
+        guard += 1;
+        if guard > entities.len() {
+            return false; // 数据里存在环，保守放弃
+        }
+        current = parent_of(&entities[index]);
+    }
+    false
+}
+
+/// 层级操作结果：新文档 + 实体在数组中的新下标。
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MoveResult {
+    pub doc: serde_json::Value,
+    pub index: usize,
+}
+
+/// 改父级（不移动数组位置）。`parent = None` 表示变成根实体。
+///
+/// 拒绝自父与「挂到自己的后代下」（会成环）。
+pub fn reparent_doc(
+    doc: &serde_json::Value,
+    child: usize,
+    parent: Option<usize>,
+) -> Result<serde_json::Value, String> {
+    let result = move_entity(doc, child, child, parent)?;
+    Ok(result.doc)
+}
+
+/// 把 `child` 移到数组的 `insert_at` 位置（旧下标空间，`len` = 末尾），
+/// 同时把它的父级设为 `parent`（旧下标空间）。
+///
+/// 其余实体的父索引会随数组重排一起重映射，因此返回值是整份新文档。
+pub fn move_entity(
+    doc: &serde_json::Value,
+    child: usize,
+    insert_at: usize,
+    parent: Option<usize>,
+) -> Result<MoveResult, String> {
+    validate_doc(doc)?;
+    let entities = entities_of(doc)?;
+    let count = entities.len();
+
+    if child >= count {
+        return Err(format!("实体下标 {child} 越界"));
+    }
+    if insert_at > count {
+        return Err(format!("插入位置 {insert_at} 越界"));
+    }
+    if let Some(parent) = parent {
+        if parent >= count {
+            return Err(format!("父实体下标 {parent} 越界"));
+        }
+        if parent == child {
+            return Err("不能以自己为父".into());
+        }
+        if is_descendant(entities, parent, child) {
+            return Err("不能挂到自己的后代下（会成环）".into());
+        }
+    }
+
+    // 先摘出 child，再插到目标位置。
+    let mut order: Vec<usize> = (0..count).collect();
+    order.remove(child);
+    let target = if insert_at > child { insert_at - 1 } else { insert_at };
+    order.insert(target.min(order.len()), child);
+
+    // 旧下标 → 新下标。
+    let mut remap = vec![usize::MAX; count];
+    for (new_index, old_index) in order.iter().enumerate() {
+        remap[*old_index] = new_index;
+    }
+
+    let mut out = Vec::with_capacity(count);
+    for old_index in &order {
+        let mut entity = entities[*old_index].clone();
+        let new_parent = if *old_index == child {
+            parent.map(|parent| remap[parent])
+        } else {
+            parent_of(&entity).map(|parent| remap[parent])
+        };
+        entity["parent"] = match new_parent {
+            Some(parent) => serde_json::json!(parent),
+            None => serde_json::json!(null),
+        };
+        out.push(entity);
+    }
+
+    Ok(MoveResult {
+        doc: doc_with_entities(doc, out),
+        index: remap[child],
+    })
+}
+
+/// 批量删除实体，并把被删掉的父级改为根、其余父索引重映射。
+///
+/// 至少要留下一个实体（与校验一致）。
+pub fn delete_entities(
+    doc: &serde_json::Value,
+    indices: &[usize],
+) -> Result<serde_json::Value, String> {
+    validate_doc(doc)?;
+    let entities = entities_of(doc)?;
+    let count = entities.len();
+
+    let mut removed = vec![false; count];
+    for index in indices {
+        if *index >= count {
+            return Err(format!("实体下标 {index} 越界"));
+        }
+        removed[*index] = true;
+    }
+    let remaining = removed.iter().filter(|flag| !**flag).count();
+    if remaining == 0 {
+        return Err("至少要保留一个实体".into());
+    }
+
+    let mut remap = vec![usize::MAX; count];
+    let mut next = 0;
+    for (old_index, is_removed) in removed.iter().enumerate() {
+        if !is_removed {
+            remap[old_index] = next;
+            next += 1;
+        }
+    }
+
+    let mut out = Vec::with_capacity(remaining);
+    for (old_index, entity) in entities.iter().enumerate() {
+        if removed[old_index] {
+            continue;
+        }
+        let mut entity = entity.clone();
+        let new_parent = parent_of(&entity).and_then(|parent| {
+            if removed[parent] {
+                None
+            } else {
+                Some(remap[parent])
+            }
+        });
+        entity["parent"] = match new_parent {
+            Some(parent) => serde_json::json!(parent),
+            None => serde_json::json!(null),
+        };
+        out.push(entity);
+    }
+
+    Ok(doc_with_entities(doc, out))
+}
+
 /// 从场景中提取「根实体 + 全部后代」为一个预制体文档。
 ///
 /// 提取出的根实体父级置为 `null`（实例化时再决定挂到哪里），
@@ -793,6 +963,96 @@ mod tests {
 
         // 越界父实体被拒绝。
         assert!(instantiate_prefab(&scene, &prefab, Some(9)).is_err());
+    }
+
+    /// a(0) → b(1) → c(2)，另有根 d(3)。
+    fn hierarchy_doc() -> serde_json::Value {
+        serde_json::json!({
+            "version": 1,
+            "entities": [
+                { "name": "a", "parent": null, "transform": {}, "components": {} },
+                { "name": "b", "parent": 0, "transform": {}, "components": {} },
+                { "name": "c", "parent": 1, "transform": {}, "components": {} },
+                { "name": "d", "parent": null, "transform": {}, "components": {} }
+            ]
+        })
+    }
+
+    #[test]
+    fn reparent_moves_a_subtree_and_rejects_cycles() {
+        let doc = hierarchy_doc();
+
+        // 把 c 挂到 d 下（并保持 c 的子树）。
+        let out = reparent_doc(&doc, 2, Some(3)).unwrap();
+        let entities = out["entities"].as_array().unwrap();
+        assert_eq!(entities[2]["name"], "c");
+        assert_eq!(entities[2]["parent"], 3);
+
+        // 变成根。
+        let out = reparent_doc(&doc, 1, None).unwrap();
+        assert_eq!(out["entities"][1]["parent"], serde_json::Value::Null);
+        // b 的子树保持不变（c 仍指向 b）。
+        assert_eq!(out["entities"][2]["parent"], 1);
+
+        // 拒绝：自父 / 挂到后代 / 越界。
+        assert!(reparent_doc(&doc, 1, Some(1)).is_err());
+        assert!(reparent_doc(&doc, 0, Some(2)).is_err()); // c 是 a 的后代
+        assert!(reparent_doc(&doc, 9, Some(0)).is_err());
+    }
+
+    #[test]
+    fn move_entity_reorders_and_remaps_parents() {
+        let doc = hierarchy_doc();
+        validate_doc(&doc).unwrap();
+
+        // 把 a(0) 移到末尾：顺序 b,c,d,a，父索引整体前移。
+        let result = move_entity(&doc, 0, 4, None).unwrap();
+        validate_doc(&result.doc).unwrap();
+        assert_eq!(result.index, 3);
+
+        let entities = result.doc["entities"].as_array().unwrap();
+        assert_eq!(entities[0]["name"], "b");
+        assert_eq!(entities[0]["parent"], 3); // 仍指向 a（a 移到了下标 3）
+        assert_eq!(entities[1]["name"], "c");
+        assert_eq!(entities[1]["parent"], 0); // 仍指向 b（已重映射）
+        assert_eq!(entities[3]["name"], "a");
+        assert_eq!(entities[3]["parent"], serde_json::Value::Null);
+
+        // 插到 b 之前，并挂到 d 下。
+        let result = move_entity(&doc, 2, 1, Some(3)).unwrap();
+        validate_doc(&result.doc).unwrap();
+        let entities = result.doc["entities"].as_array().unwrap();
+        assert_eq!(entities[1]["name"], "c");
+        assert_eq!(result.index, 1);
+        // 顺序变为 a,c,b,d：d 的原下标 3 → 新下标 3。
+        assert_eq!(entities[1]["parent"], 3);
+
+        assert!(move_entity(&doc, 0, 0, Some(2)).is_err()); // 成环
+    }
+
+    #[test]
+    fn delete_entities_remaps_or_roots_orphans() {
+        let doc = hierarchy_doc();
+
+        // 删掉 b：c 变根。
+        let out = delete_entities(&doc, &[1]).unwrap();
+        validate_doc(&out).unwrap();
+        let entities = out["entities"].as_array().unwrap();
+        assert_eq!(entities.len(), 3);
+        assert_eq!(entities[1]["name"], "c");
+        assert_eq!(entities[1]["parent"], serde_json::Value::Null);
+
+        // 同时删 a 和 d：b 的父 a 被删 → 变根。
+        let out = delete_entities(&doc, &[0, 3]).unwrap();
+        validate_doc(&out).unwrap();
+        let entities = out["entities"].as_array().unwrap();
+        assert_eq!(entities.len(), 2);
+        assert_eq!(entities[0]["name"], "b");
+        assert_eq!(entities[0]["parent"], serde_json::Value::Null);
+        assert_eq!(entities[1]["parent"], 0); // c 仍指向 b（重映射后为 0）
+
+        assert!(delete_entities(&doc, &[0, 1, 2, 3]).is_err());
+        assert!(delete_entities(&doc, &[9]).is_err());
     }
 
     #[test]

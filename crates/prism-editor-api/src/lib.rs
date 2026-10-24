@@ -30,9 +30,10 @@ pub use presets::{entity_presets, EntityPreset};
 pub use reflect_edit::{normalize_component, set_component_field};
 pub use scene::{
     // 通用（场景 / 预制体）
-    delete_doc, doc_path, docs_dir, extract_subtree, find_project_root, instantiate_prefab,
-    list_docs, prefab_template_doc, read_doc, rename_doc, template_doc, templates_for,
-    validate_doc, write_doc, write_doc_as, DocKind, InstantiateResult, SceneEntry, SceneTemplate,
+    delete_doc, delete_entities, doc_path, docs_dir, extract_subtree, find_project_root,
+    instantiate_prefab, list_docs, move_entity, prefab_template_doc, read_doc, rename_doc,
+    reparent_doc, template_doc, templates_for, validate_doc, write_doc, write_doc_as, DocKind,
+    InstantiateResult, MoveResult, SceneEntry, SceneTemplate,
     // 场景别名（旧调用）
     delete_scene, empty_scene_doc, list_scenes, read_scene_doc, rename_scene, scene_path,
     scenes_dir, template_scene_doc, templates, validate_scene_doc, write_scene_as, write_scene_doc,

@@ -2,9 +2,11 @@ import type {
   AssetInfo,
   AssetRef,
   DocKind,
+  EntityJson,
   EntityPreset,
   InstantiateResult,
   JsonValue,
+  MoveResult,
   SceneDoc,
   SceneEntry,
   SceneTemplate,
@@ -191,6 +193,96 @@ function instantiatePrefab(
   return { doc: { version: scene.version ?? 1, entities }, inserted };
 }
 
+function isDescendant(entities: EntityJson[], node: number, ancestor: number): boolean {
+  let current: number | null = node;
+  let guard = 0;
+  while (current !== null) {
+    if (current === ancestor) return true;
+    guard += 1;
+    if (guard > entities.length) return false;
+    const parent: number | null | undefined = entities[current]?.parent;
+    current = parent === null || parent === undefined ? null : parent;
+  }
+  return false;
+}
+
+/** 与 Rust 的 move_entity 同语义：移动数组位置 + 设置父级 + 全量重映射。 */
+function moveEntityInDoc(
+  doc: SceneDoc,
+  child: number,
+  at: number,
+  parent: number | null,
+): MoveResult {
+  validate(doc);
+  const count = doc.entities.length;
+  if (child < 0 || child >= count) throw new Error(`实体下标 ${child} 越界`);
+  if (at < 0 || at > count) throw new Error(`插入位置 ${at} 越界`);
+  if (parent !== null) {
+    if (parent < 0 || parent >= count) throw new Error(`父实体下标 ${parent} 越界`);
+    if (parent === child) throw new Error("不能以自己为父");
+    if (isDescendant(doc.entities, parent, child)) {
+      throw new Error("不能挂到自己的后代下（会成环）");
+    }
+  }
+
+  const order = doc.entities.map((_, index) => index);
+  order.splice(child, 1);
+  order.splice(Math.min(at > child ? at - 1 : at, order.length), 0, child);
+
+  const remap = new Array<number>(count).fill(-1);
+  order.forEach((oldIndex, newIndex) => {
+    remap[oldIndex] = newIndex;
+  });
+
+  const entities = order.map((oldIndex) => {
+    const entity = clone(doc.entities[oldIndex]);
+    const oldParent = entity.parent;
+    entity.parent =
+      oldIndex === child
+        ? parent === null
+          ? null
+          : remap[parent]
+        : oldParent === null || oldParent === undefined
+          ? null
+          : remap[oldParent];
+    return entity;
+  });
+
+  return { doc: { version: doc.version ?? 1, entities }, index: remap[child] };
+}
+
+/** 与 Rust 的 delete_entities 同语义。 */
+function deleteEntitiesInDoc(doc: SceneDoc, indices: number[]): SceneDoc {
+  validate(doc);
+  const count = doc.entities.length;
+  const removed = new Array<boolean>(count).fill(false);
+  for (const index of indices) {
+    if (index < 0 || index >= count) throw new Error(`实体下标 ${index} 越界`);
+    removed[index] = true;
+  }
+  if (removed.every(Boolean)) throw new Error("至少要保留一个实体");
+
+  const remap = new Array<number>(count).fill(-1);
+  let next = 0;
+  removed.forEach((isRemoved, oldIndex) => {
+    if (!isRemoved) remap[oldIndex] = next++;
+  });
+
+  const entities: EntityJson[] = [];
+  doc.entities.forEach((entity, oldIndex) => {
+    if (removed[oldIndex]) return;
+    const copy = clone(entity);
+    const oldParent = copy.parent;
+    copy.parent =
+      oldParent === null || oldParent === undefined || removed[oldParent]
+        ? null
+        : remap[oldParent];
+    entities.push(copy);
+  });
+
+  return { version: doc.version ?? 1, entities };
+}
+
 function documentPath(kind: DocKind, name: string): string {
   const dir = kind === "scene" ? "scenes" : "prefabs";
   const suffix = kind === "scene" ? "scene.json" : "prefab.json";
@@ -273,6 +365,23 @@ async function handle(cmd: string, args: Record<string, unknown>): Promise<unkno
       });
       return null;
     }
+
+    // ── 层级操作 ────────────────────────────────────────────────────────
+    case "editor_reparent_entity": {
+      const doc = args.doc as SceneDoc;
+      const child = Number(args.child);
+      const parent = args.parent === null || args.parent === undefined ? null : Number(args.parent);
+      return moveEntityInDoc(doc, child, child, parent).doc;
+    }
+    case "editor_move_entity": {
+      const doc = args.doc as SceneDoc;
+      const child = Number(args.child);
+      const at = Number(args.at);
+      const parent = args.parent === null || args.parent === undefined ? null : Number(args.parent);
+      return moveEntityInDoc(doc, child, at, parent);
+    }
+    case "editor_delete_entities":
+      return deleteEntitiesInDoc(args.doc as SceneDoc, (args.indices as number[]) ?? []);
 
     // ── 预制体 ──────────────────────────────────────────────────────────
     case "editor_create_prefab_from_entity": {

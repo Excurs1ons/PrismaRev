@@ -2,32 +2,39 @@
 import { computed, ref } from "vue";
 import FieldEditor from "./FieldEditor.vue";
 import * as api from "../api";
-import type { EntityJson, FieldSchema, JsonValue, Schema } from "../types";
+import type { ComponentClipboard, EntityJson, FieldSchema, JsonValue, Schema } from "../types";
 
 /**
  * 单实体检查器：name / parent / transform + 任意组件（schema 驱动）。
  *
- * 组件字段的改动**先本地提交**（拖动/输入要即时），再交给 Rust 侧
- * `set_component_field` 走反射写入：只读字段会被拒绝、值经反射类型校验，
- * 返回规范化后的组件 JSON 回填（`reflect` 事件）。
+ * - 组件字段的改动**先本地提交**（拖动/输入要即时），再交给 Rust 侧
+ *   `set_component_field` 走反射写入：只读被拒绝、类型经反射校验，
+ *   返回规范化后的组件 JSON 回填（`reflect` 事件）。
+ * - 顶部检索框按「组件名 / 字段名 / 值」过滤组件卡片。
  */
 const props = defineProps<{
   entity: EntityJson;
   index: number;
   entities: EntityJson[];
   schema: Schema;
+  selectionCount: number;
+  clipboard: ComponentClipboard | null;
 }>();
 
 const emit = defineEmits<{
   (e: "update", entity: EntityJson, editKey: string): void;
-  (e: "remove", index: number): void;
+  (e: "remove"): void;
   (e: "duplicate", index: number): void;
   (e: "save-prefab", index: number): void;
+  (e: "copy-component", name: string): void;
+  (e: "paste-component"): void;
+  (e: "clear-clipboard"): void;
   (e: "reflect", component: string, canonical: JsonValue): void;
   (e: "rejected", message: string): void;
 }>();
 
 const addName = ref("");
+const filter = ref("");
 
 /** 每个组件一条请求序号，只应用最新一次反射写入的结果。 */
 const reflectSeq = new Map<string, number>();
@@ -80,12 +87,7 @@ function setComponent(name: string, value: JsonValue, path: string) {
 }
 
 /** 反射写入：成功后回填规范化值；失败则报告（通常是只读或类型不合法）。 */
-async function reflectComponent(
-  name: string,
-  before: JsonValue,
-  path: string,
-  after: JsonValue,
-) {
+async function reflectComponent(name: string, before: JsonValue, path: string, after: JsonValue) {
   const seq = (reflectSeq.get(name) ?? 0) + 1;
   reflectSeq.set(name, seq);
   try {
@@ -135,6 +137,36 @@ function vecField(name: string, length: number): FieldSchema {
 
 const componentNames = computed(() => Object.keys(props.entity.components));
 
+/** 检索命中：组件名 / 字段名 / 值任一包含关键词。 */
+function matchedFields(name: string): string[] {
+  const query = filter.value.trim().toLowerCase();
+  if (!query) return [];
+  const type = props.schema.types.find((t) => t.name === name);
+  return (type?.fields ?? [])
+    .map((field) => field.name)
+    .filter((field) => field.toLowerCase().includes(query));
+}
+
+function matchesFilter(name: string): boolean {
+  const query = filter.value.trim().toLowerCase();
+  if (!query) return true;
+  if (name.toLowerCase().includes(query) || shortName(name).toLowerCase().includes(query)) {
+    return true;
+  }
+  if (matchedFields(name).length) return true;
+  const value = JSON.stringify(componentValue(name) ?? "").toLowerCase();
+  return value.includes(query);
+}
+
+const visibleComponents = computed(() => componentNames.value.filter(matchesFilter));
+
+const transformMatches = computed(() => {
+  const query = filter.value.trim().toLowerCase();
+  if (!query) return true;
+  return JSON.stringify(props.entity.transform).toLowerCase().includes(query)
+    || "transform translation rotation scale".includes(query);
+});
+
 const availableComponents = computed(() =>
   props.schema.types
     .filter((t) => t.isComponent && !(t.name in props.entity.components))
@@ -146,6 +178,7 @@ const availableComponents = computed(() =>
   <div class="card">
     <header>
       <span class="title">实体 #{{ index }}</span>
+      <span v-if="selectionCount > 1" class="hint">（已选 {{ selectionCount }}）</span>
       <span class="spacer" />
       <button
         class="ghost icon"
@@ -160,13 +193,20 @@ const availableComponents = computed(() =>
       <button
         class="ghost icon"
         :disabled="entities.length <= 1"
-        title="删除实体（至少保留一个，Delete）"
-        @click="emit('remove', index)"
+        title="删除选中实体（Delete）"
+        @click="emit('remove')"
       >
         删除
       </button>
     </header>
     <div class="card-body">
+      <div class="row">
+        <div class="label">检索</div>
+        <div class="scalar">
+          <input v-model="filter" type="text" placeholder="组件名 / 字段名 / 值…" />
+          <button v-if="filter" class="ghost icon" title="清除" @click="filter = ''">✕</button>
+        </div>
+      </div>
       <div class="row">
         <div class="label">name</div>
         <div>
@@ -185,8 +225,26 @@ const availableComponents = computed(() =>
         </div>
       </div>
     </div>
-    <div class="card-body" style="border-top: 1px solid var(--border)">
-      <div class="hint" style="margin-bottom: 4px">transform（局部 · T×R×S）</div>
+  </div>
+
+  <div v-if="clipboard" class="card clipboard">
+    <div class="card-body">
+      <span class="hint">剪贴板：{{ shortName(clipboard.component) }}</span>
+      <span class="spacer" />
+      <button class="primary" title="Ctrl+V" @click="emit('paste-component')">
+        粘贴到选中（{{ selectionCount }}）
+      </button>
+      <button class="ghost icon" @click="emit('clear-clipboard')">✕</button>
+    </div>
+  </div>
+
+  <div v-if="transformMatches" class="card">
+    <header>
+      <span class="title">transform</span>
+      <span class="hint">局部 · T×R×S</span>
+      <span class="spacer" />
+    </header>
+    <div class="card-body">
       <FieldEditor
         label="translation"
         path="transform.translation"
@@ -214,14 +272,20 @@ const availableComponents = computed(() =>
     </div>
   </div>
 
-  <div v-for="name in componentNames" :key="name" class="card">
+  <div v-for="name in visibleComponents" :key="name" class="card">
     <header>
       <span class="title">{{ shortName(name) }}</span>
       <span class="hint">{{ name }}</span>
       <span class="spacer" />
+      <button class="ghost icon" title="复制该组件" @click="emit('copy-component', name)">
+        复制
+      </button>
       <button class="ghost icon" title="移除组件" @click="removeComponent(name)">移除</button>
     </header>
     <div class="card-body">
+      <div v-if="filter && matchedFields(name).length" class="hint" style="margin-bottom: 4px">
+        匹配字段：{{ matchedFields(name).join("、") }}
+      </div>
       <FieldEditor
         path=""
         :value="componentValue(name)"
@@ -230,6 +294,10 @@ const availableComponents = computed(() =>
         @update="(v, p) => setComponent(name, v, p)"
       />
     </div>
+  </div>
+
+  <div v-if="filter && !visibleComponents.length" class="hint" style="padding: 8px">
+    没有匹配「{{ filter }}」的组件
   </div>
 
   <div class="card">

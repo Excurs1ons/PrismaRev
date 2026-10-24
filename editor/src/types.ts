@@ -45,6 +45,18 @@ export interface InstantiateResult {
   inserted: number[];
 }
 
+/** 层级移动结果（新文档 + 实体新下标）。 */
+export interface MoveResult {
+  doc: SceneDoc;
+  index: number;
+}
+
+/** 组件剪贴板。 */
+export interface ComponentClipboard {
+  component: string;
+  value: JsonValue;
+}
+
 /** 资产元信息（资产管理器用）。 */
 export interface AssetInfo {
   path: string;

@@ -5,6 +5,7 @@ import type {
   EntityPreset,
   InstantiateResult,
   JsonValue,
+  MoveResult,
   SceneDoc,
   SceneEntry,
   SceneTemplate,
@@ -108,6 +109,32 @@ export function deleteDocument(path: string): Promise<void> {
 /** 校验文档（不落盘），失败时抛出错误描述。 */
 export function validateDocument(doc: SceneDoc): Promise<void> {
   return call<void>("editor_validate_document", { doc });
+}
+
+// ── 层级操作 ───────────────────────────────────────────────────────────────
+
+/** 改父级（`parent = null` 表示变根）；拒绝自父与成环。 */
+export function reparentEntity(
+  doc: SceneDoc,
+  child: number,
+  parent: number | null,
+): Promise<SceneDoc> {
+  return call<SceneDoc>("editor_reparent_entity", { doc, child, parent });
+}
+
+/** 移动到数组的 `at` 位置并设置父级。 */
+export function moveEntity(
+  doc: SceneDoc,
+  child: number,
+  at: number,
+  parent: number | null,
+): Promise<MoveResult> {
+  return call<MoveResult>("editor_move_entity", { doc, child, at, parent });
+}
+
+/** 批量删除实体。 */
+export function deleteEntities(doc: SceneDoc, indices: number[]): Promise<SceneDoc> {
+  return call<SceneDoc>("editor_delete_entities", { doc, indices });
 }
 
 // ── 预制体 ─────────────────────────────────────────────────────────────────

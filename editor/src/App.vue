@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, provide, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, provide, ref, shallowRef, watch } from "vue";
 import AssetBrowser from "./components/AssetBrowser.vue";
 import AssetPicker from "./components/AssetPicker.vue";
 import HierarchyTree from "./components/HierarchyTree.vue";
@@ -8,6 +8,7 @@ import * as api from "./api";
 import { ASSETS_KEY, ASSET_PICKER_KEY } from "./keys";
 import type {
   AssetInfo,
+  ComponentClipboard,
   DocKind,
   EntityJson,
   EntityPreset,
@@ -43,7 +44,14 @@ const doc = ref<SceneDoc | null>(null);
 /** 上次保存/加载时的序列化快照，用于精确判断「是否有未保存改动」。 */
 const baseline = ref<string>("");
 
-const selected = ref<number | null>(null);
+/** 选中的实体（最后一个为「主选中」，检查器显示它）。 */
+const selection = ref<number[]>([]);
+/**
+ * 组件剪贴板。用 `shallowRef`：整体替换、不需要深响应，
+ * 也避免 Vue 对递归的 `JsonValue` 类型做深度 `UnwrapRef` 推断。
+ */
+const clipboard = shallowRef<ComponentClipboard | null>(null);
+
 const status = ref("");
 const error = ref("");
 const validationError = ref("");
@@ -54,6 +62,10 @@ const past = ref<SceneDoc[]>([]);
 const future = ref<SceneDoc[]>([]);
 let lastKey = "";
 let lastTime = 0;
+
+const primary = computed(() =>
+  selection.value.length ? selection.value[selection.value.length - 1] : null,
+);
 
 const dirty = computed(
   () => doc.value !== null && JSON.stringify(doc.value) !== baseline.value,
@@ -67,8 +79,8 @@ const canSave = computed(() => hasDoc.value && validationError.value === "");
 const isScene = computed(() => documentKind.value === "scene");
 
 const selectedEntity = computed<EntityJson | null>(() => {
-  if (!doc.value || selected.value === null) return null;
-  return doc.value.entities[selected.value] ?? null;
+  if (!doc.value || primary.value === null) return null;
+  return doc.value.entities[primary.value] ?? null;
 });
 
 function fail(e: unknown) {
@@ -130,14 +142,15 @@ watch(newKind, async () => {
 // 文档 / 历史
 // ---------------------------------------------------------------------------
 
+/** 选择状态跟随实体数量收敛（删除/撤销后下标可能失效）。 */
 function clampSelection() {
   if (!doc.value) {
-    selected.value = null;
+    selection.value = [];
     return;
   }
-  if (selected.value !== null && selected.value >= doc.value.entities.length) {
-    selected.value = doc.value.entities.length ? 0 : null;
-  }
+  const count = doc.value.entities.length;
+  const kept = selection.value.filter((index) => index < count);
+  selection.value = kept.length ? kept : count ? [0] : [];
 }
 
 function resetHistory(loaded: SceneDoc, path: string | null, kind: DocKind) {
@@ -149,7 +162,7 @@ function resetHistory(loaded: SceneDoc, path: string | null, kind: DocKind) {
   baseline.value = JSON.stringify(loaded);
   lastKey = "";
   lastTime = 0;
-  selected.value = loaded.entities.length ? 0 : null;
+  selection.value = loaded.entities.length ? [0] : [];
   void runValidation();
 }
 
@@ -323,7 +336,7 @@ async function deleteCurrent() {
     validationError.value = "";
     past.value = [];
     future.value = [];
-    selected.value = null;
+    selection.value = [];
     error.value = "";
     status.value = "已删除";
     await refreshDocuments();
@@ -368,9 +381,9 @@ async function insertPrefab(entry: SceneEntry) {
   }
   busy.value = true;
   try {
-    const result = await api.instantiatePrefab(doc.value, entry.path, selected.value);
+    const result = await api.instantiatePrefab(doc.value, entry.path, primary.value);
     commit(result.doc, `insert-prefab:${entry.path}#${Date.now()}`);
-    if (result.inserted.length) selected.value = result.inserted[0];
+    if (result.inserted.length) selection.value = [result.inserted[0]];
     error.value = "";
     status.value = `已实例化 ${entry.name}（${result.inserted.length} 个实体）`;
   } catch (e) {
@@ -396,8 +409,46 @@ async function savePrefabFromEntity(index: number) {
 }
 
 // ---------------------------------------------------------------------------
-// 实体编辑
+// 层级 / 选择
 // ---------------------------------------------------------------------------
+
+function onSelect(indices: number[]) {
+  selection.value = indices.length ? indices : [];
+}
+
+async function onReparent(child: number, parent: number | null) {
+  if (!doc.value) return;
+  try {
+    const next = await api.reparentEntity(doc.value, child, parent);
+    commit(next, `reparent:${child}->${parent ?? "root"}#${Date.now()}`);
+    error.value = "";
+    status.value = parent === null ? "已变为根实体" : `已挂到实体 #${parent}`;
+  } catch (e) {
+    fail(e);
+  }
+}
+
+async function onMove(child: number, at: number, parent: number | null) {
+  if (!doc.value) return;
+  try {
+    const result = await api.moveEntity(doc.value, child, at, parent);
+    commit(result.doc, `move:${child}@${at}#${Date.now()}`);
+    selection.value = [result.index];
+    error.value = "";
+    status.value = "已重新排序";
+  } catch (e) {
+    fail(e);
+  }
+}
+
+function onRenameEntity(index: number, name: string) {
+  if (!doc.value) return;
+  const entities = doc.value.entities.slice();
+  const entity = entities[index];
+  if (!entity) return;
+  entities[index] = { ...entity, name };
+  commit({ ...doc.value, entities }, `rename-entity:${index}#${Date.now()}`);
+}
 
 function uniqueName(base: string): string {
   if (!doc.value) return base;
@@ -409,25 +460,57 @@ function uniqueName(base: string): string {
 }
 
 function onEntityUpdate(entity: EntityJson, editKey: string) {
-  if (!doc.value || selected.value === null) return;
+  if (!doc.value || primary.value === null) return;
   const entities = doc.value.entities.slice();
-  entities[selected.value] = entity;
+  entities[primary.value] = entity;
   commit({ ...doc.value, entities }, editKey);
 }
 
 /** 反射写入成功后的规范化回填（不新增撤销步）。 */
 function onComponentReflect(name: string, canonical: JsonValue) {
-  if (!doc.value || selected.value === null) return;
-  const entity = doc.value.entities[selected.value];
+  if (!doc.value || primary.value === null) return;
+  const entity = doc.value.entities[primary.value];
   if (!entity) return;
   if (JSON.stringify(entity.components[name]) === JSON.stringify(canonical)) return;
   const entities = doc.value.entities.slice();
-  entities[selected.value] = {
+  entities[primary.value] = {
     ...entity,
     components: { ...entity.components, [name]: canonical },
   };
   silentUpdate({ ...doc.value, entities });
 }
+
+// ── 组件复制 / 粘贴 ─────────────────────────────────────────────────────────
+
+function copyComponent(name: string) {
+  if (!doc.value || primary.value === null) return;
+  const entity = doc.value.entities[primary.value];
+  const value = entity?.components[name];
+  if (value === undefined) return;
+  const cloned = JSON.parse(JSON.stringify(value)) as JsonValue;
+  clipboard.value = { component: name, value: cloned };
+  status.value = `已复制组件 ${name.split("::").pop()}`;
+}
+
+function pasteComponent() {
+  const buffer = clipboard.value;
+  if (!buffer || !doc.value || !selection.value.length) return;
+  const target = new Set(selection.value);
+  // 先克隆一次，避免在 map 回调里做递归类型推断（TS 会报过深实例化）。
+  const pasted = JSON.parse(JSON.stringify(buffer.value)) as JsonValue;
+  const entities: EntityJson[] = doc.value.entities.map((entity, index) => {
+    if (!target.has(index)) return entity;
+    return { ...entity, components: { ...entity.components, [buffer.component]: pasted } };
+  });
+  commit({ ...doc.value, entities }, `paste-component:${buffer.component}#${Date.now()}`);
+  status.value = `已粘贴 ${buffer.component.split("::").pop()} 到 ${target.size} 个实体`;
+}
+
+function clearClipboard() {
+  clipboard.value = null;
+}
+
+// ── 增删 ────────────────────────────────────────────────────────────────────
 
 function addEntity() {
   if (!doc.value) return;
@@ -449,15 +532,15 @@ function addEntity() {
     components,
   });
   commit({ ...doc.value, entities }, `add-entity#${entities.length}`);
-  selected.value = entities.length - 1;
+  selection.value = [entities.length - 1];
 }
 
 function duplicateEntity() {
-  if (!doc.value || selected.value === null) return;
-  const source = doc.value.entities[selected.value];
+  if (!doc.value || primary.value === null) return;
+  const sourceIndex = primary.value;
+  const source = doc.value.entities[sourceIndex];
   if (!source) return;
 
-  const sourceIndex = selected.value;
   const copy = JSON.parse(JSON.stringify(source)) as EntityJson;
   copy.name = uniqueName(`${source.name ?? "entity"}_copy`);
 
@@ -474,21 +557,26 @@ function duplicateEntity() {
   });
 
   commit({ ...doc.value, entities: remapped }, `duplicate-entity#${insertAt}`);
-  selected.value = insertAt;
+  selection.value = [insertAt];
 }
 
-function deleteEntity(index: number) {
-  if (!doc.value || doc.value.entities.length <= 1) return;
-  const entities = doc.value.entities
-    .filter((_, i) => i !== index)
-    .map((entity) => {
-      const parent = entity.parent;
-      if (parent === null || parent === undefined) return entity;
-      if (parent === index) return { ...entity, parent: null };
-      return { ...entity, parent: parent > index ? parent - 1 : parent };
-    });
-  commit({ ...doc.value, entities }, `delete-entity#${index}`);
-  selected.value = null;
+async function deleteSelection() {
+  if (!doc.value || !selection.value.length) return;
+  const indices = selection.value.slice().sort((a, b) => a - b);
+  if (indices.length >= doc.value.entities.length) {
+    fail("至少要保留一个实体");
+    return;
+  }
+  try {
+    const next = await api.deleteEntities(doc.value, indices);
+    commit(next, `delete-entities#${Date.now()}`);
+    selection.value = [];
+    clampSelection();
+    error.value = "";
+    status.value = `已删除 ${indices.length} 个实体`;
+  } catch (e) {
+    fail(e);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -506,23 +594,31 @@ function isTextInput(target: EventTarget | null): boolean {
 
 function onKey(event: KeyboardEvent) {
   const mod = event.ctrlKey || event.metaKey;
+  const key = event.key.toLowerCase();
 
-  if (!mod && event.key === "Delete" && !isTextInput(event.target)) {
-    if (selected.value !== null && doc.value && doc.value.entities.length > 1) {
+  if (!mod && event.key === "Delete") {
+    if (!isTextInput(event.target)) {
       event.preventDefault();
-      deleteEntity(selected.value);
+      void deleteSelection();
     }
     return;
   }
 
   if (!mod) return;
-  const key = event.key.toLowerCase();
   if (key === "s") {
     event.preventDefault();
     void save();
   } else if (key === "d") {
     event.preventDefault();
     duplicateEntity();
+  } else if (key === "v" && clipboard.value) {
+    event.preventDefault();
+    pasteComponent();
+  } else if (key === "a") {
+    if (!isTextInput(event.target) && doc.value) {
+      event.preventDefault();
+      selection.value = doc.value.entities.map((_, index) => index);
+    }
   } else if (key === "z" && !event.shiftKey) {
     event.preventDefault();
     undo();
@@ -623,6 +719,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
         <div class="section grow">
           <div class="section-title">
             <span>层级</span>
+            <span v-if="selection.length > 1" class="muted">已选 {{ selection.length }}</span>
             <span class="spacer" />
             <select v-model="presetId" class="mini" title="新增实体类型">
               <option v-for="p in presets" :key="p.id" :value="p.id">{{ p.label }}</option>
@@ -640,8 +737,11 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
             <HierarchyTree
               v-if="doc"
               :entities="doc.entities"
-              :selected="selected"
-              @select="(i) => (selected = i)"
+              :selected="selection"
+              @select="onSelect"
+              @rename="onRenameEntity"
+              @reparent="onReparent"
+              @move="onMove"
             />
           </div>
         </div>
@@ -656,15 +756,20 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
 
       <main class="editor-pane">
         <Inspector
-          v-if="selectedEntity && doc && selected !== null"
+          v-if="selectedEntity && doc && primary !== null"
           :entity="selectedEntity"
-          :index="selected"
+          :index="primary"
           :entities="doc.entities"
           :schema="schema"
+          :selection-count="selection.length"
+          :clipboard="clipboard"
           @update="onEntityUpdate"
-          @remove="deleteEntity"
+          @remove="deleteSelection"
           @duplicate="duplicateEntity"
           @save-prefab="savePrefabFromEntity"
+          @copy-component="copyComponent"
+          @paste-component="pasteComponent"
+          @clear-clipboard="clearClipboard"
           @reflect="onComponentReflect"
           @rejected="fail"
         />

@@ -38,9 +38,10 @@ Conventions) before touching any matrix/coordinate math — deviating from those
   and the `prism-cook` CLI (`src/main.rs`). Depends on `prism-asset` + `prism-scene`; never
   pulled into the game runtime. See DESIGN.md §10.
 - `launcher/` — Tauri 2 desktop shell + Android APK packaging; **own standalone workspace**, NOT a root member.
-- `editor/` — **web UI 编辑器**（Tauri 2 + Vue 3 + Vite）：层级树 + schema 驱动的组件检查器、
-  撤销/重做（按字段合并连续输入）、模板新建、重命名/删除、**Cook**、资产管理器
-  （检索/分类/引用位置）与**预制体**编辑。Rust 侧只是 `prism-editor-api` 的薄命令封装，
+- `editor/` — **web UI 编辑器**（Tauri 2 + Vue 3 + Vite）：层级树（拖拽重排/改父级/就地重命名/
+  多选）+ schema 驱动的组件检查器（拖动调值、取色盘、属性检索）、撤销/重做（按字段合并连续输入）、
+  组件复制粘贴、模板新建、重命名/删除、**Cook**、资产管理器（检索/分类/引用位置）与
+  **预制体**编辑。Rust 侧只是 `prism-editor-api` 的薄命令封装，
   **不链接** cooker/build 流水线（Cook 以子进程调用
   `cargo run -p prism-build-pipeline -- cook <file>`）。desktop-only，
   **own standalone workspace**, NOT a root member.
@@ -54,6 +55,9 @@ Conventions) before touching any matrix/coordinate math — deviating from those
     做**反射写入**：`from_object` 还原出组件 → `Reflect::set_field` 写字段（`#[reflect(read_only)]`
     被拒、类型经反射校验）→ `object_to_json` 还原作者 JSON，成功则静默回填（不新增撤销步）。
     因此枚举字符串（`TextAlign`）与单字段 newtype（`Name`）都按作者 JSON 形状工作。
+  - 层级编辑也在 Rust 侧：`reparent_doc`（拒绝自父/成环）、`move_entity`（移动数组位置 +
+    全量父索引重映射）、`delete_entities`（孤儿子级变根 + 重映射）。前端只负责把拖拽判定
+    （行的上/下 25% = 兄弟插入，中间 = 挂为子级，底部空白 = 变根）翻译成这三个命令。
 - `projects/prisma/` — 用户游戏项目（package/crate `prisma`；`prisma` 桌面二进制 + Android
   cdylib `libprisma.so`；keyframe 开场 intro、`register_scene("intro", ...)` 注册场景、
   `lib.rs` 的 `android_main`）；**own standalone workspace**, NOT a root member.

@@ -5,7 +5,10 @@
 //!
 //! 文档（场景 / 预制体）共用一套命令，用 `kind`（`"scene"` / `"prefab"`）区分。
 
-use prism_editor_api::{AssetInfo, AssetRef, DocKind, EntityPreset, InstantiateResult, SceneEntry, SceneTemplate, Schema};
+use prism_editor_api::{
+    AssetInfo, AssetRef, DocKind, EntityPreset, InstantiateResult, MoveResult, SceneEntry,
+    SceneTemplate, Schema,
+};
 
 fn kind_of(kind: &str) -> Result<DocKind, String> {
     DocKind::parse(kind)
@@ -121,6 +124,40 @@ fn editor_delete_document(path: String) -> Result<(), String> {
 }
 
 // ---------------------------------------------------------------------------
+// 层级操作
+// ---------------------------------------------------------------------------
+
+/// 改父级（`parent = null` 表示变根）。拒绝自父与成环。
+#[tauri::command]
+fn editor_reparent_entity(
+    doc: serde_json::Value,
+    child: usize,
+    parent: Option<usize>,
+) -> Result<serde_json::Value, String> {
+    prism_editor_api::reparent_doc(&doc, child, parent)
+}
+
+/// 移动实体到数组的 `at` 位置并设置父级，返回新文档与新下标。
+#[tauri::command]
+fn editor_move_entity(
+    doc: serde_json::Value,
+    child: usize,
+    at: usize,
+    parent: Option<usize>,
+) -> Result<MoveResult, String> {
+    prism_editor_api::move_entity(&doc, child, at, parent)
+}
+
+/// 批量删除实体（孤儿子级变根，其余父索引重映射）。
+#[tauri::command]
+fn editor_delete_entities(
+    doc: serde_json::Value,
+    indices: Vec<usize>,
+) -> Result<serde_json::Value, String> {
+    prism_editor_api::delete_entities(&doc, &indices)
+}
+
+// ---------------------------------------------------------------------------
 // 预制体
 // ---------------------------------------------------------------------------
 
@@ -220,6 +257,9 @@ pub fn run() {
             editor_write_document_as,
             editor_rename_document,
             editor_delete_document,
+            editor_reparent_entity,
+            editor_move_entity,
+            editor_delete_entities,
             editor_create_prefab_from_entity,
             editor_instantiate_prefab,
             editor_set_component_field,
