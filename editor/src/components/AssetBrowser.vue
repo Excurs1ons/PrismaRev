@@ -722,7 +722,8 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="tree-tools">
+  <div class="asset-browser">
+    <div class="tree-tools">
     <input v-model="search" type="text" :placeholder="`检索 ${total} 个资产…`" />
     <div class="asset-view-row">
       <select v-model="kind">
@@ -785,9 +786,10 @@ onUnmounted(() => {
         <button class="primary" :disabled="opBusy" @click="confirmDelete">确认删除</button>
       </div>
     </div>
-  </div>
+    </div>
 
-  <!-- 目录树 -->
+    <!-- 目录树 / 列表：只让这一块滚动，工具栏和详情固定 -->
+    <div class="asset-scroll">
   <template v-if="view === 'tree'">
     <div
       v-for="row in treeRows"
@@ -848,6 +850,7 @@ onUnmounted(() => {
       共 {{ matched.length }} 项，仅显示前 {{ LIST_LIMIT }} 项；继续输入以缩小范围，或切到「目录」。
     </div>
   </template>
+    </div>
 
   <div v-if="selected" class="asset-detail">
     <div class="hint path">{{ selected.path }}</div>
@@ -882,6 +885,7 @@ onUnmounted(() => {
       {{ ref.component.split("::").pop() }}.{{ ref.field }}
     </button>
     <button class="ghost icon" style="margin-top: 4px" @click="copyPath">复制路径</button>
+  </div>
   </div>
 
   <Teleport to="body">

@@ -1101,6 +1101,26 @@ html.compact .dock-tab {
 }
 
 /* 资产管理器面板 */
+.asset-browser {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+.asset-browser > .tree-tools {
+  flex: 0 0 auto;
+}
+.asset-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+.asset-browser > .asset-detail {
+  flex: 0 1 auto;
+  max-height: 45%;
+  overflow: auto;
+}
 .badge {
   flex: 0 0 auto;
   font-size: 10px;
