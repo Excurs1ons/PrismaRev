@@ -289,7 +289,9 @@ export function showPanel(root: DockNode, tab: string): DockNode {
   // 就新切一列；用户仍可把 tab 拖出来浮动或重新分屏。
   const utilityTabs = new Set([
     "renderGraph",
-    "renderSettings",
+    "projectSettings",
+    "preferences",
+    "build",
     "tools",
     "shortcuts",
     "about",

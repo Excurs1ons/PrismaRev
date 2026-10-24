@@ -87,5 +87,7 @@ pub use scene::{
 };
 pub use schema::{build_schema, FieldSchema, Schema, TypeSchema};
 pub use settings::{
-    read_render_settings, settings_path, write_render_settings, RenderSettingsData,
+    read_project_settings, read_render_settings, settings_path, write_project_settings,
+    write_render_settings, AppSettingsData, BuildSettingsData, ProjectSettingsData,
+    RenderSettingsData, WindowSettingsData,
 };

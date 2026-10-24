@@ -172,6 +172,43 @@ export interface RenderSettingsData {
   ptMaxIterations: number;
 }
 
+/** 项目设置（`assets/settings.toml` 的 app/window/build 段）。 */
+export interface ProjectSettingsData {
+  app: {
+    company: string;
+    name: string;
+    version: string;
+  };
+  window: {
+    title: string;
+    width: number;
+    height: number;
+    resizable: boolean;
+    fullscreen: boolean;
+    vsync: boolean;
+  };
+  build: {
+    target: string;
+    profile: string;
+    outputDir: string;
+    runAfter: boolean;
+  };
+}
+
+export interface BuildProjectOptions {
+  target: string;
+  profile: string;
+  outputDir: string;
+  runAfter: boolean;
+}
+
+export interface BuildProjectResult {
+  output: string;
+  exe: string;
+  outputDir: string;
+  durationMs: number;
+}
+
 /** 离线 GI 烘焙参数（`prism-build-pipeline bake-gi`）。 */
 export interface BakeGiOptions {
   rays: number;

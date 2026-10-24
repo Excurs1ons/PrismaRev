@@ -578,6 +578,14 @@ select:disabled {
 .list-item:hover {
   background: var(--panel-2);
 }
+html.compact .list-item {
+  padding-top: 3px;
+  padding-bottom: 3px;
+}
+html.compact .dock-tab {
+  padding-top: 3px;
+  padding-bottom: 3px;
+}
 .list-item.active {
   background: rgba(110, 168, 255, 0.14);
   border-color: rgba(110, 168, 255, 0.5);
@@ -1229,6 +1237,51 @@ select:disabled {
 }
 
 /* 渲染设置 */
+.settings-tabs {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+.settings-tabs button {
+  border-radius: 6px 6px 0 0;
+  border-bottom-color: transparent;
+  background: transparent;
+}
+.settings-tabs button.active {
+  background: var(--panel);
+  border-color: var(--border);
+  color: var(--text);
+}
+.settings-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.settings-group-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+.settings-body label.check-row > input {
+  flex: 0 0 auto;
+}
+.build-scenes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.build-log {
+  max-height: 260px;
+}
 .settings-body {
   display: flex;
   flex-direction: column;

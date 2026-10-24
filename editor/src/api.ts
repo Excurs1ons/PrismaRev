@@ -4,6 +4,8 @@ import type {
   AssetRef,
   AssetTextPreview,
   BakeGiOptions,
+  BuildProjectOptions,
+  BuildProjectResult,
   DocKind,
   EntityPreset,
   HeightmapOptions,
@@ -12,6 +14,7 @@ import type {
   MoveResult,
   PlayableScene,
   PrefabLink,
+  ProjectSettingsData,
   PreviewLogLine,
   RenderGraphReport,
   RenderSettingsData,
@@ -363,6 +366,26 @@ export function renderSettings(): Promise<RenderSettingsData> {
 /** 写入项目级渲染设置。 */
 export function writeRenderSettings(settings: RenderSettingsData): Promise<void> {
   return call<void>("editor_write_render_settings", { settings });
+}
+
+/** 读取项目设置（app/window/build）。 */
+export function projectSettings(): Promise<ProjectSettingsData> {
+  return call<ProjectSettingsData>("editor_project_settings");
+}
+
+/** 写入项目设置（保留 [render]）。 */
+export function writeProjectSettings(settings: ProjectSettingsData): Promise<void> {
+  return call<void>("editor_write_project_settings", { settings });
+}
+
+/** 构建游戏 exe 并汇总运行所需资产。 */
+export function buildProject(options: BuildProjectOptions): Promise<BuildProjectResult> {
+  return call<BuildProjectResult>("editor_build_project", { options });
+}
+
+/** 在资源管理器中显示文件/目录。 */
+export function revealPath(path: string): Promise<void> {
+  return call<void>("editor_reveal_path", { path });
 }
 
 // ── 渲染图 ──────────────────────────────────────────────────────────────────

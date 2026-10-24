@@ -3,9 +3,12 @@ import { computed, nextTick, onMounted, onUnmounted, provide, reactive, ref, sha
 import { Box, Check, ChevronRight, Play, Plus, RefreshCw, Square } from "lucide-vue-next";
 import AssetBrowser from "./components/AssetBrowser.vue";
 import AssetPicker from "./components/AssetPicker.vue";
+import BuildPanel from "./components/BuildPanel.vue";
 import DockLayout from "./components/DockLayout.vue";
 import HierarchyTree from "./components/HierarchyTree.vue";
 import Inspector from "./components/Inspector.vue";
+import PreferencesPanel from "./components/PreferencesPanel.vue";
+import ProjectSettingsPanel from "./components/ProjectSettingsPanel.vue";
 import {
   collectTabs,
   defaultDock,
@@ -19,6 +22,11 @@ import {
 } from "./dock";
 import * as api from "./api";
 import { ASSETS_KEY, ASSET_PICKER_KEY } from "./keys";
+import {
+  loadPreferences,
+  savePreferences,
+  type EditorPreferences,
+} from "./preferences";
 import { PREFAB_LINK_COMPONENT } from "./types";
 import type {
   AssetInfo,
@@ -33,7 +41,6 @@ import type {
   PlayableScene,
   PreviewLogLine,
   RenderGraphReport,
-  RenderSettingsData,
   SceneDoc,
   SceneEntry,
   ScenePackageStatus,
@@ -60,8 +67,8 @@ const packageStatus = ref<ScenePackageStatus>({ exists: false, sizeBytes: 0 });
 const previewRunning = ref(false);
 let previewTimer: number | undefined;
 
-/** 项目级渲染设置（`assets/settings.toml` 的 `[render]`）。 */
-const renderSettings = ref<RenderSettingsData | null>(null);
+/** 编辑器首选项（本机 localStorage）。 */
+const editorPrefs = ref<EditorPreferences>(loadPreferences());
 
 /** 渲染图可视化（数据来自游戏进程写出的 JSON 报告）。 */
 const graphReport = ref<RenderGraphReport | null>(null);
@@ -113,24 +120,7 @@ const RESOURCE_COLORS: Record<string, string> = {
   storage_buffer: "#c678dd",
   other: "#9aa4b2",
 };
-const DEBUG_FLAGS = [
-  "正常渲染",
-  "Direct",
-  "Shadow",
-  "Specular",
-  "Metallic",
-  "Roughness",
-  "DiffuseIBL",
-  "SpecularIBL",
-  "MultiLight",
-  "AO",
-  "Emissive",
-  "Transmission",
-  "Translucency",
-  "Anisotropy",
-  "ClearCoat",
-  "GI",
-];
+
 provide(ASSETS_KEY, assets);
 
 /** 新建时的文档种类（工具栏）。 */
@@ -192,6 +182,7 @@ const editorLogLines = computed<LogViewLine[]>(() =>
   logText.value
     .split(/\r?\n/)
     .filter((line) => line.trim().length > 0)
+    .slice(-Math.max(200, editorPrefs.value.maxLogLines))
     .map((line) => ({
       source: "editor",
       level: logLevelOf(line),
@@ -200,12 +191,14 @@ const editorLogLines = computed<LogViewLine[]>(() =>
 );
 
 const gameLogView = computed<LogViewLine[]>(() =>
-  gameLogEntries.value.map((entry) => ({
-    source: "game",
-    level: logLevelOf(entry.line, entry.stream),
-    line: entry.line,
-    stream: entry.stream,
-  })),
+  gameLogEntries.value
+    .slice(-Math.max(200, editorPrefs.value.maxLogLines))
+    .map((entry) => ({
+      source: "game",
+      level: logLevelOf(entry.line, entry.stream),
+      line: entry.line,
+      stream: entry.stream,
+    })),
 );
 
 const filteredEditorLogLines = computed(() =>
@@ -242,7 +235,9 @@ type PanelId =
   | "inspector"
   | "log"
   | "renderGraph"
-  | "renderSettings"
+  | "projectSettings"
+  | "preferences"
+  | "build"
   | "tools"
   | "shortcuts"
   | "about";
@@ -253,7 +248,9 @@ const PANELS: Array<{ id: PanelId; title: string }> = [
   { id: "inspector", title: "检查器" },
   { id: "log", title: "日志" },
   { id: "renderGraph", title: "渲染图" },
-  { id: "renderSettings", title: "渲染设置" },
+  { id: "projectSettings", title: "项目设置" },
+  { id: "preferences", title: "首选项" },
+  { id: "build", title: "构建项目" },
   { id: "tools", title: "离线工具" },
   { id: "shortcuts", title: "快捷键" },
   { id: "about", title: "关于" },
@@ -313,10 +310,6 @@ watch(visiblePanels, (next, previous) => {
     stopGraphPolling();
   }
 
-  const settingsWasVisible = previous?.has("renderSettings") ?? false;
-  if (next.has("renderSettings") && !settingsWasVisible && !renderSettings.value) {
-    void loadRenderSettings();
-  }
 });
 
 function loadLayout() {
@@ -1147,6 +1140,12 @@ async function deleteSelection() {
     fail("至少要保留一个实体");
     return;
   }
+  if (
+    editorPrefs.value.confirmDelete &&
+    !window.confirm(`删除 ${indices.length} 个实体？此操作可用撤销恢复。`)
+  ) {
+    return;
+  }
   try {
     const next = await api.deleteEntities(doc.value, indices);
     commit(next, `delete-entities#${Date.now()}`);
@@ -1284,8 +1283,9 @@ function scrollLogsToEnd() {
 
 function appendGameLog(entry: PreviewLogLine) {
   gameLogEntries.value.push(entry);
-  if (gameLogEntries.value.length > 4000) {
-    gameLogEntries.value.splice(0, gameLogEntries.value.length - 4000);
+  const max = Math.max(200, editorPrefs.value.maxLogLines);
+  if (gameLogEntries.value.length > max) {
+    gameLogEntries.value.splice(0, gameLogEntries.value.length - max);
   }
   scrollLogsToEnd();
 }
@@ -1327,7 +1327,7 @@ async function togglePreview() {
   if (dirty.value && !(await save())) return;
   busy.value = true;
   clearGameLog();
-  showPanelTab("log");
+  if (editorPrefs.value.autoOpenLog) showPanelTab("log");
   try {
     await api.playScene(playSceneName.value);
     previewRunning.value = true;
@@ -1340,41 +1340,38 @@ async function togglePreview() {
   }
 }
 
-// ── 项目设置 ────────────────────────────────────────────────────────────────
+// ── 项目设置 / 首选项 / 构建 ────────────────────────────────────────────────
 
-async function loadRenderSettings() {
-  try {
-    renderSettings.value = await api.renderSettings();
-  } catch (e) {
-    fail(e);
+/** 设置类窗口默认以较大的浮动面板打开；用户仍可拖回 dock 停靠。 */
+function openUtilityWindow(id: PanelId, width = 760, height = 640) {
+  if (isPanelVisible(id)) {
+    showPanelTab(id);
+    return;
   }
+  const z = floatingPanels.value.reduce((max, panel) => Math.max(max, panel.z), 9000) + 1;
+  floatingPanels.value = [
+    ...floatingPanels.value,
+    {
+      tab: id,
+      x: Math.max(24, Math.round((window.innerWidth - width) / 2)),
+      y: Math.max(48, Math.round((window.innerHeight - height) / 2)),
+      width,
+      height,
+      z,
+    },
+  ];
 }
 
-async function openSettings() {
-  if (!renderSettings.value) await loadRenderSettings();
-  showPanelTab("renderSettings");
+function openSettings() {
+  openUtilityWindow("projectSettings");
 }
 
-async function saveSettings() {
-  if (!renderSettings.value) return;
-  try {
-    await api.writeRenderSettings(renderSettings.value);
-    status.value = "渲染设置已保存到 assets/settings.toml（重启游戏生效）";
-  } catch (e) {
-    fail(e);
-  }
+function openPreferences() {
+  openUtilityWindow("preferences", 640, 560);
 }
 
-function debugFlagIndex(flags: number): number {
-  for (let bit = 0; bit < 15; bit += 1) {
-    if (flags === 1 << bit) return bit + 1;
-  }
-  return 0;
-}
-
-function setDebugFlag(index: number) {
-  if (!renderSettings.value) return;
-  renderSettings.value.debugFlags = index === 0 ? 0 : 1 << (index - 1);
+function openBuild() {
+  openUtilityWindow("build", 760, 620);
 }
 
 // ── 离线工具 ────────────────────────────────────────────────────────────────
@@ -1527,18 +1524,15 @@ const MENUS = computed<MenuDef[]>(() => {
           action: clearClipboard,
         },
         { separator: true },
-        {
-          label: "项目设置",
-          children: [
-            { label: "渲染设置…", action: () => void openSettings() },
-          ],
-        },
+        { label: "项目设置…", action: openSettings },
+        { label: "首选项…", action: openPreferences },
       ],
     },
     {
       id: "build",
       label: "构建",
       items: [
+        { label: "构建项目…", disabled: () => busy.value, action: openBuild },
         { label: "构建场景包", disabled: () => busy.value, action: () => void buildScenes() },
         {
           label: "Cook 当前场景",
@@ -1724,6 +1718,43 @@ const graphLayout = computed(() => {
 });
 
 let unlistenPreviewLog: (() => void) | undefined;
+let autoSaveTimer: number | undefined;
+
+function scheduleAutoSave(preferences: EditorPreferences) {
+  if (autoSaveTimer !== undefined) window.clearInterval(autoSaveTimer);
+  autoSaveTimer = undefined;
+  if (preferences.autoSaveSeconds <= 0) return;
+  autoSaveTimer = window.setInterval(() => {
+    if (!dirty.value || !currentPath.value || busy.value) return;
+    void save();
+  }, preferences.autoSaveSeconds * 1000);
+}
+
+function applyPreferences(preferences: EditorPreferences) {
+  document.documentElement.classList.toggle("compact", preferences.compactMode);
+  if (
+    preferences.defaultPlayScene &&
+    playableScenes.value.some((scene) => scene.name === preferences.defaultPlayScene)
+  ) {
+    playSceneName.value = preferences.defaultPlayScene;
+  }
+  scheduleAutoSave(preferences);
+}
+
+watch(editorPrefs, (value) => {
+  savePreferences(value);
+  applyPreferences(value);
+}, { deep: true, immediate: true });
+
+watch(playableScenes, (scenes) => {
+  if (
+    editorPrefs.value.defaultPlayScene &&
+    scenes.some((scene) => scene.name === editorPrefs.value.defaultPlayScene)
+  ) {
+    playSceneName.value = editorPrefs.value.defaultPlayScene;
+  }
+});
+
 onMounted(() => {
   void bootstrap();
   window.addEventListener("keydown", onKey);
@@ -1736,6 +1767,7 @@ onMounted(() => {
 onUnmounted(() => {
   window.removeEventListener("keydown", onKey);
   unlistenPreviewLog?.();
+  if (autoSaveTimer !== undefined) window.clearInterval(autoSaveTimer);
   stopPreviewPolling();
   stopGraphPolling();
 });
@@ -2022,78 +2054,23 @@ onUnmounted(() => {
         </div>
         </template>
 
-        <template #renderSettings>
-        <div class="panel-pane settings-panel">
-          <div v-if="renderSettings" class="settings-body panel-scroll">
-            <label>
-              <span>渲染模式</span>
-              <select v-model="renderSettings.renderMode">
-                <option value="raster">光栅化（PBR）</option>
-                <option value="path_trace">路径追踪</option>
-              </select>
-            </label>
+        <template #projectSettings>
+        <ProjectSettingsPanel :project-root="projectRoot" />
+        </template>
 
-            <label>
-              <span>色调映射</span>
-              <select v-model.number="renderSettings.tonemapMode">
-                <option :value="0">Reinhard</option>
-                <option :value="1">ACES</option>
-              </select>
-            </label>
+        <template #preferences>
+        <PreferencesPanel
+          v-model="editorPrefs"
+          :playable-scenes="playableScenes.map((scene) => scene.name)"
+        />
+        </template>
 
-            <label>
-              <span>PBR 调试通道</span>
-              <select
-                :value="debugFlagIndex(renderSettings.debugFlags)"
-                @change="setDebugFlag(Number(($event.target as HTMLSelectElement).value))"
-              >
-                <option v-for="(label, index) in DEBUG_FLAGS" :key="label" :value="index">
-                  {{ label }}
-                </option>
-              </select>
-            </label>
-
-            <label>
-              <span>调试 RT</span>
-              <select v-model.number="renderSettings.debugRt">
-                <option :value="0">HDR tonemap</option>
-                <option :value="1">线性深度</option>
-                <option :value="2">视图空间法线</option>
-              </select>
-            </label>
-
-            <template v-if="renderSettings.renderMode === 'path_trace'">
-              <label>
-                <span>最大弹射</span>
-                <input v-model.number="renderSettings.ptMaxBounces" type="number" min="1" max="64" />
-              </label>
-              <label>
-                <span>射线最大距离</span>
-                <input
-                  v-model.number="renderSettings.ptRayMaxDistance"
-                  type="number"
-                  min="1"
-                  step="10"
-                />
-              </label>
-              <label>
-                <span>最大采样（0 = 无限）</span>
-                <input v-model.number="renderSettings.ptMaxIterations" type="number" min="0" />
-              </label>
-            </template>
-
-            <p class="hint">
-              写入 <code>assets/settings.toml</code> 的 <code>[render]</code> 段，游戏下次启动生效；
-              运行时仍可用键盘 1–9 / Shift+1–5 / T / Tab 临时切换。
-            </p>
-          </div>
-          <div v-else class="empty">正在读取渲染设置…</div>
-
-          <footer class="panel-footer">
-            <span class="spacer" />
-            <button class="primary" :disabled="!renderSettings" @click="saveSettings">保存</button>
-          </footer>
-        </div>
+        <template #build>
+        <BuildPanel
+          :playable-scenes="playableScenes.map((scene) => scene.name)"
+          :project-root="projectRoot"
+          @built="refreshPlayable"
+        />
         </template>
 
         <template #renderGraph>

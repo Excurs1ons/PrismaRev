@@ -13,7 +13,8 @@ use std::sync::Mutex;
 
 use prism_editor_api::{
     AssetInfo, AssetMutation, AssetRef, DocKind, EntityPreset, InstantiateResult, MoveResult,
-    PlayableScene, RenderSettingsData, SceneEntry, ScenePackageStatus, SceneTemplate, Schema,
+    PlayableScene, ProjectSettingsData, RenderSettingsData, SceneEntry, ScenePackageStatus,
+    SceneTemplate, Schema,
 };
 use tauri::{Emitter, Manager, State};
 
@@ -608,11 +609,242 @@ fn editor_write_render_settings(settings: RenderSettingsData) -> Result<(), Stri
     prism_editor_api::write_render_settings(&root, &settings)
 }
 
+/// 读取项目设置（`[app]` / `[window]` / `[build]`）。
+#[tauri::command]
+fn editor_project_settings() -> Result<ProjectSettingsData, String> {
+    let root = prism_editor_api::find_project_root()?;
+    prism_editor_api::read_project_settings(&root)
+}
+
+/// 写入项目设置（保留 `[render]` 等其它段）。
+#[tauri::command]
+fn editor_write_project_settings(settings: ProjectSettingsData) -> Result<(), String> {
+    let root = prism_editor_api::find_project_root()?;
+    prism_editor_api::write_project_settings(&root, &settings)
+}
+
 /// 重新 cook + 打包所有场景（`prism-build-pipeline build-scenes`）。
 #[tauri::command]
 fn editor_build_scenes() -> Result<String, String> {
     let root = prism_editor_api::find_project_root()?;
     run_pipeline(&root, &["build-scenes"])
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BuildProjectOptions {
+    target: String,
+    profile: String,
+    output_dir: String,
+    run_after: bool,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BuildProjectResult {
+    output: String,
+    exe: String,
+    output_dir: String,
+    duration_ms: u64,
+}
+
+fn game_project_manifest(root: &Path) -> Result<PathBuf, String> {
+    if let Some(value) = std::env::var_os("PRISMREV_GAME_PROJECT") {
+        let path = PathBuf::from(value);
+        let path = if path.is_dir() {
+            path.join("Cargo.toml")
+        } else {
+            path
+        };
+        if path.is_file() {
+            return Ok(path);
+        }
+        return Err(format!(
+            "PRISMREV_GAME_PROJECT 指向的 Cargo.toml 不存在: {}",
+            path.display()
+        ));
+    }
+
+    let preferred = root.join("projects/prisma/Cargo.toml");
+    if preferred.is_file() {
+        return Ok(preferred);
+    }
+    if let Ok(entries) = std::fs::read_dir(root.join("projects")) {
+        for entry in entries.flatten() {
+            let manifest = entry.path().join("Cargo.toml");
+            if manifest.is_file() {
+                return Ok(manifest);
+            }
+        }
+    }
+    Err("找不到游戏项目（projects/*/Cargo.toml）".into())
+}
+
+fn run_cargo_build(root: &Path, manifest: &Path, release: bool) -> Result<String, String> {
+    let mut command = Command::new("cargo");
+    command.arg("build").arg("--manifest-path").arg(manifest);
+    if release {
+        command.arg("--release");
+    }
+    command.current_dir(root);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    let output = command
+        .output()
+        .map_err(|error| format!("无法启动 cargo build: {error}"))?;
+    let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+    text.push_str(&String::from_utf8_lossy(&output.stderr));
+    if output.status.success() {
+        Ok(text)
+    } else {
+        Err(format!(
+            "cargo build 失败 (exit {})：\n{text}",
+            output.status.code().unwrap_or(-1)
+        ))
+    }
+}
+
+fn copy_if_exists(from: &Path, to: &Path) {
+    if from.is_file() {
+        if let Some(parent) = to.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::copy(from, to);
+    }
+}
+
+fn build_project_blocking(
+    root: PathBuf,
+    options: BuildProjectOptions,
+) -> Result<BuildProjectResult, String> {
+    if options.target != "windows" {
+        return Err("目前只支持 windows 构建目标".into());
+    }
+    if !matches!(options.profile.as_str(), "debug" | "release") {
+        return Err("构建配置只能是 debug 或 release".into());
+    }
+    let started = std::time::Instant::now();
+    let manifest = game_project_manifest(&root)?;
+    let manifest_dir = manifest
+        .parent()
+        .ok_or_else(|| "游戏项目 Cargo.toml 没有父目录".to_string())?;
+    let release = options.profile == "release";
+
+    let mut log = String::new();
+    log.push_str(&format!(
+        "==> cargo build ({}) {}\n",
+        options.profile,
+        manifest.display()
+    ));
+    log.push_str(&run_cargo_build(&root, &manifest, release)?);
+    log.push_str("\n==> build-scenes\n");
+    log.push_str(&run_pipeline(&root, &["build-scenes"])?);
+
+    let exe_name = if cfg!(windows) { "prisma.exe" } else { "prisma" };
+    let bin = manifest_dir
+        .join("target")
+        .join(if release { "release" } else { "debug" })
+        .join(exe_name);
+    if !bin.is_file() {
+        return Err(format!("构建完成但找不到游戏二进制：{}", bin.display()));
+    }
+
+    let output_dir = {
+        let raw = PathBuf::from(options.output_dir.trim());
+        if raw.is_absolute() {
+            raw
+        } else {
+            root.join(raw)
+        }
+    };
+    std::fs::create_dir_all(&output_dir)
+        .map_err(|error| format!("无法创建输出目录 {}: {error}", output_dir.display()))?;
+
+    let output_exe = output_dir.join(exe_name);
+    std::fs::copy(&bin, &output_exe)
+        .map_err(|error| format!("复制游戏二进制失败: {error}"))?;
+    copy_if_exists(
+        &root.join("assets/scenes.pak"),
+        &output_dir.join("assets/scenes.pak"),
+    );
+    copy_if_exists(
+        &root.join("assets/scenes.pak.meta.json"),
+        &output_dir.join("assets/scenes.pak.meta.json"),
+    );
+    copy_if_exists(
+        &root.join("assets/settings.toml"),
+        &output_dir.join("assets/settings.toml"),
+    );
+
+    log.push_str(&format!(
+        "\n==> 输出\n{}\n",
+        output_exe.display()
+    ));
+
+    if options.run_after {
+        let mut command = Command::new(&output_exe);
+        command.current_dir(&output_dir);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x0000_0000);
+        }
+        command
+            .spawn()
+            .map_err(|error| format!("构建成功但启动游戏失败: {error}"))?;
+        log.push_str("==> 已启动构建产物\n");
+    }
+
+    Ok(BuildProjectResult {
+        output: log,
+        exe: output_exe.to_string_lossy().into_owned(),
+        output_dir: output_dir.to_string_lossy().into_owned(),
+        duration_ms: started.elapsed().as_millis() as u64,
+    })
+}
+
+/// 构建游戏项目并把 exe / scenes.pak / settings.toml 汇总到输出目录。
+#[tauri::command]
+async fn editor_build_project(options: BuildProjectOptions) -> Result<BuildProjectResult, String> {
+    let root = prism_editor_api::find_project_root()?;
+    tauri::async_runtime::spawn_blocking(move || build_project_blocking(root, options))
+        .await
+        .map_err(|error| format!("构建任务失败: {error}"))?
+}
+
+/// 在文件管理器中显示路径（文件则选中，目录则打开）。
+#[tauri::command]
+fn editor_reveal_path(path: String) -> Result<(), String> {
+    let path = PathBuf::from(path);
+    if !path.exists() {
+        return Err(format!("路径不存在：{}", path.display()));
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let mut command = Command::new("explorer");
+        if path.is_file() {
+            command.arg(format!("/select,{}", path.display()));
+        } else {
+            command.arg(&path);
+        }
+        command.creation_flags(0x0800_0000);
+        command
+            .spawn()
+            .map_err(|error| format!("无法打开资源管理器: {error}"))?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open").arg(&path).spawn().map_err(|e| e.to_string())?;
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        Command::new("xdg-open").arg(&path).spawn().map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 /// 解析游戏二进制：`PRISMREV_GAME_BIN` > 各 workspace 的 target 目录 > PATH。
@@ -836,7 +1068,11 @@ pub fn run() {
             editor_scene_package_status,
             editor_render_settings,
             editor_write_render_settings,
+            editor_project_settings,
+            editor_write_project_settings,
             editor_build_scenes,
+            editor_build_project,
+            editor_reveal_path,
             editor_play_scene,
             editor_stop_preview,
             editor_preview_running,

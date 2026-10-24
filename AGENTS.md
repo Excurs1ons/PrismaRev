@@ -69,6 +69,14 @@ Conventions) before touching any matrix/coordinate math — deviating from those
     (`prefab-drop` → `editor_create_prefab_at`) 保存，可落到任意 `assets/...` 目录，
     重名自动加 `-2` 后缀；`.prefab.json` 在资产树里递归枚举。反向拖 `.prefab.json`
     到层级实体/空白处会实例化到该父级/根；层级行的眼睛按钮切换 `Active` 组件。
+  - 设置类窗口：`projectSettings`（`[app]`/`[window]`/`[build]` + `[render]`，写
+    `assets/settings.toml`）、`preferences`（本机 localStorage：自动保存/删除确认/
+    紧凑模式/日志上限/默认运行场景）、`build`（构建项目）。从菜单打开时默认用
+    较大的浮动面板，用户仍可拖回 dock。
+  - 「构建项目」= `cargo build --manifest-path projects/prisma/Cargo.toml`
+    (+`--release`) → `build-scenes` → 把 exe/scenes.pak/settings.toml 复制到
+    `[build].output_dir`（默认 `build/windows`，已 gitignore），可选构建后运行。
+    命令是 `editor_build_project`；编辑器仍不链接 cooker/build 流水线。
   - 「日志」是独立 dock 面板（`log`），同时区分 **编辑器 / Game** 两个来源，并按
     `error/warn/info/debug/trace/panic` 过滤。`editor_play_scene` 用 piped
     stdout/stderr 启动游戏，读取线程把每行写入共享 ring buffer（`editor_preview_logs`

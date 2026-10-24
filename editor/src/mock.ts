@@ -11,6 +11,7 @@ import type {
   MoveResult,
   PlayableScene,
   PrefabLink,
+  ProjectSettingsData,
   RenderGraphReport,
   RenderSettingsData,
   SceneDoc,
@@ -67,6 +68,24 @@ const renderSettingsFixture: RenderSettingsData = {
   ptMaxBounces: 3,
   ptRayMaxDistance: 1000,
   ptMaxIterations: 0,
+};
+
+const projectSettingsFixture: ProjectSettingsData = {
+  app: { company: "Excurs1ons", name: "PrismaRev", version: "0.1.0" },
+  window: {
+    title: "PrismaRev",
+    width: 1600,
+    height: 900,
+    resizable: true,
+    fullscreen: false,
+    vsync: true,
+  },
+  build: {
+    target: "windows",
+    profile: "release",
+    outputDir: "build/windows",
+    runAfter: false,
+  },
 };
 
 async function fixture(): Promise<Fixture> {
@@ -691,8 +710,27 @@ async function handle(cmd: string, args: Record<string, unknown>): Promise<unkno
       return null;
     }
 
+    case "editor_project_settings":
+      return JSON.parse(JSON.stringify(projectSettingsFixture));
+
+    case "editor_write_project_settings": {
+      Object.assign(projectSettingsFixture, args.settings as ProjectSettingsData);
+      return null;
+    }
+
     case "editor_build_scenes":
       return "（浏览器预览模式：未真正调用 build-scenes）请用 `cd editor && pnpm tauri dev`。";
+
+    case "editor_build_project":
+      return {
+        output: "（浏览器预览模式：未真正构建游戏）请用 `pnpm tauri dev`。",
+        exe: "build/windows/prisma.exe",
+        outputDir: "build/windows",
+        durationMs: 0,
+      };
+
+    case "editor_reveal_path":
+      return null;
 
     case "editor_bake_gi":
       return "（浏览器预览模式：未真正调用 bake-gi）请用 `pnpm tauri dev` 或手动执行 prism-build-pipeline bake-gi。";

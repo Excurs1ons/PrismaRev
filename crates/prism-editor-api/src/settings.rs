@@ -10,6 +10,7 @@
 
 use std::path::{Path, PathBuf};
 
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 /// 前端使用的渲染设置（camelCase JSON）。
@@ -170,6 +171,283 @@ pub fn write_render_settings(root: &Path, data: &RenderSettingsData) -> Result<(
     std::fs::write(&path, text).map_err(|error| format!("无法写入 {}: {error}", path.display()))
 }
 
+// ---------------------------------------------------------------------------
+// Project settings (`[app]` / `[window]` / `[build]`)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppSettingsData {
+    pub company: String,
+    pub name: String,
+    pub version: String,
+}
+
+impl Default for AppSettingsData {
+    fn default() -> Self {
+        Self {
+            company: "Excurs1ons".into(),
+            name: "PrismaRev".into(),
+            version: "0.1.0".into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WindowSettingsData {
+    pub title: String,
+    pub width: u32,
+    pub height: u32,
+    pub resizable: bool,
+    pub fullscreen: bool,
+    pub vsync: bool,
+}
+
+impl Default for WindowSettingsData {
+    fn default() -> Self {
+        Self {
+            title: "PrismaRev".into(),
+            width: 1600,
+            height: 900,
+            resizable: true,
+            fullscreen: false,
+            vsync: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildSettingsData {
+    pub target: String,
+    pub profile: String,
+    pub output_dir: String,
+    pub run_after: bool,
+}
+
+impl Default for BuildSettingsData {
+    fn default() -> Self {
+        Self {
+            target: "windows".into(),
+            profile: "release".into(),
+            output_dir: "build/windows".into(),
+            run_after: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectSettingsData {
+    pub app: AppSettingsData,
+    pub window: WindowSettingsData,
+    pub build: BuildSettingsData,
+}
+
+impl Default for ProjectSettingsData {
+    fn default() -> Self {
+        Self {
+            app: AppSettingsData::default(),
+            window: WindowSettingsData::default(),
+            build: BuildSettingsData::default(),
+        }
+    }
+}
+
+impl ProjectSettingsData {
+    fn validate(&self) -> Result<(), String> {
+        if self.app.name.trim().is_empty() || self.app.company.trim().is_empty() {
+            return Err("应用名称和公司名不能为空".into());
+        }
+        if self.window.title.trim().is_empty() {
+            return Err("窗口标题不能为空".into());
+        }
+        if !(320..=16384).contains(&self.window.width)
+            || !(240..=16384).contains(&self.window.height)
+        {
+            return Err("窗口尺寸必须在 320x240 .. 16384x16384".into());
+        }
+        if self.build.target != "windows" {
+            return Err("目前只支持 windows 构建目标".into());
+        }
+        if !matches!(self.build.profile.as_str(), "debug" | "release") {
+            return Err("构建配置只能是 debug 或 release".into());
+        }
+        if self.build.output_dir.trim().is_empty() {
+            return Err("输出目录不能为空".into());
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(default)]
+struct AppFile {
+    company: String,
+    name: String,
+    version: String,
+}
+
+impl Default for AppFile {
+    fn default() -> Self {
+        let data = AppSettingsData::default();
+        Self {
+            company: data.company,
+            name: data.name,
+            version: data.version,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(default)]
+struct WindowFile {
+    title: String,
+    width: u32,
+    height: u32,
+    resizable: bool,
+    fullscreen: bool,
+    vsync: bool,
+}
+
+impl Default for WindowFile {
+    fn default() -> Self {
+        let data = WindowSettingsData::default();
+        Self {
+            title: data.title,
+            width: data.width,
+            height: data.height,
+            resizable: data.resizable,
+            fullscreen: data.fullscreen,
+            vsync: data.vsync,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(default)]
+struct BuildFile {
+    target: String,
+    profile: String,
+    output_dir: String,
+    run_after: bool,
+}
+
+impl Default for BuildFile {
+    fn default() -> Self {
+        let data = BuildSettingsData::default();
+        Self {
+            target: data.target,
+            profile: data.profile,
+            output_dir: data.output_dir,
+            run_after: data.run_after,
+        }
+    }
+}
+
+fn section<T: DeserializeOwned + Default>(table: &toml::Table, key: &str) -> Result<T, String> {
+    match table.get(key) {
+        Some(value) => value
+            .clone()
+            .try_into()
+            .map_err(|error| format!("解析 [{key}] 失败: {error}")),
+        None => Ok(T::default()),
+    }
+}
+
+/// 读取项目设置（`[app]` / `[window]` / `[build]`）；缺失时使用默认值。
+pub fn read_project_settings(root: &Path) -> Result<ProjectSettingsData, String> {
+    let path = settings_path(root);
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(ProjectSettingsData::default())
+        }
+        Err(error) => return Err(format!("无法读取 {}: {error}", path.display())),
+    };
+    let table: toml::Table =
+        toml::from_str(&text).map_err(|error| format!("解析 {} 失败: {error}", path.display()))?;
+    let app: AppFile = section(&table, "app")?;
+    let window: WindowFile = section(&table, "window")?;
+    let build: BuildFile = section(&table, "build")?;
+    Ok(ProjectSettingsData {
+        app: AppSettingsData {
+            company: app.company,
+            name: app.name,
+            version: app.version,
+        },
+        window: WindowSettingsData {
+            title: window.title,
+            width: window.width,
+            height: window.height,
+            resizable: window.resizable,
+            fullscreen: window.fullscreen,
+            vsync: window.vsync,
+        },
+        build: BuildSettingsData {
+            target: build.target,
+            profile: build.profile,
+            output_dir: build.output_dir,
+            run_after: build.run_after,
+        },
+    })
+}
+
+/// 写入项目设置，保留 `[render]` 等其它段。
+pub fn write_project_settings(root: &Path, data: &ProjectSettingsData) -> Result<(), String> {
+    data.validate()?;
+    let path = settings_path(root);
+    let mut table: toml::Table = match std::fs::read_to_string(&path) {
+        Ok(text) => toml::from_str(&text)
+            .map_err(|error| format!("解析 {} 失败: {error}", path.display()))?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => toml::Table::new(),
+        Err(error) => return Err(format!("无法读取 {}: {error}", path.display())),
+    };
+
+    let app = AppFile {
+        company: data.app.company.clone(),
+        name: data.app.name.clone(),
+        version: data.app.version.clone(),
+    };
+    let window = WindowFile {
+        title: data.window.title.clone(),
+        width: data.window.width,
+        height: data.window.height,
+        resizable: data.window.resizable,
+        fullscreen: data.window.fullscreen,
+        vsync: data.window.vsync,
+    };
+    let build = BuildFile {
+        target: data.build.target.clone(),
+        profile: data.build.profile.clone(),
+        output_dir: data.build.output_dir.clone(),
+        run_after: data.build.run_after,
+    };
+
+    for (key, value) in [
+        ("app", toml::Value::try_from(&app).map_err(|e| e.to_string())?),
+        (
+            "window",
+            toml::Value::try_from(&window).map_err(|e| e.to_string())?,
+        ),
+        (
+            "build",
+            toml::Value::try_from(&build).map_err(|e| e.to_string())?,
+        ),
+    ] {
+        table.insert(key.to_string(), value);
+    }
+
+    let text = toml::to_string_pretty(&table)
+        .map_err(|error| format!("序列化 settings.toml 失败: {error}"))?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("无法创建 {}: {error}", parent.display()))?;
+    }
+    std::fs::write(&path, text).map_err(|error| format!("无法写入 {}: {error}", path.display()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -216,5 +494,37 @@ mod tests {
         let mut data = RenderSettingsData::default();
         data.tonemap_mode = 9;
         assert!(write_render_settings(&dir, &data).is_err());
+    }
+
+    #[test]
+    fn project_settings_roundtrip_preserves_render() {
+        let dir = temp_dir("prism-editor-api-project-settings-roundtrip");
+        std::fs::write(
+            settings_path(&dir),
+            "[render]\nrender_mode = \"path_trace\"\n",
+        )
+        .unwrap();
+
+        let mut data = read_project_settings(&dir).unwrap();
+        assert_eq!(data.app.name, "PrismaRev");
+        data.app.name = "DemoGame".into();
+        data.window.width = 1280;
+        data.build.profile = "debug".into();
+        write_project_settings(&dir, &data).unwrap();
+
+        let text = std::fs::read_to_string(settings_path(&dir)).unwrap();
+        let table: toml::Table = toml::from_str(&text).unwrap();
+        assert_eq!(table["app"]["name"].as_str(), Some("DemoGame"));
+        assert_eq!(table["window"]["width"].as_integer(), Some(1280));
+        assert_eq!(table["build"]["profile"].as_str(), Some("debug"));
+        assert_eq!(table["render"]["render_mode"].as_str(), Some("path_trace"));
+    }
+
+    #[test]
+    fn project_settings_reject_invalid_build_profile() {
+        let dir = temp_dir("prism-editor-api-project-settings-invalid");
+        let mut data = ProjectSettingsData::default();
+        data.build.profile = "shipping".into();
+        assert!(write_project_settings(&dir, &data).is_err());
     }
 }

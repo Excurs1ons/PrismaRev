@@ -1,0 +1,27 @@
+[app]
+company = "Excurs1ons"
+name = "PrismaRev"
+version = "0.1.0"
+
+[build]
+output_dir = "build/windows"
+profile = "release"
+run_after = false
+target = "windows"
+
+[render]
+debug_flags = 0
+debug_rt = 0
+pt_max_bounces = 3
+pt_max_iterations = 0
+pt_ray_max_distance = 1000.0
+render_mode = "raster"
+tonemap_mode = 0
+
+[window]
+fullscreen = false
+height = 900
+resizable = true
+title = "PrismaRev"
+vsync = true
+width = 1600
