@@ -14,6 +14,13 @@ use crate::buffer::{create_buffer, BufferUsage, MemoryProperties};
 use crate::context::VulkanContext;
 use crate::shader_bindings::gizmo::GizmoPush;
 
+/// One ECS-authored gizmo instance. `model` already contains the entity's
+/// world transform and the component's scale.
+#[derive(Clone, Copy, Debug)]
+pub struct GizmoInstance {
+    pub model: [[f32; 4]; 4],
+}
+
 const GIZMO_VERT_SPV: &[u8] = include_bytes!("../../../assets/shaders/gizmo.vert.spv");
 const GIZMO_FRAG_SPV: &[u8] = include_bytes!("../../../assets/shaders/gizmo.frag.spv");
 
@@ -107,11 +114,11 @@ impl Gizmo {
         );
         let shader_stages = [vert_stage, frag_stage];
 
-        // --- 管线 布局 推送 常量 only (view_proj mat4) ---
+        // --- pipeline layout: push constants = viewProj + model (2 mat4) ---
         let push_constant_ranges = [vk::PushConstantRange::default()
             .stage_flags(vk::ShaderStageFlags::VERTEX)
             .offset(0)
-            .size(64)];
+            .size(128)];
         let layout_info =
             vk::PipelineLayoutCreateInfo::default().push_constant_ranges(&push_constant_ranges);
         let layout = unsafe { device.create_pipeline_layout(&layout_info, None) }
@@ -199,26 +206,40 @@ impl Gizmo {
         })
     }
 
-    /// Record the gizmo 绘制 into `cmd`. 调用 between `begin_frame` and
-    /// `end_frame`, after the 3D scene draws.
-    pub fn draw(&self, cmd: vk::CommandBuffer, view_proj: &[[f32; 4]; 4]) {
+    /// Record one draw per ECS-authored gizmo. Call between `begin_frame`
+    /// and `end_frame`, after the 3D scene draws.
+    pub fn draw(
+        &self,
+        cmd: vk::CommandBuffer,
+        view_proj: &[[f32; 4]; 4],
+        instances: &[GizmoInstance],
+    ) {
+        if instances.is_empty() {
+            return;
+        }
         let device = &self.device;
-        let push = GizmoPush {
-            viewProj: *view_proj,
-        };
+        let buffers = [self.vertex_buffer];
+        let offsets = [0u64];
         unsafe {
             device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.pipeline);
-            device.cmd_push_constants(
-                cmd,
-                self.layout,
-                vk::ShaderStageFlags::VERTEX,
-                0,
-                std::slice::from_raw_parts(&push as *const _ as *const u8, size_of::<GizmoPush>()),
-            );
-            let buffers = [self.vertex_buffer];
-            let offsets = [0u64];
             device.cmd_bind_vertex_buffers(cmd, 0, &buffers, &offsets);
-            device.cmd_draw(cmd, self.vertex_count, 1, 0, 0);
+            for instance in instances {
+                let push = GizmoPush {
+                    viewProj: *view_proj,
+                    model: instance.model,
+                };
+                device.cmd_push_constants(
+                    cmd,
+                    self.layout,
+                    vk::ShaderStageFlags::VERTEX,
+                    0,
+                    std::slice::from_raw_parts(
+                        &push as *const _ as *const u8,
+                        size_of::<GizmoPush>(),
+                    ),
+                );
+                device.cmd_draw(cmd, self.vertex_count, 1, 0, 0);
+            }
         }
     }
 }

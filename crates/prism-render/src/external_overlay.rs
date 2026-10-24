@@ -1,9 +1,9 @@
 //! 中性"外部叠加层"接口——渲染线程可在 ECS UI 之上再画一层任意叠加
-//! （编辑器 egui、调试 HUD 等）。
+//! （调试 HUD、宿主 UI 等）。
 //!
-//! 设计：`GraphRenderer` 不认识具体叠加实现（不认识 egui），只持有
-//! [`SwapchainOverlay`] 的 trait 对象；实现方（如 prism-editor-host 的
-//! egui overlay）在 record 时懒创建自己的 GPU 资源。CPU 帧数据经
+//! 设计：`GraphRenderer` 不认识具体叠加实现，只持有
+//! [`SwapchainOverlay`] 的 trait 对象；实现方在 record 时懒创建自己的
+//! GPU 资源。CPU 帧数据经
 //! `GraphRenderer::apply_overlay_message` 以类型擦除的闭包喂入。
 //!
 //! 布局契约：本层在 ECS UI 之后 record（两者 final layout 都是
@@ -39,9 +39,9 @@ impl Debug for OverlayRecordCtx<'_> {
     }
 }
 
-/// 一条投递给叠加层的类型擦除消息（如"这是新的 egui 帧"）。
+/// 一条投递给叠加层的类型擦除消息（如"这是新的宿主 UI 帧"）。
 ///
-/// 宿主（如 prism-editor-host）构造闭包捕获自己的 CPU 帧数据；
+/// 宿主构造闭包捕获自己的 CPU 帧数据；
 /// 渲染线程取出后应用到叠加层引用（闭包内可经
 /// [`AsAny::as_any_mut`] 下行转换到具体实现）。
 pub type OverlayMessage = Box<dyn FnOnce(&mut dyn SwapchainOverlay) + Send>;
@@ -50,7 +50,7 @@ pub type OverlayMessage = Box<dyn FnOnce(&mut dyn SwapchainOverlay) + Send>;
 ///
 /// 宿主投递叠加层消息时，消息闭包收到 `&mut dyn SwapchainOverlay`；
 /// 通过 `as_any_mut().downcast_mut::<T>()` 可以取回具体实现
-/// （如 prism-editor-host 的 `EguiOverlay`）。
+/// （如调试 HUD 的叠加实现）。
 pub trait AsAny: Send {
     fn as_any_mut(&mut self) -> &mut dyn Any;
 }

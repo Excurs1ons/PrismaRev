@@ -91,10 +91,9 @@ cargo test --workspace                 # ~400 测试（含 CRT 状态机单测�
 注意：
 
 - 根 workspace **没有可运行的 bin**。桌面入口在 `projects/prisma/`（`prisma` 二进制，
-  独立 workspace：`cd projects/prisma && cargo run`）；编辑器入口在 `projects/prisma-editor/`
-  （`cargo run --manifest-path projects/prisma-editor/Cargo.toml`）；
-  Tauri 壳在 `launcher/`（独立 workspace）。
-- `projects/prisma/`、`projects/prisma-sponza/`、`projects/prisma-editor/`、`launcher/`、
+  独立 workspace：`cd projects/prisma && cargo run`）；编辑器是 `editor/`（Tauri 2 + Vue 3，
+  需要 `pnpm tauri dev`）；Tauri 启动器在 `launcher/`（独立 workspace）。
+- `projects/prisma/`、`projects/prisma-sponza/`、`launcher/`、`editor/`、
   `crates/xtask` 不在根 workspace 的默认覆盖内——
   根 workspace 构建不包含它们，需各自 `cd` 进去单独 build/clippy。
 - 首次全量构建较久（依赖多，磁盘约 2GB+）；`target/` 被外部清理后需重新构建。

@@ -7,6 +7,39 @@
 pub use prism_render::RenderMode;
 use prism_render::{DebugMode, NormalSpace};
 
+/// PBR isolate flag names, ordered by shader bit (`PBR_FLAG_*` in
+/// `scene_frag.slang`). Bit `i` corresponds to `PBR_FLAG_NAMES[i]`.
+pub const PBR_FLAG_NAMES: [&str; 15] = [
+    "Direct",
+    "Shadow",
+    "Specular",
+    "Metallic",
+    "Roughness",
+    "DiffuseIBL",
+    "SpecularIBL",
+    "MultiLight",
+    "AO",
+    "Emissive",
+    "Transmission",
+    "Translucency",
+    "Anisotropy",
+    "ClearCoat",
+    "GI",
+];
+
+/// Human-readable label for a PBR debug-flag mask (`0` = normal render).
+pub fn pbr_flag_label(flags: u32) -> &'static str {
+    if flags == 0 {
+        return "(normal render)";
+    }
+    PBR_FLAG_NAMES
+        .iter()
+        .enumerate()
+        .find(|(bit, _)| flags == (1u32 << bit))
+        .map(|(_, name)| *name)
+        .unwrap_or("(custom flags)")
+}
+
 /// Aggregate of all per-frame 渲染 knobs.
 ///
 /// `App` owns one 实例 mutates it in response to keyboard/UI 输入 and

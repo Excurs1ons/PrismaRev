@@ -304,7 +304,7 @@ fn cooks_real_default_scene() {
     let json = include_bytes!("../../../../assets/scenes/default.scene.json");
     let (cooker, result) = cook_scene_json(json).unwrap();
     let decoded = rscn::decode_scene(&result.cooked_data, cooker.registry()).unwrap();
-    assert_eq!(decoded.entities.len(), 6);
+    assert_eq!(decoded.entities.len(), 7);
     assert_eq!(
         decoded.env_path().as_deref(),
         Some("../valley_of_desolation_1k.hdr")

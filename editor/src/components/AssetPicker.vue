@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, inject, ref } from "vue";
+import { X } from "lucide-vue-next";
 import { ASSETS_KEY } from "../keys";
 import { formatBytes } from "../format";
 import type { AssetInfo } from "../types";
@@ -52,7 +53,7 @@ function pick(path: string) {
       <header>
         <span class="title">{{ title ?? "选择资产" }}</span>
         <span class="spacer" />
-        <button class="ghost icon" @click="emit('cancel')">✕</button>
+        <button class="ghost icon" @click="emit('cancel')"><X :size="14" /></button>
       </header>
 
       <div class="modal-tools">

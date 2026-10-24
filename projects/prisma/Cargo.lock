@@ -2475,6 +2475,8 @@ dependencies = [
  "prism-platform",
  "prism-render",
  "rapier3d",
+ "serde",
+ "serde_json",
  "winit",
 ]
 

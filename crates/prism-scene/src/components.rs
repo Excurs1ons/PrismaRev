@@ -8,6 +8,7 @@
 //! | 光源     | `DirectionalLight`, `PointLight`, `SpotLight` |
 //! | 相机     | `Camera`, `FlyCameraController` |
 //! | 天空盒   | `Skybox` |
+//! | 调试     | `Gizmo` |
 //! | 场景     | `SceneMember` |
 //! | 标识     | `Name` |
 
@@ -384,30 +385,28 @@ pub struct Name(pub String);
 
 /// Skybox / environment 映射表 分量
 ///
-/// When an 实体 with this 分量 存在 in the scene, the engine loads
-/// the referenced 高动态范围 资源 for image-based lighting (IBL) and renders it as
-/// the background sky. The 高动态范围 is referenced through the 资源 系统 via
-/// `env_asset`; `hdr_path` is a transitional cache populated at 加载 时间 from
-/// the cooked RSCN data (will be removed once the 完整 .pak 运行时 is wired).
+/// The entity with this component owns the environment map for the scene:
+/// its HDR drives both image-based lighting (IBL) and the background sky.
+/// There should be at most one enabled skybox entity per scene; the first
+/// enabled one wins.
 ///
-/// Typically there is exactly one skybox 实体 per scene.
+/// The map is rendered as an infinitely distant background; the component's
+/// rotation/intensity are artist-facing controls rather than a world
+/// transform.
 #[derive(Debug, Clone, Serialize, Deserialize, Reflect)]
 #[reflect(name = "prism_engine::scene::Skybox")]
 #[serde(default)]
 pub struct Skybox {
-    /// 资源 ID of the 高动态范围 environment 映射表 in the 资源 系统
-    ///
-    /// The cooker resolves the authoring path to a 稳定 `AssetId`; at
-    /// 运行时 the engine loads the 高动态范围 through this ID.
+    /// Optional stable resource id resolved by the cooker (legacy path).
     pub env_asset: SceneAssetId,
-    /// Transitional: resolved 高动态范围 file path (populated from RSCN at 加载
-    /// 时间 Will be removed once the .pak 运行时 provides on-demand
-    /// 资源 loading by `SceneAssetId`.
+    /// Authoring HDR path, relative to the scene file (or `assets/...`).
     pub hdr_path: String,
-    /// When `false` the skybox 实体 is 禁用 no IBL from the 高动态范围 and
-    /// 无天空盒渲染（渲染器回退到其程序化
-    /// environment or a 固体 清空 颜色
+    /// When `false` the environment is ignored: no IBL and no sky draw.
     pub enabled: bool,
+    /// Background yaw rotation in degrees.
+    pub rotation_degrees: f32,
+    /// Background brightness multiplier (1 = HDR as-is).
+    pub intensity: f32,
 }
 
 impl Default for Skybox {
@@ -416,6 +415,31 @@ impl Default for Skybox {
             env_asset: SceneAssetId::from_raw(0),
             hdr_path: String::new(),
             enabled: true,
+            rotation_degrees: 0.0,
+            intensity: 1.0,
+        }
+    }
+}
+
+/// World-space XYZ axis gizmo owned by an entity.
+///
+/// The gizmo uses the entity's `WorldTransform` (translation/rotation/scale)
+/// multiplied by [`Gizmo::scale`], so it can be placed and oriented like any
+/// other scene object. No `Gizmo` component means no gizmo is drawn.
+#[derive(Debug, Clone, Serialize, Deserialize, Reflect)]
+#[reflect(name = "prism_engine::scene::Gizmo")]
+#[serde(default)]
+pub struct Gizmo {
+    pub enabled: bool,
+    /// Additional uniform scale applied on top of the entity transform.
+    pub scale: f32,
+}
+
+impl Default for Gizmo {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            scale: 1.0,
         }
     }
 }

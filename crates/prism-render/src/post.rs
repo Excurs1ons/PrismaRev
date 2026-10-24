@@ -17,7 +17,7 @@
 //! 加载 op).
 //! 3. 开始 渲染 pass (writes 交换链 绘制 fullscreen triangle, 结束
 //! 4. The 调用者 (GraphRenderer::render) barriers 交换链
-//! `COLOR_ATTACHMENT_OPTIMAL -> PRESENT_SRC_KHR` (or the egui 叠加 does
+//! `COLOR_ATTACHMENT_OPTIMAL -> PRESENT_SRC_KHR` (or the external overlay does
 //! it via its own load+transition pass
 
 use anyhow::Context as _;
@@ -268,7 +268,7 @@ impl PostPass {
 
     /// Record the PostPass into `cmd`. Must run AFTER ForwardPass (which leaves
     /// the 高动态范围 颜色 in COLOR_ATTACHMENT_OPTIMAL). The 调用者 barriers the
-    /// 交换链 to PRESENT_SRC_KHR (or the egui 叠加 handles it) after this.
+    /// 交换链 to PRESENT_SRC_KHR (or the external overlay handles it) after this.
     /// `frame_index` selects the per-frame-in-flight 描述符 集合 `image_index`
     /// selects the per-swapchain-image 帧缓冲
     pub fn execute(
@@ -303,7 +303,7 @@ impl PostPass {
         let _ = hdr_image;
 
         // The 交换链 图像 transitions UNDEFINED -> COLOR_ATTACHMENT_OPTIMAL
-        // via the 渲染 pass `initial_layout` (the egui 叠加 or the caller's
+        // via the 渲染 pass `initial_layout` (the external overlay or the caller's
         // PRESENT_SRC_KHR 屏障 handles the final 过渡 out).
         let clear_values = [vk::ClearValue {
             color: vk::ClearColorValue {
@@ -622,7 +622,7 @@ impl RenderPassNode for PostPass {
 /// transitions the 交换链 图像 from whatever 布局 it was in (typically
 /// PRESENT_SRC_KHR from 最后一个 帧 into COLOR_ATTACHMENT_OPTIMAL as part of
 /// the 加载 op. `final_layout = COLOR_ATTACHMENT_OPTIMAL` so the 调用者 can
-/// 屏障 to PRESENT_SRC_KHR (or the egui 叠加 can 加载 it).
+/// 屏障 to PRESENT_SRC_KHR (or the external overlay can 加载 it).
 fn create_render_pass(device: &ash::Device, format: vk::Format) -> anyhow::Result<vk::RenderPass> {
     let color_attachment = vk::AttachmentDescription::default()
         .format(format)
@@ -632,7 +632,7 @@ fn create_render_pass(device: &ash::Device, format: vk::Format) -> anyhow::Resul
         .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
         .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
         .initial_layout(vk::ImageLayout::UNDEFINED)
-        // Leave COLOR_ATTACHMENT_OPTIMAL so the egui 叠加 can 加载 it, or
+        // Leave COLOR_ATTACHMENT_OPTIMAL so the external overlay can 加载 it, or
         // the 调用者 can 屏障 to PRESENT_SRC_KHR.
         .final_layout(vk::ImageLayout::PRESENT_SRC_KHR);
 

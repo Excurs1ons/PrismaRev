@@ -31,6 +31,9 @@ use super::loader::{SceneInstance, SceneLoader, SceneSource};
 pub struct SceneManager {
     /// 当前已加载场景名（manifest 中 `scenes[].name`）。
     current_scene_name: Option<String>,
+    /// 当前场景在资源包内的路径（例如 `scenes/default.rscn`），
+    /// 用于把作者相对路径解析成包内路径。
+    current_scene_path: Option<String>,
     environment_bytes: Option<Vec<u8>>,
 }
 
@@ -50,10 +53,55 @@ impl<'a> SceneReadView<'a> {
     }
 
     pub fn environment_asset_path(&self) -> Option<String> {
+        // Skybox is the authoritative source. A scene with a disabled Skybox
+        // deliberately opts out of IBL, so do not fall back to the legacy
+        // EnvironmentLighting component in that case.
+        let mut has_skybox = false;
+        for (_, skybox) in self.world.query::<super::components::Skybox>() {
+            has_skybox = true;
+            if skybox.enabled && !skybox.hdr_path.is_empty() {
+                return Some(skybox.hdr_path.clone());
+            }
+        }
+        if has_skybox {
+            return None;
+        }
+
+        // Legacy compatibility for scenes authored before Skybox owned the
+        // environment map.
         self.world
             .query::<super::components::EnvironmentLighting>()
             .next()
             .and_then(|(_, env)| env.env_map.clone())
+    }
+
+    /// Per-frame skybox parameters (rotation/intensity) from the first enabled
+    /// Skybox component.
+    pub fn skybox_settings(&self) -> Option<prism_render::SkyboxSettings> {
+        self.world
+            .query::<super::components::Skybox>()
+            .find(|(_, skybox)| skybox.enabled)
+            .map(|(_, skybox)| prism_render::SkyboxSettings {
+                rotation: skybox.rotation_degrees.to_radians(),
+                intensity: skybox.intensity.max(0.0),
+            })
+    }
+
+    /// One gizmo instance per enabled `Gizmo` entity, using its world
+    /// transform multiplied by the component's additional scale.
+    pub fn gizmo_instances(&self) -> Vec<prism_render::GizmoInstance> {
+        self.world
+            .query::<super::components::Gizmo>()
+            .filter(|(_, gizmo)| gizmo.enabled)
+            .filter_map(|(entity, gizmo)| {
+                let transform = self.world.get::<super::components::WorldTransform>(entity)?;
+                let model = transform.0
+                    * glam::Mat4::from_scale(glam::Vec3::splat(gizmo.scale.max(0.0)));
+                Some(prism_render::GizmoInstance {
+                    model: model.to_cols_array_2d(),
+                })
+            })
+            .collect()
     }
 
     /// 提取渲染所需的扁平绘制列表，不暴露可变 ECS 访问。
@@ -79,6 +127,35 @@ impl<'a> SceneReadView<'a> {
     }
 }
 
+/// 把场景里的相对资源路径解析成资源包内路径。
+///
+/// 例：场景 `scenes/default.rscn` + `../valley.hdr` -> `valley.hdr`；
+/// `assets/valley.hdr` -> `valley.hdr`。
+fn normalize_scene_asset_path(scene_path: Option<&str>, asset_path: &str) -> String {
+    let asset_path = asset_path.replace('\\', "/");
+    if let Some(rest) = asset_path.strip_prefix("assets/") {
+        return rest.to_string();
+    }
+    if asset_path.starts_with('/') {
+        return asset_path;
+    }
+
+    let mut parts: Vec<&str> = Vec::new();
+    if let Some(dir) = scene_path.and_then(|path| path.rsplit_once('/').map(|(dir, _)| dir)) {
+        parts.extend(dir.split('/').filter(|part| !part.is_empty()));
+    }
+    for part in asset_path.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            other => parts.push(other),
+        }
+    }
+    parts.join("/")
+}
+
 impl Default for SceneManager {
     fn default() -> Self {
         Self::new()
@@ -90,6 +167,7 @@ impl SceneManager {
     pub fn new() -> Self {
         Self {
             current_scene_name: None,
+            current_scene_path: None,
             environment_bytes: None,
         }
     }
@@ -119,7 +197,7 @@ impl SceneManager {
         self.load_from_manifest(rm, world, registry, None)
     }
 
-    /// 从 manifest 加载**指定名字**的场景到世界（场景切换入口）。
+    /// 从 `assets/scenes.toml` 按名字加载指定场景。
     ///
     /// 清单中找不到该名字或加载失败时，保持「当前场景」不变并返回 `None`。
     pub fn load_named_from_manifest(
@@ -163,7 +241,9 @@ impl SceneManager {
     /// - `.scene.json`：从已加载的 ECS 世界查询 `EnvironmentLighting` 组件；
     ///   无该组件或 `env_map = None` → 返回 `None`（开屏等无光照场景不构建 IBL）。
     #[cfg(feature = "legacy-disk-scenes")]
-    #[deprecated(note = "use current_scene_env_bytes_with_provider; this fallback reads scene files")]
+    #[deprecated(
+        note = "use current_scene_env_bytes_with_provider; this fallback reads scene files"
+    )]
     pub fn current_scene_env_bytes(&self, world: &World) -> Option<Vec<u8>> {
         if let Some(bytes) = &self.environment_bytes {
             return Some(bytes.clone());
@@ -181,7 +261,11 @@ impl SceneManager {
                     .unwrap_or_else(|| PathBuf::from(&hdr_rel));
                 match std::fs::read(&hdr_path) {
                     Ok(bytes) => {
-                        log::info!("scene '{}' environment (rscn): {}", name, hdr_path.display());
+                        log::info!(
+                            "scene '{}' environment (rscn): {}",
+                            name,
+                            hdr_path.display()
+                        );
                         return Some(bytes);
                     }
                     Err(e) => log::warn!("env map {} not readable: {e}", hdr_path.display()),
@@ -229,7 +313,9 @@ impl SceneManager {
             return Some(bytes.clone());
         }
         if let Some(path) = view.environment_asset_path() {
-            return provider.load_environment(&path);
+            let normalized =
+                normalize_scene_asset_path(self.current_scene_path.as_deref(), &path);
+            return provider.load_environment(&normalized);
         }
         None
     }
@@ -287,6 +373,7 @@ impl SceneManager {
         manifest: &SceneManifest,
         scene_name: Option<&str>,
     ) -> Option<String> {
+        self.current_scene_path = None;
         for entry in &manifest.scenes {
             if let Some(name) = scene_name {
                 if &entry.name != name {
@@ -313,6 +400,7 @@ impl SceneManager {
                         inst.root_entities.len()
                     );
                     self.current_scene_name = Some(entry.name.clone());
+                    self.current_scene_path = Some(entry.path.clone());
                     return Some(entry.name.clone());
                 }
                 Err(e) => {
@@ -322,6 +410,9 @@ impl SceneManager {
             }
         }
         log::warn!("no resolvable scene in manifest; no scene will be loaded");
+        if let Some(name) = scene_name {
+            log::warn!("requested scene '{name}' was not found in the manifest");
+        }
         None
     }
 }
@@ -386,7 +477,10 @@ pub struct SceneManifest {
 /// 都能正确找到资源清单——之前从用户项目目录启动时，导致
 /// `assets/scenes.toml` 找不到、回退到空场景而黑屏。
 fn find_manifest_path() -> Option<PathBuf> {
-    let rels = ["assets/scenes.toml", "crates/prism-engine/assets/scenes.toml"];
+    let rels = [
+        "assets/scenes.toml",
+        "crates/prism-engine/assets/scenes.toml",
+    ];
     let mut bases: Vec<PathBuf> = Vec::new();
     if let Ok(cwd) = std::env::current_dir() {
         bases.push(cwd.clone());

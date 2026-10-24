@@ -1,14 +1,23 @@
 import type {
   AssetInfo,
+  AssetMutation,
   AssetRef,
+  AssetTextPreview,
+  BakeGiOptions,
   DocKind,
   EntityPreset,
+  HeightmapOptions,
   InstantiateResult,
   JsonValue,
   MoveResult,
+  PlayableScene,
   PrefabLink,
+  PreviewLogLine,
+  RenderGraphReport,
+  RenderSettingsData,
   SceneDoc,
   SceneEntry,
+  ScenePackageStatus,
   SceneTemplate,
   Schema,
 } from "./types";
@@ -20,17 +29,27 @@ import type {
  * `invoke` 的名字与参数映射，前端不重复实现任何 schema 逻辑。
  */
 
-/** 是否运行在 Tauri 宿主里（浏览器直接打开时为 false → 走预览 fixture）。 */
+/** 是否运行在 Tauri 宿主里。 */
 const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+/** 浏览器预览必须显式带 `?demo=1`，避免真实运行时静默回退到 mock。 */
+const demoRequested =
+  typeof window !== "undefined" &&
+  new URLSearchParams(window.location.search).has("demo");
 
 async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
-  if (!inTauri) {
-    // 动态 import：Tauri 构建里这一个 chunk 不会被打进主包。
+  if (inTauri) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return invoke<T>(cmd, args);
+  }
+  if (import.meta.env.DEV && demoRequested) {
+    // 仅开发服务器 + 显式 ?demo=1 才加载 fixture；生产构建会 tree-shake 掉。
     const mock = await import("./mock");
     return mock.invoke<T>(cmd, args);
   }
-  const { invoke } = await import("@tauri-apps/api/core");
-  return invoke<T>(cmd, args);
+  throw new Error(
+    `Mock 已禁用：${cmd} 只能在 Tauri 宿主中执行。` +
+      `（纯浏览器预览请打开 /?demo=1，数据来自只读 fixture）`,
+  );
 }
 
 // ── schema / 元信息 ─────────────────────────────────────────────────────────
@@ -60,9 +79,68 @@ export function listAssetsInfo(): Promise<AssetInfo[]> {
   return call<AssetInfo[]>("editor_list_assets_info");
 }
 
+/** `assets/` 下的目录（含空目录）。 */
+export function listAssetDirs(): Promise<string[]> {
+  return call<string[]>("editor_list_asset_dirs");
+}
+
+/** 读取文本资产（脚本 / JSON / TOML / 着色器等）。 */
+export function readAssetText(path: string, maxBytes = 512 * 1024): Promise<AssetTextPreview> {
+  return call<AssetTextPreview>("editor_read_asset_text", { path, maxBytes });
+}
+
+/**
+ * 读取资产原始字节（图片预览）。
+ *
+ * Tauri 对 `tauri::ipc::Response` 直接返回 ArrayBuffer，不经过 JSON；
+ * 浏览器预览没有文件访问能力，直接报错而不是伪造数据。
+ */
+export async function readAssetBytes(
+  path: string,
+  maxBytes = 16 * 1024 * 1024,
+): Promise<Uint8Array> {
+  if (inTauri) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    const data = await invoke<ArrayBuffer | Uint8Array>("editor_read_asset_bytes", {
+      path,
+      maxBytes,
+    });
+    return data instanceof Uint8Array ? data : new Uint8Array(data);
+  }
+  if (import.meta.env.DEV && demoRequested) {
+    throw new Error("浏览器预览模式无法读取资产二进制；请用 `pnpm tauri dev`");
+  }
+  throw new Error("Mock 已禁用：editor_read_asset_bytes 只能在 Tauri 宿主中执行");
+}
+
 /** 哪些文档字段引用了该资产。 */
 export function assetUsage(path: string): Promise<AssetRef[]> {
   return call<AssetRef[]>("editor_asset_usage", { path });
+}
+
+/** 新建资产目录。 */
+export function createAssetDir(path: string): Promise<string> {
+  return call<string>("editor_create_asset_dir", { path });
+}
+
+/** 重命名 / 移动资产，并同步文档引用。 */
+export function renameAsset(from: string, to: string): Promise<AssetMutation> {
+  return call<AssetMutation>("editor_rename_asset", { from, to });
+}
+
+/** 跨目录移动资产。 */
+export function moveAsset(from: string, to: string): Promise<AssetMutation> {
+  return call<AssetMutation>("editor_move_asset", { from, to });
+}
+
+/** 删除前的影响范围（引用了该资产的文档）。 */
+export function assetReferences(path: string): Promise<string[]> {
+  return call<string[]>("editor_asset_references", { path });
+}
+
+/** 删除资产；仍有引用时需 `force = true`。 */
+export function deleteAsset(path: string, force: boolean): Promise<AssetMutation> {
+  return call<AssetMutation>("editor_delete_asset", { path, force });
 }
 
 // ── 文档（场景 / 预制体） ───────────────────────────────────────────────────
@@ -149,6 +227,16 @@ export function createPrefabFromEntity(
   return call<string>("editor_create_prefab_from_entity", { doc, entityIndex, name });
 }
 
+/** 把实体子树保存为预制体到指定资产目录（层级树拖放）。 */
+export function createPrefabAt(
+  doc: SceneDoc,
+  entityIndex: number,
+  folder: string,
+  name: string,
+): Promise<string> {
+  return call<string>("editor_create_prefab_at", { doc, entityIndex, folder, name });
+}
+
 /** 把预制体实例化进场景，返回新文档与插入下标（同时记录反向链接）。 */
 export function instantiatePrefab(
   scene: SceneDoc,
@@ -205,4 +293,81 @@ export function setComponentField(
 /** 把场景 cook 成 RSCN，返回命令输出。 */
 export function cookScene(path: string): Promise<string> {
   return call<string>("editor_cook_scene", { path });
+}
+
+// ── 运行 / 预览 ─────────────────────────────────────────────────────────────
+
+/** `assets/scenes.toml` 中的可运行场景名。 */
+export function listPlayableScenes(): Promise<PlayableScene[]> {
+  return call<PlayableScene[]>("editor_list_playable_scenes");
+}
+
+/** 运行时场景包状态。 */
+export function scenePackageStatus(): Promise<ScenePackageStatus> {
+  return call<ScenePackageStatus>("editor_scene_package_status");
+}
+
+/** 重新 cook + 打包所有场景（`build-scenes`），返回命令输出。 */
+export function buildScenes(): Promise<string> {
+  return call<string>("editor_build_scenes");
+}
+
+// ── 离线工具 ────────────────────────────────────────────────────────────────
+
+/** 离线烘焙 GI probe volume，返回命令输出。 */
+export function bakeGi(options: BakeGiOptions): Promise<string> {
+  return call<string>("editor_bake_gi", { options });
+}
+
+/** 生成程序化高度图，返回命令输出。 */
+export function generateHeightmap(options: HeightmapOptions): Promise<string> {
+  return call<string>("editor_generate_heightmap", { options });
+}
+
+/** 启动游戏预览指定场景，返回进程 PID。 */
+export function playScene(scene: string): Promise<number> {
+  return call<number>("editor_play_scene", { scene });
+}
+
+/** 停止预览进程。 */
+export function stopPreview(): Promise<boolean> {
+  return call<boolean>("editor_stop_preview");
+}
+
+/** 预览进程是否仍在运行。 */
+export function previewRunning(): Promise<boolean> {
+  return call<boolean>("editor_preview_running");
+}
+
+/** 已捕获的游戏日志（面板重新显示时回填）。 */
+export function previewLogs(): Promise<PreviewLogLine[]> {
+  return call<PreviewLogLine[]>("editor_preview_logs");
+}
+
+/** 订阅游戏进程 stdout/stderr。返回取消订阅函数。 */
+export async function onPreviewLog(
+  handler: (entry: PreviewLogLine) => void,
+): Promise<() => void> {
+  if (!inTauri) return () => {};
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<PreviewLogLine>("preview-log", (event) => handler(event.payload));
+}
+
+// ── 项目设置 ────────────────────────────────────────────────────────────────
+
+/** 读取项目级渲染设置。 */
+export function renderSettings(): Promise<RenderSettingsData> {
+  return call<RenderSettingsData>("editor_render_settings");
+}
+
+/** 写入项目级渲染设置。 */
+export function writeRenderSettings(settings: RenderSettingsData): Promise<void> {
+  return call<void>("editor_write_render_settings", { settings });
+}
+
+// ── 渲染图 ──────────────────────────────────────────────────────────────────
+
+/** 读取游戏进程写出的最新渲染图报告（未运行过预览时为 null）。 */
+export function renderGraphReport(): Promise<RenderGraphReport | null> {
+  return call<RenderGraphReport | null>("editor_render_graph_report");
 }

@@ -1,7 +1,7 @@
 //! 启动配置（hub → 游戏传参）。
 //!
 //! hub（Tauri launcher / Android hub）在拉起游戏前选择启动参数，经统一
-//! 的 JSON 通道传递，引擎侧 [`LaunchConfig::load`] 自动读取：
+//! 的 JSON 通道传递，引擎侧 [`LaunchConfig::from_env`] 自动读取：
 //!
 //! - **桌面**：launcher 以 `PRISMREV_LAUNCH_CONFIG` env 传入；
 //! - **Android**：hub 把同一份 JSON 写到 app files 目录的
@@ -16,30 +16,28 @@ use serde::{Deserialize, Serialize};
 pub const ENV_KEY: &str = "PRISMREV_LAUNCH_CONFIG";
 
 /// 启动配置。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct LaunchConfig {
-    /// 启动场景。引擎根据此字段查找已注册的场景并调度。
-    #[serde(default = "default_scene")]
-    pub scene: String,
+    /// 启动场景名（`assets/scenes.toml` 的 `scenes[].name`）。
+    ///
+    /// `None` = 加载 manifest 中第一个可解析场景（历史默认行为）。
+    /// 编辑器 / 启动器可据此直接预览指定场景。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scene: Option<String>,
     /// 日志级别覆盖（如 `"debug"` / `"warn"`）；`None` = 平台默认。
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub log_level: Option<String>,
 }
 
-impl Default for LaunchConfig {
-    fn default() -> Self {
-        Self {
-            scene: default_scene(),
-            log_level: None,
+impl LaunchConfig {
+    /// 当前进程的启动配置（读 [`ENV_KEY`]；缺失/非法回退默认）。
+    pub fn from_env() -> Self {
+        match std::env::var(ENV_KEY) {
+            Ok(json) => Self::from_json(&json),
+            Err(_) => Self::default(),
         }
     }
-}
 
-fn default_scene() -> String {
-    "intro".to_string()
-}
-
-impl LaunchConfig {
     /// 从调用方提供的 JSON 解析；不访问环境变量或文件系统。
     pub fn from_json(json: &str) -> Self {
         serde_json::from_str(json).unwrap_or_else(|error| {
@@ -52,14 +50,32 @@ impl LaunchConfig {
     pub fn to_json(&self) -> String {
         serde_json::to_string(self).expect("LaunchConfig serializes")
     }
+}
 
-    /// 从环境读取并解析启动配置。缺失/非法一律回退默认。
-    #[deprecated(note = "read the source in prism-app and call LaunchConfig::from_json")]
-    pub fn load() -> Self {
-        match std::env::var(ENV_KEY) {
-            Ok(json) => Self::from_json(&json),
-            Err(_) => Self::default(),
-        }
+#[cfg(test)]
+mod tests {
+    use super::LaunchConfig;
+
+    #[test]
+    fn scene_is_optional_and_defaults_to_first_entry() {
+        let launch = LaunchConfig::from_json("{}");
+        assert_eq!(launch.scene, None);
+        assert_eq!(launch.log_level, None);
+
+        let launch = LaunchConfig::from_json(r#"{"scene":"default"}"#);
+        assert_eq!(launch.scene.as_deref(), Some("default"));
     }
 
+    #[test]
+    fn invalid_json_falls_back_to_default() {
+        let launch = LaunchConfig::from_json("not json");
+        assert!(launch.scene.is_none());
+        assert!(launch.log_level.is_none());
+    }
+
+    #[test]
+    fn json_roundtrip_omits_absent_scene() {
+        let json = LaunchConfig::default().to_json();
+        assert_eq!(json, "{}");
+    }
 }

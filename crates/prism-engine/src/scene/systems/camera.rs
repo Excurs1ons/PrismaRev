@@ -42,7 +42,7 @@ pub struct CameraOutput {
 
 /// Return a 回退 `CameraOutput` when no usable 相机 实体 存在 in the
 /// ECS 世界 This avoids a fatal 错误 — the engine renders a gray background
-/// and the egui 叠加 shows a "No 相机 hint.
+/// and the runtime HUD shows a "No 相机 hint.
 ///
 /// The 回退 places the viewer at `(0, 0, 5)` looking toward the origin with
 /// a 75° 视场角 16:9 宽高比 and exposure 1.0.

@@ -7,7 +7,7 @@
 //! - **渲染线程**每轮迭代读取最新数据并处理。
 //! - 无阻塞——渲染线程始终使用最新的可用数据。
 //!
-//! 外部叠加层（编辑器 egui 等）的 CPU 帧数据经 [`overlay_messages`]
+//! 外部叠加层（宿主 UI 等）的 CPU 帧数据经 [`overlay_messages`]
 //! 传递：主线程把类型擦除的闭包（[`OverlayMessage`]）入队，渲染线程
 //! 在每帧开始时取出并应用到叠加层。
 //!
@@ -35,10 +35,7 @@ static START_EPOCH: OnceLock<Instant> = OnceLock::new();
 
 /// 自进程启动起经过的毫秒数（单调）。
 pub fn startup_ms() -> u64 {
-    START_EPOCH
-        .get_or_init(Instant::now)
-        .elapsed()
-        .as_millis() as u64
+    START_EPOCH.get_or_init(Instant::now).elapsed().as_millis() as u64
 }
 
 /// 类型擦除的渲染器命令（主线程→渲染线程）：渲染线程每帧取出并应用到
@@ -123,11 +120,8 @@ impl RenderShared {
     /// 入队一条叠加层消息（主线程 → 渲染线程）。
     ///
     /// 消息是类型擦除的闭包：渲染线程在每帧开始时取出并应用到
-    /// 外部叠加层（如"这是新的 egui 帧"）。
-    pub fn send_overlay_message(
-        &self,
-        msg: OverlayMessage,
-    ) {
+    /// 外部叠加层（如"这是新的宿主 UI 帧"）。
+    pub fn send_overlay_message(&self, msg: OverlayMessage) {
         self.overlay_messages.lock().unwrap().push(msg);
     }
 

@@ -5,6 +5,8 @@
 
 use serde::Deserialize;
 
+use crate::render_settings::{RenderMode, RenderSettings};
+
 // ---------------------------------------------------------------------------
 // Top-level 配置
 // ---------------------------------------------------------------------------
@@ -15,6 +17,73 @@ pub struct AppConfig {
     pub app: AppInfo,
     #[serde(default)]
     pub window: WindowConfig,
+    #[serde(default)]
+    pub render: RenderConfig,
+}
+
+// ---------------------------------------------------------------------------
+// Render defaults (`[render]` in settings.toml)
+// ---------------------------------------------------------------------------
+
+/// `[render]` 段：启动时的渲染 / 调试 / 路径追踪默认值。
+///
+/// 全部字段可选——缺省沿用 [`RenderSettings::default`]。编辑器（Tauri）
+/// 会读写同一份文件，因此这里的字段名就是项目级渲染设置的外部契约。
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct RenderConfig {
+    /// `"raster"` 或 `"path_trace"`。
+    #[serde(default)]
+    pub render_mode: Option<String>,
+    /// PBR isolate 位掩码（0 = 正常渲染）。
+    #[serde(default)]
+    pub debug_flags: Option<u32>,
+    /// 0 = Reinhard, 1 = ACES。
+    #[serde(default)]
+    pub tonemap_mode: Option<u32>,
+    /// 0 = HDR tonemap, 1 = depth, 2 = view-space normal。
+    #[serde(default)]
+    pub debug_rt: Option<u32>,
+    #[serde(default)]
+    pub pt_max_bounces: Option<u32>,
+    #[serde(default)]
+    pub pt_ray_max_distance: Option<f32>,
+    /// 0 = accumulate forever。
+    #[serde(default)]
+    pub pt_max_iterations: Option<u32>,
+}
+
+impl RenderConfig {
+    /// 把配置覆盖到运行时设置上（仅覆盖显式给出的字段）。
+    pub fn apply(&self, settings: &mut RenderSettings) {
+        if let Some(mode) = &self.render_mode {
+            settings.render_mode = match mode.as_str() {
+                "path_trace" | "path-trace" | "pathtrace" => RenderMode::PathTrace,
+                "raster" => RenderMode::Raster,
+                other => {
+                    log::warn!("settings.toml: unknown render_mode '{other}'; using raster");
+                    RenderMode::Raster
+                }
+            };
+        }
+        if let Some(flags) = self.debug_flags {
+            settings.debug_flags = flags;
+        }
+        if let Some(mode) = self.tonemap_mode {
+            settings.tonemap_mode = mode;
+        }
+        if let Some(rt) = self.debug_rt {
+            settings.debug_rt = rt;
+        }
+        if let Some(bounces) = self.pt_max_bounces {
+            settings.pt_max_bounces = bounces;
+        }
+        if let Some(distance) = self.pt_ray_max_distance {
+            settings.pt_ray_max_distance = distance;
+        }
+        if let Some(iterations) = self.pt_max_iterations {
+            settings.pt_max_iterations = iterations;
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -181,6 +250,7 @@ impl Default for AppConfig {
         Self {
             app: AppInfo::default(),
             window: WindowConfig::default(),
+            render: RenderConfig::default(),
         }
     }
 }
@@ -202,6 +272,22 @@ mod tests {
         let cfg = AppConfig::from_toml("[window\nwidth = nope");
         assert_eq!(cfg.window.width, 1600);
         assert_eq!(cfg.window.height, 900);
+    }
+
+    #[test]
+    fn render_section_overrides_runtime_settings() {
+        use crate::render_settings::{RenderMode, RenderSettings};
+
+        let cfg = AppConfig::from_toml(
+            "[render]\nrender_mode = \"path_trace\"\ntonemap_mode = 1\npt_max_bounces = 7\n",
+        );
+        let mut settings = RenderSettings::default();
+        cfg.render.apply(&mut settings);
+        assert_eq!(settings.render_mode, RenderMode::PathTrace);
+        assert_eq!(settings.tonemap_mode, 1);
+        assert_eq!(settings.pt_max_bounces, 7);
+        // Unspecified fields keep their defaults.
+        assert_eq!(settings.pt_max_iterations, 0);
     }
 }
 

@@ -1,6 +1,7 @@
 import { PREFAB_LINK_COMPONENT } from "./types";
 import type {
   AssetInfo,
+  AssetMutation,
   AssetRef,
   DocKind,
   EntityJson,
@@ -8,7 +9,10 @@ import type {
   InstantiateResult,
   JsonValue,
   MoveResult,
+  PlayableScene,
   PrefabLink,
+  RenderGraphReport,
+  RenderSettingsData,
   SceneDoc,
   SceneEntry,
   SceneTemplate,
@@ -35,6 +39,35 @@ interface Fixture {
 }
 
 let cache: Fixture | null = null;
+
+/** 浏览器预览里新建的空目录（真实后端会从磁盘枚举）。 */
+const extraDirs: string[] = [];
+
+function derivedDirs(infos: AssetInfo[]): string[] {
+  const dirs = new Set<string>();
+  for (const asset of infos) {
+    const parts = asset.path.split("/");
+    parts.pop();
+    let current = "";
+    for (const part of parts) {
+      current = current ? `${current}/${part}` : part;
+      dirs.add(current);
+    }
+  }
+  for (const dir of extraDirs) dirs.add(dir);
+  return [...dirs].sort();
+}
+
+/** 浏览器预览用的渲染设置（仅内存）。 */
+const renderSettingsFixture: RenderSettingsData = {
+  renderMode: "raster",
+  debugFlags: 0,
+  tonemapMode: 0,
+  debugRt: 0,
+  ptMaxBounces: 3,
+  ptRayMaxDistance: 1000,
+  ptMaxIterations: 0,
+};
 
 async function fixture(): Promise<Fixture> {
   if (!cache) {
@@ -466,6 +499,21 @@ async function handle(cmd: string, args: Record<string, unknown>): Promise<unkno
       });
       return path;
     }
+    case "editor_create_prefab_at": {
+      const doc = args.doc as SceneDoc;
+      const prefab = extractSubtree(doc, Number(args.entityIndex));
+      const folder = String(args.folder ?? "assets/prefabs").replace(/\/$/, "");
+      const name = String(args.name || "prefab");
+      const path = `${folder}/${name}.prefab.json`;
+      if (data.docs[path]) throw new Error("已存在同名预制体");
+      data.docs[path] = prefab;
+      data.documents.prefab.push({
+        name: stemOf(path, "prefab"),
+        fileName: fileNameOf(path),
+        path,
+      });
+      return path;
+    }
     case "editor_instantiate_prefab": {
       const prefabPath = String(args.prefabPath);
       const prefab = data.docs[prefabPath];
@@ -523,7 +571,67 @@ async function handle(cmd: string, args: Record<string, unknown>): Promise<unkno
       return clone(args.after as JsonValue);
     }
 
-    // ── 资产引用 ────────────────────────────────────────────────────────
+    // ── 资产文件操作（浏览器预览只改内存） ───────────────────────────────
+    case "editor_create_asset_dir": {
+      const path = String(args.path);
+      extraDirs.push(path);
+      return path;
+    }
+
+    case "editor_list_asset_dirs":
+      return derivedDirs(data.assetInfos);
+
+    case "editor_rename_asset":
+    case "editor_move_asset": {
+      const from = String(args.from);
+      const to = String(args.to);
+      for (const asset of data.assetInfos) {
+        if (asset.path === from || asset.path.startsWith(`${from}/`)) {
+          asset.path = to + asset.path.slice(from.length);
+        }
+      }
+      for (let i = 0; i < extraDirs.length; i += 1) {
+        if (extraDirs[i] === from || extraDirs[i].startsWith(`${from}/`)) {
+          extraDirs[i] = to + extraDirs[i].slice(from.length);
+        }
+      }
+      return {
+        from,
+        to,
+        referencesUpdated: 0,
+        affectedDocuments: [],
+      } satisfies AssetMutation;
+    }
+
+    case "editor_asset_references":
+      return [];
+
+    case "editor_delete_asset": {
+      const path = String(args.path);
+      data.assetInfos = data.assetInfos.filter(
+        (asset) => asset.path !== path && !asset.path.startsWith(`${path}/`),
+      );
+      for (let i = extraDirs.length - 1; i >= 0; i -= 1) {
+        if (extraDirs[i] === path || extraDirs[i].startsWith(`${path}/`)) {
+          extraDirs.splice(i, 1);
+        }
+      }
+      return {
+        from: path,
+        to: null,
+        referencesUpdated: 0,
+        affectedDocuments: [],
+      } satisfies AssetMutation;
+    }
+
+    case "editor_read_asset_text":
+      return {
+        path: String(args.path ?? ""),
+        text: "（浏览器预览模式不读取真实文件；请用 `pnpm tauri dev` 查看文本/脚本内容）",
+        truncated: false,
+        sizeBytes: 0,
+      };
+
     case "editor_asset_usage": {
       const target = resolvePath("/preview", String(args.path));
       const refs: AssetRef[] = [];
@@ -560,6 +668,44 @@ async function handle(cmd: string, args: Record<string, unknown>): Promise<unkno
 
     case "editor_cook_scene":
       return "（浏览器预览模式：未真正调用 prism-build-pipeline）\n请用 `cd editor && pnpm tauri dev` 或 `prism-build-pipeline` 执行。";
+    case "editor_render_graph_report":
+      return renderGraphFixture();
+
+    case "editor_list_playable_scenes": {
+      const data = await fixture();
+      return data.documents.scene.map<PlayableScene>((entry) => ({
+        name: entry.name,
+        path: `scenes/${entry.name}.rscn`,
+        docPath: entry.path,
+      }));
+    }
+
+    case "editor_scene_package_status":
+      return { exists: false, sizeBytes: 0 };
+
+    case "editor_render_settings":
+      return { ...renderSettingsFixture };
+
+    case "editor_write_render_settings": {
+      Object.assign(renderSettingsFixture, args.settings as RenderSettingsData);
+      return null;
+    }
+
+    case "editor_build_scenes":
+      return "（浏览器预览模式：未真正调用 build-scenes）请用 `cd editor && pnpm tauri dev`。";
+
+    case "editor_bake_gi":
+      return "（浏览器预览模式：未真正调用 bake-gi）请用 `pnpm tauri dev` 或手动执行 prism-build-pipeline bake-gi。";
+    case "editor_generate_heightmap":
+      return "（浏览器预览模式：未真正调用 heightmap）请用 `pnpm tauri dev` 或手动执行 prism-build-pipeline heightmap。";
+
+    case "editor_preview_logs":
+      return [];
+    case "editor_play_scene":
+    case "editor_stop_preview":
+    case "editor_preview_running":
+      throw new Error("浏览器预览模式无法启动游戏；请用 `pnpm tauri dev`");
+
     default:
       throw new Error(`浏览器预览模式不支持命令 ${cmd}`);
   }
@@ -567,4 +713,40 @@ async function handle(cmd: string, args: Record<string, unknown>): Promise<unkno
 
 export function invoke<T>(cmd: string, args: Record<string, unknown> = {}): Promise<T> {
   return handle(cmd, args) as Promise<T>;
+}
+
+
+/** 浏览器预览用的静态渲染图样例（与真实 Raster 管线同构）。 */
+function renderGraphFixture(): RenderGraphReport {
+  const color = 1002;
+  const depth = 1000;
+  const normal = 1001;
+  const ptColor = 1003;
+  return {
+    generatedAtMs: Date.now(),
+    frame: 1234,
+    settings: {
+      renderMode: "raster",
+      debugFlags: 0,
+      tonemapMode: 0,
+      debugRt: 0,
+      ptMaxBounces: 3,
+      ptRayMaxDistance: 1000,
+      ptMaxIterations: 0,
+    },
+    passes: [
+      { index: 0, name: "ShadowMapPass", kind: "shadow", inputs: [], outputs: [2000] },
+      { index: 1, name: "ForwardPass", kind: "forward", inputs: [], outputs: [depth, normal, color] },
+      { index: 2, name: "GtaoPass", kind: "gtao", inputs: [depth, normal], outputs: [] },
+      { index: 3, name: "PostPass", kind: "post", inputs: [color], outputs: [] },
+      { index: 4, name: "PathTracePass", kind: "pt", inputs: [], outputs: [ptColor] },
+    ],
+    resources: [
+      { handle: 1000, name: "forward.depth", kind: "depth", format: null, width: 1600, height: 900, sampleCount: 1, sizeBytes: null, allocated: true },
+      { handle: 1001, name: "forward.normal", kind: "color", format: "R16G16B16A16_SFLOAT", width: 1600, height: 900, sampleCount: 1, sizeBytes: null, allocated: true },
+      { handle: 1002, name: "forward.color", kind: "color", format: "R16G16B16A16_SFLOAT", width: 1600, height: 900, sampleCount: 1, sizeBytes: null, allocated: true },
+      { handle: 1003, name: "pt.color", kind: "storage_image", format: "R32G32B32A32_SFLOAT", width: 1600, height: 900, sampleCount: null, sizeBytes: null, allocated: false },
+      { handle: 2000, name: "resource#2000", kind: "depth", format: null, width: 2048, height: 2048, sampleCount: 1, sizeBytes: null, allocated: true },
+    ],
+  };
 }

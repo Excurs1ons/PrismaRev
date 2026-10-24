@@ -110,7 +110,23 @@ pub fn find_project_root() -> Result<PathBuf, String> {
 }
 
 /// 枚举某类文档，按逻辑名排序。目录不存在时视为空（预制体目录可以还没有）。
+///
+/// Prefabs may live anywhere under `assets/` (the hierarchy drag-and-drop
+/// target is an arbitrary asset folder), so prefab discovery is recursive;
+/// files under `assets/prefabs` keep their plain names, while files elsewhere
+/// use their `assets/`-relative stem (e.g. `props/chair`).
 pub fn list_docs(project_root: &Path, kind: DocKind) -> Result<Vec<SceneEntry>, String> {
+    if kind == DocKind::Prefab {
+        let assets = project_root.join("assets");
+        if !assets.is_dir() {
+            return Ok(Vec::new());
+        }
+        let mut docs = Vec::new();
+        collect_docs(&assets, &assets, kind, &mut docs)?;
+        docs.sort_by(|a, b| a.name.cmp(&b.name));
+        return Ok(docs);
+    }
+
     let dir = docs_dir(project_root, kind);
     if !dir.is_dir() {
         return Ok(Vec::new());
@@ -137,6 +153,50 @@ pub fn list_docs(project_root: &Path, kind: DocKind) -> Result<Vec<SceneEntry>, 
     }
     docs.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(docs)
+}
+
+fn collect_docs(
+    assets_root: &Path,
+    dir: &Path,
+    kind: DocKind,
+    docs: &mut Vec<SceneEntry>,
+) -> Result<(), String> {
+    let read = std::fs::read_dir(dir).map_err(|e| format!("无法读取 {}: {e}", dir.display()))?;
+    for entry in read.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if matches!(name, "cooked" | "heightmaps" | "target") || name.starts_with('.') {
+                continue;
+            }
+            collect_docs(assets_root, &path, kind, docs)?;
+            continue;
+        }
+        if !path.is_file() {
+            continue;
+        }
+        let Some(file_name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        let Some(stem) = file_name.strip_suffix(&format!(".{}", kind.ext())) else {
+            continue;
+        };
+        let rel = path
+            .strip_prefix(assets_root)
+            .ok()
+            .map(|p| p.to_string_lossy().replace('\\', "/"))
+            .unwrap_or_else(|| stem.to_string());
+        let name = rel
+            .trim_end_matches(&format!(".{}", kind.ext()))
+            .trim_start_matches("prefabs/")
+            .to_string();
+        docs.push(SceneEntry {
+            name,
+            file_name: file_name.to_string(),
+            path: path.to_string_lossy().into_owned(),
+        });
+    }
+    Ok(())
 }
 
 /// 枚举所有 `.scene.json`。
@@ -225,6 +285,21 @@ pub fn scene_path(root: &Path, name: &str) -> Result<PathBuf, String> {
     doc_path(root, DocKind::Scene, name)
 }
 
+/// Write a document into an explicit directory (used by prefab drag-drop).
+pub fn write_doc_in_dir(
+    dir: &Path,
+    kind: DocKind,
+    name: &str,
+    doc: &serde_json::Value,
+) -> Result<PathBuf, String> {
+    let path = doc_file_in(dir, kind, name)?;
+    if path.exists() {
+        return Err(format!("已存在同名{}：{}", kind.label(), path.display()));
+    }
+    write_doc(&path, doc)?;
+    Ok(path)
+}
+
 /// 以新名字另存（不覆盖已存在的同名文件），返回新路径。
 pub fn write_doc_as(
     root: &Path,
@@ -232,12 +307,7 @@ pub fn write_doc_as(
     name: &str,
     doc: &serde_json::Value,
 ) -> Result<PathBuf, String> {
-    let path = doc_path(root, kind, name)?;
-    if path.exists() {
-        return Err(format!("已存在同名{}：{}", kind.label(), path.display()));
-    }
-    write_doc(&path, doc)?;
-    Ok(path)
+    write_doc_in_dir(&docs_dir(root, kind), kind, name, doc)
 }
 
 /// [`write_doc_as`] 的场景别名。

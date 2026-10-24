@@ -28,12 +28,12 @@
 //! - [`App::run_on`]：Android 入口（外部 EventLoop）。
 //!
 //! UI 用引擎自研 ECS 组件 UI（`Node` / `Style` / `Text`），随主渲染
-//! 通道每帧绘制——不依赖 egui。
+//! 通道每帧绘制。
 //!
-//! ## 中性扩展点（编辑器 / 调试宿主）
+//! ## 中性扩展点（调试宿主 / 未来宿主）
 //!
-//! 本 crate 不依赖 egui、也不依赖 prism-editor。外部宿主（如
-//! `prism-editor-host`）通过 [`App::with_frame_hook`] 注入 [`FrameHook`]：
+//! 本 crate 不依赖任何具体 UI 框架。外部宿主可
+//! 通过 [`App::with_frame_hook`] 注入 [`FrameHook`]：
 //!
 //! - [`FrameHook::on_window_event`]：抢先消费窗口事件（返回 `true` 表示吃掉）；
 //! - [`FrameHook::on_tick`]：每帧访问 world / 渲染设置 / 统计，并可经
@@ -42,7 +42,7 @@
 //! - [`FrameHook::overlay`]：提供渲染线程侧的
 //!   `prism_render::external_overlay::SwapchainOverlay` 工厂。
 //!
-//! 加编辑器功能时**不要**把 egui / prism-editor 依赖加回本 crate——扩展
+//! 加 UI 功能时**不要**把具体 UI 框架依赖加回本 crate——扩展
 //! hook 接口即可。
 //!
 //! ## 架构（多线程）
@@ -70,15 +70,18 @@
 mod android_assets;
 mod app;
 mod audio_decode_runner;
+mod debug_hud;
 mod hook;
 mod io_runner;
 mod physics_runner;
 mod render_runner;
 mod render_shared;
+mod render_graph_report;
 
 use prism_engine::config::AppConfig;
 
 pub use app::{App, Subsystem};
+pub use debug_hud::DebugHud;
 pub use hook::FrameHook;
 pub use render_shared::{RenderShared, RenderStats};
 

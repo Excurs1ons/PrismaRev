@@ -9,7 +9,8 @@
 - **Vulkan 渲染管线**：RenderGraph + pass 节点架构（`RenderPassNode`），`GraphRenderer` 驱动；GBuffer / Shadow / Lighting / Post 等 pass 组合，能力探测自动升降级。
 - **PBR + IBL**：HDR 环境光、漫反射辐照度 + 预滤波镜面反射 cubemap。
 - **Bindless 纹理表**：set 0 = frame UBO/materials/lights，set 1 = bindless 纹理，set 2 = IBL，set 3 = 阴影贴图。
-- **调试与编辑器**：egui inspector（实体/渲染设置/烘焙控制），屏幕空间调试视图模式（bitmap 字体 HUD + 命中测试），世界空间 XYZ gizmo；编辑器完全独立于用户项目依赖链（见 §编辑器与用户项目分离）。
+- **编辑器**：Tauri 2 + Vue 3 的独立 Web 编辑器（场景/层级/组件/预制体/资产/Cook/**运行预览**/项目渲染设置/**实时渲染图**），完全独立于用户项目依赖链（见 §编辑器与用户项目分离）。
+- **调试**：运行时诊断 HUD（F3：帧率 / 渲染模式 / PBR 通道，无 UI 框架依赖）、屏幕空间调试视图模式（bitmap 字体 HUD + 命中测试）、世界空间 XYZ gizmo。
 - **全链路**：acquire → record → submit → present 在桌面与 Android 端到端跑通，验证层在 debug 构建下启用。
 - **后台线程架构**：IO / 音频解码 / 物理三线程框架（flume 消息传递）。
 - **资源管线**：运行时 `prism-asset`（`.pak` / `ResourceManager` / 热重载）与构建期 `prism-cooker`（glTF 导入、纹理/mesh 烘焙、CookProfile、`prism-cook` CLI）分层；场景 schema 与 RSCN v4 在 `prism-scene`。
@@ -21,14 +22,13 @@
 PrismaRev/
 ├── crates/
 │   ├── prism-ecs/             # ECS 核心（Entity / Component / World / Query）
-│   ├── prism-reflect/         # 运行时反射 + RTTIBin（egui/render-free）
+│   ├── prism-reflect/         # 运行时反射 + RTTIBin（UI / render-free）
 │   ├── prism-scene/           # 场景 schema：组件、ComponentRegistry、.scene.json、RSCN v4
 │   ├── prism-render/          # Vulkan 后端（context、swapchain、RenderGraph passes、IBL、bindless）
-│   ├── prism-engine/          # 运行时引擎（场景加载 / 渲染系统 / 资产解析；无 egui）
+│   ├── prism-engine/          # 运行时引擎（场景加载 / 渲染系统 / 资产解析；无 UI 框架）
 │   ├── prism-platform/        # 平台抽象（窗口系统、Vulkan surface、输入路由）
-│   ├── prism-app/             # 平台应用层（事件循环 / 窗口 / 帧编排；中性 `FrameHook` 扩展点）
-│   ├── prism-editor/          # egui 编辑器 UI（inspector、调试、渲染设置、烘焙 + engine 绑定）
-│   ├── prism-editor-host/     # 编辑器宿主（唯一见到 egui 的 crate：EditorHook + egui overlay + editor_demo）
+│   ├── prism-app/             # 平台应用层（事件循环 / 窗口 / 帧编排；运行时诊断 HUD）
+│   ├── prism-editor-api/      # Web 编辑器后端（schema / 文档 IO / 项目设置；Vulkan-free）
 │   ├── prism-editor-tool/     # 编辑器工具（高度图生成器、地形工具等）
 │   ├── prism-build-pipeline/  # 离线构建管线（GI 烘焙、资产烹饪、高度图生成器 CLI）
 │   ├── prism-audio/           # 音频子系统（Firewheel）
@@ -40,11 +40,10 @@ PrismaRev/
 │   ├── scenes/                # 场景资产（glTF 等）
 │   └── ...
 ├── launcher/                  # Tauri 桌面壳 + Android APK 打包（独立 workspace）
-├── editor/                    # Tauri 2 + Vue 3 web UI 编辑器（场景/层级/组件编辑，独立 workspace）
+├── editor/                    # Tauri 2 + Vue 3 Web 编辑器（场景/预制体/资产/Cook/运行预览，独立 workspace）
 ├── projects/                  # 用户项目（各自独立 workspace）
 │   ├── prisma/                # 用户游戏项目（`prisma` + Android `libprisma.so`）
-│   ├── prisma-sponza/         # Sponza 路径追踪样例项目
-│   └── prisma-editor/         # 独立编辑器项目
+│   └── prisma-sponza/         # Sponza 路径追踪样例项目
 ├── docs/DESIGN.md             # 权威设计蓝图
 ├── scripts/                   # run.ps1 / build-android.ps1（高度图分析脚本在 scripts/scratch/）
 └── Cargo.toml                 # workspace（crates/xtask 排除在外；launcher/ 与 projects/ 独立）
@@ -52,11 +51,16 @@ PrismaRev/
 
 ### 编辑器与用户项目分离
 
-用户项目的依赖链**不含 egui、编辑器或构建工具**：`prisma → prism-app → prism-engine → {prism-scene, prism-ecs, prism-render, prism-asset}`。
-编辑器通过两个中性扩展点接入：主线程 `prism_app::FrameHook`（事件/每帧回调）与渲染线程
-`prism_render::external_overlay::SwapchainOverlay`（覆盖层录制）；两者之间的 UI 数据以类型擦除的
-`OverlayMessage`（`Box<dyn FnOnce(&mut dyn SwapchainOverlay) + Send>`）穿过 `RenderShared`。
-编辑器入口位于独立用户项目（`cargo run --manifest-path projects/prisma-editor/Cargo.toml`）。
+用户项目的依赖链**不含任何 UI 框架、编辑器或构建工具**：`prisma → prism-app → prism-engine → {prism-scene, prism-ecs, prism-render, prism-asset}`。
+
+唯一的编辑器是 `editor/`（Tauri 2 + Vue 3），它**不链接引擎**：Rust 侧只依赖
+`prism-editor-api`（schema / 文档读写 / 项目设置），Cook 与场景包构建通过子进程调用
+`prism-build-pipeline`，运行预览通过 `PRISMREV_LAUNCH_CONFIG` 拉起游戏二进制。
+
+`prism-app` 仍保留中性的 `FrameHook` 与 `prism_render::external_overlay::SwapchainOverlay`
+扩展点（供调试宿主 / 未来工具使用）；两者之间的 UI 数据以类型擦除的 `OverlayMessage`
+（`Box<dyn FnOnce(&mut dyn SwapchainOverlay) + Send>`）穿过 `RenderShared`。运行时诊断 HUD
+（F3）直接复用 ECS UI 文本叠加，不引入任何 UI 框架。
 
 ## 坐标约定
 
@@ -115,16 +119,18 @@ cargo build -p prism-ecs -p prism-render -p prism-engine -p prism-platform
 cargo test  -p prism-ecs -p prism-render -p prism-engine -p prism-platform
 ```
 
-当前根 workspace 无可执行 bin（渲染、ECS、平台层均作为库链接），可执行入口有四个：
+当前根 workspace 无可执行 bin（渲染、ECS、平台层均作为库链接），可执行入口有三个：
 
 - `launcher/`（Tauri 桌面壳，游戏启动器）：`cd launcher && pnpm tauri dev`，点 Play 启动 `prisma`。
 - `projects/prisma/`（用户游戏项目）：`cargo run --manifest-path projects/prisma/Cargo.toml`。
-- egui 编辑器：`cargo run --manifest-path projects/prisma-editor/Cargo.toml`（F1 inspector / F2 render-graph / F3 perf HUD）。
-- web UI 编辑器：`cd editor && pnpm install && pnpm tauri dev`（Tauri 2 + Vue 3；Rust 侧只依赖
-  `prism-editor-api`，不引入 egui/Vulkan）。
+- Web 编辑器：`cd editor && pnpm install && pnpm tauri dev`（Tauri 2 + Vue 3；Rust 侧只依赖
+  `prism-editor-api`，不链接引擎 / Vulkan）。工具栏的「构建」重新 cook 并打包 `scenes.pak`，
+  「运行」以 `LaunchConfig.scene` 启动游戏预览；「渲染设置」写入 `assets/settings.toml` 的 `[render]` 段；
+  「渲染图」读取游戏进程写出的 `target/prism-render-graph.json`，用 SVG 实时展示 pass / 资源 DAG（渲染线程
+  每 60 帧刷新一次，路径由 `PRISMREV_RENDER_GRAPH_REPORT` 指定）。
 
 启动器通过 `PRISMREV_LAUNCH_CONFIG` 环境变量（桌面）或 `filesDir/launch_config.json`（Android）向游戏
-传 JSON 启动参数（`{ "scene": "...", "log_level": "..." }`，见 `projects/prisma/src/launch_config.rs`）。
+传 JSON 启动参数（`{ "scene": "...", "log_level": "..." }`，见 `crates/prism-engine/src/launch_config.rs`；`scene` 缺省时加载 `assets/scenes.toml` 的第一个场景）。
 验证层在 debug 构建下启用，`RUST_LOG=info`（或 `debug`）查看诊断。`scripts/run.ps1` 提供 Windows 一键
 脚本（自动重新编译 Slang 着色器后 `cargo build`）。
 

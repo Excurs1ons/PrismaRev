@@ -36,6 +36,5 @@ pub use scene_system::{
 /// Roots: entities with [`LocalTransform`] or [`Name`] but no [`Parent`].
 /// Children: via [`Children`] 分量。
 ///
-/// 编辑器侧（prism-editor）通过 `prism_editor::inspector::Hierarchy`
-/// 为其提供实现——引擎本身不依赖编辑器。
+/// 外部工具 / 编辑器可为同一结构提供只读视图——引擎本身不依赖编辑器。
 pub struct SceneHierarchy;

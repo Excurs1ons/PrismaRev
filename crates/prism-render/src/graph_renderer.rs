@@ -55,6 +55,10 @@ pub struct SceneDrawItem {
 #[derive(Clone)]
 pub struct FrameInput<'a> {
     pub draw_items: &'a [DrawItem],
+    /// ECS-authored gizmos for this frame.
+    pub gizmos: &'a [crate::gizmo::GizmoInstance],
+    /// ECS-authored skybox parameters; `None` means no sky draw.
+    pub skybox: Option<crate::skybox_pass::SkyboxSettings>,
     pub frame_data: &'a FrameUBOData,
     pub light_view_proj: [[f32; 4]; 4],
     pub inv_projection: [[f32; 4]; 4],
@@ -195,14 +199,14 @@ pub struct GraphRenderer {
     shadow_view: vk::ImageView,
     #[allow(dead_code)]
     color_format: vk::Format,
-    /// Optional 外部叠加层（编辑器 egui 等）rendered on 顶部 of the ECS UI
+    /// Optional 外部叠加层（宿主 UI 等）rendered on 顶部 of the ECS UI
     /// 叠加 When present, 执行 records it after the ECS UI overlay and it
     /// owns the COLOR_ATTACHMENT_OPTIMAL -> PRESENT_SRC_KHR 过渡. The
     /// 实现 is injected by the app 层 (eg 编辑器 host) — this 渲染器
-    /// knows nothing about egui.
+    /// knows nothing about the concrete UI framework.
     external_overlay: Option<Box<dyn SwapchainOverlay>>,
     /// ECS UI 叠加 (GPU-only) — quads + fontdue glyph text, rendered on 顶部
-    /// of the ForwardPass 输出 (below the egui 编辑器 overlay). Created lazily
+    /// of the ForwardPass 输出 (below the external overlay). Created lazily
     /// on the 渲染 线程 when the 引擎 sends UI 命令
     ui_overlay: Option<crate::ui_overlay::UiOverlay>,
     /// True when no 表面 is available (headless / CI / server 众数
@@ -668,13 +672,13 @@ impl GraphRenderer {
         })
     }
 
-    /// 注入外部叠加层（编辑器 egui 等）。主线程在启动渲染线程前调用；
+    /// 注入外部叠加层（宿主 UI 等）。主线程在启动渲染线程前调用；
     /// overlay 的 GPU 资源由实现方在 `record` 时懒创建。
     pub fn set_external_overlay(&mut self, overlay: Box<dyn SwapchainOverlay>) {
         self.external_overlay = Some(overlay);
     }
 
-    /// 把一条类型擦除的消息（如"新 egui 帧"）投递给外部叠加层。
+    /// 把一条类型擦除的消息（如"新的宿主 UI 帧"）投递给外部叠加层。
     /// 渲染线程从 shared 通路取出消息后调用；无叠加层时静默丢弃。
     pub fn apply_overlay_message(&mut self, msg: OverlayMessage) {
         if let Some(overlay) = self.external_overlay.as_mut() {
@@ -1074,7 +1078,7 @@ impl GraphRenderer {
         }
         // Wait for the GPU to finish all in-flight 功 BEFORE destroying any
         // framebuffers. The 上一个 frame's 命令 缓冲区 references both
-        // the ForwardPass framebuffers and the egui 叠加 framebuffers; without
+        // the ForwardPass framebuffers and the external overlay framebuffers; without
         // this wait, vkDestroyFramebuffer fires while a 命令 缓冲区 is still
         // executing (VUID-vkDestroyFramebuffer-framebuffer-00892).
         unsafe { self.runtime.context.device.device_wait_idle() }
@@ -1256,7 +1260,7 @@ impl GraphRenderer {
     /// Phase 2/3: record all 渲染 commands into the frame's 命令 缓冲区
     ///
     /// Updates the per-frame UBO, builds the [`GraphFrame`], executes the
-    /// 渲染 图 (ShadowMap → Scene → GTAO → Post), records the egui
+    /// 渲染 图 (ShadowMap → Scene → GTAO → Post), records the external
     /// 叠加 if present (or inserts the swapchain-layout 屏障 and ends
     /// the 命令 缓冲区
     ///
@@ -1272,6 +1276,8 @@ impl GraphRenderer {
 
         let FrameInput {
             draw_items,
+            gizmos,
+            skybox,
             frame_data,
             light_view_proj,
             inv_projection,
@@ -1332,6 +1338,8 @@ impl GraphRenderer {
             let graph_frame = GraphFrame {
                 frame_ubo: &self.runtime.frame_ubos[frame],
                 draw_list: draw_items,
+                gizmos,
+                skybox: *skybox,
                 mesh_manager: &self.mesh_manager,
                 light_view_proj,
                 shadow_mode: self.settings.shadow_mode,
@@ -1386,14 +1394,14 @@ impl GraphRenderer {
 
         // --- ECS UI 叠加 (quads + fontdue glyph text) ---
         //
-        // Recorded between the 渲染 图 output and the egui 编辑器 overlay
+        // Recorded between the 渲染 图 output and the external overlay
         // (or the explicit PRESENT 屏障). Its render pass owns the
-        // COLOR_ATTACHMENT_OPTIMAL → PRESENT_SRC_KHR 过渡; when egui 也
+        // COLOR_ATTACHMENT_OPTIMAL → PRESENT_SRC_KHR 过渡; when an overlay 也
         // records 之后, an explicit 屏障 converts 后 to
-        // COLOR_ATTACHMENT_OPTIMAL for the egui pass.
+        // COLOR_ATTACHMENT_OPTIMAL for the overlay pass.
         //
         // 图 末尾 pass（RtPreview）final = PRESENT_SRC_KHR，所以 swapchain
-        // image 在 graph 后已是展示布局；UI/egui render pass 期望
+        // image 在 graph 后已是展示布局；UI/overlay render pass 期望
         // COLOR_ATTACHMENT_OPTIMAL 初始布局 → 各自 record 前都要显式转回。
         if record.is_ok() {
             let has_ui = ui_overlay.is_some_and(|o| !o.quads.is_empty() || !o.texts.is_empty());
@@ -1453,7 +1461,7 @@ impl GraphRenderer {
 
         // --- 过渡 交换链 图像 to PRESENT_SRC_KHR ---
         //
-        // 外部叠加层（如编辑器 egui）在 ECS UI 之后 record：image 此时
+        // 外部叠加层（宿主 UI）在 ECS UI 之后 record：image 此时
         // 已是 PRESENT_SRC_KHR（graph 末尾 RtPreview 或 ECS UI 的 final
         // layout），叠加 render pass 期望 COLOR_ATTACHMENT_OPTIMAL 初始
         // 布局 → record 前显式转回。无叠加时无需任何转换。
@@ -1628,6 +1636,8 @@ impl GraphRenderer {
         };
         let input = FrameInput {
             draw_items,
+            gizmos: &[],
+            skybox: None,
             frame_data,
             light_view_proj,
             inv_projection,
@@ -1719,7 +1729,7 @@ impl GraphRenderer {
             shadow.destroy(device);
         }
 
-        // 销毁外部叠加层（egui 编辑器等：render pass/framebuffers/渲染器）。
+        // 销毁外部叠加层（render pass/framebuffers/渲染器）。
         if let Some(overlay) = self.external_overlay.as_mut() {
             overlay.destroy();
         }
@@ -1745,8 +1755,8 @@ impl GraphRenderer {
     }
 }
 
-// 安全性 After splitting out egui_winit::State (moved to EguiCpu on the main
-// 线程 all remaining fields of GraphRenderer hold only ash/Vulkan handles
+// 安全性 UI 状态已移出渲染线程（主线程持有），
+// 渲染线程上剩余字段只持有 ash/Vulkan handles
 // (vk::*, ash::Device → u64 wrappers Send+Sync), Arc<VulkanContext> (Send+Sync
 // because all inner fields are Vulkan handles), or 容器 types whose
 // elements are Send. These fields are accessed exclusively from the 渲染

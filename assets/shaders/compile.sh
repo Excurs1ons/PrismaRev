@@ -17,7 +17,7 @@ SRC="$HERE/slang"
 OUT="$HERE"                      # .spv land next to the existing GLSL .spv
 REFL="$HERE/reflection"
 SLANGC="${SLANGC:-slangc}"
-PROFILE="${SLANG_PROFILE:-spirv_1_5}"
+PROFILE="${SLANG_PROFILE:-spirv_1_4}"
 
 if ! command -v "$SLANGC" >/dev/null 2>&1 && [ ! -x "$SLANGC" ]; then
   echo "ERROR: slangc not found. Install a Slang release or set SLANGC=/path/to/slangc" >&2

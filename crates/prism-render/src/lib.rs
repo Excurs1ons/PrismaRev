@@ -94,7 +94,8 @@ pub use gi::{
     eval_sh9, sample_probe_irradiance, sh_basis, trilinear_weights, world_to_probe_coord,
     ProbeVolumeInfo, SH_COEFF_COUNT,
 };
-pub use gizmo::Gizmo;
+pub use gizmo::{Gizmo, GizmoInstance};
+pub use skybox_pass::SkyboxSettings;
 pub use graph_renderer::{FrameCtx, FrameInput, GraphRenderer};
 pub use gtao::{GtaoFrameInputs, GtaoPass};
 pub use mesh::{Mesh, Vertex};

@@ -1,90 +1,233 @@
 {
-  "version": 1,
   "entities": [
     {
+      "components": {
+        "prism_engine::scene::Skybox": {
+          "enabled": true,
+          "env_asset": 0,
+          "hdr_path": "../valley_of_desolation_1k.hdr",
+          "intensity": 1,
+          "rotation_degrees": 0
+        }
+      },
       "name": "Skybox",
       "parent": null,
       "transform": {
-        "translation": [0.0, 0.0, 0.0],
-        "rotation": [0.0, 0.0, 0.0, 1.0],
-        "scale": [1.0, 1.0, 1.0]
-      },
-      "components": {
-        "prism_engine::scene::Skybox": {
-          "hdr_path": "../valley_of_desolation_1k.hdr",
-          "enabled": true
-        }
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "translation": [
+          0,
+          0,
+          0
+        ]
       }
     },
     {
+      "components": {
+        "prism_engine::scene::Gizmo": {
+          "enabled": true,
+          "scale": 1
+        }
+      },
+      "name": "Gizmo",
+      "parent": null,
+      "transform": {
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "translation": [
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "components": {
+        "prism_engine::scene::Camera": {
+          "aspect": 1.777,
+          "enabled": true,
+          "exposure": 1,
+          "far": 1000,
+          "fov_y_degrees": 60,
+          "near": 0.01
+        }
+      },
       "name": "Camera",
       "parent": null,
       "transform": {
-        "translation": [0.0, 2.5, 18.0],
-        "rotation": [-0.068948, 0.0, 0.0, 0.99762],
-        "scale": [1.0, 1.0, 1.0]
-      },
-      "components": {
-        "prism_engine::scene::Camera": {
-          "fov_y_degrees": 60.0, "near": 0.01, "far": 1000.0, "exposure": 1.0, "aspect": 1.777, "enabled": true
-        }
+        "rotation": [
+          -0.06894800066947937,
+          0,
+          0,
+          0.9976199865341188
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "translation": [
+          0,
+          2.5,
+          18
+        ]
       }
     },
     {
+      "components": {
+        "prism_engine::scene::DirectionalLight": {
+          "ambient": 1,
+          "color": [
+            1,
+            1,
+            1
+          ],
+          "euler_xyz": [
+            0,
+            0,
+            0
+          ],
+          "intensity": 100000
+        }
+      },
       "name": "Sun",
       "parent": null,
       "transform": {
-        "translation": [0.0, 0.0, 0.0],
-        "rotation": [0.0, 0.0, 0.0, 1.0],
-        "scale": [1.0, 1.0, 1.0]
-      },
-      "components": {
-        "prism_engine::scene::DirectionalLight": {
-          "euler_xyz": [0,0,0], "color": [1,1,1], "intensity": 100000.0, "ambient": 1.0
-        }
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "translation": [
+          0,
+          0,
+          0
+        ]
       }
     },
     {
+      "components": {
+        "prism_engine::scene::PointLight": {
+          "color": [
+            1,
+            0.2,
+            0.2
+          ],
+          "intensity": 150,
+          "range": 12
+        }
+      },
       "name": "PointLightRed",
       "parent": null,
       "transform": {
-        "translation": [2.0, 3.0, 2.0],
-        "rotation": [0.0, 0.0, 0.0, 1.0],
-        "scale": [1.0, 1.0, 1.0]
-      },
-      "components": {
-        "prism_engine::scene::PointLight": {
-          "color": [1.0, 0.2, 0.2], "intensity": 150.0, "range": 12.0
-        }
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "translation": [
+          2,
+          3,
+          2
+        ]
       }
     },
     {
+      "components": {
+        "prism_engine::scene::PointLight": {
+          "color": [
+            0.2,
+            1,
+            0.2
+          ],
+          "intensity": 150,
+          "range": 12
+        }
+      },
       "name": "PointLightGreen",
       "parent": null,
       "transform": {
-        "translation": [-2.0, 3.0, -2.0],
-        "rotation": [0.0, 0.0, 0.0, 1.0],
-        "scale": [1.0, 1.0, 1.0]
-      },
-      "components": {
-        "prism_engine::scene::PointLight": {
-          "color": [0.2, 1.0, 0.2], "intensity": 150.0, "range": 12.0
-        }
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "translation": [
+          -2,
+          3,
+          -2
+        ]
       }
     },
     {
+      "components": {
+        "prism_engine::scene::PointLight": {
+          "color": [
+            0.2,
+            0.2,
+            1
+          ],
+          "intensity": 150,
+          "range": 12
+        }
+      },
       "name": "PointLightBlue",
       "parent": null,
       "transform": {
-        "translation": [0.0, 4.0, 4.0],
-        "rotation": [0.0, 0.0, 0.0, 1.0],
-        "scale": [1.0, 1.0, 1.0]
-      },
-      "components": {
-        "prism_engine::scene::PointLight": {
-          "color": [0.2, 0.2, 1.0], "intensity": 150.0, "range": 12.0
-        }
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "translation": [
+          0,
+          4,
+          4
+        ]
       }
     }
-  ]
+  ],
+  "version": 1
 }

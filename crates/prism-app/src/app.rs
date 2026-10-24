@@ -48,6 +48,7 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow};
 use winit::keyboard::KeyCode;
 use winit::window::WindowId;
 
+use crate::debug_hud::DebugHud;
 use crate::hook::FrameHook;
 use crate::render_runner::{render_thread_main, OverlayFactory};
 use crate::render_shared::RenderShared;
@@ -74,7 +75,6 @@ pub enum Subsystem {
     AI,
     UI,
     Animation,
-
 }
 
 impl Subsystem {
@@ -121,6 +121,8 @@ pub struct App {
     // ---------- 帧钩子（编辑器等宿主注入） ----------
     frame_hook: Option<Box<dyn FrameHook>>,
     render_settings: RenderSettings,
+    /// 运行时诊断 HUD（F3；无 UI 框架依赖）。
+    debug_hud: DebugHud,
 
     // ---------- 每帧状态 ----------
     display_aspect: f32,
@@ -171,11 +173,20 @@ impl App {
         let mut asset_resolver = GpuAssetResolver::new();
         asset_resolver.load_resource_package();
 
-        // 场景 loading
-        engine.init_scene(&mut asset_resolver.resource_manager);
+        // 场景 loading — 启动配置可指定场景名（编辑器/启动器预览用）；
+        // 未指定时沿用「manifest 第一个可解析场景」的默认行为。
+        let launch = prism_engine::launch_config::LaunchConfig::from_env();
+        engine.init_scene_named(
+            &mut asset_resolver.resource_manager,
+            launch.scene.as_deref(),
+        );
 
         // 运行时 startup callbacks
         engine.runtime_initialize();
+
+        // 项目级渲染默认值（`[render]` 段）。
+        let mut render_settings = RenderSettings::default();
+        config.render.apply(&mut render_settings);
 
         Self {
             config,
@@ -187,7 +198,8 @@ impl App {
             render_thread: None,
             platform: None,
             frame_hook: None,
-            render_settings: RenderSettings::default(),
+            render_settings,
+            debug_hud: DebugHud::default(),
             display_aspect: 16.0 / 9.0,
             surface_rotation: glam::Mat4::IDENTITY,
             input: InputManager::new(),
@@ -274,7 +286,7 @@ impl App {
                     log::warn!("audio subsystem requested but failed to initialize");
                 }
                 self.start_audio_decode_thread();
-            },
+            }
             Subsystem::Network | Subsystem::Scene | Subsystem::Asset => {
                 log::warn!("{:?} subsystem requested — 已实现, ignoring", subsystem)
             }
@@ -296,9 +308,7 @@ impl App {
 
     /// 解析启动配置，设置日志级别。
     fn apply_launch_config(&mut self) {
-        let launch = std::env::var(prism_engine::launch_config::ENV_KEY)
-            .map(|json| prism_engine::launch_config::LaunchConfig::from_json(&json))
-            .unwrap_or_default();
+        let launch = prism_engine::launch_config::LaunchConfig::from_env();
 
         // 日志级别覆盖需在 logger 初始化之后生效——RUST_LOG 在 `run` 的
         // try_init 之前已被读取，这里再设一次让下一步扩展 logger 重新读取。
@@ -350,22 +360,19 @@ impl App {
 
         // 场景声明式光照：纯 CPU 计算，无需渲染器（None → 廉价空 IBL）。
         let scene_env = self.engine.as_ref().and_then(|engine| {
-            engine.current_scene_env_bytes_with_provider(
-                &mut self.asset_resolver.resource_manager,
-            )
+            engine.current_scene_env_bytes_with_provider(&mut self.asset_resolver.resource_manager)
         });
 
         // winit 的 `Window::window_handle()` 在**非窗口创建线程**上会失败
         // （"the underlying handle is not available"），因此必须在主线程把原始
         // 句柄取出来再跨线程传给渲染线程。原始 HWND 是进程级值，跨线程用于
         // 创建 Vulkan 表面是安全的（见 `SendWindowHandles`）。
-        let handles = prism_platform::raw_window_handles(&window)
-            .expect("get raw window handles");
+        let handles = prism_platform::raw_window_handles(&window).expect("get raw window handles");
 
         // Vulkan 实例扩展名（依赖窗口 display handle，便宜）。
         let extensions = required_vulkan_extensions(&window);
 
-        // 外部叠加层工厂（编辑器 egui 等）——仅提供工厂，渲染线程建好
+        // 外部叠加层工厂（宿主 UI 等）——仅提供工厂，渲染线程建好
         // 渲染器后调用一次产出叠加层（GPU 资源 record 时懒创建）。
         let overlay_factory: Option<OverlayFactory> =
             self.frame_hook.as_ref().and_then(|h| h.overlay());
@@ -520,11 +527,35 @@ impl App {
 
         // --- 提取帧数据包 → 发送到渲染线程（仅渲染启用时） ---
         if let (Some(shared), Some(engine)) = (self.render_shared.as_ref(), self.engine.as_mut()) {
-            let packet = extract_frame_packet(
+            let mut packet = extract_frame_packet(
                 engine.world_mut(),
                 self.display_aspect,
                 &self.surface_rotation,
             );
+            // 渲染设置随帧数据包送到渲染线程（快捷键 / 项目配置的修改在此生效）。
+            packet.settings = self.render_settings.clone();
+
+            // 运行时诊断 HUD：追加到 ECS UI 叠加（随后统一由 ui_overlay 绘制）。
+            if self.debug_hud.show {
+                let (width, height) = self
+                    .platform
+                    .as_ref()
+                    .map(|platform| {
+                        let size = platform.window().inner_size();
+                        (size.width as f32, size.height as f32)
+                    })
+                    .unwrap_or((1920.0, 1080.0));
+                let stats = shared.read_render_stats();
+                self.debug_hud.append(
+                    &mut packet.ui_overlay,
+                    &stats,
+                    &self.render_settings,
+                    packet.scene.has_camera,
+                    width,
+                    height,
+                );
+            }
+
             shared.send_packet(packet);
         }
     }
@@ -552,7 +583,8 @@ impl App {
         // GPU 段结果写回：渲染线程回传句柄，主线程写入组件。
         let results = shared.take_asset_results();
         if !results.is_empty() {
-            self.asset_resolver.apply_results(engine.world_mut(), &results);
+            self.asset_resolver
+                .apply_results(engine.world_mut(), &results);
         }
     }
 
@@ -567,30 +599,53 @@ impl App {
     fn route_window_event_to_input(&mut self, event_loop: &ActiveEventLoop, event: &WindowEvent) {
         if let Some(platform) = self.platform.as_ref() {
             let window = platform.window();
-            if let WindowEvent::KeyboardInput { event: key_event, .. } = event {
+            if let WindowEvent::KeyboardInput {
+                event: key_event, ..
+            } = event
+            {
                 if let winit::keyboard::PhysicalKey::Code(code) = key_event.physical_key {
                     use prism_engine::input::{ElementState, KeyCode as EngineKeyCode};
                     let key = match code {
-                        winit::keyboard::KeyCode::KeyW => EngineKeyCode::KeyW, winit::keyboard::KeyCode::KeyA => EngineKeyCode::KeyA,
-                        winit::keyboard::KeyCode::KeyS => EngineKeyCode::KeyS, winit::keyboard::KeyCode::KeyD => EngineKeyCode::KeyD,
-                        winit::keyboard::KeyCode::KeyQ => EngineKeyCode::KeyQ, winit::keyboard::KeyCode::KeyE => EngineKeyCode::KeyE,
-                        winit::keyboard::KeyCode::Space => EngineKeyCode::Space, winit::keyboard::KeyCode::ShiftLeft => EngineKeyCode::ShiftLeft,
-                        winit::keyboard::KeyCode::ShiftRight => EngineKeyCode::ShiftRight, winit::keyboard::KeyCode::ControlLeft => EngineKeyCode::ControlLeft,
-                        winit::keyboard::KeyCode::ControlRight => EngineKeyCode::ControlRight, winit::keyboard::KeyCode::AltLeft => EngineKeyCode::AltLeft,
-                        winit::keyboard::KeyCode::AltRight => EngineKeyCode::AltRight, winit::keyboard::KeyCode::Escape => EngineKeyCode::Escape,
-                        winit::keyboard::KeyCode::Tab => EngineKeyCode::Tab, winit::keyboard::KeyCode::Enter => EngineKeyCode::Enter,
-                        winit::keyboard::KeyCode::ArrowUp => EngineKeyCode::ArrowUp, winit::keyboard::KeyCode::ArrowDown => EngineKeyCode::ArrowDown,
-                        winit::keyboard::KeyCode::ArrowLeft => EngineKeyCode::ArrowLeft, winit::keyboard::KeyCode::ArrowRight => EngineKeyCode::ArrowRight,
-                        winit::keyboard::KeyCode::Digit0 => EngineKeyCode::Digit0, winit::keyboard::KeyCode::Digit1 => EngineKeyCode::Digit1,
-                        winit::keyboard::KeyCode::Digit2 => EngineKeyCode::Digit2, winit::keyboard::KeyCode::Digit3 => EngineKeyCode::Digit3,
-                        winit::keyboard::KeyCode::Digit4 => EngineKeyCode::Digit4, winit::keyboard::KeyCode::Digit5 => EngineKeyCode::Digit5,
-                        winit::keyboard::KeyCode::Digit6 => EngineKeyCode::Digit6, winit::keyboard::KeyCode::Digit7 => EngineKeyCode::Digit7,
-                        winit::keyboard::KeyCode::Digit8 => EngineKeyCode::Digit8, winit::keyboard::KeyCode::Digit9 => EngineKeyCode::Digit9,
+                        winit::keyboard::KeyCode::KeyW => EngineKeyCode::KeyW,
+                        winit::keyboard::KeyCode::KeyA => EngineKeyCode::KeyA,
+                        winit::keyboard::KeyCode::KeyS => EngineKeyCode::KeyS,
+                        winit::keyboard::KeyCode::KeyD => EngineKeyCode::KeyD,
+                        winit::keyboard::KeyCode::KeyQ => EngineKeyCode::KeyQ,
+                        winit::keyboard::KeyCode::KeyE => EngineKeyCode::KeyE,
+                        winit::keyboard::KeyCode::Space => EngineKeyCode::Space,
+                        winit::keyboard::KeyCode::ShiftLeft => EngineKeyCode::ShiftLeft,
+                        winit::keyboard::KeyCode::ShiftRight => EngineKeyCode::ShiftRight,
+                        winit::keyboard::KeyCode::ControlLeft => EngineKeyCode::ControlLeft,
+                        winit::keyboard::KeyCode::ControlRight => EngineKeyCode::ControlRight,
+                        winit::keyboard::KeyCode::AltLeft => EngineKeyCode::AltLeft,
+                        winit::keyboard::KeyCode::AltRight => EngineKeyCode::AltRight,
+                        winit::keyboard::KeyCode::Escape => EngineKeyCode::Escape,
+                        winit::keyboard::KeyCode::Tab => EngineKeyCode::Tab,
+                        winit::keyboard::KeyCode::Enter => EngineKeyCode::Enter,
+                        winit::keyboard::KeyCode::ArrowUp => EngineKeyCode::ArrowUp,
+                        winit::keyboard::KeyCode::ArrowDown => EngineKeyCode::ArrowDown,
+                        winit::keyboard::KeyCode::ArrowLeft => EngineKeyCode::ArrowLeft,
+                        winit::keyboard::KeyCode::ArrowRight => EngineKeyCode::ArrowRight,
+                        winit::keyboard::KeyCode::Digit0 => EngineKeyCode::Digit0,
+                        winit::keyboard::KeyCode::Digit1 => EngineKeyCode::Digit1,
+                        winit::keyboard::KeyCode::Digit2 => EngineKeyCode::Digit2,
+                        winit::keyboard::KeyCode::Digit3 => EngineKeyCode::Digit3,
+                        winit::keyboard::KeyCode::Digit4 => EngineKeyCode::Digit4,
+                        winit::keyboard::KeyCode::Digit5 => EngineKeyCode::Digit5,
+                        winit::keyboard::KeyCode::Digit6 => EngineKeyCode::Digit6,
+                        winit::keyboard::KeyCode::Digit7 => EngineKeyCode::Digit7,
+                        winit::keyboard::KeyCode::Digit8 => EngineKeyCode::Digit8,
+                        winit::keyboard::KeyCode::Digit9 => EngineKeyCode::Digit9,
                         other => EngineKeyCode::Other(other as u32),
                     };
-                    self.input.handle_keyboard(key, if key_event.state == winit::event::ElementState::Pressed {
-                        ElementState::Pressed
-                    } else { ElementState::Released });
+                    self.input.handle_keyboard(
+                        key,
+                        if key_event.state == winit::event::ElementState::Pressed {
+                            ElementState::Pressed
+                        } else {
+                            ElementState::Released
+                        },
+                    );
                 }
             }
             match prism_platform::to_platform_event(event) {
@@ -610,48 +665,34 @@ impl App {
                 }
                 prism_platform::PlatformEvent::MouseButton { button, pressed } => {
                     use prism_engine::input::{ElementState, MouseButton};
-                    let button = match button { 0 => MouseButton::Left, 1 => MouseButton::Right,
-                        2 => MouseButton::Middle, 3 => MouseButton::Back, 4 => MouseButton::Forward,
-                        other => MouseButton::Other(other) };
+                    let button = match button {
+                        0 => MouseButton::Left,
+                        1 => MouseButton::Right,
+                        2 => MouseButton::Middle,
+                        3 => MouseButton::Back,
+                        4 => MouseButton::Forward,
+                        other => MouseButton::Other(other),
+                    };
                     if pressed && button == MouseButton::Left && !self.input.pointer_locked {
                         prism_platform::grab_pointer(window);
                         self.input.set_locked(true);
                     }
-                    self.input.handle_mouse_button(button, if pressed { ElementState::Pressed } else { ElementState::Released });
+                    self.input.handle_mouse_button(
+                        button,
+                        if pressed {
+                            ElementState::Pressed
+                        } else {
+                            ElementState::Released
+                        },
+                    );
                 }
                 _ => {}
             }
         }
     }
 
-    fn pbr_flag_names() -> &'static [&'static str; 15] {
-        &[
-            "Direct",
-            "Shadow",
-            "Specular",
-            "Metallic",
-            "Roughness",
-            "DiffuseIBL",
-            "SpecularIBL",
-            "MultiLight",
-            "AO",
-            "Emissive",
-            "Transmission",
-            "Translucency",
-            "Anisotropy",
-            "ClearCoat",
-            "GI",
-        ]
-    }
-
     fn pbr_flag_label(&self) -> String {
-        let names = Self::pbr_flag_names();
-        for (i, n) in names.iter().enumerate() {
-            if self.render_settings.debug_flags == (1u32 << i) {
-                return (*n).to_string();
-            }
-        }
-        "(normal render)".to_string()
+        prism_engine::render_settings::pbr_flag_label(self.render_settings.debug_flags).to_string()
     }
 
     fn pbr_debug_key_to_bit(code: KeyCode, shift: bool) -> Option<u32> {
@@ -780,14 +821,14 @@ impl ApplicationHandler for App {
             return;
         }
 
-        // 先将事件转发给帧钩子（编辑器 egui 等）；被消费则不再走应用
+        // 先将事件转发给帧钩子（宿主 UI 等）；被消费则不再走应用
         // 自身的快捷键处理（输入仍会路由到 InputManager 保持按键状态一致）。
         if let Some(hook) = self.frame_hook.as_mut() {
             if let Some(ref platform) = self.platform {
                 let window = platform.window();
-        let platform_event = prism_platform::to_platform_event(&event);
-        let consumed = hook.on_platform_event(window, platform_event)
-            || hook.on_window_event(window, &event);
+                let platform_event = prism_platform::to_platform_event(&event);
+                let consumed = hook.on_platform_event(window, platform_event)
+                    || hook.on_window_event(window, &event);
                 if consumed {
                     self.route_window_event_to_input(event_loop, &event);
                     return;
@@ -814,7 +855,7 @@ impl ApplicationHandler for App {
                     winit::keyboard::PhysicalKey::Code(c) => *c,
                     _ => return,
                 };
-                // 键盘状态 — 查询 egui 修饰键状态，或保持简单。
+                // 键盘状态 — 修饰键暂按未按下处理，保持简单。
                 // 目前假设调试快捷键的 shift=ctrl=false。
                 let (shift, _ctrl) = (false, false);
 
@@ -834,6 +875,13 @@ impl ApplicationHandler for App {
                 }
 
                 match code {
+                    KeyCode::F3 => {
+                        self.debug_hud.show = !self.debug_hud.show;
+                        log::info!(
+                            "runtime HUD = {}",
+                            if self.debug_hud.show { "on" } else { "off" }
+                        );
+                    }
                     KeyCode::Tab => {
                         self.render_settings.debug_rt = (self.render_settings.debug_rt + 1) % 3;
                         let name = match self.render_settings.debug_rt {
@@ -860,10 +908,10 @@ impl ApplicationHandler for App {
         }
 
         if let WindowEvent::Resized(size) = &event {
-                self.needs_resize = true;
-                if size.width > 0 && size.height > 0 {
-                    self.display_aspect = size.width as f32 / size.height as f32;
-                }
+            self.needs_resize = true;
+            if size.width > 0 && size.height > 0 {
+                self.display_aspect = size.width as f32 / size.height as f32;
+            }
         }
     }
 
@@ -913,7 +961,7 @@ impl ApplicationHandler for App {
         }
         self.tick_sim();
 
-        // 帧钩子（编辑器 egui 等）— 主线程
+        // 帧钩子（宿主 UI 等）— 主线程
         if let Some(hook) = self.frame_hook.as_mut() {
             if let Some(ref platform) = self.platform {
                 let window = platform.window();

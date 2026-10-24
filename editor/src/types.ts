@@ -76,6 +76,22 @@ export interface AssetInfo {
   kind: "model" | "texture" | "env" | "scene" | "package" | "data" | "other";
 }
 
+/** 文本资产预览（后端按 UTF-8 读取，可截断）。 */
+export interface AssetTextPreview {
+  path: string;
+  text: string;
+  truncated: boolean;
+  sizeBytes: number;
+}
+
+/** 资产文件操作结果（重命名 / 移动 / 删除）。 */
+export interface AssetMutation {
+  from: string;
+  to: string | null;
+  referencesUpdated: number;
+  affectedDocuments: string[];
+}
+
 /** 「某场景某字段引用了该资产」的记录。 */
 export interface AssetRef {
   scene: string;
@@ -124,3 +140,96 @@ export type JsonValue =
   | string
   | JsonValue[]
   | { [key: string]: JsonValue };
+
+/** `assets/scenes.toml` 中的一个可运行场景。 */
+export interface PlayableScene {
+  name: string;
+  path: string;
+  /** 对应作者文档（存在时）。 */
+  docPath: string | null;
+}
+
+/** 运行时场景包（`assets/scenes.pak`）状态。 */
+export interface ScenePackageStatus {
+  exists: boolean;
+  sizeBytes: number;
+}
+
+/** 游戏进程 stdout/stderr 的一行。 */
+export interface PreviewLogLine {
+  stream: "stdout" | "stderr" | "system" | string;
+  line: string;
+}
+
+/** 项目级渲染设置（`assets/settings.toml` 的 `[render]`）。 */
+export interface RenderSettingsData {
+  renderMode: "raster" | "path_trace";
+  debugFlags: number;
+  tonemapMode: number;
+  debugRt: number;
+  ptMaxBounces: number;
+  ptRayMaxDistance: number;
+  ptMaxIterations: number;
+}
+
+/** 离线 GI 烘焙参数（`prism-build-pipeline bake-gi`）。 */
+export interface BakeGiOptions {
+  rays: number;
+  bounces: number;
+  output: string;
+  pak: string;
+  rscn: string;
+}
+
+/** 程序化高度图参数（`prism-build-pipeline heightmap`）。 */
+export interface HeightmapOptions {
+  output: string;
+  width: number;
+  height: number;
+  seed: number;
+  iterations: number;
+  particles: number;
+  seaLevel: number;
+}
+
+/** 渲染图报告中的一个 pass。 */
+export interface RenderGraphPass {
+  index: number;
+  name: string;
+  kind: string;
+  inputs: number[];
+  outputs: number[];
+}
+
+/** 渲染图报告中的一个图管理资源。 */
+export interface RenderGraphResource {
+  handle: number;
+  name: string;
+  kind: string;
+  format: string | null;
+  width: number | null;
+  height: number | null;
+  sampleCount: number | null;
+  sizeBytes: number | null;
+  allocated: boolean;
+}
+
+/** 报告里记录的运行时渲染设置。 */
+export interface RenderGraphSettings {
+  renderMode: string;
+  debugFlags: number;
+  tonemapMode: number;
+  debugRt: number;
+  ptMaxBounces: number;
+  ptRayMaxDistance: number;
+  ptMaxIterations: number;
+}
+
+/** 游戏进程写出的实时渲染图快照。 */
+export interface RenderGraphReport {
+  generatedAtMs: number;
+  frame: number;
+  settings: RenderGraphSettings;
+  passes: RenderGraphPass[];
+  resources: RenderGraphResource[];
+}

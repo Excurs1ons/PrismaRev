@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, nextTick, ref } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref } from "vue";
+import { ChevronDown, ChevronRight, Eye, EyeOff } from "lucide-vue-next";
 import type { EntityJson } from "../types";
 
 /**
@@ -20,6 +21,10 @@ const emit = defineEmits<{
   (e: "rename", index: number, name: string): void;
   (e: "reparent", child: number, parent: number | null): void;
   (e: "move", child: number, at: number, parent: number | null): void;
+  (e: "duplicate", index: number): void;
+  (e: "remove", indices: number[]): void;
+  (e: "toggle-active", index: number, active: boolean): void;
+  (e: "insert-prefab", path: string, parent: number | null): void;
 }>();
 
 interface Row {
@@ -28,6 +33,7 @@ interface Row {
   label: string;
   hasChildren: boolean;
   collapsed: boolean;
+  active: boolean;
 }
 
 const filter = ref("");
@@ -38,6 +44,50 @@ const renameText = ref("");
 const dragging = ref<number | null>(null);
 const dropTarget = ref<{ index: number; zone: "before" | "after" | "inside" } | null>(null);
 const rootDropActive = ref(false);
+const ENTITY_MIME = "application/x-prism-entity";
+const ASSET_MIME = "application/x-prism-asset";
+
+function draggedPrefab(event: DragEvent): string | null {
+  const path = event.dataTransfer?.getData(ASSET_MIME) ?? "";
+  return path.toLowerCase().endsWith(".prefab.json") ? path : null;
+}
+const contextTarget = ref<{ index: number; x: number; y: number } | null>(null);
+
+function openContextMenu(index: number, event: MouseEvent) {
+  if (!props.selected.includes(index)) emit("select", [index]);
+  contextTarget.value = { index, x: event.clientX, y: event.clientY };
+}
+
+function closeContextMenu() {
+  contextTarget.value = null;
+}
+
+function runContext(action: "duplicate" | "remove") {
+  const target = contextTarget.value;
+  closeContextMenu();
+  if (!target) return;
+  if (action === "duplicate") {
+    emit("duplicate", target.index);
+    return;
+  }
+  const indices = props.selected.includes(target.index)
+    ? [...props.selected]
+    : [target.index];
+  emit("remove", indices);
+}
+
+onMounted(() => {
+  window.addEventListener("pointerdown", closeContextMenu);
+  window.addEventListener("scroll", closeContextMenu, true);
+  window.addEventListener("blur", closeContextMenu);
+  window.addEventListener("resize", closeContextMenu);
+});
+onUnmounted(() => {
+  window.removeEventListener("pointerdown", closeContextMenu);
+  window.removeEventListener("scroll", closeContextMenu, true);
+  window.removeEventListener("blur", closeContextMenu);
+  window.removeEventListener("resize", closeContextMenu);
+});
 
 function toggle(index: number) {
   const next = new Set(collapsed.value);
@@ -80,12 +130,14 @@ const rows = computed<Row[]>(() => {
     const label = props.entities[index].name || `#${index}`;
     const folded = !query && collapsed.value.has(index);
     if (!query || label.toLowerCase().includes(query)) {
+      const activeValue = props.entities[index].components?.["prism_engine::scene::Active"];
       out.push({
         index,
         depth,
         label,
         hasChildren: children[index].length > 0,
         collapsed: folded,
+        active: activeValue !== false,
       });
     }
     if (folded) return;
@@ -163,8 +215,10 @@ function cancelRename() {
 
 function onDragStart(index: number, event: DragEvent) {
   dragging.value = index;
+  const name = props.entities[index]?.name ?? "entity";
+  event.dataTransfer?.setData(ENTITY_MIME, JSON.stringify({ index, name }));
   event.dataTransfer?.setData("text/plain", String(index));
-  if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+  if (event.dataTransfer) event.dataTransfer.effectAllowed = "copyMove";
 }
 
 function onDragEnd() {
@@ -174,7 +228,14 @@ function onDragEnd() {
 }
 
 function onDragOver(index: number, event: DragEvent) {
-  if (dragging.value === null) return;
+  if (dragging.value === null) {
+    if (event.dataTransfer?.types.includes(ASSET_MIME)) {
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "copy";
+      dropTarget.value = { index, zone: "inside" };
+    }
+    return;
+  }
   event.preventDefault();
   if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
 
@@ -189,6 +250,13 @@ function onDragOver(index: number, event: DragEvent) {
 
 function onDrop(index: number, event: DragEvent) {
   event.preventDefault();
+  const prefab = draggedPrefab(event);
+  if (prefab) {
+    dropTarget.value = null;
+    rootDropActive.value = false;
+    emit("insert-prefab", prefab, index);
+    return;
+  }
   const child = dragging.value;
   const zone = dropTarget.value?.zone ?? "inside";
   dropTarget.value = null;
@@ -205,13 +273,20 @@ function onDrop(index: number, event: DragEvent) {
 }
 
 function onRootDragOver(event: DragEvent) {
-  if (dragging.value === null) return;
+  if (dragging.value === null && !event.dataTransfer?.types.includes(ASSET_MIME)) return;
   event.preventDefault();
   rootDropActive.value = true;
 }
 
 function onRootDrop(event: DragEvent) {
   event.preventDefault();
+  const prefab = draggedPrefab(event);
+  if (prefab) {
+    rootDropActive.value = false;
+    dropTarget.value = null;
+    emit("insert-prefab", prefab, null);
+    return;
+  }
   const child = dragging.value;
   rootDropActive.value = false;
   dragging.value = null;
@@ -240,10 +315,11 @@ function onRootDrop(event: DragEvent) {
     @dragend="onDragEnd"
     @dragover="onDragOver(row.index, $event)"
     @drop="onDrop(row.index, $event)"
+    @contextmenu.prevent.stop="openContextMenu(row.index, $event)"
   >
     <div
       class="list-item"
-      :class="{ active: selected.includes(row.index) }"
+      :class="{ active: selected.includes(row.index), inactive: !row.active }"
       :style="{ paddingLeft: `${6 + row.depth * 14}px` }"
       @click="onRowClick(row.index, $event)"
     >
@@ -253,7 +329,8 @@ function onRootDrop(event: DragEvent) {
         :title="row.collapsed ? '展开' : '折叠'"
         @click.stop="toggle(row.index)"
       >
-        {{ row.collapsed ? "▸" : "▾" }}
+        <ChevronRight v-if="row.collapsed" :size="12" />
+        <ChevronDown v-else :size="12" />
       </button>
       <span v-else class="caret-spacer" />
       <span class="muted">{{ row.index }}</span>
@@ -268,6 +345,14 @@ function onRootDrop(event: DragEvent) {
         @blur="commitRename"
       />
       <span v-else class="label" @dblclick.stop="startRename(row.index)">{{ row.label }}</span>
+      <button
+        class="ghost icon visibility-toggle"
+        :title="row.active ? '禁用实体' : '启用实体'"
+        @click.stop="emit('toggle-active', row.index, !row.active)"
+      >
+        <Eye v-if="row.active" :size="13" />
+        <EyeOff v-else :size="13" />
+      </button>
     </div>
   </div>
 
@@ -284,4 +369,22 @@ function onRootDrop(event: DragEvent) {
   >
     拖到这里成为根实体
   </div>
+
+  <Teleport to="body">
+    <div
+      v-if="contextTarget"
+      class="entity-context-menu"
+      :style="{ left: `${contextTarget.x}px`, top: `${contextTarget.y}px` }"
+      @pointerdown.stop
+      @click.stop
+      @contextmenu.prevent
+    >
+      <button @click="runContext('duplicate')">
+        <span>复制</span><span class="context-shortcut">Ctrl+D</span>
+      </button>
+      <button class="danger" @click="runContext('remove')">
+        <span>删除</span><span class="context-shortcut">Del</span>
+      </button>
+    </div>
+  </Teleport>
 </template>

@@ -24,7 +24,7 @@ pub struct SkyboxPush {
     /// offset 0, size 64
     pub invViewRot: [[f32; 4]; 4],
     /// offset 64, size 16
-    pub _pad0: [f32; 4],
+    pub params: [f32; 4],
     /// offset 80, size 16
     pub _pad1: [f32; 4],
 }

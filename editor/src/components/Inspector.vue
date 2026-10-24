@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
+import { X } from "lucide-vue-next";
 import FieldEditor from "./FieldEditor.vue";
 import * as api from "../api";
 import type { ComponentClipboard, EntityJson, FieldSchema, JsonValue, Schema } from "../types";
@@ -28,9 +29,6 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: "update", entity: EntityJson, editKey: string): void;
-  (e: "remove"): void;
-  (e: "duplicate", index: number): void;
-  (e: "save-prefab", index: number): void;
   (e: "revert-prefab", index: number): void;
   (e: "apply-prefab", index: number): void;
   (e: "unlink-prefab", index: number): void;
@@ -43,6 +41,36 @@ const emit = defineEmits<{
 
 const addName = ref("");
 const filter = ref("");
+const componentMenu = ref<{ name: string; x: number; y: number } | null>(null);
+
+function openComponentMenu(name: string, event: MouseEvent) {
+  componentMenu.value = { name, x: event.clientX, y: event.clientY };
+}
+
+function closeComponentMenu() {
+  componentMenu.value = null;
+}
+
+function runComponentMenu(action: "copy" | "remove") {
+  const target = componentMenu.value;
+  closeComponentMenu();
+  if (!target) return;
+  if (action === "copy") emit("copy-component", target.name);
+  else removeComponent(target.name);
+}
+
+onMounted(() => {
+  window.addEventListener("pointerdown", closeComponentMenu);
+  window.addEventListener("scroll", closeComponentMenu, true);
+  window.addEventListener("blur", closeComponentMenu);
+  window.addEventListener("resize", closeComponentMenu);
+});
+onUnmounted(() => {
+  window.removeEventListener("pointerdown", closeComponentMenu);
+  window.removeEventListener("scroll", closeComponentMenu, true);
+  window.removeEventListener("blur", closeComponentMenu);
+  window.removeEventListener("resize", closeComponentMenu);
+});
 
 /** 每个组件一条请求序号，只应用最新一次反射写入的结果。 */
 const reflectSeq = new Map<string, number>();
@@ -188,31 +216,15 @@ const availableComponents = computed(() =>
       <span class="title">实体 #{{ index }}</span>
       <span v-if="selectionCount > 1" class="hint">（已选 {{ selectionCount }}）</span>
       <span class="spacer" />
-      <button
-        class="ghost icon"
-        title="把该实体及其子级保存为预制体"
-        @click="emit('save-prefab', index)"
-      >
-        存为预制体
-      </button>
-      <button class="ghost icon" title="复制实体 (Ctrl+D)" @click="emit('duplicate', index)">
-        复制
-      </button>
-      <button
-        class="ghost icon"
-        :disabled="entities.length <= 1"
-        title="删除选中实体（Delete）"
-        @click="emit('remove')"
-      >
-        删除
-      </button>
     </header>
     <div class="card-body">
       <div class="row">
         <div class="label">检索</div>
         <div class="scalar">
           <input v-model="filter" type="text" placeholder="组件名 / 字段名 / 值…" />
-          <button v-if="filter" class="ghost icon" title="清除" @click="filter = ''">✕</button>
+          <button v-if="filter" class="ghost icon" title="清除" @click="filter = ''">
+            <X :size="13" />
+          </button>
         </div>
       </div>
       <div class="row">
@@ -263,7 +275,7 @@ const availableComponents = computed(() =>
       <button class="primary" title="Ctrl+V" @click="emit('paste-component')">
         粘贴到选中（{{ selectionCount }}）
       </button>
-      <button class="ghost icon" @click="emit('clear-clipboard')">✕</button>
+      <button class="ghost icon" @click="emit('clear-clipboard')"><X :size="13" /></button>
     </div>
   </div>
 
@@ -307,14 +319,10 @@ const availableComponents = computed(() =>
     class="card"
     :class="{ highlight: highlightComponent === name }"
   >
-    <header>
+    <header @contextmenu.prevent.stop="openComponentMenu(name, $event)">
       <span class="title">{{ shortName(name) }}</span>
       <span class="hint">{{ name }}</span>
       <span class="spacer" />
-      <button class="ghost icon" title="复制该组件" @click="emit('copy-component', name)">
-        复制
-      </button>
-      <button class="ghost icon" title="移除组件" @click="removeComponent(name)">移除</button>
     </header>
     <div class="card-body">
       <div v-if="filter && matchedFields(name).length" class="hint" style="margin-bottom: 4px">
@@ -353,4 +361,22 @@ const availableComponents = computed(() =>
       </div>
     </div>
   </div>
+
+  <Teleport to="body">
+    <div
+      v-if="componentMenu"
+      class="component-context-menu"
+      :style="{ left: `${componentMenu.x}px`, top: `${componentMenu.y}px` }"
+      @pointerdown.stop
+      @click.stop
+      @contextmenu.prevent
+    >
+      <button @click="runComponentMenu('copy')">
+        <span>复制组件</span>
+      </button>
+      <button class="danger" @click="runComponentMenu('remove')">
+        <span>移除组件</span>
+      </button>
+    </div>
+  </Teleport>
 </template>

@@ -13,7 +13,8 @@ use crate::scene::components as scene_comp;
 use crate::scene::components::Camera;
 use prism_ecs::World;
 use prism_render::{
-    DrawItem, FrameUBOData, GpuLight, GraphRenderer, PtAnalyticLight, UiOverlayInput, PT_LIGHT_MAX,
+    DrawItem, FrameUBOData, GizmoInstance, GpuLight, GraphRenderer, PtAnalyticLight,
+    SkyboxSettings, UiOverlayInput, PT_LIGHT_MAX,
 };
 
 /// 预缩放因子，取代旧的 GPU 端 `exposure / PI` 单位转换。
@@ -77,8 +78,11 @@ pub fn extract_frame_packet(
     // 1. Collect per-frame scene 状态 (needs orientation).
     let scene = collect_scene_changes(world, display_aspect, surface_rotation);
 
-    // 2. 构建 the flat 绘制 列表
-    let draw_items: Vec<DrawItem> = scene::SceneReadView::new(world).draw_items();
+    // 2. Build the flat draw list and ECS-authored render helpers.
+    let scene_view = scene::SceneReadView::new(world);
+    let draw_items: Vec<DrawItem> = scene_view.draw_items();
+    let gizmos = scene_view.gizmo_instances();
+    let skybox = scene_view.skybox_settings();
 
     // 3. 构建 the UI 叠加 from the ECS 世界 (includes UiQuad/TextCmd).
     let ui_overlay = crate::ui::convert_ui_draw_list_to_overlay(world);
@@ -86,7 +90,12 @@ pub fn extract_frame_packet(
     FramePacket {
         scene,
         draw_items,
+        gizmos,
+        skybox,
         ui_overlay,
+        // 渲染设置由应用层（`App`）在发送前覆盖；引擎默认值保证独立使用
+        // `extract_frame_packet` 时仍然可用。
+        settings: RenderSettings::default(),
     }
 }
 
@@ -99,7 +108,15 @@ pub fn extract_frame_packet(
 pub struct FramePacket {
     pub scene: SceneChanges,
     pub draw_items: Vec<DrawItem>,
+    /// ECS `Gizmo` entities, already transformed into world space.
+    pub gizmos: Vec<GizmoInstance>,
+    /// ECS `Skybox` parameters for this frame (`None` = do not draw).
+    pub skybox: Option<SkyboxSettings>,
     pub ui_overlay: UiOverlayInput,
+    /// 应用层渲染设置（调试标志 / 色调映射 / PT 参数）。主线程每帧写入，
+    /// 渲染线程只读——保证 `App::render_settings` 的修改（快捷键、项目配置）
+    /// 能真正到达渲染线程。
+    pub settings: RenderSettings,
 }
 
 // ---------------------------------------------------------------------------
@@ -264,13 +281,17 @@ const CLEAR_COLOR: Vec4 = Vec4::new(0.5, 0.5, 0.5, 1.0);
 pub fn render_system(
     renderer: &mut GraphRenderer,
     packet: &FramePacket,
-    settings: &RenderSettings,
     dirty_router: &mut DirtyRouter,
 ) -> anyhow::Result<()> {
+    // 渲染设置随 packet 一起从主线程过来（见 `FramePacket::settings`）。
+    let settings = &packet.settings;
     let FramePacket {
         ref scene,
         ref draw_items,
+        ref gizmos,
+        skybox,
         ref ui_overlay,
+        settings: _,
     } = *packet;
 
     // 1. Diff against the 上一个 帧 via DirtyRouter.
@@ -333,6 +354,8 @@ pub fn render_system(
     };
     let input = prism_render::FrameInput {
         draw_items,
+        gizmos,
+        skybox,
         frame_data: &frame_data,
         light_view_proj: light_view_proj.to_cols_array_2d(),
         inv_projection: inv_projection.to_cols_array_2d(),

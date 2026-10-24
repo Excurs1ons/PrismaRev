@@ -1,5 +1,5 @@
-//! 中性"帧钩子"——`App` 的扩展点，供编辑器/调试宿主（如
-//! prism-editor-host）注入 egui 等任意 UI。
+//! 中性"帧钩子"——`App` 的扩展点，供调试宿主/未来 UI 宿主注入
+//! 任意框架的 UI。
 //!
 //! `App` 不认识任何具体 UI 框架：钩子负责自己的窗口事件处理与每帧
 //! UI 运行；渲染数据通过 [`RenderShared::send_overlay_message`] 以
@@ -14,9 +14,9 @@ use winit::window::Window;
 use crate::render_shared::{RenderShared, RenderStats};
 use prism_platform::PlatformEvent;
 
-/// 主线程上的帧钩子（编辑器 egui 等）。
+/// 主线程上的帧钩子（调试 / 宿主 UI 等）。
 ///
-/// 注入方式：`app(config).with_frame_hook(EditorHook::new())`。
+/// 注入方式：`app(config).with_frame_hook(MyHook::new())`。
 /// 钩子全部方法都有默认实现——纯游戏宿主无需实现任何方法。
 pub trait FrameHook: Send {
     /// 平台无关事件回调。新宿主应优先实现此方法，避免依赖 winit。

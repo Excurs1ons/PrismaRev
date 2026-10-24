@@ -13,14 +13,14 @@ export default defineConfig(async () => ({
   clearScreen: false,
   // 2. Tauri 需要固定端口
   server: {
-    port: 1420,
+    port: 5181,
     strictPort: true,
     host: host || false,
     hmr: host
       ? {
           protocol: "ws",
           host,
-          port: 1421,
+          port: 5182,
         }
       : undefined,
     watch: {

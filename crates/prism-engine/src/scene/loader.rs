@@ -851,9 +851,9 @@ impl SceneLoader {
                 world.insert(
                     entity,
                     Skybox {
-                        env_asset: SceneAssetId::from_raw(0),
                         hdr_path: pe.skybox_hdr_path.clone(),
                         enabled: pe.skybox_enabled,
+                        ..Skybox::default()
                     },
                 );
                 log::trace!(

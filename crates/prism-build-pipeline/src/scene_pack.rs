@@ -104,6 +104,9 @@ pub fn build_scene_package(
         );
     }
 
+    // 场景声明的环境贴图必须在包内，否则运行时 IBL 会退回空环境（黑屏）。
+    stage_environment_assets(asset_root, staging, &manifest)?;
+
     // Runtime always looks up the manifest as `scenes.toml` inside the package.
     // Rewrite authoring `.scene.json` paths to the cooked `.rscn` names while
     // keeping the original file's comments/formatting intact.
@@ -168,6 +171,116 @@ fn stage_entry(
     validate_rscn(entry_path, &cooked)?;
     write_staged(staging, &target, &cooked)?;
     Ok(Some(target))
+}
+
+/// 把场景声明引用的环境贴图复制进 staging，路径与运行时解析结果一致。
+///
+/// 支持 `EnvironmentLighting.env_map` 与旧式 `Skybox.hdr_path`；路径可以是
+/// 场景相对（`../valley.hdr`）或项目根相对（`assets/valley.hdr`）。
+fn stage_environment_assets(
+    asset_root: &Path,
+    staging: &Path,
+    manifest: &prism_engine::scene::SceneManifest,
+) -> Result<usize> {
+    let mut staged = std::collections::BTreeSet::new();
+
+    for entry in &manifest.scenes {
+        let doc_rel = if let Some(stem) = entry.path.strip_suffix(".scene.json") {
+            format!("{stem}.scene.json")
+        } else if let Some(stem) = entry.path.strip_suffix(".rscn") {
+            format!("{stem}.scene.json")
+        } else {
+            continue;
+        };
+
+        let doc_path = asset_root.join(&doc_rel);
+        let Ok(text) = fs::read_to_string(&doc_path) else {
+            continue;
+        };
+        let Ok(doc) = serde_json::from_str::<serde_json::Value>(&text) else {
+            continue;
+        };
+        let Some(entities) = doc.get("entities").and_then(|value| value.as_array()) else {
+            continue;
+        };
+
+        for entity in entities {
+            let Some(components) = entity.get("components").and_then(|value| value.as_object())
+            else {
+                continue;
+            };
+            for (component, field) in [
+                ("prism_engine::scene::EnvironmentLighting", "env_map"),
+                ("prism_engine::scene::Skybox", "hdr_path"),
+            ] {
+                let Some(value) = components
+                    .get(component)
+                    .and_then(|payload| payload.get(field))
+                    .and_then(|value| value.as_str())
+                else {
+                    continue;
+                };
+                let Some(pak_path) = normalize_scene_relative(&doc_rel, value) else {
+                    log::warn!(
+                        "environment asset '{value}' in {doc_rel} cannot be packaged (absolute or escapes assets/)"
+                    );
+                    continue;
+                };
+                if !staged.insert(pak_path.clone()) {
+                    continue;
+                }
+
+                let source = asset_root.join(&pak_path);
+                if !source.is_file() {
+                    log::warn!("environment asset {} not found; skipping", source.display());
+                    continue;
+                }
+                let bytes = fs::read(&source)
+                    .with_context(|| format!("read environment {}", source.display()))?;
+                write_staged(staging, Path::new(&pak_path), &bytes)?;
+                log::info!("packaged environment asset: {pak_path}");
+            }
+        }
+    }
+
+    Ok(staged.len())
+}
+
+/// 把 `scene_rel` 所对应场景里的相对路径折叠成 `assets/` 内路径。
+fn normalize_scene_relative(scene_rel: &str, value: &str) -> Option<String> {
+    let value = value.replace('\\', "/");
+    if value.is_empty() || Path::new(&value).is_absolute() {
+        return None;
+    }
+
+    let mut parts: Vec<String> = Vec::new();
+    let project_style = value.starts_with("assets/");
+    if !project_style {
+        if let Some((dir, _)) = scene_rel.rsplit_once('/') {
+            parts.extend(
+                dir.split('/')
+                    .filter(|part| !part.is_empty())
+                    .map(str::to_string),
+            );
+        }
+    }
+
+    let relative = value.strip_prefix("assets/").unwrap_or(&value);
+    for part in relative.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop()?;
+            }
+            other => parts.push(other.to_string()),
+        }
+    }
+
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("/"))
+    }
 }
 
 fn cook_file(cooker: &SceneCooker, path: &Path) -> Result<Vec<u8>> {

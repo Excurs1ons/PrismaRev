@@ -68,6 +68,8 @@ const BRDF_LUT_SAMPLES: u32 = 1024;
 const IBL_CACHE_DIR: &str = "assets/ibr";
 const BRDF_CACHE_FILE: &str = "brdf_lut_512.bin";
 const ENV_CUBE_CACHE_FILE: &str = "cube_512.bin";
+/// Bump when cubemap/convolution math changes so stale on-disk caches are ignored.
+const IBL_CACHE_VERSION: u32 = 2;
 const IRRADIANCE_CACHE_FILE: &str = "irradiance_64.bin";
 const PREFILTERED_CACHE_PREFIX: &str = "prefiltered_mip";
 
@@ -1532,6 +1534,7 @@ fn cache_path(hash: &str, filename: &str) -> std::path::PathBuf {
 fn env_content_hash(bytes: &[u8]) -> String {
     let mut hasher = DefaultHasher::new();
     use std::hash::Hash;
+    IBL_CACHE_VERSION.hash(&mut hasher);
     bytes.hash(&mut hasher);
     format!("{:016x}", hasher.finish())
 }
@@ -1836,7 +1839,7 @@ fn generate_cubemap(eq: &[f32], eq_w: u32, eq_h: u32, face_size: u32) -> Vec<f32
                 let d = cube_direction(f, u, v);
                 let d = normalize3(d);
                 let ueq = d[2].atan2(d[0]) / (2.0 * std::f32::consts::PI) + 0.5;
-                let veq = d[1].acos().clamp(0.0, 1.0) / std::f32::consts::PI;
+                let veq = (d[1].acos() / std::f32::consts::PI).clamp(0.0, 1.0);
                 let c = sample_equirect_bilinear(eq, eq_w, eq_h, ueq, veq);
                 let o = ((f * face_size * face_size + y * face_size + x) * 4) as usize;
                 out[o..o + 4].copy_from_slice(&c);

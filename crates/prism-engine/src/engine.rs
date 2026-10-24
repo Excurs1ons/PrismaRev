@@ -80,20 +80,34 @@ impl Engine {
     // Init
     // ======================================================================
 
-    /// 场景加载。
+    /// 场景加载（默认加载 manifest 中第一个可解析场景）。
     ///
     /// 场景加载由**场景系统**负责（委托 [`crate::scene::SceneManager::load_first_from_manifest`]），
-    /// 引擎不再自行扫描 manifest。
+    /// 引擎不再自行扫描 manifest。需要按名字选择场景时用
+    /// [`Self::init_scene_named`]。
     ///
     /// 存档由**用户项目**实现——引擎不在初始化时自动读取存档，只提供
     /// [`Self::save_scene_state`] / [`Self::load_scene_state`] 原语供调用。
     /// 资源解析（`.pak` → `ResourceManager`）由调用方完成并传入，引擎不持有。
     pub fn init_scene(&mut self, rm: &mut prism_asset::runtime::ResourceManager) {
+        self.init_scene_named(rm, None);
+    }
+
+    /// 按名字加载场景；`scene_name = None` 等价于 [`Self::init_scene`]。
+    ///
+    /// 名字对应 `assets/scenes.toml` 的 `scenes[].name`（见
+    /// [`prism_engine::launch_config::LaunchConfig`]）。找不到该名字时
+    /// 不加载任何场景并记录警告。
+    pub fn init_scene_named(
+        &mut self,
+        rm: &mut prism_asset::runtime::ResourceManager,
+        scene_name: Option<&str>,
+    ) {
         // 运行时优先从资源包读取 manifest，避免依赖当前工作目录。
         if let Some(id) = rm.id_by_path("scenes.toml") {
             if let Ok(bytes) = rm.load_with_deps_raw(id) {
                 if let Ok(text) = std::str::from_utf8(&bytes) {
-                    self.init_scene_from_manifest_text(rm, text, None);
+                    self.init_scene_from_manifest_text(rm, text, scene_name);
                     return;
                 }
             }
@@ -102,7 +116,16 @@ impl Engine {
         // 兼容开发环境：资源包缺少 manifest 时由场景系统读取文件。
         let mut registry = crate::scene::ComponentRegistry::new();
         crate::scene::register_builtin_components(&mut registry);
-        self.scene.load_first_from_manifest(rm, &mut self.world, &registry);
+        match scene_name {
+            Some(name) => {
+                self.scene
+                    .load_named_from_manifest(rm, &mut self.world, &registry, name);
+            }
+            None => {
+                self.scene
+                    .load_first_from_manifest(rm, &mut self.world, &registry);
+            }
+        }
     }
 
     /// 从调用方提供的内存 manifest 初始化场景。
@@ -176,7 +199,7 @@ impl Engine {
     // ) -> anyhow::Result<()> {
     //     use crate::scene::components::*;
     //     use prism_render::managers::{MaterialUploadInput, MeshUploadInput};
-    // 
+    //
     //     // Upload cube 网格
     //     let cpu_mesh = crate::asset::procedural::make_cube();
     //     let upload = MeshUploadInput {
@@ -188,7 +211,7 @@ impl Engine {
     //         indices: cpu_mesh.indices,
     //     };
     //     let mesh_handle = renderer.register_mesh(&upload)?;
-    // 
+    //
     //     // Register 默认 材质
     //     let mat_input = MaterialUploadInput {
     //         base_color: [0.8, 0.8, 0.8, 1.0],
@@ -214,7 +237,7 @@ impl Engine {
     //     let mat_slot = renderer
     //         .material_slot(mat_handle)
     //         .ok_or_else(|| anyhow::anyhow!("no material slot for demo cube"))?;
-    // 
+    //
     //     // 生成 cube 实体 at origin.
     //     let entity = world.spawn();
     //     world.insert(
@@ -372,11 +395,10 @@ impl Engine {
         &self,
         provider: &mut P,
     ) -> Option<Vec<u8>> {
-        self.scene
-            .current_scene_env_bytes_with_provider(
-                crate::scene::SceneReadView::new(&self.world),
-                provider,
-            )
+        self.scene.current_scene_env_bytes_with_provider(
+            crate::scene::SceneReadView::new(&self.world),
+            provider,
+        )
     }
 
     /// 注入当前场景环境贴图，供渲染器启动或场景切换时使用。
@@ -450,7 +472,6 @@ impl Engine {
         log::info!("ECS: spawned default camera entity");
     }
 }
-
 
 /// 构建 the 默认 系统 调度
 ///

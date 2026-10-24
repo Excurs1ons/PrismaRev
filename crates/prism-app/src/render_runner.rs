@@ -11,10 +11,11 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use prism_engine::ecs::Entity;
 use prism_engine::dirty_router::DirtyRouter;
+use prism_engine::ecs::Entity;
 use prism_engine::render_settings::RenderSettings;
 use prism_engine::render_system::FramePacket;
+use prism_platform::SendWindowHandles;
 use prism_render::asset_bridge::{AssetResolveRequest, AssetResolveResult};
 use prism_render::SwapchainOverlay;
 use prism_render::{FrameInput, FrameUBOData, GraphRenderer};
@@ -22,7 +23,6 @@ use winit::raw_window_handle::{
     DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, RawDisplayHandle,
     RawWindowHandle, WindowHandle,
 };
-use prism_platform::SendWindowHandles;
 
 use crate::render_shared::{RenderShared, RenderStats};
 
@@ -88,7 +88,7 @@ pub fn render_thread_main(
     overlay_factory: Option<OverlayFactory>,
 ) {
     let mut dirty_router = DirtyRouter::new();
-    let settings = RenderSettings::default();
+    let mut graph_report = crate::render_graph_report::ReportWriter::from_env();
 
     log::info!("Render thread started");
 
@@ -101,18 +101,14 @@ pub fn render_thread_main(
         display: &handles.display,
         window: &handles.window,
     };
-    let mut renderer = match GraphRenderer::new(
-        extensions_ref,
-        &handle_bridge,
-        &handle_bridge,
-        None,
-    ) {
-        Ok(r) => r,
-        Err(e) => {
-            log::error!("Render thread: failed to create renderer: {e:#}");
-            return;
-        }
-    };
+    let mut renderer =
+        match GraphRenderer::new(extensions_ref, &handle_bridge, &handle_bridge, None) {
+            Ok(r) => r,
+            Err(e) => {
+                log::error!("Render thread: failed to create renderer: {e:#}");
+                return;
+            }
+        };
     shared.mark("renderer_built");
     log::info!("Render thread: renderer built");
 
@@ -134,7 +130,7 @@ pub fn render_thread_main(
         log::info!("scene lighting: no IBL environment — cheap empty IBL (no convolve)");
     }
 
-    // 安装外部叠加层（编辑器 egui 等），其 GPU 资源在 record 时懒创建。
+    // 安装外部叠加层（宿主 UI 等），其 GPU 资源在 record 时懒创建。
     if let Some(factory) = overlay_factory {
         renderer.set_external_overlay(factory());
     }
@@ -162,7 +158,7 @@ pub fn render_thread_main(
         }
 
         let packet = shared.take_packet();
-        // 应用主线程投递的叠加层消息（如"新 egui 帧"）。
+        // 应用主线程投递的叠加层消息（如"新的宿主 UI 帧"）。
         let overlay_messages = shared.take_overlay_messages();
         let has_overlay_messages = !overlay_messages.is_empty();
         for msg in overlay_messages {
@@ -183,12 +179,7 @@ pub fn render_thread_main(
 
         let frame_start = Instant::now();
 
-        if let Err(e) = render_one_frame(
-            &mut renderer,
-            &packet,
-            &mut dirty_router,
-            &settings,
-        ) {
+        if let Err(e) = render_one_frame(&mut renderer, &packet, &mut dirty_router, &packet.settings) {
             log::error!("Render thread error: {e:#}");
         } else if !first_frame_presented {
             first_frame_presented = true;
@@ -209,6 +200,15 @@ pub fn render_thread_main(
         }
 
         let pt_count = renderer.pt_frame_count();
+
+        // 渲染图报告（Web 编辑器可视化）：首帧 + 低频刷新。
+        if graph_report.is_enabled() {
+            graph_report.maybe_write(
+                &renderer.graph().snapshot(),
+                &packet.settings,
+                frame_count,
+            );
+        }
 
         shared.set_render_stats(RenderStats {
             frame_time_ms,
@@ -272,6 +272,8 @@ fn render_one_frame(
 
     let input = FrameInput {
         draw_items,
+        gizmos: &packet.gizmos,
+        skybox: packet.skybox,
         frame_data: &frame_data,
         light_view_proj: scene.light_view_proj.to_cols_array_2d(),
         inv_projection: scene.inv_projection.to_cols_array_2d(),

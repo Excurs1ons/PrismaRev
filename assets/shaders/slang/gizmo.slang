@@ -18,6 +18,7 @@ struct GizmoVaryings
 struct GizmoPush
 {
     float4x4 viewProj;
+    float4x4 model;     // entity world transform * component scale
 };
 [[vk::push_constant]]
 GizmoPush push;
@@ -27,7 +28,8 @@ GizmoVaryings vertexMain(GizmoVertexIn in)
 {
     GizmoVaryings out;
     out.color   = in.color;
-    out.clipPos = mul(push.viewProj, float4(in.position, 1.0));
+    float4 worldPos = mul(push.model, float4(in.position, 1.0));
+    out.clipPos = mul(push.viewProj, worldPos);
     return out;
 }
 

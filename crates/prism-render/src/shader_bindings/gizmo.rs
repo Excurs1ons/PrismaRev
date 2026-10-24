@@ -19,4 +19,6 @@ pub const PUSH_CONSTANT_SIZE: u32 = 0;
 pub struct GizmoPush {
     /// offset 0, size 64
     pub viewProj: [[f32; 4]; 4],
+    /// offset 64, size 64
+    pub model: [[f32; 4]; 4],
 }

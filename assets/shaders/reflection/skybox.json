@@ -39,7 +39,7 @@
                             "binding": {"kind": "uniform", "offset": 0, "size": 64}
                         },
                         {
-                            "name": "_pad0",
+                            "name": "params",
                             "type": {
                                 "kind": "vector",
                                 "elementCount": 4,
@@ -86,7 +86,7 @@
                                 "binding": {"kind": "uniform", "offset": 0, "size": 64}
                             },
                             {
-                                "name": "_pad0",
+                                "name": "params",
                                 "type": {
                                     "kind": "vector",
                                     "elementCount": 4,

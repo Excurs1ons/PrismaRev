@@ -16,27 +16,76 @@
 //! 真正的编辑发生在 web UI 里：前端直接编辑 `.scene.json` 的 JSON 文档，
 //! schema 只作为控件类型与只读判断的提示。
 
+pub mod asset_ops;
 pub mod assets;
+pub mod play;
 pub mod presets;
 pub mod reflect_edit;
 pub mod scene;
 pub mod schema;
+pub mod settings;
 
+pub use asset_ops::{
+    asset_reference_documents, create_asset_dir, delete_asset, move_asset, normalize_asset_path,
+    rename_asset, AssetMutation,
+};
 pub use assets::{
-    asset_kind, asset_usage, assets_dir, list_assets, list_assets_info, AssetInfo, AssetRef,
-    MAX_ASSETS,
+    asset_kind, asset_usage, assets_dir, list_asset_dirs, list_assets, list_assets_info,
+    read_asset_bytes, read_asset_text, AssetInfo, AssetRef, AssetTextPreview, MAX_ASSETS,
+    MAX_PREVIEW_BYTES, MAX_TEXT_PREVIEW_BYTES,
+};
+pub use play::{
+    list_playable_scenes, manifest_path, scene_package_status, PlayableScene, ScenePackageStatus,
 };
 pub use presets::{entity_presets, EntityPreset};
 pub use reflect_edit::{normalize_component, set_component_field};
 pub use scene::{
     // 通用（场景 / 预制体）
-    delete_doc, delete_entities, doc_path, docs_dir, extract_subtree, find_project_root,
-    instantiate_prefab, list_docs, move_entity, prefab_instances, prefab_template_doc, read_doc,
-    rename_doc, reparent_doc, revert_prefab_instance, sync_prefab_instances, template_doc,
-    templates_for, unlink_prefab_instance, validate_doc, write_doc, write_doc_as, DocKind,
-    InstantiateResult, MoveResult, PrefabLink, SceneEntry, SceneTemplate, PREFAB_LINK_COMPONENT,
+    delete_doc,
+    delete_entities,
     // 场景别名（旧调用）
-    delete_scene, empty_scene_doc, list_scenes, read_scene_doc, rename_scene, scene_path,
-    scenes_dir, template_scene_doc, templates, validate_scene_doc, write_scene_as, write_scene_doc,
+    delete_scene,
+    doc_path,
+    docs_dir,
+    empty_scene_doc,
+    extract_subtree,
+    find_project_root,
+    instantiate_prefab,
+    list_docs,
+    list_scenes,
+    move_entity,
+    prefab_instances,
+    prefab_template_doc,
+    read_doc,
+    read_scene_doc,
+    rename_doc,
+    rename_scene,
+    reparent_doc,
+    revert_prefab_instance,
+    scene_path,
+    scenes_dir,
+    sync_prefab_instances,
+    template_doc,
+    template_scene_doc,
+    templates,
+    templates_for,
+    unlink_prefab_instance,
+    validate_doc,
+    validate_scene_doc,
+    write_doc,
+    write_doc_as,
+    write_doc_in_dir,
+    write_scene_as,
+    write_scene_doc,
+    DocKind,
+    InstantiateResult,
+    MoveResult,
+    PrefabLink,
+    SceneEntry,
+    SceneTemplate,
+    PREFAB_LINK_COMPONENT,
 };
 pub use schema::{build_schema, FieldSchema, Schema, TypeSchema};
+pub use settings::{
+    read_render_settings, settings_path, write_render_settings, RenderSettingsData,
+};

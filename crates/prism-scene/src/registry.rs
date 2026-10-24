@@ -394,6 +394,7 @@ pub fn register_builtin_components(registry: &mut ComponentRegistry) {
 
     // ── 天空盒 / 渲染 bundle ──
     registry.register_reflect_serde::<Skybox>("prism_engine::scene::Skybox");
+    registry.register_reflect_serde::<Gizmo>("prism_engine::scene::Gizmo");
     registry.register_reflect_serde::<MeshRenderer>("prism_engine::scene::MeshRenderer");
 
     // ── 本地变换 ──

@@ -11,6 +11,15 @@ use ash::vk;
 use crate::pipeline::{GraphicsPipeline, PipelineDesc};
 use crate::shader;
 
+/// Per-frame skybox parameters extracted from the ECS `Skybox` component.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SkyboxSettings {
+    /// Background yaw rotation in radians.
+    pub rotation: f32,
+    /// Background brightness multiplier.
+    pub intensity: f32,
+}
+
 /// Skybox pass - draws the IBL environment cubemap as a background behind the
 /// scene.
 ///
@@ -89,6 +98,7 @@ impl SkyboxPass {
         render_pass: vk::RenderPass,
         _extent: vk::Extent2D,
         inv_view_rot: &[[f32; 4]; 4],
+        params: SkyboxSettings,
     ) -> Result<()> {
         self.ensure_pipeline(device)?;
 
@@ -200,6 +210,8 @@ impl SkyboxPass {
                 inv_view_rot as *const _ as *const u8,
                 64,
             ));
+            push_data[64..68].copy_from_slice(&params.rotation.to_le_bytes());
+            push_data[68..72].copy_from_slice(&params.intensity.max(0.0).to_le_bytes());
             device.cmd_push_constants(
                 cmd,
                 pipeline.layout,
@@ -208,9 +220,8 @@ impl SkyboxPass {
                 &push_data,
             );
 
-            // 36 顶点 (12 triangles) over the 8 cube corners. No 索引
-            // 缓冲区 is bound; the 顶点 着色器 selects the corner by vid%8.
-            device.cmd_draw(cmd, 36, 1, 0, 0);
+            // 6 vertices = 2 triangles full-screen quad (see skybox.slang).
+            device.cmd_draw(cmd, 6, 1, 0, 0);
         }
 
         Ok(())

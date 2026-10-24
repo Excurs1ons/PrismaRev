@@ -1,22 +1,42 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, provide, ref, shallowRef, watch } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, provide, reactive, ref, shallowRef, watch } from "vue";
+import { Box, Check, ChevronRight, Play, Plus, RefreshCw, Square } from "lucide-vue-next";
 import AssetBrowser from "./components/AssetBrowser.vue";
 import AssetPicker from "./components/AssetPicker.vue";
+import DockLayout from "./components/DockLayout.vue";
 import HierarchyTree from "./components/HierarchyTree.vue";
 import Inspector from "./components/Inspector.vue";
+import {
+  collectTabs,
+  defaultDock,
+  leaf,
+  removePanel,
+  sanitizeDock,
+  sanitizeFloating,
+  showPanel,
+  type DockNode,
+  type FloatPanel,
+} from "./dock";
 import * as api from "./api";
 import { ASSETS_KEY, ASSET_PICKER_KEY } from "./keys";
 import { PREFAB_LINK_COMPONENT } from "./types";
 import type {
   AssetInfo,
   AssetRef,
+  BakeGiOptions,
   ComponentClipboard,
   DocKind,
   EntityJson,
   EntityPreset,
+  HeightmapOptions,
   JsonValue,
+  PlayableScene,
+  PreviewLogLine,
+  RenderGraphReport,
+  RenderSettingsData,
   SceneDoc,
   SceneEntry,
+  ScenePackageStatus,
   SceneTemplate,
   Schema,
 } from "./types";
@@ -29,14 +49,92 @@ const schema = ref<Schema>({ types: [] });
 const projectRoot = ref("");
 const scenes = ref<SceneEntry[]>([]);
 const prefabs = ref<SceneEntry[]>([]);
-const templates = ref<SceneTemplate[]>([]);
+const sceneTemplates = ref<SceneTemplate[]>([]);
 const presets = ref<EntityPreset[]>([]);
 const assets = ref<AssetInfo[]>([]);
+
+/** 运行 / 预览：manifest 场景、运行时包状态、子进程轮询。 */
+const playableScenes = ref<PlayableScene[]>([]);
+const playSceneName = ref("");
+const packageStatus = ref<ScenePackageStatus>({ exists: false, sizeBytes: 0 });
+const previewRunning = ref(false);
+let previewTimer: number | undefined;
+
+/** 项目级渲染设置（`assets/settings.toml` 的 `[render]`）。 */
+const renderSettings = ref<RenderSettingsData | null>(null);
+
+/** 渲染图可视化（数据来自游戏进程写出的 JSON 报告）。 */
+const graphReport = ref<RenderGraphReport | null>(null);
+const graphError = ref("");
+let graphTimer: number | undefined;
+
+/** 顶部菜单栏。 */
+const openMenu = ref<string | null>(null);
+
+/** 离线工具：GI 烘焙 / 高度图。 */
+const toolTab = ref<"gi" | "heightmap">("gi");
+const toolRunning = ref(false);
+const toolLog = ref("");
+const giForm = reactive<BakeGiOptions>({
+  rays: 64,
+  bounces: 3,
+  output: "assets/gi/probe_volume.bin",
+  pak: "assets/scenes.pak",
+  rscn: "target/scene_pack/scenes/default.rscn",
+});
+const heightForm = reactive<HeightmapOptions>({
+  output: "assets/heightmaps/terrain.raw",
+  width: 512,
+  height: 512,
+  seed: 24301,
+  iterations: 100,
+  particles: 200000,
+  seaLevel: 0.7,
+});
+
+const GRAPH_NODE_W = 158;
+const GRAPH_NODE_H = 64;
+const GRAPH_GAP = 86;
+const GRAPH_TOP = 52;
+const GRAPH_HEIGHT = 260;
+const PASS_COLORS: Record<string, string> = {
+  shadow: "#c9a227",
+  forward: "#4f9dde",
+  gtao: "#5aa469",
+  post: "#b06ab3",
+  pt: "#de7b4f",
+  rt: "#7f8fa6",
+  unknown: "#8b93a7",
+};
+const RESOURCE_COLORS: Record<string, string> = {
+  color: "#e06c75",
+  depth: "#61afef",
+  storage_image: "#98c379",
+  storage_buffer: "#c678dd",
+  other: "#9aa4b2",
+};
+const DEBUG_FLAGS = [
+  "正常渲染",
+  "Direct",
+  "Shadow",
+  "Specular",
+  "Metallic",
+  "Roughness",
+  "DiffuseIBL",
+  "SpecularIBL",
+  "MultiLight",
+  "AO",
+  "Emissive",
+  "Transmission",
+  "Translucency",
+  "Anisotropy",
+  "ClearCoat",
+  "GI",
+];
 provide(ASSETS_KEY, assets);
 
 /** 新建时的文档种类（工具栏）。 */
-const newKind = ref<DocKind>("scene");
-const templateId = ref("");
+
 const presetId = ref("empty");
 
 /** 当前打开文档的种类。 */
@@ -58,7 +156,232 @@ const status = ref("");
 const error = ref("");
 const validationError = ref("");
 const logText = ref("");
+const gameLogEntries = ref<PreviewLogLine[]>([]);
+const logScrollEl = ref<HTMLElement | null>(null);
+const logSourceFilter = ref<"all" | "editor" | "game">("all");
+const logLevelFilter = ref<LogLevel | "all">("all");
 const busy = ref(false);
+
+type LogLevel = "error" | "warn" | "info" | "debug" | "trace" | "panic";
+
+interface LogViewLine {
+  source: "editor" | "game";
+  level: LogLevel;
+  line: string;
+  stream?: string;
+}
+
+function logLevelOf(line: string, stream?: string): LogLevel {
+  if (/panicked at|thread '.*' panicked|\bPANIC\b|stack backtrace:/i.test(line)) {
+    return "panic";
+  }
+  const match = line.match(/\b(ERROR|WARN(?:ING)?|INFO|DEBUG|TRACE)\b/);
+  if (match) {
+    const level = match[1].toUpperCase();
+    if (level.startsWith("WARN")) return "warn";
+    return level.toLowerCase() as LogLevel;
+  }
+  if (stream === "system") return "info";
+  if (stream === "stderr") return "error";
+  if (/失败|error/i.test(line)) return "error";
+  if (/警告|warn/i.test(line)) return "warn";
+  return "info";
+}
+
+const editorLogLines = computed<LogViewLine[]>(() =>
+  logText.value
+    .split(/\r?\n/)
+    .filter((line) => line.trim().length > 0)
+    .map((line) => ({
+      source: "editor",
+      level: logLevelOf(line),
+      line,
+    })),
+);
+
+const gameLogView = computed<LogViewLine[]>(() =>
+  gameLogEntries.value.map((entry) => ({
+    source: "game",
+    level: logLevelOf(entry.line, entry.stream),
+    line: entry.line,
+    stream: entry.stream,
+  })),
+);
+
+const filteredEditorLogLines = computed(() =>
+  editorLogLines.value.filter(
+    (entry) => logLevelFilter.value === "all" || entry.level === logLevelFilter.value,
+  ),
+);
+
+const filteredGameLogLines = computed(() =>
+  gameLogView.value.filter(
+    (entry) => logLevelFilter.value === "all" || entry.level === logLevelFilter.value,
+  ),
+);
+
+const hasFilteredLogs = computed(
+  () =>
+    (logSourceFilter.value !== "game" && filteredEditorLogLines.value.length > 0) ||
+    (logSourceFilter.value !== "editor" && filteredGameLogLines.value.length > 0),
+);
+
+const documentLabel = computed(() => {
+  if (currentPath.value) return currentPath.value.split("/").pop() || currentPath.value;
+  return hasDoc.value ? "未保存的文档" : "无文档";
+});
+
+// ---------------------------------------------------------------------------
+// Docking 布局（split tree + 标签页拖拽，持久化到 localStorage）
+// ---------------------------------------------------------------------------
+
+type PanelId =
+  | "docs"
+  | "hierarchy"
+  | "assets"
+  | "inspector"
+  | "log"
+  | "renderGraph"
+  | "renderSettings"
+  | "tools"
+  | "shortcuts"
+  | "about";
+const PANELS: Array<{ id: PanelId; title: string }> = [
+  { id: "docs", title: "文档" },
+  { id: "hierarchy", title: "层级" },
+  { id: "assets", title: "资产" },
+  { id: "inspector", title: "检查器" },
+  { id: "log", title: "日志" },
+  { id: "renderGraph", title: "渲染图" },
+  { id: "renderSettings", title: "渲染设置" },
+  { id: "tools", title: "离线工具" },
+  { id: "shortcuts", title: "快捷键" },
+  { id: "about", title: "关于" },
+];
+const DOCK_STORAGE_KEY = "prisma-editor.dock.v4";
+const LEGACY_DOCK_STORAGE_KEY = "prisma-editor.dock.v3";
+const dockLayout = ref<DockNode | null>(defaultDock());
+const floatingPanels = ref<FloatPanel[]>([]);
+const visiblePanels = computed(
+  () =>
+    new Set([
+      ...(dockLayout.value ? collectTabs(dockLayout.value) : []),
+      ...floatingPanels.value.map((panel) => panel.tab),
+    ]),
+);
+
+function isPanelVisible(id: PanelId): boolean {
+  return visiblePanels.value.has(id);
+}
+
+function focusFloating(id: PanelId) {
+  const panel = floatingPanels.value.find((item) => item.tab === id);
+  if (!panel) return;
+  const z = floatingPanels.value.reduce((max, item) => Math.max(max, item.z), 0) + 1;
+  if (panel.z === z) return;
+  floatingPanels.value = floatingPanels.value.map((item) =>
+    item.tab === id ? { ...item, z } : item,
+  );
+}
+
+function showPanelTab(id: PanelId) {
+  if (floatingPanels.value.some((panel) => panel.tab === id)) {
+    focusFloating(id);
+    return;
+  }
+  dockLayout.value = dockLayout.value ? showPanel(dockLayout.value, id) : leaf([id]);
+}
+
+function closePanelTab(id: PanelId) {
+  if (dockLayout.value) dockLayout.value = removePanel(dockLayout.value, id);
+  floatingPanels.value = floatingPanels.value.filter((panel) => panel.tab !== id);
+}
+
+function togglePanel(id: PanelId) {
+  if (isPanelVisible(id)) closePanelTab(id);
+  else showPanelTab(id);
+}
+
+// 面板被关闭/重置后停止轮询；重新显示时按需加载数据。
+watch(visiblePanels, (next, previous) => {
+  const graphWasVisible = previous?.has("renderGraph") ?? false;
+  const graphVisible = next.has("renderGraph");
+  if (graphVisible && !graphWasVisible) {
+    void refreshGraph();
+    startGraphPolling();
+  } else if (!graphVisible && graphWasVisible) {
+    stopGraphPolling();
+  }
+
+  const settingsWasVisible = previous?.has("renderSettings") ?? false;
+  if (next.has("renderSettings") && !settingsWasVisible && !renderSettings.value) {
+    void loadRenderSettings();
+  }
+});
+
+function loadLayout() {
+  try {
+    const known = PANELS.map((panel) => panel.id);
+    const raw = localStorage.getItem(DOCK_STORAGE_KEY);
+    if (raw) {
+      const saved = JSON.parse(raw) as { dock?: unknown; floating?: unknown };
+      const dock = sanitizeDock(saved.dock, known);
+      const docked = new Set(dock ? collectTabs(dock) : []);
+      dockLayout.value = dock;
+      floatingPanels.value = sanitizeFloating(saved.floating, known).filter(
+        (panel) => !docked.has(panel.tab),
+      );
+      return;
+    }
+
+    // 从旧的纯 dock tree 迁移。
+    const legacy = localStorage.getItem(LEGACY_DOCK_STORAGE_KEY);
+    if (!legacy) return;
+    const dock = sanitizeDock(JSON.parse(legacy), known);
+    if (dock) dockLayout.value = dock;
+    floatingPanels.value = [];
+  } catch {
+    // 损坏的布局直接回退到默认值。
+  }
+}
+
+function saveLayout() {
+  try {
+    localStorage.setItem(
+      DOCK_STORAGE_KEY,
+      JSON.stringify({ version: 4, dock: dockLayout.value, floating: floatingPanels.value }),
+    );
+  } catch {
+    // localStorage 不可用时只在当前会话生效。
+  }
+}
+
+let saveLayoutTimer: number | undefined;
+watch(
+  [dockLayout, floatingPanels],
+  () => {
+    window.clearTimeout(saveLayoutTimer);
+    saveLayoutTimer = window.setTimeout(saveLayout, 200);
+  },
+  { deep: true },
+);
+
+function resetLayout() {
+  dockLayout.value = defaultDock();
+  floatingPanels.value = [];
+  try {
+    localStorage.removeItem(DOCK_STORAGE_KEY);
+    localStorage.removeItem(LEGACY_DOCK_STORAGE_KEY);
+  } catch {
+    // ignore
+  }
+}
+
+watch(logText, (text) => {
+  if (!text) return;
+  if (!isPanelVisible("log")) showPanelTab("log");
+  scrollLogsToEnd();
+});
 
 const past = ref<SceneDoc[]>([]);
 const future = ref<SceneDoc[]>([]);
@@ -169,11 +492,6 @@ watch(doc, () => {
   validateTimer = window.setTimeout(() => void runValidation(), VALIDATE_DEBOUNCE_MS);
 });
 
-watch(newKind, async () => {
-  templates.value = await api.documentTemplates(newKind.value);
-  templateId.value = templates.value[0]?.id ?? "";
-});
-
 // ---------------------------------------------------------------------------
 // 文档 / 历史
 // ---------------------------------------------------------------------------
@@ -265,14 +583,14 @@ async function bootstrap() {
   try {
     schema.value = await api.fetchSchema();
     projectRoot.value = await api.fetchProjectRoot();
-    templates.value = await api.documentTemplates("scene");
-    templateId.value = templates.value[0]?.id ?? "";
+    sceneTemplates.value = await api.documentTemplates("scene");
     presets.value = await api.fetchPresets();
     if (presets.value.length) presetId.value = presets.value[0].id;
     await refreshDocuments();
     // 资产列表是可选增强；失败不影响编辑。
     assets.value = await api.listAssetsInfo().catch(() => []);
-    status.value = `项目根 ${projectRoot.value}`;
+    await refreshPlayable();
+    status.value = "就绪";
   } catch (e) {
     fail(e);
   }
@@ -283,11 +601,34 @@ async function openDocument(entry: SceneEntry, kind: DocKind) {
   try {
     const loaded = await api.readDocument(entry.path);
     resetHistory(loaded, entry.path, kind);
+    if (kind === "scene" && playableScenes.value.some((s) => s.name === entry.name)) {
+      playSceneName.value = entry.name;
+    }
     error.value = "";
     status.value = `已打开 ${entry.fileName}`;
   } catch (e) {
     fail(e);
   }
+}
+
+function docKindOfPath(path: string): DocKind | null {
+  const lower = path.toLowerCase();
+  if (lower.endsWith(".scene.json")) return "scene";
+  if (lower.endsWith(".prefab.json")) return "prefab";
+  return null;
+}
+
+/** 资产管理器双击场景/预制体：直接作为文档打开。 */
+async function openAssetPath(path: string) {
+  const kind = docKindOfPath(path);
+  if (!kind) return;
+  const fileName = path.split("/").pop() ?? path;
+  const suffix = kind === "scene" ? ".scene.json" : ".prefab.json";
+  const name = fileName.toLowerCase().endsWith(suffix)
+    ? fileName.slice(0, -suffix.length)
+    : fileName;
+  const root = projectRoot.value.replace(/[\\/]+$/, "");
+  await openDocument({ name, fileName, path: root ? `${root}/${path}` : path }, kind);
 }
 
 async function reload() {
@@ -297,13 +638,23 @@ async function reload() {
   if (entry) await openDocument(entry, documentKind.value);
 }
 
-async function createDocument() {
+async function createDocumentWithTemplate(kind: DocKind, templateId: string) {
   if (!confirmDiscard()) return;
   try {
-    const fresh = await api.newDocument(newKind.value, templateId.value);
-    resetHistory(fresh, null, newKind.value);
+    const fresh = await api.newDocument(kind, templateId);
+    resetHistory(fresh, null, kind);
     error.value = "";
-    status.value = newKind.value === "scene" ? "新场景（未保存）" : "新预制体（未保存）";
+    status.value = kind === "scene" ? "新场景（未保存）" : "新预制体（未保存）";
+  } catch (e) {
+    fail(e);
+  }
+}
+
+/** 菜单里的「新建场景/预制体」：使用该类文档的第一个模板。 */
+async function createDocumentOf(kind: DocKind) {
+  try {
+    const list = await api.documentTemplates(kind);
+    await createDocumentWithTemplate(kind, list[0]?.id ?? "");
   } catch (e) {
     fail(e);
   }
@@ -341,6 +692,72 @@ async function saveAs(): Promise<boolean> {
   } catch (e) {
     fail(e);
     return false;
+  }
+}
+
+async function ensureSavedForAssetOp(): Promise<boolean> {
+  if (!hasPath.value || !dirty.value) return true;
+  const ok = await save();
+  if (!ok) status.value = "保存失败：资产操作已取消";
+  return ok;
+}
+
+function normPath(path: string): string {
+  return path.replace(/\\/g, "/");
+}
+
+/**
+ * 资产重命名/移动/删除后：刷新列表；若当前文档被改写或移动，
+ * 从磁盘重新载入（操作前已确保保存），避免用内存里的旧路径覆盖回去。
+ */
+async function onAssetsChanged(affected: string[]) {
+  assets.value = await api.listAssetsInfo().catch(() => assets.value);
+  const previous = currentPath.value;
+  if (!previous) return;
+
+  const previousKind = documentKind.value;
+  const previousNorm = normPath(previous);
+  await refreshDocuments();
+  const list = previousKind === "scene" ? scenes.value : prefabs.value;
+
+  const stillExists = list.some((item) => normPath(item.path) === previousNorm);
+  const currentWasRewritten = affected.some(
+    (rel) => normPath(`${projectRoot.value}/${rel}`) === previousNorm,
+  );
+  if (stillExists && !currentWasRewritten) return;
+
+  let entry = list.find((item) => normPath(item.path) === previousNorm);
+  if (!entry) {
+    for (const rel of affected) {
+      const abs = normPath(`${projectRoot.value}/${rel}`);
+      const found = list.find((item) => normPath(item.path) === abs);
+      if (found) {
+        entry = found;
+        break;
+      }
+    }
+  }
+  if (!entry) {
+    // 目录整体移动时文件名不变，按显示名兜底。
+    const name = previousNorm.split("/").pop()!.replace(/\.(scene|prefab)\.json$/, "");
+    const sameName = list.filter((item) => item.name === name);
+    if (sameName.length === 1) entry = sameName[0];
+  }
+
+  if (entry) {
+    await openDocument(entry, previousKind);
+    return;
+  }
+
+  if (!list.some((item) => normPath(item.path) === previousNorm)) {
+    doc.value = null;
+    currentPath.value = null;
+    baseline.value = "";
+    validationError.value = "";
+    past.value = [];
+    future.value = [];
+    selection.value = [];
+    status.value = "当前文档已不存在";
   }
 }
 
@@ -406,7 +823,7 @@ async function cook() {
 // 预制体
 // ---------------------------------------------------------------------------
 
-async function insertPrefab(entry: SceneEntry) {
+async function insertPrefab(entry: SceneEntry, parent: number | null = primary.value) {
   if (!doc.value) {
     fail("请先打开一个场景");
     return;
@@ -417,7 +834,7 @@ async function insertPrefab(entry: SceneEntry) {
   }
   busy.value = true;
   try {
-    const result = await api.instantiatePrefab(doc.value, entry.path, primary.value);
+    const result = await api.instantiatePrefab(doc.value, entry.path, parent);
     commit(result.doc, `insert-prefab:${entry.path}#${Date.now()}`);
     if (result.inserted.length) selection.value = [result.inserted[0]];
     error.value = "";
@@ -427,6 +844,21 @@ async function insertPrefab(entry: SceneEntry) {
   } finally {
     busy.value = false;
   }
+}
+
+async function insertPrefabAt(path: string, parent: number | null) {
+  const root = projectRoot.value.replace(/[\\/]+$/, "");
+  const absolute = /^[A-Za-z]:[\\/]|^\//.test(path)
+    ? path
+    : `${root}/${path}`;
+  const entry =
+    prefabs.value.find((item) => normPath(item.path) === normPath(absolute)) ??
+    ({
+      name: (path.split("/").pop() ?? path).replace(/\.prefab\.json$/, ""),
+      fileName: path.split("/").pop() ?? path,
+      path: absolute,
+    } satisfies SceneEntry);
+  await insertPrefab(entry, parent);
 }
 
 async function revertPrefab(index: number) {
@@ -516,14 +948,15 @@ async function jumpToUsage(ref: AssetRef) {
   target?.scrollIntoView({ block: "center" });
 }
 
-async function savePrefabFromEntity(index: number) {
+async function createPrefabAt(folder: string, index: number, name: string) {
   if (!doc.value) return;
   const entity = doc.value.entities[index];
-  const name = window.prompt("预制体名（不含 .prefab.json）", entity?.name ?? "prefab");
-  if (!name) return;
+  const prefabName = (name || entity?.name || "prefab").trim();
+  if (!prefabName) return;
   try {
-    const path = await api.createPrefabFromEntity(doc.value, index, name);
+    const path = await api.createPrefabAt(doc.value, index, folder, prefabName);
     await refreshDocuments();
+    assets.value = await api.listAssetsInfo().catch(() => assets.value);
     error.value = "";
     status.value = `已保存预制体 ${path}`;
   } catch (e) {
@@ -686,6 +1119,27 @@ function duplicateEntity() {
   selection.value = [insertAt];
 }
 
+function duplicateEntityAt(index: number) {
+  selection.value = [index];
+  duplicateEntity();
+}
+
+function removeEntityAt(indices: number[]) {
+  selection.value = indices.length ? [...indices] : [];
+  void deleteSelection();
+}
+
+function toggleEntityActive(index: number, active: boolean) {
+  if (!doc.value) return;
+  const entity = doc.value.entities[index];
+  if (!entity) return;
+  const components = { ...entity.components };
+  components["prism_engine::scene::Active"] = active;
+  const entities = doc.value.entities.slice();
+  entities[index] = { ...entity, components };
+  commit({ ...doc.value, entities }, `toggle-active:${index}:${active}`);
+}
+
 async function deleteSelection() {
   if (!doc.value || !selection.value.length) return;
   const indices = selection.value.slice().sort((a, b) => a - b);
@@ -722,6 +1176,11 @@ function onKey(event: KeyboardEvent) {
   const mod = event.ctrlKey || event.metaKey;
   const key = event.key.toLowerCase();
 
+  if (event.key === "Escape") {
+    openMenu.value = null;
+    return;
+  }
+
   if (!mod && event.key === "Delete") {
     if (!isTextInput(event.target)) {
       event.preventDefault();
@@ -734,6 +1193,12 @@ function onKey(event: KeyboardEvent) {
   if (key === "s") {
     event.preventDefault();
     void save();
+  } else if (key === "n") {
+    event.preventDefault();
+    void createDocumentOf("scene");
+  } else if (key === "o") {
+    event.preventDefault();
+    showPanelTab("docs");
   } else if (key === "d") {
     event.preventDefault();
     duplicateEntity();
@@ -754,184 +1219,1141 @@ function onKey(event: KeyboardEvent) {
   }
 }
 
+// ── 运行 / 预览 ─────────────────────────────────────────────────────────────
+
+/** 读取 `assets/scenes.toml` 与运行时包状态。 */
+async function refreshPlayable() {
+  playableScenes.value = await api.listPlayableScenes().catch(() => []);
+  packageStatus.value = await api.scenePackageStatus().catch(() => ({
+    exists: false,
+    sizeBytes: 0,
+  }));
+  if (!playableScenes.value.some((s) => s.name === playSceneName.value)) {
+    playSceneName.value = playableScenes.value[0]?.name ?? "";
+  }
+}
+
+/** 重新 cook + 打包所有 manifest 场景（`build-scenes`）。 */
+async function buildScenes() {
+  busy.value = true;
+  status.value = "构建场景包…";
+  try {
+    logText.value = (await api.buildScenes()) || "（无输出）";
+    await refreshPlayable();
+    status.value = packageStatus.value.exists ? "场景包构建完成" : "构建结束（未找到 scenes.pak）";
+  } catch (e) {
+    fail(e);
+  } finally {
+    busy.value = false;
+  }
+}
+
+/** 预览进程轮询：游戏自行退出时同步 UI。 */
+function startPreviewPolling() {
+  stopPreviewPolling();
+  previewTimer = window.setInterval(async () => {
+    try {
+      if (!(await api.previewRunning())) {
+        previewRunning.value = false;
+        stopPreviewPolling();
+        status.value = "预览已退出";
+        appendGameLog({ stream: "system", line: "预览进程已退出" });
+      }
+    } catch {
+      previewRunning.value = false;
+      stopPreviewPolling();
+    }
+  }, 2000);
+}
+
+function stopPreviewPolling() {
+  if (previewTimer !== undefined) {
+    window.clearInterval(previewTimer);
+    previewTimer = undefined;
+  }
+}
+
+// ── 游戏日志 ────────────────────────────────────────────────────────────────
+
+function scrollLogsToEnd() {
+  void nextTick(() => {
+    const element = logScrollEl.value;
+    if (element) element.scrollTop = element.scrollHeight;
+  });
+}
+
+function appendGameLog(entry: PreviewLogLine) {
+  gameLogEntries.value.push(entry);
+  if (gameLogEntries.value.length > 4000) {
+    gameLogEntries.value.splice(0, gameLogEntries.value.length - 4000);
+  }
+  scrollLogsToEnd();
+}
+
+function clearGameLog() {
+  gameLogEntries.value = [];
+}
+
+function clearAllLogs() {
+  gameLogEntries.value = [];
+  logText.value = "";
+}
+
+async function loadGameLogs() {
+  try {
+    gameLogEntries.value = await api.previewLogs();
+    scrollLogsToEnd();
+  } catch {
+    // 未启动过预览时没有日志。
+  }
+}
+
+async function togglePreview() {
+  if (previewRunning.value) {
+    await api.stopPreview().catch(() => false);
+    previewRunning.value = false;
+    stopPreviewPolling();
+    status.value = "预览已停止";
+    return;
+  }
+  if (!playSceneName.value) {
+    fail("assets/scenes.toml 中还没有可运行场景");
+    return;
+  }
+  if (!packageStatus.value.exists) {
+    fail("尚未构建 assets/scenes.pak：先点工具栏「构建」");
+    return;
+  }
+  if (dirty.value && !(await save())) return;
+  busy.value = true;
+  clearGameLog();
+  showPanelTab("log");
+  try {
+    await api.playScene(playSceneName.value);
+    previewRunning.value = true;
+    startPreviewPolling();
+    status.value = `运行场景 ${playSceneName.value}`;
+  } catch (e) {
+    fail(e);
+  } finally {
+    busy.value = false;
+  }
+}
+
+// ── 项目设置 ────────────────────────────────────────────────────────────────
+
+async function loadRenderSettings() {
+  try {
+    renderSettings.value = await api.renderSettings();
+  } catch (e) {
+    fail(e);
+  }
+}
+
+async function openSettings() {
+  if (!renderSettings.value) await loadRenderSettings();
+  showPanelTab("renderSettings");
+}
+
+async function saveSettings() {
+  if (!renderSettings.value) return;
+  try {
+    await api.writeRenderSettings(renderSettings.value);
+    status.value = "渲染设置已保存到 assets/settings.toml（重启游戏生效）";
+  } catch (e) {
+    fail(e);
+  }
+}
+
+function debugFlagIndex(flags: number): number {
+  for (let bit = 0; bit < 15; bit += 1) {
+    if (flags === 1 << bit) return bit + 1;
+  }
+  return 0;
+}
+
+function setDebugFlag(index: number) {
+  if (!renderSettings.value) return;
+  renderSettings.value.debugFlags = index === 0 ? 0 : 1 << (index - 1);
+}
+
+// ── 离线工具 ────────────────────────────────────────────────────────────────
+
+function openTools(tab?: "gi" | "heightmap") {
+  if (tab) toolTab.value = tab;
+  showPanelTab("tools");
+  toolLog.value = "";
+}
+
+// ── 顶部菜单栏 ──────────────────────────────────────────────────────────────
+
+interface MenuItem {
+  label?: string;
+  shortcut?: string;
+  separator?: boolean;
+  disabled?: () => boolean;
+  checked?: () => boolean;
+  children?: MenuItem[];
+  action?: () => void;
+}
+
+interface MenuDef {
+  id: string;
+  label: string;
+  items: MenuItem[];
+}
+
+function toggleMenu(id: string) {
+  openMenu.value = openMenu.value === id ? null : id;
+}
+
+/** 菜单已展开时，鼠标移到相邻菜单直接切换（UE / Unity 行为）。 */
+function hoverMenu(id: string) {
+  if (openMenu.value) openMenu.value = id;
+}
+
+/** 点击菜单栏空白处 / 右侧按钮时收起菜单。 */
+function onMenubarClick(event: MouseEvent) {
+  const target = event.target as HTMLElement | null;
+  if (!target?.closest(".menu-root")) openMenu.value = null;
+}
+
+function runMenu(item: MenuItem) {
+  if (item.disabled?.()) return;
+  openMenu.value = null;
+  item.action?.();
+}
+
+const MENUS = computed<MenuDef[]>(() => {
+  const viewItems: MenuItem[] = PANELS.map((panel) => ({
+    label: panel.title,
+    checked: () => isPanelVisible(panel.id),
+    action: () => togglePanel(panel.id),
+  }));
+
+  const newTemplateItems: MenuItem[] = [
+    ...sceneTemplates.value.map((template) => ({
+      label: `场景：${template.label}`,
+      action: () => void createDocumentWithTemplate("scene", template.id),
+    })),
+    { separator: true },
+    ...presets.value.map((preset) => ({
+      label: `预制体：${preset.label}`,
+      action: () => void createDocumentWithTemplate("prefab", preset.id),
+    })),
+  ];
+
+  return [
+    {
+      id: "file",
+      label: "文件",
+      items: [
+        { label: "新建场景", shortcut: "Ctrl+N", action: () => void createDocumentOf("scene") },
+        { label: "新建预制体", action: () => void createDocumentOf("prefab") },
+        { label: "按模板新建", children: newTemplateItems },
+        { label: "打开文档", shortcut: "Ctrl+O", action: () => showPanelTab("docs") },
+        { separator: true },
+        {
+          label: "保存",
+          shortcut: "Ctrl+S",
+          disabled: () => !canSave.value || busy.value,
+          action: () => void save(),
+        },
+        {
+          label: "另存为…",
+          disabled: () => !hasDoc.value || busy.value,
+          action: () => void saveAs(),
+        },
+        {
+          label: "重命名…",
+          disabled: () => !hasPath.value || busy.value,
+          action: () => void renameCurrent(),
+        },
+        {
+          label: "删除…",
+          disabled: () => !hasPath.value || busy.value,
+          action: () => void deleteCurrent(),
+        },
+        { separator: true },
+        {
+          label: "重新加载当前文档",
+          disabled: () => !hasPath.value || busy.value,
+          action: () => void reload(),
+        },
+      ],
+    },
+    {
+      id: "edit",
+      label: "编辑",
+      items: [
+        { label: "撤销", shortcut: "Ctrl+Z", disabled: () => !canUndo.value, action: undo },
+        {
+          label: "重做",
+          shortcut: "Ctrl+Shift+Z",
+          disabled: () => !canRedo.value,
+          action: redo,
+        },
+        { separator: true },
+        {
+          label: "复制选中实体",
+          shortcut: "Ctrl+D",
+          disabled: () => !selectedEntity.value,
+          action: duplicateEntity,
+        },
+        {
+          label: "删除选中实体",
+          shortcut: "Del",
+          disabled: () => !selectedEntity.value,
+          action: () => void deleteSelection(),
+        },
+        {
+          label: "全选实体",
+          shortcut: "Ctrl+A",
+          disabled: () => !doc.value,
+          action: () => {
+            if (doc.value) selection.value = doc.value.entities.map((_, index) => index);
+          },
+        },
+        { separator: true },
+        {
+          label: "粘贴组件",
+          shortcut: "Ctrl+V",
+          disabled: () => !clipboard.value || !selectedEntity.value,
+          action: pasteComponent,
+        },
+        {
+          label: "清空组件剪贴板",
+          disabled: () => !clipboard.value,
+          action: clearClipboard,
+        },
+        { separator: true },
+        {
+          label: "项目设置",
+          children: [
+            { label: "渲染设置…", action: () => void openSettings() },
+          ],
+        },
+      ],
+    },
+    {
+      id: "build",
+      label: "构建",
+      items: [
+        { label: "构建场景包", disabled: () => busy.value, action: () => void buildScenes() },
+        {
+          label: "Cook 当前场景",
+          disabled: () => !hasPath.value || !isScene.value || busy.value,
+          action: () => void cook(),
+        },
+        { separator: true },
+        {
+          label: "离线工具",
+          children: [
+            { label: "GI 烘焙…", action: () => openTools("gi") },
+            { label: "高度图生成…", action: () => openTools("heightmap") },
+          ],
+        },
+      ],
+    },
+    {
+      id: "window",
+      label: "窗口",
+      items: [
+        ...viewItems,
+        { separator: true },
+        { label: "重置布局", action: resetLayout },
+        { separator: true },
+        {
+          label: "分析",
+          children: [
+            { label: "实时渲染图…", action: openGraph },
+          ],
+        },
+      ],
+    },
+    {
+      id: "help",
+      label: "帮助",
+      items: [
+        { label: "键盘快捷键", action: () => showPanelTab("shortcuts") },
+        { label: "关于 PrismaRev Editor", action: () => showPanelTab("about") },
+      ],
+    },
+  ];
+});
+
+const SHORTCUTS: Array<{ label: string; keys: string }> = [
+  { label: "保存当前文档", keys: "Ctrl+S" },
+  { label: "撤销 / 重做", keys: "Ctrl+Z / Ctrl+Shift+Z" },
+  { label: "复制选中实体", keys: "Ctrl+D" },
+  { label: "删除选中实体", keys: "Delete" },
+  { label: "全选实体", keys: "Ctrl+A" },
+  { label: "粘贴组件", keys: "Ctrl+V" },
+  { label: "新建场景", keys: "Ctrl+N" },
+  { label: "打开文档面板", keys: "Ctrl+O" },
+  { label: "关闭菜单 / 弹窗", keys: "Esc" },
+  { label: "拖拽标签：合并 / 分屏", keys: "拖到面板中央 / 边缘" },
+  { label: "拖拽标签：浮动窗口", keys: "拖出面板区 或按住 Alt" },
+  { label: "停靠到主窗口三边", keys: "拖到左 / 右 / 底边" },
+];
+
+async function runBakeGi() {
+  if (toolRunning.value) return;
+  toolRunning.value = true;
+  toolLog.value = "正在烘焙 GI…（首次编译 / 大场景可能较慢）";
+  try {
+    toolLog.value = await api.bakeGi({ ...giForm });
+    status.value = "GI 烘焙完成";
+  } catch (e) {
+    toolLog.value = `失败：${e instanceof Error ? e.message : String(e)}`;
+    fail(e);
+  } finally {
+    toolRunning.value = false;
+  }
+}
+
+async function runHeightmap() {
+  if (toolRunning.value) return;
+  toolRunning.value = true;
+  toolLog.value = "正在生成高度图…";
+  try {
+    toolLog.value = await api.generateHeightmap({ ...heightForm });
+    status.value = "高度图生成完成";
+  } catch (e) {
+    toolLog.value = `失败：${e instanceof Error ? e.message : String(e)}`;
+    fail(e);
+  } finally {
+    toolRunning.value = false;
+  }
+}
+
+// ── 渲染图 ─────────────────────────────────────────────────────────────────
+
+function passColor(kind: string): string {
+  return PASS_COLORS[kind] ?? PASS_COLORS.unknown;
+}
+
+function resourceColor(kind: string): string {
+  return RESOURCE_COLORS[kind] ?? RESOURCE_COLORS.other;
+}
+
+function fmtTime(ms: number): string {
+  return new Date(ms).toLocaleTimeString();
+}
+
+async function refreshGraph() {
+  try {
+    graphReport.value = await api.renderGraphReport();
+    graphError.value = "";
+  } catch (e) {
+    graphError.value = e instanceof Error ? e.message : String(e);
+  }
+}
+
+function openGraph() {
+  showPanelTab("renderGraph");
+  void refreshGraph();
+  startGraphPolling();
+}
+
+function startGraphPolling() {
+  stopGraphPolling();
+  graphTimer = window.setInterval(refreshGraph, 1500);
+}
+
+function stopGraphPolling() {
+  if (graphTimer !== undefined) {
+    window.clearInterval(graphTimer);
+    graphTimer = undefined;
+  }
+}
+
+/**
+ * 把 pass 列表排成横向执行顺序，并按「谁生产这个资源」连边。
+ * 只做纯布局，SVG 由模板渲染。
+ */
+const graphLayout = computed(() => {
+  const report = graphReport.value;
+  if (!report || !report.passes.length) {
+    return { nodes: [], edges: [], width: 720, height: GRAPH_HEIGHT };
+  }
+  const passes = [...report.passes].sort((a, b) => a.index - b.index);
+  const resources = new Map(report.resources.map((r) => [r.handle, r]));
+  const xOf = (i: number) => 24 + i * (GRAPH_NODE_W + GRAPH_GAP);
+
+  const nodes = passes.map((pass, i) => ({ pass, x: xOf(i), y: GRAPH_TOP }));
+  const producer = new Map<number, number>();
+  const seen = new Set<string>();
+  const edges: {
+    key: string;
+    path: string;
+    color: string;
+    label: string;
+    labelX: number;
+    labelY: number;
+  }[] = [];
+
+  passes.forEach((pass, i) => {
+    pass.outputs.forEach((handle) => producer.set(handle, i));
+    pass.inputs.forEach((handle) => {
+      const from = producer.get(handle);
+      if (from === undefined || from >= i) return;
+      const key = `${from}->${i}:${handle}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+
+      const offset = edges.filter((e) => e.key.startsWith(`${from}->${i}:`)).length * 11;
+      const y = GRAPH_TOP + GRAPH_NODE_H / 2 + offset;
+      const x1 = xOf(from) + GRAPH_NODE_W;
+      const x2 = xOf(i);
+      const mx = (x1 + x2) / 2;
+      const resource = resources.get(handle);
+      edges.push({
+        key,
+        path: `M ${x1} ${y} C ${mx} ${y}, ${mx} ${y}, ${x2} ${y}`,
+        color: resourceColor(resource?.kind ?? "other"),
+        label: resource?.name ?? `#${handle}`,
+        labelX: mx,
+        labelY: y - 6,
+      });
+    });
+  });
+
+  const width = 24 + passes.length * (GRAPH_NODE_W + GRAPH_GAP) - GRAPH_GAP + 24;
+  return { nodes, edges, width: Math.max(width, 720), height: GRAPH_HEIGHT };
+});
+
+let unlistenPreviewLog: (() => void) | undefined;
 onMounted(() => {
   void bootstrap();
   window.addEventListener("keydown", onKey);
+  loadLayout();
+  void loadGameLogs();
+  void api.onPreviewLog(appendGameLog).then((unlisten) => {
+    unlistenPreviewLog = unlisten;
+  });
 });
-onUnmounted(() => window.removeEventListener("keydown", onKey));
+onUnmounted(() => {
+  window.removeEventListener("keydown", onKey);
+  unlistenPreviewLog?.();
+  stopPreviewPolling();
+  stopGraphPolling();
+});
 </script>
 
 <template>
   <div class="app">
-    <div class="toolbar">
-      <span class="brand">PrismaRev Editor</span>
-      <span class="status">{{ status }}</span>
-      <span class="spacer" />
-      <span v-if="dirty" class="dirty-dot" title="未保存改动" />
-      <button class="ghost icon" :disabled="!canUndo" title="撤销 (Ctrl+Z)" @click="undo">↶</button>
-      <button class="ghost icon" :disabled="!canRedo" title="重做 (Ctrl+Shift+Z)" @click="redo">↷</button>
-      <span class="sep" />
-      <select v-model="newKind" title="新建种类">
-        <option value="scene">场景</option>
-        <option value="prefab">预制体</option>
-      </select>
-      <select v-model="templateId" title="新建模板" :disabled="!templates.length">
-        <option v-for="t in templates" :key="t.id" :value="t.id">{{ t.label }}</option>
-      </select>
-      <button @click="createDocument">新建</button>
-      <button :disabled="!hasPath" @click="renameCurrent">重命名</button>
-      <button :disabled="!hasPath" @click="deleteCurrent">删除</button>
-      <span class="sep" />
-      <button :disabled="!hasDoc" @click="saveAs">另存为</button>
-      <button :disabled="!hasPath || !isScene || busy" title="cook 成 RSCN" @click="cook">
-        {{ busy ? "cook 中…" : "Cook" }}
-      </button>
-      <button :disabled="!hasPath || busy" @click="reload">重新加载</button>
-      <button
-        class="primary"
-        :disabled="!canSave || busy"
-        :title="validationError ? '文档校验未通过' : 'Ctrl/Cmd+S'"
-        @click="save"
-      >
-        保存
-      </button>
+    <header class="menubar" @click="onMenubarClick">
+      <nav class="menubar-items">
+        <div v-for="menu in MENUS" :key="menu.id" class="menu-root">
+          <button
+            class="menu-trigger"
+            :class="{ open: openMenu === menu.id }"
+            @click.stop="toggleMenu(menu.id)"
+            @mouseenter="hoverMenu(menu.id)"
+          >
+            {{ menu.label }}
+          </button>
+          <div v-if="openMenu === menu.id" class="menu-popup" @click.stop>
+            <template v-for="(item, index) in menu.items" :key="index">
+              <div v-if="item.separator" class="menu-separator" />
+              <div v-else-if="item.children" class="menu-submenu">
+                <button
+                  class="menu-item menu-submenu-trigger"
+                  :disabled="item.disabled?.() ?? false"
+                >
+                  <span v-if="item.checked" class="menu-check">
+                    <Check v-if="item.checked()" :size="12" />
+                  </span>
+                  <span class="menu-item-label">{{ item.label }}</span>
+                  <ChevronRight class="menu-submenu-arrow" :size="12" />
+                </button>
+                <div class="menu-popup menu-submenu-popup">
+                  <template v-for="(child, childIndex) in item.children" :key="childIndex">
+                    <div v-if="child.separator" class="menu-separator" />
+                    <button
+                      v-else
+                      class="menu-item"
+                      :disabled="child.disabled?.() ?? false"
+                      @click.stop="runMenu(child)"
+                    >
+                      <span v-if="child.checked" class="menu-check">
+                        <Check v-if="child.checked()" :size="12" />
+                      </span>
+                      <span class="menu-item-label">{{ child.label }}</span>
+                      <span class="menu-shortcut">{{ child.shortcut ?? "" }}</span>
+                    </button>
+                  </template>
+                </div>
+              </div>
+              <button
+                v-else
+                class="menu-item"
+                :disabled="item.disabled?.() ?? false"
+                @click="runMenu(item)"
+              >
+                <span v-if="item.checked" class="menu-check">
+                  <Check v-if="item.checked()" :size="12" />
+                </span>
+                <span class="menu-item-label">{{ item.label }}</span>
+                <span class="menu-shortcut">{{ item.shortcut ?? "" }}</span>
+              </button>
+            </template>
+          </div>
+        </div>
+      </nav>
+
+    </header>
+
+    <div v-if="openMenu" class="menu-backdrop" @click="openMenu = null" @contextmenu.prevent />
+
+    <div class="main-toolbar">
+      <div class="tool-group play-group">
+        <select
+          v-model="playSceneName"
+          class="tool-select scene-select"
+          title="运行场景（来自 assets/scenes.toml）"
+          :disabled="!playableScenes.length"
+        >
+          <option v-for="s in playableScenes" :key="s.name" :value="s.name">{{ s.name }}</option>
+        </select>
+        <button
+          class="play-button"
+          :class="{ running: previewRunning }"
+          :disabled="!playableScenes.length || busy"
+          :title="packageStatus.exists ? '启动 / 停止游戏预览' : '尚未构建 scenes.pak，先用「构建 → 构建场景包」'"
+          @click="togglePreview"
+        >
+          <span class="play-glyph">
+            <Square v-if="previewRunning" :size="13" fill="currentColor" />
+            <Play v-else :size="15" fill="currentColor" />
+          </span>
+          {{ previewRunning ? "停止" : "运行" }}
+        </button>
+      </div>
     </div>
 
     <div v-if="error" class="error">{{ error }}</div>
     <div v-else-if="validationError" class="warn">校验未通过：{{ validationError }}</div>
 
-    <div class="body">
-      <aside class="sidebar">
-        <div class="section grow">
-          <div class="section-title">文档</div>
-          <div class="section-body">
-            <div class="group">场景</div>
-            <div
-              v-for="s in scenes"
-              :key="s.path"
-              class="list-item"
-              :class="{ active: s.path === currentPath }"
-              @click="openDocument(s, 'scene')"
-            >
-              <span>{{ s.name }}</span>
-              <span v-if="s.path === currentPath && dirty" class="muted" title="未保存">•</span>
-            </div>
-            <div v-if="!scenes.length" class="hint" style="padding: 2px 8px">（无场景）</div>
-
-            <div class="group">预制体</div>
-            <div
-              v-for="p in prefabs"
-              :key="p.path"
-              class="list-item"
-              :class="{ active: p.path === currentPath }"
-              @click="openDocument(p, 'prefab')"
-            >
-              <span class="prefab-name">{{ p.name }}</span>
-              <button
-                v-if="instanceCountFor(p)"
-                class="ghost icon"
-                :title="`用预制体当前内容覆盖本场景的 ${instanceCountFor(p)} 个实例`"
-                :disabled="busy"
-                @click.stop="syncPrefab(p)"
-              >
-                同步 {{ instanceCountFor(p) }}
-              </button>
-              <button
-                class="ghost icon"
-                title="实例化到当前场景（挂在选中实体下）"
-                :disabled="!hasDoc || !isScene || busy"
-                @click.stop="insertPrefab(p)"
-              >
-                插入
-              </button>
-            </div>
-            <div v-if="!prefabs.length" class="hint" style="padding: 2px 8px">
-              （无预制体：选中实体后可「存为预制体」）
-            </div>
+    <div class="workspace">
+      <DockLayout
+        v-model:layout="dockLayout"
+        v-model:floating="floatingPanels"
+        :panels="PANELS"
+      >
+        <template #docs>
+        <div class="section-body">
+          <div class="group">场景</div>
+          <div
+            v-for="s in scenes"
+            :key="s.path"
+            class="list-item"
+            :class="{ active: s.path === currentPath }"
+            @click="openDocument(s, 'scene')"
+          >
+            <span>{{ s.name }}</span>
+            <span v-if="s.path === currentPath && dirty" class="muted" title="未保存">•</span>
           </div>
-        </div>
+          <div v-if="!scenes.length" class="hint" style="padding: 2px 8px">（无场景）</div>
 
-        <div class="section grow">
-          <div class="section-title">
-            <span>层级</span>
-            <span v-if="selection.length > 1" class="muted">已选 {{ selection.length }}</span>
-            <span class="spacer" />
-            <select v-model="presetId" class="mini" title="新增实体类型">
-              <option v-for="p in presets" :key="p.id" :value="p.id">{{ p.label }}</option>
-            </select>
+          <div class="group">预制体</div>
+          <div
+            v-for="p in prefabs"
+            :key="p.path"
+            class="list-item"
+            :class="{ active: p.path === currentPath }"
+            @click="openDocument(p, 'prefab')"
+          >
+            <span class="prefab-name">{{ p.name }}</span>
+            <button
+              v-if="instanceCountFor(p)"
+              class="ghost icon"
+              :title="`用预制体当前内容覆盖本场景的 ${instanceCountFor(p)} 个实例`"
+              :disabled="busy"
+              @click.stop="syncPrefab(p)"
+            >
+              同步 {{ instanceCountFor(p) }}
+            </button>
             <button
               class="ghost icon"
-              :disabled="!hasDoc"
-              title="按所选类型新增实体"
-              @click="addEntity"
+              title="实例化到当前场景（挂在选中实体下）"
+              :disabled="!hasDoc || !isScene || busy"
+              @click.stop="insertPrefab(p)"
             >
-              +
+              插入
             </button>
           </div>
-          <div class="section-body">
-            <HierarchyTree
-              v-if="doc"
-              :entities="doc.entities"
-              :selected="selection"
-              @select="onSelect"
-              @rename="onRenameEntity"
-              @reparent="onReparent"
-              @move="onMove"
-            />
+          <div v-if="!prefabs.length" class="hint" style="padding: 2px 8px">
+            （无预制体：把层级里的实体拖到资产目录即可保存为预制体）
           </div>
         </div>
 
-        <div class="section grow">
-          <div class="section-title"><span>资产</span></div>
-          <div class="section-body">
-            <AssetBrowser @jump="jumpToUsage" />
-          </div>
-        </div>
-      </aside>
+        </template>
 
-      <main class="editor-pane">
-        <Inspector
-          v-if="selectedEntity && doc && primary !== null"
-          :entity="selectedEntity"
-          :index="primary"
-          :entities="doc.entities"
-          :schema="schema"
-          :selection-count="selection.length"
-          :clipboard="clipboard"
-          :prefab-link="prefabLink"
-          :highlight-component="highlightComponent"
-          :highlight-field="highlightField"
-          @update="onEntityUpdate"
-          @remove="deleteSelection"
-          @duplicate="duplicateEntity"
-          @save-prefab="savePrefabFromEntity"
-          @revert-prefab="revertPrefab"
-          @apply-prefab="applyPrefab"
-          @unlink-prefab="unlinkPrefab"
-          @copy-component="copyComponent"
-          @paste-component="pasteComponent"
-          @clear-clipboard="clearClipboard"
-          @reflect="onComponentReflect"
-          @rejected="fail"
+        <template #hierarchy>
+        <div class="panel-toolbar">
+          <span v-if="selection.length > 1" class="muted">已选 {{ selection.length }}</span>
+          <span class="spacer" />
+          <select v-model="presetId" class="mini" title="新增实体类型">
+            <option v-for="p in presets" :key="p.id" :value="p.id">{{ p.label }}</option>
+          </select>
+          <button
+            class="hierarchy-new"
+            :disabled="!hasDoc"
+            title="按所选类型新增实体"
+            @click="addEntity"
+          >
+            <Plus class="tool-glyph" :size="13" />新建实体
+          </button>
+        </div>
+        <div class="section-body">
+          <HierarchyTree
+            v-if="doc"
+            :entities="doc.entities"
+            :selected="selection"
+            @select="onSelect"
+            @rename="onRenameEntity"
+            @reparent="onReparent"
+            @move="onMove"
+            @duplicate="duplicateEntityAt"
+            @remove="removeEntityAt"
+            @toggle-active="toggleEntityActive"
+            @insert-prefab="insertPrefabAt"
+          />
+        </div>
+
+        </template>
+
+        <template #assets>
+        <AssetBrowser
+          :before-change="ensureSavedForAssetOp"
+          @jump="jumpToUsage"
+          @changed="onAssetsChanged"
+          @open="openAssetPath"
+          @prefab-drop="createPrefabAt"
         />
-        <div v-else class="empty">打开或新建一个场景/预制体，然后在左侧选择一个实体。</div>
-      </main>
-    </div>
 
-    <div v-if="logText" class="logbar">
-      <div class="logbar-head">
-        <span>输出</span>
-        <span class="spacer" />
-        <button class="ghost icon" @click="logText = ''">关闭</button>
-      </div>
-      <pre class="log">{{ logText }}</pre>
-    </div>
+        </template>
 
+        <template #inspector>
+        <div class="editor-pane inspector-pane">
+          <Inspector
+            v-if="selectedEntity && doc && primary !== null"
+            :entity="selectedEntity"
+            :index="primary"
+            :entities="doc.entities"
+            :schema="schema"
+            :selection-count="selection.length"
+            :clipboard="clipboard"
+            :prefab-link="prefabLink"
+            :highlight-component="highlightComponent"
+            :highlight-field="highlightField"
+            @update="onEntityUpdate"
+            @revert-prefab="revertPrefab"
+            @apply-prefab="applyPrefab"
+            @unlink-prefab="unlinkPrefab"
+            @copy-component="copyComponent"
+            @paste-component="pasteComponent"
+            @clear-clipboard="clearClipboard"
+            @reflect="onComponentReflect"
+            @rejected="fail"
+          />
+          <div v-else class="empty">打开或新建一个场景/预制体，然后选择一个实体。</div>
+        </div>
+
+        </template>
+
+        <template #log>
+        <div class="log-panel">
+          <div class="log-toolbar">
+            <div class="log-filter">
+              <button
+                :class="{ active: logSourceFilter === 'all' }"
+                @click="logSourceFilter = 'all'"
+              >全部</button>
+              <button
+                :class="{ active: logSourceFilter === 'editor' }"
+                @click="logSourceFilter = 'editor'"
+              >编辑器</button>
+              <button
+                :class="{ active: logSourceFilter === 'game' }"
+                @click="logSourceFilter = 'game'"
+              >Game</button>
+            </div>
+            <select v-model="logLevelFilter" class="log-level" title="日志级别">
+              <option value="all">全部级别</option>
+              <option value="error">Error</option>
+              <option value="warn">Warn</option>
+              <option value="info">Info</option>
+              <option value="debug">Debug</option>
+              <option value="trace">Trace</option>
+              <option value="panic">Panic</option>
+            </select>
+            <span class="tool-spacer" />
+            <button class="ghost icon" title="清空日志" @click="clearAllLogs">清空</button>
+          </div>
+
+          <div ref="logScrollEl" class="log-scroll">
+            <template
+              v-if="logSourceFilter !== 'game' && filteredEditorLogLines.length"
+            >
+              <div class="log-section-title">编辑器</div>
+              <pre class="log log-block"><span
+                v-for="(entry, index) in filteredEditorLogLines"
+                :key="index"
+                :class="`log-level-${entry.level}`"
+              >{{ entry.line }}{{ "\n" }}</span></pre>
+            </template>
+
+            <template
+              v-if="logSourceFilter !== 'editor' && filteredGameLogLines.length"
+            >
+              <div class="log-section-title">Game</div>
+              <pre class="log log-block"><span
+                v-for="(entry, index) in filteredGameLogLines"
+                :key="index"
+                :class="`log-level-${entry.level}`"
+              >{{ entry.line }}{{ "\n" }}</span></pre>
+            </template>
+
+            <div v-if="!hasFilteredLogs" class="empty">当前筛选没有日志。</div>
+          </div>
+        </div>
+        </template>
+
+        <template #renderSettings>
+        <div class="panel-pane settings-panel">
+          <div v-if="renderSettings" class="settings-body panel-scroll">
+            <label>
+              <span>渲染模式</span>
+              <select v-model="renderSettings.renderMode">
+                <option value="raster">光栅化（PBR）</option>
+                <option value="path_trace">路径追踪</option>
+              </select>
+            </label>
+
+            <label>
+              <span>色调映射</span>
+              <select v-model.number="renderSettings.tonemapMode">
+                <option :value="0">Reinhard</option>
+                <option :value="1">ACES</option>
+              </select>
+            </label>
+
+            <label>
+              <span>PBR 调试通道</span>
+              <select
+                :value="debugFlagIndex(renderSettings.debugFlags)"
+                @change="setDebugFlag(Number(($event.target as HTMLSelectElement).value))"
+              >
+                <option v-for="(label, index) in DEBUG_FLAGS" :key="label" :value="index">
+                  {{ label }}
+                </option>
+              </select>
+            </label>
+
+            <label>
+              <span>调试 RT</span>
+              <select v-model.number="renderSettings.debugRt">
+                <option :value="0">HDR tonemap</option>
+                <option :value="1">线性深度</option>
+                <option :value="2">视图空间法线</option>
+              </select>
+            </label>
+
+            <template v-if="renderSettings.renderMode === 'path_trace'">
+              <label>
+                <span>最大弹射</span>
+                <input v-model.number="renderSettings.ptMaxBounces" type="number" min="1" max="64" />
+              </label>
+              <label>
+                <span>射线最大距离</span>
+                <input
+                  v-model.number="renderSettings.ptRayMaxDistance"
+                  type="number"
+                  min="1"
+                  step="10"
+                />
+              </label>
+              <label>
+                <span>最大采样（0 = 无限）</span>
+                <input v-model.number="renderSettings.ptMaxIterations" type="number" min="0" />
+              </label>
+            </template>
+
+            <p class="hint">
+              写入 <code>assets/settings.toml</code> 的 <code>[render]</code> 段，游戏下次启动生效；
+              运行时仍可用键盘 1–9 / Shift+1–5 / T / Tab 临时切换。
+            </p>
+          </div>
+          <div v-else class="empty">正在读取渲染设置…</div>
+
+          <footer class="panel-footer">
+            <span class="spacer" />
+            <button class="primary" :disabled="!renderSettings" @click="saveSettings">保存</button>
+          </footer>
+        </div>
+        </template>
+
+        <template #renderGraph>
+        <div class="panel-pane graph-panel">
+          <div class="graph-toolbar">
+            <span v-if="graphReport" class="hint">
+              frame {{ graphReport.frame }} · {{ fmtTime(graphReport.generatedAtMs) }}
+            </span>
+            <span class="spacer" />
+            <button class="ghost icon" title="立即刷新" @click="refreshGraph">
+              <RefreshCw :size="14" />
+            </button>
+          </div>
+
+          <div v-if="graphReport" class="graph-toolbar">
+            <span class="chip">
+              {{ graphReport.settings.renderMode === "path_trace" ? "Path Tracing" : "Raster" }}
+            </span>
+            <span class="chip">
+              Tonemap: {{ graphReport.settings.tonemapMode === 0 ? "Reinhard" : "ACES" }}
+            </span>
+            <span class="chip">Debug flags: 0x{{ graphReport.settings.debugFlags.toString(16) }}</span>
+            <span class="chip">PT bounces: {{ graphReport.settings.ptMaxBounces }}</span>
+            <span class="chip">PT samples: {{ graphReport.settings.ptMaxIterations || "∞" }}</span>
+          </div>
+
+          <div v-if="graphError" class="error" style="margin: 10px">{{ graphError }}</div>
+
+          <div v-if="!graphReport" class="empty">
+            还没有渲染图报告。
+            <div class="hint" style="margin-top: 8px">
+              点工具栏「运行」启动游戏预览后，渲染线程会把图结构写入报告文件，这里每秒自动刷新。
+            </div>
+          </div>
+
+          <template v-else>
+            <div class="graph-scroll">
+              <svg
+                :viewBox="`0 0 ${graphLayout.width} ${graphLayout.height}`"
+                :width="graphLayout.width"
+                :height="graphLayout.height"
+              >
+                <defs>
+                  <marker
+                    id="rg-arrow"
+                    markerWidth="7"
+                    markerHeight="7"
+                    refX="6"
+                    refY="3.5"
+                    orient="auto"
+                  >
+                    <path d="M0,0 L7,3.5 L0,7 z" fill="#9aa4b2" />
+                  </marker>
+                </defs>
+                <g v-for="edge in graphLayout.edges" :key="edge.key">
+                  <path
+                    :d="edge.path"
+                    fill="none"
+                    :stroke="edge.color"
+                    stroke-width="1.6"
+                    marker-end="url(#rg-arrow)"
+                  />
+                  <text
+                    :x="edge.labelX"
+                    :y="edge.labelY"
+                    text-anchor="middle"
+                    :fill="edge.color"
+                    font-size="10"
+                  >
+                    {{ edge.label }}
+                  </text>
+                </g>
+                <g v-for="node in graphLayout.nodes" :key="node.pass.index">
+                  <rect
+                    :x="node.x"
+                    :y="node.y"
+                    :width="158"
+                    :height="64"
+                    rx="8"
+                    fill="#171b24"
+                    :stroke="passColor(node.pass.kind)"
+                    stroke-width="1.5"
+                  />
+                  <text
+                    :x="node.x + 12"
+                    :y="node.y + 24"
+                    fill="#e8ecf4"
+                    font-size="12"
+                    font-weight="600"
+                  >
+                    {{ node.pass.name }}
+                  </text>
+                  <text
+                    :x="node.x + 12"
+                    :y="node.y + 42"
+                    :fill="passColor(node.pass.kind)"
+                    font-size="10"
+                  >
+                    {{ node.pass.kind }} · #{{ node.pass.index }}
+                  </text>
+                  <text :x="node.x + 12" :y="node.y + 57" fill="#8b93a7" font-size="9">
+                    {{ node.pass.inputs.length }} in · {{ node.pass.outputs.length }} out
+                  </text>
+                </g>
+              </svg>
+            </div>
+
+            <div class="graph-resources">
+              <div
+                v-for="resource in graphReport.resources"
+                :key="resource.handle"
+                class="resource-card"
+              >
+                <span class="dot" :style="{ background: resourceColor(resource.kind) }" />
+                <span class="name">{{ resource.name }}</span>
+                <span class="hint">
+                  {{ resource.kind }}
+                  <template v-if="resource.format"> · {{ resource.format }}</template>
+                  <template v-if="resource.width"> · {{ resource.width }}×{{ resource.height }}</template>
+                  <template v-if="!resource.allocated"> · 未分配</template>
+                </span>
+              </div>
+              <div v-if="!graphReport.resources.length" class="hint">（无图管理资源）</div>
+            </div>
+          </template>
+        </div>
+        </template>
+
+        <template #tools>
+        <div class="panel-pane tools-panel">
+          <div class="tool-tabs">
+            <button :class="{ active: toolTab === 'gi' }" @click="toolTab = 'gi'">GI 烘焙</button>
+            <button :class="{ active: toolTab === 'heightmap' }" @click="toolTab = 'heightmap'">
+              高度图
+            </button>
+          </div>
+
+          <div v-if="toolTab === 'gi'" class="settings-body panel-scroll">
+            <label>
+              <span>每 probe 射线数</span>
+              <input v-model.number="giForm.rays" type="number" min="1" max="4096" />
+            </label>
+            <label>
+              <span>最大弹射</span>
+              <input v-model.number="giForm.bounces" type="number" min="1" max="32" />
+            </label>
+            <label>
+              <span>输出 .bin</span>
+              <input v-model="giForm.output" spellcheck="false" />
+            </label>
+            <label>
+              <span>场景包 .pak</span>
+              <input v-model="giForm.pak" spellcheck="false" />
+            </label>
+            <label>
+              <span>cooked .rscn</span>
+              <input v-model="giForm.rscn" spellcheck="false" />
+            </label>
+            <p class="hint">
+              调用 <code>prism-build-pipeline bake-gi</code>，需要在桌面 GPU 上运行；结果写入
+              <code>assets/gi/probe_volume.bin</code>。
+            </p>
+          </div>
+
+          <div v-else class="settings-body panel-scroll">
+            <label>
+              <span>输出 .raw</span>
+              <input v-model="heightForm.output" spellcheck="false" />
+            </label>
+            <label>
+              <span>宽度</span>
+              <input v-model.number="heightForm.width" type="number" min="16" max="8192" />
+            </label>
+            <label>
+              <span>高度</span>
+              <input v-model.number="heightForm.height" type="number" min="16" max="8192" />
+            </label>
+            <label>
+              <span>种子</span>
+              <input v-model.number="heightForm.seed" type="number" min="0" />
+            </label>
+            <label>
+              <span>侵蚀迭代</span>
+              <input v-model.number="heightForm.iterations" type="number" min="0" max="10000" />
+            </label>
+            <label>
+              <span>水力粒子</span>
+              <input v-model.number="heightForm.particles" type="number" min="0" max="10000000" />
+            </label>
+            <label>
+              <span>海平面 (0–1)</span>
+              <input v-model.number="heightForm.seaLevel" type="number" min="0" max="1" step="0.05" />
+            </label>
+            <p class="hint">
+              调用 <code>prism-build-pipeline heightmap</code>，输出 f32 little-endian 原始高度数据。
+            </p>
+          </div>
+
+          <pre v-if="toolLog" class="tool-log">{{ toolLog }}</pre>
+
+          <footer class="panel-footer">
+            <span class="spacer" />
+            <button
+              class="primary"
+              :disabled="toolRunning"
+              @click="toolTab === 'gi' ? runBakeGi() : runHeightmap()"
+            >
+              {{ toolRunning ? "运行中…" : "运行" }}
+            </button>
+          </footer>
+        </div>
+        </template>
+
+        <template #shortcuts>
+        <div class="panel-pane help-pane">
+          <div class="help-body panel-scroll">
+            <div v-for="item in SHORTCUTS" :key="item.label" class="shortcut-row">
+              <span>{{ item.label }}</span>
+              <kbd>{{ item.keys }}</kbd>
+            </div>
+            <p class="hint">布局保存在 localStorage 的 <code>prisma-editor.dock.v4</code>。</p>
+          </div>
+        </div>
+        </template>
+
+        <template #about>
+        <div class="panel-pane help-pane">
+          <div class="help-body about-body">
+            <div class="about-mark"><Box :size="22" /></div>
+            <h2>PrismaRev Editor</h2>
+            <p class="hint">Tauri 2 + Vue 3 · 数据层 <code>prism-editor-api</code></p>
+            <p>
+              场景 / 预制体编辑、split-tree docking、实时渲染图、场景包构建与运行。编辑器进程不链接引擎或
+              Vulkan，Cook / 构建通过子进程调用构建流水线。
+            </p>
+          </div>
+        </div>
+        </template>
+
+      </DockLayout>
+    </div>
     <AssetPicker
       v-if="pickerState"
       :current="pickerState.current"
       @pick="resolvePicker"
       @cancel="resolvePicker(null)"
     />
+
+    <footer class="statusbar">
+      <span class="status-led" :class="{ busy }" />
+      <span class="status-text">{{ status || "就绪" }}</span>
+      <span class="tool-spacer" />
+      <span class="status-path" :title="projectRoot">{{ projectRoot || "未连接项目" }}</span>
+      <span class="status-sep" />
+      <span class="status-chip">{{ documentLabel }}</span>
+      <span v-if="dirty" class="status-chip dirty">未保存</span>
+      <span class="status-chip">{{ hasDoc ? (isScene ? "场景" : "预制体") : "—" }}</span>
+      <span class="status-chip" :class="{ ok: packageStatus.exists }">
+        {{ packageStatus.exists ? "scenes.pak 就绪" : "未打包" }}
+      </span>
+    </footer>
   </div>
 </template>

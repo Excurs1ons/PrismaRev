@@ -7,28 +7,22 @@ Conventions) before touching any matrix/coordinate math — deviating from those
 ## Layout
 - `crates/prism-ecs` — ECS core (Entity/Component/World/Query).
 - `crates/prism-reflect` — 运行时反射（`Reflect`/`TypeDesc`/`TypeRegistry`）+
-  自描述二进制 RTTIBin（`rtti_bin`）。egui-free，不依赖 engine/render。
+  自描述二进制 RTTIBin（`rtti_bin`）。UI-framework-free，不依赖 engine/render。
 - `crates/prism-reflect-derive` — `#[derive(Reflect)]` 过程宏（仅编译期依赖）。
 - `crates/prism-scene` — 场景 schema 层：纯数据组件、`ComponentRegistry`、`.scene.json`
-  作者格式、RSCN v4 编解码。egui/render/audio-free；cooker 与 engine 共用这一份 schema。
+  作者格式、RSCN v4 编解码。UI / render / audio-free；cooker 与 engine 共用这一份 schema。
 - `crates/prism-render` — Vulkan backend: context, swapchain, render-graph passes (`forward_pass.rs`/`shadow_map_pass.rs`/`skybox_pass.rs`),
   `GraphRenderer` driver (`graph_renderer.rs`), IBL cubemap (`ibl.rs`), bindless/PBR.
-  **egui-free**; hosts inject UI via the neutral `SwapchainOverlay` trait (`external_overlay.rs`).
+  **UI-framework-free**; hosts inject UI via the neutral `SwapchainOverlay` trait (`external_overlay.rs`).
 - `crates/prism-engine` — runtime engine: render systems/settings, asset resolver, audio hookup,
   own ECS UI systems. Re-exports `prism-scene` types for path compatibility (`scene::components`,
-  `scene::component_registry`, `ui::components`). **egui-free.**
+  `scene::component_registry`, `ui::components`). **UI-framework-free.**
 - `crates/prism-app` — platform layer (winit event loop, window, `FrameHook` extension point,
-  `run_on_android` helper). **egui-free**; the Android JNI entry lives in the user project.
+  `run_on_android` helper). **UI-framework-free**; the Android JNI entry lives in the user project.
 - `crates/prism-platform` — platform abstraction (window system, Vulkan surface, input routing).
-- `crates/prism-editor` — egui editor UI (inspector, debug views, render settings, baking) +
-  `engine_bindings.rs` (`impl Inspect` for engine components, `Hierarchy` adapter).
-  Depends on `prism-engine` (direction is editor → engine, never the reverse).
-- `crates/prism-editor-host` — reusable **editor host**: wires egui into `prism-app` via
-  `FrameHook` + `SwapchainOverlay` (`EguiCpu`/`EguiFrame`/`EguiOverlay`/`EditorHook`).
-  Owns all egui deps; its runtime entry is hosted by `projects/prisma-editor`.
 - `crates/prism-editor-tool` — editor tools (heightmap generator CLI, terrain utilities).
 - `crates/prism-editor-api` — web 编辑器的**数据层**：把 `prism-scene` 组件注册表投影成
-  属性面板 schema + `.scene.json` 定位/读写/校验。egui-free、Vulkan-free，被 `editor/`
+  属性面板 schema + `.scene.json` 定位/读写/校验。UI-framework-free、Vulkan-free，被 `editor/`
   的 Tauri 命令直接调用；也是唯一允许 `editor/` 依赖的 crate。
 - `crates/prism-build-pipeline` — offline build pipeline (GI baking, asset cooking, heightmap CLI).
 - `crates/prism-audio` — audio subsystem.
@@ -45,6 +39,38 @@ Conventions) before touching any matrix/coordinate math — deviating from those
   **不链接** cooker/build 流水线（Cook 以子进程调用
   `cargo run -p prism-build-pipeline -- cook <file>`）。desktop-only，
   **own standalone workspace**, NOT a root member.
+  - 布局是 **split-tree docking + 自由浮动窗口**（`editor/src/dock.ts` +
+    `DockNode.vue`/`DockLayout.vue`）：splitter 只改共享 `ratio`，所以同侧对齐的
+    面板一起缩放；tab 拖到别的 leaf 中央合并、边缘分屏，拖到主窗口左/右/底三边
+    （`dockPanelAtEdge`）会新开整列/整行，拖到面板区域外（或按住 Alt）变成浮动
+    窗口；浮动窗口可移动/缩放，拖回 leaf 或窗口三边会重新停靠。布局持久化在
+    `prisma-editor.dock.v4`（`{version,dock,floating}`，自动迁移旧 v3 tree）。
+    顶边是工具栏，不作为停靠目标。
+  - 标签/浮动窗口拖拽用 **pointer events + `setPointerCapture`**，不用 HTML5 DnD：
+    Windows WebView2 会截获原生拖放。资产拖到字段仍走 HTML5 DnD，所以窗口配置必须
+    `dragDropEnabled: false`。
+  - docking 的类名是 `.dock-row` / `.dock-col`，**不要**复用 `.row` / `.column`：
+    `.row` 是属性面板的全局网格类，会把 `align-items/gap/padding` 带进 splitter，
+    导致 splitter 变成 6×6 且面板间距错乱。
+  - 图标统一用 `lucide-vue-next`（`Play/Stop/Square/X/Check/Chevron*/Eye/EyeOff/Plus/Minus/RefreshCw`），
+    不要用 `▶ ■ ✓ ✕ ▾ ▸ ›` 这类 Unicode 符号。
+  - 顶部是 UE / Unity 风格三段式：菜单栏（文件/编辑/构建/窗口/帮助）、主工具栏
+    （只放场景选择 + Play）、底部状态栏。撤销/重做/保存、构建场景包、新建文档都在
+    菜单里；离线工具在「构建 → 离线工具」，渲染设置在「编辑 → 项目设置」，渲染图在
+    「窗口 → 分析」。新建实体在层级面板顶部（类型下拉 + 「新建实体」按钮）。
+    菜单/子菜单数据集中在 `App.vue` 的 `MENUS` computed（`children` 表示子菜单）；
+    新增命令时同时补菜单项与快捷键。渲染图、渲染设置、离线工具、快捷键、关于都是
+    **dock 面板**（`PANELS` + `DockLayout` 的命名 slot），默认并入检查器 leaf 的 tab，
+    可拖出浮动或重新分屏；不要再用带背景遮罩的 modal 实现窗口。
+  - 实体/组件操作走右键菜单：层级行 → 复制 / 删除，组件卡头 → 复制组件 / 移除组件。
+    检查器顶部的复制/删除/存为预制体按钮已移除。预制体通过「层级实体拖到资产目录」
+    (`prefab-drop` → `editor_create_prefab_at`) 保存，可落到任意 `assets/...` 目录，
+    重名自动加 `-2` 后缀；`.prefab.json` 在资产树里递归枚举。反向拖 `.prefab.json`
+    到层级实体/空白处会实例化到该父级/根；层级行的眼睛按钮切换 `Active` 组件。
+  - 「日志」是独立 dock 面板（`log`），同时区分 **编辑器 / Game** 两个来源，并按
+    `error/warn/info/debug/trace/panic` 过滤。`editor_play_scene` 用 piped
+    stdout/stderr 启动游戏，读取线程把每行写入共享 ring buffer（`editor_preview_logs`
+    回填）并 emit `preview-log`；前端 `onPreviewLog` 追加到 `gameLogEntries`。
   - 编辑器把**场景与预制体统一成「文档」**：同一 `{version, entities}` 形状，靠
     `DocKind` 区分目录/后缀 —— 场景 `assets/scenes/*.scene.json`、预制体
     `assets/prefabs/*.prefab.json`。因此层级树/检查器/撤销对两者完全通用；
@@ -66,43 +92,45 @@ Conventions) before touching any matrix/coordinate math — deviating from those
 - `projects/prisma/` — 用户游戏项目（package/crate `prisma`；`prisma` 桌面二进制 + Android
   cdylib `libprisma.so`；keyframe 开场 intro、`register_scene("intro", ...)` 注册场景、
   `lib.rs` 的 `android_main`）；**own standalone workspace**, NOT a root member.
-- `projects/prisma-editor/`、`projects/prisma-sponza/` — 编辑器 / Sponza 样例用户项目，
+- `projects/prisma-sponza/` — Sponza 样例用户项目，
   同为独立 workspace（package 名与目录名一致）。
 - `crates/xtask` — **excluded** from default workspace; desktop/CI only (needs `slangc`).
 - `assets/shaders/` — Slang sources in `slang/`, compiled `.spv` (gitignored, not committed) +
   `reflection/*.json` next to them.
 
 ## Editor / user-project separation (do not regress)
-The user project's dependency chain must stay **egui-free and editor-free**:
+The user project's dependency chain must stay **UI-framework-free and editor-free**:
 `prisma → prism-app → prism-engine → {prism-scene, prism-ecs, prism-render, prism-asset}`.
 `prism-cooker` / `prism-build-pipeline` are build-host only and must never appear in this chain.
-- Never add `prism-editor`, `prism-editor-host`, `egui`, `egui-winit` or `egui-ash-renderer`
-  to `prism-app` / `prism-engine` / `prism-render`. Verify with
-  `cd projects/prisma && cargo tree | grep egui` (must print nothing).
-- Editor UI reaches the engine only through two neutral extension points:
-  - `prism_app::FrameHook` (main thread: `on_tick`, `on_window_event`, `overlay` factory);
-  - `prism_render::external_overlay::SwapchainOverlay` (render thread: `record` into the
-    swapchain image; GPU resources created lazily by the implementor).
-- Main → render thread UI data crosses as a **type-erased** `OverlayMessage`
-  (`Box<dyn FnOnce(&mut dyn SwapchainOverlay) + Send>`) via `RenderShared`; the implementor
-  downcasts with `as_any_mut()`. `prism-app` never names an egui type.
-- `impl Inspect` for engine components lives in `prism-editor/src/engine_bindings.rs`
-  (orphan rule: the trait is editor-side). Register via `register_engine_inspect_fns`.
-- egui `TexturesDelta` is **incremental**: when queueing overlay frames, merge the deltas of an
-  unconsumed frame instead of overwriting it, or the font-atlas upload is lost
-  (`BadTexture(Managed(0))` on the render thread).
+- The only editor is the Tauri web editor (`editor/`); its Rust backend is `prism-editor-api`
+  and it **never links** the engine/renderer. It edits `.scene.json`/`.prefab.json`, writes
+  project settings, and shells out to `prism-build-pipeline` for cook/build.
+- Never add a UI framework (egui/egui-winit/egui-ash-renderer) to `prism-app` /
+  `prism-engine` / `prism-render`. Verify with
+  `cd projects/prisma && cargo tree | grep -i egui` (must print nothing).
+- `prism-app` keeps the neutral `FrameHook` / `prism_render::external_overlay::SwapchainOverlay`
+  seams for debug hosts and future tooling; main → render thread UI data crosses as a
+  **type-erased** `OverlayMessage` (`Box<dyn FnOnce(&mut dyn SwapchainOverlay) + Send>`) via
+  `RenderShared`, and the implementor downcasts with `as_any_mut()`. `prism-app` must not
+  name any concrete UI type.
+- Runtime diagnostics live in `prism-app/src/debug_hud.rs` (F3): it appends text to the
+  existing `UiOverlayInput`, so no extra UI framework or render pass is involved.
+- Render-graph visualization lives in the Tauri editor (SVG DAG). The game's render thread
+  writes a JSON snapshot (`prism-app/src/render_graph_report.rs`) when
+  `PRISMREV_RENDER_GRAPH_REPORT=<path>` is set; `editor_play_scene` sets it to
+  `target/prism-render-graph.json`, and `editor_render_graph_report` reads it. Keep the report
+  a pure-data DTO: never expose `vk::*` handles or pass trait objects to the web layer.
 
 ## Build / check / test
 - Build: `scripts/run.ps1` (Windows; sets `VK_SDK`, `RUST_LOG`, runs `bash assets/shaders/compile.sh`, `cargo build`, then `prism-build-pipeline build-scenes`).
   Note: the root workspace has no **game/editor entry** binary — the desktop entry is the Tauri app in `launcher/`
   (`cd launcher && pnpm tauri dev`), which spawns the game binary `prisma` (built in `projects/prisma/`: `cd projects/prisma && cargo run`).
-- egui Editor: `cargo run --manifest-path projects/prisma-editor/Cargo.toml` — the standalone editor
-  project hosts the same `prism-app` loop with egui hooked in (F1 inspector, F2 render-graph, F3 perf HUD).
 - Web Editor: `cd editor && pnpm install && pnpm tauri dev` — Tauri 2 + Vue 3; the Rust side only
-  depends on `prism-editor-api` (no egui/Vulkan). Frontend checks: `cd editor && pnpm build`.
-  Browser-only preview (no Tauri): `cd editor && pnpm dev:web` — when `__TAURI_INTERNALS__` is
-  absent the frontend falls back to the read-only fixture `editor/public/demo.json`; regenerate it
-  with `cd editor && pnpm fixture` (it dumps `build_schema`/templates/presets/scenes from the real
+  depends on `prism-editor-api` (no engine/Vulkan). Frontend checks: `cd editor && pnpm build`.
+  Browser-only preview (no Tauri): `cd editor && pnpm dev:web` — opens `/?demo=1`; only that
+  explicit demo flag (plus Vite DEV) loads the read-only fixture `editor/public/demo.json`.
+  Without it, Tauri commands fail loudly instead of silently falling back to mock data; regenerate
+  the fixture with `cd editor && pnpm fixture` (it dumps `build_schema`/templates/presets/scenes from the real
   registry, so it cannot drift from the Rust schema).
 - Checks: `cargo check -p prism-render`, `cargo build`, `cargo test`.
 - `crates/xtask` is excluded from the workspace — run it explicitly from a desktop host; do not add it to default `members`.
@@ -116,7 +144,7 @@ The user project's dependency chain must stay **egui-free and editor-free**:
   (writes `assets/cooked/default.rscn`; the old `prism-asset-cli` name is gone).
 - Pack already-cooked files: `cargo run -p prism-build-pipeline -- pack assets/cooked`
   (writes `assets/packed/game.pak` + `.pak.meta.json`; low-level escape hatch).
-- The `projects/prisma/`, `projects/prisma-sponza/`, `projects/prisma-editor/`, `launcher/` and `editor/` standalone workspaces need their own `cargo build` / `cargo clippy`
+- The `projects/prisma/`, `projects/prisma-sponza/`, `launcher/` and `editor/` standalone workspaces need their own `cargo build` / `cargo clippy`
   runs — a root-workspace build does **not** cover them. `editor/` additionally needs `pnpm`.
 
 ## Shaders (important gotcha)
@@ -182,7 +210,7 @@ The user project's dependency chain must stay **egui-free and editor-free**:
 
 ## Reflection / RTTIBin rules
 - `prism-reflect` is the runtime schema layer; `prism-reflect-derive` only generates impls.
-  Keep both egui-free and free of engine/render dependencies.
+  Keep both UI-framework-free and free of engine/render dependencies.
 - `TypeId` is `fnv1a64(canonical type name)` — never use `std::any::TypeId` for persisted data.
   Component derives must pin the scene-canonical name:
   `#[reflect(name = "prism_engine::scene::Camera")]`, matching the `.scene.json` key.
@@ -224,6 +252,11 @@ The user project's dependency chain must stay **egui-free and editor-free**:
   pin `#[reflect(name = "prism_engine::...")]`, and register it in
   `register_builtin_components` via `register_reflect_serde` (or a custom JSON converter).
   Then both cook and load share the schema automatically.
+- Skybox and gizmo are **ECS-authored**, not renderer constants: `Skybox` owns
+  `hdr_path/enabled/rotation_degrees/intensity` and drives both IBL loading and the sky
+  pass; `EnvironmentLighting` is legacy fallback only. `Gizmo` uses the entity
+  `WorldTransform` + component `scale`, and no `Gizmo` entity means no gizmo is drawn.
+  Do not re-add unconditional sky/gizmo draws in `ForwardPass`.
 - Run tests: `cargo test -p prism-asset -p prism-scene -p prism-cooker`.
 
 ## Logging

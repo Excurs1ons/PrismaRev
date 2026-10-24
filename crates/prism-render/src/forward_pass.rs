@@ -1015,8 +1015,8 @@ impl ForwardPass {
             .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
             .initial_layout(vk::ImageLayout::UNDEFINED)
             // Leave the 交换链 图像 in COLOR_ATTACHMENT_OPTIMAL so a
-            // subsequent egui 叠加 pass can 加载 it and 过渡 it to
-            // PRESENT_SRC_KHR. When the egui 叠加 is 禁用 the 调用者
+            // subsequent external overlay pass can 加载 it and 过渡 it to
+            // PRESENT_SRC_KHR. When the external overlay is 禁用 the 调用者
             // (GraphRenderer::render) records a 回退 管线 屏障 to
             // PRESENT_SRC_KHR after this pass ends.
             .final_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
@@ -1385,14 +1385,17 @@ impl RenderPassNode for ForwardPass {
         // Skipped when no usable 相机 实体 存在 so the gray 清空 颜色
         // shows through 一致 with the "No 相机 HUD 叠加
         if ctx.frame.has_camera {
-            if let Err(e) = self.skybox.draw(
-                ctx.device,
-                ctx.cmd,
-                self.render_pass.unwrap(),
-                self.extent,
-                &ctx.frame.inv_view_rot,
-            ) {
-                log::warn!("SkyboxPass draw failed (skybox skipped): {e:#}");
+            if let Some(skybox) = ctx.frame.skybox {
+                if let Err(e) = self.skybox.draw(
+                    ctx.device,
+                    ctx.cmd,
+                    self.render_pass.unwrap(),
+                    self.extent,
+                    &ctx.frame.inv_view_rot,
+                    skybox,
+                ) {
+                    log::warn!("SkyboxPass draw failed (skybox skipped): {e:#}");
+                }
             }
         }
 
@@ -1552,7 +1555,7 @@ impl RenderPassNode for ForwardPass {
         // 深度 test 禁用 so it is never occluded). Uses the same
         // view-projection the scene was drawn with.
         if let Some(gizmo) = &self.gizmo {
-            gizmo.draw(ctx.cmd, &ctx.frame.view_proj);
+            gizmo.draw(ctx.cmd, &ctx.frame.view_proj, ctx.frame.gizmos);
         }
 
         unsafe { ctx.device.cmd_end_render_pass(ctx.cmd) };

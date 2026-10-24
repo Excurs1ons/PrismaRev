@@ -122,10 +122,10 @@ impl ResourceLifecycle {
 }
 
 // ---------------------------------------------------------------------------
-// Read-only snapshots for the render-graph visualizer (egui, F2).
+// Read-only snapshots for render-graph visualizers / diagnostics.
 //
 // The engine-side viz must not 借用 `RenderGraph` (its passes are 私有
-// trait objects) nor 触摸 `vk::*` handles inside the egui 闭包 These
+// trait objects) nor 触摸 `vk::*` handles inside the UI 闭包 These
 // plain-data structs are produced by `RenderGraph::snapshot` + each pass's
 // `RenderPassNode::graph_info`, cloned once per 帧 and consumed by the UI.
 // ---------------------------------------------------------------------------
@@ -325,6 +325,10 @@ pub struct GraphFrame<'a> {
     pub frame_ubo: &'a FrameUBO,
     /// 绘制 列表 for the 当前 帧
     pub draw_list: &'a [DrawItem],
+    /// ECS-authored gizmos for this frame.
+    pub gizmos: &'a [crate::gizmo::GizmoInstance],
+    /// ECS-authored skybox parameters (`None` = skip the sky draw).
+    pub skybox: Option<crate::skybox_pass::SkyboxSettings>,
     /// 网格 管理器 — passes 解析 [`DrawItem::mesh`] handles to GPU buffers.
     pub mesh_manager: &'a RenderMeshManager,
     /// Light-space view-projection 正交 used by the shadow pass and

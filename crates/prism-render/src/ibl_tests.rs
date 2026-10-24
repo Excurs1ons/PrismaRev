@@ -25,6 +25,42 @@ fn cubemap_from_solid_equirect_is_uniform() {
 }
 
 #[test]
+fn cubemap_samples_full_vertical_range() {
+    let w = 16u32;
+    let h = 16u32;
+    let mut eq = vec![0.0f32; (w * h * 4) as usize];
+    for y in 0..h {
+        for x in 0..w {
+            let i = ((y * w + x) * 4) as usize;
+            if y < h / 2 {
+                eq[i] = 1.0; // top half: red
+            } else {
+                eq[i + 1] = 1.0; // bottom half: green
+            }
+            eq[i + 3] = 1.0;
+        }
+    }
+
+    let face = 8u32;
+    let cube = generate_cubemap(&eq, w, h, face);
+    let at = |f: u32, x: u32, y: u32| {
+        let o = ((f * face * face + y * face + x) * 4) as usize;
+        [cube[o], cube[o + 1], cube[o + 2]]
+    };
+
+    let up = at(2, face / 2, face / 2); // +Y
+    let down = at(3, face / 2, face / 2); // -Y
+    assert!(
+        up[0] > 0.8 && up[1] < 0.2,
+        "+Y should sample the top (red) rows, got {up:?}"
+    );
+    assert!(
+        down[1] > 0.8 && down[0] < 0.2,
+        "-Y should sample the bottom (green) rows, got {down:?}"
+    );
+}
+
+#[test]
 fn cube_direction_is_unit_length() {
     for f in 0..6u32 {
         for &(u, v) in &[(-1.0, -1.0), (0.0, 0.0), (1.0, 1.0), (0.3, -0.7)] {

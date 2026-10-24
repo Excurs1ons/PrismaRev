@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, inject, ref } from "vue";
+import { Minus, Plus } from "lucide-vue-next";
 import ColorField from "./ColorField.vue";
 import NumberField from "./NumberField.vue";
 import { ASSETS_KEY, ASSET_PICKER_KEY } from "../keys";
@@ -41,6 +42,8 @@ function kindOf(v: JsonValue | undefined): Kind {
 
 const hint = computed<FieldSchema | null>(() => props.field ?? null);
 const kind = computed(() => kindOf(props.value));
+/** 定长数组（`[T; N]`）：长度由 schema 固定，不能增删元素。 */
+const isFixedArray = computed(() => hint.value?.kind === "array");
 const pathStr = computed(() => props.path ?? "");
 
 const isInteger = computed(() =>
@@ -159,10 +162,13 @@ function setItem(index: number, value: JsonValue, childPathValue: string) {
 }
 
 function addItem() {
+  // 定长数组拒绝增删：长度不匹配会被 `Reflect::set_field` 拒绝。
+  if (isFixedArray.value) return;
   setOp([...asArray.value, defaultFor(hint.value?.inner ?? null)]);
 }
 
 function removeItem(index: number) {
+  if (isFixedArray.value) return;
   const next = [...asArray.value];
   next.splice(index, 1);
   setOp(next);
@@ -273,8 +279,7 @@ function onBool(event: Event) {
         {{ label }}<span v-if="hint?.readOnly" class="ro"> ·只读</span>
       </div>
       <div class="hint">
-        {{ hint?.kind === "array" ? `定长 ${hint?.arrayLen ?? "?"}` : "列表" }} ·
-        {{ asArray.length }} 项
+        {{ isFixedArray ? `定长 ${hint?.arrayLen ?? "?"} · ${asArray.length} 项` : `列表 · ${asArray.length} 项` }}
       </div>
     </div>
     <div class="nested">
@@ -287,11 +292,19 @@ function onBool(event: Event) {
           :schema="schema"
           @update="(v, p) => setItem(i, v, p)"
         />
-        <button class="ghost icon" :disabled="hint?.readOnly" title="删除" @click="removeItem(i)">
-          −
+        <button
+          v-if="!isFixedArray"
+          class="ghost icon"
+          :disabled="hint?.readOnly"
+          title="删除"
+          @click="removeItem(i)"
+        >
+          <Minus :size="13" />
         </button>
       </div>
-      <button class="ghost" :disabled="hint?.readOnly" @click="addItem">+ 元素</button>
+      <button v-if="!isFixedArray" class="ghost" :disabled="hint?.readOnly" @click="addItem">
+        <Plus :size="13" /> 元素
+      </button>
     </div>
   </div>
 
