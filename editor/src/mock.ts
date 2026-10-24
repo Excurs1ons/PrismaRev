@@ -16,6 +16,7 @@ import type {
   RenderSettingsData,
   SceneDoc,
   SceneEntry,
+  SceneListEntry,
   SceneTemplate,
   Schema,
 } from "./types";
@@ -69,6 +70,11 @@ const renderSettingsFixture: RenderSettingsData = {
   ptRayMaxDistance: 1000,
   ptMaxIterations: 0,
 };
+
+const sceneManifestFixture: SceneListEntry[] = [
+  { name: "intro", path: "scenes/intro.rscn", enabled: true },
+  { name: "default", path: "scenes/default.rscn", enabled: true },
+];
 
 const projectSettingsFixture: ProjectSettingsData = {
   app: { company: "Excurs1ons", name: "PrismaRev", version: "0.1.0" },
@@ -697,6 +703,18 @@ async function handle(cmd: string, args: Record<string, unknown>): Promise<unkno
         path: `scenes/${entry.name}.rscn`,
         docPath: entry.path,
       }));
+    }
+
+    case "editor_scene_manifest":
+      return JSON.parse(JSON.stringify(sceneManifestFixture));
+
+    case "editor_write_scene_manifest": {
+      sceneManifestFixture.splice(
+        0,
+        sceneManifestFixture.length,
+        ...(args.scenes as SceneListEntry[]),
+      );
+      return null;
     }
 
     case "editor_scene_package_status":

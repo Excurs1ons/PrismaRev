@@ -35,7 +35,8 @@ pub use assets::{
     MAX_PREVIEW_BYTES, MAX_TEXT_PREVIEW_BYTES,
 };
 pub use play::{
-    list_playable_scenes, manifest_path, scene_package_status, PlayableScene, ScenePackageStatus,
+    list_playable_scenes, manifest_path, read_scene_manifest, scene_package_status,
+    write_scene_manifest, PlayableScene, SceneListEntry, ScenePackageStatus,
 };
 pub use presets::{entity_presets, EntityPreset};
 pub use reflect_edit::{normalize_component, set_component_field};

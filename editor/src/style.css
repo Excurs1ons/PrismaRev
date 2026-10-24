@@ -1274,10 +1274,55 @@ html.compact .dock-tab {
 .settings-body label.check-row > input {
   flex: 0 0 auto;
 }
-.build-scenes {
+.build-scene-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.build-scene-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.build-scene-row input[type="checkbox"] {
+  flex: 0 0 auto;
+}
+.build-scene-index {
+  width: 18px;
+  text-align: right;
+  color: var(--muted);
+  font-size: 11px;
+}
+.build-scene-name {
+  flex: 0 0 130px;
+  font-weight: 600;
+}
+.build-scene-path {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.build-add-scene {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+  align-items: center;
+}
+.build-add-scene select {
+  flex: 1 1 220px;
+}
+.build-add-scene button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 .build-log {
   max-height: 260px;

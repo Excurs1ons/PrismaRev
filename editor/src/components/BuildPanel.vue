@@ -1,24 +1,85 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
+import { ChevronDown, ChevronUp, Plus, X } from "lucide-vue-next";
 import * as api from "../api";
-import type { BuildProjectResult, ProjectSettingsData } from "../types";
+import type {
+  BuildProjectResult,
+  ProjectSettingsData,
+  SceneEntry,
+  SceneListEntry,
+} from "../types";
 
 const props = defineProps<{
-  playableScenes: string[];
+  scenes: SceneEntry[];
   projectRoot: string;
 }>();
 
 const emit = defineEmits<{ (e: "built"): void }>();
 
 const settings = ref<ProjectSettingsData | null>(null);
+const manifest = ref<SceneListEntry[]>([]);
+const addName = ref("");
+const manifestDirty = ref(false);
 const busy = ref(false);
 const log = ref("");
 const error = ref("");
+const status = ref("");
 const result = ref<BuildProjectResult | null>(null);
+
+const availableScenes = computed(() =>
+  props.scenes.filter(
+    (scene) => !manifest.value.some((entry) => entry.name === scene.name),
+  ),
+);
 
 async function load() {
   try {
-    settings.value = await api.projectSettings();
+    const [project, scenes] = await Promise.all([
+      api.projectSettings(),
+      api.sceneManifest(),
+    ]);
+    settings.value = project;
+    manifest.value = scenes;
+    manifestDirty.value = false;
+    error.value = "";
+  } catch (e) {
+    error.value = `${e}`;
+  }
+}
+
+function addScene() {
+  const doc = props.scenes.find((scene) => scene.name === addName.value);
+  if (!doc) return;
+  manifest.value.push({
+    name: doc.name,
+    path: `scenes/${doc.fileName}`,
+    enabled: true,
+  });
+  addName.value = "";
+  manifestDirty.value = true;
+  status.value = "场景已加入列表，记得保存或直接构建";
+}
+
+function removeScene(index: number) {
+  manifest.value.splice(index, 1);
+  manifestDirty.value = true;
+  status.value = "场景已移除，记得保存或直接构建";
+}
+
+function moveScene(index: number, delta: number) {
+  const to = index + delta;
+  if (to < 0 || to >= manifest.value.length) return;
+  const [entry] = manifest.value.splice(index, 1);
+  manifest.value.splice(to, 0, entry);
+  manifestDirty.value = true;
+  status.value = "顺序已调整，记得保存或直接构建";
+}
+
+async function saveSceneList() {
+  try {
+    await api.writeSceneManifest(manifest.value);
+    manifestDirty.value = false;
+    status.value = "场景列表已写入 assets/scenes.toml";
     error.value = "";
   } catch (e) {
     error.value = `${e}`;
@@ -29,19 +90,25 @@ async function runBuild(runAfter: boolean) {
   if (!settings.value || busy.value) return;
   busy.value = true;
   error.value = "";
+  status.value = "";
   result.value = null;
   log.value = runAfter ? "构建并运行…\n" : "开始构建…\n";
   try {
+    if (manifestDirty.value) {
+      await api.writeSceneManifest(manifest.value);
+      manifestDirty.value = false;
+    }
     settings.value.build.runAfter = runAfter;
     await api.writeProjectSettings(settings.value);
     const built = await api.buildProject({
-      target: "windows",
+      target: settings.value.build.target,
       profile: settings.value.build.profile,
       outputDir: settings.value.build.outputDir,
       runAfter,
     });
     result.value = built;
     log.value = built.output;
+    status.value = `构建完成（${(built.durationMs / 1000).toFixed(1)}s）`;
     emit("built");
   } catch (e) {
     error.value = `${e}`;
@@ -99,11 +166,48 @@ onMounted(() => void load());
         </div>
 
         <div class="settings-group">
-          <div class="settings-group-title">场景（assets/scenes.toml）</div>
-          <div v-if="playableScenes.length" class="build-scenes">
-            <span v-for="name in playableScenes" :key="name" class="chip">{{ name }}</span>
+          <div class="settings-group-title">
+            场景列表（顺序 = 构建顺序，第一个启用场景为启动场景）
           </div>
-          <p v-else class="hint">没有可构建场景；先在 assets/scenes.toml 添加条目。</p>
+
+          <div class="build-scene-list">
+            <div v-for="(entry, index) in manifest" :key="entry.name" class="build-scene-row">
+              <input
+                v-model="entry.enabled"
+                type="checkbox"
+                :title="entry.enabled ? '参与构建' : '不参与构建'"
+                @change="manifestDirty = true"
+              />
+              <span class="build-scene-index">{{ index }}</span>
+              <span class="build-scene-name">{{ entry.name }}</span>
+              <code class="build-scene-path">{{ entry.path }}</code>
+              <button class="ghost icon" title="上移" :disabled="index === 0" @click="moveScene(index, -1)">
+                <ChevronUp :size="13" />
+              </button>
+              <button class="ghost icon" title="下移" :disabled="index === manifest.length - 1" @click="moveScene(index, 1)">
+                <ChevronDown :size="13" />
+              </button>
+              <button class="ghost icon" title="从列表移除" @click="removeScene(index)">
+                <X :size="13" />
+              </button>
+            </div>
+            <div v-if="!manifest.length" class="hint">场景列表为空；从下面添加 assets/scenes 里的场景。</div>
+          </div>
+
+          <div class="build-add-scene">
+            <select v-model="addName" :disabled="!availableScenes.length">
+              <option value="">选择场景…</option>
+              <option v-for="scene in availableScenes" :key="scene.path" :value="scene.name">
+                {{ scene.name }}（{{ scene.fileName }}）
+              </option>
+            </select>
+            <button :disabled="!addName" @click="addScene"><Plus :size="13" /> 添加场景</button>
+            <button class="ghost" :disabled="!manifest.length" @click="saveSceneList">保存列表</button>
+          </div>
+
+          <p v-if="!scenes.length" class="hint">
+            assets/scenes 下还没有 .scene.json 文档；先新建场景。
+          </p>
         </div>
 
         <p class="hint">
@@ -114,6 +218,7 @@ onMounted(() => void load());
       <div v-else class="empty">正在读取构建设置…</div>
 
       <div v-if="error" class="error">{{ error }}</div>
+      <div v-if="status" class="hint">{{ status }}</div>
       <pre v-if="log" class="tool-log build-log">{{ log }}</pre>
     </div>
 

@@ -92,6 +92,10 @@ pub fn build_scene_package(
     let mut scenes = 0usize;
     let mut skipped = 0usize;
     for entry in &manifest.scenes {
+        if !entry.enabled {
+            skipped += 1;
+            continue;
+        }
         match stage_entry(&cooker, asset_root, staging, &entry.path)? {
             Some(_) => scenes += 1,
             None => skipped += 1,

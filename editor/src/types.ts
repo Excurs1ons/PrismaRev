@@ -172,6 +172,13 @@ export interface RenderSettingsData {
   ptMaxIterations: number;
 }
 
+/** Build Settings 中的一行场景（顺序即构建/启动顺序）。 */
+export interface SceneListEntry {
+  name: string;
+  path: string;
+  enabled: boolean;
+}
+
 /** 项目设置（`assets/settings.toml` 的 app/window/build 段）。 */
 export interface ProjectSettingsData {
   app: {

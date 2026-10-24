@@ -375,6 +375,9 @@ impl SceneManager {
     ) -> Option<String> {
         self.current_scene_path = None;
         for entry in &manifest.scenes {
+            if !entry.enabled {
+                continue;
+            }
             if let Some(name) = scene_name {
                 if &entry.name != name {
                     continue;
@@ -458,10 +461,17 @@ pub fn load_env_bytes_from_manifest() -> Option<Vec<u8>> {
 // Manifest helpers（由旧 engine.rs 迁入）——场景系统的内部实现
 // ---------------------------------------------------------------------------
 
+fn default_enabled() -> bool {
+    true
+}
+
 #[derive(serde::Deserialize)]
 pub struct SceneManifestEntry {
     pub name: String,
     pub path: String,
+    /// Build Settings 的勾选状态；缺省视为启用（兼容旧 manifest）。
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
 }
 
 #[derive(serde::Deserialize)]

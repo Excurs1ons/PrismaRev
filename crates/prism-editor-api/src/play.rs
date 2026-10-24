@@ -36,16 +36,80 @@ struct Manifest {
     scenes: Vec<ManifestEntry>,
 }
 
+fn default_enabled() -> bool {
+    true
+}
+
 #[derive(Debug, Deserialize)]
 struct ManifestEntry {
     name: String,
     #[serde(default)]
     path: String,
+    #[serde(default = "default_enabled")]
+    enabled: bool,
 }
 
 /// `assets/scenes.toml` 的路径。
 pub fn manifest_path(root: &Path) -> PathBuf {
     root.join("assets").join("scenes.toml")
+}
+
+/// Build Settings 里的一行场景（顺序即构建/启动顺序）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SceneListEntry {
+    pub name: String,
+    /// 作者路径（`.scene.json` / `.rscn` / 外部场景）。
+    pub path: String,
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct SceneManifestFile {
+    #[serde(default)]
+    scenes: Vec<SceneListEntry>,
+}
+
+/// 读取可编辑的场景列表（保留顺序）。
+pub fn read_scene_manifest(root: &Path) -> Result<Vec<SceneListEntry>, String> {
+    let path = manifest_path(root);
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(format!("无法读取 {}: {error}", path.display())),
+    };
+    let manifest: SceneManifestFile =
+        toml::from_str(&text).map_err(|error| format!("解析 {} 失败: {error}", path.display()))?;
+    Ok(manifest.scenes)
+}
+
+/// 写回场景列表（顺序与 enabled 直接决定 build-scenes 的行为）。
+pub fn write_scene_manifest(root: &Path, scenes: &[SceneListEntry]) -> Result<(), String> {
+    let mut seen = std::collections::HashSet::new();
+    for entry in scenes {
+        if entry.name.trim().is_empty() {
+            return Err("场景名不能为空".into());
+        }
+        if entry.path.trim().is_empty() {
+            return Err(format!("场景 '{}' 的路径不能为空", entry.name));
+        }
+        if !seen.insert(entry.name.trim()) {
+            return Err(format!("场景名重复：{}", entry.name));
+        }
+    }
+    let path = manifest_path(root);
+    let file = SceneManifestFile {
+        scenes: scenes.to_vec(),
+    };
+    let body = toml::to_string_pretty(&file).map_err(|error| format!("序列化场景列表失败: {error}"))?;
+    let text = format!(
+        "# Scene list edited by PrismaRev Editor (order = build/startup order).\n{body}"
+    );
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("无法创建 {}: {error}", parent.display()))?;
+    }
+    std::fs::write(&path, text).map_err(|error| format!("无法写入 {}: {error}", path.display()))
 }
 
 /// 枚举清单中的所有场景，按名字排序。
@@ -62,6 +126,7 @@ pub fn list_playable_scenes(root: &Path) -> Result<Vec<PlayableScene>, String> {
     let mut scenes: Vec<PlayableScene> = manifest
         .scenes
         .into_iter()
+        .filter(|entry| entry.enabled)
         .map(|entry| {
             let stem = Path::new(&entry.path)
                 .file_stem()
@@ -125,5 +190,42 @@ mod tests {
         assert_eq!(scenes.len(), 1);
         assert_eq!(scenes[0].name, "intro");
         assert!(scenes[0].doc_path.is_some());
+    }
+
+    #[test]
+    fn disabled_scene_is_not_playable() {
+        let dir = std::env::temp_dir().join("prism-editor-api-play-disabled");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("assets")).unwrap();
+        std::fs::write(
+            dir.join("assets/scenes.toml"),
+            "[[scenes]]\nname = \"a\"\npath = \"scenes/a.rscn\"\nenabled = false\n\
+             [[scenes]]\nname = \"b\"\npath = \"scenes/b.rscn\"\n",
+        )
+        .unwrap();
+        let scenes = list_playable_scenes(&dir).unwrap();
+        assert_eq!(scenes.len(), 1);
+        assert_eq!(scenes[0].name, "b");
+    }
+
+    #[test]
+    fn scene_manifest_roundtrips_order_and_enabled() {
+        let dir = std::env::temp_dir().join("prism-editor-api-play-roundtrip");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("assets")).unwrap();
+        let entries = vec![
+            SceneListEntry {
+                name: "first".into(),
+                path: "scenes/first.rscn".into(),
+                enabled: true,
+            },
+            SceneListEntry {
+                name: "second".into(),
+                path: "scenes/second.scene.json".into(),
+                enabled: false,
+            },
+        ];
+        write_scene_manifest(&dir, &entries).unwrap();
+        assert_eq!(read_scene_manifest(&dir).unwrap(), entries);
     }
 }

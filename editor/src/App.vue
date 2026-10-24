@@ -2067,7 +2067,7 @@ onUnmounted(() => {
 
         <template #build>
         <BuildPanel
-          :playable-scenes="playableScenes.map((scene) => scene.name)"
+          :scenes="scenes"
           :project-root="projectRoot"
           @built="refreshPlayable"
         />

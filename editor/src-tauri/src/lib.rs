@@ -13,8 +13,8 @@ use std::sync::Mutex;
 
 use prism_editor_api::{
     AssetInfo, AssetMutation, AssetRef, DocKind, EntityPreset, InstantiateResult, MoveResult,
-    PlayableScene, ProjectSettingsData, RenderSettingsData, SceneEntry, ScenePackageStatus,
-    SceneTemplate, Schema,
+    PlayableScene, ProjectSettingsData, RenderSettingsData, SceneEntry, SceneListEntry,
+    ScenePackageStatus, SceneTemplate, Schema,
 };
 use tauri::{Emitter, Manager, State};
 
@@ -588,6 +588,20 @@ fn editor_list_playable_scenes() -> Result<Vec<PlayableScene>, String> {
     prism_editor_api::list_playable_scenes(&root)
 }
 
+/// 可编辑的场景列表（Build Settings，保持顺序）。
+#[tauri::command]
+fn editor_scene_manifest() -> Result<Vec<SceneListEntry>, String> {
+    let root = prism_editor_api::find_project_root()?;
+    prism_editor_api::read_scene_manifest(&root)
+}
+
+/// 写回场景列表（顺序 / enabled）。
+#[tauri::command]
+fn editor_write_scene_manifest(scenes: Vec<SceneListEntry>) -> Result<(), String> {
+    let root = prism_editor_api::find_project_root()?;
+    prism_editor_api::write_scene_manifest(&root, &scenes)
+}
+
 /// 运行时场景包（`assets/scenes.pak`）状态。
 #[tauri::command]
 fn editor_scene_package_status() -> Result<ScenePackageStatus, String> {
@@ -1065,6 +1079,8 @@ pub fn run() {
             editor_bake_gi,
             editor_generate_heightmap,
             editor_list_playable_scenes,
+            editor_scene_manifest,
+            editor_write_scene_manifest,
             editor_scene_package_status,
             editor_render_settings,
             editor_write_render_settings,

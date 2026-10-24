@@ -77,6 +77,10 @@ Conventions) before touching any matrix/coordinate math — deviating from those
     (+`--release`) → `build-scenes` → 把 exe/scenes.pak/settings.toml 复制到
     `[build].output_dir`（默认 `build/windows`，已 gitignore），可选构建后运行。
     命令是 `editor_build_project`；编辑器仍不链接 cooker/build 流水线。
+  - Build Settings 的**场景列表可编辑**（Unity 风格）：勾选 `enabled`、上下移动、
+    移除、从 `assets/scenes` 添加；顺序即 `assets/scenes.toml` 顺序，第一个启用项是
+    启动场景。Tauri 命令 `editor_scene_manifest` / `editor_write_scene_manifest`；
+    engine 的 `SceneManifestEntry.enabled` 与 build-scenes 都会跳过未启用项。
   - 「日志」是独立 dock 面板（`log`），同时区分 **编辑器 / Game** 两个来源，并按
     `error/warn/info/debug/trace/panic` 过滤。`editor_play_scene` 用 piped
     stdout/stderr 启动游戏，读取线程把每行写入共享 ring buffer（`editor_preview_logs`

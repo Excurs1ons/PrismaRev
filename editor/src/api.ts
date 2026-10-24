@@ -20,6 +20,7 @@ import type {
   RenderSettingsData,
   SceneDoc,
   SceneEntry,
+  SceneListEntry,
   ScenePackageStatus,
   SceneTemplate,
   Schema,
@@ -303,6 +304,16 @@ export function cookScene(path: string): Promise<string> {
 /** `assets/scenes.toml` 中的可运行场景名。 */
 export function listPlayableScenes(): Promise<PlayableScene[]> {
   return call<PlayableScene[]>("editor_list_playable_scenes");
+}
+
+/** 读取可编辑的 Build Settings 场景列表。 */
+export function sceneManifest(): Promise<SceneListEntry[]> {
+  return call<SceneListEntry[]>("editor_scene_manifest");
+}
+
+/** 写回 Build Settings 场景列表（顺序 / enabled）。 */
+export function writeSceneManifest(scenes: SceneListEntry[]): Promise<void> {
+  return call<void>("editor_write_scene_manifest", { scenes });
 }
 
 /** 运行时场景包状态。 */
