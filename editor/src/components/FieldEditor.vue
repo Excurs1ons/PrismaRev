@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, inject } from "vue";
+import { computed, inject, ref } from "vue";
 import ColorField from "./ColorField.vue";
 import NumberField from "./NumberField.vue";
 import { ASSETS_KEY, ASSET_PICKER_KEY } from "../keys";
@@ -184,6 +184,28 @@ async function pickAsset() {
   if (picked !== null && picked !== undefined) setOp(picked);
 }
 
+// —— 从资产管理器拖拽到字段 ——
+const dragOver = ref(false);
+
+function isAssetDrag(event: DragEvent): boolean {
+  return Array.from(event.dataTransfer?.types ?? []).includes("application/x-prism-asset");
+}
+
+function onAssetDragOver(event: DragEvent) {
+  if (kind.value !== "string" || hint.value?.readOnly || !isAssetDrag(event)) return;
+  event.preventDefault();
+  dragOver.value = true;
+}
+
+function onAssetDrop(event: DragEvent) {
+  dragOver.value = false;
+  if (kind.value !== "string" || hint.value?.readOnly) return;
+  const path = event.dataTransfer?.getData("application/x-prism-asset");
+  if (!path) return;
+  event.preventDefault();
+  setOp(path);
+}
+
 function onText(event: Event) {
   set((event.target as HTMLInputElement).value);
 }
@@ -195,7 +217,7 @@ function onBool(event: Event) {
 <template>
   <!-- 对象：按 JSON 的键渲染，schema 提供字段类型/只读/嵌套类型 -->
   <div v-if="kind === 'object'">
-    <div class="row" :class="{ 'no-label': !label }">
+    <div class="row" :class="{ 'no-label': !label }" :data-field="pathStr">
       <div v-if="label" class="label">
         {{ label }}<span v-if="hint?.readOnly" class="ro"> ·只读</span>
       </div>
@@ -232,7 +254,7 @@ function onBool(event: Event) {
 
   <!-- 颜色：取色盘 + 通道数值 + alpha -->
   <div v-else-if="isColor">
-    <div class="row" :class="{ 'no-label': !label }">
+    <div class="row" :class="{ 'no-label': !label }" :data-field="pathStr">
       <div v-if="label" class="label">
         {{ label }}<span v-if="hint?.readOnly" class="ro"> ·只读</span>
       </div>
@@ -246,7 +268,7 @@ function onBool(event: Event) {
 
   <!-- 数组 / 列表 -->
   <div v-else-if="kind === 'array'">
-    <div class="row" :class="{ 'no-label': !label }">
+    <div class="row" :class="{ 'no-label': !label }" :data-field="pathStr">
       <div v-if="label" class="label">
         {{ label }}<span v-if="hint?.readOnly" class="ro"> ·只读</span>
       </div>
@@ -274,11 +296,17 @@ function onBool(event: Event) {
   </div>
 
   <!-- 标量 -->
-  <div v-else class="row" :class="{ 'no-label': !label }">
+  <div v-else class="row" :class="{ 'no-label': !label }" :data-field="pathStr">
     <div v-if="label" class="label">
       {{ label }}<span v-if="hint?.readOnly" class="ro"> ·只读</span>
     </div>
-    <div class="scalar">
+    <div
+      class="scalar"
+      :class="{ 'drop-target': dragOver }"
+      @dragover="onAssetDragOver"
+      @dragleave="dragOver = false"
+      @drop="onAssetDrop"
+    >
       <input
         v-if="kind === 'bool'"
         type="checkbox"

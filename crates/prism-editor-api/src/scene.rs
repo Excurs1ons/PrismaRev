@@ -657,18 +657,11 @@ pub fn delete_entities(
     Ok(doc_with_entities(doc, out))
 }
 
-/// 从场景中提取「根实体 + 全部后代」为一个预制体文档。
-///
-/// 提取出的根实体父级置为 `null`（实例化时再决定挂到哪里），
-/// 内部父子索引重排到预制体自己的下标空间。
-pub fn extract_subtree(scene: &serde_json::Value, root: usize) -> Result<serde_json::Value, String> {
-    validate_doc(scene)?;
-    let entities = entities_of(scene)?;
-    if root >= entities.len() {
-        return Err(format!("实体下标 {root} 越界"));
-    }
+/// 预制体实例链接所处的组件名。
+pub const PREFAB_LINK_COMPONENT: &str = "prism_engine::scene::PrefabInstance";
 
-    // DFS 收集子树（父先于子），保证父索引总是已出现过的下标。
+/// 子树下标（DFS，父先于子，`root` 在首位）。
+fn subtree_indices(entities: &[serde_json::Value], root: usize) -> Vec<usize> {
     let mut order: Vec<usize> = Vec::new();
     let mut stack = vec![root];
     while let Some(index) = stack.pop() {
@@ -677,13 +670,27 @@ pub fn extract_subtree(scene: &serde_json::Value, root: usize) -> Result<serde_j
         }
         order.push(index);
         for child in (0..entities.len()).rev() {
-            let parent = entities[child].get("parent").and_then(|value| value.as_u64());
-            if parent == Some(index as u64) && !order.contains(&child) {
+            if parent_of(&entities[child]) == Some(index) && !order.contains(&child) {
                 stack.push(child);
             }
         }
     }
+    order
+}
 
+/// 从场景中提取「根实体 + 全部后代」为一个预制体文档。
+///
+/// 提取出的根实体父级置为 `null`（实例化时再决定挂到哪里），内部父子索引重排到
+/// 预制体自己的下标空间；根上的 [`PREFAB_LINK_COMPONENT`] 会被剥掉
+/// （预制体不该记录「自己是哪个预制体的实例」）。
+pub fn extract_subtree(scene: &serde_json::Value, root: usize) -> Result<serde_json::Value, String> {
+    validate_doc(scene)?;
+    let entities = entities_of(scene)?;
+    if root >= entities.len() {
+        return Err(format!("实体下标 {root} 越界"));
+    }
+
+    let order = subtree_indices(entities, root);
     let mapping: std::collections::HashMap<usize, u32> = order
         .iter()
         .enumerate()
@@ -694,10 +701,8 @@ pub fn extract_subtree(scene: &serde_json::Value, root: usize) -> Result<serde_j
     for old_index in &order {
         let mut entity = entities[*old_index].clone();
         // 不在子树内的父（含根实体原本的父）→ null。
-        let new_parent = entity
-            .get("parent")
-            .and_then(|value| value.as_u64())
-            .and_then(|parent| mapping.get(&(parent as usize)).copied());
+        let new_parent =
+            parent_of(&entity).and_then(|parent| mapping.get(&parent).copied());
         entity["parent"] = match new_parent {
             Some(parent) => serde_json::json!(parent),
             None => serde_json::json!(null),
@@ -705,17 +710,39 @@ pub fn extract_subtree(scene: &serde_json::Value, root: usize) -> Result<serde_j
         extracted.push(entity);
     }
 
+    // 剥掉根上的实例链接。
+    if let Some(first) = extracted.first_mut() {
+        if let Some(components) = first
+            .get_mut("components")
+            .and_then(|value| value.as_object_mut())
+        {
+            components.remove(PREFAB_LINK_COMPONENT);
+        }
+    }
+
     Ok(serde_json::json!({ "version": 1, "entities": extracted }))
+}
+
+/// 预制体实例链接（编辑器「反向链接」用）。
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PrefabLink {
+    /// 场景中实例根实体的下标。
+    pub index: usize,
+    /// 预制体路径（相对项目根）。
+    pub prefab: String,
 }
 
 /// 把预制体实例化进场景（追加到末尾），返回新文档与插入下标。
 ///
 /// 预制体内部的父索引整体平移到新位置；预制体的根实体挂到 `parent`
 /// （`None` = 作为场景根）。名字与场景已有实体去重（追加 `_2`、`_3`…）。
+/// `link` 非空时给每个预制体根打上 [`PrefabLink`] 记录。
 pub fn instantiate_prefab(
     scene: &serde_json::Value,
     prefab: &serde_json::Value,
     parent: Option<u32>,
+    link: Option<&str>,
 ) -> Result<InstantiateResult, String> {
     validate_doc(scene)?;
     validate_doc(prefab)?;
@@ -757,7 +784,8 @@ pub fn instantiate_prefab(
         names.push(name.clone());
         entity["name"] = serde_json::json!(name);
 
-        let new_parent = match entity.get("parent").and_then(|value| value.as_u64()) {
+        let prefab_parent = entity.get("parent").and_then(|value| value.as_u64());
+        let new_parent = match prefab_parent {
             Some(prefab_parent) => Some(base as u32 + prefab_parent as u32),
             None => parent,
         };
@@ -765,6 +793,21 @@ pub fn instantiate_prefab(
             Some(parent) => serde_json::json!(parent),
             None => serde_json::json!(null),
         };
+
+        // 预制体的根实体记录来源（编辑器反向链接用）。
+        if prefab_parent.is_none() {
+            if let Some(path) = link {
+                if let Some(components) = entity
+                    .get_mut("components")
+                    .and_then(|value| value.as_object_mut())
+                {
+                    components.insert(
+                        PREFAB_LINK_COMPONENT.to_string(),
+                        serde_json::json!({ "prefab": path }),
+                    );
+                }
+            }
+        }
 
         inserted.push(out.len());
         out.push(entity);
@@ -774,6 +817,121 @@ pub fn instantiate_prefab(
         doc: serde_json::json!({ "version": version, "entities": out }),
         inserted,
     })
+}
+
+/// 列出文档里所有预制体实例根（反向链接）。
+pub fn prefab_instances(doc: &serde_json::Value) -> Vec<PrefabLink> {
+    let Ok(entities) = entities_of(doc) else {
+        return Vec::new();
+    };
+    entities
+        .iter()
+        .enumerate()
+        .filter_map(|(index, entity)| {
+            let prefab = entity
+                .get("components")?
+                .get(PREFAB_LINK_COMPONENT)?
+                .get("prefab")?
+                .as_str()?;
+            Some(PrefabLink {
+                index,
+                prefab: prefab.to_string(),
+            })
+        })
+        .collect()
+}
+
+/// 把某个实例根**还原**成预制体的当前内容。
+///
+/// 删掉该实体的整棵子树，再用 `prefab` 重新实例化到原父级下，并保留原来的名字。
+pub fn revert_prefab_instance(
+    scene: &serde_json::Value,
+    root: usize,
+    prefab: &serde_json::Value,
+    link: Option<&str>,
+) -> Result<MoveResult, String> {
+    validate_doc(scene)?;
+    let entities = entities_of(scene)?;
+    if root >= entities.len() {
+        return Err(format!("实体下标 {root} 越界"));
+    }
+
+    let keep_name = entities[root]
+        .get("name")
+        .and_then(|value| value.as_str())
+        .map(|name| name.to_string());
+    let parent = parent_of(&entities[root]);
+    let subtree = subtree_indices(entities, root);
+
+    // 删除子树后，原父实体的新下标 = 原下标 - 子树中排在其前面的个数。
+    let new_parent = parent.map(|parent| {
+        let removed_before = subtree.iter().filter(|index| **index < parent).count();
+        parent - removed_before
+    });
+
+    let trimmed = delete_entities(scene, &subtree)?;
+    let result = instantiate_prefab(&trimmed, prefab, new_parent.map(|p| p as u32), link)?;
+    let new_root = *result
+        .inserted
+        .first()
+        .ok_or_else(|| "预制体没有实体，无法还原".to_string())?;
+
+    let mut doc = result.doc;
+    if let Some(name) = keep_name {
+        if let Some(entity) = doc
+            .get_mut("entities")
+            .and_then(|value| value.as_array_mut())
+            .and_then(|entities| entities.get_mut(new_root))
+        {
+            entity["name"] = serde_json::json!(name);
+        }
+    }
+
+    Ok(MoveResult {
+        doc,
+        index: new_root,
+    })
+}
+
+/// 解除实例链接（只去掉记录，不动实体内容）。
+pub fn unlink_prefab_instance(
+    scene: &serde_json::Value,
+    root: usize,
+) -> Result<serde_json::Value, String> {
+    validate_doc(scene)?;
+    let mut entities = entities_of(scene)?.clone();
+    if root >= entities.len() {
+        return Err(format!("实体下标 {root} 越界"));
+    }
+    if let Some(components) = entities[root]
+        .get_mut("components")
+        .and_then(|value| value.as_object_mut())
+    {
+        components.remove(PREFAB_LINK_COMPONENT);
+    }
+    Ok(doc_with_entities(scene, entities))
+}
+
+/// 把文档里所有引用 `prefab_path` 的实例都还原成 `prefab` 的内容。
+///
+/// 从大到小处理实例根：删除只会影响更靠后的下标，因此前面的根仍然有效。
+pub fn sync_prefab_instances(
+    scene: &serde_json::Value,
+    prefab_path: &str,
+    prefab: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let mut roots: Vec<usize> = prefab_instances(scene)
+        .into_iter()
+        .filter(|link| link.prefab == prefab_path)
+        .map(|link| link.index)
+        .collect();
+    roots.sort_unstable_by(|a, b| b.cmp(a));
+
+    let mut doc = scene.clone();
+    for root in roots {
+        doc = revert_prefab_instance(&doc, root, prefab, Some(prefab_path))?.doc;
+    }
+    Ok(doc)
 }
 
 #[cfg(test)]
@@ -948,7 +1106,7 @@ mod tests {
             ]
         });
 
-        let result = instantiate_prefab(&scene, &prefab, Some(0)).unwrap();
+        let result = instantiate_prefab(&scene, &prefab, Some(0), None).unwrap();
         validate_doc(&result.doc).unwrap();
         assert_eq!(result.inserted, vec![2, 3]);
 
@@ -962,7 +1120,118 @@ mod tests {
         assert_eq!(entities[3]["parent"], 2);
 
         // 越界父实体被拒绝。
-        assert!(instantiate_prefab(&scene, &prefab, Some(9)).is_err());
+        assert!(instantiate_prefab(&scene, &prefab, Some(9), None).is_err());
+    }
+
+    fn demo_scene_with_host() -> serde_json::Value {
+        serde_json::json!({
+            "version": 1,
+            "entities": [
+                { "name": "host", "parent": null, "transform": {}, "components": {} }
+            ]
+        })
+    }
+
+    fn demo_prefab() -> serde_json::Value {
+        serde_json::json!({
+            "version": 1,
+            "entities": [
+                { "name": "Door", "parent": null, "transform": {}, "components": {
+                    "prism_engine::scene::Active": true } },
+                { "name": "Handle", "parent": 0, "transform": {}, "components": {} }
+            ]
+        })
+    }
+
+    #[test]
+    fn instantiate_records_and_extract_strips_the_link() {
+        let scene = demo_scene_with_host();
+        let prefab = demo_prefab();
+        let path = "assets/prefabs/door.prefab.json";
+
+        let result = instantiate_prefab(&scene, &prefab, Some(0), Some(path)).unwrap();
+        let links = prefab_instances(&result.doc);
+        assert_eq!(
+            links,
+            vec![PrefabLink {
+                index: 1,
+                prefab: path.to_string()
+            }]
+        );
+
+        // 提取子树时剥掉链接（预制体不该记录自己是哪来的）。
+        let extracted = extract_subtree(&result.doc, 1).unwrap();
+        assert!(extracted["entities"][0]["components"]
+            .get(PREFAB_LINK_COMPONENT)
+            .is_none());
+
+        // 解除链接。
+        let unlinked = unlink_prefab_instance(&result.doc, 1).unwrap();
+        assert!(prefab_instances(&unlinked).is_empty());
+    }
+
+    #[test]
+    fn revert_restores_prefab_content_and_keeps_name_and_parent() {
+        let scene = demo_scene_with_host();
+        let prefab = demo_prefab();
+        let path = "assets/prefabs/door.prefab.json";
+
+        let instantiated = instantiate_prefab(&scene, &prefab, Some(0), Some(path)).unwrap();
+        // 改坏实例内容（改名字 + 去掉组件）。
+        let mut broken = instantiated.doc.clone();
+        broken["entities"][1]["name"] = serde_json::json!("Broken");
+        broken["entities"][1]["components"] = serde_json::json!({});
+
+        let reverted = revert_prefab_instance(&broken, 1, &prefab, Some(path)).unwrap();
+        validate_doc(&reverted.doc).unwrap();
+
+        let entities = reverted.doc["entities"].as_array().unwrap();
+        assert_eq!(entities.len(), 3);
+        // 名字与父级保留，内容来自预制体。
+        assert_eq!(entities[reverted.index]["name"], "Broken");
+        assert_eq!(entities[reverted.index]["parent"], 0);
+        assert_eq!(
+            entities[reverted.index]["components"]["prism_engine::scene::Active"],
+            serde_json::json!(true)
+        );
+        // 链接仍在，且只有这一个实例。
+        assert_eq!(prefab_instances(&reverted.doc).len(), 1);
+    }
+
+    #[test]
+    fn sync_updates_every_instance_of_the_same_prefab() {
+        let scene = demo_scene_with_host();
+        let prefab = demo_prefab();
+        let path = "assets/prefabs/door.prefab.json";
+
+        let once = instantiate_prefab(&scene, &prefab, None, Some(path)).unwrap();
+        let twice = instantiate_prefab(&once.doc, &prefab, None, Some(path)).unwrap();
+        assert_eq!(prefab_instances(&twice.doc).len(), 2);
+
+        // 把两个实例的内容改坏（但保留链接组件）。
+        let mut broken = twice.doc.clone();
+        for entity in broken["entities"].as_array_mut().unwrap().iter_mut().skip(1) {
+            if let Some(components) = entity["components"].as_object_mut() {
+                components.remove("prism_engine::scene::Active");
+            }
+        }
+        assert_eq!(prefab_instances(&broken).len(), 2);
+
+        let synced = sync_prefab_instances(&broken, path, &prefab).unwrap();
+        validate_doc(&synced).unwrap();
+        let entities = synced["entities"].as_array().unwrap();
+        assert_eq!(entities.len(), 5); // host + 2×(Door + Handle)
+        for entity in entities.iter().skip(1) {
+            if entity["name"].as_str().unwrap_or("").starts_with("Door") {
+                assert!(
+                    entity["components"]
+                        .get("prism_engine::scene::Active")
+                        .is_some(),
+                    "instance content was not restored: {entity}"
+                );
+            }
+        }
+        assert_eq!(prefab_instances(&synced).len(), 2);
     }
 
     /// a(0) → b(1) → c(2)，另有根 d(3)。

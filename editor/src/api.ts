@@ -6,6 +6,7 @@ import type {
   InstantiateResult,
   JsonValue,
   MoveResult,
+  PrefabLink,
   SceneDoc,
   SceneEntry,
   SceneTemplate,
@@ -148,13 +149,42 @@ export function createPrefabFromEntity(
   return call<string>("editor_create_prefab_from_entity", { doc, entityIndex, name });
 }
 
-/** 把预制体实例化进场景，返回新文档与插入下标。 */
+/** 把预制体实例化进场景，返回新文档与插入下标（同时记录反向链接）。 */
 export function instantiatePrefab(
   scene: SceneDoc,
   prefabPath: string,
   parent: number | null,
 ): Promise<InstantiateResult> {
   return call<InstantiateResult>("editor_instantiate_prefab", { scene, prefabPath, parent });
+}
+
+/** 文档里所有预制体实例根。 */
+export function prefabInstances(doc: SceneDoc): Promise<PrefabLink[]> {
+  return call<PrefabLink[]>("editor_prefab_instances", { doc });
+}
+
+/** 把某个实例根还原成预制体的当前内容。 */
+export function revertPrefabInstance(
+  doc: SceneDoc,
+  rootIndex: number,
+  prefab: string,
+): Promise<MoveResult> {
+  return call<MoveResult>("editor_revert_prefab_instance", { doc, rootIndex, prefab });
+}
+
+/** 把文档里所有引用该预制体的实例都还原一遍。 */
+export function syncPrefabInstances(doc: SceneDoc, prefab: string): Promise<SceneDoc> {
+  return call<SceneDoc>("editor_sync_prefab_instances", { doc, prefab });
+}
+
+/** 解除实例链接（不动实体内容）。 */
+export function unlinkPrefabInstance(doc: SceneDoc, rootIndex: number): Promise<SceneDoc> {
+  return call<SceneDoc>("editor_unlink_prefab_instance", { doc, rootIndex });
+}
+
+/** 提取「实体 + 后代」为预制体文档（「应用到预制体」用）。 */
+export function extractSubtree(doc: SceneDoc, rootIndex: number): Promise<SceneDoc> {
+  return call<SceneDoc>("editor_extract_subtree", { doc, rootIndex });
 }
 
 // ── 反射字段写入 / cook ─────────────────────────────────────────────────────

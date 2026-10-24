@@ -5,7 +5,9 @@ import { ASSETS_KEY } from "../keys";
 import { formatBytes } from "../format";
 import type { AssetInfo, AssetRef } from "../types";
 
-/** 侧栏「资产」面板：浏览 + 检索 + 查看引用位置。 */
+/** 侧栏「资产」面板：浏览 + 检索 + 查看引用位置 + 拖拽到字段。 */
+const emit = defineEmits<{ (e: "jump", ref: AssetRef): void }>();
+
 const assets = inject(ASSETS_KEY, null);
 
 const search = ref("");
@@ -66,6 +68,13 @@ async function copyPath() {
     // 剪贴板不可用时忽略（浏览器权限）。
   }
 }
+
+/** 拖拽到字段：自定义 MIME，避免和层级树的拖拽互相干扰。 */
+function onDragStart(asset: AssetInfo, event: DragEvent) {
+  event.dataTransfer?.setData("application/x-prism-asset", asset.path);
+  event.dataTransfer?.setData("text/plain", asset.path);
+  if (event.dataTransfer) event.dataTransfer.effectAllowed = "copy";
+}
 </script>
 
 <template>
@@ -81,6 +90,9 @@ async function copyPath() {
     :key="asset.path"
     class="list-item"
     :class="{ active: asset.path === selected?.path }"
+    draggable="true"
+    title="可拖到路径字段"
+    @dragstart="onDragStart(asset, $event)"
     @click="select(asset)"
   >
     <span class="badge">{{ asset.kind }}</span>
@@ -97,9 +109,16 @@ async function copyPath() {
       <template v-else-if="usage.length">{{ usage.length }} 处</template>
       <template v-else>未被任何场景引用</template>
     </div>
-    <div v-for="(ref, i) in usage" :key="i" class="hint usage">
-      {{ ref.scene }} · #{{ ref.entityIndex }} {{ ref.entity }} · {{ ref.component.split("::").pop() }}.{{ ref.field }}
-    </div>
+    <button
+      v-for="(ref, i) in usage"
+      :key="i"
+      class="usage-link"
+      title="打开该文档并定位到这个字段"
+      @click="emit('jump', ref)"
+    >
+      {{ ref.scene }} · #{{ ref.entityIndex }} {{ ref.entity }} ·
+      {{ ref.component.split("::").pop() }}.{{ ref.field }}
+    </button>
     <button class="ghost icon" style="margin-top: 4px" @click="copyPath">复制路径</button>
   </div>
 </template>

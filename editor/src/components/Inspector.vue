@@ -19,6 +19,11 @@ const props = defineProps<{
   schema: Schema;
   selectionCount: number;
   clipboard: ComponentClipboard | null;
+  /** 该实体若来自预制体，这里是预制体路径（相对项目根）。 */
+  prefabLink: string | null;
+  /** 「跳到使用处」时高亮的组件 / 字段。 */
+  highlightComponent: string | null;
+  highlightField: string | null;
 }>();
 
 const emit = defineEmits<{
@@ -26,6 +31,9 @@ const emit = defineEmits<{
   (e: "remove"): void;
   (e: "duplicate", index: number): void;
   (e: "save-prefab", index: number): void;
+  (e: "revert-prefab", index: number): void;
+  (e: "apply-prefab", index: number): void;
+  (e: "unlink-prefab", index: number): void;
   (e: "copy-component", name: string): void;
   (e: "paste-component"): void;
   (e: "clear-clipboard"): void;
@@ -227,6 +235,27 @@ const availableComponents = computed(() =>
     </div>
   </div>
 
+  <div v-if="prefabLink" class="card prefab-link">
+    <header>
+      <span class="title">预制体实例</span>
+      <span class="hint">{{ prefabLink }}</span>
+      <span class="spacer" />
+      <button class="ghost icon" title="用预制体的当前内容覆盖这个实例" @click="emit('revert-prefab', index)">
+        还原
+      </button>
+      <button
+        class="ghost icon"
+        title="把这个实例（含子级）的内容写回预制体文件"
+        @click="emit('apply-prefab', index)"
+      >
+        应用到预制体
+      </button>
+      <button class="ghost icon" title="解除链接（只去掉记录）" @click="emit('unlink-prefab', index)">
+        解除
+      </button>
+    </header>
+  </div>
+
   <div v-if="clipboard" class="card clipboard">
     <div class="card-body">
       <span class="hint">剪贴板：{{ shortName(clipboard.component) }}</span>
@@ -272,7 +301,12 @@ const availableComponents = computed(() =>
     </div>
   </div>
 
-  <div v-for="name in visibleComponents" :key="name" class="card">
+  <div
+    v-for="name in visibleComponents"
+    :key="name"
+    class="card"
+    :class="{ highlight: highlightComponent === name }"
+  >
     <header>
       <span class="title">{{ shortName(name) }}</span>
       <span class="hint">{{ name }}</span>
@@ -285,6 +319,13 @@ const availableComponents = computed(() =>
     <div class="card-body">
       <div v-if="filter && matchedFields(name).length" class="hint" style="margin-bottom: 4px">
         匹配字段：{{ matchedFields(name).join("、") }}
+      </div>
+      <div
+        v-if="highlightComponent === name && highlightField"
+        class="hint"
+        style="margin-bottom: 4px"
+      >
+        定位字段：{{ highlightField }}
       </div>
       <FieldEditor
         path=""

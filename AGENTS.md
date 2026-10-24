@@ -48,9 +48,14 @@ Conventions) before touching any matrix/coordinate math — deviating from those
   - 编辑器把**场景与预制体统一成「文档」**：同一 `{version, entities}` 形状，靠
     `DocKind` 区分目录/后缀 —— 场景 `assets/scenes/*.scene.json`、预制体
     `assets/prefabs/*.prefab.json`。因此层级树/检查器/撤销对两者完全通用；
-    「存为预制体」= 提取选中实体子树（`extract_subtree`），「插入」= `instantiate_prefab`
-    （追加到场景末尾、内部父索引平移、根挂到选中实体、名字去重）。当前是**复制式**实例化，
-    没有 prefab → 实例的反向链接/同步。
+    「存为预制体」= 提取选中实体子树（`extract_subtree`，会剥掉根上的实例链接），
+    「插入」= `instantiate_prefab`（追加到场景末尾、内部父索引平移、根挂到选中实体、名字去重）。
+  - 实例**有反向链接**：插入时给预制体根打上 `prism_engine::scene::PrefabInstance`
+    （`{ prefab: <相对项目根路径> }`）。它是 `prism-scene` 里的普通组件 —— 引擎运行时不查询
+    它（纯编辑器元数据），但因为它走注册表，所以能随场景 cook/加载，不必引入 sidecar 文件。
+    基于它提供：`revert_prefab_instance`（用预制体当前内容覆盖实例，保留名字与父级）、
+    `sync_prefab_instances`（同步本文档全部同源实例，从大到小处理避免下标漂移）、
+    `unlink_prefab_instance`，以及「应用到预制体」= `extract_subtree` + 覆盖写回预制体文件。
   - 组件字段改动**先本地即时提交**（拖动/输入要跟手），再交给 `editor_set_component_field`
     做**反射写入**：`from_object` 还原出组件 → `Reflect::set_field` 写字段（`#[reflect(read_only)]`
     被拒、类型经反射校验）→ `object_to_json` 还原作者 JSON，成功则静默回填（不新增撤销步）。

@@ -1,13 +1,15 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, provide, ref, shallowRef, watch } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, provide, ref, shallowRef, watch } from "vue";
 import AssetBrowser from "./components/AssetBrowser.vue";
 import AssetPicker from "./components/AssetPicker.vue";
 import HierarchyTree from "./components/HierarchyTree.vue";
 import Inspector from "./components/Inspector.vue";
 import * as api from "./api";
 import { ASSETS_KEY, ASSET_PICKER_KEY } from "./keys";
+import { PREFAB_LINK_COMPONENT } from "./types";
 import type {
   AssetInfo,
+  AssetRef,
   ComponentClipboard,
   DocKind,
   EntityJson,
@@ -82,6 +84,40 @@ const selectedEntity = computed<EntityJson | null>(() => {
   if (!doc.value || primary.value === null) return null;
   return doc.value.entities[primary.value] ?? null;
 });
+
+/** 「跳到使用处」时高亮的组件 / 字段。 */
+const highlightComponent = ref<string | null>(null);
+const highlightField = ref<string | null>(null);
+
+function prefabLinkOf(entity: EntityJson | null): string | null {
+  const link = entity?.components?.[PREFAB_LINK_COMPONENT] as { prefab?: string } | undefined;
+  return typeof link?.prefab === "string" ? link.prefab : null;
+}
+
+/** 主选中实体所属预制体（若有）。 */
+const prefabLink = computed(() => prefabLinkOf(selectedEntity.value));
+
+/** 当前文档里每个预制体各自的实例数。 */
+const instanceCounts = computed<Record<string, number>>(() => {
+  const counts: Record<string, number> = {};
+  for (const entity of doc.value?.entities ?? []) {
+    const link = prefabLinkOf(entity);
+    if (link) counts[link] = (counts[link] ?? 0) + 1;
+  }
+  return counts;
+});
+
+/** 文档列表项对应的预制体在当前文档里的实例数（按路径后缀匹配）。 */
+function instanceCountFor(entry: SceneEntry): number {
+  const normalized = entry.path.replace(/\\/g, "/");
+  const key = Object.keys(instanceCounts.value).find((link) => normalized.endsWith(link));
+  return key ? instanceCounts.value[key] : 0;
+}
+
+function prefabLinkFor(entry: SceneEntry): string | null {
+  const normalized = entry.path.replace(/\\/g, "/");
+  return Object.keys(instanceCounts.value).find((link) => normalized.endsWith(link)) ?? null;
+}
 
 function fail(e: unknown) {
   error.value = `${e}`;
@@ -393,6 +429,93 @@ async function insertPrefab(entry: SceneEntry) {
   }
 }
 
+async function revertPrefab(index: number) {
+  if (!doc.value || !prefabLink.value) return;
+  const link = prefabLink.value;
+  try {
+    const result = await api.revertPrefabInstance(doc.value, index, link);
+    commit(result.doc, `revert-prefab:${link}#${Date.now()}`);
+    selection.value = [result.index];
+    error.value = "";
+    status.value = `已从 ${link} 还原`;
+  } catch (e) {
+    fail(e);
+  }
+}
+
+async function applyPrefab(index: number) {
+  if (!doc.value || !prefabLink.value) return;
+  const link = prefabLink.value;
+  if (!window.confirm(`用当前实例内容覆盖预制体？\n${link}`)) return;
+  try {
+    const extracted = await api.extractSubtree(doc.value, index);
+    await api.writeDocument(`${projectRoot.value}/${link}`, extracted);
+    error.value = "";
+    status.value = `已应用到 ${link}`;
+    await refreshDocuments();
+  } catch (e) {
+    fail(e);
+  }
+}
+
+async function unlinkPrefab(index: number) {
+  if (!doc.value) return;
+  try {
+    const next = await api.unlinkPrefabInstance(doc.value, index);
+    commit(next, `unlink-prefab:${index}#${Date.now()}`);
+    error.value = "";
+    status.value = "已解除预制体链接";
+  } catch (e) {
+    fail(e);
+  }
+}
+
+/** 把这个文档里所有该预制体的实例同步一遍。 */
+async function syncPrefab(entry: SceneEntry) {
+  if (!doc.value) return;
+  const link = prefabLinkFor(entry);
+  if (!link) return;
+  busy.value = true;
+  try {
+    const next = await api.syncPrefabInstances(doc.value, link);
+    commit(next, `sync-prefab:${link}#${Date.now()}`);
+    error.value = "";
+    status.value = `已同步 ${instanceCounts.value[link]} 个实例`;
+  } catch (e) {
+    fail(e);
+  } finally {
+    busy.value = false;
+  }
+}
+
+/** 资产生成处的「跳到该字段」：打开对应文档、选中实体、高亮组件/字段。 */
+async function jumpToUsage(ref: AssetRef) {
+  if (currentPath.value !== ref.scenePath) {
+    if (!confirmDiscard()) return;
+    try {
+      const loaded = await api.readDocument(ref.scenePath);
+      resetHistory(
+        loaded,
+        ref.scenePath,
+        ref.scenePath.endsWith(".prefab.json") ? "prefab" : "scene",
+      );
+    } catch (e) {
+      fail(e);
+      return;
+    }
+  }
+  selection.value = [ref.entityIndex];
+  highlightComponent.value = ref.component;
+  highlightField.value = ref.field;
+  error.value = "";
+  status.value = `定位 ${ref.scene} · #${ref.entityIndex} ${ref.component.split("::").pop()}.${ref.field}`;
+  await nextTick();
+  const target =
+    document.querySelector(`[data-field="${ref.field}"]`) ??
+    document.querySelector(".card.highlight");
+  target?.scrollIntoView({ block: "center" });
+}
+
 async function savePrefabFromEntity(index: number) {
   if (!doc.value) return;
   const entity = doc.value.entities[index];
@@ -414,6 +537,9 @@ async function savePrefabFromEntity(index: number) {
 
 function onSelect(indices: number[]) {
   selection.value = indices.length ? indices : [];
+  // 手动选择时清掉「跳到使用处」的高亮。
+  highlightComponent.value = null;
+  highlightField.value = null;
 }
 
 async function onReparent(child: number, parent: number | null) {
@@ -702,6 +828,15 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
             >
               <span class="prefab-name">{{ p.name }}</span>
               <button
+                v-if="instanceCountFor(p)"
+                class="ghost icon"
+                :title="`用预制体当前内容覆盖本场景的 ${instanceCountFor(p)} 个实例`"
+                :disabled="busy"
+                @click.stop="syncPrefab(p)"
+              >
+                同步 {{ instanceCountFor(p) }}
+              </button>
+              <button
                 class="ghost icon"
                 title="实例化到当前场景（挂在选中实体下）"
                 :disabled="!hasDoc || !isScene || busy"
@@ -749,7 +884,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
         <div class="section grow">
           <div class="section-title"><span>资产</span></div>
           <div class="section-body">
-            <AssetBrowser />
+            <AssetBrowser @jump="jumpToUsage" />
           </div>
         </div>
       </aside>
@@ -763,10 +898,16 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
           :schema="schema"
           :selection-count="selection.length"
           :clipboard="clipboard"
+          :prefab-link="prefabLink"
+          :highlight-component="highlightComponent"
+          :highlight-field="highlightField"
           @update="onEntityUpdate"
           @remove="deleteSelection"
           @duplicate="duplicateEntity"
           @save-prefab="savePrefabFromEntity"
+          @revert-prefab="revertPrefab"
+          @apply-prefab="applyPrefab"
+          @unlink-prefab="unlinkPrefab"
           @copy-component="copyComponent"
           @paste-component="pasteComponent"
           @clear-clipboard="clearClipboard"

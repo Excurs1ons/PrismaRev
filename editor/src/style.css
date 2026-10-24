@@ -387,6 +387,48 @@ select:disabled {
   border-left: 2px solid var(--accent-2);
 }
 
+/* 预制体实例卡片：突出显示，便于看清来源 */
+.card.prefab-link {
+  border-color: rgba(110, 168, 255, 0.5);
+}
+.card.prefab-link > header {
+  border-left: 3px solid var(--accent);
+}
+
+/* 「跳到使用处」高亮 */
+.card.highlight {
+  border-color: var(--accent-2);
+  box-shadow: 0 0 0 1px var(--accent-2) inset;
+}
+
+/* 资产拖拽落点 */
+.scalar.drop-target input[type="text"] {
+  border-color: var(--accent-2);
+  background: rgba(95, 240, 216, 0.08);
+}
+
+/* 资产使用处（可点击跳转） */
+.usage-link {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  padding: 1px 0;
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+.usage-link:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+/* 可拖拽的资产行 */
+.list-item[draggable="true"] {
+  cursor: grab;
+}
+
 .logbar {
   flex: 0 0 auto;
   max-height: 30%;

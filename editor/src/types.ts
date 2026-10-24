@@ -57,6 +57,18 @@ export interface ComponentClipboard {
   value: JsonValue;
 }
 
+/**
+ * 预制体实例链接组件名（编辑器元数据，见 `prism-scene` 的 `PrefabInstance`）。
+ * 引擎运行时不查询它。
+ */
+export const PREFAB_LINK_COMPONENT = "prism_engine::scene::PrefabInstance";
+
+/** 一条预制体实例反向链接。 */
+export interface PrefabLink {
+  index: number;
+  prefab: string;
+}
+
 /** 资产元信息（资产管理器用）。 */
 export interface AssetInfo {
   path: string;

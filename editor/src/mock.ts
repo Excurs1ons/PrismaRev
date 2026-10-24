@@ -1,3 +1,4 @@
+import { PREFAB_LINK_COMPONENT } from "./types";
 import type {
   AssetInfo,
   AssetRef,
@@ -7,6 +8,7 @@ import type {
   InstantiateResult,
   JsonValue,
   MoveResult,
+  PrefabLink,
   SceneDoc,
   SceneEntry,
   SceneTemplate,
@@ -140,23 +142,28 @@ function extractSubtree(doc: SceneDoc, root: number): SceneDoc {
   const mapping = new Map<number, number>();
   order.forEach((oldIndex, newIndex) => mapping.set(oldIndex, newIndex));
 
-  return {
-    version: 1,
-    entities: order.map((oldIndex) => {
-      const entity = clone(doc.entities[oldIndex]);
-      const parent = entity.parent;
-      entity.parent =
-        parent === null || parent === undefined ? null : (mapping.get(parent) ?? null);
-      return entity;
-    }),
-  };
+  const entities = order.map((oldIndex) => {
+    const entity = clone(doc.entities[oldIndex]);
+    const parent = entity.parent;
+    entity.parent =
+      parent === null || parent === undefined ? null : (mapping.get(parent) ?? null);
+    return entity;
+  });
+
+  // 预制体不该记录「自己是哪个预制体的实例」。
+  if (entities[0]?.components) {
+    delete entities[0].components[PREFAB_LINK_COMPONENT];
+  }
+
+  return { version: 1, entities };
 }
 
-/** 实例化预制体（与 Rust 的 instantiate_prefab 同语义）。 */
+/** 实例化预制体（与 Rust 的 instantiate_prefab 同语义，含反向链接）。 */
 function instantiatePrefab(
   scene: SceneDoc,
   prefab: SceneDoc,
   parent: number | null,
+  link: string | null,
 ): InstantiateResult {
   validate(scene);
   validate(prefab);
@@ -181,16 +188,78 @@ function instantiatePrefab(
     names.push(name);
     entity.name = name;
 
-    entity.parent =
-      prefabEntity.parent === null || prefabEntity.parent === undefined
-        ? parent
-        : base + prefabEntity.parent;
+    const prefabParent = prefabEntity.parent;
+    const isRoot = prefabParent === null || prefabParent === undefined;
+    entity.parent = isRoot ? parent : base + prefabParent;
+
+    if (isRoot && link) {
+      entity.components = {
+        ...(entity.components ?? {}),
+        [PREFAB_LINK_COMPONENT]: { prefab: link },
+      };
+    }
 
     inserted.push(entities.length);
     entities.push(entity);
   }
 
   return { doc: { version: scene.version ?? 1, entities }, inserted };
+}
+
+/** 子树下标（DFS，根在首位）。 */
+function subtreeIndices(doc: SceneDoc, root: number): number[] {
+  const order: number[] = [];
+  const stack = [root];
+  while (stack.length) {
+    const index = stack.pop() as number;
+    if (order.includes(index)) continue;
+    order.push(index);
+    for (let child = doc.entities.length - 1; child >= 0; child--) {
+      if (doc.entities[child].parent === index && !order.includes(child)) stack.push(child);
+    }
+  }
+  return order;
+}
+
+function prefabLinks(doc: SceneDoc): PrefabLink[] {
+  const links: PrefabLink[] = [];
+  doc.entities.forEach((entity, index) => {
+    const link = entity.components?.[PREFAB_LINK_COMPONENT] as { prefab?: string } | undefined;
+    if (typeof link?.prefab === "string") links.push({ index, prefab: link.prefab });
+  });
+  return links;
+}
+
+/** 把某个实例根还原成预制体当前内容（与 Rust 的 revert_prefab_instance 同语义）。 */
+function revertPrefabInstance(
+  doc: SceneDoc,
+  root: number,
+  prefab: SceneDoc,
+  link: string | null,
+): MoveResult {
+  validate(doc);
+  if (root < 0 || root >= doc.entities.length) throw new Error(`实体下标 ${root} 越界`);
+
+  const keepName = doc.entities[root].name ?? null;
+  const parent = doc.entities[root].parent;
+  const subtree = subtreeIndices(doc, root);
+  const newParent =
+    parent === null || parent === undefined
+      ? null
+      : parent - subtree.filter((index) => index < parent).length;
+
+  const trimmed = deleteEntitiesInDoc(doc, subtree);
+  const result = instantiatePrefab(trimmed, prefab, newParent, link);
+  const newRoot = result.inserted[0];
+  if (keepName !== null && newRoot !== undefined) {
+    result.doc.entities[newRoot].name = keepName;
+  }
+  return { doc: result.doc, index: newRoot ?? root };
+}
+
+/** `/preview/assets/prefabs/x.prefab.json` → `assets/prefabs/x.prefab.json` */
+function rootRelative(path: string): string {
+  return path.replace(/^\/preview\//, "");
 }
 
 function isDescendant(entities: EntityJson[], node: number, ancestor: number): boolean {
@@ -402,8 +471,40 @@ async function handle(cmd: string, args: Record<string, unknown>): Promise<unkno
       const prefab = data.docs[prefabPath];
       if (!prefab) throw new Error(`预览中没有该预制体：${prefabPath}`);
       const parent = args.parent === null || args.parent === undefined ? null : Number(args.parent);
-      return instantiatePrefab(args.scene as SceneDoc, prefab, parent);
+      return instantiatePrefab(args.scene as SceneDoc, prefab, parent, rootRelative(prefabPath));
     }
+    case "editor_prefab_instances":
+      return prefabLinks(args.doc as SceneDoc);
+    case "editor_revert_prefab_instance": {
+      const link = String(args.prefab);
+      const prefab = data.docs[`/preview/${link}`];
+      if (!prefab) throw new Error(`预览中没有该预制体：${link}`);
+      return revertPrefabInstance(args.doc as SceneDoc, Number(args.rootIndex), prefab, link);
+    }
+    case "editor_sync_prefab_instances": {
+      const link = String(args.prefab);
+      const prefab = data.docs[`/preview/${link}`];
+      if (!prefab) throw new Error(`预览中没有该预制体：${link}`);
+      let doc = args.doc as SceneDoc;
+      const roots = prefabLinks(doc)
+        .filter((item) => item.prefab === link)
+        .map((item) => item.index)
+        .sort((a, b) => b - a);
+      for (const root of roots) {
+        doc = revertPrefabInstance(doc, root, prefab, link).doc;
+      }
+      return doc;
+    }
+    case "editor_unlink_prefab_instance": {
+      const doc = clone(args.doc as SceneDoc);
+      const root = Number(args.rootIndex);
+      if (doc.entities[root]?.components) {
+        delete doc.entities[root].components[PREFAB_LINK_COMPONENT];
+      }
+      return doc;
+    }
+    case "editor_extract_subtree":
+      return extractSubtree(args.doc as SceneDoc, Number(args.rootIndex));
 
     // ── 反射字段写入 ─────────────────────────────────────────────────────
     case "editor_set_component_field": {

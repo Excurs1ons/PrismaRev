@@ -399,6 +399,9 @@ pub fn register_builtin_components(registry: &mut ComponentRegistry) {
     // ── 本地变换 ──
     registry.register_reflect_serde::<LocalTransform>("prism_engine::scene::LocalTransform");
 
+    // ── 预制体实例（编辑器元数据）──
+    registry.register_reflect_serde::<PrefabInstance>("prism_engine::scene::PrefabInstance");
+
     // ── UI 组件 ──
     registry.register_reflect_serde::<Node>("prism_engine::ui::Node");
     registry.register_reflect_serde::<Style>("prism_engine::ui::Style");

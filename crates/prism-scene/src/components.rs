@@ -349,6 +349,23 @@ impl Default for FlyCameraController {
 }
 
 // ---------------------------------------------------------------------------
+// Prefab instances (editor metadata)
+// ---------------------------------------------------------------------------
+
+/// **编辑器元数据**：该实体（子树根）是从哪个预制体实例化来的。
+///
+/// 引擎运行时对它没有任何行为（没有 system 查询它），但它是普通场景组件，
+/// 因此会随场景一起 cook/加载 —— 这样编辑器才能做到「反向链接 / 还原 / 应用到预制体 /
+/// 同步同源实例」，而不需要额外的 sidecar 文件。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Reflect)]
+#[reflect(name = "prism_engine::scene::PrefabInstance")]
+#[serde(default)]
+pub struct PrefabInstance {
+    /// 预制体路径（**相对项目根**，`/` 分隔），如 `assets/prefabs/door.prefab.json`。
+    pub prefab: String,
+}
+
+// ---------------------------------------------------------------------------
 // Identification
 // ---------------------------------------------------------------------------
 

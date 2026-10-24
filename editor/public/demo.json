@@ -1498,6 +1498,25 @@
       },
       {
         "defaultJson": {
+          "prefab": ""
+        },
+        "fields": [
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "string",
+            "name": "prefab",
+            "readOnly": false,
+            "structType": null
+          }
+        ],
+        "isComponent": true,
+        "name": "prism_engine::scene::PrefabInstance",
+        "typeId": "055e0e33058d5c8e",
+        "version": 1
+      },
+      {
+        "defaultJson": {
           "enabled": true,
           "env_asset": 0,
           "hdr_path": ""

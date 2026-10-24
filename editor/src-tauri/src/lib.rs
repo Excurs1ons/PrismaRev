@@ -174,15 +174,68 @@ fn editor_create_prefab_from_entity(
         .map(|path| path.to_string_lossy().into_owned())
 }
 
-/// 把预制体实例化进场景，返回新文档与插入下标。
+/// 把绝对路径转成「相对项目根、`/` 分隔」的路径（找不到前缀时原样返回）。
+fn relative_to(root: &std::path::Path, path: &std::path::Path) -> String {
+    path.strip_prefix(root)
+        .map(|rest| rest.to_string_lossy().replace('\\', "/"))
+        .unwrap_or_else(|_| path.to_string_lossy().replace('\\', "/"))
+}
+
+/// 把预制体实例化进场景，返回新文档与插入下标（并记录反向链接）。
 #[tauri::command]
 fn editor_instantiate_prefab(
     scene: serde_json::Value,
     prefab_path: String,
     parent: Option<u32>,
 ) -> Result<InstantiateResult, String> {
+    let root = prism_editor_api::find_project_root()?;
     let prefab = prism_editor_api::read_doc(std::path::Path::new(&prefab_path))?;
-    prism_editor_api::instantiate_prefab(&scene, &prefab, parent)
+    let link = relative_to(&root, std::path::Path::new(&prefab_path));
+    prism_editor_api::instantiate_prefab(&scene, &prefab, parent, Some(&link))
+}
+
+/// 文档里所有预制体实例根（反向链接）。
+#[tauri::command]
+fn editor_prefab_instances(doc: serde_json::Value) -> Vec<prism_editor_api::PrefabLink> {
+    prism_editor_api::prefab_instances(&doc)
+}
+
+/// 把某个实例根还原成预制体的当前内容。
+#[tauri::command]
+fn editor_revert_prefab_instance(
+    doc: serde_json::Value,
+    root_index: usize,
+    prefab: String,
+) -> Result<MoveResult, String> {
+    let project_root = prism_editor_api::find_project_root()?;
+    let prefab_doc = prism_editor_api::read_doc(&project_root.join(&prefab))?;
+    prism_editor_api::revert_prefab_instance(&doc, root_index, &prefab_doc, Some(&prefab))
+}
+
+/// 把文档里所有引用该预制体的实例都还原一遍。
+#[tauri::command]
+fn editor_sync_prefab_instances(
+    doc: serde_json::Value,
+    prefab: String,
+) -> Result<serde_json::Value, String> {
+    let project_root = prism_editor_api::find_project_root()?;
+    let prefab_doc = prism_editor_api::read_doc(&project_root.join(&prefab))?;
+    prism_editor_api::sync_prefab_instances(&doc, &prefab, &prefab_doc)
+}
+
+/// 解除实例链接。
+#[tauri::command]
+fn editor_unlink_prefab_instance(
+    doc: serde_json::Value,
+    root_index: usize,
+) -> Result<serde_json::Value, String> {
+    prism_editor_api::unlink_prefab_instance(&doc, root_index)
+}
+
+/// 提取「实体 + 后代」为预制体文档（「应用到预制体」用）。
+#[tauri::command]
+fn editor_extract_subtree(doc: serde_json::Value, root_index: usize) -> Result<serde_json::Value, String> {
+    prism_editor_api::extract_subtree(&doc, root_index)
 }
 
 // ---------------------------------------------------------------------------
@@ -262,6 +315,11 @@ pub fn run() {
             editor_delete_entities,
             editor_create_prefab_from_entity,
             editor_instantiate_prefab,
+            editor_prefab_instances,
+            editor_revert_prefab_instance,
+            editor_sync_prefab_instances,
+            editor_unlink_prefab_instance,
+            editor_extract_subtree,
             editor_set_component_field,
             editor_cook_scene,
         ])
