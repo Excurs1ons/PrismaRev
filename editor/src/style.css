@@ -448,18 +448,14 @@ select:disabled {
   height: 100%;
 }
 
-.asset-ops {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  margin-top: 4px;
-}
-.asset-ops button {
+.asset-new-dir {
+  flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 2px 7px;
-  font-size: 11px;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
 }
 .nested > button.ghost {
   display: inline-flex;

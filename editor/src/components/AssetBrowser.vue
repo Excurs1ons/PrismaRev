@@ -554,10 +554,6 @@ interface NameDialog {
 const dialog = ref<NameDialog | null>(null);
 const deleteTarget = ref<{ path: string; name: string; refs: string[] } | null>(null);
 
-const canRename = computed(
-  () => !!selectedNode.value && selectedNode.value.path !== "" && !opBusy.value,
-);
-
 function openNewDir() {
   opError.value = "";
   const node = selectedNode.value;
@@ -725,6 +721,14 @@ onUnmounted(() => {
   <div class="asset-browser">
     <div class="tree-tools">
     <div class="asset-filter-row">
+      <button
+        class="ghost icon asset-new-dir"
+        :disabled="opBusy"
+        title="在所选目录下新建文件夹"
+        @click="openNewDir"
+      >
+        <Plus :size="14" />
+      </button>
       <input v-model="search" type="text" :placeholder="`检索 ${total} 个资产…`" />
       <select v-model="kind" title="按资产类型过滤">
         <option v-for="k in kinds" :key="k" :value="k">{{ KIND_LABELS[k] ?? k }}</option>
@@ -741,15 +745,6 @@ onUnmounted(() => {
           列表
         </button>
       </div>
-    </div>
-    <div class="asset-ops">
-      <button :disabled="opBusy" title="在所选目录下新建文件夹" @click="openNewDir">
-        <Plus :size="13" /> 文件夹
-      </button>
-      <button :disabled="!canRename" title="重命名所选文件/目录" @click="openRename">
-        重命名
-      </button>
-      <button :disabled="!canRename" title="删除所选文件/目录" @click="askDelete">删除</button>
     </div>
     <div v-if="opError" class="error asset-op-error" :title="opError">{{ opError }}</div>
 
