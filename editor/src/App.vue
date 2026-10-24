@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, provide, reactive, ref, shallowRef, watch } from "vue";
-import { Box, Check, ChevronRight, Play, Plus, RefreshCw, Square } from "lucide-vue-next";
+import { Box, Check, ChevronRight, Play, RefreshCw, Square } from "lucide-vue-next";
 import AssetBrowser from "./components/AssetBrowser.vue";
 import AssetPicker from "./components/AssetPicker.vue";
 import BuildPanel from "./components/BuildPanel.vue";
@@ -1924,26 +1924,16 @@ onUnmounted(() => {
         </template>
 
         <template #hierarchy>
-        <div class="panel-toolbar">
-          <span v-if="selection.length > 1" class="muted">已选 {{ selection.length }}</span>
-          <span class="spacer" />
-          <select v-model="presetId" class="mini" title="新增实体类型">
-            <option v-for="p in presets" :key="p.id" :value="p.id">{{ p.label }}</option>
-          </select>
-          <button
-            class="hierarchy-new"
-            :disabled="!hasDoc"
-            title="按所选类型新增实体"
-            @click="addEntity"
-          >
-            <Plus class="tool-glyph" :size="13" />新建实体
-          </button>
-        </div>
         <div class="section-body">
           <HierarchyTree
             v-if="doc"
             :entities="doc.entities"
             :selected="selection"
+            :presets="presets"
+            :preset-id="presetId"
+            :can-add="hasDoc"
+            @preset="presetId = $event"
+            @add="addEntity"
             @select="onSelect"
             @rename="onRenameEntity"
             @reparent="onReparent"

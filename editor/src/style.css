@@ -727,6 +727,32 @@ html.compact .dock-tab {
   font-size: 12px;
   padding: 3px 7px;
 }
+.hierarchy-filter-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.hierarchy-filter-row input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.hierarchy-filter-row select {
+  flex: 0 0 auto;
+  width: 88px;
+  margin-top: 0;
+  font-size: 11px;
+  padding: 2px 4px;
+  height: 24px;
+}
+.hierarchy-add {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+}
 .asset-filter-row {
   display: flex;
   align-items: center;
@@ -744,28 +770,7 @@ html.compact .dock-tab {
   padding: 2px 4px;
   height: 24px;
 }
-.view-toggle {
-  display: flex;
-  flex: 0 0 auto;
-}
-.view-toggle button {
-  padding: 2px 8px;
-  font-size: 11px;
-  line-height: 1.5;
-  border-radius: 0;
-}
-.view-toggle button:first-child {
-  border-radius: 5px 0 0 5px;
-}
-.view-toggle button:last-child {
-  border-radius: 0 5px 5px 0;
-  margin-left: -1px;
-}
-.view-toggle button.active {
-  background: rgba(110, 168, 255, 0.16);
-  border-color: rgba(110, 168, 255, 0.5);
-  color: var(--accent);
-}
+
 .asset-row .folder-caret {
   display: inline-flex;
   align-items: center;

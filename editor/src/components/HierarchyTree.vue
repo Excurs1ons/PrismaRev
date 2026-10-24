@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref } from "vue";
-import { ChevronDown, ChevronRight, Eye, EyeOff } from "lucide-vue-next";
+import { ChevronDown, ChevronRight, Eye, EyeOff, Plus } from "lucide-vue-next";
 import { clampMenuPosition } from "../contextMenu";
 import type { EntityJson } from "../types";
 
@@ -15,10 +15,16 @@ import type { EntityJson } from "../types";
 const props = defineProps<{
   entities: EntityJson[];
   selected: number[];
+  /** 新建实体类型下拉的数据源（来自编辑器预置）。 */
+  presets?: Array<{ id: string; label: string }>;
+  presetId?: string;
+  canAdd?: boolean;
 }>();
 
 const emit = defineEmits<{
   (e: "select", indices: number[]): void;
+  (e: "preset", id: string): void;
+  (e: "add"): void;
   (e: "rename", index: number, name: string): void;
   (e: "reparent", child: number, parent: number | null): void;
   (e: "move", child: number, at: number, parent: number | null): void;
@@ -53,6 +59,10 @@ function draggedPrefab(event: DragEvent): string | null {
   return path.toLowerCase().endsWith(".prefab.json") ? path : null;
 }
 const contextTarget = ref<{ index: number; x: number; y: number } | null>(null);
+
+function onPresetChange(event: Event) {
+  emit("preset", (event.target as HTMLSelectElement).value);
+}
 
 function openContextMenu(index: number, event: MouseEvent) {
   if (!props.selected.includes(index)) emit("select", [index]);
@@ -299,7 +309,20 @@ function onRootDrop(event: DragEvent) {
 
 <template>
   <div class="tree-tools">
-    <input v-model="filter" type="text" placeholder="过滤实体…" />
+    <div class="hierarchy-filter-row">
+      <button
+        class="ghost icon hierarchy-add"
+        :disabled="!canAdd"
+        title="按所选类型新增实体"
+        @click="emit('add')"
+      >
+        <Plus :size="14" />
+      </button>
+      <input v-model="filter" type="text" placeholder="过滤实体…" />
+      <select :value="presetId" title="新增实体类型" @change="onPresetChange">
+        <option v-for="p in presets ?? []" :key="p.id" :value="p.id">{{ p.label }}</option>
+      </select>
+    </div>
   </div>
 
   <div

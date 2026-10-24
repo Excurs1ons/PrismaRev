@@ -31,9 +31,15 @@ const emit = defineEmits<{
 const assets = inject(ASSETS_KEY, null);
 
 type ViewMode = "tree" | "list";
-const view = ref<ViewMode>("tree");
 const search = ref("");
 const kind = ref("all");
+/** 检索或类型过滤生效时自动用平铺列表（结果跨目录）。 */
+const isFiltering = computed(
+  () => search.value.trim().length > 0 || kind.value !== "all",
+);
+const currentView = computed<ViewMode>(() =>
+  isFiltering.value ? "list" : "tree",
+);
 const selected = ref<AssetInfo | null>(null);
 const selectedNode = ref<{ path: string; name: string; dir: boolean } | null>(null);
 const assetMenu = ref<{ path: string; name: string; dir: boolean; x: number; y: number } | null>(null);
@@ -733,18 +739,6 @@ onUnmounted(() => {
       <select v-model="kind" title="按资产类型过滤">
         <option v-for="k in kinds" :key="k" :value="k">{{ KIND_LABELS[k] ?? k }}</option>
       </select>
-      <div class="view-toggle">
-        <button :class="{ active: view === 'tree' }" title="按目录树浏览" @click="view = 'tree'">
-          目录
-        </button>
-        <button
-          :class="{ active: view === 'list' }"
-          title="平铺列表（按完整路径显示）"
-          @click="view = 'list'"
-        >
-          列表
-        </button>
-      </div>
     </div>
     <div v-if="opError" class="error asset-op-error" :title="opError">{{ opError }}</div>
 
@@ -785,7 +779,7 @@ onUnmounted(() => {
 
     <!-- 目录树 / 列表：只让这一块滚动，工具栏和详情固定 -->
     <div class="asset-scroll">
-  <template v-if="view === 'tree'">
+  <template v-if="currentView === 'tree'">
     <div
       v-for="row in treeRows"
       :key="row.node.path || 'root'"
