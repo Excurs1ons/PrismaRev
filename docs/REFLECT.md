@@ -100,6 +100,10 @@ registry.register_reflect_type::<glam::Vec3>();
   出现它会在迁移时折回 `transform`（`json::DERIVED_COMPONENTS`），手工构造的文档
   则被 `SceneJson::validate()` 拒绝。否则 `registry.apply` 会在 `LocalToWorld`
   算完之后覆盖 `LocalTransform`，留下一个按旧变换得到的世界矩阵。
+- **UI 布局输出同理**：`ComputedLayout` 的 `rect` 每帧由 `prism-engine` 的
+  `ui::layout` 重写，并且组件本身由该系按需插入；作者只需要 `Node` + `Style`。
+  它也在 `json::DERIVED_COMPONENTS` 里，所以文档里的旧值会被迁移剥离，
+  不会在检查器里留下一个永远被覆盖的假字段。
 
 ## RTTIBin 格式（v1）
 

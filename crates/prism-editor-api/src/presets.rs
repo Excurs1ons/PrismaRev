@@ -141,11 +141,7 @@ pub fn entity_presets() -> Vec<EntityPreset> {
             "ui",
             "UI 元素",
             "ui_node",
-            &[
-                "prism_engine::ui::Node",
-                "prism_engine::ui::Style",
-                "prism_engine::ui::ComputedLayout",
-            ],
+            &["prism_engine::ui::Node", "prism_engine::ui::Style"],
             [0.0, 0.0, 0.0],
         ),
     ]

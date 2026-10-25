@@ -293,6 +293,10 @@ The user project's dependency chain must stay **UI-framework-free and editor-fre
   (`register_reflect_type`) — never as a mountable component. Otherwise
   `registry.apply` overwrites `LocalTransform` *after* `LocalToWorld` was computed from
   the structural field. See `prism_scene::json::DERIVED_COMPONENTS`.
+- **UI layout output is derived too**: `ComputedLayout` is inserted and rewritten every
+  frame by `prism-engine/src/ui/layout.rs`, so authors write only `Node` + `Style`. It is
+  registered as a type only (same list / same reason), and old documents that still
+  author it are stripped by migration.
 - Skybox and gizmo are **ECS-authored**, not renderer constants: `Skybox` owns
   `hdr_path/enabled/rotation_degrees/intensity` and drives both IBL loading and the sky
   pass; `EnvironmentLighting` is legacy fallback only. `Gizmo` uses the entity

@@ -1,7 +1,7 @@
 //! UI Layout System —— 锚点布局计算
 //!
-//! 每帧查询所有 `Node + Style + ComputedLayout` 的实体，
-//! 根据锚点、固定尺寸、边距和父容器尺寸计算出最终屏幕空间矩形。
+//! 每帧查询所有 `Node + Style` 的实体，按需补上 `ComputedLayout` 输出组件，
+//! 再根据锚点、固定尺寸、边距和父容器尺寸计算出最终屏幕空间矩形。
 //!
 //! # 布局规则
 //! - 根元素（无 Parent）的父容器 = 屏幕尺寸（由 `ScreenSize` resource 提供）
@@ -38,13 +38,22 @@ pub fn ui_layout_system(world: &mut World) {
             height: 1080.0,
         });
 
-    // 先收集所有 Node+Style+ComputedLayout 实体及 Parent
+    // 先收集所有 `Node + Style` 实体及 Parent。
+    // `ComputedLayout` 是本系统的**输出**：作者不写它，缺失时在这里补默认值，
+    // 否则布局 / 命中测试 / 绘制（都以它为查询条件）会静默跳过该实体。
     // 分两遍：第一遍处理无 Parent 的根节点，第二遍处理子节点
-    let mut layout_queue: Vec<(prism_ecs::Entity, Option<prism_ecs::Entity>)> = Vec::new();
+    let layout_queue: Vec<(prism_ecs::Entity, Option<prism_ecs::Entity>)> = world
+        .query2::<Node, Style>()
+        .map(|(entity, _node, _style)| {
+            let parent = world.get::<UiParent>(entity);
+            (entity, parent.map(|p| p.0))
+        })
+        .collect();
 
-    for (entity, _node, _style, _layout) in world.query3::<Node, Style, ComputedLayout>() {
-        let parent = world.get::<UiParent>(entity);
-        layout_queue.push((entity, parent.map(|p| p.0)));
+    for (entity, _parent) in &layout_queue {
+        if world.get::<ComputedLayout>(*entity).is_none() {
+            world.insert(*entity, ComputedLayout::default());
+        }
     }
 
     // 按 Parent 层级处理（先根后子）
@@ -133,3 +142,7 @@ fn _anchor_point_rect(style: &Style, parent: [f32; 4]) -> [f32; 4] {
 
     [left, top, w.max(0.0), h.max(0.0)]
 }
+
+#[cfg(test)]
+#[path = "layout_tests.rs"]
+mod tests;

@@ -402,7 +402,9 @@ pub fn register_builtin_components(registry: &mut ComponentRegistry) {
     // ── UI 组件 ──
     registry.register_reflect_serde::<Node>("prism_engine::ui::Node");
     registry.register_reflect_serde::<Style>("prism_engine::ui::Style");
-    registry.register_reflect_serde::<ComputedLayout>("prism_engine::ui::ComputedLayout");
+    // `ComputedLayout` 是布局系统的输出（`rect` 每帧被重写），由
+    // `ui::layout` 自己 ensure；只登记类型，不让作者挂载。
+    registry.register_reflect_type::<ComputedLayout>();
     registry.register_reflect_serde::<Text>("prism_engine::ui::Text");
 
     // ── 嵌套类型（类型表/cook 需要）──

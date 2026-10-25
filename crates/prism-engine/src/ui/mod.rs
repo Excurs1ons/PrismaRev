@@ -3,7 +3,9 @@
 //! # 架构
 //!
 //! ```text
-//! UI 实体 = Node + Style + ComputedLayout + (Text | Interaction)
+//! UI 实体 = Node + Style + (Text | Interaction)
+//!
+//! `ComputedLayout` 由 Layout System 按需插入并每帧重写，作者不写它。
 //!
 //! [Layout System]    读取 Style → 写入 ComputedLayout
 //! [Render System]    读取 ComputedLayout + Text → 生成 UiDrawList
