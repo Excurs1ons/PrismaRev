@@ -139,6 +139,7 @@ fn expand(input: DeriveInput) -> syn::Result<TokenStream2> {
                 offset: ::core::mem::offset_of!(Self, #access),
                 ty: <#ty as ::prism_reflect::ReflectType>::field_type(),
                 read_only: #read_only,
+                enum_variants: <#ty as ::prism_reflect::ReflectType>::enum_variants(),
             }
         });
 
