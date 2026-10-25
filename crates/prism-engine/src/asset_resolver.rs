@@ -18,7 +18,7 @@
 use std::collections::HashSet;
 
 use prism_asset::core::AssetId;
-use prism_asset::runtime::{MeshAsset, MaterialAsset, ResourceManager, TextureAsset};
+use prism_asset::runtime::{MaterialAsset, MeshAsset, ResourceManager, TextureAsset};
 use prism_ecs::Entity;
 use prism_ecs::World;
 use prism_render::asset_bridge::{AssetResolveRequest, MaterialResolveData};
@@ -86,7 +86,8 @@ impl GpuAssetResolver {
     ) -> anyhow::Result<()> {
         self.resource_manager.load_package_bytes(pak_bytes)?;
         if let Some(manifest) = path_manifest_json {
-            self.resource_manager.load_path_manifest_from_str(manifest)?;
+            self.resource_manager
+                .load_path_manifest_from_str(manifest)?;
         }
         Ok(())
     }

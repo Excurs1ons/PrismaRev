@@ -42,10 +42,7 @@ impl PlatformContext {
     ///
     /// 仅分配窗口——真正的渲染器在渲染线程通过 `GraphRenderer::new` 构建，
     /// 因此 `resumed` 能立即返回并把窗口事件（关闭/移动/缩放）派发给主线程。
-    pub fn create_window(
-        event_loop: &ActiveEventLoop,
-        window_cfg: &WindowConfig,
-    ) -> Self {
+    pub fn create_window(event_loop: &ActiveEventLoop, window_cfg: &WindowConfig) -> Self {
         let t_start = Instant::now();
 
         let mut attrs = Window::default_attributes()

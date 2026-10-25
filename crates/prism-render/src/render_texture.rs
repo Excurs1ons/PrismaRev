@@ -470,7 +470,9 @@ impl RenderTexture {
         let dep = vk::DependencyInfo::default().image_memory_barriers(&barriers);
         // `vkCmdPipelineBarrier2` (1.3 core) is not exported on a 1.2 实例 —
         // use the KHR 包装器 like `buffer.rs` does (see `context.rs`).
-        let sync2 = crate::vulkan_compat::LegacySync2 { device: &context.device };
+        let sync2 = crate::vulkan_compat::LegacySync2 {
+            device: &context.device,
+        };
         unsafe { sync2.cmd_pipeline_barrier2(cmd, &dep) };
 
         let copy = vk::BufferImageCopy::default()

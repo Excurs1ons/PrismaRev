@@ -212,4 +212,3 @@ pub type AnyAsset = AnyHandle;
 #[cfg(test)]
 #[path = "handle_tests.rs"]
 mod tests;
-

@@ -586,4 +586,3 @@ fn pool_downcast_mut<T: 'static>(pool: &mut dyn ErasedPool) -> &mut ComponentPoo
 
 #[cfg(test)]
 mod tests;
-

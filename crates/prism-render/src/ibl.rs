@@ -77,9 +77,7 @@ const PREFILTERED_CACHE_PREFIX: &str = "prefiltered_mip";
 /// 绑定（envCube / irradianceCube / prefilteredCube）。由 `GraphRenderer`
 /// 创建一次并传递给空/完整 IBL，确保 set2 布局在「场景切换重建 IBL」时
 /// 保持稳定，forward pass / skybox 管线 布局 无需重建。
-pub fn ibl_descriptor_set_layout(
-    device: &ash::Device,
-) -> anyhow::Result<vk::DescriptorSetLayout> {
+pub fn ibl_descriptor_set_layout(device: &ash::Device) -> anyhow::Result<vk::DescriptorSetLayout> {
     let layout = unsafe {
         device.create_descriptor_set_layout(
             &vk::DescriptorSetLayoutCreateInfo::default().bindings(&[
@@ -87,24 +85,21 @@ pub fn ibl_descriptor_set_layout(
                     binding: 0,
                     descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
                     descriptor_count: 1,
-                    stage_flags: vk::ShaderStageFlags::FRAGMENT
-                        | vk::ShaderStageFlags::COMPUTE,
+                    stage_flags: vk::ShaderStageFlags::FRAGMENT | vk::ShaderStageFlags::COMPUTE,
                     ..Default::default()
                 },
                 vk::DescriptorSetLayoutBinding {
                     binding: 1,
                     descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
                     descriptor_count: 1,
-                    stage_flags: vk::ShaderStageFlags::FRAGMENT
-                        | vk::ShaderStageFlags::COMPUTE,
+                    stage_flags: vk::ShaderStageFlags::FRAGMENT | vk::ShaderStageFlags::COMPUTE,
                     ..Default::default()
                 },
                 vk::DescriptorSetLayoutBinding {
                     binding: 2,
                     descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
                     descriptor_count: 1,
-                    stage_flags: vk::ShaderStageFlags::FRAGMENT
-                        | vk::ShaderStageFlags::COMPUTE,
+                    stage_flags: vk::ShaderStageFlags::FRAGMENT | vk::ShaderStageFlags::COMPUTE,
                     ..Default::default()
                 },
             ]),
@@ -141,8 +136,7 @@ fn alloc_neutral_cube(
     let memory = allocate_device_memory(device, mem_props, mem_req)?;
     unsafe { device.bind_image_memory(image, memory, 0) }?;
     let staging_size = (6 * face * face * 8) as u64;
-    let (staging, staging_memory) =
-        create_staging_buffer(device, mem_props, staging_size)?;
+    let (staging, staging_memory) = create_staging_buffer(device, mem_props, staging_size)?;
     Ok((image, memory, staging, staging_memory))
 }
 
@@ -1084,23 +1078,41 @@ impl IblResources {
         const F: u32 = 1u32;
 
         // env / irradiance / prefiltered cube (1x1x6, 1 mip) — 中性灰（开屏无几何，不被采样）
-        let (image, memory, staging, staging_memory) =
-            alloc_neutral_cube(&device, mem_props, F)?;
+        let (image, memory, staging, staging_memory) = alloc_neutral_cube(&device, mem_props, F)?;
         let (irradiance_image, irradiance_memory, irradiance_staging, irradiance_staging_memory) =
             alloc_neutral_cube(&device, mem_props, F)?;
-        let (prefiltered_image, prefiltered_memory, prefiltered_staging, prefiltered_staging_memory) =
-            alloc_neutral_cube(&device, mem_props, F)?;
+        let (
+            prefiltered_image,
+            prefiltered_memory,
+            prefiltered_staging,
+            prefiltered_staging_memory,
+        ) = alloc_neutral_cube(&device, mem_props, F)?;
 
         let texels = (6 * F * F) as usize;
         let neutral = vec![f32_to_f16(0.0f32); texels * 4];
         unsafe {
-            let m = device.map_memory(staging_memory, 0, (texels * 8) as u64, vk::MemoryMapFlags::empty())? as *mut u16;
+            let m = device.map_memory(
+                staging_memory,
+                0,
+                (texels * 8) as u64,
+                vk::MemoryMapFlags::empty(),
+            )? as *mut u16;
             std::ptr::copy_nonoverlapping(neutral.as_ptr(), m, neutral.len());
             device.unmap_memory(staging_memory);
-            let m = device.map_memory(irradiance_staging_memory, 0, (texels * 8) as u64, vk::MemoryMapFlags::empty())? as *mut u16;
+            let m = device.map_memory(
+                irradiance_staging_memory,
+                0,
+                (texels * 8) as u64,
+                vk::MemoryMapFlags::empty(),
+            )? as *mut u16;
             std::ptr::copy_nonoverlapping(neutral.as_ptr(), m, neutral.len());
             device.unmap_memory(irradiance_staging_memory);
-            let m = device.map_memory(prefiltered_staging_memory, 0, (texels * 8) as u64, vk::MemoryMapFlags::empty())? as *mut u16;
+            let m = device.map_memory(
+                prefiltered_staging_memory,
+                0,
+                (texels * 8) as u64,
+                vk::MemoryMapFlags::empty(),
+            )? as *mut u16;
             std::ptr::copy_nonoverlapping(neutral.as_ptr(), m, neutral.len());
             device.unmap_memory(prefiltered_staging_memory);
         }
@@ -1109,7 +1121,11 @@ impl IblResources {
         let brdf_info = vk::ImageCreateInfo::default()
             .image_type(vk::ImageType::TYPE_2D)
             .format(vk::Format::R16G16_SFLOAT)
-            .extent(vk::Extent3D { width: F, height: F, depth: 1 })
+            .extent(vk::Extent3D {
+                width: F,
+                height: F,
+                depth: 1,
+            })
             .mip_levels(1)
             .array_layers(1)
             .samples(vk::SampleCountFlags::TYPE_1)
@@ -1162,7 +1178,11 @@ impl IblResources {
                     layer_count: 6,
                 },
                 image_offset: vk::Offset3D { x: 0, y: 0, z: 0 },
-                image_extent: vk::Extent3D { width: F, height: F, depth: 1 },
+                image_extent: vk::Extent3D {
+                    width: F,
+                    height: F,
+                    depth: 1,
+                },
             };
             unsafe {
                 device.cmd_copy_buffer_to_image(
@@ -1205,7 +1225,11 @@ impl IblResources {
                     layer_count: 1,
                 },
                 image_offset: vk::Offset3D { x: 0, y: 0, z: 0 },
-                image_extent: vk::Extent3D { width: F, height: F, depth: 1 },
+                image_extent: vk::Extent3D {
+                    width: F,
+                    height: F,
+                    depth: 1,
+                },
             };
             unsafe {
                 device.cmd_copy_buffer_to_image(
@@ -1226,8 +1250,7 @@ impl IblResources {
             vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
         );
         unsafe { device.end_command_buffer(cmd) }?;
-        submit_and_wait(&device, queue, command_pool, cmd)
-            .context("empty IBL upload submit")?;
+        submit_and_wait(&device, queue, command_pool, cmd).context("empty IBL upload submit")?;
 
         // views + samplers (max_lod 1，因仅 1 mip)
         let mk_sampler = || unsafe {

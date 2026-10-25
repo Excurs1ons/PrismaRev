@@ -21,8 +21,8 @@
     clippy::cargo
 )]
 
-use prism_asset::core::{AssetId, AssetType};
 use crate::db::{AssetDatabase, AssetRecord, ImportCache};
+use prism_asset::core::{AssetId, AssetType};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -1098,4 +1098,3 @@ fn walk_directory(dir: &Path, cb: &mut impl FnMut(PathBuf)) {
 
 #[cfg(test)]
 mod tests;
-

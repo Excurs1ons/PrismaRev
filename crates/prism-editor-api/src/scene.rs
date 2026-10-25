@@ -209,8 +209,8 @@ pub fn list_scenes(project_root: &Path) -> Result<Vec<SceneEntry>, String> {
 /// 经 [`prism_scene::SceneJson`] 往返一次，使缺失的可选字段（`transform` /
 /// `components` 等）落到 serde 默认值，前端拿到的形状始终完整。
 pub fn read_doc(path: &Path) -> Result<serde_json::Value, String> {
-    let text = std::fs::read_to_string(path)
-        .map_err(|e| format!("无法读取 {}: {e}", path.display()))?;
+    let text =
+        std::fs::read_to_string(path).map_err(|e| format!("无法读取 {}: {e}", path.display()))?;
     let scene: SceneJson = serde_json::from_str(&text)
         .map_err(|e| format!("{} JSON 解析失败: {e}", path.display()))?;
     serde_json::to_value(&scene).map_err(|e| e.to_string())
@@ -223,8 +223,8 @@ pub fn read_scene_doc(path: &Path) -> Result<serde_json::Value, String> {
 
 /// 校验作者文档：形状 + 结构不变量（父索引越界 / 自父 / 空文档）。
 pub fn validate_doc(doc: &serde_json::Value) -> Result<(), String> {
-    let scene: SceneJson = serde_json::from_value(doc.clone())
-        .map_err(|e| format!("不是合法的作者文档结构: {e}"))?;
+    let scene: SceneJson =
+        serde_json::from_value(doc.clone()).map_err(|e| format!("不是合法的作者文档结构: {e}"))?;
     scene.validate()
 }
 
@@ -391,56 +391,86 @@ pub fn template_scene_doc(id: &str) -> serde_json::Value {
     let entities = match id {
         "empty" => vec![entity("Entity", None, [0.0, 0.0, 0.0], json!({}))],
         "lit" => vec![
-            entity("Camera", None, [0.0, 2.5, 18.0], json!({
-                "prism_engine::scene::Camera": camera(),
-            })),
-            entity("Sun", None, [0.0, 6.0, 0.0], json!({
-                "prism_engine::scene::DirectionalLight":
-                    component_default("prism_engine::scene::DirectionalLight"),
-            })),
-            entity("PointLight", None, [3.0, 3.0, 3.0], json!({
-                "prism_engine::scene::PointLight":
-                    component_default("prism_engine::scene::PointLight"),
-            })),
+            entity(
+                "Camera",
+                None,
+                [0.0, 2.5, 18.0],
+                json!({
+                    "prism_engine::scene::Camera": camera(),
+                }),
+            ),
+            entity(
+                "Sun",
+                None,
+                [0.0, 6.0, 0.0],
+                json!({
+                    "prism_engine::scene::DirectionalLight":
+                        component_default("prism_engine::scene::DirectionalLight"),
+                }),
+            ),
+            entity(
+                "PointLight",
+                None,
+                [3.0, 3.0, 3.0],
+                json!({
+                    "prism_engine::scene::PointLight":
+                        component_default("prism_engine::scene::PointLight"),
+                }),
+            ),
         ],
         "ui" => vec![
-            entity("overlay", None, [0.0, 0.0, 0.0], json!({
-                "prism_engine::ui::Node": component_default("prism_engine::ui::Node"),
-                "prism_engine::ui::Style": merge(
-                    component_default("prism_engine::ui::Style"),
-                    json!({ "background": [0.0, 0.0, 0.0, 1.0] }),
-                ),
-                "prism_engine::ui::ComputedLayout":
-                    component_default("prism_engine::ui::ComputedLayout"),
-            })),
-            entity("title", Some(0), [0.0, 0.0, 0.0], json!({
-                "prism_engine::ui::Node": component_default("prism_engine::ui::Node"),
-                "prism_engine::ui::Style": merge(
-                    component_default("prism_engine::ui::Style"),
-                    json!({
-                        "width": 900.0,
-                        "height": 108.0,
-                        "anchors": { "min_x": 0.5, "min_y": 0.5, "max_x": 0.5, "max_y": 0.5 },
-                        "pivot": { "x": 0.5, "y": 0.5 },
-                    }),
-                ),
-                "prism_engine::ui::ComputedLayout":
-                    component_default("prism_engine::ui::ComputedLayout"),
-                "prism_engine::ui::Text": merge(
-                    component_default("prism_engine::ui::Text"),
-                    json!({
-                        "content": "PrismaRev",
-                        "font_size": 84.0,
-                        "color": [0.91, 0.925, 0.957, 1.0],
-                        "alignment": "Center",
-                    }),
-                ),
-            })),
+            entity(
+                "overlay",
+                None,
+                [0.0, 0.0, 0.0],
+                json!({
+                    "prism_engine::ui::Node": component_default("prism_engine::ui::Node"),
+                    "prism_engine::ui::Style": merge(
+                        component_default("prism_engine::ui::Style"),
+                        json!({ "background": [0.0, 0.0, 0.0, 1.0] }),
+                    ),
+                    "prism_engine::ui::ComputedLayout":
+                        component_default("prism_engine::ui::ComputedLayout"),
+                }),
+            ),
+            entity(
+                "title",
+                Some(0),
+                [0.0, 0.0, 0.0],
+                json!({
+                    "prism_engine::ui::Node": component_default("prism_engine::ui::Node"),
+                    "prism_engine::ui::Style": merge(
+                        component_default("prism_engine::ui::Style"),
+                        json!({
+                            "width": 900.0,
+                            "height": 108.0,
+                            "anchors": { "min_x": 0.5, "min_y": 0.5, "max_x": 0.5, "max_y": 0.5 },
+                            "pivot": { "x": 0.5, "y": 0.5 },
+                        }),
+                    ),
+                    "prism_engine::ui::ComputedLayout":
+                        component_default("prism_engine::ui::ComputedLayout"),
+                    "prism_engine::ui::Text": merge(
+                        component_default("prism_engine::ui::Text"),
+                        json!({
+                            "content": "PrismaRev",
+                            "font_size": 84.0,
+                            "color": [0.91, 0.925, 0.957, 1.0],
+                            "alignment": "Center",
+                        }),
+                    ),
+                }),
+            ),
         ],
         // "camera" 及未知 id
-        _ => vec![entity("Camera", None, [0.0, 0.0, 10.0], json!({
-            "prism_engine::scene::Camera": camera(),
-        }))],
+        _ => vec![entity(
+            "Camera",
+            None,
+            [0.0, 0.0, 10.0],
+            json!({
+                "prism_engine::scene::Camera": camera(),
+            }),
+        )],
     };
 
     json!({ "version": 1, "entities": entities })
@@ -565,7 +595,10 @@ fn parent_of(entity: &serde_json::Value) -> Option<usize> {
 }
 
 /// 用新的实体数组重建文档（保留 `version`）。
-fn doc_with_entities(doc: &serde_json::Value, entities: Vec<serde_json::Value>) -> serde_json::Value {
+fn doc_with_entities(
+    doc: &serde_json::Value,
+    entities: Vec<serde_json::Value>,
+) -> serde_json::Value {
     let version = doc.get("version").cloned().unwrap_or(serde_json::json!(1));
     serde_json::json!({ "version": version, "entities": entities })
 }
@@ -642,7 +675,11 @@ pub fn move_entity(
     // 先摘出 child，再插到目标位置。
     let mut order: Vec<usize> = (0..count).collect();
     order.remove(child);
-    let target = if insert_at > child { insert_at - 1 } else { insert_at };
+    let target = if insert_at > child {
+        insert_at - 1
+    } else {
+        insert_at
+    };
     order.insert(target.min(order.len()), child);
 
     // 旧下标 → 新下标。
@@ -753,7 +790,10 @@ fn subtree_indices(entities: &[serde_json::Value], root: usize) -> Vec<usize> {
 /// 提取出的根实体父级置为 `null`（实例化时再决定挂到哪里），内部父子索引重排到
 /// 预制体自己的下标空间；根上的 [`PREFAB_LINK_COMPONENT`] 会被剥掉
 /// （预制体不该记录「自己是哪个预制体的实例」）。
-pub fn extract_subtree(scene: &serde_json::Value, root: usize) -> Result<serde_json::Value, String> {
+pub fn extract_subtree(
+    scene: &serde_json::Value,
+    root: usize,
+) -> Result<serde_json::Value, String> {
     validate_doc(scene)?;
     let entities = entities_of(scene)?;
     if root >= entities.len() {
@@ -771,8 +811,7 @@ pub fn extract_subtree(scene: &serde_json::Value, root: usize) -> Result<serde_j
     for old_index in &order {
         let mut entity = entities[*old_index].clone();
         // 不在子树内的父（含根实体原本的父）→ null。
-        let new_parent =
-            parent_of(&entity).and_then(|parent| mapping.get(&parent).copied());
+        let new_parent = parent_of(&entity).and_then(|parent| mapping.get(&parent).copied());
         entity["parent"] = match new_parent {
             Some(parent) => serde_json::json!(parent),
             None => serde_json::json!(null),
@@ -825,7 +864,10 @@ pub fn instantiate_prefab(
         }
     }
 
-    let version = scene.get("version").cloned().unwrap_or(serde_json::json!(1));
+    let version = scene
+        .get("version")
+        .cloned()
+        .unwrap_or(serde_json::json!(1));
     let base = scene_entities.len();
 
     let mut names: Vec<String> = scene_entities
@@ -1084,8 +1126,7 @@ mod tests {
 
         for id in ids {
             let doc = template_scene_doc(&id);
-            validate_scene_doc(&doc)
-                .unwrap_or_else(|e| panic!("template '{id}' invalid: {e}"));
+            validate_scene_doc(&doc).unwrap_or_else(|e| panic!("template '{id}' invalid: {e}"));
 
             // 每个实体都必须有完整的 transform / components 形状。
             for entity in doc["entities"].as_array().unwrap() {
@@ -1108,7 +1149,9 @@ mod tests {
     fn scene_names_are_validated() {
         let root = temp_dir("names");
         assert!(scene_path(&root, "My Scene").is_ok());
-        assert!(scene_path(&root, "level1").unwrap().ends_with("level1.scene.json"));
+        assert!(scene_path(&root, "level1")
+            .unwrap()
+            .ends_with("level1.scene.json"));
         assert!(scene_path(&root, "level2.scene.json")
             .unwrap()
             .ends_with("level2.scene.json"));
@@ -1280,7 +1323,12 @@ mod tests {
 
         // 把两个实例的内容改坏（但保留链接组件）。
         let mut broken = twice.doc.clone();
-        for entity in broken["entities"].as_array_mut().unwrap().iter_mut().skip(1) {
+        for entity in broken["entities"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .skip(1)
+        {
             if let Some(components) = entity["components"].as_object_mut() {
                 components.remove("prism_engine::scene::Active");
             }

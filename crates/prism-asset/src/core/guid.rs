@@ -117,4 +117,3 @@ impl<'de> serde::Deserialize<'de> for AssetGuid {
 #[cfg(test)]
 #[path = "guid_tests.rs"]
 mod tests;
-

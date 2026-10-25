@@ -27,11 +27,11 @@
 //! prism-cook inspect 10001
 //! ```
 
-use prism_cooker::cooker::{default_cooker_registry, profile, CookPipeline};
 use prism_asset::core::AssetType;
+use prism_asset::package::PackageBuilder;
+use prism_cooker::cooker::{default_cooker_registry, profile, CookPipeline};
 use prism_cooker::db::{AssetDatabase, ImportCache};
 use prism_cooker::importer::{default_importer_registry, ImportPipeline};
-use prism_asset::package::PackageBuilder;
 
 use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
@@ -215,9 +215,7 @@ fn cmd_init(dir: &Path) -> anyhow::Result<()> {
 fn cmd_scan(root: &Path, _cli: &Cli) -> anyhow::Result<()> {
     let assets = assets_dir(root);
     if !assets.exists() {
-        anyhow::bail!(
-            "Assets/ directory not found / 目录不存在. Run 'prism-cook init' first."
-        );
+        anyhow::bail!("Assets/ directory not found / 目录不存在. Run 'prism-cook init' first.");
     }
 
     let mut db = AssetDatabase::load(db_path(root))?;
@@ -256,9 +254,7 @@ fn cmd_scan(root: &Path, _cli: &Cli) -> anyhow::Result<()> {
 fn cmd_import(root: &Path, _force: bool, _cli: &Cli) -> anyhow::Result<()> {
     let assets = assets_dir(root);
     if !assets.exists() {
-        anyhow::bail!(
-            "Assets/ directory not found / 目录不存在. Run 'prism-cook init' first."
-        );
+        anyhow::bail!("Assets/ directory not found / 目录不存在. Run 'prism-cook init' first.");
     }
 
     let mut db = AssetDatabase::load(db_path(root))?;
@@ -320,9 +316,7 @@ fn cmd_build(
     _cli: &Cli,
 ) -> anyhow::Result<()> {
     if !db_path(root).exists() {
-        anyhow::bail!(
-            "No AssetDatabase.json found / 未找到数据库. Run 'prism-cook scan' first."
-        );
+        anyhow::bail!("No AssetDatabase.json found / 未找到数据库. Run 'prism-cook scan' first.");
     }
 
     let db = AssetDatabase::load(db_path(root))?;
@@ -561,9 +555,7 @@ fn cmd_validate(pak_path: &Path) -> anyhow::Result<()> {
 
 fn cmd_list(root: &Path, _cli: &Cli) -> anyhow::Result<()> {
     if !db_path(root).exists() {
-        anyhow::bail!(
-            "No AssetDatabase.json found / 未找到数据库. Run 'prism-cook scan' first."
-        );
+        anyhow::bail!("No AssetDatabase.json found / 未找到数据库. Run 'prism-cook scan' first.");
     }
 
     let db = AssetDatabase::load(db_path(root))?;

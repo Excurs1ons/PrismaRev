@@ -179,7 +179,9 @@ pub fn render_thread_main(
 
         let frame_start = Instant::now();
 
-        if let Err(e) = render_one_frame(&mut renderer, &packet, &mut dirty_router, &packet.settings) {
+        if let Err(e) =
+            render_one_frame(&mut renderer, &packet, &mut dirty_router, &packet.settings)
+        {
             log::error!("Render thread error: {e:#}");
         } else if !first_frame_presented {
             first_frame_presented = true;
@@ -203,11 +205,7 @@ pub fn render_thread_main(
 
         // 渲染图报告（Web 编辑器可视化）：首帧 + 低频刷新。
         if graph_report.is_enabled() {
-            graph_report.maybe_write(
-                &renderer.graph().snapshot(),
-                &packet.settings,
-                frame_count,
-            );
+            graph_report.maybe_write(&renderer.graph().snapshot(), &packet.settings, frame_count);
         }
 
         shared.set_render_stats(RenderStats {

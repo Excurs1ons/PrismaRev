@@ -101,10 +101,10 @@ pub fn write_scene_manifest(root: &Path, scenes: &[SceneListEntry]) -> Result<()
     let file = SceneManifestFile {
         scenes: scenes.to_vec(),
     };
-    let body = toml::to_string_pretty(&file).map_err(|error| format!("序列化场景列表失败: {error}"))?;
-    let text = format!(
-        "# Scene list edited by PrismaRev Editor (order = build/startup order).\n{body}"
-    );
+    let body =
+        toml::to_string_pretty(&file).map_err(|error| format!("序列化场景列表失败: {error}"))?;
+    let text =
+        format!("# Scene list edited by PrismaRev Editor (order = build/startup order).\n{body}");
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|error| format!("无法创建 {}: {error}", parent.display()))?;

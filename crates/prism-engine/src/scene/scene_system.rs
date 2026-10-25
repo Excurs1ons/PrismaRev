@@ -94,9 +94,11 @@ impl<'a> SceneReadView<'a> {
             .query::<super::components::Gizmo>()
             .filter(|(_, gizmo)| gizmo.enabled)
             .filter_map(|(entity, gizmo)| {
-                let transform = self.world.get::<super::components::WorldTransform>(entity)?;
-                let model = transform.0
-                    * glam::Mat4::from_scale(glam::Vec3::splat(gizmo.scale.max(0.0)));
+                let transform = self
+                    .world
+                    .get::<super::components::WorldTransform>(entity)?;
+                let model =
+                    transform.0 * glam::Mat4::from_scale(glam::Vec3::splat(gizmo.scale.max(0.0)));
                 Some(prism_render::GizmoInstance {
                     model: model.to_cols_array_2d(),
                 })
@@ -313,8 +315,7 @@ impl SceneManager {
             return Some(bytes.clone());
         }
         if let Some(path) = view.environment_asset_path() {
-            let normalized =
-                normalize_scene_asset_path(self.current_scene_path.as_deref(), &path);
+            let normalized = normalize_scene_asset_path(self.current_scene_path.as_deref(), &path);
             return provider.load_environment(&normalized);
         }
         None

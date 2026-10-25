@@ -12,8 +12,8 @@ pub mod component_registry {
 pub mod runtime_components;
 pub mod components {
     //! Scene-schema components (from `prism-scene`) plus runtime GPU refs.
-    pub use prism_scene::components::*;
     pub use super::runtime_components::{MaterialRef, MeshRef};
+    pub use prism_scene::components::*;
 }
 pub mod helpers {
     //! Compatibility re-export of [`prism_scene::helpers`].

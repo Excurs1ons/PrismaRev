@@ -251,4 +251,3 @@ fn gradient(hm: &Heightmap, x: f64, y: f64, w: usize, h: usize) -> (f64, f64) {
 #[cfg(test)]
 #[path = "hydraulic_tests.rs"]
 mod tests;
-

@@ -74,9 +74,9 @@ mod debug_hud;
 mod hook;
 mod io_runner;
 mod physics_runner;
+mod render_graph_report;
 mod render_runner;
 mod render_shared;
-mod render_graph_report;
 
 use prism_engine::config::AppConfig;
 

@@ -260,8 +260,8 @@ impl GraphRenderer {
         // IBL：开屏/无光照场景以廉价「中性空 IBL」启动（不做 CPU 预卷积，≈0ms）。
         // 真正的 IBL 预卷积由 `set_environment` 在加载带光照的 3D 场景时按需重建。
         // 描述符 集合 布局 共享创建一次，确保场景切换重建 IBL 时管线 布局 稳定。
-        let ibl_ds_layout =
-            crate::ibl::ibl_descriptor_set_layout(&context.device).context("create IBL ds layout")?;
+        let ibl_ds_layout = crate::ibl::ibl_descriptor_set_layout(&context.device)
+            .context("create IBL ds layout")?;
         let ibl = IblResources::new_empty(
             context.clone(),
             runtime.command_pool,
@@ -480,8 +480,8 @@ impl GraphRenderer {
             ..Default::default()
         };
 
-        let ibl_ds_layout =
-            crate::ibl::ibl_descriptor_set_layout(&context.device).context("create IBL ds layout (headless)")?;
+        let ibl_ds_layout = crate::ibl::ibl_descriptor_set_layout(&context.device)
+            .context("create IBL ds layout (headless)")?;
         let ibl = IblResources::new(
             context.clone(),
             runtime.command_pool,
@@ -565,7 +565,6 @@ impl GraphRenderer {
         let frame_count = 2u32;
         let post_pass = crate::post::PostPass::new(&context, color_format, frame_count)
             .context("PostPass::new (headless)")?;
-
 
         // CRT 调度器（headless 也注册演示 RT，验证调度器在无窗口下跑通）。
         let mut _rt_scheduler = crate::rt_scheduler::RenderTextureScheduler::new(&context);
@@ -883,7 +882,9 @@ impl GraphRenderer {
                         clearcoat_roughness: s[17],
                         emissive_strength: s[9],
                     };
-                    self.register_material(input).ok().and_then(|h| self.material_slot(h))
+                    self.register_material(input)
+                        .ok()
+                        .and_then(|h| self.material_slot(h))
                 }
                 None => None,
             };

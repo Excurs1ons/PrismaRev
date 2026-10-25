@@ -18,7 +18,6 @@ pub use hydraulic::hydraulic_erosion;
 pub use terrain::generate_terrain;
 pub use thermal::thermal_erosion;
 
-
 // ---------------------------------------------------------------------------
 // Heightmap
 // ---------------------------------------------------------------------------
@@ -302,4 +301,3 @@ pub(crate) fn clone_data(data: &[f64]) -> Vec<f64> {
 
 #[cfg(test)]
 mod tests;
-

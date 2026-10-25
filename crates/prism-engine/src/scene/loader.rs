@@ -178,7 +178,9 @@ pub struct ParsedRscn {
 /// Returns `Err` with a human-readable 消息 on 格式 errors.
 pub fn parse_rscn(data: &[u8]) -> Result<ParsedRscn, String> {
     if rscn::is_v4(data) {
-        return Err("RSCN v4 requires the component registry (use SceneLoader::load_and_spawn)".into());
+        return Err(
+            "RSCN v4 requires the component registry (use SceneLoader::load_and_spawn)".into(),
+        );
     }
     if data.len() < 9 {
         return Err("RSCN data too short".into());
@@ -602,11 +604,7 @@ impl SceneLoader {
             if let Some(parent_index) = decoded_entity.parent {
                 let parent_index = parent_index as usize;
                 if parent_index < entities.len() {
-                    HierarchyHelper::reparent(
-                        world,
-                        entities[index],
-                        Some(entities[parent_index]),
-                    );
+                    HierarchyHelper::reparent(world, entities[index], Some(entities[parent_index]));
                 }
             }
         }
@@ -899,7 +897,6 @@ impl Default for SceneLoader {
 #[cfg(test)]
 #[path = "loader_tests.rs"]
 mod tests;
-
 
 // ---------------------------------------------------------------------------
 // ECS-driven scene geometry 集合 for offline baking

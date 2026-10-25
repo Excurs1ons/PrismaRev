@@ -34,18 +34,15 @@ pub fn entity_presets() -> Vec<EntityPreset> {
     };
 
     vec![
-        preset(
-            "empty",
-            "空实体",
-            "entity",
-            &[],
-            [0.0, 0.0, 0.0],
-        ),
+        preset("empty", "空实体", "entity", &[], [0.0, 0.0, 0.0]),
         preset(
             "camera",
             "相机",
             "Camera",
-            &["prism_engine::scene::Camera", "prism_engine::scene::FlyCameraController"],
+            &[
+                "prism_engine::scene::Camera",
+                "prism_engine::scene::FlyCameraController",
+            ],
             [0.0, 0.0, 10.0],
         ),
         preset(
@@ -66,7 +63,10 @@ pub fn entity_presets() -> Vec<EntityPreset> {
             "mesh",
             "网格",
             "Mesh",
-            &["prism_engine::scene::MeshRenderer", "prism_engine::scene::Active"],
+            &[
+                "prism_engine::scene::MeshRenderer",
+                "prism_engine::scene::Active",
+            ],
             [0.0, 0.0, 0.0],
         ),
         preset(

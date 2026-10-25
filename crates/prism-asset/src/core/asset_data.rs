@@ -313,4 +313,3 @@ impl<'de, T: AssetData + ?Sized> serde::Deserialize<'de> for AssetHandle<T> {
 #[cfg(test)]
 #[path = "asset_data_tests.rs"]
 mod tests;
-

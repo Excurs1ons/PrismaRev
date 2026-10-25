@@ -947,8 +947,10 @@ impl Drop for UiOverlay {
             if let Some(l) = self.layout {
                 self.device.destroy_pipeline_layout(l, None);
             }
-            self.device.destroy_descriptor_pool(self.descriptor_pool, None);
-            self.device.destroy_descriptor_set_layout(self.set_layout, None);
+            self.device
+                .destroy_descriptor_pool(self.descriptor_pool, None);
+            self.device
+                .destroy_descriptor_set_layout(self.set_layout, None);
             for fb in self.framebuffers.drain(..) {
                 self.device.destroy_framebuffer(fb, None);
             }

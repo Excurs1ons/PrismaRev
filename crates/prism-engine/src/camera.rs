@@ -151,4 +151,3 @@ impl OrbitCamera {
 #[cfg(test)]
 #[path = "camera_tests.rs"]
 mod tests;
-

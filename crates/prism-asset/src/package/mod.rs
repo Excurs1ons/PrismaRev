@@ -654,4 +654,3 @@ impl PackageReader {
 
 #[cfg(test)]
 mod tests;
-

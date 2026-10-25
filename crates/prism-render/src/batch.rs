@@ -68,8 +68,12 @@ impl<'a> BatchUploader<'a> {
         }
         .context("BatchUploader: begin command buffer")?;
 
-        let sync2 = LegacySync2 { device: &context.device };
-        let copy2 = LegacyCopy2 { device: &context.device };
+        let sync2 = LegacySync2 {
+            device: &context.device,
+        };
+        let copy2 = LegacyCopy2 {
+            device: &context.device,
+        };
 
         Ok(Self {
             context,

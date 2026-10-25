@@ -272,4 +272,3 @@ fn perspective(cam: &Camera) -> Mat4 {
 #[cfg(test)]
 #[path = "camera_tests.rs"]
 mod tests;
-

@@ -126,4 +126,3 @@ impl AssetRef {
 #[cfg(test)]
 #[path = "asset_type_tests.rs"]
 mod tests;
-

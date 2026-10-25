@@ -1,12 +1,12 @@
 //! Winit → engine domain-type conversions, pointer-lock helpers, and
 //! 输入 事件 routing.
 
+#[cfg(any())]
+use prism_engine::input::{InputManager, KeyCode as EngKeyCode, MouseButton as EngMouseButton};
 use winit::event::WindowEvent;
 #[cfg(any())]
 use winit::event_loop::ActiveEventLoop;
 use winit::window::Window;
-#[cfg(any())]
-use prism_engine::input::{InputManager, KeyCode as EngKeyCode, MouseButton as EngMouseButton};
 
 /// 与窗口库无关的平台事件快照。
 ///

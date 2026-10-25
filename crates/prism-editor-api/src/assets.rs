@@ -204,11 +204,7 @@ fn resolve_asset_file(project_root: &Path, raw: &str) -> Result<PathBuf, String>
 ///
 /// 只允许 `assets/` 下的路径，且拒绝超过上限的文件——避免一次 IPC
 /// 把几十 MB 的 HDR/模型塞进 WebView。
-pub fn read_asset_bytes(
-    project_root: &Path,
-    raw: &str,
-    max_bytes: u64,
-) -> Result<Vec<u8>, String> {
+pub fn read_asset_bytes(project_root: &Path, raw: &str, max_bytes: u64) -> Result<Vec<u8>, String> {
     let path = resolve_asset_file(project_root, raw)?;
     let size = std::fs::metadata(&path)
         .map(|meta| meta.len())
@@ -537,7 +533,11 @@ mod tests {
                 }
             ]
         });
-        std::fs::write(scenes.join("demo.scene.json"), serde_json::to_string(&doc).unwrap()).unwrap();
+        std::fs::write(
+            scenes.join("demo.scene.json"),
+            serde_json::to_string(&doc).unwrap(),
+        )
+        .unwrap();
 
         let refs = asset_usage(&root, "assets/valley.hdr").unwrap();
         assert_eq!(refs.len(), 3, "got {refs:#?}");

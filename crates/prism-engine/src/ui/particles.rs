@@ -234,7 +234,10 @@ impl ParticleSystem2D {
         };
         let speed = lerp(self.speed_min, self.speed_max, Self::rand(&mut self.rng));
         let (vx, len) = match self.kind {
-            SpawnKind::Rain => (self.wind * (0.4 + 0.6 * Self::rand(&mut self.rng)), lerp(self.len_min, self.len_max, Self::rand(&mut self.rng))),
+            SpawnKind::Rain => (
+                self.wind * (0.4 + 0.6 * Self::rand(&mut self.rng)),
+                lerp(self.len_min, self.len_max, Self::rand(&mut self.rng)),
+            ),
             SpawnKind::Snow => (0.0, 0.0),
             SpawnKind::Spark => {
                 let ang = Self::rand(&mut self.rng) * std::f32::consts::TAU;
@@ -276,7 +279,12 @@ impl ParticleSystem2D {
                 continue;
             }
             // 拖尾向上延伸（y 向下，故顶端 = y - len）。
-            let rect = [p.x - p.width * 0.5, p.y - p.len, p.width, p.len.max(p.width)];
+            let rect = [
+                p.x - p.width * 0.5,
+                p.y - p.len,
+                p.width,
+                p.len.max(p.width),
+            ];
             quads.push(UiQuad {
                 rect,
                 color: [self.color[0], self.color[1], self.color[2], a],

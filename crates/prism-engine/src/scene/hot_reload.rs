@@ -15,17 +15,27 @@ pub struct HotReloadWatcher {
 
 impl HotReloadWatcher {
     pub fn new(pak_path: impl AsRef<Path>) -> Self {
-        Self { pak_path: pak_path.as_ref().to_path_buf(), last_modified: None, interval: Duration::from_millis(500) }
+        Self {
+            pak_path: pak_path.as_ref().to_path_buf(),
+            last_modified: None,
+            interval: Duration::from_millis(500),
+        }
     }
     /// 轮询检查是否变更，返回 true 表示需要 reload
     pub fn poll(&mut self) -> bool {
-        let Ok(meta) = std::fs::metadata(&self.pak_path) else { return false };
-        let Ok(modified) = meta.modified() else { return false };
+        let Ok(meta) = std::fs::metadata(&self.pak_path) else {
+            return false;
+        };
+        let Ok(modified) = meta.modified() else {
+            return false;
+        };
         if self.last_modified.map_or(true, |t| modified > t) {
             self.last_modified = Some(modified);
             return true;
         }
         false
     }
-    pub fn pak_path(&self) -> &Path { &self.pak_path }
+    pub fn pak_path(&self) -> &Path {
+        &self.pak_path
+    }
 }

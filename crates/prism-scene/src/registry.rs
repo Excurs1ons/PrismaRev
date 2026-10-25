@@ -17,8 +17,7 @@ use serde::{de::DeserializeOwned, Serialize};
 // ComponentRegistry
 // ---------------------------------------------------------------------------
 
-type DeserializerFn =
-    Box<dyn Fn(&mut World, Entity, &serde_json::Value) + Send + Sync>;
+type DeserializerFn = Box<dyn Fn(&mut World, Entity, &serde_json::Value) + Send + Sync>;
 
 type JsonToObjectFn = Box<dyn Fn(&serde_json::Value) -> Option<Object> + Send + Sync>;
 
@@ -75,19 +74,22 @@ impl ComponentRegistry {
         C: DeserializeOwned + Send + Sync + 'static,
     {
         let name = name.to_string();
-        self.deserializers.insert(name, Box::new(move |world, entity, value| {
-            match serde_json::from_value::<C>(value.clone()) {
-                Ok(comp) => {
-                    world.insert(entity, comp);
+        self.deserializers.insert(
+            name,
+            Box::new(move |world, entity, value| {
+                match serde_json::from_value::<C>(value.clone()) {
+                    Ok(comp) => {
+                        world.insert(entity, comp);
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "ComponentRegistry: failed to deserialize '{}': {e}",
+                            std::any::type_name::<C>(),
+                        );
+                    }
                 }
-                Err(e) => {
-                    log::warn!(
-                        "ComponentRegistry: failed to deserialize '{}': {e}",
-                        std::any::type_name::<C>(),
-                    );
-                }
-            }
-        }));
+            }),
+        );
     }
 
     /// 注册一个自定义反序列化器。
@@ -113,19 +115,17 @@ impl ComponentRegistry {
             desc.id,
             ReflectEntry {
                 desc,
-                apply: |world, entity, object| {
-                    match <C as Reflect>::from_object(object) {
-                        Ok(component) => {
-                            world.insert(entity, component);
-                            true
-                        }
-                        Err(err) => {
-                            log::warn!(
-                                "ComponentRegistry: failed to reflect-restore '{}': {err}",
-                                <C as Reflect>::type_desc().name,
-                            );
-                            false
-                        }
+                apply: |world, entity, object| match <C as Reflect>::from_object(object) {
+                    Ok(component) => {
+                        world.insert(entity, component);
+                        true
+                    }
+                    Err(err) => {
+                        log::warn!(
+                            "ComponentRegistry: failed to reflect-restore '{}': {err}",
+                            <C as Reflect>::type_desc().name,
+                        );
+                        false
                     }
                 },
                 extract: |world, entity| {
@@ -250,11 +250,7 @@ impl ComponentRegistry {
     }
 
     /// 把作者 JSON 转成反射对象（cook 工具路径）。
-    pub fn object_from_json(
-        &self,
-        name: &str,
-        value: &serde_json::Value,
-    ) -> Option<Object> {
+    pub fn object_from_json(&self, name: &str, value: &serde_json::Value) -> Option<Object> {
         self.json_to_object.get(name).and_then(|f| f(value))
     }
 
@@ -317,9 +313,7 @@ impl ComponentRegistry {
 
     /// 类型描述（编辑器属性面板 / schema 浏览用）。
     pub fn descriptor(&self, type_id: TypeId) -> Option<&'static TypeDesc> {
-        self.reflect_entries
-            .get(&type_id)
-            .map(|entry| entry.desc)
+        self.reflect_entries.get(&type_id).map(|entry| entry.desc)
     }
 
     /// 底层 `TypeRegistry`，供 `rtti_bin::encode` 收集类型表。
@@ -363,9 +357,7 @@ pub fn register_builtin_components(registry: &mut ComponentRegistry) {
     });
     registry.register_reflect::<Name>();
     registry.register_json_object("prism_engine::scene::Name", |value| {
-        value
-            .as_str()
-            .map(|s| Name(s.to_string()).to_object())
+        value.as_str().map(|s| Name(s.to_string()).to_object())
     });
     registry.set_default_json("prism_engine::scene::Name", serde_json::json!("entity"));
     registry.register_object_to_json("prism_engine::scene::Name", |object| {
@@ -381,16 +373,14 @@ pub fn register_builtin_components(registry: &mut ComponentRegistry) {
     registry.register_reflect_serde::<SpotLight>("prism_engine::scene::SpotLight");
 
     // ── 声明式光照（场景驱动 IBL / GI，避免引擎启动无条件加载）──
-    registry.register_reflect_serde::<EnvironmentLighting>(
-        "prism_engine::scene::EnvironmentLighting",
-    );
+    registry
+        .register_reflect_serde::<EnvironmentLighting>("prism_engine::scene::EnvironmentLighting");
     registry.register_reflect_serde::<GiConfig>("prism_engine::scene::GiConfig");
 
     // ── 相机 ──
     registry.register_reflect_serde::<Camera>("prism_engine::scene::Camera");
-    registry.register_reflect_serde::<FlyCameraController>(
-        "prism_engine::scene::FlyCameraController",
-    );
+    registry
+        .register_reflect_serde::<FlyCameraController>("prism_engine::scene::FlyCameraController");
 
     // ── 天空盒 / 渲染 bundle ──
     registry.register_reflect_serde::<Skybox>("prism_engine::scene::Skybox");
@@ -448,11 +438,7 @@ mod tests {
             ..LocalTransform::default()
         };
 
-        let objects = vec![
-            camera.to_object(),
-            name.to_object(),
-            transform.to_object(),
-        ];
+        let objects = vec![camera.to_object(), name.to_object(), transform.to_object()];
         let bytes = rtti_bin::encode(&objects, registry.type_registry()).unwrap();
         let decoded = rtti_bin::decode(&bytes).unwrap();
 

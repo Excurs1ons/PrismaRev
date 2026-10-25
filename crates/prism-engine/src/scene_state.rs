@@ -610,4 +610,3 @@ fn extract_object_nested(s: &str) -> Option<(String, usize)> {
 #[cfg(test)]
 #[path = "scene_state_tests.rs"]
 mod tests;
-

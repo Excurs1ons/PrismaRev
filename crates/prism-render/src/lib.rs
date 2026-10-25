@@ -32,6 +32,9 @@
 )]
 
 pub mod acceleration_structure;
+/// 主线程(CPU) ↔ 渲染线程(GPU) 资产解析请求/结果桥接类型。
+pub mod asset_bridge;
+pub mod asset_decoders;
 pub mod bake_common;
 pub mod batch;
 pub mod bindless;
@@ -53,25 +56,22 @@ pub mod mesh;
 pub mod offscreen;
 pub mod pbr_push;
 pub mod pipeline;
+pub mod plugin;
 pub mod post;
 pub mod probe_loader;
 pub mod pt_pass;
 pub mod render_graph;
 pub mod render_pass;
+pub mod render_runtime;
 pub mod render_texture;
 pub mod rt_pass;
 pub mod rt_scheduler;
 pub mod scene_scope;
-/// 主线程(CPU) ↔ 渲染线程(GPU) 资产解析请求/结果桥接类型。
-pub mod asset_bridge;
 pub mod shader;
 /// Slang-reflection-generated 绑定 constants (set/binding indices, entry
 /// point names, push-constant sizes). Regenerate with `xtask/shader-bindgen`
 /// after recompiling shaders on a host with slangc - see shaders/compile.sh.
 pub mod shader_bindings;
-pub mod asset_decoders;
-pub mod plugin;
-pub mod render_runtime;
 pub mod shadow_map_pass;
 pub mod skybox_pass;
 pub mod swapchain;
@@ -95,7 +95,6 @@ pub use gi::{
     ProbeVolumeInfo, SH_COEFF_COUNT,
 };
 pub use gizmo::{Gizmo, GizmoInstance};
-pub use skybox_pass::SkyboxSettings;
 pub use graph_renderer::{FrameCtx, FrameInput, GraphRenderer};
 pub use gtao::{GtaoFrameInputs, GtaoPass};
 pub use mesh::{Mesh, Vertex};
@@ -111,5 +110,6 @@ pub use render_graph::{
 pub use render_pass::{DepthImage, Framebuffers, NormalImage, RenderPass};
 pub use shader::load_shader_module;
 pub use shadow_map_pass::ShadowMapPass;
+pub use skybox_pass::SkyboxSettings;
 pub use swapchain::Swapchain;
 pub use ui_overlay::{UiOverlay, UiOverlayInput};

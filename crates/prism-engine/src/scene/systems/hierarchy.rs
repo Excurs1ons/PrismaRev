@@ -55,4 +55,3 @@ fn visit_children(world: &mut World, parent: Entity, parent_world: glam::Mat4) {
 #[cfg(test)]
 #[path = "hierarchy_tests.rs"]
 mod tests;
-

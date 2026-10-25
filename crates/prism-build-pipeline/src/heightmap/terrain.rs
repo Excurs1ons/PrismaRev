@@ -111,4 +111,3 @@ pub fn generate_terrain(width: usize, height: usize, seed: u64, scale_m: f64) ->
 #[cfg(test)]
 #[path = "terrain_tests.rs"]
 mod tests;
-

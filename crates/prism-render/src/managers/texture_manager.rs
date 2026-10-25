@@ -99,9 +99,13 @@ impl TextureFormat {
     /// 精确的压缩块字节数（按 Vulkan 块大小计算）
     pub fn compressed_byte_len(self, width: u32, height: u32) -> usize {
         match self {
-            TextureFormat::Rgba8 | TextureFormat::Rgba8Srgb => (width as usize) * (height as usize) * 4,
-            TextureFormat::Bc7Unorm | TextureFormat::Bc7Srgb
-            | TextureFormat::Bc5Unorm | TextureFormat::Bc6HUfloat => {
+            TextureFormat::Rgba8 | TextureFormat::Rgba8Srgb => {
+                (width as usize) * (height as usize) * 4
+            }
+            TextureFormat::Bc7Unorm
+            | TextureFormat::Bc7Srgb
+            | TextureFormat::Bc5Unorm
+            | TextureFormat::Bc6HUfloat => {
                 let bw = (width + 3) / 4;
                 let bh = (height + 3) / 4;
                 (bw as usize) * (bh as usize) * 16

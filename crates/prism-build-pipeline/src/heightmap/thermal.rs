@@ -79,4 +79,3 @@ const NEIGHBORS_4: [(isize, isize); 4] = [(0, -1), (0, 1), (-1, 0), (1, 0)];
 #[cfg(test)]
 #[path = "thermal_tests.rs"]
 mod tests;
-

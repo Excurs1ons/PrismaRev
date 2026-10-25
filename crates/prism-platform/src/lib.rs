@@ -5,19 +5,16 @@
 
 #![deny(warnings)]
 
+mod config;
 mod context;
 mod input;
-mod config;
 
-pub use context::{raw_window_handles, PlatformContext, SendWindowHandles};
-pub use context::required_vulkan_extensions;
 pub use config::WindowConfig;
-pub use input::{
-    grab_pointer, release_pointer, to_platform_event, PlatformEvent,
-    TouchPhase,
-};
+pub use context::required_vulkan_extensions;
+pub use context::{raw_window_handles, PlatformContext, SendWindowHandles};
 #[cfg(any())]
 pub use input::handle_input_event;
+pub use input::{grab_pointer, release_pointer, to_platform_event, PlatformEvent, TouchPhase};
 
 /// 在 Android 上创建平台事件循环。
 ///

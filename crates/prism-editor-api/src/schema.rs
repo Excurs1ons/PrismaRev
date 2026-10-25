@@ -196,8 +196,22 @@ mod tests {
         assert!(camera.default_json.is_some());
 
         // `aspect` 是只读字段，`enabled` 不是。
-        assert!(camera.fields.iter().find(|f| f.name == "aspect").unwrap().read_only);
-        assert!(!camera.fields.iter().find(|f| f.name == "enabled").unwrap().read_only);
+        assert!(
+            camera
+                .fields
+                .iter()
+                .find(|f| f.name == "aspect")
+                .unwrap()
+                .read_only
+        );
+        assert!(
+            !camera
+                .fields
+                .iter()
+                .find(|f| f.name == "enabled")
+                .unwrap()
+                .read_only
+        );
 
         // 嵌套类型 `glam::Vec3` 出现在表里，且 Style.anchors 指向 struct。
         assert!(schema.type_by_name("glam::Vec3").is_some());

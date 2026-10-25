@@ -13,8 +13,8 @@
 
 #![allow(clippy::pedantic, clippy::nursery, clippy::cargo)]
 
-use prism_asset::core::{AssetId, AssetType};
 use crate::db::AssetRecord;
+use prism_asset::core::{AssetId, AssetType};
 use prism_asset::package::PackageBuilder;
 use std::collections::HashMap;
 use thiserror::Error;
@@ -359,9 +359,7 @@ impl Cooker for TextureCooker {
                 (RTEX_FORMAT_RGBA8, mips_rgba)
             }
             other => {
-                tracing::warn!(
-                    "Compression format {other:?} 已实现, falling back to RGBA8"
-                );
+                tracing::warn!("Compression format {other:?} 已实现, falling back to RGBA8");
                 (RTEX_FORMAT_RGBA8, mips_rgba)
             }
         };
@@ -972,10 +970,7 @@ impl ShaderCooker {
     fn compile(rsli: &RsliInfo) -> Result<Vec<u8>, CookError> {
         // 写入 源 to a temp file so #include / 模块 分辨率 works.
         let tmp_dir = std::env::temp_dir();
-        let source_path = tmp_dir.join(format!(
-            "prisma_shader_cook_{}.slang",
-            std::process::id()
-        ));
+        let source_path = tmp_dir.join(format!("prisma_shader_cook_{}.slang", std::process::id()));
         let out_path = tmp_dir.join(format!("prisma_shader_cook_{}.spv", std::process::id()));
 
         // RAII guard: removes temp files on 放置 成功 or 错误
@@ -1238,4 +1233,3 @@ pub fn topological_sort(db: &crate::db::AssetDatabase) -> Vec<AssetId> {
 
 #[cfg(test)]
 mod tests;
-

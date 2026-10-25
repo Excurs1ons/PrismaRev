@@ -431,4 +431,3 @@ pub fn normalize_path(path: &str) -> String {
 
 #[cfg(test)]
 mod tests;
-

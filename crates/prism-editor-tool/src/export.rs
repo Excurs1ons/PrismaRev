@@ -100,4 +100,3 @@ pub fn format_from_extension(path: &Path) -> Result<ExportFormat> {
 #[cfg(test)]
 #[path = "export_tests.rs"]
 mod tests;
-

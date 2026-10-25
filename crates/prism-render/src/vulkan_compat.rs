@@ -18,10 +18,8 @@ impl LegacySync2<'_> {
         cmd: vk::CommandBuffer,
         dep: &vk::DependencyInfo<'_>,
     ) {
-        let memory_input = slice_from_raw_parts_or_empty(
-            dep.p_memory_barriers,
-            dep.memory_barrier_count as usize,
-        );
+        let memory_input =
+            slice_from_raw_parts_or_empty(dep.p_memory_barriers, dep.memory_barrier_count as usize);
         let memory: Vec<vk::MemoryBarrier> = memory_input
             .iter()
             .map(|b| {

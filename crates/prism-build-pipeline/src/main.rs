@@ -132,7 +132,8 @@ fn main() -> Result<()> {
             let cfg = prism_build_pipeline::BakeGiConfig {
                 output_path: output.unwrap_or_else(|| PathBuf::from("assets/gi/probe_volume.bin")),
                 pak_path: pak.unwrap_or_else(|| PathBuf::from("assets/scenes.pak")),
-                rscn_path: rscn.unwrap_or_else(|| PathBuf::from("target/scene_pack/scenes/default.rscn")),
+                rscn_path: rscn
+                    .unwrap_or_else(|| PathBuf::from("target/scene_pack/scenes/default.rscn")),
                 num_rays: rays,
                 max_bounce: bounces,
                 ..Default::default()
@@ -156,8 +157,8 @@ fn main() -> Result<()> {
                 );
             }
 
-            let cooked = prism_cooker::cooker::scene::SceneCooker::default()
-                .cook_json_bytes(&data)?;
+            let cooked =
+                prism_cooker::cooker::scene::SceneCooker::default().cook_json_bytes(&data)?;
             std::fs::create_dir_all(&output)?;
             let stem = input
                 .file_name()
@@ -165,8 +166,9 @@ fn main() -> Result<()> {
                 .unwrap_or("scene.scene.json")
                 .trim_end_matches(".scene.json");
             let out_path = output.join(format!("{stem}.rscn"));
-            std::fs::write(&out_path, cooked)
-                .map_err(|e| anyhow::anyhow!("cook: failed to write {}: {e}", out_path.display()))?;
+            std::fs::write(&out_path, cooked).map_err(|e| {
+                anyhow::anyhow!("cook: failed to write {}: {e}", out_path.display())
+            })?;
             log::info!("cook: wrote {}", out_path.display());
             Ok(())
         }
@@ -182,8 +184,12 @@ fn main() -> Result<()> {
                 staging.display(),
                 output.display()
             );
-            let summary =
-                prism_build_pipeline::build_scene_package(&manifest, &staging, &output, compression)?;
+            let summary = prism_build_pipeline::build_scene_package(
+                &manifest,
+                &staging,
+                &output,
+                compression,
+            )?;
             log::info!(
                 "build-scenes: {} scene(s), {} skipped; {} files, {} bytes -> {}; manifest {}",
                 summary.scenes,

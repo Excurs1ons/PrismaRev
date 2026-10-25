@@ -8,10 +8,10 @@
 //! RSCN 场景格式由引擎的 `SceneLoader` 惰性解析，
 //! 因此 `SceneAsset` 仅持有原始字节。
 
+use crate::core::{AssetId, AssetType};
 use crate::formats::{
     decode_rmat, decode_rmes, decode_rtex, RmatInfo, RmesInfo, RtexInfo, MATERIAL_SCALAR_COUNT,
 };
-use crate::core::{AssetId, AssetType};
 use crate::runtime::{Asset, RuntimeError};
 
 // ---------------------------------------------------------------------------

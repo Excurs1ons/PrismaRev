@@ -15,14 +15,16 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use prism_cooker::cooker::profile::CookSettings;
-use prism_cooker::cooker::{decode_rmes, parse_rmxi_info};
-use prism_cooker::cooker::{decode_rtex, default_cooker_registry, parse_rtexi_pixels, CookPipeline};
 use prism_asset::core::{AssetId, AssetType, Handle};
-use prism_cooker::db::{AssetDatabase, ImportCache};
-use prism_cooker::importer::{default_importer_registry, ImportPipeline};
 use prism_asset::package::{PackageBuilder, PackageReader};
 use prism_asset::runtime::{EvictionPolicy, ResourceManager};
+use prism_cooker::cooker::profile::CookSettings;
+use prism_cooker::cooker::{decode_rmes, parse_rmxi_info};
+use prism_cooker::cooker::{
+    decode_rtex, default_cooker_registry, parse_rtexi_pixels, CookPipeline,
+};
+use prism_cooker::db::{AssetDatabase, ImportCache};
+use prism_cooker::importer::{default_importer_registry, ImportPipeline};
 
 // ---------------------------------------------------------------------------
 // Helpers

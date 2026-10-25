@@ -34,4 +34,3 @@ pub fn scene_render_system(world: &World) -> Vec<DrawItem> {
 #[cfg(test)]
 #[path = "render_tests.rs"]
 mod tests;
-

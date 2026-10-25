@@ -20,7 +20,13 @@ impl RenderRuntime {
         let context = renderer.context_arc();
         Self { context, renderer }
     }
-    pub fn context(&self) -> &VulkanContext { &self.context }
-    pub fn renderer(&self) -> &GraphRenderer { &self.renderer }
-    pub fn renderer_mut(&mut self) -> &mut GraphRenderer { &mut self.renderer }
+    pub fn context(&self) -> &VulkanContext {
+        &self.context
+    }
+    pub fn renderer(&self) -> &GraphRenderer {
+        &self.renderer
+    }
+    pub fn renderer_mut(&mut self) -> &mut GraphRenderer {
+        &mut self.renderer
+    }
 }

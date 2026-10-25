@@ -180,10 +180,7 @@ struct PendingEntity {
 }
 
 /// Encode an authoring scene into the compact RSCN v4 runtime format.
-pub fn encode_scene(
-    scene: &SceneJson,
-    registry: &ComponentRegistry,
-) -> Result<Vec<u8>, RscnError> {
+pub fn encode_scene(scene: &SceneJson, registry: &ComponentRegistry) -> Result<Vec<u8>, RscnError> {
     scene.validate().map_err(RscnError::BadValue)?;
 
     let order = scene.topological_order();
@@ -218,7 +215,13 @@ pub fn encode_scene(
                 .ok_or(RscnError::NotRegistered(object.type_id))?;
             collect_schema_types(descriptor.id, registry.type_registry(), &mut used_types)?;
             let mut payload = Vec::new();
-            encode_object(&object, descriptor, registry.type_registry(), &mut payload, 0)?;
+            encode_object(
+                &object,
+                descriptor,
+                registry.type_registry(),
+                &mut payload,
+                0,
+            )?;
             components.push((descriptor.id, payload));
         }
 
@@ -288,7 +291,9 @@ fn collect_schema_types(
     if !out.insert(id) {
         return Ok(());
     }
-    let descriptor = registry.descriptor(id).ok_or(RscnError::NotRegistered(id))?;
+    let descriptor = registry
+        .descriptor(id)
+        .ok_or(RscnError::NotRegistered(id))?;
     for field in &descriptor.fields {
         collect_field_type(&field.ty, registry, out)?;
     }
@@ -327,10 +332,13 @@ fn encode_object(
         )));
     }
     for field in &descriptor.fields {
-        let value = object.fields.get(field.name).ok_or_else(|| RscnError::MissingField {
-            type_name: descriptor.name.to_owned(),
-            field: field.name.to_owned(),
-        })?;
+        let value = object
+            .fields
+            .get(field.name)
+            .ok_or_else(|| RscnError::MissingField {
+                type_name: descriptor.name.to_owned(),
+                field: field.name.to_owned(),
+            })?;
         encode_value(value, &field.ty, registry, out, depth + 1)?;
     }
     Ok(())
@@ -350,18 +358,26 @@ pub fn encode_value(
         FieldType::Bool => out.push(if value.as_bool()? { 1 } else { 0 }),
         FieldType::I8 => out.push(i8::try_from(value.as_i64()?).map_err(bad_range)? as u8),
         FieldType::I16 => out.extend_from_slice(
-            &i16::try_from(value.as_i64()?).map_err(bad_range)?.to_le_bytes(),
+            &i16::try_from(value.as_i64()?)
+                .map_err(bad_range)?
+                .to_le_bytes(),
         ),
         FieldType::I32 => out.extend_from_slice(
-            &i32::try_from(value.as_i64()?).map_err(bad_range)?.to_le_bytes(),
+            &i32::try_from(value.as_i64()?)
+                .map_err(bad_range)?
+                .to_le_bytes(),
         ),
         FieldType::I64 => out.extend_from_slice(&value.as_i64()?.to_le_bytes()),
         FieldType::U8 => out.push(u8::try_from(value.as_u64()?).map_err(bad_range)?),
         FieldType::U16 => out.extend_from_slice(
-            &u16::try_from(value.as_u64()?).map_err(bad_range)?.to_le_bytes(),
+            &u16::try_from(value.as_u64()?)
+                .map_err(bad_range)?
+                .to_le_bytes(),
         ),
         FieldType::U32 => out.extend_from_slice(
-            &u32::try_from(value.as_u64()?).map_err(bad_range)?.to_le_bytes(),
+            &u32::try_from(value.as_u64()?)
+                .map_err(bad_range)?
+                .to_le_bytes(),
         ),
         FieldType::U64 => out.extend_from_slice(&value.as_u64()?.to_le_bytes()),
         FieldType::F32 => out.extend_from_slice(&(value.as_f32()?).to_le_bytes()),
@@ -375,7 +391,9 @@ pub fn encode_value(
             out.extend_from_slice(text.as_bytes());
         }
         FieldType::Struct(id) => {
-            let descriptor = registry.descriptor(*id).ok_or(RscnError::NotRegistered(*id))?;
+            let descriptor = registry
+                .descriptor(*id)
+                .ok_or(RscnError::NotRegistered(*id))?;
             let object = value.as_object()?;
             encode_object(object, descriptor, registry, out, depth + 1)?;
         }
@@ -417,10 +435,7 @@ pub fn encode_value(
 // Decoding
 // ---------------------------------------------------------------------------
 
-pub fn decode_scene(
-    data: &[u8],
-    registry: &ComponentRegistry,
-) -> Result<DecodedScene, RscnError> {
+pub fn decode_scene(data: &[u8], registry: &ComponentRegistry) -> Result<DecodedScene, RscnError> {
     let mut reader = Reader::new(data);
     if reader.take(4)? != MAGIC {
         return Err(RscnError::BadMagic);
@@ -476,9 +491,7 @@ pub fn decode_scene(
         for _ in 0..component_count {
             let id = TypeId(reader.u64()?);
             let payload_len = reader.u32()? as usize;
-            let descriptor = *types
-                .get(&id)
-                .ok_or(RscnError::NotRegistered(id))?;
+            let descriptor = *types.get(&id).ok_or(RscnError::NotRegistered(id))?;
             let payload = reader.take(payload_len)?;
             let mut payload_reader = Reader::new(payload);
             let object = decode_object(&mut payload_reader, descriptor, type_registry, 0)?;
@@ -490,7 +503,11 @@ pub fn decode_scene(
 
         entities.push(DecodedEntity {
             name,
-            parent: if parent < 0 { None } else { Some(parent as u32) },
+            parent: if parent < 0 {
+                None
+            } else {
+                Some(parent as u32)
+            },
             translation,
             rotation,
             scale,
@@ -534,11 +551,7 @@ pub fn decode_value(
         FieldType::Bool => match reader.u8()? {
             0 => Value::Bool(false),
             1 => Value::Bool(true),
-            other => {
-                return Err(RscnError::BadValue(format!(
-                    "invalid bool byte {other}"
-                )))
-            }
+            other => return Err(RscnError::BadValue(format!("invalid bool byte {other}"))),
         },
         FieldType::I8 => Value::I64(reader.u8()? as i8 as i64),
         FieldType::I16 => Value::I64(reader.i16()? as i64),
@@ -552,7 +565,9 @@ pub fn decode_value(
         FieldType::F64 => Value::F64(reader.f64()?),
         FieldType::String => Value::Str(reader.long_string()?),
         FieldType::Struct(id) => {
-            let descriptor = registry.descriptor(*id).ok_or(RscnError::NotRegistered(*id))?;
+            let descriptor = registry
+                .descriptor(*id)
+                .ok_or(RscnError::NotRegistered(*id))?;
             Value::Object(decode_object(reader, descriptor, registry, depth + 1)?)
         }
         FieldType::List(inner) => {
@@ -569,11 +584,7 @@ pub fn decode_value(
         FieldType::Optional(inner) => match reader.u8()? {
             0 => Value::None,
             1 => decode_value(reader, inner, registry, depth + 1)?,
-            other => {
-                return Err(RscnError::BadValue(format!(
-                    "invalid optional tag {other}"
-                )))
-            }
+            other => return Err(RscnError::BadValue(format!("invalid optional tag {other}"))),
         },
         FieldType::Array(inner, len) => {
             let mut items = Vec::with_capacity(*len);
@@ -628,11 +639,11 @@ impl<'a> Reader<'a> {
     }
 
     pub fn take(&mut self, len: usize) -> Result<&'a [u8], RscnError> {
-        let end = self
-            .pos
-            .checked_add(len)
+        let end = self.pos.checked_add(len).ok_or(RscnError::UnexpectedEof)?;
+        let slice = self
+            .data
+            .get(self.pos..end)
             .ok_or(RscnError::UnexpectedEof)?;
-        let slice = self.data.get(self.pos..end).ok_or(RscnError::UnexpectedEof)?;
         self.pos = end;
         Ok(slice)
     }

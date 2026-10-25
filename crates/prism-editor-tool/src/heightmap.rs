@@ -278,4 +278,3 @@ pub fn generate_heightmap(cfg: &HeightmapConfig) -> Heightmap {
 #[cfg(test)]
 #[path = "heightmap_tests.rs"]
 mod tests;
-

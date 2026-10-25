@@ -52,4 +52,3 @@ pub fn collect_spot_lights(world: &World) -> Vec<SpotLight> {
 #[cfg(test)]
 #[path = "lights_tests.rs"]
 mod tests;
-

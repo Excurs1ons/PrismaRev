@@ -154,4 +154,3 @@ impl HotReloadWatcher {
 #[cfg(test)]
 #[path = "hot_reload_tests.rs"]
 mod tests;
-

@@ -57,11 +57,7 @@ pub fn create_asset_dir(project_root: &Path, relative: &str) -> Result<String, S
 }
 
 /// 重命名 / 移动资产（文件或目录），并同步文档引用。
-pub fn rename_asset(
-    project_root: &Path,
-    from: &str,
-    to: &str,
-) -> Result<AssetMutation, String> {
+pub fn rename_asset(project_root: &Path, from: &str, to: &str) -> Result<AssetMutation, String> {
     let from_rel = normalize_asset_path(from)?;
     let to_rel = normalize_asset_path(to)?;
     ensure_document_placement(&from_rel, &to_rel)?;
@@ -89,7 +85,10 @@ pub fn rename_asset(
         if !parent.is_dir() {
             return Err(format!(
                 "目标父目录不存在：{}",
-                parent.strip_prefix(project_root).unwrap_or(parent).display()
+                parent
+                    .strip_prefix(project_root)
+                    .unwrap_or(parent)
+                    .display()
             ));
         }
     }
@@ -251,7 +250,10 @@ fn ensure_document_placement(from: &str, to: &str) -> Result<(), String> {
 }
 
 fn validate_name(name: &str) -> Result<(), String> {
-    if name.chars().any(|c| matches!(c, '<' | '>' | ':' | '"' | '|' | '?' | '*')) {
+    if name
+        .chars()
+        .any(|c| matches!(c, '<' | '>' | ':' | '"' | '|' | '?' | '*'))
+    {
         return Err(format!("文件名包含非法字符：{name}"));
     }
     if name.ends_with('.') || name.ends_with(' ') {
@@ -328,13 +330,9 @@ fn plan_rewrites(project_root: &Path, renamer: &Renamer) -> Result<RewritePlan, 
         // 引用解析用旧目录；写给文档的路径用移动后的目录（目录整体重命名时两者不同）。
         let old_dir = old_abs.parent().unwrap_or(project_root);
         let write_dir = mapped_abs.parent().unwrap_or(old_dir);
-        let changed = rewrite_json(
-            &mut value,
-            old_dir,
-            write_dir,
-            project_root,
-            &|abs| renamer.map(abs),
-        );
+        let changed = rewrite_json(&mut value, old_dir, write_dir, project_root, &|abs| {
+            renamer.map(abs)
+        });
         let old_rel = relative_path_string(project_root, &old_abs);
         let mapped_rel = relative_path_string(project_root, &mapped_abs);
         if changed > 0 || mapped_rel != old_rel {
@@ -356,19 +354,14 @@ fn plan_rewrites(project_root: &Path, renamer: &Renamer) -> Result<RewritePlan, 
 }
 
 /// 把计划的文档写回（路径按重命名映射到新位置）。
-fn apply_plan(
-    project_root: &Path,
-    plan: RewritePlan,
-    renamer: &Renamer,
-) -> Result<usize, String> {
+fn apply_plan(project_root: &Path, plan: RewritePlan, renamer: &Renamer) -> Result<usize, String> {
     for (old_path, value) in plan.documents {
         let target = renamer.map(&old_path).unwrap_or(old_path);
         write_doc(&target, &value)?;
     }
     if let Some(text) = plan.manifest {
         let path = project_root.join(SCENE_MANIFEST);
-        std::fs::write(&path, text)
-            .map_err(|e| format!("写入 {} 失败: {e}", path.display()))?;
+        std::fs::write(&path, text).map_err(|e| format!("写入 {} 失败: {e}", path.display()))?;
     }
     Ok(plan.references)
 }
@@ -448,8 +441,8 @@ fn rewrite_manifest(
     if !path.is_file() {
         return Ok(None);
     }
-    let text = std::fs::read_to_string(&path)
-        .map_err(|e| format!("读取 {} 失败: {e}", path.display()))?;
+    let text =
+        std::fs::read_to_string(&path).map_err(|e| format!("读取 {} 失败: {e}", path.display()))?;
     let Ok(manifest) = toml::from_str::<SceneManifest>(&text) else {
         return Ok(None);
     };
@@ -482,17 +475,13 @@ fn rewrite_manifest(
     }
 }
 
-fn manifest_references(
-    project_root: &Path,
-    target: &Path,
-    is_dir: bool,
-) -> Result<bool, String> {
+fn manifest_references(project_root: &Path, target: &Path, is_dir: bool) -> Result<bool, String> {
     let path = project_root.join(SCENE_MANIFEST);
     if !path.is_file() {
         return Ok(false);
     }
-    let text = std::fs::read_to_string(&path)
-        .map_err(|e| format!("读取 {} 失败: {e}", path.display()))?;
+    let text =
+        std::fs::read_to_string(&path).map_err(|e| format!("读取 {} 失败: {e}", path.display()))?;
     let Ok(manifest) = toml::from_str::<SceneManifest>(&text) else {
         return Ok(false);
     };

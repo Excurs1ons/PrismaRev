@@ -176,7 +176,10 @@ pub fn set_component_field(
 }
 
 /// 把组件 JSON 规范化（`from_object` 校验 + `object_to_json` 还原）。
-pub fn normalize_component(component: &str, value: &serde_json::Value) -> Result<serde_json::Value, String> {
+pub fn normalize_component(
+    component: &str,
+    value: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
     let registry = registry();
     let object: Object = registry
         .object_from_json(component, value)

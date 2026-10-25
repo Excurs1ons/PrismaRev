@@ -64,4 +64,3 @@ impl HierarchyHelper {
 #[cfg(test)]
 #[path = "helpers_tests.rs"]
 mod tests;
-

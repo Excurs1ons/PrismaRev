@@ -253,4 +253,3 @@ pub fn generate_parallel(
 #[cfg(test)]
 #[path = "noise_tests.rs"]
 mod tests;
-

@@ -19,10 +19,22 @@ pub struct PluginRegistry {
     plugins: Vec<Box<dyn RenderPlugin>>,
 }
 impl PluginRegistry {
-    pub fn new() -> Self { Self { plugins: Vec::new() } }
-    pub fn register<P: RenderPlugin + 'static>(&mut self, p: P) { self.plugins.push(Box::new(p)); }
+    pub fn new() -> Self {
+        Self {
+            plugins: Vec::new(),
+        }
+    }
+    pub fn register<P: RenderPlugin + 'static>(&mut self, p: P) {
+        self.plugins.push(Box::new(p));
+    }
     pub fn setup_all(&mut self, g: &mut RenderGraphBuilder, s: &RenderSettings) {
-        for p in &mut self.plugins { p.setup(g, s); }
+        for p in &mut self.plugins {
+            p.setup(g, s);
+        }
     }
 }
-impl Default for PluginRegistry { fn default() -> Self { Self::new() } }
+impl Default for PluginRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}

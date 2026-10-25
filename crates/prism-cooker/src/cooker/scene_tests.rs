@@ -19,12 +19,8 @@ fn make_intermediate(scene: &SceneJson) -> Vec<u8> {
 fn cook_scene_json(json: &[u8]) -> Result<(SceneCooker, CookResult), CookError> {
     let cooker = SceneCooker::default();
     let id = AssetId::from_raw((1u64 << 32) | 300);
-    let record = crate::db::AssetRecord::new(
-        id,
-        "scene.scene".into(),
-        AssetType::Scene,
-        "scene-importer",
-    );
+    let record =
+        crate::db::AssetRecord::new(id, "scene.scene".into(), AssetType::Scene, "scene-importer");
     let settings = crate::cooker::profile::CookSettings::default();
     let ctx = CookContext {
         record: &record,

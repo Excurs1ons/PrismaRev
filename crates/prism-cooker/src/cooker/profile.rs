@@ -670,4 +670,3 @@ impl Mergeable for CookSettings {
 #[cfg(test)]
 #[path = "profile_tests.rs"]
 mod tests;
-

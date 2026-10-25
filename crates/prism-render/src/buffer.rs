@@ -311,7 +311,8 @@ pub unsafe fn create_and_upload_image(
         );
     sync2.cmd_pipeline_barrier2(
         cmd,
-        &vk::DependencyInfo::default().image_memory_barriers(std::slice::from_ref(&undefined_to_dst)),
+        &vk::DependencyInfo::default()
+            .image_memory_barriers(std::slice::from_ref(&undefined_to_dst)),
     );
 
     let copy = vk::BufferImageCopy::default()
@@ -355,7 +356,8 @@ pub unsafe fn create_and_upload_image(
             );
         sync2.cmd_pipeline_barrier2(
             cmd,
-            &vk::DependencyInfo::default().image_memory_barriers(std::slice::from_ref(&promote_mip0)),
+            &vk::DependencyInfo::default()
+                .image_memory_barriers(std::slice::from_ref(&promote_mip0)),
         );
 
         for mip in 1..mip_levels {
@@ -422,7 +424,8 @@ pub unsafe fn create_and_upload_image(
                 );
             sync2.cmd_pipeline_barrier2(
                 cmd,
-                    &vk::DependencyInfo::default().image_memory_barriers(std::slice::from_ref(&src_done)),
+                &vk::DependencyInfo::default()
+                    .image_memory_barriers(std::slice::from_ref(&src_done)),
             );
             // Prepare this destination level as the 下一个 源 (unless it is
             // the 最后一个 level, which stays TRANSFER_DST for the final 屏障
@@ -444,7 +447,8 @@ pub unsafe fn create_and_upload_image(
                     );
                 sync2.cmd_pipeline_barrier2(
                     cmd,
-                    &vk::DependencyInfo::default().image_memory_barriers(std::slice::from_ref(&promote)),
+                    &vk::DependencyInfo::default()
+                        .image_memory_barriers(std::slice::from_ref(&promote)),
                 );
             }
         }
@@ -467,7 +471,8 @@ pub unsafe fn create_and_upload_image(
             );
         sync2.cmd_pipeline_barrier2(
             cmd,
-            &vk::DependencyInfo::default().image_memory_barriers(std::slice::from_ref(&dst_to_read)),
+            &vk::DependencyInfo::default()
+                .image_memory_barriers(std::slice::from_ref(&dst_to_read)),
         );
     } else {
         // mip_levels == 1: no blits, just 过渡 the single level to
@@ -488,7 +493,8 @@ pub unsafe fn create_and_upload_image(
             );
         sync2.cmd_pipeline_barrier2(
             cmd,
-            &vk::DependencyInfo::default().image_memory_barriers(std::slice::from_ref(&dst_to_read)),
+            &vk::DependencyInfo::default()
+                .image_memory_barriers(std::slice::from_ref(&dst_to_read)),
         );
     }
 

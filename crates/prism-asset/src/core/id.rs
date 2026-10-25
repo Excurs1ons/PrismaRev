@@ -160,4 +160,3 @@ impl AssetIdGenerator {
 #[cfg(test)]
 #[path = "id_tests.rs"]
 mod tests;
-
