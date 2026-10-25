@@ -145,19 +145,37 @@ impl Drop for DescriptorPool {
     }
 }
 
-/// 最大 number of point lights in the 光源 SSBO.
+/// 最大 number of **local** lights（点光 + 聚光）in the 光源 SSBO.
 pub const LIGHT_MAX: u32 = 8;
 
-/// GPU data 布局 for a single point 光源 (32 字节 16-byte aligned).
+/// [`GpuLight::color`] 的 `.w` 取值：点光源（全向）。
+pub const GPU_LIGHT_KIND_POINT: f32 = 0.0;
+/// [`GpuLight::color`] 的 `.w` 取值：聚光灯（锥形）。
+pub const GPU_LIGHT_KIND_SPOT: f32 = 1.0;
+
+/// GPU data 布局 for a single local 光源（点光或聚光，64 字节 / 16-byte aligned）。
 ///
 /// Mirrors the Slang `GpuLight` 结构体 in `scene_frag.slang`.
 /// Stored in a `StructuredBuffer<GpuLight>` at 集合 0 绑定 2.
+///
+/// 以前只有 `position` / `color` 两个 `float4`（32 字节，仅点光）；P3b 加了
+/// `direction` / `params` 以支持聚光锥角 —— `.color.w` 是类型位（见
+/// [`GPU_LIGHT_KIND_POINT`] / [`GPU_LIGHT_KIND_SPOT`]）。
 #[repr(C)]
 #[derive(Clone, Debug, PartialEq)]
 pub struct GpuLight {
-    pub position: [f32; 4], // xyz = world position, w = range (attenuation radius)
-    pub color: [f32; 4],    // rgb = radiant intensity, w = 1.0
+    /// xyz = world position, w = range (attenuation radius)
+    pub position: [f32; 4],
+    /// rgb = radiant intensity, w = kind ([`GPU_LIGHT_KIND_POINT`] / [`GPU_LIGHT_KIND_SPOT`])
+    pub color: [f32; 4],
+    /// xyz = 光源朝向（Unity `transform.forward`）, w = cos(outer half-angle)
+    pub direction: [f32; 4],
+    /// x = cos(inner half-angle)；yzw 保留
+    pub params: [f32; 4],
 }
+
+/// [`GpuLight`] 的字节大小（SSBO 步长，与着色器结构体必须一致）。
+pub const GPU_LIGHT_SIZE: usize = std::mem::size_of::<GpuLight>();
 
 /// 最大 number of analytic lights in the PT 光源 SSBO.
 pub const PT_LIGHT_MAX: u32 = 64;

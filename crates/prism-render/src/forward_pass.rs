@@ -563,7 +563,8 @@ impl ForwardPass {
         // lights. Shared across all 帧 sets. The 缓冲区 is zero-initialized
         // here; `ForwardPass::update_lights` rewrites the contents every 帧
         // from the ECS `PointLight` 查询 (see `render_system`).
-        let light_ssbo_size = (crate::descriptor::LIGHT_MAX as vk::DeviceSize) * 32;
+        let light_ssbo_size = (crate::descriptor::LIGHT_MAX as vk::DeviceSize)
+            * crate::descriptor::GPU_LIGHT_SIZE as vk::DeviceSize;
         let (light_buffer, light_memory) = crate::buffer::create_buffer(
             context,
             light_ssbo_size,
@@ -973,7 +974,8 @@ impl ForwardPass {
             // the 第一个 帧 after set_resources will see zeros.
             return Ok(());
         }
-        let total_bytes = (crate::descriptor::LIGHT_MAX as usize) * 32;
+        let total_bytes =
+            (crate::descriptor::LIGHT_MAX as usize) * crate::descriptor::GPU_LIGHT_SIZE;
         let ptr = unsafe {
             device.map_memory(
                 self.light_memory,
