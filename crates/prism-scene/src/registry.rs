@@ -368,6 +368,7 @@ pub fn register_builtin_components(registry: &mut ComponentRegistry) {
     });
 
     // ── 光源 ──
+    registry.register_reflect_serde::<Light>("prism_engine::scene::Light");
     registry.register_reflect_serde::<DirectionalLight>("prism_engine::scene::DirectionalLight");
     registry.register_reflect_serde::<PointLight>("prism_engine::scene::PointLight");
     registry.register_reflect_serde::<SpotLight>("prism_engine::scene::SpotLight");

@@ -189,9 +189,8 @@ public 类型的只有 **43** 个（≈0.9%）。这既是现状，也是后续�
   `asset_database` / `prefab_utility` / `selection` / `undo` / `editor_application` /
   `scene_management`（与既有导出同名的函数只在模块路径下提供，避免根命名冲突）。
 - **P3 渲染/光照/相机** — 🔄 进行中。P3a（相机）已完整落地（schema + 引擎接线 +
-  枚举下拉框，见 §9）；P3b（光照）从渲染枚举开始（`LightType` / `LightShadows` /
-  `LightRenderMode` + 色温换算），`Light` 组件与引擎接线见 §9 待办；
-  P3c（相机行为）待做。
+  枚举下拉框，见 §9）；P3b（光照）已落地渲染枚举 + `Light` 组件 schema，
+  引擎接线（统一收集 + 聚光进 GPU 光列表）见 §9 待办；P3c（相机行为）待做。
 - **P4 编辑器扩展**：`PropertyDrawer` schema 扩展点 + `EditorWindow` 面板注册表 DTO。
 - **P5 资产流水线**：`AssetImporters`/`Build`/`Build.Profile`/`Compilation` 形状。
 - **P6 并行/集合**：`Unity.Collections`/`Unity.Jobs` 形状（`NativeArray`/`IJob*`/`JobHandle`）。
@@ -516,6 +515,38 @@ P3b（光照）的第一块：先把 Unity 的光照枚举做成**纯数据镜�
 
 **这一批刻意没做**：`Light` 组件本身（下一批 `20261025-light-unity-shape`）、
 引擎接线、`ShadowCastingMode`、`BlendMode`/`CullMode`/`CompareFunction`/`RenderQueue`。
+
+### P3b-1b — `Light` 组件（Unity 形状）✅
+
+承接 P3b-1a 的枚举，这一批补上 Unity 形状的**组件本身**（纯加法）。
+
+Unity 只有一个 `Light`，用 `Light.type` 区分方向光 / 点光 / 聚光，方向由
+`transform.forward` 决定；PrismaRev 之前是三个独立组件，且方向光把欧拉角存在组件里。
+
+**prism-scene（`components.rs`）**
+- 新增 `Light`（`#[reflect(name = "prism_engine::scene::Light")]`）：
+  `enabled`、`light_type`、`color`、`intensity`、`range`、`spot_angle`、
+  `inner_spot_angle`、`shadows`、`shadow_strength`、`color_temperature`、
+  `use_color_temperature`、`render_mode`，全部带默认值（`serde(default)`）。
+- 单位刻意与旧组件一致（方向光 lux、点光/聚光 candela），**不是** Unity 的归一化
+  `intensity = 1`：渲染器内部按 `LUX_TO_RADIANCE_SCALE` 折算，观感与旧组件一致。
+  这是有意的偏差，写在组件文档里。
+- `effective_color()` = `color × 色温`（仅 `use_color_temperature` 为真时），
+  对应 Unity 的 `ExtractColorTemperature` + `ApplyColorTemperature`。
+- `cone_half_angles_radians()`：Unity 的 `spotAngle` / `innerSpotAngle` 都是
+  **全锥角（度）**，这里转成半角弧度，并把 `inner > outer` 的非法配置裁掉。
+- `is_shadow_caster()` = `enabled && shadows != None`。
+- `registry.rs` 注册 `Light`：schema / 默认值 / `.scene.json` / RSCN 共用同一条路径，
+  因此检查器里能看到全部字段，`light_type`、`shadows`、`render_mode` 都是下拉框。
+- 测试 5 个：默认值（Point / None / 30° / 21.8° / 6570 K）、JSON 往返 +
+  缺字段回退、色温滤色只按开关生效、锥角换算与裁剪、阴影判定。
+
+**旧组件不删、不迁移**：`DirectionalLight` / `PointLight` / `SpotLight` 继续可用，
+`SCENE_DOC_VERSION` 仍为 2；引擎接线（两者都收）在下一批。
+
+**这一批刻意没做**：引擎还没消费 `Light`（`collect_lights` 仍只查旧组件）；
+`MeshRenderer.shadowCastingMode` 与 `BlendMode`/`CullMode`/`CompareFunction`/
+`RenderQueue` 仍未开始。
 
 ### 待办（下一批候选）
 - **P3b 光照/渲染**：`Light` 组件（`light_type`/`color`/`intensity`/`range`/
