@@ -205,3 +205,103 @@ fn deep_chain_cooks_and_decodes_with_parent_before_child() {
         }
     }
 }
+
+#[test]
+fn entity_ids_must_be_unique() {
+    let error = SceneJson::from_value(serde_json::json!({
+        "version": crate::SCENE_DOC_VERSION,
+        "entities": [
+            { "id": 1, "parent": null },
+            { "id": 1, "parent": null },
+        ],
+    }))
+    .unwrap()
+    .validate()
+    .expect_err("duplicate id must be rejected");
+    assert!(error.contains("duplicate id"), "{error}");
+}
+
+#[test]
+fn parent_must_reference_an_existing_id() {
+    let error = SceneJson::from_value(serde_json::json!({
+        "version": crate::SCENE_DOC_VERSION,
+        "entities": [
+            { "id": 0, "parent": null },
+            { "id": 7, "parent": 42 },
+        ],
+    }))
+    .unwrap()
+    .validate()
+    .expect_err("dangling parent id must be rejected");
+    assert!(error.contains("does not exist"), "{error}");
+}
+
+#[test]
+fn self_parent_is_checked_by_id_not_position() {
+    let error = SceneJson::from_value(serde_json::json!({
+        "version": crate::SCENE_DOC_VERSION,
+        "entities": [
+            { "id": 0, "parent": null },
+            { "id": 5, "parent": 5 },
+        ],
+    }))
+    .unwrap()
+    .validate()
+    .expect_err("self parent must be rejected");
+    assert!(error.contains("self-parent"), "{error}");
+}
+
+#[test]
+fn v2_documents_get_identity_ids_on_migration() {
+    // v2：`parent` 是数组下标，没有 id。
+    let scene = SceneJson::from_value(serde_json::json!({
+        "version": 2,
+        "entities": [
+            { "name": "root", "parent": null },
+            { "name": "mid", "parent": 0 },
+            { "name": "leaf", "parent": 1 },
+        ],
+    }))
+    .unwrap();
+
+    assert_eq!(scene.version, crate::SCENE_DOC_VERSION);
+    assert_eq!(scene.entities[0].id, 0);
+    assert_eq!(scene.entities[1].id, 1);
+    assert_eq!(scene.entities[2].id, 2);
+    // 恒等映射：旧的父下标数值直接变成 id，层级不变。
+    assert_eq!(scene.entities[1].parent, Some(0));
+    assert_eq!(scene.entities[2].parent, Some(1));
+    scene.validate().unwrap();
+    assert_eq!(scene.topological_order(), vec![0, 1, 2]);
+}
+
+#[test]
+fn next_id_is_monotonic_and_never_reuses() {
+    let scene = SceneJson::from_value(serde_json::json!({
+        "version": crate::SCENE_DOC_VERSION,
+        "entities": [
+            { "id": 3, "parent": null },
+            { "id": 9, "parent": 3 },
+        ],
+    }))
+    .unwrap();
+    // 删掉 id 9 也不会让下一个 id 回退到 9。
+    assert_eq!(scene.next_id(), 10);
+}
+
+#[test]
+fn topological_order_resolves_non_contiguous_ids() {
+    let scene = SceneJson::from_value(serde_json::json!({
+        "version": crate::SCENE_DOC_VERSION,
+        "entities": [
+            { "id": 40, "parent": null, "name": "root" },
+            { "id": 12, "parent": 40, "name": "child" },
+            { "id": 3, "parent": 12, "name": "grandchild" },
+        ],
+    }))
+    .unwrap();
+
+    let order = scene.topological_order();
+    // 索引而非 id：40 → 0，12 → 1，3 → 2。
+    assert_eq!(order, vec![0, 1, 2]);
+}

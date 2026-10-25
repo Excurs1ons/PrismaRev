@@ -196,7 +196,9 @@ pub fn is_part_of_prefab_instance(scene_doc: &Value, root: usize) -> bool {
 
 /// 最近的实例根（含实体自身）= `GetNearestPrefabInstanceRoot`。
 pub fn get_nearest_prefab_instance_root(scene_doc: &Value, root: usize) -> Option<usize> {
-    let entities = entities(scene_doc).ok()?;
+    // 先规范化：v3 起 `parent` 引用实体 id，缺 id 的老文档需要先补齐。
+    let doc = &prism_scene::normalize_scene_doc(scene_doc).unwrap_or_else(|_| scene_doc.clone());
+    let entities = entities(doc).ok()?;
     if root >= entities.len() {
         return None;
     }
@@ -210,10 +212,13 @@ pub fn get_nearest_prefab_instance_root(scene_doc: &Value, root: usize) -> Optio
         if guard > entities.len() {
             return None; // 数据成环，保守放弃
         }
-        current = entities[index]
-            .get("parent")
-            .and_then(Value::as_u64)
-            .map(|parent| parent as usize);
+        // `parent` 是 id → 解析成下标再上溯。
+        let parent_id = entities[index].get("parent").and_then(Value::as_u64);
+        current = parent_id.and_then(|parent_id| {
+            entities
+                .iter()
+                .position(|entity| entity.get("id").and_then(Value::as_u64) == Some(parent_id))
+        });
     }
     None
 }

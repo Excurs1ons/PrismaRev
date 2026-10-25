@@ -293,6 +293,10 @@ The user project's dependency chain must stay **UI-framework-free and editor-fre
   (`register_reflect_type`) — never as a mountable component. Otherwise
   `registry.apply` overwrites `LocalTransform` *after* `LocalToWorld` was computed from
   the structural field. See `prism_scene::json::DERIVED_COMPONENTS`.
+- **`.scene.json` v3 entities carry a stable `id`**: `parent` references that id, **never**
+  the array index, and ids are not reused after deletion (`SceneJson::next_id`). Read/write
+  paths must go through `migrate_scene_doc` / `normalize_scene_doc`, which assign ids to
+  pre-v3 documents by array order (identity mapping).
 - **UI layout output is derived too**: `ComputedLayout` is inserted and rewritten every
   frame by `prism-engine/src/ui/layout.rs`, so authors write only `Node` + `Style`. It is
   registered as a type only (same list / same reason), and old documents that still

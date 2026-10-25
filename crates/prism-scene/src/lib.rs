@@ -18,7 +18,7 @@ pub mod ui;
 pub use components::*;
 pub use helpers::HierarchyHelper;
 pub use json::{EntityJson, SceneJson, TransformJson};
-pub use migrate::{doc_version, migrate_scene_doc, SCENE_DOC_VERSION};
+pub use migrate::{doc_version, migrate_scene_doc, normalize_scene_doc, SCENE_DOC_VERSION};
 pub use registry::{register_builtin_components, ComponentRegistry};
 pub use render_enums::{
     correlated_color_temperature_to_rgb, CameraClearFlags, LightRenderMode, LightShadows,

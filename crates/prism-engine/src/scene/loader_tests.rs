@@ -663,7 +663,8 @@ fn load_rscn_v4_applies_components_and_hierarchy() {
                 }
             ]
         }"#;
-    let scene: prism_scene::json::SceneJson = serde_json::from_slice(json).unwrap();
+    // 走迁移漏斗：v1 文档没有实体 id，直接 `from_slice` 会按设计报错。
+    let scene = prism_scene::SceneJson::parse(std::str::from_utf8(json).unwrap()).unwrap();
     let mut registry = crate::scene::ComponentRegistry::new();
     crate::scene::register_builtin_components(&mut registry);
     let bytes = prism_scene::rscn::encode_scene(&scene, &registry).unwrap();

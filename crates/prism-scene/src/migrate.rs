@@ -12,11 +12,12 @@
 //! |---|---|
 //! | 1（或缺失） | 初始格式：`transform.translation`、`LocalTransform.translation` |
 //! | 2 | 变换分量 `translation` → `position`（对齐 Unity DOTS `LocalTransform.Position`） |
+//! | 3 | 实体加稳定 `id`，`parent` 从数组下标改为引用 `id`（`id = 下标` 的恒等映射） |
 
 use serde_json::{json, Map, Value};
 
 /// 当前作者格式版本。写文件时总是写这个值。
-pub const SCENE_DOC_VERSION: u32 = 2;
+pub const SCENE_DOC_VERSION: u32 = 3;
 
 /// `LocalTransform` 组件在 `.scene.json` 里的规范名。
 const LOCAL_TRANSFORM_KEY: &str = "prism_engine::scene::LocalTransform";
@@ -53,12 +54,16 @@ pub fn migrate_scene_doc(doc: &mut Value) -> Result<(), String> {
     while version < SCENE_DOC_VERSION {
         match version {
             1 => migrate_v1_to_v2(root),
+            2 => migrate_v2_to_v3(root),
             other => return Err(format!("no migration path from scene version {other}")),
         }
         version += 1;
     }
 
-    // 与版本无关的规范化：派生组件不允许出现在作者文档里。
+    // 与版本无关的规范化：
+    // - 实体 id 缺失时按数组顺序补齐（v3 起 `parent` 引用 id）；
+    // - 派生组件不允许出现在作者文档里。
+    assign_ids(root);
     normalize_derived_components(root);
 
     root.insert("version".to_string(), json!(SCENE_DOC_VERSION));
@@ -135,6 +140,38 @@ fn hoist_transform(entity: &mut Map<String, Value>, legacy: Value) {
         transform.insert(field.to_string(), value.cloned().unwrap_or(fallback));
     }
     entity.insert("transform".to_string(), Value::Object(transform));
+}
+
+/// v2 → v3：给每个实体按数组顺序补 `id = 下标`。
+///
+/// `parent` 的**数值不变**：旧语义是"下标"，新语义是"id"，而 id 恰好等于下标，
+/// 所以这一步是恒等映射 —— 老文档的 diff 只有多出来的 `id` 字段。
+fn migrate_v2_to_v3(root: &mut Map<String, Value>) {
+    assign_ids(root);
+}
+
+/// 给缺 `id` 的实体按数组顺序补 `id = 下标`（幂等）。
+///
+/// 只补缺失的 `id`：已显式分配过的 id 不动（重复 id 由校验报错，而不是静默改号）。
+pub fn assign_ids(root: &mut Map<String, Value>) {
+    let Some(entities) = root.get_mut("entities").and_then(Value::as_array_mut) else {
+        return;
+    };
+    for (index, entity) in entities.iter_mut().enumerate() {
+        let Some(entity) = entity.as_object_mut() else {
+            continue;
+        };
+        entity
+            .entry("id".to_string())
+            .or_insert_with(|| json!(index as u64));
+    }
+}
+
+/// 迁移并返回一份新文档（编辑器所有写操作的前置步骤）。
+pub fn normalize_scene_doc(doc: &Value) -> Result<Value, String> {
+    let mut value = doc.clone();
+    migrate_scene_doc(&mut value)?;
+    Ok(value)
 }
 
 /// v1 → v2：变换分量 `translation` 改名为 `position`。

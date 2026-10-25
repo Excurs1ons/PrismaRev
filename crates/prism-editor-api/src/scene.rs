@@ -237,7 +237,11 @@ pub fn validate_scene_doc(doc: &serde_json::Value) -> Result<(), String> {
 }
 
 /// 校验并写回作者文档（2 空格缩进 + 结尾换行）。
+///
+/// 落盘的是**规范化后**的文档：补齐实体 `id`、升级到
+/// [`prism_scene::SCENE_DOC_VERSION`]、剥掉派生组件，而不是原始输入。
 pub fn write_doc(path: &Path, doc: &serde_json::Value) -> Result<(), String> {
+    let doc = &prism_scene::normalize_scene_doc(doc)?;
     validate_doc(doc)?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
@@ -472,7 +476,12 @@ pub fn template_scene_doc(id: &str) -> serde_json::Value {
         )],
     };
 
-    json!({ "version": prism_scene::SCENE_DOC_VERSION, "entities": entities })
+    normalize(json!({ "version": prism_scene::SCENE_DOC_VERSION, "entities": entities }))
+}
+
+/// 给模板文档补上实体 `id`（v3 起作者文档必须带 id）。
+fn normalize(doc: serde_json::Value) -> serde_json::Value {
+    prism_scene::normalize_scene_doc(&doc).unwrap_or(doc)
 }
 
 fn component_default(name: &str) -> serde_json::Value {
@@ -558,12 +567,12 @@ pub fn prefab_template_doc(preset_id: &str) -> serde_json::Value {
         components.insert(name.clone(), component_default(name));
     }
 
-    json!({
+    normalize(json!({
         "version": prism_scene::SCENE_DOC_VERSION,
         "entities": [
             entity(&preset.name, None, preset.position, serde_json::Value::Object(components)),
         ],
-    })
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -586,11 +595,36 @@ fn entities_of(doc: &serde_json::Value) -> Result<&Vec<serde_json::Value>, Strin
         .ok_or_else(|| "文档缺少 entities 数组".to_string())
 }
 
-fn parent_of(entity: &serde_json::Value) -> Option<usize> {
+fn id_of(entity: &serde_json::Value) -> u32 {
+    entity
+        .get("id")
+        .and_then(|value| value.as_u64())
+        .unwrap_or(0) as u32
+}
+
+/// `parent` 存的是父实体的 **id**（v3 起），不是数组下标。
+fn parent_of(entity: &serde_json::Value) -> Option<u32> {
     entity
         .get("parent")
         .and_then(|value| value.as_u64())
-        .map(|parent| parent as usize)
+        .map(|parent| parent as u32)
+}
+
+fn index_of_id(entities: &[serde_json::Value], id: u32) -> Option<usize> {
+    entities.iter().position(|entity| id_of(entity) == id)
+}
+
+/// 编辑操作统一入口：先迁移到当前 schema（补 id / 升级版本 / 剥派生组件）。
+fn normalized(doc: &serde_json::Value) -> Result<serde_json::Value, String> {
+    prism_scene::normalize_scene_doc(doc)
+}
+
+fn next_entity_id(entities: &[serde_json::Value]) -> u32 {
+    entities
+        .iter()
+        .map(id_of)
+        .max()
+        .map_or(0, |max| max.saturating_add(1))
 }
 
 /// 用新的实体数组重建文档（保留 `version`）。
@@ -605,19 +639,20 @@ fn doc_with_entities(
     serde_json::json!({ "version": version, "entities": entities })
 }
 
-/// `node` 是否位于 `ancestor` 的子树中（沿 parent 上溯）。
+/// `node` 是否位于 `ancestor` 的子树中（沿 parent id 上溯）。
 fn is_descendant(entities: &[serde_json::Value], node: usize, ancestor: usize) -> bool {
-    let mut current = Some(node);
+    let ancestor_id = id_of(&entities[ancestor]);
+    let mut current = parent_of(&entities[node]);
     let mut guard = 0;
-    while let Some(index) = current {
-        if index == ancestor {
+    while let Some(parent_id) = current {
+        if parent_id == ancestor_id {
             return true;
         }
         guard += 1;
         if guard > entities.len() {
             return false; // 数据里存在环，保守放弃
         }
-        current = parent_of(&entities[index]);
+        current = index_of_id(entities, parent_id).and_then(|index| parent_of(&entities[index]));
     }
     false
 }
@@ -652,6 +687,7 @@ pub fn move_entity(
     insert_at: usize,
     parent: Option<usize>,
 ) -> Result<MoveResult, String> {
+    let doc = &normalized(doc)?;
     validate_doc(doc)?;
     let entities = entities_of(doc)?;
     let count = entities.len();
@@ -684,30 +720,25 @@ pub fn move_entity(
     };
     order.insert(target.min(order.len()), child);
 
-    // 旧下标 → 新下标。
-    let mut remap = vec![usize::MAX; count];
-    for (new_index, old_index) in order.iter().enumerate() {
-        remap[*old_index] = new_index;
-    }
+    // 只改被移动实体的 `parent`：id 与数组位置解耦，其余实体完全不动。
+    let new_parent_id = parent.map(|index| id_of(&entities[index]));
+    let new_index = target.min(order.len() - 1);
 
     let mut out = Vec::with_capacity(count);
     for old_index in &order {
         let mut entity = entities[*old_index].clone();
-        let new_parent = if *old_index == child {
-            parent.map(|parent| remap[parent])
-        } else {
-            parent_of(&entity).map(|parent| remap[parent])
-        };
-        entity["parent"] = match new_parent {
-            Some(parent) => serde_json::json!(parent),
-            None => serde_json::json!(null),
-        };
+        if *old_index == child {
+            entity["parent"] = match new_parent_id {
+                Some(parent) => serde_json::json!(parent),
+                None => serde_json::json!(null),
+            };
+        }
         out.push(entity);
     }
 
     Ok(MoveResult {
         doc: doc_with_entities(doc, out),
-        index: remap[child],
+        index: new_index,
     })
 }
 
@@ -718,6 +749,7 @@ pub fn delete_entities(
     doc: &serde_json::Value,
     indices: &[usize],
 ) -> Result<serde_json::Value, String> {
+    let doc = &normalized(doc)?;
     validate_doc(doc)?;
     let entities = entities_of(doc)?;
     let count = entities.len();
@@ -734,14 +766,10 @@ pub fn delete_entities(
         return Err("至少要保留一个实体".into());
     }
 
-    let mut remap = vec![usize::MAX; count];
-    let mut next = 0;
-    for (old_index, is_removed) in removed.iter().enumerate() {
-        if !is_removed {
-            remap[old_index] = next;
-            next += 1;
-        }
-    }
+    let removed_ids: std::collections::HashSet<u32> = indices
+        .iter()
+        .map(|index| id_of(&entities[*index]))
+        .collect();
 
     let mut out = Vec::with_capacity(remaining);
     for (old_index, entity) in entities.iter().enumerate() {
@@ -749,13 +777,8 @@ pub fn delete_entities(
             continue;
         }
         let mut entity = entity.clone();
-        let new_parent = parent_of(&entity).and_then(|parent| {
-            if removed[parent] {
-                None
-            } else {
-                Some(remap[parent])
-            }
-        });
+        // 被删掉的父 → 变根；其余 parent 是 id，不受数组收缩影响。
+        let new_parent = parent_of(&entity).filter(|parent| !removed_ids.contains(parent));
         entity["parent"] = match new_parent {
             Some(parent) => serde_json::json!(parent),
             None => serde_json::json!(null),
@@ -778,8 +801,9 @@ fn subtree_indices(entities: &[serde_json::Value], root: usize) -> Vec<usize> {
             continue;
         }
         order.push(index);
+        let node_id = id_of(&entities[index]);
         for child in (0..entities.len()).rev() {
-            if parent_of(&entities[child]) == Some(index) && !order.contains(&child) {
+            if parent_of(&entities[child]) == Some(node_id) && !order.contains(&child) {
                 stack.push(child);
             }
         }
@@ -796,6 +820,7 @@ pub fn extract_subtree(
     scene: &serde_json::Value,
     root: usize,
 ) -> Result<serde_json::Value, String> {
+    let scene = &normalized(scene)?;
     validate_doc(scene)?;
     let entities = entities_of(scene)?;
     if root >= entities.len() {
@@ -803,17 +828,20 @@ pub fn extract_subtree(
     }
 
     let order = subtree_indices(entities, root);
-    let mapping: std::collections::HashMap<usize, u32> = order
+    // 预制体文件自成 id 空间：子树 id 重编号为 0..k，内部父子引用跟着改。
+    let mapping: std::collections::HashMap<u32, u32> = order
         .iter()
         .enumerate()
-        .map(|(new_index, old_index)| (*old_index, new_index as u32))
+        .map(|(new_id, old_index)| (id_of(&entities[*old_index]), new_id as u32))
         .collect();
 
     let mut extracted = Vec::with_capacity(order.len());
     for old_index in &order {
         let mut entity = entities[*old_index].clone();
+        let parent = parent_of(&entity);
         // 不在子树内的父（含根实体原本的父）→ null。
-        let new_parent = parent_of(&entity).and_then(|parent| mapping.get(&parent).copied());
+        let new_parent = parent.and_then(|parent| mapping.get(&parent).copied());
+        entity["id"] = serde_json::json!(mapping[&id_of(&entity)]);
         entity["parent"] = match new_parent {
             Some(parent) => serde_json::json!(parent),
             None => serde_json::json!(null),
@@ -855,6 +883,8 @@ pub fn instantiate_prefab(
     parent: Option<u32>,
     link: Option<&str>,
 ) -> Result<InstantiateResult, String> {
+    let scene = &normalized(scene)?;
+    let prefab = &normalized(prefab)?;
     validate_doc(scene)?;
     validate_doc(prefab)?;
 
@@ -870,7 +900,14 @@ pub fn instantiate_prefab(
         .get("version")
         .cloned()
         .unwrap_or(serde_json::json!(prism_scene::SCENE_DOC_VERSION));
-    let base = scene_entities.len();
+    // 预制体自成 id 空间：整体分配一段新 id，并记住 旧 id → 新 id。
+    let id_base = next_entity_id(&scene_entities);
+    let id_map: std::collections::HashMap<u32, u32> = prefab_entities
+        .iter()
+        .enumerate()
+        .map(|(offset, entity)| (id_of(entity), id_base + offset as u32))
+        .collect();
+    let root_parent_id = parent.map(|index| id_of(&scene_entities[index as usize]));
 
     let mut names: Vec<String> = scene_entities
         .iter()
@@ -898,11 +935,12 @@ pub fn instantiate_prefab(
         names.push(name.clone());
         entity["name"] = serde_json::json!(name);
 
-        let prefab_parent = entity.get("parent").and_then(|value| value.as_u64());
+        let prefab_parent = parent_of(&entity);
         let new_parent = match prefab_parent {
-            Some(prefab_parent) => Some(base as u32 + prefab_parent as u32),
-            None => parent,
+            Some(prefab_parent) => id_map.get(&prefab_parent).copied(),
+            None => root_parent_id,
         };
+        entity["id"] = serde_json::json!(id_map[&id_of(&entity)]);
         entity["parent"] = match new_parent {
             Some(parent) => serde_json::json!(parent),
             None => serde_json::json!(null),
@@ -935,6 +973,7 @@ pub fn instantiate_prefab(
 
 /// 列出文档里所有预制体实例根（反向链接）。
 pub fn prefab_instances(doc: &serde_json::Value) -> Vec<PrefabLink> {
+    let doc = &normalized(doc).unwrap_or_else(|_| doc.clone());
     let Ok(entities) = entities_of(doc) else {
         return Vec::new();
     };
@@ -964,6 +1003,7 @@ pub fn revert_prefab_instance(
     prefab: &serde_json::Value,
     link: Option<&str>,
 ) -> Result<MoveResult, String> {
+    let scene = &normalized(scene)?;
     validate_doc(scene)?;
     let entities = entities_of(scene)?;
     if root >= entities.len() {
@@ -974,17 +1014,12 @@ pub fn revert_prefab_instance(
         .get("name")
         .and_then(|value| value.as_str())
         .map(|name| name.to_string());
+    // `parent` 是 id，删掉子树不会让它失效（这正是 v3 想要的效果）。
     let parent = parent_of(&entities[root]);
     let subtree = subtree_indices(entities, root);
 
-    // 删除子树后，原父实体的新下标 = 原下标 - 子树中排在其前面的个数。
-    let new_parent = parent.map(|parent| {
-        let removed_before = subtree.iter().filter(|index| **index < parent).count();
-        parent - removed_before
-    });
-
     let trimmed = delete_entities(scene, &subtree)?;
-    let result = instantiate_prefab(&trimmed, prefab, new_parent.map(|p| p as u32), link)?;
+    let result = instantiate_prefab(&trimmed, prefab, parent, link)?;
     let new_root = *result
         .inserted
         .first()
@@ -1012,6 +1047,7 @@ pub fn unlink_prefab_instance(
     scene: &serde_json::Value,
     root: usize,
 ) -> Result<serde_json::Value, String> {
+    let scene = &normalized(scene)?;
     validate_doc(scene)?;
     let mut entities = entities_of(scene)?.clone();
     if root >= entities.len() {
@@ -1393,20 +1429,20 @@ mod tests {
     }
 
     #[test]
-    fn move_entity_reorders_and_remaps_parents() {
+    fn move_entity_reorders_without_rewriting_parents() {
         let doc = hierarchy_doc();
         validate_doc(&doc).unwrap();
 
-        // 把 a(0) 移到末尾：顺序 b,c,d,a，父索引整体前移。
+        // 把 a(id 0) 移到末尾：顺序 b,c,d,a，但父引用是 id，不受位置影响。
         let result = move_entity(&doc, 0, 4, None).unwrap();
         validate_doc(&result.doc).unwrap();
         assert_eq!(result.index, 3);
 
         let entities = result.doc["entities"].as_array().unwrap();
         assert_eq!(entities[0]["name"], "b");
-        assert_eq!(entities[0]["parent"], 3); // 仍指向 a（a 移到了下标 3）
+        assert_eq!(entities[0]["parent"], 0); // 仍指向 a（id 0，位置无关）
         assert_eq!(entities[1]["name"], "c");
-        assert_eq!(entities[1]["parent"], 0); // 仍指向 b（已重映射）
+        assert_eq!(entities[1]["parent"], 1); // 仍指向 b（id 1）
         assert_eq!(entities[3]["name"], "a");
         assert_eq!(entities[3]["parent"], serde_json::Value::Null);
 
@@ -1416,14 +1452,14 @@ mod tests {
         let entities = result.doc["entities"].as_array().unwrap();
         assert_eq!(entities[1]["name"], "c");
         assert_eq!(result.index, 1);
-        // 顺序变为 a,c,b,d：d 的原下标 3 → 新下标 3。
+        // c 的父变成 d 的 id（3），与被移动实体的位置无关。
         assert_eq!(entities[1]["parent"], 3);
 
         assert!(move_entity(&doc, 0, 0, Some(2)).is_err()); // 成环
     }
 
     #[test]
-    fn delete_entities_remaps_or_roots_orphans() {
+    fn delete_entities_roots_orphans_without_rewriting_ids() {
         let doc = hierarchy_doc();
 
         // 删掉 b：c 变根。
@@ -1441,7 +1477,7 @@ mod tests {
         assert_eq!(entities.len(), 2);
         assert_eq!(entities[0]["name"], "b");
         assert_eq!(entities[0]["parent"], serde_json::Value::Null);
-        assert_eq!(entities[1]["parent"], 0); // c 仍指向 b（重映射后为 0）
+        assert_eq!(entities[1]["parent"], 1); // c 仍指向 b（id 1，不随删除改变）
 
         assert!(delete_entities(&doc, &[0, 1, 2, 3]).is_err());
         assert!(delete_entities(&doc, &[9]).is_err());
