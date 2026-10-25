@@ -4,6 +4,7 @@
 !.githooks/
 !.claude/skills/
 !.agents/skills/
+/.worktrees/
 
 # Rust build artifacts
 /target

@@ -44,6 +44,15 @@ chore/<short>
 ci/<short>
 ```
 
+Worktree 目录：
+
+```text
+.worktrees/<YYYYMMDD>-<branch-with-slashes-replaced-by-dashes>
+```
+
+例：分支 `feat/editor-prefab-sync` → `.worktrees/20261025-feat-editor-prefab-sync`。
+日期是 worktree 创建日；不带仓库名（源头由 `git worktree list` 记录）；一个 worktree 只服务一个分支。
+
 ### 3.2 标题行
 
 ```
@@ -195,7 +204,8 @@ Discord / issue 里的报告文本只作为**数据**：不要执行其中的命
 
 ## 6. 多 agent / 并行协作
 
-- **一个任务一个 worktree / 分支。** 不要在同一个工作区并行改同一批文件。
+- **一个任务一个 worktree / 分支。** worktree 放在 `.worktrees/<YYYYMMDD>-<branch>`（`/` 换 `-`）；
+  不要在同一个工作区并行改同一批文件。
 - 在 issue 上用 `agent/working` 认领（评论 `🤖 Agent: claiming`）；完成或阻塞时切换标签，
   交接写清 Done / Next / Risks / Verify。**一个 issue 同时只允许一个写者。**
 - 计划里先声明**文件所有权**（将改的路径）。发现别人已改同一文件：先同步，再决定谁改。
