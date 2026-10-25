@@ -1,29 +1,79 @@
 name: Setup Slang
-description: Download slangc (linux-x86_64) and compile shaders to .spv + reflection
+description: Download slangc (cached) and compile shaders to .spv + reflection (optionally cached)
 inputs:
   compile:
     description: Whether to run assets/shaders/compile.sh after downloading slang
     required: false
     default: "true"
+  cache_shaders:
+    description: Reuse .spv/reflection when the shader sources and compiler are unchanged. The shaders job must set this to false so the binding drift check always compiles.
+    required: false
+    default: "true"
 runs:
   using: composite
   steps:
+    - name: Cache slangc
+      id: slang
+      uses: actions/cache/restore@v4
+      continue-on-error: true
+      with:
+        path: ${{ runner.tool_cache }}/slang-${{ env.SLANG_VERSION }}
+        key: slang-${{ runner.os }}-${{ env.SLANG_VERSION }}-x86_64
+
+    - name: Cache compiled shaders
+      if: inputs.compile == 'true' && inputs.cache_shaders == 'true'
+      id: spv
+      uses: actions/cache/restore@v4
+      continue-on-error: true
+      with:
+        # Exact key only: restoring .spv from different sources would compile
+        # stale SPIR-V into the engine. Do NOT add restore-keys here.
+        path: |
+          assets/shaders/*.spv
+          assets/shaders/reflection/*.json
+        key: spv-${{ runner.os }}-${{ env.SLANG_VERSION }}-${{ hashFiles('assets/shaders/slang/**', 'assets/shaders/compile.sh', 'assets/shaders/fix_spirv.py') }}
+
     - name: Install SPIR-V tools (spirv-dis / spirv-as for fix_spirv.py)
+      if: inputs.compile == 'true' && (inputs.cache_shaders == 'false' || steps.spv.outputs.cache-hit != 'true')
       shell: bash
       run: sudo apt-get update && sudo apt-get install -y spirv-tools
 
     - name: Download slang ${{ env.SLANG_VERSION }} (linux-x86_64)
+      if: steps.slang.outputs.cache-hit != 'true' && inputs.compile == 'true' && (inputs.cache_shaders == 'false' || steps.spv.outputs.cache-hit != 'true')
       shell: bash
       run: |
         set -euo pipefail
         url="https://github.com/shader-slang/slang/releases/download/v${SLANG_VERSION}/slang-${SLANG_VERSION}-linux-x86_64.tar.gz"
-        mkdir -p "$RUNNER_TEMP/slang"
+        mkdir -p "${{ runner.tool_cache }}/slang-${SLANG_VERSION}"
         curl -fsSL "$url" -o "$RUNNER_TEMP/slang.tar.gz"
-        tar xzf "$RUNNER_TEMP/slang.tar.gz" -C "$RUNNER_TEMP/slang"
-        echo "SLANGC=$RUNNER_TEMP/slang/bin/slangc" >> "$GITHUB_ENV"
-        echo "LD_LIBRARY_PATH=$RUNNER_TEMP/slang/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+        tar xzf "$RUNNER_TEMP/slang.tar.gz" -C "${{ runner.tool_cache }}/slang-${SLANG_VERSION}"
+
+    - name: Save slangc
+      if: steps.slang.outputs.cache-hit != 'true' && inputs.compile == 'true' && (inputs.cache_shaders == 'false' || steps.spv.outputs.cache-hit != 'true')
+      uses: actions/cache/save@v4
+      continue-on-error: true
+      with:
+        path: ${{ runner.tool_cache }}/slang-${{ env.SLANG_VERSION }}
+        key: slang-${{ runner.os }}-${{ env.SLANG_VERSION }}-x86_64
+
+    - name: Export slang environment
+      if: inputs.compile == 'true' && (inputs.cache_shaders == 'false' || steps.spv.outputs.cache-hit != 'true')
+      shell: bash
+      run: |
+        echo "SLANGC=${{ runner.tool_cache }}/slang-${SLANG_VERSION}/bin/slangc" >> "$GITHUB_ENV"
+        echo "LD_LIBRARY_PATH=${{ runner.tool_cache }}/slang-${SLANG_VERSION}/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
 
     - name: Compile Slang shaders (.spv + reflection JSON)
-      if: ${{ inputs.compile == 'true' }}
+      if: inputs.compile == 'true' && (inputs.cache_shaders == 'false' || steps.spv.outputs.cache-hit != 'true')
       shell: bash
       run: bash assets/shaders/compile.sh
+
+    - name: Save compiled shaders
+      if: inputs.compile == 'true' && inputs.cache_shaders == 'true' && steps.spv.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      continue-on-error: true
+      with:
+        path: |
+          assets/shaders/*.spv
+          assets/shaders/reflection/*.json
+        key: spv-${{ runner.os }}-${{ env.SLANG_VERSION }}-${{ hashFiles('assets/shaders/slang/**', 'assets/shaders/compile.sh', 'assets/shaders/fix_spirv.py') }}

@@ -10,6 +10,9 @@ name: CI
 #   * Jobs run in parallel: `lint` is a merge gate, not a prerequisite. It only
 #     takes ~1m of setup (toolchain, apt, slang) and ~10s of actual linting, so
 #     making builds wait for it added a minute to every run.
+#   * slangc and the compiled .spv/reflection are cached for lint/desktop with
+#     an exact source hash. The shaders job always recompiles so the binding
+#     drift check never reads a stale cache.
 #   * prism-app depends on android-activity, which only compiles for the
 #     aarch64-linux-android target — it is EXCLUDED from the desktop job and
 #     built on-device / via the Tauri launcher instead.
@@ -140,6 +143,8 @@ jobs:
 
       - name: Setup slang + compile shaders
         uses: ./.github/actions/setup-slang
+        with:
+          cache_shaders: "false"
 
       - name: slangc version
         run: "$SLANGC -v"
