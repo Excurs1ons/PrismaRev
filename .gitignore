@@ -1,6 +1,7 @@
 # Hidden folders (.*) — but keep CI config and agent skills tracked
 .*/
 !.github/
+!.githooks/
 !.claude/skills/
 !.agents/skills/
 
@@ -27,6 +28,10 @@ android/app/src/main/jniLibs/
 !launcher/src-tauri/icons/*.png
 !launcher/src-tauri/gen/android/app/src/main/res/**/*.png
 !editor/src-tauri/icons/*.png
+
+# Python 自检脚本缓存
+__pycache__/
+*.pyc
 
 # Node / Vite frontends (launcher + editor)
 node_modules/

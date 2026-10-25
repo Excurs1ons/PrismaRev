@@ -4,6 +4,19 @@ From-scratch Rust game engine; **Vulkan** rendering, **Android** + desktop, **da
 Read `docs/DESIGN.md` before changing rendering/architecture, and `README.md` (§Coordinate
 Conventions) before touching any matrix/coordinate math — deviating from those conventions is a bug.
 
+## AI 工作流（先读）
+
+完整规范见 [`docs/ai-workflow.md`](docs/ai-workflow.md)。硬规则：
+
+- **一个任务 = 一个分支 = 一个 PR**；默认 diff < ~500 行，更大的工作先拆成可独立 review 的步骤。
+- **合并前跑 `python scripts/pr_ready.py`**，把它打印的 Markdown 块贴进 PR；红灯不合并。
+- **AI 产出必须标注**：PR / issue 首行写明「谁的 agent、用什么工具」，每条评论以 `🤖 Agent:` 开头，
+  commit 带 `Co-Authored-By:`（格式见规范 §5）。不要冒充人类。
+- **不猜**：改公开 API、存档格式（RSCN / RTTIBin / `.pak`）、坐标约定、workspace 分层，或要加依赖
+  → 先改文档或先问人，再写代码。
+- **并行 agent 各用独立 worktree**；禁止未经确认的 `reset --hard` / `checkout -- .` / 覆盖他人未提交改动。
+- 只读侦察交给 subagent，写操作留在主会话；交接时写清已完成 / 未完成 / 风险 / 验证命令。
+
 ## Layout
 - `crates/prism-ecs` — ECS core (Entity/Component/World/Query).
 - `crates/prism-reflect` — 运行时反射（`Reflect`/`TypeDesc`/`TypeRegistry`）+
@@ -136,6 +149,8 @@ The user project's dependency chain must stay **UI-framework-free and editor-fre
   a pure-data DTO: never expose `vk::*` handles or pass trait objects to the web layer.
 
 ## Build / check / test
+- 提交前自检：`python scripts/pr_ready.py`（`--quick` 快速回路；`--all` 全 workspace）。
+  CI 见 `.github/workflows/ci.yml`。
 - Build: `scripts/run.ps1` (Windows; sets `VK_SDK`, `RUST_LOG`, runs `bash assets/shaders/compile.sh`, `cargo build`, then `prism-build-pipeline build-scenes`).
   Note: the root workspace has no **game/editor entry** binary — the desktop entry is the Tauri app in `launcher/`
   (`cd launcher && pnpm tauri dev`), which spawns the game binary `prisma` (built in `projects/prisma/`: `cd projects/prisma && cargo run`).

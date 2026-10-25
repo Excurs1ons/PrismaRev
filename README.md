@@ -215,6 +215,7 @@ cargo test -p prism-ecs      # ECS 单元测试（spawn/despawn/query/generation
 cargo test -p prism-asset -p prism-scene -p prism-cooker  # 运行时格式 / RSCN / 构建工具
 cargo test -p prism-build-pipeline  # 侵蚀算法测试（陡坡变平、平坦地形不变）
 cargo clippy --all-targets   # 零警告门禁
+python scripts/pr_ready.py   # 提交前自检：改动文件 fmt、受影响 crate 的 clippy/test、bindings 漂移
 ```
 
 ## CI
@@ -226,6 +227,11 @@ cargo clippy --all-targets   # 零警告门禁
 | `lint` | `cargo fmt --check` + clippy（桌面 crates + xtask，零警告） |
 | `desktop` | 桌面 crates 的 `cargo build --locked` + `cargo test --locked` |
 | `shaders` | slangc 编译 `.slang` → `.spv` + reflection，重新生成 Rust 绑定，**漂移守卫**（提交的绑定与新鲜编译不一致即失败；`.spv` 不提交，每次由编译步骤新鲜生成） |
+
+## 贡献
+
+先读 [`CONTRIBUTING.md`](CONTRIBUTING.md) 和 [`AGENTS.md`](AGENTS.md)。分支 / 提交 / PR / AI 协作的完整
+规范在 [`docs/ai-workflow.md`](docs/ai-workflow.md)；提交前跑 `python scripts/pr_ready.py`，把输出贴进 PR。
 
 ## License
 

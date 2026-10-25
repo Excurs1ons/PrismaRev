@@ -1,0 +1,257 @@
+# AI 工作流与协作规范
+
+> 参考 horizon 项目（`ludovic111/horizon`）的实践：**小 PR、单一自检命令、显式标注 AI 产出、文档即地图**。
+> 本文是规范；[`AGENTS.md`](../AGENTS.md) 是技术约束与代码地图；[`CONTRIBUTING.md`](../CONTRIBUTING.md)
+> 是给人看的简版。三者冲突时，以 `AGENTS.md` 的技术约束为准，流程以本文为准。
+
+## 0. 适用对象
+
+- 人类维护者。
+- 所有 AI agent（OpenCode / Claude Code / 其他），无论单会话还是多 agent 并行。
+- 两者走**同一条流水线**。AI 不因为“能一次改很多”就跳过自检、拆分或标注。
+
+## 1. 四条硬规则
+
+1. **一个任务 = 一个分支 = 一个 PR**。默认 diff < ~500 行；更大的工作拆成各自可独立 review 的步骤。
+2. **合并前必须跑 `python scripts/pr_ready.py`**，把它打印的 Markdown 块原样贴进 PR。红灯不合并。
+3. **AI 产出必须可识别**：PR / issue / 评论 / commit 都要标注（格式见 §5）。不要冒充人类发言。
+4. **不猜**：涉及架构、坐标约定、存档格式、依赖分层、公开 API 的变更，先改文档或先问人，再写代码。
+
+## 2. 单个任务的闭环
+
+| 步骤 | 做什么 | 产出 |
+|---|---|---|
+| 1. 定位 | 读 `AGENTS.md` 对应章节 + `docs/DESIGN.md` / `README.md` 的相关约定；`grep` 现有实现；`gh pr list --state open --search <area>` 查是否有人在做；看未完成计划 | 一段“现状 + 入口文件” |
+| 2. 计划 | 3–8 行：改哪些文件、怎么验证、风险是什么。跨 crate 或预计 >500 行 → 先拆 | 计划（会话内，可放 `.zcode/plans/`，不入库） |
+| 3. 实现 | 小步提交；先编译通过再优化；**不顺手重构无关文件** | 可编译的改动 |
+| 4. 自检 | `python scripts/pr_ready.py`；失败就修（`--quick` 用于快速回路） | 全绿 |
+| 5. 提交 | 原子提交，按 §3 写标题和正文 | commit |
+| 6. PR | 用模板；贴自检块、证据、AI 声明 | PR |
+| 7. 收尾 | 行为/约定变了就更新 `AGENTS.md` 或 `docs/`；合并后删分支 | 文档同步 |
+
+**计划不是交付物。** 会话计划放在 `.zcode/plans/`（gitignored）；能长期指导后来者的结论写进 `docs/`。
+
+## 3. 分支与提交信息
+
+### 3.1 分支命名
+
+```
+feat/<scope>-<short>      例：feat/editor-prefab-sync
+fix/<scope>-<short>       例：fix/render-swapchain-recreate
+refactor/<scope>-<short>
+docs/<short>
+chore/<short>
+ci/<short>
+```
+
+### 3.2 标题行
+
+```
+<type>(<scope>): <祈使句摘要>
+```
+
+`type` 取值：
+
+| type | 用途 |
+|---|---|
+| `feat` | 玩家 / 用户能感知的新能力 |
+| `fix` | 修 bug |
+| `refactor` | 不改行为的重构 |
+| `perf` | 性能 |
+| `docs` | 文档 |
+| `test` | 测试 |
+| `chore` | 杂项（依赖、脚本、生成物） |
+| `ci` | CI / 工作流配置 |
+| `build` | 构建系统 / 打包 |
+
+- `scope` 用 crate / 区域短名：`ecs`、`reflect`、`scene`、`render`、`engine`、`app`、
+  `platform`、`editor`、`editor-api`、`asset`、`cooker`、`pipeline`、`audio`、`android`、
+  `launcher`、`workflow`、`repo`。
+- 摘要用祈使句，**≤ 72 字符**，结尾不加句号；中英不限，但同一 PR 内保持一致。
+- 破坏性变更在 `:` 前加 `!`，正文写 `BREAKING CHANGE:` 和迁移方式。
+
+```text
+feat(editor): add prefab reverse-link sync
+fix(render): destroy framebuffers before swapchain recreate
+refactor(scene)!: drop RSCN v3 decoding
+docs(workflow): standardize commit and PR conventions
+
+update                        # 没有 type/scope，也没说改了什么
+fix bug                       # 同上
+feat: 改了很多东西             # 范围太大，应该拆
+```
+
+### 3.3 正文
+
+标题之外按三段写（可合并，但不要省）：
+
+```text
+Why:    现在的问题 / 为什么要改
+How:    关键做法与取舍（不逐行解释代码）
+Verify: 跑了什么命令、看到什么结果；没有自动验证就写清手工步骤
+```
+
+- 每行 ≤ 100 字符（中文按显示宽度可放宽）。
+- 关联 issue：`Refs #123`；修完：`Fixes #123`。
+- 生成物更新单独提交，例如 `chore(render): regenerate shader bindings`。
+- 纯格式化单独提交：`chore: apply rustfmt`，不要混进功能提交。
+
+### 3.4 完整示例
+
+```text
+fix(render): destroy framebuffers before swapchain recreate
+
+Why:
+Swapchain recreation destroyed the old image views first, so the
+per-image framebuffers still referenced them and validation reported
+VUID-vkDestroyFramebuffer-... on every resize.
+
+How:
+Call ForwardPass::drop_target() before recreating the swapchain, and
+rebuild the HDR targets lazily from the new views.
+
+Verify:
+cargo test -p prism-render
+Resized the editor preview 20 times: no validation errors, no device lost.
+
+Fixes #412
+Co-Authored-By: DeepSeek V4.1 Flash (OpenCode agent) <noreply@deepseek.com>
+```
+
+### 3.5 身份与署名
+
+- 人类维护者始终是 commit author；AI 只加 `Co-Authored-By:`。
+- 格式：`Co-Authored-By: <Model> (<Harness> agent) <noreply@...>`。
+- 不要伪造人类署名，也不要用 AI 署名替代人类审阅。
+- 提交模板：`git config commit.template .gitmessage`。
+- 标题校验（可选）：`git config core.hooksPath .githooks`。
+
+## 4. PR 规范
+
+### 4.1 标题
+
+与 squash 后的 commit 标题一致：
+
+```
+<type>(<scope>): <祈使句摘要>
+```
+
+例：`feat(editor): add prefab reverse-link sync`。
+
+### 4.2 正文
+
+必须包含以下六段（`.github/pull_request_template.md` 已给结构）：
+
+1. **What / why**：改了什么、为什么；关联 issue。
+2. **变更类型**：feat / fix / refactor / docs / chore / perf / test。
+3. **验证证据**：命令输出、测试结果、日志；UI / 渲染给 before + after；
+   Android 注明设备与 API level；性能给同场景、同设置对比。
+4. **Self-check**：`python scripts/pr_ready.py` 输出的 Markdown 块。
+5. **AI 声明**：谁、用了什么工具（格式见 §5）。
+6. **风险与回滚**：可能回归点；通常 `git revert <sha>` 即可。
+
+### 4.3 示例
+
+```md
+> 🤖 由 <维护者> 的 AI agent（DeepSeek V4.1 Flash / OpenCode）创建，不代表维护者本人已审阅。
+
+## What / why
+...
+
+## Self-check
+| Check | Result | Detail |
+|---|---|---|
+| clippy (1 crate) | ✅ | -D warnings |
+...
+
+## 风险与回滚
+只影响编辑器预览；revert 本 PR 即可。
+```
+
+### 4.4 流程
+
+- Draft PR 可以早开用于讨论方案，但**不能代替自检**。
+- 一个 PR 一个主题；>500 行要说明原因或先拆。
+- 已经进入 review 的公共分支不要 force-push；自己的分支可以 rebase。
+- 合并默认 squash，提交标题用 PR 标题；合并后删分支。
+- **不提交运行时产物**：`.spv`、`.pak`、`target/`、`node_modules/`、IBL cache、本机路径、密钥。
+- **受版本控制的生成文件必须与源头同步**（shader bindings 由 CI 查漂移；其余靠自检 / 评审）：
+  - 改 `.slang` 或 reflection → 重跑 `compile.sh` + `xtask shader-bindgen`，提交 `shader_bindings/`；
+  - 改 `prism-scene` 组件 / UI schema → `cd editor && pnpm fixture`，提交 `editor/public/demo.json`
+    （先确保 `assets/external/` 为空，否则本地素材会被写进 fixture）；
+  - 改组件序列化形状 → 同步检查 `docs/REFLECT.md` 与 RSCN 兼容性。
+
+## 5. AI 标注
+
+| 位置 | 格式 |
+|---|---|
+| PR 正文首行 | `> 🤖 由 <维护者> 的 AI agent（<模型> / <工具>）创建，不代表维护者本人已审阅。` |
+| Issue 正文首行 | `> 🤖 由 <维护者> 的 AI agent（<模型> / <工具>）提交。` |
+| 每条评论 | 以 `🤖 Agent:` 开头 |
+| Commit | `Co-Authored-By: <Model> (<Harness> agent) <noreply@...>` |
+
+如果是外部贡献者的 agent，写清**是哪位贡献者、用了什么工具**，不要冒用维护者身份。
+理由：让人一眼分清“谁说的”，也方便事后审计和追责。**未标注的 AI 产出视为流程违规。**
+
+## 6. 多 agent / 并行协作
+
+- **一个任务一个 worktree / 分支。** 不要在同一个工作区并行改同一批文件。
+- 计划里先声明**文件所有权**（将改的路径）。发现别人已改同一文件：先同步，再决定谁改。
+- 只读侦察（搜索、读文档、定位实现）交给 subagent；写操作留在主会话，避免多个写入者互相覆盖。
+- 禁止未经确认的破坏性 git：`reset --hard`、`checkout -- .`、`clean -fd`、`stash drop`、
+  强推公共分支。用户明确要求时，也要先确认没有他人的未提交改动。
+- `pull` 前有本地改动：先 `git stash push -- <paths>`，pull 后 `git stash pop`，并确认改动完整恢复。
+- 冲突时保留双方意图，逐段合并；不要整文件选一边。
+- 交接时写清楚：已完成、未完成、下一步、已知风险、验证命令。
+
+## 7. 必须停下来问人的情况
+
+- 改公开 API、存档/交换格式（RSCN v4、RTTIBin、`.pak`、`.scene.json`）。
+- 改坐标/矩阵约定（`README.md` §Coordinate Conventions）或渲染资源生命周期规则。
+- 加依赖、改 workspace 分层、移动 crate、删除模块或资产。
+- 把 UI 框架引入 `prism-app` / `prism-engine` / `prism-render`，或让运行时依赖 cooker。
+- 需要真机 / GPU / 凭据才能验证，而本地无法验证。
+- 自检失败，但你判断是**既有问题**：先报告，不要顺手改别人的代码。
+- 需求有多种合理解释且实现成本差异很大。
+
+## 8. 完成定义（DoD）
+
+- [ ] 行为符合需求；边界情况有测试，或在 PR 里明确说明为什么没有。
+- [ ] `python scripts/pr_ready.py` 全绿；跳过项在 PR 里写明原因。
+- [ ] 新增/变化的约定已写进 `AGENTS.md` 或 `docs/`。
+- [ ] 没有生成物、密钥、本机绝对路径。
+- [ ] PR 含验证证据与 AI 声明。
+- [ ] 回滚方式明确（通常 revert 单个 commit 即可）。
+
+## 9. 文档与知识沉淀
+
+- `AGENTS.md` = **地图 + 硬约束**：保持可扫读，细节放 `docs/`。
+- 先改文档再改代码；文档与代码在**同一个 PR**。
+- 分工：
+  - 踩坑与根因 → `docs/lessons-learned.md`
+  - 架构与分层 → `docs/DESIGN.md`
+  - 反射 / RSCN / RTTIBin → `docs/REFLECT.md`
+  - 协作流程 → 本文
+- 会话计划、临时分析、备份放 `.zcode/` / `.slim/`；不要混进提交。
+
+## 10. 反模式
+
+- 大而全 PR、顺手重构、格式化**无关**文件（改动文件本身需要 fmt 时除外）。
+- 只跑 `cargo check` 就说“验证通过”。
+- 用 `--no-verify`、跳过 clippy、注释掉失败测试、放宽断言。
+- 把 `.spv` / `.pak` / `target/` 提交上来。
+- 在 `prism-engine` / `prism-render` / `prism-app` 引入 UI 框架，或让用户项目依赖 cooker。
+- AI 不标注、冒充人类；评论里写“我”（指人类）。
+- 遇到失败就删测试或改预期，而不是查根因。
+
+## 附：命令速查
+
+```bash
+python scripts/pr_ready.py              # 完整自检（贴进 PR）；Unix 上可能是 python3
+python scripts/pr_ready.py --quick      # 快速回路：fmt + clippy，不跑测试
+python scripts/pr_ready.py --all        # 全 workspace + 所有独立 workspace（发布前）
+python scripts/pr_ready.py --base origin/master
+```
+
+首次构建需要 `.spv`（`scripts/run.ps1` 或 `bash assets/shaders/compile.sh` 生成）。
+`pr_ready` 会提示缺失，而不是把它当成代码错误。
