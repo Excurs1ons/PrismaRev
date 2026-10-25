@@ -558,10 +558,9 @@ impl ReflectType for CompareFunction {
 
 /// 混合因子 = `UnityEngine.Rendering.BlendMode`（取值与 Unity 一致）。
 ///
-/// Unity 的混合状态是「源因子 × 目标因子 + 混合运算」，所以这个枚举只描述
-/// **因子**；混合运算（Unity 的 `BlendOp`：Add / Sub / RevSub / Min / Max）
-/// 是另一份数据，留给后续批次。
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// Unity 的混合状态是「源因子 × 目标因子 + 混合运算」，这个枚举描述
+/// **因子**；混合运算见 [`BlendOp`]。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum BlendMode {
     /// `0`。
     Zero,
@@ -656,6 +655,72 @@ impl ReflectType for BlendMode {
             .map_err(|_| ReflectError::BadData(format!("BlendMode 数值越界: {raw}")))?;
         Self::from_unity_value(raw)
             .ok_or_else(|| ReflectError::BadData(format!("invalid BlendMode discriminant {raw}")))
+    }
+}
+
+/// 混合运算 = `UnityEngine.Rendering.BlendOp`。
+///
+/// 与 [`BlendMode`] 一起构成 Unity 材质的混合状态：
+/// `结果 = srcFactor × src op dstFactor × dst`。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum BlendOp {
+    /// `src + dst`（默认）。
+    #[default]
+    Add,
+    /// `src - dst`。
+    Subtract,
+    /// `dst - src`。
+    ReverseSubtract,
+    /// `min(src, dst)`。
+    Min,
+    /// `max(src, dst)`。
+    Max,
+}
+
+impl BlendOp {
+    /// Unity 的枚举数值。
+    pub const fn unity_value(self) -> u32 {
+        match self {
+            Self::Add => 0,
+            Self::Subtract => 1,
+            Self::ReverseSubtract => 2,
+            Self::Min => 3,
+            Self::Max => 4,
+        }
+    }
+
+    /// 从 Unity 枚举数值还原；未知值返回 `None`。
+    pub const fn from_unity_value(value: u32) -> Option<Self> {
+        match value {
+            0 => Some(Self::Add),
+            1 => Some(Self::Subtract),
+            2 => Some(Self::ReverseSubtract),
+            3 => Some(Self::Min),
+            4 => Some(Self::Max),
+            _ => None,
+        }
+    }
+}
+
+impl ReflectType for BlendOp {
+    fn field_type() -> FieldType {
+        FieldType::U8
+    }
+
+    fn enum_variants() -> Option<&'static [&'static str]> {
+        Some(&["Add", "Subtract", "ReverseSubtract", "Min", "Max"])
+    }
+
+    fn to_value(&self) -> Value {
+        Value::U64(u64::from(self.unity_value()))
+    }
+
+    fn from_value(value: Value) -> Result<Self, ReflectError> {
+        let raw = value.as_u64()?;
+        let raw = u32::try_from(raw)
+            .map_err(|_| ReflectError::BadData(format!("BlendOp 数值越界: {raw}")))?;
+        Self::from_unity_value(raw)
+            .ok_or_else(|| ReflectError::BadData(format!("invalid BlendOp discriminant {raw}")))
     }
 }
 
@@ -1097,6 +1162,30 @@ mod tests {
         assert_eq!(BlendMode::enum_variants().unwrap().len(), 11);
         assert_eq!(BlendMode::enum_variants().unwrap()[10], "OneMinusSrcAlpha");
         assert!(BlendMode::from_value(Value::U64(99)).is_err());
+    }
+
+    #[test]
+    fn blend_op_matches_unity() {
+        let table = [
+            (BlendOp::Add, 0),
+            (BlendOp::Subtract, 1),
+            (BlendOp::ReverseSubtract, 2),
+            (BlendOp::Min, 3),
+            (BlendOp::Max, 4),
+        ];
+        for (op, value) in table {
+            assert_eq!(op.unity_value(), value);
+            assert_eq!(BlendOp::from_unity_value(value), Some(op));
+            assert_eq!(
+                BlendOp::from_value(Value::U64(u64::from(value))).unwrap(),
+                op
+            );
+        }
+        assert_eq!(BlendOp::from_unity_value(5), None);
+        assert_eq!(BlendOp::default(), BlendOp::Add);
+        assert_eq!(BlendOp::enum_variants().unwrap().len(), 5);
+        assert_eq!(BlendOp::enum_variants().unwrap()[2], "ReverseSubtract");
+        assert!(BlendOp::from_value(Value::U64(99)).is_err());
     }
 
     #[test]

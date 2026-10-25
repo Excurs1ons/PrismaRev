@@ -91,7 +91,10 @@ pub fn extract_frame_packet(
 
     // 2. Build the flat draw list and ECS-authored render helpers.
     let scene_view = scene::SceneReadView::new(world);
-    let draw_items: Vec<DrawItem> = scene_view.draw_items();
+    // Unity 的 `renderQueue` 顺序：不透明段按队列升序，透明段按距离从远到近。
+    // 排序必须在提交给渲染器之前完成（`ForwardPass` 只按列表顺序绘制）。
+    let mut draw_items: Vec<DrawItem> = scene_view.draw_items();
+    prism_render::sort_draw_items(&mut draw_items, scene.eye.to_array());
     let gizmos = scene_view.gizmo_instances();
     let skybox = scene_view.skybox_settings();
 

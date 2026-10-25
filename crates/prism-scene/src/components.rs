@@ -17,8 +17,8 @@ use prism_reflect::{FieldType, Reflect, ReflectError, ReflectType, Value};
 use serde::{Deserialize, Serialize};
 
 use crate::render_enums::{
-    correlated_color_temperature_to_rgb, CameraClearFlags, CullMode, LightRenderMode, LightShadows,
-    LightType, ShadowCastingMode,
+    correlated_color_temperature_to_rgb, BlendMode, BlendOp, CameraClearFlags, CullMode,
+    LightRenderMode, LightShadows, LightType, RenderQueue, ShadowCastingMode,
 };
 
 // ---------------------------------------------------------------------------
@@ -177,7 +177,7 @@ impl Default for Active {
 /// This 分量 does **not** participate in 渲染 queries — the actual
 /// 渲染 data lives on [`MeshRef`] and [`MaterialRef`] — but provides a
 /// convenient handle for 检查器 editing and future hot-reload.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, Reflect)]
+#[derive(Debug, Clone, Serialize, Deserialize, Reflect)]
 #[reflect(name = "prism_engine::scene::MeshRenderer")]
 #[serde(default)]
 pub struct MeshRenderer {
@@ -192,6 +192,36 @@ pub struct MeshRenderer {
     /// Unity 把它放在 `Material` 上；PrismaRev 的材质目前只有 PBR 参数，
     /// 所以先落在渲染器上，语义仍是「这一个绘制用哪一面」。
     pub cull_mode: CullMode,
+    /// 渲染队列 = Unity `Material.renderQueue`（`int`，不是枚举）。
+    ///
+    /// 决定绘制顺序：小于 [`RenderQueue::GEOMETRY_LAST`] 的不透明物体先画，
+    /// 之后才是（透明）队列，透明队列内部按距离从远到近。
+    pub render_queue: RenderQueue,
+    /// 是否写深度 = Unity `_ZWrite`。透明物体通常关掉。
+    pub z_write: bool,
+    /// 源混合因子 = Unity `_SrcBlend`。
+    pub src_blend: BlendMode,
+    /// 目标混合因子 = Unity `_DstBlend`。
+    pub dst_blend: BlendMode,
+    /// 混合运算 = Unity `_BlendOp`。
+    pub blend_op: BlendOp,
+}
+
+impl Default for MeshRenderer {
+    fn default() -> Self {
+        Self {
+            mesh_path: String::new(),
+            material_path: String::new(),
+            shadow_casting_mode: ShadowCastingMode::default(),
+            cull_mode: CullMode::default(),
+            render_queue: RenderQueue::default(),
+            z_write: true,
+            // Unity 的不透明默认值：One / Zero / Add（见 `blends`）。
+            src_blend: BlendMode::One,
+            dst_blend: BlendMode::Zero,
+            blend_op: BlendOp::Add,
+        }
+    }
 }
 
 impl MeshRenderer {
@@ -200,6 +230,13 @@ impl MeshRenderer {
     }
     pub fn has_material(&self) -> bool {
         !self.material_path.is_empty()
+    }
+    /// 是否真的需要开启混合：Unity 用 `One` / `Zero` 表示「不混合」，
+    /// 所以默认值代表不透明。
+    pub fn blends(&self) -> bool {
+        self.src_blend != BlendMode::One
+            || self.dst_blend != BlendMode::Zero
+            || self.blend_op != BlendOp::Add
     }
 }
 

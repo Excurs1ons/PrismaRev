@@ -9,7 +9,7 @@
 
 use anyhow::Context as _;
 use ash::vk;
-use prism_gfx::CullMode;
+use prism_gfx::{BlendMode, BlendOp, CullMode};
 
 /// 把共享的 [`CullMode`]（`prism-gfx`，Vulkan-free）翻译成 Vulkan 剔除位。
 ///
@@ -19,6 +19,37 @@ pub(crate) fn cull_flags(mode: CullMode) -> vk::CullModeFlags {
         CullMode::Off => vk::CullModeFlags::NONE,
         CullMode::Front => vk::CullModeFlags::FRONT,
         CullMode::Back => vk::CullModeFlags::BACK,
+    }
+}
+
+/// Unity [`BlendMode`] → Vulkan 混合因子。
+///
+/// **两边的数值顺序不同**（Unity 把 `DstColor` 放在 `SrcColor` 前面），所以必须
+/// 显式映射，不能按 `as i32` 转换。
+pub(crate) fn blend_factor(mode: BlendMode) -> vk::BlendFactor {
+    match mode {
+        BlendMode::Zero => vk::BlendFactor::ZERO,
+        BlendMode::One => vk::BlendFactor::ONE,
+        BlendMode::DstColor => vk::BlendFactor::DST_COLOR,
+        BlendMode::SrcColor => vk::BlendFactor::SRC_COLOR,
+        BlendMode::OneMinusDstColor => vk::BlendFactor::ONE_MINUS_DST_COLOR,
+        BlendMode::SrcAlpha => vk::BlendFactor::SRC_ALPHA,
+        BlendMode::OneMinusSrcColor => vk::BlendFactor::ONE_MINUS_SRC_COLOR,
+        BlendMode::DstAlpha => vk::BlendFactor::DST_ALPHA,
+        BlendMode::OneMinusDstAlpha => vk::BlendFactor::ONE_MINUS_DST_ALPHA,
+        BlendMode::SrcAlphaSaturate => vk::BlendFactor::SRC_ALPHA_SATURATE,
+        BlendMode::OneMinusSrcAlpha => vk::BlendFactor::ONE_MINUS_SRC_ALPHA,
+    }
+}
+
+/// Unity [`BlendOp`] → Vulkan 混合运算。
+pub(crate) fn blend_operation(op: BlendOp) -> vk::BlendOp {
+    match op {
+        BlendOp::Add => vk::BlendOp::ADD,
+        BlendOp::Subtract => vk::BlendOp::SUBTRACT,
+        BlendOp::ReverseSubtract => vk::BlendOp::REVERSE_SUBTRACT,
+        BlendOp::Min => vk::BlendOp::MIN,
+        BlendOp::Max => vk::BlendOp::MAX,
     }
 }
 
@@ -241,5 +272,42 @@ mod tests {
         let mut uniq = modes.to_vec();
         uniq.dedup();
         assert_eq!(uniq.len(), 3);
+    }
+
+    #[test]
+    fn blend_factors_follow_unity_semantics_not_numeric_order() {
+        // Unity 的数值顺序与 Vulkan 不同：Zero/One 都是 0/1，但 Unity 的
+        // DstColor=2 对应 Vulkan 的 DST_COLOR，SrcColor=3 对应 SRC_COLOR。
+        assert_eq!(blend_factor(BlendMode::Zero), vk::BlendFactor::ZERO);
+        assert_eq!(blend_factor(BlendMode::One), vk::BlendFactor::ONE);
+        assert_eq!(
+            blend_factor(BlendMode::DstColor),
+            vk::BlendFactor::DST_COLOR
+        );
+        assert_eq!(
+            blend_factor(BlendMode::SrcColor),
+            vk::BlendFactor::SRC_COLOR
+        );
+        assert_eq!(
+            blend_factor(BlendMode::OneMinusDstColor),
+            vk::BlendFactor::ONE_MINUS_DST_COLOR
+        );
+        assert_eq!(
+            blend_factor(BlendMode::SrcAlphaSaturate),
+            vk::BlendFactor::SRC_ALPHA_SATURATE
+        );
+        assert_eq!(
+            blend_factor(BlendMode::OneMinusSrcAlpha),
+            vk::BlendFactor::ONE_MINUS_SRC_ALPHA
+        );
+
+        assert_eq!(blend_operation(BlendOp::Add), vk::BlendOp::ADD);
+        assert_eq!(blend_operation(BlendOp::Subtract), vk::BlendOp::SUBTRACT);
+        assert_eq!(
+            blend_operation(BlendOp::ReverseSubtract),
+            vk::BlendOp::REVERSE_SUBTRACT
+        );
+        assert_eq!(blend_operation(BlendOp::Min), vk::BlendOp::MIN);
+        assert_eq!(blend_operation(BlendOp::Max), vk::BlendOp::MAX);
     }
 }

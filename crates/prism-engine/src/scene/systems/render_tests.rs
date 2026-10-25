@@ -5,7 +5,8 @@
 use super::*;
 use prism_ecs::World;
 use prism_render::managers::MeshHandle;
-use prism_scene::{CullMode, ShadowCastingMode};
+use prism_render::DrawState;
+use prism_scene::{BlendMode, CullMode, RenderQueue, ShadowCastingMode};
 
 #[test]
 fn entity_with_all_components_yields_draw_item() {
@@ -252,24 +253,33 @@ fn shadows_only_hides_from_the_main_pass() {
 }
 
 #[test]
-fn cull_mode_defaults_to_back_and_follows_the_component() {
+fn render_state_defaults_to_opaque_and_follows_the_component() {
     let mut world = World::new();
-    // 没有 `MeshRenderer`：默认背面剔除。
+    // 没有 `MeshRenderer`：默认不透明、队列 2000、背面剔除、写深度。
     spawn_renderable(&mut world, None);
     let items = scene_render_system(&world);
-    assert_eq!(items[0].cull_mode, CullMode::Back);
+    assert_eq!(items[0].state, DrawState::default());
+    assert_eq!(items[0].state.cull_mode, CullMode::Back);
+    assert!(!items[0].state.blends());
 
-    // Unity `CullMode.Off` = 双面，必须原样传到绘制项。
+    // 透明材质状态必须原样传到绘制项（Unity `CullMode.Off` / 队列 / 混合）。
     let mut world = World::new();
     spawn_renderable(
         &mut world,
         Some(MeshRenderer {
             cull_mode: CullMode::Off,
+            render_queue: RenderQueue::new(RenderQueue::TRANSPARENT),
+            z_write: false,
+            src_blend: BlendMode::SrcAlpha,
+            dst_blend: BlendMode::OneMinusSrcAlpha,
             ..Default::default()
         }),
     );
     let items = scene_render_system(&world);
-    assert_eq!(items[0].cull_mode, CullMode::Off);
+    assert_eq!(items[0].state.cull_mode, CullMode::Off);
+    assert_eq!(items[0].state.render_queue, RenderQueue::TRANSPARENT);
+    assert!(!items[0].state.z_write);
+    assert!(items[0].state.blends());
 }
 
 #[test]
