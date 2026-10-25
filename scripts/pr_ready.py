@@ -12,7 +12,7 @@
   * 只对**改动过的 .rs 文件**跑 rustfmt（仓库既有 fmt 漂移不算在每个 PR 头上）；
   * 改动到的根 workspace crate：clippy --all-targets -D warnings + cargo test；
   * 改到 shader/reflection/bindings：在临时目录重跑 shader-bindgen，比对是否漂移；
-  * 改到 editor/：pnpm build（组件 schema 变更后手动 `cd editor && pnpm fixture`）；
+  * 改到 editor/：pnpm build；schema 变更时比对 fixture 的 schema/templates 是否过期；
   * 改到 projects/*、launcher/、editor/src-tauri/：各自 cargo check（独立 workspace）；
   * 拦截生成物 / 签名材料（.spv、.pak、keystore 等）和空白错误。
 
@@ -340,6 +340,57 @@ def format_check(files: list[str], verbose: bool) -> Check:
     return check
 
 
+def editor_fixture_check(changed: list[str]) -> Check:
+    check = Check(
+        "editor fixture drift",
+        ["cargo", "run", "-q", "-p", "prism-editor-api", "--example", "dump_fixture"],
+    )
+    check.done = True
+    relevant = (
+        "crates/prism-scene/src/components.rs",
+        "crates/prism-scene/src/ui.rs",
+        "editor/public/demo.json",
+    )
+    if not (has_prefix(changed, "crates/prism-editor-api/") or any(p in changed for p in relevant)):
+        check.status = "skip"
+        check.detail = "schema untouched"
+        return check
+
+    eprint("→ editor fixture drift: regenerate and compare schema/templates")
+    code, out = run(
+        ["cargo", "run", "-q", "-p", "prism-editor-api", "--example", "dump_fixture"]
+    )
+    if code != 0:
+        check.status = "fail"
+        check.detail = "dump_fixture failed"
+        check.output = out
+        eprint("\n".join(out.rstrip().splitlines()[-25:]))
+        return check
+
+    import json
+
+    # 只比注册表派生的部分；assets/docs 依赖本地工作区（未提交场景、external 素材）。
+    keys = ("schema", "presets", "templatesByKind", "templateDocs")
+    try:
+        fresh = json.loads(out)
+        committed = json.loads((ROOT / "editor" / "public" / "demo.json").read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        check.status = "fail"
+        check.detail = f"invalid fixture JSON: {exc}"
+        return check
+
+    stale = [key for key in keys if fresh.get(key) != committed.get(key)]
+    if stale:
+        check.status = "fail"
+        check.detail = f"stale: {', '.join(stale)} (run `cd editor && pnpm fixture`)"
+        eprint(f"  FAILED: {check.detail}")
+    else:
+        check.status = "ok"
+        check.detail = "schema/templates up to date"
+        eprint("  ok")
+    return check
+
+
 def editor_build_check(changed: list[str]) -> Check:
     check = Check("editor build", ["pnpm", "build"], ROOT / "editor")
     if not has_prefix(changed, "editor/"):
@@ -425,6 +476,7 @@ def main() -> int:
     checks.append(shader_bindings_check(changed))
 
     if not args.quick:
+        checks.append(editor_fixture_check(changed))
         checks.append(editor_build_check(changed))
 
         standalone = [

@@ -175,10 +175,11 @@ Co-Authored-By: DeepSeek V4.1 Flash (OpenCode agent) <noreply@deepseek.com>
 - 已经进入 review 的公共分支不要 force-push；自己的分支可以 rebase。
 - 合并默认 squash，提交标题用 PR 标题；合并后删分支。
 - **不提交运行时产物**：`.spv`、`.pak`、`target/`、`node_modules/`、IBL cache、本机路径、密钥。
-- **受版本控制的生成文件必须与源头同步**（shader bindings 由 CI 查漂移；其余靠自检 / 评审）：
+- **受版本控制的生成文件必须与源头同步**（shader bindings 由 CI 查漂移；fixture 的 schema/templates
+  由 `pr_ready` 查漂移）：
   - 改 `.slang` 或 reflection → 重跑 `compile.sh` + `xtask shader-bindgen`，提交 `shader_bindings/`；
   - 改 `prism-scene` 组件 / UI schema → `cd editor && pnpm fixture`，提交 `editor/public/demo.json`
-    （先确保 `assets/external/` 为空，否则本地素材会被写进 fixture）；
+    （fixture 使用项目相对路径，并已排除本地的 `assets/external/`）；
   - 改组件序列化形状 → 同步检查 `docs/REFLECT.md` 与 RSCN 兼容性。
 
 ## 5. AI 标注
