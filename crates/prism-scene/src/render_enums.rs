@@ -453,8 +453,9 @@ impl ReflectType for CullMode {
 /// 深度/模板比较函数 = `UnityEngine.Rendering.CompareFunction`（取值与 Unity 一致）。
 ///
 /// 默认 [`LessEqual`](Self::LessEqual)：Unity 着色器里 `ZTest` 的默认值。
-/// [`Disabled`](Self::Disabled) 对应 Unity 的“关闭深度测试”，Vulkan 没有对应
-/// `vk::CompareOp`，由 `prism-render` 用 `VK_TRUE` 的深度测试开关表达。
+/// [`Disabled`](Self::Disabled) 对应 Unity 的“关闭深度测试”，Vulkan 没有对应的
+/// `vk::CompareOp`，由 `prism-render` 用它自己的深度测试开关
+/// （`depth_test_enable(false)`，即 `VK_FALSE`）表达，而不是拿某个比较运算去反转。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CompareFunction {
     /// 关闭比较（等价于不测试）。
@@ -684,9 +685,12 @@ impl RenderQueue {
         self.0
     }
 
-    /// 是否属于不透明区间（`<= GeometryLast`）。
+    /// 是否属于不透明区间（`[0, GeometryLast]`）。
+    ///
+    /// 负数虽然允许存在（存档里可以无损保存任意队列值），但不在 Unity 的不透明
+    /// 区间内，所以下界必须是 0。
     pub const fn is_opaque(self) -> bool {
-        self.0 <= Self::GEOMETRY_LAST
+        self.0 >= 0 && self.0 <= Self::GEOMETRY_LAST
     }
 
     /// 是否属于透明区间（`> GeometryLast`）。
@@ -1107,6 +1111,10 @@ mod tests {
         assert!(!RenderQueue::new(2501).is_opaque());
         assert!(RenderQueue::new(2501).is_transparent());
         assert!(RenderQueue::new(3000).is_transparent());
+        // 负数可以无损保存，但不属于 Unity 的不透明区间 `[0, GeometryLast]`。
+        assert!(!RenderQueue::new(-1).is_opaque());
+        assert!(!RenderQueue::new(-1).is_transparent());
+        assert!(!RenderQueue::new(-1000).is_opaque());
         assert_eq!(RenderQueue::new(4242).value(), 4242);
 
         // 反射按 i32 编码（不是 u8 枚举），负值也保留。

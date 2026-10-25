@@ -842,7 +842,8 @@ P3b-1a 建了光照枚举，这一批补上**渲染状态**的纯数据镜像（
   具名队列只是 `static readonly int`。因此这里用 `RenderQueue(i32)` newtype +
   关联常量（`BACKGROUND=1000` / `GEOMETRY=2000` / `ALPHA_TEST=2450` /
   `GEOMETRY_LAST=2500` / `TRANSPARENT=3000` / `OVERLAY=4000`）、`value()`、
-  `is_opaque()`（`[0, GEOMETRY_LAST]`）/ `is_transparent()`（以 `GEOMETRY_LAST` 为界）；默认 `GEOMETRY`。
+  `is_opaque()` / `is_transparent()`（不透明区间是 `[0, GEOMETRY_LAST]`，与 Unity
+  一致；负数能无损保存但不算不透明）；默认 `GEOMETRY`。
   反射按 `FieldType::I32` 编码，任意值（含负数）都能无损往返。
 - 三个 C 风格枚举与 `CameraClearFlags` 走同一套编码（`FieldType::U8` +
   `enum_variants()`），所以未来挂到组件字段上时检查器**自动**渲染成下拉框，
