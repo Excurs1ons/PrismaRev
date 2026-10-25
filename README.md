@@ -232,6 +232,7 @@ python scripts/pr_ready.py   # 提交前自检：改动文件 fmt、受影响 cr
 
 先读 [`CONTRIBUTING.md`](CONTRIBUTING.md) 和 [`AGENTS.md`](AGENTS.md)。分支 / 提交 / PR / AI 协作的完整
 规范在 [`docs/ai-workflow.md`](docs/ai-workflow.md)；提交前跑 `python scripts/pr_ready.py`，把输出贴进 PR。
+issue/PR 自动化、Discord 与 agent 协作的契约见 [`docs/integrations.md`](docs/integrations.md)。
 
 ## License
 
