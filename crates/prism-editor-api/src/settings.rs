@@ -237,22 +237,12 @@ impl Default for BuildSettingsData {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectSettingsData {
     pub app: AppSettingsData,
     pub window: WindowSettingsData,
     pub build: BuildSettingsData,
-}
-
-impl Default for ProjectSettingsData {
-    fn default() -> Self {
-        Self {
-            app: AppSettingsData::default(),
-            window: WindowSettingsData::default(),
-            build: BuildSettingsData::default(),
-        }
-    }
 }
 
 impl ProjectSettingsData {
@@ -426,7 +416,10 @@ pub fn write_project_settings(root: &Path, data: &ProjectSettingsData) -> Result
     };
 
     for (key, value) in [
-        ("app", toml::Value::try_from(&app).map_err(|e| e.to_string())?),
+        (
+            "app",
+            toml::Value::try_from(&app).map_err(|e| e.to_string())?,
+        ),
         (
             "window",
             toml::Value::try_from(&window).map_err(|e| e.to_string())?,
@@ -491,8 +484,10 @@ mod tests {
     #[test]
     fn invalid_values_are_rejected() {
         let dir = temp_dir("prism-editor-api-settings-invalid");
-        let mut data = RenderSettingsData::default();
-        data.tonemap_mode = 9;
+        let data = RenderSettingsData {
+            tonemap_mode: 9,
+            ..Default::default()
+        };
         assert!(write_render_settings(&dir, &data).is_err());
     }
 
