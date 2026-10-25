@@ -675,11 +675,6 @@ Unity 的 `Renderer.shadowCastingMode` 决定一个物体「是否投影」与�
 **这一批没做**：`lit` 场景模板仍用旧组件（模板是另一条 `merge` 路径，留给后续）；
 渲染枚举批次（`BlendMode`/`CullMode`/`CompareFunction`/`RenderQueue`）未开始。
 
-### 待办（下一批候选）
-- **P3b 光照/渲染（剩余）**：`Light.shadows`/`shadowStrength` 接进阴影贴图
-  （`ShadowMode::None` 时整帧跳过阴影）、`TwoSided` 关闭阴影剔除、渲染枚举批次
-  （`BlendMode`/`CullMode`/`CompareFunction`/`RenderQueue`）。
-
 ### P3b-5 — `Light.shadows` / `shadowStrength` 接线 ✅
 
 `Light` 的阴影字段之前只是数据（PR #14 的「已知遗留」）。这一批让它们真正生效：
