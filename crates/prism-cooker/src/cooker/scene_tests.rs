@@ -290,10 +290,27 @@ fn cooks_real_intro_scene_with_ui_components() {
     let (cooker, result) = cook_scene_json(json).unwrap();
     let decoded = rscn::decode_scene(&result.cooked_data, cooker.registry()).unwrap();
     assert_eq!(decoded.entities.len(), 4);
-    assert!(decoded
-        .entities
-        .iter()
-        .all(|entity| entity.components.len() >= 3));
+    // 每个 UI 实体都带 `Node` + `Style`（`ComputedLayout` 是运行时输出，不进场景）。
+    let (mut nodes, mut styles) = (0, 0);
+    for entity in &decoded.entities {
+        assert!(entity.components.len() >= 2);
+        let names: Vec<String> = entity
+            .components
+            .iter()
+            .map(|component| component.type_name.clone())
+            .collect();
+        assert!(
+            names.iter().any(|name| name == "prism_engine::ui::Node"),
+            "{names:?}"
+        );
+        assert!(
+            names.iter().any(|name| name == "prism_engine::ui::Style"),
+            "{names:?}"
+        );
+        nodes += 1;
+        styles += 1;
+    }
+    assert_eq!((nodes, styles), (4, 4));
 }
 
 #[test]

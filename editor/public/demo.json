@@ -339,6 +339,7 @@
               "rotation_degrees": 0
             }
           },
+          "id": 0,
           "name": "Skybox",
           "parent": null,
           "transform": {
@@ -367,6 +368,7 @@
               "scale": 1
             }
           },
+          "id": 1,
           "name": "Gizmo",
           "parent": null,
           "transform": {
@@ -399,6 +401,7 @@
               "near": 0.01
             }
           },
+          "id": 2,
           "name": "Camera",
           "parent": null,
           "transform": {
@@ -437,6 +440,7 @@
               "intensity": 100000
             }
           },
+          "id": 3,
           "name": "Sun",
           "parent": null,
           "transform": {
@@ -470,6 +474,7 @@
               "range": 12
             }
           },
+          "id": 4,
           "name": "PointLightRed",
           "parent": null,
           "transform": {
@@ -503,6 +508,7 @@
               "range": 12
             }
           },
+          "id": 5,
           "name": "PointLightGreen",
           "parent": null,
           "transform": {
@@ -536,6 +542,7 @@
               "range": 12
             }
           },
+          "id": 6,
           "name": "PointLightBlue",
           "parent": null,
           "transform": {
@@ -558,7 +565,7 @@
           }
         }
       ],
-      "version": 2
+      "version": 3
     },
     "assets/scenes/demo.scene.json": {
       "entities": [
@@ -583,6 +590,7 @@
               "orthographic_size": 5.0
             }
           },
+          "id": 0,
           "name": "Camera",
           "parent": null,
           "transform": {
@@ -621,6 +629,7 @@
               "intensity": 100000.0
             }
           },
+          "id": 1,
           "name": "Sun",
           "parent": null,
           "transform": {
@@ -654,6 +663,7 @@
               "range": 12.0
             }
           },
+          "id": 2,
           "name": "PointLight",
           "parent": null,
           "transform": {
@@ -707,6 +717,7 @@
               "width": null
             }
           },
+          "id": 0,
           "name": "overlay",
           "parent": null,
           "transform": {
@@ -771,6 +782,7 @@
               "font_size": 84.0
             }
           },
+          "id": 1,
           "name": "title",
           "parent": 3,
           "transform": {
@@ -809,6 +821,7 @@
               ]
             }
           },
+          "id": 0,
           "name": "intro_overlay",
           "parent": null,
           "transform": {
@@ -865,6 +878,7 @@
               "font_size": 84
             }
           },
+          "id": 1,
           "name": "intro_title",
           "parent": null,
           "transform": {
@@ -921,6 +935,7 @@
               "font_size": 18
             }
           },
+          "id": 2,
           "name": "intro_subtitle",
           "parent": null,
           "transform": {
@@ -977,6 +992,7 @@
               "font_size": 14
             }
           },
+          "id": 3,
           "name": "intro_prompt",
           "parent": null,
           "transform": {
@@ -999,7 +1015,7 @@
           }
         }
       ],
-      "version": 2
+      "version": 3
     }
   },
   "documents": {
@@ -2536,6 +2552,7 @@
                 "yaw": 0.0
               }
             },
+            "id": 0,
             "name": "Camera",
             "parent": null,
             "transform": {
@@ -2558,12 +2575,13 @@
             }
           }
         ],
-        "version": 2
+        "version": 3
       },
       "empty": {
         "entities": [
           {
             "components": {},
+            "id": 0,
             "name": "entity",
             "parent": null,
             "transform": {
@@ -2586,7 +2604,7 @@
             }
           }
         ],
-        "version": 2
+        "version": 3
       },
       "mesh": {
         "entities": [
@@ -2599,6 +2617,7 @@
                 "shadow_casting_mode": "On"
               }
             },
+            "id": 0,
             "name": "Mesh",
             "parent": null,
             "transform": {
@@ -2621,7 +2640,7 @@
             }
           }
         ],
-        "version": 2
+        "version": 3
       },
       "point_light": {
         "entities": [
@@ -2646,6 +2665,7 @@
                 "use_color_temperature": false
               }
             },
+            "id": 0,
             "name": "PointLight",
             "parent": null,
             "transform": {
@@ -2668,7 +2688,7 @@
             }
           }
         ],
-        "version": 2
+        "version": 3
       },
       "skybox": {
         "entities": [
@@ -2682,6 +2702,7 @@
                 "rotation_degrees": 0.0
               }
             },
+            "id": 0,
             "name": "Skybox",
             "parent": null,
             "transform": {
@@ -2704,7 +2725,7 @@
             }
           }
         ],
-        "version": 2
+        "version": 3
       },
       "spot_light": {
         "entities": [
@@ -2729,6 +2750,7 @@
                 "use_color_temperature": false
               }
             },
+            "id": 0,
             "name": "SpotLight",
             "parent": null,
             "transform": {
@@ -2751,7 +2773,7 @@
             }
           }
         ],
-        "version": 2
+        "version": 3
       },
       "sun": {
         "entities": [
@@ -2776,6 +2798,7 @@
                 "use_color_temperature": false
               }
             },
+            "id": 0,
             "name": "Sun",
             "parent": null,
             "transform": {
@@ -2798,7 +2821,7 @@
             }
           }
         ],
-        "version": 2
+        "version": 3
       },
       "ui": {
         "entities": [
@@ -2834,6 +2857,7 @@
                 "width": null
               }
             },
+            "id": 0,
             "name": "ui_node",
             "parent": null,
             "transform": {
@@ -2856,7 +2880,7 @@
             }
           }
         ],
-        "version": 2
+        "version": 3
       }
     },
     "scene": {
@@ -2883,6 +2907,7 @@
                 "orthographic_size": 5.0
               }
             },
+            "id": 0,
             "name": "Camera",
             "parent": null,
             "transform": {
@@ -2905,12 +2930,13 @@
             }
           }
         ],
-        "version": 2
+        "version": 3
       },
       "empty": {
         "entities": [
           {
             "components": {},
+            "id": 0,
             "name": "Entity",
             "parent": null,
             "transform": {
@@ -2933,7 +2959,7 @@
             }
           }
         ],
-        "version": 2
+        "version": 3
       },
       "lit": {
         "entities": [
@@ -2958,6 +2984,7 @@
                 "orthographic_size": 5.0
               }
             },
+            "id": 0,
             "name": "Camera",
             "parent": null,
             "transform": {
@@ -2996,6 +3023,7 @@
                 "intensity": 100000.0
               }
             },
+            "id": 1,
             "name": "Sun",
             "parent": null,
             "transform": {
@@ -3029,6 +3057,7 @@
                 "range": 12.0
               }
             },
+            "id": 2,
             "name": "PointLight",
             "parent": null,
             "transform": {
@@ -3051,7 +3080,7 @@
             }
           }
         ],
-        "version": 2
+        "version": 3
       },
       "ui": {
         "entities": [
@@ -3087,6 +3116,7 @@
                 "width": null
               }
             },
+            "id": 0,
             "name": "overlay",
             "parent": null,
             "transform": {
@@ -3151,6 +3181,7 @@
                 "font_size": 84.0
               }
             },
+            "id": 1,
             "name": "title",
             "parent": 0,
             "transform": {
@@ -3173,7 +3204,7 @@
             }
           }
         ],
-        "version": 2
+        "version": 3
       }
     }
   },

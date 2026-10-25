@@ -26,9 +26,15 @@ pub struct SceneJson {
 /// One authoring entity.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct EntityJson {
+    /// 稳定实体 id：文档内唯一、删除后不复用。`parent` 引用它。
+    ///
+    /// 没有 `serde` 默认值 —— 缺 `id` 的输入必须经过
+    /// [`crate::migrate::migrate_scene_doc`]（v2→v3 按数组顺序补齐），
+    /// 直接反序列化 v2 文档应当报错，而不是静默拿到一堆 `id = 0`。
+    pub id: u32,
     #[serde(default)]
     pub name: Option<String>,
-    /// Index into the parent scene's `entities` array.
+    /// 父实体的 `id`（**不是**数组下标）。
     #[serde(default)]
     pub parent: Option<u32>,
     #[serde(default)]
@@ -123,22 +129,45 @@ impl SceneJson {
         Ok(())
     }
 
+    /// 下一个可用的实体 id（`max(id) + 1`；空文档为 0）。
+    ///
+    /// id 单调递增且**不复用**：删除留下的空洞保留，避免旧引用"复活"到新实体。
+    pub fn next_id(&self) -> u32 {
+        self.entities
+            .iter()
+            .map(|entity| entity.id)
+            .max()
+            .map_or(0, |max| max.saturating_add(1))
+    }
+
+    /// 实体 id → 数组下标（解析 `parent` 引用用）。
+    pub fn index_of_id(&self) -> HashMap<u32, usize> {
+        self.entities
+            .iter()
+            .enumerate()
+            .map(|(index, entity)| (entity.id, index))
+            .collect()
+    }
+
     /// Validate structural invariants that the binary format relies on.
     pub fn validate(&self) -> Result<(), String> {
         self.validate_authorship()?;
         if self.entities.is_empty() {
             return Err("scene must contain at least one entity".into());
         }
-        let count = self.entities.len();
+        let mut ids = std::collections::HashSet::with_capacity(self.entities.len());
+        for (index, entity) in self.entities.iter().enumerate() {
+            if !ids.insert(entity.id) {
+                return Err(format!("entity {index}: duplicate id {}", entity.id));
+            }
+        }
         for (index, entity) in self.entities.iter().enumerate() {
             if let Some(parent) = entity.parent {
-                if parent as usize >= count {
-                    return Err(format!(
-                        "entity {index}: parent index {parent} out of bounds"
-                    ));
-                }
-                if parent as usize == index {
+                if parent == entity.id {
                     return Err(format!("entity {index}: self-parent not allowed"));
+                }
+                if !ids.contains(&parent) {
+                    return Err(format!("entity {index}: parent id {parent} does not exist"));
                 }
             }
         }
@@ -150,18 +179,22 @@ impl SceneJson {
     /// Cycles (which [`Self::validate`] only rejects for self-parents) are
     /// broken deterministically by appending the remaining entities.
     ///
-    /// Linear in the number of entities: children are bucketed once instead of
-    /// rescanning the whole array for every visited node.
+    /// Linear in the number of entities: ids are resolved once and children
+    /// are bucketed once instead of rescanning the array for every node.
     pub fn topological_order(&self) -> Vec<usize> {
         let n = self.entities.len();
         let mut order = Vec::with_capacity(n);
         let mut visited = vec![false; n];
 
+        let index_of_id = self.index_of_id();
         let mut children: Vec<Vec<usize>> = vec![Vec::new(); n];
         let mut roots = Vec::new();
         for (index, entity) in self.entities.iter().enumerate() {
-            match entity.parent {
-                Some(parent) => children[parent as usize].push(index),
+            match entity
+                .parent
+                .and_then(|parent| index_of_id.get(&parent).copied())
+            {
+                Some(parent_index) => children[parent_index].push(index),
                 None => roots.push(index),
             }
         }

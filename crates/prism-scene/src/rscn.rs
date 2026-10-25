@@ -189,6 +189,8 @@ pub fn encode_scene(scene: &SceneJson, registry: &ComponentRegistry) -> Result<V
     for (position, &index) in order.iter().enumerate() {
         positions[index] = position;
     }
+    // `parent` 存的是实体 id，这里解析成数组下标。
+    let index_of_id = scene.index_of_id();
     let mut entities = Vec::with_capacity(order.len());
     let mut used_types = BTreeSet::new();
 
@@ -196,12 +198,13 @@ pub fn encode_scene(scene: &SceneJson, registry: &ComponentRegistry) -> Result<V
         let source = &scene.entities[index];
         let parent = match source.parent {
             None => -1,
-            Some(parent) => {
-                let parent_index = parent as usize;
-                let position = positions.get(parent_index).ok_or_else(|| {
-                    RscnError::BadValue(format!("entity {index}: parent {parent} out of bounds"))
+            Some(parent_id) => {
+                let parent_index = index_of_id.get(&parent_id).copied().ok_or_else(|| {
+                    RscnError::BadValue(format!(
+                        "entity {index}: parent id {parent_id} does not exist"
+                    ))
                 })?;
-                *position as i32
+                positions[parent_index] as i32
             }
         };
 
