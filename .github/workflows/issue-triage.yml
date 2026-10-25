@@ -1,0 +1,41 @@
+name: Issue triage
+
+# 新 issue 自动进入分诊；来自 Discord bot 的报告额外打 source/discord。
+# 不做关键词猜类型（bug/feature 由模板或人判断），只保证不漏分诊。
+
+on:
+  issues:
+    types: [opened, reopened]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Ensure labels
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: sh tools/ci/ensure_labels.sh
+
+      - name: Label the issue
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.issue.number }}
+          TITLE: ${{ github.event.issue.title }}
+          BODY: ${{ github.event.issue.body }}
+        run: |
+          set -euo pipefail
+          gh issue edit "$NUMBER" --add-label needs/triage
+          if printf '%s\n%s' "$TITLE" "$BODY" | grep -qi 'discord'; then
+            gh issue edit "$NUMBER" --add-label source/discord
+          fi

@@ -1,0 +1,7 @@
+# 自动化与发布相关文件需要维护者审阅。
+# 分支保护启用 code owners 审阅后生效；在此之前它是所有权说明。
+
+/.github/                       @Excurs1ons
+/tools/ci/                      @Excurs1ons
+/scripts/pr_ready.py            @Excurs1ons
+/scripts/check_commit_msg.py    @Excurs1ons

@@ -1,0 +1,30 @@
+name: cancel-on-close
+
+# PR 关闭/合并后，立刻取消它还在排队或运行的检查，释放 runner。
+# pull_request_target 才能取消 fork PR 的 run；不 checkout、不执行 PR 代码。
+
+on:
+  pull_request_target:
+    types: [closed]
+
+permissions:
+  actions: write
+
+jobs:
+  cancel:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Cancel the pull request's unfinished runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          for status in queued in_progress waiting pending requested; do
+            gh run list -R "$REPO" --branch "$BRANCH" --status "$status" --limit 100 \
+              --json databaseId,event,headSha \
+              -q ".[] | select(.event == \"pull_request\" and .headSha == \"$SHA\") | .databaseId"
+          done | sort -u | while read -r id; do
+            gh run cancel -R "$REPO" "$id" || true
+          done

@@ -1,0 +1,126 @@
+name: PR triage
+
+# 自动处理 PR 里可以机械判断的部分：
+#   - 标题是否符合 Conventional Commits（复用 scripts/check_commit_msg.py）
+#   - 是否贴了 pr_ready 的自检块（必须包含 "**Result:"）
+#   - 按改动路径打 area/*、按行数打 size/*、识别 AI 参与
+#
+# 用 pull_request_target 且只 checkout base commit：不执行 PR 里的代码。
+# 拉取到的标题/正文只作为数据处理，不拼进 shell 命令。
+
+on:
+  pull_request_target:
+    types: [opened, edited, reopened, synchronize]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: pr-triage-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+
+      - name: Ensure labels
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: sh tools/ci/ensure_labels.sh
+
+      - name: Title, self-check, labels
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          TITLE: ${{ github.event.pull_request.title }}
+          BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -euo pipefail
+
+          comment_once() {
+            local marker=$1 message=$2 existing
+            existing=$(gh api "repos/$REPO/issues/$PR/comments" --paginate --jq '.[].body' 2>/dev/null || true)
+            if ! printf '%s' "$existing" | grep -qF "$marker"; then
+              printf '%s\n%s\n' "$marker" "$message" | gh pr comment "$PR" --body-file -
+            fi
+          }
+
+          # 标题
+          printf '%s\n' "$TITLE" > "$RUNNER_TEMP/pr-title"
+          if python scripts/check_commit_msg.py "$RUNNER_TEMP/pr-title" 2>"$RUNNER_TEMP/title.err"; then
+            gh pr edit "$PR" --remove-label needs/title >/dev/null 2>&1 || true
+          else
+            gh pr edit "$PR" --add-label needs/title
+            comment_once "<!-- pr-triage:title -->" \
+          "标题不符合规范。请改成 \`<type>(<scope>): <祈使句摘要>\`（≤ 72 字符），详见 \`docs/ai-workflow.md\` §3。"
+          fi
+
+          # 自检块
+          if printf '%s' "$BODY" | grep -qE '^\*\*Result:'; then
+            gh pr edit "$PR" --remove-label needs/self-check >/dev/null 2>&1 || true
+          else
+            gh pr edit "$PR" --add-label needs/self-check
+            comment_once "<!-- pr-triage:self-check -->" \
+          "缺少 \`python scripts/pr_ready.py\` 的自检块。请运行后把打印的 Markdown（包含 \`**Result:\` 那一行）贴进 PR 正文。"
+          fi
+
+          # 区域标签：先清掉旧的，再按当前文件加。
+          for label in area/render area/scene area/editor area/engine area/assets \
+                       area/game area/android area/ci area/docs; do
+            gh pr edit "$PR" --remove-label "$label" >/dev/null 2>&1 || true
+          done
+
+          labels=""
+          add() {
+            case " $labels " in
+              *" $1 "*) ;;
+              *) labels="$labels $1" ;;
+            esac
+          }
+          while IFS= read -r file; do
+            [ -n "$file" ] || continue
+            case "$file" in
+              crates/prism-render/*|assets/shaders/*) add area/render ;;
+              crates/prism-scene/*|crates/prism-reflect/*|crates/prism-reflect-derive/*) add area/scene ;;
+              crates/prism-editor-api/*|editor/*) add area/editor ;;
+              crates/prism-engine/*|crates/prism-app/*|crates/prism-platform/*|crates/prism-audio/*) add area/engine ;;
+              crates/prism-asset/*|crates/prism-cooker/*|crates/prism-build-pipeline/*|crates/prism-editor-tool/*) add area/assets ;;
+              projects/*) add area/game ;;
+              launcher/*|scripts/build-android.ps1|*android*) add area/android ;;
+              .github/*|scripts/*|tools/*|crates/xtask/*) add area/ci ;;
+              docs/*|*.md) add area/docs ;;
+            esac
+          done < <(gh api "repos/$REPO/pulls/$PR/files" --paginate --jq '.[].filename')
+          if [ -n "$labels" ]; then
+            gh pr edit "$PR" --add-label "$(printf '%s' "${labels# }" | tr ' ' ',')"
+          fi
+
+          # 规模
+          for label in size/s size/m size/l; do
+            gh pr edit "$PR" --remove-label "$label" >/dev/null 2>&1 || true
+          done
+          total=$(gh pr view "$PR" --json additions,deletions --jq '.additions + .deletions')
+          if [ "$total" -lt 100 ]; then
+            gh pr edit "$PR" --add-label size/s
+          elif [ "$total" -lt 500 ]; then
+            gh pr edit "$PR" --add-label size/m
+          else
+            gh pr edit "$PR" --add-label size/l
+          fi
+
+          # AI 参与
+          if printf '%s' "$BODY" | grep -qE '^> 🤖|🤖 由|Co-Authored-By:'; then
+            gh pr edit "$PR" --add-label ai
+          else
+            gh pr edit "$PR" --remove-label ai >/dev/null 2>&1 || true
+          fi
