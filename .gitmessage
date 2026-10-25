@@ -1,10 +1,8 @@
 # <type>(<scope>): <summary, imperative, <=72 chars, no period>
 #
-# Why:
-#
-# How:
-#
-# Verify:
+# Optional body: 1-3 short lines on what/why. Details and verification go in the PR.
 #
 # Refs: #123
-# Co-Authored-By: <Model> (<Harness> agent) <noreply@...>
+# Optional: only when the agent has an official GitHub account.
+# Co-Authored-By: <official account> <email>
+# (OpenCode has no official account, so omit this trailer.)

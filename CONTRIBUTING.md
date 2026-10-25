@@ -62,7 +62,8 @@ python scripts/pr_ready.py --all      # 全 workspace + 所有独立 workspace
 - 正文写清 what / why、验证证据、风险与回滚方式。
 - 能看到的东西附 before / after 截图；Android 改动注明设备与 API level。
 - **AI 参与的 PR 必须标注**（格式见 [`docs/ai-workflow.md`](docs/ai-workflow.md) §5）：
-  PR 首行写明是谁的 agent、用什么工具；每条评论以 `🤖 Agent:` 开头；commit 带 `Co-Authored-By:`。
+  PR 首行写明是谁的 agent、用什么工具；每条评论以 `🤖 Agent:` 开头；commit 的 `Co-Authored-By:`
+  只在 agent 有官方 GitHub 账号时写（Codex / Claude Code 有），OpenCode 没有就省略。
 
 ## 不能碰的红线
 
