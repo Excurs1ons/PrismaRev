@@ -108,7 +108,8 @@ cargo ndk -t arm64-v8a -o <输出目录> build
 ```
 
 Tauri launcher 的 `gen/android/` 负责 APK 打包；Termux 上可直接把新 `.so`
-替换进已有 APK 并用 `apksigner` 重签（Android 构建详见 README §Android）。
+替换进已有 APK 并用 `apksigner` 重签（Android 构建详见 `AGENTS.md` §Android packaging chain
+与 `scripts/build-android.ps1`）。
 
 ## 常见坑速查
 

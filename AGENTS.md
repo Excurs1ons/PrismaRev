@@ -1,8 +1,9 @@
 # PrismaRev — Agent Instructions
 
 From-scratch Rust game engine; **Vulkan** rendering, **Android** + desktop, **data-oriented ECS**.
-Read `docs/DESIGN.md` before changing rendering/architecture, and `README.md` (§Coordinate
-Conventions) before touching any matrix/coordinate math — deviating from those conventions is a bug.
+Read `docs/DESIGN.md` before changing rendering/architecture, and the
+**Coordinate & matrix conventions** section below before touching any matrix/coordinate math —
+deviating from those conventions is a bug. (`README.md` is the human-facing overview.)
 
 ## AI 工作流（先读）
 

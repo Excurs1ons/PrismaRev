@@ -4,8 +4,7 @@ PrismaRev 是从零实现的 Rust 游戏引擎：**Vulkan** 渲染，**Android �
 数据导向 ECS 管线。开始之前请先读：
 
 - [`docs/DESIGN.md`](docs/DESIGN.md) — 架构与渲染分层（改渲染 / 架构前必读）。
-- [`README.md`](README.md) — 当前能力、坐标与矩阵约定。
-- [`AGENTS.md`](AGENTS.md) — 代码地图与硬约束（人和 AI 都适用）。
+- [`AGENTS.md`](AGENTS.md) — 代码地图、硬约束与坐标/矩阵约定（人和 AI 都适用）。
 - [`docs/ai-workflow.md`](docs/ai-workflow.md) — 分支、提交、PR、AI 协作规范。
 
 ## 环境
