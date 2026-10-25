@@ -75,7 +75,7 @@ deviating from those conventions is a bug. (`README.md` is the human-facing over
     不要用 `▶ ■ ✓ ✕ ▾ ▸ ›` 这类 Unicode 符号。
   - 顶部是 UE / Unity 风格三段式：菜单栏（文件/编辑/构建/窗口/帮助）、主工具栏
     （只放场景选择 + Play）、底部状态栏。撤销/重做/保存、构建场景包、新建文档都在
-    菜单里；离线工具在「构建 → 离线工具」，渲染设置在「编辑 → 项目设置」，渲染图在
+    菜单里；离线工具在「构建 → 离线工具」，渲染设置与主题在「编辑 → 项目设置 / 主题」，渲染图在
     「窗口 → 分析」。新建实体在层级面板顶部（类型下拉 + 「新建实体」按钮）。
     菜单/子菜单数据集中在 `App.vue` 的 `MENUS` computed（`children` 表示子菜单）；
     新增命令时同时补菜单项与快捷键。渲染图、渲染设置、离线工具、快捷键、关于都是
@@ -90,8 +90,16 @@ deviating from those conventions is a bug. (`README.md` is the human-facing over
     到层级实体/空白处会实例化到该父级/根；层级行的眼睛按钮切换 `Active` 组件。
   - 设置类窗口：`projectSettings`（`[app]`/`[window]`/`[build]` + `[render]`，写
     `assets/settings.toml`）、`preferences`（本机 localStorage：自动保存/删除确认/
-    紧凑模式/日志上限/默认运行场景）、`build`（构建项目）。从菜单打开时默认用
-    较大的浮动面板，用户仍可拖回 dock。
+    紧凑模式/日志上限/默认运行场景）、`theme`（本机 localStorage 的界面主题）、
+    `build`（构建项目）。从菜单打开时默认用较大的浮动面板，用户仍可拖回 dock。
+  - **主题**是纯前端配色层：`editor/src/theme.ts` 用 `THEME_TOKEN_GROUPS` 描述
+    「背景与表面 / 边框 / 文本 / 交互 / 强调 / 状态」几组 token（每个 token 对应
+    `style.css` 里同名 CSS 变量），`THEME_PRESETS` 提供「深空蓝（默认）/ 午夜紫 /
+    石墨灰 / 森林绿 / 纸白」五套预设，`applyTheme` 把 token 写到
+    `documentElement` 并设置 `color-scheme`，启动前在 `main.ts` 先套用以避免闪屏。
+    `style.css` 里**不要再写死颜色**：要么用 `var(--token)`，要么用
+    `color-mix(in srgb, var(--token) N%, transparent)` 派生透明色。主题状态存
+    `prisma-editor.theme.v1`（`{preset, overrides}`），只影响编辑器，不写项目文件。
   - 「构建项目」= `cargo build --manifest-path projects/prisma/Cargo.toml`
     (+`--release`) → `build-scenes` → 把 exe/scenes.pak/settings.toml 复制到
     `[build].output_dir`（默认 `build/windows`，已 gitignore），可选构建后运行。
