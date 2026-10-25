@@ -41,13 +41,22 @@ function kindOf(v: JsonValue | undefined): Kind {
 }
 
 const hint = computed<FieldSchema | null>(() => props.field ?? null);
+/**
+ * `Option<T>` 的叶子 schema：值非 null 时剥掉 option 壳，
+ * 让 `Option<Enum>` 也能读到内层 `variants` 渲染下拉框。
+ */
+const leafHint = computed<FieldSchema | null>(() => {
+  let field = hint.value;
+  while (field?.kind === "option" && field.inner && props.value !== null) field = field.inner;
+  return field;
+});
 const kind = computed(() => kindOf(props.value));
 /** 定长数组（`[T; N]`）：长度由 schema 固定，不能增删元素。 */
 const isFixedArray = computed(() => hint.value?.kind === "array");
 const pathStr = computed(() => props.path ?? "");
 
 const isInteger = computed(() =>
-  ["i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64"].includes(hint.value?.kind ?? ""),
+  ["i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64"].includes(leafHint.value?.kind ?? ""),
 );
 
 const isColor = computed(() => isColorField(hint.value?.name, props.value));
@@ -57,8 +66,10 @@ const isColor = computed(() => isColorField(hint.value?.name, props.value));
  *
  * `Some` 时渲染下拉框；选项文字与写回值都是变体名（作者 JSON 里的字符串，
  * 例如 `"SolidColor"`），与 `CameraClearFlags` / `TextAlign` 的序列化形状一致。
+ * 容器里的枚举（`Vec<Enum>` / `[Enum; N]`）由元素自己的 `FieldEditor` 命中，
+ * `Option<Enum>` 则通过 `leafHint` 命中。
  */
-const enumOptions = computed(() => hint.value?.variants ?? null);
+const enumOptions = computed(() => leafHint.value?.variants ?? null);
 
 // —— 资产引用：对「看起来是资源路径」的字符串字段给出候选与选择器 ——
 const assets = inject(ASSETS_KEY, null);
@@ -124,6 +135,8 @@ function itemPath(index: number): string {
 /** 某字段的「零值」默认，用于「添加」操作。 */
 function defaultFor(field: FieldSchema | null): JsonValue {
   if (!field) return null;
+  // 枚举的作者 JSON 形状是变体名字符串，默认取第一项（不能是数字 0）。
+  if (field.variants?.length) return field.variants[0];
   switch (field.kind) {
     case "bool":
       return false;

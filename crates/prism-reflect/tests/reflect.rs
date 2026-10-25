@@ -250,3 +250,49 @@ fn value_type_errors_are_reported() {
     let err = value.set_field("inner", Value::F64(1.0)).unwrap_err();
     assert!(matches!(err, ReflectError::TypeMismatch { .. }));
 }
+
+/// 容器类型应把内层枚举的变体名转发给 schema（编辑器下拉框依赖它）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Flag {
+    #[default]
+    Off,
+    On,
+}
+
+impl prism_reflect::ReflectType for Flag {
+    fn field_type() -> prism_reflect::FieldType {
+        prism_reflect::FieldType::U8
+    }
+
+    fn enum_variants() -> Option<&'static [&'static str]> {
+        Some(&["Off", "On"])
+    }
+
+    fn to_value(&self) -> Value {
+        Value::U64(u64::from(*self as u8))
+    }
+
+    fn from_value(value: Value) -> Result<Self, ReflectError> {
+        match value.as_u64()? {
+            0 => Ok(Self::Off),
+            1 => Ok(Self::On),
+            other => Err(ReflectError::BadData(format!("invalid Flag: {other}"))),
+        }
+    }
+}
+
+#[test]
+fn containers_forward_enum_variants() {
+    use prism_reflect::ReflectType;
+
+    let expected = Some(&["Off", "On"][..]);
+    assert_eq!(Flag::enum_variants(), expected);
+    assert_eq!(Vec::<Flag>::enum_variants(), expected);
+    assert_eq!(Option::<Flag>::enum_variants(), expected);
+    assert_eq!(<[Flag; 4]>::enum_variants(), expected);
+
+    // 非枚举字段仍为 None（不能把 "没有枚举" 误当成 "空变体列表"）。
+    assert_eq!(u8::enum_variants(), None);
+    assert_eq!(Vec::<u8>::enum_variants(), None);
+    assert_eq!(Option::<String>::enum_variants(), None);
+}
