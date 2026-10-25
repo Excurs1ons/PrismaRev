@@ -5,7 +5,7 @@
 //! | 层次结构  | `Parent`, `Child` |
 //! | 变换     | `LocalTransform`, `LocalToWorld`, `TransformDirty` |
 //! | 渲染     | `MeshRenderer`, `Active` |
-//! | 光源     | `DirectionalLight`, `PointLight`, `SpotLight` |
+//! | 光源     | `Light`（Unity 形状）, `DirectionalLight`, `PointLight`, `SpotLight`（旧） |
 //! | 相机     | `Camera`, `FlyCameraController` |
 //! | 天空盒   | `Skybox` |
 //! | 调试     | `Gizmo` |
@@ -16,7 +16,9 @@ use prism_ecs::Entity;
 use prism_reflect::{FieldType, Reflect, ReflectError, ReflectType, Value};
 use serde::{Deserialize, Serialize};
 
-use crate::render_enums::CameraClearFlags;
+use crate::render_enums::{
+    correlated_color_temperature_to_rgb, CameraClearFlags, LightRenderMode, LightShadows, LightType,
+};
 
 // ---------------------------------------------------------------------------
 // SceneAssetId
@@ -269,6 +271,98 @@ impl Default for SpotLight {
             inner_cone_angle: 0.436, // ~25°
             outer_cone_angle: 0.873, // ~50°
         }
+    }
+}
+
+/// 统一光源组件 = `UnityEngine.Light`。
+///
+/// Unity 只有一个 `Light` 组件，用 [`LightType`] 区分方向光 / 点光 / 聚光；光源的
+/// **方向由实体变换决定**（Unity 里是 `light.transform.forward`），位置由
+/// `LocalToWorld` 决定。本组件就是那个形状。
+///
+/// 旧的 [`DirectionalLight`] / [`PointLight`] / [`SpotLight`] 仍然可用（渲染器两者
+/// 都收，见 `prism-engine::scene::systems::lights`），所以老场景不需要迁移；
+/// 新场景建议只用本组件。
+///
+/// 单位与旧组件一致，采用**物理量**（方向光 lux、点光/聚光 candela），而不是 Unity
+/// 默认的归一化 `intensity = 1`：渲染器内部按 `LUX_TO_RADIANCE_SCALE` 折算，改
+/// `intensity` 的观感与旧组件相同。
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Reflect)]
+#[reflect(name = "prism_engine::scene::Light")]
+#[serde(default)]
+pub struct Light {
+    /// `Behaviour.enabled`：为 `false` 时渲染器跳过该光源。
+    pub enabled: bool,
+    /// 光源类型 = Unity `Light.type`。
+    pub light_type: LightType,
+    /// 线性 RGB 颜色 = Unity `Light.color`。
+    pub color: glam::Vec3,
+    /// 强度（方向光 lux / 点光与聚光 candela）= Unity `Light.intensity`。
+    pub intensity: f32,
+    /// 衰减半径（世界单位）= Unity `Light.range`（方向光忽略）。
+    pub range: f32,
+    /// 聚光**全锥角**（度）= Unity `Light.spotAngle`。
+    pub spot_angle: f32,
+    /// 内锥**全锥角**（度）= Unity `Light.innerSpotAngle`；小于 `spot_angle`。
+    pub inner_spot_angle: f32,
+    /// 阴影模式 = Unity `Light.shadows`。
+    pub shadows: LightShadows,
+    /// 阴影强度 = Unity `Light.shadowStrength`（`0..=1`）。
+    pub shadow_strength: f32,
+    /// 色温（开尔文）= Unity `Light.colorTemperature`。
+    pub color_temperature: f32,
+    /// 是否让色温参与光源颜色 = Unity `Light.useColorTemperature`。
+    pub use_color_temperature: bool,
+    /// 渲染模式 = Unity `Light.renderMode`。
+    pub render_mode: LightRenderMode,
+}
+
+impl Default for Light {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            // Unity 的 `new Light()` 默认是点光源。
+            light_type: LightType::Point,
+            color: glam::Vec3::ONE,
+            intensity: 100.0,
+            range: 10.0,
+            spot_angle: 30.0,
+            inner_spot_angle: 21.8,
+            shadows: LightShadows::None,
+            shadow_strength: 1.0,
+            color_temperature: 6570.0,
+            use_color_temperature: false,
+            render_mode: LightRenderMode::Auto,
+        }
+    }
+}
+
+impl Light {
+    /// 最终光源颜色 = `color`（× 色温滤色片）。
+    ///
+    /// 对应 Unity 的 `ExtractColorTemperature` + `ApplyColorTemperature`：
+    /// 只有 `use_color_temperature` 为真时才乘色温，且不归一化。
+    pub fn effective_color(&self) -> glam::Vec3 {
+        if self.use_color_temperature {
+            self.color * correlated_color_temperature_to_rgb(self.color_temperature)
+        } else {
+            self.color
+        }
+    }
+
+    /// 聚光的内 / 外**半锥角**（弧度），供 GPU 与着色器使用。
+    ///
+    /// Unity 的 `spotAngle` / `innerSpotAngle` 都是全锥角（度）；这里除以 2 转成
+    /// 半角，并把内角裁到 `[0, 外角]`，避免非法配置产生负的余弦区间。
+    pub fn cone_half_angles_radians(&self) -> (f32, f32) {
+        let outer = (self.spot_angle.max(0.0) * 0.5).to_radians();
+        let inner = (self.inner_spot_angle.max(0.0) * 0.5).to_radians();
+        (inner.min(outer), outer)
+    }
+
+    /// 是否投阴影（启用 + `shadows != None`）。
+    pub fn is_shadow_caster(&self) -> bool {
+        self.enabled && self.shadows.casts_shadows()
     }
 }
 

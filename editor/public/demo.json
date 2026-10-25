@@ -282,6 +282,11 @@
     },
     {
       "kind": "other",
+      "path": "assets/shaders/slang/pt_render.spv",
+      "sizeBytes": 68760
+    },
+    {
+      "kind": "other",
       "path": "assets/shaders/slang/rt_preview.slang",
       "sizeBytes": 1211
     },
@@ -1497,6 +1502,157 @@
         "isComponent": true,
         "name": "prism_engine::scene::Gizmo",
         "typeId": "d161ae89478af57f",
+        "version": 1
+      },
+      {
+        "defaultJson": {
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "color_temperature": 6570.0,
+          "enabled": true,
+          "inner_spot_angle": 21.799999237060547,
+          "intensity": 100.0,
+          "light_type": "Point",
+          "range": 10.0,
+          "render_mode": "Auto",
+          "shadow_strength": 1.0,
+          "shadows": "None",
+          "spot_angle": 30.0,
+          "use_color_temperature": false
+        },
+        "fields": [
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "bool",
+            "name": "enabled",
+            "readOnly": false,
+            "structType": null,
+            "variants": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "u8",
+            "name": "light_type",
+            "readOnly": false,
+            "structType": null,
+            "variants": [
+              "Spot",
+              "Directional",
+              "Point",
+              "Rectangle",
+              "Disc",
+              "Pyramid",
+              "Box",
+              "Tube"
+            ]
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "struct",
+            "name": "color",
+            "readOnly": false,
+            "structType": "glam::Vec3",
+            "variants": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "f32",
+            "name": "intensity",
+            "readOnly": false,
+            "structType": null,
+            "variants": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "f32",
+            "name": "range",
+            "readOnly": false,
+            "structType": null,
+            "variants": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "f32",
+            "name": "spot_angle",
+            "readOnly": false,
+            "structType": null,
+            "variants": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "f32",
+            "name": "inner_spot_angle",
+            "readOnly": false,
+            "structType": null,
+            "variants": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "u8",
+            "name": "shadows",
+            "readOnly": false,
+            "structType": null,
+            "variants": [
+              "None",
+              "Hard",
+              "Soft"
+            ]
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "f32",
+            "name": "shadow_strength",
+            "readOnly": false,
+            "structType": null,
+            "variants": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "f32",
+            "name": "color_temperature",
+            "readOnly": false,
+            "structType": null,
+            "variants": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "bool",
+            "name": "use_color_temperature",
+            "readOnly": false,
+            "structType": null,
+            "variants": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "u8",
+            "name": "render_mode",
+            "readOnly": false,
+            "structType": null,
+            "variants": [
+              "Auto",
+              "ForcePixel",
+              "ForceVertex"
+            ]
+          }
+        ],
+        "isComponent": true,
+        "name": "prism_engine::scene::Light",
+        "typeId": "fb75d1353a12b4e1",
         "version": 1
       },
       {

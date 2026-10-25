@@ -1,4 +1,4 @@
-//! `Camera` 的投影/矩阵约定测试（`components.rs` 的测试模块）。
+//! `Camera` / `Light` 的 schema 与数学约定测试（`components.rs` 的测试模块）。
 
 use super::*;
 
@@ -135,4 +135,103 @@ fn older_json_without_new_fields_uses_defaults() {
     assert!(approx(cam.fov_y_degrees, 72.0));
     assert_eq!(cam.clear_flags, CameraClearFlags::Skybox);
     assert!(!cam.orthographic);
+}
+
+// ---------------------------------------------------------------------------
+// Light（Unity `Light` 形状）
+// ---------------------------------------------------------------------------
+
+#[test]
+fn light_defaults_match_unity() {
+    let light = Light::default();
+    assert!(light.enabled);
+    // Unity `new Light()` 默认是点光源；聚光角度与色温沿用 Unity 默认值。
+    assert_eq!(light.light_type, LightType::Point);
+    assert_eq!(light.shadows, LightShadows::None);
+    assert_eq!(light.render_mode, LightRenderMode::Auto);
+    assert!(approx(light.spot_angle, 30.0));
+    assert!(approx(light.inner_spot_angle, 21.8));
+    assert!(approx(light.color_temperature, 6570.0));
+    assert!(!light.use_color_temperature);
+    assert!(approx(light.shadow_strength, 1.0));
+    assert!(!light.is_shadow_caster());
+}
+
+#[test]
+fn light_json_round_trips_and_fills_missing_fields() {
+    let light = Light {
+        light_type: LightType::Spot,
+        shadows: LightShadows::Soft,
+        use_color_temperature: true,
+        color_temperature: 3200.0,
+        ..Light::default()
+    };
+    let json = serde_json::to_string(&light).unwrap();
+    let back: Light = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.light_type, LightType::Spot);
+    assert_eq!(back.shadows, LightShadows::Soft);
+    assert!(back.use_color_temperature);
+
+    // 只写已知字段的文档也必须能反序列化（`#[serde(default)]`）。
+    let partial: Light =
+        serde_json::from_str(r#"{"light_type":"Directional","intensity":3.0}"#).unwrap();
+    assert_eq!(partial.light_type, LightType::Directional);
+    assert!(approx(partial.intensity, 3.0));
+    assert_eq!(partial.shadows, LightShadows::None);
+    assert!(approx(partial.range, 10.0));
+}
+
+#[test]
+fn light_effective_color_applies_temperature_only_when_enabled() {
+    let mut light = Light {
+        color: glam::Vec3::new(1.0, 0.5, 0.25),
+        color_temperature: 2000.0,
+        ..Light::default()
+    };
+    // 关闭色温：原样返回。
+    assert_eq!(light.effective_color(), light.color);
+
+    light.use_color_temperature = true;
+    let tinted = light.effective_color();
+    // 2000 K 是暖色：红色分量保持，蓝色被明显压低。
+    assert!(approx(tinted.x, light.color.x));
+    assert!(tinted.z < light.color.z, "色温滤色片应压低蓝色: {tinted:?}");
+}
+
+#[test]
+fn light_cone_half_angles_are_derived_from_full_angles() {
+    let light = Light {
+        light_type: LightType::Spot,
+        // Unity 的 60° 全锥 = 30° 半锥。
+        spot_angle: 60.0,
+        inner_spot_angle: 20.0,
+        ..Light::default()
+    };
+    let (inner, outer) = light.cone_half_angles_radians();
+    assert!(approx(outer, 30.0_f32.to_radians()));
+    assert!(approx(inner, 10.0_f32.to_radians()));
+
+    // 内锥大于外锥时被裁到外锥，不会出现负的余弦区间。
+    let broken = Light {
+        spot_angle: 20.0,
+        inner_spot_angle: 90.0,
+        ..Light::default()
+    };
+    let (inner, outer) = broken.cone_half_angles_radians();
+    assert!(inner <= outer);
+}
+
+#[test]
+fn light_shadow_caster_requires_enabled_and_shadow_mode() {
+    let light = Light {
+        shadows: LightShadows::Hard,
+        ..Light::default()
+    };
+    assert!(light.is_shadow_caster());
+
+    let disabled = Light {
+        enabled: false,
+        ..light
+    };
+    assert!(!disabled.is_shadow_caster());
 }
