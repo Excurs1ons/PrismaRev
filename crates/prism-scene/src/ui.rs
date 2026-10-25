@@ -17,10 +17,6 @@ use serde::{Deserialize, Serialize};
 #[reflect(name = "prism_engine::ui::Node")]
 pub struct Node {}
 
-/// **父子关系**：UI 子元素指向父元素 Entity。
-#[derive(Clone, Copy, Debug)]
-pub struct UiParent(pub prism_ecs::Entity);
-
 // ── 锚点系统 ─────────────────────────────────────────────────
 
 /// 锚点角 —— 定义子元素边相对于父边的位置（0..=1 归一化）。
@@ -75,6 +71,10 @@ impl Default for Anchors {
 }
 
 /// Pivot —— 旋转/缩放/定位的中心点（归一化 0..=1）。
+///
+/// 只有**点锚点**（`Anchors` 该轴 `min == max`）才用 pivot 对齐尺寸；
+/// 拉伸轴（`min != max`）的矩形由锚点与边距决定，pivot 不参与
+/// （与 Unity 的 `anchorMin/anchorMax` + `pivot` 语义一致）。
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, Reflect)]
 #[reflect(name = "prism_engine::ui::Pivot")]
 pub struct Pivot {
