@@ -30,3 +30,18 @@ fn settings_default_is_high_precision_gbuffer() {
     assert_eq!(s.ray_query_resolution_scale, 0.5);
     assert_eq!(s.sharc_capacity, 1 << 20);
 }
+
+#[test]
+fn draw_cull_mode_maps_to_vulkan_and_defaults_to_back() {
+    // 默认与 PrismaRev 既有管线一致（背面剔除）。
+    assert_eq!(DrawCullMode::default(), DrawCullMode::Back);
+    assert_eq!(DrawCullMode::Off.to_vk(), vk::CullModeFlags::NONE);
+    assert_eq!(DrawCullMode::Front.to_vk(), vk::CullModeFlags::FRONT);
+    assert_eq!(DrawCullMode::Back.to_vk(), vk::CullModeFlags::BACK);
+
+    // 管线缓存以它做键，三种取值必须互不相等。
+    let mut modes = vec![DrawCullMode::Off, DrawCullMode::Front, DrawCullMode::Back];
+    modes.sort_by_key(|m| m.to_vk().as_raw());
+    modes.dedup();
+    assert_eq!(modes.len(), 3);
+}
