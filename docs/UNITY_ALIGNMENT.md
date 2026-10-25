@@ -976,17 +976,45 @@ P3b-6 只加了枚举；这一批让 `CullMode` 真正变成 Vulkan 管线状态
   透明状态往返（`render_queue` 是 JSON 数字、混合因子是变体名）；`DrawState::blends`；
   `sort_draw_items`（不透明段按队列、透明段远→近、同队列稳定）；
   `blend_factor` / `blend_operation` 的 Unity→Vulkan 映射。
-- ✅ 编辑器 fixture 只补 schema/模板相关的 6 处（`defaultJson`、`fields` 5 项、预制体模板实例），
-  `pr_ready` 的 fixture drift 检查通过。
-- ⚠️ 本机 `pr_ready` 的 workspace 测试有一项恒定失败：`cooker::scene::tests::cooks_real_default_scene`
-  断言 `assets/scenes/default.scene.json` 有 7 个实体，而该文件在工作区里是未提交的 8 个（编辑器
-  会话残留）。与代码无关，干净 checkout 下通过。
 
 **这一批刻意没做**：`BlendOp` 之外的 Unity 状态（`_ColorMask`、`ZTest` / `CompareFunction`
 接线、`Stencil`）、按材质资产的混合（目前仍在渲染器上，等材质系统带 `Material` 组件时再搬）、
 `RenderQueueRange`。点光/聚光阴影仍未实现。
 
-## 待办（下一批候选）
+### P3c-1 — `CameraClearFlags` 的 Skybox 语义接进渲染 ✅
+
+`Camera.clear_flags`（Unity `CameraClearFlags`）此前只是数据。这一批先把**单相机下唯一
+可观察**的部分接上：**只有 `clearFlags == Skybox` 才绘制天空盒背景**，其余清屏方式即使
+场景里有启用的 `Skybox` 实体也不画。
+
+**prism-gfx / prism-scene**
+- `prism-gfx` 新增 `CameraClearFlags::draws_skybox()`（仅 `Skybox` 为真），
+  并在文档里写明与 `clears_color()` / `clears_depth()` 的分工；扩展
+  `clear_predicates` 断言四个取值的天空盒行为。
+- `prism-scene::render_enums` 维持 `pub use prism_gfx::*;`。
+
+**prism-engine**
+- `scene/systems/camera.rs` 新增 `clear_flags(world, entity)` 访问器：与
+  `clear_color` 同源（都取 `CameraOutput::entity`），缺省 `Skybox`。
+- `SceneChanges` 新增 `clear_flags`，`collect_scene_changes` 从活动相机取；
+  `extract_frame_packet` 用 `draws_skybox()` 决定 `FramePacket.skybox` 是
+  `Some(..)` 还是 `None` —— `ForwardPass` 对 `None` 直接跳过天空盒绘制，
+  所以这就是它的开关，无需改 render pass。
+
+**行为变化**：把相机的 `clearFlags` 从默认 `Skybox` 改成 `SolidColor` / `Depth` /
+`Nothing` 后，天空盒背景不再绘制（改为相机 `background_color` 或保留已有颜色）。
+默认值不变，老场景（`Skybox`）完全不变。
+
+**验证**
+- ✅ `cargo test -p prism-gfx -p prism-scene -p prism-engine` → passed。
+
+**已知遗留（下一批）**
+- `Depth` / `Nothing` 的**颜色/深度 load-op** 还没接：Vulkan 的 load op 写在 render pass
+  里（静态），需要按 `(clears_color, clears_depth)` 组合缓存 render pass + framebuffer，
+  或在 pass 外显式 `vkCmdClear*`；两者都属于多相机（叠加渲染）的前提，留到 P3c-2。
+- 多相机（`Camera.allCameras` 按 `depth` 排序 + 叠加渲染）还没接。
+
+### 待办（下一批候选）
 - **P3b 光照/渲染（剩余）**：`CompareFunction`（`ZTest`）接线、`_ColorMask`、
   `RenderQueueRange`、把渲染状态搬进真正的 `Material` 组件（材质资产级）；
   点光/聚光还没有自己的阴影（只有方向光贴图）。

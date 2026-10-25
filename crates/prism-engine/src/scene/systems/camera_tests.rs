@@ -176,6 +176,29 @@ fn clear_color_for_camera_less_entity_is_default() {
     assert_eq!(clear_color(&world, entity), DEFAULT_CLEAR_COLOR);
 }
 
+/// 清屏方式与清屏色同源：读的是同一台相机的 `clear_flags`。
+#[test]
+fn clear_flags_reads_the_camera_component() {
+    let mut world = World::new();
+    let entity = world.spawn();
+    world.insert(
+        entity,
+        Camera {
+            clear_flags: CameraClearFlags::SolidColor,
+            ..Camera::default()
+        },
+    );
+    assert_eq!(clear_flags(&world, entity), CameraClearFlags::SolidColor);
+}
+
+/// 实体上没有 `Camera` 时清屏方式退化为 Unity 默认的 `Skybox`。
+#[test]
+fn clear_flags_for_camera_less_entity_is_skybox() {
+    let world = World::new();
+    let entity = prism_ecs::Entity::from_raw(u32::MAX, 0);
+    assert_eq!(clear_flags(&world, entity), CameraClearFlags::Skybox);
+}
+
 /// 飞行输入必须驱动**正在渲染**的相机（PR #38 review finding 2）。
 ///
 /// 先插入的低 `depth` 相机才是旧的「第一个 enabled」选择结果；输入应改投

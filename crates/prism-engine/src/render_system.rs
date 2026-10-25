@@ -15,6 +15,7 @@ use prism_render::{
     DrawItem, FrameUBOData, GizmoInstance, GpuLight, GraphRenderer, PtAnalyticLight,
     SkyboxSettings, UiOverlayInput, GPU_LIGHT_KIND_POINT, GPU_LIGHT_KIND_SPOT, PT_LIGHT_MAX,
 };
+use prism_scene::CameraClearFlags;
 
 /// 预缩放因子，取代旧的 GPU 端 `exposure / PI` 单位转换。
 /// 勒克斯（或坎德拉）在 CPU 上乘以此因子，使着色器直接接收有效辐射度。
@@ -60,6 +61,9 @@ pub struct SceneChanges {
     pub camera_orthographic: bool,
     /// 清屏颜色 = 活动相机的 `background_color`（无相机时为引擎默认灰）。
     pub clear_color: [f32; 4],
+    /// 清屏方式 = 活动相机的 `Camera.clear_flags`（无相机时为 `Skybox`）。
+    /// 只有 `Skybox` 会绘制天空盒背景，见 [`CameraClearFlags::draws_skybox`]。
+    pub clear_flags: CameraClearFlags,
     /// 主方向光是否投阴影 = Unity `Light.shadows != None`。
     ///
     /// 为 `false` 时整帧跳过阴影贴图渲染（`ShadowMode::None`），
@@ -96,7 +100,14 @@ pub fn extract_frame_packet(
     let mut draw_items: Vec<DrawItem> = scene_view.draw_items();
     prism_render::sort_draw_items(&mut draw_items, scene.eye.to_array());
     let gizmos = scene_view.gizmo_instances();
-    let skybox = scene_view.skybox_settings();
+    // Unity 只有 `clearFlags == Skybox` 时才绘制天空盒：其余清屏方式（纯色 /
+    // 只清深度 / 不清）即使场景里有启用的 `Skybox` 实体也不画。`ForwardPass`
+    // 对 `None` 直接跳过天空盒绘制，所以这里就是它的开关。
+    let skybox = if scene.clear_flags.draws_skybox() {
+        scene_view.skybox_settings()
+    } else {
+        None
+    };
 
     // 3. 构建 the UI 叠加 from the ECS 世界 (includes UiQuad/TextCmd).
     let ui_overlay = crate::ui::convert_ui_draw_list_to_overlay(world);
@@ -289,6 +300,10 @@ fn collect_scene_changes(
     let clear_color = camera_entity
         .map(|entity| scene::systems::camera::clear_color(world, entity))
         .unwrap_or(scene::systems::camera::DEFAULT_CLEAR_COLOR);
+    // 清屏方式也来自同一台相机（Unity `Camera.clearFlags`）。
+    let clear_flags = camera_entity
+        .map(|entity| scene::systems::camera::clear_flags(world, entity))
+        .unwrap_or_default();
 
     SceneChanges {
         view_proj,
@@ -307,6 +322,7 @@ fn collect_scene_changes(
         has_camera,
         camera_orthographic,
         clear_color,
+        clear_flags,
         shadows_enabled,
         shadow_strength,
     }
@@ -371,6 +387,8 @@ pub fn render_system(
         camera_orthographic,
         // 清屏色直接从 `scene` 读（`scene.clear_color`），这里不解构。
         clear_color: _,
+        // 清屏方式只影响 extract 阶段的天空盒开关，渲染系统不再需要。
+        clear_flags: _,
         shadows_enabled,
         shadow_strength,
     } = scene;
@@ -592,5 +610,52 @@ mod tests {
         let fallback = collect_scene_changes(&mut empty, 16.0 / 9.0, &Mat4::IDENTITY);
         assert!(!fallback.has_camera);
         assert!(!fallback.camera_orthographic);
+    }
+
+    /// Unity 语义：只有 `clearFlags == Skybox` 才会绘制天空盒背景。
+    ///
+    /// 场景里放一个启用的 `Skybox` 实体，逐一切换相机的清屏方式；只有 `Skybox`
+    /// 时 `FramePacket.skybox` 才是 `Some`，其余都应是 `None`（`ForwardPass`
+    /// 对 `None` 直接跳过天空盒）。
+    #[test]
+    fn skybox_is_only_drawn_for_skybox_clear_flags() {
+        use crate::scene::components::Skybox;
+
+        for (flags, draws) in [
+            (CameraClearFlags::Skybox, true),
+            (CameraClearFlags::SolidColor, false),
+            (CameraClearFlags::Depth, false),
+            (CameraClearFlags::Nothing, false),
+        ] {
+            let mut world = World::new();
+
+            let camera = world.spawn();
+            world.insert(
+                camera,
+                Camera {
+                    clear_flags: flags,
+                    ..Camera::default()
+                },
+            );
+            world.insert(camera, LocalToWorld(Mat4::IDENTITY));
+
+            let sky = world.spawn();
+            world.insert(
+                sky,
+                Skybox {
+                    hdr_path: "env.hdr".to_string(),
+                    enabled: true,
+                    ..Skybox::default()
+                },
+            );
+
+            let packet = extract_frame_packet(&mut world, 1.0, &Mat4::IDENTITY);
+            assert_eq!(packet.scene.clear_flags, flags);
+            assert_eq!(
+                packet.skybox.is_some(),
+                draws,
+                "clear_flags = {flags:?} 时是否绘制天空盒应为 {draws}"
+            );
+        }
     }
 }
