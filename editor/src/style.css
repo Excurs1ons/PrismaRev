@@ -1620,7 +1620,7 @@ html.compact .dock-tab {
   align-items: center;
   justify-content: center;
   border: 2px dashed var(--accent);
-  background: rgba(79, 157, 222, 0.18);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
   color: var(--text);
   font-size: 12px;
   pointer-events: none;
@@ -1800,7 +1800,7 @@ html.compact .dock-tab {
   justify-content: center;
   border: 2px dashed var(--accent);
   border-radius: 5px;
-  background: rgba(79, 157, 222, 0.16);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
   color: var(--text);
   font-size: 12px;
   pointer-events: none;
