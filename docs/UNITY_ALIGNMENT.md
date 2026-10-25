@@ -455,9 +455,10 @@ P3a-1 只加了字段；这一批让引擎真的用上它们。
   也就是 Unity 里"相机由 Transform 驱动"的形状，场景只放 `Camera` + 变换即可出画面；
   新增 `all_cameras()`（按 `depth` 升序 = `Camera.allCameras`）、
   `main_camera()`（`depth` 最大 = `Camera.main`）、`clear_color()` + `DEFAULT_CLEAR_COLOR`。
-- **取景与清屏同源（#11）**：`compute_camera_output()` 也从 `depth` 最大的启用相机开始
-  （缺 `LocalToWorld` 才往低调），`clear_color(world, entity)` 直接接收
-  `CameraOutput::entity`，不再自己重新挑一次相机 —— 否则会出现「A 的视图 + B 的背景色」。
+- **取景与清屏同源（#11）**：新增 `active_camera()`＝`depth` 最大的**可渲染**启用相机
+  （缺 `LocalToWorld` 才往低调）。`compute_camera_output()`、清屏色、aspect 写回、
+  飞行输入都从它取实体，`clear_color(world, entity)` 直接接收 `CameraOutput::entity` ——
+  否则会出现「A 的视图 + B 的背景色 / aspect 写到 B / 输入移动 B」。
 - `render_system.rs`：`SceneChanges` 新增 `clear_color`，由 `collect_scene_changes`
   从活动相机取；删掉写死的 `const CLEAR_COLOR` —— 清屏色现在真的跟着
   `Camera.background_color` 走（复用已有的 `FrameInput.clear_color` 通路，零着色器改动）。

@@ -3,6 +3,7 @@
 // ---------------------------------------------------------------------------
 
 use super::*;
+use crate::input::{ElementState, KeyCode};
 use prism_ecs::World;
 
 #[test]
@@ -173,4 +174,60 @@ fn clear_color_for_camera_less_entity_is_default() {
     let mut world = World::new();
     let entity = world.spawn();
     assert_eq!(clear_color(&world, entity), DEFAULT_CLEAR_COLOR);
+}
+
+/// 飞行输入必须驱动**正在渲染**的相机（PR #38 review finding 2）。
+///
+/// 先插入的低 `depth` 相机才是旧的「第一个 enabled」选择结果；输入应改投
+/// `active_camera`（`depth` 最大且可渲染的那台）。
+#[test]
+fn fly_input_drives_the_rendered_camera() {
+    let mut world = World::new();
+
+    let low = world.spawn();
+    world.insert(
+        low,
+        Camera {
+            depth: 0.0,
+            ..Camera::default()
+        },
+    );
+    world.insert(low, FlyCameraController::default());
+    world.insert(low, LocalTransform::default());
+    world.insert(low, LocalToWorld(Mat4::IDENTITY));
+
+    let high = world.spawn();
+    world.insert(
+        high,
+        Camera {
+            depth: 1.0,
+            ..Camera::default()
+        },
+    );
+    world.insert(high, FlyCameraController::default());
+    world.insert(high, LocalTransform::default());
+    world.insert(high, LocalToWorld(Mat4::IDENTITY));
+
+    let mut input = InputManager::new();
+    input.handle_keyboard(KeyCode::KeyW, ElementState::Pressed);
+
+    let updated = camera_controller_system(&mut world, &input, 1.0, false);
+    assert_eq!(updated, Some(high), "输入应送给渲染中的相机");
+
+    let moved = world
+        .get::<LocalTransform>(high)
+        .expect("rendered camera transform")
+        .position
+        .length();
+    assert!(moved > 0.0, "渲染中的相机应被移动，实际 {moved}");
+
+    let untouched = world
+        .get::<LocalTransform>(low)
+        .expect("low camera transform")
+        .position
+        .length();
+    assert!(
+        untouched < 1e-6,
+        "低 depth 相机不应被移动，实际 {untouched}"
+    );
 }

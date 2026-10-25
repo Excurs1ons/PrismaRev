@@ -46,6 +46,17 @@ pub fn main_camera(world: &World) -> Option<prism_ecs::Entity> {
     all_cameras(world).pop()
 }
 
+/// 真正会被渲染的相机 = `depth` 最大的启用相机里，第一台**有 `LocalToWorld`** 的。
+///
+/// 取景、清屏、宽高比写回、飞行输入都走这一处：只要大家用同一个选择函数，
+/// 就不会出现「写完 A 的 aspect 却渲染 B」「输入驱动 A 但画面是 B」这类分叉。
+pub fn active_camera(world: &World) -> Option<prism_ecs::Entity> {
+    all_cameras(world)
+        .into_iter()
+        .rev()
+        .find(|entity| world.get::<LocalToWorld>(*entity).is_some())
+}
+
 /// 无相机时使用的清屏色（中性灰：与纯黑/纯白区分，便于看出"什么都没画"）。
 pub const DEFAULT_CLEAR_COLOR: [f32; 4] = [0.5, 0.5, 0.5, 1.0];
 
@@ -112,7 +123,7 @@ pub fn fallback_camera_output(surface_rotation: &Mat4, aspect: f32) -> CameraOut
     }
 }
 
-/// 查找 `depth` 最大的启用相机（Unity `Camera.main`），derive its view/projection.
+/// 查找 [`active_camera`]（`depth` 最大的可渲染启用相机），derive its view/projection.
 ///
 /// 取景必须与清屏同源：调用方拿 [`CameraOutput::entity`] 去
 /// [`clear_color`]，两边就不会各自挑一次相机。
@@ -125,13 +136,9 @@ pub fn fallback_camera_output(surface_rotation: &Mat4, aspect: f32) -> CameraOut
 /// view-projection (mirrors the old `mat_mul(&surface_rotation, &vp)` step in
 /// `render_system`). Returns `None` if no usable 相机 存在
 pub fn compute_camera_output(world: &World, surface_rotation: &Mat4) -> Option<CameraOutput> {
-    // `all_cameras` 按 `depth` 升序，反过来遍历就是 `main_camera` 优先；
-    // 主相机缺 `LocalToWorld` 时继续往低调，而不是直接掉进 fallback。
-    let (entity, cam, world_tf) = all_cameras(world).into_iter().rev().find_map(|entity| {
-        let cam = world.get::<Camera>(entity)?;
-        let world_tf = world.get::<LocalToWorld>(entity)?;
-        Some((entity, cam, world_tf))
-    })?;
+    let entity = active_camera(world)?;
+    let cam = world.get::<Camera>(entity)?;
+    let world_tf = world.get::<LocalToWorld>(entity)?;
 
     // Eye position = world-space 平移 列 3, rows 0..3 of the
     // column-major 矩阵 For a root 相机 this equals LocalTransform
@@ -175,13 +182,9 @@ pub fn camera_controller_system(
 ) -> Option<prism_ecs::Entity> {
     use crate::input::{KeyCode, MouseButton};
 
-    // 查找 the 第一个 相机 实体 with a controller. We collect the 实体 id
-    // 第一个 so the &self 借用 for the 查询 ends before the &mut borrows for
-    // the 分量 writes.
-    let cam_entity = world
-        .query::<Camera>()
-        .find(|(_, c)| c.enabled)
-        .map(|(e, _)| e)?;
+    // 输入必须驱动**正在渲染**的那台相机，否则多相机场景里 WASD/鼠标会移动另一台。
+    // 先拿到实体 id，让 &self 借用在这里结束，后面才能取 &mut 分量。
+    let cam_entity = active_camera(world)?;
 
     let ctrl = world.get_mut::<FlyCameraController>(cam_entity)?;
     let move_speed;

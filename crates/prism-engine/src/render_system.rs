@@ -146,11 +146,11 @@ fn collect_scene_changes(
     );
     let fallback_col = Vec4::new(1.0, 1.0, 1.0, 0.0);
 
-    // 1. 相机 — `depth` 最大的启用相机（Unity `Camera.main`）。取景与清屏必须同源，
-    //    所以清屏色稍后用 `compute_camera_output` 返回的实体去查，而不是再选一次。
+    // 1. 相机 — 真正会被渲染的那台（`active_camera`：`depth` 最大的可渲染启用相机）。
+    //    取景、清屏、aspect 写回都是同一个实体，不会各挑一次。
     let (view_proj, eye, view, projection, exposure, has_camera, camera_entity) = {
-        // 宽高比写到将被渲染的相机上：优先主相机，避免写完 A 却渲染 B。
-        if let Some(cam_entity) = scene::systems::camera::main_camera(world) {
+        // 宽高比写到**将被渲染**的相机上（`active_camera` 与下面的取景选择一致）。
+        if let Some(cam_entity) = scene::systems::camera::active_camera(world) {
             if let Some(cam) = world.get_mut::<Camera>(cam_entity) {
                 cam.aspect = display_aspect;
             }
@@ -484,4 +484,56 @@ fn light_view_proj(light_dir: &Vec4, half: f32, center: &Vec3) -> Mat4 {
 fn norm3(a: [f32; 3]) -> [f32; 3] {
     let l = (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).max(1e-8).sqrt();
     [a[0] / l, a[1] / l, a[2] / l]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scene::components::LocalToWorld;
+
+    /// PR #38 review finding 1：视口 aspect 必须写到**实际渲染**的相机上。
+    /// 主相机（`depth` 更大）缺 `LocalToWorld` 时渲染的是低 `depth` 那台。
+    #[test]
+    fn viewport_aspect_lands_on_the_rendered_camera() {
+        let mut world = World::new();
+
+        let rendered = world.spawn();
+        world.insert(
+            rendered,
+            Camera {
+                depth: 0.0,
+                ..Camera::default()
+            },
+        );
+        world.insert(rendered, LocalToWorld(Mat4::IDENTITY));
+
+        let transform_less = world.spawn();
+        world.insert(
+            transform_less,
+            Camera {
+                depth: 5.0,
+                ..Camera::default()
+            },
+        );
+
+        let changes = collect_scene_changes(&mut world, 2.5, &Mat4::IDENTITY);
+
+        assert!(changes.has_camera);
+        let rendered_aspect = world
+            .get::<Camera>(rendered)
+            .expect("rendered camera")
+            .aspect;
+        assert!(
+            (rendered_aspect - 2.5).abs() < 1e-6,
+            "渲染用的相机应拿到视口 aspect，实际 {rendered_aspect}"
+        );
+        let untouched = world
+            .get::<Camera>(transform_less)
+            .expect("transform-less camera")
+            .aspect;
+        assert!(
+            (untouched - Camera::default().aspect).abs() < 1e-6,
+            "不参与渲染的相机不应被改写 aspect，实际 {untouched}"
+        );
+    }
 }
