@@ -21,11 +21,6 @@
       "sizeBytes": 348601
     },
     {
-      "kind": "texture",
-      "path": "assets/fbx/coord.fbm/genshin-impact-character-icons-png-17.png",
-      "sizeBytes": 8620
-    },
-    {
       "kind": "model",
       "path": "assets/fbx/coord.fbx",
       "sizeBytes": 3241052
@@ -44,16 +39,6 @@
       "kind": "model",
       "path": "assets/gi/probe_volume.bin",
       "sizeBytes": 1976948
-    },
-    {
-      "kind": "package",
-      "path": "assets/scenes.pak",
-      "sizeBytes": 1890
-    },
-    {
-      "kind": "data",
-      "path": "assets/scenes.pak.meta.json",
-      "sizeBytes": 559
     },
     {
       "kind": "data",
@@ -294,11 +279,6 @@
       "kind": "other",
       "path": "assets/shaders/slang/pt_render.slang",
       "sizeBytes": 28624
-    },
-    {
-      "kind": "other",
-      "path": "assets/shaders/slang/pt_render.spv",
-      "sizeBytes": 68760
     },
     {
       "kind": "other",
@@ -586,11 +566,21 @@
           "components": {
             "prism_engine::scene::Camera": {
               "aspect": 1.7777777910232544,
+              "background_color": [
+                0.5,
+                0.5,
+                0.5,
+                1.0
+              ],
+              "clear_flags": "Skybox",
+              "depth": 0.0,
               "enabled": true,
               "exposure": 1.0,
               "far": 1000.0,
               "fov_y_degrees": 60.0,
-              "near": 0.10000000149011612
+              "near": 0.10000000149011612,
+              "orthographic": false,
+              "orthographic_size": 5.0
             }
           },
           "name": "Camera",
@@ -1169,11 +1159,21 @@
       {
         "defaultJson": {
           "aspect": 1.7777777910232544,
+          "background_color": [
+            0.5,
+            0.5,
+            0.5,
+            1.0
+          ],
+          "clear_flags": "Skybox",
+          "depth": 0.0,
           "enabled": true,
           "exposure": 1.0,
           "far": 1000.0,
           "fov_y_degrees": 60.0,
-          "near": 0.10000000149011612
+          "near": 0.10000000149011612,
+          "orthographic": false,
+          "orthographic_size": 5.0
         },
         "fields": [
           {
@@ -1221,6 +1221,53 @@
             "inner": null,
             "kind": "bool",
             "name": "enabled",
+            "readOnly": false,
+            "structType": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "u8",
+            "name": "clear_flags",
+            "readOnly": false,
+            "structType": null
+          },
+          {
+            "arrayLen": 4,
+            "inner": {
+              "arrayLen": null,
+              "inner": null,
+              "kind": "f32",
+              "name": "",
+              "readOnly": false,
+              "structType": null
+            },
+            "kind": "array",
+            "name": "background_color",
+            "readOnly": false,
+            "structType": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "bool",
+            "name": "orthographic",
+            "readOnly": false,
+            "structType": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "f32",
+            "name": "orthographic_size",
+            "readOnly": false,
+            "structType": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "f32",
+            "name": "depth",
             "readOnly": false,
             "structType": null
           }
@@ -2163,11 +2210,21 @@
             "components": {
               "prism_engine::scene::Camera": {
                 "aspect": 1.7777777910232544,
+                "background_color": [
+                  0.5,
+                  0.5,
+                  0.5,
+                  1.0
+                ],
+                "clear_flags": "Skybox",
+                "depth": 0.0,
                 "enabled": true,
                 "exposure": 1.0,
                 "far": 1000.0,
                 "fov_y_degrees": 60.0,
-                "near": 0.10000000149011612
+                "near": 0.10000000149011612,
+                "orthographic": false,
+                "orthographic_size": 5.0
               },
               "prism_engine::scene::FlyCameraController": {
                 "look_sensitivity": 0.004999999888241291,
@@ -2453,11 +2510,21 @@
             "components": {
               "prism_engine::scene::Camera": {
                 "aspect": 1.7777777910232544,
+                "background_color": [
+                  0.5,
+                  0.5,
+                  0.5,
+                  1.0
+                ],
+                "clear_flags": "Skybox",
+                "depth": 0.0,
                 "enabled": true,
                 "exposure": 1.0,
                 "far": 1000.0,
                 "fov_y_degrees": 60.0,
-                "near": 0.10000000149011612
+                "near": 0.10000000149011612,
+                "orthographic": false,
+                "orthographic_size": 5.0
               }
             },
             "name": "Camera",
@@ -2518,11 +2585,21 @@
             "components": {
               "prism_engine::scene::Camera": {
                 "aspect": 1.7777777910232544,
+                "background_color": [
+                  0.5,
+                  0.5,
+                  0.5,
+                  1.0
+                ],
+                "clear_flags": "Skybox",
+                "depth": 0.0,
                 "enabled": true,
                 "exposure": 1.0,
                 "far": 1000.0,
                 "fov_y_degrees": 60.0,
-                "near": 0.10000000149011612
+                "near": 0.10000000149011612,
+                "orthographic": false,
+                "orthographic_size": 5.0
               }
             },
             "name": "Camera",
