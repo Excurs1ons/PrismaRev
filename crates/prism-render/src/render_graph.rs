@@ -423,6 +423,9 @@ pub struct GraphFrame<'a> {
     /// Whether a usable 相机 实体 was 找到 When `false`, the skybox and
     /// PT pass should be skipped so the 清空 颜色 (gray) shows through.
     pub has_camera: bool,
+    /// Whether the active camera is orthographic; the PT pass casts parallel
+    /// primary rays in that case (issue #10).
+    pub camera_orthographic: bool,
     /// 清空 颜色 for the scene 颜色 附件 Applied by ForwardPass on
     /// render-pass 开始 可见 when the skybox and scene geometry are
     /// absent or 透明 (e.g. no-camera 回退 Matches the app-level
