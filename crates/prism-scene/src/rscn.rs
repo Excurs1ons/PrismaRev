@@ -184,6 +184,11 @@ pub fn encode_scene(scene: &SceneJson, registry: &ComponentRegistry) -> Result<V
     scene.validate().map_err(RscnError::BadValue)?;
 
     let order = scene.topological_order();
+    // 原始下标 → 拓扑序位置。预计算一次，避免每个实体都线性扫描 `order`。
+    let mut positions = vec![0usize; order.len()];
+    for (position, &index) in order.iter().enumerate() {
+        positions[index] = position;
+    }
     let mut entities = Vec::with_capacity(order.len());
     let mut used_types = BTreeSet::new();
 
@@ -191,14 +196,13 @@ pub fn encode_scene(scene: &SceneJson, registry: &ComponentRegistry) -> Result<V
         let source = &scene.entities[index];
         let parent = match source.parent {
             None => -1,
-            Some(parent) => order
-                .iter()
-                .position(|&candidate| candidate == parent as usize)
-                .ok_or_else(|| {
-                    RscnError::BadValue(format!(
-                        "entity {index}: parent {parent} missing from topological order"
-                    ))
-                })? as i32,
+            Some(parent) => {
+                let parent_index = parent as usize;
+                let position = positions.get(parent_index).ok_or_else(|| {
+                    RscnError::BadValue(format!("entity {index}: parent {parent} out of bounds"))
+                })?;
+                *position as i32
+            }
         };
 
         // Sort by name so repeated cooking produces byte-identical output.

@@ -114,3 +114,94 @@ fn derived_components_are_types_not_mountable_components() {
         "LocalTransform must stay registered as a reflect type"
     );
 }
+
+/// 链式场景：`entities[i].parent == i - 1`。
+fn chain_scene(n: usize) -> SceneJson {
+    let entities: Vec<serde_json::Value> = (0..n)
+        .map(|index| {
+            serde_json::json!({
+                "name": format!("e{index}"),
+                "parent": if index == 0 {
+                    serde_json::Value::Null
+                } else {
+                    serde_json::json!(index - 1)
+                },
+                "components": {},
+            })
+        })
+        .collect();
+    SceneJson::from_value(serde_json::json!({
+        "version": crate::SCENE_DOC_VERSION,
+        "entities": entities,
+    }))
+    .expect("chain scene should parse")
+}
+
+#[test]
+fn topological_order_is_parent_first_for_deep_chains() {
+    // 旧实现每个节点都扫全表（O(n²)），2 万节点会做 4 亿次比较。
+    let n = 20_000;
+    let order = chain_scene(n).topological_order();
+    assert_eq!(order, (0..n).collect::<Vec<_>>());
+}
+
+#[test]
+fn topological_order_keeps_parents_before_children_for_trees() {
+    let scene = SceneJson::from_value(serde_json::json!({
+        "version": crate::SCENE_DOC_VERSION,
+        "entities": [
+            { "parent": null }, { "parent": 0 }, { "parent": 0 },
+            { "parent": 1 }, { "parent": 1 }, { "parent": 2 },
+        ],
+    }))
+    .unwrap();
+
+    let order = scene.topological_order();
+    assert_eq!(order.len(), 6);
+    let mut position = [0usize; 6];
+    for (index, entity_index) in order.iter().enumerate() {
+        position[*entity_index] = index;
+    }
+    for (index, entity) in scene.entities.iter().enumerate() {
+        if let Some(parent) = entity.parent {
+            assert!(
+                position[parent as usize] < position[index],
+                "parent of {index} must be encoded first"
+            );
+        }
+    }
+}
+
+#[test]
+fn topological_order_lists_cycles_last_without_hanging() {
+    let scene = SceneJson::from_value(serde_json::json!({
+        "version": crate::SCENE_DOC_VERSION,
+        "entities": [{ "parent": 1 }, { "parent": 0 }],
+    }))
+    .unwrap();
+
+    let mut order = scene.topological_order();
+    order.sort_unstable();
+    assert_eq!(order, vec![0, 1]);
+}
+
+#[test]
+fn deep_chain_cooks_and_decodes_with_parent_before_child() {
+    let scene = chain_scene(5_000);
+    let registry = ComponentRegistry::new();
+
+    let bytes = crate::encode_scene(&scene, &registry).expect("chain scenes must cook");
+    let decoded = crate::decode_scene(&bytes, &registry).expect("cooked scene must decode");
+
+    assert_eq!(decoded.entities.len(), 5_000);
+    for (index, entity) in decoded.entities.iter().enumerate() {
+        if let Some(parent) = entity.parent {
+            assert!(
+                (parent as usize) < index,
+                "parent index must precede the child in the payload"
+            );
+        } else {
+            assert_eq!(index, 0, "only the chain root may be a root");
+        }
+    }
+}
