@@ -1,15 +1,29 @@
 //! 生成 web 编辑器「浏览器预览」用的 fixture：schema + 模板 + 预设 + 文档 + 资产。
 //!
 //! 全部由 `prism-editor-api` 的真实注册表产出，因此不会与 Rust 侧 schema 漂移。
+//! 文档路径写成**相对项目根**（`/` 分隔），并排除 `assets/external/` 下的本地素材，
+//! 保证 fixture 可跨机器复现。
 //!
 //! ```bash
 //! cd editor && pnpm fixture
 //! ```
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use prism_editor_api::DocKind;
 use serde_json::{json, Value};
+
+/// 本地素材库（gitignored），不进 fixture。
+fn is_external(path: &str) -> bool {
+    path.replace('\\', "/").starts_with("assets/external/")
+}
+
+fn relative_path(root: &Path, path: &Path) -> String {
+    path.strip_prefix(root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .replace('\\', "/")
+}
 
 fn main() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -20,7 +34,11 @@ fn main() {
 
     let schema = prism_editor_api::build_schema();
     let presets = prism_editor_api::entity_presets();
-    let asset_infos = prism_editor_api::list_assets_info(&root).unwrap_or_default();
+    let asset_infos: Vec<_> = prism_editor_api::list_assets_info(&root)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|info| !is_external(&info.path))
+        .collect();
 
     let mut docs = serde_json::Map::new();
     let mut documents = serde_json::Map::new();
@@ -35,9 +53,15 @@ fn main() {
 
         let mut entries: Vec<Value> = Vec::new();
         if let Ok(listed) = prism_editor_api::list_docs(&root, kind) {
-            for entry in listed {
-                if let Ok(doc) = prism_editor_api::read_doc(std::path::Path::new(&entry.path)) {
-                    docs.insert(entry.path.clone(), doc);
+            for mut entry in listed {
+                let absolute = PathBuf::from(&entry.path);
+                let relative = relative_path(&root, &absolute);
+                if is_external(&relative) {
+                    continue;
+                }
+                if let Ok(doc) = prism_editor_api::read_doc(&absolute) {
+                    docs.insert(relative.clone(), doc);
+                    entry.path = relative;
                     entries.push(serde_json::to_value(&entry).expect("SceneEntry 可序列化"));
                 }
             }
@@ -45,12 +69,7 @@ fn main() {
 
         // 合成一个更有层次的 demo 场景（lit 三个实体 + UI 两个实体）。
         if kind == DocKind::Scene {
-            let demo_path = root
-                .join("assets")
-                .join("scenes")
-                .join("demo.scene.json")
-                .to_string_lossy()
-                .into_owned();
+            let demo_path = "assets/scenes/demo.scene.json".to_string();
             docs.insert(demo_path.clone(), demo_scene());
             entries.push(json!({
                 "name": "demo",
