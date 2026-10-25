@@ -39,16 +39,22 @@ pub struct EntityJson {
     pub components: HashMap<String, serde_json::Value>,
 }
 
-/// 由**结构字段派生**、因此不允许出现在 [`EntityJson::components`] 里的组件。
+/// 由**结构字段或运行时系统派生**、因此不允许出现在 [`EntityJson::components`]
+/// 里的组件。
 ///
-/// `LocalTransform` 是 loader / cooker 从 [`EntityJson::transform`] bake 出来的
-/// 运行时组件：作者侧只有这一个“不可移除的 Transform”（对齐 Unity 的作者态），
-/// `LocalTransform` 本身只属于运行时。
-///
-/// 允许两条路同时写会制造静默错位：两个 loader 都是「先插 `LocalTransform` +
-/// 按它算出 `LocalToWorld`，再 apply `components`」，于是组件载荷会覆盖
-/// `LocalTransform` 而把按旧值算出的 `LocalToWorld` 留在原地。
-pub const DERIVED_COMPONENTS: &[&str] = &["prism_engine::scene::LocalTransform"];
+/// - `LocalTransform`：loader / cooker 从 [`EntityJson::transform`] bake 出来。
+///   作者侧只有这一个“不可移除的 Transform”（对齐 Unity 的作者态），
+///   `LocalTransform` 本身只属于运行时。允许两条路同时写会制造静默错位：
+///   两个 loader 都是「先插 `LocalTransform` + 按它算出 `LocalToWorld`，
+///   再 apply `components`」，于是组件载荷会覆盖 `LocalTransform`
+///   而把按旧值算出的 `LocalToWorld` 留在原地。
+/// - `ComputedLayout`：UI 布局系统的**输出**（`rect` 每帧被覆盖）。
+///   标记 UI 元素只用 `Node` / `Style`；写进文档只会让检查器出现一个
+///   永远被覆盖的假字段，并且让“漏写就不渲染”的隐式契约继续存在。
+pub const DERIVED_COMPONENTS: &[&str] = &[
+    "prism_engine::scene::LocalTransform",
+    "prism_engine::ui::ComputedLayout",
+];
 
 /// 作者格式的局部变换。
 ///

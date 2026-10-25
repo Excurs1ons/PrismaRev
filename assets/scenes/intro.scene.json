@@ -7,8 +7,7 @@
       "transform": { "translation": [0,0,0], "rotation": [0,0,0,1], "scale": [1,1,1] },
       "components": {
         "prism_engine::ui::Node": {},
-        "prism_engine::ui::Style": { "background": [0,0,0,1] },
-        "prism_engine::ui::ComputedLayout": {}
+        "prism_engine::ui::Style": { "background": [0,0,0,1] }
       }
     },
     {
@@ -23,7 +22,6 @@
           "pivot": { "x": 0.5, "y": 0.5 },
           "margin": { "top": -16, "left": 0, "right": 0, "bottom": 0 }
         },
-        "prism_engine::ui::ComputedLayout": {},
         "prism_engine::ui::Text": {
           "content": "PrismaRev",
           "font_size": 84,
@@ -44,7 +42,6 @@
           "pivot": { "x": 0.5, "y": 0.5 },
           "margin": { "top": 48, "left": 0, "right": 0, "bottom": 0 }
         },
-        "prism_engine::ui::ComputedLayout": {},
         "prism_engine::ui::Text": {
           "content": "Vulkan 实时渲染引擎",
           "font_size": 18,
@@ -65,7 +62,6 @@
           "pivot": { "x": 0.5, "y": 0.5 },
           "margin": { "top": -48, "left": 0, "right": 0, "bottom": 0 }
         },
-        "prism_engine::ui::ComputedLayout": {},
         "prism_engine::ui::Text": {
           "content": "按任意键或点击继续",
           "font_size": 14,

@@ -58,20 +58,21 @@ pub fn migrate_scene_doc(doc: &mut Value) -> Result<(), String> {
         version += 1;
     }
 
-    // 与版本无关的规范化：把历史 `components[LocalTransform]` 折回结构字段。
-    hoist_derived_components(root);
+    // 与版本无关的规范化：派生组件不允许出现在作者文档里。
+    normalize_derived_components(root);
 
     root.insert("version".to_string(), json!(SCENE_DOC_VERSION));
     Ok(())
 }
 
-/// 把历史 `components[LocalTransform]` **bake** 进结构字段 `transform`。
+/// 归一化 [`crate::json::DERIVED_COMPONENTS`]：这些组件由运行时或结构字段生成。
 ///
-/// 变换只有一个权威来源：作者写 `transform`，loader / cooker 再生成
-/// `LocalTransform` + `LocalToWorld`（对齐 Unity 作者态）。
-/// 早期文档允许把 `LocalTransform` 当普通组件写进 `components`，这里把它折进
-/// `transform` 并删除；两者同时存在时以结构字段为准（保留已作者的值）。
-fn hoist_derived_components(root: &mut Map<String, Value>) {
+/// - `LocalTransform` → **bake** 进结构字段 `transform`（变换只有一个权威来源：
+///   作者写 `transform`，loader / cooker 再生成 `LocalTransform` + `LocalToWorld`）。
+///   两者同时存在时以结构字段为准（保留已作者的值）。
+/// - 其余（如 `ComputedLayout`）→ 直接删除：它每帧由布局系统重写，
+///   留在文档里只会让检查器出现一个永远被覆盖的字段。
+fn normalize_derived_components(root: &mut Map<String, Value>) {
     let Some(entities) = root.get_mut("entities").and_then(Value::as_array_mut) else {
         return;
     };
@@ -79,41 +80,61 @@ fn hoist_derived_components(root: &mut Map<String, Value>) {
         let Some(entity) = entity.as_object_mut() else {
             continue;
         };
-        let Some(legacy) = entity
-            .get_mut("components")
-            .and_then(Value::as_object_mut)
-            .and_then(|components| components.remove(LOCAL_TRANSFORM_KEY))
-        else {
-            continue;
-        };
-        let Some(legacy) = legacy.as_object() else {
-            continue;
-        };
 
-        let has_authored_transform = !matches!(entity.get("transform"), None | Some(Value::Null));
-        if has_authored_transform {
-            log::warn!(
-                "scene migration: dropping authored `{LOCAL_TRANSFORM_KEY}` component; \
-                 the structural `transform` field is authoritative"
-            );
-            continue;
+        if let Some(legacy) = take_component(entity, LOCAL_TRANSFORM_KEY) {
+            hoist_transform(entity, legacy);
         }
 
-        let mut transform = Map::new();
-        for (field, fallback) in [
-            ("position", json!([0.0, 0.0, 0.0])),
-            ("rotation", json!([0.0, 0.0, 0.0, 1.0])),
-            ("scale", json!([1.0, 1.0, 1.0])),
-        ] {
-            let value = if field == "position" {
-                legacy.get("position").or_else(|| legacy.get("translation"))
-            } else {
-                legacy.get(field)
-            };
-            transform.insert(field.to_string(), value.cloned().unwrap_or(fallback));
+        for name in crate::json::DERIVED_COMPONENTS {
+            if *name == LOCAL_TRANSFORM_KEY {
+                continue;
+            }
+            if take_component(entity, name).is_some() {
+                log::warn!(
+                    "scene migration: dropping derived component `{name}`; \
+                     it is produced by the runtime"
+                );
+            }
         }
-        entity.insert("transform".to_string(), Value::Object(transform));
     }
+}
+
+fn take_component(entity: &mut Map<String, Value>, name: &str) -> Option<Value> {
+    entity
+        .get_mut("components")
+        .and_then(Value::as_object_mut)
+        .and_then(|components| components.remove(name))
+}
+
+/// 把历史 `components[LocalTransform]` 的对象形状折成 `transform` 字段。
+fn hoist_transform(entity: &mut Map<String, Value>, legacy: Value) {
+    let Some(legacy) = legacy.as_object() else {
+        return;
+    };
+
+    let has_authored_transform = !matches!(entity.get("transform"), None | Some(Value::Null));
+    if has_authored_transform {
+        log::warn!(
+            "scene migration: dropping authored `{LOCAL_TRANSFORM_KEY}` component; \
+             the structural `transform` field is authoritative"
+        );
+        return;
+    }
+
+    let mut transform = Map::new();
+    for (field, fallback) in [
+        ("position", json!([0.0, 0.0, 0.0])),
+        ("rotation", json!([0.0, 0.0, 0.0, 1.0])),
+        ("scale", json!([1.0, 1.0, 1.0])),
+    ] {
+        let value = if field == "position" {
+            legacy.get("position").or_else(|| legacy.get("translation"))
+        } else {
+            legacy.get(field)
+        };
+        transform.insert(field.to_string(), value.cloned().unwrap_or(fallback));
+    }
+    entity.insert("transform".to_string(), Value::Object(transform));
 }
 
 /// v1 → v2：变换分量 `translation` 改名为 `position`。
@@ -182,6 +203,23 @@ mod tests {
         assert_eq!(entity["transform"]["rotation"], json!([0.0, 0.0, 0.0, 1.0]));
         assert_eq!(entity["transform"]["scale"], json!([1.0, 1.0, 1.0]));
         assert!(entity["components"].get(LOCAL_TRANSFORM_KEY).is_none());
+    }
+
+    #[test]
+    fn derived_ui_layout_component_is_dropped() {
+        let mut doc = json!({
+            "version": 2,
+            "entities": [{
+                "components": {
+                    "prism_engine::ui::Node": {},
+                    "prism_engine::ui::ComputedLayout": { "rect": [0.0, 0.0, 10.0, 10.0] }
+                }
+            }]
+        });
+        migrate_scene_doc(&mut doc).unwrap();
+        let components = doc["entities"][0]["components"].as_object().unwrap();
+        assert!(!components.contains_key("prism_engine::ui::ComputedLayout"));
+        assert!(components.contains_key("prism_engine::ui::Node"));
     }
 
     #[test]

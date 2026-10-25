@@ -432,8 +432,6 @@ pub fn template_scene_doc(id: &str) -> serde_json::Value {
                         component_default("prism_engine::ui::Style"),
                         json!({ "background": [0.0, 0.0, 0.0, 1.0] }),
                     ),
-                    "prism_engine::ui::ComputedLayout":
-                        component_default("prism_engine::ui::ComputedLayout"),
                 }),
             ),
             entity(
@@ -451,8 +449,6 @@ pub fn template_scene_doc(id: &str) -> serde_json::Value {
                             "pivot": { "x": 0.5, "y": 0.5 },
                         }),
                     ),
-                    "prism_engine::ui::ComputedLayout":
-                        component_default("prism_engine::ui::ComputedLayout"),
                     "prism_engine::ui::Text": merge(
                         component_default("prism_engine::ui::Text"),
                         json!({

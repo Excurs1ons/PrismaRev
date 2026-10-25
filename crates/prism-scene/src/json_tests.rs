@@ -62,6 +62,36 @@ fn hand_built_derived_component_is_rejected_by_validate() {
 }
 
 #[test]
+fn legacy_computed_layout_is_stripped_on_read() {
+    let scene = SceneJson::from_value(serde_json::json!({
+        "entities": [{
+            "components": {
+                "prism_engine::ui::Node": {},
+                "prism_engine::ui::Style": {},
+                "prism_engine::ui::ComputedLayout": { "rect": [0.0, 0.0, 10.0, 10.0] },
+            }
+        }],
+    }))
+    .expect("legacy UI document should still load");
+
+    let components = &scene.entities[0].components;
+    assert!(!components.contains_key("prism_engine::ui::ComputedLayout"));
+    assert!(components.contains_key("prism_engine::ui::Node"));
+    assert!(components.contains_key("prism_engine::ui::Style"));
+}
+
+#[test]
+fn hand_built_computed_layout_is_rejected_by_validate() {
+    let mut scene = SceneJson::from_value(scene_with(serde_json::json!({}))).unwrap();
+    scene.entities[0].components.insert(
+        "prism_engine::ui::ComputedLayout".to_string(),
+        serde_json::json!({}),
+    );
+
+    assert!(scene.validate().is_err());
+}
+
+#[test]
 fn derived_components_are_types_not_mountable_components() {
     let mut registry = ComponentRegistry::new();
     register_builtin_components(&mut registry);
