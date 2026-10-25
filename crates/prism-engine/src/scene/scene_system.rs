@@ -118,10 +118,19 @@ impl<'a> SceneReadView<'a> {
                     .map(|a| a.0)
                     .unwrap_or(true)
             })
-            .map(|(_, wt, mr, mat)| prism_render::DrawItem {
-                mesh: mr.render_handle,
-                model: wt.0.to_cols_array_2d(),
-                material: Some(mat.material_slot),
+            .map(|(entity, wt, mr, mat)| {
+                let mode = self
+                    .world
+                    .get::<super::components::MeshRenderer>(entity)
+                    .map(|renderer| renderer.shadow_casting_mode)
+                    .unwrap_or_default();
+                prism_render::DrawItem {
+                    mesh: mr.render_handle,
+                    model: wt.0.to_cols_array_2d(),
+                    material: Some(mat.material_slot),
+                    cast_shadow: mode.casts_shadows(),
+                    visible_in_main_pass: mode.visible_in_main_pass(),
+                }
             })
             .collect()
     }

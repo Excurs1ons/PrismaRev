@@ -83,12 +83,12 @@
     {
       "kind": "other",
       "path": "assets/shaders/gi_bake.comp.spv",
-      "sizeBytes": 50720
+      "sizeBytes": 50752
     },
     {
       "kind": "other",
       "path": "assets/shaders/gi_render.comp.spv",
-      "sizeBytes": 44740
+      "sizeBytes": 44772
     },
     {
       "kind": "other",
@@ -98,7 +98,7 @@
     {
       "kind": "other",
       "path": "assets/shaders/gizmo.vert.spv",
-      "sizeBytes": 868
+      "sizeBytes": 1020
     },
     {
       "kind": "other",
@@ -128,7 +128,7 @@
     {
       "kind": "other",
       "path": "assets/shaders/pt_render.comp.spv",
-      "sizeBytes": 91552
+      "sizeBytes": 91584
     },
     {
       "kind": "data",
@@ -188,7 +188,7 @@
     {
       "kind": "other",
       "path": "assets/shaders/rt_preview.frag.spv",
-      "sizeBytes": 1112
+      "sizeBytes": 1144
     },
     {
       "kind": "other",
@@ -208,7 +208,7 @@
     {
       "kind": "other",
       "path": "assets/shaders/scene_frag.frag.spv",
-      "sizeBytes": 43988
+      "sizeBytes": 44800
     },
     {
       "kind": "other",
@@ -223,12 +223,12 @@
     {
       "kind": "other",
       "path": "assets/shaders/skybox.frag.spv",
-      "sizeBytes": 724
+      "sizeBytes": 1616
     },
     {
       "kind": "other",
       "path": "assets/shaders/skybox.vert.spv",
-      "sizeBytes": 1596
+      "sizeBytes": 1612
     },
     {
       "kind": "other",
@@ -282,11 +282,6 @@
     },
     {
       "kind": "other",
-      "path": "assets/shaders/slang/pt_render.spv",
-      "sizeBytes": 68760
-    },
-    {
-      "kind": "other",
       "path": "assets/shaders/slang/rt_preview.slang",
       "sizeBytes": 1211
     },
@@ -298,7 +293,7 @@
     {
       "kind": "other",
       "path": "assets/shaders/slang/scene_frag.slang",
-      "sizeBytes": 36924
+      "sizeBytes": 37742
     },
     {
       "kind": "other",
@@ -318,12 +313,12 @@
     {
       "kind": "other",
       "path": "assets/shaders/ui_overlay.frag.spv",
-      "sizeBytes": 392
+      "sizeBytes": 860
     },
     {
       "kind": "other",
       "path": "assets/shaders/ui_overlay.vert.spv",
-      "sizeBytes": 584
+      "sizeBytes": 756
     },
     {
       "kind": "env",
@@ -1711,7 +1706,8 @@
       {
         "defaultJson": {
           "material_path": "",
-          "mesh_path": ""
+          "mesh_path": "",
+          "shadow_casting_mode": "On"
         },
         "fields": [
           {
@@ -1731,6 +1727,20 @@
             "readOnly": false,
             "structType": null,
             "variants": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "u8",
+            "name": "shadow_casting_mode",
+            "readOnly": false,
+            "structType": null,
+            "variants": [
+              "Off",
+              "On",
+              "TwoSided",
+              "ShadowsOnly"
+            ]
           }
         ],
         "isComponent": true,
@@ -2546,7 +2556,8 @@
               "prism_engine::scene::Active": true,
               "prism_engine::scene::MeshRenderer": {
                 "material_path": "",
-                "mesh_path": ""
+                "mesh_path": "",
+                "shadow_casting_mode": "On"
               }
             },
             "name": "Mesh",

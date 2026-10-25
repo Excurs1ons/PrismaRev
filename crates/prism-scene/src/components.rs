@@ -17,7 +17,8 @@ use prism_reflect::{FieldType, Reflect, ReflectError, ReflectType, Value};
 use serde::{Deserialize, Serialize};
 
 use crate::render_enums::{
-    correlated_color_temperature_to_rgb, CameraClearFlags, LightRenderMode, LightShadows, LightType,
+    correlated_color_temperature_to_rgb, CameraClearFlags, LightRenderMode, LightShadows,
+    LightType, ShadowCastingMode,
 };
 
 // ---------------------------------------------------------------------------
@@ -181,6 +182,10 @@ impl Default for Active {
 pub struct MeshRenderer {
     pub mesh_path: String,
     pub material_path: String,
+    /// 阴影投射模式 = Unity `Renderer.shadowCastingMode`。
+    ///
+    /// 决定该物体是否写阴影贴图、是否出现在相机主通道（`ShadowsOnly` 只投影）。
+    pub shadow_casting_mode: ShadowCastingMode,
 }
 
 impl MeshRenderer {

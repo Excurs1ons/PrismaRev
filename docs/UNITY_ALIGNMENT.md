@@ -188,10 +188,9 @@ public 类型的只有 **43** 个（≈0.9%）。这既是现状，也是后续�
 - **P2 编辑器核心** — ✅ 完成（见 §9）。`prism-editor-api` 新增六个 Unity 形状模块：
   `asset_database` / `prefab_utility` / `selection` / `undo` / `editor_application` /
   `scene_management`（与既有导出同名的函数只在模块路径下提供，避免根命名冲突）。
-- **P3 渲染/光照/相机** — 🔄 进行中。P3a（相机）已完整落地（schema + 引擎接线 +
-  枚举下拉框）；P3b（光照）已落地渲染枚举 + `Light` 组件 + 引擎接线
-  （统一收集、聚光进 GPU 光列表、方向由 `LocalToWorld` 决定），见 §9；
-  剩余 `ShadowCastingMode` / 渲染枚举批次与 P3c（相机行为）见 §9 待办。
+- **P3 渲染/光照/相机** — 🔄 进行中。P3a（相机）与 P3b（光照：渲染枚举、
+  `Light` 组件、统一收集 + 聚光进 GPU、逐渲染器 `ShadowCastingMode`）已落地，见 §9；
+  剩余 `Light.shadows` 接线、渲染枚举批次与 P3c（相机行为）见 §9 待办。
 - **P4 编辑器扩展**：`PropertyDrawer` schema 扩展点 + `EditorWindow` 面板注册表 DTO。
 - **P5 资产流水线**：`AssetImporters`/`Build`/`Build.Profile`/`Compilation` 形状。
 - **P6 并行/集合**：`Unity.Collections`/`Unity.Jobs` 形状（`NativeArray`/`IJob*`/`JobHandle`）。
@@ -602,9 +601,48 @@ Unity 只有一个 `Light`，用 `Light.type` 区分方向光 / 点光 / 聚光�
 - `GpuLight` 从 32 → 64 字节，**必须**重新编译着色器（`.spv` 是 gitignore 的，
   CI 会编）；旧 `.spv` 配新 Rust 结构体会读出垃圾数据。
 
+### P3b-3 — 逐渲染器 `ShadowCastingMode` ✅
+
+Unity 的 `Renderer.shadowCastingMode` 决定一个物体「是否投影」与「主通道是否可见」。
+之前 PrismaRev 没有任何逐物体的阴影开关：所有 `DrawItem` 都既进主通道又进阴影贴图。
+
+**prism-scene**
+- `render_enums.rs` 新增 `ShadowCastingMode`（Unity 取值）：
+  `Off=0` / `On=1` / `TwoSided=2` / `ShadowsOnly=3`；`Default` 是 `On`。
+  `casts_shadows()`（除 `Off` 外都写阴影贴图）与 `visible_in_main_pass()`
+  （`ShadowsOnly` 为 `false`）；反射仍是 `U8` + 变体名（检查器自动下拉框）。
+- `MeshRenderer` 新增 `shadow_casting_mode`（`#[serde(default)]` → 老文档无需迁移）。
+- `lib.rs` 重导出。
+
+**prism-render**
+- `DrawItem` 新增 `cast_shadow` / `visible_in_main_pass`（由引擎按组件填好，pass 只读）。
+- `ShadowMapPass` 跳过 `!cast_shadow` 的绘制；`ForwardPass` 跳过
+  `!visible_in_main_pass`（`ShadowsOnly`）。两个 pass 的 trace 现在分别统计
+  **实际提交**的数量与绘制列表长度。
+
+**prism-engine**
+- `SceneReadView::draw_items()` 与 `scene_render_system()` 都从
+  `MeshRenderer.shadow_casting_mode` 计算两个标志；没有 `MeshRenderer` 的运行时实体
+  按默认 `On` 处理。
+- 旧场景加载路径补 `shadow_casting_mode: Default::default()`。
+
+**行为变化**：`ShadowsOnly` 物体不再出现在相机画面里、但会投下阴影；`Off` 物体不再
+写阴影贴图。旧场景（默认 `On`）完全不变。
+
+**验证**
+- ✅ `cargo test -p prism-scene -p prism-engine -p prism-render` → 44 / 98 / 81 passed
+  （新增：枚举数值/谓词/反射往返 1 个；默认、`Off`、`ShadowsOnly`、`TwoSided` 4 个）。
+- ✅ `pnpm -C editor fixture`（`MeshRenderer.defaultJson` 多了 `shadow_casting_mode`）、
+  `python3 scripts/pr_ready.py` 全绿。
+
+**已知遗留**
+- `TwoSided` 与 `On` 行为相同：光栅阴影贴图只渲染背面剔除后的三角形，双面投影需要
+  阴影管线关闭剔除（值先保留，便于无损读写 Unity 数据）。
+- `Light.shadows` / `shadowStrength` 仍是数据，阴影仍由全局方向光贴图承担。
+
 ### 待办（下一批候选）
-- **P3b 光照/渲染（剩余）**：`Light.shadows`/`shadowStrength` 接进阴影贴图、
-  `MeshRenderer.shadowCastingMode`、渲染枚举批次
+- **P3b 光照/渲染（剩余）**：`Light.shadows`/`shadowStrength` 接进阴影贴图
+  （`ShadowMode::None` 时整帧跳过阴影）、`TwoSided` 关闭阴影剔除、渲染枚举批次
   （`BlendMode`/`CullMode`/`CompareFunction`/`RenderQueue`）。
 - **编辑器光源预设**：`EntityPreset` 目前只带组件名，无法表达「方向光 / 聚光」这类
   需要覆盖字段的预设；`Light` 只能从检查器手动添加。给预设加 `overrides` 后
