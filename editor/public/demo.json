@@ -1736,59 +1736,6 @@
       },
       {
         "defaultJson": {
-          "position": [
-            0.0,
-            0.0,
-            0.0
-          ],
-          "rotation": [
-            0.0,
-            0.0,
-            0.0,
-            1.0
-          ],
-          "scale": [
-            1.0,
-            1.0,
-            1.0
-          ]
-        },
-        "fields": [
-          {
-            "arrayLen": null,
-            "inner": null,
-            "kind": "struct",
-            "name": "position",
-            "readOnly": false,
-            "structType": "glam::Vec3",
-            "variants": null
-          },
-          {
-            "arrayLen": null,
-            "inner": null,
-            "kind": "struct",
-            "name": "rotation",
-            "readOnly": false,
-            "structType": "glam::Quat",
-            "variants": null
-          },
-          {
-            "arrayLen": null,
-            "inner": null,
-            "kind": "struct",
-            "name": "scale",
-            "readOnly": false,
-            "structType": "glam::Vec3",
-            "variants": null
-          }
-        ],
-        "isComponent": true,
-        "name": "prism_engine::scene::LocalTransform",
-        "typeId": "bc85e59da7be831e",
-        "version": 1
-      },
-      {
-        "defaultJson": {
           "material_path": "",
           "mesh_path": "",
           "shadow_casting_mode": "On"
@@ -2429,6 +2376,42 @@
         "isComponent": false,
         "name": "glam::Vec4",
         "typeId": "2ca0a6cb770d9656",
+        "version": 1
+      },
+      {
+        "defaultJson": null,
+        "fields": [
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "struct",
+            "name": "position",
+            "readOnly": false,
+            "structType": "glam::Vec3",
+            "variants": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "struct",
+            "name": "rotation",
+            "readOnly": false,
+            "structType": "glam::Quat",
+            "variants": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "struct",
+            "name": "scale",
+            "readOnly": false,
+            "structType": "glam::Vec3",
+            "variants": null
+          }
+        ],
+        "isComponent": false,
+        "name": "prism_engine::scene::LocalTransform",
+        "typeId": "bc85e59da7be831e",
         "version": 1
       },
       {

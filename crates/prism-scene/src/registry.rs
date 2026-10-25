@@ -389,7 +389,12 @@ pub fn register_builtin_components(registry: &mut ComponentRegistry) {
     registry.register_reflect_serde::<MeshRenderer>("prism_engine::scene::MeshRenderer");
 
     // ── 本地变换 ──
-    registry.register_reflect_serde::<LocalTransform>("prism_engine::scene::LocalTransform");
+    // 只登记**类型**（RTTIBin 类型表 / 编辑器字段描述），不登记为可挂载组件：
+    // 作者只写 `EntityJson::transform`，由 loader / cooker bake 成
+    // `LocalTransform` + `LocalToWorld`（对齐 Unity 作者态那个不可移除的 Transform）。
+    // 若登记成组件，`registry.apply` 会在 `LocalToWorld` 计算完之后覆盖
+    // `LocalTransform`，留下一个按旧变换算出的世界矩阵。
+    registry.register_reflect_type::<LocalTransform>();
 
     // ── 预制体实例（编辑器元数据）──
     registry.register_reflect_serde::<PrefabInstance>("prism_engine::scene::PrefabInstance");

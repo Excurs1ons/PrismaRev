@@ -287,6 +287,12 @@ The user project's dependency chain must stay **UI-framework-free and editor-fre
   pin `#[reflect(name = "prism_engine::...")]`, and register it in
   `register_builtin_components` via `register_reflect_serde` (or a custom JSON converter).
   Then both cook and load share the schema automatically.
+- **Transform has exactly one authoritative source**: authors write `.scene.json`'s
+  `transform` (`EntityJson`), and loader/cooker bake it into `LocalTransform` +
+  `LocalToWorld`. `LocalTransform` is registered as a reflect **type** only
+  (`register_reflect_type`) — never as a mountable component. Otherwise
+  `registry.apply` overwrites `LocalTransform` *after* `LocalToWorld` was computed from
+  the structural field. See `prism_scene::json::DERIVED_COMPONENTS`.
 - Skybox and gizmo are **ECS-authored**, not renderer constants: `Skybox` owns
   `hdr_path/enabled/rotation_degrees/intensity` and drives both IBL loading and the sky
   pass; `EnvironmentLighting` is legacy fallback only. `Gizmo` uses the entity

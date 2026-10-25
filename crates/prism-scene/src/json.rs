@@ -39,9 +39,21 @@ pub struct EntityJson {
     pub components: HashMap<String, serde_json::Value>,
 }
 
+/// 由**结构字段派生**、因此不允许出现在 [`EntityJson::components`] 里的组件。
+///
+/// `LocalTransform` 是 loader / cooker 从 [`EntityJson::transform`] bake 出来的
+/// 运行时组件：作者侧只有这一个“不可移除的 Transform”（对齐 Unity 的作者态），
+/// `LocalTransform` 本身只属于运行时。
+///
+/// 允许两条路同时写会制造静默错位：两个 loader 都是「先插 `LocalTransform` +
+/// 按它算出 `LocalToWorld`，再 apply `components`」，于是组件载荷会覆盖
+/// `LocalTransform` 而把按旧值算出的 `LocalToWorld` 留在原地。
+pub const DERIVED_COMPONENTS: &[&str] = &["prism_engine::scene::LocalTransform"];
+
 /// 作者格式的局部变换。
 ///
-/// 字段名对齐 Unity DOTS `LocalTransform`（`Position` / `Rotation` / `Scale`）。
+/// 字段名对齐 Unity DOTS `LocalTransform`（`Position` / `Rotation` / `Scale`），
+/// 但它是**结构字段**而不是组件——见 [`DERIVED_COMPONENTS`]。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransformJson {
     #[serde(default)]
@@ -84,11 +96,30 @@ impl SceneJson {
     /// 与 [`Self::parse`] 相同，但输入已经是 [`serde_json::Value`]。
     pub fn from_value(mut value: serde_json::Value) -> Result<Self, String> {
         crate::migrate::migrate_scene_doc(&mut value)?;
-        serde_json::from_value(value).map_err(|e| format!("invalid scene document: {e}"))
+        let scene: Self =
+            serde_json::from_value(value).map_err(|e| format!("invalid scene document: {e}"))?;
+        scene.validate_authorship()?;
+        Ok(scene)
+    }
+
+    /// 拒绝作者直写派生组件（见 [`DERIVED_COMPONENTS`]）。
+    fn validate_authorship(&self) -> Result<(), String> {
+        for (index, entity) in self.entities.iter().enumerate() {
+            for name in DERIVED_COMPONENTS {
+                if entity.components.contains_key(*name) {
+                    return Err(format!(
+                        "entity {index}: component '{name}' is derived from the structural \
+                         `transform` field; author `transform` instead"
+                    ));
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Validate structural invariants that the binary format relies on.
     pub fn validate(&self) -> Result<(), String> {
+        self.validate_authorship()?;
         if self.entities.is_empty() {
             return Err("scene must contain at least one entity".into());
         }
@@ -141,3 +172,7 @@ impl SceneJson {
         order
     }
 }
+
+#[cfg(test)]
+#[path = "json_tests.rs"]
+mod tests;
