@@ -188,10 +188,10 @@ public 类型的只有 **43** 个（≈0.9%）。这既是现状，也是后续�
 - **P2 编辑器核心** — ✅ 完成（见 §9）。`prism-editor-api` 新增六个 Unity 形状模块：
   `asset_database` / `prefab_utility` / `selection` / `undo` / `editor_application` /
   `scene_management`（与既有导出同名的函数只在模块路径下提供，避免根命名冲突）。
-- **P3 渲染/光照/相机** — 🔄 进行中。P3a（相机形状）已落地 schema 部分（见 §9）：
-  `CameraClearFlags` + `Camera` 的 `clearFlags`/`backgroundColor`/`orthographic`/
-  `orthographicSize`/`depth` + `projection_matrix`/`worldToCameraMatrix`。
-  引擎接线、枚举下拉框、以及后续 P3b（光照/渲染枚举）/ P3c（相机行为）见 §9 待办。
+- **P3 渲染/光照/相机** — 🔄 进行中。P3a（相机）已完整落地（schema + 引擎接线 +
+  枚举下拉框，见 §9）；P3b（光照）从渲染枚举开始（`LightType` / `LightShadows` /
+  `LightRenderMode` + 色温换算），`Light` 组件与引擎接线见 §9 待办；
+  P3c（相机行为）待做。
 - **P4 编辑器扩展**：`PropertyDrawer` schema 扩展点 + `EditorWindow` 面板注册表 DTO。
 - **P5 资产流水线**：`AssetImporters`/`Build`/`Build.Profile`/`Compilation` 形状。
 - **P6 并行/集合**：`Unity.Collections`/`Unity.Jobs` 形状（`NativeArray`/`IJob*`/`JobHandle`）。
@@ -488,10 +488,40 @@ P3a-1 只加了字段；这一批让引擎真的用上它们。
   `Camera.clear_flags`、`Text.alignment` 和「普通数值字段没有 variants」。
 - ✅ `pnpm fixture` 后 fixture 里两处枚举都带 `variants`；`pnpm build` 通过。
 
+### P3b-1a — 渲染枚举（`LightType` / `LightShadows` / `LightRenderMode`）✅
+
+P3b（光照）的第一块：先把 Unity 的光照枚举做成**纯数据镜像**，这样 `Light` 组件、
+引擎收集器和编辑器下拉框都有一份共同定义。
+
+**prism-scene（`render_enums.rs`，纯加法）**
+- `LightType`：取值与 `UnityEngine.LightType` 一致 ——
+  `Spot=0` / `Directional=1` / `Point=2` / `Rectangle=3` / `Disc=4` /
+  `Pyramid=5` / `Box=6` / `Tube=7`；`Default` 是 `Point`（Unity `new Light()`）。
+  附 `unity_value()` / `from_unity_value()` / `is_rendered()`
+  （面光源、盒形、管状只是 schema 对照，渲染器会跳过）。
+- `LightShadows`：`None=0` / `Hard=1` / `Soft=2`，附 `casts_shadows()`。
+- `LightRenderMode`：`Auto=0` / `ForcePixel=1` / `ForceVertex=2`。
+- 三者都实现 `ReflectType`（`FieldType::U8` + `enum_variants()`），与
+  `CameraClearFlags` 同一套编码 —— 检查器**自动**渲染成下拉框，RSCN / `schema_hash`
+  不受影响，也不需要额外的类型表条目。
+- `correlated_color_temperature_to_rgb(kelvin)`：镜像 Unity
+  `Mathf.CorrelatedColorTemperatureToRGB`（Unity 是 native 实现，这里用常用的
+  黑体拟合），裁到 `[1000, 40000]` K、sRGB→线性、**不归一化**；非有限输入退化为
+  6500 K。
+- 测试 7 个：Unity 数值/往返/未知值、`is_rendered` 边界、下拉变体列表、
+  u8 反射往返、色温冷暖方向与 6500 K 近似白、裁剪与 NaN 回退、shadows/renderMode 数值。
+
+**验证**：`cargo test -p prism-scene` → 43 passed；`cargo check --workspace --all-targets`；
+`python3 scripts/pr_ready.py` 全绿。
+
+**这一批刻意没做**：`Light` 组件本身（下一批 `20261025-light-unity-shape`）、
+引擎接线、`ShadowCastingMode`、`BlendMode`/`CullMode`/`CompareFunction`/`RenderQueue`。
+
 ### 待办（下一批候选）
-- **P3b 光照/渲染**：`Light`（`LightType`/`LightShadows`/`colorTemperature`）、
-  `SpotLight` 接进 GPU 光列表、`ShadowCastingMode`、渲染枚举批次
-  （`BlendMode`/`CullMode`/`CompareFunction`/`RenderQueue`）。
+- **P3b 光照/渲染**：`Light` 组件（`light_type`/`color`/`intensity`/`range`/
+  `spot_angle`/`shadows`/`color_temperature`…）+ 引擎接线（统一收集 `Light` 与旧组件、
+  聚光进 GPU 光列表/着色器锥角、方向由 `LocalToWorld` 决定）、`ShadowCastingMode`、
+  渲染枚举批次（`BlendMode`/`CullMode`/`CompareFunction`/`RenderQueue`）。
 - **P3c 相机行为**：用测试钉住 yaw↔quaternion 的 `−π/2` 偏移；`clear_flags` 的
   `Depth`/`Nothing` 语义接进 `ForwardPass`；多相机（`depth` 排序 + 叠加）。
 - 清理 `crates/prism-cooker/src/importer/scene.rs` 里**重复的（且已死）** `SceneJson` /
