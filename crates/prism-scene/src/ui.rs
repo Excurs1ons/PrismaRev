@@ -230,6 +230,10 @@ impl ReflectType for TextAlign {
         FieldType::U8
     }
 
+    fn enum_variants() -> Option<&'static [&'static str]> {
+        Some(&["Center", "Left", "Right"])
+    }
+
     fn to_value(&self) -> Value {
         Value::U64(match self {
             Self::Center => 0,

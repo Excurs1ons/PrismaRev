@@ -124,6 +124,12 @@ pub struct FieldDesc {
     pub ty: FieldType,
     /// 编辑器只读（`set_field` 拒绝写入）。
     pub read_only: bool,
+    /// 枚举变体名（作者 JSON 里的字符串），非枚举字段为 `None`。
+    ///
+    /// 来自 [`ReflectType::enum_variants`](crate::ReflectType::enum_variants)。
+    /// **不参与 [`TypeDesc::schema_hash`]**：它只是编辑器展示元数据，改标签不该让
+    /// 已 cook 的 `.rscn` 失效。
+    pub enum_variants: Option<&'static [&'static str]>,
 }
 
 /// 一个类型的完整描述。
@@ -242,6 +248,7 @@ mod tests {
             offset,
             ty,
             read_only: false,
+            enum_variants: None,
         }
     }
 

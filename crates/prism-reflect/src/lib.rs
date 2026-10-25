@@ -298,6 +298,16 @@ pub trait ReflectType: Sized {
     /// 该类型在 schema 中的描述。
     fn field_type() -> FieldType;
 
+    /// 枚举的变体名（按声明顺序），**必须是作者 JSON 里使用的字符串**。
+    ///
+    /// 非枚举字段返回 `None`。编辑器据此把该字段渲染成下拉框
+    /// （见 `prism-editor-api` 的 `FieldSchema::variants`）。
+    /// 这是**纯编辑器元数据**：不参与 `TypeDesc::schema_hash`，改变体名不会让
+    /// 已 cook 的数据失效。
+    fn enum_variants() -> Option<&'static [&'static str]> {
+        None
+    }
+
     /// 值 → 反射值。
     fn to_value(&self) -> Value;
 

@@ -52,6 +52,14 @@ const isInteger = computed(() =>
 
 const isColor = computed(() => isColorField(hint.value?.name, props.value));
 
+/**
+ * 枚举字段的选项（schema 的 `variants`）。
+ *
+ * `Some` 时渲染下拉框；选项文字与写回值都是变体名（作者 JSON 里的字符串，
+ * 例如 `"SolidColor"`），与 `CameraClearFlags` / `TextAlign` 的序列化形状一致。
+ */
+const enumOptions = computed(() => hint.value?.variants ?? null);
+
 // —— 资产引用：对「看起来是资源路径」的字符串字段给出候选与选择器 ——
 const assets = inject(ASSETS_KEY, null);
 const openAssetPicker = inject(ASSET_PICKER_KEY, null);
@@ -218,6 +226,9 @@ function onText(event: Event) {
 function onBool(event: Event) {
   set((event.target as HTMLInputElement).checked);
 }
+function onSelect(event: Event) {
+  set((event.target as HTMLSelectElement).value);
+}
 </script>
 
 <template>
@@ -334,6 +345,16 @@ function onBool(event: Event) {
         :disabled="hint?.readOnly"
         @update:model-value="(v) => set(v)"
       />
+      <select
+        v-else-if="enumOptions"
+        :value="String(value)"
+        :disabled="hint?.readOnly"
+        @change="onSelect"
+      >
+        <option v-for="option in enumOptions" :key="option" :value="option">
+          {{ option }}
+        </option>
+      </select>
       <template v-else-if="kind === 'string'">
         <input
           type="text"

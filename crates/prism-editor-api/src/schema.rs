@@ -23,6 +23,9 @@ pub struct FieldSchema {
     pub inner: Option<Box<FieldSchema>>,
     /// `array` 的定长长度。
     pub array_len: Option<usize>,
+    /// 枚举变体名（按声明顺序）。`Some` 时前端应渲染**下拉框**，
+    /// 选项文字与写回值都是变体名（即作者 JSON 里的字符串）。
+    pub variants: Option<Vec<String>>,
     /// 编辑器只读（`#[reflect(read_only)]`）。
     pub read_only: bool,
 }
@@ -114,6 +117,9 @@ fn field_schema(field: &FieldDesc, registry: &TypeRegistry) -> FieldSchema {
     let mut schema = leaf_schema(&field.ty, registry);
     schema.name = field.name.to_string();
     schema.read_only = field.read_only;
+    schema.variants = field
+        .enum_variants
+        .map(|variants| variants.iter().map(|name| (*name).to_string()).collect());
     schema
 }
 
@@ -164,6 +170,7 @@ fn leaf_schema(ty: &FieldType, registry: &TypeRegistry) -> FieldSchema {
         struct_type,
         inner,
         array_len,
+        variants: None,
         read_only: false,
     }
 }
@@ -171,6 +178,57 @@ fn leaf_schema(ty: &FieldType, registry: &TypeRegistry) -> FieldSchema {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn schema_exposes_enum_variants_for_dropdowns() {
+        let schema = build_schema();
+
+        // `Camera.clear_flags` 是 `CameraClearFlags`：u8 编码 + 变体名。
+        let camera = schema
+            .type_by_name("prism_engine::scene::Camera")
+            .expect("Camera schema");
+        let clear_flags = camera
+            .fields
+            .iter()
+            .find(|f| f.name == "clear_flags")
+            .expect("Camera.clear_flags");
+        assert_eq!(clear_flags.kind, "u8");
+        assert_eq!(
+            clear_flags.variants.as_deref(),
+            Some(
+                &[
+                    "Skybox".to_string(),
+                    "SolidColor".to_string(),
+                    "Depth".to_string(),
+                    "Nothing".to_string()
+                ][..]
+            )
+        );
+
+        // `Text.alignment` 走同一套机制（证明不是为 Camera 特判的）。
+        let text = schema
+            .type_by_name("prism_engine::ui::Text")
+            .expect("Text schema");
+        let alignment = text
+            .fields
+            .iter()
+            .find(|f| f.name == "alignment")
+            .expect("Text.alignment");
+        assert_eq!(
+            alignment.variants.as_deref(),
+            Some(
+                &[
+                    "Center".to_string(),
+                    "Left".to_string(),
+                    "Right".to_string()
+                ][..]
+            )
+        );
+
+        // 普通数值字段没有变体。
+        let exposure = camera.fields.iter().find(|f| f.name == "exposure").unwrap();
+        assert!(exposure.variants.is_none());
+    }
 
     #[test]
     fn schema_exposes_components_and_nested_types() {

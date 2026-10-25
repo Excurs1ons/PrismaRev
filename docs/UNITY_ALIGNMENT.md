@@ -466,13 +466,34 @@ P3a-1 只加了字段；这一批让引擎真的用上它们。
 - ✅ `cargo test -p prism-engine` → 87 passed（+1 ignored）。
 - ✅ `python3 scripts/pr_ready.py` 全绿。
 
+### P3a-3 — 枚举下拉框（属性面板）✅
+
+`FieldSchema` 之前只给了 `u8` 这个 kind，枚举字段在检查器里只能看到 1/2/3/4 的数字框。
+这一批把「变体名」从反射层一路带到前端（Unity 里 `EnumPopup` 的位置）。
+
+- `prism-reflect`：`ReflectType` 新增带默认实现的
+  `enum_variants() -> Option<&'static [&'static str]>`；`FieldDesc` 新增同名字段，
+  `#[derive(Reflect)]` 为每个字段生成 `<FieldTy as ReflectType>::enum_variants()`。
+  该字段**不参与 `schema_hash`**：纯展示元数据，改标签不该让已 cook 的 `.rscn` 失效。
+- `prism-scene`：`CameraClearFlags` 暴露 `["Skybox","SolidColor","Depth","Nothing"]`，
+  `TextAlign` 暴露 `["Center","Left","Right"]`（后者证明不是给 Camera 特判）。
+- `prism-editor-api`：`FieldSchema` 新增 `variants: Option<Vec<String>>`。
+- 前端：`FieldEditor.vue` 在 `variants` 非空时渲染 `<select>`，写回的仍是作者 JSON 里的
+  字符串 —— 与 `editor_set_component_field` 的「先用 serde 还原组件再反射写入」路径一致，
+  所以不需要额外的转换层。
+
+**验证**
+- ✅ `cargo test -p prism-editor-api -p prism-scene -p prism-reflect`
+  → 74 / 31 / 13，其中 `schema_exposes_enum_variants_for_dropdowns` 同时断言
+  `Camera.clear_flags`、`Text.alignment` 和「普通数值字段没有 variants」。
+- ✅ `pnpm fixture` 后 fixture 里两处枚举都带 `variants`；`pnpm build` 通过。
+
 ### 待办（下一批候选）
 - **P3b 光照/渲染**：`Light`（`LightType`/`LightShadows`/`colorTemperature`）、
   `SpotLight` 接进 GPU 光列表、`ShadowCastingMode`、渲染枚举批次
   （`BlendMode`/`CullMode`/`CompareFunction`/`RenderQueue`）。
 - **P3c 相机行为**：用测试钉住 yaw↔quaternion 的 `−π/2` 偏移；`clear_flags` 的
   `Depth`/`Nothing` 语义接进 `ForwardPass`；多相机（`depth` 排序 + 叠加）。
-- 给 `FieldSchema` 加枚举变体信息，让 `clear_flags` 之类渲染成下拉框。
 - 清理 `crates/prism-cooker/src/importer/scene.rs` 里**重复的（且已死）** `SceneJson` /
   `TransformJson` —— 唯一权威应只有 `prism-scene`。
 
