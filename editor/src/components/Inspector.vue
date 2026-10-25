@@ -158,7 +158,15 @@ function addComponent() {
 /** 组件 JSON 值本身不是结构体时（`Name` 裸字符串等），仅作类型提示。 */
 function componentField(name: string): FieldSchema | null {
   if (!props.schema.types.some((t) => t.name === name)) return null;
-  return { name, kind: "struct", structType: name, inner: null, arrayLen: null, readOnly: false };
+  return {
+    name,
+    kind: "struct",
+    structType: name,
+    inner: null,
+    arrayLen: null,
+    variants: null,
+    readOnly: false,
+  };
 }
 
 /** 合成一个定长 `f32[n]` 字段，用于 transform 三个向量。 */
@@ -168,8 +176,17 @@ function vecField(name: string, length: number): FieldSchema {
     kind: "array",
     structType: null,
     arrayLen: length,
+    variants: null,
     readOnly: false,
-    inner: { name: "", kind: "f32", structType: null, inner: null, arrayLen: null, readOnly: false },
+    inner: {
+      name: "",
+      kind: "f32",
+      structType: null,
+      inner: null,
+      arrayLen: null,
+      variants: null,
+      readOnly: false,
+    },
   };
 }
 

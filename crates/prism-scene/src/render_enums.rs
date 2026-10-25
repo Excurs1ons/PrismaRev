@@ -68,6 +68,11 @@ impl ReflectType for CameraClearFlags {
         FieldType::U8
     }
 
+    fn enum_variants() -> Option<&'static [&'static str]> {
+        // 顺序与声明一致；这些字符串就是 `.scene.json` 里的取值。
+        Some(&["Skybox", "SolidColor", "Depth", "Nothing"])
+    }
+
     fn to_value(&self) -> Value {
         Value::U64(u64::from(self.unity_value()))
     }

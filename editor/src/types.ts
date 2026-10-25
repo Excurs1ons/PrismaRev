@@ -7,6 +7,8 @@ export interface FieldSchema {
   structType: string | null;
   inner: FieldSchema | null;
   arrayLen: number | null;
+  /** 枚举变体名（按声明顺序）；非空时渲染下拉框，值即变体名。 */
+  variants: string[] | null;
   readOnly: boolean;
 }
 
