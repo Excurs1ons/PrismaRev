@@ -64,12 +64,15 @@ struct GpuMaterial
 [[vk::binding(1, 0)]]
 StructuredBuffer<GpuMaterial> materials;
 
-// ---- set 0, binding 2 - point-light SSBO --------------------------------
-// Up to LIGHT_MAX (8) point lights. Layout matches Rust `GpuLight` (32 bytes).
+// ---- set 0, binding 2 - local-light SSBO --------------------------------
+// Up to LIGHT_MAX (8) local lights (point + spot). Layout matches Rust
+// `GpuLight` (64 bytes): `.color.w` is the kind (0 = point, 1 = spot).
 struct GpuLight
 {
-    float4 position;  // xyz = world pos, w = range (attenuation radius)
-    float4 color;     // rgb = radiant intensity, w = 1.0
+    float4 position;   // xyz = world pos, w = range (attenuation radius)
+    float4 color;      // rgb = radiant intensity, w = kind (0 = point, 1 = spot)
+    float4 direction;  // xyz = light forward, w = cos(outer half-angle)
+    float4 params;     // x = cos(inner half-angle), yzw reserved
 };
 [[vk::binding(2, 0)]]
 StructuredBuffer<GpuLight> pointLights;
@@ -296,6 +299,19 @@ float3 eval_point_lights(float3 n, float3 v, float3 world_pos, float3 albedo,
         // Range cutoff (smooth).
         float r = L.position.w;
         atten *= saturate(1.0 - (dist / r));
+
+        // Spot cone: smooth falloff between the inner and outer half angles.
+        // `l` points surface -> light, so `-l` is the light -> surface direction
+        // we compare against the light's forward axis (Unity `transform.forward`).
+        if (L.color.w > 0.5)
+        {
+            float cos_angle = dot(-l, normalize(L.direction.xyz));
+            float denom = max(L.params.x - L.direction.w, 1e-4);
+            float spot = saturate((cos_angle - L.direction.w) / denom);
+            spot *= spot;
+            if (spot <= 0.0) continue;
+            atten *= spot;
+        }
         // Point-light units are physical: `L.color.rgb` carries luminous
         // intensity in candela (color * intensity, packed on the CPU side).
         // Inverse-square attenuation (1/dist^2) converts candela to lux

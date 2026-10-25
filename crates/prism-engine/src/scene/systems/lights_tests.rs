@@ -115,3 +115,182 @@ fn missing_active_component_defaults_to_visible() {
     assert_eq!(collect_point_lights(&world).len(), 1);
     assert_eq!(collect_spot_lights(&world).len(), 1);
 }
+
+// ---------------------------------------------------------------------------
+// 统一 `Light`（Unity 形状）采样
+// ---------------------------------------------------------------------------
+
+#[test]
+fn unified_point_light_uses_transform_position() {
+    let mut world = World::new();
+    let e = world.spawn();
+    world.insert(
+        e,
+        LocalTransform {
+            position: glam::Vec3::new(1.0, 2.0, 3.0),
+            ..Default::default()
+        },
+    );
+    world.insert(
+        e,
+        Light {
+            light_type: LightType::Point,
+            intensity: 42.0,
+            ..Default::default()
+        },
+    );
+
+    let samples = collect_light_samples(&world);
+    assert_eq!(samples.len(), 1);
+    let sample = samples[0];
+    assert_eq!(sample.kind, LightKind::Point);
+    assert_eq!(sample.position, glam::Vec3::new(1.0, 2.0, 3.0));
+    assert_eq!(sample.intensity, 42.0);
+}
+
+#[test]
+fn unified_directional_light_uses_transform_forward() {
+    let mut world = World::new();
+    let e = world.spawn();
+    // 绕 Y 轴转 90°：Unity 的 forward(+Z) 变成 +X。
+    world.insert(
+        e,
+        LocalTransform {
+            rotation: glam::Quat::from_rotation_y(std::f32::consts::FRAC_PI_2),
+            ..Default::default()
+        },
+    );
+    world.insert(
+        e,
+        Light {
+            light_type: LightType::Directional,
+            ..Default::default()
+        },
+    );
+
+    let sample = primary_directional_light(&world).expect("directional sample");
+    let expected = glam::Vec3::X;
+    assert!(
+        (sample.direction - expected).length() < 1e-4,
+        "forward 应为 +X，实际 {:?}",
+        sample.direction
+    );
+}
+
+#[test]
+fn unified_spot_light_converts_full_angles_to_cosines() {
+    let mut world = World::new();
+    let e = world.spawn();
+    world.insert(
+        e,
+        Light {
+            light_type: LightType::Spot,
+            spot_angle: 60.0,
+            inner_spot_angle: 20.0,
+            ..Default::default()
+        },
+    );
+
+    let sample = collect_light_samples(&world)[0];
+    assert_eq!(sample.kind, LightKind::Spot);
+    // 全锥角 60° → 半角 30° → cos = √3/2。
+    assert!((sample.cos_outer - 30.0_f32.to_radians().cos()).abs() < 1e-5);
+    assert!((sample.cos_inner - 10.0_f32.to_radians().cos()).abs() < 1e-5);
+    assert!(sample.cos_inner > sample.cos_outer);
+}
+
+#[test]
+fn unified_light_suppresses_legacy_component_on_same_entity() {
+    let mut world = World::new();
+    let e = world.spawn();
+    world.insert(e, PointLight::default());
+    world.insert(
+        e,
+        Light {
+            light_type: LightType::Point,
+            ..Default::default()
+        },
+    );
+
+    let samples = collect_light_samples(&world);
+    assert_eq!(samples.len(), 1, "同一实体不应被点亮两次");
+    assert_eq!(samples[0].kind, LightKind::Point);
+}
+
+#[test]
+fn disabled_or_unsupported_lights_are_skipped() {
+    let mut world = World::new();
+
+    let disabled = world.spawn();
+    world.insert(
+        disabled,
+        Light {
+            enabled: false,
+            ..Default::default()
+        },
+    );
+
+    // 面光源只做 schema 对照，渲染器跳过。
+    let rect = world.spawn();
+    world.insert(
+        rect,
+        Light {
+            light_type: LightType::Rectangle,
+            ..Default::default()
+        },
+    );
+
+    let hidden = world.spawn();
+    world.insert(hidden, Light::default());
+    world.insert(hidden, Active(false));
+
+    assert!(collect_light_samples(&world).is_empty());
+}
+
+#[test]
+fn legacy_spot_light_uses_component_angles() {
+    let mut world = World::new();
+    let e = world.spawn();
+    let spot = SpotLight {
+        inner_cone_angle: 0.2,
+        outer_cone_angle: 0.6,
+        ..Default::default()
+    };
+    world.insert(e, spot);
+
+    let sample = collect_light_samples(&world)[0];
+    assert_eq!(sample.kind, LightKind::Spot);
+    assert!((sample.cos_inner - 0.2_f32.cos()).abs() < 1e-5);
+    assert!((sample.cos_outer - 0.6_f32.cos()).abs() < 1e-5);
+}
+
+#[test]
+fn local_light_budget_caps_only_point_and_spot() {
+    let mut world = World::new();
+
+    let sun = world.spawn();
+    world.insert(
+        sun,
+        Light {
+            light_type: LightType::Directional,
+            ..Default::default()
+        },
+    );
+
+    for _ in 0..(LIGHT_MAX + 4) {
+        let e = world.spawn();
+        world.insert(e, PointLight::default());
+    }
+
+    let samples = collect_light_samples(&world);
+    let directional = samples
+        .iter()
+        .filter(|s| s.kind == LightKind::Directional)
+        .count();
+    let local = samples
+        .iter()
+        .filter(|s| s.kind != LightKind::Directional)
+        .count();
+    assert_eq!(directional, 1, "方向光不占局部光预算");
+    assert_eq!(local, LIGHT_MAX as usize);
+}

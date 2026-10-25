@@ -189,8 +189,9 @@ public 类型的只有 **43** 个（≈0.9%）。这既是现状，也是后续�
   `asset_database` / `prefab_utility` / `selection` / `undo` / `editor_application` /
   `scene_management`（与既有导出同名的函数只在模块路径下提供，避免根命名冲突）。
 - **P3 渲染/光照/相机** — 🔄 进行中。P3a（相机）已完整落地（schema + 引擎接线 +
-  枚举下拉框，见 §9）；P3b（光照）已落地渲染枚举 + `Light` 组件 schema，
-  引擎接线（统一收集 + 聚光进 GPU 光列表）见 §9 待办；P3c（相机行为）待做。
+  枚举下拉框）；P3b（光照）已落地渲染枚举 + `Light` 组件 + 引擎接线
+  （统一收集、聚光进 GPU 光列表、方向由 `LocalToWorld` 决定），见 §9；
+  剩余 `ShadowCastingMode` / 渲染枚举批次与 P3c（相机行为）见 §9 待办。
 - **P4 编辑器扩展**：`PropertyDrawer` schema 扩展点 + `EditorWindow` 面板注册表 DTO。
 - **P5 资产流水线**：`AssetImporters`/`Build`/`Build.Profile`/`Compilation` 形状。
 - **P6 并行/集合**：`Unity.Collections`/`Unity.Jobs` 形状（`NativeArray`/`IJob*`/`JobHandle`）。
@@ -548,11 +549,66 @@ Unity 只有一个 `Light`，用 `Light.type` 区分方向光 / 点光 / 聚光�
 `MeshRenderer.shadowCastingMode` 与 `BlendMode`/`CullMode`/`CompareFunction`/
 `RenderQueue` 仍未开始。
 
+### P3b-2 — 引擎接线（统一收集 + 聚光进 GPU）✅
+
+`Light` 组件在上一批只是数据；这一批让引擎真正消费它，并把**聚光**接进前向光列表
+（此前 `collect_spot_lights` 存在但从未被渲染器使用）。
+
+**`prism-engine/src/scene/systems/lights.rs`（重写）**
+- 新增 `LightSample` / `LightKind`（`Directional` / `Point` / `Spot`）：
+  位置、朝向、线性颜色、强度、range、内外锥余弦、ambient、阴影字段都已解析。
+- `collect_light_samples(world)`：
+  - 先收 Unity 形状的 `Light`（跳过 `enabled = false`、`Active(false)` 和
+    `light_type.is_rendered() == false` 的面光源/盒形/管状/金字塔）；
+  - 再收旧三组件，**跳过已挂 `Light` 的实体**（避免同一实体点亮两次）；
+  - 位置/朝向优先 `LocalToWorld`，缺省回退 `LocalTransform`；朝向 = 旋转 × `+Z`
+    （Unity `transform.forward`，与相机看 `−Z` 不冲突：那是相机约定）；
+  - 局部的点光+聚光只保留前 `LIGHT_MAX`（8）个，方向光不占额。
+- `primary_directional_light(world)`：统一取方向光（`Light` 或旧组件）。
+  旧的 `collect_directional_light` / `collect_point_lights` / `collect_spot_lights`
+  保留（`pub`，老调用方与测试还在用）。
+
+**`prism-engine/src/render_system.rs`**
+- 方向光改用 `LightSample`：强度、颜色、ambient 分别进 frame UBO；
+  旧的 `euler_xyz_deg_to_dir` 仍用于旧 `DirectionalLight`（在 `lights.rs` 内部）。
+- 点光 + 聚光统一填 `GpuLight`：`const is_spot` 写进 `.color.w` 的类型位，
+  聚光带朝向 + 内外锥余弦。
+- 路径追踪的 `pt_lights` 改从 `LightSample` 取点光（PT 着色器仍无聚光分支，
+  所以聚光只进前向路径）。
+
+**`prism-render`（GPU 布局 32 → 64 字节）**
+- `GpuLight` 增加 `direction`（xyz = 光源朝向，w = `cos(outer)`）与
+  `params`（x = `cos(inner)`）；`.color.w` 表示类型（`GPU_LIGHT_KIND_POINT` /
+  `GPU_LIGHT_KIND_SPOT`）。
+- `GPU_LIGHT_SIZE` 常量取代 `forward_pass.rs` 里两处写死的 `32`（SSBO 分配与
+  `update_lights` 的映射长度），`descriptor_tests` 同步断言 64 字节与偏移。
+- `scene_frag.slang`：`GpuLight` 结构体补齐；点光循环里按类型乘聚光衰减
+  `saturate((cos_angle − cos_outer) / (cos_inner − cos_outer))²`
+  （`cos_angle = dot(-l, forward)`），锥外直接 `continue` 跳过 BRDF。
+
+**行为变化**：聚光现在真的会照出锥形光斑（此前完全被忽略）；`Light` 实体
+（点光/方向光/聚光）现在会被渲染。旧组件与旧场景不受影响。
+
+**验证**
+- ✅ `cargo test -p prism-engine -p prism-render` → 94 / 81 passed
+  （新增 7 个光源采样测试：位置、朝向、锥角余弦、同实体去重、
+  禁用/不支持类型跳过、旧聚光角换算、方向光不占局部预算）。
+- ✅ `bash assets/shaders/compile.sh`（aarch64 slangc 2026.13.1）编译 scene_frag。
+- ✅ `cargo check --workspace --all-targets`、`python3 scripts/pr_ready.py`。
+
+**已知遗留**
+- `Light.shadows` / `shadowStrength` 只是数据：阴影仍是全局方向光贴图，
+  `shadowCastingMode` 也还没做。
+- `GpuLight` 从 32 → 64 字节，**必须**重新编译着色器（`.spv` 是 gitignore 的，
+  CI 会编）；旧 `.spv` 配新 Rust 结构体会读出垃圾数据。
+
 ### 待办（下一批候选）
-- **P3b 光照/渲染**：`Light` 组件（`light_type`/`color`/`intensity`/`range`/
-  `spot_angle`/`shadows`/`color_temperature`…）+ 引擎接线（统一收集 `Light` 与旧组件、
-  聚光进 GPU 光列表/着色器锥角、方向由 `LocalToWorld` 决定）、`ShadowCastingMode`、
-  渲染枚举批次（`BlendMode`/`CullMode`/`CompareFunction`/`RenderQueue`）。
+- **P3b 光照/渲染（剩余）**：`Light.shadows`/`shadowStrength` 接进阴影贴图、
+  `MeshRenderer.shadowCastingMode`、渲染枚举批次
+  （`BlendMode`/`CullMode`/`CompareFunction`/`RenderQueue`）。
+- **编辑器光源预设**：`EntityPreset` 目前只带组件名，无法表达「方向光 / 聚光」这类
+  需要覆盖字段的预设；`Light` 只能从检查器手动添加。给预设加 `overrides` 后
+  再把 `lit` 模板与预设切到 `Light`。
 - **P3c 相机行为**：用测试钉住 yaw↔quaternion 的 `−π/2` 偏移；`clear_flags` 的
   `Depth`/`Nothing` 语义接进 `ForwardPass`；多相机（`depth` 排序 + 叠加）。
 - 清理 `crates/prism-cooker/src/importer/scene.rs` 里**重复的（且已死）** `SceneJson` /

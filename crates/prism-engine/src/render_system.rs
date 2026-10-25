@@ -9,12 +9,11 @@ use glam::{self, Mat4, Vec3, Vec4};
 use crate::dirty_router::DirtyRouter;
 use crate::render_settings::RenderSettings;
 use crate::scene;
-use crate::scene::components as scene_comp;
 use crate::scene::components::Camera;
 use prism_ecs::World;
 use prism_render::{
     DrawItem, FrameUBOData, GizmoInstance, GpuLight, GraphRenderer, PtAnalyticLight,
-    SkyboxSettings, UiOverlayInput, PT_LIGHT_MAX,
+    SkyboxSettings, UiOverlayInput, GPU_LIGHT_KIND_POINT, GPU_LIGHT_KIND_SPOT, PT_LIGHT_MAX,
 };
 
 /// 预缩放因子，取代旧的 GPU 端 `exposure / PI` 单位转换。
@@ -183,64 +182,78 @@ fn collect_scene_changes(
     let proj32 = projection.col(3).z;
     let _ = projection;
 
-    // 2. Directional 光源
-    let dir_light = scene::systems::lights::collect_directional_light(world);
+    // 2. 光源 —— 统一 `Light`（Unity 形状）与旧三组件归一成 `LightSample`。
+    let samples = scene::systems::lights::collect_light_samples(world);
+    let dir_light = samples
+        .iter()
+        .find(|sample| sample.kind == scene::systems::lights::LightKind::Directional)
+        .copied();
+
     let light_direction = dir_light
         .map(|l| {
-            let d = euler_xyz_deg_to_dir(l.euler_xyz);
-            Vec4::new(d.x, d.y, d.z, l.intensity * LUX_TO_RADIANCE_SCALE)
+            Vec4::new(
+                l.direction.x,
+                l.direction.y,
+                l.direction.z,
+                l.intensity * LUX_TO_RADIANCE_SCALE,
+            )
         })
         .unwrap_or(fallback_dir);
     let light_color = dir_light
         .map(|l| Vec4::new(l.color.x, l.color.y, l.color.z, l.ambient))
         .unwrap_or(fallback_col);
 
-    // 3. Point lights 上 to LIGHT_MAX).
+    // 3. 局部光源（点光 + 聚光）上 to LIGHT_MAX) 进前向 SSBO。`color.w` 是类型位
+    //    （0 = 点光，1 = 聚光），聚光额外带朝向与内外锥余弦。
     let mut lights: Vec<GpuLight> = Vec::new();
-    for (entity, pl) in world.query::<scene_comp::PointLight>() {
-        if !scene::systems::lights::component_is_active(world, entity) {
-            continue;
-        }
-        if lights.len() >= prism_render::LIGHT_MAX as usize {
-            break;
-        }
-        let pos = match world.get::<scene_comp::LocalTransform>(entity) {
-            Some(t) => t.position,
-            None => continue,
-        };
+    for sample in samples
+        .iter()
+        .filter(|sample| sample.kind != scene::systems::lights::LightKind::Directional)
+        .take(prism_render::LIGHT_MAX as usize)
+    {
+        let radiance = sample.color * sample.intensity * LUX_TO_RADIANCE_SCALE;
+        let is_spot = sample.kind == scene::systems::lights::LightKind::Spot;
         lights.push(GpuLight {
-            position: [pos.x, pos.y, pos.z, pl.range],
-            color: [
-                pl.color.x * pl.intensity * LUX_TO_RADIANCE_SCALE,
-                pl.color.y * pl.intensity * LUX_TO_RADIANCE_SCALE,
-                pl.color.z * pl.intensity * LUX_TO_RADIANCE_SCALE,
-                1.0,
+            position: [
+                sample.position.x,
+                sample.position.y,
+                sample.position.z,
+                sample.range,
             ],
+            color: [
+                radiance.x,
+                radiance.y,
+                radiance.z,
+                if is_spot {
+                    GPU_LIGHT_KIND_SPOT
+                } else {
+                    GPU_LIGHT_KIND_POINT
+                },
+            ],
+            direction: [
+                sample.direction.x,
+                sample.direction.y,
+                sample.direction.z,
+                sample.cos_outer,
+            ],
+            params: [sample.cos_inner, 0.0, 0.0, 0.0],
         });
     }
 
-    // 4. 构建 pt_lights from 启用 PointLight components.
+    // 4. 路径追踪的解析光：只喂点光（PT 着色器还没有聚光锥角分支）。
     let mut pt_lights: Vec<PtAnalyticLight> = Vec::new();
-    for (entity, pl) in world.query::<scene_comp::PointLight>() {
-        if !scene::systems::lights::component_is_active(world, entity) {
-            continue;
-        }
+    for sample in samples
+        .iter()
+        .filter(|sample| sample.kind == scene::systems::lights::LightKind::Point)
+    {
         if pt_lights.len() >= PT_LIGHT_MAX as usize {
             break;
         }
-        let pos = match world.get::<scene_comp::LocalTransform>(entity) {
-            Some(t) => t.position,
-            None => continue,
-        };
-        let radiance = Vec3::new(
-            pl.color.x * pl.intensity * LUX_TO_RADIANCE_SCALE,
-            pl.color.y * pl.intensity * LUX_TO_RADIANCE_SCALE,
-            pl.color.z * pl.intensity * LUX_TO_RADIANCE_SCALE,
-        );
+        let radiance = sample.color * sample.intensity * LUX_TO_RADIANCE_SCALE;
         pt_lights.push(PtAnalyticLight::point(
-            pos.into(),
+            sample.position.into(),
             radiance.into(),
-            pl.range,
+            sample.range,
         ));
     }
 

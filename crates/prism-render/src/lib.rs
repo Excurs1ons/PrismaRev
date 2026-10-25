@@ -86,7 +86,8 @@ pub use capabilities::RayTracingCaps;
 pub use context::VulkanContext;
 pub use descriptor::{
     DescriptorLayout, DescriptorPool, FrameUBO, FrameUBOData, GpuLight, PtAnalyticLight,
-    PtEmissiveTri, ReSTIRReservoir, LIGHT_MAX, PT_EMISSIVE_MAX, PT_LIGHT_MAX,
+    PtEmissiveTri, ReSTIRReservoir, GPU_LIGHT_KIND_POINT, GPU_LIGHT_KIND_SPOT, GPU_LIGHT_SIZE,
+    LIGHT_MAX, PT_EMISSIVE_MAX, PT_LIGHT_MAX,
 };
 pub use external_overlay::{OverlayMessage, OverlayRecordCtx, SwapchainOverlay};
 pub use forward_pass::ForwardPass;
