@@ -211,8 +211,10 @@ pub fn list_scenes(project_root: &Path) -> Result<Vec<SceneEntry>, String> {
 pub fn read_doc(path: &Path) -> Result<serde_json::Value, String> {
     let text =
         std::fs::read_to_string(path).map_err(|e| format!("无法读取 {}: {e}", path.display()))?;
-    let scene: SceneJson = serde_json::from_str(&text)
-        .map_err(|e| format!("{} JSON 解析失败: {e}", path.display()))?;
+    // `SceneJson::parse` 会先把老文档迁移到当前 schema（例如 v1 的
+    // `transform.translation` → `position`），再规范化往返。
+    let scene =
+        SceneJson::parse(&text).map_err(|e| format!("{} JSON 解析失败: {e}", path.display()))?;
     serde_json::to_value(&scene).map_err(|e| e.to_string())
 }
 
@@ -223,8 +225,9 @@ pub fn read_scene_doc(path: &Path) -> Result<serde_json::Value, String> {
 
 /// 校验作者文档：形状 + 结构不变量（父索引越界 / 自父 / 空文档）。
 pub fn validate_doc(doc: &serde_json::Value) -> Result<(), String> {
-    let scene: SceneJson =
-        serde_json::from_value(doc.clone()).map_err(|e| format!("不是合法的作者文档结构: {e}"))?;
+    // 先迁移再校验，使 v1 文档也能通过。
+    let scene =
+        SceneJson::from_value(doc.clone()).map_err(|e| format!("不是合法的作者文档结构: {e}"))?;
     scene.validate()
 }
 
@@ -473,7 +476,7 @@ pub fn template_scene_doc(id: &str) -> serde_json::Value {
         )],
     };
 
-    json!({ "version": 1, "entities": entities })
+    json!({ "version": prism_scene::SCENE_DOC_VERSION, "entities": entities })
 }
 
 fn component_default(name: &str) -> serde_json::Value {
@@ -495,9 +498,9 @@ fn merge(base: serde_json::Value, patch: serde_json::Value) -> serde_json::Value
     }
 }
 
-fn transform(translation: [f32; 3]) -> serde_json::Value {
+fn transform(position: [f32; 3]) -> serde_json::Value {
     serde_json::json!({
-        "translation": translation,
+        "position": position,
         "rotation": [0.0, 0.0, 0.0, 1.0],
         "scale": [1.0, 1.0, 1.0],
     })
@@ -506,13 +509,13 @@ fn transform(translation: [f32; 3]) -> serde_json::Value {
 fn entity(
     name: &str,
     parent: Option<u32>,
-    translation: [f32; 3],
+    position: [f32; 3],
     components: serde_json::Value,
 ) -> serde_json::Value {
     serde_json::json!({
         "name": name,
         "parent": parent,
-        "transform": transform(translation),
+        "transform": transform(position),
         "components": components,
     })
 }
@@ -551,7 +554,7 @@ pub fn prefab_template_doc(preset_id: &str) -> serde_json::Value {
         .or_else(|| presets.iter().find(|preset| preset.id == "empty"));
 
     let Some(preset) = preset else {
-        return json!({ "version": 1, "entities": [] });
+        return json!({ "version": prism_scene::SCENE_DOC_VERSION, "entities": [] });
     };
 
     let mut components = serde_json::Map::new();
@@ -560,9 +563,9 @@ pub fn prefab_template_doc(preset_id: &str) -> serde_json::Value {
     }
 
     json!({
-        "version": 1,
+        "version": prism_scene::SCENE_DOC_VERSION,
         "entities": [
-            entity(&preset.name, None, preset.translation, serde_json::Value::Object(components)),
+            entity(&preset.name, None, preset.position, serde_json::Value::Object(components)),
         ],
     })
 }
@@ -599,7 +602,10 @@ fn doc_with_entities(
     doc: &serde_json::Value,
     entities: Vec<serde_json::Value>,
 ) -> serde_json::Value {
-    let version = doc.get("version").cloned().unwrap_or(serde_json::json!(1));
+    let version = doc
+        .get("version")
+        .cloned()
+        .unwrap_or(serde_json::json!(prism_scene::SCENE_DOC_VERSION));
     serde_json::json!({ "version": version, "entities": entities })
 }
 
@@ -829,7 +835,7 @@ pub fn extract_subtree(
         }
     }
 
-    Ok(serde_json::json!({ "version": 1, "entities": extracted }))
+    Ok(serde_json::json!({ "version": prism_scene::SCENE_DOC_VERSION, "entities": extracted }))
 }
 
 /// 预制体实例链接（编辑器「反向链接」用）。
@@ -867,7 +873,7 @@ pub fn instantiate_prefab(
     let version = scene
         .get("version")
         .cloned()
-        .unwrap_or(serde_json::json!(1));
+        .unwrap_or(serde_json::json!(prism_scene::SCENE_DOC_VERSION));
     let base = scene_entities.len();
 
     let mut names: Vec<String> = scene_entities
@@ -1074,10 +1080,13 @@ mod tests {
 
     #[test]
     fn validate_rejects_empty_and_out_of_range_parents() {
-        assert!(validate_scene_doc(&json!({ "version": 1, "entities": [] })).is_err());
+        assert!(validate_scene_doc(
+            &json!({ "version": prism_scene::SCENE_DOC_VERSION, "entities": [] })
+        )
+        .is_err());
 
         let bad = json!({
-            "version": 1,
+            "version": prism_scene::SCENE_DOC_VERSION,
             "entities": [
                 { "name": "a", "parent": 5, "transform": {}, "components": {} }
             ]
@@ -1085,7 +1094,7 @@ mod tests {
         assert!(validate_scene_doc(&bad).is_err());
 
         let self_parent = json!({
-            "version": 1,
+            "version": prism_scene::SCENE_DOC_VERSION,
             "entities": [
                 { "name": "a", "parent": 0, "transform": {}, "components": {} }
             ]
@@ -1110,7 +1119,7 @@ mod tests {
         validate_scene_doc(&doc).unwrap();
 
         // 写回非法文档必须被拒绝，且不落盘。
-        let bad = json!({ "version": 1, "entities": [] });
+        let bad = json!({ "version": prism_scene::SCENE_DOC_VERSION, "entities": [] });
         assert!(write_scene_doc(&path, &bad).is_err());
         assert_eq!(read_scene_doc(&path).unwrap(), doc);
 
@@ -1177,7 +1186,7 @@ mod tests {
     #[test]
     fn extract_subtree_keeps_children_and_rebases_parents() {
         let scene = serde_json::json!({
-            "version": 1,
+            "version": prism_scene::SCENE_DOC_VERSION,
             "entities": [
                 { "name": "a", "parent": null, "transform": {}, "components": {} },
                 { "name": "b", "parent": 0, "transform": {}, "components": {} },
@@ -1205,14 +1214,14 @@ mod tests {
     #[test]
     fn instantiate_prefab_rebases_and_dedupes_names() {
         let scene = serde_json::json!({
-            "version": 1,
+            "version": prism_scene::SCENE_DOC_VERSION,
             "entities": [
                 { "name": "host", "parent": null, "transform": {}, "components": {} },
                 { "name": "Camera", "parent": null, "transform": {}, "components": {} }
             ]
         });
         let prefab = serde_json::json!({
-            "version": 1,
+            "version": prism_scene::SCENE_DOC_VERSION,
             "entities": [
                 { "name": "Camera", "parent": null, "transform": {}, "components": {} },
                 { "name": "Lens", "parent": 0, "transform": {}, "components": {} }
@@ -1238,7 +1247,7 @@ mod tests {
 
     fn demo_scene_with_host() -> serde_json::Value {
         serde_json::json!({
-            "version": 1,
+            "version": prism_scene::SCENE_DOC_VERSION,
             "entities": [
                 { "name": "host", "parent": null, "transform": {}, "components": {} }
             ]
@@ -1247,7 +1256,7 @@ mod tests {
 
     fn demo_prefab() -> serde_json::Value {
         serde_json::json!({
-            "version": 1,
+            "version": prism_scene::SCENE_DOC_VERSION,
             "entities": [
                 { "name": "Door", "parent": null, "transform": {}, "components": {
                     "prism_engine::scene::Active": true } },
@@ -1355,7 +1364,7 @@ mod tests {
     /// a(0) → b(1) → c(2)，另有根 d(3)。
     fn hierarchy_doc() -> serde_json::Value {
         serde_json::json!({
-            "version": 1,
+            "version": prism_scene::SCENE_DOC_VERSION,
             "entities": [
                 { "name": "a", "parent": null, "transform": {}, "components": {} },
                 { "name": "b", "parent": 0, "transform": {}, "components": {} },

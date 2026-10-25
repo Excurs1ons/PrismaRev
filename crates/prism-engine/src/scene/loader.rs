@@ -24,7 +24,7 @@
 //!   [type_id:8][schema_hash:8] × types
 //!
 //! Per entity (parent-first):
-//!   [name:str u16] [parent:i32] [translation:f32×3]
+//!   [name:str u16] [parent:i32] [position:f32×3]
 //!   [rotation:f32×4] [scale:f32×3] [component_count:u16]
 //!     [type_id:u64] [payload_len:u32] [payload]
 //! ```
@@ -110,7 +110,7 @@ pub struct SceneInstance {
 pub struct ParsedEntity {
     pub name: String,
     pub parent: Option<u32>,
-    pub translation: [f32; 3],
+    pub position: [f32; 3],
     pub rotation: [f32; 4],
     pub scale: [f32; 3],
     pub has_mesh: bool,
@@ -138,7 +138,7 @@ impl ParsedEntity {
         Self {
             name: String::new(),
             parent: None,
-            translation: [0.0; 3],
+            position: [0.0; 3],
             rotation: [0.0, 0.0, 0.0, 1.0],
             scale: [1.0; 3],
             has_mesh: false,
@@ -243,7 +243,7 @@ pub fn parse_rscn(data: &[u8]) -> Result<ParsedRscn, String> {
         if offset + 40 > data.len() {
             return Err("unexpected end (transform)".into());
         }
-        let translation = [
+        let position = [
             f32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()),
             f32::from_le_bytes(data[offset + 4..offset + 8].try_into().unwrap()),
             f32::from_le_bytes(data[offset + 8..offset + 12].try_into().unwrap()),
@@ -273,7 +273,7 @@ pub fn parse_rscn(data: &[u8]) -> Result<ParsedRscn, String> {
         let mut ent = ParsedEntity {
             name,
             parent,
-            translation,
+            position,
             rotation,
             scale,
             ..ParsedEntity::empty()
@@ -543,7 +543,7 @@ impl SceneLoader {
             }
 
             let local = LocalTransform {
-                translation: decoded_entity.translation.into(),
+                position: decoded_entity.position.into(),
                 rotation: glam::Quat::from_xyzw(
                     decoded_entity.rotation[0],
                     decoded_entity.rotation[1],
@@ -553,7 +553,7 @@ impl SceneLoader {
                 scale: decoded_entity.scale.into(),
             };
             world.insert(entity, local.clone());
-            world.insert(entity, WorldTransform(local.to_model_matrix()));
+            world.insert(entity, LocalToWorld(local.to_model_matrix()));
 
             for object in &decoded_entity.components {
                 registry.apply_object(world, entity, object);
@@ -632,7 +632,9 @@ impl SceneLoader {
     ) -> Result<SceneInstance, String> {
         let text = std::fs::read_to_string(path)
             .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
-        let scene: SceneJson = serde_json::from_str(&text)
+        // `SceneJson::parse` migrates older authoring documents (v1
+        // `transform.translation`) up to the current schema.
+        let scene = SceneJson::parse(&text)
             .map_err(|e| format!("Scene JSON parse error in {}: {e}", path.display()))?;
 
         let entity_count = scene.entities.len();
@@ -653,7 +655,7 @@ impl SceneLoader {
 
             // Transform
             let local = LocalTransform {
-                translation: glam::Vec3::from(ej.transform.translation),
+                position: glam::Vec3::from(ej.transform.position),
                 rotation: glam::Quat::from_xyzw(
                     ej.transform.rotation[0],
                     ej.transform.rotation[1],
@@ -663,7 +665,7 @@ impl SceneLoader {
                 scale: glam::Vec3::from(ej.transform.scale),
             };
             world.insert(entity, local.clone());
-            world.insert(entity, WorldTransform(local.to_model_matrix()));
+            world.insert(entity, LocalToWorld(local.to_model_matrix()));
 
             // Components via registry
             for (comp_name, comp_data) in &ej.components {
@@ -722,7 +724,7 @@ impl SceneLoader {
 
             // 局部 变换
             let local = LocalTransform {
-                translation: pe.translation.into(),
+                position: pe.position.into(),
                 rotation: glam::Quat::from_xyzw(
                     pe.rotation[0],
                     pe.rotation[1],
@@ -734,7 +736,7 @@ impl SceneLoader {
             world.insert(entity, local.clone());
 
             // Initial 世界 变换 = 局部 (will be recomputed by hierarchy 系统
-            world.insert(entity, WorldTransform(local.to_model_matrix()));
+            world.insert(entity, LocalToWorld(local.to_model_matrix()));
 
             // 网格 引用 (generation 0 = unresolved; resolved by
             // resolve_assets_system once the .pak 运行时 is wired).
@@ -904,11 +906,11 @@ mod tests;
 
 /// Collect geometry + 材质 data from the ECS 世界 for offline baking.
 ///
-/// Queries all entities with [`MeshRenderer`] + [`WorldTransform`] components,
+/// Queries all entities with [`MeshRenderer`] + [`LocalToWorld`] components,
 /// loads their CPU 顶点 data via [`ResourceManager`], and returns:
 ///
 /// - `instances` — one [`PtGeometryInstance`] per 实体 that carries
-/// a 网格 + 材质 (world-space 顶点 from `WorldTransform`).
+/// a 网格 + 材质 (world-space 顶点 from `LocalToWorld`).
 /// - `materials_bytes` — a flat `GpuMaterial[96]` 数组 (one entry per
 /// 唯一 材质 path, indexed by `PtGeometryInstance::material_slot`).
 pub fn collect_bake_instances(
@@ -923,7 +925,7 @@ pub fn collect_bake_instances(
     let mut mat_cache: HashMap<String, u32> = HashMap::new();
     let mut gpu_materials: Vec<GpuMaterial> = Vec::new();
 
-    for (_entity, mr, wt) in world.query2::<MeshRenderer, WorldTransform>() {
+    for (_entity, mr, wt) in world.query2::<MeshRenderer, LocalToWorld>() {
         // 解析 材质 槽
         let material_slot = if !mr.material_path.is_empty() {
             *mat_cache

@@ -13,7 +13,7 @@
 //!   type_id     u64
 //!   schema_hash u64
 //! entities (parent-first):
-//!   name str | parent i32 | translation [f32;3]
+//!   name str | parent i32 | position [f32;3]
 //!   rotation [f32;4] | scale [f32;3] | components u16
 //!     type_id u64 | payload_len u32 | payload
 //! ```
@@ -142,7 +142,7 @@ pub struct DecodedScene {
 pub struct DecodedEntity {
     pub name: String,
     pub parent: Option<u32>,
-    pub translation: [f32; 3],
+    pub position: [f32; 3],
     pub rotation: [f32; 4],
     pub scale: [f32; 3],
     pub components: Vec<Object>,
@@ -173,7 +173,7 @@ impl DecodedScene {
 struct PendingEntity {
     name: String,
     parent: i32,
-    translation: [f32; 3],
+    position: [f32; 3],
     rotation: [f32; 4],
     scale: [f32; 3],
     components: Vec<(TypeId, Vec<u8>)>,
@@ -228,7 +228,7 @@ pub fn encode_scene(scene: &SceneJson, registry: &ComponentRegistry) -> Result<V
         entities.push(PendingEntity {
             name: source.name.clone().unwrap_or_default(),
             parent,
-            translation: source.transform.translation,
+            position: source.transform.position,
             rotation: source.transform.rotation,
             scale: source.transform.scale,
             components,
@@ -263,7 +263,7 @@ pub fn encode_scene(scene: &SceneJson, registry: &ComponentRegistry) -> Result<V
         write_u16(&mut output, entity.name.len() as u16);
         output.extend_from_slice(entity.name.as_bytes());
         output.extend_from_slice(&entity.parent.to_le_bytes());
-        write_vec3(&mut output, entity.translation);
+        write_vec3(&mut output, entity.position);
         write_vec4(&mut output, entity.rotation);
         write_vec3(&mut output, entity.scale);
         if entity.components.len() > u16::MAX as usize {
@@ -479,7 +479,7 @@ pub fn decode_scene(data: &[u8], registry: &ComponentRegistry) -> Result<Decoded
     for _ in 0..entity_count {
         let name = reader.short_string()?;
         let parent = reader.i32()?;
-        let translation = reader.vec3()?;
+        let position = reader.vec3()?;
         let rotation = reader.vec4()?;
         let scale = reader.vec3()?;
         let component_count = reader.u16()? as usize;
@@ -508,7 +508,7 @@ pub fn decode_scene(data: &[u8], registry: &ComponentRegistry) -> Result<Decoded
             } else {
                 Some(parent as u32)
             },
-            translation,
+            position,
             rotation,
             scale,
             components,

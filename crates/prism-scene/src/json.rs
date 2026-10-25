@@ -11,9 +11,13 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Root of a `.scene.json` file.
+///
+/// 读取时请用 [`SceneJson::parse`]（它会先把老文件迁移到
+/// [`crate::migrate::SCENE_DOC_VERSION`]）；直接 `serde_json::from_str` 只应
+/// 用于已经是当前版本的输入。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SceneJson {
-    /// Authoring schema version. Missing version is accepted for old files.
+    /// 作者格式版本。缺失视为 1（历史文件没有该字段）。
     #[serde(default)]
     pub version: u32,
     pub entities: Vec<EntityJson>,
@@ -35,11 +39,13 @@ pub struct EntityJson {
     pub components: HashMap<String, serde_json::Value>,
 }
 
-/// Authoring transform.
+/// 作者格式的局部变换。
+///
+/// 字段名对齐 Unity DOTS `LocalTransform`（`Position` / `Rotation` / `Scale`）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransformJson {
     #[serde(default)]
-    pub translation: [f32; 3],
+    pub position: [f32; 3],
     #[serde(default = "identity_quat")]
     pub rotation: [f32; 4],
     #[serde(default = "one_vec3")]
@@ -49,7 +55,7 @@ pub struct TransformJson {
 impl Default for TransformJson {
     fn default() -> Self {
         Self {
-            translation: [0.0; 3],
+            position: [0.0; 3],
             rotation: identity_quat(),
             scale: one_vec3(),
         }
@@ -65,6 +71,22 @@ fn one_vec3() -> [f32; 3] {
 }
 
 impl SceneJson {
+    /// 解析 `.scene.json` 文本，**先迁移**到当前版本再反序列化。
+    ///
+    /// 所有读取 `.scene.json` / `.prefab.json` 的路径都应经过这里，
+    /// 以保证旧文件（缺 `version`、用 `transform.translation`）能透明升级。
+    pub fn parse(text: &str) -> Result<Self, String> {
+        let value: serde_json::Value =
+            serde_json::from_str(text).map_err(|e| format!("invalid scene JSON: {e}"))?;
+        Self::from_value(value)
+    }
+
+    /// 与 [`Self::parse`] 相同，但输入已经是 [`serde_json::Value`]。
+    pub fn from_value(mut value: serde_json::Value) -> Result<Self, String> {
+        crate::migrate::migrate_scene_doc(&mut value)?;
+        serde_json::from_value(value).map_err(|e| format!("invalid scene document: {e}"))
+    }
+
     /// Validate structural invariants that the binary format relies on.
     pub fn validate(&self) -> Result<(), String> {
         if self.entities.is_empty() {

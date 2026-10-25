@@ -9,7 +9,8 @@ use prism_scene::rscn;
 // ── helpers ───────────────────────────────────────────────────────
 
 fn make_scene_json() -> SceneJson {
-    serde_json::from_str(SCENE_JSON).unwrap()
+    // Fixtures below are v1 (`transform.translation`); `parse` migrates them.
+    SceneJson::parse(SCENE_JSON).unwrap()
 }
 
 fn make_intermediate(scene: &SceneJson) -> Vec<u8> {

@@ -12,7 +12,7 @@ fn entity_with_all_components_yields_draw_item() {
     let e = world.spawn();
     world.insert(
         e,
-        WorldTransform(glam::Mat4::from_cols_array_2d(&[[1.0; 4]; 4])),
+        LocalToWorld(glam::Mat4::from_cols_array_2d(&[[1.0; 4]; 4])),
     );
     world.insert(
         e,
@@ -43,7 +43,7 @@ fn inactive_entity_is_skipped() {
     let e = world.spawn();
     world.insert(
         e,
-        WorldTransform(glam::Mat4::from_cols_array_2d(&[[1.0; 4]; 4])),
+        LocalToWorld(glam::Mat4::from_cols_array_2d(&[[1.0; 4]; 4])),
     );
     world.insert(
         e,
@@ -73,7 +73,7 @@ fn entity_without_mesh_is_skipped() {
     let e = world.spawn();
     world.insert(
         e,
-        WorldTransform(glam::Mat4::from_cols_array_2d(&[[1.0; 4]; 4])),
+        LocalToWorld(glam::Mat4::from_cols_array_2d(&[[1.0; 4]; 4])),
     );
     // No MeshRef, no MaterialRef → no 绘制 item.
 
@@ -88,7 +88,7 @@ fn multiple_entities() {
         let e = world.spawn();
         world.insert(
             e,
-            WorldTransform(glam::Mat4::from_cols_array_2d(&[[1.0; 4]; 4])),
+            LocalToWorld(glam::Mat4::from_cols_array_2d(&[[1.0; 4]; 4])),
         );
         world.insert(
             e,
@@ -129,7 +129,7 @@ fn model_matrix_carries_through() {
         [0.0, 0.0, 3.0, 0.0],
         [4.0, 5.0, 6.0, 1.0],
     ];
-    world.insert(e, WorldTransform(glam::Mat4::from_cols_array_2d(&model)));
+    world.insert(e, LocalToWorld(glam::Mat4::from_cols_array_2d(&model)));
     world.insert(
         e,
         MeshRef {

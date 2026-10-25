@@ -2,7 +2,7 @@ use super::*;
 
 fn transform_json(position: [f32; 3]) -> String {
     format!(
-        "{{\"translation\":[{},{},{}],\"rotation\":[0,0,0,1],\"scale\":[1,1,1]}}",
+        "{{\"position\":[{},{},{}],\"rotation\":[0,0,0,1],\"scale\":[1,1,1]}}",
         position[0], position[1], position[2]
     )
 }
@@ -12,7 +12,7 @@ fn spawn_point_light(world: &mut World, position: [f32; 3]) -> Entity {
     world.insert(
         entity,
         LocalTransform {
-            translation: position.into(),
+            position: position.into(),
             ..Default::default()
         },
     );
@@ -47,11 +47,11 @@ fn removed_point_light_transform_does_not_consume_object_transform() {
     apply_scene_state(&mut world, &json);
 
     assert_eq!(
-        world.get::<LocalTransform>(object).unwrap().translation,
+        world.get::<LocalTransform>(object).unwrap().position,
         [1.0, 2.0, 3.0].into()
     );
     assert_eq!(
-        world.get::<LocalTransform>(light).unwrap().translation,
+        world.get::<LocalTransform>(light).unwrap().position,
         [90.0, 90.0, 90.0].into()
     );
 }
@@ -79,7 +79,7 @@ fn version_two_keeps_position_and_active_state_with_point_light() {
     assert_eq!(light.intensity, 42.0);
     assert_eq!(light.range, 8.0);
     assert_eq!(
-        world.get::<LocalTransform>(entity).unwrap().translation,
+        world.get::<LocalTransform>(entity).unwrap().position,
         [4.0, 5.0, 6.0].into()
     );
     assert_eq!(world.get::<Active>(entity), Some(&Active(false)));
@@ -100,11 +100,11 @@ fn version_one_consumes_only_leading_point_light_transforms() {
     apply_scene_state(&mut world, &json);
 
     assert_eq!(
-        world.get::<LocalTransform>(light).unwrap().translation,
+        world.get::<LocalTransform>(light).unwrap().position,
         [4.0, 5.0, 6.0].into()
     );
     assert_eq!(
-        world.get::<LocalTransform>(object).unwrap().translation,
+        world.get::<LocalTransform>(object).unwrap().position,
         [7.0, 8.0, 9.0].into()
     );
 }

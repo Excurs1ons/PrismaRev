@@ -2,8 +2,8 @@
 //!
 //! | 类别       | 组件 |
 //! |-----------|------------|
-//! | 层次结构  | `Parent`, `Children` |
-//! | 变换     | `LocalTransform`, `WorldTransform`, `TransformDirty` |
+//! | 层次结构  | `Parent`, `Child` |
+//! | 变换     | `LocalTransform`, `LocalToWorld`, `TransformDirty` |
 //! | 渲染     | `MeshRenderer`, `Active` |
 //! | 光源     | `DirectionalLight`, `PointLight`, `SpotLight` |
 //! | 相机     | `Camera`, `FlyCameraController` |
@@ -57,31 +57,52 @@ impl SceneAssetId {
 // Hierarchy
 // ---------------------------------------------------------------------------
 
-/// 引用 to the parent 实体
+/// 指向父实体的引用。对应 Unity DOTS `Unity.Transforms.Parent`（`.0` ≡ `.Value`）。
 ///
-/// Entities *without* a `Parent` 分量 are **root nodes** in the scene
-/// hierarchy.  Use [`HierarchyHelper`](super::helpers::HierarchyHelper) to
-/// change parenting — never mutate `Children` directly.
+/// 没有 `Parent` 组件的实体是场景层次中的**根节点**。请用
+/// [`HierarchyHelper`](super::helpers::HierarchyHelper) 修改父子关系 —— 不要直接改 `Child`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Parent(pub Entity);
 
-/// Derived 列表 of child entities.
+impl Parent {
+    /// DOTS `Parent.Value`：父实体。
+    pub const fn value(&self) -> Entity {
+        self.0
+    }
+}
+
+/// 派生的子实体列表。对应 Unity DOTS `Unity.Transforms.Child`（缓冲区）。
 ///
-/// This is kept in sync by [`HierarchyHelper::reparent`]; do **not** modify
-/// it by hand. Entities without this 分量 have no children.
+/// 由 [`HierarchyHelper::reparent`] 保持同步；**不要**手工修改。
+/// 没有该组件的实体没有子节点。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Children(pub Vec<Entity>);
+pub struct Child(pub Vec<Entity>);
+
+impl Child {
+    /// 子实体切片。
+    pub fn value(&self) -> &[Entity] {
+        &self.0
+    }
+
+    /// 子实体列表（可变）。
+    pub fn value_mut(&mut self) -> &mut Vec<Entity> {
+        &mut self.0
+    }
+}
 
 // ---------------------------------------------------------------------------
 // 变换
 // ---------------------------------------------------------------------------
 
-/// 局部 变换 相对 to the parent 实体 (or world-space for roots).
+/// 相对父实体的局部变换（根节点则为世界空间）。
+///
+/// 对应 Unity DOTS `Unity.Transforms.LocalTransform`
+/// （`position` / `rotation` / `scale` ≡ DOTS 的 `Position` / `Rotation` / `Scale`）。
 #[derive(Debug, Clone, Serialize, Deserialize, Reflect)]
 #[reflect(name = "prism_engine::scene::LocalTransform")]
 #[serde(default)]
 pub struct LocalTransform {
-    pub translation: glam::Vec3,
+    pub position: glam::Vec3,
     /// 四元数 Identity = `glam::Quat::IDENTITY`.
     pub rotation: glam::Quat,
     pub scale: glam::Vec3,
@@ -90,7 +111,7 @@ pub struct LocalTransform {
 impl Default for LocalTransform {
     fn default() -> Self {
         Self {
-            translation: glam::Vec3::ZERO,
+            position: glam::Vec3::ZERO,
             rotation: glam::Quat::IDENTITY,
             scale: glam::Vec3::ONE,
         }
@@ -100,15 +121,22 @@ impl Default for LocalTransform {
 impl LocalTransform {
     /// 构建 a 模型 矩阵 `T × R × S`.
     pub fn to_model_matrix(&self) -> glam::Mat4 {
-        glam::Mat4::from_scale_rotation_translation(self.scale, self.rotation, self.translation)
+        glam::Mat4::from_scale_rotation_translation(self.scale, self.rotation, self.position)
     }
 }
 
-/// World-space 变换 computed by [`HierarchySystem`].
+/// 由层次系统（`HierarchySystem`）计算的世界空间变换矩阵，每帧更新。
 ///
-/// Updated each 帧 during the 更新 phase.
+/// 对应 Unity DOTS `Unity.Transforms.LocalToWorld`（`.0` ≡ DOTS 的 `.Value`）。
 #[derive(Debug, Clone, Copy)]
-pub struct WorldTransform(pub glam::Mat4);
+pub struct LocalToWorld(pub glam::Mat4);
+
+impl LocalToWorld {
+    /// DOTS `LocalToWorld.Value`：世界变换矩阵。
+    pub const fn value(&self) -> glam::Mat4 {
+        self.0
+    }
+}
 
 /// Optional dirty marker for subtree-optimised recompute future use).
 #[derive(Debug, Clone, Copy, Default)]
@@ -280,7 +308,7 @@ pub struct GiConfig {
 /// Holds the editor-editable 投影 + exposure fields. The 运行时 视图
 /// 矩阵 is computed each 帧 by [`super::systems::camera`] from this
 /// 分量 plus a sibling [`FlyCameraController`] (or future controller)
-/// and the entity's [`WorldTransform`].
+/// and the entity's [`LocalToWorld`].
 ///
 /// 宽高比 is a 运行时 cache written by the app on 调整大小 it is exposed in
 /// 检查器视为只读。启用标志控制渲染器是否拾取
@@ -323,7 +351,7 @@ impl Default for Camera {
 /// `yaw`/`pitch` are written each 帧 by [`super::systems::camera`] from
 /// 输入 while `move_speed`/`look_sensitivity` are editor-editable. The
 /// 相机 position lives on the sibling [`LocalTransform`] (and its derived
-/// [`WorldTransform`]), so this 分量 carries no position of its own.
+/// [`LocalToWorld`]), so this 分量 carries no position of its own.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Reflect)]
 #[reflect(name = "prism_engine::scene::FlyCameraController")]
 #[serde(default)]
@@ -423,7 +451,7 @@ impl Default for Skybox {
 
 /// World-space XYZ axis gizmo owned by an entity.
 ///
-/// The gizmo uses the entity's `WorldTransform` (translation/rotation/scale)
+/// The gizmo uses the entity's `LocalToWorld` (position/rotation/scale)
 /// multiplied by [`Gizmo::scale`], so it can be placed and oriented like any
 /// other scene object. No `Gizmo` component means no gizmo is drawn.
 #[derive(Debug, Clone, Serialize, Deserialize, Reflect)]

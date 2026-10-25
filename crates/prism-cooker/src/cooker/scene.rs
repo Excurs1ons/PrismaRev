@@ -45,7 +45,11 @@ impl SceneCooker {
     }
 
     fn parse_intermediate(data: &[u8]) -> Result<SceneJson, CookError> {
-        let scene: SceneJson = serde_json::from_slice(data)
+        // `SceneJson::parse` migrates older authoring documents (e.g. v1
+        // `transform.translation`) up to the current schema before decoding.
+        let text = std::str::from_utf8(data)
+            .map_err(|e| CookError::CookFailed(format!("Scene JSON is not UTF-8: {e}")))?;
+        let scene = SceneJson::parse(text)
             .map_err(|e| CookError::CookFailed(format!("Scene JSON parse error: {e}")))?;
         scene
             .validate()

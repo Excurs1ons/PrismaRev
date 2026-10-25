@@ -180,12 +180,47 @@ const kinds = computed(() => {
   ];
 });
 
+/**
+ * Unity 风格过滤语法（`t:` 分类 / `l:` 标签 / `a:` 资产）。
+ *
+ * 命中时检索改由后端 `AssetDatabase.FindAssets`（`editor_find_assets`）处理，
+ * 支持「多词 AND」与 `t:texture` 这类条件；否则走本地子串过滤，保持跟手。
+ */
+const FILTER_SYNTAX = /(^|\s)(t|l|a):/i;
+/** 后端 `FindAssets` 的结果（`null` = 未启用后端检索）。 */
+const backendMatches = ref<Set<string> | null>(null);
+
+watch(
+  () => search.value,
+  async (value) => {
+    const query = value.trim();
+    if (!query || !FILTER_SYNTAX.test(query)) {
+      backendMatches.value = null;
+      return;
+    }
+    try {
+      backendMatches.value = new Set(await api.findAssets(query));
+    } catch {
+      // 后端不可用（如纯浏览器预览）时退回本地过滤。
+      backendMatches.value = null;
+    }
+  },
+);
+
 /** 命中检索/分类的全部资产（树模式用，不截断）。 */
 const matched = computed(() => {
   const query = search.value.trim().toLowerCase();
-  return (assets?.value ?? [])
+  const all = assets?.value ?? [];
+  const source = backendMatches.value
+    ? all.filter((asset) => backendMatches.value?.has(asset.path))
+    : all;
+  return source
     .filter((asset) => kind.value === "all" || asset.kind === kind.value)
-    .filter((asset) => !query || asset.path.toLowerCase().includes(query));
+    .filter(
+      (asset) =>
+        // 后端已按 Unity 语法匹配过，不再叠加子串过滤。
+        backendMatches.value !== null || !query || asset.path.toLowerCase().includes(query),
+    );
 });
 
 /** 平铺列表只渲染前 400 项，避免一次创建过多 DOM。 */
@@ -387,7 +422,7 @@ async function copyPath() {
 
 function openAssetMenu(node: TreeNode, event: MouseEvent) {
   onRowClick(node);
-  const pos = clampMenuPosition(event.clientX, event.clientY, 190, 170);
+  const pos = clampMenuPosition(event.clientX, event.clientY, 190, 250);
   assetMenu.value = {
     path: node.path,
     name: node.name,
@@ -398,7 +433,7 @@ function openAssetMenu(node: TreeNode, event: MouseEvent) {
 
 function openAssetMenuFromAsset(asset: AssetInfo, event: MouseEvent) {
   selectAssetRow(asset);
-  const pos = clampMenuPosition(event.clientX, event.clientY, 190, 170);
+  const pos = clampMenuPosition(event.clientX, event.clientY, 190, 250);
   assetMenu.value = {
     path: asset.path.replace(/^assets\//, ""),
     name: asset.path.split("/").pop() ?? asset.path,
@@ -419,7 +454,9 @@ async function copyAssetPath(path: string) {
   }
 }
 
-function runAssetMenu(action: "open" | "newdir" | "rename" | "delete" | "copy") {
+function runAssetMenu(
+  action: "open" | "newdir" | "rename" | "delete" | "copy" | "duplicate" | "copyguid",
+) {
   const menu = assetMenu.value;
   closeAssetMenu();
   if (!menu) return;
@@ -431,6 +468,14 @@ function runAssetMenu(action: "open" | "newdir" | "rename" | "delete" | "copy") 
     void copyAssetPath(menu.path);
     return;
   }
+  if (action === "copyguid") {
+    void copyAssetGuid(menu.path);
+    return;
+  }
+  if (action === "duplicate") {
+    void duplicateAsset(menu.path);
+    return;
+  }
   if (action === "newdir") {
     openNewDir();
     return;
@@ -440,6 +485,47 @@ function runAssetMenu(action: "open" | "newdir" | "rename" | "delete" | "copy") 
     return;
   }
   void askDelete();
+}
+
+/**
+ * 为「复制资产」(Unity `Ctrl+D`) 找一个不冲突的目标名：`a.gltf` → `a-2.gltf`。
+ *
+ * 与预制体实例化的去重后缀保持一致（见 `scene::instantiate_prefab`）。
+ */
+function uniqueCopyPath(path: string): string {
+  const taken = new Set(
+    (assets?.value ?? []).map((asset) => asset.path.replace(/^assets\//, "")),
+  );
+  const slash = path.lastIndexOf("/");
+  const dir = slash >= 0 ? path.slice(0, slash + 1) : "";
+  const file = path.slice(slash + 1);
+  const dot = file.lastIndexOf(".");
+  const stem = dot > 0 ? file.slice(0, dot) : file;
+  const ext = dot > 0 ? file.slice(dot) : "";
+  for (let n = 2; n < 1000; n += 1) {
+    const candidate = `${dir}${stem}-${n}${ext}`;
+    if (!taken.has(candidate)) return candidate;
+  }
+  return `${dir}${stem}-copy${ext}`;
+}
+
+/** 复制资产 = `AssetDatabase.CopyAsset`（**不改写引用**，与 Unity 一致）。 */
+async function duplicateAsset(path: string) {
+  const target = uniqueCopyPath(path);
+  await mutate(() => api.copyAsset(projectPath(path), projectPath(target)), {
+    clearSelection: true,
+  });
+  if (!opError.value) selectedNode.value = { path: target, name: target.split("/").pop() ?? target, dir: false };
+}
+
+/** 复制资产 GUID = `AssetDatabase.AssetPathToGUID`。 */
+async function copyAssetGuid(path: string) {
+  try {
+    const guid = await api.assetGuid(projectPath(path));
+    await navigator.clipboard.writeText(guid);
+  } catch {
+    // 剪贴板不可用 / 路径非法时忽略（菜单已关闭）。
+  }
 }
 
 const NODE_MIME = "application/x-prism-asset-node";
@@ -898,8 +984,14 @@ onUnmounted(() => {
       <button v-if="assetMenu.path" :disabled="opBusy" @click="runAssetMenu('rename')">
         <span>重命名 / 移动</span>
       </button>
+      <button v-if="assetMenu.path && !assetMenu.dir" :disabled="opBusy" @click="runAssetMenu('duplicate')">
+        <span>复制资产</span>
+      </button>
       <button @click="runAssetMenu('copy')">
         <span>复制路径</span>
+      </button>
+      <button v-if="assetMenu.path && !assetMenu.dir" @click="runAssetMenu('copyguid')">
+        <span>复制 GUID</span>
       </button>
       <button v-if="assetMenu.path" class="danger" :disabled="opBusy" @click="runAssetMenu('delete')">
         <span>删除</span>

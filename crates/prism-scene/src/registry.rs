@@ -434,7 +434,7 @@ mod tests {
         };
         let name = Name("player".into());
         let transform = LocalTransform {
-            translation: glam::Vec3::new(1.0, 2.0, 3.0),
+            position: glam::Vec3::new(1.0, 2.0, 3.0),
             ..LocalTransform::default()
         };
 
@@ -451,7 +451,7 @@ mod tests {
         assert_eq!(world.get::<Camera>(entity).unwrap().fov_y_degrees, 72.0);
         assert_eq!(world.get::<Name>(entity).unwrap().0, "player");
         assert_eq!(
-            world.get::<LocalTransform>(entity).unwrap().translation,
+            world.get::<LocalTransform>(entity).unwrap().position,
             glam::Vec3::new(1.0, 2.0, 3.0)
         );
 

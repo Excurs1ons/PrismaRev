@@ -1,4 +1,5 @@
 import type {
+  AssetImportInfo,
   AssetInfo,
   AssetMutation,
   AssetRef,
@@ -7,13 +8,17 @@ import type {
   BuildProjectOptions,
   BuildProjectResult,
   DocKind,
+  EditorPaths,
   EntityPreset,
   HeightmapOptions,
   InstantiateResult,
   JsonValue,
   MoveResult,
   PlayableScene,
+  PrefabAssetType,
+  PrefabInstanceInfo,
   PrefabLink,
+  PrefabUnpackMode,
   ProjectSettingsData,
   PreviewLogLine,
   RenderGraphReport,
@@ -21,9 +26,11 @@ import type {
   SceneDoc,
   SceneEntry,
   SceneListEntry,
+  SceneMeta,
   ScenePackageStatus,
   SceneTemplate,
   Schema,
+  SelectionMode,
 } from "./types";
 
 /**
@@ -404,4 +411,177 @@ export function revealPath(path: string): Promise<void> {
 /** 读取游戏进程写出的最新渲染图报告（未运行过预览时为 null）。 */
 export function renderGraphReport(): Promise<RenderGraphReport | null> {
   return call<RenderGraphReport | null>("editor_render_graph_report");
+}
+
+// ── AssetDatabase（对应 `UnityEditor.AssetDatabase`） ───────────────────────
+
+/** 资产路径 → GUID（路径派生，故重命名会变）。 */
+export function assetGuid(path: string): Promise<string> {
+  return call<string>("editor_asset_guid", { path });
+}
+
+/** GUID → 资产路径。 */
+export function assetPathFromGuid(guid: string): Promise<string> {
+  return call<string>("editor_asset_path_from_guid", { guid });
+}
+
+/** 全部资产路径 = `GetAllAssetPaths`。 */
+export function assetAllPaths(): Promise<string[]> {
+  return call<string[]>("editor_asset_all_paths");
+}
+
+/**
+ * Unity 风格检索 = `FindAssets`：空白分词取 **AND**，
+ * `t:<分类>` 按分类、`l:<标签>` 暂被忽略，其余按路径子串。
+ */
+export function findAssets(filter: string): Promise<string[]> {
+  return call<string[]>("editor_find_assets", { filter });
+}
+
+/** 主资产类型 = `GetMainAssetTypeAtPath`。 */
+export function assetMainType(path: string): Promise<string> {
+  return call<string>("editor_asset_main_type", { path });
+}
+
+/** 依赖哈希（路径 + 大小 + mtime）= `GetAssetDependencyHash`。 */
+export function assetDependencyHash(path: string): Promise<string> {
+  return call<string>("editor_asset_dependency_hash", { path });
+}
+
+/** 资产是否存在 = `Contains`。 */
+export function assetContains(path: string): Promise<boolean> {
+  return call<boolean>("editor_asset_contains", { path });
+}
+
+/** `assets/` 下是否已有该目录 = `IsValidFolder`。 */
+export function assetIsValidFolder(path: string): Promise<boolean> {
+  return call<boolean>("editor_asset_is_valid_folder", { path });
+}
+
+/** 复制资产（目录递归）= `CopyAsset`；**不改写引用**。 */
+export function copyAsset(from: string, to: string): Promise<AssetMutation> {
+  return call<AssetMutation>("editor_copy_asset", { from, to });
+}
+
+/** 导入资产 = `ImportAsset`（存在性校验 + 分类）。 */
+export function importAsset(path: string): Promise<AssetImportInfo> {
+  return call<AssetImportInfo>("editor_import_asset", { path });
+}
+
+/** 刷新资产数据库 = `Refresh`；返回资产数量。 */
+export function refreshAssets(): Promise<number> {
+  return call<number>("editor_refresh_assets");
+}
+
+// ── PrefabUtility（对应 `UnityEditor.PrefabUtility`） ───────────────────────
+
+/** 把实例内容写回预制体文件 = `ApplyPrefabInstance`。 */
+export function applyPrefabInstance(doc: SceneDoc, rootIndex: number): Promise<SceneDoc> {
+  return call<SceneDoc>("editor_apply_prefab_instance", { doc, rootIndex });
+}
+
+/** 解包实例 = `UnpackPrefabInstance`（断开链接，内容保留）。 */
+export function unpackPrefabInstance(
+  doc: SceneDoc,
+  rootIndex: number,
+  mode: PrefabUnpackMode = "outermost_root",
+): Promise<SceneDoc> {
+  return call<SceneDoc>("editor_unpack_prefab_instance", { doc, rootIndex, mode });
+}
+
+/** 预制体资产类型 = `GetPrefabAssetType`。 */
+export function prefabAssetType(doc: SceneDoc): Promise<PrefabAssetType> {
+  return call<PrefabAssetType>("editor_prefab_asset_type", { doc });
+}
+
+/** 文档里全部实例信息。 */
+export function prefabInstanceInfos(doc: SceneDoc): Promise<PrefabInstanceInfo[]> {
+  return call<PrefabInstanceInfo[]>("editor_prefab_instance_infos", { doc });
+}
+
+/** 实体所属的最近实例根 = `GetNearestPrefabInstanceRoot`。 */
+export function nearestPrefabInstanceRoot(
+  doc: SceneDoc,
+  rootIndex: number,
+): Promise<number | null> {
+  return call<number | null>("editor_nearest_prefab_instance_root", { doc, rootIndex });
+}
+
+/** 实体是否属于某个实例 = `IsPartOfPrefabInstance`。 */
+export function isPartOfPrefabInstance(doc: SceneDoc, rootIndex: number): Promise<boolean> {
+  return call<boolean>("editor_is_part_of_prefab_instance", { doc, rootIndex });
+}
+
+// ── SceneManagement（对应 `UnityEditor.SceneManagement`） ───────────────────
+
+/** 场景元信息列表（名字 / 路径 / GUID / 实体数 / 构建序号）。 */
+export function scenesMeta(): Promise<SceneMeta[]> {
+  return call<SceneMeta[]>("editor_scenes_meta");
+}
+
+/** `assets/scenes` 下的场景数量。 */
+export function sceneMetaCount(): Promise<number> {
+  return call<number>("editor_scene_meta_count");
+}
+
+/** 按下标取场景元信息。 */
+export function sceneMetaAt(index: number): Promise<SceneMeta> {
+  return call<SceneMeta>("editor_scene_meta_at", { index });
+}
+
+/** 按名字解析场景元信息。 */
+export function resolveScene(name: string): Promise<SceneMeta> {
+  return call<SceneMeta>("editor_resolve_scene", { name });
+}
+
+/** 新建场景文档 = `EditorSceneManager.NewScene`（`template` 缺省用默认模板）。 */
+export function newScene(template?: string): Promise<SceneDoc> {
+  return call<SceneDoc>("editor_new_scene", { template: template ?? null });
+}
+
+/** 为「尚未落盘」的文档生成元信息。 */
+export function sceneFromDoc(name: string, path: string, doc: SceneDoc): Promise<SceneMeta> {
+  return call<SceneMeta>("editor_scene_from_doc", { name, path, doc });
+}
+
+// ── Selection（对应 `UnityEditor.Selection.GetFiltered`） ───────────────────
+
+/** 在给定下标集合上按模式过滤。 */
+export function selectionFiltered(
+  doc: SceneDoc,
+  indices: number[],
+  mode: SelectionMode,
+  component?: string,
+): Promise<number[]> {
+  return call<number[]>("editor_selection_filtered", {
+    doc,
+    indices,
+    mode,
+    component: component ?? null,
+  });
+}
+
+/** 按模式过滤文档里的**全部**实体（「选择所有同类型」）。 */
+export function selectionAllMatching(
+  doc: SceneDoc,
+  mode: SelectionMode,
+  component?: string,
+): Promise<number[]> {
+  return call<number[]>("editor_selection_all_matching", {
+    doc,
+    mode,
+    component: component ?? null,
+  });
+}
+
+// ── EditorApplication（对应 `UnityEditor.EditorApplication` / `Application`） ──
+
+/** 引擎版本（「关于」面板用）。 */
+export function engineVersion(): Promise<string> {
+  return call<string>("editor_engine_version");
+}
+
+/** 编辑器关键路径（`Application.dataPath` 等）。 */
+export function editorPaths(): Promise<EditorPaths> {
+  return call<EditorPaths>("editor_paths");
 }

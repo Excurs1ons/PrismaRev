@@ -13,6 +13,21 @@ use std::any::{Any, TypeId};
 use std::collections::HashMap;
 
 // ---------------------------------------------------------------------------
+// Unity DOTS 形状的对齐层（`Unity.Entities`）
+// ---------------------------------------------------------------------------
+
+/// DOTS `EntityManager` 形状的 [`World`] 门面。
+pub mod entity_manager;
+/// DOTS `ISystem` / `SystemBase` / `ComponentSystemGroup` 形状的系统与系统组。
+pub mod systems;
+
+pub use entity_manager::EntityManager;
+pub use systems::{
+    ComponentSystemGroup, ISystem, SystemBase, SystemGroup, INITIALIZATION_SYSTEM_GROUP,
+    PRESENTATION_SYSTEM_GROUP, SIMULATION_SYSTEM_GROUP,
+};
+
+// ---------------------------------------------------------------------------
 // 实体
 // ---------------------------------------------------------------------------
 
@@ -95,6 +110,11 @@ impl World {
             pools: HashMap::new(),
             resources: HashMap::new(),
         }
+    }
+
+    /// 以 DOTS 形状的 [`EntityManager`] 借用本 world（对齐 `World.EntityManager`）。
+    pub fn entity_manager(&mut self) -> EntityManager<'_> {
+        EntityManager::new(self)
     }
 
     /// Allocate a fresh 实体 handle (starts 激活

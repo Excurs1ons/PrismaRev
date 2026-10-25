@@ -203,7 +203,7 @@ fn collect_scene_changes(
             break;
         }
         let pos = match world.get::<scene_comp::LocalTransform>(entity) {
-            Some(t) => t.translation,
+            Some(t) => t.position,
             None => continue,
         };
         lights.push(GpuLight {
@@ -227,7 +227,7 @@ fn collect_scene_changes(
             break;
         }
         let pos = match world.get::<scene_comp::LocalTransform>(entity) {
-            Some(t) => t.translation,
+            Some(t) => t.position,
             None => continue,
         };
         let radiance = Vec3::new(

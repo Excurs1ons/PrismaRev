@@ -84,7 +84,7 @@ pub fn bake_gi(cfg: &BakeGiConfig) -> Result<()> {
         .load_and_spawn(&mut world, source, &registry)
         .map_err(|e| anyhow::anyhow!("load scene into ECS: {e}"))?;
 
-    // Run hierarchy system to compute WorldTransform from LocalTransform + Parent.
+    // Run hierarchy system to compute LocalToWorld from LocalTransform + Parent.
     hierarchy_system(&mut world);
 
     let (instances, mat_bytes) =

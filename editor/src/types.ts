@@ -109,11 +109,11 @@ export interface EntityPreset {
   label: string;
   name: string;
   components: string[];
-  translation: number[];
+  position: number[];
 }
 
 export interface TransformJson {
-  translation: number[];
+  position: number[];
   rotation: number[];
   scale: number[];
 }
@@ -234,6 +234,56 @@ export interface HeightmapOptions {
   iterations: number;
   particles: number;
   seaLevel: number;
+}
+
+// ── Unity 形状的门面（AssetDatabase / PrefabUtility / SceneManagement / Selection / Application） ──
+
+/** 资产分类（同 `AssetInfo["kind"]`）= `AssetDatabase.GetMainAssetTypeAtPath`。 */
+export type AssetKind = AssetInfo["kind"];
+
+/** `editor_import_asset` 的结果：规范化路径 + 分类。 */
+export interface AssetImportInfo {
+  path: string;
+  kind: string;
+}
+
+/** 预制体资产类型 = `PrefabAssetType`。 */
+export type PrefabAssetType = "regular" | "variant" | "notAPrefab";
+
+/** 实例链接状态 = `PrefabInstanceStatus`。 */
+export type PrefabInstanceStatus = "notAPrefab" | "connected";
+
+/** 一条预制体实例信息 = `PrefabUtility.GetPrefabInstanceStatus` 的批量形态。 */
+export interface PrefabInstanceInfo {
+  index: number;
+  prefab: string;
+  status: PrefabInstanceStatus;
+}
+
+/** 解包模式 = `PrefabUnpackMode`。 */
+export type PrefabUnpackMode = "outermost_root" | "completely";
+
+/** 编辑器场景元信息 = `UnityEngine.SceneManagement.Scene`。 */
+export interface SceneMeta {
+  name: string;
+  path: string;
+  guid: string;
+  isDirty: boolean;
+  isLoaded: boolean;
+  rootCount: number;
+  entityCount: number;
+  buildIndex: number;
+}
+
+/** 选择过滤模式 = `UnityEditor.SelectionMode`。 */
+export type SelectionMode = "all" | "root" | "prefabRoot" | "hasComponent";
+
+/** 编辑器关键路径 = `Application.dataPath` / `streamingAssetsPath` 等。 */
+export interface EditorPaths {
+  project: string;
+  data: string;
+  streamingAssets: string;
+  application: string;
 }
 
 /** 渲染图报告中的一个 pass。 */

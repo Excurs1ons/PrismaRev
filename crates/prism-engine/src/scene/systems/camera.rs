@@ -7,7 +7,7 @@
 //! - [`camera_controller_system`] 将输入应用于 `FlyCameraController` +
 //!   同级 `LocalTransform`（写入偏航/俯仰/平移）。
 //! - [`compute_camera_output`] 读取 `Camera` + `FlyCameraController` +
-//! `WorldTransform` 并生成渲染器所需的矩阵。
+//! `LocalToWorld` 并生成渲染器所需的矩阵。
 //!
 //! 坐标系约定：右手系，+Y 向上，相机看向 −Z 方向。
 //! Vulkan y-flip 投影，深度范围 [0,1]。
@@ -18,7 +18,7 @@ use glam::{Mat4, Vec3};
 use prism_ecs::World;
 
 use crate::input::InputManager;
-use crate::scene::components::{Camera, FlyCameraController, LocalTransform, WorldTransform};
+use crate::scene::components::{Camera, FlyCameraController, LocalToWorld, LocalTransform};
 
 /// Return the 第一个 相机 分量 找到 in the 世界
 ///
@@ -81,7 +81,7 @@ pub fn fallback_camera_output(surface_rotation: &Mat4, aspect: f32) -> CameraOut
 }
 
 /// 查找 the 第一个 启用 相机 实体 that also has a `FlyCameraController`
-/// and a `WorldTransform`, and derive its view/projection matrices.
+/// and a `LocalToWorld`, and derive its view/projection matrices.
 ///
 /// `surface_rotation` is the device-orientation 矩阵 applied on 顶部 of the
 /// view-projection (mirrors the old `mat_mul(&surface_rotation, &vp)` step in
@@ -89,7 +89,7 @@ pub fn fallback_camera_output(surface_rotation: &Mat4, aspect: f32) -> CameraOut
 pub fn compute_camera_output(world: &World, surface_rotation: &Mat4) -> Option<CameraOutput> {
     let (entity, cam) = world.query::<Camera>().find(|(_, c)| c.enabled)?;
     let ctrl = world.get::<FlyCameraController>(entity)?;
-    let world_tf = world.get::<WorldTransform>(entity)?;
+    let world_tf = world.get::<LocalToWorld>(entity)?;
 
     // Eye position = world-space 平移 列 3, rows 0..3 of the
     // column-major 矩阵 For a root 相机 this equals LocalTransform
@@ -167,7 +167,7 @@ pub fn camera_controller_system(
 
     // 平移 WASD/QE/Space/Ctrl 相对 to the yaw/pitch basis. Position
     // lives on the sibling LocalTransform (roots) - nested cameras use the
-    // WorldTransform derived by the hierarchy 系统 and shouldn't be moved by
+    // LocalToWorld derived by the hierarchy 系统 and shouldn't be moved by
     // 输入 directly, so we only 写入 to LocalTransform.
     let boost = if input.key_held(KeyCode::ShiftLeft) || input.key_held(KeyCode::ShiftRight) {
         4.0
@@ -207,7 +207,7 @@ pub fn camera_controller_system(
         let ml = movev.length();
         if ml > 1e-6 {
             let inv = speed / ml;
-            t.translation += movev * inv;
+            t.position += movev * inv;
         }
     }
 

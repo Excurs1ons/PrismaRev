@@ -18,20 +18,19 @@ pub struct EntityPreset {
     /// 要挂载的组件规范名（顺序即挂载顺序）。
     pub components: Vec<String>,
     /// 初始位移。
-    pub translation: [f32; 3],
+    pub position: [f32; 3],
 }
 
 /// 内置实体预设（顺序即 UI 展示顺序）。
 pub fn entity_presets() -> Vec<EntityPreset> {
-    let preset = |id: &str, label: &str, name: &str, components: &[&str], translation: [f32; 3]| {
-        EntityPreset {
+    let preset =
+        |id: &str, label: &str, name: &str, components: &[&str], position: [f32; 3]| EntityPreset {
             id: id.to_string(),
             label: label.to_string(),
             name: name.to_string(),
             components: components.iter().map(|c| c.to_string()).collect(),
-            translation,
-        }
-    };
+            position,
+        };
 
     vec![
         preset("empty", "空实体", "entity", &[], [0.0, 0.0, 0.0]),

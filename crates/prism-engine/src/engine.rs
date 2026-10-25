@@ -243,12 +243,12 @@ impl Engine {
     //     world.insert(
     //         entity,
     //         LocalTransform {
-    //             translation: glam::Vec3::ZERO,
+    //             position: glam::Vec3::ZERO,
     //             rotation: glam::Quat::IDENTITY,
     //             scale: glam::Vec3::ONE,
     //         },
     //     );
-    //     world.insert(entity, WorldTransform(glam::Mat4::IDENTITY));
+    //     world.insert(entity, LocalToWorld(glam::Mat4::IDENTITY));
     //     world.insert(
     //         entity,
     //         MeshRef {
@@ -435,20 +435,18 @@ impl Engine {
     /// 生成 a 回退 相机 + controller + 变换 实体
     /// Called automatically when no 相机 实体 存在 at 运行时 init.
     fn spawn_default_camera(world: &mut World) {
-        use crate::scene::components::{
-            Camera, FlyCameraController, LocalTransform, WorldTransform,
-        };
+        use crate::scene::components::{Camera, FlyCameraController, LocalToWorld, LocalTransform};
 
         let entity = world.spawn();
         world.insert(
             entity,
             LocalTransform {
-                translation: glam::Vec3::new(0.0, 2.0, 5.0),
+                position: glam::Vec3::new(0.0, 2.0, 5.0),
                 rotation: glam::Quat::IDENTITY,
                 scale: glam::Vec3::ONE,
             },
         );
-        world.insert(entity, WorldTransform(glam::Mat4::IDENTITY));
+        world.insert(entity, LocalToWorld(glam::Mat4::IDENTITY));
         world.insert(
             entity,
             Camera {

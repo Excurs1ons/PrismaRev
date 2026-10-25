@@ -35,7 +35,7 @@ fn make_rscn(entities: &[RscnEntity]) -> Vec<u8> {
         buf.extend_from_slice(&parent.to_le_bytes());
 
         // 变换
-        for &v in &e.translation {
+        for &v in &e.position {
             buf.extend_from_slice(&v.to_le_bytes());
         }
         for &v in &e.rotation {
@@ -112,7 +112,7 @@ fn make_rscn(entities: &[RscnEntity]) -> Vec<u8> {
 struct RscnEntity {
     name: &'static str,
     parent: Option<u32>,
-    translation: [f32; 3],
+    position: [f32; 3],
     rotation: [f32; 4],
     scale: [f32; 3],
     has_mesh: bool,
@@ -139,7 +139,7 @@ fn simple_entity(name: &'static str, parent: Option<u32>) -> RscnEntity {
     RscnEntity {
         name,
         parent,
-        translation: [0.0; 3],
+        position: [0.0; 3],
         rotation: [0.0, 0.0, 0.0, 1.0],
         scale: [1.0; 3],
         has_mesh: false,
@@ -191,14 +191,14 @@ fn parse_parent_child() {
 #[test]
 fn parse_with_transform() {
     let e = RscnEntity {
-        translation: [1.0, 2.0, 3.0],
+        position: [1.0, 2.0, 3.0],
         rotation: [0.0, 0.0, 0.0, 1.0],
         scale: [2.0, 2.0, 2.0],
         ..simple_entity("Moved", None)
     };
     let bytes = make_rscn(&[e]);
     let parsed = parse_rscn(&bytes).unwrap();
-    assert_eq!(parsed.entities[0].translation, [1.0, 2.0, 3.0]);
+    assert_eq!(parsed.entities[0].position, [1.0, 2.0, 3.0]);
     assert_eq!(parsed.entities[0].rotation, [0.0, 0.0, 0.0, 1.0]);
     assert_eq!(parsed.entities[0].scale, [2.0, 2.0, 2.0]);
 }
@@ -340,7 +340,7 @@ fn spawn_has_scene_member_and_active() {
 #[test]
 fn spawn_has_local_transform() {
     let e = RscnEntity {
-        translation: [10.0, 20.0, 30.0].into(),
+        position: [10.0, 20.0, 30.0].into(),
         ..simple_entity("Moved", None)
     };
     let bytes = make_rscn(&[e]);
@@ -352,7 +352,7 @@ fn spawn_has_local_transform() {
     let inst = loader.spawn_from_parsed(&mut world, &parsed, sid).unwrap();
 
     let lt = world.get::<LocalTransform>(inst.all_entities[0]).unwrap();
-    assert_eq!(lt.translation, [10.0, 20.0, 30.0].into());
+    assert_eq!(lt.position, [10.0, 20.0, 30.0].into());
     assert_eq!(lt.rotation, Quat::IDENTITY);
 }
 
@@ -367,7 +367,7 @@ fn spawn_has_world_transform() {
     let sid = SceneAssetId::generate();
     let inst = loader.spawn_from_parsed(&mut world, &parsed, sid).unwrap();
 
-    let wt = world.get::<WorldTransform>(inst.all_entities[0]).unwrap();
+    let wt = world.get::<LocalToWorld>(inst.all_entities[0]).unwrap();
     // Identity 模型 矩阵
     assert_eq!(wt.0.col(0)[0], 1.0);
     assert_eq!(wt.0.col(3)[3], 1.0);
@@ -546,7 +546,7 @@ fn spawn_rejects_dead_parent() {
 fn spawn_camera_emits_renderer_and_data_components() {
     // 相机 at [1,2,3], identity 旋转 (looks 下 −Z), 60° 视场角
     let e = RscnEntity {
-        translation: [1.0, 2.0, 3.0],
+        position: [1.0, 2.0, 3.0],
         has_camera: true,
         camera_fov: 60.0,
         camera_near: 0.1,
@@ -584,7 +584,7 @@ fn spawn_camera_emits_renderer_and_data_components() {
     let lt = world
         .get::<LocalTransform>(entity)
         .expect("LocalTransform should be present");
-    assert_eq!(lt.translation, [1.0, 2.0, 3.0].into());
+    assert_eq!(lt.position, [1.0, 2.0, 3.0].into());
 }
 
 #[test]
@@ -641,7 +641,7 @@ fn load_rscn_v4_applies_components_and_hierarchy() {
                 {
                     "name": "Child",
                     "parent": 0,
-                    "transform": { "translation": [1.0, 2.0, 3.0] },
+                    "transform": { "position": [1.0, 2.0, 3.0] },
                     "components": {
                         "prism_engine::scene::PointLight": {
                             "color": [0.25, 0.5, 1.0],
@@ -699,7 +699,7 @@ fn load_rscn_v4_applies_components_and_hierarchy() {
 
     assert_eq!(world.get::<PointLight>(child).unwrap().intensity, 42.0);
     assert_eq!(
-        world.get::<LocalTransform>(child).unwrap().translation,
+        world.get::<LocalTransform>(child).unwrap().position,
         glam::Vec3::new(1.0, 2.0, 3.0)
     );
     assert_eq!(world.get::<Parent>(child).unwrap().0, root);
@@ -775,7 +775,7 @@ fn load_committed_default_rscn() {
     let lt = world
         .get::<LocalTransform>(cam_entity)
         .expect("camera should have a LocalTransform");
-    assert_eq!(lt.translation, [0.0, 2.5, 18.0].into());
+    assert_eq!(lt.position, [0.0, 2.5, 18.0].into());
     // And it should carry a free-fly controller.
     assert!(world.get::<FlyCameraController>(cam_entity).is_some());
 }

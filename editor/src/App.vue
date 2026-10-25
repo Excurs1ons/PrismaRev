@@ -572,10 +572,15 @@ async function refreshDocuments() {
   prefabs.value = prefabList;
 }
 
+/** 引擎/数据层版本（`editor_engine_version`，「关于」面板用）。 */
+const engineVersionText = ref("");
+
 async function bootstrap() {
   try {
     schema.value = await api.fetchSchema();
     projectRoot.value = await api.fetchProjectRoot();
+    // 版本是可选展示；失败不影响编辑。
+    engineVersionText.value = await api.engineVersion().catch(() => "");
     sceneTemplates.value = await api.documentTemplates("scene");
     presets.value = await api.fetchPresets();
     if (presets.value.length) presetId.value = presets.value[0].id;
@@ -873,8 +878,8 @@ async function applyPrefab(index: number) {
   const link = prefabLink.value;
   if (!window.confirm(`用当前实例内容覆盖预制体？\n${link}`)) return;
   try {
-    const extracted = await api.extractSubtree(doc.value, index);
-    await api.writeDocument(`${projectRoot.value}/${link}`, extracted);
+    // `PrefabUtility.ApplyPrefabInstance`：提取子树 + 写回预制体文件。
+    await api.applyPrefabInstance(doc.value, index);
     error.value = "";
     status.value = `已应用到 ${link}`;
     await refreshDocuments();
@@ -1077,7 +1082,7 @@ function addEntity() {
     name: uniqueName(preset?.name ?? "entity"),
     parent: null,
     transform: {
-      translation: (preset?.translation ?? [0, 0, 0]) as number[],
+      position: (preset?.position ?? [0, 0, 0]) as number[],
       rotation: [0, 0, 0, 1],
       scale: [1, 1, 1],
     },
@@ -2292,6 +2297,7 @@ onUnmounted(() => {
             <div class="about-mark"><Box :size="22" /></div>
             <h2>PrismaRev Editor</h2>
             <p class="hint">Tauri 2 + Vue 3 · 数据层 <code>prism-editor-api</code></p>
+            <p class="hint">版本 <code>{{ engineVersionText || "—" }}</code></p>
             <p>
               场景 / 预制体编辑、split-tree docking、实时渲染图、场景包构建与运行。编辑器进程不链接引擎或
               Vulkan，Cook / 构建通过子进程调用构建流水线。

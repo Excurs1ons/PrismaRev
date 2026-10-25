@@ -11,8 +11,8 @@ fn reparent_creates_children() {
 
     assert_eq!(world.get::<Parent>(child), Some(&Parent(parent)));
     let children = world
-        .get::<Children>(parent)
-        .expect("parent should have Children");
+        .get::<Child>(parent)
+        .expect("parent should have Child");
     assert!(children.0.contains(&child));
 }
 
@@ -26,7 +26,7 @@ fn reparent_to_none_removes_parent() {
     HierarchyHelper::reparent(&mut world, child, None);
 
     assert!(world.get::<Parent>(child).is_none());
-    let children = world.get::<Children>(parent).unwrap();
+    let children = world.get::<Child>(parent).unwrap();
     assert!(!children.0.contains(&child));
 }
 
@@ -41,9 +41,9 @@ fn reparent_updates_old_and_new_parent() {
     HierarchyHelper::reparent(&mut world, child, Some(p2));
 
     assert_eq!(world.get::<Parent>(child), Some(&Parent(p2)));
-    let c1 = world.get::<Children>(p1).unwrap();
+    let c1 = world.get::<Child>(p1).unwrap();
     assert!(!c1.0.contains(&child));
-    let c2 = world.get::<Children>(p2).unwrap();
+    let c2 = world.get::<Child>(p2).unwrap();
     assert!(c2.0.contains(&child));
 }
 
@@ -54,9 +54,9 @@ fn reparent_to_same_is_noop() {
     let child = world.spawn();
 
     HierarchyHelper::reparent(&mut world, child, Some(parent));
-    let before = world.get::<Children>(parent).unwrap().0.clone();
+    let before = world.get::<Child>(parent).unwrap().0.clone();
     HierarchyHelper::reparent(&mut world, child, Some(parent));
-    let after = world.get::<Children>(parent).unwrap().0.clone();
+    let after = world.get::<Child>(parent).unwrap().0.clone();
     assert_eq!(before, after);
 }
 
@@ -75,7 +75,7 @@ fn dead_entity_rejected() {
     let child = world.spawn();
     world.despawn(child);
     HierarchyHelper::reparent(&mut world, child, Some(parent));
-    assert!(world.get::<Children>(parent).is_none());
+    assert!(world.get::<Child>(parent).is_none());
 }
 
 #[test]

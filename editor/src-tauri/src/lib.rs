@@ -13,8 +13,9 @@ use std::sync::Mutex;
 
 use prism_editor_api::{
     AssetInfo, AssetMutation, AssetRef, DocKind, EntityPreset, InstantiateResult, MoveResult,
-    PlayableScene, ProjectSettingsData, RenderSettingsData, SceneEntry, SceneListEntry,
-    ScenePackageStatus, SceneTemplate, Schema,
+    PlayableScene, PrefabInstanceInfo, ProjectSettingsData, RenderSettingsData, Scene, SceneEntry,
+    SceneListEntry, ScenePackageStatus, SceneTemplate, Schema, SelectionFilter, SelectionMode,
+    SelectionState,
 };
 use tauri::{Emitter, Manager, State};
 
@@ -354,6 +355,301 @@ fn editor_extract_subtree(
 }
 
 // ---------------------------------------------------------------------------
+// AssetDatabase（对应 `UnityEditor.AssetDatabase`）
+//
+// `prism-editor-api` 把资产数据库暴露成 Unity 形状的门面；这里只做命令映射。
+// ---------------------------------------------------------------------------
+
+/// `editor_import_asset` 的返回：规范化路径 + 分类。
+#[derive(serde::Serialize)]
+struct AssetImportInfo {
+    path: String,
+    kind: String,
+}
+
+/// 资产路径 → GUID（32 位小写十六进制，由路径派生，故重命名会变）。
+#[tauri::command]
+fn editor_asset_guid(path: String) -> Result<String, String> {
+    prism_editor_api::asset_path_to_guid(&path)
+}
+
+/// GUID → 资产路径（找不到时报错）。
+#[tauri::command]
+fn editor_asset_path_from_guid(guid: String) -> Result<String, String> {
+    prism_editor_api::guid_to_asset_path(&prism_editor_api::find_project_root()?, &guid)
+}
+
+/// 全部资产路径 = `AssetDatabase.GetAllAssetPaths`。
+#[tauri::command]
+fn editor_asset_all_paths() -> Result<Vec<String>, String> {
+    prism_editor_api::get_all_asset_paths(&prism_editor_api::find_project_root()?)
+}
+
+/// Unity 风格检索 = `AssetDatabase.FindAssets`：空白分词取 **AND**；
+/// `t:<分类>` 匹配分类（或扩展名）、`l:<标签>` 暂被忽略，其余按路径子串。
+#[tauri::command]
+fn editor_find_assets(filter: String) -> Result<Vec<String>, String> {
+    prism_editor_api::find_assets(&prism_editor_api::find_project_root()?, &filter)
+}
+
+/// 主资产类型 = `AssetDatabase.GetMainAssetTypeAtPath`（分类字符串）。
+#[tauri::command]
+fn editor_asset_main_type(path: String) -> Result<String, String> {
+    prism_editor_api::get_main_asset_type_at_path(&prism_editor_api::find_project_root()?, &path)
+        .map(str::to_string)
+}
+
+/// 依赖哈希（路径 + 大小 + mtime）= `AssetDatabase.GetAssetDependencyHash`。
+#[tauri::command]
+fn editor_asset_dependency_hash(path: String) -> Result<String, String> {
+    prism_editor_api::get_asset_dependency_hash(&prism_editor_api::find_project_root()?, &path)
+}
+
+/// 资产是否存在 = `AssetDatabase.Contains`。
+#[tauri::command]
+fn editor_asset_contains(path: String) -> Result<bool, String> {
+    Ok(prism_editor_api::contains(
+        &prism_editor_api::find_project_root()?,
+        &path,
+    ))
+}
+
+/// `assets/` 下是否已有该目录 = `AssetDatabase.IsValidFolder`。
+#[tauri::command]
+fn editor_asset_is_valid_folder(path: String) -> Result<bool, String> {
+    Ok(prism_editor_api::is_valid_folder(
+        &prism_editor_api::find_project_root()?,
+        &path,
+    ))
+}
+
+/// 复制资产（目录递归）= `AssetDatabase.CopyAsset`；**不改写引用**（与 Unity 一致）。
+#[tauri::command]
+fn editor_copy_asset(from: String, to: String) -> Result<AssetMutation, String> {
+    prism_editor_api::copy_asset(&prism_editor_api::find_project_root()?, &from, &to)
+}
+
+/// 导入资产 = `AssetDatabase.ImportAsset`（存在性校验 + 分类；无导入数据库）。
+#[tauri::command]
+fn editor_import_asset(path: String) -> Result<AssetImportInfo, String> {
+    let root = prism_editor_api::find_project_root()?;
+    let (path, kind) = prism_editor_api::import_asset(&root, &path)?;
+    Ok(AssetImportInfo {
+        path,
+        kind: kind.to_string(),
+    })
+}
+
+/// 刷新资产数据库 = `AssetDatabase.Refresh`；返回资产数量。
+#[tauri::command]
+fn editor_refresh_assets() -> Result<usize, String> {
+    prism_editor_api::refresh(&prism_editor_api::find_project_root()?)
+}
+
+// ---------------------------------------------------------------------------
+// PrefabUtility（对应 `UnityEditor.PrefabUtility`）
+// ---------------------------------------------------------------------------
+
+/// 未知的解包模式。
+fn parse_unpack_mode(mode: Option<&str>) -> Result<prism_editor_api::PrefabUnpackMode, String> {
+    match mode.unwrap_or("outermost_root") {
+        "outermost_root" | "outermostRoot" => Ok(prism_editor_api::PrefabUnpackMode::OutermostRoot),
+        "completely" => Ok(prism_editor_api::PrefabUnpackMode::Completely),
+        other => Err(format!("未知的解包模式: {other}")),
+    }
+}
+
+/// 未知的选择过滤模式。
+fn parse_selection_mode(mode: &str) -> Result<SelectionMode, String> {
+    match mode {
+        "all" => Ok(SelectionMode::All),
+        "root" => Ok(SelectionMode::Root),
+        "prefab_root" | "prefabRoot" => Ok(SelectionMode::PrefabRoot),
+        "has_component" | "hasComponent" => Ok(SelectionMode::HasComponent),
+        other => Err(format!("未知的选择过滤模式: {other}")),
+    }
+}
+
+/// 把实例内容写回预制体文件 = `PrefabUtility.ApplyPrefabInstance`；返回写入的预制体文档。
+#[tauri::command]
+fn editor_apply_prefab_instance(
+    doc: serde_json::Value,
+    root_index: usize,
+) -> Result<serde_json::Value, String> {
+    prism_editor_api::apply_prefab_instance(
+        &prism_editor_api::find_project_root()?,
+        &doc,
+        root_index,
+    )
+}
+
+/// 解包实例 = `PrefabUtility.UnpackPrefabInstance`（断开链接，内容保留）。
+#[tauri::command]
+fn editor_unpack_prefab_instance(
+    doc: serde_json::Value,
+    root_index: usize,
+    mode: Option<String>,
+) -> Result<serde_json::Value, String> {
+    prism_editor_api::unpack_prefab_instance(&doc, root_index, parse_unpack_mode(mode.as_deref())?)
+}
+
+/// 预制体资产类型 = `PrefabUtility.GetPrefabAssetType`（普通 / 变体 / 非预制体）。
+#[tauri::command]
+fn editor_prefab_asset_type(doc: serde_json::Value) -> prism_editor_api::PrefabAssetType {
+    prism_editor_api::get_prefab_asset_type(&doc)
+}
+
+/// 文档里全部实例信息 = 逐个 `PrefabUtility.GetPrefabInstanceStatus`。
+#[tauri::command]
+fn editor_prefab_instance_infos(doc: serde_json::Value) -> Vec<PrefabInstanceInfo> {
+    prism_editor_api::prefab_instance_infos(&doc)
+}
+
+/// 实体所属的最近实例根 = `PrefabUtility.GetNearestPrefabInstanceRoot`。
+#[tauri::command]
+fn editor_nearest_prefab_instance_root(doc: serde_json::Value, root_index: usize) -> Option<usize> {
+    prism_editor_api::get_nearest_prefab_instance_root(&doc, root_index)
+}
+
+/// 实体是否属于某个实例 = `PrefabUtility.IsPartOfPrefabInstance`。
+#[tauri::command]
+fn editor_is_part_of_prefab_instance(doc: serde_json::Value, root_index: usize) -> bool {
+    prism_editor_api::is_part_of_prefab_instance(&doc, root_index)
+}
+
+// ---------------------------------------------------------------------------
+// SceneManagement（对应 `UnityEditor.SceneManagement`）
+// ---------------------------------------------------------------------------
+
+/// 场景元信息列表（名字 / 路径 / GUID / 实体数 / 构建序号）= 加载场景视图的数据源。
+#[tauri::command]
+fn editor_scenes_meta() -> Result<Vec<Scene>, String> {
+    prism_editor_api::get_loaded_scenes(&prism_editor_api::find_project_root()?)
+}
+
+/// `assets/scenes` 下的场景数量。
+#[tauri::command]
+fn editor_scene_meta_count() -> Result<usize, String> {
+    prism_editor_api::scene_count(&prism_editor_api::find_project_root()?)
+}
+
+/// 按下标取场景元信息。
+#[tauri::command]
+fn editor_scene_meta_at(index: usize) -> Result<Scene, String> {
+    prism_editor_api::get_scene_at(&prism_editor_api::find_project_root()?, index)
+}
+
+/// 按名字解析场景元信息。
+#[tauri::command]
+fn editor_resolve_scene(name: String) -> Result<Scene, String> {
+    prism_editor_api::resolve_scene(&prism_editor_api::find_project_root()?, &name)
+}
+
+/// 新建场景文档 = `EditorSceneManager.NewScene`（`template` 缺省用默认模板）。
+#[tauri::command]
+fn editor_new_scene(template: Option<String>) -> serde_json::Value {
+    prism_editor_api::new_scene(template.as_deref())
+}
+
+/// 为「尚未落盘」的文档生成元信息（实体数 / 根实体数 / GUID）。
+#[tauri::command]
+fn editor_scene_from_doc(
+    name: String,
+    path: String,
+    doc: serde_json::Value,
+) -> Result<Scene, String> {
+    Ok(prism_editor_api::scene_from_doc(
+        &prism_editor_api::find_project_root()?,
+        &name,
+        &path,
+        &doc,
+    ))
+}
+
+// ---------------------------------------------------------------------------
+// Selection（对应 `UnityEditor.Selection`）
+//
+// 选择状态本身由前端（Vue 响应式）持有以保证跟手；这里只暴露**无状态**的过滤。
+// ---------------------------------------------------------------------------
+
+/// 在给定下标集合上过滤 = `Selection.GetFiltered`。
+#[tauri::command]
+fn editor_selection_filtered(
+    doc: serde_json::Value,
+    indices: Vec<usize>,
+    mode: String,
+    component: Option<String>,
+) -> Result<Vec<usize>, String> {
+    let filter = SelectionFilter {
+        mode: parse_selection_mode(&mode)?,
+        component,
+    };
+    let mut state = SelectionState::new();
+    state.set_indices(indices);
+    Ok(state.get_filtered(&doc, &filter))
+}
+
+/// 按模式过滤文档里的**全部**实体（用于「选择所有同类型」）。
+#[tauri::command]
+fn editor_selection_all_matching(
+    doc: serde_json::Value,
+    mode: String,
+    component: Option<String>,
+) -> Result<Vec<usize>, String> {
+    let count = doc
+        .get("entities")
+        .and_then(|value| value.as_array())
+        .map(Vec::len)
+        .unwrap_or(0);
+    let filter = SelectionFilter {
+        mode: parse_selection_mode(&mode)?,
+        component,
+    };
+    let mut state = SelectionState::new();
+    state.set_indices((0..count).collect());
+    Ok(state.get_filtered(&doc, &filter))
+}
+
+// ---------------------------------------------------------------------------
+// EditorApplication（对应 `UnityEditor.EditorApplication` / `Application`）
+// ---------------------------------------------------------------------------
+
+/// 编辑器关键路径（`Application.dataPath` 等）。
+#[derive(serde::Serialize)]
+struct EditorPaths {
+    project: String,
+    data: String,
+    streaming_assets: String,
+    application: String,
+}
+
+/// 引擎版本（「关于」面板用）。
+#[tauri::command]
+fn editor_engine_version() -> String {
+    prism_editor_api::engine_version().to_string()
+}
+
+/// 编辑器关键路径。
+#[tauri::command]
+fn editor_paths() -> Result<EditorPaths, String> {
+    let root = prism_editor_api::find_project_root()?;
+    Ok(EditorPaths {
+        project: prism_editor_api::project_path(&root)
+            .to_string_lossy()
+            .into_owned(),
+        data: prism_editor_api::data_path(&root)
+            .to_string_lossy()
+            .into_owned(),
+        streaming_assets: prism_editor_api::streaming_assets_path(&root)
+            .to_string_lossy()
+            .into_owned(),
+        application: prism_editor_api::application_path()
+            .to_string_lossy()
+            .into_owned(),
+    })
+}
+
+// ---------------------------------------------------------------------------
 // 反射字段写入 / cook
 // ---------------------------------------------------------------------------
 
@@ -448,7 +744,9 @@ async fn editor_bake_gi(options: BakeGiOptions) -> Result<String, String> {
     if !(1..=32).contains(&options.bounces) {
         return Err("bounces 必须在 1..=32 之间".into());
     }
-    if options.output.trim().is_empty() || options.pak.trim().is_empty() || options.rscn.trim().is_empty()
+    if options.output.trim().is_empty()
+        || options.pak.trim().is_empty()
+        || options.rscn.trim().is_empty()
     {
         return Err("输出 / pak / rscn 路径不能为空".into());
     }
@@ -757,7 +1055,11 @@ fn build_project_blocking(
     log.push_str("\n==> build-scenes\n");
     log.push_str(&run_pipeline(&root, &["build-scenes"])?);
 
-    let exe_name = if cfg!(windows) { "prisma.exe" } else { "prisma" };
+    let exe_name = if cfg!(windows) {
+        "prisma.exe"
+    } else {
+        "prisma"
+    };
     let bin = manifest_dir
         .join("target")
         .join(if release { "release" } else { "debug" })
@@ -778,8 +1080,7 @@ fn build_project_blocking(
         .map_err(|error| format!("无法创建输出目录 {}: {error}", output_dir.display()))?;
 
     let output_exe = output_dir.join(exe_name);
-    std::fs::copy(&bin, &output_exe)
-        .map_err(|error| format!("复制游戏二进制失败: {error}"))?;
+    std::fs::copy(&bin, &output_exe).map_err(|error| format!("复制游戏二进制失败: {error}"))?;
     copy_if_exists(
         &root.join("assets/scenes.pak"),
         &output_dir.join("assets/scenes.pak"),
@@ -793,10 +1094,7 @@ fn build_project_blocking(
         &output_dir.join("assets/settings.toml"),
     );
 
-    log.push_str(&format!(
-        "\n==> 输出\n{}\n",
-        output_exe.display()
-    ));
+    log.push_str(&format!("\n==> 输出\n{}\n", output_exe.display()));
 
     if options.run_after {
         let mut command = Command::new(&output_exe);
@@ -852,11 +1150,17 @@ fn editor_reveal_path(path: String) -> Result<(), String> {
     }
     #[cfg(target_os = "macos")]
     {
-        Command::new("open").arg(&path).spawn().map_err(|e| e.to_string())?;
+        Command::new("open")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| e.to_string())?;
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
-        Command::new("xdg-open").arg(&path).spawn().map_err(|e| e.to_string())?;
+        Command::new("xdg-open")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -1074,6 +1378,33 @@ pub fn run() {
             editor_sync_prefab_instances,
             editor_unlink_prefab_instance,
             editor_extract_subtree,
+            editor_asset_guid,
+            editor_asset_path_from_guid,
+            editor_asset_all_paths,
+            editor_find_assets,
+            editor_asset_main_type,
+            editor_asset_dependency_hash,
+            editor_asset_contains,
+            editor_asset_is_valid_folder,
+            editor_copy_asset,
+            editor_import_asset,
+            editor_refresh_assets,
+            editor_apply_prefab_instance,
+            editor_unpack_prefab_instance,
+            editor_prefab_asset_type,
+            editor_prefab_instance_infos,
+            editor_nearest_prefab_instance_root,
+            editor_is_part_of_prefab_instance,
+            editor_scenes_meta,
+            editor_scene_meta_count,
+            editor_scene_meta_at,
+            editor_resolve_scene,
+            editor_new_scene,
+            editor_scene_from_doc,
+            editor_selection_filtered,
+            editor_selection_all_matching,
+            editor_engine_version,
+            editor_paths,
             editor_set_component_field,
             editor_cook_scene,
             editor_bake_gi,

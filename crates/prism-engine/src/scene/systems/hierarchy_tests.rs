@@ -11,11 +11,11 @@ fn root_gets_identity_world() {
     let mut world = World::new();
     let e = world.spawn();
     world.insert(e, LocalTransform::default());
-    world.insert(e, WorldTransform(glam::Mat4::ZERO)); // dummy
+    world.insert(e, LocalToWorld(glam::Mat4::ZERO)); // dummy
 
     hierarchy_system(&mut world);
 
-    let wt = world.get::<WorldTransform>(e).unwrap().0;
+    let wt = world.get::<LocalToWorld>(e).unwrap().0;
     assert_eq!(wt.x_axis[0], 1.0);
     assert_eq!(wt.y_axis[1], 1.0);
     assert_eq!(wt.z_axis[2], 1.0);
@@ -31,24 +31,24 @@ fn child_world_inherits_parent_translation() {
     world.insert(
         parent,
         LocalTransform {
-            translation: glam::Vec3::new(2.0, 0.0, 0.0),
+            position: glam::Vec3::new(2.0, 0.0, 0.0),
             ..Default::default()
         },
     );
-    world.insert(parent, WorldTransform(glam::Mat4::ZERO));
+    world.insert(parent, LocalToWorld(glam::Mat4::ZERO));
     world.insert(
         child,
         LocalTransform {
-            translation: glam::Vec3::new(0.0, 3.0, 0.0),
+            position: glam::Vec3::new(0.0, 3.0, 0.0),
             ..Default::default()
         },
     );
-    world.insert(child, WorldTransform(glam::Mat4::ZERO));
+    world.insert(child, LocalToWorld(glam::Mat4::ZERO));
 
     HierarchyHelper::reparent(&mut world, child, Some(parent));
     hierarchy_system(&mut world);
 
-    let cw = world.get::<WorldTransform>(child).unwrap().0;
+    let cw = world.get::<LocalToWorld>(child).unwrap().0;
     // Expect 平移 = [2, 3, 0]
     assert!(
         (cw.col(3)[0] - 2.0).abs() < 1e-6,
@@ -82,38 +82,38 @@ fn nested_hierarchy() {
     world.insert(
         gp,
         LocalTransform {
-            translation: glam::Vec3::new(1.0, 0.0, 0.0),
+            position: glam::Vec3::new(1.0, 0.0, 0.0),
             ..Default::default()
         },
     );
-    world.insert(gp, WorldTransform(glam::Mat4::ZERO));
+    world.insert(gp, LocalToWorld(glam::Mat4::ZERO));
     world.insert(
         p,
         LocalTransform {
-            translation: glam::Vec3::new(0.0, 2.0, 0.0),
+            position: glam::Vec3::new(0.0, 2.0, 0.0),
             ..Default::default()
         },
     );
-    world.insert(p, WorldTransform(glam::Mat4::ZERO));
+    world.insert(p, LocalToWorld(glam::Mat4::ZERO));
     world.insert(
         c,
         LocalTransform {
-            translation: glam::Vec3::new(0.0, 0.0, 3.0),
+            position: glam::Vec3::new(0.0, 0.0, 3.0),
             ..Default::default()
         },
     );
-    world.insert(c, WorldTransform(glam::Mat4::ZERO));
+    world.insert(c, LocalToWorld(glam::Mat4::ZERO));
 
     HierarchyHelper::reparent(&mut world, p, Some(gp));
     HierarchyHelper::reparent(&mut world, c, Some(p));
     hierarchy_system(&mut world);
 
     // gp: [1,0,0], p: [1,2,0], c: [1,2,3]
-    let pw = world.get::<WorldTransform>(p).unwrap().0;
+    let pw = world.get::<LocalToWorld>(p).unwrap().0;
     assert!((pw.col(3)[0] - 1.0).abs() < 1e-6, "p.x = {}", pw.col(3)[0]);
     assert!((pw.col(3)[1] - 2.0).abs() < 1e-6, "p.y = {}", pw.col(3)[1]);
 
-    let cw = world.get::<WorldTransform>(c).unwrap().0;
+    let cw = world.get::<LocalToWorld>(c).unwrap().0;
     assert!((cw.col(3)[0] - 1.0).abs() < 1e-6, "c.x = {}", cw.col(3)[0]);
     assert!((cw.col(3)[1] - 2.0).abs() < 1e-6, "c.y = {}", cw.col(3)[1]);
     assert!((cw.col(3)[2] - 3.0).abs() < 1e-6, "c.z = {}", cw.col(3)[2]);
@@ -127,15 +127,15 @@ fn orphan_uses_local_transform() {
     let child = world.spawn();
 
     world.insert(parent, LocalTransform::default());
-    world.insert(parent, WorldTransform(glam::Mat4::ZERO));
+    world.insert(parent, LocalToWorld(glam::Mat4::ZERO));
     world.insert(
         child,
         LocalTransform {
-            translation: glam::Vec3::new(5.0, 0.0, 0.0),
+            position: glam::Vec3::new(5.0, 0.0, 0.0),
             ..Default::default()
         },
     );
-    world.insert(child, WorldTransform(glam::Mat4::ZERO));
+    world.insert(child, LocalToWorld(glam::Mat4::ZERO));
 
     HierarchyHelper::reparent(&mut world, child, Some(parent));
     world.despawn(parent); // parent dead
@@ -150,9 +150,9 @@ fn orphan_uses_local_transform() {
     // dead, visit_children won't reach it from the root. But the child
     // won't be in the roots 列表 because it HAS a Parent 分量
     //
-    // 结果 child's WorldTransform stays as whatever it was before
+    // 结果 child's LocalToWorld stays as whatever it was before
     // (the dummy value we 集合
-    let cw = world.get::<WorldTransform>(child).unwrap().0;
+    let cw = world.get::<LocalToWorld>(child).unwrap().0;
     // Still the dummy value since hierarchy_system didn't 更新 it.
     assert_eq!(cw.x_axis[0], 0.0);
 }
@@ -182,24 +182,24 @@ fn multiple_roots() {
     world.insert(
         r1,
         LocalTransform {
-            translation: glam::Vec3::new(10.0, 0.0, 0.0),
+            position: glam::Vec3::new(10.0, 0.0, 0.0),
             ..Default::default()
         },
     );
-    world.insert(r1, WorldTransform(glam::Mat4::ZERO));
+    world.insert(r1, LocalToWorld(glam::Mat4::ZERO));
     world.insert(
         r2,
         LocalTransform {
-            translation: glam::Vec3::new(0.0, 20.0, 0.0),
+            position: glam::Vec3::new(0.0, 20.0, 0.0),
             ..Default::default()
         },
     );
-    world.insert(r2, WorldTransform(glam::Mat4::ZERO));
+    world.insert(r2, LocalToWorld(glam::Mat4::ZERO));
 
     hierarchy_system(&mut world);
 
-    let wt1 = world.get::<WorldTransform>(r1).unwrap().0;
+    let wt1 = world.get::<LocalToWorld>(r1).unwrap().0;
     assert!((wt1.w_axis[0] - 10.0).abs() < 1e-6);
-    let wt2 = world.get::<WorldTransform>(r2).unwrap().0;
+    let wt2 = world.get::<LocalToWorld>(r2).unwrap().0;
     assert!((wt2.w_axis[1] - 20.0).abs() < 1e-6);
 }

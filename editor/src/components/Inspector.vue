@@ -106,7 +106,7 @@ function onParentChange(event: Event) {
   patch({ parent: Number.isFinite(raw) && raw >= 0 ? raw : null }, fieldKey("parent"));
 }
 
-function setTransform(key: "translation" | "rotation" | "scale", value: JsonValue, path: string) {
+function setTransform(key: "position" | "rotation" | "scale", value: JsonValue, path: string) {
   patch({ transform: { ...props.entity.transform, [key]: value as number[] } }, fieldKey(path));
 }
 
@@ -202,7 +202,7 @@ const transformMatches = computed(() => {
   const query = filter.value.trim().toLowerCase();
   if (!query) return true;
   return JSON.stringify(props.entity.transform).toLowerCase().includes(query)
-    || "transform translation rotation scale".includes(query);
+    || "transform position rotation scale".includes(query);
 });
 
 const availableComponents = computed(() =>
@@ -289,12 +289,12 @@ const availableComponents = computed(() =>
     </header>
     <div class="card-body">
       <FieldEditor
-        label="translation"
-        path="transform.translation"
-        :value="entity.transform.translation"
-        :field="vecField('translation', 3)"
+        label="position"
+        path="transform.position"
+        :value="entity.transform.position"
+        :field="vecField('position', 3)"
         :schema="schema"
-        @update="(v, p) => setTransform('translation', v, p)"
+        @update="(v, p) => setTransform('position', v, p)"
       />
       <FieldEditor
         label="rotation"

@@ -14,7 +14,7 @@
 //! stone - 粗略 diffuse, no 可见 specular highlight
 //!
 //! The spheres are spawned as ECS entities with new scene components
-//! (MeshRef + MaterialRef + LocalTransform + WorldTransform), so they live in
+//! (MeshRef + MaterialRef + LocalTransform + LocalToWorld), so they live in
 //! the ECS 世界 alongside other geometry. They use the same bindless PBR path;
 //! no 纹理 slots are bound (u32::MAX) so the 标量 `base_color` /
 //! `metallic` / `roughness` drive the BRDF directly.
@@ -23,9 +23,7 @@ use prism_ecs::World;
 use prism_render::managers::{MaterialUploadInput, MeshHandle, MeshUploadInput};
 use prism_render::GraphRenderer;
 
-use crate::scene::components::{
-    LocalTransform, MaterialRef, MeshRef, SceneAssetId, WorldTransform,
-};
+use crate::scene::components::{LocalToWorld, LocalTransform, MaterialRef, MeshRef, SceneAssetId};
 
 /// Spacing between 球体 centres along the X axis 世界 units).
 const SPHERE_SPACING: f32 = 2.2;
@@ -228,13 +226,13 @@ pub fn spawn_calibration_spheres(
         world.insert(
             entity,
             LocalTransform {
-                translation: glam::Vec3::new(x, origin_y, origin_z),
+                position: glam::Vec3::new(x, origin_y, origin_z),
                 ..Default::default()
             },
         );
         world.insert(
             entity,
-            WorldTransform(translation_matrix(x, origin_y, origin_z)),
+            LocalToWorld(translation_matrix(x, origin_y, origin_z)),
         );
         log::debug!(
             "calibration sphere[{}] '{}': bc={:?} m={} r={} -> slot {}",

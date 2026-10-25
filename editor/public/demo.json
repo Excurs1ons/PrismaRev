@@ -3,12 +3,12 @@
     {
       "kind": "data",
       "path": "assets/asset-defs/default_env.cube.asset.json",
-      "sizeBytes": 161
+      "sizeBytes": 155
     },
     {
       "kind": "data",
       "path": "assets/asset-defs/default_material.asset.json",
-      "sizeBytes": 566
+      "sizeBytes": 543
     },
     {
       "kind": "texture",
@@ -19,6 +19,11 @@
       "kind": "texture",
       "path": "assets/fbx/coord.fbm/20250620_030912023_iOS.jpg",
       "sizeBytes": 348601
+    },
+    {
+      "kind": "texture",
+      "path": "assets/fbx/coord.fbm/genshin-impact-character-icons-png-17.png",
+      "sizeBytes": 8620
     },
     {
       "kind": "model",
@@ -41,54 +46,19 @@
       "sizeBytes": 1976948
     },
     {
-      "kind": "model",
-      "path": "assets/ibr/4d50312cbd1b9ab5/cube_512.bin",
-      "sizeBytes": 25165828
-    },
-    {
-      "kind": "model",
-      "path": "assets/ibr/4d50312cbd1b9ab5/irradiance_64.bin",
-      "sizeBytes": 393220
-    },
-    {
-      "kind": "model",
-      "path": "assets/ibr/4d50312cbd1b9ab5/prefiltered_mip0.bin",
-      "sizeBytes": 1572868
-    },
-    {
-      "kind": "model",
-      "path": "assets/ibr/4d50312cbd1b9ab5/prefiltered_mip1.bin",
-      "sizeBytes": 393220
-    },
-    {
-      "kind": "model",
-      "path": "assets/ibr/4d50312cbd1b9ab5/prefiltered_mip2.bin",
-      "sizeBytes": 98308
-    },
-    {
-      "kind": "model",
-      "path": "assets/ibr/4d50312cbd1b9ab5/prefiltered_mip3.bin",
-      "sizeBytes": 24580
-    },
-    {
-      "kind": "model",
-      "path": "assets/ibr/4d50312cbd1b9ab5/prefiltered_mip4.bin",
-      "sizeBytes": 6148
-    },
-    {
-      "kind": "model",
-      "path": "assets/ibr/brdf_lut_512.bin",
-      "sizeBytes": 2097156
+      "kind": "package",
+      "path": "assets/scenes.pak",
+      "sizeBytes": 1890
     },
     {
       "kind": "data",
       "path": "assets/scenes.pak.meta.json",
-      "sizeBytes": 727
+      "sizeBytes": 559
     },
     {
       "kind": "data",
       "path": "assets/scenes.toml",
-      "sizeBytes": 1702
+      "sizeBytes": 1661
     },
     {
       "kind": "scene",
@@ -98,7 +68,7 @@
     {
       "kind": "scene",
       "path": "assets/scenes/default.scene.json",
-      "sizeBytes": 4100
+      "sizeBytes": 3867
     },
     {
       "kind": "scene",
@@ -108,27 +78,32 @@
     {
       "kind": "data",
       "path": "assets/settings.toml",
-      "sizeBytes": 442
+      "sizeBytes": 415
+    },
+    {
+      "kind": "other",
+      "path": "assets/shaders/_gi_test.spv",
+      "sizeBytes": 4412
     },
     {
       "kind": "other",
       "path": "assets/shaders/compile.sh",
-      "sizeBytes": 8728
+      "sizeBytes": 8535
     },
     {
       "kind": "other",
       "path": "assets/shaders/fix_spirv.py",
-      "sizeBytes": 3274
+      "sizeBytes": 3187
     },
     {
       "kind": "other",
       "path": "assets/shaders/gi_bake.comp.spv",
-      "sizeBytes": 49584
+      "sizeBytes": 50720
     },
     {
       "kind": "other",
       "path": "assets/shaders/gi_render.comp.spv",
-      "sizeBytes": 44560
+      "sizeBytes": 44740
     },
     {
       "kind": "other",
@@ -138,22 +113,22 @@
     {
       "kind": "other",
       "path": "assets/shaders/gizmo.vert.spv",
-      "sizeBytes": 2216
+      "sizeBytes": 868
     },
     {
       "kind": "other",
       "path": "assets/shaders/gtao.frag.spv",
-      "sizeBytes": 10772
+      "sizeBytes": 7884
     },
     {
       "kind": "other",
       "path": "assets/shaders/gtao.vert.spv",
-      "sizeBytes": 1252
+      "sizeBytes": 1476
     },
     {
       "kind": "other",
       "path": "assets/shaders/mesh_vert.vert.spv",
-      "sizeBytes": 4256
+      "sizeBytes": 2716
     },
     {
       "kind": "other",
@@ -163,77 +138,77 @@
     {
       "kind": "other",
       "path": "assets/shaders/post.vert.spv",
-      "sizeBytes": 1072
+      "sizeBytes": 1140
     },
     {
       "kind": "other",
       "path": "assets/shaders/pt_render.comp.spv",
-      "sizeBytes": 89560
+      "sizeBytes": 91552
     },
     {
       "kind": "data",
       "path": "assets/shaders/reflection/gizmo.json",
-      "sizeBytes": 9653
+      "sizeBytes": 9421
     },
     {
       "kind": "data",
       "path": "assets/shaders/reflection/gtao.json",
-      "sizeBytes": 11769
+      "sizeBytes": 11468
     },
     {
       "kind": "data",
       "path": "assets/shaders/reflection/mesh_vert.json",
-      "sizeBytes": 24174
+      "sizeBytes": 23648
     },
     {
       "kind": "data",
       "path": "assets/shaders/reflection/post.json",
-      "sizeBytes": 5977
+      "sizeBytes": 5808
     },
     {
       "kind": "data",
       "path": "assets/shaders/reflection/pt_render.json",
-      "sizeBytes": 34959
+      "sizeBytes": 34132
     },
     {
       "kind": "data",
       "path": "assets/shaders/reflection/rt_preview.json",
-      "sizeBytes": 7970
+      "sizeBytes": 7758
     },
     {
       "kind": "data",
       "path": "assets/shaders/reflection/rt_render.json",
-      "sizeBytes": 6282
+      "sizeBytes": 6117
     },
     {
       "kind": "data",
       "path": "assets/shaders/reflection/scene_frag.json",
-      "sizeBytes": 45616
+      "sizeBytes": 44588
     },
     {
       "kind": "data",
       "path": "assets/shaders/reflection/shadow_depth.json",
-      "sizeBytes": 8439
+      "sizeBytes": 8242
     },
     {
       "kind": "data",
       "path": "assets/shaders/reflection/skybox.json",
-      "sizeBytes": 8853
+      "sizeBytes": 8626
     },
     {
       "kind": "data",
       "path": "assets/shaders/reflection/ui_overlay.json",
-      "sizeBytes": 8877
+      "sizeBytes": 8664
     },
     {
       "kind": "other",
       "path": "assets/shaders/rt_preview.frag.spv",
-      "sizeBytes": 1200
+      "sizeBytes": 1112
     },
     {
       "kind": "other",
       "path": "assets/shaders/rt_preview.vert.spv",
-      "sizeBytes": 848
+      "sizeBytes": 916
     },
     {
       "kind": "other",
@@ -243,12 +218,12 @@
     {
       "kind": "other",
       "path": "assets/shaders/rt_render.vert.spv",
-      "sizeBytes": 848
+      "sizeBytes": 916
     },
     {
       "kind": "other",
       "path": "assets/shaders/scene_frag.frag.spv",
-      "sizeBytes": 44436
+      "sizeBytes": 43988
     },
     {
       "kind": "other",
@@ -258,42 +233,42 @@
     {
       "kind": "other",
       "path": "assets/shaders/shadow_depth.vert.spv",
-      "sizeBytes": 2040
+      "sizeBytes": 844
     },
     {
       "kind": "other",
       "path": "assets/shaders/skybox.frag.spv",
-      "sizeBytes": 1608
+      "sizeBytes": 724
     },
     {
       "kind": "other",
       "path": "assets/shaders/skybox.vert.spv",
-      "sizeBytes": 2268
+      "sizeBytes": 1596
     },
     {
       "kind": "other",
       "path": "assets/shaders/slang/common.slang",
-      "sizeBytes": 2741
+      "sizeBytes": 2690
     },
     {
       "kind": "other",
       "path": "assets/shaders/slang/gi.slang",
-      "sizeBytes": 8542
+      "sizeBytes": 8359
     },
     {
       "kind": "other",
       "path": "assets/shaders/slang/gi_bake.slang",
-      "sizeBytes": 9408
+      "sizeBytes": 9180
     },
     {
       "kind": "other",
       "path": "assets/shaders/slang/gi_render.slang",
-      "sizeBytes": 3147
+      "sizeBytes": 3048
     },
     {
       "kind": "other",
       "path": "assets/shaders/slang/gizmo.slang",
-      "sizeBytes": 1018
+      "sizeBytes": 978
     },
     {
       "kind": "other",
@@ -303,12 +278,12 @@
     {
       "kind": "other",
       "path": "assets/shaders/slang/mesh_vert.slang",
-      "sizeBytes": 1895
+      "sizeBytes": 1836
     },
     {
       "kind": "other",
       "path": "assets/shaders/slang/path_integrator.slang",
-      "sizeBytes": 51603
+      "sizeBytes": 50461
     },
     {
       "kind": "other",
@@ -318,17 +293,22 @@
     {
       "kind": "other",
       "path": "assets/shaders/slang/pt_render.slang",
-      "sizeBytes": 29316
+      "sizeBytes": 28624
+    },
+    {
+      "kind": "other",
+      "path": "assets/shaders/slang/pt_render.spv",
+      "sizeBytes": 68760
     },
     {
       "kind": "other",
       "path": "assets/shaders/slang/rt_preview.slang",
-      "sizeBytes": 1251
+      "sizeBytes": 1211
     },
     {
       "kind": "other",
       "path": "assets/shaders/slang/rt_render.slang",
-      "sizeBytes": 1562
+      "sizeBytes": 1518
     },
     {
       "kind": "other",
@@ -338,27 +318,27 @@
     {
       "kind": "other",
       "path": "assets/shaders/slang/shadow_depth.slang",
-      "sizeBytes": 1509
+      "sizeBytes": 1468
     },
     {
       "kind": "other",
       "path": "assets/shaders/slang/skybox.slang",
-      "sizeBytes": 4257
+      "sizeBytes": 4161
     },
     {
       "kind": "other",
       "path": "assets/shaders/slang/ui_overlay.slang",
-      "sizeBytes": 2173
+      "sizeBytes": 2116
     },
     {
       "kind": "other",
       "path": "assets/shaders/ui_overlay.frag.spv",
-      "sizeBytes": 844
+      "sizeBytes": 392
     },
     {
       "kind": "other",
       "path": "assets/shaders/ui_overlay.vert.spv",
-      "sizeBytes": 756
+      "sizeBytes": 584
     },
     {
       "kind": "env",
@@ -382,6 +362,11 @@
           "name": "Skybox",
           "parent": null,
           "transform": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
             "rotation": [
               0.0,
               0.0,
@@ -392,11 +377,6 @@
               1.0,
               1.0,
               1.0
-            ],
-            "translation": [
-              0.0,
-              0.0,
-              0.0
             ]
           }
         },
@@ -410,6 +390,11 @@
           "name": "Gizmo",
           "parent": null,
           "transform": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
             "rotation": [
               0.0,
               0.0,
@@ -420,11 +405,6 @@
               1.0,
               1.0,
               1.0
-            ],
-            "translation": [
-              0.0,
-              0.0,
-              0.0
             ]
           }
         },
@@ -442,6 +422,11 @@
           "name": "Camera",
           "parent": null,
           "transform": {
+            "position": [
+              0.0,
+              2.5,
+              18.0
+            ],
             "rotation": [
               -0.06894800066947937,
               0.0,
@@ -452,11 +437,6 @@
               1.0,
               1.0,
               1.0
-            ],
-            "translation": [
-              0.0,
-              2.5,
-              18.0
             ]
           }
         },
@@ -480,6 +460,11 @@
           "name": "Sun",
           "parent": null,
           "transform": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
             "rotation": [
               0.0,
               0.0,
@@ -490,11 +475,6 @@
               1.0,
               1.0,
               1.0
-            ],
-            "translation": [
-              0.0,
-              0.0,
-              0.0
             ]
           }
         },
@@ -513,6 +493,11 @@
           "name": "PointLightRed",
           "parent": null,
           "transform": {
+            "position": [
+              2.0,
+              3.0,
+              2.0
+            ],
             "rotation": [
               0.0,
               0.0,
@@ -523,11 +508,6 @@
               1.0,
               1.0,
               1.0
-            ],
-            "translation": [
-              2.0,
-              3.0,
-              2.0
             ]
           }
         },
@@ -546,6 +526,11 @@
           "name": "PointLightGreen",
           "parent": null,
           "transform": {
+            "position": [
+              -2.0,
+              3.0,
+              -2.0
+            ],
             "rotation": [
               0.0,
               0.0,
@@ -556,11 +541,6 @@
               1.0,
               1.0,
               1.0
-            ],
-            "translation": [
-              -2.0,
-              3.0,
-              -2.0
             ]
           }
         },
@@ -579,6 +559,11 @@
           "name": "PointLightBlue",
           "parent": null,
           "transform": {
+            "position": [
+              0.0,
+              4.0,
+              4.0
+            ],
             "rotation": [
               0.0,
               0.0,
@@ -589,16 +574,11 @@
               1.0,
               1.0,
               1.0
-            ],
-            "translation": [
-              0.0,
-              4.0,
-              4.0
             ]
           }
         }
       ],
-      "version": 1
+      "version": 2
     },
     "assets/scenes/demo.scene.json": {
       "entities": [
@@ -616,6 +596,11 @@
           "name": "Camera",
           "parent": null,
           "transform": {
+            "position": [
+              0.0,
+              2.5,
+              18.0
+            ],
             "rotation": [
               0.0,
               0.0,
@@ -626,11 +611,6 @@
               1.0,
               1.0,
               1.0
-            ],
-            "translation": [
-              0.0,
-              2.5,
-              18.0
             ]
           }
         },
@@ -654,6 +634,11 @@
           "name": "Sun",
           "parent": null,
           "transform": {
+            "position": [
+              0.0,
+              6.0,
+              0.0
+            ],
             "rotation": [
               0.0,
               0.0,
@@ -664,11 +649,6 @@
               1.0,
               1.0,
               1.0
-            ],
-            "translation": [
-              0.0,
-              6.0,
-              0.0
             ]
           }
         },
@@ -687,6 +667,11 @@
           "name": "PointLight",
           "parent": null,
           "transform": {
+            "position": [
+              3.0,
+              3.0,
+              3.0
+            ],
             "rotation": [
               0.0,
               0.0,
@@ -697,11 +682,6 @@
               1.0,
               1.0,
               1.0
-            ],
-            "translation": [
-              3.0,
-              3.0,
-              3.0
             ]
           }
         },
@@ -748,6 +728,11 @@
           "name": "overlay",
           "parent": null,
           "transform": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
             "rotation": [
               0.0,
               0.0,
@@ -758,11 +743,6 @@
               1.0,
               1.0,
               1.0
-            ],
-            "translation": [
-              0.0,
-              0.0,
-              0.0
             ]
           }
         },
@@ -820,6 +800,11 @@
           "name": "title",
           "parent": 3,
           "transform": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
             "rotation": [
               0.0,
               0.0,
@@ -830,11 +815,6 @@
               1.0,
               1.0,
               1.0
-            ],
-            "translation": [
-              0.0,
-              0.0,
-              0.0
             ]
           }
         }
@@ -859,6 +839,11 @@
           "name": "intro_overlay",
           "parent": null,
           "transform": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
             "rotation": [
               0.0,
               0.0,
@@ -869,11 +854,6 @@
               1.0,
               1.0,
               1.0
-            ],
-            "translation": [
-              0.0,
-              0.0,
-              0.0
             ]
           }
         },
@@ -916,6 +896,11 @@
           "name": "intro_title",
           "parent": null,
           "transform": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
             "rotation": [
               0.0,
               0.0,
@@ -926,11 +911,6 @@
               1.0,
               1.0,
               1.0
-            ],
-            "translation": [
-              0.0,
-              0.0,
-              0.0
             ]
           }
         },
@@ -973,6 +953,11 @@
           "name": "intro_subtitle",
           "parent": null,
           "transform": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
             "rotation": [
               0.0,
               0.0,
@@ -983,11 +968,6 @@
               1.0,
               1.0,
               1.0
-            ],
-            "translation": [
-              0.0,
-              0.0,
-              0.0
             ]
           }
         },
@@ -1030,6 +1010,11 @@
           "name": "intro_prompt",
           "parent": null,
           "transform": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
             "rotation": [
               0.0,
               0.0,
@@ -1040,16 +1025,11 @@
               1.0,
               1.0,
               1.0
-            ],
-            "translation": [
-              0.0,
-              0.0,
-              0.0
             ]
           }
         }
       ],
-      "version": 1
+      "version": 2
     }
   },
   "documents": {
@@ -1078,7 +1058,7 @@
       "id": "empty",
       "label": "空实体",
       "name": "entity",
-      "translation": [
+      "position": [
         0.0,
         0.0,
         0.0
@@ -1092,7 +1072,7 @@
       "id": "camera",
       "label": "相机",
       "name": "Camera",
-      "translation": [
+      "position": [
         0.0,
         0.0,
         10.0
@@ -1105,7 +1085,7 @@
       "id": "sun",
       "label": "平行光",
       "name": "Sun",
-      "translation": [
+      "position": [
         0.0,
         6.0,
         0.0
@@ -1118,7 +1098,7 @@
       "id": "point_light",
       "label": "点光源",
       "name": "PointLight",
-      "translation": [
+      "position": [
         3.0,
         3.0,
         3.0
@@ -1132,7 +1112,7 @@
       "id": "mesh",
       "label": "网格",
       "name": "Mesh",
-      "translation": [
+      "position": [
         0.0,
         0.0,
         0.0
@@ -1145,7 +1125,7 @@
       "id": "skybox",
       "label": "天空盒",
       "name": "Skybox",
-      "translation": [
+      "position": [
         0.0,
         0.0,
         0.0
@@ -1160,7 +1140,7 @@
       "id": "ui",
       "label": "UI 元素",
       "name": "ui_node",
-      "translation": [
+      "position": [
         0.0,
         0.0,
         0.0
@@ -1441,6 +1421,11 @@
       },
       {
         "defaultJson": {
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
           "rotation": [
             0.0,
             0.0,
@@ -1451,11 +1436,6 @@
             1.0,
             1.0,
             1.0
-          ],
-          "translation": [
-            0.0,
-            0.0,
-            0.0
           ]
         },
         "fields": [
@@ -1463,7 +1443,7 @@
             "arrayLen": null,
             "inner": null,
             "kind": "struct",
-            "name": "translation",
+            "name": "position",
             "readOnly": false,
             "structType": "glam::Vec3"
           },
@@ -2199,6 +2179,11 @@
             "name": "Camera",
             "parent": null,
             "transform": {
+              "position": [
+                0.0,
+                0.0,
+                10.0
+              ],
               "rotation": [
                 0.0,
                 0.0,
@@ -2209,16 +2194,11 @@
                 1.0,
                 1.0,
                 1.0
-              ],
-              "translation": [
-                0.0,
-                0.0,
-                10.0
               ]
             }
           }
         ],
-        "version": 1
+        "version": 2
       },
       "empty": {
         "entities": [
@@ -2227,6 +2207,11 @@
             "name": "entity",
             "parent": null,
             "transform": {
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ],
               "rotation": [
                 0.0,
                 0.0,
@@ -2237,16 +2222,11 @@
                 1.0,
                 1.0,
                 1.0
-              ],
-              "translation": [
-                0.0,
-                0.0,
-                0.0
               ]
             }
           }
         ],
-        "version": 1
+        "version": 2
       },
       "mesh": {
         "entities": [
@@ -2261,6 +2241,11 @@
             "name": "Mesh",
             "parent": null,
             "transform": {
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ],
               "rotation": [
                 0.0,
                 0.0,
@@ -2271,16 +2256,11 @@
                 1.0,
                 1.0,
                 1.0
-              ],
-              "translation": [
-                0.0,
-                0.0,
-                0.0
               ]
             }
           }
         ],
-        "version": 1
+        "version": 2
       },
       "point_light": {
         "entities": [
@@ -2299,6 +2279,11 @@
             "name": "PointLight",
             "parent": null,
             "transform": {
+              "position": [
+                3.0,
+                3.0,
+                3.0
+              ],
               "rotation": [
                 0.0,
                 0.0,
@@ -2309,16 +2294,11 @@
                 1.0,
                 1.0,
                 1.0
-              ],
-              "translation": [
-                3.0,
-                3.0,
-                3.0
               ]
             }
           }
         ],
-        "version": 1
+        "version": 2
       },
       "skybox": {
         "entities": [
@@ -2335,6 +2315,11 @@
             "name": "Skybox",
             "parent": null,
             "transform": {
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ],
               "rotation": [
                 0.0,
                 0.0,
@@ -2345,16 +2330,11 @@
                 1.0,
                 1.0,
                 1.0
-              ],
-              "translation": [
-                0.0,
-                0.0,
-                0.0
               ]
             }
           }
         ],
-        "version": 1
+        "version": 2
       },
       "sun": {
         "entities": [
@@ -2378,6 +2358,11 @@
             "name": "Sun",
             "parent": null,
             "transform": {
+              "position": [
+                0.0,
+                6.0,
+                0.0
+              ],
               "rotation": [
                 0.0,
                 0.0,
@@ -2388,16 +2373,11 @@
                 1.0,
                 1.0,
                 1.0
-              ],
-              "translation": [
-                0.0,
-                6.0,
-                0.0
               ]
             }
           }
         ],
-        "version": 1
+        "version": 2
       },
       "ui": {
         "entities": [
@@ -2444,6 +2424,11 @@
             "name": "ui_node",
             "parent": null,
             "transform": {
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ],
               "rotation": [
                 0.0,
                 0.0,
@@ -2454,16 +2439,11 @@
                 1.0,
                 1.0,
                 1.0
-              ],
-              "translation": [
-                0.0,
-                0.0,
-                0.0
               ]
             }
           }
         ],
-        "version": 1
+        "version": 2
       }
     },
     "scene": {
@@ -2483,6 +2463,11 @@
             "name": "Camera",
             "parent": null,
             "transform": {
+              "position": [
+                0.0,
+                0.0,
+                10.0
+              ],
               "rotation": [
                 0.0,
                 0.0,
@@ -2493,16 +2478,11 @@
                 1.0,
                 1.0,
                 1.0
-              ],
-              "translation": [
-                0.0,
-                0.0,
-                10.0
               ]
             }
           }
         ],
-        "version": 1
+        "version": 2
       },
       "empty": {
         "entities": [
@@ -2511,6 +2491,11 @@
             "name": "Entity",
             "parent": null,
             "transform": {
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ],
               "rotation": [
                 0.0,
                 0.0,
@@ -2521,16 +2506,11 @@
                 1.0,
                 1.0,
                 1.0
-              ],
-              "translation": [
-                0.0,
-                0.0,
-                0.0
               ]
             }
           }
         ],
-        "version": 1
+        "version": 2
       },
       "lit": {
         "entities": [
@@ -2548,6 +2528,11 @@
             "name": "Camera",
             "parent": null,
             "transform": {
+              "position": [
+                0.0,
+                2.5,
+                18.0
+              ],
               "rotation": [
                 0.0,
                 0.0,
@@ -2558,11 +2543,6 @@
                 1.0,
                 1.0,
                 1.0
-              ],
-              "translation": [
-                0.0,
-                2.5,
-                18.0
               ]
             }
           },
@@ -2586,6 +2566,11 @@
             "name": "Sun",
             "parent": null,
             "transform": {
+              "position": [
+                0.0,
+                6.0,
+                0.0
+              ],
               "rotation": [
                 0.0,
                 0.0,
@@ -2596,11 +2581,6 @@
                 1.0,
                 1.0,
                 1.0
-              ],
-              "translation": [
-                0.0,
-                6.0,
-                0.0
               ]
             }
           },
@@ -2619,6 +2599,11 @@
             "name": "PointLight",
             "parent": null,
             "transform": {
+              "position": [
+                3.0,
+                3.0,
+                3.0
+              ],
               "rotation": [
                 0.0,
                 0.0,
@@ -2629,16 +2614,11 @@
                 1.0,
                 1.0,
                 1.0
-              ],
-              "translation": [
-                3.0,
-                3.0,
-                3.0
               ]
             }
           }
         ],
-        "version": 1
+        "version": 2
       },
       "ui": {
         "entities": [
@@ -2685,6 +2665,11 @@
             "name": "overlay",
             "parent": null,
             "transform": {
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ],
               "rotation": [
                 0.0,
                 0.0,
@@ -2695,11 +2680,6 @@
                 1.0,
                 1.0,
                 1.0
-              ],
-              "translation": [
-                0.0,
-                0.0,
-                0.0
               ]
             }
           },
@@ -2757,6 +2737,11 @@
             "name": "title",
             "parent": 0,
             "transform": {
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ],
               "rotation": [
                 0.0,
                 0.0,
@@ -2767,16 +2752,11 @@
                 1.0,
                 1.0,
                 1.0
-              ],
-              "translation": [
-                0.0,
-                0.0,
-                0.0
               ]
             }
           }
         ],
-        "version": 1
+        "version": 2
       }
     }
   },

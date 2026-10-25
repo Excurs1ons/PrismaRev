@@ -9,6 +9,7 @@
 pub mod components;
 pub mod helpers;
 pub mod json;
+pub mod migrate;
 pub mod registry;
 pub mod rscn;
 pub mod ui;
@@ -16,5 +17,6 @@ pub mod ui;
 pub use components::*;
 pub use helpers::HierarchyHelper;
 pub use json::{EntityJson, SceneJson, TransformJson};
+pub use migrate::{doc_version, migrate_scene_doc, SCENE_DOC_VERSION};
 pub use registry::{register_builtin_components, ComponentRegistry};
 pub use rscn::{decode_scene, encode_scene, DecodedEntity, DecodedScene, RscnError};

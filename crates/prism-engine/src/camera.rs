@@ -2,7 +2,7 @@
 //!
 //! 保留供参考/未来重新集成，但**不**接入 ECS 或渲染器。
 //! 当前激活的相机路径是 [`crate::scene::systems::camera`] 中的数据组件流程
-//!（`Camera` + `FlyCameraController` + `WorldTransform`）。
+//!（`Camera` + `FlyCameraController` + `LocalToWorld`）。
 //!
 //! `OrbitCamera` 是一个自包含的结构体，拥有自己的视图/投影数学
 //!（围绕目标点的球面坐标）。它作为独立类型保留，

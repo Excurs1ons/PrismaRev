@@ -5,7 +5,7 @@
 //!
 //! | 模块 | 函数 | Read/Write | Purpose |
 //! |-------------|----------|------------|---------|
-//! | `hierarchy` | `hierarchy_system` | 写入 | Recompute `WorldTransform` |
+//! | `hierarchy` | `hierarchy_system` | 写入 | Recompute `LocalToWorld` |
 //! | 渲染 | `scene_render_system` | 读取 | Collect `DrawItem`s |
 //! | `lights` | `collect_*` | 读取 | Collect 光源 components |
 //! | 相机 | `collect_camera` | 读取 | Collect 相机 分量 |

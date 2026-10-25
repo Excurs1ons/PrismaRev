@@ -34,7 +34,7 @@ pub use scene_system::{
 /// Scene hierarchy 适配器 for the 编辑器 检查器。
 ///
 /// Roots: entities with [`LocalTransform`] or [`Name`] but no [`Parent`].
-/// Children: via [`Children`] 分量。
+/// Child: via [`Child`] 分量。
 ///
 /// 外部工具 / 编辑器可为同一结构提供只读视图——引擎本身不依赖编辑器。
 pub struct SceneHierarchy;

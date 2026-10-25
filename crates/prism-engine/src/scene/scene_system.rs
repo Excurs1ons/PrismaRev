@@ -94,9 +94,7 @@ impl<'a> SceneReadView<'a> {
             .query::<super::components::Gizmo>()
             .filter(|(_, gizmo)| gizmo.enabled)
             .filter_map(|(entity, gizmo)| {
-                let transform = self
-                    .world
-                    .get::<super::components::WorldTransform>(entity)?;
+                let transform = self.world.get::<super::components::LocalToWorld>(entity)?;
                 let model =
                     transform.0 * glam::Mat4::from_scale(glam::Vec3::splat(gizmo.scale.max(0.0)));
                 Some(prism_render::GizmoInstance {
@@ -110,7 +108,7 @@ impl<'a> SceneReadView<'a> {
     pub fn draw_items(&self) -> Vec<prism_render::DrawItem> {
         self.world
             .query3::<
-                super::components::WorldTransform,
+                super::components::LocalToWorld,
                 super::components::MeshRef,
                 super::components::MaterialRef,
             >()

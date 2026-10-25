@@ -154,16 +154,16 @@ fn point_light_from_json(s: &str) -> Option<ScenePtLight> {
 
 fn local_transform_to_json(transform: &LocalTransform) -> String {
     format!(
-        "{{\"translation\":[{}],\"rotation\":[{}],\"scale\":[{}]}}",
-        fmt3(transform.translation),
+        "{{\"position\":[{}],\"rotation\":[{}],\"scale\":[{}]}}",
+        fmt3(transform.position),
         fmt4(transform.rotation),
         fmt3(transform.scale),
     )
 }
 
-fn local_transform_from_fields(translation: Vec3, rotation: Quat, scale: Vec3) -> LocalTransform {
+fn local_transform_from_fields(position: Vec3, rotation: Quat, scale: Vec3) -> LocalTransform {
     LocalTransform {
-        translation,
+        position,
         rotation,
         scale,
     }
@@ -214,7 +214,7 @@ pub fn save_scene_state(world: &World) {
             let ctrl = world.get::<FlyCameraController>(entity)?;
             let lt = world.get::<LocalTransform>(entity)?;
             Some(CameraState {
-                position: lt.translation,
+                position: lt.position,
                 yaw: ctrl.yaw,
                 pitch: ctrl.pitch,
                 fov_y: cam.fov_y_degrees.to_radians(),
@@ -230,7 +230,7 @@ pub fn save_scene_state(world: &World) {
         .query::<ScenePtLight>()
         .map(|(entity, light)| SavedPointLight {
             light: *light,
-            position: world.get::<LocalTransform>(entity).map(|t| t.translation),
+            position: world.get::<LocalTransform>(entity).map(|t| t.position),
             active: world.get::<Active>(entity).map(|a| a.0).unwrap_or(true),
         })
         .collect();
@@ -327,7 +327,7 @@ fn apply_scene_state(world: &mut World, text: &str) {
                 ctrl.look_sensitivity = cs.look_sensitivity;
             }
             if let Some(lt) = world.get_mut::<LocalTransform>(cam_entity) {
-                lt.translation = cs.position;
+                lt.position = cs.position;
             }
         }
     }
@@ -363,7 +363,7 @@ fn apply_scene_state(world: &mut World, text: &str) {
                 .zip(parsed_transforms.iter().take(legacy_point_transform_count))
             {
                 if saved.position.is_none() {
-                    saved.position = Some(transform.translation);
+                    saved.position = Some(transform.position);
                 }
             }
         }
@@ -386,12 +386,12 @@ fn apply_scene_state(world: &mut World, text: &str) {
             world.insert(entity, saved.light);
             if let Some(position) = saved.position {
                 if let Some(transform) = world.get_mut::<LocalTransform>(entity) {
-                    transform.translation = position;
+                    transform.position = position;
                 } else {
                     world.insert(
                         entity,
                         LocalTransform {
-                            translation: position.into(),
+                            position: position.into(),
                             ..Default::default()
                         },
                     );
@@ -560,7 +560,7 @@ fn parse_transform_array(s: &str) -> Vec<LocalTransform> {
             }
             None => break,
         };
-        let t = find_array_f32(&obj_str, "translation").unwrap_or_default();
+        let t = find_array_f32(&obj_str, "position").unwrap_or_default();
         let r = find_array_f32(&obj_str, "rotation").unwrap_or_default();
         let s = find_array_f32(&obj_str, "scale").unwrap_or_default();
         out.push(local_transform_from_fields(
