@@ -677,14 +677,6 @@
         },
         {
           "components": {
-            "prism_engine::ui::ComputedLayout": {
-              "rect": [
-                0.0,
-                0.0,
-                0.0,
-                0.0
-              ]
-            },
             "prism_engine::ui::Node": {},
             "prism_engine::ui::Style": {
               "anchors": {
@@ -738,14 +730,6 @@
         },
         {
           "components": {
-            "prism_engine::ui::ComputedLayout": {
-              "rect": [
-                0.0,
-                0.0,
-                0.0,
-                0.0
-              ]
-            },
             "prism_engine::ui::Node": {},
             "prism_engine::ui::Style": {
               "anchors": {
@@ -815,7 +799,6 @@
       "entities": [
         {
           "components": {
-            "prism_engine::ui::ComputedLayout": {},
             "prism_engine::ui::Node": {},
             "prism_engine::ui::Style": {
               "background": [
@@ -849,7 +832,6 @@
         },
         {
           "components": {
-            "prism_engine::ui::ComputedLayout": {},
             "prism_engine::ui::Node": {},
             "prism_engine::ui::Style": {
               "anchors": {
@@ -906,7 +888,6 @@
         },
         {
           "components": {
-            "prism_engine::ui::ComputedLayout": {},
             "prism_engine::ui::Node": {},
             "prism_engine::ui::Style": {
               "anchors": {
@@ -963,7 +944,6 @@
         },
         {
           "components": {
-            "prism_engine::ui::ComputedLayout": {},
             "prism_engine::ui::Node": {},
             "prism_engine::ui::Style": {
               "anchors": {
@@ -1201,8 +1181,7 @@
     {
       "components": [
         "prism_engine::ui::Node",
-        "prism_engine::ui::Style",
-        "prism_engine::ui::ComputedLayout"
+        "prism_engine::ui::Style"
       ],
       "id": "ui",
       "label": "UI 元素",
@@ -1986,39 +1965,6 @@
         "version": 1
       },
       {
-        "defaultJson": {
-          "rect": [
-            0.0,
-            0.0,
-            0.0,
-            0.0
-          ]
-        },
-        "fields": [
-          {
-            "arrayLen": 4,
-            "inner": {
-              "arrayLen": null,
-              "inner": null,
-              "kind": "f32",
-              "name": "",
-              "readOnly": false,
-              "structType": null,
-              "variants": null
-            },
-            "kind": "array",
-            "name": "rect",
-            "readOnly": false,
-            "structType": null,
-            "variants": null
-          }
-        ],
-        "isComponent": true,
-        "name": "prism_engine::ui::ComputedLayout",
-        "typeId": "436ee7806dc9e522",
-        "version": 1
-      },
-      {
         "defaultJson": {},
         "fields": [],
         "isComponent": true,
@@ -2463,6 +2409,32 @@
         "defaultJson": null,
         "fields": [
           {
+            "arrayLen": 4,
+            "inner": {
+              "arrayLen": null,
+              "inner": null,
+              "kind": "f32",
+              "name": "",
+              "readOnly": false,
+              "structType": null,
+              "variants": null
+            },
+            "kind": "array",
+            "name": "rect",
+            "readOnly": false,
+            "structType": null,
+            "variants": null
+          }
+        ],
+        "isComponent": false,
+        "name": "prism_engine::ui::ComputedLayout",
+        "typeId": "436ee7806dc9e522",
+        "version": 1
+      },
+      {
+        "defaultJson": null,
+        "fields": [
+          {
             "arrayLen": null,
             "inner": null,
             "kind": "f32",
@@ -2832,14 +2804,6 @@
         "entities": [
           {
             "components": {
-              "prism_engine::ui::ComputedLayout": {
-                "rect": [
-                  0.0,
-                  0.0,
-                  0.0,
-                  0.0
-                ]
-              },
               "prism_engine::ui::Node": {},
               "prism_engine::ui::Style": {
                 "anchors": {
@@ -3093,14 +3057,6 @@
         "entities": [
           {
             "components": {
-              "prism_engine::ui::ComputedLayout": {
-                "rect": [
-                  0.0,
-                  0.0,
-                  0.0,
-                  0.0
-                ]
-              },
               "prism_engine::ui::Node": {},
               "prism_engine::ui::Style": {
                 "anchors": {
@@ -3154,14 +3110,6 @@
           },
           {
             "components": {
-              "prism_engine::ui::ComputedLayout": {
-                "rect": [
-                  0.0,
-                  0.0,
-                  0.0,
-                  0.0
-                ]
-              },
               "prism_engine::ui::Node": {},
               "prism_engine::ui::Style": {
                 "anchors": {
