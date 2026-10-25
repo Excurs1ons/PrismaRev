@@ -26,7 +26,7 @@ use crate::offscreen::OffscreenTarget;
 use crate::pt_pass::PathTracePass;
 use crate::render_graph::{
     DrawItem, GraphFrame, RenderGraph, RenderGraphBuilder, RenderMode, RenderPassNode,
-    RenderSettings,
+    RenderSettings, ShadowMode,
 };
 use crate::scene_scope::SceneScope;
 use crate::swapchain::Swapchain;
@@ -91,6 +91,9 @@ pub struct FrameInput<'a> {
     /// Whether a usable 相机 实体 was 找到 When `false`, passes should
     /// skip camera-dependent 功 (skybox, PT rays) and leave the 清空 颜色
     pub has_camera: bool,
+    /// 主方向光是否投阴影（Unity `Light.shadows != None`）。`false` 时整帧
+    /// 跳过阴影贴图渲染（`ShadowMode::None`），着色器侧也会得到 `shadowStrength = 0`。
+    pub shadows_enabled: bool,
     /// 清空 颜色 for the scene 颜色 附件 Applied when the 渲染 pass
     /// begins; shows through where no skybox or geometry is drawn. 默认 gray
     /// `[0.5, 0.5, 0.5, 1.0]` lets the user distinguish "nothing drew" from
@@ -1299,6 +1302,7 @@ impl GraphRenderer {
             pt_accum_dirty,
             has_camera,
             clear_color,
+            shadows_enabled,
             ui_overlay,
         } = input;
         let light_view_proj = *light_view_proj;
@@ -1343,7 +1347,12 @@ impl GraphRenderer {
                 skybox: *skybox,
                 mesh_manager: &self.mesh_manager,
                 light_view_proj,
-                shadow_mode: self.settings.shadow_mode,
+                // 场景里没有投阴影的方向光时整帧跳过阴影 pass。
+                shadow_mode: if *shadows_enabled {
+                    self.settings.shadow_mode
+                } else {
+                    ShadowMode::None
+                },
                 debug_mode,
                 normal_space,
                 debug_flags,
@@ -1659,6 +1668,7 @@ impl GraphRenderer {
             pt_accum_dirty: true,
             has_camera: true,
             clear_color: [0.5, 0.5, 0.5, 1.0],
+            shadows_enabled: true,
             ui_overlay: None,
         };
         self.prepare(&ctx, &input)?;

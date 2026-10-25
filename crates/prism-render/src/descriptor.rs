@@ -285,10 +285,13 @@ pub struct FrameUBOData {
     /// 颜色 before tonemapping. 默认 1.0 = no scaling; 检查器 滑动条
     /// lets the user brighten/darken the entire 图像 uniformly. 偏移 252.
     pub exposure: f32, // offset 252
-    /// Pad to 272 字节 so the Rust `#[repr(C)]` 布局 matches the Slang
-    /// std140 `FrameUBO` 结构体 大小 must be a multiple of 16).
-    pub _pad2: [f32; 3], // offset 256..267
-    pub _pad3: f32,                // offset 268..271
+    /// 阴影强度 = Unity `Light.shadowStrength`（0 = 无阴影，1 = 全强度）。
+    ///
+    /// 复用原来的 `_pad2` 槽位，`FrameUBO` 仍是 272 字节；着色器在
+    /// `sample_shadow` 末尾用 `lerp(1, shadow, shadowStrength)` 应用。
+    pub shadow_strength: f32, // offset 256
+    /// 补到 272 字节（std140 要求 16 字节对齐）。
+    pub _pad2: [f32; 3], // offset 260..271
 }
 
 /// Per-frame UBO 缓冲区 and its 描述符 集合

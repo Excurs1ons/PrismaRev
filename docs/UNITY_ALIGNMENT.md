@@ -189,8 +189,8 @@ public 类型的只有 **43** 个（≈0.9%）。这既是现状，也是后续�
   `asset_database` / `prefab_utility` / `selection` / `undo` / `editor_application` /
   `scene_management`（与既有导出同名的函数只在模块路径下提供，避免根命名冲突）。
 - **P3 渲染/光照/相机** — 🔄 进行中。P3a（相机）与 P3b（光照：渲染枚举、
-  `Light` 组件、统一收集 + 聚光进 GPU、逐渲染器 `ShadowCastingMode`、编辑器光源预设
-  切到 `Light`）已落地，见 §9；剩余 `Light.shadows` 接线、渲染枚举批次与
+  `Light` 组件、统一收集 + 聚光进 GPU、逐渲染器 `ShadowCastingMode`、编辑器光源预设、
+  `Light.shadows`/`shadowStrength`）已落地，见 §9；剩余渲染枚举批次与
   P3c（相机行为）见 §9 待办。
 - **P4 编辑器扩展**：`PropertyDrawer` schema 扩展点 + `EditorWindow` 面板注册表 DTO。
 - **P5 资产流水线**：`AssetImporters`/`Build`/`Build.Profile`/`Compilation` 形状。
@@ -639,7 +639,7 @@ Unity 的 `Renderer.shadowCastingMode` 决定一个物体「是否投影」与�
 **已知遗留**
 - `TwoSided` 与 `On` 行为相同：光栅阴影贴图只渲染背面剔除后的三角形，双面投影需要
   阴影管线关闭剔除（值先保留，便于无损读写 Unity 数据）。
-- `Light.shadows` / `shadowStrength` 仍是数据，阴影仍由全局方向光贴图承担。
+- `Light.shadows` / `shadowStrength` 当时仍是数据（P3b-5 已接线）。
 
 ### P3b-4 — 编辑器光源预设切到 `Light` ✅
 
@@ -679,6 +679,52 @@ Unity 的 `Renderer.shadowCastingMode` 决定一个物体「是否投影」与�
 - **P3b 光照/渲染（剩余）**：`Light.shadows`/`shadowStrength` 接进阴影贴图
   （`ShadowMode::None` 时整帧跳过阴影）、`TwoSided` 关闭阴影剔除、渲染枚举批次
   （`BlendMode`/`CullMode`/`CompareFunction`/`RenderQueue`）。
+
+### P3b-5 — `Light.shadows` / `shadowStrength` 接线 ✅
+
+`Light` 的阴影字段之前只是数据（PR #14 的「已知遗留」）。这一批让它们真正生效：
+
+**prism-engine**
+- `lights.rs` 新增 `directional_shadow_state(&[LightSample]) -> (bool, f32)`：
+  `enabled = Light.shadows != None`、`strength = shadow_strength.clamp(0, 1)`；
+  没有方向光时 `(false, 0.0)`。
+- `SceneChanges` 新增 `shadows_enabled` / `shadow_strength`，
+  `collect_scene_changes` 从方向光采样一次算好。
+- `render_system` 把 `shadow_strength` 写进 `FrameUBOData`，把 `shadows_enabled`
+  透传给 `FrameInput`。
+
+**prism-render**
+- `FrameInput` 新增 `shadows_enabled`；`GraphFrame.shadow_mode` 在
+  `shadows_enabled == false` 时强制 `ShadowMode::None`（整帧跳过阴影贴图 pass，
+  而不只是不采样）。
+- `FrameUBOData` 用原来的 padding 槽位新增 `shadow_strength`（offset 256），
+  结构体仍是 272 字节；`common.slang` 同步。
+- `scene_frag.slang` 的 `sample_shadow` 末尾改成
+  `lerp(1.0, sum / 9.0, saturate(frame.shadowStrength))` —— `shadows = None`
+  （strength 0）时直接全亮，不会残留上一帧的脏阴影。
+
+**prism-app**
+- `render_runner` 的清屏色改用 `scene.clear_color`（顺手去掉写死的 `CLEAR_COLOR`），
+  并传入新的 `shadow_strength` / `shadows_enabled`。
+
+**行为变化**：`Light.shadows = None` 现在真的没有阴影（并省掉一次 shadow pass）；
+`shadow_strength = 0.5` 是半强度阴影。旧 `DirectionalLight` 采样固定为
+`Hard` / `1.0`，老场景不变；**没有方向光的场景**不再浪费一次阴影 pass。
+
+**验证**
+- ✅ `cargo test -p prism-engine -p prism-render` → 102 / 81 passed
+  （新增 4 个：Soft/0.6、None/0.4、无方向光、strength clamp）。
+- ✅ `bash assets/shaders/compile.sh`（slangc 2026.13.1，scene_frag）。
+- ✅ `cargo check --workspace --all-targets`、`python3 scripts/pr_ready.py`。
+
+**已知遗留**
+- `TwoSided` 仍等同 `On`（阴影管线未关闭剔除）。
+- `Light.shadows` 只影响**方向光**：点光/聚光本来就不投影。
+
+### 待办（下一批候选）
+- **P3b 光照/渲染（剩余）**：`TwoSided` 关闭阴影剔除、渲染枚举批次
+  （`BlendMode`/`CullMode`/`CompareFunction`/`RenderQueue`）；
+  点光/聚光还没有自己的阴影（只有方向光贴图）。
 - **P3c 相机行为**：用测试钉住 yaw↔quaternion 的 `−π/2` 偏移；`clear_flags` 的
   `Depth`/`Nothing` 语义接进 `ForwardPass`；多相机（`depth` 排序 + 叠加）。
 - 清理 `crates/prism-cooker/src/importer/scene.rs` 里**重复的（且已死）** `SceneJson` /
