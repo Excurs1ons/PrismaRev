@@ -146,13 +146,11 @@ fn collect_scene_changes(
     );
     let fallback_col = Vec4::new(1.0, 1.0, 1.0, 0.0);
 
-    // 1. 相机 — 第一个 启用 实体 with a 相机 分量
-    let (view_proj, eye, view, projection, exposure, has_camera) = {
-        let camera_entity = world
-            .query::<Camera>()
-            .find(|(_, c)| c.enabled)
-            .map(|(e, _)| e);
-        if let Some(cam_entity) = camera_entity {
+    // 1. 相机 — `depth` 最大的启用相机（Unity `Camera.main`）。取景与清屏必须同源，
+    //    所以清屏色稍后用 `compute_camera_output` 返回的实体去查，而不是再选一次。
+    let (view_proj, eye, view, projection, exposure, has_camera, camera_entity) = {
+        // 宽高比写到将被渲染的相机上：优先主相机，避免写完 A 却渲染 B。
+        if let Some(cam_entity) = scene::systems::camera::main_camera(world) {
             if let Some(cam) = world.get_mut::<Camera>(cam_entity) {
                 cam.aspect = display_aspect;
             }
@@ -165,6 +163,7 @@ fn collect_scene_changes(
                 out.projection,
                 out.exposure,
                 true,
+                Some(out.entity),
             ),
             None => {
                 log::warn!("no usable Camera entity — using fallback");
@@ -179,6 +178,7 @@ fn collect_scene_changes(
                     fb.projection,
                     fb.exposure,
                     false,
+                    None,
                 )
             }
         }
@@ -272,8 +272,10 @@ fn collect_scene_changes(
     // 5. Light-space view-projection (shadow 映射表
     let light_view_proj = light_view_proj(&light_direction, 30.0, &eye);
 
-    // 6. 清屏色 —— 取活动相机的 `background_color`（Unity `Camera.backgroundColor`）。
-    let clear_color = scene::systems::camera::clear_color(world);
+    // 6. 清屏色 —— 与取景来自**同一台**相机（Unity `Camera.backgroundColor`）。
+    let clear_color = camera_entity
+        .map(|entity| scene::systems::camera::clear_color(world, entity))
+        .unwrap_or(scene::systems::camera::DEFAULT_CLEAR_COLOR);
 
     SceneChanges {
         view_proj,
