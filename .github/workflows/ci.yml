@@ -40,10 +40,53 @@ concurrency:
 
 jobs:
   # ---------------------------------------------------------------------------
+  # 0. Doc-only fast path. The three jobs below are required status checks on
+  #    `master`; a job skipped by `if` reports "Success", so doc-only PRs stay
+  #    mergeable. (Skipping the whole workflow with `paths-ignore` would leave
+  #    those checks "Expected" and block the merge.)
+  # ---------------------------------------------------------------------------
+  changes:
+    name: changes
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: filter
+        run: |
+          set -u
+          base="${{ github.event.pull_request.base.sha || github.event.before }}"
+          # First push / manual dispatch: nothing to compare against → full CI.
+          if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # A failed diff can't prove the change is doc-only → fail closed, full CI.
+          if ! diff_out=$(git diff --name-only "$base" "$GITHUB_SHA" 2>/dev/null); then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ -z "$diff_out" ]; then
+            echo "code=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          changed=$(printf '%s\n' "$diff_out" \
+            | grep -Ev '^(docs/|.*\.md$|LICENSE.*|\.gitignore$)' || true)
+          if [ -n "$changed" ]; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "code=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # ---------------------------------------------------------------------------
   # 1. Formatting + lints. Runs in parallel with the heavier jobs.
   # ---------------------------------------------------------------------------
   lint:
     name: fmt + clippy
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -88,6 +131,8 @@ jobs:
   # ---------------------------------------------------------------------------
   desktop:
     name: desktop build + test
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -129,6 +174,8 @@ jobs:
   # ---------------------------------------------------------------------------
   shaders:
     name: slang compile + binding drift
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
