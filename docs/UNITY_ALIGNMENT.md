@@ -445,6 +445,27 @@ API 完整性 + 单测覆盖；前端只消费它们的**无状态**部分（见
 - 相机朝向偏移（`FlyCameraController.yaw = 0` 看向 **+X**，单位四元数看向 **−Z**，
   差 `−π/2`）仍未用测试钉住。
 
+### P3a-2 — 引擎接线 ✅
+
+P3a-1 只加了字段；这一批让引擎真的用上它们。
+
+- `scene/systems/camera.rs`：`perspective()` 委托 `Camera::projection_matrix`
+  （透视/正交都走同一处，测试在 `prism-scene`）；`compute_camera_output`
+  **不再强制要求 `FlyCameraController`** —— 缺失时直接用 `LocalToWorld` 的逆作为 view，
+  也就是 Unity 里"相机由 Transform 驱动"的形状，场景只放 `Camera` + 变换即可出画面；
+  新增 `all_cameras()`（按 `depth` 升序 = `Camera.allCameras`）、
+  `main_camera()`（`depth` 最大 = `Camera.main`）、`clear_color()` + `DEFAULT_CLEAR_COLOR`。
+- `render_system.rs`：`SceneChanges` 新增 `clear_color`，由 `collect_scene_changes`
+  从活动相机取；删掉写死的 `const CLEAR_COLOR` —— 清屏色现在真的跟着
+  `Camera.background_color` 走（复用已有的 `FrameInput.clear_color` 通路，零着色器改动）。
+
+**行为变化**：以前没有 `FlyCameraController` 的相机实体会落到 `fallback_camera_output`
+的固定灰底；现在会按实体朝向正常取景。这是 Unity 语义，但属于可见变化。
+
+**验证**
+- ✅ `cargo test -p prism-engine` → 87 passed（+1 ignored）。
+- ✅ `python3 scripts/pr_ready.py` 全绿。
+
 ### 待办（下一批候选）
 - **P3b 光照/渲染**：`Light`（`LightType`/`LightShadows`/`colorTemperature`）、
   `SpotLight` 接进 GPU 光列表、`ShadowCastingMode`、渲染枚举批次
