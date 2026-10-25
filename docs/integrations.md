@@ -69,6 +69,9 @@ sh tools/ci/ensure_labels.sh
 
 不做关键词猜 `bug`/`feature`——交给 issue 模板和分诊的人 / agent。
 
+Agent 发现 bug 时按 [`agent-issues.md`](agent-issues.md) 的格式提：先搜重复、写证据，
+首行 AI 声明，标签 `bug` / `enhancement` + `needs/triage` + `area/*`。
+
 ## 4. Discord 出站（`.github/workflows/discord-notify.yml`）
 
 在仓库 **Settings → Secrets and variables → Actions** 添加 `DISCORD_WEBHOOK_URL`（Discord
