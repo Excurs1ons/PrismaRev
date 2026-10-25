@@ -313,6 +313,10 @@ pub struct DrawItem {
     /// via `mat_map` when building the 绘制 列表 so passes can 推送 the
     /// 槽 directly without a per-draw `slot_of()` lookup.
     pub material: Option<u32>,
+    /// 是否写阴影贴图（Unity `ShadowCastingMode::casts_shadows`）。
+    pub cast_shadow: bool,
+    /// 是否在相机主通道可见（`ShadowsOnly` 为 `false`）。
+    pub visible_in_main_pass: bool,
 }
 
 /// Per-frame scene + lighting 状态 shared with every pass via [`RenderContext`].

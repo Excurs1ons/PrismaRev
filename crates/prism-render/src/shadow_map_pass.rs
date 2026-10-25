@@ -303,6 +303,8 @@ impl RenderPassNode for ShadowMapPass {
                 .cmd_begin_render_pass(ctx.cmd, &begin, vk::SubpassContents::INLINE)
         };
 
+        // 统计真正写进阴影贴图的 caster（`ShadowCastingMode::Off` 会被跳过）。
+        let mut casters = 0usize;
         unsafe {
             ctx.device.cmd_set_viewport(
                 ctx.cmd,
@@ -335,10 +337,15 @@ impl RenderPassNode for ShadowMapPass {
             );
 
             for item in ctx.frame.draw_list {
+                // Unity `ShadowCastingMode::Off` -> 不写阴影贴图。
+                if !item.cast_shadow {
+                    continue;
+                }
                 let uploaded = match ctx.frame.mesh_manager.get(item.mesh) {
                     Some(m) => &m.mesh,
                     None => continue,
                 };
+                casters += 1;
                 let vertex_buffers = [uploaded.vertex_buffer];
                 let offsets = [0u64];
                 ctx.device
@@ -373,10 +380,11 @@ impl RenderPassNode for ShadowMapPass {
         unsafe { ctx.device.cmd_end_render_pass(ctx.cmd) };
 
         log::trace!(
-            "ShadowMapPass: rendered {} draws into {}x{} shadow map",
-            ctx.frame.draw_list.len(),
+            "ShadowMapPass: rendered {} casters into {}x{} shadow map ({} in list)",
+            casters,
             size,
-            size
+            size,
+            ctx.frame.draw_list.len()
         );
         Ok(())
     }

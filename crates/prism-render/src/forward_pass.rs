@@ -1480,6 +1480,8 @@ impl RenderPassNode for ForwardPass {
             );
         }
 
+        // 统计真正提交的绘制数（`ShadowsOnly` 会被跳过）。
+        let mut drawn = 0usize;
         unsafe {
             ctx.device.cmd_set_viewport(
                 ctx.cmd,
@@ -1503,10 +1505,15 @@ impl RenderPassNode for ForwardPass {
             );
 
             for item in ctx.frame.draw_list {
+                // `ShadowsOnly` 物体不参与相机主通道（Unity `ShadowCastingMode`）。
+                if !item.visible_in_main_pass {
+                    continue;
+                }
                 let uploaded = match ctx.frame.mesh_manager.get(item.mesh) {
                     Some(m) => &m.mesh,
                     None => continue,
                 };
+                drawn += 1;
 
                 let vertex_buffers = [uploaded.vertex_buffer];
                 let offsets = [0u64];
@@ -1580,10 +1587,11 @@ impl RenderPassNode for ForwardPass {
         }
 
         log::trace!(
-            "ForwardPass: rendered {} draws into {}x{}",
-            ctx.frame.draw_list.len(),
+            "ForwardPass: rendered {} draws into {}x{} ({} in list)",
+            drawn,
             self.extent.width,
-            self.extent.height
+            self.extent.height,
+            ctx.frame.draw_list.len()
         );
         Ok(())
     }

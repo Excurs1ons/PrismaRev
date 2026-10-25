@@ -23,10 +23,20 @@ pub fn scene_render_system(world: &World) -> Vec<DrawItem> {
     world
         .query3::<LocalToWorld, MeshRef, MaterialRef>()
         .filter(|(e, _, _, _)| world.get::<Active>(*e).map(|a| a.0).unwrap_or(true))
-        .map(|(_, wt, mr, mar)| DrawItem {
-            mesh: mr.render_handle,
-            model: wt.0.to_cols_array_2d(),
-            material: Some(mar.material_slot),
+        .map(|(entity, wt, mr, mar)| {
+            // `MeshRenderer.shadow_casting_mode`（Unity `shadowCastingMode`）。
+            // 没有该组件的运行时实体按默认 `On` 处理。
+            let mode = world
+                .get::<MeshRenderer>(entity)
+                .map(|renderer| renderer.shadow_casting_mode)
+                .unwrap_or_default();
+            DrawItem {
+                mesh: mr.render_handle,
+                model: wt.0.to_cols_array_2d(),
+                material: Some(mar.material_slot),
+                cast_shadow: mode.casts_shadows(),
+                visible_in_main_pass: mode.visible_in_main_pass(),
+            }
         })
         .collect()
 }

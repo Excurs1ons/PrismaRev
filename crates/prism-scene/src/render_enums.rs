@@ -300,6 +300,82 @@ impl ReflectType for LightRenderMode {
     }
 }
 
+/// 阴影投射模式 = `UnityEngine.Rendering.ShadowCastingMode`。
+///
+/// 挂在渲染器上（见 [`crate::components::MeshRenderer::shadow_casting_mode`]），
+/// 决定该物体**主通道是否可见**以及**是否写阴影贴图**。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ShadowCastingMode {
+    /// 不投影、正常渲染。
+    Off,
+    /// 正常渲染 + 投影（默认，等价于 Unity 的 `On`）。
+    #[default]
+    On,
+    /// 双面投影 + 正常渲染。
+    ///
+    /// 光栅阴影贴图目前只渲染背面剔除后的三角形，所以这个变体的行为与
+    /// [`On`](Self::On) 相同；保留它是为了不失真地读写 Unity 数据。
+    TwoSided,
+    /// 只投影，主通道不可见。
+    ShadowsOnly,
+}
+
+impl ShadowCastingMode {
+    /// Unity 的枚举数值。
+    pub const fn unity_value(self) -> u32 {
+        match self {
+            Self::Off => 0,
+            Self::On => 1,
+            Self::TwoSided => 2,
+            Self::ShadowsOnly => 3,
+        }
+    }
+
+    /// 从 Unity 枚举数值还原；未知值返回 `None`。
+    pub const fn from_unity_value(value: u32) -> Option<Self> {
+        match value {
+            0 => Some(Self::Off),
+            1 => Some(Self::On),
+            2 => Some(Self::TwoSided),
+            3 => Some(Self::ShadowsOnly),
+            _ => None,
+        }
+    }
+
+    /// 是否写阴影贴图（`On` / `TwoSided` / `ShadowsOnly`）。
+    pub const fn casts_shadows(self) -> bool {
+        !matches!(self, Self::Off)
+    }
+
+    /// 是否出现在相机主通道（`Off` / `On` / `TwoSided`）。
+    pub const fn visible_in_main_pass(self) -> bool {
+        !matches!(self, Self::ShadowsOnly)
+    }
+}
+
+impl ReflectType for ShadowCastingMode {
+    fn field_type() -> FieldType {
+        FieldType::U8
+    }
+
+    fn enum_variants() -> Option<&'static [&'static str]> {
+        Some(&["Off", "On", "TwoSided", "ShadowsOnly"])
+    }
+
+    fn to_value(&self) -> Value {
+        Value::U64(u64::from(self.unity_value()))
+    }
+
+    fn from_value(value: Value) -> Result<Self, ReflectError> {
+        let raw = value.as_u64()?;
+        let raw = u32::try_from(raw)
+            .map_err(|_| ReflectError::BadData(format!("ShadowCastingMode 数值越界: {raw}")))?;
+        Self::from_unity_value(raw).ok_or_else(|| {
+            ReflectError::BadData(format!("invalid ShadowCastingMode discriminant {raw}"))
+        })
+    }
+}
+
 /// 色温（开尔文）→ 线性 RGB，对应 Unity `Mathf.CorrelatedColorTemperatureToRGB`。
 ///
 /// Unity 的实现是 native 的；这里用常用的黑体辐射近似（Tanner Helland 的分段
@@ -505,6 +581,42 @@ mod tests {
         assert!(LightType::from_value(Value::U64(99)).is_err());
         assert!(LightShadows::from_value(Value::U64(99)).is_err());
         assert!(LightRenderMode::from_value(Value::U64(99)).is_err());
+    }
+
+    #[test]
+    fn shadow_casting_mode_matches_unity_and_predicates() {
+        assert_eq!(ShadowCastingMode::Off.unity_value(), 0);
+        assert_eq!(ShadowCastingMode::On.unity_value(), 1);
+        assert_eq!(ShadowCastingMode::TwoSided.unity_value(), 2);
+        assert_eq!(ShadowCastingMode::ShadowsOnly.unity_value(), 3);
+        assert_eq!(ShadowCastingMode::from_unity_value(4), None);
+        assert_eq!(ShadowCastingMode::default(), ShadowCastingMode::On);
+        assert_eq!(
+            ShadowCastingMode::enum_variants().unwrap(),
+            &["Off", "On", "TwoSided", "ShadowsOnly"]
+        );
+
+        assert!(!ShadowCastingMode::Off.casts_shadows());
+        assert!(ShadowCastingMode::On.casts_shadows());
+        assert!(ShadowCastingMode::TwoSided.casts_shadows());
+        assert!(ShadowCastingMode::ShadowsOnly.casts_shadows());
+
+        assert!(ShadowCastingMode::Off.visible_in_main_pass());
+        assert!(ShadowCastingMode::On.visible_in_main_pass());
+        assert!(ShadowCastingMode::TwoSided.visible_in_main_pass());
+        assert!(!ShadowCastingMode::ShadowsOnly.visible_in_main_pass());
+
+        for mode in [
+            ShadowCastingMode::Off,
+            ShadowCastingMode::On,
+            ShadowCastingMode::TwoSided,
+            ShadowCastingMode::ShadowsOnly,
+        ] {
+            assert_eq!(
+                ShadowCastingMode::from_value(mode.to_value()).unwrap(),
+                mode
+            );
+        }
     }
 
     #[test]
