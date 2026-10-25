@@ -439,6 +439,11 @@ impl<T: ReflectType> ReflectType for Vec<T> {
         FieldType::List(Box::new(T::field_type()))
     }
 
+    /// 容器转发内层枚举的变体名：`Vec<Enum>` 字段的编辑器下拉框需要它们。
+    fn enum_variants() -> Option<&'static [&'static str]> {
+        T::enum_variants()
+    }
+
     fn to_value(&self) -> Value {
         Value::List(self.iter().map(T::to_value).collect())
     }
@@ -457,6 +462,11 @@ impl<T: ReflectType> ReflectType for Vec<T> {
 impl<T: ReflectType> ReflectType for Option<T> {
     fn field_type() -> FieldType {
         FieldType::Optional(Box::new(T::field_type()))
+    }
+
+    /// 同 [`Vec<T>`]：变体名属于内层枚举，`Option<Enum>` 也保留。
+    fn enum_variants() -> Option<&'static [&'static str]> {
+        T::enum_variants()
     }
 
     fn to_value(&self) -> Value {
@@ -478,6 +488,11 @@ impl<T: ReflectType> ReflectType for Option<T> {
 impl<T: ReflectType, const N: usize> ReflectType for [T; N] {
     fn field_type() -> FieldType {
         FieldType::Array(Box::new(T::field_type()), N)
+    }
+
+    /// 同 [`Vec<T>`]：定长数组里的枚举也要能渲染下拉框。
+    fn enum_variants() -> Option<&'static [&'static str]> {
+        T::enum_variants()
     }
 
     fn to_value(&self) -> Value {

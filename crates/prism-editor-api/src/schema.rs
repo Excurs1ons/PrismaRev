@@ -75,7 +75,12 @@ impl Schema {
 pub fn build_schema() -> Schema {
     let mut registry = ComponentRegistry::new();
     register_builtin_components(&mut registry);
+    build_schema_from(&registry)
+}
 
+/// 用给定注册表构建 schema。测试可借此注入只含容器枚举字段的组件，
+/// 不必为了覆盖 schema 逻辑往 `prism-scene` 里加真实组件。
+fn build_schema_from(registry: &ComponentRegistry) -> Schema {
     let component_names = registry.component_names();
     let types_registry = registry.type_registry();
 
@@ -117,10 +122,27 @@ fn field_schema(field: &FieldDesc, registry: &TypeRegistry) -> FieldSchema {
     let mut schema = leaf_schema(&field.ty, registry);
     schema.name = field.name.to_string();
     schema.read_only = field.read_only;
-    schema.variants = field
-        .enum_variants
-        .map(|variants| variants.iter().map(|name| (*name).to_string()).collect());
+    if let Some(variants) = field.enum_variants {
+        attach_variants(
+            &mut schema,
+            variants.iter().map(|name| (*name).to_string()).collect(),
+        );
+    }
     schema
+}
+
+/// 把枚举变体挂到**最内层**的标量 leaf 上。
+///
+/// `enum_variants()` 由 `Vec<T>` / `Option<T>` / `[T; N]` 向内层转发，所以
+/// `Vec<Enum>` 字段拿到的是 `inner`（`u8`）该有的变体名；前端只有叶子控件
+/// （以及数组/列表元素自己的 `FieldEditor`）会渲染下拉框。
+fn attach_variants(schema: &mut FieldSchema, variants: Vec<String>) {
+    match schema.inner.as_mut() {
+        Some(inner) if matches!(schema.kind, "list" | "option" | "array") => {
+            attach_variants(inner, variants);
+        }
+        _ => schema.variants = Some(variants),
+    }
 }
 
 /// 生成无名字段 schema（供 list/option/array 的元素与顶层复用）。
@@ -303,5 +325,73 @@ mod tests {
         assert_eq!(rect.kind, "array");
         assert_eq!(rect.array_len, Some(4));
         assert_eq!(rect.inner.as_ref().unwrap().kind, "f32");
+    }
+
+    // —— 容器里的枚举：`Vec<Enum>` / `Option<Enum>` / `[Enum; N]` ——
+
+    use prism_reflect::{FieldType, Reflect, ReflectError, ReflectType, Value};
+
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    enum TestAlign {
+        #[default]
+        Left,
+        Center,
+    }
+
+    impl ReflectType for TestAlign {
+        fn field_type() -> FieldType {
+            FieldType::U8
+        }
+
+        fn enum_variants() -> Option<&'static [&'static str]> {
+            Some(&["Left", "Center"])
+        }
+
+        fn to_value(&self) -> Value {
+            Value::U64(u64::from(*self as u8))
+        }
+
+        fn from_value(value: Value) -> Result<Self, ReflectError> {
+            match value.as_u64()? {
+                0 => Ok(Self::Left),
+                1 => Ok(Self::Center),
+                other => Err(ReflectError::BadData(format!("invalid TestAlign: {other}"))),
+            }
+        }
+    }
+
+    #[derive(Debug, Default, Reflect)]
+    #[reflect(name = "test::ContainerEnums")]
+    struct ContainerEnums {
+        flags: Vec<TestAlign>,
+        maybe: Option<TestAlign>,
+        fixed: [TestAlign; 2],
+    }
+
+    #[test]
+    fn container_enum_variants_reach_the_inner_leaf() {
+        let mut registry = ComponentRegistry::new();
+        registry.register_reflect::<ContainerEnums>();
+        let schema = build_schema_from(&registry);
+        let ty = schema
+            .type_by_name("test::ContainerEnums")
+            .expect("test component schema");
+        let field = |name: &str| ty.fields.iter().find(|f| f.name == name).unwrap();
+        let expected = || Some(vec!["Left".to_string(), "Center".to_string()]);
+
+        // 容器本身不带变体，变体在最内层的标量 leaf 上。
+        for (name, kind) in [("flags", "list"), ("maybe", "option"), ("fixed", "array")] {
+            let schema = field(name);
+            assert_eq!(schema.kind, kind, "{name} kind");
+            assert_eq!(
+                schema.variants, None,
+                "{name} must not carry variants itself"
+            );
+            let inner = schema.inner.as_ref().expect("container inner schema");
+            assert_eq!(inner.kind, "u8", "{name} inner kind");
+            assert_eq!(inner.variants, expected(), "{name} inner variants");
+        }
+
+        assert_eq!(field("fixed").array_len, Some(2));
     }
 }
