@@ -90,14 +90,8 @@ public 类型的只有 **43** 个（≈0.9%）。这既是现状，也是后续�
 | `Selection.*` | `prism_editor_api::selection` + 前端 store | 前后端各一半（前端有真实选中态） |
 | `Undo.*` | `prism_editor_api::undo` + 前端历史栈 | 同上（前端已有按字段合并的撤销） |
 | `EditorApplication.*` | `prism_editor_api::editor_application` | 包装 `play.rs`/`settings.rs` |
-| `EditorSceneManager`/`SceneManager` | `prism_editor_api::scene_management` | 包装 `scene.rs` 文档操作 |
-<<<<<<< HEAD
 | `BuildPipeline` | `prism_editor_api::build_profile` | 构建 profile / 目标组 / 场景构建顺序（执行仍在 `editor/src-tauri`） |
-| `PropertyDrawer` / `[CustomPropertyDrawer]` | **schema 扩展点** | 组件注册表里声明“字段渲染器”，经 schema 传给 Vue |
-=======
-| `BuildPipeline` | `prism_editor_api::build_pipeline` | 包装 build-scenes / build-project |
 | `PropertyDrawer` / `[CustomPropertyDrawer]` | `prism_editor_api::property_drawer` | 注册表声明“字段渲染器”，经 schema 的 `drawer` 传给 Vue |
->>>>>>> f0aacec (feat(editor): render PropertyDrawer fields in the inspector)
 | `EditorWindow` / `[MenuItem]` | **面板/命令注册表** | `PANELS` + `MENUS`（前端）由后端 DTO 驱动 |
 | `EditorUtility` | `prism_editor_api::editor_utility` | 包装 reveal/日志/对话框 |
 | `SerializedObject`/`SerializedProperty` | `reflect_edit` + schema | 已有反射写入，补 Unity 命名外观 |
@@ -830,9 +824,43 @@ Unity 的 `[Range]` / `[TextArea]` / `[ColorUsage]` 等**特性**由对应的 `P
 - 绘制器声明集中在 `prism-editor-api` 的内置表；`prism-scene` 的派生宏还没有
   `#[property(...)]` 语法糖——先让 schema 层集中声明，避免反射层依赖编辑器语义。
 
+### P3b-6b — 渲染状态枚举（`CullMode` / `CompareFunction` / `BlendMode` / `RenderQueue`）✅
+
+P3b-1a 建了光照枚举，这一批补上**渲染状态**的纯数据镜像（`prism-scene::render_enums`），
+让材质/渲染器层面的 Unity 字段有一份共同定义，检查器与 `prism-render` 都能复用。
+和 P3b-1a 一样：**只加数据，不改管线行为**。
+
+- `CullMode`（`UnityEngine.Rendering.CullMode`）：`Off=0` / `Front=1` / `Back=2`，
+  默认 `Back`（与现有图形管线的 `vk::CullModeFlags::BACK` 一致），谓词 `culls()`。
+- `CompareFunction`：`Disabled=0` … `Always=8`，默认 `LessEqual`（Unity 着色器 `ZTest`
+  的默认值），谓词 `is_enabled()`。[`Disabled`](Self::Disabled) 对应 Unity 的“关闭深度测试”，
+  Vulkan 没有对应的 `vk::CompareOp`，由 `prism-render` 用深度测试开关（`depth_test_enable(false)`）表达。
+- `BlendMode`：11 个 Unity 因子值（`Zero=0` … `OneMinusSrcAlpha=10`），默认 `One`
+  （与 `Zero` 组成不透明混合）。只描述**因子**；Unity 的 `BlendOp`
+  （Add/Sub/RevSub/Min/Max）是另一份数据，刻意留到下一批，避免半套状态。
+- `RenderQueue`：**形状不同** —— Unity 里它是包裹 `int` 的 struct，不是枚举，
+  具名队列只是 `static readonly int`。因此这里用 `RenderQueue(i32)` newtype +
+  关联常量（`BACKGROUND=1000` / `GEOMETRY=2000` / `ALPHA_TEST=2450` /
+  `GEOMETRY_LAST=2500` / `TRANSPARENT=3000` / `OVERLAY=4000`）、`value()`、
+  `is_opaque()`（`[0, GEOMETRY_LAST]`）/ `is_transparent()`（以 `GEOMETRY_LAST` 为界）；默认 `GEOMETRY`。
+  反射按 `FieldType::I32` 编码，任意值（含负数）都能无损往返。
+- 三个 C 风格枚举与 `CameraClearFlags` 走同一套编码（`FieldType::U8` +
+  `enum_variants()`），所以未来挂到组件字段上时检查器**自动**渲染成下拉框，
+  且不参与 `schema_hash`；`RenderQueue` 是数值框。
+
+**验证**
+- ✅ `cargo test -p prism-scene` → 65 passed（新增 4 个：`CullMode` 数值/默认/变体、
+  `CompareFunction` 全表 + 默认 `LessEqual`、`BlendMode` 全表 + 默认 `One`、
+  `RenderQueue` 具名值/区间/反射负数往返）。
+- ✅ `python scripts/pr_ready.py`（见 PR）。
+
+**这一批刻意没做**：`BlendOp` / `RenderQueueRange`；把枚举挂到 `MeshRenderer`
+（`cull_mode` / `render_queue`）或新建材质组件；`prism-render` 的管线状态翻译
+（`vk::CullModeFlags` / `vk::CompareOp` / `vk::BlendFactor`）。都留给后续批次。
+
 ### 待办（下一批候选）
-- **P3b 光照/渲染（剩余）**：渲染枚举批次
-  （`BlendMode`/`CullMode`/`CompareFunction`/`RenderQueue`）；
+- **P3b 光照/渲染（剩余）**：`BlendOp`（+ 混合状态整体接线）、`RenderQueueRange`；
+  把 `cull_mode` / `render_queue` / 混合挂到渲染器或材质组件并翻译成 Vulkan 管线状态；
   点光/聚光还没有自己的阴影（只有方向光贴图）。
 - **P3c 相机行为**：用测试钉住 yaw↔quaternion 的 `−π/2` 偏移；`clear_flags` 的
   `Depth`/`Nothing` 语义接进 `ForwardPass`；多相机（`depth` 排序 + 叠加）。
