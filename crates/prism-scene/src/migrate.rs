@@ -58,8 +58,62 @@ pub fn migrate_scene_doc(doc: &mut Value) -> Result<(), String> {
         version += 1;
     }
 
+    // 与版本无关的规范化：把历史 `components[LocalTransform]` 折回结构字段。
+    hoist_derived_components(root);
+
     root.insert("version".to_string(), json!(SCENE_DOC_VERSION));
     Ok(())
+}
+
+/// 把历史 `components[LocalTransform]` **bake** 进结构字段 `transform`。
+///
+/// 变换只有一个权威来源：作者写 `transform`，loader / cooker 再生成
+/// `LocalTransform` + `LocalToWorld`（对齐 Unity 作者态）。
+/// 早期文档允许把 `LocalTransform` 当普通组件写进 `components`，这里把它折进
+/// `transform` 并删除；两者同时存在时以结构字段为准（保留已作者的值）。
+fn hoist_derived_components(root: &mut Map<String, Value>) {
+    let Some(entities) = root.get_mut("entities").and_then(Value::as_array_mut) else {
+        return;
+    };
+    for entity in entities {
+        let Some(entity) = entity.as_object_mut() else {
+            continue;
+        };
+        let Some(legacy) = entity
+            .get_mut("components")
+            .and_then(Value::as_object_mut)
+            .and_then(|components| components.remove(LOCAL_TRANSFORM_KEY))
+        else {
+            continue;
+        };
+        let Some(legacy) = legacy.as_object() else {
+            continue;
+        };
+
+        let has_authored_transform = !matches!(entity.get("transform"), None | Some(Value::Null));
+        if has_authored_transform {
+            log::warn!(
+                "scene migration: dropping authored `{LOCAL_TRANSFORM_KEY}` component; \
+                 the structural `transform` field is authoritative"
+            );
+            continue;
+        }
+
+        let mut transform = Map::new();
+        for (field, fallback) in [
+            ("position", json!([0.0, 0.0, 0.0])),
+            ("rotation", json!([0.0, 0.0, 0.0, 1.0])),
+            ("scale", json!([1.0, 1.0, 1.0])),
+        ] {
+            let value = if field == "position" {
+                legacy.get("position").or_else(|| legacy.get("translation"))
+            } else {
+                legacy.get(field)
+            };
+            transform.insert(field.to_string(), value.cloned().unwrap_or(fallback));
+        }
+        entity.insert("transform".to_string(), Value::Object(transform));
+    }
 }
 
 /// v1 → v2：变换分量 `translation` 改名为 `position`。
@@ -75,16 +129,6 @@ fn migrate_v1_to_v2(root: &mut Map<String, Value>) {
         // 作者形状的 `transform` 对象。
         if let Some(transform) = entity.get_mut("transform").and_then(Value::as_object_mut) {
             rename_key(transform, "translation", "position");
-        }
-
-        // 组件载荷里的 `LocalTransform`。
-        if let Some(components) = entity.get_mut("components").and_then(Value::as_object_mut) {
-            if let Some(local) = components
-                .get_mut(LOCAL_TRANSFORM_KEY)
-                .and_then(Value::as_object_mut)
-            {
-                rename_key(local, "translation", "position");
-            }
         }
     }
 }
@@ -124,7 +168,7 @@ mod tests {
     }
 
     #[test]
-    fn v1_local_transform_component_is_renamed() {
+    fn legacy_local_transform_component_is_baked_into_transform() {
         let mut doc = json!({
             "entities": [{
                 "components": {
@@ -133,9 +177,28 @@ mod tests {
             }]
         });
         migrate_scene_doc(&mut doc).unwrap();
-        let c = &doc["entities"][0]["components"]["prism_engine::scene::LocalTransform"];
-        assert!(c.get("translation").is_none());
-        assert_eq!(c["position"], json!([4.0, 5.0, 6.0]));
+        let entity = &doc["entities"][0];
+        assert_eq!(entity["transform"]["position"], json!([4.0, 5.0, 6.0]));
+        assert_eq!(entity["transform"]["rotation"], json!([0.0, 0.0, 0.0, 1.0]));
+        assert_eq!(entity["transform"]["scale"], json!([1.0, 1.0, 1.0]));
+        assert!(entity["components"].get(LOCAL_TRANSFORM_KEY).is_none());
+    }
+
+    #[test]
+    fn authored_transform_wins_over_legacy_component() {
+        let mut doc = json!({
+            "version": 2,
+            "entities": [{
+                "transform": { "position": [1.0, 0.0, 0.0] },
+                "components": {
+                    "prism_engine::scene::LocalTransform": { "position": [9.0, 9.0, 9.0] }
+                }
+            }]
+        });
+        migrate_scene_doc(&mut doc).unwrap();
+        let entity = &doc["entities"][0];
+        assert_eq!(entity["transform"]["position"], json!([1.0, 0.0, 0.0]));
+        assert!(entity["components"].get(LOCAL_TRANSFORM_KEY).is_none());
     }
 
     #[test]

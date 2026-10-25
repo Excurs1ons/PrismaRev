@@ -93,6 +93,13 @@ registry.register_reflect_type::<glam::Vec3>();
   - 类型 id 不一致 → `ReflectError::TypeIdMismatch`。
 - `set_field` 拒绝 `read_only` 字段；`set_field_force` 忽略该限制，供反序列化使用。
 - `to_object()` 的字段顺序由 `BTreeMap` 决定，编码结果确定。
+- **变换是结构字段，不是可挂载组件**：作者只写 `EntityJson::transform`，loader / cooker
+  负责把它 bake 成 `LocalTransform` + `LocalToWorld`（对齐 Unity：作者态的 `Transform`
+  不可移除，`LocalTransform` 只属于运行时）。因此 `LocalTransform` 只在 `TypeRegistry`
+  里登记类型，不在 `ComponentRegistry` 的可挂载列表里；`.scene.json` 的 `components`
+  出现它会在迁移时折回 `transform`（`json::DERIVED_COMPONENTS`），手工构造的文档
+  则被 `SceneJson::validate()` 拒绝。否则 `registry.apply` 会在 `LocalToWorld`
+  算完之后覆盖 `LocalTransform`，留下一个按旧变换得到的世界矩阵。
 
 ## RTTIBin 格式（v1）
 
