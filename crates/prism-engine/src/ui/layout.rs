@@ -39,13 +39,15 @@ pub fn ui_layout_system(world: &mut World) {
         });
 
     // 先收集所有 `Node + Style` 实体及 Parent。
-    // `ComputedLayout` 是本系统的**输出**：作者不写它，缺失时在这里补默认值，
-    // 否则布局 / 命中测试 / 绘制（都以它为查询条件）会静默跳过该实体。
+    // 层级只认场景的 `Parent`（`HierarchyHelper` 维护的那一份），不再有第二份
+    // `UiParent` 状态。`ComputedLayout` 是本系统的**输出**：作者不写它，
+    // 缺失时在这里补默认值，否则布局 / 命中测试 / 绘制（都以它为查询条件）
+    // 会静默跳过该实体。
     // 分两遍：第一遍处理无 Parent 的根节点，第二遍处理子节点
     let layout_queue: Vec<(prism_ecs::Entity, Option<prism_ecs::Entity>)> = world
         .query2::<Node, Style>()
         .map(|(entity, _node, _style)| {
-            let parent = world.get::<UiParent>(entity);
+            let parent = world.get::<prism_scene::components::Parent>(entity);
             (entity, parent.map(|p| p.0))
         })
         .collect();
@@ -92,6 +94,11 @@ pub fn ui_layout_system(world: &mut World) {
 }
 
 /// 根据 Style 和父容器矩形计算屏幕空间矩形。
+///
+/// 语义对齐 Unity 的 `anchorMin` / `anchorMax` + `pivot`：
+/// - **拉伸轴**（`min != max`）：位置由锚点与边距决定，`pivot` **不参与**
+///   （否则全屏根元素会得到负的原点）；
+/// - **点锚点轴**（`min == max`）：尺寸取 `width`/`height`，位置按 `pivot` 对齐。
 fn compute_rect(style: &Style, parent: [f32; 4]) -> [f32; 4] {
     let (px, py, pw, ph) = (parent[0], parent[1], parent[2], parent[3]);
 
@@ -103,6 +110,9 @@ fn compute_rect(style: &Style, parent: [f32; 4]) -> [f32; 4] {
 
     let margin = &style.margin;
 
+    let stretched_x = style.anchors.min_x != style.anchors.max_x;
+    let stretched_y = style.anchors.min_y != style.anchors.max_y;
+
     // 固定尺寸 vs 锚点拉伸
     let w = style
         .width
@@ -113,16 +123,17 @@ fn compute_rect(style: &Style, parent: [f32; 4]) -> [f32; 4] {
     let w = w.max(0.0);
     let h = h.max(0.0);
 
-    // 锚点+边距决定矩形原点
-    let raw_left = anchor_left + margin.left;
-    let raw_top = anchor_top + margin.top;
-
-    // Pivot 偏移
-    let pivot_offset_x = style.pivot.x * w;
-    let pivot_offset_y = style.pivot.y * h;
-
-    let left = raw_left - pivot_offset_x;
-    let top = raw_top - pivot_offset_y;
+    // 拉伸轴：锚点+边距决定原点；点锚点轴：pivot 参与定位
+    let left = if stretched_x {
+        anchor_left + margin.left
+    } else {
+        anchor_left + margin.left - style.pivot.x * w
+    };
+    let top = if stretched_y {
+        anchor_top + margin.top
+    } else {
+        anchor_top + margin.top - style.pivot.y * h
+    };
 
     [left, top, w, h]
 }
