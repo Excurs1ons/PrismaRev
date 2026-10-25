@@ -149,25 +149,31 @@ impl SceneJson {
     ///
     /// Cycles (which [`Self::validate`] only rejects for self-parents) are
     /// broken deterministically by appending the remaining entities.
+    ///
+    /// Linear in the number of entities: children are bucketed once instead of
+    /// rescanning the whole array for every visited node.
     pub fn topological_order(&self) -> Vec<usize> {
         let n = self.entities.len();
         let mut order = Vec::with_capacity(n);
         let mut visited = vec![false; n];
 
-        let mut queue: Vec<usize> = (0..n)
-            .filter(|&i| self.entities[i].parent.is_none())
-            .collect();
+        let mut children: Vec<Vec<usize>> = vec![Vec::new(); n];
+        let mut roots = Vec::new();
+        for (index, entity) in self.entities.iter().enumerate() {
+            match entity.parent {
+                Some(parent) => children[parent as usize].push(index),
+                None => roots.push(index),
+            }
+        }
+
+        let mut queue = roots;
         while let Some(index) = queue.pop() {
             if visited[index] {
                 continue;
             }
             visited[index] = true;
             order.push(index);
-            for child in (0..n).rev() {
-                if !visited[child] && self.entities[child].parent == Some(index as u32) {
-                    queue.push(child);
-                }
-            }
+            queue.extend(children[index].iter().rev().copied());
         }
 
         for (index, seen) in visited.iter().enumerate() {
