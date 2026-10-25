@@ -2775,6 +2775,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "prism-gfx"
+version = "0.1.0"
+dependencies = [
+ "glam 0.33.2",
+ "prism-reflect",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "prism-platform"
 version = "0.1.0"
 dependencies = [
@@ -2813,6 +2823,7 @@ dependencies = [
  "fontdue",
  "image",
  "log",
+ "prism-gfx",
  "raw-window-handle",
  "slotmap",
  "winit",
@@ -2825,6 +2836,7 @@ dependencies = [
  "glam 0.33.2",
  "log",
  "prism-ecs",
+ "prism-gfx",
  "prism-reflect",
  "serde",
  "serde_json",

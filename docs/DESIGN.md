@@ -579,7 +579,8 @@ pub struct SceneReadView<'a> {
 | crate | 角色 | 职责 | 主要依赖 |
 |-------|------|------|----------|
 | `prism-asset` | 运行时 | `AssetId`（64 bit gen+serial）、`AssetType`、`Handle<T>`、`.pak`（RPAK + zstd + xxh3）、`ResourceManager`（懒加载/预算/热重载）、streaming | serde, zstd, tokio（feature-gated） |
-| `prism-scene` | schema | 场景/UI 组件、`ComponentRegistry`、`.scene.json` 作者格式、RSCN v4 编解码 | `prism-ecs`、`prism-reflect`、serde |
+| `prism-gfx` | 共享数据 | Unity 形状的渲染状态枚举（`CullMode`/`CompareFunction`/`BlendMode`/`RenderQueue`/`ShadowCastingMode`/光照与相机枚举）+ 反射编码；Vulkan-free、ECS-free | `prism-reflect`、serde、glam |
+| `prism-scene` | schema | 场景/UI 组件、`ComponentRegistry`、`.scene.json` 作者格式、RSCN v4 编解码 | `prism-ecs`、`prism-reflect`、`prism-gfx`、serde |
 | `prism-cooker` | 构建期 | importer 框架、cooker 框架、CookProfile、资产数据库/导入缓存、`SceneCooker`、CLI `prism-cook` | `prism-asset`、`prism-scene`、image、gltf |
 | `prism-build-pipeline` | 编排 | `bake-gi`、`cook`、`heightmap` 等批处理入口；调用 cooker，不进入运行时 | `prism-cooker`、`prism-engine` |
 

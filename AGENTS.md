@@ -31,6 +31,11 @@ deviating from those conventions is a bug. (`README.md` is the human-facing over
 - `crates/prism-reflect` — 运行时反射（`Reflect`/`TypeDesc`/`TypeRegistry`）+
   自描述二进制 RTTIBin（`rtti_bin`）。UI-framework-free，不依赖 engine/render。
 - `crates/prism-reflect-derive` — `#[derive(Reflect)]` 过程宏（仅编译期依赖）。
+- `crates/prism-gfx` — 跨场景/渲染共享的**纯数据**渲染状态枚举（`CullMode` /
+  `CompareFunction` / `BlendMode` / `RenderQueue` / `ShadowCastingMode` / 光照与相机枚举）+
+  Unity 形状的反射编码。**不依赖 ash/Vulkan，也不依赖 ECS**；`prism-scene` 与
+  `prism-render` 都依赖它，`prism_scene::render_enums` 只是它的 re-export。
+  翻译成 Vulkan 状态（剔除位、混合因子……）留在 `prism-render`。
 - `crates/prism-scene` — 场景 schema 层：纯数据组件、`ComponentRegistry`、`.scene.json`
   作者格式、RSCN v4 编解码。UI / render / audio-free；cooker 与 engine 共用这一份 schema。
 - `crates/prism-render` — Vulkan backend: context, swapchain, render-graph passes (`forward_pass.rs`/`shadow_map_pass.rs`/`skybox_pass.rs`),

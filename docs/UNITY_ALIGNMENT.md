@@ -870,10 +870,10 @@ P3b-6 只加了枚举；这一批让 `CullMode` 真正变成 Vulkan 管线状态
   `SCENE_DOC_VERSION` 保持 3）。作者 JSON 取值是 `"Off"` / `"Front"` / `"Back"`。
 
 **prism-render**
-- `DrawItem.cull_mode: DrawCullMode`（`render_graph.rs`）。`prism-render` 不依赖
-  `prism-scene`，所以这里放一份最小的三值中立枚举 + `to_vk()`；引擎负责映射。
+- `DrawItem.cull_mode: prism_gfx::CullMode`（共享枚举，见下方「抽出 `prism-gfx`」）。
+  把枚举翻译成 Vulkan 位的是 `pipeline::cull_flags()`，保留在渲染器一侧。
 - `ForwardPass` 的 `pipeline: Option<GraphicsPipeline>` 换成
-  `pipelines: HashMap<DrawCullMode, GraphicsPipeline>`：三种剔除模式在启动时各建一条
+  `pipelines: HashMap<CullMode, GraphicsPipeline>`：三种剔除模式在启动时各建一条
   （`ensure_pipelines`），因为剔除是**管线状态**而不是动态状态。三条变体的描述符集合
   布局与推送常量完全相同，所以描述符集 / 推送常量只在循环外绑一次，循环里只在
   `item.cull_mode` 变化时 `cmd_bind_pipeline`。
@@ -882,8 +882,8 @@ P3b-6 只加了枚举；这一批让 `CullMode` 真正变成 Vulkan 管线状态
 
 **prism-engine**
 - `scene_render_system` 与 `SceneReadView::draw_items()` 都从 `MeshRenderer.cull_mode`
-  取状态（缺组件按 `Back`），经 `draw_cull_mode()` 映射到 `DrawCullMode`
-  （两个类型分属不同 crate，孤儿规则不允许 `From`，所以是显式映射函数）。
+  取状态（缺组件按 `Back`），**直接**放进绘制项——枚举现在由 `prism-gfx` 共享，
+  不再需要映射函数。
 - `loader.rs` 的 bundle 插入补 `cull_mode: Default::default()`。
 
 **行为变化**：`cull_mode = "Off"` 的物体现在真的双面可见（此前一律背面剔除）；
@@ -901,6 +901,35 @@ P3b-6 只加了枚举；这一批让 `CullMode` 真正变成 Vulkan 管线状态
 **这一批刻意没做**：混合状态（`BlendMode` / `BlendOp`）与 `RenderQueue` 的绘制排序、
 透明度（`ZWrite` / 距离排序）——它们需要材质级管线变体 + 排序，单独一批；
 `BlendOp` 枚举也留到那时一起加。点光/聚光阴影仍未实现。
+
+### 重构 — 抽出 `prism-gfx`（共享渲染状态）✅
+
+`CullMode` 要同时被场景 schema（`prism-scene`）和 Vulkan 管线（`prism-render`）使用，
+而 `prism-render` 不依赖 `prism-scene`（也不该依赖：场景 schema 是上层概念）。上一批用
+「渲染器侧镜像一份 `DrawCullMode` + 引擎映射函数」绕过去了，但每加一个共享枚举（`BlendOp`、
+`RenderQueueRange`、以后的 `FilterMode`/`WrapMode`）都要重付一次，所以这次把数据抽出来。
+
+- 新 crate `crates/prism-gfx`：**纯数据 + 反射编码**，依赖 `prism-reflect` / `serde` / `glam`，
+  **不依赖 ash、不依赖 ECS**。内容就是原 `prism_scene::render_enums` 的全部枚举
+  （光照 + 相机 + 渲染状态）与 `correlated_color_temperature_to_rgb`，连同它们的单测。
+- `prism-scene`：`render_enums.rs` 变成 `pub use prism_gfx::*;` ——
+  `prism_scene::render_enums::*`、`prism_scene::CullMode` 等**历史路径全部不变**，
+  cooker / engine / editor-api 零改动。
+- `prism-render`：依赖 `prism-gfx`，`DrawItem.cull_mode` 直接用共享 `CullMode`；
+  删掉 `DrawCullMode` 与引擎里的 `draw_cull_mode()` 映射；Vulkan 翻译收敛到
+  `pipeline::cull_flags()`（`prism-gfx` 保持 Vulkan-free）。
+- 分层文档同步：`AGENTS.md` 的 crate 清单、`docs/DESIGN.md` §10.2 的表、
+  CI 的 `cargo clippy/test -p ...` 列表都补上 `prism-gfx`。
+
+**验证**：`cargo test -p prism-gfx -p prism-scene -p prism-engine -p prism-render`
+→ 18 / 48 / 108(+3) / 82 passed（枚举单测随类型一起搬到 `prism-gfx`，scene 只剩 schema 测试）；
+`python scripts/pr_ready.py` 全绿。
+
+**顺带修正一条过时结论**：§9 P3b-3 的「`TwoSided` 与 `On` 相同，因为阴影管线只渲染
+背面剔除后的三角形」描述有误 —— `ShadowMapPass` 的两条管线本来就用
+`cull_mode: Some(vk::CullModeFlags::NONE)`（双面写深度），所以 `TwoSided` 的投影语义
+**已经**被满足；两者视觉等价是既有行为，不是待修缺陷。
+
 ### 待办（下一批候选）
 - **P3b 光照/渲染（剩余）**：`BlendOp` + 混合状态（`BlendMode` 因子）与 `RenderQueue`
   排序、透明度（材质管线变体、`ZWrite`、透明物体按距离排序）；
