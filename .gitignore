@@ -86,3 +86,9 @@ assets/external
 # Deepwork session state
 .slim/deepwork/
 assets/heightmaps/
+
+# Local secrets: GitHub App private keys, bot tokens, local env files.
+*.pem
+.secrets/
+.env
+.env.local
