@@ -647,8 +647,7 @@ Unity 的 `Renderer.shadowCastingMode` 决定一个物体「是否投影」与�
   `python3 scripts/pr_ready.py` 全绿。
 
 **已知遗留**
-- `TwoSided` 与 `On` 行为相同：光栅阴影贴图只渲染背面剔除后的三角形，双面投影需要
-  阴影管线关闭剔除（值先保留，便于无损读写 Unity 数据）。
+- `TwoSided` 当时与 `On` 行为相同（P3b-6 已让阴影通道按它关闭背面剔除）。
 - `Light.shadows` / `shadowStrength` 当时仍是数据（P3b-5 已接线）。
 
 ### P3b-4 — 编辑器光源预设切到 `Light` ✅
@@ -735,11 +734,50 @@ Unity 的 `Renderer.shadowCastingMode` 决定一个物体「是否投影」与�
 - ✅ `cargo check --workspace --all-targets`、`python3 scripts/pr_ready.py`。
 
 **已知遗留**
-- `TwoSided` 仍等同 `On`（阴影管线未关闭剔除）。
+- `TwoSided` 当时仍等同 `On`（P3b-6 已接线）。
 - `Light.shadows` 只影响**方向光**：点光/聚光本来就不投影。
 
+### P3b-6 — `ShadowCastingMode::TwoSided` 关闭阴影背面剔除 ✅
+
+Unity `ShadowCastingMode.TwoSided` 的语义是：**阴影渲染时关闭背面剔除**
+（即使材质本身开了背面剔除），因此单面几何体也会从两面投射阴影。
+P3b-3 只把该变体接进 `cast_shadow` / `visible_in_main_pass`，但光栅阴影管道当时对
+所有 caster 都用 `CullModeFlags::NONE`，所以 `TwoSided` 与 `On` 没有区别（也与 Unity
+「`On` 单面」的语义不符）。
+
+**prism-scene**
+- `ShadowCastingMode::casts_two_sided_shadows()`：只有 `TwoSided` 为真；
+  修正 `TwoSided` 的文档注释（原文案「与 On 相同」已过时）。
+
+**prism-render**
+- `DrawItem` 新增 `cast_shadow_two_sided`（引擎按组件填好，pass 只读）。
+- `ShadowMapPass` 改为**两套 depth-only 管线**：背面剔除（`CullModeFlags::BACK`，
+  `Off`/`On`/`ShadowsOnly`）与双面不剔除（`NONE`，`TwoSided`）；绘制时按
+  `cast_shadow_two_sided` 选择、仅在模式切换时重绑；推送常量用当前绑定管线的布局。
+  管线创建抽成 `create_pipeline(device, render_pass, cull_mode)`（`warmup`/`execute`
+  共用），并新增 `shadow_cull_mode(two_sided)` 单测。
+- 默认阴影管线从 `NONE` 改为 `BACK`：这是 Unity `On` 的语义，也与主通道默认剔除一致。
+
+**prism-engine**
+- `scene_render_system` / `SceneReadView::draw_items` 把
+  `mode.casts_two_sided_shadows()` 写进 `cast_shadow_two_sided`。
+
+**行为变化**：`ShadowCastingMode::On` 的阴影贴图现在做背面剔除（与主通道一致的
+单面投影），`TwoSided` 才双面投射；两者不再等价。旧场景默认 `On`，因此此前依赖
+「阴影也渲染背面」的薄面/开口几何体，阴影可能变薄——这是 Unity 的预期语义。
+
+**验证**
+- ✅ `cargo test -p prism-scene -p prism-render -p prism-engine` → 61 / 82+3 / 113 passed；
+  新增/更新断言：`TwoSided` 关闭剔除，`Off`/`On`/`ShadowsOnly` 不关闭。
+- ✅ `cargo check -p prism-scene -p prism-render -p prism-engine --all-targets`。
+
+**已知遗留**
+- 逐 caster 的阴影管线切换是状态式的（按绘制顺序），乱序时会有额外重绑，
+  但正确性不受影响。
+- 点光/聚光仍只有方向光的阴影贴图（与 `TwoSided` 无关）。
+
 ### 待办（下一批候选）
-- **P3b 光照/渲染（剩余）**：`TwoSided` 关闭阴影剔除、渲染枚举批次
+- **P3b 光照/渲染（剩余）**：渲染枚举批次
   （`BlendMode`/`CullMode`/`CompareFunction`/`RenderQueue`）；
   点光/聚光还没有自己的阴影（只有方向光贴图）。
 - **P3c 相机行为**：用测试钉住 yaw↔quaternion 的 `−π/2` 偏移；`clear_flags` 的

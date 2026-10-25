@@ -245,6 +245,11 @@ The user project's dependency chain must stay **UI-framework-free and editor-fre
   `forward_pass.execute` per frame.
 - Resource lifetimes: framebuffers/depth must be destroyed **before** swapchain recreate
   (`forward_pass.drop_target`) to avoid `VUID-vkDestroyFramebuffer-...` validation + device-lost.
+- `ShadowCastingMode::TwoSided` disables back-face culling **in the shadow pass only**:
+  `ShadowMapPass` keeps two depth-only pipelines (`CullModeFlags::BACK` for
+  `Off`/`On`/`ShadowsOnly`, `NONE` for `TwoSided`) and selects per
+  `DrawItem::cast_shadow_two_sided`. Do not collapse them back into a single `NONE` pipeline
+  (that would silently reintroduce `On == TwoSided`).
 - Descriptor set indices are fixed by the Slang layouts: set 0 = frame UBO/materials/lights,
   set 1 = bindless textures, set 2 = IBL (env/irradiance/prefiltered), set 3 = shadow map.
   Skybox reuses set 0 = IBL `envCube` (combined image sampler).

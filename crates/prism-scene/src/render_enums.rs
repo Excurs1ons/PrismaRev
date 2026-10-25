@@ -313,8 +313,9 @@ pub enum ShadowCastingMode {
     On,
     /// 双面投影 + 正常渲染。
     ///
-    /// 光栅阴影贴图目前只渲染背面剔除后的三角形，所以这个变体的行为与
-    /// [`On`](Self::On) 相同；保留它是为了不失真地读写 Unity 数据。
+    /// 对应 Unity `ShadowCastingMode.TwoSided`：阴影渲染时**关闭背面剔除**
+    /// （即使材质本身开启了背面剔除），因此单面几何体也会从两面投射阴影
+    /// （见 [`casts_two_sided_shadows`](Self::casts_two_sided_shadows)）。
     TwoSided,
     /// 只投影，主通道不可见。
     ShadowsOnly,
@@ -350,6 +351,16 @@ impl ShadowCastingMode {
     /// 是否出现在相机主通道（`Off` / `On` / `TwoSided`）。
     pub const fn visible_in_main_pass(self) -> bool {
         !matches!(self, Self::ShadowsOnly)
+    }
+
+    /// 阴影渲染是否关闭背面剔除（Unity `ShadowCastingMode.TwoSided`）。
+    ///
+    /// Unity 文档：`TwoSided` 会在**阴影渲染时关闭背面剔除**，即使物体材质
+    /// 本身开了背面剔除。因此 `Off` / `On` / `ShadowsOnly` 走背面剔除
+    /// （`false`），只有 `TwoSided` 双面投射（`true`）。只影响阴影通道，
+    /// 不影响 [`visible_in_main_pass`](Self::visible_in_main_pass)。
+    pub const fn casts_two_sided_shadows(self) -> bool {
+        matches!(self, Self::TwoSided)
     }
 }
 
@@ -605,6 +616,12 @@ mod tests {
         assert!(ShadowCastingMode::On.visible_in_main_pass());
         assert!(ShadowCastingMode::TwoSided.visible_in_main_pass());
         assert!(!ShadowCastingMode::ShadowsOnly.visible_in_main_pass());
+
+        // Unity：只有 `TwoSided` 在阴影通道关闭背面剔除。
+        assert!(!ShadowCastingMode::Off.casts_two_sided_shadows());
+        assert!(!ShadowCastingMode::On.casts_two_sided_shadows());
+        assert!(ShadowCastingMode::TwoSided.casts_two_sided_shadows());
+        assert!(!ShadowCastingMode::ShadowsOnly.casts_two_sided_shadows());
 
         for mode in [
             ShadowCastingMode::Off,

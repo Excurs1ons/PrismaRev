@@ -36,6 +36,7 @@ pub fn scene_render_system(world: &World) -> Vec<DrawItem> {
                 material: Some(mar.material_slot),
                 cast_shadow: mode.casts_shadows(),
                 visible_in_main_pass: mode.visible_in_main_pass(),
+                cast_shadow_two_sided: mode.casts_two_sided_shadows(),
             }
         })
         .collect()

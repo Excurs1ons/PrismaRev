@@ -3,8 +3,9 @@
 //! [`ShadowMapPass`] 从光源视角将场景深度渲染到深度纹理中（混合自适应
 //! 阴影系统的纯深度后备方案，`docs/DESIGN.md` §2.3），由
 //! [`crate::forward_pass::ForwardPass`] 用比较采样器采样判断遮挡。
-//! 纯深度管线（`color_attachment_count = 0`），正面剔除 + 坡度/常量
-//! 深度偏移以减少阴影痤疮与彼得潘现象，光源空间矩阵走推送常量。
+//! 纯深度管线（`color_attachment_count = 0`），默认背面剔除 + 坡度/常量
+//! 深度偏移以减少阴影痤疮与彼得潘现象；`ShadowCastingMode::TwoSided` 的 caster
+//! 走不剔除的第二套管线（Unity 语义），光源空间矩阵走推送常量。
 
 use anyhow::Context as _;
 use anyhow::Result;
@@ -27,7 +28,8 @@ use crate::shader_bindings;
 /// 光照通道稍后对该纹理进行采样（使用比较采样器来判断被照亮还是被遮挡）。
 ///
 /// 该管线为纯深度管线（`color_attachment_count = 0`），
-/// 使用正面剔除 + 坡度/常量深度偏移以减少阴影痤疮和彼得潘现象，
+/// 默认背面剔除（`ShadowCastingMode::TwoSided` 例外，走不剔除的管线），
+/// 叠加坡度/常量深度偏移以减少阴影痤疮和彼得潘现象，
 /// 并通过推送常量（无 UBO）传递光源空间矩阵。
 pub struct ShadowMapPass {
     /// Shadow 映射表 深度 附件 handle (created in `setup`).
@@ -35,7 +37,14 @@ pub struct ShadowMapPass {
     /// Square shadow 映射表 分辨率 (e.g. 2048).
     shadow_size: u32,
     /// Depth-only graphics 管线 (lazy-created on 第一个 执行
+    ///
+    /// 背面剔除版本，供 `ShadowCastingMode::Off` / `On` / `ShadowsOnly` 使用。
     pipeline: Option<GraphicsPipeline>,
+    /// 双面（不剔除）depth-only 管线，供 `ShadowCastingMode::TwoSided` 使用。
+    ///
+    /// Unity 的 `ShadowCastingMode.TwoSided` 会在阴影渲染时关闭背面剔除，
+    /// 即使物体材质本身开启了背面剔除。
+    pipeline_two_sided: Option<GraphicsPipeline>,
     /// Shadow 渲染 pass (depth-only).
     render_pass: Option<vk::RenderPass>,
     /// 帧缓冲 wrapping the shadow 映射表 深度 视图
@@ -56,6 +65,7 @@ impl ShadowMapPass {
             shadow_map: ResourceHandle::INVALID,
             shadow_size: SHADOW_MAP_SIZE,
             pipeline: None,
+            pipeline_two_sided: None,
             render_pass: None,
             framebuffer: None,
             device: None,
@@ -132,6 +142,87 @@ impl ShadowMapPass {
             .context("create shadow render pass")?;
         Ok(handle)
     }
+
+    /// 阴影通道使用的背面剔除模式（Unity `ShadowCastingMode.TwoSided` 关闭剔除）。
+    ///
+    /// 独立成函数便于单测：GPU 侧的管线选择只有这一个判定点。
+    fn shadow_cull_mode(two_sided: bool) -> vk::CullModeFlags {
+        if two_sided {
+            vk::CullModeFlags::NONE
+        } else {
+            vk::CullModeFlags::BACK
+        }
+    }
+
+    /// 创建一套 depth-only 阴影管线；两套管线只差剔除模式。
+    ///
+    /// `warmup` 与 `execute` 各调用两次（背面剔除 / 双面），避免把同样的加载
+    /// 逻辑复制两遍。
+    fn create_pipeline(
+        device: &ash::Device,
+        render_pass: vk::RenderPass,
+        cull_mode: vk::CullModeFlags,
+    ) -> anyhow::Result<GraphicsPipeline> {
+        const VERT_SPV: &[u8] = include_bytes!("../../../assets/shaders/shadow_depth.vert.spv");
+        const FRAG_SPV: &[u8] = include_bytes!("../../../assets/shaders/shadow_depth.frag.spv");
+        let vert_module =
+            shader::load_shader_module(device, VERT_SPV).context("load shadow vert module")?;
+        let frag_module =
+            shader::load_shader_module(device, FRAG_SPV).context("load shadow frag module")?;
+
+        let vert_entry = std::ffi::CString::new("vertexMain").unwrap();
+        let frag_entry = std::ffi::CString::new("fragmentMain").unwrap();
+        let vert_stage = shader::shader_stage(
+            vk::ShaderStageFlags::VERTEX,
+            vert_module,
+            vert_entry.as_c_str(),
+        );
+        let frag_stage = shader::shader_stage(
+            vk::ShaderStageFlags::FRAGMENT,
+            frag_module,
+            frag_entry.as_c_str(),
+        );
+        let shader_stages = [vert_stage, frag_stage];
+
+        let binding_desc = Vertex::binding_description();
+        let position_attr = vk::VertexInputAttributeDescription::default()
+            .location(0)
+            .binding(0)
+            .format(vk::Format::R32G32B32_SFLOAT)
+            .offset(0);
+
+        let push = [vk::PushConstantRange::default()
+            .stage_flags(vk::ShaderStageFlags::VERTEX)
+            .offset(0)
+            .size(std::mem::size_of::<shader_bindings::shadow_depth::ShadowPush>() as u32)];
+
+        // Depth-only 管线 + 深度 bias；剔除模式由调用方决定。
+        let pipeline = GraphicsPipeline::new(&PipelineDesc {
+            device,
+            shader_stages: &shader_stages,
+            vertex_binding_desc: std::slice::from_ref(&binding_desc),
+            vertex_attr_descs: std::slice::from_ref(&position_attr),
+            descriptor_set_layouts: &[],
+            push_constant_ranges: &push,
+            render_pass,
+            subpass: 0,
+            cull_mode: Some(cull_mode),
+            depth_bias_enable: Some(true),
+            depth_bias_constant_factor: Some(32.0),
+            depth_bias_slope_factor: Some(4.0),
+            depth_write_enable: Some(true),
+            color_attachment_count: Some(0),
+            color_blend_attachments: None,
+        })
+        .context("create shadow depth-only pipeline")?;
+
+        unsafe {
+            device.destroy_shader_module(vert_module, None);
+            device.destroy_shader_module(frag_module, None);
+        }
+
+        Ok(pipeline)
+    }
 }
 
 impl Default for ShadowMapPass {
@@ -204,72 +295,23 @@ impl RenderPassNode for ShadowMapPass {
             self.framebuffer = Some(framebuffer);
 
             // 管线 — may already exist when warmup ran ahead of 时间
+            // 两套管线：背面剔除（默认）与双面/不剔除（`ShadowCastingMode::TwoSided`）。
             if self.pipeline.is_none() {
-                const VERT_SPV: &[u8] =
-                    include_bytes!("../../../assets/shaders/shadow_depth.vert.spv");
-                const FRAG_SPV: &[u8] =
-                    include_bytes!("../../../assets/shaders/shadow_depth.frag.spv");
-                let vert_module = shader::load_shader_module(device, VERT_SPV)
-                    .context("load shadow vert module")?;
-                let frag_module = shader::load_shader_module(device, FRAG_SPV)
-                    .context("load shadow frag module")?;
-
-                let vert_entry = std::ffi::CString::new("vertexMain").unwrap();
-                let frag_entry = std::ffi::CString::new("fragmentMain").unwrap();
-                let vert_stage = shader::shader_stage(
-                    vk::ShaderStageFlags::VERTEX,
-                    vert_module,
-                    vert_entry.as_c_str(),
+                self.pipeline = Some(
+                    Self::create_pipeline(device, rp, Self::shadow_cull_mode(false))
+                        .context("create shadow depth-only pipeline")?,
                 );
-                let frag_stage = shader::shader_stage(
-                    vk::ShaderStageFlags::FRAGMENT,
-                    frag_module,
-                    frag_entry.as_c_str(),
+            }
+            if self.pipeline_two_sided.is_none() {
+                self.pipeline_two_sided = Some(
+                    Self::create_pipeline(device, rp, Self::shadow_cull_mode(true))
+                        .context("create two-sided shadow depth-only pipeline")?,
                 );
-                let shader_stages = [vert_stage, frag_stage];
-
-                let binding_desc = Vertex::binding_description();
-                let position_attr = vk::VertexInputAttributeDescription::default()
-                    .location(0)
-                    .binding(0)
-                    .format(vk::Format::R32G32B32_SFLOAT)
-                    .offset(0);
-
-                let push = [vk::PushConstantRange::default()
-                    .stage_flags(vk::ShaderStageFlags::VERTEX)
-                    .offset(0)
-                    .size(std::mem::size_of::<shader_bindings::shadow_depth::ShadowPush>() as u32)];
-
-                // Depth-only 管线 NO face cull + 深度 bias.
-                let pipeline = GraphicsPipeline::new(&PipelineDesc {
-                    device,
-                    shader_stages: &shader_stages,
-                    vertex_binding_desc: std::slice::from_ref(&binding_desc),
-                    vertex_attr_descs: std::slice::from_ref(&position_attr),
-                    descriptor_set_layouts: &[],
-                    push_constant_ranges: &push,
-                    render_pass: rp,
-                    subpass: 0,
-                    cull_mode: Some(vk::CullModeFlags::NONE),
-                    depth_bias_enable: Some(true),
-                    depth_bias_constant_factor: Some(32.0),
-                    depth_bias_slope_factor: Some(4.0),
-                    depth_write_enable: Some(true),
-                    color_attachment_count: Some(0),
-                    color_blend_attachments: None,
-                })
-                .context("create shadow depth-only pipeline")?;
-
-                unsafe {
-                    device.destroy_shader_module(vert_module, None);
-                    device.destroy_shader_module(frag_module, None);
-                }
-
-                self.pipeline = Some(pipeline);
-            } // if self.pipeline.is_none()
+            }
         } // if self.framebuffer.is_none()
 
-        let pipeline = self.pipeline.as_ref().unwrap();
+        let pipeline_culled = self.pipeline.as_ref().unwrap();
+        let pipeline_two_sided = self.pipeline_two_sided.as_ref().unwrap();
         let render_pass = self.render_pass.unwrap();
         let framebuffer = self.framebuffer.unwrap();
 
@@ -330,12 +372,8 @@ impl RenderPassNode for ShadowMapPass {
                 }],
             );
 
-            ctx.device.cmd_bind_pipeline(
-                ctx.cmd,
-                vk::PipelineBindPoint::GRAPHICS,
-                pipeline.pipeline,
-            );
-
+            // 按 draw 的剔除模式选管线，只在模式切换时重绑（`TwoSided` 关闭剔除）。
+            let mut bound_two_sided: Option<bool> = None;
             for item in ctx.frame.draw_list {
                 // Unity `ShadowCastingMode::Off` -> 不写阴影贴图。
                 if !item.cast_shadow {
@@ -345,6 +383,22 @@ impl RenderPassNode for ShadowMapPass {
                     Some(m) => &m.mesh,
                     None => continue,
                 };
+
+                let two_sided = item.cast_shadow_two_sided;
+                let pipeline = if two_sided {
+                    pipeline_two_sided
+                } else {
+                    pipeline_culled
+                };
+                if bound_two_sided != Some(two_sided) {
+                    ctx.device.cmd_bind_pipeline(
+                        ctx.cmd,
+                        vk::PipelineBindPoint::GRAPHICS,
+                        pipeline.pipeline,
+                    );
+                    bound_two_sided = Some(two_sided);
+                }
+
                 casters += 1;
                 let vertex_buffers = [uploaded.vertex_buffer];
                 let offsets = [0u64];
@@ -355,6 +409,7 @@ impl RenderPassNode for ShadowMapPass {
                     model: item.model,
                     lightViewProj: ctx.frame.light_view_proj,
                 };
+                // 推送常量必须使用当前绑定管线的布局（两套管线各有独立 layout）。
                 ctx.device.cmd_push_constants(
                     ctx.cmd,
                     pipeline.layout,
@@ -390,7 +445,7 @@ impl RenderPassNode for ShadowMapPass {
     }
 
     fn warmup(&mut self, device: &ash::Device, _context: &VulkanContext) -> Result<()> {
-        if self.pipeline.is_some() {
+        if self.pipeline.is_some() && self.pipeline_two_sided.is_some() {
             return Ok(());
         }
         self.device = Some(device.clone());
@@ -399,65 +454,16 @@ impl RenderPassNode for ShadowMapPass {
         let render_pass = Self::create_render_pass(device, vk::Format::D32_SFLOAT)?;
         self.render_pass = Some(render_pass);
 
-        // 管线 — 加载 着色器 modules, 创建 depth-only 管线
-        const VERT_SPV: &[u8] = include_bytes!("../../../assets/shaders/shadow_depth.vert.spv");
-        const FRAG_SPV: &[u8] = include_bytes!("../../../assets/shaders/shadow_depth.frag.spv");
-        let vert_module =
-            shader::load_shader_module(device, VERT_SPV).context("warmup: load shadow vert")?;
-        let frag_module =
-            shader::load_shader_module(device, FRAG_SPV).context("warmup: load shadow frag")?;
-
-        let vert_entry = std::ffi::CString::new("vertexMain").unwrap();
-        let frag_entry = std::ffi::CString::new("fragmentMain").unwrap();
-        let vert_stage = shader::shader_stage(
-            vk::ShaderStageFlags::VERTEX,
-            vert_module,
-            vert_entry.as_c_str(),
+        // 管线 — 加载 着色器 modules, 创建两套 depth-only 管线
+        // （背面剔除 / 双面），使渲染线程在首帧前就编译好两条几乎相同的管线。
+        self.pipeline = Some(
+            Self::create_pipeline(device, render_pass, Self::shadow_cull_mode(false))
+                .context("warmup: shadow depth-only pipeline")?,
         );
-        let frag_stage = shader::shader_stage(
-            vk::ShaderStageFlags::FRAGMENT,
-            frag_module,
-            frag_entry.as_c_str(),
+        self.pipeline_two_sided = Some(
+            Self::create_pipeline(device, render_pass, Self::shadow_cull_mode(true))
+                .context("warmup: two-sided shadow depth-only pipeline")?,
         );
-        let shader_stages = [vert_stage, frag_stage];
-
-        let binding_desc = Vertex::binding_description();
-        let position_attr = vk::VertexInputAttributeDescription::default()
-            .location(0)
-            .binding(0)
-            .format(vk::Format::R32G32B32_SFLOAT)
-            .offset(0);
-
-        let push = [vk::PushConstantRange::default()
-            .stage_flags(vk::ShaderStageFlags::VERTEX)
-            .offset(0)
-            .size(std::mem::size_of::<shader_bindings::shadow_depth::ShadowPush>() as u32)];
-
-        let pipeline = GraphicsPipeline::new(&PipelineDesc {
-            device,
-            shader_stages: &shader_stages,
-            vertex_binding_desc: std::slice::from_ref(&binding_desc),
-            vertex_attr_descs: std::slice::from_ref(&position_attr),
-            descriptor_set_layouts: &[],
-            push_constant_ranges: &push,
-            render_pass,
-            subpass: 0,
-            cull_mode: Some(vk::CullModeFlags::NONE),
-            depth_bias_enable: Some(true),
-            depth_bias_constant_factor: Some(32.0),
-            depth_bias_slope_factor: Some(4.0),
-            depth_write_enable: Some(true),
-            color_attachment_count: Some(0),
-            color_blend_attachments: None,
-        })
-        .context("warmup: shadow depth-only pipeline")?;
-
-        unsafe {
-            device.destroy_shader_module(vert_module, None);
-            device.destroy_shader_module(frag_module, None);
-        }
-
-        self.pipeline = Some(pipeline);
         Ok(())
     }
 
@@ -495,6 +501,7 @@ impl ShadowMapPass {
         }
         // GraphicsPipeline::Drop frees the 管线 + 布局
         self.pipeline = None;
+        self.pipeline_two_sided = None;
         self.device = None;
     }
 }
@@ -510,5 +517,23 @@ impl Drop for ShadowMapPass {
             }
             // GraphicsPipeline's own 放置 frees the 管线 + 布局
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn two_sided_shadow_casting_disables_backface_culling() {
+        // Unity `ShadowCastingMode::TwoSided`：阴影渲染关闭背面剔除。
+        assert_eq!(
+            ShadowMapPass::shadow_cull_mode(false),
+            vk::CullModeFlags::BACK
+        );
+        assert_eq!(
+            ShadowMapPass::shadow_cull_mode(true),
+            vk::CullModeFlags::NONE
+        );
     }
 }

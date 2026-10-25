@@ -317,6 +317,9 @@ pub struct DrawItem {
     pub cast_shadow: bool,
     /// 是否在相机主通道可见（`ShadowsOnly` 为 `false`）。
     pub visible_in_main_pass: bool,
+    /// 阴影通道是否关闭背面剔除（Unity `ShadowCastingMode::TwoSided`）。
+    /// `false` = 背面剔除（默认），`true` = 双面投射。只被 `ShadowMapPass` 读取。
+    pub cast_shadow_two_sided: bool,
 }
 
 /// Per-frame scene + lighting 状态 shared with every pass via [`RenderContext`].
