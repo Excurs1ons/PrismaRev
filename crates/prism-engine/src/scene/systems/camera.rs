@@ -46,22 +46,28 @@ pub fn main_camera(world: &World) -> Option<prism_ecs::Entity> {
     all_cameras(world).pop()
 }
 
+/// 真正会被渲染的相机 = `depth` 最大的启用相机里，第一台**有 `LocalToWorld`** 的。
+///
+/// 取景、清屏、宽高比写回、飞行输入都走这一处：只要大家用同一个选择函数，
+/// 就不会出现「写完 A 的 aspect 却渲染 B」「输入驱动 A 但画面是 B」这类分叉。
+pub fn active_camera(world: &World) -> Option<prism_ecs::Entity> {
+    all_cameras(world)
+        .into_iter()
+        .rev()
+        .find(|entity| world.get::<LocalToWorld>(*entity).is_some())
+}
+
 /// 无相机时使用的清屏色（中性灰：与纯黑/纯白区分，便于看出"什么都没画"）。
 pub const DEFAULT_CLEAR_COLOR: [f32; 4] = [0.5, 0.5, 0.5, 1.0];
 
-/// 当前活动相机的清屏色 = Unity `Camera.backgroundColor`。
+/// 指定相机的清屏色 = Unity `Camera.backgroundColor`。
 ///
-/// 优先取 `main_camera`；没有 `depth` 之差时退化为任意启用相机；都没有时用
-/// [`DEFAULT_CLEAR_COLOR`]。
-pub fn clear_color(world: &World) -> [f32; 4] {
-    let entity = main_camera(world).or_else(|| {
-        world
-            .query::<Camera>()
-            .find(|(_, cam)| cam.enabled)
-            .map(|(entity, _)| entity)
-    });
-    entity
-        .and_then(|entity| world.get::<Camera>(entity))
+/// **取景与清屏必须同源**：调用方传入 [`CameraOutput::entity`]（真正产生 view 的
+/// 那台相机），这里不再自己挑相机，所以两处不会因为选择规则不同而分叉。
+/// 实体不存在或没有 `Camera` 时用 [`DEFAULT_CLEAR_COLOR`]。
+pub fn clear_color(world: &World, camera: prism_ecs::Entity) -> [f32; 4] {
+    world
+        .get::<Camera>(camera)
         .map(|cam| cam.background_color)
         .unwrap_or(DEFAULT_CLEAR_COLOR)
 }
@@ -117,8 +123,10 @@ pub fn fallback_camera_output(surface_rotation: &Mat4, aspect: f32) -> CameraOut
     }
 }
 
-/// 查找 the 第一个 启用 相机 实体 that also has a `FlyCameraController`
-/// and a `LocalToWorld`, and derive its view/projection matrices.
+/// 查找 [`active_camera`]（`depth` 最大的可渲染启用相机），derive its view/projection.
+///
+/// 取景必须与清屏同源：调用方拿 [`CameraOutput::entity`] 去
+/// [`clear_color`]，两边就不会各自挑一次相机。
 ///
 /// 没有 `FlyCameraController` 时回退到实体自身的朝向（`LocalToWorld` 的逆），
 /// 也就是 Unity 里"相机由 Transform 驱动"的形状 —— 这样场景里只放一个
@@ -128,7 +136,8 @@ pub fn fallback_camera_output(surface_rotation: &Mat4, aspect: f32) -> CameraOut
 /// view-projection (mirrors the old `mat_mul(&surface_rotation, &vp)` step in
 /// `render_system`). Returns `None` if no usable 相机 存在
 pub fn compute_camera_output(world: &World, surface_rotation: &Mat4) -> Option<CameraOutput> {
-    let (entity, cam) = world.query::<Camera>().find(|(_, c)| c.enabled)?;
+    let entity = active_camera(world)?;
+    let cam = world.get::<Camera>(entity)?;
     let world_tf = world.get::<LocalToWorld>(entity)?;
 
     // Eye position = world-space 平移 列 3, rows 0..3 of the
@@ -173,13 +182,9 @@ pub fn camera_controller_system(
 ) -> Option<prism_ecs::Entity> {
     use crate::input::{KeyCode, MouseButton};
 
-    // 查找 the 第一个 相机 实体 with a controller. We collect the 实体 id
-    // 第一个 so the &self 借用 for the 查询 ends before the &mut borrows for
-    // the 分量 writes.
-    let cam_entity = world
-        .query::<Camera>()
-        .find(|(_, c)| c.enabled)
-        .map(|(e, _)| e)?;
+    // 输入必须驱动**正在渲染**的那台相机，否则多相机场景里 WASD/鼠标会移动另一台。
+    // 先拿到实体 id，让 &self 借用在这里结束，后面才能取 &mut 分量。
+    let cam_entity = active_camera(world)?;
 
     let ctrl = world.get_mut::<FlyCameraController>(cam_entity)?;
     let move_speed;
