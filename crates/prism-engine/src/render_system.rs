@@ -56,6 +56,8 @@ pub struct SceneChanges {
     pub exposure: f32,
     /// Whether a usable 相机 实体 was 找到 in the ECS 世界
     pub has_camera: bool,
+    /// 清屏颜色 = 活动相机的 `background_color`（无相机时为引擎默认灰）。
+    pub clear_color: [f32; 4],
 }
 
 // ---------------------------------------------------------------------------
@@ -245,6 +247,9 @@ fn collect_scene_changes(
     // 5. Light-space view-projection (shadow 映射表
     let light_view_proj = light_view_proj(&light_direction, 30.0, &eye);
 
+    // 6. 清屏色 —— 取活动相机的 `background_color`（Unity `Camera.backgroundColor`）。
+    let clear_color = scene::systems::camera::clear_color(world);
+
     SceneChanges {
         view_proj,
         eye,
@@ -260,6 +265,7 @@ fn collect_scene_changes(
         pt_lights,
         exposure,
         has_camera,
+        clear_color,
     }
 }
 
@@ -267,9 +273,9 @@ fn collect_scene_changes(
 // 渲染 系统
 // ---------------------------------------------------------------------------
 
-/// 清空 颜色 (neutral gray — distinguishable from black/white to make it
-/// obvious when nothing drew).
-const CLEAR_COLOR: Vec4 = Vec4::new(0.5, 0.5, 0.5, 1.0);
+// 清屏色不再由渲染系统写死：它随 `SceneChanges::clear_color` 从活动相机
+// （`Camera::background_color`）过来；无相机时用
+// `scene::systems::camera::DEFAULT_CLEAR_COLOR`（中性灰）。
 
 /// Consume a pre-extracted [`FramePacket`] and drive the GPU.
 ///
@@ -319,6 +325,8 @@ pub fn render_system(
         ref pt_lights,
         exposure,
         has_camera,
+        // 清屏色直接从 `scene` 读（`scene.clear_color`），这里不解构。
+        clear_color: _,
     } = scene;
     let light_count = lights.len() as f32;
 
@@ -375,7 +383,7 @@ pub fn render_system(
         pt_lights,
         pt_accum_dirty: dirty_flags.directional_light || draw_count_dirty,
         has_camera: *has_camera,
-        clear_color: CLEAR_COLOR.to_array(),
+        clear_color: scene.clear_color,
         ui_overlay: Some(ui_overlay),
     };
     // §8 五阶段：prepare 阶段批量同步（当前实现 dirty 日志 + 未来上传点）
