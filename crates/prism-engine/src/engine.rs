@@ -454,8 +454,7 @@ impl Engine {
                 near: 0.1,
                 far: 1000.0,
                 exposure: 1.0,
-                aspect: 16.0 / 9.0,
-                enabled: true,
+                ..Camera::default()
             },
         );
         world.insert(
