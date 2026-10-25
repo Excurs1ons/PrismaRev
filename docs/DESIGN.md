@@ -803,7 +803,7 @@ prism-scene::rscn::encode_scene
 
 ### 10.13 作者格式 v3：实体身份（设计决策）
 
-**状态**：设计已定，实现待排期。相关前置改动见 #23（transform 单一来源）与 #29（cook 线性化）。
+**状态**：**已实现**（#31）。`prism-scene`（`id` 字段 / 校验 / 迁移 / cook）与 `prism-editor-api`（子树操作改用 id、删掉下标重映射）同批落地；前置改动见 #23（transform 单一来源）与 #29（cook 线性化）。
 
 #### 现状与问题
 
