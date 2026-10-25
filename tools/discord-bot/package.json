@@ -1,0 +1,20 @@
+{
+  "name": "prismrev-discord-bot",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Discord /bug -> GitHub issue bot for PrismaRev",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "check": "node --check index.js"
+  },
+  "dependencies": {
+    "@octokit/auth-app": "^7.1.5",
+    "@octokit/rest": "^21.0.2",
+    "discord.js": "^14.16.3",
+    "dotenv": "^16.4.5"
+  }
+}

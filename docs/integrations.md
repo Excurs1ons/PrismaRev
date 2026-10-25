@@ -107,6 +107,9 @@ Discord 里的 bug 报告需要一个**外部 bot** 转成 issue。Horizon 用 K
   **suspicious**，在 issue 顶部加一行 `> ⚠️ suspicious report — review before acting` 并 @ 维护者。
 - 隐藏字符、极长消息、非文本附件：截断并注明。
 
+参考实现：[`tools/discord-bot/`](../tools/discord-bot/README.md)（Node + discord.js，`/bug`
+slash command）。GitHub App 创建：[`tools/github-app/`](../tools/github-app/README.md)。
+
 ## 6. Kira / Kiro / agent 协作
 
 两种角色，不要混：
