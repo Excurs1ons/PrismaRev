@@ -800,3 +800,118 @@ prism-scene::rscn::encode_scene
 
 因此 §7 不删除，而是被 §10 框架吸纳为内部实现细节。新增纹理压缩功能
 应在 §10 的 Cooker 和 Package 层级实现，而非绕过管线直读文件系统。
+
+### 10.13 作者格式 v3：实体身份（设计决策）
+
+**状态**：设计已定，实现待排期。相关前置改动见 #23（transform 单一来源）与 #29（cook 线性化）。
+
+#### 现状与问题
+
+`.scene.json` v2 的实体用**数组下标**当身份：
+
+```json
+{ "entities": [ { "name": "Root" }, { "name": "Child", "parent": 0 } ] }
+```
+
+顺序同时承担三件事：遍历顺序、实体身份、父引用目标。代价在 `prism-editor-api` 里全部显性化：
+`move_entity` / `delete_entities` / `sync_prefab_instances` / `instantiate_prefab` 各自维护一套
+`remap[]` 并**全量重写每个实体的 `parent`**；任何一处漏改都是静默错挂，且无法表达
+「跨场景引用」或让外部工具往返编辑。
+
+#### 决定
+
+v3 引入稳定 id，`parent` 指向 id：
+
+```json
+{
+  "version": 3,
+  "entities": [
+    { "id": 0, "name": "Root",  "parent": null, "transform": { }, "components": { } },
+    { "id": 7, "name": "Child", "parent": 0,    "transform": { }, "components": { } }
+  ]
+}
+```
+
+- **id 单调递增**（`max(id) + 1`），由编辑器在新建 / 复制 / 实例化时分配；删除后**不复用**，
+  避免旧引用"复活"到新实体。
+- **数组顺序不再是身份**，只表示文件布局与编辑顺序。
+- **位宽定为 `u32`**（不是 `u64` / UUID），理由三条：
+  1. UUID 让 diff 充满噪声、难以人工 review，还会污染测试与 fixture 的确定性（需注入生成器）；
+     本项目是单人 + agent 的 git 流，并发创建实体的冲突概率极低，且重复 id 会被 `validate` 抓住。
+  2. `u64` 的唯一卖点是"高位留命名空间"，但这条路在本技术栈里走不通：`parent` 在编辑器中是
+     TS `number`，安全整数上限 **2^53**；把命名空间放进高 32 位会让 id 越过该上限，
+     `JSON.parse` 静默丢精度 —— 那比撞号更危险（撞号会被校验拦住，精度丢失不会）。
+     而 JSON 里位宽本身不可见（小数字序列化等长），`u64` 的可读性收益也是零。
+  3. 真要命名空间就得用字符串 id，等于回到 UUID 的代价，已被否决。
+- 代码侧把 id 当作**不透明不变量**（只保证"文档内唯一且不复用"），不假设它等于下标或连续，
+  这样将来若有强度更大的需求，改动面被限制在类型宽度 + 一次迁移。
+
+#### 不变量（`SceneJson::validate`）
+
+1. 至少一个实体；`id` 唯一。
+2. `parent` 必须指向**存在**的 id，且不得指向自身。
+3. 环：**加载侧容错**（`topological_order` 把未访问到的实体按数组顺序追加到末尾，结果确定），
+   **编辑器侧拒绝**成环（`reparent` 已有的 descendants 检查保留）。
+   硬失败会让一个手写错环直接打不开场景，代价大于收益；cook 时对环记 `warn`。
+
+#### 迁移 v2 → v3
+
+- `id = 数组下标`（恒等映射），`parent` 数值**不变** → 迁移是纯增量，老文档 diff 只有 `id` 字段。
+- 幂等：已含 `id` 的文档不重写；缺 `id` 的补齐。
+- 旧引擎读 v3 会命中 `migrate_scene_doc` 的「版本高于支持范围」错误（明确失败，不静默降级）。
+- `.prefab.json` 与场景共用同一套 `SceneJson` 形状与迁移，因此一并升级。
+
+#### 编辑器职责（净删代码的位置）
+
+| 操作 | v2（现状） | v3 |
+|---|---|---|
+| 移动实体 | 移动数组 + **全量重写所有 parent** | 只移动数组元素 |
+| 改父级 | 走 `move_entity` 的下标重映射 | 只写目标实体的 `parent` 一个字段 |
+| 删除 | 算 `removed[]` + `remap[]` 全量重写 | 移除行；把指向被删 id 的子级 `parent = null` |
+| 复制 / 实例化 | 数组尾部追加 + 计算 `base` 偏移 | 子树分配连续 id 块，根挂到目标 parent |
+| 存为预制体 | 提取子树并平移内部父索引 | 子树 id **重新编号为 `0..k`**（预制体自带 id 空间） |
+| 同步预制体实例 | 按数组位置匹配 + 全量平移 | 替换子树，内部重新分配 id；`PrefabInstance` 元数据不变 |
+
+#### 与 RSCN 的关系
+
+**RSCN v4 不变**。运行时只按拓扑序建立层级，不需要 id：
+
+- cook 仍写出 `parent: i32`（拓扑序下标），比存 id 更小、解码更快；
+- `encode_scene` 用 `id → 拓扑位置` 的 `Vec` 映射（O(n)，见 §10.10 与 #29）；
+- 只有在出现「运行时跨实体引用」（UI 事件绑定、脚本字段指向实体）时才考虑给 RSCN 加可选 id 表，
+  在此之前不引入。
+
+#### 否决的替代方案
+
+| 方案 | 否决理由 |
+|---|---|
+| 嵌套 `children` 树 | 与 ECS 平铺冲突；移动子树要搬整块数据；diff 噪声大；随机访问退化 |
+| UUID / GUID | 单场景内无收益，diff 与可读性变差；冲突率在本项目可忽略 |
+| 维持数组下标 | 编辑器每加一个层级功能就多一套 remap，成本线性增长，且无法跨场景引用 |
+| 在 `components` 里存 `Entity` | 运行时句柄（index+generation）不可持久化，加载即失效 |
+
+#### 验收判据
+
+1. 所有现存 `.scene.json` / `.prefab.json` 迁移后层级**完全等价**（迁移前后 `topological_order`
+   与父子关系快照一致）。
+2. 移动 / 删除 / 复制 / 实例化的随机操作序列之后，`validate()` 通过且无悬空 id。
+3. 编辑器 `scene.rs` 里 `remap` 相关代码行数下降 ≥ 60%（本决策的主要收益是**删代码**）。
+4. 真实场景 cook + decode 的层级与迁移前一致（扩展 `prism-cooker` 的 `cooks_real_default_scene`）。
+
+#### 分期
+
+id 的语义和编辑器的下标重映射**不能分开落地**：只要 `parent` 从下标变成 id，
+`move_entity` / `delete_entities` 里那套 `remap[]` 就会把 id 当索引用而静默改写。因此：
+
+- **PR-1（数据层 + 编辑器，必须同一个 PR）**：
+  - `prism-scene`：`id` 字段、`validate` 不变量、`migrate` v2→v3、`topological_order` / `encode_scene`
+    走 `id → index` 映射、现有 `.scene.json` / `.prefab.json` 迁移、测试；
+  - `prism-editor-api`：新建 / 复制 / 实例化时分配 id，删除全部 `remap[]` 路径，
+    `extract_subtree` 重编号；
+  - 前端只需确认 `parent` 仍是 `number`（语义变化对 TS 透明）。
+- **PR-2（可选）**：RSCN 可选 id 表，仅在需要运行时实体引用时。
+
+#### 未决问题
+
+- `extract_subtree` 重编号后，预制体实例的「差异对比」是否要按结构路径而非 id 匹配 —— 留到
+  预制体工作流真正落地时再定。
