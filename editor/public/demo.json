@@ -1048,10 +1048,17 @@
       "id": "empty",
       "label": "空实体",
       "name": "entity",
+      "overrides": {},
       "position": [
         0.0,
         0.0,
         0.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
       ]
     },
     {
@@ -1062,36 +1069,92 @@
       "id": "camera",
       "label": "相机",
       "name": "Camera",
+      "overrides": {},
       "position": [
         0.0,
         0.0,
         10.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
       ]
     },
     {
       "components": [
-        "prism_engine::scene::DirectionalLight"
+        "prism_engine::scene::Light"
       ],
       "id": "sun",
       "label": "平行光",
       "name": "Sun",
+      "overrides": {
+        "prism_engine::scene::Light": {
+          "intensity": 100000.0,
+          "light_type": "Directional",
+          "shadows": "Soft"
+        }
+      },
       "position": [
         0.0,
         6.0,
         0.0
+      ],
+      "rotation": [
+        -0.40824830532073975,
+        -0.28867512941360474,
+        0.0,
+        0.8660253882408142
       ]
     },
     {
       "components": [
-        "prism_engine::scene::PointLight"
+        "prism_engine::scene::Light"
       ],
       "id": "point_light",
       "label": "点光源",
       "name": "PointLight",
+      "overrides": {},
       "position": [
         3.0,
         3.0,
         3.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    },
+    {
+      "components": [
+        "prism_engine::scene::Light"
+      ],
+      "id": "spot_light",
+      "label": "聚光灯",
+      "name": "SpotLight",
+      "overrides": {
+        "prism_engine::scene::Light": {
+          "inner_spot_angle": 30.0,
+          "intensity": 200.0,
+          "light_type": "Spot",
+          "range": 20.0,
+          "shadows": "Soft",
+          "spot_angle": 45.0
+        }
+      },
+      "position": [
+        0.0,
+        6.0,
+        0.0
+      ],
+      "rotation": [
+        0.7071067690849304,
+        0.0,
+        0.0,
+        0.7071067690849304
       ]
     },
     {
@@ -1102,10 +1165,17 @@
       "id": "mesh",
       "label": "网格",
       "name": "Mesh",
+      "overrides": {},
       "position": [
         0.0,
         0.0,
         0.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
       ]
     },
     {
@@ -1115,10 +1185,17 @@
       "id": "skybox",
       "label": "天空盒",
       "name": "Skybox",
+      "overrides": {},
       "position": [
         0.0,
         0.0,
         0.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
       ]
     },
     {
@@ -1130,10 +1207,17 @@
       "id": "ui",
       "label": "UI 元素",
       "name": "ui_node",
+      "overrides": {},
       "position": [
         0.0,
         0.0,
         0.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
       ]
     }
   ],
@@ -2588,14 +2672,23 @@
         "entities": [
           {
             "components": {
-              "prism_engine::scene::PointLight": {
+              "prism_engine::scene::Light": {
                 "color": [
                   1.0,
                   1.0,
                   1.0
                 ],
+                "color_temperature": 6570.0,
+                "enabled": true,
+                "inner_spot_angle": 21.799999237060547,
                 "intensity": 100.0,
-                "range": 12.0
+                "light_type": "Point",
+                "range": 10.0,
+                "render_mode": "Auto",
+                "shadow_strength": 1.0,
+                "shadows": "None",
+                "spot_angle": 30.0,
+                "use_color_temperature": false
               }
             },
             "name": "PointLight",
@@ -2658,23 +2751,74 @@
         ],
         "version": 2
       },
-      "sun": {
+      "spot_light": {
         "entities": [
           {
             "components": {
-              "prism_engine::scene::DirectionalLight": {
-                "ambient": 1.0,
+              "prism_engine::scene::Light": {
                 "color": [
                   1.0,
                   1.0,
                   1.0
                 ],
-                "euler_xyz": [
-                  45.0,
-                  -45.0,
-                  0.0
+                "color_temperature": 6570.0,
+                "enabled": true,
+                "inner_spot_angle": 21.799999237060547,
+                "intensity": 100.0,
+                "light_type": "Point",
+                "range": 10.0,
+                "render_mode": "Auto",
+                "shadow_strength": 1.0,
+                "shadows": "None",
+                "spot_angle": 30.0,
+                "use_color_temperature": false
+              }
+            },
+            "name": "SpotLight",
+            "parent": null,
+            "transform": {
+              "position": [
+                0.0,
+                6.0,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            }
+          }
+        ],
+        "version": 2
+      },
+      "sun": {
+        "entities": [
+          {
+            "components": {
+              "prism_engine::scene::Light": {
+                "color": [
+                  1.0,
+                  1.0,
+                  1.0
                 ],
-                "intensity": 100000.0
+                "color_temperature": 6570.0,
+                "enabled": true,
+                "inner_spot_angle": 21.799999237060547,
+                "intensity": 100.0,
+                "light_type": "Point",
+                "range": 10.0,
+                "render_mode": "Auto",
+                "shadow_strength": 1.0,
+                "shadows": "None",
+                "spot_angle": 30.0,
+                "use_color_temperature": false
               }
             },
             "name": "Sun",
@@ -3119,6 +3263,10 @@
       {
         "id": "point_light",
         "label": "点光源"
+      },
+      {
+        "id": "spot_light",
+        "label": "聚光灯"
       },
       {
         "id": "mesh",

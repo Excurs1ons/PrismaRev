@@ -189,8 +189,9 @@ public 类型的只有 **43** 个（≈0.9%）。这既是现状，也是后续�
   `asset_database` / `prefab_utility` / `selection` / `undo` / `editor_application` /
   `scene_management`（与既有导出同名的函数只在模块路径下提供，避免根命名冲突）。
 - **P3 渲染/光照/相机** — 🔄 进行中。P3a（相机）与 P3b（光照：渲染枚举、
-  `Light` 组件、统一收集 + 聚光进 GPU、逐渲染器 `ShadowCastingMode`）已落地，见 §9；
-  剩余 `Light.shadows` 接线、渲染枚举批次与 P3c（相机行为）见 §9 待办。
+  `Light` 组件、统一收集 + 聚光进 GPU、逐渲染器 `ShadowCastingMode`、编辑器光源预设
+  切到 `Light`）已落地，见 §9；剩余 `Light.shadows` 接线、渲染枚举批次与
+  P3c（相机行为）见 §9 待办。
 - **P4 编辑器扩展**：`PropertyDrawer` schema 扩展点 + `EditorWindow` 面板注册表 DTO。
 - **P5 资产流水线**：`AssetImporters`/`Build`/`Build.Profile`/`Compilation` 形状。
 - **P6 并行/集合**：`Unity.Collections`/`Unity.Jobs` 形状（`NativeArray`/`IJob*`/`JobHandle`）。
@@ -596,8 +597,8 @@ Unity 只有一个 `Light`，用 `Light.type` 区分方向光 / 点光 / 聚光�
 - ✅ `cargo check --workspace --all-targets`、`python3 scripts/pr_ready.py`。
 
 **已知遗留**
-- `Light.shadows` / `shadowStrength` 只是数据：阴影仍是全局方向光贴图，
-  `shadowCastingMode` 也还没做。
+- `Light.shadows` / `shadowStrength` 只是数据：阴影仍是全局方向光贴图
+  （逐渲染器的 `ShadowCastingMode` 已在 P3b-3 补齐）。
 - `GpuLight` 从 32 → 64 字节，**必须**重新编译着色器（`.spv` 是 gitignore 的，
   CI 会编）；旧 `.spv` 配新 Rust 结构体会读出垃圾数据。
 
@@ -640,13 +641,44 @@ Unity 的 `Renderer.shadowCastingMode` 决定一个物体「是否投影」与�
   阴影管线关闭剔除（值先保留，便于无损读写 Unity 数据）。
 - `Light.shadows` / `shadowStrength` 仍是数据，阴影仍由全局方向光贴图承担。
 
+### P3b-4 — 编辑器光源预设切到 `Light` ✅
+
+`Light` 组件虽然已经能被引擎渲染，但编辑器的「新建实体」下拉仍然只认识旧的
+`DirectionalLight` / `PointLight`，等于新组件只能从检查器手动添加。根因是
+`EntityPreset` 只带组件名，拿到的永远是 `Light` 的默认值（点光源）。
+
+**prism-editor-api（`presets.rs`）**
+- `EntityPreset` 新增两个字段：
+  - `overrides: BTreeMap<String, Value>` —— 组件规范名 → **部分**作者 JSON，
+    前端与 schema 的 `defaultJson` 浅合并；
+  - `rotation: [f32; 4]` —— 初始四元数。光源朝向由 `transform.forward`（+Z）决定，
+    没有旋转就没法表达方向光/聚光。
+- 预设调整：
+  - `sun`（平行光）→ `Light`，覆盖 `light_type = Directional`、`intensity = 100000`、
+    `shadows = Soft`；旋转 = `from_rotation_arc(+Z, (−0.5, √½, 0.5))`，与旧
+    `DirectionalLight.euler_xyz = (45, −45, 0)` 的光照方向一致。
+  - `point_light` → `Light`，不覆盖（默认就是 `Point`）。
+  - 新增 `spot_light`（聚光灯）→ `Light`，覆盖 `Spot` / 45° 外锥 / 30° 内锥 /
+    `range 20` / `shadows Soft`；旋转绕 X +90°，让 +Z 朝下。
+
+**editor（Vue）**
+- `addEntity()` 把 `overrides[组件]` 浅合并进 `defaultJson`，并把 `preset.rotation`
+  写进 `transform.rotation`（之前写死单位四元数）。
+- `types.ts` 的 `EntityPreset` 补 `overrides` / `rotation`。
+
+**验证**
+- ✅ `cargo test -p prism-editor-api presets` → 4 passed（新增 3 个：四元数单位长度、
+  三个光照预设都挂 `Light` 且类型正确、`overrides` 只覆盖已挂载组件的已存在字段）。
+- ✅ `pnpm -C editor fixture`（`presets` 里带上 `overrides` / `rotation`）、
+  `pnpm -C editor build`、`python3 scripts/pr_ready.py` 全绿。
+
+**这一批没做**：`lit` 场景模板仍用旧组件（模板是另一条 `merge` 路径，留给后续）；
+渲染枚举批次（`BlendMode`/`CullMode`/`CompareFunction`/`RenderQueue`）未开始。
+
 ### 待办（下一批候选）
 - **P3b 光照/渲染（剩余）**：`Light.shadows`/`shadowStrength` 接进阴影贴图
   （`ShadowMode::None` 时整帧跳过阴影）、`TwoSided` 关闭阴影剔除、渲染枚举批次
   （`BlendMode`/`CullMode`/`CompareFunction`/`RenderQueue`）。
-- **编辑器光源预设**：`EntityPreset` 目前只带组件名，无法表达「方向光 / 聚光」这类
-  需要覆盖字段的预设；`Light` 只能从检查器手动添加。给预设加 `overrides` 后
-  再把 `lit` 模板与预设切到 `Light`。
 - **P3c 相机行为**：用测试钉住 yaw↔quaternion 的 `−π/2` 偏移；`clear_flags` 的
   `Depth`/`Nothing` 语义接进 `ForwardPass`；多相机（`depth` 排序 + 叠加）。
 - 清理 `crates/prism-cooker/src/importer/scene.rs` 里**重复的（且已死）** `SceneJson` /

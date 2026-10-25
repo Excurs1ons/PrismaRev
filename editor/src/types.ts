@@ -111,6 +111,10 @@ export interface EntityPreset {
   label: string;
   name: string;
   components: string[];
+  /** 组件字段覆盖（组件规范名 → 部分 JSON），与 `defaultJson` 浅合并。 */
+  overrides: Record<string, JsonValue>;
+  /** 初始旋转（四元数 xyzw）。光源朝向由 transform.forward(+Z) 决定。 */
+  rotation: number[];
   position: number[];
 }
 
