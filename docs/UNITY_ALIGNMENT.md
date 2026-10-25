@@ -188,7 +188,11 @@ public 类型的只有 **43** 个（≈0.9%）。这既是现状，也是后续�
 - **P2 编辑器核心** — ✅ 完成（见 §9）。`prism-editor-api` 新增六个 Unity 形状模块：
   `asset_database` / `prefab_utility` / `selection` / `undo` / `editor_application` /
   `scene_management`（与既有导出同名的函数只在模块路径下提供，避免根命名冲突）。
-- **P3 渲染/光照/相机**：`Rendering`/`Camera`/`Light`/`Skybox`/GI 的命名与结构对齐。
+- **P3 渲染/光照/相机** — 🔄 进行中。P3a（相机形状）已完成（见 §9）：
+  `CameraClearFlags`、`Camera` 的 `clearFlags`/`backgroundColor`/`orthographic`/
+  `orthographicSize`/`depth`、`projection_matrix`/`worldToCameraMatrix`、
+  `Camera.main`/`allCameras`、相机背景色真正驱动清屏。后续 P3b（光照/渲染枚举）/
+  P3c（相机行为）见 §9 待办。
 - **P4 编辑器扩展**：`PropertyDrawer` schema 扩展点 + `EditorWindow` 面板注册表 DTO。
 - **P5 资产流水线**：`AssetImporters`/`Build`/`Build.Profile`/`Compilation` 形状。
 - **P6 并行/集合**：`Unity.Collections`/`Unity.Jobs` 形状（`NativeArray`/`IJob*`/`JobHandle`）。
@@ -212,6 +216,21 @@ public 类型的只有 **43** 个（≈0.9%）。这既是现状，也是后续�
 - `cargo test -p prism-ecs -p prism-scene -p prism-editor-api`（含迁移单测）
 - `cd projects/prisma && cargo tree | grep -i egui`（必须为空）
 - 编辑器前端：`cd editor && pnpm build`
+- **本机（Termux/Android）完整验证的方法**（2026-10-25 打通，取代此前"引擎无法编译"的结论）：
+  ```bash
+  # 1) 假 pkg-config：让 alsa-sys 通过（cargo check 不链接，不需要真的 libasound）
+  export PKG_CONFIG=/tmp/opencode/fakepc/bin/pkg-config-any
+  # 2) `.spv` 是 gitignore 的：从主仓库或 CI artifact 拷进工作区
+  cp <main-repo>/assets/shaders/*.spv assets/shaders/
+  # 3) 现在这些都能过
+  cargo check --workspace --all-targets
+  (cd projects/prisma && cargo check --all-targets)
+  (cd projects/prisma-sponza && cargo check --all-targets)
+  (cd editor/src-tauri && cargo check)
+  (cd launcher/src-tauri && cargo check)
+  ```
+  限制：`cargo build` 生成二进制时仍会因缺 `libasound` 在**链接**阶段失败；
+  着色器改动仍需 `slangc`；Android 需要 NDK。
 
 ---
 
@@ -369,12 +388,66 @@ API 完整性 + 单测覆盖；前端只消费它们的**无状态**部分（见
 - ⚠️ `editor/src-tauri` 在 Termux 上**无法编译**（`glib-2.0`/webkit2gtk 缺失），
   需在桌面主机 `cd editor/src-tauri && cargo check` 复核。
 
+### P3a — 相机形状对齐 ✅
+
+**prism-scene（新 schema，纯加法）**
+- 新增 `crates/prism-scene/src/render_enums.rs`：`CameraClearFlags`
+  （`Skybox` / `SolidColor` / `Depth` / `Nothing`，取值与 Unity 的 1–4 一致），
+  附 `unity_value()` / `from_unity_value()` / `clears_color()` / `clears_depth()`；
+  反射走 `ReflectType → FieldType::U8`（与 `ui::TextAlign` 同一套编码，因此**不需要**
+  `register_reflect_type`）；serde 用变体名，和 `.scene.json` 里其它枚举一致。
+- `Camera` 追加 5 个字段（对齐 `UnityEngine.Camera`）：
+  `clear_flags`、`background_color: [f32;4]`、`orthographic`、
+  `orthographic_size`、`depth`。全部有 serde 默认值 → **老文档/老 `.rscn` 源文件不需要迁移**
+  （`SCENE_DOC_VERSION` 保持 2）。
+- `impl Camera`：`projection_matrix(aspect)`（透视/正交，Vulkan y-flip + 深度 `[0,1]`，
+  `aspect` 非有限时退化为 1.0）、`world_to_camera_matrix()` / `camera_to_world_matrix()`
+  （对应 Unity `worldToCameraMatrix` / `cameraToWorldMatrix`）。
+- 新增 `components_tests.rs`（8 个测试）：y-flip、`near→0` / `far→1`、正交半高/半宽、
+  退化 aspect、矩阵互逆、默认值、JSON 往返、**缺字段的老 JSON 仍可反序列化**。
+
+**prism-engine**
+- `scene/systems/camera.rs`：`perspective()` 改为委托 `Camera::projection_matrix`；
+  `compute_camera_output` **不再强制要求 `FlyCameraController`** —— 没有控制器时
+  直接用 `LocalToWorld` 的逆作为 view（Unity 里"相机由 Transform 驱动"的形状）；
+  新增 `all_cameras()`（按 `depth` 升序 = Unity `Camera.allCameras`）、
+  `main_camera()`（`depth` 最大 = Unity `Camera.main`）、
+  `clear_color()` + `DEFAULT_CLEAR_COLOR`。
+- `render_system.rs`：`SceneChanges` 新增 `clear_color`，由 `collect_scene_changes` 从活动
+  相机取；删掉写死的 `const CLEAR_COLOR` —— 清屏色现在真的跟着相机走。
+
+**验证**
+- ✅ `cargo test -p prism-scene -p prism-cooker -p prism-editor-api -p prism-engine`
+  → 31 / 109 / 73 / 87（+1 ignored）全绿。
+- ✅ `cargo check --workspace --all-targets`、`projects/prisma`、`projects/prisma-sponza`、
+  `crates/xtask`、`editor/src-tauri`、`launcher/src-tauri` 全部通过。
+- ✅ `cd editor && pnpm fixture && pnpm build`（fixture 因 Camera 新增字段而更新）。
+- **本机编译方案的突破**（此前记录"引擎无法编译"已作废）：Termux 上缺 `alsa.pc` 与
+  `slangc`，用
+  1. 一个假 `pkg-config`（`PKG_CONFIG=...`，`--modversion` 返回 99.0.0）+ 假 `alsa.pc`；
+  2. 从主仓库 `assets/shaders/*.spv` 拷入 worktree（`.spv` 是 gitignore 的）
+  之后 `cargo check` 全链路可用。**注意 `cargo check` 不链接**：真正 `cargo build`
+  二进制仍会因缺 `libasound` 在链接阶段失败，Android 交叉编译需要 NDK。
+
+**已知遗留**
+- 编辑器里 `clear_flags` 目前显示为 `u8` 数字框（schema 还没有枚举变体信息）。
+  要做成 Unity 那样的下拉框需要给 `FieldSchema` 加 `variants` 并让 `FieldEditor` 渲染
+  `select` —— 留给 P4（PropertyDrawer 形状）。
+- `clear_flags` 的 `Depth` / `Nothing` **语义**还没接进 `ForwardPass`（当前总是清色+清深度）；
+  P3a 只保证数据与投影/视图正确。
+- 相机朝向偏移（`FlyCameraController.yaw = 0` 看向 **+X**，单位四元数看向 **−Z**，
+  差 `−π/2`）仍未用测试钉住 —— `compute_camera_output` 现在是两条互不干扰的路径，
+  但两条路径的"同一朝向"仍需一个对照测试。
+
 ### 待办（下一批候选）
-- **P3 渲染/光照/相机**：`Rendering`/`Camera`/`Light`/`Skybox`/GI 的命名与结构对齐
-  （探索已在进行，产物见 `/tmp/opencode/p3-explore.md`）。
+- **P3b 光照/渲染**：`Light`（`LightType`/`LightShadows`/`colorTemperature`）、
+  `SpotLight` 接进 GPU 光列表、`ShadowCastingMode`、渲染枚举批次
+  （`BlendMode`/`CullMode`/`CompareFunction`/`RenderQueue`）。
+- **P3c 相机行为**：用测试钉住 yaw↔quaternion 的 `−π/2` 偏移；`clear_flags` 的
+  `Depth`/`Nothing` 语义接进 `ForwardPass`；多相机（`depth` 排序 + 叠加）。
+- 给 `FieldSchema` 加枚举变体信息，让 `clear_flags` 之类渲染成下拉框。
 - 清理 `crates/prism-cooker/src/importer/scene.rs` 里**重复的（且已死）** `SceneJson` /
   `TransformJson` —— 唯一权威应只有 `prism-scene`。
-- 复核桌面端编译：`cargo check -p prism-engine`、`cd editor/src-tauri && cargo check`。
 
 ## 附录
 

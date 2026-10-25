@@ -16,6 +16,8 @@ use prism_ecs::Entity;
 use prism_reflect::{FieldType, Reflect, ReflectError, ReflectType, Value};
 use serde::{Deserialize, Serialize};
 
+use crate::render_enums::CameraClearFlags;
+
 // ---------------------------------------------------------------------------
 // SceneAssetId
 // ---------------------------------------------------------------------------
@@ -330,6 +332,16 @@ pub struct Camera {
     /// When `false` the 相机 is skipped during scene 集合 (the
     /// 渲染器 falls 后 to the 下一个 available 相机
     pub enabled: bool,
+    /// 清屏方式 = Unity `Camera.clearFlags`（[`CameraClearFlags`]）。
+    pub clear_flags: CameraClearFlags,
+    /// 纯色背景 = Unity `Camera.backgroundColor`（线性 RGBA，`SolidColor` 时生效）。
+    pub background_color: [f32; 4],
+    /// 正交投影 = Unity `Camera.orthographic`。
+    pub orthographic: bool,
+    /// 正交视口半高（世界单位）= Unity `Camera.orthographicSize`。
+    pub orthographic_size: f32,
+    /// 渲染顺序 = Unity `Camera.depth`；数值大的后绘制，`main_camera` 取最大者。
+    pub depth: f32,
 }
 
 impl Default for Camera {
@@ -341,7 +353,59 @@ impl Default for Camera {
             exposure: 1.0,
             aspect: 16.0 / 9.0,
             enabled: true,
+            clear_flags: CameraClearFlags::Skybox,
+            background_color: [0.5, 0.5, 0.5, 1.0],
+            orthographic: false,
+            orthographic_size: 5.0,
+            depth: 0.0,
         }
+    }
+}
+
+impl Camera {
+    /// 投影矩阵（列主序）= Unity `Camera.projectionMatrix`。
+    ///
+    /// 遵循项目约定：右手系、相机看向 −Z、Vulkan y-flip（`p[1][1] = -inv_tan`）、
+    /// 深度范围 `[0, 1]`。`aspect` 由调用方给出（运行时来自 framebuffer，
+    /// 编辑器里来自面板），非有限或非正时退化为 1.0。
+    ///
+    /// `orthographic` 为真时用 [`Camera::orthographic_size`]（半高，世界单位）。
+    pub fn projection_matrix(&self, aspect: f32) -> glam::Mat4 {
+        let aspect = if aspect.is_finite() && aspect > 0.0 {
+            aspect
+        } else {
+            1.0
+        };
+        let near = self.near;
+        let far = self.far;
+        if self.orthographic {
+            let half_h = self.orthographic_size.max(1e-4);
+            let half_w = half_h * aspect;
+            glam::Mat4::from_cols(
+                glam::vec4(1.0 / half_w, 0.0, 0.0, 0.0),
+                glam::vec4(0.0, -1.0 / half_h, 0.0, 0.0),
+                glam::vec4(0.0, 0.0, 1.0 / (near - far), 0.0),
+                glam::vec4(0.0, 0.0, near / (near - far), 1.0),
+            )
+        } else {
+            let inv_tan = 1.0 / (self.fov_y_degrees.to_radians() * 0.5).tan();
+            glam::Mat4::from_cols(
+                glam::vec4(inv_tan / aspect, 0.0, 0.0, 0.0),
+                glam::vec4(0.0, -inv_tan, 0.0, 0.0),
+                glam::vec4(0.0, 0.0, far / (near - far), -1.0),
+                glam::vec4(0.0, 0.0, near * far / (near - far), 0.0),
+            )
+        }
+    }
+
+    /// 世界 → 相机空间 = Unity `Camera.worldToCameraMatrix`（即 view 矩阵）。
+    pub fn world_to_camera_matrix(camera_to_world: glam::Mat4) -> glam::Mat4 {
+        camera_to_world.inverse()
+    }
+
+    /// 相机 → 世界空间 = Unity `Camera.cameraToWorldMatrix`。
+    pub fn camera_to_world_matrix(world_to_camera: glam::Mat4) -> glam::Mat4 {
+        world_to_camera.inverse()
     }
 }
 
@@ -481,3 +545,7 @@ impl Default for Gizmo {
 /// Used for batch unload and multi-scene bookkeeping.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SceneMember(pub SceneAssetId);
+
+#[cfg(test)]
+#[path = "components_tests.rs"]
+mod tests;

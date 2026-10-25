@@ -29,6 +29,43 @@ pub fn collect_camera(world: &World) -> Option<Camera> {
     world.query::<Camera>().next().map(|(_, c)| c.clone())
 }
 
+/// 所有**启用**相机，按 `Camera.depth` 升序（数值大的后绘制）= Unity `Camera.allCameras`。
+pub fn all_cameras(world: &World) -> Vec<prism_ecs::Entity> {
+    let mut cameras: Vec<(f32, prism_ecs::Entity)> = world
+        .query::<Camera>()
+        .filter(|(_, cam)| cam.enabled)
+        .map(|(entity, cam)| (cam.depth, entity))
+        .collect();
+    // `total_cmp` 让 NaN 也有全序，避免 `partial_cmp` 的 unwrap 风险。
+    cameras.sort_by(|a, b| a.0.total_cmp(&b.0));
+    cameras.into_iter().map(|(_, entity)| entity).collect()
+}
+
+/// 主相机 = `depth` 最大的启用相机 = Unity `Camera.main`。
+pub fn main_camera(world: &World) -> Option<prism_ecs::Entity> {
+    all_cameras(world).pop()
+}
+
+/// 无相机时使用的清屏色（中性灰：与纯黑/纯白区分，便于看出"什么都没画"）。
+pub const DEFAULT_CLEAR_COLOR: [f32; 4] = [0.5, 0.5, 0.5, 1.0];
+
+/// 当前活动相机的清屏色 = Unity `Camera.backgroundColor`。
+///
+/// 优先取 `main_camera`；没有 `depth` 之差时退化为任意启用相机；都没有时用
+/// [`DEFAULT_CLEAR_COLOR`]。
+pub fn clear_color(world: &World) -> [f32; 4] {
+    let entity = main_camera(world).or_else(|| {
+        world
+            .query::<Camera>()
+            .find(|(_, cam)| cam.enabled)
+            .map(|(entity, _)| entity)
+    });
+    entity
+        .and_then(|entity| world.get::<Camera>(entity))
+        .map(|cam| cam.background_color)
+        .unwrap_or(DEFAULT_CLEAR_COLOR)
+}
+
 /// 运行时 相机 输出 produced each 帧 by [`compute_camera_output`].
 pub struct CameraOutput {
     pub view_proj: Mat4,
@@ -83,12 +120,15 @@ pub fn fallback_camera_output(surface_rotation: &Mat4, aspect: f32) -> CameraOut
 /// 查找 the 第一个 启用 相机 实体 that also has a `FlyCameraController`
 /// and a `LocalToWorld`, and derive its view/projection matrices.
 ///
+/// 没有 `FlyCameraController` 时回退到实体自身的朝向（`LocalToWorld` 的逆），
+/// 也就是 Unity 里"相机由 Transform 驱动"的形状 —— 这样场景里只放一个
+/// `Camera` + 变换就能出画面，不必强迫作者再加飞行控制器。
+///
 /// `surface_rotation` is the device-orientation 矩阵 applied on 顶部 of the
 /// view-projection (mirrors the old `mat_mul(&surface_rotation, &vp)` step in
 /// `render_system`). Returns `None` if no usable 相机 存在
 pub fn compute_camera_output(world: &World, surface_rotation: &Mat4) -> Option<CameraOutput> {
     let (entity, cam) = world.query::<Camera>().find(|(_, c)| c.enabled)?;
-    let ctrl = world.get::<FlyCameraController>(entity)?;
     let world_tf = world.get::<LocalToWorld>(entity)?;
 
     // Eye position = world-space 平移 列 3, rows 0..3 of the
@@ -98,8 +138,12 @@ pub fn compute_camera_output(world: &World, surface_rotation: &Mat4) -> Option<C
     let col3 = world_tf.0.col(3);
     let eye = Vec3::new(col3.x, col3.y, col3.z);
 
+    let view = match world.get::<FlyCameraController>(entity) {
+        Some(ctrl) => fly_view(eye, ctrl.yaw, ctrl.pitch),
+        // 单位变换 → 相机看向 −Z（项目约定）；任何旋转都由 LocalToWorld 携带。
+        None => world_tf.0.inverse(),
+    };
     let proj = perspective(cam);
-    let view = fly_view(eye, ctrl.yaw, ctrl.pitch);
     let vp = *surface_rotation * proj * view;
 
     Some(CameraOutput {
@@ -258,15 +302,11 @@ fn fly_view(eye: Vec3, yaw: f32, pitch: f32) -> Mat4 {
 }
 
 /// Column-major 投影 矩阵 Vulkan y-flip, 深度 range [0,1]).
+///
+/// 透视 / 正交的选择在 [`Camera::projection_matrix`] 里（`prism-scene` 的
+/// `components_tests.rs` 覆盖了 y-flip 与 `near → 0` / `far → 1` 的映射）。
 fn perspective(cam: &Camera) -> Mat4 {
-    let fov_y = cam.fov_y_degrees.to_radians();
-    let inv_tan = 1.0 / (fov_y * 0.5).tan();
-    Mat4::from_cols(
-        glam::vec4(inv_tan / cam.aspect, 0.0, 0.0, 0.0),
-        glam::vec4(0.0, -inv_tan, 0.0, 0.0),
-        glam::vec4(0.0, 0.0, cam.far / (cam.near - cam.far), -1.0),
-        glam::vec4(0.0, 0.0, cam.near * cam.far / (cam.near - cam.far), 0.0),
-    )
+    cam.projection_matrix(cam.aspect)
 }
 
 #[cfg(test)]
