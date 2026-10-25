@@ -7,6 +7,9 @@ name: CI
 #   - Slang shader compile (.slang -> .spv + reflection JSON) via slangc
 #
 # Design notes:
+#   * Jobs run in parallel: `lint` is a merge gate, not a prerequisite. It only
+#     takes ~1m of setup (toolchain, apt, slang) and ~10s of actual linting, so
+#     making builds wait for it added a minute to every run.
 #   * prism-app depends on android-activity, which only compiles for the
 #     aarch64-linux-android target — it is EXCLUDED from the desktop job and
 #     built on-device / via the Tauri launcher instead.
@@ -34,7 +37,7 @@ concurrency:
 
 jobs:
   # ---------------------------------------------------------------------------
-  # 1. Fast gate: formatting + lints. Fails early before heavier jobs run.
+  # 1. Formatting + lints. Runs in parallel with the heavier jobs.
   # ---------------------------------------------------------------------------
   lint:
     name: fmt + clippy
@@ -83,7 +86,6 @@ jobs:
   desktop:
     name: desktop build + test
     runs-on: ubuntu-latest
-    needs: lint
     steps:
       - uses: actions/checkout@v4
 
@@ -125,7 +127,6 @@ jobs:
   shaders:
     name: slang compile + binding drift
     runs-on: ubuntu-latest
-    needs: lint
     steps:
       - uses: actions/checkout@v4
 
