@@ -57,6 +57,13 @@ pub struct SceneChanges {
     pub has_camera: bool,
     /// 清屏颜色 = 活动相机的 `background_color`（无相机时为引擎默认灰）。
     pub clear_color: [f32; 4],
+    /// 主方向光是否投阴影 = Unity `Light.shadows != None`。
+    ///
+    /// 为 `false` 时整帧跳过阴影贴图渲染（`ShadowMode::None`），
+    /// 着色器也会因为 `shadow_strength = 0` 得到全亮结果。
+    pub shadows_enabled: bool,
+    /// 阴影强度 = Unity `Light.shadowStrength`（0..=1，已 clamp）。
+    pub shadow_strength: f32,
 }
 
 // ---------------------------------------------------------------------------
@@ -203,6 +210,11 @@ fn collect_scene_changes(
         .map(|l| Vec4::new(l.color.x, l.color.y, l.color.z, l.ambient))
         .unwrap_or(fallback_col);
 
+    // 2.5 阴影开关：方向光的 `Light.shadows` / `shadowStrength`。
+    //     没有方向光时阴影没有意义（fallback 方向只是一个常量），直接关掉。
+    let (shadows_enabled, shadow_strength) =
+        scene::systems::lights::directional_shadow_state(&samples);
+
     // 3. 局部光源（点光 + 聚光）上 to LIGHT_MAX) 进前向 SSBO。`color.w` 是类型位
     //    （0 = 点光，1 = 聚光），聚光额外带朝向与内外锥余弦。
     let mut lights: Vec<GpuLight> = Vec::new();
@@ -279,6 +291,8 @@ fn collect_scene_changes(
         exposure,
         has_camera,
         clear_color,
+        shadows_enabled,
+        shadow_strength,
     }
 }
 
@@ -340,6 +354,8 @@ pub fn render_system(
         has_camera,
         // 清屏色直接从 `scene` 读（`scene.clear_color`），这里不解构。
         clear_color: _,
+        shadows_enabled,
+        shadow_strength,
     } = scene;
     let light_count = lights.len() as f32;
 
@@ -358,8 +374,8 @@ pub fn render_system(
             [e.width as f32, e.height as f32]
         },
         exposure: *exposure,
+        shadow_strength: *shadow_strength,
         _pad2: [0.0; 3],
-        _pad3: 0.0,
     };
 
     // 2.5. 扩展脏检测：draw_items 数量变化也视为场景脏（触发 BLAS/instance 更新）
@@ -397,6 +413,7 @@ pub fn render_system(
         pt_accum_dirty: dirty_flags.directional_light || draw_count_dirty,
         has_camera: *has_camera,
         clear_color: scene.clear_color,
+        shadows_enabled: *shadows_enabled,
         ui_overlay: Some(ui_overlay),
     };
     // §8 五阶段：prepare 阶段批量同步（当前实现 dirty 日志 + 未来上传点）

@@ -294,3 +294,75 @@ fn local_light_budget_caps_only_point_and_spot() {
     assert_eq!(directional, 1, "方向光不占局部光预算");
     assert_eq!(local, LIGHT_MAX as usize);
 }
+
+// ---------------------------------------------------------------------------
+// 方向光阴影状态（Unity `Light.shadows` / `shadowStrength`）
+// ---------------------------------------------------------------------------
+
+#[test]
+fn directional_shadow_state_reads_light_fields() {
+    let mut world = World::new();
+    let sun = world.spawn();
+    world.insert(
+        sun,
+        Light {
+            light_type: LightType::Directional,
+            shadows: prism_scene::LightShadows::Soft,
+            shadow_strength: 0.6,
+            ..Default::default()
+        },
+    );
+
+    let (enabled, strength) = directional_shadow_state(&collect_light_samples(&world));
+    assert!(enabled);
+    assert!((strength - 0.6).abs() < 1e-6);
+}
+
+#[test]
+fn shadows_none_disables_but_keeps_strength() {
+    let mut world = World::new();
+    let sun = world.spawn();
+    world.insert(
+        sun,
+        Light {
+            light_type: LightType::Directional,
+            shadows: prism_scene::LightShadows::None,
+            shadow_strength: 0.4,
+            ..Default::default()
+        },
+    );
+
+    let (enabled, strength) = directional_shadow_state(&collect_light_samples(&world));
+    assert!(!enabled, "shadows = None 应整帧关闭阴影");
+    assert!((strength - 0.4).abs() < 1e-6);
+}
+
+#[test]
+fn shadow_state_is_disabled_without_a_directional_light() {
+    let mut world = World::new();
+    let e = world.spawn();
+    world.insert(e, PointLight::default());
+
+    let (enabled, strength) = directional_shadow_state(&collect_light_samples(&world));
+    assert!(!enabled);
+    assert_eq!(strength, 0.0);
+}
+
+#[test]
+fn shadow_strength_is_clamped() {
+    let mut world = World::new();
+    let sun = world.spawn();
+    world.insert(
+        sun,
+        Light {
+            light_type: LightType::Directional,
+            shadows: prism_scene::LightShadows::Hard,
+            shadow_strength: 3.5,
+            ..Default::default()
+        },
+    );
+
+    let (enabled, strength) = directional_shadow_state(&collect_light_samples(&world));
+    assert!(enabled);
+    assert_eq!(strength, 1.0);
+}

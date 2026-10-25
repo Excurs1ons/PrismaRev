@@ -57,9 +57,6 @@ impl HasWindowHandle for RawHandleBridge<'_> {
     }
 }
 
-/// 中性灰清除色——可与黑色/白色区分。
-const CLEAR_COLOR: [f32; 4] = [0.5, 0.5, 0.5, 1.0];
-
 /// 帧率计数器的平滑因子（值越低越平滑）。
 const FPS_ALPHA: f32 = 0.05;
 
@@ -264,8 +261,8 @@ fn render_one_frame(
         tonemap_mode: settings.tonemap_mode,
         viewport_size: [extent.width as f32, extent.height as f32],
         exposure: scene.exposure,
+        shadow_strength: scene.shadow_strength,
         _pad2: [0.0; 3],
-        _pad3: 0.0,
     };
 
     let input = FrameInput {
@@ -291,7 +288,8 @@ fn render_one_frame(
         pt_lights: &scene.pt_lights,
         pt_accum_dirty: dirty_flags.directional_light || draw_count_dirty,
         has_camera: scene.has_camera,
-        clear_color: CLEAR_COLOR,
+        clear_color: scene.clear_color,
+        shadows_enabled: scene.shadows_enabled,
         ui_overlay: Some(&packet.ui_overlay),
     };
 

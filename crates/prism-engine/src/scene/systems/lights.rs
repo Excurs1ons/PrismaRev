@@ -204,6 +204,23 @@ pub fn collect_light_samples(world: &World) -> Vec<LightSample> {
     out
 }
 
+/// 方向光的阴影状态 `(enabled, strength)`。
+///
+/// `enabled` = Unity `Light.shadows != None`；`strength` = `Light.shadowStrength`
+/// （clamp 到 `0..=1`）。没有方向光时两者都是「关闭」。
+pub fn directional_shadow_state(samples: &[LightSample]) -> (bool, f32) {
+    match samples
+        .iter()
+        .find(|sample| sample.kind == LightKind::Directional)
+    {
+        Some(light) => (
+            light.shadows.casts_shadows(),
+            light.shadow_strength.clamp(0.0, 1.0),
+        ),
+        None => (false, 0.0),
+    }
+}
+
 /// 主方向光 = 第一个激活的方向光（统一 `Light` 或旧组件）。
 pub fn primary_directional_light(world: &World) -> Option<LightSample> {
     collect_light_samples(world)
