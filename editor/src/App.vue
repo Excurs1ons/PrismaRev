@@ -9,6 +9,7 @@ import HierarchyTree from "./components/HierarchyTree.vue";
 import Inspector from "./components/Inspector.vue";
 import PreferencesPanel from "./components/PreferencesPanel.vue";
 import ProjectSettingsPanel from "./components/ProjectSettingsPanel.vue";
+import ThemePanel from "./components/ThemePanel.vue";
 import {
   collectTabs,
   defaultDock,
@@ -27,6 +28,12 @@ import {
   savePreferences,
   type EditorPreferences,
 } from "./preferences";
+import {
+  applyTheme,
+  loadThemeState,
+  saveThemeState,
+  type ThemeState,
+} from "./theme";
 import { PREFAB_LINK_COMPONENT } from "./types";
 import type {
   AssetInfo,
@@ -69,6 +76,9 @@ let previewTimer: number | undefined;
 
 /** 编辑器首选项（本机 localStorage）。 */
 const editorPrefs = ref<EditorPreferences>(loadPreferences());
+
+/** 编辑器主题（本机 localStorage；只覆盖 CSS 变量）。 */
+const themeState = ref<ThemeState>(loadThemeState());
 
 /** 渲染图可视化（数据来自游戏进程写出的 JSON 报告）。 */
 const graphReport = ref<RenderGraphReport | null>(null);
@@ -237,6 +247,7 @@ type PanelId =
   | "renderGraph"
   | "projectSettings"
   | "preferences"
+  | "theme"
   | "build"
   | "tools"
   | "shortcuts"
@@ -250,6 +261,7 @@ const PANELS: Array<{ id: PanelId; title: string }> = [
   { id: "renderGraph", title: "渲染图" },
   { id: "projectSettings", title: "项目设置" },
   { id: "preferences", title: "首选项" },
+  { id: "theme", title: "主题" },
   { id: "build", title: "构建项目" },
   { id: "tools", title: "离线工具" },
   { id: "shortcuts", title: "快捷键" },
@@ -1381,6 +1393,10 @@ function openPreferences() {
   openUtilityWindow("preferences", 640, 560);
 }
 
+function openTheme() {
+  openUtilityWindow("theme", 720, 640);
+}
+
 function openBuild() {
   openUtilityWindow("build", 760, 620);
 }
@@ -1537,6 +1553,7 @@ const MENUS = computed<MenuDef[]>(() => {
         { separator: true },
         { label: "项目设置…", action: openSettings },
         { label: "首选项…", action: openPreferences },
+        { label: "主题…", action: openTheme },
       ],
     },
     {
@@ -1755,6 +1772,11 @@ function applyPreferences(preferences: EditorPreferences) {
 watch(editorPrefs, (value) => {
   savePreferences(value);
   applyPreferences(value);
+}, { deep: true, immediate: true });
+
+watch(themeState, (value) => {
+  applyTheme(value);
+  saveThemeState(value);
 }, { deep: true, immediate: true });
 
 watch(playableScenes, (scenes) => {
@@ -2066,6 +2088,10 @@ onUnmounted(() => {
         />
         </template>
 
+        <template #theme>
+        <ThemePanel v-model="themeState" />
+        </template>
+
         <template #build>
         <BuildPanel
           :scenes="scenes"
@@ -2123,7 +2149,7 @@ onUnmounted(() => {
                     refY="3.5"
                     orient="auto"
                   >
-                    <path d="M0,0 L7,3.5 L0,7 z" fill="#9aa4b2" />
+                    <path d="M0,0 L7,3.5 L0,7 z" fill="var(--muted-dim)" />
                   </marker>
                 </defs>
                 <g v-for="edge in graphLayout.edges" :key="edge.key">
@@ -2151,14 +2177,14 @@ onUnmounted(() => {
                     :width="158"
                     :height="64"
                     rx="8"
-                    fill="#171b24"
+                    fill="var(--panel-alt)"
                     :stroke="passColor(node.pass.kind)"
                     stroke-width="1.5"
                   />
                   <text
                     :x="node.x + 12"
                     :y="node.y + 24"
-                    fill="#e8ecf4"
+                    fill="var(--text)"
                     font-size="12"
                     font-weight="600"
                   >
@@ -2172,7 +2198,7 @@ onUnmounted(() => {
                   >
                     {{ node.pass.kind }} · #{{ node.pass.index }}
                   </text>
-                  <text :x="node.x + 12" :y="node.y + 57" fill="#8b93a7" font-size="9">
+                  <text :x="node.x + 12" :y="node.y + 57" fill="var(--muted)" font-size="9">
                     {{ node.pass.inputs.length }} in · {{ node.pass.outputs.length }} out
                   </text>
                 </g>
