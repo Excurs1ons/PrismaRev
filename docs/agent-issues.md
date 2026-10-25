@@ -154,7 +154,9 @@ gh issue view <number>
 ## 7. 提完之后
 
 - 与当前任务相关：在 PR / commit 里写 `Refs #N`；不要扩大当前 PR 去修它。
-- 你准备修：评论 `🤖 Agent: claiming`，加 `agent/working`；完成开 PR 写 `Closes #N`。
+- 你准备修：评论 `🤖 Agent: claiming`，加 `agent/working`；完成后开 PR 写 `Closes #N`，
+  并**回到 issue 里评论 PR 链接**（以 `🤖 Agent:` 开头）—— 双向引用：PR 正文指回
+  issue，issue 页面也看得到 PR。只写 `Closes #N` 时 issue 上没有任何痕迹，别人还得自己找。
 - 不准备修：留在 `agent/ready` / `needs/triage`，不要占坑。
 - 交接写 Done / Next / Risks / Verify（见 [`integrations.md`](integrations.md) §6）。
 
