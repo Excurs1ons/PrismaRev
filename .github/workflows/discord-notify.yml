@@ -1,0 +1,95 @@
+name: Discord notify
+
+# 把 issue / PR / release / CI 失败发到 Discord（可选）。
+# 没配 DISCORD_WEBHOOK_URL 时直接跳过，不影响 CI。
+# 只做 outbound；Discord -> GitHub 的报告由外部 bot（Kira 等价物）负责，
+# 契约见 docs/integrations.md。
+
+on:
+  issues:
+    types: [opened, reopened, closed]
+  pull_request:
+    types: [opened, reopened, closed]
+  release:
+    types: [published]
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+  actions: read
+
+jobs:
+  notify:
+    if: >
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.conclusion == 'failure' &&
+       github.event.workflow_run.head_branch == 'master')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Post to Discord
+        env:
+          WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [ -z "$WEBHOOK_URL" ]; then
+            echo "DISCORD_WEBHOOK_URL is not configured; skipping."
+            exit 0
+          fi
+          python - <<'PY'
+          import json
+          import os
+          import urllib.request
+
+          event = os.environ["EVENT_NAME"]
+          with open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8") as handle:
+              payload = json.load(handle)
+
+
+          def clip(text, limit=170):
+              return (text or "").replace("\n", " ")[:limit]
+
+
+          if event == "issues":
+              action = payload["action"]
+              if action not in ("opened", "reopened", "closed"):
+                  raise SystemExit(0)
+              item = payload["issue"]
+              text = f"🐞 Issue #{item['number']} {action}: {clip(item['title'])}\n{item['html_url']}"
+          elif event == "pull_request":
+              action = payload["action"]
+              if action not in ("opened", "reopened", "closed"):
+                  raise SystemExit(0)
+              item = payload["pull_request"]
+              state = "merged" if item.get("merged") else action
+              text = f"🔀 PR #{item['number']} {state}: {clip(item['title'])}\n{item['html_url']}"
+          elif event == "release":
+              item = payload["release"]
+              text = f"🚀 Release {item['tag_name']}: {clip(item.get('name') or item['tag_name'])}\n{item['html_url']}"
+          elif event == "workflow_run":
+              item = payload["workflow_run"]
+              if item.get("conclusion") != "failure" or item.get("head_branch") != "master":
+                  raise SystemExit(0)
+              text = f"❌ CI failed on master: {clip(item.get('display_title', ''))}\n{item['html_url']}"
+          else:
+              raise SystemExit(0)
+
+          # @silent 抑制通知（release 除外）；allowed_mentions 为空，避免标题里的 @everyone 生效。
+          content = text if event == "release" else "@silent " + text
+          body = json.dumps({
+              "content": content[:1900],
+              "allowed_mentions": {"parse": []},
+          }).encode()
+          request = urllib.request.Request(
+              os.environ["WEBHOOK_URL"],
+              data=body,
+              headers={"Content-Type": "application/json", "User-Agent": "PrismaRev-CI"},
+          )
+          try:
+              urllib.request.urlopen(request, timeout=10).read()
+          except Exception as error:  # webhook 失败不应让 CI 变红
+              print(f"Discord webhook failed: {error}")
+          PY
