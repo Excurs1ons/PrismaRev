@@ -1075,7 +1075,13 @@ function addEntity() {
   const components: Record<string, JsonValue> = {};
   for (const name of preset?.components ?? []) {
     const type = schema.value.types.find((t) => t.name === name);
-    components[name] = (type?.defaultJson as JsonValue) ?? {};
+    const defaults = (type?.defaultJson as JsonValue) ?? {};
+    // 预设可以覆盖部分字段（例如把 `Light` 的默认 Point 改成 Directional/Spot）。
+    const overrides = preset?.overrides?.[name];
+    components[name] =
+      overrides && typeof overrides === "object" && !Array.isArray(overrides)
+        ? { ...(defaults as Record<string, JsonValue>), ...(overrides as Record<string, JsonValue>) }
+        : defaults;
   }
   const entities = doc.value.entities.slice();
   entities.push({
@@ -1083,7 +1089,7 @@ function addEntity() {
     parent: null,
     transform: {
       position: (preset?.position ?? [0, 0, 0]) as number[],
-      rotation: [0, 0, 0, 1],
+      rotation: (preset?.rotation ?? [0, 0, 0, 1]) as number[],
       scale: [1, 1, 1],
     },
     components,
