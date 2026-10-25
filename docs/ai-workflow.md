@@ -175,6 +175,9 @@ chore: apply rustfmt
 
 - Draft PR 可以早开用于讨论方案，但**不能代替自检**。
 - 一个 PR 一个主题；>500 行要说明原因或先拆。
+- 开 PR 后**在对应 issue 上回链 PR URL**（评论以 `🤖 Agent:` 开头），PR 正文再用
+  `Closes #N` / `Refs #N` 指回 issue —— 双向引用，不要只写单向：接口方 review 时
+  需要从 issue 也能跳到实现。
 - 已经进入 review 的公共分支不要 force-push；自己的分支可以 rebase。
 - 合并默认 squash，提交标题用 PR 标题；合并后删分支。
 - **不提交运行时产物**：`.spv`、`.pak`、`target/`、`node_modules/`、IBL cache、本机路径、密钥。
