@@ -675,6 +675,18 @@ Unity 的 `Renderer.shadowCastingMode` 决定一个物体「是否投影」与�
 **这一批没做**：`lit` 场景模板仍用旧组件（模板是另一条 `merge` 路径，留给后续）；
 渲染枚举批次（`BlendMode`/`CullMode`/`CompareFunction`/`RenderQueue`）未开始。
 
+### 清理 — `prism-cooker` 里重复的场景 schema ✅
+
+`crates/prism-cooker/src/importer/scene.rs` 里还有一份 `SceneJson` / `TransformJson`
+（连同 216 行测试），与 `prism_scene::json` 的权威定义重复，且没有任何调用方
+（cooker 的实际路径走 `cooker/scene.rs` → `prism_scene::json::SceneJson`）。
+
+删除这两个文件（356 行）并去掉 `importer/mod.rs` 的 `pub mod scene;`。cooker 现在只有
+一份场景 schema，改字段不会再出现「改了一处、另一处还是旧的」。
+
+验证：`cargo test -p prism-cooker`（95 + 6 + 3）、`cargo check -p prism-cooker --all-targets`、
+`python3 scripts/pr_ready.py --quick`。
+
 ### P3b-5 — `Light.shadows` / `shadowStrength` 接线 ✅
 
 `Light` 的阴影字段之前只是数据（PR #14 的「已知遗留」）。这一批让它们真正生效：
@@ -722,8 +734,6 @@ Unity 的 `Renderer.shadowCastingMode` 决定一个物体「是否投影」与�
   点光/聚光还没有自己的阴影（只有方向光贴图）。
 - **P3c 相机行为**：用测试钉住 yaw↔quaternion 的 `−π/2` 偏移；`clear_flags` 的
   `Depth`/`Nothing` 语义接进 `ForwardPass`；多相机（`depth` 排序 + 叠加）。
-- 清理 `crates/prism-cooker/src/importer/scene.rs` 里**重复的（且已死）** `SceneJson` /
-  `TransformJson` —— 唯一权威应只有 `prism-scene`。
 
 ## 附录
 
