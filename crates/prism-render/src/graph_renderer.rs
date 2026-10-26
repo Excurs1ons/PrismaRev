@@ -1132,43 +1132,11 @@ impl GraphRenderer {
         // here so the 帧缓冲 is always torn 下 第一个
         if let Some(forward_pass) = self.graph.pass_mut::<ForwardPass>() {
             forward_pass.drop_target(&self.runtime.context.device);
-            // Re-size the per-image 帧缓冲 vectors for the new 交换链
-            // 图像 count. `ForwardPass::execute` rebuilds any 缺少 槽 via
-            // `ensure_target` on the 下一个 帧
-            if let Some(sw) = self.swapchain.as_ref() {
-                forward_pass.set_image_count(sw.views.len());
-            }
         }
         // PostPass wraps 交换链 views too (its framebuffers 目标 the
         // 交换链 directly). 放置 them on the same lifecycle.
         if let Some(post) = self.graph.pass_mut::<crate::post::PostPass>() {
             post.drop_target(&self.runtime.context.device);
-        }
-        // GTAO owns its own 环境光遮蔽 images (not swapchain-derived) but sizes them
-        // to half the 交换链 extent, so recreate them on 调整大小 too.
-        if let Some(sw) = self.swapchain.as_ref() {
-            if let Some(gtao) = self.graph.pass_mut::<crate::gtao::GtaoPass>() {
-                if let Err(e) = gtao.recreate_target(
-                    &self.runtime.context,
-                    self.runtime.command_pool,
-                    sw.extent,
-                ) {
-                    log::warn!("GtaoPass recreate_target failed: {e:#}");
-                }
-            }
-            // CRT 调度器的 RenderTextures 跟随 swapchain 尺寸（演示 RT 全屏）。
-            if let Some(sched) = self
-                .graph
-                .pass_mut::<crate::rt_scheduler::RenderTextureScheduler>()
-            {
-                if let Err(e) = sched.resize_all(
-                    &self.runtime.context,
-                    self.texture_manager.bindless_mut(),
-                    sw.extent,
-                ) {
-                    log::warn!("RenderTextureScheduler resize_all failed: {e:#}");
-                }
-            }
         }
         // ECS UI 叠加按 image view 缓存 framebuffer；必须在 `sw.recreate()`
         // 销毁旧 image view **之前**释放，否则 framebuffer 会引用已销毁的
@@ -1186,6 +1154,42 @@ impl GraphRenderer {
         if let Some(sw) = self.swapchain.as_ref() {
             if let Some(overlay) = self.external_overlay.as_mut() {
                 overlay.on_swapchain_views_changed(&sw.views, sw.extent);
+            }
+        }
+
+        // 依赖交换链尺寸/图像数的 pass 必须在 `sw.recreate()` **之后**按新值
+        // resize：recreate 之前 `sw.extent` 与 `sw.views.len()` 还是旧交换链的，
+        // `GtaoPass::recreate_target` 拿旧的半分辨率做早退（old/2 == 旧 extent），
+        // 而 `set_image_count` 会让 `ForwardPass::ensure_target` 缺少新图像对应的
+        // 槽位（`image_index >= image_count` 直接 return）。
+        if let Some((extent, image_count)) = self
+            .swapchain
+            .as_ref()
+            .map(|sw| (sw.extent, sw.views.len()))
+        {
+            if let Some(forward_pass) = self.graph.pass_mut::<ForwardPass>() {
+                forward_pass.set_image_count(image_count);
+            }
+            // GTAO 拥有自己的 AO 图像（不来自交换链），但尺寸是交换链的一半。
+            if let Some(gtao) = self.graph.pass_mut::<crate::gtao::GtaoPass>() {
+                if let Err(e) =
+                    gtao.recreate_target(&self.runtime.context, self.runtime.command_pool, extent)
+                {
+                    log::warn!("GtaoPass recreate_target failed: {e:#}");
+                }
+            }
+            // CRT 调度器的 RenderTextures 跟随 swapchain 尺寸（演示 RT 全屏）。
+            if let Some(sched) = self
+                .graph
+                .pass_mut::<crate::rt_scheduler::RenderTextureScheduler>()
+            {
+                if let Err(e) = sched.resize_all(
+                    &self.runtime.context,
+                    self.texture_manager.bindless_mut(),
+                    extent,
+                ) {
+                    log::warn!("RenderTextureScheduler resize_all failed: {e:#}");
+                }
             }
         }
 
@@ -1460,16 +1464,24 @@ impl GraphRenderer {
         if record.is_ok() {
             let has_ui = ui_overlay.is_some_and(|o| !o.quads.is_empty() || !o.texts.is_empty());
             if has_ui {
-                if self.ui_overlay.is_none() {
-                    let gpu = crate::ui_overlay::UiOverlay::new(
-                        &self.runtime.context,
-                        self.runtime.command_pool,
-                    )
-                    .context("create ui overlay")?;
-                    self.ui_overlay = Some(gpu);
-                }
                 if let Some(sw) = self.swapchain.as_ref() {
+                    // The overlay render pass must use the swapchain's actual
+                    // color format; surfaces fall back to `available[0]`
+                    // (often `R8G8B8A8_*` on Android) when the preferred
+                    // `B8G8R8A8_SRGB` is unavailable.
+                    let color_format = sw.format.format;
+                    if self.ui_overlay.is_none() {
+                        let gpu = crate::ui_overlay::UiOverlay::with_color_format(
+                            &self.runtime.context,
+                            self.runtime.command_pool,
+                            color_format,
+                        )
+                        .context("create ui overlay")?;
+                        self.ui_overlay = Some(gpu);
+                    }
                     if let Some(gpu) = self.ui_overlay.as_mut() {
+                        gpu.set_color_format(color_format)
+                            .context("ui overlay color format")?;
                         // PostPass leaves the swapchain image in PRESENT; turn it
                         // back into a color attachment for the UI load pass.
                         let image = sw.images[image_index as usize];

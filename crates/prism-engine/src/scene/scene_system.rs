@@ -22,7 +22,7 @@ use std::path::PathBuf;
 
 use prism_asset::core::AssetId;
 use prism_asset::runtime::{ResourceManager, SceneAsset};
-use prism_ecs::World;
+use prism_ecs::{Entity, World};
 
 use super::component_registry::ComponentRegistry;
 use super::loader::{SceneInstance, SceneLoader, SceneSource};
@@ -111,35 +111,11 @@ impl<'a> SceneReadView<'a> {
     }
 
     /// 提取渲染所需的扁平绘制列表，不暴露可变 ECS 访问。
+    ///
+    /// 委托给 [`crate::scene::systems::render::scene_render_system`]：这里曾经是
+    /// 一份复制粘贴的实现，两处查询条件（尤其 `MaterialRef` 是否必需）会各自漂移。
     pub fn draw_items(&self) -> Vec<prism_render::DrawItem> {
-        self.world
-            .query3::<
-                super::components::LocalToWorld,
-                super::components::MeshRef,
-                super::components::MaterialRef,
-            >()
-            .filter(|(e, _, _, _)| {
-                self.world
-                    .get::<super::components::Active>(*e)
-                    .map(|a| a.0)
-                    .unwrap_or(true)
-            })
-            .map(|(entity, wt, mr, mat)| {
-                let mode = self
-                    .world
-                    .get::<super::components::MeshRenderer>(entity)
-                    .map(|renderer| renderer.shadow_casting_mode)
-                    .unwrap_or_default();
-                prism_render::DrawItem {
-                    mesh: mr.render_handle,
-                    model: wt.0.to_cols_array_2d(),
-                    material: Some(mat.material_slot),
-                    cast_shadow: mode.casts_shadows(),
-                    visible_in_main_pass: mode.visible_in_main_pass(),
-                    cast_shadow_two_sided: mode.casts_two_sided_shadows(),
-                }
-            })
-            .collect()
+        crate::scene::systems::render::scene_render_system(self.world)
     }
 }
 
@@ -388,7 +364,6 @@ impl SceneManager {
         manifest: &SceneManifest,
         scene_name: Option<&str>,
     ) -> Option<String> {
-        self.current_scene_path = None;
         for entry in &manifest.scenes {
             if !entry.enabled {
                 continue;
@@ -411,14 +386,15 @@ impl SceneManager {
             };
             match load_scene_by_id(rm, world, id, registry) {
                 Ok(inst) => {
+                    // 只有新场景已经 spawn 成功才卸载旧场景：失败时保持当前
+                    // 场景原样（见 `load_named_from_manifest` 的约定）。
+                    let unloaded = self.adopt_scene(world, &entry.name, &entry.path, &inst);
                     log::info!(
-                        "scene '{}' loaded: {} entities ({} roots)",
+                        "scene '{}' loaded: {} entities ({} roots), unloaded {unloaded} entity(ies) from the previous scene",
                         entry.name,
                         inst.all_entities.len(),
                         inst.root_entities.len()
                     );
-                    self.current_scene_name = Some(entry.name.clone());
-                    self.current_scene_path = Some(entry.path.clone());
                     return Some(entry.name.clone());
                 }
                 Err(e) => {
@@ -432,6 +408,28 @@ impl SceneManager {
             log::warn!("requested scene '{name}' was not found in the manifest");
         }
         None
+    }
+
+    /// 接管刚刚 spawn 成功的新场景：卸载旧场景实体、清空环境贴图缓存，
+    /// 并把「当前场景」切到新场景。
+    ///
+    /// 返回被卸载的旧场景实体数。不属于任何场景的实体（例如
+    /// `Engine::runtime_initialize` 生成的回退相机）保留——它们由引擎而不是
+    /// 场景拥有。
+    fn adopt_scene(
+        &mut self,
+        world: &mut World,
+        name: &str,
+        path: &str,
+        inst: &SceneInstance,
+    ) -> usize {
+        let unloaded = unload_other_scenes(world, inst.scene_id);
+        self.current_scene_name = Some(name.to_owned());
+        self.current_scene_path = Some(path.to_owned());
+        // IBL 按场景解析：切换后不能继续复用上一个场景注入的字节，
+        // 否则旧 HDR 会盖住新场景的天空盒。
+        self.environment_bytes = None;
+        unloaded
     }
 }
 
@@ -495,8 +493,9 @@ pub struct SceneManifest {
 }
 
 /// 不依赖当前工作目录地定位 `scenes.toml`：
-/// 依次在【当前目录及其各级父目录】与【可执行文件所在目录及其各级父目录】下，
-/// 尝试 `assets/scenes.toml` 与 `crates/prism-engine/assets/scenes.toml`。
+/// 按 [`crate::asset_paths::search_roots`] 的顺序（`PRISMREV_ASSET_ROOT`、
+/// 当前目录及其父目录、可执行文件目录及其父目录），尝试
+/// `assets/scenes.toml` 与 `crates/prism-engine/assets/scenes.toml`。
 ///
 /// 这样无论从仓库根还是 `projects/prisma/` 子目录启动，
 /// 都能正确找到资源清单——之前从用户项目目录启动时，导致
@@ -506,26 +505,7 @@ fn find_manifest_path() -> Option<PathBuf> {
         "assets/scenes.toml",
         "crates/prism-engine/assets/scenes.toml",
     ];
-    let mut bases: Vec<PathBuf> = Vec::new();
-    if let Ok(cwd) = std::env::current_dir() {
-        bases.push(cwd.clone());
-        let mut p = cwd.as_path();
-        while let Some(parent) = p.parent() {
-            bases.push(parent.to_path_buf());
-            p = parent;
-        }
-    }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(exe_dir) = exe.parent() {
-            bases.push(exe_dir.to_path_buf());
-            let mut p = exe_dir;
-            while let Some(parent) = p.parent() {
-                bases.push(parent.to_path_buf());
-                p = parent;
-            }
-        }
-    }
-    for base in bases {
+    for base in crate::asset_paths::search_roots() {
         for rel in rels {
             let candidate = base.join(rel);
             if candidate.exists() {
@@ -568,3 +548,23 @@ fn load_scene_by_id(
         .load_and_spawn(world, SceneSource::RawCooked(asset.bytes.clone()), registry)
         .map_err(|e| anyhow::anyhow!("{e}"))
 }
+
+/// 卸载所有不属于 `keep` 的场景实体，返回被移除的实体数。
+///
+/// 归属由 [`SceneMember`](super::components::SceneMember) 判定：没有该组件的
+/// 实体（引擎自有实体、用户运行时 spawn 的对象）一律保留。
+fn unload_other_scenes(world: &mut World, keep: super::components::SceneAssetId) -> usize {
+    let stale: Vec<Entity> = world
+        .query::<super::components::SceneMember>()
+        .filter(|(_, member)| member.0 != keep)
+        .map(|(entity, _)| entity)
+        .collect();
+    for entity in &stale {
+        world.despawn(*entity);
+    }
+    stale.len()
+}
+
+#[cfg(test)]
+#[path = "scene_system_tests.rs"]
+mod tests;

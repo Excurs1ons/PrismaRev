@@ -124,11 +124,14 @@ slash command）。GitHub App 创建：[`tools/github-app/`](../tools/github-app
 
 Agent 认领一个 issue 时：
 
-1. 确认没有 `agent/working`，加上它，评论 `🤖 Agent: claiming`（写明模型 / 工具）。
+1. **第一步是认领，不是调查**：确认没有 `agent/working`，加上它，评论 `🤖 Agent: claiming`
+   （写明模型 / 工具）。之后才开始读代码、复现、翻日志 —— 调查也会占用这个 issue 的注意力，
+   晚认领别人就白查一遍。
 2. 开始实现；跨文件冲突时先同步，不覆盖他人的未提交改动。
 3. 完成：开 PR（正文含 `Closes #N`），移除 `agent/working`；issue 保留到 PR 合并。
-4. 阻塞：换成 `agent/blocked`，评论写清缺什么（信息 / 权限 / 决策）。
-5. 交接：
+4. 调查完不做：移除 `agent/working`，评论结论（`🤖 Agent: not taking it — <原因>`），别让标签一直挂着。
+5. 阻塞：换成 `agent/blocked`，评论写清缺什么（信息 / 权限 / 决策）。
+6. 交接：
 
 ```md
 🤖 Agent handoff

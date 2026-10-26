@@ -17,11 +17,11 @@ use std::time::Instant;
 use crate::context::VulkanContext;
 use crate::gizmo::Gizmo;
 use crate::mesh::Vertex;
-use crate::pipeline::{GraphicsPipeline, PipelineDesc};
+use crate::pipeline::{blend_factor, blend_operation, cull_flags, GraphicsPipeline, PipelineDesc};
 use crate::render_graph::{
-    GraphResources, PassInfo, PassKind, RenderContext, RenderGraphBuilder, RenderPassNode,
-    RenderSettings, ResourceHandle, ResourceType, ResourceUsage, FORWARD_COLOR_H, FORWARD_DEPTH_H,
-    FORWARD_NORMAL_H,
+    DrawState, GraphResources, PassInfo, PassKind, RenderContext, RenderGraphBuilder,
+    RenderPassNode, RenderSettings, ResourceHandle, ResourceType, ResourceUsage, FORWARD_COLOR_H,
+    FORWARD_DEPTH_H, FORWARD_NORMAL_H,
 };
 use crate::shader;
 use crate::skybox_pass::SkyboxPass;
@@ -86,7 +86,11 @@ pub struct ForwardPass {
     out_normal_h: ResourceHandle,
     extent: vk::Extent2D,
     render_pass: Option<vk::RenderPass>,
-    pipeline: Option<GraphicsPipeline>,
+    /// 主通道管线缓存：按 [`DrawState`]（剔除 / 深度写 / 混合）各一份。
+    ///
+    /// 所有变体的描述符集合布局 / 推送常量范围完全相同，只有光栅化与颜色
+    /// 混合状态不同，因此描述符绑定与推送常量在一次绘制列表内可以跨变体复用。
+    pipelines: std::collections::HashMap<DrawState, GraphicsPipeline>,
     ibl_descriptor_set: vk::DescriptorSet,
     /// IBL 描述符 集合 布局 (borrowed from `IblResources`). Used by the
     /// skybox pass to 构建 its 管线 布局
@@ -171,7 +175,7 @@ impl ForwardPass {
                 height: 0,
             },
             render_pass: None,
-            pipeline: None,
+            pipelines: std::collections::HashMap::new(),
             ibl_descriptor_set: vk::DescriptorSet::null(),
             ibl_layout: vk::DescriptorSetLayout::null(),
             shadow_ds_layout: None,
@@ -396,8 +400,8 @@ impl ForwardPass {
         if let Some(rp) = self.render_pass.take() {
             unsafe { device.destroy_render_pass(rp, None) };
         }
-        // 管线 (frees 管线 + 布局 via GraphicsPipeline::Drop).
-        self.pipeline = None;
+        // 管线（三种剔除变体，frees 管线 + 布局 via GraphicsPipeline::Drop）。
+        self.pipelines.clear();
 
         // 集合 0: 帧 UBO + materials SSBO 布局 + 池 (sets freed with 池
         if let Some(layout) = self.frame_set_layout.take() {
@@ -1107,8 +1111,18 @@ impl ForwardPass {
         }
         Ok(())
     }
-    fn ensure_pipeline(&mut self, device: &ash::Device) -> Result<()> {
-        if self.pipeline.is_some() {
+    /// 为绘制列表里出现的每种 [`DrawState`] 各建一条管线（幂等）。
+    ///
+    /// 剔除 / 深度写 / 混合都是 Vulkan **管线状态**，所以按状态分管线；所有
+    /// 变体的描述符布局与推送常量完全一致。调用方在录制命令前把本帧需要的
+    /// 状态收集齐（见 `execute`），避免在命令缓冲录制中间创建管线。
+    fn ensure_pipelines(&mut self, device: &ash::Device, states: &[DrawState]) -> Result<()> {
+        let missing: Vec<DrawState> = states
+            .iter()
+            .copied()
+            .filter(|state| !self.pipelines.contains_key(state))
+            .collect();
+        if missing.is_empty() {
             return Ok(());
         }
         let rp = self
@@ -1176,52 +1190,41 @@ impl ForwardPass {
             set5_layout,
         ];
 
-        // 推送 constants: PbrBindlessPushConstants (96 字节 VERTEX|FRAGMENT).
-        // Matches scene_frag.slang::PbrBindlessPush and Rust
-        // PbrBindlessPushConstants.
+        // Push constants: PbrBindlessPush (108 字节 std140, VERTEX|FRAGMENT).
+        // The range keeps a 128-byte slot so it stays a superset of the block
+        // even if a field is added; `size_of` is what `cmd_push_constants` sends.
+        // Matches scene_frag.slang::PbrBindlessPush and the generated
+        // `shader_bindings::scene_frag::PbrBindlessPush`.
         let push = [vk::PushConstantRange::default()
             .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
             .offset(0)
             .size(128)];
 
-        // MRT 混合 状态 two 颜色 attachments.
-        // 附件 0 颜色 - Alpha 混合 (legacy behavior).
-        // 附件 1 视图 norm) - no 混合 写入 RGBA through.
-        let blend_attachments = [
-            vk::PipelineColorBlendAttachmentState::default()
-                .color_write_mask(vk::ColorComponentFlags::RGBA)
-                .blend_enable(true)
-                .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
-                .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
-                .color_blend_op(vk::BlendOp::ADD)
-                .src_alpha_blend_factor(vk::BlendFactor::ONE)
-                .dst_alpha_blend_factor(vk::BlendFactor::ZERO)
-                .alpha_blend_op(vk::BlendOp::ADD),
-            vk::PipelineColorBlendAttachmentState::default()
-                .color_write_mask(vk::ColorComponentFlags::RGBA)
-                .blend_enable(false),
-        ];
-
-        let pipeline = GraphicsPipeline::new(&PipelineDesc {
-            device,
-            shader_stages: &shader_stages,
-            vertex_binding_desc: std::slice::from_ref(&binding_desc),
-            vertex_attr_descs: &attr_descs,
-            descriptor_set_layouts: &set_layouts,
-            push_constant_ranges: &push,
-            render_pass: rp,
-            subpass: 0,
-            cull_mode: None,
-            depth_bias_enable: None,
-            depth_bias_constant_factor: None,
-            depth_bias_slope_factor: None,
-            depth_write_enable: None,
-            depth_test_enable: None,
-            color_attachment_count: None,
-            color_blend_attachments: Some(&blend_attachments),
-            front_face: None,
-        })
-        .context("ForwardPass: create pipeline")?;
+        for state in missing {
+            // MRT: 附件 0 = 颜色（按 `DrawState` 混合），附件 1 = 视图法线（不混合）。
+            let blend_attachments = color_blend_attachments(state);
+            let pipeline = GraphicsPipeline::new(&PipelineDesc {
+                device,
+                shader_stages: &shader_stages,
+                vertex_binding_desc: std::slice::from_ref(&binding_desc),
+                vertex_attr_descs: &attr_descs,
+                descriptor_set_layouts: &set_layouts,
+                push_constant_ranges: &push,
+                render_pass: rp,
+                subpass: 0,
+                cull_mode: Some(cull_flags(state.cull_mode)),
+                depth_bias_enable: None,
+                depth_bias_constant_factor: None,
+                depth_bias_slope_factor: None,
+                // 透明物体通常 `ZWrite Off`（Unity `_ZWrite`）。
+                depth_write_enable: Some(state.z_write),
+                color_attachment_count: None,
+                color_blend_attachments: Some(&blend_attachments),
+                front_face: None,
+            })
+            .with_context(|| format!("ForwardPass: create pipeline ({state:?})"))?;
+            self.pipelines.insert(state, pipeline);
+        }
 
         unsafe { device.destroy_shader_module(vert_module, None) };
         unsafe { device.destroy_shader_module(frag_module, None) };
@@ -1231,7 +1234,6 @@ impl ForwardPass {
         // set0/set1/set3 are owned elsewhere (frame_set_layout /
         // BindlessTextureTable / shadow_ds_layout).
 
-        self.pipeline = Some(pipeline);
         Ok(())
     }
 }
@@ -1322,7 +1324,17 @@ impl RenderPassNode for ForwardPass {
         self.update_lights(ctx.device, ctx.frame.lights)?;
 
         self.ensure_render_pass(ctx.context)?;
-        self.ensure_pipeline(ctx.device)?;
+        // 录制命令前把本帧需要的管线状态收集齐（不透明默认状态永远需要：
+        // 描述符集用它的 layout 绑定）。
+        let mut states: Vec<DrawState> = vec![DrawState::default()];
+        let mut seen = std::collections::HashSet::new();
+        seen.insert(DrawState::default());
+        for item in ctx.frame.draw_list {
+            if item.visible_in_main_pass && seen.insert(item.state) {
+                states.push(item.state);
+            }
+        }
+        self.ensure_pipelines(ctx.device, &states)?;
 
         let rp = self.render_pass.unwrap();
         // Pick the per-swapchain-image 帧缓冲 Indexed by `image_index`
@@ -1336,7 +1348,12 @@ impl RenderPassNode for ForwardPass {
             .copied()
             .flatten()
             .context("ForwardPass: no framebuffer for image_index (call set_target first)")?;
-        let pipeline = self.pipeline.as_ref().unwrap();
+        // 描述符 / 推送常量布局在所有状态变体之间完全相同，所以用默认
+        // （不透明、背面剔除）变体的 layout 绑定一次即可；循环里只按需重绑管线。
+        let pipeline = self
+            .pipelines
+            .get(&DrawState::default())
+            .context("ForwardPass: default pipeline missing")?;
 
         // 解析 the per-frame 描述符 集合 now (used after the skybox 绘制
         // when we re-bind the scene 管线 + descriptors).
@@ -1511,6 +1528,10 @@ impl RenderPassNode for ForwardPass {
                 }],
             );
 
+            // 循环开始前刚绑定的是默认（不透明）管线；只有遇到别的状态才重绑
+            // （剔除 / 深度写 / 混合都是管线状态）。描述符与推送常量布局在所有
+            // 变体之间一致，所以不需要重新绑定描述符集。
+            let mut bound_state = DrawState::default();
             for item in ctx.frame.draw_list {
                 // `ShadowsOnly` 物体不参与相机主通道（Unity `ShadowCastingMode`）。
                 if !item.visible_in_main_pass {
@@ -1520,6 +1541,17 @@ impl RenderPassNode for ForwardPass {
                     Some(m) => &m.mesh,
                     None => continue,
                 };
+                if item.state != bound_state {
+                    let variant = self.pipelines.get(&item.state).with_context(|| {
+                        format!("ForwardPass: no pipeline for {:?}", item.state)
+                    })?;
+                    ctx.device.cmd_bind_pipeline(
+                        ctx.cmd,
+                        vk::PipelineBindPoint::GRAPHICS,
+                        variant.pipeline,
+                    );
+                    bound_state = item.state;
+                }
                 drawn += 1;
 
                 let vertex_buffers = [uploaded.vertex_buffer];
@@ -1543,6 +1575,9 @@ impl RenderPassNode for ForwardPass {
                     normal_idx: u32::MAX,
                     // PBR 分量 toggles from the app (15-bit bitmask).
                     debug_flags: ctx.frame.debug_flags,
+                    // std140 hole between `debug_flags` and `_padding` (see
+                    // scene_frag.rs: the layout is generated from reflection).
+                    _pad_84: [0; 12],
                     _padding: [0; 3],
                 };
                 ctx.device.cmd_push_constants(
@@ -1635,11 +1670,11 @@ impl RenderPassNode for ForwardPass {
     }
 
     fn warmup(&mut self, device: &ash::Device, context: &VulkanContext) -> Result<()> {
-        if self.pipeline.is_some() {
+        if !self.pipelines.is_empty() {
             return Ok(());
         }
         self.ensure_render_pass(context)?;
-        self.ensure_pipeline(device)
+        self.ensure_pipelines(device, &[DrawState::default()])
     }
 }
 
@@ -1661,7 +1696,7 @@ impl Drop for ForwardPass {
                 unsafe { device.destroy_render_pass(rp, None) };
             }
             // GraphicsPipeline::Drop frees the 管线 + 布局
-            self.pipeline = None;
+            self.pipelines.clear();
             // 集合 0 帧 UBO + materials SSBO) 布局 + 池
             if let Some(layout) = self.frame_set_layout.take() {
                 unsafe { device.destroy_descriptor_set_layout(layout, None) };
@@ -1689,4 +1724,30 @@ impl Drop for ForwardPass {
             // 集合 5 全局光照 probe 音量 is borrowed from SceneScope — not destroyed here.
         }
     }
+}
+
+/// 颜色附件的混合状态（MRT：附件 0 = 颜色，附件 1 = 视图法线）。
+///
+/// 附件 0 按 Unity 材质状态（`_SrcBlend` / `_DstBlend` / `_BlendOp`）配置；
+/// 默认值 `One`/`Zero`/`Add` 表示不透明，此时直接关掉混合。附件 1 永远不混合
+/// （视图空间法线需要原样写入）。
+fn color_blend_attachments(state: DrawState) -> [vk::PipelineColorBlendAttachmentState; 2] {
+    let mut color = vk::PipelineColorBlendAttachmentState::default()
+        .color_write_mask(vk::ColorComponentFlags::RGBA);
+    if state.blends() {
+        color = color
+            .blend_enable(true)
+            .src_color_blend_factor(blend_factor(state.src_blend))
+            .dst_color_blend_factor(blend_factor(state.dst_blend))
+            .color_blend_op(blend_operation(state.blend_op))
+            .src_alpha_blend_factor(vk::BlendFactor::ONE)
+            .dst_alpha_blend_factor(vk::BlendFactor::ZERO)
+            .alpha_blend_op(vk::BlendOp::ADD);
+    }
+    [
+        color,
+        vk::PipelineColorBlendAttachmentState::default()
+            .color_write_mask(vk::ColorComponentFlags::RGBA)
+            .blend_enable(false),
+    ]
 }

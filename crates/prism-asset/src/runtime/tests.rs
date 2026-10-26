@@ -356,6 +356,29 @@ fn streaming_reads_basic() {
 }
 
 #[test]
+fn streaming_zero_chunk_size_terminates() {
+    let id = AssetId::from_raw((2u64 << 32) | 1);
+    let mut b = PackageBuilder::new();
+    let data: Vec<u8> = (0..40).collect();
+    b.add_asset(id, AssetType::Binary, data.clone(), &[]);
+    let pak = b.build().unwrap();
+    let path = write_pak(&pak, "test_stream_zero.pak");
+
+    let mut rm = ResourceManager::new();
+    rm.load_package(&path).unwrap();
+    std::fs::remove_file(&path).ok();
+
+    // A zero chunk size is clamped to one byte instead of looping forever.
+    let mut stream = rm.read_stream(id, 0).unwrap();
+    assert_eq!(stream.size_hint(), (40, Some(40)));
+    let chunks: Vec<Vec<u8>> = stream.by_ref().collect();
+    assert_eq!(chunks.len(), 40);
+    assert!(chunks.iter().all(|chunk| chunk.len() == 1));
+    let total: usize = chunks.iter().map(|chunk| chunk.len()).sum();
+    assert_eq!(total, data.len());
+}
+
+#[test]
 fn unload_id_by_asset_id() {
     let id = AssetId::from_raw((1u64 << 32) | 1);
     let mut b = PackageBuilder::new();
@@ -531,4 +554,80 @@ fn path_manifest_rejects_bad_json() {
     assert!(rm.load_path_manifest_from_str("not json").is_err());
     // 缺少 'assets' 调
     assert!(rm.load_path_manifest_from_str(r#"{"foo": 1}"#).is_err());
+}
+
+// ---------------------------------------------------------------------------
+// 热重载（`--features hot-reload`）
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "hot-reload")]
+fn hot_reload_ids() -> (AssetId, AssetId) {
+    (
+        AssetId::from_raw((1u64 << 32) | 0x11),
+        AssetId::from_raw((1u64 << 32) | 0x22),
+    )
+}
+
+#[cfg(feature = "hot-reload")]
+fn two_asset_pak(x: &[u8], y: &[u8]) -> Vec<u8> {
+    let (x_id, y_id) = hot_reload_ids();
+    let mut builder = PackageBuilder::new();
+    builder.add_asset(x_id, AssetType::Binary, x.to_vec(), &[]);
+    builder.add_asset(y_id, AssetType::Binary, y.to_vec(), &[]);
+    builder.build().unwrap()
+}
+
+/// 热重载要换掉 reader：卸载后重新加载必须读到新文件的字节。
+#[cfg(feature = "hot-reload")]
+#[test]
+fn hot_reload_replaces_package_reader() {
+    let (x_id, _) = hot_reload_ids();
+    let path = write_pak(
+        &two_asset_pak(b"old-x", b"old-y"),
+        "test_hot_reload_reader.pak",
+    );
+
+    let mut rm = ResourceManager::new();
+    rm.load_package(&path).unwrap();
+    let handle: Handle<Vec<u8>> = rm.load(x_id).unwrap();
+    assert_eq!(rm.get(handle).unwrap(), b"old-x");
+
+    std::fs::write(&path, two_asset_pak(b"new-x-longer", b"new-y-longer")).unwrap();
+    rm.on_pak_changed(&path).unwrap();
+
+    // 内存里的资源被原地刷新（generation 递增，重新取 handle）。
+    let handle: Handle<Vec<u8>> = rm.load(x_id).unwrap();
+    assert_eq!(rm.get(handle).unwrap(), b"new-x-longer");
+
+    // 卸载后重新加载只能走管理器持有的 reader：旧实现留着打开时的字节，
+    // 这里会读回 `old-x`。
+    rm.unload_all();
+    let handle: Handle<Vec<u8>> = rm.load(x_id).unwrap();
+    assert_eq!(rm.get(handle).unwrap(), b"new-x-longer");
+
+    std::fs::remove_file(&path).ok();
+}
+
+/// 热重载不负责加载：没加载过的资源（或已被淘汰的槽）不该被急切读回内存。
+#[cfg(feature = "hot-reload")]
+#[test]
+fn hot_reload_leaves_unloaded_assets_alone() {
+    let (x_id, y_id) = hot_reload_ids();
+    let path = write_pak(&two_asset_pak(b"a", b"b"), "test_hot_reload_lazy.pak");
+
+    let mut rm = ResourceManager::new();
+    rm.load_package(&path).unwrap();
+    let _loaded: Handle<Vec<u8>> = rm.load(x_id).unwrap();
+
+    std::fs::write(&path, two_asset_pak(b"a2", b"b2")).unwrap();
+    rm.on_pak_changed(&path).unwrap();
+
+    let loaded: Vec<AssetId> = rm.loaded_assets().collect();
+    assert!(loaded.contains(&x_id));
+    assert!(
+        !loaded.contains(&y_id),
+        "热重载不该把没加载过的资源读进内存"
+    );
+
+    std::fs::remove_file(&path).ok();
 }

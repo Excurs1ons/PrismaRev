@@ -576,8 +576,8 @@ fn spawn_camera_emits_renderer_and_data_components() {
     let ctrl = world
         .get::<FlyCameraController>(entity)
         .expect("FlyCameraController should be present");
-    // Identity 四元数 -> 向前 (0,0,-1) -> yaw=π/2, pitch=0.
-    assert!((ctrl.yaw - std::f32::consts::FRAC_PI_2).abs() < 1e-5);
+    // Identity 四元数 -> 向前 (0,0,-1) -> yaw=0, pitch=0.
+    assert!(ctrl.yaw.abs() < 1e-5, "yaw={}", ctrl.yaw);
     assert!(ctrl.pitch.abs() < 1e-5);
 
     // Position is the LocalTransform 平移
@@ -591,7 +591,7 @@ fn spawn_camera_emits_renderer_and_data_components() {
 fn spawn_camera_yaw_from_quaternion() {
     // 90° 旋转 about +Y: 四元数 (0, sin45, 0, cos45). A −Z 向前
     // rotated +90° about Y points to −X, which FlyCamera expresses as
-    // yaw=π 向前 = [cos(π), 0, -sin(π)] = [-1, 0, 0]).
+    // yaw=π/2 (向前 = [-sin(π/2), 0, -cos(π/2)] = [-1, 0, 0]).
     let sqrt2_inv = std::f32::consts::FRAC_PI_4.sin(); // sin(45°)
     let e = RscnEntity {
         rotation: [0.0, sqrt2_inv, 0.0, sqrt2_inv],
@@ -613,10 +613,9 @@ fn spawn_camera_yaw_from_quaternion() {
     let ctrl = world
         .get::<FlyCameraController>(inst.all_entities[0])
         .expect("FlyCameraController should be present");
-    // ±π alias to the same direction; 归一化 to [0, π] for 比较
-    let yaw_abs = ctrl.yaw.abs();
+    // `atan2` 只给出 ±π 之间的值；这个朝向的 yaw 就是 π/2。
     assert!(
-        (yaw_abs - std::f32::consts::PI).abs() < 1e-4,
+        (ctrl.yaw - std::f32::consts::FRAC_PI_2).abs() < 1e-4,
         "yaw={}",
         ctrl.yaw
     );
@@ -715,6 +714,52 @@ fn load_rscn_v4_applies_components_and_hierarchy() {
     );
 }
 
+/// 有网格、无材质的 `MeshRenderer`（编辑器 fixture 的常见形状）必须仍然
+/// 进入绘制列表：缺 `MaterialRef` 时由渲染器回落默认材质槽。
+#[test]
+fn load_rscn_v4_mesh_without_material_still_draws() {
+    let json = br#"{
+            "version": 1,
+            "entities": [
+                {
+                    "name": "MeshOnly",
+                    "parent": null,
+                    "transform": {},
+                    "components": {
+                        "prism_engine::scene::MeshRenderer": {
+                            "mesh_path": "models/box.gltf",
+                            "material_path": ""
+                        }
+                    }
+                }
+            ]
+        }"#;
+    let scene = prism_scene::SceneJson::parse(std::str::from_utf8(json).unwrap()).unwrap();
+    let mut registry = crate::scene::ComponentRegistry::new();
+    crate::scene::register_builtin_components(&mut registry);
+    let bytes = prism_scene::rscn::encode_scene(&scene, &registry).unwrap();
+
+    let mut world = World::new();
+    let mut loader = SceneLoader::new();
+    loader
+        .load_and_spawn(&mut world, SceneSource::RawCooked(bytes), &registry)
+        .unwrap();
+
+    let entity = world
+        .query::<MeshRef>()
+        .next()
+        .map(|(entity, _)| entity)
+        .expect("mesh-only entity should get a MeshRef");
+    assert!(
+        world.get::<MaterialRef>(entity).is_none(),
+        "空材质路径不应插入 MaterialRef"
+    );
+
+    let items = crate::scene::SceneReadView::new(&world).draw_items();
+    assert_eq!(items.len(), 1, "网格-only 实体应进入绘制列表");
+    assert_eq!(items[0].material, None, "缺失材质应回落到默认材质槽");
+}
+
 // ── integration via load_and_spawn ──────────────────────────────
 
 #[test]
@@ -779,4 +824,89 @@ fn load_committed_default_rscn() {
     assert_eq!(lt.position, [0.0, 2.5, 18.0].into());
     // And it should carry a free-fly controller.
     assert!(world.get::<FlyCameraController>(cam_entity).is_some());
+}
+
+// ── `.scene.json` parent = entity id (not array index) ─────────────
+
+/// 把一个 `.scene.json` 文本直接铺进 world，返回 (实例, 世界)。
+fn spawn_json_text(json: &str) -> (SceneInstance, World) {
+    let mut registry = crate::scene::ComponentRegistry::new();
+    crate::scene::register_builtin_components(&mut registry);
+    let mut world = World::new();
+    let loader = SceneLoader::new();
+    let inst = loader
+        .spawn_from_json_text(
+            &mut world,
+            json,
+            "<test>",
+            SceneAssetId::generate(),
+            &registry,
+        )
+        .unwrap();
+    (inst, world)
+}
+
+#[test]
+fn json_parent_ids_are_resolved_not_used_as_array_indices() {
+    // 数组顺序是 [child, root]，但 parent 引用的是 id 9（位于下标 1）。
+    let json = r#"{
+        "version": 3,
+        "entities": [
+            { "id": 5, "name": "Child", "parent": 9, "transform": {}, "components": {} },
+            { "id": 9, "name": "Root", "parent": null, "transform": {}, "components": {} }
+        ]
+    }"#;
+
+    let (inst, world) = spawn_json_text(json);
+    assert_eq!(inst.all_entities.len(), 2);
+
+    let child = inst.all_entities[0];
+    let root = inst.all_entities[1];
+
+    let parent = world
+        .get::<Parent>(child)
+        .expect("child 应挂到 root 下（parent 是 id，不是下标）");
+    assert_eq!(parent.0, root);
+    assert!(world.get::<Parent>(root).is_none());
+    assert_eq!(inst.root_entities, vec![root]);
+}
+
+#[test]
+fn json_parent_chain_follows_ids_after_reordering() {
+    // root(3) ← mid(7) ← leaf(1)：三层按 id 串起来，与数组顺序无关。
+    let json = r#"{
+        "version": 3,
+        "entities": [
+            { "id": 1, "name": "Leaf", "parent": 7, "transform": {}, "components": {} },
+            { "id": 7, "name": "Mid", "parent": 3, "transform": {}, "components": {} },
+            { "id": 3, "name": "Root", "parent": null, "transform": {}, "components": {} }
+        ]
+    }"#;
+
+    let (inst, world) = spawn_json_text(json);
+    let (leaf, mid, root) = (
+        inst.all_entities[0],
+        inst.all_entities[1],
+        inst.all_entities[2],
+    );
+
+    assert_eq!(world.get::<Parent>(leaf).unwrap().0, mid);
+    assert_eq!(world.get::<Parent>(mid).unwrap().0, root);
+    assert!(world.get::<Parent>(root).is_none());
+    assert_eq!(inst.root_entities, vec![root]);
+}
+
+#[test]
+fn json_dangling_parent_id_keeps_the_entity_as_a_root() {
+    let json = r#"{
+        "version": 3,
+        "entities": [
+            { "id": 4, "name": "Orphan", "parent": 42, "transform": {}, "components": {} }
+        ]
+    }"#;
+
+    let (inst, world) = spawn_json_text(json);
+    let entity = inst.all_entities[0];
+    assert!(world.get::<Parent>(entity).is_none());
+    assert_eq!(inst.root_entities, vec![entity]);
 }

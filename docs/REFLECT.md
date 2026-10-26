@@ -92,6 +92,9 @@ registry.register_reflect_type::<glam::Vec3>();
   - 未知字段 → 忽略（新数据加载旧代码时由调用方按 `TypeTable` 决定是否拒绝）；
   - 类型 id 不一致 → `ReflectError::TypeIdMismatch`。
 - `set_field` 拒绝 `read_only` 字段；`set_field_force` 忽略该限制，供反序列化使用。
+- 一个 reflect name 只能对应一个 Rust 类型：`TypeRegistry::register` 发现同名已被
+  **另一个** Rust 类型占用时直接 panic（重复注册同一类型是幂等的）。否则先写出的数据
+  会被同名的新类型解码成字段全默认的实例，而且没有任何报错。
 - `to_object()` 的字段顺序由 `BTreeMap` 决定，编码结果确定。
 - **变换是结构字段，不是可挂载组件**：作者只写 `EntityJson::transform`，loader / cooker
   负责把它 bake 成 `LocalTransform` + `LocalToWorld`（对齐 Unity：作者态的 `Transform`

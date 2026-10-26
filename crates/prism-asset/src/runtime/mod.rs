@@ -18,7 +18,7 @@ use crate::core::{AnyHandle, AssetId, AssetType, Handle};
 use crate::package::PackageReader;
 use std::cell::Cell;
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 use thiserror::Error;
 
@@ -194,6 +194,19 @@ impl MemoryTracker {
 // 资源 管理器
 // ---------------------------------------------------------------------------
 
+/// 已注册的 `.pak`：连来源路径一起保存。
+///
+/// `on_pak_changed` 只有知道每个 reader 来自哪个文件，才能把**陈旧 reader** 换掉；
+/// 否则热重载之后新 `load` 仍会从旧字节里读。
+struct LoadedPackage {
+    /// `None` = 从内存字节注册（[`ResourceManager::load_package_bytes`]），磁盘上没有可替换的文件。
+    ///
+    /// 只有 `on_pak_changed` 读它；`hot-reload` 关闭时是纯记账，所以按需关掉 dead_code。
+    #[cfg_attr(not(feature = "hot-reload"), allow(dead_code))]
+    path: Option<PathBuf>,
+    reader: PackageReader,
+}
+
 /// The central 运行时 资源 管理器
 ///
 /// Manages a 槽 数组 of loaded assets, indexed by [`Handle<T>`].
@@ -221,7 +234,7 @@ pub struct ResourceManager {
     /// no manifest has been loaded (path-based lookup is unavailable).
     path_map: HashMap<String, AssetId>,
     /// Loaded 包 readers.
-    packages: Vec<PackageReader>,
+    packages: Vec<LoadedPackage>,
     /// 下一个 free 槽 索引
     next_slot: u32,
     /// 内存 tracking.
@@ -343,15 +356,19 @@ impl ResourceManager {
 
     /// 加载 and register all assets from a `.pak` file.
     pub fn load_package(&mut self, path: impl AsRef<Path>) -> Result<(), RuntimeError> {
-        let reader = PackageReader::open(path)?;
-        self.register_package(reader);
+        let path = path.as_ref().to_path_buf();
+        let reader = PackageReader::open(&path)?;
+        self.register_package(LoadedPackage {
+            path: Some(path),
+            reader,
+        });
         Ok(())
     }
 
     /// 从内存中的 `.pak` 字节加载资源，供 Android asset/嵌入式宿主使用。
     pub fn load_package_bytes(&mut self, bytes: &[u8]) -> Result<(), RuntimeError> {
         let reader = PackageReader::from_bytes(bytes)?;
-        self.register_package(reader);
+        self.register_package(LoadedPackage { path: None, reader });
         Ok(())
     }
 
@@ -360,8 +377,12 @@ impl ResourceManager {
         &mut self,
         path: impl AsRef<Path> + Send,
     ) -> Result<(), RuntimeError> {
-        let reader = PackageReader::open_async(path).await?;
-        self.register_package(reader);
+        let path = path.as_ref().to_path_buf();
+        let reader = PackageReader::open_async(&path).await?;
+        self.register_package(LoadedPackage {
+            path: Some(path),
+            reader,
+        });
         Ok(())
     }
 
@@ -438,9 +459,9 @@ impl ResourceManager {
     }
 
     /// Register an already-open 包 reader.
-    fn register_package(&mut self, reader: PackageReader) {
-        let asset_count = reader.asset_count();
-        for record in reader.records() {
+    fn register_package(&mut self, package: LoadedPackage) {
+        let asset_count = package.reader.asset_count();
+        for record in package.reader.records() {
             let asset_id = AssetId::from_raw(record.id);
             if self.id_map.contains_key(&asset_id) {
                 tracing::warn!("Duplicate asset ID in package: {asset_id}");
@@ -467,7 +488,7 @@ impl ResourceManager {
             self.id_map.insert(asset_id, index);
         }
 
-        self.packages.push(reader);
+        self.packages.push(package);
         tracing::info!(
             "Registered {} assets from package (total slots: {})",
             asset_count,
@@ -565,7 +586,8 @@ impl ResourceManager {
         visited.insert(id, false); // mark as in-progress
 
         // 查找 the 包 that 包含 this 资源 and get its deps.
-        for reader in &self.packages {
+        for package in &self.packages {
+            let reader = &package.reader;
             if let Some(record) = reader.find_record(id) {
                 let deps_raw = reader.dependencies(record);
                 for &dep_raw in deps_raw {
@@ -725,8 +747,8 @@ impl ResourceManager {
 
     /// 读取 raw 字节 from loaded packages for a given 资源 ID.
     fn read_from_packages(&self, id: AssetId) -> Result<Vec<u8>, RuntimeError> {
-        for reader in &self.packages {
-            if let Some(data) = reader.read_asset_data(id)? {
+        for package in &self.packages {
+            if let Some(data) = package.reader.read_asset_data(id)? {
                 return Ok(data);
             }
         }
@@ -754,6 +776,9 @@ impl ResourceManager {
         id: AssetId,
         chunk_size: usize,
     ) -> Option<impl Iterator<Item = Vec<u8>> + '_> {
+        // A zero chunk size would make `StreamIter` yield empty chunks forever
+        // and make `size_hint` divide by zero; clamp it to a single byte.
+        let chunk_size = chunk_size.max(1);
         // Prefer cached data if available.
         if let Ok(cached) = self.get_raw_bytes(id) {
             return Some(StreamIter {
@@ -860,37 +885,78 @@ impl ResourceManager {
 
     /// Called by the [`HotReloadWatcher`] when a `.pak` file changes.
     ///
-    /// Reloads changed assets: scans packages for the modified file path,
-    /// reads new data, updates affected slots.
+    /// 两件事必须同时做到，否则热重载是假的：
+    /// 1. **换掉 reader** —— 管理器里留的是打开时的文件字节（`PackageReader` 持有
+    ///    `Arc<Vec<u8>>`），不替换的话之后新 `load` 仍从旧字节读；
+    /// 2. **只刷新仍在内存里的资源** —— 已卸载（被淘汰）的槽不该因为热重载被急切加载回来，
+    ///    它们下次 `load` 时自然会从新 reader 读到新数据。
+    ///
+    /// 未知路径视为新出现的 `.pak`，按普通注册处理。
     #[cfg(feature = "hot-reload")]
     pub fn on_pak_changed(&mut self, path: &Path) -> Result<(), RuntimeError> {
         let reader = PackageReader::open(path)?;
-        for record in reader.records() {
-            let asset_id = AssetId::from_raw(record.id);
-            if let Some(&idx) = self.id_map.get(&asset_id) {
-                // 读取 fresh data and 更新 槽
-                if let Ok(Some(data)) = reader.read_asset_data(asset_id) {
-                    let epoch = self.load_epoch;
-                    let slot = &mut self.slots[idx as usize];
 
-                    // 更新 内存 tracking.
-                    let old_size = slot.size_bytes;
-                    let new_size = data.len() as u64;
-                    if old_size != new_size {
-                        self.memory.account_remove(old_size);
-                        self.memory.account_add(new_size);
-                    }
+        let Some(index) = self
+            .packages
+            .iter()
+            .position(|package| package.path.as_deref() == Some(path))
+        else {
+            tracing::info!("Hot-reload registered new package {}", path.display());
+            self.register_package(LoadedPackage {
+                path: Some(path.to_path_buf()),
+                reader,
+            });
+            return Ok(());
+        };
 
-                    slot.data = Some(data);
-                    slot.size_bytes = new_size;
-                    slot.generation += 1;
-                    slot.last_access.set(Instant::now());
-                    slot.load_epoch = epoch;
-                    self.load_epoch += 1;
-                    tracing::info!("Hot-reloaded asset {asset_id}");
-                }
+        self.packages[index].reader = reader;
+
+        let ids: Vec<AssetId> = self.packages[index]
+            .reader
+            .records()
+            .iter()
+            .map(|record| AssetId::from_raw(record.id))
+            .collect();
+
+        let mut refreshed = 0usize;
+        for asset_id in ids {
+            let Some(&slot_index) = self.id_map.get(&asset_id) else {
+                continue;
+            };
+            let slot_index = slot_index as usize;
+            if self.slots[slot_index].data.is_none() {
+                // 没加载过 / 已被淘汰：不为它做急切加载。
+                continue;
             }
+            let Ok(Some(data)) = self.packages[index].reader.read_asset_data(asset_id) else {
+                continue;
+            };
+
+            let new_size = data.len() as u64;
+            let epoch = self.load_epoch;
+            {
+                let slot = &mut self.slots[slot_index];
+                let old_size = slot.size_bytes;
+                if old_size != new_size {
+                    self.memory.account_remove(old_size);
+                    self.memory.account_add(new_size);
+                }
+                slot.data = Some(data);
+                slot.size_bytes = new_size;
+                slot.generation += 1;
+                slot.last_access.set(Instant::now());
+                slot.load_epoch = epoch;
+            }
+            self.load_epoch += 1;
+            refreshed += 1;
+            tracing::info!("Hot-reloaded asset {asset_id}");
         }
+
+        tracing::info!(
+            "Replaced package {} ({} loaded asset(s) refreshed)",
+            path.display(),
+            refreshed
+        );
         Ok(())
     }
 
@@ -964,7 +1030,7 @@ impl Iterator for StreamIter {
 
     fn size_hint(&self) -> (usize, Option<usize>) {
         let remaining = self.data.len() - self.pos;
-        let chunks = remaining.div_ceil(self.chunk_size);
+        let chunks = remaining.div_ceil(self.chunk_size.max(1));
         (chunks, Some(chunks))
     }
 }

@@ -73,7 +73,8 @@ public 类型的只有 **43** 个（≈0.9%）。这既是现状，也是后续�
 | `Disabled` / `IEnableableComponent` | `scene::Active`（语义相反） | 保留 `Active`，或补 `Disabled` 兼容 tag（见 §4） |
 | `DynamicBuffer<T>` | `Children(Vec<Entity>)` | 逐步引入 `DynamicBuffer` 形状 |
 | `BlobAssetReference<T>` | 无 | 后期（P5+） |
-| `IJob*` / `JobHandle` | 无（用 rayon/同步） | 后期（并行作业，P6） |
+| `IJob*` / `JobHandle` | 无（用 rayon/同步） | **新增** `prism_ecs::jobs` 形状门面（P6b）：std 线程 + `JobHandle::complete()`；无 Burst / `AtomicSafetyHandle` |
+| `NativeArray<T>` / `NativeList<T>` / `NativeReference<T>` | 无（`Vec`/切片） | **新增** `prism_ecs::collections` 形状门面（P6a）；底层安全 `Box`/`Vec`，`Allocator` 仅元数据，无 `Dispose` |
 | `float3/quat/math` | `glam` | **不替换**；提供 `math` 兼容别名/转换层 |
 
 > 设计原则：**PrismaRev 的核心数据结构（`World`/`Entity`/`Component`）保留**，
@@ -85,13 +86,13 @@ public 类型的只有 **43** 个（≈0.9%）。这既是现状，也是后续�
 | UnityEditor 概念 | PrismaRev 落点 | 形式 |
 |---|---|---|
 | `AssetDatabase.*` | `prism_editor_api::asset_database` | Rust 模块（包装 `assets.rs`/`asset_ops.rs`） |
+| `AssetImporter.GetAtPath` / `TextureImporter` 等 | `prism_editor_api::asset_importer` | Rust 模块（按扩展名投影导入器类名 / 主资产类型）+ `AssetInfo.importer` |
 | `PrefabUtility.*` | `prism_editor_api::prefab_utility` | Rust 模块（包装 `scene.rs` 预制体函数） |
 | `Selection.*` | `prism_editor_api::selection` + 前端 store | 前后端各一半（前端有真实选中态） |
 | `Undo.*` | `prism_editor_api::undo` + 前端历史栈 | 同上（前端已有按字段合并的撤销） |
 | `EditorApplication.*` | `prism_editor_api::editor_application` | 包装 `play.rs`/`settings.rs` |
-| `EditorSceneManager`/`SceneManager` | `prism_editor_api::scene_management` | 包装 `scene.rs` 文档操作 |
-| `BuildPipeline` | `prism_editor_api::build_pipeline` | 包装 build-scenes / build-project |
-| `PropertyDrawer` / `[CustomPropertyDrawer]` | **schema 扩展点** | 组件注册表里声明“字段渲染器”，经 schema 传给 Vue |
+| `BuildPipeline` | `prism_editor_api::build_profile` | 构建 profile / 目标组 / 场景构建顺序（执行仍在 `editor/src-tauri`） |
+| `PropertyDrawer` / `[CustomPropertyDrawer]` | `prism_editor_api::property_drawer` | 注册表声明“字段渲染器”，经 schema 的 `drawer` 传给 Vue |
 | `EditorWindow` / `[MenuItem]` | **面板/命令注册表** | `PANELS` + `MENUS`（前端）由后端 DTO 驱动 |
 | `EditorUtility` | `prism_editor_api::editor_utility` | 包装 reveal/日志/对话框 |
 | `SerializedObject`/`SerializedProperty` | `reflect_edit` + schema | 已有反射写入，补 Unity 命名外观 |
@@ -108,11 +109,13 @@ public 类型的只有 **43** 个（≈0.9%）。这既是现状，也是后续�
   同时是 `.scene.json` 的 `components` 键、RSCN 的 `type_id` 输入。
 - **重命名 = 破坏性**：会同时改变 reflect 名、JSON 键、RSCN `type_id`。
   必须配套**迁移**，否则 `from_object` 会“忽略未知字段 → 静默丢数据”。
-- **迁移机制**（新增于 `prism-editor-api`，纯数据、可单测）：
-  1. `.scene.json` 顶层 `version`（当前缺省 `1`）递增；
-  2. `migrate_doc(&mut Value)` 按版本逐级重命名**组件键**与**字段键**；
-  3. `read_doc` 读入后先迁移再返回；`write_doc` 总是写最新版本；
-  4. 引擎开发加载器（JSON→ECS）同样先迁移（复用同一函数）。
+- **迁移机制**（实现于 `crates/prism-scene/src/migrate.rs`，纯数据、可单测）：
+  1. `.scene.json` / `.prefab.json` 顶层 `version`（缺失时按 `1` 处理）递增，当前
+     `SCENE_DOC_VERSION = 3`；
+  2. `migrate_scene_doc(&mut Value)` 按版本逐级重命名**组件键**与**字段键**，
+     并补齐与版本无关的规范化（实体 `id`、派生组件剥离）；
+  3. `read_doc` 读入后先迁移再返回；`write_doc` 总是写 `SCENE_DOC_VERSION`；
+  4. cooker、引擎加载器（JSON→ECS）与编辑器共用同一函数，不存在“某条读取路径忘了迁移”。
 - **RSCN**：`type_id` 变了，`.rscn` 由 cooker 重烤即可；`schema_hash` 不匹配是硬错误，
   与重命名无冲突（重烤即可）。
 - **字段重命名的 serde 归属**：新版结构体用 `#[serde(rename_all = "PascalCase")]`
@@ -165,7 +168,7 @@ public 类型的只有 **43** 个（≈0.9%）。这既是现状，也是后续�
 | `AssetDatabase` | `asset_database` 模块 |
 | `PrefabUtility` | `prefab_utility` 模块 |
 | `EditorApplication.isPlaying` | `play.rs` 预览进程状态 |
-| `BuildPipeline` | `build_pipeline` 模块（子进程 cooker） |
+| `BuildPipeline` | `build_profile` 模块（profile / 目标组 / 顺序；执行在 Tauri） |
 
 ### 5.3 明确不适用（N/A）
 
@@ -177,6 +180,9 @@ public 类型的只有 **43** 个（≈0.9%）。这既是现状，也是后续�
   （`Input.location` / `compass` / `acceleration` / `inputString` / IME）——
   没有 `InputManager.asset`，键位直接查 `KeyCode`；鼠标三条内置轴由
   `Input::get_axis` 提供，触摸走 `Input::touches`。
+- `Compilation` / `CompilationPipeline`（`UnityEditor.Compilation`）——Rust 没有托管程序集
+  编译阶段：构建直接走 `cargo build`，编译错误由 cargo 的 stdout 呈现，不存在
+  assembly / asmdef / `AssemblyBuilder` 的形状可投影。
 - XR 全家（按范围排除）。
 
 ---
@@ -195,11 +201,12 @@ public 类型的只有 **43** 个（≈0.9%）。这既是现状，也是后续�
   `scene_management`（与既有导出同名的函数只在模块路径下提供，避免根命名冲突）。
 - **P3 渲染/光照/相机** — 🔄 进行中。P3a（相机）与 P3b（光照：渲染枚举、
   `Light` 组件、统一收集 + 聚光进 GPU、逐渲染器 `ShadowCastingMode`、编辑器光源预设、
-  `Light.shadows`/`shadowStrength`）已落地，见 §9；剩余渲染枚举批次与
   P3c（相机行为）见 §9 待办。
-- **P4 编辑器扩展**：`PropertyDrawer` schema 扩展点 + `EditorWindow` 面板注册表 DTO。
-- **P5 资产流水线**：`AssetImporters`/`Build`/`Build.Profile`/`Compilation` 形状。
-- **P6 并行/集合**：`Unity.Collections`/`Unity.Jobs` 形状（`NativeArray`/`IJob*`/`JobHandle`）。
+- **P4 编辑器扩展** — ✅ 完成（见 §9）。P4a `PropertyDrawer` schema 扩展点与
+  P4b `EditorWindow` 面板注册表 DTO 已落地。
+- **P5 资产流水线** — ✅ 完成（见 §9；`Compilation` 按 §5.3 判为 N/A）。
+  P5a `AssetImporter`、P5b `Build`/`Build.Profile`、P5c `BuildReport`。
+- **P6 并行/集合** — 🔄 进行中（见 §9）。P6a `Unity.Collections` 与 P6b `Unity.Jobs` 形状均已落地。
 - **P7 UI/输入/音频/动画/物理** — 🔄 进行中（见 §9）。P7a `UnityEngine.Input`
   门面（`prism_engine::input_facade::Input`）已落地；其余 `UIElements`/`UI`/
   `Audio`/`Animation`/`Physics` 按其体量单独排期（`UIElements` 507 类型最大）。
@@ -278,11 +285,13 @@ public 类型的只有 **43** 个（≈0.9%）。这既是现状，也是后续�
 
 **3) 作者格式字段重命名 + 迁移框架（`translation` → `position`）**
 - 新增 `crates/prism-scene/src/migrate.rs`：
-  - `SCENE_DOC_VERSION = 2`；`doc_version()`（缺失/0 视为 1）；
+  - `SCENE_DOC_VERSION = 3`；`doc_version()`（缺失/0 视为 1）；
   - `migrate_scene_doc(&mut Value)`，幂等、拒绝“未来版本”；
   - v1→v2：实体 `transform.translation` → `transform.position`，以及
-    `prism_engine::scene::LocalTransform` 组件载荷内的同名字段。
-  - 7 个单测。
+    `prism_engine::scene::LocalTransform` 组件载荷内的同名字段；
+  - v2→v3：实体补稳定 `id`，`parent` 从数组下标改为引用 `id`（老文档按数组顺序做
+    恒等映射）；
+  - 10 个单测。
 - `SceneJson::parse(text)` / `SceneJson::from_value(value)`：**先迁移再反序列化**。
 - 三个读取路径全部改走它：`prism-cooker::cooker::scene`、`prism-engine::scene::loader`、
   `prism-editor-api::scene::{read_doc, validate_doc}`。
@@ -291,8 +300,8 @@ public 类型的只有 **43** 个（≈0.9%）。这既是现状，也是后续�
   `rscn` 的 `DecodedEntity`、loader 的 `ParsedEntity`、`scene_state` 的快照 JSON 键、
   `presets::EntityPreset.translation`→`position`，以及编辑器前端
   `Inspector.vue` / `types.ts` / `App.vue`（并 `pnpm fixture` 重新生成 `editor/public/demo.json`）。
-- **磁盘上现有的 `assets/scenes/*.scene.json` 仍是 v1**（用 `translation`）——这正是迁移的
-  用途：读取时透明升级，编辑器保存时写成 v2。
+- **磁盘上现有的 `assets/scenes/*.scene.json` 仍是 v1**（用 `translation`、`parent` 用下标）——
+  这正是迁移的用途：读取时透明升级到 v3，编辑器保存时写成 v3。
 
 **验证**
 - ✅ `cargo test -p prism-ecs -p prism-scene -p prism-editor-api -p prism-cooker`
@@ -420,7 +429,7 @@ API 完整性 + 单测覆盖；前端只消费它们的**无状态**部分（见
 - `Camera` 追加 5 个字段（对齐 `UnityEngine.Camera`）：
   `clear_flags`、`background_color: [f32;4]`、`orthographic`、
   `orthographic_size`、`depth`。全部有 serde 默认值 → **老文档不需要迁移**
-  （`SCENE_DOC_VERSION` 保持 2）。
+  （`SCENE_DOC_VERSION` 不变）。
 - `impl Camera`：`projection_matrix(aspect)`（透视/正交，Vulkan y-flip + 深度 `[0,1]`，
   `aspect` 非有限时退化为 1.0）、`world_to_camera_matrix()` / `camera_to_world_matrix()`
   （对应 Unity `worldToCameraMatrix` / `cameraToWorldMatrix`）。
@@ -553,7 +562,7 @@ Unity 只有一个 `Light`，用 `Light.type` 区分方向光 / 点光 / 聚光�
   缺字段回退、色温滤色只按开关生效、锥角换算与裁剪、阴影判定。
 
 **旧组件不删、不迁移**：`DirectionalLight` / `PointLight` / `SpotLight` 继续可用，
-`SCENE_DOC_VERSION` 仍为 2；引擎接线（两者都收）在下一批。
+`SCENE_DOC_VERSION` 不变（当前为 3）；引擎接线（两者都收）在下一批。
 
 **这一批刻意没做**：引擎还没消费 `Light`（`collect_lights` 仍只查旧组件）；
 `MeshRenderer.shadowCastingMode` 与 `BlendMode`/`CullMode`/`CompareFunction`/
@@ -776,9 +785,247 @@ P3b-3 只把该变体接进 `cast_shadow` / `visible_in_main_pass`，但光栅�
   但正确性不受影响。
 - 点光/聚光仍只有方向光的阴影贴图（与 `TwoSided` 无关）。
 
+### P4a — `PropertyDrawer` schema 扩展点 ✅
+
+Unity 的 `[Range]` / `[TextArea]` / `[ColorUsage]` 等**特性**由对应的 `PropertyDrawer`
+渲染成滑动条 / 多行文本框 / 取色盘。这一批把它落地成 **声明式 DTO**：后端 schema 说明
+「这个字段用哪个渲染器 + 哪些特性」，前端 Vue 负责真正的 UI（§3.2 的约定）。
+
+**prism-editor-api**
+- 新模块 `property_drawer`：
+  - `PropertyRenderer` = `default` / `slider` / `textArea` / `color` / `custom`；
+  - `PropertyAttribute` = `range` / `min` / `max` / `multiline` / `textArea` /
+    `colorUsage` / `header` / `tooltip` / `delayed`（serde 标签对象，前端按 `type` 分发）；
+  - `PropertyDrawer` = `renderer` + `attributes` + `custom`（自定义组件名），
+    带 `range` / `min` / `max` / `text_area` / `multiline` / `color_usage` / `custom`
+    构造器与 `range_bounds` / `line_range` / `tooltip` 等访问器；
+  - `PropertyDrawerRegistry`：字段级声明**优先于**类型级（`[CustomPropertyDrawer(typeof(X))]`），
+    后注册覆盖先注册。
+- `FieldSchema` 新增 `drawer: Option<PropertyDrawer>`（`None` 不序列化，fixture 不膨胀）；
+  `build_schema()` 应用 `PropertyDrawerRegistry::with_builtin()`；新增
+  `build_schema_with(&ComponentRegistry, &PropertyDrawerRegistry)` 让宿主在内置声明之上追加。
+- 内置声明（只覆盖有明确数值/展示语义的字段，不替所有字段猜控件）：
+  `Camera.fov_y_degrees` / `exposure`（Range）、`background_color`（ColorUsage）、
+  `near` / `far` / `orthographic_size`（Min）；`Light.intensity` / `range` /
+  `color_temperature`（Min）、`spot_angle` / `inner_spot_angle` / `shadow_strength`（Range）；
+  `Skybox.rotation_degrees`（Range）、`intensity`（Min）；`Text.content`（TextArea）。
+
+**editor（Vue）**
+- `types.ts`：新增 `PropertyRenderer` / `PropertyAttribute` / `PropertyDrawer`，
+  `FieldSchema.drawer?`。
+- `FieldEditor.vue`：按 `renderer` 渲染滑动条（Range = 滑动条 + 可编辑数值框）、
+  多行文本框（TextArea / Multiline）、取色盘（Color 强制）；`[Tooltip]` → 标签 `title`、
+  `[Header]` → 分组标题、`[Delayed]` → 只在 `change`（回车/失焦）提交；未知 `custom`
+  渲染器退回默认控件并在标签后标注组件名。
+- `ColorField.vue`：新增 `showAlpha` prop，`[ColorUsage(showAlpha: false)]` 时隐藏 alpha
+  滑块与第 4 个通道。
+- 重新生成 `editor/public/demo.json` 的 `schema` 段（与 `pnpm fixture` 同源，避免 fixture 漂移）。
+
+**验证**
+- ✅ `cargo test -p prism-editor-api` → **89 passed**（新增 9 个：range/非法 range/行数范围/
+  重复特性/delayed/查找优先级/后注册覆盖/内置声明/JSON 形状）。
+- ✅ `cargo clippy -p prism-editor-api --all-targets -- -D warnings`
+- ✅ `cd editor && pnpm build`（`vue-tsc --noEmit` + Vite）
+- ✅ `python3 scripts/pr_ready.py`
+
+**已知遗留**
+- `renderer == "custom"` 还没有前端插件注册机制：组件名只做标注，控件仍退回默认。
+- 绘制器声明集中在 `prism-editor-api` 的内置表；`prism-scene` 的派生宏还没有
+  `#[property(...)]` 语法糖——先让 schema 层集中声明，避免反射层依赖编辑器语义。
+
+### P3b-6b — 渲染状态枚举（`CullMode` / `CompareFunction` / `BlendMode` / `RenderQueue`）✅
+
+P3b-1a 建了光照枚举，这一批补上**渲染状态**的纯数据镜像（`prism-scene::render_enums`），
+让材质/渲染器层面的 Unity 字段有一份共同定义，检查器与 `prism-render` 都能复用。
+和 P3b-1a 一样：**只加数据，不改管线行为**。
+
+- `CullMode`（`UnityEngine.Rendering.CullMode`）：`Off=0` / `Front=1` / `Back=2`，
+  默认 `Back`（与现有图形管线的 `vk::CullModeFlags::BACK` 一致），谓词 `culls()`。
+- `CompareFunction`：`Disabled=0` … `Always=8`，默认 `LessEqual`（Unity 着色器 `ZTest`
+  的默认值），谓词 `is_enabled()`。[`Disabled`](Self::Disabled) 对应 Unity 的“关闭深度测试”，
+  Vulkan 没有对应的 `vk::CompareOp`，由 `prism-render` 用深度测试开关（`depth_test_enable(false)`）表达。
+- `BlendMode`：11 个 Unity 因子值（`Zero=0` … `OneMinusSrcAlpha=10`），默认 `One`
+  （与 `Zero` 组成不透明混合）。只描述**因子**；Unity 的 `BlendOp`
+  （Add/Sub/RevSub/Min/Max）是另一份数据，刻意留到下一批，避免半套状态。
+- `RenderQueue`：**形状不同** —— Unity 里它是包裹 `int` 的 struct，不是枚举，
+  具名队列只是 `static readonly int`。因此这里用 `RenderQueue(i32)` newtype +
+  关联常量（`BACKGROUND=1000` / `GEOMETRY=2000` / `ALPHA_TEST=2450` /
+  `GEOMETRY_LAST=2500` / `TRANSPARENT=3000` / `OVERLAY=4000`）、`value()`、
+  `is_opaque()` / `is_transparent()`（不透明区间是 `[0, GEOMETRY_LAST]`，与 Unity
+  一致；负数能无损保存但不算不透明）；默认 `GEOMETRY`。
+  反射按 `FieldType::I32` 编码，任意值（含负数）都能无损往返。
+- 三个 C 风格枚举与 `CameraClearFlags` 走同一套编码（`FieldType::U8` +
+  `enum_variants()`），所以未来挂到组件字段上时检查器**自动**渲染成下拉框，
+  且不参与 `schema_hash`；`RenderQueue` 是数值框。
+
+**验证**
+- ✅ `cargo test -p prism-scene` → 65 passed（新增 4 个：`CullMode` 数值/默认/变体、
+  `CompareFunction` 全表 + 默认 `LessEqual`、`BlendMode` 全表 + 默认 `One`、
+  `RenderQueue` 具名值/区间/反射负数往返）。
+- ✅ `python scripts/pr_ready.py`（见 PR）。
+
+**这一批刻意没做**：`BlendOp` / `RenderQueueRange`；把枚举挂到 `MeshRenderer`
+（`cull_mode` / `render_queue`）或新建材质组件；`prism-render` 的管线状态翻译
+（`vk::CullModeFlags` / `vk::CompareOp` / `vk::BlendFactor`）。都留给后续批次。
+
+### P3b-7 — 逐渲染器 `CullMode` 接线 ✅
+
+P3b-6 只加了枚举；这一批让 `CullMode` 真正变成 Vulkan 管线状态。Unity 把它放在
+`Material`（`_Cull`）上，但 PrismaRev 的材质目前只有 PBR 参数、没有逐材质的管线变体，
+所以先挂在 `MeshRenderer` 上——语义仍是「这一个绘制用哪一面」，等材质系统引入后再搬。
+
+**prism-scene**
+- `MeshRenderer.cull_mode: CullMode`（`#[serde(default)]` → 老文档不需要迁移，
+  `SCENE_DOC_VERSION` 保持 3）。作者 JSON 取值是 `"Off"` / `"Front"` / `"Back"`。
+
+**prism-render**
+- `DrawItem.cull_mode: prism_gfx::CullMode`（共享枚举，见下方「抽出 `prism-gfx`」）。
+  把枚举翻译成 Vulkan 位的是 `pipeline::cull_flags()`，保留在渲染器一侧。
+- `ForwardPass` 的 `pipeline: Option<GraphicsPipeline>` 换成
+  `pipelines: HashMap<CullMode, GraphicsPipeline>`：三种剔除模式在启动时各建一条
+  （`ensure_pipelines`），因为剔除是**管线状态**而不是动态状态。三条变体的描述符集合
+  布局与推送常量完全相同，所以描述符集 / 推送常量只在循环外绑一次，循环里只在
+  `item.cull_mode` 变化时 `cmd_bind_pipeline`。
+- 阴影贴图管线**不变**（固定 `CullModeFlags::NONE` 双面写深度），与 `ShadowCastingMode::TwoSided`
+  的既有语义一致。
+
+**prism-engine**
+- `scene_render_system` 与 `SceneReadView::draw_items()` 都从 `MeshRenderer.cull_mode`
+  取状态（缺组件按 `Back`），**直接**放进绘制项——枚举现在由 `prism-gfx` 共享，
+  不再需要映射函数。
+- `loader.rs` 的 bundle 插入补 `cull_mode: Default::default()`。
+
+**行为变化**：`cull_mode = "Off"` 的物体现在真的双面可见（此前一律背面剔除）；
+默认 `Back` 的旧场景完全不变。
+
+**验证**
+- ✅ `cargo test -p prism-scene -p prism-engine -p prism-render` → 66 / 108(+3) / 82 passed
+  （新增：`MeshRenderer` 缺字段回退 + JSON 往返；`DrawCullMode::to_vk` 映射与唯一性；
+  绘制项默认 `Back` + `CullMode::Off` 透传 + 映射函数）。
+- ✅ `pnpm -C editor fixture` 后手动只保留 schema 相关差异（`defaultJson` / `fields` /
+  模板场景各一处 `cull_mode`）——本机磁盘资产与提交版 fixture 本来就有一批无关漂移，
+  没有一并写入。
+- ✅ `python scripts/pr_ready.py`（见 PR）。
+
+**这一批刻意没做**：混合状态（`BlendMode` / `BlendOp`）与 `RenderQueue` 的绘制排序、
+透明度（`ZWrite` / 距离排序）——它们需要材质级管线变体 + 排序，单独一批；
+`BlendOp` 枚举也留到那时一起加。点光/聚光阴影仍未实现。
+
+### 重构 — 抽出 `prism-gfx`（共享渲染状态）✅
+
+`CullMode` 要同时被场景 schema（`prism-scene`）和 Vulkan 管线（`prism-render`）使用，
+而 `prism-render` 不依赖 `prism-scene`（也不该依赖：场景 schema 是上层概念）。上一批用
+「渲染器侧镜像一份 `DrawCullMode` + 引擎映射函数」绕过去了，但每加一个共享枚举（`BlendOp`、
+`RenderQueueRange`、以后的 `FilterMode`/`WrapMode`）都要重付一次，所以这次把数据抽出来。
+
+- 新 crate `crates/prism-gfx`：**纯数据 + 反射编码**，依赖 `prism-reflect` / `serde` / `glam`，
+  **不依赖 ash、不依赖 ECS**。内容就是原 `prism_scene::render_enums` 的全部枚举
+  （光照 + 相机 + 渲染状态）与 `correlated_color_temperature_to_rgb`，连同它们的单测。
+- `prism-scene`：`render_enums.rs` 变成 `pub use prism_gfx::*;` ——
+  `prism_scene::render_enums::*`、`prism_scene::CullMode` 等**历史路径全部不变**，
+  cooker / engine / editor-api 零改动。
+- `prism-render`：依赖 `prism-gfx`，`DrawItem.cull_mode` 直接用共享 `CullMode`；
+  删掉 `DrawCullMode` 与引擎里的 `draw_cull_mode()` 映射；Vulkan 翻译收敛到
+  `pipeline::cull_flags()`（`prism-gfx` 保持 Vulkan-free）。
+- 分层文档同步：`AGENTS.md` 的 crate 清单、`docs/DESIGN.md` §10.2 的表、
+  CI 的 `cargo clippy/test -p ...` 列表都补上 `prism-gfx`。
+
+**验证**：`cargo test -p prism-gfx -p prism-scene -p prism-engine -p prism-render`
+→ 18 / 48 / 108(+3) / 82 passed（枚举单测随类型一起搬到 `prism-gfx`，scene 只剩 schema 测试）；
+`python scripts/pr_ready.py` 全绿。
+
+**顺带修正一条过时结论**：§9 P3b-3 的「`TwoSided` 与 `On` 相同，因为阴影管线只渲染
+背面剔除后的三角形」描述有误 —— `ShadowMapPass` 的两条管线本来就用
+`cull_mode: Some(vk::CullModeFlags::NONE)`（双面写深度），所以 `TwoSided` 的投影语义
+**已经**被满足；两者视觉等价是既有行为，不是待修缺陷。
+
+#### P3b-7b — 混合状态 + `RenderQueue` 排序（透明度）✅
+
+上一批把剔除接进了管线，这一批补上 Unity 材质的另外三项状态：混合（`_SrcBlend` /
+`_DstBlend` / `_BlendOp`）、`_ZWrite` 和决定绘制顺序的 `renderQueue`。
+
+**prism-gfx**
+- 新增 `BlendOp`（Add=0 / Subtract / ReverseSubtract / Min / Max，默认 Add），
+  与 `BlendMode` 一样是 U8 枚举 + `enum_variants()`；`BlendMode` / `BlendOp` 加 `Hash`
+  （管线缓存键需要）。
+
+**prism-scene**
+- `MeshRenderer` 增加 `render_queue: RenderQueue` / `z_write: bool` / `src_blend` /
+  `dst_blend` / `blend_op`。`#[serde(default)]` + **手写 `Default`**，因为目标默认值
+  （`One` / `Zero` / `Add` / `ZWrite=true` / 队列 2000）不是各字段类型自身的
+  `Default::default()`（`BlendMode::default()` 是 `One`）。老文档零迁移。
+- `MeshRenderer::blends()`：`One`/`Zero`/`Add` 即“不透明”（Unity 的约定），
+  否则需要开混合。
+
+**prism-render**
+- `DrawItem.cull_mode` 升级为 `DrawItem.state: DrawState`（剔除 / 队列 / 深度写 /
+  混合因子 / 混合运算）。`DrawState` 同时是 `ForwardPass` 的管线缓存键：
+  `ensure_pipelines(device, &states)` 在**录制命令前**按本帧出现过的状态集建管线，
+  循环里按需重绑；描述符集与推送常量布局在所有变体间相同，只绑一次。
+- `pipeline::blend_factor()` / `blend_operation()` 做 Unity→Vulkan 映射
+  （**两边数值顺序不同**，Unity 把 `DstColor` 排在 `SrcColor` 前，不能 `as` 转换）。
+- 不透明绘制现在**真正关闭**颜色混合（此前管线恒定开着 `SRC_ALPHA`/`ONE_MINUS_SRC_ALPHA`
+  —— 不透明片元 alpha=1，结果一致，但语义是错的）。
+- `sort_draw_items(items, eye)`：队列升序；队列 > `GEOMETRY_LAST`（2500）的透明段
+  按与相机距离**从远到近**（`sort_by` 稳定，同队列的不透明物体保持提交顺序）。
+- 阴影贴图管线不变（双面、无混合、写深度）。
+
+**prism-engine**
+- `draw_state()` 把 `MeshRenderer` 的五个状态字段装进 `DrawState`（缺组件用默认值），
+  `extract_frame_packet` 用 `scene.eye` 调用 `sort_draw_items` —— 排序必须在提交前完成，
+  `ForwardPass` 只按列表顺序绘制。
+
+**用法**：标准 alpha 混合 = `render_queue: 3000`、`z_write: false`、
+`src_blend: "SrcAlpha"`、`dst_blend: "OneMinusSrcAlpha"`；加色 = `src_blend: "SrcAlpha"`、
+`dst_blend: "One"`。
+
+**验证**
+- ✅ `cargo test -p prism-gfx -p prism-scene -p prism-render -p prism-engine` →
+  19 / 48 / 86 / 108(+3) passed。新增：`BlendOp` 取值/反射；`MeshRenderer` 老文档默认值 +
+  透明状态往返（`render_queue` 是 JSON 数字、混合因子是变体名）；`DrawState::blends`；
+  `sort_draw_items`（不透明段按队列、透明段远→近、同队列稳定）；
+  `blend_factor` / `blend_operation` 的 Unity→Vulkan 映射。
+
+**这一批刻意没做**：`BlendOp` 之外的 Unity 状态（`_ColorMask`、`ZTest` / `CompareFunction`
+接线、`Stencil`）、按材质资产的混合（目前仍在渲染器上，等材质系统带 `Material` 组件时再搬）、
+`RenderQueueRange`。点光/聚光阴影仍未实现。
+
+### P3c-1 — `CameraClearFlags` 的 Skybox 语义接进渲染 ✅
+
+`Camera.clear_flags`（Unity `CameraClearFlags`）此前只是数据。这一批先把**单相机下唯一
+可观察**的部分接上：**只有 `clearFlags == Skybox` 才绘制天空盒背景**，其余清屏方式即使
+场景里有启用的 `Skybox` 实体也不画。
+
+**prism-gfx / prism-scene**
+- `prism-gfx` 新增 `CameraClearFlags::draws_skybox()`（仅 `Skybox` 为真），
+  并在文档里写明与 `clears_color()` / `clears_depth()` 的分工；扩展
+  `clear_predicates` 断言四个取值的天空盒行为。
+- `prism-scene::render_enums` 维持 `pub use prism_gfx::*;`。
+
+**prism-engine**
+- `scene/systems/camera.rs` 新增 `clear_flags(world, entity)` 访问器：与
+  `clear_color` 同源（都取 `CameraOutput::entity`），缺省 `Skybox`。
+- `SceneChanges` 新增 `clear_flags`，`collect_scene_changes` 从活动相机取；
+  `extract_frame_packet` 用 `draws_skybox()` 决定 `FramePacket.skybox` 是
+  `Some(..)` 还是 `None` —— `ForwardPass` 对 `None` 直接跳过天空盒绘制，
+  所以这就是它的开关，无需改 render pass。
+
+**行为变化**：把相机的 `clearFlags` 从默认 `Skybox` 改成 `SolidColor` / `Depth` /
+`Nothing` 后，天空盒背景不再绘制（改为相机 `background_color` 或保留已有颜色）。
+默认值不变，老场景（`Skybox`）完全不变。
+
+**验证**
+- ✅ `cargo test -p prism-gfx -p prism-scene -p prism-engine` → passed。
+
+**已知遗留（下一批）**
+- `Depth` / `Nothing` 的**颜色/深度 load-op** 还没接：Vulkan 的 load op 写在 render pass
+  里（静态），需要按 `(clears_color, clears_depth)` 组合缓存 render pass + framebuffer，
+  或在 pass 外显式 `vkCmdClear*`；两者都属于多相机（叠加渲染）的前提，留到 P3c-2。
+- 多相机（`Camera.allCameras` 按 `depth` 排序 + 叠加渲染）还没接。
+
 ### 待办（下一批候选）
-- **P3b 光照/渲染（剩余）**：渲染枚举批次
-  （`BlendMode`/`CullMode`/`CompareFunction`/`RenderQueue`）；
+- **P3b 光照/渲染（剩余）**：`CompareFunction`（`ZTest`）接线、`_ColorMask`、
+  `RenderQueueRange`、把渲染状态搬进真正的 `Material` 组件（材质资产级）；
   点光/聚光还没有自己的阴影（只有方向光贴图）。
 - **P3c 相机行为**：用测试钉住 yaw↔quaternion 的 `−π/2` 偏移；`clear_flags` 的
   `Depth`/`Nothing` 语义接进 `ForwardPass`；多相机（`depth` 排序 + 叠加）。
@@ -866,6 +1113,196 @@ Unity 的 `EditorWindow` 是「可停靠的编辑器窗口」，`[MenuItem("窗�
 - 菜单动作仍是前端闭包：后端只给 `command` id，不执行命令（保持 editor-api 不链接 UI/状态）。
 - 默认停靠布局仍写死在 `dock.ts` 的 `defaultDock()`；注册表还没有「默认 dock 位置」字段。
 - 快捷键只在菜单里展示，尚未由 `shortcut` 字段自动注册到 `onKey`。
+
+### P5a — `AssetImporter` 形状 + 资产浏览器显示导入器 ✅
+
+Unity 里每个资产都由一个 `AssetImporter` 子类导入（`TextureImporter` / `ModelImporter` /
+`AudioImporter` / `DefaultImporter`…），`AssetImporter.GetAtPath(path)` 拿到实例，
+`importSettingsMissing` 表示还没有 `.meta` 里的导入设置。这一批把**只读的导入器描述**
+投影出来，并显示在编辑器的资产详情里。
+
+**prism-editor-api（新模块 `asset_importer`）**
+- `ImporterClass` = `texture` / `model` / `audio` / `environment` / `scene` / `prefab` /
+  `package` / `text` / `default`，`unity_class_name()` 映射到 Unity 类名：
+  纹理与环境 → `TextureImporter`、模型 → `ModelImporter`、音频 → `AudioImporter`、
+  文本 → `TextScriptImporter`、其余 → `DefaultImporter`。
+- `ImporterClass::from_path()` 按扩展名判定（`.scene.json` / `.prefab.json` 后缀优先于
+  最后的 `.json`）：`gltf/glb/obj/fbx/bin/mesh` → 模型；`png/jpg/ktx2/…` → 纹理；
+  `hdr/exr` → 环境；`wav/mp3/ogg/flac/…` → 音频；`pak` → 包；`json/toml/ron/md/slang/…` → 文本。
+- `AssetImporter { asset_path, importer, main_asset_type, user_data, import_settings_missing }`：
+  `get_at_path(project_root, path)` 校验路径存在且是文件（目录 / 缺失分别报错），
+  `main_asset_type` 复用 `assets::asset_kind`；`list_importers(project_root)` 批量解析。
+- `AssetInfo` 新增 `importer`（导入器类名），由 `list_assets_info` 填充 —— 因此
+  **不需要新的 Tauri 命令**：资产浏览器拿到的 `AssetInfo` 就带上了导入器。
+
+**editor（Vue）**
+- `types.ts` 的 `AssetInfo` 增加 `importer: string`。
+- 资产浏览器详情面板显示 `类别 · 导入器 <类名>`（`title` 提示对应
+  `AssetImporter.GetAtPath(...).GetType().Name`）。
+
+**与 Unity 的差异（有意为之）**
+- 引擎没有 `.meta` 文件、也不在运行时保存导入参数：`user_data` 恒为空、
+  `import_settings_missing` 恒为 `true`。真正的导入参数在 cooker 的 `CookProfile` 里
+  （平台相关的压缩 / 采样设置），不塞进编辑器的资产 DTO。
+- 没有 `AssetImporter.SaveAndReimport()`：资产导入是 cooker/build 的职责，
+  `prism-editor-api` 不链接 cooker。
+
+**验证**
+- ✅ `cargo test -p prism-editor-api` → **84 passed**（新增 6 个：扩展名 → 类名、
+  `.scene.json`/`.prefab.json` 后缀优先、`get_at_path` 主资产类型、目录/缺失报错、
+  批量覆盖每个资产、camelCase 序列化）。
+- ✅ `cargo clippy -p prism-editor-api --all-targets -- -D warnings`
+- ✅ `cd editor && pnpm build`
+- ✅ `python3 scripts/pr_ready.py`
+
+**已知遗留**
+- 还没有逐资产的导入设置 UI（`TextureImporter` 的 sRGB / filter、`ModelImporter` 的
+  缩放 / 切线等）；这些目前由 cooker 的 `CookProfile` 统一决定。
+- `Build` / `Build.Profile` / `Compilation` 形状仍待后续批次。
+
+### P5b — `Build` / `Build.Profile` 形状 ✅
+
+Unity 的构建入口是 `BuildPipeline.BuildPlayer(BuildPlayerOptions)`，其中
+`BuildPlayerOptions` 携带目标平台、场景列表（顺序即 build index）与 `BuildOptions`
+（`Development` / `AllowDebugging` / `ConnectWithProfiler`）。这一批把这些概念投影成
+`prism-editor-api` 的纯数据 DTO，并把「场景列表为空」变成真正的构建前校验。
+
+**prism-editor-api（新模块 `build_profile`）**
+- `BuildScene { name, path, enabled, buildIndex: Option<usize> }` —— Unity 的
+  `EditorBuildSettingsScene`；启用项按顺序拿到连续的 `build_index`（0..n），禁用项为 `None`。
+- `BuildOptions { development, allowDebugging, connectWithProfiler }` —— 由 `[build].profile`
+  派生：`debug` → `development` + `allowDebugging`，`release` → 全关；
+  `connectWithProfiler` 目前没有宿主支持，恒为 `false`。
+- `BuildProfile { name, target, targetGroup, options, outputDir, runAfter, scenes }`，
+  `name` 即 `[build].profile`，`target` 即 `[build].target`。
+- `target_group(target)`：`windows|linux|macos` → `Standalone`、`android` → `Android`、
+  `ios` → `iOS`、`web|webgl|wasm` → `WebGL`、其它 → `Unknown`。
+- `BuildProfile::validate()`：目标为空 / 输出目录为空 / **0 个启用场景**都返回可读错误。
+- `read_build_profile(root)` = `read_project_settings` + `read_scene_manifest`，
+  不引入任何 cooker/build-pipeline 依赖。
+
+**刻意不做的事**
+- 不发明多目标枚举：`settings.rs` 的校验目前只允许 `[build].target == "windows"` 与
+  `[build].profile ∈ {debug, release}`，所以这一层只做**字符串 → 目标组**的投影，
+  等设置层真正支持多目标时再加强类型枚举（避免两套真相）。
+
+**editor（Vue + Tauri）**
+- Tauri 命令 `editor_build_profile`；`build_project_blocking` 在启动 `cargo build` 之前调用
+  `read_build_profile(&root)?.validate()?` —— 没有启用场景时立刻失败并给出明确错误
+  （此前会白跑一次 cargo build）。
+- `BuildPanel`：标题显示目标组 / 目标 / profile；场景行的序号改用**有效 build index**
+  （跳过禁用项，与 Unity 的 `SceneManager.GetSceneByBuildIndex` 一致）；底部增加一行
+  `Unity Build.Profile` 摘要（profile、目标组、启用场景数、开发/发布、是否允许调试）。
+
+**验证**
+- ✅ `cargo test -p prism-editor-api` → 85 passed（新增 7 个：目标组映射 / `BuildOptions`
+  派生 / 连续 build index / profile 字段 / `validate` 三类错误 / camelCase JSON /
+  临时目录读取 settings+manifest）。
+- ✅ `cd editor && pnpm build`、`python3 scripts/pr_ready.py`。
+
+**已知遗留**
+- 还没有 `BuildReport`（构建结果 / 体积 / 耗时）；`Compilation`（`CompilationPipeline`）
+  形状也未做。
+- fixture 不固化构建 profile：`assets/scenes.toml` 可能含本机绝对路径，浏览器预览的
+  `buildProfile` 由 `mock.ts` 用 fixture 内场景即时合成。
+
+### P5c — `BuildReport` 形状 ✅
+
+Unity 的构建结果不是一段日志，而是 `BuildReport`（`summary` + `steps` + `files`）。
+之前构建面板只有 `durationMs` 和 stdout：产物多大、各阶段各花多久，只能人去数日志。
+
+**prism-editor-api（新模块 `build_report`）**
+- `BuildResult`（`Succeeded` / `Failed` / `Cancelled`）、`BuildFileRole`
+  （`Executable` / `ScenePackage` / `Settings` / `Metadata` / `Other`）、`BuildFile`、
+  `BuildStep`、`BuildSummary`、`BuildReport`。
+- `BuildReport::new` / `failed` + `with_step` / `with_file`（大小从磁盘读，文件缺失记 0）/
+  `with_file_size`（测试与跨机器统计用）/ `file(role)` / `succeeded()`；
+  产物总大小在每次追加时自动汇总。
+- Unity 对照：`BuildSummary.result` / `totalSize` / `totalTime` / `totalErrors`、
+  `BuildReport.steps` / `files`、`BuildFile.role`。
+
+**editor/src-tauri**
+- `BuildProjectResult.report: BuildReport`。`build_project_blocking` 给三个阶段计时
+  （`cargo build` / `build-scenes` / 复制产物的 `collect`），并按角色登记 exe、
+  `assets/scenes.pak`、`assets/scenes.pak.meta.json`、`assets/settings.toml`
+  （`copy_if_exists` 之后仅登记真实存在的文件）。
+
+**editor（Vue）**
+- `types.ts` 补 `BuildReport` 全家 + `BuildProjectResult.report`。
+- 构建面板显示结果徽标、产物总大小、总耗时、阶段耗时与产物列表（名称 + 角色 + 大小，
+  相对输出目录的完整路径留在 `title` 提示里）；配色由 `color-mix` 从主题 token 派生。
+
+**与 Unity 的差异**
+- Rust 没有托管程序集，`BuildStep` 是**命令级**阶段，不是 Unity 的 asset bundle /
+  script compilation 步骤。
+- 失败不做「报告」返回：构建命令仍以 `Err(String)` 把 cargo 的错误抛给前端，
+  `BuildResult::Failed` 留给以后需要结构化失败报告的场景（目前由测试覆盖）。
+
+**明确不做**：`Compilation`（§5.3）——cargo 负责编译，没有 asmdef / `AssemblyBuilder`
+可投影。
+
+**验证**
+- ✅ `cargo test -p prism-editor-api build_report` → 7 passed。
+- ✅ `cargo clippy -p prism-editor-api --all-targets -- -D warnings`、
+  `cargo check --manifest-path editor/src-tauri/Cargo.toml`。
+- ✅ `pnpm -C editor build`（`vue-tsc --noEmit` + Vite）、`python3 scripts/pr_ready.py`。
+
+### P6a — `Unity.Collections` 形状 ✅
+
+**目标**：给 `prism-ecs` 补一层 Unity DOTS 集合门面，让熟悉
+`NativeArray` / `NativeList` 的代码有直接对应物，而不是只靠 `Vec`/切片约定。
+
+**新增 `crates/prism-ecs/src/collections.rs`**
+- `Allocator`：`Invalid`（默认）/`None`/`Temp`/`TempJob`/`Persistent`，附 `is_valid()`。
+- `NativeArray<T>`：`new(len, allocator)`（`T: Default` 清零）、`from_vec`、
+  `len`/`is_empty`、`allocator`、`as_slice`/`as_mut_slice`、`get`/`get_mut`、
+  `copy_from`、`to_vec`、`fill`、`Index`/`IndexMut`、`IntoIterator`（`&` / `&mut`）、
+  `From<Vec<T>>`。
+- `NativeList<T>`：`new`/`with_capacity`/`from_vec`、`add`、`insert`（越界返回
+  `false`）、`remove_at`/`pop`、`clear`、`sort`、切片与迭代。
+- `NativeReference<T>`：`new`/`value`/`set_value`/`into_inner`/`allocator`。
+- `NativeSlice<'a, T>`：只读视图，`new`/`len`/`get`/`slice(start, length)`/`iter`。
+- `lib.rs` 增加 `pub mod collections;` 与五个类型的根级 re-export。
+
+**与 Unity 的差异（刻意）**
+- 没有 `Dispose()` / `NativeArrayOptions` / `AtomicSafetyHandle`：Rust 所有权负责释放，
+  `Allocator` 只是元数据（保留 `allocator()` 读取，未来可接自定义分配器）。
+- `NativeArray::new` 总是清零（`T: Default`），不提供 Unity 的
+  `NativeArrayOptions.UninitializedMemory` —— 安全 Rust 不暴露未初始化内存。
+- `NativeSlice` 只读；可变视图直接用 `&mut [T]`。
+
+**验证**
+- ✅ `cargo test -p prism-ecs` → 24 passed（新增 6 个集合测试）。
+
+### P6b — `Unity.Jobs` 形状 ✅
+
+**目标**：给 `prism-ecs` 补一层 Unity DOTS 作业门面：`Schedule` 立即返回
+`JobHandle`，`Complete()` 等待，作业实现保持 `IJob*` 的命名与分工。
+
+**新增 `crates/prism-ecs/src/jobs.rs`**
+- `IJob::execute(&self)`、`IJobParallelFor::execute(&self, index)`；
+  `IJobFor: IJobParallelFor` 与 Unity 的扩展关系一致。
+- `JobHandle`：`complete()`（join 全部线程并继续传播作业 panic）、
+  `combine(other)`、`combine_dependencies(handles)`、`completed()`。
+- `schedule(job)`：一次执行，一个工作线程。
+- `schedule_parallel_for(job, length, batch_size)`：按 batch 切分，
+  工作线程数取 `min(batch 数, available_parallelism)`；`batch_size == 0` 时 panic，
+  `length == 0` 返回已完成句柄。
+- `schedule_for(job, length)`：`batch_size = 1` 的入口。
+- `lib.rs` 增加 `pub mod jobs;` 与 trait / 函数 / `JobHandle` 的根级 re-export。
+
+**与 Unity 的差异（刻意）**
+- 没有 Burst、`JobRanges`、`AtomicSafetyHandle`：并行 job 以 `&self` 执行，
+  共享可写状态用 `Atomic*` / `Mutex`，由编译器而不是安全句柄检查。
+- `IJobParallelFor.Execute` 的下标是 `usize`，不是 Unity 的 `int`。
+- `JobHandle` 被丢弃而没有 `complete()` 时线程分离（作业继续跑完），不会自动等待。
+- 不做依赖图调度：`combine_dependencies` 只是把句柄合并，`complete()` 等待全部。
+
+**验证**
+- ✅ `cargo test -p prism-ecs`（新增 6 个作业测试：单次执行、并行下标覆盖、
+  零长度、`IJobFor`、依赖合并、非法 batch）。
+- ✅ `cargo clippy -p prism-ecs --all-targets -- -D warnings`。
+- ✅ `python3 scripts/pr_ready.py`（见 PR 内自检块）。
 
 ## 附录
 

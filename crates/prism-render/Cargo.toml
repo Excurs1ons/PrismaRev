@@ -6,6 +6,7 @@ license.workspace = true
 description = "Vulkan rendering backend for PrismaRev"
 
 [dependencies]
+prism-gfx = { path = "../prism-gfx" }
 ash = { workspace = true }
 ash-window = { workspace = true }
 raw-window-handle = { workspace = true }

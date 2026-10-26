@@ -376,15 +376,15 @@ pub fn parse_rscn(data: &[u8]) -> Result<ParsedRscn, String> {
 /// `(yaw, 音高 pair used by [`FlyCameraController`].
 ///
 /// The free-fly 向前 (see 向前 in `scene::systems::camera`) is
-/// `[cos(yaw)·cos(pitch), sin(pitch), -sin(yaw)·cos(pitch)]`. The camera's
+/// `[-sin(yaw)·cos(pitch), sin(pitch), -cos(yaw)·cos(pitch)]`. The camera's
 /// world-space 向前 is the entity's 四元数 applied to the −Z basis,
 /// `R·(0,0,-1)`. Inverting the 向前 formula gives:
 /// - 音高 = asin(forward.y)`
-///   - `yaw   = atan2(-forward.z, forward.x)`
+///   - `yaw   = atan2(-forward.x, -forward.z)`
 ///
-/// 音符 this means an identity 四元数 向前 = (0,0,−1)) maps to
-/// `yaw = π/2, 音高 = 0` - the value the free-fly controller needs to look
-/// 下 −Z. Roll is discarded (the free-fly 相机 has no roll). Matches the
+/// 音符 this means an identity 四元数 (向前 = (0,0,−1)) maps to
+/// `yaw = 0, 音高 = 0` — the same orientation the entity's transform already
+/// expresses. Roll is discarded (the free-fly 相机 has no roll). Matches the
 /// right-handed conventions in `README.md` (+X 右 +Y 上 +Z toward
 /// viewer, 相机 looks 下 −Z).
 /// Inserts an unresolved [`SpriteRef`] for entities that carry a
@@ -419,7 +419,7 @@ fn quat_to_yaw_pitch(quat: [f32; 4]) -> (f32, f32) {
     let n = (qx * qx + qy * qy + qz * qz + qw * qw).sqrt();
     if n < 1e-6 {
         log::warn!("scene camera quaternion is degenerate (|q|≈0); using identity");
-        return (std::f32::consts::FRAC_PI_2, 0.0);
+        return (0.0, 0.0);
     }
     let (qx, qy, qz, qw) = (qx / n, qy / n, qz / n, qw / n);
     // 向前 = R · (0,0,-1), where R is the quaternion's 旋转 矩阵
@@ -431,7 +431,7 @@ fn quat_to_yaw_pitch(quat: [f32; 4]) -> (f32, f32) {
         -(1.0 - 2.0 * (qx * qx + qy * qy)),
     ];
     let pitch = forward[1].clamp(-1.0, 1.0).asin();
-    let yaw = (-forward[2]).atan2(forward[0]);
+    let yaw = (-forward[0]).atan2(-forward[2]);
     (yaw, pitch)
 }
 
@@ -667,10 +667,26 @@ impl SceneLoader {
     ) -> Result<SceneInstance, String> {
         let text = std::fs::read_to_string(path)
             .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
+        let origin = path.display().to_string();
+        self.spawn_from_json_text(world, &text, &origin, scene_id, registry)
+    }
+
+    /// 从 `.scene.json` 文本加载场景。
+    ///
+    /// 与 [`Self::load_and_spawn_json`] 共用同一套逻辑，只是把「读文件」与
+    /// 「解析 + spawn」分开，便于不落盘的测试。
+    fn spawn_from_json_text(
+        &self,
+        world: &mut World,
+        text: &str,
+        origin: &str,
+        scene_id: SceneAssetId,
+        registry: &ComponentRegistry,
+    ) -> Result<SceneInstance, String> {
         // `SceneJson::parse` migrates older authoring documents (v1
         // `transform.translation`) up to the current schema.
-        let scene = SceneJson::parse(&text)
-            .map_err(|e| format!("Scene JSON parse error in {}: {e}", path.display()))?;
+        let scene = SceneJson::parse(text)
+            .map_err(|e| format!("Scene JSON parse error in {origin}: {e}"))?;
 
         let entity_count = scene.entities.len();
         let mut entities: Vec<Entity> = Vec::with_capacity(entity_count);
@@ -708,13 +724,27 @@ impl SceneLoader {
             }
         }
 
-        // Phase 2: hierarchy
+        // Phase 2: hierarchy.
+        //
+        // `.scene.json` v3+ 的 `parent` 是**稳定实体 id**，不是数组下标
+        // （见 `prism_scene::json::EntityJson::parent`）；id 与下标只在
+        // `migrate_scene_doc` 给旧文档按数组顺序补 id 时才恰好相等。
+        // 直接拿 id 当下标会在实体重排/删除后接错父级，甚至越界变成根节点。
+        let index_of_id = scene.index_of_id();
         for (i, ej) in scene.entities.iter().enumerate() {
-            if let Some(parent_idx) = ej.parent {
-                let parent_idx = parent_idx as usize;
-                if parent_idx < entities.len() {
-                    HierarchyHelper::reparent(world, entities[i], Some(entities[parent_idx]));
+            let Some(parent_id) = ej.parent else {
+                continue;
+            };
+            match index_of_id.get(&parent_id).copied() {
+                Some(parent_index) => {
+                    HierarchyHelper::reparent(world, entities[i], Some(entities[parent_index]));
                 }
+                // `SceneJson::parse` 只校验作者写法，不跑 `validate()`；
+                // dev 场景里出现悬空 id 时保留实体、按根节点处理，不要整场失败。
+                None => log::warn!(
+                    "scene entity {i} references parent id {parent_id} which does not exist; \
+                     keeping it as a root"
+                ),
             }
         }
 
@@ -806,7 +836,7 @@ impl SceneLoader {
                     MeshRenderer {
                         mesh_path: pe.mesh_path.clone(),
                         material_path: pe.material_path.clone(),
-                        shadow_casting_mode: Default::default(),
+                        ..Default::default()
                     },
                 );
             }

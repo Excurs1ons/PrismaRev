@@ -12,6 +12,8 @@ import { formatNumber } from "../format";
 const props = defineProps<{
   modelValue: number;
   step?: number;
+  min?: number;
+  max?: number;
   integer?: boolean;
   disabled?: boolean;
 }>();
@@ -42,7 +44,13 @@ function round(value: number): number {
 }
 
 function commit(value: number) {
-  const next = round(value);
+  let next = round(value);
+  if (props.min !== undefined && next < props.min) {
+    next = props.min;
+  }
+  if (props.max !== undefined && next > props.max) {
+    next = props.max;
+  }
   text.value = formatNumber(next);
   if (next !== props.modelValue) emit("update:modelValue", next);
 }

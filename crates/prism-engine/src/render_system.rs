@@ -6,7 +6,7 @@
 
 use glam::{self, Mat4, Vec3, Vec4};
 
-use crate::dirty_router::DirtyRouter;
+use crate::dirty_router::{draw_items_signature, DirtyRouter};
 use crate::render_settings::RenderSettings;
 use crate::scene;
 use crate::scene::components::Camera;
@@ -15,6 +15,7 @@ use prism_render::{
     DrawItem, FrameUBOData, GizmoInstance, GpuLight, GraphRenderer, PtAnalyticLight,
     SkyboxSettings, UiOverlayInput, GPU_LIGHT_KIND_POINT, GPU_LIGHT_KIND_SPOT, PT_LIGHT_MAX,
 };
+use prism_scene::CameraClearFlags;
 
 /// 预缩放因子，取代旧的 GPU 端 `exposure / PI` 单位转换。
 /// 勒克斯（或坎德拉）在 CPU 上乘以此因子，使着色器直接接收有效辐射度。
@@ -60,6 +61,9 @@ pub struct SceneChanges {
     pub camera_orthographic: bool,
     /// 清屏颜色 = 活动相机的 `background_color`（无相机时为引擎默认灰）。
     pub clear_color: [f32; 4],
+    /// 清屏方式 = 活动相机的 `Camera.clear_flags`（无相机时为 `Skybox`）。
+    /// 只有 `Skybox` 会绘制天空盒背景，见 [`CameraClearFlags::draws_skybox`]。
+    pub clear_flags: CameraClearFlags,
     /// 主方向光是否投阴影 = Unity `Light.shadows != None`。
     ///
     /// 为 `false` 时整帧跳过阴影贴图渲染（`ShadowMode::None`），
@@ -73,27 +77,38 @@ pub struct SceneChanges {
 // Extract 帧 packet (sim phase)
 // ---------------------------------------------------------------------------
 
-/// Run the extract phase: hierarchy 更新 + scene changes + draw-item 列表
+/// Run the extract phase: scene changes + draw-item 列表
 /// producing a [`FramePacket`] for later consumption by [`render_system`].
 ///
 /// **This is the API the sim (game‑logic) 线程 calls.** [`render_system`]
 /// consumes the packet without accessing the ECS 世界
+///
+/// Transforms are **not** propagated here: [`crate::engine::Engine::update`]
+/// does it at the end of the simulation step, so the extract phase is read-only
+/// with respect to `LocalToWorld` and gameplay never sees stale matrices.
 pub fn extract_frame_packet(
     world: &mut World,
     display_aspect: f32,
     surface_rotation: &Mat4,
 ) -> FramePacket {
-    // 0. Recompute 世界 transforms from 局部 transforms (hierarchy 树
-    scene::systems::hierarchy::hierarchy_system(world);
-
     // 1. Collect per-frame scene 状态 (needs orientation).
     let scene = collect_scene_changes(world, display_aspect, surface_rotation);
 
     // 2. Build the flat draw list and ECS-authored render helpers.
     let scene_view = scene::SceneReadView::new(world);
-    let draw_items: Vec<DrawItem> = scene_view.draw_items();
+    // Unity 的 `renderQueue` 顺序：不透明段按队列升序，透明段按距离从远到近。
+    // 排序必须在提交给渲染器之前完成（`ForwardPass` 只按列表顺序绘制）。
+    let mut draw_items: Vec<DrawItem> = scene_view.draw_items();
+    prism_render::sort_draw_items(&mut draw_items, scene.eye.to_array());
     let gizmos = scene_view.gizmo_instances();
-    let skybox = scene_view.skybox_settings();
+    // Unity 只有 `clearFlags == Skybox` 时才绘制天空盒：其余清屏方式（纯色 /
+    // 只清深度 / 不清）即使场景里有启用的 `Skybox` 实体也不画。`ForwardPass`
+    // 对 `None` 直接跳过天空盒绘制，所以这里就是它的开关。
+    let skybox = if scene.clear_flags.draws_skybox() {
+        scene_view.skybox_settings()
+    } else {
+        None
+    };
     let sprite_items = scene_view.sprite_items();
 
     // 3. 构建 the UI 叠加 from the ECS 世界 (includes UiQuad/TextCmd).
@@ -211,14 +226,7 @@ fn collect_scene_changes(
         .copied();
 
     let light_direction = dir_light
-        .map(|l| {
-            Vec4::new(
-                l.direction.x,
-                l.direction.y,
-                l.direction.z,
-                l.intensity * LUX_TO_RADIANCE_SCALE,
-            )
-        })
+        .map(|l| directional_light_ubo_direction(l.direction, l.intensity * LUX_TO_RADIANCE_SCALE))
         .unwrap_or(fallback_dir);
     let light_color = dir_light
         .map(|l| Vec4::new(l.color.x, l.color.y, l.color.z, l.ambient))
@@ -290,6 +298,10 @@ fn collect_scene_changes(
     let clear_color = camera_entity
         .map(|entity| scene::systems::camera::clear_color(world, entity))
         .unwrap_or(scene::systems::camera::DEFAULT_CLEAR_COLOR);
+    // 清屏方式也来自同一台相机（Unity `Camera.clearFlags`）。
+    let clear_flags = camera_entity
+        .map(|entity| scene::systems::camera::clear_flags(world, entity))
+        .unwrap_or_default();
 
     SceneChanges {
         view_proj,
@@ -308,6 +320,7 @@ fn collect_scene_changes(
         has_camera,
         camera_orthographic,
         clear_color,
+        clear_flags,
         shadows_enabled,
         shadow_strength,
     }
@@ -373,6 +386,8 @@ pub fn render_system(
         camera_orthographic,
         // 清屏色直接从 `scene` 读（`scene.clear_color`），这里不解构。
         clear_color: _,
+        // 清屏方式只影响 extract 阶段的天空盒开关，渲染系统不再需要。
+        clear_flags: _,
         shadows_enabled,
         shadow_strength,
     } = scene;
@@ -397,11 +412,13 @@ pub fn render_system(
         _pad2: [0.0; 3],
     };
 
-    // 2.5. 扩展脏检测：draw_items 数量变化也视为场景脏（触发 BLAS/instance 更新）
-    let draw_count_dirty = dirty_router.draw_count_dirty(draw_items.len());
-    if draw_count_dirty {
-        log::trace!("dirty: draw_items count changed");
+    // 2.5. 扩展脏检测：draw_items 内容变化（矩阵 / mesh / material / 阴影标志）
+    //      也视为场景脏（触发 BLAS/instance 更新与 PT 累积重置），不只比较数量。
+    let draw_items_dirty = dirty_router.draw_items_dirty(draw_items_signature(draw_items));
+    if draw_items_dirty {
+        log::trace!("dirty: draw_items changed");
     }
+    let pt_bounces_dirty = dirty_router.pt_bounces_dirty(settings.pt_max_bounces);
 
     // 3. Drive the render-graph phase API.
     let ctx = match renderer.begin_frame()? {
@@ -430,7 +447,10 @@ pub fn render_system(
         pt_max_iterations: settings.pt_max_iterations,
         exposure: *exposure,
         pt_lights,
-        pt_accum_dirty: dirty_flags.directional_light || draw_count_dirty,
+        pt_accum_dirty: dirty_flags.directional_light
+            || dirty_flags.point_lights
+            || draw_items_dirty
+            || pt_bounces_dirty,
         has_camera: *has_camera,
         camera_orthographic: *camera_orthographic,
         clear_color: scene.clear_color,
@@ -477,6 +497,16 @@ pub fn dir_to_euler_xyz_deg(d: Vec3) -> Vec3 {
 // 矩阵 helpers
 // ---------------------------------------------------------------------------
 
+/// 方向光从「光传播方向」（Unity `transform.forward`）转换为
+/// `FrameUBO.lightDirection` 的「指向光源」约定（见 `common.slang`）。
+///
+/// `LightSample.direction` 与光学的 `transform.forward` 一致；着色器和阴影相机都要求
+/// 指向光源的方向，所以方向光在写入 UBO 时取反。点光 / 聚光的 `direction` 是锥轴传播
+/// 方向，不走这条通路。
+fn directional_light_ubo_direction(direction: Vec3, radiance: f32) -> Vec4 {
+    Vec4::new(-direction.x, -direction.y, -direction.z, radiance)
+}
+
 /// 构建 an 正交 light-space view-projection 矩阵
 fn light_view_proj(light_dir: &Vec4, half: f32, center: &Vec3) -> Mat4 {
     let l = Vec3::new(light_dir.x, light_dir.y, light_dir.z).normalize_or_zero();
@@ -509,6 +539,14 @@ fn norm3(a: [f32; 3]) -> [f32; 3] {
 mod tests {
     use super::*;
     use crate::scene::components::LocalToWorld;
+
+    /// `LightSample.direction` 是光传播方向，UBO 的 `lightDirection` 要「指向光源」。
+    #[test]
+    fn directional_ubo_direction_points_to_the_light() {
+        let ubo = directional_light_ubo_direction(Vec3::Z, 2.0);
+        assert!((ubo.truncate() - Vec3::NEG_Z).length() < 1e-6);
+        assert_eq!(ubo.w, 2.0);
+    }
 
     /// PR #38 review finding 1：视口 aspect 必须写到**实际渲染**的相机上。
     /// 主相机（`depth` 更大）缺 `LocalToWorld` 时渲染的是低 `depth` 那台。
@@ -595,5 +633,52 @@ mod tests {
         let fallback = collect_scene_changes(&mut empty, 16.0 / 9.0, &Mat4::IDENTITY);
         assert!(!fallback.has_camera);
         assert!(!fallback.camera_orthographic);
+    }
+
+    /// Unity 语义：只有 `clearFlags == Skybox` 才会绘制天空盒背景。
+    ///
+    /// 场景里放一个启用的 `Skybox` 实体，逐一切换相机的清屏方式；只有 `Skybox`
+    /// 时 `FramePacket.skybox` 才是 `Some`，其余都应是 `None`（`ForwardPass`
+    /// 对 `None` 直接跳过天空盒）。
+    #[test]
+    fn skybox_is_only_drawn_for_skybox_clear_flags() {
+        use crate::scene::components::Skybox;
+
+        for (flags, draws) in [
+            (CameraClearFlags::Skybox, true),
+            (CameraClearFlags::SolidColor, false),
+            (CameraClearFlags::Depth, false),
+            (CameraClearFlags::Nothing, false),
+        ] {
+            let mut world = World::new();
+
+            let camera = world.spawn();
+            world.insert(
+                camera,
+                Camera {
+                    clear_flags: flags,
+                    ..Camera::default()
+                },
+            );
+            world.insert(camera, LocalToWorld(Mat4::IDENTITY));
+
+            let sky = world.spawn();
+            world.insert(
+                sky,
+                Skybox {
+                    hdr_path: "env.hdr".to_string(),
+                    enabled: true,
+                    ..Skybox::default()
+                },
+            );
+
+            let packet = extract_frame_packet(&mut world, 1.0, &Mat4::IDENTITY);
+            assert_eq!(packet.scene.clear_flags, flags);
+            assert_eq!(
+                packet.skybox.is_some(),
+                draws,
+                "clear_flags = {flags:?} 时是否绘制天空盒应为 {draws}"
+            );
+        }
     }
 }

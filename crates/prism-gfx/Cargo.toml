@@ -1,0 +1,14 @@
+[package]
+name = "prism-gfx"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Shared render-state data (Unity-shaped enums) for PrismaRev scene schema and renderer"
+
+[dependencies]
+prism-reflect = { path = "../prism-reflect" }
+glam.workspace = true
+serde = { workspace = true, features = ["derive"] }
+
+[dev-dependencies]
+serde_json = { workspace = true }

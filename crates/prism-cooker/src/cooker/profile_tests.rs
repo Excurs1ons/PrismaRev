@@ -21,6 +21,56 @@ fn settings_hash_changes_on_modification() {
 }
 
 #[test]
+fn settings_hash_ignores_custom_map_insertion_order() {
+    let entries = [
+        ("alpha", serde_json::json!(1)),
+        ("beta", serde_json::json!("two")),
+        ("gamma", serde_json::json!({"nested": [1, 2, 3]})),
+        ("delta", serde_json::json!(null)),
+        ("epsilon", serde_json::json!([true, false])),
+        ("zeta", serde_json::json!(3.5)),
+        ("eta", serde_json::json!({"a": 1})),
+        ("theta", serde_json::json!("x")),
+    ];
+
+    let mut forward = CookSettings::default();
+    for (key, value) in entries.clone() {
+        forward.custom.insert(key.to_owned(), value);
+    }
+
+    // 同样的键值、相反的插入顺序 + 不同的 HashMap 容量：容量会改变桶布局，
+    // 因此迭代顺序一定与 forward 不同，能稳定暴露「直接序列化 HashMap」的问题。
+    let mut reverse = CookSettings {
+        custom: HashMap::with_capacity(64),
+        ..Default::default()
+    };
+    for (key, value) in entries.into_iter().rev() {
+        reverse.custom.insert(key.to_owned(), value);
+    }
+
+    assert_eq!(
+        forward.settings_hash(),
+        reverse.settings_hash(),
+        "custom map iteration order must not affect the settings hash"
+    );
+}
+
+#[test]
+fn settings_hash_covers_custom_entries() {
+    let mut one = CookSettings::default();
+    one.custom.insert("alpha".to_owned(), serde_json::json!(1));
+    let mut two = CookSettings::default();
+    two.custom.insert("alpha".to_owned(), serde_json::json!(2));
+
+    assert_ne!(one.settings_hash(), two.settings_hash());
+    assert_ne!(
+        CookSettings::default().settings_hash(),
+        one.settings_hash(),
+        "custom entries must still contribute to the hash"
+    );
+}
+
+#[test]
 fn builtin_profile_loading() {
     let dir = std::env::temp_dir().join("cook_profiles_test");
     let mut mgr = ProfileManager::new(&dir);
@@ -213,4 +263,103 @@ fn hash_depends_on_profile() {
     let android = mgr.resolve("android").unwrap();
 
     assert_ne!(desktop.settings_hash(), android.settings_hash());
+}
+
+#[test]
+fn partial_texture_override_keeps_parent_fields() {
+    let unique = format!("partial_override_test_{}", std::process::id());
+    let dir = std::env::temp_dir().join(&unique);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    std::fs::write(
+        dir.join("wide.json"),
+        serde_json::json!({
+            "base": "base",
+            "texture": { "compression": "bc7", "max_size": 4096, "quality": 90 }
+        })
+        .to_string(),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("child.json"),
+        serde_json::json!({
+            "base": "wide",
+            "texture": { "quality": 95 }
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let mut mgr = ProfileManager::new(&dir);
+    let settings = mgr.resolve("child").unwrap();
+
+    assert_eq!(settings.texture.quality, 95, "explicit field must win");
+    assert_eq!(
+        settings.texture.max_size, 4096,
+        "a field the child omits must keep the parent value, not reset to 0"
+    );
+    assert_eq!(settings.texture.compression, TextureCompression::Bc7);
+    assert!(settings.texture.generate_mips);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn explicit_default_values_are_honoured() {
+    let unique = format!("explicit_default_test_{}", std::process::id());
+    let dir = std::env::temp_dir().join(&unique);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    // Every value here equals the built-in default; they must still override
+    // the parent profile instead of being treated as "not specified".
+    std::fs::write(
+        dir.join("plain.json"),
+        serde_json::json!({
+            "base": "desktop",
+            "texture": { "compression": "rgba8", "max_size": 0, "generate_mips": false }
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let mut mgr = ProfileManager::new(&dir);
+    let settings = mgr.resolve("plain").unwrap();
+
+    assert_eq!(settings.texture.compression, TextureCompression::Rgba8);
+    assert_eq!(settings.texture.max_size, 0);
+    assert!(!settings.texture.generate_mips);
+    // Sections the child does not mention still inherit from `desktop`.
+    assert_eq!(settings.texture.quality, 90);
+    assert!(settings.mesh.generate_tangents);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn explicit_false_flag_is_applied() {
+    let unique = format!("explicit_false_test_{}", std::process::id());
+    let dir = std::env::temp_dir().join(&unique);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    // `optimize` defaults to true, so `false` used to be indistinguishable
+    // from an absent field.
+    std::fs::write(
+        dir.join("unoptimized.json"),
+        serde_json::json!({
+            "base": "desktop",
+            "mesh": { "optimize": false, "generate_tangents": false }
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let mut mgr = ProfileManager::new(&dir);
+    let settings = mgr.resolve("unoptimized").unwrap();
+
+    assert!(!settings.mesh.optimize);
+    assert!(!settings.mesh.generate_tangents);
+    assert!(!settings.mesh.vertex_compression);
+    assert_eq!(settings.texture.quality, 90, "untouched sections inherit");
+
+    let _ = std::fs::remove_dir_all(&dir);
 }

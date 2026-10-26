@@ -8,6 +8,7 @@ description = "Scene schema, ECS scene components, and RSCN v4 codec for PrismaR
 [dependencies]
 prism-ecs = { path = "../prism-ecs" }
 prism-reflect = { path = "../prism-reflect" }
+prism-gfx = { path = "../prism-gfx" }
 glam.workspace = true
 log = { workspace = true }
 serde = { workspace = true, features = ["derive"] }

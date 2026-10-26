@@ -223,7 +223,17 @@ fn rotate(p: [f64; 2], scale: f64) -> [f64; 2] {
 
 /// Generate a heightmap buffer by evaluating `f` at each pixel coordinate.
 ///
-/// `f` receives normalized UV coordinates in `[-1, 1]` range (aspect-corrected).
+/// `f` receives noise-space coordinates `[x * frequency, y * frequency]`, where
+/// `x`/`y` are pixel indices — so `frequency` is measured in **cycles per
+/// pixel** (smaller = larger features). The default `0.003` therefore crosses
+/// roughly three lattice cells across a 1024 px map.
+///
+/// Scaling the pixel index (not a normalized `[-1, 1]` UV) is deliberate: the
+/// value-noise lattice is one unit wide, so multiplying a UV that spans only
+/// two units by `0.003` keeps every sample inside cells `-1`/`0` and collapses
+/// the map into a single smooth patch. It also keeps features isotropic on
+/// non-square maps, which a subtractive aspect offset did not.
+///
 /// The function is called in parallel via `rayon`.
 pub fn generate_parallel(
     width: u32,
@@ -231,19 +241,13 @@ pub fn generate_parallel(
     frequency: f64,
     f: impl Fn([f64; 2]) -> f64 + Send + Sync,
 ) -> Vec<f32> {
-    let aspect = width as f64 / height as f64;
     let mut data = vec![0.0f32; (width * height) as usize];
 
     data.par_chunks_mut(width as usize)
         .enumerate()
         .for_each(|(y, row)| {
             for (x, cell) in row.iter_mut().enumerate() {
-                // Normalized UV: [-1, 1] with aspect correction.
-                let uv = [
-                    (x as f64 / width as f64) * 2.0 - 1.0 * aspect,
-                    (y as f64 / height as f64) * 2.0 - 1.0,
-                ];
-                *cell = f([uv[0] * frequency, uv[1] * frequency]) as f32;
+                *cell = f([x as f64 * frequency, y as f64 * frequency]) as f32;
             }
         });
 

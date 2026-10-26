@@ -97,5 +97,5 @@ python scripts/pr_ready.py --all      # 全 workspace + 所有独立 workspace
 
 ## 提问
 
-有 bug 或想法请开 issue，写清复现步骤、平台、日志。要接手某块工作，先在 issue 里说一声，
-避免和别人的 PR 撞车。
+有 bug 或想法请开 issue，写清复现步骤、平台、日志。要接手某块工作 —— 包括只是先去调查、
+复现一下 —— 先在 issue 里评论认领并加上 `agent/working`，然后再读代码，避免和别人的调查 / PR 撞车。

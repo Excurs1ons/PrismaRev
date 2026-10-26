@@ -10,7 +10,7 @@
 pub const ENTRY_PT_MAIN: &str = "ptMain"; // stage: COMPUTE
 
 /// Push-constant block size in bytes (reflected).
-pub const PUSH_CONSTANT_SIZE: u32 = 0;
+pub const PUSH_CONSTANT_SIZE: u32 = 144;
 
 // --- descriptor set 0 ---
 pub const ACCUM_IMAGE_SET: u32 = 0;
@@ -49,6 +49,10 @@ pub const ENV_CUBE_SET: u32 = 2;
 pub const ENV_CUBE_BINDING: u32 = 0; // COMBINED_IMAGE_SAMPLER
 
 /// Push-constant struct (auto-generated from Slang `PtPush`).
+///
+/// Field offsets are the reflected std140 ones — alignment holes are emitted as
+/// explicit `_pad_*` fillers, so `size_of` is 144 bytes and every field sits
+/// where the shader expects it.
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub struct PtPush {

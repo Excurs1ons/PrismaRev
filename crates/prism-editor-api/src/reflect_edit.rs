@@ -12,8 +12,8 @@
 //! 字段路径语法（与前端 `FieldEditor` 的 path 一致）：
 //! `fov_y_degrees`、`anchors.min_x`、`background[0]`、`nested.list[2].x`。
 
+use crate::builtin_registry;
 use prism_reflect::{Object, Value};
-use prism_scene::{register_builtin_components, ComponentRegistry};
 
 /// 字段路径中的一段。
 #[derive(Debug, Clone, PartialEq)]
@@ -114,12 +114,6 @@ fn write_at(target: &mut Value, segments: &[Segment], new_value: Value) -> Resul
     }
 }
 
-fn registry() -> ComponentRegistry {
-    let mut registry = ComponentRegistry::new();
-    register_builtin_components(&mut registry);
-    registry
-}
-
 /// 在组件 JSON 上按反射语义写入一个字段，返回新的作者 JSON。
 ///
 /// `before` 是该组件当前的值，`after` 是前端改完以后的整体值（两者形状相同）。
@@ -130,7 +124,7 @@ pub fn set_component_field(
     path: &str,
     after: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    let registry = registry();
+    let registry = builtin_registry();
 
     let before_object = registry
         .object_from_json(component, before)
@@ -180,7 +174,7 @@ pub fn normalize_component(
     component: &str,
     value: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    let registry = registry();
+    let registry = builtin_registry();
     let object: Object = registry
         .object_from_json(component, value)
         .ok_or_else(|| format!("'{component}' 的值无法还原"))?;
@@ -292,5 +286,33 @@ mod tests {
     #[test]
     fn unknown_component_is_rejected() {
         assert!(set_component_field("nope::Nope", &json!({}), "x", &json!({})).is_err());
+    }
+
+    #[test]
+    fn field_writes_reuse_one_registry_across_threads() {
+        // 拖动字段时写入可能落在不同线程池线程上；共享注册表必须只构建一次、
+        // 且能被并发读取（`ComponentRegistry` 的回调是 `Send + Sync`）。
+        assert!(std::ptr::eq(builtin_registry(), builtin_registry()));
+
+        let before = camera_default();
+        let mut after = before.clone();
+        after["fov_y_degrees"] = json!(60.0);
+
+        let handles: Vec<_> = (0..4)
+            .map(|_| {
+                let before = before.clone();
+                let after = after.clone();
+                std::thread::spawn(move || {
+                    for _ in 0..25 {
+                        let updated =
+                            set_component_field(CAMERA, &before, "fov_y_degrees", &after).unwrap();
+                        assert_eq!(updated["fov_y_degrees"], json!(60.0));
+                    }
+                })
+            })
+            .collect();
+        for handle in handles {
+            handle.join().expect("写入线程不应 panic");
+        }
     }
 }

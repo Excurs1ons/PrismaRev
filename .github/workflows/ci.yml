@@ -116,7 +116,7 @@ jobs:
       - name: clippy (desktop crates)
         run: >
           cargo clippy
-          -p prism-ecs -p prism-render -p prism-engine -p prism-platform
+          -p prism-ecs -p prism-gfx -p prism-render -p prism-engine -p prism-platform
           --all-targets -- -D warnings
 
       # xtask is workspace-excluded, so --all/-p don't reach it. Check it here.
@@ -125,6 +125,11 @@ jobs:
         run: |
           cargo fmt -- --check
           cargo clippy --all-targets -- -D warnings
+
+      # `derive` / `glam` 必须真的是可选特性：关掉默认特性后仍要能编译。
+      # 没有这条检查时，`#[cfg(...)]` 一漏就只在有人手动跑时才会暴露。
+      - name: check prism-reflect without default features
+        run: cargo check -p prism-reflect --no-default-features
 
   # ---------------------------------------------------------------------------
   # 2. Desktop build + test. The core correctness gate we can fully run in CI.
@@ -161,12 +166,12 @@ jobs:
       - name: Build (desktop crates)
         run: >
           cargo build --locked
-          -p prism-ecs -p prism-render -p prism-engine -p prism-platform
+          -p prism-ecs -p prism-gfx -p prism-render -p prism-engine -p prism-platform
 
       - name: Test (desktop crates)
         run: >
           cargo test --locked
-          -p prism-ecs -p prism-render -p prism-engine -p prism-platform
+          -p prism-ecs -p prism-gfx -p prism-render -p prism-engine -p prism-platform
 
   # ---------------------------------------------------------------------------
   # 3. Slang shaders: compile to SPIR-V + reflection, then verify the committed

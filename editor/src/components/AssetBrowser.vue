@@ -45,6 +45,8 @@ const selectedNode = ref<{ path: string; name: string; dir: boolean } | null>(nu
 const assetMenu = ref<{ path: string; name: string; dir: boolean; x: number; y: number } | null>(null);
 const assetDirs = ref<string[]>([]);
 const usage = ref<AssetRef[]>([]);
+/** 引用查询序号：连点资产时只提交最后一次请求的结果。 */
+let usageToken = 0;
 const usageError = ref("");
 const busy = ref(false);
 const opBusy = ref(false);
@@ -189,18 +191,25 @@ const kinds = computed(() => {
 const FILTER_SYNTAX = /(^|\s)(t|l|a):/i;
 /** 后端 `FindAssets` 的结果（`null` = 未启用后端检索）。 */
 const backendMatches = ref<Set<string> | null>(null);
+/** 检索请求序号：只有最后一次输入的返回可以写 `backendMatches`。 */
+let searchToken = 0;
 
 watch(
   () => search.value,
   async (value) => {
+    const token = ++searchToken;
     const query = value.trim();
     if (!query || !FILTER_SYNTAX.test(query)) {
       backendMatches.value = null;
       return;
     }
     try {
-      backendMatches.value = new Set(await api.findAssets(query));
+      const matches = await api.findAssets(query);
+      // 输入更快的连续键入会让请求乱序返回，旧结果不能覆盖新结果。
+      if (token !== searchToken) return;
+      backendMatches.value = new Set(matches);
     } catch {
+      if (token !== searchToken) return;
       // 后端不可用（如纯浏览器预览）时退回本地过滤。
       backendMatches.value = null;
     }
@@ -367,18 +376,30 @@ const treeRows = computed<TreeRow[]>(() => {
 // 选择 / 引用 / 拖拽
 // ---------------------------------------------------------------------------
 
+/** 清空引用面板，并作废仍在途的查询（否则旧结果会写回已取消的选择）。 */
+function clearUsage() {
+  usageToken += 1;
+  usage.value = [];
+  usageError.value = "";
+}
+
 async function select(asset: AssetInfo) {
+  const token = ++usageToken;
   selected.value = asset;
   usage.value = [];
   usageError.value = "";
   busy.value = true;
   void loadPreview(asset);
   try {
-    usage.value = await api.assetUsage(asset.path);
+    const refs = await api.assetUsage(asset.path);
+    // 连点两个资产时，先发出的请求可能后返回；只认最后一次选择的结果。
+    if (token !== usageToken) return;
+    usage.value = refs;
   } catch (e) {
+    if (token !== usageToken) return;
     usageError.value = `${e}`;
   } finally {
-    busy.value = false;
+    if (token === usageToken) busy.value = false;
   }
 }
 
@@ -386,8 +407,7 @@ function onRowClick(node: TreeNode) {
   selectedNode.value = { path: node.path, name: node.name, dir: node.dir };
   if (node.dir) {
     selected.value = null;
-    usage.value = [];
-    usageError.value = "";
+    clearUsage();
     clearPreview();
     return;
   }
@@ -738,7 +758,7 @@ async function confirmDelete() {
     deleteTarget.value = null;
     selectedNode.value = null;
     selected.value = null;
-    usage.value = [];
+    clearUsage();
     clearPreview();
     await refreshAssets();
     notify(result);
@@ -767,7 +787,7 @@ async function mutate(
     if (options.clearSelection) {
       selectedNode.value = null;
       selected.value = null;
-      usage.value = [];
+      clearUsage();
       clearPreview();
     }
     await refreshAssets();
@@ -929,6 +949,9 @@ onUnmounted(() => {
 
   <div v-if="selected" class="asset-detail">
     <div class="hint path">{{ selected.path }}</div>
+    <div class="hint" title="Unity AssetImporter.GetAtPath(...).GetType().Name">
+      {{ selected.kind }} · 导入器 {{ selected.importer }}
+    </div>
 
     <div v-if="previewKind === 'document'" class="asset-preview-actions">
       <button class="primary" @click="openSelected">打开文档</button>
@@ -947,17 +970,26 @@ onUnmounted(() => {
       引用：<template v-if="busy">…</template>
       <template v-else-if="usageError">{{ usageError }}</template>
       <template v-else-if="usage.length">{{ usage.length }} 处</template>
-      <template v-else>未被任何场景引用</template>
+      <template v-else>未被任何场景 / 预制体 / 构建清单引用</template>
     </div>
     <button
       v-for="(ref, i) in usage"
       :key="i"
       class="usage-link"
-      title="打开该文档并定位到这个字段"
+      :title="
+        ref.kind === 'manifest'
+          ? '构建清单（assets/scenes.toml）里的场景条目'
+          : '打开该文档并定位到这个字段'
+      "
       @click="emit('jump', ref)"
     >
-      {{ ref.scene }} · #{{ ref.entityIndex }} {{ ref.entity }} ·
-      {{ ref.component.split("::").pop() }}.{{ ref.field }}
+      <template v-if="ref.kind === 'manifest'">
+        {{ ref.scene }} · {{ ref.entity }}
+      </template>
+      <template v-else>
+        {{ ref.scene }} · #{{ ref.entityIndex }} {{ ref.entity }} ·
+        {{ ref.component.split("::").pop() }}.{{ ref.field }}
+      </template>
     </button>
     <button class="ghost icon" style="margin-top: 4px" @click="copyPath">复制路径</button>
   </div>

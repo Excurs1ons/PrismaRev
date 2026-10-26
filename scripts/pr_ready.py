@@ -197,6 +197,21 @@ def test_summary(output: str) -> str:
     return f"{passed} passed" if passed else "ok"
 
 
+def file_matches_generated(generated: Path, checked_in: Path) -> bool:
+    """生成物与已提交文件是否等价。
+
+    bindgen 始终写 LF；Windows 上 `core.autocrlf=true`（仓库没有 .gitattributes）
+    会把检出的 `.rs` 转成 CRLF，于是逐字节比较会在**内容完全一致**时假报漂移。
+    这里先做逐字节比较（快路径），不同则把两侧行尾归一化成 LF 再比；
+    真正的字段 / 常量 / 顺序变化依然会被抓出来。
+    """
+    produced = generated.read_bytes()
+    existing = checked_in.read_bytes()
+    if produced == existing:
+        return True
+    return produced.replace(b"\r\n", b"\n") == existing.replace(b"\r\n", b"\n")
+
+
 def shader_bindings_check(changed: list[str]) -> Check:
     """在临时目录重跑 bindgen，与已提交的 bindings 比对；不修改工作区。"""
     check = Check("shader bindings drift", ["shader-bindgen", "(temp out)"])
@@ -236,12 +251,19 @@ def shader_bindings_check(changed: list[str]) -> Check:
 
         committed = ROOT / "crates" / "prism-render" / "src" / "shader_bindings"
         diffs: list[str] = []
+        crlf_only = 0
         generated = sorted(p for p in tmp.rglob("*") if p.is_file())
         for path in generated:
             rel = path.relative_to(tmp)
             current = committed / rel
-            if not current.is_file() or current.read_bytes() != path.read_bytes():
+            if not current.is_file():
                 diffs.append(rel.as_posix())
+                continue
+            if file_matches_generated(path, current):
+                if current.read_bytes() != path.read_bytes():
+                    crlf_only += 1
+                continue
+            diffs.append(rel.as_posix())
         committed_names = {
             p.relative_to(committed).as_posix()
             for p in committed.rglob("*")
@@ -259,6 +281,11 @@ def shader_bindings_check(changed: list[str]) -> Check:
             check.status = "ok"
             check.detail = "up to date"
             eprint("  ok")
+            if crlf_only:
+                eprint(
+                    f"  note: {crlf_only} file(s) differ only in line endings "
+                    "(CRLF checkout, LF generated); content matches."
+                )
         return check
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

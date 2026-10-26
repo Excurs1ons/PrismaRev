@@ -4,7 +4,7 @@
 //! `UiDrawList` 被设置到 `World` Resource 中，供 `GraphRenderer` 的 UI Pass 消费。
 
 use crate::ui::components::*;
-use crate::ui::ScreenSize;
+use crate::ui::{is_ui_active, ScreenSize};
 use prism_ecs::World;
 
 // ── 绘制命令 ─────────────────────────────────────────────────
@@ -45,7 +45,10 @@ pub fn ui_render_system(world: &mut World) {
     let mut draw_list = UiDrawList::default();
 
     // 收集背景矩形
-    for (_entity, layout, style) in world.query2::<ComputedLayout, Style>() {
+    for (entity, layout, style) in world.query2::<ComputedLayout, Style>() {
+        if !is_ui_active(world, entity) {
+            continue;
+        }
         if !style.visible {
             continue;
         }
@@ -63,7 +66,10 @@ pub fn ui_render_system(world: &mut World) {
     }
 
     // 收集文本
-    for (_entity, layout, text) in world.query2::<ComputedLayout, Text>() {
+    for (entity, layout, text) in world.query2::<ComputedLayout, Text>() {
+        if !is_ui_active(world, entity) {
+            continue;
+        }
         if text.content.is_empty() {
             continue;
         }
@@ -138,3 +144,7 @@ pub fn convert_ui_draw_list_to_overlay(world: &World) -> prism_render::UiOverlay
         .collect();
     prism_render::UiOverlayInput { quads, texts }
 }
+
+#[cfg(test)]
+#[path = "render_tests.rs"]
+mod tests;

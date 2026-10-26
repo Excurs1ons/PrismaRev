@@ -16,6 +16,7 @@
 //! Unity 形状的门面层（`UnityEditor` / `UnityEngine` 对齐，见
 //! `docs/UNITY_ALIGNMENT.md`）：
 //! - [`asset_database`]：`AssetDatabase`（枚举 / 查找 / GUID / 增删改 / 导入）。
+//! - [`asset_importer`]：`AssetImporter`（按扩展名投影导入器类名 / 主资产类型）。
 //! - [`prefab_utility`]：`PrefabUtility`（提取 / 实例化 / 还原 / 应用 / 解包）。
 //! - [`selection`]：`Selection`（实体选中集合 + 活动项 + 过滤）。
 //! - [`undo`]：`Undo`（快照式撤销栈 + 标签 / 合并 / 上限）。
@@ -23,18 +24,26 @@
 //! - [`scene_management`]：`SceneManager` + `EditorSceneManager`（打开 / 保存 / 加载状态）。
 //! - [`editor_window`]：Unity `EditorWindow` / `[MenuItem]` 的面板注册表
 //!   （id / 标题 / 菜单路径 / 命令 id），驱动前端 `PANELS` 与「窗口 / 帮助」菜单。
+//! - [`build_profile`]：`Build` / `Build.Profile`（构建目标组、`BuildOptions`、场景构建顺序）。
+//! - [`build_report`]：Unity `BuildReport` / `BuildSummary`（构建阶段、产物大小、结果）。
+//! - [`property_drawer`]：Unity `PropertyDrawer` / `PropertyAttribute` 的字段渲染声明
+//!   （`[Range]` / `[TextArea]` / `[ColorUsage]` / `[CustomPropertyDrawer]`）。
 //!
 //! 真正的编辑发生在 web UI 里：前端直接编辑 `.scene.json` 的 JSON 文档，
 //! schema 只作为控件类型与只读判断的提示。
 
 pub mod asset_database;
+pub mod asset_importer;
 pub mod asset_ops;
 pub mod assets;
+pub mod build_profile;
+pub mod build_report;
 pub mod editor_application;
 pub mod editor_window;
 pub mod play;
 pub mod prefab_utility;
 pub mod presets;
+pub mod property_drawer;
 pub mod reflect_edit;
 pub mod scene;
 pub mod scene_management;
@@ -43,6 +52,9 @@ pub mod selection;
 pub mod settings;
 pub mod undo;
 
+pub use asset_importer::{
+    get_at_path as asset_importer_at_path, list_importers, AssetImporter, ImporterClass,
+};
 pub use asset_ops::{
     asset_reference_documents, create_asset_dir, delete_asset, move_asset, normalize_asset_path,
     rename_asset, AssetMutation,
@@ -60,6 +72,10 @@ pub use asset_database::{
     get_all_asset_paths, get_asset_dependency_hash, get_main_asset_type_at_path,
     guid_to_asset_path, import_asset, is_valid_folder, is_valid_guid, load_asset_at_path, refresh,
     save_assets, ASSETS_FOLDER,
+};
+pub use build_profile::{read_build_profile, target_group, BuildOptions, BuildProfile, BuildScene};
+pub use build_report::{
+    file_size, BuildFile, BuildFileRole, BuildReport, BuildResult, BuildStep, BuildSummary,
 };
 pub use editor_application::{
     application_path, data_path, engine_version, project_path, streaming_assets_path,
@@ -79,6 +95,9 @@ pub use prefab_utility::{
     PrefabInstanceStatus, PrefabUnpackMode, DEFAULT_PREFAB_FOLDER,
 };
 pub use presets::{entity_presets, EntityPreset};
+pub use property_drawer::{
+    PropertyAttribute, PropertyDrawer, PropertyDrawerRegistry, PropertyRenderer,
+};
 pub use reflect_edit::{normalize_component, set_component_field};
 pub use scene::{
     // 通用（场景 / 预制体）
@@ -131,11 +150,14 @@ pub use scene_management::{
     save_open_scenes, save_scene, save_scene_as, scene_count, scene_from_doc, LoadSceneMode, Scene,
     SceneManagerState,
 };
-pub use schema::{build_schema, FieldSchema, Schema, TypeSchema};
+pub use schema::{
+    build_schema, build_schema_with, builtin_registry, FieldSchema, Schema, TypeSchema,
+};
 pub use selection::{SelectionFilter, SelectionMode, SelectionState};
 pub use settings::{
     read_project_settings, read_render_settings, settings_path, write_project_settings,
-    write_render_settings, AppSettingsData, BuildSettingsData, ProjectSettingsData,
-    RenderSettingsData, WindowSettingsData,
+    write_project_settings_diff, write_render_settings, write_render_settings_diff,
+    AppSettingsData, BuildSettingsData, ProjectSettingsData, RenderSettingsData,
+    WindowSettingsData,
 };
 pub use undo::{DocUndoStack, UndoRecord, UndoStack, DEFAULT_UNDO_LIMIT};

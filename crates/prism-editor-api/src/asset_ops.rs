@@ -5,7 +5,9 @@
 //! - 只允许操作 `assets/` 下的相对路径，拒绝 `..`、绝对路径与构建产物目录；
 //! - 重命名/移动先扫描并计划引用改写，再执行文件系统操作，最后写回文档；
 //! - 引用保持作者原来的书写风格（场景目录相对 / 项目根相对），
-//!   因此 `../valley.hdr` 与 `assets/valley.hdr` 都会被改写成等价的新路径。
+//!   因此 `../valley.hdr` 与 `assets/valley.hdr` 都会被改写成等价的新路径；
+//! - 只有 schema 里**确实是资产路径**的字段（[`ASSET_PATH_FIELDS`]）会被改写，
+//!   实体名、UI 文本等恰好写着同一段路径的字符串保持原样。
 
 use std::collections::BTreeSet;
 use std::ffi::OsString;
@@ -163,7 +165,7 @@ pub fn delete_asset(
     let path = project_root.join(&rel);
     let meta = std::fs::metadata(&path).map_err(|e| format!("找不到 {}: {e}", rel))?;
 
-    let refs = asset_reference_documents(project_root, &rel)?;
+    let mut refs = asset_reference_documents(project_root, &rel)?;
     if !force && !refs.is_empty() {
         return Err(format!(
             "{} 仍被 {} 个文档引用；确认后再删除",
@@ -178,10 +180,28 @@ pub fn delete_asset(
         std::fs::remove_file(&path).map_err(|e| format!("删除 {rel} 失败: {e}"))?;
     }
 
+    // 删掉场景文档/产物后，`scenes.toml` 里指向它的条目必须一起消失，
+    // 否则 build-scenes 会因为悬空条目失败，运行场景列表也会留下无效项。
+    let mut references_updated = 0;
+    let target_stem = rel.strip_prefix("assets/").and_then(|asset_rel| {
+        if meta.is_dir() {
+            Some(asset_rel.to_string())
+        } else {
+            scene_stem(asset_rel)
+        }
+    });
+    if let Some(stem) = target_stem {
+        references_updated = remove_manifest_entries(project_root, &stem, meta.is_dir())?;
+        if references_updated > 0 && !refs.iter().any(|doc| doc == SCENE_MANIFEST) {
+            refs.push(SCENE_MANIFEST.to_string());
+            refs.sort();
+        }
+    }
+
     Ok(AssetMutation {
         from: rel,
         to: None,
-        references_updated: 0,
+        references_updated,
         affected_documents: refs,
     })
 }
@@ -226,25 +246,23 @@ pub fn normalize_asset_path(raw: &str) -> Result<String, String> {
     Ok(parts.join("/"))
 }
 
-/// 场景 / 预制体文档在编辑器里按扁平目录枚举，禁止把它们移到子目录，
-/// 也禁止移动 `assets/scenes`、`assets/prefabs` 根本身。
+/// 场景文档按扁平目录枚举（只扫 `assets/scenes/`），必须留在那里；
+/// 预制体在 `assets/` 下递归枚举，可以放在任意子目录，只要保留后缀。
 fn ensure_document_placement(from: &str, to: &str) -> Result<(), String> {
     if matches!(from, "assets/scenes" | "assets/prefabs") {
         return Err("不能重命名或移动编辑器文档根目录".into());
     }
-    for (suffix, dir) in [
-        (".scene.json", "assets/scenes"),
-        (".prefab.json", "assets/prefabs"),
-    ] {
-        if !from.ends_with(suffix) {
-            continue;
-        }
+    if from.ends_with(".scene.json") {
+        let scenes_dir = crate::scene::DocKind::Scene.subdir();
         let parent = to.rsplit_once('/').map(|(parent, _)| parent).unwrap_or("");
-        if parent != dir {
+        if parent != scenes_dir || !to.ends_with(".scene.json") {
             return Err(format!(
-                "{suffix} 文档必须保留在 {dir}/ 根目录（编辑器按扁平目录枚举文档）"
+                "场景文档必须留在 {scenes_dir}/ 根目录（编辑器按扁平目录枚举场景）"
             ));
         }
+    }
+    if from.ends_with(".prefab.json") && !to.ends_with(".prefab.json") {
+        return Err("预制体必须保留 .prefab.json 后缀（否则资产树不再枚举它）".into());
     }
     Ok(())
 }
@@ -305,6 +323,29 @@ impl Renamer {
     }
 }
 
+/// 组件里持有**资产路径**的字段名（`prism-scene` 组件 schema 的全量清单）。
+///
+/// 只有这些字段的字符串值参与引用改写：`.scene.json` 里其它字符串（`Name`、UI
+/// `Text.content`、材质/标签里恰好写着路径的文本）不是引用，改它们就是数据损坏。
+///
+/// 新增带路径的组件字段时要同步补进来 —— `asset_path_fields_cover_string_paths_in_schema`
+/// 会用 `prism-scene` 的注册表挡住漏加（不覆盖 `env_map` / `volume` / `prefab`
+/// 这类不以 `_path` 结尾的名字，所以别只靠测试）。
+const ASSET_PATH_FIELDS: [&str; 7] = [
+    "mesh_path",     // MeshRenderer
+    "material_path", // MeshRenderer
+    "sprite_path",   // SpriteRenderer
+    "hdr_path",      // Skybox
+    "env_map",       // EnvironmentLighting
+    "volume",        // GiConfig
+    "prefab",        // PrefabInstance
+];
+
+/// 作者 JSON 的字段名是否表示资产路径。
+fn is_asset_path_field(name: &str) -> bool {
+    ASSET_PATH_FIELDS.contains(&name)
+}
+
 struct RewritePlan {
     /// `(旧文档绝对路径, 改写后的 JSON)`。
     documents: Vec<(PathBuf, serde_json::Value)>,
@@ -330,7 +371,7 @@ fn plan_rewrites(project_root: &Path, renamer: &Renamer) -> Result<RewritePlan, 
         // 引用解析用旧目录；写给文档的路径用移动后的目录（目录整体重命名时两者不同）。
         let old_dir = old_abs.parent().unwrap_or(project_root);
         let write_dir = mapped_abs.parent().unwrap_or(old_dir);
-        let changed = rewrite_json(&mut value, old_dir, write_dir, project_root, &|abs| {
+        let changed = rewrite_json(&mut value, old_dir, write_dir, project_root, None, &|abs| {
             renamer.map(abs)
         });
         let old_rel = relative_path_string(project_root, &old_abs);
@@ -366,15 +407,24 @@ fn apply_plan(project_root: &Path, plan: RewritePlan, renamer: &Renamer) -> Resu
     Ok(plan.references)
 }
 
+/// 递归改写文档里的资产路径引用。
+///
+/// `field` 是当前字符串所在字段的名字（数组元素沿用外层字段名）。只有
+/// [`is_asset_path_field`] 认得的字段才当作引用；`None`（文档根或未命名的
+/// 嵌套值）一律不改。
 fn rewrite_json(
     value: &mut serde_json::Value,
     resolve_dir: &Path,
     write_dir: &Path,
     project_root: &Path,
+    field: Option<&str>,
     map: &dyn Fn(&Path) -> Option<PathBuf>,
 ) -> usize {
     match value {
         serde_json::Value::String(text) => {
+            if !field.is_some_and(is_asset_path_field) {
+                return 0;
+            }
             let abs_scene = lexical_abs(resolve_dir, text);
             let abs_root = lexical_abs(project_root, text);
             let (new_abs, root_style) = if let Some(mapped) = map(&abs_scene) {
@@ -400,11 +450,20 @@ fn rewrite_json(
         }
         serde_json::Value::Array(items) => items
             .iter_mut()
-            .map(|item| rewrite_json(item, resolve_dir, write_dir, project_root, map))
+            .map(|item| rewrite_json(item, resolve_dir, write_dir, project_root, field, map))
             .sum(),
         serde_json::Value::Object(fields) => fields
-            .values_mut()
-            .map(|item| rewrite_json(item, resolve_dir, write_dir, project_root, map))
+            .iter_mut()
+            .map(|(name, item)| {
+                rewrite_json(
+                    item,
+                    resolve_dir,
+                    write_dir,
+                    project_root,
+                    Some(name.as_str()),
+                    map,
+                )
+            })
             .sum(),
         _ => 0,
     }
@@ -490,6 +549,92 @@ fn manifest_references(project_root: &Path, target: &Path, is_dir: bool) -> Resu
         let abs = lexical_abs(&base, &scene.path);
         abs == *target || (is_dir && abs.starts_with(target))
     }))
+}
+
+/// 清单路径（相对 `assets/`）去掉 `.scene.json` / `.rscn` 后的场景 stem。
+///
+/// 与 `build-scenes` 一致：两种后缀指向同一个场景，删掉任一形式都要清掉条目。
+fn scene_stem(entry_path: &str) -> Option<String> {
+    let trimmed = entry_path.trim_start_matches("./");
+    trimmed
+        .strip_suffix(".scene.json")
+        .or_else(|| trimmed.strip_suffix(".rscn"))
+        .map(str::to_string)
+}
+
+fn stem_matches(target: &str, stem: &str, is_dir: bool) -> bool {
+    stem == target
+        || (is_dir
+            && stem
+                .strip_prefix(target)
+                .is_some_and(|rest| rest.starts_with('/')))
+}
+
+/// 从 `assets/scenes.toml` 删除指向被删场景的 `[[scenes]]` 条目。
+///
+/// 按行切块而不是重新序列化：清单是手写文档，注释与排版要保住。
+/// 条目上方的连续注释行算该条目的一部分，会一起删掉。
+fn remove_manifest_entries(
+    project_root: &Path,
+    target_stem: &str,
+    is_dir: bool,
+) -> Result<usize, String> {
+    let path = project_root.join(SCENE_MANIFEST);
+    if !path.is_file() {
+        return Ok(0);
+    }
+    let text =
+        std::fs::read_to_string(&path).map_err(|e| format!("读取 {} 失败: {e}", path.display()))?;
+    let lines: Vec<&str> = text.lines().collect();
+
+    let heads: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| line.trim_start().starts_with("[[scenes]]"))
+        .map(|(index, _)| {
+            let mut head = index;
+            while head > 0 && lines[head - 1].trim_start().starts_with('#') {
+                head -= 1;
+            }
+            head
+        })
+        .collect();
+    if heads.is_empty() {
+        return Ok(0);
+    }
+
+    let mut kept: Vec<String> = Vec::new();
+    let mut removed = 0;
+    for (index, &head) in heads.iter().enumerate() {
+        let end = heads.get(index + 1).copied().unwrap_or(lines.len());
+        let block = lines[head..end].join("\n");
+        let drops = toml::from_str::<SceneManifest>(&block).is_ok_and(|manifest| {
+            manifest.scenes.iter().any(|scene| {
+                scene_stem(&scene.path).is_some_and(|stem| stem_matches(target_stem, &stem, is_dir))
+            })
+        });
+        if drops {
+            removed += 1;
+        } else {
+            kept.push(block.trim_end().to_string());
+        }
+    }
+    if removed == 0 {
+        return Ok(0);
+    }
+
+    let header = lines[..heads[0]].join("\n").trim_end().to_string();
+    let mut out = String::new();
+    if !header.is_empty() {
+        out.push_str(&header);
+        out.push_str("\n\n");
+    }
+    out.push_str(&kept.join("\n\n"));
+    if !kept.is_empty() {
+        out.push('\n');
+    }
+    std::fs::write(&path, out).map_err(|e| format!("写入 {} 失败: {e}", path.display()))?;
+    Ok(removed)
 }
 
 fn all_docs(project_root: &Path) -> Vec<crate::scene::SceneEntry> {
@@ -670,6 +815,70 @@ mod tests {
     }
 
     #[test]
+    fn rename_leaves_non_path_strings_alone() {
+        let root = temp_root("rename_non_path");
+        std::fs::write(root.join("assets/valley.hdr"), b"x").unwrap();
+        let doc = serde_json::json!({
+            "version": 3,
+            "entities": [{
+                "name": "assets/valley.hdr",
+                "parent": null,
+                "transform": {
+                    "translation": [0, 0, 0],
+                    "rotation": [0, 0, 0, 1],
+                    "scale": [1, 1, 1]
+                },
+                "components": {
+                    "prism_engine::scene::MeshRenderer": { "mesh_path": "assets/valley.hdr" },
+                    "prism_engine::ui::Text": { "content": "assets/valley.hdr" }
+                }
+            }]
+        });
+        write_doc(&root.join("assets/scenes/demo.scene.json"), &doc).unwrap();
+
+        let result = rename_asset(&root, "assets/valley.hdr", "assets/sky.hdr").unwrap();
+        assert_eq!(result.references_updated, 1, "只有 mesh_path 是引用");
+
+        let text = std::fs::read_to_string(root.join("assets/scenes/demo.scene.json")).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let components = &value["entities"][0]["components"];
+        assert_eq!(
+            components["prism_engine::scene::MeshRenderer"]["mesh_path"],
+            "assets/sky.hdr"
+        );
+        assert_eq!(
+            components["prism_engine::ui::Text"]["content"],
+            "assets/valley.hdr"
+        );
+        assert_eq!(value["entities"][0]["name"], "assets/valley.hdr");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn asset_path_fields_cover_string_paths_in_schema() {
+        let schema = crate::schema::build_schema();
+        for ty in &schema.types {
+            for field in &ty.fields {
+                if field.kind == "string" && field.name.ends_with("_path") {
+                    assert!(
+                        is_asset_path_field(&field.name),
+                        "{}::{} 是路径字段，但没有登记进 ASSET_PATH_FIELDS",
+                        ty.name,
+                        field.name
+                    );
+                }
+            }
+        }
+
+        // 不以 `_path` 结尾的引用字段靠显式登记，这里断言它们没被删掉。
+        for name in ["env_map", "volume", "prefab"] {
+            assert!(is_asset_path_field(name), "{name} 必须继续登记");
+        }
+        assert!(!is_asset_path_field("content"));
+        assert!(!is_asset_path_field("name"));
+    }
+
+    #[test]
     fn rename_directory_updates_nested_references() {
         let root = temp_root("rename_dir");
         std::fs::create_dir_all(root.join("assets/models")).unwrap();
@@ -715,6 +924,67 @@ mod tests {
     }
 
     #[test]
+    fn prefab_outside_prefabs_root_can_be_renamed_and_moved() {
+        let root = temp_root("prefab_move");
+        std::fs::create_dir_all(root.join("assets/models/chair")).unwrap();
+        std::fs::create_dir_all(root.join("assets/actors")).unwrap();
+        let doc = scene_with(&["assets/a.png", "assets/a.png"]);
+        write_doc(&root.join("assets/models/chair/seat.prefab.json"), &doc).unwrap();
+
+        rename_asset(
+            &root,
+            "assets/models/chair/seat.prefab.json",
+            "assets/actors/seat.prefab.json",
+        )
+        .unwrap();
+        assert!(root.join("assets/actors/seat.prefab.json").is_file());
+        assert!(!root.join("assets/models/chair/seat.prefab.json").exists());
+
+        // 就地改名、移回默认目录、再从默认目录移进子目录都应放行。
+        rename_asset(
+            &root,
+            "assets/actors/seat.prefab.json",
+            "assets/actors/stool.prefab.json",
+        )
+        .unwrap();
+        assert!(root.join("assets/actors/stool.prefab.json").is_file());
+
+        rename_asset(
+            &root,
+            "assets/actors/stool.prefab.json",
+            "assets/prefabs/stool.prefab.json",
+        )
+        .unwrap();
+        assert!(root.join("assets/prefabs/stool.prefab.json").is_file());
+
+        rename_asset(
+            &root,
+            "assets/prefabs/stool.prefab.json",
+            "assets/models/stool.prefab.json",
+        )
+        .unwrap();
+        assert!(root.join("assets/models/stool.prefab.json").is_file());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn prefab_rename_must_keep_the_prefab_extension() {
+        let root = temp_root("prefab_ext");
+        std::fs::create_dir_all(root.join("assets/models")).unwrap();
+        let doc = scene_with(&["assets/a.png", "assets/a.png"]);
+        write_doc(&root.join("assets/models/chair.prefab.json"), &doc).unwrap();
+
+        assert!(rename_asset(
+            &root,
+            "assets/models/chair.prefab.json",
+            "assets/models/chair.json"
+        )
+        .is_err());
+        assert!(root.join("assets/models/chair.prefab.json").is_file());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
     fn scene_documents_stay_in_flat_directory() {
         let root = temp_root("doc_placement");
         std::fs::create_dir_all(root.join("assets/external")).unwrap();
@@ -750,6 +1020,88 @@ mod tests {
         .unwrap();
         let manifest = std::fs::read_to_string(root.join("assets/scenes.toml")).unwrap();
         assert!(manifest.contains("scenes/level.rscn"), "{manifest}");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn delete_scene_drops_its_manifest_entry() {
+        let root = temp_root("delete_scene_manifest");
+        std::fs::write(
+            root.join("assets/scenes.toml"),
+            "# Scene list edited by hand.\n\n\
+             # Intro entry.\n[[scenes]]\nname = \"intro\"\npath = \"scenes/intro.rscn\"\n\n\
+             # Default entry.\n[[scenes]]\nname = \"default\"\npath = \"scenes/default.rscn\"\n",
+        )
+        .unwrap();
+        for name in ["intro", "default"] {
+            let doc = scene_with(&["assets/a.png", "assets/a.png"]);
+            write_doc(&root.join(format!("assets/scenes/{name}.scene.json")), &doc).unwrap();
+        }
+
+        // 删除场景文档本身不需要 force：manifest 条目会跟着一起清掉。
+        let result = delete_asset(&root, "assets/scenes/intro.scene.json", true).unwrap();
+        assert_eq!(result.references_updated, 1);
+        assert!(result
+            .affected_documents
+            .contains(&"assets/scenes.toml".to_string()));
+
+        let manifest = std::fs::read_to_string(root.join("assets/scenes.toml")).unwrap();
+        assert!(!manifest.contains("scenes/intro.rscn"), "{manifest}");
+        assert!(!manifest.contains("# Intro entry."), "{manifest}");
+        assert!(manifest.contains("scenes/default.rscn"), "{manifest}");
+        assert!(manifest.contains("# Default entry."), "{manifest}");
+        assert!(
+            manifest.contains("# Scene list edited by hand."),
+            "{manifest}"
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn delete_scene_directory_drops_nested_entries() {
+        let root = temp_root("delete_scene_dir_manifest");
+        std::fs::write(
+            root.join("assets/scenes.toml"),
+            "[[scenes]]\nname = \"chapter\"\npath = \"scenes/chapter/intro.rscn\"\n\
+             [[scenes]]\nname = \"chaptered\"\npath = \"scenes/chaptered.rscn\"\n\
+             [[scenes]]\nname = \"other\"\npath = \"scenes/other.rscn\"\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(root.join("assets/scenes/chapter")).unwrap();
+        let doc = scene_with(&["assets/a.png", "assets/a.png"]);
+        write_doc(&root.join("assets/scenes/chapter/intro.scene.json"), &doc).unwrap();
+
+        let result = delete_asset(&root, "assets/scenes/chapter", true).unwrap();
+        assert_eq!(result.references_updated, 1);
+
+        let manifest = std::fs::read_to_string(root.join("assets/scenes.toml")).unwrap();
+        assert!(
+            !manifest.contains("scenes/chapter/intro.rscn"),
+            "{manifest}"
+        );
+        assert!(manifest.contains("scenes/chaptered.rscn"), "{manifest}");
+        assert!(manifest.contains("scenes/other.rscn"), "{manifest}");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn delete_unrelated_asset_keeps_manifest() {
+        let root = temp_root("delete_unrelated_manifest");
+        std::fs::create_dir_all(root.join("assets/textures")).unwrap();
+        std::fs::write(root.join("assets/textures/a.png"), b"x").unwrap();
+        std::fs::write(
+            root.join("assets/scenes.toml"),
+            "[[scenes]]\nname = \"intro\"\npath = \"scenes/intro.rscn\"\n",
+        )
+        .unwrap();
+        let before = std::fs::read_to_string(root.join("assets/scenes.toml")).unwrap();
+
+        let result = delete_asset(&root, "assets/textures/a.png", true).unwrap();
+        assert_eq!(result.references_updated, 0);
+        assert_eq!(
+            std::fs::read_to_string(root.join("assets/scenes.toml")).unwrap(),
+            before
+        );
         std::fs::remove_dir_all(&root).ok();
     }
 }

@@ -151,7 +151,10 @@ pub struct HeightmapConfig {
     pub height: u32,
     /// FBM octaves (layers of noise).
     pub octaves: u32,
-    /// Base frequency (scale of the largest features).
+    /// Base frequency in cycles per pixel (smaller = larger features).
+    ///
+    /// Tuned for 1024 px maps: `0.003` yields roughly three base-noise
+    /// features across the whole map.
     pub frequency: f64,
     /// FBM gain (amplitude decay per octave, typical: 0.5).
     pub gain: f64,
@@ -216,8 +219,8 @@ pub fn generate_heightmap(cfg: &HeightmapConfig) -> Heightmap {
         let lac = cfg.lacunarity;
         let freq = cfg.frequency;
         let seed_offset = cfg.seed.unwrap_or(0) as f64 * 1000.0;
-        noise::generate_parallel(cfg.width, cfg.height, freq, move |uv| {
-            let p = [uv[0] + seed_offset, uv[1] + seed_offset];
+        noise::generate_parallel(cfg.width, cfg.height, freq, move |p| {
+            let p = [p[0] + seed_offset, p[1] + seed_offset];
             noise::ridge_domain_warp(p, oct, gain, lac, warp)
         })
     } else if cfg.ridge_classic {
@@ -226,8 +229,8 @@ pub fn generate_heightmap(cfg: &HeightmapConfig) -> Heightmap {
         let lac = cfg.lacunarity;
         let freq = cfg.frequency;
         let seed_offset = cfg.seed.unwrap_or(0) as f64 * 1000.0;
-        noise::generate_parallel(cfg.width, cfg.height, freq, move |uv| {
-            let p = [uv[0] + seed_offset, uv[1] + seed_offset];
+        noise::generate_parallel(cfg.width, cfg.height, freq, move |p| {
+            let p = [p[0] + seed_offset, p[1] + seed_offset];
             noise::ridge_noise(p, oct, gain, lac)
         })
     } else {
@@ -237,8 +240,8 @@ pub fn generate_heightmap(cfg: &HeightmapConfig) -> Heightmap {
         let lac = cfg.lacunarity;
         let freq = cfg.frequency;
         let seed_offset = cfg.seed.unwrap_or(0) as f64 * 1000.0;
-        noise::generate_parallel(cfg.width, cfg.height, freq, move |uv| {
-            let p = [uv[0] + seed_offset, uv[1] + seed_offset];
+        noise::generate_parallel(cfg.width, cfg.height, freq, move |p| {
+            let p = [p[0] + seed_offset, p[1] + seed_offset];
             noise::fbm_2d(p, oct, gain, lac)
         })
     };

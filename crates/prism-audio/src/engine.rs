@@ -229,6 +229,9 @@ impl AudioEngine {
     }
 
     /// 播放解码后的声音。返回播放控制句柄。
+    ///
+    /// `audio.samples` 按声道交错排列（立体声为 L,R,L,R）。长度不是声道数
+    /// 整数倍时，尾部不足一整帧的样本会被丢弃——见 [`deinterleave`]。
     pub fn play(&mut self, audio: &AudioData) -> PlaybackHandle {
         let channels = audio.channels.max(1) as usize;
         let num_frames = audio.samples.len() / channels;
@@ -237,13 +240,15 @@ impl AudioEngine {
             return PlaybackHandle(0);
         }
 
-        // 将交错格式转换为平面格式，用于 DecodedAudioF32。
-        let mut planar: Vec<Vec<f32>> = vec![vec![0.0f32; num_frames]; channels];
-        for (i, &sample) in audio.samples.iter().enumerate() {
-            let ch = i % channels;
-            let frame = i / channels;
-            planar[ch][frame] = sample;
+        let dropped = audio.samples.len() - num_frames * channels;
+        if dropped > 0 {
+            ::log::debug!(
+                "Audio has {dropped} trailing sample(s) that do not fill a full {channels}-channel frame; dropping them"
+            );
         }
+
+        // 将交错格式转换为平面格式，用于 DecodedAudioF32。
+        let planar = deinterleave(&audio.samples, channels);
 
         let sample_rate = match NonZeroU32::new(audio.sample_rate) {
             Some(r) => r,
@@ -404,6 +409,24 @@ impl Drop for AudioEngine {
     }
 }
 
+/// 把交错排列的样本拆成每个声道一条平面缓冲。
+///
+/// `channels` 为 0 时按单声道处理。返回的每条缓冲长度都是
+/// `samples.len() / channels`；尾部不足一整帧的样本被丢弃，所以
+/// `planar[ch][frame]` 的下标永远在范围内（`samples.len() % channels != 0`
+/// 时不再越界 panic）。
+fn deinterleave(samples: &[f32], channels: usize) -> Vec<Vec<f32>> {
+    let channels = channels.max(1);
+    let num_frames = samples.len() / channels;
+    let mut planar: Vec<Vec<f32>> = (0..channels)
+        .map(|_| Vec::with_capacity(num_frames))
+        .collect();
+    for (i, &sample) in samples[..num_frames * channels].iter().enumerate() {
+        planar[i % channels].push(sample);
+    }
+    planar
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -472,6 +495,35 @@ mod tests {
         };
         let handle = engine.play(&audio);
         assert!(!handle.is_valid());
+        assert_eq!(engine.active_count(), 0);
+    }
+
+    #[test]
+    fn deinterleave_splits_interleaved_stereo() {
+        let planar = deinterleave(&[1.0, 2.0, 3.0, 4.0], 2);
+        assert_eq!(planar, vec![vec![1.0, 3.0], vec![2.0, 4.0]]);
+    }
+
+    #[test]
+    fn deinterleave_drops_a_partial_trailing_frame() {
+        let planar = deinterleave(&[1.0, 2.0, 3.0], 2);
+        assert_eq!(planar, vec![vec![1.0], vec![2.0]]);
+        assert_eq!(planar[0].len(), 1, "one complete frame survives");
+    }
+
+    #[test]
+    fn test_play_odd_sample_count_does_not_panic() {
+        let mut engine = AudioEngine::new(AudioConfig::default()).expect("engine new");
+        let audio = AudioData {
+            samples: vec![0.1; 3],
+            sample_rate: 44100,
+            channels: 2,
+            duration: Duration::from_millis(1),
+        };
+        let handle = engine.play(&audio);
+        assert!(handle.is_valid(), "truncated audio still plays");
+        assert_eq!(engine.active_count(), 1);
+        engine.stop(&handle);
         assert_eq!(engine.active_count(), 0);
     }
 }

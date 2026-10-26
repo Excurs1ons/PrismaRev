@@ -35,6 +35,7 @@ import {
   type ThemeState,
 } from "./theme";
 import { PREFAB_LINK_COMPONENT } from "./types";
+import { windowRange } from "./windowed";
 import type {
   AssetInfo,
   AssetRef,
@@ -161,6 +162,8 @@ const gameLogEntries = ref<PreviewLogLine[]>([]);
 const logScrollEl = ref<HTMLElement | null>(null);
 const logSourceFilter = ref<"all" | "editor" | "game">("all");
 const logLevelFilter = ref<LogLevel | "all">("all");
+const logScrollTop = ref(0);
+const logViewportHeight = ref(0);
 const busy = ref(false);
 
 type LogLevel = "error" | "warn" | "info" | "debug" | "trace" | "panic";
@@ -229,6 +232,71 @@ const hasFilteredLogs = computed(
     (logSourceFilter.value !== "game" && filteredEditorLogLines.value.length > 0) ||
     (logSourceFilter.value !== "editor" && filteredGameLogLines.value.length > 0),
 );
+
+// ── 日志窗口化 ──────────────────────────────────────────────────────────────
+// 单行固定高度（见 style.css 的 `.log-row`）。日志最多保留
+// `editorPrefs.maxLogLines`（上限 20000）行，一次性渲染成 DOM 会拖垮滚动；
+// 这里只渲染视口附近的行，其余用 spacer 占位。
+const LOG_ROW_HEIGHT = 18;
+
+type LogRow =
+  | { kind: "title"; text: string }
+  | { kind: "line"; entry: LogViewLine };
+
+const logRows = computed<LogRow[]>(() => {
+  const rows: LogRow[] = [];
+  if (logSourceFilter.value !== "game" && filteredEditorLogLines.value.length) {
+    rows.push({ kind: "title", text: "编辑器" });
+    for (const entry of filteredEditorLogLines.value) rows.push({ kind: "line", entry });
+  }
+  if (logSourceFilter.value !== "editor" && filteredGameLogLines.value.length) {
+    rows.push({ kind: "title", text: "Game" });
+    for (const entry of filteredGameLogLines.value) rows.push({ kind: "line", entry });
+  }
+  return rows;
+});
+
+const logWindow = computed(() =>
+  windowRange(
+    logRows.value.length,
+    LOG_ROW_HEIGHT,
+    logScrollTop.value,
+    logViewportHeight.value,
+  ),
+);
+
+const visibleLogRows = computed(() => logRows.value.slice(logWindow.value.start, logWindow.value.end));
+
+function syncLogViewport() {
+  const element = logScrollEl.value;
+  if (!element) return;
+  logScrollTop.value = element.scrollTop;
+  logViewportHeight.value = element.clientHeight;
+}
+
+function onLogScroll() {
+  syncLogViewport();
+}
+
+// 面板被拖宽/拖高、dock 重排、字号变化都会改变可见行数，用 ResizeObserver
+// 而不是监听 window resize。元素本身是 v-if 之外的常驻节点，但仍在出现时重新挂载。
+watch(
+  logScrollEl,
+  (element) => {
+    if (!element) return;
+    syncLogViewport();
+    const observer = new ResizeObserver(() => syncLogViewport());
+    observer.observe(element);
+    return () => observer.disconnect();
+  },
+  { flush: "post" },
+);
+
+watch([logSourceFilter, logLevelFilter], () => {
+  const element = logScrollEl.value;
+  if (element) element.scrollTop = 0;
+  logScrollTop.value = 0;
+});
 
 const documentLabel = computed(() => {
   if (currentPath.value) return currentPath.value.split("/").pop() || currentPath.value;
@@ -630,6 +698,35 @@ function silentUpdate(next: SceneDoc) {
   doc.value = next;
 }
 
+/**
+ * 执行「把整份文档交给后端改写」的异步命令。
+ *
+ * 后端拿到的是调用瞬间的快照，返回的也是基于这份快照的整份文档。命令在
+ * `await` 期间用户仍会继续拖动字段 / 就地重命名（这些编辑是本地即时提交的），
+ * 直接 `commit` 返回的旧快照会把这些编辑连同撤销栈一起丢掉。
+ *
+ * 因此提交前比较文档内容：没被改过才提交；被改过就用最新文档重跑一次。
+ * 连续几次都被打断就放弃并提示，绝不覆盖新内容。
+ */
+async function runDocCommand<T>(
+  run: (snapshot: SceneDoc) => Promise<T>,
+  apply: (result: T) => SceneDoc,
+  editKey: string,
+): Promise<T | null> {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    if (!doc.value) return null;
+    const snapshot = doc.value;
+    const expected = JSON.stringify(snapshot);
+    const result = await run(snapshot);
+    if (doc.value && JSON.stringify(doc.value) === expected) {
+      commit(apply(result), editKey);
+      return result;
+    }
+  }
+  status.value = "文档在操作期间又被修改，已放弃这次操作，请重试";
+  return null;
+}
+
 function undo() {
   if (!past.value.length || !doc.value) return;
   const previous = past.value[past.value.length - 1];
@@ -753,14 +850,29 @@ async function createDocumentOf(kind: DocKind) {
   }
 }
 
+/**
+ * 保存用的快照。
+ *
+ * 写入是异步的，期间用户还在拖动/输入；基线必须和**真正写进磁盘的那一份**
+ * 完全一致。若在 `await` 之后才对 `doc` 取快照当基线，写入期间产生的编辑
+ * 会被当成已保存（`dirty` 变 false），关闭或切换文档时静默丢失。
+ */
+function snapshotDoc(): { text: string; doc: SceneDoc } {
+  const text = JSON.stringify(doc.value);
+  return { text, doc: JSON.parse(text) as SceneDoc };
+}
+
 async function save(): Promise<boolean> {
   if (!doc.value) return false;
   if (!currentPath.value) return saveAs();
+  const path = currentPath.value;
+  const snapshot = snapshotDoc();
   try {
-    await api.writeDocument(currentPath.value, doc.value);
-    baseline.value = JSON.stringify(doc.value);
+    await api.writeDocument(path, snapshot.doc);
+    // 写入期间若已切到别的文档，别把这边的基线套到另一份文档上。
+    if (currentPath.value === path) baseline.value = snapshot.text;
     error.value = "";
-    status.value = `已保存 ${currentPath.value}`;
+    status.value = `已保存 ${path}`;
     await refreshDocuments();
     return true;
   } catch (e) {
@@ -774,10 +886,11 @@ async function saveAs(): Promise<boolean> {
   const suffix = documentKind.value === "scene" ? ".scene.json" : ".prefab.json";
   const name = window.prompt(`另存为（不含 ${suffix}）`, "untitled");
   if (!name) return false;
+  const snapshot = snapshotDoc();
   try {
-    const path = await api.writeDocumentAs(documentKind.value, name, doc.value);
+    const path = await api.writeDocumentAs(documentKind.value, name, snapshot.doc);
     currentPath.value = path;
-    baseline.value = JSON.stringify(doc.value);
+    baseline.value = snapshot.text;
     error.value = "";
     status.value = `已另存为 ${path}`;
     await refreshDocuments();
@@ -927,8 +1040,12 @@ async function insertPrefab(entry: SceneEntry, parent: number | null = primary.v
   }
   busy.value = true;
   try {
-    const result = await api.instantiatePrefab(doc.value, entry.path, parent);
-    commit(result.doc, `insert-prefab:${entry.path}#${Date.now()}`);
+    const result = await runDocCommand(
+      (snapshot) => api.instantiatePrefab(snapshot, entry.path, parent),
+      (inserted) => inserted.doc,
+      `insert-prefab:${entry.path}#${Date.now()}`,
+    );
+    if (!result) return;
     if (result.inserted.length) selection.value = [result.inserted[0]];
     error.value = "";
     status.value = `已实例化 ${entry.name}（${result.inserted.length} 个实体）`;
@@ -958,8 +1075,12 @@ async function revertPrefab(index: number) {
   if (!doc.value || !prefabLink.value) return;
   const link = prefabLink.value;
   try {
-    const result = await api.revertPrefabInstance(doc.value, index, link);
-    commit(result.doc, `revert-prefab:${link}#${Date.now()}`);
+    const result = await runDocCommand(
+      (snapshot) => api.revertPrefabInstance(snapshot, index, link),
+      (reverted) => reverted.doc,
+      `revert-prefab:${link}#${Date.now()}`,
+    );
+    if (!result) return;
     selection.value = [result.index];
     error.value = "";
     status.value = `已从 ${link} 还原`;
@@ -986,8 +1107,12 @@ async function applyPrefab(index: number) {
 async function unlinkPrefab(index: number) {
   if (!doc.value) return;
   try {
-    const next = await api.unlinkPrefabInstance(doc.value, index);
-    commit(next, `unlink-prefab:${index}#${Date.now()}`);
+    const next = await runDocCommand(
+      (snapshot) => api.unlinkPrefabInstance(snapshot, index),
+      (unlinked) => unlinked,
+      `unlink-prefab:${index}#${Date.now()}`,
+    );
+    if (!next) return;
     error.value = "";
     status.value = "已解除预制体链接";
   } catch (e) {
@@ -1002,8 +1127,12 @@ async function syncPrefab(entry: SceneEntry) {
   if (!link) return;
   busy.value = true;
   try {
-    const next = await api.syncPrefabInstances(doc.value, link);
-    commit(next, `sync-prefab:${link}#${Date.now()}`);
+    const next = await runDocCommand(
+      (snapshot) => api.syncPrefabInstances(snapshot, link),
+      (synced) => synced,
+      `sync-prefab:${link}#${Date.now()}`,
+    );
+    if (!next) return;
     error.value = "";
     status.value = `已同步 ${instanceCounts.value[link]} 个实例`;
   } catch (e) {
@@ -1015,6 +1144,11 @@ async function syncPrefab(entry: SceneEntry) {
 
 /** 资产生成处的「跳到该字段」：打开对应文档、选中实体、高亮组件/字段。 */
 async function jumpToUsage(ref: AssetRef) {
+  if (ref.kind === "manifest") {
+    // 清单条目没有实体/字段可定位，只提示它登记在构建清单里。
+    status.value = `${ref.entity} 在 ${ref.scene} 登记（path = ${ref.value}）`;
+    return;
+  }
   if (currentPath.value !== ref.scenePath) {
     if (!confirmDiscard()) return;
     try {
@@ -1071,8 +1205,12 @@ function onSelect(indices: number[]) {
 async function onReparent(child: number, parent: number | null) {
   if (!doc.value) return;
   try {
-    const next = await api.reparentEntity(doc.value, child, parent);
-    commit(next, `reparent:${child}->${parent ?? "root"}#${Date.now()}`);
+    const next = await runDocCommand(
+      (snapshot) => api.reparentEntity(snapshot, child, parent),
+      (reparented) => reparented,
+      `reparent:${child}->${parent ?? "root"}#${Date.now()}`,
+    );
+    if (!next) return;
     error.value = "";
     status.value = parent === null ? "已变为根实体" : `已挂到实体 #${parent}`;
   } catch (e) {
@@ -1083,8 +1221,12 @@ async function onReparent(child: number, parent: number | null) {
 async function onMove(child: number, at: number, parent: number | null) {
   if (!doc.value) return;
   try {
-    const result = await api.moveEntity(doc.value, child, at, parent);
-    commit(result.doc, `move:${child}@${at}#${Date.now()}`);
+    const result = await runDocCommand(
+      (snapshot) => api.moveEntity(snapshot, child, at, parent),
+      (moved) => moved.doc,
+      `move:${child}@${at}#${Date.now()}`,
+    );
+    if (!result) return;
     selection.value = [result.index];
     error.value = "";
     status.value = "已重新排序";
@@ -1118,18 +1260,32 @@ function onEntityUpdate(entity: EntityJson, editKey: string) {
   commit({ ...doc.value, entities }, editKey);
 }
 
-/** 反射写入成功后的规范化回填（不新增撤销步）。 */
-function onComponentReflect(name: string, canonical: JsonValue) {
-  if (!doc.value || primary.value === null) return;
-  const entity = doc.value.entities[primary.value];
+/**
+ * 反射写入成功后的规范化回填（不新增撤销步）。
+ *
+ * `index` / `pending` 来自发起编辑的那一刻：异步往返期间用户可能切换选中、
+ * 删除或移动实体，所以先确认「这个位置上的组件仍是我们刚写下的乐观值」，
+ * 否则丢弃 —— 绝不能按当前选中项回填（那会把值写进别人的实体）。
+ */
+function onComponentReflect(
+  name: string,
+  canonical: JsonValue,
+  index: number,
+  pending: JsonValue,
+) {
+  const current = doc.value;
+  if (!current) return;
+  const entity = current.entities[index];
   if (!entity) return;
-  if (JSON.stringify(entity.components[name]) === JSON.stringify(canonical)) return;
-  const entities = doc.value.entities.slice();
-  entities[primary.value] = {
+  const value = entity.components[name];
+  if (JSON.stringify(value) !== JSON.stringify(pending)) return;
+  if (JSON.stringify(value) === JSON.stringify(canonical)) return;
+  const entities = current.entities.slice();
+  entities[index] = {
     ...entity,
     components: { ...entity.components, [name]: canonical },
   };
-  silentUpdate({ ...doc.value, entities });
+  silentUpdate({ ...current, entities });
 }
 
 // ── 组件复制 / 粘贴 ─────────────────────────────────────────────────────────
@@ -1253,8 +1409,12 @@ async function deleteSelection() {
     return;
   }
   try {
-    const next = await api.deleteEntities(doc.value, indices);
-    commit(next, `delete-entities#${Date.now()}`);
+    const next = await runDocCommand(
+      (snapshot) => api.deleteEntities(snapshot, indices),
+      (deleted) => deleted,
+      `delete-entities#${Date.now()}`,
+    );
+    if (!next) return;
     selection.value = [];
     clampSelection();
     error.value = "";
@@ -1278,19 +1438,28 @@ function isTextInput(target: EventTarget | null): boolean {
 }
 
 function onKey(event: KeyboardEvent) {
-  const mod = event.ctrlKey || event.metaKey;
-  const key = event.key.toLowerCase();
-
   if (event.key === "Escape") {
     openMenu.value = null;
     return;
   }
 
-  if (!mod && event.key === "Delete") {
-    if (!isTextInput(event.target)) {
+  const mod = event.ctrlKey || event.metaKey;
+  const key = event.key.toLowerCase();
+
+  // 焦点在文本输入上时，把按键交还给文本框：`Ctrl+Z/Y`（文本撤销/重做）、
+  // `Ctrl+A`（全选）、`Ctrl+V`（粘贴）、`Ctrl+D` 都应由浏览器处理。
+  // 唯一保留的是保存 —— 编辑字段时按 `Ctrl+S` 仍应落盘。
+  if (isTextInput(event.target)) {
+    if (mod && key === "s") {
       event.preventDefault();
-      void deleteSelection();
+      void save();
     }
+    return;
+  }
+
+  if (!mod && event.key === "Delete") {
+    event.preventDefault();
+    void deleteSelection();
     return;
   }
 
@@ -1311,7 +1480,7 @@ function onKey(event: KeyboardEvent) {
     event.preventDefault();
     pasteComponent();
   } else if (key === "a") {
-    if (!isTextInput(event.target) && doc.value) {
+    if (doc.value) {
       event.preventDefault();
       selection.value = doc.value.entities.map((_, index) => index);
     }
@@ -1383,7 +1552,10 @@ function stopPreviewPolling() {
 function scrollLogsToEnd() {
   void nextTick(() => {
     const element = logScrollEl.value;
-    if (element) element.scrollTop = element.scrollHeight;
+    if (element) {
+      element.scrollTop = element.scrollHeight;
+      syncLogViewport();
+    }
   });
 }
 
@@ -2111,28 +2283,25 @@ onUnmounted(() => {
             <button class="ghost icon" title="清空日志" @click="clearAllLogs">清空</button>
           </div>
 
-          <div ref="logScrollEl" class="log-scroll">
-            <template
-              v-if="logSourceFilter !== 'game' && filteredEditorLogLines.length"
-            >
-              <div class="log-section-title">编辑器</div>
-              <pre class="log log-block"><span
-                v-for="(entry, index) in filteredEditorLogLines"
-                :key="index"
-                :class="`log-level-${entry.level}`"
-              >{{ entry.line }}{{ "\n" }}</span></pre>
-            </template>
-
-            <template
-              v-if="logSourceFilter !== 'editor' && filteredGameLogLines.length"
-            >
-              <div class="log-section-title">Game</div>
-              <pre class="log log-block"><span
-                v-for="(entry, index) in filteredGameLogLines"
-                :key="index"
-                :class="`log-level-${entry.level}`"
-              >{{ entry.line }}{{ "\n" }}</span></pre>
-            </template>
+          <div ref="logScrollEl" class="log-scroll" @scroll.passive="onLogScroll">
+            <div class="log-virtual" :style="{ height: `${logWindow.total}px` }">
+              <div
+                class="log-window"
+                :style="{ transform: `translateY(${logWindow.offset}px)` }"
+              >
+                <div
+                  v-for="(row, index) in visibleLogRows"
+                  :key="logWindow.start + index"
+                  class="log-row"
+                  :class="
+                    row.kind === 'title'
+                      ? 'log-row-section'
+                      : `log-level-${row.entry.level}`
+                  "
+                  :title="row.kind === 'line' ? row.entry.line : undefined"
+                >{{ row.kind === "title" ? row.text : row.entry.line }}</div>
+              </div>
+            </div>
 
             <div v-if="!hasFilteredLogs" class="empty">当前筛选没有日志。</div>
           </div>

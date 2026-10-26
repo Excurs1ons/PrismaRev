@@ -13,15 +13,23 @@ use std::any::{Any, TypeId};
 use std::collections::HashMap;
 
 // ---------------------------------------------------------------------------
-// Unity DOTS 形状的对齐层（`Unity.Entities`）
+// Unity DOTS 形状的对齐层（`Unity.Entities` / `Unity.Collections` / `Unity.Jobs`）
 // ---------------------------------------------------------------------------
 
+/// Unity `Unity.Collections` 形状的容器（`NativeArray` / `NativeList` / ...）。
+pub mod collections;
 /// DOTS `EntityManager` 形状的 [`World`] 门面。
 pub mod entity_manager;
+/// Unity `Unity.Jobs` 形状的作业与完成句柄。
+pub mod jobs;
 /// DOTS `ISystem` / `SystemBase` / `ComponentSystemGroup` 形状的系统与系统组。
 pub mod systems;
 
+pub use collections::{Allocator, NativeArray, NativeList, NativeReference, NativeSlice};
 pub use entity_manager::EntityManager;
+pub use jobs::{
+    schedule, schedule_for, schedule_parallel_for, IJob, IJobFor, IJobParallelFor, JobHandle,
+};
 pub use systems::{
     ComponentSystemGroup, ISystem, SystemBase, SystemGroup, INITIALIZATION_SYSTEM_GROUP,
     PRESENTATION_SYSTEM_GROUP, SIMULATION_SYSTEM_GROUP,
@@ -85,6 +93,12 @@ pub struct World {
     /// for a freed/recyclable 槽 it holds the generation the *next*
     /// recycled handle will have (old + 1), so stale handles stay dead.
     entities: Vec<u32>,
+    /// 并行 to `entities`: `true` while the 槽 holds a live 实体.
+    ///
+    /// A freed 槽 keeps its bumped generation but is marked dead here, so a
+    /// handle forged as `{ id, generation + 1 }` (which matches the stored
+    /// generation) cannot touch the 槽 before it is actually recycled.
+    alive: Vec<bool>,
     /// 并行 to `entities`: whether each live 实体 is 激活 (i.e.
     /// should be included in queries). 未激活 entities remain in the
     /// 世界 but are skipped by all 查询 iterators.
@@ -105,6 +119,7 @@ impl World {
     pub fn new() -> Self {
         Self {
             entities: Vec::new(),
+            alive: Vec::new(),
             active: Vec::new(),
             free: Vec::new(),
             pools: HashMap::new(),
@@ -124,11 +139,13 @@ impl World {
             // here (old + 1) so a recycled handle is distinguishable from the
             // stale one that was just freed.
             let generation = self.entities[id as usize];
+            self.alive[id as usize] = true;
             self.active[id as usize] = true;
             Entity { id, generation }
         } else {
             let id = self.entities.len() as u32;
             self.entities.push(0);
+            self.alive.push(true);
             self.active.push(true);
             Entity { id, generation: 0 }
         }
@@ -144,18 +161,19 @@ impl World {
                 pool.remove(entity.id);
             }
             // 存储 the *next* generation so the 槽 can be recycled with a
-            // fresh, distinguishable handle (old handle stays dead because
-            // is_alive compares for 精确 equality).
+            // fresh, distinguishable handle, and mark the 槽 dead so a handle
+            // forged as `{ id, generation + 1 }` cannot touch it before the
+            // recycle actually happens.
             self.entities[entity.id as usize] = entity.generation + 1;
+            self.alive[entity.id as usize] = false;
             self.free.push(entity.id);
         }
     }
 
     /// True if 实体 refers to a currently-live 槽
     pub fn is_alive(&self, entity: Entity) -> bool {
-        self.entities
-            .get(entity.id as usize)
-            .is_some_and(|&gen| gen == entity.generation)
+        self.alive.get(entity.id as usize).copied().unwrap_or(false)
+            && self.entities.get(entity.id as usize) == Some(&entity.generation)
     }
 
     /// True if the 实体 is alive and 激活 未激活 entities are excluded
@@ -256,18 +274,15 @@ impl World {
     /// 未激活 entities are skipped.
     pub fn query_mut<T: Component>(&mut self) -> impl Iterator<Item = (Entity, &mut T)> {
         let entities = &self.entities;
-        let active_ptr: *const Vec<bool> = &self.active;
+        let active = &self.active;
         let pool = self.pools.get_mut(&TypeId::of::<T>());
         pool.into_iter()
             .flat_map(move |p| pool_downcast_mut::<T>(p.as_mut()).iter_mut())
             .filter_map(move |(id, value)| {
                 let generation = *entities.get(id as usize)?;
-                // 安全性 self.active is not mutated during the 迭代
-                if !unsafe { &*active_ptr }
-                    .get(id as usize)
-                    .copied()
-                    .unwrap_or(true)
-                {
+                // `active` and `pools` are disjoint fields, so the shared read
+                // stays valid while the pool borrow is alive.
+                if !active.get(id as usize).copied().unwrap_or(true) {
                     return None;
                 }
                 Some((Entity { id, generation }, value))
@@ -344,43 +359,39 @@ impl World {
     /// systems that 写入 to a 变换 while reading a mesh/handle. Returns
     /// a lazy 迭代器 (no 分配
     ///
-    /// # 安全性 argument
+    /// # 借用 argument
     ///
-    /// The 借用 checker can't see that `pools[A]` and `pools[B]` are
-    /// disjoint `HashMap` entries (different `TypeId` keys). We use raw pointers
-    /// to obtain both borrows simultaneously. This is 声音 because:
-    /// - A and B are 不同 types, so their pools never alias.
-    /// - The `&mut self` 借用 prevents any other 访问 to `pools` for the
-    ///   生命周期 of the returned references.
+    /// `pools[A]` and `pools[B]` are distinct `HashMap` entries, but a plain
+    /// `get_mut` + `get` pair is not expressible in safe code (the second
+    /// borrow of the map invalidates the first). [`HashMap::get_disjoint_mut`]
+    /// hands out both entries at once, so the two references are provably
+    /// disjoint and no raw pointer / `unsafe` is needed. `get_disjoint_mut`
+    /// panics on duplicate keys, which is why the same-type query is rejected
+    /// before the call; `A` and `B` are otherwise different types, so their
+    /// pools never alias.
     pub fn query2_mut<A: Component, B: Component>(
         &mut self,
     ) -> Box<dyn Iterator<Item = (Entity, &mut A, &B)> + '_> {
-        // The raw-pointer split below requires distinct component pools.
-        // Reject the same-type query before taking either borrow.
-        if TypeId::of::<A>() == TypeId::of::<B>() {
+        let type_a = TypeId::of::<A>();
+        let type_b = TypeId::of::<B>();
+        // `get_disjoint_mut` panics for duplicate keys.
+        if type_a == type_b {
             return Box::new(std::iter::empty());
         }
         let generation_for = &self.entities;
-        let active_ptr: *const Vec<bool> = &self.active;
-        // 安全性 see above. A and B have different TypeIds, so the two 池
-        // entries are disjoint and cannot alias.
-        let pools_ptr: *mut HashMap<TypeId, Box<dyn ErasedPool>> = &mut self.pools;
-        let pool_a = unsafe { (*pools_ptr).get_mut(&TypeId::of::<A>()) }
-            .map(|pa| pool_downcast_mut::<A>(pa.as_mut()));
-        let pool_b = unsafe { (*pools_ptr).get(&TypeId::of::<B>()) }
-            .map(|pb| pool_downcast_ref::<B>(pb.as_ref()));
+        let active = &self.active;
+        let [pool_a, pool_b] = self.pools.get_disjoint_mut([&type_a, &type_b]);
         let (a, b) = match (pool_a, pool_b) {
-            (Some(a), Some(b)) => (a, b),
+            (Some(a), Some(b)) => (
+                pool_downcast_mut::<A>(a.as_mut()),
+                pool_downcast_ref::<B>(&**b),
+            ),
             _ => return Box::new(std::iter::empty()),
         };
         Box::new(a.iter_mut().filter_map(move |(id, av)| {
             let bv = b.get(id)?;
             let generation = *generation_for.get(id as usize).unwrap_or(&0);
-            if !unsafe { &*active_ptr }
-                .get(id as usize)
-                .copied()
-                .unwrap_or(true)
-            {
+            if !active.get(id as usize).copied().unwrap_or(true) {
                 return None;
             }
             Some((Entity { id, generation }, av, bv))

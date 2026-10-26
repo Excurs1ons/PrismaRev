@@ -38,7 +38,7 @@ impl Default for ThermalErosion {
 }
 
 impl ThermalErosion {
-    /// Convert talus angle to slope threshold (vertical/horizontal ratio).
+    /// Convert talus angle to a slope (vertical/horizontal ratio).
     fn talus_slope(&self) -> f64 {
         (self.talus_angle_degrees * std::f64::consts::PI / 180.0).tan()
     }
@@ -46,67 +46,75 @@ impl ThermalErosion {
 
 impl ErosionKernel for ThermalErosion {
     fn erode(&self, hm: &mut Heightmap, iterations: u32) {
-        let talus = self.talus_slope();
-        let rate = self.relaxation_rate;
+        if iterations == 0 || hm.width < 2 || hm.height < 2 {
+            return;
+        }
 
         let w = hm.width as usize;
         let h = hm.height as usize;
+        let talus = self.talus_slope();
+        let rate = self.relaxation_rate.clamp(0.0, 1.0);
+
+        // Heights are normalized to [0, 1] over a unit-square map, so one
+        // pixel spans `1 / w` horizontally and `1 / h` vertically. A talus
+        // angle is a vertical/horizontal ratio, hence the largest drop still
+        // at repose is `talus / w` (or `/ h`) per pixel. Using a flat
+        // `talus` threshold made the default 30° unreachable on normalized
+        // heightmaps.
+        let max_drop_x = talus / w as f64;
+        let max_drop_y = talus / h as f64;
 
         // Double-buffer approach: read from `src`, write to `dst`.
-        let mut src = hm.data.clone();
-        let mut dst = hm.data.clone();
+        let mut src: Vec<f64> = hm.data.iter().map(|&v| v as f64).collect();
+        let mut dst = src.clone();
 
         for _iter in 0..iterations {
             // Parallel: process each pixel independently.
             dst.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
                 for (x, cell) in row.iter_mut().enumerate() {
-                    let x = x as i32;
-                    let y = y as i32;
-                    let idx = |ix: i32, iy: i32| -> usize {
-                        (iy.clamp(0, h as i32 - 1) as usize) * w
-                            + (ix.clamp(0, w as i32 - 1) as usize)
-                    };
+                    let center_h = src[y * w + x];
 
-                    let center_h = src[idx(x, y)] as f64;
+                    // Net change: material leaving this cell to lower
+                    // neighbours, plus the mirrored inflow from higher ones.
+                    // Both sides of a pair evaluate the same `drop - max_drop`
+                    // term, so the transfer is exactly conservative.
+                    let mut net_change = 0.0;
 
-                    // For each of the 4 cardinal neighbors, check slope.
-                    let mut total_material = center_h;
-
-                    for (nx, ny) in &[(x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)] {
-                        if *nx < 0 || *nx >= w as i32 || *ny < 0 || *ny >= h as i32 {
+                    for &(dx, dy, max_drop) in &[
+                        (-1, 0, max_drop_x),
+                        (1, 0, max_drop_x),
+                        (0, -1, max_drop_y),
+                        (0, 1, max_drop_y),
+                    ] {
+                        let nx = x as isize + dx;
+                        let ny = y as isize + dy;
+                        if nx < 0 || nx >= w as isize || ny < 0 || ny >= h as isize {
                             continue;
                         }
-                        let nh = src[idx(*nx, *ny)] as f64;
-                        let dh = center_h - nh;
-                        let dist = 1.0; // pixel spacing = 1
-                        let slope = dh / dist;
 
-                        if slope > talus {
-                            // Transfer material from higher to lower.
-                            let transfer = (slope - talus) * dist * rate;
-                            let actual = transfer.min(dh * 0.5);
-                            total_material -= actual;
-                            // The neighbor receives `actual` but we don't
-                            // write to it here (owned by another cell).
+                        let neighbor_h = src[ny as usize * w + nx as usize];
+                        let drop = center_h - neighbor_h;
+
+                        if drop > max_drop {
+                            // Material leaves this cell. The neighbour adds
+                            // the same amount through its own inflow branch.
+                            net_change -= (drop - max_drop) * rate * 0.25;
+                        } else if -drop > max_drop {
+                            // Material arrives from a higher neighbour.
+                            net_change += (-drop - max_drop) * rate * 0.25;
                         }
                     }
 
-                    *cell = total_material as f32;
+                    *cell = center_h + net_change;
                 }
             });
-
-            // Apply the dumped material from neighbors.
-            // The simple approach: re-distribute evenly.
-            // More accurate: second pass that adds received material.
-            // For simplicity, we lerp between src and the eroded result.
-            for (d, s) in dst.iter_mut().zip(src.iter()) {
-                *d = *s + (*d - *s);
-            }
 
             std::mem::swap(&mut src, &mut dst);
         }
 
-        hm.data = src;
+        for (dst, src) in hm.data.iter_mut().zip(src.iter()) {
+            *dst = *src as f32;
+        }
     }
 }
 

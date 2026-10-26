@@ -391,6 +391,9 @@ pub struct UiOverlay {
     vertex_memory: vk::DeviceMemory,
     vertex_capacity: u32,
     render_pass: vk::RenderPass,
+    /// 创建 `render_pass` 时使用的颜色格式；swapchain 格式变化时用来判断
+    /// 是否需要重建（见 [`UiOverlay::set_color_format`]）。
+    color_format: vk::Format,
     atlas: GlyphAtlas,
     device: ash::Device,
     /// One framebuffer per swapchain image view/extent, reused across frames.
@@ -407,9 +410,24 @@ struct CachedFramebuffer {
 }
 
 impl UiOverlay {
+    /// 用默认的 `B8G8R8A8_SRGB` 颜色格式构造。
+    ///
+    /// 知道 swapchain 实际格式的调用方（如 [`GraphRenderer`](crate::GraphRenderer)）
+    /// 应改用 [`UiOverlay::with_color_format`]：surface 在首选格式不可用时会
+    /// 回退到 `available[0]`（Android 常见 `R8G8B8A8_*`），render pass 与
+    /// image view 的格式必须一致（VUID-VkFramebufferCreateInfo-renderPass-02711）。
     pub fn new(context: &VulkanContext, command_pool: vk::CommandPool) -> Result<Self> {
+        Self::with_color_format(context, command_pool, vk::Format::B8G8R8A8_SRGB)
+    }
+
+    /// 用 swapchain 的实际颜色格式构造叠加层。
+    pub fn with_color_format(
+        context: &VulkanContext,
+        command_pool: vk::CommandPool,
+        color_format: vk::Format,
+    ) -> Result<Self> {
         let device = context.device.clone();
-        let render_pass = Self::create_render_pass(&device, vk::Format::B8G8R8A8_SRGB)?;
+        let render_pass = Self::create_render_pass(&device, color_format)?;
         let atlas = GlyphAtlas::new(context, command_pool)?;
 
         let init_vertices = 1024u32;
@@ -435,10 +453,41 @@ impl UiOverlay {
             vertex_memory,
             vertex_capacity: init_vertices,
             render_pass,
+            color_format,
             atlas,
             device,
             framebuffers: Vec::new(),
         })
+    }
+
+    /// 让 render pass 跟随 swapchain 的实际颜色格式。
+    ///
+    /// swapchain 重建后格式可能变化（首选格式不可用时回退到 `available[0]`，
+    /// Android 上常见 `R8G8B8A8_*`）。格式变化时按新格式重建 render pass，
+    /// 并销毁依赖旧 render pass 的 pipeline 与 framebuffer；pipeline 会在
+    /// 下一次 [`UiOverlay::record`] 时按新 pass 懒重建。
+    pub fn set_color_format(&mut self, color_format: vk::Format) -> Result<()> {
+        if self.color_format == color_format {
+            return Ok(());
+        }
+        // 先建新的再拆旧的，创建失败时旧 pass 仍然有效。
+        let render_pass = Self::create_render_pass(&self.device, color_format)?;
+        unsafe {
+            if let Some(pipeline) = self.pipeline.take() {
+                self.device.destroy_pipeline(pipeline, None);
+            }
+            if let Some(layout) = self.layout.take() {
+                self.device.destroy_pipeline_layout(layout, None);
+            }
+            for cached in self.framebuffers.drain(..) {
+                self.device.destroy_framebuffer(cached.handle, None);
+            }
+            self.device.destroy_render_pass(self.render_pass, None);
+        }
+        self.render_pass = render_pass;
+        self.color_format = color_format;
+        log::debug!("UiOverlay: render pass rebuilt for {color_format:?}");
+        Ok(())
     }
 
     /// set 0 binding 0 = 字形图集 combined image sampler。
@@ -723,11 +772,12 @@ impl UiOverlay {
         }
         self.ensure_pipeline(&context.device, extent)?;
 
-        let vert_count = self.estimate_vertex_count(input);
-        self.grow_buffer(context, vert_count)?;
+        // 估算值只用于预留容量：单个字符只有在有字形位图时才写顶点
+        // （空格没有 rect、atlas 满或无字体时直接跳过），实际顶点数通常更少。
+        let estimated_vertices = self.estimate_vertex_count(input);
 
         // Build 顶点 (quads + 逐字形展开的 texts)。
-        let mut vertices: Vec<UiVertex> = Vec::with_capacity(vert_count as usize);
+        let mut vertices: Vec<UiVertex> = Vec::with_capacity(estimated_vertices as usize);
         let w = extent.width as f32;
         let h = extent.height as f32;
 
@@ -750,8 +800,17 @@ impl UiOverlay {
             self.emit_text(&mut vertices, t, w, h);
         }
 
+        // 上传与 draw 都使用实际顶点数：估算值可能高于 `vertices.len()`，
+        // 按它复制会读到 Vec 之外未初始化内存（UB，GPU 上是杂散三角形）。
+        let vert_count =
+            u32::try_from(vertices.len()).context("UiOverlay: vertex count exceeds u32")?;
+        if vert_count == 0 {
+            return Ok(());
+        }
+        self.grow_buffer(context, vert_count)?;
+
         // Upload 顶点 data.
-        let vert_bytes = vert_count as usize * size_of::<UiVertex>();
+        let vert_bytes = vertices.len() * size_of::<UiVertex>();
         unsafe {
             let ptr = context
                 .device

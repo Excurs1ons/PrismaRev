@@ -652,9 +652,14 @@ impl App {
                         winit::keyboard::KeyCode::Digit9 => EngineKeyCode::Digit9,
                         other => EngineKeyCode::Other(other as u32),
                     };
+                    let pressed = key_event.state == winit::event::ElementState::Pressed;
+                    if should_release_pointer_lock(key, pressed, self.input.pointer_locked) {
+                        prism_platform::release_pointer(window);
+                        self.input.set_locked(false);
+                    }
                     self.input.handle_keyboard(
                         key,
-                        if key_event.state == winit::event::ElementState::Pressed {
+                        if pressed {
                             ElementState::Pressed
                         } else {
                             ElementState::Released
@@ -672,10 +677,16 @@ impl App {
                     }
                 }
                 prism_platform::PlatformEvent::CursorMoved { x, y } => {
-                    self.input.handle_mouse_move([x, y]);
+                    apply_window_cursor_move(&mut self.input, x, y);
                 }
                 prism_platform::PlatformEvent::MouseWheel { delta } => {
                     self.input.handle_scroll(delta);
+                }
+                prism_platform::PlatformEvent::Touch { id, x, y, phase } => {
+                    // 触摸不走鼠标按钮模拟：多点触控必须保留触点 id 与 phase，
+                    // 由游戏逻辑经 `InputManager::touches()` 自行解释。
+                    self.input
+                        .handle_touch(id, engine_touch_phase(phase), [x, y]);
                 }
                 prism_platform::PlatformEvent::MouseButton { button, pressed } => {
                     use prism_engine::input::{ElementState, MouseButton};
@@ -700,7 +711,13 @@ impl App {
                         },
                     );
                 }
-                _ => {}
+                // 键盘已在上面单独映射（需要引擎键码表），这里不重复处理。
+                prism_platform::PlatformEvent::Key { .. } => {}
+                // 尺寸变化由渲染线程从平台上下文读取，不进 InputManager。
+                prism_platform::PlatformEvent::Resized { .. } => {}
+                // 尚未建模的事件：保持显式列出，避免 `_ => {}` 静默吞掉新变体
+                // （`PlatformEvent::Touch` 就是这样丢了整条触摸链路）。
+                prism_platform::PlatformEvent::Other => {}
             }
         }
     }
@@ -738,6 +755,20 @@ impl App {
         let _choice =
             prism_engine::crash_dialog::show_crash_dialog("PrismaRev - Fatal Error", &message);
         event_loop.exit();
+    }
+}
+
+/// `prism-platform` 的触点 phase → 引擎输入模型的 phase。
+///
+/// 两者当前一一对应，但分层上必须显式转换：`prism-app` 不把平台类型直接
+/// 传进引擎，避免以后任一侧加减 phase 时静默错配。
+fn engine_touch_phase(phase: prism_platform::TouchPhase) -> prism_engine::input::TouchPhase {
+    use prism_engine::input::TouchPhase;
+    match phase {
+        prism_platform::TouchPhase::Started => TouchPhase::Started,
+        prism_platform::TouchPhase::Moved => TouchPhase::Moved,
+        prism_platform::TouchPhase::Ended => TouchPhase::Ended,
+        prism_platform::TouchPhase::Cancelled => TouchPhase::Cancelled,
     }
 }
 
@@ -940,11 +971,7 @@ impl ApplicationHandler for App {
     ) {
         // 在指针锁定模式下，鼠标移动以原始设备增量形式到达。
         if let DeviceEvent::MouseMotion { delta: (dx, dy) } = event {
-            if self.input.pointer_locked {
-                // 累加到一个虚拟的绝对位置，使 InputManager::mouse_delta() 反映原始增量。
-                let cur = self.input.mouse_position();
-                self.input.handle_mouse_move([cur[0] + dx, cur[1] + dy]);
-            }
+            apply_device_mouse_motion(&mut self.input, dx, dy);
         }
     }
 
@@ -1043,5 +1070,119 @@ impl ApplicationHandler for App {
         self.stop_render_thread();
 
         self.platform = None;
+    }
+}
+
+/// Esc 是指针锁定的逃生口：锁定态下它先释放光标，再作为普通按键交给游戏。
+fn should_release_pointer_lock(
+    key: prism_engine::input::KeyCode,
+    pressed: bool,
+    locked: bool,
+) -> bool {
+    locked && pressed && key == prism_engine::input::KeyCode::Escape
+}
+
+/// 锁定态下窗口光标位置是被 confinement 夹住的，不能参与累加；此时唯一的
+/// 鼠标来源是原始设备增量 [`apply_device_mouse_motion`]。
+///
+/// 位置本身仍然同步（不产生 delta），解锁后第一帧才不会从旧位置跳一下。
+fn apply_window_cursor_move(input: &mut InputManager, x: f64, y: f64) {
+    if input.pointer_locked {
+        input.set_mouse_position([x, y]);
+        return;
+    }
+    input.handle_mouse_move([x, y]);
+}
+
+/// 原始设备增量（`DeviceEvent::MouseMotion`）：锁定态下累加到一个虚拟绝对
+/// 位置，使 `InputManager::mouse_delta()` 反映原始增量。
+fn apply_device_mouse_motion(input: &mut InputManager, dx: f64, dy: f64) {
+    if !input.pointer_locked {
+        return;
+    }
+    let cur = input.mouse_position();
+    input.handle_mouse_move([cur[0] + dx, cur[1] + dy]);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use prism_platform::PlatformEvent;
+
+    fn touch_event(phase: winit::event::TouchPhase, id: u64) -> WindowEvent {
+        WindowEvent::Touch(winit::event::Touch {
+            device_id: winit::event::DeviceId::dummy(),
+            phase,
+            location: winit::dpi::PhysicalPosition::new(40.0, 50.0),
+            force: Some(winit::event::Force::Normalized(1.0)),
+            id,
+        })
+    }
+
+    /// 触摸必须经平台快照落到 `InputManager::touches()`，并保留触点 id 与 phase
+    /// （回归防护：`route_window_event_to_input` 的 `_ => {}` 曾把整条链路丢掉）。
+    #[test]
+    fn touch_snapshot_reaches_input_manager() {
+        let mut input = InputManager::new();
+        for (phase, id) in [
+            (winit::event::TouchPhase::Started, 3u64),
+            (winit::event::TouchPhase::Moved, 3u64),
+        ] {
+            match prism_platform::to_platform_event(&touch_event(phase, id)) {
+                PlatformEvent::Touch { id, x, y, phase } => {
+                    input.handle_touch(id, engine_touch_phase(phase), [x, y])
+                }
+                other => panic!("touch 被转换成了 {other:?}"),
+            }
+        }
+
+        let touches = input.touches();
+        assert_eq!(touches.len(), 2);
+        assert_eq!(touches[0].id, 3);
+        assert_eq!(touches[0].phase, prism_engine::input::TouchPhase::Started);
+        assert_eq!(touches[0].position, [40.0, 50.0]);
+        assert_eq!(touches[1].phase, prism_engine::input::TouchPhase::Moved);
+    }
+
+    /// 锁定态下窗口光标位置不再参与累加（confinement 会把它夹在窗口内）。
+    #[test]
+    fn locked_pointer_ignores_window_cursor_positions() {
+        let mut input = InputManager::new();
+        input.set_locked(true);
+        apply_window_cursor_move(&mut input, 120.0, 80.0);
+        assert_eq!(input.mouse_delta(), [0.0, 0.0], "窗口光标不该产生增量");
+
+        input.set_locked(false);
+        apply_window_cursor_move(&mut input, 132.0, 80.0);
+        assert_eq!(input.mouse_delta(), [12.0, 0.0], "解锁后光标位置恢复正常");
+    }
+
+    /// 回归防护：锁定态下原始设备增量是唯一来源，不能与窗口光标叠加。
+    #[test]
+    fn raw_device_motion_is_the_only_delta_while_locked() {
+        let mut input = InputManager::new();
+        input.set_locked(true);
+        // 夹住后的光标位置先到（以前会先累加一次 delta）。
+        apply_window_cursor_move(&mut input, 640.0, 360.0);
+        apply_device_mouse_motion(&mut input, 3.0, -4.0);
+        assert_eq!(input.mouse_delta(), [3.0, -4.0]);
+    }
+
+    /// 未锁定时不接受原始增量（否则窗口光标与设备增量会同时生效）。
+    #[test]
+    fn raw_device_motion_is_ignored_when_unlocked() {
+        let mut input = InputManager::new();
+        apply_device_mouse_motion(&mut input, 5.0, 5.0);
+        assert_eq!(input.mouse_delta(), [0.0, 0.0]);
+    }
+
+    /// Esc 是锁定态下的释放入口；其它按键和按键释放都不影响锁定。
+    #[test]
+    fn escape_releases_the_pointer_lock() {
+        use prism_engine::input::KeyCode;
+        assert!(should_release_pointer_lock(KeyCode::Escape, true, true));
+        assert!(!should_release_pointer_lock(KeyCode::Escape, false, true));
+        assert!(!should_release_pointer_lock(KeyCode::KeyW, true, true));
+        assert!(!should_release_pointer_lock(KeyCode::Escape, true, false));
     }
 }

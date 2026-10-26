@@ -3,6 +3,7 @@ import type {
   AssetInfo,
   AssetMutation,
   AssetRef,
+  BuildProfile,
   DocKind,
   EditorWindowDescriptor,
   EntityJson,
@@ -95,6 +96,30 @@ const projectSettingsFixture: ProjectSettingsData = {
     runAfter: false,
   },
 };
+
+/**
+ * 把 `before` → `after` 的差异合并到内存设置里（与后端
+ * `write_*_settings_diff` 同语义）：没改过的字段保留当前值。
+ */
+function applySettingChanges<T>(current: T, before: T, after: T): void {
+  const walk = (target: unknown, oldValue: unknown, newValue: unknown): unknown => {
+    if (oldValue === newValue) return target;
+    if (
+      typeof target === "object" && target && !Array.isArray(target)
+      && typeof oldValue === "object" && oldValue
+      && typeof newValue === "object" && newValue
+    ) {
+      const record = target as Record<string, unknown>;
+      for (const [key, value] of Object.entries(newValue as Record<string, unknown>)) {
+        if ((oldValue as Record<string, unknown>)[key] === value) continue;
+        record[key] = walk(record[key], (oldValue as Record<string, unknown>)[key], value);
+      }
+      return record;
+    }
+    return newValue;
+  };
+  walk(current, before, after);
+}
 
 async function fixture(): Promise<Fixture> {
   if (!cache) {
@@ -307,14 +332,18 @@ function revertPrefabInstance(
     parent === null || parent === undefined
       ? null
       : parent - subtree.filter((index) => index < parent).length;
+  // 重建后的子树插回原位（数组顺序就是层级顺序，追加到末尾会让实例跳到最后一个兄弟）。
+  const insertAt = root - subtree.filter((index) => index < root).length;
 
   const trimmed = deleteEntitiesInDoc(doc, subtree);
   const result = instantiatePrefab(trimmed, prefab, newParent, link);
-  const newRoot = result.inserted[0];
-  if (keepName !== null && newRoot !== undefined) {
-    result.doc.entities[newRoot].name = keepName;
+  const firstNew = result.inserted[0];
+  const rebuilt = firstNew === undefined ? [] : result.doc.entities.splice(firstNew);
+  if (keepName !== null && rebuilt.length > 0) {
+    rebuilt[0].name = keepName;
   }
-  return { doc: result.doc, index: newRoot ?? root };
+  result.doc.entities.splice(insertAt, 0, ...rebuilt);
+  return { doc: result.doc, index: insertAt };
 }
 
 /** `/preview/assets/prefabs/x.prefab.json` → `assets/prefabs/x.prefab.json` */
@@ -426,6 +455,22 @@ async function handle(cmd: string, args: Record<string, unknown>): Promise<unkno
       return data.schema;
     case "editor_windows":
       return data.windows ?? [];
+    case "editor_build_profile":
+      // fixture 不存派生的 profile（场景清单可能含本机绝对路径），按 fixture 的场景文档合成。
+      return {
+        name: "release",
+        target: "windows",
+        targetGroup: "Standalone",
+        options: { development: false, allowDebugging: false, connectWithProfiler: false },
+        outputDir: "build/windows",
+        runAfter: false,
+        scenes: data.documents.scene.map((scene, index) => ({
+          name: scene.name,
+          path: scene.path,
+          enabled: true,
+          buildIndex: index,
+        })),
+      } satisfies BuildProfile;
     case "editor_project_root":
       return "/preview（浏览器预览）";
     case "editor_entity_presets":
@@ -678,6 +723,7 @@ async function handle(cmd: string, args: Record<string, unknown>): Promise<unkno
                   resolvePath("/preview", value) === target
                 ) {
                   refs.push({
+                    kind: "field",
                     scene: entry.name,
                     scenePath: entry.path,
                     entity: entity.name ?? `#${index}`,
@@ -728,7 +774,11 @@ async function handle(cmd: string, args: Record<string, unknown>): Promise<unkno
       return { ...renderSettingsFixture };
 
     case "editor_write_render_settings": {
-      Object.assign(renderSettingsFixture, args.settings as RenderSettingsData);
+      applySettingChanges(
+        renderSettingsFixture,
+        args.before as RenderSettingsData,
+        args.after as RenderSettingsData,
+      );
       return null;
     }
 
@@ -736,7 +786,11 @@ async function handle(cmd: string, args: Record<string, unknown>): Promise<unkno
       return JSON.parse(JSON.stringify(projectSettingsFixture));
 
     case "editor_write_project_settings": {
-      Object.assign(projectSettingsFixture, args.settings as ProjectSettingsData);
+      applySettingChanges(
+        projectSettingsFixture,
+        args.before as ProjectSettingsData,
+        args.after as ProjectSettingsData,
+      );
       return null;
     }
 

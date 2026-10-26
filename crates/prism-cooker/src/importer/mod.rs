@@ -252,7 +252,7 @@ impl ImportPipeline {
         settings: Option<Value>,
     ) -> Result<ImportFileResult, ImportError> {
         let normalized = normalize_relative_path(source_path);
-        self.import_file_with_key(source_path, &normalized, db, cache, settings)
+        self.import_file_with_key(source_path, &normalized, db, cache, settings, false)
     }
 
     /// 导入 a single file under an explicit asset key.
@@ -261,6 +261,9 @@ impl ImportPipeline {
     /// CLI callers that already know the root should prefer this over
     /// [`Self::import_file`], whose key is derived from the (possibly
     /// absolute) source path and would otherwise duplicate the record.
+    ///
+    /// When `force` is `true` the import cache is ignored and the importer is
+    /// run even if the source hash and settings are unchanged.
     pub fn import_file_with_key(
         &self,
         source_path: &Path,
@@ -268,6 +271,7 @@ impl ImportPipeline {
         db: &mut AssetDatabase,
         cache: &mut ImportCache,
         settings: Option<Value>,
+        force: bool,
     ) -> Result<ImportFileResult, ImportError> {
         let normalized = normalize_relative_path(Path::new(relative_key));
         let data = std::fs::read(source_path)?;
@@ -282,8 +286,8 @@ impl ImportPipeline {
             .find_for_path(source_path)
             .ok_or_else(|| ImportError::NoImporter(source_path.to_path_buf()))?;
 
-        // Check cache.
-        if cache.is_up_to_date(&normalized, hash, settings_hash, importer.version()) {
+        // Check cache (unless the caller asked for a forced re-import).
+        if !force && cache.is_up_to_date(&normalized, hash, settings_hash, importer.version()) {
             tracing::debug!("  ~ cached: {normalized}");
             return Ok(ImportFileResult {
                 was_imported: false,

@@ -98,12 +98,21 @@ pub use android_assets::init_android_assets;
 
 /// 从应用资源目录读取配置；文件系统访问属于应用层，解析逻辑由 engine
 /// 的 `AppConfig::from_toml` 提供。
+///
+/// 路径经 `prism_engine::asset_paths` 解析（cwd / 可执行文件目录 / 父目录 /
+/// `PRISMREV_ASSET_ROOT`），因此从任意目录启动 exe 都能读到 `settings.toml`。
 pub fn load_config() -> AppConfig {
-    match std::fs::read_to_string("assets/settings.toml") {
+    let Some(path) = prism_engine::asset_paths::asset_path("settings.toml") else {
+        return AppConfig::default();
+    };
+    match std::fs::read_to_string(&path) {
         Ok(text) => AppConfig::from_toml(&text),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => AppConfig::default(),
         Err(error) => {
-            log::warn!("settings.toml: {error} - using defaults");
+            log::warn!(
+                "settings.toml ({}): {error} - using defaults",
+                path.display()
+            );
             AppConfig::default()
         }
     }

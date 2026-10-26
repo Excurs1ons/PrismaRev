@@ -5,6 +5,7 @@ import type {
   AssetRef,
   AssetTextPreview,
   BakeGiOptions,
+  BuildProfile,
   BuildProjectOptions,
   BuildProjectResult,
   DocKind,
@@ -74,6 +75,11 @@ export function fetchSchema(): Promise<Schema> {
 /** 编辑器面板注册表 = Unity `EditorWindow` / `[MenuItem]` 的声明式 DTO。 */
 export function fetchEditorWindows(): Promise<EditorWindowDescriptor[]> {
   return call<EditorWindowDescriptor[]>("editor_windows");
+}
+
+/** Unity `Build.Profile.BuildProfile`（目标组 / 构建选项 / 场景构建顺序）。 */
+export function fetchBuildProfile(): Promise<BuildProfile> {
+  return call<BuildProfile>("editor_build_profile");
 }
 
 /** 项目根（含 assets/scenes）。 */
@@ -387,9 +393,17 @@ export function renderSettings(): Promise<RenderSettingsData> {
   return call<RenderSettingsData>("editor_render_settings");
 }
 
-/** 写入项目级渲染设置。 */
-export function writeRenderSettings(settings: RenderSettingsData): Promise<void> {
-  return call<void>("editor_write_render_settings", { settings });
+/**
+ * 写入项目级渲染设置。
+ *
+ * 只提交 `before`（面板打开时的快照）→ `after` 之间真正改动的字段，
+ * 避免把别的面板改过的字段用旧值写回去。
+ */
+export function writeRenderSettings(
+  before: RenderSettingsData,
+  after: RenderSettingsData,
+): Promise<void> {
+  return call<void>("editor_write_render_settings", { before, after });
 }
 
 /** 读取项目设置（app/window/build）。 */
@@ -397,9 +411,16 @@ export function projectSettings(): Promise<ProjectSettingsData> {
   return call<ProjectSettingsData>("editor_project_settings");
 }
 
-/** 写入项目设置（保留 [render]）。 */
-export function writeProjectSettings(settings: ProjectSettingsData): Promise<void> {
-  return call<void>("editor_write_project_settings", { settings });
+/**
+ * 写入项目设置（保留 [render]）。
+ *
+ * 只提交 `before`（面板打开时的快照）→ `after` 之间真正改动的字段。
+ */
+export function writeProjectSettings(
+  before: ProjectSettingsData,
+  after: ProjectSettingsData,
+): Promise<void> {
+  return call<void>("editor_write_project_settings", { before, after });
 }
 
 /** 构建游戏 exe 并汇总运行所需资产。 */

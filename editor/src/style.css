@@ -104,12 +104,14 @@ input[type="checkbox"] {
   width: auto;
 }
 input:focus,
-select:focus {
+select:focus,
+textarea:focus {
   outline: none;
   border-color: var(--accent);
 }
 input:disabled,
-select:disabled {
+select:disabled,
+textarea:disabled {
   opacity: 0.55;
 }
 
@@ -994,17 +996,6 @@ html.compact .dock-tab {
   letter-spacing: 0.12em;
   border-bottom: 1px solid var(--border);
 }
-.log {
-  margin: 0;
-  padding: 8px 10px;
-  overflow: auto;
-  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
-  font-size: 12px;
-  line-height: 1.45;
-  white-space: pre-wrap;
-  color: var(--text-soft);
-  min-height: 0;
-}
 .log-panel {
   display: flex;
   flex: 1 1 auto;
@@ -1050,17 +1041,34 @@ html.compact .dock-tab {
   min-height: 0;
   overflow: auto;
 }
-.log-block {
-  overflow: visible;
+.log-virtual {
+  position: relative;
+  min-height: 0;
 }
-.log-section-title {
-  padding: 3px 10px;
+.log-window {
+  position: absolute;
+  inset: 0 auto auto 0;
+  /* 让长行产生横向滚动，而不是换行把固定行高撑开 */
+  width: max-content;
+  min-width: 100%;
+}
+/* 固定行高是窗口化（`windowRange`）的前提：改这里必须同步 App.vue 的 LOG_ROW_HEIGHT */
+.log-row {
+  height: 18px;
+  padding: 0 10px;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 18px;
+  white-space: pre;
+  color: var(--text-soft);
+}
+.log-row-section {
+  padding: 0 10px;
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.08em;
   color: var(--muted);
   background: var(--panel);
-  border-bottom: 1px solid var(--border);
 }
 .log-level-error {
   color: var(--danger);
@@ -1091,6 +1099,25 @@ html.compact .dock-tab {
 }
 .scalar input[type="text"] {
   min-width: 0;
+}
+.scalar textarea {
+  min-width: 0;
+  font-family: inherit;
+  line-height: 1.4;
+}
+
+/* Unity `PropertyDrawer`：`[Header]` 分组标题 + `[Range]` 滑动条 */
+.drawer-header {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  margin: 6px 0 2px;
+}
+.scalar input[type="range"].drawer-slider {
+  flex: 1 1 auto;
+  min-width: 60px;
+  accent-color: var(--accent);
 }
 
 /* 拖动调值 */
@@ -1383,6 +1410,63 @@ html.compact .dock-tab {
 }
 .build-log {
   max-height: 260px;
+}
+.build-report {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.build-report-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+}
+.build-result {
+  padding: 1px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.build-result.succeeded {
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 12%, transparent);
+  border-color: color-mix(in srgb, var(--success) 45%, transparent);
+}
+.build-result.failed {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  border-color: color-mix(in srgb, var(--danger) 45%, transparent);
+}
+.build-result.cancelled {
+  color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
+  border-color: color-mix(in srgb, var(--warning) 45%, transparent);
+}
+.build-report-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px 18px;
+}
+.build-report-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 1px 0;
+  font-size: 12px;
+}
+.build-report-row > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .settings-body {
   display: flex;
@@ -1759,6 +1843,27 @@ html.compact .dock-tab {
   overflow: auto;
 }
 .dock-body > .panel-pane {
+  flex: 1;
+  min-height: 0;
+}
+/* 每个标签一个容器：面板首次激活后常驻，切标签只切换可见性。
+   直接子选择器要跟着下沉一层，否则面板拿不到原来的 flex/overflow。 */
+.dock-tab-panel {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.dock-tab-panel > .section-body,
+.dock-tab-panel > .log,
+.dock-tab-panel > .editor-pane {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.dock-tab-panel > .panel-pane {
   flex: 1;
   min-height: 0;
 }

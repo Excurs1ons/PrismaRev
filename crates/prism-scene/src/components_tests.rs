@@ -311,3 +311,48 @@ fn sprite_world_size_uses_frame_or_texture_and_ppu() {
     };
     assert_eq!(broken.world_size([100, 100]), [1.0, 1.0]);
 }
+
+#[test]
+fn mesh_renderer_state_defaults_and_round_trips() {
+    // 老文档只有 mesh/material：所有新字段必须回退到 Unity 的不透明默认值。
+    let legacy: MeshRenderer =
+        serde_json::from_str(r#"{"mesh_path":"m.mesh","material_path":"m.mat"}"#)
+            .expect("缺少渲染状态字段的老 JSON 仍然可读");
+    assert_eq!(legacy.cull_mode, CullMode::Back);
+    assert_eq!(legacy.shadow_casting_mode, ShadowCastingMode::On);
+    assert_eq!(legacy.render_queue.value(), RenderQueue::GEOMETRY);
+    assert!(legacy.z_write);
+    assert_eq!(legacy.src_blend, BlendMode::One);
+    assert_eq!(legacy.dst_blend, BlendMode::Zero);
+    assert_eq!(legacy.blend_op, BlendOp::Add);
+    // One / Zero / Add = 不透明。
+    assert!(!legacy.blends());
+
+    // 作者格式用变体名（与 `CameraClearFlags` / `TextAlign` 一致），
+    // 队列是数字（Unity `Material.renderQueue` 的 int 形状）。
+    let json = serde_json::to_value(MeshRenderer {
+        mesh_path: "m.mesh".into(),
+        material_path: "m.mat".into(),
+        shadow_casting_mode: ShadowCastingMode::Off,
+        cull_mode: CullMode::Off,
+        render_queue: RenderQueue::new(RenderQueue::TRANSPARENT),
+        z_write: false,
+        src_blend: BlendMode::SrcAlpha,
+        dst_blend: BlendMode::OneMinusSrcAlpha,
+        blend_op: BlendOp::Add,
+    })
+    .unwrap();
+    assert_eq!(json["cull_mode"], serde_json::json!("Off"));
+    assert_eq!(json["render_queue"], serde_json::json!(3000));
+    assert_eq!(json["src_blend"], serde_json::json!("SrcAlpha"));
+    assert_eq!(json["z_write"], serde_json::json!(false));
+
+    let back: MeshRenderer = serde_json::from_value(json).unwrap();
+    assert_eq!(back.cull_mode, CullMode::Off);
+    assert_eq!(back.shadow_casting_mode, ShadowCastingMode::Off);
+    assert_eq!(back.render_queue.value(), RenderQueue::TRANSPARENT);
+    assert!(!back.z_write);
+    assert_eq!(back.dst_blend, BlendMode::OneMinusSrcAlpha);
+    // 标准 alpha 混合 = 透明。
+    assert!(back.blends());
+}

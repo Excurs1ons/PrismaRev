@@ -76,7 +76,7 @@
 | 模块化管线 | `prism-render/src/render_graph.rs`（`RenderPassNode` 图）+ `forward_pass.rs` / `shadow_map_pass.rs` / `skybox_pass.rs`。**现状（2026-08-21）**：`RenderGraph::execute()` 统一驱动四个 pass（`ShadowMapPass` -> `ForwardPass` -> `GtaoPass` -> `PostPass`，按注册顺序线性执行）。passes 通过 `read_usage` / `write_usage` 声明图边依赖，graph 据此自动插入跨 pass 的 `vkCmdPipelineBarrier`（layout cache 按 `(handle, image_index)` 跨帧持久，`recreate_swapchain` 时 `reset_layouts`）。跨帧延迟边（GTAO 双缓冲 AO 回喂）与 swapchain->`PRESENT_SRC_KHR` 保留手动，标注为图边界特例。环检测已实现（`validate_edges`），执行顺序不重排（接线顺序见 `GraphRenderer::new`）。`GraphRenderer::prepare` 已接入 `render_system`/`render_runner` 五阶段链（不再空转），资源生命周期区间已声明，TBDR 内存 aliasing 待下一步扩展。|
 | bindless / 全平台统一 | `prism-render/src/bindless.rs`（分离 SRV + 全局 sampler 表） |
 | 资源管理解耦 | `crates/prism-asset` 统一提供 Import→Cook→Package→Runtime；引擎运行时提供双路径：开发期经 `GpuAssetResolver` 同步加载（`resource_manager.load_with_deps` 直通 GPU），发布期经 `ResourceManager` 从 `.pak` 懒加载（待 G3 接入后默认）。当前 `load_demo_scene` 仍走同步路径，`.pak` 路径已可手动 `load_package` 验证。 |
-| 移动端 GI | **Baked probe-volume GI**（2 阶 SH，9 系数 RGB16F，3D texture），非实时 SHARC。设计见 §6。SHARC 实时 slang 已移除，不再恢复（移动端跑不动每帧 ray 填 cache）。|
+| 移动端 GI | **Baked probe-volume GI**（2 阶 SH，9 系数 × RGB，`R32G32B32A32_SFLOAT` 3D texture；float16 仅是后续可选压缩），非实时 SHARC。设计见 §6。SHARC 实时 slang 已移除，不再恢复（移动端跑不动每帧 ray 填 cache）。|
 | 阴影 / RT | 光栅化阴影贴图：`ShadowMapPass`（深度预渲染，见 `shadow_depth.slang`）+ `ForwardPass`（comparison sampler 采样，见 `scene_frag.slang`） |
 | 能力探测 | `prism-render/src/capabilities.rs`（集中探测，扩展中） |
 | 帧生命周期 | `GraphRenderer` 已提供 `begin_frame` → `prepare` → `execute` → `present` → `end_frame` 阶段（2026-08-21 起 `prepare` 已在 `render_system` 与 `render_runner::render_one_frame` 中实际调用，不再空转）；旧 `render()` 仅作为兼容门面。`prepare` 当前实现脏标记日志与输入校验，下一步扩展在此调度批量上传。细粒度 Runtime/Plugin 拆分仍待 PR-L2。 |
@@ -152,7 +152,7 @@ ShadowMapPass → ForwardPass → GtaoPass → PostPass
 - **Probe grid**：`origin: vec3`、`spacing: vec3`、`dims: ivec3`（grid 分辨率），经 cbuffer/UBO 传入 shader。
 - **3D texture 打包**：每层一张 2D 切片（R32G32B32A32_SFLOAT），深度 = dims.z × 9
   （每系数一层 RGB）。采样用 integer `Load` + 手动三线性插值，**不用硬件 sampler**，防止系数层间串扰。
-- **烘焙工具**（`prism-bake-gi` 独立二进制，不进运行时）：多 bounce 路径追踪（3 bounce + Russian roulette）对每条 Fibonacci 球面方向做完整 bounce 链，`probe_volume.bin` 经 `prism-asset` 加载。
+- **烘焙工具**（`prism-build-pipeline bake-gi` 子命令，不进运行时）：多 bounce 路径追踪（3 bounce + Russian roulette）对每条 Fibonacci 球面方向做完整 bounce 链，写出 `assets/gi/probe_volume.bin`（`prism-render::probe_loader::save_probe_volume`）；读回同样在 `prism-render`（`probe_loader::load_probe_volume` + `GraphRenderer::load_probe_volume_file`，上传到 `SceneScope`），**不经过 `prism-asset`**（后者只负责 `.pak`）。引擎侧目前还没有调用点，烘焙产物要手动接线才会生效。
 - **内存预算**：2 阶 SH + float32，单个 probe = 9×3×4 = 108 bytes；grid 16³ ≈ 432KB，32³ ≈ 3.5MB。
   若下一步扩展切 float16：单个 probe = 54 bytes，32³ ≈ 1.8MB。
 
@@ -579,7 +579,8 @@ pub struct SceneReadView<'a> {
 | crate | 角色 | 职责 | 主要依赖 |
 |-------|------|------|----------|
 | `prism-asset` | 运行时 | `AssetId`（64 bit gen+serial）、`AssetType`、`Handle<T>`、`.pak`（RPAK + zstd + xxh3）、`ResourceManager`（懒加载/预算/热重载）、streaming | serde, zstd, tokio（feature-gated） |
-| `prism-scene` | schema | 场景/UI 组件、`ComponentRegistry`、`.scene.json` 作者格式、RSCN v4 编解码 | `prism-ecs`、`prism-reflect`、serde |
+| `prism-gfx` | 共享数据 | Unity 形状的渲染状态枚举（`CullMode`/`CompareFunction`/`BlendMode`/`RenderQueue`/`ShadowCastingMode`/光照与相机枚举）+ 反射编码；Vulkan-free、ECS-free | `prism-reflect`、serde、glam |
+| `prism-scene` | schema | 场景/UI 组件、`ComponentRegistry`、`.scene.json` 作者格式、RSCN v4 编解码 | `prism-ecs`、`prism-reflect`、`prism-gfx`、serde |
 | `prism-cooker` | 构建期 | importer 框架、cooker 框架、CookProfile、资产数据库/导入缓存、`SceneCooker`、CLI `prism-cook` | `prism-asset`、`prism-scene`、image、gltf |
 | `prism-build-pipeline` | 编排 | `bake-gi`、`cook`、`heightmap` 等批处理入口；调用 cooker，不进入运行时 | `prism-cooker`、`prism-engine` |
 
@@ -685,12 +686,18 @@ RTEX 的 mip 链由 Cooker 通过 2×2 box filter 生成（`TextureCooker::gener
 **`CookSettings`** 提供 `settings_hash()`：确定性 JSON → xxh3-64，
 用于增量构建缓存键。
 
+**覆盖语义**：profile 文件里的字段是逐字段 `Option`（`TextureOverrides` / `MeshOverrides` /
+`ShaderOverrides` / `CompressionOverrides`），只有**写出来的**字段才覆盖父级或内置值，
+缺省字段保持继承结果。所以 `{"texture":{"quality":95}}` 不会把父级的 `max_size` 清成 0，
+显式写入默认值（`"compression":"rgba8"`、`"generate_mips":false`）也能生效。
+
 **`ProfileManager`：**
 - `resolve(name)` → 递归继承合并 → `CookSettings`
 - 循环检测（环路径文字报告）
 - `apply_cli_overrides()` → 命令行覆盖叠加
 - 内置配置由 `BUILTIN_DEFAULTS` 静态 `LazyLock<HashMap>` 承载，
-  用户配置从磁盘 `profiles_dir/{name}.json` 加载
+  用户配置从磁盘 `profiles_dir/{name}.json` 加载；`prism-cook build` 的 `profiles_dir`
+  是 `<project>/Library/Profiles/`，解析顺序 `--profile` → `--platform` → `desktop`。
 
 ### 10.8 运行时 ResourceManager（`prism-asset::runtime`）
 
@@ -730,7 +737,7 @@ pub trait Asset: Sized + Send + 'static {
 | `init` | 创建 `Assets/` + `Library/` 目录结构 |
 | `scan` | 扫描 `Assets/`，按扩展名推断类型，写入数据库 |
 | `import` | 对每个文件运行匹配的 Importer，增量缓存 |
-| `build --output game.pak` | 烹饪所有资产 → 打包 `.pak` |
+| `build --output game.pak` | 烹饪所有资产 → 打包 `.pak`；`--profile <name>` / `--platform <p>` 先解析 profile（`--compression` 覆盖 profile 的 level） |
 | `validate game.pak` | 验证魔数 + 版本 + 校验和 |
 | `list` | 列出数据库全部资产 |
 | `inspect <id>` | 查看单资产详情（依赖树可见） |

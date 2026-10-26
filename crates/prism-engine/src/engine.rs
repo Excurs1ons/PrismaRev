@@ -338,6 +338,17 @@ impl Engine {
         // Run the ECS 系统 调度 (user‑registered + built‑in systems).
         self.schedule.run(&mut self.world, dt);
 
+        // ── 世界矩阵传播（模拟步末尾）────────────────────────────
+        // 用户 system 在本 tick 里 spawn 的实体/改过的 `LocalTransform` 必须
+        // 在 update 返回前变成 `LocalToWorld`，否则下面这些消费方会看到上一帧
+        // 甚至完全缺失的世界矩阵：
+        // - 同一 tick 稍后（下一帧）的 game logic / 物理 / 相机；
+        // - render extract（`extract_frame_packet` 现在只读，不再负责计算）；
+        // - 场景状态保存（`save_scene_state` 读 `LocalToWorld`）。
+        // 放在调度之后而不是放在某个 system 里，是因为用户 system 可以在
+        // `runtime_initialize` 之后再注册（App::add_system），无法靠注册顺序保证。
+        crate::scene::systems::hierarchy::hierarchy_system(&mut self.world);
+
         // Tick the main‑thread timer 分发 expired callbacks).
         self.timer.tick();
     }
@@ -507,6 +518,10 @@ fn default_schedule() -> Schedule {
 
     s
 }
+
+#[cfg(test)]
+#[path = "transform_propagation_tests.rs"]
+mod transform_propagation_tests;
 
 /// 演示用：绕 Y 轴缓慢旋转所有 `Transform`。
 ///

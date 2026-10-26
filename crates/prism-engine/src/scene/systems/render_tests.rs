@@ -5,7 +5,8 @@
 use super::*;
 use prism_ecs::World;
 use prism_render::managers::MeshHandle;
-use prism_scene::ShadowCastingMode;
+use prism_render::DrawState;
+use prism_scene::{BlendMode, CullMode, RenderQueue, ShadowCastingMode};
 
 #[test]
 fn entity_with_all_components_yields_draw_item() {
@@ -80,6 +81,30 @@ fn entity_without_mesh_is_skipped() {
 
     let items = scene_render_system(&world);
     assert!(items.is_empty());
+}
+
+#[test]
+fn mesh_without_material_still_draws_with_default_material() {
+    let mut world = World::new();
+    let e = world.spawn();
+    world.insert(
+        e,
+        LocalToWorld(glam::Mat4::from_cols_array_2d(&[[1.0; 4]; 4])),
+    );
+    world.insert(
+        e,
+        MeshRef {
+            asset_id: SceneAssetId::generate(),
+            render_handle: MeshHandle::default(),
+            generation: 1,
+        },
+    );
+    // 没有 `MaterialRef`：`MeshRenderer { material_path: "" }` 的
+    // 网格-only 实体（编辑器 fixture 就是这种形状）。
+
+    let items = scene_render_system(&world);
+    assert_eq!(items.len(), 1, "有网格、无材质的实体也应该绘制");
+    assert_eq!(items[0].material, None, "缺失材质应回落到默认材质槽");
 }
 
 #[test]
@@ -225,6 +250,36 @@ fn shadows_only_hides_from_the_main_pass() {
     assert!(items[0].cast_shadow);
     assert!(!items[0].visible_in_main_pass);
     assert!(!items[0].cast_shadow_two_sided);
+}
+
+#[test]
+fn render_state_defaults_to_opaque_and_follows_the_component() {
+    let mut world = World::new();
+    // 没有 `MeshRenderer`：默认不透明、队列 2000、背面剔除、写深度。
+    spawn_renderable(&mut world, None);
+    let items = scene_render_system(&world);
+    assert_eq!(items[0].state, DrawState::default());
+    assert_eq!(items[0].state.cull_mode, CullMode::Back);
+    assert!(!items[0].state.blends());
+
+    // 透明材质状态必须原样传到绘制项（Unity `CullMode.Off` / 队列 / 混合）。
+    let mut world = World::new();
+    spawn_renderable(
+        &mut world,
+        Some(MeshRenderer {
+            cull_mode: CullMode::Off,
+            render_queue: RenderQueue::new(RenderQueue::TRANSPARENT),
+            z_write: false,
+            src_blend: BlendMode::SrcAlpha,
+            dst_blend: BlendMode::OneMinusSrcAlpha,
+            ..Default::default()
+        }),
+    );
+    let items = scene_render_system(&world);
+    assert_eq!(items[0].state.cull_mode, CullMode::Off);
+    assert_eq!(items[0].state.render_queue, RenderQueue::TRANSPARENT);
+    assert!(!items[0].state.z_write);
+    assert!(items[0].state.blends());
 }
 
 #[test]

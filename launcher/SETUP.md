@@ -137,13 +137,29 @@ rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-andro
 - `armv7-linux-androideabi`:32 位 ARM(老设备)
 - `i686-linux-android` / `x86_64-linux-android`:模拟器用
 
-## 步骤 6:初始化 Android 项目
+## 步骤 6:确认 Android 工程(不要重新生成)
 
-进入项目目录,首次运行会生成 `src-tauri/gen/android/` 目录:
+`src-tauri/gen/android/` **已随仓库提交**,并且带着本项目自己的定制:
+
+- `minSdk 31`、只打 `arm64-v8a`;
+- `signingConfigs`、`packaging` excludes;
+- `games-activity` 依赖与第二个 Activity(`com.prisma.MainActivity`,跑游戏)。
+
+**不要**跑 `pnpm tauri android init`:它会用模板覆盖 `settings.gradle` /
+`app/build.gradle.kts`,把上面这些静默丢掉(`AGENTS.md` 的「Android packaging chain」
+同样禁止)。
+
+只有下面两个是 gitignore 的、由 Tauri CLI 生成的文件:
+
+- `src-tauri/gen/android/tauri.settings.gradle`
+- `src-tauri/gen/android/app/tauri.build.gradle.kts`
+
+Gradle 报它们不存在时,在仓库里跑一次 `pnpm tauri android build`(或 `dev`),CLI 会自动补出来。
+
+命令都在仓库根目录执行(Windows PowerShell):
 
 ```powershell
-cd F:\learn\rust\tauri-android-app
-pnpm tauri android init
+cd launcher
 ```
 
 如果报错,常见原因:
@@ -191,7 +207,7 @@ pnpm tauri android build
 | `pnpm tauri dev` | 桌面端开发(需 Rust) |
 | `pnpm tauri android dev` | Android 开发(需完整工具链) |
 | `pnpm tauri android build` | Android 打包 |
-| `pnpm tauri android init` | 生成 Android 工程(首次) |
+| `pnpm tauri android init` | ⚠️ 只给全新项目用;本仓库**不要**跑(会覆盖已提交的 Android 定制,见步骤 6) |
 
 ## 参考文档
 

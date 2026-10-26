@@ -12,10 +12,10 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 
 use prism_editor_api::{
-    AssetInfo, AssetMutation, AssetRef, DocKind, EditorWindowDescriptor, EntityPreset,
-    InstantiateResult, MoveResult, PlayableScene, PrefabInstanceInfo, ProjectSettingsData,
-    RenderSettingsData, Scene, SceneEntry, SceneListEntry, ScenePackageStatus, SceneTemplate,
-    Schema, SelectionFilter, SelectionMode, SelectionState,
+    AssetInfo, AssetMutation, AssetRef, BuildFileRole, BuildReport, DocKind, EditorWindowDescriptor,
+    EntityPreset, InstantiateResult, MoveResult, PlayableScene, PrefabInstanceInfo,
+    ProjectSettingsData, RenderSettingsData, Scene, SceneEntry, SceneListEntry, ScenePackageStatus,
+    SceneTemplate, Schema, SelectionFilter, SelectionMode, SelectionState,
 };
 use tauri::{Emitter, Manager, State};
 
@@ -37,6 +37,13 @@ fn editor_schema() -> Schema {
 #[tauri::command]
 fn editor_windows() -> Vec<EditorWindowDescriptor> {
     prism_editor_api::build_window_registry().windows().to_vec()
+}
+
+/// Unity `Build.Profile.BuildProfile`：构建目标组 / `BuildOptions` / 场景构建顺序。
+#[tauri::command]
+fn editor_build_profile() -> Result<prism_editor_api::BuildProfile, String> {
+    let root = prism_editor_api::find_project_root()?;
+    prism_editor_api::read_build_profile(&root)
 }
 
 /// 解析项目根（含 `assets/scenes` 的目录）。
@@ -920,11 +927,14 @@ fn editor_render_settings() -> Result<RenderSettingsData, String> {
     prism_editor_api::read_render_settings(&root)
 }
 
-/// 写入项目级渲染设置（保留 `settings.toml` 的其它段）。
+/// 写入项目级渲染设置（只写 `before` → `after` 改动的字段，保留其它段/其它面板的改动）。
 #[tauri::command]
-fn editor_write_render_settings(settings: RenderSettingsData) -> Result<(), String> {
+fn editor_write_render_settings(
+    before: RenderSettingsData,
+    after: RenderSettingsData,
+) -> Result<(), String> {
     let root = prism_editor_api::find_project_root()?;
-    prism_editor_api::write_render_settings(&root, &settings)
+    prism_editor_api::write_render_settings_diff(&root, &before, &after)
 }
 
 /// 读取项目设置（`[app]` / `[window]` / `[build]`）。
@@ -934,11 +944,14 @@ fn editor_project_settings() -> Result<ProjectSettingsData, String> {
     prism_editor_api::read_project_settings(&root)
 }
 
-/// 写入项目设置（保留 `[render]` 等其它段）。
+/// 写入项目设置（只写 `before` → `after` 改动的字段，保留 `[render]` 等其它段）。
 #[tauri::command]
-fn editor_write_project_settings(settings: ProjectSettingsData) -> Result<(), String> {
+fn editor_write_project_settings(
+    before: ProjectSettingsData,
+    after: ProjectSettingsData,
+) -> Result<(), String> {
     let root = prism_editor_api::find_project_root()?;
-    prism_editor_api::write_project_settings(&root, &settings)
+    prism_editor_api::write_project_settings_diff(&root, &before, &after)
 }
 
 /// 重新 cook + 打包所有场景（`prism-build-pipeline build-scenes`）。
@@ -964,6 +977,8 @@ struct BuildProjectResult {
     exe: String,
     output_dir: String,
     duration_ms: u64,
+    /// Unity `BuildReport`：构建阶段耗时 + 产物大小。
+    report: BuildReport,
 }
 
 fn game_project_manifest(root: &Path) -> Result<PathBuf, String> {
@@ -1044,6 +1059,8 @@ fn build_project_blocking(
     if !matches!(options.profile.as_str(), "debug" | "release") {
         return Err("构建配置只能是 debug 或 release".into());
     }
+    // Unity `BuildPipeline.BuildPlayer`：没有场景就直接失败。
+    prism_editor_api::read_build_profile(&root)?.validate()?;
     let started = std::time::Instant::now();
     let manifest = game_project_manifest(&root)?;
     let manifest_dir = manifest
@@ -1057,9 +1074,13 @@ fn build_project_blocking(
         options.profile,
         manifest.display()
     ));
+    let cargo_started = std::time::Instant::now();
     log.push_str(&run_cargo_build(&root, &manifest, release)?);
+    let cargo_elapsed = cargo_started.elapsed();
     log.push_str("\n==> build-scenes\n");
+    let pipeline_started = std::time::Instant::now();
     log.push_str(&run_pipeline(&root, &["build-scenes"])?);
+    let pipeline_elapsed = pipeline_started.elapsed();
 
     let exe_name = if cfg!(windows) {
         "prisma.exe"
@@ -1085,20 +1106,19 @@ fn build_project_blocking(
     std::fs::create_dir_all(&output_dir)
         .map_err(|error| format!("无法创建输出目录 {}: {error}", output_dir.display()))?;
 
+    let collect_started = std::time::Instant::now();
     let output_exe = output_dir.join(exe_name);
     std::fs::copy(&bin, &output_exe).map_err(|error| format!("复制游戏二进制失败: {error}"))?;
-    copy_if_exists(
-        &root.join("assets/scenes.pak"),
-        &output_dir.join("assets/scenes.pak"),
-    );
+    let scene_package = output_dir.join("assets/scenes.pak");
+    let scene_package_meta = output_dir.join("assets/scenes.pak.meta.json");
+    let settings = output_dir.join("assets/settings.toml");
+    copy_if_exists(&root.join("assets/scenes.pak"), &scene_package);
     copy_if_exists(
         &root.join("assets/scenes.pak.meta.json"),
-        &output_dir.join("assets/scenes.pak.meta.json"),
+        &scene_package_meta,
     );
-    copy_if_exists(
-        &root.join("assets/settings.toml"),
-        &output_dir.join("assets/settings.toml"),
-    );
+    copy_if_exists(&root.join("assets/settings.toml"), &settings);
+    let collect_elapsed = collect_started.elapsed();
 
     log.push_str(&format!("\n==> 输出\n{}\n", output_exe.display()));
 
@@ -1116,11 +1136,31 @@ fn build_project_blocking(
         log.push_str("==> 已启动构建产物\n");
     }
 
+    let mut report = BuildReport::new(
+        output_dir.to_string_lossy(),
+        "windows",
+        started.elapsed().as_millis() as u64,
+    )
+    .with_step("cargo build", cargo_elapsed)
+    .with_step("build-scenes", pipeline_elapsed)
+    .with_step("collect", collect_elapsed)
+    .with_file(&output_exe, BuildFileRole::Executable);
+    if scene_package.is_file() {
+        report = report.with_file(&scene_package, BuildFileRole::ScenePackage);
+    }
+    if settings.is_file() {
+        report = report.with_file(&settings, BuildFileRole::Settings);
+    }
+    if scene_package_meta.is_file() {
+        report = report.with_file(&scene_package_meta, BuildFileRole::Metadata);
+    }
+
     Ok(BuildProjectResult {
         output: log,
         exe: output_exe.to_string_lossy().into_owned(),
         output_dir: output_dir.to_string_lossy().into_owned(),
         duration_ms: started.elapsed().as_millis() as u64,
+        report,
     })
 }
 
@@ -1145,7 +1185,7 @@ fn editor_reveal_path(path: String) -> Result<(), String> {
         use std::os::windows::process::CommandExt;
         let mut command = Command::new("explorer");
         if path.is_file() {
-            command.arg(format!("/select,{}", path.display()));
+            command.raw_arg(explorer_select_arg(&path));
         } else {
             command.arg(&path);
         }
@@ -1169,6 +1209,17 @@ fn editor_reveal_path(path: String) -> Result<(), String> {
             .map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+/// explorer `/select,` 单文件选中参数。
+///
+/// 路径必须自己带引号：`Command::arg` 会把 `/select,C:\a b\x.txt` 当成一个整体
+/// 加引号（`"/select,C:\a b\x.txt"`），explorer 解析不了这种形式，含空格的路径
+/// 会退化成打开「文档」而不是选中文件。所以这里用 `raw_arg` 原样传
+/// `/select,"<path>"`。
+#[cfg(windows)]
+fn explorer_select_arg(path: &Path) -> String {
+    format!("/select,\"{}\"", path.display())
 }
 
 /// 解析游戏二进制：`PRISMREV_GAME_BIN` > 各 workspace 的 target 目录 > PATH。
@@ -1352,6 +1403,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             editor_schema,
             editor_windows,
+            editor_build_profile,
             editor_project_root,
             editor_list_documents,
             editor_document_templates,
@@ -1435,4 +1487,21 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running the PrismaRev editor");
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn explorer_select_arg_keeps_paths_with_spaces_quoted() {
+        let arg = explorer_select_arg(Path::new(r"C:\Users\me\Prisma Rev\logo.png"));
+        assert_eq!(arg, "/select,\"C:\\Users\\me\\Prisma Rev\\logo.png\"");
+    }
+
+    #[test]
+    fn explorer_select_arg_wraps_plain_paths_too() {
+        let arg = explorer_select_arg(Path::new(r"C:\tmp\a.png"));
+        assert_eq!(arg, "/select,\"C:\\tmp\\a.png\"");
+    }
 }

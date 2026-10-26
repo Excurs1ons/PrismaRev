@@ -314,10 +314,7 @@ impl GtaoPass {
         let device = &context.device;
         unsafe { device.device_wait_idle() }.ok();
 
-        let new_extent = vk::Extent2D {
-            width: (full_extent.width / 2).max(1),
-            height: (full_extent.height / 2).max(1),
-        };
+        let new_extent = half_extent(full_extent);
         if new_extent == self.extent {
             return Ok(());
         }
@@ -924,5 +921,70 @@ impl RenderPassNode for GtaoPass {
             return Ok(());
         }
         self.ensure_pipeline(device)
+    }
+}
+
+/// AO 目标是交换链尺寸的一半（且至少 1×1）。
+///
+/// 抽成纯函数是因为 `recreate_target` 用「新尺寸 == 当前尺寸」做早退：只要调用方
+/// 在 `Swapchain::recreate` **之前**采样交换链 extent，算出来的半分辨率就
+/// 与当前值相同，整个 resize 会被静默跳过。
+pub(crate) fn half_extent(full: vk::Extent2D) -> vk::Extent2D {
+    vk::Extent2D {
+        width: (full.width / 2).max(1),
+        height: (full.height / 2).max(1),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ao_target_is_half_the_swapchain_extent() {
+        assert_eq!(
+            half_extent(vk::Extent2D {
+                width: 1280,
+                height: 720,
+            }),
+            vk::Extent2D {
+                width: 640,
+                height: 360,
+            }
+        );
+    }
+
+    #[test]
+    fn tiny_extents_clamp_to_one_pixel() {
+        assert_eq!(
+            half_extent(vk::Extent2D {
+                width: 1,
+                height: 0,
+            }),
+            vk::Extent2D {
+                width: 1,
+                height: 1,
+            }
+        );
+    }
+
+    /// 回归守卫：喂给 `recreate_target` 的必须是**新**交换链的 extent。
+    /// 用旧 extent 算出的半分辨率等于当前值，早退会把 resize 吞掉。
+    #[test]
+    fn stale_swapchain_extent_would_early_return() {
+        let current = half_extent(vk::Extent2D {
+            width: 1920,
+            height: 1080,
+        });
+        let stale = half_extent(vk::Extent2D {
+            width: 1920,
+            height: 1080,
+        });
+        let fresh = half_extent(vk::Extent2D {
+            width: 1600,
+            height: 900,
+        });
+        assert_eq!(stale, current, "旧 extent 会命中「尺寸未变」早退");
+        assert_ne!(fresh, current, "新 extent 必须真正触发重建");
     }
 }

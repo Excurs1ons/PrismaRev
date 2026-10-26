@@ -10,11 +10,18 @@ import type { JsonValue } from "../types";
  * 引擎里的颜色都是归一化 `[r,g,b]` / `[r,g,b,a]`；取色盘按 8bit sRGB 近似映射
  * （不引入色彩管理），数值通道才是精确编辑。
  */
-const props = defineProps<{ modelValue: number[]; disabled?: boolean }>();
+const props = withDefaults(
+  defineProps<{ modelValue: number[]; disabled?: boolean; showAlpha?: boolean }>(),
+  { showAlpha: true },
+);
 const emit = defineEmits<{ (e: "update:modelValue", value: JsonValue): void }>();
 
 const hex = computed(() => floatsToHex(props.modelValue));
-const hasAlpha = computed(() => props.modelValue.length === 4);
+const hasAlpha = computed(() => props.showAlpha && props.modelValue.length === 4);
+/** 隐藏 alpha 时连第 4 个通道的数值框一起隐藏（Unity `[ColorUsage(showAlpha: false)]`）。 */
+const channels = computed(() =>
+  props.showAlpha ? props.modelValue : props.modelValue.slice(0, 3),
+);
 
 function setChannel(index: number, value: number) {
   const next = props.modelValue.slice();
@@ -44,7 +51,7 @@ function setHex(value: string) {
     />
     <div class="color-channels">
       <NumberField
-        v-for="(channel, index) in modelValue"
+        v-for="(channel, index) in channels"
         :key="index"
         :model-value="channel"
         :step="0.005"

@@ -1,6 +1,29 @@
 /** 与 `prism-editor-api`（serde camelCase）对齐的前端类型。 */
 
 /** 字段控件类型：`bool` / `i32` / `f32` / `string` / `struct` / `list` / `option` / `array`。 */
+/** 字段渲染器 = Unity `PropertyDrawer` 的选择。 */
+export type PropertyRenderer = "default" | "slider" | "textArea" | "color" | "custom";
+
+/** 一条 Unity 特性（`PropertyAttribute`），按 `type` 区分。 */
+export type PropertyAttribute =
+  | { type: "range"; min: number; max: number }
+  | { type: "min"; min: number }
+  | { type: "max"; max: number }
+  | { type: "multiline"; lines: number }
+  | { type: "textArea"; minLines: number; maxLines: number }
+  | { type: "colorUsage"; showAlpha: boolean; hdr: boolean }
+  | { type: "header"; text: string }
+  | { type: "tooltip"; text: string }
+  | { type: "delayed" };
+
+/** 字段绘制声明 = Unity `PropertyDrawer`（渲染器 + 特性）。 */
+export interface PropertyDrawer {
+  renderer: PropertyRenderer;
+  attributes: PropertyAttribute[];
+  /** `renderer === "custom"` 时的前端组件名。 */
+  custom: string | null;
+}
+
 export interface FieldSchema {
   name: string;
   kind: string;
@@ -10,6 +33,8 @@ export interface FieldSchema {
   /** 枚举变体名（按声明顺序）；非空时渲染下拉框，值即变体名。 */
   variants: string[] | null;
   readOnly: boolean;
+  /** 字段绘制器；缺省时按 `kind` 选默认控件。 */
+  drawer?: PropertyDrawer | null;
 }
 
 export interface TypeSchema {
@@ -92,6 +117,8 @@ export interface AssetInfo {
   path: string;
   sizeBytes: number;
   kind: "model" | "texture" | "env" | "scene" | "package" | "data" | "other";
+  /** Unity 导入器类名（`TextureImporter` / `ModelImporter` / `DefaultImporter`…）。 */
+  importer: string;
 }
 
 /** 文本资产预览（后端按 UTF-8 读取，可截断）。 */
@@ -112,6 +139,7 @@ export interface AssetMutation {
 
 /** 「某场景某字段引用了该资产」的记录。 */
 export interface AssetRef {
+  kind: "field" | "manifest";
   scene: string;
   scenePath: string;
   entity: string;
@@ -201,6 +229,34 @@ export interface SceneListEntry {
   enabled: boolean;
 }
 
+/** Unity `BuildOptions`（PrismaRev 由 `[build].profile == "debug"` 推导）。 */
+export interface BuildOptions {
+  development: boolean;
+  allowDebugging: boolean;
+  connectWithProfiler: boolean;
+}
+
+/** 场景在构建里的位置 = `EditorBuildSettings.scenes` 的下标。 */
+export interface BuildScene {
+  name: string;
+  path: string;
+  enabled: boolean;
+  /** 实际构建顺序（只数启用项）；未启用时为 null。 */
+  buildIndex: number | null;
+}
+
+/** Unity `Build.Profile.BuildProfile`：一次构建的完整描述。 */
+export interface BuildProfile {
+  name: string;
+  target: string;
+  /** Unity `BuildTargetGroup` 名字（Standalone / Android / …）。 */
+  targetGroup: string;
+  options: BuildOptions;
+  outputDir: string;
+  runAfter: boolean;
+  scenes: BuildScene[];
+}
+
 /** 项目设置（`assets/settings.toml` 的 app/window/build 段）。 */
 export interface ProjectSettingsData {
   app: {
@@ -231,11 +287,55 @@ export interface BuildProjectOptions {
   runAfter: boolean;
 }
 
+/** Unity `BuildResult`：一次构建的最终结果。 */
+export type BuildResult = "succeeded" | "failed" | "cancelled";
+
+/** Unity `BuildFile.role`：产物分类。 */
+export type BuildFileRole =
+  | "executable"
+  | "scenePackage"
+  | "settings"
+  | "metadata"
+  | "other";
+
+/** Unity `BuildFile`：一个产物文件。 */
+export interface BuildFile {
+  path: string;
+  role: BuildFileRole;
+  sizeBytes: number;
+}
+
+/** Unity `BuildStep`：一个构建阶段（编译 / 烤场景 / 收集产物）。 */
+export interface BuildStep {
+  name: string;
+  durationMs: number;
+}
+
+/** Unity `BuildSummary`：构建结果 + 体积 + 耗时。 */
+export interface BuildSummary {
+  result: BuildResult;
+  outputPath: string;
+  platform: string;
+  totalSizeBytes: number;
+  totalTimeMs: number;
+  totalErrors: number;
+  totalWarnings: number;
+}
+
+/** Unity `BuildReport`：摘要 + 阶段 + 产物。 */
+export interface BuildReport {
+  summary: BuildSummary;
+  steps: BuildStep[];
+  files: BuildFile[];
+}
+
 export interface BuildProjectResult {
   output: string;
   exe: string;
   outputDir: string;
   durationMs: number;
+  /** Unity `BuildReport`：构建阶段耗时 + 产物大小。 */
+  report: BuildReport;
 }
 
 /** 离线 GI 烘焙参数（`prism-build-pipeline bake-gi`）。 */

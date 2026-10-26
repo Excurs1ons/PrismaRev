@@ -11,9 +11,13 @@ pub const ENTRY_VERTEX_MAIN: &str = "vertexMain"; // stage: VERTEX
 pub const ENTRY_FRAGMENT_MAIN: &str = "fragmentMain"; // stage: FRAGMENT
 
 /// Push-constant block size in bytes (reflected).
-pub const PUSH_CONSTANT_SIZE: u32 = 0;
+pub const PUSH_CONSTANT_SIZE: u32 = 128;
 
 /// Push-constant struct (auto-generated from Slang `ShadowPush`).
+///
+/// Field offsets are the reflected std140 ones — alignment holes are emitted as
+/// explicit `_pad_*` fillers, so `size_of` is 128 bytes and every field sits
+/// where the shader expects it.
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub struct ShadowPush {

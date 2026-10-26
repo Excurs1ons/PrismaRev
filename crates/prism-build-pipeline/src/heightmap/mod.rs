@@ -14,7 +14,6 @@ mod hydraulic;
 mod terrain;
 mod thermal;
 
-pub use hydraulic::hydraulic_erosion;
 pub use terrain::generate_terrain;
 pub use thermal::thermal_erosion;
 
@@ -279,8 +278,12 @@ pub fn generate_eroded_heightmap(mut hm: Heightmap, params: &ErosionParams) -> H
     }
 
     // 第二阶段：水力 + 热力交替迭代
+    //
+    // 累积缓冲（每线程一张整图）在整条管线里复用：默认 100 轮水力侵蚀不再
+    // 每轮重新分配一份「线程数 × 整图」的 `f64` 表。
+    let mut scratch = hydraulic::ErosionScratch::new();
     for iter in 0..params.iterations {
-        hydraulic_erosion(&mut hm, params);
+        hydraulic::hydraulic_erosion_with_scratch(&mut hm, params, &mut scratch);
         if params.thermal_interval > 0 && (iter + 1) % params.thermal_interval == 0 {
             thermal_erosion(&mut hm, params);
         }
