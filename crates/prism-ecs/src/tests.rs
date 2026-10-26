@@ -53,6 +53,41 @@ fn generation_bumps_on_recycle() {
 }
 
 #[test]
+fn ghost_next_generation_handle_is_not_alive() {
+    let mut world = World::new();
+    let e = world.spawn();
+    world.despawn(e);
+
+    // A freed slot stores `generation + 1`, but that handle was never spawned.
+    let ghost = Entity::from_raw(e.id(), e.generation() + 1);
+    assert!(!world.is_alive(ghost));
+    assert!(!world.is_active(ghost));
+
+    world.insert(ghost, Position(7.0, 7.0));
+    let recycled = world.spawn();
+    assert_eq!(recycled.id(), e.id());
+    assert_ne!(recycled.generation(), e.generation());
+    // The rejected write must not leak into the recycled entity.
+    assert_eq!(world.get::<Position>(recycled), None);
+}
+
+#[test]
+fn despawn_ghost_does_not_double_free() {
+    let mut world = World::new();
+    let e = world.spawn();
+    world.despawn(e);
+
+    let ghost = Entity::from_raw(e.id(), e.generation() + 1);
+    world.despawn(ghost); // must be a no-op
+
+    let a = world.spawn();
+    let b = world.spawn();
+    assert_ne!(a, b, "a slot must not be handed out twice");
+    assert!(world.is_alive(a));
+    assert!(world.is_alive(b));
+}
+
+#[test]
 fn query_visits_all_with_component() {
     let mut world = World::new();
     let a = world.spawn();

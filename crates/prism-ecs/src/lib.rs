@@ -85,6 +85,12 @@ pub struct World {
     /// for a freed/recyclable 槽 it holds the generation the *next*
     /// recycled handle will have (old + 1), so stale handles stay dead.
     entities: Vec<u32>,
+    /// 并行 to `entities`: `true` while the 槽 holds a live 实体.
+    ///
+    /// A freed 槽 keeps its bumped generation but is marked dead here, so a
+    /// handle forged as `{ id, generation + 1 }` (which matches the stored
+    /// generation) cannot touch the 槽 before it is actually recycled.
+    alive: Vec<bool>,
     /// 并行 to `entities`: whether each live 实体 is 激活 (i.e.
     /// should be included in queries). 未激活 entities remain in the
     /// 世界 but are skipped by all 查询 iterators.
@@ -105,6 +111,7 @@ impl World {
     pub fn new() -> Self {
         Self {
             entities: Vec::new(),
+            alive: Vec::new(),
             active: Vec::new(),
             free: Vec::new(),
             pools: HashMap::new(),
@@ -124,11 +131,13 @@ impl World {
             // here (old + 1) so a recycled handle is distinguishable from the
             // stale one that was just freed.
             let generation = self.entities[id as usize];
+            self.alive[id as usize] = true;
             self.active[id as usize] = true;
             Entity { id, generation }
         } else {
             let id = self.entities.len() as u32;
             self.entities.push(0);
+            self.alive.push(true);
             self.active.push(true);
             Entity { id, generation: 0 }
         }
@@ -144,18 +153,19 @@ impl World {
                 pool.remove(entity.id);
             }
             // 存储 the *next* generation so the 槽 can be recycled with a
-            // fresh, distinguishable handle (old handle stays dead because
-            // is_alive compares for 精确 equality).
+            // fresh, distinguishable handle, and mark the 槽 dead so a handle
+            // forged as `{ id, generation + 1 }` cannot touch it before the
+            // recycle actually happens.
             self.entities[entity.id as usize] = entity.generation + 1;
+            self.alive[entity.id as usize] = false;
             self.free.push(entity.id);
         }
     }
 
     /// True if 实体 refers to a currently-live 槽
     pub fn is_alive(&self, entity: Entity) -> bool {
-        self.entities
-            .get(entity.id as usize)
-            .is_some_and(|&gen| gen == entity.generation)
+        self.alive.get(entity.id as usize).copied().unwrap_or(false)
+            && self.entities.get(entity.id as usize) == Some(&entity.generation)
     }
 
     /// True if the 实体 is alive and 激活 未激活 entities are excluded
