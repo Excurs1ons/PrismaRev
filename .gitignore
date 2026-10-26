@@ -28,6 +28,8 @@ android/app/src/main/jniLibs/
 *.png
 !launcher/src-tauri/icons/*.png
 !launcher/src-tauri/gen/android/app/src/main/res/**/*.png
+# User-project art assets are build inputs too (fishing slice sprites).
+!projects/fishing/assets/sprites/*.png
 !editor/src-tauri/icons/*.png
 
 # Python 自检脚本缓存

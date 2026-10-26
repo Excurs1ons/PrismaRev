@@ -1,0 +1,18 @@
+[package]
+name = "fishing"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Cozy Fishing — Cast n Chill 风格的 2D 像素钓鱼游戏（用户项目）"
+
+# 独立 workspace（与 projects/prisma 同构），不挂根 PrismaRev workspace。
+[workspace]
+
+[lib]
+crate-type = ["lib", "cdylib"]
+
+[dependencies]
+prism-app = { path = "../../crates/prism-app" }
+prism-engine = { path = "../../crates/prism-engine" }
+log = "0.4"
+glam = "0.33.2"

@@ -613,7 +613,14 @@ impl SceneLoader {
 
             // A cooked camera without an explicit controller gets the default
             // free-fly controller, matching the legacy loader behaviour.
+            // Orthographic cameras are 2D cameras: a fly controller would fight
+            // the game's own camera follow, so they never get one implicitly.
+            let camera_is_orthographic = world
+                .get::<Camera>(entity)
+                .map(|camera| camera.orthographic)
+                .unwrap_or(false);
             if world.get::<Camera>(entity).is_some()
+                && !camera_is_orthographic
                 && world.get::<FlyCameraController>(entity).is_none()
             {
                 let (yaw, pitch) = quat_to_yaw_pitch(decoded_entity.rotation);

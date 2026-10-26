@@ -228,7 +228,7 @@ fn stage_environment_assets(
                 else {
                     continue;
                 };
-                let Some(pak_path) = normalize_scene_relative(&doc_rel, value) else {
+                let Some(pak_path) = resolve_asset_path(asset_root, &doc_rel, value) else {
                     log::warn!(
                         "environment asset '{value}' in {doc_rel} cannot be packaged (absolute or escapes assets/)"
                     );
@@ -300,7 +300,7 @@ fn stage_sprite_assets(
             if value.is_empty() {
                 continue;
             }
-            let Some(pak_path) = normalize_scene_relative(&doc_rel, value) else {
+            let Some(pak_path) = resolve_asset_path(asset_root, &doc_rel, value) else {
                 log::warn!(
                     "sprite asset '{value}' in {doc_rel} cannot be packaged (absolute or escapes assets/)"
                 );
@@ -366,6 +366,13 @@ fn cook_texture(source: &Path) -> Result<Vec<u8>> {
 }
 
 /// 把 `scene_rel` 所对应场景里的相对路径折叠成 `assets/` 内路径。
+///
+/// 两种写法都接受，按顺序尝试：
+/// 1. **场景相对**（`../sprites/boat.png`）——与 `Skybox.hdr_path` 的旧约定一致；
+/// 2. **资源包相对**（`sprites/boat.png` 或 `assets/sprites/boat.png`）。
+///
+/// 场景相对的候选在磁盘上不存在时回落到资源包相对路径，这样组件里可以
+/// 直接写包内路径（运行时 `id_by_path` 用的就是同一个字符串）。
 fn normalize_scene_relative(scene_rel: &str, value: &str) -> Option<String> {
     let value = value.replace('\\', "/");
     if value.is_empty() || Path::new(&value).is_absolute() {
@@ -396,10 +403,28 @@ fn normalize_scene_relative(scene_rel: &str, value: &str) -> Option<String> {
     }
 
     if parts.is_empty() {
-        None
-    } else {
-        Some(parts.join("/"))
+        return None;
     }
+    Some(parts.join("/"))
+}
+
+/// 与 [`normalize_scene_relative`] 相同，但当场景相对候选在 `asset_root`
+/// 下不存在时返回资源包相对路径。
+fn resolve_asset_path(asset_root: &Path, scene_rel: &str, value: &str) -> Option<String> {
+    let scene_relative = normalize_scene_relative(scene_rel, value)?;
+    if asset_root.join(&scene_relative).is_file() {
+        return Some(scene_relative);
+    }
+    let normalized = value.replace('\\', "/");
+    let root_relative = normalized
+        .strip_prefix("assets/")
+        .unwrap_or(&normalized)
+        .to_string();
+    if !root_relative.is_empty() && asset_root.join(&root_relative).is_file() {
+        return Some(root_relative);
+    }
+    // 两个候选都不存在：返回场景相对路径，让调用方打印原始目标。
+    Some(scene_relative)
 }
 
 fn cook_file(cooker: &SceneCooker, path: &Path) -> Result<Vec<u8>> {
