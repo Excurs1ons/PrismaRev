@@ -40,6 +40,14 @@ const MAX_DEPTH: u32 = 64;
 const MAX_STRING: usize = 1 << 24;
 const MAX_COLLECTION: usize = 1 << 24;
 
+/// Smallest possible encoded entity: name length `u16` (2) + parent `i32` (4)
+/// + position (12) + rotation (16) + scale (12) + component count `u16` (2).
+///
+/// Used to clamp the capacity hint derived from `entity_count` before any
+/// entity is actually parsed, so a tiny forged header cannot reserve hundreds
+/// of megabytes.
+const MIN_ENCODED_ENTITY_BYTES: usize = 2 + 4 + 12 + 16 + 12 + 2;
+
 // ---------------------------------------------------------------------------
 // Errors
 // ---------------------------------------------------------------------------
@@ -482,7 +490,10 @@ pub fn decode_scene(data: &[u8], registry: &ComponentRegistry) -> Result<Decoded
         }
     }
 
-    let mut entities = Vec::with_capacity(entity_count);
+    // `entity_count` is attacker-controlled until the first entity is read.
+    // Clamp the reservation to what the remaining input could actually hold.
+    let capacity = entity_count.min(data.len() / MIN_ENCODED_ENTITY_BYTES);
+    let mut entities = Vec::with_capacity(capacity);
     for _ in 0..entity_count {
         let name = reader.short_string()?;
         let parent = reader.i32()?;
@@ -712,5 +723,24 @@ impl<'a> Reader<'a> {
         }
         let bytes = self.take(len)?;
         String::from_utf8(bytes.to_vec()).map_err(|_| RscnError::InvalidUtf8)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::registry::ComponentRegistry;
+
+    #[test]
+    fn forged_entity_count_does_not_preallocate_unbounded() {
+        let mut data = Vec::new();
+        data.extend_from_slice(&MAGIC);
+        data.push(VERSION);
+        data.extend_from_slice(&(MAX_ENTITIES as u32).to_le_bytes());
+        data.extend_from_slice(&0u32.to_le_bytes());
+        assert_eq!(data.len(), 13);
+
+        let error = decode_scene(&data, &ComponentRegistry::new()).unwrap_err();
+        assert!(matches!(error, RscnError::UnexpectedEof));
     }
 }
