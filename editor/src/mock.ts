@@ -308,14 +308,18 @@ function revertPrefabInstance(
     parent === null || parent === undefined
       ? null
       : parent - subtree.filter((index) => index < parent).length;
+  // 重建后的子树插回原位（数组顺序就是层级顺序，追加到末尾会让实例跳到最后一个兄弟）。
+  const insertAt = root - subtree.filter((index) => index < root).length;
 
   const trimmed = deleteEntitiesInDoc(doc, subtree);
   const result = instantiatePrefab(trimmed, prefab, newParent, link);
-  const newRoot = result.inserted[0];
-  if (keepName !== null && newRoot !== undefined) {
-    result.doc.entities[newRoot].name = keepName;
+  const firstNew = result.inserted[0];
+  const rebuilt = firstNew === undefined ? [] : result.doc.entities.splice(firstNew);
+  if (keepName !== null && rebuilt.length > 0) {
+    rebuilt[0].name = keepName;
   }
-  return { doc: result.doc, index: newRoot ?? root };
+  result.doc.entities.splice(insertAt, 0, ...rebuilt);
+  return { doc: result.doc, index: insertAt };
 }
 
 /** `/preview/assets/prefabs/x.prefab.json` → `assets/prefabs/x.prefab.json` */
