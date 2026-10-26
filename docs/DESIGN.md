@@ -634,7 +634,11 @@ Cooker 负责消费中间格式生成运行时格式。
 | 格式 | 魔数 | 结构 |
 |------|------|------|
 | **RTEX**（cooked 纹理） | `b"RTEX"` | header + mip 偏移表 + 各级 mip 数据（box filter 降采样） |
-| **RMES**（cooked 网格） | `b"RMES"` | header + 属性偏移表 + 交错顶点数据 + 索引数据 |
+| **RMES**（cooked 网格） | `b"RMES"` | header + 属性偏移表 + **平面**顶点块（positions → normals → uv，偏移字段为权威寻址）+ 索引数据 |
+
+> RMES 头里的 `stride` 字段不用于定位属性：`MeshCooker::write_rmes` 写的是平面块，
+> `stride` 只是记录交错尺寸。`prism-render/src/asset_decoders.rs` 的 `decode_rmes`
+> 按偏移字段解析，不按 `stride` 交错读取。
 
 RTEX 的 mip 链由 Cooker 通过 2×2 box filter 生成（`TextureCooker::generate_mips`），
 运行时无需降采样。后期可替换为更高质量的 Kaiser/ Lanczos 滤波。
@@ -773,7 +777,15 @@ prism-scene::rscn::encode_scene
 
 要完成"离线预处理 → .pak → 引擎运行时"的闭环，需要以下 PR：
 
-- **[G1] prism-asset-runtime 格式解码器** ✅ **实现 已落地 2026-08-21**：新增 `prism-render/src/asset_decoders.rs`（`decode_rtex`/`decode_rmes`）解析 RTEX/RMES header → `TextureUploadInput`/`MeshUploadInput` → `BatchUploader`；`TextureFormat` 已覆盖 BC/ASTC，待 `TextureCooker` 输出真实压缩 RTEX 后端到端验证。
+- **[G1] 运行时格式解码器** 🟡 **部分完成**：
+  - `prism-asset/src/formats.rs`（`decode_rtex` / `decode_rmes`）解析成纯数据 `RtexInfo` / `RmesInfo`，
+    由 `runtime/typed.rs` 的 `TextureAsset` / `MeshAsset` 使用；
+  - `prism-render/src/asset_decoders.rs`（`decode_rtex` / `decode_rmes`）按 Cooker 真实布局
+    （RTEX 版本字段 + mip 偏移表、RMES 属性偏移 + 平面顶点块）解析成
+    `TextureUploadInput` / `MeshUploadInput`，含格式码映射（RGBA8 / BC5 / BC6H）与越界校验；
+  - **尚未完成**：两个 GPU 解码器目前没有调用点，还没接到 `BatchUploader`；RTEX 预烘焙 mip 链
+    只上传 base level（`TextureUploadInput` 只能承载单级紧密像素），见 #106。
+    因此 `.pak → GPU` 的纹理/网格端到端仍待补。
 
 - **[G2] Cooker 输出格式与引擎对接** ✅ **场景链路已打通**：`SceneCooker` 产出 RSCN v4，`prism-engine` 的 `SceneLoader` 用同一份 `prism-scene` schema 解码；`prism-cooker` 中有真实 `.scene.json` 的 cook/decode 测试。纹理/网格的压缩数据端到端对比仍待补。
 
