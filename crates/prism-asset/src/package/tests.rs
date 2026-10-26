@@ -13,7 +13,11 @@ fn sample_asset_id(serial: u64) -> AssetId {
 fn roundtrip_empty() {
     let mut builder = PackageBuilder::new();
     let bytes = builder.build().unwrap();
-    assert!(bytes.is_empty());
+    // An empty package is still a valid package: header only, no 0-byte file.
+    assert_eq!(bytes.len() as u64, PackageHeader::SERIALIZED_SIZE);
+    let reader = PackageReader::from_bytes(&bytes).unwrap();
+    assert_eq!(reader.asset_count(), 0);
+    assert!(reader.records().is_empty());
 }
 
 #[test]

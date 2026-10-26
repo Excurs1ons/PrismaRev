@@ -371,9 +371,6 @@ impl PackageBuilder {
         }
 
         let asset_count = records.len() as u32;
-        if asset_count == 0 {
-            return Ok(Vec::new());
-        }
 
         // Calculate offsets.
         let registry_offset = PackageHeader::SERIALIZED_SIZE;
