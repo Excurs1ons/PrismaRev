@@ -705,6 +705,14 @@ impl GraphRenderer {
     /// 仅替换 descriptor set 句柄与 BRDF LUT（覆盖同一 bindless 槽），
     /// forward pass / skybox 管线 布局 无需重建。
     pub fn set_environment(&mut self, env_bytes: Option<Vec<u8>>) -> anyhow::Result<()> {
+        // The previous IBL (and its BRDF LUT view) may still be sampled by
+        // frames that are in flight. Finish them before overwriting the
+        // bindless slot or destroying the old images/samplers; otherwise the
+        // GPU can read freed resources (device-lost / validation error).
+        // Environment switches are rare, so an idle wait is acceptable.
+        unsafe { self.runtime.context.device.device_wait_idle() }
+            .context("wait idle before replacing IBL")?;
+
         // `None` = 无光照场景（开屏/UI）：走廉价中性空 IBL（new_empty，不卷积，≈0ms）。
         // 共享 set2 描述符 布局 保持稳定。
         let new_ibl = if let Some(bytes) = env_bytes {
