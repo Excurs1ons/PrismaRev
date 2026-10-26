@@ -63,10 +63,18 @@ fn initialize_intro(world: &mut World) -> Option<IntroState> {
 
     for (entity, name) in world.query::<Name>() {
         match name.0.as_str() {
-            ENTITY_OVERLAY => { entities.insert(ENTITY_OVERLAY, entity); }
-            ENTITY_TITLE => { entities.insert(ENTITY_TITLE, entity); }
-            ENTITY_SUBTITLE => { entities.insert(ENTITY_SUBTITLE, entity); }
-            ENTITY_PROMPT => { entities.insert(ENTITY_PROMPT, entity); }
+            ENTITY_OVERLAY => {
+                entities.insert(ENTITY_OVERLAY, entity);
+            }
+            ENTITY_TITLE => {
+                entities.insert(ENTITY_TITLE, entity);
+            }
+            ENTITY_SUBTITLE => {
+                entities.insert(ENTITY_SUBTITLE, entity);
+            }
+            ENTITY_PROMPT => {
+                entities.insert(ENTITY_PROMPT, entity);
+            }
             _ => {}
         }
     }
@@ -113,6 +121,11 @@ fn initialize_intro(world: &mut World) -> Option<IntroState> {
     })
 }
 
+/// 任意键或左键点击都跳过 intro。
+fn should_skip(input: &UiInputState) -> bool {
+    input.left_clicked || !input.pressed_keys.is_empty()
+}
+
 /// ECS system：每帧推进 intro 动画并写回 UI 组件。
 ///
 /// 第一帧按 `Name` 组件查找实体并创建 [`IntroState`] 作为 ECS resource。
@@ -131,18 +144,19 @@ pub fn tick(world: &mut World, dt: f32) {
     // 2. 跳过检测。
     let skip = world
         .get_resource::<UiInputState>()
-        .is_some_and(|i| {
-            i.left_clicked
-                || i.pressed_keys.iter().any(|k| {
-                    matches!(
-                        k,
-                        prism_engine::input::KeyCode::Space | prism_engine::input::KeyCode::Enter
-                    )
-                })
-        });
+        .is_some_and(should_skip);
 
     // 3. 推进动画、取出本帧要写回的动画值与受控实体。
-    let (overlay_alpha, title_alpha, title_y, prompt_alpha, overlay_e, title_e, subtitle_e, prompt_e) = {
+    let (
+        overlay_alpha,
+        title_alpha,
+        title_y,
+        prompt_alpha,
+        overlay_e,
+        title_e,
+        subtitle_e,
+        prompt_e,
+    ) = {
         let Some(state) = world.get_resource_mut::<IntroState>() else {
             return;
         };
@@ -211,5 +225,38 @@ pub fn tick(world: &mut World, dt: f32) {
     }
     if let Some(text) = world.get_mut::<Text>(prompt_e) {
         text.color[3] = prompt_alpha;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_skip;
+    use prism_engine::input::KeyCode;
+    use prism_engine::ui::UiInputState;
+
+    fn input(keys: &[KeyCode], clicked: bool) -> UiInputState {
+        UiInputState {
+            cursor_pos: [0.0, 0.0],
+            left_clicked: clicked,
+            left_held: false,
+            pressed_keys: keys.to_vec(),
+        }
+    }
+
+    #[test]
+    fn any_key_skips() {
+        assert!(should_skip(&input(&[KeyCode::KeyW], false)));
+        assert!(should_skip(&input(&[KeyCode::Escape], false)));
+        assert!(should_skip(&input(&[KeyCode::Space], false)));
+    }
+
+    #[test]
+    fn click_skips() {
+        assert!(should_skip(&input(&[], true)));
+    }
+
+    #[test]
+    fn idle_input_does_not_skip() {
+        assert!(!should_skip(&input(&[], false)));
     }
 }
