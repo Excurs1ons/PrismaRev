@@ -93,6 +93,37 @@ const textAreaBounds = computed(() => {
   return null;
 });
 
+const localLineCount = ref<number | null>(null);
+
+/**
+ * 依据当前文本行数在 [minLines, maxLines] 区间动态计算实际展示行数，
+ * 并在行数超过上限时自动滚动，对齐 Unity `[TextArea(minLines, maxLines)]` 的行为。
+ */
+const dynamicTextAreaRows = computed(() => {
+  if (!textAreaBounds.value) return 2;
+  const { minLines, maxLines } = textAreaBounds.value;
+  const text = typeof props.value === "string" ? props.value : "";
+  const count = localLineCount.value ?? text.split("\n").length;
+  return Math.min(Math.max(count, minLines), maxLines);
+});
+
+const textAreaStyle = computed(() => {
+  if (!textAreaBounds.value) return undefined;
+  const { minLines, maxLines } = textAreaBounds.value;
+  return {
+    minHeight: `${minLines * 1.4 + 0.6}em`,
+    maxHeight: `${maxLines * 1.4 + 0.6}em`,
+    overflowY: "auto" as const,
+    resize: "vertical" as const,
+  };
+});
+
+function onTextareaInput(event: Event) {
+  const target = event.target as HTMLTextAreaElement;
+  localLineCount.value = target.value.split("\n").length;
+  onTextInput(event);
+}
+
 /** `[Tooltip]` → 标签的悬停提示。 */
 const tooltip = computed(() => {
   const attr = drawer.value?.attributes.find((a) => a.type === "tooltip");
@@ -484,11 +515,12 @@ function onSelect(event: Event) {
       </select>
       <textarea
         v-else-if="kind === 'string' && textAreaBounds"
-        :rows="textAreaBounds.minLines"
+        :rows="dynamicTextAreaRows"
+        :style="textAreaStyle"
         :disabled="hint?.readOnly"
         :value="(value as string)"
         :title="tooltip ?? undefined"
-        @input="onTextInput"
+        @input="onTextareaInput"
         @change="onTextChange"
       />
       <template v-else-if="kind === 'string'">
