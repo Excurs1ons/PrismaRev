@@ -71,7 +71,7 @@ impl ImporterClass {
         }
         let ext = lower.rsplit('.').next().unwrap_or("");
         match ext {
-            "gltf" | "glb" | "glb2" | "obj" | "fbx" | "bin" | "mesh" => Self::Model,
+            "gltf" | "glb" | "glb2" | "obj" | "fbx" | "mesh" => Self::Model,
             "png" | "jpg" | "jpeg" | "ktx2" | "dds" | "tga" | "webp" | "gif" | "bmp" | "ico"
             | "svg" | "avif" => Self::Texture,
             "hdr" | "exr" => Self::Environment,
@@ -180,6 +180,11 @@ mod tests {
         );
         assert_eq!(
             ImporterClass::from_path("assets/weird.xyz").unity_class_name(),
+            "DefaultImporter"
+        );
+        // probe_volume.bin 等二进制数据走 DefaultImporter，避免误当模型
+        assert_eq!(
+            ImporterClass::from_path("assets/gi/probe_volume.bin").unity_class_name(),
             "DefaultImporter"
         );
     }

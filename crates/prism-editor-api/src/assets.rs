@@ -146,12 +146,12 @@ pub fn asset_kind(path: &str) -> &'static str {
     }
     let ext = lower.rsplit('.').next().unwrap_or("");
     match ext {
-        "gltf" | "glb" | "obj" | "fbx" | "bin" | "mesh" | "glb2" => "model",
+        "gltf" | "glb" | "obj" | "fbx" | "mesh" | "glb2" => "model",
         "png" | "jpg" | "jpeg" | "ktx2" | "dds" | "tga" | "webp" => "texture",
         "hdr" | "exr" => "env",
         "rscn" | "scene" => "scene",
         "pak" => "package",
-        "json" | "toml" | "txt" | "md" => "data",
+        "json" | "toml" | "txt" | "md" | "bin" => "data",
         _ => "other",
     }
 }
@@ -484,6 +484,7 @@ mod tests {
         assert_eq!(asset_kind("assets/scenes/intro.scene.json"), "scene");
         assert_eq!(asset_kind("assets/scenes.pak"), "package");
         assert_eq!(asset_kind("assets/data/x.toml"), "data");
+        assert_eq!(asset_kind("assets/gi/probe_volume.bin"), "data");
         assert_eq!(asset_kind("assets/weird.xyz"), "other");
     }
 
