@@ -1149,6 +1149,12 @@ impl GraphRenderer {
             }
         }
 
+        // ECS UI 叠加按 image view 缓存 framebuffer；旧 view 已销毁，
+        // 必须同步丢弃，避免无界增长与悬空引用。
+        if let Some(gpu) = self.ui_overlay.as_mut() {
+            gpu.on_swapchain_views_changed();
+        }
+
         // All per-swapchain-image attachments (ForwardPass HDR/depth/normal,
         // PostPass 帧缓冲 were just rebuilt, so the 渲染 graph's cached
         // 图像 layouts are stale. 清空 them so the 第一个 帧 after
