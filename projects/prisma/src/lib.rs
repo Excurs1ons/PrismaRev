@@ -29,8 +29,12 @@ pub fn build_app() -> prism_app::App {
 // ===========================================================================
 
 /// GameActivity 加载本库后调用的入口。
+///
+/// GameActivity's native glue resolves this symbol with `dlsym`, so it must
+/// keep C linkage and an unmangled name; a plain Rust `fn` is not exported.
 #[cfg(target_os = "android")]
-fn android_main(android_app: prism_app::AndroidApp) {
+#[no_mangle]
+pub extern "C" fn android_main(android_app: prism_app::AndroidApp) {
     // `run_on_android` stages APK assets and the launch config before calling
     // `build_app`, so the engine can use the same `assets/...` paths as desktop.
     prism_app::run_on_android(build_app, android_app).expect("fatal application error");
