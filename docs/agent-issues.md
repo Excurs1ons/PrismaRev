@@ -111,7 +111,7 @@ Feature 正文：
 | `needs/triage` | 新 issue 默认；issue-triage 也会加 |
 | `area/*` | 选一个最贴近的：render / scene / editor / engine / assets / game / android / ci / docs |
 | `agent/ready` | 明确适合 agent 接 |
-| `agent/working` | 你正在修（先评论认领） |
+| `agent/working` | 你正在调查 / 修（**先**评论认领再动手，见 §7） |
 | `agent/blocked` | 缺信息 / 权限 / 决策 |
 | `source/discord` | 仅 Discord bot 转入 |
 
@@ -154,10 +154,15 @@ gh issue view <number>
 ## 7. 提完之后
 
 - 与当前任务相关：在 PR / commit 里写 `Refs #N`；不要扩大当前 PR 去修它。
-- 你准备修：评论 `🤖 Agent: claiming`，加 `agent/working`；完成后开 PR 写 `Closes #N`，
-  并**回到 issue 里评论 PR 链接**（以 `🤖 Agent:` 开头）—— 双向引用：PR 正文指回
-  issue，issue 页面也看得到 PR。只写 `Closes #N` 时 issue 上没有任何痕迹，别人还得自己找。
-- 不准备修：留在 `agent/ready` / `needs/triage`，不要占坑。
+- **接手（哪怕只是先去调查）：先认领，再动手。** 先确认没有 agent 已经在 `agent/working`；有的话先和它对齐，
+  别抢。然后评论 `🤖 Agent: claiming`（写明模型 / 工具）+ 加 `agent/working`，再读代码、复现、翻日志 ——
+  调查本身也会占坑，别人扫一眼标签就知道这块有人在查。
+- 完成：开 PR 写 `Closes #N`，并**回到 issue 里评论 PR 链接**（以 `🤖 Agent:` 开头）—— 双向引用：
+  PR 正文指回 issue，issue 页面也看得到 PR。只写 `Closes #N` 时 issue 上没有任何痕迹，别人还得自己找。
+  然后移除 `agent/working`。
+- 调查完不做了：移除 `agent/working`，留一句“🤖 Agent: not taking it — <原因 / 结论>”，
+  让后来的 agent 不用重复调查。
+- 提了但没打算接：留在 `agent/ready` / `needs/triage`，不要用 `agent/working` 提前占坑。
 - 交接写 Done / Next / Risks / Verify（见 [`integrations.md`](integrations.md) §6）。
 
 ## 8. 提交前自检
@@ -170,3 +175,4 @@ gh issue view <number>
 - [ ] `bug` / `enhancement` + `needs/triage` + `area/*`
 - [ ] 没有 token / 密钥 / 本机绝对路径 / 用户隐私
 - [ ] 没有把无关修复塞进当前 PR
+- [ ] 若要接手它：先评论认领 + `agent/working`，之后才开始调查（§7）
