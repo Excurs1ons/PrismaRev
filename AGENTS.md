@@ -368,7 +368,7 @@ The user project's dependency chain must stay **UI-framework-free and editor-fre
     "A problem occurred starting process 'command 'pnpm.bat''".
   - The script targets Windows PowerShell 5.1 too: `Split-Path`/`Join-Path` reject `-LiteralPath`
     in these parameter sets there, so keep path args positional (same as `scripts/run.ps1`).
-- Launch parameters (hub → game): `projects/prisma/src/launch_config.rs`. Desktop passes JSON via the
+- Launch parameters (hub → game): `crates/prism-engine/src/launch_config.rs`. Desktop passes JSON via the
   `PRISMREV_LAUNCH_CONFIG` env var; Android writes `filesDir/launch_config.json` from Kotlin
   (`NativePlugin.launch_game`) and `android_main` reads it via `AndroidApp::internal_data_path()`,
   then re-exports it into the same env var so both paths converge on one parser.
