@@ -56,24 +56,40 @@ impl GpuAssetResolver {
     ///
     /// Both files are optional — when absent (no CLI 构建 run yet) the
     /// engine continues with only procedural geometry.
+    ///
+    /// Paths are resolved through [`crate::asset_paths`] instead of the process
+    /// cwd, so launching the executable from any directory still finds the
+    /// package that sits next to it.
     pub fn load_resource_package(&mut self) {
-        const PAK_PATH: &str = "assets/scenes.pak";
-        const MANIFEST_PATH: &str = "assets/scenes.pak.meta.json";
+        const PAK_NAME: &str = "scenes.pak";
+        const MANIFEST_NAME: &str = "scenes.pak.meta.json";
 
-        if let Err(e) = self.resource_manager.load_package(PAK_PATH) {
-            log::warn!("resource package unavailable at {PAK_PATH}: {e}; scene assets cannot load");
+        let Some(pak_path) = crate::asset_paths::asset_path(PAK_NAME) else {
+            log::warn!("resource package unavailable: no `assets/` directory found");
+            return;
+        };
+        let manifest_path =
+            crate::asset_paths::asset_path(MANIFEST_NAME).unwrap_or_else(|| pak_path.clone());
+
+        if let Err(e) = self.resource_manager.load_package(&pak_path) {
+            log::warn!(
+                "resource package unavailable at {}: {e}; scene assets cannot load",
+                pak_path.display()
+            );
             return;
         }
 
-        if let Err(e) = self.resource_manager.load_path_manifest(MANIFEST_PATH) {
+        if let Err(e) = self.resource_manager.load_path_manifest(&manifest_path) {
             log::warn!(
-                "failed to load path manifest {MANIFEST_PATH}: {e} \
-                 (asset resolution by path won't work)"
+                "failed to load path manifest {}: {e} \
+                 (asset resolution by path won't work)",
+                manifest_path.display()
             );
         }
 
         log::info!(
-            "resource package loaded: {} assets registered",
+            "resource package loaded from {}: {} assets registered",
+            pak_path.display(),
             self.resource_manager.asset_count(),
         );
     }

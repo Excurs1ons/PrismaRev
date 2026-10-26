@@ -487,8 +487,9 @@ pub struct SceneManifest {
 }
 
 /// 不依赖当前工作目录地定位 `scenes.toml`：
-/// 依次在【当前目录及其各级父目录】与【可执行文件所在目录及其各级父目录】下，
-/// 尝试 `assets/scenes.toml` 与 `crates/prism-engine/assets/scenes.toml`。
+/// 按 [`crate::asset_paths::search_roots`] 的顺序（`PRISMREV_ASSET_ROOT`、
+/// 当前目录及其父目录、可执行文件目录及其父目录），尝试
+/// `assets/scenes.toml` 与 `crates/prism-engine/assets/scenes.toml`。
 ///
 /// 这样无论从仓库根还是 `projects/prisma/` 子目录启动，
 /// 都能正确找到资源清单——之前从用户项目目录启动时，导致
@@ -498,26 +499,7 @@ fn find_manifest_path() -> Option<PathBuf> {
         "assets/scenes.toml",
         "crates/prism-engine/assets/scenes.toml",
     ];
-    let mut bases: Vec<PathBuf> = Vec::new();
-    if let Ok(cwd) = std::env::current_dir() {
-        bases.push(cwd.clone());
-        let mut p = cwd.as_path();
-        while let Some(parent) = p.parent() {
-            bases.push(parent.to_path_buf());
-            p = parent;
-        }
-    }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(exe_dir) = exe.parent() {
-            bases.push(exe_dir.to_path_buf());
-            let mut p = exe_dir;
-            while let Some(parent) = p.parent() {
-                bases.push(parent.to_path_buf());
-                p = parent;
-            }
-        }
-    }
-    for base in bases {
+    for base in crate::asset_paths::search_roots() {
         for rel in rels {
             let candidate = base.join(rel);
             if candidate.exists() {

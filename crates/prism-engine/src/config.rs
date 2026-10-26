@@ -216,7 +216,7 @@ const fn default_vsync() -> bool {
 // Loading
 // ---------------------------------------------------------------------------
 
-const CONFIG_PATH: &str = "assets/settings.toml";
+const CONFIG_PATH: &str = "settings.toml";
 
 impl AppConfig {
     /// 从调用方提供的文本解析配置；不访问文件系统。
@@ -230,13 +230,19 @@ impl AppConfig {
     /// 加载 from `assets/settings.toml`, or return defaults if the file is
     /// 缺少 / unreadable. Parse errors 对数 a 警告 and fall 后 to
     /// defaults.
+    ///
+    /// The path is resolved through [`crate::asset_paths`], so it does not
+    /// depend on the process cwd.
     #[deprecated(note = "use prism_app::load_config or AppConfig::from_toml")]
     pub fn load() -> Self {
-        let text = match std::fs::read_to_string(CONFIG_PATH) {
+        let Some(path) = crate::asset_paths::asset_path(CONFIG_PATH) else {
+            return Self::default();
+        };
+        let text = match std::fs::read_to_string(&path) {
             Ok(t) => t,
             Err(e) => {
                 if e.kind() != std::io::ErrorKind::NotFound {
-                    log::warn!("settings.toml: {e} — using defaults");
+                    log::warn!("settings.toml ({}): {e} — using defaults", path.display());
                 }
                 return Self::default();
             }

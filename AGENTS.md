@@ -333,6 +333,17 @@ The user project's dependency chain must stay **UI-framework-free and editor-fre
   Do not re-add unconditional sky/gizmo draws in `ForwardPass`.
 - Run tests: `cargo test -p prism-asset -p prism-scene -p prism-cooker`.
 
+## Asset root resolution (runtime, do not regress)
+- `assets/` 的定位只允许一处实现：`prisma_engine::asset_paths`（`asset_root` / `asset_dir` /
+  `asset_path` / `search_roots`）。`.pak`、`settings.toml`、`scenes.toml`、环境贴图都走它；
+  **不要**再新增 `std::fs::read_to_string("assets/...")` 这类 cwd 相对路径。
+- 解析顺序：`PRISMREV_ASSET_ROOT`（指向含 `assets/` 的目录）→ cwd 及其各级父目录 →
+  可执行文件目录及其各级父目录；只有**确实存在 `assets/` 子目录**的候选才算命中。
+- 覆盖的启动方式：仓库根 `cargo run`、`projects/prisma/` 内启动、双击 exe、
+  launcher 用绝对路径 spawn、快捷方式改了起始位置。Android 不受影响：`run_on_android`
+  先解包到 `<filesDir>/assets` 并 `set_current_dir`，第一个候选即命中。
+- 命中路径用 `log::debug!` 输出；完全找不到时每进程只 warn 一次（避免启动日志刷屏）。
+
 ## Logging
 - Use the `log` crate (`log::trace!`/`warn!`/...). Verbose pass tracing uses `log::trace!`.
   `RUST_LOG` is set by `run.ps1` (default `warn,tracy_client=off`); respect it, don't `eprintln!` for routine flow.
