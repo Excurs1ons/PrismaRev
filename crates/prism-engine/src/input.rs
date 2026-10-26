@@ -174,6 +174,12 @@ impl InputManager {
     pub fn mouse_delta(&self) -> [f64; 2] {
         self.mouse_delta
     }
+    /// 本帧累计的垂直滚动量，**单位是「滚轮行」**（一格传统滚轮 = 1.0，
+    /// 触控板的小数行会平滑累积）。
+    ///
+    /// 平台层已经把 winit 的像素级增量折算成行（见
+    /// `prism_platform::PIXELS_PER_SCROLL_LINE`），所以缩放/滚动曲线可以按
+    /// 「1.0 ≈ 一格」写，不必再区分设备。
     pub fn scroll_delta(&self) -> f64 {
         self.scroll_delta
     }
@@ -228,7 +234,7 @@ impl InputManager {
     }
 
     /// Handle a 滚动 事件 `delta_y` is 正 for 滚动 上 (zoom in),
-    /// 负 for 滚动 下
+    /// 负 for 滚动 下。单位是滚轮行（一格 = 1.0）。
     pub fn handle_scroll(&mut self, delta_y: f64) {
         self.scroll_delta += delta_y;
     }
