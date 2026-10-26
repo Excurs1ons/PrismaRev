@@ -1,0 +1,18 @@
+{
+  "_comment": "Lake background stack for projects/fishing, ordered far -> near (array order = draw order). `parallax` 0 = pinned to the screen, 1 = moves with the world. Art is produced by scripts/sync_fishing_art.py (reference) or scripts/gen_placeholder_sprites.py (original).",
+  "layers": [
+    { "slug": "cloud-1", "parallax": 0.04 },
+    { "slug": "far-mountains", "parallax": 0.06 },
+    { "slug": "mountain-right-left", "parallax": 0.08 },
+    { "slug": "mountain-right-far", "parallax": 0.1 },
+    { "slug": "mountain-right-close", "parallax": 0.13 },
+    { "slug": "seaweed", "parallax": 0.45 },
+    { "slug": "mid-ground", "parallax": 0.55 },
+    { "slug": "dock-back", "parallax": 0.85 },
+    { "slug": "ground", "parallax": 1.0 },
+    { "slug": "plants", "parallax": 0.97 },
+    { "slug": "dock", "parallax": 0.9 },
+    { "slug": "front-rocks", "parallax": 1.05 }
+  ],
+  "time_of_day": ["dawn", "day", "dusk", "night"]
+}

@@ -114,6 +114,9 @@ pub fn build_scene_package(
     // 2D 精灵贴图同理：`SpriteRenderer.sprite_path` 指向的 PNG 必须按
     // 运行时期望的 RTEX 格式烘进包内，否则精灵永远解析不到贴图。
     stage_sprite_assets(asset_root, staging, &manifest)?;
+    // 运行时生成的精灵（背景层、鱼、特效）不在场景 JSON 里，所以整个
+    // `sprites/` 目录都要烘进包内——和 Unity 的「Assets 目录即内容」一致。
+    stage_sprite_folder(asset_root, staging)?;
 
     // Runtime always looks up the manifest as `scenes.toml` inside the package.
     // Rewrite authoring `.scene.json` paths to the cooked `.rscn` names while
@@ -363,6 +366,47 @@ fn cook_texture(source: &Path) -> Result<Vec<u8>> {
         })
         .with_context(|| format!("cook sprite {}", source.display()))?;
     Ok(cooked.cooked_data)
+}
+
+/// 把 `assets/sprites/` 下的所有图片烘成 RTEX 并写进 staging。
+///
+/// 运行时 spawn 的精灵（分层背景、鱼、水花）不经过场景 JSON，因此不能只靠
+/// [`stage_sprite_assets`] 的引用扫描；整个目录都进包，路径保持一致。
+fn stage_sprite_folder(asset_root: &Path, staging: &Path) -> Result<usize> {
+    let root = asset_root.join("sprites");
+    if !root.is_dir() {
+        return Ok(0);
+    }
+
+    let mut staged = 0usize;
+    let mut stack = vec![root.clone()];
+    while let Some(dir) = stack.pop() {
+        for entry in
+            fs::read_dir(&dir).with_context(|| format!("read sprite dir {}", dir.display()))?
+        {
+            let path = entry?.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            if !matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "tga" | "bmp") {
+                continue;
+            }
+            let rel = path
+                .strip_prefix(asset_root)
+                .with_context(|| format!("sprite {} escapes assets/", path.display()))?;
+            let cooked = cook_texture(&path)?;
+            write_staged(staging, rel, &cooked)?;
+            staged += 1;
+        }
+    }
+    log::info!("packaged {staged} sprite file(s) from {}", root.display());
+    Ok(staged)
 }
 
 /// 把 `scene_rel` 所对应场景里的相对路径折叠成 `assets/` 内路径。

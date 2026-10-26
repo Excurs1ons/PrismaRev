@@ -16,3 +16,5 @@ prism-app = { path = "../../crates/prism-app" }
 prism-engine = { path = "../../crates/prism-engine" }
 log = "0.4"
 glam = "0.33.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

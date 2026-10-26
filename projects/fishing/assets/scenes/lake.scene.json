@@ -4,38 +4,38 @@
       "name": "camera",
       "parent": null,
       "transform": {
-        "translation": [0, -0.6, 10],
-        "rotation": [0, 0, 0, 1],
-        "scale": [1, 1, 1]
+        "translation": [
+          0,
+          180,
+          10
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
       },
       "components": {
         "prism_engine::scene::Camera": {
           "enabled": true,
           "orthographic": true,
-          "orthographic_size": 5.4,
+          "orthographic_size": 180.0,
           "near": 0.1,
           "far": 100,
           "exposure": 1,
           "clear_flags": "SolidColor",
-          "background_color": [0.06, 0.14, 0.2, 1]
-        }
-      }
-    },
-    {
-      "name": "water",
-      "parent": null,
-      "transform": {
-        "translation": [0, -0.6, -1],
-        "rotation": [0, 0, 0, 1],
-        "scale": [4, 4, 1]
-      },
-      "components": {
-        "prism_engine::scene::SpriteRenderer": {
-          "sprite_path": "sprites/water.png",
-          "pixels_per_unit": 100,
-          "sorting_layer": 0,
-          "order_in_layer": 0,
-          "color": [1, 1, 1, 1]
+          "background_color": [
+            0.05,
+            0.09,
+            0.14,
+            1
+          ]
         }
       }
     },
@@ -43,17 +43,35 @@
       "name": "boat",
       "parent": null,
       "transform": {
-        "translation": [0, -1.2, 0],
-        "rotation": [0, 0, 0, 1],
-        "scale": [3, 3, 1]
+        "translation": [
+          0,
+          120,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
       },
       "components": {
         "prism_engine::scene::SpriteRenderer": {
           "sprite_path": "sprites/boat.png",
-          "pixels_per_unit": 100,
-          "sorting_layer": 10,
+          "pixels_per_unit": 1,
+          "sorting_layer": 50,
           "order_in_layer": 0,
-          "color": [1, 1, 1, 1]
+          "color": [
+            1,
+            1,
+            1,
+            1
+          ]
         }
       }
     },
@@ -61,17 +79,35 @@
       "name": "bobber",
       "parent": null,
       "transform": {
-        "translation": [2.2, -2.6, 0],
-        "rotation": [0, 0, 0, 1],
-        "scale": [2, 2, 1]
+        "translation": [
+          120,
+          80,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
       },
       "components": {
         "prism_engine::scene::SpriteRenderer": {
           "sprite_path": "sprites/bobber.png",
-          "pixels_per_unit": 100,
-          "sorting_layer": 20,
+          "pixels_per_unit": 1,
+          "sorting_layer": 60,
           "order_in_layer": 0,
-          "color": [1, 1, 1, 1]
+          "color": [
+            1,
+            1,
+            1,
+            1
+          ]
         }
       }
     }

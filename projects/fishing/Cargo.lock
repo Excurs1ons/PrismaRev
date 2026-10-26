@@ -1194,6 +1194,8 @@ dependencies = [
  "log",
  "prism-app",
  "prism-engine",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
