@@ -1938,6 +1938,7 @@
       },
       {
         "defaultJson": {
+          "cull_mode": "Back",
           "material_path": "",
           "mesh_path": "",
           "shadow_casting_mode": "On"
@@ -1973,6 +1974,19 @@
               "On",
               "TwoSided",
               "ShadowsOnly"
+            ]
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "u8",
+            "name": "cull_mode",
+            "readOnly": false,
+            "structType": null,
+            "variants": [
+              "Off",
+              "Front",
+              "Back"
             ]
           }
         ],
@@ -2851,6 +2865,7 @@
             "components": {
               "prism_engine::scene::Active": true,
               "prism_engine::scene::MeshRenderer": {
+                "cull_mode": "Back",
                 "material_path": "",
                 "mesh_path": "",
                 "shadow_casting_mode": "On"

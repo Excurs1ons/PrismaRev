@@ -772,6 +772,7 @@ impl SceneLoader {
                         mesh_path: pe.mesh_path.clone(),
                         material_path: pe.material_path.clone(),
                         shadow_casting_mode: Default::default(),
+                        cull_mode: Default::default(),
                     },
                 );
             }

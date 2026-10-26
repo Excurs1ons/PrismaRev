@@ -17,7 +17,7 @@ use prism_reflect::{FieldType, Reflect, ReflectError, ReflectType, Value};
 use serde::{Deserialize, Serialize};
 
 use crate::render_enums::{
-    correlated_color_temperature_to_rgb, CameraClearFlags, LightRenderMode, LightShadows,
+    correlated_color_temperature_to_rgb, CameraClearFlags, CullMode, LightRenderMode, LightShadows,
     LightType, ShadowCastingMode,
 };
 
@@ -187,6 +187,11 @@ pub struct MeshRenderer {
     ///
     /// 决定该物体是否写阴影贴图、是否出现在相机主通道（`ShadowsOnly` 只投影）。
     pub shadow_casting_mode: ShadowCastingMode,
+    /// 剔除模式 = Unity 材质/渲染器的 `CullMode`（着色器属性 `_Cull`）。
+    ///
+    /// Unity 把它放在 `Material` 上；PrismaRev 的材质目前只有 PBR 参数，
+    /// 所以先落在渲染器上，语义仍是「这一个绘制用哪一面」。
+    pub cull_mode: CullMode,
 }
 
 impl MeshRenderer {

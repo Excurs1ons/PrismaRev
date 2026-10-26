@@ -859,9 +859,51 @@ P3b-1a 建了光照枚举，这一批补上**渲染状态**的纯数据镜像（
 （`cull_mode` / `render_queue`）或新建材质组件；`prism-render` 的管线状态翻译
 （`vk::CullModeFlags` / `vk::CompareOp` / `vk::BlendFactor`）。都留给后续批次。
 
+### P3b-7 — 逐渲染器 `CullMode` 接线 ✅
+
+P3b-6 只加了枚举；这一批让 `CullMode` 真正变成 Vulkan 管线状态。Unity 把它放在
+`Material`（`_Cull`）上，但 PrismaRev 的材质目前只有 PBR 参数、没有逐材质的管线变体，
+所以先挂在 `MeshRenderer` 上——语义仍是「这一个绘制用哪一面」，等材质系统引入后再搬。
+
+**prism-scene**
+- `MeshRenderer.cull_mode: CullMode`（`#[serde(default)]` → 老文档不需要迁移，
+  `SCENE_DOC_VERSION` 保持 3）。作者 JSON 取值是 `"Off"` / `"Front"` / `"Back"`。
+
+**prism-render**
+- `DrawItem.cull_mode: DrawCullMode`（`render_graph.rs`）。`prism-render` 不依赖
+  `prism-scene`，所以这里放一份最小的三值中立枚举 + `to_vk()`；引擎负责映射。
+- `ForwardPass` 的 `pipeline: Option<GraphicsPipeline>` 换成
+  `pipelines: HashMap<DrawCullMode, GraphicsPipeline>`：三种剔除模式在启动时各建一条
+  （`ensure_pipelines`），因为剔除是**管线状态**而不是动态状态。三条变体的描述符集合
+  布局与推送常量完全相同，所以描述符集 / 推送常量只在循环外绑一次，循环里只在
+  `item.cull_mode` 变化时 `cmd_bind_pipeline`。
+- 阴影贴图管线**不变**（固定 `CullModeFlags::NONE` 双面写深度），与 `ShadowCastingMode::TwoSided`
+  的既有语义一致。
+
+**prism-engine**
+- `scene_render_system` 与 `SceneReadView::draw_items()` 都从 `MeshRenderer.cull_mode`
+  取状态（缺组件按 `Back`），经 `draw_cull_mode()` 映射到 `DrawCullMode`
+  （两个类型分属不同 crate，孤儿规则不允许 `From`，所以是显式映射函数）。
+- `loader.rs` 的 bundle 插入补 `cull_mode: Default::default()`。
+
+**行为变化**：`cull_mode = "Off"` 的物体现在真的双面可见（此前一律背面剔除）；
+默认 `Back` 的旧场景完全不变。
+
+**验证**
+- ✅ `cargo test -p prism-scene -p prism-engine -p prism-render` → 66 / 108(+3) / 82 passed
+  （新增：`MeshRenderer` 缺字段回退 + JSON 往返；`DrawCullMode::to_vk` 映射与唯一性；
+  绘制项默认 `Back` + `CullMode::Off` 透传 + 映射函数）。
+- ✅ `pnpm -C editor fixture` 后手动只保留 schema 相关差异（`defaultJson` / `fields` /
+  模板场景各一处 `cull_mode`）——本机磁盘资产与提交版 fixture 本来就有一批无关漂移，
+  没有一并写入。
+- ✅ `python scripts/pr_ready.py`（见 PR）。
+
+**这一批刻意没做**：混合状态（`BlendMode` / `BlendOp`）与 `RenderQueue` 的绘制排序、
+透明度（`ZWrite` / 距离排序）——它们需要材质级管线变体 + 排序，单独一批；
+`BlendOp` 枚举也留到那时一起加。点光/聚光阴影仍未实现。
 ### 待办（下一批候选）
-- **P3b 光照/渲染（剩余）**：`BlendOp`（+ 混合状态整体接线）、`RenderQueueRange`；
-  把 `cull_mode` / `render_queue` / 混合挂到渲染器或材质组件并翻译成 Vulkan 管线状态；
+- **P3b 光照/渲染（剩余）**：`BlendOp` + 混合状态（`BlendMode` 因子）与 `RenderQueue`
+  排序、透明度（材质管线变体、`ZWrite`、透明物体按距离排序）；
   点光/聚光还没有自己的阴影（只有方向光贴图）。
 - **P3c 相机行为**：用测试钉住 yaw↔quaternion 的 `−π/2` 偏移；`clear_flags` 的
   `Depth`/`Nothing` 语义接进 `ForwardPass`；多相机（`depth` 排序 + 叠加）。

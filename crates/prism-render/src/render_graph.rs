@@ -299,6 +299,33 @@ impl RenderSettings {
     }
 }
 
+/// 逐绘制的剔除模式（Unity `Material`/`Renderer` 的 `CullMode`）。
+///
+/// `prism-render` 不依赖 `prism-scene`，所以这里保留一份最小的三值枚举；
+/// 引擎负责把 `scene::CullMode` 映射过来（见 `DrawItem::cull_mode`）。
+/// 只有 `ForwardPass` 的主通道会用它 —— 阴影贴图管线固定双面写深度。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum DrawCullMode {
+    /// 不剔除（双面）。
+    Off,
+    /// 剔除正面。
+    Front,
+    /// 剔除背面（默认，与既有管线一致）。
+    #[default]
+    Back,
+}
+
+impl DrawCullMode {
+    /// 对应的 Vulkan 剔除位。
+    pub const fn to_vk(self) -> ash::vk::CullModeFlags {
+        match self {
+            Self::Off => ash::vk::CullModeFlags::NONE,
+            Self::Front => ash::vk::CullModeFlags::FRONT,
+            Self::Back => ash::vk::CullModeFlags::BACK,
+        }
+    }
+}
+
 /// One 绘制 call's 静态 data, supplied by the engine each 帧
 /// 图 passes 读取 these to record geometry draws into their attachments.
 #[derive(Clone)]
@@ -320,6 +347,8 @@ pub struct DrawItem {
     /// 阴影通道是否关闭背面剔除（Unity `ShadowCastingMode::TwoSided`）。
     /// `false` = 背面剔除（默认），`true` = 双面投射。只被 `ShadowMapPass` 读取。
     pub cast_shadow_two_sided: bool,
+    /// 主通道的剔除模式（Unity `CullMode`）；阴影贴图管线忽略它。
+    pub cull_mode: DrawCullMode,
 }
 
 /// Per-frame scene + lighting 状态 shared with every pass via [`RenderContext`].

@@ -5,7 +5,7 @@
 use super::*;
 use prism_ecs::World;
 use prism_render::managers::MeshHandle;
-use prism_scene::ShadowCastingMode;
+use prism_scene::{CullMode, ShadowCastingMode};
 
 #[test]
 fn entity_with_all_components_yields_draw_item() {
@@ -249,6 +249,36 @@ fn shadows_only_hides_from_the_main_pass() {
     assert!(items[0].cast_shadow);
     assert!(!items[0].visible_in_main_pass);
     assert!(!items[0].cast_shadow_two_sided);
+}
+
+#[test]
+fn cull_mode_defaults_to_back_and_follows_the_component() {
+    let mut world = World::new();
+    // 没有 `MeshRenderer`：默认背面剔除。
+    spawn_renderable(&mut world, None);
+    let items = scene_render_system(&world);
+    assert_eq!(items[0].cull_mode, prism_render::DrawCullMode::Back);
+
+    // Unity `CullMode.Off` = 双面，必须原样传到绘制项。
+    let mut world = World::new();
+    spawn_renderable(
+        &mut world,
+        Some(MeshRenderer {
+            cull_mode: CullMode::Off,
+            ..Default::default()
+        }),
+    );
+    let items = scene_render_system(&world);
+    assert_eq!(items[0].cull_mode, prism_render::DrawCullMode::Off);
+
+    assert_eq!(
+        draw_cull_mode(CullMode::Front),
+        prism_render::DrawCullMode::Front
+    );
+    assert_eq!(
+        draw_cull_mode(CullMode::Back),
+        prism_render::DrawCullMode::Back
+    );
 }
 
 #[test]

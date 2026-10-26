@@ -235,3 +235,26 @@ fn light_shadow_caster_requires_enabled_and_shadow_mode() {
     };
     assert!(!disabled.is_shadow_caster());
 }
+
+#[test]
+fn mesh_renderer_cull_mode_defaults_and_round_trips() {
+    // 老文档没有 `cull_mode`：必须回退到 Back（与既有管线一致）。
+    let legacy: MeshRenderer =
+        serde_json::from_str(r#"{"mesh_path":"m.mesh","material_path":"m.mat"}"#)
+            .expect("缺少 cull_mode 的老 JSON 仍然可读");
+    assert_eq!(legacy.cull_mode, CullMode::Back);
+    assert_eq!(legacy.shadow_casting_mode, ShadowCastingMode::On);
+
+    // 作者格式用变体名（与 `CameraClearFlags` / `TextAlign` 一致）。
+    let json = serde_json::to_value(MeshRenderer {
+        mesh_path: "m.mesh".into(),
+        material_path: "m.mat".into(),
+        shadow_casting_mode: ShadowCastingMode::Off,
+        cull_mode: CullMode::Off,
+    })
+    .unwrap();
+    assert_eq!(json["cull_mode"], serde_json::json!("Off"));
+    let back: MeshRenderer = serde_json::from_value(json).unwrap();
+    assert_eq!(back.cull_mode, CullMode::Off);
+    assert_eq!(back.shadow_casting_mode, ShadowCastingMode::Off);
+}
