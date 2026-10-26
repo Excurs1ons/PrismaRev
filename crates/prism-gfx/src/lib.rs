@@ -67,6 +67,15 @@ impl CameraClearFlags {
     pub const fn clears_depth(self) -> bool {
         !matches!(self, Self::Nothing)
     }
+
+    /// 是否绘制天空盒背景。
+    ///
+    /// 只有 [`Skybox`](Self::Skybox) 会在背景填充天空盒材质；其余清屏方式
+    /// （纯色 / 仅清深度 / 不清）即使场景里挂着启用的 `Skybox` 实体也不应绘制。
+    /// 真正的纯色填充与多相机深度叠加属于后续阶段。
+    pub const fn draws_skybox(self) -> bool {
+        matches!(self, Self::Skybox)
+    }
 }
 
 impl ReflectType for CameraClearFlags {
@@ -878,6 +887,12 @@ mod tests {
         assert!(CameraClearFlags::Skybox.clears_depth());
         assert!(CameraClearFlags::Depth.clears_depth());
         assert!(!CameraClearFlags::Nothing.clears_depth());
+
+        // 只有 Skybox 会绘制天空盒背景（Unity `Camera.clearFlags` 语义）。
+        assert!(CameraClearFlags::Skybox.draws_skybox());
+        assert!(!CameraClearFlags::SolidColor.draws_skybox());
+        assert!(!CameraClearFlags::Depth.draws_skybox());
+        assert!(!CameraClearFlags::Nothing.draws_skybox());
     }
 
     #[test]

@@ -17,6 +17,8 @@ use glam::{Mat4, Vec3};
 
 use prism_ecs::World;
 
+use prism_scene::CameraClearFlags;
+
 use crate::input::InputManager;
 use crate::scene::components::{Camera, FlyCameraController, LocalToWorld, LocalTransform};
 
@@ -70,6 +72,17 @@ pub fn clear_color(world: &World, camera: prism_ecs::Entity) -> [f32; 4] {
         .get::<Camera>(camera)
         .map(|cam| cam.background_color)
         .unwrap_or(DEFAULT_CLEAR_COLOR)
+}
+
+/// 指定相机的清屏方式 = Unity `Camera.clearFlags`。
+///
+/// 与 [`clear_color`] 同源：调用方传 [`CameraOutput::entity`]，缺省回退到
+/// [`CameraClearFlags::Skybox`]（Unity 新建相机的默认值，也是引擎既有行为）。
+pub fn clear_flags(world: &World, camera: prism_ecs::Entity) -> CameraClearFlags {
+    world
+        .get::<Camera>(camera)
+        .map(|cam| cam.clear_flags)
+        .unwrap_or_default()
 }
 
 /// 运行时 相机 输出 produced each 帧 by [`compute_camera_output`].
