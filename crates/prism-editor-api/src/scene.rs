@@ -997,6 +997,8 @@ pub fn prefab_instances(doc: &serde_json::Value) -> Vec<PrefabLink> {
 /// 把某个实例根**还原**成预制体的当前内容。
 ///
 /// 删掉该实体的整棵子树，再用 `prefab` 重新实例化到原父级下，并保留原来的名字。
+/// 重建后的子树**插回原来的数组位置**：数组顺序就是层级顺序，追加到末尾会让实例
+/// 在层级树里跳到最后一个兄弟，并让它的下标（以及依赖下标的撤销/选中）失效。
 pub fn revert_prefab_instance(
     scene: &serde_json::Value,
     root: usize,
@@ -1014,31 +1016,38 @@ pub fn revert_prefab_instance(
         .get("name")
         .and_then(|value| value.as_str())
         .map(|name| name.to_string());
-    // `parent` 是 id，删掉子树不会让它失效（这正是 v3 想要的效果）。
-    let parent = parent_of(&entities[root]);
+    // `parent` 是 id，删掉子树不会让它失效（这正是 v3 想要的效果）；
+    // `instantiate_prefab` 的入参是**下标**，所以这里必须做 id → 下标换算。
+    let parent = parent_of(&entities[root])
+        .map(|id| {
+            index_of_id(entities, id)
+                .map(|index| index as u32)
+                .ok_or_else(|| format!("父实体 id {id} 不存在"))
+        })
+        .transpose()?;
     let subtree = subtree_indices(entities, root);
+    // 根在裁剪后数组里的位置：它前面的实体减去同在本子树里的那些。
+    let insert_at = root - subtree.iter().filter(|index| **index < root).count();
 
     let trimmed = delete_entities(scene, &subtree)?;
     let result = instantiate_prefab(&trimmed, prefab, parent, link)?;
-    let new_root = *result
+    let first_new = *result
         .inserted
         .first()
         .ok_or_else(|| "预制体没有实体，无法还原".to_string())?;
 
-    let mut doc = result.doc;
+    let mut out = entities_of(&result.doc)?.clone();
+    let mut rebuilt = out.split_off(first_new);
     if let Some(name) = keep_name {
-        if let Some(entity) = doc
-            .get_mut("entities")
-            .and_then(|value| value.as_array_mut())
-            .and_then(|entities| entities.get_mut(new_root))
-        {
+        if let Some(entity) = rebuilt.first_mut() {
             entity["name"] = serde_json::json!(name);
         }
     }
+    out.splice(insert_at..insert_at, rebuilt);
 
     Ok(MoveResult {
-        doc,
-        index: new_root,
+        doc: doc_with_entities(&result.doc, out),
+        index: insert_at,
     })
 }
 
@@ -1350,6 +1359,129 @@ mod tests {
         );
         // 链接仍在，且只有这一个实例。
         assert_eq!(prefab_instances(&reverted.doc).len(), 1);
+    }
+
+    #[test]
+    fn revert_keeps_the_instance_at_its_original_position() {
+        let path = "assets/prefabs/door.prefab.json";
+        let mut door = serde_json::json!({
+            "name": "Door",
+            "parent": 0,
+            "transform": {},
+            "components": {}
+        });
+        door["components"][PREFAB_LINK_COMPONENT] = serde_json::json!({ "prefab": path });
+        let scene = serde_json::json!({
+            "version": prism_scene::SCENE_DOC_VERSION,
+            "entities": [
+                { "name": "host", "parent": null, "transform": {}, "components": {} },
+                { "name": "filler", "parent": null, "transform": {}, "components": {} },
+                door,
+                { "name": "Handle", "parent": 2, "transform": {}, "components": {} },
+                { "name": "tail", "parent": null, "transform": {}, "components": {} }
+            ]
+        });
+
+        let reverted = revert_prefab_instance(&scene, 2, &demo_prefab(), Some(path)).unwrap();
+        validate_doc(&reverted.doc).unwrap();
+
+        // 重建的子树回到原位（不是追加到末尾），名字沿用实例原来的名字。
+        assert_eq!(reverted.index, 2);
+        let names: Vec<&str> = reverted.doc["entities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entity| entity["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, vec!["host", "filler", "Door", "Handle", "tail"]);
+        assert_eq!(reverted.doc["entities"][2]["parent"], 0);
+        assert_eq!(
+            prefab_instances(&reverted.doc),
+            vec![PrefabLink {
+                index: 2,
+                prefab: path.to_string()
+            }]
+        );
+    }
+
+    #[test]
+    fn revert_maps_the_parent_id_to_its_current_index() {
+        let path = "assets/prefabs/door.prefab.json";
+        let mut door = serde_json::json!({
+            "id": 30,
+            "name": "Door",
+            "parent": 10,
+            "transform": {},
+            "components": {}
+        });
+        door["components"][PREFAB_LINK_COMPONENT] = serde_json::json!({ "prefab": path });
+        // v3 文档里 `parent` 是 id；这里 id 与下标刻意不同（10/30/40）。
+        let scene = serde_json::json!({
+            "version": prism_scene::SCENE_DOC_VERSION,
+            "entities": [
+                { "id": 10, "name": "host", "parent": null, "transform": {}, "components": {} },
+                door,
+                { "id": 40, "name": "Handle", "parent": 30, "transform": {}, "components": {} }
+            ]
+        });
+
+        let reverted = revert_prefab_instance(&scene, 1, &demo_prefab(), Some(path)).unwrap();
+        validate_doc(&reverted.doc).unwrap();
+
+        let entities = reverted.doc["entities"].as_array().unwrap();
+        assert_eq!(reverted.index, 1);
+        assert_eq!(entities.len(), 3);
+        // 父级仍是 id（10），不是同值下标。
+        assert_eq!(entities[1]["parent"], 10);
+        let ids: Vec<u64> = entities
+            .iter()
+            .map(|entity| entity["id"].as_u64().unwrap())
+            .collect();
+        assert_eq!(ids, vec![10, 11, 12]);
+    }
+
+    #[test]
+    fn sync_keeps_every_instance_in_its_own_slot() {
+        let path = "assets/prefabs/door.prefab.json";
+        let prefab = demo_prefab();
+
+        let once = instantiate_prefab(&demo_scene_with_host(), &prefab, None, Some(path)).unwrap();
+        let twice = instantiate_prefab(&once.doc, &prefab, None, Some(path)).unwrap();
+
+        // 在两个实例之间插一个普通实体，检查同步后它和两个实例都留在原位。
+        let mut broken = twice.doc.clone();
+        broken["entities"].as_array_mut().unwrap().insert(
+            3,
+            serde_json::json!({
+                "id": 99, "name": "mid", "parent": null, "transform": {}, "components": {}
+            }),
+        );
+        for entity in broken["entities"].as_array_mut().unwrap().iter_mut() {
+            if let Some(components) = entity["components"].as_object_mut() {
+                components.remove("prism_engine::scene::Active");
+            }
+        }
+
+        let synced = sync_prefab_instances(&broken, path, &prefab).unwrap();
+        validate_doc(&synced).unwrap();
+
+        let names: Vec<&str> = synced["entities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entity| entity["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            names,
+            vec!["host", "Door", "Handle", "mid", "Door_2", "Handle_2"]
+        );
+        assert_eq!(
+            prefab_instances(&synced)
+                .into_iter()
+                .map(|link| link.index)
+                .collect::<Vec<_>>(),
+            vec![1, 4]
+        );
     }
 
     #[test]

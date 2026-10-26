@@ -335,19 +335,19 @@ mod tests {
         let connect =
             save_as_prefab_asset_and_connect(&doc, 0, "assets/prefabs/hero.prefab.json").unwrap();
         scene::write_doc(&dir.join(&connect.path), &connect.asset).unwrap();
-        // `Keep` 留下，实例（Root + Child）追加到末尾。
+        // 实例（Root + Child）就地替换掉原子树，「Keep」留在原位之后。
         assert_eq!(connect.scene["entities"].as_array().unwrap().len(), 3);
-        assert_eq!(connect.scene["entities"][0]["name"], json!("Keep"));
-        assert_eq!(connect.scene["entities"][1]["name"], json!("Root"));
+        assert_eq!(connect.scene["entities"][0]["name"], json!("Root"));
+        assert_eq!(connect.scene["entities"][2]["name"], json!("Keep"));
 
-        let link = get_corresponding_object_from_source(&connect.scene, 2).unwrap();
+        let link = get_corresponding_object_from_source(&connect.scene, 1).unwrap();
         assert_eq!(link.prefab, "assets/prefabs/hero.prefab.json");
-        assert_eq!(link.index, 1);
-        assert!(is_part_of_prefab_instance(&connect.scene, 2));
-        assert!(!is_part_of_prefab_instance(&connect.scene, 0));
-        assert_eq!(get_nearest_prefab_instance_root(&connect.scene, 2), Some(1));
+        assert_eq!(link.index, 0);
+        assert!(is_part_of_prefab_instance(&connect.scene, 1));
+        assert!(!is_part_of_prefab_instance(&connect.scene, 2));
+        assert_eq!(get_nearest_prefab_instance_root(&connect.scene, 1), Some(0));
         assert_eq!(
-            get_prefab_instance_status(&connect.scene, 2),
+            get_prefab_instance_status(&connect.scene, 1),
             PrefabInstanceStatus::Connected
         );
 
@@ -355,8 +355,9 @@ mod tests {
         let result = instantiate_prefab(&dir, &connect.scene, &connect.path, None).unwrap();
         assert_eq!(scene::prefab_instances(&result.doc).len(), 2);
 
-        // 还原：内容回来、名字保留（返回新的实例根下标）。
-        let reverted = revert_prefab_instance(&dir, &result.doc, 1).unwrap();
+        // 还原：内容回来、名字保留、下标不变（返回新的实例根下标）。
+        let reverted = revert_prefab_instance(&dir, &result.doc, 0).unwrap();
+        assert_eq!(reverted.index, 0);
         assert_eq!(
             reverted.doc["entities"][reverted.index]["name"],
             json!("Root")
@@ -364,9 +365,9 @@ mod tests {
 
         // 解包：只解除该实例根的链接。
         let unpacked =
-            unpack_prefab_instance(&result.doc, 1, PrefabUnpackMode::Completely).unwrap();
+            unpack_prefab_instance(&result.doc, 0, PrefabUnpackMode::Completely).unwrap();
         assert_eq!(scene::prefab_instances(&unpacked).len(), 1);
-        assert!(!is_part_of_prefab_instance(&unpacked, 1));
+        assert!(!is_part_of_prefab_instance(&unpacked, 0));
 
         assert_eq!(prefab_instance_infos(&result.doc).len(), 2);
     }
@@ -379,16 +380,16 @@ mod tests {
             save_as_prefab_asset_and_connect(&doc, 0, "assets/prefabs/hero.prefab.json").unwrap();
         scene::write_doc(&dir.join(&connect.path), &connect.asset).unwrap();
 
-        // 改个名字后 Apply，应该写回预制体（实例根在下标 1）。
+        // 改个名字后 Apply，应该写回预制体（实例根就地替换在 0）。
         let mut edited = connect.scene.clone();
-        edited["entities"][1]["name"] = json!("Renamed");
-        let asset = apply_prefab_instance(&dir, &edited, 1).unwrap();
+        edited["entities"][0]["name"] = json!("Renamed");
+        let asset = apply_prefab_instance(&dir, &edited, 0).unwrap();
         assert_eq!(asset["entities"][0]["name"], json!("Renamed"));
 
         let on_disk = read_prefab(&dir, "assets/prefabs/hero.prefab.json").unwrap();
         assert_eq!(on_disk["entities"][0]["name"], json!("Renamed"));
 
-        // 非实例根 Apply 应该报错。
-        assert!(apply_prefab_instance(&dir, &edited, 0).is_err());
+        // 非实例根 Apply 应该报错（下标 2 是「Keep」）。
+        assert!(apply_prefab_instance(&dir, &edited, 2).is_err());
     }
 }
