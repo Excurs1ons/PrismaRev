@@ -140,7 +140,9 @@ pub fn collect_light_samples(world: &World) -> Vec<LightSample> {
         out.push(LightSample {
             kind: LightKind::Directional,
             position: Vec3::ZERO,
-            direction: euler_xyz_deg_to_dir(light.euler_xyz),
+            // `euler_xyz_deg_to_dir` 给的是「指向光源」的方向，而 `LightSample.direction`
+            // 统一存光传播方向（Unity `transform.forward`），这里取反。
+            direction: -euler_xyz_deg_to_dir(light.euler_xyz),
             color: light.color,
             intensity: light.intensity,
             range: 0.0,
