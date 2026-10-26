@@ -140,6 +140,13 @@ pub struct App {
     // ---------- 窗口大小调整 ----------
     needs_resize: bool,
 
+    /// 最近一次 `ModifiersChanged` 记录的修饰键状态。
+    ///
+    /// `WindowEvent::KeyboardInput` 不携带修饰键，PBR 分量调试快捷键
+    /// （Shift+1..5 = 分量 bit 10..14）只能从这里判断 Shift 是否按下，
+    /// 否则那 5 个 bit 永远不可达。
+    modifiers: winit::keyboard::ModifiersState,
+
     // ---------- lifecycle ----------
     fatal_error: Option<String>,
     /// 后台挂起标志：`suspended()` 置位、`resumed()` 复位。置位期间
@@ -208,6 +215,7 @@ impl App {
             audio_decode_tx: None,
             audio_decode_rx: None,
             needs_resize: false,
+            modifiers: winit::keyboard::ModifiersState::empty(),
             fatal_error: None,
             suspended: false,
             last_frame: None,
@@ -750,6 +758,20 @@ impl App {
     }
 }
 
+/// 记录 winit 的修饰键状态，返回该事件是否只是修饰键变化。
+///
+/// `WindowEvent::KeyboardInput` 不含修饰键，PBR 分量调试快捷键（Shift+1..5
+/// 对应 `1 << 10 .. 1 << 14`）必须靠这份状态才能与未按 Shift 的 1..0 区分。
+fn update_modifiers(state: &mut winit::keyboard::ModifiersState, event: &WindowEvent) -> bool {
+    match event {
+        WindowEvent::ModifiersChanged(modifiers) => {
+            *state = modifiers.state();
+            true
+        }
+        _ => false,
+    }
+}
+
 /// `prism-platform` 的触点 phase → 引擎输入模型的 phase。
 ///
 /// 两者当前一一对应，但分层上必须显式转换：`prism-app` 不把平台类型直接
@@ -879,6 +901,11 @@ impl ApplicationHandler for App {
         // 路由窗口事件 → InputManager（始终路由，包括快捷键未处理的重复事件）。
         self.route_window_event_to_input(event_loop, &event);
 
+        // 修饰键状态只随 `ModifiersChanged` 更新，该事件本身无需其他处理。
+        if update_modifiers(&mut self.modifiers, &event) {
+            return;
+        }
+
         // 键盘快捷键（仅按下时触发）。
         if let WindowEvent::KeyboardInput {
             event:
@@ -895,9 +922,8 @@ impl ApplicationHandler for App {
                     winit::keyboard::PhysicalKey::Code(c) => *c,
                     _ => return,
                 };
-                // 键盘状态 — 修饰键暂按未按下处理，保持简单。
-                // 目前假设调试快捷键的 shift=ctrl=false。
-                let (shift, _ctrl) = (false, false);
+                // `KeyboardInput` 不带修饰键，Shift 取自 `ModifiersChanged`。
+                let shift = self.modifiers.shift_key();
 
                 if let Some(bit) = Self::pbr_debug_key_to_bit(code, shift) {
                     self.render_settings.debug_flags =
@@ -1179,5 +1205,81 @@ mod tests {
         assert!(!should_release_pointer_lock(KeyCode::Escape, false, true));
         assert!(!should_release_pointer_lock(KeyCode::KeyW, true, true));
         assert!(!should_release_pointer_lock(KeyCode::Escape, true, false));
+    }
+
+    /// 未按 Shift 的 1..9、0 覆盖分量 0..9。
+    #[test]
+    fn plain_digits_select_the_lower_pbr_components() {
+        use winit::keyboard::KeyCode as K;
+        for (code, bit) in [
+            (K::Digit1, 0),
+            (K::Digit2, 1),
+            (K::Digit3, 2),
+            (K::Digit4, 3),
+            (K::Digit5, 4),
+            (K::Digit6, 5),
+            (K::Digit7, 6),
+            (K::Digit8, 7),
+            (K::Digit9, 8),
+            (K::Digit0, 9),
+        ] {
+            assert_eq!(
+                App::pbr_debug_key_to_bit(code, false),
+                Some(bit),
+                "{code:?} without Shift"
+            );
+        }
+    }
+
+    /// 回归防护：Shift 曾经被硬编码成 `false`，分量 10..14 完全不可达。
+    #[test]
+    fn shift_digits_select_the_upper_pbr_components() {
+        use winit::keyboard::KeyCode as K;
+        for (code, bit) in [
+            (K::Digit1, 10),
+            (K::Digit2, 11),
+            (K::Digit3, 12),
+            (K::Digit4, 13),
+            (K::Digit5, 14),
+        ] {
+            assert_eq!(
+                App::pbr_debug_key_to_bit(code, true),
+                Some(bit),
+                "{code:?} with Shift"
+            );
+        }
+        // 只有 15 个分量；Shift+6..0 与普通字母都不该抢快捷键。
+        for code in [
+            K::Digit6,
+            K::Digit7,
+            K::Digit8,
+            K::Digit9,
+            K::Digit0,
+            K::KeyA,
+        ] {
+            assert_eq!(App::pbr_debug_key_to_bit(code, true), None, "{code:?}");
+        }
+    }
+
+    #[test]
+    fn modifiers_changed_is_tracked_and_consumed() {
+        use winit::event::Modifiers;
+        use winit::keyboard::ModifiersState;
+        let mut state = ModifiersState::empty();
+        assert!(update_modifiers(
+            &mut state,
+            &WindowEvent::ModifiersChanged(Modifiers::from(ModifiersState::SHIFT))
+        ));
+        assert!(state.shift_key());
+
+        assert!(update_modifiers(
+            &mut state,
+            &WindowEvent::ModifiersChanged(Modifiers::from(ModifiersState::empty()))
+        ));
+        assert!(!state.shift_key());
+
+        // 其它事件不改变状态，也不该被当作「已消费」。
+        assert!(!update_modifiers(&mut state, &WindowEvent::CloseRequested));
+        assert!(!state.shift_key());
     }
 }
