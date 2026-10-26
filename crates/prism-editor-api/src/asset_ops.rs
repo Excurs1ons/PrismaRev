@@ -226,23 +226,22 @@ pub fn normalize_asset_path(raw: &str) -> Result<String, String> {
     Ok(parts.join("/"))
 }
 
-/// 场景 / 预制体文档在编辑器里按扁平目录枚举，禁止把它们移到子目录，
+/// 场景文档在编辑器里按扁平目录枚举，禁止把它们移到子目录，
 /// 也禁止移动 `assets/scenes`、`assets/prefabs` 根本身。
+///
+/// 预制体不受目录限制：`list_docs(DocKind::Prefab)` 递归枚举整个 `assets/`，
+/// 层级拖拽（`editor_create_prefab_at`）也允许把预制体存到任意资产目录，
+/// 所以重命名 / 移动必须允许预制体留在子目录里或进出子目录。
 fn ensure_document_placement(from: &str, to: &str) -> Result<(), String> {
     if matches!(from, "assets/scenes" | "assets/prefabs") {
         return Err("不能重命名或移动编辑器文档根目录".into());
     }
-    for (suffix, dir) in [
-        (".scene.json", "assets/scenes"),
-        (".prefab.json", "assets/prefabs"),
-    ] {
-        if !from.ends_with(suffix) {
-            continue;
-        }
+    let scenes_dir = DocKind::Scene.subdir();
+    if from.ends_with(".scene.json") {
         let parent = to.rsplit_once('/').map(|(parent, _)| parent).unwrap_or("");
-        if parent != dir {
+        if parent != scenes_dir {
             return Err(format!(
-                "{suffix} 文档必须保留在 {dir}/ 根目录（编辑器按扁平目录枚举文档）"
+                ".scene.json 文档必须保留在 {scenes_dir}/ 根目录（编辑器按扁平目录枚举场景）"
             ));
         }
     }
@@ -728,6 +727,43 @@ mod tests {
         )
         .is_err());
         assert!(root.join("assets/scenes/demo.scene.json").is_file());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn prefab_documents_move_outside_prefabs_directory() {
+        let root = temp_root("prefab_placement");
+        std::fs::create_dir_all(root.join("assets/props")).unwrap();
+        let doc = scene_with(&["assets/tex.png", "assets/sky.hdr"]);
+        write_doc(&root.join("assets/props/box.prefab.json"), &doc).unwrap();
+
+        // 就地改名：父目录是 assets/props，不是 assets/prefabs。
+        rename_asset(
+            &root,
+            "assets/props/box.prefab.json",
+            "assets/props/crate.prefab.json",
+        )
+        .unwrap();
+        assert!(root.join("assets/props/crate.prefab.json").is_file());
+
+        // 移回默认目录。
+        rename_asset(
+            &root,
+            "assets/props/crate.prefab.json",
+            "assets/prefabs/crate.prefab.json",
+        )
+        .unwrap();
+        assert!(root.join("assets/prefabs/crate.prefab.json").is_file());
+
+        // 再从默认目录移进子目录。
+        rename_asset(
+            &root,
+            "assets/prefabs/crate.prefab.json",
+            "assets/props/crate.prefab.json",
+        )
+        .unwrap();
+        assert!(root.join("assets/props/crate.prefab.json").is_file());
+
         std::fs::remove_dir_all(&root).ok();
     }
 
