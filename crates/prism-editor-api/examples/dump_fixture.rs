@@ -94,6 +94,7 @@ fn main() {
 
     let fixture = json!({
         "schema": schema,
+        "windows": prism_editor_api::build_window_registry().windows(),
         "presets": presets,
         "assetInfos": asset_infos,
         "documents": documents,
