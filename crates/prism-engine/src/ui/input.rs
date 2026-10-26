@@ -7,6 +7,7 @@
 //!
 //! - `Style::visible == false` 的元素不参与命中（与 `ui_render_system` 收集 quad
 //!   时跳过不可见元素保持一致）。
+//! - `Active(false)` 的实体不参与命中，父级关闭时整个子树都不参与（与绘制一致）。
 //! - 重叠时只有**最上层**的元素拿到 `hovered / clicked / pressed`，点击在命中处
 //!   被消费，不会“穿透”到背景面板。
 //! - “最上层”按 UI 层级深度判定：子元素画在父元素之上，所以深度大的优先；同深度
@@ -14,6 +15,7 @@
 //!   （`ui_render_system` 也按查询顺序推入绘制列表，后入的在上）。
 
 use crate::ui::components::*;
+use crate::ui::is_ui_active;
 use prism_ecs::{Entity, World};
 
 /// 鼠标/触摸输入状态 —— 由 Engine 每帧从 `InputManager` 拷贝到 World。
@@ -67,6 +69,10 @@ fn topmost_hit(world: &World, cursor: [f32; 2]) -> Option<Entity> {
     let mut best: Option<(Entity, u32, f32)> = None;
 
     for (entity, _node, _interaction) in world.query2::<Node, Interaction>() {
+        // 被 `Active(false)` 关闭的元素（含父级关闭）不参与命中。
+        if !is_ui_active(world, entity) {
+            continue;
+        }
         // 不可见元素既画不出来也不该可点。
         if !world
             .get::<Style>(entity)
