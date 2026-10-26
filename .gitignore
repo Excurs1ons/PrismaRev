@@ -95,3 +95,6 @@ assets/heightmaps/
 .secrets/
 .env
 .env.local
+
+# Local reference material (extracted game assets, never committed)
+.local/

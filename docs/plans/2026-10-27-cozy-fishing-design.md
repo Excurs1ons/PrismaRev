@@ -250,7 +250,25 @@ Idle ──按下抛竿──> Casting ──落水──> Waiting ──咬钩�
 
 ---
 
-## 7. 风险与取舍
+## 7. 参考实现观察（Cast n Chill 解包）
+
+从参考构建（Unity 6000.3.26f1 / IL2CPP / Addressables）解出的资源结构，只用于**测量规格**，
+素材本身在 `.local/reference/castnchill/`（gitignored，禁止提交或随包分发）：
+
+| 观察 | 数值 | 对我们的含义 |
+|---|---|---|
+| 背景层尺寸 | 宽 500–4000 px，高 300–430 px | 视口高度 ≈ **360 px** → 虚拟分辨率 **640×360** |
+| 鱼的在水尺寸 | S≈14 / M≈16 / L≈20 / XL≈30 / XXL≈42 px | 占视口高度 4–12%，必须低分辨率渲染再放大 |
+| 分层命名 | `+<parallaxX>_<parallaxY>_layer-<sortOrder>@<time>` | 多层视差，X/Y 各自独立系数 |
+| 昼夜 | 每层 4 份 `@dawn/@day/@dusk/@night` | 不是全局调色，而是**整层换图** |
+| 鱼种 | `<Species>_<Tier>` + `<Species>_UI`；`<Species>0/1` 两帧游动 | 104 个条目（含拟饵/鱼竿） |
+| 音频 | FMOD 四条总线 Master/Music/UI/WorldSFX | 印证命名通道设计 |
+| 字体 | LanaPixel（CC-BY 4.0）、Silkscreen（免费） | 可直接使用，需在致谢中署名 |
+
+结论：M0 的正确形态是「**640×360 虚拟分辨率 + 分层视差 + 每层 4 个时段变体**」，
+而不是「一张大背景图 + 全局色调」。内部渲染分辨率因此从 M1 提到 M0 必做项。
+
+## 8. 风险与取舍
 
 1. **前向 pass 空跑成本**：M0 接受，M1 加 `RenderMode::Sprites2D`。
 2. **线性空间混合**：精灵在 HDR 线性空间混合与经典 2D 引擎（sRGB 混合）观感不同；
