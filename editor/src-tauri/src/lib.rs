@@ -1154,7 +1154,7 @@ fn editor_reveal_path(path: String) -> Result<(), String> {
         use std::os::windows::process::CommandExt;
         let mut command = Command::new("explorer");
         if path.is_file() {
-            command.arg(format!("/select,{}", path.display()));
+            command.raw_arg(explorer_select_arg(&path));
         } else {
             command.arg(&path);
         }
@@ -1178,6 +1178,17 @@ fn editor_reveal_path(path: String) -> Result<(), String> {
             .map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+/// explorer `/select,` 单文件选中参数。
+///
+/// 路径必须自己带引号：`Command::arg` 会把 `/select,C:\a b\x.txt` 当成一个整体
+/// 加引号（`"/select,C:\a b\x.txt"`），explorer 解析不了这种形式，含空格的路径
+/// 会退化成打开「文档」而不是选中文件。所以这里用 `raw_arg` 原样传
+/// `/select,"<path>"`。
+#[cfg(windows)]
+fn explorer_select_arg(path: &Path) -> String {
+    format!("/select,\"{}\"", path.display())
 }
 
 /// 解析游戏二进制：`PRISMREV_GAME_BIN` > 各 workspace 的 target 目录 > PATH。
@@ -1445,4 +1456,21 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running the PrismaRev editor");
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn explorer_select_arg_keeps_paths_with_spaces_quoted() {
+        let arg = explorer_select_arg(Path::new(r"C:\Users\me\Prisma Rev\logo.png"));
+        assert_eq!(arg, "/select,\"C:\\Users\\me\\Prisma Rev\\logo.png\"");
+    }
+
+    #[test]
+    fn explorer_select_arg_wraps_plain_paths_too() {
+        let arg = explorer_select_arg(Path::new(r"C:\tmp\a.png"));
+        assert_eq!(arg, "/select,\"C:\\tmp\\a.png\"");
+    }
 }
