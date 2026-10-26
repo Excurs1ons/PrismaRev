@@ -16,12 +16,29 @@ impl HierarchyHelper {
     /// - `Some(parent)` attaches the 实体 under `parent`.
     /// - `None` detaches the 实体 (it becomes a root node).
     /// - Updates both old and new parent's [`Child`] 列表
-    /// - Self-parent is rejected (logged and ignored).
+    /// - Self-parent and cycles (reparenting under a descendant) are rejected.
     /// - Dead entities are rejected (logged and ignored).
+    ///
+    /// All validation happens **before** any mutation, so a rejected call leaves
+    /// the existing hierarchy untouched.
     pub fn reparent(world: &mut World, entity: Entity, new_parent: Option<Entity>) {
+        if !world.is_alive(entity) {
+            log::warn!("HierarchyHelper::reparent: entity not alive");
+            return;
+        }
         if new_parent == Some(entity) {
             log::warn!("HierarchyHelper::reparent: self-parent not allowed");
             return;
+        }
+        if let Some(parent) = new_parent {
+            if !world.is_alive(parent) {
+                log::warn!("HierarchyHelper::reparent: parent not alive");
+                return;
+            }
+            if is_descendant(world, parent, entity) {
+                log::warn!("HierarchyHelper::reparent: cycle not allowed");
+                return;
+            }
         }
 
         // 1. 移除 from old parent's Child 列表
@@ -33,10 +50,6 @@ impl HierarchyHelper {
 
         match new_parent {
             Some(parent) => {
-                if !world.is_alive(entity) || !world.is_alive(parent) {
-                    log::warn!("HierarchyHelper::reparent: entity or parent not alive");
-                    return;
-                }
                 world.insert(entity, Parent(parent));
                 if let Some(children) = world.get_mut::<Child>(parent) {
                     if !children.0.contains(&entity) {
@@ -59,6 +72,25 @@ impl HierarchyHelper {
             .map(|c| !c.0.is_empty())
             .unwrap_or(false)
     }
+}
+
+/// Return `true` if `candidate` is `ancestor` or one of its descendants.
+///
+/// A visited set guards against pre-existing malformed cycles so the walk can
+/// never loop forever.
+fn is_descendant(world: &World, candidate: Entity, ancestor: Entity) -> bool {
+    let mut cursor = Some(candidate);
+    let mut seen = std::collections::HashSet::new();
+    while let Some(current) = cursor {
+        if current == ancestor {
+            return true;
+        }
+        if !seen.insert(current) {
+            return false;
+        }
+        cursor = world.get::<Parent>(current).map(|parent| parent.0);
+    }
+    false
 }
 
 #[cfg(test)]
