@@ -95,6 +95,7 @@ pub struct InputManager {
     keys_just_pressed: Vec<KeyCode>,
     keys_just_released: Vec<KeyCode>,
     mouse_just_pressed: Vec<MouseButton>,
+    mouse_just_released: Vec<MouseButton>,
     mouse_delta: [f64; 2],
     scroll_delta: f64,
     touches: Vec<TouchEvent>,
@@ -122,6 +123,7 @@ impl InputManager {
         self.keys_just_pressed.clear();
         self.keys_just_released.clear();
         self.mouse_just_pressed.clear();
+        self.mouse_just_released.clear();
         self.mouse_delta = [0.0; 2];
         self.scroll_delta = 0.0;
         self.touches.clear();
@@ -148,6 +150,26 @@ impl InputManager {
     }
     pub fn mouse_just_pressed(&self, button: MouseButton) -> bool {
         self.mouse_just_pressed.contains(&button)
+    }
+
+    /// 本帧刚按下的所有鼠标键（Unity `Input.anyKeyDown` 的鼠标部分）。
+    pub fn buttons_just_pressed(&self) -> &[MouseButton] {
+        &self.mouse_just_pressed
+    }
+
+    /// 鼠标键本帧刚释放（Unity `Input.GetMouseButtonUp`）。
+    pub fn mouse_just_released(&self, button: MouseButton) -> bool {
+        self.mouse_just_released.contains(&button)
+    }
+
+    /// 当前是否有任意键按住（Unity `Input.anyKey` 的键盘部分）。
+    pub fn any_key_held(&self) -> bool {
+        !self.keys_held.is_empty()
+    }
+
+    /// 当前是否有任意鼠标键按住。
+    pub fn any_mouse_button_held(&self) -> bool {
+        !self.mouse_buttons_held.is_empty()
     }
     pub fn mouse_delta(&self) -> [f64; 2] {
         self.mouse_delta
@@ -198,7 +220,9 @@ impl InputManager {
                 }
             }
             ElementState::Released => {
-                self.mouse_buttons_held.remove(&button);
+                if self.mouse_buttons_held.remove(&button) {
+                    self.mouse_just_released.push(button);
+                }
             }
         }
     }
