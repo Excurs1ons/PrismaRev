@@ -108,14 +108,20 @@ impl GpuAssetResolver {
         let pending: Vec<(Entity, String, String)> = {
             let mut out = Vec::new();
             for (entity, mr) in world.query::<MeshRenderer>() {
-                let mesh_unresolved = world
-                    .get::<MeshRef>(entity)
-                    .map(|r| r.generation == 0)
-                    .unwrap_or(true);
-                let mat_unresolved = world
-                    .get::<MaterialRef>(entity)
-                    .map(|r| r.generation == 0)
-                    .unwrap_or(true);
+                // 只有「有路径」且「句柄还没解析」才算待处理：
+                // - 路径为空 = 作者没给资源，没有东西可加载（例如无材质的网格，
+                //   由渲染器回落到默认材质槽）；
+                // - 运行时组件缺失 = 结果无处写回，投递出去只会每帧重复 enqueue。
+                let mesh_unresolved = !mr.mesh_path.is_empty()
+                    && world
+                        .get::<MeshRef>(entity)
+                        .map(|r| r.generation == 0)
+                        .unwrap_or(false);
+                let mat_unresolved = !mr.material_path.is_empty()
+                    && world
+                        .get::<MaterialRef>(entity)
+                        .map(|r| r.generation == 0)
+                        .unwrap_or(false);
                 if (mesh_unresolved || mat_unresolved) && !self.enqueued.contains(&entity) {
                     out.push((entity, mr.mesh_path.clone(), mr.material_path.clone()));
                     self.enqueued.insert(entity);
@@ -377,5 +383,88 @@ impl GpuAssetResolver {
 impl Default for GpuAssetResolver {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scene::components::{LocalToWorld, SceneAssetId};
+    use prism_render::asset_bridge::AssetResolveResult;
+    use prism_render::managers::MeshHandle;
+
+    fn spawn_renderer(world: &mut World, mesh_path: &str, material_path: &str) -> Entity {
+        let entity = world.spawn();
+        world.insert(
+            entity,
+            MeshRenderer {
+                mesh_path: mesh_path.to_string(),
+                material_path: material_path.to_string(),
+                ..Default::default()
+            },
+        );
+        world.insert(
+            entity,
+            MeshRef {
+                asset_id: SceneAssetId::generate(),
+                render_handle: MeshHandle::default(),
+                generation: 0,
+            },
+        );
+        world.insert(entity, LocalToWorld(glam::Mat4::IDENTITY));
+        entity
+    }
+
+    /// 无材质网格：材质路径为空时没有东西可解析，不能每帧重复投递
+    /// （否则每次都会重新上传网格）。
+    #[test]
+    fn mesh_only_renderer_is_enqueued_once() {
+        let mut world = World::new();
+        let entity = spawn_renderer(&mut world, "models/box.gltf", "");
+        let mut resolver = GpuAssetResolver::new();
+
+        let first = resolver.prepare_requests(&world);
+        assert_eq!(first.len(), 1, "网格路径仍需解析一次");
+        assert!(
+            first[0].1.material.is_none(),
+            "空材质路径不应产生材质解析请求"
+        );
+
+        // 模拟渲染线程回传：网格句柄已解析，材质结果为空。
+        world.get_mut::<MeshRef>(entity).unwrap().generation = 1;
+        resolver.apply_results(
+            &mut world,
+            &[(
+                entity,
+                AssetResolveResult {
+                    mesh_handle: None,
+                    material_slot: None,
+                },
+            )],
+        );
+
+        assert!(
+            resolver.prepare_requests(&world).is_empty(),
+            "解析完成后不应再投递"
+        );
+    }
+
+    /// 运行时组件缺失时结果无处写回，投递出去只会每帧重复 enqueue。
+    #[test]
+    fn renderer_without_runtime_refs_is_not_enqueued() {
+        let mut world = World::new();
+        let entity = world.spawn();
+        world.insert(
+            entity,
+            MeshRenderer {
+                mesh_path: "models/box.gltf".to_string(),
+                material_path: "materials/box.mat".to_string(),
+                ..Default::default()
+            },
+        );
+        let mut resolver = GpuAssetResolver::new();
+
+        assert!(resolver.prepare_requests(&world).is_empty());
+        assert!(resolver.prepare_requests(&world).is_empty());
     }
 }

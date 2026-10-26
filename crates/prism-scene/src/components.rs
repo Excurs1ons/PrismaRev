@@ -172,7 +172,8 @@ impl Default for Active {
 /// Authoring-time bundle marker for a renderable 实体
 ///
 /// Inserted by [`SceneLoader`](crate::scene::loader::SceneLoader) during
-/// scene 生成 when an 实体 carries both a 网格 path and a 材质 path.
+/// scene 生成 when an 实体 carries a 网格 path; the 材质 path is optional
+/// (a mesh-only renderer still draws, using the 渲染器 default 材质).
 /// This 分量 does **not** participate in 渲染 queries — the actual
 /// 渲染 data lives on [`MeshRef`] and [`MaterialRef`] — but provides a
 /// convenient handle for 检查器 editing and future hot-reload.

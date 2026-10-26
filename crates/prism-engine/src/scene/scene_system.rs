@@ -105,35 +105,11 @@ impl<'a> SceneReadView<'a> {
     }
 
     /// 提取渲染所需的扁平绘制列表，不暴露可变 ECS 访问。
+    ///
+    /// 委托给 [`crate::scene::systems::render::scene_render_system`]：这里曾经是
+    /// 一份复制粘贴的实现，两处查询条件（尤其 `MaterialRef` 是否必需）会各自漂移。
     pub fn draw_items(&self) -> Vec<prism_render::DrawItem> {
-        self.world
-            .query3::<
-                super::components::LocalToWorld,
-                super::components::MeshRef,
-                super::components::MaterialRef,
-            >()
-            .filter(|(e, _, _, _)| {
-                self.world
-                    .get::<super::components::Active>(*e)
-                    .map(|a| a.0)
-                    .unwrap_or(true)
-            })
-            .map(|(entity, wt, mr, mat)| {
-                let mode = self
-                    .world
-                    .get::<super::components::MeshRenderer>(entity)
-                    .map(|renderer| renderer.shadow_casting_mode)
-                    .unwrap_or_default();
-                prism_render::DrawItem {
-                    mesh: mr.render_handle,
-                    model: wt.0.to_cols_array_2d(),
-                    material: Some(mat.material_slot),
-                    cast_shadow: mode.casts_shadows(),
-                    visible_in_main_pass: mode.visible_in_main_pass(),
-                    cast_shadow_two_sided: mode.casts_two_sided_shadows(),
-                }
-            })
-            .collect()
+        crate::scene::systems::render::scene_render_system(self.world)
     }
 }
 
