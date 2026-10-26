@@ -715,6 +715,52 @@ fn load_rscn_v4_applies_components_and_hierarchy() {
     );
 }
 
+/// 有网格、无材质的 `MeshRenderer`（编辑器 fixture 的常见形状）必须仍然
+/// 进入绘制列表：缺 `MaterialRef` 时由渲染器回落默认材质槽。
+#[test]
+fn load_rscn_v4_mesh_without_material_still_draws() {
+    let json = br#"{
+            "version": 1,
+            "entities": [
+                {
+                    "name": "MeshOnly",
+                    "parent": null,
+                    "transform": {},
+                    "components": {
+                        "prism_engine::scene::MeshRenderer": {
+                            "mesh_path": "models/box.gltf",
+                            "material_path": ""
+                        }
+                    }
+                }
+            ]
+        }"#;
+    let scene = prism_scene::SceneJson::parse(std::str::from_utf8(json).unwrap()).unwrap();
+    let mut registry = crate::scene::ComponentRegistry::new();
+    crate::scene::register_builtin_components(&mut registry);
+    let bytes = prism_scene::rscn::encode_scene(&scene, &registry).unwrap();
+
+    let mut world = World::new();
+    let mut loader = SceneLoader::new();
+    loader
+        .load_and_spawn(&mut world, SceneSource::RawCooked(bytes), &registry)
+        .unwrap();
+
+    let entity = world
+        .query::<MeshRef>()
+        .next()
+        .map(|(entity, _)| entity)
+        .expect("mesh-only entity should get a MeshRef");
+    assert!(
+        world.get::<MaterialRef>(entity).is_none(),
+        "空材质路径不应插入 MaterialRef"
+    );
+
+    let items = crate::scene::SceneReadView::new(&world).draw_items();
+    assert_eq!(items.len(), 1, "网格-only 实体应进入绘制列表");
+    assert_eq!(items[0].material, None, "缺失材质应回落到默认材质槽");
+}
+
 // ── integration via load_and_spawn ──────────────────────────────
 
 #[test]

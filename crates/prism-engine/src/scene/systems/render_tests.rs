@@ -83,6 +83,30 @@ fn entity_without_mesh_is_skipped() {
 }
 
 #[test]
+fn mesh_without_material_still_draws_with_default_material() {
+    let mut world = World::new();
+    let e = world.spawn();
+    world.insert(
+        e,
+        LocalToWorld(glam::Mat4::from_cols_array_2d(&[[1.0; 4]; 4])),
+    );
+    world.insert(
+        e,
+        MeshRef {
+            asset_id: SceneAssetId::generate(),
+            render_handle: MeshHandle::default(),
+            generation: 1,
+        },
+    );
+    // 没有 `MaterialRef`：`MeshRenderer { material_path: "" }` 的
+    // 网格-only 实体（编辑器 fixture 就是这种形状）。
+
+    let items = scene_render_system(&world);
+    assert_eq!(items.len(), 1, "有网格、无材质的实体也应该绘制");
+    assert_eq!(items[0].material, None, "缺失材质应回落到默认材质槽");
+}
+
+#[test]
 fn multiple_entities() {
     let mut world = World::new();
     for _ in 0..3 {
