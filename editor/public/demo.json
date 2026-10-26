@@ -3261,5 +3261,98 @@
         "label": "空实体"
       }
     ]
-  }
+  },
+  "windows": [
+    {
+      "command": "window/toggle/docs",
+      "id": "docs",
+      "menuPath": "窗口/文档",
+      "shortcut": "Ctrl+O",
+      "title": "文档"
+    },
+    {
+      "command": "window/toggle/hierarchy",
+      "id": "hierarchy",
+      "menuPath": "窗口/层级",
+      "shortcut": null,
+      "title": "层级"
+    },
+    {
+      "command": "window/toggle/assets",
+      "id": "assets",
+      "menuPath": "窗口/资产",
+      "shortcut": null,
+      "title": "资产"
+    },
+    {
+      "command": "window/toggle/inspector",
+      "id": "inspector",
+      "menuPath": "窗口/检查器",
+      "shortcut": null,
+      "title": "检查器"
+    },
+    {
+      "command": "window/toggle/log",
+      "id": "log",
+      "menuPath": "窗口/日志",
+      "shortcut": null,
+      "title": "日志"
+    },
+    {
+      "command": "window/toggle/renderGraph",
+      "id": "renderGraph",
+      "menuPath": "窗口/分析/实时渲染图",
+      "shortcut": null,
+      "title": "渲染图"
+    },
+    {
+      "command": "window/toggle/projectSettings",
+      "id": "projectSettings",
+      "menuPath": "窗口/项目设置",
+      "shortcut": null,
+      "title": "项目设置"
+    },
+    {
+      "command": "window/toggle/preferences",
+      "id": "preferences",
+      "menuPath": "窗口/首选项",
+      "shortcut": null,
+      "title": "首选项"
+    },
+    {
+      "command": "window/toggle/theme",
+      "id": "theme",
+      "menuPath": "窗口/主题",
+      "shortcut": null,
+      "title": "主题"
+    },
+    {
+      "command": "window/toggle/build",
+      "id": "build",
+      "menuPath": "窗口/构建项目",
+      "shortcut": null,
+      "title": "构建项目"
+    },
+    {
+      "command": "window/toggle/tools",
+      "id": "tools",
+      "menuPath": "窗口/离线工具",
+      "shortcut": null,
+      "title": "离线工具"
+    },
+    {
+      "command": "window/toggle/shortcuts",
+      "id": "shortcuts",
+      "menuPath": "帮助/键盘快捷键",
+      "shortcut": null,
+      "title": "快捷键"
+    },
+    {
+      "command": "window/toggle/about",
+      "id": "about",
+      "menuPath": "帮助/关于 PrismaRev Editor",
+      "shortcut": null,
+      "title": "关于"
+    }
+  ]
 }

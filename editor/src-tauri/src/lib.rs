@@ -12,10 +12,10 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 
 use prism_editor_api::{
-    AssetInfo, AssetMutation, AssetRef, DocKind, EntityPreset, InstantiateResult, MoveResult,
-    PlayableScene, PrefabInstanceInfo, ProjectSettingsData, RenderSettingsData, Scene, SceneEntry,
-    SceneListEntry, ScenePackageStatus, SceneTemplate, Schema, SelectionFilter, SelectionMode,
-    SelectionState,
+    AssetInfo, AssetMutation, AssetRef, DocKind, EditorWindowDescriptor, EntityPreset,
+    InstantiateResult, MoveResult, PlayableScene, PrefabInstanceInfo, ProjectSettingsData,
+    RenderSettingsData, Scene, SceneEntry, SceneListEntry, ScenePackageStatus, SceneTemplate,
+    Schema, SelectionFilter, SelectionMode, SelectionState,
 };
 use tauri::{Emitter, Manager, State};
 
@@ -31,6 +31,12 @@ fn kind_of(kind: &str) -> Result<DocKind, String> {
 #[tauri::command]
 fn editor_schema() -> Schema {
     prism_editor_api::build_schema()
+}
+
+/// 编辑器面板注册表 = Unity `EditorWindow` / `[MenuItem]` 的声明式 DTO。
+#[tauri::command]
+fn editor_windows() -> Vec<EditorWindowDescriptor> {
+    prism_editor_api::build_window_registry().windows().to_vec()
 }
 
 /// 解析项目根（含 `assets/scenes` 的目录）。
@@ -1345,6 +1351,7 @@ pub fn run() {
         .manage(PreviewState::default())
         .invoke_handler(tauri::generate_handler![
             editor_schema,
+            editor_windows,
             editor_project_root,
             editor_list_documents,
             editor_document_templates,

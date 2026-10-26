@@ -9,6 +9,7 @@ import type {
   BuildProjectResult,
   DocKind,
   EditorPaths,
+  EditorWindowDescriptor,
   EntityPreset,
   HeightmapOptions,
   InstantiateResult,
@@ -68,6 +69,11 @@ async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> 
 /** 组件属性面板 schema。 */
 export function fetchSchema(): Promise<Schema> {
   return call<Schema>("editor_schema");
+}
+
+/** 编辑器面板注册表 = Unity `EditorWindow` / `[MenuItem]` 的声明式 DTO。 */
+export function fetchEditorWindows(): Promise<EditorWindowDescriptor[]> {
+  return call<EditorWindowDescriptor[]>("editor_windows");
 }
 
 /** 项目根（含 assets/scenes）。 */

@@ -4,6 +4,7 @@ import type {
   AssetMutation,
   AssetRef,
   DocKind,
+  EditorWindowDescriptor,
   EntityJson,
   EntityPreset,
   InstantiateResult,
@@ -32,6 +33,7 @@ import type {
 
 interface Fixture {
   schema: Schema;
+  windows: EditorWindowDescriptor[];
   presets: EntityPreset[];
   assetInfos: AssetInfo[];
   documents: Record<DocKind, SceneEntry[]>;
@@ -422,6 +424,8 @@ async function handle(cmd: string, args: Record<string, unknown>): Promise<unkno
   switch (cmd) {
     case "editor_schema":
       return data.schema;
+    case "editor_windows":
+      return data.windows ?? [];
     case "editor_project_root":
       return "/preview（浏览器预览）";
     case "editor_entity_presets":

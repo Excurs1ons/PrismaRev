@@ -21,6 +21,8 @@
 //! - [`undo`]：`Undo`（快照式撤销栈 + 标签 / 合并 / 上限）。
 //! - [`editor_application`]：`EditorApplication`（播放模式 / 路径 / `delayCall`）。
 //! - [`scene_management`]：`SceneManager` + `EditorSceneManager`（打开 / 保存 / 加载状态）。
+//! - [`editor_window`]：Unity `EditorWindow` / `[MenuItem]` 的面板注册表
+//!   （id / 标题 / 菜单路径 / 命令 id），驱动前端 `PANELS` 与「窗口 / 帮助」菜单。
 //!
 //! 真正的编辑发生在 web UI 里：前端直接编辑 `.scene.json` 的 JSON 文档，
 //! schema 只作为控件类型与只读判断的提示。
@@ -29,6 +31,7 @@ pub mod asset_database;
 pub mod asset_ops;
 pub mod assets;
 pub mod editor_application;
+pub mod editor_window;
 pub mod play;
 pub mod prefab_utility;
 pub mod presets;
@@ -62,6 +65,7 @@ pub use editor_application::{
     application_path, data_path, engine_version, project_path, streaming_assets_path,
     EditorApplicationState, PlayModeState,
 };
+pub use editor_window::{build_window_registry, EditorWindowDescriptor, EditorWindowRegistry};
 pub use play::{
     list_playable_scenes, manifest_path, read_scene_manifest, scene_package_status,
     write_scene_manifest, PlayableScene, SceneListEntry, ScenePackageStatus,

@@ -25,6 +25,22 @@ export interface Schema {
   types: TypeSchema[];
 }
 
+/**
+ * 一个 dock 面板 = Unity `EditorWindow`（`prism_editor_api::editor_window`）。
+ *
+ * 后端只声明 id / 标题 / 菜单路径 / 命令 id；动作由前端命令表分发。
+ */
+export interface EditorWindowDescriptor {
+  id: string;
+  title: string;
+  /** Unity `[MenuItem("窗口/分析/实时渲染图")]` 的路径；最后一段是菜单文字。 */
+  menuPath: string;
+  /** 快捷键提示（只用于显示）。 */
+  shortcut: string | null;
+  /** 面板命令 id（`window/toggle/<id>`）。 */
+  command: string;
+}
+
 /** 可打开的场景文件。 */
 export interface SceneEntry {
   name: string;
