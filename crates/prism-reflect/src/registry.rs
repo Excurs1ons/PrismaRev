@@ -8,6 +8,10 @@ use crate::{Object, Reflect, ReflectError, TypeDesc, TypeId};
 /// 注册表条目：描述 + 两个方向类型擦除的函数指针。
 pub struct TypeEntry {
     desc: &'static TypeDesc,
+    /// 注册它的具体 Rust 类型，用来识别「同名但不同类型」的冲突（#166）。
+    rust_type: std::any::TypeId,
+    /// 同上，仅用于拼错误信息。
+    rust_type_name: &'static str,
     from_object: fn(&Object) -> Result<Box<dyn Any>, ReflectError>,
     to_object: fn(&dyn Any) -> Option<Object>,
 }
@@ -47,15 +51,35 @@ impl TypeRegistry {
     }
 
     /// 注册一个可反射类型。返回之前占用同一 id 的条目（若有）。
+    ///
+    /// 稳定 `TypeId` 只由 reflect name 派生，所以同一个名字只能对应一个 Rust
+    /// 类型。重复注册**同一类型**是幂等的（返回 `Some(id)`）；用另一个 Rust
+    /// 类型抢占同名会立即 panic —— 否则先用前者写出的数据会被后者解码成
+    /// 字段全默认的实例，且没有任何报错（见 #166）。
     pub fn register<T: Reflect>(&mut self) -> Option<TypeId> {
         let desc = T::type_desc();
         let id = desc.id;
+        let rust_type = std::any::TypeId::of::<T>();
+        if let Some(existing) = self.by_id.get(&id) {
+            assert_eq!(
+                existing.rust_type,
+                rust_type,
+                "reflect name `{}` (TypeId {}) is already registered by `{}`, \
+                 so `{}` cannot reuse it",
+                desc.name,
+                id,
+                existing.rust_type_name,
+                std::any::type_name::<T>(),
+            );
+        }
         self.by_name.insert(desc.name, id);
-        self.by_any.insert(std::any::TypeId::of::<T>(), id);
+        self.by_any.insert(rust_type, id);
         let replaced = self.by_id.insert(
             id,
             TypeEntry {
                 desc,
+                rust_type,
+                rust_type_name: std::any::type_name::<T>(),
                 from_object: |object| {
                     let value = <T as Reflect>::from_object(object)?;
                     Ok(Box::new(value) as Box<dyn Any>)

@@ -169,6 +169,40 @@ fn registry_restores_without_static_type() {
     assert_eq!(registry.len(), 4);
 }
 
+/// 两个不同的 Rust 类型不能共用同一个 reflect name（#166）：
+/// 稳定 `TypeId` 只由名字派生，静默覆盖会让先写出的数据被错误类型解码。
+#[derive(Debug, Default, Clone, PartialEq, Reflect)]
+#[reflect(name = "test::Clash")]
+struct ClashA {
+    a: f32,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Reflect)]
+#[reflect(name = "test::Clash")]
+struct ClashB {
+    b: u32,
+}
+
+#[test]
+#[should_panic(expected = "is already registered by")]
+fn registry_rejects_a_second_rust_type_with_the_same_reflect_name() {
+    let mut registry = TypeRegistry::new();
+    registry.register::<ClashA>();
+    registry.register::<ClashB>();
+}
+
+#[test]
+fn registry_accepts_the_same_type_twice() {
+    let mut registry = TypeRegistry::new();
+    assert_eq!(registry.register::<Outer>(), None);
+    assert_eq!(registry.register::<Outer>(), Some(Outer::type_desc().id));
+    assert_eq!(registry.len(), 1);
+
+    // 重复注册不能破坏还原路径。
+    let any = registry.from_object(&sample().to_object()).unwrap();
+    assert_eq!(any.downcast_ref::<Outer>().unwrap(), &sample());
+}
+
 #[test]
 fn rtti_bin_round_trip_and_determinism() {
     let registry = registry();
