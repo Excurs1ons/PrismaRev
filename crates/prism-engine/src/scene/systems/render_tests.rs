@@ -299,3 +299,190 @@ fn two_sided_requests_two_sided_shadow_casting() {
     assert!(items[0].visible_in_main_pass);
     assert!(items[0].cast_shadow_two_sided);
 }
+
+// ---------------------------------------------------------------------------
+// 2D 精灵
+// ---------------------------------------------------------------------------
+
+fn spawn_sprite(
+    world: &mut World,
+    translation: glam::Vec3,
+    sprite: SpriteRenderer,
+    texture_size: [u32; 2],
+    texture_slot: u32,
+) -> prism_ecs::Entity {
+    let e = world.spawn();
+    let local = LocalTransform {
+        position: translation,
+        ..LocalTransform::default()
+    };
+    world.insert(e, LocalToWorld(local.to_model_matrix()));
+    world.insert(e, sprite);
+    world.insert(
+        e,
+        SpriteRef {
+            asset_id: SceneAssetId::generate(),
+            texture_slot,
+            size: texture_size,
+            generation: 1,
+        },
+    );
+    e
+}
+
+#[test]
+fn sprite_entity_yields_draw_item_with_world_size() {
+    let mut world = World::new();
+    spawn_sprite(
+        &mut world,
+        glam::Vec3::ZERO,
+        SpriteRenderer {
+            sprite_path: "sprites/boat.png".into(),
+            pixels_per_unit: 100.0,
+            ..SpriteRenderer::default()
+        },
+        [32, 32],
+        7,
+    );
+
+    let items = scene_sprite_system(&world);
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].texture, 7);
+    assert_eq!(items[0].uv_rect, [0.0, 0.0, 1.0, 1.0]);
+    // 32 px / 100 ppu = 0.32 world units, centred pivot → no offset.
+    assert!((items[0].model[0][0] - 0.32).abs() < 1e-6);
+    assert!((items[0].model[1][1] - 0.32).abs() < 1e-6);
+    assert!((items[0].model[3][0]).abs() < 1e-6);
+}
+
+#[test]
+fn sprite_pivot_offsets_the_quad() {
+    let mut world = World::new();
+    spawn_sprite(
+        &mut world,
+        glam::Vec3::ZERO,
+        SpriteRenderer {
+            sprite_path: "a.png".into(),
+            pixels_per_unit: 100.0,
+            pivot: [0.0, 0.0], // bottom-left
+            ..SpriteRenderer::default()
+        },
+        [100, 100],
+        0,
+    );
+
+    let items = scene_sprite_system(&world);
+    // Pivot at bottom-left: the quad shifts +X and +Y by half a unit so the
+    // entity origin lands on the sprite's bottom-left corner.
+    assert!((items[0].model[3][0] - 0.5).abs() < 1e-6);
+    assert!((items[0].model[3][1] - 0.5).abs() < 1e-6);
+}
+
+#[test]
+fn sprite_sheet_frame_selects_horizontal_uv_slice() {
+    let mut world = World::new();
+    spawn_sprite(
+        &mut world,
+        glam::Vec3::ZERO,
+        SpriteRenderer {
+            sprite_path: "sheet.png".into(),
+            frame_size: [32, 32],
+            frame_index: 2,
+            ..SpriteRenderer::default()
+        },
+        [128, 32],
+        0,
+    );
+
+    let items = scene_sprite_system(&world);
+    assert_eq!(items[0].uv_rect, [0.5, 0.0, 0.75, 1.0]);
+}
+
+#[test]
+fn sprite_flip_swaps_uv_edges() {
+    let mut world = World::new();
+    spawn_sprite(
+        &mut world,
+        glam::Vec3::ZERO,
+        SpriteRenderer {
+            sprite_path: "sheet.png".into(),
+            frame_size: [32, 32],
+            frame_index: 0,
+            flip_x: true,
+            flip_y: true,
+            ..SpriteRenderer::default()
+        },
+        [64, 32],
+        0,
+    );
+
+    let items = scene_sprite_system(&world);
+    assert_eq!(items[0].uv_rect, [0.5, 1.0, 0.0, 0.0]);
+}
+
+#[test]
+fn sprites_sort_by_layer_order_then_z() {
+    let mut world = World::new();
+    let make = |layer: i32, order: i32| SpriteRenderer {
+        sprite_path: "a.png".into(),
+        sorting_layer: layer,
+        order_in_layer: order,
+        ..SpriteRenderer::default()
+    };
+
+    // Spawned out of order on purpose.
+    let near = spawn_sprite(
+        &mut world,
+        glam::Vec3::new(0.0, 0.0, 1.0),
+        make(0, 0),
+        [10, 10],
+        1,
+    );
+    let far = spawn_sprite(
+        &mut world,
+        glam::Vec3::new(0.0, 0.0, -1.0),
+        make(0, 0),
+        [10, 10],
+        2,
+    );
+    let top = spawn_sprite(
+        &mut world,
+        glam::Vec3::new(0.0, 0.0, -5.0),
+        make(1, 0),
+        [10, 10],
+        3,
+    );
+    let ordered = spawn_sprite(
+        &mut world,
+        glam::Vec3::new(0.0, 0.0, -9.0),
+        make(0, 1),
+        [10, 10],
+        4,
+    );
+    let _ = (near, far, top, ordered);
+
+    let textures: Vec<u32> = scene_sprite_system(&world)
+        .iter()
+        .map(|i| i.texture)
+        .collect();
+    // layer 0 first (order 0 → z ascending, then order 1), then layer 1.
+    assert_eq!(textures, vec![2, 1, 4, 3]);
+}
+
+#[test]
+fn unresolved_sprite_is_skipped() {
+    let mut world = World::new();
+    let e = spawn_sprite(
+        &mut world,
+        glam::Vec3::ZERO,
+        SpriteRenderer {
+            sprite_path: "a.png".into(),
+            ..SpriteRenderer::default()
+        },
+        [10, 10],
+        0,
+    );
+    world.get_mut::<SpriteRef>(e).unwrap().generation = 0;
+
+    assert!(scene_sprite_system(&world).is_empty());
+}

@@ -28,6 +28,11 @@ android/app/src/main/jniLibs/
 *.png
 !launcher/src-tauri/icons/*.png
 !launcher/src-tauri/gen/android/app/src/main/res/**/*.png
+# User-project art assets are build inputs too (fishing slice sprites).
+# Fishing project art is generated locally: either reference art
+# (scripts/sync_fishing_art.py) or original placeholders
+# (scripts/gen_placeholder_sprites.py). Never commit extracted assets.
+projects/fishing/assets/sprites/
 !editor/src-tauri/icons/*.png
 
 # Python 自检脚本缓存
@@ -93,3 +98,6 @@ assets/heightmaps/
 .secrets/
 .env
 .env.local
+
+# Local reference material (extracted game assets, never committed)
+.local/

@@ -139,6 +139,10 @@ pub struct ForwardPass {
     /// Skybox background pass (draws the IBL env cubemap). Owns its 管线 +
     /// set-2 (IBL env) 布局 borrows the IBL 描述符 集合
     skybox: SkyboxPass,
+    /// 2D sprite pass (instanced quads, bindless textures). Drawn after the
+    /// 3D mesh list and before the debug gizmo; owns its pipeline + a
+    /// per-frame instance buffer.
+    sprites: crate::sprite_pass::SpritePass,
     /// World-space XYZ orientation gizmo, drawn on 顶部 of the scene 深度
     /// test 禁用 内置 lazily once the 渲染 pass 存在
     gizmo: Option<Gizmo>,
@@ -193,6 +197,7 @@ impl ForwardPass {
             gi_descriptor_set: vk::DescriptorSet::null(),
             gi_layout: vk::DescriptorSetLayout::null(),
             skybox: SkyboxPass::new(vk::DescriptorSet::null(), vk::DescriptorSetLayout::null()),
+            sprites: crate::sprite_pass::SpritePass::new(),
             gizmo: None,
             device: None,
         }
@@ -1213,6 +1218,7 @@ impl ForwardPass {
                 depth_bias_slope_factor: None,
                 // 透明物体通常 `ZWrite Off`（Unity `_ZWrite`）。
                 depth_write_enable: Some(state.z_write),
+                depth_test_enable: None,
                 color_attachment_count: None,
                 color_blend_attachments: Some(&blend_attachments),
                 front_face: None,
@@ -1594,6 +1600,24 @@ impl RenderPassNode for ForwardPass {
                 } else {
                     ctx.device.cmd_draw(ctx.cmd, uploaded.vertex_count, 1, 0, 0);
                 }
+            }
+        }
+
+        // 2D sprites, drawn after the mesh list so they overlay 3D geometry.
+        // The pass disables depth test/write; ordering comes from the engine's
+        // CPU-side sort (sorting_layer -> order_in_layer -> z).
+        if !ctx.frame.sprite_items.is_empty() {
+            if let Err(e) = self.sprites.draw(
+                ctx.device,
+                ctx.context,
+                ctx.cmd,
+                self.render_pass.unwrap(),
+                self.bindless_set,
+                self.bindless_layout,
+                &ctx.frame.view_proj,
+                ctx.frame.sprite_items,
+            ) {
+                log::warn!("SpritePass draw failed (sprites skipped): {e:#}");
             }
         }
 

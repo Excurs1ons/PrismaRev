@@ -25,7 +25,7 @@ use prism_ecs::World;
 use prism_render::asset_bridge::{AssetResolveRequest, MaterialResolveData};
 use prism_render::managers::{MeshUploadInput, TextureFormat, TextureUploadInput};
 
-use crate::scene::components::{MaterialRef, MeshRef, MeshRenderer};
+use crate::scene::components::{MaterialRef, MeshRef, MeshRenderer, SpriteRef, SpriteRenderer};
 
 /// 把 RTEX 头的 `format` byte 与槽位颜色空间映射成渲染层 [`TextureFormat`]。
 ///
@@ -138,7 +138,8 @@ impl GpuAssetResolver {
     /// 返回数量即本帧新投递的实体数。已 enqueue 但尚未写回结果的实体会被去重跳过。
     pub fn prepare_requests(&mut self, world: &World) -> Vec<(Entity, AssetResolveRequest)> {
         // 收集待处理实体（首个），避免同时借用世界 & self。
-        let pending: Vec<(Entity, String, String)> = {
+        // `(entity, mesh_path, material_path, sprite_path)`
+        let pending: Vec<(Entity, String, String, String)> = {
             let mut out = Vec::new();
             for (entity, mr) in world.query::<MeshRenderer>() {
                 // 只有「有路径」且「句柄还没解析」才算待处理：
@@ -156,7 +157,31 @@ impl GpuAssetResolver {
                         .map(|r| r.generation == 0)
                         .unwrap_or(false);
                 if (mesh_unresolved || mat_unresolved) && !self.enqueued.contains(&entity) {
-                    out.push((entity, mr.mesh_path.clone(), mr.material_path.clone()));
+                    out.push((
+                        entity,
+                        mr.mesh_path.clone(),
+                        mr.material_path.clone(),
+                        String::new(),
+                    ));
+                    self.enqueued.insert(entity);
+                }
+            }
+            // 2D 精灵：只有贴图一条资源，`SpriteRef.generation == 0` 表示待解析。
+            for (entity, sprite) in world.query::<SpriteRenderer>() {
+                if !sprite.has_sprite() {
+                    continue;
+                }
+                let unresolved = world
+                    .get::<SpriteRef>(entity)
+                    .map(|r| r.generation == 0)
+                    .unwrap_or(true);
+                if unresolved && !self.enqueued.contains(&entity) {
+                    out.push((
+                        entity,
+                        String::new(),
+                        String::new(),
+                        sprite.sprite_path.clone(),
+                    ));
                     self.enqueued.insert(entity);
                 }
             }
@@ -168,7 +193,7 @@ impl GpuAssetResolver {
         }
 
         let mut reqs = Vec::with_capacity(pending.len());
-        for (entity, mesh_path, mat_path) in pending {
+        for (entity, mesh_path, mat_path, sprite_path) in pending {
             let mesh = if !mesh_path.is_empty() {
                 self.load_mesh_inputs(&mesh_path)
             } else {
@@ -179,7 +204,19 @@ impl GpuAssetResolver {
             } else {
                 None
             };
-            reqs.push((entity, AssetResolveRequest { mesh, material }));
+            let texture = if !sprite_path.is_empty() {
+                self.load_texture_by_path(&sprite_path)
+            } else {
+                None
+            };
+            reqs.push((
+                entity,
+                AssetResolveRequest {
+                    mesh,
+                    material,
+                    texture,
+                },
+            ));
         }
 
         log::info!(
@@ -208,6 +245,13 @@ impl GpuAssetResolver {
                 if let Some(slot) = result.material_slot {
                     mr.material_slot = slot;
                     mr.generation = 1;
+                }
+            }
+            if let (Some(slot), Some(size)) = (result.texture_slot, result.texture_size) {
+                if let Some(sr) = world.get_mut::<SpriteRef>(*entity) {
+                    sr.texture_slot = slot;
+                    sr.size = size;
+                    sr.generation = 1;
                 }
             }
             self.enqueued.remove(entity);
@@ -285,6 +329,15 @@ impl GpuAssetResolver {
         let textures = [albedo, normal, mr, emissive, occlusion];
 
         Some(MaterialResolveData { scalars, textures })
+    }
+
+    /// CPU 段：按路径加载单张纹理（精灵贴图）→ `TextureUploadInput`。
+    fn load_texture_by_path(&mut self, path: &str) -> Option<TextureUploadInput> {
+        let id = self.resource_manager.id_by_path(path).or_else(|| {
+            log::warn!("load_texture_by_path: path '{path}' not in manifest");
+            None
+        })?;
+        self.load_texture_data(Some(id), true)
     }
 
     /// CPU 段：加载单张纹理依赖 → `TextureUploadInput` 像素（或品红回退）。
@@ -510,6 +563,8 @@ mod tests {
                 AssetResolveResult {
                     mesh_handle: None,
                     material_slot: None,
+                    texture_slot: None,
+                    texture_size: None,
                 },
             )],
         );

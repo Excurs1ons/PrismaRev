@@ -9,7 +9,8 @@
 // Sets (must match `PostPass::ensure_pipeline`):
 //   set 0, binding 0 - HDR color texture (combined Sampler2D)
 //
-// Push constants: PostPush (4 bytes) - `tonemapMode` (0 = Reinhard, 1 = ACES).
+// Push constants: PostPush (4 bytes) - `tonemapMode` (0 = Reinhard, 1 = ACES,
+// 2 = passthrough for 2D scenes so the sprite palette survives untouched).
 //
 // Compile:
 //   slangc post.slang -profile spirv_1_5 -target spirv \
@@ -68,6 +69,8 @@ public void fragmentMain(
     float3 tonemapped;
     if (pc.tonemapMode == 0u)
         tonemapped = hdr / (hdr + 1.0);          // Reinhard
+    else if (pc.tonemapMode == 2u)
+        tonemapped = saturate(hdr);               // passthrough (2D pixel art)
     else
         tonemapped = aces(hdr);                    // ACES Narkowicz
     outColor = float4(tonemapped, 1.0);

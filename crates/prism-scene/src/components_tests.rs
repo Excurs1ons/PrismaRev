@@ -236,6 +236,82 @@ fn light_shadow_caster_requires_enabled_and_shadow_mode() {
     assert!(!disabled.is_shadow_caster());
 }
 
+// ---------------------------------------------------------------------------
+// SpriteRenderer（2D 精灵）
+// ---------------------------------------------------------------------------
+
+#[test]
+fn sprite_defaults_match_unity() {
+    let sprite = SpriteRenderer::default();
+    assert!(!sprite.has_sprite());
+    assert_eq!(sprite.frame_size, [0, 0]);
+    assert_eq!(sprite.frame_index, 0);
+    assert!(approx(sprite.pixels_per_unit, 100.0));
+    assert_eq!(sprite.pivot, [0.5, 0.5]);
+    assert_eq!(sprite.color, [1.0, 1.0, 1.0, 1.0]);
+    assert!(!sprite.flip_x && !sprite.flip_y);
+    assert_eq!(sprite.sorting_layer, 0);
+    assert_eq!(sprite.order_in_layer, 0);
+}
+
+#[test]
+fn sprite_json_round_trips_and_fills_missing_fields() {
+    let sprite = SpriteRenderer {
+        sprite_path: "sprites/boat.png".into(),
+        frame_size: [32, 16],
+        frame_index: 3,
+        pixels_per_unit: 16.0,
+        pivot: [0.0, 1.0],
+        color: [0.5, 1.0, 0.25, 0.75],
+        flip_x: true,
+        flip_y: false,
+        sorting_layer: 2,
+        order_in_layer: -1,
+    };
+    let json = serde_json::to_string(&sprite).unwrap();
+    let back: SpriteRenderer = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.sprite_path, "sprites/boat.png");
+    assert_eq!(back.frame_size, [32, 16]);
+    assert_eq!(back.frame_index, 3);
+    assert!(approx(back.pixels_per_unit, 16.0));
+    assert_eq!(back.pivot, [0.0, 1.0]);
+    assert!(back.flip_x);
+    assert_eq!(back.sorting_layer, 2);
+    assert_eq!(back.order_in_layer, -1);
+
+    // 老文档只有路径：其余字段走 serde 默认。
+    let legacy: SpriteRenderer = serde_json::from_str(r#"{"sprite_path":"a.png"}"#).unwrap();
+    assert_eq!(legacy.sprite_path, "a.png");
+    assert!(approx(legacy.pixels_per_unit, 100.0));
+    assert_eq!(legacy.frame_size, [0, 0]);
+}
+
+#[test]
+fn sprite_world_size_uses_frame_or_texture_and_ppu() {
+    // 整张纹理 64x32，PPU 16 -> 4x2 世界单位。
+    let whole = SpriteRenderer {
+        pixels_per_unit: 16.0,
+        ..SpriteRenderer::default()
+    };
+    assert_eq!(whole.world_size([64, 32]), [4.0, 2.0]);
+
+    // 精灵表单帧优先于纹理尺寸。
+    let sheet = SpriteRenderer {
+        frame_size: [32, 32],
+        pixels_per_unit: 32.0,
+        ..SpriteRenderer::default()
+    };
+    assert_eq!(sheet.frame_size_or([256, 32]), [32, 32]);
+    assert_eq!(sheet.world_size([256, 32]), [1.0, 1.0]);
+
+    // 非法 PPU 回落到 100，不产生 NaN/Inf。
+    let broken = SpriteRenderer {
+        pixels_per_unit: 0.0,
+        ..SpriteRenderer::default()
+    };
+    assert_eq!(broken.world_size([100, 100]), [1.0, 1.0]);
+}
+
 #[test]
 fn mesh_renderer_state_defaults_and_round_trips() {
     // 老文档只有 mesh/material：所有新字段必须回退到 Unity 的不透明默认值。

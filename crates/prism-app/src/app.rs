@@ -481,6 +481,14 @@ impl App {
             .min(Duration::from_millis(100));
         self.fixed_accumulator += elapsed;
         let dt = elapsed.as_secs_f32();
+        // Advance the frame clock HERE, at the point `elapsed` was measured:
+        // the heavy per-frame work (extract + render submit) happens later in
+        // this same call, so stamping the clock at the end of `about_to_wait`
+        // made `dt` measure only the idle gap between iterations (≈0.5 µs).
+        // That froze time-driven simulation and made its speed depend on how
+        // often winit woke the loop (i.e. on mouse movement).
+        self.last_frame = Some(now);
+
         // --- 引擎模拟（独立借用 self.engine，块结束即释放） ---
         {
             let Some(engine) = self.engine.as_mut() else {
@@ -1061,9 +1069,6 @@ impl ApplicationHandler for App {
                 }
             }
         }
-
-        // 更新 last_frame 用于 dt 计算
-        self.last_frame = Some(Instant::now());
     }
 
     fn suspended(&mut self, event_loop: &ActiveEventLoop) {

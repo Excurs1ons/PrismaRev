@@ -13,4 +13,5 @@ pub mod rt_render;
 pub mod scene_frag;
 pub mod shadow_depth;
 pub mod skybox;
+pub mod sprites;
 pub mod ui_overlay;

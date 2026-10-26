@@ -404,6 +404,24 @@ pub fn sort_draw_items(items: &mut [DrawItem], eye: [f32; 3]) {
     });
 }
 
+/// One 2D sprite instance for [`crate::sprite_pass::SpritePass`].
+///
+/// The engine resolves the authoring `SpriteRenderer` (texture path, sprite
+/// sheet frame, pivot, sorting) into this flat record: `model` already carries
+/// the world transform, the pivot offset and the sprite's world size, and
+/// `texture` is the bindless slot of the resolved texture.
+#[derive(Clone, Copy, Debug)]
+pub struct SpriteDrawItem {
+    /// World matrix applied to the unit quad (includes size + pivot).
+    pub model: [[f32; 4]; 4],
+    /// UV rect `(u0, v0, u1, v1)` inside the sprite sheet.
+    pub uv_rect: [f32; 4],
+    /// Linear RGBA tint multiplied with the sampled texel.
+    pub color: [f32; 4],
+    /// Bindless texture slot.
+    pub texture: u32,
+}
+
 /// Per-frame scene + lighting 状态 shared with every pass via [`RenderContext`].
 ///
 /// The `GraphRenderer` populates this once per 帧 (before driving the
@@ -416,6 +434,8 @@ pub struct GraphFrame<'a> {
     pub draw_list: &'a [DrawItem],
     /// ECS-authored gizmos for this frame.
     pub gizmos: &'a [crate::gizmo::GizmoInstance],
+    /// ECS-authored 2D sprites for this frame (sorted back-to-front).
+    pub sprite_items: &'a [SpriteDrawItem],
     /// ECS-authored skybox parameters (`None` = skip the sky draw).
     pub skybox: Option<crate::skybox_pass::SkyboxSettings>,
     /// 网格 管理器 — passes 解析 [`DrawItem::mesh`] handles to GPU buffers.

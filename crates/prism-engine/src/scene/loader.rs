@@ -387,6 +387,32 @@ pub fn parse_rscn(data: &[u8]) -> Result<ParsedRscn, String> {
 /// expresses. Roll is discarded (the free-fly 相机 has no roll). Matches the
 /// right-handed conventions in `README.md` (+X 右 +Y 上 +Z toward
 /// viewer, 相机 looks 下 −Z).
+/// Inserts an unresolved [`SpriteRef`] for entities that carry a
+/// [`SpriteRenderer`] with a texture path.
+///
+/// The GPU handle is filled in later by `GpuAssetResolver::apply_results`
+/// (`generation == 0` means "not resolved yet"), mirroring `MeshRef`.
+fn ensure_sprite_ref(world: &mut World, entity: Entity) {
+    if world.get::<SpriteRef>(entity).is_some() {
+        return;
+    }
+    let has_sprite = world
+        .get::<SpriteRenderer>(entity)
+        .map(|sprite| sprite.has_sprite())
+        .unwrap_or(false);
+    if has_sprite {
+        world.insert(
+            entity,
+            SpriteRef {
+                asset_id: SceneAssetId::generate(),
+                texture_slot: 0,
+                size: [0, 0],
+                generation: 0,
+            },
+        );
+    }
+}
+
 fn quat_to_yaw_pitch(quat: [f32; 4]) -> (f32, f32) {
     let [qx, qy, qz, qw] = quat;
     // 归一化 to avoid degenerate 输入 skewing the 结果
@@ -583,9 +609,18 @@ impl SceneLoader {
                 }
             }
 
+            ensure_sprite_ref(world, entity);
+
             // A cooked camera without an explicit controller gets the default
             // free-fly controller, matching the legacy loader behaviour.
+            // Orthographic cameras are 2D cameras: a fly controller would fight
+            // the game's own camera follow, so they never get one implicitly.
+            let camera_is_orthographic = world
+                .get::<Camera>(entity)
+                .map(|camera| camera.orthographic)
+                .unwrap_or(false);
             if world.get::<Camera>(entity).is_some()
+                && !camera_is_orthographic
                 && world.get::<FlyCameraController>(entity).is_none()
             {
                 let (yaw, pitch) = quat_to_yaw_pitch(decoded_entity.rotation);
@@ -805,6 +840,8 @@ impl SceneLoader {
                     },
                 );
             }
+
+            ensure_sprite_ref(world, entity);
 
             // 光源 分量
             if pe.has_light {

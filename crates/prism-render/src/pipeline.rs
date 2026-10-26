@@ -83,6 +83,9 @@ pub struct PipelineDesc<'a> {
     pub depth_bias_slope_factor: Option<f32>,
     /// 覆盖 深度 写入 enable 默认 `true`).
     pub depth_write_enable: Option<bool>,
+    /// 覆盖 深度 测试 enable 默认 `true`）。2D 精灵管线关闭深度测试，
+    /// 由 CPU 排序保证绘制顺序。
+    pub depth_test_enable: Option<bool>,
     /// Number of 颜色 attachments the 渲染 pass 子 pass uses 默认 1).
     /// 集合 to `Some(0)` for a depth-only 管线 (e.g. shadow 映射表 the
     /// 颜色 混合 状态 then carries 零 attachments.
@@ -181,7 +184,7 @@ impl GraphicsPipeline {
         // `depth_write_enable` is an optional 覆盖 shadow-map pipelines
         // may disable 颜色 writes but keep 深度 writes, so it defaults true.
         let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
-            .depth_test_enable(true)
+            .depth_test_enable(desc.depth_test_enable.unwrap_or(true))
             .depth_write_enable(desc.depth_write_enable.unwrap_or(true))
             .depth_compare_op(vk::CompareOp::LESS);
 

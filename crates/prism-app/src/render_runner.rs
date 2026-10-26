@@ -277,6 +277,7 @@ fn render_one_frame(
     let input = FrameInput {
         draw_items,
         gizmos: &packet.gizmos,
+        sprite_items: &packet.sprite_items,
         skybox: packet.skybox,
         frame_data: &frame_data,
         light_view_proj: scene.light_view_proj.to_cols_array_2d(),

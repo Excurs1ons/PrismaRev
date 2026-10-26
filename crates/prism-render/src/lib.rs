@@ -74,6 +74,7 @@ pub mod shader;
 pub mod shader_bindings;
 pub mod shadow_map_pass;
 pub mod skybox_pass;
+pub mod sprite_pass;
 pub mod swapchain;
 pub mod ui_overlay;
 pub(crate) mod vulkan_compat;
@@ -106,11 +107,12 @@ pub use probe_loader::{load_probe_volume, save_probe_volume, ProbeVolumeData};
 pub use pt_pass::PathTracePass;
 pub use render_graph::{
     sort_draw_items, DrawItem, DrawState, PassInfo, PassKind, RenderGraphSnapshot, RenderMode,
-    RenderSettings, ResourceHandle, ResourceInfo, ResourceType, ShadowMode,
+    RenderSettings, ResourceHandle, ResourceInfo, ResourceType, ShadowMode, SpriteDrawItem,
 };
 pub use render_pass::{DepthImage, Framebuffers, NormalImage, RenderPass};
 pub use shader::load_shader_module;
 pub use shadow_map_pass::ShadowMapPass;
 pub use skybox_pass::SkyboxSettings;
+pub use sprite_pass::SpritePass;
 pub use swapchain::Swapchain;
 pub use ui_overlay::{UiOverlay, UiOverlayInput};

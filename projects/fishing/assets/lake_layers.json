@@ -1,0 +1,96 @@
+{
+  "_comment": "Curated lake stack for projects/fishing (far -> near = draw order). `x`/`y` is the layer's BOTTOM-CENTER anchor with the camera at camera_origin; `parallax` 0 = pinned to the screen, 1 = moves with the world. Layer names come from the reference level (scripts/build_lake_layers.py extracts the full 163-layer list); this file keeps the subset that has a usable texture, with hand-tuned y so the horizon lands on water_line. Art is local-only (gitignored).",
+  "camera_origin": [
+    0.0,
+    180.0
+  ],
+  "water_line": 80.0,
+  "time_of_day": [
+    "dawn",
+    "day",
+    "dusk",
+    "night"
+  ],
+  "layers": [
+    {
+      "slug": "+72_sky",
+      "parallax": 0.0,
+      "x": 0.0,
+      "y": 0.0,
+      "reflect": false,
+      "scale": 1.12
+    },
+    {
+      "slug": "+71_cloud-1",
+      "parallax": 0.02,
+      "x": -60.0,
+      "y": 250.0,
+      "reflect": false,
+      "scale": 1.0
+    },
+    {
+      "slug": "+70_far-mountains",
+      "parallax": 0.15,
+      "x": 0.0,
+      "y": 140.0,
+      "reflect": false,
+      "scale": 1.0
+    },
+    {
+      "slug": "+68_mountain-right-far-copy",
+      "parallax": 0.2,
+      "x": 40.0,
+      "y": 120.0,
+      "reflect": false,
+      "scale": 1.0
+    },
+    {
+      "slug": "+69_mountain-right-left",
+      "parallax": 0.25,
+      "x": -20.0,
+      "y": 100.0,
+      "reflect": false,
+      "scale": 1.0
+    },
+    {
+      "slug": "+66_mountain-right-close",
+      "parallax": 0.3,
+      "x": 60.0,
+      "y": 92.0,
+      "reflect": false,
+      "scale": 1.0
+    },
+    {
+      "slug": "+63_mountain-left-close",
+      "parallax": 0.35,
+      "x": -80.0,
+      "y": 86.0,
+      "reflect": false,
+      "scale": 1.0
+    },
+    {
+      "slug": "+59_seaweed",
+      "parallax": 0.6,
+      "x": 0.0,
+      "y": 78.0,
+      "reflect": false,
+      "scale": 1.0
+    },
+    {
+      "slug": "+0_plants",
+      "parallax": 0.95,
+      "x": 0.0,
+      "y": 76.0,
+      "reflect": false,
+      "scale": 1.0
+    },
+    {
+      "slug": "+13_+1_front-rocks",
+      "parallax": 1.05,
+      "x": 120.0,
+      "y": 74.0,
+      "reflect": false,
+      "scale": 1.0
+    }
+  ]
+}

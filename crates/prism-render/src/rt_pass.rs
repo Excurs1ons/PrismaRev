@@ -133,6 +133,7 @@ impl RtPreviewPass {
                 depth_bias_constant_factor: None,
                 depth_bias_slope_factor: None,
                 depth_write_enable: None,
+                depth_test_enable: None,
                 color_attachment_count: Some(1),
                 color_blend_attachments: None,
                 front_face: None,

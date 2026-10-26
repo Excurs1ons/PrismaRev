@@ -388,6 +388,10 @@ pub fn register_builtin_components(registry: &mut ComponentRegistry) {
     registry.register_reflect_serde::<Gizmo>("prism_engine::scene::Gizmo");
     registry.register_reflect_serde::<MeshRenderer>("prism_engine::scene::MeshRenderer");
 
+    // ── 2D 精灵（作者态；GPU 句柄由运行时 `SpriteRef` 持有）──
+    registry.register_reflect_serde::<SpriteRenderer>("prism_engine::scene::SpriteRenderer");
+    registry.register_reflect_serde::<SpriteAnimation>("prism_engine::scene::SpriteAnimation");
+
     // ── 本地变换 ──
     // 只登记**类型**（RTTIBin 类型表 / 编辑器字段描述），不登记为可挂载组件：
     // 作者只写 `EntityJson::transform`，由 loader / cooker bake 成

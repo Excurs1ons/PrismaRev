@@ -219,6 +219,7 @@ impl ShadowMapPass {
             depth_bias_constant_factor: Some(32.0),
             depth_bias_slope_factor: Some(4.0),
             depth_write_enable: Some(true),
+            depth_test_enable: None,
             color_attachment_count: Some(0),
             color_blend_attachments: None,
             front_face: Some(Self::SHADOW_FRONT_FACE),

@@ -57,6 +57,9 @@ pub struct FrameInput<'a> {
     pub draw_items: &'a [DrawItem],
     /// ECS-authored gizmos for this frame.
     pub gizmos: &'a [crate::gizmo::GizmoInstance],
+    /// ECS-authored 2D sprites for this frame (sorted back-to-front by the
+    /// engine). Empty for 3D-only scenes.
+    pub sprite_items: &'a [crate::render_graph::SpriteDrawItem],
     /// ECS-authored skybox parameters; `None` means no sky draw.
     pub skybox: Option<crate::skybox_pass::SkyboxSettings>,
     pub frame_data: &'a FrameUBOData,
@@ -922,9 +925,25 @@ impl GraphRenderer {
                 None => None,
             };
 
+            let (texture_slot, texture_size) = match &req.texture {
+                Some(input) => {
+                    let size = [input.width, input.height];
+                    match self.register_texture_into(&mut uploader, input) {
+                        Ok(handle) => (Some(self.texture_srv(handle).0), Some(size)),
+                        Err(e) => {
+                            log::warn!("apply_asset_requests: sprite texture upload failed: {e}");
+                            (None, None)
+                        }
+                    }
+                }
+                None => (None, None),
+            };
+
             results.push(crate::asset_bridge::AssetResolveResult {
                 mesh_handle,
                 material_slot,
+                texture_slot,
+                texture_size,
             });
         }
 
@@ -1324,6 +1343,7 @@ impl GraphRenderer {
         let FrameInput {
             draw_items,
             gizmos,
+            sprite_items,
             skybox,
             frame_data,
             light_view_proj,
@@ -1388,6 +1408,7 @@ impl GraphRenderer {
                 frame_ubo: &self.runtime.frame_ubos[frame],
                 draw_list: draw_items,
                 gizmos,
+                sprite_items,
                 skybox: *skybox,
                 mesh_manager: &self.mesh_manager,
                 light_view_proj,
@@ -1700,6 +1721,7 @@ impl GraphRenderer {
         let input = FrameInput {
             draw_items,
             gizmos: &[],
+            sprite_items: &[],
             skybox: None,
             frame_data,
             light_view_proj,
