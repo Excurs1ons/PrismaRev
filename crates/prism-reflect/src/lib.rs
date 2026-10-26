@@ -14,8 +14,17 @@
 //! `serde` 是“编译期已知类型”的序列化；本 crate 处理“运行时才知道类型”的
 //! 场景（编辑器、cook、跨版本资产）。两者可以共存：作者格式仍用 JSON，
 //! cooked 格式用 RTTIBin。
+//!
+//! ## Cargo 特性
+//!
+//! - `derive`（默认）：重导出 `#[derive(Reflect)]`；关掉后仍可手写 `impl Reflect`。
+//! - `glam`（默认）：为 glam 的向量 / 四元数类型实现 `Reflect`；关掉后只是少这些实现。
+//!
+//! 两个特性都可以单独关闭，例如
+//! `cargo check -p prism-reflect --no-default-features`（CI 会跑）。
 
 mod desc;
+#[cfg(feature = "glam")]
 mod glam_impls;
 mod registry;
 pub mod rtti_bin;
@@ -23,6 +32,7 @@ pub mod rtti_bin;
 pub use desc::{FieldDesc, FieldType, TypeDesc, TypeId, TypeKind};
 pub use registry::{TypeEntry, TypeRegistry};
 
+#[cfg(feature = "derive")]
 pub use prism_reflect_derive::Reflect;
 
 use std::collections::BTreeMap;
