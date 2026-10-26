@@ -1118,18 +1118,32 @@ function onEntityUpdate(entity: EntityJson, editKey: string) {
   commit({ ...doc.value, entities }, editKey);
 }
 
-/** 反射写入成功后的规范化回填（不新增撤销步）。 */
-function onComponentReflect(name: string, canonical: JsonValue) {
-  if (!doc.value || primary.value === null) return;
-  const entity = doc.value.entities[primary.value];
+/**
+ * 反射写入成功后的规范化回填（不新增撤销步）。
+ *
+ * `index` / `pending` 来自发起编辑的那一刻：异步往返期间用户可能切换选中、
+ * 删除或移动实体，所以先确认「这个位置上的组件仍是我们刚写下的乐观值」，
+ * 否则丢弃 —— 绝不能按当前选中项回填（那会把值写进别人的实体）。
+ */
+function onComponentReflect(
+  name: string,
+  canonical: JsonValue,
+  index: number,
+  pending: JsonValue,
+) {
+  const current = doc.value;
+  if (!current) return;
+  const entity = current.entities[index];
   if (!entity) return;
-  if (JSON.stringify(entity.components[name]) === JSON.stringify(canonical)) return;
-  const entities = doc.value.entities.slice();
-  entities[primary.value] = {
+  const value = entity.components[name];
+  if (JSON.stringify(value) !== JSON.stringify(pending)) return;
+  if (JSON.stringify(value) === JSON.stringify(canonical)) return;
+  const entities = current.entities.slice();
+  entities[index] = {
     ...entity,
     components: { ...entity.components, [name]: canonical },
   };
-  silentUpdate({ ...doc.value, entities });
+  silentUpdate({ ...current, entities });
 }
 
 // ── 组件复制 / 粘贴 ─────────────────────────────────────────────────────────
