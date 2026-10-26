@@ -18,6 +18,7 @@
 use std::collections::HashSet;
 
 use prism_asset::core::AssetId;
+use prism_asset::formats::{RTEX_FORMAT_BC5, RTEX_FORMAT_BC6H, RTEX_FORMAT_RGBA8};
 use prism_asset::runtime::{MaterialAsset, MeshAsset, ResourceManager, TextureAsset};
 use prism_ecs::Entity;
 use prism_ecs::World;
@@ -25,6 +26,22 @@ use prism_render::asset_bridge::{AssetResolveRequest, MaterialResolveData};
 use prism_render::managers::{MeshUploadInput, TextureFormat, TextureUploadInput};
 
 use crate::scene::components::{MaterialRef, MeshRef, MeshRenderer};
+
+/// 把 RTEX 头的 `format` byte 与槽位颜色空间映射成渲染层 [`TextureFormat`]。
+///
+/// RTEX 不编码颜色空间：同一个 RGBA8 payload 可能是 sRGB（albedo / emissive）
+/// 也可能是线性（normal / MR / AO），由调用方按槽位传入 `srgb`。压缩格式的
+/// 通道语义固定（BC5 是线性双通道法线，BC6H 是 HDR 线性）。未支持的格式返回
+/// `None`，调用方回退洋红。
+fn texture_format_for(rtex_format: u8, srgb: bool) -> Option<TextureFormat> {
+    match rtex_format {
+        RTEX_FORMAT_RGBA8 if srgb => Some(TextureFormat::Rgba8Srgb),
+        RTEX_FORMAT_RGBA8 => Some(TextureFormat::Rgba8),
+        RTEX_FORMAT_BC5 => Some(TextureFormat::Bc5Unorm),
+        RTEX_FORMAT_BC6H => Some(TextureFormat::Bc6HUfloat),
+        _ => None,
+    }
+}
 
 // ---------------------------------------------------------------------------
 // GpuAssetResolver
@@ -258,18 +275,27 @@ impl GpuAssetResolver {
         };
 
         let tex_ids = mat.texture_ids();
-        let albedo = self.load_texture_data(tex_ids[0]);
-        let normal = self.load_texture_data(tex_ids[1]);
-        let mr = self.load_texture_data(tex_ids[2]);
-        let emissive = self.load_texture_data(tex_ids[3]);
-        let occlusion = self.load_texture_data(tex_ids[4]);
+        // 颜色贴图是 sRGB 编码：让硬件在采样时解码。法线/MR/AO 存的是线性
+        // 数据，按 sRGB 解码会把 0.5 压成 ≈0.214（法线 Z 变负、光照全错）。
+        let albedo = self.load_texture_data(tex_ids[0], true);
+        let normal = self.load_texture_data(tex_ids[1], false);
+        let mr = self.load_texture_data(tex_ids[2], false);
+        let emissive = self.load_texture_data(tex_ids[3], true);
+        let occlusion = self.load_texture_data(tex_ids[4], false);
         let textures = [albedo, normal, mr, emissive, occlusion];
 
         Some(MaterialResolveData { scalars, textures })
     }
 
     /// CPU 段：加载单张纹理依赖 → `TextureUploadInput` 像素（或品红回退）。
-    fn load_texture_data(&mut self, tex_id_opt: Option<AssetId>) -> Option<TextureUploadInput> {
+    ///
+    /// `srgb` 是**槽位**的颜色空间（RTEX 头不区分 sRGB/线性）：albedo、emissive、
+    /// 精灵贴图为 `true`，normal、metallic_roughness、occlusion 为 `false`。
+    fn load_texture_data(
+        &mut self,
+        tex_id_opt: Option<AssetId>,
+        srgb: bool,
+    ) -> Option<TextureUploadInput> {
         let tex_id = tex_id_opt?;
         let tex_handle = self
             .resource_manager
@@ -291,20 +317,27 @@ impl GpuAssetResolver {
             pixels: vec![255, 0, 255, 255],
         };
 
+        let Some(format) = texture_format_for(tex.info.format, srgb) else {
+            log::warn!(
+                "load_texture_data: texture {tex_id} uses unsupported RTEX format {}; \
+                 using magenta fallback",
+                tex.info.format
+            );
+            return Some(magenta());
+        };
+
         let input = if mip0.is_empty() {
             log::warn!("load_texture_data: texture {tex_id} has no mip 0; using magenta fallback");
             magenta()
         } else {
-            let bpp = TextureFormat::Rgba8Srgb.bytes_per_pixel();
-            let expected = (tex.info.width as usize) * (tex.info.height as usize) * bpp;
+            let expected = format.compressed_byte_len(tex.info.width, tex.info.height);
             if mip0.len() != expected {
                 log::warn!(
-                    "load_texture_data: texture {tex_id} mip0 size {} != {}x{}x{} ({}); \
+                    "load_texture_data: texture {tex_id} mip0 size {} != {}x{} {format:?} ({}); \
                      using magenta fallback",
                     mip0.len(),
                     tex.info.width,
                     tex.info.height,
-                    bpp,
                     expected
                 );
                 magenta()
@@ -312,7 +345,7 @@ impl GpuAssetResolver {
                 TextureUploadInput {
                     width: tex.info.width,
                     height: tex.info.height,
-                    format: TextureFormat::Rgba8Srgb,
+                    format,
                     mip_levels: 0,
                     pixels: mip0,
                 }
@@ -585,5 +618,41 @@ mod tests {
         assert_eq!(mesh.positions, vec![[7.0, 8.0, 9.0], [10.0, 11.0, 12.0]]);
         assert_eq!(mesh.normals, vec![[0.0, 0.0, 1.0], [0.0, 0.0, 1.0]]);
         assert_eq!(mesh.uvs, vec![[0.0, 0.0], [0.0, 0.0]]);
+    }
+
+    #[test]
+    fn rtex_rgba8_follows_the_slot_colour_space() {
+        assert_eq!(
+            texture_format_for(RTEX_FORMAT_RGBA8, true),
+            Some(TextureFormat::Rgba8Srgb)
+        );
+        assert_eq!(
+            texture_format_for(RTEX_FORMAT_RGBA8, false),
+            Some(TextureFormat::Rgba8),
+            "linear slots must not be sRGB-decoded"
+        );
+    }
+
+    #[test]
+    fn rtex_compressed_formats_keep_linear_semantics() {
+        assert_eq!(
+            texture_format_for(RTEX_FORMAT_BC5, true),
+            Some(TextureFormat::Bc5Unorm),
+            "BC5 is a linear 2-channel normal map regardless of the slot"
+        );
+        assert_eq!(
+            texture_format_for(RTEX_FORMAT_BC6H, false),
+            Some(TextureFormat::Bc6HUfloat)
+        );
+    }
+
+    #[test]
+    fn unsupported_rtex_formats_fall_back() {
+        use prism_asset::formats::{RTEX_FORMAT_BC1, RTEX_FORMAT_BC3};
+
+        assert_eq!(texture_format_for(RTEX_FORMAT_BC1, true), None);
+        assert_eq!(texture_format_for(RTEX_FORMAT_BC3, true), None);
+        assert_eq!(texture_format_for(99, false), None);
+    }
     }
 }
