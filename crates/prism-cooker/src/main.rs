@@ -251,7 +251,7 @@ fn cmd_scan(root: &Path, _cli: &Cli) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn cmd_import(root: &Path, _force: bool, _cli: &Cli) -> anyhow::Result<()> {
+fn cmd_import(root: &Path, force: bool, _cli: &Cli) -> anyhow::Result<()> {
     let assets = assets_dir(root);
     if !assets.exists() {
         anyhow::bail!("Assets/ directory not found / 目录不存在. Run 'prism-cook init' first.");
@@ -292,7 +292,14 @@ fn cmd_import(root: &Path, _force: bool, _cli: &Cli) -> anyhow::Result<()> {
         if !source_path.exists() {
             continue;
         }
-        match pipeline.import_file_with_key(&source_path, relative, &mut db, &mut cache, None) {
+        match pipeline.import_file_with_key(
+            &source_path,
+            relative,
+            &mut db,
+            &mut cache,
+            None,
+            force,
+        ) {
             Ok(r) if r.was_imported => imported += 1,
             Ok(_) => cached += 1,
             Err(e) => eprintln!("  ⚠  {}: {e}", relative),

@@ -172,6 +172,38 @@ fn import_pipeline_skips_cached_files() {
 }
 
 #[test]
+fn force_import_bypasses_the_cache() {
+    let reg = Arc::new(default_importer_registry());
+    let pipeline = ImportPipeline::new(reg);
+
+    let dir = std::env::temp_dir().join("prism_force_import_test");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("scanned.bin");
+    std::fs::write(&path, b"force me").unwrap();
+
+    let mut db = AssetDatabase::new();
+    let mut cache = ImportCache::new();
+
+    let first = pipeline
+        .import_file_with_key(&path, "scanned.bin", &mut db, &mut cache, None, false)
+        .unwrap();
+    assert!(first.was_imported);
+
+    let cached = pipeline
+        .import_file_with_key(&path, "scanned.bin", &mut db, &mut cache, None, false)
+        .unwrap();
+    assert!(!cached.was_imported);
+
+    // The source is unchanged, but `force` must re-run the importer.
+    let forced = pipeline
+        .import_file_with_key(&path, "scanned.bin", &mut db, &mut cache, None, true)
+        .unwrap();
+    assert!(forced.was_imported);
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn import_pipeline_updates_database() {
     let reg = Arc::new(default_importer_registry());
     let pipeline = ImportPipeline::new(reg);
@@ -219,7 +251,7 @@ fn explicit_relative_key_reuses_scanned_record() {
     let mut cache = ImportCache::new();
 
     let result = pipeline
-        .import_file_with_key(&path, "scanned.bin", &mut db, &mut cache, None)
+        .import_file_with_key(&path, "scanned.bin", &mut db, &mut cache, None, false)
         .unwrap();
 
     assert!(result.was_imported);
