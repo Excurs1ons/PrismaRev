@@ -21,7 +21,7 @@ pub use json::{EntityJson, SceneJson, TransformJson};
 pub use migrate::{doc_version, migrate_scene_doc, normalize_scene_doc, SCENE_DOC_VERSION};
 pub use registry::{register_builtin_components, ComponentRegistry};
 pub use render_enums::{
-    correlated_color_temperature_to_rgb, CameraClearFlags, LightRenderMode, LightShadows,
-    LightType, ShadowCastingMode,
+    correlated_color_temperature_to_rgb, BlendMode, CameraClearFlags, CompareFunction, CullMode,
+    LightRenderMode, LightShadows, LightType, RenderQueue, ShadowCastingMode,
 };
 pub use rscn::{decode_scene, encode_scene, DecodedEntity, DecodedScene, RscnError};
