@@ -50,6 +50,16 @@ impl LaunchConfig {
     pub fn to_json(&self) -> String {
         serde_json::to_string(self).expect("LaunchConfig serializes")
     }
+
+    /// 把 [`Self::log_level`] 解析为 `log` 过滤器。
+    ///
+    /// 只接受单个级别名（`off` / `error` / `warn` / `info` / `debug` / `trace`，
+    /// 大小写不敏感）；复杂的 `RUST_LOG` 指令请继续用环境变量。
+    pub fn log_level_filter(&self) -> Option<log::LevelFilter> {
+        self.log_level
+            .as_deref()
+            .and_then(|raw| raw.trim().parse().ok())
+    }
 }
 
 #[cfg(test)]
@@ -77,5 +87,17 @@ mod tests {
     fn json_roundtrip_omits_absent_scene() {
         let json = LaunchConfig::default().to_json();
         assert_eq!(json, "{}");
+    }
+
+    #[test]
+    fn log_level_filter_parses_case_insensitively() {
+        let launch = LaunchConfig::from_json(r#"{"log_level":"DEBUG"}"#);
+        assert_eq!(launch.log_level_filter(), Some(log::LevelFilter::Debug));
+
+        let launch = LaunchConfig::from_json(r#"{"log_level":" warn "}"#);
+        assert_eq!(launch.log_level_filter(), Some(log::LevelFilter::Warn));
+
+        let launch = LaunchConfig::from_json(r#"{"log_level":"warn,foo=debug"}"#);
+        assert_eq!(launch.log_level_filter(), None);
     }
 }

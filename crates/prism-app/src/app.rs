@@ -306,12 +306,13 @@ impl App {
     // 启动配置
     // -----------------------------------------------------------------------
 
-    /// 解析启动配置，设置日志级别。
-    fn apply_launch_config(&mut self) {
+    /// 解析启动配置，把日志级别写入 `RUST_LOG`。
+    ///
+    /// **必须在 logger 初始化之前调用**：`env_logger` / `android_logger`
+    /// 只在初始化时读取一次过滤器。桌面入口在 [`Self::run`] 里先调用本函数，
+    /// Android 入口在 `run_on_android` 里先读取同一份配置。
+    fn apply_launch_config(&self) {
         let launch = prism_engine::launch_config::LaunchConfig::from_env();
-
-        // 日志级别覆盖需在 logger 初始化之后生效——RUST_LOG 在 `run` 的
-        // try_init 之前已被读取，这里再设一次让下一步扩展 logger 重新读取。
         if let Some(level) = &launch.log_level {
             std::env::set_var("RUST_LOG", level);
         }
@@ -321,6 +322,8 @@ impl App {
     ///
     /// 内部构造 EventLoop 并交给 [`Self::run_on`]；致命错误直接 panic。
     pub fn run(self) {
+        // 日志级别必须在 try_init 之前写入，否则 env_logger 已经读完 RUST_LOG。
+        self.apply_launch_config();
         // 日志兜底（try_init 幂等，已初始化时静默失败）。
         let _ = env_logger::try_init();
         let event_loop = winit::event_loop::EventLoop::new().expect("failed to create event loop");

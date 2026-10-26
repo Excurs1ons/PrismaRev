@@ -158,20 +158,26 @@ pub fn run_on_android<F>(
 where
     F: FnOnce() -> App,
 {
+    // The engine is filesystem-based; stage the APK asset tree before App
+    // construction so `assets/scenes.pak` etc. resolve exactly like desktop.
+    // This also injects the hub's launch config, which carries `log_level`.
+    let data_dir = android_assets::init_android_assets(&android_app)?;
+    inject_launch_config(&data_dir);
+
+    // android_logger reads its level once at init; apply the launch override
+    // first (default: Debug, matching the historical behavior).
+    let level = prism_engine::launch_config::LaunchConfig::from_env()
+        .log_level_filter()
+        .unwrap_or(log::LevelFilter::Debug);
     android_logger::init_once(
         android_logger::Config::default()
-            .with_max_level(log::LevelFilter::Debug)
+            .with_max_level(level)
             .with_tag("PrismaRev"),
     );
 
     log::info!("PrismaRev Android starting");
 
     prism_engine::crash_dialog::register_android_app(&android_app);
-
-    // The engine is filesystem-based; stage the APK asset tree before App
-    // construction so `assets/scenes.pak` etc. resolve exactly like desktop.
-    let data_dir = android_assets::init_android_assets(&android_app)?;
-    inject_launch_config(&data_dir);
 
     let app = build_app();
     let event_loop = prism_platform::build_android_event_loop(android_app)?;
