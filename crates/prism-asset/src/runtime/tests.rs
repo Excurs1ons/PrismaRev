@@ -78,6 +78,27 @@ fn load_with_dependencies() {
 }
 
 #[test]
+fn load_with_deps_validates_root_type_even_when_preloaded() {
+    let id = AssetId::from_raw((1u64 << 32) | 77);
+    let mut builder = PackageBuilder::new();
+    builder.add_asset(id, AssetType::Binary, b"not a texture".to_vec(), &[]);
+    let pak = builder.build().unwrap();
+    let path = write_pak(&pak, "test_deps_type.pak");
+
+    let mut rm = ResourceManager::new();
+    rm.load_package(&path).unwrap();
+    std::fs::remove_file(&path).ok();
+
+    // load_with_deps loads the root as raw bytes first; the typed path must
+    // still validate T instead of returning a mismatched handle.
+    let err: Result<Handle<TextureAsset>, RuntimeError> = rm.load_with_deps(id);
+    assert!(matches!(err, Err(RuntimeError::TypeMismatch { .. })));
+
+    let handle: Handle<Vec<u8>> = rm.load_with_deps(id).unwrap();
+    assert_eq!(rm.get(handle).unwrap(), b"not a texture");
+}
+
+#[test]
 fn memory_budget_eviction_lru() {
     let id1 = AssetId::from_raw((1u64 << 32) | 1);
     let id2 = AssetId::from_raw((1u64 << 32) | 2);

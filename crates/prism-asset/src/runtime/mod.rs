@@ -647,9 +647,15 @@ impl ResourceManager {
         let slot_index = self.slot_index(id).ok_or(RuntimeError::NotFound(id))?;
 
         // If data is already loaded, 更新 访问 时间 and return handle.
+        // Validate `T` even on the cached path: callers such as
+        // `load_with_deps` may have populated the slot as raw bytes first.
         {
             let slot = &mut self.slots[slot_index as usize];
-            if slot.data.is_some() {
+            if let Some(data) = slot.data.as_ref() {
+                T::from_bytes(data).map_err(|_| RuntimeError::TypeMismatch {
+                    expected: std::any::type_name::<T>(),
+                    got: slot.asset_type,
+                })?;
                 slot.last_access = Instant::now();
                 return Ok(Handle::new(slot_index, slot.generation));
             }
