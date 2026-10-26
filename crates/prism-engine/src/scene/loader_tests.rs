@@ -826,3 +826,88 @@ fn load_committed_default_rscn() {
     // And it should carry a free-fly controller.
     assert!(world.get::<FlyCameraController>(cam_entity).is_some());
 }
+
+// ── `.scene.json` parent = entity id (not array index) ─────────────
+
+/// 把一个 `.scene.json` 文本直接铺进 world，返回 (实例, 世界)。
+fn spawn_json_text(json: &str) -> (SceneInstance, World) {
+    let mut registry = crate::scene::ComponentRegistry::new();
+    crate::scene::register_builtin_components(&mut registry);
+    let mut world = World::new();
+    let loader = SceneLoader::new();
+    let inst = loader
+        .spawn_from_json_text(
+            &mut world,
+            json,
+            "<test>",
+            SceneAssetId::generate(),
+            &registry,
+        )
+        .unwrap();
+    (inst, world)
+}
+
+#[test]
+fn json_parent_ids_are_resolved_not_used_as_array_indices() {
+    // 数组顺序是 [child, root]，但 parent 引用的是 id 9（位于下标 1）。
+    let json = r#"{
+        "version": 3,
+        "entities": [
+            { "id": 5, "name": "Child", "parent": 9, "transform": {}, "components": {} },
+            { "id": 9, "name": "Root", "parent": null, "transform": {}, "components": {} }
+        ]
+    }"#;
+
+    let (inst, world) = spawn_json_text(json);
+    assert_eq!(inst.all_entities.len(), 2);
+
+    let child = inst.all_entities[0];
+    let root = inst.all_entities[1];
+
+    let parent = world
+        .get::<Parent>(child)
+        .expect("child 应挂到 root 下（parent 是 id，不是下标）");
+    assert_eq!(parent.0, root);
+    assert!(world.get::<Parent>(root).is_none());
+    assert_eq!(inst.root_entities, vec![root]);
+}
+
+#[test]
+fn json_parent_chain_follows_ids_after_reordering() {
+    // root(3) ← mid(7) ← leaf(1)：三层按 id 串起来，与数组顺序无关。
+    let json = r#"{
+        "version": 3,
+        "entities": [
+            { "id": 1, "name": "Leaf", "parent": 7, "transform": {}, "components": {} },
+            { "id": 7, "name": "Mid", "parent": 3, "transform": {}, "components": {} },
+            { "id": 3, "name": "Root", "parent": null, "transform": {}, "components": {} }
+        ]
+    }"#;
+
+    let (inst, world) = spawn_json_text(json);
+    let (leaf, mid, root) = (
+        inst.all_entities[0],
+        inst.all_entities[1],
+        inst.all_entities[2],
+    );
+
+    assert_eq!(world.get::<Parent>(leaf).unwrap().0, mid);
+    assert_eq!(world.get::<Parent>(mid).unwrap().0, root);
+    assert!(world.get::<Parent>(root).is_none());
+    assert_eq!(inst.root_entities, vec![root]);
+}
+
+#[test]
+fn json_dangling_parent_id_keeps_the_entity_as_a_root() {
+    let json = r#"{
+        "version": 3,
+        "entities": [
+            { "id": 4, "name": "Orphan", "parent": 42, "transform": {}, "components": {} }
+        ]
+    }"#;
+
+    let (inst, world) = spawn_json_text(json);
+    let entity = inst.all_entities[0];
+    assert!(world.get::<Parent>(entity).is_none());
+    assert_eq!(inst.root_entities, vec![entity]);
+}
