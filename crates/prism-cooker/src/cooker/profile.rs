@@ -192,6 +192,112 @@ pub struct CookSettings {
     pub custom: HashMap<String, serde_json::Value>,
 }
 
+// ===========================================================================
+// Partial overrides (what a profile file actually contains)
+//
+// A profile file only describes the fields it wants to change. Using the
+// fully-materialised `*Settings` structs for that is wrong: `#[serde(default)]`
+// fills every missing field with a default value, so merging cannot tell
+// "absent" from "explicitly set to the default".
+// ===========================================================================
+
+/// Partial [`TextureSettings`] override from a profile file.
+///
+/// `None` = "not specified here", which keeps whatever the parent profile or
+/// the built-in default resolved to.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct TextureOverrides {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compression: Option<TextureCompression>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generate_mips: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quality: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_size: Option<u32>,
+}
+
+/// Partial [`MeshSettings`] override from a profile file.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct MeshOverrides {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vertex_compression: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub optimize: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generate_tangents: Option<bool>,
+}
+
+/// Partial [`ShaderSettings`] override from a profile file.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ShaderOverrides {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+}
+
+/// Partial [`CompressionSettings`] override from a profile file.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct CompressionOverrides {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub algorithm: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub level: Option<i32>,
+}
+
+impl TextureSettings {
+    /// Overlay only the fields the profile explicitly specified.
+    pub fn apply_overrides(&mut self, overrides: &TextureOverrides) {
+        if let Some(compression) = overrides.compression {
+            self.compression = compression;
+        }
+        if let Some(generate_mips) = overrides.generate_mips {
+            self.generate_mips = generate_mips;
+        }
+        if let Some(quality) = overrides.quality {
+            self.quality = quality;
+        }
+        if let Some(max_size) = overrides.max_size {
+            self.max_size = max_size;
+        }
+    }
+}
+
+impl MeshSettings {
+    /// Overlay only the fields the profile explicitly specified.
+    pub fn apply_overrides(&mut self, overrides: &MeshOverrides) {
+        if let Some(vertex_compression) = overrides.vertex_compression {
+            self.vertex_compression = vertex_compression;
+        }
+        if let Some(optimize) = overrides.optimize {
+            self.optimize = optimize;
+        }
+        if let Some(generate_tangents) = overrides.generate_tangents {
+            self.generate_tangents = generate_tangents;
+        }
+    }
+}
+
+impl ShaderSettings {
+    /// Overlay only the fields the profile explicitly specified.
+    pub fn apply_overrides(&mut self, overrides: &ShaderOverrides) {
+        if let Some(ref target) = overrides.target {
+            self.target = target.clone();
+        }
+    }
+}
+
+impl CompressionSettings {
+    /// Overlay only the fields the profile explicitly specified.
+    pub fn apply_overrides(&mut self, overrides: &CompressionOverrides) {
+        if let Some(ref algorithm) = overrides.algorithm {
+            self.algorithm = algorithm.clone();
+        }
+        if let Some(level) = overrides.level {
+            self.level = level;
+        }
+    }
+}
+
 impl Default for CookSettings {
     fn default() -> Self {
         Self {
@@ -237,16 +343,16 @@ pub struct CookProfile {
     pub platform: Option<String>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub texture: Option<TextureSettings>,
+    pub texture: Option<TextureOverrides>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub mesh: Option<MeshSettings>,
+    pub mesh: Option<MeshOverrides>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub shader: Option<ShaderSettings>,
+    pub shader: Option<ShaderOverrides>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub compression: Option<CompressionSettings>,
+    pub compression: Option<CompressionOverrides>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub streaming: Option<bool>,
@@ -348,30 +454,27 @@ impl ProfileManager {
 
         let profile = self.load_profile(name)?;
 
-        // Start with 默认 settings.
-        let mut settings = CookSettings::default();
+        // Start from either the parent's resolved settings or the defaults.
+        let mut settings = match profile.base {
+            Some(ref base_name) => self.resolve_internal(base_name, seen)?,
+            None => CookSettings::default(),
+        };
 
-        // If there's a base, merge it 第一个
-        if let Some(ref base_name) = profile.base {
-            let base_settings = self.resolve_internal(base_name, seen)?;
-            settings = deep_merge(settings, base_settings);
-        }
-
-        // 叠加 this profile's fields.
+        // 叠加 only the fields this profile explicitly specifies.
         if let Some(ref p) = profile.platform {
             settings.platform = p.clone();
         }
         if let Some(ref t) = profile.texture {
-            settings.texture = deep_merge(settings.texture, t.clone());
+            settings.texture.apply_overrides(t);
         }
         if let Some(ref m) = profile.mesh {
-            settings.mesh = deep_merge(settings.mesh, m.clone());
+            settings.mesh.apply_overrides(m);
         }
         if let Some(ref s) = profile.shader {
-            settings.shader = deep_merge(settings.shader, s.clone());
+            settings.shader.apply_overrides(s);
         }
         if let Some(ref c) = profile.compression {
-            settings.compression = deep_merge(settings.compression, c.clone());
+            settings.compression.apply_overrides(c);
         }
         if let Some(v) = profile.streaming {
             settings.streaming = v;
@@ -451,23 +554,23 @@ static BUILTIN_DEFAULTS: LazyLock<HashMap<&'static str, CookProfile>> = LazyLock
         "base",
         CookProfile {
             version: Some(1),
-            texture: Some(TextureSettings {
-                compression: TextureCompression::Rgba8,
-                generate_mips: true,
-                quality: 80,
-                max_size: 0,
+            texture: Some(TextureOverrides {
+                compression: Some(TextureCompression::Rgba8),
+                generate_mips: Some(true),
+                quality: Some(80),
+                max_size: Some(0),
             }),
-            mesh: Some(MeshSettings {
-                vertex_compression: false,
-                optimize: true,
-                generate_tangents: false,
+            mesh: Some(MeshOverrides {
+                vertex_compression: Some(false),
+                optimize: Some(true),
+                generate_tangents: Some(false),
             }),
-            shader: Some(ShaderSettings {
-                target: "spirv".into(),
+            shader: Some(ShaderOverrides {
+                target: Some("spirv".into()),
             }),
-            compression: Some(CompressionSettings {
-                algorithm: "zstd".into(),
-                level: 3,
+            compression: Some(CompressionOverrides {
+                algorithm: Some("zstd".into()),
+                level: Some(3),
             }),
             streaming: Some(false),
             chunk_size: Some(64 * 1024),
@@ -482,16 +585,16 @@ static BUILTIN_DEFAULTS: LazyLock<HashMap<&'static str, CookProfile>> = LazyLock
             version: Some(1),
             base: Some("base".into()),
             platform: Some("desktop".into()),
-            texture: Some(TextureSettings {
-                compression: TextureCompression::Bc7,
-                generate_mips: true,
-                quality: 90,
-                max_size: 4096,
+            texture: Some(TextureOverrides {
+                compression: Some(TextureCompression::Bc7),
+                generate_mips: Some(true),
+                quality: Some(90),
+                max_size: Some(4096),
             }),
-            mesh: Some(MeshSettings {
-                vertex_compression: false,
-                optimize: true,
-                generate_tangents: true,
+            mesh: Some(MeshOverrides {
+                vertex_compression: Some(false),
+                optimize: Some(true),
+                generate_tangents: Some(true),
             }),
             streaming: Some(false),
             ..Default::default()
@@ -505,16 +608,16 @@ static BUILTIN_DEFAULTS: LazyLock<HashMap<&'static str, CookProfile>> = LazyLock
             version: Some(1),
             base: Some("base".into()),
             platform: Some("android".into()),
-            texture: Some(TextureSettings {
-                compression: TextureCompression::Astc8x8,
-                generate_mips: true,
-                quality: 75,
-                max_size: 2048,
+            texture: Some(TextureOverrides {
+                compression: Some(TextureCompression::Astc8x8),
+                generate_mips: Some(true),
+                quality: Some(75),
+                max_size: Some(2048),
             }),
-            mesh: Some(MeshSettings {
-                vertex_compression: true,
-                optimize: true,
-                generate_tangents: false,
+            mesh: Some(MeshOverrides {
+                vertex_compression: Some(true),
+                optimize: Some(true),
+                generate_tangents: Some(false),
             }),
             streaming: Some(true),
             chunk_size: Some(32 * 1024),
@@ -529,16 +632,16 @@ static BUILTIN_DEFAULTS: LazyLock<HashMap<&'static str, CookProfile>> = LazyLock
             version: Some(1),
             base: Some("base".into()),
             platform: Some("ios".into()),
-            texture: Some(TextureSettings {
-                compression: TextureCompression::Astc8x8,
-                generate_mips: true,
-                quality: 80,
-                max_size: 2048,
+            texture: Some(TextureOverrides {
+                compression: Some(TextureCompression::Astc8x8),
+                generate_mips: Some(true),
+                quality: Some(80),
+                max_size: Some(2048),
             }),
-            mesh: Some(MeshSettings {
-                vertex_compression: true,
-                optimize: true,
-                generate_tangents: false,
+            mesh: Some(MeshOverrides {
+                vertex_compression: Some(true),
+                optimize: Some(true),
+                generate_tangents: Some(false),
             }),
             streaming: Some(true),
             chunk_size: Some(32 * 1024),
@@ -553,20 +656,20 @@ static BUILTIN_DEFAULTS: LazyLock<HashMap<&'static str, CookProfile>> = LazyLock
             version: Some(1),
             base: Some("base".into()),
             platform: Some("embedded".into()),
-            texture: Some(TextureSettings {
-                compression: TextureCompression::Etc2Rgba,
-                generate_mips: false,
-                quality: 50,
-                max_size: 1024,
+            texture: Some(TextureOverrides {
+                compression: Some(TextureCompression::Etc2Rgba),
+                generate_mips: Some(false),
+                quality: Some(50),
+                max_size: Some(1024),
             }),
-            mesh: Some(MeshSettings {
-                vertex_compression: true,
-                optimize: true,
-                generate_tangents: false,
+            mesh: Some(MeshOverrides {
+                vertex_compression: Some(true),
+                optimize: Some(true),
+                generate_tangents: Some(false),
             }),
-            compression: Some(CompressionSettings {
-                algorithm: "zstd".into(),
-                level: 5,
+            compression: Some(CompressionOverrides {
+                algorithm: Some("zstd".into()),
+                level: Some(5),
             }),
             streaming: Some(true),
             chunk_size: Some(16 * 1024),
@@ -576,96 +679,6 @@ static BUILTIN_DEFAULTS: LazyLock<HashMap<&'static str, CookProfile>> = LazyLock
 
     m
 });
-
-// ===========================================================================
-// Deep Merge Helpers
-// ===========================================================================
-
-fn deep_merge<T: Mergeable>(mut target: T, source: T) -> T {
-    target.merge_from(source);
-    target
-}
-
-/// trait for partial-overlay merging 结构体 field by field).
-///
-/// Only non-default/Some fields from 源 overwrite `self`.
-trait Mergeable: Sized {
-    fn merge_from(&mut self, source: Self);
-}
-
-macro_rules! impl_mergeable_optional {
-    ($($t:ty),*) => {
-        $(
-            impl Mergeable for $t {
-                fn merge_from(&mut self, source: Self) {
-                    *self = source;
-                }
-            }
-        )*
-    };
-}
-
-impl_mergeable_optional!(TextureCompression, String, bool, u32, u8, i32, u64);
-
-impl Mergeable for TextureSettings {
-    fn merge_from(&mut self, source: Self) {
-        if source.compression != TextureCompression::default() {
-            self.compression = source.compression;
-        }
-        if !source.generate_mips || source != TextureSettings::default() {
-            // Always respect an explicit 设置
-            self.generate_mips = source.generate_mips;
-        }
-        // 比较 to 默认 quality (80) to detect explicit 源 values.
-        if source != TextureSettings::default() {
-            self.quality = source.quality;
-            self.max_size = source.max_size;
-        }
-    }
-}
-
-impl Mergeable for MeshSettings {
-    fn merge_from(&mut self, source: Self) {
-        if source != Self::default() {
-            *self = source;
-        }
-    }
-}
-
-impl Mergeable for ShaderSettings {
-    fn merge_from(&mut self, source: Self) {
-        if source != Self::default() {
-            *self = source;
-        }
-    }
-}
-
-impl Mergeable for CompressionSettings {
-    fn merge_from(&mut self, source: Self) {
-        if source != Self::default() {
-            *self = source;
-        }
-    }
-}
-
-impl Mergeable for CookSettings {
-    fn merge_from(&mut self, source: Self) {
-        if source.platform != "desktop" {
-            self.platform = source.platform;
-        }
-        self.texture.merge_from(source.texture);
-        self.mesh.merge_from(source.mesh);
-        self.shader.merge_from(source.shader);
-        self.compression.merge_from(source.compression);
-        if source.streaming {
-            self.streaming = source.streaming;
-        }
-        if source.chunk_size != 64 * 1024 {
-            self.chunk_size = source.chunk_size;
-        }
-        self.custom.extend(source.custom);
-    }
-}
 
 #[cfg(test)]
 #[path = "profile_tests.rs"]
