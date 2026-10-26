@@ -91,7 +91,7 @@ public 类型的只有 **43** 个（≈0.9%）。这既是现状，也是后续�
 | `Undo.*` | `prism_editor_api::undo` + 前端历史栈 | 同上（前端已有按字段合并的撤销） |
 | `EditorApplication.*` | `prism_editor_api::editor_application` | 包装 `play.rs`/`settings.rs` |
 | `EditorSceneManager`/`SceneManager` | `prism_editor_api::scene_management` | 包装 `scene.rs` 文档操作 |
-| `BuildPipeline` | `prism_editor_api::build_pipeline` | 包装 build-scenes / build-project |
+| `BuildPipeline` | `prism_editor_api::build_profile` | 构建 profile / 目标组 / 场景构建顺序（执行仍在 `editor/src-tauri`） |
 | `PropertyDrawer` / `[CustomPropertyDrawer]` | **schema 扩展点** | 组件注册表里声明“字段渲染器”，经 schema 传给 Vue |
 | `EditorWindow` / `[MenuItem]` | **面板/命令注册表** | `PANELS` + `MENUS`（前端）由后端 DTO 驱动 |
 | `EditorUtility` | `prism_editor_api::editor_utility` | 包装 reveal/日志/对话框 |
@@ -166,7 +166,7 @@ public 类型的只有 **43** 个（≈0.9%）。这既是现状，也是后续�
 | `AssetDatabase` | `asset_database` 模块 |
 | `PrefabUtility` | `prefab_utility` 模块 |
 | `EditorApplication.isPlaying` | `play.rs` 预览进程状态 |
-| `BuildPipeline` | `build_pipeline` 模块（子进程 cooker） |
+| `BuildPipeline` | `build_profile` 模块（profile / 目标组 / 顺序；执行在 Tauri） |
 
 ### 5.3 明确不适用（N/A）
 
@@ -197,10 +197,8 @@ public 类型的只有 **43** 个（≈0.9%）。这既是现状，也是后续�
 - **P3 渲染/光照/相机** — 🔄 进行中。P3a（相机）与 P3b（光照：渲染枚举、
   `Light` 组件、统一收集 + 聚光进 GPU、逐渲染器 `ShadowCastingMode`、编辑器光源预设、
   `Light.shadows`/`shadowStrength`）已落地，见 §9；剩余渲染枚举批次与
-  P3c（相机行为）见 §9 待办。
 - **P4 编辑器扩展**：`PropertyDrawer` schema 扩展点 + `EditorWindow` 面板注册表 DTO。
-- **P5 资产流水线** — 🔄 进行中。P5a `AssetImporter` 形状已落地（见 §9）；
-  剩余 `Build` / `Build.Profile` / `Compilation` 形状。
+- **P5 资产流水线** — 🔄 进行中。P5a `AssetImporter` 形状与 P5b `Build`/`Build.Profile` 已落地（见 §9）；剩余 `Compilation` 形状。
 - **P6 并行/集合**：`Unity.Collections`/`Unity.Jobs` 形状（`NativeArray`/`IJob*`/`JobHandle`）。
 - **P7 UI/输入/音频/动画/物理** — 🔄 进行中（见 §9）。P7a `UnityEngine.Input`
   门面（`prism_engine::input_facade::Input`）已落地；其余 `UIElements`/`UI`/
@@ -914,6 +912,52 @@ Unity 里每个资产都由一个 `AssetImporter` 子类导入（`TextureImporte
 - 还没有逐资产的导入设置 UI（`TextureImporter` 的 sRGB / filter、`ModelImporter` 的
   缩放 / 切线等）；这些目前由 cooker 的 `CookProfile` 统一决定。
 - `Build` / `Build.Profile` / `Compilation` 形状仍待后续批次。
+
+### P5b — `Build` / `Build.Profile` 形状 ✅
+
+Unity 的构建入口是 `BuildPipeline.BuildPlayer(BuildPlayerOptions)`，其中
+`BuildPlayerOptions` 携带目标平台、场景列表（顺序即 build index）与 `BuildOptions`
+（`Development` / `AllowDebugging` / `ConnectWithProfiler`）。这一批把这些概念投影成
+`prism-editor-api` 的纯数据 DTO，并把「场景列表为空」变成真正的构建前校验。
+
+**prism-editor-api（新模块 `build_profile`）**
+- `BuildScene { name, path, enabled, buildIndex: Option<usize> }` —— Unity 的
+  `EditorBuildSettingsScene`；启用项按顺序拿到连续的 `build_index`（0..n），禁用项为 `None`。
+- `BuildOptions { development, allowDebugging, connectWithProfiler }` —— 由 `[build].profile`
+  派生：`debug` → `development` + `allowDebugging`，`release` → 全关；
+  `connectWithProfiler` 目前没有宿主支持，恒为 `false`。
+- `BuildProfile { name, target, targetGroup, options, outputDir, runAfter, scenes }`，
+  `name` 即 `[build].profile`，`target` 即 `[build].target`。
+- `target_group(target)`：`windows|linux|macos` → `Standalone`、`android` → `Android`、
+  `ios` → `iOS`、`web|webgl|wasm` → `WebGL`、其它 → `Unknown`。
+- `BuildProfile::validate()`：目标为空 / 输出目录为空 / **0 个启用场景**都返回可读错误。
+- `read_build_profile(root)` = `read_project_settings` + `read_scene_manifest`，
+  不引入任何 cooker/build-pipeline 依赖。
+
+**刻意不做的事**
+- 不发明多目标枚举：`settings.rs` 的校验目前只允许 `[build].target == "windows"` 与
+  `[build].profile ∈ {debug, release}`，所以这一层只做**字符串 → 目标组**的投影，
+  等设置层真正支持多目标时再加强类型枚举（避免两套真相）。
+
+**editor（Vue + Tauri）**
+- Tauri 命令 `editor_build_profile`；`build_project_blocking` 在启动 `cargo build` 之前调用
+  `read_build_profile(&root)?.validate()?` —— 没有启用场景时立刻失败并给出明确错误
+  （此前会白跑一次 cargo build）。
+- `BuildPanel`：标题显示目标组 / 目标 / profile；场景行的序号改用**有效 build index**
+  （跳过禁用项，与 Unity 的 `SceneManager.GetSceneByBuildIndex` 一致）；底部增加一行
+  `Unity Build.Profile` 摘要（profile、目标组、启用场景数、开发/发布、是否允许调试）。
+
+**验证**
+- ✅ `cargo test -p prism-editor-api` → 85 passed（新增 7 个：目标组映射 / `BuildOptions`
+  派生 / 连续 build index / profile 字段 / `validate` 三类错误 / camelCase JSON /
+  临时目录读取 settings+manifest）。
+- ✅ `cd editor && pnpm build`、`python3 scripts/pr_ready.py`。
+
+**已知遗留**
+- 还没有 `BuildReport`（构建结果 / 体积 / 耗时）；`Compilation`（`CompilationPipeline`）
+  形状也未做。
+- fixture 不固化构建 profile：`assets/scenes.toml` 可能含本机绝对路径，浏览器预览的
+  `buildProfile` 由 `mock.ts` 用 fixture 内场景即时合成。
 
 ## 附录
 

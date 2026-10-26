@@ -5,6 +5,7 @@ import type {
   AssetRef,
   AssetTextPreview,
   BakeGiOptions,
+  BuildProfile,
   BuildProjectOptions,
   BuildProjectResult,
   DocKind,
@@ -74,6 +75,11 @@ export function fetchSchema(): Promise<Schema> {
 /** 编辑器面板注册表 = Unity `EditorWindow` / `[MenuItem]` 的声明式 DTO。 */
 export function fetchEditorWindows(): Promise<EditorWindowDescriptor[]> {
   return call<EditorWindowDescriptor[]>("editor_windows");
+}
+
+/** Unity `Build.Profile.BuildProfile`（目标组 / 构建选项 / 场景构建顺序）。 */
+export function fetchBuildProfile(): Promise<BuildProfile> {
+  return call<BuildProfile>("editor_build_profile");
 }
 
 /** 项目根（含 assets/scenes）。 */
