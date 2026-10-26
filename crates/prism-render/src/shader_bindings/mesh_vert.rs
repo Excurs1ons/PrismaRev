@@ -10,13 +10,17 @@
 pub const ENTRY_VERTEX_MAIN: &str = "vertexMain"; // stage: VERTEX
 
 /// Push-constant block size in bytes (reflected).
-pub const PUSH_CONSTANT_SIZE: u32 = 0;
+pub const PUSH_CONSTANT_SIZE: u32 = 64;
 
 // --- descriptor set 0 ---
 pub const FRAME_SET: u32 = 0;
 pub const FRAME_BINDING: u32 = 0; // UNIFORM_BUFFER
 
 /// Push-constant struct (auto-generated from Slang `MeshPush`).
+///
+/// Field offsets are the reflected std140 ones — alignment holes are emitted as
+/// explicit `_pad_*` fillers, so `size_of` is 64 bytes and every field sits
+/// where the shader expects it.
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub struct MeshPush {

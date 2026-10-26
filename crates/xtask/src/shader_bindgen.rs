@@ -157,27 +157,171 @@ fn field_type_to_rust(ft: &FieldType) -> String {
     }
 }
 
+/// Rust `#[repr(C)]` layout of the type [`field_type_to_rust`] emits:
+/// `(size, alignment)` in bytes.
+///
+/// Slang reflects push-constant fields on 4-byte boundaries, so scalars and
+/// vectors keep their natural width; matrices are column-major arrays of
+/// columns. Anything unrecognised falls back to the `u32` used by
+/// [`field_type_to_rust`].
+fn rust_layout(ft: &FieldType) -> (u64, u64) {
+    match ft.kind.as_str() {
+        "scalar" => match ft.scalar_type.as_deref() {
+            Some("float16") => (2, 2),
+            _ => (4, 4),
+        },
+        "vector" => {
+            let count = u64::from(ft.element_count.unwrap_or(4));
+            let (elem_size, elem_align) = ft
+                .element_type
+                .as_deref()
+                .map(rust_layout)
+                .unwrap_or((4, 4));
+            (elem_size * count, elem_align)
+        }
+        "matrix" => {
+            let rows = u64::from(ft.row_count.unwrap_or(4));
+            let cols = u64::from(ft.column_count.unwrap_or(4));
+            let (elem_size, elem_align) = ft
+                .element_type
+                .as_deref()
+                .map(rust_layout)
+                .unwrap_or((4, 4));
+            (elem_size * rows * cols, elem_align)
+        }
+        _ => (4, 4),
+    }
+}
+
+/// One member of the emitted push-constant struct.
+#[derive(Debug)]
+enum PushMember {
+    /// A reflected field, placed at its reflected offset.
+    Field {
+        name: String,
+        rust_type: String,
+        offset: u64,
+        size: u64,
+    },
+    /// Filler for a std140 alignment hole.
+    ///
+    /// Leaning on `#[repr(C)]` alone would collapse the hole (the emitted types
+    /// only need 4-byte alignment) and silently shift every later field.
+    Pad { offset: u64, len: u64 },
+}
+
+/// Lay reflected fields out as `#[repr(C)]` members that keep their offsets.
+///
+/// Returns the members and the resulting struct size. A field that would
+/// overlap the previous member is an error: no `#[repr(C)]` layout can express
+/// it, and guessing would desync the Rust struct from the shader.
+fn layout_push_fields(fields: &[StructField]) -> Result<(Vec<PushMember>, u64)> {
+    let mut members: Vec<PushMember> = Vec::new();
+    let mut cursor = 0u64;
+
+    for f in fields {
+        let (natural_size, _) = rust_layout(&f.ty);
+        // The emitted Rust type must never be larger than what the shader
+        // reserved for the field; when it is smaller (e.g. a std140 matrix with
+        // 16-byte column stride) the reserved size wins.
+        let reserved = u64::from(f.binding.size.unwrap_or(natural_size as u32));
+        let occupied = natural_size.max(reserved);
+        let offset = f.binding.offset.map(u64::from).unwrap_or(cursor);
+
+        if offset < cursor {
+            anyhow::bail!(
+                "field `{}` is reflected at offset {offset} but the previous member ends at {cursor}",
+                f.name
+            );
+        }
+        if offset > cursor {
+            members.push(PushMember::Pad {
+                offset: cursor,
+                len: offset - cursor,
+            });
+        }
+        members.push(PushMember::Field {
+            name: f.name.clone(),
+            rust_type: field_type_to_rust(&f.ty),
+            offset,
+            size: reserved,
+        });
+        cursor = offset + occupied;
+    }
+
+    Ok((members, cursor))
+}
+
 /// Generate a Rust 结构体 定义 from reflected 推送 常量 fields.
-fn emit_push_struct(struct_name: &str, fields: &[StructField]) -> String {
+fn emit_push_struct(struct_name: &str, fields: &[StructField]) -> Result<String> {
+    let (members, total) = layout_push_fields(fields)?;
     let mut out = String::new();
     out.push_str(&format!(
-        "\n/// Push-constant struct (auto-generated from Slang `{}`).\n",
-        struct_name
+        "\n/// Push-constant struct (auto-generated from Slang `{struct_name}`).\n\
+         ///\n\
+         /// Field offsets are the reflected std140 ones — alignment holes are emitted as\n\
+         /// explicit `_pad_*` fillers, so `size_of` is {total} bytes and every field sits\n\
+         /// where the shader expects it.\n"
     ));
     out.push_str("#[repr(C)]\n#[derive(Clone, Copy, Default)]\n");
     out.push_str(&format!("pub struct {struct_name} {{\n"));
-    for f in fields {
-        let rust_type = field_type_to_rust(&f.ty);
-        // 发射 doc 注释 showing the reflected offset+size for easy 验证
-        let off = f.binding.offset.unwrap_or(0);
-        let sz = f.binding.size.unwrap_or(0);
-        out.push_str(&format!(
-            "    /// offset {off}, size {sz}\n    pub {}: {},\n",
-            f.name, rust_type
-        ));
+    for member in &members {
+        match member {
+            PushMember::Field {
+                name,
+                rust_type,
+                offset,
+                size,
+            } => {
+                out.push_str(&format!(
+                    "    /// offset {offset}, size {size}\n    pub {name}: {rust_type},\n"
+                ));
+            }
+            PushMember::Pad { offset, len } => {
+                out.push_str(&format!(
+                    "    /// std140 alignment hole at offset {offset} ({len} bytes)\n    \
+                     pub _pad_{offset}: [u8; {len}],\n"
+                ));
+            }
+        }
     }
     out.push_str("}\n");
-    out
+    Ok(out)
+}
+
+/// Push-constant structs declared by a reflection document.
+///
+/// Slang lets either the global scope or an entry point declare the block, and
+/// the same block can show up in both; the first declaration wins so the
+/// generated file never defines a struct twice.
+fn push_constant_structs(refl: &Reflection) -> Vec<(&str, &[StructField])> {
+    fn pick(p: &Parameter) -> Option<(&str, &[StructField])> {
+        let is_push = p
+            .binding
+            .as_ref()
+            .is_some_and(|b| b.kind == "pushConstantBuffer" || b.kind == "pushConstant");
+        if !is_push {
+            return None;
+        }
+        let element = p.ty.as_ref()?.element_type.as_ref()?;
+        let name = element.name.as_deref().unwrap_or("PushConstants");
+        let fields = element.fields.as_deref()?;
+        Some((name, fields))
+    }
+
+    let mut found: Vec<(&str, &[StructField])> = Vec::new();
+    let params = refl
+        .parameters
+        .iter()
+        .chain(refl.entry_points.iter().flat_map(|ep| ep.parameters.iter()));
+    for p in params {
+        if let Some((name, fields)) = pick(p) {
+            if !found.iter().any(|(known, _)| *known == name) {
+                found.push((name, fields));
+            }
+        }
+    }
+    found
 }
 
 /// A resolved 绑定 fact we care about for Rust codegen.
@@ -336,13 +480,22 @@ fn process_file(path: &Path) -> Result<(String, String)> {
 
     // 描述符 bindings grouped by 集合
     let mut by_set: BTreeMap<u32, Vec<&ResolvedBinding>> = BTreeMap::new();
+
+    // std140 size of the emitted structs. This is the authoritative fallback for
+    // shaders whose slangc reflection omits the block size on the
+    // `pushConstantBuffer` parameter.
+    let mut struct_size: u32 = 0;
+    for (struct_name, fields) in push_constant_structs(&refl) {
+        let (_, total) = layout_push_fields(fields)
+            .with_context(|| format!("layout push-constant struct `{struct_name}`"))?;
+        struct_size = struct_size.max(total as u32);
+    }
+
     let mut push_size: Option<u32> = None;
     for r in &resolved {
         match &r.kind {
             BindKind::PushConstant { size } => {
-                // Real slangc omits 大小 for some shaders; fall 后 to the
-                // known Rust-side 布局 (see pbr_push.rs + its tests).
-                let sz = *size.max(&fallback_push_size(&shader));
+                let sz = (*size).max(fallback_push_size(&shader)).max(struct_size);
                 push_size = Some(push_size.unwrap_or(0).max(sz));
             }
             _ => by_set.entry(r.set).or_default().push(r),
@@ -371,39 +524,8 @@ fn process_file(path: &Path) -> Result<(String, String)> {
     // Scan 全局 and entry-point parameters for push-constant buffers whose
     // types carry 结构体 field 信息 发射 a #[repr(C)] Rust 结构体 for each.
     // This replaces the hand-written push-constant structs in the engine.
-    for p in &refl.parameters {
-        if let Some(ety) = p
-            .binding
-            .as_ref()
-            .filter(|b| b.kind == "pushConstantBuffer" || b.kind == "pushConstant")
-            .and(p.ty.as_ref())
-            .and_then(|t| t.element_type.as_ref())
-            .filter(|e| e.fields.is_some())
-        {
-            let struct_name = ety.name.as_deref().unwrap_or("PushConstants");
-            if let Some(ref fields) = ety.fields {
-                out.push_str(&emit_push_struct(struct_name, fields));
-            }
-        }
-    }
-    // Same for entry-point parameters (some shaders declare 推送 constants
-    // at the entry-point level instead of globally).
-    for ep in &refl.entry_points {
-        for p in &ep.parameters {
-            if let Some(ety) = p
-                .binding
-                .as_ref()
-                .filter(|b| b.kind == "pushConstantBuffer" || b.kind == "pushConstant")
-                .and(p.ty.as_ref())
-                .and_then(|t| t.element_type.as_ref())
-                .filter(|e| e.fields.is_some())
-            {
-                let struct_name = ety.name.as_deref().unwrap_or("PushConstants");
-                if let Some(ref fields) = ety.fields {
-                    out.push_str(&emit_push_struct(struct_name, fields));
-                }
-            }
-        }
+    for (struct_name, fields) in push_constant_structs(&refl) {
+        out.push_str(&emit_push_struct(struct_name, fields)?);
     }
 
     Ok((mod_name, out))
@@ -463,4 +585,209 @@ fn main() -> Result<()> {
 
     println!("wrote {} module(s) to {}", files.len(), out_dir.display());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn reflection_dir() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/shaders/reflection")
+    }
+
+    fn load(name: &str) -> Reflection {
+        let path = reflection_dir().join(name);
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+        serde_json::from_str(&text)
+            .unwrap_or_else(|error| panic!("parse {}: {error}", path.display()))
+    }
+
+    /// Every committed reflection document, so the layout can be checked against
+    /// what `slangc` actually emitted instead of a hand-written fixture.
+    fn committed_reflections() -> Vec<(String, Reflection)> {
+        let dir = reflection_dir();
+        let mut names: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap_or_else(|error| panic!("read {}: {error}", dir.display()))
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.ends_with(".json"))
+            .collect();
+        names.sort();
+        assert!(!names.is_empty(), "no reflection JSON in {}", dir.display());
+        names
+            .into_iter()
+            .map(|name| {
+                let refl = load(&name);
+                (name, refl)
+            })
+            .collect()
+    }
+
+    fn scalar32() -> FieldType {
+        FieldType {
+            kind: "scalar".into(),
+            scalar_type: Some("float32".into()),
+            element_count: None,
+            row_count: None,
+            column_count: None,
+            element_type: None,
+        }
+    }
+
+    fn vector(count: u32) -> FieldType {
+        FieldType {
+            kind: "vector".into(),
+            scalar_type: None,
+            element_count: Some(count),
+            row_count: None,
+            column_count: None,
+            element_type: Some(Box::new(scalar32())),
+        }
+    }
+
+    fn field(name: &str, ty: FieldType, offset: u32, size: u32) -> StructField {
+        StructField {
+            name: name.into(),
+            ty,
+            binding: FieldBinding {
+                offset: Some(offset),
+                size: Some(size),
+            },
+        }
+    }
+
+    #[test]
+    fn reflected_offsets_are_reproduced_for_every_committed_shader() {
+        let mut blocks = 0;
+        for (file, refl) in committed_reflections() {
+            for (name, fields) in push_constant_structs(&refl) {
+                let (members, total) = layout_push_fields(fields)
+                    .unwrap_or_else(|error| panic!("{file} :: {name}: {error}"));
+
+                // Every reflected field must land on its own reflected offset.
+                for reflected in fields {
+                    let expected = u64::from(reflected.binding.offset.expect("reflected offset"));
+                    let emitted = members.iter().find_map(|member| match member {
+                        PushMember::Field {
+                            name: member_name,
+                            offset,
+                            ..
+                        } if member_name == &reflected.name => Some(*offset),
+                        _ => None,
+                    });
+                    assert_eq!(
+                        emitted,
+                        Some(expected),
+                        "{file} :: {name}.{} must stay at its reflected offset",
+                        reflected.name
+                    );
+                }
+
+                // And the struct must extend to the last reflected byte.
+                let extent = fields
+                    .iter()
+                    .map(|f| u64::from(f.binding.offset.unwrap_or(0) + f.binding.size.unwrap_or(0)))
+                    .max()
+                    .unwrap_or(0);
+                assert_eq!(total, extent, "{file} :: {name} struct size");
+                blocks += 1;
+            }
+        }
+        assert!(
+            blocks >= 8,
+            "expected the committed reflection set to carry push blocks, saw {blocks}"
+        );
+    }
+
+    #[test]
+    fn alignment_holes_become_explicit_padding() {
+        // std140 rounds the vec4 after a u32 up to 16: bytes 4..16 are a hole that
+        // a dense `#[repr(C)]` layout would silently collapse.
+        let fields = vec![
+            field("flags", scalar32(), 0, 4),
+            field("color", vector(4), 16, 16),
+        ];
+
+        let (members, total) = layout_push_fields(&fields).unwrap();
+        assert_eq!(total, 32);
+        match members.as_slice() {
+            [PushMember::Field { offset: 0, .. }, PushMember::Pad { offset: 4, len: 12 }, PushMember::Field { offset: 16, .. }] =>
+                {}
+            other => panic!("unexpected layout: {other:?}"),
+        }
+
+        let text = emit_push_struct("Padding", &fields).unwrap();
+        assert!(text.contains("pub _pad_4: [u8; 12],"), "{text}");
+    }
+
+    #[test]
+    fn scene_frag_padding_keeps_its_reflected_offset() {
+        let refl = load("scene_frag.json");
+        let (name, fields) = push_constant_structs(&refl)
+            .pop()
+            .expect("scene_frag declares a push block");
+        let (members, total) = layout_push_fields(fields).unwrap();
+
+        let offset_of = |wanted: &str| {
+            members.iter().find_map(|member| match member {
+                PushMember::Field { name, offset, .. } if name == wanted => Some(*offset),
+                _ => None,
+            })
+        };
+
+        // The shader reserves `_padding` at 96; the dense layout used to put it at 84.
+        assert_eq!(offset_of("_padding"), Some(96), "{name}");
+        assert_eq!(total, 108, "{name}");
+
+        let holes: u64 = members
+            .iter()
+            .map(|member| match member {
+                PushMember::Pad { len, .. } => *len,
+                _ => 0,
+            })
+            .sum();
+        assert_eq!(holes, 12, "{name} must fill the 84..96 hole");
+    }
+
+    #[test]
+    fn emitted_types_never_exceed_the_reflected_field_size() {
+        for (file, refl) in committed_reflections() {
+            for (name, fields) in push_constant_structs(&refl) {
+                for reflected in fields {
+                    let (natural, _) = rust_layout(&reflected.ty);
+                    let reserved = u64::from(reflected.binding.size.unwrap_or(natural as u32));
+                    assert!(
+                        natural <= reserved,
+                        "{file} :: {name}.{}: emitted type is {natural} bytes but the shader \
+                         reserved {reserved}",
+                        reflected.name
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn generated_const_matches_the_emitted_struct_size() {
+        let path = reflection_dir().join("scene_frag.json");
+        let (module, text) = process_file(&path).expect("generate scene_frag bindings");
+        assert_eq!(module, "scene_frag");
+        // 108 = model(64) + 5×4 scalars + the 12-byte hole + `_padding`(12).
+        assert!(
+            text.contains("pub const PUSH_CONSTANT_SIZE: u32 = 108;"),
+            "{text}"
+        );
+        assert!(text.contains("pub _pad_84: [u8; 12],"), "{text}");
+    }
+
+    #[test]
+    fn overlapping_fields_are_rejected() {
+        let fields = vec![
+            field("whole", vector(4), 0, 16),
+            field("overlap", scalar32(), 8, 4),
+        ];
+        let error = layout_push_fields(&fields).unwrap_err().to_string();
+        assert!(error.contains("overlap"), "{error}");
+    }
 }

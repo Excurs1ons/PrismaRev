@@ -10,7 +10,7 @@
 pub const ENTRY_FRAGMENT_MAIN: &str = "fragmentMain"; // stage: FRAGMENT
 
 /// Push-constant block size in bytes (reflected).
-pub const PUSH_CONSTANT_SIZE: u32 = 0;
+pub const PUSH_CONSTANT_SIZE: u32 = 108;
 
 // --- descriptor set 0 ---
 pub const FRAME_SET: u32 = 0;
@@ -51,6 +51,10 @@ pub const PROBE_INFO_SET: u32 = 5;
 pub const PROBE_INFO_BINDING: u32 = 1; // UNIFORM_BUFFER
 
 /// Push-constant struct (auto-generated from Slang `PbrBindlessPush`).
+///
+/// Field offsets are the reflected std140 ones — alignment holes are emitted as
+/// explicit `_pad_*` fillers, so `size_of` is 108 bytes and every field sits
+/// where the shader expects it.
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub struct PbrBindlessPush {
@@ -66,6 +70,8 @@ pub struct PbrBindlessPush {
     pub normal_idx: u32,
     /// offset 80, size 4
     pub debug_flags: u32,
+    /// std140 alignment hole at offset 84 (12 bytes)
+    pub _pad_84: [u8; 12],
     /// offset 96, size 12
     pub _padding: [u32; 3],
 }

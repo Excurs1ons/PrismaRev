@@ -227,11 +227,16 @@ The user project's dependency chain must stay **UI-framework-free and editor-fre
   - Entry-point name constants (`ENTRY_VERTEX_MAIN`, etc.)
   - Descriptor set/binding constants
   - Push-constant struct (`#[repr(C)]` with all reflected fields)
-- Push-constant structs use `#[repr(C)]`, which matches std140 for `mat4`/`vec4`/`scalar`
-  fields but may omit std140 trailing structure padding. When the Slang reflection JSON
-  doesn't include trailing implicit padding, the generated struct will be a few bytes
-  shorter than the shader's std140 block size. In that case declare the `VkPushConstantRange`
-  `size` explicitly (e.g. `144`) rather than relying on `size_of`.
+- Push-constant structs are `#[repr(C)]`, but the bindgen forces every field onto its reflected
+  `offset`: std140 alignment holes are emitted as explicit `_pad_<offset>: [u8; N]` members, so
+  `size_of` and each field offset match the reflection. Editing a shader can therefore add or
+  rename a `_pad_*` member — construction sites must be updated with it (the compiler enforces
+  this, which is intentional).
+- `PUSH_CONSTANT_SIZE` is that std140 struct size, maxed with the reflected block size and
+  `PUSH_SIZE_FALLBACK`. `VkPushConstantRange::size` may stay larger than `size_of` (it only needs
+  to be a superset of the shader's block); `cmd_push_constants` sends `size_of`.
+- Layout regressions are covered by `cargo test --manifest-path crates/xtask/Cargo.toml`, which
+  checks every committed reflection JSON against the generated offsets.
 - If a Slang shader lacks `emit_reflection` in `compile.sh`, add it so the bindgen covers it.
 - Do NOT add hand-written `#[repr(C)]` push-constant structs. If the bindgen can't cover a
   case, extend `shader_bindgen.rs` (it should parse all Slang reflection field types).
