@@ -2781,7 +2781,6 @@ dependencies = [
  "anyhow",
  "ash-window",
  "log",
- "prism-render",
  "raw-window-handle",
  "winit",
 ]
