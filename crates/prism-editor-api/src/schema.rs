@@ -4,6 +4,8 @@
 //! （`bool` / `f32` / `string` / `struct` / `list` / `option` / `array`…）
 //! 生成对应控件，`struct` 字段再按类型名递归查表。
 
+use std::sync::OnceLock;
+
 use prism_reflect::{FieldDesc, FieldType, TypeRegistry};
 use prism_scene::{register_builtin_components, ComponentRegistry};
 use serde::Serialize;
@@ -78,13 +80,29 @@ impl Schema {
     }
 }
 
+/// 进程内共享的内置组件注册表。
+///
+/// 注册内置组件要建若干 `HashMap` 并注册整棵反射类型树，而字段写入 /
+/// 规范化是**输入事件级**的热路径（拖动滑块时每帧都会调用），因此这里只
+/// 构建一次。注册表构建后只读，`ComponentRegistry` 的回调都要求
+/// `Send + Sync`，可以安全地跨线程共享。
+///
+/// 需要追加自定义组件的宿主仍然用 [`build_schema_with`] 传入自己的注册表，
+/// 不受这里影响。
+pub fn builtin_registry() -> &'static ComponentRegistry {
+    static REGISTRY: OnceLock<ComponentRegistry> = OnceLock::new();
+    REGISTRY.get_or_init(|| {
+        let mut registry = ComponentRegistry::new();
+        register_builtin_components(&mut registry);
+        registry
+    })
+}
+
 /// 构建完整 schema（内置组件的唯一来源是 `prism-scene` 的注册表）。
 ///
 /// 字段绘制器用 [`PropertyDrawerRegistry::with_builtin`] 的内置声明。
 pub fn build_schema() -> Schema {
-    let mut registry = ComponentRegistry::new();
-    register_builtin_components(&mut registry);
-    build_schema_from(&registry)
+    build_schema_from(builtin_registry())
 }
 
 /// 用给定注册表 + 给定绘制器注册表构建 schema。
@@ -402,6 +420,26 @@ mod tests {
 
         // 没有声明的字段不带 drawer（前端退回默认控件）。
         assert!(field("prism_engine::scene::Camera", "aspect").is_none());
+    }
+
+    #[test]
+    fn builtin_registry_is_shared_and_matches_a_fresh_one() {
+        // 同一进程只构建一次（字段写入是输入事件热路径）。
+        assert!(std::ptr::eq(builtin_registry(), builtin_registry()));
+
+        // 缓存内容必须与手工注册的结果一致，避免把初始化写歪。
+        let mut fresh = ComponentRegistry::new();
+        register_builtin_components(&mut fresh);
+        assert_eq!(
+            builtin_registry().component_names(),
+            fresh.component_names()
+        );
+
+        // `build_schema()` 走的就是这份共享注册表。
+        assert_eq!(
+            build_schema().component_names(),
+            builtin_registry().component_names()
+        );
     }
 
     #[test]

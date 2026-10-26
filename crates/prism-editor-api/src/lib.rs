@@ -150,7 +150,9 @@ pub use scene_management::{
     save_open_scenes, save_scene, save_scene_as, scene_count, scene_from_doc, LoadSceneMode, Scene,
     SceneManagerState,
 };
-pub use schema::{build_schema, build_schema_with, FieldSchema, Schema, TypeSchema};
+pub use schema::{
+    build_schema, build_schema_with, builtin_registry, FieldSchema, Schema, TypeSchema,
+};
 pub use selection::{SelectionFilter, SelectionMode, SelectionState};
 pub use settings::{
     read_project_settings, read_render_settings, settings_path, write_project_settings,
