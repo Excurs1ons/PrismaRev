@@ -1183,9 +1183,11 @@ impl ForwardPass {
             set5_layout,
         ];
 
-        // 推送 constants: PbrBindlessPushConstants (96 字节 VERTEX|FRAGMENT).
-        // Matches scene_frag.slang::PbrBindlessPush and Rust
-        // PbrBindlessPushConstants.
+        // Push constants: PbrBindlessPush (108 字节 std140, VERTEX|FRAGMENT).
+        // The range keeps a 128-byte slot so it stays a superset of the block
+        // even if a field is added; `size_of` is what `cmd_push_constants` sends.
+        // Matches scene_frag.slang::PbrBindlessPush and the generated
+        // `shader_bindings::scene_frag::PbrBindlessPush`.
         let push = [vk::PushConstantRange::default()
             .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
             .offset(0)
@@ -1575,6 +1577,9 @@ impl RenderPassNode for ForwardPass {
                     normal_idx: u32::MAX,
                     // PBR 分量 toggles from the app (15-bit bitmask).
                     debug_flags: ctx.frame.debug_flags,
+                    // std140 hole between `debug_flags` and `_padding` (see
+                    // scene_frag.rs: the layout is generated from reflection).
+                    _pad_84: [0; 12],
                     _padding: [0; 3],
                 };
                 ctx.device.cmd_push_constants(
