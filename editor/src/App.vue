@@ -1015,6 +1015,11 @@ async function syncPrefab(entry: SceneEntry) {
 
 /** 资产生成处的「跳到该字段」：打开对应文档、选中实体、高亮组件/字段。 */
 async function jumpToUsage(ref: AssetRef) {
+  if (ref.kind === "manifest") {
+    // 清单条目没有实体/字段可定位，只提示它登记在构建清单里。
+    status.value = `${ref.entity} 在 ${ref.scene} 登记（path = ${ref.value}）`;
+    return;
+  }
   if (currentPath.value !== ref.scenePath) {
     if (!confirmDiscard()) return;
     try {

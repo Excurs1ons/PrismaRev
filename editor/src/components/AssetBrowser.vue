@@ -950,17 +950,26 @@ onUnmounted(() => {
       引用：<template v-if="busy">…</template>
       <template v-else-if="usageError">{{ usageError }}</template>
       <template v-else-if="usage.length">{{ usage.length }} 处</template>
-      <template v-else>未被任何场景引用</template>
+      <template v-else>未被任何场景 / 预制体 / 构建清单引用</template>
     </div>
     <button
       v-for="(ref, i) in usage"
       :key="i"
       class="usage-link"
-      title="打开该文档并定位到这个字段"
+      :title="
+        ref.kind === 'manifest'
+          ? '构建清单（assets/scenes.toml）里的场景条目'
+          : '打开该文档并定位到这个字段'
+      "
       @click="emit('jump', ref)"
     >
-      {{ ref.scene }} · #{{ ref.entityIndex }} {{ ref.entity }} ·
-      {{ ref.component.split("::").pop() }}.{{ ref.field }}
+      <template v-if="ref.kind === 'manifest'">
+        {{ ref.scene }} · {{ ref.entity }}
+      </template>
+      <template v-else>
+        {{ ref.scene }} · #{{ ref.entityIndex }} {{ ref.entity }} ·
+        {{ ref.component.split("::").pop() }}.{{ ref.field }}
+      </template>
     </button>
     <button class="ghost icon" style="margin-top: 4px" @click="copyPath">复制路径</button>
   </div>
