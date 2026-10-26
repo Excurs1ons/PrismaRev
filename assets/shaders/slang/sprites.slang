@@ -13,11 +13,11 @@
 //
 // Push constants: SpritePush (64 bytes) = world-view-projection.
 //
-// Per-instance vertex data (one 112-byte record per sprite, instance rate):
-//   loc 0..3 : model matrix columns (float4 each)
-//   loc 4    : uv rect (u0, v0, u1, v1)
-//   loc 5    : color (linear RGBA, multiplied with the sampled texel)
-//   loc 6    : bindless texture index
+// Per-instance vertex data (one 96-byte record per sprite, instance rate):
+//   loc 0..2 : model matrix columns 0, 1 and 3 (float4 each)
+//   loc 3    : uv rect (u0, v0, u1, v1)
+//   loc 4    : color (linear RGBA, multiplied with the sampled texel)
+//   loc 5    : bindless texture index
 //
 // Compile:
 //   slangc sprites.slang -profile spirv_1_4 -target spirv \
@@ -47,13 +47,12 @@ ConstantBuffer<SpritePush> pc;
 
 struct SpriteVertexIn
 {
-    [[vk::location(0)]] float4 m0;
-    [[vk::location(1)]] float4 m1;
-    [[vk::location(2)]] float4 m2;
-    [[vk::location(3)]] float4 m3;
-    [[vk::location(4)]] float4 uvRect;
-    [[vk::location(5)]] float4 color;
-    [[vk::location(6)]] uint   textureIndex;
+    [[vk::location(0)]] float4 m0;   // model column 0
+    [[vk::location(1)]] float4 m1;   // model column 1
+    [[vk::location(2)]] float4 m3;   // model column 3 (translation)
+    [[vk::location(3)]] float4 uvRect;
+    [[vk::location(4)]] float4 color;
+    [[vk::location(5)]] uint   textureIndex;
 };
 
 struct SpriteVaryings
@@ -78,8 +77,15 @@ static const float2 QUAD_POS[6] = {
 SpriteVaryings vertexMain(SpriteVertexIn in, uint vertexId : SV_VertexID)
 {
     float2 corner = QUAD_POS[vertexId];
-    float4x4 model = float4x4(in.m0, in.m1, in.m2, in.m3);
-    float4 worldPos = mul(model, float4(corner, 0.0, 1.0));
+
+    // The float4s are the model matrix's COLUMNS. Do not build a
+    // `float4x4` from them: Slang's 4-vector constructor fills ROWS, which
+    // transposes the matrix, moves the translation into the w row and makes
+    // the projection divide by a non-unit w (visible as perspective skew).
+    // 2D sprites only need columns 0, 1 and 3 (the z basis is always
+    // (0, 0, 1, 0) and depth is resolved by the CPU sort).
+    float3 world = in.m0.xyz * corner.x + in.m1.xyz * corner.y + in.m3.xyz;
+    float4 worldPos = float4(world, 1.0);
 
     // Texture rows arrive top-to-bottom, world +Y points up: map the quad's
     // top edge to the sprite rect's v0 so images are not flipped.

@@ -91,7 +91,7 @@
                 {
                     "name": "in",
                     "stage": "vertex",
-                    "binding": {"kind": "varyingInput", "index": 0, "count": 7},
+                    "binding": {"kind": "varyingInput", "index": 0, "count": 6},
                     "type": {
                         "kind": "struct",
                         "name": "SpriteVertexIn",
@@ -123,7 +123,7 @@
                                 "binding": {"kind": "varyingInput", "index": 1}
                             },
                             {
-                                "name": "m2",
+                                "name": "m3",
                                 "type": {
                                     "kind": "vector",
                                     "elementCount": 4,
@@ -136,7 +136,7 @@
                                 "binding": {"kind": "varyingInput", "index": 2}
                             },
                             {
-                                "name": "m3",
+                                "name": "uvRect",
                                 "type": {
                                     "kind": "vector",
                                     "elementCount": 4,
@@ -149,7 +149,7 @@
                                 "binding": {"kind": "varyingInput", "index": 3}
                             },
                             {
-                                "name": "uvRect",
+                                "name": "color",
                                 "type": {
                                     "kind": "vector",
                                     "elementCount": 4,
@@ -162,26 +162,13 @@
                                 "binding": {"kind": "varyingInput", "index": 4}
                             },
                             {
-                                "name": "color",
-                                "type": {
-                                    "kind": "vector",
-                                    "elementCount": 4,
-                                    "elementType": {
-                                        "kind": "scalar",
-                                        "scalarType": "float32"
-                                    }
-                                },
-                                "stage": "vertex",
-                                "binding": {"kind": "varyingInput", "index": 5}
-                            },
-                            {
                                 "name": "textureIndex",
                                 "type": {
                                     "kind": "scalar",
                                     "scalarType": "uint32"
                                 },
                                 "stage": "vertex",
-                                "binding": {"kind": "varyingInput", "index": 6}
+                                "binding": {"kind": "varyingInput", "index": 5}
                             }
                         ]
                     }

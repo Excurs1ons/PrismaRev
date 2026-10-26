@@ -40,8 +40,12 @@ const INITIAL_CAPACITY: u32 = 256;
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 struct SpriteInstance {
-    /// 世界矩阵（含精灵世界尺寸与 pivot 偏移）。
-    model: [[f32; 4]; 4],
+    /// 世界矩阵第 0 列（含旋转/缩放）。
+    c0: [f32; 4],
+    /// 世界矩阵第 1 列。
+    c1: [f32; 4],
+    /// 世界矩阵第 3 列（平移；2D 只需 xy）。
+    c3: [f32; 4],
     /// UV 矩形 `(u0, v0, u1, v1)`。
     uv_rect: [f32; 4],
     /// 线性 RGBA 乘算色。
@@ -59,7 +63,7 @@ impl SpriteInstance {
             .input_rate(vk::VertexInputRate::INSTANCE)
     }
 
-    fn attribute_descriptions() -> [vk::VertexInputAttributeDescription; 7] {
+    fn attribute_descriptions() -> [vk::VertexInputAttributeDescription; 6] {
         let vec4 = |location: u32, offset: u32| {
             vk::VertexInputAttributeDescription::default()
                 .location(location)
@@ -73,12 +77,11 @@ impl SpriteInstance {
             vec4(2, 32),
             vec4(3, 48),
             vec4(4, 64),
-            vec4(5, 80),
             vk::VertexInputAttributeDescription::default()
-                .location(6)
+                .location(5)
                 .binding(0)
                 .format(vk::Format::R32_UINT)
-                .offset(96),
+                .offset(80),
         ]
     }
 }
@@ -291,7 +294,9 @@ impl SpritePass {
         let instances: Vec<SpriteInstance> = items
             .iter()
             .map(|item| SpriteInstance {
-                model: item.model,
+                c0: item.model[0],
+                c1: item.model[1],
+                c3: item.model[3],
                 uv_rect: item.uv_rect,
                 color: item.color,
                 texture: item.texture,
