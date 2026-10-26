@@ -239,8 +239,10 @@ pub fn decode_rmes(bytes: &[u8]) -> Result<MeshUploadInput> {
         uv_pairs.into_iter().step_by(uv_channels as usize).collect()
     };
     let indices = bytes[index_start..index_end]
-        .chunks_exact(4)
-        .map(|chunk| u32::from_le_bytes(chunk.try_into().unwrap()))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|&chunk| u32::from_le_bytes(chunk))
         .collect();
 
     Ok(MeshUploadInput {
