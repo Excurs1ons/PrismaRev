@@ -16,12 +16,32 @@ use winit::window::Window;
 pub enum PlatformEvent {
     CloseRequested,
     Focused(bool),
-    Resized { width: u32, height: u32 },
-    CursorMoved { x: f64, y: f64 },
-    MouseButton { button: u16, pressed: bool },
-    MouseWheel { delta: f64 },
-    Key { key: u32, pressed: bool },
-    Touch { x: f64, y: f64, phase: TouchPhase },
+    Resized {
+        width: u32,
+        height: u32,
+    },
+    CursorMoved {
+        x: f64,
+        y: f64,
+    },
+    MouseButton {
+        button: u16,
+        pressed: bool,
+    },
+    MouseWheel {
+        delta: f64,
+    },
+    Key {
+        key: u32,
+        pressed: bool,
+    },
+    Touch {
+        /// 触点 id（同一根手指的手指按下到抬起保持不变，多点触控据此区分）。
+        id: u64,
+        x: f64,
+        y: f64,
+        phase: TouchPhase,
+    },
     Other,
 }
 
@@ -71,6 +91,7 @@ pub fn to_platform_event(event: &WindowEvent) -> PlatformEvent {
             pressed: event.state == winit::event::ElementState::Pressed,
         },
         WindowEvent::Touch(touch) => PlatformEvent::Touch {
+            id: touch.id,
             x: touch.location.x,
             y: touch.location.y,
             phase: match touch.phase {
@@ -346,6 +367,57 @@ mod tests {
         assert_eq!(
             to_platform_event(&WindowEvent::CloseRequested),
             PlatformEvent::CloseRequested
+        );
+    }
+
+    #[test]
+    fn converts_touch_with_pointer_id() {
+        let event = WindowEvent::Touch(winit::event::Touch {
+            device_id: winit::event::DeviceId::dummy(),
+            phase: winit::event::TouchPhase::Started,
+            location: winit::dpi::PhysicalPosition::new(12.5, 34.0),
+            force: None,
+            id: 7,
+        });
+        assert_eq!(
+            to_platform_event(&event),
+            PlatformEvent::Touch {
+                id: 7,
+                x: 12.5,
+                y: 34.0,
+                phase: TouchPhase::Started,
+            }
+        );
+    }
+
+    #[test]
+    fn keeps_touch_phase_and_distinct_pointer_ids() {
+        let make = |phase, id| {
+            WindowEvent::Touch(winit::event::Touch {
+                device_id: winit::event::DeviceId::dummy(),
+                phase,
+                location: winit::dpi::PhysicalPosition::new(1.0, 2.0),
+                force: Some(winit::event::Force::Normalized(0.5)),
+                id,
+            })
+        };
+        assert_eq!(
+            to_platform_event(&make(winit::event::TouchPhase::Moved, 1)),
+            PlatformEvent::Touch {
+                id: 1,
+                x: 1.0,
+                y: 2.0,
+                phase: TouchPhase::Moved,
+            }
+        );
+        assert_eq!(
+            to_platform_event(&make(winit::event::TouchPhase::Cancelled, 2)),
+            PlatformEvent::Touch {
+                id: 2,
+                x: 1.0,
+                y: 2.0,
+                phase: TouchPhase::Cancelled,
+            }
         );
     }
 }
