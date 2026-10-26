@@ -82,6 +82,25 @@ const sliderBounds = computed(() => {
   return attr && attr.type === "range" ? attr : null;
 });
 
+/** `[Range]` / `[Min]` / `[Max]` → 数值上下界。 */
+const numberBounds = computed(() => {
+  if (!drawer.value) return null;
+  let min: number | undefined;
+  let max: number | undefined;
+  for (const attr of drawer.value.attributes) {
+    if (attr.type === "range") {
+      min = attr.min;
+      max = attr.max;
+    } else if (attr.type === "min") {
+      min = attr.min;
+    } else if (attr.type === "max") {
+      max = attr.max;
+    }
+  }
+  if (min === undefined && max === undefined) return null;
+  return { min, max };
+});
+
 /** `[TextArea]` / `[Multiline]` → 多行文本框的行数范围。 */
 const textAreaBounds = computed(() => {
   const attr = drawer.value?.attributes.find(
@@ -250,7 +269,16 @@ function defaultFor(field: FieldSchema | null): JsonValue {
 
 /** `fromChild` 为嵌套编辑器冒泡上来的精确路径；为空则用本字段路径。 */
 function set(next: JsonValue, fromChild?: string) {
-  emit("update", next, fromChild ?? pathStr.value);
+  let val = next;
+  if (!fromChild && kind.value === "number" && typeof val === "number" && numberBounds.value) {
+    if (numberBounds.value.min !== undefined && val < numberBounds.value.min) {
+      val = numberBounds.value.min;
+    }
+    if (numberBounds.value.max !== undefined && val > numberBounds.value.max) {
+      val = numberBounds.value.max;
+    }
+  }
+  emit("update", val, fromChild ?? pathStr.value);
 }
 
 /** 离散操作：唯一后缀确保不被合并。 */
@@ -491,6 +519,8 @@ function onSelect(event: Event) {
         />
         <NumberField
           :model-value="(value as number)"
+          :min="numberBounds?.min"
+          :max="numberBounds?.max"
           :integer="isInteger"
           :disabled="hint?.readOnly"
           @update:model-value="(v) => set(v)"
@@ -499,6 +529,8 @@ function onSelect(event: Event) {
       <NumberField
         v-else-if="kind === 'number'"
         :model-value="(value as number)"
+        :min="numberBounds?.min"
+        :max="numberBounds?.max"
         :integer="isInteger"
         :disabled="hint?.readOnly"
         @update:model-value="(v) => set(v)"

@@ -144,7 +144,10 @@ fn field_schema(
     let mut schema = leaf_schema(&field.ty, registry);
     schema.name = field.name.to_string();
     schema.read_only = field.read_only;
-    schema.drawer = drawers.drawer_for(declaring_type, field.name).cloned();
+    let value_type = value_type_name(&schema);
+    schema.drawer = drawers
+        .drawer_for_field(declaring_type, field.name, value_type)
+        .cloned();
     if let Some(variants) = field.enum_variants {
         attach_variants(
             &mut schema,
@@ -152,6 +155,16 @@ fn field_schema(
         );
     }
     schema
+}
+
+fn value_type_name(schema: &FieldSchema) -> Option<&str> {
+    if let Some(ref st) = schema.struct_type {
+        return Some(st.as_str());
+    }
+    if let Some(ref inner) = schema.inner {
+        return value_type_name(inner);
+    }
+    None
 }
 
 /// 把枚举变体挂到**最内层**的标量 leaf 上。
@@ -446,6 +459,28 @@ mod tests {
             .clone()
             .expect("exposure drawer");
         assert_eq!(exposure.range_bounds(), Some((0.0, 5.0)));
+
+        // 类型级绘制器（Unity `[CustomPropertyDrawer(typeof(Anchors))]`）：
+        // 凡是值类型为 `prism_engine::ui::Anchors` 的字段（如 `Style.anchors`）都获得该绘制器。
+        drawers.register_type(
+            "prism_engine::ui::Anchors",
+            PropertyDrawer::custom("AnchorGizmo"),
+        );
+        let custom_schema_with_type = build_schema_with(&registry, &drawers);
+        let style = custom_schema_with_type
+            .type_by_name("prism_engine::ui::Style")
+            .expect("Style component");
+        let anchors_field = style
+            .fields
+            .iter()
+            .find(|f| f.name == "anchors")
+            .expect("Style.anchors");
+        let anchors_drawer = anchors_field
+            .drawer
+            .as_ref()
+            .expect("anchors type-level drawer");
+        assert_eq!(anchors_drawer.renderer, PropertyRenderer::Custom);
+        assert_eq!(anchors_drawer.custom.as_deref(), Some("AnchorGizmo"));
 
         // 宿主注册表是局部覆盖：默认 schema 仍是内置的 `[ColorUsage]`。
         let builtin_schema = build_schema();

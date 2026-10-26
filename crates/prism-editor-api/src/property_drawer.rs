@@ -380,17 +380,44 @@ impl PropertyDrawerRegistry {
     }
 
     /// 查某个字段该用哪个绘制器。
-    pub fn drawer_for(&self, type_name: &str, field: &str) -> Option<&PropertyDrawer> {
+    ///
+    /// 查找顺序：
+    /// 1. 字段级声明（`declaring_type` + `field`）；
+    /// 2. 字段值类型级声明（`value_type`，对齐 Unity `[CustomPropertyDrawer(typeof(X))]`）。
+    pub fn drawer_for_field(
+        &self,
+        declaring_type: &str,
+        field: &str,
+        value_type: Option<&str>,
+    ) -> Option<&PropertyDrawer> {
         self.entries
             .iter()
             .rev()
-            .find(|entry| entry.type_name == type_name && entry.field.as_deref() == Some(field))
-            .or_else(|| {
-                self.entries
-                    .iter()
-                    .rev()
-                    .find(|entry| entry.type_name == type_name && entry.field.is_none())
+            .find(|entry| {
+                entry.type_name == declaring_type && entry.field.as_deref() == Some(field)
             })
+            .or_else(|| {
+                value_type.and_then(|val_ty| {
+                    self.entries
+                        .iter()
+                        .rev()
+                        .find(|entry| entry.type_name == val_ty && entry.field.is_none())
+                })
+            })
+            .map(|entry| &entry.drawer)
+    }
+
+    /// 查某个声明者类型的具体字段（不传值类型）。
+    pub fn drawer_for(&self, type_name: &str, field: &str) -> Option<&PropertyDrawer> {
+        self.drawer_for_field(type_name, field, None)
+    }
+
+    /// 查针对某个类型本身的绘制器（`[CustomPropertyDrawer(typeof(X))]`）。
+    pub fn drawer_for_type(&self, type_name: &str) -> Option<&PropertyDrawer> {
+        self.entries
+            .iter()
+            .rev()
+            .find(|entry| entry.type_name == type_name && entry.field.is_none())
             .map(|entry| &entry.drawer)
     }
 
@@ -461,26 +488,38 @@ mod tests {
     #[test]
     fn lookup_prefers_field_scope_over_type_scope() {
         let mut registry = PropertyDrawerRegistry::new();
+        // 给类型 demo::X 登记类型级绘制器（Unity `[CustomPropertyDrawer(typeof(X))]`）
         registry.register_type("demo::X", PropertyDrawer::custom("WholeType"));
+
+        // 宿主包含 demo::X 类型的值字段：命中类型级绘制器
         assert_eq!(
-            registry.drawer_for("demo::X", "any").map(|d| d.renderer),
+            registry
+                .drawer_for_field("demo::Host", "x_field", Some("demo::X"))
+                .map(|d| d.renderer),
             Some(PropertyRenderer::Custom)
         );
 
-        registry.register("demo::X", "any", PropertyDrawer::range(0.0, 1.0));
-        assert_eq!(
-            registry.drawer_for("demo::X", "any").map(|d| d.renderer),
-            Some(PropertyRenderer::Slider)
-        );
-        // 其它字段仍走类型级声明。
+        // 给特定字段登记字段级绘制器：覆盖类型级
+        registry.register("demo::Host", "x_field", PropertyDrawer::range(0.0, 1.0));
         assert_eq!(
             registry
-                .drawer_for("demo::X", "other")
+                .drawer_for_field("demo::Host", "x_field", Some("demo::X"))
+                .map(|d| d.renderer),
+            Some(PropertyRenderer::Slider)
+        );
+
+        // 同一宿主的其它同类型字段仍走类型级声明
+        assert_eq!(
+            registry
+                .drawer_for_field("demo::Host", "other_x", Some("demo::X"))
                 .and_then(|d| d.custom.as_deref()),
             Some("WholeType")
         );
-        // 别的类型不受影响。
-        assert!(registry.drawer_for("demo::Y", "any").is_none());
+
+        // 其它值类型的字段不受影响
+        assert!(registry
+            .drawer_for_field("demo::Host", "y_field", Some("demo::Y"))
+            .is_none());
     }
 
     #[test]
