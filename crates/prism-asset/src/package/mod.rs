@@ -502,18 +502,69 @@ impl PackageReader {
     fn from_owned_bytes(bytes: Vec<u8>) -> Result<Self, PackageError> {
         let header = PackageHeader::from_bytes(&bytes)?;
 
-        // 读取 registry.
-        let reg_start = header.registry_offset as usize;
-        let reg_end = reg_start + header.registry_size as usize;
-        if reg_end > bytes.len() {
+        // 由 header 派生的偏移/长度全部走 checked 算术：`.pak` 是运行时从磁盘读入的
+        // 格式，损坏或不可信的文件必须返回 Err，而不是在 debug 下整数溢出 panic、
+        // release 下回绕成巨大值再切片 panic（校验和检查根本走不到）。
+        let file_len = bytes.len() as u64;
+
+        if header.registry_offset != PackageHeader::SERIALIZED_SIZE {
             return Err(PackageError::Truncated(format!(
-                "registry extends past file: {reg_end} > {}",
-                bytes.len()
+                "registry_offset {} != header size {}",
+                header.registry_offset,
+                PackageHeader::SERIALIZED_SIZE
             )));
         }
-        let reg_bytes = &bytes[reg_start..reg_end];
+
+        let expected_registry_size =
+            header.asset_count as u64 * RuntimeAssetRecord::SERIALIZED_SIZE;
+        if header.registry_size != expected_registry_size {
+            return Err(PackageError::Truncated(format!(
+                "registry_size {} != asset_count {} * {}",
+                header.registry_size,
+                header.asset_count,
+                RuntimeAssetRecord::SERIALIZED_SIZE
+            )));
+        }
+
+        let reg_start = header.registry_offset as usize;
+        let reg_end = header
+            .registry_offset
+            .checked_add(header.registry_size)
+            .ok_or_else(|| PackageError::Truncated("registry end overflows u64".into()))?;
+        if reg_end > file_len {
+            return Err(PackageError::Truncated(format!(
+                "registry extends past file: {reg_end} > {file_len}"
+            )));
+        }
+
+        // 依赖数组位于 registry 与 data 之间，长度必须是 u64 的整数倍。
+        let deps_start = reg_end;
+        let deps_size = header.data_offset.checked_sub(deps_start).ok_or_else(|| {
+            PackageError::Truncated(format!(
+                "data_offset {} precedes the registry end {deps_start}",
+                header.data_offset
+            ))
+        })?;
+        if deps_size % 8 != 0 {
+            return Err(PackageError::Truncated(format!(
+                "dependency array size {deps_size} is not a multiple of 8"
+            )));
+        }
+
+        let data_end = header
+            .data_offset
+            .checked_add(header.data_size)
+            .ok_or_else(|| PackageError::Truncated("data chunk end overflows u64".into()))?;
+        if data_end > file_len {
+            return Err(PackageError::Truncated(format!(
+                "data chunk extends past file: {data_end} > {file_len}"
+            )));
+        }
+
+        // 读取 registry.
+        let reg_bytes = &bytes[reg_start..reg_end as usize];
         let mut records = Vec::with_capacity(header.asset_count as usize);
-        let mut off = 0;
+        let mut off = 0usize;
         for _ in 0..header.asset_count {
             let (rec, consumed) = RuntimeAssetRecord::from_bytes(&reg_bytes[off..])?;
             records.push(rec);
@@ -521,34 +572,50 @@ impl PackageReader {
         }
 
         // 读取 dependency 数组
-        let deps_start = reg_end;
-        let deps_size = header.data_offset as usize - deps_start;
-        if deps_start + deps_size > bytes.len() {
-            return Err(PackageError::Truncated(
-                "dependency array extends past file".into(),
-            ));
-        }
-        let deps_bytes = &bytes[deps_start..deps_start + deps_size];
-        let dep_count = deps_size / 8;
+        let deps_bytes = &bytes[deps_start as usize..header.data_offset as usize];
+        let dep_count = deps_bytes.len() / 8;
         let mut dependency_array = Vec::with_capacity(dep_count);
-        for i in 0..dep_count {
-            let raw = u64::from_le_bytes(deps_bytes[i * 8..(i + 1) * 8].try_into().unwrap());
-            dependency_array.push(raw);
+        for chunk in deps_bytes.chunks_exact(8) {
+            dependency_array.push(u64::from_le_bytes(chunk.try_into().unwrap()));
         }
 
-        // 验证 校验和
-        let _checksum_field_end = 4 + 4 + 4 + 8 + 8 + 8 + 8; // 44 = end of data_size
-        let header_prefix = &bytes[12..44];
-        let data_start = header.data_offset as usize;
-        let data_bytes = &bytes[data_start..];
+        // record 里的依赖区间与数据区间同样来自文件内容，不校验就会在
+        // dependencies() / read_asset_record_data 里越界切片 panic。
+        for rec in &records {
+            let dep_end = rec
+                .dependency_start
+                .checked_add(rec.dependency_count)
+                .ok_or_else(|| PackageError::Truncated("dependency range overflows u32".into()))?;
+            if dep_end as usize > dep_count {
+                return Err(PackageError::Truncated(format!(
+                    "record dependency range {}..{} exceeds {dep_count} dependencies",
+                    rec.dependency_start, dep_end
+                )));
+            }
 
-        // Everything after header[12..44] = registry + deps + data
-        let reg_slice = reg_bytes;
-        let deps_slice = &deps_bytes;
-        let data_slice = data_bytes;
+            let stored_len = if (rec.flags & FLAG_COMPRESSED) != 0 {
+                rec.compressed_size
+            } else {
+                rec.size
+            };
+            let asset_end = rec
+                .offset
+                .checked_add(stored_len)
+                .ok_or_else(|| PackageError::Truncated("asset range overflows u64".into()))?;
+            if rec.offset < header.data_offset || asset_end > data_end {
+                return Err(PackageError::Truncated(format!(
+                    "record data range {}..{} escapes the data chunk {}..{}",
+                    rec.offset, asset_end, header.data_offset, data_end
+                )));
+            }
+        }
+
+        // 验证 校验和（覆盖 header[12..44] + registry + deps + data，到文件末尾）
+        let header_prefix = &bytes[12..44];
+        let data_bytes = &bytes[header.data_offset as usize..];
 
         let computed =
-            PackageHeader::compute_checksum(header_prefix, reg_slice, deps_slice, data_slice);
+            PackageHeader::compute_checksum(header_prefix, reg_bytes, deps_bytes, data_bytes);
         if computed != header.checksum {
             return Err(PackageError::ChecksumMismatch {
                 computed,
@@ -614,31 +681,31 @@ impl PackageReader {
         &self,
         record: &RuntimeAssetRecord,
     ) -> Result<Vec<u8>, PackageError> {
-        let data_start = self.header.data_offset as usize;
-        let offset = data_start + record.offset as usize - self.header.data_offset as usize;
-
-        let end = offset
-            + if (record.flags & FLAG_COMPRESSED) != 0 {
-                record.compressed_size as usize
-            } else {
-                record.size as usize
-            };
-
-        if end > self.data.len() {
+        // record 的区间来自文件；即使已经在校验阶段筛过，这里也只用 checked 算术，
+        // 避免手工构造的 record 越界切片。
+        let stored_len = if (record.flags & FLAG_COMPRESSED) != 0 {
+            record.compressed_size
+        } else {
+            record.size
+        };
+        let end = record
+            .offset
+            .checked_add(stored_len)
+            .ok_or_else(|| PackageError::Truncated("asset range overflows u64".into()))?;
+        let file_len = self.data.len() as u64;
+        if end > file_len {
             return Err(PackageError::Truncated(format!(
-                "asset data extends past file: {end} > {}",
-                self.data.len()
+                "asset data extends past file: {end} > {file_len}"
             )));
         }
 
-        let compressed = (record.flags & FLAG_COMPRESSED) != 0;
-        if compressed {
-            let compressed_bytes = &self.data[offset..end];
-            let decompressed = zstd::decode_all(std::io::Cursor::new(compressed_bytes))
+        let range = record.offset as usize..end as usize;
+        if (record.flags & FLAG_COMPRESSED) != 0 {
+            let decompressed = zstd::decode_all(std::io::Cursor::new(&self.data[range]))
                 .map_err(|e| PackageError::Decompress(e.to_string()))?;
             Ok(decompressed)
         } else {
-            Ok(self.data[offset..end].to_vec())
+            Ok(self.data[range].to_vec())
         }
     }
 
