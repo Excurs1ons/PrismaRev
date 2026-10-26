@@ -996,17 +996,6 @@ html.compact .dock-tab {
   letter-spacing: 0.12em;
   border-bottom: 1px solid var(--border);
 }
-.log {
-  margin: 0;
-  padding: 8px 10px;
-  overflow: auto;
-  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
-  font-size: 12px;
-  line-height: 1.45;
-  white-space: pre-wrap;
-  color: var(--text-soft);
-  min-height: 0;
-}
 .log-panel {
   display: flex;
   flex: 1 1 auto;
@@ -1052,17 +1041,34 @@ html.compact .dock-tab {
   min-height: 0;
   overflow: auto;
 }
-.log-block {
-  overflow: visible;
+.log-virtual {
+  position: relative;
+  min-height: 0;
 }
-.log-section-title {
-  padding: 3px 10px;
+.log-window {
+  position: absolute;
+  inset: 0 auto auto 0;
+  /* 让长行产生横向滚动，而不是换行把固定行高撑开 */
+  width: max-content;
+  min-width: 100%;
+}
+/* 固定行高是窗口化（`windowRange`）的前提：改这里必须同步 App.vue 的 LOG_ROW_HEIGHT */
+.log-row {
+  height: 18px;
+  padding: 0 10px;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 18px;
+  white-space: pre;
+  color: var(--text-soft);
+}
+.log-row-section {
+  padding: 0 10px;
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.08em;
   color: var(--muted);
   background: var(--panel);
-  border-bottom: 1px solid var(--border);
 }
 .log-level-error {
   color: var(--danger);
