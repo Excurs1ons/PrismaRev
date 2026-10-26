@@ -26,6 +26,11 @@ use crate::runtime::{Asset, RuntimeError};
 #[derive(Debug, Clone)]
 pub struct TextureAsset {
     pub info: RtexInfo,
+    /// The cooked bytes this asset was decoded from, kept so [`Asset::into_bytes`]
+    /// can hand back exactly what the `.pak` stored. Decoding copies the mip
+    /// chain into `info`, so re-serialising from `info` would need the cooker's
+    /// writer in the runtime layer.
+    raw: Vec<u8>,
 }
 
 impl Asset for TextureAsset {
@@ -38,16 +43,14 @@ impl Asset for TextureAsset {
             asset_type: AssetType::Texture,
             reason: "invalid RTEX data (bad magic / truncated)".into(),
         })?;
-        Ok(Self { info })
+        Ok(Self {
+            info,
+            raw: data.to_vec(),
+        })
     }
 
     fn into_bytes(self) -> Vec<u8> {
-        // Re-serialization is not needed at 运行时 this is a 回退 that
-        // round-trips via the cooker's writer if ever required. For now we
-        // return the raw 字节 we were given - but since we don't 存储 them,
-        // return 空 (this 方法 is only used by the editor's 保存 后
-        // path which the 运行时 doesn't exercise).
-        Vec::new()
+        self.raw
     }
 }
 
@@ -64,6 +67,10 @@ impl Asset for TextureAsset {
 #[derive(Debug, Clone)]
 pub struct MeshAsset {
     pub info: RmesInfo,
+    /// The cooked bytes this asset was decoded from. Kept verbatim because
+    /// [`RmesInfo`] does not model the three sub-buffer offsets in the RMES
+    /// header, so anything rebuilt from `info` would not be byte-identical.
+    raw: Vec<u8>,
 }
 
 impl Asset for MeshAsset {
@@ -76,11 +83,14 @@ impl Asset for MeshAsset {
             asset_type: AssetType::Mesh,
             reason: "invalid RMES data (bad magic / truncated)".into(),
         })?;
-        Ok(Self { info })
+        Ok(Self {
+            info,
+            raw: data.to_vec(),
+        })
     }
 
     fn into_bytes(self) -> Vec<u8> {
-        Vec::new()
+        self.raw
     }
 }
 
@@ -96,6 +106,10 @@ impl Asset for MeshAsset {
 #[derive(Debug, Clone)]
 pub struct MaterialAsset {
     pub info: RmatInfo,
+    /// The cooked bytes this asset was decoded from, so [`Asset::into_bytes`]
+    /// round-trips the original RMAT blob (including any trailing payload the
+    /// decoder ignores).
+    raw: Vec<u8>,
 }
 
 impl MaterialAsset {
@@ -120,11 +134,14 @@ impl Asset for MaterialAsset {
             asset_type: AssetType::Material,
             reason: "invalid RMAT data (bad magic / truncated)".into(),
         })?;
-        Ok(Self { info })
+        Ok(Self {
+            info,
+            raw: data.to_vec(),
+        })
     }
 
     fn into_bytes(self) -> Vec<u8> {
-        Vec::new()
+        self.raw
     }
 }
 
@@ -215,3 +232,7 @@ impl Asset for SceneAsset {
         self.bytes
     }
 }
+
+#[cfg(test)]
+#[path = "typed_tests.rs"]
+mod tests;
