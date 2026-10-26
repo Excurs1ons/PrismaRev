@@ -35,6 +35,7 @@ import {
   type ThemeState,
 } from "./theme";
 import { PREFAB_LINK_COMPONENT } from "./types";
+import { windowRange } from "./windowed";
 import type {
   AssetInfo,
   AssetRef,
@@ -161,6 +162,8 @@ const gameLogEntries = ref<PreviewLogLine[]>([]);
 const logScrollEl = ref<HTMLElement | null>(null);
 const logSourceFilter = ref<"all" | "editor" | "game">("all");
 const logLevelFilter = ref<LogLevel | "all">("all");
+const logScrollTop = ref(0);
+const logViewportHeight = ref(0);
 const busy = ref(false);
 
 type LogLevel = "error" | "warn" | "info" | "debug" | "trace" | "panic";
@@ -229,6 +232,71 @@ const hasFilteredLogs = computed(
     (logSourceFilter.value !== "game" && filteredEditorLogLines.value.length > 0) ||
     (logSourceFilter.value !== "editor" && filteredGameLogLines.value.length > 0),
 );
+
+// ── 日志窗口化 ──────────────────────────────────────────────────────────────
+// 单行固定高度（见 style.css 的 `.log-row`）。日志最多保留
+// `editorPrefs.maxLogLines`（上限 20000）行，一次性渲染成 DOM 会拖垮滚动；
+// 这里只渲染视口附近的行，其余用 spacer 占位。
+const LOG_ROW_HEIGHT = 18;
+
+type LogRow =
+  | { kind: "title"; text: string }
+  | { kind: "line"; entry: LogViewLine };
+
+const logRows = computed<LogRow[]>(() => {
+  const rows: LogRow[] = [];
+  if (logSourceFilter.value !== "game" && filteredEditorLogLines.value.length) {
+    rows.push({ kind: "title", text: "编辑器" });
+    for (const entry of filteredEditorLogLines.value) rows.push({ kind: "line", entry });
+  }
+  if (logSourceFilter.value !== "editor" && filteredGameLogLines.value.length) {
+    rows.push({ kind: "title", text: "Game" });
+    for (const entry of filteredGameLogLines.value) rows.push({ kind: "line", entry });
+  }
+  return rows;
+});
+
+const logWindow = computed(() =>
+  windowRange(
+    logRows.value.length,
+    LOG_ROW_HEIGHT,
+    logScrollTop.value,
+    logViewportHeight.value,
+  ),
+);
+
+const visibleLogRows = computed(() => logRows.value.slice(logWindow.value.start, logWindow.value.end));
+
+function syncLogViewport() {
+  const element = logScrollEl.value;
+  if (!element) return;
+  logScrollTop.value = element.scrollTop;
+  logViewportHeight.value = element.clientHeight;
+}
+
+function onLogScroll() {
+  syncLogViewport();
+}
+
+// 面板被拖宽/拖高、dock 重排、字号变化都会改变可见行数，用 ResizeObserver
+// 而不是监听 window resize。元素本身是 v-if 之外的常驻节点，但仍在出现时重新挂载。
+watch(
+  logScrollEl,
+  (element) => {
+    if (!element) return;
+    syncLogViewport();
+    const observer = new ResizeObserver(() => syncLogViewport());
+    observer.observe(element);
+    return () => observer.disconnect();
+  },
+  { flush: "post" },
+);
+
+watch([logSourceFilter, logLevelFilter], () => {
+  const element = logScrollEl.value;
+  if (element) element.scrollTop = 0;
+  logScrollTop.value = 0;
+});
 
 const documentLabel = computed(() => {
   if (currentPath.value) return currentPath.value.split("/").pop() || currentPath.value;
@@ -1484,7 +1552,10 @@ function stopPreviewPolling() {
 function scrollLogsToEnd() {
   void nextTick(() => {
     const element = logScrollEl.value;
-    if (element) element.scrollTop = element.scrollHeight;
+    if (element) {
+      element.scrollTop = element.scrollHeight;
+      syncLogViewport();
+    }
   });
 }
 
@@ -2212,28 +2283,25 @@ onUnmounted(() => {
             <button class="ghost icon" title="清空日志" @click="clearAllLogs">清空</button>
           </div>
 
-          <div ref="logScrollEl" class="log-scroll">
-            <template
-              v-if="logSourceFilter !== 'game' && filteredEditorLogLines.length"
-            >
-              <div class="log-section-title">编辑器</div>
-              <pre class="log log-block"><span
-                v-for="(entry, index) in filteredEditorLogLines"
-                :key="index"
-                :class="`log-level-${entry.level}`"
-              >{{ entry.line }}{{ "\n" }}</span></pre>
-            </template>
-
-            <template
-              v-if="logSourceFilter !== 'editor' && filteredGameLogLines.length"
-            >
-              <div class="log-section-title">Game</div>
-              <pre class="log log-block"><span
-                v-for="(entry, index) in filteredGameLogLines"
-                :key="index"
-                :class="`log-level-${entry.level}`"
-              >{{ entry.line }}{{ "\n" }}</span></pre>
-            </template>
+          <div ref="logScrollEl" class="log-scroll" @scroll.passive="onLogScroll">
+            <div class="log-virtual" :style="{ height: `${logWindow.total}px` }">
+              <div
+                class="log-window"
+                :style="{ transform: `translateY(${logWindow.offset}px)` }"
+              >
+                <div
+                  v-for="(row, index) in visibleLogRows"
+                  :key="logWindow.start + index"
+                  class="log-row"
+                  :class="
+                    row.kind === 'title'
+                      ? 'log-row-section'
+                      : `log-level-${row.entry.level}`
+                  "
+                  :title="row.kind === 'line' ? row.entry.line : undefined"
+                >{{ row.kind === "title" ? row.text : row.entry.line }}</div>
+              </div>
+            </div>
 
             <div v-if="!hasFilteredLogs" class="empty">当前筛选没有日志。</div>
           </div>

@@ -120,6 +120,11 @@ deviating from those conventions is a bug. (`README.md` is the human-facing over
     `error/warn/info/debug/trace/panic` 过滤。`editor_play_scene` 用 piped
     stdout/stderr 启动游戏，读取线程把每行写入共享 ring buffer（`editor_preview_logs`
     回填）并 emit `preview-log`；前端 `onPreviewLog` 追加到 `gameLogEntries`。
+    面板本身是**窗口化**的（`editor/src/windowed.ts` 的 `windowRange` + `LOG_ROW_HEIGHT`）：
+    只渲染视口附近的行，其余用 spacer 占位，所以 `maxLogLines`（默认 5000、上限 20000）
+    不再等于 DOM 节点数。行的**固定 18px 高度**是前提（`.log-row` 里 `height/line-height: 18px`
+    且 `white-space: pre`，长行横向滚动 + `title` 显示全文），改行高必须同步
+    `App.vue` 的 `LOG_ROW_HEIGHT`，否则滚动位置会错位。
   - 编辑器把**场景与预制体统一成「文档」**：同一 `{version, entities}` 形状，靠
     `DocKind` 区分目录/后缀 —— 场景 `assets/scenes/*.scene.json`、预制体
     `assets/prefabs/*.prefab.json`。因此层级树/检查器/撤销对两者完全通用；
