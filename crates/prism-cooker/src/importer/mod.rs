@@ -252,6 +252,24 @@ impl ImportPipeline {
         settings: Option<Value>,
     ) -> Result<ImportFileResult, ImportError> {
         let normalized = normalize_relative_path(source_path);
+        self.import_file_with_key(source_path, &normalized, db, cache, settings)
+    }
+
+    /// 导入 a single file under an explicit asset key.
+    ///
+    /// `relative_key` is the path relative to the project's `Assets/` root.
+    /// CLI callers that already know the root should prefer this over
+    /// [`Self::import_file`], whose key is derived from the (possibly
+    /// absolute) source path and would otherwise duplicate the record.
+    pub fn import_file_with_key(
+        &self,
+        source_path: &Path,
+        relative_key: &str,
+        db: &mut AssetDatabase,
+        cache: &mut ImportCache,
+        settings: Option<Value>,
+    ) -> Result<ImportFileResult, ImportError> {
+        let normalized = normalize_relative_path(Path::new(relative_key));
         let data = std::fs::read(source_path)?;
         let hash = xxhash_rust::xxh3::xxh3_64(&data);
         let settings = settings.unwrap_or(Value::Null);

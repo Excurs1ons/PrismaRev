@@ -197,6 +197,43 @@ fn import_pipeline_updates_database() {
     std::fs::remove_file(&path).ok();
 }
 
+#[test]
+fn explicit_relative_key_reuses_scanned_record() {
+    let reg = Arc::new(default_importer_registry());
+    let pipeline = ImportPipeline::new(reg);
+
+    let dir = std::env::temp_dir().join("prism_relative_key_test");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("scanned.bin");
+    std::fs::write(&path, b"relative key").unwrap();
+
+    let mut db = AssetDatabase::new();
+    let id = db.generate_id();
+    db.insert(crate::db::AssetRecord::new(
+        id,
+        "scanned.bin".into(),
+        AssetType::Binary,
+        "raw",
+    ))
+    .unwrap();
+    let mut cache = ImportCache::new();
+
+    let result = pipeline
+        .import_file_with_key(&path, "scanned.bin", &mut db, &mut cache, None)
+        .unwrap();
+
+    assert!(result.was_imported);
+    assert_eq!(
+        db.len(),
+        1,
+        "absolute source path must not add a second record"
+    );
+    assert_eq!(db.id_by_path("scanned.bin"), Some(id));
+    assert!(db.get_by_path("scanned.bin").is_some());
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 // ── Real glTF / GLB 导入 test ──────────────────────────────────
 
 /// 构建 a minimal 有效 GLB file in 内存
