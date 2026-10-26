@@ -50,14 +50,6 @@ impl AssetData for TestAsset {
     fn display_name(&self) -> &'static str {
         "Test Asset"
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-        self
-    }
 }
 
 #[test]
@@ -103,6 +95,17 @@ fn downcast() {
     let down = asset.downcast_ref::<TestAsset>();
     assert!(down.is_some());
     assert!((down.unwrap().value - std::f32::consts::PI).abs() < 1e-6);
+}
+
+#[test]
+fn downcast_rejects_mismatched_type() {
+    let asset: Box<dyn AssetData> = Box::new(TestAsset { value: 1.0 });
+    assert!(asset.downcast_ref::<String>().is_none());
+    assert!(downcast_ref::<String>(asset.as_ref()).is_none());
+
+    let mut asset: Box<dyn AssetData> = Box::new(TestAsset { value: 1.0 });
+    assert!(asset.downcast_mut::<String>().is_none());
+    assert!(downcast_mut::<String>(asset.as_mut()).is_none());
 }
 
 #[test]
