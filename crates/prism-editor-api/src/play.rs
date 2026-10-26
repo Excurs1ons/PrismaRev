@@ -112,7 +112,19 @@ pub fn write_scene_manifest(root: &Path, scenes: &[SceneListEntry]) -> Result<()
     std::fs::write(&path, text).map_err(|error| format!("无法写入 {}: {error}", path.display()))
 }
 
-/// 枚举清单中的所有场景，按名字排序。
+/// 由清单条目路径推出作者文档（相对 `assets/`）。
+///
+/// 与 `prism-build-pipeline` 的 `build-scenes` 使用同一约定：`.scene.json` 是作者文档
+/// 本身，`.rscn` 是它的 cook 产物，两者都映射回 `<stem>.scene.json`，并保留子目录。
+/// 其他格式（外部 glTF 等）没有对应的作者文档。
+fn doc_relative_path(entry_path: &str) -> Option<String> {
+    let stem = entry_path
+        .strip_suffix(".scene.json")
+        .or_else(|| entry_path.strip_suffix(".rscn"))?;
+    Some(format!("{stem}.scene.json"))
+}
+
+/// 枚举清单中所有启用的场景，保持清单顺序（= 构建 / 启动顺序）。
 pub fn list_playable_scenes(root: &Path) -> Result<Vec<PlayableScene>, String> {
     let path = manifest_path(root);
     let text = match std::fs::read_to_string(&path) {
@@ -123,28 +135,22 @@ pub fn list_playable_scenes(root: &Path) -> Result<Vec<PlayableScene>, String> {
     let manifest: Manifest =
         toml::from_str(&text).map_err(|error| format!("解析 {} 失败: {error}", path.display()))?;
 
-    let mut scenes: Vec<PlayableScene> = manifest
+    let assets = root.join("assets");
+    Ok(manifest
         .scenes
         .into_iter()
         .filter(|entry| entry.enabled)
         .map(|entry| {
-            let stem = Path::new(&entry.path)
-                .file_stem()
-                .and_then(|stem| stem.to_str())
-                .unwrap_or(&entry.name);
-            let doc = root
-                .join("assets")
-                .join("scenes")
-                .join(format!("{stem}.scene.json"));
+            let doc = doc_relative_path(&entry.path)
+                .map(|rel| assets.join(rel))
+                .filter(|doc| doc.is_file());
             PlayableScene {
                 name: entry.name,
                 path: entry.path,
-                doc_path: doc.is_file().then(|| doc.to_string_lossy().into_owned()),
+                doc_path: doc.map(|doc| doc.to_string_lossy().into_owned()),
             }
         })
-        .collect();
-    scenes.sort_by(|a, b| a.name.cmp(&b.name));
-    Ok(scenes)
+        .collect())
 }
 
 /// 运行时包状态（`assets/scenes.pak`）。
@@ -165,6 +171,14 @@ pub fn scene_package_status(root: &Path) -> ScenePackageStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 建一个只含空 `assets/` 的项目目录；同名目录先清空，避免测试互相污染。
+    fn temp_project(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("prism-editor-api-{name}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("assets")).unwrap();
+        dir
+    }
 
     #[test]
     fn missing_manifest_is_empty() {
@@ -206,6 +220,80 @@ mod tests {
         let scenes = list_playable_scenes(&dir).unwrap();
         assert_eq!(scenes.len(), 1);
         assert_eq!(scenes[0].name, "b");
+    }
+
+    #[test]
+    fn scene_json_entry_maps_to_the_same_document() {
+        let dir = temp_project("play-scene-json-doc");
+        std::fs::write(
+            dir.join("assets/scenes.toml"),
+            "[[scenes]]\nname = \"intro\"\npath = \"scenes/intro.scene.json\"\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.join("assets/scenes")).unwrap();
+        std::fs::write(dir.join("assets/scenes/intro.scene.json"), "{}").unwrap();
+
+        let scenes = list_playable_scenes(&dir).unwrap();
+        assert_eq!(scenes.len(), 1);
+        let doc = scenes[0].doc_path.as_deref().expect("doc path");
+        assert_eq!(
+            Path::new(doc),
+            dir.join("assets").join("scenes").join("intro.scene.json")
+        );
+    }
+
+    #[test]
+    fn nested_scene_paths_keep_their_directory() {
+        let dir = temp_project("play-nested-doc");
+        std::fs::write(
+            dir.join("assets/scenes.toml"),
+            "[[scenes]]\nname = \"chapter\"\npath = \"scenes/chapter/intro.rscn\"\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.join("assets/scenes/chapter")).unwrap();
+        std::fs::write(dir.join("assets/scenes/chapter/intro.scene.json"), "{}").unwrap();
+
+        let scenes = list_playable_scenes(&dir).unwrap();
+        let doc = scenes[0].doc_path.as_deref().expect("doc path");
+        assert_eq!(
+            Path::new(doc),
+            dir.join("assets")
+                .join("scenes")
+                .join("chapter")
+                .join("intro.scene.json")
+        );
+    }
+
+    #[test]
+    fn non_scene_formats_have_no_doc_path() {
+        let dir = temp_project("play-no-doc");
+        std::fs::write(
+            dir.join("assets/scenes.toml"),
+            "[[scenes]]\nname = \"sponza\"\npath = \"models/sponza.gltf\"\n",
+        )
+        .unwrap();
+
+        let scenes = list_playable_scenes(&dir).unwrap();
+        assert_eq!(scenes[0].doc_path, None);
+    }
+
+    #[test]
+    fn playable_scenes_keep_manifest_order() {
+        let dir = temp_project("play-order");
+        std::fs::write(
+            dir.join("assets/scenes.toml"),
+            "[[scenes]]\nname = \"zulu\"\npath = \"scenes/zulu.rscn\"\n\
+             [[scenes]]\nname = \"alpha\"\npath = \"scenes/alpha.rscn\"\n\
+             [[scenes]]\nname = \"mike\"\npath = \"scenes/mike.rscn\"\n",
+        )
+        .unwrap();
+
+        let names: Vec<String> = list_playable_scenes(&dir)
+            .unwrap()
+            .into_iter()
+            .map(|scene| scene.name)
+            .collect();
+        assert_eq!(names, ["zulu", "alpha", "mike"]);
     }
 
     #[test]
