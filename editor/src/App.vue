@@ -1278,19 +1278,28 @@ function isTextInput(target: EventTarget | null): boolean {
 }
 
 function onKey(event: KeyboardEvent) {
-  const mod = event.ctrlKey || event.metaKey;
-  const key = event.key.toLowerCase();
-
   if (event.key === "Escape") {
     openMenu.value = null;
     return;
   }
 
-  if (!mod && event.key === "Delete") {
-    if (!isTextInput(event.target)) {
+  const mod = event.ctrlKey || event.metaKey;
+  const key = event.key.toLowerCase();
+
+  // 焦点在文本输入上时，把按键交还给文本框：`Ctrl+Z/Y`（文本撤销/重做）、
+  // `Ctrl+A`（全选）、`Ctrl+V`（粘贴）、`Ctrl+D` 都应由浏览器处理。
+  // 唯一保留的是保存 —— 编辑字段时按 `Ctrl+S` 仍应落盘。
+  if (isTextInput(event.target)) {
+    if (mod && key === "s") {
       event.preventDefault();
-      void deleteSelection();
+      void save();
     }
+    return;
+  }
+
+  if (!mod && event.key === "Delete") {
+    event.preventDefault();
+    void deleteSelection();
     return;
   }
 
@@ -1311,7 +1320,7 @@ function onKey(event: KeyboardEvent) {
     event.preventDefault();
     pasteComponent();
   } else if (key === "a") {
-    if (!isTextInput(event.target) && doc.value) {
+    if (doc.value) {
       event.preventDefault();
       selection.value = doc.value.entities.map((_, index) => index);
     }
