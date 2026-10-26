@@ -197,8 +197,12 @@ impl ComputedLayout {
 // ── Text ──────────────────────────────────────────────────────
 
 /// 文本内容。
+///
+/// `#[serde(default)]`：旧文档或手工编辑的 JSON 可能只写 `content`，
+/// 缺失字段回落到 [`Text::default`]，而不是让整个组件反序列化失败。
 #[derive(Clone, Debug, Serialize, Deserialize, Reflect)]
 #[reflect(name = "prism_engine::ui::Text")]
+#[serde(default)]
 pub struct Text {
     pub content: String,
     pub font_size: f32,
@@ -263,4 +267,25 @@ pub struct Interaction {
     pub pressed: bool,
     /// 一帧有效，input system 设置后下一帧清零。
     pub clicked: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Text, TextAlign};
+
+    #[test]
+    fn text_partial_json_fills_defaults() {
+        let text: Text = serde_json::from_str(r#"{"content":"hello"}"#).unwrap();
+        assert_eq!(text.content, "hello");
+        assert_eq!(text.font_size, 16.0);
+        assert_eq!(text.color, [1.0; 4]);
+        assert!(matches!(text.alignment, TextAlign::Center));
+    }
+
+    #[test]
+    fn text_empty_object_is_default() {
+        let text: Text = serde_json::from_str("{}").unwrap();
+        assert!(text.content.is_empty());
+        assert_eq!(text.font_size, Text::default().font_size);
+    }
 }
