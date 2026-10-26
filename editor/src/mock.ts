@@ -97,6 +97,30 @@ const projectSettingsFixture: ProjectSettingsData = {
   },
 };
 
+/**
+ * 把 `before` → `after` 的差异合并到内存设置里（与后端
+ * `write_*_settings_diff` 同语义）：没改过的字段保留当前值。
+ */
+function applySettingChanges<T>(current: T, before: T, after: T): void {
+  const walk = (target: unknown, oldValue: unknown, newValue: unknown): unknown => {
+    if (oldValue === newValue) return target;
+    if (
+      typeof target === "object" && target && !Array.isArray(target)
+      && typeof oldValue === "object" && oldValue
+      && typeof newValue === "object" && newValue
+    ) {
+      const record = target as Record<string, unknown>;
+      for (const [key, value] of Object.entries(newValue as Record<string, unknown>)) {
+        if ((oldValue as Record<string, unknown>)[key] === value) continue;
+        record[key] = walk(record[key], (oldValue as Record<string, unknown>)[key], value);
+      }
+      return record;
+    }
+    return newValue;
+  };
+  walk(current, before, after);
+}
+
 async function fixture(): Promise<Fixture> {
   if (!cache) {
     const response = await fetch("demo.json");
@@ -750,7 +774,11 @@ async function handle(cmd: string, args: Record<string, unknown>): Promise<unkno
       return { ...renderSettingsFixture };
 
     case "editor_write_render_settings": {
-      Object.assign(renderSettingsFixture, args.settings as RenderSettingsData);
+      applySettingChanges(
+        renderSettingsFixture,
+        args.before as RenderSettingsData,
+        args.after as RenderSettingsData,
+      );
       return null;
     }
 
@@ -758,7 +786,11 @@ async function handle(cmd: string, args: Record<string, unknown>): Promise<unkno
       return JSON.parse(JSON.stringify(projectSettingsFixture));
 
     case "editor_write_project_settings": {
-      Object.assign(projectSettingsFixture, args.settings as ProjectSettingsData);
+      applySettingChanges(
+        projectSettingsFixture,
+        args.before as ProjectSettingsData,
+        args.after as ProjectSettingsData,
+      );
       return null;
     }
 

@@ -927,11 +927,14 @@ fn editor_render_settings() -> Result<RenderSettingsData, String> {
     prism_editor_api::read_render_settings(&root)
 }
 
-/// 写入项目级渲染设置（保留 `settings.toml` 的其它段）。
+/// 写入项目级渲染设置（只写 `before` → `after` 改动的字段，保留其它段/其它面板的改动）。
 #[tauri::command]
-fn editor_write_render_settings(settings: RenderSettingsData) -> Result<(), String> {
+fn editor_write_render_settings(
+    before: RenderSettingsData,
+    after: RenderSettingsData,
+) -> Result<(), String> {
     let root = prism_editor_api::find_project_root()?;
-    prism_editor_api::write_render_settings(&root, &settings)
+    prism_editor_api::write_render_settings_diff(&root, &before, &after)
 }
 
 /// 读取项目设置（`[app]` / `[window]` / `[build]`）。
@@ -941,11 +944,14 @@ fn editor_project_settings() -> Result<ProjectSettingsData, String> {
     prism_editor_api::read_project_settings(&root)
 }
 
-/// 写入项目设置（保留 `[render]` 等其它段）。
+/// 写入项目设置（只写 `before` → `after` 改动的字段，保留 `[render]` 等其它段）。
 #[tauri::command]
-fn editor_write_project_settings(settings: ProjectSettingsData) -> Result<(), String> {
+fn editor_write_project_settings(
+    before: ProjectSettingsData,
+    after: ProjectSettingsData,
+) -> Result<(), String> {
     let root = prism_editor_api::find_project_root()?;
-    prism_editor_api::write_project_settings(&root, &settings)
+    prism_editor_api::write_project_settings_diff(&root, &before, &after)
 }
 
 /// 重新 cook + 打包所有场景（`prism-build-pipeline build-scenes`）。
