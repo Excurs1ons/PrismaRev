@@ -217,3 +217,129 @@ fn invalid_magic_rejected() {
     let err = PackageReader::from_bytes(&pak).unwrap_err();
     assert!(matches!(err, PackageError::InvalidMagic(_)));
 }
+
+// ---------------------------------------------------------------------------
+// 畸形 header（回归 #60）：这些输入以前会在 debug 下整数溢出 panic、
+// release 下回绕成巨大偏移再切片 panic，永远走不到校验和检查。
+// ---------------------------------------------------------------------------
+
+fn malformed_pak(
+    asset_count: u32,
+    registry_offset: u64,
+    registry_size: u64,
+    data_offset: u64,
+    data_size: u64,
+    payload: &[u8],
+) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(52 + payload.len());
+    buf.extend_from_slice(&MAGIC);
+    buf.extend_from_slice(&VERSION.to_le_bytes());
+    buf.extend_from_slice(&asset_count.to_le_bytes());
+    buf.extend_from_slice(&registry_offset.to_le_bytes());
+    buf.extend_from_slice(&registry_size.to_le_bytes());
+    buf.extend_from_slice(&data_offset.to_le_bytes());
+    buf.extend_from_slice(&data_size.to_le_bytes());
+    buf.extend_from_slice(&0u64.to_le_bytes()); // checksum (never reached first)
+    buf.extend_from_slice(payload);
+    buf
+}
+
+fn expect_truncated(bytes: &[u8]) -> PackageError {
+    let err = PackageReader::from_bytes(bytes).expect_err("malformed pak must be rejected");
+    assert!(
+        matches!(err, PackageError::Truncated(_)),
+        "expected Truncated, got {err}"
+    );
+    err
+}
+
+#[test]
+fn data_offset_before_registry_end_is_rejected() {
+    // 复现 issue 里的 100 字节构造：registry 覆盖 52..100，但 data_offset 仍是 52。
+    let bytes = malformed_pak(
+        1,
+        PackageHeader::SERIALIZED_SIZE,
+        RuntimeAssetRecord::SERIALIZED_SIZE,
+        52,
+        0,
+        &[0u8; 48],
+    );
+    expect_truncated(&bytes);
+}
+
+#[test]
+fn registry_past_end_of_file_is_rejected() {
+    let bytes = malformed_pak(
+        1,
+        PackageHeader::SERIALIZED_SIZE,
+        RuntimeAssetRecord::SERIALIZED_SIZE,
+        52 + RuntimeAssetRecord::SERIALIZED_SIZE,
+        0,
+        &[],
+    );
+    expect_truncated(&bytes);
+}
+
+#[test]
+fn asset_count_disagreeing_with_registry_size_is_rejected() {
+    let bytes = malformed_pak(
+        2,
+        PackageHeader::SERIALIZED_SIZE,
+        RuntimeAssetRecord::SERIALIZED_SIZE,
+        52 + RuntimeAssetRecord::SERIALIZED_SIZE,
+        0,
+        &[0u8; 48],
+    );
+    expect_truncated(&bytes);
+}
+
+#[test]
+fn overflowing_data_size_is_rejected() {
+    let bytes = malformed_pak(
+        0,
+        PackageHeader::SERIALIZED_SIZE,
+        0,
+        PackageHeader::SERIALIZED_SIZE,
+        u64::MAX,
+        &[],
+    );
+    expect_truncated(&bytes);
+}
+
+#[test]
+fn truncated_header_is_rejected() {
+    expect_truncated(&[]);
+    let bytes = malformed_pak(0, PackageHeader::SERIALIZED_SIZE, 0, 52, 0, &[]);
+    expect_truncated(&bytes[..40]);
+}
+
+#[test]
+fn record_data_outside_the_chunk_is_rejected() {
+    // 合法形状的 100 字节包，但 record 声称数据在 offset 0（data chunk 从 100 开始）。
+    let bytes = malformed_pak(
+        1,
+        PackageHeader::SERIALIZED_SIZE,
+        RuntimeAssetRecord::SERIALIZED_SIZE,
+        52 + RuntimeAssetRecord::SERIALIZED_SIZE,
+        0,
+        &[0u8; 48],
+    );
+    expect_truncated(&bytes);
+}
+
+#[test]
+fn record_dependencies_outside_the_array_are_rejected() {
+    let mut record = vec![0u8; RuntimeAssetRecord::SERIALIZED_SIZE as usize];
+    // dependency_start = 1, dependency_count = 1, 但依赖数组为空。
+    record[40..44].copy_from_slice(&1u32.to_le_bytes());
+    record[44..48].copy_from_slice(&1u32.to_le_bytes());
+    let bytes = malformed_pak(
+        1,
+        PackageHeader::SERIALIZED_SIZE,
+        RuntimeAssetRecord::SERIALIZED_SIZE,
+        52 + RuntimeAssetRecord::SERIALIZED_SIZE,
+        0,
+        &record,
+    );
+    expect_truncated(&bytes);
+}
