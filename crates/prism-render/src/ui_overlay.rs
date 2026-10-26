@@ -115,23 +115,37 @@ const FONT_CANDIDATES: &[(&str, u32)] = &[
     ("/System/Library/Fonts/Helvetica.ttc", 0),
 ];
 
-/// 加载第一个可用的系统字体（fontdue 只接受单字体；ttc 走 collection_index）。
-fn load_system_font() -> Option<Font> {
-    for (path, collection_index) in FONT_CANDIDATES {
-        let data = std::fs::read(path).ok()?;
-        if let Ok(font) = Font::from_bytes(
-            data,
-            fontdue::FontSettings {
-                collection_index: *collection_index,
-                ..Default::default()
-            },
-        ) {
-            log::info!("ui overlay: loaded font {path}");
-            return Some(font);
+/// Return the first candidate for which `load` produces a value.
+///
+/// Missing/unreadable candidates must not abort the search: only the first
+/// *available* font is used, and every other candidate is a fallback.
+fn first_available<T>(
+    candidates: &[(&str, u32)],
+    mut load: impl FnMut(&str, u32) -> Option<T>,
+) -> Option<(String, T)> {
+    for &(path, collection_index) in candidates {
+        if let Some(value) = load(path, collection_index) {
+            return Some((path.to_string(), value));
         }
     }
-    log::warn!("ui overlay: no system font found — text commands will be skipped");
     None
+}
+
+/// 加载第一个可用的系统字体（fontdue 只接受单字体；ttc 走 collection_index）。
+fn load_system_font() -> Option<Font> {
+    let (path, font) = first_available(FONT_CANDIDATES, |path, collection_index| {
+        let data = std::fs::read(path).ok()?;
+        Font::from_bytes(
+            data,
+            fontdue::FontSettings {
+                collection_index,
+                ..Default::default()
+            },
+        )
+        .ok()
+    })?;
+    log::info!("ui overlay: loaded font {path}");
+    Some(font)
 }
 
 /// fontdue 光栅化 + 行打包的 R8 字形图集（host-visible，LINEAR tiling）。
@@ -1058,4 +1072,25 @@ fn find_memory_type(
         }
     }
     panic!("no suitable memory type found");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn font_lookup_skips_missing_candidates() {
+        let candidates = [("missing", 0), ("broken", 0), ("ok", 2)];
+        let found = first_available(&candidates, |path, index| match path {
+            "ok" => Some(index),
+            _ => None,
+        });
+        assert_eq!(found, Some(("ok".to_string(), 2)));
+    }
+
+    #[test]
+    fn font_lookup_returns_none_when_all_candidates_fail() {
+        let candidates = [("missing", 0), ("broken", 0)];
+        assert!(first_available(&candidates, |_, _| None::<u32>).is_none());
+    }
 }
