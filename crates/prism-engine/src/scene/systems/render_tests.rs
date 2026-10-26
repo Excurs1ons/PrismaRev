@@ -190,6 +190,7 @@ fn missing_mesh_renderer_defaults_to_casting_and_visible() {
     assert_eq!(items.len(), 1);
     assert!(items[0].cast_shadow, "默认 ShadowCastingMode 应为 On");
     assert!(items[0].visible_in_main_pass);
+    assert!(!items[0].cast_shadow_two_sided, "默认 On 走背面剔除阴影");
 }
 
 #[test]
@@ -206,6 +207,7 @@ fn shadow_casting_mode_off_disables_only_the_shadow() {
     let items = scene_render_system(&world);
     assert!(!items[0].cast_shadow);
     assert!(items[0].visible_in_main_pass);
+    assert!(!items[0].cast_shadow_two_sided);
 }
 
 #[test]
@@ -222,10 +224,11 @@ fn shadows_only_hides_from_the_main_pass() {
     let items = scene_render_system(&world);
     assert!(items[0].cast_shadow);
     assert!(!items[0].visible_in_main_pass);
+    assert!(!items[0].cast_shadow_two_sided);
 }
 
 #[test]
-fn two_sided_matches_on_for_raster_shadows() {
+fn two_sided_requests_two_sided_shadow_casting() {
     let mut world = World::new();
     spawn_renderable(
         &mut world,
@@ -236,7 +239,8 @@ fn two_sided_matches_on_for_raster_shadows() {
     );
 
     let items = scene_render_system(&world);
-    // 光栅阴影贴图只渲染背面剔除后的三角形，所以 TwoSided 与 On 行为相同。
+    // Unity `ShadowCastingMode::TwoSided`：投影且阴影通道关闭背面剔除。
     assert!(items[0].cast_shadow);
     assert!(items[0].visible_in_main_pass);
+    assert!(items[0].cast_shadow_two_sided);
 }

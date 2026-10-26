@@ -1213,6 +1213,7 @@ impl ForwardPass {
             depth_write_enable: None,
             color_attachment_count: None,
             color_blend_attachments: Some(&blend_attachments),
+            front_face: None,
         })
         .context("ForwardPass: create pipeline")?;
 

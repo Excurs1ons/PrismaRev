@@ -135,6 +135,7 @@ impl RtPreviewPass {
                 depth_write_enable: None,
                 color_attachment_count: Some(1),
                 color_blend_attachments: None,
+                front_face: None,
             })
             .context("RtPreviewPass: create pipeline")?;
 
