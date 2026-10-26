@@ -63,3 +63,62 @@ fn decode_rle_literal_run() {
     assert!((rgba[2] - 5.0 / 256.0).abs() < 1e-5);
     assert_eq!(rgba[3], 1.0);
 }
+
+#[test]
+fn rejects_empty_and_unterminated_header() {
+    assert!(load_rgbe(b"").is_err());
+    assert!(load_rgbe(b"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n").is_err());
+}
+
+#[test]
+fn rejects_truncated_rle_scanline() {
+    let header = b"-Y 1 +X 4\n";
+    // RLE marker + width, then nothing for the four channels.
+    let mut data = header.to_vec();
+    data.extend_from_slice(&[0x02, 0x02, 0x00, 0x04]);
+    assert!(load_rgbe(&data).is_err());
+}
+
+#[test]
+fn rejects_zero_length_rle_run() {
+    let header = b"-Y 1 +X 4\n";
+    let mut data = header.to_vec();
+    // A zero count would never advance `x`; it must be rejected, not looped.
+    data.extend_from_slice(&[0x02, 0x02, 0x00, 0x04, 0x00]);
+    assert!(load_rgbe(&data).is_err());
+}
+
+#[test]
+fn rejects_rle_run_past_scanline() {
+    let header = b"-Y 1 +X 4\n";
+    let mut data = header.to_vec();
+    // R: run of 5 values on a 4-pixel scanline.
+    data.extend_from_slice(&[0x02, 0x02, 0x00, 0x04, 0x85, 0x0a]);
+    assert!(load_rgbe(&data).is_err());
+}
+
+#[test]
+fn rejects_truncated_uncompressed_scanline() {
+    let header = b"-Y 1 +X 4\n";
+    let mut data = header.to_vec();
+    data.extend_from_slice(&[1, 2, 3]);
+    assert!(load_rgbe(&data).is_err());
+}
+
+#[test]
+fn rejects_overflowing_dimensions() {
+    assert!(load_rgbe(b"-Y 4294967295 +X 4294967295\n").is_err());
+}
+
+#[test]
+fn decodes_uncompressed_scanline() {
+    let header = b"-Y 1 +X 2\n";
+    let mut data = header.to_vec();
+    data.extend_from_slice(&[128, 64, 32, 128, 0, 0, 0, 0]);
+    let (rgba, w, h) = load_rgbe(&data).expect("decode uncompressed");
+    assert_eq!((w, h), (2, 1));
+    assert!((rgba[0] - 0.5).abs() < 1e-4);
+    assert!((rgba[1] - 0.25).abs() < 1e-4);
+    assert!((rgba[2] - 0.125).abs() < 1e-4);
+    assert_eq!(rgba[3], 1.0);
+}

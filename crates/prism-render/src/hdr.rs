@@ -15,52 +15,62 @@ pub fn load_rgbe(bytes: &[u8]) -> anyhow::Result<(Vec<f32>, u32, u32)> {
     // --- Header: lines until the 分辨率 line ("-Y H +X W"). ---
     let mut width = 0u32;
     let mut height = 0u32;
-    loop {
+    let mut saw_resolution = false;
+    while pos < bytes.len() {
         let line_end = bytes[pos..]
             .iter()
             .position(|&b| b == b'\n')
             .context("unterminated HDR header")?;
         let line = &bytes[pos..pos + line_end];
         pos += line_end + 1;
-        if line.first() == Some(&b'-') && line.starts_with(b"-Y") {
+        if line.starts_with(b"-Y") {
             // 格式 "-Y <H> +X <W>"
             let mut it = line
                 .split(|&b| b == b' ' || b == b'\t')
                 .filter(|s| !s.is_empty());
             while let Some(tok) = it.next() {
                 if tok == b"-Y" {
-                    let h = it
+                    height = it
                         .next()
                         .and_then(|s| std::str::from_utf8(s).ok())
                         .and_then(|s| s.parse::<u32>().ok())
                         .context("bad -Y height")?;
-                    height = h;
                 } else if tok == b"+X" {
-                    let w = it
+                    width = it
                         .next()
                         .and_then(|s| std::str::from_utf8(s).ok())
                         .and_then(|s| s.parse::<u32>().ok())
                         .context("bad +X width")?;
-                    width = w;
                 }
             }
+            saw_resolution = true;
             break;
         }
     }
 
-    if width == 0 || height == 0 {
+    if !saw_resolution || width == 0 || height == 0 {
         bail!("HDR resolution line missing or invalid");
     }
 
-    let mut rgba = vec![0.0f32; (width * height * 4) as usize];
+    // Checked so hostile/corrupt dimensions cannot overflow the allocation
+    // arithmetic before we read a single scanline.
+    let pixel_count = (width as usize)
+        .checked_mul(height as usize)
+        .context("HDR dimensions overflow")?;
+    let float_count = pixel_count
+        .checked_mul(4)
+        .context("HDR buffer size overflow")?;
+    let mut rgba = vec![0.0f32; float_count];
     let mut out = 0usize; // float index
 
     for _y in 0..height as usize {
         // Detect RLE: a scanline starts with the 2-byte marker 0x02 0x02,
-        // followed by the scanline 宽度 (little-endian u16).
-        let rle = bytes.get(pos..pos + 2) == Some(&[0x02, 0x02]);
+        // followed by the scanline 宽度 (big-endian u16).
+        let rle_header = bytes.get(pos..).and_then(|rest| rest.get(..4));
+        let rle = rle_header.is_some_and(|h| h[0] == 0x02 && h[1] == 0x02);
         if rle {
-            let marker_w = u16::from_be_bytes([bytes[pos + 2], bytes[pos + 3]]) as usize;
+            let header = rle_header.expect("checked above");
+            let marker_w = u16::from_be_bytes([header[2], header[3]]) as usize;
             pos += 4;
             if marker_w != width as usize {
                 bail!("RLE scanline width mismatch: {} != {}", marker_w, width);
@@ -69,43 +79,57 @@ pub fn load_rgbe(bytes: &[u8]) -> anyhow::Result<(Vec<f32>, u32, u32)> {
             for ch in 0..4usize {
                 let mut x = 0usize;
                 while x < width as usize {
-                    let count = bytes[pos] as usize;
+                    let count = *bytes.get(pos).context("truncated HDR RLE count byte")? as usize;
                     pos += 1;
+                    if count == 0 {
+                        bail!("invalid HDR RLE count 0");
+                    }
                     if count > 128 {
                         let run = count - 128;
-                        let val = bytes[pos];
+                        if x + run > width as usize {
+                            bail!("HDR RLE run overruns scanline");
+                        }
+                        let val = *bytes.get(pos).context("truncated HDR RLE run value")?;
                         pos += 1;
-                        for _ in 0..run {
-                            if x >= width as usize {
-                                break;
-                            }
-                            rgba[out + x * 4 + ch] = val as f32;
-                            x += 1;
+                        for i in 0..run {
+                            rgba[out + (x + i) * 4 + ch] = val as f32;
                         }
+                        x += run;
                     } else {
-                        for _ in 0..count {
-                            if x >= width as usize {
-                                break;
-                            }
-                            rgba[out + x * 4 + ch] = bytes[pos] as f32;
-                            pos += 1;
-                            x += 1;
+                        if x + count > width as usize {
+                            bail!("HDR RLE literals overrun scanline");
                         }
+                        let values = bytes
+                            .get(pos..)
+                            .and_then(|rest| rest.get(..count))
+                            .context("truncated HDR RLE literal run")?;
+                        for (i, &val) in values.iter().enumerate() {
+                            rgba[out + (x + i) * 4 + ch] = val as f32;
+                        }
+                        pos += count;
+                        x += count;
                     }
                 }
             }
         } else {
             // Uncompressed: 4 字节 per 像素 row-major.
-            for _x in 0..width as usize {
-                let p = [
-                    bytes[pos] as f32,
-                    bytes[pos + 1] as f32,
-                    bytes[pos + 2] as f32,
-                    bytes[pos + 3] as f32,
-                ];
-                rgba[out + _x * 4..out + _x * 4 + 4].copy_from_slice(&p);
-                pos += 4;
+            let row_len = (width as usize)
+                .checked_mul(4)
+                .context("HDR row size overflow")?;
+            let row = bytes
+                .get(pos..)
+                .and_then(|rest| rest.get(..row_len))
+                .context("truncated HDR scanline")?;
+            for x in 0..width as usize {
+                let p = &row[x * 4..x * 4 + 4];
+                rgba[out + x * 4..out + x * 4 + 4].copy_from_slice(&[
+                    p[0] as f32,
+                    p[1] as f32,
+                    p[2] as f32,
+                    p[3] as f32,
+                ]);
             }
+            pos += row_len;
         }
 
         // 转换 this scanline's RGBE → 浮点数 RGB 集合 A = 1.
