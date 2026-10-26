@@ -181,6 +181,10 @@ fn stage_entry(
 ///
 /// 支持 `EnvironmentLighting.env_map` 与旧式 `Skybox.hdr_path`；路径可以是
 /// 场景相对（`../valley.hdr`）或项目根相对（`assets/valley.hdr`）。
+///
+/// 有作者文档（`*.scene.json`）时以文档为准。只有 `.rscn` 的场景没有文档可读，
+/// 此时从已暂存的 RSCN 里取 `Skybox.hdr_path`——否则这类场景打包后环境贴图
+/// 不在包内，运行时 IBL 退回空环境（黑屏）。
 fn stage_environment_assets(
     asset_root: &Path,
     staging: &Path,
@@ -189,65 +193,84 @@ fn stage_environment_assets(
     let mut staged = std::collections::BTreeSet::new();
 
     for entry in &manifest.scenes {
-        let doc_rel = if let Some(stem) = entry.path.strip_suffix(".scene.json") {
-            format!("{stem}.scene.json")
-        } else if let Some(stem) = entry.path.strip_suffix(".rscn") {
-            format!("{stem}.scene.json")
-        } else {
+        let Some(doc_rel) = scene_doc_rel(&entry.path) else {
             continue;
         };
 
+        let mut env_values = Vec::new();
         let doc_path = asset_root.join(&doc_rel);
-        let Ok(text) = fs::read_to_string(&doc_path) else {
-            continue;
-        };
-        let Ok(doc) = serde_json::from_str::<serde_json::Value>(&text) else {
-            continue;
-        };
-        let Some(entities) = doc.get("entities").and_then(|value| value.as_array()) else {
-            continue;
-        };
+        if let Ok(text) = fs::read_to_string(&doc_path) {
+            collect_env_values_from_doc(&text, &mut env_values);
+        } else if let Ok(relative) = safe_relative(&entry.path) {
+            if let Ok(cooked) = fs::read(staging.join(&relative)) {
+                let path = prism_engine::scene::loader::read_env_path_from_rscn_bytes(&cooked);
+                env_values.extend(path);
+            }
+        }
 
-        for entity in entities {
-            let Some(components) = entity.get("components").and_then(|value| value.as_object())
-            else {
+        for value in env_values {
+            let Some(pak_path) = normalize_scene_relative(&doc_rel, &value) else {
+                log::warn!(
+                    "environment asset '{value}' in {doc_rel} cannot be packaged (absolute or escapes assets/)"
+                );
                 continue;
             };
-            for (component, field) in [
-                ("prism_engine::scene::EnvironmentLighting", "env_map"),
-                ("prism_engine::scene::Skybox", "hdr_path"),
-            ] {
-                let Some(value) = components
-                    .get(component)
-                    .and_then(|payload| payload.get(field))
-                    .and_then(|value| value.as_str())
-                else {
-                    continue;
-                };
-                let Some(pak_path) = normalize_scene_relative(&doc_rel, value) else {
-                    log::warn!(
-                        "environment asset '{value}' in {doc_rel} cannot be packaged (absolute or escapes assets/)"
-                    );
-                    continue;
-                };
-                if !staged.insert(pak_path.clone()) {
-                    continue;
-                }
-
-                let source = asset_root.join(&pak_path);
-                if !source.is_file() {
-                    log::warn!("environment asset {} not found; skipping", source.display());
-                    continue;
-                }
-                let bytes = fs::read(&source)
-                    .with_context(|| format!("read environment {}", source.display()))?;
-                write_staged(staging, Path::new(&pak_path), &bytes)?;
-                log::info!("packaged environment asset: {pak_path}");
+            if !staged.insert(pak_path.clone()) {
+                continue;
             }
+
+            let source = asset_root.join(&pak_path);
+            if !source.is_file() {
+                log::warn!("environment asset {} not found; skipping", source.display());
+                continue;
+            }
+            let bytes = fs::read(&source)
+                .with_context(|| format!("read environment {}", source.display()))?;
+            write_staged(staging, Path::new(&pak_path), &bytes)?;
+            log::info!("packaged environment asset: {pak_path}");
         }
     }
 
     Ok(staged.len())
+}
+
+/// 场景对应的作者文档路径（`.rscn` 条目映射回同名 `.scene.json`）。
+fn scene_doc_rel(entry_path: &str) -> Option<String> {
+    if let Some(stem) = entry_path.strip_suffix(".scene.json") {
+        Some(format!("{stem}.scene.json"))
+    } else {
+        entry_path
+            .strip_suffix(".rscn")
+            .map(|stem| format!("{stem}.scene.json"))
+    }
+}
+
+/// 收集作者文档里每个实体声明的环境贴图路径。
+fn collect_env_values_from_doc(text: &str, out: &mut Vec<String>) {
+    let Ok(doc) = serde_json::from_str::<serde_json::Value>(text) else {
+        return;
+    };
+    let Some(entities) = doc.get("entities").and_then(|value| value.as_array()) else {
+        return;
+    };
+
+    for entity in entities {
+        let Some(components) = entity.get("components").and_then(|value| value.as_object()) else {
+            continue;
+        };
+        for (component, field) in [
+            ("prism_engine::scene::EnvironmentLighting", "env_map"),
+            ("prism_engine::scene::Skybox", "hdr_path"),
+        ] {
+            if let Some(value) = components
+                .get(component)
+                .and_then(|payload| payload.get(field))
+                .and_then(|value| value.as_str())
+            {
+                out.push(value.to_string());
+            }
+        }
+    }
 }
 
 /// 把 `scene_rel` 所对应场景里的相对路径折叠成 `assets/` 内路径。
@@ -471,5 +494,106 @@ path = "D:/external/model.gltf"
         let err = build_scene_package(&manifest, temp.path(), temp.path().join("scenes.pak"), 0)
             .unwrap_err();
         assert!(err.to_string().contains("must not contain"));
+    }
+
+    fn skybox_scene_json(hdr_path: &str) -> String {
+        format!(
+            r#"{{
+                "version": 1,
+                "entities": [{{
+                    "name": "Sky",
+                    "parent": null,
+                    "transform": {{}},
+                    "components": {{
+                        "prism_engine::scene::Skybox": {{ "hdr_path": "{hdr_path}" }}
+                    }}
+                }}]
+            }}"#
+        )
+    }
+
+    /// A `.rscn`-only manifest entry has no authoring `.scene.json` to read, but
+    /// its environment map still has to end up inside the package.
+    #[test]
+    fn stages_environment_for_rscn_only_scenes() {
+        let temp = tempfile::tempdir().unwrap();
+        let assets = temp.path().join("assets");
+        fs::create_dir_all(assets.join("scenes")).unwrap();
+        fs::create_dir_all(assets.join("env")).unwrap();
+        fs::write(assets.join("env/valley.hdr"), b"hdr-bytes").unwrap();
+
+        // Cook, then drop the authoring doc so only the `.rscn` remains.
+        let authoring = assets.join("scenes/valley.scene.json");
+        fs::write(&authoring, skybox_scene_json("../env/valley.hdr")).unwrap();
+        let cooked = SceneCooker::default()
+            .cook_json_bytes(&fs::read(&authoring).unwrap())
+            .unwrap();
+        fs::remove_file(&authoring).unwrap();
+        fs::write(assets.join("scenes/valley.rscn"), &cooked).unwrap();
+
+        fs::write(
+            assets.join("scenes.toml"),
+            r#"
+[[scenes]]
+name = "valley"
+path = "scenes/valley.rscn"
+"#,
+        )
+        .unwrap();
+
+        let staging = temp.path().join("cooked");
+        let output = temp.path().join("scenes.pak");
+        let summary =
+            build_scene_package(assets.join("scenes.toml"), &staging, &output, 0).unwrap();
+
+        assert!(
+            staging.join("env/valley.hdr").is_file(),
+            "environment map of a .rscn-only scene must be staged"
+        );
+
+        let meta_text = fs::read_to_string(summary.pack.manifest_path.clone()).unwrap();
+        let meta: serde_json::Value = serde_json::from_str(&meta_text).unwrap();
+        let paths: Vec<_> = meta["assets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|asset| asset["path"].as_str().unwrap())
+            .collect();
+        assert!(paths.contains(&"env/valley.hdr"), "paths = {paths:?}");
+    }
+
+    /// `.scene.json` entries keep working, and each HDR is staged once.
+    #[test]
+    fn stages_environment_declared_by_the_authoring_doc() {
+        let temp = tempfile::tempdir().unwrap();
+        let assets = temp.path().join("assets");
+        fs::create_dir_all(assets.join("scenes")).unwrap();
+        fs::create_dir_all(assets.join("env")).unwrap();
+        fs::write(assets.join("env/sky.hdr"), b"hdr-bytes").unwrap();
+        fs::write(
+            assets.join("scenes/main.scene.json"),
+            skybox_scene_json("../env/sky.hdr"),
+        )
+        .unwrap();
+        fs::write(
+            assets.join("scenes.toml"),
+            r#"
+[[scenes]]
+name = "main"
+path = "scenes/main.scene.json"
+"#,
+        )
+        .unwrap();
+
+        let staging = temp.path().join("cooked");
+        build_scene_package(
+            assets.join("scenes.toml"),
+            &staging,
+            temp.path().join("scenes.pak"),
+            0,
+        )
+        .unwrap();
+
+        assert!(staging.join("env/sky.hdr").is_file());
     }
 }
