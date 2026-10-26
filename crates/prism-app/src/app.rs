@@ -962,6 +962,24 @@ impl ApplicationHandler for App {
         if self.suspended {
             return;
         }
+
+        // The render thread exclusively owns the Vulkan context. If it exited
+        // (renderer init failure or panic), stop instead of spinning a blank
+        // window at 100% CPU.
+        if let Some(handle) = self.render_thread.as_ref() {
+            if handle.is_finished() {
+                let message = self
+                    .render_shared
+                    .as_ref()
+                    .and_then(|shared| shared.take_render_failure())
+                    .unwrap_or_else(|| "render thread exited unexpectedly (see log)".to_string());
+                log::error!("{message}");
+                self.fatal_error = Some(message);
+                self.show_fatal_dialog(event_loop);
+                return;
+            }
+        }
+
         self.tick_sim();
 
         // 帧钩子（宿主 UI 等）— 主线程
