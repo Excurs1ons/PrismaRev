@@ -180,6 +180,9 @@ impl RenderRuntime {
 
 pub struct GraphRenderer {
     swapchain: Option<Swapchain>,
+    /// Present-mode preference reused when the surface is recreated after
+    /// a suspend/resume cycle (`Swapchain::new_with_vsync`).
+    vsync: bool,
     mesh_manager: RenderMeshManager,
     texture_manager: RenderTextureManager,
     material_manager: RenderMaterialManager,
@@ -256,8 +259,20 @@ impl GraphRenderer {
         // 驱动；此处忽略启动期 env_bytes（保持引擎「场景声明式光照」）。
         _env_bytes: Option<Vec<u8>>,
     ) -> anyhow::Result<Self> {
+        Self::new_with_vsync(window_extensions, window, window_handle, _env_bytes, true)
+    }
+
+    /// Like [`GraphRenderer::new`], but with an explicit vsync preference
+    /// forwarded to the swapchain present-mode selection.
+    pub fn new_with_vsync(
+        window_extensions: Vec<&str>,
+        window: &dyn raw_window_handle::HasDisplayHandle,
+        window_handle: &dyn raw_window_handle::HasWindowHandle,
+        _env_bytes: Option<Vec<u8>>,
+        vsync: bool,
+    ) -> anyhow::Result<Self> {
         let context = Arc::new(VulkanContext::new(&window_extensions)?);
-        let swapchain = Swapchain::new(&context, window, window_handle)?;
+        let swapchain = Swapchain::new_with_vsync(&context, window, window_handle, vsync)?;
         let color_format = swapchain.format.format;
 
         // 构建 the GPU 运行时 描述符 infrastructure, 命令 池
@@ -425,6 +440,7 @@ impl GraphRenderer {
 
         Ok(Self {
             swapchain: Some(swapchain),
+            vsync,
             runtime,
             mesh_manager,
             texture_manager,
@@ -598,6 +614,7 @@ impl GraphRenderer {
 
         Ok(Self {
             swapchain: None,
+            vsync: false,
             runtime,
             mesh_manager,
             texture_manager,
@@ -1077,7 +1094,8 @@ impl GraphRenderer {
         if self.is_headless || self.swapchain.is_some() {
             return Ok(());
         }
-        let swapchain = Swapchain::new(&self.runtime.context, window, window_handle)?;
+        let swapchain =
+            Swapchain::new_with_vsync(&self.runtime.context, window, window_handle, self.vsync)?;
         // 恢复路径与启动路径同样需要同步 ForwardPass 的 per-image 槽位数
         // （见 `GraphRenderer::new` 里的注释）。
         let image_count = swapchain.views.len();

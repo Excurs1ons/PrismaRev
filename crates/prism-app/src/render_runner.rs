@@ -11,7 +11,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use prism_engine::dirty_router::DirtyRouter;
+use prism_engine::dirty_router::{draw_items_signature, DirtyRouter};
 use prism_engine::ecs::Entity;
 use prism_engine::render_settings::RenderSettings;
 use prism_engine::render_system::FramePacket;
@@ -71,6 +71,7 @@ pub type OverlayFactory = Box<dyn Fn() -> Box<dyn SwapchainOverlay> + Send>;
 /// - `extensions` 是主线程算好的 Vulkan 实例扩展名（依赖窗口 display handle）。
 /// - `scene_env` 是场景声明式光照的 IBL 数据（None → 廉价空 IBL，不卷积）。
 /// - `warmup` 是否在首帧前预热所有 GPU 管线。
+/// - `vsync` 是否请求垂直同步的 present mode（来自 `WindowConfig.vsync`）。
 /// - `overlay_factory` 若有，构建完成后立即安装外部叠加层。
 ///
 /// 这样 `resumed()` 能在窗口建好后立即返回，窗口事件（关闭/移动/缩放）
@@ -82,6 +83,7 @@ pub fn render_thread_main(
     extensions: Vec<String>,
     scene_env: Option<Vec<u8>>,
     warmup: bool,
+    vsync: bool,
     overlay_factory: Option<OverlayFactory>,
 ) {
     let mut dirty_router = DirtyRouter::new();
@@ -98,16 +100,21 @@ pub fn render_thread_main(
         display: &handles.display,
         window: &handles.window,
     };
-    let mut renderer =
-        match GraphRenderer::new(extensions_ref, &handle_bridge, &handle_bridge, None) {
-            Ok(r) => r,
-            Err(e) => {
-                let message = format!("failed to create renderer: {e:#}");
-                log::error!("Render thread: {message}");
-                shared.fail_render(message);
-                return;
-            }
-        };
+    let mut renderer = match GraphRenderer::new_with_vsync(
+        extensions_ref,
+        &handle_bridge,
+        &handle_bridge,
+        None,
+        vsync,
+    ) {
+        Ok(r) => r,
+        Err(e) => {
+            let message = format!("failed to create renderer: {e:#}");
+            log::error!("Render thread: {message}");
+            shared.fail_render(message);
+            return;
+        }
+    };
     shared.mark("renderer_built");
     log::info!("Render thread: renderer built");
 
@@ -235,15 +242,15 @@ fn render_one_frame(
     let draw_items = &packet.draw_items;
 
     let dirty_flags = dirty_router.update(scene);
-    let draw_count_dirty = dirty_router.draw_count_dirty(draw_items.len());
-    if dirty_flags.any() || draw_count_dirty {
+    let draw_items_dirty = dirty_router.draw_items_dirty(draw_items_signature(draw_items));
+    if dirty_flags.any() || draw_items_dirty {
         log::trace!(
-            "dirty_flags: camera={} dir_light={} point_lights={} exposure={} draw_count={}",
+            "dirty_flags: camera={} dir_light={} point_lights={} exposure={} draw_items={}",
             dirty_flags.camera,
             dirty_flags.directional_light,
             dirty_flags.point_lights,
             dirty_flags.exposure,
-            draw_count_dirty
+            draw_items_dirty
         );
     }
 
@@ -288,7 +295,7 @@ fn render_one_frame(
         pt_max_iterations: settings.pt_max_iterations,
         exposure: scene.exposure,
         pt_lights: &scene.pt_lights,
-        pt_accum_dirty: dirty_flags.directional_light || draw_count_dirty,
+        pt_accum_dirty: dirty_flags.directional_light || draw_items_dirty,
         has_camera: scene.has_camera,
         camera_orthographic: scene.camera_orthographic,
         clear_color: scene.clear_color,
