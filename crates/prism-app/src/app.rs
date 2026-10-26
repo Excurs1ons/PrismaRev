@@ -1011,7 +1011,11 @@ impl ApplicationHandler for App {
         self.last_frame = Some(Instant::now());
     }
 
-    fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
+    fn suspended(&mut self, event_loop: &ActiveEventLoop) {
+        // 后台不再需要逐帧轮询；`resumed()` 会恢复 `Poll`。否则 winit 在
+        // Android 后台仍持续空转，CPU 占用保持 100%。
+        event_loop.set_control_flow(ControlFlow::Wait);
+
         // 置位挂起标志（必须先于任何子系统门控——audio 挂起不依赖 Render）。
         self.suspended = true;
 
