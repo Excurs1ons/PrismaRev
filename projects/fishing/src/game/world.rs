@@ -49,6 +49,9 @@ struct LayerDef {
     /// 是否在水面下生成一份镜像（侧面视角的屏幕反射）。
     #[serde(default)]
     reflect: bool,
+    /// 均匀缩放（补偿素材高度与视口高度的差异），默认 1。
+    #[serde(default = "unit_scale")]
+    scale: f32,
 }
 
 /// 单个图层实体。
@@ -103,6 +106,7 @@ impl LakeWorld {
                 entity,
                 LocalTransform {
                     position: base,
+                    scale: glam::Vec3::splat(def.scale),
                     ..LocalTransform::default()
                 },
             );
@@ -111,8 +115,8 @@ impl LakeWorld {
                 SpriteRenderer {
                     sprite_path: path.clone(),
                     pixels_per_unit: PIXELS_PER_UNIT,
-                    // 顶边中心对齐 `y`（Unity 轴心约定：(0.5, 1.0) = 顶边）。
-                    pivot: [0.5, 1.0],
+                    // 底边中心对齐 `y`（Unity 轴心约定：(0.5, 0.0) = 底边）。
+                    pivot: [0.5, 0.0],
                     sorting_layer: order as i32,
                     ..SpriteRenderer::default()
                 },
@@ -213,6 +217,10 @@ impl LakeWorld {
 
 /// 图层贴图路径；该时段缺图时回落到 `day`（再缺就用该时段的名字，
 /// 解析失败只是不画，不会崩）。
+fn unit_scale() -> f32 {
+    1.0
+}
+
 fn layer_path(slug: &str, tod: &str) -> String {
     let candidate = format!("sprites/bg/{slug}@{tod}.png");
     if Path::new("assets").join(&candidate).is_file() {

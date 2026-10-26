@@ -73,6 +73,17 @@ def main() -> int:
         default="6000.3.26f1",
         help="fallback Unity version for bundles that omit it",
     )
+    ap.add_argument(
+        "--only",
+        default=None,
+        help="only unpack containers whose path contains this substring",
+    )
+    ap.add_argument(
+        "--group-by-source",
+        action="store_true",
+        help="prefix exported files with the source container name so different "
+        "levels do not overwrite each other",
+    )
     args = ap.parse_args()
 
     # AssetBundles built by Addressables do not always embed the editor version;
@@ -88,6 +99,8 @@ def main() -> int:
         (out / sub).mkdir(parents=True, exist_ok=True)
 
     sources = asset_sources(game)
+    if args.only:
+        sources = [p for p in sources if args.only in p.relative_to(game).as_posix()]
     print(f"{len(sources)} container(s)")
 
     records: list[dict] = []
@@ -97,6 +110,8 @@ def main() -> int:
 
     for source in sources:
         rel = source.relative_to(game).as_posix()
+        group = safe(source.stem, "container") if args.group_by_source else ""
+        prefix = f"{group}/" if group else ""
         print(f"  {rel}")
         try:
             env = UnityPy.load(str(source))
@@ -126,13 +141,15 @@ def main() -> int:
                             "pixels_per_unit": getattr(data, "m_PixelsPerUnit", None),
                             "pivot": list(getattr(data, "m_Pivot", []) or []),
                             "rect": list(getattr(data, "m_Rect", {}) or []),
-                            "path": f"sprites/{safe(name, 'sprite')}.png",
+                            "path": f"sprites/{prefix}{safe(name, 'sprite')}.png",
                         }
                     )
                     key = (kind, name, f"{size[0]}x{size[1]}")
                     if key not in seen:
                         seen.add(key)
-                        image.save(out / record["path"])
+                        target = out / record["path"]
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        image.save(target)
 
                 elif kind == "Texture2D":
                     image = data.image
@@ -141,13 +158,15 @@ def main() -> int:
                         {
                             "width": size[0],
                             "height": size[1],
-                            "path": f"textures/{safe(name, 'texture')}.png",
+                            "path": f"textures/{prefix}{safe(name, 'texture')}.png",
                         }
                     )
                     key = (kind, name, f"{size[0]}x{size[1]}")
                     if key not in seen:
                         seen.add(key)
-                        image.save(out / record["path"])
+                        target = out / record["path"]
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        image.save(target)
 
                 elif kind == "TextAsset":
                     script = getattr(data, "m_Script", "")
