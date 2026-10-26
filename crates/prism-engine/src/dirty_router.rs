@@ -169,6 +169,7 @@ mod tests {
             cast_shadow: true,
             visible_in_main_pass: true,
             cast_shadow_two_sided: false,
+            state: Default::default(),
         }
     }
 
