@@ -41,6 +41,7 @@ import type {
   BakeGiOptions,
   ComponentClipboard,
   DocKind,
+  EditorWindowDescriptor,
   EntityJson,
   EntityPreset,
   HeightmapOptions,
@@ -238,37 +239,70 @@ const documentLabel = computed(() => {
 // Docking 布局（split tree + 标签页拖拽，持久化到 localStorage）
 // ---------------------------------------------------------------------------
 
-type PanelId =
-  | "docs"
-  | "hierarchy"
-  | "assets"
-  | "inspector"
-  | "log"
-  | "renderGraph"
-  | "projectSettings"
-  | "preferences"
-  | "theme"
-  | "build"
-  | "tools"
-  | "shortcuts"
-  | "about";
-const PANELS: Array<{ id: PanelId; title: string }> = [
-  { id: "docs", title: "文档" },
-  { id: "hierarchy", title: "层级" },
-  { id: "assets", title: "资产" },
-  { id: "inspector", title: "检查器" },
-  { id: "log", title: "日志" },
-  { id: "renderGraph", title: "渲染图" },
-  { id: "projectSettings", title: "项目设置" },
-  { id: "preferences", title: "首选项" },
-  { id: "theme", title: "主题" },
-  { id: "build", title: "构建项目" },
-  { id: "tools", title: "离线工具" },
-  { id: "shortcuts", title: "快捷键" },
-  { id: "about", title: "关于" },
+const PANEL_IDS = [
+  "docs",
+  "hierarchy",
+  "assets",
+  "inspector",
+  "log",
+  "renderGraph",
+  "projectSettings",
+  "preferences",
+  "theme",
+  "build",
+  "tools",
+  "shortcuts",
+  "about",
+] as const;
+type PanelId = (typeof PANEL_IDS)[number];
+
+/**
+ * 面板注册表的内置回退 = Unity `EditorWindow` / `[MenuItem]` 的前端镜像。
+ *
+ * 正常启动时由后端 `editor_windows`（`prism_editor_api::editor_window`）覆盖；
+ * 浏览器预览 / 旧后端拿不到命令时用这份，保证 UI 仍可用。
+ */
+const FALLBACK_WINDOWS: EditorWindowDescriptor[] = [
+  { id: "docs", title: "文档", menuPath: "窗口/文档", shortcut: "Ctrl+O", command: "window/toggle/docs" },
+  { id: "hierarchy", title: "层级", menuPath: "窗口/层级", shortcut: null, command: "window/toggle/hierarchy" },
+  { id: "assets", title: "资产", menuPath: "窗口/资产", shortcut: null, command: "window/toggle/assets" },
+  { id: "inspector", title: "检查器", menuPath: "窗口/检查器", shortcut: null, command: "window/toggle/inspector" },
+  { id: "log", title: "日志", menuPath: "窗口/日志", shortcut: null, command: "window/toggle/log" },
+  { id: "renderGraph", title: "渲染图", menuPath: "窗口/分析/实时渲染图", shortcut: null, command: "window/toggle/renderGraph" },
+  { id: "projectSettings", title: "项目设置", menuPath: "窗口/项目设置", shortcut: null, command: "window/toggle/projectSettings" },
+  { id: "preferences", title: "首选项", menuPath: "窗口/首选项", shortcut: null, command: "window/toggle/preferences" },
+  { id: "theme", title: "主题", menuPath: "窗口/主题", shortcut: null, command: "window/toggle/theme" },
+  { id: "build", title: "构建项目", menuPath: "窗口/构建项目", shortcut: null, command: "window/toggle/build" },
+  { id: "tools", title: "离线工具", menuPath: "窗口/离线工具", shortcut: null, command: "window/toggle/tools" },
+  { id: "shortcuts", title: "快捷键", menuPath: "帮助/键盘快捷键", shortcut: null, command: "window/toggle/shortcuts" },
+  { id: "about", title: "关于", menuPath: "帮助/关于 PrismaRev Editor", shortcut: null, command: "window/toggle/about" },
 ];
-const DOCK_STORAGE_KEY = "prisma-editor.dock.v4";
-const LEGACY_DOCK_STORAGE_KEY = "prisma-editor.dock.v3";
+
+const windowRegistry = ref<EditorWindowDescriptor[]>(FALLBACK_WINDOWS);
+
+/** 标签页列表（`PANELS`）由注册表派生，顺序即「窗口」菜单顺序。 */
+const PANELS = computed<Array<{ id: PanelId; title: string }>>(() =>
+  windowRegistry.value
+    .filter((window) => (PANEL_IDS as readonly string[]).includes(window.id))
+    .map((window) => ({ id: window.id as PanelId, title: window.title })),
+);
+/**
+ * 拉取后端面板注册表 = Unity `EditorWindow` / `[MenuItem]` 声明。
+ *
+ * 以 `FALLBACK_WINDOWS` 为骨架按下标覆盖：后端只改标题/菜单路径/快捷键/命令，
+ * 不会因为少发一个窗口就让标签页消失。浏览器预览 / 旧后端失败时保持回退。
+ */
+async function loadWindowRegistry() {
+  try {
+    const windows = await api.fetchEditorWindows();
+    const byId = new Map(windows.map((window) => [window.id, window]));
+    windowRegistry.value = FALLBACK_WINDOWS.map((window) => byId.get(window.id) ?? window);
+  } catch {
+    // 非 Tauri 环境（纯浏览器预览）或旧后端：继续用 FALLBACK_WINDOWS。
+  }
+}
+
+const DOCK_STORAGE_KEY = "prisma-editor.dock.v4";const LEGACY_DOCK_STORAGE_KEY = "prisma-editor.dock.v3";
 const dockLayout = ref<DockNode | null>(defaultDock());
 const floatingPanels = ref<FloatPanel[]>([]);
 const visiblePanels = computed(
@@ -311,6 +345,55 @@ function togglePanel(id: PanelId) {
   else showPanelTab(id);
 }
 
+// —— 面板命令 = Unity `[MenuItem]` 的 action ——
+// 后端只声明「命令 id」（`window/toggle/<panel>`），动作必须留在前端：它需要
+// docking 状态、localStorage 与轮询。未知命令直接忽略（向前兼容）。
+const PANEL_COMMANDS: Record<string, () => void> = Object.fromEntries(
+  PANEL_IDS.map((id) => [`window/toggle/${id}`, () => togglePanel(id)]),
+);
+
+function runPanelCommand(command: string) {
+  PANEL_COMMANDS[command]?.();
+}
+
+/** 把 `窗口/分析/实时渲染图` 折进菜单树，复用已有的同名子菜单。 */
+function addMenuPath(items: MenuItem[], path: string[], item: MenuItem) {
+  if (!path.length) {
+    items.push(item);
+    return;
+  }
+  const [head, ...rest] = path;
+  let group = items.find((entry) => entry.label === head && entry.children);
+  if (!group) {
+    group = { label: head, children: [] };
+    items.push(group);
+  }
+  addMenuPath(group.children ?? [], rest, item);
+}
+
+/**
+ * 「窗口」与「帮助」菜单由注册表的 `menuPath` 派生
+ * （= Unity `[MenuItem("窗口/文档")]`），顺序即注册表顺序。
+ */
+const panelMenuRoots = computed(() => {
+  const window: MenuItem[] = [];
+  const help: MenuItem[] = [];
+  for (const descriptor of windowRegistry.value) {
+    const parts = descriptor.menuPath
+      .split("/")
+      .map((part) => part.trim())
+      .filter(Boolean);
+    const root = parts[0] === "帮助" ? help : window;
+    addMenuPath(root, parts.slice(1, -1), {
+      label: parts[parts.length - 1] ?? descriptor.title,
+      shortcut: descriptor.shortcut ?? undefined,
+      checked: () => isPanelVisible(descriptor.id as PanelId),
+      action: () => runPanelCommand(descriptor.command),
+    });
+  }
+  return { window, help };
+});
+
 // 面板被关闭/重置后停止轮询；重新显示时按需加载数据。
 watch(visiblePanels, (next, previous) => {
   const graphWasVisible = previous?.has("renderGraph") ?? false;
@@ -326,7 +409,7 @@ watch(visiblePanels, (next, previous) => {
 
 function loadLayout() {
   try {
-    const known = PANELS.map((panel) => panel.id);
+    const known = PANELS.value.map((panel) => panel.id);
     const raw = localStorage.getItem(DOCK_STORAGE_KEY);
     if (raw) {
       const saved = JSON.parse(raw) as { dock?: unknown; floating?: unknown };
@@ -1449,12 +1532,6 @@ function runMenu(item: MenuItem) {
 }
 
 const MENUS = computed<MenuDef[]>(() => {
-  const viewItems: MenuItem[] = PANELS.map((panel) => ({
-    label: panel.title,
-    checked: () => isPanelVisible(panel.id),
-    action: () => togglePanel(panel.id),
-  }));
-
   const newTemplateItems: MenuItem[] = [
     ...sceneTemplates.value.map((template) => ({
       label: `场景：${template.label}`,
@@ -1581,25 +1658,15 @@ const MENUS = computed<MenuDef[]>(() => {
       id: "window",
       label: "窗口",
       items: [
-        ...viewItems,
+        ...panelMenuRoots.value.window,
         { separator: true },
         { label: "重置布局", action: resetLayout },
-        { separator: true },
-        {
-          label: "分析",
-          children: [
-            { label: "实时渲染图…", action: openGraph },
-          ],
-        },
       ],
     },
     {
       id: "help",
       label: "帮助",
-      items: [
-        { label: "键盘快捷键", action: () => showPanelTab("shortcuts") },
-        { label: "关于 PrismaRev Editor", action: () => showPanelTab("about") },
-      ],
+      items: panelMenuRoots.value.help,
     },
   ];
 });
@@ -1670,12 +1737,6 @@ async function refreshGraph() {
   } catch (e) {
     graphError.value = e instanceof Error ? e.message : String(e);
   }
-}
-
-function openGraph() {
-  showPanelTab("renderGraph");
-  void refreshGraph();
-  startGraphPolling();
 }
 
 function startGraphPolling() {
@@ -1792,6 +1853,7 @@ onMounted(() => {
   void bootstrap();
   window.addEventListener("keydown", onKey);
   loadLayout();
+  void loadWindowRegistry();
   void loadGameLogs();
   void api.onPreviewLog(appendGameLog).then((unlisten) => {
     unlistenPreviewLog = unlisten;

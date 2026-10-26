@@ -739,6 +739,50 @@ Unity 的 `Renderer.shadowCastingMode` 决定一个物体「是否投影」与�
 - **P3c 相机行为**：用测试钉住 yaw↔quaternion 的 `−π/2` 偏移；`clear_flags` 的
   `Depth`/`Nothing` 语义接进 `ForwardPass`；多相机（`depth` 排序 + 叠加）。
 
+### P4b — `EditorWindow` / `[MenuItem]` 面板注册表 DTO ✅
+
+Unity 的 `EditorWindow` 是「可停靠的编辑器窗口」，`[MenuItem("窗口/…")]` 是「菜单命令」。
+这一批把两者投影成**后端声明 + 前端动作**：后端只说「有哪些窗口、标题、菜单路径、快捷键、
+命令 id」，真正打开/关闭/停靠仍由前端 docking 负责（§3.2 的约定）。
+
+**prism-editor-api**
+- 新模块 `editor_window`：
+  - `EditorWindowDescriptor { id, title, menu_path, shortcut, command }`（serde camelCase）；
+    构造时 `command` 自动为 `window/toggle/<id>`，可用 `with_shortcut` 补快捷键；
+    `menu_segments()` / `menu_label()` 负责拆 `窗口/分析/实时渲染图` 这类路径。
+  - `EditorWindowRegistry`：`builtin()`（13 个窗口）/ `register()`（同 id 覆盖）/
+    `get()` / `ids()` / `len()`；`build_window_registry()` 是命令层的入口。
+  - 内置表与编辑器现有面板一一对应：`文档`（Ctrl+O）、`层级`、`资产`、`检查器`、`日志`、
+    `渲染图`（`窗口/分析/实时渲染图`）、`项目设置`、`首选项`、`主题`、`构建项目`、
+    `离线工具`、`快捷键`（`帮助/键盘快捷键`）、`关于`（`帮助/关于 PrismaRev Editor`）。
+- `dump_fixture` 增加 `windows` 键，浏览器预览与 Tauri 用同一份声明。
+
+**editor**
+- `types.ts` / `api.ts` / `mock.ts`：`EditorWindowDescriptor` + `fetchEditorWindows()`
+  （Tauri 命令 `editor_windows`；fixture 走 `windows` 键）。
+- `App.vue`：`PANELS` 改为由注册表派生的 computed（`PANEL_IDS` 仍是前端类型的唯一来源）；
+  `FALLBACK_WINDOWS` 是浏览器预览/旧后端的内置回退，启动时按 id 覆盖而非整体替换，
+  少发一个窗口不会让标签页消失。
+- `MENUS` 的「窗口」「帮助」两棵树由 `menuPath` 折叠生成
+  （`addMenuPath` 复用同名子菜单），因此 `窗口 → 分析 → 实时渲染图` 与
+  `帮助 → 键盘快捷键 / 关于…` 不再手写。`command` 通过前端 `PANEL_COMMANDS` 表执行，
+  未知命令忽略（向前兼容）；`openGraph` 被删掉——显示面板时
+  `watch(visiblePanels)` 已经负责刷新渲染图并开始轮询。
+- 文件/编辑/构建菜单保持前端静态闭包（它们操作的是文档状态，不是窗口）。
+
+**验证**
+- ✅ `cargo test -p prism-editor-api`（新增 5 个：内置 13 项、按 id 查找/覆盖、
+  菜单路径覆盖「分析」「帮助」、`menu_label` 回退、camelCase 序列化）
+- ✅ `cargo clippy -p prism-editor-api --all-targets -- -D warnings`
+- ✅ `cargo check --manifest-path editor/src-tauri/Cargo.toml`
+- ✅ `cd editor && pnpm build`（`vue-tsc --noEmit` + Vite）
+- ✅ `python3 scripts/pr_ready.py`
+
+**已知遗留**
+- 菜单动作仍是前端闭包：后端只给 `command` id，不执行命令（保持 editor-api 不链接 UI/状态）。
+- 默认停靠布局仍写死在 `dock.ts` 的 `defaultDock()`；注册表还没有「默认 dock 位置」字段。
+- 快捷键只在菜单里展示，尚未由 `shortcut` 字段自动注册到 `onKey`。
+
 ## 附录
 
 - `docs/unity_api_inventory.md` — Unity public 类型全清单（按模块/命名空间，XR 排除）。
