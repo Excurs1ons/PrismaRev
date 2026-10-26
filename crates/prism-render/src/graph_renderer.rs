@@ -1439,16 +1439,24 @@ impl GraphRenderer {
         if record.is_ok() {
             let has_ui = ui_overlay.is_some_and(|o| !o.quads.is_empty() || !o.texts.is_empty());
             if has_ui {
-                if self.ui_overlay.is_none() {
-                    let gpu = crate::ui_overlay::UiOverlay::new(
-                        &self.runtime.context,
-                        self.runtime.command_pool,
-                    )
-                    .context("create ui overlay")?;
-                    self.ui_overlay = Some(gpu);
-                }
                 if let Some(sw) = self.swapchain.as_ref() {
+                    // The overlay render pass must use the swapchain's actual
+                    // color format; surfaces fall back to `available[0]`
+                    // (often `R8G8B8A8_*` on Android) when the preferred
+                    // `B8G8R8A8_SRGB` is unavailable.
+                    let color_format = sw.format.format;
+                    if self.ui_overlay.is_none() {
+                        let gpu = crate::ui_overlay::UiOverlay::with_color_format(
+                            &self.runtime.context,
+                            self.runtime.command_pool,
+                            color_format,
+                        )
+                        .context("create ui overlay")?;
+                        self.ui_overlay = Some(gpu);
+                    }
                     if let Some(gpu) = self.ui_overlay.as_mut() {
+                        gpu.set_color_format(color_format)
+                            .context("ui overlay color format")?;
                         // PostPass leaves the swapchain image in PRESENT; turn it
                         // back into a color attachment for the UI load pass.
                         let image = sw.images[image_index as usize];
