@@ -9,6 +9,7 @@
 
 pub mod app;
 pub mod asset;
+pub mod asset_paths;
 pub mod asset_resolver;
 pub mod audio;
 pub mod calibration_spheres;
