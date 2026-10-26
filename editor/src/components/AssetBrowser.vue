@@ -929,6 +929,9 @@ onUnmounted(() => {
 
   <div v-if="selected" class="asset-detail">
     <div class="hint path">{{ selected.path }}</div>
+    <div class="hint" title="Unity AssetImporter.GetAtPath(...).GetType().Name">
+      {{ selected.kind }} · 导入器 {{ selected.importer }}
+    </div>
 
     <div v-if="previewKind === 'document'" class="asset-preview-actions">
       <button class="primary" @click="openSelected">打开文档</button>
