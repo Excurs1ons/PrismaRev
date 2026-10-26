@@ -52,6 +52,14 @@ fn handle_copy_semantics() {
 }
 
 #[test]
+fn handle_is_send_and_sync() {
+    fn assert_send_sync<T: Send + Sync>() {}
+    // Even a !Send/!Sync payload must not leak into the handle's auto traits:
+    // the handle is an index, not an owned reference.
+    assert_send_sync::<Handle<std::rc::Rc<()>>>();
+}
+
+#[test]
 fn raw_parts_roundtrip() {
     let h = Handle::<TestAsset>::new(255, 65535);
     let (idx, gen) = h.into_raw_parts();
