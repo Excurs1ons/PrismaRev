@@ -266,18 +266,15 @@ impl World {
     /// 未激活 entities are skipped.
     pub fn query_mut<T: Component>(&mut self) -> impl Iterator<Item = (Entity, &mut T)> {
         let entities = &self.entities;
-        let active_ptr: *const Vec<bool> = &self.active;
+        let active = &self.active;
         let pool = self.pools.get_mut(&TypeId::of::<T>());
         pool.into_iter()
             .flat_map(move |p| pool_downcast_mut::<T>(p.as_mut()).iter_mut())
             .filter_map(move |(id, value)| {
                 let generation = *entities.get(id as usize)?;
-                // 安全性 self.active is not mutated during the 迭代
-                if !unsafe { &*active_ptr }
-                    .get(id as usize)
-                    .copied()
-                    .unwrap_or(true)
-                {
+                // `active` and `pools` are disjoint fields, so the shared read
+                // stays valid while the pool borrow is alive.
+                if !active.get(id as usize).copied().unwrap_or(true) {
                     return None;
                 }
                 Some((Entity { id, generation }, value))
@@ -354,43 +351,39 @@ impl World {
     /// systems that 写入 to a 变换 while reading a mesh/handle. Returns
     /// a lazy 迭代器 (no 分配
     ///
-    /// # 安全性 argument
+    /// # 借用 argument
     ///
-    /// The 借用 checker can't see that `pools[A]` and `pools[B]` are
-    /// disjoint `HashMap` entries (different `TypeId` keys). We use raw pointers
-    /// to obtain both borrows simultaneously. This is 声音 because:
-    /// - A and B are 不同 types, so their pools never alias.
-    /// - The `&mut self` 借用 prevents any other 访问 to `pools` for the
-    ///   生命周期 of the returned references.
+    /// `pools[A]` and `pools[B]` are distinct `HashMap` entries, but a plain
+    /// `get_mut` + `get` pair is not expressible in safe code (the second
+    /// borrow of the map invalidates the first). [`HashMap::get_disjoint_mut`]
+    /// hands out both entries at once, so the two references are provably
+    /// disjoint and no raw pointer / `unsafe` is needed. `get_disjoint_mut`
+    /// panics on duplicate keys, which is why the same-type query is rejected
+    /// before the call; `A` and `B` are otherwise different types, so their
+    /// pools never alias.
     pub fn query2_mut<A: Component, B: Component>(
         &mut self,
     ) -> Box<dyn Iterator<Item = (Entity, &mut A, &B)> + '_> {
-        // The raw-pointer split below requires distinct component pools.
-        // Reject the same-type query before taking either borrow.
-        if TypeId::of::<A>() == TypeId::of::<B>() {
+        let type_a = TypeId::of::<A>();
+        let type_b = TypeId::of::<B>();
+        // `get_disjoint_mut` panics for duplicate keys.
+        if type_a == type_b {
             return Box::new(std::iter::empty());
         }
         let generation_for = &self.entities;
-        let active_ptr: *const Vec<bool> = &self.active;
-        // 安全性 see above. A and B have different TypeIds, so the two 池
-        // entries are disjoint and cannot alias.
-        let pools_ptr: *mut HashMap<TypeId, Box<dyn ErasedPool>> = &mut self.pools;
-        let pool_a = unsafe { (*pools_ptr).get_mut(&TypeId::of::<A>()) }
-            .map(|pa| pool_downcast_mut::<A>(pa.as_mut()));
-        let pool_b = unsafe { (*pools_ptr).get(&TypeId::of::<B>()) }
-            .map(|pb| pool_downcast_ref::<B>(pb.as_ref()));
+        let active = &self.active;
+        let [pool_a, pool_b] = self.pools.get_disjoint_mut([&type_a, &type_b]);
         let (a, b) = match (pool_a, pool_b) {
-            (Some(a), Some(b)) => (a, b),
+            (Some(a), Some(b)) => (
+                pool_downcast_mut::<A>(a.as_mut()),
+                pool_downcast_ref::<B>(&**b),
+            ),
             _ => return Box::new(std::iter::empty()),
         };
         Box::new(a.iter_mut().filter_map(move |(id, av)| {
             let bv = b.get(id)?;
             let generation = *generation_for.get(id as usize).unwrap_or(&0);
-            if !unsafe { &*active_ptr }
-                .get(id as usize)
-                .copied()
-                .unwrap_or(true)
-            {
+            if !active.get(id as usize).copied().unwrap_or(true) {
                 return None;
             }
             Some((Entity { id, generation }, av, bv))
