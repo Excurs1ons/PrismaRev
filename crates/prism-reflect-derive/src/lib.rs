@@ -89,6 +89,7 @@ fn expand(input: DeriveInput) -> syn::Result<TokenStream2> {
     let mut getters = Vec::new();
     let mut setters = Vec::new();
     let mut force_setters = Vec::new();
+    let mut field_names = std::collections::HashSet::new();
 
     for (index, field) in fields.iter().enumerate() {
         let mut skip = false;
@@ -131,6 +132,15 @@ fn expand(input: DeriveInput) -> syn::Result<TokenStream2> {
             Some(name) => name.to_string(),
             None => index.to_string(),
         });
+        if !field_names.insert(field_name.clone()) {
+            return Err(syn::Error::new(
+                field.span(),
+                format!(
+                    "duplicate reflect field name `{field_name}`; \
+                     use #[reflect(rename = \"...\")] to disambiguate"
+                ),
+            ));
+        }
         let ty = &field.ty;
 
         descriptors.push(quote! {
@@ -255,4 +265,65 @@ fn expand(input: DeriveInput) -> syn::Result<TokenStream2> {
             }
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::expand;
+
+    fn expand_str(source: &str) -> syn::Result<proc_macro2::TokenStream> {
+        let input: syn::DeriveInput = syn::parse_str(source).expect("test input parses");
+        expand(input)
+    }
+
+    #[test]
+    fn duplicate_renamed_fields_are_rejected() {
+        let error = expand_str(
+            r#"
+            struct Camera {
+                #[reflect(rename = "fov")]
+                fov_y: f32,
+                #[reflect(rename = "fov")]
+                fov_x: f32,
+            }
+            "#,
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("duplicate reflect field name `fov`"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn duplicate_numeric_renames_are_rejected() {
+        let error = expand_str(
+            r#"
+            struct Camera {
+                #[reflect(rename = "0")]
+                a: f32,
+                #[reflect(rename = "0")]
+                b: f32,
+            }
+            "#,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("duplicate reflect field name"));
+    }
+
+    #[test]
+    fn unique_fields_still_expand() {
+        expand_str(
+            r#"
+            struct Camera {
+                fov: f32,
+                #[reflect(rename = "near")]
+                near_plane: f32,
+            }
+            "#,
+        )
+        .expect("unique field names expand");
+    }
 }
