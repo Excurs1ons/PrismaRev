@@ -744,6 +744,9 @@ Unity 的 `Renderer.shadowCastingMode` 决定一个物体「是否投影」与�
   点光/聚光还没有自己的阴影（只有方向光贴图）。
 - **P3c 相机行为**：用测试钉住 yaw↔quaternion 的 `−π/2` 偏移；`clear_flags` 的
   `Depth`/`Nothing` 语义接进 `ForwardPass`；多相机（`depth` 排序 + 叠加）。
+- **P7 剩余**：`UIElements`（编辑器是 Vue，507 类型）/ `UI`（已有 ECS 布局，
+  UGUI 形状需先设计）/ `Audio`（运行时 `AudioSource` 已有，场景组件与
+  `AudioListener` 需接线）/ `Animation` / `Physics`（暂无运行时后端，需先选型）。
 
 ### P7a — `UnityEngine.Input` 门面 ✅
 
