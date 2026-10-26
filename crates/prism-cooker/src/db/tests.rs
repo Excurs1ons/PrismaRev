@@ -52,6 +52,28 @@ fn remove_marks_tombstone() {
     db.remove(id);
     assert!(db.get(id).is_none());
     assert!(db.get_by_path("meshes/cube.gltf").is_none());
+    assert_eq!(db.len(), 0);
+    assert!(db.records().next().is_none());
+}
+
+#[test]
+fn tombstone_survives_json_roundtrip() {
+    let mut db = make_db();
+    let id = db.get_by_path("meshes/cube.gltf").unwrap().id;
+    db.remove(id);
+
+    let json = serde_json::to_string_pretty(&db).unwrap();
+    assert!(json.contains("Deleted"), "tombstone must be serialized");
+
+    let mut loaded: AssetDatabase = serde_json::from_str(&json).unwrap();
+    loaded.rebuild_index();
+    assert!(loaded.get(id).is_none());
+    assert!(loaded.get_by_path("meshes/cube.gltf").is_none());
+    assert!(loaded
+        .records
+        .iter()
+        .any(|r| r.id == id && r.state == AssetState::Deleted));
+    assert_eq!(loaded.len(), 0);
 }
 
 #[test]

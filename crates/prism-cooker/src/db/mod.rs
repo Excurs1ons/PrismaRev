@@ -151,34 +151,45 @@ impl AssetDatabase {
     // Accessors
     // ------------------------------------------------------------------
 
-    /// Number of records (excluding tombstones).
+    /// Number of live records (excluding tombstones).
     pub fn len(&self) -> usize {
-        self.records.len()
+        self.records
+            .iter()
+            .filter(|r| r.state != AssetState::Deleted)
+            .count()
     }
 
-    /// Returns `true` if the database is 空
+    /// Returns `true` if the database has no live records.
     pub fn is_empty(&self) -> bool {
-        self.records.is_empty()
+        self.len() == 0
     }
 
-    /// Iterate all records.
+    /// Iterate live records (tombstones are persisted but not yielded).
     pub fn records(&self) -> impl Iterator<Item = &AssetRecord> {
-        self.records.iter()
+        self.records
+            .iter()
+            .filter(|r| r.state != AssetState::Deleted)
     }
 
-    /// Iterate mutable records.
+    /// Iterate mutable live records.
     pub fn records_mut(&mut self) -> impl Iterator<Item = &mut AssetRecord> {
-        self.records.iter_mut()
+        self.records
+            .iter_mut()
+            .filter(|r| r.state != AssetState::Deleted)
     }
 
-    /// Get a record by ID 线性 scan — databases are small in the 编辑器
+    /// Get a live record by ID 线性 scan — databases are small in the 编辑器
     pub fn get(&self, id: AssetId) -> Option<&AssetRecord> {
-        self.records.iter().find(|r| r.id == id)
+        self.records
+            .iter()
+            .find(|r| r.id == id && r.state != AssetState::Deleted)
     }
 
-    /// Get a mutable record by ID.
+    /// Get a mutable live record by ID.
     pub fn get_mut(&mut self, id: AssetId) -> Option<&mut AssetRecord> {
-        self.records.iter_mut().find(|r| r.id == id)
+        self.records
+            .iter_mut()
+            .find(|r| r.id == id && r.state != AssetState::Deleted)
     }
 
     /// 查找 an 资源 by its 相对 path.
@@ -225,14 +236,20 @@ impl AssetDatabase {
         Ok(id)
     }
 
-    /// 移除 a record (marks as tombstone).
+    /// 移除 a record: keep it in the database as a persisted tombstone.
+    ///
+    /// The record stays serialized with [`AssetState::Deleted`] so a later
+    /// `load` can distinguish "deleted" from "never imported"; accessors such
+    /// as [`Self::get`] and [`Self::records`] skip tombstones.
     pub fn remove(&mut self, id: AssetId) -> Option<AssetRecord> {
-        let pos = self.records.iter().position(|r| r.id == id)?;
-        let mut record = self.records.swap_remove(pos);
+        let record = self
+            .records
+            .iter_mut()
+            .find(|r| r.id == id && r.state != AssetState::Deleted)?;
         let normalized = normalize_path(&record.path);
         record.state = AssetState::Deleted;
         self.path_index.remove(&normalized);
-        Some(record)
+        Some(record.clone())
     }
 
     /// Generate a fresh 资源 ID.
