@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, inject, ref } from "vue";
+import { computed, inject, reactive, ref, watch } from "vue";
 import { X } from "lucide-vue-next";
 import type { DockNode } from "../dock";
 import { DOCK_KEY, type DockContext } from "../dockContext";
@@ -16,6 +16,22 @@ const hoverZone = computed(() => {
   const target = ctx.hover.value;
   return target && target.leafId === props.node.id ? target.zone : null;
 });
+
+/**
+ * 已经挂载过的标签。
+ *
+ * 面板只有在第一次被激活时才挂载（启动时不会一次性挂载全部面板），之后就用
+ * `v-show` 隐藏而不是卸载 —— 切标签不再销毁组件，面板的本地状态（设置面板里
+ * 未保存的输入、资产检索条件、滚动位置）不会随切标签丢掉。
+ */
+const mountedTabs = reactive(new Set<string>());
+watch(
+  () => (props.node.type === "leaf" ? props.node.active : null),
+  (tab) => {
+    if (tab) mountedTabs.add(tab);
+  },
+  { immediate: true },
+);
 
 function startResize(event: PointerEvent) {
   if (props.node.type !== "split") return;
@@ -102,7 +118,14 @@ function startResize(event: PointerEvent) {
     </div>
 
     <div class="dock-body">
-      <slot :name="node.active" />
+      <div
+        v-for="tab in node.tabs.filter((name) => mountedTabs.has(name))"
+        :key="tab"
+        class="dock-tab-panel"
+        v-show="tab === node.active"
+      >
+        <slot :name="tab" />
+      </div>
     </div>
 
     <div v-if="hoverZone" class="dock-drop" :class="`zone-${hoverZone}`">
