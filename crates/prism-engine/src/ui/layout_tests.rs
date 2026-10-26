@@ -91,6 +91,73 @@ fn child_is_positioned_relative_to_its_parent() {
 }
 
 #[test]
+fn child_created_before_parent_uses_the_fresh_parent_rect() {
+    let mut world = world_with_screen();
+
+    // 故意先建子、后建父：查询顺序里子节点排在父节点前面。
+    // 预插入 `ComputedLayout::default()` 之后，父节点的组件总「存在」，
+    // 旧实现据此认为父节点已就绪，用默认矩形给子节点定了一次位置。
+    let child = world.spawn();
+    world.insert(child, Node {});
+    world.insert(child, Style::default()); // 拉伸填满父容器
+
+    let parent = world.spawn();
+    world.insert(parent, Node {});
+    world.insert(parent, Style::fixed(400.0, 300.0));
+
+    HierarchyHelper::reparent(&mut world, child, Some(parent));
+
+    ui_layout_system(&mut world);
+
+    // 父 = [200, 150, 400, 300]（屏幕居中 400x300），子必须用它本帧的矩形。
+    assert_eq!(
+        world.get::<ComputedLayout>(parent).unwrap().rect,
+        [200.0, 150.0, 400.0, 300.0]
+    );
+    assert_eq!(
+        world.get::<ComputedLayout>(child).unwrap().rect,
+        [200.0, 150.0, 400.0, 300.0]
+    );
+}
+
+#[test]
+fn deeper_child_waits_for_the_whole_ancestor_chain() {
+    let mut world = world_with_screen();
+
+    // 顺序同样是「孙 → 子 → 父」，且父节点位置在屏幕中央（非零原点），
+    // 这样任何一层用到默认矩形都会被断言抓到。
+    let grandchild = world.spawn();
+    world.insert(grandchild, Node {});
+    world.insert(grandchild, Style::default());
+
+    let child = world.spawn();
+    world.insert(child, Node {});
+    world.insert(child, Style::fixed(300.0, 200.0));
+
+    let parent = world.spawn();
+    world.insert(parent, Node {});
+    world.insert(parent, Style::fixed(400.0, 300.0));
+
+    HierarchyHelper::reparent(&mut world, child, Some(parent));
+    HierarchyHelper::reparent(&mut world, grandchild, Some(child));
+
+    ui_layout_system(&mut world);
+
+    assert_eq!(
+        world.get::<ComputedLayout>(parent).unwrap().rect,
+        [200.0, 150.0, 400.0, 300.0]
+    );
+    assert_eq!(
+        world.get::<ComputedLayout>(child).unwrap().rect,
+        [250.0, 200.0, 300.0, 200.0]
+    );
+    assert_eq!(
+        world.get::<ComputedLayout>(grandchild).unwrap().rect,
+        [250.0, 200.0, 300.0, 200.0]
+    );
+}
+
+#[test]
 fn stretched_child_fills_its_parent() {
     let mut world = world_with_screen();
 

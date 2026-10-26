@@ -58,6 +58,17 @@ pub fn ui_layout_system(world: &mut World) {
         }
     }
 
+    // 本帧已经算出的矩形。
+    //
+    // `ComputedLayout` 是每帧的输出，读 `world` 里的值只能证明「组件存在」，
+    // 不能证明「它是本帧算的」：预插入保证组件一定存在，于是子节点排在父节点
+    // 前面时会拿上一帧（或刚插入的默认值）当父矩形，算完也不会再重算。
+    // 这里用帧内的 `resolved` 记录真正就绪的父节点，恢复「父先子后」的顺序保证。
+    let mut resolved: std::collections::HashMap<prism_ecs::Entity, [f32; 4]> =
+        std::collections::HashMap::new();
+    let layout_entities: std::collections::HashSet<prism_ecs::Entity> =
+        layout_queue.iter().map(|(entity, _)| *entity).collect();
+
     // 按 Parent 层级处理（先根后子）
     let mut remaining: Vec<_> = layout_queue.into_iter().collect();
     let mut pass = 0;
@@ -67,12 +78,21 @@ pub fn ui_layout_system(world: &mut World) {
 
         for (entity, parent_opt) in remaining.drain(..) {
             let parent_rect = match parent_opt {
-                Some(parent_entity) => match world.get::<ComputedLayout>(parent_entity) {
-                    Some(layout) => layout.rect,
-                    None => {
+                Some(parent_entity) => match resolved.get(&parent_entity) {
+                    Some(rect) => *rect,
+                    None if layout_entities.contains(&parent_entity) => {
+                        // 父节点本帧还没算：等它先算完。
                         next_pass.push((entity, parent_opt));
                         continue;
                     }
+                    // 父节点不是 UI 实体（没有 `Node + Style`）：沿用它的现有输出。
+                    None => match world.get::<ComputedLayout>(parent_entity) {
+                        Some(layout) => layout.rect,
+                        None => {
+                            next_pass.push((entity, parent_opt));
+                            continue;
+                        }
+                    },
                 },
                 None => [0.0, 0.0, screen.width, screen.height],
             };
@@ -86,7 +106,10 @@ pub fn ui_layout_system(world: &mut World) {
 
             if let Some(layout) = world.get_mut::<ComputedLayout>(entity) {
                 layout.rect = rect;
+            } else {
+                world.insert(entity, ComputedLayout { rect });
             }
+            resolved.insert(entity, rect);
         }
 
         remaining = next_pass;
