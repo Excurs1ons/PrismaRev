@@ -36,7 +36,7 @@ const emit = defineEmits<{
   (e: "copy-component", name: string): void;
   (e: "paste-component"): void;
   (e: "clear-clipboard"): void;
-  (e: "reflect", component: string, canonical: JsonValue): void;
+  (e: "reflect", component: string, canonical: JsonValue, index: number, pending: JsonValue): void;
   (e: "rejected", message: string): void;
 }>();
 
@@ -121,16 +121,27 @@ function setComponent(name: string, value: JsonValue, path: string) {
     { ...props.entity, components: { ...props.entity.components, [name]: value } },
     fieldKey(`components.${name}/${path}`),
   );
-  void reflectComponent(name, before, path, value);
+  void reflectComponent(name, before, path, value, props.index);
 }
 
-/** 反射写入：成功后回填规范化值；失败则报告（通常是只读或类型不合法）。 */
-async function reflectComponent(name: string, before: JsonValue, path: string, after: JsonValue) {
+/**
+ * 反射写入：成功后回填规范化值；失败则报告（通常是只读或类型不合法）。
+ *
+ * `index` / `pending` 随事件一起带回 App：异步往返期间用户可能切换选中或改动
+ * 文档，回填必须落回**发起编辑的那个实体**，不能落到当前选中项上。
+ */
+async function reflectComponent(
+  name: string,
+  before: JsonValue,
+  path: string,
+  after: JsonValue,
+  index: number,
+) {
   const seq = (reflectSeq.get(name) ?? 0) + 1;
   reflectSeq.set(name, seq);
   try {
     const canonical = await api.setComponentField(name, before, path, after);
-    if (reflectSeq.get(name) === seq) emit("reflect", name, canonical);
+    if (reflectSeq.get(name) === seq) emit("reflect", name, canonical, index, after);
   } catch (e) {
     if (reflectSeq.get(name) === seq) emit("rejected", `${e}`);
   }
