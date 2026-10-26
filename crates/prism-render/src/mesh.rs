@@ -66,6 +66,23 @@ impl Vertex {
     }
 }
 
+/// Usage flags for mesh vertex/index buffers.
+///
+/// `SHADER_DEVICE_ADDRESS` and `ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR`
+/// are only legal when the device was created with the corresponding feature
+/// and extension. Requesting them unconditionally makes buffer creation fail
+/// on hardware without buffer-device-address or ray tracing support.
+fn mesh_buffer_usage(context: &VulkanContext, base: BufferUsage) -> BufferUsage {
+    let mut usage = base | BufferUsage::TRANSFER_DST;
+    if context.rt_caps.buffer_device_address {
+        usage |= BufferUsage::SHADER_DEVICE_ADDRESS;
+    }
+    if context.rt_caps.acceleration_structure {
+        usage |= BufferUsage::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR;
+    }
+    usage
+}
+
 /// A GPU 网格 顶点 缓冲区 (+ optional 索引 缓冲区 and 绘制 metadata.
 pub struct Mesh {
     pub vertex_buffer: vk::Buffer,
@@ -113,16 +130,13 @@ impl Mesh {
     ) -> anyhow::Result<Self> {
         let vertex_size = std::mem::size_of_val(vertices) as vk::DeviceSize;
 
-        // 顶点 缓冲区 (device-local). Include SHADER_DEVICE_ADDRESS +
-        // ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR so the same 缓冲区 can
-        // be used for BLAS builds without reallocation.
+        // 顶点 缓冲区 (device-local). On devices that support them, add
+        // device-address + AS-build usages so the same buffer can feed BLAS
+        // builds without reallocation.
         let (vertex_buffer, vertex_memory) = buffer::create_buffer(
             context,
             vertex_size,
-            BufferUsage::VERTEX_BUFFER
-                | BufferUsage::TRANSFER_DST
-                | BufferUsage::SHADER_DEVICE_ADDRESS
-                | BufferUsage::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
+            mesh_buffer_usage(context, BufferUsage::VERTEX_BUFFER),
             MemoryProperties::DEVICE_LOCAL,
         )
         .context("create vertex buffer")?;
@@ -151,10 +165,7 @@ impl Mesh {
             let (buf, mem) = buffer::create_buffer(
                 context,
                 index_size,
-                BufferUsage::INDEX_BUFFER
-                    | BufferUsage::TRANSFER_DST
-                    | BufferUsage::SHADER_DEVICE_ADDRESS
-                    | BufferUsage::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
+                mesh_buffer_usage(context, BufferUsage::INDEX_BUFFER),
                 MemoryProperties::DEVICE_LOCAL,
             )
             .context("create index buffer")?;
@@ -208,10 +219,7 @@ impl Mesh {
         let (vertex_buffer, vertex_memory) = buffer::create_buffer(
             context,
             vertex_size,
-            BufferUsage::VERTEX_BUFFER
-                | BufferUsage::TRANSFER_DST
-                | BufferUsage::SHADER_DEVICE_ADDRESS
-                | BufferUsage::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
+            mesh_buffer_usage(context, BufferUsage::VERTEX_BUFFER),
             MemoryProperties::DEVICE_LOCAL,
         )
         .context("create vertex buffer")?;
@@ -231,10 +239,7 @@ impl Mesh {
             let (buf, mem) = buffer::create_buffer(
                 context,
                 index_size,
-                BufferUsage::INDEX_BUFFER
-                    | BufferUsage::TRANSFER_DST
-                    | BufferUsage::SHADER_DEVICE_ADDRESS
-                    | BufferUsage::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
+                mesh_buffer_usage(context, BufferUsage::INDEX_BUFFER),
                 MemoryProperties::DEVICE_LOCAL,
             )
             .context("create index buffer")?;
