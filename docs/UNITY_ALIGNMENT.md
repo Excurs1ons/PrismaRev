@@ -85,6 +85,7 @@ public 类型的只有 **43** 个（≈0.9%）。这既是现状，也是后续�
 | UnityEditor 概念 | PrismaRev 落点 | 形式 |
 |---|---|---|
 | `AssetDatabase.*` | `prism_editor_api::asset_database` | Rust 模块（包装 `assets.rs`/`asset_ops.rs`） |
+| `AssetImporter.GetAtPath` / `TextureImporter` 等 | `prism_editor_api::asset_importer` | Rust 模块（按扩展名投影导入器类名 / 主资产类型）+ `AssetInfo.importer` |
 | `PrefabUtility.*` | `prism_editor_api::prefab_utility` | Rust 模块（包装 `scene.rs` 预制体函数） |
 | `Selection.*` | `prism_editor_api::selection` + 前端 store | 前后端各一半（前端有真实选中态） |
 | `Undo.*` | `prism_editor_api::undo` + 前端历史栈 | 同上（前端已有按字段合并的撤销） |
@@ -198,7 +199,8 @@ public 类型的只有 **43** 个（≈0.9%）。这既是现状，也是后续�
   `Light.shadows`/`shadowStrength`）已落地，见 §9；剩余渲染枚举批次与
   P3c（相机行为）见 §9 待办。
 - **P4 编辑器扩展**：`PropertyDrawer` schema 扩展点 + `EditorWindow` 面板注册表 DTO。
-- **P5 资产流水线**：`AssetImporters`/`Build`/`Build.Profile`/`Compilation` 形状。
+- **P5 资产流水线** — 🔄 进行中。P5a `AssetImporter` 形状已落地（见 §9）；
+  剩余 `Build` / `Build.Profile` / `Compilation` 形状。
 - **P6 并行/集合**：`Unity.Collections`/`Unity.Jobs` 形状（`NativeArray`/`IJob*`/`JobHandle`）。
 - **P7 UI/输入/音频/动画/物理** — 🔄 进行中（见 §9）。P7a `UnityEngine.Input`
   门面（`prism_engine::input_facade::Input`）已落地；其余 `UIElements`/`UI`/
@@ -866,6 +868,52 @@ Unity 的 `EditorWindow` 是「可停靠的编辑器窗口」，`[MenuItem("窗�
 - 菜单动作仍是前端闭包：后端只给 `command` id，不执行命令（保持 editor-api 不链接 UI/状态）。
 - 默认停靠布局仍写死在 `dock.ts` 的 `defaultDock()`；注册表还没有「默认 dock 位置」字段。
 - 快捷键只在菜单里展示，尚未由 `shortcut` 字段自动注册到 `onKey`。
+
+### P5a — `AssetImporter` 形状 + 资产浏览器显示导入器 ✅
+
+Unity 里每个资产都由一个 `AssetImporter` 子类导入（`TextureImporter` / `ModelImporter` /
+`AudioImporter` / `DefaultImporter`…），`AssetImporter.GetAtPath(path)` 拿到实例，
+`importSettingsMissing` 表示还没有 `.meta` 里的导入设置。这一批把**只读的导入器描述**
+投影出来，并显示在编辑器的资产详情里。
+
+**prism-editor-api（新模块 `asset_importer`）**
+- `ImporterClass` = `texture` / `model` / `audio` / `environment` / `scene` / `prefab` /
+  `package` / `text` / `default`，`unity_class_name()` 映射到 Unity 类名：
+  纹理与环境 → `TextureImporter`、模型 → `ModelImporter`、音频 → `AudioImporter`、
+  文本 → `TextScriptImporter`、其余 → `DefaultImporter`。
+- `ImporterClass::from_path()` 按扩展名判定（`.scene.json` / `.prefab.json` 后缀优先于
+  最后的 `.json`）：`gltf/glb/obj/fbx/bin/mesh` → 模型；`png/jpg/ktx2/…` → 纹理；
+  `hdr/exr` → 环境；`wav/mp3/ogg/flac/…` → 音频；`pak` → 包；`json/toml/ron/md/slang/…` → 文本。
+- `AssetImporter { asset_path, importer, main_asset_type, user_data, import_settings_missing }`：
+  `get_at_path(project_root, path)` 校验路径存在且是文件（目录 / 缺失分别报错），
+  `main_asset_type` 复用 `assets::asset_kind`；`list_importers(project_root)` 批量解析。
+- `AssetInfo` 新增 `importer`（导入器类名），由 `list_assets_info` 填充 —— 因此
+  **不需要新的 Tauri 命令**：资产浏览器拿到的 `AssetInfo` 就带上了导入器。
+
+**editor（Vue）**
+- `types.ts` 的 `AssetInfo` 增加 `importer: string`。
+- 资产浏览器详情面板显示 `类别 · 导入器 <类名>`（`title` 提示对应
+  `AssetImporter.GetAtPath(...).GetType().Name`）。
+
+**与 Unity 的差异（有意为之）**
+- 引擎没有 `.meta` 文件、也不在运行时保存导入参数：`user_data` 恒为空、
+  `import_settings_missing` 恒为 `true`。真正的导入参数在 cooker 的 `CookProfile` 里
+  （平台相关的压缩 / 采样设置），不塞进编辑器的资产 DTO。
+- 没有 `AssetImporter.SaveAndReimport()`：资产导入是 cooker/build 的职责，
+  `prism-editor-api` 不链接 cooker。
+
+**验证**
+- ✅ `cargo test -p prism-editor-api` → **84 passed**（新增 6 个：扩展名 → 类名、
+  `.scene.json`/`.prefab.json` 后缀优先、`get_at_path` 主资产类型、目录/缺失报错、
+  批量覆盖每个资产、camelCase 序列化）。
+- ✅ `cargo clippy -p prism-editor-api --all-targets -- -D warnings`
+- ✅ `cd editor && pnpm build`
+- ✅ `python3 scripts/pr_ready.py`
+
+**已知遗留**
+- 还没有逐资产的导入设置 UI（`TextureImporter` 的 sRGB / filter、`ModelImporter` 的
+  缩放 / 切线等）；这些目前由 cooker 的 `CookProfile` 统一决定。
+- `Build` / `Build.Profile` / `Compilation` 形状仍待后续批次。
 
 ## 附录
 

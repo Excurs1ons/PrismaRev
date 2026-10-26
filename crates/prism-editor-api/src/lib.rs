@@ -16,6 +16,7 @@
 //! Unity 形状的门面层（`UnityEditor` / `UnityEngine` 对齐，见
 //! `docs/UNITY_ALIGNMENT.md`）：
 //! - [`asset_database`]：`AssetDatabase`（枚举 / 查找 / GUID / 增删改 / 导入）。
+//! - [`asset_importer`]：`AssetImporter`（按扩展名投影导入器类名 / 主资产类型）。
 //! - [`prefab_utility`]：`PrefabUtility`（提取 / 实例化 / 还原 / 应用 / 解包）。
 //! - [`selection`]：`Selection`（实体选中集合 + 活动项 + 过滤）。
 //! - [`undo`]：`Undo`（快照式撤销栈 + 标签 / 合并 / 上限）。
@@ -28,6 +29,7 @@
 //! schema 只作为控件类型与只读判断的提示。
 
 pub mod asset_database;
+pub mod asset_importer;
 pub mod asset_ops;
 pub mod assets;
 pub mod editor_application;
@@ -43,6 +45,9 @@ pub mod selection;
 pub mod settings;
 pub mod undo;
 
+pub use asset_importer::{
+    get_at_path as asset_importer_at_path, list_importers, AssetImporter, ImporterClass,
+};
 pub use asset_ops::{
     asset_reference_documents, create_asset_dir, delete_asset, move_asset, normalize_asset_path,
     rename_asset, AssetMutation,

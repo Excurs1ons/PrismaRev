@@ -92,6 +92,8 @@ export interface AssetInfo {
   path: string;
   sizeBytes: number;
   kind: "model" | "texture" | "env" | "scene" | "package" | "data" | "other";
+  /** Unity 导入器类名（`TextureImporter` / `ModelImporter` / `DefaultImporter`…）。 */
+  importer: string;
 }
 
 /** 文本资产预览（后端按 UTF-8 读取，可截断）。 */
