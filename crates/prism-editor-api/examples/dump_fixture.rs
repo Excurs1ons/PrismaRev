@@ -109,24 +109,58 @@ fn main() {
     );
 }
 
-/// `lit`（相机 + 平行光 + 点光源）追加 `ui`（overlay + title），并修正父索引。
+/// `lit`（相机 + 平行光 + 点光源）追加 `ui`（overlay + title），实体 id 全局唯一、父级按 id 重映射。
+///
+/// 每个模板块自成 id 空间（都从 0 开始），直接拼接会得到重复的 id 和指向错位的父级；
+/// 这里按块把旧 id 平移到全局区间，并把块内父子引用一起重映射。
 fn demo_scene() -> Value {
     let mut entities: Vec<Value> = Vec::new();
-
-    if let Some(list) = prism_editor_api::template_scene_doc("lit")["entities"].as_array() {
-        entities.extend(list.iter().cloned());
+    for template in ["lit", "ui"] {
+        append_template_block(&mut entities, template);
     }
 
-    let base = entities.len() as u64;
-    if let Some(list) = prism_editor_api::template_scene_doc("ui")["entities"].as_array() {
-        for entity in list {
-            let mut entity = entity.clone();
-            if let Some(parent) = entity["parent"].as_u64() {
-                entity["parent"] = json!(parent + base);
-            }
-            entities.push(entity);
-        }
-    }
+    let version = prism_editor_api::empty_scene_doc()["version"].clone();
+    let doc = json!({ "version": version, "entities": entities });
+    // fixture 是浏览器预览的唯一数据源，坏掉只会在打开预览时静默报错，所以这里直接校验。
+    prism_editor_api::validate_doc(&doc).expect("demo 场景必须是可校验的文档");
+    doc
+}
 
-    json!({ "version": 1, "entities": entities })
+/// 把一个模板块追加到 `entities`，块内 id → 新的全局 id（父子引用同步重映射）。
+fn append_template_block(entities: &mut Vec<Value>, template: &str) {
+    let block = prism_editor_api::template_scene_doc(template);
+    let Some(block) = block["entities"].as_array() else {
+        return;
+    };
+    let next_id = entities
+        .iter()
+        .filter_map(|entity| entity["id"].as_u64())
+        .max()
+        .map_or(0, |max| max + 1);
+    let map: Vec<(u64, u64)> = block
+        .iter()
+        .enumerate()
+        .map(|(offset, entity)| {
+            (
+                entity["id"].as_u64().unwrap_or(offset as u64),
+                next_id + offset as u64,
+            )
+        })
+        .collect();
+    let remap = |old: u64| {
+        map.iter()
+            .find(|(from, _)| *from == old)
+            .map(|(_, to)| *to)
+            .unwrap_or(old)
+    };
+
+    for entity in block {
+        let mut entity = entity.clone();
+        entity["id"] = json!(remap(entity["id"].as_u64().unwrap_or(0)));
+        entity["parent"] = match entity["parent"].as_u64() {
+            Some(parent) => json!(remap(parent)),
+            None => Value::Null,
+        };
+        entities.push(entity);
+    }
 }
