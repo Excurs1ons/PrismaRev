@@ -376,15 +376,15 @@ pub fn parse_rscn(data: &[u8]) -> Result<ParsedRscn, String> {
 /// `(yaw, 音高 pair used by [`FlyCameraController`].
 ///
 /// The free-fly 向前 (see 向前 in `scene::systems::camera`) is
-/// `[cos(yaw)·cos(pitch), sin(pitch), -sin(yaw)·cos(pitch)]`. The camera's
+/// `[-sin(yaw)·cos(pitch), sin(pitch), -cos(yaw)·cos(pitch)]`. The camera's
 /// world-space 向前 is the entity's 四元数 applied to the −Z basis,
 /// `R·(0,0,-1)`. Inverting the 向前 formula gives:
 /// - 音高 = asin(forward.y)`
-///   - `yaw   = atan2(-forward.z, forward.x)`
+///   - `yaw   = atan2(-forward.x, -forward.z)`
 ///
-/// 音符 this means an identity 四元数 向前 = (0,0,−1)) maps to
-/// `yaw = π/2, 音高 = 0` - the value the free-fly controller needs to look
-/// 下 −Z. Roll is discarded (the free-fly 相机 has no roll). Matches the
+/// 音符 this means an identity 四元数 (向前 = (0,0,−1)) maps to
+/// `yaw = 0, 音高 = 0` — the same orientation the entity's transform already
+/// expresses. Roll is discarded (the free-fly 相机 has no roll). Matches the
 /// right-handed conventions in `README.md` (+X 右 +Y 上 +Z toward
 /// viewer, 相机 looks 下 −Z).
 fn quat_to_yaw_pitch(quat: [f32; 4]) -> (f32, f32) {
@@ -393,7 +393,7 @@ fn quat_to_yaw_pitch(quat: [f32; 4]) -> (f32, f32) {
     let n = (qx * qx + qy * qy + qz * qz + qw * qw).sqrt();
     if n < 1e-6 {
         log::warn!("scene camera quaternion is degenerate (|q|≈0); using identity");
-        return (std::f32::consts::FRAC_PI_2, 0.0);
+        return (0.0, 0.0);
     }
     let (qx, qy, qz, qw) = (qx / n, qy / n, qz / n, qw / n);
     // 向前 = R · (0,0,-1), where R is the quaternion's 旋转 矩阵
@@ -405,7 +405,7 @@ fn quat_to_yaw_pitch(quat: [f32; 4]) -> (f32, f32) {
         -(1.0 - 2.0 * (qx * qx + qy * qy)),
     ];
     let pitch = forward[1].clamp(-1.0, 1.0).asin();
-    let yaw = (-forward[2]).atan2(forward[0]);
+    let yaw = (-forward[0]).atan2(-forward[2]);
     (yaw, pitch)
 }
 
