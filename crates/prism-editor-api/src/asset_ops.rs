@@ -246,25 +246,22 @@ pub fn normalize_asset_path(raw: &str) -> Result<String, String> {
     Ok(parts.join("/"))
 }
 
-/// 场景 / 预制体文档在编辑器里按扁平目录枚举，禁止把它们移到子目录，
-/// 也禁止移动 `assets/scenes`、`assets/prefabs` 根本身。
+/// 场景文档按扁平目录枚举（只扫 `assets/scenes/`），必须留在那里；
+/// 预制体在 `assets/` 下递归枚举，可以放在任意子目录，只要保留后缀。
 fn ensure_document_placement(from: &str, to: &str) -> Result<(), String> {
     if matches!(from, "assets/scenes" | "assets/prefabs") {
         return Err("不能重命名或移动编辑器文档根目录".into());
     }
-    for (suffix, dir) in [
-        (".scene.json", "assets/scenes"),
-        (".prefab.json", "assets/prefabs"),
-    ] {
-        if !from.ends_with(suffix) {
-            continue;
-        }
+    if from.ends_with(".scene.json") {
         let parent = to.rsplit_once('/').map(|(parent, _)| parent).unwrap_or("");
-        if parent != dir {
-            return Err(format!(
-                "{suffix} 文档必须保留在 {dir}/ 根目录（编辑器按扁平目录枚举文档）"
-            ));
+        if parent != "assets/scenes" || !to.ends_with(".scene.json") {
+            return Err(
+                "场景文档必须留在 assets/scenes/ 根目录（编辑器按扁平目录枚举场景）".into(),
+            );
         }
+    }
+    if from.ends_with(".prefab.json") && !to.ends_with(".prefab.json") {
+        return Err("预制体必须保留 .prefab.json 后缀（否则资产树不再枚举它）".into());
     }
     Ok(())
 }
@@ -922,6 +919,42 @@ mod tests {
         assert!(delete_asset(&root, "assets/scenes", false).is_err());
         delete_asset(&root, "assets/scenes", true).unwrap();
         assert!(!root.join("assets/scenes").exists());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn prefab_outside_prefabs_root_can_be_renamed_and_moved() {
+        let root = temp_root("prefab_move");
+        std::fs::create_dir_all(root.join("assets/models/chair")).unwrap();
+        std::fs::create_dir_all(root.join("assets/actors")).unwrap();
+        let doc = scene_with(&["assets/a.png", "assets/a.png"]);
+        write_doc(&root.join("assets/models/chair/seat.prefab.json"), &doc).unwrap();
+
+        rename_asset(
+            &root,
+            "assets/models/chair/seat.prefab.json",
+            "assets/actors/seat.prefab.json",
+        )
+        .unwrap();
+        assert!(root.join("assets/actors/seat.prefab.json").is_file());
+        assert!(!root.join("assets/models/chair/seat.prefab.json").exists());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn prefab_rename_must_keep_the_prefab_extension() {
+        let root = temp_root("prefab_ext");
+        std::fs::create_dir_all(root.join("assets/models")).unwrap();
+        let doc = scene_with(&["assets/a.png", "assets/a.png"]);
+        write_doc(&root.join("assets/models/chair.prefab.json"), &doc).unwrap();
+
+        assert!(rename_asset(
+            &root,
+            "assets/models/chair.prefab.json",
+            "assets/models/chair.json"
+        )
+        .is_err());
+        assert!(root.join("assets/models/chair.prefab.json").is_file());
         std::fs::remove_dir_all(&root).ok();
     }
 
