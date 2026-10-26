@@ -425,6 +425,9 @@ impl App {
     // -----------------------------------------------------------------------
 
     fn start_audio_decode_thread(&mut self) {
+        if self.audio_decode_thread.is_some() {
+            return;
+        }
         let (tx, rx) = flume::unbounded();
         let (result_tx, result_rx) = flume::bounded(8);
 
@@ -757,6 +760,9 @@ impl ApplicationHandler for App {
             if let Some(audio) = self.audio.as_mut() {
                 audio.resume_stream();
             }
+            // `suspended()` shuts the decode thread down; restart it so
+            // playback queued after resume is decoded again.
+            self.start_audio_decode_thread();
         }
 
         if !self.has_subsystem(Subsystem::Render) {
