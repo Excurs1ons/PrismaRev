@@ -104,12 +104,14 @@ input[type="checkbox"] {
   width: auto;
 }
 input:focus,
-select:focus {
+select:focus,
+textarea:focus {
   outline: none;
   border-color: var(--accent);
 }
 input:disabled,
-select:disabled {
+select:disabled,
+textarea:disabled {
   opacity: 0.55;
 }
 
@@ -1091,6 +1093,25 @@ html.compact .dock-tab {
 }
 .scalar input[type="text"] {
   min-width: 0;
+}
+.scalar textarea {
+  min-width: 0;
+  font-family: inherit;
+  line-height: 1.4;
+}
+
+/* Unity `PropertyDrawer`：`[Header]` 分组标题 + `[Range]` 滑动条 */
+.drawer-header {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  margin: 6px 0 2px;
+}
+.scalar input[type="range"].drawer-slider {
+  flex: 1 1 auto;
+  min-width: 60px;
+  accent-color: var(--accent);
 }
 
 /* 拖动调值 */

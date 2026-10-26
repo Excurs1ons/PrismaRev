@@ -1323,6 +1323,21 @@
         "fields": [
           {
             "arrayLen": null,
+            "drawer": {
+              "attributes": [
+                {
+                  "max": 179.0,
+                  "min": 1.0,
+                  "type": "range"
+                },
+                {
+                  "text": "垂直视场角（度）= Camera.fieldOfView",
+                  "type": "tooltip"
+                }
+              ],
+              "custom": null,
+              "renderer": "slider"
+            },
             "inner": null,
             "kind": "f32",
             "name": "fov_y_degrees",
@@ -1332,6 +1347,16 @@
           },
           {
             "arrayLen": null,
+            "drawer": {
+              "attributes": [
+                {
+                  "min": 9.999999747378752e-05,
+                  "type": "min"
+                }
+              ],
+              "custom": null,
+              "renderer": "default"
+            },
             "inner": null,
             "kind": "f32",
             "name": "near",
@@ -1341,6 +1366,16 @@
           },
           {
             "arrayLen": null,
+            "drawer": {
+              "attributes": [
+                {
+                  "min": 9.999999747378752e-05,
+                  "type": "min"
+                }
+              ],
+              "custom": null,
+              "renderer": "default"
+            },
             "inner": null,
             "kind": "f32",
             "name": "far",
@@ -1350,6 +1385,21 @@
           },
           {
             "arrayLen": null,
+            "drawer": {
+              "attributes": [
+                {
+                  "max": 5.0,
+                  "min": 0.0,
+                  "type": "range"
+                },
+                {
+                  "text": "曝光倍率，1.0 = 不缩放",
+                  "type": "tooltip"
+                }
+              ],
+              "custom": null,
+              "renderer": "slider"
+            },
             "inner": null,
             "kind": "f32",
             "name": "exposure",
@@ -1391,6 +1441,21 @@
           },
           {
             "arrayLen": 4,
+            "drawer": {
+              "attributes": [
+                {
+                  "hdr": false,
+                  "showAlpha": true,
+                  "type": "colorUsage"
+                },
+                {
+                  "text": "纯色背景（clearFlags = SolidColor 时生效）",
+                  "type": "tooltip"
+                }
+              ],
+              "custom": null,
+              "renderer": "color"
+            },
             "inner": {
               "arrayLen": null,
               "inner": null,
@@ -1417,6 +1482,16 @@
           },
           {
             "arrayLen": null,
+            "drawer": {
+              "attributes": [
+                {
+                  "min": 9.999999747378752e-05,
+                  "type": "min"
+                }
+              ],
+              "custom": null,
+              "renderer": "default"
+            },
             "inner": null,
             "kind": "f32",
             "name": "orthographic_size",
@@ -1701,6 +1776,16 @@
           },
           {
             "arrayLen": null,
+            "drawer": {
+              "attributes": [
+                {
+                  "min": 0.0,
+                  "type": "min"
+                }
+              ],
+              "custom": null,
+              "renderer": "default"
+            },
             "inner": null,
             "kind": "f32",
             "name": "intensity",
@@ -1710,6 +1795,16 @@
           },
           {
             "arrayLen": null,
+            "drawer": {
+              "attributes": [
+                {
+                  "min": 0.0,
+                  "type": "min"
+                }
+              ],
+              "custom": null,
+              "renderer": "default"
+            },
             "inner": null,
             "kind": "f32",
             "name": "range",
@@ -1719,6 +1814,17 @@
           },
           {
             "arrayLen": null,
+            "drawer": {
+              "attributes": [
+                {
+                  "max": 179.0,
+                  "min": 1.0,
+                  "type": "range"
+                }
+              ],
+              "custom": null,
+              "renderer": "slider"
+            },
             "inner": null,
             "kind": "f32",
             "name": "spot_angle",
@@ -1728,6 +1834,17 @@
           },
           {
             "arrayLen": null,
+            "drawer": {
+              "attributes": [
+                {
+                  "max": 179.0,
+                  "min": 1.0,
+                  "type": "range"
+                }
+              ],
+              "custom": null,
+              "renderer": "slider"
+            },
             "inner": null,
             "kind": "f32",
             "name": "inner_spot_angle",
@@ -1750,6 +1867,21 @@
           },
           {
             "arrayLen": null,
+            "drawer": {
+              "attributes": [
+                {
+                  "max": 1.0,
+                  "min": 0.0,
+                  "type": "range"
+                },
+                {
+                  "text": "阴影强度，0 = 无阴影、1 = 全黑",
+                  "type": "tooltip"
+                }
+              ],
+              "custom": null,
+              "renderer": "slider"
+            },
             "inner": null,
             "kind": "f32",
             "name": "shadow_strength",
@@ -1759,6 +1891,16 @@
           },
           {
             "arrayLen": null,
+            "drawer": {
+              "attributes": [
+                {
+                  "min": 0.0,
+                  "type": "min"
+                }
+              ],
+              "custom": null,
+              "renderer": "default"
+            },
             "inner": null,
             "kind": "f32",
             "name": "color_temperature",
@@ -1959,6 +2101,17 @@
           },
           {
             "arrayLen": null,
+            "drawer": {
+              "attributes": [
+                {
+                  "max": 360.0,
+                  "min": 0.0,
+                  "type": "range"
+                }
+              ],
+              "custom": null,
+              "renderer": "slider"
+            },
             "inner": null,
             "kind": "f32",
             "name": "rotation_degrees",
@@ -1968,6 +2121,16 @@
           },
           {
             "arrayLen": null,
+            "drawer": {
+              "attributes": [
+                {
+                  "min": 0.0,
+                  "type": "min"
+                }
+              ],
+              "custom": null,
+              "renderer": "default"
+            },
             "inner": null,
             "kind": "f32",
             "name": "intensity",
@@ -2200,6 +2363,17 @@
         "fields": [
           {
             "arrayLen": null,
+            "drawer": {
+              "attributes": [
+                {
+                  "maxLines": 6,
+                  "minLines": 2,
+                  "type": "textArea"
+                }
+              ],
+              "custom": null,
+              "renderer": "textArea"
+            },
             "inner": null,
             "kind": "string",
             "name": "content",

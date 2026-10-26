@@ -91,8 +91,13 @@ public 类型的只有 **43** 个（≈0.9%）。这既是现状，也是后续�
 | `Undo.*` | `prism_editor_api::undo` + 前端历史栈 | 同上（前端已有按字段合并的撤销） |
 | `EditorApplication.*` | `prism_editor_api::editor_application` | 包装 `play.rs`/`settings.rs` |
 | `EditorSceneManager`/`SceneManager` | `prism_editor_api::scene_management` | 包装 `scene.rs` 文档操作 |
+<<<<<<< HEAD
 | `BuildPipeline` | `prism_editor_api::build_profile` | 构建 profile / 目标组 / 场景构建顺序（执行仍在 `editor/src-tauri`） |
 | `PropertyDrawer` / `[CustomPropertyDrawer]` | **schema 扩展点** | 组件注册表里声明“字段渲染器”，经 schema 传给 Vue |
+=======
+| `BuildPipeline` | `prism_editor_api::build_pipeline` | 包装 build-scenes / build-project |
+| `PropertyDrawer` / `[CustomPropertyDrawer]` | `prism_editor_api::property_drawer` | 注册表声明“字段渲染器”，经 schema 的 `drawer` 传给 Vue |
+>>>>>>> f0aacec (feat(editor): render PropertyDrawer fields in the inspector)
 | `EditorWindow` / `[MenuItem]` | **面板/命令注册表** | `PANELS` + `MENUS`（前端）由后端 DTO 驱动 |
 | `EditorUtility` | `prism_editor_api::editor_utility` | 包装 reveal/日志/对话框 |
 | `SerializedObject`/`SerializedProperty` | `reflect_edit` + schema | 已有反射写入，补 Unity 命名外观 |
@@ -196,8 +201,9 @@ public 类型的只有 **43** 个（≈0.9%）。这既是现状，也是后续�
   `scene_management`（与既有导出同名的函数只在模块路径下提供，避免根命名冲突）。
 - **P3 渲染/光照/相机** — 🔄 进行中。P3a（相机）与 P3b（光照：渲染枚举、
   `Light` 组件、统一收集 + 聚光进 GPU、逐渲染器 `ShadowCastingMode`、编辑器光源预设、
-  `Light.shadows`/`shadowStrength`）已落地，见 §9；剩余渲染枚举批次与
-- **P4 编辑器扩展**：`PropertyDrawer` schema 扩展点 + `EditorWindow` 面板注册表 DTO。
+  P3c（相机行为）见 §9 待办。
+- **P4 编辑器扩展** — ✅ 完成（见 §9）。P4a `PropertyDrawer` schema 扩展点与
+  P4b `EditorWindow` 面板注册表 DTO 已落地。
 - **P5 资产流水线** — 🔄 进行中。P5a `AssetImporter` 形状与 P5b `Build`/`Build.Profile` 已落地（见 §9）；剩余 `Compilation` 形状。
 - **P6 并行/集合**：`Unity.Collections`/`Unity.Jobs` 形状（`NativeArray`/`IJob*`/`JobHandle`）。
 - **P7 UI/输入/音频/动画/物理** — 🔄 进行中（见 §9）。P7a `UnityEngine.Input`
@@ -775,6 +781,54 @@ P3b-3 只把该变体接进 `cast_shadow` / `visible_in_main_pass`，但光栅�
 - 逐 caster 的阴影管线切换是状态式的（按绘制顺序），乱序时会有额外重绑，
   但正确性不受影响。
 - 点光/聚光仍只有方向光的阴影贴图（与 `TwoSided` 无关）。
+
+### P4a — `PropertyDrawer` schema 扩展点 ✅
+
+Unity 的 `[Range]` / `[TextArea]` / `[ColorUsage]` 等**特性**由对应的 `PropertyDrawer`
+渲染成滑动条 / 多行文本框 / 取色盘。这一批把它落地成 **声明式 DTO**：后端 schema 说明
+「这个字段用哪个渲染器 + 哪些特性」，前端 Vue 负责真正的 UI（§3.2 的约定）。
+
+**prism-editor-api**
+- 新模块 `property_drawer`：
+  - `PropertyRenderer` = `default` / `slider` / `textArea` / `color` / `custom`；
+  - `PropertyAttribute` = `range` / `min` / `max` / `multiline` / `textArea` /
+    `colorUsage` / `header` / `tooltip` / `delayed`（serde 标签对象，前端按 `type` 分发）；
+  - `PropertyDrawer` = `renderer` + `attributes` + `custom`（自定义组件名），
+    带 `range` / `min` / `max` / `text_area` / `multiline` / `color_usage` / `custom`
+    构造器与 `range_bounds` / `line_range` / `tooltip` 等访问器；
+  - `PropertyDrawerRegistry`：字段级声明**优先于**类型级（`[CustomPropertyDrawer(typeof(X))]`），
+    后注册覆盖先注册。
+- `FieldSchema` 新增 `drawer: Option<PropertyDrawer>`（`None` 不序列化，fixture 不膨胀）；
+  `build_schema()` 应用 `PropertyDrawerRegistry::with_builtin()`；新增
+  `build_schema_with(&ComponentRegistry, &PropertyDrawerRegistry)` 让宿主在内置声明之上追加。
+- 内置声明（只覆盖有明确数值/展示语义的字段，不替所有字段猜控件）：
+  `Camera.fov_y_degrees` / `exposure`（Range）、`background_color`（ColorUsage）、
+  `near` / `far` / `orthographic_size`（Min）；`Light.intensity` / `range` /
+  `color_temperature`（Min）、`spot_angle` / `inner_spot_angle` / `shadow_strength`（Range）；
+  `Skybox.rotation_degrees`（Range）、`intensity`（Min）；`Text.content`（TextArea）。
+
+**editor（Vue）**
+- `types.ts`：新增 `PropertyRenderer` / `PropertyAttribute` / `PropertyDrawer`，
+  `FieldSchema.drawer?`。
+- `FieldEditor.vue`：按 `renderer` 渲染滑动条（Range = 滑动条 + 可编辑数值框）、
+  多行文本框（TextArea / Multiline）、取色盘（Color 强制）；`[Tooltip]` → 标签 `title`、
+  `[Header]` → 分组标题、`[Delayed]` → 只在 `change`（回车/失焦）提交；未知 `custom`
+  渲染器退回默认控件并在标签后标注组件名。
+- `ColorField.vue`：新增 `showAlpha` prop，`[ColorUsage(showAlpha: false)]` 时隐藏 alpha
+  滑块与第 4 个通道。
+- 重新生成 `editor/public/demo.json` 的 `schema` 段（与 `pnpm fixture` 同源，避免 fixture 漂移）。
+
+**验证**
+- ✅ `cargo test -p prism-editor-api` → **89 passed**（新增 9 个：range/非法 range/行数范围/
+  重复特性/delayed/查找优先级/后注册覆盖/内置声明/JSON 形状）。
+- ✅ `cargo clippy -p prism-editor-api --all-targets -- -D warnings`
+- ✅ `cd editor && pnpm build`（`vue-tsc --noEmit` + Vite）
+- ✅ `python3 scripts/pr_ready.py`
+
+**已知遗留**
+- `renderer == "custom"` 还没有前端插件注册机制：组件名只做标注，控件仍退回默认。
+- 绘制器声明集中在 `prism-editor-api` 的内置表；`prism-scene` 的派生宏还没有
+  `#[property(...)]` 语法糖——先让 schema 层集中声明，避免反射层依赖编辑器语义。
 
 ### 待办（下一批候选）
 - **P3b 光照/渲染（剩余）**：渲染枚举批次

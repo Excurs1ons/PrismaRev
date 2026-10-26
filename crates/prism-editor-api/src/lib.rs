@@ -25,6 +25,8 @@
 //! - [`editor_window`]：Unity `EditorWindow` / `[MenuItem]` 的面板注册表
 //!   （id / 标题 / 菜单路径 / 命令 id），驱动前端 `PANELS` 与「窗口 / 帮助」菜单。
 //! - [`build_profile`]：`Build` / `Build.Profile`（构建目标组、`BuildOptions`、场景构建顺序）。
+//! - [`property_drawer`]：Unity `PropertyDrawer` / `PropertyAttribute` 的字段渲染声明
+//!   （`[Range]` / `[TextArea]` / `[ColorUsage]` / `[CustomPropertyDrawer]`）。
 //!
 //! 真正的编辑发生在 web UI 里：前端直接编辑 `.scene.json` 的 JSON 文档，
 //! schema 只作为控件类型与只读判断的提示。
@@ -39,6 +41,7 @@ pub mod editor_window;
 pub mod play;
 pub mod prefab_utility;
 pub mod presets;
+pub mod property_drawer;
 pub mod reflect_edit;
 pub mod scene;
 pub mod scene_management;
@@ -87,6 +90,9 @@ pub use prefab_utility::{
     PrefabInstanceStatus, PrefabUnpackMode, DEFAULT_PREFAB_FOLDER,
 };
 pub use presets::{entity_presets, EntityPreset};
+pub use property_drawer::{
+    PropertyAttribute, PropertyDrawer, PropertyDrawerRegistry, PropertyRenderer,
+};
 pub use reflect_edit::{normalize_component, set_component_field};
 pub use scene::{
     // 通用（场景 / 预制体）
@@ -139,7 +145,7 @@ pub use scene_management::{
     save_open_scenes, save_scene, save_scene_as, scene_count, scene_from_doc, LoadSceneMode, Scene,
     SceneManagerState,
 };
-pub use schema::{build_schema, FieldSchema, Schema, TypeSchema};
+pub use schema::{build_schema, build_schema_with, FieldSchema, Schema, TypeSchema};
 pub use selection::{SelectionFilter, SelectionMode, SelectionState};
 pub use settings::{
     read_project_settings, read_render_settings, settings_path, write_project_settings,

@@ -1,6 +1,29 @@
 /** 与 `prism-editor-api`（serde camelCase）对齐的前端类型。 */
 
 /** 字段控件类型：`bool` / `i32` / `f32` / `string` / `struct` / `list` / `option` / `array`。 */
+/** 字段渲染器 = Unity `PropertyDrawer` 的选择。 */
+export type PropertyRenderer = "default" | "slider" | "textArea" | "color" | "custom";
+
+/** 一条 Unity 特性（`PropertyAttribute`），按 `type` 区分。 */
+export type PropertyAttribute =
+  | { type: "range"; min: number; max: number }
+  | { type: "min"; min: number }
+  | { type: "max"; max: number }
+  | { type: "multiline"; lines: number }
+  | { type: "textArea"; minLines: number; maxLines: number }
+  | { type: "colorUsage"; showAlpha: boolean; hdr: boolean }
+  | { type: "header"; text: string }
+  | { type: "tooltip"; text: string }
+  | { type: "delayed" };
+
+/** 字段绘制声明 = Unity `PropertyDrawer`（渲染器 + 特性）。 */
+export interface PropertyDrawer {
+  renderer: PropertyRenderer;
+  attributes: PropertyAttribute[];
+  /** `renderer === "custom"` 时的前端组件名。 */
+  custom: string | null;
+}
+
 export interface FieldSchema {
   name: string;
   kind: string;
@@ -10,6 +33,8 @@ export interface FieldSchema {
   /** 枚举变体名（按声明顺序）；非空时渲染下拉框，值即变体名。 */
   variants: string[] | null;
   readOnly: boolean;
+  /** 字段绘制器；缺省时按 `kind` 选默认控件。 */
+  drawer?: PropertyDrawer | null;
 }
 
 export interface TypeSchema {
