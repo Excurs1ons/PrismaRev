@@ -2,6 +2,16 @@
 //!
 //! 每帧从 `UiInputState` resource 读取鼠标状态，
 //! 对 `Node + ComputedLayout` 做命中测试，更新 `Interaction` 组件。
+//!
+//! # 命中规则
+//!
+//! - `Style::visible == false` 的元素不参与命中（与 `ui_render_system` 收集 quad
+//!   时跳过不可见元素保持一致）。
+//! - 重叠时只有**最上层**的元素拿到 `hovered / clicked / pressed`，点击在命中处
+//!   被消费，不会“穿透”到背景面板。
+//! - “最上层”按 UI 层级深度判定：子元素画在父元素之上，所以深度大的优先；同深度
+//!   时面积更小的更具体，优先命中；深度和面积都相同时取查询顺序中靠后的实体
+//!   （`ui_render_system` 也按查询顺序推入绘制列表，后入的在上）。
 
 use crate::ui::components::*;
 use prism_ecs::{Entity, World};
@@ -28,8 +38,6 @@ pub fn ui_input_system(world: &mut World) {
         None => return,
     };
 
-    let cursor = state.cursor_pos;
-
     // 第一步：清空所有之前帧的状态
     for (_, interaction) in world.query_mut::<Interaction>() {
         interaction.clicked = false;
@@ -37,32 +45,85 @@ pub fn ui_input_system(world: &mut World) {
         interaction.pressed = false;
     }
 
-    // 第二步：收集有 Interaction 组件的 UI 实体
-    let targets: Vec<Entity> = world
-        .query2::<Node, Interaction>()
-        .map(|(e, _, _)| e)
-        .collect();
+    // 第二步：命中测试，选出光标下最上层的那一个元素
+    let Some(entity) = topmost_hit(world, state.cursor_pos) else {
+        return;
+    };
 
-    // 第三步：命中测试 + 更新
-    for entity in targets {
-        let layout = match world.get::<ComputedLayout>(entity) {
-            Some(l) => *l,
-            None => continue,
-        };
-
-        let hit = cursor[0] >= layout.rect[0]
-            && cursor[0] <= layout.rect[0] + layout.rect[2]
-            && cursor[1] >= layout.rect[1]
-            && cursor[1] <= layout.rect[1] + layout.rect[3];
-
-        if let Some(interaction) = world.get_mut::<Interaction>(entity) {
-            interaction.hovered = hit;
-            if hit && state.left_clicked {
-                interaction.clicked = true;
-            }
-            if hit && state.left_held {
-                interaction.pressed = true;
-            }
+    // 第三步：只把状态写给最上层元素
+    if let Some(interaction) = world.get_mut::<Interaction>(entity) {
+        interaction.hovered = true;
+        if state.left_clicked {
+            interaction.clicked = true;
+        }
+        if state.left_held {
+            interaction.pressed = true;
         }
     }
 }
+
+/// 光标下最上层的可交互 UI 实体（`None` = 没有命中）。
+fn topmost_hit(world: &World, cursor: [f32; 2]) -> Option<Entity> {
+    let mut best: Option<(Entity, u32, f32)> = None;
+
+    for (entity, _node, _interaction) in world.query2::<Node, Interaction>() {
+        // 不可见元素既画不出来也不该可点。
+        if !world
+            .get::<Style>(entity)
+            .map(|style| style.visible)
+            .unwrap_or(true)
+        {
+            continue;
+        }
+
+        let Some(layout) = world.get::<ComputedLayout>(entity) else {
+            continue;
+        };
+        if !rect_contains(layout.rect, cursor) {
+            continue;
+        }
+
+        let depth = ui_depth(world, entity);
+        let area = layout.rect[2].max(0.0) * layout.rect[3].max(0.0);
+        // 深度大的优先；同深度面积小的优先；完全相同时保留后遍历到的
+        // （后入绘制列表 = 画在上面）。
+        let better = best.is_none_or(|(_, best_depth, best_area)| {
+            depth > best_depth || (depth == best_depth && area <= best_area)
+        });
+        if better {
+            best = Some((entity, depth, area));
+        }
+    }
+
+    best.map(|(entity, _, _)| entity)
+}
+
+/// 屏幕空间矩形 `[left, top, width, height]` 是否包含光标（像素坐标，y 向下）。
+fn rect_contains(rect: [f32; 4], cursor: [f32; 2]) -> bool {
+    let [left, top, width, height] = rect;
+    cursor[0] >= left && cursor[0] <= left + width && cursor[1] >= top && cursor[1] <= top + height
+}
+
+/// UI 层级深度（根 = 0）。层级只认场景的 `Parent`。
+///
+/// 最大 64 层：脏数据成环时不至于卡死一帧。
+fn ui_depth(world: &World, entity: Entity) -> u32 {
+    const MAX_DEPTH: u32 = 64;
+    let mut depth = 0;
+    let mut current = entity;
+    while depth < MAX_DEPTH {
+        let Some(parent) = world
+            .get::<prism_scene::components::Parent>(current)
+            .map(|parent| parent.0)
+        else {
+            break;
+        };
+        depth += 1;
+        current = parent;
+    }
+    depth
+}
+
+#[cfg(test)]
+#[path = "input_tests.rs"]
+mod tests;
