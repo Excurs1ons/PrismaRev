@@ -105,8 +105,8 @@ pub use post::PostPass;
 pub use probe_loader::{load_probe_volume, save_probe_volume, ProbeVolumeData};
 pub use pt_pass::PathTracePass;
 pub use render_graph::{
-    DrawItem, PassInfo, PassKind, RenderGraphSnapshot, RenderMode, RenderSettings, ResourceHandle,
-    ResourceInfo, ResourceType, ShadowMode,
+    sort_draw_items, DrawItem, DrawState, PassInfo, PassKind, RenderGraphSnapshot, RenderMode,
+    RenderSettings, ResourceHandle, ResourceInfo, ResourceType, ShadowMode,
 };
 pub use render_pass::{DepthImage, Framebuffers, NormalImage, RenderPass};
 pub use shader::load_shader_module;

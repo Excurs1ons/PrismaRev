@@ -1938,10 +1938,15 @@
       },
       {
         "defaultJson": {
+          "blend_op": "Add",
           "cull_mode": "Back",
+          "dst_blend": "Zero",
           "material_path": "",
           "mesh_path": "",
-          "shadow_casting_mode": "On"
+          "render_queue": 2000,
+          "shadow_casting_mode": "On",
+          "src_blend": "One",
+          "z_write": true
         },
         "fields": [
           {
@@ -1987,6 +1992,81 @@
               "Off",
               "Front",
               "Back"
+            ]
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "i32",
+            "name": "render_queue",
+            "readOnly": false,
+            "structType": null,
+            "variants": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "bool",
+            "name": "z_write",
+            "readOnly": false,
+            "structType": null,
+            "variants": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "u8",
+            "name": "src_blend",
+            "readOnly": false,
+            "structType": null,
+            "variants": [
+              "Zero",
+              "One",
+              "DstColor",
+              "SrcColor",
+              "OneMinusDstColor",
+              "SrcAlpha",
+              "OneMinusSrcColor",
+              "DstAlpha",
+              "OneMinusDstAlpha",
+              "SrcAlphaSaturate",
+              "OneMinusSrcAlpha"
+            ]
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "u8",
+            "name": "dst_blend",
+            "readOnly": false,
+            "structType": null,
+            "variants": [
+              "Zero",
+              "One",
+              "DstColor",
+              "SrcColor",
+              "OneMinusDstColor",
+              "SrcAlpha",
+              "OneMinusSrcColor",
+              "DstAlpha",
+              "OneMinusDstAlpha",
+              "SrcAlphaSaturate",
+              "OneMinusSrcAlpha"
+            ]
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "u8",
+            "name": "blend_op",
+            "readOnly": false,
+            "structType": null,
+            "variants": [
+              "Add",
+              "Subtract",
+              "ReverseSubtract",
+              "Min",
+              "Max"
             ]
           }
         ],
@@ -2865,10 +2945,15 @@
             "components": {
               "prism_engine::scene::Active": true,
               "prism_engine::scene::MeshRenderer": {
+                "blend_op": "Add",
                 "cull_mode": "Back",
+                "dst_blend": "Zero",
                 "material_path": "",
                 "mesh_path": "",
-                "shadow_casting_mode": "On"
+                "render_queue": 2000,
+                "shadow_casting_mode": "On",
+                "src_blend": "One",
+                "z_write": true
               }
             },
             "id": 0,

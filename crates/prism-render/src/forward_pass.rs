@@ -17,15 +17,14 @@ use std::time::Instant;
 use crate::context::VulkanContext;
 use crate::gizmo::Gizmo;
 use crate::mesh::Vertex;
-use crate::pipeline::{cull_flags, GraphicsPipeline, PipelineDesc};
+use crate::pipeline::{blend_factor, blend_operation, cull_flags, GraphicsPipeline, PipelineDesc};
 use crate::render_graph::{
-    GraphResources, PassInfo, PassKind, RenderContext, RenderGraphBuilder, RenderPassNode,
-    RenderSettings, ResourceHandle, ResourceType, ResourceUsage, FORWARD_COLOR_H, FORWARD_DEPTH_H,
-    FORWARD_NORMAL_H,
+    DrawState, GraphResources, PassInfo, PassKind, RenderContext, RenderGraphBuilder,
+    RenderPassNode, RenderSettings, ResourceHandle, ResourceType, ResourceUsage, FORWARD_COLOR_H,
+    FORWARD_DEPTH_H, FORWARD_NORMAL_H,
 };
 use crate::shader;
 use crate::skybox_pass::SkyboxPass;
-use prism_gfx::CullMode;
 
 /// 向前 scene pass (bindless PBR + neutral ambient + shadow 映射表 targeting
 /// the 交换链
@@ -87,13 +86,11 @@ pub struct ForwardPass {
     out_normal_h: ResourceHandle,
     extent: vk::Extent2D,
     render_pass: Option<vk::RenderPass>,
-    /// 主通道管线缓存：按剔除模式各一份，对应 `DrawItem::cull_mode`
-    /// （`prism_gfx::CullMode`）。
+    /// 主通道管线缓存：按 [`DrawState`]（剔除 / 深度写 / 混合）各一份。
     ///
-    /// 三种变体的描述符集合布局 / 推送常量范围完全相同，只有
-    /// `vk::PipelineRasterizationStateCreateInfo::cull_mode` 不同，因此
-    /// 描述符绑定与推送常量在一次绘制列表内可以跨变体复用。
-    pipelines: std::collections::HashMap<CullMode, GraphicsPipeline>,
+    /// 所有变体的描述符集合布局 / 推送常量范围完全相同，只有光栅化与颜色
+    /// 混合状态不同，因此描述符绑定与推送常量在一次绘制列表内可以跨变体复用。
+    pipelines: std::collections::HashMap<DrawState, GraphicsPipeline>,
     ibl_descriptor_set: vk::DescriptorSet,
     /// IBL 描述符 集合 布局 (borrowed from `IblResources`). Used by the
     /// skybox pass to 构建 its 管线 布局
@@ -1109,15 +1106,18 @@ impl ForwardPass {
         }
         Ok(())
     }
-    /// 为三种剔除模式各建一条管线（幂等）。
+    /// 为绘制列表里出现的每种 [`DrawState`] 各建一条管线（幂等）。
     ///
-    /// `DrawItem::cull_mode` 允许一次绘制列表里混用双面 / 单面几何，而 Vulkan
-    /// 的剔除模式是管线状态，所以必须按状态分管线。三者只有光栅化状态不同，
-    /// 描述符布局与推送常量完全一致；启动时全部建好，避免录制命令时临时
-    /// 创建管线造成的卡顿。
-    fn ensure_pipelines(&mut self, device: &ash::Device) -> Result<()> {
-        const ALL: [CullMode; 3] = [CullMode::Back, CullMode::Front, CullMode::Off];
-        if ALL.iter().all(|cull| self.pipelines.contains_key(cull)) {
+    /// 剔除 / 深度写 / 混合都是 Vulkan **管线状态**，所以按状态分管线；所有
+    /// 变体的描述符布局与推送常量完全一致。调用方在录制命令前把本帧需要的
+    /// 状态收集齐（见 `execute`），避免在命令缓冲录制中间创建管线。
+    fn ensure_pipelines(&mut self, device: &ash::Device, states: &[DrawState]) -> Result<()> {
+        let missing: Vec<DrawState> = states
+            .iter()
+            .copied()
+            .filter(|state| !self.pipelines.contains_key(state))
+            .collect();
+        if missing.is_empty() {
             return Ok(());
         }
         let rp = self
@@ -1193,28 +1193,9 @@ impl ForwardPass {
             .offset(0)
             .size(128)];
 
-        // MRT 混合 状态 two 颜色 attachments.
-        // 附件 0 颜色 - Alpha 混合 (legacy behavior).
-        // 附件 1 视图 norm) - no 混合 写入 RGBA through.
-        let blend_attachments = [
-            vk::PipelineColorBlendAttachmentState::default()
-                .color_write_mask(vk::ColorComponentFlags::RGBA)
-                .blend_enable(true)
-                .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
-                .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
-                .color_blend_op(vk::BlendOp::ADD)
-                .src_alpha_blend_factor(vk::BlendFactor::ONE)
-                .dst_alpha_blend_factor(vk::BlendFactor::ZERO)
-                .alpha_blend_op(vk::BlendOp::ADD),
-            vk::PipelineColorBlendAttachmentState::default()
-                .color_write_mask(vk::ColorComponentFlags::RGBA)
-                .blend_enable(false),
-        ];
-
-        for cull in ALL {
-            if self.pipelines.contains_key(&cull) {
-                continue;
-            }
+        for state in missing {
+            // MRT: 附件 0 = 颜色（按 `DrawState` 混合），附件 1 = 视图法线（不混合）。
+            let blend_attachments = color_blend_attachments(state);
             let pipeline = GraphicsPipeline::new(&PipelineDesc {
                 device,
                 shader_stages: &shader_stages,
@@ -1224,18 +1205,18 @@ impl ForwardPass {
                 push_constant_ranges: &push,
                 render_pass: rp,
                 subpass: 0,
-                // 唯一的差异：剔除模式来自逐绘制状态（Unity `CullMode`）。
-                cull_mode: Some(cull_flags(cull)),
+                cull_mode: Some(cull_flags(state.cull_mode)),
                 depth_bias_enable: None,
                 depth_bias_constant_factor: None,
                 depth_bias_slope_factor: None,
-                depth_write_enable: None,
+                // 透明物体通常 `ZWrite Off`（Unity `_ZWrite`）。
+                depth_write_enable: Some(state.z_write),
                 color_attachment_count: None,
                 color_blend_attachments: Some(&blend_attachments),
                 front_face: None,
             })
-            .with_context(|| format!("ForwardPass: create pipeline ({cull:?})"))?;
-            self.pipelines.insert(cull, pipeline);
+            .with_context(|| format!("ForwardPass: create pipeline ({state:?})"))?;
+            self.pipelines.insert(state, pipeline);
         }
 
         unsafe { device.destroy_shader_module(vert_module, None) };
@@ -1336,7 +1317,17 @@ impl RenderPassNode for ForwardPass {
         self.update_lights(ctx.device, ctx.frame.lights)?;
 
         self.ensure_render_pass(ctx.context)?;
-        self.ensure_pipelines(ctx.device)?;
+        // 录制命令前把本帧需要的管线状态收集齐（不透明默认状态永远需要：
+        // 描述符集用它的 layout 绑定）。
+        let mut states: Vec<DrawState> = vec![DrawState::default()];
+        let mut seen = std::collections::HashSet::new();
+        seen.insert(DrawState::default());
+        for item in ctx.frame.draw_list {
+            if item.visible_in_main_pass && seen.insert(item.state) {
+                states.push(item.state);
+            }
+        }
+        self.ensure_pipelines(ctx.device, &states)?;
 
         let rp = self.render_pass.unwrap();
         // Pick the per-swapchain-image 帧缓冲 Indexed by `image_index`
@@ -1350,12 +1341,12 @@ impl RenderPassNode for ForwardPass {
             .copied()
             .flatten()
             .context("ForwardPass: no framebuffer for image_index (call set_target first)")?;
-        // 描述符 / 推送常量布局在三种剔除变体之间完全相同，所以用默认
-        // （背面剔除）变体的 layout 绑定一次即可；循环里只按需重绑管线。
+        // 描述符 / 推送常量布局在所有状态变体之间完全相同，所以用默认
+        // （不透明、背面剔除）变体的 layout 绑定一次即可；循环里只按需重绑管线。
         let pipeline = self
             .pipelines
-            .get(&CullMode::Back)
-            .context("ForwardPass: back-face pipeline missing")?;
+            .get(&DrawState::default())
+            .context("ForwardPass: default pipeline missing")?;
 
         // 解析 the per-frame 描述符 集合 now (used after the skybox 绘制
         // when we re-bind the scene 管线 + descriptors).
@@ -1530,10 +1521,10 @@ impl RenderPassNode for ForwardPass {
                 }],
             );
 
-            // 循环开始前刚绑定的是默认（背面剔除）管线；只有遇到别的剔除模式
-            // 才重绑（Unity `CullMode` 是管线状态）。描述符与推送常量布局在
-            // 三种变体之间一致，所以不需要重新绑定描述符集。
-            let mut bound_cull = CullMode::Back;
+            // 循环开始前刚绑定的是默认（不透明）管线；只有遇到别的状态才重绑
+            // （剔除 / 深度写 / 混合都是管线状态）。描述符与推送常量布局在所有
+            // 变体之间一致，所以不需要重新绑定描述符集。
+            let mut bound_state = DrawState::default();
             for item in ctx.frame.draw_list {
                 // `ShadowsOnly` 物体不参与相机主通道（Unity `ShadowCastingMode`）。
                 if !item.visible_in_main_pass {
@@ -1543,16 +1534,16 @@ impl RenderPassNode for ForwardPass {
                     Some(m) => &m.mesh,
                     None => continue,
                 };
-                if item.cull_mode != bound_cull {
-                    let variant = self.pipelines.get(&item.cull_mode).with_context(|| {
-                        format!("ForwardPass: no pipeline for {:?}", item.cull_mode)
+                if item.state != bound_state {
+                    let variant = self.pipelines.get(&item.state).with_context(|| {
+                        format!("ForwardPass: no pipeline for {:?}", item.state)
                     })?;
                     ctx.device.cmd_bind_pipeline(
                         ctx.cmd,
                         vk::PipelineBindPoint::GRAPHICS,
                         variant.pipeline,
                     );
-                    bound_cull = item.cull_mode;
+                    bound_state = item.state;
                 }
                 drawn += 1;
 
@@ -1655,7 +1646,7 @@ impl RenderPassNode for ForwardPass {
             return Ok(());
         }
         self.ensure_render_pass(context)?;
-        self.ensure_pipelines(device)
+        self.ensure_pipelines(device, &[DrawState::default()])
     }
 }
 
@@ -1705,4 +1696,30 @@ impl Drop for ForwardPass {
             // 集合 5 全局光照 probe 音量 is borrowed from SceneScope — not destroyed here.
         }
     }
+}
+
+/// 颜色附件的混合状态（MRT：附件 0 = 颜色，附件 1 = 视图法线）。
+///
+/// 附件 0 按 Unity 材质状态（`_SrcBlend` / `_DstBlend` / `_BlendOp`）配置；
+/// 默认值 `One`/`Zero`/`Add` 表示不透明，此时直接关掉混合。附件 1 永远不混合
+/// （视图空间法线需要原样写入）。
+fn color_blend_attachments(state: DrawState) -> [vk::PipelineColorBlendAttachmentState; 2] {
+    let mut color = vk::PipelineColorBlendAttachmentState::default()
+        .color_write_mask(vk::ColorComponentFlags::RGBA);
+    if state.blends() {
+        color = color
+            .blend_enable(true)
+            .src_color_blend_factor(blend_factor(state.src_blend))
+            .dst_color_blend_factor(blend_factor(state.dst_blend))
+            .color_blend_op(blend_operation(state.blend_op))
+            .src_alpha_blend_factor(vk::BlendFactor::ONE)
+            .dst_alpha_blend_factor(vk::BlendFactor::ZERO)
+            .alpha_blend_op(vk::BlendOp::ADD);
+    }
+    [
+        color,
+        vk::PipelineColorBlendAttachmentState::default()
+            .color_write_mask(vk::ColorComponentFlags::RGBA)
+            .blend_enable(false),
+    ]
 }

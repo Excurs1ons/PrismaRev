@@ -930,9 +930,65 @@ P3b-6 只加了枚举；这一批让 `CullMode` 真正变成 Vulkan 管线状态
 `cull_mode: Some(vk::CullModeFlags::NONE)`（双面写深度），所以 `TwoSided` 的投影语义
 **已经**被满足；两者视觉等价是既有行为，不是待修缺陷。
 
-### 待办（下一批候选）
-- **P3b 光照/渲染（剩余）**：`BlendOp` + 混合状态（`BlendMode` 因子）与 `RenderQueue`
-  排序、透明度（材质管线变体、`ZWrite`、透明物体按距离排序）；
+#### P3b-7b — 混合状态 + `RenderQueue` 排序（透明度）✅
+
+上一批把剔除接进了管线，这一批补上 Unity 材质的另外三项状态：混合（`_SrcBlend` /
+`_DstBlend` / `_BlendOp`）、`_ZWrite` 和决定绘制顺序的 `renderQueue`。
+
+**prism-gfx**
+- 新增 `BlendOp`（Add=0 / Subtract / ReverseSubtract / Min / Max，默认 Add），
+  与 `BlendMode` 一样是 U8 枚举 + `enum_variants()`；`BlendMode` / `BlendOp` 加 `Hash`
+  （管线缓存键需要）。
+
+**prism-scene**
+- `MeshRenderer` 增加 `render_queue: RenderQueue` / `z_write: bool` / `src_blend` /
+  `dst_blend` / `blend_op`。`#[serde(default)]` + **手写 `Default`**，因为目标默认值
+  （`One` / `Zero` / `Add` / `ZWrite=true` / 队列 2000）不是各字段类型自身的
+  `Default::default()`（`BlendMode::default()` 是 `One`）。老文档零迁移。
+- `MeshRenderer::blends()`：`One`/`Zero`/`Add` 即“不透明”（Unity 的约定），
+  否则需要开混合。
+
+**prism-render**
+- `DrawItem.cull_mode` 升级为 `DrawItem.state: DrawState`（剔除 / 队列 / 深度写 /
+  混合因子 / 混合运算）。`DrawState` 同时是 `ForwardPass` 的管线缓存键：
+  `ensure_pipelines(device, &states)` 在**录制命令前**按本帧出现过的状态集建管线，
+  循环里按需重绑；描述符集与推送常量布局在所有变体间相同，只绑一次。
+- `pipeline::blend_factor()` / `blend_operation()` 做 Unity→Vulkan 映射
+  （**两边数值顺序不同**，Unity 把 `DstColor` 排在 `SrcColor` 前，不能 `as` 转换）。
+- 不透明绘制现在**真正关闭**颜色混合（此前管线恒定开着 `SRC_ALPHA`/`ONE_MINUS_SRC_ALPHA`
+  —— 不透明片元 alpha=1，结果一致，但语义是错的）。
+- `sort_draw_items(items, eye)`：队列升序；队列 > `GEOMETRY_LAST`（2500）的透明段
+  按与相机距离**从远到近**（`sort_by` 稳定，同队列的不透明物体保持提交顺序）。
+- 阴影贴图管线不变（双面、无混合、写深度）。
+
+**prism-engine**
+- `draw_state()` 把 `MeshRenderer` 的五个状态字段装进 `DrawState`（缺组件用默认值），
+  `extract_frame_packet` 用 `scene.eye` 调用 `sort_draw_items` —— 排序必须在提交前完成，
+  `ForwardPass` 只按列表顺序绘制。
+
+**用法**：标准 alpha 混合 = `render_queue: 3000`、`z_write: false`、
+`src_blend: "SrcAlpha"`、`dst_blend: "OneMinusSrcAlpha"`；加色 = `src_blend: "SrcAlpha"`、
+`dst_blend: "One"`。
+
+**验证**
+- ✅ `cargo test -p prism-gfx -p prism-scene -p prism-render -p prism-engine` →
+  19 / 48 / 86 / 108(+3) passed。新增：`BlendOp` 取值/反射；`MeshRenderer` 老文档默认值 +
+  透明状态往返（`render_queue` 是 JSON 数字、混合因子是变体名）；`DrawState::blends`；
+  `sort_draw_items`（不透明段按队列、透明段远→近、同队列稳定）；
+  `blend_factor` / `blend_operation` 的 Unity→Vulkan 映射。
+- ✅ 编辑器 fixture 只补 schema/模板相关的 6 处（`defaultJson`、`fields` 5 项、预制体模板实例），
+  `pr_ready` 的 fixture drift 检查通过。
+- ⚠️ 本机 `pr_ready` 的 workspace 测试有一项恒定失败：`cooker::scene::tests::cooks_real_default_scene`
+  断言 `assets/scenes/default.scene.json` 有 7 个实体，而该文件在工作区里是未提交的 8 个（编辑器
+  会话残留）。与代码无关，干净 checkout 下通过。
+
+**这一批刻意没做**：`BlendOp` 之外的 Unity 状态（`_ColorMask`、`ZTest` / `CompareFunction`
+接线、`Stencil`）、按材质资产的混合（目前仍在渲染器上，等材质系统带 `Material` 组件时再搬）、
+`RenderQueueRange`。点光/聚光阴影仍未实现。
+
+## 待办（下一批候选）
+- **P3b 光照/渲染（剩余）**：`CompareFunction`（`ZTest`）接线、`_ColorMask`、
+  `RenderQueueRange`、把渲染状态搬进真正的 `Material` 组件（材质资产级）；
   点光/聚光还没有自己的阴影（只有方向光贴图）。
 - **P3c 相机行为**：用测试钉住 yaw↔quaternion 的 `−π/2` 偏移；`clear_flags` 的
   `Depth`/`Nothing` 语义接进 `ForwardPass`；多相机（`depth` 排序 + 叠加）。
