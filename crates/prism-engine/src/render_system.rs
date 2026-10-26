@@ -6,7 +6,7 @@
 
 use glam::{self, Mat4, Vec3, Vec4};
 
-use crate::dirty_router::DirtyRouter;
+use crate::dirty_router::{draw_items_signature, DirtyRouter};
 use crate::render_settings::RenderSettings;
 use crate::scene;
 use crate::scene::components::Camera;
@@ -406,11 +406,13 @@ pub fn render_system(
         _pad2: [0.0; 3],
     };
 
-    // 2.5. 扩展脏检测：draw_items 数量变化也视为场景脏（触发 BLAS/instance 更新）
-    let draw_count_dirty = dirty_router.draw_count_dirty(draw_items.len());
-    if draw_count_dirty {
-        log::trace!("dirty: draw_items count changed");
+    // 2.5. 扩展脏检测：draw_items 内容变化（矩阵 / mesh / material / 阴影标志）
+    //      也视为场景脏（触发 BLAS/instance 更新与 PT 累积重置），不只比较数量。
+    let draw_items_dirty = dirty_router.draw_items_dirty(draw_items_signature(draw_items));
+    if draw_items_dirty {
+        log::trace!("dirty: draw_items changed");
     }
+    let pt_bounces_dirty = dirty_router.pt_bounces_dirty(settings.pt_max_bounces);
 
     // 3. Drive the render-graph phase API.
     let ctx = match renderer.begin_frame()? {
@@ -438,7 +440,10 @@ pub fn render_system(
         pt_max_iterations: settings.pt_max_iterations,
         exposure: *exposure,
         pt_lights,
-        pt_accum_dirty: dirty_flags.directional_light || draw_count_dirty,
+        pt_accum_dirty: dirty_flags.directional_light
+            || dirty_flags.point_lights
+            || draw_items_dirty
+            || pt_bounces_dirty,
         has_camera: *has_camera,
         camera_orthographic: *camera_orthographic,
         clear_color: scene.clear_color,
