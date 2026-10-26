@@ -25,10 +25,22 @@ const LOCAL_TRANSFORM_KEY: &str = "prism_engine::scene::LocalTransform";
 /// 读取文档声明的版本号。
 ///
 /// 缺失或 `0` 一律视为 **1**（历史文件没有 `version` 字段）。
+/// 超出 `u32` 的版本（未来版本）饱和到 [`u32::MAX`]，调用方应据此拒绝降级；
+/// 迁移入口 [`migrate_scene_doc`] 会返回明确错误。
 pub fn doc_version(doc: &Value) -> u32 {
     match doc.get("version").and_then(Value::as_u64) {
-        Some(v) if v >= 1 => v as u32,
+        Some(v) if v >= 1 => u32::try_from(v).unwrap_or(u32::MAX),
         _ => 1,
+    }
+}
+
+/// 把 JSON 里的版本号解析成 `u32`，拒绝超出表示范围的“未来版本”。
+fn parse_version(value: Option<&Value>) -> Result<u32, String> {
+    match value.and_then(Value::as_u64) {
+        Some(v) if v >= 1 => u32::try_from(v).map_err(|_| {
+            format!("scene document version {v} is newer than supported {SCENE_DOC_VERSION}")
+        }),
+        _ => Ok(1),
     }
 }
 
@@ -41,10 +53,7 @@ pub fn migrate_scene_doc(doc: &mut Value) -> Result<(), String> {
         .as_object_mut()
         .ok_or_else(|| "scene document must be a JSON object".to_string())?;
 
-    let mut version = match root.get("version").and_then(Value::as_u64) {
-        Some(v) if v >= 1 => v as u32,
-        _ => 1,
-    };
+    let mut version = parse_version(root.get("version"))?;
     if version > SCENE_DOC_VERSION {
         return Err(format!(
             "scene document version {version} is newer than supported {SCENE_DOC_VERSION}"
@@ -207,6 +216,20 @@ mod tests {
         assert_eq!(doc_version(&json!({ "entities": [] })), 1);
         assert_eq!(doc_version(&json!({ "version": 0 })), 1);
         assert_eq!(doc_version(&json!({ "version": 2 })), 2);
+    }
+
+    #[test]
+    fn version_beyond_u32_is_rejected_instead_of_truncated() {
+        let future = u64::from(u32::MAX) + 2; // would truncate to 1 with `as u32`
+        let doc = json!({ "version": future, "entities": [] });
+        assert_eq!(doc_version(&doc), u32::MAX);
+
+        let mut doc = doc;
+        let error = migrate_scene_doc(&mut doc).unwrap_err();
+        assert!(
+            error.contains("newer than supported"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]
