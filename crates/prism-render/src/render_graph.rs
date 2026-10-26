@@ -1341,7 +1341,6 @@ impl RenderGraph {
                         vk::ImageUsageFlags::COLOR_ATTACHMENT
                             | vk::ImageUsageFlags::INPUT_ATTACHMENT
                             | vk::ImageUsageFlags::STORAGE,
-                        true, // lazy allocation for TBDR
                     )?;
                     res.image = Some(image);
                     res.image_view = Some(view);
@@ -1360,7 +1359,6 @@ impl RenderGraph {
                         vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT
                             | vk::ImageUsageFlags::INPUT_ATTACHMENT
                             | vk::ImageUsageFlags::SAMPLED,
-                        true,
                     )?;
                     res.image = Some(image);
                     res.image_view = Some(view);
@@ -1379,7 +1377,6 @@ impl RenderGraph {
                         vk::ImageUsageFlags::STORAGE
                             | vk::ImageUsageFlags::TRANSFER_DST
                             | vk::ImageUsageFlags::SAMPLED,
-                        false, // storage images can't be lazy
                     )?;
                     res.image = Some(image);
                     res.image_view = Some(view);
@@ -1466,7 +1463,14 @@ fn build_last_writers(edges: &[ResourceEdge]) -> HashMap<ResourceHandle, Resourc
     map.into_iter().map(|(h, (_, u))| (h, u.clone())).collect()
 }
 
-/// 创建 an 图像 with optional lazy 分配 (transient 附件
+/// Create a graph-owned 2D image and bind memory for it.
+///
+/// Lazy (`LAZILY_ALLOCATED`) memory is only legal for images created with
+/// `TRANSIENT_ATTACHMENT`, and such an image must not also be `SAMPLED` or
+/// `STORAGE`. Every resource this graph allocates today is consumed by other
+/// passes (color -> post, depth/shadow -> sampled), so they all end up in
+/// `DEVICE_LOCAL`: a sampled depth image in a TBDR lazy heap produces
+/// validation errors and undefined reads.
 fn create_transient_image(
     device: &ash::Device,
     mem_props: &vk::PhysicalDeviceMemoryProperties,
@@ -1474,7 +1478,6 @@ fn create_transient_image(
     extent: vk::Extent2D,
     sample_count: vk::SampleCountFlags,
     usage: vk::ImageUsageFlags,
-    lazy: bool,
 ) -> anyhow::Result<(vk::Image, vk::ImageView, vk::DeviceMemory)> {
     let flags = vk::ImageCreateFlags::empty();
     let _ = flags; // suppress unused warning
@@ -1500,7 +1503,14 @@ fn create_transient_image(
     let image = unsafe { device.create_image(&image_create_info, None) }?;
     let req = unsafe { device.get_image_memory_requirements(image) };
 
-    // For transient attachments, prefer LAZILY_ALLOCATED 内存 类型
+    // For real transient attachments, prefer LAZILY_ALLOCATED 内存 类型.
+    let lazy = lazy_allocation_allowed(usage);
+    debug_assert!(
+        !lazy
+            || !(usage.contains(vk::ImageUsageFlags::SAMPLED)
+                || usage.contains(vk::ImageUsageFlags::STORAGE)),
+        "LAZILY_ALLOCATED requires TRANSIENT_ATTACHMENT without SAMPLED/STORAGE"
+    );
     let mem_type = if lazy {
         find_memory_type(
             mem_props,
@@ -1563,6 +1573,17 @@ fn create_transient_image(
     }?;
 
     Ok((image, view, memory))
+}
+
+/// Whether `usage` permits backing the image with `LAZILY_ALLOCATED` memory.
+///
+/// Vulkan only allows that memory for `TRANSIENT_ATTACHMENT` images, and the
+/// same image may not be `SAMPLED`/`STORAGE` (so its contents need never be
+/// written back to the heap).
+fn lazy_allocation_allowed(usage: vk::ImageUsageFlags) -> bool {
+    usage.contains(vk::ImageUsageFlags::TRANSIENT_ATTACHMENT)
+        && !usage.contains(vk::ImageUsageFlags::SAMPLED)
+        && !usage.contains(vk::ImageUsageFlags::STORAGE)
 }
 
 fn find_memory_type(
