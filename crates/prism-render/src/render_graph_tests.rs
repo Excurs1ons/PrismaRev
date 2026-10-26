@@ -110,3 +110,29 @@ fn sort_draw_items_is_stable_for_equal_queues() {
     assert_eq!(items[0].world_position()[0], 5.0);
     assert_eq!(items[1].world_position()[0], 1.0);
 }
+
+#[test]
+fn lazy_allocation_requires_a_pure_transient_attachment() {
+    // ForwardPass color: also STORAGE, so it can never be lazy.
+    assert!(!lazy_allocation_allowed(
+        vk::ImageUsageFlags::COLOR_ATTACHMENT
+            | vk::ImageUsageFlags::INPUT_ATTACHMENT
+            | vk::ImageUsageFlags::STORAGE
+    ));
+    // Forward depth + shadow map: SAMPLED by later passes, so never lazy.
+    assert!(!lazy_allocation_allowed(
+        vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT
+            | vk::ImageUsageFlags::INPUT_ATTACHMENT
+            | vk::ImageUsageFlags::SAMPLED
+    ));
+    // Storage images can not be lazy either.
+    assert!(!lazy_allocation_allowed(
+        vk::ImageUsageFlags::STORAGE
+            | vk::ImageUsageFlags::TRANSFER_DST
+            | vk::ImageUsageFlags::SAMPLED
+    ));
+    // A pure transient attachment (write-only, discarded) may be lazy.
+    assert!(lazy_allocation_allowed(
+        vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | vk::ImageUsageFlags::TRANSIENT_ATTACHMENT
+    ));
+}

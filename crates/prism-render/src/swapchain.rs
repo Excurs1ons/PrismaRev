@@ -63,10 +63,26 @@ pub struct Swapchain {
 
 impl Swapchain {
     /// 创建 the 表面 (from the 窗口 and an initial 交换链
+    ///
+    /// Defaults to a v-synced present mode. Use [`Swapchain::new_with_vsync`]
+    /// when the caller has an explicit `WindowConfig.vsync` preference.
     pub fn new(
         context: &Arc<VulkanContext>,
         window: &dyn raw_window_handle::HasDisplayHandle,
         window_handle: &dyn raw_window_handle::HasWindowHandle,
+    ) -> anyhow::Result<Self> {
+        Self::new_with_vsync(context, window, window_handle, true)
+    }
+
+    /// 创建 the 表面 and 交换链 with an explicit vsync preference.
+    ///
+    /// `vsync = false` prefers `IMMEDIATE` (uncapped, may tear) and falls
+    /// back to `MAILBOX` / `FIFO`; `true` prefers `MAILBOX` / `FIFO`.
+    pub fn new_with_vsync(
+        context: &Arc<VulkanContext>,
+        window: &dyn raw_window_handle::HasDisplayHandle,
+        window_handle: &dyn raw_window_handle::HasWindowHandle,
+        vsync: bool,
     ) -> anyhow::Result<Self> {
         let surface_ext = ash::khr::surface::Instance::new(&context.entry, &context.instance);
 
@@ -88,7 +104,8 @@ impl Swapchain {
         }
         .map_err(|e| anyhow!(e).context("create surface"))?;
 
-        let present_mode = choose_present_mode(&surface_ext, context.physical_device, surface);
+        let present_mode =
+            choose_present_mode(&surface_ext, context.physical_device, surface, vsync);
 
         let SwapchainOutput {
             format,
@@ -426,23 +443,44 @@ fn choose_surface_format(available: &[vk::SurfaceFormatKHR]) -> vk::SurfaceForma
         .unwrap_or_else(|| available[0])
 }
 
-/// Prefer `MAILBOX` (lowest 延迟 that is always tear-free) when the 表面
-/// supports it; otherwise fall 后 to `FIFO` (always supported).
+/// Pick a present mode from the surface's supported list.
+///
+/// With vsync enabled, prefer `MAILBOX` (tear-free, lower latency) then
+/// `FIFO`. With vsync disabled, prefer `IMMEDIATE` (uncapped, may tear),
+/// then `MAILBOX`, then `FIFO`. `FIFO` is always supported by the spec.
+fn pick_present_mode(modes: &[vk::PresentModeKHR], vsync: bool) -> vk::PresentModeKHR {
+    let preferred: &[vk::PresentModeKHR] = if vsync {
+        &[vk::PresentModeKHR::MAILBOX, vk::PresentModeKHR::FIFO]
+    } else {
+        &[
+            vk::PresentModeKHR::IMMEDIATE,
+            vk::PresentModeKHR::MAILBOX,
+            vk::PresentModeKHR::FIFO,
+        ]
+    };
+    preferred
+        .iter()
+        .copied()
+        .find(|mode| modes.contains(mode))
+        .unwrap_or(vk::PresentModeKHR::FIFO)
+}
+
+/// Prefer `MAILBOX`/`FIFO` when v-synced, `IMMEDIATE` when not, falling
+/// back to `FIFO` (always supported).
 fn choose_present_mode(
     surface_ext: &ash::khr::surface::Instance,
     physical_device: vk::PhysicalDevice,
     surface: vk::SurfaceKHR,
+    vsync: bool,
 ) -> vk::PresentModeKHR {
     let modes = unsafe {
         surface_ext
             .get_physical_device_surface_present_modes(physical_device, surface)
             .unwrap_or_default()
     };
-    if modes.contains(&vk::PresentModeKHR::MAILBOX) {
-        vk::PresentModeKHR::MAILBOX
-    } else {
-        vk::PresentModeKHR::FIFO
-    }
+    let mode = pick_present_mode(&modes, vsync);
+    log::info!("swapchain present mode: {mode:?} (vsync={vsync})");
+    mode
 }
 
 fn choose_extent(caps: &vk::SurfaceCapabilitiesKHR) -> vk::Extent2D {
@@ -490,4 +528,54 @@ fn create_image_view(
 
     unsafe { context.device.create_image_view(&create_info, None) }
         .map_err(|e| anyhow!(e).context("create image view"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vsync_prefers_mailbox_then_fifo() {
+        assert_eq!(
+            pick_present_mode(
+                &[vk::PresentModeKHR::FIFO, vk::PresentModeKHR::MAILBOX],
+                true
+            ),
+            vk::PresentModeKHR::MAILBOX
+        );
+        assert_eq!(
+            pick_present_mode(&[vk::PresentModeKHR::FIFO], true),
+            vk::PresentModeKHR::FIFO
+        );
+    }
+
+    #[test]
+    fn no_vsync_prefers_immediate() {
+        assert_eq!(
+            pick_present_mode(
+                &[
+                    vk::PresentModeKHR::FIFO,
+                    vk::PresentModeKHR::MAILBOX,
+                    vk::PresentModeKHR::IMMEDIATE,
+                ],
+                false
+            ),
+            vk::PresentModeKHR::IMMEDIATE
+        );
+    }
+
+    #[test]
+    fn no_vsync_falls_back_to_mailbox_then_fifo() {
+        assert_eq!(
+            pick_present_mode(
+                &[vk::PresentModeKHR::FIFO, vk::PresentModeKHR::MAILBOX],
+                false
+            ),
+            vk::PresentModeKHR::MAILBOX
+        );
+        assert_eq!(
+            pick_present_mode(&[vk::PresentModeKHR::FIFO], false),
+            vk::PresentModeKHR::FIFO
+        );
+    }
 }

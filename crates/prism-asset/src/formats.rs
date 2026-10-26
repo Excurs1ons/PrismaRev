@@ -7,6 +7,26 @@ const RTEX_MAGIC: &[u8; 4] = b"RTEX";
 const RMES_MAGIC: &[u8; 4] = b"RMES";
 const MAX_MIP_LEVELS: u32 = 16;
 
+// ---------------------------------------------------------------------------
+// RTEX `format` byte values
+// ---------------------------------------------------------------------------
+//
+// The cooker writes one of these into the header; runtime consumers use them to
+// interpret the mip payload. RTEX does **not** encode colour space: an RGBA8
+// payload can be sRGB (albedo/emissive) or linear (normal/MR/AO), so the caller
+// picks sRGB-ness per texture slot.
+
+/// Uncompressed RGBA8 (4 bytes per pixel).
+pub const RTEX_FORMAT_RGBA8: u8 = 0;
+/// BC5 (two-channel RG normal map, 16 bytes per 4×4 block).
+pub const RTEX_FORMAT_BC5: u8 = 2;
+/// BC1 / DXT1 (RGB, optional 1-bit alpha, 8 bytes per 4×4 block).
+pub const RTEX_FORMAT_BC1: u8 = 3;
+/// BC3 / DXT5 (RGBA, 16 bytes per 4×4 block).
+pub const RTEX_FORMAT_BC3: u8 = 4;
+/// BC6H (HDR RGB, 16 bytes per 4×4 block).
+pub const RTEX_FORMAT_BC6H: u8 = 5;
+
 #[derive(Debug, Clone)]
 pub struct RtexInfo {
     pub width: u32,

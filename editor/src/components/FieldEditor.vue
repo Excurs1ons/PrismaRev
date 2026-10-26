@@ -15,6 +15,10 @@ import type { FieldSchema, JsonValue, Schema } from "../types";
  * `path` 是字段的稳定编辑路径（组件内相对路径，如 `anchors.min_x`），随每次
  * 改动一并向上抛：宿主用它做「同字段连续输入合并成一次撤销」，
  * 也用它调用 Rust 侧的**反射字段写入**。
+ *
+ * 第三个参数 `discrete` 标记「离散操作」（增删元素、取色器/资产选择器确认、
+ * `Option<T>` 置值/清空）：宿主据此**不把这次编辑与上一次合并**，但 `path`
+ * 本身必须保持是合法的反射字段路径 —— 合并策略不能混进路径里。
  */
 const props = defineProps<{
   label?: string;
@@ -24,10 +28,9 @@ const props = defineProps<{
   schema: Schema;
 }>();
 
-const emit = defineEmits<{ (e: "update", value: JsonValue, path: string): void }>();
-
-/** 离散操作（增删）用唯一后缀，避免与连续输入合并。 */
-let opSeq = 0;
+const emit = defineEmits<{
+  (e: "update", value: JsonValue, path: string, discrete?: boolean): void;
+}>();
 
 type Kind = "bool" | "number" | "string" | "object" | "array" | "null";
 
@@ -268,7 +271,7 @@ function defaultFor(field: FieldSchema | null): JsonValue {
 }
 
 /** `fromChild` 为嵌套编辑器冒泡上来的精确路径；为空则用本字段路径。 */
-function set(next: JsonValue, fromChild?: string) {
+function set(next: JsonValue, fromChild?: string, discrete = false) {
   let val = next;
   if (!fromChild && kind.value === "number" && typeof val === "number" && numberBounds.value) {
     if (numberBounds.value.min !== undefined && val < numberBounds.value.min) {
@@ -278,23 +281,22 @@ function set(next: JsonValue, fromChild?: string) {
       val = numberBounds.value.max;
     }
   }
-  emit("update", val, fromChild ?? pathStr.value);
+  emit("update", val, fromChild ?? pathStr.value, discrete);
 }
 
-/** 离散操作：唯一后缀确保不被合并。 */
+/** 离散操作：标记为不合并（路径仍是合法字段路径）。 */
 function setOp(next: JsonValue) {
-  opSeq += 1;
-  emit("update", next, `${pathStr.value}#op${opSeq}`);
+  emit("update", next, pathStr.value, true);
 }
 
-function setKey(key: string, value: JsonValue, childPathValue: string) {
-  set({ ...asObject.value, [key]: value }, childPathValue);
+function setKey(key: string, value: JsonValue, childPathValue: string, discrete = false) {
+  set({ ...asObject.value, [key]: value }, childPathValue, discrete);
 }
 
-function setItem(index: number, value: JsonValue, childPathValue: string) {
+function setItem(index: number, value: JsonValue, childPathValue: string, discrete = false) {
   const next = [...asArray.value];
   next[index] = value;
-  set(next, childPathValue);
+  set(next, childPathValue, discrete);
 }
 
 function addItem() {
@@ -401,7 +403,7 @@ function onSelect(event: Event) {
         :value="entry.value"
         :field="fieldFor(entry.key)"
         :schema="schema"
-        @update="(v, p) => setKey(entry.key, v, p)"
+        @update="(v, p, d) => setKey(entry.key, v, p, d)"
       />
       <div v-for="f in missingKeys" :key="`missing-${f.name}`" class="row">
         <div class="label">{{ f.name }}</div>
@@ -462,7 +464,7 @@ function onSelect(event: Event) {
           :value="item"
           :field="hint?.inner ?? null"
           :schema="schema"
-          @update="(v, p) => setItem(i, v, p)"
+          @update="(v, p, d) => setItem(i, v, p, d)"
         />
         <button
           v-if="!isFixedArray"

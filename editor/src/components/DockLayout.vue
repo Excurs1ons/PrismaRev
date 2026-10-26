@@ -33,6 +33,8 @@ const edgeHover = ref<DockEdge | null>(null);
 const dragPos = reactive({ x: 0, y: 0 });
 /** 只允许一个拖拽会话，避免旧 pointer 监听器在新拖拽的 pointerup 上重复触发。 */
 let dragSeq = 0;
+/** 当前拖拽会话的清理函数；组件卸载时用它移除 window 监听器。 */
+let endActiveDrag: (() => void) | null = null;
 
 const titles = computed(() => new Map(props.panels.map((panel) => [panel.id, panel.title])));
 const floatingSorted = computed(() => [...floating.value].sort((a, b) => a.z - b.z));
@@ -173,6 +175,7 @@ function detach(tab: string, x: number, y: number) {
  */
 function startDrag(tab: string, event: PointerEvent) {
   if (event.button !== 0) return;
+  endActiveDrag?.();
   const seq = ++dragSeq;
   const capture = event.currentTarget as HTMLElement | null;
   capture?.setPointerCapture?.(event.pointerId);
@@ -203,9 +206,7 @@ function startDrag(tab: string, event: PointerEvent) {
   };
 
   const finish = () => {
-    window.removeEventListener("pointermove", move);
-    window.removeEventListener("pointerup", finish);
-    window.removeEventListener("pointercancel", finish);
+    removeListeners();
     if (seq !== dragSeq) return;
     document.body.style.userSelect = "";
     document.body.style.cursor = "";
@@ -222,14 +223,33 @@ function startDrag(tab: string, event: PointerEvent) {
     edgeHover.value = null;
   };
 
+  function removeListeners() {
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", finish);
+    window.removeEventListener("pointercancel", cancel);
+    if (endActiveDrag === cancel) endActiveDrag = null;
+  }
+
+  function cancel() {
+    removeListeners();
+    if (seq !== dragSeq) return;
+    document.body.style.userSelect = "";
+    document.body.style.cursor = "";
+    dragPanel.value = null;
+    hover.value = null;
+    edgeHover.value = null;
+  }
+
+  endActiveDrag = cancel;
   window.addEventListener("pointermove", move);
   window.addEventListener("pointerup", finish);
-  window.addEventListener("pointercancel", finish);
+  window.addEventListener("pointercancel", cancel);
 }
 
 /** 拖动浮动窗口标题栏；放到 dock 区域会重新停靠。 */
 function startFloatDrag(tab: string, event: PointerEvent) {
   if (event.button !== 0) return;
+  endActiveDrag?.();
   const seq = ++dragSeq;
   focus(tab);
   const panel = floating.value.find((item) => item.tab === tab);
@@ -259,9 +279,7 @@ function startFloatDrag(tab: string, event: PointerEvent) {
   };
 
   const finish = () => {
-    window.removeEventListener("pointermove", move);
-    window.removeEventListener("pointerup", finish);
-    window.removeEventListener("pointercancel", finish);
+    removeListeners();
     if (seq !== dragSeq) return;
     document.body.style.userSelect = "";
     document.body.style.cursor = "";
@@ -281,14 +299,32 @@ function startFloatDrag(tab: string, event: PointerEvent) {
     edgeHover.value = null;
   };
 
+  function removeListeners() {
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", finish);
+    window.removeEventListener("pointercancel", cancel);
+    if (endActiveDrag === cancel) endActiveDrag = null;
+  }
+
+  function cancel() {
+    removeListeners();
+    if (seq !== dragSeq) return;
+    document.body.style.userSelect = "";
+    document.body.style.cursor = "";
+    hover.value = null;
+    edgeHover.value = null;
+  }
+
+  endActiveDrag = cancel;
   window.addEventListener("pointermove", move);
   window.addEventListener("pointerup", finish);
-  window.addEventListener("pointercancel", finish);
+  window.addEventListener("pointercancel", cancel);
 }
 
 /** 拖动右下角调整浮动窗口尺寸。 */
 function startFloatResize(tab: string, event: PointerEvent) {
   if (event.button !== 0) return;
+  endActiveDrag?.();
   const seq = ++dragSeq;
   event.preventDefault();
   focus(tab);
@@ -311,18 +347,28 @@ function startFloatResize(tab: string, event: PointerEvent) {
   };
 
   const finish = () => {
-    window.removeEventListener("pointermove", move);
-    window.removeEventListener("pointerup", finish);
-    window.removeEventListener("pointercancel", finish);
+    removeListeners();
     if (seq !== dragSeq) return;
     floating.value = floating.value.map((item) =>
       item.tab === tab ? clampFloatPanel(item, window.innerWidth, window.innerHeight) : item,
     );
   };
 
+  function removeListeners() {
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", finish);
+    window.removeEventListener("pointercancel", cancel);
+    if (endActiveDrag === cancel) endActiveDrag = null;
+  }
+
+  function cancel() {
+    removeListeners();
+  }
+
+  endActiveDrag = cancel;
   window.addEventListener("pointermove", move);
   window.addEventListener("pointerup", finish);
-  window.addEventListener("pointercancel", finish);
+  window.addEventListener("pointercancel", cancel);
 }
 
 function clampAllFloating() {
@@ -333,7 +379,11 @@ function clampAllFloating() {
 }
 
 onMounted(() => window.addEventListener("resize", clampAllFloating));
-onUnmounted(() => window.removeEventListener("resize", clampAllFloating));
+onUnmounted(() => {
+  window.removeEventListener("resize", clampAllFloating);
+  endActiveDrag?.();
+  endActiveDrag = null;
+});
 
 provide(DOCK_KEY, {
   dragPanel,
