@@ -149,6 +149,7 @@ public 类型的只有 **43** 个（≈0.9%）。这既是现状，也是后续�
 | `RenderSettings.skybox` | `scene::Skybox` |
 | `Lightmapping`/GI | `scene::GiConfig` + IBL |
 | `MeshRenderer`/`MeshFilter` | `scene::MeshRenderer`（`mesh_path`/`material_path`） |
+| `Input.GetKey/GetMouseButton/GetAxis` | `prism_engine::input_facade::Input`（借用 `InputManager`） |
 
 ### 5.2 编辑器
 
@@ -172,6 +173,10 @@ public 类型的只有 **43** 个（≈0.9%）。这既是现状，也是后续�
   由 ECS system + 调度代替，**不提供**同名 C# 形状。
 - C# 协程 / `yield` / `PlayerLoop` 的托管形状——由 system 顺序代替。
 - 托管 GC / `ScriptableObject` 的托管生命周期——用 Rust 资源（`World::insert_resource`）。
+- Input Manager **命名轴**（`Input.GetButton("Fire1")`）与传感器/文本输入
+  （`Input.location` / `compass` / `acceleration` / `inputString` / IME）——
+  没有 `InputManager.asset`，键位直接查 `KeyCode`；鼠标三条内置轴由
+  `Input::get_axis` 提供，触摸走 `Input::touches`。
 - XR 全家（按范围排除）。
 
 ---
@@ -195,8 +200,9 @@ public 类型的只有 **43** 个（≈0.9%）。这既是现状，也是后续�
 - **P4 编辑器扩展**：`PropertyDrawer` schema 扩展点 + `EditorWindow` 面板注册表 DTO。
 - **P5 资产流水线**：`AssetImporters`/`Build`/`Build.Profile`/`Compilation` 形状。
 - **P6 并行/集合**：`Unity.Collections`/`Unity.Jobs` 形状（`NativeArray`/`IJob*`/`JobHandle`）。
-- **P7 UI/输入/音频/动画/物理**：`UIElements`/`UI`/`Input`/`Audio`/`Animation`/`Physics`。
-  （每项按其体量单独排期；`UIElements` 507 类型体量最大。）
+- **P7 UI/输入/音频/动画/物理** — 🔄 进行中（见 §9）。P7a `UnityEngine.Input`
+  门面（`prism_engine::input_facade::Input`）已落地；其余 `UIElements`/`UI`/
+  `Audio`/`Animation`/`Physics` 按其体量单独排期（`UIElements` 507 类型最大）。
 
 ---
 
@@ -738,6 +744,46 @@ Unity 的 `Renderer.shadowCastingMode` 决定一个物体「是否投影」与�
   点光/聚光还没有自己的阴影（只有方向光贴图）。
 - **P3c 相机行为**：用测试钉住 yaw↔quaternion 的 `−π/2` 偏移；`clear_flags` 的
   `Depth`/`Nothing` 语义接进 `ForwardPass`；多相机（`depth` 排序 + 叠加）。
+- **P7 剩余**：`UIElements`（编辑器是 Vue，507 类型）/ `UI`（已有 ECS 布局，
+  UGUI 形状需先设计）/ `Audio`（运行时 `AudioSource` 已有，场景组件与
+  `AudioListener` 需接线）/ `Animation` / `Physics`（暂无运行时后端，需先选型）。
+
+### P7a — `UnityEngine.Input` 门面 ✅
+
+**目标**：`UnityEngine.Input` 在差距矩阵里还是 ✗，但底层状态其实已经齐了——
+[`InputManager`] 每帧收键盘/鼠标/触摸，只是方法名是 `key_held` 这类 Rust 风格。
+这一批叠一层只读门面，让 Unity 代码可以按 `Input.GetKey` 的名字查询。
+
+**新增 `crates/prism-engine/src/input_facade.rs`**
+- `Input<'a>` 借用当帧的 `InputManager`（`Input::new(&manager)` / `From<&InputManager>`），
+  零分配、`Copy`。
+- 键盘：`get_key` / `get_key_down` / `get_key_up` / `any_key` / `any_key_down`。
+- 鼠标：`get_mouse_button` / `get_mouse_button_down` / `get_mouse_button_up` /
+  `mouse_position` / `mouse_scroll_delta`。
+- 轴：`get_axis("Mouse X" | "Mouse Y" | "Mouse ScrollWheel")`，其它名字返回 `0.0`；
+  `get_axis_raw` 与 `get_axis` 等价（没有平滑层）。
+- 触摸：`touches` / `touch_count`（按事件，不按触点列表）。
+- `lib.rs`：`pub mod input_facade;` + 根级 `pub use input_facade::Input;`。
+
+**`InputManager` 补齐的状态**
+- 新增 `mouse_just_released: Vec<MouseButton>`（`begin_frame` 清空，
+  `handle_mouse_button(Released)` 填充）——之前只有 `keys_just_released`，
+  没有鼠标键的 “up” 瞬态，`GetMouseButtonUp` 无从实现。
+- 新增只读查询 `any_key_held` / `any_mouse_button_held` / `buttons_just_pressed` /
+  `mouse_just_released`；不把内部的 `FxHashSet` 类型暴露到公开 API。
+
+**与 Unity 的差异（刻意）**
+- 没有 Input Manager 命名轴（`GetButton` / `GetAxis("Horizontal")`）：本项目没有
+  `InputManager.asset`，键位直接查 `KeyCode`；`GetAxis` 只实现三条鼠标内置轴。
+- 没有传感器与文本输入（`Input.location` / `compass` / `acceleration` /
+  `inputString` / IME），已记入 §5.3。
+- 触摸是**本帧事件列表**，不是 Unity 的 per-finger `Touch[]` 快照。
+
+**验证**
+- ✅ `cargo test -p prism-engine input_facade` → 6 passed。
+- ✅ `cargo test -p prism-engine` → 119 passed / 1 ignored。
+- ✅ `cargo clippy -p prism-engine --all-targets -- -D warnings`。
+- ✅ `python3 scripts/pr_ready.py`（见 PR 内自检块）。
 
 ## 附录
 
