@@ -8,6 +8,8 @@ use prism_reflect::{FieldDesc, FieldType, TypeRegistry};
 use prism_scene::{register_builtin_components, ComponentRegistry};
 use serde::Serialize;
 
+use crate::property_drawer::{PropertyDrawer, PropertyDrawerRegistry};
+
 /// 一个类型的字段 schema。
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -28,6 +30,11 @@ pub struct FieldSchema {
     pub variants: Option<Vec<String>>,
     /// 编辑器只读（`#[reflect(read_only)]`）。
     pub read_only: bool,
+    /// 字段绘制器 = Unity `PropertyDrawer`（`[Range]` / `[TextArea]` /
+    /// `[ColorUsage]` / `[CustomPropertyDrawer]`）。缺省（不序列化）时前端按
+    /// `kind` 选默认控件。见 [`crate::property_drawer`]。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub drawer: Option<PropertyDrawer>,
 }
 
 /// 一个类型（组件或嵌套结构体）的 schema。
@@ -72,15 +79,19 @@ impl Schema {
 }
 
 /// 构建完整 schema（内置组件的唯一来源是 `prism-scene` 的注册表）。
+///
+/// 字段绘制器用 [`PropertyDrawerRegistry::with_builtin`] 的内置声明。
 pub fn build_schema() -> Schema {
     let mut registry = ComponentRegistry::new();
     register_builtin_components(&mut registry);
     build_schema_from(&registry)
 }
 
-/// 用给定注册表构建 schema。测试可借此注入只含容器枚举字段的组件，
-/// 不必为了覆盖 schema 逻辑往 `prism-scene` 里加真实组件。
-fn build_schema_from(registry: &ComponentRegistry) -> Schema {
+/// 用给定注册表 + 给定绘制器注册表构建 schema。
+///
+/// 宿主（未来插件、自定义组件）可以在内置声明之上追加自己的
+/// `[CustomPropertyDrawer]`；字段级声明优先于类型级。
+pub fn build_schema_with(registry: &ComponentRegistry, drawers: &PropertyDrawerRegistry) -> Schema {
     let component_names = registry.component_names();
     let types_registry = registry.type_registry();
 
@@ -97,7 +108,7 @@ fn build_schema_from(registry: &ComponentRegistry) -> Schema {
                 fields: desc
                     .fields
                     .iter()
-                    .map(|field| field_schema(field, types_registry))
+                    .map(|field| field_schema(field, types_registry, desc.name, drawers))
                     .collect(),
                 default_json: if is_component {
                     registry.default_json(desc.name)
@@ -118,10 +129,22 @@ fn build_schema_from(registry: &ComponentRegistry) -> Schema {
     Schema { types }
 }
 
-fn field_schema(field: &FieldDesc, registry: &TypeRegistry) -> FieldSchema {
+/// 用给定注册表构建 schema，绘制器用内置声明。测试可借此注入只含容器枚举
+/// 字段的组件，不必为了覆盖 schema 逻辑往 `prism-scene` 里加真实组件。
+fn build_schema_from(registry: &ComponentRegistry) -> Schema {
+    build_schema_with(registry, &PropertyDrawerRegistry::with_builtin())
+}
+
+fn field_schema(
+    field: &FieldDesc,
+    registry: &TypeRegistry,
+    declaring_type: &str,
+    drawers: &PropertyDrawerRegistry,
+) -> FieldSchema {
     let mut schema = leaf_schema(&field.ty, registry);
     schema.name = field.name.to_string();
     schema.read_only = field.read_only;
+    schema.drawer = drawers.drawer_for(declaring_type, field.name).cloned();
     if let Some(variants) = field.enum_variants {
         attach_variants(
             &mut schema,
@@ -194,6 +217,7 @@ fn leaf_schema(ty: &FieldType, registry: &TypeRegistry) -> FieldSchema {
         array_len,
         variants: None,
         read_only: false,
+        drawer: None,
     }
 }
 
@@ -327,8 +351,113 @@ mod tests {
         assert_eq!(rect.inner.as_ref().unwrap().kind, "f32");
     }
 
-    // —— 容器里的枚举：`Vec<Enum>` / `Option<Enum>` / `[Enum; N]` ——
+    // —— 字段绘制器（Unity `PropertyDrawer` / `PropertyAttribute`） ——
 
+    #[test]
+    fn builtin_drawers_reach_editor_fields() {
+        use crate::property_drawer::PropertyRenderer;
+
+        let schema = build_schema();
+        let field = |type_name: &str, field: &str| {
+            schema
+                .type_by_name(type_name)
+                .unwrap_or_else(|| panic!("missing type {type_name}"))
+                .fields
+                .iter()
+                .find(|f| f.name == field)
+                .unwrap_or_else(|| panic!("missing field {type_name}.{field}"))
+                .drawer
+                .clone()
+        };
+
+        // `[Range]` → 滑动条 + 上下界。
+        let exposure = field("prism_engine::scene::Camera", "exposure").expect("Camera.exposure");
+        assert_eq!(exposure.renderer, PropertyRenderer::Slider);
+        assert_eq!(exposure.range_bounds(), Some((0.0, 5.0)));
+        assert!(exposure.tooltip().is_some());
+
+        // `[ColorUsage]` → 取色盘。
+        let background =
+            field("prism_engine::scene::Camera", "background_color").expect("background_color");
+        assert_eq!(background.renderer, PropertyRenderer::Color);
+        assert_eq!(background.color_usage_flags(), Some((true, false)));
+
+        // `[TextArea]` → 多行文本框。
+        let content = field("prism_engine::ui::Text", "content").expect("Text.content");
+        assert_eq!(content.renderer, PropertyRenderer::TextArea);
+        assert_eq!(content.line_range(), Some((2, 6)));
+
+        // 没有声明的字段不带 drawer（前端退回默认控件）。
+        assert!(field("prism_engine::scene::Camera", "aspect").is_none());
+    }
+
+    #[test]
+    fn custom_drawers_can_be_added_on_top_of_builtins() {
+        use crate::property_drawer::{PropertyDrawer, PropertyDrawerRegistry, PropertyRenderer};
+
+        let mut drawers = PropertyDrawerRegistry::with_builtin();
+        drawers.register_custom(
+            "prism_engine::scene::Camera",
+            "background_color",
+            "LinearColorEditor",
+        );
+        drawers.register(
+            "prism_engine::scene::Camera",
+            "fov_y_degrees",
+            PropertyDrawer::range(10.0, 120.0),
+        );
+
+        let mut registry = ComponentRegistry::new();
+        register_builtin_components(&mut registry);
+        let custom_schema = build_schema_with(&registry, &drawers);
+
+        let camera = custom_schema
+            .type_by_name("prism_engine::scene::Camera")
+            .unwrap();
+        let background = camera
+            .fields
+            .iter()
+            .find(|f| f.name == "background_color")
+            .unwrap()
+            .drawer
+            .clone()
+            .expect("custom drawer");
+        assert_eq!(background.renderer, PropertyRenderer::Custom);
+        assert_eq!(background.custom.as_deref(), Some("LinearColorEditor"));
+
+        // 同字段的后注册声明覆盖内置的 `[Range(1,179)]`。
+        let fov = camera
+            .fields
+            .iter()
+            .find(|f| f.name == "fov_y_degrees")
+            .unwrap()
+            .drawer
+            .clone()
+            .expect("fov drawer");
+        assert_eq!(fov.range_bounds(), Some((10.0, 120.0)));
+
+        // 未覆盖的内置声明仍在。
+        let exposure = camera
+            .fields
+            .iter()
+            .find(|f| f.name == "exposure")
+            .unwrap()
+            .drawer
+            .clone()
+            .expect("exposure drawer");
+        assert_eq!(exposure.range_bounds(), Some((0.0, 5.0)));
+
+        // 宿主注册表是局部覆盖：默认 schema 仍是内置的 `[ColorUsage]`。
+        let builtin_schema = build_schema();
+        let builtin_background = builtin_schema
+            .type_by_name("prism_engine::scene::Camera")
+            .and_then(|ty| ty.fields.iter().find(|f| f.name == "background_color"))
+            .and_then(|f| f.drawer.as_ref())
+            .expect("builtin color drawer");
+        assert_eq!(builtin_background.renderer, PropertyRenderer::Color);
+    }
+
+    // —— 容器里的枚举：`Vec<Enum>` / `Option<Enum>` / `[Enum; N]` ——
     use prism_reflect::{FieldType, Reflect, ReflectError, ReflectType, Value};
 
     #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
