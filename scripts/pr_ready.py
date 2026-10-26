@@ -372,6 +372,10 @@ def editor_fixture_check(changed: list[str]) -> Check:
     # 只比注册表派生的部分；assets/docs 依赖本地工作区（未提交场景、external 素材）。
     keys = ("schema", "presets", "templatesByKind", "templateDocs")
     try:
+        json_start = out.find("{")
+        json_end = out.rfind("}")
+        if json_start != -1 and json_end != -1:
+            out = out[json_start : json_end + 1]
         fresh = json.loads(out)
         committed = json.loads((ROOT / "editor" / "public" / "demo.json").read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
