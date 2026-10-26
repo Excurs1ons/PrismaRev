@@ -635,7 +635,10 @@ fn hot_reload_leaves_unloaded_assets_alone() {
 #[cfg(feature = "hot-reload")]
 #[test]
 fn hot_reload_of_a_resident_slot_adjusts_by_the_delta() {
-    let path = write_pak(&two_asset_pak(&vec![7u8; 100], &vec![7u8; 200]), "test_hot_reload_delta.pak");
+    let path = write_pak(
+        &two_asset_pak(&vec![7u8; 100], &vec![7u8; 200]),
+        "test_hot_reload_delta.pak",
+    );
     let (x_id, y_id) = hot_reload_ids();
 
     let mut rm = ResourceManager::new();
