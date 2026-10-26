@@ -163,7 +163,7 @@ pub fn delete_asset(
     let path = project_root.join(&rel);
     let meta = std::fs::metadata(&path).map_err(|e| format!("找不到 {}: {e}", rel))?;
 
-    let refs = asset_reference_documents(project_root, &rel)?;
+    let mut refs = asset_reference_documents(project_root, &rel)?;
     if !force && !refs.is_empty() {
         return Err(format!(
             "{} 仍被 {} 个文档引用；确认后再删除",
@@ -178,10 +178,28 @@ pub fn delete_asset(
         std::fs::remove_file(&path).map_err(|e| format!("删除 {rel} 失败: {e}"))?;
     }
 
+    // 删掉场景文档/产物后，`scenes.toml` 里指向它的条目必须一起消失，
+    // 否则 build-scenes 会因为悬空条目失败，运行场景列表也会留下无效项。
+    let mut references_updated = 0;
+    let target_stem = rel.strip_prefix("assets/").and_then(|asset_rel| {
+        if meta.is_dir() {
+            Some(asset_rel.to_string())
+        } else {
+            scene_stem(asset_rel)
+        }
+    });
+    if let Some(stem) = target_stem {
+        references_updated = remove_manifest_entries(project_root, &stem, meta.is_dir())?;
+        if references_updated > 0 && !refs.iter().any(|doc| doc == SCENE_MANIFEST) {
+            refs.push(SCENE_MANIFEST.to_string());
+            refs.sort();
+        }
+    }
+
     Ok(AssetMutation {
         from: rel,
         to: None,
-        references_updated: 0,
+        references_updated,
         affected_documents: refs,
     })
 }
@@ -492,6 +510,92 @@ fn manifest_references(project_root: &Path, target: &Path, is_dir: bool) -> Resu
     }))
 }
 
+/// 清单路径（相对 `assets/`）去掉 `.scene.json` / `.rscn` 后的场景 stem。
+///
+/// 与 `build-scenes` 一致：两种后缀指向同一个场景，删掉任一形式都要清掉条目。
+fn scene_stem(entry_path: &str) -> Option<String> {
+    let trimmed = entry_path.trim_start_matches("./");
+    trimmed
+        .strip_suffix(".scene.json")
+        .or_else(|| trimmed.strip_suffix(".rscn"))
+        .map(str::to_string)
+}
+
+fn stem_matches(target: &str, stem: &str, is_dir: bool) -> bool {
+    stem == target
+        || (is_dir
+            && stem
+                .strip_prefix(target)
+                .is_some_and(|rest| rest.starts_with('/')))
+}
+
+/// 从 `assets/scenes.toml` 删除指向被删场景的 `[[scenes]]` 条目。
+///
+/// 按行切块而不是重新序列化：清单是手写文档，注释与排版要保住。
+/// 条目上方的连续注释行算该条目的一部分，会一起删掉。
+fn remove_manifest_entries(
+    project_root: &Path,
+    target_stem: &str,
+    is_dir: bool,
+) -> Result<usize, String> {
+    let path = project_root.join(SCENE_MANIFEST);
+    if !path.is_file() {
+        return Ok(0);
+    }
+    let text =
+        std::fs::read_to_string(&path).map_err(|e| format!("读取 {} 失败: {e}", path.display()))?;
+    let lines: Vec<&str> = text.lines().collect();
+
+    let heads: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| line.trim_start().starts_with("[[scenes]]"))
+        .map(|(index, _)| {
+            let mut head = index;
+            while head > 0 && lines[head - 1].trim_start().starts_with('#') {
+                head -= 1;
+            }
+            head
+        })
+        .collect();
+    if heads.is_empty() {
+        return Ok(0);
+    }
+
+    let mut kept: Vec<String> = Vec::new();
+    let mut removed = 0;
+    for (index, &head) in heads.iter().enumerate() {
+        let end = heads.get(index + 1).copied().unwrap_or(lines.len());
+        let block = lines[head..end].join("\n");
+        let drops = toml::from_str::<SceneManifest>(&block).is_ok_and(|manifest| {
+            manifest.scenes.iter().any(|scene| {
+                scene_stem(&scene.path).is_some_and(|stem| stem_matches(target_stem, &stem, is_dir))
+            })
+        });
+        if drops {
+            removed += 1;
+        } else {
+            kept.push(block.trim_end().to_string());
+        }
+    }
+    if removed == 0 {
+        return Ok(0);
+    }
+
+    let header = lines[..heads[0]].join("\n").trim_end().to_string();
+    let mut out = String::new();
+    if !header.is_empty() {
+        out.push_str(&header);
+        out.push_str("\n\n");
+    }
+    out.push_str(&kept.join("\n\n"));
+    if !kept.is_empty() {
+        out.push('\n');
+    }
+    std::fs::write(&path, out).map_err(|e| format!("写入 {} 失败: {e}", path.display()))?;
+    Ok(removed)
+}
+
 fn all_docs(project_root: &Path) -> Vec<crate::scene::SceneEntry> {
     let mut docs = Vec::new();
     for kind in [DocKind::Scene, DocKind::Prefab] {
@@ -750,6 +854,88 @@ mod tests {
         .unwrap();
         let manifest = std::fs::read_to_string(root.join("assets/scenes.toml")).unwrap();
         assert!(manifest.contains("scenes/level.rscn"), "{manifest}");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn delete_scene_drops_its_manifest_entry() {
+        let root = temp_root("delete_scene_manifest");
+        std::fs::write(
+            root.join("assets/scenes.toml"),
+            "# Scene list edited by hand.\n\n\
+             # Intro entry.\n[[scenes]]\nname = \"intro\"\npath = \"scenes/intro.rscn\"\n\n\
+             # Default entry.\n[[scenes]]\nname = \"default\"\npath = \"scenes/default.rscn\"\n",
+        )
+        .unwrap();
+        for name in ["intro", "default"] {
+            let doc = scene_with(&["assets/a.png", "assets/a.png"]);
+            write_doc(&root.join(format!("assets/scenes/{name}.scene.json")), &doc).unwrap();
+        }
+
+        // 删除场景文档本身不需要 force：manifest 条目会跟着一起清掉。
+        let result = delete_asset(&root, "assets/scenes/intro.scene.json", true).unwrap();
+        assert_eq!(result.references_updated, 1);
+        assert!(result
+            .affected_documents
+            .contains(&"assets/scenes.toml".to_string()));
+
+        let manifest = std::fs::read_to_string(root.join("assets/scenes.toml")).unwrap();
+        assert!(!manifest.contains("scenes/intro.rscn"), "{manifest}");
+        assert!(!manifest.contains("# Intro entry."), "{manifest}");
+        assert!(manifest.contains("scenes/default.rscn"), "{manifest}");
+        assert!(manifest.contains("# Default entry."), "{manifest}");
+        assert!(
+            manifest.contains("# Scene list edited by hand."),
+            "{manifest}"
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn delete_scene_directory_drops_nested_entries() {
+        let root = temp_root("delete_scene_dir_manifest");
+        std::fs::write(
+            root.join("assets/scenes.toml"),
+            "[[scenes]]\nname = \"chapter\"\npath = \"scenes/chapter/intro.rscn\"\n\
+             [[scenes]]\nname = \"chaptered\"\npath = \"scenes/chaptered.rscn\"\n\
+             [[scenes]]\nname = \"other\"\npath = \"scenes/other.rscn\"\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(root.join("assets/scenes/chapter")).unwrap();
+        let doc = scene_with(&["assets/a.png", "assets/a.png"]);
+        write_doc(&root.join("assets/scenes/chapter/intro.scene.json"), &doc).unwrap();
+
+        let result = delete_asset(&root, "assets/scenes/chapter", true).unwrap();
+        assert_eq!(result.references_updated, 1);
+
+        let manifest = std::fs::read_to_string(root.join("assets/scenes.toml")).unwrap();
+        assert!(
+            !manifest.contains("scenes/chapter/intro.rscn"),
+            "{manifest}"
+        );
+        assert!(manifest.contains("scenes/chaptered.rscn"), "{manifest}");
+        assert!(manifest.contains("scenes/other.rscn"), "{manifest}");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn delete_unrelated_asset_keeps_manifest() {
+        let root = temp_root("delete_unrelated_manifest");
+        std::fs::create_dir_all(root.join("assets/textures")).unwrap();
+        std::fs::write(root.join("assets/textures/a.png"), b"x").unwrap();
+        std::fs::write(
+            root.join("assets/scenes.toml"),
+            "[[scenes]]\nname = \"intro\"\npath = \"scenes/intro.rscn\"\n",
+        )
+        .unwrap();
+        let before = std::fs::read_to_string(root.join("assets/scenes.toml")).unwrap();
+
+        let result = delete_asset(&root, "assets/textures/a.png", true).unwrap();
+        assert_eq!(result.references_updated, 0);
+        assert_eq!(
+            std::fs::read_to_string(root.join("assets/scenes.toml")).unwrap(),
+            before
+        );
         std::fs::remove_dir_all(&root).ok();
     }
 }
