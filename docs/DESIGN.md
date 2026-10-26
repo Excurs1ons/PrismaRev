@@ -686,12 +686,18 @@ RTEX 的 mip 链由 Cooker 通过 2×2 box filter 生成（`TextureCooker::gener
 **`CookSettings`** 提供 `settings_hash()`：确定性 JSON → xxh3-64，
 用于增量构建缓存键。
 
+**覆盖语义**：profile 文件里的字段是逐字段 `Option`（`TextureOverrides` / `MeshOverrides` /
+`ShaderOverrides` / `CompressionOverrides`），只有**写出来的**字段才覆盖父级或内置值，
+缺省字段保持继承结果。所以 `{"texture":{"quality":95}}` 不会把父级的 `max_size` 清成 0，
+显式写入默认值（`"compression":"rgba8"`、`"generate_mips":false`）也能生效。
+
 **`ProfileManager`：**
 - `resolve(name)` → 递归继承合并 → `CookSettings`
 - 循环检测（环路径文字报告）
 - `apply_cli_overrides()` → 命令行覆盖叠加
 - 内置配置由 `BUILTIN_DEFAULTS` 静态 `LazyLock<HashMap>` 承载，
-  用户配置从磁盘 `profiles_dir/{name}.json` 加载
+  用户配置从磁盘 `profiles_dir/{name}.json` 加载；`prism-cook build` 的 `profiles_dir`
+  是 `<project>/Library/Profiles/`，解析顺序 `--profile` → `--platform` → `desktop`。
 
 ### 10.8 运行时 ResourceManager（`prism-asset::runtime`）
 
@@ -731,7 +737,7 @@ pub trait Asset: Sized + Send + 'static {
 | `init` | 创建 `Assets/` + `Library/` 目录结构 |
 | `scan` | 扫描 `Assets/`，按扩展名推断类型，写入数据库 |
 | `import` | 对每个文件运行匹配的 Importer，增量缓存 |
-| `build --output game.pak` | 烹饪所有资产 → 打包 `.pak` |
+| `build --output game.pak` | 烹饪所有资产 → 打包 `.pak`；`--profile <name>` / `--platform <p>` 先解析 profile（`--compression` 覆盖 profile 的 level） |
 | `validate game.pak` | 验证魔数 + 版本 + 校验和 |
 | `list` | 列出数据库全部资产 |
 | `inspect <id>` | 查看单资产详情（依赖树可见） |

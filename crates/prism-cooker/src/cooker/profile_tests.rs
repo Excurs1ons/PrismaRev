@@ -264,3 +264,102 @@ fn hash_depends_on_profile() {
 
     assert_ne!(desktop.settings_hash(), android.settings_hash());
 }
+
+#[test]
+fn partial_texture_override_keeps_parent_fields() {
+    let unique = format!("partial_override_test_{}", std::process::id());
+    let dir = std::env::temp_dir().join(&unique);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    std::fs::write(
+        dir.join("wide.json"),
+        serde_json::json!({
+            "base": "base",
+            "texture": { "compression": "bc7", "max_size": 4096, "quality": 90 }
+        })
+        .to_string(),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("child.json"),
+        serde_json::json!({
+            "base": "wide",
+            "texture": { "quality": 95 }
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let mut mgr = ProfileManager::new(&dir);
+    let settings = mgr.resolve("child").unwrap();
+
+    assert_eq!(settings.texture.quality, 95, "explicit field must win");
+    assert_eq!(
+        settings.texture.max_size, 4096,
+        "a field the child omits must keep the parent value, not reset to 0"
+    );
+    assert_eq!(settings.texture.compression, TextureCompression::Bc7);
+    assert!(settings.texture.generate_mips);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn explicit_default_values_are_honoured() {
+    let unique = format!("explicit_default_test_{}", std::process::id());
+    let dir = std::env::temp_dir().join(&unique);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    // Every value here equals the built-in default; they must still override
+    // the parent profile instead of being treated as "not specified".
+    std::fs::write(
+        dir.join("plain.json"),
+        serde_json::json!({
+            "base": "desktop",
+            "texture": { "compression": "rgba8", "max_size": 0, "generate_mips": false }
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let mut mgr = ProfileManager::new(&dir);
+    let settings = mgr.resolve("plain").unwrap();
+
+    assert_eq!(settings.texture.compression, TextureCompression::Rgba8);
+    assert_eq!(settings.texture.max_size, 0);
+    assert!(!settings.texture.generate_mips);
+    // Sections the child does not mention still inherit from `desktop`.
+    assert_eq!(settings.texture.quality, 90);
+    assert!(settings.mesh.generate_tangents);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn explicit_false_flag_is_applied() {
+    let unique = format!("explicit_false_test_{}", std::process::id());
+    let dir = std::env::temp_dir().join(&unique);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    // `optimize` defaults to true, so `false` used to be indistinguishable
+    // from an absent field.
+    std::fs::write(
+        dir.join("unoptimized.json"),
+        serde_json::json!({
+            "base": "desktop",
+            "mesh": { "optimize": false, "generate_tangents": false }
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let mut mgr = ProfileManager::new(&dir);
+    let settings = mgr.resolve("unoptimized").unwrap();
+
+    assert!(!settings.mesh.optimize);
+    assert!(!settings.mesh.generate_tangents);
+    assert!(!settings.mesh.vertex_compression);
+    assert_eq!(settings.texture.quality, 90, "untouched sections inherit");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

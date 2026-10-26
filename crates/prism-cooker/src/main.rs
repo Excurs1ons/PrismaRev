@@ -134,13 +134,20 @@ enum Commands {
         #[arg(long, short, default_value = "game.pak")]
         output: PathBuf,
 
-        /// Compression level (0-10, 0=no compression). 压缩级别（0-10，0=不压缩）
-        #[arg(long, short = 'l', default_value = "3")]
-        compression: u32,
+        /// Compression level (0-22). Overrides the profile level when given.
+        /// 压缩级别（0-22）；不填则使用 profile 的 level
+        #[arg(long, short = 'l')]
+        compression: Option<u32>,
 
-        /// Platform target (reserved for future use). 目标平台（预留）
+        /// Platform target; selects the built-in profile of the same name.
+        /// 目标平台（选中同名内置 profile）
         #[arg(long)]
         platform: Option<String>,
+
+        /// Profile name to resolve (defaults to `--platform`, then `desktop`).
+        /// 要解析的 profile 名（默认取 --platform，再退回 desktop）
+        #[arg(long)]
+        profile: Option<String>,
     },
 
     /// Validate a .pak file. 验证 .pak 文件
@@ -184,6 +191,44 @@ fn db_path(root: &Path) -> PathBuf {
 
 fn cache_path(root: &Path) -> PathBuf {
     library_dir(root).join("import_cache.json")
+}
+
+/// Resolve the profile/platform + CLI overrides into final cook settings.
+///
+/// Profile lookup order: explicit `--profile`, then `--platform`, then
+/// `desktop`. User profiles are read from `<root>/Library/Profiles/<name>.json`;
+/// when the name is neither a user file nor a built-in, cooking falls back to
+/// the defaults for that platform (and says so) instead of failing the build.
+fn resolve_build_settings(
+    root: &Path,
+    platform: Option<&str>,
+    profile_name: Option<&str>,
+    compression: Option<u32>,
+) -> anyhow::Result<(String, profile::CookSettings)> {
+    let profiles_dir = library_dir(root).join("Profiles");
+    let mut profiles = profile::ProfileManager::new(&profiles_dir);
+    let name = profile_name.or(platform).unwrap_or("desktop").to_owned();
+
+    let mut settings = match profiles.resolve(&name) {
+        Ok(settings) => settings,
+        Err(profile::ProfileError::NotFound(missing)) => {
+            eprintln!("  ⚠  unknown profile / 未知 profile: {missing} (using defaults)");
+            profile::CookSettings {
+                platform: missing,
+                ..Default::default()
+            }
+        }
+        Err(err) => return Err(err.into()),
+    };
+
+    let overrides = profile::CliOverrides {
+        platform: platform.map(str::to_owned),
+        compression_level: compression.map(|level| level.min(22) as i32),
+        ..Default::default()
+    };
+    profile::ProfileManager::apply_cli_overrides(&mut settings, &overrides)?;
+
+    Ok((name, settings))
 }
 
 // ---------------------------------------------------------------------------
@@ -311,8 +356,9 @@ fn cmd_import(root: &Path, _force: bool, _cli: &Cli) -> anyhow::Result<()> {
 fn cmd_build(
     root: &Path,
     output: &Path,
-    compression: u32,
+    compression: Option<u32>,
     platform: &Option<String>,
+    profile_name: Option<&str>,
     _cli: &Cli,
 ) -> anyhow::Result<()> {
     if !db_path(root).exists() {
@@ -323,6 +369,16 @@ fn cmd_build(
     if db.is_empty() {
         anyhow::bail!("No assets to build / 没有可构建的资源. Run 'prism-cook scan' first.");
     }
+
+    // Resolve the platform/profile settings *before* cooking: the texture and
+    // mesh settings used by the cookers come from here, not from hardcoded
+    // defaults.
+    let (resolved_profile, settings) =
+        resolve_build_settings(root, platform.as_deref(), profile_name, compression)?;
+    println!(
+        "  profile / 配置: {} (platform {}, compression level {})",
+        resolved_profile, settings.platform, settings.compression.level
+    );
 
     // 加载 imported data: for now, just 读取 源 files.
     let assets = assets_dir(root);
@@ -340,14 +396,8 @@ fn cmd_build(
     let cooker_reg = default_cooker_registry();
     let pipeline = CookPipeline::new(cooker_reg);
 
-    let compression_level = compression.min(22) as i32;
     let mut builder = PackageBuilder::new();
-    builder.set_compression(compression_level);
-
-    let settings = profile::CookSettings {
-        platform: platform.clone().unwrap_or_else(|| "desktop".to_owned()),
-        ..Default::default()
-    };
+    builder.set_compression(settings.compression.level.max(0));
 
     let summary = pipeline.cook_all(&db, &asset_data, &mut builder, &settings)?;
 
@@ -637,7 +687,15 @@ fn main() -> anyhow::Result<()> {
             output,
             compression,
             platform,
-        }) => cmd_build(&root, output, *compression, platform, &cli),
+            profile,
+        }) => cmd_build(
+            &root,
+            output,
+            *compression,
+            platform,
+            profile.as_deref(),
+            &cli,
+        ),
         Some(Commands::Validate { pak }) => cmd_validate(pak),
         Some(Commands::List) => cmd_list(&root, &cli),
         Some(Commands::Inspect { id }) => cmd_inspect(&root, id),
@@ -672,5 +730,96 @@ fn walk_directory(dir: &Path, cb: &mut impl FnMut(PathBuf)) {
                 cb(path);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use prism_cooker::cooker::profile::TextureCompression;
+
+    fn temp_root(tag: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("prism-cook-{tag}-{}", std::process::id()))
+    }
+
+    #[test]
+    fn build_uses_the_platform_profile() {
+        // Regression for #81: `build --platform android` used to cook with
+        // `CookSettings::default()` (i.e. desktop values).
+        let (name, settings) =
+            resolve_build_settings(&temp_root("build-android"), Some("android"), None, None)
+                .unwrap();
+
+        assert_eq!(name, "android");
+        assert_eq!(settings.platform, "android");
+        assert_eq!(settings.texture.compression, TextureCompression::Astc8x8);
+        assert_eq!(settings.texture.max_size, 2048);
+        assert!(settings.mesh.vertex_compression);
+        assert!(settings.streaming);
+        assert_eq!(settings.compression.level, 3);
+    }
+
+    #[test]
+    fn build_cli_compression_overrides_the_profile_level() {
+        let (_, settings) = resolve_build_settings(
+            &temp_root("build-embedded"),
+            Some("embedded"),
+            None,
+            Some(9),
+        )
+        .unwrap();
+
+        assert_eq!(settings.compression.level, 9);
+        assert_eq!(settings.texture.max_size, 1024, "profile still applies");
+    }
+
+    #[test]
+    fn build_profile_flag_wins_over_platform() {
+        let (name, settings) = resolve_build_settings(
+            &temp_root("build-profile-flag"),
+            Some("android"),
+            Some("desktop"),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(name, "desktop");
+        assert_eq!(settings.texture.max_size, 4096);
+        // The platform flag is still authoritative for the recorded platform.
+        assert_eq!(settings.platform, "android");
+    }
+
+    #[test]
+    fn build_falls_back_to_defaults_for_unknown_profiles() {
+        let (name, settings) =
+            resolve_build_settings(&temp_root("build-unknown"), Some("haiku"), None, None).unwrap();
+
+        assert_eq!(name, "haiku");
+        assert_eq!(settings.platform, "haiku");
+        assert_eq!(settings.texture, Default::default());
+    }
+
+    #[test]
+    fn build_reads_user_profiles_from_library() {
+        let root = temp_root("build-user-profile");
+        let profiles_dir = library_dir(&root).join("Profiles");
+        std::fs::create_dir_all(&profiles_dir).unwrap();
+        std::fs::write(
+            profiles_dir.join("hq.json"),
+            serde_json::json!({
+                "base": "desktop",
+                "texture": { "quality": 100 }
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let (name, settings) = resolve_build_settings(&root, None, Some("hq"), None).unwrap();
+
+        assert_eq!(name, "hq");
+        assert_eq!(settings.texture.quality, 100);
+        assert_eq!(settings.texture.max_size, 4096, "inherited from desktop");
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
