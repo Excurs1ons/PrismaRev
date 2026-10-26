@@ -15,6 +15,9 @@
 
 use crate::db::AssetRecord;
 use prism_asset::core::{AssetId, AssetType};
+// RTEX format bytes are part of the wire format; the single source of truth
+// lives in `prism-asset::formats` (shared with the runtime decoder).
+use prism_asset::formats::RTEX_FORMAT_RGBA8;
 use prism_asset::package::PackageBuilder;
 use std::collections::HashMap;
 use thiserror::Error;
@@ -197,25 +200,6 @@ const RTEX_MAGIC: &[u8; 4] = b"RTEX";
 const RTXI_MAGIC: &[u8; 4] = b"RTXI";
 /// 最大 mip levels for a single 纹理
 const MAX_MIP_LEVELS: u32 = 16;
-
-// ---------------------------------------------------------------------------
-// RTEX 格式 byte constants
-// ---------------------------------------------------------------------------
-
-/// Uncompressed RGBA8 (4 字节 per 像素
-const RTEX_FORMAT_RGBA8: u8 = 0;
-#[allow(dead_code)]
-/// BC5 (two-channel RG 法线 映射表 16 字节 per 4×4 块
-const RTEX_FORMAT_BC5: u8 = 2;
-#[allow(dead_code)]
-/// BC1 / DXT1 RGB optional 1-bit Alpha 8 字节 per 4×4 块
-const RTEX_FORMAT_BC1: u8 = 3;
-#[allow(dead_code)]
-/// BC3 / DXT5 RGBA 16 字节 per 4×4 块
-const RTEX_FORMAT_BC3: u8 = 4;
-#[allow(dead_code)]
-/// BC6H 高动态范围 RGB 16 字节 per 4×4 块
-const RTEX_FORMAT_BC6H: u8 = 5;
 
 /// Cooks 纹理 data by reconstructing the RGBA 图像 generating a mip
 /// 链 (box-filtered), and packing into a runtime-ready 二进制
