@@ -59,6 +59,41 @@ fn roundtrip_compressed() {
 }
 
 #[test]
+fn compression_level_changed_after_add_uses_build_level() {
+    let id = sample_asset_id(3);
+    let data = vec![7u8; 4096];
+
+    let mut builder = PackageBuilder::new();
+    builder.add_asset(id, AssetType::Binary, data.clone(), &[]);
+    builder.set_compression(3);
+    let pak = builder.build().unwrap();
+
+    let reader = PackageReader::from_bytes(&pak).unwrap();
+    let record = reader.find_record(id).unwrap();
+    assert!(record.flags & FLAG_COMPRESSED != 0);
+    assert!(record.compressed_size > 0);
+    assert_eq!(reader.read_asset_record_data(record).unwrap(), data);
+}
+
+#[test]
+fn compression_disabled_after_add_writes_plain_asset() {
+    let id = sample_asset_id(4);
+    let data = b"plain payload".to_vec();
+
+    let mut builder = PackageBuilder::new();
+    builder.set_compression(3);
+    builder.add_asset(id, AssetType::Binary, data.clone(), &[]);
+    builder.set_compression(0);
+    let pak = builder.build().unwrap();
+
+    let reader = PackageReader::from_bytes(&pak).unwrap();
+    let record = reader.find_record(id).unwrap();
+    assert_eq!(record.flags & FLAG_COMPRESSED, 0);
+    assert_eq!(record.compressed_size, 0);
+    assert_eq!(reader.read_asset_record_data(record).unwrap(), data);
+}
+
+#[test]
 fn roundtrip_with_dependencies() {
     let id_a = sample_asset_id(10);
     let id_b = sample_asset_id(11);
