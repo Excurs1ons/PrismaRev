@@ -13,14 +13,59 @@ use rand::RngExt;
 use rayon::prelude::*;
 use std::f64::consts::PI;
 
-/// 执行一轮水力侵蚀。
+/// 水力侵蚀的累积缓冲区：每线程一张整图大小的 `f64` 表。
 ///
-/// 流程：
-/// 1. 随机生成粒子
-/// 2. 并行处理每个粒子（每个粒子在自己的上下文中迭代）
-/// 3. 每个粒子的修改写入一个局部修改缓冲区
-/// 4. 所有粒子完成后，合并修改到高度图
-pub fn hydraulic_erosion(hm: &mut Heightmap, params: &ErosionParams) {
+/// [`generate_eroded_heightmap`](super::generate_eroded_heightmap) 默认连跑
+/// `iterations`（100）轮水力侵蚀；缓冲放在这里复用后，每轮只做一次
+/// `fill(0.0)`，而不是重新分配 + 重新置零。2048² 图、16 线程时这是每轮约
+/// 536 MB 的分配/清零开销。
+#[derive(Default)]
+pub(crate) struct ErosionScratch {
+    bufs: Vec<Vec<f64>>,
+    width: usize,
+    height: usize,
+}
+
+impl ErosionScratch {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    /// 确保有 `count` 张 `w × h` 的零缓冲；尺寸不变时复用已有分配。
+    fn prepare(&mut self, count: usize, w: usize, h: usize) {
+        if self.width != w || self.height != h {
+            // 只有图尺寸变化才丢弃旧缓冲（一个管线生命周期内至多一次）。
+            self.bufs.clear();
+            self.width = w;
+            self.height = h;
+        }
+        let len = w * h;
+        self.bufs.resize_with(count, || vec![0.0; len]);
+        for buf in &mut self.bufs {
+            buf.fill(0.0);
+        }
+    }
+}
+
+/// 规划粒子分块：返回 `(chunk_size, buffer_count)`。
+///
+/// `chunk_size` 向上取整、缓冲区数量按实际块数计算，保证
+/// `chunk_size * buffer_count >= n_particles`——没有粒子会被丢弃。
+fn chunk_plan(n_particles: usize, n_threads: usize) -> (usize, usize) {
+    let n_chunks = n_threads.max(1).min(n_particles);
+    if n_chunks == 0 {
+        return (1, 0);
+    }
+    let chunk_size = n_particles.div_ceil(n_chunks);
+    (chunk_size, n_particles.div_ceil(chunk_size))
+}
+
+/// 用调用方提供的 scratch 执行一轮水力侵蚀。
+pub(crate) fn hydraulic_erosion_with_scratch(
+    hm: &mut Heightmap,
+    params: &ErosionParams,
+    scratch: &mut ErosionScratch,
+) {
     let w = hm.width;
     let h = hm.height;
     let sea_level = hm.sea_level;
@@ -31,50 +76,54 @@ pub fn hydraulic_erosion(hm: &mut Heightmap, params: &ErosionParams) {
 
     // 1. 生成粒子
     let particles: Vec<Particle> = spawn_particles(params.particle_count, w, h);
-    let n_particles = particles.len();
-    let n_threads = rayon::current_num_threads().max(1);
 
-    // 2. 局部修改缓冲区（每线程一个）
-    let mut local_bufs: Vec<Vec<f64>> = (0..n_threads).map(|_| vec![0.0_f64; w * h]).collect();
+    // 2. 分块：块数不超过线程数，块大小向上取整，保证**所有**粒子都被处理。
+    //    旧实现用 `n_particles / n_threads` 向下取整再按 `thread_idx * chunk_size`
+    //    取区间，`particle_count % n_threads != 0` 时尾部粒子会被静默丢弃。
+    let (chunk_size, n_buffers) = chunk_plan(particles.len(), rayon::current_num_threads());
+    scratch.prepare(n_buffers, w, h);
 
-    // 3. 并行处理粒子
-    // 将粒子分块，每块有自己的局部缓冲区
-    let chunk_size = (n_particles / n_threads).max(1);
+    // 3. 并行处理粒子：每块写自己的局部缓冲区（与块一一对应）
     {
         let hm_ref: &Heightmap = &*hm;
-        local_bufs
-            .par_iter_mut()
-            .enumerate()
-            .for_each(|(thread_idx, buf)| {
-                let start = thread_idx * chunk_size;
-                let end = (start + chunk_size).min(n_particles);
-                for p in &particles[start..end] {
+        let bufs = &mut scratch.bufs;
+        particles
+            .par_chunks(chunk_size)
+            .zip(bufs.par_iter_mut())
+            .for_each(|(chunk, buf)| {
+                for p in chunk {
                     let mut p = p.clone();
                     process_particle(&mut p, hm_ref, buf, params, w, h, sea_level);
                 }
             });
     }
 
-    // 4. 合并修改到高度图
-    for i in 0..hm.data.len() {
-        let mut total = hm.data[i];
-        for buf in &local_bufs {
-            total += buf[i];
-        }
-        hm.data[i] = total;
+    // 4. 合并修改到高度图（按像元并行：线程数 × 整图的顺序合并在大图上很贵）
+    {
+        let bufs = &scratch.bufs;
+        hm.data.par_iter_mut().enumerate().for_each(|(i, value)| {
+            let mut total = *value;
+            for buf in bufs {
+                total += buf[i];
+            }
+            *value = total;
+        });
     }
 
-    // 5. 更新 min/max
-    hm.min_height = f64::INFINITY;
-    hm.max_height = f64::NEG_INFINITY;
-    for &v in &hm.data {
-        if v < hm.min_height {
-            hm.min_height = v;
-        }
-        if v > hm.max_height {
-            hm.max_height = v;
-        }
-    }
+    // 5. 更新 min/max（同样并行归约）
+    let (min, max) = hm
+        .data
+        .par_iter()
+        .fold(
+            || (f64::INFINITY, f64::NEG_INFINITY),
+            |(lo, hi), &v| (lo.min(v), hi.max(v)),
+        )
+        .reduce(
+            || (f64::INFINITY, f64::NEG_INFINITY),
+            |(lo_a, hi_a), (lo_b, hi_b)| (lo_a.min(lo_b), hi_a.max(hi_b)),
+        );
+    hm.min_height = min;
+    hm.max_height = max;
 }
 
 /// 随机生成粒子。
