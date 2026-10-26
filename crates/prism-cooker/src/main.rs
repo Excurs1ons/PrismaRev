@@ -292,7 +292,7 @@ fn cmd_import(root: &Path, _force: bool, _cli: &Cli) -> anyhow::Result<()> {
         if !source_path.exists() {
             continue;
         }
-        match pipeline.import_file(&source_path, &mut db, &mut cache, None) {
+        match pipeline.import_file_with_key(&source_path, relative, &mut db, &mut cache, None) {
             Ok(r) if r.was_imported => imported += 1,
             Ok(_) => cached += 1,
             Err(e) => eprintln!("  ⚠  {}: {e}", relative),
