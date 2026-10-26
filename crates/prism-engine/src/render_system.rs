@@ -77,19 +77,20 @@ pub struct SceneChanges {
 // Extract 帧 packet (sim phase)
 // ---------------------------------------------------------------------------
 
-/// Run the extract phase: hierarchy 更新 + scene changes + draw-item 列表
+/// Run the extract phase: scene changes + draw-item 列表
 /// producing a [`FramePacket`] for later consumption by [`render_system`].
 ///
 /// **This is the API the sim (game‑logic) 线程 calls.** [`render_system`]
 /// consumes the packet without accessing the ECS 世界
+///
+/// Transforms are **not** propagated here: [`crate::engine::Engine::update`]
+/// does it at the end of the simulation step, so the extract phase is read-only
+/// with respect to `LocalToWorld` and gameplay never sees stale matrices.
 pub fn extract_frame_packet(
     world: &mut World,
     display_aspect: f32,
     surface_rotation: &Mat4,
 ) -> FramePacket {
-    // 0. Recompute 世界 transforms from 局部 transforms (hierarchy 树
-    scene::systems::hierarchy::hierarchy_system(world);
-
     // 1. Collect per-frame scene 状态 (needs orientation).
     let scene = collect_scene_changes(world, display_aspect, surface_rotation);
 

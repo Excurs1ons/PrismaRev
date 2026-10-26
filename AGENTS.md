@@ -318,6 +318,10 @@ The user project's dependency chain must stay **UI-framework-free and editor-fre
   (`register_reflect_type`) — never as a mountable component. Otherwise
   `registry.apply` overwrites `LocalTransform` *after* `LocalToWorld` was computed from
   the structural field. See `prism_scene::json::DERIVED_COMPONENTS`.
+- **世界矩阵传播发生在模拟步末尾**：`Engine::update` 在 `schedule.run` 之后调用
+  `scene::systems::hierarchy::hierarchy_system`，所以同一 tick 内用户 system spawn/修改的
+  `LocalTransform` 在 `update` 返回前就有对应 `LocalToWorld`；`extract_frame_packet`
+  只读，不再负责计算。不要在 extract 或渲染侧重新加回传播。
 - **`.scene.json` v3 entities carry a stable `id`**: `parent` references that id, **never**
   the array index, and ids are not reused after deletion (`SceneJson::next_id`). Read/write
   paths must go through `migrate_scene_doc` / `normalize_scene_doc`, which assign ids to
