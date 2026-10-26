@@ -1,14 +1,15 @@
 //! 湖面世界：分层视差背景 + 昼夜换图。
 //!
 //! 这是**用户项目**的内容（关卡编排），不是引擎能力：
-//! `assets/lake_layers.json` 描述湖面的图层顺序与视差系数，本模块在启动时
-//! 为「每一层 × 每个时段」各生成一个精灵实体，然后：
+//! `assets/lake_layers.json` 描述湖面的图层顺序与视差系数，本模块为
+//! 「当前时段」的每一层生成一个精灵实体，然后：
 //!
-//! - 每帧按相机位置平移各层（`x = base.x + cam.x * (1 - parallax)`），
+//! - 每帧按相机位置平移各层（`pos = base + (cam - origin) * parallax`），
 //!   远层几乎钉在屏幕上，近层跟随世界；
-//! - 按 `cycle_seconds` 轮换 dawn → day → dusk → night，只把当前时段的
-//!   变体设为 `Active`，其余隐藏。
+//! - 按 `cycle_seconds` 轮换 dawn → day → dusk → night：只换贴图路径并让
+//!   资产系统重新解析（`SpriteRef.generation = 0`），不重复生成实体。
 //!
+//! 图层列表与顺序来自参考实现的关卡数据（`scripts/build_lake_layers.py`），
 //! 美术由 `scripts/sync_fishing_art.py`（参考素材，本地）或
 //! `scripts/gen_placeholder_sprites.py`（原创占位）生成，二者文件名一致。
 
@@ -32,20 +33,32 @@ const BG_Z: f32 = -20.0;
 struct LayersFile {
     layers: Vec<LayerDef>,
     time_of_day: Vec<String>,
+    /// 水面所在的世界 y（反射的镜像轴）。
+    water_line: f32,
+    /// 编排时相机所在位置；视差以它为原点。
+    camera_origin: [f32; 2],
 }
 
 #[derive(Deserialize)]
 struct LayerDef {
     slug: String,
     parallax: f32,
+    /// 该层底边（轴心在底部中心）在 `camera_origin` 下的世界坐标。
+    x: f32,
+    y: f32,
+    /// 是否在水面下生成一份镜像（侧面视角的屏幕反射）。
+    #[serde(default)]
+    reflect: bool,
 }
 
-/// 单个「层 × 时段」实体。
+/// 单个图层实体。
 struct LayerInstance {
     entity: Entity,
     base: glam::Vec3,
     parallax: f32,
-    tod: usize,
+    slug: String,
+    /// 水面下的镜像实体（同层同视差，y 由水面镜像得到）。
+    reflection: Option<Entity>,
 }
 
 /// 湖面状态（ECS 资源）。
@@ -55,46 +68,93 @@ pub struct LakeWorld {
     tods: Vec<String>,
     current_tod: usize,
     elapsed: f32,
+    /// 视差原点（编排时的相机位置）。
+    camera_origin: glam::Vec2,
+    /// 水面世界 y（反射镜像轴）。
+    water_line: f32,
 }
 
 impl LakeWorld {
     fn build(world: &mut World) -> Self {
         let camera = world.query::<Camera>().next().map(|(entity, _)| entity);
 
-        let (layers_def, tods) = match load_layers() {
-            Ok(file) => (file.layers, file.time_of_day),
+        let (layers_def, tods, camera_origin, water_line) = match load_layers() {
+            Ok(file) => (
+                file.layers,
+                file.time_of_day,
+                file.camera_origin,
+                file.water_line,
+            ),
             Err(err) => {
                 log::error!("lake_layers.json: {err}");
-                (Vec::new(), Vec::new())
+                (Vec::new(), Vec::new(), [0.0, 0.0], 0.0)
             }
         };
+        let camera_origin = glam::Vec2::new(camera_origin[0], camera_origin[1]);
+        let current_tod = initial_tod(&tods);
+        let tod_name = tods.get(current_tod).cloned().unwrap_or_default();
 
         let mut layers = Vec::new();
         for (order, def) in layers_def.iter().enumerate() {
-            for (tod_index, tod) in tods.iter().enumerate() {
-                let entity = world.spawn();
-                let base = glam::Vec3::new(0.0, 0.0, BG_Z + order as f32 * 0.01);
+            let path = layer_path(&def.slug, &tod_name);
+            let entity = world.spawn();
+            let base = glam::Vec3::new(def.x, def.y, BG_Z + order as f32 * 0.01);
+            world.insert(
+                entity,
+                LocalTransform {
+                    position: base,
+                    ..LocalTransform::default()
+                },
+            );
+            world.insert(
+                entity,
+                SpriteRenderer {
+                    sprite_path: path.clone(),
+                    pixels_per_unit: PIXELS_PER_UNIT,
+                    // 顶边中心对齐 `y`（Unity 轴心约定：(0.5, 1.0) = 顶边）。
+                    pivot: [0.5, 1.0],
+                    sorting_layer: order as i32,
+                    ..SpriteRenderer::default()
+                },
+            );
+            // 运行时句柄：generation 0 表示待解析，资产系统会回填。
+            world.insert(
+                entity,
+                SpriteRef {
+                    asset_id: SceneAssetId::generate(),
+                    texture_slot: 0,
+                    size: [0, 0],
+                    generation: 0,
+                },
+            );
+            world.insert(entity, Active(true));
+
+            // 水面反射：同一张贴图上下翻转、轴心改为顶部中心，
+            // 位置由 tick 按 `y = 2 * water_line - source.y` 镜像。
+            let reflection = def.reflect.then(|| {
+                let mirror = world.spawn();
                 world.insert(
-                    entity,
+                    mirror,
                     LocalTransform {
-                        position: base,
+                        position: glam::Vec3::new(def.x, 2.0 * water_line - def.y, base.z + 0.005),
                         ..LocalTransform::default()
                     },
                 );
                 world.insert(
-                    entity,
+                    mirror,
                     SpriteRenderer {
-                        sprite_path: format!("sprites/bg/{}@{}.png", def.slug, tod),
+                        sprite_path: path.clone(),
                         pixels_per_unit: PIXELS_PER_UNIT,
-                        // 参考素材的轴心是底部中心（Sprite.m_Pivot = 0.5, 0）。
+                        // 镜像层同样以顶边对齐水面镜像线，向下展开。
                         pivot: [0.5, 1.0],
+                        flip_y: true,
                         sorting_layer: order as i32,
+                        color: [0.45, 0.6, 0.85, 0.5],
                         ..SpriteRenderer::default()
                     },
                 );
-                // 运行时句柄：generation 0 表示待解析，资产系统会回填。
                 world.insert(
-                    entity,
+                    mirror,
                     SpriteRef {
                         asset_id: SceneAssetId::generate(),
                         texture_slot: 0,
@@ -102,31 +162,67 @@ impl LakeWorld {
                         generation: 0,
                     },
                 );
-                // 只有当前时段可见（初始为 day）。
-                world.insert(entity, Active(tod_index == initial_tod(&tods)));
-                layers.push(LayerInstance {
-                    entity,
-                    base,
-                    parallax: def.parallax,
-                    tod: tod_index,
-                });
-            }
+                world.insert(mirror, Active(true));
+                mirror
+            });
+
+            layers.push(LayerInstance {
+                entity,
+                base,
+                parallax: def.parallax,
+                slug: def.slug.clone(),
+                reflection,
+            });
         }
 
         log::info!(
-            "lake world: {} layer(s) x {} time-of-day variant(s)",
+            "lake world: {} layer(s), start time-of-day '{}'",
             layers_def.len(),
-            tods.len()
+            tod_name
         );
 
         Self {
             camera,
             layers,
-            current_tod: initial_tod(&tods),
             tods,
+            current_tod,
             elapsed: 0.0,
+            camera_origin,
+            water_line,
         }
     }
+
+    /// 切换时段：只换贴图路径并让资产系统重新解析。
+    fn apply_time_of_day(&self, world: &mut World, tod: &str) {
+        for layer in &self.layers {
+            let path = layer_path(&layer.slug, tod);
+            for entity in std::iter::once(layer.entity).chain(layer.reflection) {
+                if let Some(sprite) = world.get_mut::<SpriteRenderer>(entity) {
+                    if sprite.sprite_path == path {
+                        continue;
+                    }
+                    sprite.sprite_path = path.clone();
+                }
+                if let Some(sprite_ref) = world.get_mut::<SpriteRef>(entity) {
+                    sprite_ref.generation = 0;
+                }
+            }
+        }
+    }
+}
+
+/// 图层贴图路径；该时段缺图时回落到 `day`（再缺就用该时段的名字，
+/// 解析失败只是不画，不会崩）。
+fn layer_path(slug: &str, tod: &str) -> String {
+    let candidate = format!("sprites/bg/{slug}@{tod}.png");
+    if Path::new("assets").join(&candidate).is_file() {
+        return candidate;
+    }
+    let fallback = format!("sprites/bg/{slug}@day.png");
+    if Path::new("assets").join(&fallback).is_file() {
+        return fallback;
+    }
+    candidate
 }
 
 /// 初始时段取 `day`，没有就取第一个。
@@ -136,8 +232,8 @@ fn initial_tod(tods: &[String]) -> usize {
 
 fn load_layers() -> Result<LayersFile, String> {
     let path = Path::new("assets/lake_layers.json");
-    let text = std::fs::read_to_string(path)
-        .map_err(|e| format!("read {}: {e}", path.display()))?;
+    let text =
+        std::fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
     serde_json::from_str(&text).map_err(|e| format!("parse {}: {e}", path.display()))
 }
 
@@ -159,30 +255,32 @@ pub fn tick(world: &mut World, dt: f32) {
         let tod = step % state.tods.len();
         if tod != state.current_tod {
             state.current_tod = tod;
-            for layer in &state.layers {
-                world.insert(layer.entity, Active(layer.tod == tod));
-            }
-            log::info!("time of day -> {}", state.tods[tod]);
+            let name = state.tods[tod].clone();
+            state.apply_time_of_day(world, &name);
+            log::info!("time of day -> {name}");
         }
     }
 
     // --- 视差 -----------------------------------------------------------
-    let camera_x = state
+    let camera_pos = state
         .camera
         .and_then(|camera| world.get::<LocalTransform>(camera))
-        .map(|transform| transform.position.x)
-        .unwrap_or(0.0);
-    let camera_y = state
-        .camera
-        .and_then(|camera| world.get::<LocalTransform>(camera))
-        .map(|transform| transform.position.y)
-        .unwrap_or(0.0);
+        .map(|transform| transform.position)
+        .unwrap_or_default();
 
     for layer in &state.layers {
+        let x = layer.base.x + (camera_pos.x - state.camera_origin.x) * layer.parallax;
+        let y = layer.base.y + (camera_pos.y - state.camera_origin.y) * layer.parallax;
         if let Some(transform) = world.get_mut::<LocalTransform>(layer.entity) {
-            // parallax = 0 → 钉在屏幕上；1 → 跟随世界。
-            transform.position.x = layer.base.x + camera_x * (1.0 - layer.parallax);
-            transform.position.y = layer.base.y + camera_y * (1.0 - layer.parallax);
+            transform.position.x = x;
+            transform.position.y = y;
+        }
+        if let Some(mirror) = layer.reflection {
+            if let Some(transform) = world.get_mut::<LocalTransform>(mirror) {
+                transform.position.x = x;
+                // 关于水面镜像：轴心在顶部中心，所以 y = 2*W - 源层底边。
+                transform.position.y = 2.0 * state.water_line - y;
+            }
         }
     }
 

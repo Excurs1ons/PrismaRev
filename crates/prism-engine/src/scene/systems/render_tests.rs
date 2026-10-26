@@ -309,7 +309,7 @@ fn sprite_pivot_offsets_the_quad() {
         SpriteRenderer {
             sprite_path: "a.png".into(),
             pixels_per_unit: 100.0,
-            pivot: [0.0, 0.0], // top-left
+            pivot: [0.0, 0.0], // bottom-left
             ..SpriteRenderer::default()
         },
         [100, 100],
@@ -317,9 +317,10 @@ fn sprite_pivot_offsets_the_quad() {
     );
 
     let items = scene_sprite_system(&world);
-    // Pivot at top-left: quad shifts +X and −Y by half a unit.
+    // Pivot at bottom-left: the quad shifts +X and +Y by half a unit so the
+    // entity origin lands on the sprite's bottom-left corner.
     assert!((items[0].model[3][0] - 0.5).abs() < 1e-6);
-    assert!((items[0].model[3][1] + 0.5).abs() < 1e-6);
+    assert!((items[0].model[3][1] - 0.5).abs() < 1e-6);
 }
 
 #[test]

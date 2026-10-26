@@ -60,11 +60,11 @@ pub fn scene_sprite_system(world: &World) -> Vec<prism_render::SpriteDrawItem> {
         })
         .map(|(entity, world_transform, sprite, sref)| {
             let size = sprite.world_size(sref.size);
-            // Place the entity origin on the sprite pivot (pivot is normalized
-            // with (0,0) at the top-left, world +Y points up).
+            // Place the entity origin on the sprite pivot. Unity convention:
+            // (0,0) = bottom-left, (0.5,0.5) = centre, (0.5,0) = bottom-centre.
             let offset = glam::vec3(
                 -(sprite.pivot[0] - 0.5) * size[0],
-                -(0.5 - sprite.pivot[1]) * size[1],
+                -(sprite.pivot[1] - 0.5) * size[1],
                 0.0,
             );
             let local = glam::Mat4::from_scale_rotation_translation(

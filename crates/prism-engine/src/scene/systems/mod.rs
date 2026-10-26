@@ -10,6 +10,7 @@
 //! | `lights` | `collect_*` | 读取 | Collect 光源 components |
 //! | 相机 | `collect_camera` | 读取 | Collect 相机 分量 |
 
+pub mod animation;
 pub mod camera;
 pub mod hierarchy;
 pub mod lights;

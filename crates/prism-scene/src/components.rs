@@ -4,7 +4,7 @@
 //! |-----------|------------|
 //! | 层次结构  | `Parent`, `Child` |
 //! | 变换     | `LocalTransform`, `LocalToWorld`, `TransformDirty` |
-//! | 渲染     | `MeshRenderer`, `SpriteRenderer`, `Active` |
+//! | 渲染     | `MeshRenderer`, `SpriteRenderer`, `SpriteAnimation`, `Active` |
 //! | 光源     | `Light`（Unity 形状）, `DirectionalLight`, `PointLight`, `SpotLight`（旧） |
 //! | 相机     | `Camera`, `FlyCameraController` |
 //! | 天空盒   | `Skybox` |
@@ -222,7 +222,8 @@ pub struct SpriteRenderer {
     pub frame_index: u32,
     /// 每世界单位像素数 = Unity `Sprite.pixelsPerUnit`。
     pub pixels_per_unit: f32,
-    /// 轴心（`0..1`，左上为原点）= Unity `Sprite.pivot` 归一化形式。
+    /// 轴心（`0..1`，**左下角**为原点）= Unity `Sprite.pivot` 归一化形式。
+    /// `[0.5, 0.5]` = 居中，`[0.5, 0.0]` = 底边居中，`[0.5, 1.0]` = 顶边居中。
     pub pivot: [f32; 2],
     /// 顶点色乘算（线性 RGBA）= Unity `SpriteRenderer.color`。
     pub color: [f32; 4],
@@ -277,6 +278,41 @@ impl SpriteRenderer {
         };
         let frame = self.frame_size_or(texture_size);
         [frame[0] as f32 / ppu, frame[1] as f32 / ppu]
+    }
+}
+
+/// 2D 精灵帧动画 = Unity `Animator` + `AnimationClip` 的最小替身。
+///
+/// 只描述「怎么播」；当前帧写回 [`SpriteRenderer::frame_index`]，由引擎的
+/// `sprite_animation_system` 每帧推进（播放进度不进场景，见该系统的说明）。
+///
+/// 精灵表约定：帧按**横向**排列，单帧像素尺寸由
+/// [`SpriteRenderer::frame_size`] 给出。
+#[derive(Debug, Clone, Serialize, Deserialize, Reflect)]
+#[reflect(name = "prism_engine::scene::SpriteAnimation")]
+#[serde(default)]
+pub struct SpriteAnimation {
+    /// 总帧数；`0` = 由「纹理宽度 / 单帧宽度」推导。
+    pub frames: u32,
+    /// 每秒帧数。
+    pub fps: f32,
+    /// 是否循环；`false` 时停在最后一帧。
+    pub looped: bool,
+    /// 是否播放（暂停时保持当前帧）。
+    pub playing: bool,
+    /// 相位偏移（秒），用于让多个实体不同步。
+    pub phase: f32,
+}
+
+impl Default for SpriteAnimation {
+    fn default() -> Self {
+        Self {
+            frames: 0,
+            fps: 12.0,
+            looped: true,
+            playing: true,
+            phase: 0.0,
+        }
     }
 }
 

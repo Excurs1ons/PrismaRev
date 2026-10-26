@@ -10,13 +10,13 @@ use prism_engine::scene::components::{LocalTransform, Name};
 /// 相机离场景平面的距离（相机在 +Z 看向 −Z）。
 const CAMERA_Z: f32 = 10.0;
 /// 相机相对船的水面高度（相机在船的斜上方）。
-const CAMERA_LIFT: f32 = 60.0;
+const CAMERA_LIFT: f32 = 100.0;
 /// 船漂移的横向幅度（世界单位）。
 const DRIFT_AMPLITUDE: f32 = 40.0;
 /// 漂移角速度（弧度/秒）。
 const DRIFT_SPEED: f32 = 0.35;
 /// 船的基础位置。
-const BOAT_BASE: [f32; 3] = [0.0, 120.0, 0.0];
+const BOAT_BASE: [f32; 3] = [0.0, 80.0, 0.0];
 
 /// 漂移状态（ECS 资源）。
 #[derive(Default)]

@@ -1,18 +1,28 @@
 {
-  "_comment": "Lake background stack for projects/fishing, ordered far -> near (array order = draw order). `parallax` 0 = pinned to the screen, 1 = moves with the world. Art is produced by scripts/sync_fishing_art.py (reference) or scripts/gen_placeholder_sprites.py (original).",
-  "layers": [
-    { "slug": "cloud-1", "parallax": 0.04 },
-    { "slug": "far-mountains", "parallax": 0.06 },
-    { "slug": "mountain-right-left", "parallax": 0.08 },
-    { "slug": "mountain-right-far", "parallax": 0.1 },
-    { "slug": "mountain-right-close", "parallax": 0.13 },
-    { "slug": "seaweed", "parallax": 0.45 },
-    { "slug": "mid-ground", "parallax": 0.55 },
-    { "slug": "dock-back", "parallax": 0.85 },
-    { "slug": "ground", "parallax": 1.0 },
-    { "slug": "plants", "parallax": 0.97 },
-    { "slug": "dock", "parallax": 0.9 },
-    { "slug": "front-rocks", "parallax": 1.05 }
+  "_comment": "Lake background stack for projects/fishing, ordered far -> near (array order = draw order). `x`/`y` is the layer's TOP-CENTER anchor when the camera sits at camera_origin; `parallax` 0 = pinned to the screen, 1 = moves with the world. Art comes from scripts/sync_fishing_art.py (reference, local only) or scripts/gen_placeholder_sprites.py (original).",
+  "camera_origin": [
+    0.0,
+    180.0
   ],
-  "time_of_day": ["dawn", "day", "dusk", "night"]
+  "water_line": 80.0,
+  "time_of_day": [
+    "dawn",
+    "day",
+    "dusk",
+    "night"
+  ],
+  "layers": [
+    { "slug": "cloud-1", "parallax": 0.04, "x": -120.0, "y": 300.0, "reflect": true },
+    { "slug": "far-mountains", "parallax": 0.06, "x": 0.0, "y": 95.0, "reflect": true },
+    { "slug": "mountain-right-left", "parallax": 0.08, "x": -60.0, "y": 90.0, "reflect": true },
+    { "slug": "mountain-right-far", "parallax": 0.1, "x": 160.0, "y": 95.0, "reflect": true },
+    { "slug": "mountain-right-close", "parallax": 0.13, "x": 120.0, "y": 88.0, "reflect": true },
+    { "slug": "seaweed", "parallax": 0.45, "x": 0.0, "y": -20.0, "reflect": false },
+    { "slug": "mid-ground", "parallax": 0.55, "x": 0.0, "y": 80.0, "reflect": true },
+    { "slug": "dock-back", "parallax": 0.85, "x": -150.0, "y": 82.0, "reflect": false },
+    { "slug": "ground", "parallax": 1.0, "x": 0.0, "y": -100.0, "reflect": false },
+    { "slug": "plants", "parallax": 0.97, "x": 0.0, "y": -80.0, "reflect": false },
+    { "slug": "dock", "parallax": 0.9, "x": -200.0, "y": -40.0, "reflect": false },
+    { "slug": "front-rocks", "parallax": 1.05, "x": 100.0, "y": -30.0, "reflect": false }
+  ]
 }

@@ -483,6 +483,12 @@ fn default_schedule() -> Schedule {
 
     let mut s = Schedule::new();
 
+    // ── 精灵动画 ────────────────────────────────────────────
+    // 推进 `SpriteAnimation` → `SpriteRenderer.frame_index`；渲染提取之前。
+    s.add_system("sprite::animation", |world, dt| {
+        crate::scene::systems::animation::sprite_animation_system(world, dt)
+    });
+
     // ── UI 布局 ─────────────────────────────────────────────
     // 每帧重新计算所有 UI 元素的屏幕空间矩形。
     s.add_system("ui::layout", |world, _dt| {
