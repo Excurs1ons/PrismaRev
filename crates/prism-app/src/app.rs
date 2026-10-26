@@ -392,6 +392,7 @@ impl App {
         let (shared, running) = RenderShared::new();
 
         // 启动渲染线程（渲染器在该线程内部构建，不阻塞主线程）
+        let vsync = self.config.window.vsync;
         let shared_clone = shared.clone();
         let thread = std::thread::Builder::new()
             .name("render".into())
@@ -402,6 +403,7 @@ impl App {
                     extensions,
                     scene_env,
                     true,
+                    vsync,
                     overlay_factory,
                 )
             })
