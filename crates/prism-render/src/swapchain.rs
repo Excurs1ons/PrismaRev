@@ -224,13 +224,15 @@ impl Swapchain {
         let image_available = self.image_available[frame];
         let fence = self.in_flight_fences[frame];
 
-        // Wait for the 上一个 submission using this frame's 围栏 then reset.
-        // This ensures the frame's 命令 缓冲区 is no longer in use and its
-        // acquire 信号量 has been consumed by the prior submit.
+        // Wait for the 上一个 submission using this frame's 围栏. This ensures
+        // the frame's 命令 缓冲区 is no longer in use and its acquire 信号量
+        // has been consumed by the prior submit.
         unsafe { device.wait_for_fences(&[fence], true, u64::MAX) }
             .context("wait for in_flight fence")?;
-        unsafe { device.reset_fences(&[fence]) }.context("reset in_flight fence")?;
 
+        // Reset only after acquire succeeds. `ERROR_OUT_OF_DATE_KHR` returns
+        // without a submit, so a fence reset beforehand would never be
+        // signaled and the next `wait_for_fences(..., u64::MAX)` would hang.
         let (image_index, _sub) = unsafe {
             self.swapchain_ext.acquire_next_image(
                 self.swapchain,
@@ -243,6 +245,7 @@ impl Swapchain {
             vk::Result::ERROR_OUT_OF_DATE_KHR => anyhow!("swapchain out of date"),
             _ => anyhow!(e).context("acquire next image"),
         })?;
+        unsafe { device.reset_fences(&[fence]) }.context("reset in_flight fence")?;
 
         let render_finished = self.render_finished[image_index as usize];
         Ok((image_index, frame, image_available, render_finished, fence))
