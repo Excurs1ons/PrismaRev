@@ -88,6 +88,8 @@ pub struct RenderShared {
     pub asset_results: Mutex<Vec<(Entity, AssetResolveResult)>>,
     /// 启动期计时标记（主线程 + 渲染线程共享，仅用于启动诊断打印）。
     pub startup_marks: Mutex<HashMap<&'static str, u64>>,
+    /// 渲染线程无法继续时记录的致命错误（初始化失败等），由主线程取出并展示。
+    pub render_failure: Mutex<Option<String>>,
 }
 
 impl RenderShared {
@@ -104,6 +106,7 @@ impl RenderShared {
             asset_requests: Mutex::new(Vec::new()),
             asset_results: Mutex::new(Vec::new()),
             startup_marks: Mutex::new(HashMap::new()),
+            render_failure: Mutex::new(None),
         });
         (shared, running)
     }
@@ -250,5 +253,34 @@ impl RenderShared {
     /// Take and 清空 PT reset flag 渲染 线程
     pub fn take_pt_reset(&self) -> bool {
         self.pt_reset_requested.swap(false, Ordering::Relaxed)
+    }
+
+    // -------------------------------------------------------------------
+    // Render-thread failure (渲染 → main)
+    // -------------------------------------------------------------------
+
+    /// Record a fatal render-thread error so the main thread can surface it.
+    pub fn fail_render(&self, message: String) {
+        *self.render_failure.lock().unwrap() = Some(message);
+    }
+
+    /// Take the recorded render-thread error, if any.
+    pub fn take_render_failure(&self) -> Option<String> {
+        self.render_failure.lock().unwrap().take()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn render_failure_is_reported_once() {
+        let (shared, _running) = RenderShared::new();
+        assert!(shared.take_render_failure().is_none());
+
+        shared.fail_render("boom".to_string());
+        assert_eq!(shared.take_render_failure().as_deref(), Some("boom"));
+        assert!(shared.take_render_failure().is_none());
     }
 }

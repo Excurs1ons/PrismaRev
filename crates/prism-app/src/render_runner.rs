@@ -102,7 +102,9 @@ pub fn render_thread_main(
         match GraphRenderer::new(extensions_ref, &handle_bridge, &handle_bridge, None) {
             Ok(r) => r,
             Err(e) => {
-                log::error!("Render thread: failed to create renderer: {e:#}");
+                let message = format!("failed to create renderer: {e:#}");
+                log::error!("Render thread: {message}");
+                shared.fail_render(message);
                 return;
             }
         };
