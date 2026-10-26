@@ -152,7 +152,7 @@ ShadowMapPass → ForwardPass → GtaoPass → PostPass
 - **Probe grid**：`origin: vec3`、`spacing: vec3`、`dims: ivec3`（grid 分辨率），经 cbuffer/UBO 传入 shader。
 - **3D texture 打包**：每层一张 2D 切片（R32G32B32A32_SFLOAT），深度 = dims.z × 9
   （每系数一层 RGB）。采样用 integer `Load` + 手动三线性插值，**不用硬件 sampler**，防止系数层间串扰。
-- **烘焙工具**（`prism-bake-gi` 独立二进制，不进运行时）：多 bounce 路径追踪（3 bounce + Russian roulette）对每条 Fibonacci 球面方向做完整 bounce 链，`probe_volume.bin` 经 `prism-asset` 加载。
+- **烘焙工具**（`prism-build-pipeline bake-gi` 子命令，不进运行时）：多 bounce 路径追踪（3 bounce + Russian roulette）对每条 Fibonacci 球面方向做完整 bounce 链，写出 `assets/gi/probe_volume.bin`（`prism-render::probe_loader::save_probe_volume`）；读回同样在 `prism-render`（`probe_loader::load_probe_volume` + `GraphRenderer::load_probe_volume_file`，上传到 `SceneScope`），**不经过 `prism-asset`**（后者只负责 `.pak`）。引擎侧目前还没有调用点，烘焙产物要手动接线才会生效。
 - **内存预算**：2 阶 SH + float32，单个 probe = 9×3×4 = 108 bytes；grid 16³ ≈ 432KB，32³ ≈ 3.5MB。
   若下一步扩展切 float16：单个 probe = 54 bytes，32³ ≈ 1.8MB。
 
