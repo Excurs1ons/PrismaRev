@@ -653,5 +653,3 @@ fn hot_reload_of_a_resident_slot_adjusts_by_the_delta() {
     assert_eq!(rm.get_raw(x_id).unwrap().len(), 130);
     std::fs::remove_file(&path).ok();
 }
-    std::fs::remove_file(&path).ok();
-}
