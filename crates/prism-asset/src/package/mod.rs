@@ -263,7 +263,6 @@ impl RuntimeAssetRecord {
 struct PendingAsset {
     id: AssetId,
     asset_type: AssetType,
-    flags: u32,
     data: Vec<u8>,
     dependencies: Vec<AssetId>,
 }
@@ -303,15 +302,9 @@ impl PackageBuilder {
         data: Vec<u8>,
         dependencies: &[AssetId],
     ) {
-        let flags = if self.compression_level > 0 {
-            FLAG_COMPRESSED
-        } else {
-            0
-        };
         self.assets.push(PendingAsset {
             id,
             asset_type,
-            flags,
             data,
             dependencies: dependencies.to_vec(),
         });
@@ -347,11 +340,9 @@ impl PackageBuilder {
 
         for (i, asset) in self.assets.iter().enumerate() {
             let (data, uncompressed_size) = &compressed_data[i];
-            let comp_size = if self.compression_level > 0 {
-                data.len() as u64
-            } else {
-                0
-            };
+            let compressed = self.compression_level > 0;
+            let flags = if compressed { FLAG_COMPRESSED } else { 0 };
+            let comp_size = if compressed { data.len() as u64 } else { 0 };
 
             let deps: Vec<u64> = asset.dependencies.iter().map(|d| d.into_raw()).collect();
             let dep_count = deps.len() as u32;
@@ -360,7 +351,7 @@ impl PackageBuilder {
             records.push(RuntimeAssetRecord {
                 id: asset.id.into_raw(),
                 type_id: asset.asset_type.to_u32(),
-                flags: asset.flags,
+                flags,
                 offset: 0, // filled below
                 size: *uncompressed_size,
                 compressed_size: comp_size,
