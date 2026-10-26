@@ -178,6 +178,28 @@ fn unified_directional_light_uses_transform_forward() {
 }
 
 #[test]
+fn legacy_directional_light_stores_propagation_direction() {
+    let mut world = World::new();
+    let e = world.spawn();
+    // 旧组件 `euler_xyz` 表示「指向光源」的方向；采样统一存光传播方向。
+    world.insert(
+        e,
+        DirectionalLight {
+            euler_xyz: glam::Vec3::ZERO,
+            ..Default::default()
+        },
+    );
+
+    let sample = primary_directional_light(&world).expect("directional sample");
+    let expected = -glam::Vec3::Z;
+    assert!(
+        (sample.direction - expected).length() < 1e-4,
+        "传播方向应为 -Z，实际 {:?}",
+        sample.direction
+    );
+}
+
+#[test]
 fn unified_spot_light_converts_full_angles_to_cosines() {
     let mut world = World::new();
     let e = world.spawn();

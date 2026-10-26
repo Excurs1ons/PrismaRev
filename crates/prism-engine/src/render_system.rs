@@ -207,14 +207,7 @@ fn collect_scene_changes(
         .copied();
 
     let light_direction = dir_light
-        .map(|l| {
-            Vec4::new(
-                l.direction.x,
-                l.direction.y,
-                l.direction.z,
-                l.intensity * LUX_TO_RADIANCE_SCALE,
-            )
-        })
+        .map(|l| directional_light_ubo_direction(l.direction, l.intensity * LUX_TO_RADIANCE_SCALE))
         .unwrap_or(fallback_dir);
     let light_color = dir_light
         .map(|l| Vec4::new(l.color.x, l.color.y, l.color.z, l.ambient))
@@ -471,6 +464,16 @@ pub fn dir_to_euler_xyz_deg(d: Vec3) -> Vec3 {
 // 矩阵 helpers
 // ---------------------------------------------------------------------------
 
+/// 方向光从「光传播方向」（Unity `transform.forward`）转换为
+/// `FrameUBO.lightDirection` 的「指向光源」约定（见 `common.slang`）。
+///
+/// `LightSample.direction` 与光学的 `transform.forward` 一致；着色器和阴影相机都要求
+/// 指向光源的方向，所以方向光在写入 UBO 时取反。点光 / 聚光的 `direction` 是锥轴传播
+/// 方向，不走这条通路。
+fn directional_light_ubo_direction(direction: Vec3, radiance: f32) -> Vec4 {
+    Vec4::new(-direction.x, -direction.y, -direction.z, radiance)
+}
+
 /// 构建 an 正交 light-space view-projection 矩阵
 fn light_view_proj(light_dir: &Vec4, half: f32, center: &Vec3) -> Mat4 {
     let l = Vec3::new(light_dir.x, light_dir.y, light_dir.z).normalize_or_zero();
@@ -503,6 +506,14 @@ fn norm3(a: [f32; 3]) -> [f32; 3] {
 mod tests {
     use super::*;
     use crate::scene::components::LocalToWorld;
+
+    /// `LightSample.direction` 是光传播方向，UBO 的 `lightDirection` 要「指向光源」。
+    #[test]
+    fn directional_ubo_direction_points_to_the_light() {
+        let ubo = directional_light_ubo_direction(Vec3::Z, 2.0);
+        assert!((ubo.truncate() - Vec3::NEG_Z).length() < 1e-6);
+        assert_eq!(ubo.w, 2.0);
+    }
 
     /// PR #38 review finding 1：视口 aspect 必须写到**实际渲染**的相机上。
     /// 主相机（`depth` 更大）缺 `LocalToWorld` 时渲染的是低 `depth` 那台。
