@@ -230,14 +230,11 @@ impl AudioEngine {
 
     /// 播放解码后的声音。返回播放控制句柄。
     pub fn play(&mut self, audio: &AudioData) -> PlaybackHandle {
-        let id = PlaybackHandle(self.next_id);
-        self.next_id += 1;
-
         let channels = audio.channels.max(1) as usize;
         let num_frames = audio.samples.len() / channels;
         if num_frames == 0 {
             ::log::error!("Cannot play empty audio");
-            return id;
+            return PlaybackHandle(0);
         }
 
         // 将交错格式转换为平面格式，用于 DecodedAudioF32。
@@ -252,7 +249,7 @@ impl AudioEngine {
             Some(r) => r,
             None => {
                 ::log::error!("Invalid sample rate: {}", audio.sample_rate);
-                return id;
+                return PlaybackHandle(0);
             }
         };
 
@@ -281,7 +278,7 @@ impl AudioEngine {
             Ok(nid) => nid,
             Err(e) => {
                 ::log::error!("Failed to add sampler node to graph: {e}");
-                return id;
+                return PlaybackHandle(0);
             }
         };
 
@@ -289,13 +286,21 @@ impl AudioEngine {
         self.ctx
             .queue_event_for(node_id, SamplerNode::set_dyn_sample_event(resource));
 
-        // 连接到图形输出（立体声对）。
+        // 连接到图形输出。单声道连接 (0, 0)，立体声连接立体声对。
         let out = self.ctx.graph_out_node_id();
-        if let Err(e) = self.ctx.connect_stereo(node_id, out, false) {
+        let res = if self.channels == 1 {
+            self.ctx.connect(node_id, out, &[(0, 0)], false)
+        } else {
+            self.ctx.connect_stereo(node_id, out, false)
+        };
+        if let Err(e) = res {
             ::log::error!("Failed to connect sampler to graph output: {e}");
             let _ = self.ctx.remove_node(node_id);
-            return id;
+            return PlaybackHandle(0);
         }
+
+        let id = PlaybackHandle(self.next_id);
+        self.next_id += 1;
 
         self.active.push(ActiveSound {
             handle: id,
@@ -383,6 +388,11 @@ impl AudioEngine {
     pub fn is_active(&self) -> bool {
         self._stream.is_some()
     }
+
+    /// 当前活跃的声音数量。
+    pub fn active_count(&self) -> usize {
+        self.active.len()
+    }
 }
 
 impl Drop for AudioEngine {
@@ -391,5 +401,77 @@ impl Drop for AudioEngine {
         // CpalStream must be dropped before FirewheelContext.
         let stream = self._stream.take();
         drop(stream);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dummy_audio(channels: u16) -> AudioData {
+        AudioData {
+            samples: vec![0.1; 4410 * channels as usize],
+            sample_rate: 44100,
+            channels,
+            duration: Duration::from_millis(100),
+        }
+    }
+
+    #[test]
+    fn test_play_stereo_default_config() {
+        let mut engine = AudioEngine::new(AudioConfig::default()).expect("engine new");
+        let audio = dummy_audio(2);
+        let handle = engine.play(&audio);
+        assert!(handle.is_valid());
+        assert_eq!(engine.active_count(), 1);
+        engine.stop(&handle);
+        assert_eq!(engine.active_count(), 0);
+    }
+
+    #[test]
+    fn test_play_mono_config() {
+        let config = AudioConfig {
+            channels: 1,
+            ..Default::default()
+        };
+        let mut engine = AudioEngine::new(config).expect("engine new");
+        let audio = dummy_audio(1);
+        let handle = engine.play(&audio);
+        assert!(handle.is_valid(), "mono play() must return a valid handle");
+        assert_eq!(
+            engine.active_count(),
+            1,
+            "mono play() must add an active sound"
+        );
+        engine.stop(&handle);
+        assert_eq!(engine.active_count(), 0);
+    }
+
+    #[test]
+    fn test_play_empty_audio_returns_invalid_handle() {
+        let mut engine = AudioEngine::new(AudioConfig::default()).expect("engine new");
+        let audio = AudioData {
+            samples: Vec::new(),
+            sample_rate: 44100,
+            channels: 2,
+            duration: Duration::ZERO,
+        };
+        let handle = engine.play(&audio);
+        assert!(!handle.is_valid());
+        assert_eq!(engine.active_count(), 0);
+    }
+
+    #[test]
+    fn test_play_invalid_sample_rate_returns_invalid_handle() {
+        let mut engine = AudioEngine::new(AudioConfig::default()).expect("engine new");
+        let audio = AudioData {
+            samples: vec![0.1; 100],
+            sample_rate: 0,
+            channels: 2,
+            duration: Duration::from_millis(10),
+        };
+        let handle = engine.play(&audio);
+        assert!(!handle.is_valid());
+        assert_eq!(engine.active_count(), 0);
     }
 }
