@@ -171,7 +171,7 @@ component payload                    // 按 TypeDesc 字段顺序，不含字段
 加载时用编译进二进制的 `TypeDesc` 重新计算 `schema_hash`：
 
 - 一致 → 按位置解码（仍经 `set_field`，不依赖 Rust 内存布局）；
-- 不一致 → 旧版本走 migration，否则报错；编辑器/player 可退回 RTTIBin。
+- 不一致 → 硬错误（立即报错，拒绝加载损坏或过时的二进制场景；迁移只发生在作者格式 `.scene.json`）；编辑器/工具可使用自描述的 RTTIBin 格式。
 
 这样运行时不会带冗余 schema；工具侧仍能无编译期类型读取。`TypeId` 只哈希
 类型名，不能替代 `schema_hash`。
