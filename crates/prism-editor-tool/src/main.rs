@@ -39,7 +39,7 @@ enum Command {
         #[arg(long, default_value_t = 8)]
         octaves: u32,
 
-        /// Base frequency (smaller = larger features)
+        /// Base frequency in cycles per pixel (smaller = larger features)
         #[arg(long, default_value_t = 0.003)]
         frequency: f64,
 
