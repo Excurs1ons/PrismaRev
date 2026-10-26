@@ -5,7 +5,8 @@
 //! 每帧从中派生运行时视图/投影矩阵的自由函数。
 //!
 //! - [`camera_controller_system`] 将输入应用于 `FlyCameraController` +
-//!   同级 `LocalTransform`（写入偏航/俯仰/平移）。
+//!   同级 `LocalTransform`（写入偏航/俯仰/平移，并把朝向同步进
+//!   `LocalTransform.rotation`，让子节点与 `LocalToWorld` 跟随视角）。
 //! - [`compute_camera_output`] 读取 `Camera` + `FlyCameraController` +
 //! `LocalToWorld` 并生成渲染器所需的矩阵。
 //!
@@ -18,7 +19,7 @@ use glam::{Mat4, Vec3};
 use prism_ecs::World;
 
 use crate::input::InputManager;
-use crate::scene::components::{Camera, FlyCameraController, LocalToWorld, LocalTransform};
+use crate::scene::components::{Camera, FlyCameraController, LocalToWorld, LocalTransform, Parent};
 
 /// Return the 第一个 相机 分量 找到 in the 世界
 ///
@@ -252,12 +253,34 @@ pub fn camera_controller_system(
         movev -= up;
     }
 
+    // 朝向也要写回：`hierarchy_system` 只从 `LocalTransform.rotation` 推导
+    // 子节点（billboard / 武器 / 聚光灯）的 `LocalToWorld`，只写 yaw/pitch
+    // 会让它们停在旧朝向上。
+    //
+    // `yaw`/`pitch`（以及 WASD 基向量）是**世界**空间的，而 `LocalTransform`
+    // 是相对父级的：挂在旋转父级下时先减去父级的世界旋转，否则子节点朝向
+    // 会被父级二次旋转、WASD 也会把世界轴直接加到局部坐标上。
+    let world_rot = fly_rotation(yaw, pitch);
+    let parent_rot = parent_world_rotation(world, cam_entity);
+    let local_rot = match parent_rot {
+        Some(p) => p.inverse() * world_rot,
+        None => world_rot,
+    };
+
+    let ml = movev.length();
+    let delta_world = if ml > 1e-6 {
+        movev * (speed / ml)
+    } else {
+        Vec3::ZERO
+    };
+    let delta_local = match parent_rot {
+        Some(p) => p.inverse() * delta_world,
+        None => delta_world,
+    };
+
     if let Some(t) = world.get_mut::<LocalTransform>(cam_entity) {
-        let ml = movev.length();
-        if ml > 1e-6 {
-            let inv = speed / ml;
-            t.position += movev * inv;
-        }
+        t.rotation = local_rot;
+        t.position += delta_local;
     }
 
     // 触摸 `look_sensitivity` so the compiler doesn't warn about it being
@@ -272,25 +295,45 @@ pub fn camera_controller_system(
 
 /// Unit 向前 向量 from yaw/pitch.
 ///
-/// 向前 = [cos(yaw)·cos(pitch), sin(pitch), -sin(yaw)·cos(pitch)]`.
-/// `yaw=0` looks 下 +X; `yaw = π/2` looks 下 -Z (the convention the scene
-/// loader uses when converting an identity 四元数 which must face -Z per
-/// `README.md`).
+/// 向前 = `[-sin(yaw)·cos(pitch), sin(pitch), -cos(yaw)·cos(pitch)]`。
+/// `yaw = 0` 看向 **−Z**（与 `.scene.json` 里 identity 变换、以及
+/// `README.md` 的坐标约定一致）；`yaw` 增大向左转。
 fn forward(yaw: f32, pitch: f32) -> Vec3 {
     let (s_y, c_y) = yaw.sin_cos();
     let (s_p, c_p) = pitch.sin_cos();
-    Vec3::new(c_y * c_p, s_p, -s_y * c_p)
+    Vec3::new(-s_y * c_p, s_p, -c_y * c_p)
 }
 
 /// Unit 右 向量 derived from yaw only (not 向前 × worldUp).
 ///
-/// 右 = [sin(yaw), 0, cos(yaw)]`; at `yaw=0` this is +Z, at `yaw=π/2` it
-/// is +X (orthonormal with 向前 at every yaw). Building it from yaw keeps
-/// it well-defined at any 音高 - including 直通 up/down 音高 = ±π/2) -
-/// where 向前 × worldUp` would degenerate to 零
+/// 右 = `[cos(yaw), 0, -sin(yaw)]`；`yaw = 0` 时是 **+X**。用 yaw 单独构造，
+/// 所以任意 音高 下都有定义（包括 音高 = ±π/2，此时 向前 × worldUp 会退化）。
 fn right(yaw: f32) -> Vec3 {
     let (s_y, c_y) = yaw.sin_cos();
-    Vec3::new(s_y, 0.0, c_y)
+    Vec3::new(c_y, 0.0, -s_y)
+}
+
+/// `yaw`/`pitch` 对应的相机世界旋转（相机看向自身 −Z）。
+///
+/// 与 [`fly_view`] 用同一组基向量（列 = 右 / 上 / −前），所以写回
+/// `LocalTransform.rotation` 后，相机子节点和 `LocalToWorld` 得到的朝向
+/// 与画面里看到的完全一致。`yaw = 0, pitch = 0` → 单位四元数。
+fn fly_rotation(yaw: f32, pitch: f32) -> glam::Quat {
+    let f = forward(yaw, pitch).normalize();
+    let r = right(yaw);
+    let u = r.cross(f);
+    glam::Quat::from_mat3(&glam::Mat3::from_cols(r, u, -f)).normalize()
+}
+
+/// 父级的世界旋转（没有父级 / 父级还没算 `LocalToWorld` 时 `None`）。
+///
+/// `hierarchy_system` 把父级的 scale 也乘进了 `LocalToWorld`，这里只要旋转，
+/// 所以取 T×R×S 分解里的正交部分（并归一化，避免非均匀 scale 把四元数拉歪）。
+fn parent_world_rotation(world: &World, entity: prism_ecs::Entity) -> Option<glam::Quat> {
+    let parent = world.get::<Parent>(entity)?.0;
+    let parent_world = world.get::<LocalToWorld>(parent)?.0;
+    let (_, rotation, _) = parent_world.to_scale_rotation_translation();
+    Some(rotation.normalize())
 }
 
 /// Column-major 视图 矩阵 for a free-fly 相机 at `eye` with `yaw`/`pitch`.

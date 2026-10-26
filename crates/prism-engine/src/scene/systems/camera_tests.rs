@@ -231,3 +231,163 @@ fn fly_input_drives_the_rendered_camera() {
         "低 depth 相机不应被移动，实际 {untouched}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// 朝向写回（issue #121）
+// ---------------------------------------------------------------------------
+
+/// `yaw = 0` 必须看向 −Z（`.scene.json` 里 identity 变换的含义），不是 +X。
+#[test]
+fn yaw_zero_looks_down_negative_z() {
+    let f = forward(0.0, 0.0);
+    assert!(
+        (f - Vec3::new(0.0, 0.0, -1.0)).length() < 1e-6,
+        "forward(0, 0) 应为 −Z，实际 {f:?}"
+    );
+    let r = right(0.0);
+    assert!(
+        (r - Vec3::X).length() < 1e-6,
+        "right(0) 应为 +X，实际 {r:?}"
+    );
+    assert!(
+        fly_rotation(0.0, 0.0).dot(glam::Quat::IDENTITY).abs() > 1.0 - 1e-6,
+        "yaw = pitch = 0 应得到单位四元数（= 看向 −Z）"
+    );
+}
+
+/// view 矩阵与写回 `LocalTransform.rotation` 的朝向必须是同一个，
+/// 否则相机子节点会和画面错位。
+#[test]
+fn fly_view_matches_fly_rotation() {
+    let yaw = 0.7;
+    let pitch = -0.3;
+    let eye = Vec3::new(1.0, 2.0, -3.0);
+    let view = fly_view(eye, yaw, pitch);
+    let expected = Mat4::from_rotation_translation(fly_rotation(yaw, pitch), eye).inverse();
+    for c in 0..4 {
+        for r in 0..4 {
+            assert!(
+                (view.col(c)[r] - expected.col(c)[r]).abs() < 1e-4,
+                "view[{c}][{r}] = {} vs {}",
+                view.col(c)[r],
+                expected.col(c)[r]
+            );
+        }
+    }
+}
+
+/// 环视后相机子节点必须跟着转（issue #121 的核心症状）。
+#[test]
+fn children_follow_the_controller_orientation() {
+    let mut world = World::new();
+    let cam = world.spawn();
+    world.insert(cam, Camera::default());
+    world.insert(
+        cam,
+        FlyCameraController {
+            yaw: std::f32::consts::FRAC_PI_2,
+            ..Default::default()
+        },
+    );
+    world.insert(cam, LocalTransform::default());
+    world.insert(cam, LocalToWorld(Mat4::IDENTITY));
+
+    // 相机正前方一个单位的子节点（局部 −Z）
+    let child = world.spawn();
+    world.insert(
+        child,
+        LocalTransform {
+            position: Vec3::new(0.0, 0.0, -1.0),
+            ..Default::default()
+        },
+    );
+    crate::scene::helpers::HierarchyHelper::reparent(&mut world, child, Some(cam));
+
+    camera_controller_system(&mut world, &InputManager::new(), 0.0, false);
+    crate::scene::systems::hierarchy::hierarchy_system(&mut world);
+
+    // yaw = π/2 → 看向 −X，所以子节点的世界位置是 (−1, 0, 0)
+    let world_pos = world
+        .get::<LocalToWorld>(child)
+        .expect("child world transform")
+        .0
+        .col(3)
+        .truncate();
+    assert!(
+        (world_pos - Vec3::new(-1.0, 0.0, 0.0)).length() < 1e-4,
+        "子节点应转到相机正前方，实际 {world_pos:?}"
+    );
+}
+
+/// 相机挂在旋转父级下时：世界朝向仍是 yaw/pitch 的方向，WASD 也沿世界轴移动
+/// （不能把世界轴向量直接加到局部坐标上）。
+#[test]
+fn parented_camera_keeps_world_orientation_and_movement() {
+    let mut world = World::new();
+
+    let parent = world.spawn();
+    world.insert(
+        parent,
+        LocalTransform {
+            rotation: glam::Quat::from_rotation_y(std::f32::consts::FRAC_PI_2),
+            ..Default::default()
+        },
+    );
+    world.insert(parent, LocalToWorld(Mat4::IDENTITY));
+
+    let cam = world.spawn();
+    world.insert(cam, Camera::default());
+    world.insert(cam, FlyCameraController::default()); // yaw = 0 → 世界 −Z
+    world.insert(
+        cam,
+        LocalTransform {
+            position: Vec3::new(1.0, 0.0, 0.0),
+            ..Default::default()
+        },
+    );
+    world.insert(cam, LocalToWorld(Mat4::IDENTITY));
+    crate::scene::helpers::HierarchyHelper::reparent(&mut world, cam, Some(parent));
+
+    // 先算一次父级世界矩阵，控制器才读得到父级旋转。
+    crate::scene::systems::hierarchy::hierarchy_system(&mut world);
+
+    let child = world.spawn();
+    world.insert(
+        child,
+        LocalTransform {
+            position: Vec3::new(0.0, 0.0, -2.0),
+            ..Default::default()
+        },
+    );
+    crate::scene::helpers::HierarchyHelper::reparent(&mut world, child, Some(cam));
+
+    camera_controller_system(&mut world, &InputManager::new(), 0.0, false);
+    crate::scene::systems::hierarchy::hierarchy_system(&mut world);
+
+    let cam_pos = world.get::<LocalToWorld>(cam).unwrap().0.col(3).truncate();
+    let child_pos = world
+        .get::<LocalToWorld>(child)
+        .unwrap()
+        .0
+        .col(3)
+        .truncate();
+    assert!(
+        child_pos.z - cam_pos.z < -1.9,
+        "子节点应在相机世界 −Z 方向，实际 dz = {}",
+        child_pos.z - cam_pos.z
+    );
+
+    let before = cam_pos;
+    let mut input = InputManager::new();
+    input.handle_keyboard(KeyCode::KeyW, ElementState::Pressed);
+    camera_controller_system(&mut world, &input, 1.0, false);
+    crate::scene::systems::hierarchy::hierarchy_system(&mut world);
+    let after = world.get::<LocalToWorld>(cam).unwrap().0.col(3).truncate();
+
+    let delta = after - before;
+    assert!(delta.z < -0.5, "W 应沿世界 −Z 前进，实际 {delta:?}");
+    assert!(
+        delta.x.abs() < 1e-4,
+        "父级旋转不该把 W 带偏到 X，实际 {delta:?}"
+    );
+}
