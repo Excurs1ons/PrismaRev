@@ -870,9 +870,9 @@ impl UiOverlay {
 
     /// Discard framebuffers built for the previous swapchain image views.
     ///
-    /// Must be called after the device is idle (swapchain recreation already
-    /// waits) and before the new image views are used, otherwise the old
-    /// framebuffers keep dangling view handles around until shutdown.
+    /// Must be called after the device is idle and **before** the old
+    /// swapchain image views are destroyed, otherwise the cached framebuffers
+    /// keep references to destroyed views (VUID-vkDestroyImageView-...).
     pub fn on_swapchain_views_changed(&mut self) {
         for cached in self.framebuffers.drain(..) {
             unsafe { self.device.destroy_framebuffer(cached.handle, None) };
