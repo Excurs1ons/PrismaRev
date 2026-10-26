@@ -334,8 +334,7 @@ fn cook_texture(source: &Path) -> Result<Vec<u8>> {
     use prism_cooker::importer::{ImportContext, Importer as _, TextureImporter};
     use prism_cooker::Cooker as _;
 
-    let bytes =
-        fs::read(source).with_context(|| format!("read sprite {}", source.display()))?;
+    let bytes = fs::read(source).with_context(|| format!("read sprite {}", source.display()))?;
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     bytes.hash(&mut hasher);
     let source_hash = hasher.finish();
