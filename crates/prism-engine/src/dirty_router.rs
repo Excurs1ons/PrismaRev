@@ -6,6 +6,11 @@
 //! 冗余的 GPU 上传——例如仅在 `POINT_LIGHTS` 变脏时重新上传光源缓冲区，
 //! 仅在相机变脏时重新绑定相机 UBO 等。
 
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+
+use prism_render::DrawItem;
+
 use crate::render_system::SceneChanges;
 
 // ---------------------------------------------------------------------------
@@ -58,21 +63,32 @@ impl DirtyFlags {
 /// values actually changed.
 pub struct DirtyRouter {
     prev: Option<Box<SceneChanges>>,
-    prev_draw_count: usize,
+    prev_draw_signature: Option<u64>,
+    prev_pt_bounces: Option<u32>,
 }
 
 impl DirtyRouter {
     pub fn new() -> Self {
         Self {
             prev: None,
-            prev_draw_count: 0,
+            prev_draw_signature: None,
+            prev_pt_bounces: None,
         }
     }
 
-    /// 追踪 draw_items 数量变化（instance/mesh 增删）
-    pub fn draw_count_dirty(&mut self, count: usize) -> bool {
-        let dirty = self.prev_draw_count != count;
-        self.prev_draw_count = count;
+    /// 追踪 draw items 的内容变化（矩阵 / mesh / material / 阴影标志），
+    /// 不再只看数量：数量不变但物体移动或换网格同样算脏。
+    pub fn draw_items_dirty(&mut self, signature: u64) -> bool {
+        let dirty = self.prev_draw_signature != Some(signature);
+        self.prev_draw_signature = Some(signature);
+        dirty
+    }
+
+    /// 追踪路径追踪的回弹次数变化：变化后已有累积样本的反弹路径失效，
+    /// 调用方必须重置累积。
+    pub fn pt_bounces_dirty(&mut self, max_bounces: u32) -> bool {
+        let dirty = self.prev_pt_bounces != Some(max_bounces);
+        self.prev_pt_bounces = Some(max_bounces);
         dirty
     }
 
@@ -84,7 +100,6 @@ impl DirtyRouter {
         let Some(ref prev) = self.prev else {
             // 第一个 帧 everything is dirty.
             self.prev = Some(Box::new(new.clone()));
-            self.prev_draw_count = 0; // 下一帧 draw_count 检测会触发
             return DirtyFlags::all();
         };
 
@@ -112,5 +127,83 @@ impl DirtyRouter {
 impl Default for DirtyRouter {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// 绘制列表的内容签名：模型矩阵、mesh、material 槽与阴影标志。
+///
+/// 数量不变但物体移动 / 换了网格时签名也会变化，供路径追踪判断是否需要
+/// 丢弃已有累积样本。
+pub fn draw_items_signature(items: &[DrawItem]) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    items.len().hash(&mut hasher);
+    for item in items {
+        item.mesh.hash(&mut hasher);
+        for column in &item.model {
+            for value in column {
+                value.to_bits().hash(&mut hasher);
+            }
+        }
+        item.material.hash(&mut hasher);
+        item.cast_shadow.hash(&mut hasher);
+        item.visible_in_main_pass.hash(&mut hasher);
+        item.cast_shadow_two_sided.hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn draw_item(x: f32, material: Option<u32>) -> DrawItem {
+        DrawItem {
+            mesh: Default::default(),
+            model: [
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+                [x, 0.0, 0.0, 1.0],
+            ],
+            material,
+            cast_shadow: true,
+            visible_in_main_pass: true,
+            cast_shadow_two_sided: false,
+        }
+    }
+
+    #[test]
+    fn draw_signature_tracks_content_not_just_count() {
+        let a = vec![draw_item(0.0, None)];
+        let b = vec![draw_item(1.0, None)];
+        assert_eq!(draw_items_signature(&a), draw_items_signature(&a));
+        assert_ne!(
+            draw_items_signature(&a),
+            draw_items_signature(&b),
+            "moving a draw item must change the signature"
+        );
+    }
+
+    #[test]
+    fn draw_signature_tracks_material_slot() {
+        let a = vec![draw_item(0.0, Some(1))];
+        let b = vec![draw_item(0.0, Some(2))];
+        assert_ne!(draw_items_signature(&a), draw_items_signature(&b));
+    }
+
+    #[test]
+    fn draw_items_dirty_reports_changes_once() {
+        let mut router = DirtyRouter::new();
+        assert!(router.draw_items_dirty(1));
+        assert!(!router.draw_items_dirty(1));
+        assert!(router.draw_items_dirty(2));
+    }
+
+    #[test]
+    fn pt_bounces_dirty_reports_changes_once() {
+        let mut router = DirtyRouter::new();
+        assert!(router.pt_bounces_dirty(3));
+        assert!(!router.pt_bounces_dirty(3));
+        assert!(router.pt_bounces_dirty(5));
     }
 }
