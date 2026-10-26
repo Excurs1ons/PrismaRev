@@ -14,7 +14,10 @@ pub use context::required_vulkan_extensions;
 pub use context::{raw_window_handles, PlatformContext, SendWindowHandles};
 #[cfg(any())]
 pub use input::handle_input_event;
-pub use input::{grab_pointer, release_pointer, to_platform_event, PlatformEvent, TouchPhase};
+pub use input::{
+    grab_pointer, release_pointer, scroll_lines_from_pixels, to_platform_event, PlatformEvent,
+    TouchPhase, PIXELS_PER_SCROLL_LINE,
+};
 
 /// 在 Android 上创建平台事件循环。
 ///
