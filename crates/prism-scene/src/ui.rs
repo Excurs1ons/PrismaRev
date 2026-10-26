@@ -131,8 +131,16 @@ pub struct Style {
     #[serde(default)]
     pub border_radius: f32,
     /// 可见性。
-    #[serde(default)]
+    #[serde(default = "default_visible")]
     pub visible: bool,
+}
+
+/// `Style::visible` 的 serde 默认值。
+///
+/// 必须与 [`Style::default`] 保持一致：作者 JSON 省略 `visible` 时元素是可见的，
+/// 不能落到 `bool::default()`（`false`）。
+fn default_visible() -> bool {
+    true
 }
 
 impl Default for Style {
@@ -271,7 +279,30 @@ pub struct Interaction {
 
 #[cfg(test)]
 mod tests {
-    use super::{Text, TextAlign};
+    use super::{Style, Text, TextAlign};
+
+    #[test]
+    fn style_partial_json_is_visible_by_default() {
+        let style: Style = serde_json::from_str(r#"{"width":100}"#).unwrap();
+        assert_eq!(style.width, Some(100.0));
+        assert!(
+            style.visible,
+            "omitting `visible` must not hide the element"
+        );
+    }
+
+    #[test]
+    fn style_empty_object_matches_default() {
+        let style: Style = serde_json::from_str("{}").unwrap();
+        assert_eq!(style.width, Style::default().width);
+        assert!(style.visible);
+    }
+
+    #[test]
+    fn style_explicit_invisible_is_respected() {
+        let style: Style = serde_json::from_str(r#"{"visible":false}"#).unwrap();
+        assert!(!style.visible);
+    }
 
     #[test]
     fn text_partial_json_fills_defaults() {
