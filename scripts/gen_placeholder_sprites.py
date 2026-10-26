@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import math
 from PIL import Image, ImageDraw
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -82,6 +83,32 @@ def layer(size, color, seed):
     return im
 
 
+def water_tile(size=(512, 256)):
+    """Tileable water band: horizontal ripple lines fading out at both edges.
+
+    Fully transparent at the top/bottom rows so the quad never reads as a
+    rectangle over the background (the old opaque placeholder did).
+    """
+    w, h = size
+    im = Image.new("RGBA", size, (0, 0, 0, 0))
+    px = im.load()
+    for y in range(h):
+        # 0 at the edges, 1 in the middle.
+        t = y / (h - 1)
+        fade = min(1.0, t * 6.0, (1.0 - t) * 6.0)
+        if fade <= 0.0:
+            continue
+        ripple = 0.5 + 0.5 * math.sin(y * 0.55)
+        base = int(40 + 30 * ripple)
+        for x in range(w):
+            wave = math.sin((x * 0.08) + (y * 0.22))
+            a = int(120 * fade * (0.55 + 0.45 * wave))
+            if a <= 0:
+                continue
+            px[x, y] = (base, base + 30, base + 70, a)
+    return im
+
+
 def main() -> int:
     (OUT / "bg").mkdir(parents=True, exist_ok=True)
     (OUT / "fish").mkdir(parents=True, exist_ok=True)
@@ -99,6 +126,11 @@ def main() -> int:
         )
 
     for name, (w, h, color) in PROPS.items():
+        if name == "water.png":
+            im = water_tile((w, h))
+            im.save(OUT / name)
+            manifest["props"][name] = f"sprites/{name}"
+            continue
         im = Image.new("RGBA", (w, h), (0, 0, 0, 0))
         d = ImageDraw.Draw(im)
         d.rounded_rectangle([1, 1, w - 2, h - 2], radius=max(1, h // 4), fill=color + (255,))
