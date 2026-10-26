@@ -72,6 +72,31 @@ P4–P7 与 P3 可并行，但按上表顺序合并以减少冲突。
 
 ---
 
+## P2.5 — 精灵贴图烘焙进 `.pak`
+
+**分支**：`feat/sprite-asset-staging`
+
+- `crates/prism-build-pipeline/src/scene_pack.rs`：`stage_sprite_assets`
+  扫描 `SpriteRenderer.sprite_path`，用 `TextureImporter` + `TextureCooker`
+  烘成 RTEX，按同一相对路径写进 staging，再打包。
+
+**验收**：场景里引用的 PNG 出现在 `assets/scenes.pak` 路径清单里，运行时
+`SpriteRef.generation` 变为 1。
+
+---
+
+## P2.6 — 内部渲染分辨率（像素完美）
+
+**分支**：`feat/internal-resolution`
+
+- `RenderSettings.internal_resolution: Option<[u32; 2]>`（引擎/项目设置）
+- ForwardPass 的 HDR 目标按内部尺寸分配；PostPass 用 nearest 放大到 swapchain
+- 编辑器「项目设置 → 渲染」暴露该字段
+
+**验收**：480×270 渲染、1080p 窗口，精灵边缘为硬像素，无半透明模糊。
+
+---
+
 ## P3 — 用户工程脚手架
 
 **分支**：`feat/fishing-project-scaffold`

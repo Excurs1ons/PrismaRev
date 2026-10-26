@@ -111,6 +111,10 @@ pub fn build_scene_package(
     // 场景声明的环境贴图必须在包内，否则运行时 IBL 会退回空环境（黑屏）。
     stage_environment_assets(asset_root, staging, &manifest)?;
 
+    // 2D 精灵贴图同理：`SpriteRenderer.sprite_path` 指向的 PNG 必须按
+    // 运行时期望的 RTEX 格式烘进包内，否则精灵永远解析不到贴图。
+    stage_sprite_assets(asset_root, staging, &manifest)?;
+
     // Runtime always looks up the manifest as `scenes.toml` inside the package.
     // Rewrite authoring `.scene.json` paths to the cooked `.rscn` names while
     // keeping the original file's comments/formatting intact.
@@ -248,6 +252,118 @@ fn stage_environment_assets(
     }
 
     Ok(staged.len())
+}
+
+/// 把场景里 `SpriteRenderer.sprite_path` 引用的 PNG 烘成 RTEX 并放进包内。
+///
+/// 运行时通过 `.pak` 路径清单按同一相对路径查找，所以 staging 里的文件名
+/// 必须与组件里的 `sprite_path` 折叠结果一致（`sprites/boat.png`）。
+fn stage_sprite_assets(
+    asset_root: &Path,
+    staging: &Path,
+    manifest: &prism_engine::scene::SceneManifest,
+) -> Result<usize> {
+    let mut staged = std::collections::BTreeSet::new();
+
+    for entry in &manifest.scenes {
+        let doc_rel = if let Some(stem) = entry.path.strip_suffix(".scene.json") {
+            format!("{stem}.scene.json")
+        } else if let Some(stem) = entry.path.strip_suffix(".rscn") {
+            format!("{stem}.scene.json")
+        } else {
+            continue;
+        };
+
+        let doc_path = asset_root.join(&doc_rel);
+        let Ok(text) = fs::read_to_string(&doc_path) else {
+            continue;
+        };
+        let Ok(doc) = serde_json::from_str::<serde_json::Value>(&text) else {
+            continue;
+        };
+        let Some(entities) = doc.get("entities").and_then(|value| value.as_array()) else {
+            continue;
+        };
+
+        for entity in entities {
+            let Some(components) = entity.get("components").and_then(|value| value.as_object())
+            else {
+                continue;
+            };
+            let Some(value) = components
+                .get("prism_engine::scene::SpriteRenderer")
+                .and_then(|payload| payload.get("sprite_path"))
+                .and_then(|value| value.as_str())
+            else {
+                continue;
+            };
+            if value.is_empty() {
+                continue;
+            }
+            let Some(pak_path) = normalize_scene_relative(&doc_rel, value) else {
+                log::warn!(
+                    "sprite asset '{value}' in {doc_rel} cannot be packaged (absolute or escapes assets/)"
+                );
+                continue;
+            };
+            if !staged.insert(pak_path.clone()) {
+                continue;
+            }
+
+            let source = asset_root.join(&pak_path);
+            if !source.is_file() {
+                log::warn!("sprite asset {} not found; skipping", source.display());
+                continue;
+            }
+            let cooked = cook_texture(&source)?;
+            write_staged(staging, Path::new(&pak_path), &cooked)?;
+            log::info!("packaged sprite asset: {pak_path}");
+        }
+    }
+
+    Ok(staged.len())
+}
+
+/// 用 cooker 的 `TextureImporter` + `TextureCooker` 把源图烘成 RTEX 字节。
+fn cook_texture(source: &Path) -> Result<Vec<u8>> {
+    use std::hash::{Hash, Hasher};
+
+    use prism_asset::core::AssetType;
+    use prism_cooker::cooker::profile::CookSettings;
+    use prism_cooker::cooker::TextureCooker;
+    use prism_cooker::importer::{ImportContext, Importer as _, TextureImporter};
+    use prism_cooker::Cooker as _;
+
+    let bytes =
+        fs::read(source).with_context(|| format!("read sprite {}", source.display()))?;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    bytes.hash(&mut hasher);
+    let source_hash = hasher.finish();
+
+    let imported = TextureImporter
+        .import(&ImportContext {
+            source_path: source.to_path_buf(),
+            source_hash,
+            settings: serde_json::json!({}),
+            db: std::sync::Arc::new(prism_cooker::AssetDatabase::new()),
+        })
+        .with_context(|| format!("import sprite {}", source.display()))?;
+
+    let record = prism_cooker::AssetRecord::new(
+        prism_asset::core::AssetId::generate(),
+        source.to_string_lossy().into_owned(),
+        AssetType::Texture,
+        "texture-importer",
+    );
+    let settings = CookSettings::default();
+    let cooked = TextureCooker
+        .cook(&prism_cooker::CookContext {
+            record: &record,
+            imported_data: &imported.output_data,
+            settings: &settings,
+        })
+        .with_context(|| format!("cook sprite {}", source.display()))?;
+    Ok(cooked.cooked_data)
 }
 
 /// 把 `scene_rel` 所对应场景里的相对路径折叠成 `assets/` 内路径。
