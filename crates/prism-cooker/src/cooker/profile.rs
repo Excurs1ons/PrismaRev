@@ -208,11 +208,32 @@ impl Default for CookSettings {
 }
 
 impl CookSettings {
-    /// 计算 a 稳定 确定性 哈希 for incremental-build caching.
+    /// 计算一个稳定的确定性哈希，供增量构建缓存使用。
+    ///
+    /// `custom` 是 `HashMap`，迭代顺序每个进程都随机化，所以先去掉它再序列化，
+    /// 然后把**按 key 排序**后的键值对追加到哈希输入。否则同样的设置在不同进程
+    /// 或不同插入顺序下会得到不同哈希，缓存会被误判为失效。
     pub fn settings_hash(&self) -> u64 {
-        // 确定性 JSON serialization (no extra whitespace, 已排序 keys).
-        let json = serde_json::to_string(self).expect("CookSettings should always serialize");
-        xxhash_rust::xxh3::xxh3_64(json.as_bytes())
+        let mut canonical = self.clone();
+        canonical.custom.clear();
+        let mut buffer = serde_json::to_string(&canonical)
+            .expect("CookSettings should always serialize")
+            .into_bytes();
+
+        let mut keys: Vec<&String> = self.custom.keys().collect();
+        keys.sort();
+        for key in keys {
+            buffer.extend_from_slice(key.as_bytes());
+            buffer.push(0x1f); // unit separator：key 与 value 之间
+            buffer.extend_from_slice(
+                serde_json::to_string(&self.custom[key])
+                    .expect("custom values should always serialize")
+                    .as_bytes(),
+            );
+            buffer.push(0x1e); // record separator：不同条目之间
+        }
+
+        xxhash_rust::xxh3::xxh3_64(&buffer)
     }
 }
 

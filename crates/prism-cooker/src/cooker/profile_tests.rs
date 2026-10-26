@@ -21,6 +21,56 @@ fn settings_hash_changes_on_modification() {
 }
 
 #[test]
+fn settings_hash_ignores_custom_map_insertion_order() {
+    let entries = [
+        ("alpha", serde_json::json!(1)),
+        ("beta", serde_json::json!("two")),
+        ("gamma", serde_json::json!({"nested": [1, 2, 3]})),
+        ("delta", serde_json::json!(null)),
+        ("epsilon", serde_json::json!([true, false])),
+        ("zeta", serde_json::json!(3.5)),
+        ("eta", serde_json::json!({"a": 1})),
+        ("theta", serde_json::json!("x")),
+    ];
+
+    let mut forward = CookSettings::default();
+    for (key, value) in entries.clone() {
+        forward.custom.insert(key.to_owned(), value);
+    }
+
+    // 同样的键值、相反的插入顺序 + 不同的 HashMap 容量：容量会改变桶布局，
+    // 因此迭代顺序一定与 forward 不同，能稳定暴露「直接序列化 HashMap」的问题。
+    let mut reverse = CookSettings {
+        custom: HashMap::with_capacity(64),
+        ..Default::default()
+    };
+    for (key, value) in entries.into_iter().rev() {
+        reverse.custom.insert(key.to_owned(), value);
+    }
+
+    assert_eq!(
+        forward.settings_hash(),
+        reverse.settings_hash(),
+        "custom map iteration order must not affect the settings hash"
+    );
+}
+
+#[test]
+fn settings_hash_covers_custom_entries() {
+    let mut one = CookSettings::default();
+    one.custom.insert("alpha".to_owned(), serde_json::json!(1));
+    let mut two = CookSettings::default();
+    two.custom.insert("alpha".to_owned(), serde_json::json!(2));
+
+    assert_ne!(one.settings_hash(), two.settings_hash());
+    assert_ne!(
+        CookSettings::default().settings_hash(),
+        one.settings_hash(),
+        "custom entries must still contribute to the hash"
+    );
+}
+
+#[test]
 fn builtin_profile_loading() {
     let dir = std::env::temp_dir().join("cook_profiles_test");
     let mut mgr = ProfileManager::new(&dir);
