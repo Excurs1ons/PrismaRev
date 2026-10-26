@@ -177,6 +177,9 @@ public 类型的只有 **43** 个（≈0.9%）。这既是现状，也是后续�
   （`Input.location` / `compass` / `acceleration` / `inputString` / IME）——
   没有 `InputManager.asset`，键位直接查 `KeyCode`；鼠标三条内置轴由
   `Input::get_axis` 提供，触摸走 `Input::touches`。
+- `Compilation` / `CompilationPipeline`（`UnityEditor.Compilation`）——Rust 没有托管程序集
+  编译阶段：构建直接走 `cargo build`，编译错误由 cargo 的 stdout 呈现，不存在
+  assembly / asmdef / `AssemblyBuilder` 的形状可投影。
 - XR 全家（按范围排除）。
 
 ---
@@ -198,7 +201,8 @@ public 类型的只有 **43** 个（≈0.9%）。这既是现状，也是后续�
   P3c（相机行为）见 §9 待办。
 - **P4 编辑器扩展** — ✅ 完成（见 §9）。P4a `PropertyDrawer` schema 扩展点与
   P4b `EditorWindow` 面板注册表 DTO 已落地。
-- **P5 资产流水线** — 🔄 进行中。P5a `AssetImporter` 形状与 P5b `Build`/`Build.Profile` 已落地（见 §9）；剩余 `Compilation` 形状。
+- **P5 资产流水线** — ✅ 完成（见 §9；`Compilation` 按 §5.3 判为 N/A）。
+  P5a `AssetImporter`、P5b `Build`/`Build.Profile`、P5c `BuildReport`。
 - **P6 并行/集合**：`Unity.Collections`/`Unity.Jobs` 形状（`NativeArray`/`IJob*`/`JobHandle`）。
 - **P7 UI/输入/音频/动画/物理** — 🔄 进行中（见 §9）。P7a `UnityEngine.Input`
   门面（`prism_engine::input_facade::Input`）已落地；其余 `UIElements`/`UI`/
@@ -1168,6 +1172,47 @@ Unity 的构建入口是 `BuildPipeline.BuildPlayer(BuildPlayerOptions)`，其�
   形状也未做。
 - fixture 不固化构建 profile：`assets/scenes.toml` 可能含本机绝对路径，浏览器预览的
   `buildProfile` 由 `mock.ts` 用 fixture 内场景即时合成。
+
+### P5c — `BuildReport` 形状 ✅
+
+Unity 的构建结果不是一段日志，而是 `BuildReport`（`summary` + `steps` + `files`）。
+之前构建面板只有 `durationMs` 和 stdout：产物多大、各阶段各花多久，只能人去数日志。
+
+**prism-editor-api（新模块 `build_report`）**
+- `BuildResult`（`Succeeded` / `Failed` / `Cancelled`）、`BuildFileRole`
+  （`Executable` / `ScenePackage` / `Settings` / `Metadata` / `Other`）、`BuildFile`、
+  `BuildStep`、`BuildSummary`、`BuildReport`。
+- `BuildReport::new` / `failed` + `with_step` / `with_file`（大小从磁盘读，文件缺失记 0）/
+  `with_file_size`（测试与跨机器统计用）/ `file(role)` / `succeeded()`；
+  产物总大小在每次追加时自动汇总。
+- Unity 对照：`BuildSummary.result` / `totalSize` / `totalTime` / `totalErrors`、
+  `BuildReport.steps` / `files`、`BuildFile.role`。
+
+**editor/src-tauri**
+- `BuildProjectResult.report: BuildReport`。`build_project_blocking` 给三个阶段计时
+  （`cargo build` / `build-scenes` / 复制产物的 `collect`），并按角色登记 exe、
+  `assets/scenes.pak`、`assets/scenes.pak.meta.json`、`assets/settings.toml`
+  （`copy_if_exists` 之后仅登记真实存在的文件）。
+
+**editor（Vue）**
+- `types.ts` 补 `BuildReport` 全家 + `BuildProjectResult.report`。
+- 构建面板显示结果徽标、产物总大小、总耗时、阶段耗时与产物列表（名称 + 角色 + 大小，
+  相对输出目录的完整路径留在 `title` 提示里）；配色由 `color-mix` 从主题 token 派生。
+
+**与 Unity 的差异**
+- Rust 没有托管程序集，`BuildStep` 是**命令级**阶段，不是 Unity 的 asset bundle /
+  script compilation 步骤。
+- 失败不做「报告」返回：构建命令仍以 `Err(String)` 把 cargo 的错误抛给前端，
+  `BuildResult::Failed` 留给以后需要结构化失败报告的场景（目前由测试覆盖）。
+
+**明确不做**：`Compilation`（§5.3）——cargo 负责编译，没有 asmdef / `AssemblyBuilder`
+可投影。
+
+**验证**
+- ✅ `cargo test -p prism-editor-api build_report` → 7 passed。
+- ✅ `cargo clippy -p prism-editor-api --all-targets -- -D warnings`、
+  `cargo check --manifest-path editor/src-tauri/Cargo.toml`。
+- ✅ `pnpm -C editor build`（`vue-tsc --noEmit` + Vite）、`python3 scripts/pr_ready.py`。
 
 ## 附录
 

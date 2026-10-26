@@ -29,6 +29,38 @@ const error = ref("");
 const status = ref("");
 const result = ref<BuildProjectResult | null>(null);
 
+const report = computed(() => result.value?.report ?? null);
+
+const RESULT_LABELS: Record<string, string> = {
+  succeeded: "构建成功",
+  failed: "构建失败",
+  cancelled: "已取消",
+};
+
+const ROLE_LABELS: Record<string, string> = {
+  executable: "可执行文件",
+  scenePackage: "场景包",
+  settings: "设置",
+  metadata: "元数据",
+  other: "其它",
+};
+
+function formatBytes(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${bytes} B`;
+}
+
+function formatDuration(ms: number): string {
+  if (ms >= 1000) return `${(ms / 1000).toFixed(2)}s`;
+  return `${ms} ms`;
+}
+
+function fileName(path: string): string {
+  const parts = path.replace(/\\/g, "/").split("/");
+  return parts[parts.length - 1] || path;
+}
+
 const availableScenes = computed(() =>
   props.scenes.filter(
     (scene) => !manifest.value.some((entry) => entry.name === scene.name),
@@ -283,6 +315,34 @@ onMounted(() => void load());
 
       <div v-if="error" class="error">{{ error }}</div>
       <div v-if="status" class="hint">{{ status }}</div>
+
+      <div v-if="report" class="build-report">
+        <div class="build-report-head">
+          <span class="build-result" :class="report.summary.result">
+            {{ RESULT_LABELS[report.summary.result] ?? report.summary.result }}
+          </span>
+          <span>{{ formatBytes(report.summary.totalSizeBytes) }}</span>
+          <span>{{ formatDuration(report.summary.totalTimeMs) }}</span>
+          <span class="hint">{{ report.summary.platform }} · {{ report.summary.outputPath }}</span>
+        </div>
+        <div class="build-report-grid">
+          <div>
+            <div class="settings-group-title">阶段</div>
+            <div v-for="step in report.steps" :key="step.name" class="build-report-row">
+              <span>{{ step.name }}</span>
+              <span class="hint">{{ formatDuration(step.durationMs) }}</span>
+            </div>
+          </div>
+          <div>
+            <div class="settings-group-title">产物</div>
+            <div v-for="file in report.files" :key="file.path" class="build-report-row">
+              <span :title="file.path">{{ fileName(file.path) }}</span>
+              <span class="hint">{{ ROLE_LABELS[file.role] ?? file.role }} · {{ formatBytes(file.sizeBytes) }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <pre v-if="log" class="tool-log build-log">{{ log }}</pre>
     </div>
 

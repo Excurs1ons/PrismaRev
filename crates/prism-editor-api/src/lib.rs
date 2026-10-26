@@ -25,6 +25,7 @@
 //! - [`editor_window`]：Unity `EditorWindow` / `[MenuItem]` 的面板注册表
 //!   （id / 标题 / 菜单路径 / 命令 id），驱动前端 `PANELS` 与「窗口 / 帮助」菜单。
 //! - [`build_profile`]：`Build` / `Build.Profile`（构建目标组、`BuildOptions`、场景构建顺序）。
+//! - [`build_report`]：Unity `BuildReport` / `BuildSummary`（构建阶段、产物大小、结果）。
 //! - [`property_drawer`]：Unity `PropertyDrawer` / `PropertyAttribute` 的字段渲染声明
 //!   （`[Range]` / `[TextArea]` / `[ColorUsage]` / `[CustomPropertyDrawer]`）。
 //!
@@ -36,6 +37,7 @@ pub mod asset_importer;
 pub mod asset_ops;
 pub mod assets;
 pub mod build_profile;
+pub mod build_report;
 pub mod editor_application;
 pub mod editor_window;
 pub mod play;
@@ -72,6 +74,9 @@ pub use asset_database::{
     save_assets, ASSETS_FOLDER,
 };
 pub use build_profile::{read_build_profile, target_group, BuildOptions, BuildProfile, BuildScene};
+pub use build_report::{
+    file_size, BuildFile, BuildFileRole, BuildReport, BuildResult, BuildStep, BuildSummary,
+};
 pub use editor_application::{
     application_path, data_path, engine_version, project_path, streaming_assets_path,
     EditorApplicationState, PlayModeState,

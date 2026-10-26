@@ -12,10 +12,10 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 
 use prism_editor_api::{
-    AssetInfo, AssetMutation, AssetRef, DocKind, EditorWindowDescriptor, EntityPreset,
-    InstantiateResult, MoveResult, PlayableScene, PrefabInstanceInfo, ProjectSettingsData,
-    RenderSettingsData, Scene, SceneEntry, SceneListEntry, ScenePackageStatus, SceneTemplate,
-    Schema, SelectionFilter, SelectionMode, SelectionState,
+    AssetInfo, AssetMutation, AssetRef, BuildFileRole, BuildReport, DocKind, EditorWindowDescriptor,
+    EntityPreset, InstantiateResult, MoveResult, PlayableScene, PrefabInstanceInfo,
+    ProjectSettingsData, RenderSettingsData, Scene, SceneEntry, SceneListEntry, ScenePackageStatus,
+    SceneTemplate, Schema, SelectionFilter, SelectionMode, SelectionState,
 };
 use tauri::{Emitter, Manager, State};
 
@@ -971,6 +971,8 @@ struct BuildProjectResult {
     exe: String,
     output_dir: String,
     duration_ms: u64,
+    /// Unity `BuildReport`：构建阶段耗时 + 产物大小。
+    report: BuildReport,
 }
 
 fn game_project_manifest(root: &Path) -> Result<PathBuf, String> {
@@ -1066,9 +1068,13 @@ fn build_project_blocking(
         options.profile,
         manifest.display()
     ));
+    let cargo_started = std::time::Instant::now();
     log.push_str(&run_cargo_build(&root, &manifest, release)?);
+    let cargo_elapsed = cargo_started.elapsed();
     log.push_str("\n==> build-scenes\n");
+    let pipeline_started = std::time::Instant::now();
     log.push_str(&run_pipeline(&root, &["build-scenes"])?);
+    let pipeline_elapsed = pipeline_started.elapsed();
 
     let exe_name = if cfg!(windows) {
         "prisma.exe"
@@ -1094,20 +1100,19 @@ fn build_project_blocking(
     std::fs::create_dir_all(&output_dir)
         .map_err(|error| format!("无法创建输出目录 {}: {error}", output_dir.display()))?;
 
+    let collect_started = std::time::Instant::now();
     let output_exe = output_dir.join(exe_name);
     std::fs::copy(&bin, &output_exe).map_err(|error| format!("复制游戏二进制失败: {error}"))?;
-    copy_if_exists(
-        &root.join("assets/scenes.pak"),
-        &output_dir.join("assets/scenes.pak"),
-    );
+    let scene_package = output_dir.join("assets/scenes.pak");
+    let scene_package_meta = output_dir.join("assets/scenes.pak.meta.json");
+    let settings = output_dir.join("assets/settings.toml");
+    copy_if_exists(&root.join("assets/scenes.pak"), &scene_package);
     copy_if_exists(
         &root.join("assets/scenes.pak.meta.json"),
-        &output_dir.join("assets/scenes.pak.meta.json"),
+        &scene_package_meta,
     );
-    copy_if_exists(
-        &root.join("assets/settings.toml"),
-        &output_dir.join("assets/settings.toml"),
-    );
+    copy_if_exists(&root.join("assets/settings.toml"), &settings);
+    let collect_elapsed = collect_started.elapsed();
 
     log.push_str(&format!("\n==> 输出\n{}\n", output_exe.display()));
 
@@ -1125,11 +1130,31 @@ fn build_project_blocking(
         log.push_str("==> 已启动构建产物\n");
     }
 
+    let mut report = BuildReport::new(
+        output_dir.to_string_lossy(),
+        "windows",
+        started.elapsed().as_millis() as u64,
+    )
+    .with_step("cargo build", cargo_elapsed)
+    .with_step("build-scenes", pipeline_elapsed)
+    .with_step("collect", collect_elapsed)
+    .with_file(&output_exe, BuildFileRole::Executable);
+    if scene_package.is_file() {
+        report = report.with_file(&scene_package, BuildFileRole::ScenePackage);
+    }
+    if settings.is_file() {
+        report = report.with_file(&settings, BuildFileRole::Settings);
+    }
+    if scene_package_meta.is_file() {
+        report = report.with_file(&scene_package_meta, BuildFileRole::Metadata);
+    }
+
     Ok(BuildProjectResult {
         output: log,
         exe: output_exe.to_string_lossy().into_owned(),
         output_dir: output_dir.to_string_lossy().into_owned(),
         duration_ms: started.elapsed().as_millis() as u64,
+        report,
     })
 }
 

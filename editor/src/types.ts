@@ -286,11 +286,55 @@ export interface BuildProjectOptions {
   runAfter: boolean;
 }
 
+/** Unity `BuildResult`：一次构建的最终结果。 */
+export type BuildResult = "succeeded" | "failed" | "cancelled";
+
+/** Unity `BuildFile.role`：产物分类。 */
+export type BuildFileRole =
+  | "executable"
+  | "scenePackage"
+  | "settings"
+  | "metadata"
+  | "other";
+
+/** Unity `BuildFile`：一个产物文件。 */
+export interface BuildFile {
+  path: string;
+  role: BuildFileRole;
+  sizeBytes: number;
+}
+
+/** Unity `BuildStep`：一个构建阶段（编译 / 烤场景 / 收集产物）。 */
+export interface BuildStep {
+  name: string;
+  durationMs: number;
+}
+
+/** Unity `BuildSummary`：构建结果 + 体积 + 耗时。 */
+export interface BuildSummary {
+  result: BuildResult;
+  outputPath: string;
+  platform: string;
+  totalSizeBytes: number;
+  totalTimeMs: number;
+  totalErrors: number;
+  totalWarnings: number;
+}
+
+/** Unity `BuildReport`：摘要 + 阶段 + 产物。 */
+export interface BuildReport {
+  summary: BuildSummary;
+  steps: BuildStep[];
+  files: BuildFile[];
+}
+
 export interface BuildProjectResult {
   output: string;
   exe: string;
   outputDir: string;
   durationMs: number;
+  /** Unity `BuildReport`：构建阶段耗时 + 产物大小。 */
+  report: BuildReport;
 }
 
 /** 离线 GI 烘焙参数（`prism-build-pipeline bake-gi`）。 */
