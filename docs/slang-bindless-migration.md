@@ -1,39 +1,37 @@
 # Slang 工具链 + Bindless 迁移指南
 
-本文档记录 PrismaRev 引入 **Slang shader 工具链** 和 **Bindless（descriptor-indexing）纹理表** 的落地情况，以及需要在**有 slangc 的桌面/CI 机器**上完成的收尾步骤。
+本文档记录 PrismaRev 引入 **Slang shader 工具链** 与 **Bindless（descriptor-indexing）纹理表** 的过程，以及现在维护它们要用到的命令和文件位置。
 
-> 背景：改动在 Termux/aarch64 上开发，那里 `cargo check`/`cargo test -p prism-render` 全绿，但官方 `slangc` 是 glibc 二进制、无法在 Termux 原生运行。因此 shader 编译（`.slang -> .spv` + 反射 JSON）必须在桌面/CI 完成，`.spv` 与生成的 Rust 绑定 checked-in 后手机端照常构建。
+> 背景：最初改动在 Termux/aarch64 上开发，那里 `cargo check`/`cargo test -p prism-render` 全绿，但官方 `slangc` 是 glibc 二进制、无法在 Termux 原生运行。因此 shader 编译（`.slang -> .spv` + 反射 JSON）在桌面/CI 完成；`.spv` 与生成的 Rust 绑定 checked-in 后手机端照常构建。
 
 ---
 
 ## 一、Slang 工具链
 
-### 新增文件
+### 文件布局
 ```
-shaders/slang/common.slang     # 共享类型 (FrameUBO / 顶点流 / varyings)
-shaders/slang/mesh.slang       # = mesh.vert + mesh.frag (Blinn-Phong)
-shaders/slang/pbr.slang        # = pbr.frag (Cook-Torrance + IBL)
-shaders/slang/gizmo.slang      # = gizmo.vert + gizmo.frag
-shaders/slang/overlay.slang    # = overlay.vert + overlay.frag
-shaders/slang/bindless.slang   # PBR 的 bindless 变体 (见第二节)
-shaders/compile.sh             # slangc 编译脚本 (.spv + reflection JSON)
-shaders/reflection/*.json      # 反射 JSON (桌面 slangc 生成；仓库内是预留样例)
-xtask/                         # 反射 JSON -> Rust 绑定 codegen 工具
-crates/prism-render/src/shader_bindings.rs  # @generated 绑定常量
+assets/shaders/slang/*.slang              # 每个模块一个文件（common.slang 提供共享类型）
+assets/shaders/compile.sh                 # slangc 编译脚本 (.spv + reflection JSON)
+assets/shaders/reflection/*.json          # slangc 产出的反射 JSON（checked-in，驱动 codegen）
+assets/shaders/*.spv                      # 编译产物（gitignore，include_bytes! 进二进制）
+crates/xtask/                             # 反射 JSON -> Rust 绑定 codegen（独立 workspace）
+crates/prism-render/src/shader_bindings/   # @generated：每个 shader 模块一个 .rs + mod.rs
 ```
 
-原有 GLSL（`shaders/*.vert/*.frag`）与其 `.spv` **保留共存**，现有渲染不受影响。
+迁移完成后原来的 GLSL 源（`*.vert` / `*.frag`）已删除，`assets/shaders/` 下只剩它们的 `.spv`。
 
 ### 绑定约定（`[[vk::binding(binding, set)]]`）
-| shader | set | binding | 资源 | 类型 |
-|--------|-----|---------|------|------|
-| mesh/pbr | 0 | 0 | FrameUBO | UNIFORM_BUFFER |
-| pbr | 1 | 0 | envCube | COMBINED_IMAGE_SAMPLER (samplerCube) |
-| overlay | 0 | 0 | fontTex | COMBINED_IMAGE_SAMPLER (sampler2D) |
-| bindless | 0 | 0 | FrameUBO | UNIFORM_BUFFER |
-| bindless | 2 | 0 | bindlessCubes[] | 运行时数组 COMBINED_IMAGE_SAMPLER |
 
-Push constant 大小：mesh=64, pbr=92, gizmo=64, bindless=96。**与 Rust `#[repr(C)]` 镜像字节对齐**（有单测校验 offset）。
+各 set 的分配以 `.slang` 源码为准（Rust 侧的 `shader_bindings` 由同一份反射生成，不会漂）：
+
+| set | 资源 |
+|-----|------|
+| 0 | frame UBO / materials / lights（skybox 复用这里的 IBL `envCube`） |
+| 1 | bindless 纹理表（合并 sampler + SRV 数组） |
+| 2 | IBL（env / irradiance / prefiltered） |
+| 3 | shadow map |
+
+Push constant 结构**不手写**：全部来自 `shader_bindings::<module>::*`（`#[repr(C)]`，字段顺序与 Slang 反射一致）。由于 std140 尾部隐式 padding 不一定出现在反射里，`VkPushConstantRange` 的 `size` 有需要时显式写死（例如 144），不要依赖 `size_of`。
 
 > ⚠️ combined image sampler：Slang 用 `Sampler2D`/`SamplerCube`（不是分离的 `Texture2D + SamplerState`），以匹配 Rust 侧的 `COMBINED_IMAGE_SAMPLER` 描述符和原 GLSL。
 
@@ -45,76 +43,65 @@ Push constant 大小：mesh=64, pbr=92, gizmo=64, bindless=96。**与 Rust `#[re
 
 # 2) 编译 shader -> .spv + 反射 JSON
 export SLANGC=/path/to/slangc      # 或让 slangc 在 PATH 上
-bash shaders/compile.sh
-#   产出 shaders/*.spv 和 shaders/reflection/*.json（覆盖仓库里的预留样例）
+bash assets/shaders/compile.sh
+#   产出 assets/shaders/*.spv 和 assets/shaders/reflection/*.json
 
-# 3) 从真实反射重新生成 Rust 绑定
-cd xtask
-cargo run --bin shader-bindgen -- ../shaders/reflection ../crates/prism-render/src/shader_bindings.rs
+# 3) 从真实反射重新生成 Rust 绑定（输出目录会被整份重写：每模块一个 .rs + mod.rs）
+cd crates/xtask
+cargo run --bin shader-bindgen -- ../../assets/shaders/reflection ../../crates/prism-render/src/shader_bindings
+cd ../..
 
 # 4) 校验
-cd .. && cargo test -p prism-render
+cargo test -p prism-render
 ```
 
-> `shaders/reflection/*.json` 目前是**手写预留样例**（结构与 slangc `-reflection-json` 输出一致），让 xtask 和 CI 在没有 slangc 时也能跑通端到端。真实 slangc 产出会覆盖它们；若字段名有出入，调整 `xtask/src/shader_bindgen.rs` 的 serde 结构即可。
+> `assets/shaders/reflection/*.json` 是**真实 slangc 产出**并 checked-in：没有 slangc 的机器（Termux / Android 构建机）也能跑 codegen，桌面/CI 重新编一遍由 drift guard 比对（见文末 CI 一节），手改反射 JSON 会在那里挂掉。
+>
+> 反过来，`assets/shaders/*.spv` 是 gitignore 的：**每个新 worktree 或新克隆都要先 `bash assets/shaders/compile.sh`**，否则 `include_bytes!` 找不到文件、`prism-render` 相关编译直接失败。
 
 ### xtask 为什么是独立 crate（不是 build.rs）
 - `build.rs` 每次 `cargo build` 都跑 → 会强制依赖 slangc → **手机端构建直接崩**。
-- xtask 在 workspace `exclude` 列表里，默认 `cargo check`/`build` **完全不碰它**，生成的 `shader_bindings.rs` checked-in。
-- 运行方式：`cd xtask && cargo run --bin shader-bindgen -- <反射目录> <输出.rs>`（不能用 `cargo run -p xtask`，因为它被 exclude 了）。
+- xtask 在 workspace `exclude` 列表里，默认 `cargo check`/`build` **完全不碰它**，生成的 `shader_bindings/` checked-in。
+- 运行方式：`cd crates/xtask && cargo run --bin shader-bindgen -- <反射目录> <输出目录>`（不能用 `cargo run -p xtask`，因为它被 exclude 了）。
 
 ---
 
 ## 二、Bindless（descriptor-indexing）
 
 ### 设计
-新增 `crates/prism-render/src/bindless.rs`：一个 `BindlessTextureTable` —— 单个大描述符集，含一个**运行时大小的 `COMBINED_IMAGE_SAMPLER` 数组**（默认容量 1024）。Shader 用 `u32` handle 索引（`bindless.slang`），材质/纹理切换不再需要重绑描述符集。
+`crates/prism-render/src/bindless.rs` 里的 `BindlessTextureTable`：一个大的描述符集，含一个**运行时大小的 `COMBINED_IMAGE_SAMPLER` 数组**。Shader 用 `u32` handle 索引，材质/纹理切换不再需要重绑描述符集。
 
 Flags：`PARTIALLY_BOUND | UPDATE_AFTER_BIND | VARIABLE_DESCRIPTOR_COUNT`，配合 `runtime_descriptor_array` + `shader_sampled_image_array_non_uniform_indexing`。
 
-### 改动清单
-- `context.rs`：`rt_caps.descriptor_indexing` 为真时，额外开启 5 个 descriptor-indexing 子特性（runtime array / partially bound / update-after-bind / variable count / non-uniform indexing）。
-- `renderer.rs`：构造时创建 `BindlessTextureTable`（容量 1024），把 IBL cubemap 注册进去得到 `ibl_bindless_handle`；新增 `bindless()` / `bindless_mut()` / `ibl_bindless_handle()` 访问器。
-- `ibl.rs`：新增 `image_view()` / `sampler()` 访问器，供注册使用。
-- `pbr_push.rs`：新增 `PbrBindlessPushConstants`（96 字节，多一个 `env_handle: u32`），带 offset 单测。
-- `bindless.slang`：PBR 的 bindless 变体，从 set 2 的运行时数组按 `env_handle` 用 `NonUniformResourceIndex` 采样。
-
-### 关键：这是**增量**改造，不是替换
-现有每资源独立描述符集（`descriptor.rs` / `ibl.rs` set-1 cubemap / `overlay.rs`）**全部保留可用**。bindless 表是并行新增的基础设施。这样做的原因：renderer.rs 有 995 行，在无法看到渲染结果的环境下把绑定全推倒重写风险极高。
-
-### 桌面/真机上完成 bindless PBR 迁移（需你验证渲染结果）
-当前 bindless 表已创建、IBL cubemap 已注册，但 **PBR pipeline 仍走老的 set-1 路径**。要切到 bindless：
-
-1. **编 bindless shader**：`compile.sh` 已包含 `bindless.slang`，产出 `bindless_pbr.frag.spv`（确认脚本里的 entry/stage）。
-2. **建 bindless PBR pipeline**：pipeline layout 用 `[descriptor_layout.layout(set0), <未用>(set1 预留或跳过), bindless.layout(set2)]`。
-   - 注意：Vulkan set 索引必须连续或用空 layout 填。若想让 bindless 表在 set 2，set 1 需要一个空 descriptor set layout 预留；或把 bindless 表改到 set 1（同时改 `bindless.slang` 的 `[[vk::binding(0,1)]]`）。**推荐后者**（少一个空集）。
-3. **push constant** 换成 `PbrBindlessPushConstants`（range size 96），填入 `env_handle = renderer.ibl_bindless_handle().0`。
-4. **每帧绑定** bindless set：`cmd_bind_descriptor_sets(..., set_index, &[table.set], &[])`，替代原来绑 `ibl.descriptor_set`。
-5. **验证**：桌面跑起来对比 IBL 反射/高光是否与老路径一致；真机（Android Vulkan）确认设备支持这些 descriptor-indexing 子特性（多数新 GPU 支持，老 Mali/Adreno 可能缺 update-after-bind，需要 fallback 到老路径）。
+### 现状
+- `context.rs`：`rt_caps.descriptor_indexing` 为真时开启 5 个 descriptor-indexing 子特性（runtime array / partially bound / update-after-bind / variable count / non-uniform indexing）。
+- 纹理表由 `RenderTextureManager` 持有（`bindless()` / `bindless_mut()`），`ForwardPass` 只借用它的 set + layout（set 1）；IBL cubemap 与 BRDF LUT 在启动/场景切换时注册进去换成 handle。
+- **PBR 已经走 bindless**：`scene_frag.slang` 从 set 1 的运行时数组采样，push constant 用生成的 `PbrBindlessPushConstants`（96 字节，多一个 `env_handle: u32`），采样走 `NonUniformResourceIndex`。
+- 老的独立描述符集（`descriptor.rs`、`ibl.rs` 的 cubemap set、`external_overlay.rs`）**全部保留可用**：它们是给不支持 descriptor-indexing 的设备和其他 pass 用的，不是遗留待删代码。
+- 落地顺序是「先加表、再切 pipeline」的增量改造——当时 renderer 体量大，在没有可视化验证的环境里整体重写绑定风险太高。
 
 ### 移动端注意
-- 并非所有 Android GPU 都支持全套 descriptor-indexing。`context.rs` 只在 `descriptor_indexing` cap 为真时开启；建议再加一层 runtime 检查：不支持时 fallback 到现有 set-1 cubemap 路径（老路径已保留，天然可 fallback）。
-- `UPDATE_AFTER_BIND` 在部分移动驱动上支持较弱，真机务必验证。
+- 并非所有 Android GPU 都支持全套 descriptor-indexing。`context.rs` 只在 `descriptor_indexing` cap 为真时开启；设备缺 `UPDATE_AFTER_BIND` 一类子特性时应回退到现有独立描述符集路径（老路径已保留，天然可 fallback），真机务必验证。
+- `UPDATE_AFTER_BIND` 在部分移动驱动上支持较弱。
 
 ---
 
-## 验证状态（Termux/aarch64）
+## 验证状态（迁移当时，Termux/aarch64 快照）
 - `cargo check -p prism-render` ✅
 - `cargo test -p prism-render --lib` ✅ 25 passed
-- `xtask` 端到端生成 `shader_bindings.rs` ✅（5 个 shader 模块）
-- `prism-android` 在非 Android target 上编不过是**既有问题**（android-activity 需 NDK target），与本次改动无关。
+- `xtask` 端到端生成绑定 ✅
+- 当时的 `prism-android` crate 在非 Android target 上编不过（android-activity 需要 NDK target），与本次改动无关。该 crate 后来拆成 `prism-app` + 用户项目 `projects/prisma`，同样的限制仍然成立：`prism-app` 不进 desktop CI job。
 
 ## CI（.github/workflows/ci.yml）
-5 个 job，全并行（除依赖）：
-1. **lint** — fmt + clippy（report-only，因既有代码未格式化；可在仓库统一 `cargo fmt --all` 后收紧为 `-D warnings`）
-2. **desktop** — `cargo build` + `cargo test`（prism-ecs/render/engine/prisma）
-3. **shaders** — slangc 编 `.spv` + 反射，xtask 重生成绑定，**drift guard**（spv/绑定与源码不符则 fail）
-4. **android-rust** — cargo-ndk 交叉编 `prism-android` arm64 cdylib（CI 上 `aarch64-linux-android` target）
-5. **android-apk** — Gradle assembleDebug，产出 debug APK（仅 push 到 master/dev 时跑，避免 PR 烧构建时长）
+4 个 job：
+1. **changes** — doc-only 快速通道：diff 只落在 `docs/`、`*.md`、`LICENSE*`、`.gitignore` 时其余 job 跳过（跳过的 job 仍报 Success，保持 required checks 可合并）。
+2. **lint** — `cargo fmt --all -- --check`；desktop crates 的 `clippy --all-targets -- -D warnings`（`prism-ecs/render/engine/platform`）；`xtask` 因为被 workspace exclude，单独 fmt + clippy。
+3. **desktop** — `cargo build/test --locked -p prism-ecs -p prism-render -p prism-engine -p prism-platform`。`prism-app` 需要 NDK target，因此不在这个 job 里。
+4. **shaders** — slangc 编 `.spv` + 反射，`shader-bindgen` 从新反射重生成绑定，**drift guard**（committed 绑定与真实反射不符则 fail），并把 `spirv` / `slang-reflection-real` 作为 artifact 上传。
 
-> 注意：`.spv` 是 `include_bytes!` 编进 Rust 的（见 renderer.rs），所以 shaders job 的 drift guard 是硬保证——谁改了 `.slang` 忘了重编 spv，CI 直接挂。
-> prism-engine 经 winit 间接依赖 android-activity，但只在 `aarch64-linux-android` target 才启用；desktop job 在 CI 的 x86_64 runner 上正常。
+> 没有 Android job：APK/`.so` 由桌面上的 `scripts/build-android.ps1` 产出（见 `AGENTS.md` 的「Android packaging chain」）。
+> `.spv` 是 `include_bytes!` 编进 Rust 的，所以 shaders job 的 drift guard 是硬保证——谁改了 `.slang` 忘了重编 spv，CI 直接挂。
 
 ## 资产
-`assets/fbx/` 已拷入小资产：`cornell-box.fbx`、`cube-coord.fbx`、`cornell-box.zip`（含贴图 + coord.fbx）。
-`sponza.zip`(110MB)/`sponza-1.zip`(99MB) 因网络对 GitHub 大文件的限制未拷；需要时在桌面/CI 用 `just fetch-res` 等价流程拉取（见 TruvisRenderer `resources.toml`）。
+`assets/fbx/`：`coord.fbm/`、`coord.fbx`、`cornell-box.fbx`、`cube-coord.fbx`。
+`sponza.zip`(110MB)/`sponza-1.zip`(99MB) 因 GitHub 大文件限制未拷；需要时在桌面/CI 用 `just fetch-res` 等价流程拉取（见 TruvisRenderer `resources.toml`）。
