@@ -126,6 +126,11 @@ jobs:
           cargo fmt -- --check
           cargo clippy --all-targets -- -D warnings
 
+      # `derive` / `glam` 必须真的是可选特性：关掉默认特性后仍要能编译。
+      # 没有这条检查时，`#[cfg(...)]` 一漏就只在有人手动跑时才会暴露。
+      - name: check prism-reflect without default features
+        run: cargo check -p prism-reflect --no-default-features
+
   # ---------------------------------------------------------------------------
   # 2. Desktop build + test. The core correctness gate we can fully run in CI.
   # ---------------------------------------------------------------------------
