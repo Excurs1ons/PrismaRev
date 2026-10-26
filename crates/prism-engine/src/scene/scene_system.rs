@@ -104,6 +104,12 @@ impl<'a> SceneReadView<'a> {
             .collect()
     }
 
+    /// 提取 2D 精灵绘制列表（已按 `sorting_layer` → `order_in_layer` →
+    /// 世界 `z` → 实体 id 排序，先画远、后画近）。
+    pub fn sprite_items(&self) -> Vec<prism_render::SpriteDrawItem> {
+        super::systems::render::scene_sprite_system(self.world)
+    }
+
     /// 提取渲染所需的扁平绘制列表，不暴露可变 ECS 访问。
     pub fn draw_items(&self) -> Vec<prism_render::DrawItem> {
         self.world

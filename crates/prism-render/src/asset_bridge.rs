@@ -21,10 +21,16 @@ pub struct MaterialResolveData {
 pub struct AssetResolveRequest {
     pub mesh: Option<MeshUploadInput>,
     pub material: Option<MaterialResolveData>,
+    /// 2D 精灵贴图（`SpriteRenderer.sprite_path` 解析结果）。
+    pub texture: Option<TextureUploadInput>,
 }
 
 /// 渲染线程完成上传后回传的句柄（纯数据，Send）。
 pub struct AssetResolveResult {
     pub mesh_handle: Option<MeshHandle>,
     pub material_slot: Option<u32>,
+    /// 精灵贴图的 bindless SRV 槽位。
+    pub texture_slot: Option<u32>,
+    /// 精灵贴图的像素尺寸 `[width, height]`（与 `texture_slot` 同时有效）。
+    pub texture_size: Option<[u32; 2]>,
 }

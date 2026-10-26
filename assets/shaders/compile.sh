@@ -177,6 +177,12 @@ compile_stage ui_overlay vertexMain vertex
 compile_stage ui_overlay fragmentMain fragment
 emit_reflection ui_overlay vertexMain vertex fragmentMain fragment
 
+# sprites: vertex + fragment (2D sprite quads sampled through the bindless
+# texture table, drawn inside ForwardPass' HDR render pass).
+compile_stage sprites vertexMain vertex
+compile_stage sprites fragmentMain fragment
+emit_reflection sprites vertexMain vertex fragmentMain fragment
+
 # rt_render: vertex + fragment — offscreen shader that renders a 4x4 bitmap
 # pattern (from a CPU-generated 16-bit value) into a RenderTexture. The shader
 # is target-agnostic; RenderToTexturePass binds the RT view as the attachment.

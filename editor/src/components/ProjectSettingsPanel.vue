@@ -120,6 +120,7 @@ onMounted(() => void load());
           <select v-model.number="render.tonemapMode">
             <option :value="0">Reinhard</option>
             <option :value="1">ACES</option>
+            <option :value="2">直通（2D 像素画）</option>
           </select>
         </label>
         <label>

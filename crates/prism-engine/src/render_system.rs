@@ -94,6 +94,7 @@ pub fn extract_frame_packet(
     let draw_items: Vec<DrawItem> = scene_view.draw_items();
     let gizmos = scene_view.gizmo_instances();
     let skybox = scene_view.skybox_settings();
+    let sprite_items = scene_view.sprite_items();
 
     // 3. 构建 the UI 叠加 from the ECS 世界 (includes UiQuad/TextCmd).
     let ui_overlay = crate::ui::convert_ui_draw_list_to_overlay(world);
@@ -103,6 +104,7 @@ pub fn extract_frame_packet(
         draw_items,
         gizmos,
         skybox,
+        sprite_items,
         ui_overlay,
         // 渲染设置由应用层（`App`）在发送前覆盖；引擎默认值保证独立使用
         // `extract_frame_packet` 时仍然可用。
@@ -123,6 +125,9 @@ pub struct FramePacket {
     pub gizmos: Vec<GizmoInstance>,
     /// ECS `Skybox` parameters for this frame (`None` = do not draw).
     pub skybox: Option<SkyboxSettings>,
+    /// ECS `SpriteRenderer` entities resolved into flat 2D draw records
+    /// (already sorted back-to-front).
+    pub sprite_items: Vec<prism_render::SpriteDrawItem>,
     pub ui_overlay: UiOverlayInput,
     /// 应用层渲染设置（调试标志 / 色调映射 / PT 参数）。主线程每帧写入，
     /// 渲染线程只读——保证 `App::render_settings` 的修改（快捷键、项目配置）
@@ -336,6 +341,7 @@ pub fn render_system(
         ref draw_items,
         ref gizmos,
         skybox,
+        ref sprite_items,
         ref ui_overlay,
         settings: _,
     } = *packet;
@@ -406,6 +412,7 @@ pub fn render_system(
     let input = prism_render::FrameInput {
         draw_items,
         gizmos,
+        sprite_items,
         skybox,
         frame_data: &frame_data,
         light_view_proj: light_view_proj.to_cols_array_2d(),

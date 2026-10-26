@@ -174,6 +174,7 @@ impl SkyboxPass {
                 // Disable 深度 写入 so the sky never occludes scene geometry;
                 // 深度 test LEQUAL lets it 绘制 where 深度 == 1.0 (cleared).
                 depth_write_enable: Some(false),
+                depth_test_enable: None,
                 color_attachment_count: None,
                 color_blend_attachments: Some(&blend_attachments),
                 front_face: None,

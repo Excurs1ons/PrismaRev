@@ -579,6 +579,7 @@ impl GtaoPass {
             depth_bias_constant_factor: None,
             depth_bias_slope_factor: None,
             depth_write_enable: Some(false),
+            depth_test_enable: None,
             color_attachment_count: None,
             color_blend_attachments: Some(std::slice::from_ref(&blend_attachment)),
             front_face: None,

@@ -1,0 +1,350 @@
+//! 2D 精灵通道。
+//!
+//! [`SpritePass`] 把 ECS 收集来的精灵实例（[`SpriteDrawItem`]）作为
+//! **实例化四边形**绘制到 ForwardPass 的 HDR 颜色附件里——和
+//! [`crate::skybox_pass::SkyboxPass`] 一样，它不拥有自己的 render pass /
+//! 帧缓冲，而是在 ForwardPass 已开启的 pass 内记录命令。
+//!
+//! 设计要点（见 `docs/plans/2026-10-27-cozy-fishing-design.md`）：
+//!
+//! - **一次 draw call**：所有精灵共享一个实例缓冲，纹理索引进 bindless 表；
+//! - **关闭深度测试/写入**：2D 的前后关系由 CPU 侧排序
+//!   （`sorting_layer` → `order_in_layer` → `z`）保证，不依赖深度缓冲；
+//! - **Nearest 采样**：像素画在 `sprites.slang` 里固定用 bindless 表里的
+//!   nearest 采样器，帧矩形由 CPU 预先 clamp，避免精灵表串色；
+//! - 输出到线性 HDR 目标，由 `PostPass` 在 `tonemap_mode = 2`（直通）时
+//!   保持原始调色板。
+//!
+//! 描述符布局：绑定 ForwardPass 共享的 bindless 表，但放在 **set 0**
+//! （该布局对象与集合索引无关；scene 管线把它绑在 set 1）。
+
+use std::mem::size_of;
+
+use anyhow::{Context as _, Result};
+use ash::vk;
+
+use crate::buffer::{create_buffer, BufferUsage, MemoryProperties};
+use crate::context::VulkanContext;
+use crate::pipeline::{GraphicsPipeline, PipelineDesc};
+use crate::render_graph::SpriteDrawItem;
+use crate::shader;
+use crate::shader_bindings::sprites as bindings;
+
+const SPRITE_VERT_SPV: &[u8] = include_bytes!("../../../assets/shaders/sprites.vert.spv");
+const SPRITE_FRAG_SPV: &[u8] = include_bytes!("../../../assets/shaders/sprites.frag.spv");
+
+/// 初始实例容量（按需增长）。
+const INITIAL_CAPACITY: u32 = 256;
+
+/// 单实例顶点数据 —— 必须与 `sprites.slang` 的 `SpriteVertexIn` 一致。
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct SpriteInstance {
+    /// 世界矩阵（含精灵世界尺寸与 pivot 偏移）。
+    model: [[f32; 4]; 4],
+    /// UV 矩形 `(u0, v0, u1, v1)`。
+    uv_rect: [f32; 4],
+    /// 线性 RGBA 乘算色。
+    color: [f32; 4],
+    /// bindless 纹理索引。
+    texture: u32,
+    _pad: [u32; 3],
+}
+
+impl SpriteInstance {
+    fn binding_description() -> vk::VertexInputBindingDescription {
+        vk::VertexInputBindingDescription::default()
+            .binding(0)
+            .stride(size_of::<Self>() as u32)
+            .input_rate(vk::VertexInputRate::INSTANCE)
+    }
+
+    fn attribute_descriptions() -> [vk::VertexInputAttributeDescription; 7] {
+        let vec4 = |location: u32, offset: u32| {
+            vk::VertexInputAttributeDescription::default()
+                .location(location)
+                .binding(0)
+                .format(vk::Format::R32G32B32A32_SFLOAT)
+                .offset(offset)
+        };
+        [
+            vec4(0, 0),
+            vec4(1, 16),
+            vec4(2, 32),
+            vec4(3, 48),
+            vec4(4, 64),
+            vec4(5, 80),
+            vk::VertexInputAttributeDescription::default()
+                .location(6)
+                .binding(0)
+                .format(vk::Format::R32_UINT)
+                .offset(96),
+        ]
+    }
+}
+
+/// 2D 精灵实例化绘制通道。
+pub struct SpritePass {
+    pipeline: Option<GraphicsPipeline>,
+    /// 管线编译时使用的 render pass（ForwardPass 重建后需要重编）。
+    built_for_render_pass: Option<vk::RenderPass>,
+    instance_buffer: vk::Buffer,
+    instance_memory: vk::DeviceMemory,
+    instance_capacity: u32,
+    device: Option<ash::Device>,
+}
+
+impl SpritePass {
+    /// Creates an empty pass; the instance buffer is allocated lazily on the
+    /// first [`SpritePass::draw`] (ForwardPass is constructed without a
+    /// `VulkanContext`, so it cannot allocate GPU memory here).
+    pub fn new() -> Self {
+        Self {
+            pipeline: None,
+            built_for_render_pass: None,
+            instance_buffer: vk::Buffer::null(),
+            instance_memory: vk::DeviceMemory::null(),
+            instance_capacity: 0,
+            device: None,
+        }
+    }
+}
+
+impl Default for SpritePass {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SpritePass {
+    /// 在已开启的 render pass 内绘制 `items`（按给定顺序，先画先覆盖）。
+    ///
+    /// `bindless_set` / `bindless_layout` 由 ForwardPass 提供；`view_proj`
+    /// 是本帧世界→裁剪矩阵（2D 时即正交相机矩阵）。
+    pub fn draw(
+        &mut self,
+        device: &ash::Device,
+        context: &VulkanContext,
+        cmd: vk::CommandBuffer,
+        render_pass: vk::RenderPass,
+        bindless_set: vk::DescriptorSet,
+        bindless_layout: vk::DescriptorSetLayout,
+        view_proj: &[[f32; 4]; 4],
+        items: &[SpriteDrawItem],
+    ) -> Result<()> {
+        if items.is_empty() || bindless_set == vk::DescriptorSet::null() {
+            return Ok(());
+        }
+        self.ensure_pipeline(device, render_pass, bindless_layout)?;
+        self.grow(device, context, items.len() as u32)?;
+        self.upload(context, items)?;
+
+        let pipeline = self.pipeline.as_ref().expect("pipeline built above");
+
+        unsafe {
+            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.pipeline);
+            device.cmd_bind_descriptor_sets(
+                cmd,
+                vk::PipelineBindPoint::GRAPHICS,
+                pipeline.layout,
+                0,
+                std::slice::from_ref(&bindless_set),
+                &[],
+            );
+            device.cmd_push_constants(
+                cmd,
+                pipeline.layout,
+                vk::ShaderStageFlags::VERTEX,
+                0,
+                std::slice::from_raw_parts(
+                    view_proj as *const [[f32; 4]; 4] as *const u8,
+                    size_of::<[[f32; 4]; 4]>(),
+                ),
+            );
+            device.cmd_bind_vertex_buffers(cmd, 0, &[self.instance_buffer], &[0]);
+            // 6 vertices = 2 triangles, one instance per sprite.
+            device.cmd_draw(cmd, 6, items.len() as u32, 0, 0);
+        }
+
+        Ok(())
+    }
+
+    fn ensure_pipeline(
+        &mut self,
+        device: &ash::Device,
+        render_pass: vk::RenderPass,
+        bindless_layout: vk::DescriptorSetLayout,
+    ) -> Result<()> {
+        if self.pipeline.is_some() && self.built_for_render_pass == Some(render_pass) {
+            return Ok(());
+        }
+        self.device = Some(device.clone());
+        self.pipeline = None;
+
+        let vert_module =
+            shader::load_shader_module(device, SPRITE_VERT_SPV).context("SpritePass: vert")?;
+        let frag_module =
+            shader::load_shader_module(device, SPRITE_FRAG_SPV).context("SpritePass: frag")?;
+        let vert_entry = std::ffi::CString::new(bindings::ENTRY_VERTEX_MAIN).unwrap();
+        let frag_entry = std::ffi::CString::new(bindings::ENTRY_FRAGMENT_MAIN).unwrap();
+        let vert_stage = shader::shader_stage(
+            vk::ShaderStageFlags::VERTEX,
+            vert_module,
+            vert_entry.as_c_str(),
+        );
+        let frag_stage = shader::shader_stage(
+            vk::ShaderStageFlags::FRAGMENT,
+            frag_module,
+            frag_entry.as_c_str(),
+        );
+        let shader_stages = [vert_stage, frag_stage];
+
+        let binding_descs = [SpriteInstance::binding_description()];
+        let attr_descs = SpriteInstance::attribute_descriptions();
+
+        // Push constant = `SpritePush` (one mat4 = 64 bytes, vertex stage only).
+        let push = [vk::PushConstantRange::default()
+            .stage_flags(vk::ShaderStageFlags::VERTEX)
+            .offset(0)
+            .size(size_of::<bindings::SpritePush>() as u32)];
+
+        // ForwardPass' render pass has two color attachments (HDR color +
+        // view-space normal). Sprites blend into SV_Target0 and leave the
+        // normal target untouched (write mask empty), mirroring SkyboxPass.
+        let blend_attachments = [
+            vk::PipelineColorBlendAttachmentState::default()
+                .color_write_mask(vk::ColorComponentFlags::RGBA)
+                .blend_enable(true)
+                .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
+                .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
+                .color_blend_op(vk::BlendOp::ADD)
+                .src_alpha_blend_factor(vk::BlendFactor::ONE)
+                .dst_alpha_blend_factor(vk::BlendFactor::ZERO)
+                .alpha_blend_op(vk::BlendOp::ADD),
+            vk::PipelineColorBlendAttachmentState::default()
+                .color_write_mask(vk::ColorComponentFlags::empty())
+                .blend_enable(false),
+        ];
+
+        let pipeline = GraphicsPipeline::new(&PipelineDesc {
+            device,
+            shader_stages: &shader_stages,
+            vertex_binding_desc: &binding_descs,
+            vertex_attr_descs: &attr_descs,
+            descriptor_set_layouts: std::slice::from_ref(&bindless_layout),
+            push_constant_ranges: &push,
+            render_pass,
+            subpass: 0,
+            cull_mode: Some(vk::CullModeFlags::NONE),
+            depth_bias_enable: None,
+            depth_bias_constant_factor: None,
+            depth_bias_slope_factor: None,
+            // 2D 顺序由 CPU 排序决定：不测试也不写深度。
+            depth_write_enable: Some(false),
+            depth_test_enable: Some(false),
+            color_attachment_count: None,
+            color_blend_attachments: Some(&blend_attachments),
+            front_face: None,
+        })
+        .context("SpritePass: create pipeline")?;
+
+        unsafe {
+            device.destroy_shader_module(vert_module, None);
+            device.destroy_shader_module(frag_module, None);
+        }
+
+        self.pipeline = Some(pipeline);
+        self.built_for_render_pass = Some(render_pass);
+        Ok(())
+    }
+
+    fn grow(&mut self, device: &ash::Device, context: &VulkanContext, needed: u32) -> Result<()> {
+        if needed <= self.instance_capacity {
+            return Ok(());
+        }
+        let capacity = needed.next_power_of_two().max(INITIAL_CAPACITY);
+        // First allocation happens here (capacity == 0), so there is no old
+        // buffer to release yet.
+        let (buffer, memory) = create_buffer(
+            context,
+            capacity as vk::DeviceSize * size_of::<SpriteInstance>() as vk::DeviceSize,
+            BufferUsage::VERTEX_BUFFER,
+            MemoryProperties::HOST_VISIBLE | MemoryProperties::HOST_COHERENT,
+        )
+        .context("SpritePass: grow instance buffer")?;
+        unsafe {
+            if self.instance_buffer != vk::Buffer::null() {
+                device.destroy_buffer(self.instance_buffer, None);
+            }
+            if self.instance_memory != vk::DeviceMemory::null() {
+                device.free_memory(self.instance_memory, None);
+            }
+        }
+        self.instance_buffer = buffer;
+        self.instance_memory = memory;
+        self.instance_capacity = capacity;
+        Ok(())
+    }
+
+    fn upload(&self, context: &VulkanContext, items: &[SpriteDrawItem]) -> Result<()> {
+        let bytes = items.len() * size_of::<SpriteInstance>();
+        let instances: Vec<SpriteInstance> = items
+            .iter()
+            .map(|item| SpriteInstance {
+                model: item.model,
+                uv_rect: item.uv_rect,
+                color: item.color,
+                texture: item.texture,
+                _pad: [0; 3],
+            })
+            .collect();
+        unsafe {
+            let ptr = context
+                .device
+                .map_memory(
+                    self.instance_memory,
+                    0,
+                    bytes as vk::DeviceSize,
+                    vk::MemoryMapFlags::empty(),
+                )
+                .context("SpritePass: map instance memory")?;
+            std::ptr::copy_nonoverlapping(instances.as_ptr() as *const u8, ptr as *mut u8, bytes);
+            context.device.unmap_memory(self.instance_memory);
+        }
+        Ok(())
+    }
+
+    /// 交换链重建 / 销毁前释放 GPU 资源。
+    pub fn destroy(&mut self, device: &ash::Device) {
+        self.pipeline = None;
+        self.built_for_render_pass = None;
+        unsafe {
+            if self.instance_buffer != vk::Buffer::null() {
+                device.destroy_buffer(self.instance_buffer, None);
+                self.instance_buffer = vk::Buffer::null();
+            }
+            if self.instance_memory != vk::DeviceMemory::null() {
+                device.free_memory(self.instance_memory, None);
+                self.instance_memory = vk::DeviceMemory::null();
+            }
+        }
+        self.instance_capacity = 0;
+        self.device = None;
+    }
+}
+
+impl Drop for SpritePass {
+    fn drop(&mut self) {
+        if let Some(device) = self.device.take() {
+            self.pipeline = None;
+            unsafe {
+                if self.instance_buffer != vk::Buffer::null() {
+                    device.destroy_buffer(self.instance_buffer, None);
+                }
+                if self.instance_memory != vk::DeviceMemory::null() {
+                    device.free_memory(self.instance_memory, None);
+                }
+            }
+        }
+    }
+}

@@ -57,7 +57,8 @@ pub struct RenderSettings {
     /// `PBR_FLAG_*`). `0` = 法线 full-PBR 渲染 (all components on);
     /// `1 << bit` = isolate that one 分量 as a grayscale visualization.
     pub debug_flags: u32,
-    /// 色调映射 operator: 0 = Reinhard, 1 = ACES (Narkowicz).
+    /// 色调映射 operator: 0 = Reinhard, 1 = ACES (Narkowicz),
+    /// 2 = passthrough (2D 像素画：保留原始调色板，只做 saturate).
     pub tonemap_mode: u32,
     /// PostPass 调试 render-target viewer (Tab cycles). 0 = 法线 tonemapped
     /// 高动态范围 1 = linearized 深度 2 = view-space 法线
