@@ -337,7 +337,7 @@ impl GpuAssetResolver {
             log::warn!("load_texture_by_path: path '{path}' not in manifest");
             None
         })?;
-        self.load_texture_data(Some(id))
+        self.load_texture_data(Some(id), true)
     }
 
     /// CPU 段：加载单张纹理依赖 → `TextureUploadInput` 像素（或品红回退）。
@@ -563,6 +563,8 @@ mod tests {
                 AssetResolveResult {
                     mesh_handle: None,
                     material_slot: None,
+                    texture_slot: None,
+                    texture_size: None,
                 },
             )],
         );
