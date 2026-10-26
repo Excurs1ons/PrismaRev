@@ -695,6 +695,7 @@ async function handle(cmd: string, args: Record<string, unknown>): Promise<unkno
                   resolvePath("/preview", value) === target
                 ) {
                   refs.push({
+                    kind: "field",
                     scene: entry.name,
                     scenePath: entry.path,
                     entity: entity.name ?? `#${index}`,

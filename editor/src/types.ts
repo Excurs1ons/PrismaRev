@@ -114,6 +114,7 @@ export interface AssetMutation {
 
 /** 「某场景某字段引用了该资产」的记录。 */
 export interface AssetRef {
+  kind: "field" | "manifest";
   scene: string;
   scenePath: string;
   entity: string;

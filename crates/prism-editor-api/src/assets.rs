@@ -282,22 +282,25 @@ pub fn read_asset_text(
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct AssetRef {
-    /// 场景逻辑名。
+    /// 引用来源：`"field"` = 文档里的组件字段；`"manifest"` = `assets/scenes.toml` 条目。
+    pub kind: String,
+    /// 场景逻辑名（清单条目固定为 `scenes.toml`）。
     pub scene: String,
     /// 场景文件绝对路径。
     pub scene_path: String,
-    /// 实体名（无名时为 `#<index>`）。
+    /// 实体名（无名时为 `#<index>`；清单条目为条目名）。
     pub entity: String,
     pub entity_index: usize,
-    /// 组件规范名。
+    /// 组件规范名（清单条目为 `assets/scenes.toml`）。
     pub component: String,
-    /// 组件内字段路径（点号连接，数组下标用 `[i]`）。
+    /// 组件内字段路径（点号连接，数组下标用 `[i]`；清单条目为 `path`）。
     pub field: String,
     /// 实际写在该字段里的值（可能是相对路径）。
     pub value: String,
 }
 
-/// 扫描所有 `.scene.json`，找出引用 `target` 的字段。
+/// 扫描所有 `.scene.json` / `.prefab.json`，找出引用 `target` 的字段，
+/// 再补上 `assets/scenes.toml` 里指向该资产的构建清单条目。
 ///
 /// `target` 是**相对项目根**的路径。字段里的引用会按两种基准解析后比较：
 /// 1. 相对场景文件所在目录（引擎约定，如 `default.scene.json` 里的 `../valley.hdr`）；
@@ -311,7 +314,14 @@ pub fn asset_usage(project_root: &Path, target: &str) -> Result<Vec<AssetRef>, S
     }
     let mut refs = Vec::new();
 
-    for entry in crate::scene::list_scenes(project_root)? {
+    // 场景与预制体共用同一套文档形状，都要扫；预制体在 `assets/` 下是递归枚举的。
+    let mut documents = crate::scene::list_scenes(project_root)?;
+    documents.extend(crate::scene::list_docs(
+        project_root,
+        crate::scene::DocKind::Prefab,
+    )?);
+
+    for entry in documents {
         let doc = match crate::scene::read_scene_doc(Path::new(&entry.path)) {
             Ok(doc) => doc,
             Err(_) => continue,
@@ -346,6 +356,7 @@ pub fn asset_usage(project_root: &Path, target: &str) -> Result<Vec<AssetRef>, S
                         || resolve(project_root, &value) == target_abs;
                     if referenced {
                         refs.push(AssetRef {
+                            kind: "field".into(),
                             scene: entry.name.clone(),
                             scene_path: entry.path.clone(),
                             entity: entity_name.clone(),
@@ -360,6 +371,64 @@ pub fn asset_usage(project_root: &Path, target: &str) -> Result<Vec<AssetRef>, S
         }
     }
 
+    refs.extend(manifest_usage(project_root, &target_abs)?);
+    Ok(refs)
+}
+
+/// `assets/scenes.toml` 里指向该资产的条目。
+///
+/// 清单路径可以是 `.rscn`（cook 产物）或 `.scene.json`（作者文档），两者按同一个
+/// stem 比较——和 `build-scenes` 的约定一致；所以删除/重命名任一形式都能被看到。
+fn manifest_usage(project_root: &Path, target_abs: &str) -> Result<Vec<AssetRef>, String> {
+    #[derive(serde::Deserialize)]
+    struct Manifest {
+        #[serde(default)]
+        scenes: Vec<Entry>,
+    }
+    #[derive(serde::Deserialize)]
+    struct Entry {
+        #[serde(default)]
+        name: String,
+        #[serde(default)]
+        path: String,
+    }
+
+    let path = assets_dir(project_root).join("scenes.toml");
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return Ok(Vec::new());
+    };
+    let Ok(manifest) = toml::from_str::<Manifest>(&text) else {
+        return Ok(Vec::new());
+    };
+
+    let base = assets_dir(project_root);
+    let mut refs = Vec::new();
+    for (index, entry) in manifest.scenes.iter().enumerate() {
+        if entry.path.trim().is_empty() {
+            continue;
+        }
+        let trimmed = entry.path.trim_start_matches("./");
+        let stem = trimmed
+            .strip_suffix(".scene.json")
+            .or_else(|| trimmed.strip_suffix(".rscn"));
+        let mut candidates = vec![resolve(&base, trimmed)];
+        if let Some(stem) = stem {
+            candidates.push(resolve(&base, &format!("{stem}.scene.json")));
+            candidates.push(resolve(&base, &format!("{stem}.rscn")));
+        }
+        if candidates.iter().any(|candidate| candidate == target_abs) {
+            refs.push(AssetRef {
+                kind: "manifest".into(),
+                scene: "scenes.toml".into(),
+                scene_path: path.to_string_lossy().into_owned(),
+                entity: entry.name.clone(),
+                entity_index: index,
+                component: "assets/scenes.toml".into(),
+                field: "path".into(),
+                value: entry.path.clone(),
+            });
+        }
+    }
     Ok(refs)
 }
 
@@ -561,6 +630,68 @@ mod tests {
 
         // 无关字符串不产生引用。
         assert!(asset_usage(&root, "not_an_asset").unwrap().is_empty());
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn finds_references_in_prefabs() {
+        let root = temp_root("usage_prefab");
+        std::fs::create_dir_all(root.join("assets/models")).unwrap();
+        std::fs::create_dir_all(root.join("assets/prefabs")).unwrap();
+        std::fs::write(root.join("assets/models/a.gltf"), b"x").unwrap();
+        let doc = serde_json::json!({
+            "version": 1,
+            "entities": [{
+                "name": "Chair",
+                "parent": null,
+                "transform": { "translation": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
+                "components": {
+                    "prism_engine::scene::MeshRenderer": { "mesh_path": "../models/a.gltf" }
+                }
+            }]
+        });
+        std::fs::write(
+            root.join("assets/prefabs/chair.prefab.json"),
+            serde_json::to_string(&doc).unwrap(),
+        )
+        .unwrap();
+
+        let refs = asset_usage(&root, "assets/models/a.gltf").unwrap();
+        assert_eq!(refs.len(), 1, "got {refs:#?}");
+        assert_eq!(refs[0].kind, "field");
+        assert_eq!(refs[0].scene, "chair");
+        assert_eq!(refs[0].entity, "Chair");
+        assert!(refs[0].scene_path.ends_with("chair.prefab.json"));
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn finds_references_in_scene_manifest() {
+        let root = temp_root("usage_manifest");
+        std::fs::create_dir_all(root.join("assets/scenes")).unwrap();
+        std::fs::write(
+            root.join("assets/scenes.toml"),
+            "# build list\n[[scenes]]\nname = \"intro\"\npath = \"scenes/intro.rscn\"\n",
+        )
+        .unwrap();
+
+        // `.rscn` 与它的作者文档 `.scene.json` 视为同一个场景。
+        for target in ["assets/scenes/intro.rscn", "assets/scenes/intro.scene.json"] {
+            let refs = asset_usage(&root, target).unwrap();
+            assert_eq!(refs.len(), 1, "{target}: {refs:#?}");
+            assert_eq!(refs[0].kind, "manifest");
+            assert_eq!(refs[0].scene, "scenes.toml");
+            assert_eq!(refs[0].entity, "intro");
+            assert_eq!(refs[0].field, "path");
+            assert!(refs[0].scene_path.ends_with("scenes.toml"));
+        }
+
+        // 未登记的资产不产生清单引用。
+        assert!(asset_usage(&root, "assets/scenes/other.rscn")
+            .unwrap()
+            .is_empty());
 
         std::fs::remove_dir_all(&root).ok();
     }
