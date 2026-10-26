@@ -5,7 +5,9 @@
 //! - 只允许操作 `assets/` 下的相对路径，拒绝 `..`、绝对路径与构建产物目录；
 //! - 重命名/移动先扫描并计划引用改写，再执行文件系统操作，最后写回文档；
 //! - 引用保持作者原来的书写风格（场景目录相对 / 项目根相对），
-//!   因此 `../valley.hdr` 与 `assets/valley.hdr` 都会被改写成等价的新路径。
+//!   因此 `../valley.hdr` 与 `assets/valley.hdr` 都会被改写成等价的新路径；
+//! - 只有 schema 里**确实是资产路径**的字段（[`ASSET_PATH_FIELDS`]）会被改写，
+//!   实体名、UI 文本等恰好写着同一段路径的字符串保持原样。
 
 use std::collections::BTreeSet;
 use std::ffi::OsString;
@@ -323,6 +325,29 @@ impl Renamer {
     }
 }
 
+/// 组件里持有**资产路径**的字段名（`prism-scene` 组件 schema 的全量清单）。
+///
+/// 只有这些字段的字符串值参与引用改写：`.scene.json` 里其它字符串（`Name`、UI
+/// `Text.content`、材质/标签里恰好写着路径的文本）不是引用，改它们就是数据损坏。
+///
+/// 新增带路径的组件字段时要同步补进来 —— `asset_path_fields_cover_string_paths_in_schema`
+/// 会用 `prism-scene` 的注册表挡住漏加（不覆盖 `env_map` / `volume` / `prefab`
+/// 这类不以 `_path` 结尾的名字，所以别只靠测试）。
+const ASSET_PATH_FIELDS: [&str; 7] = [
+    "mesh_path",     // MeshRenderer
+    "material_path", // MeshRenderer
+    "sprite_path",   // SpriteRenderer
+    "hdr_path",      // Skybox
+    "env_map",       // EnvironmentLighting
+    "volume",        // GiConfig
+    "prefab",        // PrefabInstance
+];
+
+/// 作者 JSON 的字段名是否表示资产路径。
+fn is_asset_path_field(name: &str) -> bool {
+    ASSET_PATH_FIELDS.contains(&name)
+}
+
 struct RewritePlan {
     /// `(旧文档绝对路径, 改写后的 JSON)`。
     documents: Vec<(PathBuf, serde_json::Value)>,
@@ -348,7 +373,7 @@ fn plan_rewrites(project_root: &Path, renamer: &Renamer) -> Result<RewritePlan, 
         // 引用解析用旧目录；写给文档的路径用移动后的目录（目录整体重命名时两者不同）。
         let old_dir = old_abs.parent().unwrap_or(project_root);
         let write_dir = mapped_abs.parent().unwrap_or(old_dir);
-        let changed = rewrite_json(&mut value, old_dir, write_dir, project_root, &|abs| {
+        let changed = rewrite_json(&mut value, old_dir, write_dir, project_root, None, &|abs| {
             renamer.map(abs)
         });
         let old_rel = relative_path_string(project_root, &old_abs);
@@ -384,15 +409,24 @@ fn apply_plan(project_root: &Path, plan: RewritePlan, renamer: &Renamer) -> Resu
     Ok(plan.references)
 }
 
+/// 递归改写文档里的资产路径引用。
+///
+/// `field` 是当前字符串所在字段的名字（数组元素沿用外层字段名）。只有
+/// [`is_asset_path_field`] 认得的字段才当作引用；`None`（文档根或未命名的
+/// 嵌套值）一律不改。
 fn rewrite_json(
     value: &mut serde_json::Value,
     resolve_dir: &Path,
     write_dir: &Path,
     project_root: &Path,
+    field: Option<&str>,
     map: &dyn Fn(&Path) -> Option<PathBuf>,
 ) -> usize {
     match value {
         serde_json::Value::String(text) => {
+            if !field.is_some_and(is_asset_path_field) {
+                return 0;
+            }
             let abs_scene = lexical_abs(resolve_dir, text);
             let abs_root = lexical_abs(project_root, text);
             let (new_abs, root_style) = if let Some(mapped) = map(&abs_scene) {
@@ -418,11 +452,20 @@ fn rewrite_json(
         }
         serde_json::Value::Array(items) => items
             .iter_mut()
-            .map(|item| rewrite_json(item, resolve_dir, write_dir, project_root, map))
+            .map(|item| rewrite_json(item, resolve_dir, write_dir, project_root, field, map))
             .sum(),
         serde_json::Value::Object(fields) => fields
-            .values_mut()
-            .map(|item| rewrite_json(item, resolve_dir, write_dir, project_root, map))
+            .iter_mut()
+            .map(|(name, item)| {
+                rewrite_json(
+                    item,
+                    resolve_dir,
+                    write_dir,
+                    project_root,
+                    Some(name.as_str()),
+                    map,
+                )
+            })
             .sum(),
         _ => 0,
     }
@@ -771,6 +814,70 @@ mod tests {
         assert!(text.contains("../textures/sky.hdr"));
         assert!(text.contains("assets/textures/sky.hdr"));
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn rename_leaves_non_path_strings_alone() {
+        let root = temp_root("rename_non_path");
+        std::fs::write(root.join("assets/valley.hdr"), b"x").unwrap();
+        let doc = serde_json::json!({
+            "version": 3,
+            "entities": [{
+                "name": "assets/valley.hdr",
+                "parent": null,
+                "transform": {
+                    "translation": [0, 0, 0],
+                    "rotation": [0, 0, 0, 1],
+                    "scale": [1, 1, 1]
+                },
+                "components": {
+                    "prism_engine::scene::MeshRenderer": { "mesh_path": "assets/valley.hdr" },
+                    "prism_engine::ui::Text": { "content": "assets/valley.hdr" }
+                }
+            }]
+        });
+        write_doc(&root.join("assets/scenes/demo.scene.json"), &doc).unwrap();
+
+        let result = rename_asset(&root, "assets/valley.hdr", "assets/sky.hdr").unwrap();
+        assert_eq!(result.references_updated, 1, "只有 mesh_path 是引用");
+
+        let text = std::fs::read_to_string(root.join("assets/scenes/demo.scene.json")).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let components = &value["entities"][0]["components"];
+        assert_eq!(
+            components["prism_engine::scene::MeshRenderer"]["mesh_path"],
+            "assets/sky.hdr"
+        );
+        assert_eq!(
+            components["prism_engine::ui::Text"]["content"],
+            "assets/valley.hdr"
+        );
+        assert_eq!(value["entities"][0]["name"], "assets/valley.hdr");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn asset_path_fields_cover_string_paths_in_schema() {
+        let schema = crate::schema::build_schema();
+        for ty in &schema.types {
+            for field in &ty.fields {
+                if field.kind == "string" && field.name.ends_with("_path") {
+                    assert!(
+                        is_asset_path_field(&field.name),
+                        "{}::{} 是路径字段，但没有登记进 ASSET_PATH_FIELDS",
+                        ty.name,
+                        field.name
+                    );
+                }
+            }
+        }
+
+        // 不以 `_path` 结尾的引用字段靠显式登记，这里断言它们没被删掉。
+        for name in ["env_map", "volume", "prefab"] {
+            assert!(is_asset_path_field(name), "{name} 必须继续登记");
+        }
+        assert!(!is_asset_path_field("content"));
+        assert!(!is_asset_path_field("name"));
     }
 
     #[test]

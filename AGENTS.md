@@ -303,6 +303,10 @@ The user project's dependency chain must stay **UI-framework-free and editor-fre
   pin `#[reflect(name = "prism_engine::...")]`, and register it in
   `register_builtin_components` via `register_reflect_serde` (or a custom JSON converter).
   Then both cook and load share the schema automatically.
+  - 组件里**持有资产路径**的字符串字段（`mesh_path` / `sprite_path` / `hdr_path` …）还要登记进
+    `crates/prism-editor-api/src/asset_ops.rs` 的 `ASSET_PATH_FIELDS`：资产重命名/移动只会改写
+    这个清单里的字段，漏登记 = 重命名后引用断掉（`_path` 结尾的名字有测试兜底，`env_map` /
+    `volume` / `prefab` 这类只能靠人记住）。
 - **Transform has exactly one authoritative source**: authors write `.scene.json`'s
   `transform` (`EntityJson`), and loader/cooker bake it into `LocalTransform` +
   `LocalToWorld`. `LocalTransform` is registered as a reflect **type** only
