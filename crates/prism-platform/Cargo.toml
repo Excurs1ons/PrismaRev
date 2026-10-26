@@ -6,8 +6,6 @@ license.workspace = true
 description = "Platform abstraction — window system, Vulkan surface, input routing"
 
 [dependencies]
-prism-render = { path = "../prism-render" }
-
 winit = { workspace = true }
 ash-window = { workspace = true }
 raw-window-handle = { workspace = true }

@@ -13,9 +13,7 @@ use winit::window::Window;
 ///
 /// 注意：渲染器不再在此创建。为达成「秒开窗口、事件不被初始化阻塞」，
 /// 窗口在**主线程**快速创建（`create_window`，~数毫秒），而重量级的
-/// [`GraphRenderer`] 构建移到**渲染线程**异步完成（见 `prism_app`）。
-///
-/// [`GraphRenderer`]: prism_render::GraphRenderer
+/// `GraphRenderer`（`prism-render`）构建移到**渲染线程**异步完成（见 `prism_app`）。
 pub struct PlatformContext {
     pub(crate) window: Arc<Window>,
 }
