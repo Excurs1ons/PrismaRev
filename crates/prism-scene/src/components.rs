@@ -4,7 +4,7 @@
 //! |-----------|------------|
 //! | 层次结构  | `Parent`, `Child` |
 //! | 变换     | `LocalTransform`, `LocalToWorld`, `TransformDirty` |
-//! | 渲染     | `MeshRenderer`, `Active` |
+//! | 渲染     | `MeshRenderer`, `SpriteRenderer`, `Active` |
 //! | 光源     | `Light`（Unity 形状）, `DirectionalLight`, `PointLight`, `SpotLight`（旧） |
 //! | 相机     | `Camera`, `FlyCameraController` |
 //! | 天空盒   | `Skybox` |
@@ -194,6 +194,89 @@ impl MeshRenderer {
     }
     pub fn has_material(&self) -> bool {
         !self.material_path.is_empty()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 2D 精灵
+// ---------------------------------------------------------------------------
+
+/// 2D 精灵渲染器 = Unity `SpriteRenderer`（渲染子集）。
+///
+/// 只承载**作者态**字段：贴图路径、精灵表帧、排序层。GPU 纹理句柄在运行时由
+/// `SpriteRef`（`prism-engine::scene::runtime_components`）持有——和
+/// `MeshRenderer` → `MeshRef` 的关系完全一致。
+///
+/// 2D 约定（见 `docs/plans/2026-10-27-cozy-fishing-design.md`）：
+/// 相机在 **+Z 看向 −Z**，`z` 越大越靠近相机；世界尺寸 =
+/// 纹理像素尺寸 / [`SpriteRenderer::pixels_per_unit`]。
+#[derive(Debug, Clone, Serialize, Deserialize, Reflect)]
+#[reflect(name = "prism_engine::scene::SpriteRenderer")]
+#[serde(default)]
+pub struct SpriteRenderer {
+    /// 贴图资源路径 = Unity `SpriteRenderer.sprite`。空字符串 = 不绘制。
+    pub sprite_path: String,
+    /// 精灵表单帧像素尺寸；`[0, 0]` 表示整张纹理就是一帧。
+    pub frame_size: [u32; 2],
+    /// 当前帧索引（精灵表按横向排列）。
+    pub frame_index: u32,
+    /// 每世界单位像素数 = Unity `Sprite.pixelsPerUnit`。
+    pub pixels_per_unit: f32,
+    /// 轴心（`0..1`，左上为原点）= Unity `Sprite.pivot` 归一化形式。
+    pub pivot: [f32; 2],
+    /// 顶点色乘算（线性 RGBA）= Unity `SpriteRenderer.color`。
+    pub color: [f32; 4],
+    /// 水平翻转 = Unity `SpriteRenderer.flipX`。
+    pub flip_x: bool,
+    /// 垂直翻转 = Unity `SpriteRenderer.flipY`。
+    pub flip_y: bool,
+    /// 排序层，数值越大越靠前 = Unity `sortingLayerName` 的数值形式。
+    pub sorting_layer: i32,
+    /// 同层内顺序 = Unity `sortingOrder`。
+    pub order_in_layer: i32,
+}
+
+impl Default for SpriteRenderer {
+    fn default() -> Self {
+        Self {
+            sprite_path: String::new(),
+            frame_size: [0, 0],
+            frame_index: 0,
+            pixels_per_unit: 100.0,
+            pivot: [0.5, 0.5],
+            color: [1.0, 1.0, 1.0, 1.0],
+            flip_x: false,
+            flip_y: false,
+            sorting_layer: 0,
+            order_in_layer: 0,
+        }
+    }
+}
+
+impl SpriteRenderer {
+    /// 是否有可绘制的贴图。
+    pub fn has_sprite(&self) -> bool {
+        !self.sprite_path.is_empty()
+    }
+
+    /// 单帧像素尺寸；未配置精灵表时由调用方回落到纹理尺寸。
+    pub fn frame_size_or(&self, texture_size: [u32; 2]) -> [u32; 2] {
+        if self.frame_size[0] > 0 && self.frame_size[1] > 0 {
+            self.frame_size
+        } else {
+            texture_size
+        }
+    }
+
+    /// 单帧在世界空间的尺寸（单位/世界）。`pixels_per_unit` 非法时回落到 100。
+    pub fn world_size(&self, texture_size: [u32; 2]) -> [f32; 2] {
+        let ppu = if self.pixels_per_unit.is_finite() && self.pixels_per_unit > 0.0 {
+            self.pixels_per_unit
+        } else {
+            100.0
+        };
+        let frame = self.frame_size_or(texture_size);
+        [frame[0] as f32 / ppu, frame[1] as f32 / ppu]
     }
 }
 

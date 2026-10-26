@@ -28,3 +28,19 @@ pub struct MaterialRef {
     /// Generation at resolve time.
     pub generation: u32,
 }
+
+/// GPU texture reference for a 2D [`SpriteRenderer`](prism_scene::components::SpriteRenderer).
+///
+/// Same role as [`MeshRef`] for meshes: the scene only stores the authoring
+/// texture path, while the resolved bindless texture handle lives here.
+#[derive(Debug, Clone, Copy)]
+pub struct SpriteRef {
+    /// Stable asset id (hot-reload / debugging).
+    pub asset_id: SceneAssetId,
+    /// Bindless SRV slot of the resolved texture (what the sprite pass reads).
+    pub texture_slot: u32,
+    /// Pixel size of the uploaded texture, filled in after upload.
+    pub size: [u32; 2],
+    /// `0` = not resolved yet; bumped on hot-reload.
+    pub generation: u32,
+}
