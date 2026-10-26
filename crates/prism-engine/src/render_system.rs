@@ -55,6 +55,9 @@ pub struct SceneChanges {
     pub exposure: f32,
     /// Whether a usable 相机 实体 was 找到 in the ECS 世界
     pub has_camera: bool,
+    /// 活动相机是否用正交投影（`Camera::orthographic`）。PT 主光线需要它来
+    /// 决定走平行光还是透视锥（issue #10）。
+    pub camera_orthographic: bool,
     /// 清屏颜色 = 活动相机的 `background_color`（无相机时为引擎默认灰）。
     pub clear_color: [f32; 4],
     /// 主方向光是否投阴影 = Unity `Light.shadows != None`。
@@ -189,6 +192,13 @@ fn collect_scene_changes(
     let proj32 = projection.col(3).z;
     let _ = projection;
 
+    // 1.5 正交标志 —— 与取景/清屏来自**同一台**相机。PT 主光线据此决定
+    //     是共享相机原点（透视）还是逐像素近平面起点（正交，issue #10）。
+    let camera_orthographic = camera_entity
+        .and_then(|entity| world.get::<Camera>(entity))
+        .map(|cam| cam.orthographic)
+        .unwrap_or(false);
+
     // 2. 光源 —— 统一 `Light`（Unity 形状）与旧三组件归一成 `LightSample`。
     let samples = scene::systems::lights::collect_light_samples(world);
     let dir_light = samples
@@ -292,6 +302,7 @@ fn collect_scene_changes(
         pt_lights,
         exposure,
         has_camera,
+        camera_orthographic,
         clear_color,
         shadows_enabled,
         shadow_strength,
@@ -354,6 +365,7 @@ pub fn render_system(
         ref pt_lights,
         exposure,
         has_camera,
+        camera_orthographic,
         // 清屏色直接从 `scene` 读（`scene.clear_color`），这里不解构。
         clear_color: _,
         shadows_enabled,
@@ -414,6 +426,7 @@ pub fn render_system(
         pt_lights,
         pt_accum_dirty: dirty_flags.directional_light || draw_count_dirty,
         has_camera: *has_camera,
+        camera_orthographic: *camera_orthographic,
         clear_color: scene.clear_color,
         shadows_enabled: *shadows_enabled,
         ui_overlay: Some(ui_overlay),
@@ -535,5 +548,46 @@ mod tests {
             (untouched - Camera::default().aspect).abs() < 1e-6,
             "不参与渲染的相机不应被改写 aspect，实际 {untouched}"
         );
+    }
+
+    /// issue #10：PT 主光线要区分透视/正交，所以「正交标志」也必须来自
+    /// **实际渲染**的那台相机，而不是随便挑一台。
+    #[test]
+    fn orthographic_flag_comes_from_the_rendered_camera() {
+        let mut world = World::new();
+
+        let rendered = world.spawn();
+        world.insert(
+            rendered,
+            Camera {
+                depth: 0.0,
+                orthographic: true,
+                ..Camera::default()
+            },
+        );
+        world.insert(rendered, LocalToWorld(Mat4::IDENTITY));
+
+        let transform_less = world.spawn();
+        world.insert(
+            transform_less,
+            Camera {
+                depth: 5.0,
+                orthographic: false,
+                ..Camera::default()
+            },
+        );
+
+        let changes = collect_scene_changes(&mut world, 16.0 / 9.0, &Mat4::IDENTITY);
+        assert!(changes.has_camera);
+        assert!(
+            changes.camera_orthographic,
+            "正交标志应跟随实际渲染的相机（有 LocalToWorld 的那台）"
+        );
+
+        // 没有可渲染相机时退化到 fallback 透视相机。
+        let mut empty = World::new();
+        let fallback = collect_scene_changes(&mut empty, 16.0 / 9.0, &Mat4::IDENTITY);
+        assert!(!fallback.has_camera);
+        assert!(!fallback.camera_orthographic);
     }
 }

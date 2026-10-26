@@ -290,6 +290,7 @@ fn render_one_frame(
         pt_lights: &scene.pt_lights,
         pt_accum_dirty: dirty_flags.directional_light || draw_count_dirty,
         has_camera: scene.has_camera,
+        camera_orthographic: scene.camera_orthographic,
         clear_color: scene.clear_color,
         shadows_enabled: scene.shadows_enabled,
         ui_overlay: Some(&packet.ui_overlay),

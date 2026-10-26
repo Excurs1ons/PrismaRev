@@ -35,6 +35,24 @@ use crate::shader_bindings;
 /// `#[repr(C)]`; add 8 字节 of std140 trailing 填充 for the actual range.
 const PT_PUSH_RANGE_SIZE: u32 = 144;
 
+/// `PtPush::params.w` bit layout, mirrored in `pt_render.slang`
+/// (`PT_PARAMS_*`). Bits 0..=29 are the frame counter, bit 30 marks an
+/// orthographic camera and bit 31 asks the shader to clear accumulation.
+const PT_PARAMS_FRAME_MASK: u32 = 0x3FFF_FFFF;
+const PT_PARAMS_ORTHOGRAPHIC: u32 = 1 << 30;
+const PT_PARAMS_RESET: u32 = 1 << 31;
+
+/// Pack the per-frame flags the path tracer reads out of `params.w`.
+fn pack_pt_params(frame_count: u32, reset: bool, orthographic: bool) -> u32 {
+    (frame_count & PT_PARAMS_FRAME_MASK)
+        | if orthographic {
+            PT_PARAMS_ORTHOGRAPHIC
+        } else {
+            0
+        }
+        | if reset { PT_PARAMS_RESET } else { 0 }
+}
+
 /// Real-time path tracing 计算 pass
 pub struct PathTracePass {
     // 管线
@@ -1131,13 +1149,9 @@ impl RenderPassNode for PathTracePass {
             );
         }
 
-        // 打包 reset into params.w bit 31
-        let frame_count = self.frame_counter;
-        let params_w = if reset {
-            frame_count | (1u32 << 31)
-        } else {
-            frame_count
-        };
+        // Pack the per-frame flags into params.w: bit 30 = orthographic
+        // camera, bit 31 = reset accumulation (see `PT_PARAMS_*`).
+        let params_w = pack_pt_params(self.frame_counter, reset, ctx.frame.camera_orthographic);
 
         let light_dir = ctx.frame.light_dir;
         let light_color = ctx.frame.light_color;
@@ -1208,7 +1222,7 @@ impl RenderPassNode for PathTracePass {
         // Advance reservoir 交换 索引 for 下一个 帧
         self.reservoir_swap = (self.reservoir_swap + 1) & 1;
 
-        self.frame_counter = frame_count.wrapping_add(1);
+        self.frame_counter = self.frame_counter.wrapping_add(1);
 
         // 发布 for PostPass
         resources.set_image_view(PT_COLOR_H, self.output_view);

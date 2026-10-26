@@ -42,7 +42,7 @@ struct PtPush
     float4   camera_pos;     // 64: .xyz = camera pos, .w = exposure
     float4   light_dir;      // 80: xyz = dir TO light, w = pre-scaled radiance
     float4   light_color;    // 96: rgb = directional color, w = ambient factor
-    uint4    params;         // 112: x=w, y=h, z=max_bounce, w=packed(frame|reset<<31)
+    uint4    params;         // 112: x=w, y=h, z=max_bounce, w=packed(frame|ortho<<30|reset<<31)
     float    ray_max_distance; // 128: max ray length
     uint     max_iterations;   // 132: 0 = accumulate forever
     uint     num_lights;       // 136: analytic lights in ptLights
@@ -80,7 +80,16 @@ RWStructuredBuffer<ReSTIRReservoir> currReservoir;
 [[vk::push_constant]]
 PtPush push;
 
+// ---- params.w bit layout (mirrored by `PT_PARAMS_*` in `pt_pass.rs`) ----
+static const uint PT_PARAMS_FRAME_MASK = 0x3FFFFFFFu; // bits 0..29: frame counter
+static const uint PT_PARAMS_ORTHOGRAPHIC = 1u << 30u; // bit 30: orthographic camera
+static const uint PT_PARAMS_RESET = 1u << 31u;        // bit 31: clear accumulation
+
 // ---- Ray generation ----
+// NDC z = 0 is the near plane and z = 1 the far plane (Vulkan depth range
+// [0,1]), so unprojecting both gives the ray through this pixel; near→far is
+// the camera forward. A perspective camera starts every ray at the eye, while
+// an orthographic camera casts parallel rays from the pixel's near-plane point.
 void generate_ray(uint px, uint py, float jx, float jy,
     out float3 origin, out float3 dir)
 {
@@ -88,11 +97,14 @@ void generate_ray(uint px, uint py, float jx, float jy,
     uint h = push.params.y;
     float ndc_x = ((float(px) + 0.5 + jx) / float(w)) * 2.0 - 1.0;
     float ndc_y = ((float(py) + 0.5 + jy) / float(h)) * 2.0 - 1.0;
-    float4 clip = float4(ndc_x, ndc_y, 0.0, 1.0);
-    float4 world = mul(push.inv_view_proj, clip);
-    float3 world_pt = world.xyz / world.w;
-    origin = push.camera_pos.xyz;
-    dir = normalize(world_pt - origin);
+    float4 world_near = mul(push.inv_view_proj, float4(ndc_x, ndc_y, 0.0, 1.0));
+    float4 world_far = mul(push.inv_view_proj, float4(ndc_x, ndc_y, 1.0, 1.0));
+    float3 near_pt = world_near.xyz / world_near.w;
+    float3 far_pt = world_far.xyz / world_far.w;
+    float3 forward = far_pt - near_pt;
+    dir = normalize(forward);
+    bool orthographic = (push.params.w & PT_PARAMS_ORTHOGRAPHIC) != 0u;
+    origin = orthographic ? near_pt : push.camera_pos.xyz;
 }
 
 // ---- Trace a ray and return hit data ----
@@ -176,8 +188,9 @@ void ptMain(uint3 tid : SV_DispatchThreadID)
 
     uint2 pixel = uint2(tid.x, tid.y);
 
-    // Unpack reset from params.w bit 31
-    uint frame_count = push.params.w & 0x7FFFFFFFu;
+    // Unpack the frame counter and the per-frame flags from params.w
+    // (bit 30 = orthographic camera, bit 31 = reset accumulation).
+    uint frame_count = push.params.w & PT_PARAMS_FRAME_MASK;
     uint reset = (push.params.w >> 31u) & 1u;
 
     // ---- Reset accumulation on demand ----

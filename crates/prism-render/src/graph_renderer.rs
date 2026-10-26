@@ -91,6 +91,11 @@ pub struct FrameInput<'a> {
     /// Whether a usable 相机 实体 was 找到 When `false`, passes should
     /// skip camera-dependent 功 (skybox, PT rays) and leave the 清空 颜色
     pub has_camera: bool,
+    /// Whether the active camera projects orthographically. The path tracer
+    /// uses it to cast parallel primary rays instead of a perspective fan
+    /// (issue #10); the rasterizer already gets this from the projection
+    /// matrix alone.
+    pub camera_orthographic: bool,
     /// 主方向光是否投阴影（Unity `Light.shadows != None`）。`false` 时整帧
     /// 跳过阴影贴图渲染（`ShadowMode::None`），着色器侧也会得到 `shadowStrength = 0`。
     pub shadows_enabled: bool,
@@ -1317,6 +1322,7 @@ impl GraphRenderer {
             pt_lights,
             pt_accum_dirty,
             has_camera,
+            camera_orthographic,
             clear_color,
             shadows_enabled,
             ui_overlay,
@@ -1403,6 +1409,7 @@ impl GraphRenderer {
                 pt_lights,
                 pt_accum_dirty: *pt_accum_dirty,
                 has_camera: *has_camera,
+                camera_orthographic: *camera_orthographic,
                 clear_color: *clear_color,
             };
             let render_ctx = crate::render_graph::RenderContext {
@@ -1683,6 +1690,9 @@ impl GraphRenderer {
             pt_lights,
             pt_accum_dirty: true,
             has_camera: true,
+            // The convenience wrapper has no camera entity to inspect and
+            // always drove a perspective projection before, so keep that.
+            camera_orthographic: false,
             clear_color: [0.5, 0.5, 0.5, 1.0],
             shadows_enabled: true,
             ui_overlay: None,

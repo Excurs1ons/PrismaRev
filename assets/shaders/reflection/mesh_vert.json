@@ -117,6 +117,14 @@
                             "binding": {"kind": "uniform", "offset": 252, "size": 4}
                         },
                         {
+                            "name": "shadowStrength",
+                            "type": {
+                                "kind": "scalar",
+                                "scalarType": "float32"
+                            },
+                            "binding": {"kind": "uniform", "offset": 256, "size": 4}
+                        },
+                        {
                             "name": "_pad2",
                             "type": {
                                 "kind": "vector",
@@ -126,15 +134,7 @@
                                     "scalarType": "float32"
                                 }
                             },
-                            "binding": {"kind": "uniform", "offset": 256, "size": 12}
-                        },
-                        {
-                            "name": "_pad3",
-                            "type": {
-                                "kind": "scalar",
-                                "scalarType": "float32"
-                            },
-                            "binding": {"kind": "uniform", "offset": 268, "size": 4}
+                            "binding": {"kind": "uniform", "offset": 272, "size": 12}
                         }
                     ]
                 },
@@ -254,6 +254,14 @@
                                 "binding": {"kind": "uniform", "offset": 252, "size": 4}
                             },
                             {
+                                "name": "shadowStrength",
+                                "type": {
+                                    "kind": "scalar",
+                                    "scalarType": "float32"
+                                },
+                                "binding": {"kind": "uniform", "offset": 256, "size": 4}
+                            },
+                            {
                                 "name": "_pad2",
                                 "type": {
                                     "kind": "vector",
@@ -263,19 +271,11 @@
                                         "scalarType": "float32"
                                     }
                                 },
-                                "binding": {"kind": "uniform", "offset": 256, "size": 12}
-                            },
-                            {
-                                "name": "_pad3",
-                                "type": {
-                                    "kind": "scalar",
-                                    "scalarType": "float32"
-                                },
-                                "binding": {"kind": "uniform", "offset": 268, "size": 4}
+                                "binding": {"kind": "uniform", "offset": 272, "size": 12}
                             }
                         ]
                     },
-                    "binding": {"kind": "uniform", "offset": 0, "size": 272}
+                    "binding": {"kind": "uniform", "offset": 0, "size": 288}
                 }
             }
         },
