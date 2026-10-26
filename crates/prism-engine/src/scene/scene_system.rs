@@ -22,7 +22,7 @@ use std::path::PathBuf;
 
 use prism_asset::core::AssetId;
 use prism_asset::runtime::{ResourceManager, SceneAsset};
-use prism_ecs::World;
+use prism_ecs::{Entity, World};
 
 use super::component_registry::ComponentRegistry;
 use super::loader::{SceneInstance, SceneLoader, SceneSource};
@@ -382,7 +382,6 @@ impl SceneManager {
         manifest: &SceneManifest,
         scene_name: Option<&str>,
     ) -> Option<String> {
-        self.current_scene_path = None;
         for entry in &manifest.scenes {
             if !entry.enabled {
                 continue;
@@ -405,14 +404,15 @@ impl SceneManager {
             };
             match load_scene_by_id(rm, world, id, registry) {
                 Ok(inst) => {
+                    // 只有新场景已经 spawn 成功才卸载旧场景：失败时保持当前
+                    // 场景原样（见 `load_named_from_manifest` 的约定）。
+                    let unloaded = self.adopt_scene(world, &entry.name, &entry.path, &inst);
                     log::info!(
-                        "scene '{}' loaded: {} entities ({} roots)",
+                        "scene '{}' loaded: {} entities ({} roots), unloaded {unloaded} entity(ies) from the previous scene",
                         entry.name,
                         inst.all_entities.len(),
                         inst.root_entities.len()
                     );
-                    self.current_scene_name = Some(entry.name.clone());
-                    self.current_scene_path = Some(entry.path.clone());
                     return Some(entry.name.clone());
                 }
                 Err(e) => {
@@ -426,6 +426,28 @@ impl SceneManager {
             log::warn!("requested scene '{name}' was not found in the manifest");
         }
         None
+    }
+
+    /// 接管刚刚 spawn 成功的新场景：卸载旧场景实体、清空环境贴图缓存，
+    /// 并把「当前场景」切到新场景。
+    ///
+    /// 返回被卸载的旧场景实体数。不属于任何场景的实体（例如
+    /// `Engine::runtime_initialize` 生成的回退相机）保留——它们由引擎而不是
+    /// 场景拥有。
+    fn adopt_scene(
+        &mut self,
+        world: &mut World,
+        name: &str,
+        path: &str,
+        inst: &SceneInstance,
+    ) -> usize {
+        let unloaded = unload_other_scenes(world, inst.scene_id);
+        self.current_scene_name = Some(name.to_owned());
+        self.current_scene_path = Some(path.to_owned());
+        // IBL 按场景解析：切换后不能继续复用上一个场景注入的字节，
+        // 否则旧 HDR 会盖住新场景的天空盒。
+        self.environment_bytes = None;
+        unloaded
     }
 }
 
@@ -562,3 +584,23 @@ fn load_scene_by_id(
         .load_and_spawn(world, SceneSource::RawCooked(asset.bytes.clone()), registry)
         .map_err(|e| anyhow::anyhow!("{e}"))
 }
+
+/// 卸载所有不属于 `keep` 的场景实体，返回被移除的实体数。
+///
+/// 归属由 [`SceneMember`](super::components::SceneMember) 判定：没有该组件的
+/// 实体（引擎自有实体、用户运行时 spawn 的对象）一律保留。
+fn unload_other_scenes(world: &mut World, keep: super::components::SceneAssetId) -> usize {
+    let stale: Vec<Entity> = world
+        .query::<super::components::SceneMember>()
+        .filter(|(_, member)| member.0 != keep)
+        .map(|(entity, _)| entity)
+        .collect();
+    for entity in &stale {
+        world.despawn(*entity);
+    }
+    stale.len()
+}
+
+#[cfg(test)]
+#[path = "scene_system_tests.rs"]
+mod tests;
