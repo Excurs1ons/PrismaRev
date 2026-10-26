@@ -1138,6 +1138,14 @@ impl GraphRenderer {
                 }
             }
         }
+        // ECS UI 叠加按 image view 缓存 framebuffer；必须在 `sw.recreate()`
+        // 销毁旧 image view **之前**释放，否则 framebuffer 会引用已销毁的
+        // view（VUID-vkDestroyImageView-imageView-01026），可导致验证错误/
+        // device lost。此处 device 已 idle。
+        if let Some(gpu) = self.ui_overlay.as_mut() {
+            gpu.on_swapchain_views_changed();
+        }
+
         if let Some(sw) = self.swapchain.as_mut() {
             sw.recreate(&self.runtime.context)?;
         }

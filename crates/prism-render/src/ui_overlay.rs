@@ -379,7 +379,17 @@ pub struct UiOverlay {
     render_pass: vk::RenderPass,
     atlas: GlyphAtlas,
     device: ash::Device,
-    framebuffers: Vec<vk::Framebuffer>,
+    /// One framebuffer per swapchain image view/extent, reused across frames.
+    /// Cleared by [`UiOverlay::on_swapchain_views_changed`] because the old
+    /// image views are destroyed during swapchain recreation.
+    framebuffers: Vec<CachedFramebuffer>,
+}
+
+#[derive(Clone, Copy)]
+struct CachedFramebuffer {
+    view: vk::ImageView,
+    extent: vk::Extent2D,
+    handle: vk::Framebuffer,
 }
 
 impl UiOverlay {
@@ -777,17 +787,32 @@ impl UiOverlay {
             self.atlas.dirty = false;
         }
 
-        // Temporary 帧缓冲
-        let fb = {
-            let attachments = [target_view];
-            let fb_info = vk::FramebufferCreateInfo::default()
-                .render_pass(self.render_pass)
-                .attachments(&attachments)
-                .width(extent.width)
-                .height(extent.height)
-                .layers(1);
-            unsafe { context.device.create_framebuffer(&fb_info, None) }
-                .context("UiOverlay: framebuffer")?
+        // Reuse the framebuffer for this swapchain image instead of creating
+        // (and retaining) one every frame. Not thread-safe by itself; record
+        // runs on the render thread and swapchain recreation clears the cache.
+        let fb = match self.framebuffers.iter().find(|cached| {
+            cached.view == target_view
+                && cached.extent.width == extent.width
+                && cached.extent.height == extent.height
+        }) {
+            Some(cached) => cached.handle,
+            None => {
+                let attachments = [target_view];
+                let fb_info = vk::FramebufferCreateInfo::default()
+                    .render_pass(self.render_pass)
+                    .attachments(&attachments)
+                    .width(extent.width)
+                    .height(extent.height)
+                    .layers(1);
+                let handle = unsafe { context.device.create_framebuffer(&fb_info, None) }
+                    .context("UiOverlay: framebuffer")?;
+                self.framebuffers.push(CachedFramebuffer {
+                    view: target_view,
+                    extent,
+                    handle,
+                });
+                handle
+            }
         };
 
         // Record 绘制
@@ -840,11 +865,18 @@ impl UiOverlay {
             context.device.cmd_draw(cmd, vert_count, 1, 0, 0);
             context.device.cmd_end_render_pass(cmd);
         }
-        // Command buffers may still reference this framebuffer after recording;
-        // retain it until UiOverlay is destroyed after the device is idle.
-        self.framebuffers.push(fb);
-
         Ok(())
+    }
+
+    /// Discard framebuffers built for the previous swapchain image views.
+    ///
+    /// Must be called after the device is idle and **before** the old
+    /// swapchain image views are destroyed, otherwise the cached framebuffers
+    /// keep references to destroyed views (VUID-vkDestroyImageView-...).
+    pub fn on_swapchain_views_changed(&mut self) {
+        for cached in self.framebuffers.drain(..) {
+            unsafe { self.device.destroy_framebuffer(cached.handle, None) };
+        }
     }
 
     /// 把一个文本命令展开成逐字形四边形（像素 → NDC，字形带图集 uv）。
@@ -951,8 +983,8 @@ impl Drop for UiOverlay {
                 .destroy_descriptor_pool(self.descriptor_pool, None);
             self.device
                 .destroy_descriptor_set_layout(self.set_layout, None);
-            for fb in self.framebuffers.drain(..) {
-                self.device.destroy_framebuffer(fb, None);
+            for cached in self.framebuffers.drain(..) {
+                self.device.destroy_framebuffer(cached.handle, None);
             }
             self.device.destroy_render_pass(self.render_pass, None);
             self.device.destroy_buffer(self.vertex_buffer, None);
