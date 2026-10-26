@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from "vue";
 import { ChevronDown, ChevronUp, Plus, X } from "lucide-vue-next";
 import * as api from "../api";
 import type {
+  BuildProfile,
   BuildProjectResult,
   ProjectSettingsData,
   SceneEntry,
@@ -18,6 +19,8 @@ const emit = defineEmits<{ (e: "built"): void }>();
 
 const settings = ref<ProjectSettingsData | null>(null);
 const manifest = ref<SceneListEntry[]>([]);
+/** 后端派生的 Unity `Build.Profile`（目标组 / 构建选项 / 构建顺序）。 */
+const profile = ref<BuildProfile | null>(null);
 const addName = ref("");
 const manifestDirty = ref(false);
 const busy = ref(false);
@@ -34,18 +37,33 @@ const availableScenes = computed(() =>
 
 async function load() {
   try {
-    const [project, scenes] = await Promise.all([
+    const [project, scenes, buildProfile] = await Promise.all([
       api.projectSettings(),
       api.sceneManifest(),
+      api.fetchBuildProfile().catch(() => null),
     ]);
     settings.value = project;
     manifest.value = scenes;
+    profile.value = buildProfile;
     manifestDirty.value = false;
     error.value = "";
   } catch (e) {
     error.value = `${e}`;
   }
 }
+
+/**
+ * Unity 的 build index：只数**启用**的场景，所以禁用的行不占号。
+ * 与后端 `BuildProfile.scenes[].buildIndex` 的规则一致。
+ */
+function effectiveIndex(index: number): number {
+  return manifest.value.slice(0, index).filter((entry) => entry.enabled).length;
+}
+
+/** 已启用场景数（Unity `EditorBuildSettings.scenes` 里 enabled 的项）。 */
+const enabledCount = computed(
+  () => manifest.value.filter((entry) => entry.enabled).length,
+);
 
 function addScene() {
   const doc = props.scenes.find((scene) => scene.name === addName.value);
@@ -139,7 +157,9 @@ onMounted(() => void load());
     <div class="settings-tabs">
       <strong>构建项目</strong>
       <span class="spacer" />
-      <span class="hint">Windows Desktop</span>
+      <span class="hint">
+        {{ profile ? `${profile.targetGroup} · ${profile.target} · ${profile.name}` : "Windows Desktop" }}
+      </span>
     </div>
 
     <div class="settings-body panel-scroll">
@@ -178,7 +198,7 @@ onMounted(() => void load());
                 :title="entry.enabled ? '参与构建' : '不参与构建'"
                 @change="manifestDirty = true"
               />
-              <span class="build-scene-index">{{ index }}</span>
+              <span class="build-scene-index">{{ entry.enabled ? effectiveIndex(index) : "—" }}</span>
               <span class="build-scene-name">{{ entry.name }}</span>
               <code class="build-scene-path">{{ entry.path }}</code>
               <button class="ghost icon" title="上移" :disabled="index === 0" @click="moveScene(index, -1)">
@@ -209,6 +229,14 @@ onMounted(() => void load());
             assets/scenes 下还没有 .scene.json 文档；先新建场景。
           </p>
         </div>
+
+        <p v-if="profile" class="hint">
+          Unity <code>Build.Profile</code>：<strong>{{ profile.name }}</strong> ·
+          {{ profile.targetGroup }} / {{ profile.target }} ·
+          {{ enabledCount }} 个启用场景 ·
+          {{ profile.options.development ? "开发构建" : "发布构建" }}
+          <span v-if="profile.options.allowDebugging"> · 允许调试</span>
+        </p>
 
         <p class="hint">
           构建会执行 cargo build、build-scenes，并把 exe / scenes.pak / settings.toml

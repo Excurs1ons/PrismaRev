@@ -39,6 +39,13 @@ fn editor_windows() -> Vec<EditorWindowDescriptor> {
     prism_editor_api::build_window_registry().windows().to_vec()
 }
 
+/// Unity `Build.Profile.BuildProfile`：构建目标组 / `BuildOptions` / 场景构建顺序。
+#[tauri::command]
+fn editor_build_profile() -> Result<prism_editor_api::BuildProfile, String> {
+    let root = prism_editor_api::find_project_root()?;
+    prism_editor_api::read_build_profile(&root)
+}
+
 /// 解析项目根（含 `assets/scenes` 的目录）。
 #[tauri::command]
 fn editor_project_root() -> Result<String, String> {
@@ -1044,6 +1051,8 @@ fn build_project_blocking(
     if !matches!(options.profile.as_str(), "debug" | "release") {
         return Err("构建配置只能是 debug 或 release".into());
     }
+    // Unity `BuildPipeline.BuildPlayer`：没有场景就直接失败。
+    prism_editor_api::read_build_profile(&root)?.validate()?;
     let started = std::time::Instant::now();
     let manifest = game_project_manifest(&root)?;
     let manifest_dir = manifest
@@ -1352,6 +1361,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             editor_schema,
             editor_windows,
+            editor_build_profile,
             editor_project_root,
             editor_list_documents,
             editor_document_templates,

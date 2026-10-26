@@ -203,6 +203,34 @@ export interface SceneListEntry {
   enabled: boolean;
 }
 
+/** Unity `BuildOptions`（PrismaRev 由 `[build].profile == "debug"` 推导）。 */
+export interface BuildOptions {
+  development: boolean;
+  allowDebugging: boolean;
+  connectWithProfiler: boolean;
+}
+
+/** 场景在构建里的位置 = `EditorBuildSettings.scenes` 的下标。 */
+export interface BuildScene {
+  name: string;
+  path: string;
+  enabled: boolean;
+  /** 实际构建顺序（只数启用项）；未启用时为 null。 */
+  buildIndex: number | null;
+}
+
+/** Unity `Build.Profile.BuildProfile`：一次构建的完整描述。 */
+export interface BuildProfile {
+  name: string;
+  target: string;
+  /** Unity `BuildTargetGroup` 名字（Standalone / Android / …）。 */
+  targetGroup: string;
+  options: BuildOptions;
+  outputDir: string;
+  runAfter: boolean;
+  scenes: BuildScene[];
+}
+
 /** 项目设置（`assets/settings.toml` 的 app/window/build 段）。 */
 export interface ProjectSettingsData {
   app: {

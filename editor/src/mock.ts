@@ -3,6 +3,7 @@ import type {
   AssetInfo,
   AssetMutation,
   AssetRef,
+  BuildProfile,
   DocKind,
   EditorWindowDescriptor,
   EntityJson,
@@ -426,6 +427,22 @@ async function handle(cmd: string, args: Record<string, unknown>): Promise<unkno
       return data.schema;
     case "editor_windows":
       return data.windows ?? [];
+    case "editor_build_profile":
+      // fixture 不存派生的 profile（场景清单可能含本机绝对路径），按 fixture 的场景文档合成。
+      return {
+        name: "release",
+        target: "windows",
+        targetGroup: "Standalone",
+        options: { development: false, allowDebugging: false, connectWithProfiler: false },
+        outputDir: "build/windows",
+        runAfter: false,
+        scenes: data.documents.scene.map((scene, index) => ({
+          name: scene.name,
+          path: scene.path,
+          enabled: true,
+          buildIndex: index,
+        })),
+      } satisfies BuildProfile;
     case "editor_project_root":
       return "/preview（浏览器预览）";
     case "editor_entity_presets":
