@@ -225,7 +225,6 @@ fn stage_environment_assets(
             if !staged.insert(pak_path.clone()) {
                 continue;
             }
-            }
 
             let source = asset_root.join(&pak_path);
             if !source.is_file() {

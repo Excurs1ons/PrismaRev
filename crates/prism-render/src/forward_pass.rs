@@ -1218,6 +1218,7 @@ impl ForwardPass {
                 depth_bias_slope_factor: None,
                 // 透明物体通常 `ZWrite Off`（Unity `_ZWrite`）。
                 depth_write_enable: Some(state.z_write),
+                depth_test_enable: None,
                 color_attachment_count: None,
                 color_blend_attachments: Some(&blend_attachments),
                 front_face: None,
