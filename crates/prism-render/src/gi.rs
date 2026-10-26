@@ -83,9 +83,10 @@ impl ProbeVolumeInfo {
 // Bake-time directional 光源 (shared 默认 for baker + 运行时
 // -------------------------------------------------------------------
 //
-// The offline baker lives in `prism-render` (the `prism-bake-gi` 二进制 and
-// cannot depend on `prism-engine` (the dependency runs engine -> 渲染 so
-// importing `engine::DirectionalLight` would form a cycle). To keep the baked
+// The offline baker lives in `prism-build-pipeline` (`prism-build-pipeline
+// bake-gi`), which links this crate for the probe math but cannot depend on
+// `prism-engine` (the dependency runs engine -> render, so importing
+// `engine::DirectionalLight` would form a cycle). To keep the baked
 // 间接 sun in sync with the 运行时 sun without that cycle, the canonical
 // 默认 光源 parameters are mirrored here. **These constants MUST stay in
 // lock-step with `prism_engine::render_system::DirectionalLight::default()`**
