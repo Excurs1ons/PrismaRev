@@ -101,7 +101,7 @@ impl AudioEngine {
     ///
     /// 如果音频设备无法打开，会记录警告，但引擎仍会运行（静默模式——游戏不应因音频而崩溃）。
     pub fn new(config: AudioConfig) -> Result<Self, AudioError> {
-        let channels = config.channels;
+        let channels = config.channels.max(1);
 
         let ctx = FirewheelContext::new(FirewheelConfig {
             num_graph_outputs: ChannelCount::new(channels as u32).unwrap_or(ChannelCount::STEREO),
@@ -289,9 +289,14 @@ impl AudioEngine {
         self.ctx
             .queue_event_for(node_id, SamplerNode::set_dyn_sample_event(resource));
 
-        // 连接到图形输出（立体声对）。
+        // 连接到图形输出（单声道走单通道连接，立体声及以上走立体声对）。
         let out = self.ctx.graph_out_node_id();
-        if let Err(e) = self.ctx.connect_stereo(node_id, out, false) {
+        let connect_result = if self.channels == 1 {
+            self.ctx.connect(node_id, out, &[(0, 0)], false)
+        } else {
+            self.ctx.connect_stereo(node_id, out, false)
+        };
+        if let Err(e) = connect_result {
             ::log::error!("Failed to connect sampler to graph output: {e}");
             let _ = self.ctx.remove_node(node_id);
             return id;
@@ -391,5 +396,50 @@ impl Drop for AudioEngine {
         // CpalStream must be dropped before FirewheelContext.
         let stream = self._stream.take();
         drop(stream);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn play_succeeds_with_mono_config() {
+        let mut engine = AudioEngine::new(AudioConfig {
+            channels: 1,
+            ..Default::default()
+        })
+        .unwrap();
+
+        let audio = AudioData {
+            samples: vec![0.0; 44100],
+            sample_rate: 44100,
+            channels: 1,
+            duration: Duration::from_secs(1),
+        };
+
+        let handle = engine.play(&audio);
+        assert_eq!(engine.active.len(), 1);
+        assert_eq!(engine.active[0].handle, handle);
+    }
+
+    #[test]
+    fn play_succeeds_with_stereo_config() {
+        let mut engine = AudioEngine::new(AudioConfig {
+            channels: 2,
+            ..Default::default()
+        })
+        .unwrap();
+
+        let audio = AudioData {
+            samples: vec![0.0; 88200],
+            sample_rate: 44100,
+            channels: 2,
+            duration: Duration::from_secs(1),
+        };
+
+        let handle = engine.play(&audio);
+        assert_eq!(engine.active.len(), 1);
+        assert_eq!(engine.active[0].handle, handle);
     }
 }
