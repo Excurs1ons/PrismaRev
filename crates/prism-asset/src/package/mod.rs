@@ -466,8 +466,8 @@ impl PackageBuilder {
 
 /// A loaded `.pak` 包 ready for 资源 lookup and extraction.
 ///
-/// The reader maps the file into 内存 at 打开 时间 and provides zero-copy
-/// 访问 to 资源 data where possible (uncompressed assets).
+/// The reader materialises the file bytes **once** at 打开 时间 (the buffer is
+/// owned by the reader and shared via `Arc`), then serves 资源 data on demand.
 #[derive(Debug, Clone)]
 pub struct PackageReader {
     header: PackageHeader,
@@ -478,20 +478,29 @@ pub struct PackageReader {
 
 impl PackageReader {
     /// 打开 a `.pak` file from disk and 验证 its 完整性
+    ///
+    /// The bytes read from disk are moved into the reader, so the file is only
+    /// materialised once.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, PackageError> {
-        let bytes = std::fs::read(path.as_ref())?;
-        Self::from_bytes(&bytes)
+        Self::from_owned_bytes(std::fs::read(path.as_ref())?)
     }
 
     /// 异步 打开 via tokio.
     pub async fn open_async(path: impl AsRef<Path> + Send) -> Result<Self, PackageError> {
-        let bytes = tokio::fs::read(path.as_ref()).await?;
-        Self::from_bytes(&bytes)
+        Self::from_owned_bytes(tokio::fs::read(path.as_ref()).await?)
     }
 
-    /// Parse from an in-memory byte 切片
+    /// Parse from an in-memory byte 切片 (copies the bytes into the reader).
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, PackageError> {
-        let header = PackageHeader::from_bytes(bytes)?;
+        Self::from_owned_bytes(bytes.to_vec())
+    }
+
+    /// Parse from an owned buffer, taking ownership instead of copying it.
+    ///
+    /// [`Self::open`] / [`Self::open_async`] go through this so opening a
+    /// `.pak` allocates the file buffer exactly once.
+    fn from_owned_bytes(bytes: Vec<u8>) -> Result<Self, PackageError> {
+        let header = PackageHeader::from_bytes(&bytes)?;
 
         // 读取 registry.
         let reg_start = header.registry_offset as usize;
@@ -551,7 +560,7 @@ impl PackageReader {
             header,
             records,
             dependency_array,
-            data: Arc::new(bytes.to_vec()),
+            data: Arc::new(bytes),
         })
     }
 

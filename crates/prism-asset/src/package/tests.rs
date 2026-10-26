@@ -4,6 +4,7 @@
 
 use super::*;
 use crate::core::AssetId;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 fn sample_asset_id(serial: u64) -> AssetId {
     AssetId::from_raw((1u64 << 32) | serial)
@@ -161,6 +162,49 @@ fn verify_ok_on_valid_pak() {
     let pak = builder.build().unwrap();
     let reader = PackageReader::from_bytes(&pak).unwrap();
     assert!(reader.verify_integrity().is_ok());
+}
+
+fn temp_pak_path() -> std::path::PathBuf {
+    static NEXT: AtomicU32 = AtomicU32::new(0);
+    let id = NEXT.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!("prism-asset-181-{}-{id}.pak", std::process::id()))
+}
+
+#[test]
+fn open_takes_ownership_of_file_bytes() {
+    // Regression for #181: `open` used to read the file and then `to_vec()` the
+    // whole buffer again, so peak memory was 2x the `.pak` size.
+    let id = sample_asset_id(7);
+    let data = vec![0xABu8; 2048];
+    let mut builder = PackageBuilder::new();
+    builder.add_asset(id, AssetType::Binary, data.clone(), &[]);
+    let pak = builder.build().unwrap();
+
+    let path = temp_pak_path();
+    std::fs::write(&path, &pak).unwrap();
+    let reader = PackageReader::open(&path).unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(reader.asset_count(), 1);
+    assert_eq!(reader.data.len(), pak.len());
+    assert_eq!(reader.read_asset_data(id).unwrap().unwrap(), data);
+}
+
+#[test]
+fn from_owned_bytes_moves_the_buffer() {
+    let mut builder = PackageBuilder::new();
+    builder.add_asset(sample_asset_id(8), AssetType::Binary, b"x".to_vec(), &[]);
+    let pak = builder.build().unwrap();
+    let (ptr, len) = (pak.as_ptr(), pak.len());
+
+    let reader = PackageReader::from_owned_bytes(pak).unwrap();
+
+    assert_eq!(
+        reader.data.as_ptr(),
+        ptr,
+        "reader must take ownership of the buffer instead of copying it"
+    );
+    assert_eq!(reader.data.len(), len);
 }
 
 #[test]
