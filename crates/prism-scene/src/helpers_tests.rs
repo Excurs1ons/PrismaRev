@@ -79,6 +79,43 @@ fn dead_entity_rejected() {
 }
 
 #[test]
+fn dead_new_parent_leaves_hierarchy_untouched() {
+    let mut world = World::new();
+    let old_parent = world.spawn();
+    let dead_parent = world.spawn();
+    let child = world.spawn();
+
+    HierarchyHelper::reparent(&mut world, child, Some(old_parent));
+    world.despawn(dead_parent);
+    HierarchyHelper::reparent(&mut world, child, Some(dead_parent));
+
+    assert_eq!(world.get::<Parent>(child), Some(&Parent(old_parent)));
+    let children = world.get::<Child>(old_parent).unwrap();
+    assert!(children.0.contains(&child));
+}
+
+#[test]
+fn cycle_is_rejected() {
+    let mut world = World::new();
+    let a = world.spawn();
+    let b = world.spawn();
+    let c = world.spawn();
+
+    HierarchyHelper::reparent(&mut world, b, Some(a));
+    HierarchyHelper::reparent(&mut world, c, Some(b));
+
+    // a -> b -> c, so making a a child of c would close a cycle.
+    HierarchyHelper::reparent(&mut world, a, Some(c));
+
+    assert!(world.get::<Parent>(a).is_none());
+    let a_children = world.get::<Child>(a).unwrap();
+    assert!(a_children.0.contains(&b));
+    let b_children = world.get::<Child>(b).unwrap();
+    assert!(b_children.0.contains(&c));
+    assert!(world.get::<Child>(c).is_none());
+}
+
+#[test]
 fn has_children_works() {
     let mut world = World::new();
     let parent = world.spawn();
