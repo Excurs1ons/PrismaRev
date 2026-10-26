@@ -82,10 +82,11 @@ impl<T> Default for Handle<T> {
 // 槽
 // ===========================================================================
 
-/// One 槽 in an [`AssetManager`]. A free 槽 carries no value; an occupied
-/// 槽 carries the 资源 value and its generation.
+/// One 槽 in an [`AssetManager`]. A free 槽 carries no value but keeps the
+/// next generation to hand out; an occupied 槽 carries the 资源 value and its
+/// current generation.
 enum Slot<T> {
-    Free { next_free: u32 },
+    Free { next_free: u32, generation: u32 },
     Occupied { value: T, generation: u32 },
 }
 
@@ -162,12 +163,15 @@ impl<T> AssetManager<T> {
         let idx = handle.index() as usize;
         match self.slots.get_mut(idx) {
             Some(Slot::Occupied { generation, .. }) if *generation == handle.generation() => {
-                // Bump generation so stale handles are rejected.
-                *generation += 1;
+                // Bump generation so stale handles are rejected, and keep the
+                // bumped value in the free slot so reuse cannot resurrect the
+                // old handle by resetting to generation 0.
+                let next_generation = generation.wrapping_add(1);
                 let old = std::mem::replace(
                     &mut self.slots[idx],
                     Slot::Free {
                         next_free: self.free_head,
+                        generation: next_generation,
                     },
                 );
                 self.free_head = idx as u32;
@@ -211,7 +215,7 @@ impl<T> AssetManager<T> {
         } else {
             let id = self.free_head;
             match &self.slots[id as usize] {
-                Slot::Free { next_free } => {
+                Slot::Free { next_free, .. } => {
                     self.free_head = *next_free;
                 }
                 _ => unreachable!(),
@@ -223,7 +227,7 @@ impl<T> AssetManager<T> {
     fn generation_for(&self, index: u32) -> u32 {
         match &self.slots[index as usize] {
             Slot::Occupied { generation, .. } => *generation,
-            Slot::Free { .. } => 0,
+            Slot::Free { generation, .. } => *generation,
         }
     }
 }
@@ -243,3 +247,41 @@ pub type MeshId = Handle<MeshAsset>;
 
 /// Handle to a CPU-side 材质 资源
 pub type MaterialId = Handle<MaterialAsset>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn slot_reuse_invalidates_stale_handle() {
+        let mut manager = AssetManager::new();
+        let first = manager.insert(10u32);
+        assert_eq!(manager.remove(first), Some(10));
+
+        let second = manager.insert(20u32);
+        assert_eq!(first.index(), second.index(), "free slot should be reused");
+        assert_ne!(
+            first.generation(),
+            second.generation(),
+            "reused slot must advance the generation"
+        );
+        assert!(!manager.is_alive(first));
+        assert_eq!(manager.get(first), None);
+        assert_eq!(manager.get(second), Some(&20));
+    }
+
+    #[test]
+    fn generation_advances_on_every_reuse() {
+        let mut manager = AssetManager::new();
+        let mut previous = None;
+        for value in 0..4u32 {
+            let handle = manager.insert(value);
+            if let Some(old) = previous {
+                assert_eq!(manager.remove(old), Some(value - 1));
+                assert!(!manager.is_alive(old));
+            }
+            previous = Some(handle);
+        }
+        assert!(manager.is_alive(previous.unwrap()));
+    }
+}
