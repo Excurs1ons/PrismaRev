@@ -753,14 +753,29 @@ async function createDocumentOf(kind: DocKind) {
   }
 }
 
+/**
+ * 保存用的快照。
+ *
+ * 写入是异步的，期间用户还在拖动/输入；基线必须和**真正写进磁盘的那一份**
+ * 完全一致。若在 `await` 之后才对 `doc` 取快照当基线，写入期间产生的编辑
+ * 会被当成已保存（`dirty` 变 false），关闭或切换文档时静默丢失。
+ */
+function snapshotDoc(): { text: string; doc: SceneDoc } {
+  const text = JSON.stringify(doc.value);
+  return { text, doc: JSON.parse(text) as SceneDoc };
+}
+
 async function save(): Promise<boolean> {
   if (!doc.value) return false;
   if (!currentPath.value) return saveAs();
+  const path = currentPath.value;
+  const snapshot = snapshotDoc();
   try {
-    await api.writeDocument(currentPath.value, doc.value);
-    baseline.value = JSON.stringify(doc.value);
+    await api.writeDocument(path, snapshot.doc);
+    // 写入期间若已切到别的文档，别把这边的基线套到另一份文档上。
+    if (currentPath.value === path) baseline.value = snapshot.text;
     error.value = "";
-    status.value = `已保存 ${currentPath.value}`;
+    status.value = `已保存 ${path}`;
     await refreshDocuments();
     return true;
   } catch (e) {
@@ -774,10 +789,11 @@ async function saveAs(): Promise<boolean> {
   const suffix = documentKind.value === "scene" ? ".scene.json" : ".prefab.json";
   const name = window.prompt(`另存为（不含 ${suffix}）`, "untitled");
   if (!name) return false;
+  const snapshot = snapshotDoc();
   try {
-    const path = await api.writeDocumentAs(documentKind.value, name, doc.value);
+    const path = await api.writeDocumentAs(documentKind.value, name, snapshot.doc);
     currentPath.value = path;
-    baseline.value = JSON.stringify(doc.value);
+    baseline.value = snapshot.text;
     error.value = "";
     status.value = `已另存为 ${path}`;
     await refreshDocuments();
