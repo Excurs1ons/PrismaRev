@@ -4,6 +4,7 @@ members = [
     "crates/prism-ecs",
     "crates/prism-reflect",
     "crates/prism-reflect-derive",
+    "crates/prism-gfx",
     "crates/prism-cooker",
     "crates/prism-scene",
     "crates/prism-render",

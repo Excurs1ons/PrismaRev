@@ -9,6 +9,18 @@
 
 use anyhow::Context as _;
 use ash::vk;
+use prism_gfx::CullMode;
+
+/// 把共享的 [`CullMode`]（`prism-gfx`，Vulkan-free）翻译成 Vulkan 剔除位。
+///
+/// 映射留在渲染器这一层，所以 `prism-gfx` 不需要知道 ash。
+pub(crate) fn cull_flags(mode: CullMode) -> vk::CullModeFlags {
+    match mode {
+        CullMode::Off => vk::CullModeFlags::NONE,
+        CullMode::Front => vk::CullModeFlags::FRONT,
+        CullMode::Back => vk::CullModeFlags::BACK,
+    }
+}
 
 /// 创建 [`GraphicsPipeline`] 的参数。
 ///
@@ -208,5 +220,26 @@ impl Drop for GraphicsPipeline {
             self.device.destroy_pipeline(self.pipeline, None);
             self.device.destroy_pipeline_layout(self.layout, None);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cull_mode_maps_to_vulkan_and_defaults_to_back() {
+        // 默认与 PrismaRev 既有管线一致（背面剔除）。
+        assert_eq!(CullMode::default(), CullMode::Back);
+        assert_eq!(cull_flags(CullMode::Off), vk::CullModeFlags::NONE);
+        assert_eq!(cull_flags(CullMode::Front), vk::CullModeFlags::FRONT);
+        assert_eq!(cull_flags(CullMode::Back), vk::CullModeFlags::BACK);
+
+        // 管线缓存以 `CullMode` 做键，三种取值必须互不相等。
+        let mut modes = [CullMode::Off, CullMode::Front, CullMode::Back];
+        modes.sort_by_key(|m| cull_flags(*m).as_raw());
+        let mut uniq = modes.to_vec();
+        uniq.dedup();
+        assert_eq!(uniq.len(), 3);
     }
 }

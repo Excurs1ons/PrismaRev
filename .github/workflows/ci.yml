@@ -116,7 +116,7 @@ jobs:
       - name: clippy (desktop crates)
         run: >
           cargo clippy
-          -p prism-ecs -p prism-render -p prism-engine -p prism-platform
+          -p prism-ecs -p prism-gfx -p prism-render -p prism-engine -p prism-platform
           --all-targets -- -D warnings
 
       # xtask is workspace-excluded, so --all/-p don't reach it. Check it here.
@@ -161,12 +161,12 @@ jobs:
       - name: Build (desktop crates)
         run: >
           cargo build --locked
-          -p prism-ecs -p prism-render -p prism-engine -p prism-platform
+          -p prism-ecs -p prism-gfx -p prism-render -p prism-engine -p prism-platform
 
       - name: Test (desktop crates)
         run: >
           cargo test --locked
-          -p prism-ecs -p prism-render -p prism-engine -p prism-platform
+          -p prism-ecs -p prism-gfx -p prism-render -p prism-engine -p prism-platform
 
   # ---------------------------------------------------------------------------
   # 3. Slang shaders: compile to SPIR-V + reflection, then verify the committed

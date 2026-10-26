@@ -4,22 +4,9 @@
 //! 激活 The 结果 is fed to [`prism_render`]'s [`GraphRenderer`] each 帧
 
 use prism_ecs::World;
-use prism_render::{DrawCullMode, DrawItem};
-use prism_scene::CullMode;
+use prism_render::DrawItem;
 
 use crate::scene::components::*;
-
-/// 把场景层的 `CullMode`（Unity 形状）映射成渲染器自己的中立副本。
-///
-/// 两个类型分属 `prism-scene` / `prism-render`，`prism-engine` 无法为它们
-/// 实现 `From`（孤儿规则），所以用这个显式映射。
-pub(crate) fn draw_cull_mode(mode: CullMode) -> DrawCullMode {
-    match mode {
-        CullMode::Off => DrawCullMode::Off,
-        CullMode::Front => DrawCullMode::Front,
-        CullMode::Back => DrawCullMode::Back,
-    }
-}
 
 /// Collect all 可见 绘制 items from the ECS 世界
 ///
@@ -59,7 +46,7 @@ pub fn scene_render_system(world: &World) -> Vec<DrawItem> {
                 cast_shadow: mode.casts_shadows(),
                 visible_in_main_pass: mode.visible_in_main_pass(),
                 cast_shadow_two_sided: mode.casts_two_sided_shadows(),
-                cull_mode: draw_cull_mode(cull),
+                cull_mode: cull,
             }
         })
         .collect()

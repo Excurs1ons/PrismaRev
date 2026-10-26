@@ -257,7 +257,7 @@ fn cull_mode_defaults_to_back_and_follows_the_component() {
     // 没有 `MeshRenderer`：默认背面剔除。
     spawn_renderable(&mut world, None);
     let items = scene_render_system(&world);
-    assert_eq!(items[0].cull_mode, prism_render::DrawCullMode::Back);
+    assert_eq!(items[0].cull_mode, CullMode::Back);
 
     // Unity `CullMode.Off` = 双面，必须原样传到绘制项。
     let mut world = World::new();
@@ -269,16 +269,7 @@ fn cull_mode_defaults_to_back_and_follows_the_component() {
         }),
     );
     let items = scene_render_system(&world);
-    assert_eq!(items[0].cull_mode, prism_render::DrawCullMode::Off);
-
-    assert_eq!(
-        draw_cull_mode(CullMode::Front),
-        prism_render::DrawCullMode::Front
-    );
-    assert_eq!(
-        draw_cull_mode(CullMode::Back),
-        prism_render::DrawCullMode::Back
-    );
+    assert_eq!(items[0].cull_mode, CullMode::Off);
 }
 
 #[test]

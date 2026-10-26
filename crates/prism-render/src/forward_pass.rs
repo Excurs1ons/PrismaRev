@@ -17,14 +17,15 @@ use std::time::Instant;
 use crate::context::VulkanContext;
 use crate::gizmo::Gizmo;
 use crate::mesh::Vertex;
-use crate::pipeline::{GraphicsPipeline, PipelineDesc};
+use crate::pipeline::{cull_flags, GraphicsPipeline, PipelineDesc};
 use crate::render_graph::{
-    DrawCullMode, GraphResources, PassInfo, PassKind, RenderContext, RenderGraphBuilder,
-    RenderPassNode, RenderSettings, ResourceHandle, ResourceType, ResourceUsage, FORWARD_COLOR_H,
-    FORWARD_DEPTH_H, FORWARD_NORMAL_H,
+    GraphResources, PassInfo, PassKind, RenderContext, RenderGraphBuilder, RenderPassNode,
+    RenderSettings, ResourceHandle, ResourceType, ResourceUsage, FORWARD_COLOR_H, FORWARD_DEPTH_H,
+    FORWARD_NORMAL_H,
 };
 use crate::shader;
 use crate::skybox_pass::SkyboxPass;
+use prism_gfx::CullMode;
 
 /// 向前 scene pass (bindless PBR + neutral ambient + shadow 映射表 targeting
 /// the 交换链
@@ -86,12 +87,13 @@ pub struct ForwardPass {
     out_normal_h: ResourceHandle,
     extent: vk::Extent2D,
     render_pass: Option<vk::RenderPass>,
-    /// 主通道管线缓存：按剔除模式各一份，对应 `DrawItem::cull_mode`。
+    /// 主通道管线缓存：按剔除模式各一份，对应 `DrawItem::cull_mode`
+    /// （`prism_gfx::CullMode`）。
     ///
     /// 三种变体的描述符集合布局 / 推送常量范围完全相同，只有
     /// `vk::PipelineRasterizationStateCreateInfo::cull_mode` 不同，因此
     /// 描述符绑定与推送常量在一次绘制列表内可以跨变体复用。
-    pipelines: std::collections::HashMap<DrawCullMode, GraphicsPipeline>,
+    pipelines: std::collections::HashMap<CullMode, GraphicsPipeline>,
     ibl_descriptor_set: vk::DescriptorSet,
     /// IBL 描述符 集合 布局 (borrowed from `IblResources`). Used by the
     /// skybox pass to 构建 its 管线 布局
@@ -1114,7 +1116,7 @@ impl ForwardPass {
     /// 描述符布局与推送常量完全一致；启动时全部建好，避免录制命令时临时
     /// 创建管线造成的卡顿。
     fn ensure_pipelines(&mut self, device: &ash::Device) -> Result<()> {
-        const ALL: [DrawCullMode; 3] = [DrawCullMode::Back, DrawCullMode::Front, DrawCullMode::Off];
+        const ALL: [CullMode; 3] = [CullMode::Back, CullMode::Front, CullMode::Off];
         if ALL.iter().all(|cull| self.pipelines.contains_key(cull)) {
             return Ok(());
         }
@@ -1223,7 +1225,7 @@ impl ForwardPass {
                 render_pass: rp,
                 subpass: 0,
                 // 唯一的差异：剔除模式来自逐绘制状态（Unity `CullMode`）。
-                cull_mode: Some(cull.to_vk()),
+                cull_mode: Some(cull_flags(cull)),
                 depth_bias_enable: None,
                 depth_bias_constant_factor: None,
                 depth_bias_slope_factor: None,
@@ -1352,7 +1354,7 @@ impl RenderPassNode for ForwardPass {
         // （背面剔除）变体的 layout 绑定一次即可；循环里只按需重绑管线。
         let pipeline = self
             .pipelines
-            .get(&DrawCullMode::Back)
+            .get(&CullMode::Back)
             .context("ForwardPass: back-face pipeline missing")?;
 
         // 解析 the per-frame 描述符 集合 now (used after the skybox 绘制
@@ -1531,7 +1533,7 @@ impl RenderPassNode for ForwardPass {
             // 循环开始前刚绑定的是默认（背面剔除）管线；只有遇到别的剔除模式
             // 才重绑（Unity `CullMode` 是管线状态）。描述符与推送常量布局在
             // 三种变体之间一致，所以不需要重新绑定描述符集。
-            let mut bound_cull = DrawCullMode::Back;
+            let mut bound_cull = CullMode::Back;
             for item in ctx.frame.draw_list {
                 // `ShadowsOnly` 物体不参与相机主通道（Unity `ShadowCastingMode`）。
                 if !item.visible_in_main_pass {
