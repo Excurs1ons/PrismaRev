@@ -669,6 +669,12 @@ impl App {
                 prism_platform::PlatformEvent::MouseWheel { delta } => {
                     self.input.handle_scroll(delta);
                 }
+                prism_platform::PlatformEvent::Touch { id, x, y, phase } => {
+                    // 触摸不走鼠标按钮模拟：多点触控必须保留触点 id 与 phase，
+                    // 由游戏逻辑经 `InputManager::touches()` 自行解释。
+                    self.input
+                        .handle_touch(id, engine_touch_phase(phase), [x, y]);
+                }
                 prism_platform::PlatformEvent::MouseButton { button, pressed } => {
                     use prism_engine::input::{ElementState, MouseButton};
                     let button = match button {
@@ -692,7 +698,13 @@ impl App {
                         },
                     );
                 }
-                _ => {}
+                // 键盘已在上面单独映射（需要引擎键码表），这里不重复处理。
+                prism_platform::PlatformEvent::Key { .. } => {}
+                // 尺寸变化由渲染线程从平台上下文读取，不进 InputManager。
+                prism_platform::PlatformEvent::Resized { .. } => {}
+                // 尚未建模的事件：保持显式列出，避免 `_ => {}` 静默吞掉新变体
+                // （`PlatformEvent::Touch` 就是这样丢了整条触摸链路）。
+                prism_platform::PlatformEvent::Other => {}
             }
         }
     }
@@ -730,6 +742,20 @@ impl App {
         let _choice =
             prism_engine::crash_dialog::show_crash_dialog("PrismaRev - Fatal Error", &message);
         event_loop.exit();
+    }
+}
+
+/// `prism-platform` 的触点 phase → 引擎输入模型的 phase。
+///
+/// 两者当前一一对应，但分层上必须显式转换：`prism-app` 不把平台类型直接
+/// 传进引擎，避免以后任一侧加减 phase 时静默错配。
+fn engine_touch_phase(phase: prism_platform::TouchPhase) -> prism_engine::input::TouchPhase {
+    use prism_engine::input::TouchPhase;
+    match phase {
+        prism_platform::TouchPhase::Started => TouchPhase::Started,
+        prism_platform::TouchPhase::Moved => TouchPhase::Moved,
+        prism_platform::TouchPhase::Ended => TouchPhase::Ended,
+        prism_platform::TouchPhase::Cancelled => TouchPhase::Cancelled,
     }
 }
 
@@ -1038,5 +1064,46 @@ impl ApplicationHandler for App {
         self.stop_render_thread();
 
         self.platform = None;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use prism_platform::PlatformEvent;
+
+    fn touch_event(phase: winit::event::TouchPhase, id: u64) -> WindowEvent {
+        WindowEvent::Touch(winit::event::Touch {
+            device_id: winit::event::DeviceId::dummy(),
+            phase,
+            location: winit::dpi::PhysicalPosition::new(40.0, 50.0),
+            force: Some(winit::event::Force::Normalized(1.0)),
+            id,
+        })
+    }
+
+    /// 触摸必须经平台快照落到 `InputManager::touches()`，并保留触点 id 与 phase
+    /// （回归防护：`route_window_event_to_input` 的 `_ => {}` 曾把整条链路丢掉）。
+    #[test]
+    fn touch_snapshot_reaches_input_manager() {
+        let mut input = InputManager::new();
+        for (phase, id) in [
+            (winit::event::TouchPhase::Started, 3u64),
+            (winit::event::TouchPhase::Moved, 3u64),
+        ] {
+            match prism_platform::to_platform_event(&touch_event(phase, id)) {
+                PlatformEvent::Touch { id, x, y, phase } => {
+                    input.handle_touch(id, engine_touch_phase(phase), [x, y])
+                }
+                other => panic!("touch 被转换成了 {other:?}"),
+            }
+        }
+
+        let touches = input.touches();
+        assert_eq!(touches.len(), 2);
+        assert_eq!(touches[0].id, 3);
+        assert_eq!(touches[0].phase, prism_engine::input::TouchPhase::Started);
+        assert_eq!(touches[0].position, [40.0, 50.0]);
+        assert_eq!(touches[1].phase, prism_engine::input::TouchPhase::Moved);
     }
 }
