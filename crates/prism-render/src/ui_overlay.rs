@@ -723,11 +723,12 @@ impl UiOverlay {
         }
         self.ensure_pipeline(&context.device, extent)?;
 
-        let vert_count = self.estimate_vertex_count(input);
-        self.grow_buffer(context, vert_count)?;
+        // 估算值只用于预留容量：单个字符只有在有字形位图时才写顶点
+        // （空格没有 rect、atlas 满或无字体时直接跳过），实际顶点数通常更少。
+        let estimated_vertices = self.estimate_vertex_count(input);
 
         // Build 顶点 (quads + 逐字形展开的 texts)。
-        let mut vertices: Vec<UiVertex> = Vec::with_capacity(vert_count as usize);
+        let mut vertices: Vec<UiVertex> = Vec::with_capacity(estimated_vertices as usize);
         let w = extent.width as f32;
         let h = extent.height as f32;
 
@@ -750,8 +751,17 @@ impl UiOverlay {
             self.emit_text(&mut vertices, t, w, h);
         }
 
+        // 上传与 draw 都使用实际顶点数：估算值可能高于 `vertices.len()`，
+        // 按它复制会读到 Vec 之外未初始化内存（UB，GPU 上是杂散三角形）。
+        let vert_count =
+            u32::try_from(vertices.len()).context("UiOverlay: vertex count exceeds u32")?;
+        if vert_count == 0 {
+            return Ok(());
+        }
+        self.grow_buffer(context, vert_count)?;
+
         // Upload 顶点 data.
-        let vert_bytes = vert_count as usize * size_of::<UiVertex>();
+        let vert_bytes = vertices.len() * size_of::<UiVertex>();
         unsafe {
             let ptr = context
                 .device
