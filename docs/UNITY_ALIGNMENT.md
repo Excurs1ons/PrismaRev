@@ -74,6 +74,7 @@ public 类型的只有 **43** 个（≈0.9%）。这既是现状，也是后续�
 | `DynamicBuffer<T>` | `Children(Vec<Entity>)` | 逐步引入 `DynamicBuffer` 形状 |
 | `BlobAssetReference<T>` | 无 | 后期（P5+） |
 | `IJob*` / `JobHandle` | 无（用 rayon/同步） | **新增** `prism_ecs::jobs` 形状门面（P6b）：std 线程 + `JobHandle::complete()`；无 Burst / `AtomicSafetyHandle` |
+| `NativeArray<T>` / `NativeList<T>` / `NativeReference<T>` | 无（`Vec`/切片） | **新增** `prism_ecs::collections` 形状门面（P6a）；底层安全 `Box`/`Vec`，`Allocator` 仅元数据，无 `Dispose` |
 | `float3/quat/math` | `glam` | **不替换**；提供 `math` 兼容别名/转换层 |
 
 > 设计原则：**PrismaRev 的核心数据结构（`World`/`Entity`/`Component`）保留**，
@@ -203,8 +204,7 @@ public 类型的只有 **43** 个（≈0.9%）。这既是现状，也是后续�
   P4b `EditorWindow` 面板注册表 DTO 已落地。
 - **P5 资产流水线** — ✅ 完成（见 §9；`Compilation` 按 §5.3 判为 N/A）。
   P5a `AssetImporter`、P5b `Build`/`Build.Profile`、P5c `BuildReport`。
-- **P6 并行/集合** — 🔄 进行中（见 §9）。P6b `Unity.Jobs` 形状
-  （`IJob`/`IJobParallelFor`/`IJobFor`/`JobHandle`）已落地；P6a `Unity.Collections` 见另一批次。
+- **P6 并行/集合** — 🔄 进行中（见 §9）。P6a `Unity.Collections` 与 P6b `Unity.Jobs` 形状均已落地。
 - **P7 UI/输入/音频/动画/物理** — 🔄 进行中（见 §9）。P7a `UnityEngine.Input`
   门面（`prism_engine::input_facade::Input`）已落地；其余 `UIElements`/`UI`/
   `Audio`/`Animation`/`Physics` 按其体量单独排期（`UIElements` 507 类型最大）。
@@ -1242,6 +1242,33 @@ Unity 的构建结果不是一段日志，而是 `BuildReport`（`summary` + `st
 - ✅ `cargo clippy -p prism-editor-api --all-targets -- -D warnings`、
   `cargo check --manifest-path editor/src-tauri/Cargo.toml`。
 - ✅ `pnpm -C editor build`（`vue-tsc --noEmit` + Vite）、`python3 scripts/pr_ready.py`。
+
+### P6a — `Unity.Collections` 形状 ✅
+
+**目标**：给 `prism-ecs` 补一层 Unity DOTS 集合门面，让熟悉
+`NativeArray` / `NativeList` 的代码有直接对应物，而不是只靠 `Vec`/切片约定。
+
+**新增 `crates/prism-ecs/src/collections.rs`**
+- `Allocator`：`Invalid`（默认）/`None`/`Temp`/`TempJob`/`Persistent`，附 `is_valid()`。
+- `NativeArray<T>`：`new(len, allocator)`（`T: Default` 清零）、`from_vec`、
+  `len`/`is_empty`、`allocator`、`as_slice`/`as_mut_slice`、`get`/`get_mut`、
+  `copy_from`、`to_vec`、`fill`、`Index`/`IndexMut`、`IntoIterator`（`&` / `&mut`）、
+  `From<Vec<T>>`。
+- `NativeList<T>`：`new`/`with_capacity`/`from_vec`、`add`、`insert`（越界返回
+  `false`）、`remove_at`/`pop`、`clear`、`sort`、切片与迭代。
+- `NativeReference<T>`：`new`/`value`/`set_value`/`into_inner`/`allocator`。
+- `NativeSlice<'a, T>`：只读视图，`new`/`len`/`get`/`slice(start, length)`/`iter`。
+- `lib.rs` 增加 `pub mod collections;` 与五个类型的根级 re-export。
+
+**与 Unity 的差异（刻意）**
+- 没有 `Dispose()` / `NativeArrayOptions` / `AtomicSafetyHandle`：Rust 所有权负责释放，
+  `Allocator` 只是元数据（保留 `allocator()` 读取，未来可接自定义分配器）。
+- `NativeArray::new` 总是清零（`T: Default`），不提供 Unity 的
+  `NativeArrayOptions.UninitializedMemory` —— 安全 Rust 不暴露未初始化内存。
+- `NativeSlice` 只读；可变视图直接用 `&mut [T]`。
+
+**验证**
+- ✅ `cargo test -p prism-ecs` → 24 passed（新增 6 个集合测试）。
 
 ### P6b — `Unity.Jobs` 形状 ✅
 
