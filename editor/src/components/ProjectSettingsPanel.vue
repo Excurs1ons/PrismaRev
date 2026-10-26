@@ -28,9 +28,16 @@ type Tab = "general" | "render" | "build";
 const tab = ref<Tab>("general");
 const project = ref<ProjectSettingsData | null>(null);
 const render = ref<RenderSettingsData | null>(null);
+/** 打开面板 / 上次保存时的快照：保存时只把差异交给后端写入。 */
+const loadedProject = ref<ProjectSettingsData | null>(null);
+const loadedRender = ref<RenderSettingsData | null>(null);
 const busy = ref(false);
 const error = ref("");
 const status = ref("");
+
+function clone<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
 
 async function load() {
   busy.value = true;
@@ -39,6 +46,8 @@ async function load() {
     const [p, r] = await Promise.all([api.projectSettings(), api.renderSettings()]);
     project.value = p;
     render.value = r;
+    loadedProject.value = clone(p);
+    loadedRender.value = clone(r);
   } catch (e) {
     error.value = `${e}`;
   } finally {
@@ -48,12 +57,17 @@ async function load() {
 
 async function save() {
   if (!project.value || !render.value) return;
+  if (!loadedProject.value || !loadedRender.value) return;
   busy.value = true;
   error.value = "";
   status.value = "";
   try {
-    await api.writeProjectSettings(project.value);
-    await api.writeRenderSettings(render.value);
+    // 只提交本面板真正改过的字段：别的面板（构建面板 / 渲染设置）在这期间
+    // 写入的值不会被这份旧快照覆盖。
+    await api.writeProjectSettings(loadedProject.value, project.value);
+    await api.writeRenderSettings(loadedRender.value, render.value);
+    loadedProject.value = clone(project.value);
+    loadedRender.value = clone(render.value);
     status.value = "已写入 assets/settings.toml（游戏下次启动生效）";
   } catch (e) {
     error.value = `${e}`;

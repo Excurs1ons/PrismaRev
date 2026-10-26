@@ -18,6 +18,8 @@ const props = defineProps<{
 const emit = defineEmits<{ (e: "built"): void }>();
 
 const settings = ref<ProjectSettingsData | null>(null);
+/** 面板打开 / 上次保存时的快照：保存时只把差异交给后端写入。 */
+const loadedSettings = ref<ProjectSettingsData | null>(null);
 const manifest = ref<SceneListEntry[]>([]);
 /** 后端派生的 Unity `Build.Profile`（目标组 / 构建选项 / 构建顺序）。 */
 const profile = ref<BuildProfile | null>(null);
@@ -43,6 +45,7 @@ async function load() {
       api.fetchBuildProfile().catch(() => null),
     ]);
     settings.value = project;
+    loadedSettings.value = JSON.parse(JSON.stringify(project)) as ProjectSettingsData;
     manifest.value = scenes;
     profile.value = buildProfile;
     manifestDirty.value = false;
@@ -140,8 +143,12 @@ async function saveSceneList() {
   }
 }
 
+function cloneSettings(value: ProjectSettingsData): ProjectSettingsData {
+  return JSON.parse(JSON.stringify(value)) as ProjectSettingsData;
+}
+
 async function runBuild(runAfter: boolean) {
-  if (!settings.value || busy.value) return;
+  if (!settings.value || !loadedSettings.value || busy.value) return;
   busy.value = true;
   error.value = "";
   status.value = "";
@@ -153,7 +160,10 @@ async function runBuild(runAfter: boolean) {
       manifestDirty.value = false;
     }
     settings.value.build.runAfter = runAfter;
-    await api.writeProjectSettings(settings.value);
+    // 只提交本面板改过的字段：项目设置面板在此期间写入的 [app]/[window]
+    // 以及 [build] 的其它字段不会被这份旧快照覆盖。
+    await api.writeProjectSettings(loadedSettings.value, settings.value);
+    loadedSettings.value = cloneSettings(settings.value);
     const built = await api.buildProject({
       target: settings.value.build.target,
       profile: settings.value.build.profile,

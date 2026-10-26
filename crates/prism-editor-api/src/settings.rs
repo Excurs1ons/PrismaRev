@@ -346,6 +346,97 @@ fn section<T: DeserializeOwned + Default>(table: &toml::Table, key: &str) -> Res
     }
 }
 
+// ---------------------------------------------------------------------------
+// 只写入「真正改动的字段」
+// ---------------------------------------------------------------------------
+//
+// 编辑器里有多个面板同时编辑同一个 `settings.toml`（项目设置面板管
+// `[app]`/`[window]`/`[build]`/`[render]`，构建面板也改 `[build]`）。面板都是
+// 打开时读一份快照、保存时整段写回，于是一个面板会把另一个面板**没碰过**的
+// 段（以及同段里没碰过的字段）用旧值覆盖掉。
+//
+// 这里让前端把「打开时的快照 before」和「现在的值 after」一起发过来，只把
+// 两者不同的叶子写到磁盘上当前的设置里：没改过的字段永远以磁盘为准。
+
+/// 把 `before` → `after` 之间**改动的叶子**合并到 `current` 上。
+fn merge_changed_values(
+    current: serde_json::Value,
+    before: &serde_json::Value,
+    after: &serde_json::Value,
+) -> serde_json::Value {
+    if before == after {
+        return current;
+    }
+
+    let (
+        serde_json::Value::Object(mut current),
+        serde_json::Value::Object(before),
+        serde_json::Value::Object(after),
+    ) = (current, before, after)
+    else {
+        return after.clone();
+    };
+
+    for (key, after_value) in after {
+        // 面板没改这个键（或它根本不在快照里）→ 保留磁盘上的值。
+        if before.get(key) == Some(after_value) {
+            continue;
+        }
+        let Some(before_value) = before.get(key) else {
+            continue;
+        };
+        let Some(slot) = current.get_mut(key) else {
+            continue;
+        };
+        let merged = merge_changed_values(std::mem::take(slot), before_value, after_value);
+        if let Some(slot) = current.get_mut(key) {
+            *slot = merged;
+        }
+    }
+
+    serde_json::Value::Object(current)
+}
+
+fn merged_settings<T>(current: &T, before: &T, after: &T) -> Result<T, String>
+where
+    T: Serialize + DeserializeOwned,
+{
+    let to_value =
+        |value: &T| serde_json::to_value(value).map_err(|error| format!("序列化设置失败: {error}"));
+    let merged = merge_changed_values(to_value(current)?, &to_value(before)?, &to_value(after)?);
+    serde_json::from_value(merged).map_err(|error| format!("合并设置失败: {error}"))
+}
+
+/// 只写入 `[app]`/`[window]`/`[build]` 中 `before` → `after` 真正改动的字段。
+///
+/// 其它面板在两次读写之间改过的字段保留磁盘值；`before == after` 时不写文件。
+pub fn write_project_settings_diff(
+    root: &Path,
+    before: &ProjectSettingsData,
+    after: &ProjectSettingsData,
+) -> Result<(), String> {
+    if before == after {
+        return Ok(());
+    }
+    let current = read_project_settings(root)?;
+    let merged = merged_settings(&current, before, after)?;
+    write_project_settings(root, &merged)
+}
+
+/// 只写入 `[render]` 中 `before` → `after` 真正改动的字段。
+pub fn write_render_settings_diff(
+    root: &Path,
+    before: &RenderSettingsData,
+    after: &RenderSettingsData,
+) -> Result<(), String> {
+    if before == after {
+        return Ok(());
+    }
+    let current = read_render_settings(root)?;
+    let merged = merged_settings(&current, before, after)?;
+    write_render_settings(root, &merged)
+}
+
 /// 读取项目设置（`[app]` / `[window]` / `[build]`）；缺失时使用默认值。
 pub fn read_project_settings(root: &Path) -> Result<ProjectSettingsData, String> {
     let path = settings_path(root);
@@ -521,5 +612,83 @@ mod tests {
         let mut data = ProjectSettingsData::default();
         data.build.profile = "shipping".into();
         assert!(write_project_settings(&dir, &data).is_err());
+    }
+
+    #[test]
+    fn project_settings_diff_keeps_changes_from_other_panels() {
+        let dir = temp_dir("prism-editor-api-project-settings-diff-panels");
+        write_project_settings(&dir, &ProjectSettingsData::default()).unwrap();
+
+        // 构建面板打开时的快照。
+        let before = read_project_settings(&dir).unwrap();
+
+        // 项目设置面板在此期间改了 [app]，并已写入磁盘。
+        let mut other = read_project_settings(&dir).unwrap();
+        other.app.name = "Renamed".into();
+        write_project_settings(&dir, &other).unwrap();
+
+        // 构建面板只改了 [build].output_dir 后保存。
+        let mut after = before.clone();
+        after.build.output_dir = "build/out".into();
+        write_project_settings_diff(&dir, &before, &after).unwrap();
+
+        let saved = read_project_settings(&dir).unwrap();
+        assert_eq!(saved.app.name, "Renamed", "别的面板改过的段被旧快照覆盖了");
+        assert_eq!(saved.build.output_dir, "build/out");
+    }
+
+    #[test]
+    fn project_settings_diff_keeps_fields_the_panel_did_not_touch() {
+        let dir = temp_dir("prism-editor-api-project-settings-diff-fields");
+        write_project_settings(&dir, &ProjectSettingsData::default()).unwrap();
+        let before = read_project_settings(&dir).unwrap();
+
+        // 同一段里的另一个字段被别处改了。
+        let mut other = read_project_settings(&dir).unwrap();
+        other.build.profile = "debug".into();
+        write_project_settings(&dir, &other).unwrap();
+
+        // 面板只改窗口宽度（快照里的 build.profile 还是 release，但没改过）。
+        let mut after = before.clone();
+        after.window.width = 1280;
+        write_project_settings_diff(&dir, &before, &after).unwrap();
+
+        let saved = read_project_settings(&dir).unwrap();
+        assert_eq!(saved.window.width, 1280);
+        assert_eq!(saved.build.profile, "debug", "未改动的同段字段被旧值覆盖了");
+    }
+
+    #[test]
+    fn project_settings_diff_does_not_rewrite_unchanged_snapshots() {
+        let dir = temp_dir("prism-editor-api-project-settings-diff-noop");
+        // 手写文件（写回会丢掉注释）用来证明「没改动就不写文件」。
+        std::fs::write(settings_path(&dir), "# keep me\n[app]\nname = \"Demo\"\n").unwrap();
+
+        let snapshot = read_project_settings(&dir).unwrap();
+        write_project_settings_diff(&dir, &snapshot, &snapshot.clone()).unwrap();
+
+        let text = std::fs::read_to_string(settings_path(&dir)).unwrap();
+        assert!(text.contains("# keep me"), "无改动时不应重写文件: {text}");
+    }
+
+    #[test]
+    fn render_settings_diff_only_writes_changed_fields() {
+        let dir = temp_dir("prism-editor-api-render-settings-diff");
+        write_render_settings(&dir, &RenderSettingsData::default()).unwrap();
+        let before = read_render_settings(&dir).unwrap();
+
+        // 别处改了色调映射。
+        let mut other = read_render_settings(&dir).unwrap();
+        other.tonemap_mode = 1;
+        write_render_settings(&dir, &other).unwrap();
+
+        // 面板只改最大弹射次数。
+        let mut after = before.clone();
+        after.pt_max_bounces = 7;
+        write_render_settings_diff(&dir, &before, &after).unwrap();
+
+        let saved = read_render_settings(&dir).unwrap();
+        assert_eq!(saved.pt_max_bounces, 7);
+        assert_eq!(saved.tonemap_mode, 1, "未改动的同段字段被旧值覆盖了");
     }
 }

@@ -149,7 +149,8 @@ pub use schema::{build_schema, build_schema_with, FieldSchema, Schema, TypeSchem
 pub use selection::{SelectionFilter, SelectionMode, SelectionState};
 pub use settings::{
     read_project_settings, read_render_settings, settings_path, write_project_settings,
-    write_render_settings, AppSettingsData, BuildSettingsData, ProjectSettingsData,
-    RenderSettingsData, WindowSettingsData,
+    write_project_settings_diff, write_render_settings, write_render_settings_diff,
+    AppSettingsData, BuildSettingsData, ProjectSettingsData, RenderSettingsData,
+    WindowSettingsData,
 };
 pub use undo::{DocUndoStack, UndoRecord, UndoStack, DEFAULT_UNDO_LIMIT};
