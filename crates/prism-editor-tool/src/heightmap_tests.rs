@@ -47,6 +47,30 @@ fn test_gradient_finite() {
 }
 
 #[test]
+fn test_default_frequency_produces_detail() {
+    // Regression for #124: with the default frequency the map used to be a
+    // single bilinear ramp (at most a couple of extrema per row).
+    let cfg = HeightmapConfig {
+        width: 512,
+        height: 512,
+        frequency: 0.003 * 2.0, // same features-per-pixel as the default on a 1024 px map
+        ..Default::default()
+    };
+    let hm = generate_heightmap(&cfg);
+
+    let y = cfg.height / 2;
+    let row: Vec<f32> = (0..cfg.width).map(|x| hm.get(x, y)).collect();
+    let extrema = row
+        .windows(3)
+        .filter(|w| (w[1] > w[0] && w[1] > w[2]) || (w[1] < w[0] && w[1] < w[2]))
+        .count();
+    assert!(
+        extrema > 32,
+        "default frequency collapsed into a smooth ramp ({extrema} extrema)"
+    );
+}
+
+#[test]
 fn test_cliff_enhancement() {
     let mut cfg = HeightmapConfig {
         width: 64,
