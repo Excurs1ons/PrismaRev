@@ -630,6 +630,35 @@ function silentUpdate(next: SceneDoc) {
   doc.value = next;
 }
 
+/**
+ * 执行「把整份文档交给后端改写」的异步命令。
+ *
+ * 后端拿到的是调用瞬间的快照，返回的也是基于这份快照的整份文档。命令在
+ * `await` 期间用户仍会继续拖动字段 / 就地重命名（这些编辑是本地即时提交的），
+ * 直接 `commit` 返回的旧快照会把这些编辑连同撤销栈一起丢掉。
+ *
+ * 因此提交前比较文档内容：没被改过才提交；被改过就用最新文档重跑一次。
+ * 连续几次都被打断就放弃并提示，绝不覆盖新内容。
+ */
+async function runDocCommand<T>(
+  run: (snapshot: SceneDoc) => Promise<T>,
+  apply: (result: T) => SceneDoc,
+  editKey: string,
+): Promise<T | null> {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    if (!doc.value) return null;
+    const snapshot = doc.value;
+    const expected = JSON.stringify(snapshot);
+    const result = await run(snapshot);
+    if (doc.value && JSON.stringify(doc.value) === expected) {
+      commit(apply(result), editKey);
+      return result;
+    }
+  }
+  status.value = "文档在操作期间又被修改，已放弃这次操作，请重试";
+  return null;
+}
+
 function undo() {
   if (!past.value.length || !doc.value) return;
   const previous = past.value[past.value.length - 1];
@@ -943,8 +972,12 @@ async function insertPrefab(entry: SceneEntry, parent: number | null = primary.v
   }
   busy.value = true;
   try {
-    const result = await api.instantiatePrefab(doc.value, entry.path, parent);
-    commit(result.doc, `insert-prefab:${entry.path}#${Date.now()}`);
+    const result = await runDocCommand(
+      (snapshot) => api.instantiatePrefab(snapshot, entry.path, parent),
+      (inserted) => inserted.doc,
+      `insert-prefab:${entry.path}#${Date.now()}`,
+    );
+    if (!result) return;
     if (result.inserted.length) selection.value = [result.inserted[0]];
     error.value = "";
     status.value = `已实例化 ${entry.name}（${result.inserted.length} 个实体）`;
@@ -974,8 +1007,12 @@ async function revertPrefab(index: number) {
   if (!doc.value || !prefabLink.value) return;
   const link = prefabLink.value;
   try {
-    const result = await api.revertPrefabInstance(doc.value, index, link);
-    commit(result.doc, `revert-prefab:${link}#${Date.now()}`);
+    const result = await runDocCommand(
+      (snapshot) => api.revertPrefabInstance(snapshot, index, link),
+      (reverted) => reverted.doc,
+      `revert-prefab:${link}#${Date.now()}`,
+    );
+    if (!result) return;
     selection.value = [result.index];
     error.value = "";
     status.value = `已从 ${link} 还原`;
@@ -1002,8 +1039,12 @@ async function applyPrefab(index: number) {
 async function unlinkPrefab(index: number) {
   if (!doc.value) return;
   try {
-    const next = await api.unlinkPrefabInstance(doc.value, index);
-    commit(next, `unlink-prefab:${index}#${Date.now()}`);
+    const next = await runDocCommand(
+      (snapshot) => api.unlinkPrefabInstance(snapshot, index),
+      (unlinked) => unlinked,
+      `unlink-prefab:${index}#${Date.now()}`,
+    );
+    if (!next) return;
     error.value = "";
     status.value = "已解除预制体链接";
   } catch (e) {
@@ -1018,8 +1059,12 @@ async function syncPrefab(entry: SceneEntry) {
   if (!link) return;
   busy.value = true;
   try {
-    const next = await api.syncPrefabInstances(doc.value, link);
-    commit(next, `sync-prefab:${link}#${Date.now()}`);
+    const next = await runDocCommand(
+      (snapshot) => api.syncPrefabInstances(snapshot, link),
+      (synced) => synced,
+      `sync-prefab:${link}#${Date.now()}`,
+    );
+    if (!next) return;
     error.value = "";
     status.value = `已同步 ${instanceCounts.value[link]} 个实例`;
   } catch (e) {
@@ -1092,8 +1137,12 @@ function onSelect(indices: number[]) {
 async function onReparent(child: number, parent: number | null) {
   if (!doc.value) return;
   try {
-    const next = await api.reparentEntity(doc.value, child, parent);
-    commit(next, `reparent:${child}->${parent ?? "root"}#${Date.now()}`);
+    const next = await runDocCommand(
+      (snapshot) => api.reparentEntity(snapshot, child, parent),
+      (reparented) => reparented,
+      `reparent:${child}->${parent ?? "root"}#${Date.now()}`,
+    );
+    if (!next) return;
     error.value = "";
     status.value = parent === null ? "已变为根实体" : `已挂到实体 #${parent}`;
   } catch (e) {
@@ -1104,8 +1153,12 @@ async function onReparent(child: number, parent: number | null) {
 async function onMove(child: number, at: number, parent: number | null) {
   if (!doc.value) return;
   try {
-    const result = await api.moveEntity(doc.value, child, at, parent);
-    commit(result.doc, `move:${child}@${at}#${Date.now()}`);
+    const result = await runDocCommand(
+      (snapshot) => api.moveEntity(snapshot, child, at, parent),
+      (moved) => moved.doc,
+      `move:${child}@${at}#${Date.now()}`,
+    );
+    if (!result) return;
     selection.value = [result.index];
     error.value = "";
     status.value = "已重新排序";
@@ -1288,8 +1341,12 @@ async function deleteSelection() {
     return;
   }
   try {
-    const next = await api.deleteEntities(doc.value, indices);
-    commit(next, `delete-entities#${Date.now()}`);
+    const next = await runDocCommand(
+      (snapshot) => api.deleteEntities(snapshot, indices),
+      (deleted) => deleted,
+      `delete-entities#${Date.now()}`,
+    );
+    if (!next) return;
     selection.value = [];
     clampSelection();
     error.value = "";
