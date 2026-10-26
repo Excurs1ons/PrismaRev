@@ -1783,6 +1783,27 @@ html.compact .dock-tab {
   flex: 1;
   min-height: 0;
 }
+/* 每个标签一个容器：面板首次激活后常驻，切标签只切换可见性。
+   直接子选择器要跟着下沉一层，否则面板拿不到原来的 flex/overflow。 */
+.dock-tab-panel {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.dock-tab-panel > .section-body,
+.dock-tab-panel > .log,
+.dock-tab-panel > .editor-pane {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.dock-tab-panel > .panel-pane {
+  flex: 1;
+  min-height: 0;
+}
 .panel-pane {
   display: flex;
   flex: 1 1 auto;
