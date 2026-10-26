@@ -103,7 +103,8 @@ function onPointerDown(event: PointerEvent) {
   startX = event.clientX;
   startValue = props.modelValue;
   window.addEventListener("pointermove", onPointerMove);
-  window.addEventListener("pointerup", onPointerUp, { once: true });
+  window.addEventListener("pointerup", finishDrag, { once: true });
+  window.addEventListener("pointercancel", finishDrag, { once: true });
 }
 
 function onPointerMove(event: PointerEvent) {
@@ -118,12 +119,14 @@ function onPointerMove(event: PointerEvent) {
   commit(startValue + dx * stepSize() * modifierScale(event));
 }
 
-function onPointerUp() {
+function finishDrag() {
   window.removeEventListener("pointermove", onPointerMove);
+  window.removeEventListener("pointerup", finishDrag);
+  window.removeEventListener("pointercancel", finishDrag);
   dragging.value = false;
 }
 
-onUnmounted(() => window.removeEventListener("pointermove", onPointerMove));
+onUnmounted(finishDrag);
 </script>
 
 <template>

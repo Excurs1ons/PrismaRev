@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, inject, reactive, ref, watch } from "vue";
+import { computed, inject, onUnmounted, reactive, ref, watch } from "vue";
 import { X } from "lucide-vue-next";
 import type { DockNode } from "../dock";
 import { DOCK_KEY, type DockContext } from "../dockContext";
@@ -33,11 +33,14 @@ watch(
   { immediate: true },
 );
 
+let endResize: (() => void) | null = null;
+
 function startResize(event: PointerEvent) {
   if (props.node.type !== "split") return;
   const el = splitEl.value;
   if (!el) return;
   event.preventDefault();
+  endResize?.();
   const target = event.currentTarget as HTMLElement | null;
   target?.setPointerCapture?.(event.pointerId);
   const horizontal = props.node.dir === "row";
@@ -53,15 +56,21 @@ function startResize(event: PointerEvent) {
   const stop = () => {
     window.removeEventListener("pointermove", move);
     window.removeEventListener("pointerup", stop);
+    window.removeEventListener("pointercancel", stop);
     document.body.style.cursor = "";
     document.body.style.userSelect = "";
+    if (endResize === stop) endResize = null;
   };
 
+  endResize = stop;
   window.addEventListener("pointermove", move);
   window.addEventListener("pointerup", stop);
+  window.addEventListener("pointercancel", stop);
   document.body.style.cursor = horizontal ? "col-resize" : "row-resize";
   document.body.style.userSelect = "none";
 }
+
+onUnmounted(() => endResize?.());
 
 </script>
 
