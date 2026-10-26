@@ -99,6 +99,69 @@ fn load_with_deps_validates_root_type_even_when_preloaded() {
 }
 
 #[test]
+fn raw_reads_refresh_lru_recency() {
+    let ids = [
+        AssetId::from_raw((1u64 << 32) | 1),
+        AssetId::from_raw((1u64 << 32) | 2),
+        AssetId::from_raw((1u64 << 32) | 3),
+    ];
+    let mut b = PackageBuilder::new();
+    b.add_asset(ids[0], AssetType::Binary, vec![0u8; 100], &[]);
+    b.add_asset(ids[1], AssetType::Binary, vec![1u8; 100], &[]);
+    b.add_asset(ids[2], AssetType::Binary, vec![2u8; 100], &[]);
+    let pak = b.build().unwrap();
+    let path = write_pak(&pak, "test_lru_raw.pak");
+
+    let mut rm = ResourceManager::new();
+    rm.load_package(&path).unwrap();
+    std::fs::remove_file(&path).ok();
+    rm.set_eviction_policy(EvictionPolicy::Lru);
+
+    let _: Handle<Vec<u8>> = rm.load(ids[0]).unwrap();
+    let _: Handle<Vec<u8>> = rm.load(ids[1]).unwrap();
+    let _: Handle<Vec<u8>> = rm.load(ids[2]).unwrap();
+
+    // Raw reads must count as accesses: ids[0] is now hotter than ids[1].
+    rm.get_raw(ids[0]).unwrap();
+    rm.evict(1);
+
+    assert!(rm.get_raw(ids[0]).is_ok(), "hot raw-read asset evicted");
+    assert!(rm.get_raw(ids[1]).is_err(), "cold asset should be evicted");
+    assert!(rm.get_raw(ids[2]).is_ok());
+}
+
+#[test]
+fn fifo_evicts_in_load_order_not_access_order() {
+    let ids = [
+        AssetId::from_raw((1u64 << 32) | 11),
+        AssetId::from_raw((1u64 << 32) | 12),
+        AssetId::from_raw((1u64 << 32) | 13),
+    ];
+    let mut b = PackageBuilder::new();
+    b.add_asset(ids[0], AssetType::Binary, vec![0u8; 100], &[]);
+    b.add_asset(ids[1], AssetType::Binary, vec![1u8; 100], &[]);
+    b.add_asset(ids[2], AssetType::Binary, vec![2u8; 100], &[]);
+    let pak = b.build().unwrap();
+    let path = write_pak(&pak, "test_fifo.pak");
+
+    let mut rm = ResourceManager::new();
+    rm.load_package(&path).unwrap();
+    std::fs::remove_file(&path).ok();
+    rm.set_eviction_policy(EvictionPolicy::Fifo);
+
+    let h1: Handle<Vec<u8>> = rm.load(ids[0]).unwrap();
+    let _: Handle<Vec<u8>> = rm.load(ids[1]).unwrap();
+    let _: Handle<Vec<u8>> = rm.load(ids[2]).unwrap();
+    // Touch the first asset; FIFO must still evict it because it was loaded first.
+    rm.get(h1).unwrap();
+    rm.evict(1);
+
+    assert!(rm.get_raw(ids[0]).is_err(), "first loaded asset should go");
+    assert!(rm.get_raw(ids[1]).is_ok());
+    assert!(rm.get_raw(ids[2]).is_ok());
+}
+
+#[test]
 fn memory_budget_eviction_lru() {
     let id1 = AssetId::from_raw((1u64 << 32) | 1);
     let id2 = AssetId::from_raw((1u64 << 32) | 2);

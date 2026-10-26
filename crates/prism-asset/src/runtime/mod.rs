@@ -16,6 +16,7 @@
 
 use crate::core::{AnyHandle, AssetId, AssetType, Handle};
 use crate::package::PackageReader;
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::path::Path;
 use std::time::Instant;
@@ -96,10 +97,13 @@ struct Slot {
     /// Handle of the 槽 for type-safe 访问
     #[allow(dead_code)]
     handle: AnyHandle,
-    /// 最后一个 访问 时间戳 (for LRU eviction)
-    last_access: Instant,
+    /// 最后一个 访问 时间戳 (for LRU eviction). `Cell` lets read-only
+    /// accessors (`get_raw`, `read_stream`) refresh recency without `&mut`.
+    last_access: Cell<Instant>,
     /// 大小 of the 资源 data in 字节 (for 内存 tracking)
     size_bytes: u64,
+    /// Load sequence stamp (for FIFO eviction), assigned when data is cached.
+    load_epoch: u64,
 }
 
 impl Slot {
@@ -110,8 +114,9 @@ impl Slot {
             asset_type: AssetType::Unknown,
             data: None,
             handle: AnyHandle::from_raw(index as u64),
-            last_access: Instant::now(),
+            last_access: Cell::new(Instant::now()),
             size_bytes: 0,
+            load_epoch: 0,
         }
     }
 }
@@ -286,14 +291,19 @@ impl ResourceManager {
 
         let mut freed: u64 = 0;
 
-        // 构建 eviction candidate 列表
-        let mut candidates: Vec<(u32, Instant, u64)> = self
+        // 构建 eviction candidate 列表: (slot, last_access, size, load_epoch)
+        let mut candidates: Vec<(u32, Instant, u64, u64)> = self
             .id_map
             .values()
             .filter_map(|&idx| {
                 let slot = &self.slots[idx as usize];
                 if slot.data.is_some() {
-                    Some((idx, slot.last_access, slot.size_bytes))
+                    Some((
+                        idx,
+                        slot.last_access.get(),
+                        slot.size_bytes,
+                        slot.load_epoch,
+                    ))
                 } else {
                     None
                 }
@@ -303,17 +313,16 @@ impl ResourceManager {
         match self.memory.policy {
             EvictionPolicy::Lru => {
                 // 排序 by 访问 时间 (oldest 第一个
-                candidates.sort_by_key(|&(_, time, _)| time);
+                candidates.sort_by_key(|&(_, time, _, _)| time);
             }
             EvictionPolicy::Fifo => {
-                // Can't truly track FIFO from last_access alone,
-                // but treating 访问 时间 as 加载 时间 is 关闭
-                candidates.sort_by_key(|&(_, time, _)| time);
+                // FIFO orders by when the data was loaded, not last access.
+                candidates.sort_by_key(|&(_, _, _, epoch)| epoch);
             }
             EvictionPolicy::None => return 0,
         }
 
-        for (idx, _time, size) in &candidates {
+        for (idx, _time, size, _epoch) in &candidates {
             if freed >= target_bytes {
                 break;
             }
@@ -451,8 +460,9 @@ impl ResourceManager {
                 asset_type: AssetType::from_u32(record.type_id),
                 data: None,
                 handle: AnyHandle::from_raw(index as u64),
-                last_access: Instant::now(),
+                last_access: Cell::new(Instant::now()),
                 size_bytes: record.size, // track uncompressed size
+                load_epoch: 0,
             };
             self.id_map.insert(asset_id, index);
         }
@@ -588,6 +598,7 @@ impl ResourceManager {
         {
             let slot = &self.slots[slot_index as usize];
             if let Some(ref data) = slot.data {
+                slot.last_access.set(Instant::now());
                 return Ok(data.clone());
             }
         }
@@ -619,12 +630,14 @@ impl ResourceManager {
         }
 
         // 存储
+        let epoch = self.load_epoch;
         {
             let slot = &mut self.slots[slot_index as usize];
             slot.data = Some(data.clone());
-            slot.last_access = Instant::now();
+            slot.last_access.set(Instant::now());
             slot.size_bytes = size;
             slot.generation += 1;
+            slot.load_epoch = epoch;
         }
         self.memory.account_add(size);
         self.load_epoch += 1;
@@ -636,7 +649,9 @@ impl ResourceManager {
     fn get_raw_bytes(&self, id: AssetId) -> Result<Vec<u8>, RuntimeError> {
         let slot_index = self.slot_index(id).ok_or(RuntimeError::NotFound(id))?;
         let slot = &self.slots[slot_index as usize];
-        slot.data.clone().ok_or(RuntimeError::NotLoaded(id))
+        let data = slot.data.as_ref().ok_or(RuntimeError::NotLoaded(id))?;
+        slot.last_access.set(Instant::now());
+        Ok(data.clone())
     }
 
     /// 加载 an 资源 by ID and return a typed handle.
@@ -656,7 +671,7 @@ impl ResourceManager {
                     expected: std::any::type_name::<T>(),
                     got: slot.asset_type,
                 })?;
-                slot.last_access = Instant::now();
+                slot.last_access.set(Instant::now());
                 return Ok(Handle::new(slot_index, slot.generation));
             }
         }
@@ -692,12 +707,14 @@ impl ResourceManager {
         }
 
         // 存储 data and 更新 metadata.
+        let epoch = self.load_epoch;
         {
             let slot = &mut self.slots[slot_index as usize];
             slot.data = Some(data);
-            slot.last_access = Instant::now();
+            slot.last_access.set(Instant::now());
             slot.size_bytes = size;
             slot.generation += 1;
+            slot.load_epoch = epoch;
         }
         self.memory.account_add(size);
         self.load_epoch += 1;
@@ -777,7 +794,7 @@ impl ResourceManager {
                 got: slot.generation,
             });
         }
-        slot.last_access = Instant::now();
+        slot.last_access.set(Instant::now());
         let data = slot
             .data
             .as_ref()
@@ -853,6 +870,7 @@ impl ResourceManager {
             if let Some(&idx) = self.id_map.get(&asset_id) {
                 // 读取 fresh data and 更新 槽
                 if let Ok(Some(data)) = reader.read_asset_data(asset_id) {
+                    let epoch = self.load_epoch;
                     let slot = &mut self.slots[idx as usize];
 
                     // 更新 内存 tracking.
@@ -866,7 +884,9 @@ impl ResourceManager {
                     slot.data = Some(data);
                     slot.size_bytes = new_size;
                     slot.generation += 1;
-                    slot.last_access = Instant::now();
+                    slot.last_access.set(Instant::now());
+                    slot.load_epoch = epoch;
+                    self.load_epoch += 1;
                     tracing::info!("Hot-reloaded asset {asset_id}");
                 }
             }
