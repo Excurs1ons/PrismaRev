@@ -90,6 +90,13 @@ struct FireEvent {
     id: u32,
 }
 
+/// Messages from [`TimerClient`] to the main-thread [`TimerService`].
+enum ServiceMsg {
+    Register(RegMsg),
+    Destroy(TimerId),
+    DestroyGroup(u32),
+}
+
 const SLEEP_CHUNK: Duration = Duration::from_millis(50);
 
 // ── 公开类型 ─────────────────────────────────────────────────────────────
@@ -110,7 +117,7 @@ pub type TimerId = u32;
 #[derive(Clone)]
 pub struct TimerClient {
     cmd_tx: Sender<WorkerCmd>,
-    reg_tx: Sender<RegMsg>,
+    reg_tx: Sender<ServiceMsg>,
     state: Arc<Mutex<SlotMap<TimerState>>>,
 }
 
@@ -127,18 +134,21 @@ impl TimerClient {
         };
         let deadline = Instant::now() + params.delay;
         let group_id = params.group_id;
-        let _ = self.reg_tx.send(RegMsg {
+        let _ = self.reg_tx.send(ServiceMsg::Register(RegMsg {
             id,
             group_id,
             params,
             deadline,
-        });
+        }));
         let _ = self.cmd_tx.send(WorkerCmd { id, deadline });
         id
     }
 
     pub fn destroy(&self, id: TimerId) {
         self.state.lock().unwrap().remove(id);
+        // The service owns the callback/params; tell it to drop them too so a
+        // reused slot id cannot dispatch the previous timer's callback.
+        let _ = self.reg_tx.send(ServiceMsg::Destroy(id));
     }
 
     pub fn pause(&self, id: TimerId) {
@@ -167,15 +177,18 @@ impl TimerClient {
     }
 
     pub fn destroy_group(&self, group: u32) {
-        let mut s = self.state.lock().unwrap();
-        for i in 0..s.slots.len() {
-            if let Some(ref st) = s.slots[i] {
-                if st.group == Some(group) {
-                    s.slots[i] = None;
-                    s.free.push(i as u32);
+        {
+            let mut s = self.state.lock().unwrap();
+            for i in 0..s.slots.len() {
+                if let Some(ref st) = s.slots[i] {
+                    if st.group == Some(group) {
+                        s.slots[i] = None;
+                        s.free.push(i as u32);
+                    }
                 }
             }
         }
+        let _ = self.reg_tx.send(ServiceMsg::DestroyGroup(group));
     }
 }
 
@@ -183,8 +196,9 @@ impl TimerClient {
 pub struct TimerService {
     pub client: TimerClient,
     fire_rx: Receiver<FireEvent>,
-    reg_rx: Receiver<RegMsg>,
-    params: SlotMap<TimerParams>,
+    reg_rx: Receiver<ServiceMsg>,
+    /// Callback/params keyed by the same slot id as `client.state`.
+    params: HashMap<TimerId, TimerParams>,
     groups: HashMap<u32, Vec<u32>>,
 }
 
@@ -192,7 +206,7 @@ impl TimerService {
     pub fn new() -> Self {
         let (cmd_tx, cmd_rx): (Sender<WorkerCmd>, Receiver<WorkerCmd>) = mpsc::channel();
         let (fire_tx, fire_rx): (Sender<FireEvent>, Receiver<FireEvent>) = mpsc::channel();
-        let (reg_tx, reg_rx): (Sender<RegMsg>, Receiver<RegMsg>) = mpsc::channel();
+        let (reg_tx, reg_rx): (Sender<ServiceMsg>, Receiver<ServiceMsg>) = mpsc::channel();
         let state: Arc<Mutex<SlotMap<TimerState>>> = Arc::new(Mutex::new(SlotMap::new()));
 
         let worker_state = state.clone();
@@ -206,24 +220,41 @@ impl TimerService {
             },
             fire_rx,
             reg_rx,
-            params: SlotMap::new(),
+            params: HashMap::new(),
             groups: HashMap::new(),
         }
     }
 
     /// 每帧在主线程调用，派发到期回调。
     pub fn tick(&mut self) {
-        // 1. 新注册 → 存 params + group 映射 + exec_immediately
+        // 1. 处理注册/销毁消息（同一个 mpsc，按发送顺序消费）。
         while let Ok(msg) = self.reg_rx.try_recv() {
-            let id = msg.id;
-            if let Some(g) = msg.group_id {
-                self.groups.entry(g).or_default().push(id);
-            }
-            let exec = msg.params.exec_immediately;
-            self.params.insert(msg.params);
-            if exec {
-                if let Some(p) = self.params.get_mut(id) {
-                    (p.callback)();
+            match msg {
+                ServiceMsg::Register(msg) => {
+                    let id = msg.id;
+                    if let Some(g) = msg.group_id {
+                        self.groups.entry(g).or_default().push(id);
+                    }
+                    let exec = msg.params.exec_immediately;
+                    self.params.insert(id, msg.params);
+                    if exec {
+                        if let Some(p) = self.params.get_mut(&id) {
+                            (p.callback)();
+                        }
+                    }
+                }
+                ServiceMsg::Destroy(id) => {
+                    self.params.remove(&id);
+                    for ids in self.groups.values_mut() {
+                        ids.retain(|&member| member != id);
+                    }
+                }
+                ServiceMsg::DestroyGroup(group) => {
+                    if let Some(ids) = self.groups.remove(&group) {
+                        for id in ids {
+                            self.params.remove(&id);
+                        }
+                    }
                 }
             }
         }
@@ -258,7 +289,7 @@ impl TimerService {
                 continue;
             }
 
-            if let Some(p) = self.params.get_mut(id) {
+            if let Some(p) = self.params.get_mut(&id) {
                 (p.callback)();
                 if let Some(period) = p.interval {
                     self.client
@@ -273,7 +304,7 @@ impl TimerService {
                     });
                 } else {
                     self.client.state.lock().unwrap().remove(id);
-                    self.params.remove(id);
+                    self.params.remove(&id);
                 }
             }
         }
@@ -385,5 +416,43 @@ impl TimerSet {
 impl Drop for TimerSet {
     fn drop(&mut self) {
         self.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    fn timer(flag: Arc<AtomicBool>, exec_immediately: bool) -> TimerParams {
+        TimerParams {
+            delay: Duration::from_secs(30),
+            interval: None,
+            exec_immediately,
+            group_id: None,
+            callback: Box::new(move || flag.store(true, Ordering::SeqCst)),
+        }
+    }
+
+    #[test]
+    fn reused_slot_does_not_fire_destroyed_callback() {
+        let mut service = TimerService::new();
+        let old_fired = Arc::new(AtomicBool::new(false));
+        let new_fired = Arc::new(AtomicBool::new(false));
+
+        let old_id = service.client.create_timer(timer(old_fired.clone(), false));
+        service.tick(); // register params for old_id
+
+        service.client.destroy(old_id);
+        let new_id = service.client.create_timer(timer(new_fired.clone(), true));
+        assert_eq!(old_id, new_id, "destroyed slot should be reused");
+
+        service.tick();
+
+        assert!(new_fired.load(Ordering::SeqCst), "new callback must fire");
+        assert!(
+            !old_fired.load(Ordering::SeqCst),
+            "destroyed callback must not fire for the reused id"
+        );
     }
 }
