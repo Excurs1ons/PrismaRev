@@ -575,8 +575,8 @@ impl PackageReader {
         let deps_bytes = &bytes[deps_start as usize..header.data_offset as usize];
         let dep_count = deps_bytes.len() / 8;
         let mut dependency_array = Vec::with_capacity(dep_count);
-        for chunk in deps_bytes.chunks_exact(8) {
-            dependency_array.push(u64::from_le_bytes(chunk.try_into().unwrap()));
+        for &chunk in deps_bytes.as_chunks::<8>().0 {
+            dependency_array.push(u64::from_le_bytes(chunk));
         }
 
         // record 里的依赖区间与数据区间同样来自文件内容，不校验就会在
