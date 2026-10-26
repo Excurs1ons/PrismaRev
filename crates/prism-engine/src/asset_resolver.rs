@@ -203,81 +203,8 @@ impl GpuAssetResolver {
             .map_err(|e| log::warn!("load_mesh_inputs: get '{path}' failed: {e}"))
             .ok()?;
 
-        // De-interleave RMES 顶点 data into split arrays.
-        let info = &mesh.info;
-        let stride = info.stride_bytes as usize;
-        if stride == 0 || stride % 4 != 0 {
-            log::warn!("load_mesh_inputs: bad stride {} for '{path}'", stride);
-            return None;
-        }
-        let vert_count = info.vert_count as usize;
-        let float_stride = stride / 4;
-
-        let pos_floats = 3;
-        let nrm_floats = 3;
-        let uv_floats = if info.uv_channels >= 1 { 2 } else { 0 };
-        let expected_float_stride = pos_floats + nrm_floats + uv_floats;
-        if float_stride != expected_float_stride {
-            log::warn!(
-                "load_mesh_inputs: stride mismatch for '{path}' \
-                 (got {float_stride} floats, expected {expected_float_stride})"
-            );
-            return None;
-        }
-        if info.vertex_data.len() < vert_count * stride {
-            log::warn!("load_mesh_inputs: vertex buffer truncated for '{path}'");
-            return None;
-        }
-        if info.index_data.len() < info.idx_count as usize * 4 {
-            log::warn!("load_mesh_inputs: index buffer truncated for '{path}'");
-            return None;
-        }
-
-        let mut positions = Vec::with_capacity(vert_count);
-        let mut normals = Vec::with_capacity(vert_count);
-        let mut uvs = Vec::with_capacity(vert_count);
-        let mut tangents = Vec::with_capacity(vert_count);
-
-        for v in 0..vert_count {
-            let base = v * float_stride;
-            let row = &info.vertex_data[base * 4..(base + float_stride) * 4];
-            let read3 = |off: usize| -> [f32; 3] {
-                [
-                    f32::from_le_bytes(row[off * 4..off * 4 + 4].try_into().unwrap()),
-                    f32::from_le_bytes(row[off * 4 + 4..off * 4 + 8].try_into().unwrap()),
-                    f32::from_le_bytes(row[off * 4 + 8..off * 4 + 12].try_into().unwrap()),
-                ]
-            };
-            positions.push(read3(0));
-            normals.push(read3(3));
-            if uv_floats == 2 {
-                let off = 6;
-                uvs.push([
-                    f32::from_le_bytes(row[off * 4..off * 4 + 4].try_into().unwrap()),
-                    f32::from_le_bytes(row[off * 4 + 4..off * 4 + 8].try_into().unwrap()),
-                ]);
-            } else {
-                uvs.push([0.0, 0.0]);
-            }
-            tangents.push([1.0, 0.0, 0.0, 1.0]); // default tangent
-        }
-
-        let mut indices = Vec::with_capacity(info.idx_count as usize);
-        for i in 0..info.idx_count as usize {
-            let off = i * 4;
-            indices.push(u32::from_le_bytes(
-                info.index_data[off..off + 4].try_into().unwrap(),
-            ));
-        }
-
-        Some(MeshUploadInput {
-            positions,
-            normals,
-            colors: vec![],
-            uvs,
-            tangents,
-            indices,
-        })
+        // RMES 的顶点区是分段布局（见 `deinterleave_rmes`），不是每顶点交错。
+        deinterleave_rmes(path, &mesh.info)
     }
 
     /// CPU 段：加载材质资源 → 18 个 PBR 标量 + 5 张纹理像素
@@ -386,6 +313,101 @@ impl Default for GpuAssetResolver {
     }
 }
 
+/// 把 RMES 的分段顶点区解成 split arrays。
+///
+/// RMES 的顶点区**不是**每顶点交错，而是三段连续存放：
+/// `[positions × vert_count][normals × vert_count][uv0 × vert_count]`。
+/// 布局来自写入端 —— `prism-cooker` 的 `GltfImporter::write_intermediate`
+/// 按这个顺序产出 RMXI，`MeshCooker::write_rmes` 原样复制，并按同样的分段
+/// 写出 `pos_off / nrm_off / uv0_off`。
+///
+/// `stride_bytes` 只表示「每顶点合计多少字节」，拿它当 interleaved 行宽会把
+/// 第二个顶点之后的 positions 读进 normals / uv 的内存里。
+fn deinterleave_rmes(path: &str, info: &prism_asset::formats::RmesInfo) -> Option<MeshUploadInput> {
+    let stride = info.stride_bytes as usize;
+    if stride == 0 || stride % 4 != 0 {
+        log::warn!("load_mesh_inputs: bad stride {stride} for '{path}'");
+        return None;
+    }
+    let float_stride = stride / 4;
+    let vert_count = info.vert_count as usize;
+    let uv_floats = if info.uv_channels >= 1 { 2 } else { 0 };
+
+    // 两种合法组合：每顶点 3 + uv 个 float（无 normals），或 6 + uv 个（有 normals）。
+    let has_normals = if float_stride == 3 + uv_floats {
+        false
+    } else if float_stride == 6 + uv_floats {
+        true
+    } else {
+        log::warn!(
+            "load_mesh_inputs: stride mismatch for '{path}' \
+             (got {float_stride} floats, uv_channels {})",
+            info.uv_channels
+        );
+        return None;
+    };
+
+    if info.vertex_data.len() < vert_count * stride {
+        log::warn!("load_mesh_inputs: vertex buffer truncated for '{path}'");
+        return None;
+    }
+    if info.index_data.len() < info.idx_count as usize * 4 {
+        log::warn!("load_mesh_inputs: index buffer truncated for '{path}'");
+        return None;
+    }
+
+    // 段首（单位：float）。
+    let nrm_base = vert_count * 3;
+    let uv_base = nrm_base + if has_normals { vert_count * 3 } else { 0 };
+
+    let read = |float_index: usize| -> f32 {
+        let off = float_index * 4;
+        f32::from_le_bytes(info.vertex_data[off..off + 4].try_into().unwrap())
+    };
+
+    let mut positions = Vec::with_capacity(vert_count);
+    let mut normals = Vec::with_capacity(vert_count);
+    let mut uvs = Vec::with_capacity(vert_count);
+    let mut tangents = Vec::with_capacity(vert_count);
+
+    for v in 0..vert_count {
+        let p = v * 3;
+        positions.push([read(p), read(p + 1), read(p + 2)]);
+        if has_normals {
+            let n = nrm_base + v * 3;
+            normals.push([read(n), read(n + 1), read(n + 2)]);
+        } else {
+            // 没有法线的资源没有可靠的着色法线；给一个固定方向而不是 0 向量，
+            // 避免光照直接退化成 NaN / 全黑。
+            normals.push([0.0, 0.0, 1.0]);
+        }
+        if uv_floats == 2 {
+            let t = uv_base + v * 2;
+            uvs.push([read(t), read(t + 1)]);
+        } else {
+            uvs.push([0.0, 0.0]);
+        }
+        tangents.push([1.0, 0.0, 0.0, 1.0]); // default tangent
+    }
+
+    let mut indices = Vec::with_capacity(info.idx_count as usize);
+    for i in 0..info.idx_count as usize {
+        let off = i * 4;
+        indices.push(u32::from_le_bytes(
+            info.index_data[off..off + 4].try_into().unwrap(),
+        ));
+    }
+
+    Some(MeshUploadInput {
+        positions,
+        normals,
+        colors: vec![],
+        uvs,
+        tangents,
+        indices,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -466,5 +488,86 @@ mod tests {
 
         assert!(resolver.prepare_requests(&world).is_empty());
         assert!(resolver.prepare_requests(&world).is_empty());
+    }
+
+    /// 按 RMXI / RMES 的真实布局构造顶点区：分段，不是交错。
+    fn planar_mesh(
+        positions: &[[f32; 3]],
+        normals: &[[f32; 3]],
+        uvs: &[[f32; 2]],
+        indices: &[u32],
+    ) -> prism_asset::formats::RmesInfo {
+        let mut vertex_data = Vec::new();
+        for p in positions {
+            for c in p {
+                vertex_data.extend_from_slice(&c.to_le_bytes());
+            }
+        }
+        for n in normals {
+            for c in n {
+                vertex_data.extend_from_slice(&c.to_le_bytes());
+            }
+        }
+        for t in uvs {
+            for c in t {
+                vertex_data.extend_from_slice(&c.to_le_bytes());
+            }
+        }
+        let float_stride =
+            3 + if normals.is_empty() { 0 } else { 3 } + if uvs.is_empty() { 0 } else { 2 };
+        prism_asset::formats::RmesInfo {
+            vert_count: positions.len() as u32,
+            idx_count: indices.len() as u32,
+            uv_channels: if uvs.is_empty() { 0 } else { 1 },
+            stride_bytes: (float_stride * 4) as u32,
+            vertex_data,
+            index_data: indices.iter().flat_map(|i| i.to_le_bytes()).collect(),
+        }
+    }
+
+    #[test]
+    fn planar_rmes_splits_into_channels_instead_of_rows() {
+        // 两个顶点的数值互不相同：任何「把分段当交错」的读法都会串道。
+        let info = planar_mesh(
+            &[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]],
+            &[[0.0, 0.0, 1.0], [0.0, 1.0, 0.0]],
+            &[[0.25, 0.5], [0.75, 1.0]],
+            &[0, 1, 0],
+        );
+
+        let mesh = deinterleave_rmes("test/planar.rmes", &info).expect("valid RMES must decode");
+
+        assert_eq!(mesh.positions, vec![[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]);
+        assert_eq!(mesh.normals, vec![[0.0, 0.0, 1.0], [0.0, 1.0, 0.0]]);
+        assert_eq!(mesh.uvs, vec![[0.25, 0.5], [0.75, 1.0]]);
+        assert_eq!(mesh.indices, vec![0, 1, 0]);
+    }
+
+    #[test]
+    fn planar_rmes_without_normals_keeps_positions_and_uvs() {
+        // 无 normals 时 stride 是 3 + 2 个 float，uv 段紧跟 positions 段。
+        let info = planar_mesh(
+            &[[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            &[],
+            &[[0.1, 0.2], [0.3, 0.4]],
+            &[0, 1, 1],
+        );
+
+        let mesh = deinterleave_rmes("test/uv-only.rmes", &info).expect("valid RMES must decode");
+
+        assert_eq!(mesh.positions, vec![[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]);
+        assert_eq!(mesh.normals, vec![[0.0, 0.0, 1.0], [0.0, 0.0, 1.0]]);
+        assert_eq!(mesh.uvs, vec![[0.1, 0.2], [0.3, 0.4]]);
+    }
+
+    #[test]
+    fn planar_rmes_positions_only_falls_back_to_a_fixed_normal() {
+        let info = planar_mesh(&[[7.0, 8.0, 9.0], [10.0, 11.0, 12.0]], &[], &[], &[0, 1, 0]);
+
+        let mesh = deinterleave_rmes("test/pos-only.rmes", &info).expect("valid RMES must decode");
+
+        assert_eq!(mesh.positions, vec![[7.0, 8.0, 9.0], [10.0, 11.0, 12.0]]);
+        assert_eq!(mesh.normals, vec![[0.0, 0.0, 1.0], [0.0, 0.0, 1.0]]);
+        assert_eq!(mesh.uvs, vec![[0.0, 0.0], [0.0, 0.0]]);
     }
 }
