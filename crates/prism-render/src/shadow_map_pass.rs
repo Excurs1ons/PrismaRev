@@ -154,6 +154,14 @@ impl ShadowMapPass {
         }
     }
 
+    /// 阴影通道正面三角形绕序。
+    ///
+    /// 正交光照投影矩阵（`light_view_proj`）没有相机透视视锥的 Vulkan Y 翻转，
+    /// 其行列式为正；而透视投影包含负 Y 缩放。因此在光照裁剪空间下，面向光源
+    /// 的正面三角形绕序为 [`vk::FrontFace::CLOCKWISE`]。若使用默认的
+    /// `COUNTER_CLOCKWISE`，背向剔除会将面向光源的正面剔除。
+    pub(crate) const SHADOW_FRONT_FACE: vk::FrontFace = vk::FrontFace::CLOCKWISE;
+
     /// 创建一套 depth-only 阴影管线；两套管线只差剔除模式。
     ///
     /// `warmup` 与 `execute` 各调用两次（背面剔除 / 双面），避免把同样的加载
@@ -213,6 +221,7 @@ impl ShadowMapPass {
             depth_write_enable: Some(true),
             color_attachment_count: Some(0),
             color_blend_attachments: None,
+            front_face: Some(Self::SHADOW_FRONT_FACE),
         })
         .context("create shadow depth-only pipeline")?;
 
@@ -535,5 +544,11 @@ mod tests {
             ShadowMapPass::shadow_cull_mode(true),
             vk::CullModeFlags::NONE
         );
+    }
+
+    #[test]
+    fn shadow_pass_uses_clockwise_front_face() {
+        // 无 Y-flip 的光照正交投影下，正面绕序为 CLOCKWISE
+        assert_eq!(ShadowMapPass::SHADOW_FRONT_FACE, vk::FrontFace::CLOCKWISE);
     }
 }

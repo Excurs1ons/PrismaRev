@@ -51,6 +51,9 @@ pub struct PipelineDesc<'a> {
     /// (e.g. ForwardPass writes 颜色 + view-normal) where each 目标 needs a
     /// different 混合 配置 颜色 = Alpha 混合 法线 = no 混合
     pub color_blend_attachments: Option<&'a [vk::PipelineColorBlendAttachmentState]>,
+    /// 覆盖正面绕序（默认 [`vk::FrontFace::COUNTER_CLOCKWISE`]）。
+    /// 阴影管线使用无 Y 翻转的正交光照投影，因此需要 [`vk::FrontFace::CLOCKWISE`]。
+    pub front_face: Option<vk::FrontFace>,
 }
 
 /// A compiled graphics 管线 with its 布局
@@ -121,7 +124,7 @@ impl GraphicsPipeline {
             // 视图 矩阵 is now a proper 旋转 (det +1); the projection's
             // y-flip Vulkan NDC) is the single remaining reflection, so 前
             // faces wind counter-clockwise in 片段 空间
-            .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
+            .front_face(desc.front_face.unwrap_or(vk::FrontFace::COUNTER_CLOCKWISE))
             .depth_bias_enable(desc.depth_bias_enable.unwrap_or(false))
             .depth_bias_constant_factor(desc.depth_bias_constant_factor.unwrap_or(0.0))
             .depth_bias_slope_factor(desc.depth_bias_slope_factor.unwrap_or(0.0));

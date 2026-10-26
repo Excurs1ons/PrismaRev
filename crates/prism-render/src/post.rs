@@ -433,6 +433,7 @@ impl PostPass {
             depth_write_enable: Some(false),
             color_attachment_count: None,
             color_blend_attachments: Some(std::slice::from_ref(&blend_attachment)),
+            front_face: None,
         })
         .context("PostPass: create pipeline")?;
 
