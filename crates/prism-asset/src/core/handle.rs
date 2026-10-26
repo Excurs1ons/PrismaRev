@@ -21,7 +21,9 @@ pub const MAX_STATIC_INDEX: u32 = 1024;
 pub struct Handle<T: ?Sized> {
     /// Packed: 索引 in the low 32 bits, generation in the high 32 bits.
     packed: u64,
-    _marker: PhantomData<*const T>,
+    /// `fn() -> T` keeps `Handle<T>: Send + Sync` for every `T` without
+    /// implying ownership (a raw `*const T` would make it `!Send + !Sync`).
+    _marker: PhantomData<fn() -> T>,
 }
 
 // Manual Clone/Copy to avoid deriving T: Clone/T: 复制 bounds.
