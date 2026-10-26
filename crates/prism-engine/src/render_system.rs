@@ -203,7 +203,6 @@ fn collect_scene_changes(
         .and_then(|entity| world.get::<Camera>(entity))
         .map(|cam| cam.orthographic)
         .unwrap_or(false);
-
     // 2. 光源 —— 统一 `Light`（Unity 形状）与旧三组件归一成 `LightSample`。
     let samples = scene::systems::lights::collect_light_samples(world);
     let dir_light = samples
