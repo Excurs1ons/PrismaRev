@@ -65,6 +65,42 @@ const enabledCount = computed(
   () => manifest.value.filter((entry) => entry.enabled).length,
 );
 
+function targetGroup(target: string): string {
+  switch (target.trim().toLowerCase()) {
+    case "windows":
+    case "linux":
+    case "macos":
+      return "Standalone";
+    case "android":
+      return "Android";
+    case "ios":
+      return "iOS";
+    case "web":
+    case "webgl":
+    case "wasm":
+      return "WebGL";
+    default:
+      return "Unknown";
+  }
+}
+
+/** 随配置与平台选择实时响应的 Unity `Build.Profile` 派生摘要。 */
+const activeProfile = computed(() => {
+  const name = settings.value?.build.profile ?? profile.value?.name ?? "release";
+  const target = settings.value?.build.target ?? profile.value?.target ?? "windows";
+  const dev = name.toLowerCase() === "debug";
+  return {
+    name,
+    target,
+    targetGroup: targetGroup(target),
+    options: {
+      development: dev,
+      allowDebugging: dev,
+      connectWithProfiler: false,
+    },
+  };
+});
+
 function addScene() {
   const doc = props.scenes.find((scene) => scene.name === addName.value);
   if (!doc) return;
@@ -158,7 +194,7 @@ onMounted(() => void load());
       <strong>构建项目</strong>
       <span class="spacer" />
       <span class="hint">
-        {{ profile ? `${profile.targetGroup} · ${profile.target} · ${profile.name}` : "Windows Desktop" }}
+        {{ `${activeProfile.targetGroup} · ${activeProfile.target} · ${activeProfile.name}` }}
       </span>
     </div>
 
@@ -230,12 +266,12 @@ onMounted(() => void load());
           </p>
         </div>
 
-        <p v-if="profile" class="hint">
-          Unity <code>Build.Profile</code>：<strong>{{ profile.name }}</strong> ·
-          {{ profile.targetGroup }} / {{ profile.target }} ·
+        <p class="hint">
+          Unity <code>Build.Profile</code>：<strong>{{ activeProfile.name }}</strong> ·
+          {{ activeProfile.targetGroup }} / {{ activeProfile.target }} ·
           {{ enabledCount }} 个启用场景 ·
-          {{ profile.options.development ? "开发构建" : "发布构建" }}
-          <span v-if="profile.options.allowDebugging"> · 允许调试</span>
+          {{ activeProfile.options.development ? "开发构建" : "发布构建" }}
+          <span v-if="activeProfile.options.allowDebugging"> · 允许调试</span>
         </p>
 
         <p class="hint">

@@ -37,6 +37,19 @@ pub struct BuildScene {
     pub build_index: Option<usize>,
 }
 
+/// 路径是否是可构建/可打包为场景包的格式（`.scene.json` 或 `.rscn`）。
+pub fn is_cookable_scene_path(path: &str) -> bool {
+    let lower = path.trim().to_ascii_lowercase();
+    lower.ends_with(".scene.json") || lower.ends_with(".rscn")
+}
+
+impl BuildScene {
+    /// 该条目的路径是否为支持的场景格式。
+    pub fn is_cookable(&self) -> bool {
+        is_cookable_scene_path(&self.path)
+    }
+}
+
 /// Unity `BuildOptions`（只投影引擎实际有语义的两位）。
 ///
 /// PrismaRev 没有 profile 级别的任意 flag，因此两位都由
@@ -142,7 +155,15 @@ impl BuildProfile {
         self.scenes.iter().filter(|scene| scene.enabled).count()
     }
 
-    /// 构建前的守卫：至少有一个启用场景，且目标 / 输出目录非空。
+    /// 启用的可构建场景数（对应 `build-scenes` 最终能打包的场景）。
+    pub fn cookable_scene_count(&self) -> usize {
+        self.scenes
+            .iter()
+            .filter(|scene| scene.enabled && scene.is_cookable())
+            .count()
+    }
+
+    /// 构建前的守卫：至少有一个启用场景、目标与输出目录非空，且启用场景必须为可构建格式。
     ///
     /// 对应 Unity `BuildPipeline.BuildPlayer` 在没有场景时直接失败的行为。
     pub fn validate(&self) -> Result<(), String> {
@@ -154,6 +175,17 @@ impl BuildProfile {
         }
         if self.enabled_scene_count() == 0 {
             return Err("没有启用的场景：先在场景列表里勾选至少一个".into());
+        }
+        for scene in &self.scenes {
+            if scene.enabled && !scene.is_cookable() {
+                return Err(format!(
+                    "启用场景 '{}' 不是受支持的场景格式（需要 .scene.json 或 .rscn）",
+                    scene.path
+                ));
+            }
+        }
+        if self.cookable_scene_count() == 0 {
+            return Err("没有可构建的启用场景（需要 .scene.json 或 .rscn）".into());
         }
         Ok(())
     }
@@ -279,6 +311,41 @@ mod tests {
         assert!(BuildProfile::new(&empty_output, &[scene("main", true)])
             .validate()
             .is_err());
+    }
+
+    #[test]
+    fn validate_rejects_unsupported_scene_paths() {
+        let bad_scene = SceneListEntry {
+            name: "notes".into(),
+            path: "docs/notes.txt".into(),
+            enabled: true,
+        };
+        assert!(
+            BuildProfile::new(&settings(), std::slice::from_ref(&bad_scene))
+                .validate()
+                .is_err()
+        );
+
+        // 禁用状态下的不支持路径不阻止构建
+        let disabled_bad = SceneListEntry {
+            enabled: false,
+            ..bad_scene
+        };
+        assert!(
+            BuildProfile::new(&settings(), &[disabled_bad, scene("main", true)])
+                .validate()
+                .is_ok()
+        );
+
+        // .rscn 也是支持的可构建场景路径
+        let rscn_scene = SceneListEntry {
+            name: "main".into(),
+            path: "scenes/main.rscn".into(),
+            enabled: true,
+        };
+        assert!(BuildProfile::new(&settings(), &[rscn_scene])
+            .validate()
+            .is_ok());
     }
 
     #[test]
