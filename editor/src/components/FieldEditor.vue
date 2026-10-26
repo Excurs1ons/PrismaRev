@@ -71,6 +71,62 @@ const isColor = computed(() => isColorField(hint.value?.name, props.value));
  */
 const enumOptions = computed(() => leafHint.value?.variants ?? null);
 
+// —— 字段绘制器 = Unity `PropertyDrawer` / `PropertyAttribute` ——
+// 后端 schema 用声明式 DTO 说明「这个字段该用滑动条 / 多行框 / 取色盘」，
+// 前端只按 `renderer` + `attributes` 渲染；未知渲染器退回默认控件。
+const drawer = computed(() => hint.value?.drawer ?? leafHint.value?.drawer ?? null);
+
+/** `[Range(min, max)]` → 滑动条。 */
+const sliderBounds = computed(() => {
+  const attr = drawer.value?.attributes.find((a) => a.type === "range");
+  return attr && attr.type === "range" ? attr : null;
+});
+
+/** `[TextArea]` / `[Multiline]` → 多行文本框的行数范围。 */
+const textAreaBounds = computed(() => {
+  const attr = drawer.value?.attributes.find(
+    (a) => a.type === "textArea" || a.type === "multiline",
+  );
+  if (!attr) return null;
+  if (attr.type === "textArea") return { minLines: attr.minLines, maxLines: attr.maxLines };
+  if (attr.type === "multiline") return { minLines: attr.lines, maxLines: attr.lines };
+  return null;
+});
+
+/** `[Tooltip]` → 标签的悬停提示。 */
+const tooltip = computed(() => {
+  const attr = drawer.value?.attributes.find((a) => a.type === "tooltip");
+  return attr && attr.type === "tooltip" ? attr.text : null;
+});
+
+/** `[Header]` → 字段上方的分组标题。 */
+const headerText = computed(() => {
+  const attr = drawer.value?.attributes.find((a) => a.type === "header");
+  return attr && attr.type === "header" ? attr.text : null;
+});
+
+/** `[Delayed]` → 只在回车 / 失焦时提交。 */
+const delayed = computed(() => Boolean(drawer.value?.attributes.some((a) => a.type === "delayed")));
+
+/** `[CustomPropertyDrawer]` 的前端组件名（当前前端没有插件机制，退回默认控件）。 */
+const customRenderer = computed(() =>
+  drawer.value?.renderer === "custom" ? drawer.value.custom : null,
+);
+
+/** 滑动条步长：整数字段 1，其余 0.01（与 `NumberField` 一致）。 */
+const sliderStep = computed(() => (isInteger.value ? 1 : 0.01));
+
+/** 取色盘：按字段名/值推断，或 `[ColorUsage]` 显式声明。 */
+const showColorPicker = computed(
+  () => isColor.value || drawer.value?.renderer === "color",
+);
+
+/** `[ColorUsage(showAlpha)]`：取色盘是否显示 alpha 通道。 */
+const showAlpha = computed(() => {
+  const attr = drawer.value?.attributes.find((a) => a.type === "colorUsage");
+  return attr && attr.type === "colorUsage" ? attr.showAlpha : true;
+});
+
 // —— 资产引用：对「看起来是资源路径」的字符串字段给出候选与选择器 ——
 const assets = inject(ASSETS_KEY, null);
 const openAssetPicker = inject(ASSET_PICKER_KEY, null);
@@ -234,7 +290,21 @@ function onAssetDrop(event: DragEvent) {
 }
 
 function onText(event: Event) {
-  set((event.target as HTMLInputElement).value);
+  set((event.target as HTMLInputElement | HTMLTextAreaElement).value);
+}
+
+/** 普通输入：`[Delayed]` 字段只在 change（回车/失焦）提交。 */
+function onTextInput(event: Event) {
+  if (!delayed.value) onText(event);
+}
+
+function onTextChange(event: Event) {
+  if (delayed.value) onText(event);
+}
+
+function onRange(event: Event) {
+  const next = Number((event.target as HTMLInputElement).value);
+  if (Number.isFinite(next)) set(next);
 }
 function onBool(event: Event) {
   set((event.target as HTMLInputElement).checked);
@@ -245,10 +315,18 @@ function onSelect(event: Event) {
 </script>
 
 <template>
+  <!-- `[Header]` = Unity 的字段分组标题 -->
+  <div v-if="headerText" class="drawer-header">{{ headerText }}</div>
+
   <!-- 对象：按 JSON 的键渲染，schema 提供字段类型/只读/嵌套类型 -->
   <div v-if="kind === 'object'">
-    <div class="row" :class="{ 'no-label': !label }" :data-field="pathStr">
-      <div v-if="label" class="label">
+    <div
+      class="row"
+      :class="{ 'no-label': !label }"
+      :data-field="pathStr"
+      :data-drawer="drawer?.renderer"
+    >
+      <div v-if="label" class="label" :title="tooltip ?? undefined">
         {{ label }}<span v-if="hint?.readOnly" class="ro"> ·只读</span>
       </div>
       <div class="hint">
@@ -283,14 +361,20 @@ function onSelect(event: Event) {
   </div>
 
   <!-- 颜色：取色盘 + 通道数值 + alpha -->
-  <div v-else-if="isColor">
-    <div class="row" :class="{ 'no-label': !label }" :data-field="pathStr">
-      <div v-if="label" class="label">
+  <div v-else-if="showColorPicker">
+    <div
+      class="row"
+      :class="{ 'no-label': !label }"
+      :data-field="pathStr"
+      :data-drawer="drawer?.renderer"
+    >
+      <div v-if="label" class="label" :title="tooltip ?? undefined">
         {{ label }}<span v-if="hint?.readOnly" class="ro"> ·只读</span>
       </div>
       <ColorField
         :model-value="(value as number[])"
         :disabled="hint?.readOnly"
+        :show-alpha="showAlpha"
         @update:model-value="(v) => set(v)"
       />
     </div>
@@ -298,8 +382,13 @@ function onSelect(event: Event) {
 
   <!-- 数组 / 列表 -->
   <div v-else-if="kind === 'array'">
-    <div class="row" :class="{ 'no-label': !label }" :data-field="pathStr">
-      <div v-if="label" class="label">
+    <div
+      class="row"
+      :class="{ 'no-label': !label }"
+      :data-field="pathStr"
+      :data-drawer="drawer?.renderer"
+    >
+      <div v-if="label" class="label" :title="tooltip ?? undefined">
         {{ label }}<span v-if="hint?.readOnly" class="ro"> ·只读</span>
       </div>
       <div class="hint">
@@ -333,9 +422,16 @@ function onSelect(event: Event) {
   </div>
 
   <!-- 标量 -->
-  <div v-else class="row" :class="{ 'no-label': !label }" :data-field="pathStr">
-    <div v-if="label" class="label">
-      {{ label }}<span v-if="hint?.readOnly" class="ro"> ·只读</span>
+  <div
+    v-else
+    class="row"
+    :class="{ 'no-label': !label }"
+    :data-field="pathStr"
+    :data-drawer="drawer?.renderer"
+  >
+    <div v-if="label" class="label" :title="tooltip ?? undefined">
+      {{ label }}<span v-if="hint?.readOnly" class="ro"> ·只读</span
+      ><span v-if="customRenderer" class="ro"> ·{{ customRenderer }}</span>
     </div>
     <div
       class="scalar"
@@ -351,6 +447,24 @@ function onSelect(event: Event) {
         :disabled="hint?.readOnly"
         @change="onBool"
       />
+      <template v-else-if="kind === 'number' && sliderBounds">
+        <input
+          class="drawer-slider"
+          type="range"
+          :min="sliderBounds.min"
+          :max="sliderBounds.max"
+          :step="sliderStep"
+          :value="value"
+          :disabled="hint?.readOnly"
+          @input="onRange"
+        />
+        <NumberField
+          :model-value="(value as number)"
+          :integer="isInteger"
+          :disabled="hint?.readOnly"
+          @update:model-value="(v) => set(v)"
+        />
+      </template>
       <NumberField
         v-else-if="kind === 'number'"
         :model-value="(value as number)"
@@ -368,13 +482,24 @@ function onSelect(event: Event) {
           {{ option }}
         </option>
       </select>
+      <textarea
+        v-else-if="kind === 'string' && textAreaBounds"
+        :rows="textAreaBounds.minLines"
+        :disabled="hint?.readOnly"
+        :value="(value as string)"
+        :title="tooltip ?? undefined"
+        @input="onTextInput"
+        @change="onTextChange"
+      />
       <template v-else-if="kind === 'string'">
         <input
           type="text"
           :list="showAssetPicker ? listId : undefined"
           :disabled="hint?.readOnly"
+          :title="tooltip ?? undefined"
           :value="(value as string)"
-          @input="onText"
+          @input="onTextInput"
+          @change="onTextChange"
         />
         <button
           v-if="showAssetPicker"

@@ -1093,6 +1093,20 @@ html.compact .dock-tab {
   min-width: 0;
 }
 
+/* Unity `PropertyDrawer`：`[Header]` 分组标题 + `[Range]` 滑动条 */
+.drawer-header {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  margin: 6px 0 2px;
+}
+.scalar input[type="range"].drawer-slider {
+  flex: 1 1 auto;
+  min-width: 60px;
+  accent-color: var(--accent);
+}
+
 /* 拖动调值 */
 .num {
   flex: 1 1 auto;
