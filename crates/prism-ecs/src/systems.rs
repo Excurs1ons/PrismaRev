@@ -81,10 +81,19 @@ where
     }
 }
 
+/// 组里的一个子系统槽位：记录生命周期钩子是否已经触发过。
+struct Slot {
+    system: Box<dyn ISystem>,
+    /// `on_create` 已触发（第一次拿到 `&mut World` 时补）。
+    created: bool,
+    /// `on_start_running` 已触发且尚未 `on_stop_running`。
+    started: bool,
+}
+
 /// DOTS `ComponentSystemGroup` 形状的系统组：按注册顺序更新其子系统的容器。
 pub struct SystemGroup {
     name: String,
-    systems: Vec<Box<dyn ISystem>>,
+    systems: Vec<Slot>,
     running: bool,
 }
 
@@ -119,8 +128,16 @@ impl SystemGroup {
     }
 
     /// 追加一个子系统（DOTS：`AddSystemToUpdateList`）。
+    ///
+    /// 注册时还没有 `&mut World`，所以 `on_create` 延迟到该组第一次 `update`
+    /// （最早能拿到世界的时机）补触发；组已经在运行时，新系统也会在下一次
+    /// `update` 收到 `on_start_running`。
     pub fn add_system(&mut self, system: impl ISystem) -> &mut Self {
-        self.systems.push(Box::new(system));
+        self.systems.push(Slot {
+            system: Box::new(system),
+            created: false,
+            started: false,
+        });
         self
     }
 
@@ -142,25 +159,38 @@ impl SystemGroup {
     /// 更新整个组：按顺序更新每个子系统，并维护 start/stop-running 状态迁移
     /// （DOTS：`ComponentSystemGroup.Update`）。
     pub fn update(&mut self, world: &mut World) {
-        if self.systems.is_empty() {
-            return;
-        }
-        if !self.running {
-            for system in &mut self.systems {
-                system.on_start_running(world);
+        // 1. 首次拿到世界时补 `on_create`（DOTS：OnCreate 早于 OnStartRunning）。
+        for slot in &mut self.systems {
+            if !slot.created {
+                slot.system.on_create(world);
+                slot.created = true;
             }
-            self.running = true;
         }
-        for system in &mut self.systems {
-            system.on_update(world);
+
+        // 2. 开始运行：整组启动时全部补；已运行则只补热加进来的系统。
+        //    （空组也要翻转 `running`，否则 `is_running()` 永远为 false。）
+        for slot in &mut self.systems {
+            if !slot.started {
+                slot.system.on_start_running(world);
+                slot.started = true;
+            }
+        }
+        self.running = true;
+
+        // 3. 按注册顺序更新。
+        for slot in &mut self.systems {
+            slot.system.on_update(world);
         }
     }
 
     /// 停止运行本组（触发 `on_stop_running`）。
     pub fn stop_running(&mut self, world: &mut World) {
         if self.running {
-            for system in &mut self.systems {
-                system.on_stop_running(world);
+            for slot in &mut self.systems {
+                if slot.started {
+                    slot.system.on_stop_running(world);
+                    slot.started = false;
+                }
             }
             self.running = false;
         }
@@ -169,8 +199,8 @@ impl SystemGroup {
     /// 销毁本组全部子系统（触发 `on_destroy`）。
     pub fn destroy(&mut self, world: &mut World) {
         self.stop_running(world);
-        for system in &mut self.systems {
-            system.on_destroy(world);
+        for slot in &mut self.systems {
+            slot.system.on_destroy(world);
         }
         self.systems.clear();
     }
@@ -233,6 +263,134 @@ mod tests {
         group.add_system(Marker(&HITS));
         group.update(&mut world);
         assert_eq!(HITS.load(Ordering::SeqCst), 1);
+    }
+
+    /// 把生命周期钩子按顺序记进共享日志，用来断言调用次数与顺序。
+    struct Recorder {
+        log: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+        tag: &'static str,
+    }
+
+    impl Recorder {
+        fn new(log: &std::sync::Arc<std::sync::Mutex<Vec<String>>>, tag: &'static str) -> Self {
+            Self {
+                log: log.clone(),
+                tag,
+            }
+        }
+
+        fn push(&self, hook: &str) {
+            self.log
+                .lock()
+                .unwrap()
+                .push(format!("{}:{hook}", self.tag));
+        }
+    }
+
+    impl ISystem for Recorder {
+        fn on_create(&mut self, _world: &mut World) {
+            self.push("create");
+        }
+        fn on_start_running(&mut self, _world: &mut World) {
+            self.push("start");
+        }
+        fn on_stop_running(&mut self, _world: &mut World) {
+            self.push("stop");
+        }
+        fn on_update(&mut self, _world: &mut World) {
+            self.push("update");
+        }
+        fn on_destroy(&mut self, _world: &mut World) {
+            self.push("destroy");
+        }
+    }
+
+    #[test]
+    fn create_and_start_run_once_before_the_first_updates() {
+        let mut world = World::new();
+        let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut group = SystemGroup::simulation();
+        group.add_system(Recorder::new(&log, "a"));
+
+        group.update(&mut world);
+        group.update(&mut world);
+
+        assert_eq!(
+            log.lock().unwrap().as_slice(),
+            ["a:create", "a:start", "a:update", "a:update"]
+        );
+    }
+
+    #[test]
+    fn system_added_while_running_gets_create_and_start_on_the_next_update() {
+        let mut world = World::new();
+        let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut group = SystemGroup::simulation();
+        group.add_system(Recorder::new(&log, "a"));
+        group.update(&mut world);
+
+        // 运行中热加的系统此前完全没收到任何钩子。
+        group.add_system(Recorder::new(&log, "b"));
+        group.update(&mut world);
+
+        assert_eq!(
+            log.lock().unwrap().as_slice(),
+            ["a:create", "a:start", "a:update", "b:create", "b:start", "a:update", "b:update"]
+        );
+        assert!(group.is_running());
+    }
+
+    #[test]
+    fn stopping_does_not_touch_systems_that_never_started() {
+        let mut world = World::new();
+        let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut group = SystemGroup::simulation();
+        group.add_system(Recorder::new(&log, "a"));
+        group.update(&mut world);
+
+        group.add_system(Recorder::new(&log, "b"));
+        group.stop_running(&mut world);
+        // `a` 已在运行，所以它确实收到 stop；`b` 从未 start，不该收到。
+        assert_eq!(
+            log.lock().unwrap().as_slice(),
+            ["a:create", "a:start", "a:update", "a:stop"]
+        );
+        assert!(!group.is_running());
+        group.update(&mut world);
+        assert_eq!(
+            log.lock().unwrap().as_slice(),
+            [
+                "a:create", "a:start", "a:update", "a:stop", "b:create", "a:start", "b:start",
+                "a:update", "b:update"
+            ]
+        );
+    }
+
+    #[test]
+    fn empty_group_still_transitions_to_running() {
+        let mut world = World::new();
+        let mut group = SystemGroup::initialization();
+        group.update(&mut world);
+        assert!(group.is_running());
+        group.stop_running(&mut world);
+        assert!(!group.is_running());
+    }
+
+    #[test]
+    fn destroy_stops_then_destroys_every_system() {
+        let mut world = World::new();
+        let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut group = SystemGroup::presentation();
+        group.add_system(Recorder::new(&log, "a"));
+        group.update(&mut world);
+        group.destroy(&mut world);
+
+        assert_eq!(
+            log.lock().unwrap().as_slice(),
+            ["a:create", "a:start", "a:update", "a:stop", "a:destroy"]
+        );
+        assert!(group.is_empty());
+        assert!(!group.is_running());
     }
 
     #[test]
