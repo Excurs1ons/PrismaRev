@@ -109,11 +109,13 @@ public 类型的只有 **43** 个（≈0.9%）。这既是现状，也是后续�
   同时是 `.scene.json` 的 `components` 键、RSCN 的 `type_id` 输入。
 - **重命名 = 破坏性**：会同时改变 reflect 名、JSON 键、RSCN `type_id`。
   必须配套**迁移**，否则 `from_object` 会“忽略未知字段 → 静默丢数据”。
-- **迁移机制**（新增于 `prism-editor-api`，纯数据、可单测）：
-  1. `.scene.json` 顶层 `version`（当前缺省 `1`）递增；
-  2. `migrate_doc(&mut Value)` 按版本逐级重命名**组件键**与**字段键**；
-  3. `read_doc` 读入后先迁移再返回；`write_doc` 总是写最新版本；
-  4. 引擎开发加载器（JSON→ECS）同样先迁移（复用同一函数）。
+- **迁移机制**（实现于 `crates/prism-scene/src/migrate.rs`，纯数据、可单测）：
+  1. `.scene.json` / `.prefab.json` 顶层 `version`（缺失时按 `1` 处理）递增，当前
+     `SCENE_DOC_VERSION = 3`；
+  2. `migrate_scene_doc(&mut Value)` 按版本逐级重命名**组件键**与**字段键**，
+     并补齐与版本无关的规范化（实体 `id`、派生组件剥离）；
+  3. `read_doc` 读入后先迁移再返回；`write_doc` 总是写 `SCENE_DOC_VERSION`；
+  4. cooker、引擎加载器（JSON→ECS）与编辑器共用同一函数，不存在“某条读取路径忘了迁移”。
 - **RSCN**：`type_id` 变了，`.rscn` 由 cooker 重烤即可；`schema_hash` 不匹配是硬错误，
   与重命名无冲突（重烤即可）。
 - **字段重命名的 serde 归属**：新版结构体用 `#[serde(rename_all = "PascalCase")]`
@@ -283,11 +285,13 @@ public 类型的只有 **43** 个（≈0.9%）。这既是现状，也是后续�
 
 **3) 作者格式字段重命名 + 迁移框架（`translation` → `position`）**
 - 新增 `crates/prism-scene/src/migrate.rs`：
-  - `SCENE_DOC_VERSION = 2`；`doc_version()`（缺失/0 视为 1）；
+  - `SCENE_DOC_VERSION = 3`；`doc_version()`（缺失/0 视为 1）；
   - `migrate_scene_doc(&mut Value)`，幂等、拒绝“未来版本”；
   - v1→v2：实体 `transform.translation` → `transform.position`，以及
-    `prism_engine::scene::LocalTransform` 组件载荷内的同名字段。
-  - 7 个单测。
+    `prism_engine::scene::LocalTransform` 组件载荷内的同名字段；
+  - v2→v3：实体补稳定 `id`，`parent` 从数组下标改为引用 `id`（老文档按数组顺序做
+    恒等映射）；
+  - 10 个单测。
 - `SceneJson::parse(text)` / `SceneJson::from_value(value)`：**先迁移再反序列化**。
 - 三个读取路径全部改走它：`prism-cooker::cooker::scene`、`prism-engine::scene::loader`、
   `prism-editor-api::scene::{read_doc, validate_doc}`。
@@ -296,8 +300,8 @@ public 类型的只有 **43** 个（≈0.9%）。这既是现状，也是后续�
   `rscn` 的 `DecodedEntity`、loader 的 `ParsedEntity`、`scene_state` 的快照 JSON 键、
   `presets::EntityPreset.translation`→`position`，以及编辑器前端
   `Inspector.vue` / `types.ts` / `App.vue`（并 `pnpm fixture` 重新生成 `editor/public/demo.json`）。
-- **磁盘上现有的 `assets/scenes/*.scene.json` 仍是 v1**（用 `translation`）——这正是迁移的
-  用途：读取时透明升级，编辑器保存时写成 v2。
+- **磁盘上现有的 `assets/scenes/*.scene.json` 仍是 v1**（用 `translation`、`parent` 用下标）——
+  这正是迁移的用途：读取时透明升级到 v3，编辑器保存时写成 v3。
 
 **验证**
 - ✅ `cargo test -p prism-ecs -p prism-scene -p prism-editor-api -p prism-cooker`
@@ -425,7 +429,7 @@ API 完整性 + 单测覆盖；前端只消费它们的**无状态**部分（见
 - `Camera` 追加 5 个字段（对齐 `UnityEngine.Camera`）：
   `clear_flags`、`background_color: [f32;4]`、`orthographic`、
   `orthographic_size`、`depth`。全部有 serde 默认值 → **老文档不需要迁移**
-  （`SCENE_DOC_VERSION` 保持 2）。
+  （`SCENE_DOC_VERSION` 不变）。
 - `impl Camera`：`projection_matrix(aspect)`（透视/正交，Vulkan y-flip + 深度 `[0,1]`，
   `aspect` 非有限时退化为 1.0）、`world_to_camera_matrix()` / `camera_to_world_matrix()`
   （对应 Unity `worldToCameraMatrix` / `cameraToWorldMatrix`）。
@@ -558,7 +562,7 @@ Unity 只有一个 `Light`，用 `Light.type` 区分方向光 / 点光 / 聚光�
   缺字段回退、色温滤色只按开关生效、锥角换算与裁剪、阴影判定。
 
 **旧组件不删、不迁移**：`DirectionalLight` / `PointLight` / `SpotLight` 继续可用，
-`SCENE_DOC_VERSION` 仍为 2；引擎接线（两者都收）在下一批。
+`SCENE_DOC_VERSION` 不变（当前为 3）；引擎接线（两者都收）在下一批。
 
 **这一批刻意没做**：引擎还没消费 `Light`（`collect_lights` 仍只查旧组件）；
 `MeshRenderer.shadowCastingMode` 与 `BlendMode`/`CullMode`/`CompareFunction`/
