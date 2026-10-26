@@ -104,7 +104,9 @@ cargo test --workspace                 # ~400 测试（含 CRT 状态机单测�
 
 ```bash
 # 在 game/ 或根 workspace 编译 aarch64 .so（记忆：cargo-ndk 即可，无需 Gradle 工程）
-cargo ndk -t arm64-v8a -o <输出目录> build
+# -P 必须 >= 26：libaaudio.so 从 API 26 才有，cargo-ndk 默认 21 会报 -laaudio not found。
+# 同时不要高于项目的 minSdk（当前为 31），否则会在旧设备上链接到不存在的符号。
+cargo ndk -P 26 -t arm64-v8a -o <输出目录> build
 ```
 
 Tauri launcher 的 `gen/android/` 负责 APK 打包；Termux 上可直接把新 `.so`
