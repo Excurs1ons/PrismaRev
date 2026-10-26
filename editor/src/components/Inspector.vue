@@ -106,21 +106,31 @@ function onParentChange(event: Event) {
   patch({ parent: Number.isFinite(raw) && raw >= 0 ? raw : null }, fieldKey("parent"));
 }
 
-function setTransform(key: "position" | "rotation" | "scale", value: JsonValue, path: string) {
-  patch({ transform: { ...props.entity.transform, [key]: value as number[] } }, fieldKey(path));
+function setTransform(
+  key: "position" | "rotation" | "scale",
+  value: JsonValue,
+  path: string,
+  discrete = false,
+) {
+  patch(
+    { transform: { ...props.entity.transform, [key]: value as number[] } },
+    discrete ? opKey(path) : fieldKey(path),
+  );
 }
 
 function componentValue(name: string): JsonValue {
   return props.entity.components[name] as JsonValue;
 }
 
-function setComponent(name: string, value: JsonValue, path: string) {
+function setComponent(name: string, value: JsonValue, path: string, discrete = false) {
   const before = componentValue(name);
+  const label = `components.${name}/${path}`;
   emit(
     "update",
     { ...props.entity, components: { ...props.entity.components, [name]: value } },
-    fieldKey(`components.${name}/${path}`),
+    discrete ? opKey(label) : fieldKey(label),
   );
+  // `path` 是纯反射路径：合并策略走 editKey，绝不混进这里。
   void reflectComponent(name, before, path, value, props.index);
 }
 
@@ -322,7 +332,7 @@ const availableComponents = computed(() =>
         :value="entity.transform.position"
         :field="vecField('position', 3)"
         :schema="schema"
-        @update="(v, p) => setTransform('position', v, p)"
+        @update="(v, p, d) => setTransform('position', v, p, d)"
       />
       <FieldEditor
         label="rotation"
@@ -330,7 +340,7 @@ const availableComponents = computed(() =>
         :value="entity.transform.rotation"
         :field="vecField('rotation', 4)"
         :schema="schema"
-        @update="(v, p) => setTransform('rotation', v, p)"
+        @update="(v, p, d) => setTransform('rotation', v, p, d)"
       />
       <FieldEditor
         label="scale"
@@ -338,7 +348,7 @@ const availableComponents = computed(() =>
         :value="entity.transform.scale"
         :field="vecField('scale', 3)"
         :schema="schema"
-        @update="(v, p) => setTransform('scale', v, p)"
+        @update="(v, p, d) => setTransform('scale', v, p, d)"
       />
     </div>
   </div>
@@ -370,7 +380,7 @@ const availableComponents = computed(() =>
         :value="componentValue(name)"
         :field="componentField(name)"
         :schema="schema"
-        @update="(v, p) => setComponent(name, v, p)"
+        @update="(v, p, d) => setComponent(name, v, p, d)"
       />
     </div>
   </div>
