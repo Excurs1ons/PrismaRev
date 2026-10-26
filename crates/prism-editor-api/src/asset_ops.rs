@@ -253,11 +253,12 @@ fn ensure_document_placement(from: &str, to: &str) -> Result<(), String> {
         return Err("不能重命名或移动编辑器文档根目录".into());
     }
     if from.ends_with(".scene.json") {
+        let scenes_dir = crate::scene::DocKind::Scene.subdir();
         let parent = to.rsplit_once('/').map(|(parent, _)| parent).unwrap_or("");
-        if parent != "assets/scenes" || !to.ends_with(".scene.json") {
-            return Err(
-                "场景文档必须留在 assets/scenes/ 根目录（编辑器按扁平目录枚举场景）".into(),
-            );
+        if parent != scenes_dir || !to.ends_with(".scene.json") {
+            return Err(format!(
+                "场景文档必须留在 {scenes_dir}/ 根目录（编辑器按扁平目录枚举场景）"
+            ));
         }
     }
     if from.ends_with(".prefab.json") && !to.ends_with(".prefab.json") {
@@ -938,6 +939,31 @@ mod tests {
         .unwrap();
         assert!(root.join("assets/actors/seat.prefab.json").is_file());
         assert!(!root.join("assets/models/chair/seat.prefab.json").exists());
+
+        // 就地改名、移回默认目录、再从默认目录移进子目录都应放行。
+        rename_asset(
+            &root,
+            "assets/actors/seat.prefab.json",
+            "assets/actors/stool.prefab.json",
+        )
+        .unwrap();
+        assert!(root.join("assets/actors/stool.prefab.json").is_file());
+
+        rename_asset(
+            &root,
+            "assets/actors/stool.prefab.json",
+            "assets/prefabs/stool.prefab.json",
+        )
+        .unwrap();
+        assert!(root.join("assets/prefabs/stool.prefab.json").is_file());
+
+        rename_asset(
+            &root,
+            "assets/prefabs/stool.prefab.json",
+            "assets/models/stool.prefab.json",
+        )
+        .unwrap();
+        assert!(root.join("assets/models/stool.prefab.json").is_file());
         std::fs::remove_dir_all(&root).ok();
     }
 
