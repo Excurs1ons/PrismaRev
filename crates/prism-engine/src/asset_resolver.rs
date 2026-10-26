@@ -654,5 +654,4 @@ mod tests {
         assert_eq!(texture_format_for(RTEX_FORMAT_BC3, true), None);
         assert_eq!(texture_format_for(99, false), None);
     }
-    }
 }
