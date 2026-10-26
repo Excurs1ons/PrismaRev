@@ -42,15 +42,22 @@ impl AssetId {
         self.0
     }
 
-    /// Generate a fresh globally-unique ID using an 原子 计数器
-    /// starting at generation = 1, serial = process-wide 计数器
+    /// Generate a fresh process-local ID using an atomic counter.
+    ///
+    /// Runtime-generated IDs use **generation 0**, which is reserved away from
+    /// the persisted cooker/database namespace (generation >= 1) so that
+    /// `AssetId::generate()` can never collide with `AssetIdGenerator::new(1, ..)`.
     ///
     /// This is **not** persisted across restarts. 编辑器 代码 should
     /// 调用 [`AssetIdGenerator::next`] if it has 访问 to the database
     /// sequence.
     pub fn generate() -> Self {
         let serial = NEXT_SERIAL.fetch_add(1, Ordering::Relaxed);
-        Self((1u64 << Self::GENERATION_SHIFT) | (serial & Self::SERIAL_MASK))
+        assert!(
+            serial <= Self::SERIAL_MASK,
+            "runtime AssetId serial space exhausted"
+        );
+        Self(serial)
     }
 
     /// 构建 a tombstone sentinel for the given serial.
@@ -136,14 +143,19 @@ impl AssetIdGenerator {
     }
 
     /// Allocate the 下一个 资源 ID (monotonically increasing).
+    ///
+    /// Panics after 2^32 allocations instead of silently truncating the serial
+    /// and reusing IDs.
     #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> AssetId {
         let serial = self.next_serial;
+        assert!(
+            serial <= AssetId::SERIAL_MASK,
+            "AssetIdGenerator serial space exhausted for generation {}",
+            self.generation
+        );
         self.next_serial += 1;
-        AssetId(
-            (u64::from(self.generation) << AssetId::GENERATION_SHIFT)
-                | (serial & AssetId::SERIAL_MASK),
-        )
+        AssetId((u64::from(self.generation) << AssetId::GENERATION_SHIFT) | serial)
     }
 
     /// 当前 serial value 下一个 to be assigned).

@@ -9,9 +9,25 @@ fn generate_produces_unique_ids() {
     let a = AssetId::generate();
     let b = AssetId::generate();
     assert_ne!(a, b);
-    assert_eq!(a.generation(), 1);
-    assert_eq!(b.generation(), 1);
+    assert_eq!(a.generation(), 0);
+    assert_eq!(b.generation(), 0);
     assert_eq!(b.serial(), a.serial() + 1);
+}
+
+#[test]
+fn generate_does_not_collide_with_database_generation() {
+    let database_id = AssetIdGenerator::new(1, 0).next();
+    let runtime_id = AssetId::generate();
+    assert_ne!(runtime_id, database_id);
+    assert_eq!(runtime_id.generation(), 0);
+    assert_eq!(database_id.generation(), 1);
+}
+
+#[test]
+#[should_panic(expected = "serial space exhausted")]
+fn generator_rejects_serial_overflow() {
+    let mut gen = AssetIdGenerator::new(1, u64::from(u32::MAX));
+    let _ = gen.next();
 }
 
 #[test]
