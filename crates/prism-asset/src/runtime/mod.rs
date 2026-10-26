@@ -776,6 +776,9 @@ impl ResourceManager {
         id: AssetId,
         chunk_size: usize,
     ) -> Option<impl Iterator<Item = Vec<u8>> + '_> {
+        // A zero chunk size would make `StreamIter` yield empty chunks forever
+        // and make `size_hint` divide by zero; clamp it to a single byte.
+        let chunk_size = chunk_size.max(1);
         // Prefer cached data if available.
         if let Ok(cached) = self.get_raw_bytes(id) {
             return Some(StreamIter {
@@ -1027,7 +1030,7 @@ impl Iterator for StreamIter {
 
     fn size_hint(&self) -> (usize, Option<usize>) {
         let remaining = self.data.len() - self.pos;
-        let chunks = remaining.div_ceil(self.chunk_size);
+        let chunks = remaining.div_ceil(self.chunk_size.max(1));
         (chunks, Some(chunks))
     }
 }

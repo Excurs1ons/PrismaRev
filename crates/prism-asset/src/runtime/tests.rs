@@ -356,6 +356,29 @@ fn streaming_reads_basic() {
 }
 
 #[test]
+fn streaming_zero_chunk_size_terminates() {
+    let id = AssetId::from_raw((2u64 << 32) | 1);
+    let mut b = PackageBuilder::new();
+    let data: Vec<u8> = (0..40).collect();
+    b.add_asset(id, AssetType::Binary, data.clone(), &[]);
+    let pak = b.build().unwrap();
+    let path = write_pak(&pak, "test_stream_zero.pak");
+
+    let mut rm = ResourceManager::new();
+    rm.load_package(&path).unwrap();
+    std::fs::remove_file(&path).ok();
+
+    // A zero chunk size is clamped to one byte instead of looping forever.
+    let mut stream = rm.read_stream(id, 0).unwrap();
+    assert_eq!(stream.size_hint(), (40, Some(40)));
+    let chunks: Vec<Vec<u8>> = stream.by_ref().collect();
+    assert_eq!(chunks.len(), 40);
+    assert!(chunks.iter().all(|chunk| chunk.len() == 1));
+    let total: usize = chunks.iter().map(|chunk| chunk.len()).sum();
+    assert_eq!(total, data.len());
+}
+
+#[test]
 fn unload_id_by_asset_id() {
     let id = AssetId::from_raw((1u64 << 32) | 1);
     let mut b = PackageBuilder::new();
