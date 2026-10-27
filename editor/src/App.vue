@@ -1208,6 +1208,26 @@ function onViewportSelect(index: number | null) {
   onSelect(index === null ? [] : [index]);
 }
 
+/**
+ * 拖动平移手柄 → 写回文档的 `transform.position`（局部坐标，后端已经换算过）。
+ *
+ * 与检查器一致：本地即时提交保证跟手，`editKey` 用同一条
+ * `drag-move:<下标>` 让整段拖动合并成一次撤销（连续提交间隔 < 700ms）。
+ * 视口画面不靠这次写回 —— 引擎侧已经直接改了 `LocalTransform`。
+ */
+function onViewportMove(position: [number, number, number]) {
+  if (!doc.value || primary.value === null) return;
+  const index = primary.value;
+  const entity = doc.value.entities[index];
+  if (!entity) return;
+  const entities = doc.value.entities.slice();
+  entities[index] = {
+    ...entity,
+    transform: { ...entity.transform, position: [...position] },
+  };
+  commit({ ...doc.value, entities }, `drag-move:${index}`);
+}
+
 function onSelect(indices: number[]) {
   selection.value = indices.length ? indices : [];
   // 手动选择时清掉「跳到使用处」的高亮。
@@ -2123,6 +2143,7 @@ onUnmounted(() => {
             :path="currentPath"
             :selection="selection"
             @select="onViewportSelect"
+            @move="onViewportMove"
           />
         </template>
         <template #gameView>

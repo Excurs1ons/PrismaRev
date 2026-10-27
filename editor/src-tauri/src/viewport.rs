@@ -25,16 +25,26 @@ use glam::{EulerRot, Mat4, Quat, Vec3};
 use prism_app::App;
 use prism_engine::ecs::Entity;
 use prism_engine::input::{ElementState, KeyCode, MouseButton};
-use prism_engine::scene::components::{Active, Camera, Gizmo, LocalToWorld, LocalTransform};
+use prism_engine::scene::components::{
+    Active, Camera, Gizmo, LocalToWorld, LocalTransform, Parent,
+};
 use prism_scene::CameraClearFlags;
 use serde::{Deserialize, Serialize};
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::State;
 
+use crate::gizmo::{self, Axis};
 use crate::pick;
 
 /// 视口帧率上限。离屏渲染每帧要 CPU 读回，30fps 是画质与带宽的折中。
 const TARGET_FPS: u32 = 30;
+/// 平移 gizmo 在屏幕高度上占的比例（箭头长度 ≈ 这个比例的 1/1.5 倍缩放）。
+const GIZMO_SCREEN_FRACTION: f32 = 0.18;
+/// 引擎里 `Gizmo` 箭头的世界长度（`prism-render/src/gizmo.rs` 的 `len`），
+/// 用来把「想要的屏幕长度」换算成组件 scale。
+const GIZMO_ARROW_LENGTH: f32 = 1.5;
+/// 点中某个轴手柄的像素容差。
+const GIZMO_PICK_SLOP: f32 = 10.0;
 /// 离屏渲染分辨率上限（超过则按比例缩小，canvas 负责放大）。
 const MAX_WIDTH: u32 = 1600;
 const MAX_HEIGHT: u32 = 900;
@@ -183,6 +193,35 @@ struct HostState {
     marker: Option<Entity>,
     /// 当前选中的文档下标（由前端下发，重载后保留）。
     selection: Option<usize>,
+    /// 正在进行的轴拖动（`None` = 没在拖）。
+    drag: Option<AxisDrag>,
+}
+
+/// 平移 gizmo 的拖动会话。
+///
+/// 起点固定点击那一刻的实体世界位置与射线参数，之后每次移动只算
+/// 沿轴的参数差 —— 这样拖动不会因为相机取景变化而漂移。
+#[derive(Clone, Copy)]
+struct AxisDrag {
+    /// 被拖的文档下标（不是 `Entity`：重载后 ECS 句柄会变）。
+    index: usize,
+    axis: Axis,
+    /// 实体开始拖动时的世界位置。
+    start_world: Vec3,
+    /// 点击射线在轴上的参数。
+    start_parameter: f32,
+}
+
+/// 计算 gizmo 命中 / 拖动所需的一次性相机 + 选中项快照。
+struct GizmoContext {
+    /// 世界 → 视图。
+    view: Mat4,
+    /// 世界 → 视图前的相机矩阵（`pick::screen_ray` 需要）。
+    camera_world: Mat4,
+    eye: Vec3,
+    fov: f32,
+    center: Vec3,
+    entity: Entity,
 }
 
 impl HostState {
@@ -217,6 +256,12 @@ impl HostState {
         if let Some(camera) = world.get_mut::<Camera>(entity) {
             camera.aspect = self.width as f32 / self.height.max(1) as f32;
         }
+
+        // gizmo 的屏幕比例跟着相机距离走（滚轮缩放时箭头大小保持不变）。
+        if let Some(ctx) = self.gizmo_context() {
+            let length = self.gizmo_length(&ctx);
+            self.sync_marker(Some(ctx.center), length);
+        }
     }
 
     /// 重新加载场景；编辑器相机、轨道参数与选中项保留。
@@ -224,6 +269,12 @@ impl HostState {
         let entities = self.app.load_scene_json_file(&self.scene_path)?;
         let count = entities.len();
         self.entities = entities;
+        // 加载器只保证「根实体」的 LocalToWorld；子级要等第一次
+        // hierarchy_system。这里立刻传播一遍，让紧接着的相机 / 选中标记 /
+        // 点选都读到正确的世界矩阵（否则重载后第一帧高亮会错位）。
+        prism_engine::scene::systems::hierarchy::hierarchy_system(
+            self.app.engine_mut().world_mut(),
+        );
         match self.kind {
             ViewKind::Scene => {
                 self.camera = Some(spawn_editor_camera(&mut self.app, self.width, self.height))
@@ -248,12 +299,10 @@ impl HostState {
     fn apply_selection(&mut self, index: Option<usize>) {
         let index = index.filter(|index| *index < self.entities.len());
         self.selection = index;
-        let Some(marker) = self.marker else {
-            return;
-        };
-        let world = self.app.engine_mut().world_mut();
+        self.drag = None;
         let position = index.and_then(|index| {
             let entity = self.entities[index];
+            let world = self.app.engine_mut().world();
             world
                 .get::<LocalToWorld>(entity)
                 .map(|transform| transform.0.col(3).truncate())
@@ -263,27 +312,14 @@ impl HostState {
                         .map(|local| local.position)
                 })
         });
-        match position {
-            Some(position) => {
-                world.insert(
-                    marker,
-                    LocalTransform {
-                        position,
-                        rotation: Quat::IDENTITY,
-                        scale: Vec3::ONE,
-                    },
-                );
-                world.insert(marker, LocalToWorld(Mat4::from_translation(position)));
-                if let Some(gizmo) = world.get_mut::<Gizmo>(marker) {
-                    gizmo.enabled = true;
-                }
-            }
-            None => {
-                if let Some(gizmo) = world.get_mut::<Gizmo>(marker) {
-                    gizmo.enabled = false;
-                }
-            }
-        }
+        let length = match position {
+            Some(_) => self
+                .gizmo_context()
+                .map(|ctx| self.gizmo_length(&ctx))
+                .unwrap_or(GIZMO_ARROW_LENGTH),
+            None => GIZMO_ARROW_LENGTH,
+        };
+        self.sync_marker(position, length);
     }
 
     /// 屏幕像素 → 命中的文档下标（最近的实体）。
@@ -328,6 +364,157 @@ impl HostState {
             }
         }
         best.map(|(_, index)| index)
+    }
+
+    /// 计算 gizmo 命中 / 拖动所需的相机与选中项。
+    ///
+    /// 只有 Scene view 有编辑器相机与 gizmo；Game view 返回 `None`。
+    fn gizmo_context(&mut self) -> Option<GizmoContext> {
+        let camera = self.camera?;
+        let index = self.selection?;
+        let entity = *self.entities.get(index)?;
+        let world = self.app.engine_mut().world();
+        let camera_world = world.get::<LocalToWorld>(camera)?.0;
+        let fov = world
+            .get::<Camera>(camera)
+            .map(|camera| camera.fov_y_degrees)
+            .unwrap_or(60.0);
+        let center = world
+            .get::<LocalToWorld>(entity)
+            .map(|transform| transform.0.col(3).truncate())
+            .or_else(|| {
+                world
+                    .get::<LocalTransform>(entity)
+                    .map(|local| local.position)
+            })?;
+        Some(GizmoContext {
+            view: camera_world.inverse(),
+            camera_world,
+            eye: camera_world.col(3).truncate(),
+            fov,
+            center,
+            entity,
+        })
+    }
+
+    /// 选中实体处 gizmo 箭头的世界长度（屏幕上近似恒定）。
+    fn gizmo_length(&self, ctx: &GizmoContext) -> f32 {
+        let distance = (ctx.center - ctx.eye).length();
+        gizmo::screen_constant_length(distance, ctx.fov, GIZMO_SCREEN_FRACTION)
+    }
+
+    /// 让标记实体跟着 gizmo 的位置与缩放（没选中就关掉）。
+    fn sync_marker(&mut self, center: Option<Vec3>, length: f32) {
+        let Some(marker) = self.marker else {
+            return;
+        };
+        let world = self.app.engine_mut().world_mut();
+        match center {
+            Some(center) => {
+                world.insert(
+                    marker,
+                    LocalTransform {
+                        position: center,
+                        rotation: Quat::IDENTITY,
+                        scale: Vec3::ONE,
+                    },
+                );
+                world.insert(marker, LocalToWorld(Mat4::from_translation(center)));
+                if let Some(gizmo) = world.get_mut::<Gizmo>(marker) {
+                    gizmo.enabled = true;
+                    gizmo.scale = (length / GIZMO_ARROW_LENGTH).max(1e-4);
+                }
+            }
+            None => {
+                if let Some(gizmo) = world.get_mut::<Gizmo>(marker) {
+                    gizmo.enabled = false;
+                }
+            }
+        }
+    }
+
+    /// 光标下的轴手柄（像素坐标，渲染分辨率）。
+    fn gizmo_axis_at(&mut self, x: f32, y: f32) -> Option<Axis> {
+        let ctx = self.gizmo_context()?;
+        let length = self.gizmo_length(&ctx);
+        let screen = gizmo::Screen {
+            view: ctx.view,
+            fov_y_degrees: ctx.fov,
+            width: self.width as f32,
+            height: self.height as f32,
+        };
+        gizmo::pick_axis(
+            &screen,
+            ctx.center,
+            length,
+            glam::Vec2::new(x, y),
+            GIZMO_PICK_SLOP,
+        )
+    }
+
+    /// 开始拖动选中实体的某根轴。
+    fn begin_drag(&mut self, axis: Axis, x: f32, y: f32) -> Result<(), String> {
+        let ctx = self
+            .gizmo_context()
+            .ok_or_else(|| "没有选中的实体，无法拖动".to_string())?;
+        let index = self.selection.ok_or_else(|| "没有选中".to_string())?;
+        let (origin, dir) =
+            pick::screen_ray(&ctx.camera_world, ctx.fov, self.width, self.height, x, y)
+                .ok_or_else(|| "点击位置无法生成射线".to_string())?;
+        let start_parameter = gizmo::axis_parameter(origin, dir, ctx.center, axis.vector())
+            .ok_or_else(|| "视线与这根轴平行，请换个角度".to_string())?;
+        self.drag = Some(AxisDrag {
+            index,
+            axis,
+            start_world: ctx.center,
+            start_parameter,
+        });
+        Ok(())
+    }
+
+    /// 拖动到新光标位置，返回实体**局部** `transform.position`（供文档写回）。
+    ///
+    /// 同时直接改 ECS 里的 `LocalTransform`，所以视口跟手 —— 前端把文档
+    /// 重载压到拖动结束之后，拖动过程中画面来自引擎，不靠 reload。
+    fn drag_to(&mut self, x: f32, y: f32) -> Option<[f32; 3]> {
+        let drag = self.drag?;
+        let ctx = self.gizmo_context()?;
+        if ctx.entity != self.entities.get(drag.index).copied()? {
+            // 场景重载换了 ECS 句柄：这次拖动失效。
+            self.drag = None;
+            return None;
+        }
+        let (origin, dir) =
+            pick::screen_ray(&ctx.camera_world, ctx.fov, self.width, self.height, x, y)?;
+        let parameter = gizmo::axis_parameter(origin, dir, drag.start_world, drag.axis.vector())?;
+        let target = drag.start_world + drag.axis.vector() * (parameter - drag.start_parameter);
+
+        let world = self.app.engine_mut().world_mut();
+        // 父级的世界矩阵把世界位移换算回作者的局部坐标。
+        let local = match world.get::<Parent>(ctx.entity).map(|parent| parent.0) {
+            Some(parent) if world.is_alive(parent) => world
+                .get::<LocalToWorld>(parent)
+                .map(|transform| transform.0.inverse().transform_point3(target))
+                .unwrap_or(target),
+            _ => target,
+        };
+        match world.get_mut::<LocalTransform>(ctx.entity) {
+            Some(local_transform) => local_transform.position = local,
+            None => world.insert(
+                ctx.entity,
+                LocalTransform {
+                    position: local,
+                    ..LocalTransform::default()
+                },
+            ),
+        }
+        // 标记跟手（`LocalToWorld` 下一 tick 由 hierarchy_system 重算）。
+        self.sync_marker(Some(target), self.gizmo_length(&ctx));
+        Some(local.to_array())
+    }
+
+    fn end_drag(&mut self) {
+        self.drag = None;
     }
 
     fn resize(&mut self, width: u32, height: u32) {
@@ -406,6 +593,7 @@ fn viewport_thread(
         entities: Vec::new(),
         marker: None,
         selection: None,
+        drag: None,
     };
 
     match state.reload() {
@@ -824,6 +1012,119 @@ pub async fn editor_viewport_pick(
     Ok(hit.ok().flatten())
 }
 
+/// 把一个问题交给视口线程并等回答。
+///
+/// `Ok(None)` = 视口不存在或线程超时没回话；闭包里再套一层 `Option` 表示
+/// 「算出来了但结果是 None」。超时 500ms 覆盖视口线程一个帧预算（不可见时是 `IDLE_POLL`）。
+async fn ask_viewport<T, F>(
+    manager: &ViewportManager,
+    id: &str,
+    ask: F,
+) -> Result<Option<T>, String>
+where
+    T: Send + 'static,
+    F: FnOnce(&mut HostState, Sender<T>) + Send + 'static,
+{
+    let (tx, rx) = mpsc_channel::<T>();
+    {
+        let views = manager
+            .views
+            .lock()
+            .map_err(|_| "视口状态锁失败".to_string())?;
+        let Some(handle) = views.get(id) else {
+            return Ok(None);
+        };
+        let _ = handle
+            .tx
+            .send(Box::new(move |state: &mut HostState| ask(state, tx)));
+    }
+    let reply =
+        tauri::async_runtime::spawn_blocking(move || rx.recv_timeout(Duration::from_millis(500)))
+            .await
+            .map_err(|error| error.to_string())?;
+    Ok(reply.ok())
+}
+
+/// 光标落在哪根平移手柄上（`"x"` / `"y"` / `"z"`，没有则 `None`）。
+///
+/// 坐标与 [`editor_viewport_pick`] 一致：**渲染分辨率**下的像素，左上原点。
+#[tauri::command]
+pub async fn editor_viewport_gizmo_hit(
+    id: String,
+    x: f32,
+    y: f32,
+    manager: State<'_, ViewportManager>,
+) -> Result<Option<String>, String> {
+    let hit = ask_viewport(&manager, &id, move |state, tx| {
+        let axis = state
+            .gizmo_axis_at(x, y)
+            .map(|axis| axis.name().to_string());
+        let _ = tx.send(axis);
+    })
+    .await?;
+    Ok(hit.flatten())
+}
+
+/// 开始拖动选中实体的某根轴（`axis` = `"x"` / `"y"` / `"z"`）。
+#[tauri::command]
+pub fn editor_viewport_drag_begin(
+    id: String,
+    axis: String,
+    x: f32,
+    y: f32,
+    manager: State<'_, ViewportManager>,
+) -> Result<(), String> {
+    let Some(axis) = Axis::parse(&axis) else {
+        return Err(format!("未知的轴：{axis}"));
+    };
+    let views = manager
+        .views
+        .lock()
+        .map_err(|_| "视口状态锁失败".to_string())?;
+    if let Some(handle) = views.get(&id) {
+        let _ = handle.tx.send(Box::new(move |state: &mut HostState| {
+            let _ = state.begin_drag(axis, x, y);
+        }));
+    }
+    Ok(())
+}
+
+/// 拖动到新光标位置，返回选中实体的**局部** `transform.position`。
+///
+/// 返回 `None` = 没在拖动 / 场景已重载 / 视线与轴平行（这次移动忽略）。
+#[tauri::command]
+pub async fn editor_viewport_drag(
+    id: String,
+    x: f32,
+    y: f32,
+    manager: State<'_, ViewportManager>,
+) -> Result<Option<[f32; 3]>, String> {
+    let moved = ask_viewport(&manager, &id, move |state, tx| {
+        let local = state.drag_to(x, y);
+        let _ = tx.send(local);
+    })
+    .await?;
+    Ok(moved.flatten())
+}
+
+/// 结束拖动。
+#[tauri::command]
+pub fn editor_viewport_drag_end(
+    id: String,
+    manager: State<'_, ViewportManager>,
+) -> Result<(), String> {
+    let views = manager
+        .views
+        .lock()
+        .map_err(|_| "视口状态锁失败".to_string())?;
+    if let Some(handle) = views.get(&id) {
+        let _ = handle
+            .tx
+            .send(Box::new(move |state: &mut HostState| state.end_drag()));
+    }
+    Ok(())
+}
+
 /// 轮询视口状态（FPS / 实体数 / 加载错误 / 实际渲染尺寸）。
 #[tauri::command]
 pub fn editor_viewport_stats(
@@ -887,10 +1188,14 @@ mod tests {
     }"#;
 
     fn test_state(name: &str) -> HostState {
+        test_state_from(name, SCENE)
+    }
+
+    fn test_state_from(name: &str, scene: &str) -> HostState {
         let root = std::env::temp_dir().join("prismrev-editor-picking");
         std::fs::create_dir_all(&root).unwrap();
         let path = root.join(format!("{name}-{}.scene.json", std::process::id()));
-        std::fs::write(&path, SCENE).unwrap();
+        std::fs::write(&path, scene).unwrap();
 
         let mut state = HostState {
             app: App::hosted(prism_engine::config::AppConfig::default()),
@@ -910,6 +1215,7 @@ mod tests {
             entities: Vec::new(),
             marker: None,
             selection: None,
+            drag: None,
         };
         state.reload().expect("测试场景应该能加载");
         assert_eq!(state.entities.len(), 2);
@@ -954,5 +1260,120 @@ mod tests {
         let world = state.app.engine_mut().world_mut();
         assert!(!world.get::<Gizmo>(marker).unwrap().enabled);
         assert_eq!(state.selection, None);
+    }
+
+    /// 选中项的中心与箭头尖端在屏幕上的位置（像素）。
+    fn gizmo_screen_points(state: &mut HostState) -> (glam::Vec2, glam::Vec2) {
+        let ctx = state
+            .gizmo_context()
+            .expect("Scene view 应该有相机与选中项");
+        let length = state.gizmo_length(&ctx);
+        let project = |point| {
+            gizmo::project(&ctx.view, ctx.fov, 200.0, 100.0, point).expect("应能投影到屏幕")
+        };
+        (project(ctx.center), project(ctx.center + Vec3::X * length))
+    }
+
+    #[test]
+    fn gizmo_hit_test_finds_the_axis_under_the_cursor() {
+        let mut state = test_state("gizmo-hit");
+        state.apply_selection(Some(1));
+        let (center, x_tip) = gizmo_screen_points(&mut state);
+        assert_eq!(state.gizmo_axis_at(x_tip.x, x_tip.y), Some(Axis::X));
+        // 远离任何一根轴：不抢实体的点选。
+        assert_eq!(state.gizmo_axis_at(center.x + 60.0, center.y + 40.0), None);
+        // 没有选中项时没有手柄。
+        state.apply_selection(None);
+        assert_eq!(state.gizmo_axis_at(x_tip.x, x_tip.y), None);
+    }
+
+    #[test]
+    fn dragging_the_x_axis_moves_the_entity_along_world_x() {
+        let mut state = test_state("gizmo-drag");
+        state.apply_selection(Some(1));
+        let (center, _) = gizmo_screen_points(&mut state);
+        let entity = state.entities[1];
+
+        state
+            .begin_drag(Axis::X, center.x, center.y)
+            .expect("正对着实体应该能开始拖动");
+        let moved = state
+            .drag_to(center.x + 30.0, center.y)
+            .expect("拖动应该给出新位置");
+        assert!(moved[0] > 1.0, "应沿 +X 移动: {moved:?}");
+        assert!(moved[1].abs() < 1e-4 && moved[2].abs() < 1e-4, "{moved:?}");
+
+        // 引擎里的实体跟手（渲染直接用这份数据，不等文档重载）。
+        let world = state.app.engine_mut().world_mut();
+        let local = world.get::<LocalTransform>(entity).unwrap();
+        assert!(
+            (local.position.x - moved[0]).abs() < 1e-5,
+            "{:?}",
+            local.position
+        );
+
+        // 缩放标记实体也跟着走。
+        let marker = state.marker.unwrap();
+        let marker_x = world.get::<LocalToWorld>(marker).unwrap().0.col(3).x;
+        assert!(
+            (marker_x - moved[0]).abs() < 1e-4,
+            "{marker_x} vs {moved:?}"
+        );
+
+        state.end_drag();
+        assert!(state.drag_to(center.x + 60.0, center.y).is_none());
+    }
+
+    #[test]
+    fn dragging_a_child_converts_back_into_parent_space() {
+        // 父级在 (5,0,0) 绕 Y 转 90°；子级局部坐标 = 世界位移经过父级逆矩阵。
+        const CHILD: &str = r#"{
+          "version": 1,
+          "entities": [
+            {
+              "name": "parent",
+              "parent": null,
+              "transform": {
+                "position": [5,0,0],
+                "rotation": [0,0.70710678,0,0.70710678],
+                "scale": [1,1,1]
+              },
+              "components": {}
+            },
+            {
+              "name": "child",
+              "parent": 0,
+              "transform": { "position": [0,0,0], "rotation": [0,0,0,1], "scale": [1,1,1] },
+              "components": {}
+            }
+          ]
+        }"#;
+        let mut state = test_state_from("gizmo-child", CHILD);
+        state.orbit.target = [5.0, 0.0, 0.0];
+        state.place_camera();
+        state.apply_selection(Some(1));
+
+        let ctx = state.gizmo_context().unwrap();
+        let center = gizmo::project(&ctx.view, ctx.fov, 200.0, 100.0, ctx.center).unwrap();
+        state.begin_drag(Axis::X, center.x, center.y).unwrap();
+        let moved = state
+            .drag_to(center.x + 30.0, center.y)
+            .expect("子级也应该能拖动");
+
+        // 世界 +X 位移被父级的旋转／缩放折回局部空间，而不是原样写进 position。
+        let parent_world = {
+            let world = state.app.engine_mut().world_mut();
+            world
+                .get::<LocalToWorld>(state.entities[0])
+                .expect("父级应该有世界矩阵")
+                .0
+        };
+        let moved_world = parent_world.transform_point3(Vec3::from_array(moved));
+        assert!(moved_world.x > 6.0, "世界坐标应沿 +X: {moved_world:?}");
+        assert!(moved_world.y.abs() < 1e-3, "{moved_world:?}");
+        assert!(moved_world.z.abs() < 1e-3, "{moved_world:?}");
+        // 局部坐标必须换过基底：绕 Y 转 90° 后世界 +X 变成局部 ±Z。
+        assert!(moved[0].abs() < 1e-3, "局部 X 应该为 0: {moved:?}");
+        assert!(moved[2].abs() > 1.0, "世界 +X 落在局部 Z 上: {moved:?}");
     }
 }

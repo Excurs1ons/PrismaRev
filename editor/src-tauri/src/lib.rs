@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 
+mod gizmo;
 mod pick;
 mod viewport;
 
@@ -1503,6 +1504,10 @@ pub fn run() {
             viewport::editor_viewport_input,
             viewport::editor_viewport_select,
             viewport::editor_viewport_pick,
+            viewport::editor_viewport_gizmo_hit,
+            viewport::editor_viewport_drag_begin,
+            viewport::editor_viewport_drag,
+            viewport::editor_viewport_drag_end,
             viewport::editor_viewport_stats,
             viewport::editor_viewport_close,
         ])
