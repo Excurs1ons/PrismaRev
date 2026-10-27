@@ -13,6 +13,7 @@ members = [
     "crates/prism-platform",
     "crates/prism-editor-tool",
     "crates/prism-editor-api",
+    "crates/prism-editor-mcp",
     "crates/prism-build-pipeline",
     "crates/prism-audio",
     "crates/prism-asset",

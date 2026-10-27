@@ -203,6 +203,14 @@ The user project's dependency chain must stay **UI-framework-free and editor-fre
 - The `projects/prisma/`, `projects/prisma-sponza/`, `launcher/` and `editor/` standalone workspaces need their own `cargo build` / `cargo clippy`
   runs — a root-workspace build does **not** cover them. `editor/` additionally needs `pnpm`.
 
+## Editor MCP server (agent 改场景 / 跑游戏 / 抓图)
+- `crates/prism-editor-mcp` 把 `prism-editor-api` 暴露成 MCP 工具（stdio）：文档读写、
+  `schema_list`、`field_set`（反射校验）、组件增删、`game_run/game_logs`、`screenshot`。
+  它**不链接** engine / render，抓图靠起子进程 + `PRISMREV_SCREENSHOT`。
+  用法与工具表见 [`docs/editor-mcp.md`](docs/editor-mcp.md)。
+- 改场景字段优先用它而不是手改 `.scene.json`：`field_set` 会拒绝只读字段和非法类型。
+- 注意它写的是**作者文档**；运行时只读 `assets/scenes.pak`，改完还要重新 cook。
+
 ## Built-in screenshot (automation / art tuning)
 - `PRISMREV_SCREENSHOT=<path>` 让渲染线程在第 N 帧把**屏幕上那一帧**写成 PNG
   （`crates/prism-render/src/screenshot.rs` + `crates/prism-app/src/screenshot.rs`）。

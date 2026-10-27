@@ -2739,6 +2739,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "prism-editor-mcp"
+version = "0.1.0"
+dependencies = [
+ "env_logger",
+ "log",
+ "prism-editor-api",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "prism-editor-tool"
 version = "0.1.0"
 dependencies = [
