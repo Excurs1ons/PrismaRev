@@ -407,29 +407,10 @@ impl GraphRenderer {
         // explicitly request a PT renderer before this expensive pass is built.
 
         // CRT 调度器：统一渲染所有注册的 RenderTexture（Unity 式）。
-        // 演示 RT：4x4 位图图案（Realtime，每帧随机 16 位模式，CPU xorshift）。
-        let mut _rt_scheduler = crate::rt_scheduler::RenderTextureScheduler::new(&context);
-        let mut rt_demo = crate::render_texture::RenderTexture::new(
-            &context,
-            bindless,
-            swapchain_extent,
-            vk::Format::R8G8B8A8_UNORM,
-        )
-        .context("RenderTexture::new")?;
-        rt_demo
-            .set_update_mode(crate::render_texture::RtUpdateMode::Realtime)
-            .set_period(1)
-            .set_update_shader(crate::render_texture::RtShader::BitmapPattern);
-        let rt_demo_handle = _rt_scheduler.add(rt_demo);
-        log::info!("RT demo: 4x4 bitmap render texture registered -> {rt_demo_handle:?}");
-
-        // 消费端：全屏采样 RT（bindless）→ swapchain，验证 RT 闭环。
-        let mut _rt_preview_pass = crate::rt_pass::RtPreviewPass::new(&context, color_format);
-        _rt_preview_pass.set_bindless_layout(bindless.layout);
-        _rt_preview_pass.set_bindless_set(bindless.set);
+        let rt_scheduler = crate::rt_scheduler::RenderTextureScheduler::new(&context);
 
         // Register all passes into the 图 in 执行 order.
-        // Shadow -> Scene -> GTAO -> RenderTextures -> PathTrace -> Post -> RtPreview.
+        // Shadow -> Scene -> GTAO -> RenderTextures -> PathTrace -> Post.
         graph.add_pass(Box::new(forward_pass));
         // 启动路径：同步 per-swapchain-image 槽位数。`ForwardPass::execute` 的
         // `ensure_target` 按 `image_count` 建 framebuffer，`recreate_swapchain`
@@ -439,6 +420,7 @@ impl GraphRenderer {
             forward_pass.set_image_count(swapchain.views.len());
         }
         graph.add_pass(Box::new(gtao_pass));
+        graph.add_pass(Box::new(rt_scheduler));
         graph.add_pass(Box::new(post_pass));
 
         Ok(Self {
@@ -593,23 +575,8 @@ impl GraphRenderer {
         let post_pass = crate::post::PostPass::new(&context, color_format, frame_count)
             .context("PostPass::new (headless)")?;
 
-        // CRT 调度器（headless 也注册演示 RT，验证调度器在无窗口下跑通）。
-        let mut _rt_scheduler = crate::rt_scheduler::RenderTextureScheduler::new(&context);
-        let mut rt_demo = crate::render_texture::RenderTexture::new(
-            &context,
-            bindless,
-            offscreen.extent,
-            vk::Format::R8G8B8A8_UNORM,
-        )
-        .context("RenderTexture::new (headless)")?;
-        rt_demo
-            .set_update_mode(crate::render_texture::RtUpdateMode::Realtime)
-            .set_period(1)
-            .set_update_shader(crate::render_texture::RtShader::BitmapPattern);
-        let rt_demo_handle = _rt_scheduler.add(rt_demo);
-        log::info!(
-            "RT demo: 4x4 bitmap render texture registered (headless) -> {rt_demo_handle:?}"
-        );
+        // CRT 调度器（headless 下同样接入图，支持无窗口离屏 RT 调度）。
+        let rt_scheduler = crate::rt_scheduler::RenderTextureScheduler::new(&context);
 
         graph.add_pass(Box::new(forward_pass));
         if let Some(forward_pass) = graph.pass_mut::<ForwardPass>() {
@@ -617,6 +584,7 @@ impl GraphRenderer {
             forward_pass.set_target(&context.device, &context, 1, 0, offscreen.extent)?;
         }
         graph.add_pass(Box::new(gtao_pass));
+        graph.add_pass(Box::new(rt_scheduler));
         graph.add_pass(Box::new(post_pass));
         if let Some(post_pass) = graph.pass_mut::<crate::post::PostPass>() {
             post_pass.set_target(
