@@ -162,6 +162,16 @@ deviating from those conventions is a bug. (`README.md` is the human-facing over
       直接当作 `.scene.json` 的 `entities[i]`，与层级 / 检查器的选择共用。
     - 选中高亮复用引擎已有的 `Gizmo` 组件（世界坐标轴三色箭头，标记实体由视口
       线程创建，`enabled` 控制显隐），不引入「描边 / 选中框」这种渲染侧编辑器概念。
+    - 平移 gizmo（`editor/src-tauri/src/gizmo.rs`）：点击命中某一根轴（屏幕空间线段
+      距离，容差 10px）就进入拖动，拖动量由「光标射线与轴线的最近点参数差」得到，
+      所以相机视角变化不会让实体漂移。世界位移写回文档前要经**父级世界矩阵的逆**
+      换成局部 `transform.position`；箭头靠 `Gizmo.scale` 保持屏幕比例
+      （`GIZMO_SCREEN_FRACTION`，基准长度是渲染侧的 1.5 世界单位）。
+    - 拖动过程中**不重载场景**：后端直接改 ECS 的 `LocalTransform`（画面来自引擎，
+      跟手），前端把文档写回合并成一次撤销，松手后才 `editor_viewport_reload` 同步。
+      重载会换掉 ECS 句柄，所以拖动期间任何整场重建都会让这次拖动失效。
+    - `HostState::reload` 加载完会立刻跑一遍 `hierarchy_system`：加载器只保证根实体的
+      `LocalToWorld`，子级要等这一刻，否则重载后第一帧的高亮 / 点选会落在错误位置。
     - 不要在 `prism-app` / `prism-engine` 里加视口/面板概念；它们只提供
       「离屏渲染 + 帧读回」这一层通用能力。
 - `projects/prisma/` — 用户游戏项目（package/crate `prisma`；`prisma` 桌面二进制 + Android

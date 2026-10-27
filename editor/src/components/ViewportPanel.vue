@@ -30,6 +30,8 @@ const emit = defineEmits<{
   (event: "toggle-play"): void;
   /** 在场景视图里点选：`null` = 点空处（取消选中）。 */
   (event: "select", index: number | null): void;
+  /** 拖动平移手柄后的新局部位置 `[x, y, z]`。 */
+  (event: "move", position: [number, number, number]): void;
 }>();
 
 const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -152,6 +154,11 @@ function setActive(active: boolean) {
 
 function scheduleReload() {
   if (!inTauri) return;
+  // 拖动 gizmo 期间文档每帧都在变，重载会换掉 ECS 句柄；攒到松手后再同步。
+  if (draggingAxis.value) {
+    reloadPending = true;
+    return;
+  }
   if (reloadTimer !== undefined) window.clearTimeout(reloadTimer);
   reloadTimer = window.setTimeout(async () => {
     if (!props.doc) return;
@@ -176,6 +183,14 @@ let dragMode: "orbit" | "pan" | null = null;
 let lastPointer = { x: 0, y: 0 };
 /** 判定「点选」还是「拖动相机」：按下位置 + 时间。 */
 let clickStart: { x: number; y: number; at: number } | null = null;
+/** 正在拖动的平移手柄（`"x"` / `"y"` / `"z"`），`null` = 没在拖。 */
+const draggingAxis = ref<string | null>(null);
+/** 拖动期间待下发的光标位置 / 是否攒了未同步的文档重载。 */
+let pendingDrag: { x: number; y: number } | null = null;
+let reloadPending = false;
+let dragFrame = 0;
+/** 左键按下瞬间的相机（万一这一按其实落在手柄上，用于还原）。 */
+let orbitBeforePress: CameraOrbit | null = null;
 
 /** 相机变更按 rAF 合并：拖动时每帧最多下发一次。 */
 function pushCamera() {
@@ -193,24 +208,71 @@ function onPointerDown(event: PointerEvent) {
   if (!canvas) return;
   canvas.focus();
   if (isScene.value) {
-    if (event.button === 1 || event.shiftKey) {
-      dragMode = "pan";
-    } else if (event.button === 0 || event.button === 2) {
-      dragMode = "orbit";
+    const point = event.button === 0 && !event.shiftKey ? canvasPoint(event) : null;
+    if (point) {
+      // 左键：先按「轨道旋转 / 点选」记账（保证快速点击仍然能点选），
+      // 同时问后端是否按在平移手柄上；是就切过去并把相机还原。
+      orbitBeforePress = { ...orbit.value };
+      beginCameraDrag(event, canvas);
+      void beginGizmoDrag(point, event, canvas);
     } else {
-      return;
+      beginCameraDrag(event, canvas);
     }
-    lastPointer = { x: event.clientX, y: event.clientY };
-    clickStart = event.button === 0 ? { x: event.clientX, y: event.clientY, at: Date.now() } : null;
-    canvas.setPointerCapture(event.pointerId);
-    event.preventDefault();
     return;
   }
   void sendInput({ type: "mouseButton", button: event.button, pressed: true });
 }
 
+/** 轨道旋转 / 平移：记录起点并接管指针。 */
+function beginCameraDrag(event: PointerEvent, canvas: HTMLCanvasElement) {
+  if (event.button === 1 || event.shiftKey) {
+    dragMode = "pan";
+  } else if (event.button === 0 || event.button === 2) {
+    dragMode = "orbit";
+  } else {
+    return;
+  }
+  lastPointer = { x: event.clientX, y: event.clientY };
+  clickStart = event.button === 0 ? { x: event.clientX, y: event.clientY, at: Date.now() } : null;
+  canvas.setPointerCapture(event.pointerId);
+  event.preventDefault();
+}
+
+/** 按在平移手柄上 → 后端开始拖动会话（`draggingAxis` 非空后 pointermove 变成移动实体）。 */
+async function beginGizmoDrag(
+  point: { x: number; y: number },
+  event: PointerEvent,
+  canvas: HTMLCanvasElement,
+) {
+  if (!inTauri || !channel) return;
+  const axis = await api.viewportGizmoHit(viewId, point.x, point.y).catch(() => null);
+  // 松手了 / 没按到手柄：保持「轨道 + 点选」的记账，什么都不做。
+  if (!axis || event.buttons === 0) return;
+  try {
+    await api.viewportDragBegin(viewId, axis, point.x, point.y);
+  } catch {
+    return;
+  }
+  // 命中手柄之前可能已经转了一两像素的轨道视点，还原回去。
+  if (orbitBeforePress) {
+    orbit.value = orbitBeforePress;
+    orbitBeforePress = null;
+    pushCamera();
+  }
+  dragMode = null;
+  clickStart = null;
+  draggingAxis.value = axis;
+  canvas.setPointerCapture(event.pointerId);
+  event.preventDefault();
+}
+
 function onPointerMove(event: PointerEvent) {
   if (isScene.value) {
+    if (draggingAxis.value) {
+      const point = canvasPoint(event);
+      if (point) pushDrag(point);
+      return;
+    }
     if (!dragMode) return;
     const dx = event.clientX - lastPointer.x;
     const dy = event.clientY - lastPointer.y;
@@ -243,8 +305,46 @@ function onPointerMove(event: PointerEvent) {
   });
 }
 
+/** 拖动按 rAF 合并：每帧最多问一次后端，中间的光标位置直接丢掉。 */
+function pushDrag(point: { x: number; y: number }) {
+  if (dragFrame) {
+    pendingDrag = point;
+    return;
+  }
+  dragFrame = requestAnimationFrame(() => {
+    dragFrame = 0;
+    const target = pendingDrag ?? point;
+    pendingDrag = null;
+    void api
+      .viewportDrag(viewId, target.x, target.y)
+      .then((position) => {
+        if (!position) return;
+        emit("move", position);
+        // 拖动期间文档在变，但重载会换掉 ECS 句柄：等松手再同步。
+        reloadPending = true;
+      })
+      .catch(() => undefined);
+  });
+}
+
 function onPointerUp(event: PointerEvent) {
+  orbitBeforePress = null;
   if (isScene.value) {
+    if (draggingAxis.value) {
+      draggingAxis.value = null;
+      pendingDrag = null;
+      if (dragFrame) {
+        cancelAnimationFrame(dragFrame);
+        dragFrame = 0;
+      }
+      canvasEl.value?.releasePointerCapture(event.pointerId);
+      void api.viewportDragEnd(viewId).catch(() => undefined);
+      if (reloadPending) {
+        reloadPending = false;
+        scheduleReload();
+      }
+      return;
+    }
     dragMode = null;
     canvasEl.value?.releasePointerCapture(event.pointerId);
     const start = clickStart;
@@ -265,19 +365,28 @@ function onPointerUp(event: PointerEvent) {
 }
 
 /**
- * 点选：把 CSS 坐标换算到 canvas **位图**坐标再交给后端。
+ * CSS 坐标 → canvas **位图**坐标。
  *
  * canvas 的宽高就是后端实际渲染分辨率（已按 1600×900 上限缩过），所以按比例换算，
  * 不依赖 devicePixelRatio。
  */
-async function pickAt(event: PointerEvent) {
+function canvasPoint(event: PointerEvent): { x: number; y: number } | null {
   const canvas = canvasEl.value;
-  if (!canvas || !inTauri || !channel || canvas.width === 0) return;
+  if (!canvas || canvas.width === 0) return null;
   const rect = canvas.getBoundingClientRect();
-  if (rect.width === 0 || rect.height === 0) return;
-  const x = ((event.clientX - rect.left) / rect.width) * canvas.width;
-  const y = ((event.clientY - rect.top) / rect.height) * canvas.height;
-  const hit = await api.viewportPick(viewId, x, y).catch(() => undefined);
+  if (rect.width === 0 || rect.height === 0) return null;
+  return {
+    x: ((event.clientX - rect.left) / rect.width) * canvas.width,
+    y: ((event.clientY - rect.top) / rect.height) * canvas.height,
+  };
+}
+
+/** 点选：把 CSS 坐标换算到 canvas **位图**坐标再交给后端。 */
+async function pickAt(event: PointerEvent) {
+  if (!inTauri || !channel) return;
+  const point = canvasPoint(event);
+  if (!point) return;
+  const hit = await api.viewportPick(viewId, point.x, point.y).catch(() => undefined);
   if (hit === undefined) return;
   emit("select", hit ?? null);
 }
@@ -288,6 +397,7 @@ function primarySelection(): number | null {
   return selection && selection.length ? selection[selection.length - 1] : null;
 }
 
+/** 把选中项同步给后端（决定 gizmo 画在哪个实体上）。 */
 function pushSelection() {
   if (!inTauri || !channel || !isScene.value) return;
   void api.viewportSelect(viewId, primarySelection()).catch(() => undefined);
@@ -418,6 +528,7 @@ const entityLabel = computed(() =>
       <canvas
         ref="canvasEl"
         class="viewport-canvas"
+        :class="{ dragging: draggingAxis !== null }"
         tabindex="0"
         @pointerdown="onPointerDown"
         @pointermove="onPointerMove"
@@ -435,7 +546,7 @@ const entityLabel = computed(() =>
         <span v-else>等待场景文档…</span>
       </div>
       <div v-if="isScene" class="viewport-hint">
-        左键轨道 · 中键/Shift 平移 · 滚轮缩放
+        拖动坐标轴移动 · 左键轨道 · 中键/Shift 平移 · 滚轮缩放
       </div>
     </div>
   </div>
@@ -492,6 +603,10 @@ const entityLabel = computed(() =>
 
 .viewport-surface.playing .viewport-canvas {
   cursor: default;
+}
+
+.viewport-canvas.dragging {
+  cursor: grabbing;
 }
 
 .viewport-overlay {

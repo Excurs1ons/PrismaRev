@@ -694,6 +694,35 @@ export function viewportPick(id: string, x: number, y: number): Promise<number |
   return call<number | null>("editor_viewport_pick", { id, x, y });
 }
 
+/** 光标下的平移手柄（`"x"` / `"y"` / `"z"`，没有则 `null`）。 */
+export function viewportGizmoHit(id: string, x: number, y: number): Promise<string | null> {
+  return call<string | null>("editor_viewport_gizmo_hit", { id, x, y });
+}
+
+/** 开始拖动选中实体的某根轴。 */
+export function viewportDragBegin(
+  id: string,
+  axis: string,
+  x: number,
+  y: number,
+): Promise<void> {
+  return call<void>("editor_viewport_drag_begin", { id, axis, x, y });
+}
+
+/** 拖动到新光标位置，返回实体新的局部 `transform.position`。 */
+export function viewportDrag(
+  id: string,
+  x: number,
+  y: number,
+): Promise<[number, number, number] | null> {
+  return call<[number, number, number] | null>("editor_viewport_drag", { id, x, y });
+}
+
+/** 结束拖动。 */
+export function viewportDragEnd(id: string): Promise<void> {
+  return call<void>("editor_viewport_drag_end", { id });
+}
+
 /** 关闭视口并清理临时快照。 */
 export function viewportClose(id: string): Promise<boolean> {
   return call<boolean>("editor_viewport_close", { id });
