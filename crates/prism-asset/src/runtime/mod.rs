@@ -891,6 +891,9 @@ impl ResourceManager {
     /// 2. **只刷新仍在内存里的资源** —— 已卸载（被淘汰）的槽不该因为热重载被急切加载回来，
     ///    它们下次 `load` 时自然会从新 reader 读到新数据。
     ///
+    /// 刷新是**原地换内容**：`generation` 不变，所以热重载前发出的 [`Handle`] 仍然有效
+    /// （只用于「槽被回收给别的资源」时才递增）。
+    ///
     /// 未知路径视为新出现的 `.pak`，按普通注册处理。
     #[cfg(feature = "hot-reload")]
     pub fn on_pak_changed(&mut self, path: &Path) -> Result<(), RuntimeError> {
@@ -943,7 +946,12 @@ impl ResourceManager {
                 }
                 slot.data = Some(data);
                 slot.size_bytes = new_size;
-                slot.generation += 1;
+                // Deliberately **no** `generation` bump: the slot still holds
+                // the same asset, just newer bytes. Bumping it here would make
+                // every `Handle` handed out before the reload fail with
+                // `GenerationMismatch` — a hot reload must refresh content
+                // without invalidating live handles. Generation only moves
+                // when a slot is recycled for a different asset.
                 slot.last_access.set(Instant::now());
                 slot.load_epoch = epoch;
             }
