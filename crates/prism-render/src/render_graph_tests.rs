@@ -136,3 +136,160 @@ fn lazy_allocation_requires_a_pure_transient_attachment() {
         vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | vk::ImageUsageFlags::TRANSIENT_ATTACHMENT
     ));
 }
+
+struct TestPass {
+    name: &'static str,
+    reads: Vec<ResourceUsage>,
+    writes: Vec<ResourceUsage>,
+}
+
+impl RenderPassNode for TestPass {
+    fn name(&self) -> &str {
+        self.name
+    }
+
+    fn setup(&mut self, graph: &mut RenderGraphBuilder, _settings: &RenderSettings) {
+        for r in &self.reads {
+            graph.read_usage(r.clone());
+        }
+        for w in &self.writes {
+            graph.write_usage(w.clone());
+        }
+    }
+
+    fn execute(&mut self, _ctx: &RenderContext, _resources: &mut GraphResources) -> Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn graph_precomputes_and_caches_pass_edges_and_last_writers() {
+    let mut builder = RenderGraphBuilder::new();
+    let res_a = ResourceHandle(0);
+    let res_b = ResourceHandle(1);
+
+    let mut pass0 = TestPass {
+        name: "Pass0",
+        reads: vec![],
+        writes: vec![ResourceUsage {
+            handle: res_a,
+            access: vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
+            stage: vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+            layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+        }],
+    };
+    pass0.setup(&mut builder, &RenderSettings::default());
+    builder.add_pass(Box::new(pass0));
+
+    let mut pass1 = TestPass {
+        name: "Pass1",
+        reads: vec![ResourceUsage {
+            handle: res_a,
+            access: vk::AccessFlags::SHADER_READ,
+            stage: vk::PipelineStageFlags::FRAGMENT_SHADER,
+            layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+        }],
+        writes: vec![ResourceUsage {
+            handle: res_b,
+            access: vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
+            stage: vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+            layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+        }],
+    };
+    pass1.setup(&mut builder, &RenderSettings::default());
+    builder.add_pass(Box::new(pass1));
+    let mut graph = builder.build();
+
+    // Verify pass_edges has precomputed buckets
+    assert_eq!(graph.pass_edges.len(), 2);
+    assert_eq!(graph.pass_edges[0].len(), 1);
+    assert_eq!(graph.pass_edges[0][0].pass_idx, 0);
+    assert_eq!(graph.pass_edges[0][0].kind, EdgeKind::Write);
+    assert_eq!(graph.pass_edges[0][0].usage.handle, res_a);
+
+    assert_eq!(graph.pass_edges[1].len(), 2);
+    assert_eq!(graph.pass_edges[1][0].pass_idx, 1);
+    assert_eq!(graph.pass_edges[1][0].kind, EdgeKind::Read);
+    assert_eq!(graph.pass_edges[1][0].usage.handle, res_a);
+    assert_eq!(graph.pass_edges[1][1].pass_idx, 1);
+    assert_eq!(graph.pass_edges[1][1].kind, EdgeKind::Write);
+    assert_eq!(graph.pass_edges[1][1].usage.handle, res_b);
+
+    // Verify last_writers
+    assert_eq!(graph.last_writers.len(), 2);
+    assert_eq!(
+        graph.last_writers.get(&res_a).unwrap().access,
+        vk::AccessFlags::COLOR_ATTACHMENT_WRITE
+    );
+    assert_eq!(
+        graph.last_writers.get(&res_b).unwrap().access,
+        vk::AccessFlags::COLOR_ATTACHMENT_WRITE
+    );
+
+    // Now test add_pass updates precomputed cache
+    let pass2 = Box::new(TestPass {
+        name: "Pass2",
+        reads: vec![ResourceUsage {
+            handle: res_b,
+            access: vk::AccessFlags::SHADER_READ,
+            stage: vk::PipelineStageFlags::FRAGMENT_SHADER,
+            layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+        }],
+        writes: vec![ResourceUsage {
+            handle: res_a, // writes res_a again, updating last_writers
+            access: vk::AccessFlags::TRANSFER_WRITE,
+            stage: vk::PipelineStageFlags::TRANSFER,
+            layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+        }],
+    });
+
+    graph.add_pass(pass2);
+    assert_eq!(graph.pass_edges.len(), 3);
+    assert_eq!(graph.pass_edges[2].len(), 2);
+    assert_eq!(graph.pass_edges[2][0].pass_idx, 2);
+    assert_eq!(graph.pass_edges[2][1].pass_idx, 2);
+
+    // last_writers for res_a should now reflect Pass2
+    assert_eq!(
+        graph.last_writers.get(&res_a).unwrap().access,
+        vk::AccessFlags::TRANSFER_WRITE
+    );
+    assert_eq!(
+        graph.last_writers.get(&res_a).unwrap().stage,
+        vk::PipelineStageFlags::TRANSFER
+    );
+}
+
+#[test]
+fn graph_resources_clear_frame_preserves_persistent_resources() {
+    let mut resources = GraphResources::new();
+    let handle = ResourceHandle(42);
+    resources.resources.insert(
+        handle,
+        GraphResource {
+            handle,
+            res_type: ResourceType::StorageBuffer { size: 1024 },
+            image: None,
+            image_view: None,
+            memory: None,
+        },
+    );
+
+    // Simulate per-frame published data
+    resources.set_image_view(handle, vk::ImageView::null());
+    resources.set_image(handle, vk::Image::null());
+    resources.set_param(handle, 123);
+
+    assert!(resources.published_view(handle).is_some());
+    assert!(resources.published_image(handle).is_some());
+    assert_eq!(resources.param(handle), Some(123));
+
+    resources.clear_frame();
+
+    // Persistent resources table must be preserved
+    assert!(resources.resources.contains_key(&handle));
+    // Per-frame items must be cleared
+    assert!(resources.published_view(handle).is_none());
+    assert!(resources.published_image(handle).is_none());
+    assert_eq!(resources.param(handle), None);
+}
