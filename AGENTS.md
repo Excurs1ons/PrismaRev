@@ -143,6 +143,19 @@ deviating from those conventions is a bug. (`README.md` is the human-facing over
   - 层级编辑也在 Rust 侧：`reparent_doc`（拒绝自父/成环）、`move_entity`（移动数组位置 +
     全量父索引重映射）、`delete_entities`（孤儿子级变根 + 重映射）。前端只负责把拖拽判定
     （行的上/下 25% = 兄弟插入，中间 = 挂为子级，底部空白 = 变根）翻译成这三个命令。
+  - **内置视口（2026-10-27）**：`sceneView` / `gameView` 两个 dock 面板由编辑器**进程内**
+    的 engine 实例渲染，不再 spawn 游戏进程。
+    - 每个视口 = 一个线程 + 一个 `prism_app::App`（渲染走离屏 target），帧经 Tauri
+      `Channel`（8 字节宽高头 + RGBA8）推给 `components/ViewportPanel.vue` 的 canvas。
+      渲染分辨率上限 1600×900、30fps，面板不可见时暂停。
+    - 场景来源是**当前编辑中的文档**：前端把（可能未保存的）JSON 发给后端，后端写
+      `target/editor-preview/<id>.scene.json` 后由 `Engine::load_scene_json_file` 加载
+      （`SceneSource::JsonFile` 路径），所以不依赖 `scenes.pak`、也不需要先 cook。
+    - Scene view 是编辑态：不跑 `Engine::update`，只传播层级；叠加一台 `depth = 1000`
+      的编辑器相机（轨道控制由前端持有后整体下发）。Game view 用文档相机，Play 时
+      才跑完整模拟。改 `scene/` 的相机选择或清屏规则前先看这里。
+    - 不要在 `prism-app` / `prism-engine` 里加视口/面板概念；它们只提供
+      「离屏渲染 + 帧读回」这一层通用能力。
 - `projects/prisma/` — 用户游戏项目（package/crate `prisma`；`prisma` 桌面二进制 + Android
   cdylib `libprisma.so`；keyframe 开场 intro、`register_scene("intro", ...)` 注册场景、
   `lib.rs` 的 `android_main`）；**own standalone workspace**, NOT a root member.
@@ -156,12 +169,29 @@ deviating from those conventions is a bug. (`README.md` is the human-facing over
 The user project's dependency chain must stay **UI-framework-free and editor-free**:
 `prisma → prism-app → prism-engine → {prism-scene, prism-ecs, prism-render, prism-asset}`.
 `prism-cooker` / `prism-build-pipeline` are build-host only and must never appear in this chain.
-- The only editor is the Tauri web editor (`editor/`); its Rust backend is `prism-editor-api`
-  and it **never links** the engine/renderer. It edits `.scene.json`/`.prefab.json`, writes
-  project settings, and shells out to `prism-build-pipeline` for cook/build.
+- The only editor is the Tauri web editor (`editor/`). **Since 2026-10-27 its Rust backend
+  links `prism-app` / `prism-engine` on purpose** (built-in Scene / Game view): the editor
+  owns engine instances and renders them offscreen inside its own process.
+  - It still uses `prism-editor-api` for schema / `.scene.json` / `.prefab.json` / project
+    settings, and still shells out to `prism-build-pipeline` for cook/build.
+  - **Play no longer spawns the game binary.** The toolbar 运行/停止 drives the editor's
+    Game view; the `editor_play_scene` command survives only for automation (MCP /
+    `scripts`) that wants the real game build in a separate process.
+  - The engine side of this must stay generic: no editor-only concepts (panels, docks,
+    selection) may leak into `prism-app` / `prism-engine` / `prism-render`.
 - Never add a UI framework (egui/egui-winit/egui-ash-renderer) to `prism-app` /
   `prism-engine` / `prism-render`. Verify with
   `cd projects/prisma && cargo tree | grep -i egui` (must print nothing).
+- Built-in viewport pipeline (do not re-implement it elsewhere):
+  - `prism-app` hosted mode — `App::hosted(config)` (no manifest scene, no winit window),
+    `load_scene_json_file`, `start_hosted(w, h)` (offscreen render thread),
+    `host_tick(simulate)`, `host_resize`, `take_hosted_frame`, `shutdown_hosted`.
+  - `prism-render` — `GraphRenderer::offscreen_new(w, h)` + `resize_offscreen`;
+    PostPass tonemaps into the offscreen image, `copy_offscreen_to_readback` +
+    `readback_pixels` return RGBA8. Do not read back before a frame is submitted.
+  - `editor/src-tauri/src/viewport.rs` — one thread per viewport, frames travel as
+    `Raw` Tauri channel payloads (`8-byte w/h header + RGBA`), the Vue panel only does
+    `putImageData`. Scene JSON snapshots live in `target/editor-preview/`.
 - `prism-app` keeps the neutral `FrameHook` / `prism_render::external_overlay::SwapchainOverlay`
   seams for debug hosts and future tooling; main → render thread UI data crosses as a
   **type-erased** `OverlayMessage` (`Box<dyn FnOnce(&mut dyn SwapchainOverlay) + Send>`) via

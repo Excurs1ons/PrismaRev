@@ -43,6 +43,21 @@ pub fn startup_ms() -> u64 {
 pub type RendererMessage = Box<dyn FnOnce(&mut GraphRenderer) + Send>;
 
 // ---------------------------------------------------------------------------
+// FrameImage — 渲染线程 → 宿主（编辑器）
+// ---------------------------------------------------------------------------
+
+/// 一帧离屏渲染结果（RGBA8，行优先，左上原点）。
+///
+/// 只有无窗口（`GraphRenderer::offscreen_new`）模式会产生它：宿主请求一帧后，
+/// 渲染线程把 PostPass 的 tonemap 结果读回 CPU 并放在 [`RenderShared::frame`]。
+#[derive(Clone, Debug)]
+pub struct FrameImage {
+    pub width: u32,
+    pub height: u32,
+    pub pixels: Vec<u8>,
+}
+
+// ---------------------------------------------------------------------------
 // RenderStats — 渲染线程 → 主线程
 // ---------------------------------------------------------------------------
 
@@ -93,6 +108,10 @@ pub struct RenderShared {
     pub startup_marks: Mutex<HashMap<&'static str, u64>>,
     /// 渲染线程无法继续时记录的致命错误（初始化失败等），由主线程取出并展示。
     pub render_failure: Mutex<Option<String>>,
+    /// 宿主（编辑器）请求下一帧读回（主线程→渲染线程，一次性）。
+    pub frame_requested: AtomicBool,
+    /// 最近一次读回的离屏帧（渲染线程→主线程）。
+    pub frame: Mutex<Option<FrameImage>>,
 }
 
 impl RenderShared {
@@ -111,6 +130,8 @@ impl RenderShared {
             asset_results: Mutex::new(Vec::new()),
             startup_marks: Mutex::new(HashMap::new()),
             render_failure: Mutex::new(None),
+            frame_requested: AtomicBool::new(false),
+            frame: Mutex::new(None),
         });
         (shared, running)
     }
@@ -154,6 +175,23 @@ impl RenderShared {
     /// 取走所有排队中的叠加层消息（渲染线程）。
     pub fn take_overlay_messages(&self) -> Vec<OverlayMessage> {
         std::mem::take(&mut *self.overlay_messages.lock().unwrap())
+    }
+
+    // -------------------------------------------------------------------
+    // 离屏帧读回（宿主模式）
+    // -------------------------------------------------------------------
+
+    /// 请求渲染线程在下一帧把 tonemap 结果读回 CPU（主线程 → 渲染线程）。
+    ///
+    /// 一次性标志：渲染线程在**有可用帧**时消费；宿主每 tick 重新请求即可，
+    /// 掉帧时自然降频，不会堆积请求。
+    pub fn request_frame(&self) {
+        self.frame_requested.store(true, Ordering::Relaxed);
+    }
+
+    /// 取走最近读回的帧（主线程）；没有新帧时返回 `None`。
+    pub fn take_frame(&self) -> Option<FrameImage> {
+        self.frame.lock().unwrap().take()
     }
 
     // -------------------------------------------------------------------
@@ -285,6 +323,11 @@ impl RenderShared {
     /// Take the recorded render-thread error, if any.
     pub fn take_render_failure(&self) -> Option<String> {
         self.render_failure.lock().unwrap().take()
+    }
+
+    /// 只读当前错误（不消费），供宿主轮询展示。
+    pub fn read_render_failure(&self) -> Option<String> {
+        self.render_failure.lock().unwrap().clone()
     }
 }
 

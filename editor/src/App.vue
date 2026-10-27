@@ -10,6 +10,7 @@ import Inspector from "./components/Inspector.vue";
 import PreferencesPanel from "./components/PreferencesPanel.vue";
 import ProjectSettingsPanel from "./components/ProjectSettingsPanel.vue";
 import ThemePanel from "./components/ThemePanel.vue";
+import ViewportPanel from "./components/ViewportPanel.vue";
 import {
   collectTabs,
   defaultDock,
@@ -69,12 +70,17 @@ const sceneTemplates = ref<SceneTemplate[]>([]);
 const presets = ref<EntityPreset[]>([]);
 const assets = ref<AssetInfo[]>([]);
 
-/** 运行 / 预览：manifest 场景、运行时包状态、子进程轮询。 */
+/** 运行 / 预览：manifest 场景与运行时包状态（构建 / 首选项面板仍会用）。 */
 const playableScenes = ref<PlayableScene[]>([]);
 const playSceneName = ref("");
 const packageStatus = ref<ScenePackageStatus>({ exists: false, sizeBytes: 0 });
-const previewRunning = ref(false);
-let previewTimer: number | undefined;
+/**
+ * Game view 是否在播放。
+ *
+ * 2026-10-27 起「运行」不再 spawn 游戏子进程：编辑器持有 engine 实例，
+ * Play 由 Game view 的视口线程模拟（见 `components/ViewportPanel.vue`）。
+ */
+const playing = ref(false);
 
 /** 编辑器首选项（本机 localStorage）。 */
 const editorPrefs = ref<EditorPreferences>(loadPreferences());
@@ -308,6 +314,8 @@ const documentLabel = computed(() => {
 // ---------------------------------------------------------------------------
 
 const PANEL_IDS = [
+  "sceneView",
+  "gameView",
   "docs",
   "hierarchy",
   "assets",
@@ -331,6 +339,8 @@ type PanelId = (typeof PANEL_IDS)[number];
  * 浏览器预览 / 旧后端拿不到命令时用这份，保证 UI 仍可用。
  */
 const FALLBACK_WINDOWS: EditorWindowDescriptor[] = [
+  { id: "sceneView", title: "场景视图", menuPath: "窗口/场景视图", shortcut: null, command: "window/toggle/sceneView" },
+  { id: "gameView", title: "游戏视图", menuPath: "窗口/游戏视图", shortcut: null, command: "window/toggle/gameView" },
   { id: "docs", title: "文档", menuPath: "窗口/文档", shortcut: "Ctrl+O", command: "window/toggle/docs" },
   { id: "hierarchy", title: "层级", menuPath: "窗口/层级", shortcut: null, command: "window/toggle/hierarchy" },
   { id: "assets", title: "资产", menuPath: "窗口/资产", shortcut: null, command: "window/toggle/assets" },
@@ -370,7 +380,7 @@ async function loadWindowRegistry() {
   }
 }
 
-const DOCK_STORAGE_KEY = "prisma-editor.dock.v4";const LEGACY_DOCK_STORAGE_KEY = "prisma-editor.dock.v3";
+const DOCK_STORAGE_KEY = "prisma-editor.dock.v5";
 const dockLayout = ref<DockNode | null>(defaultDock());
 const floatingPanels = ref<FloatPanel[]>([]);
 const visiblePanels = computed(
@@ -483,19 +493,17 @@ function loadLayout() {
       const saved = JSON.parse(raw) as { dock?: unknown; floating?: unknown };
       const dock = sanitizeDock(saved.dock, known);
       const docked = new Set(dock ? collectTabs(dock) : []);
-      dockLayout.value = dock;
+      // 旧布局里没有视口面板（v4 及更早）：把两个视口补进默认中间列，
+      // 而不是让用户升级后看不到画面。
+      dockLayout.value =
+        dock && docked.has("sceneView")
+          ? dock
+          : showPanel(dock ?? defaultDock(), "sceneView");
       floatingPanels.value = sanitizeFloating(saved.floating, known).filter(
         (panel) => !docked.has(panel.tab),
       );
       return;
     }
-
-    // 从旧的纯 dock tree 迁移。
-    const legacy = localStorage.getItem(LEGACY_DOCK_STORAGE_KEY);
-    if (!legacy) return;
-    const dock = sanitizeDock(JSON.parse(legacy), known);
-    if (dock) dockLayout.value = dock;
-    floatingPanels.value = [];
   } catch {
     // 损坏的布局直接回退到默认值。
   }
@@ -527,7 +535,7 @@ function resetLayout() {
   floatingPanels.value = [];
   try {
     localStorage.removeItem(DOCK_STORAGE_KEY);
-    localStorage.removeItem(LEGACY_DOCK_STORAGE_KEY);
+    localStorage.removeItem("prisma-editor.dock.v4");
   } catch {
     // ignore
   }
@@ -1529,31 +1537,6 @@ async function buildScenes() {
   }
 }
 
-/** 预览进程轮询：游戏自行退出时同步 UI。 */
-function startPreviewPolling() {
-  stopPreviewPolling();
-  previewTimer = window.setInterval(async () => {
-    try {
-      if (!(await api.previewRunning())) {
-        previewRunning.value = false;
-        stopPreviewPolling();
-        status.value = "预览已退出";
-        appendGameLog({ stream: "system", line: "预览进程已退出" });
-      }
-    } catch {
-      previewRunning.value = false;
-      stopPreviewPolling();
-    }
-  }, 2000);
-}
-
-function stopPreviewPolling() {
-  if (previewTimer !== undefined) {
-    window.clearInterval(previewTimer);
-    previewTimer = undefined;
-  }
-}
-
 // ── 游戏日志 ────────────────────────────────────────────────────────────────
 
 function scrollLogsToEnd() {
@@ -1575,10 +1558,6 @@ function appendGameLog(entry: PreviewLogLine) {
   scrollLogsToEnd();
 }
 
-function clearGameLog() {
-  gameLogEntries.value = [];
-}
-
 function clearAllLogs() {
   gameLogEntries.value = [];
   logText.value = "";
@@ -1593,36 +1572,26 @@ async function loadGameLogs() {
   }
 }
 
-async function togglePreview() {
-  if (previewRunning.value) {
-    await api.stopPreview().catch(() => false);
-    previewRunning.value = false;
-    stopPreviewPolling();
-    status.value = "预览已停止";
+/**
+ * 「运行 / 停止」：驱动 Game view 在**编辑器进程内**模拟当前场景。
+ *
+ * 与旧实现（spawn `projects/prisma` 二进制 + 读 stdout）的关键差别：
+ * 不再有第二个进程，场景来源是当前打开的文档（含未保存改动），不需要先
+ * cook 成 `scenes.pak`。
+ */
+async function togglePlay() {
+  if (playing.value) {
+    playing.value = false;
+    status.value = "已停止";
     return;
   }
-  if (!playSceneName.value) {
-    fail("assets/scenes.toml 中还没有可运行场景");
+  if (!doc.value || !isScene.value) {
+    fail("先打开一个场景再运行");
     return;
   }
-  if (!packageStatus.value.exists) {
-    fail("尚未构建 assets/scenes.pak：先点工具栏「构建」");
-    return;
-  }
-  if (dirty.value && !(await save())) return;
-  busy.value = true;
-  clearGameLog();
-  if (editorPrefs.value.autoOpenLog) showPanelTab("log");
-  try {
-    await api.playScene(playSceneName.value);
-    previewRunning.value = true;
-    startPreviewPolling();
-    status.value = `运行场景 ${playSceneName.value}`;
-  } catch (e) {
-    fail(e);
-  } finally {
-    busy.value = false;
-  }
+  showPanelTab("gameView");
+  playing.value = true;
+  status.value = `运行场景 ${currentPath.value ?? ""}`;
 }
 
 // ── 项目设置 / 首选项 / 构建 ────────────────────────────────────────────────
@@ -2042,7 +2011,6 @@ onUnmounted(() => {
   window.removeEventListener("keydown", onKey);
   unlistenPreviewLog?.();
   if (autoSaveTimer !== undefined) window.clearInterval(autoSaveTimer);
-  stopPreviewPolling();
   stopGraphPolling();
 });
 </script>
@@ -2115,26 +2083,21 @@ onUnmounted(() => {
 
     <div class="main-toolbar">
       <div class="tool-group play-group">
-        <select
-          v-model="playSceneName"
-          class="tool-select scene-select"
-          title="运行场景（来自 assets/scenes.toml）"
-          :disabled="!playableScenes.length"
-        >
-          <option v-for="s in playableScenes" :key="s.name" :value="s.name">{{ s.name }}</option>
-        </select>
+        <span class="tool-select scene-select viewport-scene-label" :title="currentPath ?? '未打开场景'">
+          {{ currentPath ? currentPath.split('/').pop() : '未打开场景' }}
+        </span>
         <button
           class="play-button"
-          :class="{ running: previewRunning }"
-          :disabled="!playableScenes.length || busy"
-          :title="packageStatus.exists ? '启动 / 停止游戏预览' : '尚未构建 scenes.pak，先用「构建 → 构建场景包」'"
-          @click="togglePreview"
+          :class="{ running: playing }"
+          :disabled="!hasDoc || !isScene"
+          :title="'在编辑器内运行当前场景（Game view，不启动外部进程）'"
+          @click="togglePlay"
         >
           <span class="play-glyph">
-            <Square v-if="previewRunning" :size="13" fill="currentColor" />
+            <Square v-if="playing" :size="13" fill="currentColor" />
             <Play v-else :size="15" fill="currentColor" />
           </span>
-          {{ previewRunning ? "停止" : "运行" }}
+          {{ playing ? "停止" : "运行" }}
         </button>
       </div>
     </div>
@@ -2148,6 +2111,18 @@ onUnmounted(() => {
         v-model:floating="floatingPanels"
         :panels="PANELS"
       >
+        <template #sceneView>
+          <ViewportPanel kind="scene" :doc="doc" :path="currentPath" />
+        </template>
+        <template #gameView>
+          <ViewportPanel
+            kind="game"
+            :doc="doc"
+            :path="currentPath"
+            :playing="playing"
+            @toggle-play="togglePlay"
+          />
+        </template>
         <template #docs>
         <div class="section-body">
           <div class="group">场景</div>

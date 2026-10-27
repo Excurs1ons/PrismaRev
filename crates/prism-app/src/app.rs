@@ -29,6 +29,7 @@
 //!     → 进入帧循环；资源解析经 asset_requests/asset_results 通道异步完成
 //! ```
 
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
@@ -50,8 +51,8 @@ use winit::window::WindowId;
 
 use crate::debug_hud::DebugHud;
 use crate::hook::FrameHook;
-use crate::render_runner::{render_thread_main, OverlayFactory};
-use crate::render_shared::RenderShared;
+use crate::render_runner::{render_thread_main, OverlayFactory, RenderTarget};
+use crate::render_shared::{FrameImage, RenderShared, RenderStats};
 
 // ===========================================================================
 // Subsystem 枚举
@@ -140,6 +141,12 @@ pub struct App {
     // ---------- 窗口大小调整 ----------
     needs_resize: bool,
 
+    /// 宿主（编辑器）模式下的离屏渲染尺寸。
+    ///
+    /// `Some` 表示本实例没有 winit 窗口：`tick_sim` 用它写 `ScreenSize`/宽高比，
+    /// 渲染线程跑 `RenderTarget::Offscreen`，帧经 [`RenderShared::take_frame`] 读回。
+    host_extent: Option<(u32, u32)>,
+
     /// 最近一次 `ModifiersChanged` 记录的修饰键状态。
     ///
     /// `WindowEvent::KeyboardInput` 不携带修饰键，PBR 分量调试快捷键
@@ -172,6 +179,18 @@ impl App {
     /// [`Self::insert_resource`] 注册自己的 ECS 内容，最后调用
     /// [`Self::run`]（桌面）或 [`Self::run_on`]（Android）启动事件循环。
     pub fn with_config(config: AppConfig) -> Self {
+        Self::build(config, true)
+    }
+
+    /// 宿主（编辑器）模式：**不加载 manifest 场景、不创建 winit 窗口**。
+    ///
+    /// 编辑器持有 engine 实例，场景由 [`Self::load_scene_json_file`] 从当前
+    /// 编辑中的 `.scene.json` 载入，渲染走离屏目标，帧由宿主取走。
+    pub fn hosted(config: AppConfig) -> Self {
+        Self::build(config, false)
+    }
+
+    fn build(config: AppConfig, load_scene: bool) -> Self {
         let mut engine = Engine::empty();
 
         // Phase 1 – Subsystem registration
@@ -180,13 +199,15 @@ impl App {
         let mut asset_resolver = GpuAssetResolver::new();
         asset_resolver.load_resource_package();
 
-        // 场景 loading — 启动配置可指定场景名（编辑器/启动器预览用）；
-        // 未指定时沿用「manifest 第一个可解析场景」的默认行为。
-        let launch = prism_engine::launch_config::LaunchConfig::from_env();
-        engine.init_scene_named(
-            &mut asset_resolver.resource_manager,
-            launch.scene.as_deref(),
-        );
+        if load_scene {
+            // 场景 loading — 启动配置可指定场景名（编辑器/启动器预览用）；
+            // 未指定时沿用「manifest 第一个可解析场景」的默认行为。
+            let launch = prism_engine::launch_config::LaunchConfig::from_env();
+            engine.init_scene_named(
+                &mut asset_resolver.resource_manager,
+                launch.scene.as_deref(),
+            );
+        }
 
         // 运行时 startup callbacks
         engine.runtime_initialize();
@@ -215,6 +236,7 @@ impl App {
             audio_decode_tx: None,
             audio_decode_rx: None,
             needs_resize: false,
+            host_extent: None,
             modifiers: winit::keyboard::ModifiersState::empty(),
             fatal_error: None,
             suspended: false,
@@ -311,6 +333,184 @@ impl App {
     }
 
     // -----------------------------------------------------------------------
+    // 宿主（编辑器）模式
+    // -----------------------------------------------------------------------
+
+    /// 当前渲染表面的逻辑尺寸（像素）。
+    ///
+    /// 宿主模式用 [`Self::host_extent`]，游戏模式取 winit 窗口的内尺寸。
+    fn surface_size(&self) -> (u32, u32) {
+        if let Some(size) = self.host_extent {
+            return size;
+        }
+        self.platform
+            .as_ref()
+            .map(|platform| platform.window().inner_size().into())
+            .unwrap_or((1920, 1080))
+    }
+
+    /// 以**离屏目标**启动渲染线程（编辑器视口）。
+    ///
+    /// 与 [`Self::run`]/[`Self::run_on`] 互斥：宿主模式不创建 winit 窗口，
+    /// 由宿主按自己的节奏调用 [`Self::host_tick`] 并取走
+    /// [`Self::take_hosted_frame`] 返回的像素。
+    pub fn start_hosted(&mut self, width: u32, height: u32) {
+        let width = width.max(1);
+        let height = height.max(1);
+        self.host_extent = Some((width, height));
+        self.display_aspect = width as f32 / height as f32;
+        let scene_env = self.engine.as_ref().and_then(|engine| {
+            engine.current_scene_env_bytes_with_provider(&mut self.asset_resolver.resource_manager)
+        });
+        self.spawn_render_thread_with(RenderTarget::Offscreen { width, height }, scene_env, None);
+    }
+
+    /// 调整离屏渲染尺寸（面板 resize）；下一帧起生效。
+    pub fn host_resize(&mut self, width: u32, height: u32) {
+        let size = (width.max(1), height.max(1));
+        if self.host_extent == Some(size) {
+            return;
+        }
+        self.host_extent = Some(size);
+        self.display_aspect = size.0 as f32 / size.1 as f32;
+        if let Some(shared) = self.render_shared.as_ref() {
+            let (w, h) = size;
+            shared.send_renderer_message(Box::new(move |renderer| {
+                if let Err(e) = renderer.resize_offscreen(w, h) {
+                    log::warn!("host resize ({w}x{h}) failed: {e:#}");
+                }
+            }));
+        }
+    }
+
+    /// 宿主驱动的一帧：模拟（可选）+ extract + 提交渲染 + 请求回读。
+    ///
+    /// `simulate = false` 即编辑器「编辑态」：只传播层级，不跑游戏 system。
+    pub fn host_tick(&mut self, simulate: bool) {
+        self.tick_sim(simulate);
+        if let Some(shared) = self.render_shared.as_ref() {
+            shared.request_frame();
+        }
+    }
+
+    /// 取走渲染线程最近读回的一帧（RGBA8）。
+    pub fn take_hosted_frame(&self) -> Option<FrameImage> {
+        self.render_shared
+            .as_ref()
+            .and_then(|shared| shared.take_frame())
+    }
+
+    /// 渲染线程的致命错误（初始化失败 / 线程退出）。宿主模式用它给面板报错。
+    pub fn render_failure(&self) -> Option<String> {
+        self.render_shared
+            .as_ref()
+            .and_then(|shared| shared.read_render_failure())
+    }
+
+    /// 渲染线程的实时统计（FPS / 帧时间）。
+    pub fn render_stats(&self) -> Option<RenderStats> {
+        self.render_shared
+            .as_ref()
+            .map(|shared| shared.read_render_stats())
+    }
+
+    /// 输入句柄：宿主把鼠标/键盘事件写进同一个 [`InputManager`]。
+    pub fn input_manager_mut(&mut self) -> &mut InputManager {
+        &mut self.input
+    }
+
+    /// 停止宿主渲染线程并收尾（音频 / 引擎 pre/post shutdown）。
+    pub fn shutdown_hosted(&mut self) {
+        self.stop_audio_decode_thread();
+        self.stop_render_thread();
+        if let Some(engine) = self.engine.as_mut() {
+            engine.pre_shutdown();
+        }
+        self.audio.take();
+        if let Some(engine) = self.engine.as_mut() {
+            engine.post_shutdown();
+        }
+    }
+
+    /// 与渲染线程做一次同步：等它处理完**已经排队**的资产上传，然后丢弃结果。
+    ///
+    /// 重新加载场景会把世界整体换掉，而 `prism-ecs` 的实体 id 从 0 重新分配；
+    /// 旧场景在途的上传结果一旦晚到，就会挂到新场景同 id 的实体上（错误网格）。
+    /// 渲染线程每帧先处理 `asset_requests`、再处理 `renderer_messages`，所以
+    /// 一条消息返回即代表之前的请求都已应用到结果队列。
+    fn sync_render_thread(&self) {
+        let Some(shared) = self.render_shared.as_ref() else {
+            return;
+        };
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        shared.send_renderer_message(Box::new(move |_| {
+            let _ = done_tx.send(());
+        }));
+        if done_rx.recv_timeout(Duration::from_millis(500)).is_err() {
+            log::warn!("scene reload: render thread sync timed out");
+        }
+        let _ = shared.take_asset_results();
+    }
+
+    /// 从松散的 `.scene.json` 重新加载场景（宿主 / 编辑器）。
+    ///
+    /// 会重建 engine 与资源解析器：实体 id 与 GPU 句柄不能跨场景复用。
+    /// 返回生成的实体数。
+    pub fn load_scene_json_file(&mut self, path: &Path) -> Result<usize, String> {
+        self.sync_render_thread();
+        self.engine = Some(Engine::empty());
+        self.asset_resolver = GpuAssetResolver::new();
+        self.asset_resolver.load_resource_package();
+        let engine = self.engine.as_mut().expect("engine just re-created");
+        let count = engine.load_scene_json_file(path)?;
+        engine.runtime_initialize();
+
+        self.last_frame = None;
+        self.fixed_accumulator = Duration::ZERO;
+        self.apply_scene_environment();
+        Ok(count)
+    }
+
+    /// 把场景 `Skybox` 指向的 HDR 交给渲染线程重建 IBL。
+    ///
+    /// manifest 路径下 IBL 来自 cook 进 `.rscn` 的环境字节；松散 `.scene.json`
+    /// 没有 manifest 条目，所以由宿主按组件里的 `hdr_path` 现取现送。
+    fn apply_scene_environment(&mut self) {
+        let Some(shared) = self.render_shared.clone() else {
+            return;
+        };
+        let Some(engine) = self.engine.as_ref() else {
+            return;
+        };
+        let Some(path) =
+            prism_engine::scene::SceneReadView::new(engine.world()).environment_asset_path()
+        else {
+            return;
+        };
+        let normalized = path.replace('\\', "/");
+        let normalized = normalized
+            .strip_prefix("assets/")
+            .unwrap_or(normalized.as_str())
+            .to_string();
+        let Some(id) = self.asset_resolver.resource_manager.id_by_path(&normalized) else {
+            log::warn!("hosted: environment `{path}` not found in package");
+            return;
+        };
+        let bytes = match self.asset_resolver.resource_manager.load_with_deps_raw(id) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                log::warn!("hosted: load environment `{path}` failed: {e}");
+                return;
+            }
+        };
+        shared.send_renderer_message(Box::new(move |renderer| {
+            if let Err(e) = renderer.set_environment(Some(bytes)) {
+                log::warn!("hosted: set_environment failed: {e:#}");
+            }
+        }));
+    }
+
+    // -----------------------------------------------------------------------
     // 启动配置
     // -----------------------------------------------------------------------
 
@@ -388,24 +588,31 @@ impl App {
         let overlay_factory: Option<OverlayFactory> =
             self.frame_hook.as_ref().and_then(|h| h.overlay());
 
-        // 创建共享状态
-        let (shared, running) = RenderShared::new();
-
-        // 启动渲染线程（渲染器在该线程内部构建，不阻塞主线程）
         let vsync = self.config.window.vsync;
+        self.spawn_render_thread_with(
+            RenderTarget::Surface {
+                handles,
+                extensions,
+                vsync,
+            },
+            scene_env,
+            overlay_factory,
+        );
+    }
+
+    /// 启动渲染线程——目标（交换链 / 离屏图像）由调用方决定。
+    fn spawn_render_thread_with(
+        &mut self,
+        target: RenderTarget,
+        scene_env: Option<Vec<u8>>,
+        overlay_factory: Option<OverlayFactory>,
+    ) {
+        let (shared, running) = RenderShared::new();
         let shared_clone = shared.clone();
         let thread = std::thread::Builder::new()
             .name("render".into())
             .spawn(move || {
-                render_thread_main(
-                    shared_clone,
-                    handles,
-                    extensions,
-                    scene_env,
-                    true,
-                    vsync,
-                    overlay_factory,
-                )
+                render_thread_main(shared_clone, target, scene_env, true, overlay_factory)
             })
             .expect("failed to spawn render thread");
 
@@ -470,7 +677,11 @@ impl App {
     // 游戏循环（主线程）
     // -----------------------------------------------------------------------
 
-    fn tick_sim(&mut self) {
+    /// 单步模拟 + extract + 提交渲染。
+    ///
+    /// `simulate = false` 是编辑器「编辑态」：只传播层级后直接 extract，不跑
+    /// 任何游戏 system（相机控制器 / UI / 用户逻辑都不该在点 Play 之前动场景）。
+    fn tick_sim(&mut self, simulate: bool) {
         // Poll mode may call this at any event rate. Time is measured once from
         // the monotonic clock; input events must never determine simulation speed.
         let now = Instant::now();
@@ -490,39 +701,43 @@ impl App {
         self.last_frame = Some(now);
 
         // --- 引擎模拟（独立借用 self.engine，块结束即释放） ---
+        // 尺寸要在借用 engine 之前取：`surface_size()` 借整个 `&self`。
+        let (surface_w, surface_h) = self.surface_size();
         {
             let Some(engine) = self.engine.as_mut() else {
                 return;
             };
 
             // --- 同步屏幕尺寸（ECS UI 布局依赖 ScreenSize resource） ---
-            if let Some(ref platform) = self.platform {
-                let window = platform.window();
-                let (w, h) = window.inner_size().into();
-                if w > 0 && h > 0 {
-                    engine
-                        .world_mut()
-                        .insert_resource(prism_engine::ui::ScreenSize::new(w, h));
-                }
+            if surface_w > 0 && surface_h > 0 {
+                engine
+                    .world_mut()
+                    .insert_resource(prism_engine::ui::ScreenSize::new(surface_w, surface_h));
             }
 
             // --- 输入：帧开始，清空瞬时状态 ---
             self.input.begin_frame();
 
-            // --- Fixed timestep: integer nanosecond clock, capped catch-up ---
-            const FIXED_STEP: Duration = Duration::from_nanos(16_666_667);
-            let mut fixed_steps = 0;
-            while self.fixed_accumulator >= FIXED_STEP && fixed_steps < 8 {
-                engine.fixed_update(FIXED_STEP.as_secs_f32(), &self.input);
-                self.fixed_accumulator -= FIXED_STEP;
-                fixed_steps += 1;
+            if simulate {
+                // --- Fixed timestep: integer nanosecond clock, capped catch-up ---
+                const FIXED_STEP: Duration = Duration::from_nanos(16_666_667);
+                let mut fixed_steps = 0;
+                while self.fixed_accumulator >= FIXED_STEP && fixed_steps < 8 {
+                    engine.fixed_update(FIXED_STEP.as_secs_f32(), &self.input);
+                    self.fixed_accumulator -= FIXED_STEP;
+                    fixed_steps += 1;
+                }
+
+                // --- 可变时间步长更新 ---
+                engine.update(dt, &self.input);
+
+                // --- 延迟更新 ---
+                engine.late_update();
+            } else {
+                // 编辑态：不消费 fixed accumulator，避免切到 Play 时补跑一大段。
+                self.fixed_accumulator = Duration::ZERO;
+                prism_engine::scene::systems::hierarchy::hierarchy_system(engine.world_mut());
             }
-
-            // --- 可变时间步长更新 ---
-            engine.update(dt, &self.input);
-
-            // --- 延迟更新 ---
-            engine.late_update();
 
             // --- 音频更新 ---
             if let Some(audio) = self.audio.as_mut() {
@@ -564,14 +779,8 @@ impl App {
 
             // 运行时诊断 HUD：追加到 ECS UI 叠加（随后统一由 ui_overlay 绘制）。
             if self.debug_hud.show {
-                let (width, height) = self
-                    .platform
-                    .as_ref()
-                    .map(|platform| {
-                        let size = platform.window().inner_size();
-                        (size.width as f32, size.height as f32)
-                    })
-                    .unwrap_or((1920.0, 1080.0));
+                let (width, height) = self.surface_size();
+                let (width, height) = (width as f32, height as f32);
                 let stats = shared.read_render_stats();
                 self.debug_hud.append(
                     &mut packet.ui_overlay,
@@ -1020,7 +1229,7 @@ impl ApplicationHandler for App {
             }
         }
 
-        self.tick_sim();
+        self.tick_sim(true);
 
         // 帧钩子（宿主 UI 等）— 主线程
         if let Some(hook) = self.frame_hook.as_mut() {

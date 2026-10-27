@@ -489,6 +489,11 @@ impl GraphRenderer {
         self.is_headless
     }
 
+    /// 离屏渲染目标的尺寸（无窗口宿主模式）；有交换链时返回 `None`。
+    pub fn offscreen_extent(&self) -> Option<ash::vk::Extent2D> {
+        self.offscreen.as_ref().map(|target| target.extent)
+    }
+
     // ── headless 众数 ──────────────────────────────────────────────
 
     /// 创建 a headless `GraphRenderer` — no 窗口 表面 or 交换链
@@ -496,8 +501,23 @@ impl GraphRenderer {
     ///
     /// `env_bytes` is optional IBL environment 映射表 data (`None` = 默认 sky).
     pub fn headless_new(env_bytes: Option<Vec<u8>>) -> anyhow::Result<Self> {
+        Self::offscreen_new(256, 256, env_bytes)
+    }
+
+    /// 创建 a 无窗口 `GraphRenderer` rendering into an offscreen 图像 of
+    /// `width × height` (编辑器 host 模式 / 离屏预览).
+    ///
+    /// 与 [`Self::headless_new`] 同一条渲染路径：完整图（Shadow → Scene →
+    /// GTAO → Post）跑完后，PostPass 把 **tonemap 后的结果** 写进离屏图像，
+    /// 随后 [`Self::copy_offscreen_to_readback`] + [`Self::readback_pixels`]
+    /// 把那一帧读回 CPU。
+    pub fn offscreen_new(
+        width: u32,
+        height: u32,
+        env_bytes: Option<Vec<u8>>,
+    ) -> anyhow::Result<Self> {
         let context = Arc::new(VulkanContext::new(&[])?);
-        let offscreen = OffscreenTarget::new(&context)?;
+        let offscreen = OffscreenTarget::new(&context, width, height)?;
         let color_format = offscreen.format;
 
         // 运行时 with 2 命令 buffers (minimal for headless ops).
@@ -1258,6 +1278,73 @@ impl GraphRenderer {
         // 图像 layouts are stale. 清空 them so the 第一个 帧 after
         // recreate re-transitions from UNDEFINED instead of trusting a 布局
         // that no longer matches the fresh images.
+        self.graph.reset_layouts();
+        Ok(())
+    }
+
+    /// 调整**离屏**渲染目标尺寸（编辑器视口面板改大小时走这里）。
+    ///
+    /// 顺序与 [`Self::recreate_swapchain`] 一致：先 `device_wait_idle`，再拆掉
+    /// 引用旧视图的 framebuffer，然后换目标、按新尺寸重建依赖 pass，最后清掉
+    /// 图缓存里的 layout（新图像从 UNDEFINED 重新过渡）。
+    pub fn resize_offscreen(&mut self, width: u32, height: u32) -> anyhow::Result<()> {
+        let width = width.max(1);
+        let height = height.max(1);
+        let Some(target) = self.offscreen.as_ref() else {
+            return Ok(());
+        };
+        if target.extent.width == width && target.extent.height == height {
+            return Ok(());
+        }
+
+        unsafe { self.runtime.context.device.device_wait_idle() }
+            .context("resize_offscreen: device_wait_idle")?;
+
+        if let Some(forward_pass) = self.graph.pass_mut::<ForwardPass>() {
+            forward_pass.drop_target(&self.runtime.context.device);
+        }
+        if let Some(post) = self.graph.pass_mut::<crate::post::PostPass>() {
+            post.drop_target(&self.runtime.context.device);
+        }
+        // UI 叠加按 image view 缓存 framebuffer，必须先于旧视图销毁释放。
+        if let Some(gpu) = self.ui_overlay.as_mut() {
+            gpu.on_swapchain_views_changed();
+        }
+
+        let context = self.runtime.context.clone();
+        let fresh = OffscreenTarget::new(&context, width, height)?;
+        let extent = fresh.extent;
+        if let Some(mut old) = self.offscreen.replace(fresh) {
+            unsafe { old.destroy(&context.device) };
+        }
+        let view = self
+            .offscreen
+            .as_ref()
+            .map(|target| target.image_view)
+            .unwrap_or(vk::ImageView::null());
+
+        if let Some(forward_pass) = self.graph.pass_mut::<ForwardPass>() {
+            forward_pass.set_image_count(1);
+            forward_pass.set_target(&context.device, &context, 1, 0, extent)?;
+        }
+        if let Some(post) = self.graph.pass_mut::<crate::post::PostPass>() {
+            post.set_target(&context.device, std::slice::from_ref(&view), 0, extent)?;
+        }
+        if let Some(gtao) = self.graph.pass_mut::<crate::gtao::GtaoPass>() {
+            if let Err(e) = gtao.recreate_target(&context, self.runtime.command_pool, extent) {
+                log::warn!("GtaoPass recreate_target failed (offscreen resize): {e:#}");
+            }
+        }
+        if let Some(sched) = self
+            .graph
+            .pass_mut::<crate::rt_scheduler::RenderTextureScheduler>()
+        {
+            if let Err(e) = sched.resize_all(&context, self.texture_manager.bindless_mut(), extent)
+            {
+                log::warn!("RenderTextureScheduler resize_all failed (offscreen resize): {e:#}");
+            }
+        }
+
         self.graph.reset_layouts();
         Ok(())
     }

@@ -130,7 +130,10 @@ export function defaultDock(): DockNode {
   const assets = leaf(["assets"]);
   const hierarchy = split("column", leaf(["hierarchy"]), assets, 0.55);
   const left = split("column", leaf(["docs"]), hierarchy, 0.3);
-  return split("row", left, leaf(["inspector"]), 0.24);
+  // 中间是视口（场景 / 游戏视图同 leaf，标签切换），右侧检查器。
+  const viewport = leaf(["sceneView", "gameView"]);
+  const main = split("row", viewport, leaf(["inspector"]), 0.76);
+  return split("row", left, main, 0.19);
 }
 
 export function cloneNode(node: DockNode): DockNode {

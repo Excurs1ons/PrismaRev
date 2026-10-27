@@ -450,3 +450,35 @@ export interface RenderGraphReport {
   passes: RenderGraphPass[];
   resources: RenderGraphResource[];
 }
+
+// ── 内置视口（Scene / Game view） ────────────────────────────────────
+
+/** 视口线程回报的状态。 */
+export interface ViewportSnapshot {
+  fps: number;
+  entities: number;
+  /** 场景加载失败时的错误（面板顶部显示，不打断编辑）。 */
+  error: string | null;
+  /** 实际离屏渲染分辨率（面板尺寸按上限缩放后）。 */
+  width: number;
+  height: number;
+}
+
+/** Scene view 的轨道相机（前端持有状态，整体下发）。 */
+export interface CameraOrbit {
+  /** 注视点（世界坐标）。 */
+  target: [number, number, number];
+  /** 水平角（弧度，绕 +Y）。 */
+  yaw: number;
+  /** 俯仰角（弧度，正 = 从上方看）。 */
+  pitch: number;
+  /** 相机到注视点的距离。 */
+  distance: number;
+}
+
+/** Game view 转发的输入事件。 */
+export type ViewportInput =
+  | { type: "mouseMove"; x: number; y: number }
+  | { type: "mouseButton"; button: number; pressed: boolean }
+  | { type: "wheel"; delta: number }
+  | { type: "key"; code: string; pressed: boolean };
