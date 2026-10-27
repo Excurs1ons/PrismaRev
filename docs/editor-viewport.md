@@ -84,6 +84,9 @@ Vue ViewportPanel.vue  ◄──── Channel(ArrayBuffer) ──── 视口�
 - 前端状态（`paused`）在 `App.vue` 里，和 `playing` 一起控制 Game 面板的工具栏按钮；
   后端还会把 `paused` 放进 `editor_viewport_stats` 的快照里作为真相来源。
 - 开始 / 停止 Play 都会 `set_paused(false)`：Play 结束不该留下一个"暂停中"的幽灵状态。
+- **Play 期间文档改动不会重载 Game view**（`scheduleReload` 在 `playing` 时直接丢弃）：
+  否则 Scene view 里拖一下 gizmo 就会把正在跑的模拟重置掉。停止 Play 前先把当前文档
+  `editor_viewport_reload` 一次，Game view 回到编辑态时看到的就是最新文档。
 
 ## 平移 gizmo（拖动改位置）
 

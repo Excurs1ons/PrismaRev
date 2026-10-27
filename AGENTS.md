@@ -160,6 +160,9 @@ deviating from those conventions is a bug. (`README.md` is the human-facing over
     - Play 支持**暂停 / 单步**（`editor_viewport_set_paused` / `editor_viewport_step`）：
       暂停只是不推进模拟（`HostState::simulate_now`），渲染与出帧照旧；单步消费一次
       模拟后停在暂停。开始 / 停止 Play 都从磁盘快照重建场景，并清掉暂停状态。
+    - **Play 期间不重载 Game view**：此时编辑文档（Scene view 拖 gizmo 等）只改编辑态，
+      不会打断运行中的模拟；停止 Play 时先把当前文档 `editor_viewport_reload` 一遍
+      再 `set_playing(false)`，所以编辑态看到的就是停止后的状态。
     - 点选（`editor/src-tauri/src/pick.rs`）：屏幕像素 → 世界射线（与
       `compute_camera_output` 同一套透视 / y-flip 约定），与实体的**局部单位立方体**
       `[-0.5,0.5]³` × 世界矩阵求交，取最近命中。引擎没有 CPU 侧网格包围盒，这是
