@@ -120,6 +120,11 @@ deviating from those conventions is a bug. (`README.md` is the human-facing over
     `error/warn/info/debug/trace/panic` 过滤。`editor_play_scene` 用 piped
     stdout/stderr 启动游戏，读取线程把每行写入共享 ring buffer（`editor_preview_logs`
     回填）并 emit `preview-log`；前端 `onPreviewLog` 追加到 `gameLogEntries`。
+    **进程内引擎的日志也进这个面板**（2026-10-28 起）：`editor/src-tauri` 装了一个包着
+    `env_logger` 的 `log::Log`（`EditorLogger`），把同一条记录额外写进 `PreviewState`
+    环形缓冲并 emit `preview-log`（`stream = "engine"`、带 `level`）。所以视口线程里
+    `prism_render` / `prism_engine` 的 warn/info 不用再去看终端；`RUST_LOG` 语义不变。
+    Rust 的 panic 不走 `log`，仍只在终端里。
     面板本身是**窗口化**的（`editor/src/windowed.ts` 的 `windowRange` + `LOG_ROW_HEIGHT`）：
     只渲染视口附近的行，其余用 spacer 占位，所以 `maxLogLines`（默认 5000、上限 20000）
     不再等于 DOM 节点数。行的**固定 18px 高度**是前提（`.log-row` 里 `height/line-height: 18px`

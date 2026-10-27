@@ -208,8 +208,10 @@ export interface ScenePackageStatus {
 
 /** 游戏进程 stdout/stderr 的一行。 */
 export interface PreviewLogLine {
-  stream: "stdout" | "stderr" | "system" | string;
+  stream: "stdout" | "stderr" | "system" | "engine" | string;
   line: string;
+  /** 进程内引擎的记录带已知级别；子进程输出靠前端从文本里推断。 */
+  level?: "error" | "warn" | "info" | "debug" | "trace";
 }
 
 /** 项目级渲染设置（`assets/settings.toml` 的 `[render]`）。 */

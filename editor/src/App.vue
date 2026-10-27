@@ -217,7 +217,8 @@ const gameLogView = computed<LogViewLine[]>(() =>
     .slice(-Math.max(200, editorPrefs.value.maxLogLines))
     .map((entry) => ({
       source: "game",
-      level: logLevelOf(entry.line, entry.stream),
+      // 进程内引擎的记录自带级别，不用猜。
+      level: entry.level ?? logLevelOf(entry.line, entry.stream),
       line: entry.line,
       stream: entry.stream,
     })),
