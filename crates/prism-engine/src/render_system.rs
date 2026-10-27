@@ -30,7 +30,7 @@ const LUX_TO_RADIANCE_SCALE: f32 = 1.0 / (10_000.0 * std::f32::consts::PI);
 ///
 /// Produced by [`collect_scene_changes`] and consumed by [`render_system`] to
 /// 构建 the [`FrameUBOData`] and [`FrameInput`].
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct SceneChanges {
     pub view_proj: Mat4,
     pub eye: Vec3,
@@ -91,40 +91,49 @@ pub fn extract_frame_packet(
     display_aspect: f32,
     surface_rotation: &Mat4,
 ) -> FramePacket {
+    let mut packet = FramePacket::default();
+    extract_frame_packet_into(world, display_aspect, surface_rotation, &mut packet);
+    packet
+}
+
+/// [`extract_frame_packet`] into a recycled packet.
+///
+/// Every collection in the packet is cleared and refilled, so a caller that
+/// keeps one packet alive across frames — `prism-app` recycles it through the
+/// render thread — reuses the allocations instead of building new `Vec`s every
+/// frame (#66).
+pub fn extract_frame_packet_into(
+    world: &mut World,
+    display_aspect: f32,
+    surface_rotation: &Mat4,
+    packet: &mut FramePacket,
+) {
     // 1. Collect per-frame scene 状态 (needs orientation).
-    let scene = collect_scene_changes(world, display_aspect, surface_rotation);
+    collect_scene_changes_into(world, display_aspect, surface_rotation, &mut packet.scene);
 
     // 2. Build the flat draw list and ECS-authored render helpers.
     let scene_view = scene::SceneReadView::new(world);
     // Unity 的 `renderQueue` 顺序：不透明段按队列升序，透明段按距离从远到近。
     // 排序必须在提交给渲染器之前完成（`ForwardPass` 只按列表顺序绘制）。
-    let mut draw_items: Vec<DrawItem> = scene_view.draw_items();
-    prism_render::sort_draw_items(&mut draw_items, scene.eye.to_array());
-    let gizmos = scene_view.gizmo_instances();
+    scene_view.draw_items_into(&mut packet.draw_items);
+    prism_render::sort_draw_items(&mut packet.draw_items, packet.scene.eye.to_array());
+    scene_view.gizmo_instances_into(&mut packet.gizmos);
     // Unity 只有 `clearFlags == Skybox` 时才绘制天空盒：其余清屏方式（纯色 /
     // 只清深度 / 不清）即使场景里有启用的 `Skybox` 实体也不画。`ForwardPass`
     // 对 `None` 直接跳过天空盒绘制，所以这里就是它的开关。
-    let skybox = if scene.clear_flags.draws_skybox() {
+    packet.skybox = if packet.scene.clear_flags.draws_skybox() {
         scene_view.skybox_settings()
     } else {
         None
     };
-    let sprite_items = scene_view.sprite_items();
+    scene_view.sprite_items_into(&mut packet.sprite_items);
 
     // 3. 构建 the UI 叠加 from the ECS 世界 (includes UiQuad/TextCmd).
-    let ui_overlay = crate::ui::convert_ui_draw_list_to_overlay(world);
+    crate::ui::convert_ui_draw_list_to_overlay_into(world, &mut packet.ui_overlay);
 
-    FramePacket {
-        scene,
-        draw_items,
-        gizmos,
-        skybox,
-        sprite_items,
-        ui_overlay,
-        // 渲染设置由应用层（`App`）在发送前覆盖；引擎默认值保证独立使用
-        // `extract_frame_packet` 时仍然可用。
-        settings: RenderSettings::default(),
-    }
+    // 渲染设置由应用层（`App`）在发送前覆盖；引擎默认值保证独立使用
+    // `extract_frame_packet` 时仍然可用。
+    packet.settings = RenderSettings::default();
 }
 
 // ---------------------------------------------------------------------------
@@ -133,6 +142,10 @@ pub fn extract_frame_packet(
 
 /// Per-tick extract 结果 camera/light 快照 + 绘制 items + UI 叠加
 /// Produced by [`extract_frame_packet`], consumed by [`render_system`].
+///
+/// `Default` exists so a caller can hold one packet and refill it with
+/// [`extract_frame_packet_into`] (see #66).
+#[derive(Default)]
 pub struct FramePacket {
     pub scene: SceneChanges,
     pub draw_items: Vec<DrawItem>,
@@ -156,11 +169,28 @@ pub struct FramePacket {
 
 /// 读取 the ECS 世界 and the orientation parameters, then produce
 /// a [`SceneChanges`] 快照 for the 当前 帧
+/// 采集一帧的 scene 快照（不带复用的便捷包装，测试用）。
+#[cfg(test)]
 fn collect_scene_changes(
     world: &mut World,
     display_aspect: f32,
     surface_rotation: &Mat4,
 ) -> SceneChanges {
+    let mut out = SceneChanges::default();
+    collect_scene_changes_into(world, display_aspect, surface_rotation, &mut out);
+    out
+}
+
+/// 采集进调用方持有的快照。
+///
+/// `out` is the previous frame's snapshot (the recycled frame packet), so the
+/// light buffers keep their allocation instead of being re-collected (#66).
+fn collect_scene_changes_into(
+    world: &mut World,
+    display_aspect: f32,
+    surface_rotation: &Mat4,
+    out: &mut SceneChanges,
+) {
     let fallback_dir = Vec4::new(
         -std::f32::consts::FRAC_1_SQRT_2,
         std::f32::consts::FRAC_1_SQRT_2,
@@ -239,7 +269,7 @@ fn collect_scene_changes(
 
     // 3. 局部光源（点光 + 聚光）上 to LIGHT_MAX) 进前向 SSBO。`color.w` 是类型位
     //    （0 = 点光，1 = 聚光），聚光额外带朝向与内外锥余弦。
-    let mut lights: Vec<GpuLight> = Vec::new();
+    out.lights.clear();
     for sample in samples
         .iter()
         .filter(|sample| sample.kind != scene::systems::lights::LightKind::Directional)
@@ -247,7 +277,7 @@ fn collect_scene_changes(
     {
         let radiance = sample.color * sample.intensity * LUX_TO_RADIANCE_SCALE;
         let is_spot = sample.kind == scene::systems::lights::LightKind::Spot;
-        lights.push(GpuLight {
+        out.lights.push(GpuLight {
             position: [
                 sample.position.x,
                 sample.position.y,
@@ -275,16 +305,16 @@ fn collect_scene_changes(
     }
 
     // 4. 路径追踪的解析光：只喂点光（PT 着色器还没有聚光锥角分支）。
-    let mut pt_lights: Vec<PtAnalyticLight> = Vec::new();
+    out.pt_lights.clear();
     for sample in samples
         .iter()
         .filter(|sample| sample.kind == scene::systems::lights::LightKind::Point)
     {
-        if pt_lights.len() >= PT_LIGHT_MAX as usize {
+        if out.pt_lights.len() >= PT_LIGHT_MAX as usize {
             break;
         }
         let radiance = sample.color * sample.intensity * LUX_TO_RADIANCE_SCALE;
-        pt_lights.push(PtAnalyticLight::point(
+        out.pt_lights.push(PtAnalyticLight::point(
             sample.position.into(),
             radiance.into(),
             sample.range,
@@ -303,27 +333,23 @@ fn collect_scene_changes(
         .map(|entity| scene::systems::camera::clear_flags(world, entity))
         .unwrap_or_default();
 
-    SceneChanges {
-        view_proj,
-        eye,
-        view,
-        projection,
-        inv_projection,
-        proj22,
-        proj32,
-        light_direction,
-        light_color,
-        light_view_proj,
-        lights,
-        pt_lights,
-        exposure,
-        has_camera,
-        camera_orthographic,
-        clear_color,
-        clear_flags,
-        shadows_enabled,
-        shadow_strength,
-    }
+    out.view_proj = view_proj;
+    out.eye = eye;
+    out.view = view;
+    out.projection = projection;
+    out.inv_projection = inv_projection;
+    out.proj22 = proj22;
+    out.proj32 = proj32;
+    out.light_direction = light_direction;
+    out.light_color = light_color;
+    out.light_view_proj = light_view_proj;
+    out.exposure = exposure;
+    out.has_camera = has_camera;
+    out.camera_orthographic = camera_orthographic;
+    out.clear_color = clear_color;
+    out.clear_flags = clear_flags;
+    out.shadows_enabled = shadows_enabled;
+    out.shadow_strength = shadow_strength;
 }
 
 // ---------------------------------------------------------------------------
@@ -680,5 +706,51 @@ mod tests {
                 "clear_flags = {flags:?} 时是否绘制天空盒应为 {draws}"
             );
         }
+    }
+
+    /// #66：`extract_frame_packet_into` 必须复用调用方数据包里的分配，
+    /// 否则每帧都会重新 `collect()` 一遍。
+    #[test]
+    fn extract_into_reuses_the_packet_allocations() {
+        use crate::scene::components::Gizmo;
+
+        let mut world = World::new();
+        let camera = world.spawn();
+        world.insert(camera, Camera::default());
+        world.insert(camera, LocalToWorld(Mat4::IDENTITY));
+        let gizmo = world.spawn();
+        world.insert(
+            gizmo,
+            Gizmo {
+                enabled: true,
+                ..Gizmo::default()
+            },
+        );
+        world.insert(gizmo, LocalToWorld(Mat4::IDENTITY));
+
+        let capacities = |packet: &FramePacket| {
+            [
+                packet.draw_items.capacity(),
+                packet.gizmos.capacity(),
+                packet.sprite_items.capacity(),
+                packet.scene.lights.capacity(),
+                packet.scene.pt_lights.capacity(),
+                packet.ui_overlay.quads.capacity(),
+                packet.ui_overlay.texts.capacity(),
+            ]
+        };
+
+        let mut packet = FramePacket::default();
+        extract_frame_packet_into(&mut world, 1.0, &Mat4::IDENTITY, &mut packet);
+        assert!(!packet.gizmos.is_empty(), "用例需要至少一个绘制项");
+        let first = capacities(&packet);
+
+        extract_frame_packet_into(&mut world, 1.0, &Mat4::IDENTITY, &mut packet);
+        let second = capacities(&packet);
+        assert_eq!(
+            first, second,
+            "第二次 extract 应复用同一批 Vec 容量，而不是重新分配"
+        );
+        assert!(!packet.gizmos.is_empty());
     }
 }

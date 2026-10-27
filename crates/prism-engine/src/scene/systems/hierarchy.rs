@@ -80,11 +80,21 @@ fn visit_children(
     parent_world: glam::Mat4,
     visited: &mut HashSet<Entity>,
 ) {
-    // Clone the children 列表 so we don't hold a 借用 on 世界 during the
-    // recursive calls that may mutate components.
-    let children = world.get::<Child>(parent).cloned().unwrap_or_default();
+    // Index into the parent's child list instead of cloning it: the recursive
+    // calls mutate components, so the `&Child` borrow cannot be held across
+    // them, but re-reading one element per child is still allocation-free
+    // (#66 — this used to clone the whole list for every node, per frame).
+    let child_count = world
+        .get::<Child>(parent)
+        .map_or(0usize, |children| children.0.len());
 
-    for child in children.0 {
+    for index in 0..child_count {
+        let Some(child) = world
+            .get::<Child>(parent)
+            .and_then(|children| children.0.get(index).copied())
+        else {
+            break;
+        };
         // `visited` 同时兜住脏数据里可能出现的环（A.Child=[B]，B.Child=[A]）。
         if !world.is_alive(child) || !visited.insert(child) {
             continue;

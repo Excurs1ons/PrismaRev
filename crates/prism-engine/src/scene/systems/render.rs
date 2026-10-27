@@ -41,30 +41,42 @@ pub(crate) fn draw_state(renderer: Option<&MeshRenderer>) -> DrawState {
 /// Entities without an 激活 分量 默认 to 激活 (the 分量
 /// defaults to `true`).
 pub fn scene_render_system(world: &World) -> Vec<DrawItem> {
-    world
-        .query2::<LocalToWorld, MeshRef>()
-        .filter(|(e, _, _)| world.get::<Active>(*e).map(|a| a.0).unwrap_or(true))
-        .map(|(entity, wt, mr)| {
-            // `MeshRenderer.shadow_casting_mode` / `cull_mode`（Unity
-            // `shadowCastingMode` / `CullMode`）。没有该组件的运行时实体按
-            // 默认值处理（`On` / `Back`）。
-            let renderer = world.get::<MeshRenderer>(entity);
-            let mode = renderer
-                .map(|renderer| renderer.shadow_casting_mode)
-                .unwrap_or_default();
-            DrawItem {
-                mesh: mr.render_handle,
-                model: wt.0.to_cols_array_2d(),
-                material: world
-                    .get::<MaterialRef>(entity)
-                    .map(|material| material.material_slot),
-                cast_shadow: mode.casts_shadows(),
-                visible_in_main_pass: mode.visible_in_main_pass(),
-                cast_shadow_two_sided: mode.casts_two_sided_shadows(),
-                state: draw_state(renderer),
-            }
-        })
-        .collect()
+    let mut out = Vec::new();
+    scene_render_system_into(world, &mut out);
+    out
+}
+
+/// [`scene_render_system`] into a caller-owned buffer.
+///
+/// The frame packet keeps this `Vec` across frames, so `clear()` + `extend`
+/// reuses the allocation instead of doing one `collect()` per frame (#66).
+pub fn scene_render_system_into(world: &World, out: &mut Vec<DrawItem>) {
+    out.clear();
+    out.extend(
+        world
+            .query2::<LocalToWorld, MeshRef>()
+            .filter(|(e, _, _)| world.get::<Active>(*e).map(|a| a.0).unwrap_or(true))
+            .map(|(entity, wt, mr)| {
+                // `MeshRenderer.shadow_casting_mode` / `cull_mode`（Unity
+                // `shadowCastingMode` / `CullMode`）。没有该组件的运行时实体按
+                // 默认值处理（`On` / `Back`）。
+                let renderer = world.get::<MeshRenderer>(entity);
+                let mode = renderer
+                    .map(|renderer| renderer.shadow_casting_mode)
+                    .unwrap_or_default();
+                DrawItem {
+                    mesh: mr.render_handle,
+                    model: wt.0.to_cols_array_2d(),
+                    material: world
+                        .get::<MaterialRef>(entity)
+                        .map(|material| material.material_slot),
+                    cast_shadow: mode.casts_shadows(),
+                    visible_in_main_pass: mode.visible_in_main_pass(),
+                    cast_shadow_two_sided: mode.casts_two_sided_shadows(),
+                    state: draw_state(renderer),
+                }
+            }),
+    );
 }
 
 /// 2D 绘制项的排序键：`(sorting_layer, order_in_layer, z, entity_id)`。
@@ -96,14 +108,31 @@ pub fn scene_line_system(world: &World) -> Vec<prism_render::SpriteDrawItem> {
 /// This is what the renderer consumes: sprites and lines share one pass, so
 /// they must be sorted against each other, not in two independent lists.
 pub fn scene_2d_system(world: &World) -> Vec<prism_render::SpriteDrawItem> {
+    let mut out = Vec::new();
+    scene_2d_system_into(world, &mut out);
+    out
+}
+
+/// [`scene_2d_system`] into a caller-owned buffer (see
+/// [`scene_render_system_into`] for why).
+pub fn scene_2d_system_into(world: &World, out: &mut Vec<prism_render::SpriteDrawItem>) {
     let mut entries = sprite_entries(world);
     entries.extend(line_entries(world));
-    sort_draw_items(entries)
+    sort_draw_items_into(entries, out);
 }
 
 fn sort_draw_items(
-    mut entries: Vec<(SortKey, prism_render::SpriteDrawItem)>,
+    entries: Vec<(SortKey, prism_render::SpriteDrawItem)>,
 ) -> Vec<prism_render::SpriteDrawItem> {
+    let mut out = Vec::new();
+    sort_draw_items_into(entries, &mut out);
+    out
+}
+
+fn sort_draw_items_into(
+    mut entries: Vec<(SortKey, prism_render::SpriteDrawItem)>,
+    out: &mut Vec<prism_render::SpriteDrawItem>,
+) {
     entries.sort_by(|a, b| {
         let (ak, bk) = (&a.0, &b.0);
         ak.0.cmp(&bk.0)
@@ -111,7 +140,8 @@ fn sort_draw_items(
             .then(ak.2.partial_cmp(&bk.2).unwrap_or(std::cmp::Ordering::Equal))
             .then(ak.3.cmp(&bk.3))
     });
-    entries.into_iter().map(|(_, item)| item).collect()
+    out.clear();
+    out.extend(entries.into_iter().map(|(_, item)| item));
 }
 
 fn sprite_entries(world: &World) -> Vec<(SortKey, prism_render::SpriteDrawItem)> {

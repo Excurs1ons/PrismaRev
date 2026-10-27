@@ -291,6 +291,10 @@ The user project's dependency chain must stay **UI-framework-free and editor-fre
   `Off`/`On`/`ShadowsOnly`, `NONE` for `TwoSided`) and selects per
   `DrawItem::cast_shadow_two_sided`. Do not collapse them back into a single `NONE` pipeline
   (that would silently reintroduce `On == TwoSided`).
+- Frame packet 跨线程复用：`prism-app` 主线程先从 `RenderShared::take_spare_packet()`
+  取渲染线程归还的包，再用 `extract_frame_packet_into` 重填（渲染线程在每帧末尾
+  `recycle_packet`）。新增 per-frame 集合时走 `*_into`（`clear()` + `extend`），
+  不要每帧 `collect()` 出新 `Vec`（#66）。
 - Descriptor set indices are fixed by the Slang layouts: set 0 = frame UBO/materials/lights,
   set 1 = bindless textures, set 2 = IBL (env/irradiance/prefiltered), set 3 = shadow map.
   Skybox reuses set 0 = IBL `envCube` (combined image sampler).

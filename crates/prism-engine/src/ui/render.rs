@@ -100,6 +100,19 @@ pub fn ui_render_system(world: &mut World) {
 ///
 /// 从 world 的 `ScreenSize` resource 读取屏幕尺寸。
 pub fn convert_ui_draw_list_to_overlay(world: &World) -> prism_render::UiOverlayInput {
+    let mut out = prism_render::UiOverlayInput::default();
+    convert_ui_draw_list_to_overlay_into(world, &mut out);
+    out
+}
+
+/// [`convert_ui_draw_list_to_overlay`] into a caller-owned buffer.
+///
+/// The frame packet owns the `UiOverlayInput` across frames, so this refills
+/// the existing `quads` / `texts` allocations instead of building new ones (#66).
+pub fn convert_ui_draw_list_to_overlay_into(world: &World, out: &mut prism_render::UiOverlayInput) {
+    out.quads.clear();
+    out.texts.clear();
+
     let screen = world
         .get_resource::<ScreenSize>()
         .copied()
@@ -111,10 +124,9 @@ pub fn convert_ui_draw_list_to_overlay(world: &World) -> prism_render::UiOverlay
     let h = screen.height as f32;
 
     let Some(draw_list) = world.get_resource::<UiDrawList>() else {
-        return prism_render::UiOverlayInput::default();
+        return;
     };
 
-    let mut quads = Vec::with_capacity(draw_list.quads.len());
     for q in &draw_list.quads {
         let [px, py, pw, ph] = q.rect; // pixel left, top, width, height
                                        // NDC: [-1,1] x [-1,1], Y-up, origin center.
@@ -124,7 +136,7 @@ pub fn convert_ui_draw_list_to_overlay(world: &World) -> prism_render::UiOverlay
         let y1 = ((h - (py + ph)) / h) * 2.0 - 1.0;
         // NDC border 半径 近似
         let br_ndc = q.border_radius / w.max(h) * 2.0;
-        quads.push(prism_render::ui_overlay::UiQuad {
+        out.quads.push(prism_render::ui_overlay::UiQuad {
             rect: [x0, y1, x1, y0], // NDC [xmin, ymin, xmax, ymax]
             color: q.color,
             border_radius: br_ndc,
@@ -132,22 +144,22 @@ pub fn convert_ui_draw_list_to_overlay(world: &World) -> prism_render::UiOverlay
     }
 
     // 文本命令按像素坐标原样透传（record 时展开成逐字形四边形）。
-    let texts = draw_list
-        .texts
-        .iter()
-        .map(|t| prism_render::ui_overlay::UiTextInput {
-            rect: t.rect,
-            content: t.content.clone(),
-            font_size: t.font_size,
-            color: t.color,
-            alignment: match t.alignment {
-                TextAlign::Left => prism_render::ui_overlay::UiTextAlign::Left,
-                TextAlign::Center => prism_render::ui_overlay::UiTextAlign::Center,
-                TextAlign::Right => prism_render::ui_overlay::UiTextAlign::Right,
-            },
-        })
-        .collect();
-    prism_render::UiOverlayInput { quads, texts }
+    out.texts.extend(
+        draw_list
+            .texts
+            .iter()
+            .map(|t| prism_render::ui_overlay::UiTextInput {
+                rect: t.rect,
+                content: t.content.clone(),
+                font_size: t.font_size,
+                color: t.color,
+                alignment: match t.alignment {
+                    TextAlign::Left => prism_render::ui_overlay::UiTextAlign::Left,
+                    TextAlign::Center => prism_render::ui_overlay::UiTextAlign::Center,
+                    TextAlign::Right => prism_render::ui_overlay::UiTextAlign::Right,
+                },
+            }),
+    );
 }
 
 #[cfg(test)]

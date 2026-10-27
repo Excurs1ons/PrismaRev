@@ -233,6 +233,9 @@ pub fn render_thread_main(
             pt_frame_count: pt_count,
         });
 
+        // 归还数据包：主线程下一帧 clear() + 重填，跳过每帧的 Vec 重分配（#66）。
+        shared.recycle_packet(packet);
+
         // Throttle if no 叠加层消息 pending to avoid 100% CPU spin when idle.
         if !has_overlay_messages && frame_time_ms < 1.0 {
             std::thread::sleep(std::time::Duration::from_micros(500));
