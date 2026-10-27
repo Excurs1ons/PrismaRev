@@ -120,6 +120,16 @@ fn sample_from_light(light: &Light, position: Vec3, rotation: Quat) -> Option<Li
 /// 方向光不占 [`LIGHT_MAX`]（它走 frame UBO 的单独通路）。
 pub fn collect_light_samples(world: &World) -> Vec<LightSample> {
     let mut out: Vec<LightSample> = Vec::new();
+    collect_light_samples_into(world, &mut out);
+    out
+}
+
+/// [`collect_light_samples`] into a caller-owned buffer.
+///
+/// The frame packet keeps the sample buffer alive across frames, so the
+/// per-frame collection only refills an existing allocation (#66).
+pub fn collect_light_samples_into(world: &World, out: &mut Vec<LightSample>) {
+    out.clear();
 
     // 1. Unity 形状的 `Light`。
     for (entity, light) in world.query::<Light>() {
@@ -203,7 +213,6 @@ pub fn collect_light_samples(world: &World) -> Vec<LightSample> {
         local_seen += 1;
         local_seen <= LIGHT_MAX as usize
     });
-    out
 }
 
 /// 方向光的阴影状态 `(enabled, strength)`。

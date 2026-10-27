@@ -67,6 +67,9 @@ pub struct RenderShared {
     pub running: Arc<AtomicBool>,
     /// 来自游戏循环的最新帧数据包（主线程→渲染线程）
     pub packet: Mutex<Option<FramePacket>>,
+    /// 渲染线程用完归还的空包（渲染线程→主线程），主线程下一帧
+    /// `clear()` + 重填，复用里面的 `Vec` 容量（issue #66）。
+    pub spare_packet: Mutex<Option<FramePacket>>,
     /// 投递给外部叠加层的类型擦除消息队列（主线程→渲染线程）
     pub overlay_messages: Mutex<Vec<OverlayMessage>>,
     /// 投递给渲染器本身的类型擦除消息队列（主线程→渲染线程）。
@@ -99,6 +102,7 @@ impl RenderShared {
         let shared = Arc::new(Self {
             running: running.clone(),
             packet: Mutex::new(None),
+            spare_packet: Mutex::new(None),
             overlay_messages: Mutex::new(Vec::new()),
             renderer_messages: Mutex::new(Vec::new()),
             render_stats: Mutex::new(RenderStats::default()),
@@ -131,6 +135,20 @@ impl RenderShared {
     /// Take the latest 帧 packet 渲染 线程
     pub fn take_packet(&self) -> Option<FramePacket> {
         self.packet.lock().unwrap().take()
+    }
+
+    /// 取回渲染线程归还的空包（主线程）。
+    ///
+    /// 没有可复用的包时返回 `None`，调用方用 [`FramePacket::default`] 兜底。
+    pub fn take_spare_packet(&self) -> Option<FramePacket> {
+        self.spare_packet.lock().unwrap().take()
+    }
+
+    /// 渲染线程用完帧数据包后归还，供下一帧 `clear()` + 重填复用（issue #66）。
+    ///
+    /// 只保留最新一个：主线程没取走时覆盖旧的，避免无界堆积。
+    pub fn recycle_packet(&self, packet: FramePacket) {
+        *self.spare_packet.lock().unwrap() = Some(packet);
     }
 
     /// 取走所有排队中的叠加层消息（渲染线程）。
