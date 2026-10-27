@@ -681,7 +681,7 @@ RTEX 的 mip 链由 Cooker 通过 2×2 box filter 生成（`TextureCooker::gener
 **优先级链**（高→低）：
 ```
 1. CLI 覆盖（命令行参数）
-2. 活动项目配置（--profile 或 active.json）
+2. 活动项目配置（`--profile`；没有持久化的 active 配置文件，缺省用平台默认）
 3. 平台默认配置（--platform → desktop/android/ios/embedded）
 4. base.json（最低）
 ```
