@@ -654,48 +654,37 @@ pub fn bake_gi(cfg: &BakeGiConfig) -> Result<()> {
     .context("map staging")?;
     let raw: &[u8] =
         unsafe { std::slice::from_raw_parts(staging_ptr as *const u8, vol_bytes_actual) };
-    let coeff_count_float = (tex_w * tex_h * dims[2]) as usize * 9; // 9 SH coeffs per (x,y,z)
-    let mut coeffs: Vec<f32> = Vec::with_capacity(coeff_count_float);
-    for i in 0..coeff_count_float {
-        let off = i * 16; // vec4 f32 = 16 bytes
-        let c = f32::from_le_bytes(raw[off..off + 4].try_into().unwrap());
-        coeffs.push(c);
-    }
+    let (rgb_coeffs, hit_ratios) = unpack_baked_probe_volume(raw, dims);
 
-    // Compute hit ratios.
+    // Compute hit ratios and solid counts.
     let probe_count = (dims[0] * dims[1] * dims[2]) as usize;
-    let mut hit_ratios = Vec::with_capacity(probe_count);
-    for p in 0..probe_count {
-        let p_u32 = p as u32;
-        let _slice_z = p_u32 / (dims[0] * dims[1]);
-        let rem = p_u32 % (dims[0] * dims[1]);
-        let _slice_y = rem / dims[0];
-        let _slice_x = rem % dims[0];
-        // Each probe's first coefficient is at index p*9.
-        // The DC (0th SH coefficient) carries the average radiance; a negative
-        // value means the probe is inside solid geometry.
-        let dc = coeffs[p * 9];
-        hit_ratios.push(if dc >= 0.0 { 1.0 } else { 0.0 });
-    }
-
-    let global_hit_ratio = if probe_count > 0 {
-        hit_ratios.iter().copied().sum::<f32>() / probe_count as f32
+    let valid_hits: Vec<f32> = hit_ratios.iter().copied().filter(|&h| h >= 0.0).collect();
+    let global_hit_ratio = if !valid_hits.is_empty() {
+        valid_hits.iter().sum::<f32>() / valid_hits.len() as f32
     } else {
         0.0
     };
-    let inside_solid = hit_ratios.iter().filter(|&&h| h < 0.5).count();
+    let inside_solid = probe_count - valid_hits.len();
 
-    let dc_min = coeffs.iter().copied().fold(f32::MAX, f32::min);
-    let dc_max = coeffs.iter().copied().fold(f32::MIN, f32::max);
-    let dc_avg = if !coeffs.is_empty() {
-        coeffs.iter().copied().sum::<f32>() / coeffs.len() as f32
+    let mut dc_min = f32::MAX;
+    let mut dc_max = f32::MIN;
+    let mut dc_sum = 0.0f32;
+    for p in 0..probe_count {
+        let [r, g, b] = rgb_coeffs[p * 9];
+        let lum = (r + g + b) / 3.0;
+        dc_min = dc_min.min(lum);
+        dc_max = dc_max.max(lum);
+        dc_sum += lum;
+    }
+    let dc_avg = if probe_count > 0 {
+        dc_sum / probe_count as f32
     } else {
         0.0
     };
     log::info!(
         "  SH DC coeff: min={:.3} max={:.3} avg={:.3}  inside-solid={} / {}",
-        dc_min,
-        dc_max,
+        if dc_min == f32::MAX { 0.0 } else { dc_min },
+        if dc_max == f32::MIN { 0.0 } else { dc_max },
         dc_avg,
         inside_solid,
         probe_count
@@ -719,9 +708,6 @@ pub fn bake_gi(cfg: &BakeGiConfig) -> Result<()> {
         .and_then(|s| s.to_str())
         .unwrap_or("unknown")
         .to_string();
-
-    // Convert flat Vec<f32> coeffs to Vec<[f32; 3]> (RGB triplets).
-    let rgb_coeffs: Vec<[f32; 3]> = coeffs.as_chunks::<3>().0.to_vec();
 
     let probe_data = prism_render::probe_loader::ProbeVolumeData {
         scene_name,
@@ -794,22 +780,143 @@ fn derive_grid(
 
 fn hr_min(probe_count: usize, hit_ratios: &[f32]) -> f32 {
     let mut m = f32::MAX;
+    let mut found = false;
     for &h in hit_ratios.iter().take(probe_count) {
         if h >= 0.0 {
             m = m.min(h);
+            found = true;
         }
     }
-    m
+    if found {
+        m
+    } else {
+        0.0
+    }
 }
 
 fn hr_max(probe_count: usize, hit_ratios: &[f32]) -> f32 {
     let mut m = f32::MIN;
+    let mut found = false;
     for &h in hit_ratios.iter().take(probe_count) {
         if h >= 0.0 {
             m = m.max(h);
+            found = true;
         }
     }
-    m
+    if found {
+        m
+    } else {
+        0.0
+    }
+}
+
+/// Unpack raw 3D staging buffer bytes (coefficient-major RGBA32F depth slices)
+/// into `(rgb_coeffs, hit_ratios)`.
+///
+/// In `gi_bake.slang`, coefficients are written as 3D depth slices where slice
+/// `tex_z = c * dims.z + z` contains voxel `(x, y, tex_z)` as a `float4(sh[c], alpha)`.
+/// `alpha` on slice 0 (`c == 0`) is `-1.0` if the probe is inside solid geometry, or
+/// `hit_ratio` in `[0.0, 1.0]` otherwise.
+///
+/// Returns:
+/// - `rgb_coeffs`: `dims.x * dims.y * dims.z * 9` RGB triplets in probe-major order
+///   (`probe_idx * 9 + coeff_idx`).
+/// - `hit_ratios`: per-probe hit ratio from `c == 0`'s alpha component (or `< 0.0` for solid).
+pub fn unpack_baked_probe_volume(raw: &[u8], dims: [u32; 3]) -> (Vec<[f32; 3]>, Vec<f32>) {
+    let probe_count = (dims[0] * dims[1] * dims[2]) as usize;
+    let expected_bytes = probe_count * 9 * 16;
+    assert!(
+        raw.len() >= expected_bytes,
+        "staging buffer too small: expected {expected_bytes} bytes, got {}",
+        raw.len()
+    );
+
+    let mut rgb_coeffs = vec![[0.0f32; 3]; probe_count * 9];
+    let mut hit_ratios = vec![0.0f32; probe_count];
+
+    for c in 0..9 {
+        for p in 0..probe_count {
+            let off = (c * probe_count + p) * 16;
+            let r = f32::from_le_bytes(raw[off..off + 4].try_into().unwrap());
+            let g = f32::from_le_bytes(raw[off + 4..off + 8].try_into().unwrap());
+            let b = f32::from_le_bytes(raw[off + 8..off + 12].try_into().unwrap());
+            let alpha = f32::from_le_bytes(raw[off + 12..off + 16].try_into().unwrap());
+
+            rgb_coeffs[p * 9 + c] = [r, g, b];
+            if c == 0 {
+                hit_ratios[p] = alpha;
+            }
+        }
+    }
+
+    (rgb_coeffs, hit_ratios)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unpack_baked_probe_volume_extracts_rgb_and_hit_ratio() {
+        let dims = [2, 1, 1]; // 2 probes: probe 0, probe 1
+        let probe_count = 2;
+        let mut raw = vec![0u8; probe_count * 9 * 16];
+
+        // Fill raw data for probe 0 and probe 1 across 9 coefficients
+        for c in 0..9 {
+            for p in 0..probe_count {
+                let off = (c * probe_count + p) * 16;
+                let r = (p * 100 + c * 10 + 1) as f32;
+                let g = (p * 100 + c * 10 + 2) as f32;
+                let b = (p * 100 + c * 10 + 3) as f32;
+                let alpha: f32 = if c == 0 {
+                    if p == 0 {
+                        0.75
+                    } else {
+                        -1.0
+                    } // p=0 is valid, p=1 is solid
+                } else {
+                    0.0
+                };
+
+                raw[off..off + 4].copy_from_slice(&r.to_le_bytes());
+                raw[off + 4..off + 8].copy_from_slice(&g.to_le_bytes());
+                raw[off + 8..off + 12].copy_from_slice(&b.to_le_bytes());
+                raw[off + 12..off + 16].copy_from_slice(&alpha.to_le_bytes());
+            }
+        }
+
+        let (coeffs, hit_ratios) = unpack_baked_probe_volume(&raw, dims);
+
+        assert_eq!(coeffs.len(), 18);
+        assert_eq!(hit_ratios.len(), 2);
+
+        // Check probe 0 coefficients
+        for (c, item) in coeffs.iter().take(9).enumerate() {
+            let expected_r = (c * 10 + 1) as f32;
+            let expected_g = (c * 10 + 2) as f32;
+            let expected_b = (c * 10 + 3) as f32;
+            assert_eq!(*item, [expected_r, expected_g, expected_b]);
+        }
+        assert_eq!(hit_ratios[0], 0.75);
+
+        // Check probe 1 coefficients
+        for (c, item) in coeffs.iter().skip(9).take(9).enumerate() {
+            let expected_r = (100 + c * 10 + 1) as f32;
+            let expected_g = (100 + c * 10 + 2) as f32;
+            let expected_b = (100 + c * 10 + 3) as f32;
+            assert_eq!(*item, [expected_r, expected_g, expected_b]);
+        }
+        assert_eq!(hit_ratios[1], -1.0);
+    }
+
+    #[test]
+    #[should_panic(expected = "staging buffer too small")]
+    fn unpack_baked_probe_volume_panics_on_truncated_buffer() {
+        let dims = [2, 2, 2];
+        let truncated = vec![0u8; 10];
+        unpack_baked_probe_volume(&truncated, dims);
+    }
 }
 
 /// Compute 3D workgroup dispatch counts for `gi_bake.slang`.
@@ -822,7 +929,7 @@ pub const fn gi_bake_dispatch_groups(dims: [u32; 3]) -> [u32; 3] {
 }
 
 #[cfg(test)]
-mod tests {
+mod dispatch_tests {
     use super::*;
 
     #[test]
