@@ -445,14 +445,6 @@ float eval_brdf_pdf(SurfaceMaterial s, float3 n, float3 view_dir, float3 light_d
 // the light exists (deterministic direction), so pdf_sun = 1.0.
 float nee_pdf_sun() { return 1.0; }
 
-// NEE pdf for a single analytic light from the SSBO. `num_lights` is the
-// total number of active point/spot/area lights (excluding the sun).
-// Point lights are sampled uniformly over the sphere from the hit point.
-float nee_pdf_point(uint num_lights)
-{
-    return 1.0 / (4.0 * PI * max(float(num_lights), 1.0));
-}
-
 // Power-heuristic MIS weight with beta=2.
 // `p_a` = pdf of the evaluating strategy (NEE).
 // `p_b` = pdf of the alternative strategy (BRDF sampling).
@@ -957,11 +949,19 @@ public float3 TraceRadiance(
                         al_shadow = 0.0;
                 }
 
+                // Analytic lights (point/spot/area) are not in the TLAS, and
+                // point/spot are delta distributions: BRDF sampling can never
+                // hit them, so NEE is the only strategy and there is nothing
+                // to MIS against. The old `nee_pdf_point` fed the
+                // light-selection probability 1/N into the power heuristic as
+                // if it were a per-steradian pdf; a correct solid-angle pdf
+                // for an area-sampled light needs the d^2 / cos_light
+                // Jacobian, which a delta light does not have. That unit
+                // mismatch scaled every analytic light down by
+                // p_nee^2 / (p_nee^2 + p_brdf^2) (about 6% for a single
+                // light), so the estimator now takes the raw contribution.
                 float3 al_brdf = eval_brdf(surf, hit_normal, view_dir, L_dir);
-                float p_brdf_al = eval_brdf_pdf(surf, hit_normal, view_dir, L_dir);
-                float p_nee_al = nee_pdf_point(num_lights);
-                total_radiance += throughput * al_brdf * L_radiance * al_shadow
-                    * p_nee_al / max(p_nee_al * p_nee_al + p_brdf_al * p_brdf_al, 1e-20);
+                total_radiance += throughput * al_brdf * L_radiance * al_shadow;
             }
 
             // ---- Emissive triangle NEE (binding 9) ----
