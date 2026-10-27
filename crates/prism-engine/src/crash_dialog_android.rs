@@ -25,10 +25,16 @@ pub fn show(title: &str, message: &str) -> CrashChoice {
     // 完整 错误 already logged by `show_crash_dialog`; also 表面 title.
     log::error!("Crash dialog: {title}");
 
-    let handles = match ANDROID_APP.get() {
-        Some(h) => h,
-        None => {
-            log::warn!("AndroidApp not registered; cannot show dialog, exiting");
+    let handles = match ANDROID_APP.read() {
+        Ok(guard) => match *guard {
+            Some(h) => h,
+            None => {
+                log::warn!("AndroidApp not registered; cannot show dialog, exiting");
+                return CrashChoice::Exit;
+            }
+        },
+        Err(_) => {
+            log::warn!("ANDROID_APP lock poisoned; cannot show dialog, exiting");
             return CrashChoice::Exit;
         }
     };
@@ -196,9 +202,12 @@ fn show_alert_dialog(
 
 /// 复制 `text` to Android 系统 clipboard via `ClipboardManager` and `ClipData`.
 pub fn copy_to_clipboard(text: &str) -> std::io::Result<()> {
-    let handles = match ANDROID_APP.get() {
-        Some(h) => h,
-        None => return Ok(()),
+    let handles = match ANDROID_APP.read() {
+        Ok(guard) => match *guard {
+            Some(h) => h,
+            None => return Ok(()),
+        },
+        Err(_) => return Ok(()),
     };
     let vm = unsafe { JavaVM::from_raw(handles.vm_ptr as *mut _) };
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

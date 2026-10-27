@@ -188,6 +188,13 @@ where
     log::info!("PrismaRev Android starting");
 
     prism_engine::crash_dialog::register_android_app(&android_app);
+    struct AndroidAppGuard;
+    impl Drop for AndroidAppGuard {
+        fn drop(&mut self) {
+            prism_engine::crash_dialog::unregister_android_app();
+        }
+    }
+    let _app_guard = AndroidAppGuard;
 
     let app = build_app();
     let event_loop = prism_platform::build_android_event_loop(android_app)?;
@@ -196,17 +203,58 @@ where
 }
 
 /// Bridge the hub's `filesDir/launch_config.json` into the same env var used
-/// by desktop. An explicit env override wins.
-#[cfg(target_os = "android")]
+/// by desktop. On re-entry, always read the latest file (or clear the env
+/// var if the file was removed) so stale launch configs do not persist across runs.
+#[cfg(any(target_os = "android", test))]
 fn inject_launch_config(data_dir: &std::path::Path) {
-    if std::env::var_os(prism_engine::launch_config::ENV_KEY).is_some() {
-        return;
-    }
-
     let path = data_dir.join("launch_config.json");
     match std::fs::read_to_string(&path) {
         Ok(json) => std::env::set_var(prism_engine::launch_config::ENV_KEY, json),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            std::env::remove_var(prism_engine::launch_config::ENV_KEY);
+        }
         Err(error) => log::warn!("read {}: {error}", path.display()),
+    }
+}
+
+#[cfg(test)]
+mod launch_config_reentrancy_tests {
+    use super::*;
+
+    #[test]
+    fn inject_launch_config_updates_and_cleans_up_on_reentry() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "prism_test_launch_config_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        let cfg_path = temp_dir.join("launch_config.json");
+
+        // Initial launch with config A
+        std::fs::write(&cfg_path, r#"{"scene":"intro","log_level":"debug"}"#).unwrap();
+        inject_launch_config(&temp_dir);
+        assert_eq!(
+            std::env::var(prism_engine::launch_config::ENV_KEY).as_deref(),
+            Ok(r#"{"scene":"intro","log_level":"debug"}"#)
+        );
+
+        // Re-entry with updated config B
+        std::fs::write(&cfg_path, r#"{"scene":"gameplay","log_level":"warn"}"#).unwrap();
+        inject_launch_config(&temp_dir);
+        assert_eq!(
+            std::env::var(prism_engine::launch_config::ENV_KEY).as_deref(),
+            Ok(r#"{"scene":"gameplay","log_level":"warn"}"#)
+        );
+
+        // Re-entry when launch config is deleted
+        std::fs::remove_file(&cfg_path).unwrap();
+        inject_launch_config(&temp_dir);
+        assert!(std::env::var(prism_engine::launch_config::ENV_KEY).is_err());
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }
