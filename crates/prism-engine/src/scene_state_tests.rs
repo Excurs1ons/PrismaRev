@@ -31,7 +31,10 @@ fn saved_transform_keeps_the_full_quaternion() {
         scale: Vec3::ONE,
     };
 
-    let saved = local_transform_to_json(&transform);
+    let saved = saved_transform_to_json(&SavedTransform {
+        id: Some(7),
+        transform,
+    });
     let rotation_field = saved
         .split("\"rotation\":[")
         .nth(1)
@@ -46,10 +49,11 @@ fn saved_transform_keeps_the_full_quaternion() {
     let parsed = parse_transform_array(&format!("[{saved}]"));
     assert_eq!(parsed.len(), 1, "{saved}");
     // 四元数 q 与 -q 表示同一旋转，比较绝对值点积即可。
+    assert_eq!(parsed[0].id, Some(7), "id must survive the round trip");
     assert!(
-        parsed[0].rotation.dot(rotation).abs() > 0.999_999,
+        parsed[0].transform.rotation.dot(rotation).abs() > 0.999_999,
         "expected {rotation:?}, got {:?}",
-        parsed[0].rotation
+        parsed[0].transform.rotation
     );
 }
 
@@ -283,4 +287,75 @@ fn camera_choice_falls_back_to_main_camera_before_hierarchy_runs() {
     assert_eq!(state_camera(&world), Some(main));
     let snapshot = snapshot_camera_state(&world).expect("main camera is complete");
     assert_eq!(snapshot.position, Vec3::new(2.0, 0.0, 0.0));
+}
+
+/// #118：恢复按 `.scene.json` 稳定 id 配对，而不是按 ECS 池顺序 zip。
+///
+/// 存档里的顺序与池顺序故意相反：老实现会把位姿互换，这正是「场景里插入一个
+/// 实体后所有存档位姿错位」的根因。
+#[test]
+fn v4_restores_transforms_by_entity_id_not_by_pool_order() {
+    let mut world = World::new();
+    let first = world.spawn();
+    world.insert(first, SceneEntityId(1));
+    world.insert(
+        first,
+        LocalTransform {
+            position: Vec3::new(1.0, 0.0, 0.0),
+            ..Default::default()
+        },
+    );
+    let second = world.spawn();
+    world.insert(second, SceneEntityId(2));
+    world.insert(
+        second,
+        LocalTransform {
+            position: Vec3::new(2.0, 0.0, 0.0),
+            ..Default::default()
+        },
+    );
+
+    let json = r#"{"version":4,"transforms":[
+        {"id":2,"position":[20,0,0],"rotation":[0,0,0,1],"scale":[1,1,1]},
+        {"id":1,"position":[10,0,0],"rotation":[0,0,0,1],"scale":[1,1,1]}
+    ]}"#;
+    apply_scene_state(&mut world, json);
+
+    assert_eq!(
+        world.get::<LocalTransform>(first).unwrap().position,
+        Vec3::new(10.0, 0.0, 0.0),
+        "id 1 必须拿回自己的位姿"
+    );
+    assert_eq!(
+        world.get::<LocalTransform>(second).unwrap().position,
+        Vec3::new(20.0, 0.0, 0.0),
+        "id 2 必须拿回自己的位姿"
+    );
+}
+
+/// #118：存档里多出来的 id（场景已删掉的实体）不会占用别的实体的位姿。
+#[test]
+fn v4_ignores_saved_transforms_for_missing_entities() {
+    let mut world = World::new();
+    let kept = world.spawn();
+    world.insert(kept, SceneEntityId(5));
+    world.insert(
+        kept,
+        LocalTransform {
+            position: Vec3::ZERO,
+            ..Default::default()
+        },
+    );
+
+    let json = r#"{"version":4,"transforms":[
+        {"id":99,"position":[70,0,0],"rotation":[0,0,0,1],"scale":[1,1,1]},
+        {"id":5,"position":[50,0,0],"rotation":[0,0,0,1],"scale":[1,1,1]}
+    ]}"#;
+    apply_scene_state(&mut world, json);
+
+    assert_eq!(
+        world.get::<LocalTransform>(kept).unwrap().position,
+        Vec3::new(50.0, 0.0, 0.0),
+        "已删除实体的记录不能把位姿挤给别的实体（老实现会按顺序错位）"
+    );
 }

@@ -8,6 +8,11 @@
 //! together with the 光源 This preserves the entity/component relationship
 //! instead of pairing independent 分量 arrays by 迭代 order.
 //!
+//! **Format version 4:** every saved record carries the entity's stable
+//! `.scene.json` id (`SceneEntityId`), and restore matches by id instead of by
+//! pool order, so inserting or deleting an entity no longer shifts every saved
+//! pose (#118). Files without ids still restore positionally.
+//!
 //! **Format version 3:** 相机 状态 is sourced from the data components
 //! 相机 + `FlyCameraController` + `LocalTransform`) instead of the old
 //! `crate::camera::Camera` 枚举 `fov_y` is still serialized in 弧度 for
@@ -21,9 +26,14 @@ use crate::scene::components::{
     Active, Camera, DirectionalLight as SceneDirLight, FlyCameraController, LocalTransform,
     PointLight as ScenePtLight,
 };
+use crate::scene::runtime_components::SceneEntityId;
 use crate::scene::systems::camera;
 
-const SCENE_STATE_VERSION: u32 = 3;
+const SCENE_STATE_VERSION: u32 = 4;
+
+/// v1 wrote point-light positions in a separate array; v2+ keeps them with the
+/// light, so the positional back-fill below only applies to v1 files.
+const LEGACY_INDEPENDENT_LIGHTS_VERSION: u32 = 2;
 
 // ---------------------------------------------------------------------------
 // File path
@@ -58,14 +68,30 @@ pub struct SceneState {
     pub camera: Option<CameraState>,
     pub directional_light: Option<SceneDirLight>,
     pub point_lights: Vec<ScenePtLight>,
-    pub transforms: Vec<LocalTransform>,
+    pub transforms: Vec<SavedTransform>,
+}
+
+/// 一条保存的变换记录：稳定 id + 位姿。
+///
+/// `id` 来自加载时写入的 [`SceneEntityId`]（`.scene.json` v3+ 的 `id`）。v4 之前的
+/// 存档没有这个字段，恢复时退回按顺序配对（#118）。
+#[derive(Clone, Debug)]
+pub struct SavedTransform {
+    pub id: Option<u32>,
+    pub transform: LocalTransform,
 }
 
 #[derive(Clone, Debug)]
 struct SavedPointLight {
+    id: Option<u32>,
     light: ScenePtLight,
     position: Option<Vec3>,
     active: bool,
+}
+
+/// 取实体的稳定 id（没有 `.scene.json` id 时返回 `None`）。
+fn scene_entity_id(world: &World, entity: Entity) -> Option<u32> {
+    world.get::<SceneEntityId>(entity).map(|id| id.0)
 }
 // ---------------------------------------------------------------------------
 // Serialisation (hand-rolled JSON — no serde)
@@ -153,12 +179,17 @@ fn point_light_from_json(s: &str) -> Option<ScenePtLight> {
     })
 }
 
-fn local_transform_to_json(transform: &LocalTransform) -> String {
+fn saved_transform_to_json(saved: &SavedTransform) -> String {
+    let id = saved
+        .id
+        .map(|id| format!("\"id\":{id},"))
+        .unwrap_or_default();
     format!(
-        "{{\"position\":[{}],\"rotation\":[{}],\"scale\":[{}]}}",
-        fmt3(transform.position),
-        fmt4(transform.rotation),
-        fmt3(transform.scale),
+        "{{{}\"position\":[{}],\"rotation\":[{}],\"scale\":[{}]}}",
+        id,
+        fmt3(saved.transform.position),
+        fmt4(saved.transform.rotation),
+        fmt3(saved.transform.scale),
     )
 }
 
@@ -172,12 +203,17 @@ fn local_transform_from_fields(position: Vec3, rotation: Quat, scale: Vec3) -> L
 
 impl SavedPointLight {
     fn to_json(&self) -> String {
+        let id = self
+            .id
+            .map(|id| format!("\"id\":{id},"))
+            .unwrap_or_default();
         let position = self
             .position
             .map(|value| format!("\"position\":[{}],", fmt3(value)))
             .unwrap_or_default();
         format!(
-            "{{{}\"range\":{},\"color\":[{}],\"intensity\":{},\"active\":{}}}",
+            "{{{}{}\"range\":{},\"color\":[{}],\"intensity\":{},\"active\":{}}}",
+            id,
             position,
             self.light.range,
             fmt3(self.light.color),
@@ -190,6 +226,7 @@ impl SavedPointLight {
         let position = find_array_f32(s, "position")
             .and_then(|value| (value.len() == 3).then(|| Vec3::new(value[0], value[1], value[2])));
         Some(Self {
+            id: find_field_u32(s, "id"),
             light: point_light_from_json(s)?,
             position,
             active: find_field_bool(s, "active")
@@ -249,15 +286,19 @@ pub fn save_scene_state(world: &World) {
     let point_lights: Vec<SavedPointLight> = world
         .query::<ScenePtLight>()
         .map(|(entity, light)| SavedPointLight {
+            id: scene_entity_id(world, entity),
             light: *light,
             position: world.get::<LocalTransform>(entity).map(|t| t.position),
             active: world.get::<Active>(entity).map(|a| a.0).unwrap_or(true),
         })
         .collect();
-    let transforms: Vec<LocalTransform> = world
+    let transforms: Vec<SavedTransform> = world
         .query::<LocalTransform>()
         .filter(|(entity, _)| world.get::<ScenePtLight>(*entity).is_none())
-        .map(|(_, transform)| transform.clone())
+        .map(|(entity, transform)| SavedTransform {
+            id: scene_entity_id(world, entity),
+            transform: transform.clone(),
+        })
         .collect();
 
     let mut json = String::new();
@@ -290,7 +331,7 @@ pub fn save_scene_state(world: &World) {
         if i > 0 {
             json.push(',');
         }
-        let _ = write!(json, "{}", local_transform_to_json(t));
+        let _ = write!(json, "{}", saved_transform_to_json(t));
     }
     json.push_str("]\n");
     json.push_str("}\n");
@@ -374,14 +415,14 @@ fn apply_scene_state(world: &mut World, text: &str) {
         // Version 1 wrote point-light and 变换 arrays independently. At
         // startup the point-light transforms occupied the leading slots, so
         // recover those positions before applying the remaining transforms.
-        if version < SCENE_STATE_VERSION {
+        if version < LEGACY_INDEPENDENT_LIGHTS_VERSION {
             legacy_point_transform_count = parsed.len().min(parsed_transforms.len());
             for (saved, transform) in parsed
                 .iter_mut()
                 .zip(parsed_transforms.iter().take(legacy_point_transform_count))
             {
                 if saved.position.is_none() {
-                    saved.position = Some(transform.position);
+                    saved.position = Some(transform.transform.position);
                 }
             }
         }
@@ -400,44 +441,101 @@ fn apply_scene_state(world: &mut World, text: &str) {
             );
         }
 
-        for (entity, saved) in old_point_entities.iter().copied().zip(parsed) {
-            world.insert(entity, saved.light);
-            if let Some(position) = saved.position {
-                if let Some(transform) = world.get_mut::<LocalTransform>(entity) {
-                    transform.position = position;
-                } else {
-                    world.insert(
-                        entity,
-                        LocalTransform {
-                            position: position.into(),
-                            ..Default::default()
-                        },
-                    );
+        // v4+：按稳定 id 配对；旧存档没有 id 时退回「按顺序配对」。
+        let mut unmatched: Vec<SavedPointLight> = Vec::new();
+        let mut remaining: Vec<Entity> = old_point_entities.clone();
+        for saved in parsed {
+            let matched = saved.id.and_then(|id| {
+                let index = remaining
+                    .iter()
+                    .position(|entity| scene_entity_id(world, *entity) == Some(id))?;
+                Some(remaining.remove(index))
+            });
+            match matched {
+                Some(entity) => {
+                    apply_saved_light(world, entity, saved, &mut reserved_transform_entities)
                 }
+                None => unmatched.push(saved),
             }
-            world.insert(entity, Active(saved.active));
-            reserved_transform_entities.insert(entity);
+        }
+        // 没有 id 的记录（v3 及更早）仍然按池顺序落到剩余光源上。
+        for (entity, saved) in remaining.into_iter().zip(unmatched) {
+            apply_saved_light(world, entity, saved, &mut reserved_transform_entities);
         }
     }
 
     // --- Non-light transforms ---
+    // v4+ 按 `.scene.json` 稳定 id 配对，场景里插入/删除实体不会再让后面的位姿整体
+    // 错位（#118）；没有 id 的旧记录退回按顺序配对。
+    let mut matched_transforms: HashSet<Entity> = HashSet::new();
+    let mut legacy_transforms: Vec<SavedTransform> = Vec::new();
+    for saved in parsed_transforms
+        .into_iter()
+        .skip(legacy_point_transform_count)
+    {
+        let entity = saved.id.and_then(|id| {
+            world
+                .query::<SceneEntityId>()
+                .find(|(entity, stable)| {
+                    stable.0 == id
+                        && !matched_transforms.contains(entity)
+                        && world.get::<LocalTransform>(*entity).is_some()
+                })
+                .map(|(entity, _)| entity)
+        });
+        match (entity, saved.id) {
+            (Some(entity), _) => {
+                if let Some(existing) = world.get_mut::<LocalTransform>(entity) {
+                    *existing = saved.transform;
+                }
+                matched_transforms.insert(entity);
+            }
+            (None, None) => legacy_transforms.push(saved),
+            (None, Some(id)) => log::warn!(
+                "scene state holds a transform for entity id {id}, which is not in the loaded scene; ignoring it"
+            ),
+        }
+    }
+
     let transform_entities: Vec<Entity> = world
         .query::<LocalTransform>()
         .filter(|(entity, _)| {
             !reserved_transform_entities.contains(entity)
+                && !matched_transforms.contains(entity)
                 && world.get::<ScenePtLight>(*entity).is_none()
         })
         .map(|(entity, _)| entity)
         .collect();
-    for (entity, new) in transform_entities.into_iter().zip(
-        parsed_transforms
-            .into_iter()
-            .skip(legacy_point_transform_count),
-    ) {
+    for (entity, new) in transform_entities.into_iter().zip(legacy_transforms) {
         if let Some(existing) = world.get_mut::<LocalTransform>(entity) {
-            *existing = new;
+            *existing = new.transform;
         }
     }
+}
+
+/// 把一条存档光源应用到已存在的实体上（不新建实体）。
+fn apply_saved_light(
+    world: &mut World,
+    entity: Entity,
+    saved: SavedPointLight,
+    reserved_transform_entities: &mut std::collections::HashSet<Entity>,
+) {
+    world.insert(entity, saved.light);
+    if let Some(position) = saved.position {
+        if let Some(transform) = world.get_mut::<LocalTransform>(entity) {
+            transform.position = position;
+        } else {
+            world.insert(
+                entity,
+                LocalTransform {
+                    position: position.into(),
+                    ..Default::default()
+                },
+            );
+        }
+    }
+    world.insert(entity, Active(saved.active));
+    reserved_transform_entities.insert(entity);
 }
 
 // ---------------------------------------------------------------------------
@@ -479,6 +577,17 @@ fn find_field_bool(s: &str, key: &str) -> Option<bool> {
         .find(|c: char| [',', '}', ']'].contains(&c))
         .unwrap_or(rest.len());
     rest[..end].trim().parse::<bool>().ok()
+}
+
+/// 查找 a bare `u32` following 调 in a JSON-ish 字符串
+fn find_field_u32(s: &str, key: &str) -> Option<u32> {
+    let needle = format!("\"{key}\":");
+    let pos = s.find(&needle)? + needle.len();
+    let rest = s[pos..].trim_start();
+    let end = rest
+        .find(|c: char| [',', '}', ']'].contains(&c))
+        .unwrap_or(rest.len());
+    rest[..end].trim().parse::<u32>().ok()
 }
 
 /// Extract the JSON 对象 `{...}` for a top-level 调 Returns the inner
@@ -563,7 +672,7 @@ fn parse_pt_light_array(s: &str) -> Vec<SavedPointLight> {
 
 /// Parse a JSON 数组 of `{...}` objects into Vec<LocalTransform>.
 /// Backward-compatible: reads 启用 from old 格式 (ignored).
-fn parse_transform_array(s: &str) -> Vec<LocalTransform> {
+fn parse_transform_array(s: &str) -> Vec<SavedTransform> {
     let mut out = Vec::new();
     let mut rest = s.trim();
     while !rest.is_empty() {
@@ -581,23 +690,26 @@ fn parse_transform_array(s: &str) -> Vec<LocalTransform> {
         let t = find_array_f32(&obj_str, "position").unwrap_or_default();
         let r = find_array_f32(&obj_str, "rotation").unwrap_or_default();
         let s = find_array_f32(&obj_str, "scale").unwrap_or_default();
-        out.push(local_transform_from_fields(
-            if t.len() == 3 {
-                glam::Vec3::new(t[0], t[1], t[2])
-            } else {
-                glam::Vec3::ZERO
-            },
-            if r.len() == 4 {
-                glam::Quat::from_xyzw(r[0], r[1], r[2], r[3])
-            } else {
-                glam::Quat::IDENTITY
-            },
-            if s.len() == 3 {
-                glam::Vec3::new(s[0], s[1], s[2])
-            } else {
-                glam::Vec3::ONE
-            },
-        ));
+        out.push(SavedTransform {
+            id: find_field_u32(&obj_str, "id"),
+            transform: local_transform_from_fields(
+                if t.len() == 3 {
+                    glam::Vec3::new(t[0], t[1], t[2])
+                } else {
+                    glam::Vec3::ZERO
+                },
+                if r.len() == 4 {
+                    glam::Quat::from_xyzw(r[0], r[1], r[2], r[3])
+                } else {
+                    glam::Quat::IDENTITY
+                },
+                if s.len() == 3 {
+                    glam::Vec3::new(s[0], s[1], s[2])
+                } else {
+                    glam::Vec3::ONE
+                },
+            ),
+        });
     }
     out
 }

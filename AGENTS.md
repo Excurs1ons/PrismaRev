@@ -363,6 +363,10 @@ The user project's dependency chain must stay **UI-framework-free and editor-fre
   the array index, and ids are not reused after deletion (`SceneJson::next_id`). Read/write
   paths must go through `migrate_scene_doc` / `normalize_scene_doc`, which assign ids to
   pre-v3 documents by array order (identity mapping).
+- **`.scene.json` 的 `id` 会写成运行时 `SceneEntityId`**（loader 插入的 runtime-only 标记，
+  不进注册表、不进 RSCN）：跨会话匹配同一实体（`scene_state` v4 存档、将来的编辑器同步）
+  只能靠它 —— ECS `Entity` 句柄每次加载都会重新分配。新增「按实体存档/同步」的功能按 id
+  配对，不要再按查询顺序 zip。
 - **UI layout output is derived too**: `ComputedLayout` is inserted and rewritten every
   frame by `prism-engine/src/ui/layout.rs`, so authors write only `Node` + `Style`. It is
   registered as a type only (same list / same reason), and old documents that still
