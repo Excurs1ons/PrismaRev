@@ -723,6 +723,14 @@ export function viewportDragEnd(id: string): Promise<void> {
   return call<void>("editor_viewport_drag_end", { id });
 }
 
+/** 重新取景（`"all"` / `"selection"`），返回新的轨道参数。 */
+export function viewportFrame(
+  id: string,
+  mode: "all" | "selection",
+): Promise<CameraOrbit | null> {
+  return call<CameraOrbit | null>("editor_viewport_frame", { id, mode });
+}
+
 /** Play 模式暂停 / 继续。 */
 export function viewportSetPaused(id: string, paused: boolean): Promise<void> {
   return call<void>("editor_viewport_set_paused", { id, paused });

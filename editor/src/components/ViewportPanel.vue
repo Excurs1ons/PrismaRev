@@ -63,6 +63,8 @@ let reloadTimer: number | undefined;
 let statsTimer: number | undefined;
 let cameraPending = false;
 let isActive = true;
+/** 场景第一次出帧时自动框住内容；换文档后重置。 */
+let autoFramed = false;
 
 /** 面板尺寸（物理像素），已含 devicePixelRatio。 */
 function physicalSize(): { width: number; height: number } {
@@ -134,6 +136,10 @@ function drawFrame(buffer: ArrayBuffer) {
   context.putImageData(new ImageData(pixels, width, height), 0, 0);
   frames.value += 1;
   status.value = "live";
+  if (isScene.value && !autoFramed) {
+    autoFramed = true;
+    void frameAll();
+  }
 }
 
 function scheduleResize() {
@@ -430,7 +436,18 @@ function onWheel(event: WheelEvent) {
 }
 
 function onKey(event: KeyboardEvent, pressed: boolean) {
-  if (isScene.value) return;
+  if (isScene.value) {
+    if (!pressed) return;
+    // F = 聚焦选中项（没有选中就框住整个场景），A / Home = 框住整个场景。
+    if (event.code === "KeyF") {
+      void frameSelection();
+      event.preventDefault();
+    } else if (event.code === "KeyA" || event.code === "Home") {
+      void frameAll();
+      event.preventDefault();
+    }
+    return;
+  }
   void sendInput({ type: "key", code: event.code, pressed });
   event.preventDefault();
 }
@@ -440,9 +457,23 @@ function sendInput(event: ViewportInput) {
   return api.viewportInput(viewId, event).catch(() => undefined);
 }
 
-function resetCamera() {
-  orbit.value = { target: [0, 0, 0], yaw: -0.7, pitch: 0.35, distance: 12 };
+/** 套用后端算出来的取景参数（`yaw` / `pitch` 由后端原样带回）。 */
+async function applyFrame(mode: "all" | "selection") {
+  if (!inTauri || !channel) return;
+  const framed = await api.viewportFrame(viewId, mode).catch(() => null);
+  if (!framed) return;
+  orbit.value = framed;
   pushCamera();
+}
+
+/** 框住整个场景（`A` / `Home` / 工具栏按钮）。 */
+function frameAll() {
+  return applyFrame("all");
+}
+
+/** 聚焦选中项；没有选中项时退回框住整个场景。 */
+function frameSelection() {
+  return applyFrame(primarySelection() === null ? "all" : "selection");
 }
 
 // ── 生命周期 ───────────────────────────────────────────────────────────────
@@ -487,6 +518,7 @@ watch(
   async () => {
     await close();
     channel = null;
+    autoFramed = false;
     await open();
   },
 );
@@ -526,9 +558,9 @@ const entityLabel = computed(() =>
       <button
         v-if="isScene"
         class="icon-button"
-        title="重置相机"
+        title="框住场景（A）"
         :disabled="!canRender"
-        @click="resetCamera"
+        @click="frameAll"
       >
         <RefreshCw :size="13" />
       </button>
@@ -587,7 +619,7 @@ const entityLabel = computed(() =>
         <span v-else>等待场景文档…</span>
       </div>
       <div v-if="isScene" class="viewport-hint">
-        拖动坐标轴移动 · 左键轨道 · 中键/Shift 平移 · 滚轮缩放
+        拖动坐标轴移动 · F 聚焦选中 · A 框住场景 · 左键轨道 · 中键/Shift 平移 · 滚轮缩放
       </div>
     </div>
   </div>
