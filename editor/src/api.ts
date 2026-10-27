@@ -723,6 +723,16 @@ export function viewportDragEnd(id: string): Promise<void> {
   return call<void>("editor_viewport_drag_end", { id });
 }
 
+/** Play 模式暂停 / 继续。 */
+export function viewportSetPaused(id: string, paused: boolean): Promise<void> {
+  return call<void>("editor_viewport_set_paused", { id, paused });
+}
+
+/** 暂停中前进一帧。 */
+export function viewportStep(id: string): Promise<void> {
+  return call<void>("editor_viewport_step", { id });
+}
+
 /** 关闭视口并清理临时快照。 */
 export function viewportClose(id: string): Promise<boolean> {
   return call<boolean>("editor_viewport_close", { id });

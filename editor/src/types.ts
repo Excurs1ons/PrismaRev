@@ -462,6 +462,8 @@ export interface ViewportSnapshot {
   /** 实际离屏渲染分辨率（面板尺寸按上限缩放后）。 */
   width: number;
   height: number;
+  /** Play 模式是否处于暂停（单步不改变它）。 */
+  paused: boolean;
 }
 
 /** Scene view 的轨道相机（前端持有状态，整体下发）。 */

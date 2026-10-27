@@ -1501,6 +1501,8 @@ pub fn run() {
             viewport::editor_viewport_camera,
             viewport::editor_viewport_reload,
             viewport::editor_viewport_set_playing,
+            viewport::editor_viewport_set_paused,
+            viewport::editor_viewport_step,
             viewport::editor_viewport_input,
             viewport::editor_viewport_select,
             viewport::editor_viewport_pick,

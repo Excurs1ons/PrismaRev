@@ -81,6 +81,8 @@ const packageStatus = ref<ScenePackageStatus>({ exists: false, sizeBytes: 0 });
  * Play 由 Game view 的视口线程模拟（见 `components/ViewportPanel.vue`）。
  */
 const playing = ref(false);
+/** Game view 的 Play 是否暂停（暂停后画面照渲，时间停住；可单步）。 */
+const paused = ref(false);
 
 /** 编辑器首选项（本机 localStorage）。 */
 const editorPrefs = ref<EditorPreferences>(loadPreferences());
@@ -1607,6 +1609,7 @@ async function loadGameLogs() {
 async function togglePlay() {
   if (playing.value) {
     playing.value = false;
+    paused.value = false;
     status.value = "已停止";
     return;
   }
@@ -1615,8 +1618,23 @@ async function togglePlay() {
     return;
   }
   showPanelTab("gameView");
+  paused.value = false;
   playing.value = true;
   status.value = `运行场景 ${currentPath.value ?? ""}`;
+}
+
+/** 暂停 / 继续 Game view 的模拟（场景还在渲染，方便看住某一帧）。 */
+function togglePause() {
+  if (!playing.value) return;
+  paused.value = !paused.value;
+  status.value = paused.value ? "已暂停（可单步）" : "继续运行";
+}
+
+/** 暂停中前进一帧（真正的 `editor_viewport_step` 由 Game 面板按自己的 id 下发）。 */
+function stepGame() {
+  if (!playing.value) return;
+  paused.value = true;
+  status.value = "单步前进一帧";
 }
 
 // ── 项目设置 / 首选项 / 构建 ────────────────────────────────────────────────
@@ -2152,7 +2170,10 @@ onUnmounted(() => {
             :doc="doc"
             :path="currentPath"
             :playing="playing"
+            :paused="paused"
             @toggle-play="togglePlay"
+            @toggle-pause="togglePause"
+            @step="stepGame"
           />
         </template>
         <template #docs>
