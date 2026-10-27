@@ -1320,6 +1320,16 @@ function clearClipboard() {
 
 // ── 增删 ────────────────────────────────────────────────────────────────────
 
+function nextEntityId(entities: EntityJson[]): number {
+  let max = -1;
+  for (const e of entities) {
+    if (typeof e.id === "number" && e.id > max) {
+      max = e.id;
+    }
+  }
+  return max + 1;
+}
+
 function addEntity() {
   if (!doc.value) return;
   const preset = presets.value.find((p) => p.id === presetId.value);
@@ -1335,7 +1345,9 @@ function addEntity() {
         : defaults;
   }
   const entities = doc.value.entities.slice();
+  const id = nextEntityId(entities);
   entities.push({
+    id,
     name: uniqueName(preset?.name ?? "entity"),
     parent: null,
     transform: {
@@ -1355,22 +1367,17 @@ function duplicateEntity() {
   const source = doc.value.entities[sourceIndex];
   if (!source) return;
 
+  const entities = doc.value.entities.slice();
   const copy = JSON.parse(JSON.stringify(source)) as EntityJson;
+  copy.id = nextEntityId(entities);
   copy.name = uniqueName(`${source.name ?? "entity"}_copy`);
+  // 保持与源实体相同的父级 ID（parent 是实体稳定 id 而不是数组下标）。
+  copy.parent = source.parent ?? null;
 
   const insertAt = sourceIndex + 1;
-  const entities = doc.value.entities.slice();
   entities.splice(insertAt, 0, copy);
 
-  // 插入点之后的父索引整体后移一位。
-  const remapped = entities.map((entity, index) => {
-    if (index <= sourceIndex) return entity;
-    const parent = entity.parent;
-    if (parent === null || parent === undefined) return entity;
-    return { ...entity, parent: parent >= insertAt ? parent + 1 : parent };
-  });
-
-  commit({ ...doc.value, entities: remapped }, `duplicate-entity#${insertAt}`);
+  commit({ ...doc.value, entities }, `duplicate-entity#${insertAt}`);
   selection.value = [insertAt];
 }
 

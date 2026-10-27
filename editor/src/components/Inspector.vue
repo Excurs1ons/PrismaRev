@@ -278,7 +278,12 @@ const availableComponents = computed(() =>
         <div>
           <select :value="entity.parent ?? -1" @change="onParentChange">
             <option value="-1">（无父）</option>
-            <option v-for="(e, i) in entities" :key="i" :value="i" :disabled="i === index">
+            <option
+              v-for="(e, i) in entities"
+              :key="e.id ?? i"
+              :value="e.id ?? i"
+              :disabled="i === index || (e.id !== undefined && e.id === entity.id)"
+            >
               {{ e.name || `#${i}` }} · #{{ i }}
             </option>
           </select>

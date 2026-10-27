@@ -111,23 +111,33 @@ function toggle(index: number) {
   collapsed.value = next;
 }
 
+const idToIndex = computed(() => {
+  const map = new Map<number, number>();
+  props.entities.forEach((entity, index) => {
+    if (typeof entity.id === "number") {
+      map.set(entity.id, index);
+    }
+  });
+  return map;
+});
+
 const rows = computed<Row[]>(() => {
   const count = props.entities.length;
   const children: number[][] = Array.from({ length: count }, () => []);
   const roots: number[] = [];
+  const map = idToIndex.value;
 
   props.entities.forEach((entity, index) => {
-    const parent = entity.parent;
-    if (
-      parent === null ||
-      parent === undefined ||
-      parent < 0 ||
-      parent >= count ||
-      parent === index
-    ) {
+    const parentId = entity.parent;
+    if (parentId === null || parentId === undefined) {
+      roots.push(index);
+      return;
+    }
+    const parentIndex = map.get(parentId);
+    if (parentIndex === undefined || parentIndex === index) {
       roots.push(index);
     } else {
-      children[parent].push(index);
+      children[parentIndex].push(index);
     }
   });
 
@@ -163,9 +173,10 @@ const rows = computed<Row[]>(() => {
   return out;
 });
 
-function parentOf(index: number): number | null {
-  const parent = props.entities[index]?.parent;
-  return parent === null || parent === undefined ? null : parent;
+function parentIndexOf(index: number): number | null {
+  const parentId = props.entities[index]?.parent;
+  if (parentId === null || parentId === undefined) return null;
+  return idToIndex.value.get(parentId) ?? null;
 }
 
 // ── 选择 ────────────────────────────────────────────────────────────────────
@@ -281,7 +292,7 @@ function onDrop(index: number, event: DragEvent) {
     return;
   }
   const at = zone === "before" ? index : index + 1;
-  emit("move", child, at, parentOf(index));
+  emit("move", child, at, parentIndexOf(index));
 }
 
 function onRootDragOver(event: DragEvent) {

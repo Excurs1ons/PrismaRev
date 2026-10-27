@@ -159,20 +159,40 @@ fn migrate_v2_to_v3(root: &mut Map<String, Value>) {
     assign_ids(root);
 }
 
-/// 给缺 `id` 的实体按数组顺序补 `id = 下标`（幂等）。
+/// 给缺 `id` 的实体补齐 `id`（幂等）。
 ///
-/// 只补缺失的 `id`：已显式分配过的 id 不动（重复 id 由校验报错，而不是静默改号）。
+/// 若整份文档全无 `id`（如旧版 v2 迁移），按数组顺序补齐 `id = 下标`，保持与下标空间一致；
+/// 若已有部分实体存在 `id`，缺失项分配 `max(已有 id) + 1`，避免在实体删除后补号与既有 id 冲突。
 pub fn assign_ids(root: &mut Map<String, Value>) {
     let Some(entities) = root.get_mut("entities").and_then(Value::as_array_mut) else {
         return;
     };
-    for (index, entity) in entities.iter_mut().enumerate() {
+    let has_any_id = entities
+        .iter()
+        .any(|e| e.as_object().and_then(|o| o.get("id")).is_some());
+    if !has_any_id {
+        for (index, entity) in entities.iter_mut().enumerate() {
+            if let Some(entity) = entity.as_object_mut() {
+                entity.insert("id".to_string(), json!(index as u64));
+            }
+        }
+        return;
+    }
+
+    let mut next_id: u64 = entities
+        .iter()
+        .filter_map(|e| e.as_object()?.get("id")?.as_u64())
+        .max()
+        .map_or(0, |m| m + 1);
+
+    for entity in entities.iter_mut() {
         let Some(entity) = entity.as_object_mut() else {
             continue;
         };
-        entity
-            .entry("id".to_string())
-            .or_insert_with(|| json!(index as u64));
+        if !entity.contains_key("id") {
+            entity.insert("id".to_string(), json!(next_id));
+            next_id += 1;
+        }
     }
 }
 
@@ -327,6 +347,23 @@ mod tests {
     fn future_version_is_rejected() {
         let mut doc = json!({ "version": 99, "entities": [] });
         assert!(migrate_scene_doc(&mut doc).is_err());
+    }
+
+    #[test]
+    fn assign_ids_with_existing_ids_avoids_collisions() {
+        let mut doc = json!({
+            "version": 3,
+            "entities": [
+                { "id": 1, "name": "b" },
+                { "id": 2, "name": "c" },
+                { "name": "new_added" }
+            ]
+        });
+        migrate_scene_doc(&mut doc).unwrap();
+        assert_eq!(doc["entities"][0]["id"], 1);
+        assert_eq!(doc["entities"][1]["id"], 2);
+        // "new_added" at index 2 must NOT receive id 2 (which already belongs to "c")
+        assert_eq!(doc["entities"][2]["id"], 3);
     }
 
     #[test]
