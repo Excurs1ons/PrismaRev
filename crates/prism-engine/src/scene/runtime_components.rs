@@ -44,3 +44,11 @@ pub struct SpriteRef {
     /// `0` = not resolved yet; bumped on hot-reload.
     pub generation: u32,
 }
+
+/// `.scene.json` v3+ 里每个实体的稳定 id。
+///
+/// ECS [`Entity`](prism_ecs::Entity) 句柄每次加载都会重新分配，跨会话（存档恢复、
+/// 编辑器同步）匹配同一实体只能靠作者文档里的 id。加载器在 spawn 时写入这个标记；
+/// 它不参与渲染，也不进 `.scene.json`（作者文档里已经有 `id` 了）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SceneEntityId(pub u32);

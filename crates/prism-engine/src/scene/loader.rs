@@ -48,6 +48,7 @@ use prism_scene::rscn;
 use super::component_registry::ComponentRegistry;
 use super::components::*;
 use super::helpers::HierarchyHelper;
+use super::runtime_components::SceneEntityId;
 
 // ---------------------------------------------------------------------------
 // 分量 flags (must 匹配 the cooker's constants)
@@ -703,6 +704,9 @@ impl SceneLoader {
             if let Some(name) = &ej.name {
                 world.insert(entity, Name(name.clone()));
             }
+
+            // 稳定 id：`.scene.json` v3+ 的 `id`，跨会话身份（scene_state / 编辑器同步）。
+            world.insert(entity, SceneEntityId(ej.id));
 
             // Transform
             let local = LocalTransform {
