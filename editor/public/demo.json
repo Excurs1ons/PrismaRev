@@ -49,6 +49,66 @@
       "sizeBytes": 1976948
     },
     {
+      "importer": "DefaultImporter",
+      "kind": "data",
+      "path": "assets/ibr/4d50312cbd1b9ab5/cube_512.bin",
+      "sizeBytes": 25165828
+    },
+    {
+      "importer": "DefaultImporter",
+      "kind": "data",
+      "path": "assets/ibr/4d50312cbd1b9ab5/irradiance_64.bin",
+      "sizeBytes": 393220
+    },
+    {
+      "importer": "DefaultImporter",
+      "kind": "data",
+      "path": "assets/ibr/4d50312cbd1b9ab5/prefiltered_mip0.bin",
+      "sizeBytes": 1572868
+    },
+    {
+      "importer": "DefaultImporter",
+      "kind": "data",
+      "path": "assets/ibr/4d50312cbd1b9ab5/prefiltered_mip1.bin",
+      "sizeBytes": 393220
+    },
+    {
+      "importer": "DefaultImporter",
+      "kind": "data",
+      "path": "assets/ibr/4d50312cbd1b9ab5/prefiltered_mip2.bin",
+      "sizeBytes": 98308
+    },
+    {
+      "importer": "DefaultImporter",
+      "kind": "data",
+      "path": "assets/ibr/4d50312cbd1b9ab5/prefiltered_mip3.bin",
+      "sizeBytes": 24580
+    },
+    {
+      "importer": "DefaultImporter",
+      "kind": "data",
+      "path": "assets/ibr/4d50312cbd1b9ab5/prefiltered_mip4.bin",
+      "sizeBytes": 6148
+    },
+    {
+      "importer": "DefaultImporter",
+      "kind": "data",
+      "path": "assets/ibr/brdf_lut_512.bin",
+      "sizeBytes": 2097156
+    },
+    {
+      "importer": "DefaultImporter",
+      "kind": "package",
+      "path": "assets/scenes.pak",
+      "sizeBytes": 1164471
+    },
+    {
+      "importer": "TextScriptImporter",
+      "kind": "data",
+      "path": "assets/scenes.pak.meta.json",
+      "sizeBytes": 727
+    },
+    {
       "importer": "TextScriptImporter",
       "kind": "data",
       "path": "assets/scenes.toml",
@@ -82,13 +142,73 @@
       "importer": "DefaultImporter",
       "kind": "other",
       "path": "assets/shaders/compile.sh",
-      "sizeBytes": 8728
+      "sizeBytes": 9019
     },
     {
       "importer": "DefaultImporter",
       "kind": "other",
       "path": "assets/shaders/fix_spirv.py",
       "sizeBytes": 3274
+    },
+    {
+      "importer": "DefaultImporter",
+      "kind": "other",
+      "path": "assets/shaders/gi_bake.comp.spv",
+      "sizeBytes": 49584
+    },
+    {
+      "importer": "DefaultImporter",
+      "kind": "other",
+      "path": "assets/shaders/gi_render.comp.spv",
+      "sizeBytes": 44560
+    },
+    {
+      "importer": "DefaultImporter",
+      "kind": "other",
+      "path": "assets/shaders/gizmo.frag.spv",
+      "sizeBytes": 444
+    },
+    {
+      "importer": "DefaultImporter",
+      "kind": "other",
+      "path": "assets/shaders/gizmo.vert.spv",
+      "sizeBytes": 2216
+    },
+    {
+      "importer": "DefaultImporter",
+      "kind": "other",
+      "path": "assets/shaders/gtao.frag.spv",
+      "sizeBytes": 10772
+    },
+    {
+      "importer": "DefaultImporter",
+      "kind": "other",
+      "path": "assets/shaders/gtao.vert.spv",
+      "sizeBytes": 1252
+    },
+    {
+      "importer": "DefaultImporter",
+      "kind": "other",
+      "path": "assets/shaders/mesh_vert.vert.spv",
+      "sizeBytes": 4264
+    },
+    {
+      "importer": "DefaultImporter",
+      "kind": "other",
+      "path": "assets/shaders/post.frag.spv",
+      "sizeBytes": 1832
+    },
+    {
+      "importer": "DefaultImporter",
+      "kind": "other",
+      "path": "assets/shaders/post.vert.spv",
+      "sizeBytes": 1072
+    },
+    {
+      "importer": "DefaultImporter",
+      "kind": "other",
+      "path": "assets/shaders/pt_render.comp.spv",
+      "sizeBytes": 89560
     },
     {
       "importer": "TextScriptImporter",
@@ -153,8 +273,68 @@
     {
       "importer": "TextScriptImporter",
       "kind": "data",
+      "path": "assets/shaders/reflection/sprites.json",
+      "sizeBytes": 15082
+    },
+    {
+      "importer": "TextScriptImporter",
+      "kind": "data",
       "path": "assets/shaders/reflection/ui_overlay.json",
       "sizeBytes": 8877
+    },
+    {
+      "importer": "DefaultImporter",
+      "kind": "other",
+      "path": "assets/shaders/rt_preview.frag.spv",
+      "sizeBytes": 1200
+    },
+    {
+      "importer": "DefaultImporter",
+      "kind": "other",
+      "path": "assets/shaders/rt_preview.vert.spv",
+      "sizeBytes": 848
+    },
+    {
+      "importer": "DefaultImporter",
+      "kind": "other",
+      "path": "assets/shaders/rt_render.frag.spv",
+      "sizeBytes": 964
+    },
+    {
+      "importer": "DefaultImporter",
+      "kind": "other",
+      "path": "assets/shaders/rt_render.vert.spv",
+      "sizeBytes": 848
+    },
+    {
+      "importer": "DefaultImporter",
+      "kind": "other",
+      "path": "assets/shaders/scene_frag.frag.spv",
+      "sizeBytes": 45236
+    },
+    {
+      "importer": "DefaultImporter",
+      "kind": "other",
+      "path": "assets/shaders/shadow_depth.frag.spv",
+      "sizeBytes": 172
+    },
+    {
+      "importer": "DefaultImporter",
+      "kind": "other",
+      "path": "assets/shaders/shadow_depth.vert.spv",
+      "sizeBytes": 2040
+    },
+    {
+      "importer": "DefaultImporter",
+      "kind": "other",
+      "path": "assets/shaders/skybox.frag.spv",
+      "sizeBytes": 1608
+    },
+    {
+      "importer": "DefaultImporter",
+      "kind": "other",
+      "path": "assets/shaders/skybox.vert.spv",
+      "sizeBytes": 2268
     },
     {
       "importer": "TextScriptImporter",
@@ -190,7 +370,7 @@
       "importer": "TextScriptImporter",
       "kind": "other",
       "path": "assets/shaders/slang/gtao.slang",
-      "sizeBytes": 11227
+      "sizeBytes": 10979
     },
     {
       "importer": "TextScriptImporter",
@@ -208,7 +388,7 @@
       "importer": "TextScriptImporter",
       "kind": "other",
       "path": "assets/shaders/slang/post.slang",
-      "sizeBytes": 2660
+      "sizeBytes": 2853
     },
     {
       "importer": "TextScriptImporter",
@@ -249,8 +429,38 @@
     {
       "importer": "TextScriptImporter",
       "kind": "other",
+      "path": "assets/shaders/slang/sprites.slang",
+      "sizeBytes": 4400
+    },
+    {
+      "importer": "TextScriptImporter",
+      "kind": "other",
       "path": "assets/shaders/slang/ui_overlay.slang",
       "sizeBytes": 2173
+    },
+    {
+      "importer": "DefaultImporter",
+      "kind": "other",
+      "path": "assets/shaders/sprites.frag.spv",
+      "sizeBytes": 1436
+    },
+    {
+      "importer": "DefaultImporter",
+      "kind": "other",
+      "path": "assets/shaders/sprites.vert.spv",
+      "sizeBytes": 2980
+    },
+    {
+      "importer": "DefaultImporter",
+      "kind": "other",
+      "path": "assets/shaders/ui_overlay.frag.spv",
+      "sizeBytes": 844
+    },
+    {
+      "importer": "DefaultImporter",
+      "kind": "other",
+      "path": "assets/shaders/ui_overlay.vert.spv",
+      "sizeBytes": 756
     },
     {
       "importer": "TextureImporter",
@@ -1806,6 +2016,95 @@
       },
       {
         "defaultJson": {
+          "color": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "order_in_layer": 0,
+          "points": [],
+          "sorting_layer": 0,
+          "width": 0.10000000149011612
+        },
+        "fields": [
+          {
+            "arrayLen": null,
+            "inner": {
+              "arrayLen": 3,
+              "inner": {
+                "arrayLen": null,
+                "inner": null,
+                "kind": "f32",
+                "name": "",
+                "readOnly": false,
+                "structType": null,
+                "variants": null
+              },
+              "kind": "array",
+              "name": "",
+              "readOnly": false,
+              "structType": null,
+              "variants": null
+            },
+            "kind": "list",
+            "name": "points",
+            "readOnly": false,
+            "structType": null,
+            "variants": null
+          },
+          {
+            "arrayLen": 4,
+            "inner": {
+              "arrayLen": null,
+              "inner": null,
+              "kind": "f32",
+              "name": "",
+              "readOnly": false,
+              "structType": null,
+              "variants": null
+            },
+            "kind": "array",
+            "name": "color",
+            "readOnly": false,
+            "structType": null,
+            "variants": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "f32",
+            "name": "width",
+            "readOnly": false,
+            "structType": null,
+            "variants": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "i32",
+            "name": "sorting_layer",
+            "readOnly": false,
+            "structType": null,
+            "variants": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "i32",
+            "name": "order_in_layer",
+            "readOnly": false,
+            "structType": null,
+            "variants": null
+          }
+        ],
+        "isComponent": true,
+        "name": "prism_engine::scene::LineRenderer",
+        "typeId": "8583daf5c2b2d2ae",
+        "version": 1
+      },
+      {
+        "defaultJson": {
           "blend_op": "Add",
           "cull_mode": "Back",
           "dst_blend": "Zero",
@@ -2168,6 +2467,211 @@
         "isComponent": true,
         "name": "prism_engine::scene::SpotLight",
         "typeId": "4c3ca4800691ceb9",
+        "version": 1
+      },
+      {
+        "defaultJson": {
+          "fps": 12.0,
+          "frames": 0,
+          "looped": true,
+          "phase": 0.0,
+          "playing": true
+        },
+        "fields": [
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "u32",
+            "name": "frames",
+            "readOnly": false,
+            "structType": null,
+            "variants": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "f32",
+            "name": "fps",
+            "readOnly": false,
+            "structType": null,
+            "variants": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "bool",
+            "name": "looped",
+            "readOnly": false,
+            "structType": null,
+            "variants": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "bool",
+            "name": "playing",
+            "readOnly": false,
+            "structType": null,
+            "variants": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "f32",
+            "name": "phase",
+            "readOnly": false,
+            "structType": null,
+            "variants": null
+          }
+        ],
+        "isComponent": true,
+        "name": "prism_engine::scene::SpriteAnimation",
+        "typeId": "5d03e63a40ea369c",
+        "version": 1
+      },
+      {
+        "defaultJson": {
+          "color": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "flip_x": false,
+          "flip_y": false,
+          "frame_index": 0,
+          "frame_size": [
+            0,
+            0
+          ],
+          "order_in_layer": 0,
+          "pivot": [
+            0.5,
+            0.5
+          ],
+          "pixels_per_unit": 100.0,
+          "sorting_layer": 0,
+          "sprite_path": ""
+        },
+        "fields": [
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "string",
+            "name": "sprite_path",
+            "readOnly": false,
+            "structType": null,
+            "variants": null
+          },
+          {
+            "arrayLen": 2,
+            "inner": {
+              "arrayLen": null,
+              "inner": null,
+              "kind": "u32",
+              "name": "",
+              "readOnly": false,
+              "structType": null,
+              "variants": null
+            },
+            "kind": "array",
+            "name": "frame_size",
+            "readOnly": false,
+            "structType": null,
+            "variants": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "u32",
+            "name": "frame_index",
+            "readOnly": false,
+            "structType": null,
+            "variants": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "f32",
+            "name": "pixels_per_unit",
+            "readOnly": false,
+            "structType": null,
+            "variants": null
+          },
+          {
+            "arrayLen": 2,
+            "inner": {
+              "arrayLen": null,
+              "inner": null,
+              "kind": "f32",
+              "name": "",
+              "readOnly": false,
+              "structType": null,
+              "variants": null
+            },
+            "kind": "array",
+            "name": "pivot",
+            "readOnly": false,
+            "structType": null,
+            "variants": null
+          },
+          {
+            "arrayLen": 4,
+            "inner": {
+              "arrayLen": null,
+              "inner": null,
+              "kind": "f32",
+              "name": "",
+              "readOnly": false,
+              "structType": null,
+              "variants": null
+            },
+            "kind": "array",
+            "name": "color",
+            "readOnly": false,
+            "structType": null,
+            "variants": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "bool",
+            "name": "flip_x",
+            "readOnly": false,
+            "structType": null,
+            "variants": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "bool",
+            "name": "flip_y",
+            "readOnly": false,
+            "structType": null,
+            "variants": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "i32",
+            "name": "sorting_layer",
+            "readOnly": false,
+            "structType": null,
+            "variants": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "i32",
+            "name": "order_in_layer",
+            "readOnly": false,
+            "structType": null,
+            "variants": null
+          }
+        ],
+        "isComponent": true,
+        "name": "prism_engine::scene::SpriteRenderer",
+        "typeId": "c31c3d38fb43c875",
         "version": 1
       },
       {
