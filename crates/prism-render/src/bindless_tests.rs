@@ -39,3 +39,117 @@ fn register_with_handle_advances_next_pointer() {
     let next_slot = s.next;
     assert_eq!(next_slot, 1, "register_with_handle must advance next");
 }
+
+// --- SlotAllocator (pure slot bookkeeping, no Vulkan device needed) ---
+
+#[test]
+fn slot_allocator_bumps_then_reuses_released_slots_lifo() {
+    let mut slots = SlotAllocator::new(4);
+    assert_eq!(slots.claim().unwrap(), 0);
+    assert_eq!(slots.claim().unwrap(), 1);
+    assert_eq!(slots.claim().unwrap(), 2);
+    assert_eq!(slots.live_len(), 3);
+
+    // Released slots are reused before the bump pointer advances.
+    assert!(slots.release(1));
+    assert_eq!(slots.live_len(), 2);
+    assert_eq!(slots.claim().unwrap(), 1);
+    assert_eq!(slots.live_len(), 3);
+    assert_eq!(slots.free_slot_count(), 0);
+
+    assert!(slots.release(2));
+    assert!(slots.release(0));
+    // LIFO: the most recently released slot comes back first.
+    assert_eq!(slots.claim().unwrap(), 0);
+    assert_eq!(slots.claim().unwrap(), 2);
+    assert_eq!(slots.claim().unwrap(), 3);
+}
+
+#[test]
+fn slot_allocator_reports_released_slots_as_unused() {
+    let mut slots = SlotAllocator::new(2);
+    let slot = slots.claim().unwrap();
+    assert!(slots.is_used(slot));
+    assert!(slots.release(slot));
+    assert!(!slots.is_used(slot));
+    // Never-claimed slots are unused too.
+    assert!(!slots.is_used(1));
+    assert!(!slots.is_used(99));
+}
+
+#[test]
+fn slot_allocator_rejects_double_release_and_unclaimed_release() {
+    let mut slots = SlotAllocator::new(2);
+    assert!(!slots.release(0), "never-claimed slot must not be released");
+    let slot = slots.claim().unwrap();
+    assert!(slots.release(slot));
+    assert!(!slots.release(slot), "double release must be rejected");
+    // A rejected release must not widen the pool: the slot is handed out once.
+    assert_eq!(slots.claim().unwrap(), slot);
+    assert_eq!(slots.free_slot_count(), 0);
+}
+
+#[test]
+fn slot_allocator_claim_at_advances_high_water_mark() {
+    let mut slots = SlotAllocator::new(8);
+    assert_eq!(slots.claim_at(3).unwrap(), 3);
+    assert_eq!(slots.live_len(), 1);
+    // Slots below the high-water mark stay bumpable-to, not reusable.
+    assert_eq!(slots.claim().unwrap(), 4);
+    assert!(slots.is_used(3));
+    assert!(!slots.is_used(0));
+}
+
+#[test]
+fn slot_allocator_claim_at_reclaims_a_released_slot() {
+    let mut slots = SlotAllocator::new(4);
+    let slot = slots.claim().unwrap();
+    assert!(slots.release(slot));
+    assert_eq!(slots.free_slot_count(), 1);
+    assert_eq!(slots.claim_at(slot).unwrap(), slot);
+    assert_eq!(
+        slots.free_slot_count(),
+        0,
+        "claim_at must consume the free entry"
+    );
+    assert_eq!(
+        slots.live_len(),
+        1,
+        "re-claiming a released slot must not double count"
+    );
+}
+
+#[test]
+fn slot_allocator_claim_fails_when_capacity_is_exhausted() {
+    let mut slots = SlotAllocator::new(2);
+    assert_eq!(slots.claim().unwrap(), 0);
+    assert_eq!(slots.claim().unwrap(), 1);
+    let err = slots.claim().unwrap_err().to_string();
+    assert!(err.contains("table full"), "unexpected error: {err}");
+    // Freeing one slot makes room again.
+    assert!(slots.release(0));
+    assert_eq!(slots.claim().unwrap(), 0);
+    assert!(slots.claim().is_err());
+}
+
+#[test]
+fn slot_allocator_rejects_slots_at_or_past_capacity() {
+    let mut slots = SlotAllocator::new(2);
+    assert!(slots.claim_at(2).is_err());
+    assert!(slots.claim_at(u32::MAX).is_err());
+    assert_eq!(slots.live_len(), 0);
+}
+
+#[test]
+fn slot_allocator_empty_and_capacity_accessors() {
+    let mut slots = SlotAllocator::new(3);
+    assert!(slots.is_empty());
+    assert_eq!(slots.capacity(), 3);
+    let slot = slots.claim().unwrap();
+    assert!(!slots.is_empty());
+    assert!(slots.release(slot));
+    assert!(
+        slots.is_empty(),
+        "releasing every slot makes it empty again"
+    );
+}
