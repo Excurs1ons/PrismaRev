@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 
+mod pick;
 mod viewport;
 
 use prism_editor_api::{
@@ -1500,6 +1501,8 @@ pub fn run() {
             viewport::editor_viewport_reload,
             viewport::editor_viewport_set_playing,
             viewport::editor_viewport_input,
+            viewport::editor_viewport_select,
+            viewport::editor_viewport_pick,
             viewport::editor_viewport_stats,
             viewport::editor_viewport_close,
         ])

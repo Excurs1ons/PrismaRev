@@ -455,20 +455,23 @@ impl App {
     /// 从松散的 `.scene.json` 重新加载场景（宿主 / 编辑器）。
     ///
     /// 会重建 engine 与资源解析器：实体 id 与 GPU 句柄不能跨场景复用。
-    /// 返回生成的实体数。
-    pub fn load_scene_json_file(&mut self, path: &Path) -> Result<usize, String> {
+    /// 返回**文档顺序**的实体表（与 `.scene.json` 的 `entities` 下标一一对应）。
+    pub fn load_scene_json_file(
+        &mut self,
+        path: &Path,
+    ) -> Result<Vec<prism_engine::ecs::Entity>, String> {
         self.sync_render_thread();
         self.engine = Some(Engine::empty());
         self.asset_resolver = GpuAssetResolver::new();
         self.asset_resolver.load_resource_package();
         let engine = self.engine.as_mut().expect("engine just re-created");
-        let count = engine.load_scene_json_file(path)?;
+        let entities = engine.load_scene_json_file(path)?;
         engine.runtime_initialize();
 
         self.last_frame = None;
         self.fixed_accumulator = Duration::ZERO;
         self.apply_scene_environment();
-        Ok(count)
+        Ok(entities)
     }
 
     /// 把场景 `Skybox` 指向的 HDR 交给渲染线程重建 IBL。

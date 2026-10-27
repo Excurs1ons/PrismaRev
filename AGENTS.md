@@ -154,6 +154,14 @@ deviating from those conventions is a bug. (`README.md` is the human-facing over
     - Scene view 是编辑态：不跑 `Engine::update`，只传播层级；叠加一台 `depth = 1000`
       的编辑器相机（轨道控制由前端持有后整体下发）。Game view 用文档相机，Play 时
       才跑完整模拟。改 `scene/` 的相机选择或清屏规则前先看这里。
+    - 点选（`editor/src-tauri/src/pick.rs`）：屏幕像素 → 世界射线（与
+      `compute_camera_output` 同一套透视 / y-flip 约定），与实体的**局部单位立方体**
+      `[-0.5,0.5]³` × 世界矩阵求交，取最近命中。引擎没有 CPU 侧网格包围盒，这是
+      不改资产格式的折中（对编辑器模板基本体是精确的，对导入网格是近似）。
+      `Engine::load_scene_json_file` 返回**文档顺序**的实体表，所以命中的下标可以
+      直接当作 `.scene.json` 的 `entities[i]`，与层级 / 检查器的选择共用。
+    - 选中高亮复用引擎已有的 `Gizmo` 组件（世界坐标轴三色箭头，标记实体由视口
+      线程创建，`enabled` 控制显隐），不引入「描边 / 选中框」这种渲染侧编辑器概念。
     - 不要在 `prism-app` / `prism-engine` 里加视口/面板概念；它们只提供
       「离屏渲染 + 帧读回」这一层通用能力。
 - `projects/prisma/` — 用户游戏项目（package/crate `prisma`；`prisma` 桌面二进制 + Android

@@ -33,7 +33,7 @@ fn hosted_viewport_renders_a_frame_from_a_loose_scene_json() {
     let entities = app
         .load_scene_json_file(&scene)
         .expect("松散 .scene.json 应该能加载");
-    assert!(entities > 0, "场景里应该至少有一个实体");
+    assert!(!entities.is_empty(), "场景里应该至少有一个实体");
 
     app.start_hosted(320, 180);
 

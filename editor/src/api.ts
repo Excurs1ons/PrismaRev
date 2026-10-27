@@ -682,6 +682,18 @@ export function viewportStats(id: string): Promise<ViewportSnapshot | null> {
   return call<ViewportSnapshot | null>("editor_viewport_stats", { id });
 }
 
+/** 高亮选中项（`index` = 文档 `entities` 下标；`null` = 取消选中）。 */
+export function viewportSelect(id: string, index: number | null): Promise<void> {
+  return call<void>("editor_viewport_select", { id, index });
+}
+
+/**
+ * 场景视图点选：`x` / `y` 是 canvas 位图坐标（左上原点），返回命中的实体下标。
+ */
+export function viewportPick(id: string, x: number, y: number): Promise<number | null> {
+  return call<number | null>("editor_viewport_pick", { id, x, y });
+}
+
 /** 关闭视口并清理临时快照。 */
 export function viewportClose(id: string): Promise<boolean> {
   return call<boolean>("editor_viewport_close", { id });

@@ -22,9 +22,15 @@ const props = defineProps<{
   path: string | null;
   /** Game view 的 Play 状态（由工具栏统一控制）。 */
   playing?: boolean;
+  /** 当前选中项（文档 `entities` 下标，与层级 / 检查器共用）。 */
+  selection?: number[];
 }>();
 
-const emit = defineEmits<{ (event: "toggle-play"): void }>();
+const emit = defineEmits<{
+  (event: "toggle-play"): void;
+  /** 在场景视图里点选：`null` = 点空处（取消选中）。 */
+  (event: "select", index: number | null): void;
+}>();
 
 const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -86,6 +92,7 @@ async function open() {
       isScene.value ? orbit.value : undefined,
       !isScene.value && props.playing,
     );
+    pushSelection();
     // 第一帧到达时 drawFrame 才切到 live：渲染器还在建管线时先保留 loading 浮层，
     // 否则会先闪一段黑屏。
   } catch (error) {
@@ -167,6 +174,8 @@ function scheduleReload() {
 
 let dragMode: "orbit" | "pan" | null = null;
 let lastPointer = { x: 0, y: 0 };
+/** 判定「点选」还是「拖动相机」：按下位置 + 时间。 */
+let clickStart: { x: number; y: number; at: number } | null = null;
 
 /** 相机变更按 rAF 合并：拖动时每帧最多下发一次。 */
 function pushCamera() {
@@ -192,6 +201,7 @@ function onPointerDown(event: PointerEvent) {
       return;
     }
     lastPointer = { x: event.clientX, y: event.clientY };
+    clickStart = event.button === 0 ? { x: event.clientX, y: event.clientY, at: Date.now() } : null;
     canvas.setPointerCapture(event.pointerId);
     event.preventDefault();
     return;
@@ -237,9 +247,50 @@ function onPointerUp(event: PointerEvent) {
   if (isScene.value) {
     dragMode = null;
     canvasEl.value?.releasePointerCapture(event.pointerId);
+    const start = clickStart;
+    clickStart = null;
+    // 左键按下后几乎没有移动 = 点选（拖动是轨道旋转，不改变选中项）。
+    if (
+      start &&
+      event.button === 0 &&
+      Date.now() - start.at < 400 &&
+      Math.abs(event.clientX - start.x) < 4 &&
+      Math.abs(event.clientY - start.y) < 4
+    ) {
+      void pickAt(event);
+    }
     return;
   }
   void sendInput({ type: "mouseButton", button: event.button, pressed: false });
+}
+
+/**
+ * 点选：把 CSS 坐标换算到 canvas **位图**坐标再交给后端。
+ *
+ * canvas 的宽高就是后端实际渲染分辨率（已按 1600×900 上限缩过），所以按比例换算，
+ * 不依赖 devicePixelRatio。
+ */
+async function pickAt(event: PointerEvent) {
+  const canvas = canvasEl.value;
+  if (!canvas || !inTauri || !channel || canvas.width === 0) return;
+  const rect = canvas.getBoundingClientRect();
+  if (rect.width === 0 || rect.height === 0) return;
+  const x = ((event.clientX - rect.left) / rect.width) * canvas.width;
+  const y = ((event.clientY - rect.top) / rect.height) * canvas.height;
+  const hit = await api.viewportPick(viewId, x, y).catch(() => undefined);
+  if (hit === undefined) return;
+  emit("select", hit ?? null);
+}
+
+/** 主选中项：多选时与层级一样取最后一个。 */
+function primarySelection(): number | null {
+  const selection = props.selection;
+  return selection && selection.length ? selection[selection.length - 1] : null;
+}
+
+function pushSelection() {
+  if (!inTauri || !channel || !isScene.value) return;
+  void api.viewportSelect(viewId, primarySelection()).catch(() => undefined);
 }
 
 function onWheel(event: WheelEvent) {
@@ -316,6 +367,7 @@ watch(
     await open();
   },
 );
+watch(() => props.selection, pushSelection);
 watch(
   () => props.playing,
   (playing) => {
