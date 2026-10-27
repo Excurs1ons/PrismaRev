@@ -203,7 +203,7 @@ impl ScreenshotCapture {
             vk::Format::B8G8R8A8_SRGB | vk::Format::B8G8R8A8_UNORM
         );
         if bgra {
-            for texel in pixels.chunks_exact_mut(4) {
+            for texel in pixels.as_chunks_mut::<4>().0 {
                 texel.swap(0, 2);
             }
         }
