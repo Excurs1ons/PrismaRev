@@ -112,10 +112,11 @@ pub struct ForwardPass {
     /// 集合 1 布局 (from `BindlessTextureTable::layout`). Borrowed for
     /// pipeline-layout creation; not destroyed by ForwardPass.
     bindless_layout: vk::DescriptorSetLayout,
-    /// 光源 SSBO 集合 0 绑定 2): host-visible 缓冲区 holding 上 to
-    /// `LIGHT_MAX` hard-coded point lights. Shared across all 帧 sets.
-    light_buffer: vk::Buffer,
-    light_memory: vk::DeviceMemory,
+    /// 光源 SSBO (集合 0 绑定 2): host-visible 缓冲区 holding up to
+    /// `LIGHT_MAX` hard-coded point lights. One per frame-in-flight to avoid
+    /// tearing and race conditions between concurrent in-flight frames.
+    light_buffers: Vec<vk::Buffer>,
+    light_memories: Vec<vk::DeviceMemory>,
     /// 集合 4 - previous-frame GTAO R8 可见性 纹理 (combined 图像
     /// 采样器 One 描述符 集合 per frame-in-flight so updating the 环境光遮蔽
     /// 视图 for 帧 N doesn't disturb 帧 N-1's still-in-flight 集合
@@ -186,8 +187,8 @@ impl ForwardPass {
             frame_set_pool: None,
             bindless_set: vk::DescriptorSet::null(),
             bindless_layout: vk::DescriptorSetLayout::null(),
-            light_buffer: vk::Buffer::null(),
-            light_memory: vk::DeviceMemory::null(),
+            light_buffers: Vec::new(),
+            light_memories: Vec::new(),
             ao_ds_layout: None,
             ao_descriptor_sets: Vec::new(),
             ao_ds_pool: None,
@@ -422,13 +423,15 @@ impl ForwardPass {
         }
         self.shadow_descriptor_set = vk::DescriptorSet::null();
         // 光源 SSBO.
-        if self.light_buffer != vk::Buffer::null() {
-            unsafe { device.destroy_buffer(self.light_buffer, None) };
-            self.light_buffer = vk::Buffer::null();
+        for buf in self.light_buffers.drain(..) {
+            if buf != vk::Buffer::null() {
+                unsafe { device.destroy_buffer(buf, None) };
+            }
         }
-        if self.light_memory != vk::DeviceMemory::null() {
-            unsafe { device.free_memory(self.light_memory, None) };
-            self.light_memory = vk::DeviceMemory::null();
+        for mem in self.light_memories.drain(..) {
+            if mem != vk::DeviceMemory::null() {
+                unsafe { device.free_memory(mem, None) };
+            }
         }
         // Skybox pass (its own 管线 + set-2 布局
         self.skybox.destroy(device);
@@ -567,60 +570,71 @@ impl ForwardPass {
         }
         .context("ForwardPass: allocate set0 sets")?;
 
-        // ---- 光源 SSBO 绑定 2) ----
-        // 创建 a host-visible, coherent 缓冲区 for 上 to `LIGHT_MAX` point
-        // lights. Shared across all 帧 sets. The 缓冲区 is zero-initialized
-        // here; `ForwardPass::update_lights` rewrites the contents every 帧
-        // from the ECS `PointLight` 查询 (see `render_system`).
+        // ---- 光源 SSBO (绑定 2) ----
+        // 创建 host-visible, coherent 缓冲区 for up to `LIGHT_MAX` point
+        // lights, one per frame-in-flight to avoid tearing and data races.
+        // The 缓冲区 is zero-initialized here; `ForwardPass::update_lights`
+        // rewrites the contents every frame from the ECS `PointLight` 查询 (see `render_system`).
         let light_ssbo_size = (crate::descriptor::LIGHT_MAX as vk::DeviceSize)
             * crate::descriptor::GPU_LIGHT_SIZE as vk::DeviceSize;
-        let (light_buffer, light_memory) = crate::buffer::create_buffer(
-            context,
-            light_ssbo_size,
-            crate::buffer::BufferUsage::STORAGE_BUFFER,
-            crate::buffer::MemoryProperties::HOST_VISIBLE
-                | crate::buffer::MemoryProperties::HOST_COHERENT,
-        )
-        .context("ForwardPass: create light SSBO buffer")?;
-
-        // Zero-initialize so the 第一个 帧 (before any `update_lights` 调用
-        // doesn't 读取 garbage.
-        let light_ptr = unsafe {
-            device.map_memory(
-                light_memory,
-                0,
+        let mut new_light_buffers = Vec::with_capacity(fif_count);
+        let mut new_light_memories = Vec::with_capacity(fif_count);
+        for _ in 0..fif_count {
+            let (buf, mem) = crate::buffer::create_buffer(
+                context,
                 light_ssbo_size,
-                vk::MemoryMapFlags::empty(),
+                crate::buffer::BufferUsage::STORAGE_BUFFER,
+                crate::buffer::MemoryProperties::HOST_VISIBLE
+                    | crate::buffer::MemoryProperties::HOST_COHERENT,
             )
+            .context("ForwardPass: create light SSBO buffer")?;
+
+            // Zero-initialize so the 第一个 帧 (before any `update_lights` 调用)
+            // doesn't 读取 garbage.
+            let light_ptr =
+                unsafe { device.map_memory(mem, 0, light_ssbo_size, vk::MemoryMapFlags::empty()) }
+                    .context("ForwardPass: map light SSBO memory")?;
+            unsafe {
+                std::ptr::write_bytes(light_ptr as *mut u8, 0, light_ssbo_size as usize);
+            }
+            unsafe { device.unmap_memory(mem) };
+
+            new_light_buffers.push(buf);
+            new_light_memories.push(mem);
         }
-        .context("ForwardPass: map light SSBO memory")?;
-        unsafe {
-            std::ptr::write_bytes(light_ptr as *mut u8, 0, light_ssbo_size as usize);
-        }
-        unsafe { device.unmap_memory(light_memory) };
 
         // 销毁 old 光源 缓冲区 if any.
-        if self.light_buffer != vk::Buffer::null() {
-            unsafe { device.destroy_buffer(self.light_buffer, None) };
+        for buf in self.light_buffers.drain(..) {
+            if buf != vk::Buffer::null() {
+                unsafe { device.destroy_buffer(buf, None) };
+            }
         }
-        if self.light_memory != vk::DeviceMemory::null() {
-            unsafe { device.free_memory(self.light_memory, None) };
+        for mem in self.light_memories.drain(..) {
+            if mem != vk::DeviceMemory::null() {
+                unsafe { device.free_memory(mem, None) };
+            }
         }
-        self.light_buffer = light_buffer;
-        self.light_memory = light_memory;
+        self.light_buffers = new_light_buffers;
+        self.light_memories = new_light_memories;
 
         // 写入 each 集合 绑定 0 = this frame's UBO, 绑定 1 = materials SSBO,
-        // 绑定 2 = 光源 SSBO.
+        // 绑定 2 = this frame's 光源 SSBO.
         let ubo_size = std::mem::size_of::<crate::descriptor::FrameUBOData>() as vk::DeviceSize;
         let mat_ssbo_size = vk::WHOLE_SIZE; // SSBO: whole buffer is fine.
         let mat_info = vk::DescriptorBufferInfo::default()
             .buffer(materials_buffer)
             .offset(0)
             .range(mat_ssbo_size);
-        let light_info = vk::DescriptorBufferInfo::default()
-            .buffer(light_buffer)
-            .offset(0)
-            .range(vk::WHOLE_SIZE);
+        let light_infos: Vec<vk::DescriptorBufferInfo> = self
+            .light_buffers
+            .iter()
+            .map(|buf| {
+                vk::DescriptorBufferInfo::default()
+                    .buffer(*buf)
+                    .offset(0)
+                    .range(vk::WHOLE_SIZE)
+            })
+            .collect();
         // Collect all per-frame UBO infos 第一个 so the `writes` 切片
         // references below don't conflict with mutating `ubo_infos`.
         let ubo_infos: Vec<vk::DescriptorBufferInfo> = frame_ubo_buffers
@@ -653,7 +667,7 @@ impl ForwardPass {
                     .dst_set(*set)
                     .dst_binding(2)
                     .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                    .buffer_info(std::slice::from_ref(&light_info)),
+                    .buffer_info(std::slice::from_ref(&light_infos[i])),
             );
         }
         unsafe { device.update_descriptor_sets(&writes, &[]) };
@@ -965,48 +979,69 @@ impl ForwardPass {
         [self.out_color_h, self.out_normal_h, self.out_depth_h]
     }
 
-    /// Rewrite the point-light SSBO from a fresh `&[GpuLight]` 切片 Called
-    /// every 帧 from `GraphRenderer::render` with the lights collected by
-    /// `render_system` from the ECS 世界 Unused slots (between `lights.len()`
-    /// and `LIGHT_MAX`) are zeroed so the 着色器 doesn't 读取 stale data.
+    /// Clamp light count to `LIGHT_MAX` to avoid buffer overflow.
+    #[inline]
+    pub const fn clamped_light_count(raw_count: usize) -> usize {
+        let max = crate::descriptor::LIGHT_MAX as usize;
+        if raw_count > max {
+            max
+        } else {
+            raw_count
+        }
+    }
+
+    /// Rewrite the point-light SSBO for this frame from a fresh `&[GpuLight]` slice.
+    /// Called every frame from `ForwardPass::execute` with the lights collected by
+    /// `render_system` from the ECS world. Unused slots (between `lights.len()`
+    /// and `LIGHT_MAX`) are zeroed so the shader doesn't read stale data.
     ///
-    /// The 缓冲区 is `HOST_VISIBLE | HOST_COHERENT`, so this is a plain 映射表 +
-    /// 复制 + unmap. Safe to 调用 before the SSBO is 第一个 bound (the 描述符
-    /// points at the same 缓冲区 regardless of its contents).
+    /// Copies at most `LIGHT_MAX` lights to avoid buffer overflow if more lights are present.
+    /// Uses the SSBO dedicated to `frame_index` to prevent data races across frames in flight.
+    ///
+    /// The buffer is `HOST_VISIBLE | HOST_COHERENT`, so this is a plain map +
+    /// copy + unmap. Safe to call before the SSBO is first bound (the descriptor
+    /// points at the same buffer regardless of its contents).
     pub fn update_lights(
         &mut self,
         device: &ash::Device,
+        frame_index: u32,
         lights: &[crate::descriptor::GpuLight],
     ) -> Result<()> {
-        if self.light_memory == vk::DeviceMemory::null() {
+        if self.light_memories.is_empty() {
             // SSBO not allocated yet (set_resources not called). Nothing to do;
-            // the 第一个 帧 after set_resources will see zeros.
+            // the first frame after set_resources will see zeros.
+            return Ok(());
+        }
+        let mem = self.light_memories[(frame_index as usize) % self.light_memories.len()];
+        if mem == vk::DeviceMemory::null() {
             return Ok(());
         }
         let total_bytes =
             (crate::descriptor::LIGHT_MAX as usize) * crate::descriptor::GPU_LIGHT_SIZE;
         let ptr = unsafe {
             device.map_memory(
-                self.light_memory,
+                mem,
                 0,
                 total_bytes as vk::DeviceSize,
                 vk::MemoryMapFlags::empty(),
             )
         }
         .context("ForwardPass::update_lights: map")?;
-        // 零 the whole 缓冲区 then 复制 in the 激活 lights. Cheaper than
-        // tracking which slots changed, and keeps unused slots well-defined.
+        // Zero the whole buffer then copy in the active lights up to LIGHT_MAX.
+        // Cheaper than tracking which slots changed, and keeps unused slots well-defined.
+        let count = Self::clamped_light_count(lights.len());
+        let copy_bytes = count * crate::descriptor::GPU_LIGHT_SIZE;
         unsafe {
             std::ptr::write_bytes(ptr as *mut u8, 0, total_bytes);
-            if !lights.is_empty() {
+            if copy_bytes > 0 {
                 std::ptr::copy_nonoverlapping(
                     lights.as_ptr() as *const u8,
                     ptr as *mut u8,
-                    std::mem::size_of_val(lights),
+                    copy_bytes,
                 );
             }
         }
-        unsafe { device.unmap_memory(self.light_memory) };
+        unsafe { device.unmap_memory(mem) };
         Ok(())
     }
     fn ensure_render_pass(&mut self, context: &crate::context::VulkanContext) -> Result<()> {
@@ -1322,7 +1357,7 @@ impl RenderPassNode for ForwardPass {
         // point-light SSBO from the ECS-collected lights for this 帧
         self.ensure_target(ctx.device, ctx.context, ctx.image_index, ctx.extent)?;
         self.set_ao(ctx.device, ctx.frame_index, ctx.frame.ao_view);
-        self.update_lights(ctx.device, ctx.frame.lights)?;
+        self.update_lights(ctx.device, ctx.frame_index, ctx.frame.lights)?;
 
         self.ensure_render_pass(ctx.context)?;
         // 录制命令前把本帧需要的管线状态收集齐（不透明默认状态永远需要：
@@ -1712,11 +1747,15 @@ impl Drop for ForwardPass {
                 unsafe { device.destroy_descriptor_pool(pool, None) };
             }
             // 光源 SSBO.
-            if self.light_buffer != vk::Buffer::null() {
-                unsafe { device.destroy_buffer(self.light_buffer, None) };
+            for buf in self.light_buffers.drain(..) {
+                if buf != vk::Buffer::null() {
+                    unsafe { device.destroy_buffer(buf, None) };
+                }
             }
-            if self.light_memory != vk::DeviceMemory::null() {
-                unsafe { device.free_memory(self.light_memory, None) };
+            for mem in self.light_memories.drain(..) {
+                if mem != vk::DeviceMemory::null() {
+                    unsafe { device.free_memory(mem, None) };
+                }
             }
             // Skybox pass (its own 管线 + set-2 布局
             self.skybox.destroy(&device);
@@ -1751,4 +1790,34 @@ fn color_blend_attachments(state: DrawState) -> [vk::PipelineColorBlendAttachmen
             .color_write_mask(vk::ColorComponentFlags::RGBA)
             .blend_enable(false),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clamped_light_count_clamps_to_light_max() {
+        assert_eq!(ForwardPass::clamped_light_count(0), 0);
+        assert_eq!(ForwardPass::clamped_light_count(1), 1);
+        assert_eq!(
+            ForwardPass::clamped_light_count(crate::descriptor::LIGHT_MAX as usize),
+            crate::descriptor::LIGHT_MAX as usize
+        );
+        assert_eq!(
+            ForwardPass::clamped_light_count(crate::descriptor::LIGHT_MAX as usize + 1),
+            crate::descriptor::LIGHT_MAX as usize
+        );
+        assert_eq!(
+            ForwardPass::clamped_light_count(100),
+            crate::descriptor::LIGHT_MAX as usize
+        );
+    }
+
+    #[test]
+    fn forward_pass_initializes_empty_light_resources() {
+        let pass = ForwardPass::new(vk::Format::B8G8R8A8_UNORM);
+        assert!(pass.light_buffers.is_empty());
+        assert!(pass.light_memories.is_empty());
+    }
 }
