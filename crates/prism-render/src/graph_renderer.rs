@@ -228,6 +228,10 @@ pub struct GraphRenderer {
     /// Offscreen 目标 for headless 众数 — owned device-local 图像 +
     /// host-visible staging 缓冲区 `None` in windowed 众数
     offscreen: Option<OffscreenTarget>,
+    /// 已预约、尚未在 `execute` 里落地的截图请求。
+    pending_screenshot: Option<crate::screenshot::ScreenshotRequest>,
+    /// 已经记录进命令缓冲区、等待帧提交后读回的截图。
+    screenshot: Option<crate::screenshot::ScreenshotCapture>,
 
     // ── 最后一个 field ──────────────────────────────────────────────────
     /// Long-lived GPU session 设备 命令 池 descriptors, UBOs).
@@ -460,6 +464,8 @@ impl GraphRenderer {
             ui_overlay: None,
             is_headless: false,
             offscreen: None,
+            pending_screenshot: None,
+            screenshot: None,
         })
     }
     // -------------------------------------------------------------------
@@ -633,6 +639,8 @@ impl GraphRenderer {
             external_overlay: None,
             ui_overlay: None,
             is_headless: true,
+            pending_screenshot: None,
+            screenshot: None,
             offscreen: Some(offscreen),
         })
     }
@@ -1606,6 +1614,36 @@ impl GraphRenderer {
             // 无叠加：image 已是 PRESENT_SRC_KHR，即展示布局，无需转换。
         }
 
+        // --- 截图：交换链图像 → host-visible 缓冲区 ---
+        //
+        // 必须放在图像回到 PRESENT_SRC_KHR 之后、`end_command_buffer` 之前：
+        // 拷贝本身需要 TRANSFER_SRC_OPTIMAL，记录完再转回展示布局。
+        if record.is_ok() {
+            if let Some(request) = self.pending_screenshot.take() {
+                let capture = crate::screenshot::ScreenshotCapture::new(
+                    &self.runtime.context,
+                    extent,
+                    request,
+                );
+                match capture {
+                    Ok(capture) => {
+                        let image = self
+                            .swapchain
+                            .as_ref()
+                            .map(|sw| sw.images[image_index as usize]);
+                        match image {
+                            Some(image) => match capture.record_copy(device, cmd, image) {
+                                Ok(()) => self.screenshot = Some(capture),
+                                Err(err) => record = Err(err),
+                            },
+                            None => record = Err(anyhow::anyhow!("screenshot: no swapchain")),
+                        }
+                    }
+                    Err(err) => record = Err(err),
+                }
+            }
+        }
+
         // --- 结束 命令 缓冲区 (always attempted) ---
         if let Err(end_err) = unsafe { device.end_command_buffer(cmd) } {
             if record.is_ok() {
@@ -1758,9 +1796,56 @@ impl GraphRenderer {
     }
 
     /// 释放 all GPU resources.
+    /// 预约一次截图：下一帧 `execute` 把交换链图像拷贝到读回缓冲区，
+    /// `finish_screenshot` 再写成 PNG。
+    ///
+    /// `size` 为 `None` 时与窗口分辨率一致；给了尺寸就最近邻缩放
+    /// （像素画放大不会糊）。
+    pub fn request_screenshot(
+        &mut self,
+        path: impl Into<std::path::PathBuf>,
+        size: Option<[u32; 2]>,
+        scale: Option<f32>,
+    ) {
+        self.pending_screenshot = Some(crate::screenshot::ScreenshotRequest {
+            path: path.into(),
+            size,
+            scale,
+        });
+    }
+
+    /// 帧提交之后调用：等待本次提交的围栏、读回像素、写 PNG。
+    ///
+    /// 没有进行中的截图时返回 `Ok(None)`。
+    pub fn finish_screenshot(
+        &mut self,
+        ctx: &FrameCtx,
+    ) -> anyhow::Result<Option<std::path::PathBuf>> {
+        let Some(capture) = self.screenshot.take() else {
+            return Ok(None);
+        };
+        if ctx.fence != vk::Fence::null() {
+            unsafe {
+                self.runtime
+                    .context
+                    .device
+                    .wait_for_fences(&[ctx.fence], true, u64::MAX)
+            }
+            .context("screenshot: wait for fence")?;
+        }
+        let result = capture.finish(&self.runtime.context, self.color_format);
+        let mut capture = capture;
+        unsafe { capture.destroy(&self.runtime.context.device) };
+        result.map(Some)
+    }
+
     pub fn destroy(&mut self) {
         let device = &self.runtime.context.device;
         unsafe { device.device_wait_idle() }.ok();
+
+        if let Some(mut capture) = self.screenshot.take() {
+            unsafe { capture.destroy(device) };
+        }
 
         // 销毁 IBL resources (env/irradiance/prefiltered cubes, BRDF LUT).
         // 共享的 set2 描述符 布局 由 GraphRenderer 持有，此处单独销毁

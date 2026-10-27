@@ -77,6 +77,7 @@ mod physics_runner;
 mod render_graph_report;
 mod render_runner;
 mod render_shared;
+mod screenshot;
 
 use prism_engine::config::AppConfig;
 

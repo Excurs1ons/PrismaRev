@@ -203,6 +203,17 @@ The user project's dependency chain must stay **UI-framework-free and editor-fre
 - The `projects/prisma/`, `projects/prisma-sponza/`, `launcher/` and `editor/` standalone workspaces need their own `cargo build` / `cargo clippy`
   runs — a root-workspace build does **not** cover them. `editor/` additionally needs `pnpm`.
 
+## Built-in screenshot (automation / art tuning)
+- `PRISMREV_SCREENSHOT=<path>` 让渲染线程在第 N 帧把**屏幕上那一帧**写成 PNG
+  （`crates/prism-render/src/screenshot.rs` + `crates/prism-app/src/screenshot.rs`）。
+  - `PRISMREV_SCREENSHOT_FRAME=<n>`：抓第几帧，默认 90（等资源上传/动画稳定）。
+  - `PRISMREV_SCREENSHOT_SIZE=1920x1080`：输出分辨率（`x` / `X` / `,` 分隔都行）。
+  - `PRISMREV_SCREENSHOT_SCALE=2`：按窗口分辨率倍数放大（`SIZE` 优先）。
+  - 缩放是**最近邻**，像素画放大不糊；内容是窗口那一帧，不重渲染。
+- 实现方式：`execute` 在图像回到 `PRESENT_SRC_KHR` 后插入
+  `vkCmdCopyImageToBuffer`（`PRESENT_SRC → TRANSFER_SRC → PRESENT_SRC`），
+  `finish_screenshot` 在帧提交后等待围栏再读回。不要在 `present` 之前 map 内存。
+
 ## Shaders (important gotcha)
 - Shaders are **Slang** (`assets/shaders/slang/*.slang`), compiled with `slangc` to `.spv`.
   Entry points are `vertexMain` / `fragmentMain` (`-fvk-use-entrypoint-name`).

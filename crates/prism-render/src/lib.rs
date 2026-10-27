@@ -67,6 +67,7 @@ pub mod render_texture;
 pub mod rt_pass;
 pub mod rt_scheduler;
 pub mod scene_scope;
+pub mod screenshot;
 pub mod shader;
 /// Slang-reflection-generated 绑定 constants (set/binding indices, entry
 /// point names, push-constant sizes). Regenerate with `xtask/shader-bindgen`
