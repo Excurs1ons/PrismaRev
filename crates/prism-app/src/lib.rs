@@ -66,7 +66,7 @@
 //! 启动期资产解析经 asset_requests/asset_results 通道完成：主线程 CPU 段
 //! 准备上传请求，渲染线程 GPU 段上传并回传句柄。
 
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", test))]
 mod android_assets;
 mod app;
 mod audio_decode_runner;

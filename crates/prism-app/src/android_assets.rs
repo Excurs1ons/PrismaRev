@@ -9,12 +9,17 @@
 //! `assets/...` paths.
 
 use std::ffi::CString;
+#[cfg(target_os = "android")]
 use std::fs::{self, File};
+#[cfg(target_os = "android")]
 use std::io;
+#[cfg(target_os = "android")]
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+#[cfg(target_os = "android")]
 use ndk::asset::AssetManager;
+#[cfg(target_os = "android")]
 use winit::platform::android::activity::AndroidApp;
 
 /// Copy the bundled APK `game/` assets into internal storage and make it the
@@ -23,6 +28,7 @@ use winit::platform::android::activity::AndroidApp;
 /// Returns the internal data directory (the parent of the staged `assets/`
 /// tree). Call this before constructing the application: `App::with_config`
 /// loads `assets/scenes.pak` from the filesystem during construction.
+#[cfg(target_os = "android")]
 pub fn init_android_assets(android_app: &AndroidApp) -> Result<PathBuf> {
     let data_dir = android_app
         .internal_data_path()
@@ -49,12 +55,14 @@ pub fn init_android_assets(android_app: &AndroidApp) -> Result<PathBuf> {
     Ok(data_dir)
 }
 
+#[cfg(target_os = "android")]
 #[derive(Default)]
 struct CopyStats {
     copied: usize,
     skipped: usize,
 }
 
+#[cfg(target_os = "android")]
 fn copy_dir(manager: &AssetManager, rel: &str, dest: &Path) -> Result<CopyStats> {
     let dir_path = cstring(rel)?;
     let mut dir = manager
@@ -110,12 +118,38 @@ fn copy_dir(manager: &AssetManager, rel: &str, dest: &Path) -> Result<CopyStats>
     Ok(stats)
 }
 
-/// Package files are small and may change without a length change; always
-/// overwrite them. Everything else is reused when the size matches.
+/// Package and configuration files are small and may change without a length change;
+/// always overwrite them. Everything else is reused when the size matches.
 fn force_refresh(path: &str) -> bool {
-    path.ends_with(".pak") || path.ends_with(".pak.meta.json") || path == "settings.toml"
+    path.ends_with(".pak")
+        || path.ends_with(".pak.meta.json")
+        || path == "settings.toml"
+        || path.ends_with("/settings.toml")
+        || path.ends_with("\\settings.toml")
 }
 
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
 fn cstring(path: &str) -> Result<CString> {
     CString::new(path).with_context(|| format!("asset path contains NUL: {path:?}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn force_refresh_matches_packages_and_settings() {
+        assert!(force_refresh("settings.toml"));
+        assert!(force_refresh("game/settings.toml"));
+        assert!(force_refresh("game/nested/settings.toml"));
+        assert!(force_refresh("game\\settings.toml"));
+        assert!(force_refresh("scenes.pak"));
+        assert!(force_refresh("game/scenes.pak"));
+        assert!(force_refresh("game/scenes.pak.meta.json"));
+
+        assert!(!force_refresh("game/textures/albedo.rtex"));
+        assert!(!force_refresh("game/other_settings.toml"));
+        assert!(!force_refresh("game/settings.toml.bak"));
+        assert!(!force_refresh("game/models/mesh.rmes"));
+    }
 }
