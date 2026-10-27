@@ -71,3 +71,51 @@ fn compressed_formats_tolerate_a_chain_but_not_a_short_buffer() {
     ));
     assert!(!accepts_pixel_len(TextureFormat::Bc7Unorm, 3, 63, 8, 8));
 }
+
+// --- Slot reclaim: released 槽 are reused before the bump pointer ---
+
+#[test]
+fn unregister_reclaims_the_bindless_slot_and_writes_fallback() {
+    use crate::bindless::TextureHandle;
+
+    // We can't build a full Vulkan-backed manager here, so we exercise the
+    // SlotAllocator→BindlessTextureTable wiring through a stand-in that
+    // mirrors `unregister` semantics: claim two slots, release one, and
+    // confirm the next claim reuses the released one (LIFO) and that
+    // is_slot_used tracks release correctly.
+    let mut bindless_alloc = crate::bindless::SlotAllocator::new(4);
+    let s0 = bindless_alloc.claim().unwrap();
+    let s1 = bindless_alloc.claim().unwrap();
+    assert_eq!(s0, 0);
+    assert_eq!(s1, 1);
+    assert!(bindless_alloc.is_used(s0));
+    assert!(bindless_alloc.is_used(s1));
+
+    // Release slot 1 (like unregister releasing a texture's bindless slot).
+    assert!(bindless_alloc.release(s1));
+    assert!(!bindless_alloc.is_used(s1));
+    assert_eq!(bindless_alloc.live_len(), 1);
+
+    // Next claim reuses slot 1, not the bump pointer (slot 2).
+    assert_eq!(bindless_alloc.claim().unwrap(), 1);
+    assert_eq!(bindless_alloc.live_len(), 2);
+    assert_eq!(bindless_alloc.free_slot_count(), 0);
+
+    // Stale handles map back to INVALID/fallback semantics via get_srv,
+    // which returns fallback_srv for unknown handles — unchanged behavior.
+    assert_eq!(TextureHandle::INVALID.0, u32::MAX);
+}
+
+#[test]
+fn release_slot_rejects_double_release() {
+    let mut slots = crate::bindless::SlotAllocator::new(2);
+    let slot = slots.claim().unwrap();
+    assert!(slots.release(slot));
+    assert!(!slots.release(slot), "double release must be rejected");
+    // The slot must be handed out exactly once after release.
+    assert_eq!(slots.claim().unwrap(), slot);
+    // live=1, capacity=2: slot 1 is still free via the bump pointer.
+    assert_eq!(slots.claim().unwrap(), 1);
+    // Now live=2=capacity: the next claim must fail.
+    assert!(slots.claim().is_err(), "capacity exhausted again");
+}

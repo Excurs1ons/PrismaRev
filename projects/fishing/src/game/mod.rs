@@ -5,4 +5,5 @@
 //! `docs/plans/2026-10-27-cozy-fishing-design.md` §2 分层契约）。
 
 pub mod boat;
+pub mod fishing;
 pub mod world;

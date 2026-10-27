@@ -486,3 +486,86 @@ fn unresolved_sprite_is_skipped() {
 
     assert!(scene_sprite_system(&world).is_empty());
 }
+
+// ---------------------------------------------------------------------------
+// 2D 折线（LineRenderer）
+// ---------------------------------------------------------------------------
+
+fn spawn_line(world: &mut World, points: Vec<[f32; 3]>, layer: i32) -> prism_ecs::Entity {
+    let e = world.spawn();
+    world.insert(e, LocalToWorld(glam::Mat4::IDENTITY));
+    world.insert(
+        e,
+        LineRenderer {
+            points,
+            width: 2.0,
+            color: [1.0, 0.5, 0.0, 1.0],
+            sorting_layer: layer,
+            order_in_layer: 0,
+        },
+    );
+    e
+}
+
+#[test]
+fn line_renders_one_quad_per_segment() {
+    let mut world = World::new();
+    spawn_line(
+        &mut world,
+        vec![[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [10.0, 10.0, 0.0]],
+        0,
+    );
+
+    let items = scene_line_system(&world);
+    assert_eq!(items.len(), 2, "3 points -> 2 segments");
+    for item in &items {
+        assert_eq!(item.texture, SOLID_TEXTURE);
+        assert_eq!(item.color, [1.0, 0.5, 0.0, 1.0]);
+    }
+
+    // First segment runs along +X: m0 = (10, 0), m1 = (0, 2) (width 2).
+    assert!((items[0].model[0][0] - 10.0).abs() < 1e-5);
+    assert!((items[0].model[0][1]).abs() < 1e-5);
+    assert!((items[0].model[1][1] - 2.0).abs() < 1e-5);
+    // Midpoint of the first segment.
+    assert!((items[0].model[3][0] - 5.0).abs() < 1e-5);
+}
+
+#[test]
+fn line_with_one_point_is_skipped() {
+    let mut world = World::new();
+    spawn_line(&mut world, vec![[0.0, 0.0, 0.0]], 0);
+    assert!(scene_line_system(&world).is_empty());
+}
+
+#[test]
+fn degenerate_segment_is_skipped() {
+    let mut world = World::new();
+    spawn_line(&mut world, vec![[1.0, 1.0, 0.0], [1.0, 1.0, 0.0]], 0);
+    assert!(scene_line_system(&world).is_empty());
+}
+
+#[test]
+fn sprites_and_lines_sort_together() {
+    let mut world = World::new();
+    spawn_sprite(
+        &mut world,
+        glam::Vec3::ZERO,
+        SpriteRenderer {
+            sprite_path: "a.png".into(),
+            sorting_layer: 1,
+            ..SpriteRenderer::default()
+        },
+        [10, 10],
+        7,
+    );
+    spawn_line(&mut world, vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], 5);
+
+    let items = scene_2d_system(&world);
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0].texture, 7, "sprite (layer 1) draws first");
+    assert_eq!(
+        items[1].texture, SOLID_TEXTURE,
+        "line (layer 5) draws on top"
+    );
+}

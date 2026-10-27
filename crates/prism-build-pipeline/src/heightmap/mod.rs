@@ -185,6 +185,8 @@ pub struct ErosionParams {
     pub particle_count: usize,
     pub max_steps: usize,
     pub cell_size: f64,
+    /// 随机数种子（用于水力侵蚀粒子生成与随机漫步，保证相同参数输出确定性）。
+    pub seed: u64,
     /// 热力侵蚀间隔（水力每 N 轮后做一次热力）。
     pub thermal_interval: usize,
     /// 预处理热力轮数。
@@ -217,6 +219,7 @@ impl Default for ErosionParams {
             particle_count: 200_000,
             max_steps: 150,
             cell_size: 1.0,
+            seed: 0x5EED,
             thermal_interval: 5,
             thermal_pre_iterations: 100,
             sea_erosion_factor: 0.05,
@@ -240,6 +243,7 @@ pub(crate) struct Particle {
     pub water: f64,
     pub sediment: f64,
     pub speed: f64,
+    pub seed: u64,
 }
 
 impl Particle {
@@ -252,6 +256,7 @@ impl Particle {
             water: 1.0,
             sediment: 0.0,
             speed: 0.0,
+            seed: 0,
         }
     }
 }
@@ -283,7 +288,10 @@ pub fn generate_eroded_heightmap(mut hm: Heightmap, params: &ErosionParams) -> H
     // 每轮重新分配一份「线程数 × 整图」的 `f64` 表。
     let mut scratch = hydraulic::ErosionScratch::new();
     for iter in 0..params.iterations {
-        hydraulic::hydraulic_erosion_with_scratch(&mut hm, params, &mut scratch);
+        let round_seed = params
+            .seed
+            .wrapping_add((iter as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
+        hydraulic::hydraulic_erosion_with_scratch(&mut hm, params, &mut scratch, round_seed);
         if params.thermal_interval > 0 && (iter + 1) % params.thermal_interval == 0 {
             thermal_erosion(&mut hm, params);
         }

@@ -249,6 +249,7 @@ fn main() -> Result<()> {
                 iterations,
                 particle_count: particles,
                 talus_angle,
+                seed,
                 ..Default::default()
             };
             if no_erode {

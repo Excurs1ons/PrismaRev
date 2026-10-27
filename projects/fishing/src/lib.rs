@@ -12,7 +12,8 @@ pub fn build_app() -> prism_app::App {
         .with_subsystem(prism_app::Subsystem::Audio);
 
     app.add_system("game::world", game::world::tick);
-    app.add_system("game::boat", game::boat::tick);
+    app.add_system("game::fishing", game::fishing::tick)
+        .add_system("game::boat", game::boat::tick);
     app
 }
 

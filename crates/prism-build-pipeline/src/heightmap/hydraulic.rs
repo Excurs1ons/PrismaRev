@@ -9,7 +9,8 @@
 //! - 海平面以下侵蚀倍率 `sea_erosion_factor`
 
 use super::{ErosionParams, Heightmap, Particle};
-use rand::RngExt;
+use rand::rngs::StdRng;
+use rand::{RngExt, SeedableRng};
 use rayon::prelude::*;
 use std::f64::consts::PI;
 
@@ -65,17 +66,18 @@ pub(crate) fn hydraulic_erosion_with_scratch(
     hm: &mut Heightmap,
     params: &ErosionParams,
     scratch: &mut ErosionScratch,
+    round_seed: u64,
 ) {
     let w = hm.width;
     let h = hm.height;
     let sea_level = hm.sea_level;
 
-    if w < 2 || h < 2 {
+    if w < 2 || h < 2 || params.particle_count == 0 {
         return;
     }
 
-    // 1. 生成粒子
-    let particles: Vec<Particle> = spawn_particles(params.particle_count, w, h);
+    // 1. 生成粒子（根据 round_seed 确定性生成）
+    let particles: Vec<Particle> = spawn_particles(params.particle_count, w, h, round_seed);
 
     // 2. 分块：块数不超过线程数，块大小向上取整，保证**所有**粒子都被处理。
     //    旧实现用 `n_particles / n_threads` 向下取整再按 `thread_idx * chunk_size`
@@ -126,9 +128,9 @@ pub(crate) fn hydraulic_erosion_with_scratch(
     hm.max_height = max;
 }
 
-/// 随机生成粒子。
-fn spawn_particles(count: usize, w: usize, h: usize) -> Vec<Particle> {
-    let mut rng = rand::rng();
+/// 确定性生成粒子。
+fn spawn_particles(count: usize, w: usize, h: usize, seed: u64) -> Vec<Particle> {
+    let mut rng = StdRng::seed_from_u64(seed);
     let mut particles = Vec::with_capacity(count);
     for _ in 0..count {
         let x = rng.random::<f64>() * (w - 1) as f64;
@@ -137,6 +139,7 @@ fn spawn_particles(count: usize, w: usize, h: usize) -> Vec<Particle> {
         let water = 0.8 + rng.random::<f64>() * 0.4;
         let mut p = Particle::new(x, y);
         p.water = water;
+        p.seed = rng.random::<u64>();
         particles.push(p);
     }
     particles
@@ -177,8 +180,12 @@ fn process_particle(
         let (dx, dy) = if len > 1e-12 {
             (dir_x / len, dir_y / len)
         } else {
-            // 梯度为零时随机漫步
-            let angle = rand::rng().random::<f64>() * 2.0 * PI;
+            // 梯度为零时使用粒子内嵌 seed 进行确定性随机漫步
+            p.seed = p
+                .seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            let angle = ((p.seed >> 11) as f64 / (1u64 << 53) as f64) * 2.0 * PI;
             (angle.cos(), angle.sin())
         };
 

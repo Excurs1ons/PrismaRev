@@ -34,8 +34,10 @@
   新增特性 = 新增一个 pass 节点，不改动既有节点。
 - **特性可开关、可降级**：光追、GI、阴影、调试视图等都由 `RenderSettings` 控制。
   中端 GPU 撑不住时关 RT / 把 GI 切到 Off 即可，**架构本身不因此变形**。
-- **资源与渲染解耦**：场景数据走 `prism-asset`（glTF 2.0 加载器 + `SceneStore` +
-  `MaterialManager` + `BindlessTextureTable`），引擎 crate 不依赖具体资源格式。
+- **资源与渲染解耦**：源格式（glTF / PNG / HDR）由 `prism-cooker` 离线导入并 cook 成
+  RTEX / RMES / RSCN，运行时经 `prism-asset` 的 `.pak` + `ResourceManager` 读取；GPU 侧的
+  `RenderMaterialManager` / `BindlessTextureTable` 在 `prism-render`。引擎 crate 不依赖
+  具体资源格式。
 
 ### 2.3 运行时自动判断 Vulkan 版本与扩展支持
 
@@ -67,7 +69,7 @@
 | 重 pass（阴影/GI/反射）默认半分辨率 | 2.1：移动端带宽/算力 |
 | 所有跨端布局（push constant、UBO、SSBO）显式 padding 并验证 | 全平台一致 ABI |
 | 阴影 / GI / RT / 调试视图由 `RenderSettings` 统一开关 | 2.2：可降级不形变 |
-| 资源格式（glTF / 纹理）经 `prism-asset`（运行时即时加载）或 `prism-asset/*`（离线预处理 → .pak）接入，引擎不直读文件 | 2.2：解耦 |
+| 源格式（glTF / 纹理）由 `prism-cooker` 在构建期导入/烘焙，运行时经 `prism-asset` 读 `.pak`，引擎不直读源文件 | 2.2：解耦 |
 
 ## 4. 当前架构落点（与目标的对应关系）
 
@@ -75,7 +77,7 @@
 |----------|----------|
 | 模块化管线 | `prism-render/src/render_graph.rs`（`RenderPassNode` 图）+ `forward_pass.rs` / `shadow_map_pass.rs` / `skybox_pass.rs`。**现状（2026-08-21）**：`RenderGraph::execute()` 统一驱动四个 pass（`ShadowMapPass` -> `ForwardPass` -> `GtaoPass` -> `PostPass`，按注册顺序线性执行）。passes 通过 `read_usage` / `write_usage` 声明图边依赖，graph 据此自动插入跨 pass 的 `vkCmdPipelineBarrier`（layout cache 按 `(handle, image_index)` 跨帧持久，`recreate_swapchain` 时 `reset_layouts`）。跨帧延迟边（GTAO 双缓冲 AO 回喂）与 swapchain->`PRESENT_SRC_KHR` 保留手动，标注为图边界特例。环检测已实现（`validate_edges`），执行顺序不重排（接线顺序见 `GraphRenderer::new`）。`GraphRenderer::prepare` 已接入 `render_system`/`render_runner` 五阶段链（不再空转），资源生命周期区间已声明，TBDR 内存 aliasing 待下一步扩展。|
 | bindless / 全平台统一 | `prism-render/src/bindless.rs`（分离 SRV + 全局 sampler 表） |
-| 资源管理解耦 | `crates/prism-asset` 统一提供 Import→Cook→Package→Runtime；引擎运行时提供双路径：开发期经 `GpuAssetResolver` 同步加载（`resource_manager.load_with_deps` 直通 GPU），发布期经 `ResourceManager` 从 `.pak` 懒加载（待 G3 接入后默认）。当前 `load_demo_scene` 仍走同步路径，`.pak` 路径已可手动 `load_package` 验证。 |
+| 资源管理解耦 | 职责拆成三个 crate：`prism-cooker`（Import→Cook，仅构建期）、`prism-scene`（组件 schema + RSCN v4）、`prism-asset`（Package→Runtime，`.pak` + `ResourceManager`）。引擎侧 `GpuAssetResolver` 持 `ResourceManager`，用 `load_with_deps` 从 `.pak` 懒加载，再经 `GraphRenderer::apply_asset_requests` 在渲染线程上传；运行时链路不依赖 cooker。 |
 | 移动端 GI | **Baked probe-volume GI**（2 阶 SH，9 系数 × RGB，`R32G32B32A32_SFLOAT` 3D texture；float16 仅是后续可选压缩），非实时 SHARC。设计见 §6。SHARC 实时 slang 已移除，不再恢复（移动端跑不动每帧 ray 填 cache）。|
 | 阴影 / RT | 光栅化阴影贴图：`ShadowMapPass`（深度预渲染，见 `shadow_depth.slang`）+ `ForwardPass`（comparison sampler 采样，见 `scene_frag.slang`） |
 | 能力探测 | `prism-render/src/capabilities.rs`（集中探测，扩展中） |
@@ -183,7 +185,7 @@ ShadowMapPass → ForwardPass → GtaoPass → PostPass
 - **PR-2：GtaoPass / PostPass 进图（不改 shader）**。同上模式，声明图边依赖，删手动编排。
   重点验证 1-frame-latency AO 跨帧依赖的图表达正确。
 - **PR-3：probe volume 场景级资源 + `scene_frag` GI 分支**。新增 `SceneScope` 资源表、loader
-  接口（走 `prism-asset`）、`PBR_FLAG_GI` 采样分支。此时 GI 接进来，图的"三类生命周期"被真实消费。
+  接口（`prism-render::probe_loader`）、`PBR_FLAG_GI` 采样分支。此时 GI 接进来，图的"三类生命周期"被真实消费。
 
 > **顺序原则**：PR-1/PR-2 先把图接口按"消费者（GI）需求"定下来（§6.1 三类生命周期），PR-3 才真正接入 GI。
 > 不在 PR-1 时空改接口猜 GI 需求（避免第二遍返工）。
@@ -205,7 +207,7 @@ ShadowMapPass → ForwardPass → GtaoPass → PostPass
 | **离线预处理，运行时零解码** | PNG 解码（701ms）+ 块压缩编码（数十秒/张）都不该每次启动重做。源文件指纹变化才重导入。 |
 | **移动端格式优先，桌面能力探测降级** | 契合 §1/§2.1 mobile-first 定位。ASTC 是移动端新设备原生，桌面现代 GPU 也支持；BC 作为桌面老设备回退。 |
 | **产物不进 git，本地 / CI 生成** | 72 张 4K BC7 ≈ 2.25 GB，进 git 仓库爆。靠源文件 SHA256 保证一致性。 |
-| **glTF 不直读，经 `prism-asset` 接入** | 契合 §3 "资源格式经 prism-asset 接入，引擎不直读文件"。导入工具是离线 xtask，运行时只读 KTX2。 |
+| **glTF 不直读，经 `prism-cooker` 离线导入** | 契合 §3「源格式由构建期导入，引擎不直读文件」。导入 / cook 在 `prism-cooker`，运行时只读 `.pak` 内的 RTEX。 |
 | **mip chain 由容器承载，支持下一步扩展流式** | KTX2 原生存完整 mip chain；阶段 3 流式加载以此为前提。 |
 
 ### 7.2 格式选型（移动端新设备优先）
@@ -316,9 +318,13 @@ match kind {
 }
 ```
 
-### 7.5 运行时加载路径（`prism-asset` 改造）
+### 7.5 运行时加载路径（KTX2 直读，已被 §10 取代）
 
-`gltf_loader::load` 改为优先读 KTX2 缓存：
+> **2026-10 分层重构后已废弃**：`gltf_loader` / `SceneStore` 随旧 `prism-asset` 拆分移除，
+> 导入 / cook 迁到 `prism-cooker`，运行时只读 `.pak` 内的 RTEX（见 §10.12）。本节 7.5–7.7
+> 保留为历史设计，不再按此实现。
+
+`gltf_loader::load` 曾计划改为优先读 KTX2 缓存：
 
 ```
 解析 glTF 拿 image URI 列表
@@ -375,7 +381,8 @@ impl TextureFormat { fn is_compressed()->bool; fn compressed_byte_len()->usize; 
 - **PR-T4（可选）：mip chain 流式加载**。KTX2 mip level 按可视距离动态加载/卸载，首帧只加载低 mip。需要 `SceneStore` 支持部分加载 + 渲染管线容忍"纹理未就绪"。工作量大，放下一步扩展里程碑。
 
 > **顺序原则**：PR-T1 先把"能传压缩格式"的能力做出来（不依赖导入工具），PR-T2 再做导入工具（不依赖引擎改造），PR-T3 才把两者接起来。每步独立可验证，避免"先改引擎再发现导入工具没法跟上"的返工。
-> **2026-08-21 状态**：T1 已完成，T2/T3 待 `TextureCooker` 编码器集成与 `prism-asset` KTX2 优先加载（见 §10.7 说明仍为 RGBA8）。
+> **状态**：T1（压缩格式上传）已完成；T2 / T3 未按本节实施，纹理导入 / cook 改由 §10 的
+> `prism-cooker` 承担，运行时读 `.pak` 内的 RTEX。
 
 ### 7.8 不做 / 反目标
 
@@ -488,7 +495,9 @@ Dirty dispatch 不采用通用事件总线，而是使用**静态规则集**，�
 **关键规则**：
 - prepare 阶段**一次性**消费 `SceneChanges` 并生成 `DirtyDispatchPlan`，不允许多帧累积脏状态。
 - `RenderEmissiveLightTable` 依赖 `RenderInstanceManager` 的 prepare 结果（active instance list），因此它的 rebuild 排在 instance dispatch 之后。
-- texture → material → instance 的级联脏标记通过 `SceneStore` 内部反向索引完成：删除 texture 时如果有 material 引用，`World` 暴露 `WorldEditError`，拒绝删除。
+- texture → material → instance 的级联目前只由 `prism-engine::dirty_router` 对 `SceneChanges` /
+  draw item 签名做帧间比对；`RenderTextureManager` / `RenderMaterialManager` 按槽位更新，
+  没有跨层引用拒绝。上面的统一 `DirtyDispatchPlan` 是目标形态，尚未实现。
 
 ### 9.3 只读场景视图
 
@@ -789,7 +798,8 @@ prism-scene::rscn::encode_scene
 
 - **[G2] Cooker 输出格式与引擎对接** ✅ **场景链路已打通**：`SceneCooker` 产出 RSCN v4，`prism-engine` 的 `SceneLoader` 用同一份 `prism-scene` schema 解码；`prism-cooker` 中有真实 `.scene.json` 的 cook/decode 测试。纹理/网格的压缩数据端到端对比仍待补。
 
-- **[G3] ResourceManager → Engine 桥接** ✅ **部分完成**：`GpuAssetResolver` 已持 `ResourceManager` 并支持 `load_package/load_package_bytes` 与 `load_with_deps`，`App::new` 中 `load_resource_package()` 已探查 `assets/scenes.pak`；`Handle<T>`→`Entity` 映射沿用 `load_demo_scene` 模式，全链路 `CLI build → .pak → ResourceManager → GPU` 可手动验证。
+- **[G3] ResourceManager → Engine 桥接** ✅ **部分完成**：`GpuAssetResolver` 已持 `ResourceManager` 并支持 `load_package/load_package_bytes` 与 `load_with_deps`，`App::new` 中 `load_resource_package()` 已探查 `assets/scenes.pak`；`Handle<T>`→`Entity` 的映射由 `GpuAssetResolver` 的引用缓存维护（`MeshRef` / `MaterialRef` /
+  `SpriteRef` 持 `Handle`），全链路 `CLI build → .pak → ResourceManager → GPU` 可手动验证。
 
 - **[G4] 构建脚本集成** ✅ **已落地**：`prism-build-pipeline build-scenes` 统一完成
   `scenes.toml → cooked RSCN → scenes.pak + path manifest`；泛资产仍走 `prism-cook build`，

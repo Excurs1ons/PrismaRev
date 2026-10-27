@@ -16,7 +16,7 @@ use crate::mesh::Vertex;
 use crate::pipeline::{GraphicsPipeline, PipelineDesc};
 use crate::render_graph::{
     GraphResources, PassInfo, PassKind, RenderContext, RenderGraphBuilder, RenderPassNode,
-    RenderSettings, ResourceHandle, ResourceType, ShadowMode,
+    RenderSettings, ResourceHandle, ResourceType, ResourceUsage, ShadowMode, SHADOW_MAP_H,
 };
 use crate::shader;
 use crate::shader_bindings;
@@ -51,6 +51,8 @@ pub struct ShadowMapPass {
     framebuffer: Option<vk::Framebuffer>,
     /// Cloned 设备 handle for 放置
     device: Option<ash::Device>,
+    /// Track whether the shadow map image layout has been transitioned from UNDEFINED.
+    layout_initialized: bool,
 }
 
 /// Square shadow 映射表 分辨率 2048 is a reasonable desktop/mobile 默认
@@ -62,13 +64,14 @@ pub const SHADOW_CASCADE_COUNT: u32 = 1; // CSM: 扩展为 3-4 级联并按相�
 impl ShadowMapPass {
     pub fn new() -> Self {
         Self {
-            shadow_map: ResourceHandle::INVALID,
+            shadow_map: SHADOW_MAP_H,
             shadow_size: SHADOW_MAP_SIZE,
             pipeline: None,
             pipeline_two_sided: None,
             render_pass: None,
             framebuffer: None,
             device: None,
+            layout_initialized: false,
         }
     }
 
@@ -123,20 +126,32 @@ impl ShadowMapPass {
             .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
             .depth_stencil_attachment(&depth_ref);
 
-        // Wait for any prior shadow-map sampling to finish reading before we
-        // 写入 深度 again.
-        let dependency = vk::SubpassDependency::default()
+        // Wait for prior shadow-map fragment shader sampling to finish reading
+        // before writing depth again.
+        let dependency_from_external = vk::SubpassDependency::default()
             .src_subpass(vk::SUBPASS_EXTERNAL)
             .dst_subpass(0)
             .src_stage_mask(vk::PipelineStageFlags::FRAGMENT_SHADER)
             .dst_stage_mask(vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS)
-            .src_access_mask(vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_READ)
+            .src_access_mask(vk::AccessFlags::SHADER_READ)
             .dst_access_mask(vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE);
+
+        // Ensure depth writes in subpass 0 are complete and visible before
+        // subsequent fragment shaders sample the shadow map.
+        let dependency_to_external = vk::SubpassDependency::default()
+            .src_subpass(0)
+            .dst_subpass(vk::SUBPASS_EXTERNAL)
+            .src_stage_mask(vk::PipelineStageFlags::LATE_FRAGMENT_TESTS)
+            .dst_stage_mask(vk::PipelineStageFlags::FRAGMENT_SHADER)
+            .src_access_mask(vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE)
+            .dst_access_mask(vk::AccessFlags::SHADER_READ);
+
+        let dependencies = [dependency_from_external, dependency_to_external];
 
         let create_info = vk::RenderPassCreateInfo::default()
             .attachments(std::slice::from_ref(&depth_attachment))
             .subpasses(std::slice::from_ref(&subpass))
-            .dependencies(std::slice::from_ref(&dependency));
+            .dependencies(&dependencies);
 
         let handle = unsafe { device.create_render_pass(&create_info, None) }
             .context("create shadow render pass")?;
@@ -248,12 +263,22 @@ impl RenderPassNode for ShadowMapPass {
 
     fn setup(&mut self, graph: &mut RenderGraphBuilder, _settings: &RenderSettings) {
         let size = self.shadow_size;
-        self.shadow_map = graph.create_resource(ResourceType::DepthAttachment {
-            extent: vk::Extent2D {
-                width: size,
-                height: size,
+        self.shadow_map = SHADOW_MAP_H;
+        graph.create_resource_at(
+            SHADOW_MAP_H,
+            ResourceType::DepthAttachment {
+                extent: vk::Extent2D {
+                    width: size,
+                    height: size,
+                },
+                sample_count: vk::SampleCountFlags::TYPE_1,
             },
-            sample_count: vk::SampleCountFlags::TYPE_1,
+        );
+        graph.write_usage(ResourceUsage {
+            handle: SHADOW_MAP_H,
+            access: vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
+            stage: vk::PipelineStageFlags::LATE_FRAGMENT_TESTS,
+            layout: vk::ImageLayout::DEPTH_STENCIL_READ_ONLY_OPTIMAL,
         });
     }
 
@@ -262,6 +287,37 @@ impl RenderPassNode for ShadowMapPass {
         // 构建器 adds this pass only for `ShadowMode::Raster`, but guard
         // anyway so a misconfigured 图 can't waste a 深度 pass
         if ctx.frame.shadow_mode != ShadowMode::Raster {
+            if !self.layout_initialized {
+                if let Some(shadow_img) = resources.image(self.shadow_map) {
+                    let barrier = vk::ImageMemoryBarrier::default()
+                        .old_layout(vk::ImageLayout::UNDEFINED)
+                        .new_layout(vk::ImageLayout::DEPTH_STENCIL_READ_ONLY_OPTIMAL)
+                        .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                        .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                        .image(shadow_img)
+                        .src_access_mask(vk::AccessFlags::empty())
+                        .dst_access_mask(vk::AccessFlags::SHADER_READ)
+                        .subresource_range(vk::ImageSubresourceRange {
+                            aspect_mask: vk::ImageAspectFlags::DEPTH,
+                            base_mip_level: 0,
+                            level_count: 1,
+                            base_array_layer: 0,
+                            layer_count: 1,
+                        });
+                    unsafe {
+                        ctx.device.cmd_pipeline_barrier(
+                            ctx.cmd,
+                            vk::PipelineStageFlags::TOP_OF_PIPE,
+                            vk::PipelineStageFlags::FRAGMENT_SHADER,
+                            vk::DependencyFlags::empty(),
+                            &[],
+                            &[],
+                            std::slice::from_ref(&barrier),
+                        );
+                    }
+                    self.layout_initialized = true;
+                }
+            }
             return Ok(());
         }
 
@@ -443,6 +499,7 @@ impl RenderPassNode for ShadowMapPass {
         }
 
         unsafe { ctx.device.cmd_end_render_pass(ctx.cmd) };
+        self.layout_initialized = true;
 
         log::trace!(
             "ShadowMapPass: rendered {} casters into {}x{} shadow map ({} in list)",
@@ -513,6 +570,7 @@ impl ShadowMapPass {
         self.pipeline = None;
         self.pipeline_two_sided = None;
         self.device = None;
+        self.layout_initialized = false;
     }
 }
 
@@ -551,5 +609,41 @@ mod tests {
     fn shadow_pass_uses_clockwise_front_face() {
         // 无 Y-flip 的光照正交投影下，正面绕序为 CLOCKWISE
         assert_eq!(ShadowMapPass::SHADOW_FRONT_FACE, vk::FrontFace::CLOCKWISE);
+    }
+
+    #[test]
+    fn shadow_pass_registers_resource_and_outputs() {
+        let mut shadow_pass = ShadowMapPass::new();
+        assert_eq!(shadow_pass.shadow_map_handle(), SHADOW_MAP_H);
+
+        let settings = RenderSettings::default();
+        let mut builder = RenderGraphBuilder::new().settings(&settings);
+        shadow_pass.setup(&mut builder, &settings);
+        builder.add_pass(Box::new(shadow_pass));
+        let graph = builder.build();
+
+        assert!(graph.resource(SHADOW_MAP_H).is_some());
+        let snapshot = graph.snapshot();
+        assert_eq!(snapshot.passes.len(), 1);
+        assert_eq!(snapshot.passes[0].outputs, vec![SHADOW_MAP_H]);
+        assert!(snapshot.passes[0].inputs.is_empty());
+    }
+
+    #[test]
+    fn forward_pass_reads_shadow_map_from_shadow_pass() {
+        let mut shadow_pass = ShadowMapPass::new();
+        let settings = RenderSettings::default();
+        let mut builder = RenderGraphBuilder::new().settings(&settings);
+        shadow_pass.setup(&mut builder, &settings);
+        builder.add_pass(Box::new(shadow_pass));
+        let mut graph = builder.build();
+
+        let forward_pass = crate::forward_pass::ForwardPass::new(vk::Format::B8G8R8A8_SRGB);
+        graph.add_pass(Box::new(forward_pass));
+
+        let snapshot = graph.snapshot();
+        assert_eq!(snapshot.passes.len(), 2);
+        assert_eq!(snapshot.passes[0].outputs, vec![SHADOW_MAP_H]);
+        assert!(snapshot.passes[1].inputs.contains(&SHADOW_MAP_H));
     }
 }
