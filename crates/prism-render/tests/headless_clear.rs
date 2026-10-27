@@ -127,8 +127,6 @@ fn headless_render_real_frame_and_readback() {
             0,
             0,
             0,
-            0,
-            0,
             0.0,
             0.0,
             &[],

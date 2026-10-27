@@ -65,8 +65,6 @@ pub struct FrameInput<'a> {
     pub frame_data: &'a FrameUBOData,
     pub light_view_proj: [[f32; 4]; 4],
     pub inv_projection: [[f32; 4]; 4],
-    pub debug_mode: u32,
-    pub normal_space: u32,
     pub debug_flags: u32,
     pub tonemap_mode: u32,
     pub debug_rt: u32,
@@ -1392,8 +1390,6 @@ impl GraphRenderer {
             frame_data,
             light_view_proj,
             inv_projection,
-            debug_mode,
-            normal_space,
             debug_flags,
             tonemap_mode,
             debug_rt,
@@ -1415,8 +1411,6 @@ impl GraphRenderer {
         } = input;
         let light_view_proj = *light_view_proj;
         let inv_projection = *inv_projection;
-        let debug_mode = *debug_mode;
-        let normal_space = *normal_space;
         let debug_flags = *debug_flags;
         let tonemap_mode = *tonemap_mode;
         let debug_rt = *debug_rt;
@@ -1463,8 +1457,6 @@ impl GraphRenderer {
                 } else {
                     ShadowMode::None
                 },
-                debug_mode,
-                normal_space,
                 debug_flags,
                 inv_view_rot: {
                     let v = &frame_data.view;
@@ -1774,8 +1766,6 @@ impl GraphRenderer {
         frame_data: &FrameUBOData,
         light_view_proj: [[f32; 4]; 4],
         inv_projection: [[f32; 4]; 4],
-        debug_mode: u32,
-        normal_space: u32,
         debug_flags: u32,
         tonemap_mode: u32,
         debug_rt: u32,
@@ -1801,8 +1791,6 @@ impl GraphRenderer {
             frame_data,
             light_view_proj,
             inv_projection,
-            debug_mode,
-            normal_space,
             debug_flags,
             tonemap_mode,
             debug_rt,
