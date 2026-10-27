@@ -628,40 +628,8 @@ impl App {
             } = event
             {
                 if let winit::keyboard::PhysicalKey::Code(code) = key_event.physical_key {
-                    use prism_engine::input::{ElementState, KeyCode as EngineKeyCode};
-                    let key = match code {
-                        winit::keyboard::KeyCode::KeyW => EngineKeyCode::KeyW,
-                        winit::keyboard::KeyCode::KeyA => EngineKeyCode::KeyA,
-                        winit::keyboard::KeyCode::KeyS => EngineKeyCode::KeyS,
-                        winit::keyboard::KeyCode::KeyD => EngineKeyCode::KeyD,
-                        winit::keyboard::KeyCode::KeyQ => EngineKeyCode::KeyQ,
-                        winit::keyboard::KeyCode::KeyE => EngineKeyCode::KeyE,
-                        winit::keyboard::KeyCode::Space => EngineKeyCode::Space,
-                        winit::keyboard::KeyCode::ShiftLeft => EngineKeyCode::ShiftLeft,
-                        winit::keyboard::KeyCode::ShiftRight => EngineKeyCode::ShiftRight,
-                        winit::keyboard::KeyCode::ControlLeft => EngineKeyCode::ControlLeft,
-                        winit::keyboard::KeyCode::ControlRight => EngineKeyCode::ControlRight,
-                        winit::keyboard::KeyCode::AltLeft => EngineKeyCode::AltLeft,
-                        winit::keyboard::KeyCode::AltRight => EngineKeyCode::AltRight,
-                        winit::keyboard::KeyCode::Escape => EngineKeyCode::Escape,
-                        winit::keyboard::KeyCode::Tab => EngineKeyCode::Tab,
-                        winit::keyboard::KeyCode::Enter => EngineKeyCode::Enter,
-                        winit::keyboard::KeyCode::ArrowUp => EngineKeyCode::ArrowUp,
-                        winit::keyboard::KeyCode::ArrowDown => EngineKeyCode::ArrowDown,
-                        winit::keyboard::KeyCode::ArrowLeft => EngineKeyCode::ArrowLeft,
-                        winit::keyboard::KeyCode::ArrowRight => EngineKeyCode::ArrowRight,
-                        winit::keyboard::KeyCode::Digit0 => EngineKeyCode::Digit0,
-                        winit::keyboard::KeyCode::Digit1 => EngineKeyCode::Digit1,
-                        winit::keyboard::KeyCode::Digit2 => EngineKeyCode::Digit2,
-                        winit::keyboard::KeyCode::Digit3 => EngineKeyCode::Digit3,
-                        winit::keyboard::KeyCode::Digit4 => EngineKeyCode::Digit4,
-                        winit::keyboard::KeyCode::Digit5 => EngineKeyCode::Digit5,
-                        winit::keyboard::KeyCode::Digit6 => EngineKeyCode::Digit6,
-                        winit::keyboard::KeyCode::Digit7 => EngineKeyCode::Digit7,
-                        winit::keyboard::KeyCode::Digit8 => EngineKeyCode::Digit8,
-                        winit::keyboard::KeyCode::Digit9 => EngineKeyCode::Digit9,
-                        other => EngineKeyCode::Other(other as u32),
-                    };
+                    use prism_engine::input::ElementState;
+                    let key = engine_key_from_winit(code);
                     let pressed = key_event.state == winit::event::ElementState::Pressed;
                     if should_release_pointer_lock(key, pressed, self.input.pointer_locked) {
                         prism_platform::release_pointer(window);
@@ -1132,6 +1100,49 @@ fn apply_device_mouse_motion(input: &mut InputManager, dx: f64, dy: f64) {
     input.handle_mouse_move([cur[0] + dx, cur[1] + dy]);
 }
 
+/// winit 物理键码 → 引擎键码。
+///
+/// 转换留在 `prism-app`（同时依赖 winit 与 `prism-engine`），而不是
+/// `prism-platform`：平台层保持 engine-free，只产出与窗口库无关的
+/// [`prism_platform::PlatformEvent`]。未列出的键退化为 winit 判别值，避免静默丢弃。
+fn engine_key_from_winit(code: winit::keyboard::KeyCode) -> prism_engine::input::KeyCode {
+    use prism_engine::input::KeyCode as Eng;
+    use winit::keyboard::KeyCode as Wk;
+    match code {
+        Wk::KeyW => Eng::KeyW,
+        Wk::KeyA => Eng::KeyA,
+        Wk::KeyS => Eng::KeyS,
+        Wk::KeyD => Eng::KeyD,
+        Wk::KeyQ => Eng::KeyQ,
+        Wk::KeyE => Eng::KeyE,
+        Wk::Space => Eng::Space,
+        Wk::ShiftLeft => Eng::ShiftLeft,
+        Wk::ShiftRight => Eng::ShiftRight,
+        Wk::ControlLeft => Eng::ControlLeft,
+        Wk::ControlRight => Eng::ControlRight,
+        Wk::AltLeft => Eng::AltLeft,
+        Wk::AltRight => Eng::AltRight,
+        Wk::Escape => Eng::Escape,
+        Wk::Tab => Eng::Tab,
+        Wk::Enter => Eng::Enter,
+        Wk::ArrowUp => Eng::ArrowUp,
+        Wk::ArrowDown => Eng::ArrowDown,
+        Wk::ArrowLeft => Eng::ArrowLeft,
+        Wk::ArrowRight => Eng::ArrowRight,
+        Wk::Digit0 => Eng::Digit0,
+        Wk::Digit1 => Eng::Digit1,
+        Wk::Digit2 => Eng::Digit2,
+        Wk::Digit3 => Eng::Digit3,
+        Wk::Digit4 => Eng::Digit4,
+        Wk::Digit5 => Eng::Digit5,
+        Wk::Digit6 => Eng::Digit6,
+        Wk::Digit7 => Eng::Digit7,
+        Wk::Digit8 => Eng::Digit8,
+        Wk::Digit9 => Eng::Digit9,
+        other => Eng::Other(other as u32),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1288,5 +1299,42 @@ mod tests {
         // 其它事件不改变状态，也不该被当作「已消费」。
         assert!(!update_modifiers(&mut state, &WindowEvent::CloseRequested));
         assert!(!state.shift_key());
+    }
+
+    /// 键盘映射是手工表：抽查移动/修饰/功能/数字键，防止 winit 侧改动后
+    /// 只有部分键还能到达 `InputManager`。
+    #[test]
+    fn winit_keycodes_map_to_engine_keys() {
+        use prism_engine::input::KeyCode as Eng;
+        use winit::keyboard::KeyCode as Wk;
+        for (winit, expected) in [
+            (Wk::KeyW, Eng::KeyW),
+            (Wk::KeyA, Eng::KeyA),
+            (Wk::KeyS, Eng::KeyS),
+            (Wk::KeyD, Eng::KeyD),
+            (Wk::KeyQ, Eng::KeyQ),
+            (Wk::KeyE, Eng::KeyE),
+            (Wk::Space, Eng::Space),
+            (Wk::ShiftLeft, Eng::ShiftLeft),
+            (Wk::ShiftRight, Eng::ShiftRight),
+            (Wk::ControlLeft, Eng::ControlLeft),
+            (Wk::ControlRight, Eng::ControlRight),
+            (Wk::AltLeft, Eng::AltLeft),
+            (Wk::AltRight, Eng::AltRight),
+            (Wk::Escape, Eng::Escape),
+            (Wk::Tab, Eng::Tab),
+            (Wk::Enter, Eng::Enter),
+            (Wk::ArrowUp, Eng::ArrowUp),
+            (Wk::ArrowDown, Eng::ArrowDown),
+            (Wk::ArrowLeft, Eng::ArrowLeft),
+            (Wk::ArrowRight, Eng::ArrowRight),
+            (Wk::Digit0, Eng::Digit0),
+            (Wk::Digit5, Eng::Digit5),
+            (Wk::Digit9, Eng::Digit9),
+        ] {
+            assert_eq!(engine_key_from_winit(winit), expected, "{winit:?}");
+        }
+        // 未列出的键不能丢：退化为 winit 判别值。
+        assert_eq!(engine_key_from_winit(Wk::KeyZ), Eng::Other(Wk::KeyZ as u32));
     }
 }

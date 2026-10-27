@@ -21,6 +21,7 @@ use crate::scene::components::{
     Active, Camera, DirectionalLight as SceneDirLight, FlyCameraController, LocalTransform,
     PointLight as ScenePtLight,
 };
+use crate::scene::systems::camera;
 
 const SCENE_STATE_VERSION: u32 = 3;
 
@@ -201,29 +202,48 @@ impl SavedPointLight {
 // 保存 / 加载
 // ---------------------------------------------------------------------------
 
+/// 保存/恢复所用的相机实体：**真正被渲染的那台**。
+///
+/// 与渲染、宽高比写回、飞行输入共用
+/// [`scene::systems::camera::active_camera`]（`#45`）：多相机时取 `depth` 最大的
+/// 启用相机，而不是 ECS 插入顺序里的第一台，否则保存的是 A、玩家看到的是 B。
+///
+/// `active_camera` 要求相机已有 `LocalToWorld`；恢复场景状态时层级传播可能还没跑过，
+/// 所以回退到 `main_camera`（`depth` 最大的启用相机），最后才退回第一台相机，
+/// 保持「世界里只有被禁用的相机」时的旧兜底行为。
+fn state_camera(world: &World) -> Option<Entity> {
+    camera::active_camera(world)
+        .or_else(|| camera::main_camera(world))
+        .or_else(|| world.query::<Camera>().next().map(|(entity, _)| entity))
+}
+
+/// 从**被渲染的相机**快照 [`CameraState`]。
+///
+/// position 来自 `LocalTransform`，yaw/pitch/move_speed/look_sensitivity 来自
+/// `FlyCameraController`，fov/near/far 来自 `Camera`（位置在控制器重构后住在变换上，
+/// 见 `scene::systems::camera`）。选中的相机缺少其中任一组件时返回 `None`。
+fn snapshot_camera_state(world: &World) -> Option<CameraState> {
+    let entity = state_camera(world)?;
+    let cam = world.get::<Camera>(entity)?;
+    let ctrl = world.get::<FlyCameraController>(entity)?;
+    let lt = world.get::<LocalTransform>(entity)?;
+    Some(CameraState {
+        position: lt.position,
+        yaw: ctrl.yaw,
+        pitch: ctrl.pitch,
+        fov_y: cam.fov_y_degrees.to_radians(),
+        move_speed: ctrl.move_speed,
+        look_sensitivity: ctrl.look_sensitivity,
+        znear: cam.near,
+        zfar: cam.far,
+    })
+}
+
 /// 查询 the ECS 世界 + 相机 and 写入 the JSON file.
 pub fn save_scene_state(world: &World) {
     use std::fmt::Write;
 
-    // 相机 状态 is composed from the data components on the 第一个 相机
-    // 实体 position from LocalTransform, yaw/pitch/move_speed/look_sensitivity
-    // from FlyCameraController, fov/near/far from 相机 (Position lives on
-    // the 变换 since the controller refactor - see scene::systems::camera.)
-    let camera_state: Option<CameraState> =
-        world.query::<Camera>().next().and_then(|(entity, cam)| {
-            let ctrl = world.get::<FlyCameraController>(entity)?;
-            let lt = world.get::<LocalTransform>(entity)?;
-            Some(CameraState {
-                position: lt.position,
-                yaw: ctrl.yaw,
-                pitch: ctrl.pitch,
-                fov_y: cam.fov_y_degrees.to_radians(),
-                move_speed: ctrl.move_speed,
-                look_sensitivity: ctrl.look_sensitivity,
-                znear: cam.near,
-                zfar: cam.far,
-            })
-        });
+    let camera_state = snapshot_camera_state(world);
 
     let dir_light = world.query::<SceneDirLight>().next().map(|(_, dl)| *dl);
     let point_lights: Vec<SavedPointLight> = world
@@ -307,14 +327,12 @@ fn apply_scene_state(world: &mut World, text: &str) {
         .map(|array| parse_transform_array(&array))
         .unwrap_or_default();
 
-    // --- 相机 (data components on the 第一个 相机 实体 ---
+    // --- 相机（data components on 被渲染的那台相机实体，见 `state_camera`）---
     if let Some(cs) = extract_object(&text, "camera").and_then(|json| CameraState::from_json(&json))
     {
-        // 查找 the 相机 实体 with an immutable 借用 第一个 so the
-        // subsequent per-component `get_mut` calls don't 重叠 the query's
-        // 借用 of 世界
-        let cam_entity = world.query::<Camera>().next().map(|(e, _)| e);
-        if let Some(cam_entity) = cam_entity {
+        // 先一次性解析出实体，随后逐组件的 `get_mut` 不会和查询的
+        // 世界借用重叠。
+        if let Some(cam_entity) = state_camera(world) {
             if let Some(cam) = world.get_mut::<Camera>(cam_entity) {
                 cam.fov_y_degrees = cs.fov_y.to_degrees();
                 cam.near = cs.znear;

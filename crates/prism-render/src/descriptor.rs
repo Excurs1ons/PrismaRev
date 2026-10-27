@@ -267,6 +267,7 @@ pub struct PtEmissiveTri {
 /// 常量 块 stays under Vulkan's 128-byte 限制 the legacy shaders
 /// simply ignore the trailing field.
 #[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct FrameUBOData {
     pub view_proj: [[f32; 4]; 4],       // 64 bytes, offset   0
     pub camera_position: [f32; 4],      // 16 bytes, offset  64 (xyz = camera pos, w = light_count)

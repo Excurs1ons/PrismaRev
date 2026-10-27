@@ -27,7 +27,10 @@ pub const MAGIC: [u8; 4] = *b"PRTB";
 pub const VERSION: u16 = 1;
 
 const MAX_TYPES: usize = 1 << 16;
-const MAX_FIELDS: usize = 1 << 16;
+/// 字段数上限 = `u16` 的容纳上限：字段计数在文件里写成 `u16`，
+/// 上限必须与承载宽度一致，否则恰好 `1 << 16` 个字段会通过 `>` 守卫、
+/// 再被 `as u16` 截断成 0，文件声称「0 字段」而解码端毫无察觉（#87）。
+const MAX_FIELDS: usize = u16::MAX as usize;
 const MAX_OBJECTS: usize = 1 << 24;
 const MAX_DEPTH: u32 = 64;
 
@@ -147,6 +150,11 @@ pub fn encode(objects: &[Object], registry: &TypeRegistry) -> Result<Vec<u8>, Rt
     let mut buf = Vec::new();
     buf.extend_from_slice(&MAGIC);
     buf.extend_from_slice(&VERSION.to_le_bytes());
+    // 编码端必须与解码端的 `MAX_TYPES` 检查对称，否则能写出解码器
+    // 会拒绝的文件（#87）。
+    if type_ids.len() > MAX_TYPES {
+        return Err(RttiError::LimitExceeded("type"));
+    }
     write_u32(&mut buf, type_ids.len() as u32);
 
     for id in &type_ids {
@@ -159,10 +167,7 @@ pub fn encode(objects: &[Object], registry: &TypeRegistry) -> Result<Vec<u8>, Rt
         write_u32(&mut buf, desc.version);
         write_u32(&mut buf, desc.size as u32);
         write_u32(&mut buf, desc.align as u32);
-        if desc.fields.len() > MAX_FIELDS {
-            return Err(RttiError::LimitExceeded("field"));
-        }
-        write_u16(&mut buf, desc.fields.len() as u16);
+        write_u16(&mut buf, checked_field_count(desc.fields.len())?);
         for field in &desc.fields {
             write_str(&mut buf, field.name);
             write_field_type(&mut buf, &field.ty, 0)?;
@@ -306,6 +311,16 @@ pub fn decode(bytes: &[u8]) -> Result<Decoded, RttiError> {
 // 编码辅助
 // ---------------------------------------------------------------------------
 
+/// 字段计数写进 `u16` 前的边界检查（`#87`）。
+///
+/// 单点实现，避免「上限用 `1 << 16`、承载用 `u16`」这种不一致再次出现。
+fn checked_field_count(len: usize) -> Result<u16, RttiError> {
+    if len > MAX_FIELDS {
+        return Err(RttiError::LimitExceeded("field"));
+    }
+    Ok(len as u16)
+}
+
 fn write_u8(buf: &mut Vec<u8>, value: u8) {
     buf.push(value);
 }
@@ -368,11 +383,8 @@ fn write_object(buf: &mut Vec<u8>, object: &Object, depth: u32) -> Result<(), Rt
     if depth > MAX_DEPTH {
         return Err(RttiError::TooDeep);
     }
-    if object.fields.len() > MAX_FIELDS {
-        return Err(RttiError::LimitExceeded("field"));
-    }
     write_u64(buf, object.type_id.raw());
-    write_u16(buf, object.fields.len() as u16);
+    write_u16(buf, checked_field_count(object.fields.len())?);
     for (name, value) in &object.fields {
         write_str(buf, name);
         write_value(buf, value, depth + 1)?;
@@ -566,5 +578,33 @@ impl<'a> Reader<'a> {
             7 => Value::Object(self.object(table, depth + 1)?),
             other => return Err(RttiError::InvalidTag(other)),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn field_limit_matches_its_u16_wire_width() {
+        // `#87`：上限曾经是 `1 << 16`，恰好 65 536 个字段能通过 `>` 守卫，
+        // 再被 `as u16` 截断成 0。上限必须等于承载宽度的最大值。
+        assert_eq!(MAX_FIELDS, u16::MAX as usize);
+    }
+
+    #[test]
+    fn field_count_is_rejected_instead_of_truncated() {
+        assert_eq!(checked_field_count(u16::MAX as usize), Ok(u16::MAX));
+        assert_eq!(
+            checked_field_count(u16::MAX as usize + 1),
+            Err(RttiError::LimitExceeded("field"))
+        );
+    }
+
+    #[test]
+    fn type_limit_fits_the_u32_count_field() {
+        // 编码端的守卫与解码端的 `type_count > MAX_TYPES` 必须对称，
+        // 且上限本身能写进 `u32`。
+        assert!(MAX_TYPES <= u32::MAX as usize);
     }
 }

@@ -1,4 +1,5 @@
 use super::*;
+use crate::scene::components::LocalToWorld;
 
 fn transform_json(position: [f32; 3]) -> String {
     format!(
@@ -177,4 +178,109 @@ fn saved_point_light_does_not_create_an_entity() {
     assert!(world.query::<ScenePtLight>().next().is_none());
     assert!(world.query::<LocalTransform>().next().is_none());
     assert!(world.query::<Active>().next().is_none());
+}
+
+// ---------------------------------------------------------------------------
+// #45 — 保存/恢复必须用「被渲染的那台相机」，而不是插入顺序第一台
+// ---------------------------------------------------------------------------
+
+/// 生成一台完整相机（`Camera` + `FlyCameraController` + `LocalTransform`）。
+/// `with_world_matrix` 决定是否再补上层级系统算出的 `LocalToWorld`
+/// （`active_camera` 要求它存在，加载早期则可能还没有）。
+fn spawn_camera(
+    world: &mut World,
+    depth: f32,
+    position: [f32; 3],
+    enabled: bool,
+    with_world_matrix: bool,
+) -> Entity {
+    let entity = world.spawn();
+    world.insert(
+        entity,
+        Camera {
+            depth,
+            enabled,
+            ..Default::default()
+        },
+    );
+    world.insert(entity, FlyCameraController::default());
+    world.insert(
+        entity,
+        LocalTransform {
+            position: position.into(),
+            ..Default::default()
+        },
+    );
+    if with_world_matrix {
+        world.insert(entity, LocalToWorld(glam::Mat4::IDENTITY));
+    }
+    entity
+}
+
+#[test]
+fn saved_camera_state_uses_the_rendered_camera() {
+    let mut world = World::new();
+    let behind = spawn_camera(&mut world, 0.0, [1.0, 0.0, 0.0], true, true);
+    let rendered = spawn_camera(&mut world, 1.0, [2.0, 3.0, 4.0], true, true);
+    let disabled = spawn_camera(&mut world, 9.0, [5.0, 6.0, 7.0], false, true);
+
+    let snapshot = snapshot_camera_state(&world).expect("world has cameras");
+    assert_eq!(snapshot.position, Vec3::new(2.0, 3.0, 4.0));
+
+    // 保存走同一选择器：最高 `depth` 的**启用**相机，而不是插入顺序第一台。
+    assert_eq!(state_camera(&world), Some(rendered));
+    assert_ne!(state_camera(&world), Some(behind));
+    assert_ne!(state_camera(&world), Some(disabled));
+}
+
+#[test]
+fn restored_camera_state_writes_the_rendered_camera_only() {
+    let mut world = World::new();
+    let behind = spawn_camera(&mut world, 0.0, [1.0, 1.0, 1.0], true, true);
+    let rendered = spawn_camera(&mut world, 1.0, [2.0, 2.0, 2.0], true, true);
+    let json = format!(
+        "{{\"version\":3,\"camera\":{},\"transforms\":[]}}",
+        CameraState {
+            position: Vec3::new(7.0, 8.0, 9.0),
+            yaw: 0.5,
+            pitch: -0.25,
+            fov_y: 1.0,
+            move_speed: 12.0,
+            look_sensitivity: 0.01,
+            znear: 0.2,
+            zfar: 500.0,
+        }
+        .to_json()
+    );
+
+    apply_scene_state(&mut world, &json);
+
+    let rendered_transform = world.get::<LocalTransform>(rendered).unwrap();
+    assert_eq!(rendered_transform.position, Vec3::new(7.0, 8.0, 9.0));
+    let rendered_controller = world.get::<FlyCameraController>(rendered).unwrap();
+    assert_eq!(rendered_controller.yaw, 0.5);
+    assert_eq!(rendered_controller.move_speed, 12.0);
+    assert_eq!(
+        world.get::<Camera>(rendered).unwrap().fov_y_degrees,
+        1.0_f32.to_degrees()
+    );
+
+    // 较低 `depth` 的相机保持原样。
+    let behind_transform = world.get::<LocalTransform>(behind).unwrap();
+    assert_eq!(behind_transform.position, Vec3::new(1.0, 1.0, 1.0));
+    assert_eq!(world.get::<FlyCameraController>(behind).unwrap().yaw, 0.0);
+}
+
+#[test]
+fn camera_choice_falls_back_to_main_camera_before_hierarchy_runs() {
+    // 加载场景状态时层级传播可能还没跑过：没有 `LocalToWorld` 时
+    // `active_camera` 返回 `None`，只能按 `main_camera`（最高 depth 的启用相机）兜底。
+    let mut world = World::new();
+    let _first = spawn_camera(&mut world, 0.0, [1.0, 0.0, 0.0], true, false);
+    let main = spawn_camera(&mut world, 2.0, [2.0, 0.0, 0.0], true, false);
+    assert!(camera::active_camera(&world).is_none());
+
+    assert_eq!(state_camera(&world), Some(main));
+    let snapshot = snapshot_camera_state(&world).expect("main camera is complete");
+    assert_eq!(snapshot.position, Vec3::new(2.0, 0.0, 0.0));
 }

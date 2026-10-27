@@ -184,6 +184,10 @@ pub struct RenderTextureManager {
     /// 槽 0 of the bindless 表 is reserved for the magenta 回退
     /// and is never reallocated.
     fallback_srv: TextureHandle,
+    /// The fallback image view — written into any slot that is released
+    /// via `unregister` so a stale handle sampling the freed view hits
+    /// magenta instead of a use-after-free.
+    fallback_view: vk::ImageView,
     /// 总计 slots the bindless 表 can hold. User textures start at
     /// 槽 1 槽 0 is the 回退 The 总计 is `fallback_capacity +
     /// user_capacity` to keep the math simple.
@@ -243,6 +247,7 @@ impl RenderTextureManager {
             memory: fb_memory,
             view: fb_view,
         };
+        let fallback_view = fb_view;
 
         let mut textures = SlotMap::with_key();
         // 存储 the 回退 under a dedicated 调 so 销毁 frees it.
@@ -254,6 +259,7 @@ impl RenderTextureManager {
             bindless,
             textures,
             fallback_srv,
+            fallback_view,
             user_capacity,
             destroyed: false,
         })
@@ -437,9 +443,18 @@ impl RenderTextureManager {
             .unwrap_or(self.fallback_srv)
     }
 
-    /// 放置 a single entry and 释放 its GPU image/memory/view.
+    /// 放置 a single entry and 释放 its GPU image/memory/view and
+    /// reclaims its bindless SRV 槽 The 槽 is rewritten with the
+    /// magenta fallback view first, so a stale handle sampling it gets
+    /// magenta instead of a freed-view use-after-free. The 槽 number is
+    /// returned to the free-list so a later `reserve` reuses it.
     pub fn unregister(&mut self, handle: AssetTextureHandle, device: &ash::Device) {
         if let Some(tex) = self.textures.remove(handle) {
+            // Rewrite the descriptor with the fallback view before the
+            // image view is destroyed, so any shader holding the old
+            // handle samples magenta rather than a freed view.
+            self.bindless.write_srv(tex.srv.0, self.fallback_view);
+            self.bindless.release_slot(tex.srv);
             unsafe {
                 device.destroy_image_view(tex.view, None);
                 device.destroy_image(tex.image, None);

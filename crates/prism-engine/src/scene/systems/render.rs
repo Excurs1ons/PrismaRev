@@ -67,6 +67,12 @@ pub fn scene_render_system(world: &World) -> Vec<DrawItem> {
         .collect()
 }
 
+/// 2D 绘制项的排序键：`(sorting_layer, order_in_layer, z, entity_id)`。
+type SortKey = (i32, i32, f32, u32);
+
+/// 纯色绘制标记：`SpriteDrawItem.texture` 取此值时着色器不采样贴图。
+pub const SOLID_TEXTURE: u32 = u32::MAX;
+
 /// Collect all 2D sprite draw items from the ECS world, sorted back-to-front.
 ///
 /// An entity produces a [`SpriteDrawItem`](prism_render::SpriteDrawItem) when it
@@ -77,7 +83,39 @@ pub fn scene_render_system(world: &World) -> Vec<DrawItem> {
 /// Painter's algorithm draws far-to-near, so `z` ascending (camera looks −Z and
 /// sits at +Z: larger `z` is closer).
 pub fn scene_sprite_system(world: &World) -> Vec<prism_render::SpriteDrawItem> {
-    let mut sorted: Vec<(i32, i32, f32, u32, prism_render::SpriteDrawItem)> = world
+    sort_draw_items(sprite_entries(world))
+}
+
+/// Collect all 2D line draw items (`LineRenderer`) expanded into quads.
+pub fn scene_line_system(world: &World) -> Vec<prism_render::SpriteDrawItem> {
+    sort_draw_items(line_entries(world))
+}
+
+/// Every 2D draw item (sprites **and** lines) in one back-to-front list.
+///
+/// This is what the renderer consumes: sprites and lines share one pass, so
+/// they must be sorted against each other, not in two independent lists.
+pub fn scene_2d_system(world: &World) -> Vec<prism_render::SpriteDrawItem> {
+    let mut entries = sprite_entries(world);
+    entries.extend(line_entries(world));
+    sort_draw_items(entries)
+}
+
+fn sort_draw_items(
+    mut entries: Vec<(SortKey, prism_render::SpriteDrawItem)>,
+) -> Vec<prism_render::SpriteDrawItem> {
+    entries.sort_by(|a, b| {
+        let (ak, bk) = (&a.0, &b.0);
+        ak.0.cmp(&bk.0)
+            .then(ak.1.cmp(&bk.1))
+            .then(ak.2.partial_cmp(&bk.2).unwrap_or(std::cmp::Ordering::Equal))
+            .then(ak.3.cmp(&bk.3))
+    });
+    entries.into_iter().map(|(_, item)| item).collect()
+}
+
+fn sprite_entries(world: &World) -> Vec<(SortKey, prism_render::SpriteDrawItem)> {
+    world
         .query3::<LocalToWorld, SpriteRenderer, SpriteRef>()
         .filter(|(entity, _, sprite, sref)| {
             let active = world.get::<Active>(*entity).map(|a| a.0).unwrap_or(true);
@@ -85,8 +123,8 @@ pub fn scene_sprite_system(world: &World) -> Vec<prism_render::SpriteDrawItem> {
         })
         .map(|(entity, world_transform, sprite, sref)| {
             let size = sprite.world_size(sref.size);
-            // Place the entity origin on the sprite pivot. Unity convention:
-            // (0,0) = bottom-left, (0.5,0.5) = centre, (0.5,0) = bottom-centre.
+            // Place the entity origin on the sprite pivot (Unity convention:
+            // (0,0) is the bottom-left corner).
             let offset = glam::vec3(
                 -(sprite.pivot[0] - 0.5) * size[0],
                 -(sprite.pivot[1] - 0.5) * size[1],
@@ -98,11 +136,14 @@ pub fn scene_sprite_system(world: &World) -> Vec<prism_render::SpriteDrawItem> {
                 offset,
             );
             let model = world_transform.0 * local;
-            (
+            let key: SortKey = (
                 sprite.sorting_layer,
                 sprite.order_in_layer,
                 world_transform.0.w_axis.z,
                 entity.id(),
+            );
+            (
+                key,
                 prism_render::SpriteDrawItem {
                     model: model.to_cols_array_2d(),
                     uv_rect: sprite_uv_rect(sprite, sref.size),
@@ -111,15 +152,57 @@ pub fn scene_sprite_system(world: &World) -> Vec<prism_render::SpriteDrawItem> {
                 },
             )
         })
-        .collect();
+        .collect()
+}
 
-    sorted.sort_by(|a, b| {
-        a.0.cmp(&b.0)
-            .then(a.1.cmp(&b.1))
-            .then(a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal))
-            .then(a.3.cmp(&b.3))
-    });
-    sorted.into_iter().map(|(_, _, _, _, item)| item).collect()
+fn line_entries(world: &World) -> Vec<(SortKey, prism_render::SpriteDrawItem)> {
+    let mut out = Vec::new();
+    for (entity, line) in world.query::<LineRenderer>() {
+        let active = world.get::<Active>(entity).map(|a| a.0).unwrap_or(true);
+        if !active || !line.has_line() {
+            continue;
+        }
+        let width = if line.width.is_finite() && line.width > 0.0 {
+            line.width
+        } else {
+            0.1
+        };
+        let z = world
+            .get::<LocalToWorld>(entity)
+            .map(|t| t.0.w_axis.z)
+            .unwrap_or(0.0);
+        let key_base = (line.sorting_layer, line.order_in_layer, z, entity.id());
+
+        for (index, pair) in line.points.windows(2).enumerate() {
+            let (p0, p1) = (pair[0], pair[1]);
+            let a = glam::Vec2::new(p0[0], p0[1]);
+            let b = glam::Vec2::new(p1[0], p1[1]);
+            let dir = b - a;
+            let length = dir.length();
+            if length <= f32::EPSILON {
+                continue;
+            }
+            // Quad: m0 spans the segment, m1 spans the (doubled) half-width.
+            let normal = glam::Vec2::new(-dir.y, dir.x) / length * width;
+            let mid = (a + b) * 0.5;
+            let model = glam::Mat4::from_cols(
+                glam::Vec4::new(dir.x, dir.y, 0.0, 0.0),
+                glam::Vec4::new(normal.x, normal.y, 0.0, 0.0),
+                glam::Vec4::new(0.0, 0.0, 1.0, 0.0),
+                glam::Vec4::new(mid.x, mid.y, p0[2], 1.0),
+            );
+            out.push((
+                (key_base.0, key_base.1, z, key_base.3 + index as u32),
+                prism_render::SpriteDrawItem {
+                    model: model.to_cols_array_2d(),
+                    uv_rect: [0.0, 0.0, 1.0, 1.0],
+                    color: line.color,
+                    texture: SOLID_TEXTURE,
+                },
+            ));
+        }
+    }
+    out
 }
 
 /// UV rect `(u0, v0, u1, v1)` of one sprite-sheet frame.

@@ -184,3 +184,84 @@ fn cli_help_subcommand_shows_help() {
     );
     assert!(stderr.is_empty(), "no error on stderr:\n{stderr}");
 }
+
+#[test]
+fn cli_import_and_build_texture_produces_valid_pak() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let root = dir.path();
+    let root_str = root.to_string_lossy().to_string();
+
+    // 1. init
+    let (stdout, stderr) = run_cli(&["init", &root_str]);
+    assert!(stderr.is_empty(), "init error: {stderr}");
+    assert!(stdout.contains("initialized"), "init output: {stdout}");
+
+    // 2. create a small PNG texture in Assets/
+    let assets_dir = root.join("Assets");
+    let img_path = assets_dir.join("test_tex.png");
+    let img = image::RgbaImage::new(4, 4);
+    img.save(&img_path).expect("save test png");
+
+    // 3. scan
+    let (_stdout, stderr) = run_cli(&["scan", "--project", &root_str]);
+    assert!(stderr.is_empty(), "scan error: {stderr}");
+
+    // 4. import
+    let (_stdout, stderr) = run_cli(&["import", "--project", &root_str]);
+    assert!(stderr.is_empty(), "import error: {stderr}");
+
+    // Verify intermediate file was written into Library/Intermediate/
+    let inter_dir = root.join("Library").join("Intermediate");
+    assert!(inter_dir.exists(), "Library/Intermediate must exist");
+    let inter_files: Vec<_> = std::fs::read_dir(&inter_dir)
+        .expect("read inter_dir")
+        .flatten()
+        .collect();
+    assert_eq!(inter_files.len(), 1, "should have 1 intermediate file");
+
+    // 5. build
+    let out_pak = root.join("out.pak");
+    let out_pak_str = out_pak.to_string_lossy().to_string();
+    let (_stdout, stderr) = run_cli(&["build", "--project", &root_str, "--output", &out_pak_str]);
+    assert!(stderr.is_empty(), "build error: {stderr}");
+    assert!(out_pak.exists(), "out.pak must be built");
+
+    // 6. validate built pak
+    let (v_stdout, v_stderr) = run_cli(&["validate", &out_pak_str]);
+    assert!(v_stderr.is_empty(), "validate error: {v_stderr}");
+    assert!(v_stdout.contains("RPAK"), "validate should show magic");
+}
+
+#[test]
+fn cli_build_without_prior_import_imports_on_demand() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let root = dir.path();
+    let root_str = root.to_string_lossy().to_string();
+
+    // 1. init
+    let (stdout, stderr) = run_cli(&["init", &root_str]);
+    assert!(stderr.is_empty(), "init error: {stderr}");
+    assert!(stdout.contains("initialized"), "init output: {stdout}");
+
+    // 2. create texture
+    let assets_dir = root.join("Assets");
+    let img_path = assets_dir.join("test_tex.png");
+    let img = image::RgbaImage::new(4, 4);
+    img.save(&img_path).expect("save test png");
+
+    // 3. scan
+    let (_stdout, stderr) = run_cli(&["scan", "--project", &root_str]);
+    assert!(stderr.is_empty(), "scan error: {stderr}");
+
+    // 4. build directly without running import
+    let out_pak = root.join("out.pak");
+    let out_pak_str = out_pak.to_string_lossy().to_string();
+    let (_stdout, stderr) = run_cli(&["build", "--project", &root_str, "--output", &out_pak_str]);
+    assert!(stderr.is_empty(), "build error: {stderr}");
+    assert!(out_pak.exists(), "out.pak must be built");
+
+    // 5. validate
+    let (v_stdout, v_stderr) = run_cli(&["validate", &out_pak_str]);
+    assert!(v_stderr.is_empty(), "validate error: {v_stderr}");
+    assert!(v_stdout.contains("RPAK"), "validate should show magic");
+}
