@@ -118,6 +118,123 @@ pub fn required_features() -> vk::PhysicalDeviceVulkan12Features<'static> {
         .shader_sampled_image_array_non_uniform_indexing(true)
 }
 
+/// Pure SRV-slot allocator for [`BindlessTextureTable`] (bump pointer +
+/// free-list).
+///
+/// Kept free of Vulkan handles on purpose so slot bookkeeping is unit
+/// testable without a device: `next` is the high-water mark, `free` holds
+/// released slots that a later [`claim`](Self::claim) reuses (LIFO).
+#[derive(Debug, Clone)]
+pub struct SlotAllocator {
+    capacity: u32,
+    /// 下一个 never-used 槽 (bump pointer / high-water mark).
+    next: u32,
+    /// 释放过、可复用的 槽 (release → claim LIFO).
+    free: Vec<u32>,
+    /// claimed[i] == true iff 槽 i is currently live (claimed and not
+    /// released). Needed because `next` counts gaps left by `claim_at`.
+    claimed: Vec<bool>,
+    /// Number of currently live in-use 槽.
+    live: u32,
+}
+
+impl SlotAllocator {
+    /// Empty allocator with 容量 槽 (0..容量
+    pub fn new(capacity: u32) -> Self {
+        Self {
+            capacity,
+            next: 0,
+            free: Vec::new(),
+            claimed: vec![false; capacity as usize],
+            live: 0,
+        }
+    }
+
+    /// Claim a 槽 freed 槽 are reused first (LIFO), otherwise the
+    /// bump pointer advances. Errors when every 槽 is in use.
+    pub fn claim(&mut self) -> anyhow::Result<u32> {
+        if let Some(slot) = self.free.pop() {
+            self.claimed[slot as usize] = true;
+            self.live += 1;
+            return Ok(slot);
+        }
+        anyhow::ensure!(
+            self.next < self.capacity,
+            "bindless SRV table full ({} / {})",
+            self.live,
+            self.capacity
+        );
+        let slot = self.next;
+        self.claimed[slot as usize] = true;
+        self.next += 1;
+        self.live += 1;
+        Ok(slot)
+    }
+
+    /// Claim a specific 槽 The 调用者 must know the 槽 is not
+    /// live in use otherwise the previous view is silently overwritten
+    /// by the subsequent descriptor 写入 This is what
+    /// `register_with_handle` uses for the magenta 回退 槽
+    ///
+    /// If the 槽 was at or past 下一个 下一个 becomes 槽 + 1` so a later
+    /// `claim` cannot hand the same 槽 out twice.
+    pub fn claim_at(&mut self, slot: u32) -> anyhow::Result<u32> {
+        anyhow::ensure!(
+            slot < self.capacity,
+            "register_with_handle: slot {slot} >= capacity {}",
+            self.capacity
+        );
+        if let Some(pos) = self.free.iter().position(|free| *free == slot) {
+            self.free.swap_remove(pos);
+        }
+        self.claimed[slot as usize] = true;
+        self.live += 1;
+        if slot >= self.next {
+            self.next = slot + 1;
+        }
+        Ok(slot)
+    }
+
+    /// Return a 槽 to the free-list so a later `claim` reuses it.
+    ///
+    /// Returns `false` (and changes nothing) when the 槽 was never
+    /// claimed or is already free — a double release must not hand the
+    /// same 槽 out twice.
+    pub fn release(&mut self, slot: u32) -> bool {
+        if slot >= self.capacity || !self.claimed[slot as usize] {
+            return false;
+        }
+        self.claimed[slot as usize] = false;
+        self.live -= 1;
+        self.free.push(slot);
+        true
+    }
+
+    /// Whether 槽 is currently live in use). A 槽 counts as used once
+    /// it has been claimed and until it is released.
+    pub fn is_used(&self, slot: u32) -> bool {
+        self.claimed.get(slot as usize).copied().unwrap_or(false)
+    }
+
+    /// Number of live in-use 槽 (released slots do not count).
+    pub fn live_len(&self) -> u32 {
+        self.live
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.live == 0
+    }
+
+    pub const fn capacity(&self) -> u32 {
+        self.capacity
+    }
+
+    /// 槽 released but not yet reused (diagnostics / tests).
+    pub fn free_slot_count(&self) -> u32 {
+        self.free.len() as u32
+    }
+}
+
 /// Bindless 纹理 表 with separated SRV + 全局 samplers.
 ///
 /// Two bindings in one 描述符 集合
@@ -128,9 +245,8 @@ pub struct BindlessTextureTable {
     pub layout: vk::DescriptorSetLayout,
     pool: vk::DescriptorPool,
     pub set: vk::DescriptorSet,
-    capacity: u32,
-    /// 下一个 free SRV 槽 (bump allocator; free-list can be added later).
-    next: u32,
+    /// SRV 槽 bookkeeping (bump pointer + free-list, see [`SlotAllocator`]).
+    slots: SlotAllocator,
     /// The 4 全局 采样器 objects owned by this 表
     samplers: [vk::Sampler; SamplerType::COUNT as usize],
 }
@@ -264,8 +380,7 @@ impl BindlessTextureTable {
             layout,
             pool,
             set,
-            capacity,
-            next: 0,
+            slots: SlotAllocator::new(capacity),
             samplers,
         })
     }
@@ -275,14 +390,8 @@ impl BindlessTextureTable {
     ///
     /// The 图像 must already be in `SHADER_READ_ONLY_OPTIMAL` 布局
     pub fn register(&mut self, image_view: vk::ImageView) -> anyhow::Result<TextureHandle> {
-        anyhow::ensure!(
-            self.next < self.capacity,
-            "bindless SRV table full ({} / {})",
-            self.next,
-            self.capacity
-        );
-        let slot = self.next;
-        self.next += 1;
+        // 释放过的 槽 are reused before the bump pointer advances.
+        let slot = self.slots.claim()?;
         self.write_srv(slot, image_view);
         Ok(TextureHandle(slot))
     }
@@ -302,23 +411,28 @@ impl BindlessTextureTable {
         slot: u32,
         image_view: vk::ImageView,
     ) -> anyhow::Result<TextureHandle> {
-        anyhow::ensure!(
-            slot < self.capacity,
-            "register_with_handle: slot {slot} >= capacity {}",
-            self.capacity
-        );
+        self.slots.claim_at(slot)?;
         self.write_srv(slot, image_view);
-        if slot >= self.next {
-            self.next = slot + 1;
-        }
         Ok(TextureHandle(slot))
     }
 
-    /// Whether 槽 is currently in use (has been registered or
-    /// written to). A 槽 is considered used once 下一个 has crossed
-    /// it; this matches the 线性 bump-allocator behaviour.
+    /// Return a 槽 to the free-list so a later [`register`](Self::register)
+    /// reuses it.
+    ///
+    /// This only reclaims the *slot number*: the SRV descriptor still
+    /// points at whatever view was last written into it. Callers that
+    /// destroyed that view must first [`write_srv`](Self::write_srv) a
+    /// live view (e.g. the magenta fallback) so a shader holding the old
+    /// handle cannot sample a freed view.
+    ///
+    /// Returns `false` when the 槽 was never claimed or is already free.
+    pub fn release_slot(&mut self, handle: TextureHandle) -> bool {
+        self.slots.release(handle.0)
+    }
+
+    /// Whether 槽 is currently in use (claimed and not released).
     pub fn is_slot_used(&self, slot: u32) -> bool {
-        slot < self.next
+        self.slots.is_used(slot)
     }
 
     /// Overwrite an existing SRV 槽 (e.g. to 交换 a 纹理 without reallocating).
@@ -348,17 +462,17 @@ impl BindlessTextureTable {
         &self.device
     }
 
-    /// Number of registered 纹理 views.
+    /// Number of live in-use 纹理 views (released 槽 excluded).
     pub fn len(&self) -> u32 {
-        self.next
+        self.slots.live_len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.next == 0
+        self.slots.is_empty()
     }
 
     pub fn capacity(&self) -> u32 {
-        self.capacity
+        self.slots.capacity()
     }
 }
 
