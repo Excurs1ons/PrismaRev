@@ -145,6 +145,8 @@ pub fn render_thread_main(
     let mut smoothed_fps = 0.0f32;
     let mut frame_count: u64 = 0;
     let mut first_frame_presented = false;
+    let screenshot = crate::screenshot::ScreenshotPlan::from_env();
+    let mut screenshot_done = false;
 
     while shared.running.load(std::sync::atomic::Ordering::Relaxed) {
         // 检查来自主线程的 PT 重置请求
@@ -185,14 +187,25 @@ pub fn render_thread_main(
 
         let frame_start = Instant::now();
 
-        if let Err(e) =
-            render_one_frame(&mut renderer, &packet, &mut dirty_router, &packet.settings)
-        {
+        let frame_plan = screenshot
+            .as_ref()
+            .filter(|plan| !screenshot_done && plan.fires_on(frame_count + 1));
+        if let Err(e) = render_one_frame(
+            &mut renderer,
+            &packet,
+            &mut dirty_router,
+            &packet.settings,
+            frame_plan,
+        ) {
             log::error!("Render thread error: {e:#}");
         } else if !first_frame_presented {
             first_frame_presented = true;
             shared.mark("first_frame");
             shared.print_startup_report();
+        }
+
+        if frame_plan.is_some() {
+            screenshot_done = true;
         }
 
         // 计算 渲染 stats.
@@ -237,6 +250,7 @@ fn render_one_frame(
     packet: &FramePacket,
     dirty_router: &mut DirtyRouter,
     settings: &RenderSettings,
+    screenshot: Option<&crate::screenshot::ScreenshotPlan>,
 ) -> anyhow::Result<()> {
     let scene = &packet.scene;
     let draw_items = &packet.draw_items;
@@ -308,6 +322,9 @@ fn render_one_frame(
         Some(c) => c,
         None => return Ok(()),
     };
+    if let Some(plan) = screenshot {
+        renderer.request_screenshot(plan.path.clone(), plan.size, plan.scale);
+    }
     renderer
         .prepare(&ctx, &input)
         .and_then(|_| renderer.execute(&ctx, &input))
@@ -316,6 +333,11 @@ fn render_one_frame(
             let _ = renderer.end_frame(&ctx, false);
         })?;
     let presented = renderer.present(&ctx)?;
+    if screenshot.is_some() {
+        if let Err(err) = renderer.finish_screenshot(&ctx) {
+            log::error!("screenshot failed: {err:#}");
+        }
+    }
     renderer.end_frame(&ctx, presented)?;
 
     Ok(())

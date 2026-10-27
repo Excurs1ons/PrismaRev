@@ -1,0 +1,16 @@
+[package]
+name = "prism-editor-mcp"
+version = "0.1.0"
+edition = "2021"
+description = "MCP server exposing the PrismaRev editor data layer over stdio"
+
+[[bin]]
+name = "prism-editor-mcp"
+path = "src/main.rs"
+
+[dependencies]
+prism-editor-api = { path = "../prism-editor-api" }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+log = { workspace = true }
+env_logger = { workspace = true }

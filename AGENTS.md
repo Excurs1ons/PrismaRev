@@ -203,6 +203,29 @@ The user project's dependency chain must stay **UI-framework-free and editor-fre
 - The `projects/prisma/`, `projects/prisma-sponza/`, `launcher/` and `editor/` standalone workspaces need their own `cargo build` / `cargo clippy`
   runs — a root-workspace build does **not** cover them. `editor/` additionally needs `pnpm`.
 
+## Editor MCP server (agent 改场景 / 跑游戏 / 抓图)
+- `crates/prism-editor-mcp` 把 `prism-editor-api` 暴露成 MCP 工具（stdio）：文档读写、
+  `schema_list`、`field_set`（反射校验）、组件增删、`game_run/game_logs`、`screenshot`。
+  它**不链接** engine / render，抓图靠起子进程 + `PRISMREV_SCREENSHOT`。
+  用法与工具表见 [`docs/editor-mcp.md`](docs/editor-mcp.md)。
+- 改场景字段优先用它而不是手改 `.scene.json`：`field_set` 会拒绝只读字段和非法类型。
+- 注意它写的是**作者文档**；运行时只读 `assets/scenes.pak`，改完还要重新 cook。
+- 编辑器界面本身也能驱动（`ui_snapshot` / `ui_click` / `ui_fill` / `ui_highlight` /
+  `ui_screenshot`）：走 CDP 连 WebView2，所以启动编辑器时要带
+  `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222`
+  （或用 `scripts/editor-cdp.ps1`）。不改编辑器代码，也不加依赖。
+
+## Built-in screenshot (automation / art tuning)
+- `PRISMREV_SCREENSHOT=<path>` 让渲染线程在第 N 帧把**屏幕上那一帧**写成 PNG
+  （`crates/prism-render/src/screenshot.rs` + `crates/prism-app/src/screenshot.rs`）。
+  - `PRISMREV_SCREENSHOT_FRAME=<n>`：抓第几帧，默认 90（等资源上传/动画稳定）。
+  - `PRISMREV_SCREENSHOT_SIZE=1920x1080`：输出分辨率（`x` / `X` / `,` 分隔都行）。
+  - `PRISMREV_SCREENSHOT_SCALE=2`：按窗口分辨率倍数放大（`SIZE` 优先）。
+  - 缩放是**最近邻**，像素画放大不糊；内容是窗口那一帧，不重渲染。
+- 实现方式：`execute` 在图像回到 `PRESENT_SRC_KHR` 后插入
+  `vkCmdCopyImageToBuffer`（`PRESENT_SRC → TRANSFER_SRC → PRESENT_SRC`），
+  `finish_screenshot` 在帧提交后等待围栏再读回。不要在 `present` 之前 map 内存。
+
 ## Shaders (important gotcha)
 - Shaders are **Slang** (`assets/shaders/slang/*.slang`), compiled with `slangc` to `.spv`.
   Entry points are `vertexMain` / `fragmentMain` (`-fvk-use-entrypoint-name`).
