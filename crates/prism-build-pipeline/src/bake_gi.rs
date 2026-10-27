@@ -470,8 +470,7 @@ pub fn bake_gi(cfg: &BakeGiConfig) -> Result<()> {
         dims: [dims[0], dims[1], dims[2]],
     };
 
-    let workgroup = 8u32;
-    let total_workgroups = ((dims[0] * dims[1] * dims[2]) as f32 / workgroup as f32).ceil() as u32;
+    let [group_x, group_y, group_z] = gi_bake_dispatch_groups(dims);
     let cmd_buf = unsafe {
         context.device.allocate_command_buffers(
             &vk::CommandBufferAllocateInfo::default()
@@ -532,8 +531,10 @@ pub fn bake_gi(cfg: &BakeGiConfig) -> Result<()> {
             0,
             std::slice::from_raw_parts(&pc as *const _ as *const u8, std::mem::size_of_val(&pc)),
         );
-        // Dispatch
-        context.device.cmd_dispatch(cmd_buf, total_workgroups, 1, 1);
+        // Dispatch in 3D: numthreads is (4, 4, 1) in gi_bake.slang.
+        context
+            .device
+            .cmd_dispatch(cmd_buf, group_x, group_y, group_z);
         // Barrier to make volume readable.
         let read_barrier = vk::ImageMemoryBarrier2::default()
             .src_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
@@ -809,4 +810,39 @@ fn hr_max(probe_count: usize, hit_ratios: &[f32]) -> f32 {
         }
     }
     m
+}
+
+/// Compute 3D workgroup dispatch counts for `gi_bake.slang`.
+///
+/// The compute shader uses `[numthreads(4, 4, 1)]` with `SV_DispatchThreadID`,
+/// requiring 3D dispatch counts of `(dims.x.div_ceil(4), dims.y.div_ceil(4), dims.z)`.
+#[inline]
+pub const fn gi_bake_dispatch_groups(dims: [u32; 3]) -> [u32; 3] {
+    [dims[0].div_ceil(4), dims[1].div_ceil(4), dims[2]]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gi_bake_dispatch_groups_matches_shader_numthreads() {
+        // [numthreads(4, 4, 1)] with SV_DispatchThreadID:
+        // group_x = (dims[0] + 3) / 4
+        // group_y = (dims[1] + 3) / 4
+        // group_z = dims[2]
+
+        // Exact multiples of 4
+        assert_eq!(gi_bake_dispatch_groups([16, 8, 8]), [4, 2, 8]);
+        assert_eq!(gi_bake_dispatch_groups([4, 4, 1]), [1, 1, 1]);
+
+        // Non-multiples of 4 rounding up
+        assert_eq!(gi_bake_dispatch_groups([1, 1, 1]), [1, 1, 1]);
+        assert_eq!(gi_bake_dispatch_groups([5, 1, 3]), [2, 1, 3]);
+        assert_eq!(gi_bake_dispatch_groups([7, 9, 12]), [2, 3, 12]);
+        assert_eq!(gi_bake_dispatch_groups([10, 14, 5]), [3, 4, 5]);
+
+        // Zero dimensions
+        assert_eq!(gi_bake_dispatch_groups([0, 0, 0]), [0, 0, 0]);
+    }
 }

@@ -108,6 +108,7 @@ pub use pt_pass::PathTracePass;
 pub use render_graph::{
     sort_draw_items, DrawItem, DrawState, PassInfo, PassKind, RenderGraphSnapshot, RenderMode,
     RenderSettings, ResourceHandle, ResourceInfo, ResourceType, ShadowMode, SpriteDrawItem,
+    FORWARD_COLOR_H, FORWARD_DEPTH_H, FORWARD_NORMAL_H, PT_COLOR_H, SHADOW_MAP_H,
 };
 pub use render_pass::{DepthImage, Framebuffers, NormalImage, RenderPass};
 pub use shader::load_shader_module;

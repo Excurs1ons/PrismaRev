@@ -27,7 +27,7 @@
 //! prism-cook inspect 10001
 //! ```
 
-use prism_asset::core::AssetType;
+use prism_asset::core::{AssetId, AssetType};
 use prism_asset::package::PackageBuilder;
 use prism_cooker::cooker::{default_cooker_registry, profile, CookPipeline};
 use prism_cooker::db::{AssetDatabase, ImportCache};
@@ -193,6 +193,14 @@ fn cache_path(root: &Path) -> PathBuf {
     library_dir(root).join("import_cache.json")
 }
 
+fn intermediate_dir(root: &Path) -> PathBuf {
+    library_dir(root).join("Intermediate")
+}
+
+fn intermediate_path(root: &Path, id: AssetId) -> PathBuf {
+    intermediate_dir(root).join(format!("{:016x}.bin", id.0))
+}
+
 /// Resolve the profile/platform + CLI overrides into final cook settings.
 ///
 /// Profile lookup order: explicit `--profile`, then `--platform`, then
@@ -238,9 +246,11 @@ fn resolve_build_settings(
 fn cmd_init(dir: &Path) -> anyhow::Result<()> {
     let assets = assets_dir(dir);
     let library = library_dir(dir);
+    let intermediate = intermediate_dir(dir);
 
     std::fs::create_dir_all(&assets)?;
     std::fs::create_dir_all(&library)?;
+    std::fs::create_dir_all(&intermediate)?;
 
     let db = AssetDatabase::new();
     db.save(db_path(dir))?;
@@ -329,6 +339,9 @@ fn cmd_import(root: &Path, force: bool, _cli: &Cli) -> anyhow::Result<()> {
     let mut imported = 0u32;
     let mut cached = 0u32;
 
+    let inter_dir = intermediate_dir(root);
+    std::fs::create_dir_all(&inter_dir)?;
+
     // Collect records as vec since import_file borrows db mutably.
     let paths: Vec<String> = db.records().map(|r| r.path.clone()).collect();
 
@@ -337,16 +350,38 @@ fn cmd_import(root: &Path, force: bool, _cli: &Cli) -> anyhow::Result<()> {
         if !source_path.exists() {
             continue;
         }
+        let id_opt = db.id_by_path(relative);
+        let force_this = force
+            || id_opt
+                .map(|id| !intermediate_path(root, id).exists())
+                .unwrap_or(true);
+
         match pipeline.import_file_with_key(
             &source_path,
             relative,
             &mut db,
             &mut cache,
             None,
-            force,
+            force_this,
         ) {
-            Ok(r) if r.was_imported => imported += 1,
-            Ok(_) => cached += 1,
+            Ok(r) => {
+                if r.was_imported {
+                    imported += 1;
+                    if let Some(data) = r.intermediate_data {
+                        if let Some(id) = db.id_by_path(relative) {
+                            let path = intermediate_path(root, id);
+                            if let Err(e) = std::fs::write(&path, &data) {
+                                eprintln!(
+                                    "  ⚠  cannot write intermediate / 无法写入中间文件 {}: {e}",
+                                    path.display()
+                                );
+                            }
+                        }
+                    }
+                } else {
+                    cached += 1;
+                }
+            }
             Err(e) => eprintln!("  ⚠  {}: {e}", relative),
         }
     }
@@ -387,18 +422,70 @@ fn cmd_build(
         resolved_profile, settings.platform, settings.compression.level
     );
 
-    // 加载 imported data: for now, just 读取 源 files.
+    // 加载 imported data: 从 Library/Intermediate/ 读取中间数据；
+    // 若尚未导入则按需执行 importer 生成中间数据，避免直接将原始文件（如 PNG）
+    // 传给期望 RTXI/RMXI 的 cooker。
     let assets = assets_dir(root);
+    let inter_dir = intermediate_dir(root);
+    std::fs::create_dir_all(&inter_dir)?;
+
+    let mut db_mut = db.clone();
+    let mut cache = ImportCache::load(cache_path(root)).unwrap_or_default();
+    let mut dirty = false;
+
+    let importer_reg = Arc::new(default_importer_registry());
+    let import_pipeline = ImportPipeline::new(importer_reg);
+
     let mut asset_data: std::collections::HashMap<prism_asset::core::AssetId, Vec<u8>> =
         std::collections::HashMap::new();
     for record in db.records() {
+        let inter_path = intermediate_path(root, record.id);
+        if inter_path.exists() {
+            if let Ok(data) = std::fs::read(&inter_path) {
+                asset_data.insert(record.id, data);
+                continue;
+            }
+        }
+
         let source_path = assets.join(&record.path);
-        if let Ok(data) = std::fs::read(&source_path) {
-            asset_data.insert(record.id, data);
-        } else {
+        if !source_path.exists() {
             eprintln!("  ⚠  cannot read / 无法读取 {}", record.path);
+            continue;
+        }
+
+        match import_pipeline.import_file_with_key(
+            &source_path,
+            &record.path,
+            &mut db_mut,
+            &mut cache,
+            None,
+            false,
+        ) {
+            Ok(r) => {
+                dirty = true;
+                if let Some(data) = r.intermediate_data {
+                    let _ = std::fs::write(&inter_path, &data);
+                    asset_data.insert(record.id, data);
+                } else if let Ok(data) = std::fs::read(&inter_path) {
+                    asset_data.insert(record.id, data);
+                } else if let Ok(data) = std::fs::read(&source_path) {
+                    asset_data.insert(record.id, data);
+                }
+            }
+            Err(e) => {
+                eprintln!("  ⚠  import failed / 导入失败 {}: {e}", record.path);
+                if let Ok(data) = std::fs::read(&source_path) {
+                    asset_data.insert(record.id, data);
+                }
+            }
         }
     }
+
+    if dirty {
+        let _ = db_mut.save(db_path(root));
+        let _ = cache.save(cache_path(root));
+    }
+    let db = db_mut;
 
     let cooker_reg = default_cooker_registry();
     let pipeline = CookPipeline::new(cooker_reg);

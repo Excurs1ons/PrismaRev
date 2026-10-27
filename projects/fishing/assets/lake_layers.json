@@ -69,22 +69,6 @@
       "scale": 1.0
     },
     {
-      "slug": "+59_seaweed",
-      "parallax": 0.6,
-      "x": 0.0,
-      "y": 78.0,
-      "reflect": false,
-      "scale": 1.0
-    },
-    {
-      "slug": "+0_plants",
-      "parallax": 0.95,
-      "x": 0.0,
-      "y": 76.0,
-      "reflect": false,
-      "scale": 1.0
-    },
-    {
       "slug": "+13_+1_front-rocks",
       "parallax": 1.05,
       "x": 120.0,
