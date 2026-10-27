@@ -846,14 +846,72 @@ async fn editor_generate_heightmap(options: HeightmapOptions) -> Result<String, 
 // 运行 / 预览
 // ---------------------------------------------------------------------------
 
-/// One captured line from the game process.
+/// One captured line from the game process (or from the in-process engine).
 #[derive(Clone, serde::Serialize)]
 struct PreviewLogLine {
     stream: String,
     line: String,
+    /// 已知级别时直接给出（`log` 记录），子进程输出靠前端从文本里猜。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    level: Option<String>,
 }
 
 const PREVIEW_LOG_LIMIT: usize = 5000;
+
+/// 进程内引擎（视口线程）的日志出口：`log` 记录既写 stderr，也进日志面板。
+///
+/// 用 `env_logger` 当内层，所以 `RUST_LOG` / 默认过滤规则都没有变化；这里只是额外
+/// 把同一条记录塞进 `PreviewState` 的环形缓冲并 emit `preview-log`。
+static LOG_APP: std::sync::OnceLock<tauri::AppHandle> = std::sync::OnceLock::new();
+
+struct EditorLogger {
+    inner: env_logger::Logger,
+}
+
+fn level_name(level: log::Level) -> &'static str {
+    match level {
+        log::Level::Error => "error",
+        log::Level::Warn => "warn",
+        log::Level::Info => "info",
+        log::Level::Debug => "debug",
+        log::Level::Trace => "trace",
+    }
+}
+
+/// 日志面板里的一行：`[level] target: message`（级别由日志面板着色）。
+fn engine_log_line(level: &str, target: &str, message: &str) -> String {
+    format!("[{level}] {target}: {message}")
+}
+
+impl log::Log for EditorLogger {
+    fn enabled(&self, metadata: &log::Metadata) -> bool {
+        self.inner.enabled(metadata)
+    }
+
+    fn log(&self, record: &log::Record) {
+        if !self.inner.enabled(record.metadata()) {
+            return;
+        }
+        // 终端那份保持 env_logger 的原始格式。
+        self.inner.log(record);
+        let Some(app) = LOG_APP.get() else {
+            return;
+        };
+        let level = level_name(record.level());
+        push_preview_log(
+            app,
+            PreviewLogLine {
+                stream: "engine".to_string(),
+                line: engine_log_line(level, record.target(), &record.args().to_string()),
+                level: Some(level.to_string()),
+            },
+        );
+    }
+
+    fn flush(&self) {
+        self.inner.flush();
+    }
+}
 
 /// 正在运行的游戏进程（编辑器生命周期内最多一个预览实例）。
 #[derive(Default)]
@@ -888,6 +946,7 @@ fn spawn_preview_log_reader<R: Read + Send + 'static>(
                     PreviewLogLine {
                         stream: stream.to_string(),
                         line,
+                        level: None,
                     },
                 ),
                 Err(_) => break,
@@ -1372,6 +1431,7 @@ fn editor_stop_preview(
         PreviewLogLine {
             stream: "system".to_string(),
             line: "预览进程已停止".to_string(),
+            level: None,
         },
     );
     Ok(true)
@@ -1402,14 +1462,21 @@ fn editor_preview_running(state: State<'_, PreviewState>) -> Result<bool, String
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // 引擎日志（视口线程里的 render/asset 诊断）走同一个 logger。
-    let _ = env_logger::Builder::from_env(
+    // 引擎日志（视口线程里的 render/asset 诊断）既写终端也进日志面板。
+    let inner = env_logger::Builder::from_env(
         env_logger::Env::default().default_filter_or("warn,prism_render=info"),
     )
-    .try_init();
+    .build();
+    if log::set_boxed_logger(Box::new(EditorLogger { inner })).is_ok() {
+        log::set_max_level(log::LevelFilter::Trace);
+    }
 
     tauri::Builder::default()
         .manage(PreviewState::default())
+        .setup(|app| {
+            let _ = LOG_APP.set(app.handle().clone());
+            Ok(())
+        })
         .manage(viewport::ViewportManager::default())
         .invoke_handler(tauri::generate_handler![
             editor_schema,
@@ -1532,5 +1599,35 @@ mod tests {
     fn explorer_select_arg_wraps_plain_paths_too() {
         let arg = explorer_select_arg(Path::new(r"C:\tmp\a.png"));
         assert_eq!(arg, "/select,\"C:\\tmp\\a.png\"");
+    }
+}
+
+#[cfg(test)]
+mod engine_log_tests {
+    use super::{engine_log_line, level_name};
+
+    #[test]
+    fn engine_log_lines_carry_level_and_target() {
+        assert_eq!(
+            engine_log_line("error", "prism_render::graph_renderer", "device lost"),
+            "[error] prism_render::graph_renderer: device lost"
+        );
+        assert_eq!(
+            engine_log_line("trace", "prism_app", "frame"),
+            "[trace] prism_app: frame"
+        );
+    }
+
+    #[test]
+    fn every_log_level_maps_to_a_frontend_level() {
+        for (level, name) in [
+            (log::Level::Error, "error"),
+            (log::Level::Warn, "warn"),
+            (log::Level::Info, "info"),
+            (log::Level::Debug, "debug"),
+            (log::Level::Trace, "trace"),
+        ] {
+            assert_eq!(level_name(level), name);
+        }
     }
 }

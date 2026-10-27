@@ -142,3 +142,10 @@ Scene view 里选中实体后，`Gizmo` 组件会用三色世界轴标出它的�
 - 输入映射只覆盖 `KeyCode` 里列出的键（`viewport.rs::key_code_from_code`）。
 - `editor_play_scene`（spawn 真正的游戏二进制）保留给 MCP / 自动化，
   用来验证发布路径；编辑器 UI 不再使用它。
+
+## 日志
+
+进程内引擎不再有独立的终端：`editor/src-tauri` 里 `EditorLogger` 把 `log` 记录同时写到
+stderr 和日志面板（`stream = "engine"`、`level` 直接给出，前端不用再从文本里猜）。
+`RUST_LOG` 仍然生效（内层就是 `env_logger`），默认 `warn,prism_render=info`。
+Rust panic 不经过 `log`，只会出现在终端。
