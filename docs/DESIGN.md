@@ -671,7 +671,9 @@ RTEX 的 mip 链由 Cooker 通过 2×2 box filter 生成（`TextureCooker::gener
 └─────────────────────────────────────────┘
 ```
 - **压缩**：zstd（按 asset 粒度，`FLAG_COMPRESSED` 标记）
-- **校验**：xxh3-64 覆盖 `header[12..] + registry + deps + data`
+- **校验**：xxh3-64 覆盖 `header[4..44]`（version / asset_count / 各偏移与长度；`magic` 与
+  `checksum` 自身除外）+ registry + deps + data。读取端在**解析 registry 之前**校验，
+  篡改 `version` / `asset_count` 会直接得到 `ChecksumMismatch`（#89）。
 - **读取**：`PackageReader` 零拷贝访问（未压缩 asset 直接 memcpy）
 
 ### 10.7 Cook Profile 系统（`prism-cooker`，src/cooker/profile.rs）

@@ -137,6 +137,64 @@ fn checksum_mismatch_detected() {
     );
 }
 
+/// #89：校验和必须覆盖 `version` 字段。
+///
+/// header 解析器本身也会拒绝未知版本，所以这里直接测 `verify_checksum`，
+/// 证明「同版本号范围内的篡改」不会再被漏掉。
+#[test]
+fn checksum_covers_version_field() {
+    let id = sample_asset_id(6);
+    let mut builder = PackageBuilder::new();
+    builder.add_asset(id, AssetType::Binary, vec![0; 16], &[]);
+    let pak = builder.build().unwrap();
+
+    let header = PackageHeader::from_bytes(&pak).unwrap();
+    assert!(verify_checksum(&pak, &header).is_ok());
+
+    let mut tampered = pak.clone();
+    tampered[4] ^= 0xFF; // version
+    let tampered_header = PackageHeader {
+        version: header.version ^ 0xFF,
+        ..header
+    };
+    let err = verify_checksum(&tampered, &tampered_header).unwrap_err();
+    assert!(
+        matches!(&err, PackageError::ChecksumMismatch { .. }),
+        "version 必须在校验和覆盖范围内，got {err}"
+    );
+}
+
+/// #89：`asset_count` 被篡改时必须在**解析 registry 之前**失败。
+///
+/// 以前校验和跳过这个字段，把 `asset_count` 改成 0 会让解析器按「0 个资产」
+/// 继续跑，而不是报错。
+#[test]
+fn checksum_covers_asset_count() {
+    let id = sample_asset_id(7);
+    let mut builder = PackageBuilder::new();
+    builder.add_asset(id, AssetType::Binary, vec![0; 16], &[]);
+    let pak = builder.build().unwrap();
+
+    let mut tampered = pak.clone();
+    tampered[8..12].copy_from_slice(&0u32.to_le_bytes());
+    let err = PackageReader::from_bytes(&tampered).unwrap_err();
+    assert!(
+        matches!(&err, PackageError::ChecksumMismatch { .. }),
+        "asset_count = 0 应触发校验和失败，got {err}"
+    );
+
+    // 连 registry_size 一起改成自洽的 2 个资产，也逃不掉。
+    let mut tampered = pak.clone();
+    tampered[8..12].copy_from_slice(&2u32.to_le_bytes());
+    let with_two = (RuntimeAssetRecord::SERIALIZED_SIZE * 2).to_le_bytes();
+    tampered[20..28].copy_from_slice(&with_two);
+    let err = PackageReader::from_bytes(&tampered).unwrap_err();
+    assert!(
+        matches!(&err, PackageError::ChecksumMismatch { .. }),
+        "asset_count + registry_size 一起改仍应触发校验和失败，got {err}"
+    );
+}
+
 #[test]
 fn multiple_assets_have_correct_layout() {
     let ids: Vec<_> = (0..5).map(|i| sample_asset_id(100 + i)).collect();
@@ -239,8 +297,12 @@ fn malformed_pak(
     buf.extend_from_slice(&registry_size.to_le_bytes());
     buf.extend_from_slice(&data_offset.to_le_bytes());
     buf.extend_from_slice(&data_size.to_le_bytes());
-    buf.extend_from_slice(&0u64.to_le_bytes()); // checksum (never reached first)
+    buf.extend_from_slice(&0u64.to_le_bytes()); // checksum, filled in below
     buf.extend_from_slice(payload);
+    // 结构校验用例必须带**合法**的校验和，否则会先撞上 ChecksumMismatch（#89）。
+    let tail = buf[PackageHeader::SERIALIZED_SIZE as usize..].to_vec();
+    let checksum = PackageHeader::compute_checksum(&buf[4..44], &[], &[], &tail);
+    buf[44..52].copy_from_slice(&checksum.to_le_bytes());
     buf
 }
 
