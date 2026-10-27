@@ -359,6 +359,47 @@ impl Default for SpriteAnimation {
     }
 }
 
+/// 2D 折线渲染器 = Unity `LineRenderer`（2D 子集）。
+///
+/// 点是**世界空间**的（等价 Unity `useWorldSpace = true`），引擎把折线展开成
+/// 面向相机的加宽四边形并入精灵通道，因此排序/混合与精灵完全一致。
+///
+/// 线的颜色走精灵通道的 `texture == u32::MAX`（纯色）分支，不采样贴图。
+#[derive(Debug, Clone, Serialize, Deserialize, Reflect)]
+#[reflect(name = "prism_engine::scene::LineRenderer")]
+#[serde(default)]
+pub struct LineRenderer {
+    /// 世界空间折线点；少于 2 个点时不绘制。
+    pub points: Vec<[f32; 3]>,
+    /// 线性 RGBA 颜色。
+    pub color: [f32; 4],
+    /// 线宽（世界单位）。
+    pub width: f32,
+    /// 排序层，与 [`SpriteRenderer::sorting_layer`] 同一套数值。
+    pub sorting_layer: i32,
+    /// 同层内顺序。
+    pub order_in_layer: i32,
+}
+
+impl Default for LineRenderer {
+    fn default() -> Self {
+        Self {
+            points: Vec::new(),
+            color: [1.0, 1.0, 1.0, 1.0],
+            width: 0.1,
+            sorting_layer: 0,
+            order_in_layer: 0,
+        }
+    }
+}
+
+impl LineRenderer {
+    /// 是否有可绘制的线段。
+    pub fn has_line(&self) -> bool {
+        self.points.len() >= 2
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Lighting
 // ---------------------------------------------------------------------------
