@@ -84,7 +84,7 @@ use prism_engine::config::AppConfig;
 pub use app::{App, Subsystem};
 pub use debug_hud::DebugHud;
 pub use hook::FrameHook;
-pub use render_shared::{RenderShared, RenderStats};
+pub use render_shared::{FrameImage, RenderShared, RenderStats};
 
 /// 用户项目 Android 入口所需的平台句柄；具体窗口库类型由 app 层封装。
 #[cfg(target_os = "android")]

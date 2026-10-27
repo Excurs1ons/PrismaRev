@@ -87,6 +87,8 @@ impl EditorWindowRegistry {
     pub fn builtin() -> Self {
         let mut registry = Self::new();
         for window in [
+            EditorWindowDescriptor::new("sceneView", "场景视图", "窗口/场景视图"),
+            EditorWindowDescriptor::new("gameView", "游戏视图", "窗口/游戏视图"),
             EditorWindowDescriptor::new("docs", "文档", "窗口/文档").with_shortcut("Ctrl+O"),
             EditorWindowDescriptor::new("hierarchy", "层级", "窗口/层级"),
             EditorWindowDescriptor::new("assets", "资产", "窗口/资产"),
@@ -155,6 +157,8 @@ mod tests {
         assert_eq!(
             registry.ids(),
             vec![
+                "sceneView",
+                "gameView",
                 "docs",
                 "hierarchy",
                 "assets",
@@ -241,11 +245,14 @@ mod tests {
         let registry = build_window_registry();
         let json = serde_json::to_value(registry.windows()).expect("serialize");
         let first = &json[0];
-        assert_eq!(first["id"], "docs");
-        assert_eq!(first["menuPath"], "窗口/文档");
-        assert_eq!(first["command"], "window/toggle/docs");
-        assert_eq!(first["shortcut"], "Ctrl+O");
+        assert_eq!(first["id"], "sceneView");
+        assert_eq!(first["menuPath"], "窗口/场景视图");
+        assert_eq!(first["command"], "window/toggle/sceneView");
+        assert_eq!(first["shortcut"], serde_json::Value::Null);
         // 没有快捷键的面板是显式 null（前端按 `string | null` 处理）。
         assert_eq!(json[1]["shortcut"], serde_json::Value::Null);
+        let docs = &json[2];
+        assert_eq!(docs["id"], "docs");
+        assert_eq!(docs["shortcut"], "Ctrl+O");
     }
 }

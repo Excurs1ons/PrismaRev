@@ -8,6 +8,7 @@ import type {
   BuildProfile,
   BuildProjectOptions,
   BuildProjectResult,
+  CameraOrbit,
   DocKind,
   EditorPaths,
   EditorWindowDescriptor,
@@ -33,6 +34,8 @@ import type {
   SceneTemplate,
   Schema,
   SelectionMode,
+  ViewportInput,
+  ViewportSnapshot,
 } from "./types";
 
 /**
@@ -611,4 +614,75 @@ export function engineVersion(): Promise<string> {
 /** 编辑器关键路径（`Application.dataPath` 等）。 */
 export function editorPaths(): Promise<EditorPaths> {
   return call<EditorPaths>("editor_paths");
+}
+
+// ── 内置视口（Scene / Game view，进程内 engine 实例） ──────────────────────
+
+/**
+ * 打开视口：后端起一个持有 `prism_app::App` 的线程，帧经 `channel` 以
+ * `ArrayBuffer`（8 字节宽高头 + RGBA8）推回来。
+ *
+ * `channel` 是 `@tauri-apps/api` 导出的 `Channel`；这里用 `unknown` 避免
+ * 让 api.ts 依赖 Tauri 运行时（浏览器预览时不可用）。
+ */
+export function viewportOpen(
+  id: string,
+  kind: "scene" | "game",
+  doc: SceneDoc,
+  width: number,
+  height: number,
+  channel: unknown,
+  camera?: CameraOrbit,
+  playing?: boolean,
+): Promise<ViewportSnapshot> {
+  return call<ViewportSnapshot>("editor_viewport_open", {
+    id,
+    kind,
+    doc,
+    width,
+    height,
+    channel,
+    camera: camera ?? null,
+    playing: playing ?? null,
+  });
+}
+
+/** 面板尺寸变化（物理像素）。 */
+export function viewportResize(id: string, width: number, height: number): Promise<void> {
+  return call<void>("editor_viewport_resize", { id, width, height });
+}
+
+/** 面板不可见时暂停（停靠到后台标签）。 */
+export function viewportSetActive(id: string, active: boolean): Promise<void> {
+  return call<void>("editor_viewport_set_active", { id, active });
+}
+
+/** Scene view 相机（轨道参数整体下发）。 */
+export function viewportCamera(id: string, camera: CameraOrbit): Promise<void> {
+  return call<void>("editor_viewport_camera", { id, camera });
+}
+
+/** 用新文档重建场景（保存 / 撤销 / 改字段后 debounce 调用）。 */
+export function viewportReload(id: string, doc: SceneDoc): Promise<ViewportSnapshot> {
+  return call<ViewportSnapshot>("editor_viewport_reload", { id, doc });
+}
+
+/** Game view 的 Play / Stop。 */
+export function viewportSetPlaying(id: string, playing: boolean): Promise<void> {
+  return call<void>("editor_viewport_set_playing", { id, playing });
+}
+
+/** Game view 的鼠标 / 键盘事件。 */
+export function viewportInput(id: string, event: ViewportInput): Promise<void> {
+  return call<void>("editor_viewport_input", { id, event });
+}
+
+/** 轮询视口状态（FPS / 实体数 / 加载错误 / 实际渲染尺寸）。 */
+export function viewportStats(id: string): Promise<ViewportSnapshot | null> {
+  return call<ViewportSnapshot | null>("editor_viewport_stats", { id });
+}
+
+/** 关闭视口并清理临时快照。 */
+export function viewportClose(id: string): Promise<boolean> {
+  return call<boolean>("editor_viewport_close", { id });
 }

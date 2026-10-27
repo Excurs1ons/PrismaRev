@@ -11,11 +11,13 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 
+mod viewport;
+
 use prism_editor_api::{
-    AssetInfo, AssetMutation, AssetRef, BuildFileRole, BuildReport, DocKind, EditorWindowDescriptor,
-    EntityPreset, InstantiateResult, MoveResult, PlayableScene, PrefabInstanceInfo,
-    ProjectSettingsData, RenderSettingsData, Scene, SceneEntry, SceneListEntry, ScenePackageStatus,
-    SceneTemplate, Schema, SelectionFilter, SelectionMode, SelectionState,
+    AssetInfo, AssetMutation, AssetRef, BuildFileRole, BuildReport, DocKind,
+    EditorWindowDescriptor, EntityPreset, InstantiateResult, MoveResult, PlayableScene,
+    PrefabInstanceInfo, ProjectSettingsData, RenderSettingsData, Scene, SceneEntry, SceneListEntry,
+    ScenePackageStatus, SceneTemplate, Schema, SelectionFilter, SelectionMode, SelectionState,
 };
 use tauri::{Emitter, Manager, State};
 
@@ -1398,8 +1400,15 @@ fn editor_preview_running(state: State<'_, PreviewState>) -> Result<bool, String
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // 引擎日志（视口线程里的 render/asset 诊断）走同一个 logger。
+    let _ = env_logger::Builder::from_env(
+        env_logger::Env::default().default_filter_or("warn,prism_render=info"),
+    )
+    .try_init();
+
     tauri::Builder::default()
         .manage(PreviewState::default())
+        .manage(viewport::ViewportManager::default())
         .invoke_handler(tauri::generate_handler![
             editor_schema,
             editor_windows,
@@ -1484,6 +1493,15 @@ pub fn run() {
             editor_preview_running,
             editor_preview_logs,
             editor_render_graph_report,
+            viewport::editor_viewport_open,
+            viewport::editor_viewport_resize,
+            viewport::editor_viewport_set_active,
+            viewport::editor_viewport_camera,
+            viewport::editor_viewport_reload,
+            viewport::editor_viewport_set_playing,
+            viewport::editor_viewport_input,
+            viewport::editor_viewport_stats,
+            viewport::editor_viewport_close,
         ])
         .run(tauri::generate_context!())
         .expect("error while running the PrismaRev editor");

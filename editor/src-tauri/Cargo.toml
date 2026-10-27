@@ -17,6 +17,15 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 # 编辑器后端：场景 schema + .scene.json 读写（egui/Vulkan-free）。
 prism-editor-api = { path = "../../crates/prism-editor-api" }
+# 内置视口（Scene / Game view）：编辑器**进程内**持有 engine 实例。
+# 这是 2026-10-27 的分层变更：Play 不再 spawn 游戏子进程，所有子系统都归
+# 编辑器持有的 `prism_app::App`；渲染走无窗口离屏目标，帧回传 WebView。
+prism-app = { path = "../../crates/prism-app" }
+prism-engine = { path = "../../crates/prism-engine" }
+prism-scene = { path = "../../crates/prism-scene" }
+glam = "0.33"
+log = "0.4"
+env_logger = "0.11"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

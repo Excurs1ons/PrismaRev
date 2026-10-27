@@ -149,6 +149,27 @@ impl Engine {
         )
     }
 
+    /// 从松散的 `.scene.json` 加载场景（编辑器宿主 / 开发期作者格式）。
+    ///
+    /// 与 manifest/cook 路径不同：不经过 `.pak`，直接用反射注册表把作者 JSON
+    /// 反序列化成 ECS 组件。返回生成的实体数。
+    pub fn load_scene_json_file(&mut self, path: &std::path::Path) -> Result<usize, String> {
+        let mut registry = crate::scene::ComponentRegistry::new();
+        crate::scene::register_builtin_components(&mut registry);
+        let mut loader = crate::scene::loader::SceneLoader::new();
+        let instance = loader.load_and_spawn(
+            &mut self.world,
+            crate::scene::loader::SceneSource::JsonFile(path.to_path_buf()),
+            &registry,
+        )?;
+        log::info!(
+            "scene: loaded {} entities from {}",
+            instance.all_entities.len(),
+            path.display()
+        );
+        Ok(instance.all_entities.len())
+    }
+
     /// 存档原语：将当前 ECS 世界状态写入 `scene_state.json`。
     ///
     /// 存档由**用户项目**实现——引擎初始化不再自动读取存档；用户代码在

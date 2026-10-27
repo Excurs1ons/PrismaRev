@@ -30,15 +30,16 @@ pub(crate) struct OffscreenTarget {
 
 impl OffscreenTarget {
     const FORMAT: vk::Format = vk::Format::R8G8B8A8_UNORM;
-    const WIDTH: u32 = 256;
-    const HEIGHT: u32 = 256;
 
     /// 创建 the offscreen 图像 a host-visible readback 缓冲区 and a
     /// dedicated 命令 池
-    pub fn new(context: &VulkanContext) -> anyhow::Result<Self> {
+    ///
+    /// `usage` 同时包含 `COLOR_ATTACHMENT`：PostPass 会把 tonemap 结果直接
+    /// 渲染进这张图（无交换链的宿主模式），随后经 `TRANSFER_SRC` 读回 CPU。
+    pub fn new(context: &VulkanContext, width: u32, height: u32) -> anyhow::Result<Self> {
         let extent = vk::Extent2D {
-            width: Self::WIDTH,
-            height: Self::HEIGHT,
+            width: width.max(1),
+            height: height.max(1),
         };
         let pixel_size = 4u32;
         let buffer_size = (extent.width * extent.height * pixel_size) as u64;
@@ -58,7 +59,11 @@ impl OffscreenTarget {
                     .array_layers(1)
                     .samples(vk::SampleCountFlags::TYPE_1)
                     .tiling(vk::ImageTiling::OPTIMAL)
-                    .usage(vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::TRANSFER_SRC),
+                    .usage(
+                        vk::ImageUsageFlags::COLOR_ATTACHMENT
+                            | vk::ImageUsageFlags::TRANSFER_DST
+                            | vk::ImageUsageFlags::TRANSFER_SRC,
+                    ),
                 None,
             )
         }

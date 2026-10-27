@@ -24,7 +24,7 @@ use winit::raw_window_handle::{
     RawWindowHandle, WindowHandle,
 };
 
-use crate::render_shared::{RenderShared, RenderStats};
+use crate::render_shared::{FrameImage, RenderShared, RenderStats};
 
 /// 进程级原始窗口句柄的 `Send` 包装。
 ///
@@ -63,6 +63,19 @@ const FPS_ALPHA: f32 = 0.05;
 /// 外部叠加层工厂：渲染线程启动前由主线程提供，返回 [`SwapchainOverlay`]。
 pub type OverlayFactory = Box<dyn Fn() -> Box<dyn SwapchainOverlay> + Send>;
 
+/// 渲染线程的呈现目标。
+pub enum RenderTarget {
+    /// 真实窗口 + 交换链（游戏 / launcher）。
+    Surface {
+        handles: SendWindowHandles,
+        extensions: Vec<String>,
+        vsync: bool,
+    },
+    /// 无窗口离屏图像（编辑器视口）。帧由宿主经 [`RenderShared::request_frame`]
+    /// 请求，渲染线程读回 CPU 后放进 [`RenderShared::frame`]。
+    Offscreen { width: u32, height: u32 },
+}
+
 /// 渲染线程入口点。
 ///
 /// 与旧实现不同，本函数在渲染线程**内部**构建 [`GraphRenderer`]：
@@ -79,11 +92,9 @@ pub type OverlayFactory = Box<dyn Fn() -> Box<dyn SwapchainOverlay> + Send>;
 /// → 构建输入 → begin/execute/present。当 `shared.running` 变为 `false` 时退出。
 pub fn render_thread_main(
     shared: Arc<RenderShared>,
-    handles: SendWindowHandles,
-    extensions: Vec<String>,
+    target: RenderTarget,
     scene_env: Option<Vec<u8>>,
     warmup: bool,
-    vsync: bool,
     overlay_factory: Option<OverlayFactory>,
 ) {
     let mut dirty_router = DirtyRouter::new();
@@ -94,19 +105,31 @@ pub fn render_thread_main(
     // -------------------------------------------------------------------
     // 异步构建渲染器（~数百毫秒，但运行在渲染线程，不阻塞窗口事件）
     // -------------------------------------------------------------------
-    let extensions_ref: Vec<&str> = extensions.iter().map(|s| s.as_str()).collect();
     // 原始句柄包装成 Has*Handle——raw 句柄是进程级的，跨线程安全。
-    let handle_bridge = RawHandleBridge {
-        display: &handles.display,
-        window: &handles.window,
+    let created = match &target {
+        RenderTarget::Surface {
+            handles,
+            extensions,
+            vsync,
+        } => {
+            let extensions_ref: Vec<&str> = extensions.iter().map(|s| s.as_str()).collect();
+            let handle_bridge = RawHandleBridge {
+                display: &handles.display,
+                window: &handles.window,
+            };
+            GraphRenderer::new_with_vsync(
+                extensions_ref,
+                &handle_bridge,
+                &handle_bridge,
+                None,
+                *vsync,
+            )
+        }
+        RenderTarget::Offscreen { width, height } => {
+            GraphRenderer::offscreen_new(*width, *height, None)
+        }
     };
-    let mut renderer = match GraphRenderer::new_with_vsync(
-        extensions_ref,
-        &handle_bridge,
-        &handle_bridge,
-        None,
-        vsync,
-    ) {
+    let mut renderer = match created {
         Ok(r) => r,
         Err(e) => {
             let message = format!("failed to create renderer: {e:#}");
@@ -232,6 +255,30 @@ pub fn render_thread_main(
             fps: smoothed_fps,
             pt_frame_count: pt_count,
         });
+
+        // ---- 宿主（编辑器）帧读回：只读回 PostPass 已 tonemap 的离屏图像 ----
+        if renderer.is_headless()
+            && shared
+                .frame_requested
+                .swap(false, std::sync::atomic::Ordering::Relaxed)
+        {
+            match renderer.offscreen_extent() {
+                Some(extent) => match renderer
+                    .copy_offscreen_to_readback()
+                    .and_then(|_| renderer.readback_pixels())
+                {
+                    Ok(pixels) => {
+                        *shared.frame.lock().unwrap() = Some(FrameImage {
+                            width: extent.width,
+                            height: extent.height,
+                            pixels,
+                        });
+                    }
+                    Err(e) => log::warn!("Render thread: frame readback failed: {e:#}"),
+                },
+                None => log::warn!("Render thread: frame requested but no offscreen target"),
+            }
+        }
 
         // Throttle if no 叠加层消息 pending to avoid 100% CPU spin when idle.
         if !has_overlay_messages && frame_time_ms < 1.0 {
