@@ -80,6 +80,9 @@ pub enum RuntimeError {
 
     #[error("Memory budget would be exceeded ({current} + {needed} > {max})")]
     OutOfMemory { current: u64, needed: u64, max: u64 },
+
+    #[error("Cannot unpin asset {0}: pin count is already zero")]
+    PinUnderflow(AssetId),
 }
 
 // ---------------------------------------------------------------------------
@@ -104,6 +107,8 @@ struct Slot {
     size_bytes: u64,
     /// Load sequence stamp (for FIFO eviction), assigned when data is cached.
     load_epoch: u64,
+    /// Number of active pins protecting this slot from automatic eviction.
+    pin_count: u32,
 }
 
 impl Slot {
@@ -117,6 +122,7 @@ impl Slot {
             last_access: Cell::new(Instant::now()),
             size_bytes: 0,
             load_epoch: 0,
+            pin_count: 0,
         }
     }
 }
@@ -310,7 +316,7 @@ impl ResourceManager {
             .values()
             .filter_map(|&idx| {
                 let slot = &self.slots[idx as usize];
-                if slot.data.is_some() {
+                if slot.data.is_some() && slot.pin_count == 0 {
                     Some((
                         idx,
                         slot.last_access.get(),
@@ -340,6 +346,9 @@ impl ResourceManager {
                 break;
             }
             let slot = &mut self.slots[*idx as usize];
+            if slot.pin_count > 0 {
+                continue;
+            }
             if slot.data.take().is_some() {
                 self.memory.account_remove(*size);
                 freed += *size;
@@ -484,6 +493,7 @@ impl ResourceManager {
                 last_access: Cell::new(Instant::now()),
                 size_bytes: record.size, // track uncompressed size
                 load_epoch: 0,
+                pin_count: 0,
             };
             self.id_map.insert(asset_id, index);
         }
@@ -881,6 +891,7 @@ impl ResourceManager {
                 let size = slot.size_bytes;
                 if slot.data.take().is_some() {
                     self.memory.account_remove(size);
+                    slot.pin_count = 0;
                     tracing::debug!("Unloaded slot {index}");
                 }
             }
@@ -892,6 +903,7 @@ impl ResourceManager {
         for slot in &mut self.slots {
             if slot.data.take().is_some() {
                 self.memory.account_remove(slot.size_bytes);
+                slot.pin_count = 0;
             }
         }
         self.memory.current = 0;
@@ -901,15 +913,151 @@ impl ResourceManager {
         );
     }
 
-    /// Unload an 资源 by ID (convenience).
+    /// Unload an asset by ID (convenience).
     pub fn unload_id(&mut self, id: AssetId) -> Result<(), RuntimeError> {
         let index = self.slot_index(id).ok_or(RuntimeError::NotFound(id))?;
         let slot = &mut self.slots[index as usize];
         let size = slot.size_bytes;
         if slot.data.take().is_some() {
             self.memory.account_remove(size);
+            slot.pin_count = 0;
         }
         Ok(())
+    }
+
+    // ------------------------------------------------------------------
+    // Pinning / lease management
+    // ------------------------------------------------------------------
+
+    /// Pin an asset to prevent it from being evicted from memory.
+    ///
+    /// Increments the slot's pin count. As long as `pin_count > 0`,
+    /// automatic eviction (LRU / FIFO) will never discard this asset's data.
+    ///
+    /// Returns the updated pin count on success.
+    pub fn pin<T: ?Sized>(&mut self, handle: Handle<T>) -> Result<u32, RuntimeError> {
+        let index = handle.index() as usize;
+        if index >= self.slots.len() {
+            return Err(RuntimeError::SlotEmpty {
+                index: handle.index(),
+            });
+        }
+        let slot = &mut self.slots[index];
+        if slot.generation != handle.generation() {
+            return Err(RuntimeError::GenerationMismatch {
+                index: handle.index(),
+                expected: handle.generation(),
+                got: slot.generation,
+            });
+        }
+        if slot.data.is_none() {
+            return Err(RuntimeError::NotLoaded(slot.asset_id));
+        }
+        slot.pin_count = slot.pin_count.saturating_add(1);
+        Ok(slot.pin_count)
+    }
+
+    /// Unpin an asset, allowing it to be evicted when memory is needed.
+    ///
+    /// Decrements the slot's pin count. If the pin count reaches 0, the
+    /// asset becomes eligible for eviction.
+    ///
+    /// Returns the updated pin count on success, or `Err(RuntimeError::PinUnderflow)`
+    /// if the asset was not pinned.
+    pub fn unpin<T: ?Sized>(&mut self, handle: Handle<T>) -> Result<u32, RuntimeError> {
+        let index = handle.index() as usize;
+        if index >= self.slots.len() {
+            return Err(RuntimeError::SlotEmpty {
+                index: handle.index(),
+            });
+        }
+        let slot = &mut self.slots[index];
+        if slot.generation != handle.generation() {
+            return Err(RuntimeError::GenerationMismatch {
+                index: handle.index(),
+                expected: handle.generation(),
+                got: slot.generation,
+            });
+        }
+        if slot.pin_count == 0 {
+            return Err(RuntimeError::PinUnderflow(slot.asset_id));
+        }
+        slot.pin_count -= 1;
+        Ok(slot.pin_count)
+    }
+
+    /// Check whether an asset handle is currently pinned.
+    pub fn is_pinned<T: ?Sized>(&self, handle: Handle<T>) -> bool {
+        self.pin_count(handle) > 0
+    }
+
+    /// Get the current pin count for an asset handle.
+    pub fn pin_count<T: ?Sized>(&self, handle: Handle<T>) -> u32 {
+        let index = handle.index() as usize;
+        if index < self.slots.len() {
+            let slot = &self.slots[index];
+            if slot.generation == handle.generation() {
+                return slot.pin_count;
+            }
+        }
+        0
+    }
+
+    /// Pin an asset using a type-erased [`AnyHandle`].
+    pub fn pin_any(&mut self, handle: AnyHandle) -> Result<u32, RuntimeError> {
+        self.pin(Handle::<()>::from(handle))
+    }
+
+    /// Unpin an asset using a type-erased [`AnyHandle`].
+    pub fn unpin_any(&mut self, handle: AnyHandle) -> Result<u32, RuntimeError> {
+        self.unpin(Handle::<()>::from(handle))
+    }
+
+    /// Check whether a type-erased [`AnyHandle`] is pinned.
+    pub fn is_any_pinned(&self, handle: AnyHandle) -> bool {
+        self.is_pinned(Handle::<()>::from(handle))
+    }
+
+    /// Get the pin count for a type-erased [`AnyHandle`].
+    pub fn any_pin_count(&self, handle: AnyHandle) -> u32 {
+        self.pin_count(Handle::<()>::from(handle))
+    }
+
+    /// Pin an asset by `AssetId`.
+    pub fn pin_id(&mut self, id: AssetId) -> Result<u32, RuntimeError> {
+        let index = self.slot_index(id).ok_or(RuntimeError::NotFound(id))?;
+        let slot = &mut self.slots[index as usize];
+        if slot.data.is_none() {
+            return Err(RuntimeError::NotLoaded(id));
+        }
+        slot.pin_count = slot.pin_count.saturating_add(1);
+        Ok(slot.pin_count)
+    }
+
+    /// Unpin an asset by `AssetId`.
+    pub fn unpin_id(&mut self, id: AssetId) -> Result<u32, RuntimeError> {
+        let index = self.slot_index(id).ok_or(RuntimeError::NotFound(id))?;
+        let slot = &mut self.slots[index as usize];
+        if slot.pin_count == 0 {
+            return Err(RuntimeError::PinUnderflow(id));
+        }
+        slot.pin_count -= 1;
+        Ok(slot.pin_count)
+    }
+
+    /// Check whether an asset ID is currently pinned.
+    pub fn is_id_pinned(&self, id: AssetId) -> bool {
+        self.id_pin_count(id) > 0
+    }
+
+    /// Get the current pin count for an asset ID.
+    pub fn id_pin_count(&self, id: AssetId) -> u32 {
+        if let Some(index) = self.slot_index(id) {
+            if let Some(slot) = self.slots.get(index as usize) {
+                return slot.pin_count;
+            }
+        }
+        0
     }
 
     // ------------------------------------------------------------------
