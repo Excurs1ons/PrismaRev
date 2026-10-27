@@ -120,8 +120,10 @@ fn nested_hierarchy() {
 }
 
 #[test]
-fn orphan_uses_local_transform() {
-    // 实体 with Parent pointing to a dead 实体 → treated as root.
+fn dead_parent_makes_the_child_a_root() {
+    // 父实体被 despawn 后子实体的 `Parent` 仍指向死实体（despawn 只删自己的
+    // 组件）。以前这种子节点既不是根、也够不到，`LocalToWorld` 会永远冻结在
+    // 旧值；现在按 Unity 语义提升为根，等于自己的 `LocalTransform`。
     let mut world = World::new();
     let parent = world.spawn();
     let child = world.spawn();
@@ -138,23 +140,116 @@ fn orphan_uses_local_transform() {
     world.insert(child, LocalToWorld(glam::Mat4::ZERO));
 
     HierarchyHelper::reparent(&mut world, child, Some(parent));
-    world.despawn(parent); // parent dead
+    world.despawn(parent);
     hierarchy_system(&mut world);
 
-    // Child's parent is dead — it has no live parent 链 so
-    // hierarchy_system treats it as root (no Parent 分量 → root).
-    // But the Parent 分量 still 存在 The 销毁 only removes
-    // the 实体 not the components on other entities.
-    //
-    // So the child still says Parent(dead_entity). Since the parent is
-    // dead, visit_children won't reach it from the root. But the child
-    // won't be in the roots 列表 because it HAS a Parent 分量
-    //
-    // 结果 child's LocalToWorld stays as whatever it was before
-    // (the dummy value we 集合
     let cw = world.get::<LocalToWorld>(child).unwrap().0;
-    // Still the dummy value since hierarchy_system didn't 更新 it.
-    assert_eq!(cw.x_axis[0], 0.0);
+    assert!(
+        (cw.w_axis[0] - 5.0).abs() < 1e-6,
+        "child.x = {}",
+        cw.w_axis[0]
+    );
+}
+
+#[test]
+fn parent_without_child_link_treats_the_child_as_a_root() {
+    // 只有 `Parent`、父的 `Child` 里却没有列出它：树是不一致的，
+    // 不能让它永远等一个不会遍历到它的父节点。
+    let mut world = World::new();
+    let parent = world.spawn();
+    let child = world.spawn();
+
+    world.insert(
+        parent,
+        LocalTransform {
+            position: glam::Vec3::new(100.0, 0.0, 0.0),
+            ..Default::default()
+        },
+    );
+    world.insert(
+        child,
+        LocalTransform {
+            position: glam::Vec3::new(3.0, 0.0, 0.0),
+            ..Default::default()
+        },
+    );
+    world.insert(child, Parent(parent));
+
+    hierarchy_system(&mut world);
+
+    let cw = world.get::<LocalToWorld>(child).unwrap().0;
+    assert!(
+        (cw.w_axis[0] - 3.0).abs() < 1e-6,
+        "child.x = {}",
+        cw.w_axis[0]
+    );
+}
+
+#[test]
+fn transformless_intermediate_node_does_not_block_its_subtree() {
+    // root(x=10) → mid(无 LocalTransform) → leaf(x=0)
+    // mid 自己不该拿到 `LocalToWorld`，但 leaf 必须继承 root 的平移。
+    let mut world = World::new();
+    let root = world.spawn();
+    let mid = world.spawn();
+    let leaf = world.spawn();
+
+    world.insert(
+        root,
+        LocalTransform {
+            position: glam::Vec3::new(10.0, 0.0, 0.0),
+            ..Default::default()
+        },
+    );
+    world.insert(
+        leaf,
+        LocalTransform {
+            position: glam::Vec3::new(0.0, 0.0, 0.0),
+            ..Default::default()
+        },
+    );
+
+    HierarchyHelper::reparent(&mut world, mid, Some(root));
+    HierarchyHelper::reparent(&mut world, leaf, Some(mid));
+    hierarchy_system(&mut world);
+
+    assert!(
+        world.get::<LocalToWorld>(mid).is_none(),
+        "transform-less nodes stay without LocalToWorld"
+    );
+    let lw = world.get::<LocalToWorld>(leaf).unwrap().0;
+    assert!(
+        (lw.w_axis[0] - 10.0).abs() < 1e-6,
+        "leaf.x = {}",
+        lw.w_axis[0]
+    );
+}
+
+#[test]
+fn parent_cycle_does_not_recurse_forever() {
+    // 脏数据成环时不能让 DFS 无限递归：A 是根且列出 B，B 又列出 A。
+    let mut world = World::new();
+    let a = world.spawn();
+    let b = world.spawn();
+
+    for entity in [a, b] {
+        world.insert(
+            entity,
+            LocalTransform {
+                position: glam::Vec3::new(1.0, 0.0, 0.0),
+                ..Default::default()
+            },
+        );
+    }
+    world.insert(a, Child(vec![b]));
+    world.insert(b, Child(vec![a]));
+    world.insert(b, Parent(a));
+
+    hierarchy_system(&mut world);
+
+    // A 是根（无 Parent）→ [1,0,0]；B 是子 → [2,0,0]。
+    assert!((world.get::<LocalToWorld>(a).unwrap().0.w_axis[0] - 1.0).abs() < 1e-6);
+    assert!((world.get::<LocalToWorld>(b).unwrap().0.w_axis[0] - 2.0).abs() < 1e-6);
 }
 
 #[test]
