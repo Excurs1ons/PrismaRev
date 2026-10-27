@@ -73,6 +73,16 @@ struct ActiveSound {
     node_id: NodeID,
     /// 本地副本，用于调用 `sync_*_event()`。
     sampler: SamplerNode,
+    /// 采样器节点的共享状态，用于观察音频线程真实的播放进度。
+    ///
+    /// 音频线程只写入 `SamplerState` 内部的共享通道，节点本身不暴露完成事件，
+    /// 所以这是唯一能区分「已播完」与「还没开始播」的途径。
+    state: SamplerState,
+    /// 是否已经观察到该采样器真正播放过。
+    ///
+    /// 采样器刚创建时报告 `Stopped`，直到音频线程处理完第一个音频块才变为
+    /// `Playing`；因此首次看到 `Stopped` 不代表播放结束。
+    seen_playing: bool,
 }
 
 /// 主音频引擎。
@@ -203,26 +213,19 @@ impl AudioEngine {
 
     /// 必须每帧调用一次（最好在帧结束时）。
     ///
-    /// 移除已播放完成的声音并推进 Firewheel 上下文。
+    /// 移除已播放完成的声音并推进 Firewheel 上下文。存活判定见
+    /// [`should_keep_sound`]：新创建的采样器在音频线程处理第一个块之前一直报告
+    /// `Stopped`，所以必须用「是否观察到过 `Playing`」来区分「未开始」和「已结束」。
     pub fn update(&mut self) {
-        // 清理已播放完成的声音。
-        self.active.retain(|s| {
-            let alive = self
-                .ctx
-                .node_info(s.node_id)
-                .and_then(|entry| {
-                    entry
-                        .info
-                        .custom_state
-                        .as_ref()
-                        .and_then(|state| state.downcast_ref::<CurrentProcessorState>())
-                })
-                .is_some_and(|ps| ps.playback_state == PlaybackState::Playing);
-
-            if !alive {
-                let _ = self.ctx.remove_node(s.node_id);
+        let has_output = self._stream.is_some();
+        let ctx = &mut self.ctx;
+        self.active.retain_mut(|s| {
+            let playback_state = s.state.playback_state();
+            if should_keep_sound(playback_state, &mut s.seen_playing, has_output) {
+                return true;
             }
-            alive
+            let _ = ctx.remove_node(s.node_id);
+            false
         });
 
         let _ = self.ctx.update();
@@ -287,6 +290,16 @@ impl AudioEngine {
             }
         };
 
+        // 采样器节点把自己的 `SamplerState` 注册为 node state —— 这是观察
+        // 播放完成的唯一通道（Firewheel 不提供播放结束事件）。
+        let Some(state) = self.ctx.node_state::<SamplerState>(node_id).cloned() else {
+            ::log::error!(
+                "Sampler node {node_id:?} exposes no SamplerState; cannot track playback"
+            );
+            let _ = self.ctx.remove_node(node_id);
+            return PlaybackHandle(0);
+        };
+
         // 将样本资源加入队列。
         self.ctx
             .queue_event_for(node_id, SamplerNode::set_dyn_sample_event(resource));
@@ -311,6 +324,8 @@ impl AudioEngine {
             handle: id,
             node_id,
             sampler,
+            state,
+            seen_playing: false,
         });
 
         id
@@ -356,20 +371,14 @@ impl AudioEngine {
     }
 
     /// 检查声音当前是否正在播放。
+    ///
+    /// 采样器由音频线程驱动：刚 `play()` 后、音频线程处理第一个音频块之前，
+    /// 这里会返回 `false`。暂停中的声音返回 `false`。
     pub fn is_playing(&self, handle: &PlaybackHandle) -> bool {
         let Some(s) = self.active.iter().find(|s| s.handle == *handle) else {
             return false;
         };
-        self.ctx
-            .node_info(s.node_id)
-            .and_then(|entry| {
-                entry
-                    .info
-                    .custom_state
-                    .as_ref()
-                    .and_then(|state| state.downcast_ref::<CurrentProcessorState>())
-            })
-            .is_some_and(|ps| ps.playback_state == PlaybackState::Playing)
+        s.state.playback_state() == PlaybackState::Playing
     }
 
     /// 立即停止所有正在播放的声音。
@@ -406,6 +415,31 @@ impl Drop for AudioEngine {
         // CpalStream must be dropped before FirewheelContext.
         let stream = self._stream.take();
         drop(stream);
+    }
+}
+
+/// 判断一个活动声音在 `update()` 时是否应继续保留。
+///
+/// `playback_state` 来自音频线程，`seen_playing` 记录本声音是否已经真正开始播放，
+/// `has_output` 表示当前是否真的有音频流在消费图（设备打不开时为 `false`）。
+///
+/// 规则：
+/// - `Playing`：记住「已开始」并保留；
+/// - `Paused`：保留，`resume()` 才能续播；
+/// - `Stopped`：只在「从未开始」且「确实有输出」时保留（音频线程可能还没处理到
+///   第一个块）；已经播过或根本没有输出时视为结束/不可能播放，移除节点。
+fn should_keep_sound(
+    playback_state: PlaybackState,
+    seen_playing: &mut bool,
+    has_output: bool,
+) -> bool {
+    match playback_state {
+        PlaybackState::Playing => {
+            *seen_playing = true;
+            true
+        }
+        PlaybackState::Paused => true,
+        PlaybackState::Stopped => !*seen_playing && has_output,
     }
 }
 
@@ -496,6 +530,86 @@ mod tests {
         let handle = engine.play(&audio);
         assert!(!handle.is_valid());
         assert_eq!(engine.active_count(), 0);
+    }
+
+    #[test]
+    fn sound_that_has_not_started_yet_is_kept_while_output_exists() {
+        let mut seen_playing = false;
+        assert!(
+            should_keep_sound(PlaybackState::Stopped, &mut seen_playing, true),
+            "a sampler reports Stopped until the audio thread processes the first block"
+        );
+        assert!(!seen_playing);
+    }
+
+    #[test]
+    fn playing_sound_is_kept_and_marks_that_it_started() {
+        let mut seen_playing = false;
+        assert!(should_keep_sound(
+            PlaybackState::Playing,
+            &mut seen_playing,
+            true
+        ));
+        assert!(seen_playing);
+    }
+
+    #[test]
+    fn finished_sound_is_dropped_once_it_has_played() {
+        let mut seen_playing = true;
+        assert!(!should_keep_sound(
+            PlaybackState::Stopped,
+            &mut seen_playing,
+            true
+        ));
+    }
+
+    #[test]
+    fn paused_sound_is_kept_so_resume_can_continue_it() {
+        let mut never_started = false;
+        assert!(should_keep_sound(
+            PlaybackState::Paused,
+            &mut never_started,
+            true
+        ));
+        let mut played_before = true;
+        assert!(should_keep_sound(
+            PlaybackState::Paused,
+            &mut played_before,
+            true
+        ));
+    }
+
+    #[test]
+    fn stopped_sound_is_dropped_when_no_audio_output_exists() {
+        let mut seen_playing = false;
+        assert!(
+            !should_keep_sound(PlaybackState::Stopped, &mut seen_playing, false),
+            "without an audio stream the node would never start, so it must not leak"
+        );
+    }
+
+    #[test]
+    fn update_does_not_panic_and_follows_stream_availability() {
+        // 没有音频设备时，play() 仍要建立可跟踪的活动声音；随后 update() 才能清掉
+        // 永远不会播放的节点。设备可用时则必须继续保留（音频线程可能还没跑第一块）。
+        let mut engine = AudioEngine::new(AudioConfig::default()).expect("engine new");
+        let handle = engine.play(&dummy_audio(2));
+        assert!(handle.is_valid());
+        assert_eq!(engine.active_count(), 1);
+
+        let has_output = engine.is_active();
+        engine.update();
+        assert_eq!(
+            engine.active_count(),
+            usize::from(has_output),
+            "a sound may only survive update() when it still has an audio stream"
+        );
+    }
+
+    #[test]
+    fn is_playing_is_false_for_unknown_handle() {
+        let engine = AudioEngine::new(AudioConfig::default()).expect("engine new");
+        assert!(!engine.is_playing(&PlaybackHandle(9999)));
     }
 
     #[test]
