@@ -84,28 +84,42 @@ def layer(size, color, seed):
 
 
 def water_tile(size=(512, 256)):
-    """Tileable water band: horizontal ripple lines fading out at both edges.
+    """Opaque water body: sky-tinted at the horizon, deepening downwards.
 
-    Fully transparent at the top/bottom rows so the quad never reads as a
-    rectangle over the background (the old opaque placeholder did).
+    The top row of the texture is the water line, so the quad hides every
+    background layer's hard bottom crop instead of letting the sky bleed
+    through (a translucent band over a bright sky reads as grey haze).
     """
     w, h = size
-    im = Image.new("RGBA", size, (0, 0, 0, 0))
+    im = Image.new("RGBA", size, (0, 0, 0, 255))
     px = im.load()
+    # sRGB stops: horizon (reflects the sky) -> mid lake -> deep water.
+    stops = [(0.0, (92, 122, 138)), (0.18, (58, 92, 116)), (0.55, (34, 62, 88)), (1.0, (18, 36, 58))]
+
+    def sample(t):
+        for i in range(len(stops) - 1):
+            t0, c0 = stops[i]
+            t1, c1 = stops[i + 1]
+            if t0 <= t <= t1:
+                f = (t - t0) / (t1 - t0)
+                return tuple(c0[k] + (c1[k] - c0[k]) * f for k in range(3))
+        return stops[-1][1]
+
     for y in range(h):
-        # 0 at the edges, 1 in the middle.
         t = y / (h - 1)
-        fade = min(1.0, t * 6.0, (1.0 - t) * 6.0)
-        if fade <= 0.0:
-            continue
-        ripple = 0.5 + 0.5 * math.sin(y * 0.55)
-        base = int(40 + 30 * ripple)
+        r, g, b = sample(t)
+        # Ripples get shorter and lower-contrast with distance (nearer water
+        # sits at the bottom of the texture).
+        amp = 3.0 + 7.0 * t
         for x in range(w):
-            wave = math.sin((x * 0.08) + (y * 0.22))
-            a = int(215 * fade * (0.55 + 0.45 * wave))
-            if a <= 0:
-                continue
-            px[x, y] = (base, base + 30, base + 70, a)
+            wave = math.sin((x * 0.06) + math.sin(y * 0.9) * 2.0)
+            ripple = amp * wave
+            px[x, y] = (
+                max(0, min(255, int(r + ripple * 0.6))),
+                max(0, min(255, int(g + ripple * 0.8))),
+                max(0, min(255, int(b + ripple))),
+                255,
+            )
     return im
 
 
