@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
+import EditorDropdown, { type DropdownOption } from "./EditorDropdown.vue";
 import * as api from "../api";
 import type { ProjectSettingsData, RenderSettingsData } from "../types";
 
@@ -22,6 +23,37 @@ const DEBUG_FLAGS = [
   "Anisotropy",
   "ClearCoat",
   "GI",
+];
+
+const renderModeOptions: DropdownOption[] = [
+  { value: "raster", label: "光栅化（PBR）" },
+  { value: "path_trace", label: "路径追踪" },
+];
+
+const tonemapOptions: DropdownOption[] = [
+  { value: 0, label: "Reinhard" },
+  { value: 1, label: "ACES" },
+  { value: 2, label: "直通（2D 像素画）" },
+];
+
+const debugFlagsOptions: DropdownOption[] = DEBUG_FLAGS.map((label, index) => ({
+  value: index,
+  label,
+}));
+
+const debugRtOptions: DropdownOption[] = [
+  { value: 0, label: "HDR tonemap" },
+  { value: 1, label: "线性深度" },
+  { value: 2, label: "视图空间法线" },
+];
+
+const buildTargetOptions: DropdownOption[] = [
+  { value: "windows", label: "Windows Desktop" },
+];
+
+const buildProfileOptions: DropdownOption[] = [
+  { value: "release", label: "Release" },
+  { value: "debug", label: "Debug" },
 ];
 
 type Tab = "general" | "render" | "build";
@@ -124,64 +156,69 @@ onMounted(() => void load());
       <template v-else-if="tab === 'render'">
         <label>
           <span>渲染模式</span>
-          <select v-model="render.renderMode">
-            <option value="raster">光栅化（PBR）</option>
-            <option value="path_trace">路径追踪</option>
-          </select>
+          <EditorDropdown
+            v-model="render.renderMode"
+            :options="renderModeOptions"
+            block
+          />
         </label>
         <label>
           <span>色调映射</span>
-          <select v-model.number="render.tonemapMode">
-            <option :value="0">Reinhard</option>
-            <option :value="1">ACES</option>
-            <option :value="2">直通（2D 像素画）</option>
-          </select>
+          <EditorDropdown
+            v-model="render.tonemapMode"
+            :options="tonemapOptions"
+            block
+          />
         </label>
         <label>
           <span>PBR 调试通道</span>
-          <select :value="debugFlagIndex(render.debugFlags)" @change="setDebugFlag(Number(($event.target as HTMLSelectElement).value))">
-            <option v-for="(label, index) in DEBUG_FLAGS" :key="label" :value="index">{{ label }}</option>
-          </select>
+          <EditorDropdown
+            :model-value="debugFlagIndex(render.debugFlags)"
+            :options="debugFlagsOptions"
+            block
+            @update:model-value="(val) => setDebugFlag(Number(val))"
+          />
         </label>
         <label>
           <span>调试 RT</span>
-          <select v-model.number="render.debugRt">
-            <option :value="0">HDR tonemap</option>
-            <option :value="1">线性深度</option>
-            <option :value="2">视图空间法线</option>
-          </select>
+          <EditorDropdown
+            v-model="render.debugRt"
+            :options="debugRtOptions"
+            block
+          />
         </label>
         <template v-if="render.renderMode === 'path_trace'">
-          <label><span>最大弹射</span><input v-model.number="render.ptMaxBounces" type="number" min="1" max="64" /></label>
-          <label><span>射线最大距离</span><input v-model.number="render.ptRayMaxDistance" type="number" min="1" step="10" /></label>
-          <label><span>最大采样（0 = 无限）</span><input v-model.number="render.ptMaxIterations" type="number" min="0" /></label>
+          <label><span>{{ $t("projectSettings.ptMaxBounces") }}</span><input v-model.number="render.ptMaxBounces" type="number" min="1" max="64" /></label>
+          <label><span>{{ $t("projectSettings.ptRayMaxDistance") }}</span><input v-model.number="render.ptRayMaxDistance" type="number" min="1" step="10" /></label>
+          <label><span>{{ $t("projectSettings.ptMaxIterations") }}</span><input v-model.number="render.ptMaxIterations" type="number" min="0" /></label>
         </template>
-        <p class="hint">写入 assets/settings.toml 的 [render] 段；运行时仍可用键盘 1–9 / Shift+1–5 / T / Tab 临时切换。</p>
       </template>
 
       <template v-else>
-        <div class="settings-group">
-          <div class="settings-group-title">目标平台</div>
+        <div class="settings-group" :title="$t('projectSettings.buildDescTooltip')">
+          <div class="settings-group-title">{{ $t("projectSettings.buildTarget") }}</div>
           <label>
-            <span>平台</span>
-            <select v-model="project.build.target">
-              <option value="windows">Windows Desktop</option>
-            </select>
+            <span>{{ $t("projectSettings.platform") }}</span>
+            <EditorDropdown
+              v-model="project.build.target"
+              :options="buildTargetOptions"
+              block
+            />
           </label>
           <label>
-            <span>配置</span>
-            <select v-model="project.build.profile">
-              <option value="release">Release</option>
-              <option value="debug">Debug</option>
-            </select>
+            <span>{{ $t("projectSettings.profile") }}</span>
+            <EditorDropdown
+              v-model="project.build.profile"
+              :options="buildProfileOptions"
+              block
+            />
           </label>
           <label>
-            <span>输出目录</span>
+            <span>{{ $t("projectSettings.outputDir") }}</span>
             <input v-model="project.build.outputDir" type="text" placeholder="build/windows" />
           </label>
-          <label class="check-row"><input v-model="project.build.runAfter" type="checkbox" /><span>构建完成后运行</span></label>
+          <label class="check-row"><input v-model="project.build.runAfter" type="checkbox" /><span>{{ $t("projectSettings.runAfterBuild") }}</span></label>
         </div>
-        <p class="hint">构建会执行 cargo build + 构建场景包，并把 exe、scenes.pak、settings.toml 汇总到输出目录。</p>
       </template>
 
       <div v-if="error" class="error">{{ error }}</div>

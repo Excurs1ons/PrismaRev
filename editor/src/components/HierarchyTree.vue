@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref } from "vue";
 import { ChevronDown, ChevronRight, Eye, EyeOff, Plus } from "lucide-vue-next";
 import { clampMenuPosition } from "../contextMenu";
+import EditorDropdown, { type DropdownOption } from "./EditorDropdown.vue";
 import type { EntityJson } from "../types";
 
 /**
@@ -19,6 +20,8 @@ const props = defineProps<{
   presets?: Array<{ id: string; label: string }>;
   presetId?: string;
   canAdd?: boolean;
+  sceneName?: string;
+  dirty?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -59,10 +62,6 @@ function draggedPrefab(event: DragEvent): string | null {
   return path.toLowerCase().endsWith(".prefab.json") ? path : null;
 }
 const contextTarget = ref<{ index: number; x: number; y: number } | null>(null);
-
-function onPresetChange(event: Event) {
-  emit("preset", (event.target as HTMLSelectElement).value);
-}
 
 function openContextMenu(index: number, event: MouseEvent) {
   if (!props.selected.includes(index)) emit("select", [index]);
@@ -316,6 +315,10 @@ function onRootDrop(event: DragEvent) {
   dropTarget.value = null;
   if (child !== null) emit("reparent", child, null);
 }
+
+const presetOptions = computed<DropdownOption[]>(() =>
+  (props.presets ?? []).map((p) => ({ value: p.id, label: p.label })),
+);
 </script>
 
 <template>
@@ -324,16 +327,26 @@ function onRootDrop(event: DragEvent) {
       <button
         class="ghost icon hierarchy-add"
         :disabled="!canAdd"
-        title="按所选类型新增实体"
+        :title="$t('hierarchy.createTooltip')"
         @click="emit('add')"
       >
         <Plus :size="14" />
       </button>
-      <input v-model="filter" type="text" placeholder="过滤实体…" />
-      <select :value="presetId" title="新增实体类型" @change="onPresetChange">
-        <option v-for="p in presets ?? []" :key="p.id" :value="p.id">{{ p.label }}</option>
-      </select>
+      <input v-model="filter" type="text" :placeholder="$t('hierarchy.filterPlaceholder')" />
+      <EditorDropdown
+        v-if="presets && presets.length"
+        :model-value="presetId ?? ''"
+        :options="presetOptions"
+        :title="$t('hierarchy.presetTypeTooltip')"
+        @update:model-value="(val) => emit('preset', String(val))"
+      />
     </div>
+  </div>
+
+  <!-- Unity 风格场景根节点标头 -->
+  <div v-if="sceneName" class="scene-root-row">
+    <span>{{ sceneName }}</span>
+    <span v-if="dirty" class="scene-dirty-star" :title="$t('common.unsaved')">*</span>
   </div>
 
   <div
@@ -362,7 +375,7 @@ function onRootDrop(event: DragEvent) {
       <button
         v-if="row.hasChildren"
         class="ghost icon caret"
-        :title="row.collapsed ? '展开' : '折叠'"
+        :title="row.collapsed ? $t('common.expand') : $t('common.collapse')"
         @click.stop="toggle(row.index)"
       >
         <ChevronRight v-if="row.collapsed" :size="12" />
@@ -383,7 +396,7 @@ function onRootDrop(event: DragEvent) {
       <span v-else class="label" @dblclick.stop="startRename(row.index)">{{ row.label }}</span>
       <button
         class="ghost icon visibility-toggle"
-        :title="row.active ? '禁用实体' : '启用实体'"
+        :title="row.active ? $t('hierarchy.disableEntity') : $t('hierarchy.enableEntity')"
         @click.stop="emit('toggle-active', row.index, !row.active)"
       >
         <Eye v-if="row.active" :size="13" />
@@ -393,7 +406,7 @@ function onRootDrop(event: DragEvent) {
   </div>
 
   <div v-if="!rows.length" class="hint" style="padding: 8px">
-    {{ filter ? "无匹配实体" : "（无实体）" }}
+    {{ filter ? $t("hierarchy.noMatching") : $t("hierarchy.empty") }}
   </div>
 
   <div
@@ -403,7 +416,7 @@ function onRootDrop(event: DragEvent) {
     @dragover="onRootDragOver"
     @drop="onRootDrop"
   >
-    拖到这里成为根实体
+    {{ $t("hierarchy.dropToRoot") }}
   </div>
 
   <Teleport to="body">
@@ -416,10 +429,10 @@ function onRootDrop(event: DragEvent) {
       @contextmenu.prevent
     >
       <button @click="runContext('duplicate')">
-        <span>复制</span><span class="context-shortcut">Ctrl+D</span>
+        <span>{{ $t("common.duplicate") }}</span><span class="context-shortcut">Ctrl+D</span>
       </button>
       <button class="danger" @click="runContext('remove')">
-        <span>删除</span><span class="context-shortcut">Del</span>
+        <span>{{ $t("common.delete") }}</span><span class="context-shortcut">Del</span>
       </button>
     </div>
   </Teleport>

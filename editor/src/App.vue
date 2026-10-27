@@ -1,17 +1,38 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, provide, reactive, ref, shallowRef, watch } from "vue";
-import { Box, Check, ChevronRight, Play, RefreshCw, Square } from "lucide-vue-next";
+import {
+  AlertCircle,
+  AlertTriangle,
+  Box,
+  Check,
+  ChevronRight,
+  Info,
+  Maximize2,
+  MousePointer,
+  Move,
+  Pause,
+  Play,
+  RefreshCw,
+  RotateCw,
+  Square,
+  StepForward,
+} from "lucide-vue-next";
 import AssetBrowser from "./components/AssetBrowser.vue";
+import AssetInspector from "./components/AssetInspector.vue";
 import AssetPicker from "./components/AssetPicker.vue";
 import BuildPanel from "./components/BuildPanel.vue";
 import DockLayout from "./components/DockLayout.vue";
+import EditorDropdown, { type DropdownOption } from "./components/EditorDropdown.vue";
+import EditorModal from "./components/EditorModal.vue";
 import HierarchyTree from "./components/HierarchyTree.vue";
 import Inspector from "./components/Inspector.vue";
 import PreferencesPanel from "./components/PreferencesPanel.vue";
 import ProjectSettingsPanel from "./components/ProjectSettingsPanel.vue";
 import ThemePanel from "./components/ThemePanel.vue";
 import ViewportPanel from "./components/ViewportPanel.vue";
+import { t } from "./i18n";
 import {
+  LAYOUT_PRESETS,
   collectTabs,
   defaultDock,
   leaf,
@@ -66,6 +87,14 @@ const schema = ref<Schema>({ types: [] });
 const projectRoot = ref("");
 const scenes = ref<SceneEntry[]>([]);
 const prefabs = ref<SceneEntry[]>([]);
+
+const sceneDropdownOptions = computed<DropdownOption[]>(() =>
+  scenes.value.map((s) => ({ value: s.path, label: s.name })),
+);
+
+const layoutDropdownOptions = computed<DropdownOption[]>(() =>
+  LAYOUT_PRESETS.map((lp) => ({ value: lp.id, label: lp.label })),
+);
 const sceneTemplates = ref<SceneTemplate[]>([]);
 const presets = ref<EntityPreset[]>([]);
 const assets = ref<AssetInfo[]>([]);
@@ -156,6 +185,15 @@ const baseline = ref<string>("");
 
 /** 选中的实体（最后一个为「主选中」，检查器显示它）。 */
 const selection = ref<number[]>([]);
+/** 选中的资产（对齐 Unity：点击 Project 资产时在 Inspector 展示其导入配置与预览）。 */
+const selectedAsset = ref<AssetInfo | null>(null);
+
+function onAssetSelect(asset: AssetInfo | null) {
+  selectedAsset.value = asset;
+  if (asset) {
+    selection.value = [];
+  }
+}
 /**
  * 组件剪贴板。用 `shallowRef`：整体替换、不需要深响应，
  * 也避免 Vue 对递归的 `JsonValue` 类型做深度 `UnwrapRef` 推断。
@@ -242,6 +280,34 @@ const hasFilteredLogs = computed(
     (logSourceFilter.value !== "editor" && filteredGameLogLines.value.length > 0),
 );
 
+const activeLogLines = computed(() => {
+  if (logSourceFilter.value === "editor") return editorLogLines.value;
+  if (logSourceFilter.value === "game") return gameLogView.value;
+  return [...editorLogLines.value, ...gameLogView.value];
+});
+
+const logCounts = computed(() => {
+  let info = 0;
+  let warn = 0;
+  let error = 0;
+  for (const item of activeLogLines.value) {
+    if (item.level === "info" || item.level === "debug" || item.level === "trace") info++;
+    else if (item.level === "warn") warn++;
+    else if (item.level === "error" || item.level === "panic") error++;
+  }
+  return { info, warn, error };
+});
+
+const logLevelOptions = computed<DropdownOption[]>(() => [
+  { value: "all", label: t("console.levelAll") },
+  { value: "error", label: t("console.levelError") },
+  { value: "warn", label: t("console.levelWarn") },
+  { value: "info", label: t("console.levelInfo") },
+  { value: "debug", label: t("console.levelDebug") },
+  { value: "trace", label: t("console.levelTrace") },
+  { value: "panic", label: t("console.levelPanic") },
+]);
+
 // ── 日志窗口化 ──────────────────────────────────────────────────────────────
 // 单行固定高度（见 style.css 的 `.log-row`）。日志最多保留
 // `editorPrefs.maxLogLines`（上限 20000）行，一次性渲染成 DOM 会拖垮滚动；
@@ -311,6 +377,26 @@ const documentLabel = computed(() => {
   if (currentPath.value) return currentPath.value.split("/").pop() || currentPath.value;
   return hasDoc.value ? "未保存的文档" : "无文档";
 });
+
+// ── 顶部工具栏状态（对齐 Unity） ───────────────────────────────────────────
+const activeTool = ref<"select" | "move" | "rotate" | "scale">("move");
+const activePivot = ref<"pivot" | "center">("pivot");
+const activeSpace = ref<"global" | "local">("global");
+const activeLayout = ref<string>("default");
+
+function applyLayout(id: string) {
+  activeLayout.value = id;
+  const preset = LAYOUT_PRESETS.find((p) => p.id === id);
+  if (preset) {
+    dockLayout.value = preset.factory();
+    floatingPanels.value = [];
+  }
+}
+
+function onToolbarSceneSelect(path: string) {
+  const scene = scenes.value.find((s) => s.path === path);
+  if (scene) openDocument(scene, "scene");
+}
 
 // ---------------------------------------------------------------------------
 // Docking 布局（split tree + 标签页拖拽，持久化到 localStorage）
@@ -758,8 +844,91 @@ function redo() {
   clampSelection();
 }
 
-function confirmDiscard(): boolean {
-  return !dirty.value || window.confirm("当前文档有未保存改动，放弃它们？");
+interface ModalState {
+  open: boolean;
+  title: string;
+  message: string;
+  hasInput: boolean;
+  defaultValue: string;
+  placeholder: string;
+  confirmText: string;
+  cancelText: string;
+  danger: boolean;
+  resolve?: (value: any) => void;
+}
+
+const modalState = ref<ModalState>({
+  open: false,
+  title: "",
+  message: "",
+  hasInput: false,
+  defaultValue: "",
+  placeholder: "",
+  confirmText: "确定",
+  cancelText: "取消",
+  danger: false,
+});
+
+function showConfirm(
+  title: string,
+  message: string,
+  options?: { danger?: boolean; confirmText?: string; cancelText?: string },
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    modalState.value = {
+      open: true,
+      title,
+      message,
+      hasInput: false,
+      defaultValue: "",
+      placeholder: "",
+      confirmText: options?.confirmText ?? t("common.confirm"),
+      cancelText: options?.cancelText ?? t("common.cancel"),
+      danger: options?.danger ?? false,
+      resolve: (val) => resolve(Boolean(val)),
+    };
+  });
+}
+
+function showPrompt(
+  title: string,
+  message: string,
+  defaultValue = "",
+  placeholder = "",
+): Promise<string | null> {
+  return new Promise((resolve) => {
+    modalState.value = {
+      open: true,
+      title,
+      message,
+      hasInput: true,
+      defaultValue,
+      placeholder,
+      confirmText: t("common.confirm"),
+      cancelText: t("common.cancel"),
+      danger: false,
+      resolve: (val) => resolve(typeof val === "string" ? val : null),
+    };
+  });
+}
+
+function onModalConfirm(val?: string) {
+  modalState.value.open = false;
+  modalState.value.resolve?.(modalState.value.hasInput ? (val ?? "") : true);
+}
+
+function onModalCancel() {
+  modalState.value.open = false;
+  modalState.value.resolve?.(modalState.value.hasInput ? null : false);
+}
+
+async function confirmDiscard(): Promise<boolean> {
+  if (!dirty.value) return true;
+  return await showConfirm(
+    t("dialog.discardTitle"),
+    t("dialog.discardMsg"),
+    { danger: true },
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -798,7 +967,7 @@ async function bootstrap() {
 }
 
 async function openDocument(entry: SceneEntry, kind: DocKind) {
-  if (!confirmDiscard()) return;
+  if (!(await confirmDiscard())) return;
   try {
     const loaded = await api.readDocument(entry.path);
     resetHistory(loaded, entry.path, kind);
@@ -840,7 +1009,7 @@ async function reload() {
 }
 
 async function createDocumentWithTemplate(kind: DocKind, templateId: string) {
-  if (!confirmDiscard()) return;
+  if (!(await confirmDiscard())) return;
   try {
     const fresh = await api.newDocument(kind, templateId);
     resetHistory(fresh, null, kind);
@@ -895,11 +1064,15 @@ async function save(): Promise<boolean> {
 async function saveAs(): Promise<boolean> {
   if (!doc.value) return false;
   const suffix = documentKind.value === "scene" ? ".scene.json" : ".prefab.json";
-  const name = window.prompt(`另存为（不含 ${suffix}）`, "untitled");
-  if (!name) return false;
+  const name = await showPrompt(
+    t("dialog.saveAsTitle"),
+    `${t("dialog.saveAsMsg")} (${suffix})`,
+    "untitled",
+  );
+  if (!name || !name.trim()) return false;
   const snapshot = snapshotDoc();
   try {
-    const path = await api.writeDocumentAs(documentKind.value, name, snapshot.doc);
+    const path = await api.writeDocumentAs(documentKind.value, name.trim(), snapshot.doc);
     currentPath.value = path;
     baseline.value = snapshot.text;
     error.value = "";
@@ -982,10 +1155,14 @@ async function renameCurrent() {
   if (!currentPath.value) return;
   const list = isScene.value ? scenes.value : prefabs.value;
   const current = list.find((s) => s.path === currentPath.value);
-  const name = window.prompt("新名字（不含后缀）", current?.name ?? "");
-  if (!name) return;
+  const name = await showPrompt(
+    t("dialog.renameTitle"),
+    t("dialog.renameMsg"),
+    current?.name ?? "",
+  );
+  if (!name || !name.trim()) return;
   try {
-    const path = await api.renameDocument(currentPath.value, documentKind.value, name);
+    const path = await api.renameDocument(currentPath.value, documentKind.value, name.trim());
     currentPath.value = path;
     error.value = "";
     status.value = `已重命名为 ${path}`;
@@ -997,7 +1174,12 @@ async function renameCurrent() {
 
 async function deleteCurrent() {
   if (!currentPath.value) return;
-  if (!window.confirm(`删除文件？\n${currentPath.value}`)) return;
+  const ok = await showConfirm(
+    t("dialog.deleteDocTitle"),
+    t("dialog.deleteDocMsg", { path: currentPath.value }),
+    { danger: true },
+  );
+  if (!ok) return;
   try {
     await api.deleteDocument(currentPath.value);
     doc.value = null;
@@ -1103,7 +1285,12 @@ async function revertPrefab(index: number) {
 async function applyPrefab(index: number) {
   if (!doc.value || !prefabLink.value) return;
   const link = prefabLink.value;
-  if (!window.confirm(`用当前实例内容覆盖预制体？\n${link}`)) return;
+  const ok = await showConfirm(
+    t("dialog.applyPrefabTitle"),
+    t("dialog.applyPrefabMsg", { link }),
+    { danger: true },
+  );
+  if (!ok) return;
   try {
     // `PrefabUtility.ApplyPrefabInstance`：提取子树 + 写回预制体文件。
     await api.applyPrefabInstance(doc.value, index);
@@ -1161,7 +1348,7 @@ async function jumpToUsage(ref: AssetRef) {
     return;
   }
   if (currentPath.value !== ref.scenePath) {
-    if (!confirmDiscard()) return;
+    if (!(await confirmDiscard())) return;
     try {
       const loaded = await api.readDocument(ref.scenePath);
       resetHistory(
@@ -1175,6 +1362,7 @@ async function jumpToUsage(ref: AssetRef) {
     }
   }
   selection.value = [ref.entityIndex];
+  selectedAsset.value = null;
   highlightComponent.value = ref.component;
   highlightField.value = ref.field;
   error.value = "";
@@ -1233,6 +1421,9 @@ function onViewportMove(position: [number, number, number]) {
 
 function onSelect(indices: number[]) {
   selection.value = indices.length ? indices : [];
+  if (indices.length) {
+    selectedAsset.value = null;
+  }
   // 手动选择时清掉「跳到使用处」的高亮。
   highlightComponent.value = null;
   highlightField.value = null;
@@ -1442,14 +1633,16 @@ async function deleteSelection() {
   if (!doc.value || !selection.value.length) return;
   const indices = selection.value.slice().sort((a, b) => a - b);
   if (indices.length >= doc.value.entities.length) {
-    fail("至少要保留一个实体");
+    fail(t("dialog.atLeastOneEntity"));
     return;
   }
-  if (
-    editorPrefs.value.confirmDelete &&
-    !window.confirm(`删除 ${indices.length} 个实体？此操作可用撤销恢复。`)
-  ) {
-    return;
+  if (editorPrefs.value.confirmDelete) {
+    const ok = await showConfirm(
+      t("dialog.deleteEntitiesTitle"),
+      t("dialog.deleteEntitiesMsg", { count: indices.length }),
+      { danger: true },
+    );
+    if (!ok) return;
   }
   try {
     const next = await runDocCommand(
@@ -2126,23 +2319,113 @@ onUnmounted(() => {
     <div v-if="openMenu" class="menu-backdrop" @click="openMenu = null" @contextmenu.prevent />
 
     <div class="main-toolbar">
-      <div class="tool-group play-group">
-        <span class="tool-select scene-select viewport-scene-label" :title="currentPath ?? '未打开场景'">
-          {{ currentPath ? currentPath.split('/').pop() : '未打开场景' }}
+      <!-- 左侧：变换工具组与坐标空间切换 -->
+      <div class="toolbar-section toolbar-left">
+        <div class="segmented-group" :title="$t('toolbar.transformTools')">
+          <button
+            class="segmented-btn"
+            :class="{ active: activeTool === 'select' }"
+            :title="$t('toolbar.toolSelect')"
+            @click="activeTool = 'select'"
+          >
+            <MousePointer :size="13" />
+          </button>
+          <button
+            class="segmented-btn"
+            :class="{ active: activeTool === 'move' }"
+            :title="$t('toolbar.toolMove')"
+            @click="activeTool = 'move'"
+          >
+            <Move :size="13" />
+          </button>
+          <button
+            class="segmented-btn"
+            :class="{ active: activeTool === 'rotate' }"
+            :title="$t('toolbar.toolRotate')"
+            @click="activeTool = 'rotate'"
+          >
+            <RotateCw :size="13" />
+          </button>
+          <button
+            class="segmented-btn"
+            :class="{ active: activeTool === 'scale' }"
+            :title="$t('toolbar.toolScale')"
+            @click="activeTool = 'scale'"
+          >
+            <Maximize2 :size="13" />
+          </button>
+        </div>
+
+        <div class="segmented-group">
+          <button
+            class="segmented-btn"
+            :title="$t('toolbar.pivotTooltip')"
+            @click="activePivot = activePivot === 'pivot' ? 'center' : 'pivot'"
+          >
+            {{ activePivot === "pivot" ? $t("toolbar.pivot") : $t("toolbar.center") }}
+          </button>
+          <button
+            class="segmented-btn"
+            :title="$t('toolbar.spaceTooltip')"
+            @click="activeSpace = activeSpace === 'global' ? 'local' : 'global'"
+          >
+            {{ activeSpace === "global" ? $t("toolbar.global") : $t("toolbar.local") }}
+          </button>
+        </div>
+      </div>
+
+      <!-- 中间：Unity 经典对称三段式 Play / Pause / Step 运行控制 -->
+      <div class="toolbar-section toolbar-center">
+        <div class="segmented-group">
+          <button
+            class="segmented-btn play-btn"
+            :class="{ running: playing }"
+            :disabled="!hasDoc || !isScene"
+            :title="$t('toolbar.playTooltip')"
+            @click="togglePlay"
+          >
+            <Square v-if="playing" :size="12" fill="currentColor" />
+            <Play v-else :size="13" fill="currentColor" />
+          </button>
+          <button
+            class="segmented-btn pause-btn"
+            :class="{ paused }"
+            :disabled="!playing"
+            :title="$t('toolbar.pauseTooltip')"
+            @click="togglePause"
+          >
+            <Pause :size="13" fill="currentColor" />
+          </button>
+          <button
+            class="segmented-btn step-btn"
+            :disabled="!playing"
+            :title="$t('toolbar.stepTooltip')"
+            @click="stepGame"
+          >
+            <StepForward :size="13" />
+          </button>
+        </div>
+      </div>
+
+      <!-- 右侧：当前场景与布局切换 -->
+      <div class="toolbar-section toolbar-right">
+        <EditorDropdown
+          v-if="scenes.length"
+          :model-value="currentPath ?? ''"
+          :options="sceneDropdownOptions"
+          :title="$t('toolbar.switchScene')"
+          @update:model-value="(val) => onToolbarSceneSelect(String(val))"
+        />
+        <span v-else class="tool-select scene-select viewport-scene-label">
+          {{ documentLabel }}
         </span>
-        <button
-          class="play-button"
-          :class="{ running: playing }"
-          :disabled="!hasDoc || !isScene"
-          :title="'在编辑器内运行当前场景（Game view，不启动外部进程）'"
-          @click="togglePlay"
-        >
-          <span class="play-glyph">
-            <Square v-if="playing" :size="13" fill="currentColor" />
-            <Play v-else :size="15" fill="currentColor" />
-          </span>
-          {{ playing ? "停止" : "运行" }}
-        </button>
+
+        <EditorDropdown
+          :model-value="activeLayout"
+          :options="layoutDropdownOptions"
+          :title="$t('toolbar.layoutPresets')"
+          @update:model-value="(val) => applyLayout(String(val))"
+        />
       </div>
     </div>
 
@@ -2235,6 +2518,8 @@ onUnmounted(() => {
             :presets="presets"
             :preset-id="presetId"
             :can-add="hasDoc"
+            :scene-name="documentLabel"
+            :dirty="dirty"
             @preset="presetId = $event"
             @add="addEntity"
             @select="onSelect"
@@ -2253,6 +2538,7 @@ onUnmounted(() => {
         <template #assets>
         <AssetBrowser
           :before-change="ensureSavedForAssetOp"
+          @select="onAssetSelect"
           @jump="jumpToUsage"
           @changed="onAssetsChanged"
           @open="openAssetPath"
@@ -2263,8 +2549,16 @@ onUnmounted(() => {
 
         <template #inspector>
         <div class="editor-pane inspector-pane">
+          <!-- 选中资产时展示 Unity 风格 Asset Inspector（含大图/文本预览与导入元数据） -->
+          <AssetInspector
+            v-if="selectedAsset"
+            :asset="selectedAsset"
+            @jump="jumpToUsage"
+            @open="openAssetPath"
+          />
+          <!-- 选中实体时展示 GameObject 检查器 -->
           <Inspector
-            v-if="selectedEntity && doc && primary !== null"
+            v-else-if="selectedEntity && doc && primary !== null"
             :entity="selectedEntity"
             :index="primary"
             :entities="doc.entities"
@@ -2284,7 +2578,7 @@ onUnmounted(() => {
             @reflect="onComponentReflect"
             @rejected="fail"
           />
-          <div v-else class="empty">打开或新建一个场景/预制体，然后选择一个实体。</div>
+          <div v-else class="empty">{{ $t("inspector.emptyState") }}</div>
         </div>
 
         </template>
@@ -2306,15 +2600,41 @@ onUnmounted(() => {
                 @click="logSourceFilter = 'game'"
               >Game</button>
             </div>
-            <select v-model="logLevelFilter" class="log-level" title="日志级别">
-              <option value="all">全部级别</option>
-              <option value="error">Error</option>
-              <option value="warn">Warn</option>
-              <option value="info">Info</option>
-              <option value="debug">Debug</option>
-              <option value="trace">Trace</option>
-              <option value="panic">Panic</option>
-            </select>
+            <EditorDropdown
+              :model-value="logLevelFilter"
+              :options="logLevelOptions"
+              :title="$t('console.title')"
+              @update:model-value="(val) => (logLevelFilter = val as LogLevel | 'all')"
+            />
+            <div class="log-counts-group">
+              <button
+                class="log-count-btn info-count"
+                :class="{ active: logLevelFilter === 'info' }"
+                title="Info"
+                @click="logLevelFilter = logLevelFilter === 'info' ? 'all' : 'info'"
+              >
+                <Info :size="12" />
+                <span>{{ logCounts.info }}</span>
+              </button>
+              <button
+                class="log-count-btn warn-count"
+                :class="{ active: logLevelFilter === 'warn' }"
+                title="Warning"
+                @click="logLevelFilter = logLevelFilter === 'warn' ? 'all' : 'warn'"
+              >
+                <AlertTriangle :size="12" />
+                <span>{{ logCounts.warn }}</span>
+              </button>
+              <button
+                class="log-count-btn error-count"
+                :class="{ active: logLevelFilter === 'error' }"
+                title="Error"
+                @click="logLevelFilter = logLevelFilter === 'error' ? 'all' : 'error'"
+              >
+                <AlertCircle :size="12" />
+                <span>{{ logCounts.error }}</span>
+              </button>
+            </div>
             <span class="tool-spacer" />
             <button class="ghost icon" title="清空日志" @click="clearAllLogs">清空</button>
           </div>
@@ -2612,6 +2932,19 @@ onUnmounted(() => {
       :current="pickerState.current"
       @pick="resolvePicker"
       @cancel="resolvePicker(null)"
+    />
+    <EditorModal
+      v-model="modalState.open"
+      :title="modalState.title"
+      :message="modalState.message"
+      :has-input="modalState.hasInput"
+      :default-value="modalState.defaultValue"
+      :placeholder="modalState.placeholder"
+      :confirm-text="modalState.confirmText"
+      :cancel-text="modalState.cancelText"
+      :danger="modalState.danger"
+      @confirm="onModalConfirm"
+      @cancel="onModalCancel"
     />
 
     <footer class="statusbar">

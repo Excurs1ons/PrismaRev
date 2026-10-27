@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, inject, ref } from "vue";
 import { X } from "lucide-vue-next";
+import EditorDropdown, { type DropdownOption } from "./EditorDropdown.vue";
 import { ASSETS_KEY } from "../keys";
 import { formatBytes } from "../format";
 import type { AssetInfo } from "../types";
@@ -34,6 +35,10 @@ const kinds = computed(() => {
   return ["all", ...Object.keys(KIND_LABELS).filter((key) => key !== "all" && present.has(key as AssetInfo["kind"]))];
 });
 
+const kindDropdownOptions = computed<DropdownOption[]>(() =>
+  kinds.value.map((k) => ({ value: k, label: KIND_LABELS[k] ?? k })),
+);
+
 const filtered = computed(() => {
   const query = search.value.trim().toLowerCase();
   return (assets?.value ?? [])
@@ -58,9 +63,7 @@ function pick(path: string) {
 
       <div class="modal-tools">
         <input v-model="search" type="text" placeholder="检索路径…" autofocus />
-        <select v-model="kind">
-          <option v-for="k in kinds" :key="k" :value="k">{{ KIND_LABELS[k] ?? k }}</option>
-        </select>
+        <EditorDropdown v-model="kind" :options="kindDropdownOptions" />
       </div>
 
       <div class="modal-list">

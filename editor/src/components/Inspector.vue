@@ -1,18 +1,20 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from "vue";
-import { X } from "lucide-vue-next";
+import { ChevronDown, ChevronRight, MoreVertical, X } from "lucide-vue-next";
 import { clampMenuPosition } from "../contextMenu";
+import EditorDropdown, { type DropdownOption } from "./EditorDropdown.vue";
 import FieldEditor from "./FieldEditor.vue";
+import { eulerToQuaternion, quaternionToEuler } from "../math";
 import * as api from "../api";
+import { t } from "../i18n";
 import type { ComponentClipboard, EntityJson, FieldSchema, JsonValue, Schema } from "../types";
 
 /**
- * 单实体检查器：name / parent / transform + 任意组件（schema 驱动）。
- *
- * - 组件字段的改动**先本地提交**（拖动/输入要即时），再交给 Rust 侧
- *   `set_component_field` 走反射写入：只读被拒绝、类型经反射校验，
- *   返回规范化后的组件 JSON 回填（`reflect` 事件）。
- * - 顶部检索框按「组件名 / 字段名 / 值」过滤组件卡片。
+ * 单实体检查器：对齐 Unity Inspector 规范。
+ * - 顶部 GameObjectHeader：激活复选框、名称输入、静态标记、Tag / Layer 下拉
+ * - Transform 变换：支持欧拉角（度）与四元数无缝双向换算
+ * - 组件容器：扁平卡片、折叠三角、右键 / 三点操作菜单
+ * - 底部居中「添加组件」按钮与快速检索弹出层
  */
 const props = defineProps<{
   entity: EntityJson;
@@ -42,7 +44,21 @@ const emit = defineEmits<{
 
 const addName = ref("");
 const filter = ref("");
+const showAddPopup = ref(false);
+const addFilter = ref("");
+const showEuler = ref(true);
+const collapsedCards = ref<Set<string>>(new Set());
 const componentMenu = ref<{ name: string; x: number; y: number } | null>(null);
+
+function toggleCard(name: string) {
+  const set = new Set(collapsedCards.value);
+  if (set.has(name)) {
+    set.delete(name);
+  } else {
+    set.add(name);
+  }
+  collapsedCards.value = set;
+}
 
 function openComponentMenu(name: string, event: MouseEvent) {
   const pos = clampMenuPosition(event.clientX, event.clientY, 190, 82);
@@ -101,8 +117,33 @@ function setName(event: Event) {
   patch({ name: (event.target as HTMLInputElement).value }, fieldKey("name"));
 }
 
-function onParentChange(event: Event) {
-  const raw = Number((event.target as HTMLSelectElement).value);
+const isActive = computed(() => {
+  const val = props.entity.components["prism_engine::scene::Active"] ?? props.entity.components["Active"];
+  return val !== false;
+});
+
+function toggleActive() {
+  setComponent("prism_engine::scene::Active", !isActive.value, "Active", true);
+}
+
+const tagOptions: DropdownOption[] = [{ value: "Untagged", label: "Untagged" }];
+const layerOptions: DropdownOption[] = [{ value: "Default", label: "Default" }];
+
+const parentOptions = computed<DropdownOption[]>(() => {
+  const options: DropdownOption[] = [{ value: -1, label: t("inspector.noParent") }];
+  props.entities.forEach((e, i) => {
+    const isSelf = i === props.index || (e.id !== undefined && e.id === props.entity.id);
+    if (!isSelf) {
+      options.push({
+        value: e.id ?? i,
+        label: `${e.name || `#${i}`} · #${i}`,
+      });
+    }
+  });
+  return options;
+});
+
+function onParentSelect(raw: number) {
   patch({ parent: Number.isFinite(raw) && raw >= 0 ? raw : null }, fieldKey("parent"));
 }
 
@@ -118,6 +159,19 @@ function setTransform(
   );
 }
 
+// ── 欧拉角转换（Unity 顺规） ────────────────────────────────────────────────
+const eulerRotation = computed(() => {
+  const rot = props.entity.transform.rotation ?? [0, 0, 0, 1];
+  return quaternionToEuler(rot[0] ?? 0, rot[1] ?? 0, rot[2] ?? 0, rot[3] ?? 1);
+});
+
+function setEulerRotation(val: JsonValue, _path: string, discrete = false) {
+  if (!Array.isArray(val) || val.length < 3) return;
+  const [pitch, yaw, roll] = val as [number, number, number];
+  const q = eulerToQuaternion(pitch, yaw, roll);
+  setTransform("rotation", q, "transform.rotation", discrete);
+}
+
 function componentValue(name: string): JsonValue {
   return props.entity.components[name] as JsonValue;
 }
@@ -130,16 +184,9 @@ function setComponent(name: string, value: JsonValue, path: string, discrete = f
     { ...props.entity, components: { ...props.entity.components, [name]: value } },
     discrete ? opKey(label) : fieldKey(label),
   );
-  // `path` 是纯反射路径：合并策略走 editKey，绝不混进这里。
   void reflectComponent(name, before, path, value, props.index);
 }
 
-/**
- * 反射写入：成功后回填规范化值；失败则报告（通常是只读或类型不合法）。
- *
- * `index` / `pending` 随事件一起带回 App：异步往返期间用户可能切换选中或改动
- * 文档，回填必须落回**发起编辑的那个实体**，不能落到当前选中项上。
- */
 async function reflectComponent(
   name: string,
   before: JsonValue,
@@ -176,7 +223,13 @@ function addComponent() {
   addName.value = "";
 }
 
-/** 组件 JSON 值本身不是结构体时（`Name` 裸字符串等），仅作类型提示。 */
+function selectAddComponent(name: string) {
+  addName.value = name;
+  addComponent();
+  showAddPopup.value = false;
+  addFilter.value = "";
+}
+
 function componentField(name: string): FieldSchema | null {
   if (!props.schema.types.some((t) => t.name === name)) return null;
   return {
@@ -190,7 +243,6 @@ function componentField(name: string): FieldSchema | null {
   };
 }
 
-/** 合成一个定长 `f32[n]` 字段，用于 transform 三个向量。 */
 function vecField(name: string, length: number): FieldSchema {
   return {
     name,
@@ -213,7 +265,6 @@ function vecField(name: string, length: number): FieldSchema {
 
 const componentNames = computed(() => Object.keys(props.entity.components));
 
-/** 检索命中：组件名 / 字段名 / 值任一包含关键词。 */
 function matchedFields(name: string): string[] {
   const query = filter.value.trim().toLowerCase();
   if (!query) return [];
@@ -248,91 +299,138 @@ const availableComponents = computed(() =>
     .filter((t) => t.isComponent && !(t.name in props.entity.components))
     .map((t) => t.name),
 );
+
+const filteredAvailableComponents = computed(() => {
+  const query = addFilter.value.trim().toLowerCase();
+  if (!query) return availableComponents.value;
+  return availableComponents.value.filter((n) =>
+    n.toLowerCase().includes(query) || shortName(n).toLowerCase().includes(query),
+  );
+});
 </script>
 
 <template>
-  <div class="card">
-    <header>
-      <span class="title">实体 #{{ index }}</span>
-      <span v-if="selectionCount > 1" class="hint">（已选 {{ selectionCount }}）</span>
-      <span class="spacer" />
-    </header>
-    <div class="card-body">
-      <div class="row">
-        <div class="label">检索</div>
-        <div class="scalar">
-          <input v-model="filter" type="text" placeholder="组件名 / 字段名 / 值…" />
-          <button v-if="filter" class="ghost icon" title="清除" @click="filter = ''">
-            <X :size="13" />
-          </button>
-        </div>
+  <!-- Unity 风格 GameObject Header -->
+  <div class="gameobject-header">
+    <div class="gameobject-row-top">
+      <input
+        type="checkbox"
+        class="entity-active-check"
+        :checked="isActive"
+        :title="$t('inspector.activeTooltip')"
+        @change="toggleActive"
+      />
+      <input
+        type="text"
+        class="entity-name-input"
+        :value="entity.name ?? ''"
+        :placeholder="$t('inspector.namePlaceholder')"
+        @input="setName"
+      />
+      <label class="static-label" :title="$t('inspector.staticTooltip')">
+        <input type="checkbox" disabled />
+        <span>{{ $t("inspector.static") }}</span>
+      </label>
+    </div>
+    <div class="gameobject-row-bottom">
+      <div class="tag-layer-cell">
+        <span class="sub-label">{{ $t("inspector.tag") }}</span>
+        <EditorDropdown model-value="Untagged" :options="tagOptions" disabled block />
       </div>
-      <div class="row">
-        <div class="label">name</div>
-        <div>
-          <input type="text" :value="entity.name ?? ''" @input="setName" />
-        </div>
+      <div class="tag-layer-cell">
+        <span class="sub-label">{{ $t("inspector.layer") }}</span>
+        <EditorDropdown model-value="Default" :options="layerOptions" disabled block />
       </div>
+    </div>
+  </div>
+
+  <!-- 检索过滤栏 -->
+  <div style="padding: 4px 8px; background: var(--chrome); border-bottom: 1px solid var(--border)">
+    <div class="scalar" style="height: 20px">
+      <input
+        v-model="filter"
+        type="text"
+        :placeholder="$t('inspector.searchPlaceholder')"
+        style="height: 19px"
+      />
+      <button v-if="filter" class="ghost icon" :title="$t('common.clear')" @click="filter = ''">
+        <X :size="12" />
+      </button>
+    </div>
+  </div>
+
+  <!-- 父实体选择 -->
+  <div class="card" style="margin-bottom: 2px">
+    <div class="card-body" style="padding: 3px 8px">
       <div class="row">
-        <div class="label">parent</div>
+        <div class="label" :title="$t('inspector.parentTooltip')">{{ $t("inspector.parent") }}</div>
         <div>
-          <select :value="entity.parent ?? -1" @change="onParentChange">
-            <option value="-1">（无父）</option>
-            <option
-              v-for="(e, i) in entities"
-              :key="e.id ?? i"
-              :value="e.id ?? i"
-              :disabled="i === index || (e.id !== undefined && e.id === entity.id)"
-            >
-              {{ e.name || `#${i}` }} · #{{ i }}
-            </option>
-          </select>
+          <EditorDropdown
+            :model-value="entity.parent ?? -1"
+            :options="parentOptions"
+            block
+            @update:model-value="(val) => onParentSelect(Number(val))"
+          />
         </div>
       </div>
     </div>
   </div>
 
+  <!-- 预制体实例指示卡片 -->
   <div v-if="prefabLink" class="card prefab-link">
     <header>
-      <span class="title">预制体实例</span>
-      <span class="hint">{{ prefabLink }}</span>
+      <span class="title">{{ $t("inspector.prefabInstance") }}</span>
+      <span class="hint" :title="prefabLink">{{ prefabLink.split('/').pop() }}</span>
       <span class="spacer" />
-      <button class="ghost icon" title="用预制体的当前内容覆盖这个实例" @click="emit('revert-prefab', index)">
-        还原
+      <button class="ghost icon" :title="$t('inspector.revertPrefabTooltip')" @click="emit('revert-prefab', index)">
+        {{ $t("inspector.revertPrefab") }}
       </button>
       <button
         class="ghost icon"
-        title="把这个实例（含子级）的内容写回预制体文件"
+        :title="$t('inspector.applyPrefabTooltip')"
         @click="emit('apply-prefab', index)"
       >
-        应用到预制体
+        {{ $t("inspector.applyPrefab") }}
       </button>
-      <button class="ghost icon" title="解除链接（只去掉记录）" @click="emit('unlink-prefab', index)">
-        解除
+      <button class="ghost icon" :title="$t('inspector.unlinkPrefabTooltip')" @click="emit('unlink-prefab', index)">
+        {{ $t("inspector.unlinkPrefab") }}
       </button>
     </header>
   </div>
 
+  <!-- 剪贴板条目 -->
   <div v-if="clipboard" class="card clipboard">
-    <div class="card-body">
-      <span class="hint">剪贴板：{{ shortName(clipboard.component) }}</span>
+    <div class="card-body" style="display: flex; align-items: center; gap: 6px; padding: 4px 8px">
+      <span class="hint">{{ $t("inspector.clipboard") }}: {{ shortName(clipboard.component) }}</span>
       <span class="spacer" />
       <button class="primary" title="Ctrl+V" @click="emit('paste-component')">
-        粘贴到选中（{{ selectionCount }}）
+        {{ $t("inspector.pasteToSelection", { count: selectionCount }) }}
       </button>
-      <button class="ghost icon" @click="emit('clear-clipboard')"><X :size="13" /></button>
+      <button class="ghost icon" @click="emit('clear-clipboard')"><X :size="12" /></button>
     </div>
   </div>
 
+  <!-- Transform 变换组件 -->
   <div v-if="transformMatches" class="card">
-    <header>
-      <span class="title">transform</span>
-      <span class="hint">局部 · T×R×S</span>
+    <header @click="toggleCard('Transform')">
+      <span class="foldout-icon">
+        <ChevronDown v-if="!collapsedCards.has('Transform')" :size="12" />
+        <ChevronRight v-else :size="12" />
+      </span>
+      <span class="title">Transform</span>
       <span class="spacer" />
+      <button
+        class="ghost icon"
+        style="width: auto; padding: 0 4px; font-size: 10px; height: 18px"
+        :title="$t('inspector.toggleRotationMode')"
+        @click.stop="showEuler = !showEuler"
+      >
+        {{ showEuler ? "Euler°" : "Quat" }}
+      </button>
     </header>
-    <div class="card-body">
+    <div v-if="!collapsedCards.has('Transform')" class="card-body">
       <FieldEditor
-        label="position"
+        label="Position"
         path="transform.position"
         :value="entity.transform.position"
         :field="vecField('position', 3)"
@@ -340,7 +438,17 @@ const availableComponents = computed(() =>
         @update="(v, p, d) => setTransform('position', v, p, d)"
       />
       <FieldEditor
-        label="rotation"
+        v-if="showEuler"
+        label="Rotation"
+        path="transform.rotation"
+        :value="eulerRotation"
+        :field="vecField('rotation', 3)"
+        :schema="schema"
+        @update="(v, p, d) => setEulerRotation(v, p, d)"
+      />
+      <FieldEditor
+        v-else
+        label="Rotation (Q)"
         path="transform.rotation"
         :value="entity.transform.rotation"
         :field="vecField('rotation', 4)"
@@ -348,7 +456,7 @@ const availableComponents = computed(() =>
         @update="(v, p, d) => setTransform('rotation', v, p, d)"
       />
       <FieldEditor
-        label="scale"
+        label="Scale"
         path="transform.scale"
         :value="entity.transform.scale"
         :field="vecField('scale', 3)"
@@ -358,27 +466,41 @@ const availableComponents = computed(() =>
     </div>
   </div>
 
+  <!-- 挂载的各个组件卡片 -->
   <div
     v-for="name in visibleComponents"
     :key="name"
     class="card"
     :class="{ highlight: highlightComponent === name }"
   >
-    <header @contextmenu.prevent.stop="openComponentMenu(name, $event)">
-      <span class="title">{{ shortName(name) }}</span>
-      <span class="hint">{{ name }}</span>
+    <header
+      @click="toggleCard(name)"
+      @contextmenu.prevent.stop="openComponentMenu(name, $event)"
+    >
+      <span class="foldout-icon">
+        <ChevronDown v-if="!collapsedCards.has(name)" :size="12" />
+        <ChevronRight v-else :size="12" />
+      </span>
+      <span class="title" :title="name">{{ shortName(name) }}</span>
       <span class="spacer" />
+      <button
+        class="menu-icon-btn"
+        :title="$t('inspector.componentMenu')"
+        @click.stop="openComponentMenu(name, $event)"
+      >
+        <MoreVertical :size="13" />
+      </button>
     </header>
-    <div class="card-body">
+    <div v-if="!collapsedCards.has(name)" class="card-body">
       <div v-if="filter && matchedFields(name).length" class="hint" style="margin-bottom: 4px">
-        匹配字段：{{ matchedFields(name).join("、") }}
+        {{ $t("inspector.matchedFields") }}: {{ matchedFields(name).join(", ") }}
       </div>
       <div
         v-if="highlightComponent === name && highlightField"
         class="hint"
         style="margin-bottom: 4px"
       >
-        定位字段：{{ highlightField }}
+        {{ $t("inspector.highlightField") }}: {{ highlightField }}
       </div>
       <FieldEditor
         path=""
@@ -390,19 +512,37 @@ const availableComponents = computed(() =>
     </div>
   </div>
 
-  <div v-if="filter && !visibleComponents.length" class="hint" style="padding: 8px">
-    没有匹配「{{ filter }}」的组件
+  <div v-if="filter && !visibleComponents.length" class="hint" style="padding: 12px; text-align: center">
+    {{ $t("inspector.noMatchingComponents", { query: filter }) }}
   </div>
 
-  <div class="card">
-    <header><span class="title">添加组件</span></header>
-    <div class="card-body">
-      <div style="display: flex; gap: 8px">
-        <select v-model="addName">
-          <option value="">选择类型…</option>
-          <option v-for="n in availableComponents" :key="n" :value="n">{{ shortName(n) }}</option>
-        </select>
-        <button class="primary" :disabled="!addName" @click="addComponent">添加</button>
+  <!-- Unity 风格居中 Add Component 按钮 -->
+  <div class="add-component-container">
+    <button class="add-component-button" @click="showAddPopup = !showAddPopup">
+      {{ $t("inspector.addComponent") }}
+    </button>
+    <div v-if="showAddPopup" class="add-component-popup" @pointerdown.stop>
+      <div class="add-component-filter">
+        <input
+          v-model="addFilter"
+          type="text"
+          :placeholder="$t('inspector.searchComponents')"
+          autofocus
+        />
+      </div>
+      <div class="add-component-list">
+        <div
+          v-for="n in filteredAvailableComponents"
+          :key="n"
+          class="add-component-item"
+          @click="selectAddComponent(n)"
+        >
+          <span>{{ shortName(n) }}</span>
+          <span style="font-size: 10px; color: var(--muted); margin-left: auto">{{ n }}</span>
+        </div>
+        <div v-if="!filteredAvailableComponents.length" class="hint" style="padding: 8px; text-align: center">
+          {{ $t("common.none") }}
+        </div>
       </div>
     </div>
   </div>
@@ -417,10 +557,10 @@ const availableComponents = computed(() =>
       @contextmenu.prevent
     >
       <button @click="runComponentMenu('copy')">
-        <span>复制组件</span>
+        <span>{{ $t("inspector.copyComponent") }}</span>
       </button>
       <button class="danger" @click="runComponentMenu('remove')">
-        <span>移除组件</span>
+        <span>{{ $t("inspector.removeComponent") }}</span>
       </button>
     </div>
   </Teleport>
