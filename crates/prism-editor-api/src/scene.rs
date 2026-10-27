@@ -793,6 +793,13 @@ pub fn delete_entities(
 pub const PREFAB_LINK_COMPONENT: &str = "prism_engine::scene::PrefabInstance";
 
 /// 子树下标（DFS，父先于子，`root` 在首位）。
+/// 原数组下标在删除 `removed` 里的实体之后的新位置。
+///
+/// 只数排在它前面的被删下标；调用方必须保证 `index` 自己不在 `removed` 里。
+fn index_after_removal(index: usize, removed: &[usize]) -> usize {
+    index - removed.iter().filter(|removed| **removed < index).count()
+}
+
 fn subtree_indices(entities: &[serde_json::Value], root: usize) -> Vec<usize> {
     let mut order: Vec<usize> = Vec::new();
     let mut stack = vec![root];
@@ -1016,18 +1023,25 @@ pub fn revert_prefab_instance(
         .get("name")
         .and_then(|value| value.as_str())
         .map(|name| name.to_string());
+    let subtree = subtree_indices(entities, root);
     // `parent` 是 id，删掉子树不会让它失效（这正是 v3 想要的效果）；
-    // `instantiate_prefab` 的入参是**下标**，所以这里必须做 id → 下标换算。
+    // `instantiate_prefab` 的入参是**下标**，而且必须是**裁剪后**文档里的下标：
+    // 数组顺序与层级无关（见 `SceneJson::topological_order`），被删的实体完全可能
+    // 排在父实体前面，删除会让父实体整体前移。直接用原数组下标会挂错父级（或在
+    // 越界检查里报错）。
     let parent = parent_of(&entities[root])
         .map(|id| {
-            index_of_id(entities, id)
-                .map(|index| index as u32)
-                .ok_or_else(|| format!("父实体 id {id} 不存在"))
+            let index =
+                index_of_id(entities, id).ok_or_else(|| format!("父实体 id {id} 不存在"))?;
+            if subtree.contains(&index) {
+                // 只有层级成环时才会出现（`validate` 只拒绝自父）。
+                return Err(format!("父实体 id {id} 在待删除的子树内（层级成环）"));
+            }
+            Ok(index_after_removal(index, &subtree) as u32)
         })
         .transpose()?;
-    let subtree = subtree_indices(entities, root);
     // 根在裁剪后数组里的位置：它前面的实体减去同在本子树里的那些。
-    let insert_at = root - subtree.iter().filter(|index| **index < root).count();
+    let insert_at = index_after_removal(root, &subtree);
 
     let trimmed = delete_entities(scene, &subtree)?;
     let result = instantiate_prefab(&trimmed, prefab, parent, link)?;
@@ -1438,6 +1452,75 @@ mod tests {
             .map(|entity| entity["id"].as_u64().unwrap())
             .collect();
         assert_eq!(ids, vec![10, 11, 12]);
+    }
+
+    #[test]
+    fn revert_resolves_the_parent_index_after_deleting_the_subtree() {
+        let path = "assets/prefabs/door.prefab.json";
+        let mut door = serde_json::json!({
+            "id": 1,
+            "name": "Door",
+            "parent": 0,
+            "transform": {},
+            "components": {}
+        });
+        door["components"][PREFAB_LINK_COMPONENT] = serde_json::json!({ "prefab": path });
+        // 数组顺序刻意与层级顺序相反：
+        //   idx0 `grandchild`（id 9）排在它的父 `Door` 前面，自己也在 Door 的子树里；
+        //   idx1 `host`（id 0）是 Door 的父，却排在子树之后。
+        // 删掉子树后 host 从下标 1 前移到 0：若沿用原数组下标（1），实例会被挂到
+        // `tail` 上（静默挂错父级）。
+        let scene = serde_json::json!({
+            "version": prism_scene::SCENE_DOC_VERSION,
+            "entities": [
+                { "id": 9, "name": "grandchild", "parent": 1, "transform": {}, "components": {} },
+                { "id": 0, "name": "host", "parent": null, "transform": {}, "components": {} },
+                door,
+                { "id": 7, "name": "tail", "parent": null, "transform": {}, "components": {} }
+            ]
+        });
+
+        let reverted = revert_prefab_instance(&scene, 2, &demo_prefab(), Some(path)).unwrap();
+        validate_doc(&reverted.doc).unwrap();
+
+        let entities = reverted.doc["entities"].as_array().unwrap();
+        let names: Vec<&str> = entities
+            .iter()
+            .map(|entity| entity["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, vec!["host", "Door", "Handle", "tail"]);
+        // 实例根挂回 host（id 0 / 裁剪后的下标 0），不是裁剪前的下标 1 所指的 tail。
+        assert_eq!(entities[reverted.index]["parent"], 0);
+        assert_eq!(reverted.index, 1);
+        assert_eq!(prefab_instances(&reverted.doc).len(), 1);
+    }
+
+    #[test]
+    fn revert_rejects_a_parent_that_is_inside_the_subtree() {
+        let path = "assets/prefabs/door.prefab.json";
+        // 层级成环（`validate` 只拒绝自父）：Door(id 1) 的父是它的后代 grandchild(id 9)。
+        let mut door = serde_json::json!({
+            "id": 1,
+            "name": "Door",
+            "parent": 9,
+            "transform": {},
+            "components": {}
+        });
+        door["components"][PREFAB_LINK_COMPONENT] = serde_json::json!({ "prefab": path });
+        let scene = serde_json::json!({
+            "version": prism_scene::SCENE_DOC_VERSION,
+            "entities": [
+                { "id": 9, "name": "grandchild", "parent": 1, "transform": {}, "components": {} },
+                { "id": 0, "name": "host", "parent": null, "transform": {}, "components": {} },
+                door
+            ]
+        });
+
+        let error = revert_prefab_instance(&scene, 2, &demo_prefab(), Some(path)).unwrap_err();
+        assert!(
+            error.contains("在待删除的子树内"),
+            "成环时不能把父 id 换成凭空的裁剪后下标：{error}"
+        );
     }
 
     #[test]

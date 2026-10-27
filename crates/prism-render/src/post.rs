@@ -27,8 +27,8 @@ use crate::context::VulkanContext;
 use crate::pipeline::{GraphicsPipeline, PipelineDesc};
 use crate::render_graph::{
     GraphResources, PassInfo, PassKind, RenderContext, RenderGraphBuilder, RenderMode,
-    RenderPassNode, RenderSettings, ResourceUsage, FORWARD_COLOR_H, FORWARD_DEPTH_H,
-    FORWARD_NORMAL_H, PT_COLOR_H,
+    RenderPassNode, RenderSettings, ResourceHandle, ResourceUsage, FORWARD_COLOR_H,
+    FORWARD_DEPTH_H, FORWARD_NORMAL_H, PT_COLOR_H,
 };
 use crate::render_pass::find_memory_type;
 use crate::shader;
@@ -525,18 +525,15 @@ impl RenderPassNode for PostPass {
         // In path-trace 众数 we 读取 PT_COLOR_H instead of FORWARD_COLOR_H,
         // unless no usable 相机 存在 — in that case the PT pass was skipped
         // so fall 后 to FORWARD_COLOR_H (the gray 清空 颜色 from ForwardPass).
+        // If PT_COLOR_H was not published (e.g. no RT hardware, pass skipped,
+        // or geometry/materials not yet uploaded), also fall back to FORWARD_COLOR_H
+        // so PostPass can tonemap and transition the swapchain image to PRESENT_SRC_KHR.
         // 调试 modes 1 深度 and 2 法线 always 读取 from scene 输出
         let is_pt = ctx.frame.render_mode == RenderMode::PathTrace;
         let has_camera = ctx.frame.has_camera;
-        let (handle, image_layout) = match ctx.frame.debug_rt {
-            1 => (
-                FORWARD_DEPTH_H,
-                vk::ImageLayout::DEPTH_STENCIL_READ_ONLY_OPTIMAL,
-            ),
-            2 => (FORWARD_NORMAL_H, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL),
-            _ if is_pt && has_camera => (PT_COLOR_H, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL),
-            _ => (FORWARD_COLOR_H, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL),
-        };
+        let has_pt_view = resources.published_view(PT_COLOR_H).is_some();
+        let (handle, image_layout) =
+            select_input_target(ctx.frame.debug_rt, is_pt, has_camera, has_pt_view);
         let input_view = match resources.published_view(handle) {
             Some(v) => v,
             None => {
@@ -676,4 +673,81 @@ fn _memory_type_for_hdr(context: &VulkanContext, mem_type_bits: u32) -> anyhow::
         vk::MemoryPropertyFlags::DEVICE_LOCAL,
     )
     .context("PostPass: no suitable memory type for HDR image")
+}
+
+/// Helper to select the input resource handle and expected image layout for PostPass.
+///
+/// In path-trace mode we read PT_COLOR_H instead of FORWARD_COLOR_H, unless no usable camera
+/// exists or PT_COLOR_H was not published (e.g. acceleration structures unsupported, or PT pass
+/// skipped). In that case, falls back to FORWARD_COLOR_H so PostPass can tonemap and transition
+/// the presentation image properly.
+pub(crate) fn select_input_target(
+    debug_rt: u32,
+    is_pt: bool,
+    has_camera: bool,
+    has_pt_view: bool,
+) -> (ResourceHandle, vk::ImageLayout) {
+    match debug_rt {
+        1 => (
+            FORWARD_DEPTH_H,
+            vk::ImageLayout::DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+        ),
+        2 => (FORWARD_NORMAL_H, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL),
+        _ if is_pt && has_camera && has_pt_view => {
+            (PT_COLOR_H, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+        }
+        _ if is_pt && has_camera => {
+            log::warn!(
+                "PostPass: PT_COLOR_H requested but not published; falling back to FORWARD_COLOR_H"
+            );
+            (FORWARD_COLOR_H, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+        }
+        _ => (FORWARD_COLOR_H, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_select_input_target_raster() {
+        let (handle, layout) = select_input_target(0, false, true, false);
+        assert_eq!(handle, FORWARD_COLOR_H);
+        assert_eq!(layout, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
+    }
+
+    #[test]
+    fn test_select_input_target_path_trace_with_pt_view() {
+        let (handle, layout) = select_input_target(0, true, true, true);
+        assert_eq!(handle, PT_COLOR_H);
+        assert_eq!(layout, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
+    }
+
+    #[test]
+    fn test_select_input_target_path_trace_fallback_when_view_missing() {
+        // PT requested with camera, but PT_COLOR_H was not published -> fall back to FORWARD_COLOR_H
+        let (handle, layout) = select_input_target(0, true, true, false);
+        assert_eq!(handle, FORWARD_COLOR_H);
+        assert_eq!(layout, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
+    }
+
+    #[test]
+    fn test_select_input_target_path_trace_no_camera() {
+        // PT requested without camera -> forward color
+        let (handle, layout) = select_input_target(0, true, false, false);
+        assert_eq!(handle, FORWARD_COLOR_H);
+        assert_eq!(layout, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
+    }
+
+    #[test]
+    fn test_select_input_target_debug_modes() {
+        let (h1, l1) = select_input_target(1, true, true, true);
+        assert_eq!(h1, FORWARD_DEPTH_H);
+        assert_eq!(l1, vk::ImageLayout::DEPTH_STENCIL_READ_ONLY_OPTIMAL);
+
+        let (h2, l2) = select_input_target(2, true, true, true);
+        assert_eq!(h2, FORWARD_NORMAL_H);
+        assert_eq!(l2, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
+    }
 }

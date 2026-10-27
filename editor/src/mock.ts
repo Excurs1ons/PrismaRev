@@ -195,15 +195,23 @@ function validate(doc: SceneDoc | undefined) {
   if (!Array.isArray(doc.entities) || doc.entities.length === 0) {
     throw new Error("文档至少要有一个实体");
   }
-  const count = doc.entities.length;
+  const ids = new Set<number>();
+  doc.entities.forEach((entity, index) => {
+    if (typeof entity.id === "number") {
+      if (ids.has(entity.id)) {
+        throw new Error(`entity ${index}: duplicate id ${entity.id}`);
+      }
+      ids.add(entity.id);
+    }
+  });
   doc.entities.forEach((entity, index) => {
     const parent = entity.parent;
     if (parent === null || parent === undefined) return;
-    if (parent < 0 || parent >= count) {
-      throw new Error(`entity ${index}: parent index ${parent} out of bounds`);
-    }
-    if (parent === index) {
+    if (typeof entity.id === "number" && parent === entity.id) {
       throw new Error(`entity ${index}: self-parent not allowed`);
+    }
+    if (ids.size > 0 && !ids.has(parent)) {
+      throw new Error(`entity ${index}: parent id ${parent} does not exist`);
     }
   });
 }
@@ -213,25 +221,20 @@ function extractSubtree(doc: SceneDoc, root: number): SceneDoc {
   validate(doc);
   if (root < 0 || root >= doc.entities.length) throw new Error(`实体下标 ${root} 越界`);
 
-  const order: number[] = [];
-  const stack = [root];
-  while (stack.length) {
-    const index = stack.pop() as number;
-    if (order.includes(index)) continue;
-    order.push(index);
-    for (let child = doc.entities.length - 1; child >= 0; child--) {
-      if (doc.entities[child].parent === index && !order.includes(child)) stack.push(child);
-    }
-  }
-
+  const order = subtreeIndices(doc, root);
   const mapping = new Map<number, number>();
-  order.forEach((oldIndex, newIndex) => mapping.set(oldIndex, newIndex));
+  order.forEach((oldIndex, newId) => {
+    mapping.set(doc.entities[oldIndex]?.id ?? oldIndex, newId);
+  });
 
   const entities = order.map((oldIndex) => {
     const entity = clone(doc.entities[oldIndex]);
-    const parent = entity.parent;
-    entity.parent =
-      parent === null || parent === undefined ? null : (mapping.get(parent) ?? null);
+    const oldId = entity.id ?? oldIndex;
+    const oldParent = entity.parent;
+    entity.id = mapping.get(oldId) ?? 0;
+    const newParent =
+      oldParent === null || oldParent === undefined ? null : (mapping.get(oldParent) ?? null);
+    entity.parent = newParent;
     return entity;
   });
 
@@ -256,13 +259,27 @@ function instantiatePrefab(
     throw new Error(`父实体下标 ${parent} 越界`);
   }
 
-  const base = scene.entities.length;
+  let maxId = -1;
+  for (const e of scene.entities) {
+    if (typeof e.id === "number" && e.id > maxId) maxId = e.id;
+  }
+  const idBase = maxId + 1;
+  const rootParentId = parent === null ? null : (scene.entities[parent]?.id ?? parent);
+
+  const idMap = new Map<number, number>();
+  prefab.entities.forEach((entity, offset) => {
+    idMap.set(entity.id ?? offset, idBase + offset);
+  });
+
   const names = scene.entities.map((entity) => entity.name ?? "");
   const entities = scene.entities.map((entity) => clone(entity));
   const inserted: number[] = [];
 
-  for (const prefabEntity of prefab.entities) {
+  for (let offset = 0; offset < prefab.entities.length; offset++) {
+    const prefabEntity = prefab.entities[offset];
     const entity = clone(prefabEntity);
+    entity.id = idBase + offset;
+
     const baseName = entity.name ?? "entity";
     let name = baseName;
     let suffix = 2;
@@ -275,7 +292,7 @@ function instantiatePrefab(
 
     const prefabParent = prefabEntity.parent;
     const isRoot = prefabParent === null || prefabParent === undefined;
-    entity.parent = isRoot ? parent : base + prefabParent;
+    entity.parent = isRoot ? rootParentId : (idMap.get(prefabParent) ?? rootParentId);
 
     if (isRoot && link) {
       entity.components = {
@@ -293,14 +310,21 @@ function instantiatePrefab(
 
 /** 子树下标（DFS，根在首位）。 */
 function subtreeIndices(doc: SceneDoc, root: number): number[] {
+  const idMap = new Map<number, number>();
+  doc.entities.forEach((e, i) => {
+    if (typeof e.id === "number") idMap.set(e.id, i);
+  });
   const order: number[] = [];
   const stack = [root];
   while (stack.length) {
     const index = stack.pop() as number;
     if (order.includes(index)) continue;
     order.push(index);
+    const currId = doc.entities[index]?.id ?? index;
     for (let child = doc.entities.length - 1; child >= 0; child--) {
-      if (doc.entities[child].parent === index && !order.includes(child)) stack.push(child);
+      if (doc.entities[child].parent === currId && !order.includes(child)) {
+        stack.push(child);
+      }
     }
   }
   return order;
@@ -326,17 +350,22 @@ function revertPrefabInstance(
   if (root < 0 || root >= doc.entities.length) throw new Error(`实体下标 ${root} 越界`);
 
   const keepName = doc.entities[root].name ?? null;
-  const parent = doc.entities[root].parent;
+  const parentId = doc.entities[root].parent;
   const subtree = subtreeIndices(doc, root);
-  const newParent =
-    parent === null || parent === undefined
-      ? null
-      : parent - subtree.filter((index) => index < parent).length;
   // 重建后的子树插回原位（数组顺序就是层级顺序，追加到末尾会让实例跳到最后一个兄弟）。
   const insertAt = root - subtree.filter((index) => index < root).length;
 
   const trimmed = deleteEntitiesInDoc(doc, subtree);
-  const result = instantiatePrefab(trimmed, prefab, newParent, link);
+  const newParentIndex =
+    parentId === null || parentId === undefined
+      ? null
+      : trimmed.entities.findIndex((e) => (e.id ?? -1) === parentId);
+  const result = instantiatePrefab(
+    trimmed,
+    prefab,
+    newParentIndex === null || newParentIndex < 0 ? null : newParentIndex,
+    link,
+  );
   const firstNew = result.inserted[0];
   const rebuilt = firstNew === undefined ? [] : result.doc.entities.splice(firstNew);
   if (keepName !== null && rebuilt.length > 0) {
@@ -352,19 +381,20 @@ function rootRelative(path: string): string {
 }
 
 function isDescendant(entities: EntityJson[], node: number, ancestor: number): boolean {
-  let current: number | null = node;
+  const ancestorId = entities[ancestor]?.id ?? ancestor;
+  let currentParentId = entities[node]?.parent;
   let guard = 0;
-  while (current !== null) {
-    if (current === ancestor) return true;
+  while (currentParentId !== null && currentParentId !== undefined) {
+    if (currentParentId === ancestorId) return true;
     guard += 1;
     if (guard > entities.length) return false;
-    const parent: number | null | undefined = entities[current]?.parent;
-    current = parent === null || parent === undefined ? null : parent;
+    const parentEntity = entities.find((e) => (e.id ?? -1) === currentParentId);
+    currentParentId = parentEntity?.parent;
   }
   return false;
 }
 
-/** 与 Rust 的 move_entity 同语义：移动数组位置 + 设置父级 + 全量重映射。 */
+/** 与 Rust 的 move_entity 同语义：移动数组位置 + 设置父级。 */
 function moveEntityInDoc(
   doc: SceneDoc,
   child: number,
@@ -385,28 +415,21 @@ function moveEntityInDoc(
 
   const order = doc.entities.map((_, index) => index);
   order.splice(child, 1);
-  order.splice(Math.min(at > child ? at - 1 : at, order.length), 0, child);
+  const target = at > child ? at - 1 : at;
+  order.splice(Math.min(target, order.length), 0, child);
 
-  const remap = new Array<number>(count).fill(-1);
-  order.forEach((oldIndex, newIndex) => {
-    remap[oldIndex] = newIndex;
-  });
+  const newParentId =
+    parent === null ? null : (doc.entities[parent]?.id ?? parent);
 
   const entities = order.map((oldIndex) => {
     const entity = clone(doc.entities[oldIndex]);
-    const oldParent = entity.parent;
-    entity.parent =
-      oldIndex === child
-        ? parent === null
-          ? null
-          : remap[parent]
-        : oldParent === null || oldParent === undefined
-          ? null
-          : remap[oldParent];
+    if (oldIndex === child) {
+      entity.parent = newParentId;
+    }
     return entity;
   });
 
-  return { doc: { version: doc.version ?? 1, entities }, index: remap[child] };
+  return { doc: { version: doc.version ?? 1, entities }, index: Math.min(target, order.length - 1) };
 }
 
 /** 与 Rust 的 delete_entities 同语义。 */
@@ -420,10 +443,12 @@ function deleteEntitiesInDoc(doc: SceneDoc, indices: number[]): SceneDoc {
   }
   if (removed.every(Boolean)) throw new Error("至少要保留一个实体");
 
-  const remap = new Array<number>(count).fill(-1);
-  let next = 0;
-  removed.forEach((isRemoved, oldIndex) => {
-    if (!isRemoved) remap[oldIndex] = next++;
+  const removedIds = new Set<number>();
+  indices.forEach((index) => {
+    const id = doc.entities[index]?.id;
+    if (typeof id === "number") {
+      removedIds.add(id);
+    }
   });
 
   const entities: EntityJson[] = [];
@@ -432,9 +457,9 @@ function deleteEntitiesInDoc(doc: SceneDoc, indices: number[]): SceneDoc {
     const copy = clone(entity);
     const oldParent = copy.parent;
     copy.parent =
-      oldParent === null || oldParent === undefined || removed[oldParent]
+      oldParent === null || oldParent === undefined || removedIds.has(oldParent)
         ? null
-        : remap[oldParent];
+        : oldParent;
     entities.push(copy);
   });
 

@@ -21,7 +21,10 @@
 use anyhow::{Context as _, Result};
 use ash::vk;
 
-use crate::buffer::{create_buffer, find_memory_type, BufferUsage, MemoryProperties};
+use crate::buffer::{
+    create_buffer, find_memory_type, mip_chain_byte_size, mip_level_byte_size, BufferUsage,
+    MemoryProperties,
+};
 use crate::context::VulkanContext;
 use crate::vulkan_compat::{LegacyCopy2, LegacySync2};
 
@@ -188,8 +191,9 @@ impl<'a> BatchUploader<'a> {
         unsafe { device.bind_image_memory(image, memory, 0) }
             .context("BatchUploader: bind image memory")?;
 
-        // Staging 缓冲区 for the base mip.
-        let size = (width as vk::DeviceSize) * (height as vk::DeviceSize) * 4;
+        // Staging 缓冲区 for the base mip — sized by what the caller provided,
+        // since `pixels` may hold a whole baked mip chain (KTX2).
+        let size = pixels.len() as vk::DeviceSize;
         let (staging, staging_memory) = create_buffer(
             self.context,
             size,
@@ -246,7 +250,64 @@ impl<'a> BatchUploader<'a> {
         }
 
         // Generate mip 链 (mirrors buffer.rs but uses the shared cmd).
-        if mip_levels > 1 {
+        //
+        // When `pixels` carries a fully baked chain (KTX2), upload the remaining
+        // levels straight from staging — baked compressed blocks survive and no
+        // blit feature is required. Level 0 was copied above.
+        let has_all_mips = mip_levels > 1
+            && mip_chain_byte_size(format, width, height, mip_levels)
+                .is_some_and(|total| pixels.len() >= total);
+        if has_all_mips {
+            let mut offset = mip_level_byte_size(format, width, height, 0)
+                .context("BatchUploader: unsupported format for mip chain")?
+                as u64;
+            for level in 1..mip_levels {
+                let copy = vk::BufferImageCopy::default()
+                    .buffer_offset(offset)
+                    .image_subresource(
+                        vk::ImageSubresourceLayers::default()
+                            .aspect_mask(vk::ImageAspectFlags::COLOR)
+                            .mip_level(level)
+                            .base_array_layer(0)
+                            .layer_count(1),
+                    )
+                    .image_extent(mip_extent(width, height, level));
+                unsafe {
+                    device.cmd_copy_buffer_to_image(
+                        self.cmd,
+                        staging,
+                        image,
+                        vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                        &[copy],
+                    );
+                }
+                offset += mip_level_byte_size(format, width, height, level)
+                    .context("BatchUploader: unsupported format for mip chain")?
+                    as u64;
+            }
+            barrier2(
+                &self.sync2,
+                self.cmd,
+                image,
+                color_sub(0, mip_levels),
+                ImageBarrier {
+                    old_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                    new_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                    src_stage: vk::PipelineStageFlags2::TRANSFER,
+                    src_access: vk::AccessFlags2::TRANSFER_WRITE,
+                    dst_stage: vk::PipelineStageFlags2::FRAGMENT_SHADER,
+                    dst_access: vk::AccessFlags2::SHADER_READ,
+                },
+            );
+        } else if mip_levels > 1 {
+            // Blitting is a format feature, not a given: BC7/ASTC/ETC2 often
+            // lack BLIT_SRC/BLIT_DST (notably on mobile), so fail loudly rather
+            // than record a command the driver rejects.
+            anyhow::ensure!(
+                crate::buffer::format_supports_blit(self.context, format),
+                "BatchUploader: {format:?} cannot be blitted on this device to generate mips; \
+                 provide the full mip chain (KTX2) or upload level 0 only"
+            );
             barrier2(
                 &self.sync2,
                 self.cmd,
@@ -355,8 +416,9 @@ impl<'a> BatchUploader<'a> {
                     dst_access: vk::AccessFlags2::SHADER_READ,
                 },
             );
-        } else {
-            // single mip: dst -> 着色器 读取
+        } else if mip_levels == 1 {
+            // single mip: dst -> 着色器 读取 (the baked-chain path above already
+            // transitioned every level, so it must not fall through to here)
             barrier2(
                 &self.sync2,
                 self.cmd,

@@ -172,3 +172,21 @@ fn rt_scheduler_is_registered_in_graph() {
         "RenderTextureScheduler should be registered in graph"
     );
 }
+
+#[test]
+fn headless_path_trace_pass_registered_if_supported() {
+    let renderer = match try_create_headless() {
+        Some(r) => r,
+        None => return,
+    };
+
+    let has_pt = renderer
+        .graph()
+        .pass_ref::<prism_render::PathTracePass>()
+        .is_some();
+    let rt_supported = renderer.context().rt_caps.acceleration_structure;
+    assert_eq!(
+        has_pt, rt_supported,
+        "PathTracePass registration must match acceleration_structure support"
+    );
+}

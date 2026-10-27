@@ -39,6 +39,39 @@ fn valid_input_passes_size_check() {
     assert_eq!(input.pixels.len(), expected);
 }
 
+// --- Pixel-buffer validation: baked mip chains must be accepted ---
+
+#[test]
+fn single_level_rgba8_must_be_exact() {
+    // 2x2 RGBA8 = 16 bytes.
+    assert!(accepts_pixel_len(TextureFormat::Rgba8, 0, 16, 2, 2));
+    // A stray extra byte means the caller's layout is wrong: reject.
+    assert!(!accepts_pixel_len(TextureFormat::Rgba8, 0, 17, 2, 2));
+    assert!(!accepts_pixel_len(TextureFormat::Rgba8, 0, 15, 2, 2));
+}
+
+#[test]
+fn baked_rgba8_chain_larger_than_base_level_is_accepted() {
+    // 8x8 RGBA8 chain (levels 4,1,0... all four) = 340 bytes > 256 base.
+    assert!(accepts_pixel_len(TextureFormat::Rgba8, 4, 340, 8, 8));
+    // But never less than the base level, even when claiming a chain.
+    assert!(!accepts_pixel_len(TextureFormat::Rgba8, 4, 255, 8, 8));
+}
+
+#[test]
+fn compressed_formats_tolerate_a_chain_but_not_a_short_buffer() {
+    // 8x8 BC7 base level = 2x2 blocks * 16 = 64 bytes.
+    assert!(accepts_pixel_len(TextureFormat::Bc7Unorm, 0, 64, 8, 8));
+    assert!(accepts_pixel_len(
+        TextureFormat::Bc7Unorm,
+        3,
+        64 + 16 + 16,
+        8,
+        8
+    ));
+    assert!(!accepts_pixel_len(TextureFormat::Bc7Unorm, 3, 63, 8, 8));
+}
+
 // --- Slot reclaim: released 槽 are reused before the bump pointer ---
 
 #[test]
