@@ -299,8 +299,6 @@ fn render_one_frame(
         frame_data: &frame_data,
         light_view_proj: scene.light_view_proj.to_cols_array_2d(),
         inv_projection: scene.inv_projection.to_cols_array_2d(),
-        debug_mode: settings.debug_mode as u32,
-        normal_space: settings.normal_space as u32,
         debug_flags: settings.debug_flags,
         tonemap_mode: settings.tonemap_mode,
         debug_rt: settings.debug_rt,

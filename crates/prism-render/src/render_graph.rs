@@ -448,12 +448,6 @@ pub struct GraphFrame<'a> {
     pub light_view_proj: [[f32; 4]; 4],
     /// Effective shadow 众数 for this 帧 (after 能力 分辨率
     pub shadow_mode: ShadowMode,
-    /// PBR 调试 visualization 众数 (0 = final, 1 = albedo, ...). Forwarded to
-    /// the scene shader's push-constant `debug.x`.
-    pub debug_mode: u32,
-    /// Normal-space selector for the 法线 调试 视图 (0 = 世界 1 = 切线
-    /// Forwarded to the scene shader's push-constant `debug.y`.
-    pub normal_space: u32,
     /// PBR 分量 toggle bitmask (15 bits, see `scene_frag.slang`
     /// `PBR_FLAG_*`). 0 = all components neutral (raw baseColor). Forwarded
     /// to the bindless 推送 常量 `debug_flags` field.

@@ -5,7 +5,6 @@
 //! instead of a growing 列表 of 标量 arguments.
 
 pub use prism_render::RenderMode;
-use prism_render::{DebugMode, NormalSpace};
 
 /// PBR isolate flag names, ordered by shader bit (`PBR_FLAG_*` in
 /// `scene_frag.slang`). Bit `i` corresponds to `PBR_FLAG_NAMES[i]`.
@@ -49,10 +48,6 @@ pub fn pbr_flag_label(flags: u32) -> &'static str {
 /// 标量 parameters to `render_system`.
 #[derive(Clone, Debug)]
 pub struct RenderSettings {
-    /// Currently selected PBR 调试 visualisation 众数
-    pub debug_mode: DebugMode,
-    /// 坐标系 空间 for the 法线 调试 众数
-    pub normal_space: NormalSpace,
     /// PBR 分量 isolate selector (15 bits, see `scene_frag.slang`
     /// `PBR_FLAG_*`). `0` = 法线 full-PBR 渲染 (all components on);
     /// `1 << bit` = isolate that one 分量 as a grayscale visualization.
@@ -77,8 +72,6 @@ pub struct RenderSettings {
 impl Default for RenderSettings {
     fn default() -> Self {
         Self {
-            debug_mode: DebugMode::Final,
-            normal_space: NormalSpace::World,
             debug_flags: 0,
             tonemap_mode: 0,
             debug_rt: 0,
