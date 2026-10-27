@@ -154,6 +154,9 @@ deviating from those conventions is a bug. (`README.md` is the human-facing over
     - Scene view 是编辑态：不跑 `Engine::update`，只传播层级；叠加一台 `depth = 1000`
       的编辑器相机（轨道控制由前端持有后整体下发）。Game view 用文档相机，Play 时
       才跑完整模拟。改 `scene/` 的相机选择或清屏规则前先看这里。
+    - Play 支持**暂停 / 单步**（`editor_viewport_set_paused` / `editor_viewport_step`）：
+      暂停只是不推进模拟（`HostState::simulate_now`），渲染与出帧照旧；单步消费一次
+      模拟后停在暂停。开始 / 停止 Play 都从磁盘快照重建场景，并清掉暂停状态。
     - 点选（`editor/src-tauri/src/pick.rs`）：屏幕像素 → 世界射线（与
       `compute_camera_output` 同一套透视 / y-flip 约定），与实体的**局部单位立方体**
       `[-0.5,0.5]³` × 世界矩阵求交，取最近命中。引擎没有 CPU 侧网格包围盒，这是

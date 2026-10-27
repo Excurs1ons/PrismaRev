@@ -86,6 +86,8 @@ pub struct ViewportSnapshot {
     /// 最近一帧的尺寸（缩放到上限后的实际渲染分辨率）。
     pub width: u32,
     pub height: u32,
+    /// Play 模式是否被暂停（单步不会改变它）。
+    pub paused: bool,
 }
 
 struct Shared {
@@ -96,6 +98,7 @@ struct Shared {
     entities: Mutex<usize>,
     error: Mutex<Option<String>>,
     extent: Mutex<(u32, u32)>,
+    paused: AtomicBool,
     channel: Mutex<Option<Channel<InvokeResponseBody>>>,
 }
 
@@ -108,6 +111,7 @@ impl Shared {
             entities: Mutex::new(0),
             error: Mutex::new(None),
             extent: Mutex::new(extent),
+            paused: AtomicBool::new(false),
             channel: Mutex::new(Some(channel)),
         })
     }
@@ -120,6 +124,7 @@ impl Shared {
             error: self.error.lock().unwrap().clone(),
             width,
             height,
+            paused: self.paused.load(Ordering::Relaxed),
         }
     }
 }
@@ -195,6 +200,10 @@ struct HostState {
     selection: Option<usize>,
     /// 正在进行的轴拖动（`None` = 没在拖）。
     drag: Option<AxisDrag>,
+    /// Play 模式暂停：仍然渲染，但不推进模拟。
+    paused: bool,
+    /// 暂停时请求单步：下一帧模拟一次然后回到暂停。
+    step_pending: bool,
 }
 
 /// 平移 gizmo 的拖动会话。
@@ -517,6 +526,39 @@ impl HostState {
         self.drag = None;
     }
 
+    /// 这一帧要不要推进模拟。
+    ///
+    /// 只有 Play 中的 Game view 会模拟；暂停时仍然渲染（画面能看，只是时间停住），
+    /// 单步请求消费一次模拟。
+    fn simulate_now(&mut self) -> bool {
+        if !self.simulate {
+            self.step_pending = false;
+            return false;
+        }
+        if self.step_pending {
+            self.step_pending = false;
+            return true;
+        }
+        !self.paused
+    }
+
+    /// 设置暂停状态（`false` 会清掉待处理的单步）。
+    fn set_paused(&mut self, paused: bool) {
+        self.paused = paused;
+        if !paused {
+            self.step_pending = false;
+        }
+    }
+
+    /// 暂停中前进一帧。
+    fn step(&mut self) {
+        if !self.simulate {
+            return;
+        }
+        self.paused = true;
+        self.step_pending = true;
+    }
+
     fn resize(&mut self, width: u32, height: u32) {
         let (w, h) = clamp_extent(width, height);
         if (w, h) == (self.width, self.height) {
@@ -594,6 +636,8 @@ fn viewport_thread(
         marker: None,
         selection: None,
         drag: None,
+        paused: false,
+        step_pending: false,
     };
 
     match state.reload() {
@@ -623,7 +667,8 @@ fn viewport_thread(
 
         if shared.active.load(Ordering::Relaxed) {
             state.place_camera();
-            state.app.host_tick(state.simulate);
+            let simulate = state.simulate_now();
+            state.app.host_tick(simulate);
             if let Some(frame) = state.app.take_hosted_frame() {
                 push_frame(&shared, frame);
             }
@@ -930,11 +975,51 @@ pub fn editor_viewport_set_playing(
             // Play 开始 / 结束时都从磁盘快照重建：开始 = 回到初始状态，
             // 结束 = 丢弃模拟出来的改动（Unity 的 enter/exit play mode）。
             state.simulate = playing;
+            state.set_paused(false);
+            shared.paused.store(false, Ordering::Relaxed);
             if let Err(error) = state.reload() {
                 *shared.error.lock().unwrap() = Some(error);
             } else {
                 *shared.error.lock().unwrap() = None;
             }
+        }));
+    }
+    Ok(())
+}
+
+/// Play 模式暂停 / 继续（暂停时仍然渲染，只是不推进模拟）。
+#[tauri::command]
+pub fn editor_viewport_set_paused(
+    id: String,
+    paused: bool,
+    manager: State<'_, ViewportManager>,
+) -> Result<(), String> {
+    let views = manager
+        .views
+        .lock()
+        .map_err(|_| "视口状态锁失败".to_string())?;
+    if let Some(handle) = views.get(&id) {
+        let shared = handle.shared.clone();
+        let _ = handle.tx.send(Box::new(move |state: &mut HostState| {
+            state.set_paused(paused);
+            shared.paused.store(paused, Ordering::Relaxed);
+        }));
+    }
+    Ok(())
+}
+
+/// 暂停中前进一帧（会先进入暂停状态）。
+#[tauri::command]
+pub fn editor_viewport_step(id: String, manager: State<'_, ViewportManager>) -> Result<(), String> {
+    let views = manager
+        .views
+        .lock()
+        .map_err(|_| "视口状态锁失败".to_string())?;
+    if let Some(handle) = views.get(&id) {
+        let shared = handle.shared.clone();
+        let _ = handle.tx.send(Box::new(move |state: &mut HostState| {
+            state.step();
+            shared.paused.store(state.paused, Ordering::Relaxed);
         }));
     }
     Ok(())
@@ -1216,6 +1301,8 @@ mod tests {
             marker: None,
             selection: None,
             drag: None,
+            paused: false,
+            step_pending: false,
         };
         state.reload().expect("测试场景应该能加载");
         assert_eq!(state.entities.len(), 2);
@@ -1260,6 +1347,34 @@ mod tests {
         let world = state.app.engine_mut().world_mut();
         assert!(!world.get::<Gizmo>(marker).unwrap().enabled);
         assert_eq!(state.selection, None);
+    }
+
+    #[test]
+    fn play_pause_and_step_drive_the_simulation() {
+        let mut state = test_state("play-pause");
+        // 编辑态（没点 Play）永不模拟，单步请求也被丢掉。
+        state.simulate = false;
+        state.step_pending = true;
+        assert!(!state.simulate_now());
+        assert!(!state.step_pending);
+
+        state.simulate = true;
+        state.set_paused(false);
+        assert!(state.simulate_now());
+
+        // 暂停：仍然渲染，但不推进；单步只推进一帧。
+        state.set_paused(true);
+        assert!(!state.simulate_now());
+        state.step();
+        assert!(state.simulate_now());
+        assert!(!state.simulate_now());
+        assert!(state.paused, "单步之后仍然停在暂停");
+
+        // 继续播放会清掉待处理的单步。
+        state.step_pending = true;
+        state.set_paused(false);
+        assert!(state.simulate_now());
+        assert!(!state.step_pending);
     }
 
     /// 选中项的中心与箭头尖端在屏幕上的位置（像素）。

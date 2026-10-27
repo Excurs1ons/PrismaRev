@@ -61,9 +61,18 @@ Vue ViewportPanel.vue  ◄──── Channel(ArrayBuffer) ──── 视口�
 | 模拟 | 不跑 `Engine::update`，只传播层级 | Play 时跑完整 `update` |
 | 相机 | 叠加一台 `depth = 1000`、`clear_flags = SolidColor` 的编辑器相机 | 文档里的相机（无则用 runtime 回退相机） |
 | 相机控制 | 左键轨道 / 中键或 Shift 平移 / 滚轮缩放，参数由前端持有并整体下发 | 转发鼠标、滚轮、少量按键给 `InputManager` |
-| Play | 不受影响 | 工具栏「运行」= 重载场景后开始模拟 |
+| Play | 不受影响 | 工具栏「运行」= 重载场景后开始模拟；运行中可暂停 / 单步 |
 
 编辑器相机**不写进文档**（它只是视口元数据，不应该被 cook 进场景）。
+
+## Play 的暂停与单步
+
+- 暂停 = `HostState.paused`：`simulate_now()` 返回 false，但线程照常 `host_tick(false)`
+  → 只渲染 + 传播层级，所以画面不动但仍然是最新的一帧（可以放心看某个瞬间）。
+- 单步 = `step_pending`：下一次 `simulate_now()` 返回 true，消费后立刻回到暂停。
+- 前端状态（`paused`）在 `App.vue` 里，和 `playing` 一起控制 Game 面板的工具栏按钮；
+  后端还会把 `paused` 放进 `editor_viewport_stats` 的快照里作为真相来源。
+- 开始 / 停止 Play 都会 `set_paused(false)`：Play 结束不该留下一个"暂停中"的幽灵状态。
 
 ## 平移 gizmo（拖动改位置）
 

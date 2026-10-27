@@ -11,7 +11,7 @@
  * - Game view：Play 时模拟游戏循环；鼠标/键盘转发给引擎 `InputManager`。
  */
 import { Channel } from "@tauri-apps/api/core";
-import { Pause, Play, RefreshCw } from "lucide-vue-next";
+import { Pause, Play, RefreshCw, Square, StepForward } from "lucide-vue-next";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import * as api from "../api";
 import type { CameraOrbit, SceneDoc, ViewportInput, ViewportSnapshot } from "../types";
@@ -22,6 +22,8 @@ const props = defineProps<{
   path: string | null;
   /** Game view 的 Play 状态（由工具栏统一控制）。 */
   playing?: boolean;
+  /** Game view 是否暂停（由工具栏控制，暂停时仍渲染）。 */
+  paused?: boolean;
   /** 当前选中项（文档 `entities` 下标，与层级 / 检查器共用）。 */
   selection?: number[];
 }>();
@@ -32,6 +34,10 @@ const emit = defineEmits<{
   (event: "select", index: number | null): void;
   /** 拖动平移手柄后的新局部位置 `[x, y, z]`。 */
   (event: "move", position: [number, number, number]): void;
+  /** Game view：暂停 / 继续 Play。 */
+  (event: "toggle-pause"): void;
+  /** Game view：暂停中前进一帧。 */
+  (event: "step"): void;
 }>();
 
 const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -305,6 +311,13 @@ function onPointerMove(event: PointerEvent) {
   });
 }
 
+/** 暂停中前进一帧（后端会先把状态切成暂停，所以连点也安全）。 */
+function requestStep() {
+  if (!inTauri) return;
+  void api.viewportStep(viewId).catch(() => undefined);
+  emit("step");
+}
+
 /** 拖动按 rAF 合并：每帧最多问一次后端，中间的光标位置直接丢掉。 */
 function pushDrag(point: { x: number; y: number }) {
   if (dragFrame) {
@@ -485,6 +498,13 @@ watch(
     void api.viewportSetPlaying(viewId, !!playing).catch(() => undefined);
   },
 );
+watch(
+  () => props.paused,
+  (paused) => {
+    if (!inTauri || !props.playing) return;
+    void api.viewportSetPaused(viewId, !!paused).catch(() => undefined);
+  },
+);
 
 const fpsLabel = computed(() => {
   const fps = stats.value?.fps ?? 0;
@@ -513,13 +533,34 @@ const entityLabel = computed(() =>
         <RefreshCw :size="13" />
       </button>
       <button
+        v-if="!isScene && playing"
+        class="icon-button"
+        :class="{ active: paused }"
+        :title="paused ? '继续' : '暂停'"
+        :disabled="!canRender"
+        @click="emit('toggle-pause')"
+      >
+        <Play v-if="paused" :size="13" />
+        <Pause v-else :size="13" />
+      </button>
+      <button
+        v-if="!isScene && playing"
+        class="icon-button"
+        title="单步（前进一帧）"
+        :disabled="!canRender"
+        @click="requestStep"
+      >
+        <StepForward :size="13" />
+      </button>
+      <button
         v-if="!isScene"
         class="icon-button"
+        :class="{ active: playing }"
         :title="playing ? '停止' : '运行'"
         :disabled="!canRender"
         @click="emit('toggle-play')"
       >
-        <Pause v-if="playing" :size="13" />
+        <Square v-if="playing" :size="12" />
         <Play v-else :size="13" />
       </button>
     </div>
@@ -558,7 +599,7 @@ const entityLabel = computed(() =>
   flex-direction: column;
   height: 100%;
   min-height: 0;
-  background: var(--panel-bg, #15171c);
+  background: var(--panel, #121722);
 }
 
 .viewport-toolbar {
@@ -566,12 +607,41 @@ const entityLabel = computed(() =>
   align-items: center;
   gap: 8px;
   padding: 4px 8px;
-  border-bottom: 1px solid var(--border, #262a33);
+  border-bottom: 1px solid var(--border, #232b3d);
   font-size: 12px;
 }
 
 .viewport-title {
   font-weight: 600;
+}
+
+.icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--border, #232b3d);
+  border-radius: 4px;
+  background: var(--panel-alt, #171d2b);
+  color: var(--muted, #8b96ad);
+  cursor: pointer;
+}
+
+.icon-button:hover:not(:disabled) {
+  border-color: var(--border-strong, #333843);
+  color: var(--text, #e6ebf5);
+}
+
+.icon-button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.icon-button.active {
+  border-color: var(--accent, #6ea8ff);
+  color: var(--accent, #6ea8ff);
 }
 
 .viewport-meta {
@@ -589,7 +659,7 @@ const entityLabel = computed(() =>
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #0b0c0f;
+  background: var(--bg-sunken, #0d1119);
   overflow: hidden;
 }
 
@@ -617,9 +687,9 @@ const entityLabel = computed(() =>
   justify-content: center;
   padding: 16px;
   text-align: center;
-  color: var(--text-muted, #8b93a1);
+  color: var(--muted, #8b96ad);
   font-size: 12px;
-  background: rgba(8, 9, 12, 0.72);
+  background: color-mix(in srgb, var(--bg, #0b0e14) 78%, transparent);
   pointer-events: none;
 }
 
@@ -628,7 +698,7 @@ const entityLabel = computed(() =>
   left: 8px;
   bottom: 6px;
   font-size: 11px;
-  color: var(--text-muted, #8b93a1);
+  color: var(--muted, #8b96ad);
   opacity: 0.75;
   pointer-events: none;
 }
