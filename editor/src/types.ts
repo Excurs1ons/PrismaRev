@@ -170,6 +170,7 @@ export interface TransformJson {
 
 /** `.scene.json` 的一个实体。 */
 export interface EntityJson {
+  id?: number;
   name?: string | null;
   parent?: number | null;
   transform: TransformJson;
