@@ -222,6 +222,50 @@ fn verify_ok_on_valid_pak() {
     assert!(reader.verify_integrity().is_ok());
 }
 
+#[test]
+fn streamed_asset_sets_flag_and_bypasses_compression() {
+    let id_normal = sample_asset_id(10);
+    let id_stream = sample_asset_id(20);
+    let data_normal = vec![42u8; 1024];
+    let data_stream = vec![99u8; 2048];
+
+    let mut builder = PackageBuilder::new();
+    builder.set_compression(3);
+    builder.add_asset(id_normal, AssetType::Binary, data_normal.clone(), &[]);
+    builder.add_streamed_asset(id_stream, AssetType::Binary, data_stream.clone(), &[]);
+
+    let pak = builder.build().expect("package build");
+    let reader = PackageReader::from_bytes(&pak).expect("package read");
+
+    let rec_normal = reader.find_record(id_normal).expect("normal record");
+    assert!(rec_normal.is_compressed());
+    assert!(!rec_normal.is_streamed());
+    assert!(!reader.is_asset_streamed(id_normal));
+
+    let rec_stream = reader.find_record(id_stream).expect("stream record");
+    assert!(!rec_stream.is_compressed());
+    assert!(rec_stream.is_streamed());
+    assert!(reader.is_asset_streamed(id_stream));
+    assert_eq!(rec_stream.compressed_size, 0);
+    assert_eq!(rec_stream.size, 2048);
+
+    // Streamed asset slice in package matches uncompressed data directly.
+    let raw_stream_slice = reader
+        .asset_record_raw_slice(rec_stream)
+        .expect("raw slice");
+    assert_eq!(raw_stream_slice, &data_stream);
+
+    // Both read back correctly through read_asset_data.
+    assert_eq!(
+        reader.read_asset_data(id_normal).unwrap().unwrap(),
+        data_normal
+    );
+    assert_eq!(
+        reader.read_asset_data(id_stream).unwrap().unwrap(),
+        data_stream
+    );
+}
+
 fn temp_pak_path() -> std::path::PathBuf {
     static NEXT: AtomicU32 = AtomicU32::new(0);
     let id = NEXT.fetch_add(1, Ordering::Relaxed);
