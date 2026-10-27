@@ -49,6 +49,7 @@ const status = ref<"idle" | "loading" | "live" | "error">("idle");
 const message = ref<string | null>(null);
 const stats = ref<ViewportSnapshot | null>(null);
 const frames = ref(0);
+const displayFps = ref(0);
 
 /** Scene view 的轨道相机（唯一的状态持有者，整体下发给后端）。 */
 const orbit = ref<CameraOrbit>({ target: [0, 0, 0], yaw: -0.7, pitch: 0.35, distance: 12 });
@@ -63,6 +64,12 @@ let reloadTimer: number | undefined;
 let statsTimer: number | undefined;
 let cameraPending = false;
 let isActive = true;
+let pendingFrame: ArrayBuffer | null = null;
+let drawScheduled = false;
+let lastFpsSample = performance.now();
+let sampledFrames = 0;
+let context2d: CanvasRenderingContext2D | null = null;
+let imageData: ImageData | null = null;
 /** 场景第一次出帧时自动框住内容；换文档后重置。 */
 let autoFramed = false;
 
@@ -88,9 +95,22 @@ async function open() {
   }
   status.value = "loading";
   message.value = null;
+  pendingFrame = null;
+  drawScheduled = false;
+  context2d = null;
+  imageData = null;
+  displayFps.value = 0;
+  sampledFrames = 0;
+  lastFpsSample = performance.now();
   const { width, height } = physicalSize();
   channel = new Channel<ArrayBuffer>();
-  channel.onmessage = (buffer) => drawFrame(buffer);
+  channel.onmessage = (buffer) => {
+    // Keep only the newest image when IPC is faster than the browser's paint loop.
+    pendingFrame = buffer;
+    if (drawScheduled) return;
+    drawScheduled = true;
+    requestAnimationFrame(paintPendingFrame);
+  };
   try {
     stats.value = await api.viewportOpen(
       viewId,
@@ -113,8 +133,13 @@ async function open() {
 
 async function close() {
   if (!inTauri) return;
+  pendingFrame = null;
+  drawScheduled = false;
+  context2d = null;
+  imageData = null;
   channel = null;
   frames.value = 0;
+  displayFps.value = 0;
   await api.viewportClose(viewId).catch(() => false);
 }
 
@@ -129,16 +154,40 @@ function drawFrame(buffer: ArrayBuffer) {
   if (canvas.width !== width || canvas.height !== height) {
     canvas.width = width;
     canvas.height = height;
+    imageData = null;
   }
-  const context = canvas.getContext("2d");
+  const context = context2d ?? (context2d = canvas.getContext("2d"));
   if (!context) return;
   const pixels = new Uint8ClampedArray(buffer, 8);
-  context.putImageData(new ImageData(pixels, width, height), 0, 0);
+  if (!imageData || imageData.width !== width || imageData.height !== height) {
+    imageData = new ImageData(width, height);
+  }
+  imageData.data.set(pixels);
+  context.putImageData(imageData, 0, 0);
   frames.value += 1;
+  sampledFrames += 1;
+  const now = performance.now();
+  const elapsed = now - lastFpsSample;
+  if (elapsed >= 500) {
+    displayFps.value = Math.round((sampledFrames * 1000) / elapsed);
+    sampledFrames = 0;
+    lastFpsSample = now;
+  }
   status.value = "live";
   if (isScene.value && !autoFramed) {
     autoFramed = true;
     void frameAll();
+  }
+}
+
+function paintPendingFrame() {
+  drawScheduled = false;
+  const frame = pendingFrame;
+  pendingFrame = null;
+  if (frame) drawFrame(frame);
+  if (pendingFrame && !drawScheduled) {
+    drawScheduled = true;
+    requestAnimationFrame(paintPendingFrame);
   }
 }
 
@@ -551,7 +600,7 @@ watch(
 );
 
 const fpsLabel = computed(() => {
-  const fps = stats.value?.fps ?? 0;
+  const fps = displayFps.value;
   return fps > 0 ? `${fps.toFixed(0)} fps` : "—";
 });
 

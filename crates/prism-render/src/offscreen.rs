@@ -24,6 +24,8 @@ pub(crate) struct OffscreenTarget {
     command_pool: vk::CommandPool,
     buffer: vk::Buffer,
     buffer_memory: vk::DeviceMemory,
+    readback_cmd: Option<vk::CommandBuffer>,
+    readback_fence: Option<vk::Fence>,
     pub extent: vk::Extent2D,
     pub(crate) format: vk::Format,
 }
@@ -137,6 +139,8 @@ impl OffscreenTarget {
             command_pool,
             buffer,
             buffer_memory,
+            readback_cmd: None,
+            readback_fence: None,
             extent,
             format: Self::FORMAT,
         })
@@ -264,6 +268,10 @@ impl OffscreenTarget {
         context: &VulkanContext,
         current_layout: vk::ImageLayout,
     ) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.readback_cmd.is_none(),
+            "offscreen readback is still in flight"
+        );
         let device = &context.device;
 
         let alloc_info = vk::CommandBufferAllocateInfo::default()
@@ -315,6 +323,17 @@ impl OffscreenTarget {
                 &[copy],
             );
         }
+        image_barrier(
+            device,
+            cmd,
+            self.image,
+            vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+            current_layout,
+            vk::AccessFlags::TRANSFER_READ,
+            vk::AccessFlags::empty(),
+            vk::PipelineStageFlags::TRANSFER,
+            vk::PipelineStageFlags::BOTTOM_OF_PIPE,
+        );
 
         unsafe { device.end_command_buffer(cmd) }.context("end offscreen cmd buffer")?;
 
@@ -326,13 +345,117 @@ impl OffscreenTarget {
             .context("queue submit offscreen")?;
         unsafe { device.wait_for_fences(&[fence], true, u64::MAX) }
             .context("wait for offscreen fence")?;
-
-        unsafe {
-            device.destroy_fence(fence, None);
-            device.free_command_buffers(self.command_pool, &[cmd]);
-        }
+        unsafe { device.destroy_fence(fence, None) };
+        unsafe { device.free_command_buffers(self.command_pool, &[cmd]) };
 
         Ok(())
+    }
+
+    /// Submit the image copy without waiting for the GPU. The copy is serialized
+    /// on the graphics queue after the render submission; callers poll the fence
+    /// with [`poll_readback`] before mapping the staging buffer.
+    pub fn copy_to_readback_async(
+        &mut self,
+        context: &VulkanContext,
+        current_layout: vk::ImageLayout,
+    ) -> anyhow::Result<bool> {
+        if self.readback_cmd.is_some() {
+            return Ok(false);
+        }
+        let device = &context.device;
+        let alloc_info = vk::CommandBufferAllocateInfo::default()
+            .command_pool(self.command_pool)
+            .level(vk::CommandBufferLevel::PRIMARY)
+            .command_buffer_count(1);
+        let cmd = unsafe { device.allocate_command_buffers(&alloc_info) }
+            .context("allocate async offscreen cmd buffer")?[0];
+        let begin_info = vk::CommandBufferBeginInfo::default()
+            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+        unsafe { device.begin_command_buffer(cmd, &begin_info) }
+            .context("begin async offscreen cmd buffer")?;
+        image_barrier(
+            device,
+            cmd,
+            self.image,
+            current_layout,
+            vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+            vk::AccessFlags::COLOR_ATTACHMENT_WRITE | vk::AccessFlags::MEMORY_WRITE,
+            vk::AccessFlags::TRANSFER_READ,
+            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT | vk::PipelineStageFlags::ALL_COMMANDS,
+            vk::PipelineStageFlags::TRANSFER,
+        );
+        let copy = vk::BufferImageCopy::default()
+            .image_subresource(vk::ImageSubresourceLayers {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                mip_level: 0,
+                base_array_layer: 0,
+                layer_count: 1,
+            })
+            .image_extent(vk::Extent3D {
+                width: self.extent.width,
+                height: self.extent.height,
+                depth: 1,
+            });
+        unsafe {
+            device.cmd_copy_image_to_buffer(
+                cmd,
+                self.image,
+                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                self.buffer,
+                &[copy],
+            );
+        }
+        image_barrier(
+            device,
+            cmd,
+            self.image,
+            vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+            vk::ImageLayout::PRESENT_SRC_KHR,
+            vk::AccessFlags::TRANSFER_READ,
+            vk::AccessFlags::empty(),
+            vk::PipelineStageFlags::TRANSFER,
+            vk::PipelineStageFlags::BOTTOM_OF_PIPE,
+        );
+        unsafe { device.end_command_buffer(cmd) }.context("end async offscreen cmd buffer")?;
+        let fence = unsafe { device.create_fence(&vk::FenceCreateInfo::default(), None) }
+            .context("create async offscreen fence")?;
+        let submit = vk::SubmitInfo::default().command_buffers(std::slice::from_ref(&cmd));
+        if let Err(error) = unsafe { device.queue_submit(context.graphics_queue, &[submit], fence) }
+        {
+            unsafe {
+                device.destroy_fence(fence, None);
+                device.free_command_buffers(self.command_pool, &[cmd]);
+            }
+            return Err(error).context("submit async offscreen readback");
+        }
+        self.readback_cmd = Some(cmd);
+        self.readback_fence = Some(fence);
+        Ok(true)
+    }
+
+    /// Return completed pixels, or `None` while the previous copy is pending.
+    pub fn poll_readback(&mut self, context: &VulkanContext) -> anyhow::Result<Option<Vec<u8>>> {
+        let Some(fence) = self.readback_fence else {
+            return Ok(None);
+        };
+        let complete = unsafe { context.device.get_fence_status(fence) }
+            .context("poll offscreen readback fence")?;
+        if !complete {
+            return Ok(None);
+        }
+        let data = self.readback(context)?;
+        let cmd = self
+            .readback_cmd
+            .take()
+            .expect("readback command with fence");
+        self.readback_fence = None;
+        unsafe {
+            context.device.destroy_fence(fence, None);
+            context
+                .device
+                .free_command_buffers(self.command_pool, &[cmd]);
+        }
+        Ok(Some(data))
     }
 
     /// 映射表 the host-visible 缓冲区 and return 像素 data as `Vec<u8>` RGBA
@@ -364,10 +487,16 @@ impl OffscreenTarget {
     /// and must 已 have been destroyed.
     pub(crate) unsafe fn destroy(&mut self, device: &ash::Device) {
         unsafe {
+            device.device_wait_idle().ok();
+            if let Some(fence) = self.readback_fence.take() {
+                device.destroy_fence(fence, None);
+            }
+            if let Some(cmd) = self.readback_cmd.take() {
+                device.free_command_buffers(self.command_pool, &[cmd]);
+            }
             device.destroy_image_view(self.image_view, None);
             device.destroy_image(self.image, None);
             device.free_memory(self.image_memory, None);
-            device.device_wait_idle().ok();
             device.destroy_command_pool(self.command_pool, None);
             device.destroy_buffer(self.buffer, None);
             device.free_memory(self.buffer_memory, None);
