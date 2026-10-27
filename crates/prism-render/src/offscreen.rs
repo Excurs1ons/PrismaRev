@@ -252,6 +252,84 @@ impl OffscreenTarget {
         Ok(())
     }
 
+    /// Copy the current offscreen image contents to the host-visible readback buffer
+    /// without clearing. Afterwards call [`readback`](Self::readback).
+    pub fn copy_to_readback(
+        &mut self,
+        context: &VulkanContext,
+        current_layout: vk::ImageLayout,
+    ) -> anyhow::Result<()> {
+        let device = &context.device;
+
+        let alloc_info = vk::CommandBufferAllocateInfo::default()
+            .command_pool(self.command_pool)
+            .level(vk::CommandBufferLevel::PRIMARY)
+            .command_buffer_count(1);
+        let cmd = unsafe { device.allocate_command_buffers(&alloc_info) }
+            .context("allocate offscreen cmd buffer")?[0];
+
+        let begin_info = vk::CommandBufferBeginInfo::default()
+            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+        unsafe { device.begin_command_buffer(cmd, &begin_info) }
+            .context("begin offscreen cmd buffer")?;
+
+        image_barrier(
+            device,
+            cmd,
+            self.image,
+            current_layout,
+            vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+            vk::AccessFlags::COLOR_ATTACHMENT_WRITE | vk::AccessFlags::MEMORY_WRITE,
+            vk::AccessFlags::TRANSFER_READ,
+            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT | vk::PipelineStageFlags::ALL_COMMANDS,
+            vk::PipelineStageFlags::TRANSFER,
+        );
+
+        let copy = vk::BufferImageCopy::default()
+            .buffer_offset(0)
+            .buffer_row_length(0)
+            .buffer_image_height(0)
+            .image_subresource(vk::ImageSubresourceLayers {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                mip_level: 0,
+                base_array_layer: 0,
+                layer_count: 1,
+            })
+            .image_offset(vk::Offset3D { x: 0, y: 0, z: 0 })
+            .image_extent(vk::Extent3D {
+                width: self.extent.width,
+                height: self.extent.height,
+                depth: 1,
+            });
+        unsafe {
+            device.cmd_copy_image_to_buffer(
+                cmd,
+                self.image,
+                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                self.buffer,
+                &[copy],
+            );
+        }
+
+        unsafe { device.end_command_buffer(cmd) }.context("end offscreen cmd buffer")?;
+
+        let fence = unsafe { device.create_fence(&vk::FenceCreateInfo::default(), None) }
+            .context("create offscreen fence")?;
+        let submit_cmds = [cmd];
+        let submit = vk::SubmitInfo::default().command_buffers(&submit_cmds);
+        unsafe { device.queue_submit(context.graphics_queue, &[submit], fence) }
+            .context("queue submit offscreen")?;
+        unsafe { device.wait_for_fences(&[fence], true, u64::MAX) }
+            .context("wait for offscreen fence")?;
+
+        unsafe {
+            device.destroy_fence(fence, None);
+            device.free_command_buffers(self.command_pool, &[cmd]);
+        }
+
+        Ok(())
+    }
+
     /// 映射表 the host-visible 缓冲区 and return 像素 data as `Vec<u8>` RGBA
     pub fn readback(&self, context: &VulkanContext) -> anyhow::Result<Vec<u8>> {
         let size = (self.extent.width * self.extent.height * 4) as usize;

@@ -109,3 +109,50 @@ fn headless_clear_to_blue_and_readback() {
     let px = &pixels[0..4];
     assert_eq!(px, [0, 0, 255, 255], "first pixel should be pure blue");
 }
+
+#[test]
+fn headless_render_real_frame_and_readback() {
+    let mut renderer = match try_create_headless() {
+        Some(r) => r,
+        None => return,
+    };
+
+    let frame_data = prism_render::descriptor::FrameUBOData::default();
+    let out_of_date = renderer
+        .render(
+            &[],
+            &frame_data,
+            [[0.0; 4]; 4],
+            [[0.0; 4]; 4],
+            0,
+            0,
+            0,
+            0,
+            0,
+            0.0,
+            0.0,
+            &[],
+            prism_render::RenderMode::Raster,
+            0,
+            0.0,
+            0,
+            1.0,
+            &[],
+        )
+        .expect("headless render failed");
+
+    assert!(!out_of_date);
+
+    renderer
+        .copy_offscreen_to_readback()
+        .expect("copy_offscreen_to_readback failed");
+
+    let pixels = renderer.readback_pixels().expect("readback_pixels failed");
+    assert_eq!(pixels.len(), 256 * 256 * 4);
+
+    let px = &pixels[0..4];
+    assert!(
+        px[0] > 0 && px[1] > 0 && px[2] > 0,
+        "first pixel should contain rendered color, got {px:?}"
+    );
+}
