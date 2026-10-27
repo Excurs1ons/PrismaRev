@@ -52,6 +52,9 @@ struct LayerDef {
     /// 均匀缩放（补偿素材高度与视口高度的差异），默认 1。
     #[serde(default = "unit_scale")]
     scale: f32,
+    /// 排序层；默认等于图层下标（远 → 近）。前景层要盖住水面时显式指定。
+    #[serde(default)]
+    sorting: Option<i32>,
 }
 
 /// 单个图层实体。
@@ -117,7 +120,7 @@ impl LakeWorld {
                     pixels_per_unit: PIXELS_PER_UNIT,
                     // 底边中心对齐 `y`（Unity 轴心约定：(0.5, 0.0) = 底边）。
                     pivot: [0.5, 0.0],
-                    sorting_layer: order as i32,
+                    sorting_layer: def.sorting.unwrap_or(order as i32),
                     ..SpriteRenderer::default()
                 },
             );
@@ -152,7 +155,8 @@ impl LakeWorld {
                         // 镜像层同样以顶边对齐水面镜像线，向下展开。
                         pivot: [0.5, 1.0],
                         flip_y: true,
-                        sorting_layer: order as i32,
+                        // 镜像要压在水面之上才有反射感：水面在 20，船在 50。
+                        sorting_layer: def.sorting.unwrap_or(order as i32) + 30,
                         color: [0.45, 0.6, 0.85, 0.5],
                         ..SpriteRenderer::default()
                     },
@@ -286,8 +290,10 @@ pub fn tick(world: &mut World, dt: f32) {
         if let Some(mirror) = layer.reflection {
             if let Some(transform) = world.get_mut::<LocalTransform>(mirror) {
                 transform.position.x = x;
-                // 关于水面镜像：轴心在顶部中心，所以 y = 2*W - 源层底边。
-                transform.position.y = 2.0 * state.water_line - y;
+                // 镜像顶边 = 源层底边（轴心在顶部中心）。山体底边本来就埋在水面
+                // 之下用来藏贴图的裁切边，所以按水面翻转会让镜像越过水线露在外面；
+                // 取 `min` 让底边高于水面的层仍然贴着水面翻转。
+                transform.position.y = y.min(state.water_line);
             }
         }
     }
