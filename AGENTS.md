@@ -210,6 +210,10 @@ The user project's dependency chain must stay **UI-framework-free and editor-fre
   用法与工具表见 [`docs/editor-mcp.md`](docs/editor-mcp.md)。
 - 改场景字段优先用它而不是手改 `.scene.json`：`field_set` 会拒绝只读字段和非法类型。
 - 注意它写的是**作者文档**；运行时只读 `assets/scenes.pak`，改完还要重新 cook。
+- 编辑器界面本身也能驱动（`ui_snapshot` / `ui_click` / `ui_fill` / `ui_highlight` /
+  `ui_screenshot`）：走 CDP 连 WebView2，所以启动编辑器时要带
+  `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222`
+  （或用 `scripts/editor-cdp.ps1`）。不改编辑器代码，也不加依赖。
 
 ## Built-in screenshot (automation / art tuning)
 - `PRISMREV_SCREENSHOT=<path>` 让渲染线程在第 N 帧把**屏幕上那一帧**写成 PNG
