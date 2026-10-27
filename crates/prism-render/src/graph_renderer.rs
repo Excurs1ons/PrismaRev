@@ -612,8 +612,20 @@ impl GraphRenderer {
         );
 
         graph.add_pass(Box::new(forward_pass));
+        if let Some(forward_pass) = graph.pass_mut::<ForwardPass>() {
+            forward_pass.set_image_count(1);
+            forward_pass.set_target(&context.device, &context, 1, 0, offscreen.extent)?;
+        }
         graph.add_pass(Box::new(gtao_pass));
         graph.add_pass(Box::new(post_pass));
+        if let Some(post_pass) = graph.pass_mut::<crate::post::PostPass>() {
+            post_pass.set_target(
+                &context.device,
+                std::slice::from_ref(&offscreen.image_view),
+                0,
+                offscreen.extent,
+            )?;
+        }
 
         Ok(Self {
             swapchain: None,
@@ -649,13 +661,25 @@ impl GraphRenderer {
 
     /// 读取 后 像素 data from the offscreen 目标
     /// Returns RGBA 字节 256 × 256 = 262144 字节
-    /// Only 有效 after [`clear_offscreen`](Self::clear_offscreen).
+    /// Only 有效 after [`clear_offscreen`](Self::clear_offscreen) or
+    /// [`copy_offscreen_to_readback`](Self::copy_offscreen_to_readback).
     pub fn readback_pixels(&self) -> anyhow::Result<Vec<u8>> {
         let target = self
             .offscreen
             .as_ref()
             .context("readback_pixels called but no OffscreenTarget")?;
         target.readback(&self.runtime.context)
+    }
+
+    /// Copy the rendered offscreen image to the host-visible readback buffer
+    /// and wait for completion. Only valid in headless mode. Afterwards call
+    /// [`readback_pixels`](Self::readback_pixels).
+    pub fn copy_offscreen_to_readback(&mut self) -> anyhow::Result<()> {
+        let target = self
+            .offscreen
+            .as_mut()
+            .context("copy_offscreen_to_readback called but no OffscreenTarget (not headless?)")?;
+        target.copy_to_readback(&self.runtime.context, vk::ImageLayout::PRESENT_SRC_KHR)
     }
 
     /// Immutable 借用 of the 渲染 图 (passes + declared resources +
@@ -1399,11 +1423,12 @@ impl GraphRenderer {
                 .pass_mut::<crate::gtao::GtaoPass>()
                 .map(|g| g.ao_view((frame as u32 + 1) % 2))
                 .unwrap_or_else(vk::ImageView::null);
-            let swapchain_views: &[vk::ImageView] = self
-                .swapchain
-                .as_ref()
-                .map(|sw| sw.views.as_slice())
-                .unwrap_or(&[]);
+            let offscreen_views = self.offscreen.as_ref().map(|o| [o.image_view]);
+            let swapchain_views: &[vk::ImageView] = match (&self.swapchain, &offscreen_views) {
+                (Some(sw), _) => sw.views.as_slice(),
+                (None, Some(ov)) => ov.as_slice(),
+                (None, None) => &[],
+            };
             let graph_frame = GraphFrame {
                 frame_ubo: &self.runtime.frame_ubos[frame],
                 draw_list: draw_items,
