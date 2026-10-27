@@ -15,7 +15,7 @@
 //!
 //! 这样启动期渲染器在渲染线程异步构建时，主线程仍可处理窗口事件（关闭/移动/缩放）。
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use prism_asset::core::AssetId;
 use prism_asset::formats::{RTEX_FORMAT_BC5, RTEX_FORMAT_BC6H, RTEX_FORMAT_RGBA8};
@@ -47,6 +47,22 @@ fn texture_format_for(rtex_format: u8, srgb: bool) -> Option<TextureFormat> {
 // GpuAssetResolver
 // ---------------------------------------------------------------------------
 
+/// 资源槽位，用作「失败缓存」的键。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum AssetSlot {
+    Mesh,
+    Material,
+    Sprite,
+}
+
+/// 一个实体本帧要解析的资源（只包含仍然缺失的那几半）。
+struct PendingRequest {
+    entity: Entity,
+    mesh_path: Option<String>,
+    material_path: Option<String>,
+    sprite_path: Option<String>,
+}
+
 /// On-demand 资源 loader + GPU uploader + cache.
 ///
 /// 每帧调用 [`prepare_requests`] 收集待处理实体并产出上传请求（CPU 段）；
@@ -55,6 +71,12 @@ pub struct GpuAssetResolver {
     pub resource_manager: ResourceManager,
     /// 已投递上传请求的实体（去重：避免每帧重复 enqueue，直到结果写回 World）。
     enqueued: HashSet<Entity>,
+    /// 已尝试且失败的槽位：`(实体, 槽位) -> 失败时的路径`。
+    ///
+    /// 路径不在清单里、解码失败这类错误不会「再试一次就好」，每帧重试只会反复
+    /// 读 `.pak` 并刷日志。缓存以路径为值：路径被改写（换素材、热重载换包）时
+    /// 键不再匹配，会自动重新尝试。
+    failed: HashMap<(Entity, AssetSlot), String>,
 }
 
 impl GpuAssetResolver {
@@ -62,7 +84,25 @@ impl GpuAssetResolver {
         Self {
             resource_manager: ResourceManager::new(),
             enqueued: HashSet::new(),
+            failed: HashMap::new(),
         }
+    }
+
+    /// 该实体的这个槽位是否已经因同一个路径失败过。
+    fn failed_before(&self, entity: Entity, slot: AssetSlot, path: &str) -> bool {
+        self.failed
+            .get(&(entity, slot))
+            .is_some_and(|failed_path| failed_path == path)
+    }
+
+    /// 记住一个加载失败：路径不在清单 / 解码失败都不会因为下一帧再试而变好，
+    /// 缓存后同一个路径只尝试一次（路径被改写时自动重新尝试）。
+    fn record_failure(&mut self, entity: Entity, slot: AssetSlot, path: &str) {
+        log::warn!(
+            "asset_resolver: {slot:?} '{path}' failed to load; \
+             not retrying until the path changes"
+        );
+        self.failed.insert((entity, slot), path.to_string());
     }
 
     // -----------------------------------------------------------------------
@@ -136,33 +176,44 @@ impl GpuAssetResolver {
     /// 返回的请求由调用方通过 [`prism_app::RenderShared`] 通道交给渲染线程。
     ///
     /// 返回数量即本帧新投递的实体数。已 enqueue 但尚未写回结果的实体会被去重跳过。
+    ///
+    /// 每个实体只携带「仍然缺失」的那几半：网格已解析、材质还缺时不会再加载/上传
+    /// 网格（旧实现会把整份请求重发一遍，导致每帧注册新的 GPU 资源）。加载失败的
+    /// 槽位会记入失败缓存（[`GpuAssetResolver::failed`]），同一坏路径只尝试一次，
+    /// 直到路径被改写。
     pub fn prepare_requests(&mut self, world: &World) -> Vec<(Entity, AssetResolveRequest)> {
         // 收集待处理实体（首个），避免同时借用世界 & self。
-        // `(entity, mesh_path, material_path, sprite_path)`
-        let pending: Vec<(Entity, String, String, String)> = {
+        let pending: Vec<PendingRequest> = {
+            // 失败缓存只对仍然存在的实体有意义；实体被删除后顺手回收。
+            self.failed.retain(|(entity, _), _| {
+                world.get::<MeshRenderer>(*entity).is_some()
+                    || world.get::<SpriteRenderer>(*entity).is_some()
+            });
+
             let mut out = Vec::new();
             for (entity, mr) in world.query::<MeshRenderer>() {
                 // 只有「有路径」且「句柄还没解析」才算待处理：
                 // - 路径为空 = 作者没给资源，没有东西可加载（例如无材质的网格，
                 //   由渲染器回落到默认材质槽）；
-                // - 运行时组件缺失 = 结果无处写回，投递出去只会每帧重复 enqueue。
-                let mesh_unresolved = !mr.mesh_path.is_empty()
+                // - 运行时组件缺失 = 结果无处写回，投递出去只会每帧重复 enqueue；
+                // - 失败缓存命中 = 同一个坏路径不再重试。
+                let wants_mesh = !mr.mesh_path.is_empty()
                     && world
                         .get::<MeshRef>(entity)
-                        .map(|r| r.generation == 0)
-                        .unwrap_or(false);
-                let mat_unresolved = !mr.material_path.is_empty()
+                        .is_some_and(|r| r.generation == 0)
+                    && !self.failed_before(entity, AssetSlot::Mesh, &mr.mesh_path);
+                let wants_material = !mr.material_path.is_empty()
                     && world
                         .get::<MaterialRef>(entity)
-                        .map(|r| r.generation == 0)
-                        .unwrap_or(false);
-                if (mesh_unresolved || mat_unresolved) && !self.enqueued.contains(&entity) {
-                    out.push((
+                        .is_some_and(|r| r.generation == 0)
+                    && !self.failed_before(entity, AssetSlot::Material, &mr.material_path);
+                if (wants_mesh || wants_material) && !self.enqueued.contains(&entity) {
+                    out.push(PendingRequest {
                         entity,
-                        mr.mesh_path.clone(),
-                        mr.material_path.clone(),
-                        String::new(),
-                    ));
+                        mesh_path: wants_mesh.then(|| mr.mesh_path.clone()),
+                        material_path: wants_material.then(|| mr.material_path.clone()),
+                        sprite_path: None,
+                    });
                     self.enqueued.insert(entity);
                 }
             }
@@ -175,13 +226,16 @@ impl GpuAssetResolver {
                     .get::<SpriteRef>(entity)
                     .map(|r| r.generation == 0)
                     .unwrap_or(true);
-                if unresolved && !self.enqueued.contains(&entity) {
-                    out.push((
+                if unresolved
+                    && !self.failed_before(entity, AssetSlot::Sprite, &sprite.sprite_path)
+                    && !self.enqueued.contains(&entity)
+                {
+                    out.push(PendingRequest {
                         entity,
-                        String::new(),
-                        String::new(),
-                        sprite.sprite_path.clone(),
-                    ));
+                        mesh_path: None,
+                        material_path: None,
+                        sprite_path: Some(sprite.sprite_path.clone()),
+                    });
                     self.enqueued.insert(entity);
                 }
             }
@@ -193,24 +247,39 @@ impl GpuAssetResolver {
         }
 
         let mut reqs = Vec::with_capacity(pending.len());
-        for (entity, mesh_path, mat_path, sprite_path) in pending {
-            let mesh = if !mesh_path.is_empty() {
-                self.load_mesh_inputs(&mesh_path)
-            } else {
-                None
+        for item in pending {
+            let mesh = match item.mesh_path.as_deref() {
+                Some(path) => {
+                    let loaded = self.load_mesh_inputs(path);
+                    if loaded.is_none() {
+                        self.record_failure(item.entity, AssetSlot::Mesh, path);
+                    }
+                    loaded
+                }
+                None => None,
             };
-            let material = if !mat_path.is_empty() {
-                self.load_material_data(&mat_path)
-            } else {
-                None
+            let material = match item.material_path.as_deref() {
+                Some(path) => {
+                    let loaded = self.load_material_data(path);
+                    if loaded.is_none() {
+                        self.record_failure(item.entity, AssetSlot::Material, path);
+                    }
+                    loaded
+                }
+                None => None,
             };
-            let texture = if !sprite_path.is_empty() {
-                self.load_texture_by_path(&sprite_path)
-            } else {
-                None
+            let texture = match item.sprite_path.as_deref() {
+                Some(path) => {
+                    let loaded = self.load_texture_by_path(path);
+                    if loaded.is_none() {
+                        self.record_failure(item.entity, AssetSlot::Sprite, path);
+                    }
+                    loaded
+                }
+                None => None,
             };
             reqs.push((
-                entity,
+                item.entity,
                 AssetResolveRequest {
                     mesh,
                     material,
@@ -539,6 +608,18 @@ mod tests {
         entity
     }
 
+    /// 运行时材质句柄：`generation == 0` 表示材质还没解析。
+    fn insert_material_ref(world: &mut World, entity: Entity) {
+        world.insert(
+            entity,
+            MaterialRef {
+                asset_id: SceneAssetId::generate(),
+                material_slot: 0,
+                generation: 0,
+            },
+        );
+    }
+
     /// 无材质网格：材质路径为空时没有东西可解析，不能每帧重复投递
     /// （否则每次都会重新上传网格）。
     #[test]
@@ -592,6 +673,76 @@ mod tests {
 
         assert!(resolver.prepare_requests(&world).is_empty());
         assert!(resolver.prepare_requests(&world).is_empty());
+    }
+
+    /// 半解析：网格上传成功、材质路径坏掉时，不能因为材质还在 `generation == 0`
+    /// 就把已经解析好的网格每帧重新上传（显存 / bindless 槽泄漏）。
+    #[test]
+    fn failed_material_is_latched_and_the_resolved_mesh_is_not_reuploaded() {
+        let mut world = World::new();
+        let entity = spawn_renderer(&mut world, "models/box.gltf", "materials/missing.mat");
+        insert_material_ref(&mut world, entity);
+        let mut resolver = GpuAssetResolver::new();
+
+        let first = resolver.prepare_requests(&world);
+        assert_eq!(first.len(), 1, "两个槽位都还没解析，需要投递一次");
+
+        // 渲染线程回传：网格上传成功，材质没有句柄。
+        resolver.apply_results(
+            &mut world,
+            &[(
+                entity,
+                AssetResolveResult {
+                    mesh_handle: Some(MeshHandle::default()),
+                    material_slot: None,
+                    texture_slot: None,
+                    texture_size: None,
+                },
+            )],
+        );
+        assert_eq!(world.get::<MeshRef>(entity).unwrap().generation, 1);
+
+        assert!(
+            resolver.prepare_requests(&world).is_empty(),
+            "失败的材质路径已被缓存，已解析的网格也不应重新投递"
+        );
+        assert!(
+            resolver.prepare_requests(&world).is_empty(),
+            "缓存必须跨帧生效（旧实现每帧都会重新请求）"
+        );
+    }
+
+    /// 失败缓存以路径为值：作者换掉坏路径（或热重载换包）后必须重新尝试，
+    /// 且只重试那半边。
+    #[test]
+    fn changing_a_failed_path_retries_only_that_half() {
+        let mut world = World::new();
+        let entity = spawn_renderer(&mut world, "models/box.gltf", "materials/missing.mat");
+        insert_material_ref(&mut world, entity);
+        let mut resolver = GpuAssetResolver::new();
+
+        assert_eq!(resolver.prepare_requests(&world).len(), 1);
+        resolver.apply_results(
+            &mut world,
+            &[(
+                entity,
+                AssetResolveResult {
+                    mesh_handle: Some(MeshHandle::default()),
+                    material_slot: None,
+                    texture_slot: None,
+                    texture_size: None,
+                },
+            )],
+        );
+
+        world.get_mut::<MeshRenderer>(entity).unwrap().material_path =
+            "materials/fixed.mat".to_string();
+        let retry = resolver.prepare_requests(&world);
+        assert_eq!(retry.len(), 1, "路径变化后应重新尝试");
+        assert!(
+            retry[0].1.mesh.is_none(),
+            "网格已解析，重试时不应再次加载/上传它"
+        );
     }
 
     /// 按 RMXI / RMES 的真实布局构造顶点区：分段，不是交错。
