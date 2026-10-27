@@ -49,9 +49,11 @@ UiVaryings vertexMain(UiVertexIn in)
 [shader("fragment")]
 float4 fragmentMain(UiVaryings in) : SV_Target0
 {
-    // Glyph alpha modulates the vertex color (plain quads sample the white
-    // reserve pixel → alpha = 1). Alpha-weighted rgb for correct blending
-    // with the SRC_ALPHA/ONE_MINUS_SRC_ALPHA state.
-    float a = glyphAtlas.Sample(in.uv).r;
-    return float4(in.color.rgb * a, in.color.a * a);
+    // Glyph coverage modulates the vertex color (plain quads sample the white
+    // reserve pixel → coverage = 1).
+    float coverage = glyphAtlas.Sample(in.uv).r;
+    // Straight alpha: the pipeline blends with SRC_ALPHA/ONE_MINUS_SRC_ALPHA,
+    // so coverage belongs on alpha only. Multiplying rgb here as well would
+    // apply it twice — the classic dark fringe around antialiased text.
+    return float4(in.color.rgb, in.color.a * coverage);
 }
