@@ -103,6 +103,10 @@ SpriteVaryings vertexMain(SpriteVertexIn in, uint vertexId : SV_VertexID)
 [shader("fragment")]
 float4 fragmentMain(SpriteVaryings in) : SV_Target0
 {
+    // `0xFFFFFFFF` = solid fill (LineRenderer quads): no texture fetch.
+    if (in.textureIndex == 0xFFFFFFFFu)
+        return in.color;
+
     // Nearest sampling keeps pixel art crisp; the rect is pre-clamped on the
     // CPU so the sprite sheet frame never bleeds into its neighbours.
     float4 texel = bindlessSrvs[NonUniformResourceIndex(in.textureIndex)]

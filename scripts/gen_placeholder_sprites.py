@@ -102,7 +102,7 @@ def water_tile(size=(512, 256)):
         base = int(40 + 30 * ripple)
         for x in range(w):
             wave = math.sin((x * 0.08) + (y * 0.22))
-            a = int(120 * fade * (0.55 + 0.45 * wave))
+            a = int(215 * fade * (0.55 + 0.45 * wave))
             if a <= 0:
                 continue
             px[x, y] = (base, base + 30, base + 70, a)

@@ -390,6 +390,7 @@ pub fn register_builtin_components(registry: &mut ComponentRegistry) {
 
     // ── 2D 精灵（作者态；GPU 句柄由运行时 `SpriteRef` 持有）──
     registry.register_reflect_serde::<SpriteRenderer>("prism_engine::scene::SpriteRenderer");
+    registry.register_reflect_serde::<LineRenderer>("prism_engine::scene::LineRenderer");
     registry.register_reflect_serde::<SpriteAnimation>("prism_engine::scene::SpriteAnimation");
 
     // ── 本地变换 ──
