@@ -400,11 +400,27 @@ impl GraphRenderer {
         let post_pass = crate::post::PostPass::new(&context, color_format, frame_count)
             .context("PostPass::new")?;
 
-        // PathTracePass — real-time path tracing 计算 pass Always added;
+        // PathTracePass — real-time path tracing compute pass.
+        // Registered when hardware acceleration structures are supported;
         // checks RenderSettings.render_mode internally to decide whether to
-        // 分发 Created with scene geometry later via set_geometry.
-        // Path tracing is opt-in. A user project starts in raster mode and must
-        // explicitly request a PT renderer before this expensive pass is built.
+        // dispatch. Scene geometry is uploaded later via set_geometry.
+        let pt_pass = if context.rt_caps.acceleration_structure {
+            match PathTracePass::new(&context) {
+                Ok(mut pt) => {
+                    pt.set_material_resources(materials_buffer, bindless.set, bindless.layout);
+                    pt.set_ibl_resources(ibl.descriptor_set, ibl.descriptor_set_layout);
+                    log::info!("PathTracePass registered in render graph");
+                    Some(pt)
+                }
+                Err(err) => {
+                    log::warn!("Failed to initialize PathTracePass despite RT caps: {err:#}");
+                    None
+                }
+            }
+        } else {
+            log::debug!("Acceleration structures not supported; PathTracePass not registered");
+            None
+        };
 
         // CRT 调度器：统一渲染所有注册的 RenderTexture（Unity 式）。
         // 演示 RT：4x4 位图图案（Realtime，每帧随机 16 位模式，CPU xorshift）。
@@ -439,6 +455,9 @@ impl GraphRenderer {
             forward_pass.set_image_count(swapchain.views.len());
         }
         graph.add_pass(Box::new(gtao_pass));
+        if let Some(pt) = pt_pass {
+            graph.add_pass(Box::new(pt));
+        }
         graph.add_pass(Box::new(post_pass));
 
         Ok(Self {
@@ -611,8 +630,33 @@ impl GraphRenderer {
             "RT demo: 4x4 bitmap render texture registered (headless) -> {rt_demo_handle:?}"
         );
 
+        let pt_pass = if context.rt_caps.acceleration_structure {
+            match PathTracePass::new(&context) {
+                Ok(mut pt) => {
+                    pt.set_material_resources(materials_buffer, bindless.set, bindless.layout);
+                    pt.set_ibl_resources(ibl.descriptor_set, ibl.descriptor_set_layout);
+                    log::info!("PathTracePass registered in render graph (headless)");
+                    Some(pt)
+                }
+                Err(err) => {
+                    log::warn!(
+                        "Failed to initialize PathTracePass (headless) despite RT caps: {err:#}"
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         graph.add_pass(Box::new(forward_pass));
+        if let Some(forward_pass) = graph.pass_mut::<ForwardPass>() {
+            forward_pass.set_image_count(1);
+        }
         graph.add_pass(Box::new(gtao_pass));
+        if let Some(pt) = pt_pass {
+            graph.add_pass(Box::new(pt));
+        }
         graph.add_pass(Box::new(post_pass));
 
         Ok(Self {
@@ -767,6 +811,9 @@ impl GraphRenderer {
         // 切换 forward pass / skybox 的 set2（布局共享，不重建管线）。
         if let Some(fp) = self.graph.pass_mut::<ForwardPass>() {
             fp.set_ibl(new_ibl.descriptor_set, self.brdf_bindless_slot);
+        }
+        if let Some(pt) = self.graph.pass_mut::<PathTracePass>() {
+            pt.set_ibl_resources(new_ibl.descriptor_set, self.ibl.descriptor_set_layout);
         }
 
         // 销毁旧 IBL（不销毁共享 布局）后接管新的。
