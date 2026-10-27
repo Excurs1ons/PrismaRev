@@ -147,7 +147,7 @@ pub struct ViewportManager {
 // ===========================================================================
 
 /// 编辑器相机的轨道参数（球坐标；由前端持有并整体下发）。
-#[derive(Clone, Copy, Debug, Deserialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CameraOrbit {
     pub target: [f32; 3],
@@ -219,6 +219,15 @@ struct AxisDrag {
     start_world: Vec3,
     /// 点击射线在轴上的参数。
     start_parameter: f32,
+}
+
+/// `editor_viewport_frame` 的取景范围。
+#[derive(Clone, Copy, Debug)]
+enum FrameMode {
+    /// 整个文档。
+    All,
+    /// 只框住当前选中项（没有选中时调用方应退回 `All`）。
+    Selection,
 }
 
 /// 计算 gizmo 命中 / 拖动所需的一次性相机 + 选中项快照。
@@ -524,6 +533,80 @@ impl HostState {
 
     fn end_drag(&mut self) {
         self.drag = None;
+    }
+
+    /// 框住整个文档（`All`）或当前选中项（`Selection`）的轨道相机参数。
+    ///
+    /// 包围盒用和点选相同的**局部单位立方体**代理，所以对基本体精确、对导入网格近似；
+    /// 距离按包围球占满垂直视场（留 20% 余量）算出来，`yaw` / `pitch` 保持不变。
+    fn frame(&mut self, mode: FrameMode) -> Option<CameraOrbit> {
+        let indices: Vec<usize> = match mode {
+            FrameMode::Selection => self.selection.into_iter().collect(),
+            FrameMode::All => (0..self.entities.len()).collect(),
+        };
+        if indices.is_empty() {
+            return None;
+        }
+        let world = self.app.engine_mut().world();
+        let mut min = Vec3::splat(f32::INFINITY);
+        let mut max = Vec3::splat(f32::NEG_INFINITY);
+        let mut found = false;
+        for index in indices {
+            let Some(entity) = self.entities.get(index).copied() else {
+                continue;
+            };
+            let Some(model) = world
+                .get::<LocalToWorld>(entity)
+                .map(|transform| transform.0)
+                .or_else(|| {
+                    world
+                        .get::<LocalTransform>(entity)
+                        .map(|local| local.to_model_matrix())
+                })
+            else {
+                continue;
+            };
+            found = true;
+            for sx in [-0.5f32, 0.5] {
+                for sy in [-0.5f32, 0.5] {
+                    for sz in [-0.5f32, 0.5] {
+                        let point = model.transform_point3(Vec3::new(sx, sy, sz));
+                        min = min.min(point);
+                        max = max.max(point);
+                    }
+                }
+            }
+        }
+        if !found {
+            return None;
+        }
+        let center = (min + max) * 0.5;
+        let radius = ((max - min).length() * 0.5).max(0.5);
+        let tan = (self.orbit_fov().to_radians() * 0.5).tan();
+        let distance = if tan > 1e-4 {
+            (radius / tan * 1.2).clamp(0.5, 500.0)
+        } else {
+            12.0
+        };
+        Some(CameraOrbit {
+            target: center.to_array(),
+            yaw: self.orbit.yaw,
+            pitch: self.orbit.pitch,
+            distance,
+        })
+    }
+
+    /// 编辑器相机的垂直视场角（Game view 的相机不是编辑器相机，回退 60°）。
+    fn orbit_fov(&mut self) -> f32 {
+        self.camera
+            .and_then(|camera| {
+                self.app
+                    .engine_mut()
+                    .world()
+                    .get::<Camera>(camera)
+                    .map(|camera| camera.fov_y_degrees)
+            })
+            .unwrap_or(60.0)
     }
 
     /// 这一帧要不要推进模拟。
@@ -1210,6 +1293,28 @@ pub fn editor_viewport_drag_end(
     Ok(())
 }
 
+/// 重新取景：`mode` = `"all"`（整个文档）或 `"selection"`（当前选中项）。
+///
+/// 返回新的轨道参数（`yaw` / `pitch` 不变），前端套用后照常下发 `editor_viewport_camera`。
+#[tauri::command]
+pub async fn editor_viewport_frame(
+    id: String,
+    mode: String,
+    manager: State<'_, ViewportManager>,
+) -> Result<Option<CameraOrbit>, String> {
+    let mode = match mode.as_str() {
+        "selection" => FrameMode::Selection,
+        "all" => FrameMode::All,
+        other => return Err(format!("未知的取景范围：{other}")),
+    };
+    let orbit = ask_viewport(&manager, &id, move |state, tx| {
+        let orbit = state.frame(mode);
+        let _ = tx.send(orbit);
+    })
+    .await?;
+    Ok(orbit.flatten())
+}
+
 /// 轮询视口状态（FPS / 实体数 / 加载错误 / 实际渲染尺寸）。
 #[tauri::command]
 pub fn editor_viewport_stats(
@@ -1347,6 +1452,34 @@ mod tests {
         let world = state.app.engine_mut().world_mut();
         assert!(!world.get::<Gizmo>(marker).unwrap().enabled);
         assert_eq!(state.selection, None);
+    }
+
+    #[test]
+    fn framing_all_covers_the_whole_scene() {
+        let mut state = test_state("frame-all");
+        let orbit = state.frame(FrameMode::All).expect("有实体就应该能取景");
+        // `far` 在 z = −20、放大 4 倍，`near` 在原点：中心应偏向 −Z，距离要装得下两者。
+        assert!(orbit.target[2] < -5.0, "{orbit:?}");
+        assert!(orbit.distance > 10.0, "{orbit:?}");
+        // yaw / pitch 不动（取景只改注视点与距离）。
+        assert!((orbit.yaw - state.orbit.yaw).abs() < 1e-6);
+        assert!((orbit.pitch - state.orbit.pitch).abs() < 1e-6);
+    }
+
+    #[test]
+    fn framing_selection_ignores_the_rest_of_the_document() {
+        let mut state = test_state("frame-selection");
+        state.apply_selection(Some(1));
+        let orbit = state
+            .frame(FrameMode::Selection)
+            .expect("选中项应该有包围盒");
+        // `near` 在原点、scale 1：中心和距离都应该很小。
+        assert!(orbit.target[2].abs() < 0.01, "{orbit:?}");
+        assert!(orbit.distance < 5.0, "{orbit:?}");
+
+        // 没有选中项时什么也不做（调用方自己退回 All）。
+        state.apply_selection(None);
+        assert!(state.frame(FrameMode::Selection).is_none());
     }
 
     #[test]

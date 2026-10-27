@@ -154,6 +154,9 @@ deviating from those conventions is a bug. (`README.md` is the human-facing over
     - Scene view 是编辑态：不跑 `Engine::update`，只传播层级；叠加一台 `depth = 1000`
       的编辑器相机（轨道控制由前端持有后整体下发）。Game view 用文档相机，Play 时
       才跑完整模拟。改 `scene/` 的相机选择或清屏规则前先看这里。
+    - 取景（`editor_viewport_frame`，`"all"` / `"selection"`）：用和点选同一套单位立方体
+      代理算世界包围球，按垂直视场换算距离（留 20% 余量），`yaw` / `pitch` 不变。
+      Scene view 第一次出帧自动框住场景，之后 `F` 聚焦选中项、`A` / `Home` 框住全场景。
     - Play 支持**暂停 / 单步**（`editor_viewport_set_paused` / `editor_viewport_step`）：
       暂停只是不推进模拟（`HostState::simulate_now`），渲染与出帧照旧；单步消费一次
       模拟后停在暂停。开始 / 停止 Play 都从磁盘快照重建场景，并清掉暂停状态。
