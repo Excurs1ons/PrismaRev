@@ -142,3 +142,87 @@ fn inactive_element_does_not_block_hit_testing() {
     assert!(!above_interaction.hovered);
     assert!(!above_interaction.clicked);
 }
+
+#[test]
+fn invisible_text_is_skipped_like_quads() {
+    let mut world = world_with_screen();
+
+    let visible_text = spawn_text(&mut world, [0.0, 0.0, 100.0, 20.0], "shown");
+    let hidden_text = spawn_text(&mut world, [0.0, 20.0, 100.0, 20.0], "hidden");
+    let hidden_quad = spawn_quad(&mut world, [0.0, 40.0, 100.0, 20.0]);
+
+    // 只改 `Style::visible`（不是 `Active`）：背景 quad 与字形都应该一起消失。
+    world.insert(
+        hidden_text,
+        Style {
+            visible: false,
+            ..Style::default()
+        },
+    );
+    world.insert(
+        hidden_quad,
+        Style {
+            visible: false,
+            background: [1.0, 0.0, 0.0, 1.0],
+            ..Style::default()
+        },
+    );
+
+    ui_render_system(&mut world);
+
+    let draw_list = world.get_resource::<UiDrawList>().expect("draw list");
+    assert!(draw_list.quads.is_empty(), "隐藏的 quad 不应进绘制列表");
+    assert_eq!(draw_list.texts.len(), 1, "只有可见文本应该被收集");
+    assert_eq!(draw_list.texts[0].content, "shown");
+    assert_eq!(draw_list.texts[0].rect, [0.0, 0.0, 100.0, 20.0]);
+
+    // 上屏数据同样只剩可见文本。
+    let overlay = convert_ui_draw_list_to_overlay(&world);
+    assert!(overlay.quads.is_empty());
+    assert_eq!(overlay.texts.len(), 1);
+    assert_eq!(overlay.texts[0].content, "shown");
+
+    // `visible` 只是过滤条件，不是删除：组件仍在，重新打开即恢复绘制。
+    assert!(world.get::<Text>(hidden_text).is_some());
+    assert!(world.get::<ComputedLayout>(visible_text).is_some());
+
+    world.insert(
+        hidden_text,
+        Style {
+            visible: true,
+            ..Style::default()
+        },
+    );
+    ui_render_system(&mut world);
+    let draw_list = world.get_resource::<UiDrawList>().expect("draw list");
+    assert_eq!(draw_list.texts.len(), 2, "重新可见后应恢复绘制");
+}
+
+#[test]
+fn text_without_style_is_still_drawn() {
+    let mut world = world_with_screen();
+    let entity = world.spawn();
+    world.insert(entity, Node {});
+    world.insert(
+        entity,
+        ComputedLayout {
+            rect: [0.0, 0.0, 10.0, 10.0],
+        },
+    );
+    world.insert(
+        entity,
+        Text {
+            content: "no style".to_string(),
+            ..Text::default()
+        },
+    );
+
+    ui_render_system(&mut world);
+
+    let draw_list = world.get_resource::<UiDrawList>().expect("draw list");
+    assert_eq!(
+        draw_list.texts.len(),
+        1,
+        "缺少 Style 的文本按可见处理（与 `visible` 的默认值一致）"
+    );
+}

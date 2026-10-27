@@ -70,6 +70,11 @@ pub fn ui_render_system(world: &mut World) {
         if !is_ui_active(world, entity) {
             continue;
         }
+        // 与上面的 quad 一致：`Style::visible == false` 的实体不产生绘制命令。
+        // 文本实体通常也挂 `Style`（`Node + Style + Text`），没有 `Style` 时按可见处理。
+        if matches!(world.get::<Style>(entity), Some(style) if !style.visible) {
+            continue;
+        }
         if text.content.is_empty() {
             continue;
         }
