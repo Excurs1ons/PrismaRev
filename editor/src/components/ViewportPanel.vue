@@ -171,6 +171,12 @@ function scheduleReload() {
     reloadPending = true;
     return;
   }
+  // Play 期间编辑文档不该打断运行中的模拟（Unity 里编辑也会被丢弃）；
+  // 停止时会先把当前文档刷进来，所以这里直接丢掉。
+  if (props.playing) {
+    reloadPending = false;
+    return;
+  }
   if (reloadTimer !== undefined) window.clearTimeout(reloadTimer);
   reloadTimer = window.setTimeout(async () => {
     if (!props.doc) return;
@@ -525,9 +531,15 @@ watch(
 watch(() => props.selection, pushSelection);
 watch(
   () => props.playing,
-  (playing) => {
+  async (playing) => {
     if (!inTauri) return;
-    void api.viewportSetPlaying(viewId, !!playing).catch(() => undefined);
+    // 停止前先同步一次文档：Play 期间被丢掉的编辑要在回到编辑态时补上。
+    if (!playing && props.doc && channel) {
+      await api
+        .viewportReload(viewId, props.doc)
+        .catch(() => undefined);
+    }
+    await api.viewportSetPlaying(viewId, !!playing).catch(() => undefined);
   },
 );
 watch(
