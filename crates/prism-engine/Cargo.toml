@@ -43,3 +43,6 @@ jni = "0.22"
 # android-activity won't compile.
 android-activity = { version = "0.6", features = ["game-activity"] }
 log = { workspace = true }
+
+[dev-dependencies]
+jni = "0.22"

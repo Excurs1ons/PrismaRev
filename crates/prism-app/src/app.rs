@@ -40,7 +40,7 @@ use prism_engine::asset_resolver::GpuAssetResolver;
 use prism_engine::config::AppConfig;
 use prism_engine::input::InputManager;
 use prism_engine::render_settings::RenderSettings;
-use prism_engine::render_system::extract_frame_packet;
+use prism_engine::render_system::extract_frame_packet_into;
 use prism_engine::Engine;
 use prism_platform::{required_vulkan_extensions, PlatformContext};
 use winit::application::ApplicationHandler;
@@ -766,10 +766,13 @@ impl App {
 
         // --- 提取帧数据包 → 发送到渲染线程（仅渲染启用时） ---
         if let (Some(shared), Some(engine)) = (self.render_shared.as_ref(), self.engine.as_mut()) {
-            let mut packet = extract_frame_packet(
+            // 复用渲染线程上一帧归还的数据包（`Vec` 容量随之保留，#66）。
+            let mut packet = shared.take_spare_packet().unwrap_or_default();
+            extract_frame_packet_into(
                 engine.world_mut(),
                 self.display_aspect,
                 &self.surface_rotation,
+                &mut packet,
             );
             // 渲染设置随帧数据包送到渲染线程（快捷键 / 项目配置的修改在此生效）。
             packet.settings = self.render_settings.clone();

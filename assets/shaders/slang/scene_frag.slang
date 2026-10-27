@@ -245,7 +245,13 @@ float sample_shadow(float3 world_pos, float3 n)
     // 3x3 PCF: average 9 comparison samples in a texel-spaced grid. Each
     // SampleCmpLevelZero returns 1.0 (pass) or 0.0 (fail) with hardware 2x2
     // bilinear filtering, so the 9-tap average gives a soft shadow edge.
-    float2 texel = 1.0 / float2(2048.0, 2048.0); // SHADOW_MAP_SIZE
+    // The texel step comes from the resource, not from a guess: the pass
+    // happens to render 2048² today (`SHADOW_MAP_SIZE` in shadow_map_pass.rs),
+    // and a hardcoded 1/2048 here would silently blur/sharpen the moment that
+    // resolution changes.
+    uint2 shadow_extent;
+    shadowMap.GetDimensions(shadow_extent.x, shadow_extent.y);
+    float2 texel = 1.0 / float2(max(shadow_extent.x, 1u), max(shadow_extent.y, 1u));
     float sum = 0.0;
     for (int y = -1; y <= 1; y++)
     {

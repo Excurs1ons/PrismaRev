@@ -211,6 +211,10 @@ The user project's dependency chain must stay **UI-framework-free and editor-fre
 - Build: `scripts/run.ps1` (Windows; sets `VK_SDK`, `RUST_LOG`, runs `bash assets/shaders/compile.sh`, `cargo build`, then `prism-build-pipeline build-scenes`).
   Note: the root workspace has no **game/editor entry** binary — the desktop entry is the Tauri app in `launcher/`
   (`cd launcher && pnpm tauri dev`), which spawns the game binary `prisma` (built in `projects/prisma/`: `cd projects/prisma && cargo run`).
+  - 桌面端 `launch_game` **不查 `PATH`**：先看 launcher 可执行文件同目录的 `prisma[.exe]`（打包布局），
+    再按 `projects/prisma/target/{debug,release}/prisma[.exe]`（开发布局，仓库根由 exe 所在目录逐级向上找
+    `projects/prisma/Cargo.toml`）；`PRISMREV_GAME_BIN` 可覆盖（指向不存在的文件直接报错，不回退）。
+    已有存活子进程时拒绝再起第二个，避免同时开两个游戏实例。
 - Web Editor: `cd editor && pnpm install && pnpm tauri dev` — Tauri 2 + Vue 3; the Rust side only
   depends on `prism-editor-api` (no engine/Vulkan). Frontend checks: `cd editor && pnpm build`.
   Browser-only preview (no Tauri): `cd editor && pnpm dev:web` — opens `/?demo=1`; only that
@@ -321,6 +325,10 @@ The user project's dependency chain must stay **UI-framework-free and editor-fre
   `Off`/`On`/`ShadowsOnly`, `NONE` for `TwoSided`) and selects per
   `DrawItem::cast_shadow_two_sided`. Do not collapse them back into a single `NONE` pipeline
   (that would silently reintroduce `On == TwoSided`).
+- Frame packet 跨线程复用：`prism-app` 主线程先从 `RenderShared::take_spare_packet()`
+  取渲染线程归还的包，再用 `extract_frame_packet_into` 重填（渲染线程在每帧末尾
+  `recycle_packet`）。新增 per-frame 集合时走 `*_into`（`clear()` + `extend`），
+  不要每帧 `collect()` 出新 `Vec`（#66）。
 - Descriptor set indices are fixed by the Slang layouts: set 0 = frame UBO/materials/lights,
   set 1 = bindless textures, set 2 = IBL (env/irradiance/prefiltered), set 3 = shadow map.
   Skybox reuses set 0 = IBL `envCube` (combined image sampler).
@@ -389,6 +397,10 @@ The user project's dependency chain must stay **UI-framework-free and editor-fre
   the array index, and ids are not reused after deletion (`SceneJson::next_id`). Read/write
   paths must go through `migrate_scene_doc` / `normalize_scene_doc`, which assign ids to
   pre-v3 documents by array order (identity mapping).
+- **`.scene.json` 的 `id` 会写成运行时 `SceneEntityId`**（loader 插入的 runtime-only 标记，
+  不进注册表、不进 RSCN）：跨会话匹配同一实体（`scene_state` v4 存档、将来的编辑器同步）
+  只能靠它 —— ECS `Entity` 句柄每次加载都会重新分配。新增「按实体存档/同步」的功能按 id
+  配对，不要再按查询顺序 zip。
 - **UI layout output is derived too**: `ComputedLayout` is inserted and rewritten every
   frame by `prism-engine/src/ui/layout.rs`, so authors write only `Node` + `Style`. It is
   registered as a type only (same list / same reason), and old documents that still

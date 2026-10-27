@@ -43,7 +43,8 @@ pub use layout::{ui_layout_system, ScreenSize};
 pub use panel_base::PanelBase;
 pub use particles::{Particle2D, ParticleSystem2D, SpawnKind};
 pub use render::{
-    convert_ui_draw_list_to_overlay, ui_render_system, UiDrawList, UiQuad, UiTextCmd,
+    convert_ui_draw_list_to_overlay, convert_ui_draw_list_to_overlay_into, ui_render_system,
+    UiDrawList, UiQuad, UiTextCmd,
 };
 
 /// 实体及其祖先链是否全部处于激活状态。

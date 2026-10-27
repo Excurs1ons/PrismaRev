@@ -19,8 +19,13 @@ struct RenderPush
     float4   camera_pos;     // .w unused
     float4   light_dir;      // .w unused
     float4   light_color;    // .w unused
-    uint4    params;         // .x = width, .y = height, .z = max_bounce, .w = num_samples
+    uint4    params;         // .x = width, .y = height, .z = max_bounce,
+                             // .w = num_samples | GI_PARAMS_ORTHOGRAPHIC
 };
+
+// ---- params.w bit layout (mirrored on the CPU side when the pass is wired) ----
+static const uint GI_PARAMS_SAMPLES_MASK = 0x7FFFFFFFu; // bits 0..30: samples per pixel
+static const uint GI_PARAMS_ORTHOGRAPHIC = 1u << 31u;  // bit 31: orthographic camera
 
 // ---- Descriptors (set 0) ----
 [[vk::binding(0, 0)]]
@@ -40,6 +45,11 @@ StructuredBuffer<uint> indices;
 RenderPush push;
 
 // ---- Ray generation from pixel coordinates ----
+// NDC z = 0 is the near plane and z = 1 the far plane (Vulkan depth range
+// [0,1]), so unprojecting both gives the ray through this pixel; near→far is
+// the camera forward. A perspective camera starts every ray at the eye, while
+// an orthographic camera casts parallel rays from the pixel's near-plane point.
+// Mirrors `pt_render.slang` (`#10`).
 void generate_ray(uint px, uint py, float jx, float jy,
     out float3 origin, out float3 dir)
 {
@@ -50,13 +60,15 @@ void generate_ray(uint px, uint py, float jx, float jy,
     float ndc_x = ((float(px) + 0.5 + jx) / float(w)) * 2.0 - 1.0;
     float ndc_y = ((float(py) + 0.5 + jy) / float(h)) * 2.0 - 1.0;
 
-    // Unproject from clip space at depth 0 (= near plane in [0,1] depth)
-    float4 clip = float4(ndc_x, ndc_y, 0.0, 1.0);
-    float4 world = mul(push.inv_view_proj, clip);
-    float3 world_pt = world.xyz / world.w;
+    // Unproject both depth planes; near→far is the primary-ray direction.
+    float4 world_near = mul(push.inv_view_proj, float4(ndc_x, ndc_y, 0.0, 1.0));
+    float4 world_far = mul(push.inv_view_proj, float4(ndc_x, ndc_y, 1.0, 1.0));
+    float3 near_pt = world_near.xyz / world_near.w;
+    float3 far_pt = world_far.xyz / world_far.w;
 
-    origin = push.camera_pos.xyz;
-    dir = normalize(world_pt - origin);
+    dir = normalize(far_pt - near_pt);
+    bool orthographic = (push.params.w & GI_PARAMS_ORTHOGRAPHIC) != 0u;
+    origin = orthographic ? near_pt : push.camera_pos.xyz;
 }
 
 // ---- Compute entry point ----
@@ -69,7 +81,7 @@ void renderMain(uint3 tid : SV_DispatchThreadID)
     if (tid.x >= w || tid.y >= h)
         return;
 
-    uint num_samples = push.params.w;
+    uint num_samples = push.params.w & GI_PARAMS_SAMPLES_MASK;
     float3 accum = float3(0.0, 0.0, 0.0);
 
     // RNG seed: unique per pixel.

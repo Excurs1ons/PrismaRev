@@ -671,7 +671,9 @@ RTEX 的 mip 链由 Cooker 通过 2×2 box filter 生成（`TextureCooker::gener
 └─────────────────────────────────────────┘
 ```
 - **压缩**：zstd（按 asset 粒度，`FLAG_COMPRESSED` 标记）
-- **校验**：xxh3-64 覆盖 `header[12..] + registry + deps + data`
+- **校验**：xxh3-64 覆盖 `header[4..44]`（version / asset_count / 各偏移与长度；`magic` 与
+  `checksum` 自身除外）+ registry + deps + data。读取端在**解析 registry 之前**校验，
+  篡改 `version` / `asset_count` 会直接得到 `ChecksumMismatch`（#89）。
 - **读取**：`PackageReader` 零拷贝访问（未压缩 asset 直接 memcpy）
 
 ### 10.7 Cook Profile 系统（`prism-cooker`，src/cooker/profile.rs）
@@ -679,7 +681,7 @@ RTEX 的 mip 链由 Cooker 通过 2×2 box filter 生成（`TextureCooker::gener
 **优先级链**（高→低）：
 ```
 1. CLI 覆盖（命令行参数）
-2. 活动项目配置（--profile 或 active.json）
+2. 活动项目配置（`--profile`；没有持久化的 active 配置文件，缺省用平台默认）
 3. 平台默认配置（--platform → desktop/android/ios/embedded）
 4. base.json（最低）
 ```
@@ -731,7 +733,8 @@ RTEX 的 mip 链由 Cooker 通过 2×2 box filter 生成（`TextureCooker::gener
 
 **热重载**（feature-gated `hot-reload`）：
 - `HotReloadWatcher`：轮询 `.pak` 文件修改时间
-- `on_pak_changed()`：重读数据 → 更新 slot → 递增 generation
+- `on_pak_changed()`：重读数据 → **原地**更新 slot（不递增 generation：句柄身份不变，
+  热重载前发出的 `Handle` 继续可用）
 
 **`Asset` trait**：
 ```rust
@@ -810,7 +813,7 @@ prism-scene::rscn::encode_scene
 
 - **[G5] CookProfile 集成到引擎设置** ⏳ **配置已就绪**：`CookProfile` 5 档 + `settings_hash` 已实现，`--profile` CLI 透传待接入 `AppConfig` 启动参数。
 
-- **[G6] 热重载管道** ✅ **实现 已接线**：`ResourceManager::on_pak_changed` + `HotReloadWatcher`（`hot-reload` feature）已实现轮询，`prism-engine::hot_reload` 预留模块已预留，编辑器 `HotReloadWatcher` 启动后 `.pak` 变更可触发 `generation++`。
+- **[G6] 热重载管道** ✅ **实现 已接线**：`ResourceManager::on_pak_changed` + `HotReloadWatcher`（`hot-reload` feature）已实现轮询，`prism-engine::hot_reload` 预留模块已预留，编辑器 `HotReloadWatcher` 启动后 `.pak` 变更可原地刷新驻留槽（`Handle` 保持有效）。
 
 > **里程碑建议**：G1+G2+G3 为"闭环 MVP"✅ 实现 已打通（可手动端到端），G4+G5 为"开发体验完善"⏳，G6 为"编辑器体验"✅ 实现。
 

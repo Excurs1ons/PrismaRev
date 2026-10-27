@@ -90,18 +90,27 @@ impl<'a> SceneReadView<'a> {
     /// One gizmo instance per enabled `Gizmo` entity, using its world
     /// transform multiplied by the component's additional scale.
     pub fn gizmo_instances(&self) -> Vec<prism_render::GizmoInstance> {
-        self.world
-            .query::<super::components::Gizmo>()
-            .filter(|(_, gizmo)| gizmo.enabled)
-            .filter_map(|(entity, gizmo)| {
-                let transform = self.world.get::<super::components::LocalToWorld>(entity)?;
-                let model =
-                    transform.0 * glam::Mat4::from_scale(glam::Vec3::splat(gizmo.scale.max(0.0)));
-                Some(prism_render::GizmoInstance {
-                    model: model.to_cols_array_2d(),
-                })
-            })
-            .collect()
+        let mut out = Vec::new();
+        self.gizmo_instances_into(&mut out);
+        out
+    }
+
+    /// [`Self::gizmo_instances`] into a caller-owned buffer (frame-packet reuse).
+    pub fn gizmo_instances_into(&self, out: &mut Vec<prism_render::GizmoInstance>) {
+        out.clear();
+        out.extend(
+            self.world
+                .query::<super::components::Gizmo>()
+                .filter(|(_, gizmo)| gizmo.enabled)
+                .filter_map(|(entity, gizmo)| {
+                    let transform = self.world.get::<super::components::LocalToWorld>(entity)?;
+                    let model = transform.0
+                        * glam::Mat4::from_scale(glam::Vec3::splat(gizmo.scale.max(0.0)));
+                    Some(prism_render::GizmoInstance {
+                        model: model.to_cols_array_2d(),
+                    })
+                }),
+        );
     }
 
     /// 提取 2D 绘制列表（精灵 + 折线，已按 `sorting_layer` →
@@ -110,12 +119,22 @@ impl<'a> SceneReadView<'a> {
         super::systems::render::scene_2d_system(self.world)
     }
 
+    /// [`Self::sprite_items`] into a caller-owned buffer (frame-packet reuse).
+    pub fn sprite_items_into(&self, out: &mut Vec<prism_render::SpriteDrawItem>) {
+        super::systems::render::scene_2d_system_into(self.world, out)
+    }
+
     /// 提取渲染所需的扁平绘制列表，不暴露可变 ECS 访问。
     ///
     /// 委托给 [`crate::scene::systems::render::scene_render_system`]：这里曾经是
     /// 一份复制粘贴的实现，两处查询条件（尤其 `MaterialRef` 是否必需）会各自漂移。
     pub fn draw_items(&self) -> Vec<prism_render::DrawItem> {
         crate::scene::systems::render::scene_render_system(self.world)
+    }
+
+    /// [`Self::draw_items`] into a caller-owned buffer (frame-packet reuse).
+    pub fn draw_items_into(&self, out: &mut Vec<prism_render::DrawItem>) {
+        crate::scene::systems::render::scene_render_system_into(self.world, out)
     }
 }
 
