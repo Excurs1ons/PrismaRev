@@ -4,6 +4,9 @@ use tauri::{Emitter, Manager, Wry};
 #[cfg(mobile)]
 use tauri_plugin_fs::FsExt;
 
+#[cfg(not(mobile))]
+mod game_launcher;
+
 // ==================== 1. 前后端通信演示 ====================
 
 /// 基础命令:接收参数,返回字符串
@@ -121,11 +124,11 @@ fn toggle_immersive(state: tauri::State<NativeApi>) -> Result<bool, String> {
 /// 设置状态栏颜色 (hex, 如 "#FF5722")
 #[tauri::command]
 #[cfg(mobile)]
-fn set_status_bar_color(
-    state: tauri::State<NativeApi>,
-    color: String,
-) -> Result<(), String> {
-    state.call::<serde_json::Value>("set_status_bar_color", serde_json::json!({ "color": color }))?;
+fn set_status_bar_color(state: tauri::State<NativeApi>, color: String) -> Result<(), String> {
+    state.call::<serde_json::Value>(
+        "set_status_bar_color",
+        serde_json::json!({ "color": color }),
+    )?;
     Ok(())
 }
 
@@ -172,8 +175,8 @@ fn get_device_info() -> Result<serde_json::Value, String> {
     }))
 }
 
-/// 启动游戏:移动端通过 Kotlin plugin 启动 GameActivity;桌面端直接拉起
-/// prisma 二进制。`config` 为可选 LaunchConfig JSON(场景/日志级别等),
+/// 启动游戏:移动端通过 Kotlin plugin 启动 GameActivity;桌面端拉起
+/// `prisma` 二进制。`config` 为可选 LaunchConfig JSON(场景/日志级别等),
 /// 经 `PRISMREV_LAUNCH_CONFIG` env(桌面)或 files 目录文件(Android)传递。
 #[cfg(mobile)]
 #[tauri::command]
@@ -183,15 +186,15 @@ fn launch_game(state: tauri::State<NativeApi>, config: Option<String>) -> Result
         .map(|_| ())
 }
 
+/// 桌面端：二进制由 [`game_launcher::resolve`] 定位（不走 `PATH`），
+/// 已有一个游戏在跑时直接拒绝，避免同时开两个实例。
 #[cfg(not(mobile))]
 #[tauri::command]
-fn launch_game(config: Option<String>) -> Result<(), String> {
-    let mut cmd = std::process::Command::new("prisma");
-    if let Some(c) = config {
-        cmd.env("PRISMREV_LAUNCH_CONFIG", c);
-    }
-    cmd.spawn().map_err(|e| e.to_string())?;
-    Ok(())
+fn launch_game(
+    state: tauri::State<'_, game_launcher::RunningGame>,
+    config: Option<String>,
+) -> Result<(), String> {
+    state.launch(config)
 }
 
 /// 初始化自定义原生插件(mobile 端注册 Kotlin plugin)
@@ -200,7 +203,8 @@ pub fn init_native_plugin() -> tauri::plugin::TauriPlugin<Wry> {
         .setup(|_app, _api| {
             #[cfg(target_os = "android")]
             {
-                let handle = _api.register_android_plugin(NATIVE_PLUGIN_IDENTIFIER, "NativePlugin")?;
+                let handle =
+                    _api.register_android_plugin(NATIVE_PLUGIN_IDENTIFIER, "NativePlugin")?;
                 _app.manage(NativeApi(handle));
             }
             Ok(())
@@ -210,10 +214,13 @@ pub fn init_native_plugin() -> tauri::plugin::TauriPlugin<Wry> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_fs::init())
-        .plugin(init_native_plugin())
+        .plugin(init_native_plugin());
+    #[cfg(not(mobile))]
+    let builder = builder.manage(game_launcher::RunningGame::default());
+    builder
         // 允许前端访问 app 数据目录(fs 插件 scope)
         .setup(|app| {
             #[cfg(mobile)]

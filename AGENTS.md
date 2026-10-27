@@ -181,6 +181,10 @@ The user project's dependency chain must stay **UI-framework-free and editor-fre
 - Build: `scripts/run.ps1` (Windows; sets `VK_SDK`, `RUST_LOG`, runs `bash assets/shaders/compile.sh`, `cargo build`, then `prism-build-pipeline build-scenes`).
   Note: the root workspace has no **game/editor entry** binary — the desktop entry is the Tauri app in `launcher/`
   (`cd launcher && pnpm tauri dev`), which spawns the game binary `prisma` (built in `projects/prisma/`: `cd projects/prisma && cargo run`).
+  - 桌面端 `launch_game` **不查 `PATH`**：先看 launcher 可执行文件同目录的 `prisma[.exe]`（打包布局），
+    再按 `projects/prisma/target/{debug,release}/prisma[.exe]`（开发布局，仓库根由 exe 所在目录逐级向上找
+    `projects/prisma/Cargo.toml`）；`PRISMREV_GAME_BIN` 可覆盖（指向不存在的文件直接报错，不回退）。
+    已有存活子进程时拒绝再起第二个，避免同时开两个游戏实例。
 - Web Editor: `cd editor && pnpm install && pnpm tauri dev` — Tauri 2 + Vue 3; the Rust side only
   depends on `prism-editor-api` (no engine/Vulkan). Frontend checks: `cd editor && pnpm build`.
   Browser-only preview (no Tauri): `cd editor && pnpm dev:web` — opens `/?demo=1`; only that
