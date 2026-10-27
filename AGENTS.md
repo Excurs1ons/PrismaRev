@@ -445,6 +445,11 @@ The user project's dependency chain must stay **UI-framework-free and editor-fre
   `PRISMREV_LAUNCH_CONFIG` env var; Android writes `filesDir/launch_config.json` from Kotlin
   (`NativePlugin.launch_game`) and `android_main` reads it via `AndroidApp::internal_data_path()`,
   then re-exports it into the same env var so both paths converge on one parser.
+- **发布签名材料不入库**：`launcher/src-tauri/gen/android/keystore.properties`（已 gitignore）或
+  环境变量 `PRISMREV_ANDROID_KEYSTORE` / `PRISMREV_ANDROID_KEYSTORE_PASSWORD` /
+  `PRISMREV_ANDROID_KEY_ALIAS` / `PRISMREV_ANDROID_KEY_PASSWORD`。`assembleRelease` /
+  `bundleRelease` 缺材料时在任务图确定后直接失败（不会静默用公开 debug keystore 签名）；
+  `--debug` 构建仍用本机 debug keystore，不受影响。
 - `launcher/src-tauri/gen/android/` is **committed with local customizations** (minSdk 31,
   arm64-v8a-only `abiFilters`, `signingConfigs`, `packaging` excludes, `games-activity` dep,
   the second Activity). Do NOT regenerate `settings.gradle` / `app/build.gradle.kts` via

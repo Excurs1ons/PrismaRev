@@ -13,6 +13,56 @@ val tauriProperties = Properties().apply {
     }
 }
 
+// ---- 发布签名材料 -----------------------------------------------------------
+// release APK **不能**用公开的 debug keystore 签名：同一个 applicationId + 公开
+// 密钥意味着任何人都能签一个可以覆盖安装的更新。材料只从本机文件或环境变量读取，
+// 两个来源都不入库（`keystore.properties` 已 gitignore）。
+//
+//   launcher/src-tauri/gen/android/keystore.properties
+//     storeFile=/abs/path/release.jks   # 相对路径按 gen/android/ 解析
+//     storePassword=...
+//     keyAlias=...
+//     keyPassword=...
+//
+// 或环境变量 PRISMREV_ANDROID_KEYSTORE / _KEYSTORE_PASSWORD / _KEY_ALIAS / _KEY_PASSWORD。
+// 缺材料时 debug 构建照常，release 构建会在任务图确定后直接失败并说明缺什么。
+val keystoreProperties = Properties().apply {
+    val propFile = rootProject.file("keystore.properties")
+    if (propFile.exists()) {
+        propFile.inputStream().use { load(it) }
+    }
+}
+
+val signingValue: (String, String) -> String? = { property, env ->
+    keystoreProperties.getProperty(property)?.takeIf { it.isNotBlank() }
+        ?: System.getenv(env)?.takeIf { it.isNotBlank() }
+}
+
+val rawStorePath = signingValue("storeFile", "PRISMREV_ANDROID_KEYSTORE")
+val releaseStorePassword = signingValue("storePassword", "PRISMREV_ANDROID_KEYSTORE_PASSWORD")
+val releaseKeyAlias = signingValue("keyAlias", "PRISMREV_ANDROID_KEY_ALIAS")
+val releaseKeyPassword = signingValue("keyPassword", "PRISMREV_ANDROID_KEY_PASSWORD")
+val releaseStoreFile: File? = rawStorePath?.let {
+    val candidate = File(it)
+    if (candidate.isAbsolute) candidate else rootProject.file(it)
+}
+val hasReleaseSigning = releaseStoreFile != null && releaseStorePassword != null &&
+    releaseKeyAlias != null && releaseKeyPassword != null
+
+gradle.taskGraph.whenReady {
+    // 只在真的要出 release 产物时拦：配置阶段就抛错会连 `assembleDebug` 一起挂掉。
+    val wantsRelease = allTasks.any { it.name.contains("Release") }
+    if (wantsRelease && !hasReleaseSigning) {
+        throw GradleException(
+            "缺少 Android 发布签名材料。请在 launcher/src-tauri/gen/android/keystore.properties " +
+            "填写 storeFile / storePassword / keyAlias / keyPassword，或设置 " +
+            "PRISMREV_ANDROID_KEYSTORE、PRISMREV_ANDROID_KEYSTORE_PASSWORD、" +
+            "PRISMREV_ANDROID_KEY_ALIAS、PRISMREV_ANDROID_KEY_PASSWORD。" +
+            "debug 构建（--debug）不需要这些。"
+        )
+    }
+}
+
 android {
     compileSdk = 36
     namespace = "com.example.tauriandroidapp"
@@ -29,11 +79,12 @@ android {
     }
     signingConfigs {
         create("release") {
-            val debugKeystore = File(System.getProperty("user.home") + "/.android/debug.keystore")
-            storeFile = debugKeystore
-            storePassword = "android"
-            keyAlias = "androiddebugkey"
-            keyPassword = "android"
+            if (hasReleaseSigning) {
+                storeFile = releaseStoreFile
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
         }
     }
     buildTypes {
