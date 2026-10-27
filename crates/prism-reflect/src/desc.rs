@@ -1,6 +1,9 @@
 //! 类型描述：`TypeId` / `FieldType` / `FieldDesc` / `TypeDesc`。
 
+use std::collections::HashSet;
 use std::fmt;
+
+use crate::registry::TypeRegistry;
 
 /// FNV-1a 64 位参数（类型 id 与 schema 指纹共用）。
 const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
@@ -171,17 +174,35 @@ impl TypeDesc {
     /// - 字段增删、改名、改类型或改顺序会立刻被发现（即使忘了 bump version）。
     ///
     /// 注意：`TypeId` 只哈希类型名，**不能**单独用来校验 schema。
-    pub fn schema_hash(&self) -> u64 {
+    pub fn schema_hash(&self, registry: &TypeRegistry) -> u64 {
         let mut hash = FNV_OFFSET_BASIS;
-        hash_bytes(&mut hash, self.name.as_bytes());
-        hash_bytes(&mut hash, &self.version.to_le_bytes());
-        hash_bytes(&mut hash, &(self.fields.len() as u32).to_le_bytes());
-        for field in &self.fields {
-            hash_bytes(&mut hash, field.name.as_bytes());
-            hash_bytes(&mut hash, &[0xff]); // 字段名结束标记
-            hash_field_type(&mut hash, &field.ty);
-        }
+        let mut visiting = HashSet::new();
+        visiting.insert(self.id);
+        self.hash_into(&mut hash, registry, &mut visiting);
         hash
+    }
+
+    /// Registry-independent schema hash for leaf types or when no registry is available.
+    /// Nested struct fields hash their TypeId without inspecting nested fields.
+    pub fn schema_hash_standalone(&self) -> u64 {
+        let registry = TypeRegistry::new();
+        self.schema_hash(&registry)
+    }
+
+    pub(crate) fn hash_into(
+        &self,
+        hash: &mut u64,
+        registry: &TypeRegistry,
+        visiting: &mut HashSet<TypeId>,
+    ) {
+        hash_bytes(hash, self.name.as_bytes());
+        hash_bytes(hash, &self.version.to_le_bytes());
+        hash_bytes(hash, &(self.fields.len() as u32).to_le_bytes());
+        for field in &self.fields {
+            hash_bytes(hash, field.name.as_bytes());
+            hash_bytes(hash, &[0xff]); // 字段界
+            hash_field_type(hash, &field.ty, registry, visiting);
+        }
     }
 }
 
@@ -192,7 +213,12 @@ fn hash_bytes(hash: &mut u64, bytes: &[u8]) {
     }
 }
 
-fn hash_field_type(hash: &mut u64, ty: &FieldType) {
+fn hash_field_type(
+    hash: &mut u64,
+    ty: &FieldType,
+    registry: &TypeRegistry,
+    visiting: &mut HashSet<TypeId>,
+) {
     match ty {
         FieldType::Bool => hash_bytes(hash, &[0]),
         FieldType::I8 => hash_bytes(hash, &[1]),
@@ -209,18 +235,26 @@ fn hash_field_type(hash: &mut u64, ty: &FieldType) {
         FieldType::Struct(id) => {
             hash_bytes(hash, &[12]);
             hash_bytes(hash, &id.raw().to_le_bytes());
+            if let Some(nested) = registry.descriptor(*id) {
+                if visiting.insert(*id) {
+                    nested.hash_into(hash, registry, visiting);
+                    visiting.remove(id);
+                } else {
+                    hash_bytes(hash, &[0xfe]);
+                }
+            }
         }
         FieldType::List(inner) => {
             hash_bytes(hash, &[13]);
-            hash_field_type(hash, inner);
+            hash_field_type(hash, inner, registry, visiting);
         }
         FieldType::Optional(inner) => {
             hash_bytes(hash, &[14]);
-            hash_field_type(hash, inner);
+            hash_field_type(hash, inner, registry, visiting);
         }
         FieldType::Array(inner, len) => {
             hash_bytes(hash, &[15]);
-            hash_field_type(hash, inner);
+            hash_field_type(hash, inner, registry, visiting);
             hash_bytes(hash, &(*len as u32).to_le_bytes());
         }
     }
@@ -258,70 +292,164 @@ mod tests {
             1,
             vec![
                 field("x", 0, FieldType::F32),
-                field("y", 4, FieldType::String),
+                FieldDesc {
+                    name: "tag",
+                    offset: 4,
+                    ty: FieldType::U32,
+                    read_only: false,
+                    enum_variants: Some(&["A", "B"]),
+                },
             ],
         );
-        let mut b = a.clone();
-        b.fields[0].offset = 128;
-        b.fields[1].offset = 200;
-        b.fields[0].read_only = true;
-        b.size = 999;
-        b.align = 64;
-        assert_eq!(a.schema_hash(), b.schema_hash());
+        let b = desc(
+            1,
+            vec![
+                field("x", 128, FieldType::F32),
+                FieldDesc {
+                    name: "tag",
+                    offset: 256,
+                    ty: FieldType::U32,
+                    read_only: true, // editor flag flipped
+                    enum_variants: None,
+                },
+            ],
+        );
+        let reg = TypeRegistry::new();
+        assert_eq!(a.schema_hash(&reg), b.schema_hash(&reg));
+        assert_eq!(a.schema_hash_standalone(), b.schema_hash_standalone());
     }
 
     #[test]
     fn schema_hash_tracks_everything_that_changes_encoding() {
+        let reg = TypeRegistry::new();
         let base = desc(
             1,
             vec![
-                field("x", 0, FieldType::F32),
-                field("y", 4, FieldType::String),
+                field("a", 0, FieldType::I32),
+                field("b", 4, FieldType::String),
             ],
         );
-
-        let mut reordered = base.clone();
-        reordered.fields.swap(0, 1);
-
-        let mut renamed = base.clone();
-        renamed.fields[0].name = "z";
-
-        let mut retyped = base.clone();
-        retyped.fields[0].ty = FieldType::F64;
-
-        let mut versioned = base.clone();
-        versioned.version = 2;
-
-        let mut extra = base.clone();
-        extra.fields.push(field("z", 8, FieldType::Bool));
-
-        let hash = base.schema_hash();
-        assert_ne!(hash, reordered.schema_hash());
-        assert_ne!(hash, renamed.schema_hash());
-        assert_ne!(hash, retyped.schema_hash());
-        assert_ne!(hash, versioned.schema_hash());
-        assert_ne!(hash, extra.schema_hash());
-        assert_eq!(hash, base.schema_hash());
+        let reordered = desc(
+            1,
+            vec![
+                field("b", 0, FieldType::String),
+                field("a", 8, FieldType::I32),
+            ],
+        );
+        let renamed = desc(
+            1,
+            vec![
+                field("c", 0, FieldType::I32),
+                field("b", 4, FieldType::String),
+            ],
+        );
+        let retyped = desc(
+            1,
+            vec![
+                field("a", 0, FieldType::I64),
+                field("b", 8, FieldType::String),
+            ],
+        );
+        let versioned = desc(
+            2,
+            vec![
+                field("a", 0, FieldType::I32),
+                field("b", 4, FieldType::String),
+            ],
+        );
+        let extra = desc(
+            1,
+            vec![
+                field("a", 0, FieldType::I32),
+                field("b", 4, FieldType::String),
+                field("c", 8, FieldType::Bool),
+            ],
+        );
+        let hash = base.schema_hash(&reg);
+        assert_ne!(hash, reordered.schema_hash(&reg));
+        assert_ne!(hash, renamed.schema_hash(&reg));
+        assert_ne!(hash, retyped.schema_hash(&reg));
+        assert_ne!(hash, versioned.schema_hash(&reg));
+        assert_ne!(hash, extra.schema_hash(&reg));
+        assert_eq!(hash, base.schema_hash(&reg));
     }
 
     #[test]
     fn schema_hash_covers_nested_types() {
-        let a = desc(
+        let mut reg_v1 = TypeRegistry::new();
+        let mut reg_v2 = TypeRegistry::new();
+
+        let inner_v1 = Box::leak(Box::new(TypeDesc {
+            id: TypeId::from_name("test::Inner"),
+            name: "test::Inner",
+            version: 1,
+            size: 4,
+            align: 4,
+            kind: TypeKind::Struct,
+            fields: vec![field("x", 0, FieldType::F32)],
+        }));
+        let inner_v2 = Box::leak(Box::new(TypeDesc {
+            id: TypeId::from_name("test::Inner"),
+            name: "test::Inner",
+            version: 2,
+            size: 8,
+            align: 4,
+            kind: TypeKind::Struct,
+            fields: vec![field("x", 0, FieldType::F32), field("y", 4, FieldType::F32)],
+        }));
+
+        reg_v1.register_desc(inner_v1);
+        reg_v2.register_desc(inner_v2);
+
+        let outer = desc(
             1,
             vec![field(
-                "v",
+                "inner",
                 0,
-                FieldType::List(Box::new(FieldType::Struct(TypeId::from_name("A")))),
+                FieldType::Struct(TypeId::from_name("test::Inner")),
             )],
         );
-        let b = desc(
+
+        // Nested struct schema change MUST change the outer struct's schema_hash!
+        assert_ne!(outer.schema_hash(&reg_v1), outer.schema_hash(&reg_v2));
+
+        // Also test nested inside List
+        let outer_list = desc(
             1,
             vec![field(
-                "v",
+                "items",
                 0,
-                FieldType::List(Box::new(FieldType::Struct(TypeId::from_name("B")))),
+                FieldType::List(Box::new(FieldType::Struct(TypeId::from_name(
+                    "test::Inner",
+                )))),
             )],
         );
-        assert_ne!(a.schema_hash(), b.schema_hash());
+        assert_ne!(
+            outer_list.schema_hash(&reg_v1),
+            outer_list.schema_hash(&reg_v2)
+        );
+
+        // Also test self-referential / recursive struct termination
+        let recursive = Box::leak(Box::new(TypeDesc {
+            id: TypeId::from_name("test::Recursive"),
+            name: "test::Recursive",
+            version: 1,
+            size: 8,
+            align: 8,
+            kind: TypeKind::Struct,
+            fields: vec![field(
+                "next",
+                0,
+                FieldType::Optional(Box::new(FieldType::Struct(TypeId::from_name(
+                    "test::Recursive",
+                )))),
+            )],
+        }));
+        let mut reg_rec = TypeRegistry::new();
+        reg_rec.register_desc(recursive);
+
+        // Must terminate without stack overflow
+        let rec_hash = recursive.schema_hash(&reg_rec);
+        assert_ne!(rec_hash, 0);
     }
 }

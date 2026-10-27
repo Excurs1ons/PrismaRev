@@ -268,7 +268,7 @@ pub fn encode_scene(scene: &SceneJson, registry: &ComponentRegistry) -> Result<V
             .descriptor(*id)
             .ok_or(RscnError::NotRegistered(*id))?;
         write_u64(&mut output, id.raw());
-        write_u64(&mut output, descriptor.schema_hash());
+        write_u64(&mut output, descriptor.schema_hash(type_registry));
     }
 
     for entity in &entities {
@@ -477,7 +477,7 @@ pub fn decode_scene(data: &[u8], registry: &ComponentRegistry) -> Result<Decoded
         let descriptor = type_registry
             .descriptor(id)
             .ok_or(RscnError::NotRegistered(id))?;
-        let expected = descriptor.schema_hash();
+        let expected = descriptor.schema_hash(type_registry);
         if stored_hash != expected {
             return Err(RscnError::SchemaMismatch {
                 type_name: descriptor.name.to_owned(),

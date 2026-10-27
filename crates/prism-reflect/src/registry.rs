@@ -98,6 +98,21 @@ impl TypeRegistry {
         self.by_id.get(&id).map(TypeEntry::descriptor)
     }
 
+    /// Register a `TypeDesc` directly (useful for tests and dynamic schema registration).
+    pub fn register_desc(&mut self, desc: &'static TypeDesc) {
+        self.by_id.insert(
+            desc.id,
+            TypeEntry {
+                desc,
+                rust_type: std::any::TypeId::of::<()>(),
+                rust_type_name: desc.name,
+                from_object: |_| Err(ReflectError::NotRegistered(TypeId(0))),
+                to_object: |_| None,
+            },
+        );
+        self.by_name.insert(desc.name, desc.id);
+    }
+
     pub fn descriptor_by_name(&self, name: &str) -> Option<&'static TypeDesc> {
         self.by_name.get(name).and_then(|id| self.descriptor(*id))
     }
