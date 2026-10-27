@@ -93,13 +93,21 @@ pub struct PackageHeader {
     pub data_offset: u64,
     /// Byte 大小 of the data chunk 面积 (uncompressed).
     pub data_size: u64,
-    /// xxh3-64 校验和 of header[12..] + registry + deps + data.
+    /// xxh3-64 校验和 of `header[4..44]` (version, asset_count, offsets/sizes)
+    /// + registry + deps + data. `magic` 与 `checksum` 字段自身不参与。
     pub checksum: u64,
 }
 
 impl PackageHeader {
     /// Serialized header 大小 in 字节 (magic 4 + version 4 + ... + 校验和 8 + 填充
     pub const SERIALIZED_SIZE: u64 = 4 + 4 + 4 + 8 + 8 + 8 + 8 + 8; // 52
+
+    /// 校验和覆盖的 header 起点：跳过 `magic`（固定值，改了就不是 pak 了）。
+    const CHECKSUM_HEADER_START: usize = 4;
+    /// 校验和覆盖的 header 终点 = `checksum` 字段起点。`version` / `asset_count`
+    /// 必须在这里面，否则篡改它们不会触发 [`PackageError::ChecksumMismatch`]
+    /// （#89）。
+    const CHECKSUM_FIELD_OFFSET: usize = 44;
 
     /// 计算 the xxh3 校验和 over the payload (everything after the 校验和 field).
     fn compute_checksum(header_body: &[u8], registry: &[u8], deps: &[u8], data: &[u8]) -> u64 {
@@ -390,8 +398,8 @@ impl PackageBuilder {
             .flat_map(|(d, _)| d.clone())
             .collect();
 
-        // 计算 the 校验和 over everything after the 校验和 field.
-        // The 校验和 covers header_body (everything after 校验和 + registry + deps + data.
+        // 校验和覆盖 header[4..44]（version、asset_count、各偏移/长度）+ registry +
+        // deps + data；`checksum` 字段自身与固定的 `magic` 不参与。
         let hdr = PackageHeader {
             magic: MAGIC,
             version: VERSION,
@@ -403,12 +411,8 @@ impl PackageBuilder {
             checksum: 0, // placeholder
         };
         let header_bytes = hdr.to_bytes();
-        // header_body = 字节 after the 8-byte 校验和 field
-        let checksum_field_end = 4 + 4 + 4 + 8 + 8 + 8 + 8; // 44 = end of data_size field
-        let _header_body = &header_bytes[checksum_field_end..]; // actually we need header[12..]
-                                                                // Let's be 精确 校验和 starts at 偏移 44, 长度 8.
-                                                                // The 校验和 covers header[12..44] + registry + deps + data
-        let header_prefix = &header_bytes[12..44]; // from after asset_count through data_size
+        let header_prefix = &header_bytes
+            [PackageHeader::CHECKSUM_HEADER_START..PackageHeader::CHECKSUM_FIELD_OFFSET];
 
         let checksum = PackageHeader::compute_checksum(
             header_prefix,
@@ -501,6 +505,12 @@ impl PackageReader {
     /// `.pak` allocates the file buffer exactly once.
     fn from_owned_bytes(bytes: Vec<u8>) -> Result<Self, PackageError> {
         let header = PackageHeader::from_bytes(&bytes)?;
+
+        // 完整性先于一切结构性判断：校验和只看「header 里除 magic/checksum 外的
+        // 字段」+ 文件剩余字节，不依赖 header 里那些尚未验证的偏移，所以被篡改的
+        // `version` / `asset_count` 会在这里就变成 ChecksumMismatch，而不是让后面的
+        // registry 解析在错误数据上继续跑（#89）。
+        verify_checksum(&bytes, &header)?;
 
         // 由 header 派生的偏移/长度全部走 checked 算术：`.pak` 是运行时从磁盘读入的
         // 格式，损坏或不可信的文件必须返回 Err，而不是在 debug 下整数溢出 panic、
@@ -610,19 +620,6 @@ impl PackageReader {
             }
         }
 
-        // 验证 校验和（覆盖 header[12..44] + registry + deps + data，到文件末尾）
-        let header_prefix = &bytes[12..44];
-        let data_bytes = &bytes[header.data_offset as usize..];
-
-        let computed =
-            PackageHeader::compute_checksum(header_prefix, reg_bytes, deps_bytes, data_bytes);
-        if computed != header.checksum {
-            return Err(PackageError::ChecksumMismatch {
-                computed,
-                stored: header.checksum,
-            });
-        }
-
         Ok(Self {
             header,
             records,
@@ -714,6 +711,34 @@ impl PackageReader {
         // Re-open from 字节 to 触发器 完整 校验和 验证
         Self::from_bytes(&self.data).map(|_| ())
     }
+}
+
+/// 校验 `.pak` 的 xxh3-64 校验和。
+///
+/// 覆盖 `header[4..44]`（version / asset_count / 各偏移与长度）加上 header 之后的
+/// 全部字节（registry + deps + data）。只按文件布局取切片，不读 header 里那些
+/// 尚未验证的偏移，所以可以放在解析 registry **之前**（#89）。
+fn verify_checksum(bytes: &[u8], header: &PackageHeader) -> Result<(), PackageError> {
+    let header_prefix = bytes
+        .get(PackageHeader::CHECKSUM_HEADER_START..PackageHeader::CHECKSUM_FIELD_OFFSET)
+        .ok_or_else(|| {
+            PackageError::Truncated(format!(
+                "file is {} bytes, shorter than the checksummed header",
+                bytes.len()
+            ))
+        })?;
+    let payload = bytes
+        .get(PackageHeader::SERIALIZED_SIZE as usize..)
+        .unwrap_or(&[]);
+
+    let computed = PackageHeader::compute_checksum(header_prefix, &[], &[], payload);
+    if computed != header.checksum {
+        return Err(PackageError::ChecksumMismatch {
+            computed,
+            stored: header.checksum,
+        });
+    }
+    Ok(())
 }
 
 #[cfg(test)]
