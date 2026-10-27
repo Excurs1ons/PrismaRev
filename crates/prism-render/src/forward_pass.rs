@@ -21,7 +21,7 @@ use crate::pipeline::{blend_factor, blend_operation, cull_flags, GraphicsPipelin
 use crate::render_graph::{
     DrawState, GraphResources, PassInfo, PassKind, RenderContext, RenderGraphBuilder,
     RenderPassNode, RenderSettings, ResourceHandle, ResourceType, ResourceUsage, FORWARD_COLOR_H,
-    FORWARD_DEPTH_H, FORWARD_NORMAL_H,
+    FORWARD_DEPTH_H, FORWARD_NORMAL_H, SHADOW_MAP_H,
 };
 use crate::shader;
 use crate::skybox_pass::SkyboxPass;
@@ -1320,6 +1320,14 @@ impl RenderPassNode for ForwardPass {
         self.out_normal_h = FORWARD_NORMAL_H;
         self.out_color_h = FORWARD_COLOR_H;
 
+        // Declare read edge for directional shadow map sampled in fragment shader (set 3).
+        graph.read_usage(ResourceUsage {
+            handle: SHADOW_MAP_H,
+            access: vk::AccessFlags::SHADER_READ,
+            stage: vk::PipelineStageFlags::FRAGMENT_SHADER,
+            layout: vk::ImageLayout::DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+        });
+
         // Declare 写入 edges so the 渲染 graph's 布局 cache records the
         // 布局 this pass leaves each 附件 in (matching the 渲染 pass
         // `final_layout`). Downstream `GtaoPass` / `PostPass` 读取 edges then
@@ -1697,10 +1705,10 @@ impl RenderPassNode for ForwardPass {
             index: usize::MAX,
             name: self.name().to_string(),
             kind: PassKind::Forward,
-            // Shadow 视图 / IBL / previous-frame 环境光遮蔽 are bound via `set_resources`
-            // / `set_ao` and bypass `GraphResources`, so they aren't listed as
-            // 图 edges here - the viz surfaces them as human-readable notes.
-            inputs: Vec::new(),
+            // Shadow 视图 is declared as an input (SHADOW_MAP_H); IBL and
+            // previous-frame AO are bound via `set_resources` / `set_ao` and
+            // bypass `GraphResources`, so they aren't listed as graph edges.
+            inputs: vec![SHADOW_MAP_H],
             outputs: vec![self.out_depth_h, self.out_normal_h, self.out_color_h],
         }
     }

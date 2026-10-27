@@ -41,6 +41,9 @@ pub const FORWARD_COLOR_H: ResourceHandle = ResourceHandle(1002);
 /// `RenderSettings.render_mode == PathTrace`. Written by PathTracePass
 /// as a storage+sampled 图像 读取 by PostPass for tonemapping.
 pub const PT_COLOR_H: ResourceHandle = ResourceHandle(1003);
+/// Directional light depth shadow map — written by `ShadowMapPass` and
+/// sampled in `ForwardPass` fragment shader for shadowing.
+pub const SHADOW_MAP_H: ResourceHandle = ResourceHandle(1004);
 
 impl ResourceHandle {
     pub const INVALID: ResourceHandle = ResourceHandle(u32::MAX);
