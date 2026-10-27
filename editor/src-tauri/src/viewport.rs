@@ -21,15 +21,17 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use glam::{EulerRot, Quat, Vec3};
+use glam::{EulerRot, Mat4, Quat, Vec3};
 use prism_app::App;
 use prism_engine::ecs::Entity;
 use prism_engine::input::{ElementState, KeyCode, MouseButton};
-use prism_engine::scene::components::{Camera, LocalToWorld, LocalTransform};
+use prism_engine::scene::components::{Active, Camera, Gizmo, LocalToWorld, LocalTransform};
 use prism_scene::CameraClearFlags;
 use serde::{Deserialize, Serialize};
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::State;
+
+use crate::pick;
 
 /// 视口帧率上限。离屏渲染每帧要 CPU 读回，30fps 是画质与带宽的折中。
 const TARGET_FPS: u32 = 30;
@@ -174,6 +176,13 @@ struct HostState {
     /// 面板尺寸（已按上限缩放）。
     width: u32,
     height: u32,
+    /// 文档顺序的实体表：`entities[i]` 就是 `.scene.json` 的 `entities[i]`，
+    /// 视口点选靠这个下标与前端的选择（层级 / 检查器）对齐。
+    entities: Vec<Entity>,
+    /// 选中标记的实体（挂了 [`Gizmo`]，没有选中时 `enabled = false`）。
+    marker: Option<Entity>,
+    /// 当前选中的文档下标（由前端下发，重载后保留）。
+    selection: Option<usize>,
 }
 
 impl HostState {
@@ -210,9 +219,11 @@ impl HostState {
         }
     }
 
-    /// 重新加载场景；编辑器相机与轨道参数保留。
+    /// 重新加载场景；编辑器相机、轨道参数与选中项保留。
     fn reload(&mut self) -> Result<usize, String> {
-        let count = self.app.load_scene_json_file(&self.scene_path)?;
+        let entities = self.app.load_scene_json_file(&self.scene_path)?;
+        let count = entities.len();
+        self.entities = entities;
         match self.kind {
             ViewKind::Scene => {
                 self.camera = Some(spawn_editor_camera(&mut self.app, self.width, self.height))
@@ -223,8 +234,100 @@ impl HostState {
                 // 已经补了一台回退相机。
             }
         }
+        self.marker = Some(spawn_selection_marker(&mut self.app));
         self.place_camera();
+        let selection = self.selection;
+        self.apply_selection(selection);
         Ok(count)
+    }
+
+    /// 高亮当前选中项：把标记实体挪到它的世界位置（没有选中就关掉标记）。
+    ///
+    /// 引擎没有「描边 / 选中框」这种编辑器概念，所以复用 ECS 里已有的
+    /// [`Gizmo`]（世界坐标轴三色箭头，始终置顶）——不改渲染图、不加组件类型。
+    fn apply_selection(&mut self, index: Option<usize>) {
+        let index = index.filter(|index| *index < self.entities.len());
+        self.selection = index;
+        let Some(marker) = self.marker else {
+            return;
+        };
+        let world = self.app.engine_mut().world_mut();
+        let position = index.and_then(|index| {
+            let entity = self.entities[index];
+            world
+                .get::<LocalToWorld>(entity)
+                .map(|transform| transform.0.col(3).truncate())
+                .or_else(|| {
+                    world
+                        .get::<LocalTransform>(entity)
+                        .map(|local| local.position)
+                })
+        });
+        match position {
+            Some(position) => {
+                world.insert(
+                    marker,
+                    LocalTransform {
+                        position,
+                        rotation: Quat::IDENTITY,
+                        scale: Vec3::ONE,
+                    },
+                );
+                world.insert(marker, LocalToWorld(Mat4::from_translation(position)));
+                if let Some(gizmo) = world.get_mut::<Gizmo>(marker) {
+                    gizmo.enabled = true;
+                }
+            }
+            None => {
+                if let Some(gizmo) = world.get_mut::<Gizmo>(marker) {
+                    gizmo.enabled = false;
+                }
+            }
+        }
+    }
+
+    /// 屏幕像素 → 命中的文档下标（最近的实体）。
+    ///
+    /// 只用于 Scene view：Game view 的相机是文档相机，点选会跟着游戏逻辑跑。
+    fn pick(&mut self, x: f32, y: f32) -> Option<usize> {
+        let camera = self.camera?;
+        let world = self.app.engine_mut().world();
+        let camera_world = world.get::<LocalToWorld>(camera)?.0;
+        let fov = world
+            .get::<Camera>(camera)
+            .map(|camera| camera.fov_y_degrees)
+            .unwrap_or(60.0);
+        let (origin, dir) = pick::screen_ray(&camera_world, fov, self.width, self.height, x, y)?;
+
+        let mut best: Option<(f32, usize)> = None;
+        for (index, entity) in self.entities.iter().enumerate() {
+            let entity = *entity;
+            if !world
+                .get::<Active>(entity)
+                .map(|active| active.0)
+                .unwrap_or(true)
+            {
+                continue;
+            }
+            let model = world
+                .get::<LocalToWorld>(entity)
+                .map(|transform| transform.0)
+                .or_else(|| {
+                    world
+                        .get::<LocalTransform>(entity)
+                        .map(|local| local.to_model_matrix())
+                });
+            let Some(model) = model else {
+                continue;
+            };
+            let Some(distance) = pick::ray_entity(origin, dir, &model) else {
+                continue;
+            };
+            if best.map(|(best, _)| distance < best).unwrap_or(true) {
+                best = Some((distance, index));
+            }
+        }
+        best.map(|(_, index)| index)
     }
 
     fn resize(&mut self, width: u32, height: u32) {
@@ -300,6 +403,9 @@ fn viewport_thread(
         simulate,
         width,
         height,
+        entities: Vec::new(),
+        marker: None,
+        selection: None,
     };
 
     match state.reload() {
@@ -397,6 +503,24 @@ fn spawn_editor_camera(app: &mut App, width: u32, height: u32) -> Entity {
     let entity = world.spawn();
     world.insert(entity, camera);
     world.insert(entity, LocalTransform::default());
+    entity
+}
+
+/// Scene view 的选中标记：世界坐标轴三色箭头（引擎已有的 [`Gizmo`] 组件）。
+///
+/// 没有选中时 `enabled = false`（[`HostState::apply_selection`] 负责开关与移动）。
+fn spawn_selection_marker(app: &mut App) -> Entity {
+    let world = app.engine_mut().world_mut();
+    let entity = world.spawn();
+    world.insert(
+        entity,
+        Gizmo {
+            enabled: false,
+            scale: 1.0,
+        },
+    );
+    world.insert(entity, LocalTransform::default());
+    world.insert(entity, LocalToWorld(Mat4::IDENTITY));
     entity
 }
 
@@ -647,6 +771,59 @@ pub fn editor_viewport_input(
     Ok(())
 }
 
+/// 高亮当前选中项（层级 / 检查器改动选择时下发）。
+///
+/// `index` 是 `.scene.json` 里 `entities` 的下标；`None` = 取消选中。
+#[tauri::command]
+pub fn editor_viewport_select(
+    id: String,
+    index: Option<usize>,
+    manager: State<'_, ViewportManager>,
+) -> Result<(), String> {
+    let views = manager
+        .views
+        .lock()
+        .map_err(|_| "视口状态锁失败".to_string())?;
+    if let Some(handle) = views.get(&id) {
+        let _ = handle.tx.send(Box::new(move |state: &mut HostState| {
+            state.apply_selection(index);
+        }));
+    }
+    Ok(())
+}
+
+/// 在 Scene view 里点选：`x` / `y` 是**渲染分辨率**下的像素坐标（左上原点）。
+///
+/// 返回命中的 `.scene.json` 实体下标；点空处返回 `None`。
+#[tauri::command]
+pub async fn editor_viewport_pick(
+    id: String,
+    x: f32,
+    y: f32,
+    manager: State<'_, ViewportManager>,
+) -> Result<Option<usize>, String> {
+    let (tx, rx) = mpsc_channel::<Option<usize>>();
+    {
+        let views = manager
+            .views
+            .lock()
+            .map_err(|_| "视口状态锁失败".to_string())?;
+        let Some(handle) = views.get(&id) else {
+            return Ok(None);
+        };
+        let _ = handle.tx.send(Box::new(move |state: &mut HostState| {
+            let hit = state.pick(x, y);
+            let _ = tx.send(hit);
+        }));
+    }
+    // 视口线程最多在一个帧预算内处理命令（不可见时是 IDLE_POLL）。
+    let hit =
+        tauri::async_runtime::spawn_blocking(move || rx.recv_timeout(Duration::from_millis(500)))
+            .await
+            .map_err(|e| e.to_string())?;
+    Ok(hit.ok().flatten())
+}
+
 /// 轮询视口状态（FPS / 实体数 / 加载错误 / 实际渲染尺寸）。
 #[tauri::command]
 pub fn editor_viewport_stats(
@@ -684,4 +861,98 @@ fn stop_handle(handle: &mut ViewportHandle) {
         let _ = thread.join();
     }
     let _ = std::fs::remove_file(&handle.snapshot_path);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 两台实体：`0` 在远处（z = −20、放大 4 倍），`1` 在原点。
+    const SCENE: &str = r#"{
+      "version": 1,
+      "entities": [
+        {
+          "name": "far",
+          "parent": null,
+          "transform": { "position": [0,0,-20], "rotation": [0,0,0,1], "scale": [4,4,4] },
+          "components": {}
+        },
+        {
+          "name": "near",
+          "parent": null,
+          "transform": { "position": [0,0,0], "rotation": [0,0,0,1], "scale": [1,1,1] },
+          "components": {}
+        }
+      ]
+    }"#;
+
+    fn test_state(name: &str) -> HostState {
+        let root = std::env::temp_dir().join("prismrev-editor-picking");
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join(format!("{name}-{}.scene.json", std::process::id()));
+        std::fs::write(&path, SCENE).unwrap();
+
+        let mut state = HostState {
+            app: App::hosted(prism_engine::config::AppConfig::default()),
+            scene_path: path,
+            kind: ViewKind::Scene,
+            camera: None,
+            // 正对着 −Z 看，两眼之间全是可预测的坐标。
+            orbit: CameraOrbit {
+                target: [0.0, 0.0, 0.0],
+                yaw: 0.0,
+                pitch: 0.0,
+                distance: 10.0,
+            },
+            simulate: false,
+            width: 200,
+            height: 100,
+            entities: Vec::new(),
+            marker: None,
+            selection: None,
+        };
+        state.reload().expect("测试场景应该能加载");
+        assert_eq!(state.entities.len(), 2);
+        state
+    }
+
+    #[test]
+    fn picks_the_nearest_entity_and_returns_document_index() {
+        let mut state = test_state("nearest");
+        // 中心像素：相机 z = 10 看向 −Z，光线先穿过原点的 `near`（下标 1）。
+        assert_eq!(state.pick(100.0, 50.0), Some(1));
+        // 往偏一点（视口 2px）仍在 `near` 的单位盒子里。
+        assert_eq!(state.pick(100.0, 52.0), Some(1));
+        // 再偏一点就出了 `near`，但仍在远处放大的 `far` 盒子里。
+        assert_eq!(state.pick(100.0, 55.0), Some(0));
+    }
+
+    #[test]
+    fn reports_miss_outside_of_any_box() {
+        let mut state = test_state("miss");
+        assert_eq!(state.pick(2.0, 2.0), None);
+    }
+
+    #[test]
+    fn selection_moves_the_marker_and_ignores_stale_indices() {
+        let mut state = test_state("selection");
+        let marker = state.marker.expect("标记实体应该已创建");
+
+        state.apply_selection(Some(1));
+        let world = state.app.engine_mut().world_mut();
+        assert!(world.get::<Gizmo>(marker).unwrap().enabled);
+        let position = world
+            .get::<LocalToWorld>(marker)
+            .unwrap()
+            .0
+            .col(3)
+            .truncate();
+        assert!(position.length() < 1e-4, "标记应停在原点: {position:?}");
+
+        // 文档被裁剪后再下发旧下标：当作没有选中，而不是让标记乱跑。
+        state.apply_selection(Some(99));
+        let world = state.app.engine_mut().world_mut();
+        assert!(!world.get::<Gizmo>(marker).unwrap().enabled);
+        assert_eq!(state.selection, None);
+    }
 }

@@ -1203,6 +1203,11 @@ async function createPrefabAt(folder: string, index: number, name: string) {
 // 层级 / 选择
 // ---------------------------------------------------------------------------
 
+/** 场景视图点选 → 与层级 / 检查器共用同一份选中状态。 */
+function onViewportSelect(index: number | null) {
+  onSelect(index === null ? [] : [index]);
+}
+
 function onSelect(indices: number[]) {
   selection.value = indices.length ? indices : [];
   // 手动选择时清掉「跳到使用处」的高亮。
@@ -2112,7 +2117,13 @@ onUnmounted(() => {
         :panels="PANELS"
       >
         <template #sceneView>
-          <ViewportPanel kind="scene" :doc="doc" :path="currentPath" />
+          <ViewportPanel
+            kind="scene"
+            :doc="doc"
+            :path="currentPath"
+            :selection="selection"
+            @select="onViewportSelect"
+          />
         </template>
         <template #gameView>
           <ViewportPanel
