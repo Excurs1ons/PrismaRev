@@ -158,6 +158,22 @@ fn headless_render_real_frame_and_readback() {
 }
 
 #[test]
+fn rt_scheduler_is_registered_in_graph() {
+    let renderer = match try_create_headless() {
+        Some(r) => r,
+        None => return,
+    };
+
+    assert!(
+        renderer
+            .graph()
+            .pass_ref::<prism_render::rt_scheduler::RenderTextureScheduler>()
+            .is_some(),
+        "RenderTextureScheduler should be registered in graph"
+    );
+}
+
+#[test]
 fn headless_path_trace_pass_registered_if_supported() {
     let renderer = match try_create_headless() {
         Some(r) => r,
