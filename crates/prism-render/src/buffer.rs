@@ -263,7 +263,9 @@ pub unsafe fn create_and_upload_image(
         .context("bind texture memory")?;
 
     // 阶段 the pixels and 复制 them into the 图像
-    let size = (width as vk::DeviceSize) * (height as vk::DeviceSize) * 4;
+    // `pixels` may hold a whole pre-baked mip chain (KTX2), so the staging
+    // buffer is sized by what the caller provided, not by the base level.
+    let size = pixels.len() as vk::DeviceSize;
     let (staging, staging_memory) = create_buffer(
         context,
         size,
@@ -332,11 +334,75 @@ pub unsafe fn create_and_upload_image(
         &[copy],
     );
 
-    // Generate the mip 链 by blitting each level from the 上一个 one.
-    // 算法 mirrors ibl.rs but uses the synchronization2 屏障 API to
-    // 匹配 the rest of this 函数 Only level 0 has data so 远 levels
+    // A KTX2 texture ships a fully baked mip chain; `pixels` then holds every
+    // level back to back. Upload those levels straight from staging instead of
+    // blitting: the baked blocks survive and compressed formats never need
+    // BLIT_SRC/BLIT_DST. Level 0 was copied above, so this copies 1.. and then
+    // moves the whole chain to shader-readable in one barrier.
+    let has_all_mips = mip_levels > 1
+        && mip_chain_byte_size(format, width, height, mip_levels)
+            .is_some_and(|total| pixels.len() >= total);
+    if has_all_mips {
+        let mut offset = mip_level_byte_size(format, width, height, 0)
+            .context("upload texture: unsupported format for mip chain")?
+            as u64;
+        for level in 1..mip_levels {
+            let copy = vk::BufferImageCopy::default()
+                .buffer_offset(offset)
+                .image_subresource(
+                    vk::ImageSubresourceLayers::default()
+                        .aspect_mask(vk::ImageAspectFlags::COLOR)
+                        .mip_level(level)
+                        .base_array_layer(0)
+                        .layer_count(1),
+                )
+                .image_extent(mip_extent(width, height, level));
+            device.cmd_copy_buffer_to_image(
+                cmd,
+                staging,
+                image,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                &[copy],
+            );
+            offset += mip_level_byte_size(format, width, height, level)
+                .context("upload texture: unsupported format for mip chain")?
+                as u64;
+        }
+        let all_to_read = vk::ImageMemoryBarrier2::default()
+            .src_stage_mask(vk::PipelineStageFlags2::TRANSFER)
+            .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+            .dst_stage_mask(vk::PipelineStageFlags2::FRAGMENT_SHADER)
+            .dst_access_mask(vk::AccessFlags2::SHADER_READ)
+            .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+            .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+            .image(image)
+            .subresource_range(
+                vk::ImageSubresourceRange::default()
+                    .aspect_mask(vk::ImageAspectFlags::COLOR)
+                    .level_count(mip_levels)
+                    .layer_count(1),
+            );
+        sync2.cmd_pipeline_barrier2(
+            cmd,
+            &vk::DependencyInfo::default()
+                .image_memory_barriers(std::slice::from_ref(&all_to_read)),
+        );
+    }
+
+    // Only level 0 exists: generate the lower levels by blitting each one
+    // from the previous level. 算法 mirrors ibl.rs but uses the
+    // synchronization2 屏障 API to 匹配 the rest of this 函数 Levels
     // 1..mip_levels are still UNDEFINED (transitioned to TRANSFER_DST above).
-    if mip_levels > 1 {
+    //
+    // Blitting is a format feature, not a given: BC7/ASTC/ETC2 often lack
+    // BLIT_SRC/BLIT_DST (notably on mobile), so refuse instead of recording a
+    // command the driver will reject.
+    if mip_levels > 1 && !has_all_mips {
+        anyhow::ensure!(
+            format_supports_blit(context, format),
+            "upload texture: {format:?} cannot be blitted on this device to generate mips; \
+             provide the full mip chain (KTX2) or upload level 0 only"
+        );
         // Level 0 is now TRANSFER_DST; promote it to TRANSFER_SRC so we can
         // 块传 from it into level 1.
         let promote_mip0 = vk::ImageMemoryBarrier2::default()
@@ -474,9 +540,10 @@ pub unsafe fn create_and_upload_image(
             &vk::DependencyInfo::default()
                 .image_memory_barriers(std::slice::from_ref(&dst_to_read)),
         );
-    } else {
+    } else if mip_levels == 1 {
         // mip_levels == 1: no blits, just 过渡 the single level to
-        // shader-readable.
+        // shader-readable. (The `has_all_mips` path above already moved the
+        // whole chain, so it must not fall through to here.)
         let dst_to_read = vk::ImageMemoryBarrier2::default()
             .src_stage_mask(vk::PipelineStageFlags2::TRANSFER)
             .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
@@ -539,6 +606,72 @@ pub unsafe fn create_and_upload_image(
     Ok((image, memory, view))
 }
 
+/// `(block width, block height, bytes per block)` for the image formats the
+/// runtime uploads. `None` for formats this helper cannot measure — callers
+/// then fall back to per-level blitting.
+fn format_block_layout(format: vk::Format) -> Option<(u32, u32, u32)> {
+    use vk::Format as F;
+    let layout = match format {
+        F::R8G8B8A8_UNORM | F::R8G8B8A8_SRGB => (1, 1, 4),
+        F::BC7_UNORM_BLOCK | F::BC7_SRGB_BLOCK => (4, 4, 16),
+        F::BC5_UNORM_BLOCK => (4, 4, 16),
+        F::BC4_UNORM_BLOCK => (4, 4, 8),
+        F::BC6H_UFLOAT_BLOCK => (4, 4, 16),
+        F::ASTC_4X4_UNORM_BLOCK | F::ASTC_4X4_SRGB_BLOCK => (4, 4, 16),
+        F::ASTC_6X6_UNORM_BLOCK | F::ASTC_6X6_SRGB_BLOCK => (6, 6, 16),
+        F::ASTC_8X8_UNORM_BLOCK | F::ASTC_8X8_SRGB_BLOCK => (8, 8, 16),
+        F::ETC2_R8G8B8A8_SRGB_BLOCK => (4, 4, 16),
+        _ => return None,
+    };
+    Some(layout)
+}
+
+/// Byte size of one mip level of `format` at `level` (block-aligned for
+/// compressed formats). `None` when the format is not in [`format_block_layout`].
+pub(crate) fn mip_level_byte_size(
+    format: vk::Format,
+    width: u32,
+    height: u32,
+    level: u32,
+) -> Option<usize> {
+    let (block_w, block_h, block_bytes) = format_block_layout(format)?;
+    let level_width = (width >> level).max(1);
+    let level_height = (height >> level).max(1);
+    let blocks_x = level_width.div_ceil(block_w) as usize;
+    let blocks_y = level_height.div_ceil(block_h) as usize;
+    Some(blocks_x * blocks_y * block_bytes as usize)
+}
+
+/// Total byte size of mip levels `0..levels` — i.e. how large a buffer must be
+/// to hold a fully baked mip chain.
+pub(crate) fn mip_chain_byte_size(
+    format: vk::Format,
+    width: u32,
+    height: u32,
+    levels: u32,
+) -> Option<usize> {
+    let mut total = 0usize;
+    for level in 0..levels {
+        total += mip_level_byte_size(format, width, height, level)?;
+    }
+    Some(total)
+}
+
+/// Whether the physical device allows `vkCmdBlitImage` for `format`
+/// (`BLIT_SRC | BLIT_DST` in the optimal-tiling features).
+///
+/// Compressed formats frequently lack this (especially ASTC/ETC2 on mobile),
+/// so mip generation by blitting must never assume it.
+pub(crate) fn format_supports_blit(context: &VulkanContext, format: vk::Format) -> bool {
+    let props = unsafe {
+        context
+            .instance
+            .get_physical_device_format_properties(context.physical_device, format)
+    };
+    let needed = vk::FormatFeatureFlags::BLIT_SRC | vk::FormatFeatureFlags::BLIT_DST;
+    props.optimal_tiling_features.contains(needed)
+}
+
 fn mip_extent(width: u32, height: u32, level: u32) -> vk::Extent3D {
     vk::Extent3D {
         width: (width >> level).max(1),
@@ -546,3 +679,7 @@ fn mip_extent(width: u32, height: u32, level: u32) -> vk::Extent3D {
         depth: 1,
     }
 }
+
+#[cfg(test)]
+#[path = "buffer_tests.rs"]
+mod tests;

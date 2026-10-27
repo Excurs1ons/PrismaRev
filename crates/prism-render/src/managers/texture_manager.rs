@@ -49,8 +49,9 @@ pub struct TextureUploadInput {
     pub format: TextureFormat,
     /// KTX2 已含完整 mip 时 >1，否则 0 表示按 width/height 自动推导（仅 Rgba8）
     pub mip_levels: u32,
-    /// Tightly packed rows, no 填充 长度 must be
-    /// 宽度 * 高度 * format.bytes_per_pixel()`（压缩格式按块计算）。
+    /// Tightly packed rows, no 填充 When `mip_levels > 1` this may hold the
+    /// whole baked chain (level 0 first, then each halved level); the upload
+    /// copies every level instead of blitting it.
     pub pixels: Vec<u8>,
 }
 
@@ -156,6 +157,31 @@ impl TextureFormat {
             TextureFormat::Astc8x8Srgb => vk::Format::ASTC_8X8_SRGB_BLOCK,
             TextureFormat::Etc2R8G8B8A8Srgb => vk::Format::ETC2_R8G8B8A8_SRGB_BLOCK,
         }
+    }
+}
+
+/// Whether `pixels` is an acceptable payload for this upload.
+///
+/// Compressed formats and any upload that claims more than one mip level are
+/// allowed to carry a *larger* buffer than the base level — that is how a
+/// pre-baked KTX2 chain arrives. Everything else must be exactly the base
+/// level, so a plainly wrong buffer is still rejected.
+fn accepts_pixel_len(
+    format: TextureFormat,
+    mip_levels: u32,
+    pixels_len: usize,
+    width: u32,
+    height: u32,
+) -> bool {
+    let base = if format.is_compressed() {
+        format.compressed_byte_len(width, height)
+    } else {
+        (width as usize) * (height as usize) * format.bytes_per_pixel()
+    };
+    if format.is_compressed() || mip_levels > 1 {
+        pixels_len >= base
+    } else {
+        pixels_len == base
     }
 }
 
@@ -298,11 +324,13 @@ impl RenderTextureManager {
             (input.width as usize) * (input.height as usize) * input.format.bytes_per_pixel()
         };
         // 压缩格式允许 mip 链时 pixels 更长，宽松校验：至少 base mip 大小
-        let valid = if input.format.is_compressed() {
-            input.pixels.len() >= expected
-        } else {
-            input.pixels.len() == expected
-        };
+        let valid = accepts_pixel_len(
+            input.format,
+            input.mip_levels,
+            input.pixels.len(),
+            input.width,
+            input.height,
+        );
         if !valid {
             anyhow::bail!(
                 "TextureUploadInput: pixel buffer size {} does not match {}x{}*{} (expected >= {})",
@@ -377,11 +405,13 @@ impl RenderTextureManager {
         } else {
             (input.width as usize) * (input.height as usize) * input.format.bytes_per_pixel()
         };
-        let valid = if input.format.is_compressed() {
-            input.pixels.len() >= expected
-        } else {
-            input.pixels.len() == expected
-        };
+        let valid = accepts_pixel_len(
+            input.format,
+            input.mip_levels,
+            input.pixels.len(),
+            input.width,
+            input.height,
+        );
         if !valid {
             anyhow::bail!(
                 "TextureUploadInput: pixel buffer size {} does not match {}x{}*{} (expected >= {})",
