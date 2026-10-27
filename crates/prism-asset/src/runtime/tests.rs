@@ -636,7 +636,7 @@ fn hot_reload_leaves_unloaded_assets_alone() {
 #[test]
 fn hot_reload_of_a_resident_slot_adjusts_by_the_delta() {
     let path = write_pak(
-        &two_asset_pak(&vec![7u8; 100], &vec![7u8; 200]),
+        &two_asset_pak(&[7u8; 100], &[7u8; 200]),
         "test_hot_reload_delta.pak",
     );
     let (x_id, y_id) = hot_reload_ids();
@@ -649,7 +649,7 @@ fn hot_reload_of_a_resident_slot_adjusts_by_the_delta() {
     assert_eq!(rm.get(pending).unwrap().len(), 200);
     assert_eq!(rm.memory_usage(), 300);
 
-    std::fs::write(&path, &two_asset_pak(&vec![7u8; 130], &vec![7u8; 200])).unwrap();
+    std::fs::write(&path, two_asset_pak(&[7u8; 130], &[7u8; 200])).unwrap();
     rm.on_pak_changed(&path).unwrap();
 
     assert_eq!(rm.memory_usage(), 330, "grew by the 30-byte delta");
