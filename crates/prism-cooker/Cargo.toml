@@ -15,7 +15,7 @@ default = ["cli"]
 cli = ["dep:clap", "dep:tracing-subscriber", "dep:unicode-width"]
 
 [dependencies]
-prism-asset = { path = "../prism-asset", default-features = false, features = ["core", "package"] }
+prism-asset = { path = "../prism-asset", default-features = false, features = ["core", "package", "runtime"] }
 prism-scene = { path = "../prism-scene" }
 
 serde = { version = "1", features = ["derive"] }
