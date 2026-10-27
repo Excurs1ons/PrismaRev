@@ -10,6 +10,7 @@ mod heightmap;
 mod scene_pack;
 
 pub use bake_gi::bake_gi;
+pub use bake_gi::unpack_baked_probe_volume;
 pub use bake_gi::BakeGiConfig;
 pub use heightmap::{generate_eroded_heightmap, generate_terrain, ErosionParams, Heightmap};
 pub use scene_pack::{build_scene_package, ScenePackSummary};
