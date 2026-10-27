@@ -14,7 +14,7 @@
 //! | Windows | `MessageBoxW` (`MB_YESNO`) | `OpenClipboard` / `SetClipboardData` |
 //! | macOS | `osascript` (`display 对话框 | `pbcopy` |
 //! | Linux | `zenity --question` 回退 text on stderr) | `xclip`/`xsel` |
-//! | Android | `AlertDialog` via JNI on the UI 线程 | (no 复制 text is in logcat) |
+//! | Android | `AlertDialog` via JNI (模态轮询等待) | `ClipboardManager` via JNI |
 //!
 //! The 对话框 blocks the calling 线程 (the winit event-loop / main 线程
 //! 直到用户确认，这自然"暂停"了渲染循环。
@@ -22,12 +22,11 @@
 //!
 //! ## Android
 //!
-//! There is no clipboard-with-button path that works from native 代码 without
-//! a 完整 JNI round-trip; the 错误 text is logged to logcat (tag `PrismaRev`)
-//! and an `AlertDialog` is shown on the UI 线程 via JNI against the
-//! `Activity` exposed by [`android_activity::AndroidApp`]. The 对话框 has a
-//! single OK 按钮 (exit). The 错误 text is also written to logcat so the
-//! user / developer can grab it with `adb logcat`.
+//! The 错误 text is logged to logcat (tag `PrismaRev`), an `AlertDialog` is
+//! shown on the UI 线程 via JNI against the `Activity` exposed by
+//! [`android_activity::AndroidApp`], and the calling 线程 waits modally until
+//! the 对话框 is dismissed. The 错误 text is also copied to the Android 系统
+//! clipboard via `ClipboardManager` on dismissal.
 
 /// The user's choice in the 崩溃 对话框
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,21 +41,21 @@ pub enum CrashChoice {
 // Android app registration (only compiled on Android
 // ---------------------------------------------------------------------------
 
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", test))]
 struct AndroidAppHandles {
     vm_ptr: *mut std::ffi::c_void,
     activity_ptr: *mut std::ffi::c_void,
 }
 
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", test))]
 // 安全性 the handles are raw pointers into the JVM/Activity, which live for
 // the entire 进程 They are only dereferenced from the main 线程 (the
 // winit 事件 循环 线程 which is also the 线程 that registered them.
 unsafe impl Send for AndroidAppHandles {}
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", test))]
 unsafe impl Sync for AndroidAppHandles {}
 
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", test))]
 static ANDROID_APP: std::sync::OnceLock<AndroidAppHandles> = std::sync::OnceLock::new();
 
 /// Register the `AndroidApp` so the 崩溃 对话框 can reach the JVM/Activity
@@ -130,8 +129,28 @@ fn show_native(title: &str, message: &str) -> CrashChoice {
     platform::show(title, message)
 }
 
-/// 复制 `text` to the 系统 clipboard. Platform-specific; on Android this is
-/// a no-op (the 对话框 text is available via logcat instead).
+/// 复制 `text` to the 系统 clipboard. Platform-specific.
 fn copy_to_clipboard(text: &str) -> std::io::Result<()> {
     platform::copy_to_clipboard(text)
+}
+
+#[cfg(test)]
+#[path = "crash_dialog_android.rs"]
+mod test_android_syntax;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn android_clipboard_noop_when_not_registered() {
+        let res = test_android_syntax::copy_to_clipboard("test message");
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn android_show_exits_when_not_registered() {
+        let choice = test_android_syntax::show("title", "message");
+        assert_eq!(choice, CrashChoice::Exit);
+    }
 }
