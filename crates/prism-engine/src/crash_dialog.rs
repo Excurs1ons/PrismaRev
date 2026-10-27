@@ -42,6 +42,8 @@ pub enum CrashChoice {
 // ---------------------------------------------------------------------------
 
 #[cfg(any(target_os = "android", test))]
+#[derive(Clone, Copy)]
+#[allow(dead_code)]
 struct AndroidAppHandles {
     vm_ptr: *mut std::ffi::c_void,
     activity_ptr: *mut std::ffi::c_void,
@@ -56,11 +58,12 @@ unsafe impl Send for AndroidAppHandles {}
 unsafe impl Sync for AndroidAppHandles {}
 
 #[cfg(any(target_os = "android", test))]
-static ANDROID_APP: std::sync::OnceLock<AndroidAppHandles> = std::sync::OnceLock::new();
+static ANDROID_APP: std::sync::RwLock<Option<AndroidAppHandles>> = std::sync::RwLock::new(None);
 
 /// Register the `AndroidApp` so the 崩溃 对话框 can reach the JVM/Activity
-/// for showing an `AlertDialog`. Called once from `android_main` before the
-/// 事件 循环 starts. Safe to 调用 multiple times (only the 第一个 wins).
+/// for showing an `AlertDialog`. Called from `android_main` before the
+/// 事件 循环 starts. Overwrites any previous registration so re-entering the
+/// Android activity always replaces any stale Activity handle.
 ///
 /// No-op on non-Android platforms (the 函数 simply isn't compiled there).
 #[cfg(target_os = "android")]
@@ -69,7 +72,18 @@ pub fn register_android_app(app: &android_activity::AndroidApp) {
         vm_ptr: app.vm_as_ptr(),
         activity_ptr: app.activity_as_ptr(),
     };
-    let _ = ANDROID_APP.set(handles);
+    if let Ok(mut guard) = ANDROID_APP.write() {
+        *guard = Some(handles);
+    }
+}
+
+/// Unregister the `AndroidApp` on activity exit to avoid retaining dangling
+/// pointers to a destroyed Activity.
+#[cfg(any(target_os = "android", test))]
+pub fn unregister_android_app() {
+    if let Ok(mut guard) = ANDROID_APP.write() {
+        *guard = None;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -152,5 +166,33 @@ mod tests {
     fn android_show_exits_when_not_registered() {
         let choice = test_android_syntax::show("title", "message");
         assert_eq!(choice, CrashChoice::Exit);
+    }
+
+    #[test]
+    fn android_app_registration_is_reentrant() {
+        let ptr1 = 0x1234 as *mut std::ffi::c_void;
+        let ptr2 = 0x5678 as *mut std::ffi::c_void;
+
+        // Register initial handle
+        if let Ok(mut guard) = ANDROID_APP.write() {
+            *guard = Some(AndroidAppHandles {
+                vm_ptr: ptr1,
+                activity_ptr: ptr1,
+            });
+        }
+        assert_eq!(ANDROID_APP.read().unwrap().unwrap().activity_ptr, ptr1);
+
+        // Re-entry replaces the previous handle
+        if let Ok(mut guard) = ANDROID_APP.write() {
+            *guard = Some(AndroidAppHandles {
+                vm_ptr: ptr2,
+                activity_ptr: ptr2,
+            });
+        }
+        assert_eq!(ANDROID_APP.read().unwrap().unwrap().activity_ptr, ptr2);
+
+        // Exit / unregister clears the reference so it never dangles
+        unregister_android_app();
+        assert!(ANDROID_APP.read().unwrap().is_none());
     }
 }
