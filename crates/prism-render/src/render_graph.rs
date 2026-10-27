@@ -820,6 +820,23 @@ pub struct GraphResources {
 }
 
 impl GraphResources {
+    pub fn new() -> Self {
+        Self {
+            resources: HashMap::new(),
+            image_views: HashMap::new(),
+            images: HashMap::new(),
+            params: HashMap::new(),
+        }
+    }
+
+    /// Clear per-frame published views, images, and params for the next frame.
+    /// Retains the underlying capacity of the HashMaps to avoid per-frame allocations.
+    pub fn clear_frame(&mut self) {
+        self.image_views.clear();
+        self.images.clear();
+        self.params.clear();
+    }
+
     pub fn image(&self, h: ResourceHandle) -> Option<vk::Image> {
         self.resources.get(&h).and_then(|r| r.image)
     }
@@ -858,6 +875,23 @@ impl GraphResources {
     pub fn param(&self, h: ResourceHandle) -> Option<u32> {
         self.params.get(&h).copied()
     }
+}
+
+impl Default for GraphResources {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Groups edges by their execution `pass_idx` into preallocated buckets.
+fn build_pass_edges(passes_count: usize, edges: &[ResourceEdge]) -> Vec<Vec<ResourceEdge>> {
+    let mut buckets: Vec<Vec<ResourceEdge>> = vec![Vec::new(); passes_count];
+    for e in edges {
+        if e.pass_idx < buckets.len() {
+            buckets[e.pass_idx].push(e.clone());
+        }
+    }
+    buckets
 }
 
 // ---------------------------------------------------------------------------
@@ -994,11 +1028,20 @@ impl RenderGraphBuilder {
     /// 编译 into an 可执行文件 图
     pub fn build(self) -> RenderGraph {
         let lifecycles = compute_lifecycles(&self.edges);
+        let pass_edges = build_pass_edges(self.passes.len(), &self.edges);
+        let last_writers = build_last_writers(&self.edges);
         let g = RenderGraph {
             passes: self.passes,
-            resources: self.resources,
+            graph_resources: GraphResources {
+                resources: self.resources,
+                image_views: HashMap::new(),
+                images: HashMap::new(),
+                params: HashMap::new(),
+            },
             settings: self.settings,
             edges: self.edges,
+            pass_edges,
+            last_writers,
             state_tracker: ResourceStateTracker::new(),
             lifecycles,
             last_barrier_probe: Instant::now(),
@@ -1031,10 +1074,14 @@ impl Default for RenderGraphBuilder {
 
 pub struct RenderGraph {
     passes: Vec<Box<dyn RenderPassNode + 'static>>,
-    resources: HashMap<ResourceHandle, GraphResource>,
+    graph_resources: GraphResources,
     settings: RenderSettings,
     /// Declared read/write edges, collected from each pass's `setup`.
     edges: Vec<ResourceEdge>,
+    /// Precomputed pass_idx -> edges bucket list for fast traversal without per-frame cloning.
+    pass_edges: Vec<Vec<ResourceEdge>>,
+    /// Precomputed handle -> last writer's usage for barrier src stage/access.
+    last_writers: HashMap<ResourceHandle, ResourceUsage>,
     /// Per-`(handle, image_index)` 资源 状态 tracker, persisted across
     /// frames so cross-frame reads (e.g. GTAO's double-buffered 环境光遮蔽 keep their
     /// 布局 Keyed by `image_index` because `ForwardPass`/`PostPass` own
@@ -1091,12 +1138,12 @@ impl RenderGraph {
     /// 迭代器 over all declared 图 resources (depth/color attachments,
     /// 存储 images). Exposed read-only for the visualizer.
     pub fn resources(&self) -> impl Iterator<Item = &GraphResource> {
-        self.resources.values()
+        self.graph_resources.resources.values()
     }
 
     /// Look 上 a graph-managed 资源 by handle (immutable).
     pub fn resource(&self, h: ResourceHandle) -> Option<&GraphResource> {
-        self.resources.get(&h)
+        self.graph_resources.resources.get(&h)
     }
 
     /// 构建 a 完整 read-only 快照 of the 图 for the visualizer:
@@ -1115,6 +1162,7 @@ impl RenderGraph {
             })
             .collect();
         let resources = self
+            .graph_resources
             .resources
             .values()
             .map(|r| ResourceInfo {
@@ -1130,6 +1178,13 @@ impl RenderGraph {
         }
     }
 
+    /// Recomputes the pass edge bucket cache and last writer mapping when the graph
+    /// topology changes (e.g. at build time or after `add_pass`).
+    fn rebuild_topology_cache(&mut self) {
+        self.pass_edges = build_pass_edges(self.passes.len(), &self.edges);
+        self.last_writers = build_last_writers(&self.edges);
+    }
+
     /// 追加 a pass to an already-built 图 (e.g. ForwardPass / GtaoPass /
     /// PostPass, registered after the shadow map's resources are allocated so
     /// the scene can bind the shadow 视图 Runs `setup` on the new pass
@@ -1142,7 +1197,7 @@ impl RenderGraph {
             .pass_idx_offset(pass_idx);
         pass.setup(&mut b, &self.settings);
         for (h, r) in b.resources {
-            self.resources.insert(h, r);
+            self.graph_resources.resources.insert(h, r);
         }
         // Edges were recorded with pass_idx = 偏移 + b.passes.len() == pass_idx
         // (b is a fresh 构建器 with no passes pushed); sanity-check before merging.
@@ -1156,6 +1211,7 @@ impl RenderGraph {
             self.edges.push(e);
         }
         self.passes.push(pass);
+        self.rebuild_topology_cache();
     }
 
     /// 放置 all cached 图像 layouts. Called after `recreate_swapchain` (where
@@ -1246,27 +1302,7 @@ impl RenderGraph {
     /// cache only tracks the four graph-flow handles (shadow / scene 深度 /
     /// 法线 / 高动态范围 颜色
     pub fn execute(&mut self, ctx: &RenderContext) -> Result<()> {
-        let mut resources = GraphResources {
-            resources: self.resources.clone(),
-            image_views: HashMap::new(),
-            images: HashMap::new(),
-            params: HashMap::new(),
-        };
-
-        // 快照 of pass_idx -> 写入 edges, so borrows of `self.edges` don't
-        // fight the `&mut self.passes` 迭代 Cheap: a few edges per pass
-        let pass_edges: Vec<Vec<ResourceEdge>> = {
-            let mut buckets: Vec<Vec<ResourceEdge>> = vec![Vec::new(); self.passes.len()];
-            for e in &self.edges {
-                if e.pass_idx < buckets.len() {
-                    buckets[e.pass_idx].push(e.clone());
-                }
-            }
-            buckets
-        };
-        // 快照 of (handle, pass_idx) -> 最后一个 writer's 用法 for 屏障
-        // src stage/access. 内置 once per 帧 from `self.edges`.
-        let last_writers = build_last_writers(&self.edges);
+        self.graph_resources.clear_frame();
 
         // Throttle the BARRIER_PROBE 跟踪 lines to once per 秒 so the 对数
         // isn't flooded at 帧 rate. The probe is a debugging aid for the
@@ -1283,10 +1319,10 @@ impl RenderGraph {
             // 构建 and 发射 barriers for this pass's 读取 edges, then
             // 更新 the tracker with 写入 edges after the pass executes.
             let (barriers, src_stage, dst_stage) = self.state_tracker.build_read_barriers(
-                &pass_edges[pass_idx],
-                &last_writers,
+                &self.pass_edges[pass_idx],
+                &self.last_writers,
                 ctx.image_index,
-                &resources,
+                &self.graph_resources,
             );
             if !barriers.is_empty() {
                 let src_stage = if src_stage.is_empty() {
@@ -1313,7 +1349,7 @@ impl RenderGraph {
             }
 
             if probe {
-                for e in &pass_edges[pass_idx] {
+                for e in &self.pass_edges[pass_idx] {
                     if e.kind == EdgeKind::Read {
                         let st = self.state_tracker.get(e.usage.handle, ctx.image_index);
                         log::trace!(
@@ -1329,10 +1365,10 @@ impl RenderGraph {
                 }
             }
 
-            pass.execute(ctx, &mut resources)?;
+            pass.execute(ctx, &mut self.graph_resources)?;
 
             self.state_tracker
-                .apply_writes(&pass_edges[pass_idx], ctx.image_index);
+                .apply_writes(&self.pass_edges[pass_idx], ctx.image_index);
         }
 
         Ok(())
@@ -1345,7 +1381,7 @@ impl RenderGraph {
         device: &ash::Device,
         mem_props: &vk::PhysicalDeviceMemoryProperties,
     ) -> Result<()> {
-        for res in self.resources.values_mut() {
+        for res in self.graph_resources.resources.values_mut() {
             if res.image.is_some() {
                 continue; // already allocated
             }
@@ -1417,12 +1453,12 @@ impl RenderGraph {
     /// Look 上 a graph-managed 图像 视图 by 资源 handle.
     /// Returns `None` if the handle does not exist or the 资源 has no 视图
     pub fn image_view(&self, h: ResourceHandle) -> Option<vk::ImageView> {
-        self.resources.get(&h).and_then(|r| r.image_view)
+        self.graph_resources.image_view(h)
     }
 
     /// 销毁 all owned Vulkan resources.
     pub fn destroy(&mut self, device: &ash::Device) {
-        for res in self.resources.values() {
+        for res in self.graph_resources.resources.values() {
             unsafe {
                 if let Some(view) = res.image_view {
                     device.destroy_image_view(view, None);
@@ -1435,7 +1471,7 @@ impl RenderGraph {
                 }
             }
         }
-        self.resources.clear();
+        self.graph_resources.resources.clear();
     }
 }
 
