@@ -1,18 +1,15 @@
-//! Android 崩溃 对话框 `AlertDialog` via JNI + logcat.
+//! Android 崩溃 对话框 `AlertDialog` via JNI + logcat + clipboard copying.
 //!
-//! The 渲染 线程 (== winit event-loop / main 线程 on Android holds
+//! The 渲染 线程 (== winit event-loop / main 线程 on Android) holds
 //! pointers to the JVM (`JavaVM*`) and the `Activity` jobject (registered by
 //! [`super::register_android_app`]). We attach the 当前 线程 to the JVM
 //! and, on the Activity's UI 线程 构建 and show an `AlertDialog` with a
-//! single OK 按钮 The 对话框 is modal from the user's 透视 we
-//! 块 the calling 线程 with a condvar until the OK button's 监听器
-//! fires.
+//! single OK 按钮 The 对话框 is modal from the user's 透视: we
+//! poll until the 对话框 is dismissed (or activity finishes) and 块 the
+//! calling 线程 with a condvar.
 //!
-//! The 完整 错误 text is also written to logcat (tag `PrismaRev`) so it can
-//! be retrieved with `adb logcat` even if the 对话框 渲染 fails.
-//!
-//! Clipboard 复制 is a no-op on Android the native clipboard API requires a
-//! UI-thread round-trip and the 错误 text is already in logcat.
+//! The 完整 错误 text is also written to logcat (tag `PrismaRev`) and copied
+//! to the 系统 clipboard via `ClipboardManager`.
 
 use std::sync::{Arc, Condvar, Mutex};
 
@@ -77,14 +74,14 @@ pub fn show(title: &str, message: &str) -> CrashChoice {
         }
     }
 
-    // 块 until the OK 按钮 回调 sets `done`.
+    // 块 until the 对话框 is dismissed and signals `done`.
     let (lock, cvar) = &*done;
     let mut guard = lock.lock().unwrap_or_else(|p| p.into_inner());
     while !*guard {
         guard = cvar.wait(guard).unwrap_or_else(|p| p.into_inner());
     }
 
-    CrashChoice::Exit
+    CrashChoice::CopyAndExit
 }
 
 /// 构建 and show an `AlertDialog` with a single OK 按钮 When OK is tapped
@@ -166,10 +163,27 @@ fn show_alert_dialog(
     env.call_method(&dialog_obj, jni_str!("show"), jni_sig!("()V"), &[])?;
 
     // Keep a 全局 ref so the 对话框 isn't GC'd before the user dismisses it.
-    let _global = env.new_global_ref(dialog_obj)?;
+    let global_dialog = env.new_global_ref(dialog_obj)?;
 
-    // 信号 `done` immediately: the user will tap OK and the Activity will
-    // be finished by the 调用者 (event_loop.exit() + 进程 termination).
+    // Poll until the 对话框 is dismissed (e.g. user tapped OK) or the activity finishes.
+    loop {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let is_showing = env
+            .call_method(&global_dialog, jni_str!("isShowing"), jni_sig!("()Z"), &[])
+            .and_then(|v| v.z())
+            .unwrap_or(false);
+        if !is_showing {
+            break;
+        }
+        let is_finishing = env
+            .call_method(activity, jni_str!("isFinishing"), jni_sig!("()Z"), &[])
+            .and_then(|v| v.z())
+            .unwrap_or(true);
+        if is_finishing {
+            break;
+        }
+    }
+
     let (lock, cvar) = &**done;
     let mut guard = lock.lock().unwrap_or_else(|p| p.into_inner());
     *guard = true;
@@ -180,8 +194,70 @@ fn show_alert_dialog(
     Ok(())
 }
 
-/// Android has no reliable native clipboard 访问 from this 线程 without a
-/// UI round-trip; the 错误 text is already in logcat. No-op.
-pub fn copy_to_clipboard(_text: &str) -> std::io::Result<()> {
+/// 复制 `text` to Android 系统 clipboard via `ClipboardManager` and `ClipData`.
+pub fn copy_to_clipboard(text: &str) -> std::io::Result<()> {
+    let handles = match ANDROID_APP.get() {
+        Some(h) => h,
+        None => return Ok(()),
+    };
+    let vm = unsafe { JavaVM::from_raw(handles.vm_ptr as *mut _) };
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        vm.attach_current_thread(|env| {
+            let activity = unsafe { JObject::from_raw(env, handles.activity_ptr as *mut _) };
+            copy_to_clipboard_jni(env, &activity, text)
+        })
+    }));
+    match result {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(e)) => {
+            log::warn!("Android clipboard JNI failed: {e}");
+            Ok(())
+        }
+        Err(p) => {
+            log::warn!("Android clipboard JNI panic: {p:?}");
+            Ok(())
+        }
+    }
+}
+
+fn copy_to_clipboard_jni(
+    env: &mut jni::Env<'_>,
+    activity: &JObject,
+    text: &str,
+) -> jni::errors::Result<()> {
+    let service_name = env.new_string("clipboard")?;
+    let clipboard_manager = env
+        .call_method(
+            activity,
+            jni_str!("getSystemService"),
+            jni_sig!("(Ljava/lang/String;)Ljava/lang/Object;"),
+            &[JValue::Object(&service_name)],
+        )?
+        .l()?;
+
+    if clipboard_manager.as_raw().is_null() {
+        return Ok(());
+    }
+
+    let clip_data_class = env.find_class(jni_str!("android/content/ClipData"))?;
+    let label = env.new_string("PrismaRev Crash Log")?;
+    let text_j = env.new_string(text)?;
+    let clip = env
+        .call_static_method(
+            clip_data_class,
+            jni_str!("newPlainText"),
+            jni_sig!(
+                "(Ljava/lang/CharSequence;Ljava/lang/CharSequence;)Landroid/content/ClipData;"
+            ),
+            &[JValue::Object(&label), JValue::Object(&text_j)],
+        )?
+        .l()?;
+
+    env.call_method(
+        &clipboard_manager,
+        jni_str!("setPrimaryClip"),
+        jni_sig!("(Landroid/content/ClipData;)V"),
+        &[JValue::Object(&clip)],
+    )?;
     Ok(())
 }
