@@ -522,6 +522,13 @@ impl ResourceManager {
             .map(|&idx| self.slots[idx as usize].asset_type)
     }
 
+    /// Check whether an asset is marked for streaming in any loaded package.
+    pub fn is_streamed(&self, id: AssetId) -> bool {
+        self.packages
+            .iter()
+            .any(|package| package.reader.is_asset_streamed(id))
+    }
+
     // ------------------------------------------------------------------
     // Dependency 分辨率 (topological)
     // ------------------------------------------------------------------
@@ -779,23 +786,49 @@ impl ResourceManager {
         // A zero chunk size would make `StreamIter` yield empty chunks forever
         // and make `size_hint` divide by zero; clamp it to a single byte.
         let chunk_size = chunk_size.max(1);
-        // Prefer cached data if available.
-        if let Ok(cached) = self.get_raw_bytes(id) {
-            return Some(StreamIter {
-                data: cached,
-                pos: 0,
-                chunk_size,
-            });
+
+        // 1. If already cached in slot, stream directly from the cached slice without copying.
+        if let Some(slot_index) = self.slot_index(id) {
+            let slot = &self.slots[slot_index as usize];
+            if let Some(data) = slot.data.as_ref() {
+                slot.last_access.set(Instant::now());
+                return Some(StreamIter::Slice(SliceStreamIter {
+                    data: data.as_slice(),
+                    pos: 0,
+                    chunk_size,
+                }));
+            }
         }
 
-        // Fall 后 to reading from 包
-        if let Ok(data) = self.read_from_packages(id) {
-            return Some(StreamIter {
-                data,
-                pos: 0,
-                chunk_size,
-            });
+        // 2. Otherwise stream directly from package.
+        for package in &self.packages {
+            if let Some(record) = package.reader.find_record(id) {
+                if let Ok(slice) = package.reader.asset_record_raw_slice(record) {
+                    if let Some(slot_index) = self.slot_index(id) {
+                        self.slots[slot_index as usize]
+                            .last_access
+                            .set(Instant::now());
+                    }
+                    if record.is_compressed() {
+                        if let Ok(decoder) = zstd::Decoder::new(std::io::Cursor::new(slice)) {
+                            return Some(StreamIter::Compressed(CompressedStreamIter {
+                                decoder,
+                                chunk_size,
+                                total_size: record.size as usize,
+                                read_so_far: 0,
+                            }));
+                        }
+                    } else {
+                        return Some(StreamIter::Slice(SliceStreamIter {
+                            data: slice,
+                            pos: 0,
+                            chunk_size,
+                        }));
+                    }
+                }
+            }
         }
+
         None
     }
 
@@ -1016,14 +1049,20 @@ impl std::fmt::Debug for ResourceManager {
 // ---------------------------------------------------------------------------
 
 #[cfg(feature = "streaming")]
-struct StreamIter {
-    data: Vec<u8>,
+enum StreamIter<'a> {
+    Slice(SliceStreamIter<'a>),
+    Compressed(CompressedStreamIter<'a>),
+}
+
+#[cfg(feature = "streaming")]
+struct SliceStreamIter<'a> {
+    data: &'a [u8],
     pos: usize,
     chunk_size: usize,
 }
 
 #[cfg(feature = "streaming")]
-impl Iterator for StreamIter {
+impl<'a> Iterator for SliceStreamIter<'a> {
     type Item = Vec<u8>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -1040,6 +1079,65 @@ impl Iterator for StreamIter {
         let remaining = self.data.len() - self.pos;
         let chunks = remaining.div_ceil(self.chunk_size.max(1));
         (chunks, Some(chunks))
+    }
+}
+
+#[cfg(feature = "streaming")]
+struct CompressedStreamIter<'a> {
+    decoder: zstd::Decoder<'a, std::io::BufReader<std::io::Cursor<&'a [u8]>>>,
+    chunk_size: usize,
+    total_size: usize,
+    read_so_far: usize,
+}
+
+#[cfg(feature = "streaming")]
+impl<'a> Iterator for CompressedStreamIter<'a> {
+    type Item = Vec<u8>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.read_so_far >= self.total_size {
+            return None;
+        }
+        let mut buf = vec![0u8; self.chunk_size];
+        let mut total_read = 0;
+        while total_read < self.chunk_size {
+            match std::io::Read::read(&mut self.decoder, &mut buf[total_read..]) {
+                Ok(0) => break,
+                Ok(n) => total_read += n,
+                Err(_) => return None,
+            }
+        }
+        if total_read == 0 {
+            return None;
+        }
+        buf.truncate(total_read);
+        self.read_so_far += total_read;
+        Some(buf)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remaining = self.total_size.saturating_sub(self.read_so_far);
+        let chunks = remaining.div_ceil(self.chunk_size.max(1));
+        (chunks, Some(chunks))
+    }
+}
+
+#[cfg(feature = "streaming")]
+impl<'a> Iterator for StreamIter<'a> {
+    type Item = Vec<u8>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::Slice(it) => it.next(),
+            Self::Compressed(it) => it.next(),
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        match self {
+            Self::Slice(it) => it.size_hint(),
+            Self::Compressed(it) => it.size_hint(),
+        }
     }
 }
 

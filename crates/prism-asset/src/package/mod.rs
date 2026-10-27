@@ -209,6 +209,18 @@ pub struct RuntimeAssetRecord {
 impl RuntimeAssetRecord {
     pub const SERIALIZED_SIZE: u64 = 48;
 
+    /// Returns true if this asset is compressed in the package.
+    #[inline]
+    pub fn is_compressed(&self) -> bool {
+        (self.flags & FLAG_COMPRESSED) != 0
+    }
+
+    /// Returns true if this asset is intended for streaming.
+    #[inline]
+    pub fn is_streamed(&self) -> bool {
+        (self.flags & FLAG_STREAMED) != 0
+    }
+
     fn to_bytes(&self) -> Vec<u8> {
         let mut buf = Vec::with_capacity(Self::SERIALIZED_SIZE as usize);
         buf.extend_from_slice(&self.id.to_le_bytes());
@@ -273,6 +285,7 @@ struct PendingAsset {
     asset_type: AssetType,
     data: Vec<u8>,
     dependencies: Vec<AssetId>,
+    flags: u32,
 }
 
 /// 构建器 for creating `.pak` 包 files.
@@ -310,11 +323,39 @@ impl PackageBuilder {
         data: Vec<u8>,
         dependencies: &[AssetId],
     ) {
+        self.add_asset_with_flags(id, asset_type, data, dependencies, 0);
+    }
+
+    /// Add an asset intended for streaming.
+    ///
+    /// Streamed assets have `FLAG_STREAMED` set in their record and are stored
+    /// uncompressed in the package so they can be streamed directly in chunks
+    /// without decompressing or copying the entire payload into memory.
+    pub fn add_streamed_asset(
+        &mut self,
+        id: AssetId,
+        asset_type: AssetType,
+        data: Vec<u8>,
+        dependencies: &[AssetId],
+    ) {
+        self.add_asset_with_flags(id, asset_type, data, dependencies, FLAG_STREAMED);
+    }
+
+    /// Add an asset with custom flags (e.g. `FLAG_STREAMED`).
+    pub fn add_asset_with_flags(
+        &mut self,
+        id: AssetId,
+        asset_type: AssetType,
+        data: Vec<u8>,
+        dependencies: &[AssetId],
+        flags: u32,
+    ) {
         self.assets.push(PendingAsset {
             id,
             asset_type,
             data,
             dependencies: dependencies.to_vec(),
+            flags,
         });
     }
 
@@ -326,17 +367,19 @@ impl PackageBuilder {
     /// 构建 the .pak file in 内存 and return the raw 字节
     pub fn build(&mut self) -> Result<Vec<u8>, PackageError> {
         // 计算 compressed data if needed.
-        let compressed_data: Vec<(Vec<u8>, u64)> = self
+        let compressed_data: Vec<(Vec<u8>, u64, bool)> = self
             .assets
             .iter()
             .map(|a| {
-                if self.compression_level > 0 {
+                let is_streamed = (a.flags & FLAG_STREAMED) != 0;
+                let should_compress = self.compression_level > 0 && !is_streamed;
+                if should_compress {
                     let compressed =
                         zstd::encode_all(std::io::Cursor::new(&a.data), self.compression_level)
                             .map_err(|e| PackageError::Compress(e.to_string()))?;
-                    Ok((compressed, a.data.len() as u64))
+                    Ok((compressed, a.data.len() as u64, true))
                 } else {
-                    Ok((a.data.clone(), a.data.len() as u64))
+                    Ok((a.data.clone(), a.data.len() as u64, false))
                 }
             })
             .collect::<Result<Vec<_>, PackageError>>()?;
@@ -347,10 +390,12 @@ impl PackageBuilder {
         let mut dep_start: u32 = 0;
 
         for (i, asset) in self.assets.iter().enumerate() {
-            let (data, uncompressed_size) = &compressed_data[i];
-            let compressed = self.compression_level > 0;
-            let flags = if compressed { FLAG_COMPRESSED } else { 0 };
-            let comp_size = if compressed { data.len() as u64 } else { 0 };
+            let (data, uncompressed_size, is_compressed) = &compressed_data[i];
+            let mut flags = asset.flags;
+            if *is_compressed {
+                flags |= FLAG_COMPRESSED;
+            }
+            let comp_size = if *is_compressed { data.len() as u64 } else { 0 };
 
             let deps: Vec<u64> = asset.dependencies.iter().map(|d| d.into_raw()).collect();
             let dep_count = deps.len() as u32;
@@ -377,13 +422,13 @@ impl PackageBuilder {
         let deps_offset = registry_offset + registry_size;
         let deps_size = dep_array.len() as u64 * 8;
         let data_offset = deps_offset + deps_size;
-        let data_size: u64 = compressed_data.iter().map(|(d, _)| d.len() as u64).sum();
+        let data_size: u64 = compressed_data.iter().map(|(d, _, _)| d.len() as u64).sum();
 
         // Fill in data offsets for each record.
         let mut data_off = data_offset;
         for (i, record) in records.iter_mut().enumerate() {
             record.offset = data_off;
-            data_off += if self.compression_level > 0 {
+            data_off += if compressed_data[i].2 {
                 compressed_data[i].0.len() as u64
             } else {
                 compressed_data[i].1 // uncompressed size
@@ -395,7 +440,7 @@ impl PackageBuilder {
         let deps_bytes: Vec<u8> = dep_array.iter().flat_map(|d| d.to_le_bytes()).collect();
         let data_bytes: Vec<u8> = compressed_data
             .iter()
-            .flat_map(|(d, _)| d.clone())
+            .flat_map(|(d, _, _)| d.clone())
             .collect();
 
         // 校验和覆盖 header[4..44]（version、asset_count、各偏移/长度）+ registry +
@@ -661,6 +706,48 @@ impl PackageReader {
         &self.dependency_array[start..end]
     }
 
+    /// Return the raw byte slice of the package payload for a specific record.
+    ///
+    /// For uncompressed or streamed assets, this slice is the actual asset bytes.
+    /// For compressed assets, this slice contains the compressed zstd frame.
+    pub fn asset_record_raw_slice(
+        &self,
+        record: &RuntimeAssetRecord,
+    ) -> Result<&[u8], PackageError> {
+        let stored_len = if record.is_compressed() {
+            record.compressed_size
+        } else {
+            record.size
+        };
+        let end = record
+            .offset
+            .checked_add(stored_len)
+            .ok_or_else(|| PackageError::Truncated("asset range overflows u64".into()))?;
+        let file_len = self.data.len() as u64;
+        if end > file_len {
+            return Err(PackageError::Truncated(format!(
+                "asset data extends past file: {end} > {file_len}"
+            )));
+        }
+
+        let range = record.offset as usize..end as usize;
+        Ok(&self.data[range])
+    }
+
+    /// Return the raw byte slice of the package payload for a given asset ID.
+    pub fn asset_raw_slice(&self, id: AssetId) -> Result<Option<&[u8]>, PackageError> {
+        let record = match self.find_record(id) {
+            Some(r) => r,
+            None => return Ok(None),
+        };
+        self.asset_record_raw_slice(record).map(Some)
+    }
+
+    /// Returns whether the specified asset is marked for streaming.
+    pub fn is_asset_streamed(&self, id: AssetId) -> bool {
+        self.find_record(id).is_some_and(|r| r.is_streamed())
+    }
+
     /// 读取 the uncompressed data for an 资源
     ///
     /// Returns `None` if the record is not 找到 Returns decompressed 字节
@@ -678,31 +765,13 @@ impl PackageReader {
         &self,
         record: &RuntimeAssetRecord,
     ) -> Result<Vec<u8>, PackageError> {
-        // record 的区间来自文件；即使已经在校验阶段筛过，这里也只用 checked 算术，
-        // 避免手工构造的 record 越界切片。
-        let stored_len = if (record.flags & FLAG_COMPRESSED) != 0 {
-            record.compressed_size
-        } else {
-            record.size
-        };
-        let end = record
-            .offset
-            .checked_add(stored_len)
-            .ok_or_else(|| PackageError::Truncated("asset range overflows u64".into()))?;
-        let file_len = self.data.len() as u64;
-        if end > file_len {
-            return Err(PackageError::Truncated(format!(
-                "asset data extends past file: {end} > {file_len}"
-            )));
-        }
-
-        let range = record.offset as usize..end as usize;
-        if (record.flags & FLAG_COMPRESSED) != 0 {
-            let decompressed = zstd::decode_all(std::io::Cursor::new(&self.data[range]))
+        let slice = self.asset_record_raw_slice(record)?;
+        if record.is_compressed() {
+            let decompressed = zstd::decode_all(std::io::Cursor::new(slice))
                 .map_err(|e| PackageError::Decompress(e.to_string()))?;
             Ok(decompressed)
         } else {
-            Ok(self.data[range].to_vec())
+            Ok(slice.to_vec())
         }
     }
 

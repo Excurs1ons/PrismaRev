@@ -379,6 +379,56 @@ fn streaming_zero_chunk_size_terminates() {
 }
 
 #[test]
+fn streaming_compressed_and_streamed_assets() {
+    let id_comp = AssetId::from_raw((3u64 << 32) | 1);
+    let id_stream = AssetId::from_raw((3u64 << 32) | 2);
+
+    let data_comp: Vec<u8> = (0..500).map(|i| (i % 256) as u8).collect();
+    let data_stream: Vec<u8> = (0..1200).map(|i| ((i * 7) % 256) as u8).collect();
+
+    let mut b = PackageBuilder::new();
+    b.set_compression(3);
+    b.add_asset(id_comp, AssetType::Binary, data_comp.clone(), &[]);
+    b.add_streamed_asset(id_stream, AssetType::Binary, data_stream.clone(), &[]);
+    let pak = b.build().unwrap();
+
+    let path = write_pak(&pak, "test_stream_types.pak");
+    let mut rm = ResourceManager::new();
+    rm.load_package(&path).unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert!(!rm.is_streamed(id_comp));
+    assert!(rm.is_streamed(id_stream));
+    assert!(!rm.is_streamed(AssetId::from_raw(999999)));
+
+    // 1. Stream compressed asset from package in 128-byte chunks without caching
+    let comp_chunks: Vec<Vec<u8>> = rm.read_stream(id_comp, 128).unwrap().collect();
+    let reassembled_comp: Vec<u8> = comp_chunks.into_iter().flatten().collect();
+    assert_eq!(reassembled_comp, data_comp);
+
+    // Asset was streamed directly and not cached in slot
+    assert_eq!(rm.memory_usage(), 0);
+
+    // 2. Stream uncompressed/streamed asset from package in 256-byte chunks
+    let stream_chunks: Vec<Vec<u8>> = rm.read_stream(id_stream, 256).unwrap().collect();
+    let reassembled_stream: Vec<u8> = stream_chunks.into_iter().flatten().collect();
+    assert_eq!(reassembled_stream, data_stream);
+    assert_eq!(rm.memory_usage(), 0);
+
+    // 3. Stream already loaded/cached asset
+    let _: Handle<Vec<u8>> = rm.load(id_comp).unwrap();
+    assert!(rm.memory_usage() > 0);
+    let cached_chunks: Vec<Vec<u8>> = rm.read_stream(id_comp, 64).unwrap().collect();
+    let reassembled_cached: Vec<u8> = cached_chunks.into_iter().flatten().collect();
+    assert_eq!(reassembled_cached, data_comp);
+
+    // 4. Unknown asset returns None
+    assert!(rm
+        .read_stream(AssetId::from_raw(0xDEAD_BEEF), 100)
+        .is_none());
+}
+
+#[test]
 fn unload_id_by_asset_id() {
     let id = AssetId::from_raw((1u64 << 32) | 1);
     let mut b = PackageBuilder::new();
