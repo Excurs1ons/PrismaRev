@@ -733,7 +733,8 @@ RTEX 的 mip 链由 Cooker 通过 2×2 box filter 生成（`TextureCooker::gener
 
 **热重载**（feature-gated `hot-reload`）：
 - `HotReloadWatcher`：轮询 `.pak` 文件修改时间
-- `on_pak_changed()`：重读数据 → 更新 slot → 递增 generation
+- `on_pak_changed()`：重读数据 → **原地**更新 slot（不递增 generation：句柄身份不变，
+  热重载前发出的 `Handle` 继续可用）
 
 **`Asset` trait**：
 ```rust
@@ -812,7 +813,7 @@ prism-scene::rscn::encode_scene
 
 - **[G5] CookProfile 集成到引擎设置** ⏳ **配置已就绪**：`CookProfile` 5 档 + `settings_hash` 已实现，`--profile` CLI 透传待接入 `AppConfig` 启动参数。
 
-- **[G6] 热重载管道** ✅ **实现 已接线**：`ResourceManager::on_pak_changed` + `HotReloadWatcher`（`hot-reload` feature）已实现轮询，`prism-engine::hot_reload` 预留模块已预留，编辑器 `HotReloadWatcher` 启动后 `.pak` 变更可触发 `generation++`。
+- **[G6] 热重载管道** ✅ **实现 已接线**：`ResourceManager::on_pak_changed` + `HotReloadWatcher`（`hot-reload` feature）已实现轮询，`prism-engine::hot_reload` 预留模块已预留，编辑器 `HotReloadWatcher` 启动后 `.pak` 变更可原地刷新驻留槽（`Handle` 保持有效）。
 
 > **里程碑建议**：G1+G2+G3 为"闭环 MVP"✅ 实现 已打通（可手动端到端），G4+G5 为"开发体验完善"⏳，G6 为"编辑器体验"✅ 实现。
 

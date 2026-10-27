@@ -595,8 +595,8 @@ fn hot_reload_replaces_package_reader() {
     std::fs::write(&path, two_asset_pak(b"new-x-longer", b"new-y-longer")).unwrap();
     rm.on_pak_changed(&path).unwrap();
 
-    // 内存里的资源被原地刷新（generation 递增，重新取 handle）。
-    let handle: Handle<Vec<u8>> = rm.load(x_id).unwrap();
+    // 内存里的资源被原地刷新，且**旧 handle 依然有效**（generation 不变）——
+    // 热重载不该让调用方手里的 Handle 失效。
     assert_eq!(rm.get(handle).unwrap(), b"new-x-longer");
 
     // 卸载后重新加载只能走管理器持有的 reader：旧实现留着打开时的字节，
