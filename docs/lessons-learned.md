@@ -917,3 +917,29 @@ accel_features.descriptor_binding_acceleration_structure_update_after_bind = vk:
 - 新增描述符类型到 update-after-bind set 时，先查对应的 `descriptorBinding<Type>UpdateAfterBind` 是否已在设备创建处启用——这是最常见的遗漏点。
 - `BindlessTextureTable::required_features()` 返回了它需要的 feature 集，但 `PathTracePass` 没有对应的 `required_features()` 方法。实践中，每个需要特殊 device feature 的模块应该暴露一个 `required_features()`，然后在设备创建处汇总启用。
 
+## MIS 只对「两种策略都能采到同一个光源」成立
+
+`path_integrator.slang` 的多光源 NEE 曾经这样算权重：
+
+```slang
+float p_nee_al = 1.0 / (4.0 * PI * num_lights);   // 当成每球面度 pdf
+total += brdf * L * p_nee_al / (p_nee_al*p_nee_al + p_brdf*p_brdf);
+```
+
+点光/聚光是**解析 delta 光源**：它们不在 TLAS 里，BRDF 采样永远打不到，
+所以 NEE 是唯一策略 —— 不存在第二个 pdf 可以平衡。更糟的是那个 `1/(4πN)` 是
+**选灯概率**，量纲是「每盏灯」，而 `p_brdf` 是「每球面度」；把两者塞进同一个
+power heuristic，等于用一个量纲错的 pdf 去缩放贡献：N = 1 时点光只剩
+`p²/(p²+p_brdf²) ≈ 6%` 的能量。
+
+要做 MIS，必须先把采样策略的概率换算到**同一个测度**（通常是对立体角）：面积
+采样 → 立体角要乘 Jacobian `d² / |cos_light|`（emissive triangle 的 NEE 就是这么写的）。
+delta 光源没有面积，也就不存在这个 Jacobian——正确做法是权重取 1。
+
+**教训**：
+- 加 MIS 前先问：两个策略是否都能采到同一个光源？delta 光源（点光、方向光、
+  用来近似面光的中心点采样）不能和 BRDF 采样做 MIS。
+- pdf 的量纲要对齐：离散概率（选灯 `1/N`）、面积 pdf、立体角 pdf 三者不同，
+  混用会静默压暗/提亮，编译器不会报错哪。
+- 这类错误只在「有解析光源 + 开 NEE」时才出现，视觉上像「灯不够亮」，
+  很容易被误当成 tonemap 或曝光问题。
