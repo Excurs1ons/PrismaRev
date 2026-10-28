@@ -1237,12 +1237,30 @@ function onViewportSelect(index: number | null) {
  * `drag-move:<下标>` 让整段拖动合并成一次撤销（连续提交间隔 < 700ms）。
  * 视口画面不靠这次写回 —— 引擎侧已经直接改了 `LocalTransform`。
  */
-function onViewportMove(position: [number, number, number]) {
-  if (!doc.value || primary.value === null) return;
-  const index = primary.value;
-  const entity = doc.value.entities[index];
-  if (!entity) return;
+function onViewportMove(
+  position: [number, number, number],
+  multiUpdates?: api.EntityTransformUpdate[],
+) {
+  if (!doc.value) return;
   const entities = doc.value.entities.slice();
+  if (multiUpdates && multiUpdates.length > 0) {
+    for (const update of multiUpdates) {
+      const ent = entities[update.index];
+      if (ent && update.position) {
+        entities[update.index] = {
+          ...ent,
+          transform: { ...ent.transform, position: [...update.position] },
+        };
+      }
+    }
+    const editKey = `drag-move:${selection.value.join("-")}`;
+    commit({ ...doc.value, entities }, editKey);
+    return;
+  }
+  if (primary.value === null) return;
+  const index = primary.value;
+  const entity = entities[index];
+  if (!entity) return;
   entities[index] = {
     ...entity,
     transform: { ...entity.transform, position: [...position] },
@@ -1250,12 +1268,33 @@ function onViewportMove(position: [number, number, number]) {
   commit({ ...doc.value, entities }, `drag-move:${index}`);
 }
 
-function onViewportRotate(rotation: [number, number, number, number]) {
-  if (!doc.value || primary.value === null) return;
-  const index = primary.value;
-  const entity = doc.value.entities[index];
-  if (!entity) return;
+function onViewportRotate(
+  rotation: [number, number, number, number],
+  multiUpdates?: api.EntityTransformUpdate[],
+) {
+  if (!doc.value) return;
   const entities = doc.value.entities.slice();
+  if (multiUpdates && multiUpdates.length > 0) {
+    for (const update of multiUpdates) {
+      const ent = entities[update.index];
+      if (ent) {
+        const nextTransform = { ...ent.transform };
+        if (update.rotation) nextTransform.rotation = [...update.rotation];
+        if (update.position) nextTransform.position = [...update.position];
+        entities[update.index] = {
+          ...ent,
+          transform: nextTransform,
+        };
+      }
+    }
+    const editKey = `drag-rotate:${selection.value.join("-")}`;
+    commit({ ...doc.value, entities }, editKey);
+    return;
+  }
+  if (primary.value === null) return;
+  const index = primary.value;
+  const entity = entities[index];
+  if (!entity) return;
   entities[index] = {
     ...entity,
     transform: { ...entity.transform, rotation: [...rotation] },
@@ -1263,12 +1302,33 @@ function onViewportRotate(rotation: [number, number, number, number]) {
   commit({ ...doc.value, entities }, `drag-rotate:${index}`);
 }
 
-function onViewportScale(scale: [number, number, number]) {
-  if (!doc.value || primary.value === null) return;
-  const index = primary.value;
-  const entity = doc.value.entities[index];
-  if (!entity) return;
+function onViewportScale(
+  scale: [number, number, number],
+  multiUpdates?: api.EntityTransformUpdate[],
+) {
+  if (!doc.value) return;
   const entities = doc.value.entities.slice();
+  if (multiUpdates && multiUpdates.length > 0) {
+    for (const update of multiUpdates) {
+      const ent = entities[update.index];
+      if (ent) {
+        const nextTransform = { ...ent.transform };
+        if (update.scale) nextTransform.scale = [...update.scale];
+        if (update.position) nextTransform.position = [...update.position];
+        entities[update.index] = {
+          ...ent,
+          transform: nextTransform,
+        };
+      }
+    }
+    const editKey = `drag-scale:${selection.value.join("-")}`;
+    commit({ ...doc.value, entities }, editKey);
+    return;
+  }
+  if (primary.value === null) return;
+  const index = primary.value;
+  const entity = entities[index];
+  if (!entity) return;
   entities[index] = {
     ...entity,
     transform: { ...entity.transform, scale: [...scale] },
@@ -2336,6 +2396,7 @@ onUnmounted(() => {
             :selection="selection"
             :active-tool="activeTool"
             :active-space="activeSpace"
+            :active-pivot="activePivot"
             @select="onViewportSelect"
             @select-multiple="onSelect"
             @move="onViewportMove"

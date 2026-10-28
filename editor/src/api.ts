@@ -682,9 +682,13 @@ export function viewportStats(id: string): Promise<ViewportSnapshot | null> {
   return call<ViewportSnapshot | null>("editor_viewport_stats", { id });
 }
 
-/** 高亮选中项（`index` = 文档 `entities` 下标；`null` = 取消选中）。 */
-export function viewportSelect(id: string, index: number | null): Promise<void> {
-  return call<void>("editor_viewport_select", { id, index });
+/** 高亮选中项（`index` = 主选实体下标；`indices` = 多选下标列表；`null` = 取消选中）。 */
+export function viewportSelect(
+  id: string,
+  index: number | null,
+  indices?: number[],
+): Promise<void> {
+  return call<void>("editor_viewport_select", { id, index, indices });
 }
 
 /** 拖动过程中的实时交互反馈（浮层数值提示、旋转弧面等）。 */
@@ -699,12 +703,21 @@ export interface DragFeedback {
   radius?: number;
 }
 
+/** 单个实体的局部变换更新项。 */
+export interface EntityTransformUpdate {
+  index: number;
+  position?: [number, number, number];
+  rotation?: [number, number, number, number];
+  scale?: [number, number, number];
+}
+
 /** 视口变换手柄拖动返回的结果。 */
 export interface DragTransformResult {
   position?: [number, number, number];
   rotation?: [number, number, number, number];
   scale?: [number, number, number];
   feedback?: DragFeedback;
+  multiUpdates?: EntityTransformUpdate[];
 }
 
 /** 切换视口的当前变换工具模式（"select" | "move" | "rotate" | "scale"）。 */
@@ -715,6 +728,11 @@ export function viewportSetTool(id: string, tool: string): Promise<void> {
 /** 切换视口的当前坐标系（"global" | "local"）。 */
 export function viewportSetSpace(id: string, space: string): Promise<void> {
   return call<void>("editor_viewport_set_space", { id, space });
+}
+
+/** 切换视口的轴心模式（"pivot" | "center"）。 */
+export function viewportSetPivot(id: string, pivot: "pivot" | "center"): Promise<void> {
+  return call<void>("editor_viewport_set_pivot", { id, pivot });
 }
 
 /** 切换视口地面参考网格的显隐。 */
