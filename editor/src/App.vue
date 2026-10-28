@@ -2335,6 +2335,7 @@ onUnmounted(() => {
             :path="currentPath"
             :selection="selection"
             :active-tool="activeTool"
+            :active-space="activeSpace"
             @select="onViewportSelect"
             @select-multiple="onSelect"
             @move="onViewportMove"

@@ -12,6 +12,7 @@ use glam::{Mat4, Vec2, Vec3};
 /// 当前激活的 Gizmo 工具模式。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GizmoTool {
+    Select,
     Translate,
     Rotate,
     Scale,
@@ -20,6 +21,7 @@ pub enum GizmoTool {
 impl GizmoTool {
     pub fn parse(text: &str) -> Option<Self> {
         match text {
+            "select" | "Select" | "view" | "View" | "hand" | "Hand" => Some(Self::Select),
             "move" | "translate" | "Move" | "Translate" => Some(Self::Translate),
             "rotate" | "Rotate" => Some(Self::Rotate),
             "scale" | "Scale" => Some(Self::Scale),
@@ -30,6 +32,7 @@ impl GizmoTool {
     #[allow(dead_code)]
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::Select => "select",
             Self::Translate => "move",
             Self::Rotate => "rotate",
             Self::Scale => "scale",
@@ -178,6 +181,7 @@ pub fn point_segment_distance(point: Vec2, start: Vec2, end: Vec2) -> f32 {
 pub fn pick_axis(
     screen: &Screen,
     center: Vec3,
+    orientation: glam::Quat,
     length: f32,
     cursor: Vec2,
     threshold: f32,
@@ -185,7 +189,8 @@ pub fn pick_axis(
     let start = screen.project(center)?;
     let mut best: Option<(f32, Axis)> = None;
     for axis in Axis::ALL {
-        let Some(end) = screen.project(center + axis.vector() * length) else {
+        let dir = orientation * axis.vector();
+        let Some(end) = screen.project(center + dir * length) else {
             continue;
         };
         let distance = point_segment_distance(cursor, start, end);
@@ -217,11 +222,17 @@ pub fn point_in_triangle(pt: Vec2, a: Vec2, b: Vec2, c: Vec2) -> bool {
 }
 
 /// 鼠标在哪个 2D 平面手柄角标内（XY / XZ / YZ）。
-pub fn pick_plane(screen: &Screen, center: Vec3, length: f32, cursor: Vec2) -> Option<Axis> {
+pub fn pick_plane(
+    screen: &Screen,
+    center: Vec3,
+    orientation: glam::Quat,
+    length: f32,
+    cursor: Vec2,
+) -> Option<Axis> {
     let planes = [
-        (Axis::XY, Vec3::X, Vec3::Y),
-        (Axis::XZ, Vec3::X, Vec3::Z),
-        (Axis::YZ, Vec3::Y, Vec3::Z),
+        (Axis::XY, orientation * Vec3::X, orientation * Vec3::Y),
+        (Axis::XZ, orientation * Vec3::X, orientation * Vec3::Z),
+        (Axis::YZ, orientation * Vec3::Y, orientation * Vec3::Z),
     ];
     let r_min = 0.23f32;
     let r_max = 0.48f32;
@@ -265,14 +276,15 @@ pub fn pick_plane(screen: &Screen, center: Vec3, length: f32, cursor: Vec2) -> O
 pub fn pick_translate_handle(
     screen: &Screen,
     center: Vec3,
+    orientation: glam::Quat,
     length: f32,
     cursor: Vec2,
     threshold: f32,
 ) -> Option<Axis> {
-    if let Some(plane) = pick_plane(screen, center, length, cursor) {
+    if let Some(plane) = pick_plane(screen, center, orientation, length, cursor) {
         return Some(plane);
     }
-    pick_axis(screen, center, length, cursor, threshold)
+    pick_axis(screen, center, orientation, length, cursor, threshold)
 }
 
 /// 射线（`origin + t · dir`，`dir` 归一化）与穿过 `center`、方向 `axis` 的
@@ -296,15 +308,16 @@ pub fn axis_parameter(origin: Vec3, dir: Vec3, center: Vec3, axis: Vec3) -> Opti
 pub fn pick_rotate_axis(
     screen: &Screen,
     center: Vec3,
+    orientation: glam::Quat,
     radius: f32,
     cursor: Vec2,
     threshold: f32,
 ) -> Option<Axis> {
     let mut best: Option<(f32, Axis)> = None;
     let rings = [
-        (Axis::X, Vec3::Y, Vec3::Z),
-        (Axis::Y, Vec3::Z, Vec3::X),
-        (Axis::Z, Vec3::X, Vec3::Y),
+        (Axis::X, orientation * Vec3::Y, orientation * Vec3::Z),
+        (Axis::Y, orientation * Vec3::Z, orientation * Vec3::X),
+        (Axis::Z, orientation * Vec3::X, orientation * Vec3::Y),
     ];
     const SEGMENTS: usize = 36;
     for (axis, p1, p2) in rings {
@@ -352,6 +365,7 @@ pub fn plane_intersection_vector(
 pub fn pick_scale_axis(
     screen: &Screen,
     center: Vec3,
+    orientation: glam::Quat,
     length: f32,
     cursor: Vec2,
     threshold: f32,
@@ -361,7 +375,7 @@ pub fn pick_scale_axis(
             return Some(Axis::XYZ);
         }
     }
-    pick_axis(screen, center, length, cursor, threshold)
+    pick_axis(screen, center, orientation, length, cursor, threshold)
 }
 
 #[cfg(test)]
@@ -408,13 +422,13 @@ mod tests {
         let screen = screen(view_from_eye(Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO));
         let tip = screen.project(Vec3::X * 1.5).unwrap();
         assert_eq!(
-            pick_axis(&screen, Vec3::ZERO, 1.5, tip, 12.0),
+            pick_axis(&screen, Vec3::ZERO, glam::Quat::IDENTITY, 1.5, tip, 12.0),
             Some(Axis::X)
         );
 
         let tip = screen.project(Vec3::Y * 1.5).unwrap();
         assert_eq!(
-            pick_axis(&screen, Vec3::ZERO, 1.5, tip, 12.0),
+            pick_axis(&screen, Vec3::ZERO, glam::Quat::IDENTITY, 1.5, tip, 12.0),
             Some(Axis::Y)
         );
     }
@@ -423,7 +437,14 @@ mod tests {
     fn ignores_clicks_far_from_every_axis() {
         let screen = screen(view_from_eye(Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO));
         assert_eq!(
-            pick_axis(&screen, Vec3::ZERO, 1.5, Vec2::new(4.0, 96.0), 12.0),
+            pick_axis(
+                &screen,
+                Vec3::ZERO,
+                glam::Quat::IDENTITY,
+                1.5,
+                Vec2::new(4.0, 96.0),
+                12.0
+            ),
             None
         );
     }
@@ -476,7 +497,7 @@ mod tests {
         let center = screen.project(Vec3::ZERO).unwrap();
         // 中心命中 scale XYZ
         assert_eq!(
-            pick_scale_axis(&screen, Vec3::ZERO, 1.5, center, 12.0),
+            pick_scale_axis(&screen, Vec3::ZERO, glam::Quat::IDENTITY, 1.5, center, 12.0),
             Some(Axis::XYZ)
         );
 
@@ -485,7 +506,7 @@ mod tests {
             .project((Vec3::X + Vec3::Y).normalize() * 1.5)
             .unwrap();
         assert_eq!(
-            pick_rotate_axis(&screen, Vec3::ZERO, 1.5, pt, 12.0),
+            pick_rotate_axis(&screen, Vec3::ZERO, glam::Quat::IDENTITY, 1.5, pt, 12.0),
             Some(Axis::Z)
         );
     }
@@ -495,10 +516,25 @@ mod tests {
         let screen = screen(view_from_eye(Vec3::new(5.0, 5.0, 5.0), Vec3::ZERO));
         // XZ 平面在 (0.35 * 1.5, 0, 0.35 * 1.5) 附近
         let xz_pt = screen.project(Vec3::new(0.5, 0.0, 0.5)).unwrap();
-        assert_eq!(pick_plane(&screen, Vec3::ZERO, 1.5, xz_pt), Some(Axis::XZ));
         assert_eq!(
-            pick_translate_handle(&screen, Vec3::ZERO, 1.5, xz_pt, 12.0),
+            pick_plane(&screen, Vec3::ZERO, glam::Quat::IDENTITY, 1.5, xz_pt),
             Some(Axis::XZ)
+        );
+        assert_eq!(
+            pick_translate_handle(&screen, Vec3::ZERO, glam::Quat::IDENTITY, 1.5, xz_pt, 12.0),
+            Some(Axis::XZ)
+        );
+    }
+
+    #[test]
+    fn pick_axis_with_local_orientation() {
+        let screen = screen(view_from_eye(Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO));
+        // 旋转 90 度绕 Z 轴：原 X 轴指向 +Y
+        let rot_z_90 = glam::Quat::from_rotation_z(90.0_f32.to_radians());
+        let tip = screen.project(Vec3::Y * 1.5).unwrap();
+        assert_eq!(
+            pick_axis(&screen, Vec3::ZERO, rot_z_90, 1.5, tip, 12.0),
+            Some(Axis::X)
         );
     }
 }

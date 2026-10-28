@@ -185,6 +185,24 @@ pub enum ViewportInput {
     Key { code: String, pressed: bool },
 }
 
+/// 视口坐标系（全局世界坐标 vs 局部对象坐标）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum CoordinateSpace {
+    #[default]
+    Global,
+    Local,
+}
+
+impl CoordinateSpace {
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "global" | "Global" => Some(Self::Global),
+            "local" | "Local" => Some(Self::Local),
+            _ => None,
+        }
+    }
+}
+
 struct HostState {
     /// Declared before `app` so Rust drops the project session first. Project
     /// callbacks must be gone before the engine host is torn down.
@@ -208,6 +226,8 @@ struct HostState {
     selection: Option<usize>,
     /// 当前使用的变换工具。
     tool: GizmoTool,
+    /// 当前使用的坐标系（Global vs Local）。
+    space: CoordinateSpace,
     /// 正在进行的轴拖动（`None` = 没在拖）。
     drag: Option<ActiveDrag>,
     /// Play 模式暂停：仍然渲染，但不推进模拟。
@@ -295,6 +315,7 @@ struct GizmoContext {
     eye: Vec3,
     fov: f32,
     center: Vec3,
+    orientation: glam::Quat,
     entity: Entity,
 }
 
@@ -441,6 +462,106 @@ impl HostState {
         best.map(|(_, index)| index)
     }
 
+    /// 视口矩形框选：返回所有落在像素框 [min_x..max_x, min_y..max_y] 内的实体文档下标。
+    fn box_select(&mut self, min_x: f32, min_y: f32, max_x: f32, max_y: f32) -> Vec<usize> {
+        let (min_x, max_x) = if min_x <= max_x {
+            (min_x, max_x)
+        } else {
+            (max_x, min_x)
+        };
+        let (min_y, max_y) = if min_y <= max_y {
+            (min_y, max_y)
+        } else {
+            (max_y, min_y)
+        };
+
+        let Some(camera) = self.camera else {
+            return Vec::new();
+        };
+        let world = self.app.engine_mut().world();
+        let Some(camera_world) = world.get::<LocalToWorld>(camera).map(|ltw| ltw.0) else {
+            return Vec::new();
+        };
+        let fov = world
+            .get::<Camera>(camera)
+            .map(|c| c.fov_y_degrees)
+            .unwrap_or(60.0);
+        let screen = gizmo::Screen {
+            view: camera_world.inverse(),
+            fov_y_degrees: fov,
+            width: self.width as f32,
+            height: self.height as f32,
+        };
+
+        let corners = [
+            Vec3::new(-0.5, -0.5, -0.5),
+            Vec3::new(0.5, -0.5, -0.5),
+            Vec3::new(-0.5, 0.5, -0.5),
+            Vec3::new(0.5, 0.5, -0.5),
+            Vec3::new(-0.5, -0.5, 0.5),
+            Vec3::new(0.5, -0.5, 0.5),
+            Vec3::new(-0.5, 0.5, 0.5),
+            Vec3::new(0.5, 0.5, 0.5),
+        ];
+
+        let mut hits = Vec::new();
+        for (index, entity) in self.entities.iter().enumerate() {
+            let entity = *entity;
+            if !world.is_alive(entity) {
+                continue;
+            }
+            if !world
+                .get::<Active>(entity)
+                .map(|active| active.0)
+                .unwrap_or(true)
+            {
+                continue;
+            }
+            let model = world
+                .get::<LocalToWorld>(entity)
+                .map(|transform| transform.0)
+                .or_else(|| {
+                    world
+                        .get::<LocalTransform>(entity)
+                        .map(|local| local.to_model_matrix())
+                });
+            let Some(model) = model else {
+                continue;
+            };
+
+            let mut any_in = false;
+            let mut min_pt = glam::Vec2::splat(f32::INFINITY);
+            let mut max_pt = glam::Vec2::splat(f32::NEG_INFINITY);
+
+            for corner in corners {
+                let world_pt = model.transform_point3(corner);
+                if let Some(screen_pt) = screen.project(world_pt) {
+                    min_pt = min_pt.min(screen_pt);
+                    max_pt = max_pt.max(screen_pt);
+                    if screen_pt.x >= min_x
+                        && screen_pt.x <= max_x
+                        && screen_pt.y >= min_y
+                        && screen_pt.y <= max_y
+                    {
+                        any_in = true;
+                        break;
+                    }
+                }
+            }
+
+            let overlaps = any_in
+                || (min_pt.x <= max_x
+                    && max_pt.x >= min_x
+                    && min_pt.y <= max_y
+                    && max_pt.y >= min_y);
+
+            if overlaps {
+                hits.push(index);
+            }
+        }
+        hits
+    }
+
     /// 计算 gizmo 命中 / 拖动所需的相机与选中项。
     ///
     /// 只有 Scene view 有编辑器相机与 gizmo；Game view 返回 `None`。
@@ -462,12 +583,26 @@ impl HostState {
                     .get::<LocalTransform>(entity)
                     .map(|local| local.position)
             })?;
+        let orientation = if self.space == CoordinateSpace::Local {
+            world
+                .get::<LocalToWorld>(entity)
+                .map(|transform| glam::Quat::from_mat4(&transform.0))
+                .or_else(|| {
+                    world
+                        .get::<LocalTransform>(entity)
+                        .map(|local| local.rotation)
+                })
+                .unwrap_or(glam::Quat::IDENTITY)
+        } else {
+            glam::Quat::IDENTITY
+        };
         Some(GizmoContext {
             view: camera_world.inverse(),
             camera_world,
             eye: camera_world.col(3).truncate(),
             fov,
             center,
+            orientation,
             entity,
         })
     }
@@ -486,19 +621,36 @@ impl HostState {
         let world = self.app.engine_mut().world_mut();
         match center {
             Some(center) => {
+                let orientation = if self.space == CoordinateSpace::Local {
+                    self.selection
+                        .and_then(|idx| self.entities.get(idx))
+                        .and_then(|&ent| {
+                            world
+                                .get::<LocalToWorld>(ent)
+                                .map(|ltw| glam::Quat::from_mat4(&ltw.0))
+                                .or_else(|| world.get::<LocalTransform>(ent).map(|lt| lt.rotation))
+                        })
+                        .unwrap_or(glam::Quat::IDENTITY)
+                } else {
+                    glam::Quat::IDENTITY
+                };
                 world.insert(
                     marker,
                     LocalTransform {
                         position: center,
-                        rotation: Quat::IDENTITY,
+                        rotation: orientation,
                         scale: Vec3::ONE,
                     },
                 );
-                world.insert(marker, LocalToWorld(Mat4::from_translation(center)));
+                world.insert(
+                    marker,
+                    LocalToWorld(Mat4::from_rotation_translation(orientation, center)),
+                );
                 if let Some(gizmo) = world.get_mut::<Gizmo>(marker) {
-                    gizmo.enabled = true;
+                    gizmo.enabled = self.tool != GizmoTool::Select;
                     gizmo.scale = (length / GIZMO_ARROW_LENGTH).max(1e-4);
                     gizmo.mode = match self.tool {
+                        GizmoTool::Select => prism_scene::GizmoMode::Translate,
                         GizmoTool::Translate => prism_scene::GizmoMode::Translate,
                         GizmoTool::Rotate => prism_scene::GizmoMode::Rotate,
                         GizmoTool::Scale => prism_scene::GizmoMode::Scale,
@@ -516,6 +668,9 @@ impl HostState {
     /// 光标下的轴手柄（像素坐标，渲染分辨率）。
     fn gizmo_axis_at(&mut self, x: f32, y: f32) -> Option<Axis> {
         let ctx = self.gizmo_context()?;
+        if self.tool == GizmoTool::Select {
+            return None;
+        }
         let length = self.gizmo_length(&ctx);
         let screen = gizmo::Screen {
             view: ctx.view,
@@ -524,9 +679,11 @@ impl HostState {
             height: self.height as f32,
         };
         match self.tool {
+            GizmoTool::Select => None,
             GizmoTool::Translate => gizmo::pick_translate_handle(
                 &screen,
                 ctx.center,
+                ctx.orientation,
                 length,
                 glam::Vec2::new(x, y),
                 GIZMO_PICK_SLOP,
@@ -534,6 +691,7 @@ impl HostState {
             GizmoTool::Rotate => gizmo::pick_rotate_axis(
                 &screen,
                 ctx.center,
+                ctx.orientation,
                 length,
                 glam::Vec2::new(x, y),
                 GIZMO_PICK_SLOP,
@@ -541,6 +699,7 @@ impl HostState {
             GizmoTool::Scale => gizmo::pick_scale_axis(
                 &screen,
                 ctx.center,
+                ctx.orientation,
                 length,
                 glam::Vec2::new(x, y),
                 GIZMO_PICK_SLOP,
@@ -562,6 +721,7 @@ impl HostState {
         let center_screen = screen.project(ctx.center)?.to_array();
 
         let tool_name = match self.tool {
+            GizmoTool::Select => return None,
             GizmoTool::Translate => "translate",
             GizmoTool::Rotate => "rotate",
             GizmoTool::Scale => "scale",
@@ -572,12 +732,13 @@ impl HostState {
         let mut ring_pts = None;
 
         match self.tool {
+            GizmoTool::Select => return None,
             GizmoTool::Translate => {
                 if axis.is_plane() {
                     let (a1, a2) = match axis {
-                        Axis::XY => (Vec3::X, Vec3::Y),
-                        Axis::XZ => (Vec3::X, Vec3::Z),
-                        Axis::YZ => (Vec3::Y, Vec3::Z),
+                        Axis::XY => (ctx.orientation * Vec3::X, ctx.orientation * Vec3::Y),
+                        Axis::XZ => (ctx.orientation * Vec3::X, ctx.orientation * Vec3::Z),
+                        Axis::YZ => (ctx.orientation * Vec3::Y, ctx.orientation * Vec3::Z),
                         _ => (Vec3::X, Vec3::Y),
                     };
                     let r_min = 0.23f32;
@@ -596,7 +757,7 @@ impl HostState {
                             Some([p0.to_array(), p1.to_array(), p2.to_array(), p3.to_array()]);
                     }
                 } else if axis != Axis::XYZ {
-                    let tip = ctx.center + axis.vector() * length;
+                    let tip = ctx.center + (ctx.orientation * axis.vector()) * length;
                     if let Some(p) = screen.project(tip) {
                         tip_screen = Some(p.to_array());
                     }
@@ -604,9 +765,9 @@ impl HostState {
             }
             GizmoTool::Rotate => {
                 let (p1, p2) = match axis {
-                    Axis::X => (Vec3::Y, Vec3::Z),
-                    Axis::Y => (Vec3::Z, Vec3::X),
-                    Axis::Z => (Vec3::X, Vec3::Y),
+                    Axis::X => (ctx.orientation * Vec3::Y, ctx.orientation * Vec3::Z),
+                    Axis::Y => (ctx.orientation * Vec3::Z, ctx.orientation * Vec3::X),
+                    Axis::Z => (ctx.orientation * Vec3::X, ctx.orientation * Vec3::Y),
                     _ => (Vec3::X, Vec3::Y),
                 };
                 const SEGS: usize = 36;
@@ -624,7 +785,7 @@ impl HostState {
             }
             GizmoTool::Scale => {
                 if axis != Axis::XYZ {
-                    let tip = ctx.center + axis.vector() * length;
+                    let tip = ctx.center + (ctx.orientation * axis.vector()) * length;
                     if let Some(p) = screen.project(tip) {
                         tip_screen = Some(p.to_array());
                     }
@@ -655,9 +816,10 @@ impl HostState {
         let entity = ctx.entity;
 
         match self.tool {
+            GizmoTool::Select => return Err("选择工具不支持拖动手柄".to_string()),
             GizmoTool::Translate => {
                 if axis.is_plane() {
-                    let normal = axis.vector();
+                    let normal = ctx.orientation * axis.vector();
                     let hit_pt = gizmo::plane_intersection_vector(origin, dir, ctx.center, normal)
                         .ok_or_else(|| "视线与平面平行，请换个角度".to_string())?;
                     self.drag = Some(ActiveDrag::Translate {
@@ -668,9 +830,9 @@ impl HostState {
                         start_plane_offset: hit_pt,
                     });
                 } else {
-                    let start_parameter =
-                        gizmo::axis_parameter(origin, dir, ctx.center, axis.vector())
-                            .ok_or_else(|| "视线与这根轴平行，请换个角度".to_string())?;
+                    let axis_dir = ctx.orientation * axis.vector();
+                    let start_parameter = gizmo::axis_parameter(origin, dir, ctx.center, axis_dir)
+                        .ok_or_else(|| "视线与这根轴平行，请换个角度".to_string())?;
                     self.drag = Some(ActiveDrag::Translate {
                         index,
                         axis,
@@ -681,8 +843,9 @@ impl HostState {
                 }
             }
             GizmoTool::Rotate => {
+                let axis_normal = ctx.orientation * axis.vector();
                 let start_vec =
-                    gizmo::plane_intersection_vector(origin, dir, ctx.center, axis.vector())
+                    gizmo::plane_intersection_vector(origin, dir, ctx.center, axis_normal)
                         .ok_or_else(|| "视线与旋转平面平行，请换个角度".to_string())?;
                 let start_world_rot = world
                     .get::<LocalToWorld>(entity)
@@ -701,7 +864,8 @@ impl HostState {
                     .map(|lt| lt.scale)
                     .unwrap_or(Vec3::ONE);
                 let start_parameter = if axis != Axis::XYZ {
-                    gizmo::axis_parameter(origin, dir, ctx.center, axis.vector()).unwrap_or(0.0)
+                    let axis_dir = ctx.orientation * axis.vector();
+                    gizmo::axis_parameter(origin, dir, ctx.center, axis_dir).unwrap_or(0.0)
                 } else {
                     0.0
                 };
@@ -754,7 +918,7 @@ impl HostState {
                 ..
             } => {
                 let (target, text) = if axis.is_plane() {
-                    let normal = axis.vector();
+                    let normal = ctx.orientation * axis.vector();
                     let hit_pt =
                         gizmo::plane_intersection_vector(origin, dir, start_world, normal)?;
                     let mut delta = hit_pt - start_plane_offset;
@@ -785,13 +949,14 @@ impl HostState {
                     };
                     (target, text)
                 } else {
-                    let parameter = gizmo::axis_parameter(origin, dir, start_world, axis.vector())?;
+                    let axis_dir = ctx.orientation * axis.vector();
+                    let parameter = gizmo::axis_parameter(origin, dir, start_world, axis_dir)?;
                     let mut delta = parameter - start_parameter;
                     if snap {
                         let step = 1.0_f32;
                         delta = (delta / step).round() * step;
                     }
-                    let target = start_world + axis.vector() * delta;
+                    let target = start_world + axis_dir * delta;
                     let snap_suffix = if snap { " (Snap 1m)" } else { "" };
                     let text = format!(
                         "{}: {:+.2} m{}",
@@ -846,7 +1011,7 @@ impl HostState {
                 start_vec,
                 ..
             } => {
-                let normal = axis.vector();
+                let normal = ctx.orientation * axis.vector();
                 let current_vec_raw =
                     gizmo::plane_intersection_vector(origin, dir, ctx.center, normal)?
                         .normalize_or_zero();
@@ -931,7 +1096,8 @@ impl HostState {
                     }
                     (start_scale * factor, factor)
                 } else {
-                    let parameter = gizmo::axis_parameter(origin, dir, ctx.center, axis.vector())?;
+                    let axis_dir = ctx.orientation * axis.vector();
+                    let parameter = gizmo::axis_parameter(origin, dir, ctx.center, axis_dir)?;
                     let delta = (parameter - start_parameter) / gizmo_len;
                     let mut factor = (1.0 + delta).max(0.01);
                     if snap {
@@ -1197,6 +1363,7 @@ fn viewport_thread(
         marker: None,
         selection: None,
         tool: GizmoTool::Translate,
+        space: CoordinateSpace::Global,
         drag: None,
         paused: false,
         step_pending: false,
@@ -1734,6 +1901,24 @@ pub async fn editor_viewport_pick(
     Ok(hit.ok().flatten())
 }
 
+/// 在 Scene view 里框选：返回所有落在像素框 [min_x..max_x, min_y..max_y] 内的实体文档下标。
+#[tauri::command]
+pub async fn editor_viewport_box_select(
+    id: String,
+    min_x: f32,
+    min_y: f32,
+    max_x: f32,
+    max_y: f32,
+    manager: State<'_, ViewportManager>,
+) -> Result<Vec<usize>, String> {
+    let hits = ask_viewport(&manager, &id, move |state, tx| {
+        let indices = state.box_select(min_x, min_y, max_x, max_y);
+        let _ = tx.send(indices);
+    })
+    .await?;
+    Ok(hits.unwrap_or_default())
+}
+
 /// 把一个问题交给视口线程并等回答。
 ///
 /// `Ok(None)` = 视口不存在或线程超时没回话；闭包里再套一层 `Option` 表示
@@ -1892,6 +2077,32 @@ pub fn editor_viewport_set_tool(
     Ok(())
 }
 
+/// 切换当前场景视口的坐标系（"global" | "local"）。
+#[tauri::command]
+pub fn editor_viewport_set_space(
+    id: String,
+    space: String,
+    manager: State<'_, ViewportManager>,
+) -> Result<(), String> {
+    let Some(parsed_space) = CoordinateSpace::parse(&space) else {
+        return Err(format!("未知的坐标系：{space}"));
+    };
+    let views = manager
+        .views
+        .lock()
+        .map_err(|_| "视口状态锁失败".to_string())?;
+    if let Some(handle) = views.get(&id) {
+        let _ = handle.tx.send(Box::new(move |state: &mut HostState| {
+            state.space = parsed_space;
+            if let Some(ctx) = state.gizmo_context() {
+                let length = state.gizmo_length(&ctx);
+                state.sync_marker(Some(ctx.center), length);
+            }
+        }));
+    }
+    Ok(())
+}
+
 /// 结束拖动。
 #[tauri::command]
 pub fn editor_viewport_drag_end(
@@ -2028,6 +2239,7 @@ mod tests {
             marker: None,
             selection: None,
             tool: GizmoTool::Translate,
+            space: CoordinateSpace::Global,
             drag: None,
             paused: false,
             step_pending: false,
@@ -2488,5 +2700,67 @@ mod tests {
         // Turn off
         state.app.render_settings_mut().show_grid = false;
         assert!(!state.app.render_settings_mut().show_grid);
+    }
+
+    #[test]
+    fn box_select_finds_entities_in_rect() {
+        let mut state = test_state("box-select");
+        // test_state 中有两个实体：far (0,0,-5) 和 near (0,0,0)。
+        // 相机在 (0,0,10) 正对 -Z。
+        // 原点的 near 投影在屏幕中央 (100, 50)。
+        let hits = state.box_select(90.0, 40.0, 110.0, 60.0);
+        assert!(hits.contains(&1), "应包含中心原点的实体 near: {hits:?}");
+
+        // 视口边缘之外无实体
+        let empty = state.box_select(0.0, 0.0, 20.0, 20.0);
+        assert!(empty.is_empty(), "无实体区域应返回空: {empty:?}");
+    }
+
+    #[test]
+    fn select_tool_disables_gizmo_marker_and_hit_testing() {
+        let mut state = test_state("select-tool");
+        state.apply_selection(Some(1));
+        state.tool = GizmoTool::Select;
+        let ctx = state.gizmo_context().unwrap();
+        let length = state.gizmo_length(&ctx);
+        state.sync_marker(Some(ctx.center), length);
+
+        // Gizmo marker 应处于禁用状态
+        let world = state.app.engine_mut().world();
+        let marker = state.marker.unwrap();
+        let gizmo = world.get::<Gizmo>(marker).unwrap();
+        assert!(!gizmo.enabled, "Select 工具模式下 Gizmo 应为 disabled");
+
+        // 命中与悬停都应返回 None
+        assert!(state.gizmo_axis_at(100.0, 50.0).is_none());
+        assert!(state.gizmo_hover_at(100.0, 50.0).is_none());
+    }
+
+    #[test]
+    fn coordinate_space_local_orients_gizmo_with_entity() {
+        let mut state = test_state("coord-space");
+        state.apply_selection(Some(1));
+        // 将 entity 1 绕 Z 轴旋转 90 度
+        let rot = glam::Quat::from_rotation_z(90.0_f32.to_radians());
+        {
+            let world = state.app.engine_mut().world_mut();
+            let ent = state.entities[1];
+            if let Some(lt) = world.get_mut::<LocalTransform>(ent) {
+                lt.rotation = rot;
+            }
+            if let Some(ltw) = world.get_mut::<LocalToWorld>(ent) {
+                ltw.0 = glam::Mat4::from_rotation_translation(rot, glam::Vec3::ZERO);
+            }
+        }
+
+        // Global space: orientation 始终是 IDENTITY
+        state.space = CoordinateSpace::Global;
+        let ctx = state.gizmo_context().unwrap();
+        assert_eq!(ctx.orientation, glam::Quat::IDENTITY);
+
+        // Local space: orientation 是实体的旋转
+        state.space = CoordinateSpace::Local;
+        let ctx = state.gizmo_context().unwrap();
+        assert!((ctx.orientation.z - rot.z).abs() < 1e-4);
     }
 }
