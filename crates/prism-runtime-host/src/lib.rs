@@ -15,14 +15,17 @@ use std::path::{Path, PathBuf};
 
 use libloading::{Library, Symbol};
 use prism_project_api::{
-    EntityHandle, GetProjectApi, HostApi, InputSnapshot, ProjectApi, ABI_VERSION, BUFFER_TOO_SMALL,
-    HOST_CAP_COMPONENTS, HOST_CAP_LOGGING, HOST_CAP_WORLD_COMMANDS, INVALID_ARGUMENT, SUCCESS,
+    GetProjectApi, HostApi, ProjectApi, ABI_VERSION, BUFFER_TOO_SMALL, HOST_CAP_COMPONENTS,
+    HOST_CAP_DRAW, HOST_CAP_LOGGING, HOST_CAP_WORLD_COMMANDS, INVALID_ARGUMENT, SUCCESS,
     UNKNOWN_TYPE,
 };
 use prism_reflect::rtti_bin;
 use thiserror::Error;
 
 const GET_API_SYMBOL: &[u8] = b"prism_project_get_api\0";
+
+/// ABI 载荷类型，供宿主侧直接使用（无需再依赖 `prism-project-api`）。
+pub use prism_project_api::{EntityHandle, InputSnapshot, UiQuad};
 
 #[derive(Debug, Error)]
 pub enum ProjectModuleError {
@@ -59,6 +62,8 @@ struct CommandContext<'a> {
     registry: &'a prism_scene::ComponentRegistry,
     /// `get_component` 的返回缓冲：指针只在下次宿主调用前有效。
     scratch: Vec<u8>,
+    /// 项目提交的 UI 四边形；宿主在 UI 渲染前取走。
+    quads: Vec<UiQuad>,
     scene_generation: u64,
     input: InputSnapshot,
 }
@@ -79,6 +84,7 @@ impl<'a> WorldCommands<'a> {
                 world,
                 registry,
                 scratch: Vec::new(),
+                quads: Vec::new(),
                 scene_generation,
                 input: InputSnapshot::default(),
             },
@@ -90,11 +96,19 @@ impl<'a> WorldCommands<'a> {
         self.context.input = input;
     }
 
+    /// 取走项目本帧提交的 UI 四边形（宿主在 UI 渲染前合并）。
+    pub fn take_quads(&mut self) -> Vec<UiQuad> {
+        std::mem::take(&mut self.context.quads)
+    }
+
     /// 构造本 tick 的能力表。指针只在 `api` 返回后到本 tick 结束之间有效。
     pub fn api(&mut self) -> HostApi {
         HostApi {
             abi_version: ABI_VERSION,
-            capabilities: HOST_CAP_LOGGING | HOST_CAP_WORLD_COMMANDS | HOST_CAP_COMPONENTS,
+            capabilities: HOST_CAP_LOGGING
+                | HOST_CAP_WORLD_COMMANDS
+                | HOST_CAP_COMPONENTS
+                | HOST_CAP_DRAW,
             scene_generation: self.context.scene_generation,
             user_data: (&mut self.context as *mut CommandContext).cast(),
             input: self.context.input,
@@ -105,6 +119,9 @@ impl<'a> WorldCommands<'a> {
             get_component: Some(host_get_component),
             set_component: Some(host_set_component),
             remove_component: Some(host_remove_component),
+            despawn_entity: Some(host_despawn_entity),
+            is_alive: Some(host_is_alive),
+            draw_quad: Some(host_draw_quad),
         }
     }
 }
@@ -325,6 +342,36 @@ unsafe extern "C" fn host_remove_component(
     } else {
         INVALID_ARGUMENT
     }
+}
+
+unsafe extern "C" fn host_despawn_entity(
+    user_data: *mut std::ffi::c_void,
+    entity: EntityHandle,
+) -> i32 {
+    let Some(context) = (unsafe { context(user_data) }) else {
+        return INVALID_ARGUMENT;
+    };
+    let entity = handle_to_entity(entity);
+    if !context.world.is_alive(entity) {
+        return INVALID_ARGUMENT;
+    }
+    context.world.despawn(entity);
+    SUCCESS
+}
+
+unsafe extern "C" fn host_is_alive(user_data: *mut std::ffi::c_void, entity: EntityHandle) -> i32 {
+    let Some(context) = (unsafe { context(user_data) }) else {
+        return -1;
+    };
+    i32::from(context.world.is_alive(handle_to_entity(entity)))
+}
+
+unsafe extern "C" fn host_draw_quad(user_data: *mut std::ffi::c_void, quad: UiQuad) -> i32 {
+    let Some(context) = (unsafe { context(user_data) }) else {
+        return INVALID_ARGUMENT;
+    };
+    context.quads.push(quad);
+    SUCCESS
 }
 
 pub struct ProjectModule {
@@ -630,6 +677,37 @@ mod tests {
             SUCCESS
         );
         assert!(world.get::<prism_scene::components::Name>(entity).is_none());
+    }
+
+    #[test]
+    fn despawn_is_alive_and_draw_quad_cross_the_abi() {
+        let mut world = prism_ecs::World::new();
+        let registry = registry();
+        let mut commands = WorldCommands::new(&mut world, &registry, 1);
+        let api = commands.api();
+
+        let spawn = api.spawn_entity.expect("world command capability");
+        let is_alive = api.is_alive.expect("liveness capability");
+        let despawn = api.despawn_entity.expect("despawn capability");
+        let draw = api.draw_quad.expect("draw capability");
+
+        let mut handle = EntityHandle::default();
+        assert_eq!(unsafe { spawn(api.user_data, &mut handle) }, SUCCESS);
+        assert_eq!(unsafe { is_alive(api.user_data, handle) }, 1);
+
+        let quad = UiQuad {
+            rect: [1.0, 2.0, 3.0, 4.0],
+            color: [1.0; 4],
+            border_radius: 2.0,
+            layer: 3,
+        };
+        assert_eq!(unsafe { draw(api.user_data, quad) }, SUCCESS);
+        assert_eq!(commands.take_quads().len(), 1);
+
+        assert_eq!(unsafe { despawn(api.user_data, handle) }, SUCCESS);
+        assert_eq!(unsafe { is_alive(api.user_data, handle) }, 0);
+        // 二次销毁必须被拒绝，而不是静默成功。
+        assert_eq!(unsafe { despawn(api.user_data, handle) }, INVALID_ARGUMENT);
     }
 
     #[test]

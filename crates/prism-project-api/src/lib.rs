@@ -11,7 +11,7 @@
 //! RTTIBin 编码，宿主用自己的 `ComponentRegistry` 解码 —— 这样新增组件类型
 //! 不需要改 ABI，也不需要在这里为每个组件写一遍绑定。
 
-pub const ABI_VERSION: u32 = 3;
+pub const ABI_VERSION: u32 = 4;
 
 pub const SUCCESS: i32 = 0;
 pub const INVALID_ARGUMENT: i32 = 1;
@@ -25,6 +25,7 @@ pub const BUFFER_TOO_SMALL: i32 = 5;
 pub const HOST_CAP_LOGGING: u64 = 1 << 0;
 pub const HOST_CAP_WORLD_COMMANDS: u64 = 1 << 1;
 pub const HOST_CAP_COMPONENTS: u64 = 1 << 2;
+pub const HOST_CAP_DRAW: u64 = 1 << 3;
 
 // ---------------------------------------------------------------------------
 // POD payloads
@@ -172,6 +173,36 @@ pub type RemoveComponent = unsafe extern "C" fn(
     type_name_len: usize,
 ) -> i32;
 
+/// 销毁实体（组件一并回收）。槽位会被复用，但代数递增，旧句柄仍然失效。
+pub type DespawnEntity =
+    unsafe extern "C" fn(user_data: *mut core::ffi::c_void, entity: EntityHandle) -> i32;
+
+/// 句柄是否仍指向存活实体：`1` 存活、`0` 已失效、负数是参数错误。
+///
+/// 与其余命令不同，它把「存活与否」直接放在返回值里，避免再传一个 out 参数。
+pub type IsAlive =
+    unsafe extern "C" fn(user_data: *mut core::ffi::c_void, entity: EntityHandle) -> i32;
+
+/// 一条 2D UI 四边形。
+///
+/// 字段与引擎侧 UI 四边形一致：宿主可以无转换地并入自己的绘制列表，项目模块
+/// 也不必链接渲染 crate。
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct UiQuad {
+    /// `[x, y, width, height]`，屏幕像素、左上原点。
+    pub rect: [f32; 4],
+    /// RGBA，线性空间。
+    pub color: [f32; 4],
+    /// 圆角半径（px）。
+    pub border_radius: f32,
+    /// 绘制层级（z-index）。
+    pub layer: i32,
+}
+
+/// 提交一条 UI 四边形；宿主在本帧 UI 渲染前并入绘制列表。
+pub type DrawQuad = unsafe extern "C" fn(user_data: *mut core::ffi::c_void, quad: UiQuad) -> i32;
+
 /// 宿主能力表。
 ///
 /// 由宿主每 tick 构造一次；其中的指针与 `user_data` **只在本 tick 内有效**。
@@ -190,6 +221,9 @@ pub struct HostApi {
     pub get_component: Option<GetComponent>,
     pub set_component: Option<SetComponent>,
     pub remove_component: Option<RemoveComponent>,
+    pub despawn_entity: Option<DespawnEntity>,
+    pub is_alive: Option<IsAlive>,
+    pub draw_quad: Option<DrawQuad>,
 }
 
 impl HostApi {
@@ -214,6 +248,9 @@ impl HostApi {
             get_component: None,
             set_component: None,
             remove_component: None,
+            despawn_entity: None,
+            is_alive: None,
+            draw_quad: None,
         }
     }
 }

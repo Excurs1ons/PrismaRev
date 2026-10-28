@@ -1499,18 +1499,25 @@ fn viewport_thread(
             state.place_camera();
             let simulate = state.simulate_now();
             if simulate {
-                if let Some(project) = state.project_session.as_mut() {
+                let quads = if let Some(project) = state.project_session.as_mut() {
+                    let input =
+                        input_snapshot(state.app.input_manager_mut(), state.width, state.height);
                     let mut commands = prism_runtime_host::WorldCommands::new(
                         state.app.engine_mut().world_mut(),
                         &state.components,
                         state.scene_generation,
                     );
+                    commands.set_input(input);
                     let host = commands.api();
                     if let Err(error) = project.tick(&host, frame_budget.as_secs_f32()) {
                         log::warn!("viewport: project preview tick failed: {error}");
                         *shared.error.lock().unwrap() = Some(error.to_string());
                     }
-                }
+                    commands.take_quads()
+                } else {
+                    Vec::new()
+                };
+                queue_project_quads(&mut state, quads);
             }
             state.app.host_tick(simulate);
             if let Some(frame) = state.app.take_hosted_frame() {
@@ -1537,6 +1544,51 @@ fn viewport_thread(
 
     log::info!("viewport: shutting down ({:?})", state.kind);
     state.app.shutdown_hosted();
+}
+
+/// 把当前输入状态打包成给项目模块的快照。
+///
+/// 键位编号由 `KeyCode::bit_index` 定义，是 ABI 的一部分。
+fn input_snapshot(
+    input: &prism_engine::input::InputManager,
+    width: u32,
+    height: u32,
+) -> prism_runtime_host::InputSnapshot {
+    use prism_engine::input::MouseButton;
+
+    let mut snapshot = prism_runtime_host::InputSnapshot::default();
+    let cursor = input.mouse_position();
+    snapshot.cursor = [cursor[0] as f32, cursor[1] as f32];
+    snapshot.screen = [width as f32, height as f32];
+    snapshot.left_clicked = input.mouse_just_pressed(MouseButton::Left);
+    snapshot.left_held = input.mouse_held(MouseButton::Left);
+    for key in input.pressed_keys() {
+        snapshot.set_key(key.bit_index(), true);
+    }
+    snapshot
+}
+
+/// 把项目模块提交的四边形并入引擎的 UI 绘制队列。
+///
+/// 必须在 `host_tick` 之前写入：`ui::render` 系统会在同一帧把它们并进
+/// `UiDrawList` 并清空资源。
+fn queue_project_quads(state: &mut HostState, quads: Vec<prism_runtime_host::UiQuad>) {
+    if quads.is_empty() {
+        return;
+    }
+    let world = state.app.engine_mut().world_mut();
+    let mut external = world
+        .remove_resource::<prism_engine::ui::ExternalUiQuads>()
+        .unwrap_or_default();
+    external
+        .0
+        .extend(quads.into_iter().map(|quad| prism_engine::ui::UiQuad {
+            rect: quad.rect,
+            color: quad.color,
+            border_radius: quad.border_radius,
+            layer: quad.layer,
+        }));
+    world.insert_resource(external);
 }
 
 /// 宿主侧组件 schema：解释项目模块送来的 RTTIBin 载荷。

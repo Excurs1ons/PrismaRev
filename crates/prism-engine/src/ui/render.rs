@@ -40,9 +40,22 @@ pub struct UiDrawList {
     pub texts: Vec<UiTextCmd>,
 }
 
+/// 外部（宿主 / 项目模块）提交的 UI 四边形。
+///
+/// `ui_render_system` 每帧重建 `UiDrawList`，所以提交方必须在**同一帧的 UI
+/// 渲染系统之前**写入本资源；系统会把它们并入绘制列表（参与 `layer` 排序）
+/// 并清空资源，避免跨帧重复绘制。
+#[derive(Clone, Debug, Default)]
+pub struct ExternalUiQuads(pub Vec<UiQuad>);
+
 /// 每帧更新 `UiDrawList` resource —— 查询所有 UI 实体生成绘制命令。
 pub fn ui_render_system(world: &mut World) {
     let mut draw_list = UiDrawList::default();
+
+    // 外部提交的四边形先并入，随后的按 layer 排序会把它们放到正确的层。
+    if let Some(mut external) = world.remove_resource::<ExternalUiQuads>() {
+        draw_list.quads.append(&mut external.0);
+    }
 
     // 收集背景矩形
     for (entity, layout, style) in world.query2::<ComputedLayout, Style>() {
