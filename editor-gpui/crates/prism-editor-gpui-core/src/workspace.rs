@@ -1910,6 +1910,54 @@ impl Workspace {
         document.dirty = true;
     }
 
+    /// 多选 Transform 字段：把同一个分量值写到所有选中实体（整次拖动一个撤销步）。
+    pub fn set_transform_axis_many(
+        &mut self,
+        entity_ids: &[u32],
+        field: &str,
+        axis: usize,
+        value: f32,
+    ) {
+        let mut ids: Vec<u32> = entity_ids.to_vec();
+        ids.sort_unstable();
+        ids.dedup();
+        let doc = &self.document().doc;
+        let mut changes = Vec::new();
+        for entity_id in &ids {
+            let Some(index) = doc.index_of_id(*entity_id) else {
+                continue;
+            };
+            let before = doc.entities[index].transform;
+            let mut after = before;
+            match field {
+                "position" => after.position[axis] = value,
+                "rotation" => after.rotation[axis] = value,
+                "scale" => after.scale[axis] = value,
+                _ => return,
+            }
+            if before != after {
+                changes.push((*entity_id, before, after));
+            }
+        }
+        if changes.is_empty() {
+            return;
+        }
+        let now = now_ms();
+        let document = self.document_mut();
+        if changes.len() == 1 {
+            let (entity_id, before, after) = changes[0];
+            document
+                .undo
+                .push_transform(&mut document.doc, entity_id, before, after, now);
+        } else {
+            let key = format!("transform-axis/{field}/{axis}/{ids:?}");
+            document
+                .undo
+                .push_transform_batch(&mut document.doc, changes, key, now);
+        }
+        document.dirty = true;
+    }
+
     // ── 撤销 ────────────────────────────────────────────────────────────
 
     pub fn undo(&mut self) {
@@ -2800,6 +2848,40 @@ mod tests {
             light_before
         );
         assert!(!workspace.can_undo());
+    }
+
+    #[test]
+    fn batch_transform_axis_sets_all_and_one_undo_step() {
+        let mut workspace = Workspace::sample();
+        let cube = index_named(&workspace, "Cube");
+        let light = index_named(&workspace, "Directional Light");
+        let cube_id = workspace.document().doc.entities[cube].id.unwrap();
+        let light_id = workspace.document().doc.entities[light].id.unwrap();
+        let cube_before = workspace.document().doc.entities[cube].transform.position[1];
+        let light_before = workspace.document().doc.entities[light].transform.position[1];
+
+        workspace.set_transform_axis_many(&[cube_id, light_id], "position", 1, 2.5);
+        workspace.set_transform_axis_many(&[cube_id, light_id], "position", 1, 3.0);
+
+        assert_eq!(
+            workspace.document().doc.entities[cube].transform.position[1],
+            3.0
+        );
+        assert_eq!(
+            workspace.document().doc.entities[light].transform.position[1],
+            3.0
+        );
+        assert_eq!(workspace.document().undo.history().len(), 1);
+
+        workspace.undo();
+        assert_eq!(
+            workspace.document().doc.entities[cube].transform.position[1],
+            cube_before
+        );
+        assert_eq!(
+            workspace.document().doc.entities[light].transform.position[1],
+            light_before
+        );
     }
 
     #[test]

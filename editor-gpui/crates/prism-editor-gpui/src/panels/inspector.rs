@@ -120,6 +120,7 @@ impl EditorView {
                 .text_color(style.muted())
                 .child("字段修改会应用到所有选中实体（一次撤销回退）"),
         );
+        content = content.child(self.multi_transform_card(selection, cx));
 
         for component in common {
             content = content.child(self.component_card(selection, &component.name, cx));
@@ -379,6 +380,87 @@ impl EditorView {
                     row = row.child(self.drag_number(
                         format!("tf-{index}-{axis}-{component}"),
                         vec![entity_id],
+                        "Transform".to_string(),
+                        path,
+                        value,
+                        f32::NEG_INFINITY,
+                        f32::INFINITY,
+                        0.01,
+                        cx,
+                    ));
+                }
+                body = body.child(row);
+            }
+        }
+
+        div()
+            .flex()
+            .flex_col()
+            .child(header)
+            .child(body)
+            .into_any_element()
+    }
+
+    fn multi_transform_card(
+        &mut self,
+        selection: &[usize],
+        cx: &mut gpui::Context<Self>,
+    ) -> AnyElement {
+        let style = self.style;
+        let Some(primary) = selection
+            .first()
+            .and_then(|index| self.workspace.document().doc.entities.get(*index))
+        else {
+            return div().into_any_element();
+        };
+        let transform = primary.transform;
+        let entity_ids = self.entity_ids(selection);
+        let collapsed = self.collapsed_components.contains("transform");
+        let (header, mut body) = self.card_shell("Transform", Some("多选"), collapsed);
+        let header = header.on_click(cx.listener(|this, _, _, cx| {
+            let key = "transform".to_string();
+            if !this.collapsed_components.insert(key.clone()) {
+                this.collapsed_components.remove(&key);
+            }
+            cx.notify();
+        }));
+
+        if !collapsed {
+            for (axis, label) in ["Position", "Rotation", "Scale"].iter().enumerate() {
+                let component_count = if axis == 1 { 4 } else { 3 };
+                let mut row = div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_1()
+                    .h(px(20.0))
+                    .child(
+                        div()
+                            .w(px(60.0))
+                            .text_xs()
+                            .text_color(style.muted())
+                            .child(SharedString::from(*label)),
+                    );
+                for component in 0..component_count {
+                    let path = format!(
+                        "{}[{component}]",
+                        match axis {
+                            0 => "position",
+                            1 => "rotation",
+                            _ => "scale",
+                        }
+                    );
+                    let value = match axis {
+                        0 => transform.position[component],
+                        1 => transform.rotation[component],
+                        _ => transform.scale[component],
+                    };
+                    row = row.child(self.drag_number(
+                        format!(
+                            "mtf-{primary_index}-{axis}-{component}",
+                            primary_index = selection[0]
+                        ),
+                        entity_ids.clone(),
                         "Transform".to_string(),
                         path,
                         value,

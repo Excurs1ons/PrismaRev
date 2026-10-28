@@ -872,13 +872,7 @@ impl EditorView {
             } => {
                 if let Ok(value) = editing.text().parse::<f32>() {
                     if component == "Transform" {
-                        if let (Some(entity_id), Some((field, rest))) =
-                            (entity_ids.first(), path.split_once('['))
-                        {
-                            let axis = rest.trim_end_matches(']').parse::<usize>().unwrap_or(0);
-                            self.workspace
-                                .set_transform_axis(*entity_id, field, axis, value);
-                        }
+                        self.apply_transform_axis(entity_ids, path, value);
                     } else {
                         let ids = entity_ids.clone();
                         self.apply_field(&ids, component, path, serde_json::json!(value));
@@ -904,13 +898,7 @@ impl EditorView {
             } => {
                 if let Ok(value) = editing.text().parse::<f32>() {
                     if component == "Transform" {
-                        if let (Some(entity_id), Some((field, rest))) =
-                            (entity_ids.first(), path.split_once('['))
-                        {
-                            let axis = rest.trim_end_matches(']').parse::<usize>().unwrap_or(0);
-                            self.workspace
-                                .set_transform_axis(*entity_id, field, axis, value);
-                        }
+                        self.apply_transform_axis(entity_ids, path, value);
                     } else {
                         let ids = entity_ids.clone();
                         self.apply_field(&ids, component, path, serde_json::json!(value));
@@ -1048,6 +1036,21 @@ impl EditorView {
                 .set_field_multi(entity_ids, component, path, value);
         } else if let Some(entity_id) = entity_ids.first() {
             self.workspace.set_field(*entity_id, component, path, value);
+        }
+    }
+
+    /// Transform 的 `position[1]` 形式：多选时写同一分量到所有实体。
+    fn apply_transform_axis(&mut self, entity_ids: &[u32], path: &str, value: f32) {
+        let Some((field, rest)) = path.split_once('[') else {
+            return;
+        };
+        let axis = rest.trim_end_matches(']').parse::<usize>().unwrap_or(0);
+        if entity_ids.len() > 1 {
+            self.workspace
+                .set_transform_axis_many(entity_ids, field, axis, value);
+        } else if let Some(entity_id) = entity_ids.first() {
+            self.workspace
+                .set_transform_axis(*entity_id, field, axis, value);
         }
     }
 
@@ -1355,14 +1358,7 @@ impl EditorView {
                 next = next.clamp(min, max);
                 let rounded = (next * 1000.0).round() / 1000.0;
                 if component == "Transform" {
-                    // `position[1]` → ("position", 1)
-                    if let (Some(entity_id), Some((field, rest))) =
-                        (entity_ids.first(), path.split_once('['))
-                    {
-                        let axis = rest.trim_end_matches(']').parse::<usize>().unwrap_or(0);
-                        self.workspace
-                            .set_transform_axis(*entity_id, field, axis, rounded);
-                    }
+                    self.apply_transform_axis(&entity_ids, &path, rounded);
                 } else {
                     let json = serde_json::json!(rounded);
                     if entity_ids.len() > 1 {

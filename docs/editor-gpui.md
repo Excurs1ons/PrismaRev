@@ -96,7 +96,8 @@ Unity 形状的编辑器，又不会把 `prism-render` 绑死在某套 UI 生命
   快照撤销步；Esc 直接回滚到 `base`。
 - **多对象编辑**：只显示所有选中实体的公共组件（`common_components`），字段写入走
   `set_field_multi`（一次快照 = 一次撤销），组件移除走 `remove_component_multi`；
-  Transform 不参与批量编辑（避免不同父级下的局部坐标歧义）。
+  Transform 卡在多选时也显示（以主选择的值作为显示），拖动/输入走
+  `set_transform_axis_many`，把同一**局部**分量写到所有选中实体（一次撤销）。
 - **内联输入**：所有文本目标（重命名 / 字段 / 搜索 / 另存为 / 资产重命名 / 预制体名）
   共用 `core/src/textinput.rs` 的 `TextInput`：光标 + 锚点（字节偏移、始终在 char 边界），
   支持选区替换、Home/End、Shift 扩选、Ctrl/Alt 按词左右移动、Ctrl+Backspace/Delete

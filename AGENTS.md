@@ -206,7 +206,7 @@ deviating from those conventions is a bug. (`README.md` is the human-facing over
   `editor/src/dock.ts` v4 同形）+ 层级/检查器（schema 驱动）/资产/日志（窗口化
   `uniform_list`）/文档/渲染图/设置面板 + Scene/Game View（目前是 `canvas` 的 CPU
   投影，接线点见 `viewport.rs::paint_scene`）。数据层 `prism-editor-gpui-core` 与 UI
-  框架无关（176 单测：dock/doc/schema/undo/theme/i18n/log/assets/keys/project/
+  框架无关（177 单测：dock/doc/schema/undo/theme/i18n/log/assets/keys/project/
   viewport_math/state/settings/textinput/manifest/build）；内联输入走 `TextInput`（光标 / 选区 /
   按词移动与删除，Unicode 安全）；实体剪贴板 Ctrl+C/X/V + 粘贴为子级（多根、保留预制体链接）；
   多选可整体平移 / 旋转 / 缩放、整组改父级（一个撤销步），层级 `Alt`+点箭头递归展开；关闭未保存的文档前有确认；资产可拖到检查器字段或层级实体（预制体实例化）；检查器资产字段有按类别过滤的资产选择器，
