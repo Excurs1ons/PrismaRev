@@ -201,6 +201,26 @@ deviating from those conventions is a bug. (`README.md` is the human-facing over
       `LocalToWorld`，子级要等这一刻，否则重载后第一帧的高亮 / 点选会落在错误位置。
     - 不要在 `prism-app` / `prism-engine` 里加视口/面板概念；它们只提供
       「离屏渲染 + 帧读回」这一层通用能力。
+- `editor-gpui/` — **GPUI 原生编辑器壳**（Rust-only，独立 workspace，不挂根成员）：
+  菜单/工具栏 + split-tree docking（含浮动窗口、8 方向 resize、磁吸；布局 JSON 与
+  `editor/src/dock.ts` v4 同形）+ 层级/检查器（schema 驱动）/资产/日志（窗口化
+  `uniform_list`）/文档/渲染图/设置面板 + Scene/Game View（目前是 `canvas` 的 CPU
+  投影，接线点见 `viewport.rs::paint_scene`）。数据层 `prism-editor-gpui-core` 与 UI
+  框架无关（111 单测：dock/doc/schema/undo/theme/i18n/log/assets/keys/project/
+  viewport_math/state/settings）；检查器支持多选批量改字段（公共组件、一次撤销）；
+  选中实体可「存为预制体」，资产面板可把 `.prefab.json` 实例化到场景；
+  资产重命名会改磁盘文件并精确改写打开文档的路径引用；
+  项目设置面板会合并写回 `assets/settings.toml`（保留 `[render]` 等其它段）；
+  Scene View 支持点击拾取与 gizmo 拖动（Ctrl 吸附 0.25）；
+  布局 / 主题 / 语言 / 首选项持久化在 `<project>/target/editor-gpui/state.json`，
+  并有 5s 自动保存；
+  项目模式下会向上找 `assets/` 并真实读写 `.scene.json`（保存 / 另存为 / 重新读取、
+  预制体还原与同步），纯 fixture 模式只读；
+  **GPUI 只允许出现在这个 workspace**，不得进入 `prism-app`/`prism-engine`/`prism-render`。
+  Termux/Android 无法运行 GPUI（无 X11/Wayland），本机验证用
+  `cargo test -p prism-editor-gpui-core` +
+  `cargo check -p prism-editor-gpui --target x86_64-pc-windows-gnu`。设计说明见
+  `docs/editor-gpui.md`。
 - `projects/prisma/` — 用户游戏项目（package/crate `prisma`；`prisma` 桌面二进制 + Android
   cdylib `libprisma.so`；keyframe 开场 intro、`register_scene("intro", ...)` 注册场景、
   `lib.rs` 的 `android_main`）；**own standalone workspace**, NOT a root member.

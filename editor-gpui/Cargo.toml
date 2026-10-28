@@ -1,0 +1,18 @@
+[workspace]
+resolver = "2"
+members = ["crates/prism-editor-gpui-core", "crates/prism-editor-gpui"]
+
+# 独立 workspace：编辑器 UI 壳不挂根 PrismaRev workspace（与 editor/、launcher/ 一致）。
+# GPUI 是桌面 UI 框架（Windows / macOS / Linux），Android 不参与；根 workspace 的
+# Termux/Android `cargo check` 不会因此多出 GPUI 依赖。
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+gpui = "0.2.2"
