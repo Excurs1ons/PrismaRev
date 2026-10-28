@@ -533,6 +533,8 @@ pub struct GraphFrame<'a> {
     /// absent or 透明 (e.g. no-camera 回退 Matches the app-level
     /// `clear_color` 参数 passed to `render_system`.
     pub clear_color: [f32; 4],
+    /// 是否在场景渲染中绘制地面参考网格。
+    pub show_grid: bool,
 }
 
 /// Context passed to each pass's 执行

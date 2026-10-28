@@ -66,6 +66,8 @@ pub struct RenderSettings {
     pub pt_ray_max_distance: f32,
     /// 最大 iterations (samples per 像素 0 = accumulate forever.
     pub pt_max_iterations: u32,
+    /// 是否在场景视图中渲染地面基准网格 (Y = 0)。
+    pub show_grid: bool,
 }
 
 /// 默认 PBR 众数 法线 full-PBR 渲染 Reinhard 色调映射 光栅化
@@ -79,6 +81,7 @@ impl Default for RenderSettings {
             pt_max_bounces: 3,
             pt_ray_max_distance: 1000.0,
             pt_max_iterations: 0,
+            show_grid: false,
         }
     }
 }

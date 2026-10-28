@@ -712,6 +712,11 @@ export function viewportSetTool(id: string, tool: string): Promise<void> {
   return call<void>("editor_viewport_set_tool", { id, tool });
 }
 
+/** 切换视口地面参考网格的显隐。 */
+export function viewportSetGrid(id: string, enabled: boolean): Promise<void> {
+  return call<void>("editor_viewport_set_grid", { id, enabled });
+}
+
 /** 场景视图点选：`x` / `y` 是 canvas 位图坐标（左上原点），返回命中的实体下标。 */
 export function viewportPick(id: string, x: number, y: number): Promise<number | null> {
   return call<number | null>("editor_viewport_pick", { id, x, y });

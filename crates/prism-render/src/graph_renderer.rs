@@ -108,6 +108,8 @@ pub struct FrameInput<'a> {
     /// UI 叠加 绘制 commands (filled by engine's ui_render_system).
     /// `None` in headless 众数
     pub ui_overlay: Option<&'a crate::ui_overlay::UiOverlayInput>,
+    /// 是否在场景渲染中绘制地面参考网格。
+    pub show_grid: bool,
 }
 
 /// GPU session that owns the long-lived Vulkan 运行时 objects 设备
@@ -1511,6 +1513,7 @@ impl GraphRenderer {
             clear_color,
             shadows_enabled,
             ui_overlay,
+            show_grid,
         } = input;
         let light_view_proj = *light_view_proj;
         let inv_projection = *inv_projection;
@@ -1594,6 +1597,7 @@ impl GraphRenderer {
                 has_camera: *has_camera,
                 camera_orthographic: *camera_orthographic,
                 clear_color: *clear_color,
+                show_grid: *show_grid,
             };
             let render_ctx = crate::render_graph::RenderContext {
                 device,
@@ -1914,6 +1918,7 @@ impl GraphRenderer {
             clear_color: [0.5, 0.5, 0.5, 1.0],
             shadows_enabled: true,
             ui_overlay: None,
+            show_grid: false,
         };
         self.prepare(&ctx, &input)?;
         let exec_result = self.execute(&ctx, &input);

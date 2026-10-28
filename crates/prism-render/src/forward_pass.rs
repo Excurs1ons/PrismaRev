@@ -16,6 +16,7 @@ use std::time::Instant;
 
 use crate::context::VulkanContext;
 use crate::gizmo::Gizmo;
+use crate::ground_grid::GroundGrid;
 use crate::mesh::Vertex;
 use crate::pipeline::{blend_factor, blend_operation, cull_flags, GraphicsPipeline, PipelineDesc};
 use crate::render_graph::{
@@ -147,6 +148,8 @@ pub struct ForwardPass {
     /// World-space XYZ orientation gizmo, drawn on 顶部 of the scene 深度
     /// test 禁用 内置 lazily once the 渲染 pass 存在
     gizmo: Option<Gizmo>,
+    /// 地面参考网格 (Y = 0)，开启深度测试被场景几何体自然遮挡
+    ground_grid: Option<GroundGrid>,
     device: Option<ash::Device>,
 }
 impl ForwardPass {
@@ -200,6 +203,7 @@ impl ForwardPass {
             skybox: SkyboxPass::new(vk::DescriptorSet::null(), vk::DescriptorSetLayout::null()),
             sprites: crate::sprite_pass::SpritePass::new(),
             gizmo: None,
+            ground_grid: None,
             device: None,
         }
     }
@@ -437,6 +441,7 @@ impl ForwardPass {
         self.skybox.destroy(device);
         // Gizmo (its own 管线 + 顶点 缓冲区 放置 frees them).
         self.gizmo = None;
+        self.ground_grid = None;
 
         // 集合 4: 环境光遮蔽 描述符 集合 布局 + 池 + 采样器
         if let Some(layout) = self.ao_ds_layout.take() {
@@ -1144,6 +1149,10 @@ impl ForwardPass {
         if self.gizmo.is_none() {
             self.gizmo = Some(Gizmo::new(context, rp).context("ForwardPass: create gizmo")?);
         }
+        if self.ground_grid.is_none() {
+            self.ground_grid =
+                Some(GroundGrid::new(context, rp).context("ForwardPass: create ground grid")?);
+        }
         Ok(())
     }
     /// 为绘制列表里出现的每种 [`DrawState`] 各建一条管线（幂等）。
@@ -1664,6 +1673,13 @@ impl RenderPassNode for ForwardPass {
             }
         }
 
+        // 绘制地面参考网格（深度测试开启，被场景实体遮挡）
+        if ctx.frame.show_grid {
+            if let Some(grid) = &self.ground_grid {
+                grid.draw(ctx.cmd, &ctx.frame.view_proj);
+            }
+        }
+
         // 绘制 the world-space XYZ gizmo on 顶部 of the scene (its 管线 has
         // 深度 test 禁用 so it is never occluded). Uses the same
         // view-projection the scene was drawn with.
@@ -1769,6 +1785,7 @@ impl Drop for ForwardPass {
             self.skybox.destroy(&device);
             // Gizmo (its own 管线 + 顶点 缓冲区 放置 frees them).
             self.gizmo = None;
+            self.ground_grid = None;
             // 集合 5 全局光照 probe 音量 is borrowed from SceneScope — not destroyed here.
         }
     }

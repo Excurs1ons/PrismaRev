@@ -480,6 +480,7 @@ pub fn render_system(
         clear_color: scene.clear_color,
         shadows_enabled: *shadows_enabled,
         ui_overlay: Some(ui_overlay),
+        show_grid: settings.show_grid,
     };
     // §8 五阶段：prepare 阶段批量同步（当前实现 dirty 日志 + 未来上传点）
     renderer.prepare(&ctx, &input).map_err(|e| {

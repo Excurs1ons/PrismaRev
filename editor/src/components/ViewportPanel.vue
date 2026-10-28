@@ -789,6 +789,11 @@ const showStats = ref<boolean>(false);
 const showGizmos = ref<boolean>(true);
 const shadingMode = ref<"shaded" | "wireframe">("shaded");
 
+watch(showGizmos, (enabled) => {
+  if (!inTauri || !channel || !isScene.value) return;
+  void api.viewportSetGrid(viewId, enabled).catch(() => undefined);
+});
+
 const canvasContainerStyle = computed(() => {
   const base: Record<string, string> = {
     transform: `scale(${viewportScale.value})`,

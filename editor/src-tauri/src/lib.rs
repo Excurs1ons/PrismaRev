@@ -1573,6 +1573,7 @@ pub fn run() {
             viewport::editor_viewport_input,
             viewport::editor_viewport_select,
             viewport::editor_viewport_set_tool,
+            viewport::editor_viewport_set_grid,
             viewport::editor_viewport_pick,
             viewport::editor_viewport_gizmo_hit,
             viewport::editor_viewport_gizmo_hover,
