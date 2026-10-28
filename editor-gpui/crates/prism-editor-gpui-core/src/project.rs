@@ -40,6 +40,88 @@ pub fn scan_documents(root: &Path) -> Vec<ProjectFile> {
     files
 }
 
+/// 扫描整个 `assets/`（资产面板 / 检查器资产选择器用），最多 12 层。
+/// 路径统一带 `assets/` 前缀，与 `.scene.json` 里的引用形状一致。
+pub fn scan_assets(root: &Path) -> Vec<crate::assets::AssetInfo> {
+    let mut files = Vec::new();
+    collect_assets(root, "assets", 0, &mut files);
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    files
+}
+
+fn collect_assets(
+    root: &Path,
+    relative: &str,
+    depth: usize,
+    out: &mut Vec<crate::assets::AssetInfo>,
+) {
+    if depth > 12 {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(root.join(relative)) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') || name == "target" || name == "node_modules" {
+            continue;
+        }
+        let child = format!("{relative}/{name}");
+        let path = entry.path();
+        if path.is_dir() {
+            collect_assets(root, &child, depth + 1, out);
+            continue;
+        }
+        let size_bytes = entry.metadata().map(|meta| meta.len()).unwrap_or(0);
+        out.push(crate::assets::AssetInfo {
+            kind: asset_kind(&child),
+            importer: importer_for(&child),
+            path: child,
+            size_bytes,
+        });
+    }
+}
+
+/// 按扩展名归类（与 `prism-editor-api` 的资产分类保持近似）。
+pub fn asset_kind(path: &str) -> crate::assets::AssetKind {
+    use crate::assets::AssetKind;
+    let lower = path.to_ascii_lowercase();
+    if lower.ends_with(".scene.json") {
+        return AssetKind::Scene;
+    }
+    if lower.ends_with(".prefab.json") {
+        return AssetKind::Prefab;
+    }
+    match lower.rsplit_once('.').map(|(_, ext)| ext).unwrap_or("") {
+        "fbx" | "obj" | "gltf" | "glb" | "rmesh" | "dae" | "blend" => AssetKind::Model,
+        "png" | "jpg" | "jpeg" | "webp" | "tga" | "bmp" | "ktx2" | "rtex" => AssetKind::Texture,
+        "hdr" | "exr" => AssetKind::Env,
+        "rscn" => AssetKind::Scene,
+        "wav" | "ogg" | "mp3" | "flac" => AssetKind::Audio,
+        "pak" => AssetKind::Package,
+        "material" | "mat" => AssetKind::Material,
+        "json" | "toml" | "ron" | "yaml" | "yml" | "bin" | "slang" | "glsl" | "txt" => {
+            AssetKind::Data
+        }
+        _ => AssetKind::Other,
+    }
+}
+
+fn importer_for(path: &str) -> String {
+    use crate::assets::AssetKind;
+    match asset_kind(path) {
+        AssetKind::Model => "ModelImporter",
+        AssetKind::Texture => "TextureImporter",
+        AssetKind::Env => "TextureImporter",
+        AssetKind::Scene | AssetKind::Prefab => "DefaultImporter",
+        AssetKind::Audio => "AudioImporter",
+        AssetKind::Material => "TextScriptImporter",
+        AssetKind::Data => "TextScriptImporter",
+        _ => "DefaultImporter",
+    }
+    .to_string()
+}
+
 fn collect(root: &Path, relative: &str, kind: DocKind, depth: usize, out: &mut Vec<ProjectFile>) {
     if depth > 4 {
         return;

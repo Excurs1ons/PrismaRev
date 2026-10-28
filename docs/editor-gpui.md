@@ -107,14 +107,21 @@ Unity 形状的编辑器，又不会把 `prism-render` 绑死在某套 UI 生命
   逐棵 `instantiate_prefab`（空路径 = 不覆盖链接），根挂到 `parent` 或根级，
   名字按当前文档去重。右键「粘贴」= 挂到被点实体的父级，「粘贴为子级」= 挂到它下面。
   剪切 = 复制 + 删除；多选 Ctrl+D / 创建副本会复制每个顶层子树并选中全部新根。
+- **资产选择器**：`assets::is_asset_path_field`（`*_path` + `env_map` / `volume` / `prefab`）
+  决定字段右侧是否出现「…」；`Workspace::asset_picker_candidates` 按字段名推断类别
+  （mesh→Model、sprite/texture→Texture、hdr/env→Env、audio、material、prefab、scene），
+  弹层列出候选路径（当前值用 ● 标记），点击经 `apply_field` 写回（多选同样一次撤销），
+  另有「清除（空路径）」。
 
-## 6. 项目文件
+ ## 6. 项目文件
 
-`core/src/project.rs` 只做文件系统，不依赖 engine/render：
+ `core/src/project.rs` 只做文件系统，不依赖 engine/render：
 
-- `find_project_root`：从起点向上找**确实包含 `assets/` 的目录**（与
-  `prisma_engine::asset_paths` 同语义）。
+ - `find_project_root`：从起点向上找**确实包含 `assets/` 的目录**（与
+   `prisma_engine::asset_paths` 同语义）。
 - `scan_documents`：递归扫描 `assets/scenes` / `assets/prefabs`（最多 4 层）。
+- `scan_assets`：递归扫描整个 `assets/`（最多 12 层，跳过 `.` / `target` / `node_modules`），
+  按扩展名归类并填导入器名；`load_project` 用它重建资产面板与检查器候选。
 - `read_document` / `write_document`：展示格式是 2 空格缩进 + 结尾换行，读入后
   `normalize()`（补 id、迁移旧 parent、清理悬空父级）。
 - `default_save_path`：文件名非法字符替换、重名追加 `-2`；`normalize_save_path`

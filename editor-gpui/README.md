@@ -42,6 +42,10 @@
   （未命名文档自动落到默认路径）、`Ctrl+Shift+S` 另存为（弹层输入相对路径）、
   重新读取当前文档
 - **自动保存**：首选项开启时每 5s 保存有改动的当前文档（Play 中跳过）
+- **项目资产扫描**：项目模式启动时递归扫描整个 `assets/`（最多 12 层），填充资产面板
+  与检查器资产选择器；扩展名决定分类 / 导入器
+- **检查器资产选择器**：`*_path` / `env_map` / `volume` / `prefab` 字段右侧「…」按字段名
+  过滤类别（模型 / 纹理 / 环境 / 音频 / 材质 / 预制体 / 场景），单击写回路径，可清除
 - **资产重命名 / 移动**：只允许 `assets/` 内；改磁盘文件并把打开文档里精确匹配的路径
   字段一起改写（不做子串替换），撤销仍然可用（文档标记 dirty）
 - **存为预制体**：把选中实体子树写成 `assets/prefabs/<名字>.prefab.json`（重名加 `-2`），
@@ -83,8 +87,10 @@
 - 资产删除：只允许 `assets/` 内的普通文件（场景/预制体走文档流程）
 - 存为预制体：子树提取 + 名字清洗 + 重名去重 + 落盘
 - 预制体实例化到场景：磁盘优先 / fixture 回退模板，自动挂到选中实体并选中新根
-- 项目文件层：向上找 `assets/`、扫描 / 读写文档、默认保存路径防重名、
+- 项目文件层：向上找 `assets/`、递归扫描文档与资产（分类/导入器）、默认保存路径防重名、
   预制体实例还原（保留名字与父级）与同源同步（磁盘优先，fixture 模式回退模板）
+- 资产字段判定：`assets::is_asset_path_field`（`*_path` + `env_map`/`volume`/`prefab`）
+  与 `Workspace::asset_picker_candidates`（按字段名推断类别）
 - 主题（38 token + 6 预设）、i18n（331 条 × 2 语言，key 集合有测试兜底）、
   日志环形缓冲（窗口化区间）、资产目录树、dock v4 读写与 `sanitize`
 
@@ -165,7 +171,7 @@ editor-gpui/
 
 ## 验证记录
 
-- `cargo test -p prism-editor-gpui-core`：**166 passed**。
+- `cargo test -p prism-editor-gpui-core`：**169 passed**。
 - `cargo check -p prism-editor-gpui --target x86_64-pc-windows-gnu`：通过。
 - `cargo clippy -p prism-editor-gpui -p prism-editor-gpui-core --target x86_64-pc-windows-gnu`：
   无 warning（仅 `proc-macro-error2` 的 future-incompat 提示）。

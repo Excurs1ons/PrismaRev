@@ -78,6 +78,17 @@ impl AssetKind {
     }
 }
 
+/// 组件字段是否是资产路径（检查器里显示「选择资产」按钮）。
+///
+/// 与 `prism-editor-api` 的 `ASSET_PATH_FIELDS` 保持同一判断口径：
+/// `*_path` 后缀 + 少数没有后缀的历史字段（`env_map` / `volume` / `prefab`）。
+pub fn is_asset_path_field(component: &str, field: &str) -> bool {
+    let leaf = field.rsplit('.').next().unwrap_or(field);
+    leaf.ends_with("_path")
+        || matches!(leaf, "env_map" | "volume" | "prefab")
+        || (component.ends_with("PrefabInstance") && leaf == "prefab")
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AssetInfo {

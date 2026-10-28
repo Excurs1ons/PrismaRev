@@ -451,6 +451,10 @@ impl Workspace {
 
         self.project_root = Some(root);
         self.project_files = files;
+        if let Some(root) = self.project_root.clone() {
+            self.assets = project::scan_assets(&root);
+            self.tree = AssetTree::build(&self.assets);
+        }
         match SceneManifest::read(self.project_root.as_deref().expect("project_root 刚刚赋值"))
         {
             Ok(manifest) => self.scene_manifest = manifest,
@@ -1910,6 +1914,48 @@ impl Workspace {
         crate::assets::filter_assets(&self.assets, &self.asset_query)
     }
 
+    /// 检查器「选择资产」候选：按字段名推断资产类别，同类优先（全部按路径排序）。
+    pub fn asset_picker_candidates(&self, field: &str) -> Vec<AssetInfo> {
+        let leaf = field
+            .rsplit('.')
+            .next()
+            .unwrap_or(field)
+            .to_ascii_lowercase();
+        let kind = if leaf == "env_map"
+            || leaf.contains("hdr")
+            || leaf.contains("env")
+            || leaf.contains("sky")
+        {
+            Some(AssetKind::Env)
+        } else if leaf.contains("mesh") || leaf.contains("model") {
+            Some(AssetKind::Model)
+        } else if leaf.contains("sprite")
+            || leaf.contains("texture")
+            || leaf.contains("icon")
+            || leaf.contains("tex")
+        {
+            Some(AssetKind::Texture)
+        } else if leaf.contains("audio") || leaf.contains("sound") || leaf.contains("music") {
+            Some(AssetKind::Audio)
+        } else if leaf.contains("material") {
+            Some(AssetKind::Material)
+        } else if leaf.contains("prefab") {
+            Some(AssetKind::Prefab)
+        } else if leaf.contains("scene") {
+            Some(AssetKind::Scene)
+        } else {
+            None
+        };
+        let mut candidates: Vec<AssetInfo> = self
+            .assets
+            .iter()
+            .filter(|asset| kind.is_none_or(|kind| asset.kind == kind))
+            .cloned()
+            .collect();
+        candidates.sort_by(|a, b| a.path.cmp(&b.path));
+        candidates
+    }
+
     pub fn toggle_asset_kind(&mut self, kind: AssetKind) {
         match self.asset_query.kinds.iter().position(|item| *item == kind) {
             Some(index) => {
@@ -2835,6 +2881,38 @@ mod tests {
     }
 
     #[test]
+    fn project_scan_assets_populates_tree_and_picker() {
+        let project = TempProject::new("scan-assets");
+        std::fs::create_dir_all(project.root.join("assets/meshes")).unwrap();
+        std::fs::write(project.root.join("assets/meshes/cube.fbx"), b"fbx").unwrap();
+        std::fs::write(
+            project.root.join("assets/scenes/a.scene.json"),
+            r#"{"version":3,"entities":[]}"#,
+        )
+        .unwrap();
+        let mut workspace = Workspace::load_fixture(&fixture());
+        workspace.load_project(project.root.clone()).unwrap();
+        assert!(workspace
+            .assets
+            .iter()
+            .any(|asset| asset.path == "assets/meshes/cube.fbx" && asset.kind == AssetKind::Model));
+        assert!(workspace
+            .assets
+            .iter()
+            .any(|asset| asset.path == "assets/scenes/a.scene.json"
+                && asset.kind == AssetKind::Scene));
+        let meshes = workspace.asset_picker_candidates("mesh_path");
+        assert_eq!(meshes.len(), 1);
+        assert_eq!(meshes[0].path, "assets/meshes/cube.fbx");
+        let expanded = workspace.expanded_assets.clone();
+        assert!(workspace
+            .tree
+            .visible_rows(&expanded)
+            .iter()
+            .any(|(node, _)| node.name == "meshes"));
+    }
+
+    #[test]
     fn project_scene_manifest_is_loaded_and_saved() {
         let project = TempProject::new("manifest-load");
         std::fs::write(
@@ -3325,6 +3403,57 @@ mod tests {
         assert!(workspace.unlink_prefab(1));
         assert!(!workspace.document().doc.entities[1].has_component(PREFAB_LINK_COMPONENT));
         assert!(!workspace.unlink_prefab(1), "没有链接时返回 false");
+    }
+
+    #[test]
+    fn asset_path_fields_are_detected_and_filtered() {
+        use crate::assets::{is_asset_path_field, AssetKind};
+        assert!(is_asset_path_field(
+            "prism_engine::scene::MeshRenderer",
+            "mesh_path"
+        ));
+        assert!(is_asset_path_field(
+            "prism_engine::scene::Skybox",
+            "hdr_path"
+        ));
+        assert!(is_asset_path_field(
+            "prism_engine::scene::EnvironmentLighting",
+            "env_map"
+        ));
+        assert!(is_asset_path_field(
+            "prism_engine::scene::PrefabInstance",
+            "prefab"
+        ));
+        assert!(!is_asset_path_field("prism_engine::scene::Camera", "name"));
+        assert!(!is_asset_path_field(
+            "prism_engine::scene::Camera",
+            "fov_y_degrees"
+        ));
+
+        let mut workspace = Workspace::sample();
+        use crate::assets::AssetInfo;
+        workspace.assets = vec![
+            AssetInfo {
+                path: "assets/meshes/cube.rmesh".into(),
+                size_bytes: 1,
+                kind: AssetKind::Model,
+                importer: "ModelImporter".into(),
+            },
+            AssetInfo {
+                path: "assets/textures/grid.png".into(),
+                size_bytes: 1,
+                kind: AssetKind::Texture,
+                importer: "TextureImporter".into(),
+            },
+        ];
+        let meshes = workspace.asset_picker_candidates("mesh_path");
+        assert_eq!(meshes.len(), 1);
+        assert_eq!(meshes[0].path, "assets/meshes/cube.rmesh");
+        let textures = workspace.asset_picker_candidates("sprite_path");
+        assert_eq!(textures.len(), 1);
+        assert_eq!(textures[0].kind, AssetKind::Texture);
+        let all = workspace.asset_picker_candidates("some_unknown_field");
+        assert_eq!(all.len(), 2);
     }
 
     #[test]

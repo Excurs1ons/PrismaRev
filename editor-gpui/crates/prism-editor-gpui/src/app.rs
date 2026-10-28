@@ -134,6 +134,14 @@ impl TextEditState {
 }
 
 #[derive(Debug, Clone)]
+pub struct AssetPickerState {
+    pub entity_ids: Vec<u32>,
+    pub component: String,
+    pub path: String,
+    pub current: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct BakeOptionsForm {
     pub rays: f32,
     pub bounces: f32,
@@ -331,6 +339,8 @@ pub struct EditorView {
     pub asset_delete: Option<String>,
     /// 删除当前文档前的确认弹层（路径）。
     pub document_delete: Option<String>,
+    /// 检查器「选择资产」弹层。
+    pub asset_picker: Option<AssetPickerState>,
     /// Scene / Game View 最近一次绘制的屏幕矩形（拾取与 gizmo 用）。
     /// 内联重命名的起始快照（提交时补一个撤销步，Esc 时回滚）。
     pub rename_base: Option<prism_editor_gpui_core::SceneDoc>,
@@ -387,6 +397,7 @@ impl EditorView {
             theme_edit: None,
             asset_delete: None,
             document_delete: None,
+            asset_picker: None,
             rename_base: None,
             last_pick: None,
             scene_bounds: Rc::new(Cell::new(None)),
@@ -707,6 +718,7 @@ impl EditorView {
                 self.theme_edit = None;
                 self.asset_delete = None;
                 self.document_delete = None;
+                self.asset_picker = None;
                 cx.notify();
             }
             "down" if !self.workspace.selection.is_empty() => {
@@ -2044,6 +2056,148 @@ impl EditorView {
         )
     }
 
+    fn render_asset_picker(&mut self, cx: &mut Context<Self>) -> Option<Div> {
+        let picker = self.asset_picker.clone()?;
+        let style = self.style;
+        let candidates = self.workspace.asset_picker_candidates(&picker.path);
+        let total = candidates.len();
+
+        let mut list = div()
+            .id("asset-picker-list")
+            .max_h(px(300.0))
+            .overflow_y_scroll()
+            .flex()
+            .flex_col();
+        {
+            let ids = picker.entity_ids.clone();
+            let component = picker.component.clone();
+            let path = picker.path.clone();
+            list = list.child(
+                div()
+                    .id("asset-pick-clear")
+                    .px_2()
+                    .py_1()
+                    .text_size(px(10.0))
+                    .text_color(style.muted())
+                    .cursor_pointer()
+                    .hover(move |this| this.bg(style.row_hover()))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.apply_field(
+                            &ids,
+                            &component,
+                            &path,
+                            serde_json::Value::String(String::new()),
+                        );
+                        this.asset_picker = None;
+                        cx.notify();
+                    }))
+                    .child("清除（空路径）"),
+            );
+        }
+        for (position, asset) in candidates.iter().take(300).enumerate() {
+            let ids = picker.entity_ids.clone();
+            let component = picker.component.clone();
+            let path = picker.path.clone();
+            let chosen = asset.path.clone();
+            let selected = chosen == picker.current;
+            let row_style = style;
+            list = list.child(
+                div()
+                    .id(SharedString::from(format!("asset-pick-{position}")))
+                    .px_2()
+                    .py_1()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_2()
+                    .text_size(px(10.0))
+                    .text_color(if selected {
+                        row_style.accent()
+                    } else {
+                        row_style.text()
+                    })
+                    .when(selected, |this| this.bg(row_style.selection()))
+                    .cursor_pointer()
+                    .hover(move |this| this.bg(row_style.row_hover()))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.apply_field(
+                            &ids,
+                            &component,
+                            &path,
+                            serde_json::Value::String(chosen.clone()),
+                        );
+                        this.asset_picker = None;
+                        cx.notify();
+                    }))
+                    .child(SharedString::from(if selected {
+                        format!("● {}", asset.path)
+                    } else {
+                        asset.path.clone()
+                    }))
+                    .child(
+                        div()
+                            .ml_auto()
+                            .text_size(px(9.0))
+                            .text_color(row_style.muted())
+                            .child(SharedString::from(asset.kind.label())),
+                    ),
+            );
+        }
+
+        Some(
+            div()
+                .absolute()
+                .top(px(120.0))
+                .left(px(f32::from(self.window_size.width) * 0.5 - 230.0))
+                .w(px(460.0))
+                .bg(style.panel_raised())
+                .border_1()
+                .border_color(style.border_strong())
+                .rounded_sm()
+                .shadow_lg()
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .px_2()
+                        .py_1()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(style.text_strong())
+                                .child(SharedString::from(format!("选择资产 · {}", picker.path))),
+                        )
+                        .child(
+                            div()
+                                .ml_auto()
+                                .text_size(px(9.0))
+                                .text_color(style.muted())
+                                .child(SharedString::from(format!("{total} 个候选"))),
+                        ),
+                )
+                .child(
+                    div()
+                        .px_2()
+                        .pb_1()
+                        .text_size(px(9.0))
+                        .text_color(style.muted())
+                        .child(SharedString::from(format!(
+                            "当前：{}",
+                            if picker.current.is_empty() {
+                                "（空）"
+                            } else {
+                                picker.current.as_str()
+                            }
+                        ))),
+                )
+                .child(list),
+        )
+    }
+
     fn render_asset_rename(&mut self, cx: &mut Context<Self>) -> Option<Div> {
         let (_, _current) = self.asset_rename.clone()?;
         let style = self.style;
@@ -3113,6 +3267,23 @@ impl Render for EditorView {
                     })),
             );
             root = root.child(asset_rename);
+        }
+
+        let asset_picker = self.render_asset_picker(cx);
+        if let Some(asset_picker) = asset_picker {
+            root = root.child(
+                div()
+                    .id("asset-picker-dismiss")
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full()
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.asset_picker = None;
+                        cx.notify();
+                    })),
+            );
+            root = root.child(asset_picker);
         }
 
         let context_menu = self.render_context_menu(cx);

@@ -8,7 +8,7 @@ use gpui::{div, prelude::*, px, AnyElement, Div, MouseButton, SharedString, Stat
 use prism_editor_gpui_core::{FieldSchema, FieldWidget, ThemeToken, TypeSchema};
 use serde_json::Value;
 
-use crate::app::{ContextTarget, DragState, EditorView, TextTarget};
+use crate::app::{AssetPickerState, ContextTarget, DragState, EditorView, TextTarget};
 use crate::panels::{header_row, icon_button, muted};
 
 impl EditorView {
@@ -785,7 +785,13 @@ impl EditorView {
                 let component = component.to_string();
                 let text_for_edit = text.clone();
                 let ids = entity_ids.clone();
-                div()
+                let is_asset =
+                    prism_editor_gpui_core::assets::is_asset_path_field(&component, &path);
+                let picker_ids = ids.clone();
+                let picker_component = component.clone();
+                let picker_path = path.clone();
+                let picker_current = text.clone();
+                let input = div()
                     .id(SharedString::from(format!("f-{index}-{component}-{path}")))
                     .flex_1()
                     .h(px(18.0))
@@ -819,8 +825,49 @@ impl EditorView {
                             text_for_edit.clone(),
                             cx,
                         );
-                    }))
-                    .into_any_element()
+                    }));
+                if is_asset {
+                    div()
+                        .flex_1()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap_1()
+                        .child(input)
+                        .child(
+                            div()
+                                .id(SharedString::from(format!(
+                                    "pick-{index}-{picker_component}-{picker_path}"
+                                )))
+                                .w(px(18.0))
+                                .h(px(18.0))
+                                .flex_none()
+                                .rounded_sm()
+                                .border_1()
+                                .border_color(style.border())
+                                .bg(style.panel_alt())
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .text_size(px(10.0))
+                                .text_color(style.text_soft())
+                                .cursor_pointer()
+                                .hover(move |this| this.bg(style.row_hover()))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.asset_picker = Some(AssetPickerState {
+                                        entity_ids: picker_ids.clone(),
+                                        component: picker_component.clone(),
+                                        path: picker_path.clone(),
+                                        current: picker_current.clone(),
+                                    });
+                                    cx.notify();
+                                }))
+                                .child("…"),
+                        )
+                        .into_any_element()
+                } else {
+                    input.into_any_element()
+                }
             }
             FieldWidget::List | FieldWidget::Option | FieldWidget::Struct => {
                 let key = format!("json:{component}:{path}");
