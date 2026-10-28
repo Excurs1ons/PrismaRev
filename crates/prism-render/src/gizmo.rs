@@ -15,10 +15,11 @@ use crate::context::VulkanContext;
 use crate::shader_bindings::gizmo::GizmoPush;
 
 /// One ECS-authored gizmo instance. `model` already contains the entity's
-/// world transform and the component's scale.
+/// world transform and the component's scale. `mode`: 0 = translate, 1 = rotate, 2 = scale.
 #[derive(Clone, Copy, Debug)]
 pub struct GizmoInstance {
     pub model: [[f32; 4]; 4],
+    pub mode: u32,
 }
 
 const GIZMO_VERT_SPV: &[u8] = include_bytes!("../../../assets/shaders/gizmo.vert.spv");
@@ -61,7 +62,11 @@ pub struct Gizmo {
     layout: vk::PipelineLayout,
     vertex_buffer: vk::Buffer,
     vertex_memory: vk::DeviceMemory,
-    vertex_count: u32,
+    translate_count: u32,
+    rotate_first: u32,
+    rotate_count: u32,
+    scale_first: u32,
+    scale_count: u32,
     device: ash::Device,
 }
 
@@ -71,7 +76,8 @@ impl Gizmo {
         let device = context.device.clone();
 
         // --- 静态 geometry (generated once on the CPU) ---
-        let verts = generate_gizmo();
+        let (verts, translate_count, (rotate_first, rotate_count), (scale_first, scale_count)) =
+            generate_all_gizmos();
         let vertex_count = verts.len() as u32;
         let buf_size = (vertex_count as usize * size_of::<GizmoVertex>()) as vk::DeviceSize;
         let (vertex_buffer, vertex_memory) = create_buffer(
@@ -201,7 +207,11 @@ impl Gizmo {
             layout,
             vertex_buffer,
             vertex_memory,
-            vertex_count,
+            translate_count,
+            rotate_first,
+            rotate_count,
+            scale_first,
+            scale_count,
             device,
         })
     }
@@ -238,7 +248,12 @@ impl Gizmo {
                         size_of::<GizmoPush>(),
                     ),
                 );
-                device.cmd_draw(cmd, self.vertex_count, 1, 0, 0);
+                let (first, count) = match instance.mode {
+                    1 => (self.rotate_first, self.rotate_count),
+                    2 => (self.scale_first, self.scale_count),
+                    _ => (0, self.translate_count),
+                };
+                device.cmd_draw(cmd, count, 1, first, 0);
             }
         }
     }
@@ -260,8 +275,8 @@ impl Drop for Gizmo {
 // Geometry generation
 // ---------------------------------------------------------------------------
 
-/// 构建 the three axis arrows (shaft 盒 + cone head) as a triangle 列表
-fn generate_gizmo() -> Vec<GizmoVertex> {
+/// 构建平移箭头、旋转圆环和缩放手柄的几何体
+fn generate_all_gizmos() -> (Vec<GizmoVertex>, u32, (u32, u32), (u32, u32)) {
     let mut v = Vec::new();
     let len = 1.5f32; // shaft length
     let thick = 0.045f32; // shaft half-thickness
@@ -269,7 +284,7 @@ fn generate_gizmo() -> Vec<GizmoVertex> {
     let head_r = 0.13f32; // cone base radius
     let segs = 20u32; // cone radial segments
 
-    // (direction, perpendicular-1, perpendicular-2, 颜色
+    // (direction, perpendicular-1, perpendicular-2, 颜色)
     type Axis = ([f32; 3], [f32; 3], [f32; 3], [f32; 3]);
     let axes: [Axis; 3] = [
         (
@@ -292,6 +307,7 @@ fn generate_gizmo() -> Vec<GizmoVertex> {
         ),
     ];
 
+    // 1. Translate (平移箭头)
     for (dir, p1, p2, color) in axes {
         let geo = AxisGeometry {
             dir,
@@ -303,7 +319,147 @@ fn generate_gizmo() -> Vec<GizmoVertex> {
         push_shaft(&mut v, &geo, thick);
         push_cone(&mut v, &geo, head_len, head_r, segs);
     }
-    v
+    let translate_count = v.len() as u32;
+
+    // 2. Rotate (旋转圆环)
+    let rotate_first = v.len() as u32;
+    let ring_radius = 1.5f32;
+    let ring_thick = 0.025f32;
+    let ring_segs = 48u32;
+    for (dir, p1, p2, color) in axes {
+        push_ring(
+            &mut v,
+            dir,
+            p1,
+            p2,
+            ring_radius,
+            ring_thick,
+            ring_segs,
+            color,
+        );
+    }
+    let rotate_count = (v.len() as u32) - rotate_first;
+
+    // 3. Scale (缩放轴 + 端点立方体 + 中心均匀缩放立方体)
+    let scale_first = v.len() as u32;
+    let cube_half = 0.09f32;
+    for (dir, p1, p2, color) in axes {
+        let geo = AxisGeometry {
+            dir,
+            p1,
+            p2,
+            len,
+            color,
+        };
+        push_shaft(&mut v, &geo, thick);
+        let tip_center = [dir[0] * len, dir[1] * len, dir[2] * len];
+        push_box(&mut v, tip_center, [cube_half; 3], color);
+    }
+    push_box(&mut v, [0.0, 0.0, 0.0], [0.08; 3], [0.9, 0.9, 0.9]);
+    let scale_count = (v.len() as u32) - scale_first;
+
+    (
+        v,
+        translate_count,
+        (rotate_first, rotate_count),
+        (scale_first, scale_count),
+    )
+}
+
+fn push_box(v: &mut Vec<GizmoVertex>, center: [f32; 3], half: [f32; 3], color: [f32; 3]) {
+    let (cx, cy, cz) = (center[0], center[1], center[2]);
+    let (hx, hy, hz) = (half[0], half[1], half[2]);
+    let p = [
+        [cx - hx, cy - hy, cz - hz],
+        [cx + hx, cy - hy, cz - hz],
+        [cx + hx, cy + hy, cz - hz],
+        [cx - hx, cy + hy, cz - hz],
+        [cx - hx, cy - hy, cz + hz],
+        [cx + hx, cy - hy, cz + hz],
+        [cx + hx, cy + hy, cz + hz],
+        [cx - hx, cy + hy, cz + hz],
+    ];
+    // -Z
+    push_tri(v, p[0], p[2], p[1], color);
+    push_tri(v, p[0], p[3], p[2], color);
+    // +Z
+    push_tri(v, p[4], p[5], p[6], color);
+    push_tri(v, p[4], p[6], p[7], color);
+    // -X
+    push_tri(v, p[0], p[4], p[7], color);
+    push_tri(v, p[0], p[7], p[3], color);
+    // +X
+    push_tri(v, p[1], p[2], p[6], color);
+    push_tri(v, p[1], p[6], p[5], color);
+    // -Y
+    push_tri(v, p[0], p[1], p[5], color);
+    push_tri(v, p[0], p[5], p[4], color);
+    // +Y
+    push_tri(v, p[3], p[7], p[6], color);
+    push_tri(v, p[3], p[6], p[2], color);
+}
+
+fn push_ring(
+    v: &mut Vec<GizmoVertex>,
+    dir: [f32; 3],
+    p1: [f32; 3],
+    p2: [f32; 3],
+    radius: f32,
+    thick: f32,
+    segs: u32,
+    color: [f32; 3],
+) {
+    for i in 0..segs {
+        let a0 = (i as f32 / segs as f32) * std::f32::consts::TAU;
+        let a1 = ((i + 1) as f32 / segs as f32) * std::f32::consts::TAU;
+        let (c0, s0) = (a0.cos(), a0.sin());
+        let (c1, s1) = (a1.cos(), a1.sin());
+
+        let rad0 = [
+            p1[0] * c0 + p2[0] * s0,
+            p1[1] * c0 + p2[1] * s0,
+            p1[2] * c0 + p2[2] * s0,
+        ];
+        let rad1 = [
+            p1[0] * c1 + p2[0] * s1,
+            p1[1] * c1 + p2[1] * s1,
+            p1[2] * c1 + p2[2] * s1,
+        ];
+
+        // 平面内带状表面
+        let r_in = radius - thick;
+        let r_out = radius + thick;
+        let p0_in = [rad0[0] * r_in, rad0[1] * r_in, rad0[2] * r_in];
+        let p0_out = [rad0[0] * r_out, rad0[1] * r_out, rad0[2] * r_out];
+        let p1_in = [rad1[0] * r_in, rad1[1] * r_in, rad1[2] * r_in];
+        let p1_out = [rad1[0] * r_out, rad1[1] * r_out, rad1[2] * r_out];
+        push_tri(v, p0_in, p0_out, p1_out, color);
+        push_tri(v, p0_in, p1_out, p1_in, color);
+
+        // 垂直于平面的带状表面（保证各视角可见）
+        let p0_up = [
+            rad0[0] * radius + dir[0] * thick,
+            rad0[1] * radius + dir[1] * thick,
+            rad0[2] * radius + dir[2] * thick,
+        ];
+        let p0_down = [
+            rad0[0] * radius - dir[0] * thick,
+            rad0[1] * radius - dir[1] * thick,
+            rad0[2] * radius - dir[2] * thick,
+        ];
+        let p1_up = [
+            rad1[0] * radius + dir[0] * thick,
+            rad1[1] * radius + dir[1] * thick,
+            rad1[2] * radius + dir[2] * thick,
+        ];
+        let p1_down = [
+            rad1[0] * radius - dir[0] * thick,
+            rad1[1] * radius - dir[1] * thick,
+            rad1[2] * radius - dir[2] * thick,
+        ];
+        push_tri(v, p0_down, p0_up, p1_up, color);
+        push_tri(v, p0_down, p1_up, p1_down, color);
+    }
 }
 
 fn push_tri(v: &mut Vec<GizmoVertex>, a: [f32; 3], b: [f32; 3], c: [f32; 3], color: [f32; 3]) {

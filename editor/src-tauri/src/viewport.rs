@@ -33,7 +33,7 @@ use serde::{Deserialize, Serialize};
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::State;
 
-use crate::gizmo::{self, Axis};
+use crate::gizmo::{self, Axis, GizmoTool};
 use crate::pick;
 
 /// 视口帧率上限。读回帧以显示器常见刷新率为目标，避免把内部渲染 FPS
@@ -202,27 +202,47 @@ struct HostState {
     marker: Option<Entity>,
     /// 当前选中的文档下标（由前端下发，重载后保留）。
     selection: Option<usize>,
+    /// 当前使用的变换工具。
+    tool: GizmoTool,
     /// 正在进行的轴拖动（`None` = 没在拖）。
-    drag: Option<AxisDrag>,
+    drag: Option<ActiveDrag>,
     /// Play 模式暂停：仍然渲染，但不推进模拟。
     paused: bool,
     /// 暂停时请求单步：下一帧模拟一次然后回到暂停。
     step_pending: bool,
 }
 
-/// 平移 gizmo 的拖动会话。
-///
-/// 起点固定点击那一刻的实体世界位置与射线参数，之后每次移动只算
-/// 沿轴的参数差 —— 这样拖动不会因为相机取景变化而漂移。
+/// 变换拖动产生的局部属性更新结果。
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DragTransformResult {
+    pub position: Option<[f32; 3]>,
+    pub rotation: Option<[f32; 4]>,
+    pub scale: Option<[f32; 3]>,
+}
+
+/// Gizmo 拖动会话（平移 / 旋转 / 缩放）。
 #[derive(Clone, Copy)]
-struct AxisDrag {
-    /// 被拖的文档下标（不是 `Entity`：重载后 ECS 句柄会变）。
-    index: usize,
-    axis: Axis,
-    /// 实体开始拖动时的世界位置。
-    start_world: Vec3,
-    /// 点击射线在轴上的参数。
-    start_parameter: f32,
+enum ActiveDrag {
+    Translate {
+        index: usize,
+        axis: Axis,
+        start_world: Vec3,
+        start_parameter: f32,
+    },
+    Rotate {
+        index: usize,
+        axis: Axis,
+        start_world_rot: Quat,
+        start_vec: Vec3,
+    },
+    Scale {
+        index: usize,
+        axis: Axis,
+        start_scale: Vec3,
+        start_parameter: f32,
+        start_cursor: glam::Vec2,
+    },
 }
 
 /// `editor_viewport_frame` 的取景范围。
@@ -445,6 +465,11 @@ impl HostState {
                 if let Some(gizmo) = world.get_mut::<Gizmo>(marker) {
                     gizmo.enabled = true;
                     gizmo.scale = (length / GIZMO_ARROW_LENGTH).max(1e-4);
+                    gizmo.mode = match self.tool {
+                        GizmoTool::Translate => prism_scene::GizmoMode::Translate,
+                        GizmoTool::Rotate => prism_scene::GizmoMode::Rotate,
+                        GizmoTool::Scale => prism_scene::GizmoMode::Scale,
+                    };
                 }
             }
             None => {
@@ -465,13 +490,29 @@ impl HostState {
             width: self.width as f32,
             height: self.height as f32,
         };
-        gizmo::pick_axis(
-            &screen,
-            ctx.center,
-            length,
-            glam::Vec2::new(x, y),
-            GIZMO_PICK_SLOP,
-        )
+        match self.tool {
+            GizmoTool::Translate => gizmo::pick_axis(
+                &screen,
+                ctx.center,
+                length,
+                glam::Vec2::new(x, y),
+                GIZMO_PICK_SLOP,
+            ),
+            GizmoTool::Rotate => gizmo::pick_rotate_axis(
+                &screen,
+                ctx.center,
+                length,
+                glam::Vec2::new(x, y),
+                GIZMO_PICK_SLOP,
+            ),
+            GizmoTool::Scale => gizmo::pick_scale_axis(
+                &screen,
+                ctx.center,
+                length,
+                glam::Vec2::new(x, y),
+                GIZMO_PICK_SLOP,
+            ),
+        }
     }
 
     /// 开始拖动选中实体的某根轴。
@@ -483,56 +524,208 @@ impl HostState {
         let (origin, dir) =
             pick::screen_ray(&ctx.camera_world, ctx.fov, self.width, self.height, x, y)
                 .ok_or_else(|| "点击位置无法生成射线".to_string())?;
-        let start_parameter = gizmo::axis_parameter(origin, dir, ctx.center, axis.vector())
-            .ok_or_else(|| "视线与这根轴平行，请换个角度".to_string())?;
-        self.drag = Some(AxisDrag {
-            index,
-            axis,
-            start_world: ctx.center,
-            start_parameter,
-        });
+        let world = self.app.engine_mut().world();
+        let entity = ctx.entity;
+
+        match self.tool {
+            GizmoTool::Translate => {
+                let start_parameter = gizmo::axis_parameter(origin, dir, ctx.center, axis.vector())
+                    .ok_or_else(|| "视线与这根轴平行，请换个角度".to_string())?;
+                self.drag = Some(ActiveDrag::Translate {
+                    index,
+                    axis,
+                    start_world: ctx.center,
+                    start_parameter,
+                });
+            }
+            GizmoTool::Rotate => {
+                let start_vec =
+                    gizmo::plane_intersection_vector(origin, dir, ctx.center, axis.vector())
+                        .ok_or_else(|| "视线与旋转平面平行，请换个角度".to_string())?;
+                let start_world_rot = world
+                    .get::<LocalToWorld>(entity)
+                    .map(|ltw| Quat::from_mat4(&ltw.0))
+                    .unwrap_or(Quat::IDENTITY);
+                self.drag = Some(ActiveDrag::Rotate {
+                    index,
+                    axis,
+                    start_world_rot,
+                    start_vec: start_vec.normalize_or_zero(),
+                });
+            }
+            GizmoTool::Scale => {
+                let start_scale = world
+                    .get::<LocalTransform>(entity)
+                    .map(|lt| lt.scale)
+                    .unwrap_or(Vec3::ONE);
+                let start_parameter = if axis != Axis::XYZ {
+                    gizmo::axis_parameter(origin, dir, ctx.center, axis.vector()).unwrap_or(0.0)
+                } else {
+                    0.0
+                };
+                self.drag = Some(ActiveDrag::Scale {
+                    index,
+                    axis,
+                    start_scale,
+                    start_parameter,
+                    start_cursor: glam::Vec2::new(x, y),
+                });
+            }
+        }
         Ok(())
     }
 
-    /// 拖动到新光标位置，返回实体**局部** `transform.position`（供文档写回）。
+    /// 拖动到新光标位置，返回实体**局部**变换属性（供文档写回）。
     ///
     /// 同时直接改 ECS 里的 `LocalTransform`，所以视口跟手 —— 前端把文档
     /// 重载压到拖动结束之后，拖动过程中画面来自引擎，不靠 reload。
-    fn drag_to(&mut self, x: f32, y: f32) -> Option<[f32; 3]> {
+    fn drag_to(&mut self, x: f32, y: f32) -> Option<DragTransformResult> {
         let drag = self.drag?;
         let ctx = self.gizmo_context()?;
-        if ctx.entity != self.entities.get(drag.index).copied()? {
+        let drag_index = match drag {
+            ActiveDrag::Translate { index, .. }
+            | ActiveDrag::Rotate { index, .. }
+            | ActiveDrag::Scale { index, .. } => index,
+        };
+        if ctx.entity != self.entities.get(drag_index).copied()? {
             // 场景重载换了 ECS 句柄：这次拖动失效。
             self.drag = None;
             return None;
         }
         let (origin, dir) =
             pick::screen_ray(&ctx.camera_world, ctx.fov, self.width, self.height, x, y)?;
-        let parameter = gizmo::axis_parameter(origin, dir, drag.start_world, drag.axis.vector())?;
-        let target = drag.start_world + drag.axis.vector() * (parameter - drag.start_parameter);
+        let gizmo_len = self.gizmo_length(&ctx).max(1e-4);
 
-        let world = self.app.engine_mut().world_mut();
-        // 父级的世界矩阵把世界位移换算回作者的局部坐标。
-        let local = match world.get::<Parent>(ctx.entity).map(|parent| parent.0) {
-            Some(parent) if world.is_alive(parent) => world
-                .get::<LocalToWorld>(parent)
-                .map(|transform| transform.0.inverse().transform_point3(target))
-                .unwrap_or(target),
-            _ => target,
-        };
-        match world.get_mut::<LocalTransform>(ctx.entity) {
-            Some(local_transform) => local_transform.position = local,
-            None => world.insert(
-                ctx.entity,
-                LocalTransform {
-                    position: local,
-                    ..LocalTransform::default()
-                },
-            ),
+        match drag {
+            ActiveDrag::Translate {
+                axis,
+                start_world,
+                start_parameter,
+                ..
+            } => {
+                let parameter = gizmo::axis_parameter(origin, dir, start_world, axis.vector())?;
+                let target = start_world + axis.vector() * (parameter - start_parameter);
+                let local = {
+                    let world = self.app.engine_mut().world_mut();
+                    let local = match world.get::<Parent>(ctx.entity).map(|parent| parent.0) {
+                        Some(parent) if world.is_alive(parent) => world
+                            .get::<LocalToWorld>(parent)
+                            .map(|transform| transform.0.inverse().transform_point3(target))
+                            .unwrap_or(target),
+                        _ => target,
+                    };
+                    match world.get_mut::<LocalTransform>(ctx.entity) {
+                        Some(local_transform) => local_transform.position = local,
+                        None => world.insert(
+                            ctx.entity,
+                            LocalTransform {
+                                position: local,
+                                ..LocalTransform::default()
+                            },
+                        ),
+                    }
+                    local
+                };
+                self.sync_marker(Some(target), gizmo_len);
+                Some(DragTransformResult {
+                    position: Some(local.to_array()),
+                    rotation: None,
+                    scale: None,
+                })
+            }
+            ActiveDrag::Rotate {
+                axis,
+                start_world_rot,
+                start_vec,
+                ..
+            } => {
+                let normal = axis.vector();
+                let current_vec =
+                    gizmo::plane_intersection_vector(origin, dir, ctx.center, normal)?
+                        .normalize_or_zero();
+                if start_vec.length_squared() < 1e-4 || current_vec.length_squared() < 1e-4 {
+                    return None;
+                }
+                let cross = start_vec.cross(current_vec);
+                let sin = cross.dot(normal);
+                let cos = start_vec.dot(current_vec);
+                let angle = sin.atan2(cos);
+                let delta_rot = Quat::from_axis_angle(normal, angle);
+                let new_world_rot = delta_rot * start_world_rot;
+
+                let world = self.app.engine_mut().world_mut();
+                let new_local_rot = match world.get::<Parent>(ctx.entity).map(|parent| parent.0) {
+                    Some(parent) if world.is_alive(parent) => {
+                        let parent_rot = world
+                            .get::<LocalToWorld>(parent)
+                            .map(|ltw| Quat::from_mat4(&ltw.0))
+                            .unwrap_or(Quat::IDENTITY);
+                        parent_rot.inverse() * new_world_rot
+                    }
+                    _ => new_world_rot,
+                };
+
+                match world.get_mut::<LocalTransform>(ctx.entity) {
+                    Some(lt) => lt.rotation = new_local_rot,
+                    None => world.insert(
+                        ctx.entity,
+                        LocalTransform {
+                            rotation: new_local_rot,
+                            ..LocalTransform::default()
+                        },
+                    ),
+                }
+                Some(DragTransformResult {
+                    position: None,
+                    rotation: Some(new_local_rot.to_array()),
+                    scale: None,
+                })
+            }
+            ActiveDrag::Scale {
+                axis,
+                start_scale,
+                start_parameter,
+                start_cursor,
+                ..
+            } => {
+                let new_scale = if axis == Axis::XYZ {
+                    let dx = x - start_cursor.x;
+                    let dy = y - start_cursor.y;
+                    let delta = (dx - dy) * 0.005;
+                    let factor = (1.0 + delta).max(0.01);
+                    start_scale * factor
+                } else {
+                    let parameter = gizmo::axis_parameter(origin, dir, ctx.center, axis.vector())?;
+                    let delta = (parameter - start_parameter) / gizmo_len;
+                    let factor = (1.0 + delta).max(0.01);
+                    let mut s = start_scale;
+                    match axis {
+                        Axis::X => s.x = (s.x * factor).max(0.001),
+                        Axis::Y => s.y = (s.y * factor).max(0.001),
+                        Axis::Z => s.z = (s.z * factor).max(0.001),
+                        _ => (),
+                    }
+                    s
+                };
+
+                let world = self.app.engine_mut().world_mut();
+                match world.get_mut::<LocalTransform>(ctx.entity) {
+                    Some(lt) => lt.scale = new_scale,
+                    None => world.insert(
+                        ctx.entity,
+                        LocalTransform {
+                            scale: new_scale,
+                            ..LocalTransform::default()
+                        },
+                    ),
+                }
+                Some(DragTransformResult {
+                    position: None,
+                    rotation: None,
+                    scale: Some(new_scale.to_array()),
+                })
+            }
         }
-        // 标记跟手（`LocalToWorld` 下一 tick 由 hierarchy_system 重算）。
-        self.sync_marker(Some(target), self.gizmo_length(&ctx));
-        Some(local.to_array())
     }
 
     fn end_drag(&mut self) {
@@ -722,6 +915,7 @@ fn viewport_thread(
         entities: Vec::new(),
         marker: None,
         selection: None,
+        tool: GizmoTool::Translate,
         drag: None,
         paused: false,
         step_pending: false,
@@ -860,6 +1054,7 @@ fn spawn_selection_marker(app: &mut App) -> Entity {
         Gizmo {
             enabled: false,
             scale: 1.0,
+            mode: prism_scene::GizmoMode::Translate,
         },
     );
     world.insert(entity, LocalTransform::default());
@@ -1290,7 +1485,7 @@ pub fn editor_viewport_drag_begin(
     Ok(())
 }
 
-/// 拖动到新光标位置，返回选中实体的**局部** `transform.position`。
+/// 拖动到新光标位置，返回选中实体的**局部**变换更新（position / rotation / scale）。
 ///
 /// 返回 `None` = 没在拖动 / 场景已重载 / 视线与轴平行（这次移动忽略）。
 #[tauri::command]
@@ -1299,13 +1494,39 @@ pub async fn editor_viewport_drag(
     x: f32,
     y: f32,
     manager: State<'_, ViewportManager>,
-) -> Result<Option<[f32; 3]>, String> {
+) -> Result<Option<DragTransformResult>, String> {
     let moved = ask_viewport(&manager, &id, move |state, tx| {
-        let local = state.drag_to(x, y);
-        let _ = tx.send(local);
+        let res = state.drag_to(x, y);
+        let _ = tx.send(res);
     })
     .await?;
     Ok(moved.flatten())
+}
+
+/// 切换当前场景视口的变换工具（"move" | "rotate" | "scale"）。
+#[tauri::command]
+pub fn editor_viewport_set_tool(
+    id: String,
+    tool: String,
+    manager: State<'_, ViewportManager>,
+) -> Result<(), String> {
+    let Some(parsed_tool) = GizmoTool::parse(&tool) else {
+        return Err(format!("未知的工具：{tool}"));
+    };
+    let views = manager
+        .views
+        .lock()
+        .map_err(|_| "视口状态锁失败".to_string())?;
+    if let Some(handle) = views.get(&id) {
+        let _ = handle.tx.send(Box::new(move |state: &mut HostState| {
+            state.tool = parsed_tool;
+            if let Some(ctx) = state.gizmo_context() {
+                let length = state.gizmo_length(&ctx);
+                state.sync_marker(Some(ctx.center), length);
+            }
+        }));
+    }
+    Ok(())
 }
 
 /// 结束拖动。
@@ -1441,6 +1662,7 @@ mod tests {
             entities: Vec::new(),
             marker: None,
             selection: None,
+            tool: GizmoTool::Translate,
             drag: None,
             paused: false,
             step_pending: false,
@@ -1584,14 +1806,15 @@ mod tests {
         let moved = state
             .drag_to(center.x + 30.0, center.y)
             .expect("拖动应该给出新位置");
-        assert!(moved[0] > 1.0, "应沿 +X 移动: {moved:?}");
-        assert!(moved[1].abs() < 1e-4 && moved[2].abs() < 1e-4, "{moved:?}");
+        let pos = moved.position.expect("平移应该返回 position");
+        assert!(pos[0] > 1.0, "应沿 +X 移动: {pos:?}");
+        assert!(pos[1].abs() < 1e-4 && pos[2].abs() < 1e-4, "{pos:?}");
 
         // 引擎里的实体跟手（渲染直接用这份数据，不等文档重载）。
         let world = state.app.engine_mut().world_mut();
         let local = world.get::<LocalTransform>(entity).unwrap();
         assert!(
-            (local.position.x - moved[0]).abs() < 1e-5,
+            (local.position.x - pos[0]).abs() < 1e-5,
             "{:?}",
             local.position
         );
@@ -1599,10 +1822,7 @@ mod tests {
         // 缩放标记实体也跟着走。
         let marker = state.marker.unwrap();
         let marker_x = world.get::<LocalToWorld>(marker).unwrap().0.col(3).x;
-        assert!(
-            (marker_x - moved[0]).abs() < 1e-4,
-            "{marker_x} vs {moved:?}"
-        );
+        assert!((marker_x - pos[0]).abs() < 1e-4, "{marker_x} vs {pos:?}");
 
         state.end_drag();
         assert!(state.drag_to(center.x + 60.0, center.y).is_none());
@@ -1643,6 +1863,7 @@ mod tests {
         let moved = state
             .drag_to(center.x + 30.0, center.y)
             .expect("子级也应该能拖动");
+        let pos = moved.position.expect("平移应该返回 position");
 
         // 世界 +X 位移被父级的旋转／缩放折回局部空间，而不是原样写进 position。
         let parent_world = {
@@ -1652,12 +1873,12 @@ mod tests {
                 .expect("父级应该有世界矩阵")
                 .0
         };
-        let moved_world = parent_world.transform_point3(Vec3::from_array(moved));
+        let moved_world = parent_world.transform_point3(Vec3::from_array(pos));
         assert!(moved_world.x > 6.0, "世界坐标应沿 +X: {moved_world:?}");
         assert!(moved_world.y.abs() < 1e-3, "{moved_world:?}");
         assert!(moved_world.z.abs() < 1e-3, "{moved_world:?}");
         // 局部坐标必须换过基底：绕 Y 转 90° 后世界 +X 变成局部 ±Z。
-        assert!(moved[0].abs() < 1e-3, "局部 X 应该为 0: {moved:?}");
-        assert!(moved[2].abs() > 1.0, "世界 +X 落在局部 Z 上: {moved:?}");
+        assert!(pos[0].abs() < 1e-3, "局部 X 应该为 0: {pos:?}");
+        assert!(pos[2].abs() > 1.0, "世界 +X 落在局部 Z 上: {pos:?}");
     }
 }

@@ -108,6 +108,11 @@ impl<'a> SceneReadView<'a> {
                         * glam::Mat4::from_scale(glam::Vec3::splat(gizmo.scale.max(0.0)));
                     Some(prism_render::GizmoInstance {
                         model: model.to_cols_array_2d(),
+                        mode: match gizmo.mode {
+                            super::components::GizmoMode::Translate => 0,
+                            super::components::GizmoMode::Rotate => 1,
+                            super::components::GizmoMode::Scale => 2,
+                        },
                     })
                 }),
         );

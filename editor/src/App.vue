@@ -1250,6 +1250,32 @@ function onViewportMove(position: [number, number, number]) {
   commit({ ...doc.value, entities }, `drag-move:${index}`);
 }
 
+function onViewportRotate(rotation: [number, number, number, number]) {
+  if (!doc.value || primary.value === null) return;
+  const index = primary.value;
+  const entity = doc.value.entities[index];
+  if (!entity) return;
+  const entities = doc.value.entities.slice();
+  entities[index] = {
+    ...entity,
+    transform: { ...entity.transform, rotation: [...rotation] },
+  };
+  commit({ ...doc.value, entities }, `drag-rotate:${index}`);
+}
+
+function onViewportScale(scale: [number, number, number]) {
+  if (!doc.value || primary.value === null) return;
+  const index = primary.value;
+  const entity = doc.value.entities[index];
+  if (!entity) return;
+  const entities = doc.value.entities.slice();
+  entities[index] = {
+    ...entity,
+    transform: { ...entity.transform, scale: [...scale] },
+  };
+  commit({ ...doc.value, entities }, `drag-scale:${index}`);
+}
+
 function onSelect(indices: number[]) {
   selection.value = indices.length ? indices : [];
   if (indices.length) {
@@ -1553,7 +1579,23 @@ function onKey(event: KeyboardEvent) {
     return;
   }
 
-  if (!mod) return;
+  // 场景视图变换快捷键（对齐 Unity）：Q 选择、W 平移、E 旋转、R 缩放
+  if (!mod) {
+    if (key === "q") {
+      activeTool.value = "select";
+      return;
+    } else if (key === "w") {
+      activeTool.value = "move";
+      return;
+    } else if (key === "e") {
+      activeTool.value = "rotate";
+      return;
+    } else if (key === "r") {
+      activeTool.value = "scale";
+      return;
+    }
+    return;
+  }
   if (key === "s") {
     event.preventDefault();
     void save();
@@ -2292,8 +2334,11 @@ onUnmounted(() => {
             :doc="doc"
             :path="currentPath"
             :selection="selection"
+            :active-tool="activeTool"
             @select="onViewportSelect"
             @move="onViewportMove"
+            @rotate="onViewportRotate"
+            @scale="onViewportScale"
           />
         </template>
         <template #gameView>

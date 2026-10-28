@@ -4,13 +4,13 @@
       "importer": "TextScriptImporter",
       "kind": "data",
       "path": "assets/asset-defs/default_env.cube.asset.json",
-      "sizeBytes": 161
+      "sizeBytes": 155
     },
     {
       "importer": "TextScriptImporter",
       "kind": "data",
       "path": "assets/asset-defs/default_material.asset.json",
-      "sizeBytes": 566
+      "sizeBytes": 543
     },
     {
       "importer": "TextureImporter",
@@ -49,70 +49,10 @@
       "sizeBytes": 1976948
     },
     {
-      "importer": "DefaultImporter",
-      "kind": "data",
-      "path": "assets/ibr/4d50312cbd1b9ab5/cube_512.bin",
-      "sizeBytes": 25165828
-    },
-    {
-      "importer": "DefaultImporter",
-      "kind": "data",
-      "path": "assets/ibr/4d50312cbd1b9ab5/irradiance_64.bin",
-      "sizeBytes": 393220
-    },
-    {
-      "importer": "DefaultImporter",
-      "kind": "data",
-      "path": "assets/ibr/4d50312cbd1b9ab5/prefiltered_mip0.bin",
-      "sizeBytes": 1572868
-    },
-    {
-      "importer": "DefaultImporter",
-      "kind": "data",
-      "path": "assets/ibr/4d50312cbd1b9ab5/prefiltered_mip1.bin",
-      "sizeBytes": 393220
-    },
-    {
-      "importer": "DefaultImporter",
-      "kind": "data",
-      "path": "assets/ibr/4d50312cbd1b9ab5/prefiltered_mip2.bin",
-      "sizeBytes": 98308
-    },
-    {
-      "importer": "DefaultImporter",
-      "kind": "data",
-      "path": "assets/ibr/4d50312cbd1b9ab5/prefiltered_mip3.bin",
-      "sizeBytes": 24580
-    },
-    {
-      "importer": "DefaultImporter",
-      "kind": "data",
-      "path": "assets/ibr/4d50312cbd1b9ab5/prefiltered_mip4.bin",
-      "sizeBytes": 6148
-    },
-    {
-      "importer": "DefaultImporter",
-      "kind": "data",
-      "path": "assets/ibr/brdf_lut_512.bin",
-      "sizeBytes": 2097156
-    },
-    {
-      "importer": "DefaultImporter",
-      "kind": "package",
-      "path": "assets/scenes.pak",
-      "sizeBytes": 1164471
-    },
-    {
-      "importer": "TextScriptImporter",
-      "kind": "data",
-      "path": "assets/scenes.pak.meta.json",
-      "sizeBytes": 727
-    },
-    {
       "importer": "TextScriptImporter",
       "kind": "data",
       "path": "assets/scenes.toml",
-      "sizeBytes": 1702
+      "sizeBytes": 1661
     },
     {
       "importer": "DefaultImporter",
@@ -124,247 +64,133 @@
       "importer": "DefaultImporter",
       "kind": "scene",
       "path": "assets/scenes/default.scene.json",
-      "sizeBytes": 4100
+      "sizeBytes": 3867
     },
     {
       "importer": "DefaultImporter",
       "kind": "scene",
       "path": "assets/scenes/intro.scene.json",
-      "sizeBytes": 2494
+      "sizeBytes": 2421
     },
     {
       "importer": "TextScriptImporter",
       "kind": "data",
       "path": "assets/settings.toml",
-      "sizeBytes": 442
+      "sizeBytes": 415
     },
     {
       "importer": "DefaultImporter",
       "kind": "other",
       "path": "assets/shaders/compile.sh",
-      "sizeBytes": 9019
+      "sizeBytes": 8820
     },
     {
       "importer": "DefaultImporter",
       "kind": "other",
       "path": "assets/shaders/fix_spirv.py",
-      "sizeBytes": 3274
-    },
-    {
-      "importer": "DefaultImporter",
-      "kind": "other",
-      "path": "assets/shaders/gi_bake.comp.spv",
-      "sizeBytes": 49584
-    },
-    {
-      "importer": "DefaultImporter",
-      "kind": "other",
-      "path": "assets/shaders/gi_render.comp.spv",
-      "sizeBytes": 44560
-    },
-    {
-      "importer": "DefaultImporter",
-      "kind": "other",
-      "path": "assets/shaders/gizmo.frag.spv",
-      "sizeBytes": 444
-    },
-    {
-      "importer": "DefaultImporter",
-      "kind": "other",
-      "path": "assets/shaders/gizmo.vert.spv",
-      "sizeBytes": 2216
-    },
-    {
-      "importer": "DefaultImporter",
-      "kind": "other",
-      "path": "assets/shaders/gtao.frag.spv",
-      "sizeBytes": 10772
-    },
-    {
-      "importer": "DefaultImporter",
-      "kind": "other",
-      "path": "assets/shaders/gtao.vert.spv",
-      "sizeBytes": 1252
-    },
-    {
-      "importer": "DefaultImporter",
-      "kind": "other",
-      "path": "assets/shaders/mesh_vert.vert.spv",
-      "sizeBytes": 4264
-    },
-    {
-      "importer": "DefaultImporter",
-      "kind": "other",
-      "path": "assets/shaders/post.frag.spv",
-      "sizeBytes": 1832
-    },
-    {
-      "importer": "DefaultImporter",
-      "kind": "other",
-      "path": "assets/shaders/post.vert.spv",
-      "sizeBytes": 1072
-    },
-    {
-      "importer": "DefaultImporter",
-      "kind": "other",
-      "path": "assets/shaders/pt_render.comp.spv",
-      "sizeBytes": 89560
+      "sizeBytes": 3187
     },
     {
       "importer": "TextScriptImporter",
       "kind": "data",
       "path": "assets/shaders/reflection/gizmo.json",
-      "sizeBytes": 9653
+      "sizeBytes": 9421
     },
     {
       "importer": "TextScriptImporter",
       "kind": "data",
       "path": "assets/shaders/reflection/gtao.json",
-      "sizeBytes": 11769
+      "sizeBytes": 11468
     },
     {
       "importer": "TextScriptImporter",
       "kind": "data",
       "path": "assets/shaders/reflection/mesh_vert.json",
-      "sizeBytes": 24192
+      "sizeBytes": 23666
     },
     {
       "importer": "TextScriptImporter",
       "kind": "data",
       "path": "assets/shaders/reflection/post.json",
-      "sizeBytes": 5977
+      "sizeBytes": 5808
     },
     {
       "importer": "TextScriptImporter",
       "kind": "data",
       "path": "assets/shaders/reflection/pt_render.json",
-      "sizeBytes": 34959
+      "sizeBytes": 34132
     },
     {
       "importer": "TextScriptImporter",
       "kind": "data",
       "path": "assets/shaders/reflection/rt_preview.json",
-      "sizeBytes": 7970
+      "sizeBytes": 7758
     },
     {
       "importer": "TextScriptImporter",
       "kind": "data",
       "path": "assets/shaders/reflection/rt_render.json",
-      "sizeBytes": 6282
+      "sizeBytes": 6117
     },
     {
       "importer": "TextScriptImporter",
       "kind": "data",
       "path": "assets/shaders/reflection/scene_frag.json",
-      "sizeBytes": 46763
+      "sizeBytes": 45711
     },
     {
       "importer": "TextScriptImporter",
       "kind": "data",
       "path": "assets/shaders/reflection/shadow_depth.json",
-      "sizeBytes": 8439
+      "sizeBytes": 8242
     },
     {
       "importer": "TextScriptImporter",
       "kind": "data",
       "path": "assets/shaders/reflection/skybox.json",
-      "sizeBytes": 8853
+      "sizeBytes": 8626
     },
     {
       "importer": "TextScriptImporter",
       "kind": "data",
       "path": "assets/shaders/reflection/sprites.json",
-      "sizeBytes": 15082
+      "sizeBytes": 14725
     },
     {
       "importer": "TextScriptImporter",
       "kind": "data",
       "path": "assets/shaders/reflection/ui_overlay.json",
-      "sizeBytes": 8877
-    },
-    {
-      "importer": "DefaultImporter",
-      "kind": "other",
-      "path": "assets/shaders/rt_preview.frag.spv",
-      "sizeBytes": 1200
-    },
-    {
-      "importer": "DefaultImporter",
-      "kind": "other",
-      "path": "assets/shaders/rt_preview.vert.spv",
-      "sizeBytes": 848
-    },
-    {
-      "importer": "DefaultImporter",
-      "kind": "other",
-      "path": "assets/shaders/rt_render.frag.spv",
-      "sizeBytes": 964
-    },
-    {
-      "importer": "DefaultImporter",
-      "kind": "other",
-      "path": "assets/shaders/rt_render.vert.spv",
-      "sizeBytes": 848
-    },
-    {
-      "importer": "DefaultImporter",
-      "kind": "other",
-      "path": "assets/shaders/scene_frag.frag.spv",
-      "sizeBytes": 45236
-    },
-    {
-      "importer": "DefaultImporter",
-      "kind": "other",
-      "path": "assets/shaders/shadow_depth.frag.spv",
-      "sizeBytes": 172
-    },
-    {
-      "importer": "DefaultImporter",
-      "kind": "other",
-      "path": "assets/shaders/shadow_depth.vert.spv",
-      "sizeBytes": 2040
-    },
-    {
-      "importer": "DefaultImporter",
-      "kind": "other",
-      "path": "assets/shaders/skybox.frag.spv",
-      "sizeBytes": 1608
-    },
-    {
-      "importer": "DefaultImporter",
-      "kind": "other",
-      "path": "assets/shaders/skybox.vert.spv",
-      "sizeBytes": 2268
+      "sizeBytes": 8664
     },
     {
       "importer": "TextScriptImporter",
       "kind": "other",
       "path": "assets/shaders/slang/common.slang",
-      "sizeBytes": 2751
+      "sizeBytes": 2700
     },
     {
       "importer": "TextScriptImporter",
       "kind": "other",
       "path": "assets/shaders/slang/gi.slang",
-      "sizeBytes": 8542
+      "sizeBytes": 8359
     },
     {
       "importer": "TextScriptImporter",
       "kind": "other",
       "path": "assets/shaders/slang/gi_bake.slang",
-      "sizeBytes": 9408
+      "sizeBytes": 9180
     },
     {
       "importer": "TextScriptImporter",
       "kind": "other",
       "path": "assets/shaders/slang/gi_render.slang",
-      "sizeBytes": 3147
+      "sizeBytes": 3960
     },
     {
       "importer": "TextScriptImporter",
       "kind": "other",
       "path": "assets/shaders/slang/gizmo.slang",
-      "sizeBytes": 1018
+      "sizeBytes": 978
     },
     {
       "importer": "TextScriptImporter",
@@ -376,91 +202,67 @@
       "importer": "TextScriptImporter",
       "kind": "other",
       "path": "assets/shaders/slang/mesh_vert.slang",
-      "sizeBytes": 1895
+      "sizeBytes": 1836
     },
     {
       "importer": "TextScriptImporter",
       "kind": "other",
       "path": "assets/shaders/slang/path_integrator.slang",
-      "sizeBytes": 51603
+      "sizeBytes": 50725
     },
     {
       "importer": "TextScriptImporter",
       "kind": "other",
       "path": "assets/shaders/slang/post.slang",
-      "sizeBytes": 2853
+      "sizeBytes": 2776
     },
     {
       "importer": "TextScriptImporter",
       "kind": "other",
       "path": "assets/shaders/slang/pt_render.slang",
-      "sizeBytes": 30335
+      "sizeBytes": 29630
     },
     {
       "importer": "TextScriptImporter",
       "kind": "other",
       "path": "assets/shaders/slang/rt_preview.slang",
-      "sizeBytes": 1251
+      "sizeBytes": 1211
     },
     {
       "importer": "TextScriptImporter",
       "kind": "other",
       "path": "assets/shaders/slang/rt_render.slang",
-      "sizeBytes": 1562
+      "sizeBytes": 1518
     },
     {
       "importer": "TextScriptImporter",
       "kind": "other",
       "path": "assets/shaders/slang/scene_frag.slang",
-      "sizeBytes": 38744
+      "sizeBytes": 38317
     },
     {
       "importer": "TextScriptImporter",
       "kind": "other",
       "path": "assets/shaders/slang/shadow_depth.slang",
-      "sizeBytes": 1509
+      "sizeBytes": 1468
     },
     {
       "importer": "TextScriptImporter",
       "kind": "other",
       "path": "assets/shaders/slang/skybox.slang",
-      "sizeBytes": 4257
+      "sizeBytes": 4161
     },
     {
       "importer": "TextScriptImporter",
       "kind": "other",
       "path": "assets/shaders/slang/sprites.slang",
-      "sizeBytes": 4400
+      "sizeBytes": 4283
     },
     {
       "importer": "TextScriptImporter",
       "kind": "other",
       "path": "assets/shaders/slang/ui_overlay.slang",
-      "sizeBytes": 2173
-    },
-    {
-      "importer": "DefaultImporter",
-      "kind": "other",
-      "path": "assets/shaders/sprites.frag.spv",
-      "sizeBytes": 1436
-    },
-    {
-      "importer": "DefaultImporter",
-      "kind": "other",
-      "path": "assets/shaders/sprites.vert.spv",
-      "sizeBytes": 2980
-    },
-    {
-      "importer": "DefaultImporter",
-      "kind": "other",
-      "path": "assets/shaders/ui_overlay.frag.spv",
-      "sizeBytes": 844
-    },
-    {
-      "importer": "DefaultImporter",
-      "kind": "other",
-      "path": "assets/shaders/ui_overlay.vert.spv",
-      "sizeBytes": 756
+      "sizeBytes": 2270
     },
     {
       "importer": "TextureImporter",
@@ -1769,6 +1571,7 @@
       {
         "defaultJson": {
           "enabled": true,
+          "mode": "Translate",
           "scale": 1.0
         },
         "fields": [
@@ -1789,6 +1592,19 @@
             "readOnly": false,
             "structType": null,
             "variants": null
+          },
+          {
+            "arrayLen": null,
+            "inner": null,
+            "kind": "u8",
+            "name": "mode",
+            "readOnly": false,
+            "structType": null,
+            "variants": [
+              "Translate",
+              "Rotate",
+              "Scale"
+            ]
           }
         ],
         "isComponent": true,
@@ -3974,6 +3790,20 @@
     ]
   },
   "windows": [
+    {
+      "command": "window/toggle/sceneView",
+      "id": "sceneView",
+      "menuPath": "窗口/场景视图",
+      "shortcut": null,
+      "title": "场景视图"
+    },
+    {
+      "command": "window/toggle/gameView",
+      "id": "gameView",
+      "menuPath": "窗口/游戏视图",
+      "shortcut": null,
+      "title": "游戏视图"
+    },
     {
       "command": "window/toggle/docs",
       "id": "docs",

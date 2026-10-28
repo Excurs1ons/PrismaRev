@@ -817,6 +817,44 @@ impl Default for Skybox {
 
 /// World-space XYZ axis gizmo owned by an entity.
 ///
+/// 控制手柄显示模式（平移 / 旋转 / 缩放）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum GizmoMode {
+    #[default]
+    Translate,
+    Rotate,
+    Scale,
+}
+
+impl prism_reflect::ReflectType for GizmoMode {
+    fn field_type() -> prism_reflect::FieldType {
+        prism_reflect::FieldType::U8
+    }
+
+    fn enum_variants() -> Option<&'static [&'static str]> {
+        Some(&["Translate", "Rotate", "Scale"])
+    }
+
+    fn to_value(&self) -> prism_reflect::Value {
+        prism_reflect::Value::U64(match self {
+            Self::Translate => 0,
+            Self::Rotate => 1,
+            Self::Scale => 2,
+        })
+    }
+
+    fn from_value(value: prism_reflect::Value) -> Result<Self, prism_reflect::ReflectError> {
+        match value.as_u64()? {
+            0 => Ok(Self::Translate),
+            1 => Ok(Self::Rotate),
+            2 => Ok(Self::Scale),
+            other => Err(prism_reflect::ReflectError::BadData(format!(
+                "invalid GizmoMode discriminant {other}"
+            ))),
+        }
+    }
+}
+
 /// The gizmo uses the entity's `LocalToWorld` (position/rotation/scale)
 /// multiplied by [`Gizmo::scale`], so it can be placed and oriented like any
 /// other scene object. No `Gizmo` component means no gizmo is drawn.
@@ -827,6 +865,8 @@ pub struct Gizmo {
     pub enabled: bool,
     /// Additional uniform scale applied on top of the entity transform.
     pub scale: f32,
+    /// 显示手柄模式（平移箭头、旋转圆环、缩放手柄）。
+    pub mode: GizmoMode,
 }
 
 impl Default for Gizmo {
@@ -834,6 +874,7 @@ impl Default for Gizmo {
         Self {
             enabled: true,
             scale: 1.0,
+            mode: GizmoMode::Translate,
         }
     }
 }
