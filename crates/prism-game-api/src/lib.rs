@@ -115,32 +115,6 @@ impl<'a> GameWorld<'a> {
         self.input().screen
     }
 
-    /// 让宿主重新解析该实体的精灵贴图（改过 `SpriteRenderer::sprite_path`
-    /// 之后必须调用）。`SpriteRef` 是引擎内部的资产解析协议，不应该出现在
-    /// 用户项目里；插件后端会在资产能力位接好后走同一条实现。
-    pub fn refresh_sprite(&mut self, entity: EntityHandle) {
-        match &mut self.backend {
-            #[cfg(feature = "host")]
-            Backend::Host(world) => {
-                use prism_engine::scene::components::{SceneAssetId, SpriteRef};
-                let entity = entity_from_handle(entity);
-                let mut sprite = world
-                    .get::<SpriteRef>(entity)
-                    .cloned()
-                    .unwrap_or(SpriteRef {
-                        asset_id: SceneAssetId::generate(),
-                        texture_slot: 0,
-                        size: [0, 0],
-                        generation: 0,
-                    });
-                sprite.generation = 0;
-                world.insert(entity, sprite);
-            }
-            #[cfg(feature = "plugin")]
-            Backend::Plugin(_) => {}
-        }
-    }
-
     // ------------------------------------------------------------------
     // 资产（松散文件；`.pak` 内容仍由运行时资源包负责）
     // ------------------------------------------------------------------

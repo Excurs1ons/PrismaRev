@@ -123,8 +123,6 @@ impl LakeWorld {
                     ..SpriteRenderer::default()
                 },
             );
-            // 首次解析：`SpriteRef` 由宿主创建，项目侧不碰引擎的资产协议。
-            world.refresh_sprite(entity);
             world.set(entity, Active(true));
 
             // 水面反射：同一张贴图上下翻转、轴心改为顶部中心，
@@ -152,7 +150,6 @@ impl LakeWorld {
                         ..SpriteRenderer::default()
                     },
                 );
-                world.refresh_sprite(mirror);
                 world.set(mirror, Active(true));
                 mirror
             });
@@ -195,7 +192,6 @@ impl LakeWorld {
                     sprite.sprite_path = path.clone();
                     world.set(entity, sprite);
                 }
-                world.refresh_sprite(entity);
             }
         }
     }
