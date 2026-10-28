@@ -244,6 +244,7 @@ enum ActiveDrag {
         axis: Axis,
         start_world: Vec3,
         start_parameter: f32,
+        start_plane_offset: Vec3,
     },
     Rotate {
         index: usize,
@@ -506,7 +507,7 @@ impl HostState {
             height: self.height as f32,
         };
         match self.tool {
-            GizmoTool::Translate => gizmo::pick_axis(
+            GizmoTool::Translate => gizmo::pick_translate_handle(
                 &screen,
                 ctx.center,
                 length,
@@ -530,7 +531,7 @@ impl HostState {
         }
     }
 
-    /// 开始拖动选中实体的某根轴。
+    /// 开始拖动选中实体的某根轴或平面手柄。
     fn begin_drag(&mut self, axis: Axis, x: f32, y: f32) -> Result<(), String> {
         let ctx = self
             .gizmo_context()
@@ -544,14 +545,29 @@ impl HostState {
 
         match self.tool {
             GizmoTool::Translate => {
-                let start_parameter = gizmo::axis_parameter(origin, dir, ctx.center, axis.vector())
-                    .ok_or_else(|| "视线与这根轴平行，请换个角度".to_string())?;
-                self.drag = Some(ActiveDrag::Translate {
-                    index,
-                    axis,
-                    start_world: ctx.center,
-                    start_parameter,
-                });
+                if axis.is_plane() {
+                    let normal = axis.vector();
+                    let hit_pt = gizmo::plane_intersection_vector(origin, dir, ctx.center, normal)
+                        .ok_or_else(|| "视线与平面平行，请换个角度".to_string())?;
+                    self.drag = Some(ActiveDrag::Translate {
+                        index,
+                        axis,
+                        start_world: ctx.center,
+                        start_parameter: 0.0,
+                        start_plane_offset: hit_pt,
+                    });
+                } else {
+                    let start_parameter =
+                        gizmo::axis_parameter(origin, dir, ctx.center, axis.vector())
+                            .ok_or_else(|| "视线与这根轴平行，请换个角度".to_string())?;
+                    self.drag = Some(ActiveDrag::Translate {
+                        index,
+                        axis,
+                        start_world: ctx.center,
+                        start_parameter,
+                        start_plane_offset: Vec3::ZERO,
+                    });
+                }
             }
             GizmoTool::Rotate => {
                 let start_vec =
@@ -623,11 +639,29 @@ impl HostState {
                 axis,
                 start_world,
                 start_parameter,
+                start_plane_offset,
                 ..
             } => {
-                let parameter = gizmo::axis_parameter(origin, dir, start_world, axis.vector())?;
-                let delta = parameter - start_parameter;
-                let target = start_world + axis.vector() * delta;
+                let (target, text) = if axis.is_plane() {
+                    let normal = axis.vector();
+                    let hit_pt =
+                        gizmo::plane_intersection_vector(origin, dir, start_world, normal)?;
+                    let delta = hit_pt - start_plane_offset;
+                    let target = start_world + delta;
+                    let text = match axis {
+                        Axis::XZ => format!("XZ: ({:+.2}, {:+.2}) m", delta.x, delta.z),
+                        Axis::XY => format!("XY: ({:+.2}, {:+.2}) m", delta.x, delta.y),
+                        Axis::YZ => format!("YZ: ({:+.2}, {:+.2}) m", delta.y, delta.z),
+                        _ => format!("{}: {:+.2} m", axis.name().to_uppercase(), delta.length()),
+                    };
+                    (target, text)
+                } else {
+                    let parameter = gizmo::axis_parameter(origin, dir, start_world, axis.vector())?;
+                    let delta = parameter - start_parameter;
+                    let target = start_world + axis.vector() * delta;
+                    let text = format!("{}: {:+.2} m", axis.name().to_uppercase(), delta);
+                    (target, text)
+                };
                 let local = {
                     let world = self.app.engine_mut().world_mut();
                     let local = match world.get::<Parent>(ctx.entity).map(|parent| parent.0) {
@@ -653,7 +687,7 @@ impl HostState {
                 let feedback = DragFeedback {
                     tool: "translate".to_string(),
                     axis: axis.name().to_string(),
-                    text: format!("{}: {:+.2} m", axis.name().to_uppercase(), delta),
+                    text,
                     center_screen: center_screen.to_array(),
                     start_screen: None,
                     current_screen: None,
@@ -1994,6 +2028,36 @@ mod tests {
         assert_eq!(fb.tool, "scale");
         assert_eq!(fb.axis, "xyz");
         assert!(fb.text.contains("x"));
+        state.end_drag();
+    }
+
+    #[test]
+    fn dragging_planar_handle_translates_along_plane() {
+        let mut state = test_state("drag-plane");
+        // 相机在高处看着原点
+        state.orbit.pitch = 0.5;
+        state.orbit.distance = 10.0;
+        state.place_camera();
+        state.apply_selection(Some(1));
+
+        let ctx = state.gizmo_context().unwrap();
+        // XZ 面中间点
+        let plane_center = ctx.center + Vec3::new(0.5, 0.0, 0.5);
+        let screen_pt = gizmo::project(&ctx.view, ctx.fov, 200.0, 100.0, plane_center).unwrap();
+
+        state
+            .begin_drag(Axis::XZ, screen_pt.x, screen_pt.y)
+            .unwrap();
+        let res = state
+            .drag_to(screen_pt.x + 20.0, screen_pt.y + 10.0)
+            .unwrap();
+        let pos = res.position.expect("平移应返回 position");
+        let fb = res.feedback.expect("应返回 feedback");
+
+        // Y 轴没有移动（delta.y == 0）
+        assert!(pos[1].abs() < 1e-3, "XZ 拖动不应改动 Y: {pos:?}");
+        assert_eq!(fb.axis, "xz");
+        assert!(fb.text.contains("XZ:"));
         state.end_drag();
     }
 }

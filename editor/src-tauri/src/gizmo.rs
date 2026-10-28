@@ -37,22 +37,28 @@ impl GizmoTool {
     }
 }
 
-/// 世界坐标轴（Gizmo 的手柄分量）。
+/// 世界坐标轴与平面（Gizmo 的手柄分量）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Axis {
     X,
     Y,
     Z,
+    XY,
+    XZ,
+    YZ,
     XYZ,
 }
 
 impl Axis {
-    /// 前端下发的轴名（`"x"` / `"y"` / `"z"` / `"xyz"`）。
+    /// 前端下发的轴名（`"x"` / `"y"` / `"z"` / `"xy"` / `"xz"` / `"yz"` / `"xyz"`）。
     pub fn parse(text: &str) -> Option<Self> {
         match text {
             "x" | "X" => Some(Self::X),
             "y" | "Y" => Some(Self::Y),
             "z" | "Z" => Some(Self::Z),
+            "xy" | "XY" => Some(Self::XY),
+            "xz" | "XZ" => Some(Self::XZ),
+            "yz" | "YZ" => Some(Self::YZ),
             "xyz" | "XYZ" => Some(Self::XYZ),
             _ => None,
         }
@@ -64,20 +70,34 @@ impl Axis {
             Self::X => "x",
             Self::Y => "y",
             Self::Z => "z",
+            Self::XY => "xy",
+            Self::XZ => "xz",
+            Self::YZ => "yz",
             Self::XYZ => "xyz",
         }
     }
 
+    /// 是否是 2D 平面手柄。
+    pub fn is_plane(self) -> bool {
+        matches!(self, Self::XY | Self::XZ | Self::YZ)
+    }
+
+    /// 轴向方向向量（对平面手柄则是平面的法向量）。
     pub fn vector(self) -> Vec3 {
         match self {
             Self::X => Vec3::X,
             Self::Y => Vec3::Y,
             Self::Z => Vec3::Z,
+            Self::XY => Vec3::Z, // normal +Z
+            Self::XZ => Vec3::Y, // normal +Y
+            Self::YZ => Vec3::X, // normal +X
             Self::XYZ => Vec3::ONE,
         }
     }
 
     pub const ALL: [Self; 3] = [Self::X, Self::Y, Self::Z];
+    #[allow(dead_code)]
+    pub const PLANES: [Self; 3] = [Self::XY, Self::XZ, Self::YZ];
 }
 
 /// 世界空间里多长距离刚好占屏幕高度的 `fraction`（用于让 gizmo 保持屏幕比例）。
@@ -177,6 +197,82 @@ pub fn pick_axis(
         }
     }
     best.map(|(_, axis)| axis)
+}
+
+/// 2D 屏幕空间点是否落在三角形 abc 内。
+pub fn point_in_triangle(pt: Vec2, a: Vec2, b: Vec2, c: Vec2) -> bool {
+    let cross = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+    if cross.abs() < 1.0 {
+        // 退化三角形（视线与平面平行或近乎平行，面积近乎 0），不接受面拾取
+        return false;
+    }
+    let d1 = (pt.x - b.x) * (a.y - b.y) - (a.x - b.x) * (pt.y - b.y);
+    let d2 = (pt.x - c.x) * (b.y - c.y) - (b.x - c.x) * (pt.y - c.y);
+    let d3 = (pt.x - a.x) * (c.y - a.y) - (c.x - a.x) * (pt.y - a.y);
+
+    let has_neg = (d1 < -1e-4) || (d2 < -1e-4) || (d3 < -1e-4);
+    let has_pos = (d1 > 1e-4) || (d2 > 1e-4) || (d3 > 1e-4);
+
+    !(has_neg && has_pos)
+}
+
+/// 鼠标在哪个 2D 平面手柄角标内（XY / XZ / YZ）。
+pub fn pick_plane(screen: &Screen, center: Vec3, length: f32, cursor: Vec2) -> Option<Axis> {
+    let planes = [
+        (Axis::XY, Vec3::X, Vec3::Y),
+        (Axis::XZ, Vec3::X, Vec3::Z),
+        (Axis::YZ, Vec3::Y, Vec3::Z),
+    ];
+    let r_min = 0.23f32;
+    let r_max = 0.48f32;
+
+    let mut best: Option<(f32, Axis)> = None;
+
+    for (axis, a1, a2) in planes {
+        let c0 = center + (a1 * r_min + a2 * r_min) * length;
+        let c1 = center + (a1 * r_max + a2 * r_min) * length;
+        let c2 = center + (a1 * r_max + a2 * r_max) * length;
+        let c3 = center + (a1 * r_min + a2 * r_max) * length;
+
+        let (Some(p0), Some(p1), Some(p2), Some(p3)) = (
+            screen.project(c0),
+            screen.project(c1),
+            screen.project(c2),
+            screen.project(c3),
+        ) else {
+            continue;
+        };
+
+        let area = ((p1.x - p0.x) * (p2.y - p0.y) - (p1.y - p0.y) * (p2.x - p0.x)).abs()
+            + ((p3.x - p0.x) * (p2.y - p0.y) - (p3.y - p0.y) * (p2.x - p0.x)).abs();
+        if area < 0.5 {
+            // 视线几乎贴着平面（侧视），平面在屏幕上只剩一条极细的线，忽略面拾取
+            continue;
+        }
+
+        if point_in_triangle(cursor, p0, p1, p2) || point_in_triangle(cursor, p0, p2, p3) {
+            // 投影面积越大说明该平面朝向越正对相机，优先拾取
+            if best.map(|(b, _)| area > b).unwrap_or(true) {
+                best = Some((area, axis));
+            }
+        }
+    }
+
+    best.map(|(_, axis)| axis)
+}
+
+/// 鼠标在哪个平移手柄上（优先检测 2D 平面角标，若未命中再检测 1D 单轴手柄）。
+pub fn pick_translate_handle(
+    screen: &Screen,
+    center: Vec3,
+    length: f32,
+    cursor: Vec2,
+    threshold: f32,
+) -> Option<Axis> {
+    if let Some(plane) = pick_plane(screen, center, length, cursor) {
+        return Some(plane);
+    }
+    pick_axis(screen, center, length, cursor, threshold)
 }
 
 /// 射线（`origin + t · dir`，`dir` 归一化）与穿过 `center`、方向 `axis` 的
@@ -391,6 +487,18 @@ mod tests {
         assert_eq!(
             pick_rotate_axis(&screen, Vec3::ZERO, 1.5, pt, 12.0),
             Some(Axis::Z)
+        );
+    }
+
+    #[test]
+    fn picks_planar_handles() {
+        let screen = screen(view_from_eye(Vec3::new(5.0, 5.0, 5.0), Vec3::ZERO));
+        // XZ 平面在 (0.35 * 1.5, 0, 0.35 * 1.5) 附近
+        let xz_pt = screen.project(Vec3::new(0.5, 0.0, 0.5)).unwrap();
+        assert_eq!(pick_plane(&screen, Vec3::ZERO, 1.5, xz_pt), Some(Axis::XZ));
+        assert_eq!(
+            pick_translate_handle(&screen, Vec3::ZERO, 1.5, xz_pt, 12.0),
+            Some(Axis::XZ)
         );
     }
 }
