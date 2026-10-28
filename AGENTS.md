@@ -256,6 +256,18 @@ The user project's dependency chain must stay **UI-framework-free and editor-fre
     path without progress.
   - Project types (`IntroState`, fishing state machines) stay inside the project crate.
     They never enter engine/editor APIs: the host only holds opaque `*mut c_void`.
+  - **The ABI exposes operation classes, never type lists.** The bar for a new
+    capability bit: the operation cannot be expressed as "component read/write + engine
+    derivation". The current set is `LOGGING`, `WORLD_COMMANDS`, `COMPONENTS`, `DRAW`,
+    `ASSET`; asset IO is path-based and format-agnostic, so a new resource kind never
+    changes the ABI.
+  - **Ask whether the engine can derive it before asking for an API.** Engine-owned
+    runtime/derived state (`SpriteRef`, `MeshRef`, `MaterialRef`, `ComputedLayout`,
+    `LocalToWorld`, …) is written and read by the engine alone. A project needing it
+    means the derivation is missing — fix the engine rather than promoting the type to a
+    capability bit or a `GameWorld` method.
+  - **Only values with cross-boundary identity are versioned** (fixed index tables such
+    as key codes): they are part of the ABI contract, append-only and never reordered.
 - `prism-app` keeps the neutral `FrameHook` / `prism_render::external_overlay::SwapchainOverlay`
   seams for debug hosts and future tooling; main → render thread UI data crosses as a
   **type-erased** `OverlayMessage` (`Box<dyn FnOnce(&mut dyn SwapchainOverlay) + Send>`) via
