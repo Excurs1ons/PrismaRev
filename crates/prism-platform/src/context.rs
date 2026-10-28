@@ -35,6 +35,22 @@ pub fn raw_window_handles(window: &Window) -> anyhow::Result<SendWindowHandles> 
     })
 }
 
+/// Build raw Win32 handles for a host-owned child window.
+#[cfg(windows)]
+pub fn raw_win32_window_handles(hwnd: isize, hinstance: isize) -> SendWindowHandles {
+    use std::num::NonZeroIsize;
+    use winit::raw_window_handle::{Win32WindowHandle, WindowsDisplayHandle};
+
+    let mut window = Win32WindowHandle::new(
+        NonZeroIsize::new(hwnd).expect("native viewport HWND must be non-zero"),
+    );
+    window.hinstance = NonZeroIsize::new(hinstance);
+    SendWindowHandles {
+        display: RawDisplayHandle::Windows(WindowsDisplayHandle::new()),
+        window: RawWindowHandle::Win32(window),
+    }
+}
+
 impl PlatformContext {
     /// 在**主线程**创建 winit 窗口（快速，不触碰 Vulkan / GPU）。
     ///

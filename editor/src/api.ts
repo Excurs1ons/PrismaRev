@@ -635,6 +635,15 @@ export function editorPaths(): Promise<EditorPaths> {
  * `channel` 是 `@tauri-apps/api` 导出的 `Channel`；这里用 `unknown` 避免
  * 让 api.ts 依赖 Tauri 运行时（浏览器预览时不可用）。
  */
+/** 原生承载窗口矩形（屏幕物理像素；`visible=false` 时隐藏）。 */
+export interface NativeRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  visible: boolean;
+}
+
 export function viewportOpen(
   id: string,
   kind: "scene" | "game",
@@ -644,6 +653,7 @@ export function viewportOpen(
   channel: unknown,
   camera?: CameraOrbit,
   playing?: boolean,
+  rect?: NativeRect,
 ): Promise<ViewportSnapshot> {
   return call<ViewportSnapshot>("editor_viewport_open", {
     id,
@@ -654,6 +664,7 @@ export function viewportOpen(
     channel,
     camera: camera ?? null,
     playing: playing ?? null,
+    rect: rect ?? null,
   });
 }
 
@@ -665,6 +676,23 @@ export function viewportResize(id: string, width: number, height: number): Promi
 /** 面板不可见时暂停（停靠到后台标签）。 */
 export function viewportSetActive(id: string, active: boolean): Promise<void> {
   return call<void>("editor_viewport_set_active", { id, active });
+}
+
+/** 同步 Windows 原生 Vulkan 视口子窗口的屏幕矩形。 */
+export function viewportNativeBounds(
+  id: string,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  visible: boolean,
+): Promise<void> {
+  return call<void>("editor_viewport_native_bounds", { id, x, y, width, height, visible });
+}
+
+/** Scene view 光标形状（原生视口窗口不跟随 DOM cursor）。 */
+export function viewportNativeCursor(id: string, cursor: string): Promise<void> {
+  return call<void>("editor_viewport_native_cursor", { id, cursor });
 }
 
 /** Scene view 相机（轨道参数整体下发）。 */

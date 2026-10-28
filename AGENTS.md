@@ -150,9 +150,22 @@ deviating from those conventions is a bug. (`README.md` is the human-facing over
     （行的上/下 25% = 兄弟插入，中间 = 挂为子级，底部空白 = 变根）翻译成这三个命令。
   - **内置视口（2026-10-27）**：`sceneView` / `gameView` 两个 dock 面板由编辑器**进程内**
     的 engine 实例渲染，不再 spawn 游戏进程。
-    - 每个视口 = 一个线程 + 一个 `prism_app::App`（渲染走离屏 target），帧经 Tauri
-      `Channel`（8 字节宽高头 + RGBA8）推给 `components/ViewportPanel.vue` 的 canvas。
-      渲染分辨率上限 1600×900、30fps，面板不可见时暂停。
+    - 每个视口 = 一个线程 + 一个 `prism_app::App`。**Windows 走原生 surface**（见下一条），
+      其他平台仍走离屏 target + Tauri `Channel`（8 字节宽高头 + RGBA8）推给 canvas，
+      分辨率上限 1600×900。不再有人为帧率上限。
+    - **Windows 原生承载窗口**：Vulkan 直接呈现到编辑器自己的 popup 窗口，不读回 CPU、
+      不走 IPC。两个关键约束别踩：
+      - WebView2 的合成层盖住同一顶层窗口下**所有** `WS_CHILD`，子 HWND 永远不会显示
+        （实测连 z-order 0 都不行）。所以用 `WS_POPUP` + owner，配
+        `WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE`。
+      - `Win32WindowHandle` 必须带 `hinstance`，否则 `create_surface` 返回
+        `ERROR_INITIALIZATION_FAILED`；HWND 在 `editor_viewport_open` 里（UI 线程）
+        先建好再起渲染线程，否则静默退回离屏。`DestroyWindow` 也必须在 UI 线程。
+    - 原生窗口吃掉了那块屏幕区域，DOM 指针事件到不了页面：wndproc 把鼠标事件经
+      `viewport-native-input` 发回 WebView，前端拼成 `NativePointerLike` 复用同一套
+      `onPointerDown/Move/Up/Wheel`（轨道、gizmo 拖动、拾取、框选只有一份实现）。
+      指针捕获由 `SetCapture` 负责，键盘不转发（popup 是 `WS_EX_NOACTIVATE`，焦点留在 WebView）。
+      代价：canvas 区域内的 DOM 覆层（HUD、gizmo 悬停高亮）被盖住。
     - 场景来源是**当前编辑中的文档**：前端把（可能未保存的）JSON 发给后端，后端写
       `target/editor-preview/<id>.scene.json` 后由 `Engine::load_scene_json_file` 加载
       （`SceneSource::JsonFile` 路径），所以不依赖 `scenes.pak`、也不需要先 cook。

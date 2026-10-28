@@ -129,6 +129,8 @@ impl GroundGrid {
         let rasterizer = vk::PipelineRasterizationStateCreateInfo::default()
             .depth_clamp_enable(false)
             .rasterizer_discard_enable(false)
+            // The grid is already emitted as LINE_LIST geometry. Wireframe
+            // polygon mode is redundant here and requires fillModeNonSolid.
             .polygon_mode(vk::PolygonMode::FILL)
             .line_width(1.0)
             .cull_mode(vk::CullModeFlags::NONE)

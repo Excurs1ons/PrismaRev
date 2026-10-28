@@ -24,11 +24,13 @@ prism-app = { path = "../../crates/prism-app" }
 prism-engine = { path = "../../crates/prism-engine" }
 prism-scene = { path = "../../crates/prism-scene" }
 prism-runtime-host = { path = "../../crates/prism-runtime-host" }
+prism-platform = { path = "../../crates/prism-platform" }
 glam = "0.33"
 log = "0.4"
 env_logger = "0.11"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse"] }
 
 # 独立 workspace：不挂根 PrismaRev workspace（与 launcher/ 一致）。
 [workspace]

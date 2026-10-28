@@ -4191,12 +4191,14 @@ dependencies = [
  "prism-app",
  "prism-editor-api",
  "prism-engine",
+ "prism-platform",
  "prism-runtime-host",
  "prism-scene",
  "serde",
  "serde_json",
  "tauri",
  "tauri-build",
+ "windows",
 ]
 
 [[package]]

@@ -16,7 +16,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{channel as mpsc_channel, Receiver, Sender, TryRecvError};
+use std::sync::mpsc::{channel as mpsc_channel, Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -36,9 +36,6 @@ use tauri::State;
 use crate::gizmo::{self, Axis, GizmoTool};
 use crate::pick;
 
-/// 视口帧率上限。读回帧以显示器常见刷新率为目标，避免把内部渲染 FPS
-/// （它不包含 Tauri 传输与 canvas 绘制）误当成面板实际帧率。
-const TARGET_FPS: u32 = 60;
 /// 平移 gizmo 在屏幕高度上占的比例（箭头长度 ≈ 这个比例的 1/1.5 倍缩放）。
 const GIZMO_SCREEN_FRACTION: f32 = 0.18;
 /// 引擎里 `Gizmo` 箭头的世界长度（`prism-render/src/gizmo.rs` 的 `len`），
@@ -49,6 +46,8 @@ const GIZMO_PICK_SLOP: f32 = 10.0;
 /// 离屏渲染分辨率上限（超过则按比例缩小，canvas 负责放大）。
 const MAX_WIDTH: u32 = 1600;
 const MAX_HEIGHT: u32 = 900;
+/// 帧率日志间隔（仅模拟时输出）。
+const FPS_LOG_INTERVAL: Duration = Duration::from_secs(2);
 /// 面板不可见时的轮询间隔。
 const IDLE_POLL: Duration = Duration::from_millis(50);
 
@@ -92,6 +91,23 @@ impl ViewKind {
     }
 }
 
+/// 原生视口承载窗口的屏幕矩形（物理像素，含虚拟屏幕偏移）。
+#[cfg_attr(not(windows), allow(dead_code))]
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeRect {
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+    #[serde(default = "default_true")]
+    pub visible: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
 /// 前端可轮询的视口状态。
 #[derive(Clone, Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -104,6 +120,8 @@ pub struct ViewportSnapshot {
     pub height: u32,
     /// Play 模式是否被暂停（单步不会改变它）。
     pub paused: bool,
+    /// 该视口由原生承载窗口直接显示 GPU 画面（无 CPU 读回 / Channel 帧）。
+    pub native: bool,
     /// 项目模块编译进度（Game view；前端据此显示进度弹窗）。
     pub build: BuildProgress,
 }
@@ -130,6 +148,8 @@ struct Shared {
     running: AtomicBool,
     /// 面板是否可见：不可见时不 tick、不出帧（停靠被切成后台标签时省 GPU）。
     active: AtomicBool,
+    /// 渲染目标是原生承载窗口（不走 CPU 读回 / Channel）。
+    native: bool,
     fps: Mutex<f32>,
     entities: Mutex<usize>,
     error: Mutex<Option<String>>,
@@ -141,10 +161,11 @@ struct Shared {
 }
 
 impl Shared {
-    fn new(extent: (u32, u32)) -> Arc<Self> {
+    fn new(extent: (u32, u32), native: bool) -> Arc<Self> {
         Arc::new(Self {
             running: AtomicBool::new(true),
             active: AtomicBool::new(true),
+            native,
             fps: Mutex::new(0.0),
             entities: Mutex::new(0),
             error: Mutex::new(None),
@@ -165,6 +186,7 @@ impl Shared {
             width,
             height,
             paused: self.paused.load(Ordering::Relaxed),
+            native: self.native,
             build: self.build.lock().unwrap().progress.clone(),
         }
     }
@@ -179,9 +201,36 @@ struct ViewportHandle {
 }
 
 /// 所有视口（tauri `manage` 的单例状态）。
-#[derive(Default)]
 pub struct ViewportManager {
     views: Mutex<HashMap<String, ViewportHandle>>,
+    #[cfg(windows)]
+    native: Arc<Mutex<HashMap<String, NativeViewport>>>,
+}
+
+impl Default for ViewportManager {
+    fn default() -> Self {
+        Self {
+            views: Mutex::new(HashMap::new()),
+            #[cfg(windows)]
+            native: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+}
+
+#[cfg(windows)]
+struct NativeViewport {
+    hwnd: isize,
+    hinstance: isize,
+}
+
+#[cfg(windows)]
+impl Drop for NativeViewport {
+    fn drop(&mut self) {
+        // Intentionally does NOT destroy the window: `DestroyWindow` must run on
+        // the thread that created it (the UI thread), while this map is dropped
+        // from arbitrary threads. `editor_viewport_close` dispatches the destroy
+        // through `destroy_native_window` instead.
+    }
 }
 
 // ===========================================================================
@@ -1919,8 +1968,10 @@ fn viewport_thread(
     orbit: CameraOrbit,
     shared: Arc<Shared>,
     rx: Receiver<Job>,
+    native_surface: Option<(prism_platform::SendWindowHandles, Vec<String>)>,
 ) {
     let (width, height) = clamp_extent(width, height);
+    let native_mode = native_surface.is_some();
     // 模块在后台编译：视口先起来，进度经 `Shared::build` 报给前端。
     let mut state = HostState {
         project_session: None,
@@ -1930,7 +1981,14 @@ fn viewport_thread(
         project_module_copy: None,
         project_refresh_requested: false,
         components: builtin_component_registry(),
-        app: App::hosted(prism_engine::config::AppConfig::default()),
+        app: match native_surface {
+            Some((handles, extensions)) => App::hosted_surface(
+                prism_engine::config::AppConfig::default(),
+                handles,
+                extensions,
+            ),
+            None => App::hosted(prism_engine::config::AppConfig::default()),
+        },
         scene_path,
         kind,
         camera: None,
@@ -1952,6 +2010,12 @@ fn viewport_thread(
     if kind == ViewKind::Scene {
         state.app.render_settings_mut().show_grid = true;
     }
+    log::info!(
+        "viewport: starting {:?} at {}x{} (native={native_mode})",
+        kind,
+        width,
+        height
+    );
 
     match state.reload() {
         Ok(count) => *shared.entities.lock().unwrap() = count,
@@ -1969,8 +2033,32 @@ fn viewport_thread(
         }
     }
 
-    let frame_budget = Duration::from_millis(1000 / TARGET_FPS as u64);
+    let mut rendered_initial_frame = false;
+    let mut fps_log_at = Instant::now();
     while shared.running.load(Ordering::Relaxed) {
+        // Native Scene view is an editor camera, not a simulation loop. Once
+        // its initial image is presented, wait for an editor command instead
+        // of repeatedly extracting and submitting an unchanged scene.
+        if native_mode && kind == ViewKind::Scene && rendered_initial_frame {
+            match rx.recv_timeout(Duration::from_millis(20)) {
+                Ok(job) => job(&mut state),
+                Err(RecvTimeoutError::Timeout) => {
+                    // The render thread reports fatal failures (e.g. device lost)
+                    // out-of-band; surface it instead of idling forever.
+                    if let Some(failure) = state.app.render_failure() {
+                        log::warn!("viewport: render thread failed: {failure}");
+                        *shared.error.lock().unwrap() = Some(failure);
+                        break;
+                    }
+                    continue;
+                }
+                Err(RecvTimeoutError::Disconnected) => {
+                    shared.running.store(false, Ordering::Relaxed);
+                    break;
+                }
+            }
+        }
+
         let started = Instant::now();
 
         // 宿主命令（resize / camera / reload / playing / input）先于本帧生效。
@@ -2004,7 +2092,9 @@ fn viewport_thread(
                     .with_assets(&ENGINE_ASSETS);
                     commands.set_input(input);
                     let host = commands.api();
-                    if let Err(error) = project.tick(&host, frame_budget.as_secs_f32()) {
+                    if let Err(error) =
+                        project.tick(&host, started.elapsed().as_secs_f32().max(0.0005))
+                    {
                         log::warn!("viewport: project preview tick failed: {error}");
                         *shared.error.lock().unwrap() = Some(error.to_string());
                     }
@@ -2015,11 +2105,26 @@ fn viewport_thread(
                 queue_project_quads(&mut state, quads);
             }
             state.app.host_tick(simulate);
-            if let Some(frame) = state.app.take_hosted_frame() {
-                publish_frame(&shared, frame);
+            rendered_initial_frame = true;
+            if !native_mode {
+                if let Some(frame) = state.app.take_hosted_frame() {
+                    publish_frame(&shared, frame);
+                }
             }
             if let Some(stats) = state.app.render_stats() {
                 *shared.fps.lock().unwrap() = stats.fps;
+                // 持续模拟时每帧都真正渲染，周期性报一次实际帧率，
+                // 让「未设上限」可验证，而不是只靠肉眼判断。
+                if simulate && fps_log_at.elapsed() >= FPS_LOG_INTERVAL {
+                    fps_log_at = Instant::now();
+                    log::info!(
+                        "viewport {:?}: {:.0} fps ({:.2} ms/frame, native={})",
+                        state.kind,
+                        stats.fps,
+                        stats.frame_time_ms,
+                        native_mode,
+                    );
+                }
             }
             // 渲染线程挂了（无 Vulkan / 设备丢失）：让面板显示原因，别继续空转。
             if let Some(failure) = state.app.render_failure() {
@@ -2031,10 +2136,7 @@ fn viewport_thread(
             std::thread::sleep(IDLE_POLL);
         }
 
-        let elapsed = started.elapsed();
-        if elapsed < frame_budget {
-            std::thread::sleep(frame_budget - elapsed);
-        }
+        let _ = started;
     }
 
     log::info!("viewport: shutting down ({:?})", state.kind);
@@ -2370,8 +2472,6 @@ fn publish_frame(shared: &Shared, frame: prism_app::FrameImage) {
 }
 
 fn frame_sender(shared: Arc<Shared>, channel: Channel<InvokeResponseBody>) {
-    let frame_interval = Duration::from_millis(1000 / TARGET_FPS as u64);
-    let mut next_send = Instant::now();
     while shared.running.load(Ordering::Relaxed) {
         let mut latest = shared.latest_frame.lock().unwrap();
         while latest.is_none() && shared.running.load(Ordering::Relaxed) {
@@ -2381,12 +2481,6 @@ fn frame_sender(shared: Arc<Shared>, channel: Channel<InvokeResponseBody>) {
             continue;
         };
         drop(latest);
-
-        let now = Instant::now();
-        if now < next_send {
-            std::thread::sleep(next_send - now);
-        }
-        next_send = Instant::now() + frame_interval;
 
         let mut payload = Vec::with_capacity(8 + frame.pixels.len());
         payload.extend_from_slice(&frame.width.to_le_bytes());
@@ -2506,7 +2600,7 @@ fn write_snapshot(root: &Path, id: &str, doc: &serde_json::Value) -> Result<Path
 /// 打开一个视口（已存在则先关闭旧的）。
 #[tauri::command]
 #[allow(clippy::too_many_arguments)] // Tauri 命令参数按名字反序列化，打包成结构体反而更难用
-pub fn editor_viewport_open(
+pub async fn editor_viewport_open(
     id: String,
     kind: String,
     doc: serde_json::Value,
@@ -2515,35 +2609,94 @@ pub fn editor_viewport_open(
     channel: Channel<InvokeResponseBody>,
     camera: Option<CameraOrbit>,
     playing: Option<bool>,
+    rect: Option<NativeRect>,
+    #[allow(unused_variables)] app: tauri::AppHandle,
     manager: State<'_, ViewportManager>,
 ) -> Result<ViewportSnapshot, String> {
+    log::info!("viewport command: open id={id} kind={kind} size={width}x{height} rect={rect:?}");
     let kind = ViewKind::parse(&kind)?;
     let root = project_root()?;
     let preview = write_snapshot(&root, &id, &doc)?;
 
+    // The Vulkan surface is created from the native child HWND, so it must
+    // exist (and be positioned) before the render thread starts. Creating it
+    // here removes the ordering race with `editor_viewport_native_bounds`.
+    #[cfg(windows)]
+    if let Some(rect) = rect {
+        ensure_native_window(
+            &app,
+            &manager.native,
+            &id,
+            rect.x,
+            rect.y,
+            rect.width,
+            rect.height,
+            rect.visible,
+        )
+        .await?;
+    }
+
     let (tx, rx) = mpsc_channel::<Job>();
     let (w, h) = clamp_extent(width, height);
-    let shared = Shared::new((w, h));
-    let shared_thread = shared.clone();
-    let sender_shared = shared.clone();
     let path_thread = preview.clone();
     // Game view 只在 Play 时模拟：静默打开时保持「编辑预览」状态。
     let simulate = matches!(kind, ViewKind::Game) && playing.unwrap_or(false);
     let orbit = camera.unwrap_or_default();
 
+    #[cfg(windows)]
+    let native_surface = manager
+        .native
+        .lock()
+        .map_err(|_| "原生视口状态锁失败".to_string())?
+        .get(&id)
+        .map(|native| {
+            (
+                prism_platform::raw_win32_window_handles(native.hwnd, native.hinstance),
+                vec![
+                    "VK_KHR_surface".to_string(),
+                    "VK_KHR_win32_surface".to_string(),
+                ],
+            )
+        });
+    #[cfg(not(windows))]
+    let native_surface = None;
+    let native_mode = native_surface.is_some();
+
+    let shared = Shared::new((w, h), native_mode);
+    let shared_thread = shared.clone();
+    let sender_shared = shared.clone();
+
     let thread = std::thread::Builder::new()
         .name(format!("viewport-{id}"))
-        .spawn(move || viewport_thread(path_thread, kind, w, h, simulate, orbit, shared_thread, rx))
+        .spawn(move || {
+            viewport_thread(
+                path_thread,
+                kind,
+                w,
+                h,
+                simulate,
+                orbit,
+                shared_thread,
+                rx,
+                native_surface,
+            )
+        })
         .map_err(|e| format!("启动视口线程失败: {e}"))?;
-    let sender_thread = std::thread::Builder::new()
-        .name(format!("viewport-{id}-sender"))
-        .spawn(move || frame_sender(sender_shared, channel))
-        .map_err(|e| format!("启动视口发送线程失败: {e}"))?;
+    let sender_thread = if native_mode {
+        None
+    } else {
+        Some(
+            std::thread::Builder::new()
+                .name(format!("viewport-{id}-sender"))
+                .spawn(move || frame_sender(sender_shared, channel))
+                .map_err(|e| format!("启动视口发送线程失败: {e}"))?,
+        )
+    };
 
     let handle = ViewportHandle {
         tx,
         thread: Some(thread),
-        sender_thread: Some(sender_thread),
+        sender_thread,
         shared: shared.clone(),
         snapshot_path: preview,
     };
@@ -2557,6 +2710,440 @@ pub fn editor_viewport_open(
     }
     views.insert(id, handle);
     Ok(shared.snapshot())
+}
+
+/// Create or reposition the native Vulkan viewport child window.
+#[cfg(windows)]
+#[tauri::command]
+pub async fn editor_viewport_native_bounds(
+    id: String,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    visible: bool,
+    app: tauri::AppHandle,
+    manager: State<'_, ViewportManager>,
+) -> Result<(), String> {
+    log::info!(
+        "viewport command: native_bounds id={id} rect=({}, {}, {}x{}) visible={visible}",
+        x,
+        y,
+        width,
+        height,
+    );
+    ensure_native_window(&app, &manager.native, &id, x, y, width, height, visible).await
+}
+
+/// Create/reposition the native child window on the UI thread and wait for it.
+///
+/// Must be awaited **before** the render thread starts: the Vulkan surface is
+/// created from this HWND, so a missing window silently degrades the viewport to
+/// the offscreen (headless) path.
+#[cfg(windows)]
+async fn ensure_native_window(
+    app: &tauri::AppHandle,
+    native: &Arc<Mutex<HashMap<String, NativeViewport>>>,
+    id: &str,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    visible: bool,
+) -> Result<(), String> {
+    use tauri::Manager;
+    let parent = app
+        .get_webview_window("main")
+        .ok_or_else(|| "主编辑器窗口不存在".to_string())?;
+    let parent_hwnd = parent.hwnd().map_err(|error| error.to_string())?.0 as isize;
+    let native = native.clone();
+    let id = id.to_string();
+    let app_for_window = app.clone();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    parent
+        .run_on_main_thread(move || {
+            let result = update_native_window(
+                &app_for_window,
+                &native,
+                id,
+                windows::Win32::Foundation::HWND(parent_hwnd as *mut _),
+                x,
+                y,
+                width,
+                height,
+                visible,
+            );
+            let _ = done_tx.send(result);
+        })
+        .map_err(|error| error.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || done_rx.recv_timeout(Duration::from_secs(2)))
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| format!("等待主线程更新原生视口超时: {error}"))?
+}
+
+/// Per-window state for the native viewport popup.
+///
+/// Lives in the window's `GWLP_USERDATA` so the wndproc can forward mouse input
+/// to the WebView. Only touched from the UI thread (the message loop), which is
+/// why the interior mutability is a plain `Cell`.
+#[cfg(windows)]
+struct NativeInputSink {
+    app: tauri::AppHandle,
+    id: String,
+    buttons: std::cell::Cell<u32>,
+    tracking_leave: std::cell::Cell<bool>,
+    /// Cursor requested by the editor (`arrow` / `crosshair` / `sizeall` / `sizens`).
+    cursor: std::cell::Cell<&'static str>,
+}
+
+#[cfg(windows)]
+impl NativeInputSink {
+    /// Borrow the sink attached to `hwnd`, if any.
+    ///
+    /// # Safety
+    /// The pointer must have been installed by [`Self::install`] and live for
+    /// the window's lifetime (it is freed in `destroy_native_window`).
+    unsafe fn from_window(hwnd: windows::Win32::Foundation::HWND) -> Option<&'static Self> {
+        use windows::Win32::UI::WindowsAndMessaging::{GetWindowLongPtrW, GWLP_USERDATA};
+        let raw = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *const Self;
+        unsafe { raw.as_ref() }
+    }
+
+    unsafe fn install(hwnd: windows::Win32::Foundation::HWND, sink: Self) {
+        use windows::Win32::UI::WindowsAndMessaging::{SetWindowLongPtrW, GWLP_USERDATA};
+        let raw = Box::into_raw(Box::new(sink));
+        unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, raw as isize) };
+    }
+
+    fn emit(&self, kind: &str, x: f32, y: f32, button: i32, wheel: f32) {
+        use tauri::Emitter;
+        let payload = NativeInputPayload {
+            id: self.id.clone(),
+            kind: kind.to_string(),
+            x,
+            y,
+            button,
+            buttons: self.buttons.get(),
+            alt: key_down(0x12),
+            shift: key_down(0x10),
+            ctrl: key_down(0x11),
+            wheel,
+        };
+        let _ = self.app.emit("viewport-native-input", payload.clone());
+        log::debug!(
+            "native input: viewport={} kind={} x={:.0} y={:.0} button={} buttons={}",
+            payload.id,
+            payload.kind,
+            payload.x,
+            payload.y,
+            payload.button,
+            payload.buttons,
+        );
+    }
+
+    unsafe fn handle_message(
+        &self,
+        hwnd: windows::Win32::Foundation::HWND,
+        msg: u32,
+        wparam: windows::Win32::Foundation::WPARAM,
+        lparam: windows::Win32::Foundation::LPARAM,
+    ) {
+        use windows::Win32::UI::Input::KeyboardAndMouse::{
+            ReleaseCapture, SetCapture, TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT,
+        };
+        use windows::Win32::UI::WindowsAndMessaging::{
+            LoadCursorW, SetCursor, IDC_ARROW, IDC_CROSS, IDC_SIZEALL, IDC_SIZENS, WM_LBUTTONDOWN,
+            WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
+            WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR,
+        };
+        // `WM_MOUSELEAVE` lives under `Win32::UI::Controls` in the windows crate;
+        // the value is stable, so keeping it local avoids enabling that feature.
+        const WM_MOUSELEAVE: u32 = 0x02A3;
+        let raw = lparam.0 as isize;
+        let px = (raw & 0xFFFF) as u16 as i16 as f32;
+        let py = ((raw >> 16) & 0xFFFF) as u16 as i16 as f32;
+
+        if msg == WM_SETCURSOR {
+            // `SetCursor` is transient and reset by the default handler, so the
+            // requested shape has to be re-asserted on every cursor message.
+            let id = match self.cursor.get() {
+                "crosshair" => IDC_CROSS,
+                "sizeall" => IDC_SIZEALL,
+                "sizens" => IDC_SIZENS,
+                _ => IDC_ARROW,
+            };
+            if let Ok(cursor) = unsafe { LoadCursorW(None, id) } {
+                unsafe { SetCursor(Some(cursor)) };
+            }
+            return;
+        }
+
+        match msg {
+            WM_MOUSEMOVE => {
+                self.sync_buttons();
+                if !self.tracking_leave.get() {
+                    let mut track = TRACKMOUSEEVENT {
+                        cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
+                        dwFlags: TME_LEAVE,
+                        hwndTrack: hwnd,
+                        dwHoverTime: 0,
+                    };
+                    let _ = unsafe { TrackMouseEvent(&mut track) };
+                    self.tracking_leave.set(true);
+                }
+                self.emit("move", px, py, -1, 0.0);
+            }
+            WM_MOUSELEAVE => {
+                self.tracking_leave.set(false);
+                self.emit("leave", px, py, -1, 0.0);
+            }
+            WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN => {
+                self.sync_buttons();
+                let _ = unsafe { SetCapture(hwnd) };
+                let button = match msg {
+                    WM_LBUTTONDOWN => 0,
+                    WM_RBUTTONDOWN => 2,
+                    _ => 1,
+                };
+                self.emit("down", px, py, button, 0.0);
+            }
+            WM_LBUTTONUP | WM_RBUTTONUP | WM_MBUTTONUP => {
+                self.sync_buttons();
+                let _ = unsafe { ReleaseCapture() };
+                let button = match msg {
+                    WM_LBUTTONUP => 0,
+                    WM_RBUTTONUP => 2,
+                    _ => 1,
+                };
+                self.emit("up", px, py, button, 0.0);
+            }
+            WM_MOUSEWHEEL => {
+                // High word of wParam is the signed wheel delta (120 = one notch).
+                let delta = ((wparam.0 >> 16) & 0xFFFF) as u16 as i16 as f32;
+                // DOM convention: wheel-forward (positive delta) scrolls up = negative deltaY.
+                self.emit("wheel", px, py, -1, -delta * (100.0 / 120.0));
+            }
+            _ => {}
+        }
+    }
+
+    fn sync_buttons(&self) {
+        // Recompute from the real button state so drags that left the window
+        // keep the right mask.
+        let mut mask = 0u32;
+        if key_down(0x01) {
+            mask |= 1;
+        }
+        if key_down(0x02) {
+            mask |= 2;
+        }
+        if key_down(0x04) {
+            mask |= 4;
+        }
+        self.buttons.set(mask);
+    }
+}
+
+/// Win32 `GetKeyState(...) < 0` → key is currently down.
+#[cfg(windows)]
+fn key_down(vk: i32) -> bool {
+    unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetKeyState(vk) < 0 }
+}
+
+#[cfg(windows)]
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeInputPayload {
+    id: String,
+    kind: String,
+    /// Popup-local physical pixels (divide by `devicePixelRatio` for CSS px).
+    x: f32,
+    y: f32,
+    button: i32,
+    buttons: u32,
+    alt: bool,
+    shift: bool,
+    ctrl: bool,
+    wheel: f32,
+}
+
+#[cfg(windows)]
+fn update_native_window(
+    app: &tauri::AppHandle,
+    native_state: &Arc<Mutex<HashMap<String, NativeViewport>>>,
+    id: String,
+    parent: windows::Win32::Foundation::HWND,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    visible: bool,
+) -> Result<(), String> {
+    use std::mem::zeroed;
+    use windows::core::w;
+    use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
+    use windows::Win32::Graphics::Gdi::HBRUSH;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        CreateWindowExW, DefWindowProcW, GetWindowLongPtrW, RegisterClassW, SetWindowPos,
+        ShowWindow, CS_HREDRAW, CS_VREDRAW, GWLP_HINSTANCE, HWND_TOP, SWP_NOACTIVATE,
+        SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNOACTIVATE, WNDCLASSW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+        WS_POPUP, WS_VISIBLE,
+    };
+
+    // Mouse input must be forwarded to the WebView: the popup owns the pixels
+    // in that screen region, so DOM pointer events never reach the page.
+    // Keyboard is intentionally NOT forwarded — the popup is `WS_EX_NOACTIVATE`
+    // and never takes focus, so shortcuts keep working in the WebView.
+    unsafe extern "system" fn viewport_proc(
+        hwnd: HWND,
+        msg: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> LRESULT {
+        if let Some(sink) = unsafe { NativeInputSink::from_window(hwnd) } {
+            unsafe { sink.handle_message(hwnd, msg, wparam, lparam) };
+        }
+        unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+    }
+    let mut native = native_state
+        .lock()
+        .map_err(|_| "原生视口状态锁失败".to_string())?;
+    let existing = native.get(&id).map(|entry| HWND(entry.hwnd as *mut _));
+    if width < 2 || height < 2 || !visible {
+        if let Some(hwnd) = existing {
+            unsafe {
+                let _ = ShowWindow(hwnd, SW_HIDE);
+            }
+        }
+        return Ok(());
+    }
+
+    let hwnd = if let Some(hwnd) = existing {
+        hwnd
+    } else {
+        let instance = HINSTANCE(unsafe { GetWindowLongPtrW(parent, GWLP_HINSTANCE) } as *mut _);
+        let class_name = w!("PrismaRevNativeViewport");
+        // Diagnostic: `PRISMREV_VIEWPORT_DEBUG_BG=1` fills the child with solid
+        // red so we can tell "window not on screen" from "Vulkan not composited".
+        let debug_brush = if std::env::var_os("PRISMREV_VIEWPORT_DEBUG_BG").is_some() {
+            unsafe {
+                windows::Win32::Graphics::Gdi::CreateSolidBrush(
+                    windows::Win32::Foundation::COLORREF(0x0000_00FF),
+                )
+            }
+        } else {
+            HBRUSH::default()
+        };
+        let class = WNDCLASSW {
+            style: CS_HREDRAW | CS_VREDRAW,
+            lpfnWndProc: Some(viewport_proc),
+            hInstance: instance,
+            hCursor: unsafe {
+                windows::Win32::UI::WindowsAndMessaging::LoadCursorW(
+                    None,
+                    windows::Win32::UI::WindowsAndMessaging::IDC_ARROW,
+                )
+                .unwrap_or_default()
+            },
+            hbrBackground: debug_brush,
+            lpszClassName: class_name,
+            ..unsafe { zeroed() }
+        };
+        unsafe { RegisterClassW(&class) };
+        // Owned popup, NOT a child window: WebView2 paints through a DWM
+        // composition layer that covers every GDI/Vulkan child of the same
+        // top-level window (verified: a solid-red child stayed invisible).
+        // An owned window is always composited above its owner.
+        let popup = unsafe {
+            CreateWindowExW(
+                WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+                class_name,
+                w!(""),
+                WS_POPUP | WS_VISIBLE,
+                x,
+                y,
+                width,
+                height,
+                Some(parent), // owner
+                None,
+                Some(instance),
+                None,
+            )
+        }
+        .map_err(|error| format!("创建原生视口窗口失败: {error}"))?;
+        unsafe {
+            NativeInputSink::install(
+                popup,
+                NativeInputSink {
+                    app: app.clone(),
+                    id: id.clone(),
+                    buttons: std::cell::Cell::new(0),
+                    tracking_leave: std::cell::Cell::new(false),
+                    cursor: std::cell::Cell::new("arrow"),
+                },
+            )
+        };
+        native.insert(
+            id,
+            NativeViewport {
+                hwnd: popup.0 as isize,
+                hinstance: instance.0 as isize,
+            },
+        );
+        popup
+    };
+
+    unsafe {
+        // Owned windows use absolute screen coordinates, so no ScreenToClient.
+        SetWindowPos(
+            hwnd,
+            Some(HWND_TOP),
+            x,
+            y,
+            width,
+            height,
+            SWP_NOACTIVATE | SWP_SHOWWINDOW,
+        )
+        .map_err(|error| format!("调整原生视口窗口失败: {error}"))?;
+        let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+    }
+    Ok(())
+}
+
+/// Scene view 的光标形状（原生承载窗口拿不到 DOM cursor）。
+#[cfg(windows)]
+#[tauri::command]
+pub fn editor_viewport_native_cursor(
+    id: String,
+    cursor: String,
+    app: tauri::AppHandle,
+    manager: State<'_, ViewportManager>,
+) -> Result<(), String> {
+    use tauri::Manager;
+    let hwnd = match manager.native.lock() {
+        Ok(native) => native.get(&id).map(|entry| entry.hwnd),
+        Err(_) => return Err("原生视口状态锁失败".to_string()),
+    };
+    let Some(hwnd) = hwnd else {
+        return Ok(());
+    };
+    let kind: &'static str = match cursor.as_str() {
+        "crosshair" => "crosshair",
+        "sizeall" => "sizeall",
+        "sizens" => "sizens",
+        _ => "arrow",
+    };
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.run_on_main_thread(move || unsafe {
+            if let Some(sink) =
+                NativeInputSink::from_window(windows::Win32::Foundation::HWND(hwnd as *mut _))
+            {
+                sink.cursor.set(kind);
+            }
+        });
+    }
+    Ok(())
 }
 
 /// 面板尺寸变化（前端 `ResizeObserver`，物理像素）。
@@ -2587,6 +3174,7 @@ pub fn editor_viewport_resize(
 pub fn editor_viewport_set_active(
     id: String,
     active: bool,
+    app: tauri::AppHandle,
     manager: State<'_, ViewportManager>,
 ) -> Result<(), String> {
     let views = manager
@@ -2595,6 +3183,30 @@ pub fn editor_viewport_set_active(
         .map_err(|_| "视口状态锁失败".to_string())?;
     if let Some(handle) = views.get(&id) {
         handle.shared.active.store(active, Ordering::Relaxed);
+    }
+    #[cfg(windows)]
+    if let Some(hwnd) = manager
+        .native
+        .lock()
+        .unwrap()
+        .get(&id)
+        .map(|native| native.hwnd)
+    {
+        use tauri::Manager;
+        let window = app
+            .get_webview_window("main")
+            .ok_or_else(|| "主编辑器窗口不存在".to_string())?;
+        window
+            .run_on_main_thread(move || {
+                use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE, SW_SHOW};
+                unsafe {
+                    let _ = ShowWindow(
+                        windows::Win32::Foundation::HWND(hwnd as *mut _),
+                        if active { SW_SHOW } else { SW_HIDE },
+                    );
+                }
+            })
+            .map_err(|error| error.to_string())?;
     }
     Ok(())
 }
@@ -3170,19 +3782,65 @@ pub fn editor_viewport_stats(
 
 /// 关闭视口并清理快照。
 #[tauri::command]
-pub fn editor_viewport_close(
+pub async fn editor_viewport_close(
     id: String,
+    #[allow(unused_variables)] app: tauri::AppHandle,
     manager: State<'_, ViewportManager>,
 ) -> Result<bool, String> {
-    let mut views = manager
-        .views
-        .lock()
-        .map_err(|_| "视口状态锁失败".to_string())?;
-    let Some(mut handle) = views.remove(&id) else {
+    let handle = {
+        let mut views = manager
+            .views
+            .lock()
+            .map_err(|_| "视口状态锁失败".to_string())?;
+        views.remove(&id)
+    };
+    let Some(mut handle) = handle else {
         return Ok(false);
     };
     stop_handle(&mut handle);
+    #[cfg(windows)]
+    {
+        let native = manager
+            .native
+            .lock()
+            .map_err(|_| "原生视口状态锁失败".to_string())?
+            .remove(&id);
+        if let Some(native) = native {
+            destroy_native_window(&app, native.hwnd).await?;
+        }
+    }
     Ok(true)
+}
+
+/// Destroy a native child window on the thread that created it.
+#[cfg(windows)]
+async fn destroy_native_window(app: &tauri::AppHandle, hwnd: isize) -> Result<(), String> {
+    use tauri::Manager;
+    use windows::Win32::UI::WindowsAndMessaging::{DestroyWindow, SetWindowLongPtrW};
+    let Some(parent) = app.get_webview_window("main") else {
+        return Ok(());
+    };
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    parent
+        .run_on_main_thread(move || {
+            unsafe {
+                use windows::Win32::UI::WindowsAndMessaging::{GetWindowLongPtrW, GWLP_USERDATA};
+                let hwnd = windows::Win32::Foundation::HWND(hwnd as *mut _);
+                // Free the input sink we installed on creation (UI thread owns it).
+                let raw = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut NativeInputSink;
+                if !raw.is_null() {
+                    let _ = SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+                    drop(Box::from_raw(raw));
+                }
+                let _ = DestroyWindow(hwnd);
+            }
+            let _ = done_tx.send(());
+        })
+        .map_err(|error| error.to_string())?;
+    let _ =
+        tauri::async_runtime::spawn_blocking(move || done_rx.recv_timeout(Duration::from_secs(2)))
+            .await;
+    Ok(())
 }
 
 fn stop_handle(handle: &mut ViewportHandle) {

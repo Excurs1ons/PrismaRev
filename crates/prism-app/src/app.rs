@@ -146,6 +146,9 @@ pub struct App {
     /// `Some` 表示本实例没有 winit 窗口：`tick_sim` 用它写 `ScreenSize`/宽高比，
     /// 渲染线程跑 `RenderTarget::Offscreen`，帧经 [`RenderShared::take_frame`] 读回。
     host_extent: Option<(u32, u32)>,
+    /// Optional native window surface supplied by an embedding host.
+    host_surface: Option<(prism_platform::SendWindowHandles, Vec<String>)>,
+    host_native_surface: bool,
 
     /// 最近一次 `ModifiersChanged` 记录的修饰键状态。
     ///
@@ -165,6 +168,26 @@ pub struct App {
     /// Fixed-step accumulator in nanoseconds. Keeping this as an integer
     /// avoids float drift and makes simulation time independent of event rate.
     fixed_accumulator: Duration,
+}
+
+/// 把场景里写的资产路径归一化成 pak 内的相对路径。
+///
+/// 场景作者常写 `assets/` 前缀或相对路径（`../x.hdr`），而 pak 的键是
+/// 去掉 `assets/` 且已经解析过 `.`/`..` 的相对路径；不归一化就会查不到。
+fn normalize_asset_path(path: &str) -> String {
+    let unified = path.replace('\\', "/");
+    let stripped = unified.strip_prefix("assets/").unwrap_or(unified.as_str());
+    let mut parts: Vec<&str> = Vec::new();
+    for segment in stripped.split('/') {
+        match segment {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            other => parts.push(other),
+        }
+    }
+    parts.join("/")
 }
 
 impl App {
@@ -188,6 +211,19 @@ impl App {
     /// 编辑中的 `.scene.json` 载入，渲染走离屏目标，帧由宿主取走。
     pub fn hosted(config: AppConfig) -> Self {
         Self::build(config, false)
+    }
+
+    /// Hosted engine backed by a host-owned native window surface.
+    ///
+    /// The host window must outlive the App and its render thread.
+    pub fn hosted_surface(
+        config: AppConfig,
+        handles: prism_platform::SendWindowHandles,
+        extensions: Vec<String>,
+    ) -> Self {
+        let mut app = Self::build(config, false);
+        app.host_surface = Some((handles, extensions));
+        app
     }
 
     fn build(config: AppConfig, load_scene: bool) -> Self {
@@ -237,6 +273,8 @@ impl App {
             audio_decode_rx: None,
             needs_resize: false,
             host_extent: None,
+            host_surface: None,
+            host_native_surface: false,
             modifiers: winit::keyboard::ModifiersState::empty(),
             fatal_error: None,
             suspended: false,
@@ -362,7 +400,18 @@ impl App {
         let scene_env = self.engine.as_ref().and_then(|engine| {
             engine.current_scene_env_bytes_with_provider(&mut self.asset_resolver.resource_manager)
         });
-        self.spawn_render_thread_with(RenderTarget::Offscreen { width, height }, scene_env, None);
+        let target = match self.host_surface.take() {
+            Some((handles, extensions)) => {
+                self.host_native_surface = true;
+                RenderTarget::NativeSurface {
+                    handles,
+                    extensions,
+                    vsync: false,
+                }
+            }
+            None => RenderTarget::Offscreen { width, height },
+        };
+        self.spawn_render_thread_with(target, scene_env, None);
     }
 
     /// 调整离屏渲染尺寸（面板 resize）；下一帧起生效。
@@ -376,7 +425,12 @@ impl App {
         if let Some(shared) = self.render_shared.as_ref() {
             let (w, h) = size;
             shared.send_renderer_message(Box::new(move |renderer| {
-                if let Err(e) = renderer.resize_offscreen(w, h) {
+                let result = if renderer.is_headless() {
+                    renderer.resize_offscreen(w, h)
+                } else {
+                    renderer.recreate_swapchain()
+                };
+                if let Err(e) = result {
                     log::warn!("host resize ({w}x{h}) failed: {e:#}");
                 }
             }));
@@ -389,7 +443,11 @@ impl App {
     pub fn host_tick(&mut self, simulate: bool) {
         self.tick_sim(simulate);
         if let Some(shared) = self.render_shared.as_ref() {
-            shared.request_frame();
+            if self.host_native_surface {
+                shared.wake_renderer();
+            } else {
+                shared.request_frame();
+            }
         }
     }
 
@@ -490,12 +548,12 @@ impl App {
         else {
             return;
         };
-        let normalized = path.replace('\\', "/");
-        let normalized = normalized
-            .strip_prefix("assets/")
-            .unwrap_or(normalized.as_str())
-            .to_string();
-        let Some(id) = self.asset_resolver.resource_manager.id_by_path(&normalized) else {
+        let normalized = normalize_asset_path(&path);
+        let Some(id) = self
+            .asset_resolver
+            .resource_manager
+            .id_by_path(normalized.as_str())
+        else {
             log::warn!("hosted: environment `{path}` not found in package");
             return;
         };
@@ -628,6 +686,9 @@ impl App {
         // 通知渲染线程停止。
         if let Some(ref running) = self.render_running {
             running.store(false, Ordering::Relaxed);
+        }
+        if let Some(shared) = self.render_shared.as_ref() {
+            shared.packet_ready.notify_all();
         }
 
         // 等待线程结束
@@ -1362,6 +1423,22 @@ fn engine_key_from_winit(code: winit::keyboard::KeyCode) -> prism_engine::input:
 mod tests {
     use super::*;
     use prism_platform::PlatformEvent;
+
+    /// 场景里写的环境贴图路径常见三种写法，都要落到 pak 的键上。
+    #[test]
+    fn environment_paths_normalize_to_package_keys() {
+        assert_eq!(
+            normalize_asset_path("../valley_of_desolation_1k.hdr"),
+            "valley_of_desolation_1k.hdr"
+        );
+        assert_eq!(normalize_asset_path("assets/env/sky.hdr"), "env/sky.hdr");
+        assert_eq!(normalize_asset_path("assets\\env\\sky.hdr"), "env/sky.hdr");
+        assert_eq!(normalize_asset_path("./env/./sky.hdr"), "env/sky.hdr");
+        assert_eq!(
+            normalize_asset_path("assets/env/../env/sky.hdr"),
+            "env/sky.hdr"
+        );
+    }
 
     fn touch_event(phase: winit::event::TouchPhase, id: u64) -> WindowEvent {
         WindowEvent::Touch(winit::event::Touch {

@@ -11,6 +11,7 @@
  * - Game view：Play 时模拟游戏循环；鼠标/键盘转发给引擎 `InputManager`。
  */
 import { Channel } from "@tauri-apps/api/core";
+import { listen as listenEvent } from "@tauri-apps/api/event";
 import {
   ArrowDownToLine,
   Box,
@@ -111,6 +112,8 @@ const message = ref<string | null>(null);
 const stats = ref<ViewportSnapshot | null>(null);
 const frames = ref(0);
 const displayFps = ref(0);
+/** 后端用原生承载窗口直出 GPU 画面（无 Channel 帧、无 canvas 内容）。 */
+const nativeMode = ref(false);
 
 /** Scene view 的轨道相机（唯一的状态持有者，整体下发给后端）。 */
 const orbit = ref<CameraOrbit>({ target: [0, 0, 0], yaw: -0.7, pitch: 0.35, distance: 12 });
@@ -123,6 +126,7 @@ let resizeObserver: ResizeObserver | null = null;
 let resizeTimer: number | undefined;
 let reloadTimer: number | undefined;
 let statsTimer: number | undefined;
+let unlistenNativeInput: (() => void) | null = null;
 let cameraPending = false;
 let isActive = true;
 let pendingFrame: ArrayBuffer | null = null;
@@ -133,6 +137,60 @@ let context2d: CanvasRenderingContext2D | null = null;
 let imageData: ImageData | null = null;
 /** 场景第一次出帧时自动框住内容；换文档后重置。 */
 let autoFramed = false;
+
+/** 后端原生承载窗口转发的鼠标事件载荷。 */
+interface NativeInputPayload {
+  id: string;
+  kind: "move" | "down" | "up" | "leave" | "wheel";
+  /** popup 局部物理像素。 */
+  x: number;
+  y: number;
+  button: number;
+  buttons: number;
+  alt: boolean;
+  shift: boolean;
+  ctrl: boolean;
+  wheel: number;
+}
+
+/**
+ * 原生模式下合成给现有指针处理器的最小事件形状。
+ *
+ * 复用同一套 orbit / gizmo / 拾取逻辑，而不是在 Rust 里重写一份：相机状态和
+ * 撤销都在前端。`native: true` 表示指针捕获由 Win32 `SetCapture` 负责，
+ * 不需要（也不能）再调用 `setPointerCapture`。
+ */
+interface NativePointerLike {
+  clientX: number;
+  clientY: number;
+  /** Game view 的 `sendInput` 用相对 canvas 的偏移。 */
+  offsetX: number;
+  offsetY: number;
+  button: number;
+  buttons: number;
+  altKey: boolean;
+  shiftKey: boolean;
+  ctrlKey: boolean;
+  metaKey: boolean;
+  pointerId: number;
+  native: true;
+  preventDefault: () => void;
+}
+
+type ViewportPointer = PointerEvent | NativePointerLike;
+
+function isNativePointer(event: ViewportPointer): event is NativePointerLike {
+  return (event as NativePointerLike).native === true;
+}
+
+/**
+ * 指针捕获：DOM 事件用 `setPointerCapture`，原生事件已由 Win32 `SetCapture`
+ * 捕获（对它调 DOM 捕获会抛 `NotFoundError`）。
+ */
+function capturePointer(canvas: HTMLCanvasElement, event: ViewportPointer) {
+  if (isNativePointer(event)) return;
+  canvas.setPointerCapture(event.pointerId);
+}
 
 /** 面板尺寸（物理像素），已含 devicePixelRatio。 */
 function physicalSize(): { width: number; height: number } {
@@ -145,12 +203,17 @@ function physicalSize(): { width: number; height: number } {
 }
 
 async function open() {
+  console.info("viewport open start", viewId, props.kind);
   if (!inTauri) {
     message.value = t("viewport.needDesktopOverlay");
     status.value = "error";
     return;
   }
   if (!props.doc || !props.path) {
+    console.info("viewport open skipped: document unavailable", viewId, {
+      hasDoc: !!props.doc,
+      path: props.path,
+    });
     status.value = "idle";
     return;
   }
@@ -182,7 +245,17 @@ async function open() {
       channel,
       isScene.value ? orbit.value : undefined,
       !isScene.value && props.playing,
+      nativeRect(),
     );
+    console.info("viewport open complete", viewId);
+    if (stats.value?.native) {
+      // 原生承载窗口直接显示 GPU 画面：没有 Channel 帧，面板按 live 处理，
+      // 否则会永远停在 “加载场景” 遮罩（它还盖在原生画面上面）。
+      nativeMode.value = true;
+      applyNativeCanvasSize(stats.value);
+      status.value = "live";
+      pendingFrame = null;
+    }
     pushSelection();
     if (props.activeTool && isScene.value) {
       void api.viewportSetTool(viewId, props.activeTool).catch(() => undefined);
@@ -283,6 +356,81 @@ function setActive(active: boolean) {
   void api.viewportSetActive(viewId, active).catch(() => undefined);
 }
 
+/** 面板在屏幕上的物理像素矩形（原生承载窗口用）。 */
+function nativeRect(): api.NativeRect {
+  const rect = container.value?.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  const left = rect?.left ?? 0;
+  const top = rect?.top ?? 0;
+  const width = rect?.width ?? 0;
+  const height = rect?.height ?? 0;
+  return {
+    x: Math.round(((window.screenX || 0) + left) * dpr),
+    y: Math.round(((window.screenY || 0) + top) * dpr),
+    width: Math.max(1, Math.round(width * dpr)),
+    height: Math.max(1, Math.round(height * dpr)),
+    visible: width > 1 && height > 1,
+  };
+}
+
+async function syncNativeBounds() {
+  if (!inTauri || !container.value || !canRender.value) return;
+  const r = nativeRect();
+  await api.viewportNativeBounds(viewId, r.x, r.y, r.width, r.height, r.visible);
+}
+
+/** 原生模式没有 Channel 帧，canvas 的位图尺寸要按实际渲染分辨率手动对齐。 */
+function applyNativeCanvasSize(snapshot: ViewportSnapshot) {
+  const canvas = canvasEl.value;
+  if (!canvas || !snapshot.width || !snapshot.height) return;
+  if (canvas.width !== snapshot.width) canvas.width = snapshot.width;
+  if (canvas.height !== snapshot.height) canvas.height = snapshot.height;
+}
+
+/** 把 popup 局部物理像素翻译成页面 CSS 坐标下的事件。 */
+function nativePointer(payload: NativeInputPayload, button: number): NativePointerLike {
+  const rect = container.value?.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  const localX = payload.x / dpr;
+  const localY = payload.y / dpr;
+  return {
+    clientX: (rect?.left ?? 0) + localX,
+    clientY: (rect?.top ?? 0) + localY,
+    offsetX: localX,
+    offsetY: localY,
+    button,
+    buttons: payload.buttons,
+    altKey: payload.alt,
+    shiftKey: payload.shift,
+    ctrlKey: payload.ctrl,
+    metaKey: false,
+    pointerId: 1,
+    native: true,
+    preventDefault: () => undefined,
+  };
+}
+
+/** 原生承载窗口吃掉了视口内的 DOM 指针事件，这里把它们接回同一套处理器。 */
+function onNativeInput(event: { payload: NativeInputPayload }) {
+  const payload = event.payload;
+  if (payload.id !== viewId || !nativeMode.value) return;
+  if (payload.kind === "wheel") {
+    onWheel({
+      deltaY: payload.wheel,
+      preventDefault: () => undefined,
+    } as unknown as WheelEvent);
+    return;
+  }
+  if (payload.kind === "leave") {
+    onPointerLeave();
+    return;
+  }
+  const pointer = nativePointer(payload, payload.button);
+  if (payload.kind === "move") onPointerMove(pointer);
+  else if (payload.kind === "down") onPointerDown(pointer);
+  else if (payload.kind === "up") onPointerUp(pointer);
+}
+
 function scheduleReload() {
   if (!inTauri) return;
   // 拖动 gizmo 期间文档每帧都在变，重载会换掉 ECS 句柄；攒到松手后再同步。
@@ -308,7 +456,8 @@ function scheduleReload() {
       stats.value = await api.viewportReload(viewId, props.doc);
       scheduleFetchSelectionBounds();
       message.value = null;
-    } catch (error) {
+  } catch (error) {
+    console.error("viewport open failed", viewId, error);
       message.value = String(error);
       status.value = "error";
     }
@@ -616,7 +765,7 @@ function resetCameraView() {
   alignCameraTo({ yaw: -0.7, pitch: 0.35 });
 }
 
-function onPointerDown(event: PointerEvent) {
+function onPointerDown(event: ViewportPointer) {
   const canvas = canvasEl.value;
   if (!canvas) return;
   canvas.focus();
@@ -641,7 +790,7 @@ function onPointerDown(event: PointerEvent) {
         return;
       }
       lastPointer = { x: event.clientX, y: event.clientY };
-      canvas.setPointerCapture(event.pointerId);
+      capturePointer(canvas, event);
       event.preventDefault();
       return;
     }
@@ -652,7 +801,7 @@ function onPointerDown(event: PointerEvent) {
       flyMode.value = true;
       startFlyLoop();
       lastPointer = { x: event.clientX, y: event.clientY };
-      canvas.setPointerCapture(event.pointerId);
+      capturePointer(canvas, event);
       event.preventDefault();
       return;
     }
@@ -661,7 +810,7 @@ function onPointerDown(event: PointerEvent) {
     if (event.button === 1 || (event.button === 0 && event.shiftKey && !event.ctrlKey && !event.metaKey)) {
       dragMode.value = "pan";
       lastPointer = { x: event.clientX, y: event.clientY };
-      canvas.setPointerCapture(event.pointerId);
+      capturePointer(canvas, event);
       event.preventDefault();
       return;
     }
@@ -673,7 +822,7 @@ function onPointerDown(event: PointerEvent) {
       marqueeStart.value = { x: event.clientX, y: event.clientY };
       marqueeCurrent.value = { x: event.clientX, y: event.clientY };
       clickStart = { x: event.clientX, y: event.clientY, at: Date.now() };
-      canvas.setPointerCapture(event.pointerId);
+      capturePointer(canvas, event);
 
       if (point && props.activeTool !== "select") {
         void beginGizmoDrag(point, event, canvas);
@@ -689,7 +838,7 @@ function onPointerDown(event: PointerEvent) {
 /** 按在平移/旋转/缩放手柄上 → 后端开始拖动会话（`draggingAxis` 非空后 pointermove 变成移动实体）。 */
 async function beginGizmoDrag(
   point: { x: number; y: number },
-  event: PointerEvent,
+  event: ViewportPointer,
   canvas: HTMLCanvasElement,
 ) {
   if (cameraAnimFrame) {
@@ -711,7 +860,7 @@ async function beginGizmoDrag(
   marqueeCurrent.value = null;
   hoveredGizmo.value = null;
   draggingAxis.value = axis;
-  canvas.setPointerCapture(event.pointerId);
+  capturePointer(canvas, event);
   event.preventDefault();
 }
 
@@ -755,7 +904,7 @@ function onPointerLeave() {
   }
 }
 
-function onPointerMove(event: PointerEvent) {
+function onPointerMove(event: ViewportPointer) {
   if (isScene.value) {
     if (dragMode.value === "marquee") {
       marqueeCurrent.value = { x: event.clientX, y: event.clientY };
@@ -842,7 +991,7 @@ function pushDrag(point: { x: number; y: number }, snap: boolean, vsnap: boolean
   });
 }
 
-function onPointerUp(event: PointerEvent) {
+function onPointerUp(event: ViewportPointer) {
   if (isScene.value) {
     if (flyMode.value) {
       flyMode.value = false;
@@ -850,7 +999,7 @@ function onPointerUp(event: PointerEvent) {
     }
     if (dragMode.value === "marquee") {
       dragMode.value = null;
-      canvasEl.value?.releasePointerCapture(event.pointerId);
+      if (!isNativePointer(event)) canvasEl.value?.releasePointerCapture(event.pointerId);
       const start = marqueeStart.value;
       const current = marqueeCurrent.value;
       marqueeStart.value = null;
@@ -908,7 +1057,7 @@ function onPointerUp(event: PointerEvent) {
         cancelAnimationFrame(dragFrame);
         dragFrame = 0;
       }
-      canvasEl.value?.releasePointerCapture(event.pointerId);
+      if (!isNativePointer(event)) canvasEl.value?.releasePointerCapture(event.pointerId);
       void api.viewportDragEnd(viewId).catch(() => undefined);
       if (reloadPending) {
         reloadPending = false;
@@ -949,7 +1098,7 @@ function onPointerUp(event: PointerEvent) {
   void sendInput({ type: "mouseButton", button: event.button, pressed: false });
 }
 
-async function openContextMenu(event: PointerEvent) {
+async function openContextMenu(event: ViewportPointer) {
   const canvas = canvasEl.value;
   if (!canvas) return;
   const rect = canvas.getBoundingClientRect();
@@ -961,6 +1110,13 @@ async function openContextMenu(event: PointerEvent) {
   contextMenuWorldPos = await api.viewportRaycast(viewId, px, py).catch(() => null);
   const menuX = Math.min(window.innerWidth - 220, Math.max(10, event.clientX));
   const menuY = Math.min(window.innerHeight - 340, Math.max(10, event.clientY));
+  // 原生承载窗口是 Win32 popup，画在 WebView 之上；菜单开在视口内就会被它盖住，
+  // 所以先隐藏原生窗口，菜单关闭时（watcher）再恢复。
+  if (nativeMode.value) {
+    void api
+      .viewportNativeBounds(viewId, 0, 0, 1, 1, false)
+      .catch(() => undefined);
+  }
   contextMenu.value = { x: menuX, y: menuY };
   submenuOpen.value = false;
 }
@@ -1018,7 +1174,7 @@ function handleDelete() {
  * canvas 的宽高就是后端实际渲染分辨率（已按 1600×900 上限缩过），所以按比例换算，
  * 不依赖 devicePixelRatio。
  */
-function canvasPoint(event: PointerEvent): { x: number; y: number } | null {
+function canvasPoint(event: ViewportPointer): { x: number; y: number } | null {
   const canvas = canvasEl.value;
   if (!canvas || canvas.width === 0) return null;
   const rect = canvas.getBoundingClientRect();
@@ -1030,7 +1186,7 @@ function canvasPoint(event: PointerEvent): { x: number; y: number } | null {
 }
 
 /** 点选：把 CSS 坐标换算到 canvas **位图**坐标再交给后端。支持 Shift / Ctrl 多选。 */
-async function pickAt(event: PointerEvent) {
+async function pickAt(event: ViewportPointer) {
   if (!inTauri || !channel) return;
   const point = canvasPoint(event);
   if (!point) return;
@@ -1246,6 +1402,8 @@ function onWindowBlur() {
 
 onMounted(async () => {
   window.addEventListener("keyup", onWindowKeyUp);
+  document.addEventListener("visibilitychange", onWindowVisibility);
+  window.addEventListener("focus", onWindowVisibility);
   window.addEventListener("blur", onWindowBlur);
   if (!inTauri) {
     status.value = "error";
@@ -1263,21 +1421,39 @@ onMounted(async () => {
     const visible = !!rect && rect.width > 1 && rect.height > 1;
     setActive(visible);
     if (visible) scheduleResize();
+    syncNativeBounds();
   });
   if (container.value) resizeObserver.observe(container.value);
+  unlistenNativeInput = await listenEvent<NativeInputPayload>(
+    "viewport-native-input",
+    onNativeInput,
+  ).catch(() => null);
   statsTimer = window.setInterval(async () => {
     const snapshot = await api.viewportStats(viewId).catch(() => null);
     if (snapshot) {
       stats.value = snapshot;
       if (snapshot.error) message.value = snapshot.error;
+      if (snapshot.native) {
+        nativeMode.value = true;
+        applyNativeCanvasSize(snapshot);
+        // 原生窗口用屏幕坐标定位：窗口被拖动/最小化后这里负责重新对齐。
+        void syncNativeBounds().catch(() => undefined);
+      }
     }
   }, 1000);
+  // Geometry sync is best-effort and must not block viewport startup. The
+  // native child can be positioned again by ResizeObserver after layout.
   await open();
+  void syncNativeBounds().catch(() => undefined);
 });
 
 onBeforeUnmount(() => {
   window.removeEventListener("keyup", onWindowKeyUp);
+  document.removeEventListener("visibilitychange", onWindowVisibility);
+  window.removeEventListener("focus", onWindowVisibility);
   window.removeEventListener("blur", onWindowBlur);
+  unlistenNativeInput?.();
+  unlistenNativeInput = null;
   resizeObserver?.disconnect();
   resizeObserver = null;
   if (resizeTimer !== undefined) window.clearTimeout(resizeTimer);
@@ -1300,6 +1476,44 @@ watch(
     await open();
   },
 );
+/**
+ * 主窗口最小化 / 失焦时把原生窗口藏起来。
+ *
+ * popup 是独立顶层窗口，Windows 不会跟着它的 owner 一起隐藏。
+ */
+function onWindowVisibility() {
+  if (!inTauri || !nativeMode.value) return;
+  if (document.visibilityState === "hidden") {
+    void api
+      .viewportNativeBounds(viewId, 0, 0, 1, 1, false)
+      .catch(() => undefined);
+    return;
+  }
+  void syncNativeBounds().catch(() => undefined);
+}
+
+/** 原生窗口的光标形状（DOM cursor 传不过去，只能显式下发）。 */
+const nativeCursor = computed<string>(() => {
+  if (!isScene.value) return "arrow";
+  if (draggingAxis.value) return "sizeall";
+  if (dragMode.value === "marquee") return "crosshair";
+  if (dragMode.value === "orbit" || dragMode.value === "pan" || flyMode.value) return "sizeall";
+  if (dragMode.value === "zoom") return "sizens";
+  return "arrow";
+});
+
+watch(nativeCursor, (cursor) => {
+  if (!inTauri || !nativeMode.value) return;
+  void api.viewportNativeCursor(viewId, cursor).catch(() => undefined);
+});
+
+/** 右键菜单关闭后把被临时隐藏的原生视口放回去。 */
+watch(contextMenu, (menu) => {
+  if (menu) return;
+  if (!nativeMode.value) return;
+  void syncNativeBounds().catch(() => undefined);
+});
+
 watch(() => props.selection, () => {
   hoveredGizmo.value = null;
   pushSelection();
