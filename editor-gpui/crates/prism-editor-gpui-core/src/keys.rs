@@ -47,6 +47,7 @@ pub enum Command {
     ToggleRenderGraph,
     ToggleBuild,
     ToggleTools,
+    ToggleHistory,
     // 帮助
     Shortcuts,
     About,
@@ -94,6 +95,7 @@ impl Command {
         Command::ToggleRenderGraph,
         Command::ToggleBuild,
         Command::ToggleTools,
+        Command::ToggleHistory,
         Command::Shortcuts,
         Command::About,
         Command::FrameAll,
@@ -139,6 +141,7 @@ impl Command {
             Command::ToggleRenderGraph => "window/toggle/renderGraph",
             Command::ToggleBuild => "window/toggle/build",
             Command::ToggleTools => "window/toggle/tools",
+            Command::ToggleHistory => "window/toggle/history",
             Command::Shortcuts => "help/shortcuts",
             Command::About => "help/about",
             Command::FrameAll => "viewport/frame-all",
@@ -186,6 +189,7 @@ impl Command {
             Command::ToggleRenderGraph => "menu.renderGraph",
             Command::ToggleBuild => "menu.buildPanel",
             Command::ToggleTools => "menu.tools",
+            Command::ToggleHistory => "menu.history",
             Command::Shortcuts => "menu.shortcuts",
             Command::About => "menu.about",
             Command::FrameAll => "viewport.frameAll",
@@ -213,6 +217,7 @@ impl Command {
             Command::ToggleRenderGraph => Some("renderGraph"),
             Command::ToggleBuild => Some("build"),
             Command::ToggleTools => Some("tools"),
+            Command::ToggleHistory => Some("history"),
             Command::Preferences => Some("preferences"),
             Command::ProjectSettings => Some("projectSettings"),
             Command::ThemePanel => Some("theme"),
@@ -498,6 +503,7 @@ mod tests {
     #[test]
     fn panel_commands_map_to_panel_ids() {
         assert_eq!(Command::ToggleLog.panel_id(), Some("log"));
+        assert_eq!(Command::ToggleHistory.panel_id(), Some("history"));
         assert_eq!(Command::Preferences.panel_id(), Some("preferences"));
         assert_eq!(Command::Save.panel_id(), None);
     }

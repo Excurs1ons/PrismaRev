@@ -262,6 +262,48 @@ impl EditorView {
                         prefab.rsplit('/').next().unwrap_or(&prefab)
                     ))),
             );
+            entity_header = entity_header.child(
+                div()
+                    .id("insp-prefab-apply")
+                    .px_1()
+                    .rounded_sm()
+                    .text_size(px(9.0))
+                    .text_color(style.muted())
+                    .cursor_pointer()
+                    .hover(move |this| this.bg(style.row_hover()).text_color(style.text()))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if let Err(error) = this.workspace.apply_prefab_instance(entity_id) {
+                            this.workspace.log(
+                                prism_editor_gpui_core::LogSource::Editor,
+                                prism_editor_gpui_core::LogLevel::Error,
+                                format!("应用预制体失败：{error}"),
+                            );
+                        }
+                        cx.notify();
+                    }))
+                    .child(SharedString::from("应用")),
+            );
+            entity_header = entity_header.child(
+                div()
+                    .id("insp-prefab-revert")
+                    .px_1()
+                    .rounded_sm()
+                    .text_size(px(9.0))
+                    .text_color(style.muted())
+                    .cursor_pointer()
+                    .hover(move |this| this.bg(style.row_hover()).text_color(style.text()))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if let Err(error) = this.workspace.revert_prefab_instance(entity_id) {
+                            this.workspace.log(
+                                prism_editor_gpui_core::LogSource::Editor,
+                                prism_editor_gpui_core::LogLevel::Error,
+                                format!("还原预制体失败：{error}"),
+                            );
+                        }
+                        cx.notify();
+                    }))
+                    .child(SharedString::from("还原")),
+            );
         }
 
         let mut content = div().flex().flex_col().p_1().gap_1();

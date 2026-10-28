@@ -321,6 +321,7 @@ impl MenuId {
                 Command::ToggleRenderGraph,
                 Command::ToggleBuild,
                 Command::ToggleTools,
+                Command::ToggleHistory,
             ],
             MenuId::Help => &[Command::Shortcuts, Command::About],
         }
@@ -3013,6 +3014,7 @@ impl EditorView {
                 items.push(("存为预制体…".into(), true));
                 if has_prefab {
                     items.push(("打开预制体".into(), true));
+                    items.push(("应用预制体修改".into(), true));
                     items.push(("还原预制体实例".into(), true));
                     items.push(("同步同源实例".into(), true));
                     items.push(("解除预制体链接".into(), true));
@@ -3123,6 +3125,18 @@ impl EditorView {
                                             prism_editor_gpui_core::LogSource::Editor,
                                             prism_editor_gpui_core::LogLevel::Error,
                                             format!("打开预制体 {link} 失败：{error}"),
+                                        );
+                                    }
+                                }
+                            }
+                            (ContextTarget::Entity(index), "应用预制体修改") => {
+                                let id = this.workspace.document().doc.id_of_index(*index);
+                                if let Some(id) = id {
+                                    if let Err(error) = this.workspace.apply_prefab_instance(id) {
+                                        this.workspace.log(
+                                            prism_editor_gpui_core::LogSource::Editor,
+                                            prism_editor_gpui_core::LogLevel::Error,
+                                            format!("应用预制体失败：{error}"),
                                         );
                                     }
                                 }

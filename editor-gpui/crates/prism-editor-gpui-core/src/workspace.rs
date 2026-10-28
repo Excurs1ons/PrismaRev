@@ -559,6 +559,48 @@ impl Workspace {
         Ok(path)
     }
 
+    /// 把实例当前内容覆盖写回源预制体（Unity `PrefabUtility.ApplyPrefabInstance`）。
+    ///
+    /// 只写预制体文件，不改变场景；根上的 `PrefabInstance` 链接会被剥掉，
+    /// 避免预制体引用自己，嵌套实例的链接保持不变。
+    pub fn apply_prefab_instance(&mut self, entity_id: u32) -> io::Result<String> {
+        let root = self.project_root.clone().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                "没有绑定项目根，无法应用预制体修改",
+            )
+        })?;
+        let index = self
+            .document()
+            .doc
+            .index_of_id(entity_id)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "实例不存在"))?;
+        let link = self
+            .document()
+            .doc
+            .entities
+            .get(index)
+            .and_then(|entity| entity.prefab_link())
+            .map(str::to_string)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "不是预制体实例"))?;
+        if !link.starts_with("assets/") || !link.ends_with(".prefab.json") {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("非法的预制体路径 {link}"),
+            ));
+        }
+
+        let doc = self.document().doc.extract_subtree(&[index]);
+        project::write_document(&root, &link, &doc)?;
+        self.refresh_project_files();
+        self.log(
+            LogSource::Editor,
+            LogLevel::Info,
+            format!("已应用预制体修改 {link}（{} 个实体）", doc.entities.len()),
+        );
+        Ok(link)
+    }
+
     /// 删除资产文件（只允许 `assets/` 内，场景/预制体走文档流程）。
     /// 引用不会自动清理（与 Web 编辑器一致：引用变成悬空值，由检查器提示）。
     pub fn delete_asset(&mut self, path: &str) -> io::Result<()> {
@@ -1982,6 +2024,43 @@ impl Workspace {
         self.document().undo.can_redo()
     }
 
+    /// 当前文档的撤销历史（最近 → 最早），供「撤销历史」面板使用。
+    pub fn undo_history(&self) -> Vec<String> {
+        self.document()
+            .undo
+            .history()
+            .into_iter()
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// 回退到历史面板中第 `position` 条（0 = 最近一条）之前：撤销 `position + 1` 步。
+    /// 返回实际撤销的步数。
+    pub fn undo_to(&mut self, position: usize) -> usize {
+        let mut undone = 0;
+        for _ in 0..=position {
+            if !self.can_undo() {
+                break;
+            }
+            self.undo();
+            undone += 1;
+        }
+        if undone > 0 {
+            self.log(
+                LogSource::Editor,
+                LogLevel::Info,
+                format!("撤销 {undone} 步"),
+            );
+        }
+        undone
+    }
+
+    /// 清空当前文档的撤销 / 重做历史。
+    pub fn clear_history(&mut self) {
+        self.document_mut().undo.clear();
+        self.log(LogSource::Editor, LogLevel::Info, "已清空撤销历史");
+    }
+
     // ── 面板 / 布局 ─────────────────────────────────────────────────────
 
     pub fn panel(&self, id: &str) -> Option<&PanelInfo> {
@@ -2003,6 +2082,7 @@ impl Workspace {
             "theme" => self.i18n.t1("menu.theme"),
             "build" => self.i18n.t1("menu.buildPanel"),
             "tools" => self.i18n.t1("menu.tools"),
+            "history" => self.i18n.t1("menu.history"),
             "shortcuts" => self.i18n.t1("menu.shortcuts"),
             "about" => self.i18n.t1("menu.about"),
             other => self
@@ -2522,6 +2602,7 @@ fn default_panels() -> Vec<PanelInfo> {
         ("theme", "界面主题"),
         ("build", "构建项目"),
         ("tools", "离线工具"),
+        ("history", "撤销历史"),
         ("shortcuts", "键盘快捷键"),
         ("about", "关于 PrismaRev Editor"),
     ]
@@ -2911,6 +2992,36 @@ mod tests {
                 assert!((a - b).abs() < 1e-4);
             }
         }
+    }
+
+    #[test]
+    fn undo_history_can_jump_back_and_clear() {
+        let mut workspace = Workspace::sample();
+        let initial = workspace.document().doc.entities.len();
+        workspace.add_entity("camera");
+        workspace.add_entity("camera");
+        workspace.add_entity("camera");
+        assert_eq!(workspace.undo_history().len(), 3);
+        assert_eq!(
+            workspace.undo_history().first().map(String::as_str),
+            Some("新建实体")
+        );
+
+        assert_eq!(workspace.undo_to(1), 2, "回退第 2 条之前的操作");
+        assert_eq!(workspace.undo_history().len(), 1);
+        assert_eq!(workspace.document().doc.entities.len(), initial + 1);
+
+        assert_eq!(workspace.undo_to(0), 1);
+        assert!(workspace.undo_history().is_empty());
+        assert!(!workspace.can_undo());
+        assert_eq!(workspace.undo_to(3), 0, "没有历史时是空操作");
+
+        workspace.add_entity("camera");
+        assert!(workspace.can_undo());
+        workspace.clear_history();
+        assert!(!workspace.can_undo());
+        assert!(!workspace.can_redo());
+        assert!(workspace.undo_history().is_empty());
     }
 
     #[test]
@@ -3652,6 +3763,76 @@ mod tests {
             workspace.document().doc.entities[1].transform.position,
             [1.0, 2.0, 3.0]
         );
+    }
+
+    #[test]
+    fn apply_prefab_instance_writes_subtree_and_strips_root_link() {
+        let project = TempProject::new("apply-prefab");
+        std::fs::write(
+            project.root.join("assets/prefabs/box.prefab.json"),
+            r#"{"version":3,"entities":[
+                {"id":1,"name":"Box","parent":null,
+                 "transform":{"position":[0,0,0],"rotation":[0,0,0,1],"scale":[1,1,1]},
+                 "components":{}},
+                {"id":2,"name":"Child","parent":1,
+                 "transform":{"position":[0,1,0],"rotation":[0,0,0,1],"scale":[1,1,1]},
+                 "components":{}}
+            ]}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            project.root.join("assets/scenes/main.scene.json"),
+            r#"{"version":3,"entities":[
+                {"id":1,"name":"Root","parent":null,
+                 "transform":{"position":[0,0,0],"rotation":[0,0,0,1],"scale":[1,1,1]},
+                 "components":{}},
+                {"id":2,"name":"My Box","parent":1,
+                 "transform":{"position":[0,0,0],"rotation":[0,0,0,1],"scale":[1,1,1]},
+                 "components":{"prism_engine::scene::PrefabInstance":{"prefab":"assets/prefabs/box.prefab.json"}}}
+            ]}"#,
+        )
+        .unwrap();
+
+        let mut workspace = Workspace::load_fixture(&fixture());
+        workspace.load_project(project.root.clone()).unwrap();
+        workspace.revert_prefab_instance(2).unwrap();
+        let root_id = workspace
+            .document()
+            .doc
+            .entities
+            .iter()
+            .find(|entity| entity.display_name() == "My Box")
+            .and_then(|entity| entity.id)
+            .expect("实例根");
+        {
+            let doc = &mut workspace.document_mut().doc;
+            let child = doc
+                .entities
+                .iter_mut()
+                .find(|entity| entity.display_name() == "Child")
+                .expect("实例子级");
+            child.transform.position = [7.0, 0.0, 0.0];
+            child.name = Some("Renamed Child".to_string());
+        }
+
+        let path = workspace.apply_prefab_instance(root_id).unwrap();
+        assert_eq!(path, "assets/prefabs/box.prefab.json");
+        let prefab = project::read_document(&project.root, &path).unwrap();
+        assert_eq!(prefab.entities.len(), 2);
+        assert!(
+            prefab
+                .entities
+                .iter()
+                .all(|entity| entity.prefab_link().is_none()),
+            "预制体根不应带实例链接"
+        );
+        let child = prefab
+            .entities
+            .iter()
+            .find(|entity| entity.display_name() == "Renamed Child")
+            .expect("修改写回预制体");
+        assert_eq!(child.transform.position, [7.0, 0.0, 0.0]);
+        assert!(workspace.apply_prefab_instance(1).is_err(), "非实例应报错");
     }
 
     #[test]

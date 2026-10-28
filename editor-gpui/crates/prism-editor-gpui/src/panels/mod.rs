@@ -5,6 +5,7 @@ mod console;
 mod documents;
 mod graph;
 mod hierarchy;
+mod history;
 mod inspector;
 mod settings;
 mod viewport;
@@ -36,6 +37,7 @@ impl EditorView {
             "theme" => self.theme_panel(cx),
             "build" => self.build_panel(cx),
             "tools" => self.tools_panel(cx),
+            "history" => self.history_panel(cx),
             "shortcuts" => self.shortcuts_panel(cx),
             "about" => self.about_panel(cx),
             other => self.missing_panel(other),

@@ -616,6 +616,7 @@ pub const UTILITY_TABS: &[&str] = &[
     "tools",
     "shortcuts",
     "about",
+    "history",
 ];
 
 /// 给「显示面板」菜单用：把面板放回一个合理的锚点旁边。

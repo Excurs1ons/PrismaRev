@@ -71,6 +71,7 @@
     "renderGraph": "Render Graph",
     "buildPanel": "Build Settings",
     "tools": "Pipeline Tools",
+    "history": "Undo History",
     "help": "Help",
     "shortcuts": "Keyboard Shortcuts",
     "about": "About PrismaRev Editor"

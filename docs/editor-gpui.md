@@ -1,6 +1,6 @@
 # GPUI 原生编辑器（`editor-gpui/`）
 
-> 状态：**可编译的类型检查 + 158 个数据层单测通过**；桌面运行尚未在 CI 上跑过
+> 状态：**可编译的类型检查 + 179 个数据层单测通过**；桌面运行尚未在 CI 上跑过
 > （GPUI 需要 Windows/macOS/Linux 桌面与 GPU）。
 >
 > 本文说明「为什么做、边界在哪、怎么接真实引擎」，功能清单见
@@ -120,6 +120,9 @@ Unity 形状的编辑器，又不会把 `prism-render` 绑死在某套 UI 生命
   `selection_roots()` 整组挂到目标下（一次快照撤销）；行上/下 25% 仍是单实体排序。
 - **递归展开**：`Alt`+点箭头走 `set_subtree_expanded`（根 + 全部后代一起展开 / 收起），
   普通点击只 `toggle_expanded` 当前项。
+- **撤销历史面板**：`UndoStack::history()` 给出最近 → 最早的标签，点击第 `i` 条调用
+  `Workspace::undo_to(i)`（撤销 `i + 1` 步，回到该操作之前）；清空按钮走
+  `clear_history`。面板只反映当前标签页的撤销栈，与 `Ctrl+Z` 完全同源。
 
  ## 6. 项目文件
 
@@ -136,6 +139,8 @@ Unity 形状的编辑器，又不会把 `prism-render` 绑死在某套 UI 生命
   把用户输入（可省略 `assets/`、可带反斜杠）规范化。
 - 预制体实例：`revert_prefab_instance` 用预制体当前内容覆盖实例子树，保留根名字与
   父级；`sync_prefab_instances` 批量处理同源实例；磁盘优先、fixture 模式回退同名模板。
+  `apply_prefab_instance` 反向把实例子树（`extract_subtree`，剥掉根上的实例链接）写回
+  链接指向的 `.prefab.json`，只改预制体文件、不动场景。
 - 存为预制体：`save_selection_as_prefab` = `extract_subtree`（剥掉实例链接）+
   `sanitize_stem` + 重名后缀 + `write_document`，不修改当前场景。
 - 实例化：`instantiate_prefab_asset` 从磁盘（或 fixture 模板）读预制体，
@@ -247,7 +252,7 @@ Unity 形状的编辑器，又不会把 `prism-render` 绑死在某套 UI 生命
 
 ```sh
 cd editor-gpui
-cargo test -p prism-editor-gpui-core                                  # 158 passed
+cargo test -p prism-editor-gpui-core                                  # 179 passed
 cargo check -p prism-editor-gpui --target x86_64-pc-windows-gnu       # 类型检查
 cargo clippy -p prism-editor-gpui -p prism-editor-gpui-core \
     --target x86_64-pc-windows-gnu                                    # clean

@@ -71,6 +71,7 @@
     "renderGraph": "渲染图",
     "buildPanel": "构建项目",
     "tools": "离线工具",
+    "history": "撤销历史",
     "help": "帮助",
     "shortcuts": "键盘快捷键",
     "about": "关于 PrismaRev Editor"

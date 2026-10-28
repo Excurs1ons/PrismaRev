@@ -36,7 +36,7 @@
 - 浮动窗口标题栏拖动、关闭；`window/toggle/<id>` 与「显示面板」菜单
 - 右键菜单（层级实体 / 组件卡 / 资产）：复制 / 剪切 / 粘贴 / 粘贴为子级 / 创建副本、
   删除、重命名、**存为预制体**、
-  还原 / 同步 / 解除预制体实例、复制/移除/粘贴组件、打开文档、重命名资产、复制路径
+  应用 / 还原 / 同步 / 解除预制体实例、复制/移除/粘贴组件、打开文档、重命名资产、复制路径
 - **真实文件 IO**：自动从 cwd / 可执行文件目录向上找 `assets/`；打开磁盘上的
   `assets/scenes/*.scene.json`、`assets/prefabs/*.prefab.json`；`Ctrl+S` 保存
   （未命名文档自动落到默认路径）、`Ctrl+Shift+S` 另存为（弹层输入相对路径）、
@@ -50,6 +50,8 @@
   字段一起改写（不做子串替换），撤销仍然可用（文档标记 dirty）
 - **存为预制体**：把选中实体子树写成 `assets/prefabs/<名字>.prefab.json`（重名加 `-2`），
   场景不变；资产右键可把 `.prefab.json` **实例化到场景**（挂到当前选中实体下）
+- **应用预制体修改**：实例检查器的「应用」/ 右键「应用预制体修改」把实例子树覆盖写回源
+  预制体（剥掉根上的实例链接，嵌套实例链接保留），不影响场景
 - **本地状态持久化**：dock 布局 / 主题（预设 + override）/ 语言 / 首选项写入
   `<project>/target/editor-gpui/state.json`，下次启动恢复；损坏或未知字段静默回退
 
@@ -61,13 +63,14 @@
 | 检查器 | 实体面包屑 + schema 驱动：bool / int / float / 滑杆 / 向量 / 四元数 / 颜色 / 枚举 / 文本 / 只读；拖动调值（Shift+点击输入）、组件卡折叠、复制/移除、添加组件（分类 + 搜索）、无 schema 时显示原始 JSON；**多选时显示 Transform + 公共组件，字段修改一次应用到全部（一次撤销回退）** |
 | 资产 | 目录树 + 文件列表、分类 chips、搜索、选中详情（导入器 / 体积 / 分类）；**双击场景/预制体打开文档**；**拖资产到检查器字段写路径、拖预制体到层级实体实例化**；右键**重命名 / 移动**（磁盘改名 + 打开文档里的精确路径引用自动改写）与**删除**（二次确认，不清理悬空引用） |
 | 日志 | 级别 × 来源过滤、搜索、错误/告警计数、窗口化 `uniform_list`（固定 18px 行高） |
+| 撤销历史 | 当前文档的撤销栈（最近 → 最早），点击某条回退到该操作之前；一键清空 |
 | 场景视图 | `canvas` 绘制的世界网格（`G` 开关）、实体线框、选中高亮；**点击拾取实体**、**双击聚焦**、空白处左键拖**框选**（Shift 追加）、`Alt`+左键或右键轨道旋转、中键平移、滚轮缩放；gizmo 三模式（`W` 移动 / `E` 旋转 / `R` 缩放，Ctrl 吸附 0.25）：移动与缩放拖轴、旋转拖圆环，均可撤销（`X` 切世界/局部） |
 | 游戏视图 | 文档相机视角 + Play 状态；Play 时实体轻微上下浮动（模拟 tick） |
 | 文档 | 打开的文档、新建场景/预制体、模板 |
 | 渲染图 | pass 链（ShadowMap → Forward → Gtao → Post）+ 图资源表（scene/swapchain/frame 生命周期） |
 | 项目设置 / 首选项 / 主题 / 构建 / 离线工具 / 快捷键 / 关于 | 直接编辑设置、主题预设与 38 个 token 预览、真实 cargo/cook 构建日志、bake-gi 与 heightmap 命令预览 |
 
-**数据层**（`prism-editor-gpui-core`，UI 框架无关，177 个单元测试）
+**数据层**（`prism-editor-gpui-core`，UI 框架无关，179 个单元测试）
 
 - `.scene.json` / `.prefab.json`：稳定 id、parent 迁移、删除孤儿子级变根、reparent 防环、
   子树提取（存预制体）、预制体实例化（id 平移 + 名字去重 + 反向链接）、字段引用扫描
@@ -175,7 +178,7 @@ editor-gpui/
 
 ## 验证记录
 
-- `cargo test -p prism-editor-gpui-core`：**177 passed**。
+- `cargo test -p prism-editor-gpui-core`：**179 passed**。
 - `cargo check -p prism-editor-gpui --target x86_64-pc-windows-gnu`：通过。
 - `cargo clippy -p prism-editor-gpui -p prism-editor-gpui-core --target x86_64-pc-windows-gnu`：
   无 warning（仅 `proc-macro-error2` 的 future-incompat 提示）。
