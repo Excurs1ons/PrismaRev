@@ -1,6 +1,6 @@
 # GPUI 原生编辑器（`editor-gpui/`）
 
-> 状态：**可编译的类型检查 + 155 个数据层单测通过**；桌面运行尚未在 CI 上跑过
+> 状态：**可编译的类型检查 + 157 个数据层单测通过**；桌面运行尚未在 CI 上跑过
 > （GPUI 需要 Windows/macOS/Linux 桌面与 GPU）。
 >
 > 本文说明「为什么做、边界在哪、怎么接真实引擎」，功能清单见
@@ -184,16 +184,17 @@ Unity 形状的编辑器，又不会把 `prism-render` 绑死在某套 UI 生命
 - 轨道相机（target / yaw / pitch / distance）投影到屏幕，画 21×21 世界网格、
   未选中实体的线框、选中实体的线框 + 三色 gizmo 轴；
 - 左键：先试 gizmo（移动/缩放拖轴 8px 内；旋转拖圆环 10px 内，Ctrl 吸附 0.25），
-  否则射线拾取实体（单位立方体 × scale 的近似，双击同一实体 = 取景），再否则轨道旋转；
-  右键平移、滚轮缩放；`W` / `E` / `R` 切换移动 / 旋转 / 缩放 gizmo，`X` 或标题栏
-  按钮切换世界 / 局部坐标。
+  否则射线拾取实体（单位立方体 × scale 的近似，双击同一实体 = 取景）；点击空白清空选择，
+  在空白处拖拽 = **框选**（投影中心 / 8 个角任一落在矩形内即选中，Shift 追加）；
+  `Alt`+左键或右键轨道旋转、中键平移、滚轮缩放；`W` / `E` / `R` 切换移动 / 旋转 /
+  缩放 gizmo，`X` 或标题栏按钮切换世界 / 局部坐标。
 - 旋转在世界空间左乘 `q_axis * q_old`，局部空间右乘 `q_old * q_axis`；局部模式的
   三轴取实体沿父链累积的世界旋转（`world_rotation` / `gizmo_basis`）。平移把世界位移
   经**父级世界旋转的逆**换算成 `position` 增量（`translate_entity_world`），所以父级
   旋转后拖轴也不会漂。缩放夹在 0.01..=1000，避免退化矩阵。两者都走 `push_transform`，
   一次拖动合并成一步撤销。
   Game View 只读，点击按归一化视口坐标记日志（将来直接转成游戏输入）。
-- 拾取 / gizmo 的数学在 `core/src/viewport_math.rs`（纯函数 + 10 个单测），UI 侧
+- 拾取 / gizmo 的数学在 `core/src/viewport_math.rs`（纯函数 + 13 个单测），UI 侧
   只负责把 `canvas` 的实际 `Bounds` 记下来（`scene_bounds` / `game_bounds`）。
 - 这不是 `prism-render` 的帧，但**接口形状**已经是「面板 + 相机 + 鼠标事件」。
 
@@ -215,7 +216,7 @@ Unity 形状的编辑器，又不会把 `prism-render` 绑死在某套 UI 生命
 
 ```sh
 cd editor-gpui
-cargo test -p prism-editor-gpui-core                                  # 155 passed
+cargo test -p prism-editor-gpui-core                                  # 157 passed
 cargo check -p prism-editor-gpui --target x86_64-pc-windows-gnu       # 类型检查
 cargo clippy -p prism-editor-gpui -p prism-editor-gpui-core \
     --target x86_64-pc-windows-gnu                                    # clean

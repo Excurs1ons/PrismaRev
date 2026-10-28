@@ -1040,6 +1040,19 @@ impl Workspace {
         self.selection = (start..=end).collect();
     }
 
+    /// 框选：`additive = false` 覆盖选择，`true` 并入。
+    pub fn select_many(&mut self, indices: &[usize], additive: bool) {
+        if !additive {
+            self.selection.clear();
+        }
+        for index in indices {
+            if !self.selection.contains(index) {
+                self.selection.push(*index);
+            }
+        }
+        self.selection.sort_unstable();
+    }
+
     pub fn clear_selection(&mut self) {
         self.selection.clear();
     }
@@ -2420,6 +2433,17 @@ mod tests {
         assert_eq!(workspace.selection, vec![1], "已有项被切换掉");
         workspace.select(0, true);
         assert_eq!(workspace.selection, vec![0, 1]);
+    }
+
+    #[test]
+    fn select_many_overwrites_or_extends() {
+        let mut workspace = Workspace::load_fixture(&fixture());
+        workspace.select_many(&[1, 0], false);
+        assert_eq!(workspace.selection, vec![0, 1], "排序且覆盖旧选择");
+        workspace.select_many(&[1, 2], true);
+        assert_eq!(workspace.selection, vec![0, 1, 2], "附加选择去重");
+        workspace.select_many(&[], false);
+        assert!(workspace.selection.is_empty());
     }
 
     #[test]

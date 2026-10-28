@@ -24,6 +24,8 @@ struct SceneSnapshot {
     gizmo_mode: GizmoMode,
     /// 选中实体的 gizmo 基准（世界模式为单位基）。
     gizmo_basis: [[f32; 3]; 3],
+    /// 框选矩形（窗口坐标的左上/右下）。
+    box_select: Option<((f32, f32), (f32, f32))>,
 }
 
 impl EditorView {
@@ -50,6 +52,12 @@ impl EditorView {
                 playing: self.workspace.playing,
                 gizmo_mode: self.gizmo_mode,
                 gizmo_basis,
+                box_select: self.box_select.map(|(a, b)| {
+                    (
+                        (f32::from(a.x), f32::from(a.y)),
+                        (f32::from(b.x), f32::from(b.y)),
+                    )
+                }),
             }
         };
 
@@ -214,12 +222,26 @@ impl EditorView {
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(|this, event: &gpui::MouseDownEvent, _, cx| {
-                        this.scene_mouse_down(event.position, cx);
+                        this.scene_mouse_down(event.position, event.modifiers, cx);
                         cx.notify();
                     }),
                 )
                 .on_mouse_down(
                     MouseButton::Right,
+                    cx.listener(|this, event: &gpui::MouseDownEvent, _, cx| {
+                        this.drag = Some(DragState::Orbit {
+                            start: event.position,
+                        });
+                        this.workspace.log(
+                            prism_editor_gpui_core::LogSource::Editor,
+                            prism_editor_gpui_core::LogLevel::Trace,
+                            "开始轨道旋转（右键）",
+                        );
+                        cx.notify();
+                    }),
+                )
+                .on_mouse_down(
+                    MouseButton::Middle,
                     cx.listener(|this, event: &gpui::MouseDownEvent, _, cx| {
                         this.drag = Some(DragState::Pan {
                             start: event.position,
@@ -228,7 +250,7 @@ impl EditorView {
                         this.workspace.log(
                             prism_editor_gpui_core::LogSource::Editor,
                             prism_editor_gpui_core::LogLevel::Trace,
-                            "开始平移（右键）",
+                            "开始平移（中键）",
                         );
                         cx.notify();
                     }),
@@ -476,6 +498,48 @@ fn paint_scene(
                         }
                     }
                 }
+            }
+        }
+    }
+
+    // 框选矩形：半透明填充 + 1px 边框（面板内坐标）。
+    if let Some(((ax, ay), (bx, by))) = snapshot.box_select {
+        let width = f32::from(bounds.size.width);
+        let height = f32::from(bounds.size.height);
+        let ax = (ax - f32::from(bounds.origin.x)).clamp(0.0, width);
+        let ay = (ay - f32::from(bounds.origin.y)).clamp(0.0, height);
+        let bx = (bx - f32::from(bounds.origin.x)).clamp(0.0, width);
+        let by = (by - f32::from(bounds.origin.y)).clamp(0.0, height);
+        let (min_x, max_x) = (ax.min(bx), ax.max(bx));
+        let (min_y, max_y) = (ay.min(by), ay.max(by));
+        if max_x - min_x >= 1.0 && max_y - min_y >= 1.0 {
+            let fill = style.alpha(ThemeToken::Accent, 0.12);
+            window.paint_quad(gpui::quad(
+                gpui::Bounds {
+                    origin: gpui::point(bounds.origin.x + px(min_x), bounds.origin.y + px(min_y)),
+                    size: gpui::size(px(max_x - min_x), px(max_y - min_y)),
+                },
+                px(0.0),
+                fill,
+                px(0.0),
+                gpui::transparent_black(),
+                Default::default(),
+            ));
+            let edge = style.accent();
+            for (start, end) in [
+                ((min_x, min_y), (max_x, min_y)),
+                ((max_x, min_y), (max_x, max_y)),
+                ((max_x, max_y), (min_x, max_y)),
+                ((min_x, max_y), (min_x, min_y)),
+            ] {
+                paint_segment(
+                    window,
+                    bounds,
+                    (start.0, start.1, 0.0),
+                    (end.0, end.1, 0.0),
+                    edge,
+                    1.0,
+                );
             }
         }
     }

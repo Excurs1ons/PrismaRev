@@ -85,6 +85,12 @@ pub enum DragState {
         direction: [f32; 2],
         px_per_unit: f32,
     },
+    /// 在空白处拖拽框选（Unity 左键拖空白）。
+    BoxSelect {
+        start: Point<Pixels>,
+        current: Point<Pixels>,
+        additive: bool,
+    },
     Hierarchy {
         index: usize,
         start: Point<Pixels>,
@@ -313,6 +319,8 @@ pub struct EditorView {
     pub prefab_save: Option<(usize, String)>,
     /// Scene View 的 gizmo 模式（W/E/R）。
     pub gizmo_mode: GizmoMode,
+    /// 框选的屏幕矩形（窗口坐标，用于绘制）。
+    pub box_select: Option<(Point<Pixels>, Point<Pixels>)>,
     /// 主题 token 覆盖编辑器当前打开的 token。
     pub theme_edit: Option<ThemeToken>,
     /// 删除资产前的确认弹层（路径）。
@@ -371,6 +379,7 @@ impl EditorView {
             asset_rename: None,
             prefab_save: None,
             gizmo_mode: GizmoMode::Translate,
+            box_select: None,
             theme_edit: None,
             asset_delete: None,
             document_delete: None,
@@ -942,8 +951,17 @@ impl EditorView {
 
     // ── 鼠标 ────────────────────────────────────────────────────────────
 
-    /// Scene View 左键：优先 gizmo 轴，其次实体拾取，最后轨道旋转。
-    pub fn scene_mouse_down(&mut self, position: Point<Pixels>, _cx: &mut Context<Self>) {
+    /// Scene View 左键：优先 gizmo 轴，其次实体拾取，最后框选（Alt 拖拽 = 轨道旋转）。
+    pub fn scene_mouse_down(
+        &mut self,
+        position: Point<Pixels>,
+        modifiers: gpui::Modifiers,
+        _cx: &mut Context<Self>,
+    ) {
+        if modifiers.alt {
+            self.drag = Some(DragState::Orbit { start: position });
+            return;
+        }
         let Some(bounds) = self.scene_bounds.get() else {
             self.drag = Some(DragState::Orbit { start: position });
             return;
@@ -1091,7 +1109,16 @@ impl EditorView {
             return;
         }
 
-        self.drag = Some(DragState::Orbit { start: position });
+        if !modifiers.shift {
+            self.workspace.clear_selection();
+            self.hierarchy_anchor = None;
+        }
+        self.box_select = Some((position, position));
+        self.drag = Some(DragState::BoxSelect {
+            start: position,
+            current: position,
+            additive: modifiers.shift,
+        });
     }
 
     fn on_mouse_move(
@@ -1317,6 +1344,19 @@ impl EditorView {
                 });
                 cx.notify();
             }
+            DragState::BoxSelect {
+                start,
+                current: _,
+                additive,
+            } => {
+                self.box_select = Some((start, event.position));
+                self.drag = Some(DragState::BoxSelect {
+                    start,
+                    current: event.position,
+                    additive,
+                });
+                cx.notify();
+            }
             DragState::Pan { start, target } => {
                 let dx = f32::from(event.position.x - start.x);
                 let dy = f32::from(event.position.y - start.y);
@@ -1333,6 +1373,41 @@ impl EditorView {
             return;
         };
         match drag {
+            DragState::BoxSelect {
+                start,
+                current,
+                additive,
+            } => {
+                self.box_select = None;
+                if let Some(bounds) = self.scene_bounds.get() {
+                    let width = f32::from(bounds.size.width);
+                    let height = f32::from(bounds.size.height);
+                    let sx = f32::from(start.x - bounds.origin.x);
+                    let sy = f32::from(start.y - bounds.origin.y);
+                    let cx = f32::from(current.x - bounds.origin.x);
+                    let cy = f32::from(current.y - bounds.origin.y);
+                    if (cx - sx).abs() >= 3.0 || (cy - sy).abs() >= 3.0 {
+                        let rect = (sx.min(cx), sy.min(cy), sx.max(cx), sy.max(cy));
+                        let frame = prism_editor_gpui_core::viewport_math::camera_frame(
+                            &self.workspace.camera,
+                        );
+                        let entities: Vec<(usize, prism_editor_gpui_core::TransformJson)> = self
+                            .workspace
+                            .document()
+                            .doc
+                            .entities
+                            .iter()
+                            .enumerate()
+                            .map(|(index, entity)| (index, entity.transform))
+                            .collect();
+                        let picked = prism_editor_gpui_core::viewport_math::box_select(
+                            rect, &frame, width, height, &entities,
+                        );
+                        self.workspace.select_many(&picked, additive);
+                    }
+                }
+                cx.notify();
+            }
             DragState::Tab {
                 tab,
                 current,

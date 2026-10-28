@@ -477,6 +477,48 @@ pub fn normalize2(v: (f32, f32)) -> [f32; 2] {
     [v.0 / len, v.1 / len]
 }
 
+/// 框选：投影中心 / 8 个立方体角，任意一点落在矩形内即选中。
+///
+/// 矩形是 `(min_x, min_y, max_x, max_y)`（视口像素坐标）；索引按文档顺序返回。
+pub fn box_select(
+    rect: (f32, f32, f32, f32),
+    frame: &CameraFrame,
+    width: f32,
+    height: f32,
+    entities: &[(usize, TransformJson)],
+) -> Vec<usize> {
+    let (min_x, min_y, max_x, max_y) = rect;
+    let mut selected = Vec::new();
+    for (index, transform) in entities {
+        let half = [
+            transform.scale[0].abs().max(0.05) * 0.5,
+            transform.scale[1].abs().max(0.05) * 0.5,
+            transform.scale[2].abs().max(0.05) * 0.5,
+        ];
+        let mut points = vec![transform.position];
+        for dx in [-1.0f32, 1.0] {
+            for dy in [-1.0f32, 1.0] {
+                for dz in [-1.0f32, 1.0] {
+                    points.push([
+                        transform.position[0] + half[0] * dx,
+                        transform.position[1] + half[1] * dy,
+                        transform.position[2] + half[2] * dz,
+                    ]);
+                }
+            }
+        }
+        let hit = points.iter().any(|point| {
+            project(*point, frame, width, height)
+                .map(|(x, y, _)| x >= min_x && x <= max_x && y >= min_y && y <= max_y)
+                .unwrap_or(false)
+        });
+        if hit {
+            selected.push(*index);
+        }
+    }
+    selected
+}
+
 /// 拾取离相机最近的实体（索引, 命中距离）。
 pub fn pick_entity(
     point: (f32, f32),
@@ -682,6 +724,35 @@ mod tests {
         let hit =
             pick_gizmo_axis_oriented(middle, &frame, [0.0, 0.0, 0.0], basis, length, 800.0, 600.0);
         assert_eq!(hit.map(|(axis, _, _)| axis), Some(0));
+    }
+
+    #[test]
+    fn box_select_uses_projected_bounds() {
+        let camera = camera();
+        let frame = camera_frame(&camera);
+        let entities = vec![
+            (0, TransformJson::default()),
+            (
+                1,
+                TransformJson {
+                    position: [3.0, 0.0, 0.0],
+                    ..Default::default()
+                },
+            ),
+        ];
+        let (center_x, center_y, _) = project([0.0, 0.0, 0.0], &frame, 800.0, 600.0).unwrap();
+        let small = (
+            center_x - 20.0,
+            center_y - 20.0,
+            center_x + 20.0,
+            center_y + 20.0,
+        );
+        assert_eq!(box_select(small, &frame, 800.0, 600.0, &entities), vec![0]);
+        assert_eq!(
+            box_select((0.0, 0.0, 800.0, 600.0), &frame, 800.0, 600.0, &entities),
+            vec![0, 1]
+        );
+        assert!(box_select((0.0, 0.0, 4.0, 4.0), &frame, 800.0, 600.0, &entities).is_empty());
     }
 
     #[test]
