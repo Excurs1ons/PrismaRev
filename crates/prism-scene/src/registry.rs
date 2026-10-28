@@ -351,6 +351,36 @@ impl ComponentRegistry {
     pub fn reflect_component_count(&self) -> usize {
         self.reflect_entries.len()
     }
+
+    /// Compute a deterministic schema fingerprint of all reflected components.
+    ///
+    /// Changes whenever any component is added, removed, or has its schema / fields
+    /// changed (including nested types via `TypeDesc::schema_hash`).
+    pub fn schema_fingerprint(&self) -> u64 {
+        const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+        const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+
+        let mut entries: Vec<(&str, u64)> = self
+            .reflect_entries
+            .values()
+            .map(|entry| {
+                let hash = entry.desc.schema_hash(&self.reflect);
+                (entry.desc.name, hash)
+            })
+            .collect();
+        entries.sort_unstable_by_key(|&(name, _)| name);
+
+        let mut hash = FNV_OFFSET_BASIS;
+        for (name, schema_hash) in entries {
+            for byte in name.as_bytes() {
+                hash ^= *byte as u64;
+                hash = hash.wrapping_mul(FNV_PRIME);
+            }
+            hash ^= schema_hash;
+            hash = hash.wrapping_mul(FNV_PRIME);
+        }
+        hash
+    }
 }
 
 impl Default for ComponentRegistry {
@@ -366,6 +396,16 @@ impl Default for ComponentRegistry {
 /// 注册所有内置场景与 UI 组件到 registry。
 ///
 /// 这是作者 JSON、cook 工具和运行时共用的唯一 schema 入口。
+/// Returns the builtin components schema fingerprint.
+pub fn builtin_schema_fingerprint() -> u64 {
+    static FINGERPRINT: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *FINGERPRINT.get_or_init(|| {
+        let mut registry = ComponentRegistry::new();
+        register_builtin_components(&mut registry);
+        registry.schema_fingerprint()
+    })
+}
+
 pub fn register_builtin_components(registry: &mut ComponentRegistry) {
     use crate::components::*;
     use crate::ui::{Anchors, ComputedLayout, Margin, Node, Pivot, Style, Text};
@@ -518,6 +558,12 @@ mod tests {
 
         // 每个内置组件都有「添加组件」默认值，且能反序列化回组件。
         let names = registry.component_names();
+
+        // schema_fingerprint is deterministic and non-zero
+        let fp1 = registry.schema_fingerprint();
+        assert_ne!(fp1, 0);
+        let fp2 = builtin_schema_fingerprint();
+        assert_eq!(fp1, fp2);
         assert!(names.contains(&"prism_engine::scene::Camera"));
         for name in &names {
             let default = registry
