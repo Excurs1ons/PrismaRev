@@ -37,6 +37,8 @@ const emit = defineEmits<{
   (event: "toggle-play"): void;
   /** 在场景视图里点选：`null` = 点空处（取消选中）。 */
   (event: "select", index: number | null): void;
+  /** Shift / Ctrl 多选：批量更新选中项。 */
+  (event: "select-multiple", indices: number[]): void;
   /** 拖动平移手柄后的新局部位置 `[x, y, z]`。 */
   (event: "move", position: [number, number, number]): void;
   /** 拖动旋转圆环后的新局部四元数 `[x, y, z, w]`。 */
@@ -323,7 +325,7 @@ const badgePosition = computed(() => {
   return { x, y, width: bw };
 });
 /** 拖动期间待下发的光标位置 / 是否攒了未同步的文档重载。 */
-let pendingDrag: { x: number; y: number } | null = null;
+let pendingDrag: { x: number; y: number; snap: boolean } | null = null;
 let reloadPending = false;
 let dragFrame = 0;
 /** 左键按下瞬间的相机（万一这一按其实落在手柄上，用于还原）。 */
@@ -341,22 +343,37 @@ function pushCamera() {
   });
 }
 
-/** 平滑动画过渡视口相机到目标角度（如点击右上角方向导航指示器）。 */
-function alignCameraTo(target: { yaw: number; pitch: number }) {
+/** 平滑动画过渡视口相机到目标参数（角度、注视点与距离）。 */
+function tweenCameraTo(
+  target: {
+    yaw?: number;
+    pitch?: number;
+    distance?: number;
+    target?: [number, number, number];
+  },
+  duration = 200,
+) {
   if (cameraAnimFrame) {
     cancelAnimationFrame(cameraAnimFrame);
     cameraAnimFrame = 0;
   }
   const startYaw = orbit.value.yaw;
   const startPitch = orbit.value.pitch;
+  const startDist = orbit.value.distance;
+  const startTgt = [...orbit.value.target] as [number, number, number];
 
-  // 保证沿最短角旋转过渡（-π 到 +π）
-  const diff = (target.yaw - startYaw) % (Math.PI * 2);
-  const shortestDiff = ((diff + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
-  const endYaw = startYaw + shortestDiff;
-  const endPitch = target.pitch;
+  const endYaw =
+    target.yaw !== undefined
+      ? (() => {
+          const diff = (target.yaw - startYaw) % (Math.PI * 2);
+          const shortestDiff = ((diff + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
+          return startYaw + shortestDiff;
+        })()
+      : startYaw;
+  const endPitch = target.pitch !== undefined ? target.pitch : startPitch;
+  const endDist = target.distance !== undefined ? target.distance : startDist;
+  const endTgt = target.target !== undefined ? target.target : startTgt;
 
-  const duration = 180; // ms
   const startTime = performance.now();
 
   function step(now: number) {
@@ -367,6 +384,12 @@ function alignCameraTo(target: { yaw: number; pitch: number }) {
 
     orbit.value.yaw = startYaw + (endYaw - startYaw) * ease;
     orbit.value.pitch = startPitch + (endPitch - startPitch) * ease;
+    orbit.value.distance = startDist + (endDist - startDist) * ease;
+    orbit.value.target = [
+      startTgt[0] + (endTgt[0] - startTgt[0]) * ease,
+      startTgt[1] + (endTgt[1] - startTgt[1]) * ease,
+      startTgt[2] + (endTgt[2] - startTgt[2]) * ease,
+    ];
     pushCamera();
 
     if (t < 1) {
@@ -377,6 +400,11 @@ function alignCameraTo(target: { yaw: number; pitch: number }) {
   }
 
   cameraAnimFrame = requestAnimationFrame(step);
+}
+
+/** 平滑动画过渡视口相机到目标角度（如点击右上角方向导航指示器）。 */
+function alignCameraTo(target: { yaw: number; pitch: number }) {
+  tweenCameraTo(target, 180);
 }
 
 /** 重置为标准透视斜俯视视角 (yaw = -0.7, pitch = 0.35)。 */
@@ -498,7 +526,7 @@ function onPointerMove(event: PointerEvent) {
     if (draggingAxis.value) {
       hoveredGizmo.value = null;
       const point = canvasPoint(event);
-      if (point) pushDrag(point);
+      if (point) pushDrag(point, event.ctrlKey || event.metaKey);
       return;
     }
     if (dragMode) {
@@ -546,17 +574,17 @@ function requestStep() {
 }
 
 /** 拖动按 rAF 合并：每帧最多问一次后端，中间的光标位置直接丢掉。 */
-function pushDrag(point: { x: number; y: number }) {
+function pushDrag(point: { x: number; y: number }, snap: boolean) {
   if (dragFrame) {
-    pendingDrag = point;
+    pendingDrag = { x: point.x, y: point.y, snap };
     return;
   }
   dragFrame = requestAnimationFrame(() => {
     dragFrame = 0;
-    const target = pendingDrag ?? point;
+    const target = pendingDrag ?? { x: point.x, y: point.y, snap };
     pendingDrag = null;
     void api
-      .viewportDrag(viewId, target.x, target.y)
+      .viewportDrag(viewId, target.x, target.y, target.snap)
       .then((res) => {
         if (!res) return;
         if (res.position) emit("move", res.position);
@@ -626,14 +654,35 @@ function canvasPoint(event: PointerEvent): { x: number; y: number } | null {
   };
 }
 
-/** 点选：把 CSS 坐标换算到 canvas **位图**坐标再交给后端。 */
+/** 点选：把 CSS 坐标换算到 canvas **位图**坐标再交给后端。支持 Shift / Ctrl 多选。 */
 async function pickAt(event: PointerEvent) {
   if (!inTauri || !channel) return;
   const point = canvasPoint(event);
   if (!point) return;
   const hit = await api.viewportPick(viewId, point.x, point.y).catch(() => undefined);
   if (hit === undefined) return;
-  emit("select", hit ?? null);
+  if (hit === null) {
+    if (!event.shiftKey && !event.ctrlKey && !event.metaKey) {
+      emit("select", null);
+    }
+    return;
+  }
+  if (event.ctrlKey || event.metaKey) {
+    // Ctrl / Cmd 多选：切换该项在选择集合中的状态
+    const current = props.selection ?? [];
+    const next = current.includes(hit)
+      ? current.filter((i) => i !== hit)
+      : [...current, hit];
+    emit("select-multiple", next);
+  } else if (event.shiftKey) {
+    // Shift 多选：追加到选择集合
+    const current = props.selection ?? [];
+    if (!current.includes(hit)) {
+      emit("select-multiple", [...current, hit]);
+    }
+  } else {
+    emit("select", hit);
+  }
 }
 
 /** 主选中项：多选时与层级一样取最后一个。 */
@@ -683,13 +732,12 @@ function sendInput(event: ViewportInput) {
   return api.viewportInput(viewId, event).catch(() => undefined);
 }
 
-/** 套用后端算出来的取景参数（`yaw` / `pitch` 由后端原样带回）。 */
+/** 套用后端算出来的取景参数（`yaw` / `pitch` 由后端原样带回，平滑过渡）。 */
 async function applyFrame(mode: "all" | "selection") {
   if (!inTauri || !channel) return;
   const framed = await api.viewportFrame(viewId, mode).catch(() => null);
   if (!framed) return;
-  orbit.value = framed;
-  pushCamera();
+  tweenCameraTo(framed, 220);
 }
 
 /** 框住整个场景（`A` / `Home` / 工具栏按钮）。 */
