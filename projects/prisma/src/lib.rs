@@ -43,6 +43,7 @@ pub unsafe extern "C" fn prism_project_get_api(out: *mut prism_project_api::Proj
 #[cfg(not(target_os = "android"))]
 struct PreviewState {
     ticks: u64,
+    host: *const prism_project_api::HostApi,
 }
 
 #[cfg(not(target_os = "android"))]
@@ -57,7 +58,7 @@ unsafe extern "C" fn preview_create(
     if host.abi_version != prism_project_api::ABI_VERSION {
         return prism_project_api::INVALID_ARGUMENT;
     }
-    let state = Box::new(PreviewState { ticks: 0 });
+    let state = Box::new(PreviewState { ticks: 0, host });
     unsafe { *out = Box::into_raw(state).cast() };
     if let Some(log) = host.log {
         let message = b"Prisma project preview started";
@@ -72,6 +73,13 @@ unsafe extern "C" fn preview_tick(state: *mut std::ffi::c_void, _dt: f32) -> i32
         return prism_project_api::INVALID_ARGUMENT;
     };
     state.ticks = state.ticks.saturating_add(1);
+    if state.ticks == 1 && !state.host.is_null() {
+        let host = unsafe { &*state.host };
+        if let Some(log) = host.log {
+            let message = b"Prisma project preview ticked";
+            unsafe { log(host.user_data, 3, message.as_ptr(), message.len()) };
+        }
+    }
     prism_project_api::SUCCESS
 }
 

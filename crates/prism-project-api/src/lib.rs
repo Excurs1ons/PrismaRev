@@ -10,6 +10,23 @@ pub const SUCCESS: i32 = 0;
 pub const INVALID_ARGUMENT: i32 = 1;
 pub const REGISTRATION_FAILED: i32 = 2;
 pub const TICK_FAILED: i32 = 3;
+pub const HOST_CAP_LOGGING: u64 = 1 << 0;
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct EntityHandle {
+    pub id: u32,
+    pub generation: u32,
+}
+
+pub type SpawnEntity =
+    unsafe extern "C" fn(user_data: *mut core::ffi::c_void, out_entity: *mut EntityHandle) -> i32;
+pub type SetEntityName = unsafe extern "C" fn(
+    user_data: *mut core::ffi::c_void,
+    entity: EntityHandle,
+    name: *const u8,
+    name_len: usize,
+) -> i32;
 
 pub type LogMessage = unsafe extern "C" fn(
     user_data: *mut core::ffi::c_void,
@@ -22,9 +39,14 @@ pub type LogMessage = unsafe extern "C" fn(
 #[derive(Clone, Copy)]
 pub struct HostApi {
     pub abi_version: u32,
+    pub capabilities: u64,
     pub user_data: *mut core::ffi::c_void,
     pub log: Option<LogMessage>,
+    pub spawn_entity: Option<SpawnEntity>,
+    pub set_entity_name: Option<SetEntityName>,
 }
+
+pub const HOST_CAP_WORLD_COMMANDS: u64 = 1 << 1;
 
 pub type CreateProject =
     unsafe extern "C" fn(host: *const HostApi, out_state: *mut *mut core::ffi::c_void) -> i32;

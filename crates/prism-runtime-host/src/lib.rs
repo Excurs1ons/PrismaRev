@@ -8,7 +8,9 @@
 use std::path::{Path, PathBuf};
 
 use libloading::{Library, Symbol};
-use prism_project_api::{GetProjectApi, HostApi, ProjectApi, ABI_VERSION, SUCCESS};
+use prism_project_api::{
+    GetProjectApi, HostApi, ProjectApi, ABI_VERSION, HOST_CAP_LOGGING, SUCCESS,
+};
 use thiserror::Error;
 
 const GET_API_SYMBOL: &[u8] = b"prism_project_get_api\0";
@@ -90,13 +92,16 @@ impl ProjectModule {
         else {
             return Err(ProjectModuleError::IncompleteApi { path: self.path });
         };
-        let host = HostApi {
+        let host = Box::new(HostApi {
             abi_version: ABI_VERSION,
+            capabilities: HOST_CAP_LOGGING,
             user_data: std::ptr::null_mut(),
             log: Some(host_log),
-        };
+            spawn_entity: None,
+            set_entity_name: None,
+        });
         let mut state = std::ptr::null_mut();
-        let status = unsafe { create(&host, &mut state) };
+        let status = unsafe { create(host.as_ref(), &mut state) };
         if status != SUCCESS || state.is_null() {
             return Err(ProjectModuleError::Create {
                 path: self.path.clone(),
@@ -105,6 +110,7 @@ impl ProjectModule {
         }
         Ok(ProjectSession {
             module: self,
+            host,
             state,
             tick,
             shutdown,
@@ -114,6 +120,7 @@ impl ProjectModule {
 
 pub struct ProjectSession {
     module: ProjectModule,
+    host: Box<HostApi>,
     state: *mut std::ffi::c_void,
     tick: prism_project_api::TickProject,
     shutdown: prism_project_api::ShutdownProject,
@@ -122,6 +129,10 @@ pub struct ProjectSession {
 impl ProjectSession {
     pub fn module(&self) -> &ProjectModule {
         &self.module
+    }
+
+    pub fn host_capabilities(&self) -> u64 {
+        self.host.capabilities
     }
 
     pub fn tick(&mut self, dt: f32) -> Result<(), ProjectModuleError> {
