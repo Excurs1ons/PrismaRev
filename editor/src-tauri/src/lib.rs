@@ -1577,6 +1577,7 @@ pub fn run() {
             viewport::editor_viewport_set_grid,
             viewport::editor_viewport_pick,
             viewport::editor_viewport_box_select,
+            viewport::editor_viewport_selection_bounds,
             viewport::editor_viewport_gizmo_hit,
             viewport::editor_viewport_gizmo_hover,
             viewport::editor_viewport_drag_begin,

@@ -255,6 +255,7 @@ function scheduleReload() {
     }
     try {
       stats.value = await api.viewportReload(viewId, props.doc);
+      scheduleFetchSelectionBounds();
       message.value = null;
     } catch (error) {
       message.value = String(error);
@@ -296,6 +297,121 @@ const marqueeBox = computed(() => {
   if (w < 2 && h < 2) return null;
   return { x: x1, y: y1, width: w, height: h };
 });
+
+/** 选中实体的 3D 投影包围盒列表。 */
+const selectionBounds = ref<api.ProjectedBoundBox[]>([]);
+let boundsFrame = 0;
+
+const BOUND_BOX_EDGES: [number, number][] = [
+  // 底面
+  [0, 1], [1, 3], [3, 2], [2, 0],
+  // 顶面
+  [4, 5], [5, 7], [7, 6], [6, 4],
+  // 竖立边
+  [0, 4], [1, 5], [2, 6], [3, 7],
+];
+
+function scheduleFetchSelectionBounds() {
+  if (!inTauri || !channel || !isScene.value || !props.selection || props.selection.length === 0) {
+    selectionBounds.value = [];
+    return;
+  }
+  if (boundsFrame) return;
+  boundsFrame = requestAnimationFrame(() => {
+    boundsFrame = 0;
+    const indices = props.selection ?? [];
+    if (indices.length === 0) {
+      selectionBounds.value = [];
+      return;
+    }
+    void api
+      .viewportSelectionBounds(viewId, indices)
+      .then((bounds) => {
+        selectionBounds.value = bounds;
+      })
+      .catch(() => {
+        selectionBounds.value = [];
+      });
+  });
+}
+
+/** Unity 风格第一人称飞行相机模式（右键按住 + WASD/QE 漫游）。 */
+const flyMode = ref(false);
+const flySpeed = ref(10.0);
+const flyKeys = {
+  w: false,
+  a: false,
+  s: false,
+  d: false,
+  q: false,
+  e: false,
+  shift: false,
+};
+let flyAnimFrame = 0;
+let lastFlyTime = 0;
+
+function startFlyLoop() {
+  if (flyAnimFrame) cancelAnimationFrame(flyAnimFrame);
+  lastFlyTime = performance.now();
+
+  function step(now: number) {
+    if (!flyMode.value) {
+      flyAnimFrame = 0;
+      return;
+    }
+    const dt = Math.min(0.1, (now - lastFlyTime) / 1000);
+    lastFlyTime = now;
+
+    const multiplier = flyKeys.shift ? 2.5 : 1.0;
+    const speed = flySpeed.value * multiplier * dt;
+
+    const { yaw, pitch, target } = orbit.value;
+    const forwardX = Math.cos(pitch) * -Math.sin(yaw);
+    const forwardY = -Math.sin(pitch);
+    const forwardZ = Math.cos(pitch) * -Math.cos(yaw);
+
+    const rightX = Math.cos(yaw);
+    const rightZ = -Math.sin(yaw);
+
+    let mx = 0;
+    let my = 0;
+    let mz = 0;
+
+    if (flyKeys.w) { mx += forwardX; my += forwardY; mz += forwardZ; }
+    if (flyKeys.s) { mx -= forwardX; my -= forwardY; mz -= forwardZ; }
+    if (flyKeys.d) { mx += rightX; mz += rightZ; }
+    if (flyKeys.a) { mx -= rightX; mz -= rightZ; }
+    if (flyKeys.e) { my += 1.0; }
+    if (flyKeys.q) { my -= 1.0; }
+
+    const len = Math.hypot(mx, my, mz);
+    if (len > 1e-4) {
+      const stepDist = speed / len;
+      orbit.value.target = [
+        target[0] + mx * stepDist,
+        target[1] + my * stepDist,
+        target[2] + mz * stepDist,
+      ];
+      pushCamera();
+    }
+    flyAnimFrame = requestAnimationFrame(step);
+  }
+  flyAnimFrame = requestAnimationFrame(step);
+}
+
+function stopFlyLoop() {
+  if (flyAnimFrame) {
+    cancelAnimationFrame(flyAnimFrame);
+    flyAnimFrame = 0;
+  }
+  flyKeys.w = false;
+  flyKeys.a = false;
+  flyKeys.s = false;
+  flyKeys.d = false;
+  flyKeys.q = false;
+  flyKeys.e = false;
+  flyKeys.shift = false;
+}
 
 /** 旋转手柄拖拽时的 SVG 扇面与弧线路径。 */
 const rotateArcPath = computed(() => {
@@ -359,6 +475,7 @@ let cameraAnimFrame = 0;
 /** 相机变更按 rAF 合并：拖动时每帧最多下发一次。 */
 function pushCamera() {
   if (!inTauri || !isScene.value) return;
+  scheduleFetchSelectionBounds();
   if (cameraPending) return;
   cameraPending = true;
   requestAnimationFrame(() => {
@@ -441,6 +558,10 @@ function onPointerDown(event: PointerEvent) {
   if (!canvas) return;
   canvas.focus();
   if (isScene.value) {
+    if (event.button === 2) {
+      flyMode.value = true;
+      startFlyLoop();
+    }
     if (props.activeTool === "select" && event.button === 0 && !event.altKey) {
       dragMode = "marquee";
       marqueeStart.value = { x: event.clientX, y: event.clientY };
@@ -546,6 +667,10 @@ function pushHoverCheck(point: { x: number; y: number }) {
 }
 
 function onPointerLeave() {
+  if (flyMode.value) {
+    flyMode.value = false;
+    stopFlyLoop();
+  }
   hoveredGizmo.value = null;
   pendingHover = null;
   if (hoverFrame) {
@@ -628,6 +753,7 @@ function pushDrag(point: { x: number; y: number }, snap: boolean) {
         if (res.rotation) emit("rotate", res.rotation);
         if (res.scale) emit("scale", res.scale);
         if (res.feedback) dragFeedback.value = res.feedback;
+        scheduleFetchSelectionBounds();
         // 拖动期间文档在变，但重载会换掉 ECS 句柄：等松手再同步。
         reloadPending = true;
       })
@@ -638,6 +764,10 @@ function pushDrag(point: { x: number; y: number }, snap: boolean) {
 function onPointerUp(event: PointerEvent) {
   orbitBeforePress = null;
   if (isScene.value) {
+    if (flyMode.value) {
+      flyMode.value = false;
+      stopFlyLoop();
+    }
     if (dragMode === "marquee") {
       dragMode = null;
       canvasEl.value?.releasePointerCapture(event.pointerId);
@@ -781,12 +911,21 @@ function primarySelection(): number | null {
 
 /** 把选中项同步给后端（决定 gizmo 画在哪个实体上）。 */
 function pushSelection() {
+  scheduleFetchSelectionBounds();
   if (!inTauri || !channel || !isScene.value) return;
   void api.viewportSelect(viewId, primarySelection()).catch(() => undefined);
 }
 
 function onWheel(event: WheelEvent) {
   if (isScene.value) {
+    if (flyMode.value) {
+      flySpeed.value = Math.max(
+        1.0,
+        Math.min(100.0, flySpeed.value * (event.deltaY < 0 ? 1.25 : 0.8)),
+      );
+      event.preventDefault();
+      return;
+    }
     orbit.value.distance = Math.max(
       0.2,
       Math.min(500, orbit.value.distance * Math.exp(event.deltaY * 0.0012)),
@@ -800,6 +939,16 @@ function onWheel(event: WheelEvent) {
 
 function onKey(event: KeyboardEvent, pressed: boolean) {
   if (isScene.value) {
+    if (flyMode.value) {
+      const code = event.code;
+      if (code === "KeyW") { flyKeys.w = pressed; event.preventDefault(); return; }
+      if (code === "KeyS") { flyKeys.s = pressed; event.preventDefault(); return; }
+      if (code === "KeyA") { flyKeys.a = pressed; event.preventDefault(); return; }
+      if (code === "KeyD") { flyKeys.d = pressed; event.preventDefault(); return; }
+      if (code === "KeyE") { flyKeys.e = pressed; event.preventDefault(); return; }
+      if (code === "KeyQ") { flyKeys.q = pressed; event.preventDefault(); return; }
+      if (code === "ShiftLeft" || code === "ShiftRight") { flyKeys.shift = pressed; return; }
+    }
     if (!pressed) return;
     // F = 聚焦选中项（没有选中就框住整个场景），A / Home = 框住整个场景。
     if (event.code === "KeyF") {
@@ -1195,10 +1344,37 @@ const aspectOptions = computed<DropdownOption[]>(() => [
         />
         <!-- 变换拖拽与手柄悬停实时交互反馈浮层 (Unity 风格黄色高亮与数值 HUD) -->
         <svg
-          v-if="dragFeedback || (hoveredGizmo && draggingAxis === null)"
+          v-if="dragFeedback || (hoveredGizmo && draggingAxis === null) || selectionBounds.length > 0"
           class="viewport-drag-overlay"
           :viewBox="`0 0 ${canvasEl?.width || 1280} ${canvasEl?.height || 720}`"
         >
+          <!-- 3D 选中包围盒 (Selection Bounding Box) -->
+          <g v-if="selectionBounds.length > 0" class="selection-bounds-group">
+            <g
+              v-for="box in selectionBounds"
+              :key="box.index"
+              :class="['selection-bound-box', { primary: box.isPrimary }]"
+            >
+              <template v-if="box.corners">
+                <line
+                  v-for="([i1, i2], edgeIdx) in BOUND_BOX_EDGES"
+                  :key="edgeIdx"
+                  :x1="box.corners[i1][0]"
+                  :y1="box.corners[i1][1]"
+                  :x2="box.corners[i2][0]"
+                  :y2="box.corners[i2][1]"
+                />
+              </template>
+              <rect
+                v-else
+                :x="box.rect[0]"
+                :y="box.rect[1]"
+                :width="Math.max(2, box.rect[2] - box.rect[0])"
+                :height="Math.max(2, box.rect[3] - box.rect[1])"
+              />
+            </g>
+          </g>
+
           <!-- 悬停手柄高亮轮廓 -->
           <template v-if="hoveredGizmo && draggingAxis === null">
             <!-- 1D 轴线投影 -->
@@ -1279,6 +1455,11 @@ const aspectOptions = computed<DropdownOption[]>(() => [
             >{{ dragFeedback.text }}</text>
           </g>
         </svg>
+
+        <!-- Unity 风格漫游飞行状态指示 -->
+        <div v-if="flyMode" class="viewport-fly-badge">
+          <span>漫游飞行模式 (WASD 移动 · QE 升降 · Shift 加速 · 滚轮调速: {{ flySpeed.toFixed(1) }} m/s)</span>
+        </div>
       </div>
 
       <!-- Unity 风格右上角相机方向导航指示器 (Orientation Gizmo) -->
@@ -1716,5 +1897,41 @@ const aspectOptions = computed<DropdownOption[]>(() => [
 
 .font-bold {
   font-weight: 600;
+}
+
+.selection-bound-box line,
+.selection-bound-box rect {
+  stroke: #388bfd;
+  stroke-width: 1.25;
+  stroke-dasharray: 4 3;
+  fill: none;
+  vector-effect: non-scaling-stroke;
+  opacity: 0.7;
+}
+
+.selection-bound-box.primary line,
+.selection-bound-box.primary rect {
+  stroke: #ff9b26;
+  stroke-width: 1.5;
+  stroke-dasharray: none;
+  opacity: 0.95;
+  filter: drop-shadow(0 0 2px rgba(255, 155, 38, 0.45));
+}
+
+.viewport-fly-badge {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 4px 12px;
+  background: rgba(20, 24, 33, 0.88);
+  border: 1px solid #388bfd;
+  border-radius: 4px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+  color: #e6edf3;
+  font-size: 11px;
+  font-weight: 500;
+  pointer-events: none;
+  z-index: 40;
 }
 </style>

@@ -744,6 +744,22 @@ export function viewportBoxSelect(
   });
 }
 
+/** 实体在视口屏幕上的 3D 投影包围盒。 */
+export interface ProjectedBoundBox {
+  index: number;
+  isPrimary: boolean;
+  corners?: [number, number][];
+  rect: [number, number, number, number];
+}
+
+/** 获取选中实体列表在视口屏幕上的投影包围盒。 */
+export function viewportSelectionBounds(
+  id: string,
+  indices: number[],
+): Promise<ProjectedBoundBox[]> {
+  return call<ProjectedBoundBox[]>("editor_viewport_selection_bounds", { id, indices });
+}
+
 /** 光标下的变换手柄（`"x"` / `"y"` / `"z"` / `"xy"` / `"xz"` / `"yz"` / `"xyz"`，没有则 `null`）。 */
 export function viewportGizmoHit(id: string, x: number, y: number): Promise<string | null> {
   return call<string | null>("editor_viewport_gizmo_hit", { id, x, y });
