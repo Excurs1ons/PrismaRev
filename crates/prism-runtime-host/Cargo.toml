@@ -1,0 +1,12 @@
+[package]
+name = "prism-runtime-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Desktop project module loader for editor/runtime hosts"
+
+[dependencies]
+libloading = "0.8"
+prism-project-api = { path = "../prism-project-api" }
+log.workspace = true
+thiserror.workspace = true

@@ -1,0 +1,6 @@
+[package]
+name = "prism-project-api"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Same-build project module ABI for desktop preview"
