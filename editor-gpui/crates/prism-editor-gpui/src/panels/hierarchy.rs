@@ -198,9 +198,22 @@ impl EditorView {
                 .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
                     let modifiers = event.modifiers();
                     if modifiers.shift {
-                        // Shift = 区间选择（锚点 → 当前行），与 Unity / 资源管理器一致。
+                        // Shift = 可见行区间选择（Unity：按屏幕顺序，不是数组下标）。
                         let anchor = this.hierarchy_anchor.unwrap_or(index);
-                        this.workspace.select_range(anchor, index);
+                        let rows = this
+                            .workspace
+                            .document()
+                            .doc
+                            .visible_rows(&this.workspace.expanded);
+                        let position =
+                            |target: usize| rows.iter().position(|(row, _)| *row == target);
+                        if let (Some(from), Some(to)) = (position(anchor), position(index)) {
+                            let (start, end) = if from <= to { (from, to) } else { (to, from) };
+                            this.workspace.selection =
+                                rows[start..=end].iter().map(|(row, _)| *row).collect();
+                        } else {
+                            this.workspace.select(index, false);
+                        }
                     } else if modifiers.control {
                         this.workspace.select(index, true);
                         this.hierarchy_anchor = Some(index);

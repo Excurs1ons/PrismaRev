@@ -923,9 +923,14 @@ impl Workspace {
         let Some(index) = self.primary_selection() else {
             return;
         };
-        let new_index = self.edit("复制实体", |document| document.doc.duplicate(index));
+        let new_index = self.edit("复制实体", |document| {
+            document.doc.duplicate_subtree(index)
+        });
         if let Some(new_index) = new_index {
             self.selection = vec![new_index];
+            if let Some(id) = self.document().doc.id_of_index(new_index) {
+                self.expanded.insert(id);
+            }
         }
     }
 
@@ -1065,6 +1070,27 @@ impl Workspace {
             document.doc.remove_component(index, PREFAB_LINK_COMPONENT);
         });
         true
+    }
+
+    /// 内联重命名的实时预览：只改文档，不产生撤销步（避免每敲一个字符一步）。
+    pub fn preview_rename(&mut self, index: usize, name: &str) {
+        if let Some(entity) = self.document_mut().doc.entities.get_mut(index) {
+            if entity.name.as_deref() != Some(name) {
+                entity.name = Some(name.to_string());
+                self.document_mut().dirty = true;
+            }
+        }
+    }
+
+    /// 重命名结束：用开始编辑前的快照补一个撤销步（内容没变则不记）。
+    pub fn finish_rename(&mut self, base: SceneDoc) {
+        let after = self.document().doc.clone();
+        if base != after {
+            self.document_mut()
+                .undo
+                .push_snapshot("重命名实体", base, &after);
+            self.document_mut().dirty = true;
+        }
     }
 
     pub fn rename_entity(&mut self, index: usize, name: &str) {
@@ -1933,6 +1959,51 @@ mod tests {
         for entity in &workspace.document().doc.entities {
             assert!(!entity.has_component("prism_engine::scene::Camera") || entity.id != Some(1));
         }
+    }
+
+    #[test]
+    fn preview_rename_creates_one_undo_step_on_finish() {
+        let mut workspace = Workspace::load_fixture(&fixture());
+        let base = workspace.document().doc.clone();
+        workspace.preview_rename(0, "C");
+        workspace.preview_rename(0, "Ca");
+        workspace.preview_rename(0, "Camera2");
+        assert_eq!(
+            workspace.document().doc.entities[0].display_name(),
+            "Camera2"
+        );
+        assert!(!workspace.can_undo(), "预览阶段不产生撤销步");
+
+        workspace.finish_rename(base);
+        assert_eq!(workspace.document().undo.history().len(), 1);
+        workspace.undo();
+        assert_eq!(
+            workspace.document().doc.entities[0].display_name(),
+            "Camera"
+        );
+    }
+
+    #[test]
+    fn duplicate_selection_copies_subtree() {
+        let mut workspace = Workspace::load_fixture(&fixture());
+        // fixture: Camera(1) → Cube(2)。
+        workspace.select(0, false);
+        workspace.duplicate_selection();
+        assert_eq!(workspace.document().doc.entities.len(), 4);
+        let root = workspace.selection[0];
+        assert_eq!(
+            workspace.document().doc.entities[root].display_name(),
+            "Camera (1)"
+        );
+        let root_id = workspace.document().doc.entities[root].id.unwrap();
+        assert!(workspace
+            .document()
+            .doc
+            .entities
+            .iter()
+            .any(|entity| entity.parent == Some(root_id) && entity.display_name() == "Cube"));
+        workspace.undo();
+        assert_eq!(workspace.document().doc.entities.len(), 2);
     }
 
     #[test]

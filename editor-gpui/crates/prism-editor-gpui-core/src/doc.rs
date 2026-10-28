@@ -377,6 +377,47 @@ impl SceneDoc {
         Ok(to)
     }
 
+    /// 复制整棵子树（Unity 的 Ctrl+D）：内部 parent 重映射到新 id，根保持原父级。
+    pub fn duplicate_subtree(&mut self, index: usize) -> Option<usize> {
+        self.entities.get(index)?;
+        // 收集子树（根 + 后代），保持数组顺序，保证父级先于子级。
+        let mut selected = vec![index];
+        selected.extend(self.descendants(index));
+        selected.sort_unstable();
+
+        let base = self.next_id();
+        let remap: HashMap<u32, u32> = selected
+            .iter()
+            .filter_map(|index| self.id_of_index(*index))
+            .enumerate()
+            .map(|(offset, id)| (id, base + offset as u32))
+            .collect();
+        let root_id = self.id_of_index(index);
+
+        let start = self.entities.len();
+        for old_index in selected {
+            let Some(source) = self.entities.get(old_index).cloned() else {
+                continue;
+            };
+            let mut copy = source.clone();
+            let old_id = source.id;
+            copy.id = old_id.and_then(|id| remap.get(&id).copied());
+            copy.parent = if old_id == root_id {
+                source.parent
+            } else {
+                source.parent.and_then(|parent| remap.get(&parent).copied())
+            };
+            if old_id == root_id {
+                copy.name = Some(format!("{} (1)", source.display_name()));
+            }
+            self.entities.push(copy);
+        }
+        if self.entities.len() == start {
+            return None;
+        }
+        Some(start)
+    }
+
     pub fn duplicate(&mut self, index: usize) -> Option<usize> {
         let source = self.entities.get(index)?.clone();
         let mut copy = source.clone();
@@ -699,6 +740,31 @@ mod tests {
         doc.remove_entities(&[a]);
         assert!(doc.entities.is_empty());
         assert_ne!(b, usize::MAX);
+    }
+
+    #[test]
+    fn duplicate_subtree_remaps_children_and_keeps_root_parent() {
+        let mut doc = doc_with_tree();
+        let duplicated = doc.duplicate_subtree(0).expect("duplicate");
+        assert_eq!(doc.entities.len(), 7, "3 个原实体 + 3 个复制 + sibling");
+        assert_eq!(doc.entities[duplicated].display_name(), "Root (1)");
+        assert!(doc.entities[duplicated].parent.is_none());
+        let root_id = doc.entities[duplicated].id.unwrap();
+        let children: Vec<&EntityJson> = doc
+            .entities
+            .iter()
+            .filter(|entity| entity.parent == Some(root_id))
+            .collect();
+        assert_eq!(children.len(), 1, "直接子级指向新根");
+        assert_eq!(children[0].display_name(), "Child");
+        let child_id = children[0].id.unwrap();
+        assert!(doc
+            .entities
+            .iter()
+            .any(|entity| entity.parent == Some(child_id)));
+        // id 全局唯一。
+        let ids: HashSet<u32> = doc.entities.iter().filter_map(|e| e.id).collect();
+        assert_eq!(ids.len(), doc.entities.len());
     }
 
     #[test]

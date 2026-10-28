@@ -90,6 +90,10 @@ Unity 形状的编辑器，又不会把 `prism-render` 绑死在某套 UI 生命
   写 `components[component][path]`，失败就不改；步进进入撤销栈并按字段合并。
 - `Transform` 不在 `components` 里（作者字段），走 `set_transform_axis`，撤销也单独合并。
 - 没有 schema 的组件 → 直接显示 pretty JSON（保证旧文档/新组件不会「打不开」）。
+- **删除 / 复制**：删除整棵子树；`duplicate_subtree` 复制根 + 后代并把内部 parent
+  映射到新 id，根保留原父级（Unity Ctrl+D 语义）。
+- **重命名**：`preview_rename` 逐字改文档但不入栈，`finish_rename(base)` 在提交时补一个
+  快照撤销步；Esc 直接回滚到 `base`。
 - **多对象编辑**：只显示所有选中实体的公共组件（`common_components`），字段写入走
   `set_field_multi`（一次快照 = 一次撤销），组件移除走 `remove_component_multi`；
   Transform 不参与批量编辑（避免不同父级下的局部坐标歧义）。
@@ -168,7 +172,7 @@ Unity 形状的编辑器，又不会把 `prism-render` 绑死在某套 UI 生命
 
 ```sh
 cd editor-gpui
-cargo test -p prism-editor-gpui-core                                  # 111 passed
+cargo test -p prism-editor-gpui-core                                  # 114 passed
 cargo check -p prism-editor-gpui --target x86_64-pc-windows-gnu       # 类型检查
 cargo clippy -p prism-editor-gpui -p prism-editor-gpui-core \
     --target x86_64-pc-windows-gnu                                    # clean

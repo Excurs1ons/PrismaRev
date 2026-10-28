@@ -262,6 +262,8 @@ pub struct EditorView {
     /// 「存为预制体」弹层：`(实体下标, 名字提示)`。
     pub prefab_save: Option<(usize, String)>,
     /// Scene / Game View 最近一次绘制的屏幕矩形（拾取与 gizmo 用）。
+    /// 内联重命名的起始快照（提交时补一个撤销步，Esc 时回滚）。
+    pub rename_base: Option<prism_editor_gpui_core::SceneDoc>,
     /// 双击实体 = 取景（Unity 里双击层级/视口都会聚焦）。
     pub last_pick: Option<(usize, std::time::Instant)>,
     pub scene_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
@@ -309,6 +311,7 @@ impl EditorView {
             save_as: None,
             asset_rename: None,
             prefab_save: None,
+            rename_base: None,
             last_pick: None,
             scene_bounds: Rc::new(Cell::new(None)),
             game_bounds: Rc::new(Cell::new(None)),
@@ -467,7 +470,7 @@ impl EditorView {
                     editing.buffer.pop();
                 }
                 "escape" => {
-                    self.editing = None;
+                    self.cancel_edit();
                 }
                 "enter" => {
                     self.commit_edit(editing.clone());
@@ -559,6 +562,20 @@ impl EditorView {
         cx.notify();
     }
 
+    /// 取消内联编辑：重命名回滚到开始前的内容，其余只丢缓冲。
+    fn cancel_edit(&mut self) {
+        if matches!(
+            self.editing.as_ref().map(|editing| &editing.target),
+            Some(TextTarget::RenameEntity(_))
+        ) {
+            if let Some(base) = self.rename_base.take() {
+                self.workspace.document_mut().doc = base;
+            }
+        }
+        self.editing = None;
+        self.rename_base = None;
+    }
+
     fn preview_edit(&mut self) {
         let Some(editing) = self.editing.clone() else {
             return;
@@ -572,7 +589,7 @@ impl EditorView {
             }
             TextTarget::ComponentSearch => self.component_search = editing.buffer.clone(),
             TextTarget::RenameEntity(index) => {
-                self.workspace.rename_entity(*index, &editing.buffer);
+                self.workspace.preview_rename(*index, &editing.buffer);
             }
             TextTarget::Field {
                 entity_ids,
@@ -604,7 +621,7 @@ impl EditorView {
     fn commit_edit(&mut self, editing: TextEditState) {
         match &editing.target {
             TextTarget::RenameEntity(index) => {
-                self.workspace.rename_entity(*index, &editing.buffer);
+                self.workspace.preview_rename(*index, &editing.buffer);
             }
             TextTarget::Field {
                 entity_ids,
@@ -670,11 +687,14 @@ impl EditorView {
                                 self.asset_rename = None;
                                 self.selected_asset = Some(target);
                             }
-                            Err(error) => self.workspace.log(
-                                prism_editor_gpui_core::LogSource::Editor,
-                                prism_editor_gpui_core::LogLevel::Error,
-                                format!("重命名失败：{error}"),
-                            ),
+                            Err(error) => {
+                                self.asset_rename = Some((from.clone(), editing.buffer.clone()));
+                                self.workspace.log(
+                                    prism_editor_gpui_core::LogSource::Editor,
+                                    prism_editor_gpui_core::LogLevel::Error,
+                                    format!("重命名失败：{error}"),
+                                );
+                            }
                         }
                     }
                 }
@@ -685,11 +705,16 @@ impl EditorView {
                         self.prefab_save = None;
                         self.workspace.status = format!("已存为预制体 {path}");
                     }
-                    Err(error) => self.workspace.log(
-                        prism_editor_gpui_core::LogSource::Editor,
-                        prism_editor_gpui_core::LogLevel::Error,
-                        format!("存为预制体失败：{error}"),
-                    ),
+                    Err(error) => {
+                        if let Some((index, _)) = self.prefab_save.clone() {
+                            self.prefab_save = Some((index, editing.buffer.clone()));
+                        }
+                        self.workspace.log(
+                            prism_editor_gpui_core::LogSource::Editor,
+                            prism_editor_gpui_core::LogLevel::Error,
+                            format!("存为预制体失败：{error}"),
+                        );
+                    }
                 }
             }
             TextTarget::ProjectSettings(key) => {
