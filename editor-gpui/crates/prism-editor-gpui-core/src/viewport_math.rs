@@ -4,13 +4,40 @@
 //! 编辑器侧的**近似**拾取：实体用轴对齐单位立方体（`[-0.5,0.5]³` × scale），
 //! 与 Web 编辑器 `pick.rs` 的折中一致。
 
-use crate::doc::TransformJson;
+use crate::doc::{SceneDoc, TransformJson};
 use crate::workspace::OrbitCamera;
 
 pub const GIZMO_SCREEN_PIXELS: f32 = 90.0;
 pub const GIZMO_PICK_RADIUS: f32 = 8.0;
 /// 旋转 gizmo 圆环的命中带宽（像素）。
 pub const GIZMO_RING_TOLERANCE: f32 = 10.0;
+
+pub const IDENTITY_BASIS: [[f32; 3]; 3] = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+pub const IDENTITY_ROTATION: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
+
+/// gizmo 的坐标空间：世界轴或实体自身轴。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GizmoSpace {
+    #[default]
+    World,
+    Local,
+}
+
+impl GizmoSpace {
+    pub fn label(self) -> &'static str {
+        match self {
+            GizmoSpace::World => "世界",
+            GizmoSpace::Local => "局部",
+        }
+    }
+
+    pub fn toggled(self) -> Self {
+        match self {
+            GizmoSpace::World => GizmoSpace::Local,
+            GizmoSpace::Local => GizmoSpace::World,
+        }
+    }
+}
 
 /// 旋转 gizmo 的圆环在屏幕上的半径（每个轴一条）。
 pub fn ring_screen_radius(
@@ -21,11 +48,32 @@ pub fn ring_screen_radius(
     width: f32,
     height: f32,
 ) -> Option<(f32, f32, f32)> {
+    ring_screen_radius_oriented(
+        frame,
+        origin,
+        IDENTITY_BASIS,
+        axis,
+        world_radius,
+        width,
+        height,
+    )
+}
+
+/// 局部坐标下的圆环半径：`basis` 的三列是实体局部轴在世界空间的方向。
+pub fn ring_screen_radius_oriented(
+    frame: &CameraFrame,
+    origin: [f32; 3],
+    basis: [[f32; 3]; 3],
+    axis: usize,
+    world_radius: f32,
+    width: f32,
+    height: f32,
+) -> Option<(f32, f32, f32)> {
     // 圆环在垂直于轴的平面里；用两条正交半径的屏幕长度平均近似半径。
     let (u, v) = match axis {
-        0 => ([0.0, 1.0, 0.0], [0.0, 0.0, 1.0]),
-        1 => ([1.0, 0.0, 0.0], [0.0, 0.0, 1.0]),
-        _ => ([1.0, 0.0, 0.0], [0.0, 1.0, 0.0]),
+        0 => (basis[1], basis[2]),
+        1 => (basis[0], basis[2]),
+        _ => (basis[0], basis[1]),
     };
     let start = project(origin, frame, width, height)?;
     let a = project(add(origin, scale(u, world_radius)), frame, width, height)?;
@@ -44,10 +92,31 @@ pub fn pick_rotation_axis(
     width: f32,
     height: f32,
 ) -> Option<usize> {
+    pick_rotation_axis_oriented(
+        point,
+        frame,
+        origin,
+        IDENTITY_BASIS,
+        world_radius,
+        width,
+        height,
+    )
+}
+
+/// 局部坐标下的圆环命中。
+pub fn pick_rotation_axis_oriented(
+    point: (f32, f32),
+    frame: &CameraFrame,
+    origin: [f32; 3],
+    basis: [[f32; 3]; 3],
+    world_radius: f32,
+    width: f32,
+    height: f32,
+) -> Option<usize> {
     let mut best: Option<(usize, f32)> = None;
     for axis in 0..3 {
         let Some((cx, cy, radius)) =
-            ring_screen_radius(frame, origin, axis, world_radius, width, height)
+            ring_screen_radius_oriented(frame, origin, basis, axis, world_radius, width, height)
         else {
             continue;
         };
@@ -116,6 +185,49 @@ pub fn quat_normalize(q: [f32; 4]) -> [f32; 4] {
         .sqrt()
         .max(1e-6);
     [q[0] / len, q[1] / len, q[2] / len, q[3] / len]
+}
+
+/// 单位四元数的共轭（= 逆）。
+pub fn quat_conjugate(q: [f32; 4]) -> [f32; 4] {
+    [-q[0], -q[1], -q[2], q[3]]
+}
+
+/// 局部三轴在世界空间的方向（列向量）。
+pub fn basis_from_quat(q: [f32; 4]) -> [[f32; 3]; 3] {
+    [
+        quat_rotate(q, [1.0, 0.0, 0.0]),
+        quat_rotate(q, [0.0, 1.0, 0.0]),
+        quat_rotate(q, [0.0, 0.0, 1.0]),
+    ]
+}
+
+/// 实体沿父链累积的世界旋转（含自身；父级优先，遇环时截断）。
+pub fn world_rotation(doc: &SceneDoc, index: usize) -> [f32; 4] {
+    let mut chain = Vec::new();
+    let mut current = Some(index);
+    while let Some(current_index) = current {
+        if chain.len() >= 64 || chain.contains(&current_index) {
+            break;
+        }
+        chain.push(current_index);
+        current = doc.entities[current_index]
+            .parent
+            .and_then(|parent_id| doc.index_of_id(parent_id));
+    }
+    let mut rotation = IDENTITY_ROTATION;
+    for entity_index in chain.iter().rev() {
+        rotation = quat_mul(rotation, doc.entities[*entity_index].transform.rotation);
+    }
+    quat_normalize(rotation)
+}
+
+/// 父级的世界旋转（不含自身；根实体的父级为单位旋转）。
+pub fn parent_world_rotation(doc: &SceneDoc, index: usize) -> [f32; 4] {
+    doc.entities[index]
+        .parent
+        .and_then(|parent_id| doc.index_of_id(parent_id))
+        .map(|parent_index| world_rotation(doc, parent_index))
+        .unwrap_or(IDENTITY_ROTATION)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -283,9 +395,21 @@ pub fn axis_screen_segment(
     width: f32,
     height: f32,
 ) -> Option<ScreenSegment> {
-    let mut offset = [0.0; 3];
-    offset[axis] = world_length;
-    let end = add(origin, offset);
+    let mut direction = [0.0; 3];
+    direction[axis] = 1.0;
+    axis_screen_segment_oriented(frame, origin, direction, world_length, width, height)
+}
+
+/// 指定方向的轴线段（局部 gizmo 用）。
+pub fn axis_screen_segment_oriented(
+    frame: &CameraFrame,
+    origin: [f32; 3],
+    direction: [f32; 3],
+    world_length: f32,
+    width: f32,
+    height: f32,
+) -> Option<ScreenSegment> {
+    let end = add(origin, scale(direction, world_length));
     let start = project(origin, frame, width, height)?;
     let end = project(end, frame, width, height)?;
     let px = ((end.0 - start.0).powi(2) + (end.1 - start.1).powi(2)).sqrt();
@@ -305,10 +429,31 @@ pub fn pick_gizmo_axis(
     width: f32,
     height: f32,
 ) -> Option<(usize, [f32; 2], f32)> {
+    pick_gizmo_axis_oriented(
+        point,
+        frame,
+        origin,
+        IDENTITY_BASIS,
+        world_length,
+        width,
+        height,
+    )
+}
+
+/// 局部坐标下的轴命中。
+pub fn pick_gizmo_axis_oriented(
+    point: (f32, f32),
+    frame: &CameraFrame,
+    origin: [f32; 3],
+    basis: [[f32; 3]; 3],
+    world_length: f32,
+    width: f32,
+    height: f32,
+) -> Option<(usize, [f32; 2], f32)> {
     let mut best: Option<(usize, [f32; 2], f32, f32)> = None;
-    for axis in 0..3 {
+    for (axis, direction) in basis.iter().enumerate() {
         let Some((start, end, px_per_unit)) =
-            axis_screen_segment(frame, origin, axis, world_length, width, height)
+            axis_screen_segment_oriented(frame, origin, *direction, world_length, width, height)
         else {
             continue;
         };
@@ -488,6 +633,55 @@ mod tests {
         assert!((wrap_angle(-3.0 * std::f32::consts::PI) + std::f32::consts::PI).abs() < 1e-4);
         let a = screen_angle((10.0, 0.0), (0.0, 0.0));
         assert!(a.abs() < 1e-5);
+    }
+
+    #[test]
+    fn quaternion_conjugate_inverts_rotation() {
+        let q = quat_normalize(quat_axis_angle(1, 0.7));
+        let v = [0.3, -0.5, 0.8];
+        let round_trip = quat_rotate(quat_conjugate(q), quat_rotate(q, v));
+        for axis in 0..3 {
+            assert!((round_trip[axis] - v[axis]).abs() < 1e-4);
+        }
+    }
+
+    #[test]
+    fn basis_from_quat_rotates_axes() {
+        let basis = basis_from_quat(quat_axis_angle(1, std::f32::consts::FRAC_PI_2));
+        // 绕 Y 90°：X → −Z，Y 不变，Z → X。
+        assert!((basis[0][2] + 1.0).abs() < 1e-4);
+        assert!((basis[1][1] - 1.0).abs() < 1e-4);
+        assert!((basis[2][0] - 1.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn world_rotation_composes_parent_chain() {
+        let mut doc = SceneDoc::default();
+        let root = doc.add_named_child(None, "Root");
+        doc.entities[root].transform.rotation = quat_axis_angle(1, std::f32::consts::FRAC_PI_2);
+        let child = doc.add_named_child(Some(root), "Child");
+        doc.entities[child].transform.rotation = quat_axis_angle(1, std::f32::consts::FRAC_PI_2);
+
+        let x = quat_rotate(world_rotation(&doc, child), [1.0, 0.0, 0.0]);
+        assert!((x[0] + 1.0).abs() < 1e-4, "两级 90° = 180°，X → −X");
+
+        let parent_x = quat_rotate(parent_world_rotation(&doc, child), [1.0, 0.0, 0.0]);
+        assert!((parent_x[2] + 1.0).abs() < 1e-4, "父级只含 Root 自身旋转");
+    }
+
+    #[test]
+    fn oriented_gizmo_pick_uses_local_axis() {
+        let camera = camera();
+        let frame = camera_frame(&camera);
+        let basis = basis_from_quat(quat_axis_angle(2, 0.6));
+        let length = gizmo_world_length(&camera);
+        let (start, end, _) =
+            axis_screen_segment_oriented(&frame, [0.0, 0.0, 0.0], basis[0], length, 800.0, 600.0)
+                .unwrap();
+        let middle = ((start.0 + end.0) * 0.5, (start.1 + end.1) * 0.5);
+        let hit =
+            pick_gizmo_axis_oriented(middle, &frame, [0.0, 0.0, 0.0], basis, length, 800.0, 600.0);
+        assert_eq!(hit.map(|(axis, _, _)| axis), Some(0));
     }
 
     #[test]

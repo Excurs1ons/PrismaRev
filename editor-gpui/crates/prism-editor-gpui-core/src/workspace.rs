@@ -15,7 +15,10 @@ use crate::logbuf::{LogBuffer, LogLevel, LogSource};
 use crate::project::{self, ProjectFile};
 use crate::schema::{component_value_with_overrides, EntityPreset, Schema, TypeSchema};
 use crate::theme::{ThemeColors, ThemeState, ThemeToken};
-use crate::viewport_math::{quat_axis_angle, quat_mul, quat_normalize};
+use crate::viewport_math::{
+    basis_from_quat, parent_world_rotation, quat_axis_angle, quat_conjugate, quat_mul,
+    quat_normalize, quat_rotate, world_rotation, GizmoSpace,
+};
 use serde_json::Value;
 use std::collections::HashSet;
 use std::io;
@@ -201,6 +204,8 @@ pub struct Workspace {
     pub i18n: I18n,
     pub log: LogBuffer,
     pub camera: OrbitCamera,
+    /// W/E/R gizmo 使用世界轴还是实体自身轴。
+    pub gizmo_space: GizmoSpace,
     pub playing: bool,
     pub paused: bool,
     pub play_time_s: f32,
@@ -253,6 +258,7 @@ impl Workspace {
             i18n: I18n::default(),
             log: LogBuffer::default(),
             camera: OrbitCamera::default(),
+            gizmo_space: GizmoSpace::World,
             playing: false,
             paused: false,
             play_time_s: 0.0,
@@ -1322,13 +1328,58 @@ impl Workspace {
             return;
         };
         let before = self.document().doc.entities[index].transform;
+        // 世界空间：左乘（绕世界轴）；局部空间：右乘（绕实体自身轴）。
+        let after_rotation = match self.gizmo_space {
+            GizmoSpace::World => quat_mul(quat_axis_angle(axis, delta_radians), before.rotation),
+            GizmoSpace::Local => quat_mul(before.rotation, quat_axis_angle(axis, delta_radians)),
+        };
         let after = TransformJson {
-            rotation: quat_normalize(quat_mul(
-                quat_axis_angle(axis, delta_radians),
-                before.rotation,
-            )),
+            rotation: quat_normalize(after_rotation),
             ..before
         };
+        let now = now_ms();
+        let document = self.document_mut();
+        document
+            .undo
+            .push_transform(&mut document.doc, entity_id, before, after, now);
+        document.dirty = true;
+    }
+
+    /// 选中实体的 gizmo 基准（世界空间三轴）。世界模式恒为单位基。
+    pub fn gizmo_basis(&self) -> [[f32; 3]; 3] {
+        match self.gizmo_space {
+            GizmoSpace::World => crate::viewport_math::IDENTITY_BASIS,
+            GizmoSpace::Local => self
+                .primary_selection()
+                .map(|index| basis_from_quat(world_rotation(&self.document().doc, index)))
+                .unwrap_or(crate::viewport_math::IDENTITY_BASIS),
+        }
+    }
+
+    pub fn toggle_gizmo_space(&mut self) {
+        self.gizmo_space = self.gizmo_space.toggled();
+        self.log(
+            LogSource::Editor,
+            LogLevel::Debug,
+            format!("gizmo 坐标空间：{}", self.gizmo_space.label()),
+        );
+    }
+
+    /// 把世界空间位移换算到父级空间后加到实体 `position` 上（gizmo 拖动用）。
+    pub fn translate_entity_world(&mut self, entity_id: u32, delta_world: [f32; 3]) {
+        if delta_world.iter().all(|value| value.abs() < 1e-6) {
+            return;
+        }
+        let Some(index) = self.document().doc.index_of_id(entity_id) else {
+            return;
+        };
+        let parent_rotation = parent_world_rotation(&self.document().doc, index);
+        let delta_local = quat_rotate(quat_conjugate(parent_rotation), delta_world);
+        let before = self.document().doc.entities[index].transform;
+        let mut after = before;
+        for axis in 0..3 {
+            after.position[axis] += delta_local[axis];
+        }
         let now = now_ms();
         let document = self.document_mut();
         document
@@ -2063,6 +2114,117 @@ mod tests {
         let history = workspace.document().undo.history().len();
         workspace.rotate_entity(id, 0, 0.0);
         assert_eq!(workspace.document().undo.history().len(), history);
+    }
+
+    #[test]
+    fn local_gizmo_rotation_uses_entity_axis() {
+        use crate::viewport_math::{basis_from_quat, quat_axis_angle, world_rotation};
+
+        let mut workspace = Workspace::sample();
+        let index = workspace
+            .document()
+            .doc
+            .entities
+            .iter()
+            .position(|entity| entity.display_name() == "Cube")
+            .expect("sample 里有 Cube");
+        let id = workspace.document().doc.entities[index].id.unwrap();
+        let base_rotation = quat_axis_angle(1, std::f32::consts::FRAC_PI_2);
+
+        workspace.document_mut().doc.entities[index]
+            .transform
+            .rotation = base_rotation;
+        workspace.gizmo_space = GizmoSpace::World;
+        workspace.rotate_entity(id, 0, std::f32::consts::FRAC_PI_2);
+        let world_x = basis_from_quat(world_rotation(&workspace.document().doc, index))[0];
+        assert!(
+            (world_x[1] - 1.0).abs() < 1e-3,
+            "世界轴绕 X 旋后 X 轴应指向 +Y，实际 {world_x:?}"
+        );
+
+        workspace.document_mut().doc.entities[index]
+            .transform
+            .rotation = base_rotation;
+        workspace.gizmo_space = GizmoSpace::Local;
+        workspace.rotate_entity(id, 0, std::f32::consts::FRAC_PI_2);
+        let local_x = basis_from_quat(world_rotation(&workspace.document().doc, index))[0];
+        assert!(
+            (local_x[2] + 1.0).abs() < 1e-3,
+            "局部轴绕 X 旋后 X 轴应指向 −Z，实际 {local_x:?}"
+        );
+    }
+
+    #[test]
+    fn gizmo_basis_follows_parent_rotation_and_space() {
+        let mut workspace = Workspace::sample();
+        let cube = workspace
+            .document()
+            .doc
+            .entities
+            .iter()
+            .position(|entity| entity.display_name() == "Cube")
+            .expect("sample 里有 Cube");
+        let detail = workspace
+            .document()
+            .doc
+            .entities
+            .iter()
+            .position(|entity| entity.display_name() == "Detail")
+            .expect("sample 里有 Detail");
+        workspace.document_mut().doc.entities[cube]
+            .transform
+            .rotation = crate::viewport_math::quat_axis_angle(1, std::f32::consts::FRAC_PI_2);
+        workspace.select(detail, false);
+
+        assert_eq!(
+            workspace.gizmo_basis(),
+            crate::viewport_math::IDENTITY_BASIS,
+            "默认是世界空间"
+        );
+        workspace.toggle_gizmo_space();
+        let basis = workspace.gizmo_basis();
+        assert!(
+            (basis[0][2] + 1.0).abs() < 1e-3,
+            "父级绕 Y 90° 后子级局部 X 指向 −Z，实际 {:?}",
+            basis[0]
+        );
+    }
+
+    #[test]
+    fn translate_entity_world_converts_into_parent_space() {
+        let mut workspace = Workspace::sample();
+        let cube = workspace
+            .document()
+            .doc
+            .entities
+            .iter()
+            .position(|entity| entity.display_name() == "Cube")
+            .expect("sample 里有 Cube");
+        let detail = workspace
+            .document()
+            .doc
+            .entities
+            .iter()
+            .position(|entity| entity.display_name() == "Detail")
+            .expect("sample 里有 Detail");
+        workspace.document_mut().doc.entities[cube]
+            .transform
+            .rotation = crate::viewport_math::quat_axis_angle(1, std::f32::consts::FRAC_PI_2);
+        let id = workspace.document().doc.entities[detail].id.unwrap();
+        let delta = [0.25, 0.5, -0.75];
+
+        workspace.translate_entity_world(id, delta);
+
+        let parent_rotation = crate::viewport_math::world_rotation(&workspace.document().doc, cube);
+        let position = workspace.document().doc.entities[detail].transform.position;
+        let world_offset = crate::viewport_math::quat_rotate(parent_rotation, position);
+        for axis in 0..3 {
+            assert!(
+                (world_offset[axis] - delta[axis]).abs() < 1e-3,
+                "世界位移应等于 {delta:?}，实际 {world_offset:?}"
+            );
+        }
+        assert!(workspace.can_undo());
     }
 
     #[test]

@@ -22,11 +22,15 @@ struct SceneSnapshot {
     play_time: f32,
     playing: bool,
     gizmo_mode: GizmoMode,
+    /// 选中实体的 gizmo 基准（世界模式为单位基）。
+    gizmo_basis: [[f32; 3]; 3],
 }
 
 impl EditorView {
     pub fn viewport_panel(&mut self, scene: bool, cx: &mut Context<Self>) -> AnyElement {
         let style = self.style;
+        let gizmo_basis = self.workspace.gizmo_basis();
+        let gizmo_space = self.workspace.gizmo_space;
         let snapshot = {
             let doc = &self.workspace.document().doc;
             let selection = self.workspace.selection.clone();
@@ -45,6 +49,7 @@ impl EditorView {
                 play_time: self.workspace.play_time_s,
                 playing: self.workspace.playing,
                 gizmo_mode: self.gizmo_mode,
+                gizmo_basis,
             }
         };
 
@@ -102,6 +107,23 @@ impl EditorView {
                             .child(SharedString::from(mode.label()))
                     }),
             )
+            .when(scene, |header| {
+                header.child(
+                    div()
+                        .id("gizmo-space")
+                        .px_1()
+                        .rounded_sm()
+                        .cursor_pointer()
+                        .text_size(px(9.0))
+                        .text_color(style.text_soft())
+                        .hover(move |this| this.bg(style.row_hover()))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.workspace.toggle_gizmo_space();
+                            cx.notify();
+                        }))
+                        .child(SharedString::from(gizmo_space.label())),
+                )
+            })
             .child(div().flex_1())
             .child(SharedString::from(format!("{entity_count} 实体")))
             .child(SharedString::from(format!(
@@ -392,11 +414,11 @@ fn paint_scene(
             let color = style.alpha(token, 0.9);
             match snapshot.gizmo_mode {
                 GizmoMode::Rotate => {
-                    // 垂直于轴的圆环（48 段折线）。
+                    // 垂直于轴的圆环（48 段折线）；局部模式用实体自身轴。
                     let (u, v) = match axis {
-                        0 => ([0.0, 1.0, 0.0], [0.0, 0.0, 1.0]),
-                        1 => ([1.0, 0.0, 0.0], [0.0, 0.0, 1.0]),
-                        _ => ([1.0, 0.0, 0.0], [0.0, 1.0, 0.0]),
+                        0 => (snapshot.gizmo_basis[1], snapshot.gizmo_basis[2]),
+                        1 => (snapshot.gizmo_basis[0], snapshot.gizmo_basis[2]),
+                        _ => (snapshot.gizmo_basis[0], snapshot.gizmo_basis[1]),
                     };
                     let mut previous = None;
                     for step in 0..=48 {
@@ -419,15 +441,11 @@ fn paint_scene(
                     }
                 }
                 GizmoMode::Translate | GizmoMode::Scale => {
-                    let offset = match axis {
-                        0 => [length, 0.0, 0.0],
-                        1 => [0.0, length, 0.0],
-                        _ => [0.0, 0.0, length],
-                    };
+                    let direction = snapshot.gizmo_basis[axis];
                     let end = [
-                        position[0] + offset[0],
-                        position[1] + offset[1],
-                        position[2] + offset[2],
+                        position[0] + direction[0] * length,
+                        position[1] + direction[1] * length,
+                        position[2] + direction[2] * length,
                     ];
                     draw_line(
                         window,

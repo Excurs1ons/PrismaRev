@@ -61,9 +61,13 @@ pub enum DragState {
     },
     Gizmo {
         entity_id: u32,
-        axis: usize,
-        start: Point<Pixels>,
-        start_value: f32,
+        last: Point<Pixels>,
+        /// 本次拖动累计的屏幕位移（沿轴投影）。
+        total: f32,
+        /// 已应用的累计世界位移（吸附后会与 `total` 不同）。
+        applied: f32,
+        direction_world: [f32; 3],
+        /// 轴在屏幕上的单位方向。
         direction: [f32; 2],
         px_per_unit: f32,
     },
@@ -578,6 +582,10 @@ impl EditorView {
                 self.gizmo_mode = GizmoMode::Scale;
                 cx.notify();
             }
+            "x" if !modifiers.control && !modifiers.alt => {
+                self.workspace.toggle_gizmo_space();
+                cx.notify();
+            }
             "f2" if !self.workspace.selection.is_empty() => {
                 let index = self.workspace.selection[0];
                 let name = self
@@ -870,6 +878,7 @@ impl EditorView {
         let frame = prism_editor_gpui_core::viewport_math::camera_frame(&self.workspace.camera);
         let length =
             prism_editor_gpui_core::viewport_math::gizmo_world_length(&self.workspace.camera);
+        let basis = self.workspace.gizmo_basis();
 
         let candidate = self.workspace.primary_selection().and_then(|index| {
             let entity = self.workspace.document().doc.entities.get(index)?;
@@ -883,10 +892,11 @@ impl EditorView {
             match self.gizmo_mode {
                 GizmoMode::Translate | GizmoMode::Scale => {
                     if let Some((axis, direction, px_per_unit)) =
-                        prism_editor_gpui_core::viewport_math::pick_gizmo_axis(
+                        prism_editor_gpui_core::viewport_math::pick_gizmo_axis_oriented(
                             local,
                             &frame,
                             world_position,
+                            basis,
                             length,
                             width,
                             height,
@@ -895,14 +905,20 @@ impl EditorView {
                         self.workspace.log(
                             prism_editor_gpui_core::LogSource::Editor,
                             prism_editor_gpui_core::LogLevel::Trace,
-                            format!("{}：{} 轴", self.gizmo_mode.label(), ["X", "Y", "Z"][axis]),
+                            format!(
+                                "{}：{} 轴（{}）",
+                                self.gizmo_mode.label(),
+                                ["X", "Y", "Z"][axis],
+                                self.workspace.gizmo_space.label()
+                            ),
                         );
                         self.drag = Some(if self.gizmo_mode == GizmoMode::Translate {
                             DragState::Gizmo {
                                 entity_id,
-                                axis,
-                                start: position,
-                                start_value: world_position[axis],
+                                last: position,
+                                total: 0.0,
+                                applied: 0.0,
+                                direction_world: basis[axis],
                                 direction,
                                 px_per_unit,
                             }
@@ -920,18 +936,22 @@ impl EditorView {
                     }
                 }
                 GizmoMode::Rotate => {
-                    if let Some(axis) = prism_editor_gpui_core::viewport_math::pick_rotation_axis(
-                        local,
-                        &frame,
-                        world_position,
-                        length,
-                        width,
-                        height,
-                    ) {
+                    if let Some(axis) =
+                        prism_editor_gpui_core::viewport_math::pick_rotation_axis_oriented(
+                            local,
+                            &frame,
+                            world_position,
+                            basis,
+                            length,
+                            width,
+                            height,
+                        )
+                    {
                         if let Some((cx, cy, _)) =
-                            prism_editor_gpui_core::viewport_math::ring_screen_radius(
+                            prism_editor_gpui_core::viewport_math::ring_screen_radius_oriented(
                                 &frame,
                                 world_position,
+                                basis,
                                 axis,
                                 length,
                                 width,
@@ -1131,21 +1151,40 @@ impl EditorView {
             }
             DragState::Gizmo {
                 entity_id,
-                axis,
-                start,
-                start_value,
+                last,
+                total,
+                applied,
+                direction_world,
                 direction,
                 px_per_unit,
             } => {
-                let dx = f32::from(event.position.x - start.x);
-                let dy = f32::from(event.position.y - start.y);
-                let along = dx * direction[0] + dy * direction[1];
-                let mut value = start_value + along / px_per_unit.max(0.01);
+                let dx = f32::from(event.position.x - last.x);
+                let dy = f32::from(event.position.y - last.y);
+                let next_total = total + dx * direction[0] + dy * direction[1];
+                let mut units_total = next_total / px_per_unit.max(0.01);
                 if event.modifiers.control {
-                    value = (value * 4.0).round() / 4.0;
+                    units_total = (units_total * 4.0).round() / 4.0;
                 }
-                self.workspace
-                    .set_transform_axis(entity_id, "position", axis, value);
+                let delta_units = units_total - applied;
+                if delta_units.abs() > 1e-5 {
+                    self.workspace.translate_entity_world(
+                        entity_id,
+                        [
+                            direction_world[0] * delta_units,
+                            direction_world[1] * delta_units,
+                            direction_world[2] * delta_units,
+                        ],
+                    );
+                }
+                self.drag = Some(DragState::Gizmo {
+                    entity_id,
+                    last: event.position,
+                    total: next_total,
+                    applied: units_total,
+                    direction_world,
+                    direction,
+                    px_per_unit,
+                });
                 cx.notify();
             }
             DragState::GizmoRotate {
