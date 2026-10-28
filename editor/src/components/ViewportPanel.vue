@@ -11,7 +11,23 @@
  * - Game view：Play 时模拟游戏循环；鼠标/键盘转发给引擎 `InputManager`。
  */
 import { Channel } from "@tauri-apps/api/core";
-import { HelpCircle, Pause, Play, RefreshCw, Square, StepForward, X, Zap } from "lucide-vue-next";
+import {
+  ArrowDownToLine,
+  Focus,
+  Grid,
+  HelpCircle,
+  Maximize2,
+  MousePointer,
+  Move,
+  Pause,
+  Play,
+  RefreshCw,
+  RotateCw,
+  Square,
+  StepForward,
+  X,
+  Zap,
+} from "lucide-vue-next";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import * as api from "../api";
 import { t } from "../i18n";
@@ -53,6 +69,14 @@ const emit = defineEmits<{
   (event: "toggle-pause"): void;
   /** Game view：暂停中前进一帧。 */
   (event: "step"): void;
+  /** 视口悬浮药丸工具栏 / 快捷键切换变换工具。 */
+  (event: "set-tool", tool: "select" | "move" | "rotate" | "scale"): void;
+  /** 切换轴心模式 (Pivot / Center)。 */
+  (event: "toggle-pivot"): void;
+  /** 切换参考坐标系 (Global / Local)。 */
+  (event: "toggle-space"): void;
+  /** 一键贴落至地面返回批更新。 */
+  (event: "drop-to-floor", updates: api.EntityTransformUpdate[]): void;
 }>();
 
 const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -271,7 +295,12 @@ function scheduleReload() {
 
 // ── 相机 / 输入 ────────────────────────────────────────────────────────────
 
-let dragMode: "orbit" | "pan" | "marquee" | null = null;
+/** 当前视口鼠标拖拽模式（轨道旋转 / 变焦 / 平移 / 框选）。 */
+const dragMode = ref<"orbit" | "pan" | "zoom" | "marquee" | null>(null);
+/** Alt 键是否处于按住状态（用于切换 Unity 风格视口导航光标与手势）。 */
+const altHeld = ref(false);
+/** 地面参考网格显隐。 */
+const showGrid = ref(true);
 let lastPointer = { x: 0, y: 0 };
 /** 判定「点选」还是「拖动相机」：按下位置 + 时间。 */
 let clickStart: { x: number; y: number; at: number } | null = null;
@@ -289,7 +318,7 @@ const marqueeStart = ref<{ x: number; y: number } | null>(null);
 const marqueeCurrent = ref<{ x: number; y: number } | null>(null);
 
 const marqueeBox = computed(() => {
-  if (dragMode !== "marquee" || !marqueeStart.value || !marqueeCurrent.value) return null;
+  if (dragMode.value !== "marquee" || !marqueeStart.value || !marqueeCurrent.value) return null;
   const canvas = canvasEl.value;
   if (!canvas) return null;
   const rect = canvas.getBoundingClientRect();
@@ -473,8 +502,6 @@ const badgePosition = computed(() => {
 let pendingDrag: { x: number; y: number; snap: boolean } | null = null;
 let reloadPending = false;
 let dragFrame = 0;
-/** 左键按下瞬间的相机（万一这一按其实落在手柄上，用于还原）。 */
-let orbitBeforePress: CameraOrbit | null = null;
 let cameraAnimFrame = 0;
 
 /** 相机变更按 rAF 合并：拖动时每帧最多下发一次。 */
@@ -563,55 +590,69 @@ function onPointerDown(event: PointerEvent) {
   if (!canvas) return;
   canvas.focus();
   if (isScene.value) {
-    if (event.button === 2) {
-      flyMode.value = true;
-      startFlyLoop();
+    if (cameraAnimFrame) {
+      cancelAnimationFrame(cameraAnimFrame);
+      cameraAnimFrame = 0;
     }
-    if (props.activeTool === "select" && event.button === 0 && !event.altKey) {
-      dragMode = "marquee";
-      marqueeStart.value = { x: event.clientX, y: event.clientY };
-      marqueeCurrent.value = { x: event.clientX, y: event.clientY };
-      clickStart = { x: event.clientX, y: event.clientY, at: Date.now() };
+    hoveredGizmo.value = null;
+
+    // 1. Alt 组合键优先导航模式 (Unity 标准：Alt+LMB 轨道旋转, Alt+RMB 连续擦洗缩放, Alt+MMB 平移)
+    if (event.altKey) {
+      if (event.button === 0) {
+        dragMode.value = "orbit";
+      } else if (event.button === 2) {
+        dragMode.value = "zoom";
+      } else if (event.button === 1) {
+        dragMode.value = "pan";
+      } else {
+        return;
+      }
+      lastPointer = { x: event.clientX, y: event.clientY };
       canvas.setPointerCapture(event.pointerId);
       event.preventDefault();
       return;
     }
-    const point = event.button === 0 && !event.shiftKey ? canvasPoint(event) : null;
-    if (point) {
-      // 左键：先按「轨道旋转 / 点选」记账（保证快速点击仍然能点选），
-      // 同时问后端是否按在平移手柄上；是就切过去并把相机还原。
-      orbitBeforePress = { ...orbit.value };
-      beginCameraDrag(event, canvas);
-      void beginGizmoDrag(point, event, canvas);
-    } else {
-      beginCameraDrag(event, canvas);
+
+    // 2. 无 Alt 时的右键：进入第一人称漫游飞行模式 (WASD + QE)
+    if (event.button === 2) {
+      flyMode.value = true;
+      startFlyLoop();
+      lastPointer = { x: event.clientX, y: event.clientY };
+      canvas.setPointerCapture(event.pointerId);
+      event.preventDefault();
+      return;
+    }
+
+    // 3. 无 Alt 时的中键 / Shift+左键：视口平移
+    if (event.button === 1 || (event.button === 0 && event.shiftKey && !event.ctrlKey && !event.metaKey)) {
+      dragMode.value = "pan";
+      lastPointer = { x: event.clientX, y: event.clientY };
+      canvas.setPointerCapture(event.pointerId);
+      event.preventDefault();
+      return;
+    }
+
+    // 4. 无 Alt 时的左键：如果点中 Gizmo 手柄则进入拖动变换，否则进入点选 / 矩形框选
+    if (event.button === 0) {
+      const point = canvasPoint(event);
+      dragMode.value = "marquee";
+      marqueeStart.value = { x: event.clientX, y: event.clientY };
+      marqueeCurrent.value = { x: event.clientX, y: event.clientY };
+      clickStart = { x: event.clientX, y: event.clientY, at: Date.now() };
+      canvas.setPointerCapture(event.pointerId);
+
+      if (point && props.activeTool !== "select") {
+        void beginGizmoDrag(point, event, canvas);
+      }
+      event.preventDefault();
+      return;
     }
     return;
   }
   void sendInput({ type: "mouseButton", button: event.button, pressed: true });
 }
 
-/** 轨道旋转 / 平移：记录起点并接管指针。 */
-function beginCameraDrag(event: PointerEvent, canvas: HTMLCanvasElement) {
-  if (cameraAnimFrame) {
-    cancelAnimationFrame(cameraAnimFrame);
-    cameraAnimFrame = 0;
-  }
-  hoveredGizmo.value = null;
-  if (event.button === 1 || event.shiftKey) {
-    dragMode = "pan";
-  } else if (event.button === 0 || event.button === 2) {
-    dragMode = "orbit";
-  } else {
-    return;
-  }
-  lastPointer = { x: event.clientX, y: event.clientY };
-  clickStart = event.button === 0 ? { x: event.clientX, y: event.clientY, at: Date.now() } : null;
-  canvas.setPointerCapture(event.pointerId);
-  event.preventDefault();
-}
-
-/** 按在平移手柄上 → 后端开始拖动会话（`draggingAxis` 非空后 pointermove 变成移动实体）。 */
+/** 按在平移/旋转/缩放手柄上 → 后端开始拖动会话（`draggingAxis` 非空后 pointermove 变成移动实体）。 */
 async function beginGizmoDrag(
   point: { x: number; y: number },
   event: PointerEvent,
@@ -623,21 +664,17 @@ async function beginGizmoDrag(
   }
   if (!inTauri || !channel) return;
   const axis = await api.viewportGizmoHit(viewId, point.x, point.y).catch(() => null);
-  // 松手了 / 没按到手柄：保持「轨道 + 点选」的记账，什么都不做。
+  // 松手了 / 没按到手柄：保持框选与点选记账
   if (!axis || event.buttons === 0) return;
   try {
     await api.viewportDragBegin(viewId, axis, point.x, point.y);
   } catch {
     return;
   }
-  // 命中手柄之前可能已经转了一两像素的轨道视点，还原回去。
-  if (orbitBeforePress) {
-    orbit.value = orbitBeforePress;
-    orbitBeforePress = null;
-    pushCamera();
-  }
-  dragMode = null;
+  dragMode.value = null;
   clickStart = null;
+  marqueeStart.value = null;
+  marqueeCurrent.value = null;
   hoveredGizmo.value = null;
   draggingAxis.value = axis;
   canvas.setPointerCapture(event.pointerId);
@@ -646,7 +683,7 @@ async function beginGizmoDrag(
 
 /** 悬停手柄检测按 rAF 合并节流。 */
 function pushHoverCheck(point: { x: number; y: number }) {
-  if (!inTauri || !channel || !isScene.value || draggingAxis.value || dragMode) {
+  if (!inTauri || !channel || !isScene.value || draggingAxis.value || dragMode.value) {
     hoveredGizmo.value = null;
     return;
   }
@@ -661,7 +698,7 @@ function pushHoverCheck(point: { x: number; y: number }) {
     void api
       .viewportGizmoHover(viewId, target.x, target.y)
       .then((info) => {
-        if (!draggingAxis.value && !dragMode) {
+        if (!draggingAxis.value && !dragMode.value) {
           hoveredGizmo.value = info;
         }
       })
@@ -686,7 +723,7 @@ function onPointerLeave() {
 
 function onPointerMove(event: PointerEvent) {
   if (isScene.value) {
-    if (dragMode === "marquee") {
+    if (dragMode.value === "marquee") {
       marqueeCurrent.value = { x: event.clientX, y: event.clientY };
       return;
     }
@@ -696,18 +733,23 @@ function onPointerMove(event: PointerEvent) {
       if (point) pushDrag(point, event.ctrlKey || event.metaKey);
       return;
     }
-    if (dragMode) {
+    if (dragMode.value) {
       hoveredGizmo.value = null;
       const dx = event.clientX - lastPointer.x;
       const dy = event.clientY - lastPointer.y;
       lastPointer = { x: event.clientX, y: event.clientY };
-      if (dragMode === "orbit") {
+      if (dragMode.value === "orbit") {
         orbit.value.yaw -= dx * 0.008;
         orbit.value.pitch = Math.max(
           -1.5,
           Math.min(1.5, orbit.value.pitch + dy * 0.008),
         );
-      } else {
+      } else if (dragMode.value === "zoom") {
+        orbit.value.distance = Math.max(
+          0.2,
+          Math.min(500, orbit.value.distance * Math.exp(dy * 0.008)),
+        );
+      } else if (dragMode.value === "pan") {
         // 沿相机右方向 / 世界上方向平移注视点。
         const scale = orbit.value.distance * 0.0016;
         const { yaw, target } = orbit.value;
@@ -767,14 +809,13 @@ function pushDrag(point: { x: number; y: number }, snap: boolean) {
 }
 
 function onPointerUp(event: PointerEvent) {
-  orbitBeforePress = null;
   if (isScene.value) {
     if (flyMode.value) {
       flyMode.value = false;
       stopFlyLoop();
     }
-    if (dragMode === "marquee") {
-      dragMode = null;
+    if (dragMode.value === "marquee") {
+      dragMode.value = null;
       canvasEl.value?.releasePointerCapture(event.pointerId);
       const start = marqueeStart.value;
       const current = marqueeCurrent.value;
@@ -841,7 +882,7 @@ function onPointerUp(event: PointerEvent) {
       }
       return;
     }
-    dragMode = null;
+    dragMode.value = null;
     canvasEl.value?.releasePointerCapture(event.pointerId);
     const start = clickStart;
     clickStart = null;
@@ -946,6 +987,9 @@ function onWheel(event: WheelEvent) {
 
 function onKey(event: KeyboardEvent, pressed: boolean) {
   if (isScene.value) {
+    if (event.key === "Alt" || event.code === "AltLeft" || event.code === "AltRight") {
+      altHeld.value = pressed;
+    }
     if (flyMode.value) {
       const code = event.code;
       if (code === "KeyW") { flyKeys.w = pressed; event.preventDefault(); return; }
@@ -957,18 +1001,80 @@ function onKey(event: KeyboardEvent, pressed: boolean) {
       if (code === "ShiftLeft" || code === "ShiftRight") { flyKeys.shift = pressed; return; }
     }
     if (!pressed) return;
-    // F = 聚焦选中项（没有选中就框住整个场景），A / Home = 框住整个场景。
-    if (event.code === "KeyF") {
-      void frameSelection();
+
+    // End 快捷键：一键贴落至世界地面
+    if (event.code === "End") {
+      void dropToFloor();
       event.preventDefault();
+      return;
+    }
+
+    // F 快捷键族：
+    // - Ctrl + Shift + F: 视角对齐选中项 (Align View to Selected)
+    // - Ctrl + Alt + F: 选中项移至视角前 (Align Selected to View)
+    // - F: 聚焦选中项 (Frame Selected)
+    if (event.code === "KeyF") {
+      if (event.ctrlKey && event.shiftKey) {
+        alignViewToSelected();
+        event.preventDefault();
+        return;
+      }
+      if (event.ctrlKey && event.altKey) {
+        alignSelectedToView();
+        event.preventDefault();
+        return;
+      }
+      if (!event.ctrlKey && !event.metaKey && !event.altKey) {
+        void frameSelection();
+        event.preventDefault();
+        return;
+      }
     } else if (event.code === "KeyA" || event.code === "Home") {
       void frameAll();
       event.preventDefault();
+      return;
+    } else if (!event.ctrlKey && !event.metaKey && !event.altKey) {
+      if (event.code === "KeyQ") { emit("set-tool", "select"); event.preventDefault(); return; }
+      if (event.code === "KeyW") { emit("set-tool", "move"); event.preventDefault(); return; }
+      if (event.code === "KeyE") { emit("set-tool", "rotate"); event.preventDefault(); return; }
+      if (event.code === "KeyR") { emit("set-tool", "scale"); event.preventDefault(); return; }
     }
     return;
   }
   void sendInput({ type: "key", code: event.code, pressed });
   event.preventDefault();
+}
+
+/** 将选中实体集合平移贴落至世界地面 (Y = 0) */
+async function dropToFloor() {
+  const sel = props.selection;
+  if (!inTauri || !channel || !sel || sel.length === 0) return;
+  const updates = await api.viewportDropToFloor(viewId, sel).catch(() => null);
+  if (updates && updates.length > 0) {
+    emit("drop-to-floor", updates);
+    scheduleFetchSelectionBounds();
+  }
+}
+
+/** 视角对齐选中项：聚焦至主选实体 (Ctrl+Shift+F) */
+function alignViewToSelected() {
+  void frameSelection();
+}
+
+/** 选中项对齐视角：将选中实体瞬移至当前相机正前方注视点 (Ctrl+Alt+F) */
+function alignSelectedToView() {
+  const sel = primarySelection();
+  if (sel === null || !props.doc) return;
+  const target = orbit.value.target;
+  emit("move", [target[0], target[1], target[2]]);
+}
+
+/** 切换地面参考网格显隐 */
+function toggleGrid() {
+  showGrid.value = !showGrid.value;
+  if (inTauri && channel && isScene.value) {
+    void api.viewportSetGrid(viewId, showGrid.value).catch(() => undefined);
+  }
 }
 
 function sendInput(event: ViewportInput) {
@@ -1012,24 +1118,32 @@ async function refreshProject() {
   projectRefreshing.value = false;
 }
 
-onMounted(() => {
-  if (!inTauri) return;
+function onWindowKeyUp(event: KeyboardEvent) {
+  if (event.key === "Alt" || event.code === "AltLeft" || event.code === "AltRight") {
+    altHeld.value = false;
+  }
+}
+
+function onWindowBlur() {
+  altHeld.value = false;
+}
+
+// ── 生命周期 ───────────────────────────────────────────────────────────────
+
+onMounted(async () => {
+  window.addEventListener("keyup", onWindowKeyUp);
+  window.addEventListener("blur", onWindowBlur);
+  if (!inTauri) {
+    status.value = "error";
+    message.value = "内置视口需要桌面编辑器（浏览器预览不支持 Vulkan）";
+    return;
+  }
   void api
     .viewportAutoRefresh()
     .then((enabled) => {
       autoRefresh.value = enabled;
     })
     .catch(() => undefined);
-});
-
-// ── 生命周期 ───────────────────────────────────────────────────────────────
-
-onMounted(async () => {
-  if (!inTauri) {
-    status.value = "error";
-    message.value = "内置视口需要桌面编辑器（浏览器预览不支持 Vulkan）";
-    return;
-  }
   resizeObserver = new ResizeObserver((entries) => {
     const rect = entries[0]?.contentRect;
     const visible = !!rect && rect.width > 1 && rect.height > 1;
@@ -1048,6 +1162,8 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
+  window.removeEventListener("keyup", onWindowKeyUp);
+  window.removeEventListener("blur", onWindowBlur);
   resizeObserver?.disconnect();
   resizeObserver = null;
   if (resizeTimer !== undefined) window.clearTimeout(resizeTimer);
@@ -1387,6 +1503,11 @@ const aspectOptions = computed<DropdownOption[]>(() => [
           :class="{
             dragging: draggingAxis !== null,
             'has-hover': hoveredGizmo !== null && draggingAxis === null,
+            'cursor-alt-grab': altHeld && !dragMode,
+            'cursor-alt-orbit': dragMode === 'orbit',
+            'cursor-alt-zoom': dragMode === 'zoom',
+            'cursor-pan': dragMode === 'pan',
+            'cursor-fly': flyMode,
           }"
           tabindex="0"
           @pointerdown="onPointerDown"
@@ -1399,6 +1520,90 @@ const aspectOptions = computed<DropdownOption[]>(() => [
           @keyup="onKey($event, false)"
           @contextmenu.prevent
         />
+
+        <!-- 视口左上方悬浮胶囊工具栏 (Unity 6 / UE5 风格 Floating Pill Toolbar) -->
+        <div v-if="isScene" class="viewport-pill-toolbar" @pointerdown.stop>
+          <div class="pill-btn-group">
+            <button
+              class="pill-btn"
+              :class="{ active: activeTool === 'select' }"
+              title="选择工具 (Q)"
+              @click="emit('set-tool', 'select')"
+            >
+              <MousePointer :size="13" />
+            </button>
+            <button
+              class="pill-btn"
+              :class="{ active: activeTool === 'move' }"
+              title="平移工具 (W)"
+              @click="emit('set-tool', 'move')"
+            >
+              <Move :size="13" />
+            </button>
+            <button
+              class="pill-btn"
+              :class="{ active: activeTool === 'rotate' }"
+              title="旋转工具 (E)"
+              @click="emit('set-tool', 'rotate')"
+            >
+              <RotateCw :size="13" />
+            </button>
+            <button
+              class="pill-btn"
+              :class="{ active: activeTool === 'scale' }"
+              title="缩放工具 (R)"
+              @click="emit('set-tool', 'scale')"
+            >
+              <Maximize2 :size="13" />
+            </button>
+          </div>
+
+          <span class="pill-divider" />
+
+          <button
+            class="pill-btn pill-badge-btn"
+            :title="activePivot === 'pivot' ? '轴心模式: 实体锚点 (Pivot) · 点击切换' : '轴心模式: 选区中心 (Center) · 点击切换'"
+            @click="emit('toggle-pivot')"
+          >
+            {{ activePivot === 'pivot' ? 'Pivot' : 'Center' }}
+          </button>
+
+          <button
+            class="pill-btn pill-badge-btn"
+            :title="activeSpace === 'global' ? '坐标系: 世界全局 (Global) · 点击切换' : '坐标系: 物体本地 (Local) · 点击切换'"
+            @click="emit('toggle-space')"
+          >
+            {{ activeSpace === 'global' ? 'Global' : 'Local' }}
+          </button>
+
+          <span class="pill-divider" />
+
+          <button
+            class="pill-btn"
+            :class="{ active: showGrid }"
+            :title="showGrid ? '隐藏地面参考网格' : '显示地面参考网格'"
+            @click="toggleGrid"
+          >
+            <Grid :size="13" />
+          </button>
+
+          <button
+            class="pill-btn"
+            :disabled="!selection || selection.length === 0"
+            title="一键贴落至地面 (End)"
+            @click="dropToFloor"
+          >
+            <ArrowDownToLine :size="13" />
+          </button>
+
+          <button
+            class="pill-btn"
+            title="聚焦选中项 (F) · Ctrl+Shift+F 视角对齐"
+            @click="frameSelection"
+          >
+            <Focus :size="13" />
+          </button>
+        </div>
         <!-- 场景视图矩形框选 (Marquee Selection) -->
         <div
           v-if="marqueeBox"
@@ -2001,5 +2206,93 @@ const aspectOptions = computed<DropdownOption[]>(() => [
   font-weight: 500;
   pointer-events: none;
   z-index: 40;
+}
+
+/* ── SceneView 导航光标 ─────────────────────────────────────────────────── */
+.viewport-canvas.cursor-alt-grab {
+  cursor: grab !important;
+}
+.viewport-canvas.cursor-alt-orbit {
+  cursor: grabbing !important;
+}
+.viewport-canvas.cursor-alt-zoom {
+  cursor: ns-resize !important;
+}
+.viewport-canvas.cursor-pan {
+  cursor: move !important;
+}
+.viewport-canvas.cursor-fly {
+  cursor: crosshair !important;
+}
+
+/* ── SceneView 悬浮药丸工具栏 (Unity 6 / UE5 风格) ────────────────────────── */
+.viewport-pill-toolbar {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 25;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px 6px;
+  background: color-mix(in srgb, var(--bg, #0b0e14) 82%, transparent);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid color-mix(in srgb, var(--border, #2d333b) 85%, transparent);
+  border-radius: 20px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.38);
+  user-select: none;
+}
+
+.pill-btn-group {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.pill-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-dim, #768390);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.pill-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--hover-bg, #22272e) 85%, transparent);
+  color: var(--text, #cdd9e5);
+}
+
+.pill-btn.active {
+  background: color-mix(in srgb, var(--accent, #388bfd) 24%, transparent);
+  color: var(--accent, #388bfd);
+  font-weight: 600;
+}
+
+.pill-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.pill-badge-btn {
+  width: auto;
+  padding: 0 6px;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.2px;
+}
+
+.pill-divider {
+  width: 1px;
+  height: 14px;
+  background: color-mix(in srgb, var(--border, #2d333b) 80%, transparent);
+  margin: 0 2px;
 }
 </style>
