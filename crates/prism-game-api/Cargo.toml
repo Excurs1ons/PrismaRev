@@ -1,0 +1,16 @@
+[package]
+name = "prism-game-api"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Engine-independent gameplay API shared by the runtime host and project modules"
+
+# 目前只有 `host` 后端（直接借用宿主的 ECS World，零序列化）。
+# 插件后端（宿主下发的 C 函数表 + RTTIBin 字节流）随 `prism-runtime-host`
+# 的 ABI 扩展一起加入，届时用 feature 在两者之间切换，接口保持不变。
+[dependencies]
+prism-reflect = { path = "../prism-reflect" }
+# 纯数据 ECS（无 Vulkan / 无 UI）。插件侧只会用到 `Entity` 的布局与
+# `Component` blanket impl，永远不会把宿主的 `World` 指针传出去。
+prism-ecs = { path = "../prism-ecs" }
+log.workspace = true
