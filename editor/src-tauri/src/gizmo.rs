@@ -9,21 +9,50 @@
 
 use glam::{Mat4, Vec2, Vec3};
 
-/// 世界坐标轴（平移 gizmo 的三个手柄）。
+/// 当前激活的 Gizmo 工具模式。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GizmoTool {
+    Translate,
+    Rotate,
+    Scale,
+}
+
+impl GizmoTool {
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "move" | "translate" | "Move" | "Translate" => Some(Self::Translate),
+            "rotate" | "Rotate" => Some(Self::Rotate),
+            "scale" | "Scale" => Some(Self::Scale),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Translate => "move",
+            Self::Rotate => "rotate",
+            Self::Scale => "scale",
+        }
+    }
+}
+
+/// 世界坐标轴（Gizmo 的手柄分量）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Axis {
     X,
     Y,
     Z,
+    XYZ,
 }
 
 impl Axis {
-    /// 前端下发的轴名（`"x"` / `"y"` / `"z"`）。
+    /// 前端下发的轴名（`"x"` / `"y"` / `"z"` / `"xyz"`）。
     pub fn parse(text: &str) -> Option<Self> {
         match text {
             "x" | "X" => Some(Self::X),
             "y" | "Y" => Some(Self::Y),
             "z" | "Z" => Some(Self::Z),
+            "xyz" | "XYZ" => Some(Self::XYZ),
             _ => None,
         }
     }
@@ -34,6 +63,7 @@ impl Axis {
             Self::X => "x",
             Self::Y => "y",
             Self::Z => "z",
+            Self::XYZ => "xyz",
         }
     }
 
@@ -42,6 +72,7 @@ impl Axis {
             Self::X => Vec3::X,
             Self::Y => Vec3::Y,
             Self::Z => Vec3::Z,
+            Self::XYZ => Vec3::ONE,
         }
     }
 
@@ -164,6 +195,78 @@ pub fn axis_parameter(origin: Vec3, dir: Vec3, center: Vec3, axis: Vec3) -> Opti
     t.is_finite().then_some(t)
 }
 
+/// 鼠标在哪个旋转圆环上（采样圆周线段投影）。
+pub fn pick_rotate_axis(
+    screen: &Screen,
+    center: Vec3,
+    radius: f32,
+    cursor: Vec2,
+    threshold: f32,
+) -> Option<Axis> {
+    let mut best: Option<(f32, Axis)> = None;
+    let rings = [
+        (Axis::X, Vec3::Y, Vec3::Z),
+        (Axis::Y, Vec3::Z, Vec3::X),
+        (Axis::Z, Vec3::X, Vec3::Y),
+    ];
+    const SEGMENTS: usize = 36;
+    for (axis, p1, p2) in rings {
+        let mut min_dist = f32::INFINITY;
+        let mut prev_screen: Option<Vec2> = None;
+        for i in 0..=SEGMENTS {
+            let angle = (i as f32 / SEGMENTS as f32) * std::f32::consts::TAU;
+            let world_pt = center + (p1 * angle.cos() + p2 * angle.sin()) * radius;
+            let current_screen = screen.project(world_pt);
+            if let (Some(p0), Some(p1)) = (prev_screen, current_screen) {
+                let d = point_segment_distance(cursor, p0, p1);
+                if d < min_dist {
+                    min_dist = d;
+                }
+            }
+            prev_screen = current_screen;
+        }
+        if min_dist <= threshold && best.map(|(b, _)| min_dist < b).unwrap_or(true) {
+            best = Some((min_dist, axis));
+        }
+    }
+    best.map(|(_, axis)| axis)
+}
+
+/// 射线与穿过 `center` 且法线为 `axis_normal` 的平面的交点向量（从 `center` 指向交点）。
+pub fn plane_intersection_vector(
+    origin: Vec3,
+    dir: Vec3,
+    center: Vec3,
+    axis_normal: Vec3,
+) -> Option<Vec3> {
+    let denom = dir.dot(axis_normal);
+    if denom.abs() < 1e-5 {
+        return None;
+    }
+    let t = (center - origin).dot(axis_normal) / denom;
+    if t <= 0.0 {
+        return None;
+    }
+    let hit = origin + dir * t;
+    Some(hit - center)
+}
+
+/// 鼠标在哪个缩放手柄上（中心方块 = XYZ 等比缩放，轴向 = 对应单轴）。
+pub fn pick_scale_axis(
+    screen: &Screen,
+    center: Vec3,
+    length: f32,
+    cursor: Vec2,
+    threshold: f32,
+) -> Option<Axis> {
+    if let Some(center_screen) = screen.project(center) {
+        if center_screen.distance(cursor) <= threshold * 1.4 {
+            return Some(Axis::XYZ);
+        }
+    }
+    pick_axis(screen, center, length, cursor, threshold)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -268,5 +371,23 @@ mod tests {
         assert!(project(&view, 0.0, 100.0, 100.0, Vec3::ZERO).is_none());
         // 点在相机背后（+Z）。
         assert!(project(&view, FOV, 100.0, 100.0, Vec3::new(0.0, 0.0, 2.0)).is_none());
+    }
+
+    #[test]
+    fn picks_rotate_ring_and_scale_center() {
+        let screen = screen(view_from_eye(Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO));
+        let center = screen.project(Vec3::ZERO).unwrap();
+        // 中心命中 scale XYZ
+        assert_eq!(
+            pick_scale_axis(&screen, Vec3::ZERO, 1.5, center, 12.0),
+            Some(Axis::XYZ)
+        );
+
+        // Z 轴环在 XY 平面上，(1.5, 0, 0) 是它的一点
+        let pt = screen.project(Vec3::X * 1.5).unwrap();
+        assert_eq!(
+            pick_rotate_axis(&screen, Vec3::ZERO, 1.5, pt, 12.0),
+            Some(Axis::Z)
+        );
     }
 }

@@ -687,14 +687,24 @@ export function viewportSelect(id: string, index: number | null): Promise<void> 
   return call<void>("editor_viewport_select", { id, index });
 }
 
-/**
- * 场景视图点选：`x` / `y` 是 canvas 位图坐标（左上原点），返回命中的实体下标。
- */
+/** 视口变换手柄拖动返回的结果。 */
+export interface DragTransformResult {
+  position?: [number, number, number];
+  rotation?: [number, number, number, number];
+  scale?: [number, number, number];
+}
+
+/** 切换视口的当前变换工具模式（"move" | "rotate" | "scale"）。 */
+export function viewportSetTool(id: string, tool: string): Promise<void> {
+  return call<void>("editor_viewport_set_tool", { id, tool });
+}
+
+/** 场景视图点选：`x` / `y` 是 canvas 位图坐标（左上原点），返回命中的实体下标。 */
 export function viewportPick(id: string, x: number, y: number): Promise<number | null> {
   return call<number | null>("editor_viewport_pick", { id, x, y });
 }
 
-/** 光标下的平移手柄（`"x"` / `"y"` / `"z"`，没有则 `null`）。 */
+/** 光标下的变换手柄（`"x"` / `"y"` / `"z"` / `"xyz"`，没有则 `null`）。 */
 export function viewportGizmoHit(id: string, x: number, y: number): Promise<string | null> {
   return call<string | null>("editor_viewport_gizmo_hit", { id, x, y });
 }
@@ -709,13 +719,13 @@ export function viewportDragBegin(
   return call<void>("editor_viewport_drag_begin", { id, axis, x, y });
 }
 
-/** 拖动到新光标位置，返回实体新的局部 `transform.position`。 */
+/** 拖动到新光标位置，返回实体新的局部变换属性（position / rotation / scale）。 */
 export function viewportDrag(
   id: string,
   x: number,
   y: number,
-): Promise<[number, number, number] | null> {
-  return call<[number, number, number] | null>("editor_viewport_drag", { id, x, y });
+): Promise<DragTransformResult | null> {
+  return call<DragTransformResult | null>("editor_viewport_drag", { id, x, y });
 }
 
 /** 结束拖动。 */

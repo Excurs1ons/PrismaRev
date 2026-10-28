@@ -22,6 +22,8 @@ const props = defineProps<{
   kind: "scene" | "game";
   doc: SceneDoc | null;
   path: string | null;
+  /** 当前主工具栏选择的变换工具。 */
+  activeTool?: "select" | "move" | "rotate" | "scale";
   /** Game view 的 Play 状态（由工具栏统一控制）。 */
   playing?: boolean;
   /** Game view 是否暂停（由工具栏控制，暂停时仍渲染）。 */
@@ -36,6 +38,10 @@ const emit = defineEmits<{
   (event: "select", index: number | null): void;
   /** 拖动平移手柄后的新局部位置 `[x, y, z]`。 */
   (event: "move", position: [number, number, number]): void;
+  /** 拖动旋转圆环后的新局部四元数 `[x, y, z, w]`。 */
+  (event: "rotate", rotation: [number, number, number, number]): void;
+  /** 拖动缩放手柄后的新局部缩放 `[x, y, z]`。 */
+  (event: "scale", scale: [number, number, number]): void;
   /** Game view：暂停 / 继续 Play。 */
   (event: "toggle-pause"): void;
   /** Game view：暂停中前进一帧。 */
@@ -105,6 +111,9 @@ async function open() {
       !isScene.value && props.playing,
     );
     pushSelection();
+    if (props.activeTool && isScene.value) {
+      void api.viewportSetTool(viewId, props.activeTool).catch(() => undefined);
+    }
     // 第一帧到达时 drawFrame 才切到 live：渲染器还在建管线时先保留 loading 浮层，
     // 否则会先闪一段黑屏。
   } catch (error) {
@@ -344,9 +353,11 @@ function pushDrag(point: { x: number; y: number }) {
     pendingDrag = null;
     void api
       .viewportDrag(viewId, target.x, target.y)
-      .then((position) => {
-        if (!position) return;
-        emit("move", position);
+      .then((res) => {
+        if (!res) return;
+        if (res.position) emit("move", res.position);
+        if (res.rotation) emit("rotate", res.rotation);
+        if (res.scale) emit("scale", res.scale);
         // 拖动期间文档在变，但重载会换掉 ECS 句柄：等松手再同步。
         reloadPending = true;
       })
@@ -531,6 +542,13 @@ watch(
   },
 );
 watch(() => props.selection, pushSelection);
+watch(
+  () => props.activeTool,
+  (tool) => {
+    if (!inTauri || !channel || !tool || !isScene.value) return;
+    void api.viewportSetTool(viewId, tool).catch(() => undefined);
+  },
+);
 watch(
   () => props.playing,
   async (playing) => {
