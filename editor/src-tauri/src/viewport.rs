@@ -1613,6 +1613,38 @@ fn project_module_path(scene_path: &Path) -> Result<PathBuf, String> {
         .ancestors()
         .find(|path| path.join("projects").is_dir())
         .ok_or_else(|| "无法从预览场景定位仓库根目录".to_string())?;
+    let project = root.join("projects").join("prisma");
+    let manifest = project.join("Cargo.toml");
+    // 单独的 target 目录：preview-module 与静态 Player 的产物同名，共用一个
+    // target/debug 会互相覆盖并每次全量重编。
+    let target_dir = project.join("target").join("preview-module");
+
+    // 编辑器负责编译项目模块（对应 Unity 的脚本编译）。默认 feature 是静态
+    // Player，会把引擎打进同一个镜像；这里只构建 preview-module，模块因此
+    // 绝不能链接引擎。cargo 增量缓存让未改动的重复构建接近空转。
+    log::info!("viewport: building project preview module");
+    let mut command = std::process::Command::new("cargo");
+    command
+        .arg("build")
+        .arg("--manifest-path")
+        .arg(&manifest)
+        .args(["--no-default-features", "--features", "preview-module"])
+        .arg("--target-dir")
+        .arg(&target_dir)
+        .current_dir(root);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    let output = command
+        .output()
+        .map_err(|error| format!("无法启动 cargo 构建项目模块: {error}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("项目模块编译失败：\n{}", tail_lines(&stderr, 20)));
+    }
+
     let library = if cfg!(target_os = "windows") {
         "prisma.dll"
     } else if cfg!(target_os = "macos") {
@@ -1620,14 +1652,16 @@ fn project_module_path(scene_path: &Path) -> Result<PathBuf, String> {
     } else {
         "libprisma.so"
     };
-    let path = root
-        .join("projects")
-        .join("prisma")
-        .join("target/debug")
-        .join(library);
+    let path = target_dir.join("debug").join(library);
     path.is_file()
         .then_some(path.clone())
         .ok_or_else(|| format!("项目预览模块不存在: {}", path.display()))
+}
+
+/// 构建失败时只回显最后几行，避免把整份 cargo 日志塞进面板浮层。
+fn tail_lines(text: &str, count: usize) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    lines[lines.len().saturating_sub(count)..].join("\n")
 }
 
 fn publish_frame(shared: &Shared, frame: prism_app::FrameImage) {

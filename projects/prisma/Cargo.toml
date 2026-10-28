@@ -9,15 +9,33 @@ description = "PrismaRev 用户游戏项目——桌面二进制 `prisma`，由 
 [workspace]
 
 # 产物名与 package 名一致：桌面二进制 `prisma` + Android cdylib `libprisma.so`
-# （`android.app.lib_name = prisma` 见 launcher gen/android Manifest），
-# JNI `android_main` 在 src/lib.rs。
-# `lib` 类型供桌面 bin 链接 rlib；`cdylib` 仅 Android 打包时使用。
+# （`android.app.lib_name = prisma` 见 launcher gen/android Manifest）。
+# `lib` 类型供桌面 bin 链接 rlib；`cdylib` 另有两个用途：
+# Android 的 GameActivity 入口，以及编辑器加载的 preview 模块。
 [lib]
 crate-type = ["lib", "cdylib"]
 
+# 两种构建形态，互相排斥：
+# - `player`（默认）：静态 Player / Android，直接链接引擎。
+# - `preview-module`：编辑器加载的 cdylib。**不链接引擎**，只依赖跨 ABI 的
+#   `prism-game-api` / `prism-project-api`，否则 .so 里会带第二份引擎。
+[features]
+default = ["player"]
+player = ["dep:prism-app", "dep:prism-engine"]
+preview-module = ["dep:prism-project-api"]
+
+[[bin]]
+name = "prisma"
+path = "src/main.rs"
+# 没有 `player` 时没有 `build_app`，所以 bin 也不应被构建。
+required-features = ["player"]
+
 [dependencies]
-prism-app = { path = "../../crates/prism-app" }
-prism-engine = { path = "../../crates/prism-engine" }
-prism-project-api = { path = "../../crates/prism-project-api" }
+prism-app = { path = "../../crates/prism-app", optional = true }
+prism-engine = { path = "../../crates/prism-engine", optional = true }
+prism-game-api = { path = "../../crates/prism-game-api" }
+prism-project-api = { path = "../../crates/prism-project-api", optional = true }
+# 纯数据层（组件 / UI schema），两种形态都需要。
+prism-scene = { path = "../../crates/prism-scene" }
 keyframe = "1.1"
 log = "0.4"
