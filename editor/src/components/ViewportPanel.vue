@@ -601,11 +601,6 @@ watch(
   },
 );
 
-const fpsLabel = computed(() => {
-  const fps = displayFps.value;
-  return fps > 0 ? `${fps.toFixed(0)} fps` : "—";
-});
-
 const aspectMode = ref<string>("free");
 const viewportScale = ref<number>(1);
 const showStats = ref<boolean>(false);
