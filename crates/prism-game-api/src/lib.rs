@@ -123,12 +123,15 @@ impl<'a> GameWorld<'a> {
             Backend::Host(world) => {
                 use prism_engine::scene::components::{SceneAssetId, SpriteRef};
                 let entity = entity_from_handle(entity);
-                let mut sprite = world.get::<SpriteRef>(entity).cloned().unwrap_or(SpriteRef {
-                    asset_id: SceneAssetId::generate(),
-                    texture_slot: 0,
-                    size: [0, 0],
-                    generation: 0,
-                });
+                let mut sprite = world
+                    .get::<SpriteRef>(entity)
+                    .cloned()
+                    .unwrap_or(SpriteRef {
+                        asset_id: SceneAssetId::generate(),
+                        texture_slot: 0,
+                        size: [0, 0],
+                        generation: 0,
+                    });
                 sprite.generation = 0;
                 world.insert(entity, sprite);
             }
