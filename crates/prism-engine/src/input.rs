@@ -34,6 +34,49 @@ pub enum KeyCode {
     Other(u32),
 }
 
+impl KeyCode {
+    /// 稳定的按键位编号，用于宿主下发给项目模块的 `InputSnapshot` 位图。
+    ///
+    /// 这是**跨模块 ABI 的一部分**：数字一旦发布就不能重排，否则已编译的
+    /// 项目模块会把按键认错。新增按键请追加到末尾。
+    pub fn bit_index(self) -> usize {
+        match self {
+            Self::KeyW => 0,
+            Self::KeyA => 1,
+            Self::KeyS => 2,
+            Self::KeyD => 3,
+            Self::KeyQ => 4,
+            Self::KeyE => 5,
+            Self::Space => 6,
+            Self::ShiftLeft => 7,
+            Self::ShiftRight => 8,
+            Self::ControlLeft => 9,
+            Self::ControlRight => 10,
+            Self::AltLeft => 11,
+            Self::AltRight => 12,
+            Self::Escape => 13,
+            Self::Tab => 14,
+            Self::Enter => 15,
+            Self::ArrowUp => 16,
+            Self::ArrowDown => 17,
+            Self::ArrowLeft => 18,
+            Self::ArrowRight => 19,
+            Self::Digit0 => 20,
+            Self::Digit1 => 21,
+            Self::Digit2 => 22,
+            Self::Digit3 => 23,
+            Self::Digit4 => 24,
+            Self::Digit5 => 25,
+            Self::Digit6 => 26,
+            Self::Digit7 => 27,
+            Self::Digit8 => 28,
+            Self::Digit9 => 29,
+            // 平台原始键码落在 30..256；位图容量足够，冲突只影响非常用键。
+            Self::Other(code) => 30 + (code as usize % 226),
+        }
+    }
+}
+
 /// 调 or 按钮 状态
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ElementState {

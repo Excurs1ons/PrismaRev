@@ -31,22 +31,8 @@ use prism_project_api::{HostApi, SUCCESS};
 #[cfg(feature = "plugin")]
 use prism_reflect::{rtti_bin, TypeRegistry};
 
-/// 一条 2D UI 四边形。
-///
-/// 字段与引擎侧的 UI 四边形一致，宿主可以无转换地并入自己的绘制列表；
-/// 插件既不需要链接 `prism-render`，也不用关心批次排序。
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default)]
-pub struct UiQuad {
-    /// `[x, y, width, height]`，屏幕像素、左上原点。
-    pub rect: [f32; 4],
-    /// RGBA，线性空间。
-    pub color: [f32; 4],
-    /// 圆角半径（px）。
-    pub border_radius: f32,
-    /// 绘制层级（z-index）。
-    pub layer: i32,
-}
+/// 一条 2D UI 四边形（定义在 ABI crate，这里重新导出）。
+pub use prism_project_api::UiQuad;
 
 /// 把 ECS 句柄转成跨边界句柄。
 pub fn handle_from_entity(entity: Entity) -> EntityHandle {
@@ -229,15 +215,17 @@ impl<'a> GameWorld<'a> {
     // 2D 绘制
     // ------------------------------------------------------------------
 
-    /// 提交一条 UI 四边形；宿主在 tick 结束后取走并合并进自己的绘制列表。
-    ///
-    /// 仅 host 后端可用：插件侧要等 ABI 增加绘制能力后才会生效。
-    #[cfg(feature = "host")]
+    /// 提交一条 UI 四边形；宿主在本帧 UI 渲染前取走并合并进绘制列表。
     pub fn draw_quad(&mut self, quad: UiQuad) {
-        self.quads.push(quad);
+        match &mut self.backend {
+            #[cfg(feature = "host")]
+            Backend::Host(_) => self.quads.push(quad),
+            #[cfg(feature = "plugin")]
+            Backend::Plugin(backend) => backend.draw(quad),
+        }
     }
 
-    /// 取走本帧累积的四边形（宿主侧调用）。
+    /// 取走本帧累积的四边形（宿主侧调用；插件后端由宿主自行取走）。
     #[cfg(feature = "host")]
     pub fn take_quads(&mut self) -> Vec<UiQuad> {
         std::mem::take(&mut self.quads)
@@ -265,15 +253,31 @@ impl PluginBackend<'_> {
         }
     }
 
-    fn despawn(&self, _entity: EntityHandle) {
-        // ABI 尚未提供 despawn：宿主需要在 v4 里补上，见 issue #374。
-        log::debug!("game-api: despawn is not available through the project ABI yet");
+    fn despawn(&self, entity: EntityHandle) {
+        let Some(despawn) = self.api.despawn_entity else {
+            log::debug!("game-api: host does not expose despawn_entity");
+            return;
+        };
+        let status = unsafe { despawn(self.api.user_data, entity) };
+        if status != SUCCESS {
+            log::debug!("game-api: despawn rejected by host (status {status})");
+        }
     }
 
     fn is_alive(&self, entity: EntityHandle) -> bool {
-        // 没有专门的存活查询；用「能否读到组件」无法区分空实体，所以先按
-        // 句柄非空判断。真正的校验由每次读写回传的状态完成。
-        !entity.is_placeholder()
+        match self.api.is_alive {
+            Some(is_alive) => unsafe { is_alive(self.api.user_data, entity) == 1 },
+            // 宿主没有提供存活查询时退回「句柄非空」；读写仍会各自校验。
+            None => !entity.is_placeholder(),
+        }
+    }
+
+    fn draw(&self, quad: UiQuad) {
+        let Some(draw) = self.api.draw_quad else {
+            log::debug!("game-api: host does not expose draw_quad");
+            return;
+        };
+        unsafe { draw(self.api.user_data, quad) };
     }
 
     fn query(&self, type_name: &str) -> Vec<EntityHandle> {
@@ -442,6 +446,9 @@ mod tests {
             );
             assert!(view.remove::<Name>(entity));
             assert!(view.query::<Name>().is_empty());
+            assert!(view.is_alive(entity));
+            view.despawn(entity);
+            assert!(!view.is_alive(entity));
         }
 
         drop(commands);
