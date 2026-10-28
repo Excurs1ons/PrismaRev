@@ -265,6 +265,10 @@ let clickStart: { x: number; y: number; at: number } | null = null;
 const draggingAxis = ref<string | null>(null);
 /** 拖动过程中的实时交互反馈（浮层数值提示、旋转弧面等）。 */
 const dragFeedback = ref<api.DragFeedback | null>(null);
+/** 鼠标悬停手柄的投影轮廓（用于高亮提示）。 */
+const hoveredGizmo = ref<api.GizmoHoverInfo | null>(null);
+let hoverFrame = 0;
+let pendingHover: { x: number; y: number } | null = null;
 
 /** 旋转手柄拖拽时的 SVG 扇面与弧线路径。 */
 const rotateArcPath = computed(() => {
@@ -357,6 +361,7 @@ function onPointerDown(event: PointerEvent) {
 
 /** 轨道旋转 / 平移：记录起点并接管指针。 */
 function beginCameraDrag(event: PointerEvent, canvas: HTMLCanvasElement) {
+  hoveredGizmo.value = null;
   if (event.button === 1 || event.shiftKey) {
     dragMode = "pan";
   } else if (event.button === 0 || event.button === 2) {
@@ -393,41 +398,84 @@ async function beginGizmoDrag(
   }
   dragMode = null;
   clickStart = null;
+  hoveredGizmo.value = null;
   draggingAxis.value = axis;
   canvas.setPointerCapture(event.pointerId);
   event.preventDefault();
 }
 
+/** 悬停手柄检测按 rAF 合并节流。 */
+function pushHoverCheck(point: { x: number; y: number }) {
+  if (!inTauri || !channel || !isScene.value || draggingAxis.value || dragMode) {
+    hoveredGizmo.value = null;
+    return;
+  }
+  if (hoverFrame) {
+    pendingHover = point;
+    return;
+  }
+  hoverFrame = requestAnimationFrame(() => {
+    hoverFrame = 0;
+    const target = pendingHover ?? point;
+    pendingHover = null;
+    void api
+      .viewportGizmoHover(viewId, target.x, target.y)
+      .then((info) => {
+        if (!draggingAxis.value && !dragMode) {
+          hoveredGizmo.value = info;
+        }
+      })
+      .catch(() => {
+        hoveredGizmo.value = null;
+      });
+  });
+}
+
+function onPointerLeave() {
+  hoveredGizmo.value = null;
+  pendingHover = null;
+  if (hoverFrame) {
+    cancelAnimationFrame(hoverFrame);
+    hoverFrame = 0;
+  }
+}
+
 function onPointerMove(event: PointerEvent) {
   if (isScene.value) {
     if (draggingAxis.value) {
+      hoveredGizmo.value = null;
       const point = canvasPoint(event);
       if (point) pushDrag(point);
       return;
     }
-    if (!dragMode) return;
-    const dx = event.clientX - lastPointer.x;
-    const dy = event.clientY - lastPointer.y;
-    lastPointer = { x: event.clientX, y: event.clientY };
-    if (dragMode === "orbit") {
-      orbit.value.yaw -= dx * 0.008;
-      orbit.value.pitch = Math.max(
-        -1.5,
-        Math.min(1.5, orbit.value.pitch + dy * 0.008),
-      );
-    } else {
-      // 沿相机右方向 / 世界上方向平移注视点。
-      const scale = orbit.value.distance * 0.0016;
-      const { yaw, target } = orbit.value;
-      const rightX = Math.cos(yaw);
-      const rightZ = -Math.sin(yaw);
-      orbit.value.target = [
-        target[0] - rightX * dx * scale,
-        target[1] + dy * scale,
-        target[2] - rightZ * dx * scale,
-      ];
+    if (dragMode) {
+      hoveredGizmo.value = null;
+      const dx = event.clientX - lastPointer.x;
+      const dy = event.clientY - lastPointer.y;
+      lastPointer = { x: event.clientX, y: event.clientY };
+      if (dragMode === "orbit") {
+        orbit.value.yaw -= dx * 0.008;
+        orbit.value.pitch = Math.max(
+          -1.5,
+          Math.min(1.5, orbit.value.pitch + dy * 0.008),
+        );
+      } else {
+        // 沿相机右方向 / 世界上方向平移注视点。
+        const scale = orbit.value.distance * 0.0016;
+        const { yaw, target } = orbit.value;
+        const rightX = Math.cos(yaw);
+        const rightZ = -Math.sin(yaw);
+        orbit.value.target = [
+          target[0] - rightX * dx * scale,
+          target[1] + dy * scale,
+          target[2] - rightZ * dx * scale,
+        ];
+      }
+      pushCamera();
+      return;
     }
-    pushCamera();
+    const point = canvasPoint(event);
+    if (point) pushHoverCheck(point);
     return;
   }
   void sendInput({
@@ -475,6 +523,7 @@ function onPointerUp(event: PointerEvent) {
     if (draggingAxis.value) {
       draggingAxis.value = null;
       dragFeedback.value = null;
+      hoveredGizmo.value = null;
       pendingDrag = null;
       if (dragFrame) {
         cancelAnimationFrame(dragFrame);
@@ -631,6 +680,7 @@ onBeforeUnmount(() => {
   if (resizeTimer !== undefined) window.clearTimeout(resizeTimer);
   if (reloadTimer !== undefined) window.clearTimeout(reloadTimer);
   if (statsTimer !== undefined) window.clearInterval(statsTimer);
+  if (hoverFrame) cancelAnimationFrame(hoverFrame);
   void close();
 });
 
@@ -646,10 +696,14 @@ watch(
     await open();
   },
 );
-watch(() => props.selection, pushSelection);
+watch(() => props.selection, () => {
+  hoveredGizmo.value = null;
+  pushSelection();
+});
 watch(
   () => props.activeTool,
   (tool) => {
+    hoveredGizmo.value = null;
     if (!inTauri || !channel || !tool || !isScene.value) return;
     void api.viewportSetTool(viewId, tool).catch(() => undefined);
   },
@@ -911,23 +965,70 @@ const aspectOptions = computed<DropdownOption[]>(() => [
         <canvas
           ref="canvasEl"
           class="viewport-canvas"
-          :class="{ dragging: draggingAxis !== null }"
+          :class="{
+            dragging: draggingAxis !== null,
+            'has-hover': hoveredGizmo !== null && draggingAxis === null,
+          }"
           tabindex="0"
           @pointerdown="onPointerDown"
           @pointermove="onPointerMove"
           @pointerup="onPointerUp"
+          @pointerleave="onPointerLeave"
           @pointercancel="onPointerUp"
           @wheel="onWheel"
           @keydown="onKey($event, true)"
           @keyup="onKey($event, false)"
           @contextmenu.prevent
         />
-        <!-- 变换拖拽实时交互反馈浮层 (Unity 风格黄色旋转弧面与数值 HUD) -->
+        <!-- 变换拖拽与手柄悬停实时交互反馈浮层 (Unity 风格黄色高亮与数值 HUD) -->
         <svg
-          v-if="dragFeedback"
+          v-if="dragFeedback || (hoveredGizmo && draggingAxis === null)"
           class="viewport-drag-overlay"
           :viewBox="`0 0 ${canvasEl?.width || 1280} ${canvasEl?.height || 720}`"
         >
+          <!-- 悬停手柄高亮轮廓 -->
+          <template v-if="hoveredGizmo && draggingAxis === null">
+            <!-- 1D 轴线投影 -->
+            <line
+              v-if="hoveredGizmo.tipScreen"
+              :x1="hoveredGizmo.centerScreen[0]"
+              :y1="hoveredGizmo.centerScreen[1]"
+              :x2="hoveredGizmo.tipScreen[0]"
+              :y2="hoveredGizmo.tipScreen[1]"
+              class="gizmo-hover-line"
+            />
+            <!-- 缩放手柄末端方块 -->
+            <rect
+              v-if="hoveredGizmo.tool === 'scale' && hoveredGizmo.tipScreen"
+              :x="hoveredGizmo.tipScreen[0] - 5"
+              :y="hoveredGizmo.tipScreen[1] - 5"
+              width="10"
+              height="10"
+              class="gizmo-hover-scale-box"
+            />
+            <!-- 2D 平面手柄四边形 -->
+            <polygon
+              v-if="hoveredGizmo.quadScreen"
+              :points="hoveredGizmo.quadScreen.map((p) => `${p[0]},${p[1]}`).join(' ')"
+              class="gizmo-hover-quad"
+            />
+            <!-- 旋转圆环多段线 -->
+            <polyline
+              v-if="hoveredGizmo.ringPts"
+              :points="hoveredGizmo.ringPts.map((p) => `${p[0]},${p[1]}`).join(' ')"
+              class="gizmo-hover-ring"
+            />
+            <!-- 中心统一缩放方块 -->
+            <rect
+              v-if="hoveredGizmo.axis === 'xyz'"
+              :x="hoveredGizmo.centerScreen[0] - 8"
+              :y="hoveredGizmo.centerScreen[1] - 8"
+              width="16"
+              height="16"
+              class="gizmo-hover-center"
+            />
+          </template>
+
           <!-- 旋转黄色半透明扇面与基准线 -->
           <template v-if="rotateArcPath">
             <path :d="rotateArcPath.wedgeD" class="drag-wedge" />
@@ -949,7 +1050,7 @@ const aspectOptions = computed<DropdownOption[]>(() => [
           </template>
 
           <!-- 交互数值 HUD Badge -->
-          <g v-if="badgePosition" :transform="`translate(${badgePosition.x}, ${badgePosition.y})`">
+          <g v-if="badgePosition && dragFeedback" :transform="`translate(${badgePosition.x}, ${badgePosition.y})`">
             <rect
               x="0"
               y="-18"
@@ -1237,8 +1338,49 @@ const aspectOptions = computed<DropdownOption[]>(() => [
   cursor: default;
 }
 
+.viewport-canvas.has-hover {
+  cursor: pointer;
+}
+
 .viewport-canvas.dragging {
   cursor: grabbing;
+}
+
+.gizmo-hover-line {
+  stroke: #ffe600;
+  stroke-width: 4;
+  stroke-linecap: round;
+  filter: drop-shadow(0 0 3px rgba(255, 230, 0, 0.7));
+}
+
+.gizmo-hover-scale-box {
+  fill: #ffe600;
+  stroke: #ffffff;
+  stroke-width: 1.5;
+  filter: drop-shadow(0 0 3px rgba(255, 230, 0, 0.8));
+}
+
+.gizmo-hover-quad {
+  fill: rgba(255, 230, 0, 0.45);
+  stroke: #ffe600;
+  stroke-width: 2;
+  stroke-linejoin: round;
+  filter: drop-shadow(0 0 4px rgba(255, 230, 0, 0.6));
+}
+
+.gizmo-hover-ring {
+  fill: none;
+  stroke: #ffe600;
+  stroke-width: 3.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  filter: drop-shadow(0 0 4px rgba(255, 230, 0, 0.7));
+}
+
+.gizmo-hover-center {
+  fill: rgba(255, 230, 0, 0.5);
+  stroke: #ffe600;
+  stroke-width: 2;
 }
 
 .viewport-overlay {
