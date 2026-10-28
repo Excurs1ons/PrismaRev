@@ -174,10 +174,11 @@ cargo clippy -p prism-editor-gpui -p prism-editor-gpui-core \
     --target x86_64-pc-windows-gnu                                    # clean
 ```
 
-CI 目前不覆盖这个 workspace（GPUI 需要桌面 runner）。要加的话，在
-`.github/workflows/ci.yml` 里追加一个 `windows-latest` job：
+CI 覆盖：
 
-```yaml
-- run: cargo test  --manifest-path editor-gpui/Cargo.toml -p prism-editor-gpui-core
-- run: cargo check --manifest-path editor-gpui/Cargo.toml -p prism-editor-gpui
-```
+- `.github/workflows/ci.yml` 的 `editor-gpui` job（ubuntu）跑数据层单测；
+- `scripts/pr_ready.py` 在改动 `editor-gpui/` 时跑数据层单测，并在本机装有
+  `x86_64-pc-windows-gnu` 目标时追加 `cargo check -p prism-editor-gpui --target
+  x86_64-pc-windows-gnu`（Termux 上的替代验证方式）。
+
+GPUI 的**运行**仍然需要桌面环境（Windows/macOS/Linux + GPU），CI 只做类型检查。

@@ -151,3 +151,6 @@ editor-gpui/
 - `cargo check -p prism-editor-gpui --target x86_64-pc-windows-gnu`：通过。
 - `cargo clippy -p prism-editor-gpui -p prism-editor-gpui-core --target x86_64-pc-windows-gnu`：
   无 warning（仅 `proc-macro-error2` 的 future-incompat 提示）。
+- `python scripts/pr_ready.py`：改动 `editor-gpui/` 时自动跑数据层单测；装了
+  `x86_64-pc-windows-gnu` 目标时再跑 UI 类型检查。CI（`.github/workflows/ci.yml`）
+  新增 `editor-gpui` job 跑数据层单测。
