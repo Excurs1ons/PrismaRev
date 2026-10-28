@@ -1138,14 +1138,16 @@ impl Workspace {
 
     /// 顶层选中实体：去掉“父级也在选中集合里”的项，避免复制整棵子树两次。
     pub fn selection_roots(&self) -> Vec<usize> {
-        let doc = &self.document().doc;
-        let ids: HashSet<u32> = self
-            .selection
+        Self::roots_of(&self.document().doc, &self.selection)
+    }
+
+    fn roots_of(doc: &SceneDoc, selection: &[usize]) -> Vec<usize> {
+        let ids: HashSet<u32> = selection
             .iter()
             .filter_map(|index| doc.entities.get(*index).and_then(|entity| entity.id))
             .collect();
         let mut roots = Vec::new();
-        for index in &self.selection {
+        for index in selection {
             let Some(entity) = doc.entities.get(*index) else {
                 continue;
             };
@@ -1285,6 +1287,24 @@ impl Workspace {
                 LogLevel::Warn,
                 "层级调整被拒绝（自父 / 成环）",
             );
+        }
+    }
+
+    /// 多选拖拽：把选中集合的顶层实体一起挂到 `new_parent` 下（一次快照撤销）。
+    pub fn reparent_selection(&mut self, new_parent: Option<usize>) -> usize {
+        let roots = self.selection_roots();
+        if roots.is_empty() {
+            return 0;
+        }
+        let result = self.edit("调整层级", |document| {
+            document.doc.reparent_many(&roots, new_parent)
+        });
+        match result {
+            Ok(moved) => moved,
+            Err(reason) => {
+                self.log(LogSource::Editor, LogLevel::Warn, reason);
+                0
+            }
         }
     }
 
@@ -3733,6 +3753,42 @@ mod tests {
         workspace.select(cube, false);
         workspace.select(detail, true);
         assert_eq!(workspace.selection_roots(), vec![cube]);
+    }
+
+    #[test]
+    fn reparent_selection_moves_all_roots_in_one_step() {
+        let mut workspace = Workspace::sample();
+        let cube = index_named(&workspace, "Cube");
+        let light = index_named(&workspace, "Directional Light");
+        let camera = index_named(&workspace, "Main Camera");
+        let camera_id = workspace.document().doc.entities[camera].id;
+        let cube_parent = workspace.document().doc.entities[cube].parent;
+        let light_parent = workspace.document().doc.entities[light].parent;
+
+        workspace.select(cube, false);
+        workspace.select(light, true);
+        assert_eq!(workspace.reparent_selection(Some(camera)), 2);
+        assert_eq!(workspace.document().doc.entities[cube].parent, camera_id);
+        assert_eq!(workspace.document().doc.entities[light].parent, camera_id);
+        assert_eq!(workspace.document().undo.history().len(), 1);
+
+        workspace.undo();
+        assert_eq!(workspace.document().doc.entities[cube].parent, cube_parent);
+        assert_eq!(
+            workspace.document().doc.entities[light].parent,
+            light_parent
+        );
+    }
+
+    #[test]
+    fn reparent_selection_rejects_dropping_into_own_descendant() {
+        let mut workspace = Workspace::sample();
+        let cube = index_named(&workspace, "Cube");
+        let detail = index_named(&workspace, "Detail");
+        workspace.select(cube, false);
+        workspace.select(detail, true);
+        assert_eq!(workspace.reparent_selection(Some(detail)), 0);
+        assert!(!workspace.can_undo());
     }
 
     #[test]

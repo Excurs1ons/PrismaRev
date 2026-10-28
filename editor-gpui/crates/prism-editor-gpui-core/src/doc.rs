@@ -364,6 +364,45 @@ impl SceneDoc {
     }
 
     /// 移动数组位置（层级树的拖拽排序）；父子关系已由调用方设置。
+    /// 多选拖拽改父级：只改 parent，不调整兄弟顺序；拒绝挂到选中项自身或其后代下。
+    pub fn reparent_many(
+        &mut self,
+        roots: &[usize],
+        new_parent: Option<usize>,
+    ) -> Result<usize, &'static str> {
+        let mut roots: Vec<usize> = roots.to_vec();
+        roots.sort_unstable();
+        roots.dedup();
+        if roots.is_empty() {
+            return Ok(0);
+        }
+        let parent_id = match new_parent {
+            Some(parent) => {
+                if roots.contains(&parent) {
+                    return Err("不能把实体挂到自己下面");
+                }
+                for root in &roots {
+                    if self.entities.get(*root).is_none() {
+                        continue;
+                    }
+                    if self.descendants(*root).contains(&parent) {
+                        return Err("不能把实体挂到自己的子级下面");
+                    }
+                }
+                Some(self.id_of_index(parent).ok_or("父实体不存在")?)
+            }
+            None => None,
+        };
+        let mut moved = 0;
+        for root in roots {
+            if let Some(entity) = self.entities.get_mut(root) {
+                entity.parent = parent_id;
+                moved += 1;
+            }
+        }
+        Ok(moved)
+    }
+
     pub fn move_entity(&mut self, from: usize, to: usize) -> Result<usize, &'static str> {
         if from >= self.entities.len() {
             return Err("实体不存在");

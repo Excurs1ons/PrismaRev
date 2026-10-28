@@ -238,7 +238,13 @@ impl EditorView {
                         }) = this.drag.clone()
                         {
                             if from != index {
-                                this.workspace.reparent(from, Some(index), None);
+                                let multi = this.workspace.selection.len() > 1
+                                    && this.workspace.selection.contains(&from);
+                                if multi {
+                                    this.workspace.reparent_selection(Some(index));
+                                } else {
+                                    this.workspace.reparent(from, Some(index), None);
+                                }
                             }
                             this.drag = None;
                             cx.notify();

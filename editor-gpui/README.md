@@ -67,7 +67,7 @@
 | 渲染图 | pass 链（ShadowMap → Forward → Gtao → Post）+ 图资源表（scene/swapchain/frame 生命周期） |
 | 项目设置 / 首选项 / 主题 / 构建 / 离线工具 / 快捷键 / 关于 | 直接编辑设置、主题预设与 38 个 token 预览、真实 cargo/cook 构建日志、bake-gi 与 heightmap 命令预览 |
 
-**数据层**（`prism-editor-gpui-core`，UI 框架无关，173 个单元测试）
+**数据层**（`prism-editor-gpui-core`，UI 框架无关，175 个单元测试）
 
 - `.scene.json` / `.prefab.json`：稳定 id、parent 迁移、删除孤儿子级变根、reparent 防环、
   子树提取（存预制体）、预制体实例化（id 平移 + 名字去重 + 反向链接）、字段引用扫描
@@ -78,6 +78,8 @@
 - 子树复制：内部 parent 重映射、根保持父级、名字加 `(1)`；重命名预览不产生撤销步
 - 实体剪贴板：Ctrl+C/X/V、右键「粘贴 / 粘贴为子级」、多根批量复制；预制体实例
   复制后保留同源链接（`extract_subtree_preserving_links`）
+- 多选拖拽改父级：拖到行中间时 `reparent_selection` 把选中集合的顶层实体一起挂过去
+  （一次快照撤销，挂到自己后代下会被拒绝）
 - 视口数学：世界↔屏幕投影、屏幕射线、AABB 拾取、gizmo 轴/圆环命中、像素↔世界换算、
   四元数世界/局部轴旋转、父链世界旋转与父空间位移换算
 - 本地状态：`EditorState`（布局 + 主题 + 语言 + 首选项）的宽容读写与回退
@@ -171,7 +173,7 @@ editor-gpui/
 
 ## 验证记录
 
-- `cargo test -p prism-editor-gpui-core`：**173 passed**。
+- `cargo test -p prism-editor-gpui-core`：**175 passed**。
 - `cargo check -p prism-editor-gpui --target x86_64-pc-windows-gnu`：通过。
 - `cargo clippy -p prism-editor-gpui -p prism-editor-gpui-core --target x86_64-pc-windows-gnu`：
   无 warning（仅 `proc-macro-error2` 的 future-incompat 提示）。

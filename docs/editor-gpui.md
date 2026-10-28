@@ -115,6 +115,8 @@ Unity 形状的编辑器，又不会把 `prism-render` 绑死在某套 UI 生命
 - **资产拖拽**：资产列表行用 GPUI `on_drag`（`AssetDragPreview` 小卡片），检查器资产
   字段和层级实体行是 drop target：拖到字段直接 `apply_field(String)`，拖 `.prefab.json`
   到层级实体会 `instantiate_prefab_asset` 到该实体下并选中新根。
+- **多选拖拽层级**：拖到行中间时若被拖的实体在选中集合里，`reparent_selection` 把
+  `selection_roots()` 整组挂到目标下（一次快照撤销）；行上/下 25% 仍是单实体排序。
 
  ## 6. 项目文件
 
