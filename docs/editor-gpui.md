@@ -149,9 +149,11 @@ Unity 形状的编辑器，又不会把 `prism-render` 绑死在某套 UI 生命
 
 - 轨道相机（target / yaw / pitch / distance）投影到屏幕，画 21×21 世界网格、
   未选中实体的线框、选中实体的线框 + 三色 gizmo 轴；
-- 左键：先试 gizmo 轴（屏幕 8px 内）→ 拖动移动（Ctrl 吸附 0.25），否则射线拾取
-  实体（单位立方体 × scale 的近似，双击同一实体 = 取景），再否则轨道旋转；
-  右键平移、滚轮缩放；
+- 左键：先试 gizmo（移动/缩放拖轴 8px 内；旋转拖圆环 10px 内，Ctrl 吸附 0.25），
+  否则射线拾取实体（单位立方体 × scale 的近似，双击同一实体 = 取景），再否则轨道旋转；
+  右键平移、滚轮缩放；`W` / `E` / `R` 切换移动 / 旋转 / 缩放 gizmo。
+- 旋转用四元数 `q_axis * q_old`（世界轴，忽略实体自身旋转）；缩放夹在
+  0.01..=1000，避免退化矩阵。两者都走 `push_transform`，一次拖动合并成一步撤销。
   Game View 只读，点击按归一化视口坐标记日志（将来直接转成游戏输入）。
 - 拾取 / gizmo 的数学在 `core/src/viewport_math.rs`（纯函数 + 6 个单测），UI 侧
   只负责把 `canvas` 的实际 `Bounds` 记下来（`scene_bounds` / `game_bounds`）。
@@ -175,7 +177,7 @@ Unity 形状的编辑器，又不会把 `prism-render` 绑死在某套 UI 生命
 
 ```sh
 cd editor-gpui
-cargo test -p prism-editor-gpui-core                                  # 115 passed
+cargo test -p prism-editor-gpui-core                                  # 118 passed
 cargo check -p prism-editor-gpui --target x86_64-pc-windows-gnu       # 类型检查
 cargo clippy -p prism-editor-gpui -p prism-editor-gpui-core \
     --target x86_64-pc-windows-gnu                                    # clean

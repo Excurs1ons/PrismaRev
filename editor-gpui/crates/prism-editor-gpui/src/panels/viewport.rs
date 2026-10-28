@@ -6,7 +6,7 @@
 use gpui::{div, prelude::*, px, AnyElement, Context, MouseButton, PathBuilder, SharedString};
 use prism_editor_gpui_core::OrbitCamera;
 
-use crate::app::{DragState, EditorView};
+use crate::app::{DragState, EditorView, GizmoMode};
 use crate::style::{Style, TAB_HEIGHT};
 use prism_editor_gpui_core::viewport_math::{
     camera_frame, gizmo_world_length, project, CameraFrame,
@@ -21,6 +21,7 @@ struct SceneSnapshot {
     selection: Vec<[f32; 3]>,
     play_time: f32,
     playing: bool,
+    gizmo_mode: GizmoMode,
 }
 
 impl EditorView {
@@ -43,6 +44,7 @@ impl EditorView {
                     .collect(),
                 play_time: self.workspace.play_time_s,
                 playing: self.workspace.playing,
+                gizmo_mode: self.gizmo_mode,
             }
         };
 
@@ -73,6 +75,32 @@ impl EditorView {
                         style.muted()
                     })
                     .child(SharedString::from(self.workspace.play_state_label())),
+            )
+            .child(div().w(px(8.0)))
+            .children(
+                [GizmoMode::Translate, GizmoMode::Rotate, GizmoMode::Scale]
+                    .into_iter()
+                    .map(|mode| {
+                        let active = self.gizmo_mode == mode;
+                        div()
+                            .id(SharedString::from(format!("gizmo-mode-{:?}", mode)))
+                            .px_1()
+                            .rounded_sm()
+                            .cursor_pointer()
+                            .text_size(px(9.0))
+                            .text_color(if active {
+                                style.text_strong()
+                            } else {
+                                style.text_soft()
+                            })
+                            .when(active, |this| this.bg(style.selection()))
+                            .hover(move |this| this.bg(style.row_hover()))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.gizmo_mode = mode;
+                                cx.notify();
+                            }))
+                            .child(SharedString::from(mode.label()))
+                    }),
             )
             .child(div().flex_1())
             .child(SharedString::from(format!("{entity_count} 实体")))
@@ -356,25 +384,81 @@ fn paint_scene(
 
         let length = gizmo_world_length(&snapshot.camera);
         let axes = [
-            ([length, 0.0, 0.0], ThemeToken::Danger),
-            ([0.0, length, 0.0], ThemeToken::Success),
-            ([0.0, 0.0, length], ThemeToken::Accent),
+            (0usize, ThemeToken::Danger),
+            (1, ThemeToken::Success),
+            (2, ThemeToken::Accent),
         ];
-        for (offset, token) in axes {
-            let end = [
-                position[0] + offset[0],
-                position[1] + offset[1],
-                position[2] + offset[2],
-            ];
-            draw_line(
-                window,
-                bounds,
-                &frame,
-                *position,
-                end,
-                style.alpha(token, 0.9),
-                if scene { 2.0 } else { 1.0 },
-            );
+        for (axis, token) in axes {
+            let color = style.alpha(token, 0.9);
+            match snapshot.gizmo_mode {
+                GizmoMode::Rotate => {
+                    // 垂直于轴的圆环（48 段折线）。
+                    let (u, v) = match axis {
+                        0 => ([0.0, 1.0, 0.0], [0.0, 0.0, 1.0]),
+                        1 => ([1.0, 0.0, 0.0], [0.0, 0.0, 1.0]),
+                        _ => ([1.0, 0.0, 0.0], [0.0, 1.0, 0.0]),
+                    };
+                    let mut previous = None;
+                    for step in 0..=48 {
+                        let angle = step as f32 / 48.0 * std::f32::consts::TAU;
+                        let (sin, cos) = angle.sin_cos();
+                        let point = [
+                            position[0] + (u[0] * cos + v[0] * sin) * length,
+                            position[1] + (u[1] * cos + v[1] * sin) * length,
+                            position[2] + (u[2] * cos + v[2] * sin) * length,
+                        ];
+                        if let Some(previous) = previous {
+                            if let (Some(start), Some(end)) = (
+                                project(previous, &frame, width, height),
+                                project(point, &frame, width, height),
+                            ) {
+                                paint_segment(window, bounds, start, end, color, 1.5);
+                            }
+                        }
+                        previous = Some(point);
+                    }
+                }
+                GizmoMode::Translate | GizmoMode::Scale => {
+                    let offset = match axis {
+                        0 => [length, 0.0, 0.0],
+                        1 => [0.0, length, 0.0],
+                        _ => [0.0, 0.0, length],
+                    };
+                    let end = [
+                        position[0] + offset[0],
+                        position[1] + offset[1],
+                        position[2] + offset[2],
+                    ];
+                    draw_line(
+                        window,
+                        bounds,
+                        &frame,
+                        *position,
+                        end,
+                        color,
+                        if scene { 2.0 } else { 1.0 },
+                    );
+                    if snapshot.gizmo_mode == GizmoMode::Scale {
+                        // 端点画一个小方块（屏幕空间 ~5px）。
+                        if let Some((x, y, _)) = project(end, &frame, width, height) {
+                            window.paint_quad(gpui::quad(
+                                gpui::Bounds {
+                                    origin: gpui::point(
+                                        bounds.origin.x + px(x - 3.0),
+                                        bounds.origin.y + px(y - 3.0),
+                                    ),
+                                    size: gpui::size(px(6.0), px(6.0)),
+                                },
+                                px(0.0),
+                                color,
+                                px(0.0),
+                                gpui::transparent_black(),
+                                Default::default(),
+                            ));
+                        }
+                    }
+                }
+            }
         }
     }
 

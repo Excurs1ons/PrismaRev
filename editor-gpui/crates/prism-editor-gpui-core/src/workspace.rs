@@ -15,6 +15,7 @@ use crate::logbuf::{LogBuffer, LogLevel, LogSource};
 use crate::project::{self, ProjectFile};
 use crate::schema::{component_value_with_overrides, EntityPreset, Schema, TypeSchema};
 use crate::theme::{ThemeColors, ThemeState, ThemeToken};
+use crate::viewport_math::{quat_axis_angle, quat_mul, quat_normalize};
 use serde_json::Value;
 use std::collections::HashSet;
 use std::io;
@@ -1312,6 +1313,49 @@ impl Workspace {
         document.dirty = true;
     }
 
+    /// 绕世界轴旋转实体（旋转 gizmo）；四元数 `q_axis * q_old`，按实体合并撤销。
+    pub fn rotate_entity(&mut self, entity_id: u32, axis: usize, delta_radians: f32) {
+        if !delta_radians.is_finite() || delta_radians.abs() < 1e-6 {
+            return;
+        }
+        let Some(index) = self.document().doc.index_of_id(entity_id) else {
+            return;
+        };
+        let before = self.document().doc.entities[index].transform;
+        let after = TransformJson {
+            rotation: quat_normalize(quat_mul(
+                quat_axis_angle(axis, delta_radians),
+                before.rotation,
+            )),
+            ..before
+        };
+        let now = now_ms();
+        let document = self.document_mut();
+        document
+            .undo
+            .push_transform(&mut document.doc, entity_id, before, after, now);
+        document.dirty = true;
+    }
+
+    /// 缩放 gizmo：只改一个轴（下限 0.01，避免退化矩阵）。
+    pub fn set_scale_axis(&mut self, entity_id: u32, axis: usize, value: f32) {
+        let Some(index) = self.document().doc.index_of_id(entity_id) else {
+            return;
+        };
+        let before = self.document().doc.entities[index].transform;
+        let mut after = before;
+        after.scale[axis] = value.clamp(0.01, 1000.0);
+        if before == after {
+            return;
+        }
+        let now = now_ms();
+        let document = self.document_mut();
+        document
+            .undo
+            .push_transform(&mut document.doc, entity_id, before, after, now);
+        document.dirty = true;
+    }
+
     /// 检查器里拖动 Transform 的一个分量（按实体合并撤销步）。
     pub fn set_transform_axis(&mut self, entity_id: u32, field: &str, axis: usize, value: f32) {
         let Some(index) = self.document().doc.index_of_id(entity_id) else {
@@ -1990,6 +2034,35 @@ mod tests {
         for entity in &workspace.document().doc.entities {
             assert!(!entity.has_component("prism_engine::scene::Camera") || entity.id != Some(1));
         }
+    }
+
+    #[test]
+    fn rotate_and_scale_gizmo_operations_are_undoable() {
+        let mut workspace = Workspace::load_fixture(&fixture());
+        let id = workspace.document().doc.entities[0].id.unwrap();
+        workspace.rotate_entity(id, 1, std::f32::consts::FRAC_PI_2);
+        let rotation = workspace.document().doc.entities[0].transform.rotation;
+        // 绕 Y 90°：w = cos45。
+        assert!((rotation[3] - std::f32::consts::FRAC_1_SQRT_2).abs() < 1e-4);
+        assert!(workspace.can_undo());
+        workspace.undo();
+        assert_eq!(
+            workspace.document().doc.entities[0].transform.rotation,
+            [0.0, 0.0, 0.0, 1.0]
+        );
+
+        workspace.set_scale_axis(id, 0, 2.5);
+        assert_eq!(workspace.document().doc.entities[0].transform.scale[0], 2.5);
+        workspace.set_scale_axis(id, 0, -5.0);
+        assert_eq!(
+            workspace.document().doc.entities[0].transform.scale[0],
+            0.01,
+            "负数被夹到最小值"
+        );
+        // 无效 delta 不产生撤销步。
+        let history = workspace.document().undo.history().len();
+        workspace.rotate_entity(id, 0, 0.0);
+        assert_eq!(workspace.document().undo.history().len(), history);
     }
 
     #[test]

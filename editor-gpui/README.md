@@ -56,7 +56,7 @@
 | 检查器 | 实体面包屑 + schema 驱动：bool / int / float / 滑杆 / 向量 / 四元数 / 颜色 / 枚举 / 文本 / 只读；拖动调值（Shift+点击输入）、组件卡折叠、复制/移除、添加组件（分类 + 搜索）、无 schema 时显示原始 JSON；**多选时只显示公共组件，字段修改一次应用到全部（一次撤销回退）** |
 | 资产 | 目录树 + 文件列表、分类 chips、搜索、选中详情（导入器 / 体积 / 分类）；右键**重命名 / 移动**（磁盘改名 + 打开文档里的精确路径引用自动改写）与**删除**（二次确认，不清理悬空引用） |
 | 日志 | 级别 × 来源过滤、搜索、错误/告警计数、窗口化 `uniform_list`（固定 18px 行高） |
-| 场景视图 | `canvas` 绘制的世界网格、实体线框、选中高亮 + gizmo 三轴；**点击拾取实体**、**双击聚焦**、**拖 gizmo 移动**（Ctrl 吸附 0.25）、空白处左键轨道、右键平移、滚轮缩放 |
+| 场景视图 | `canvas` 绘制的世界网格、实体线框、选中高亮；**点击拾取实体**、**双击聚焦**、空白处左键轨道、右键平移、滚轮缩放；gizmo 三模式（`W` 移动 / `E` 旋转 / `R` 缩放，Ctrl 吸附 0.25）：移动与缩放拖轴、旋转拖圆环，均可撤销 |
 | 游戏视图 | 文档相机视角 + Play 状态；Play 时实体轻微上下浮动（模拟 tick） |
 | 文档 | 打开的文档、新建场景/预制体、模板 |
 | 渲染图 | pass 链（ShadowMap → Forward → Gtao → Post）+ 图资源表（scene/swapchain/frame 生命周期） |
@@ -69,7 +69,8 @@
 - 撤销栈：字段级合并（同一实体/组件/路径 800ms 内合并）、Transform 单独合并、结构编辑用整文档快照
 - 多对象编辑：公共组件求交、批量字段写入（一次快照撤销）、批量移除组件
 - 子树复制：内部 parent 重映射、根保持父级、名字加 `(1)`；重命名预览不产生撤销步
-- 视口数学：世界↔屏幕投影、屏幕射线、AABB 拾取、gizmo 轴命中与像素↔世界换算
+- 视口数学：世界↔屏幕投影、屏幕射线、AABB 拾取、gizmo 轴/圆环命中、像素↔世界换算、
+  四元数世界轴旋转
 - 本地状态：`EditorState`（布局 + 主题 + 语言 + 首选项）的宽容读写与回退
 - 项目设置：`assets/settings.toml` 的 `[app]` / `[window]` / `[build]` 读写（合并写回，保留其它段）
 - 资产重命名 / 移动：文件改名 + 文档引用改写（精确匹配，含嵌套数组/对象）
@@ -143,13 +144,14 @@ editor-gpui/
 - **文本输入是最小实现**：单击/双击进入内联编辑，支持退格/回车/Esc 与普通字符，
   没有 IME、选区、光标移动；搜索框同理。补 IME 时需要 `ElementInputHandler`。
 - 图标用文本符号（`▶`/`◉`/`▾`…），没有引入图标库；Web 编辑器用 `lucide-vue-next`。
+- 旋转 / 缩放 gizmo 是**世界轴**（忽略实体自身旋转）；Unity 的 local/global 切换尚未做。
 - 渲染图面板是**静态快照**（形状与 `prism-render-graph.json` 一致），
   尚未读取真实报告。
 - 主题面板可切预设并预览 token，但逐项覆盖（override）的编辑器还没做 UI。
 
 ## 验证记录
 
-- `cargo test -p prism-editor-gpui-core`：**115 passed**。
+- `cargo test -p prism-editor-gpui-core`：**118 passed**。
 - `cargo check -p prism-editor-gpui --target x86_64-pc-windows-gnu`：通过。
 - `cargo clippy -p prism-editor-gpui -p prism-editor-gpui-core --target x86_64-pc-windows-gnu`：
   无 warning（仅 `proc-macro-error2` 的 future-incompat 提示）。

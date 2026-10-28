@@ -9,6 +9,114 @@ use crate::workspace::OrbitCamera;
 
 pub const GIZMO_SCREEN_PIXELS: f32 = 90.0;
 pub const GIZMO_PICK_RADIUS: f32 = 8.0;
+/// 旋转 gizmo 圆环的命中带宽（像素）。
+pub const GIZMO_RING_TOLERANCE: f32 = 10.0;
+
+/// 旋转 gizmo 的圆环在屏幕上的半径（每个轴一条）。
+pub fn ring_screen_radius(
+    frame: &CameraFrame,
+    origin: [f32; 3],
+    axis: usize,
+    world_radius: f32,
+    width: f32,
+    height: f32,
+) -> Option<(f32, f32, f32)> {
+    // 圆环在垂直于轴的平面里；用两条正交半径的屏幕长度平均近似半径。
+    let (u, v) = match axis {
+        0 => ([0.0, 1.0, 0.0], [0.0, 0.0, 1.0]),
+        1 => ([1.0, 0.0, 0.0], [0.0, 0.0, 1.0]),
+        _ => ([1.0, 0.0, 0.0], [0.0, 1.0, 0.0]),
+    };
+    let start = project(origin, frame, width, height)?;
+    let a = project(add(origin, scale(u, world_radius)), frame, width, height)?;
+    let b = project(add(origin, scale(v, world_radius)), frame, width, height)?;
+    let ra = ((a.0 - start.0).powi(2) + (a.1 - start.1).powi(2)).sqrt();
+    let rb = ((b.0 - start.0).powi(2) + (b.1 - start.1).powi(2)).sqrt();
+    Some((start.0, start.1, (ra + rb) * 0.5))
+}
+
+/// 命中旋转圆环：返回轴。屏幕距离与投影半径之差小于带宽即命中。
+pub fn pick_rotation_axis(
+    point: (f32, f32),
+    frame: &CameraFrame,
+    origin: [f32; 3],
+    world_radius: f32,
+    width: f32,
+    height: f32,
+) -> Option<usize> {
+    let mut best: Option<(usize, f32)> = None;
+    for axis in 0..3 {
+        let Some((cx, cy, radius)) =
+            ring_screen_radius(frame, origin, axis, world_radius, width, height)
+        else {
+            continue;
+        };
+        if radius < 12.0 {
+            continue;
+        }
+        let distance = ((point.0 - cx).powi(2) + (point.1 - cy).powi(2)).sqrt();
+        let error = (distance - radius).abs();
+        if error <= GIZMO_RING_TOLERANCE && best.map(|(_, best)| error < best).unwrap_or(true) {
+            best = Some((axis, error));
+        }
+    }
+    best.map(|(axis, _)| axis)
+}
+
+/// 屏幕点相对圆心的角度（用于旋转拖动）。
+pub fn screen_angle(point: (f32, f32), center: (f32, f32)) -> f32 {
+    (point.1 - center.1).atan2(point.0 - center.0)
+}
+
+/// 把角度差规范到 `(-π, π]`。
+pub fn wrap_angle(angle: f32) -> f32 {
+    let two_pi = std::f32::consts::TAU;
+    let mut wrapped = angle % two_pi;
+    if wrapped > std::f32::consts::PI {
+        wrapped -= two_pi;
+    } else if wrapped <= -std::f32::consts::PI {
+        wrapped += two_pi;
+    }
+    wrapped
+}
+
+/// 四元数乘法（`a * b`，与 glam 的 `Quat::mul_quat` 同序）。
+pub fn quat_mul(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
+    let (ax, ay, az, aw) = (a[0], a[1], a[2], a[3]);
+    let (bx, by, bz, bw) = (b[0], b[1], b[2], b[3]);
+    [
+        aw * bx + ax * bw + ay * bz - az * by,
+        aw * by - ax * bz + ay * bw + az * bx,
+        aw * bz + ax * by - ay * bx + az * bw,
+        aw * bw - ax * bx - ay * by - az * bz,
+    ]
+}
+
+/// 绕世界轴旋转 `angle` 弧度的四元数。
+pub fn quat_axis_angle(axis: usize, angle: f32) -> [f32; 4] {
+    let half = angle * 0.5;
+    let (sin, cos) = half.sin_cos();
+    match axis {
+        0 => [sin, 0.0, 0.0, cos],
+        1 => [0.0, sin, 0.0, cos],
+        _ => [0.0, 0.0, sin, cos],
+    }
+}
+
+/// 用四元数旋转向量（测试 / 旋转后的轴端点用）。
+pub fn quat_rotate(q: [f32; 4], v: [f32; 3]) -> [f32; 3] {
+    let qv = [q[0], q[1], q[2]];
+    let uv = cross(qv, v);
+    let uuv = cross(qv, uv);
+    add(v, add(scale(uv, 2.0 * q[3]), scale(uuv, 2.0)))
+}
+
+pub fn quat_normalize(q: [f32; 4]) -> [f32; 4] {
+    let len = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3])
+        .sqrt()
+        .max(1e-6);
+    [q[0] / len, q[1] / len, q[2] / len, q[3] / len]
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct CameraFrame {
@@ -339,6 +447,47 @@ mod tests {
         assert!(
             pick_gizmo_axis((10.0, 590.0), &frame, [0.0, 0.0, 0.0], length, 800.0, 600.0).is_none()
         );
+    }
+
+    #[test]
+    fn quaternion_rotation_about_world_axes() {
+        let q = quat_axis_angle(0, std::f32::consts::FRAC_PI_2);
+        let rotated = quat_rotate(q, [0.0, 1.0, 0.0]);
+        assert!((rotated[0]).abs() < 1e-4);
+        assert!((rotated[1]).abs() < 1e-4);
+        assert!((rotated[2] - 1.0).abs() < 1e-4, "+Y → +Z");
+
+        // 组合：绕 X 90° 再绕 Y 90°。
+        let qx = quat_axis_angle(0, std::f32::consts::FRAC_PI_2);
+        let qy = quat_axis_angle(1, std::f32::consts::FRAC_PI_2);
+        let combined = quat_normalize(quat_mul(qy, qx));
+        let v = quat_rotate(combined, [0.0, 1.0, 0.0]);
+        assert!((v[0] - 1.0).abs() < 1e-4, "+Y → +Z → +X: {v:?}");
+    }
+
+    #[test]
+    fn ring_pick_and_angle_helpers() {
+        let camera = camera();
+        let frame = camera_frame(&camera);
+        let radius = gizmo_world_length(&camera);
+        let (cx, cy, screen_radius) =
+            ring_screen_radius(&frame, [0.0, 0.0, 0.0], 1, radius, 800.0, 600.0).unwrap();
+        assert!(screen_radius > 10.0);
+        // 圆环右侧一点（Y 轴圆环在 XZ 平面，屏幕上是一个椭圆）。
+        let hit = pick_rotation_axis(
+            (cx + screen_radius, cy),
+            &frame,
+            [0.0, 0.0, 0.0],
+            radius,
+            800.0,
+            600.0,
+        );
+        assert_eq!(hit, Some(1), "最外圈是 Y 轴圆环");
+
+        assert!((wrap_angle(3.0 * std::f32::consts::PI) - std::f32::consts::PI).abs() < 1e-4);
+        assert!((wrap_angle(-3.0 * std::f32::consts::PI) + std::f32::consts::PI).abs() < 1e-4);
+        let a = screen_angle((10.0, 0.0), (0.0, 0.0));
+        assert!(a.abs() < 1e-5);
     }
 
     #[test]
