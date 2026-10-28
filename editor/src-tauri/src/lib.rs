@@ -1158,6 +1158,31 @@ fn copy_if_exists(from: &Path, to: &Path) {
     }
 }
 
+/// 构建步骤进度：前端浮窗显示「构建项目：<步骤>」。
+fn set_build_step(message: impl Into<String>) {
+    if let Ok(mut status) = BUILD_STATUS.lock() {
+        *status = Some(BuildStatus {
+            active: true,
+            label: "构建项目".to_string(),
+            message: message.into(),
+            elapsed_ms: 0,
+        });
+    }
+}
+
+/// 无论从哪条 `?` 提前返回，都把进度标成已结束（否则浮窗会一直转）。
+struct BuildStatusGuard;
+
+impl Drop for BuildStatusGuard {
+    fn drop(&mut self) {
+        if let Ok(mut status) = BUILD_STATUS.lock() {
+            if let Some(status) = status.as_mut() {
+                status.active = false;
+            }
+        }
+    }
+}
+
 fn build_project_blocking(
     root: PathBuf,
     options: BuildProjectOptions,
@@ -1178,6 +1203,8 @@ fn build_project_blocking(
     let release = options.profile == "release";
 
     let mut log = String::new();
+    let _progress = BuildStatusGuard;
+    set_build_step("正在编译游戏二进制…");
     log.push_str(&format!(
         "==> cargo build ({}) {}\n",
         options.profile,
@@ -1186,6 +1213,7 @@ fn build_project_blocking(
     let cargo_started = std::time::Instant::now();
     log.push_str(&run_cargo_build(&root, &manifest, release)?);
     let cargo_elapsed = cargo_started.elapsed();
+    set_build_step("正在 cook 场景并打包 scenes.pak…");
     log.push_str("\n==> build-scenes\n");
     let pipeline_started = std::time::Instant::now();
     log.push_str(&run_pipeline(&root, &["build-scenes"])?);
@@ -1215,6 +1243,7 @@ fn build_project_blocking(
     std::fs::create_dir_all(&output_dir)
         .map_err(|error| format!("无法创建输出目录 {}: {error}", output_dir.display()))?;
 
+    set_build_step("正在收集构建产物…");
     let collect_started = std::time::Instant::now();
     let output_exe = output_dir.join(exe_name);
     std::fs::copy(&bin, &output_exe).map_err(|error| format!("复制游戏二进制失败: {error}"))?;
@@ -1264,6 +1293,7 @@ fn build_project_blocking(
         report = report.with_file(&scene_package_meta, BuildFileRole::Metadata);
     }
 
+    set_build_step("构建完成");
     Ok(BuildProjectResult {
         output: log,
         exe: output_exe.to_string_lossy().into_owned(),

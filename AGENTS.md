@@ -224,6 +224,38 @@ The user project's dependency chain must stay **UI-framework-free and editor-fre
   - `editor/src-tauri/src/viewport.rs` — one thread per viewport, frames travel as
     `Raw` Tauri channel payloads (`8-byte w/h header + RGBA`), the Vue panel only does
     `putImageData`. Scene JSON snapshots live in `target/editor-preview/`.
+- **Project code runs as a dynamic module in Game View** (Unity model: editor hosts
+  scripts, players stay monolithic). Do not try to make the Android/desktop player load a
+  plugin — `GameActivity` needs one `.so`, and the player is intentionally static.
+  - `crates/prism-project-api` — the C ABI (`repr(C)` tables + POD payloads + RTTIBin
+    component bytes). Never pass `Engine` / `World` / trait objects across it: editor and
+    project are separate workspaces and compile **different** `prism-engine` instances.
+  - `crates/prism-runtime-host` — loads the module, validates the ABI, and turns host
+    calls into `World` operations via `ComponentRegistry` (`apply_object` /
+    `extract_object` / `entities_with` / `remove_component`). Adding a component type
+    needs **no** ABI change.
+  - `crates/prism-game-api` — one `GameWorld` surface with two backends: `host` borrows
+    the host `World` directly (zero serialization), `plugin` speaks the ABI. Gameplay
+    code is written once; `cargo tree -p prism-game-api --no-default-features --features
+    plugin -e normal` must stay free of `prism-engine` / `prism-render` / `prism-app`.
+  - `projects/<p>/Cargo.toml` splits `player` (links the engine) from `preview-module`
+    (cdylib that links none). Bins use `required-features = ["player"]`; `android_main`
+    is gated on `player` too.
+  - The editor builds the module itself:
+    `cargo build --no-default-features --features preview-module --target-dir
+    projects/<p>/target/preview-module`. The separate target dir matters: the module and
+    the player share the artifact name, so a shared `target/debug` would overwrite them
+    and force full rebuilds.
+  - Compile timing follows Unity: 350 ms debounce after edits settle, deferred while
+    playing, failing builds keep the previous module running, and the built file is
+    copied to a unique name before loading (a loaded dll cannot be overwritten on
+    Windows). Auto Refresh can be disabled; `Ctrl+R` forces a rebuild.
+  - Compilation runs **off** the viewport thread and reports progress through
+    `ViewportSnapshot.build`; scene cook/pack and project builds report through
+    `editor_build_status`. Never run `cargo`/cook synchronously in a viewport or command
+    path without progress.
+  - Project types (`IntroState`, fishing state machines) stay inside the project crate.
+    They never enter engine/editor APIs: the host only holds opaque `*mut c_void`.
 - `prism-app` keeps the neutral `FrameHook` / `prism_render::external_overlay::SwapchainOverlay`
   seams for debug hosts and future tooling; main → render thread UI data crosses as a
   **type-erased** `OverlayMessage` (`Box<dyn FnOnce(&mut dyn SwapchainOverlay) + Send>`) via
