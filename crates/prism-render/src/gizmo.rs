@@ -307,7 +307,7 @@ fn generate_all_gizmos() -> (Vec<GizmoVertex>, u32, (u32, u32), (u32, u32)) {
         ),
     ];
 
-    // 1. Translate (平移箭头)
+    // 1. Translate (平移箭头 + 2D 平面手柄角标)
     for (dir, p1, p2, color) in axes {
         let geo = AxisGeometry {
             dir,
@@ -319,6 +319,12 @@ fn generate_all_gizmos() -> (Vec<GizmoVertex>, u32, (u32, u32), (u32, u32)) {
         push_shaft(&mut v, &geo, thick);
         push_cone(&mut v, &geo, head_len, head_r, segs);
     }
+    // XY 面 (法线 +Z，蓝色)
+    push_plane_handle(&mut v, [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.3, 0.5, 1.0]);
+    // XZ 面 (法线 +Y，绿色，地表平移)
+    push_plane_handle(&mut v, [1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.3, 1.0, 0.3]);
+    // YZ 面 (法线 +X，红色)
+    push_plane_handle(&mut v, [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [1.0, 0.25, 0.25]);
     let translate_count = v.len() as u32;
 
     // 2. Rotate (旋转圆环)
@@ -551,4 +557,70 @@ fn push_cone(v: &mut Vec<GizmoVertex>, geo: &AxisGeometry, head_len: f32, head_r
         push_tri(v, apex, b0, b1, color); // side
         push_tri(v, center, b1, b0, color); // base cap
     }
+}
+
+/// 推送双面 2D 平面手柄 quad + 边缘 L 型边框。
+fn push_plane_handle(v: &mut Vec<GizmoVertex>, axis1: [f32; 3], axis2: [f32; 3], color: [f32; 3]) {
+    let min = 0.35f32;
+    let max = 0.70f32;
+    let p0 = [
+        axis1[0] * min + axis2[0] * min,
+        axis1[1] * min + axis2[1] * min,
+        axis1[2] * min + axis2[2] * min,
+    ];
+    let p1 = [
+        axis1[0] * max + axis2[0] * min,
+        axis1[1] * max + axis2[1] * min,
+        axis1[2] * max + axis2[2] * min,
+    ];
+    let p2 = [
+        axis1[0] * max + axis2[0] * max,
+        axis1[1] * max + axis2[1] * max,
+        axis1[2] * max + axis2[2] * max,
+    ];
+    let p3 = [
+        axis1[0] * min + axis2[0] * max,
+        axis1[1] * min + axis2[1] * max,
+        axis1[2] * min + axis2[2] * max,
+    ];
+
+    let face_color = [color[0] * 0.75, color[1] * 0.75, color[2] * 0.75];
+    // 正面
+    push_tri(v, p0, p1, p2, face_color);
+    push_tri(v, p0, p2, p3, face_color);
+    // 反面
+    push_tri(v, p2, p1, p0, face_color);
+    push_tri(v, p3, p2, p0, face_color);
+
+    // 外边缘 L 型边框 (p1 -> p2 -> p3)
+    let border_thick = 0.025f32;
+    push_line_strip(v, p1, p2, axis1, border_thick, color);
+    push_line_strip(v, p3, p2, axis2, border_thick, color);
+}
+
+fn push_line_strip(
+    v: &mut Vec<GizmoVertex>,
+    start: [f32; 3],
+    end: [f32; 3],
+    perp: [f32; 3],
+    thick: f32,
+    color: [f32; 3],
+) {
+    let a = start;
+    let b = end;
+    let c = [
+        b[0] - perp[0] * thick,
+        b[1] - perp[1] * thick,
+        b[2] - perp[2] * thick,
+    ];
+    let d = [
+        a[0] - perp[0] * thick,
+        a[1] - perp[1] * thick,
+        a[2] - perp[2] * thick,
+    ];
+
+    push_tri(v, a, b, c, color);
+    push_tri(v, a, c, d, color);
+    push_tri(v, c, b, a, color);
+    push_tri(v, d, c, a, color);
 }
