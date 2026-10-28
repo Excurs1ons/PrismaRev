@@ -272,6 +272,16 @@ pub struct DragTransformResult {
     pub feedback: Option<DragFeedback>,
 }
 
+/// 实体在视口屏幕上的 3D 投影包围盒（用于 SceneView 框线高亮）。
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectedBoundBox {
+    pub index: usize,
+    pub is_primary: bool,
+    pub corners: Option<[[f32; 2]; 8]>,
+    pub rect: [f32; 4],
+}
+
 /// Gizmo 拖动会话（平移 / 旋转 / 缩放）。
 #[derive(Clone, Copy)]
 enum ActiveDrag {
@@ -560,6 +570,91 @@ impl HostState {
             }
         }
         hits
+    }
+
+    /// 计算指定文档实体列表在屏幕上的投影包围盒。
+    fn selection_bounds(&mut self, indices: &[usize]) -> Vec<ProjectedBoundBox> {
+        let Some(camera) = self.camera else {
+            return Vec::new();
+        };
+        let world = self.app.engine_mut().world();
+        let Some(camera_world) = world.get::<LocalToWorld>(camera).map(|ltw| ltw.0) else {
+            return Vec::new();
+        };
+        let fov = world
+            .get::<Camera>(camera)
+            .map(|c| c.fov_y_degrees)
+            .unwrap_or(60.0);
+        let screen = gizmo::Screen {
+            view: camera_world.inverse(),
+            fov_y_degrees: fov,
+            width: self.width as f32,
+            height: self.height as f32,
+        };
+
+        const LOCAL_CORNERS: [Vec3; 8] = [
+            Vec3::new(-0.5, -0.5, -0.5),
+            Vec3::new(0.5, -0.5, -0.5),
+            Vec3::new(-0.5, 0.5, -0.5),
+            Vec3::new(0.5, 0.5, -0.5),
+            Vec3::new(-0.5, -0.5, 0.5),
+            Vec3::new(0.5, -0.5, 0.5),
+            Vec3::new(-0.5, 0.5, 0.5),
+            Vec3::new(0.5, 0.5, 0.5),
+        ];
+
+        let primary_index = self.selection;
+        let mut out = Vec::new();
+
+        for &index in indices {
+            let Some(&entity) = self.entities.get(index) else {
+                continue;
+            };
+            if !world.is_alive(entity) {
+                continue;
+            }
+            let Some(model) = world
+                .get::<LocalToWorld>(entity)
+                .map(|ltw| ltw.0)
+                .or_else(|| {
+                    world
+                        .get::<LocalTransform>(entity)
+                        .map(|local| local.to_model_matrix())
+                })
+            else {
+                continue;
+            };
+
+            let mut projected = [[0.0f32; 2]; 8];
+            let mut all_projected = true;
+            let mut min_x = f32::INFINITY;
+            let mut max_x = f32::NEG_INFINITY;
+            let mut min_y = f32::INFINITY;
+            let mut max_y = f32::NEG_INFINITY;
+
+            for (i, corner) in LOCAL_CORNERS.iter().enumerate() {
+                let world_pt = model.transform_point3(*corner);
+                if let Some(sc) = screen.project(world_pt) {
+                    projected[i] = [sc.x, sc.y];
+                    min_x = min_x.min(sc.x);
+                    max_x = max_x.max(sc.x);
+                    min_y = min_y.min(sc.y);
+                    max_y = max_y.max(sc.y);
+                } else {
+                    all_projected = false;
+                }
+            }
+
+            if min_x.is_finite() {
+                out.push(ProjectedBoundBox {
+                    index,
+                    is_primary: primary_index == Some(index),
+                    corners: all_projected.then_some(projected),
+                    rect: [min_x, min_y, max_x, max_y],
+                });
+            }
+        }
+        out
     }
 
     /// 计算 gizmo 命中 / 拖动所需的相机与选中项。
@@ -1919,6 +2014,21 @@ pub async fn editor_viewport_box_select(
     Ok(hits.unwrap_or_default())
 }
 
+/// 获取指定选中实体列表在视口屏幕上的投影包围盒。
+#[tauri::command]
+pub async fn editor_viewport_selection_bounds(
+    id: String,
+    indices: Vec<usize>,
+    manager: State<'_, ViewportManager>,
+) -> Result<Vec<ProjectedBoundBox>, String> {
+    let bounds = ask_viewport(&manager, &id, move |state, tx| {
+        let list = state.selection_bounds(&indices);
+        let _ = tx.send(list);
+    })
+    .await?;
+    Ok(bounds.unwrap_or_default())
+}
+
 /// 把一个问题交给视口线程并等回答。
 ///
 /// `Ok(None)` = 视口不存在或线程超时没回话；闭包里再套一层 `Option` 表示
@@ -2762,5 +2872,28 @@ mod tests {
         state.space = CoordinateSpace::Local;
         let ctx = state.gizmo_context().unwrap();
         assert!((ctx.orientation.z - rot.z).abs() < 1e-4);
+    }
+
+    #[test]
+    fn selection_bounds_projects_corners_to_screen() {
+        let mut state = test_state("selection-bounds");
+        state.apply_selection(Some(1));
+        let bounds = state.selection_bounds(&[0, 1]);
+        assert_eq!(bounds.len(), 2, "应返回选中的 2 个实体的包围盒");
+
+        // 实体 1 是 primary 选中项
+        let primary = bounds.iter().find(|b| b.index == 1).unwrap();
+        assert!(primary.is_primary);
+        let corners = primary.corners.expect("原点处的单位盒子应该能完全投影");
+        assert_eq!(corners.len(), 8);
+
+        // 8 个顶点应当围绕屏幕中心 (100, 50) 对称分布
+        let min_x = primary.rect[0];
+        let max_x = primary.rect[2];
+        let center_x = (min_x + max_x) * 0.5;
+        assert!(
+            (center_x - 100.0).abs() < 1e-3,
+            "包围盒中心 X 应在 100: {center_x}"
+        );
     }
 }
