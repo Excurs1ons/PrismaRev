@@ -677,6 +677,10 @@ impl EditorView {
                 self.workspace.toggle_gizmo_space();
                 cx.notify();
             }
+            "g" if !modifiers.control && !modifiers.alt => {
+                self.workspace.toggle_grid();
+                cx.notify();
+            }
             "f2" if !self.workspace.selection.is_empty() => {
                 let index = self.workspace.selection[0];
                 let name = self

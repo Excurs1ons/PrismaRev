@@ -207,6 +207,8 @@ pub struct Workspace {
     pub camera: OrbitCamera,
     /// W/E/R gizmo 使用世界轴还是实体自身轴。
     pub gizmo_space: GizmoSpace,
+    /// Scene View 是否画世界网格。
+    pub show_grid: bool,
     pub playing: bool,
     pub paused: bool,
     pub play_time_s: f32,
@@ -262,6 +264,7 @@ impl Workspace {
             log: LogBuffer::default(),
             camera: OrbitCamera::default(),
             gizmo_space: GizmoSpace::World,
+            show_grid: true,
             playing: false,
             paused: false,
             play_time_s: 0.0,
@@ -1517,6 +1520,10 @@ impl Workspace {
         );
     }
 
+    pub fn toggle_grid(&mut self) {
+        self.show_grid = !self.show_grid;
+    }
+
     /// 把世界空间位移换算到父级空间后加到实体 `position` 上（gizmo 拖动用）。
     pub fn translate_entity_world(&mut self, entity_id: u32, delta_world: [f32; 3]) {
         if delta_world.iter().all(|value| value.abs() < 1e-6) {
@@ -2545,6 +2552,16 @@ mod tests {
         assert!(workspace.floating.is_empty());
         assert!(workspace.dock_tabs().iter().any(|tab| tab == "gameView"));
         assert_eq!(workspace.layout_preset, "2by3");
+    }
+
+    #[test]
+    fn grid_toggle_flips_flag() {
+        let mut workspace = Workspace::sample();
+        assert!(workspace.show_grid);
+        workspace.toggle_grid();
+        assert!(!workspace.show_grid);
+        workspace.toggle_grid();
+        assert!(workspace.show_grid);
     }
 
     #[test]

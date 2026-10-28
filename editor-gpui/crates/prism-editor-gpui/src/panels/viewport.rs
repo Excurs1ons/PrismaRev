@@ -26,6 +26,7 @@ struct SceneSnapshot {
     gizmo_basis: [[f32; 3]; 3],
     /// 框选矩形（窗口坐标的左上/右下）。
     box_select: Option<((f32, f32), (f32, f32))>,
+    show_grid: bool,
 }
 
 impl EditorView {
@@ -58,6 +59,7 @@ impl EditorView {
                         (f32::from(b.x), f32::from(b.y)),
                     )
                 }),
+                show_grid: self.workspace.show_grid,
             }
         };
 
@@ -130,6 +132,27 @@ impl EditorView {
                             cx.notify();
                         }))
                         .child(SharedString::from(gizmo_space.label())),
+                )
+            })
+            .when(scene, |header| {
+                header.child(
+                    div()
+                        .id("grid-toggle")
+                        .px_1()
+                        .rounded_sm()
+                        .cursor_pointer()
+                        .text_size(px(9.0))
+                        .text_color(if self.workspace.show_grid {
+                            style.text_strong()
+                        } else {
+                            style.muted()
+                        })
+                        .hover(move |this| this.bg(style.row_hover()))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.workspace.toggle_grid();
+                            cx.notify();
+                        }))
+                        .child("网格"),
                 )
             })
             .child(div().flex_1())
@@ -325,27 +348,29 @@ fn paint_scene(
     let axis_z = style.alpha(ThemeToken::Accent, 0.45);
 
     // y = 0 平面网格，每格 1 世界单位，±10。
-    for i in -10..=10 {
-        let color = if i == 0 { axis_z } else { grid_color };
-        draw_line(
-            window,
-            bounds,
-            &frame,
-            [-10.0, 0.0, i as f32],
-            [10.0, 0.0, i as f32],
-            color,
-            1.0,
-        );
-        let color = if i == 0 { axis_x } else { grid_color };
-        draw_line(
-            window,
-            bounds,
-            &frame,
-            [i as f32, 0.0, -10.0],
-            [i as f32, 0.0, 10.0],
-            color,
-            1.0,
-        );
+    if snapshot.show_grid {
+        for i in -10..=10 {
+            let color = if i == 0 { axis_z } else { grid_color };
+            draw_line(
+                window,
+                bounds,
+                &frame,
+                [-10.0, 0.0, i as f32],
+                [10.0, 0.0, i as f32],
+                color,
+                1.0,
+            );
+            let color = if i == 0 { axis_x } else { grid_color };
+            draw_line(
+                window,
+                bounds,
+                &frame,
+                [i as f32, 0.0, -10.0],
+                [i as f32, 0.0, 10.0],
+                color,
+                1.0,
+            );
+        }
     }
 
     // 实体标记：未选中的小十字，选中的线框立方体 + 三色轴。
@@ -424,6 +449,11 @@ fn paint_scene(
             if let (Some(start), Some(end)) = (projected[a], projected[b]) {
                 paint_segment(window, bounds, start, end, color, 1.5);
             }
+        }
+
+        // 多选时只画线框，gizmo 只跟单选（批量 Transform 编辑还未做）。
+        if snapshot.selection.len() > 1 {
+            continue;
         }
 
         let length = gizmo_world_length(&snapshot.camera);

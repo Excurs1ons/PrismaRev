@@ -206,7 +206,7 @@ deviating from those conventions is a bug. (`README.md` is the human-facing over
   `editor/src/dock.ts` v4 同形）+ 层级/检查器（schema 驱动）/资产/日志（窗口化
   `uniform_list`）/文档/渲染图/设置面板 + Scene/Game View（目前是 `canvas` 的 CPU
   投影，接线点见 `viewport.rs::paint_scene`）。数据层 `prism-editor-gpui-core` 与 UI
-  框架无关（157 单测：dock/doc/schema/undo/theme/i18n/log/assets/keys/project/
+  框架无关（158 单测：dock/doc/schema/undo/theme/i18n/log/assets/keys/project/
   viewport_math/state/settings/textinput/manifest/build）；内联输入走 `TextInput`（光标 / 选区 /
   按词移动与删除，Unicode 安全）；检查器支持多选批量改字段（公共组件、一次撤销）；
   选中实体可「存为预制体」，资产面板可把 `.prefab.json` 实例化到场景；
@@ -216,7 +216,7 @@ deviating from those conventions is a bug. (`README.md` is the human-facing over
   「构建项目 / 构建场景包」会真的 spawn cargo 并把产物拷到输出目录；
   删除文档会删文件、打开标签与清单条目（带确认）；
   Scene View 支持点击拾取、双击聚焦、空白拖拽框选与 W/E/R 三种 gizmo（移动 / 旋转 / 缩放，
-  Ctrl 吸附，X 切换世界 / 局部坐标）；
+  Ctrl 吸附，X 切换世界 / 局部坐标，G 开关网格）；
   布局 / 主题 / 语言 / 首选项持久化在 `<project>/target/editor-gpui/state.json`，
   并有 5s 自动保存；
   项目模式下会向上找 `assets/` 并真实读写 `.scene.json`（保存 / 另存为 / 重新读取、

@@ -1,6 +1,6 @@
 # GPUI 原生编辑器（`editor-gpui/`）
 
-> 状态：**可编译的类型检查 + 157 个数据层单测通过**；桌面运行尚未在 CI 上跑过
+> 状态：**可编译的类型检查 + 158 个数据层单测通过**；桌面运行尚未在 CI 上跑过
 > （GPUI 需要 Windows/macOS/Linux 桌面与 GPU）。
 >
 > 本文说明「为什么做、边界在哪、怎么接真实引擎」，功能清单见
@@ -187,7 +187,8 @@ Unity 形状的编辑器，又不会把 `prism-render` 绑死在某套 UI 生命
   否则射线拾取实体（单位立方体 × scale 的近似，双击同一实体 = 取景）；点击空白清空选择，
   在空白处拖拽 = **框选**（投影中心 / 8 个角任一落在矩形内即选中，Shift 追加）；
   `Alt`+左键或右键轨道旋转、中键平移、滚轮缩放；`W` / `E` / `R` 切换移动 / 旋转 /
-  缩放 gizmo，`X` 或标题栏按钮切换世界 / 局部坐标。
+  缩放 gizmo，`X` 或标题栏按钮切换世界 / 局部坐标，`G` 开关网格。多选时只画线框，
+  gizmo 只跟单选（批量 Transform 尚未做）。
 - 旋转在世界空间左乘 `q_axis * q_old`，局部空间右乘 `q_old * q_axis`；局部模式的
   三轴取实体沿父链累积的世界旋转（`world_rotation` / `gizmo_basis`）。平移把世界位移
   经**父级世界旋转的逆**换算成 `position` 增量（`translate_entity_world`），所以父级
@@ -216,7 +217,7 @@ Unity 形状的编辑器，又不会把 `prism-render` 绑死在某套 UI 生命
 
 ```sh
 cd editor-gpui
-cargo test -p prism-editor-gpui-core                                  # 157 passed
+cargo test -p prism-editor-gpui-core                                  # 158 passed
 cargo check -p prism-editor-gpui --target x86_64-pc-windows-gnu       # 类型检查
 cargo clippy -p prism-editor-gpui -p prism-editor-gpui-core \
     --target x86_64-pc-windows-gnu                                    # clean
