@@ -706,6 +706,14 @@ impl GraphRenderer {
         target.readback(&self.runtime.context)
     }
 
+    /// 轮询异步离屏读回；GPU 未完成时返回 `None`。
+    pub fn poll_offscreen_readback(&mut self) -> anyhow::Result<Option<Vec<u8>>> {
+        self.offscreen
+            .as_mut()
+            .context("poll_offscreen_readback called but no OffscreenTarget")?
+            .poll_readback(&self.runtime.context)
+    }
+
     /// Copy the rendered offscreen image to the host-visible readback buffer
     /// and wait for completion. Only valid in headless mode. Afterwards call
     /// [`readback_pixels`](Self::readback_pixels).
@@ -715,6 +723,14 @@ impl GraphRenderer {
             .as_mut()
             .context("copy_offscreen_to_readback called but no OffscreenTarget (not headless?)")?;
         target.copy_to_readback(&self.runtime.context, vk::ImageLayout::PRESENT_SRC_KHR)
+    }
+
+    /// 异步提交离屏图像读回；已有读回未完成时跳过本次提交。
+    pub fn copy_offscreen_to_readback_async(&mut self) -> anyhow::Result<bool> {
+        self.offscreen
+            .as_mut()
+            .context("copy_offscreen_to_readback_async called but no OffscreenTarget")?
+            .copy_to_readback_async(&self.runtime.context, vk::ImageLayout::PRESENT_SRC_KHR)
     }
 
     /// Immutable 借用 of the 渲染 图 (passes + declared resources +

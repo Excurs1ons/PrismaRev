@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel as mpsc_channel, Receiver, Sender, TryRecvError};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -36,8 +36,9 @@ use tauri::State;
 use crate::gizmo::{self, Axis};
 use crate::pick;
 
-/// 视口帧率上限。离屏渲染每帧要 CPU 读回，30fps 是画质与带宽的折中。
-const TARGET_FPS: u32 = 30;
+/// 视口帧率上限。读回帧以显示器常见刷新率为目标，避免把内部渲染 FPS
+/// （它不包含 Tauri 传输与 canvas 绘制）误当成面板实际帧率。
+const TARGET_FPS: u32 = 60;
 /// 平移 gizmo 在屏幕高度上占的比例（箭头长度 ≈ 这个比例的 1/1.5 倍缩放）。
 const GIZMO_SCREEN_FRACTION: f32 = 0.18;
 /// 引擎里 `Gizmo` 箭头的世界长度（`prism-render/src/gizmo.rs` 的 `len`），
@@ -99,11 +100,12 @@ struct Shared {
     error: Mutex<Option<String>>,
     extent: Mutex<(u32, u32)>,
     paused: AtomicBool,
-    channel: Mutex<Option<Channel<InvokeResponseBody>>>,
+    latest_frame: Mutex<Option<prism_app::FrameImage>>,
+    frame_ready: Condvar,
 }
 
 impl Shared {
-    fn new(channel: Channel<InvokeResponseBody>, extent: (u32, u32)) -> Arc<Self> {
+    fn new(extent: (u32, u32)) -> Arc<Self> {
         Arc::new(Self {
             running: AtomicBool::new(true),
             active: AtomicBool::new(true),
@@ -112,7 +114,8 @@ impl Shared {
             error: Mutex::new(None),
             extent: Mutex::new(extent),
             paused: AtomicBool::new(false),
-            channel: Mutex::new(Some(channel)),
+            latest_frame: Mutex::new(None),
+            frame_ready: Condvar::new(),
         })
     }
 
@@ -132,6 +135,7 @@ impl Shared {
 struct ViewportHandle {
     tx: Sender<Job>,
     thread: Option<JoinHandle<()>>,
+    sender_thread: Option<JoinHandle<()>>,
     shared: Arc<Shared>,
     snapshot_path: PathBuf,
 }
@@ -753,7 +757,7 @@ fn viewport_thread(
             let simulate = state.simulate_now();
             state.app.host_tick(simulate);
             if let Some(frame) = state.app.take_hosted_frame() {
-                push_frame(&shared, frame);
+                publish_frame(&shared, frame);
             }
             if let Some(stats) = state.app.render_stats() {
                 *shared.fps.lock().unwrap() = stats.fps;
@@ -778,17 +782,40 @@ fn viewport_thread(
     state.app.shutdown_hosted();
 }
 
-fn push_frame(shared: &Shared, frame: prism_app::FrameImage) {
-    let channel = shared.channel.lock().unwrap().clone();
-    let Some(channel) = channel else {
-        return;
-    };
-    let mut payload = Vec::with_capacity(8 + frame.pixels.len());
-    payload.extend_from_slice(&frame.width.to_le_bytes());
-    payload.extend_from_slice(&frame.height.to_le_bytes());
-    payload.extend_from_slice(&frame.pixels);
-    if let Err(error) = channel.send(InvokeResponseBody::Raw(payload)) {
-        log::warn!("viewport: frame send failed: {error}");
+fn publish_frame(shared: &Shared, frame: prism_app::FrameImage) {
+    *shared.latest_frame.lock().unwrap() = Some(frame);
+    shared.frame_ready.notify_one();
+}
+
+fn frame_sender(shared: Arc<Shared>, channel: Channel<InvokeResponseBody>) {
+    let frame_interval = Duration::from_millis(1000 / TARGET_FPS as u64);
+    let mut next_send = Instant::now();
+    while shared.running.load(Ordering::Relaxed) {
+        let mut latest = shared.latest_frame.lock().unwrap();
+        while latest.is_none() && shared.running.load(Ordering::Relaxed) {
+            latest = shared.frame_ready.wait(latest).unwrap();
+        }
+        let Some(frame) = latest.take() else {
+            continue;
+        };
+        drop(latest);
+
+        let now = Instant::now();
+        if now < next_send {
+            std::thread::sleep(next_send - now);
+        }
+        next_send = Instant::now() + frame_interval;
+
+        let mut payload = Vec::with_capacity(8 + frame.pixels.len());
+        payload.extend_from_slice(&frame.width.to_le_bytes());
+        payload.extend_from_slice(&frame.height.to_le_bytes());
+        payload.extend_from_slice(&frame.pixels);
+        if let Err(error) = channel.send(InvokeResponseBody::Raw(payload)) {
+            log::warn!("viewport: frame send failed: {error}");
+            shared.running.store(false, Ordering::Relaxed);
+            shared.frame_ready.notify_all();
+            break;
+        }
     }
 }
 
@@ -913,8 +940,9 @@ pub fn editor_viewport_open(
 
     let (tx, rx) = mpsc_channel::<Job>();
     let (w, h) = clamp_extent(width, height);
-    let shared = Shared::new(channel, (w, h));
+    let shared = Shared::new((w, h));
     let shared_thread = shared.clone();
+    let sender_shared = shared.clone();
     let path_thread = preview.clone();
     // Game view 只在 Play 时模拟：静默打开时保持「编辑预览」状态。
     let simulate = matches!(kind, ViewKind::Game) && playing.unwrap_or(false);
@@ -924,10 +952,15 @@ pub fn editor_viewport_open(
         .name(format!("viewport-{id}"))
         .spawn(move || viewport_thread(path_thread, kind, w, h, simulate, orbit, shared_thread, rx))
         .map_err(|e| format!("启动视口线程失败: {e}"))?;
+    let sender_thread = std::thread::Builder::new()
+        .name(format!("viewport-{id}-sender"))
+        .spawn(move || frame_sender(sender_shared, channel))
+        .map_err(|e| format!("启动视口发送线程失败: {e}"))?;
 
     let handle = ViewportHandle {
         tx,
         thread: Some(thread),
+        sender_thread: Some(sender_thread),
         shared: shared.clone(),
         snapshot_path: preview,
     };
@@ -1347,8 +1380,11 @@ pub fn editor_viewport_close(
 
 fn stop_handle(handle: &mut ViewportHandle) {
     handle.shared.running.store(false, Ordering::Relaxed);
-    handle.shared.channel.lock().unwrap().take();
+    handle.shared.frame_ready.notify_all();
     if let Some(thread) = handle.thread.take() {
+        let _ = thread.join();
+    }
+    if let Some(thread) = handle.sender_thread.take() {
         let _ = thread.join();
     }
     let _ = std::fs::remove_file(&handle.snapshot_path);

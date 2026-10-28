@@ -257,25 +257,25 @@ pub fn render_thread_main(
         });
 
         // ---- 宿主（编辑器）帧读回：只读回 PostPass 已 tonemap 的离屏图像 ----
-        if renderer.is_headless()
-            && shared
-                .frame_requested
-                .swap(false, std::sync::atomic::Ordering::Relaxed)
-        {
+        if renderer.is_headless() {
             match renderer.offscreen_extent() {
-                Some(extent) => match renderer
-                    .copy_offscreen_to_readback()
-                    .and_then(|_| renderer.readback_pixels())
-                {
-                    Ok(pixels) => {
+                Some(extent) => {
+                    if let Ok(Some(pixels)) = renderer.poll_offscreen_readback() {
                         *shared.frame.lock().unwrap() = Some(FrameImage {
                             width: extent.width,
                             height: extent.height,
                             pixels,
                         });
                     }
-                    Err(e) => log::warn!("Render thread: frame readback failed: {e:#}"),
-                },
+                    if shared
+                        .frame_requested
+                        .swap(false, std::sync::atomic::Ordering::Relaxed)
+                    {
+                        if let Err(e) = renderer.copy_offscreen_to_readback_async() {
+                            log::warn!("Render thread: frame readback submit failed: {e:#}");
+                        }
+                    }
+                }
                 None => log::warn!("Render thread: frame requested but no offscreen target"),
             }
         }
