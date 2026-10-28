@@ -57,7 +57,7 @@
 
 | 面板 | 内容 |
 |---|---|
-| 层级 | 实体树、搜索（匹配项忽略折叠、按层级缩进）、展开/折叠、多选（Shift 按可见行区间 / Ctrl 切换）、双击或 F2 重命名（一次撤销 / Esc 回滚）、眼睛切 Active、拖拽改父级/排序（上 25% / 下 25% / 中间）、按预设新建、Ctrl+D 复制整棵子树 |
+| 层级 | 实体树、搜索（匹配项忽略折叠、按层级缩进）、展开/折叠（`Alt`+点箭头递归展开整棵子树）、多选（Shift 按可见行区间 / Ctrl 切换）、双击或 F2 重命名（一次撤销 / Esc 回滚）、眼睛切 Active、拖拽改父级/排序（上 25% / 下 25% / 中间，多选拖中间整组）、按预设新建、Ctrl+D 复制整棵子树 |
 | 检查器 | 实体面包屑 + schema 驱动：bool / int / float / 滑杆 / 向量 / 四元数 / 颜色 / 枚举 / 文本 / 只读；拖动调值（Shift+点击输入）、组件卡折叠、复制/移除、添加组件（分类 + 搜索）、无 schema 时显示原始 JSON；**多选时只显示公共组件，字段修改一次应用到全部（一次撤销回退）** |
 | 资产 | 目录树 + 文件列表、分类 chips、搜索、选中详情（导入器 / 体积 / 分类）；**双击场景/预制体打开文档**；**拖资产到检查器字段写路径、拖预制体到层级实体实例化**；右键**重命名 / 移动**（磁盘改名 + 打开文档里的精确路径引用自动改写）与**删除**（二次确认，不清理悬空引用） |
 | 日志 | 级别 × 来源过滤、搜索、错误/告警计数、窗口化 `uniform_list`（固定 18px 行高） |
@@ -67,7 +67,7 @@
 | 渲染图 | pass 链（ShadowMap → Forward → Gtao → Post）+ 图资源表（scene/swapchain/frame 生命周期） |
 | 项目设置 / 首选项 / 主题 / 构建 / 离线工具 / 快捷键 / 关于 | 直接编辑设置、主题预设与 38 个 token 预览、真实 cargo/cook 构建日志、bake-gi 与 heightmap 命令预览 |
 
-**数据层**（`prism-editor-gpui-core`，UI 框架无关，175 个单元测试）
+**数据层**（`prism-editor-gpui-core`，UI 框架无关，176 个单元测试）
 
 - `.scene.json` / `.prefab.json`：稳定 id、parent 迁移、删除孤儿子级变根、reparent 防环、
   子树提取（存预制体）、预制体实例化（id 平移 + 名字去重 + 反向链接）、字段引用扫描
@@ -173,7 +173,7 @@ editor-gpui/
 
 ## 验证记录
 
-- `cargo test -p prism-editor-gpui-core`：**175 passed**。
+- `cargo test -p prism-editor-gpui-core`：**176 passed**。
 - `cargo check -p prism-editor-gpui --target x86_64-pc-windows-gnu`：通过。
 - `cargo clippy -p prism-editor-gpui -p prism-editor-gpui-core --target x86_64-pc-windows-gnu`：
   无 warning（仅 `proc-macro-error2` 的 future-incompat 提示）。

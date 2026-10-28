@@ -1111,6 +1111,24 @@ impl Workspace {
         self.expanded.clear();
     }
 
+    /// Alt+点击箭头：连同全部后代一起展开 / 收起。
+    pub fn set_subtree_expanded(&mut self, index: usize, expanded: bool) {
+        let doc = &self.document().doc;
+        let mut indices = vec![index];
+        indices.extend(doc.descendants(index));
+        let ids: Vec<u32> = indices
+            .iter()
+            .filter_map(|index| doc.id_of_index(*index))
+            .collect();
+        for id in ids {
+            if expanded {
+                self.expanded.insert(id);
+            } else {
+                self.expanded.remove(&id);
+            }
+        }
+    }
+
     pub fn add_entity(&mut self, preset_id: &str) {
         let preset = self
             .presets
@@ -3753,6 +3771,26 @@ mod tests {
         workspace.select(cube, false);
         workspace.select(detail, true);
         assert_eq!(workspace.selection_roots(), vec![cube]);
+    }
+
+    #[test]
+    fn subtree_expand_toggles_all_descendant_ids() {
+        let mut workspace = Workspace::sample();
+        let cube = index_named(&workspace, "Cube");
+        let detail = index_named(&workspace, "Detail");
+        let light = index_named(&workspace, "Directional Light");
+        let cube_id = workspace.document().doc.entities[cube].id.unwrap();
+        let detail_id = workspace.document().doc.entities[detail].id.unwrap();
+        let light_id = workspace.document().doc.entities[light].id.unwrap();
+
+        workspace.set_subtree_expanded(cube, true);
+        assert!(workspace.expanded.contains(&cube_id));
+        assert!(workspace.expanded.contains(&detail_id));
+        assert!(!workspace.expanded.contains(&light_id));
+
+        workspace.set_subtree_expanded(cube, false);
+        assert!(!workspace.expanded.contains(&cube_id));
+        assert!(!workspace.expanded.contains(&detail_id));
     }
 
     #[test]

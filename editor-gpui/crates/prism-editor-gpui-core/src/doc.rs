@@ -255,7 +255,7 @@ impl SceneDoc {
         path
     }
 
-    fn descendants(&self, index: usize) -> Vec<usize> {
+    pub fn descendants(&self, index: usize) -> Vec<usize> {
         let mut out = Vec::new();
         let mut stack = self.children(index);
         while let Some(index) = stack.pop() {

@@ -259,8 +259,21 @@ impl EditorView {
                     .w(px(12.0))
                     .cursor_pointer()
                     .text_color(style.muted())
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.workspace.toggle_expanded(index);
+                    .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
+                        if event.modifiers().alt {
+                            let expanded = this
+                                .workspace
+                                .document()
+                                .doc
+                                .entities
+                                .get(index)
+                                .and_then(|entity| entity.id)
+                                .map(|id| this.workspace.expanded.contains(&id))
+                                .unwrap_or(false);
+                            this.workspace.set_subtree_expanded(index, !expanded);
+                        } else {
+                            this.workspace.toggle_expanded(index);
+                        }
                         cx.stop_propagation();
                         cx.notify();
                     }))
