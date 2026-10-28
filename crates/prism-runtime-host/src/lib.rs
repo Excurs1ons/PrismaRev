@@ -45,6 +45,12 @@ pub enum ProjectModuleError {
         actual: u32,
         expected: u32,
     },
+    #[error("project module `{path}` schema fingerprint {actual:#018x} does not match host {expected:#018x}")]
+    SchemaMismatch {
+        path: PathBuf,
+        actual: u64,
+        expected: u64,
+    },
     #[error("project module `{path}` has an incomplete lifecycle API")]
     IncompleteApi { path: PathBuf },
     #[error("project module `{path}` create failed with status {status}")]
@@ -141,6 +147,7 @@ impl<'a> WorldCommands<'a> {
     pub fn api(&mut self) -> HostApi {
         HostApi {
             abi_version: ABI_VERSION,
+            schema_fingerprint: self.context.registry.schema_fingerprint(),
             capabilities: HOST_CAP_LOGGING
                 | HOST_CAP_WORLD_COMMANDS
                 | HOST_CAP_COMPONENTS
@@ -478,7 +485,47 @@ pub struct ProjectModule {
 impl ProjectModule {
     /// Load and validate a project module. The library remains loaded until
     /// this value is dropped.
+    /// Validate that a project API satisfies the host ABI and schema requirements.
+    pub fn validate_api(
+        api: &ProjectApi,
+        expected_fingerprint: u64,
+        path: &Path,
+    ) -> Result<(), ProjectModuleError> {
+        if api.abi_version != ABI_VERSION {
+            return Err(ProjectModuleError::AbiMismatch {
+                path: path.to_path_buf(),
+                actual: api.abi_version,
+                expected: ABI_VERSION,
+            });
+        }
+        if api.schema_fingerprint != expected_fingerprint {
+            return Err(ProjectModuleError::SchemaMismatch {
+                path: path.to_path_buf(),
+                actual: api.schema_fingerprint,
+                expected: expected_fingerprint,
+            });
+        }
+        Ok(())
+    }
+
+    /// Load and validate a project module against the builtin schema fingerprint.
     pub fn load(path: impl AsRef<Path>) -> Result<Self, ProjectModuleError> {
+        Self::load_with_fingerprint(path, prism_scene::builtin_schema_fingerprint())
+    }
+
+    /// Load and validate a project module against a specific component registry.
+    pub fn load_with_registry(
+        path: impl AsRef<Path>,
+        registry: &prism_scene::ComponentRegistry,
+    ) -> Result<Self, ProjectModuleError> {
+        Self::load_with_fingerprint(path, registry.schema_fingerprint())
+    }
+
+    /// Load and validate a project module against an expected schema fingerprint.
+    pub fn load_with_fingerprint(
+        path: impl AsRef<Path>,
+        expected_fingerprint: u64,
+    ) -> Result<Self, ProjectModuleError> {
         let path = path.as_ref().to_path_buf();
         let library =
             unsafe { Library::new(&path) }.map_err(|source| ProjectModuleError::Load {
@@ -495,13 +542,7 @@ impl ProjectModule {
         if status != SUCCESS {
             return Err(ProjectModuleError::GetApi { path, status });
         }
-        if api.abi_version != ABI_VERSION {
-            return Err(ProjectModuleError::AbiMismatch {
-                path,
-                actual: api.abi_version,
-                expected: ABI_VERSION,
-            });
-        }
+        Self::validate_api(&api, expected_fingerprint, &path)?;
         Ok(Self {
             path,
             _library: library,
@@ -520,6 +561,7 @@ impl ProjectModule {
             return Err(ProjectModuleError::IncompleteApi { path: self.path });
         };
         let mut host = Box::new(HostApi::logging_only());
+        host.schema_fingerprint = self.api.schema_fingerprint;
         host.log = Some(host_log);
         let mut state = std::ptr::null_mut();
         let status = unsafe { create(host.as_ref(), &mut state) };
@@ -665,6 +707,56 @@ mod tests {
         assert_eq!(status, SUCCESS);
         let bytes = unsafe { std::slice::from_raw_parts(ptr, len) };
         assert_eq!(bytes, br#"{"layers":[]}"#);
+    }
+
+    #[test]
+    fn validate_api_accepts_matching_abi_and_fingerprint() {
+        let path = Path::new("test.so");
+        let fp = prism_scene::builtin_schema_fingerprint();
+        let api = ProjectApi {
+            abi_version: ABI_VERSION,
+            schema_fingerprint: fp,
+            create: None,
+            tick: None,
+            shutdown: None,
+        };
+        assert!(ProjectModule::validate_api(&api, fp, path).is_ok());
+    }
+
+    #[test]
+    fn validate_api_rejects_abi_mismatch() {
+        let path = Path::new("test.so");
+        let fp = prism_scene::builtin_schema_fingerprint();
+        let api = ProjectApi {
+            abi_version: ABI_VERSION + 1,
+            schema_fingerprint: fp,
+            create: None,
+            tick: None,
+            shutdown: None,
+        };
+        let err =
+            ProjectModule::validate_api(&api, fp, path).expect_err("mismatched ABI must fail");
+        assert!(
+            matches!(err, ProjectModuleError::AbiMismatch { actual, expected, .. } if actual == ABI_VERSION + 1 && expected == ABI_VERSION)
+        );
+    }
+
+    #[test]
+    fn validate_api_rejects_schema_fingerprint_mismatch() {
+        let path = Path::new("test.so");
+        let fp = prism_scene::builtin_schema_fingerprint();
+        let api = ProjectApi {
+            abi_version: ABI_VERSION,
+            schema_fingerprint: fp ^ 0xdeadbeef,
+            create: None,
+            tick: None,
+            shutdown: None,
+        };
+        let err = ProjectModule::validate_api(&api, fp, path)
+            .expect_err("mismatched fingerprint must fail");
+        assert!(
+            matches!(err, ProjectModuleError::SchemaMismatch { actual, expected, .. } if actual == fp ^ 0xdeadbeef && expected == fp)
+        );
     }
 
     #[test]

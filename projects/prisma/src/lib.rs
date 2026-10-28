@@ -66,6 +66,7 @@ mod preview {
         unsafe {
             *out = ProjectApi {
                 abi_version: ABI_VERSION,
+                schema_fingerprint: registry().schema_fingerprint(),
                 create: Some(create),
                 tick: Some(tick),
                 shutdown: Some(shutdown),
@@ -79,7 +80,9 @@ mod preview {
             return INVALID_ARGUMENT;
         }
         let host = unsafe { &*host };
-        if host.abi_version != ABI_VERSION {
+        if host.abi_version != ABI_VERSION
+            || host.schema_fingerprint != registry().schema_fingerprint()
+        {
             return INVALID_ARGUMENT;
         }
         let state = Box::new(PreviewState {

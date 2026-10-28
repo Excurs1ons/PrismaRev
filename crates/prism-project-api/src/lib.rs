@@ -41,7 +41,7 @@ pub mod keys {
     pub const OTHER_BASE: usize = 30;
 }
 
-pub const ABI_VERSION: u32 = 5;
+pub const ABI_VERSION: u32 = 6;
 
 pub const SUCCESS: i32 = 0;
 pub const INVALID_ARGUMENT: i32 = 1;
@@ -258,6 +258,8 @@ pub type DrawQuad = unsafe extern "C" fn(user_data: *mut core::ffi::c_void, quad
 #[derive(Clone, Copy)]
 pub struct HostApi {
     pub abi_version: u32,
+    /// Schema fingerprint of reflected engine components (prevents stale module loads).
+    pub schema_fingerprint: u64,
     pub capabilities: u64,
     pub scene_generation: u64,
     pub user_data: *mut core::ffi::c_void,
@@ -281,6 +283,7 @@ impl HostApi {
     pub const fn logging_only() -> Self {
         Self {
             abi_version: ABI_VERSION,
+            schema_fingerprint: 0,
             capabilities: HOST_CAP_LOGGING,
             scene_generation: 0,
             user_data: core::ptr::null_mut(),
@@ -327,6 +330,8 @@ pub type GetProjectApi = unsafe extern "C" fn(*mut ProjectApi) -> i32;
 #[derive(Clone, Copy)]
 pub struct ProjectApi {
     pub abi_version: u32,
+    /// Schema fingerprint of reflected engine components built into the project module.
+    pub schema_fingerprint: u64,
     pub create: Option<CreateProject>,
     pub tick: Option<TickProject>,
     pub shutdown: Option<ShutdownProject>,
@@ -336,6 +341,7 @@ impl ProjectApi {
     pub const fn empty() -> Self {
         Self {
             abi_version: 0,
+            schema_fingerprint: 0,
             create: None,
             tick: None,
             shutdown: None,
