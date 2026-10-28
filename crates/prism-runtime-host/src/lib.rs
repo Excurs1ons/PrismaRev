@@ -15,9 +15,9 @@ use std::path::{Path, PathBuf};
 
 use libloading::{Library, Symbol};
 use prism_project_api::{
-    GetProjectApi, HostApi, ProjectApi, ABI_VERSION, BUFFER_TOO_SMALL, HOST_CAP_COMPONENTS,
-    HOST_CAP_DRAW, HOST_CAP_LOGGING, HOST_CAP_WORLD_COMMANDS, INVALID_ARGUMENT, SUCCESS,
-    UNKNOWN_TYPE,
+    GetProjectApi, HostApi, ProjectApi, ABI_VERSION, BUFFER_TOO_SMALL, HOST_CAP_ASSET,
+    HOST_CAP_COMPONENTS, HOST_CAP_DRAW, HOST_CAP_LOGGING, HOST_CAP_WORLD_COMMANDS,
+    INVALID_ARGUMENT, SUCCESS, UNKNOWN_TYPE,
 };
 use prism_reflect::rtti_bin;
 use thiserror::Error;
@@ -57,6 +57,31 @@ pub enum ProjectModuleError {
 ///
 /// 回调只拿到一份 `user_data`，所以世界、注册表和临时缓冲必须打包在同一个
 /// 结构里；它的生命周期由 [`WorldCommands`] 保证，不会活过本次 tick。
+/// 宿主侧的松散资产访问。实现放在宿主（编辑器 / Player），资产根解析仍然只有
+/// `prism-engine::asset_paths` 一份实现。
+pub trait AssetIo {
+    fn exists(&self, path: &str) -> bool;
+    fn read(&self, path: &str) -> std::io::Result<Vec<u8>>;
+}
+
+/// 默认实现：不支持松散资产（例如只跑 `.pak` 内容的宿主）。
+pub struct NoAssets;
+
+impl AssetIo for NoAssets {
+    fn exists(&self, _path: &str) -> bool {
+        false
+    }
+
+    fn read(&self, path: &str) -> std::io::Result<Vec<u8>> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            format!("loose asset access disabled for `{path}`"),
+        ))
+    }
+}
+
+static NO_ASSETS: NoAssets = NoAssets;
+
 struct CommandContext<'a> {
     world: &'a mut prism_ecs::World,
     registry: &'a prism_scene::ComponentRegistry,
@@ -66,6 +91,9 @@ struct CommandContext<'a> {
     quads: Vec<UiQuad>,
     scene_generation: u64,
     input: InputSnapshot,
+    asset: &'a dyn AssetIo,
+    /// `read_asset_file` 的返回缓冲：指针只在下次宿主调用前有效。
+    asset_bytes: Vec<u8>,
 }
 
 /// 把宿主世界包装成 [`HostApi`] 函数表。
@@ -87,8 +115,16 @@ impl<'a> WorldCommands<'a> {
                 quads: Vec::new(),
                 scene_generation,
                 input: InputSnapshot::default(),
+                asset: &NO_ASSETS,
+                asset_bytes: Vec::new(),
             },
         }
+    }
+
+    /// 注入松散资产访问（宿主实现 `AssetIo`）。
+    pub fn with_assets(mut self, asset: &'a dyn AssetIo) -> Self {
+        self.context.asset = asset;
+        self
     }
 
     /// 本帧输入快照；`ui`/项目代码通过 `HostApi::input` 读取。
@@ -108,6 +144,7 @@ impl<'a> WorldCommands<'a> {
             capabilities: HOST_CAP_LOGGING
                 | HOST_CAP_WORLD_COMMANDS
                 | HOST_CAP_COMPONENTS
+                | HOST_CAP_ASSET
                 | HOST_CAP_DRAW,
             scene_generation: self.context.scene_generation,
             user_data: (&mut self.context as *mut CommandContext).cast(),
@@ -115,6 +152,8 @@ impl<'a> WorldCommands<'a> {
             log: Some(host_log),
             spawn_entity: Some(host_spawn_entity),
             set_entity_name: Some(host_set_entity_name),
+            asset_exists: Some(host_asset_exists),
+            read_asset_file: Some(host_read_asset_file),
             query_entities: Some(host_query_entities),
             get_component: Some(host_get_component),
             set_component: Some(host_set_component),
@@ -374,6 +413,61 @@ unsafe extern "C" fn host_draw_quad(user_data: *mut std::ffi::c_void, quad: UiQu
     SUCCESS
 }
 
+unsafe extern "C" fn host_asset_exists(
+    user_data: *mut std::ffi::c_void,
+    path: *const u8,
+    path_len: usize,
+) -> i32 {
+    let Some(path) = (unsafe { asset_path_str(path, path_len) }) else {
+        return prism_project_api::INVALID_ARGUMENT;
+    };
+    let Some(context) = (unsafe { (user_data as *mut CommandContext<'_>).as_ref() }) else {
+        return prism_project_api::INVALID_ARGUMENT;
+    };
+    i32::from(context.asset.exists(path))
+}
+
+unsafe extern "C" fn host_read_asset_file(
+    user_data: *mut std::ffi::c_void,
+    path: *const u8,
+    path_len: usize,
+    out_ptr: *mut *const u8,
+    out_len: *mut usize,
+) -> i32 {
+    if out_ptr.is_null() || out_len.is_null() {
+        return prism_project_api::INVALID_ARGUMENT;
+    }
+    let Some(path) = (unsafe { asset_path_str(path, path_len) }) else {
+        return prism_project_api::INVALID_ARGUMENT;
+    };
+    let Some(context) = (unsafe { (user_data as *mut CommandContext<'_>).as_mut() }) else {
+        return prism_project_api::INVALID_ARGUMENT;
+    };
+    match context.asset.read(path) {
+        Ok(bytes) => {
+            context.asset_bytes = bytes;
+            unsafe {
+                *out_ptr = context.asset_bytes.as_ptr();
+                *out_len = context.asset_bytes.len();
+            }
+            prism_project_api::SUCCESS
+        }
+        Err(_) => prism_project_api::INVALID_ARGUMENT,
+    }
+}
+
+unsafe fn asset_path_str<'a>(path: *const u8, path_len: usize) -> Option<&'a str> {
+    if path.is_null() && path_len != 0 {
+        return None;
+    }
+    let bytes = if path_len == 0 {
+        &[][..]
+    } else {
+        unsafe { std::slice::from_raw_parts(path, path_len) }
+    };
+    std::str::from_utf8(bytes).ok()
+}
+
 pub struct ProjectModule {
     path: PathBuf,
     // Kept solely to keep the module loaded while its callbacks are registered.
@@ -525,6 +619,52 @@ mod tests {
         let mut registry = prism_scene::ComponentRegistry::new();
         prism_scene::register_builtin_components(&mut registry);
         registry
+    }
+
+    struct FixedAssets;
+
+    impl AssetIo for FixedAssets {
+        fn exists(&self, path: &str) -> bool {
+            path == "lake_layers.json"
+        }
+
+        fn read(&self, path: &str) -> std::io::Result<Vec<u8>> {
+            if path == "lake_layers.json" {
+                Ok(br#"{"layers":[]}"#.to_vec())
+            } else {
+                Err(std::io::Error::new(std::io::ErrorKind::NotFound, path))
+            }
+        }
+    }
+
+    /// 项目模块拿到的松散资产访问与宿主同一份实现（走 `HOST_CAP_ASSET`）。
+    #[test]
+    fn asset_capability_reads_through_host_callbacks() {
+        let mut world = prism_ecs::World::new();
+        let registry = registry();
+        let mut commands = WorldCommands::new(&mut world, &registry, 1).with_assets(&FixedAssets);
+        let api = commands.api();
+        assert_ne!(api.capabilities & HOST_CAP_ASSET, 0);
+
+        let exists = api.asset_exists.expect("asset capability");
+        let read = api.read_asset_file.expect("asset capability");
+        let name = b"lake_layers.json";
+        assert_eq!(
+            unsafe { exists(api.user_data, name.as_ptr(), name.len()) },
+            1
+        );
+        let missing = b"nope.json";
+        assert_eq!(
+            unsafe { exists(api.user_data, missing.as_ptr(), missing.len()) },
+            0
+        );
+
+        let mut ptr: *const u8 = std::ptr::null();
+        let mut len = 0usize;
+        let status = unsafe { read(api.user_data, name.as_ptr(), name.len(), &mut ptr, &mut len) };
+        assert_eq!(status, SUCCESS);
+        let bytes = unsafe { std::slice::from_raw_parts(ptr, len) };
+        assert_eq!(bytes, br#"{"layers":[]}"#);
     }
 
     #[test]

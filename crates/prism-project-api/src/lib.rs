@@ -41,7 +41,7 @@ pub mod keys {
     pub const OTHER_BASE: usize = 30;
 }
 
-pub const ABI_VERSION: u32 = 4;
+pub const ABI_VERSION: u32 = 5;
 
 pub const SUCCESS: i32 = 0;
 pub const INVALID_ARGUMENT: i32 = 1;
@@ -54,6 +54,8 @@ pub const BUFFER_TOO_SMALL: i32 = 5;
 
 pub const HOST_CAP_LOGGING: u64 = 1 << 0;
 pub const HOST_CAP_WORLD_COMMANDS: u64 = 1 << 1;
+/// 松散资产访问（`asset_exists` / `read_asset_file`）。
+pub const HOST_CAP_ASSET: u64 = 1 << 4;
 pub const HOST_CAP_COMPONENTS: u64 = 1 << 2;
 pub const HOST_CAP_DRAW: u64 = 1 << 3;
 
@@ -145,6 +147,22 @@ impl Default for InputSnapshot {
 // ---------------------------------------------------------------------------
 // Host callbacks
 // ---------------------------------------------------------------------------
+
+/// 松散资产是否存在：返回 1/0，负数为错误。
+pub type AssetExists = unsafe extern "C" fn(
+    user_data: *mut core::ffi::c_void,
+    path: *const u8,
+    path_len: usize,
+) -> i32;
+
+/// 读取松散资产；返回的指针只在下次宿主调用前有效。
+pub type ReadAssetFile = unsafe extern "C" fn(
+    user_data: *mut core::ffi::c_void,
+    path: *const u8,
+    path_len: usize,
+    out_ptr: *mut *const u8,
+    out_len: *mut usize,
+) -> i32;
 
 pub type LogMessage = unsafe extern "C" fn(
     user_data: *mut core::ffi::c_void,
@@ -254,6 +272,8 @@ pub struct HostApi {
     pub despawn_entity: Option<DespawnEntity>,
     pub is_alive: Option<IsAlive>,
     pub draw_quad: Option<DrawQuad>,
+    pub asset_exists: Option<AssetExists>,
+    pub read_asset_file: Option<ReadAssetFile>,
 }
 
 impl HostApi {
@@ -281,6 +301,8 @@ impl HostApi {
             despawn_entity: None,
             is_alive: None,
             draw_quad: None,
+            asset_exists: None,
+            read_asset_file: None,
         }
     }
 }
