@@ -215,6 +215,12 @@ impl EditorView {
                         this.selected_asset = Some(path_for_click.clone());
                         cx.notify();
                     }))
+                    .on_drag(path.clone(), move |path: &String, _, _, cx| {
+                        cx.new(|_| crate::app::AssetDragPreview {
+                            path: path.clone(),
+                            style,
+                        })
+                    })
                     .on_mouse_down(
                         MouseButton::Right,
                         cx.listener({

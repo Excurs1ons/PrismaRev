@@ -212,6 +212,33 @@ pub enum BuildEvent {
     Done(bool),
 }
 
+/// 资产拖拽时的预览小卡片。
+pub struct AssetDragPreview {
+    pub path: String,
+    pub style: Style,
+}
+
+impl Render for AssetDragPreview {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let name = self
+            .path
+            .rsplit('/')
+            .next()
+            .unwrap_or(self.path.as_str())
+            .to_string();
+        div()
+            .px_2()
+            .py_1()
+            .rounded_sm()
+            .bg(self.style.panel_raised())
+            .border_1()
+            .border_color(self.style.accent())
+            .text_size(px(10.0))
+            .text_color(self.style.text())
+            .child(SharedString::from(name))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum ContextTarget {
     Entity(usize),
@@ -498,6 +525,36 @@ impl EditorView {
     }
 
     /// 定时器回调：Play 时间推进、自动保存、状态持久化。
+    /// 资产拖到层级实体上：预制体实例化到该实体下（None = 根），其它资产忽略。
+    pub fn drop_asset_on_entity(&mut self, parent: Option<usize>, path: &str) {
+        if !path.ends_with(".prefab.json") {
+            return;
+        }
+        match self.workspace.instantiate_prefab_asset(path, parent) {
+            Ok(index) => {
+                self.workspace.select(index, false);
+                self.hierarchy_anchor = Some(index);
+                if let Some(parent) = parent {
+                    if let Some(id) = self
+                        .workspace
+                        .document()
+                        .doc
+                        .entities
+                        .get(parent)
+                        .and_then(|entity| entity.id)
+                    {
+                        self.workspace.expanded.insert(id);
+                    }
+                }
+            }
+            Err(error) => self.workspace.log(
+                prism_editor_gpui_core::LogSource::Editor,
+                prism_editor_gpui_core::LogLevel::Error,
+                format!("实例化 {path} 失败：{error}"),
+            ),
+        }
+    }
+
     pub fn background_tick(&mut self, cx: &mut Context<Self>) {
         if self.workspace.playing && !self.workspace.paused {
             self.workspace.tick(0.033);

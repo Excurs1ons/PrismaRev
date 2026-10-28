@@ -899,16 +899,28 @@ impl EditorView {
             }
         };
 
-        div()
+        let mut row = div()
+            .id(SharedString::from(format!(
+                "field-{index}-{component}-{path}"
+            )))
             .flex()
             .flex_row()
             .items_center()
             .gap_1()
             .min_h(px(20.0))
-            .when(field.read_only, |this| this.text_color(style.muted()))
-            .child(label_cell)
-            .child(control)
-            .into_any_element()
+            .when(field.read_only, |this| this.text_color(style.muted()));
+        if !field.read_only
+            && prism_editor_gpui_core::assets::is_asset_path_field(component, &field.name)
+        {
+            let ids = entity_ids.clone();
+            let component = component.to_string();
+            let path = path.clone();
+            row = row.on_drop(cx.listener(move |this, dropped: &String, _, cx| {
+                this.apply_field(&ids, &component, &path, Value::String(dropped.clone()));
+                cx.notify();
+            }));
+        }
+        row.child(label_cell).child(control).into_any_element()
     }
 
     #[allow(clippy::too_many_arguments)]

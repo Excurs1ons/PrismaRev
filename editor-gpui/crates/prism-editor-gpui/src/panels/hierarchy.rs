@@ -223,6 +223,10 @@ impl EditorView {
                     }
                     cx.notify();
                 }))
+                .on_drop(cx.listener(move |this, path: &String, _, cx| {
+                    this.drop_asset_on_entity(Some(index), path);
+                    cx.notify();
+                }))
                 .on_mouse_up(
                     MouseButton::Left,
                     cx.listener(move |this, _, _, cx| {

@@ -112,6 +112,9 @@ Unity 形状的编辑器，又不会把 `prism-render` 绑死在某套 UI 生命
   （mesh→Model、sprite/texture→Texture、hdr/env→Env、audio、material、prefab、scene），
   弹层列出候选路径（当前值用 ● 标记），点击经 `apply_field` 写回（多选同样一次撤销），
   另有「清除（空路径）」。
+- **资产拖拽**：资产列表行用 GPUI `on_drag`（`AssetDragPreview` 小卡片），检查器资产
+  字段和层级实体行是 drop target：拖到字段直接 `apply_field(String)`，拖 `.prefab.json`
+  到层级实体会 `instantiate_prefab_asset` 到该实体下并选中新根。
 
  ## 6. 项目文件
 
