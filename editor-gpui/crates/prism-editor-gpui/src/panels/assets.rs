@@ -113,9 +113,15 @@ impl EditorView {
                     .when(!selected, |this| {
                         this.hover(move |this| this.bg(style.row_hover()))
                     })
-                    .on_click(cx.listener(move |this, _, _, cx| {
+                    .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
+                        let double = matches!(
+                            event,
+                            gpui::ClickEvent::Mouse(mouse) if mouse.down.click_count >= 2
+                        );
                         if is_dir {
                             this.workspace.toggle_asset_folder(&path_for_toggle);
+                        } else if double {
+                            this.open_asset_document(&path_for_click, cx);
                         }
                         this.selected_asset = Some(path_for_click.clone());
                         cx.notify();
@@ -198,7 +204,14 @@ impl EditorView {
                     .when(!selected, |this| {
                         this.hover(move |this| this.bg(style.row_hover()))
                     })
-                    .on_click(cx.listener(move |this, _, _, cx| {
+                    .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
+                        let double = matches!(
+                            event,
+                            gpui::ClickEvent::Mouse(mouse) if mouse.down.click_count >= 2
+                        );
+                        if double {
+                            this.open_asset_document(&path_for_click, cx);
+                        }
                         this.selected_asset = Some(path_for_click.clone());
                         cx.notify();
                     }))
@@ -304,6 +317,21 @@ impl EditorView {
             )
             .child(footer)
             .into_any_element()
+    }
+
+    /// 双击资产列表/树里的场景或预制体 = 打开文档。
+    fn open_asset_document(&mut self, path: &str, cx: &mut Context<Self>) {
+        if !(path.ends_with(".scene.json") || path.ends_with(".prefab.json")) {
+            return;
+        }
+        if let Err(error) = self.workspace.open_project_file(path) {
+            self.workspace.log(
+                prism_editor_gpui_core::LogSource::Editor,
+                prism_editor_gpui_core::LogLevel::Error,
+                format!("打开 {path} 失败: {error}"),
+            );
+        }
+        cx.notify();
     }
 }
 
