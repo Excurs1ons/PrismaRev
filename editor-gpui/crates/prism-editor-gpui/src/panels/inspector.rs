@@ -236,13 +236,27 @@ impl EditorView {
         );
 
         if let Some(prefab) = prefab {
+            let prefab_for_click = prefab.clone();
             entity_header = entity_header.child(
                 div()
+                    .id("insp-prefab-link")
                     .px_1()
                     .rounded_sm()
                     .text_size(px(9.0))
                     .bg(style.alpha(ThemeToken::Accent, 0.2))
                     .text_color(style.accent())
+                    .cursor_pointer()
+                    .hover(move |this| this.bg(style.selection()))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if let Err(error) = this.workspace.open_project_file(&prefab_for_click) {
+                            this.workspace.log(
+                                prism_editor_gpui_core::LogSource::Editor,
+                                prism_editor_gpui_core::LogLevel::Error,
+                                format!("打开预制体失败：{error}"),
+                            );
+                        }
+                        cx.notify();
+                    }))
                     .child(SharedString::from(format!(
                         "P {}",
                         prefab.rsplit('/').next().unwrap_or(&prefab)

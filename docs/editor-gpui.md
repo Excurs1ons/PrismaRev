@@ -140,6 +140,8 @@ Unity 形状的编辑器，又不会把 `prism-render` 绑死在某套 UI 生命
   `sanitize_stem` + 重名后缀 + `write_document`，不修改当前场景。
 - 实例化：`instantiate_prefab_asset` 从磁盘（或 fixture 模板）读预制体，
   `instantiate_prefab` 追加到场景并挂到选中实体，自动选中新根、可撤销。
+- 打开预制体：实例根检查器的 P 徽章与实体右键「打开预制体」都调用
+  `open_project_file(prefab_link)`，已打开则直接切标签。
 - 资产删除：`delete_asset` 只允许 `assets/` 内的普通文件，场景/预制体走文档面板；
   引用不做自动清理（检查器里保留悬空值，便于发现）。
 - 文档删除：`delete_document` 删磁盘文件 + 打开标签 + 项目文件表，并移除

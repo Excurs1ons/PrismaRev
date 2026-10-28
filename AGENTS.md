@@ -211,7 +211,7 @@ deviating from those conventions is a bug. (`README.md` is the human-facing over
   按词移动与删除，Unicode 安全）；实体剪贴板 Ctrl+C/X/V + 粘贴为子级（多根、保留预制体链接）；
   多选可整体平移 / 旋转 / 缩放、整组改父级（一个撤销步），层级 `Alt`+点箭头递归展开；关闭未保存的文档前有确认；资产可拖到检查器字段或层级实体（预制体实例化）；检查器资产字段有按类别过滤的资产选择器，
   项目模式会递归扫描 `assets/`；检查器支持多选批量改字段（公共组件、一次撤销）；
-  选中实体可「存为预制体」，资产面板可把 `.prefab.json` 实例化到场景；
+  选中实体可「存为预制体」，资产面板可把 `.prefab.json` 实例化到场景，实例的 P 徽章可打开源预制体；
   资产重命名会改磁盘文件并精确改写打开文档的路径引用；
   项目设置面板会合并写回 `assets/settings.toml`（保留 `[render]` 等其它段）；
   构建面板会真实读写 `assets/scenes.toml`（勾选 / 排序 / 移除 / 从 `assets/scenes` 添加），

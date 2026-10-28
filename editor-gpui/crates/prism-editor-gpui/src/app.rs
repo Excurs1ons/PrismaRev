@@ -3012,6 +3012,7 @@ impl EditorView {
                 items.push(("重命名…".into(), true));
                 items.push(("存为预制体…".into(), true));
                 if has_prefab {
+                    items.push(("打开预制体".into(), true));
                     items.push(("还原预制体实例".into(), true));
                     items.push(("同步同源实例".into(), true));
                     items.push(("解除预制体链接".into(), true));
@@ -3106,6 +3107,25 @@ impl EditorView {
                                     .unwrap_or_else(|| "Prefab".to_string());
                                 this.prefab_save = Some((*index, name.clone()));
                                 this.begin_edit(TextTarget::PrefabSave, name, cx);
+                            }
+                            (ContextTarget::Entity(index), "打开预制体") => {
+                                let link = this
+                                    .workspace
+                                    .document()
+                                    .doc
+                                    .entities
+                                    .get(*index)
+                                    .and_then(|entity| entity.prefab_link())
+                                    .map(str::to_string);
+                                if let Some(link) = link {
+                                    if let Err(error) = this.workspace.open_project_file(&link) {
+                                        this.workspace.log(
+                                            prism_editor_gpui_core::LogSource::Editor,
+                                            prism_editor_gpui_core::LogLevel::Error,
+                                            format!("打开预制体 {link} 失败：{error}"),
+                                        );
+                                    }
+                                }
                             }
                             (ContextTarget::Entity(index), "还原预制体实例") => {
                                 let id = this.workspace.document().doc.id_of_index(*index);
