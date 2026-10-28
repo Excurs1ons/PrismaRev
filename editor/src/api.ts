@@ -717,9 +717,28 @@ export function viewportPick(id: string, x: number, y: number): Promise<number |
   return call<number | null>("editor_viewport_pick", { id, x, y });
 }
 
-/** 光标下的变换手柄（`"x"` / `"y"` / `"z"` / `"xyz"`，没有则 `null`）。 */
+/** 光标下的变换手柄（`"x"` / `"y"` / `"z"` / `"xy"` / `"xz"` / `"yz"` / `"xyz"`，没有则 `null`）。 */
 export function viewportGizmoHit(id: string, x: number, y: number): Promise<string | null> {
   return call<string | null>("editor_viewport_gizmo_hit", { id, x, y });
+}
+
+/** 鼠标悬停在 Gizmo 手柄上的高亮几何信息。 */
+export interface GizmoHoverInfo {
+  axis: string;
+  tool: string;
+  centerScreen: [number, number];
+  tipScreen?: [number, number];
+  quadScreen?: [number, number][];
+  ringPts?: [number, number][];
+}
+
+/** 光标悬停在手柄上返回的高亮投影信息（没有悬停手柄则为 null）。 */
+export function viewportGizmoHover(
+  id: string,
+  x: number,
+  y: number,
+): Promise<GizmoHoverInfo | null> {
+  return call<GizmoHoverInfo | null>("editor_viewport_gizmo_hover", { id, x, y });
 }
 
 /** 开始拖动选中实体的某根轴。 */

@@ -226,6 +226,18 @@ pub struct DragFeedback {
     pub radius: Option<f32>,
 }
 
+/// 鼠标悬停在手柄上时的屏幕投影轮廓（供前端渲染高亮提示）。
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GizmoHoverInfo {
+    pub axis: String,
+    pub tool: String,
+    pub center_screen: [f32; 2],
+    pub tip_screen: Option<[f32; 2]>,
+    pub quad_screen: Option<[[f32; 2]; 4]>,
+    pub ring_pts: Option<Vec<[f32; 2]>>,
+}
+
 /// 变换拖动产生的局部属性更新结果。
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -529,6 +541,100 @@ impl HostState {
                 GIZMO_PICK_SLOP,
             ),
         }
+    }
+
+    /// 鼠标悬停在哪个手柄上以及该手柄在屏幕上的投影轮廓。
+    fn gizmo_hover_at(&mut self, x: f32, y: f32) -> Option<GizmoHoverInfo> {
+        let axis = self.gizmo_axis_at(x, y)?;
+        let ctx = self.gizmo_context()?;
+        let length = self.gizmo_length(&ctx);
+        let screen = gizmo::Screen {
+            view: ctx.view,
+            fov_y_degrees: ctx.fov,
+            width: self.width as f32,
+            height: self.height as f32,
+        };
+        let center_screen = screen.project(ctx.center)?.to_array();
+
+        let tool_name = match self.tool {
+            GizmoTool::Translate => "translate",
+            GizmoTool::Rotate => "rotate",
+            GizmoTool::Scale => "scale",
+        };
+
+        let mut tip_screen = None;
+        let mut quad_screen = None;
+        let mut ring_pts = None;
+
+        match self.tool {
+            GizmoTool::Translate => {
+                if axis.is_plane() {
+                    let (a1, a2) = match axis {
+                        Axis::XY => (Vec3::X, Vec3::Y),
+                        Axis::XZ => (Vec3::X, Vec3::Z),
+                        Axis::YZ => (Vec3::Y, Vec3::Z),
+                        _ => (Vec3::X, Vec3::Y),
+                    };
+                    let r_min = 0.23f32;
+                    let r_max = 0.48f32;
+                    let c0 = ctx.center + (a1 * r_min + a2 * r_min) * length;
+                    let c1 = ctx.center + (a1 * r_max + a2 * r_min) * length;
+                    let c2 = ctx.center + (a1 * r_max + a2 * r_max) * length;
+                    let c3 = ctx.center + (a1 * r_min + a2 * r_max) * length;
+                    if let (Some(p0), Some(p1), Some(p2), Some(p3)) = (
+                        screen.project(c0),
+                        screen.project(c1),
+                        screen.project(c2),
+                        screen.project(c3),
+                    ) {
+                        quad_screen =
+                            Some([p0.to_array(), p1.to_array(), p2.to_array(), p3.to_array()]);
+                    }
+                } else if axis != Axis::XYZ {
+                    let tip = ctx.center + axis.vector() * length;
+                    if let Some(p) = screen.project(tip) {
+                        tip_screen = Some(p.to_array());
+                    }
+                }
+            }
+            GizmoTool::Rotate => {
+                let (p1, p2) = match axis {
+                    Axis::X => (Vec3::Y, Vec3::Z),
+                    Axis::Y => (Vec3::Z, Vec3::X),
+                    Axis::Z => (Vec3::X, Vec3::Y),
+                    _ => (Vec3::X, Vec3::Y),
+                };
+                const SEGS: usize = 36;
+                let mut pts = Vec::with_capacity(SEGS + 1);
+                for i in 0..=SEGS {
+                    let angle = (i as f32 / SEGS as f32) * std::f32::consts::TAU;
+                    let world_pt = ctx.center + (p1 * angle.cos() + p2 * angle.sin()) * length;
+                    if let Some(p) = screen.project(world_pt) {
+                        pts.push(p.to_array());
+                    }
+                }
+                if pts.len() >= 4 {
+                    ring_pts = Some(pts);
+                }
+            }
+            GizmoTool::Scale => {
+                if axis != Axis::XYZ {
+                    let tip = ctx.center + axis.vector() * length;
+                    if let Some(p) = screen.project(tip) {
+                        tip_screen = Some(p.to_array());
+                    }
+                }
+            }
+        }
+
+        Some(GizmoHoverInfo {
+            axis: axis.name().to_string(),
+            tool: tool_name.to_string(),
+            center_screen,
+            tip_screen,
+            quad_screen,
+            ring_pts,
+        })
     }
 
     /// 开始拖动选中实体的某根轴或平面手柄。
@@ -1566,6 +1672,22 @@ pub async fn editor_viewport_gizmo_hit(
     Ok(hit.flatten())
 }
 
+/// 光标悬停的手柄信息（轴名、模式、屏幕投影几何，没有则 `None`）。
+#[tauri::command]
+pub async fn editor_viewport_gizmo_hover(
+    id: String,
+    x: f32,
+    y: f32,
+    manager: State<'_, ViewportManager>,
+) -> Result<Option<GizmoHoverInfo>, String> {
+    let hover = ask_viewport(&manager, &id, move |state, tx| {
+        let info = state.gizmo_hover_at(x, y);
+        let _ = tx.send(info);
+    })
+    .await?;
+    Ok(hover.flatten())
+}
+
 /// 开始拖动选中实体的某根轴（`axis` = `"x"` / `"y"` / `"z"`）。
 #[tauri::command]
 pub fn editor_viewport_drag_begin(
@@ -2059,5 +2181,57 @@ mod tests {
         assert_eq!(fb.axis, "xz");
         assert!(fb.text.contains("XZ:"));
         state.end_drag();
+    }
+
+    #[test]
+    fn gizmo_hover_returns_projected_outlines() {
+        let mut state = test_state("gizmo-hover");
+        state.orbit.pitch = 0.5;
+        state.orbit.distance = 10.0;
+        state.place_camera();
+        state.apply_selection(Some(1));
+
+        let ctx = state.gizmo_context().unwrap();
+        let length = state.gizmo_length(&ctx);
+        let project = |point| {
+            gizmo::project(&ctx.view, ctx.fov, 200.0, 100.0, point).expect("应能投影到屏幕")
+        };
+        let center = project(ctx.center);
+        let x_tip = project(ctx.center + Vec3::X * length);
+
+        // 1. Translate 1D handle hover
+        state.tool = GizmoTool::Translate;
+        let hover_x = state
+            .gizmo_hover_at(x_tip.x, x_tip.y)
+            .expect("X 轴应命中悬停");
+        assert_eq!(hover_x.axis, "x");
+        assert_eq!(hover_x.tool, "translate");
+        assert!(hover_x.tip_screen.is_some());
+        assert_eq!(hover_x.center_screen, center.to_array());
+
+        // 2. Translate 2D planar handle hover (XZ 面)
+        let plane_center = ctx.center + Vec3::new(0.35, 0.0, 0.35) * length;
+        let plane_pt = project(plane_center);
+        let hover_xz = state
+            .gizmo_hover_at(plane_pt.x, plane_pt.y)
+            .expect("XZ 面应命中悬停");
+        assert_eq!(hover_xz.axis, "xz");
+        let quad = hover_xz.quad_screen.expect("平面手柄应包含 4 顶点轮廓");
+        assert_eq!(quad.len(), 4);
+
+        // 3. Rotate handle hover
+        state.tool = GizmoTool::Rotate;
+        let ring_world = ctx.center + Vec3::Y * length;
+        let ring_pt = project(ring_world);
+        if let Some(hover) = state.gizmo_hover_at(ring_pt.x, ring_pt.y) {
+            assert_eq!(hover.tool, "rotate");
+            assert!(hover.ring_pts.is_some());
+            assert!(hover.ring_pts.unwrap().len() >= 4);
+        }
+
+        // 4. Hover away: returns None
+        assert!(state
+            .gizmo_hover_at(center.x + 80.0, center.y + 80.0)
+            .is_none());
     }
 }
