@@ -181,6 +181,13 @@ impl GizmoMode {
     }
 }
 
+/// 后台构建线程发回 UI 的事件。
+#[derive(Debug, Clone)]
+pub enum BuildEvent {
+    Line(String),
+    Done(bool),
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum ContextTarget {
     Entity(usize),
@@ -296,6 +303,8 @@ pub struct EditorView {
     pub heightmap: HeightmapForm,
     pub build_log: Vec<String>,
     pub building: bool,
+    /// 后台构建线程 → UI 的行 / 完成事件。
+    pub build_rx: Option<std::sync::mpsc::Receiver<BuildEvent>>,
     /// 「另存为」弹层的输入缓冲；`Some` 时显示弹层。
     pub save_as: Option<String>,
     /// 「重命名资产」弹层：`(源路径, 新名字提示)`。
@@ -357,6 +366,7 @@ impl EditorView {
             heightmap: HeightmapForm::default(),
             build_log: Vec::new(),
             building: false,
+            build_rx: None,
             save_as: None,
             asset_rename: None,
             prefab_save: None,
@@ -474,6 +484,53 @@ impl EditorView {
             self.last_persist = now;
             self.persist_state_if_changed();
         }
+
+        // 构建输出：每 tick 最多消费 40 行，避免卡 UI。
+        let mut finished = None;
+        let mut lines = 0;
+        for _ in 0..40 {
+            let event = match self.build_rx.as_ref() {
+                Some(rx) => rx.try_recv().ok(),
+                None => break,
+            };
+            match event {
+                Some(BuildEvent::Line(line)) => {
+                    self.build_log.push(line.clone());
+                    self.workspace.log(
+                        prism_editor_gpui_core::LogSource::System,
+                        prism_editor_gpui_core::LogLevel::Info,
+                        line,
+                    );
+                    lines += 1;
+                }
+                Some(BuildEvent::Done(ok)) => {
+                    finished = Some(ok);
+                    break;
+                }
+                None => break,
+            }
+        }
+        if let Some(ok) = finished {
+            self.build_rx = None;
+            self.building = false;
+            self.build_log.push(if ok {
+                "✓ 构建完成".to_string()
+            } else {
+                "✗ 构建失败".to_string()
+            });
+            self.workspace.log(
+                prism_editor_gpui_core::LogSource::System,
+                if ok {
+                    prism_editor_gpui_core::LogLevel::Info
+                } else {
+                    prism_editor_gpui_core::LogLevel::Error
+                },
+                if ok { "构建完成" } else { "构建失败" },
+            );
+            cx.notify();
+        } else if lines > 0 {
+            cx.notify();
+        }
     }
 
     // ── 命令 / 快捷键 ───────────────────────────────────────────────────
@@ -508,6 +565,16 @@ impl EditorView {
                     "当前文档尚未保存，没有可删除的文件",
                 ),
             }
+            cx.notify();
+            return;
+        }
+        if command == Command::BuildProject {
+            self.run_build();
+            cx.notify();
+            return;
+        }
+        if command == Command::CookScenes {
+            self.run_cook();
             cx.notify();
             return;
         }

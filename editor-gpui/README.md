@@ -60,7 +60,7 @@
 | 游戏视图 | 文档相机视角 + Play 状态；Play 时实体轻微上下浮动（模拟 tick） |
 | 文档 | 打开的文档、新建场景/预制体、模板 |
 | 渲染图 | pass 链（ShadowMap → Forward → Gtao → Post）+ 图资源表（scene/swapchain/frame 生命周期） |
-| 项目设置 / 首选项 / 主题 / 构建 / 离线工具 / 快捷键 / 关于 | 直接编辑设置、主题预设与 38 个 token 预览、构建步骤日志、bake-gi 与 heightmap 命令预览 |
+| 项目设置 / 首选项 / 主题 / 构建 / 离线工具 / 快捷键 / 关于 | 直接编辑设置、主题预设与 38 个 token 预览、真实 cargo/cook 构建日志、bake-gi 与 heightmap 命令预览 |
 
 **数据层**（`prism-editor-gpui-core`，UI 框架无关，114 个单元测试）
 
@@ -140,7 +140,11 @@ editor-gpui/
 - **Scene View 目前是 CPU 投影的 `canvas` 绘制**，不是 `prism-render` 的真实画面。
   接线点已经留好：把 `paint_scene` 换成离屏 `GraphRenderer` 的帧（或原生 Vulkan
   popup 窗口 + 输入转发），面板本身不需要改。
-- **构建与 cook 仍是占位**：构建面板只打印步骤日志，没有真正调用 cargo / cook。
+- **构建是真实子进程**：构建面板 / 「构建项目」「构建场景包」菜单按 `core::build` 的计划执行
+  `cargo build --manifest-path <game>/Cargo.toml [--release]` 与
+  `cargo run -p prism-build-pipeline -- build-scenes`，stdout/stderr 流式进构建日志与日志面板；
+  成功后把 exe / `scenes.pak` / `settings.toml` 拷到 `[build].output_dir`（缺失的产物跳过）。
+  子进程在后台线程跑，UI 每 tick 消费最多 40 行。桌面运行时回归尚未做。
   文档删除已真实落盘（菜单「文件 → 删除文档」或资产面板右键，都会先确认，
   并同时清理打开标签与 `scenes.toml` 条目）。
   保存 / 另存为 / 重新读取 / settings.toml / scenes.toml / 资产改名、删除、实例化与预制体写入已真实落盘。

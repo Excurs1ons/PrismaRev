@@ -5,8 +5,10 @@
 
 use gpui::{div, prelude::*, px, AnyElement, Context, Div, SharedString, Stateful};
 use prism_editor_gpui_core::{Locale, ThemeToken, THEME_PRESETS};
+use std::io::{BufRead, BufReader};
+use std::process::Stdio;
 
-use crate::app::{EditorView, TextTarget};
+use crate::app::{BuildEvent, EditorView, TextTarget};
 use crate::panels::{header_row, icon_button, muted};
 use crate::style::ROW_HEIGHT;
 
@@ -408,21 +410,45 @@ impl EditorView {
                 ))
                 .child(
                     div()
-                        .id("build-run")
-                        .px_2()
-                        .py_0p5()
-                        .rounded_sm()
-                        .border_1()
-                        .border_color(style.success())
-                        .text_size(px(9.0))
-                        .text_color(style.success())
-                        .cursor_pointer()
-                        .hover(move |this| this.bg(style.row_hover()))
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.run_build();
-                            cx.notify();
-                        }))
-                        .child("构建项目"),
+                        .flex()
+                        .flex_row()
+                        .gap_1()
+                        .child(
+                            div()
+                                .id("build-cook")
+                                .px_2()
+                                .py_0p5()
+                                .rounded_sm()
+                                .border_1()
+                                .border_color(style.border())
+                                .text_size(px(9.0))
+                                .text_color(style.text_soft())
+                                .cursor_pointer()
+                                .hover(move |this| this.bg(style.row_hover()))
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.run_cook();
+                                    cx.notify();
+                                }))
+                                .child("构建场景包"),
+                        )
+                        .child(
+                            div()
+                                .id("build-run")
+                                .px_2()
+                                .py_0p5()
+                                .rounded_sm()
+                                .border_1()
+                                .border_color(style.success())
+                                .text_size(px(9.0))
+                                .text_color(style.success())
+                                .cursor_pointer()
+                                .hover(move |this| this.bg(style.row_hover()))
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.run_build();
+                                    cx.notify();
+                                }))
+                                .child("构建项目"),
+                        ),
                 );
 
         let entries: Vec<(usize, String, String, bool)> = self
@@ -588,7 +614,15 @@ impl EditorView {
         if self.build_log.is_empty() {
             body = body.child(muted(style, "尚未构建"));
         }
-        for line in &self.build_log {
+        let total = self.build_log.len();
+        let start = total.saturating_sub(500);
+        if start > 0 {
+            body = body.child(muted(
+                style,
+                format!("… 仅显示最后 500 行（共 {total} 行）"),
+            ));
+        }
+        for line in &self.build_log[start..] {
             body = body.child(
                 div()
                     .px_2()
@@ -1069,27 +1103,127 @@ impl EditorView {
             .into_any_element()
     }
 
-    fn run_build(&mut self) {
+    pub fn run_build(&mut self) {
+        if self.building {
+            return;
+        }
+        self.build_log.clear();
+        let Some(root) = self.workspace.project_root.clone() else {
+            self.workspace.log(
+                prism_editor_gpui_core::LogSource::Editor,
+                prism_editor_gpui_core::LogLevel::Warn,
+                "没有绑定项目根：先打开一个含 assets/ 的项目",
+            );
+            return;
+        };
+        let plan = prism_editor_gpui_core::build::plan_build(&root, &self.project);
+        self.start_build(plan.steps, plan.copies, plan.output_dir);
+    }
+
+    /// 「构建场景包」只跑 cook 一步，不重新编译游戏。
+    pub fn run_cook(&mut self) {
+        if self.building {
+            return;
+        }
+        let Some(root) = self.workspace.project_root.clone() else {
+            self.workspace.log(
+                prism_editor_gpui_core::LogSource::Editor,
+                prism_editor_gpui_core::LogLevel::Warn,
+                "没有绑定项目根：先打开一个含 assets/ 的项目",
+            );
+            return;
+        };
+        let mut plan = prism_editor_gpui_core::build::plan_build(&root, &self.project);
+        let cook = plan.steps.pop().expect("构建计划至少包含 cook 一步");
+        self.start_build(vec![cook], Vec::new(), plan.output_dir);
+    }
+
+    fn start_build(
+        &mut self,
+        steps: Vec<prism_editor_gpui_core::BuildStep>,
+        copies: Vec<prism_editor_gpui_core::ArtifactCopy>,
+        output_dir: std::path::PathBuf,
+    ) {
         self.build_log.clear();
         self.building = true;
-        let steps = [
-            "cargo build --release（prisma）",
-            "build-scenes（cook 场景包）",
-            "收集 exe / scenes.pak / settings.toml",
-        ];
-        for step in steps {
-            self.build_log.push(format!("✓ {step}"));
-            self.workspace.log(
-                prism_editor_gpui_core::LogSource::System,
-                prism_editor_gpui_core::LogLevel::Info,
-                step,
-            );
+        self.build_log
+            .push(format!("输出目录：{}", output_dir.display()));
+        for step in &steps {
+            self.build_log
+                .push(format!("$ {} {}", step.program, step.args.join(" ")));
         }
-        self.build_log.push(format!(
-            "完成 → {}（占位执行，未真正调用 cargo）",
-            self.project.build.output_dir
-        ));
-        self.building = false;
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.build_rx = Some(rx);
+        std::thread::spawn(move || {
+            for step in &steps {
+                let _ = tx.send(BuildEvent::Line(format!("▶ {}", step.label)));
+                let output = std::process::Command::new(&step.program)
+                    .args(&step.args)
+                    .current_dir(&step.cwd)
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .spawn();
+                let mut child = match output {
+                    Ok(child) => child,
+                    Err(error) => {
+                        let _ = tx.send(BuildEvent::Line(format!(
+                            "✗ 无法启动 {}：{error}",
+                            step.program
+                        )));
+                        let _ = tx.send(BuildEvent::Done(false));
+                        return;
+                    }
+                };
+                // stdout / stderr 同时排空，避免管道写满死锁。
+                let stderr = child.stderr.take();
+                let tx_err = tx.clone();
+                let stderr_thread = std::thread::spawn(move || {
+                    if let Some(stderr) = stderr {
+                        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                            let _ = tx_err.send(BuildEvent::Line(line));
+                        }
+                    }
+                });
+                if let Some(stdout) = child.stdout.take() {
+                    for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                        let _ = tx.send(BuildEvent::Line(line));
+                    }
+                }
+                let _ = stderr_thread.join();
+                match child.wait() {
+                    Ok(status) if status.success() => {}
+                    Ok(status) => {
+                        let _ = tx.send(BuildEvent::Line(format!(
+                            "✗ {} 失败（退出码 {:?}）",
+                            step.label,
+                            status.code()
+                        )));
+                        let _ = tx.send(BuildEvent::Done(false));
+                        return;
+                    }
+                    Err(error) => {
+                        let _ = tx.send(BuildEvent::Line(format!(
+                            "✗ 等待 {} 失败：{error}",
+                            step.label
+                        )));
+                        let _ = tx.send(BuildEvent::Done(false));
+                        return;
+                    }
+                }
+            }
+            match prism_editor_gpui_core::build::copy_artifacts(&copies) {
+                Ok(copied) => {
+                    for line in copied {
+                        let _ = tx.send(BuildEvent::Line(format!("✓ {line}")));
+                    }
+                    let _ = tx.send(BuildEvent::Done(true));
+                }
+                Err(error) => {
+                    let _ = tx.send(BuildEvent::Line(format!("✗ 拷贝产物失败：{error}")));
+                    let _ = tx.send(BuildEvent::Done(false));
+                }
+            }
+        });
     }
 }
 

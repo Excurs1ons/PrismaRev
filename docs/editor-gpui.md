@@ -1,6 +1,6 @@
 # GPUI 原生编辑器（`editor-gpui/`）
 
-> 状态：**可编译的类型检查 + 151 个数据层单测通过**；桌面运行尚未在 CI 上跑过
+> 状态：**可编译的类型检查 + 155 个数据层单测通过**；桌面运行尚未在 CI 上跑过
 > （GPUI 需要 Windows/macOS/Linux 桌面与 GPU）。
 >
 > 本文说明「为什么做、边界在哪、怎么接真实引擎」，功能清单见
@@ -162,6 +162,21 @@ Unity 形状的编辑器，又不会把 `prism-render` 绑死在某套 UI 生命
 - 构建面板可以勾选/上下移/移除条目，并从 `assets/scenes` 里把尚未入清单的文档加进来
   （名字自动去重为 `foo-2`，路径写成 `scenes/foo.rscn`）；每次改动立即写盘。
 
+## 8.2 构建执行
+
+`core/src/build.rs` 只产出纯数据的构建计划，UI 负责 spawn：
+
+- `game_manifest_path`：仓库布局优先 `projects/prisma/Cargo.toml`，否则项目根
+  `Cargo.toml`（用户项目自成 workspace 的情况）；
+- 两步：`cargo build --manifest-path <game> [--release]`，然后
+  `cargo run -p prism-build-pipeline -- build-scenes`（cwd = 项目根）；
+- 产物：`projects/<game>/target/{debug,release}/prisma[.exe]`、`assets/scenes.pak`、
+  `assets/settings.toml` → `[build].output_dir`（相对路径相对项目根）；
+- `copy_artifacts` 跳过不存在的产物（例如还没 cook 过 `scenes.pak`），不算失败。
+- UI 用后台线程 + `mpsc` 发 `BuildEvent::{Line,Done}`；stdout/stderr 各一个读取线程
+  （避免管道写满死锁），`background_tick` 每 tick 最多消费 40 行，日志同时进
+  构建面板与日志面板。
+
 ## 9. Scene / Game View 的现状与接线
 
 当前 `viewport.rs` 用 `gpui::canvas` 做**CPU 投影**：
@@ -200,7 +215,7 @@ Unity 形状的编辑器，又不会把 `prism-render` 绑死在某套 UI 生命
 
 ```sh
 cd editor-gpui
-cargo test -p prism-editor-gpui-core                                  # 151 passed
+cargo test -p prism-editor-gpui-core                                  # 155 passed
 cargo check -p prism-editor-gpui --target x86_64-pc-windows-gnu       # 类型检查
 cargo clippy -p prism-editor-gpui -p prism-editor-gpui-core \
     --target x86_64-pc-windows-gnu                                    # clean
