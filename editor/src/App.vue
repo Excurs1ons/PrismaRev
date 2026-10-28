@@ -1388,9 +1388,26 @@ function nextEntityId(entities: EntityJson[]): number {
   return max + 1;
 }
 
-function addEntity() {
+function addEntity(targetPresetId?: string, parentIndex?: number | null) {
   if (!doc.value) return;
-  const preset = presets.value.find((p) => p.id === presetId.value);
+  const pId = targetPresetId || presetId.value;
+  let preset = presets.value.find((p) => p.id === pId);
+
+  // 虚拟 3D Primitives 预设支持
+  if (!preset) {
+    if (pId === "cube") {
+      preset = { id: "cube", label: "Cube", name: "Cube", components: ["prism_engine::scene::MeshRenderer", "prism_engine::scene::Active"], overrides: {}, rotation: [0, 0, 0, 1], position: [0, 0, 0] };
+    } else if (pId === "sphere") {
+      preset = { id: "sphere", label: "Sphere", name: "Sphere", components: ["prism_engine::scene::MeshRenderer", "prism_engine::scene::Active"], overrides: {}, rotation: [0, 0, 0, 1], position: [0, 0, 0] };
+    } else if (pId === "cylinder") {
+      preset = { id: "cylinder", label: "Cylinder", name: "Cylinder", components: ["prism_engine::scene::MeshRenderer", "prism_engine::scene::Active"], overrides: {}, rotation: [0, 0, 0, 1], position: [0, 0, 0] };
+    } else if (pId === "plane") {
+      preset = { id: "plane", label: "Plane", name: "Plane", components: ["prism_engine::scene::MeshRenderer", "prism_engine::scene::Active"], overrides: {}, rotation: [0, 0, 0, 1], position: [0, 0, 0] };
+    } else {
+      preset = presets.value.find((p) => p.id === presetId.value) || presets.value[0];
+    }
+  }
+
   const components: Record<string, JsonValue> = {};
   for (const name of preset?.components ?? []) {
     const type = schema.value.types.find((t) => t.name === name);
@@ -1404,10 +1421,16 @@ function addEntity() {
   }
   const entities = doc.value.entities.slice();
   const id = nextEntityId(entities);
+
+  let parentId: number | null = null;
+  if (parentIndex != null && parentIndex >= 0 && parentIndex < entities.length) {
+    parentId = entities[parentIndex].id ?? null;
+  }
+
   entities.push({
     id,
     name: uniqueName(preset?.name ?? "entity"),
-    parent: null,
+    parent: parentId,
     transform: {
       position: (preset?.position ?? [0, 0, 0]) as number[],
       rotation: (preset?.rotation ?? [0, 0, 0, 1]) as number[],
