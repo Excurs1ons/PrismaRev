@@ -1,12 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, provide, reactive, ref, shallowRef, watch } from "vue";
 import {
-  AlertCircle,
-  AlertTriangle,
   Box,
   Check,
   ChevronRight,
-  Info,
   Maximize2,
   MousePointer,
   Move,
@@ -21,6 +18,7 @@ import AssetBrowser from "./components/AssetBrowser.vue";
 import AssetInspector from "./components/AssetInspector.vue";
 import AssetPicker from "./components/AssetPicker.vue";
 import BuildPanel from "./components/BuildPanel.vue";
+import ConsolePanel from "./components/ConsolePanel.vue";
 import DockLayout from "./components/DockLayout.vue";
 import EditorDropdown, { type DropdownOption } from "./components/EditorDropdown.vue";
 import EditorModal from "./components/EditorModal.vue";
@@ -57,7 +55,6 @@ import {
   type ThemeState,
 } from "./theme";
 import { PREFAB_LINK_COMPONENT } from "./types";
-import { windowRange } from "./windowed";
 import type {
   AssetInfo,
   AssetRef,
@@ -205,173 +202,7 @@ const error = ref("");
 const validationError = ref("");
 const logText = ref("");
 const gameLogEntries = ref<PreviewLogLine[]>([]);
-const logScrollEl = ref<HTMLElement | null>(null);
-const logSourceFilter = ref<"all" | "editor" | "game">("all");
-const logLevelFilter = ref<LogLevel | "all">("all");
-const logScrollTop = ref(0);
-const logViewportHeight = ref(0);
 const busy = ref(false);
-
-type LogLevel = "error" | "warn" | "info" | "debug" | "trace" | "panic";
-
-interface LogViewLine {
-  source: "editor" | "game";
-  level: LogLevel;
-  line: string;
-  stream?: string;
-}
-
-function logLevelOf(line: string, stream?: string): LogLevel {
-  if (/panicked at|thread '.*' panicked|\bPANIC\b|stack backtrace:/i.test(line)) {
-    return "panic";
-  }
-  const match = line.match(/\b(ERROR|WARN(?:ING)?|INFO|DEBUG|TRACE)\b/);
-  if (match) {
-    const level = match[1].toUpperCase();
-    if (level.startsWith("WARN")) return "warn";
-    return level.toLowerCase() as LogLevel;
-  }
-  if (stream === "system") return "info";
-  if (stream === "stderr") return "error";
-  if (/失败|error/i.test(line)) return "error";
-  if (/警告|warn/i.test(line)) return "warn";
-  return "info";
-}
-
-const editorLogLines = computed<LogViewLine[]>(() =>
-  logText.value
-    .split(/\r?\n/)
-    .filter((line) => line.trim().length > 0)
-    .slice(-Math.max(200, editorPrefs.value.maxLogLines))
-    .map((line) => ({
-      source: "editor",
-      level: logLevelOf(line),
-      line,
-    })),
-);
-
-const gameLogView = computed<LogViewLine[]>(() =>
-  gameLogEntries.value
-    .slice(-Math.max(200, editorPrefs.value.maxLogLines))
-    .map((entry) => ({
-      source: "game",
-      // 进程内引擎的记录自带级别，不用猜。
-      level: entry.level ?? logLevelOf(entry.line, entry.stream),
-      line: entry.line,
-      stream: entry.stream,
-    })),
-);
-
-const filteredEditorLogLines = computed(() =>
-  editorLogLines.value.filter(
-    (entry) => logLevelFilter.value === "all" || entry.level === logLevelFilter.value,
-  ),
-);
-
-const filteredGameLogLines = computed(() =>
-  gameLogView.value.filter(
-    (entry) => logLevelFilter.value === "all" || entry.level === logLevelFilter.value,
-  ),
-);
-
-const hasFilteredLogs = computed(
-  () =>
-    (logSourceFilter.value !== "game" && filteredEditorLogLines.value.length > 0) ||
-    (logSourceFilter.value !== "editor" && filteredGameLogLines.value.length > 0),
-);
-
-const activeLogLines = computed(() => {
-  if (logSourceFilter.value === "editor") return editorLogLines.value;
-  if (logSourceFilter.value === "game") return gameLogView.value;
-  return [...editorLogLines.value, ...gameLogView.value];
-});
-
-const logCounts = computed(() => {
-  let info = 0;
-  let warn = 0;
-  let error = 0;
-  for (const item of activeLogLines.value) {
-    if (item.level === "info" || item.level === "debug" || item.level === "trace") info++;
-    else if (item.level === "warn") warn++;
-    else if (item.level === "error" || item.level === "panic") error++;
-  }
-  return { info, warn, error };
-});
-
-const logLevelOptions = computed<DropdownOption[]>(() => [
-  { value: "all", label: t("console.levelAll") },
-  { value: "error", label: t("console.levelError") },
-  { value: "warn", label: t("console.levelWarn") },
-  { value: "info", label: t("console.levelInfo") },
-  { value: "debug", label: t("console.levelDebug") },
-  { value: "trace", label: t("console.levelTrace") },
-  { value: "panic", label: t("console.levelPanic") },
-]);
-
-// ── 日志窗口化 ──────────────────────────────────────────────────────────────
-// 单行固定高度（见 style.css 的 `.log-row`）。日志最多保留
-// `editorPrefs.maxLogLines`（上限 20000）行，一次性渲染成 DOM 会拖垮滚动；
-// 这里只渲染视口附近的行，其余用 spacer 占位。
-const LOG_ROW_HEIGHT = 18;
-
-type LogRow =
-  | { kind: "title"; text: string }
-  | { kind: "line"; entry: LogViewLine };
-
-const logRows = computed<LogRow[]>(() => {
-  const rows: LogRow[] = [];
-  if (logSourceFilter.value !== "game" && filteredEditorLogLines.value.length) {
-    rows.push({ kind: "title", text: "编辑器" });
-    for (const entry of filteredEditorLogLines.value) rows.push({ kind: "line", entry });
-  }
-  if (logSourceFilter.value !== "editor" && filteredGameLogLines.value.length) {
-    rows.push({ kind: "title", text: "Game" });
-    for (const entry of filteredGameLogLines.value) rows.push({ kind: "line", entry });
-  }
-  return rows;
-});
-
-const logWindow = computed(() =>
-  windowRange(
-    logRows.value.length,
-    LOG_ROW_HEIGHT,
-    logScrollTop.value,
-    logViewportHeight.value,
-  ),
-);
-
-const visibleLogRows = computed(() => logRows.value.slice(logWindow.value.start, logWindow.value.end));
-
-function syncLogViewport() {
-  const element = logScrollEl.value;
-  if (!element) return;
-  logScrollTop.value = element.scrollTop;
-  logViewportHeight.value = element.clientHeight;
-}
-
-function onLogScroll() {
-  syncLogViewport();
-}
-
-// 面板被拖宽/拖高、dock 重排、字号变化都会改变可见行数，用 ResizeObserver
-// 而不是监听 window resize。元素本身是 v-if 之外的常驻节点，但仍在出现时重新挂载。
-watch(
-  logScrollEl,
-  (element) => {
-    if (!element) return;
-    syncLogViewport();
-    const observer = new ResizeObserver(() => syncLogViewport());
-    observer.observe(element);
-    return () => observer.disconnect();
-  },
-  { flush: "post" },
-);
-
-watch([logSourceFilter, logLevelFilter], () => {
-  const element = logScrollEl.value;
-  if (element) element.scrollTop = 0;
-  logScrollTop.value = 0;
-});
 
 const documentLabel = computed(() => {
   if (currentPath.value) return currentPath.value.split("/").pop() || currentPath.value;
@@ -1761,13 +1592,7 @@ async function buildScenes() {
 // ── 游戏日志 ────────────────────────────────────────────────────────────────
 
 function scrollLogsToEnd() {
-  void nextTick(() => {
-    const element = logScrollEl.value;
-    if (element) {
-      element.scrollTop = element.scrollHeight;
-      syncLogViewport();
-    }
-  });
+  // ConsolePanel handles its own auto-scroll on log updates
 }
 
 function appendGameLog(entry: PreviewLogLine) {
@@ -2584,84 +2409,14 @@ onUnmounted(() => {
         </template>
 
         <template #log>
-        <div class="log-panel">
-          <div class="log-toolbar">
-            <div class="log-filter">
-              <button
-                :class="{ active: logSourceFilter === 'all' }"
-                @click="logSourceFilter = 'all'"
-              >全部</button>
-              <button
-                :class="{ active: logSourceFilter === 'editor' }"
-                @click="logSourceFilter = 'editor'"
-              >编辑器</button>
-              <button
-                :class="{ active: logSourceFilter === 'game' }"
-                @click="logSourceFilter = 'game'"
-              >Game</button>
-            </div>
-            <EditorDropdown
-              :model-value="logLevelFilter"
-              :options="logLevelOptions"
-              :title="$t('console.title')"
-              @update:model-value="(val) => (logLevelFilter = val as LogLevel | 'all')"
-            />
-            <div class="log-counts-group">
-              <button
-                class="log-count-btn info-count"
-                :class="{ active: logLevelFilter === 'info' }"
-                title="Info"
-                @click="logLevelFilter = logLevelFilter === 'info' ? 'all' : 'info'"
-              >
-                <Info :size="12" />
-                <span>{{ logCounts.info }}</span>
-              </button>
-              <button
-                class="log-count-btn warn-count"
-                :class="{ active: logLevelFilter === 'warn' }"
-                title="Warning"
-                @click="logLevelFilter = logLevelFilter === 'warn' ? 'all' : 'warn'"
-              >
-                <AlertTriangle :size="12" />
-                <span>{{ logCounts.warn }}</span>
-              </button>
-              <button
-                class="log-count-btn error-count"
-                :class="{ active: logLevelFilter === 'error' }"
-                title="Error"
-                @click="logLevelFilter = logLevelFilter === 'error' ? 'all' : 'error'"
-              >
-                <AlertCircle :size="12" />
-                <span>{{ logCounts.error }}</span>
-              </button>
-            </div>
-            <span class="tool-spacer" />
-            <button class="ghost icon" title="清空日志" @click="clearAllLogs">清空</button>
-          </div>
-
-          <div ref="logScrollEl" class="log-scroll" @scroll.passive="onLogScroll">
-            <div class="log-virtual" :style="{ height: `${logWindow.total}px` }">
-              <div
-                class="log-window"
-                :style="{ transform: `translateY(${logWindow.offset}px)` }"
-              >
-                <div
-                  v-for="(row, index) in visibleLogRows"
-                  :key="logWindow.start + index"
-                  class="log-row"
-                  :class="
-                    row.kind === 'title'
-                      ? 'log-row-section'
-                      : `log-level-${row.entry.level}`
-                  "
-                  :title="row.kind === 'line' ? row.entry.line : undefined"
-                >{{ row.kind === "title" ? row.text : row.entry.line }}</div>
-              </div>
-            </div>
-
-            <div v-if="!hasFilteredLogs" class="empty">当前筛选没有日志。</div>
-          </div>
-        </div>
+          <ConsolePanel
+            :editor-logs="logText"
+            :game-logs="gameLogEntries"
+            :max-log-lines="editorPrefs.maxLogLines"
+            :playing="playing"
+            @clear="clearAllLogs"
+            @pause-game="paused = true"
+          />
         </template>
 
         <template #projectSettings>
