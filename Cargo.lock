@@ -2791,7 +2791,10 @@ version = "0.1.0"
 dependencies = [
  "log",
  "prism-ecs",
+ "prism-project-api",
  "prism-reflect",
+ "prism-runtime-host",
+ "prism-scene",
 ]
 
 [[package]]
@@ -2860,6 +2863,7 @@ dependencies = [
  "log",
  "prism-ecs",
  "prism-project-api",
+ "prism-reflect",
  "prism-scene",
  "thiserror 2.0.19",
 ]

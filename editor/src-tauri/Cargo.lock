@@ -4163,6 +4163,7 @@ dependencies = [
  "log",
  "prism-ecs",
  "prism-project-api",
+ "prism-reflect",
  "prism-scene",
  "thiserror 2.0.21",
 ]

@@ -5,12 +5,24 @@ edition.workspace = true
 license.workspace = true
 description = "Engine-independent gameplay API shared by the runtime host and project modules"
 
-# 目前只有 `host` 后端（直接借用宿主的 ECS World，零序列化）。
-# 插件后端（宿主下发的 C 函数表 + RTTIBin 字节流）随 `prism-runtime-host`
-# 的 ABI 扩展一起加入，届时用 feature 在两者之间切换，接口保持不变。
+# 两个后端共用同一套函数签名：
+# - `host`：直接借用宿主自己的 ECS World，零序列化（静态 Player / 宿主内）。
+# - `plugin`：通过宿主下发的 C 函数表读写，组件以 RTTIBin 字节流跨边界。
+# 插件构建只需 `--no-default-features --features plugin`。
+[features]
+default = ["host", "plugin"]
+host = []
+plugin = []
+
 [dependencies]
 prism-reflect = { path = "../prism-reflect" }
-# 纯数据 ECS（无 Vulkan / 无 UI）。插件侧只会用到 `Entity` 的布局与
+prism-project-api = { path = "../prism-project-api" }
+# 纯数据 ECS（无 Vulkan / 无 UI）。插件侧只用它的 `Entity` 句柄布局与
 # `Component` blanket impl，永远不会把宿主的 `World` 指针传出去。
 prism-ecs = { path = "../prism-ecs" }
 log.workspace = true
+
+[dev-dependencies]
+# 用真实的宿主函数表验证 plugin 后端，而不是在测试里仿造一张表。
+prism-runtime-host = { path = "../prism-runtime-host" }
+prism-scene = { path = "../prism-scene" }

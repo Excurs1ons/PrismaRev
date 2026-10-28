@@ -4,10 +4,9 @@
 //! Player，也能被编译成动态库由编辑器宿主加载。区别只在 [`GameWorld`]
 //! 背后接的是谁：
 //!
-//! - **host**（当前实现）：直接借用宿主自己的 `prism_ecs::World`，零序列化。
-//!   静态 Player、以及编辑器宿主自己跑的画面内项目代码走这条。
-//! - **plugin**（后续）：通过宿主下发的 C 函数表读写，组件数据以 RTTIBin
-//!   字节流跨边界。动态库里的 gameplay 代码走这条。
+//! - [`GameWorld::host`]：直接借用宿主自己的 `prism_ecs::World`，零序列化。
+//! - [`GameWorld::plugin`]：通过宿主下发的 [`HostApi`] 函数表读写，组件数据
+//!   以 RTTIBin 字节流跨边界。
 //!
 //! 两条路径暴露**完全相同的函数签名**，所以项目代码不需要写两套。
 //!
@@ -21,112 +20,45 @@
 //! - 跨边界只传 [`EntityHandle`] 这类 `#[repr(C)]` POD 与字节流，不传引用、
 //!   不传 `&mut World`、不传 trait object。
 
-use prism_ecs::{Component, Entity, World};
+#[cfg(feature = "host")]
+use prism_ecs::World;
+use prism_ecs::{Component, Entity};
+pub use prism_project_api::{EntityHandle, InputSnapshot};
 use prism_reflect::Reflect;
 
-/// 跨 ABI 的实体句柄。
-///
-/// 与 [`prism_ecs::Entity`] 同构，但**不共享类型身份**：插件里的句柄只是
-/// 宿主槽位的编号 + 代数，宿主会重新校验它是否仍然存活。
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub struct EntityHandle {
-    pub id: u32,
-    pub generation: u32,
-}
-
-impl EntityHandle {
-    /// 空句柄；宿主必须拒绝它。
-    pub const PLACEHOLDER: Self = Self {
-        id: u32::MAX,
-        generation: u32::MAX,
-    };
-
-    pub fn from_entity(entity: Entity) -> Self {
-        Self {
-            id: entity.id(),
-            generation: entity.generation(),
-        }
-    }
-
-    pub fn to_entity(self) -> Entity {
-        Entity::from_raw(self.id, self.generation)
-    }
-}
-
-/// 每帧下发给 gameplay 代码的输入快照。
-///
-/// 固定大小、`#[repr(C)]`，可以整块跨 ABI 传。按键用位图而不是 `Vec`，
-/// 避免在边界上处理堆分配与释放责任。
-#[repr(C)]
-#[derive(Clone, Copy, Debug)]
-pub struct InputSnapshot {
-    /// 光标位置（像素，左上原点）。
-    pub cursor: [f32; 2],
-    /// 当前绘图区域尺寸（像素）。
-    pub screen: [f32; 2],
-    pub left_clicked: bool,
-    pub left_held: bool,
-    /// 按键位图：`keys[i / 64] & (1 << (i % 64))`。
-    /// 键位编号由宿主定义（见 `prism-app` 的映射），插件只做查表。
-    pub keys: [u64; Self::KEY_WORDS],
-}
-
-impl Default for InputSnapshot {
-    fn default() -> Self {
-        Self {
-            cursor: [0.0; 2],
-            screen: [0.0; 2],
-            left_clicked: false,
-            left_held: false,
-            keys: [0; Self::KEY_WORDS],
-        }
-    }
-}
-
-impl InputSnapshot {
-    /// 支持的键位数量。
-    pub const KEY_COUNT: usize = 256;
-    const KEY_WORDS: usize = Self::KEY_COUNT / 64;
-
-    pub fn set_key(&mut self, index: usize, down: bool) {
-        if index >= Self::KEY_COUNT {
-            return;
-        }
-        let mask = 1u64 << (index % 64);
-        let word = &mut self.keys[index / 64];
-        if down {
-            *word |= mask;
-        } else {
-            *word &= !mask;
-        }
-    }
-
-    pub fn key(&self, index: usize) -> bool {
-        index < Self::KEY_COUNT && (self.keys[index / 64] & (1u64 << (index % 64))) != 0
-    }
-
-    /// 本帧是否有任意键按下（intro 的「任意键跳过」用它）。
-    pub fn any_key(&self) -> bool {
-        self.keys.iter().any(|word| *word != 0)
-    }
-}
+#[cfg(feature = "plugin")]
+use prism_project_api::{HostApi, SUCCESS};
+#[cfg(feature = "plugin")]
+use prism_reflect::{rtti_bin, TypeRegistry};
 
 /// 一条 2D UI 四边形。
 ///
-/// gameplay 代码不直接改渲染侧的 `UiDrawList`，而是提交这种中性描述，
-/// 由宿主转换。这样插件既不需要链接 `prism-render`，也不用关心批次排序。
+/// 字段与引擎侧的 UI 四边形一致，宿主可以无转换地并入自己的绘制列表；
+/// 插件既不需要链接 `prism-render`，也不用关心批次排序。
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct UiQuad {
     /// `[x, y, width, height]`，屏幕像素、左上原点。
     pub rect: [f32; 4],
-    /// `[u0, v0, u1, v1]`。
-    pub uv: [f32; 4],
     /// RGBA，线性空间。
     pub color: [f32; 4],
-    /// 绘制顺序（越大越靠上）。
-    pub depth: f32,
+    /// 圆角半径（px）。
+    pub border_radius: f32,
+    /// 绘制层级（z-index）。
+    pub layer: i32,
+}
+
+/// 把 ECS 句柄转成跨边界句柄。
+pub fn handle_from_entity(entity: Entity) -> EntityHandle {
+    EntityHandle {
+        id: entity.id(),
+        generation: entity.generation(),
+    }
+}
+
+/// 把跨边界句柄还原成 ECS 句柄（宿主侧使用；插件侧无从构造真实 `Entity`）。
+pub fn entity_from_handle(handle: EntityHandle) -> Entity {
+    Entity::from_raw(handle.id, handle.generation)
 }
 
 /// gameplay 代码看到的世界。
@@ -134,17 +66,41 @@ pub struct UiQuad {
 /// 所有方法都在**宿主的**世界上操作；插件后端会把同样的调用翻译成宿主
 /// 回调，所以调用方无需区分自己是怎么被编译的。
 pub struct GameWorld<'a> {
-    world: &'a mut World,
+    backend: Backend<'a>,
+    /// 仅 host 后端使用：插件后端的输入来自 `HostApi::input`。
+    #[cfg_attr(not(feature = "host"), allow(dead_code))]
     input: InputSnapshot,
+    #[cfg_attr(not(feature = "host"), allow(dead_code))]
     quads: Vec<UiQuad>,
+}
+
+enum Backend<'a> {
+    #[cfg(feature = "host")]
+    Host(&'a mut World),
+    #[cfg(feature = "plugin")]
+    Plugin(PluginBackend<'a>),
 }
 
 impl<'a> GameWorld<'a> {
     /// 直接借用宿主世界（静态 Player / 编辑器宿主内）。
+    #[cfg(feature = "host")]
     pub fn host(world: &'a mut World) -> Self {
         Self {
-            world,
+            backend: Backend::Host(world),
             input: InputSnapshot::default(),
+            quads: Vec::new(),
+        }
+    }
+
+    /// 通过宿主下发的函数表操作宿主世界（动态库内）。
+    ///
+    /// `registry` 只用于把组件编码成 RTTIBin 的类型表；解码端自描述，
+    /// 所以读取路径不需要它。
+    #[cfg(feature = "plugin")]
+    pub fn plugin(api: &'a HostApi, registry: &'a TypeRegistry) -> Self {
+        Self {
+            backend: Backend::Plugin(PluginBackend { api, registry }),
+            input: api.input,
             quads: Vec::new(),
         }
     }
@@ -153,16 +109,23 @@ impl<'a> GameWorld<'a> {
     // 输入
     // ------------------------------------------------------------------
 
-    pub fn input(&self) -> &InputSnapshot {
-        &self.input
+    pub fn input(&self) -> InputSnapshot {
+        match &self.backend {
+            #[cfg(feature = "host")]
+            Backend::Host(_) => self.input,
+            #[cfg(feature = "plugin")]
+            Backend::Plugin(backend) => backend.api.input,
+        }
     }
 
+    /// 仅 host 后端生效：插件后端的输入由宿主每 tick 通过 `HostApi::input` 下发。
+    #[cfg(feature = "host")]
     pub fn set_input(&mut self, input: InputSnapshot) {
         self.input = input;
     }
 
     pub fn screen_size(&self) -> [f32; 2] {
-        self.input.screen
+        self.input().screen
     }
 
     // ------------------------------------------------------------------
@@ -170,23 +133,43 @@ impl<'a> GameWorld<'a> {
     // ------------------------------------------------------------------
 
     pub fn spawn(&mut self) -> EntityHandle {
-        EntityHandle::from_entity(self.world.spawn())
+        match &mut self.backend {
+            #[cfg(feature = "host")]
+            Backend::Host(world) => handle_from_entity(world.spawn()),
+            #[cfg(feature = "plugin")]
+            Backend::Plugin(backend) => backend.spawn(),
+        }
     }
 
     pub fn despawn(&mut self, entity: EntityHandle) {
-        self.world.despawn(entity.to_entity());
+        match &mut self.backend {
+            #[cfg(feature = "host")]
+            Backend::Host(world) => world.despawn(entity_from_handle(entity)),
+            #[cfg(feature = "plugin")]
+            Backend::Plugin(backend) => backend.despawn(entity),
+        }
     }
 
     pub fn is_alive(&self, entity: EntityHandle) -> bool {
-        self.world.is_alive(entity.to_entity())
+        match &self.backend {
+            #[cfg(feature = "host")]
+            Backend::Host(world) => world.is_alive(entity_from_handle(entity)),
+            #[cfg(feature = "plugin")]
+            Backend::Plugin(backend) => backend.is_alive(entity),
+        }
     }
 
-    /// 拥有组件 `T` 的全部实体（`Active` 语义与 `World::query` 一致）。
+    /// 拥有组件 `T` 的全部实体（与宿主 `World::query` 的 `Active` 语义一致）。
     pub fn query<T: Component + Reflect>(&self) -> Vec<EntityHandle> {
-        self.world
-            .query::<T>()
-            .map(|(entity, _)| EntityHandle::from_entity(entity))
-            .collect()
+        match &self.backend {
+            #[cfg(feature = "host")]
+            Backend::Host(world) => world
+                .query::<T>()
+                .map(|(entity, _)| handle_from_entity(entity))
+                .collect(),
+            #[cfg(feature = "plugin")]
+            Backend::Plugin(backend) => backend.query(T::type_desc().name),
+        }
     }
 
     // ------------------------------------------------------------------
@@ -194,22 +177,52 @@ impl<'a> GameWorld<'a> {
     // ------------------------------------------------------------------
 
     pub fn get<T: Component + Reflect + Clone>(&self, entity: EntityHandle) -> Option<T> {
-        self.world.get::<T>(entity.to_entity()).cloned()
+        match &self.backend {
+            #[cfg(feature = "host")]
+            Backend::Host(world) => world.get::<T>(entity_from_handle(entity)).cloned(),
+            #[cfg(feature = "plugin")]
+            Backend::Plugin(backend) => {
+                let bytes = backend.get(entity, T::type_desc().name)?;
+                let decoded = rtti_bin::decode(&bytes).ok()?;
+                T::from_object(decoded.objects.first()?).ok()
+            }
+        }
     }
 
     /// 写入（无则新增）组件。句柄失效时返回 `false`。
     pub fn set<T: Component + Reflect>(&mut self, entity: EntityHandle, value: T) -> bool {
-        let entity = entity.to_entity();
-        if !self.world.is_alive(entity) {
-            return false;
+        match &mut self.backend {
+            #[cfg(feature = "host")]
+            Backend::Host(world) => {
+                let entity = entity_from_handle(entity);
+                if !world.is_alive(entity) {
+                    return false;
+                }
+                world.insert(entity, value);
+                true
+            }
+            #[cfg(feature = "plugin")]
+            Backend::Plugin(backend) => {
+                let object = value.to_object();
+                match rtti_bin::encode_one(&object, backend.registry) {
+                    Ok(bytes) => backend.set(entity, &bytes),
+                    Err(error) => {
+                        log::warn!("game-api: encode `{}` failed: {error}", T::type_desc().name);
+                        false
+                    }
+                }
+            }
         }
-        self.world.insert(entity, value);
-        true
     }
 
     /// 移除组件，返回是否确实存在过。
     pub fn remove<T: Component + Reflect>(&mut self, entity: EntityHandle) -> bool {
-        self.world.remove::<T>(entity.to_entity()).is_some()
+        match &mut self.backend {
+            #[cfg(feature = "host")]
+            Backend::Host(world) => world.remove::<T>(entity_from_handle(entity)).is_some(),
+            #[cfg(feature = "plugin")]
+            Backend::Plugin(backend) => backend.remove(entity, T::type_desc().name),
+        }
     }
 
     // ------------------------------------------------------------------
@@ -217,13 +230,128 @@ impl<'a> GameWorld<'a> {
     // ------------------------------------------------------------------
 
     /// 提交一条 UI 四边形；宿主在 tick 结束后取走并合并进自己的绘制列表。
+    ///
+    /// 仅 host 后端可用：插件侧要等 ABI 增加绘制能力后才会生效。
+    #[cfg(feature = "host")]
     pub fn draw_quad(&mut self, quad: UiQuad) {
         self.quads.push(quad);
     }
 
     /// 取走本帧累积的四边形（宿主侧调用）。
+    #[cfg(feature = "host")]
     pub fn take_quads(&mut self) -> Vec<UiQuad> {
         std::mem::take(&mut self.quads)
+    }
+}
+
+#[cfg(feature = "plugin")]
+struct PluginBackend<'a> {
+    api: &'a HostApi,
+    registry: &'a TypeRegistry,
+}
+
+#[cfg(feature = "plugin")]
+impl PluginBackend<'_> {
+    fn spawn(&self) -> EntityHandle {
+        let Some(spawn) = self.api.spawn_entity else {
+            return EntityHandle::PLACEHOLDER;
+        };
+        let mut out = EntityHandle::PLACEHOLDER;
+        let status = unsafe { spawn(self.api.user_data, &mut out) };
+        if status == SUCCESS {
+            out
+        } else {
+            EntityHandle::PLACEHOLDER
+        }
+    }
+
+    fn despawn(&self, _entity: EntityHandle) {
+        // ABI 尚未提供 despawn：宿主需要在 v4 里补上，见 issue #374。
+        log::debug!("game-api: despawn is not available through the project ABI yet");
+    }
+
+    fn is_alive(&self, entity: EntityHandle) -> bool {
+        // 没有专门的存活查询；用「能否读到组件」无法区分空实体，所以先按
+        // 句柄非空判断。真正的校验由每次读写回传的状态完成。
+        !entity.is_placeholder()
+    }
+
+    fn query(&self, type_name: &str) -> Vec<EntityHandle> {
+        let Some(query) = self.api.query_entities else {
+            return Vec::new();
+        };
+        let name = type_name.as_bytes();
+        let mut count = 0usize;
+        let status = unsafe {
+            query(
+                self.api.user_data,
+                name.as_ptr(),
+                name.len(),
+                std::ptr::null_mut(),
+                0,
+                &mut count,
+            )
+        };
+        if status != SUCCESS || count == 0 {
+            return Vec::new();
+        }
+
+        let mut out = vec![EntityHandle::default(); count];
+        let mut written = 0usize;
+        let status = unsafe {
+            query(
+                self.api.user_data,
+                name.as_ptr(),
+                name.len(),
+                out.as_mut_ptr(),
+                out.len(),
+                &mut written,
+            )
+        };
+        if status != SUCCESS {
+            return Vec::new();
+        }
+        out.truncate(written);
+        out
+    }
+
+    fn get(&self, entity: EntityHandle, type_name: &str) -> Option<Vec<u8>> {
+        let get = self.api.get_component?;
+        let name = type_name.as_bytes();
+        let mut ptr: *const u8 = std::ptr::null();
+        let mut len = 0usize;
+        let status = unsafe {
+            get(
+                self.api.user_data,
+                entity,
+                name.as_ptr(),
+                name.len(),
+                &mut ptr,
+                &mut len,
+            )
+        };
+        if status != SUCCESS || ptr.is_null() {
+            return None;
+        }
+        // 指针只在下一次宿主调用前有效：立刻拷走。
+        Some(unsafe { std::slice::from_raw_parts(ptr, len) }.to_vec())
+    }
+
+    fn set(&self, entity: EntityHandle, bytes: &[u8]) -> bool {
+        let Some(set) = self.api.set_component else {
+            return false;
+        };
+        let status = unsafe { set(self.api.user_data, entity, bytes.as_ptr(), bytes.len()) };
+        status == SUCCESS
+    }
+
+    fn remove(&self, entity: EntityHandle, type_name: &str) -> bool {
+        let Some(remove) = self.api.remove_component else {
+            return false;
+        };
+        let name = type_name.as_bytes();
+        let status = unsafe { remove(self.api.user_data, entity, name.as_ptr(), name.len()) };
+        status == SUCCESS
     }
 }
 
@@ -290,24 +418,33 @@ mod tests {
         assert!(api.take_quads().is_empty());
     }
 
+    #[cfg(feature = "plugin")]
     #[test]
-    fn key_bits_round_trip() {
-        let mut input = InputSnapshot::default();
-        assert!(!input.any_key());
+    fn plugin_backend_reads_and_writes_through_host_callbacks() {
+        use prism_scene::components::Name;
 
-        input.set_key(7, true);
-        input.set_key(200, true);
-        assert!(input.key(7));
-        assert!(input.key(200));
-        assert!(!input.key(8));
-        assert!(input.any_key());
+        let mut components = prism_scene::ComponentRegistry::new();
+        prism_scene::register_builtin_components(&mut components);
 
-        input.set_key(7, false);
-        assert!(!input.key(7));
-        assert!(input.key(200));
+        let mut world = World::new();
+        let mut commands = prism_runtime_host::WorldCommands::new(&mut world, &components, 1);
+        let api = commands.api();
+        let registry = components.type_registry();
 
-        // 越界写入被忽略，不会 panic。
-        input.set_key(usize::MAX, true);
-        assert!(!input.key(usize::MAX));
+        {
+            let mut view = GameWorld::plugin(&api, registry);
+            let entity = view.spawn();
+            assert!(view.set(entity, Name("from_plugin".to_owned())));
+            assert_eq!(view.query::<Name>(), vec![entity]);
+            assert_eq!(
+                view.get::<Name>(entity).map(|name| name.0),
+                Some("from_plugin".to_owned())
+            );
+            assert!(view.remove::<Name>(entity));
+            assert!(view.query::<Name>().is_empty());
+        }
+
+        drop(commands);
+        assert!(world.query::<Name>().next().is_none());
     }
 }
