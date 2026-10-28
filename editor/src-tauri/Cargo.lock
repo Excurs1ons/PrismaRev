@@ -4119,6 +4119,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "prism-project-api"
+version = "0.1.0"
+
+[[package]]
 name = "prism-reflect"
 version = "0.1.0"
 dependencies = [
@@ -4152,6 +4156,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "prism-runtime-host"
+version = "0.1.0"
+dependencies = [
+ "libloading 0.8.9",
+ "log",
+ "prism-project-api",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "prism-scene"
 version = "0.1.0"
 dependencies = [
@@ -4174,6 +4188,7 @@ dependencies = [
  "prism-app",
  "prism-editor-api",
  "prism-engine",
+ "prism-runtime-host",
  "prism-scene",
  "serde",
  "serde_json",

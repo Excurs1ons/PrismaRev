@@ -186,6 +186,9 @@ pub enum ViewportInput {
 }
 
 struct HostState {
+    /// Declared before `app` so Rust drops the project session first. Project
+    /// callbacks must be gone before the engine host is torn down.
+    project_session: Option<prism_runtime_host::ProjectSession>,
     app: App,
     scene_path: PathBuf,
     kind: ViewKind,
@@ -974,7 +977,25 @@ fn viewport_thread(
     rx: Receiver<Job>,
 ) {
     let (width, height) = clamp_extent(width, height);
+    let project_session = if matches!(kind, ViewKind::Game) {
+        match project_module_path(&scene_path).and_then(|path| {
+            prism_runtime_host::ProjectModule::load(path)
+                .map_err(|error| error.to_string())?
+                .start()
+                .map_err(|error| error.to_string())
+        }) {
+            Ok(session) => Some(session),
+            Err(error) => {
+                log::warn!("viewport: project preview module unavailable: {error}");
+                *shared.error.lock().unwrap() = Some(error);
+                None
+            }
+        }
+    } else {
+        None
+    };
     let mut state = HostState {
+        project_session,
         app: App::hosted(prism_engine::config::AppConfig::default()),
         scene_path,
         kind,
@@ -1020,6 +1041,14 @@ fn viewport_thread(
         if shared.active.load(Ordering::Relaxed) {
             state.place_camera();
             let simulate = state.simulate_now();
+            if simulate {
+                if let Some(project) = state.project_session.as_mut() {
+                    if let Err(error) = project.tick(frame_budget.as_secs_f32()) {
+                        log::warn!("viewport: project preview tick failed: {error}");
+                        *shared.error.lock().unwrap() = Some(error.to_string());
+                    }
+                }
+            }
             state.app.host_tick(simulate);
             if let Some(frame) = state.app.take_hosted_frame() {
                 publish_frame(&shared, frame);
@@ -1045,6 +1074,35 @@ fn viewport_thread(
 
     log::info!("viewport: shutting down ({:?})", state.kind);
     state.app.shutdown_hosted();
+}
+
+fn project_module_path(scene_path: &Path) -> Result<PathBuf, String> {
+    if let Some(path) = std::env::var_os("PRISMREV_PROJECT_MODULE") {
+        let path = PathBuf::from(path);
+        return path
+            .is_file()
+            .then_some(path.clone())
+            .ok_or_else(|| format!("PRISMREV_PROJECT_MODULE 不存在: {}", path.display()));
+    }
+    let root = scene_path
+        .ancestors()
+        .find(|path| path.join("projects").is_dir())
+        .ok_or_else(|| "无法从预览场景定位仓库根目录".to_string())?;
+    let library = if cfg!(target_os = "windows") {
+        "prisma.dll"
+    } else if cfg!(target_os = "macos") {
+        "libprisma.dylib"
+    } else {
+        "libprisma.so"
+    };
+    let path = root
+        .join("projects")
+        .join("prisma")
+        .join("target/debug")
+        .join(library);
+    path.is_file()
+        .then_some(path.clone())
+        .ok_or_else(|| format!("项目预览模块不存在: {}", path.display()))
 }
 
 fn publish_frame(shared: &Shared, frame: prism_app::FrameImage) {

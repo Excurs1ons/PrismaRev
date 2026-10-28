@@ -24,6 +24,64 @@ pub fn build_app() -> prism_app::App {
     app
 }
 
+/// Same-build desktop preview module entry point.
+#[cfg(not(target_os = "android"))]
+#[no_mangle]
+pub unsafe extern "C" fn prism_project_get_api(out: *mut prism_project_api::ProjectApi) -> i32 {
+    if out.is_null() {
+        return prism_project_api::INVALID_ARGUMENT;
+    }
+    *out = prism_project_api::ProjectApi {
+        abi_version: prism_project_api::ABI_VERSION,
+        create: Some(preview_create),
+        tick: Some(preview_tick),
+        shutdown: Some(preview_shutdown),
+    };
+    prism_project_api::SUCCESS
+}
+
+#[cfg(not(target_os = "android"))]
+struct PreviewState {
+    ticks: u64,
+}
+
+#[cfg(not(target_os = "android"))]
+unsafe extern "C" fn preview_create(
+    host: *const prism_project_api::HostApi,
+    out: *mut *mut std::ffi::c_void,
+) -> i32 {
+    if host.is_null() || out.is_null() {
+        return prism_project_api::INVALID_ARGUMENT;
+    }
+    let host = unsafe { &*host };
+    if host.abi_version != prism_project_api::ABI_VERSION {
+        return prism_project_api::INVALID_ARGUMENT;
+    }
+    let state = Box::new(PreviewState { ticks: 0 });
+    unsafe { *out = Box::into_raw(state).cast() };
+    if let Some(log) = host.log {
+        let message = b"Prisma project preview started";
+        unsafe { log(host.user_data, 3, message.as_ptr(), message.len()) };
+    }
+    prism_project_api::SUCCESS
+}
+
+#[cfg(not(target_os = "android"))]
+unsafe extern "C" fn preview_tick(state: *mut std::ffi::c_void, _dt: f32) -> i32 {
+    let Some(state) = (unsafe { state.cast::<PreviewState>().as_mut() }) else {
+        return prism_project_api::INVALID_ARGUMENT;
+    };
+    state.ticks = state.ticks.saturating_add(1);
+    prism_project_api::SUCCESS
+}
+
+#[cfg(not(target_os = "android"))]
+unsafe extern "C" fn preview_shutdown(state: *mut std::ffi::c_void) {
+    if !state.is_null() {
+        drop(unsafe { Box::from_raw(state.cast::<PreviewState>()) });
+    }
+}
+
 // ===========================================================================
 // Android JNI entry point
 // ===========================================================================
