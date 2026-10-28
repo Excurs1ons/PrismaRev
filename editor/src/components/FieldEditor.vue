@@ -2,6 +2,7 @@
 import { computed, inject, ref } from "vue";
 import { Minus, Plus } from "lucide-vue-next";
 import ColorField from "./ColorField.vue";
+import EditorDropdown, { type DropdownOption } from "./EditorDropdown.vue";
 import NumberField from "./NumberField.vue";
 import { ASSETS_KEY, ASSET_PICKER_KEY } from "../keys";
 import { isColorField } from "../format";
@@ -58,6 +59,13 @@ const kind = computed(() => kindOf(props.value));
 const isFixedArray = computed(() => hint.value?.kind === "array");
 const pathStr = computed(() => props.path ?? "");
 
+const AXIS_LABELS = ["X", "Y", "Z", "W"];
+const isNumericVector = computed(() => {
+  if (kind.value !== "array") return false;
+  const arr = asArray.value;
+  return arr.length >= 2 && arr.length <= 4 && arr.every((v) => typeof v === "number");
+});
+
 const isInteger = computed(() =>
   ["i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64"].includes(leafHint.value?.kind ?? ""),
 );
@@ -73,6 +81,9 @@ const isColor = computed(() => isColorField(hint.value?.name, props.value));
  * `Option<Enum>` 则通过 `leafHint` 命中。
  */
 const enumOptions = computed(() => leafHint.value?.variants ?? null);
+const enumDropdownOptions = computed<DropdownOption[]>(() =>
+  (enumOptions.value ?? []).map((opt) => ({ value: opt, label: opt })),
+);
 
 // —— 字段绘制器 = Unity `PropertyDrawer` / `PropertyAttribute` ——
 // 后端 schema 用声明式 DTO 说明「这个字段该用滑动条 / 多行框 / 取色盘」，
@@ -370,8 +381,103 @@ function onRange(event: Event) {
 function onBool(event: Event) {
   set((event.target as HTMLInputElement).checked);
 }
-function onSelect(event: Event) {
-  set((event.target as HTMLSelectElement).value);
+
+function onAxisPointerDown(i: number, event: PointerEvent) {
+  if (hint.value?.readOnly || event.button !== 0) return;
+  const target = event.currentTarget as HTMLElement;
+  target.setPointerCapture(event.pointerId);
+
+  const startX = event.clientX;
+  const startVal = Number(asArray.value[i] ?? 0);
+  const step = isInteger.value ? 1 : 0.01;
+  let didMove = false;
+
+  const onPointerMove = (ev: PointerEvent) => {
+    const dx = ev.clientX - startX;
+    if (!didMove) {
+      if (Math.abs(dx) < 2) return;
+      didMove = true;
+      document.body.style.cursor = "ew-resize";
+      document.body.style.userSelect = "none";
+    }
+    const mult = ev.shiftKey ? 10 : ev.altKey ? 0.1 : 1;
+    const next = isInteger.value
+      ? Math.round(startVal + dx * step * mult)
+      : Math.round((startVal + dx * step * mult) * 1e6) / 1e6;
+    setItem(i, next, itemPath(i));
+  };
+
+  const onPointerUp = (ev: PointerEvent) => {
+    try {
+      target.releasePointerCapture(ev.pointerId);
+    } catch {}
+    window.removeEventListener("pointermove", onPointerMove);
+    window.removeEventListener("pointerup", onPointerUp);
+    window.removeEventListener("pointercancel", onPointerUp);
+    document.body.style.cursor = "";
+    document.body.style.userSelect = "";
+
+    if (!didMove) {
+      const cell = target.closest(".vector-cell");
+      const inp = cell?.querySelector("input");
+      inp?.focus();
+      inp?.select();
+    }
+  };
+
+  window.addEventListener("pointermove", onPointerMove);
+  window.addEventListener("pointerup", onPointerUp);
+  window.addEventListener("pointercancel", onPointerUp);
+}
+
+function onScalarLabelPointerDown(event: PointerEvent) {
+  if (hint.value?.readOnly || event.button !== 0 || typeof props.value !== "number") return;
+  const target = event.currentTarget as HTMLElement;
+  target.setPointerCapture(event.pointerId);
+
+  const startX = event.clientX;
+  const startVal = props.value;
+  const step = isInteger.value ? 1 : 0.01;
+  let didMove = false;
+
+  const onPointerMove = (ev: PointerEvent) => {
+    const dx = ev.clientX - startX;
+    if (!didMove) {
+      if (Math.abs(dx) < 2) return;
+      didMove = true;
+      document.body.style.cursor = "ew-resize";
+      document.body.style.userSelect = "none";
+    }
+    const mult = ev.shiftKey ? 10 : ev.altKey ? 0.1 : 1;
+    let next = isInteger.value
+      ? Math.round(startVal + dx * step * mult)
+      : Math.round((startVal + dx * step * mult) * 1e6) / 1e6;
+    if (numberBounds.value?.min !== undefined && next < numberBounds.value.min) next = numberBounds.value.min;
+    if (numberBounds.value?.max !== undefined && next > numberBounds.value.max) next = numberBounds.value.max;
+    set(next);
+  };
+
+  const onPointerUp = (ev: PointerEvent) => {
+    try {
+      target.releasePointerCapture(ev.pointerId);
+    } catch {}
+    window.removeEventListener("pointermove", onPointerMove);
+    window.removeEventListener("pointerup", onPointerUp);
+    window.removeEventListener("pointercancel", onPointerUp);
+    document.body.style.cursor = "";
+    document.body.style.userSelect = "";
+
+    if (!didMove) {
+      const row = target.closest(".row");
+      const inp = row?.querySelector("input");
+      inp?.focus();
+      inp?.select();
+    }
+  };
+
+  window.addEventListener("pointermove", onPointerMove);
+  window.addEventListener("pointerup", onPointerUp);
+  window.addEventListener("pointercancel", onPointerUp);
 }
 </script>
 
@@ -382,16 +488,13 @@ function onSelect(event: Event) {
   <!-- 对象：按 JSON 的键渲染，schema 提供字段类型/只读/嵌套类型 -->
   <div v-if="kind === 'object'">
     <div
+      v-if="label"
       class="row"
-      :class="{ 'no-label': !label }"
       :data-field="pathStr"
       :data-drawer="drawer?.renderer"
     >
-      <div v-if="label" class="label" :title="tooltip ?? undefined">
-        {{ label }}<span v-if="hint?.readOnly" class="ro"> ·只读</span>
-      </div>
-      <div class="hint">
-        {{ structFields.length ? "结构体" : "对象" }} · {{ objectEntries.length }} 字段
+      <div class="label" :title="tooltip ?? `${structFields.length ? 'Struct' : 'Object'}: ${objectEntries.length}`">
+        {{ label }}<span v-if="hint?.readOnly" class="ro"> {{ $t("field.readOnly") }}</span>
       </div>
     </div>
     <div class="nested">
@@ -413,11 +516,11 @@ function onSelect(event: Event) {
             :disabled="f.readOnly"
             @click="setOp({ ...asObject, [f.name]: defaultFor(f) })"
           >
-            + 添加
+            + {{ $t("field.add") }}
           </button>
         </div>
       </div>
-      <div v-if="!objectEntries.length && !missingKeys.length" class="hint">（空）</div>
+      <div v-if="!objectEntries.length && !missingKeys.length" class="hint">{{ $t("field.empty") }}</div>
     </div>
   </div>
 
@@ -430,7 +533,7 @@ function onSelect(event: Event) {
       :data-drawer="drawer?.renderer"
     >
       <div v-if="label" class="label" :title="tooltip ?? undefined">
-        {{ label }}<span v-if="hint?.readOnly" class="ro"> ·只读</span>
+        {{ label }}<span v-if="hint?.readOnly" class="ro"> {{ $t("field.readOnly") }}</span>
       </div>
       <ColorField
         :model-value="(value as number[])"
@@ -438,6 +541,38 @@ function onSelect(event: Event) {
         :show-alpha="showAlpha"
         @update:model-value="(v) => set(v)"
       />
+    </div>
+  </div>
+
+  <!-- 单行多分量数值向量 (Vector2 / Vector3 / Vector4) -->
+  <div v-else-if="isNumericVector">
+    <div
+      class="row"
+      :class="{ 'no-label': !label }"
+      :data-field="pathStr"
+      :data-drawer="drawer?.renderer"
+    >
+      <div v-if="label" class="label" :title="tooltip ?? undefined">
+        {{ label }}<span v-if="hint?.readOnly" class="ro"> {{ $t("field.readOnly") }}</span>
+      </div>
+      <div class="vector-group">
+        <div v-for="(item, i) in asArray" :key="i" class="vector-cell">
+          <span
+            class="axis-badge"
+            :class="`axis-${AXIS_LABELS[i].toLowerCase()}`"
+            :title="`左右拖动调节 ${AXIS_LABELS[i]}（Shift 10x 快速 / Alt 0.1x 精调）`"
+            @pointerdown="onAxisPointerDown(i, $event)"
+          >
+            {{ AXIS_LABELS[i] }}
+          </span>
+          <NumberField
+            :model-value="(item as number)"
+            :integer="isInteger"
+            :disabled="hint?.readOnly"
+            @update:model-value="(v) => setItem(i, v, itemPath(i))"
+          />
+        </div>
+      </div>
     </div>
   </div>
 
@@ -450,10 +585,10 @@ function onSelect(event: Event) {
       :data-drawer="drawer?.renderer"
     >
       <div v-if="label" class="label" :title="tooltip ?? undefined">
-        {{ label }}<span v-if="hint?.readOnly" class="ro"> ·只读</span>
+        {{ label }}<span v-if="hint?.readOnly" class="ro"> {{ $t("field.readOnly") }}</span>
       </div>
-      <div class="hint">
-        {{ isFixedArray ? `定长 ${hint?.arrayLen ?? "?"} · ${asArray.length} 项` : `列表 · ${asArray.length} 项` }}
+      <div class="label" style="text-align: right; font-size: 10px; color: var(--muted)">
+        [{{ asArray.length }}]
       </div>
     </div>
     <div class="nested">
@@ -470,14 +605,14 @@ function onSelect(event: Event) {
           v-if="!isFixedArray"
           class="ghost icon"
           :disabled="hint?.readOnly"
-          title="删除"
+          :title="$t('field.remove')"
           @click="removeItem(i)"
         >
-          <Minus :size="13" />
+          <Minus :size="12" />
         </button>
       </div>
       <button v-if="!isFixedArray" class="ghost" :disabled="hint?.readOnly" @click="addItem">
-        <Plus :size="13" /> 元素
+        <Plus :size="12" /> {{ $t("field.addElement") }}
       </button>
     </div>
   </div>
@@ -490,8 +625,14 @@ function onSelect(event: Event) {
     :data-field="pathStr"
     :data-drawer="drawer?.renderer"
   >
-    <div v-if="label" class="label" :title="tooltip ?? undefined">
-      {{ label }}<span v-if="hint?.readOnly" class="ro"> ·只读</span
+    <div
+      v-if="label"
+      class="label"
+      :class="{ 'label-scrubbable': kind === 'number' && !hint?.readOnly }"
+      :title="tooltip ?? (kind === 'number' && !hint?.readOnly ? `左右拖动调节 ${label}（Shift 10x 快速 / Alt 0.1x 精调）` : undefined)"
+      @pointerdown="kind === 'number' && !hint?.readOnly ? onScalarLabelPointerDown($event) : undefined"
+    >
+      {{ label }}<span v-if="hint?.readOnly" class="ro"> {{ $t("field.readOnly") }}</span
       ><span v-if="customRenderer" class="ro"> ·{{ customRenderer }}</span>
     </div>
     <div
@@ -537,16 +678,14 @@ function onSelect(event: Event) {
         :disabled="hint?.readOnly"
         @update:model-value="(v) => set(v)"
       />
-      <select
+      <EditorDropdown
         v-else-if="enumOptions"
-        :value="String(value)"
+        :model-value="String(value)"
+        :options="enumDropdownOptions"
         :disabled="hint?.readOnly"
-        @change="onSelect"
-      >
-        <option v-for="option in enumOptions" :key="option" :value="option">
-          {{ option }}
-        </option>
-      </select>
+        block
+        @update:model-value="(v) => set(v, undefined, true)"
+      />
       <textarea
         v-else-if="kind === 'string' && textAreaBounds"
         :rows="dynamicTextAreaRows"
@@ -571,7 +710,7 @@ function onSelect(event: Event) {
           v-if="showAssetPicker"
           class="ghost icon"
           :disabled="hint?.readOnly"
-          title="资产管理器"
+          :title="$t('field.assetPicker')"
           @click="pickAsset"
         >
           …
@@ -581,8 +720,8 @@ function onSelect(event: Event) {
         </datalist>
       </template>
       <template v-else>
-        <span class="hint">null</span>
-        <button class="ghost icon" :disabled="hint?.readOnly" @click="initFromNull">设置</button>
+        <span class="hint">{{ $t("field.nullValue") }}</span>
+        <button class="ghost icon" :disabled="hint?.readOnly" @click="initFromNull">{{ $t("field.set") }}</button>
       </template>
     </div>
   </div>

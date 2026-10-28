@@ -1,48 +1,63 @@
 :root {
   color-scheme: dark;
-  /* 默认值 = 「深空蓝」预设；运行时由 editor/src/theme.ts 覆盖（主题面板可改）。 */
-  --bg: #0b0e14;
-  --bg-sunken: #0d1119;
-  --panel: #121722;
-  --panel-alt: #171d2b;
-  --panel-raised: #1d2027;
-  --chrome: #181a1f;
-  --border: #232b3d;
-  --border-strong: #333843;
-  --border-subtle: #2a2d35;
-  --text: #e6ebf5;
+  /* 默认 Unity 暗色调；运行时由 editor/src/theme.ts 覆盖 */
+  --bg: #1c1c1c;
+  --bg-sunken: #181818;
+  --panel: #282828;
+  --panel-alt: #303030;
+  --panel-raised: #383838;
+  --chrome: #222222;
+  --border: #1a1a1a;
+  --border-strong: #353535;
+  --border-subtle: #242424;
+  --text: #c4c4c4;
   --text-strong: #ffffff;
-  --text-soft: #cfd8ea;
-  --muted: #8b96ad;
-  --muted-dim: #7f8a9e;
-  --row-hover: #171d2b;
-  --menu-hover: #242832;
-  --menu-active: #2a3242;
-  --selection: #1b2333;
-  --accent: #6ea8ff;
-  --accent-solid: #2d68c4;
+  --text-soft: #ababab;
+  --muted: #767676;
+  --muted-dim: #585858;
+  --row-hover: #303030;
+  --menu-hover: #3a3a3a;
+  --menu-active: #2c5d88;
+  --selection: #2c5d88;
+  --accent: #3a75c4;
+  --accent-solid: #2c5d88;
   --on-accent: #ffffff;
-  --accent-ink: #06121f;
-  --accent-alt: #5ff0d8;
-  --success: #4fbf87;
+  --accent-ink: #0a1420;
+  --accent-alt: #569cd6;
+  --success: #4ec9b0;
   --success-soft: #8fe0b0;
   --success-bg: #255f3b;
   --success-border: #2f7a4b;
-  --danger: #ff6b6b;
-  --danger-soft: #ffb4b4;
-  --danger-bg: #6a2a2f;
-  --danger-bg-subtle: #2a1b1f;
-  --danger-solid: #8d3038;
-  --danger-border: #934049;
-  --on-danger: #ffe4e6;
-  --warning: #ffcf6b;
-  --warning-strong: #e0a84c;
-  --warning-border: #7a652f;
-  --panic: #ff7ad9;
+  --danger: #f44747;
+  --danger-soft: #ff8b8b;
+  --danger-bg: #602428;
+  --danger-bg-subtle: #30181a;
+  --danger-solid: #8d2828;
+  --danger-border: #983030;
+  --on-danger: #ffffff;
+  --warning: #dcdcaa;
+  --warning-strong: #d7ba7d;
+  --warning-border: #685830;
+  --panic: #f44747;
 }
 
 * {
   box-sizing: border-box;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.16);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.28);
 }
 
 html,
@@ -53,66 +68,104 @@ body,
 }
 
 body {
-  font-family: "Inter", -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
-  font-size: 13px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-size: 11px;
   background: var(--bg);
   color: var(--text);
+  line-height: 1.35;
+  user-select: none;
 }
 
 button {
   font: inherit;
+  font-size: 11px;
   color: var(--text);
-  background: var(--panel-alt);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 5px 10px;
+  background: var(--panel-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: 2px;
+  padding: 1px 7px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
   cursor: pointer;
+  box-shadow: none;
+  transition: background 0.08s ease, border-color 0.08s ease;
+  user-select: none;
+  white-space: nowrap;
 }
 button:hover:not(:disabled) {
-  border-color: var(--accent);
+  background: #444444;
+  border-color: #555555;
+  color: var(--text-strong);
+}
+button:active:not(:disabled) {
+  background: #252525;
 }
 button:disabled {
   opacity: 0.45;
   cursor: not-allowed;
 }
 button.primary {
-  background: linear-gradient(120deg, var(--accent-solid), var(--accent-alt));
-  border-color: transparent;
-  color: var(--accent-ink);
-  font-weight: 600;
+  background: var(--accent);
+  border-color: #2b5c9c;
+  color: #ffffff;
+  font-weight: 500;
+}
+button.primary:hover:not(:disabled) {
+  background: #4b88dc;
+  border-color: #3b70b8;
 }
 button.ghost {
   background: transparent;
+  border-color: transparent;
+}
+button.ghost:hover:not(:disabled) {
+  background: var(--row-hover);
+  border-color: var(--border-subtle);
 }
 button.icon {
-  padding: 2px 7px;
-  line-height: 1.2;
+  padding: 0;
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
 }
 
 input,
 select,
 textarea {
   font: inherit;
-  color: var(--text);
+  font-size: 11px;
+  color: var(--text-strong);
   background: var(--bg-sunken);
   border: 1px solid var(--border);
-  border-radius: 5px;
-  padding: 4px 7px;
+  border-radius: 2px;
+  padding: 1px 5px;
+  height: 20px;
   width: 100%;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.35);
+  transition: border-color 0.08s ease;
 }
 input[type="checkbox"] {
-  width: auto;
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  padding: 0;
+  cursor: pointer;
+  accent-color: var(--accent);
 }
 input:focus,
 select:focus,
 textarea:focus {
   outline: none;
   border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
 }
 input:disabled,
 select:disabled,
 textarea:disabled {
-  opacity: 0.55;
+  opacity: 0.45;
 }
 
 .app {
@@ -121,18 +174,18 @@ textarea:disabled {
   height: 100%;
 }
 
-/* ── 顶部菜单栏（UE / Unity 风格） ─────────────────────────────────────── */
+/* ── 顶部菜单栏（Unity 风格） ─────────────────────────────────────── */
 
 .menubar {
   position: relative;
   z-index: 9650;
   display: flex;
   align-items: center;
-  gap: 10px;
-  height: 34px;
-  padding: 0 10px;
+  gap: 2px;
+  height: 22px;
+  padding: 0 4px;
   background: var(--chrome);
-  border-bottom: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--border);
   flex: 0 0 auto;
   user-select: none;
 }
@@ -145,12 +198,13 @@ textarea:disabled {
   position: relative;
 }
 .menu-trigger {
-  padding: 4px 9px;
-  font-size: 12px;
+  padding: 1px 7px;
+  height: 20px;
+  font-size: 11px;
   color: var(--text-soft);
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 4px;
+  border-radius: 2px;
   outline: none;
 }
 .menu-trigger:hover {
@@ -164,28 +218,29 @@ textarea:disabled {
 }
 .menu-popup {
   position: absolute;
-  top: calc(100% + 5px);
+  top: 100%;
   left: 0;
   z-index: 9660;
-  min-width: 224px;
-  padding: 5px;
+  min-width: 200px;
+  padding: 3px;
   background: var(--panel-raised);
   border: 1px solid var(--border-strong);
-  border-radius: 6px;
-  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.55);
+  border-radius: 3px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.55);
 }
 .menu-item {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   width: 100%;
-  padding: 5px 8px;
-  font-size: 12px;
+  padding: 3px 8px;
+  height: 22px;
+  font-size: 11px;
   color: var(--text);
   text-align: left;
   background: transparent;
   border: none;
-  border-radius: 4px;
+  border-radius: 2px;
 }
 .menu-item:hover:not(:disabled) {
   background: var(--accent-solid);
@@ -204,8 +259,8 @@ textarea:disabled {
   white-space: nowrap;
 }
 .menu-shortcut {
-  margin-left: 24px;
-  font-size: 11px;
+  margin-left: 20px;
+  font-size: 10px;
   color: var(--muted-dim);
 }
 .menu-item:hover:not(:disabled) .menu-shortcut {
@@ -216,7 +271,7 @@ textarea:disabled {
 }
 .menu-submenu-arrow {
   display: inline-flex;
-  margin-left: 18px;
+  margin-left: 14px;
   line-height: 1;
   color: var(--muted-dim);
 }
@@ -225,10 +280,10 @@ textarea:disabled {
   background: var(--accent-solid);
 }
 .menu-submenu > .menu-submenu-popup {
-  top: -6px;
+  top: -4px;
   left: calc(100% - 2px);
   display: none;
-  min-width: 190px;
+  min-width: 180px;
 }
 .menu-submenu:hover > .menu-submenu-popup,
 .menu-submenu:focus-within > .menu-submenu-popup {
@@ -236,7 +291,7 @@ textarea:disabled {
 }
 .menu-separator {
   height: 1px;
-  margin: 4px 6px;
+  margin: 3px 4px;
   background: var(--border-strong);
 }
 .menu-backdrop {
@@ -244,39 +299,93 @@ textarea:disabled {
   inset: 0;
   z-index: 9600;
 }
-/* ── 主工具栏 ──────────────────────────────────────────────────────────── */
+
+/* ── 主工具栏（Unity 经典三段对称式） ─────────────────────────────────── */
 
 .main-toolbar {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 6px;
-  min-height: 40px;
-  padding: 5px 10px;
-  background: var(--panel-raised);
-  border-bottom: 1px solid var(--border-subtle);
+  justify-content: space-between;
+  height: 32px;
+  min-height: 32px;
+  padding: 0 8px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
   flex: 0 0 auto;
 }
-.tool-group {
+.toolbar-section {
   display: flex;
   align-items: center;
+  gap: 6px;
+}
+.toolbar-left {
+  flex: 1;
+  justify-content: flex-start;
+}
+.toolbar-center {
+  flex: 0 0 auto;
+  justify-content: center;
+}
+.toolbar-right {
+  flex: 1;
+  justify-content: flex-end;
+}
+
+/* 分段按钮组 (Segmented Tool Groups) */
+.segmented-group {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 2px;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-sunken);
+}
+.segmented-btn {
+  height: 22px;
+  padding: 0 8px;
+  font-size: 11px;
+  border: none;
+  border-right: 1px solid var(--border-strong);
+  border-radius: 0;
+  background: var(--panel-raised);
+  color: var(--text);
   gap: 4px;
 }
-.tool-spacer {
-  flex: 1 1 auto;
+.segmented-btn:last-child {
+  border-right: none;
 }
+.segmented-btn:hover:not(:disabled) {
+  background: #444444;
+  color: #ffffff;
+}
+.segmented-btn.active {
+  background: #2c5d88;
+  color: #ffffff;
+}
+.segmented-btn.play-btn.running {
+  background: #2c5d88;
+  color: #ffffff;
+}
+.segmented-btn.pause-btn.paused {
+  background: #7a5818;
+  color: #ffffff;
+}
+
 .tool-select {
   width: auto;
-  height: 26px;
-  padding: 2px 8px;
-  font-size: 12px;
-  background: var(--panel-alt);
+  height: 22px;
+  padding: 1px 6px;
+  font-size: 11px;
+  background: var(--bg-sunken);
   border: 1px solid var(--border-strong);
-  border-radius: 4px;
+  border-radius: 2px;
 }
 .scene-select {
-  min-width: 110px;
-  max-width: 160px;
+  min-width: 100px;
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .tool-glyph {
   display: inline-flex;
@@ -597,31 +706,57 @@ textarea:disabled {
 .list-item {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 5px 8px;
-  border-radius: 5px;
+  gap: 4px;
+  padding: 1px 6px;
+  height: 20px;
+  border-radius: 2px;
   cursor: pointer;
   border: 1px solid transparent;
+  font-size: 11px;
 }
 .list-item:hover {
   background: var(--row-hover);
 }
 html.compact .list-item {
-  padding-top: 3px;
-  padding-bottom: 3px;
+  height: 18px;
+  padding-top: 0;
+  padding-bottom: 0;
 }
 html.compact .dock-tab {
-  padding-top: 3px;
-  padding-bottom: 3px;
+  padding-top: 2px;
+  padding-bottom: 2px;
 }
 .list-item.active {
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-  border-color: color-mix(in srgb, var(--accent) 50%, transparent);
+  background: var(--selection);
+  border-color: transparent;
+  color: #ffffff;
+}
+.list-item.active .label,
+.list-item.active .muted {
+  color: #ffffff;
 }
 .list-item.inactive .label,
 .list-item.inactive > .muted {
   color: var(--muted-dim);
   text-decoration: line-through;
+}
+.scene-root-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 6px;
+  background: var(--panel-raised);
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+  font-size: 11px;
+  color: var(--text-strong);
+  user-select: none;
+}
+.scene-dirty-star {
+  color: var(--accent-alt);
+  font-size: 13px;
+  line-height: 1;
 }
 .visibility-toggle {
   display: inline-flex;
@@ -656,35 +791,131 @@ html.compact .dock-tab {
 
 .editor-pane {
   flex: 1 1 auto;
-  overflow: auto;
-  padding: 12px 16px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 0;
   min-width: 0;
+  background: var(--panel);
 }
+
+/* ── Unity 风格组件容器 ────────────────────────────────────────── */
 
 .card {
   background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  margin-bottom: 12px;
-  overflow: hidden;
+  border-top: 1px solid var(--border-strong);
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  margin-bottom: 2px;
+  overflow: visible;
+}
+.card:first-child {
+  border-top: none;
 }
 .card > header {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 7px 10px;
-  background: var(--panel-alt);
+  gap: 6px;
+  padding: 2px 8px;
+  height: 22px;
+  background: var(--panel-raised);
   border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  user-select: none;
+}
+.card > header:hover {
+  background: #3c3c3c;
 }
 .card > header .title {
   font-weight: 600;
+  font-size: 11px;
+  color: var(--text-strong);
+}
+.card > header .foldout-icon {
+  display: inline-flex;
+  color: var(--muted);
+  cursor: pointer;
 }
 .card > header .spacer {
   flex: 1;
 }
-.card-body {
-  padding: 8px 10px;
+.card > header .menu-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  color: var(--muted);
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  border-radius: 2px;
 }
+.card > header .menu-icon-btn:hover {
+  background: var(--row-hover);
+  color: var(--text-strong);
+}
+.card-body {
+  padding: 4px 10px 6px;
+}
+
+/* ── 顶部 GameObject Header ───────────────────────────────────────── */
+
+.gameobject-header {
+  background: var(--panel);
+  border-bottom: 1px solid var(--border-strong);
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.gameobject-row-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.gameobject-row-top .entity-active-check {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+.gameobject-row-top .entity-name-input {
+  flex: 1 1 auto;
+  height: 22px;
+  font-weight: 600;
+  font-size: 12px;
+}
+.gameobject-row-top .static-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-soft);
+  flex-shrink: 0;
+}
+.gameobject-row-bottom {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.tag-layer-cell {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.tag-layer-cell .sub-label {
+  font-size: 10px;
+  color: var(--muted);
+  width: 34px;
+  flex-shrink: 0;
+}
+.tag-layer-cell select {
+  height: 19px;
+  font-size: 10px;
+  flex: 1 1 auto;
+}
+
+/* ── 属性面板网格与字段布局 ────────────────────────────────────────── */
 
 .spacer {
   flex: 1 1 auto;
@@ -692,41 +923,164 @@ html.compact .dock-tab {
 
 .row {
   display: grid;
-  grid-template-columns: 170px 1fr;
-  gap: 8px;
+  grid-template-columns: 115px 1fr;
+  gap: 4px;
   align-items: center;
-  padding: 3px 0;
+  min-height: 20px;
+  padding: 1px 0;
 }
 .row.no-label {
   grid-template-columns: 1fr;
 }
 .row > .label {
-  color: var(--muted);
+  color: var(--text-soft);
+  font-size: 11px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  cursor: default;
+}
+.row > .label.label-scrubbable {
+  cursor: ew-resize;
+  user-select: none;
+  transition: color 0.1s;
+}
+.row > .label.label-scrubbable:hover {
+  color: var(--accent, #388bfd);
 }
 .row > .label .ro {
   font-size: 10px;
-  opacity: 0.7;
+  opacity: 0.65;
+  color: var(--muted);
 }
+
+/* 单行多分量向量 (Vector2 / Vector3 / Vector4) */
+.vector-group {
+  display: flex;
+  gap: 4px;
+  width: 100%;
+}
+.vector-cell {
+  display: flex;
+  align-items: center;
+  flex: 1 1 0;
+  min-width: 0;
+  position: relative;
+}
+.axis-badge {
+  position: absolute;
+  left: 2px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 14px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 700;
+  cursor: ew-resize;
+  pointer-events: auto;
+  z-index: 3;
+  user-select: none;
+  border-radius: 2px;
+  transition: background 0.1s;
+}
+.axis-badge:hover {
+  background: var(--hover-bg, rgba(255, 255, 255, 0.12));
+}
+.axis-badge.axis-x { color: #e06c75; }
+.axis-badge.axis-y { color: #98c379; }
+.axis-badge.axis-z { color: #61afef; }
+.axis-badge.axis-w { color: #c678dd; }
+.vector-cell input {
+  padding-left: 15px;
+  height: 20px;
+}
+
 .nested {
-  border-left: 1px solid var(--border);
-  margin-left: 4px;
-  padding-left: 10px;
+  border-left: 1px solid var(--border-strong);
+  margin-left: 6px;
+  padding-left: 8px;
 }
 .array-row {
   display: flex;
-  gap: 6px;
+  gap: 4px;
   align-items: center;
-  padding: 2px 0;
+  padding: 1px 0;
 }
 .array-row .idx {
   color: var(--muted);
-  width: 42px;
+  width: 32px;
   flex: 0 0 auto;
-  font-size: 11px;
+  font-size: 10px;
 }
+
+/* ── Unity 风格添加组件按钮与弹出层 ──────────────────────────────────── */
+
+.add-component-container {
+  display: flex;
+  justify-content: center;
+  padding: 14px 10px 24px;
+  position: relative;
+}
+.add-component-button {
+  height: 24px;
+  width: 200px;
+  background: var(--panel-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-strong);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+.add-component-button:hover:not(:disabled) {
+  background: #444444;
+  border-color: #555555;
+}
+.add-component-popup {
+  position: absolute;
+  bottom: 44px;
+  width: 250px;
+  max-height: 280px;
+  background: var(--panel-alt);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.55);
+  display: flex;
+  flex-direction: column;
+  z-index: 9900;
+  overflow: hidden;
+}
+.add-component-filter {
+  padding: 5px;
+  border-bottom: 1px solid var(--border);
+  background: var(--chrome);
+}
+.add-component-filter input {
+  height: 22px;
+  padding: 2px 6px;
+}
+.add-component-list {
+  overflow-y: auto;
+  max-height: 220px;
+  padding: 2px 0;
+}
+.add-component-item {
+  padding: 4px 8px;
+  font-size: 11px;
+  color: var(--text);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.add-component-item:hover {
+  background: var(--accent);
+  color: #ffffff;
+}
+
 .hint {
   color: var(--muted);
   font-size: 11px;
@@ -1035,6 +1389,45 @@ html.compact .dock-tab {
   height: 24px;
   padding: 1px 6px;
   font-size: 11px;
+}
+.log-counts-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  background: var(--bg-sunken, #181818);
+  border: 1px solid var(--border-strong, #333333);
+  border-radius: 3px;
+  padding: 1px;
+}
+.log-count-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 6px;
+  font-size: 11px;
+  background: transparent;
+  border: none;
+  border-radius: 2px;
+  color: var(--text-muted, #888888);
+  cursor: pointer;
+}
+.log-count-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-strong, #ffffff);
+}
+.log-count-btn.active {
+  background: rgba(255, 255, 255, 0.15);
+  color: #ffffff;
+}
+.log-count-btn.info-count svg {
+  color: var(--accent-alt, #569cd6);
+}
+.log-count-btn.warn-count svg {
+  color: var(--warning, #e5a93c);
+}
+.log-count-btn.error-count svg {
+  color: var(--danger, #f44747);
 }
 .log-scroll {
   flex: 1 1 auto;
@@ -1703,11 +2096,24 @@ html.compact .dock-tab {
   display: flex;
   align-items: center;
   justify-content: center;
-  border: 2px dashed var(--accent);
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  border: 2px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  box-shadow: inset 0 0 20px color-mix(in srgb, var(--accent) 25%, transparent);
+  backdrop-filter: blur(2px);
   color: var(--text);
   font-size: 12px;
   pointer-events: none;
+  transition: all 0.12s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.dock-edge-drop span {
+  padding: 4px 12px;
+  border-radius: 4px;
+  background: var(--panel-raised, #24292e);
+  border: 1px solid var(--accent);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
+  color: #fff;
+  font-weight: 500;
+  font-size: 11.5px;
 }
 .dock-edge-drop.edge-left {
   inset: 0 auto 0 0;
@@ -1802,6 +2208,20 @@ html.compact .dock-tab {
   cursor: grab;
   user-select: none;
   white-space: nowrap;
+}
+.dock-tab-insert-marker {
+  width: 3px;
+  margin: 3px -1px;
+  background: var(--accent, #388bfd);
+  border-radius: 2px;
+  box-shadow: 0 0 8px var(--accent, #388bfd);
+  animation: dockMarkerPulse 0.7s ease-in-out infinite alternate;
+  z-index: 10;
+  flex-shrink: 0;
+}
+@keyframes dockMarkerPulse {
+  from { opacity: 0.75; transform: scaleY(0.85); }
+  to { opacity: 1; transform: scaleY(1); }
 }
 .dock-tab:hover {
   color: var(--text);
@@ -1903,12 +2323,30 @@ html.compact .dock-tab {
   display: flex;
   align-items: center;
   justify-content: center;
-  border: 2px dashed var(--accent);
-  border-radius: 5px;
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  border: 2px solid var(--accent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  box-shadow: inset 0 0 16px color-mix(in srgb, var(--accent) 25%, transparent),
+              0 0 16px color-mix(in srgb, var(--accent) 30%, transparent);
+  backdrop-filter: blur(2px);
   color: var(--text);
   font-size: 12px;
   pointer-events: none;
+  transition: inset 0.12s cubic-bezier(0.16, 1, 0.3, 1),
+              width 0.12s cubic-bezier(0.16, 1, 0.3, 1),
+              height 0.12s cubic-bezier(0.16, 1, 0.3, 1),
+              background 0.12s ease;
+}
+.dock-drop span {
+  padding: 4px 10px;
+  border-radius: 4px;
+  background: var(--panel-raised, #24292e);
+  border: 1px solid var(--accent);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
+  color: #fff;
+  font-weight: 500;
+  font-size: 11.5px;
+  letter-spacing: 0.02em;
 }
 .dock-drop.zone-center {
   inset: 6px;
@@ -2021,16 +2459,20 @@ html.compact .dock-tab {
 .dock-drag-ghost {
   position: fixed;
   z-index: 12000;
-  padding: 4px 12px;
+  padding: 5px 12px;
   border: 1px solid var(--accent);
-  border-radius: 5px;
-  background: color-mix(in srgb, var(--panel-raised) 92%, transparent);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  border-radius: 4px;
+  background: var(--panel-raised, #24292e);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.1);
   color: var(--text);
   font-size: 12px;
+  font-weight: 500;
   pointer-events: none;
   transform: translate(-50%, -50%);
   white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 /* ── 帮助 / 关于面板 ───────────────────────────────────────────────────── */

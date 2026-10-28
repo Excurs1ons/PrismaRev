@@ -136,6 +136,40 @@ export function defaultDock(): DockNode {
   return split("row", left, main, 0.19);
 }
 
+/** Unity 经典 2 by 3 布局：左视口（Scene+Game 上下），中层级/资产，右检查器。 */
+export function twoByThreeDock(): DockNode {
+  const leftViewports = split("column", leaf(["sceneView"]), leaf(["gameView"]), 0.5);
+  const midTrees = split("column", leaf(["hierarchy", "docs"]), leaf(["assets", "log"]), 0.55);
+  const leftAndMid = split("row", leftViewports, midTrees, 0.7);
+  return split("row", leftAndMid, leaf(["inspector"]), 0.78);
+}
+
+/** Unity 经典 Tall 布局：左侧上下视口，右侧单列竖排（层级/资产/检查器）。 */
+export function tallDock(): DockNode {
+  const leftViewports = split("column", leaf(["sceneView"]), leaf(["gameView"]), 0.5);
+  const rightColumn = split("column", leaf(["hierarchy", "assets"]), leaf(["inspector"]), 0.45);
+  return split("row", leftViewports, rightColumn, 0.72);
+}
+
+/** Unity 经典 Wide 布局：上方宽幅视口，下方横排面板。 */
+export function wideDock(): DockNode {
+  const topViewports = split("row", leaf(["sceneView"]), leaf(["gameView"]), 0.5);
+  const bottomPanels = split(
+    "row",
+    leaf(["hierarchy", "docs"]),
+    split("row", leaf(["assets", "log"]), leaf(["inspector"]), 0.55),
+    0.28,
+  );
+  return split("column", topViewports, bottomPanels, 0.65);
+}
+
+export const LAYOUT_PRESETS: Array<{ id: string; label: string; factory: () => DockNode }> = [
+  { id: "default", label: "Default", factory: defaultDock },
+  { id: "2by3", label: "2 by 3", factory: twoByThreeDock },
+  { id: "tall", label: "Tall", factory: tallDock },
+  { id: "wide", label: "Wide", factory: wideDock },
+];
+
 export function cloneNode(node: DockNode): DockNode {
   return node.type === "leaf"
     ? { ...node, tabs: [...node.tabs] }
@@ -205,13 +239,25 @@ export function insertPanel(
   tab: string,
   zone: DockZone,
   ratio = 0.3,
+  targetIndex?: number,
 ): DockNode {
   const target = findLeafById(root, targetLeafId);
   if (!target) return root;
 
   if (zone === "center") {
     if (target.tabs.includes(tab)) {
-      return activateTab(root, target.id, tab);
+      // 在同一 leaf 内部拖拽标签页：支持重新排序
+      const filtered = target.tabs.filter((item) => item !== tab);
+      const insertAt =
+        targetIndex !== undefined
+          ? Math.max(0, Math.min(targetIndex, filtered.length))
+          : filtered.length;
+      filtered.splice(insertAt, 0, tab);
+      return replaceLeaf(root, targetLeafId, {
+        ...target,
+        tabs: filtered,
+        active: tab,
+      });
     }
     const detached = removePanel(root, tab) ?? root;
     const nextTarget = findLeafById(detached, targetLeafId);
@@ -219,9 +265,15 @@ export function insertPanel(
       // 目标 leaf 因为拖走的是它唯一的面板而消失了：直接放回原位。
       return detached;
     }
+    const nextTabs = [...nextTarget.tabs];
+    const insertAt =
+      targetIndex !== undefined
+        ? Math.max(0, Math.min(targetIndex, nextTabs.length))
+        : nextTabs.length;
+    nextTabs.splice(insertAt, 0, tab);
     return replaceLeaf(detached, targetLeafId, {
       ...nextTarget,
-      tabs: [...nextTarget.tabs, tab],
+      tabs: nextTabs,
       active: tab,
     });
   }

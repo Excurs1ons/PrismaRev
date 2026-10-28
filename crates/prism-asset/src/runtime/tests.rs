@@ -706,3 +706,137 @@ fn hot_reload_of_a_resident_slot_adjusts_by_the_delta() {
     assert_eq!(rm.get_raw(x_id).unwrap().len(), 130);
     std::fs::remove_file(&path).ok();
 }
+
+#[test]
+fn eviction_skips_pinned_slots_and_evicts_after_unpin() {
+    let id1 = AssetId::from_raw((1u64 << 32) | 1);
+    let id2 = AssetId::from_raw((1u64 << 32) | 2);
+
+    let mut b = PackageBuilder::new();
+    b.add_asset(id1, AssetType::Binary, vec![1u8; 100], &[]);
+    b.add_asset(id2, AssetType::Binary, vec![2u8; 200], &[]);
+    let pak = b.build().unwrap();
+    let path = write_pak(&pak, "test_eviction_pin.pak");
+
+    let mut rm = ResourceManager::new();
+    rm.load_package(&path).unwrap();
+
+    // Budget fits 250 bytes. Both assets together would be 300 bytes.
+    rm.set_memory_budget(250);
+    rm.set_eviction_policy(EvictionPolicy::Lru);
+    std::fs::remove_file(&path).ok();
+
+    // 1. Load asset 1.
+    let h1: Handle<Vec<u8>> = rm.load(id1).unwrap();
+    assert_eq!(rm.memory_usage(), 100);
+    assert_eq!(rm.pin_count(h1), 0);
+    assert!(!rm.is_pinned(h1));
+
+    // 2. Pin asset 1.
+    assert_eq!(rm.pin(h1).unwrap(), 1);
+    assert_eq!(rm.pin_count(h1), 1);
+    assert!(rm.is_pinned(h1));
+    assert!(rm.is_id_pinned(id1));
+    assert_eq!(rm.id_pin_count(id1), 1);
+
+    // Pinning again increments count.
+    assert_eq!(rm.pin(h1).unwrap(), 2);
+    assert_eq!(rm.pin_count(h1), 2);
+
+    // Unpin once.
+    assert_eq!(rm.unpin(h1).unwrap(), 1);
+    assert_eq!(rm.pin_count(h1), 1);
+    assert!(rm.is_pinned(h1));
+
+    // 3. Try to load asset 2 (200 bytes).
+    // Total would be 300 > 250. Eviction tries to free space, but asset 1 is pinned!
+    // Eviction cannot evict asset 1, so load(id2) must fail with OutOfMemory.
+    let err = rm.load::<Vec<u8>>(id2).unwrap_err();
+    assert!(
+        matches!(err, RuntimeError::OutOfMemory { .. }),
+        "expected OutOfMemory, got: {err:?}"
+    );
+
+    // Asset 1 must still be loaded and intact.
+    assert!(rm.get_raw(id1).is_ok());
+    assert_eq!(rm.get(h1).unwrap(), vec![1u8; 100]);
+
+    // Direct evict call also refuses to evict pinned slot.
+    assert_eq!(rm.evict(100), 0);
+    assert!(rm.get_raw(id1).is_ok());
+
+    // 4. Unpin asset 1 completely.
+    assert_eq!(rm.unpin(h1).unwrap(), 0);
+    assert!(!rm.is_pinned(h1));
+    assert_eq!(rm.pin_count(h1), 0);
+
+    // Unpinning when count is 0 returns PinUnderflow.
+    assert!(matches!(
+        rm.unpin(h1).unwrap_err(),
+        RuntimeError::PinUnderflow(id) if id == id1
+    ));
+
+    // 5. Now that asset 1 is unpinned, loading asset 2 succeeds by evicting asset 1.
+    let h2: Handle<Vec<u8>> = rm.load(id2).unwrap();
+    assert!(rm.memory_usage() <= 250);
+    assert_eq!(rm.get(h2).unwrap(), vec![2u8; 200]);
+
+    // Asset 1 was evicted.
+    assert!(matches!(
+        rm.get(h1).unwrap_err(),
+        RuntimeError::NotLoaded(id) if id == id1
+    ));
+
+    // Pinning an evicted asset returns NotLoaded.
+    assert!(matches!(
+        rm.pin(h1).unwrap_err(),
+        RuntimeError::NotLoaded(id) if id == id1
+    ));
+}
+
+#[test]
+fn handle_pin_generation_mismatch_and_unload_resets_pin() {
+    let id1 = AssetId::from_raw((1u64 << 32) | 10);
+    let mut b = PackageBuilder::new();
+    b.add_asset(id1, AssetType::Binary, vec![42u8; 64], &[]);
+    let pak = b.build().unwrap();
+    let path = write_pak(&pak, "test_pin_unload.pak");
+
+    let mut rm = ResourceManager::new();
+    rm.load_package(&path).unwrap();
+    std::fs::remove_file(&path).ok();
+
+    let h1: Handle<Vec<u8>> = rm.load(id1).unwrap();
+    rm.pin(h1).unwrap();
+    assert!(rm.is_pinned(h1));
+
+    // AnyHandle pinning
+    let any_h = AnyHandle::from(h1);
+    assert!(rm.is_any_pinned(any_h));
+    assert_eq!(rm.any_pin_count(any_h), 1);
+    rm.pin_any(any_h).unwrap();
+    assert_eq!(rm.any_pin_count(any_h), 2);
+    rm.unpin_any(any_h).unwrap();
+    assert_eq!(rm.any_pin_count(any_h), 1);
+
+    // Stale generation handle should fail to pin / unpin.
+    let (idx, gen) = h1.into_raw_parts();
+    let stale_h = Handle::<Vec<u8>>::new(idx, gen + 1);
+    assert!(matches!(
+        rm.pin(stale_h).unwrap_err(),
+        RuntimeError::GenerationMismatch { .. }
+    ));
+    assert!(matches!(
+        rm.unpin(stale_h).unwrap_err(),
+        RuntimeError::GenerationMismatch { .. }
+    ));
+
+    // Explicit unload resets pin count and frees data.
+    rm.unload(h1);
+    assert_eq!(rm.pin_count(h1), 0);
+    assert!(!rm.is_pinned(h1));
+    assert!(matches!(
+        rm.get(h1).unwrap_err(),
+        RuntimeError::NotLoaded(_)
+    ));
+}

@@ -1,17 +1,36 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, provide, reactive, ref, shallowRef, watch } from "vue";
-import { Box, Check, ChevronRight, Play, RefreshCw, Square } from "lucide-vue-next";
+import {
+  Box,
+  Check,
+  ChevronRight,
+  Maximize2,
+  MousePointer,
+  Move,
+  Pause,
+  Play,
+  RefreshCw,
+  RotateCw,
+  Square,
+  StepForward,
+} from "lucide-vue-next";
 import AssetBrowser from "./components/AssetBrowser.vue";
+import AssetInspector from "./components/AssetInspector.vue";
 import AssetPicker from "./components/AssetPicker.vue";
 import BuildPanel from "./components/BuildPanel.vue";
+import ConsolePanel from "./components/ConsolePanel.vue";
 import DockLayout from "./components/DockLayout.vue";
+import EditorDropdown, { type DropdownOption } from "./components/EditorDropdown.vue";
+import EditorModal from "./components/EditorModal.vue";
 import HierarchyTree from "./components/HierarchyTree.vue";
 import Inspector from "./components/Inspector.vue";
 import PreferencesPanel from "./components/PreferencesPanel.vue";
 import ProjectSettingsPanel from "./components/ProjectSettingsPanel.vue";
 import ThemePanel from "./components/ThemePanel.vue";
 import ViewportPanel from "./components/ViewportPanel.vue";
+import { t } from "./i18n";
 import {
+  LAYOUT_PRESETS,
   collectTabs,
   defaultDock,
   leaf,
@@ -36,7 +55,6 @@ import {
   type ThemeState,
 } from "./theme";
 import { PREFAB_LINK_COMPONENT } from "./types";
-import { windowRange } from "./windowed";
 import type {
   AssetInfo,
   AssetRef,
@@ -66,6 +84,14 @@ const schema = ref<Schema>({ types: [] });
 const projectRoot = ref("");
 const scenes = ref<SceneEntry[]>([]);
 const prefabs = ref<SceneEntry[]>([]);
+
+const sceneDropdownOptions = computed<DropdownOption[]>(() =>
+  scenes.value.map((s) => ({ value: s.path, label: s.name })),
+);
+
+const layoutDropdownOptions = computed<DropdownOption[]>(() =>
+  LAYOUT_PRESETS.map((lp) => ({ value: lp.id, label: lp.label })),
+);
 const sceneTemplates = ref<SceneTemplate[]>([]);
 const presets = ref<EntityPreset[]>([]);
 const assets = ref<AssetInfo[]>([]);
@@ -156,6 +182,15 @@ const baseline = ref<string>("");
 
 /** 选中的实体（最后一个为「主选中」，检查器显示它）。 */
 const selection = ref<number[]>([]);
+/** 选中的资产（对齐 Unity：点击 Project 资产时在 Inspector 展示其导入配置与预览）。 */
+const selectedAsset = ref<AssetInfo | null>(null);
+
+function onAssetSelect(asset: AssetInfo | null) {
+  selectedAsset.value = asset;
+  if (asset) {
+    selection.value = [];
+  }
+}
 /**
  * 组件剪贴板。用 `shallowRef`：整体替换、不需要深响应，
  * 也避免 Vue 对递归的 `JsonValue` 类型做深度 `UnwrapRef` 推断。
@@ -167,150 +202,32 @@ const error = ref("");
 const validationError = ref("");
 const logText = ref("");
 const gameLogEntries = ref<PreviewLogLine[]>([]);
-const logScrollEl = ref<HTMLElement | null>(null);
-const logSourceFilter = ref<"all" | "editor" | "game">("all");
-const logLevelFilter = ref<LogLevel | "all">("all");
-const logScrollTop = ref(0);
-const logViewportHeight = ref(0);
 const busy = ref(false);
-
-type LogLevel = "error" | "warn" | "info" | "debug" | "trace" | "panic";
-
-interface LogViewLine {
-  source: "editor" | "game";
-  level: LogLevel;
-  line: string;
-  stream?: string;
-}
-
-function logLevelOf(line: string, stream?: string): LogLevel {
-  if (/panicked at|thread '.*' panicked|\bPANIC\b|stack backtrace:/i.test(line)) {
-    return "panic";
-  }
-  const match = line.match(/\b(ERROR|WARN(?:ING)?|INFO|DEBUG|TRACE)\b/);
-  if (match) {
-    const level = match[1].toUpperCase();
-    if (level.startsWith("WARN")) return "warn";
-    return level.toLowerCase() as LogLevel;
-  }
-  if (stream === "system") return "info";
-  if (stream === "stderr") return "error";
-  if (/失败|error/i.test(line)) return "error";
-  if (/警告|warn/i.test(line)) return "warn";
-  return "info";
-}
-
-const editorLogLines = computed<LogViewLine[]>(() =>
-  logText.value
-    .split(/\r?\n/)
-    .filter((line) => line.trim().length > 0)
-    .slice(-Math.max(200, editorPrefs.value.maxLogLines))
-    .map((line) => ({
-      source: "editor",
-      level: logLevelOf(line),
-      line,
-    })),
-);
-
-const gameLogView = computed<LogViewLine[]>(() =>
-  gameLogEntries.value
-    .slice(-Math.max(200, editorPrefs.value.maxLogLines))
-    .map((entry) => ({
-      source: "game",
-      // 进程内引擎的记录自带级别，不用猜。
-      level: entry.level ?? logLevelOf(entry.line, entry.stream),
-      line: entry.line,
-      stream: entry.stream,
-    })),
-);
-
-const filteredEditorLogLines = computed(() =>
-  editorLogLines.value.filter(
-    (entry) => logLevelFilter.value === "all" || entry.level === logLevelFilter.value,
-  ),
-);
-
-const filteredGameLogLines = computed(() =>
-  gameLogView.value.filter(
-    (entry) => logLevelFilter.value === "all" || entry.level === logLevelFilter.value,
-  ),
-);
-
-const hasFilteredLogs = computed(
-  () =>
-    (logSourceFilter.value !== "game" && filteredEditorLogLines.value.length > 0) ||
-    (logSourceFilter.value !== "editor" && filteredGameLogLines.value.length > 0),
-);
-
-// ── 日志窗口化 ──────────────────────────────────────────────────────────────
-// 单行固定高度（见 style.css 的 `.log-row`）。日志最多保留
-// `editorPrefs.maxLogLines`（上限 20000）行，一次性渲染成 DOM 会拖垮滚动；
-// 这里只渲染视口附近的行，其余用 spacer 占位。
-const LOG_ROW_HEIGHT = 18;
-
-type LogRow =
-  | { kind: "title"; text: string }
-  | { kind: "line"; entry: LogViewLine };
-
-const logRows = computed<LogRow[]>(() => {
-  const rows: LogRow[] = [];
-  if (logSourceFilter.value !== "game" && filteredEditorLogLines.value.length) {
-    rows.push({ kind: "title", text: "编辑器" });
-    for (const entry of filteredEditorLogLines.value) rows.push({ kind: "line", entry });
-  }
-  if (logSourceFilter.value !== "editor" && filteredGameLogLines.value.length) {
-    rows.push({ kind: "title", text: "Game" });
-    for (const entry of filteredGameLogLines.value) rows.push({ kind: "line", entry });
-  }
-  return rows;
-});
-
-const logWindow = computed(() =>
-  windowRange(
-    logRows.value.length,
-    LOG_ROW_HEIGHT,
-    logScrollTop.value,
-    logViewportHeight.value,
-  ),
-);
-
-const visibleLogRows = computed(() => logRows.value.slice(logWindow.value.start, logWindow.value.end));
-
-function syncLogViewport() {
-  const element = logScrollEl.value;
-  if (!element) return;
-  logScrollTop.value = element.scrollTop;
-  logViewportHeight.value = element.clientHeight;
-}
-
-function onLogScroll() {
-  syncLogViewport();
-}
-
-// 面板被拖宽/拖高、dock 重排、字号变化都会改变可见行数，用 ResizeObserver
-// 而不是监听 window resize。元素本身是 v-if 之外的常驻节点，但仍在出现时重新挂载。
-watch(
-  logScrollEl,
-  (element) => {
-    if (!element) return;
-    syncLogViewport();
-    const observer = new ResizeObserver(() => syncLogViewport());
-    observer.observe(element);
-    return () => observer.disconnect();
-  },
-  { flush: "post" },
-);
-
-watch([logSourceFilter, logLevelFilter], () => {
-  const element = logScrollEl.value;
-  if (element) element.scrollTop = 0;
-  logScrollTop.value = 0;
-});
 
 const documentLabel = computed(() => {
   if (currentPath.value) return currentPath.value.split("/").pop() || currentPath.value;
   return hasDoc.value ? "未保存的文档" : "无文档";
 });
+
+// ── 顶部工具栏状态（对齐 Unity） ───────────────────────────────────────────
+const activeTool = ref<"select" | "move" | "rotate" | "scale">("move");
+const activePivot = ref<"pivot" | "center">("pivot");
+const activeSpace = ref<"global" | "local">("global");
+const activeLayout = ref<string>("default");
+
+function applyLayout(id: string) {
+  activeLayout.value = id;
+  const preset = LAYOUT_PRESETS.find((p) => p.id === id);
+  if (preset) {
+    dockLayout.value = preset.factory();
+    floatingPanels.value = [];
+  }
+}
+
+function onToolbarSceneSelect(path: string) {
+  const scene = scenes.value.find((s) => s.path === path);
+  if (scene) openDocument(scene, "scene");
+}
 
 // ---------------------------------------------------------------------------
 // Docking 布局（split tree + 标签页拖拽，持久化到 localStorage）
@@ -758,8 +675,91 @@ function redo() {
   clampSelection();
 }
 
-function confirmDiscard(): boolean {
-  return !dirty.value || window.confirm("当前文档有未保存改动，放弃它们？");
+interface ModalState {
+  open: boolean;
+  title: string;
+  message: string;
+  hasInput: boolean;
+  defaultValue: string;
+  placeholder: string;
+  confirmText: string;
+  cancelText: string;
+  danger: boolean;
+  resolve?: (value: any) => void;
+}
+
+const modalState = ref<ModalState>({
+  open: false,
+  title: "",
+  message: "",
+  hasInput: false,
+  defaultValue: "",
+  placeholder: "",
+  confirmText: "确定",
+  cancelText: "取消",
+  danger: false,
+});
+
+function showConfirm(
+  title: string,
+  message: string,
+  options?: { danger?: boolean; confirmText?: string; cancelText?: string },
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    modalState.value = {
+      open: true,
+      title,
+      message,
+      hasInput: false,
+      defaultValue: "",
+      placeholder: "",
+      confirmText: options?.confirmText ?? t("common.confirm"),
+      cancelText: options?.cancelText ?? t("common.cancel"),
+      danger: options?.danger ?? false,
+      resolve: (val) => resolve(Boolean(val)),
+    };
+  });
+}
+
+function showPrompt(
+  title: string,
+  message: string,
+  defaultValue = "",
+  placeholder = "",
+): Promise<string | null> {
+  return new Promise((resolve) => {
+    modalState.value = {
+      open: true,
+      title,
+      message,
+      hasInput: true,
+      defaultValue,
+      placeholder,
+      confirmText: t("common.confirm"),
+      cancelText: t("common.cancel"),
+      danger: false,
+      resolve: (val) => resolve(typeof val === "string" ? val : null),
+    };
+  });
+}
+
+function onModalConfirm(val?: string) {
+  modalState.value.open = false;
+  modalState.value.resolve?.(modalState.value.hasInput ? (val ?? "") : true);
+}
+
+function onModalCancel() {
+  modalState.value.open = false;
+  modalState.value.resolve?.(modalState.value.hasInput ? null : false);
+}
+
+async function confirmDiscard(): Promise<boolean> {
+  if (!dirty.value) return true;
+  return await showConfirm(
+    t("dialog.discardTitle"),
+    t("dialog.discardMsg"),
+    { danger: true },
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -798,7 +798,7 @@ async function bootstrap() {
 }
 
 async function openDocument(entry: SceneEntry, kind: DocKind) {
-  if (!confirmDiscard()) return;
+  if (!(await confirmDiscard())) return;
   try {
     const loaded = await api.readDocument(entry.path);
     resetHistory(loaded, entry.path, kind);
@@ -840,7 +840,7 @@ async function reload() {
 }
 
 async function createDocumentWithTemplate(kind: DocKind, templateId: string) {
-  if (!confirmDiscard()) return;
+  if (!(await confirmDiscard())) return;
   try {
     const fresh = await api.newDocument(kind, templateId);
     resetHistory(fresh, null, kind);
@@ -895,11 +895,15 @@ async function save(): Promise<boolean> {
 async function saveAs(): Promise<boolean> {
   if (!doc.value) return false;
   const suffix = documentKind.value === "scene" ? ".scene.json" : ".prefab.json";
-  const name = window.prompt(`另存为（不含 ${suffix}）`, "untitled");
-  if (!name) return false;
+  const name = await showPrompt(
+    t("dialog.saveAsTitle"),
+    `${t("dialog.saveAsMsg")} (${suffix})`,
+    "untitled",
+  );
+  if (!name || !name.trim()) return false;
   const snapshot = snapshotDoc();
   try {
-    const path = await api.writeDocumentAs(documentKind.value, name, snapshot.doc);
+    const path = await api.writeDocumentAs(documentKind.value, name.trim(), snapshot.doc);
     currentPath.value = path;
     baseline.value = snapshot.text;
     error.value = "";
@@ -982,10 +986,14 @@ async function renameCurrent() {
   if (!currentPath.value) return;
   const list = isScene.value ? scenes.value : prefabs.value;
   const current = list.find((s) => s.path === currentPath.value);
-  const name = window.prompt("新名字（不含后缀）", current?.name ?? "");
-  if (!name) return;
+  const name = await showPrompt(
+    t("dialog.renameTitle"),
+    t("dialog.renameMsg"),
+    current?.name ?? "",
+  );
+  if (!name || !name.trim()) return;
   try {
-    const path = await api.renameDocument(currentPath.value, documentKind.value, name);
+    const path = await api.renameDocument(currentPath.value, documentKind.value, name.trim());
     currentPath.value = path;
     error.value = "";
     status.value = `已重命名为 ${path}`;
@@ -997,7 +1005,12 @@ async function renameCurrent() {
 
 async function deleteCurrent() {
   if (!currentPath.value) return;
-  if (!window.confirm(`删除文件？\n${currentPath.value}`)) return;
+  const ok = await showConfirm(
+    t("dialog.deleteDocTitle"),
+    t("dialog.deleteDocMsg", { path: currentPath.value }),
+    { danger: true },
+  );
+  if (!ok) return;
   try {
     await api.deleteDocument(currentPath.value);
     doc.value = null;
@@ -1103,7 +1116,12 @@ async function revertPrefab(index: number) {
 async function applyPrefab(index: number) {
   if (!doc.value || !prefabLink.value) return;
   const link = prefabLink.value;
-  if (!window.confirm(`用当前实例内容覆盖预制体？\n${link}`)) return;
+  const ok = await showConfirm(
+    t("dialog.applyPrefabTitle"),
+    t("dialog.applyPrefabMsg", { link }),
+    { danger: true },
+  );
+  if (!ok) return;
   try {
     // `PrefabUtility.ApplyPrefabInstance`：提取子树 + 写回预制体文件。
     await api.applyPrefabInstance(doc.value, index);
@@ -1161,7 +1179,7 @@ async function jumpToUsage(ref: AssetRef) {
     return;
   }
   if (currentPath.value !== ref.scenePath) {
-    if (!confirmDiscard()) return;
+    if (!(await confirmDiscard())) return;
     try {
       const loaded = await api.readDocument(ref.scenePath);
       resetHistory(
@@ -1175,6 +1193,7 @@ async function jumpToUsage(ref: AssetRef) {
     }
   }
   selection.value = [ref.entityIndex];
+  selectedAsset.value = null;
   highlightComponent.value = ref.component;
   highlightField.value = ref.field;
   error.value = "";
@@ -1233,6 +1252,9 @@ function onViewportMove(position: [number, number, number]) {
 
 function onSelect(indices: number[]) {
   selection.value = indices.length ? indices : [];
+  if (indices.length) {
+    selectedAsset.value = null;
+  }
   // 手动选择时清掉「跳到使用处」的高亮。
   highlightComponent.value = null;
   highlightField.value = null;
@@ -1366,9 +1388,26 @@ function nextEntityId(entities: EntityJson[]): number {
   return max + 1;
 }
 
-function addEntity() {
+function addEntity(targetPresetId?: string, parentIndex?: number | null) {
   if (!doc.value) return;
-  const preset = presets.value.find((p) => p.id === presetId.value);
+  const pId = targetPresetId || presetId.value;
+  let preset = presets.value.find((p) => p.id === pId);
+
+  // 虚拟 3D Primitives 预设支持
+  if (!preset) {
+    if (pId === "cube") {
+      preset = { id: "cube", label: "Cube", name: "Cube", components: ["prism_engine::scene::MeshRenderer", "prism_engine::scene::Active"], overrides: {}, rotation: [0, 0, 0, 1], position: [0, 0, 0] };
+    } else if (pId === "sphere") {
+      preset = { id: "sphere", label: "Sphere", name: "Sphere", components: ["prism_engine::scene::MeshRenderer", "prism_engine::scene::Active"], overrides: {}, rotation: [0, 0, 0, 1], position: [0, 0, 0] };
+    } else if (pId === "cylinder") {
+      preset = { id: "cylinder", label: "Cylinder", name: "Cylinder", components: ["prism_engine::scene::MeshRenderer", "prism_engine::scene::Active"], overrides: {}, rotation: [0, 0, 0, 1], position: [0, 0, 0] };
+    } else if (pId === "plane") {
+      preset = { id: "plane", label: "Plane", name: "Plane", components: ["prism_engine::scene::MeshRenderer", "prism_engine::scene::Active"], overrides: {}, rotation: [0, 0, 0, 1], position: [0, 0, 0] };
+    } else {
+      preset = presets.value.find((p) => p.id === presetId.value) || presets.value[0];
+    }
+  }
+
   const components: Record<string, JsonValue> = {};
   for (const name of preset?.components ?? []) {
     const type = schema.value.types.find((t) => t.name === name);
@@ -1382,10 +1421,16 @@ function addEntity() {
   }
   const entities = doc.value.entities.slice();
   const id = nextEntityId(entities);
+
+  let parentId: number | null = null;
+  if (parentIndex != null && parentIndex >= 0 && parentIndex < entities.length) {
+    parentId = entities[parentIndex].id ?? null;
+  }
+
   entities.push({
     id,
     name: uniqueName(preset?.name ?? "entity"),
-    parent: null,
+    parent: parentId,
     transform: {
       position: (preset?.position ?? [0, 0, 0]) as number[],
       rotation: (preset?.rotation ?? [0, 0, 0, 1]) as number[],
@@ -1442,14 +1487,16 @@ async function deleteSelection() {
   if (!doc.value || !selection.value.length) return;
   const indices = selection.value.slice().sort((a, b) => a - b);
   if (indices.length >= doc.value.entities.length) {
-    fail("至少要保留一个实体");
+    fail(t("dialog.atLeastOneEntity"));
     return;
   }
-  if (
-    editorPrefs.value.confirmDelete &&
-    !window.confirm(`删除 ${indices.length} 个实体？此操作可用撤销恢复。`)
-  ) {
-    return;
+  if (editorPrefs.value.confirmDelete) {
+    const ok = await showConfirm(
+      t("dialog.deleteEntitiesTitle"),
+      t("dialog.deleteEntitiesMsg", { count: indices.length }),
+      { danger: true },
+    );
+    if (!ok) return;
   }
   try {
     const next = await runDocCommand(
@@ -1568,13 +1615,7 @@ async function buildScenes() {
 // ── 游戏日志 ────────────────────────────────────────────────────────────────
 
 function scrollLogsToEnd() {
-  void nextTick(() => {
-    const element = logScrollEl.value;
-    if (element) {
-      element.scrollTop = element.scrollHeight;
-      syncLogViewport();
-    }
-  });
+  // ConsolePanel handles its own auto-scroll on log updates
 }
 
 function appendGameLog(entry: PreviewLogLine) {
@@ -2126,23 +2167,113 @@ onUnmounted(() => {
     <div v-if="openMenu" class="menu-backdrop" @click="openMenu = null" @contextmenu.prevent />
 
     <div class="main-toolbar">
-      <div class="tool-group play-group">
-        <span class="tool-select scene-select viewport-scene-label" :title="currentPath ?? '未打开场景'">
-          {{ currentPath ? currentPath.split('/').pop() : '未打开场景' }}
+      <!-- 左侧：变换工具组与坐标空间切换 -->
+      <div class="toolbar-section toolbar-left">
+        <div class="segmented-group" :title="$t('toolbar.transformTools')">
+          <button
+            class="segmented-btn"
+            :class="{ active: activeTool === 'select' }"
+            :title="$t('toolbar.toolSelect')"
+            @click="activeTool = 'select'"
+          >
+            <MousePointer :size="13" />
+          </button>
+          <button
+            class="segmented-btn"
+            :class="{ active: activeTool === 'move' }"
+            :title="$t('toolbar.toolMove')"
+            @click="activeTool = 'move'"
+          >
+            <Move :size="13" />
+          </button>
+          <button
+            class="segmented-btn"
+            :class="{ active: activeTool === 'rotate' }"
+            :title="$t('toolbar.toolRotate')"
+            @click="activeTool = 'rotate'"
+          >
+            <RotateCw :size="13" />
+          </button>
+          <button
+            class="segmented-btn"
+            :class="{ active: activeTool === 'scale' }"
+            :title="$t('toolbar.toolScale')"
+            @click="activeTool = 'scale'"
+          >
+            <Maximize2 :size="13" />
+          </button>
+        </div>
+
+        <div class="segmented-group">
+          <button
+            class="segmented-btn"
+            :title="$t('toolbar.pivotTooltip')"
+            @click="activePivot = activePivot === 'pivot' ? 'center' : 'pivot'"
+          >
+            {{ activePivot === "pivot" ? $t("toolbar.pivot") : $t("toolbar.center") }}
+          </button>
+          <button
+            class="segmented-btn"
+            :title="$t('toolbar.spaceTooltip')"
+            @click="activeSpace = activeSpace === 'global' ? 'local' : 'global'"
+          >
+            {{ activeSpace === "global" ? $t("toolbar.global") : $t("toolbar.local") }}
+          </button>
+        </div>
+      </div>
+
+      <!-- 中间：Unity 经典对称三段式 Play / Pause / Step 运行控制 -->
+      <div class="toolbar-section toolbar-center">
+        <div class="segmented-group">
+          <button
+            class="segmented-btn play-btn"
+            :class="{ running: playing }"
+            :disabled="!hasDoc || !isScene"
+            :title="$t('toolbar.playTooltip')"
+            @click="togglePlay"
+          >
+            <Square v-if="playing" :size="12" fill="currentColor" />
+            <Play v-else :size="13" fill="currentColor" />
+          </button>
+          <button
+            class="segmented-btn pause-btn"
+            :class="{ paused }"
+            :disabled="!playing"
+            :title="$t('toolbar.pauseTooltip')"
+            @click="togglePause"
+          >
+            <Pause :size="13" fill="currentColor" />
+          </button>
+          <button
+            class="segmented-btn step-btn"
+            :disabled="!playing"
+            :title="$t('toolbar.stepTooltip')"
+            @click="stepGame"
+          >
+            <StepForward :size="13" />
+          </button>
+        </div>
+      </div>
+
+      <!-- 右侧：当前场景与布局切换 -->
+      <div class="toolbar-section toolbar-right">
+        <EditorDropdown
+          v-if="scenes.length"
+          :model-value="currentPath ?? ''"
+          :options="sceneDropdownOptions"
+          :title="$t('toolbar.switchScene')"
+          @update:model-value="(val) => onToolbarSceneSelect(String(val))"
+        />
+        <span v-else class="tool-select scene-select viewport-scene-label">
+          {{ documentLabel }}
         </span>
-        <button
-          class="play-button"
-          :class="{ running: playing }"
-          :disabled="!hasDoc || !isScene"
-          :title="'在编辑器内运行当前场景（Game view，不启动外部进程）'"
-          @click="togglePlay"
-        >
-          <span class="play-glyph">
-            <Square v-if="playing" :size="13" fill="currentColor" />
-            <Play v-else :size="15" fill="currentColor" />
-          </span>
-          {{ playing ? "停止" : "运行" }}
-        </button>
+
+        <EditorDropdown
+          :model-value="activeLayout"
+          :options="layoutDropdownOptions"
+          :title="$t('toolbar.layoutPresets')"
+          @update:model-value="(val) => applyLayout(String(val))"
+        />
       </div>
     </div>
 
@@ -2235,6 +2366,8 @@ onUnmounted(() => {
             :presets="presets"
             :preset-id="presetId"
             :can-add="hasDoc"
+            :scene-name="documentLabel"
+            :dirty="dirty"
             @preset="presetId = $event"
             @add="addEntity"
             @select="onSelect"
@@ -2253,6 +2386,7 @@ onUnmounted(() => {
         <template #assets>
         <AssetBrowser
           :before-change="ensureSavedForAssetOp"
+          @select="onAssetSelect"
           @jump="jumpToUsage"
           @changed="onAssetsChanged"
           @open="openAssetPath"
@@ -2263,8 +2397,16 @@ onUnmounted(() => {
 
         <template #inspector>
         <div class="editor-pane inspector-pane">
+          <!-- 选中资产时展示 Unity 风格 Asset Inspector（含大图/文本预览与导入元数据） -->
+          <AssetInspector
+            v-if="selectedAsset"
+            :asset="selectedAsset"
+            @jump="jumpToUsage"
+            @open="openAssetPath"
+          />
+          <!-- 选中实体时展示 GameObject 检查器 -->
           <Inspector
-            v-if="selectedEntity && doc && primary !== null"
+            v-else-if="selectedEntity && doc && primary !== null"
             :entity="selectedEntity"
             :index="primary"
             :entities="doc.entities"
@@ -2284,64 +2426,20 @@ onUnmounted(() => {
             @reflect="onComponentReflect"
             @rejected="fail"
           />
-          <div v-else class="empty">打开或新建一个场景/预制体，然后选择一个实体。</div>
+          <div v-else class="empty">{{ $t("inspector.emptyState") }}</div>
         </div>
 
         </template>
 
         <template #log>
-        <div class="log-panel">
-          <div class="log-toolbar">
-            <div class="log-filter">
-              <button
-                :class="{ active: logSourceFilter === 'all' }"
-                @click="logSourceFilter = 'all'"
-              >全部</button>
-              <button
-                :class="{ active: logSourceFilter === 'editor' }"
-                @click="logSourceFilter = 'editor'"
-              >编辑器</button>
-              <button
-                :class="{ active: logSourceFilter === 'game' }"
-                @click="logSourceFilter = 'game'"
-              >Game</button>
-            </div>
-            <select v-model="logLevelFilter" class="log-level" title="日志级别">
-              <option value="all">全部级别</option>
-              <option value="error">Error</option>
-              <option value="warn">Warn</option>
-              <option value="info">Info</option>
-              <option value="debug">Debug</option>
-              <option value="trace">Trace</option>
-              <option value="panic">Panic</option>
-            </select>
-            <span class="tool-spacer" />
-            <button class="ghost icon" title="清空日志" @click="clearAllLogs">清空</button>
-          </div>
-
-          <div ref="logScrollEl" class="log-scroll" @scroll.passive="onLogScroll">
-            <div class="log-virtual" :style="{ height: `${logWindow.total}px` }">
-              <div
-                class="log-window"
-                :style="{ transform: `translateY(${logWindow.offset}px)` }"
-              >
-                <div
-                  v-for="(row, index) in visibleLogRows"
-                  :key="logWindow.start + index"
-                  class="log-row"
-                  :class="
-                    row.kind === 'title'
-                      ? 'log-row-section'
-                      : `log-level-${row.entry.level}`
-                  "
-                  :title="row.kind === 'line' ? row.entry.line : undefined"
-                >{{ row.kind === "title" ? row.text : row.entry.line }}</div>
-              </div>
-            </div>
-
-            <div v-if="!hasFilteredLogs" class="empty">当前筛选没有日志。</div>
-          </div>
-        </div>
+          <ConsolePanel
+            :editor-logs="logText"
+            :game-logs="gameLogEntries"
+            :max-log-lines="editorPrefs.maxLogLines"
+            :playing="playing"
+            @clear="clearAllLogs"
+            @pause-game="paused = true"
+          />
         </template>
 
         <template #projectSettings>
@@ -2612,6 +2710,19 @@ onUnmounted(() => {
       :current="pickerState.current"
       @pick="resolvePicker"
       @cancel="resolvePicker(null)"
+    />
+    <EditorModal
+      v-model="modalState.open"
+      :title="modalState.title"
+      :message="modalState.message"
+      :has-input="modalState.hasInput"
+      :default-value="modalState.defaultValue"
+      :placeholder="modalState.placeholder"
+      :confirm-text="modalState.confirmText"
+      :cancel-text="modalState.cancelText"
+      :danger="modalState.danger"
+      @confirm="onModalConfirm"
+      @cancel="onModalCancel"
     />
 
     <footer class="statusbar">

@@ -71,7 +71,7 @@ function resize(splitId: string, ratio: number) {
   layout.value = setRatio(layout.value, splitId, ratio);
 }
 
-function drop(leafId: string, zone: DockZone, tab: string) {
+function drop(leafId: string, zone: DockZone, tab: string, targetIndex?: number) {
   floating.value = floating.value.filter((panel) => panel.tab !== tab);
   if (!layout.value) {
     layout.value = leaf([tab]);
@@ -79,21 +79,71 @@ function drop(leafId: string, zone: DockZone, tab: string) {
     hover.value = null;
     return;
   }
-  layout.value = insertPanel(layout.value, leafId, tab, zone);
+  layout.value = insertPanel(layout.value, leafId, tab, zone, 0.3, targetIndex);
   dragPanel.value = null;
   hover.value = null;
 }
 
-function zoneAt(node: HTMLElement, x: number, y: number): DockZone {
-  const rect = node.getBoundingClientRect();
-  const px = (x - rect.left) / Math.max(1, rect.width);
-  const py = (y - rect.top) / Math.max(1, rect.height);
-  const edge = 0.25;
-  if (px < edge) return "left";
-  if (px > 1 - edge) return "right";
-  if (py < edge) return "top";
-  if (py > 1 - edge) return "bottom";
-  return "center";
+interface ZoneResult {
+  zone: DockZone;
+  targetIndex?: number;
+}
+
+function zoneAt(leafEl: HTMLElement, x: number, y: number): ZoneResult {
+  const rect = leafEl.getBoundingClientRect();
+  const relX = x - rect.left;
+  const relY = y - rect.top;
+  const w = Math.max(1, rect.width);
+  const h = Math.max(1, rect.height);
+
+  // 1. 如果光标落在顶部的标签栏区域（高度 ~32px）或靠近标签栏，直接判定为标签页堆叠
+  const tabsEl = leafEl.querySelector<HTMLElement>(".dock-tabs");
+  if (tabsEl) {
+    const tabsRect = tabsEl.getBoundingClientRect();
+    if (y >= tabsRect.top - 6 && y <= tabsRect.bottom + 8) {
+      // 计算插入的具体标签索引，实现顺滑插队
+      const tabEls = Array.from(tabsEl.querySelectorAll<HTMLElement>(".dock-tab"));
+      let targetIndex = tabEls.length;
+      for (let i = 0; i < tabEls.length; i++) {
+        const tr = tabEls[i].getBoundingClientRect();
+        if (x < tr.left + tr.width / 2) {
+          targetIndex = i;
+          break;
+        }
+      }
+      return { zone: "center", targetIndex };
+    }
+  }
+
+  // 2. 边框吸附区域计算（根据窗口大小动态适应，最大 52px，最小 24px，约占尺寸的 20%）
+  const edgeX = Math.max(24, Math.min(w * 0.2, 52));
+  const edgeY = Math.max(24, Math.min(h * 0.2, 52));
+
+  const distLeft = relX;
+  const distRight = w - relX;
+  const distTop = relY;
+  const distBottom = h - relY;
+
+  const isLeft = distLeft < edgeX;
+  const isRight = distRight < edgeX;
+  const isTop = distTop < edgeY;
+  const isBottom = distBottom < edgeY;
+
+  if (isLeft || isRight || isTop || isBottom) {
+    const minDist = Math.min(
+      isLeft ? distLeft : Infinity,
+      isRight ? distRight : Infinity,
+      isTop ? distTop : Infinity,
+      isBottom ? distBottom : Infinity,
+    );
+    if (minDist === distLeft) return { zone: "left" };
+    if (minDist === distRight) return { zone: "right" };
+    if (minDist === distTop) return { zone: "top" };
+    if (minDist === distBottom) return { zone: "bottom" };
+  }
+
+  // 其余中央主体区域（约 65% ~ 80%）全部为合并堆叠
+  return { zone: "center" };
 }
 
 /**
@@ -138,7 +188,12 @@ function updateHover(x: number, y: number) {
     hover.value = null;
     return;
   }
-  hover.value = { leafId: leafEl.dataset.leafId, zone: zoneAt(leafEl, x, y) };
+  const result = zoneAt(leafEl, x, y);
+  hover.value = {
+    leafId: leafEl.dataset.leafId,
+    zone: result.zone,
+    targetIndex: result.targetIndex,
+  };
 }
 
 /** 停靠到主窗口左/右/底边（整棵树的外侧）。 */
@@ -215,7 +270,7 @@ function startDrag(tab: string, event: PointerEvent) {
       const edge = edgeHover.value;
       const target = hover.value;
       if (edge && !forceFloat) dockEdge(tab, edge);
-      else if (target && !forceFloat) drop(target.leafId, target.zone, tab);
+      else if (target && !forceFloat) drop(target.leafId, target.zone, tab, target.targetIndex);
       else detach(tab, dragPos.x, dragPos.y);
     }
     dragPanel.value = null;
@@ -289,7 +344,7 @@ function startFloatDrag(tab: string, event: PointerEvent) {
     if (edge && !forceFloat) {
       dockEdge(tab, edge);
     } else if (target && !forceFloat) {
-      drop(target.leafId, target.zone, tab);
+      drop(target.leafId, target.zone, tab, target.targetIndex);
     } else {
       floating.value = floating.value.map((item) =>
         item.tab === tab ? clampFloatPanel(item, window.innerWidth, window.innerHeight) : item,
