@@ -23,6 +23,7 @@
 #[cfg(feature = "host")]
 use prism_ecs::World;
 use prism_ecs::{Component, Entity};
+pub use prism_project_api::keys;
 pub use prism_project_api::{EntityHandle, InputSnapshot};
 use prism_reflect::Reflect;
 

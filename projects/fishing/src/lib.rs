@@ -12,7 +12,7 @@ pub fn build_app() -> prism_app::App {
         .with_subsystem(prism_app::Subsystem::Audio);
 
     app.add_system("game::world", world_system);
-    app.add_system("game::fishing", game::fishing::tick)
+    app.add_system("game::fishing", fishing_system)
         .add_system("game::boat", boat_system);
     app
 }
@@ -22,6 +22,17 @@ fn world_system(world: &mut prism_engine::ecs::World, dt: f32) {
     {
         let mut api = prism_game_api::GameWorld::host(world);
         game::world::tick(&mut state, &mut api, dt);
+    }
+    if let Some(state) = state {
+        world.insert_resource(state);
+    }
+}
+
+fn fishing_system(world: &mut prism_engine::ecs::World, dt: f32) {
+    let mut state = world.remove_resource::<game::fishing::FishingState>();
+    {
+        let mut api = prism_game_api::GameWorld::host(world);
+        game::fishing::tick(&mut state, &mut api, dt);
     }
     if let Some(state) = state {
         world.insert_resource(state);
