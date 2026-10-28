@@ -120,6 +120,18 @@ pub fn asset_exists(relative: impl AsRef<Path>) -> bool {
     asset_path(relative).is_some_and(|path| path.is_file())
 }
 
+/// 读取松散资产原始字节。
+pub fn read_asset_file(relative: impl AsRef<Path>) -> std::io::Result<Vec<u8>> {
+    let relative = relative.as_ref();
+    let path = asset_path(relative).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("asset root not found for {}", relative.display()),
+        )
+    })?;
+    std::fs::read(&path)
+}
+
 /// 读取松散文本资产（关卡配置、清单等）。
 pub fn read_asset_text(relative: impl AsRef<Path>) -> std::io::Result<String> {
     let relative = relative.as_ref();

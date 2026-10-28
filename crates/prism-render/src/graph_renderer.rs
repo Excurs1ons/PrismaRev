@@ -228,6 +228,8 @@ pub struct GraphRenderer {
     /// Offscreen 目标 for headless 众数 — owned device-local 图像 +
     /// host-visible staging 缓冲区 `None` in windowed 众数
     offscreen: Option<OffscreenTarget>,
+    /// Fence used to synchronize command buffer reuse in headless / offscreen mode.
+    headless_fence: vk::Fence,
     /// 已预约、尚未在 `execute` 里落地的截图请求。
     pending_screenshot: Option<crate::screenshot::ScreenshotRequest>,
     /// 已经记录进命令缓冲区、等待帧提交后读回的截图。
@@ -465,6 +467,7 @@ impl GraphRenderer {
             ui_overlay: None,
             is_headless: false,
             offscreen: None,
+            headless_fence: vk::Fence::null(),
             pending_screenshot: None,
             screenshot: None,
         })
@@ -521,6 +524,10 @@ impl GraphRenderer {
         let context = Arc::new(VulkanContext::new(&[])?);
         let offscreen = OffscreenTarget::new(&context, width, height)?;
         let color_format = offscreen.format;
+
+        let fence_info = vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED);
+        let headless_fence = unsafe { context.device.create_fence(&fence_info, None) }
+            .context("create headless frame fence")?;
 
         // 运行时 with 2 命令 buffers (minimal for headless ops).
         let runtime = RenderRuntime::new(context.clone(), 2)?;
@@ -683,6 +690,7 @@ impl GraphRenderer {
             pending_screenshot: None,
             screenshot: None,
             offscreen: Some(offscreen),
+            headless_fence,
         })
     }
 
@@ -1384,6 +1392,17 @@ impl GraphRenderer {
 
         // Headless: no acquire, just grab cmd buf[0].
         if self.is_headless {
+            if self.headless_fence != vk::Fence::null() {
+                unsafe {
+                    device
+                        .wait_for_fences(&[self.headless_fence], true, u64::MAX)
+                        .context("wait for headless frame fence")?;
+                    device
+                        .reset_fences(&[self.headless_fence])
+                        .context("reset headless frame fence")?;
+                }
+            }
+
             let cmd = self.runtime.command_buffers[0];
             unsafe { device.reset_command_buffer(cmd, vk::CommandBufferResetFlags::empty()) }
                 .context("reset command buffer (headless)")?;
@@ -1408,7 +1427,7 @@ impl GraphRenderer {
                 image_index: 0,
                 frame_index: 0,
                 extent,
-                fence: vk::Fence::null(),
+                fence: self.headless_fence,
                 image_available: vk::Semaphore::null(),
                 render_finished: vk::Semaphore::null(),
             }));
@@ -2058,6 +2077,11 @@ impl GraphRenderer {
         // 销毁 offscreen 目标 (headless 众数
         if let Some(mut target) = self.offscreen.take() {
             unsafe { target.destroy(device) };
+        }
+
+        if self.headless_fence != vk::Fence::null() {
+            unsafe { device.destroy_fence(self.headless_fence, None) };
+            self.headless_fence = vk::Fence::null();
         }
     }
 }

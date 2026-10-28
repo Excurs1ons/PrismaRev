@@ -41,7 +41,7 @@ pub mod keys {
     pub const OTHER_BASE: usize = 30;
 }
 
-pub const ABI_VERSION: u32 = 4;
+pub const ABI_VERSION: u32 = 6;
 
 pub const SUCCESS: i32 = 0;
 pub const INVALID_ARGUMENT: i32 = 1;
@@ -54,6 +54,8 @@ pub const BUFFER_TOO_SMALL: i32 = 5;
 
 pub const HOST_CAP_LOGGING: u64 = 1 << 0;
 pub const HOST_CAP_WORLD_COMMANDS: u64 = 1 << 1;
+/// 松散资产访问（`asset_exists` / `read_asset_file`）。
+pub const HOST_CAP_ASSET: u64 = 1 << 4;
 pub const HOST_CAP_COMPONENTS: u64 = 1 << 2;
 pub const HOST_CAP_DRAW: u64 = 1 << 3;
 
@@ -145,6 +147,22 @@ impl Default for InputSnapshot {
 // ---------------------------------------------------------------------------
 // Host callbacks
 // ---------------------------------------------------------------------------
+
+/// 松散资产是否存在：返回 1/0，负数为错误。
+pub type AssetExists = unsafe extern "C" fn(
+    user_data: *mut core::ffi::c_void,
+    path: *const u8,
+    path_len: usize,
+) -> i32;
+
+/// 读取松散资产；返回的指针只在下次宿主调用前有效。
+pub type ReadAssetFile = unsafe extern "C" fn(
+    user_data: *mut core::ffi::c_void,
+    path: *const u8,
+    path_len: usize,
+    out_ptr: *mut *const u8,
+    out_len: *mut usize,
+) -> i32;
 
 pub type LogMessage = unsafe extern "C" fn(
     user_data: *mut core::ffi::c_void,
@@ -240,6 +258,8 @@ pub type DrawQuad = unsafe extern "C" fn(user_data: *mut core::ffi::c_void, quad
 #[derive(Clone, Copy)]
 pub struct HostApi {
     pub abi_version: u32,
+    /// Schema fingerprint of reflected engine components (prevents stale module loads).
+    pub schema_fingerprint: u64,
     pub capabilities: u64,
     pub scene_generation: u64,
     pub user_data: *mut core::ffi::c_void,
@@ -254,6 +274,8 @@ pub struct HostApi {
     pub despawn_entity: Option<DespawnEntity>,
     pub is_alive: Option<IsAlive>,
     pub draw_quad: Option<DrawQuad>,
+    pub asset_exists: Option<AssetExists>,
+    pub read_asset_file: Option<ReadAssetFile>,
 }
 
 impl HostApi {
@@ -261,6 +283,7 @@ impl HostApi {
     pub const fn logging_only() -> Self {
         Self {
             abi_version: ABI_VERSION,
+            schema_fingerprint: 0,
             capabilities: HOST_CAP_LOGGING,
             scene_generation: 0,
             user_data: core::ptr::null_mut(),
@@ -281,6 +304,8 @@ impl HostApi {
             despawn_entity: None,
             is_alive: None,
             draw_quad: None,
+            asset_exists: None,
+            read_asset_file: None,
         }
     }
 }
@@ -305,6 +330,8 @@ pub type GetProjectApi = unsafe extern "C" fn(*mut ProjectApi) -> i32;
 #[derive(Clone, Copy)]
 pub struct ProjectApi {
     pub abi_version: u32,
+    /// Schema fingerprint of reflected engine components built into the project module.
+    pub schema_fingerprint: u64,
     pub create: Option<CreateProject>,
     pub tick: Option<TickProject>,
     pub shutdown: Option<ShutdownProject>,
@@ -314,6 +341,7 @@ impl ProjectApi {
     pub const fn empty() -> Self {
         Self {
             abi_version: 0,
+            schema_fingerprint: 0,
             create: None,
             tick: None,
             shutdown: None,

@@ -77,6 +77,9 @@ pub struct GpuAssetResolver {
     /// 读 `.pak` 并刷日志。缓存以路径为值：路径被改写（换素材、热重载换包）时
     /// 键不再匹配，会自动重新尝试。
     failed: HashMap<(Entity, AssetSlot), String>,
+    /// 最近一次解析的精灵路径。项目只改 `sprite_path`，这里发现不一致就重新解析，
+    /// 不再要求调用方手动把 `SpriteRef::generation` 清零。
+    sprite_paths: HashMap<Entity, String>,
 }
 
 impl GpuAssetResolver {
@@ -85,6 +88,7 @@ impl GpuAssetResolver {
             resource_manager: ResourceManager::new(),
             enqueued: HashSet::new(),
             failed: HashMap::new(),
+            sprite_paths: HashMap::new(),
         }
     }
 
@@ -185,6 +189,8 @@ impl GpuAssetResolver {
         // 收集待处理实体（首个），避免同时借用世界 & self。
         let pending: Vec<PendingRequest> = {
             // 失败缓存只对仍然存在的实体有意义；实体被删除后顺手回收。
+            self.sprite_paths
+                .retain(|entity, _| world.get::<SpriteRenderer>(*entity).is_some());
             self.failed.retain(|(entity, _), _| {
                 world.get::<MeshRenderer>(*entity).is_some()
                     || world.get::<SpriteRenderer>(*entity).is_some()
@@ -226,7 +232,12 @@ impl GpuAssetResolver {
                     .get::<SpriteRef>(entity)
                     .map(|r| r.generation == 0)
                     .unwrap_or(true);
-                if unresolved
+                // 没有 `SpriteRef`（运行期新生成的精灵）或路径被改写都算待解析。
+                let path_changed = self
+                    .sprite_paths
+                    .get(&entity)
+                    .is_some_and(|last| last != &sprite.sprite_path);
+                if (unresolved || path_changed)
                     && !self.failed_before(entity, AssetSlot::Sprite, &sprite.sprite_path)
                     && !self.enqueued.contains(&entity)
                 {
@@ -237,6 +248,7 @@ impl GpuAssetResolver {
                         sprite_path: Some(sprite.sprite_path.clone()),
                     });
                     self.enqueued.insert(entity);
+                    self.sprite_paths.insert(entity, sprite.sprite_path.clone());
                 }
             }
             out
@@ -317,11 +329,20 @@ impl GpuAssetResolver {
                 }
             }
             if let (Some(slot), Some(size)) = (result.texture_slot, result.texture_size) {
-                if let Some(sr) = world.get_mut::<SpriteRef>(*entity) {
-                    sr.texture_slot = slot;
-                    sr.size = size;
-                    sr.generation = 1;
-                }
+                let mut sprite =
+                    world
+                        .get::<SpriteRef>(*entity)
+                        .cloned()
+                        .unwrap_or_else(|| SpriteRef {
+                            asset_id: crate::scene::components::SceneAssetId::generate(),
+                            texture_slot: 0,
+                            size: [0, 0],
+                            generation: 0,
+                        });
+                sprite.texture_slot = slot;
+                sprite.size = size;
+                sprite.generation = 1;
+                world.insert(*entity, sprite);
             }
             self.enqueued.remove(entity);
         }
@@ -617,6 +638,85 @@ mod tests {
                 material_slot: 0,
                 generation: 0,
             },
+        );
+    }
+
+    /// 精灵只需要 `SpriteRenderer`：`SpriteRef` 由解析结果补上，项目不碰引擎内部状态。
+    #[test]
+    fn sprite_without_ref_is_resolved_and_ref_is_created() {
+        let mut world = World::new();
+        let entity = world.spawn();
+        world.insert(
+            entity,
+            SpriteRenderer {
+                sprite_path: "sprites/boat.png".to_string(),
+                ..Default::default()
+            },
+        );
+        let mut resolver = GpuAssetResolver::new();
+
+        let first = resolver.prepare_requests(&world);
+        // 资源包为空，所以贴图加载会失败；关键是「没有 `SpriteRef` 也会入队」。
+        assert_eq!(first.len(), 1, "没有 SpriteRef 的精灵也要解析一次");
+
+        resolver.apply_results(
+            &mut world,
+            &[(
+                entity,
+                AssetResolveResult {
+                    mesh_handle: None,
+                    material_slot: None,
+                    texture_slot: Some(7),
+                    texture_size: Some([16, 16]),
+                },
+            )],
+        );
+        let sprite = world
+            .get::<SpriteRef>(entity)
+            .expect("解析后应补上 SpriteRef");
+        assert_eq!(sprite.texture_slot, 7);
+        assert_eq!(sprite.generation, 1);
+
+        // 已解析且路径没变：不再重复投递。
+        assert!(resolver.prepare_requests(&world).is_empty());
+    }
+
+    /// 改 `sprite_path` 就够：不再需要手动把 `generation` 清零。
+    #[test]
+    fn sprite_path_change_re_resolves_without_touching_generation() {
+        let mut world = World::new();
+        let entity = world.spawn();
+        world.insert(
+            entity,
+            SpriteRenderer {
+                sprite_path: "sprites/bg@day.png".to_string(),
+                ..Default::default()
+            },
+        );
+        let mut resolver = GpuAssetResolver::new();
+        assert_eq!(resolver.prepare_requests(&world).len(), 1);
+        resolver.apply_results(
+            &mut world,
+            &[(
+                entity,
+                AssetResolveResult {
+                    mesh_handle: None,
+                    material_slot: None,
+                    texture_slot: Some(1),
+                    texture_size: Some([8, 8]),
+                },
+            )],
+        );
+        assert_eq!(world.get::<SpriteRef>(entity).unwrap().generation, 1);
+
+        world.get_mut::<SpriteRenderer>(entity).unwrap().sprite_path =
+            "sprites/bg@night.png".to_string();
+        let requests = resolver.prepare_requests(&world);
+        assert_eq!(requests.len(), 1, "路径变化必须重新解析");
+        assert_eq!(
+            world.get::<SpriteRef>(entity).unwrap().generation,
+            1,
+            "宿主不需要（也不应该）手动清零 generation"
         );
     }
 
