@@ -1,122 +1,135 @@
-//! PrismaRev 用户游戏项目库目标。
+//! PrismaRev 用户游戏项目。
 //!
-//! 桌面端是纯二进制（`src/main.rs`），本 lib 目标只为 Android 服务：
-//! 导出 `android_main` JNI 入口，产出 `libprisma.so` 由
-//! GameActivity 加载（launcher `gen/android` 的 Manifest `lib_name`）。
+//! 两种构建形态共用同一份 gameplay 代码：
 //!
-//! 应用构建逻辑（`build_app`）在 main 与 android 入口间共享。
+//! - **player**（默认）：桌面二进制 `prisma` + Android `libprisma.so`，
+//!   直接链接 `prism-app` / `prism-engine`。
+//! - **preview-module**：编辑器加载的动态模块，只依赖跨 ABI 的
+//!   `prism-game-api` / `prism-project-api`，**不链接引擎**。
+//!
+//! 项目自己的类型（`intro::IntroState`）始终留在本 crate 里：引擎和编辑器
+//! 只通过 opaque 句柄与通用组件 schema 与项目交互。
 
 pub mod intro;
 
-use prism_engine::ui::ParticleSystem2D;
+// ===========================================================================
+// 静态 Player
+// ===========================================================================
 
 /// 构造应用：引擎从 `assets/scenes.pak` 的路径清单加载 intro 场景实体
 /// （由 `assets/scenes/intro.scene.json` cook 而来），本项目只注册
-/// `intro::tick` system 驱动动画。
+/// `intro::tick_system` 驱动动画。
+#[cfg(feature = "player")]
 pub fn build_app() -> prism_app::App {
     let mut app = prism_app::app()
         .with_subsystem(prism_app::Subsystem::Render)
         .with_subsystem(prism_app::Subsystem::Audio);
-    // 开屏雨滴：2D 粒子系统资源，尺寸随后每帧按 ScreenSize 更新，
-    // 由 `intro::tick` 驱动并按标题淡入淡出控制整体强度。
-    app.insert_resource(ParticleSystem2D::rain_preset(1920.0, 1080.0));
-    app.add_system("intro::tick", intro::tick);
+    app.add_system("intro::tick", intro::tick_system);
     app
 }
 
-/// Same-build desktop preview module entry point.
-#[cfg(not(target_os = "android"))]
-#[no_mangle]
-pub unsafe extern "C" fn prism_project_get_api(out: *mut prism_project_api::ProjectApi) -> i32 {
-    if out.is_null() {
-        return prism_project_api::INVALID_ARGUMENT;
-    }
-    *out = prism_project_api::ProjectApi {
-        abi_version: prism_project_api::ABI_VERSION,
-        create: Some(preview_create),
-        tick: Some(preview_tick),
-        shutdown: Some(preview_shutdown),
-    };
-    prism_project_api::SUCCESS
-}
+// ===========================================================================
+// 编辑器加载的 preview 模块
+// ===========================================================================
 
-#[cfg(not(target_os = "android"))]
-struct PreviewState {
-    ticks: u64,
-    scene_generation: Option<u64>,
-}
+#[cfg(feature = "preview-module")]
+mod preview {
+    use std::sync::OnceLock;
 
-#[cfg(not(target_os = "android"))]
-unsafe extern "C" fn preview_create(
-    host: *const prism_project_api::HostApi,
-    out: *mut *mut std::ffi::c_void,
-) -> i32 {
-    if host.is_null() || out.is_null() {
-        return prism_project_api::INVALID_ARGUMENT;
-    }
-    let host = unsafe { &*host };
-    if host.abi_version != prism_project_api::ABI_VERSION {
-        return prism_project_api::INVALID_ARGUMENT;
-    }
-    let state = Box::new(PreviewState {
-        ticks: 0,
-        scene_generation: None,
-    });
-    unsafe { *out = Box::into_raw(state).cast() };
-    if let Some(log) = host.log {
-        let message = b"Prisma project preview started";
-        unsafe { log(host.user_data, 3, message.as_ptr(), message.len()) };
-    }
-    prism_project_api::SUCCESS
-}
+    use prism_game_api::GameWorld;
+    use prism_project_api::{HostApi, ProjectApi, ABI_VERSION, INVALID_ARGUMENT, SUCCESS};
 
-#[cfg(not(target_os = "android"))]
-unsafe extern "C" fn preview_tick(
-    host_api: *const prism_project_api::HostApi,
-    state: *mut std::ffi::c_void,
-    _dt: f32,
-) -> i32 {
-    let Some(state) = (unsafe { state.cast::<PreviewState>().as_mut() }) else {
-        return prism_project_api::INVALID_ARGUMENT;
-    };
-    state.ticks = state.ticks.saturating_add(1);
-    if host_api.is_null() {
-        return prism_project_api::INVALID_ARGUMENT;
+    use crate::intro::{self, IntroState};
+
+    /// 项目模块持有的全部状态。
+    ///
+    /// 它**不会**出现在宿主世界里：宿主只拿到一个 `*mut c_void`。
+    struct PreviewState {
+        intro: Option<IntroState>,
+        scene_generation: Option<u64>,
     }
-    let host = unsafe { &*host_api };
-    if state.scene_generation != Some(host.scene_generation) {
-        let Some(spawn_entity) = host.spawn_entity else {
-            return prism_project_api::REGISTRATION_FAILED;
-        };
-        let Some(set_entity_name) = host.set_entity_name else {
-            return prism_project_api::REGISTRATION_FAILED;
-        };
-        let mut entity = prism_project_api::EntityHandle::default();
-        if unsafe { spawn_entity(host.user_data, &mut entity) } != prism_project_api::SUCCESS {
-            return prism_project_api::REGISTRATION_FAILED;
+
+    /// 组件 schema：编码组件时生成 RTTIBin 的类型表。只需建一次。
+    fn registry() -> &'static prism_scene::ComponentRegistry {
+        static REGISTRY: OnceLock<prism_scene::ComponentRegistry> = OnceLock::new();
+        REGISTRY.get_or_init(|| {
+            let mut registry = prism_scene::ComponentRegistry::new();
+            prism_scene::register_builtin_components(&mut registry);
+            registry
+        })
+    }
+
+    pub unsafe extern "C" fn get_api(out: *mut ProjectApi) -> i32 {
+        if out.is_null() {
+            return INVALID_ARGUMENT;
         }
-        let name = b"project_preview_entity";
-        if unsafe { set_entity_name(host.user_data, entity, name.as_ptr(), name.len()) }
-            != prism_project_api::SUCCESS
-        {
-            return prism_project_api::REGISTRATION_FAILED;
+        unsafe {
+            *out = ProjectApi {
+                abi_version: ABI_VERSION,
+                create: Some(create),
+                tick: Some(tick),
+                shutdown: Some(shutdown),
+            };
         }
-        state.scene_generation = Some(host.scene_generation);
+        SUCCESS
     }
-    if state.ticks == 1 {
+
+    unsafe extern "C" fn create(host: *const HostApi, out: *mut *mut std::ffi::c_void) -> i32 {
+        if host.is_null() || out.is_null() {
+            return INVALID_ARGUMENT;
+        }
+        let host = unsafe { &*host };
+        if host.abi_version != ABI_VERSION {
+            return INVALID_ARGUMENT;
+        }
+        let state = Box::new(PreviewState {
+            intro: None,
+            scene_generation: None,
+        });
+        unsafe { *out = Box::into_raw(state).cast() };
         if let Some(log) = host.log {
-            let message = b"Prisma project preview ticked";
+            let message = b"prisma preview module started";
             unsafe { log(host.user_data, 3, message.as_ptr(), message.len()) };
         }
+        SUCCESS
     }
-    prism_project_api::SUCCESS
+
+    unsafe extern "C" fn tick(
+        host_api: *const HostApi,
+        state: *mut std::ffi::c_void,
+        dt: f32,
+    ) -> i32 {
+        let Some(state) = (unsafe { state.cast::<PreviewState>().as_mut() }) else {
+            return INVALID_ARGUMENT;
+        };
+        if host_api.is_null() {
+            return INVALID_ARGUMENT;
+        }
+        let host = unsafe { &*host_api };
+
+        // 场景重载会让所有实体句柄失效：丢掉绑定的状态，下一帧按 Name 重绑。
+        if state.scene_generation != Some(host.scene_generation) {
+            state.intro = None;
+            state.scene_generation = Some(host.scene_generation);
+        }
+
+        let mut world = GameWorld::plugin(host, registry().type_registry());
+        intro::tick(&mut state.intro, &mut world, dt);
+        SUCCESS
+    }
+
+    unsafe extern "C" fn shutdown(state: *mut std::ffi::c_void) {
+        if !state.is_null() {
+            drop(unsafe { Box::from_raw(state.cast::<PreviewState>()) });
+        }
+    }
 }
 
-#[cfg(not(target_os = "android"))]
-unsafe extern "C" fn preview_shutdown(state: *mut std::ffi::c_void) {
-    if !state.is_null() {
-        drop(unsafe { Box::from_raw(state.cast::<PreviewState>()) });
-    }
+/// 编辑器解析的动态模块入口。
+#[cfg(feature = "preview-module")]
+#[no_mangle]
+pub unsafe extern "C" fn prism_project_get_api(out: *mut prism_project_api::ProjectApi) -> i32 {
+    unsafe { preview::get_api(out) }
 }
 
 // ===========================================================================
@@ -127,7 +140,7 @@ unsafe extern "C" fn preview_shutdown(state: *mut std::ffi::c_void) {
 ///
 /// GameActivity's native glue resolves this symbol with `dlsym`, so it must
 /// keep C linkage and an unmangled name; a plain Rust `fn` is not exported.
-#[cfg(target_os = "android")]
+#[cfg(all(target_os = "android", feature = "player"))]
 #[no_mangle]
 pub extern "C" fn android_main(android_app: prism_app::AndroidApp) {
     // `run_on_android` stages APK assets and the launch config before calling

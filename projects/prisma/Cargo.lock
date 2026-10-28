@@ -2536,6 +2536,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "prism-game-api"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "prism-ecs",
+ "prism-project-api",
+ "prism-reflect",
+]
+
+[[package]]
 name = "prism-gfx"
 version = "0.1.0"
 dependencies = [
@@ -2613,7 +2623,9 @@ dependencies = [
  "log",
  "prism-app",
  "prism-engine",
+ "prism-game-api",
  "prism-project-api",
+ "prism-scene",
 ]
 
 [[package]]
