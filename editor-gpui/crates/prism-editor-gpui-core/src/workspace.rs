@@ -572,6 +572,60 @@ impl Workspace {
         Ok(())
     }
 
+    /// 删除场景 / 预制体文档：磁盘文件、打开文档、项目文件表与 `scenes.toml` 条目一起清理。
+    ///
+    /// 不可撤销，调用方负责确认；预制体实例会保留（链接悬空，便于发现）。
+    pub fn delete_document(&mut self, path: &str) -> io::Result<()> {
+        let root = self.project_root.clone().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotFound, "没有绑定项目根，无法删除文档")
+        })?;
+        if !path.starts_with("assets/")
+            || !(path.ends_with(".scene.json") || path.ends_with(".prefab.json"))
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "只允许删除 assets/ 下的 .scene.json / .prefab.json",
+            ));
+        }
+        let full = root.join(path);
+        if !full.is_file() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("{path} 不存在"),
+            ));
+        }
+        std::fs::remove_file(full)?;
+
+        let removed = self
+            .docs
+            .iter()
+            .position(|document| document.path.as_deref() == Some(path));
+        self.docs
+            .retain(|document| document.path.as_deref() != Some(path));
+        if let Some(index) = removed {
+            if index < self.active {
+                self.active -= 1;
+            }
+        }
+        self.active = self.active.min(self.docs.len().saturating_sub(1));
+        self.selection.clear();
+        self.expanded.clear();
+        if self.docs.is_empty() {
+            self.new_document(DocKind::Scene, None);
+        }
+
+        let doc_relative = path.trim_start_matches("assets/");
+        if let Some(position) = self.scene_manifest.scenes.iter().position(|entry| {
+            crate::manifest::doc_relative_path(&entry.path).as_deref() == Some(doc_relative)
+        }) {
+            self.scene_manifest.remove(position);
+            self.persist_scene_manifest();
+        }
+        self.project_files.retain(|file| file.path != path);
+        self.log(LogSource::Editor, LogLevel::Info, format!("已删除 {path}"));
+        Ok(())
+    }
+
     /// 资产重命名 / 移动：先改磁盘文件，再改写所有打开文档里的精确路径引用，
     /// 并同步文档自身的路径。返回 `(替换次数, 受影响文档)`。
     pub fn rename_asset(&mut self, from: &str, to: &str) -> io::Result<(usize, Vec<String>)> {
@@ -2570,6 +2624,46 @@ mod tests {
         assert!(workspace.remove_scene_entry(0));
         assert_eq!(SceneManifest::read(&project.root).unwrap().scenes.len(), 1);
         assert!(!workspace.remove_scene_entry(9));
+    }
+
+    #[test]
+    fn delete_document_cleans_file_manifest_and_open_tab() {
+        let project = TempProject::new("doc-delete");
+        let scene = r#"{"version":3,"entities":[]}"#;
+        std::fs::write(project.root.join("assets/scenes/a.scene.json"), scene).unwrap();
+        std::fs::write(project.root.join("assets/scenes/b.scene.json"), scene).unwrap();
+        std::fs::write(
+            project.root.join("assets/scenes.toml"),
+            "[[scenes]]\nname = \"a\"\npath = \"scenes/a.rscn\"\n\n\
+             [[scenes]]\nname = \"b\"\npath = \"scenes/b.rscn\"\n",
+        )
+        .unwrap();
+        let mut workspace = Workspace::load_fixture(&fixture());
+        workspace.load_project(project.root.clone()).unwrap();
+        assert_eq!(workspace.docs.len(), 2);
+        assert_eq!(
+            workspace.document().path.as_deref(),
+            Some("assets/scenes/a.scene.json")
+        );
+
+        workspace
+            .delete_document("assets/scenes/a.scene.json")
+            .unwrap();
+        assert!(!project.root.join("assets/scenes/a.scene.json").exists());
+        assert_eq!(workspace.docs.len(), 1);
+        assert_eq!(
+            workspace.document().path.as_deref(),
+            Some("assets/scenes/b.scene.json")
+        );
+        assert_eq!(workspace.project_files.len(), 1);
+        let manifest = SceneManifest::read(&project.root).unwrap();
+        assert_eq!(manifest.scenes.len(), 1);
+        assert_eq!(manifest.scenes[0].name, "b");
+
+        assert!(workspace
+            .delete_document("assets/scenes/a.scene.json")
+            .is_err());
+        assert!(workspace.delete_document("assets/settings.toml").is_err());
     }
 
     #[test]

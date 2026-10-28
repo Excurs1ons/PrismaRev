@@ -140,8 +140,10 @@ editor-gpui/
 - **Scene View 目前是 CPU 投影的 `canvas` 绘制**，不是 `prism-render` 的真实画面。
   接线点已经留好：把 `paint_scene` 换成离屏 `GraphRenderer` 的帧（或原生 Vulkan
   popup 窗口 + 输入转发），面板本身不需要改。
-- **文档删除与构建仍是占位**：删除场景/预制体、真实构建与 cook 只写日志。
-  保存 / 另存为 / 重新读取 / settings.toml / 资产改名、删除、实例化与预制体写入已真实落盘。
+- **构建与 cook 仍是占位**：构建面板只打印步骤日志，没有真正调用 cargo / cook。
+  文档删除已真实落盘（菜单「文件 → 删除文档」或资产面板右键，都会先确认，
+  并同时清理打开标签与 `scenes.toml` 条目）。
+  保存 / 另存为 / 重新读取 / settings.toml / scenes.toml / 资产改名、删除、实例化与预制体写入已真实落盘。
 - **文本输入**走 `prism-editor-gpui-core::TextInput`（光标 / 选区 / 按词移动与删除，
   Unicode 安全），但**没有 IME**，也还不画插入符与选区高亮（需要文本测量）。
   补 IME 时需要 `ElementInputHandler`。

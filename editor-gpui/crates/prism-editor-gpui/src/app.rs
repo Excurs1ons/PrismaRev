@@ -308,6 +308,8 @@ pub struct EditorView {
     pub theme_edit: Option<ThemeToken>,
     /// 删除资产前的确认弹层（路径）。
     pub asset_delete: Option<String>,
+    /// 删除当前文档前的确认弹层（路径）。
+    pub document_delete: Option<String>,
     /// Scene / Game View 最近一次绘制的屏幕矩形（拾取与 gizmo 用）。
     /// 内联重命名的起始快照（提交时补一个撤销步，Esc 时回滚）。
     pub rename_base: Option<prism_editor_gpui_core::SceneDoc>,
@@ -361,6 +363,7 @@ impl EditorView {
             gizmo_mode: GizmoMode::Translate,
             theme_edit: None,
             asset_delete: None,
+            document_delete: None,
             rename_base: None,
             last_pick: None,
             scene_bounds: Rc::new(Cell::new(None)),
@@ -496,6 +499,18 @@ impl EditorView {
             self.begin_edit(TextTarget::SaveAs, suggestion, cx);
             return;
         }
+        if command == Command::DeleteDocument {
+            match self.workspace.document().path.clone() {
+                Some(path) => self.document_delete = Some(path),
+                None => self.workspace.log(
+                    prism_editor_gpui_core::LogSource::Editor,
+                    prism_editor_gpui_core::LogLevel::Warn,
+                    "当前文档尚未保存，没有可删除的文件",
+                ),
+            }
+            cx.notify();
+            return;
+        }
         self.add_component_open = false;
         self.workspace.run(command);
         if matches!(
@@ -607,6 +622,7 @@ impl EditorView {
                 self.prefab_save = None;
                 self.theme_edit = None;
                 self.asset_delete = None;
+                self.document_delete = None;
                 cx.notify();
             }
             "down" if !self.workspace.selection.is_empty() => {
@@ -2325,20 +2341,113 @@ impl EditorView {
                                 .text_color(style.color(ThemeToken::OnDanger))
                                 .cursor_pointer()
                                 .on_click(cx.listener(move |this, _, _, cx| {
-                                    match this.workspace.delete_asset(&path) {
-                                        Ok(()) => {
-                                            this.asset_delete = None;
-                                            this.selected_asset = None;
-                                        }
-                                        Err(error) => {
-                                            this.workspace.log(
-                                                prism_editor_gpui_core::LogSource::Editor,
-                                                prism_editor_gpui_core::LogLevel::Error,
-                                                format!("删除失败：{error}"),
-                                            );
-                                            this.asset_delete = None;
-                                        }
+                                    let result = if path.ends_with(".scene.json")
+                                        || path.ends_with(".prefab.json")
+                                    {
+                                        this.workspace.delete_document(&path)
+                                    } else {
+                                        this.workspace.delete_asset(&path)
+                                    };
+                                    if let Err(error) = result {
+                                        this.workspace.log(
+                                            prism_editor_gpui_core::LogSource::Editor,
+                                            prism_editor_gpui_core::LogLevel::Error,
+                                            format!("删除失败：{error}"),
+                                        );
                                     }
+                                    this.asset_delete = None;
+                                    this.selected_asset = None;
+                                    cx.notify();
+                                }))
+                                .child("删除"),
+                        ),
+                ),
+        )
+    }
+
+    fn render_document_delete(&mut self, cx: &mut Context<Self>) -> Option<Div> {
+        let path = self.document_delete.clone()?;
+        let style = self.style;
+        Some(
+            div()
+                .absolute()
+                .top(px(170.0))
+                .left(px(f32::from(self.window_size.width) * 0.5 - 210.0))
+                .w(px(420.0))
+                .bg(style.panel_raised())
+                .border_1()
+                .border_color(style.danger())
+                .rounded_sm()
+                .shadow_lg()
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .px_2()
+                        .py_1()
+                        .text_sm()
+                        .text_color(style.text_strong())
+                        .child("删除文档"),
+                )
+                .child(
+                    div()
+                        .px_2()
+                        .text_size(px(10.0))
+                        .text_color(style.text_soft())
+                        .child(SharedString::from(path.clone())),
+                )
+                .child(
+                    div()
+                        .px_2()
+                        .py_1()
+                        .text_size(px(9.0))
+                        .text_color(style.muted())
+                        .child("磁盘文件、打开标签与 assets/scenes.toml 条目都会删除；不可撤销。"),
+                )
+                .child(
+                    div()
+                        .px_2()
+                        .pb_2()
+                        .flex()
+                        .flex_row()
+                        .justify_end()
+                        .gap_2()
+                        .child(
+                            div()
+                                .id("document-delete-cancel")
+                                .px_2()
+                                .py_0p5()
+                                .rounded_sm()
+                                .text_size(px(10.0))
+                                .text_color(style.text_soft())
+                                .cursor_pointer()
+                                .hover(move |this| this.bg(style.row_hover()))
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.document_delete = None;
+                                    cx.notify();
+                                }))
+                                .child("取消"),
+                        )
+                        .child(
+                            div()
+                                .id("document-delete-confirm")
+                                .px_2()
+                                .py_0p5()
+                                .rounded_sm()
+                                .bg(style.danger())
+                                .text_size(px(10.0))
+                                .text_color(style.color(ThemeToken::OnDanger))
+                                .cursor_pointer()
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    if let Err(error) = this.workspace.delete_document(&path) {
+                                        this.workspace.log(
+                                            prism_editor_gpui_core::LogSource::Editor,
+                                            prism_editor_gpui_core::LogLevel::Error,
+                                            format!("删除失败：{error}"),
+                                        );
+                                    }
+                                    this.document_delete = None;
+                                    this.selected_asset = None;
                                     cx.notify();
                                 }))
                                 .child("删除"),
@@ -2767,6 +2876,23 @@ impl Render for EditorView {
                     })),
             );
             root = root.child(asset_delete);
+        }
+
+        let document_delete = self.render_document_delete(cx);
+        if let Some(document_delete) = document_delete {
+            root = root.child(
+                div()
+                    .id("document-delete-dismiss")
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full()
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.document_delete = None;
+                        cx.notify();
+                    })),
+            );
+            root = root.child(document_delete);
         }
 
         let asset_rename = self.render_asset_rename(cx);

@@ -1,6 +1,6 @@
 # GPUI 原生编辑器（`editor-gpui/`）
 
-> 状态：**可编译的类型检查 + 150 个数据层单测通过**；桌面运行尚未在 CI 上跑过
+> 状态：**可编译的类型检查 + 151 个数据层单测通过**；桌面运行尚未在 CI 上跑过
 > （GPUI 需要 Windows/macOS/Linux 桌面与 GPU）。
 >
 > 本文说明「为什么做、边界在哪、怎么接真实引擎」，功能清单见
@@ -121,6 +121,9 @@ Unity 形状的编辑器，又不会把 `prism-render` 绑死在某套 UI 生命
   `instantiate_prefab` 追加到场景并挂到选中实体，自动选中新根、可撤销。
 - 资产删除：`delete_asset` 只允许 `assets/` 内的普通文件，场景/预制体走文档面板；
   引用不做自动清理（检查器里保留悬空值，便于发现）。
+- 文档删除：`delete_document` 删磁盘文件 + 打开标签 + 项目文件表，并移除
+  `scenes.toml` 里对应的条目（立即写盘）；预制体实例保留为悬空链接。菜单与资产面板
+  都先弹确认层，确认后才执行。
 - 资产重命名 / 移动：`rename_path` 只允许 `assets/` 内、拒绝覆盖；随后
   `SceneDoc::rewrite_reference` 对所有组件的字符串值做**精确匹配**替换（不做子串，
   避免把 `a.png` 误伤成 `a.png.bak`），并把打开文档自己的 `path` 同步过去。
@@ -197,7 +200,7 @@ Unity 形状的编辑器，又不会把 `prism-render` 绑死在某套 UI 生命
 
 ```sh
 cd editor-gpui
-cargo test -p prism-editor-gpui-core                                  # 150 passed
+cargo test -p prism-editor-gpui-core                                  # 151 passed
 cargo check -p prism-editor-gpui --target x86_64-pc-windows-gnu       # 类型检查
 cargo clippy -p prism-editor-gpui -p prism-editor-gpui-core \
     --target x86_64-pc-windows-gnu                                    # clean
