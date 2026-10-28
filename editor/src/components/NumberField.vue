@@ -56,7 +56,7 @@ function commit(value: number) {
 }
 
 function modifierScale(event: { shiftKey: boolean; altKey: boolean }): number {
-  return event.shiftKey ? 0.1 : event.altKey ? 10 : 1;
+  return event.shiftKey ? 10 : event.altKey ? 0.1 : 1;
 }
 
 function onFocus(event: FocusEvent) {

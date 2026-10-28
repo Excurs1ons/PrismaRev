@@ -381,6 +381,104 @@ function onRange(event: Event) {
 function onBool(event: Event) {
   set((event.target as HTMLInputElement).checked);
 }
+
+function onAxisPointerDown(i: number, event: PointerEvent) {
+  if (hint.value?.readOnly || event.button !== 0) return;
+  const target = event.currentTarget as HTMLElement;
+  target.setPointerCapture(event.pointerId);
+
+  const startX = event.clientX;
+  const startVal = Number(asArray.value[i] ?? 0);
+  const step = isInteger.value ? 1 : 0.01;
+  let didMove = false;
+
+  const onPointerMove = (ev: PointerEvent) => {
+    const dx = ev.clientX - startX;
+    if (!didMove) {
+      if (Math.abs(dx) < 2) return;
+      didMove = true;
+      document.body.style.cursor = "ew-resize";
+      document.body.style.userSelect = "none";
+    }
+    const mult = ev.shiftKey ? 10 : ev.altKey ? 0.1 : 1;
+    const next = isInteger.value
+      ? Math.round(startVal + dx * step * mult)
+      : Math.round((startVal + dx * step * mult) * 1e6) / 1e6;
+    setItem(i, next, itemPath(i));
+  };
+
+  const onPointerUp = (ev: PointerEvent) => {
+    try {
+      target.releasePointerCapture(ev.pointerId);
+    } catch {}
+    window.removeEventListener("pointermove", onPointerMove);
+    window.removeEventListener("pointerup", onPointerUp);
+    window.removeEventListener("pointercancel", onPointerUp);
+    document.body.style.cursor = "";
+    document.body.style.userSelect = "";
+
+    if (!didMove) {
+      const cell = target.closest(".vector-cell");
+      const inp = cell?.querySelector("input");
+      inp?.focus();
+      inp?.select();
+    }
+  };
+
+  window.addEventListener("pointermove", onPointerMove);
+  window.addEventListener("pointerup", onPointerUp);
+  window.addEventListener("pointercancel", onPointerUp);
+}
+
+function onScalarLabelPointerDown(event: PointerEvent) {
+  if (hint.value?.readOnly || event.button !== 0 || typeof props.value !== "number") return;
+  const target = event.currentTarget as HTMLElement;
+  target.setPointerCapture(event.pointerId);
+
+  const startX = event.clientX;
+  const startVal = props.value;
+  const step = isInteger.value ? 1 : 0.01;
+  let didMove = false;
+
+  const onPointerMove = (ev: PointerEvent) => {
+    const dx = ev.clientX - startX;
+    if (!didMove) {
+      if (Math.abs(dx) < 2) return;
+      didMove = true;
+      document.body.style.cursor = "ew-resize";
+      document.body.style.userSelect = "none";
+    }
+    const mult = ev.shiftKey ? 10 : ev.altKey ? 0.1 : 1;
+    let next = isInteger.value
+      ? Math.round(startVal + dx * step * mult)
+      : Math.round((startVal + dx * step * mult) * 1e6) / 1e6;
+    if (numberBounds.value?.min !== undefined && next < numberBounds.value.min) next = numberBounds.value.min;
+    if (numberBounds.value?.max !== undefined && next > numberBounds.value.max) next = numberBounds.value.max;
+    set(next);
+  };
+
+  const onPointerUp = (ev: PointerEvent) => {
+    try {
+      target.releasePointerCapture(ev.pointerId);
+    } catch {}
+    window.removeEventListener("pointermove", onPointerMove);
+    window.removeEventListener("pointerup", onPointerUp);
+    window.removeEventListener("pointercancel", onPointerUp);
+    document.body.style.cursor = "";
+    document.body.style.userSelect = "";
+
+    if (!didMove) {
+      const row = target.closest(".row");
+      const inp = row?.querySelector("input");
+      inp?.focus();
+      inp?.select();
+    }
+  };
+
+  window.addEventListener("pointermove", onPointerMove);
+  window.addEventListener("pointerup", onPointerUp);
+  window.addEventListener("pointercancel", onPointerUp);
+}
 </script>
 
 <template>
@@ -459,7 +557,14 @@ function onBool(event: Event) {
       </div>
       <div class="vector-group">
         <div v-for="(item, i) in asArray" :key="i" class="vector-cell">
-          <span class="axis-badge" :class="`axis-${AXIS_LABELS[i].toLowerCase()}`">{{ AXIS_LABELS[i] }}</span>
+          <span
+            class="axis-badge"
+            :class="`axis-${AXIS_LABELS[i].toLowerCase()}`"
+            :title="`左右拖动调节 ${AXIS_LABELS[i]}（Shift 10x 快速 / Alt 0.1x 精调）`"
+            @pointerdown="onAxisPointerDown(i, $event)"
+          >
+            {{ AXIS_LABELS[i] }}
+          </span>
           <NumberField
             :model-value="(item as number)"
             :integer="isInteger"
@@ -520,7 +625,13 @@ function onBool(event: Event) {
     :data-field="pathStr"
     :data-drawer="drawer?.renderer"
   >
-    <div v-if="label" class="label" :title="tooltip ?? undefined">
+    <div
+      v-if="label"
+      class="label"
+      :class="{ 'label-scrubbable': kind === 'number' && !hint?.readOnly }"
+      :title="tooltip ?? (kind === 'number' && !hint?.readOnly ? `左右拖动调节 ${label}（Shift 10x 快速 / Alt 0.1x 精调）` : undefined)"
+      @pointerdown="kind === 'number' && !hint?.readOnly ? onScalarLabelPointerDown($event) : undefined"
+    >
       {{ label }}<span v-if="hint?.readOnly" class="ro"> {{ $t("field.readOnly") }}</span
       ><span v-if="customRenderer" class="ro"> ·{{ customRenderer }}</span>
     </div>

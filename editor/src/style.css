@@ -940,6 +940,14 @@ html.compact .dock-tab {
   white-space: nowrap;
   cursor: default;
 }
+.row > .label.label-scrubbable {
+  cursor: ew-resize;
+  user-select: none;
+  transition: color 0.1s;
+}
+.row > .label.label-scrubbable:hover {
+  color: var(--accent, #388bfd);
+}
 .row > .label .ro {
   font-size: 10px;
   opacity: 0.65;
@@ -961,15 +969,25 @@ html.compact .dock-tab {
 }
 .axis-badge {
   position: absolute;
-  left: 4px;
+  left: 2px;
   top: 50%;
   transform: translateY(-50%);
+  width: 14px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   font-size: 10px;
   font-weight: 700;
-  pointer-events: none;
-  z-index: 2;
+  cursor: ew-resize;
+  pointer-events: auto;
+  z-index: 3;
   user-select: none;
-  line-height: 1;
+  border-radius: 2px;
+  transition: background 0.1s;
+}
+.axis-badge:hover {
+  background: var(--hover-bg, rgba(255, 255, 255, 0.12));
 }
 .axis-badge.axis-x { color: #e06c75; }
 .axis-badge.axis-y { color: #98c379; }
