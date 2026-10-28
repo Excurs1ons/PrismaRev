@@ -882,9 +882,7 @@ impl Workspace {
 
     /// 把磁盘上的场景文档加入清单；已存在 / 无项目根时返回 `None`。
     pub fn add_scene_document(&mut self, doc_relative: &str) -> Option<usize> {
-        if self.project_root.is_none() {
-            return None;
-        }
+        self.project_root.as_ref()?;
         let added = self.scene_manifest.add_document(doc_relative);
         if added.is_some() {
             self.persist_scene_manifest();
@@ -1639,6 +1637,59 @@ impl Workspace {
         document.dirty = true;
     }
 
+    /// 多选 gizmo 旋转：每个实体绕自身位置旋转（局部模式各用自身轴），
+    /// 整次拖动只产生一个撤销步。
+    pub fn rotate_entities(&mut self, entity_ids: &[u32], axis: usize, delta_radians: f32) {
+        if entity_ids.is_empty() || !delta_radians.is_finite() || delta_radians.abs() < 1e-6 {
+            return;
+        }
+        let mut ids: Vec<u32> = entity_ids.to_vec();
+        ids.sort_unstable();
+        ids.dedup();
+        let space = self.gizmo_space;
+        let doc = &self.document().doc;
+        let mut changes = Vec::new();
+        for entity_id in &ids {
+            let Some(index) = doc.index_of_id(*entity_id) else {
+                continue;
+            };
+            let before = doc.entities[index].transform;
+            let after_rotation = match space {
+                GizmoSpace::World => {
+                    quat_mul(quat_axis_angle(axis, delta_radians), before.rotation)
+                }
+                GizmoSpace::Local => {
+                    quat_mul(before.rotation, quat_axis_angle(axis, delta_radians))
+                }
+            };
+            changes.push((
+                *entity_id,
+                before,
+                TransformJson {
+                    rotation: quat_normalize(after_rotation),
+                    ..before
+                },
+            ));
+        }
+        if changes.is_empty() {
+            return;
+        }
+        let now = now_ms();
+        let document = self.document_mut();
+        if changes.len() == 1 {
+            let (entity_id, before, after) = changes[0];
+            document
+                .undo
+                .push_transform(&mut document.doc, entity_id, before, after, now);
+        } else {
+            let key = format!("rotate-group/{ids:?}");
+            document
+                .undo
+                .push_transform_batch(&mut document.doc, changes, key, now);
+        }
+        document.dirty = true;
+    }
+
     /// 选中实体的 gizmo 基准（世界空间三轴）。世界模式恒为单位基。
     pub fn gizmo_basis(&self) -> [[f32; 3]; 3] {
         match self.gizmo_space {
@@ -1744,6 +1795,48 @@ impl Workspace {
         document
             .undo
             .push_transform(&mut document.doc, entity_id, before, after, now);
+        document.dirty = true;
+    }
+
+    /// 多选 gizmo 缩放：`targets` 是 (实体 id, 拖动开始时的轴缩放值)，`ratio` 为整体倍数。
+    /// 每个实体保留自己的起始比例，整次拖动只产生一个撤销步。
+    pub fn scale_entities_axis(&mut self, targets: &[(u32, f32)], axis: usize, ratio: f32) {
+        if targets.is_empty() || !ratio.is_finite() || ratio <= 0.0 {
+            return;
+        }
+        let mut sorted: Vec<(u32, f32)> = targets.to_vec();
+        sorted.sort_by_key(|(entity_id, _)| *entity_id);
+        sorted.dedup_by_key(|(entity_id, _)| *entity_id);
+        let doc = &self.document().doc;
+        let mut changes = Vec::new();
+        for (entity_id, start_value) in &sorted {
+            let Some(index) = doc.index_of_id(*entity_id) else {
+                continue;
+            };
+            let before = doc.entities[index].transform;
+            let mut after = before;
+            after.scale[axis] = (*start_value * ratio).clamp(0.01, 1000.0);
+            if before != after {
+                changes.push((*entity_id, before, after));
+            }
+        }
+        if changes.is_empty() {
+            return;
+        }
+        let ids: Vec<u32> = sorted.iter().map(|(entity_id, _)| *entity_id).collect();
+        let now = now_ms();
+        let document = self.document_mut();
+        if changes.len() == 1 {
+            let (entity_id, before, after) = changes[0];
+            document
+                .undo
+                .push_transform(&mut document.doc, entity_id, before, after, now);
+        } else {
+            let key = format!("scale-group/{ids:?}");
+            document
+                .undo
+                .push_transform_batch(&mut document.doc, changes, key, now);
+        }
         document.dirty = true;
     }
 
@@ -2658,6 +2751,72 @@ mod tests {
             light_before
         );
         assert!(!workspace.can_undo());
+    }
+
+    #[test]
+    fn batch_rotate_turns_every_selection_in_one_undo_step() {
+        let mut workspace = Workspace::sample();
+        let cube = index_named(&workspace, "Cube");
+        let light = index_named(&workspace, "Directional Light");
+        let cube_id = workspace.document().doc.entities[cube].id.unwrap();
+        let light_id = workspace.document().doc.entities[light].id.unwrap();
+        let cube_before = workspace.document().doc.entities[cube].transform.rotation;
+        let light_before = workspace.document().doc.entities[light].transform.rotation;
+
+        workspace.rotate_entities(&[cube_id, light_id], 1, 0.5);
+        workspace.rotate_entities(&[cube_id, light_id], 1, 0.5);
+
+        let cube_after = workspace.document().doc.entities[cube].transform.rotation;
+        let light_after = workspace.document().doc.entities[light].transform.rotation;
+        assert_ne!(cube_after, cube_before);
+        assert_ne!(light_after, light_before);
+        assert_eq!(workspace.document().undo.history().len(), 1);
+
+        workspace.undo();
+        let cube_restored = workspace.document().doc.entities[cube].transform.rotation;
+        let light_restored = workspace.document().doc.entities[light].transform.rotation;
+        for (restored, before) in [(cube_restored, cube_before), (light_restored, light_before)] {
+            for (a, b) in restored.iter().zip(before) {
+                assert!((a - b).abs() < 1e-4);
+            }
+        }
+    }
+
+    #[test]
+    fn batch_scale_uses_each_start_value_and_one_undo_step() {
+        let mut workspace = Workspace::sample();
+        let cube = index_named(&workspace, "Cube");
+        let light = index_named(&workspace, "Directional Light");
+        let cube_id = workspace.document().doc.entities[cube].id.unwrap();
+        let light_id = workspace.document().doc.entities[light].id.unwrap();
+        let cube_before = workspace.document().doc.entities[cube].transform.scale;
+        let light_before = workspace.document().doc.entities[light].transform.scale;
+
+        let targets = [(cube_id, cube_before[0]), (light_id, light_before[0])];
+        workspace.scale_entities_axis(&targets, 0, 2.0);
+        workspace.scale_entities_axis(&targets, 0, 3.0);
+
+        assert!(
+            (workspace.document().doc.entities[cube].transform.scale[0] - cube_before[0] * 3.0)
+                .abs()
+                < 1e-4
+        );
+        assert!(
+            (workspace.document().doc.entities[light].transform.scale[0] - light_before[0] * 3.0)
+                .abs()
+                < 1e-4
+        );
+        assert_eq!(workspace.document().undo.history().len(), 1);
+
+        workspace.undo();
+        assert_eq!(
+            workspace.document().doc.entities[cube].transform.scale,
+            cube_before
+        );
+        assert_eq!(
+            workspace.document().doc.entities[light].transform.scale,
+            light_before
+        );
     }
 
     #[test]

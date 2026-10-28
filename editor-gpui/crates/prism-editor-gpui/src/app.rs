@@ -73,13 +73,17 @@ pub enum DragState {
         px_per_unit: f32,
     },
     GizmoRotate {
-        entity_id: u32,
+        /// 一起旋转的实体（多选批量旋转；单选时长度为 1）。
+        entity_ids: Vec<u32>,
         axis: usize,
         center: (f32, f32),
         last_angle: f32,
     },
     GizmoScale {
-        entity_id: u32,
+        /// 一起缩放的实体（多选批量缩放；单选时长度为 1）。
+        entity_ids: Vec<u32>,
+        /// 拖动开始时的轴缩放值（保留各实体自己的起始比例）。
+        starts: Vec<(u32, f32)>,
         axis: usize,
         start: Point<Pixels>,
         start_value: f32,
@@ -1022,8 +1026,7 @@ impl EditorView {
                     .and_then(|entity| entity.id)
             })
             .collect();
-        let single_selection = self.workspace.selection.len() == 1;
-        if let Some((entity_id, world_position, start_scale)) = candidate {
+        if let Some((_entity_id, world_position, start_scale)) = candidate {
             match self.gizmo_mode {
                 GizmoMode::Translate | GizmoMode::Scale => {
                     if let Some((axis, direction, px_per_unit)) =
@@ -1047,9 +1050,15 @@ impl EditorView {
                                 self.workspace.gizmo_space.label()
                             ),
                         );
-                        if self.gizmo_mode == GizmoMode::Scale && !single_selection {
-                            return;
-                        }
+                        let starts: Vec<(u32, f32)> = self
+                            .workspace
+                            .selection
+                            .iter()
+                            .filter_map(|index| {
+                                let entity = self.workspace.document().doc.entities.get(*index)?;
+                                Some((entity.id?, entity.transform.scale[axis]))
+                            })
+                            .collect();
                         self.drag = Some(if self.gizmo_mode == GizmoMode::Translate {
                             DragState::Gizmo {
                                 entity_ids: selection_ids.clone(),
@@ -1062,7 +1071,8 @@ impl EditorView {
                             }
                         } else {
                             DragState::GizmoScale {
-                                entity_id,
+                                entity_ids: selection_ids.clone(),
+                                starts,
                                 axis,
                                 start: position,
                                 start_value: start_scale[axis],
@@ -1074,47 +1084,44 @@ impl EditorView {
                     }
                 }
                 GizmoMode::Rotate => {
-                    if single_selection {
-                        if let Some(axis) =
-                            prism_editor_gpui_core::viewport_math::pick_rotation_axis_oriented(
-                                local,
+                    if let Some(axis) =
+                        prism_editor_gpui_core::viewport_math::pick_rotation_axis_oriented(
+                            local,
+                            &frame,
+                            world_position,
+                            basis,
+                            length,
+                            width,
+                            height,
+                        )
+                    {
+                        if let Some((cx, cy, _)) =
+                            prism_editor_gpui_core::viewport_math::ring_screen_radius_oriented(
                                 &frame,
                                 world_position,
                                 basis,
+                                axis,
                                 length,
                                 width,
                                 height,
                             )
                         {
-                            if let Some((cx, cy, _)) =
-                                prism_editor_gpui_core::viewport_math::ring_screen_radius_oriented(
-                                    &frame,
-                                    world_position,
-                                    basis,
-                                    axis,
-                                    length,
-                                    width,
-                                    height,
-                                )
-                            {
-                                // 统一用窗口坐标：`project` 返回的是面板内坐标。
-                                let center = (
-                                    cx + f32::from(bounds.origin.x),
-                                    cy + f32::from(bounds.origin.y),
-                                );
-                                let last_angle =
-                                    prism_editor_gpui_core::viewport_math::screen_angle(
-                                        (f32::from(position.x), f32::from(position.y)),
-                                        center,
-                                    );
-                                self.drag = Some(DragState::GizmoRotate {
-                                    entity_id,
-                                    axis,
-                                    center,
-                                    last_angle,
-                                });
-                                return;
-                            }
+                            // 统一用窗口坐标：`project` 返回的是面板内坐标。
+                            let center = (
+                                cx + f32::from(bounds.origin.x),
+                                cy + f32::from(bounds.origin.y),
+                            );
+                            let last_angle = prism_editor_gpui_core::viewport_math::screen_angle(
+                                (f32::from(position.x), f32::from(position.y)),
+                                center,
+                            );
+                            self.drag = Some(DragState::GizmoRotate {
+                                entity_ids: selection_ids.clone(),
+                                axis,
+                                center,
+                                last_angle,
+                            });
+                            return;
                         }
                     }
                 }
@@ -1337,7 +1344,7 @@ impl EditorView {
                 cx.notify();
             }
             DragState::GizmoRotate {
-                entity_id,
+                entity_ids,
                 axis,
                 center,
                 last_angle,
@@ -1346,10 +1353,10 @@ impl EditorView {
                 let angle = prism_editor_gpui_core::viewport_math::screen_angle(current, center);
                 let delta = prism_editor_gpui_core::viewport_math::wrap_angle(angle - last_angle);
                 if delta.abs() > 1e-4 {
-                    self.workspace.rotate_entity(entity_id, axis, delta);
+                    self.workspace.rotate_entities(&entity_ids, axis, delta);
                 }
                 self.drag = Some(DragState::GizmoRotate {
-                    entity_id,
+                    entity_ids,
                     axis,
                     center,
                     last_angle: angle,
@@ -1357,7 +1364,8 @@ impl EditorView {
                 cx.notify();
             }
             DragState::GizmoScale {
-                entity_id,
+                entity_ids,
+                starts,
                 axis,
                 start,
                 start_value,
@@ -1371,7 +1379,17 @@ impl EditorView {
                 if event.modifiers.control {
                     value = (value * 4.0).round() / 4.0;
                 }
-                self.workspace.set_scale_axis(entity_id, axis, value);
+                let ratio = value / start_value.max(0.01);
+                self.workspace.scale_entities_axis(&starts, axis, ratio);
+                self.drag = Some(DragState::GizmoScale {
+                    entity_ids,
+                    starts,
+                    axis,
+                    start,
+                    start_value,
+                    direction,
+                    px_per_unit,
+                });
                 cx.notify();
             }
             DragState::Orbit { start } => {

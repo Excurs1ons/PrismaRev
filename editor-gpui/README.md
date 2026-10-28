@@ -67,14 +67,14 @@
 | 渲染图 | pass 链（ShadowMap → Forward → Gtao → Post）+ 图资源表（scene/swapchain/frame 生命周期） |
 | 项目设置 / 首选项 / 主题 / 构建 / 离线工具 / 快捷键 / 关于 | 直接编辑设置、主题预设与 38 个 token 预览、真实 cargo/cook 构建日志、bake-gi 与 heightmap 命令预览 |
 
-**数据层**（`prism-editor-gpui-core`，UI 框架无关，114 个单元测试）
+**数据层**（`prism-editor-gpui-core`，UI 框架无关，171 个单元测试）
 
 - `.scene.json` / `.prefab.json`：稳定 id、parent 迁移、删除孤儿子级变根、reparent 防环、
   子树提取（存预制体）、预制体实例化（id 平移 + 名字去重 + 反向链接）、字段引用扫描
 - 撤销栈：字段级合并（同一实体/组件/路径 800ms 内合并）、Transform 单独合并、结构编辑用整文档快照
 - 多对象编辑：公共组件求交、批量字段写入（一次快照撤销）、批量移除组件
-- 多选 gizmo 平移：同一世界位移应用到所有选中实体（各自换算父空间），
-  整次拖动合并成一个撤销步；旋转 / 缩放仍只支持单选
+- 多选 gizmo：平移把同一世界位移应用到所有选中实体（各自换算父空间）；旋转绕各自
+  位置、缩放保留各自起始比例；三种模式整次拖动都合并成一个撤销步
 - 子树复制：内部 parent 重映射、根保持父级、名字加 `(1)`；重命名预览不产生撤销步
 - 实体剪贴板：Ctrl+C/X/V、右键「粘贴 / 粘贴为子级」、多根批量复制；预制体实例
   复制后保留同源链接（`extract_subtree_preserving_links`）
@@ -171,7 +171,7 @@ editor-gpui/
 
 ## 验证记录
 
-- `cargo test -p prism-editor-gpui-core`：**169 passed**。
+- `cargo test -p prism-editor-gpui-core`：**171 passed**。
 - `cargo check -p prism-editor-gpui --target x86_64-pc-windows-gnu`：通过。
 - `cargo clippy -p prism-editor-gpui -p prism-editor-gpui-core --target x86_64-pc-windows-gnu`：
   无 warning（仅 `proc-macro-error2` 的 future-incompat 提示）。

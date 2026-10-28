@@ -451,10 +451,9 @@ fn paint_scene(
             }
         }
 
-        // gizmo 画在主选择（第一个选中项）上：单选永远显示，
-        // 多选只在平移模式显示（批量平移；旋转 / 缩放仍只支持单选）。
-        let gizmo_visible = snapshot.selection.len() == 1
-            || (snapshot.gizmo_mode == GizmoMode::Translate && position_index == 0);
+        // gizmo 画在主选择（第一个选中项）上：单选永远显示；
+        // 多选时三种模式都显示，拖动会作用到整组。
+        let gizmo_visible = snapshot.selection.len() == 1 || position_index == 0;
         if !gizmo_visible {
             continue;
         }
