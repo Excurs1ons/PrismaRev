@@ -16,6 +16,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import * as api from "../api";
 import { t } from "../i18n";
 import EditorDropdown, { type DropdownOption } from "./EditorDropdown.vue";
+import OrientationGizmo from "./OrientationGizmo.vue";
 import type { CameraOrbit, SceneDoc, ViewportInput, ViewportSnapshot } from "../types";
 
 const props = defineProps<{
@@ -327,6 +328,7 @@ let reloadPending = false;
 let dragFrame = 0;
 /** 左键按下瞬间的相机（万一这一按其实落在手柄上，用于还原）。 */
 let orbitBeforePress: CameraOrbit | null = null;
+let cameraAnimFrame = 0;
 
 /** 相机变更按 rAF 合并：拖动时每帧最多下发一次。 */
 function pushCamera() {
@@ -337,6 +339,49 @@ function pushCamera() {
     cameraPending = false;
     void api.viewportCamera(viewId, orbit.value).catch(() => undefined);
   });
+}
+
+/** 平滑动画过渡视口相机到目标角度（如点击右上角方向导航指示器）。 */
+function alignCameraTo(target: { yaw: number; pitch: number }) {
+  if (cameraAnimFrame) {
+    cancelAnimationFrame(cameraAnimFrame);
+    cameraAnimFrame = 0;
+  }
+  const startYaw = orbit.value.yaw;
+  const startPitch = orbit.value.pitch;
+
+  // 保证沿最短角旋转过渡（-π 到 +π）
+  const diff = (target.yaw - startYaw) % (Math.PI * 2);
+  const shortestDiff = ((diff + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
+  const endYaw = startYaw + shortestDiff;
+  const endPitch = target.pitch;
+
+  const duration = 180; // ms
+  const startTime = performance.now();
+
+  function step(now: number) {
+    const elapsed = now - startTime;
+    const t = Math.min(1, elapsed / duration);
+    // Ease-out quad 曲线
+    const ease = t * (2 - t);
+
+    orbit.value.yaw = startYaw + (endYaw - startYaw) * ease;
+    orbit.value.pitch = startPitch + (endPitch - startPitch) * ease;
+    pushCamera();
+
+    if (t < 1) {
+      cameraAnimFrame = requestAnimationFrame(step);
+    } else {
+      cameraAnimFrame = 0;
+    }
+  }
+
+  cameraAnimFrame = requestAnimationFrame(step);
+}
+
+/** 重置为标准透视斜俯视视角 (yaw = -0.7, pitch = 0.35)。 */
+function resetCameraView() {
+  alignCameraTo({ yaw: -0.7, pitch: 0.35 });
 }
 
 function onPointerDown(event: PointerEvent) {
@@ -361,6 +406,10 @@ function onPointerDown(event: PointerEvent) {
 
 /** 轨道旋转 / 平移：记录起点并接管指针。 */
 function beginCameraDrag(event: PointerEvent, canvas: HTMLCanvasElement) {
+  if (cameraAnimFrame) {
+    cancelAnimationFrame(cameraAnimFrame);
+    cameraAnimFrame = 0;
+  }
   hoveredGizmo.value = null;
   if (event.button === 1 || event.shiftKey) {
     dragMode = "pan";
@@ -381,6 +430,10 @@ async function beginGizmoDrag(
   event: PointerEvent,
   canvas: HTMLCanvasElement,
 ) {
+  if (cameraAnimFrame) {
+    cancelAnimationFrame(cameraAnimFrame);
+    cameraAnimFrame = 0;
+  }
   if (!inTauri || !channel) return;
   const axis = await api.viewportGizmoHit(viewId, point.x, point.y).catch(() => null);
   // 松手了 / 没按到手柄：保持「轨道 + 点选」的记账，什么都不做。
@@ -681,6 +734,7 @@ onBeforeUnmount(() => {
   if (reloadTimer !== undefined) window.clearTimeout(reloadTimer);
   if (statsTimer !== undefined) window.clearInterval(statsTimer);
   if (hoverFrame) cancelAnimationFrame(hoverFrame);
+  if (cameraAnimFrame) cancelAnimationFrame(cameraAnimFrame);
   void close();
 });
 
@@ -1067,6 +1121,15 @@ const aspectOptions = computed<DropdownOption[]>(() => [
           </g>
         </svg>
       </div>
+
+      <!-- Unity 风格右上角相机方向导航指示器 (Orientation Gizmo) -->
+      <OrientationGizmo
+        v-if="isScene"
+        :orbit="orbit"
+        :class="{ 'stats-open': showStats }"
+        @align="alignCameraTo"
+        @reset="resetCameraView"
+      />
 
       <!-- Unity 风格 Statistics 半透明悬浮状态窗口 -->
       <div v-if="showStats" class="unity-stats-window" @pointerdown.stop>

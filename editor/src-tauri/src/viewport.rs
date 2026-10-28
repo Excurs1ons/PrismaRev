@@ -2234,4 +2234,63 @@ mod tests {
             .gizmo_hover_at(center.x + 80.0, center.y + 80.0)
             .is_none());
     }
+
+    #[test]
+    fn cardinal_camera_alignments_place_eye_along_expected_axes() {
+        let mut state = test_state("cardinal-align");
+        state.orbit.target = [0.0, 0.0, 0.0];
+        state.orbit.distance = 10.0;
+
+        let get_eye = |st: &mut HostState| -> Vec3 {
+            let entity = st.camera.expect("Scene view 应该有相机");
+            let world = st.app.engine_mut().world_mut();
+            world.get::<LocalTransform>(entity).unwrap().position
+        };
+
+        // 1. Front (+Z view looking at origin from +Z)
+        state.orbit.yaw = 0.0;
+        state.orbit.pitch = 0.0;
+        state.place_camera();
+        let eye_front = get_eye(&mut state);
+        assert!((eye_front.z - 10.0).abs() < 1e-4, "{eye_front:?}");
+        assert!(eye_front.x.abs() < 1e-4 && eye_front.y.abs() < 1e-4);
+
+        // 2. Right (+X view looking at origin from +X)
+        state.orbit.yaw = std::f32::consts::FRAC_PI_2;
+        state.orbit.pitch = 0.0;
+        state.place_camera();
+        let eye_right = get_eye(&mut state);
+        assert!((eye_right.x - 10.0).abs() < 1e-4, "{eye_right:?}");
+        assert!(eye_right.y.abs() < 1e-4 && eye_right.z.abs() < 1e-4);
+
+        // 3. Left (-X view looking at origin from -X)
+        state.orbit.yaw = -std::f32::consts::FRAC_PI_2;
+        state.orbit.pitch = 0.0;
+        state.place_camera();
+        let eye_left = get_eye(&mut state);
+        assert!((eye_left.x + 10.0).abs() < 1e-4, "{eye_left:?}");
+        assert!(eye_left.y.abs() < 1e-4 && eye_left.z.abs() < 1e-4);
+
+        // 4. Back (-Z view looking at origin from -Z)
+        state.orbit.yaw = std::f32::consts::PI;
+        state.orbit.pitch = 0.0;
+        state.place_camera();
+        let eye_back = get_eye(&mut state);
+        assert!((eye_back.z + 10.0).abs() < 1e-4, "{eye_back:?}");
+        assert!(eye_back.x.abs() < 1e-4 && eye_back.y.abs() < 1e-4);
+
+        // 5. Top (+Y view looking down from above)
+        state.orbit.yaw = 0.0;
+        state.orbit.pitch = -1.5;
+        state.place_camera();
+        let eye_top = get_eye(&mut state);
+        assert!(eye_top.y > 9.0, "{eye_top:?}");
+
+        // 6. Bottom (-Y view looking up from below)
+        state.orbit.yaw = 0.0;
+        state.orbit.pitch = 1.5;
+        state.place_camera();
+        let eye_bottom = get_eye(&mut state);
+        assert!(eye_bottom.y < -9.0, "{eye_bottom:?}");
+    }
 }
