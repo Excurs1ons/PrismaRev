@@ -1358,6 +1358,14 @@ const aspectOptions = computed<DropdownOption[]>(() => [
 
     <!-- 视口渲染区域 -->
     <div ref="container" class="viewport-surface" :class="{ playing: !isScene && playing }">
+      <!-- 项目模块编译进度：编译在后台线程，视口照常出帧 -->
+      <div
+        v-if="!isScene && stats?.build?.phase === 'building'"
+        style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;background:rgba(0,0,0,0.45);z-index:5;pointer-events:none;font-size:12px"
+      >
+        <RefreshCw :size="20" />
+        <span>{{ stats?.build?.message || "正在编译项目模块…" }}</span>
+      </div>
       <div class="viewport-canvas-wrapper" :style="canvasContainerStyle">
         <canvas
           ref="canvasEl"

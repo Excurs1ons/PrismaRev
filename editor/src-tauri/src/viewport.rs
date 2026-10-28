@@ -89,6 +89,26 @@ pub struct ViewportSnapshot {
     pub height: u32,
     /// Play 模式是否被暂停（单步不会改变它）。
     pub paused: bool,
+    /// 项目模块编译进度（Game view；前端据此显示进度弹窗）。
+    pub build: BuildProgress,
+}
+
+/// 项目模块编译进度。
+#[derive(Clone, Debug, Default, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildProgress {
+    /// `idle` / `building` / `failed`
+    pub phase: String,
+    pub message: String,
+    pub elapsed_ms: u64,
+}
+
+#[derive(Default)]
+struct BuildState {
+    progress: BuildProgress,
+    /// 编译线程产物：等主线程换模块时取走。
+    built: Option<PathBuf>,
+    error: Option<String>,
 }
 
 struct Shared {
@@ -100,6 +120,7 @@ struct Shared {
     error: Mutex<Option<String>>,
     extent: Mutex<(u32, u32)>,
     paused: AtomicBool,
+    build: Mutex<BuildState>,
     latest_frame: Mutex<Option<prism_app::FrameImage>>,
     frame_ready: Condvar,
 }
@@ -114,6 +135,7 @@ impl Shared {
             error: Mutex::new(None),
             extent: Mutex::new(extent),
             paused: AtomicBool::new(false),
+            build: Mutex::new(BuildState::default()),
             latest_frame: Mutex::new(None),
             frame_ready: Condvar::new(),
         })
@@ -128,6 +150,7 @@ impl Shared {
             width,
             height,
             paused: self.paused.load(Ordering::Relaxed),
+            build: self.build.lock().unwrap().progress.clone(),
         }
     }
 }
@@ -1436,25 +1459,13 @@ fn viewport_thread(
     rx: Receiver<Job>,
 ) {
     let (width, height) = clamp_extent(width, height);
-    let (project_session, project_stamp, project_module_copy) = if matches!(kind, ViewKind::Game) {
-        let stamp = project_source_stamp(&scene_path);
-        match start_project_module(&scene_path) {
-            Ok((session, copy)) => (Some(session), stamp, Some(copy)),
-            Err(error) => {
-                log::warn!("viewport: project preview module unavailable: {error}");
-                *shared.error.lock().unwrap() = Some(error);
-                (None, stamp, None)
-            }
-        }
-    } else {
-        (None, None, None)
-    };
+    // 模块在后台编译：视口先起来，进度经 `Shared::build` 报给前端。
     let mut state = HostState {
-        project_session,
+        project_session: None,
         scene_generation: 0,
-        project_stamp,
+        project_stamp: None,
         project_pending_since: None,
-        project_module_copy,
+        project_module_copy: None,
         project_refresh_requested: false,
         components: builtin_component_registry(),
         app: App::hosted(prism_engine::config::AppConfig::default()),
@@ -1487,6 +1498,13 @@ fn viewport_thread(
     }
     state.app.start_hosted(width, height);
 
+    // 首次编译放到后台，视口先出帧。
+    if matches!(state.kind, ViewKind::Game) {
+        if let Some(stamp) = project_source_stamp(&state.scene_path) {
+            begin_project_build(&mut state, &shared, stamp);
+        }
+    }
+
     let frame_budget = Duration::from_millis(1000 / TARGET_FPS as u64);
     while shared.running.load(Ordering::Relaxed) {
         let started = Instant::now();
@@ -1507,6 +1525,7 @@ fn viewport_thread(
             state.place_camera();
             let simulate = state.simulate_now();
             if matches!(state.kind, ViewKind::Game) {
+                pump_project_build(&mut state, &shared);
                 maybe_compile_project(&mut state, &shared, simulate);
             }
             if simulate {
@@ -1724,7 +1743,7 @@ static PROJECT_AUTO_REFRESH: AtomicBool = AtomicBool::new(true);
 /// - Play 期间不打断（等停止后再换模块），除非显式 Ctrl+R；
 /// - 编译失败**保留**上一次成功的模块继续跑，只把错误报到面板；
 /// - 关闭 Auto Refresh 后完全不自动编译。
-fn maybe_compile_project(state: &mut HostState, shared: &Shared, playing: bool) {
+fn maybe_compile_project(state: &mut HostState, shared: &Arc<Shared>, playing: bool) {
     let manual = std::mem::take(&mut state.project_refresh_requested);
     if !manual && !PROJECT_AUTO_REFRESH.load(Ordering::Relaxed) {
         return;
@@ -1753,16 +1772,76 @@ fn maybe_compile_project(state: &mut HostState, shared: &Shared, playing: bool) 
     }
 
     state.project_pending_since = None;
-    compile_and_swap_project(state, shared, stamp);
+    begin_project_build(state, shared, stamp);
 }
 
-fn compile_and_swap_project(state: &mut HostState, shared: &Shared, stamp: std::time::SystemTime) {
-    let loaded = start_project_module(&state.scene_path);
+/// 在后台线程编译，绝不阻塞视口（首次编译可能要几十秒）。
+fn begin_project_build(state: &mut HostState, shared: &Arc<Shared>, stamp: std::time::SystemTime) {
+    {
+        let mut build = shared.build.lock().unwrap();
+        if build.progress.phase == "building" {
+            return;
+        }
+        build.progress = BuildProgress {
+            phase: "building".to_string(),
+            message: "正在编译项目模块…".to_string(),
+            elapsed_ms: 0,
+        };
+        build.built = None;
+        build.error = None;
+    }
 
     // 无论成败都记下时间戳：语法错误不该让编辑器每隔 350ms 重跑一次 cargo。
     state.project_stamp = Some(stamp);
 
-    match loaded {
+    let shared = Arc::clone(shared);
+    let scene_path = state.scene_path.clone();
+    std::thread::spawn(move || {
+        let started = Instant::now();
+        let built = project_module_path(&scene_path);
+        let mut build = shared.build.lock().unwrap();
+        let elapsed_ms = started.elapsed().as_millis() as u64;
+        match built {
+            Ok(path) => {
+                build.built = Some(path);
+                build.progress = BuildProgress::default();
+            }
+            Err(error) => {
+                build.error = Some(error.clone());
+                build.progress = BuildProgress {
+                    phase: "failed".to_string(),
+                    message: error,
+                    elapsed_ms,
+                };
+            }
+        }
+    });
+}
+
+/// 编译线程完成后，在视口线程换模块（加载动态库必须在这里做）。
+fn pump_project_build(state: &mut HostState, shared: &Shared) {
+    let (built, error) = {
+        let mut build = shared.build.lock().unwrap();
+        if build.progress.phase == "building" {
+            return;
+        }
+        let taken = (build.built.take(), build.error.take());
+        if taken.0.is_some() || taken.1.is_some() {
+            build.progress = BuildProgress::default();
+        }
+        taken
+    };
+
+    if let Some(error) = error {
+        log::warn!("viewport: project compile failed");
+        *shared.error.lock().unwrap() = Some(error);
+        return;
+    }
+    let Some(built) = built else {
+        return;
+    };
+
+    match load_project_session(&built) {
         Ok((session, staged)) => {
             // 先换 session 再删旧副本：旧代码指针必须在新模块生效前彻底失效。
             let previous = state.project_session.replace(session);
@@ -1771,24 +1850,23 @@ fn compile_and_swap_project(state: &mut HostState, shared: &Shared, stamp: std::
                 let _ = std::fs::remove_file(old);
             }
             *shared.error.lock().unwrap() = None;
-            log::info!("viewport: project module reloaded");
+            log::info!("viewport: project module loaded");
         }
         Err(error) => {
-            log::warn!("viewport: project compile failed: {error}");
+            log::warn!("viewport: project module load failed: {error}");
             *shared.error.lock().unwrap() = Some(error);
         }
     }
 }
 
-/// 构建 + 复制 + 加载一个新模块。
+/// 复制 + 加载一个**已经构建好**的模块。
 ///
-/// 构建产物会被下一次 cargo 覆盖，所以先把 `.so` 复制成唯一名字再加载；
-/// 否则 Windows 上「已加载的 dll 不可写」会让下一次编译直接失败。
-fn start_project_module(
-    scene_path: &Path,
+/// 构建产物会被下一次 cargo 覆盖，所以先复制成唯一名字再加载；否则 Windows 上
+/// 「已加载的 dll 不可写」会让下一次编译直接失败。
+fn load_project_session(
+    built: &Path,
 ) -> Result<(prism_runtime_host::ProjectSession, PathBuf), String> {
-    let built = project_module_path(scene_path)?;
-    let staged = stage_project_module(&built)?;
+    let staged = stage_project_module(built)?;
     let session = prism_runtime_host::ProjectModule::load(&staged)
         .map_err(|error| error.to_string())?
         .start()
