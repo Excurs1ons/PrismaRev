@@ -672,6 +672,20 @@ export function viewportSetPlaying(id: string, playing: boolean): Promise<void> 
   return call<void>("editor_viewport_set_playing", { id, playing });
 }
 
+/** Ctrl+R：立即重编并重载项目模块（无视 Auto Refresh 开关）。 */
+export function viewportRefreshProject(id: string): Promise<void> {
+  return call<void>("editor_viewport_refresh_project", { id });
+}
+
+/** 项目模块自动编译开关（Unity 的 Auto Refresh）。 */
+export function viewportSetAutoRefresh(enabled: boolean): Promise<void> {
+  return call<void>("editor_viewport_set_auto_refresh", { enabled });
+}
+
+export function viewportAutoRefresh(): Promise<boolean> {
+  return call<boolean>("editor_viewport_auto_refresh");
+}
+
 /** Game view 的鼠标 / 键盘事件。 */
 export function viewportInput(id: string, event: ViewportInput): Promise<void> {
   return call<void>("editor_viewport_input", { id, event });

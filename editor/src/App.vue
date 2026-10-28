@@ -1599,6 +1599,9 @@ function onKey(event: KeyboardEvent) {
   if (key === "s") {
     event.preventDefault();
     void save();
+  } else if (key === "r") {
+    event.preventDefault();
+    void api.viewportRefreshProject("game").catch(() => undefined);
   } else if (key === "n") {
     event.preventDefault();
     void createDocumentOf("scene");
