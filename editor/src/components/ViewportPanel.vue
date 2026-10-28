@@ -25,6 +25,8 @@ const props = defineProps<{
   path: string | null;
   /** 当前主工具栏选择的变换工具。 */
   activeTool?: "select" | "move" | "rotate" | "scale";
+  /** 当前主工具栏选择的坐标系（Global vs Local）。 */
+  activeSpace?: "global" | "local";
   /** Game view 的 Play 状态（由工具栏统一控制）。 */
   playing?: boolean;
   /** Game view 是否暂停（由工具栏控制，暂停时仍渲染）。 */
@@ -136,6 +138,9 @@ async function open() {
     pushSelection();
     if (props.activeTool && isScene.value) {
       void api.viewportSetTool(viewId, props.activeTool).catch(() => undefined);
+    }
+    if (props.activeSpace && isScene.value) {
+      void api.viewportSetSpace(viewId, props.activeSpace).catch(() => undefined);
     }
     // 第一帧到达时 drawFrame 才切到 live：渲染器还在建管线时先保留 loading 浮层，
     // 否则会先闪一段黑屏。
@@ -260,7 +265,7 @@ function scheduleReload() {
 
 // ── 相机 / 输入 ────────────────────────────────────────────────────────────
 
-let dragMode: "orbit" | "pan" | null = null;
+let dragMode: "orbit" | "pan" | "marquee" | null = null;
 let lastPointer = { x: 0, y: 0 };
 /** 判定「点选」还是「拖动相机」：按下位置 + 时间。 */
 let clickStart: { x: number; y: number; at: number } | null = null;
@@ -272,6 +277,25 @@ const dragFeedback = ref<api.DragFeedback | null>(null);
 const hoveredGizmo = ref<api.GizmoHoverInfo | null>(null);
 let hoverFrame = 0;
 let pendingHover: { x: number; y: number } | null = null;
+
+/** 场景视图矩形框选 (Marquee Selection) 状态。 */
+const marqueeStart = ref<{ x: number; y: number } | null>(null);
+const marqueeCurrent = ref<{ x: number; y: number } | null>(null);
+
+const marqueeBox = computed(() => {
+  if (dragMode !== "marquee" || !marqueeStart.value || !marqueeCurrent.value) return null;
+  const canvas = canvasEl.value;
+  if (!canvas) return null;
+  const rect = canvas.getBoundingClientRect();
+  const x1 = Math.min(marqueeStart.value.x, marqueeCurrent.value.x) - rect.left;
+  const y1 = Math.min(marqueeStart.value.y, marqueeCurrent.value.y) - rect.top;
+  const x2 = Math.max(marqueeStart.value.x, marqueeCurrent.value.x) - rect.left;
+  const y2 = Math.max(marqueeStart.value.y, marqueeCurrent.value.y) - rect.top;
+  const w = x2 - x1;
+  const h = y2 - y1;
+  if (w < 2 && h < 2) return null;
+  return { x: x1, y: y1, width: w, height: h };
+});
 
 /** 旋转手柄拖拽时的 SVG 扇面与弧线路径。 */
 const rotateArcPath = computed(() => {
@@ -417,6 +441,15 @@ function onPointerDown(event: PointerEvent) {
   if (!canvas) return;
   canvas.focus();
   if (isScene.value) {
+    if (props.activeTool === "select" && event.button === 0 && !event.altKey) {
+      dragMode = "marquee";
+      marqueeStart.value = { x: event.clientX, y: event.clientY };
+      marqueeCurrent.value = { x: event.clientX, y: event.clientY };
+      clickStart = { x: event.clientX, y: event.clientY, at: Date.now() };
+      canvas.setPointerCapture(event.pointerId);
+      event.preventDefault();
+      return;
+    }
     const point = event.button === 0 && !event.shiftKey ? canvasPoint(event) : null;
     if (point) {
       // 左键：先按「轨道旋转 / 点选」记账（保证快速点击仍然能点选），
@@ -523,6 +556,10 @@ function onPointerLeave() {
 
 function onPointerMove(event: PointerEvent) {
   if (isScene.value) {
+    if (dragMode === "marquee") {
+      marqueeCurrent.value = { x: event.clientX, y: event.clientY };
+      return;
+    }
     if (draggingAxis.value) {
       hoveredGizmo.value = null;
       const point = canvasPoint(event);
@@ -601,6 +638,57 @@ function pushDrag(point: { x: number; y: number }, snap: boolean) {
 function onPointerUp(event: PointerEvent) {
   orbitBeforePress = null;
   if (isScene.value) {
+    if (dragMode === "marquee") {
+      dragMode = null;
+      canvasEl.value?.releasePointerCapture(event.pointerId);
+      const start = marqueeStart.value;
+      const current = marqueeCurrent.value;
+      marqueeStart.value = null;
+      marqueeCurrent.value = null;
+      clickStart = null;
+      if (!start || !current) return;
+      const dx = Math.abs(current.x - start.x);
+      const dy = Math.abs(current.y - start.y);
+      if (dx < 5 && dy < 5) {
+        void pickAt(event);
+        return;
+      }
+      const canvas = canvasEl.value;
+      if (!canvas) return;
+      const rect = canvas.getBoundingClientRect();
+      const minCssX = Math.min(start.x, current.x) - rect.left;
+      const maxCssX = Math.max(start.x, current.x) - rect.left;
+      const minCssY = Math.min(start.y, current.y) - rect.top;
+      const maxCssY = Math.max(start.y, current.y) - rect.top;
+
+      const scaleX = canvas.width / rect.width;
+      const scaleY = canvas.height / rect.height;
+      const minBmpX = minCssX * scaleX;
+      const maxBmpX = maxCssX * scaleX;
+      const minBmpY = minCssY * scaleY;
+      const maxBmpY = maxCssY * scaleY;
+
+      void api
+        .viewportBoxSelect(viewId, minBmpX, minBmpY, maxBmpX, maxBmpY)
+        .then((hits) => {
+          if (event.ctrlKey || event.metaKey) {
+            const currentSel = new Set(props.selection ?? []);
+            for (const h of hits) {
+              if (currentSel.has(h)) currentSel.delete(h);
+              else currentSel.add(h);
+            }
+            emit("select-multiple", Array.from(currentSel));
+          } else if (event.shiftKey) {
+            const currentSel = new Set(props.selection ?? []);
+            for (const h of hits) currentSel.add(h);
+            emit("select-multiple", Array.from(currentSel));
+          } else {
+            emit("select-multiple", hits);
+          }
+        })
+        .catch(() => undefined);
+      return;
+    }
     if (draggingAxis.value) {
       draggingAxis.value = null;
       dragFeedback.value = null;
@@ -808,6 +896,13 @@ watch(
     hoveredGizmo.value = null;
     if (!inTauri || !channel || !tool || !isScene.value) return;
     void api.viewportSetTool(viewId, tool).catch(() => undefined);
+  },
+);
+watch(
+  () => props.activeSpace,
+  (space) => {
+    if (!inTauri || !channel || !space || !isScene.value) return;
+    void api.viewportSetSpace(viewId, space).catch(() => undefined);
   },
 );
 watch(
@@ -1086,6 +1181,17 @@ const aspectOptions = computed<DropdownOption[]>(() => [
           @keydown="onKey($event, true)"
           @keyup="onKey($event, false)"
           @contextmenu.prevent
+        />
+        <!-- 场景视图矩形框选 (Marquee Selection) -->
+        <div
+          v-if="marqueeBox"
+          class="marquee-selection-box"
+          :style="{
+            left: `${marqueeBox.x}px`,
+            top: `${marqueeBox.y}px`,
+            width: `${marqueeBox.width}px`,
+            height: `${marqueeBox.height}px`,
+          }"
         />
         <!-- 变换拖拽与手柄悬停实时交互反馈浮层 (Unity 风格黄色高亮与数值 HUD) -->
         <svg
@@ -1511,6 +1617,16 @@ const aspectOptions = computed<DropdownOption[]>(() => [
   font-size: 12px;
   background: color-mix(in srgb, var(--bg, #0b0e14) 78%, transparent);
   pointer-events: none;
+}
+
+.marquee-selection-box {
+  position: absolute;
+  pointer-events: none;
+  border: 1px solid #388bfd;
+  background: rgba(56, 139, 253, 0.22);
+  box-shadow: 0 0 6px rgba(56, 139, 253, 0.4);
+  border-radius: 2px;
+  z-index: 30;
 }
 
 /* ── Unity 风格 Statistics 状态悬浮窗 ───────────────────────────────── */

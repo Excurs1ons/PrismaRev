@@ -707,9 +707,14 @@ export interface DragTransformResult {
   feedback?: DragFeedback;
 }
 
-/** 切换视口的当前变换工具模式（"move" | "rotate" | "scale"）。 */
+/** 切换视口的当前变换工具模式（"select" | "move" | "rotate" | "scale"）。 */
 export function viewportSetTool(id: string, tool: string): Promise<void> {
   return call<void>("editor_viewport_set_tool", { id, tool });
+}
+
+/** 切换视口的当前坐标系（"global" | "local"）。 */
+export function viewportSetSpace(id: string, space: string): Promise<void> {
+  return call<void>("editor_viewport_set_space", { id, space });
 }
 
 /** 切换视口地面参考网格的显隐。 */
@@ -720,6 +725,23 @@ export function viewportSetGrid(id: string, enabled: boolean): Promise<void> {
 /** 场景视图点选：`x` / `y` 是 canvas 位图坐标（左上原点），返回命中的实体下标。 */
 export function viewportPick(id: string, x: number, y: number): Promise<number | null> {
   return call<number | null>("editor_viewport_pick", { id, x, y });
+}
+
+/** 场景视图框选：返回矩形框内所有实体的下标列表。 */
+export function viewportBoxSelect(
+  id: string,
+  minX: number,
+  minY: number,
+  maxX: number,
+  maxY: number,
+): Promise<number[]> {
+  return call<number[]>("editor_viewport_box_select", {
+    id,
+    minX,
+    minY,
+    maxX,
+    maxY,
+  });
 }
 
 /** 光标下的变换手柄（`"x"` / `"y"` / `"z"` / `"xy"` / `"xz"` / `"yz"` / `"xyz"`，没有则 `null`）。 */
