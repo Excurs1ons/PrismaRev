@@ -43,7 +43,7 @@ pub unsafe extern "C" fn prism_project_get_api(out: *mut prism_project_api::Proj
 #[cfg(not(target_os = "android"))]
 struct PreviewState {
     ticks: u64,
-    host: *const prism_project_api::HostApi,
+    spawned: bool,
 }
 
 #[cfg(not(target_os = "android"))]
@@ -58,7 +58,10 @@ unsafe extern "C" fn preview_create(
     if host.abi_version != prism_project_api::ABI_VERSION {
         return prism_project_api::INVALID_ARGUMENT;
     }
-    let state = Box::new(PreviewState { ticks: 0, host });
+    let state = Box::new(PreviewState {
+        ticks: 0,
+        spawned: false,
+    });
     unsafe { *out = Box::into_raw(state).cast() };
     if let Some(log) = host.log {
         let message = b"Prisma project preview started";
@@ -68,13 +71,39 @@ unsafe extern "C" fn preview_create(
 }
 
 #[cfg(not(target_os = "android"))]
-unsafe extern "C" fn preview_tick(state: *mut std::ffi::c_void, _dt: f32) -> i32 {
+unsafe extern "C" fn preview_tick(
+    host_api: *const prism_project_api::HostApi,
+    state: *mut std::ffi::c_void,
+    _dt: f32,
+) -> i32 {
     let Some(state) = (unsafe { state.cast::<PreviewState>().as_mut() }) else {
         return prism_project_api::INVALID_ARGUMENT;
     };
     state.ticks = state.ticks.saturating_add(1);
-    if state.ticks == 1 && !state.host.is_null() {
-        let host = unsafe { &*state.host };
+    if host_api.is_null() {
+        return prism_project_api::INVALID_ARGUMENT;
+    }
+    let host = unsafe { &*host_api };
+    if !state.spawned {
+        let Some(spawn_entity) = host.spawn_entity else {
+            return prism_project_api::REGISTRATION_FAILED;
+        };
+        let Some(set_entity_name) = host.set_entity_name else {
+            return prism_project_api::REGISTRATION_FAILED;
+        };
+        let mut entity = prism_project_api::EntityHandle::default();
+        if unsafe { spawn_entity(host.user_data, &mut entity) } != prism_project_api::SUCCESS {
+            return prism_project_api::REGISTRATION_FAILED;
+        }
+        let name = b"project_preview_entity";
+        if unsafe { set_entity_name(host.user_data, entity, name.as_ptr(), name.len()) }
+            != prism_project_api::SUCCESS
+        {
+            return prism_project_api::REGISTRATION_FAILED;
+        }
+        state.spawned = true;
+    }
+    if state.ticks == 1 {
         if let Some(log) = host.log {
             let message = b"Prisma project preview ticked";
             unsafe { log(host.user_data, 3, message.as_ptr(), message.len()) };

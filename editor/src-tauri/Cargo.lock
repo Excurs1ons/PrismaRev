@@ -4161,7 +4161,9 @@ version = "0.1.0"
 dependencies = [
  "libloading 0.8.9",
  "log",
+ "prism-ecs",
  "prism-project-api",
+ "prism-scene",
  "thiserror 2.0.21",
 ]
 

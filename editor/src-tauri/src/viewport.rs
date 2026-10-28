@@ -1043,7 +1043,10 @@ fn viewport_thread(
             let simulate = state.simulate_now();
             if simulate {
                 if let Some(project) = state.project_session.as_mut() {
-                    if let Err(error) = project.tick(frame_budget.as_secs_f32()) {
+                    let mut commands =
+                        prism_runtime_host::WorldCommands::new(state.app.engine_mut().world_mut());
+                    let host = commands.api();
+                    if let Err(error) = project.tick(&host, frame_budget.as_secs_f32()) {
                         log::warn!("viewport: project preview tick failed: {error}");
                         *shared.error.lock().unwrap() = Some(error.to_string());
                     }

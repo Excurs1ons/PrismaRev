@@ -41,6 +41,71 @@ pub enum ProjectModuleError {
     Tick { path: PathBuf, status: i32 },
 }
 
+pub struct WorldCommands {
+    world: *mut prism_ecs::World,
+}
+
+impl WorldCommands {
+    pub fn new(world: &mut prism_ecs::World) -> Self {
+        Self { world }
+    }
+
+    pub fn api(&mut self) -> HostApi {
+        HostApi {
+            abi_version: ABI_VERSION,
+            capabilities: HOST_CAP_LOGGING | prism_project_api::HOST_CAP_WORLD_COMMANDS,
+            user_data: self.world.cast(),
+            log: Some(host_log),
+            spawn_entity: Some(host_spawn_entity),
+            set_entity_name: Some(host_set_entity_name),
+        }
+    }
+}
+
+unsafe extern "C" fn host_spawn_entity(
+    user_data: *mut std::ffi::c_void,
+    out_entity: *mut prism_project_api::EntityHandle,
+) -> i32 {
+    if user_data.is_null() || out_entity.is_null() {
+        return prism_project_api::INVALID_ARGUMENT;
+    }
+    let world = unsafe { &mut *user_data.cast::<prism_ecs::World>() };
+    let entity = world.spawn();
+    unsafe {
+        *out_entity = prism_project_api::EntityHandle {
+            id: entity.id(),
+            generation: entity.generation(),
+        };
+    }
+    prism_project_api::SUCCESS
+}
+
+unsafe extern "C" fn host_set_entity_name(
+    user_data: *mut std::ffi::c_void,
+    entity: prism_project_api::EntityHandle,
+    name: *const u8,
+    name_len: usize,
+) -> i32 {
+    if user_data.is_null() || (name.is_null() && name_len != 0) {
+        return prism_project_api::INVALID_ARGUMENT;
+    }
+    let bytes = if name_len == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(name, name_len) }
+    };
+    let Ok(name) = std::str::from_utf8(bytes) else {
+        return prism_project_api::INVALID_ARGUMENT;
+    };
+    let world = unsafe { &mut *user_data.cast::<prism_ecs::World>() };
+    let entity = prism_ecs::Entity::from_raw(entity.id, entity.generation);
+    if !world.is_alive(entity) {
+        return prism_project_api::INVALID_ARGUMENT;
+    }
+    world.insert(entity, prism_scene::components::Name(name.to_owned()));
+    prism_project_api::SUCCESS
+}
+
 pub struct ProjectModule {
     path: PathBuf,
     // Kept solely to keep the module loaded while its callbacks are registered.
@@ -92,14 +157,8 @@ impl ProjectModule {
         else {
             return Err(ProjectModuleError::IncompleteApi { path: self.path });
         };
-        let host = Box::new(HostApi {
-            abi_version: ABI_VERSION,
-            capabilities: HOST_CAP_LOGGING,
-            user_data: std::ptr::null_mut(),
-            log: Some(host_log),
-            spawn_entity: None,
-            set_entity_name: None,
-        });
+        let mut host = Box::new(HostApi::logging_only());
+        host.log = Some(host_log);
         let mut state = std::ptr::null_mut();
         let status = unsafe { create(host.as_ref(), &mut state) };
         if status != SUCCESS || state.is_null() {
@@ -135,8 +194,8 @@ impl ProjectSession {
         self.host.capabilities
     }
 
-    pub fn tick(&mut self, dt: f32) -> Result<(), ProjectModuleError> {
-        let status = unsafe { (self.tick)(self.state, dt) };
+    pub fn tick(&mut self, host: &HostApi, dt: f32) -> Result<(), ProjectModuleError> {
+        let status = unsafe { (self.tick)(host, self.state, dt) };
         if status == SUCCESS {
             Ok(())
         } else {
@@ -203,8 +262,46 @@ mod tests {
         };
         let module = ProjectModule::load(path).expect("project module should load");
         let mut session = module.start().expect("project session should start");
+        let mut world = prism_ecs::World::new();
+        let mut commands = WorldCommands::new(&mut world);
+        let host = commands.api();
         session
-            .tick(1.0 / 60.0)
+            .tick(&host, 1.0 / 60.0)
             .expect("project tick should succeed");
+    }
+
+    #[test]
+    fn world_commands_spawn_and_name_entities_through_opaque_handles() {
+        let mut world = prism_ecs::World::new();
+        let mut commands = WorldCommands::new(&mut world);
+        let api = commands.api();
+        assert_ne!(
+            api.capabilities & prism_project_api::HOST_CAP_WORLD_COMMANDS,
+            0
+        );
+        let mut raw = prism_project_api::EntityHandle::default();
+        let spawn = api.spawn_entity.expect("world command capability");
+        let set_name = api.set_entity_name.expect("world command capability");
+        assert_eq!(unsafe { spawn(api.user_data, &mut raw) }, SUCCESS);
+        let name = b"from_project_module";
+        assert_eq!(
+            unsafe { set_name(api.user_data, raw, name.as_ptr(), name.len()) },
+            SUCCESS
+        );
+        let entity = prism_ecs::Entity::from_raw(raw.id, raw.generation);
+        assert!(world.is_alive(entity));
+        assert_eq!(
+            world
+                .get::<prism_scene::components::Name>(entity)
+                .unwrap()
+                .0,
+            "from_project_module"
+        );
+
+        world.despawn(entity);
+        assert_eq!(
+            unsafe { set_name(api.user_data, raw, name.as_ptr(), name.len()) },
+            prism_project_api::INVALID_ARGUMENT
+        );
     }
 }

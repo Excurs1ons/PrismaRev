@@ -13,11 +13,13 @@ desktop module alive safely, and drives an opaque `create -> tick -> shutdown`
 session from Game View. The module does not receive `Engine`, `World`, Vulkan
 handles, or ECS component pointers.
 
-The editor still owns the hosted engine directly. Project gameplay is currently
-limited to the opaque session callback; ECS/world capabilities are blocked on
-the single-engine runtime boundary described in issue #374. Passing
-`prism_engine::Engine` or `World` pointers from the editor into a project
-`cdylib` remains forbidden.
+The editor still owns the hosted engine directly. ABI v2 adds a synchronous
+tick-scoped host table with opaque entity handles and two world commands:
+spawn an entity and set its `Name`. The table's world context is valid only
+during the tick callback, so scene reload cannot leave a retained world pointer
+in project state. Passing `prism_engine::Engine`, `World`, or Rust component
+values across the dynamic-library boundary remains forbidden. Full gameplay
+component registration and typed component access remain tracked by issue #374.
 
 ## 1. Decision
 

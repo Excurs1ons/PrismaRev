@@ -5,7 +5,7 @@
 //! profile, and feature set. The function table is `repr(C)` so the boundary
 //! is explicit while the API is still being narrowed.
 
-pub const ABI_VERSION: u32 = 1;
+pub const ABI_VERSION: u32 = 2;
 pub const SUCCESS: i32 = 0;
 pub const INVALID_ARGUMENT: i32 = 1;
 pub const REGISTRATION_FAILED: i32 = 2;
@@ -46,11 +46,26 @@ pub struct HostApi {
     pub set_entity_name: Option<SetEntityName>,
 }
 
+impl HostApi {
+    pub const fn logging_only() -> Self {
+        Self {
+            abi_version: ABI_VERSION,
+            capabilities: HOST_CAP_LOGGING,
+            user_data: core::ptr::null_mut(),
+            log: None,
+            spawn_entity: None,
+            set_entity_name: None,
+        }
+    }
+}
+
 pub const HOST_CAP_WORLD_COMMANDS: u64 = 1 << 1;
 
 pub type CreateProject =
     unsafe extern "C" fn(host: *const HostApi, out_state: *mut *mut core::ffi::c_void) -> i32;
-pub type TickProject = unsafe extern "C" fn(state: *mut core::ffi::c_void, dt: f32) -> i32;
+/// The host table and its `user_data` are valid only until this call returns.
+pub type TickProject =
+    unsafe extern "C" fn(host: *const HostApi, state: *mut core::ffi::c_void, dt: f32) -> i32;
 pub type ShutdownProject = unsafe extern "C" fn(state: *mut core::ffi::c_void);
 
 /// Exported entry point resolved by the runtime host.
