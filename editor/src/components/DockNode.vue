@@ -16,6 +16,10 @@ const hoverZone = computed(() => {
   const target = ctx.hover.value;
   return target && target.leafId === props.node.id ? target.zone : null;
 });
+const hoverTargetIndex = computed(() => {
+  const target = ctx.hover.value;
+  return target && target.leafId === props.node.id ? target.targetIndex : undefined;
+});
 
 /**
  * 已经挂载过的标签。
@@ -105,25 +109,33 @@ onUnmounted(() => endResize?.());
 
   <div v-else class="dock-leaf" :data-leaf-id="node.id">
     <div class="dock-tabs">
-      <div
-        v-for="tab in node.tabs"
-        :key="tab"
-        class="dock-tab"
-        :class="{ active: tab === node.active }"
-        :title="`${ctx.titleOf(tab)}（拖动可停靠；按住 Alt 拖出为浮动窗口）`"
-        @click="ctx.select(node.id, tab)"
-        @pointerdown="ctx.startDrag(tab, $event)"
-      >
-        <span class="dock-tab-title">{{ ctx.titleOf(tab) }}</span>
-        <button
-          class="dock-tab-close"
-          title="关闭面板"
-          @pointerdown.stop
-          @click.stop="ctx.close(tab)"
+      <template v-for="(tab, idx) in node.tabs" :key="tab">
+        <div
+          v-if="hoverZone === 'center' && hoverTargetIndex === idx"
+          class="dock-tab-insert-marker"
+        />
+        <div
+          class="dock-tab"
+          :class="{ active: tab === node.active }"
+          :title="`${ctx.titleOf(tab)}（拖动可停靠；按住 Alt 拖出为浮动窗口）`"
+          @click="ctx.select(node.id, tab)"
+          @pointerdown="ctx.startDrag(tab, $event)"
         >
-          <X :size="12" />
-        </button>
-      </div>
+          <span class="dock-tab-title">{{ ctx.titleOf(tab) }}</span>
+          <button
+            class="dock-tab-close"
+            title="关闭面板"
+            @pointerdown.stop
+            @click.stop="ctx.close(tab)"
+          >
+            <X :size="12" />
+          </button>
+        </div>
+      </template>
+      <div
+        v-if="hoverZone === 'center' && hoverTargetIndex === node.tabs.length"
+        class="dock-tab-insert-marker"
+      />
     </div>
 
     <div class="dock-body">

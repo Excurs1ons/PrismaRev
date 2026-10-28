@@ -1,19 +1,39 @@
 <script setup lang="ts">
 import { computed, inject, onMounted, onUnmounted, reactive, ref, watch } from "vue";
-import { ChevronDown, ChevronRight, Plus } from "lucide-vue-next";
+import {
+  Box,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  File,
+  FileCode,
+  FileText,
+  Folder,
+  FolderOpen,
+  Image as ImageIcon,
+  Music,
+  Plus,
+  RefreshCw,
+  Search,
+  Sparkles,
+  X,
+} from "lucide-vue-next";
 import EditorDropdown, { type DropdownOption } from "./EditorDropdown.vue";
 import * as api from "../api";
 import { ASSETS_KEY } from "../keys";
 import { formatBytes } from "../format";
 import { clampMenuPosition } from "../contextMenu";
+import { t } from "../i18n";
 import type { AssetInfo, AssetMutation, AssetRef } from "../types";
 
 /**
- * 侧栏「资产」面板：目录树 / 平铺列表 + 检索 + 引用位置 + 拖拽到字段，
- * 以及 `assets/` 内的文件管理（新建目录 / 重命名 / 移动 / 删除）。
- *
- * 文件操作全部走 `prism-editor-api`：重命名/移动会自动改写场景与预制体里的
- * 路径引用；删除前会先列出受影响文档。
+ * 资产管理器面板（Unity 7 Project Browser 标准双栏设计）：
+ * - 左侧：文件夹树（仅展示目录层级，支持展开/折叠、点击切换当前目录、拖拽移动与预制体保存）。
+ * - 竖向 Splitter：可平滑拖拽调整左右栏宽度，记忆到 localStorage。
+ * - 顶部工具栏：Unity 风格后退/前进导航历史、面包屑导航（点击快速跳转上级）、搜索过滤与分类下拉。
+ * - 右侧：文件夹内容区（ListArea），展示当前目录下的子文件夹与资产。
+ * - 底部状态栏：显示项目计数或选中资产信息，以及 Unity 标准图标大小滑块（16px 为列表视图，>16px 为网格视图）。
+ * - 自定义 Editor UI 对话框与右键菜单，禁止使用原生 window.confirm/prompt。
  */
 const props = defineProps<{
   /** 写操作前确保当前文档已保存（由 App 注入）。 */
@@ -31,139 +51,56 @@ const emit = defineEmits<{
 }>();
 
 const assets = inject(ASSETS_KEY, null);
+const assetDirs = ref<string[]>([]);
 
-type ViewMode = "tree" | "list";
+// ---------------------------------------------------------------------------
+// 布局与尺寸持久化
+// ---------------------------------------------------------------------------
+
+const TREE_WIDTH_STORAGE_KEY = "prisma-editor.project-browser.tree-width";
+const ICON_SIZE_STORAGE_KEY = "prisma-editor.project-browser.icon-size";
+
+function getInitialTreeWidth(): number {
+  try {
+    const val = Number(localStorage.getItem(TREE_WIDTH_STORAGE_KEY));
+    if (!isNaN(val) && val >= 100 && val <= 400) return val;
+  } catch {
+    // Local storage unavailable
+  }
+  return 180;
+}
+
+function getInitialIconSize(): number {
+  try {
+    const val = Number(localStorage.getItem(ICON_SIZE_STORAGE_KEY));
+    if (!isNaN(val) && val >= 16 && val <= 96) return val;
+  } catch {
+    // Local storage unavailable
+  }
+  return 16;
+}
+
+const treeWidth = ref(getInitialTreeWidth());
+const iconSize = ref(getInitialIconSize());
+
+watch(treeWidth, (val) => {
+  try {
+    localStorage.setItem(TREE_WIDTH_STORAGE_KEY, String(val));
+  } catch {}
+});
+
+watch(iconSize, (val) => {
+  try {
+    localStorage.setItem(ICON_SIZE_STORAGE_KEY, String(val));
+  } catch {}
+});
+
+// ---------------------------------------------------------------------------
+// 检索与分类过滤
+// ---------------------------------------------------------------------------
+
 const search = ref("");
 const kind = ref("all");
-/** 检索或类型过滤生效时自动用平铺列表（结果跨目录）。 */
-const isFiltering = computed(
-  () => search.value.trim().length > 0 || kind.value !== "all",
-);
-const currentView = computed<ViewMode>(() =>
-  isFiltering.value ? "list" : "tree",
-);
-const selected = ref<AssetInfo | null>(null);
-const selectedNode = ref<{ path: string; name: string; dir: boolean } | null>(null);
-const assetMenu = ref<{ path: string; name: string; dir: boolean; x: number; y: number } | null>(null);
-const assetDirs = ref<string[]>([]);
-const usage = ref<AssetRef[]>([]);
-/** 引用查询序号：连点资产时只提交最后一次请求的结果。 */
-let usageToken = 0;
-const usageError = ref("");
-const busy = ref(false);
-const opBusy = ref(false);
-const opError = ref("");
-
-// ---------------------------------------------------------------------------
-// 预览：图片走原始字节 + Blob URL；文本走 UTF-8 字符串；场景/预制体可打开
-// ---------------------------------------------------------------------------
-
-type PreviewKind = "image" | "text" | "document" | "none";
-
-const IMAGE_MIME: Record<string, string> = {
-  png: "image/png",
-  jpg: "image/jpeg",
-  jpeg: "image/jpeg",
-  webp: "image/webp",
-  gif: "image/gif",
-  bmp: "image/bmp",
-  ico: "image/x-icon",
-  svg: "image/svg+xml",
-  avif: "image/avif",
-};
-
-const TEXT_EXT = new Set([
-  "txt", "md", "json", "toml", "ron", "yaml", "yml", "xml", "csv", "ini", "cfg", "log",
-  "slang", "wgsl", "glsl", "vert", "frag", "comp", "hlsl", "shader",
-  "gltf", "obj", "mtl",
-]);
-
-const previewKind = computed<PreviewKind>(() =>
-  selected.value ? previewKindOf(selected.value.path) : "none",
-);
-const previewUrl = ref("");
-const previewText = ref("");
-const previewTruncated = ref(false);
-const previewError = ref("");
-const previewBusy = ref(false);
-let previewObjectUrl: string | null = null;
-let previewToken = 0;
-
-function extensionOf(path: string): string {
-  const name = path.split("/").pop() ?? path;
-  const dot = name.lastIndexOf(".");
-  return dot < 0 ? "" : name.slice(dot + 1).toLowerCase();
-}
-
-function isDocumentPath(path: string): boolean {
-  const lower = path.toLowerCase();
-  return lower.endsWith(".scene.json") || lower.endsWith(".prefab.json");
-}
-
-function previewKindOf(path: string): PreviewKind {
-  if (isDocumentPath(path)) return "document";
-  const ext = extensionOf(path);
-  if (ext in IMAGE_MIME) return "image";
-  if (TEXT_EXT.has(ext)) return "text";
-  return "none";
-}
-
-function clearPreview() {
-  previewToken += 1;
-  if (previewObjectUrl) {
-    URL.revokeObjectURL(previewObjectUrl);
-    previewObjectUrl = null;
-  }
-  previewUrl.value = "";
-  previewText.value = "";
-  previewTruncated.value = false;
-  previewError.value = "";
-  previewBusy.value = false;
-}
-
-async function loadPreview(asset: AssetInfo) {
-  const token = ++previewToken;
-  if (previewObjectUrl) {
-    URL.revokeObjectURL(previewObjectUrl);
-    previewObjectUrl = null;
-  }
-  previewUrl.value = "";
-  previewText.value = "";
-  previewTruncated.value = false;
-  previewError.value = "";
-  previewBusy.value = true;
-
-  try {
-    if (previewKindOf(asset.path) === "image") {
-      const bytes = await api.readAssetBytes(asset.path);
-      if (token !== previewToken) return;
-      const blob = new Blob([bytes], { type: IMAGE_MIME[extensionOf(asset.path)] });
-      previewObjectUrl = URL.createObjectURL(blob);
-      previewUrl.value = previewObjectUrl;
-    } else if (previewKindOf(asset.path) === "text") {
-      const result = await api.readAssetText(asset.path);
-      if (token !== previewToken) return;
-      previewText.value = result.text;
-      previewTruncated.value = result.truncated;
-    }
-  } catch (e) {
-    if (token === previewToken) previewError.value = `${e}`;
-  } finally {
-    if (token === previewToken) previewBusy.value = false;
-  }
-}
-
-function openSelected() {
-  if (selected.value && previewKind.value === "document") {
-    emit("open", selected.value.path);
-  }
-}
-
-function onAssetDoubleClick(asset: AssetInfo) {
-  if (isDocumentPath(asset.path)) emit("open", asset.path);
-}
-
-onUnmounted(clearPreview);
 
 const KIND_LABELS: Record<string, string> = {
   all: "全部",
@@ -180,7 +117,9 @@ const kinds = computed(() => {
   const present = new Set((assets?.value ?? []).map((asset) => asset.kind));
   return [
     "all",
-    ...Object.keys(KIND_LABELS).filter((key) => key !== "all" && present.has(key as AssetInfo["kind"])),
+    ...Object.keys(KIND_LABELS).filter(
+      (key) => key !== "all" && present.has(key as AssetInfo["kind"]),
+    ),
   ];
 });
 
@@ -188,16 +127,12 @@ const kindDropdownOptions = computed<DropdownOption[]>(() =>
   kinds.value.map((k) => ({ value: k, label: KIND_LABELS[k] ?? k })),
 );
 
-/**
- * Unity 风格过滤语法（`t:` 分类 / `l:` 标签 / `a:` 资产）。
- *
- * 命中时检索改由后端 `AssetDatabase.FindAssets`（`editor_find_assets`）处理，
- * 支持「多词 AND」与 `t:texture` 这类条件；否则走本地子串过滤，保持跟手。
- */
+const isSearching = computed(
+  () => search.value.trim().length > 0 || kind.value !== "all",
+);
+
 const FILTER_SYNTAX = /(^|\s)(t|l|a):/i;
-/** 后端 `FindAssets` 的结果（`null` = 未启用后端检索）。 */
 const backendMatches = ref<Set<string> | null>(null);
-/** 检索请求序号：只有最后一次输入的返回可以写 `backendMatches`。 */
 let searchToken = 0;
 
 watch(
@@ -211,19 +146,16 @@ watch(
     }
     try {
       const matches = await api.findAssets(query);
-      // 输入更快的连续键入会让请求乱序返回，旧结果不能覆盖新结果。
       if (token !== searchToken) return;
       backendMatches.value = new Set(matches);
     } catch {
       if (token !== searchToken) return;
-      // 后端不可用（如纯浏览器预览）时退回本地过滤。
       backendMatches.value = null;
     }
   },
 );
 
-/** 命中检索/分类的全部资产（树模式用，不截断）。 */
-const matched = computed(() => {
+const matchedAssets = computed(() => {
   const query = search.value.trim().toLowerCase();
   const all = assets?.value ?? [];
   const source = backendMatches.value
@@ -233,284 +165,587 @@ const matched = computed(() => {
     .filter((asset) => kind.value === "all" || asset.kind === kind.value)
     .filter(
       (asset) =>
-        // 后端已按 Unity 语法匹配过，不再叠加子串过滤。
-        backendMatches.value !== null || !query || asset.path.toLowerCase().includes(query),
+        backendMatches.value !== null ||
+        !query ||
+        asset.path.toLowerCase().includes(query),
     );
 });
 
-/** 平铺列表只渲染前 400 项，避免一次创建过多 DOM。 */
-const LIST_LIMIT = 400;
-const filtered = computed(() => matched.value.slice(0, LIST_LIMIT));
-const total = computed(() => (assets?.value ?? []).length);
-
 // ---------------------------------------------------------------------------
-// 目录树
+// 目录树模型（左侧目录面板）
 // ---------------------------------------------------------------------------
 
-interface TreeNode {
-  /** 单段显示名。 */
+interface FolderNode {
   name: string;
-  /** 相对 `assets/` 的目录或文件路径（`/` 分隔，根为 `""`）。 */
-  path: string;
-  dir: boolean;
-  children: TreeNode[];
-  asset?: AssetInfo;
-  /** 子树里的文件数。 */
-  count: number;
+  relPath: string; // "" 为根 Assets，"scenes", "textures/nature"
+  fullPath: string; // "assets", "assets/scenes"
+  subfolders: FolderNode[];
+  assetCount: number;
 }
 
-interface TreeRow {
-  node: TreeNode;
+interface VisibleFolderRow {
+  name: string;
+  relPath: string;
   depth: number;
+  hasChildren: boolean;
+  assetCount: number;
 }
 
-function buildTree(items: AssetInfo[], dirs: string[]): TreeNode {
-  const root: TreeNode = { name: "assets", path: "", dir: true, children: [], count: 0 };
+const expandedFolders = reactive(new Set<string>([""]));
+let initialExpandedDone = false;
 
-  // 先建目录（包括空目录），再挂文件；文件路径里的中间目录会复用已有节点。
-  for (const dir of dirs) {
-    const parts = dir.split("/").filter(Boolean);
-    if (parts[0] === "assets") parts.shift();
-    let node = root;
-    for (const part of parts) {
-      let child = node.children.find((c) => c.name === part && c.dir);
-      if (!child) {
-        child = {
-          name: part,
-          path: node.path ? `${node.path}/${part}` : part,
-          dir: true,
-          children: [],
-          count: 0,
-        };
-        node.children.push(child);
+function buildFolderTree(): FolderNode {
+  const root: FolderNode = {
+    name: "Assets",
+    relPath: "",
+    fullPath: "assets",
+    subfolders: [],
+    assetCount: 0,
+  };
+
+  const registeredDirs = new Set<string>();
+
+  // 1. 收集明确列出的目录
+  for (const dir of assetDirs.value) {
+    const clean = dir.replace(/^assets\/?/, "").replace(/\/+$/, "");
+    if (clean) registeredDirs.add(clean);
+  }
+
+  // 2. 从资产文件路径中提取中间目录
+  for (const asset of assets?.value ?? []) {
+    const clean = asset.path.replace(/^assets\/?/, "");
+    const slash = clean.lastIndexOf("/");
+    if (slash > 0) {
+      let cur = "";
+      for (const seg of clean.slice(0, slash).split("/")) {
+        cur = cur ? `${cur}/${seg}` : seg;
+        registeredDirs.add(cur);
       }
-      node = child;
     }
   }
 
-  for (const asset of items) {
-    const parts = asset.path.split("/").filter(Boolean);
-    // 后端返回的是相对项目根的路径；树根代表 `assets/`。
-    if (parts[0] === "assets") parts.shift();
-    if (!parts.length) continue;
-
-    let node = root;
-    parts.forEach((part, index) => {
-      const isFile = index === parts.length - 1;
-      let child = node.children.find((c) => c.name === part && c.dir !== isFile);
-      if (!child) {
-        child = {
+  // 3. 构建多层级目录树
+  for (const dir of Array.from(registeredDirs).sort()) {
+    const parts = dir.split("/").filter(Boolean);
+    let cur = root;
+    let accumulated = "";
+    for (const part of parts) {
+      accumulated = accumulated ? `${accumulated}/${part}` : part;
+      let next = cur.subfolders.find((f) => f.name === part);
+      if (!next) {
+        next = {
           name: part,
-          path: node.path ? `${node.path}/${part}` : part,
-          dir: !isFile,
-          children: [],
-          count: 0,
-          asset: isFile ? asset : undefined,
+          relPath: accumulated,
+          fullPath: `assets/${accumulated}`,
+          subfolders: [],
+          assetCount: 0,
         };
-        node.children.push(child);
+        cur.subfolders.push(next);
       }
-      if (!isFile) node = child;
-    });
+      cur = next;
+    }
   }
 
-  sortTree(root);
-  countTree(root);
+  // 4. 计算每个目录包含的资产数量
+  for (const asset of assets?.value ?? []) {
+    const clean = asset.path.replace(/^assets\/?/, "");
+    const slash = clean.lastIndexOf("/");
+    const parentDir = slash > 0 ? clean.slice(0, slash) : "";
+    let cur = root;
+    cur.assetCount += 1;
+    if (parentDir) {
+      for (const seg of parentDir.split("/")) {
+        const next = cur.subfolders.find((f) => f.name === seg);
+        if (next) {
+          next.assetCount += 1;
+          cur = next;
+        } else break;
+      }
+    }
+  }
+
+  function sortFolders(node: FolderNode) {
+    node.subfolders.sort((a, b) => a.name.localeCompare(b.name, "zh-CN"));
+    node.subfolders.forEach(sortFolders);
+  }
+  sortFolders(root);
+
   return root;
 }
 
-/** 目录在前、文件在后，各自按名称排序。 */
-function sortTree(node: TreeNode) {
-  node.children.sort((a, b) => {
-    if (a.dir !== b.dir) return a.dir ? -1 : 1;
-    return a.name.localeCompare(b.name, "zh-CN");
-  });
-  node.children.forEach(sortTree);
-}
-
-function countTree(node: TreeNode): number {
-  node.count = node.dir ? node.children.reduce((sum, child) => sum + countTree(child), 0) : 1;
-  return node.count;
-}
-
-const tree = computed(() => buildTree(matched.value, assetDirs.value));
-
-/** 展开状态（按相对 `assets/` 的目录路径记，根为 `""`）。 */
-const expanded = reactive(new Set<string>([""]));
-let treeInitialized = false;
+const folderTree = computed(() => buildFolderTree());
 
 watch(
-  tree,
+  folderTree,
   (root) => {
-    if (treeInitialized || root.children.length === 0) return;
-    treeInitialized = true;
-    // 默认展开第一层目录，避免打开面板只看到几个折叠项。
-    for (const child of root.children) {
-      if (child.dir) expanded.add(child.path);
+    if (initialExpandedDone || root.subfolders.length === 0) return;
+    initialExpandedDone = true;
+    for (const child of root.subfolders) {
+      expandedFolders.add(child.relPath);
     }
   },
   { immediate: true },
 );
 
-/** 检索/分类过滤时强制展开，保证匹配项可见。 */
-const autoExpand = computed(() => search.value.trim() !== "" || kind.value !== "all");
-
-function isOpen(node: TreeNode): boolean {
-  return autoExpand.value || expanded.has(node.path);
-}
-
-function toggleDir(node: TreeNode) {
-  if (autoExpand.value) return;
-  if (expanded.has(node.path)) expanded.delete(node.path);
-  else expanded.add(node.path);
-}
-
-/** 把树按当前展开状态压平成可见行，模板无需递归组件。 */
-const treeRows = computed<TreeRow[]>(() => {
-  const rows: TreeRow[] = [{ node: tree.value, depth: 0 }];
-  if (!isOpen(tree.value)) return rows;
-  const walk = (node: TreeNode, depth: number) => {
-    for (const child of node.children) {
-      rows.push({ node: child, depth });
-      if (child.dir && isOpen(child)) walk(child, depth + 1);
+const visibleFolderRows = computed<VisibleFolderRow[]>(() => {
+  const rows: VisibleFolderRow[] = [];
+  function traverse(node: FolderNode, depth: number) {
+    rows.push({
+      name: node.name,
+      relPath: node.relPath,
+      depth,
+      hasChildren: node.subfolders.length > 0,
+      assetCount: node.assetCount,
+    });
+    if (expandedFolders.has(node.relPath)) {
+      for (const child of node.subfolders) {
+        traverse(child, depth + 1);
+      }
     }
-  };
-  walk(tree.value, 1);
+  }
+  traverse(folderTree.value, 0);
   return rows;
 });
 
-// ---------------------------------------------------------------------------
-// 选择 / 引用 / 拖拽
-// ---------------------------------------------------------------------------
-
-/** 清空引用面板，并作废仍在途的查询（否则旧结果会写回已取消的选择）。 */
-function clearUsage() {
-  usageToken += 1;
-  usage.value = [];
-  usageError.value = "";
+function isFolderExpanded(relPath: string): boolean {
+  return expandedFolders.has(relPath);
 }
 
-async function select(asset: AssetInfo) {
-  const token = ++usageToken;
-  selected.value = asset;
-  emit("select", asset);
-  usage.value = [];
-  usageError.value = "";
-  busy.value = true;
-  void loadPreview(asset);
-  try {
-    const refs = await api.assetUsage(asset.path);
-    // 连点两个资产时，先发出的请求可能后返回；只认最后一次选择的结果。
-    if (token !== usageToken) return;
-    usage.value = refs;
-  } catch (e) {
-    if (token !== usageToken) return;
-    usageError.value = `${e}`;
-  } finally {
-    if (token === usageToken) busy.value = false;
+function toggleFolderExpanded(relPath: string) {
+  if (expandedFolders.has(relPath)) {
+    expandedFolders.delete(relPath);
+  } else {
+    expandedFolders.add(relPath);
   }
 }
 
-function onRowClick(node: TreeNode) {
-  selectedNode.value = { path: node.path, name: node.name, dir: node.dir };
-  if (node.dir) {
-    selected.value = null;
+// ---------------------------------------------------------------------------
+// 导航历史与当前激活目录
+// ---------------------------------------------------------------------------
+
+const activeFolder = ref<string>("");
+const navHistory = ref<string[]>([""]);
+const navHistoryIndex = ref(0);
+
+function navigateTo(relPath: string) {
+  if (relPath === activeFolder.value) return;
+  navHistory.value = navHistory.value.slice(0, navHistoryIndex.value + 1);
+  navHistory.value.push(relPath);
+  navHistoryIndex.value = navHistory.value.length - 1;
+  activeFolder.value = relPath;
+
+  // 展开该路径的所有祖先节点
+  let p = "";
+  for (const seg of relPath.split("/").filter(Boolean)) {
+    p = p ? `${p}/${seg}` : seg;
+    expandedFolders.add(p);
+  }
+}
+
+function goBack() {
+  if (navHistoryIndex.value > 0) {
+    navHistoryIndex.value -= 1;
+    activeFolder.value = navHistory.value[navHistoryIndex.value];
+  }
+}
+
+function goForward() {
+  if (navHistoryIndex.value < navHistory.value.length - 1) {
+    navHistoryIndex.value += 1;
+    activeFolder.value = navHistory.value[navHistoryIndex.value];
+  }
+}
+
+const breadcrumbs = computed(() => {
+  const list = [{ name: "Assets", relPath: "" }];
+  if (!activeFolder.value) return list;
+  const parts = activeFolder.value.split("/").filter(Boolean);
+  let cur = "";
+  for (const part of parts) {
+    cur = cur ? `${cur}/${part}` : part;
+    list.push({ name: part, relPath: cur });
+  }
+  return list;
+});
+
+// ---------------------------------------------------------------------------
+// 右侧内容区（ListArea 条目）
+// ---------------------------------------------------------------------------
+
+export interface ContentEntry {
+  id: string;
+  name: string;
+  relPath: string;
+  fullPath: string;
+  isDir: boolean;
+  asset?: AssetInfo;
+  sizeBytes?: number;
+  kind?: string;
+}
+
+const currentEntries = computed<ContentEntry[]>(() => {
+  if (isSearching.value) {
+    // 搜索模式：直接展示所有匹配资产
+    return matchedAssets.value.map((asset) => {
+      const clean = asset.path.replace(/^assets\/?/, "");
+      const name = clean.split("/").pop() ?? clean;
+      return {
+        id: asset.path,
+        name,
+        relPath: clean,
+        fullPath: asset.path,
+        isDir: false,
+        asset,
+        sizeBytes: asset.sizeBytes,
+        kind: asset.kind,
+      };
+    });
+  }
+
+  // 正常浏览模式：展示当前目录下的直接子文件夹与直接资产
+  const entries: ContentEntry[] = [];
+  const currentRel = activeFolder.value;
+
+  // 1. 查找当前目录的子文件夹
+  let targetNode = folderTree.value;
+  if (currentRel) {
+    const parts = currentRel.split("/").filter(Boolean);
+    for (const part of parts) {
+      const next = targetNode.subfolders.find((f) => f.name === part);
+      if (next) targetNode = next;
+      else break;
+    }
+  }
+
+  for (const sub of targetNode.subfolders) {
+    entries.push({
+      id: `dir:${sub.relPath}`,
+      name: sub.name,
+      relPath: sub.relPath,
+      fullPath: sub.fullPath,
+      isDir: true,
+      sizeBytes: undefined,
+      kind: undefined,
+    });
+  }
+
+  // 2. 查找直接位于当前目录下的资产文件
+  for (const asset of assets?.value ?? []) {
+    const clean = asset.path.replace(/^assets\/?/, "");
+    const slash = clean.lastIndexOf("/");
+    const parent = slash > 0 ? clean.slice(0, slash) : "";
+    if (parent === currentRel) {
+      const name = slash >= 0 ? clean.slice(slash + 1) : clean;
+      entries.push({
+        id: asset.path,
+        name,
+        relPath: clean,
+        fullPath: asset.path,
+        isDir: false,
+        asset,
+        sizeBytes: asset.sizeBytes,
+        kind: asset.kind,
+      });
+    }
+  }
+
+  return entries;
+});
+
+// ---------------------------------------------------------------------------
+// 选中与详情状态
+// ---------------------------------------------------------------------------
+
+const selectedEntry = ref<ContentEntry | null>(null);
+
+function selectEntry(entry: ContentEntry | null) {
+  selectedEntry.value = entry;
+  if (entry && !entry.isDir && entry.asset) {
+    emit("select", entry.asset);
+  } else {
     emit("select", null);
-    clearUsage();
-    clearPreview();
-    return;
   }
-  if (node.asset) void select(node.asset);
 }
 
-function onRowDoubleClick(node: TreeNode) {
-  if (node.dir) {
-    toggleDir(node);
-    return;
+function onFolderRowClick(relPath: string) {
+  navigateTo(relPath);
+  selectEntry(null);
+}
+
+function onEntryClick(entry: ContentEntry) {
+  selectEntry(entry);
+}
+
+function onEntryDoubleClick(entry: ContentEntry) {
+  if (entry.isDir) {
+    navigateTo(entry.relPath);
+    selectEntry(null);
+  } else if (entry.asset && isDocumentPath(entry.fullPath)) {
+    emit("open", entry.fullPath);
   }
-  if (node.asset) onAssetDoubleClick(node.asset);
 }
 
-function selectAssetRow(asset: AssetInfo) {
-  selectedNode.value = {
-    path: asset.path.replace(/^assets\//, ""),
-    name: asset.path.split("/").pop() ?? asset.path,
-    dir: false,
-  };
-  void select(asset);
+function isDocumentPath(path: string): boolean {
+  const lower = path.toLowerCase();
+  return lower.endsWith(".scene.json") || lower.endsWith(".prefab.json");
 }
 
-function openAssetMenu(node: TreeNode, event: MouseEvent) {
-  onRowClick(node);
-  const pos = clampMenuPosition(event.clientX, event.clientY, 190, 250);
-  assetMenu.value = {
-    path: node.path,
-    name: node.name,
-    dir: node.dir,
-    ...pos,
-  };
+function getEntryIcon(entry: ContentEntry) {
+  if (entry.isDir) {
+    return activeFolder.value === entry.relPath ? FolderOpen : Folder;
+  }
+  const ext = entry.name.split(".").pop()?.toLowerCase() ?? "";
+  if (entry.kind === "scene" || entry.name.endsWith(".scene.json")) return Sparkles;
+  if (entry.kind === "package" || entry.name.endsWith(".prefab.json")) return Box;
+  if (entry.kind === "model" || ["fbx", "gltf", "glb", "obj"].includes(ext)) return Box;
+  if (entry.kind === "texture" || ["png", "jpg", "jpeg", "webp", "hdr"].includes(ext)) return ImageIcon;
+  if (["slang", "wgsl", "glsl", "hlsl", "shader"].includes(ext)) return FileCode;
+  if (["wav", "ogg", "mp3"].includes(ext)) return Music;
+  if (["json", "toml", "txt", "md"].includes(ext)) return FileText;
+  return File;
 }
 
-function openAssetMenuFromAsset(asset: AssetInfo, event: MouseEvent) {
-  selectAssetRow(asset);
-  const pos = clampMenuPosition(event.clientX, event.clientY, 190, 250);
-  assetMenu.value = {
-    path: asset.path.replace(/^assets\//, ""),
-    name: asset.path.split("/").pop() ?? asset.path,
-    dir: false,
-    ...pos,
-  };
+function getEntryIconClass(entry: ContentEntry): string {
+  if (entry.isDir) return "icon-folder";
+  if (entry.kind === "scene" || entry.name.endsWith(".scene.json")) return "icon-scene";
+  if (entry.kind === "package" || entry.name.endsWith(".prefab.json")) return "icon-prefab";
+  if (entry.kind === "model") return "icon-model";
+  if (entry.kind === "texture") return "icon-texture";
+  if (entry.kind === "data") return "icon-data";
+  return "icon-generic";
 }
 
-function closeAssetMenu() {
-  assetMenu.value = null;
-}
+const statusLabel = computed(() => {
+  if (selectedEntry.value) {
+    const entry = selectedEntry.value;
+    if (entry.isDir) {
+      return `${entry.fullPath}/ (${t("assets.folder")})`;
+    }
+    return `${entry.fullPath} (${formatBytes(entry.sizeBytes ?? 0)})`;
+  }
+  const count = currentEntries.value.length;
+  return t(count === 1 ? "assets.itemCountSingle" : "assets.itemsCount", { count });
+});
 
-async function copyAssetPath(path: string) {
+// ---------------------------------------------------------------------------
+// 拖拽与移动
+// ---------------------------------------------------------------------------
+
+const NODE_MIME = "application/x-prism-asset-node";
+const ENTITY_MIME = "application/x-prism-entity";
+const dragOverFolder = ref<string | null>(null);
+
+function readDraggedEntity(event: DragEvent): { index: number; name: string } | null {
+  const raw = event.dataTransfer?.getData(ENTITY_MIME);
+  if (!raw) return null;
   try {
-    await navigator.clipboard.writeText(projectPath(path));
+    const value = JSON.parse(raw) as { index?: unknown; name?: unknown };
+    if (typeof value.index !== "number") return null;
+    return { index: value.index, name: typeof value.name === "string" ? value.name : "" };
   } catch {
-    // 剪贴板不可用时忽略（浏览器权限）。
+    return null;
   }
 }
 
-function runAssetMenu(
-  action: "open" | "newdir" | "rename" | "delete" | "copy" | "duplicate" | "copyguid",
-) {
-  const menu = assetMenu.value;
-  closeAssetMenu();
-  if (!menu) return;
-  if (action === "open") {
-    openSelected();
-    return;
+function readDraggedNode(event: DragEvent): { path: string; dir: boolean } | null {
+  const raw = event.dataTransfer?.getData(NODE_MIME);
+  if (!raw) return null;
+  try {
+    const value = JSON.parse(raw) as { path?: unknown; dir?: unknown };
+    if (typeof value.path !== "string" || typeof value.dir !== "boolean") return null;
+    return { path: value.path, dir: value.dir };
+  } catch {
+    return null;
   }
-  if (action === "copy") {
-    void copyAssetPath(menu.path);
-    return;
-  }
-  if (action === "copyguid") {
-    void copyAssetGuid(menu.path);
-    return;
-  }
-  if (action === "duplicate") {
-    void duplicateAsset(menu.path);
-    return;
-  }
-  if (action === "newdir") {
-    openNewDir();
-    return;
-  }
-  if (action === "rename") {
-    openRename();
-    return;
-  }
-  void askDelete();
 }
 
-/**
- * 为「复制资产」(Unity `Ctrl+D`) 找一个不冲突的目标名：`a.gltf` → `a-2.gltf`。
- *
- * 与预制体实例化的去重后缀保持一致（见 `scene::instantiate_prefab`）。
- */
+function onFolderDragStart(folder: { relPath: string }, event: DragEvent) {
+  if (!folder.relPath) {
+    event.preventDefault();
+    return;
+  }
+  event.dataTransfer?.setData(
+    NODE_MIME,
+    JSON.stringify({ path: folder.relPath, dir: true }),
+  );
+  if (event.dataTransfer) event.dataTransfer.effectAllowed = "copyMove";
+}
+
+function onEntryDragStart(entry: ContentEntry, event: DragEvent) {
+  event.dataTransfer?.setData(
+    NODE_MIME,
+    JSON.stringify({ path: entry.relPath, dir: entry.isDir }),
+  );
+  if (!entry.isDir) {
+    event.dataTransfer?.setData("application/x-prism-asset", entry.fullPath);
+    event.dataTransfer?.setData("text/plain", entry.fullPath);
+  }
+  if (event.dataTransfer) event.dataTransfer.effectAllowed = "copyMove";
+}
+
+function onFolderDragOver(targetRelPath: string, event: DragEvent) {
+  event.preventDefault();
+  const entity = readDraggedEntity(event);
+  if (event.dataTransfer) event.dataTransfer.dropEffect = entity ? "copy" : "move";
+  dragOverFolder.value = targetRelPath;
+}
+
+function onFolderDragLeave() {
+  dragOverFolder.value = null;
+}
+
+async function onFolderDrop(targetRelPath: string, event: DragEvent) {
+  dragOverFolder.value = null;
+  const targetFullPath = targetRelPath ? `assets/${targetRelPath}` : "assets";
+
+  // 1. 处理从场景层级拖拽实体 -> 保存为预制体
+  const entity = readDraggedEntity(event);
+  if (entity) {
+    emit("prefab-drop", targetFullPath, entity.index, entity.name);
+    return;
+  }
+
+  // 2. 处理项目浏览器内资产/目录移动
+  const dragged = readDraggedNode(event);
+  if (!dragged || !dragged.path) return;
+  if (dragged.path === targetRelPath) return;
+  if (dragged.dir && targetRelPath.startsWith(`${dragged.path}/`)) return;
+
+  const fileName = dragged.path.split("/").pop() ?? dragged.path;
+  const destination = targetRelPath ? `${targetRelPath}/${fileName}` : fileName;
+  if (dragged.path === destination) return;
+
+  await mutate(
+    () => api.moveAsset(`assets/${dragged.path}`, `assets/${destination}`),
+    { clearSelection: true },
+  );
+}
+
+function onContentsDragOver(event: DragEvent) {
+  onFolderDragOver(activeFolder.value, event);
+}
+
+function onContentsDragLeave() {
+  onFolderDragLeave();
+}
+
+async function onContentsDrop(event: DragEvent) {
+  await onFolderDrop(activeFolder.value, event);
+}
+
+// ---------------------------------------------------------------------------
+// 垂直 Splitter 拖拽调整大小
+// ---------------------------------------------------------------------------
+
+const browserRoot = ref<HTMLElement | null>(null);
+let isResizingSplitter = false;
+
+function startSplitterResize(event: PointerEvent) {
+  isResizingSplitter = true;
+  const target = event.currentTarget as HTMLElement;
+  target.setPointerCapture(event.pointerId);
+
+  const onPointerMove = (e: PointerEvent) => {
+    if (!isResizingSplitter || !browserRoot.value) return;
+    const rect = browserRoot.value.getBoundingClientRect();
+    const newWidth = Math.max(110, Math.min(360, e.clientX - rect.left));
+    treeWidth.value = newWidth;
+  };
+
+  const onPointerUp = (e: PointerEvent) => {
+    isResizingSplitter = false;
+    try {
+      target.releasePointerCapture(e.pointerId);
+    } catch {}
+    window.removeEventListener("pointermove", onPointerMove);
+    window.removeEventListener("pointerup", onPointerUp);
+  };
+
+  window.addEventListener("pointermove", onPointerMove);
+  window.addEventListener("pointerup", onPointerUp);
+}
+
+// ---------------------------------------------------------------------------
+// 右键上下文菜单
+// ---------------------------------------------------------------------------
+
+interface ContextMenuState {
+  x: number;
+  y: number;
+  isItem: boolean;
+  isDir: boolean;
+  name: string;
+  relPath: string;
+  fullPath: string;
+}
+
+const contextMenu = ref<ContextMenuState | null>(null);
+
+function openFolderContextMenu(folder: { name: string; relPath: string }, event: MouseEvent) {
+  navigateTo(folder.relPath);
+  selectEntry(null);
+  const pos = clampMenuPosition(event.clientX, event.clientY, 180, 240);
+  contextMenu.value = {
+    x: pos.x,
+    y: pos.y,
+    isItem: true,
+    isDir: true,
+    name: folder.name,
+    relPath: folder.relPath,
+    fullPath: folder.relPath ? `assets/${folder.relPath}` : "assets",
+  };
+}
+
+function openEntryContextMenu(entry: ContentEntry, event: MouseEvent) {
+  selectEntry(entry);
+  const pos = clampMenuPosition(event.clientX, event.clientY, 180, 240);
+  contextMenu.value = {
+    x: pos.x,
+    y: pos.y,
+    isItem: true,
+    isDir: entry.isDir,
+    name: entry.name,
+    relPath: entry.relPath,
+    fullPath: entry.fullPath,
+  };
+}
+
+function openEmptyAreaContextMenu(event: MouseEvent) {
+  selectEntry(null);
+  const pos = clampMenuPosition(event.clientX, event.clientY, 180, 200);
+  contextMenu.value = {
+    x: pos.x,
+    y: pos.y,
+    isItem: false,
+    isDir: true,
+    name: activeFolder.value.split("/").pop() ?? "Assets",
+    relPath: activeFolder.value,
+    fullPath: activeFolder.value ? `assets/${activeFolder.value}` : "assets",
+  };
+}
+
+function closeContextMenu() {
+  contextMenu.value = null;
+}
+
+function onEmptyAreaClick() {
+  selectEntry(null);
+  closeContextMenu();
+}
+
+async function copyPath(text: string) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {}
+}
+
+async function copyAssetGuid(path: string) {
+  try {
+    const guid = await api.assetGuid(path);
+    await navigator.clipboard.writeText(guid);
+  } catch {}
+}
+
 function uniqueCopyPath(path: string): string {
   const taken = new Set(
     (assets?.value ?? []).map((asset) => asset.path.replace(/^assets\//, "")),
@@ -528,201 +763,86 @@ function uniqueCopyPath(path: string): string {
   return `${dir}${stem}-copy${ext}`;
 }
 
-/** 复制资产 = `AssetDatabase.CopyAsset`（**不改写引用**，与 Unity 一致）。 */
-async function duplicateAsset(path: string) {
-  const target = uniqueCopyPath(path);
-  await mutate(() => api.copyAsset(projectPath(path), projectPath(target)), {
-    clearSelection: true,
-  });
-  if (!opError.value) selectedNode.value = { path: target, name: target.split("/").pop() ?? target, dir: false };
-}
-
-/** 复制资产 GUID = `AssetDatabase.AssetPathToGUID`。 */
-async function copyAssetGuid(path: string) {
-  try {
-    const guid = await api.assetGuid(projectPath(path));
-    await navigator.clipboard.writeText(guid);
-  } catch {
-    // 剪贴板不可用 / 路径非法时忽略（菜单已关闭）。
-  }
-}
-
-const NODE_MIME = "application/x-prism-asset-node";
-
-/** 拖拽到字段：自定义 MIME，避免和层级树的拖拽互相干扰。 */
-function onDragStart(asset: AssetInfo, event: DragEvent) {
-  event.dataTransfer?.setData("application/x-prism-asset", asset.path);
-  event.dataTransfer?.setData("text/plain", asset.path);
-  if (event.dataTransfer) event.dataTransfer.effectAllowed = "copyMove";
-}
-
-function onNodeDragStart(node: TreeNode, event: DragEvent) {
-  if (!node.path) {
-    event.preventDefault();
-    return;
-  }
-  event.dataTransfer?.setData(
-    NODE_MIME,
-    JSON.stringify({ path: node.path, dir: node.dir }),
-  );
-  if (!node.dir && node.asset) {
-    event.dataTransfer?.setData("application/x-prism-asset", node.asset.path);
-    event.dataTransfer?.setData("text/plain", node.asset.path);
-  }
-  if (event.dataTransfer) event.dataTransfer.effectAllowed = "copyMove";
-}
-
-const dragOverPath = ref<string | null>(null);
-const ENTITY_MIME = "application/x-prism-entity";
-
-function readDraggedEntity(event: DragEvent): { index: number; name: string } | null {
-  const raw = event.dataTransfer?.getData(ENTITY_MIME);
-  if (!raw) return null;
-  try {
-    const value = JSON.parse(raw) as { index?: unknown; name?: unknown };
-    if (typeof value.index !== "number") return null;
-    return { index: value.index, name: typeof value.name === "string" ? value.name : "" };
-  } catch {
-    return null;
-  }
-}
-
-function onFolderDragOver(node: TreeNode, event: DragEvent) {
-  if (!node.dir) return;
-  const entity = readDraggedEntity(event);
-  event.preventDefault();
-  if (event.dataTransfer) event.dataTransfer.dropEffect = entity ? "copy" : "move";
-  dragOverPath.value = node.path;
-}
-
-function readDraggedNode(event: DragEvent): { path: string; dir: boolean } | null {
-  const raw = event.dataTransfer?.getData(NODE_MIME);
-  if (!raw) return null;
-  try {
-    const value = JSON.parse(raw) as { path?: unknown; dir?: unknown };
-    if (typeof value.path !== "string" || typeof value.dir !== "boolean") return null;
-    return { path: value.path, dir: value.dir };
-  } catch {
-    return null;
-  }
-}
-
-function parentOf(path: string): string {
-  const index = path.lastIndexOf("/");
-  return index < 0 ? "" : path.slice(0, index);
-}
-
-function baseName(path: string): string {
-  const index = path.lastIndexOf("/");
-  return index < 0 ? path : path.slice(index + 1);
-}
-
-function joinRel(base: string, name: string): string {
-  return base ? `${base}/${name}` : name;
-}
-
-/** 树内相对路径 -> 项目相对路径（`assets/...`）。 */
-function projectPath(rel: string): string {
-  return rel ? `assets/${rel}` : "assets";
-}
-
-async function onDropFolder(target: TreeNode, event: DragEvent) {
-  dragOverPath.value = null;
-  if (!target.dir) return;
-  const entity = readDraggedEntity(event);
-  if (entity) {
-    emit("prefab-drop", projectPath(target.path), entity.index, entity.name);
-    return;
-  }
-
-  const dragged = readDraggedNode(event);
-  if (!dragged || !dragged.path || !target.dir) return;
-  if (dragged.path === target.path) return;
-  if (dragged.dir && target.path.startsWith(`${dragged.path}/`)) return;
-  if (parentOf(dragged.path) === target.path) return;
-
-  const to = joinRel(target.path, baseName(dragged.path));
+async function duplicateAsset(relPath: string) {
+  const target = uniqueCopyPath(relPath);
   await mutate(
-    () => api.moveAsset(projectPath(dragged.path), projectPath(to)),
+    () => api.copyAsset(`assets/${relPath}`, `assets/${target}`),
     { clearSelection: true },
   );
 }
 
 // ---------------------------------------------------------------------------
-// 文件操作
+// 自定义 Editor UI 对话框（新建文件夹 / 重命名 / 删除确认）
 // ---------------------------------------------------------------------------
 
-interface NameDialog {
+interface DialogState {
   kind: "newdir" | "rename";
   title: string;
-  /** 相对 `assets/` 的父目录。 */
-  base: string;
+  baseRel: string;
   value: string;
-  /** 重命名时的原项目路径。 */
-  from?: string;
+  fromFullPath?: string;
 }
 
-const dialog = ref<NameDialog | null>(null);
+const dialog = ref<DialogState | null>(null);
 const deleteTarget = ref<{ path: string; name: string; refs: string[] } | null>(null);
+const opBusy = ref(false);
+const opError = ref("");
 
-function openNewDir() {
+function openNewDir(baseRel: string) {
   opError.value = "";
-  const node = selectedNode.value;
-  const base = node ? (node.dir ? node.path : parentOf(node.path)) : "";
+  const baseFull = baseRel ? `assets/${baseRel}` : "assets";
   dialog.value = {
     kind: "newdir",
-    title: `在 ${projectPath(base)} 下新建文件夹`,
-    base,
+    title: t("assets.createInFolder", { folder: baseFull }),
+    baseRel,
     value: "",
   };
 }
 
-function openRename() {
-  const node = selectedNode.value;
-  if (!node || !node.path) return;
+function openRename(entry: { name: string; relPath: string; fullPath: string }) {
   opError.value = "";
+  const slash = entry.relPath.lastIndexOf("/");
+  const baseRel = slash > 0 ? entry.relPath.slice(0, slash) : "";
   dialog.value = {
     kind: "rename",
-    title: `重命名 / 移动 ${projectPath(node.path)}`,
-    base: parentOf(node.path),
-    value: node.name,
-    from: projectPath(node.path),
+    title: t("assets.renameAsset", { name: entry.name }),
+    baseRel,
+    value: entry.name,
+    fromFullPath: entry.fullPath,
   };
 }
 
 async function submitDialog() {
-  const current = dialog.value;
-  if (!current || opBusy.value) return;
-  const name = current.value.trim();
+  const cur = dialog.value;
+  if (!cur || opBusy.value) return;
+  const name = cur.value.trim();
   if (!name) {
-    opError.value = "名称不能为空";
+    opError.value = t("assets.nameCannotBeEmpty");
     return;
   }
   if (name.includes("/") || name.includes("\\")) {
-    opError.value = "名称不能包含斜杠（移动请直接拖拽）";
+    opError.value = t("assets.nameCannotContainSlash");
     return;
   }
-  const rel = joinRel(current.base, name);
+
+  const targetRel = cur.baseRel ? `${cur.baseRel}/${name}` : name;
+  const targetFull = `assets/${targetRel}`;
 
   opBusy.value = true;
   opError.value = "";
   try {
-    if (current.kind === "newdir") {
-      await api.createAssetDir(projectPath(rel));
+    if (cur.kind === "newdir") {
+      await api.createAssetDir(targetFull);
       dialog.value = null;
-      expanded.add(current.base);
+      expandedFolders.add(cur.baseRel);
       await refreshAssets();
-      selectedNode.value = { path: rel, name, dir: true };
-      selected.value = null;
+      navigateTo(targetRel);
     } else {
       if (!(await ensureSaved())) return;
-      const result = await api.renameAsset(current.from ?? projectPath(rel), projectPath(rel));
+      const result = await api.renameAsset(cur.fromFullPath ?? targetFull, targetFull);
       dialog.value = null;
       await refreshAssets();
-      selectedNode.value = { path: rel, name, dir: false };
-      const next = (assets?.value ?? []).find((asset) => asset.path === projectPath(rel));
-      if (next) await select(next);
-      notify(result);
+      emit("changed", result.affectedDocuments);
     }
   } catch (e) {
     opError.value = `${e}`;
@@ -731,15 +851,13 @@ async function submitDialog() {
   }
 }
 
-async function askDelete() {
-  const node = selectedNode.value;
-  if (!node || !node.path || opBusy.value) return;
+async function askDelete(entry: { fullPath: string; name: string }) {
+  if (opBusy.value) return;
   opBusy.value = true;
   opError.value = "";
   try {
-    const path = projectPath(node.path);
-    const refs = await api.assetReferences(path);
-    deleteTarget.value = { path, name: node.name, refs };
+    const refs = await api.assetReferences(entry.fullPath);
+    deleteTarget.value = { path: entry.fullPath, name: entry.name, refs };
   } catch (e) {
     opError.value = `${e}`;
   } finally {
@@ -755,12 +873,9 @@ async function confirmDelete() {
   try {
     const result = await api.deleteAsset(target.path, true);
     deleteTarget.value = null;
-    selectedNode.value = null;
-    selected.value = null;
-    clearUsage();
-    clearPreview();
+    selectEntry(null);
     await refreshAssets();
-    notify(result);
+    emit("changed", result.affectedDocuments);
   } catch (e) {
     opError.value = `${e}`;
   } finally {
@@ -784,13 +899,10 @@ async function mutate(
   try {
     const result = await operation();
     if (options.clearSelection) {
-      selectedNode.value = null;
-      selected.value = null;
-      clearUsage();
-      clearPreview();
+      selectEntry(null);
     }
     await refreshAssets();
-    notify(result);
+    emit("changed", result.affectedDocuments);
   } catch (e) {
     opError.value = `${e}`;
   } finally {
@@ -807,181 +919,854 @@ async function refreshAssets() {
   assetDirs.value = dirs;
 }
 
-function notify(result: AssetMutation) {
-  opError.value = "";
-  emit("changed", result.affectedDocuments);
-}
+// ---------------------------------------------------------------------------
+// 生命周期
+// ---------------------------------------------------------------------------
 
 onMounted(() => {
-  window.addEventListener("pointerdown", closeAssetMenu);
-  window.addEventListener("scroll", closeAssetMenu, true);
-  window.addEventListener("blur", closeAssetMenu);
-  window.addEventListener("resize", closeAssetMenu);
+  window.addEventListener("pointerdown", closeContextMenu);
+  window.addEventListener("scroll", closeContextMenu, true);
+  window.addEventListener("blur", closeContextMenu);
+  window.addEventListener("resize", closeContextMenu);
   void refreshAssets();
 });
 
 onUnmounted(() => {
-  window.removeEventListener("pointerdown", closeAssetMenu);
-  window.removeEventListener("scroll", closeAssetMenu, true);
-  window.removeEventListener("blur", closeAssetMenu);
-  window.removeEventListener("resize", closeAssetMenu);
+  window.removeEventListener("pointerdown", closeContextMenu);
+  window.removeEventListener("scroll", closeContextMenu, true);
+  window.removeEventListener("blur", closeContextMenu);
+  window.removeEventListener("resize", closeContextMenu);
 });
 </script>
 
 <template>
-  <div class="asset-browser">
-    <div class="tree-tools">
-    <div class="asset-filter-row">
-      <button
-        class="ghost icon asset-new-dir"
-        :disabled="opBusy"
-        title="在所选目录下新建文件夹"
-        @click="openNewDir"
-      >
-        <Plus :size="14" />
-      </button>
-      <input v-model="search" type="text" :placeholder="`检索 ${total} 个资产…`" />
+  <div ref="browserRoot" class="asset-browser">
+    <!-- 顶部 Unity 风格工具栏 -->
+    <div class="project-toolbar">
+      <!-- 导航前进后退按钮 -->
+      <div class="nav-actions">
+        <button
+          class="ghost icon nav-btn"
+          :disabled="navHistoryIndex <= 0"
+          :title="t('assets.back')"
+          @click="goBack"
+        >
+          <ChevronLeft :size="14" />
+        </button>
+        <button
+          class="ghost icon nav-btn"
+          :disabled="navHistoryIndex >= navHistory.length - 1"
+          :title="t('assets.forward')"
+          @click="goForward"
+        >
+          <ChevronRight :size="14" />
+        </button>
+      </div>
+
+      <!-- 面包屑路径条 -->
+      <div class="breadcrumbs-container">
+        <template v-for="(crumb, idx) in breadcrumbs" :key="crumb.relPath">
+          <button
+            class="crumb-btn"
+            :class="{ active: idx === breadcrumbs.length - 1 }"
+            @click="navigateTo(crumb.relPath)"
+          >
+            {{ crumb.name }}
+          </button>
+          <span v-if="idx < breadcrumbs.length - 1" class="crumb-sep">›</span>
+        </template>
+      </div>
+
+      <div class="toolbar-spacer" />
+
+      <!-- 搜索输入框 -->
+      <div class="search-box">
+        <Search :size="12" class="search-icon" />
+        <input
+          v-model="search"
+          type="text"
+          :placeholder="t('assets.searchPlaceholder')"
+        />
+        <button
+          v-if="search"
+          class="ghost icon clear-btn"
+          @click="search = ''"
+        >
+          <X :size="12" />
+        </button>
+      </div>
+
+      <!-- 资产类型下拉 -->
       <EditorDropdown
         v-model="kind"
         :options="kindDropdownOptions"
-        title="按资产类型过滤"
+        :title="t('assets.allTypes')"
       />
-    </div>
-    <div v-if="opError" class="error asset-op-error" :title="opError">{{ opError }}</div>
 
-    <div v-if="dialog" class="asset-dialog">
-      <div class="hint">{{ dialog.title }}</div>
+      <!-- 新建文件夹 -->
+      <button
+        class="ghost icon create-btn"
+        :disabled="opBusy"
+        :title="t('assets.newFolder')"
+        @click="openNewDir(activeFolder)"
+      >
+        <Plus :size="14" />
+      </button>
+
+      <!-- 刷新 -->
+      <button
+        class="ghost icon refresh-btn"
+        :disabled="opBusy"
+        :title="t('assets.refresh')"
+        @click="refreshAssets"
+      >
+        <RefreshCw :size="13" />
+      </button>
+    </div>
+
+    <!-- 操作错误提示 -->
+    <div v-if="opError" class="asset-op-error" :title="opError">{{ opError }}</div>
+
+    <!-- 自定义 Editor UI 对话框：新建文件夹 / 重命名 -->
+    <div v-if="dialog" class="asset-dialog-card">
+      <div class="dialog-title">{{ dialog.title }}</div>
       <input
         v-model="dialog.value"
         type="text"
+        class="dialog-input"
         autofocus
         @keydown.enter.prevent="submitDialog"
         @keydown.esc.prevent="dialog = null"
       />
-      <div class="asset-dialog-actions">
-        <button class="ghost" @click="dialog = null">取消</button>
+      <div class="dialog-actions">
+        <button class="ghost" @click="dialog = null">{{ t("common.cancel", { default: "取消" }) }}</button>
         <button class="primary" :disabled="opBusy || !dialog.value.trim()" @click="submitDialog">
-          确定
+          {{ t("common.confirm", { default: "确定" }) }}
         </button>
       </div>
     </div>
 
-    <div v-if="deleteTarget" class="asset-dialog">
-      <div class="hint">删除 {{ deleteTarget.path }}？</div>
-      <div v-if="deleteTarget.refs.length" class="asset-warning">
-        仍被 {{ deleteTarget.refs.length }} 个文档引用：
-        <div v-for="ref in deleteTarget.refs.slice(0, 5)" :key="ref" class="asset-warning-ref">
+    <!-- 自定义 Editor UI 对话框：删除确认 -->
+    <div v-if="deleteTarget" class="asset-dialog-card">
+      <div class="dialog-title">{{ t("assets.confirmDelete", { path: deleteTarget.path }) }}</div>
+      <div v-if="deleteTarget.refs.length" class="delete-warning">
+        <div class="warning-header">{{ t("assets.warningRef", { count: deleteTarget.refs.length }) }}</div>
+        <div v-for="ref in deleteTarget.refs.slice(0, 5)" :key="ref" class="warning-ref">
           {{ ref }}
         </div>
-        <div v-if="deleteTarget.refs.length > 5" class="asset-warning-ref">
-          … 还有 {{ deleteTarget.refs.length - 5 }} 个
+        <div v-if="deleteTarget.refs.length > 5" class="warning-ref">
+          {{ t("assets.moreRefs", { count: deleteTarget.refs.length - 5 }) }}
         </div>
       </div>
-      <div class="asset-dialog-actions">
-        <button class="ghost" @click="deleteTarget = null">取消</button>
-        <button class="primary" :disabled="opBusy" @click="confirmDelete">确认删除</button>
+      <div class="dialog-actions">
+        <button class="ghost" @click="deleteTarget = null">{{ t("common.cancel", { default: "取消" }) }}</button>
+        <button class="danger" :disabled="opBusy" @click="confirmDelete">
+          {{ t("assets.delete") }}
+        </button>
       </div>
     </div>
-    </div>
 
-    <!-- 目录树 / 列表：只让这一块滚动，工具栏和详情固定 -->
-    <div class="asset-scroll">
-  <template v-if="currentView === 'tree'">
-    <div
-      v-for="row in treeRows"
-      :key="row.node.path || 'root'"
-      class="list-item asset-row"
-      :class="{
-        active:
-          selectedNode?.path === row.node.path && selectedNode?.dir === row.node.dir,
-        'drop-target': dragOverPath === row.node.path && row.node.dir,
-      }"
-      :style="{ paddingLeft: `${6 + row.depth * 12}px` }"
-      :draggable="!!row.node.path"
-      :title="row.node.dir ? row.node.path || 'assets' : `可拖到路径字段：${row.node.path}`"
-      @dragstart="onNodeDragStart(row.node, $event)"
-      @dragover="onFolderDragOver(row.node, $event)"
-      @dragleave="dragOverPath = null"
-      @drop.stop.prevent="onDropFolder(row.node, $event)"
-      @click="onRowClick(row.node)"
-      @dblclick="onRowDoubleClick(row.node)"
-      @contextmenu.prevent.stop="openAssetMenu(row.node, $event)"
-    >
-      <span
-        v-if="row.node.dir"
-        class="folder-caret"
-        @click.stop="toggleDir(row.node)"
+    <!-- 双栏主体视图 -->
+    <div class="project-body">
+      <!-- 左栏：文件夹层级树 -->
+      <div class="folder-tree-pane" :style="{ width: `${treeWidth}px` }">
+        <div
+          v-for="row in visibleFolderRows"
+          :key="row.relPath || 'root'"
+          class="folder-tree-row"
+          :class="{
+            active: activeFolder === row.relPath,
+            'drop-target': dragOverFolder === row.relPath,
+          }"
+          :style="{ paddingLeft: `${4 + row.depth * 14}px` }"
+          :draggable="!!row.relPath"
+          @click="onFolderRowClick(row.relPath)"
+          @dblclick="toggleFolderExpanded(row.relPath)"
+          @dragstart="onFolderDragStart(row, $event)"
+          @dragover="onFolderDragOver(row.relPath, $event)"
+          @dragleave="onFolderDragLeave"
+          @drop.stop.prevent="onFolderDrop(row.relPath, $event)"
+          @contextmenu.prevent.stop="openFolderContextMenu(row, $event)"
+        >
+          <span
+            class="folder-foldout"
+            :class="{ hidden: !row.hasChildren }"
+            @click.stop="toggleFolderExpanded(row.relPath)"
+          >
+            <ChevronDown v-if="isFolderExpanded(row.relPath)" :size="12" />
+            <ChevronRight v-else :size="12" />
+          </span>
+          <component
+            :is="isFolderExpanded(row.relPath) || activeFolder === row.relPath ? FolderOpen : Folder"
+            :size="14"
+            class="folder-icon"
+          />
+          <span class="folder-name">{{ row.name }}</span>
+        </div>
+      </div>
+
+      <!-- 垂直 Splitter -->
+      <div
+        class="project-splitter"
+        title="拖动调整文件夹树宽度"
+        @pointerdown="startSplitterResize"
+      />
+
+      <!-- 右栏：内容区 (ListArea) -->
+      <div
+        class="folder-contents-pane"
+        :class="{ 'drop-target': dragOverFolder === activeFolder }"
+        @click="onEmptyAreaClick"
+        @contextmenu.prevent.stop="openEmptyAreaContextMenu"
+        @dragover="onContentsDragOver"
+        @dragleave="onContentsDragLeave"
+        @drop.stop.prevent="onContentsDrop"
       >
-        <ChevronDown v-if="isOpen(row.node)" :size="12" />
-        <ChevronRight v-else :size="12" />
-      </span>
-      <span v-else class="badge">{{ row.node.asset?.kind }}</span>
-      <span class="asset-name">{{ row.node.name }}</span>
-      <span v-if="row.node.dir" class="muted">{{ row.node.count }}</span>
-      <span v-else class="muted">{{ formatBytes(row.node.asset?.sizeBytes ?? 0) }}</span>
-    </div>
-    <div v-if="!treeRows.length" class="hint" style="padding: 8px">没有匹配的资产</div>
-  </template>
+        <!-- 列表视图（滑块处于 16px） -->
+        <div v-if="iconSize <= 18" class="contents-list-view">
+          <div
+            v-for="entry in currentEntries"
+            :key="entry.id"
+            class="content-list-row"
+            :class="{
+              active: selectedEntry?.id === entry.id,
+              'drop-target': dragOverFolder === entry.relPath && entry.isDir,
+            }"
+            :draggable="true"
+            @click.stop="onEntryClick(entry)"
+            @dblclick.stop="onEntryDoubleClick(entry)"
+            @dragstart="onEntryDragStart(entry, $event)"
+            @dragover="entry.isDir ? onFolderDragOver(entry.relPath, $event) : undefined"
+            @dragleave="entry.isDir ? onFolderDragLeave() : undefined"
+            @drop.stop.prevent="entry.isDir ? onFolderDrop(entry.relPath, $event) : undefined"
+            @contextmenu.prevent.stop="openEntryContextMenu(entry, $event)"
+          >
+            <component
+              :is="getEntryIcon(entry)"
+              :size="14"
+              class="entry-icon"
+              :class="getEntryIconClass(entry)"
+            />
+            <span class="entry-name">{{ entry.name }}</span>
+            <span v-if="entry.isDir" class="entry-badge folder-badge">{{ t("assets.folder") }}</span>
+            <span v-else-if="entry.kind" class="entry-badge">{{ entry.kind }}</span>
+            <span class="entry-size">{{ entry.sizeBytes != null ? formatBytes(entry.sizeBytes) : "" }}</span>
+          </div>
+        </div>
 
-  <!-- 平铺列表 -->
-  <template v-else>
-    <div
-      v-for="asset in filtered"
-      :key="asset.path"
-      class="list-item"
-      :class="{ active: asset.path === selected?.path }"
-      draggable="true"
-      title="可拖到路径字段"
-      @dragstart="onDragStart(asset, $event)"
-      @click="selectAssetRow(asset)"
-      @dblclick="onAssetDoubleClick(asset)"
-      @contextmenu.prevent.stop="openAssetMenuFromAsset(asset, $event)"
-    >
-      <span class="badge">{{ asset.kind }}</span>
-      <span class="path">{{ asset.path }}</span>
-      <span class="muted">{{ formatBytes(asset.sizeBytes) }}</span>
+        <!-- 网格卡片视图（滑块 > 18px） -->
+        <div
+          v-else
+          class="contents-grid-view"
+          :style="{ '--icon-size': `${iconSize}px` }"
+        >
+          <div
+            v-for="entry in currentEntries"
+            :key="entry.id"
+            class="content-grid-card"
+            :class="{
+              active: selectedEntry?.id === entry.id,
+              'drop-target': dragOverFolder === entry.relPath && entry.isDir,
+            }"
+            :draggable="true"
+            :title="entry.name"
+            @click.stop="onEntryClick(entry)"
+            @dblclick.stop="onEntryDoubleClick(entry)"
+            @dragstart="onEntryDragStart(entry, $event)"
+            @dragover="entry.isDir ? onFolderDragOver(entry.relPath, $event) : undefined"
+            @dragleave="entry.isDir ? onFolderDragLeave() : undefined"
+            @drop.stop.prevent="entry.isDir ? onFolderDrop(entry.relPath, $event) : undefined"
+            @contextmenu.prevent.stop="openEntryContextMenu(entry, $event)"
+          >
+            <div class="card-icon-wrapper">
+              <component
+                :is="getEntryIcon(entry)"
+                :size="Math.min(iconSize, 56)"
+                class="card-icon"
+                :class="getEntryIconClass(entry)"
+              />
+            </div>
+            <span class="card-label">{{ entry.name }}</span>
+          </div>
+        </div>
+
+        <!-- 空目录提示 -->
+        <div v-if="currentEntries.length === 0" class="empty-hint">
+          {{ isSearching ? t("assets.noMatch") : t("assets.emptyFolder") }}
+        </div>
+      </div>
     </div>
-    <div v-if="!filtered.length" class="hint" style="padding: 8px">没有匹配的资产</div>
-    <div v-else-if="matched.length > LIST_LIMIT" class="hint" style="padding: 8px">
-      共 {{ matched.length }} 项，仅显示前 {{ LIST_LIMIT }} 项；继续输入以缩小范围，或切到「目录」。
-    </div>
-  </template>
+
+    <!-- 底部状态栏 -->
+    <div class="project-bottom-bar">
+      <div class="status-summary" :title="statusLabel">
+        {{ statusLabel }}
+      </div>
+      <div class="slider-wrapper" :title="t('assets.iconSize')">
+        <input
+          v-model.number="iconSize"
+          type="range"
+          min="16"
+          max="96"
+          step="4"
+          class="icon-size-slider"
+        />
+      </div>
     </div>
   </div>
 
+  <!-- 右键上下文菜单 -->
   <Teleport to="body">
     <div
-      v-if="assetMenu"
+      v-if="contextMenu"
       class="entity-context-menu asset-context-menu"
-      :style="{ left: `${assetMenu.x}px`, top: `${assetMenu.y}px` }"
+      :style="{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }"
       @pointerdown.stop
       @click.stop
       @contextmenu.prevent
     >
+      <!-- 双击打开文档 -->
       <button
-        v-if="!assetMenu.dir && isDocumentPath(projectPath(assetMenu.path))"
-        @click="runAssetMenu('open')"
+        v-if="contextMenu.isItem && !contextMenu.isDir && isDocumentPath(contextMenu.fullPath)"
+        @click="emit('open', contextMenu.fullPath); closeContextMenu()"
       >
-        <span>打开文档</span>
+        <span>{{ t("assets.openDoc") }}</span>
       </button>
-      <button v-if="assetMenu.dir" @click="runAssetMenu('newdir')">
-        <span>新建文件夹</span>
+
+      <!-- 新建文件夹 -->
+      <button
+        v-if="contextMenu.isDir"
+        @click="openNewDir(contextMenu.relPath); closeContextMenu()"
+      >
+        <span>{{ t("assets.newFolder") }}</span>
       </button>
-      <button v-if="assetMenu.path" :disabled="opBusy" @click="runAssetMenu('rename')">
-        <span>重命名 / 移动</span>
+
+      <!-- 重命名 -->
+      <button
+        v-if="contextMenu.isItem && contextMenu.relPath"
+        :disabled="opBusy"
+        @click="openRename(contextMenu); closeContextMenu()"
+      >
+        <span>{{ t("assets.rename") }}</span>
       </button>
-      <button v-if="assetMenu.path && !assetMenu.dir" :disabled="opBusy" @click="runAssetMenu('duplicate')">
-        <span>复制资产</span>
+
+      <!-- 复制资产 (Ctrl+D) -->
+      <button
+        v-if="contextMenu.isItem && !contextMenu.isDir"
+        :disabled="opBusy"
+        @click="duplicateAsset(contextMenu.relPath); closeContextMenu()"
+      >
+        <span>{{ t("assets.duplicate") }}</span>
       </button>
-      <button @click="runAssetMenu('copy')">
-        <span>复制路径</span>
+
+      <!-- 复制路径 -->
+      <button @click="copyPath(contextMenu.fullPath); closeContextMenu()">
+        <span>{{ t("assets.copyPath") }}</span>
       </button>
-      <button v-if="assetMenu.path && !assetMenu.dir" @click="runAssetMenu('copyguid')">
-        <span>复制 GUID</span>
+
+      <!-- 复制 GUID -->
+      <button
+        v-if="contextMenu.isItem && !contextMenu.isDir"
+        @click="copyAssetGuid(contextMenu.fullPath); closeContextMenu()"
+      >
+        <span>{{ t("assets.copyGuid") }}</span>
       </button>
-      <button v-if="assetMenu.path" class="danger" :disabled="opBusy" @click="runAssetMenu('delete')">
-        <span>删除</span>
+
+      <!-- 刷新 -->
+      <button
+        v-if="!contextMenu.isItem"
+        @click="refreshAssets(); closeContextMenu()"
+      >
+        <span>{{ t("assets.refresh") }}</span>
+      </button>
+
+      <!-- 删除 -->
+      <button
+        v-if="contextMenu.isItem && contextMenu.relPath"
+        class="danger"
+        :disabled="opBusy"
+        @click="askDelete(contextMenu); closeContextMenu()"
+      >
+        <span>{{ t("assets.delete") }}</span>
       </button>
     </div>
   </Teleport>
 </template>
+
+<style scoped>
+.asset-browser {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg-sunken);
+  color: var(--text);
+  font-size: 12px;
+  user-select: none;
+}
+
+/* 顶部工具栏 */
+.project-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  padding: 0 6px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.nav-actions {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+}
+
+.nav-btn {
+  padding: 2px 4px;
+  height: 20px;
+  color: var(--text-soft);
+}
+.nav-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.breadcrumbs-container {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  margin-left: 2px;
+}
+
+.crumb-btn {
+  background: transparent;
+  border: none;
+  padding: 1px 4px;
+  color: var(--muted);
+  cursor: pointer;
+  border-radius: 2px;
+  font-size: 11px;
+}
+.crumb-btn:hover {
+  color: var(--text);
+  background: var(--hover-bg);
+}
+.crumb-btn.active {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.crumb-sep {
+  color: var(--muted);
+  font-size: 11px;
+  opacity: 0.7;
+}
+
+.toolbar-spacer {
+  flex: 1 1 auto;
+}
+
+.search-box {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 140px;
+  flex-shrink: 0;
+}
+
+.search-icon {
+  position: absolute;
+  left: 6px;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.search-box input {
+  width: 100%;
+  height: 20px;
+  padding: 0 20px 0 22px;
+  font-size: 11px;
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text);
+}
+
+.clear-btn {
+  position: absolute;
+  right: 2px;
+  padding: 2px;
+  height: 16px;
+  color: var(--muted);
+}
+
+.create-btn,
+.refresh-btn {
+  padding: 2px 5px;
+  height: 20px;
+  color: var(--text-soft);
+}
+
+/* 错误条目 */
+.asset-op-error {
+  background: rgba(239, 68, 68, 0.15);
+  border-bottom: 1px solid #ef4444;
+  color: #fca5a5;
+  padding: 4px 8px;
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+/* 对话框卡片 */
+.asset-dialog-card {
+  padding: 8px 12px;
+  background: var(--panel-alt);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.dialog-title {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.dialog-input {
+  height: 22px;
+  padding: 0 6px;
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.delete-warning {
+  font-size: 11px;
+  color: #fbbf24;
+  background: rgba(245, 158, 11, 0.1);
+  padding: 6px 8px;
+  border-radius: 3px;
+}
+.warning-ref {
+  color: var(--text-soft);
+  font-family: ui-monospace, monospace;
+  font-size: 10px;
+  margin-top: 2px;
+}
+
+/* 主体视图 */
+.project-body {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* 左侧文件夹树 */
+.folder-tree-pane {
+  flex-shrink: 0;
+  min-width: 100px;
+  max-width: 360px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  background: var(--panel);
+  border-right: 1px solid var(--border);
+}
+
+.folder-tree-row {
+  display: flex;
+  align-items: center;
+  height: 20px;
+  padding-right: 6px;
+  gap: 4px;
+  cursor: pointer;
+  color: var(--text-soft);
+  font-size: 11.5px;
+}
+
+.folder-tree-row:hover {
+  background: var(--hover-bg);
+  color: var(--text);
+}
+
+.folder-tree-row.active {
+  background: var(--active-bg, #2c5d87);
+  color: #fff;
+}
+
+.folder-tree-row.drop-target {
+  outline: 2px dashed var(--accent, #388bfd);
+  outline-offset: -2px;
+}
+
+.folder-foldout {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  color: var(--muted);
+}
+.folder-foldout.hidden {
+  visibility: hidden;
+}
+
+.folder-icon {
+  flex-shrink: 0;
+  color: #dcb67a;
+}
+
+.folder-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Splitter */
+.project-splitter {
+  width: 4px;
+  cursor: col-resize;
+  background: transparent;
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+.project-splitter:hover,
+.project-splitter:active {
+  background: var(--accent, #388bfd);
+}
+
+/* 右侧内容区 */
+.folder-contents-pane {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  background: var(--bg-sunken);
+  position: relative;
+}
+
+.folder-contents-pane.drop-target {
+  background: rgba(56, 139, 253, 0.08);
+  outline: 2px dashed var(--accent, #388bfd);
+  outline-offset: -2px;
+}
+
+/* 列表视图 */
+.contents-list-view {
+  display: flex;
+  flex-direction: column;
+}
+
+.content-list-row {
+  display: flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 8px;
+  gap: 6px;
+  cursor: pointer;
+  color: var(--text-soft);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+}
+
+.content-list-row:hover {
+  background: var(--hover-bg);
+  color: var(--text);
+}
+
+.content-list-row.active {
+  background: var(--active-bg, #2c5d87);
+  color: #fff;
+}
+
+.content-list-row.drop-target {
+  outline: 2px dashed var(--accent, #388bfd);
+  outline-offset: -2px;
+}
+
+.entry-icon {
+  flex-shrink: 0;
+}
+.icon-folder {
+  color: #dcb67a;
+}
+.icon-scene {
+  color: #38bdf8;
+}
+.icon-prefab {
+  color: #60a5fa;
+}
+.icon-model {
+  color: #a78bfa;
+}
+.icon-texture {
+  color: #34d399;
+}
+.icon-data {
+  color: #cbd5e1;
+}
+.icon-generic {
+  color: var(--muted);
+}
+
+.entry-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+}
+
+.entry-badge {
+  font-size: 9.5px;
+  padding: 0 4px;
+  border-radius: 2px;
+  background: var(--panel-alt);
+  color: var(--muted);
+  border: 1px solid var(--border);
+  text-transform: uppercase;
+}
+
+.folder-badge {
+  color: #dcb67a;
+  border-color: rgba(220, 182, 122, 0.3);
+}
+
+.entry-size {
+  font-size: 10.5px;
+  color: var(--muted);
+  flex-shrink: 0;
+  width: 58px;
+  text-align: right;
+}
+
+/* 网格卡片视图 */
+.contents-grid-view {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(calc(var(--icon-size) + 32px), 1fr));
+  gap: 6px;
+  padding: 8px;
+  align-content: flex-start;
+}
+
+.content-grid-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 6px 4px 4px;
+  border-radius: 4px;
+  cursor: pointer;
+  background: transparent;
+  border: 1px solid transparent;
+  transition: background 0.1s;
+}
+
+.content-grid-card:hover {
+  background: var(--hover-bg);
+}
+
+.content-grid-card.active {
+  background: var(--active-bg, #2c5d87);
+  border-color: var(--accent, #388bfd);
+}
+
+.content-grid-card.drop-target {
+  outline: 2px dashed var(--accent, #388bfd);
+  outline-offset: -2px;
+}
+
+.card-icon-wrapper {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--icon-size);
+  height: var(--icon-size);
+  margin-bottom: 4px;
+}
+
+.card-icon {
+  max-width: 100%;
+  max-height: 100%;
+}
+
+.card-label {
+  font-size: 11px;
+  color: var(--text-soft);
+  text-align: center;
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  line-height: 1.25;
+  word-break: break-all;
+}
+.content-grid-card.active .card-label {
+  color: #fff;
+}
+
+/* 空提示 */
+.empty-hint {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 80px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* 底部状态栏 */
+.project-bottom-bar {
+  display: flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 8px;
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+  gap: 8px;
+}
+
+.status-summary {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.slider-wrapper {
+  display: flex;
+  align-items: center;
+  width: 68px;
+  flex-shrink: 0;
+}
+
+.icon-size-slider {
+  width: 100%;
+  height: 10px;
+  accent-color: var(--accent, #388bfd);
+  cursor: pointer;
+}
+</style>
