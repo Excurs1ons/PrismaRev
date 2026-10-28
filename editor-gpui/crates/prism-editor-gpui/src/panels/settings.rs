@@ -347,15 +347,25 @@ impl EditorView {
             for token in group.tokens {
                 let color = self.workspace.color(*token);
                 let overridden = self.workspace.theme.overrides.contains_key(token);
+                let token = *token;
                 grid = grid.child(
                     div()
+                        .id(SharedString::from(format!("theme-token-{}", token.key())))
                         .flex()
                         .flex_row()
                         .items_center()
                         .gap_1()
                         .w(px(150.0))
+                        .px_1()
+                        .rounded_sm()
+                        .cursor_pointer()
+                        .hover(move |this| this.bg(style.row_hover()))
                         .text_size(px(9.0))
                         .text_color(style.text_soft())
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.theme_edit = Some(token);
+                            cx.notify();
+                        }))
                         .child(
                             div()
                                 .w(px(12.0))

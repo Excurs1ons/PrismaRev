@@ -115,6 +115,8 @@ Unity 形状的编辑器，又不会把 `prism-render` 绑死在某套 UI 生命
   `sanitize_stem` + 重名后缀 + `write_document`，不修改当前场景。
 - 实例化：`instantiate_prefab_asset` 从磁盘（或 fixture 模板）读预制体，
   `instantiate_prefab` 追加到场景并挂到选中实体，自动选中新根、可撤销。
+- 资产删除：`delete_asset` 只允许 `assets/` 内的普通文件，场景/预制体走文档面板；
+  引用不做自动清理（检查器里保留悬空值，便于发现）。
 - 资产重命名 / 移动：`rename_path` 只允许 `assets/` 内、拒绝覆盖；随后
   `SceneDoc::rewrite_reference` 对所有组件的字符串值做**精确匹配**替换（不做子串，
   避免把 `a.png` 误伤成 `a.png.bak`），并把打开文档自己的 `path` 同步过去。
@@ -127,7 +129,8 @@ Unity 形状的编辑器，又不会把 `prism-render` 绑死在某套 UI 生命
   dock 走 `DockLayout::from_json`（未知面板丢弃），主题只接受「存在预设 + 合法
   `#rrggbb` token」，locale 非法回退中文。
 - 文件默认落在 `<project>/target/editor-gpui/state.json`（fixture 模式落 cwd 的
-  `target/`）；启动时恢复，运行中每 3s 仅在内容变化时重写。
+  `target/`）；启动时恢复，运行中每 3s 仅在内容变化时重写。主题面板里的逐项
+  RGBA 覆盖也走同一份状态。
 - 自动保存由同一 33ms 定时器驱动：每 5s 检查一次当前文档是否 dirty，项目模式下
   写盘；Play 中跳过。
 
@@ -172,7 +175,7 @@ Unity 形状的编辑器，又不会把 `prism-render` 绑死在某套 UI 生命
 
 ```sh
 cd editor-gpui
-cargo test -p prism-editor-gpui-core                                  # 114 passed
+cargo test -p prism-editor-gpui-core                                  # 115 passed
 cargo check -p prism-editor-gpui --target x86_64-pc-windows-gnu       # 类型检查
 cargo clippy -p prism-editor-gpui -p prism-editor-gpui-core \
     --target x86_64-pc-windows-gnu                                    # clean

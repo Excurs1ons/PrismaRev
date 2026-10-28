@@ -261,6 +261,10 @@ pub struct EditorView {
     pub asset_rename: Option<(String, String)>,
     /// 「存为预制体」弹层：`(实体下标, 名字提示)`。
     pub prefab_save: Option<(usize, String)>,
+    /// 主题 token 覆盖编辑器当前打开的 token。
+    pub theme_edit: Option<ThemeToken>,
+    /// 删除资产前的确认弹层（路径）。
+    pub asset_delete: Option<String>,
     /// Scene / Game View 最近一次绘制的屏幕矩形（拾取与 gizmo 用）。
     /// 内联重命名的起始快照（提交时补一个撤销步，Esc 时回滚）。
     pub rename_base: Option<prism_editor_gpui_core::SceneDoc>,
@@ -311,6 +315,8 @@ impl EditorView {
             save_as: None,
             asset_rename: None,
             prefab_save: None,
+            theme_edit: None,
+            asset_delete: None,
             rename_base: None,
             last_pick: None,
             scene_bounds: Rc::new(Cell::new(None)),
@@ -527,6 +533,8 @@ impl EditorView {
                 self.save_as = None;
                 self.asset_rename = None;
                 self.prefab_save = None;
+                self.theme_edit = None;
+                self.asset_delete = None;
                 cx.notify();
             }
             "down" if !self.workspace.selection.is_empty() => {
@@ -1862,6 +1870,284 @@ impl EditorView {
         )
     }
 
+    fn render_theme_edit(&mut self, cx: &mut Context<Self>) -> Option<Div> {
+        let token = self.theme_edit?;
+        let style = self.style;
+        let color = self.workspace.color(token);
+        let overridden = self.workspace.theme.overrides.contains_key(&token);
+
+        let mut rows = div().flex().flex_col().gap_1();
+        for (label, channel) in [("R", 0usize), ("G", 1), ("B", 2), ("A", 3)] {
+            let value = match channel {
+                0 => color.r as f32 / 255.0,
+                1 => color.g as f32 / 255.0,
+                2 => color.b as f32 / 255.0,
+                _ => color.a as f32 / 255.0,
+            };
+            rows = rows.child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .w(px(18.0))
+                            .text_size(px(10.0))
+                            .text_color(style.text_soft())
+                            .child(SharedString::from(label)),
+                    )
+                    .child(
+                        div()
+                            .w(px(52.0))
+                            .text_size(px(10.0))
+                            .text_color(style.text())
+                            .child(SharedString::from(format!("{value:.2}"))),
+                    )
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("theme-{}-dec", token.key())))
+                            .px_1()
+                            .rounded_sm()
+                            .border_1()
+                            .border_color(style.border())
+                            .bg(style.panel_alt())
+                            .text_size(px(9.0))
+                            .text_color(style.text())
+                            .cursor_pointer()
+                            .hover(move |this| this.bg(style.row_hover()))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.nudge_theme_channel(token, channel, -0.05);
+                                cx.notify();
+                            }))
+                            .child("−"),
+                    )
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("theme-{}-inc", token.key())))
+                            .px_1()
+                            .rounded_sm()
+                            .border_1()
+                            .border_color(style.border())
+                            .bg(style.panel_alt())
+                            .text_size(px(9.0))
+                            .text_color(style.text())
+                            .cursor_pointer()
+                            .hover(move |this| this.bg(style.row_hover()))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.nudge_theme_channel(token, channel, 0.05);
+                                cx.notify();
+                            }))
+                            .child("＋"),
+                    ),
+            );
+        }
+
+        let preview = crate::style::hsla(color);
+        Some(
+            div()
+                .absolute()
+                .top(px(150.0))
+                .left(px(f32::from(self.window_size.width) * 0.5 - 180.0))
+                .w(px(360.0))
+                .bg(style.panel_raised())
+                .border_1()
+                .border_color(style.border_strong())
+                .rounded_sm()
+                .shadow_lg()
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .px_2()
+                        .py_1()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .justify_between()
+                        .text_sm()
+                        .text_color(style.text_strong())
+                        .child(SharedString::from(format!(
+                            "主题颜色 · {} ({})",
+                            token.label(),
+                            token.key()
+                        )))
+                        .child(
+                            div()
+                                .w(px(36.0))
+                                .h(px(14.0))
+                                .rounded_sm()
+                                .border_1()
+                                .border_color(style.border_strong())
+                                .bg(preview),
+                        ),
+                )
+                .child(div().px_2().pb_1().flex().flex_col().gap_1().child(rows))
+                .child(
+                    div()
+                        .px_2()
+                        .pb_2()
+                        .flex()
+                        .flex_row()
+                        .justify_between()
+                        .gap_2()
+                        .child(
+                            div()
+                                .id("theme-reset")
+                                .px_2()
+                                .py_0p5()
+                                .rounded_sm()
+                                .text_size(px(9.0))
+                                .text_color(if overridden {
+                                    style.danger()
+                                } else {
+                                    style.muted()
+                                })
+                                .cursor_pointer()
+                                .when(overridden, |this| {
+                                    this.hover(move |this| this.bg(style.row_hover()))
+                                })
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.workspace.theme.reset_override(token);
+                                    this.theme_changed();
+                                    cx.notify();
+                                }))
+                                .child(if overridden {
+                                    "重置该项"
+                                } else {
+                                    "使用预设值"
+                                }),
+                        )
+                        .child(
+                            div()
+                                .id("theme-edit-close")
+                                .px_2()
+                                .py_0p5()
+                                .rounded_sm()
+                                .bg(style.accent())
+                                .text_size(px(9.0))
+                                .text_color(style.color(ThemeToken::OnAccent))
+                                .cursor_pointer()
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.theme_edit = None;
+                                    cx.notify();
+                                }))
+                                .child("关闭"),
+                        ),
+                ),
+        )
+    }
+
+    fn nudge_theme_channel(&mut self, token: ThemeToken, channel: usize, delta: f32) {
+        let mut color = self.workspace.color(token);
+        let map =
+            |value: u8| ((value as f32 / 255.0 + delta).clamp(0.0, 1.0) * 255.0).round() as u8;
+        match channel {
+            0 => color.r = map(color.r),
+            1 => color.g = map(color.g),
+            2 => color.b = map(color.b),
+            _ => color.a = map(color.a),
+        }
+        self.workspace.theme.set_override(token, color);
+        self.theme_changed();
+    }
+
+    fn render_asset_delete(&mut self, cx: &mut Context<Self>) -> Option<Div> {
+        let path = self.asset_delete.clone()?;
+        let style = self.style;
+        Some(
+            div()
+                .absolute()
+                .top(px(170.0))
+                .left(px(f32::from(self.window_size.width) * 0.5 - 200.0))
+                .w(px(400.0))
+                .bg(style.panel_raised())
+                .border_1()
+                .border_color(style.danger())
+                .rounded_sm()
+                .shadow_lg()
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .px_2()
+                        .py_1()
+                        .text_sm()
+                        .text_color(style.text_strong())
+                        .child("删除资产"),
+                )
+                .child(
+                    div()
+                        .px_2()
+                        .text_size(px(10.0))
+                        .text_color(style.text_soft())
+                        .child(SharedString::from(path.clone())),
+                )
+                .child(
+                    div()
+                        .px_2()
+                        .py_1()
+                        .text_size(px(9.0))
+                        .text_color(style.muted())
+                        .child("文件会从磁盘删除；打开文档里的引用不会自动清理。"),
+                )
+                .child(
+                    div()
+                        .px_2()
+                        .pb_2()
+                        .flex()
+                        .flex_row()
+                        .justify_end()
+                        .gap_2()
+                        .child(
+                            div()
+                                .id("asset-delete-cancel")
+                                .px_2()
+                                .py_0p5()
+                                .rounded_sm()
+                                .text_size(px(10.0))
+                                .text_color(style.text_soft())
+                                .cursor_pointer()
+                                .hover(move |this| this.bg(style.row_hover()))
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.asset_delete = None;
+                                    cx.notify();
+                                }))
+                                .child("取消"),
+                        )
+                        .child(
+                            div()
+                                .id("asset-delete-confirm")
+                                .px_2()
+                                .py_0p5()
+                                .rounded_sm()
+                                .bg(style.danger())
+                                .text_size(px(10.0))
+                                .text_color(style.color(ThemeToken::OnDanger))
+                                .cursor_pointer()
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    match this.workspace.delete_asset(&path) {
+                                        Ok(()) => {
+                                            this.asset_delete = None;
+                                            this.selected_asset = None;
+                                        }
+                                        Err(error) => {
+                                            this.workspace.log(
+                                                prism_editor_gpui_core::LogSource::Editor,
+                                                prism_editor_gpui_core::LogLevel::Error,
+                                                format!("删除失败：{error}"),
+                                            );
+                                            this.asset_delete = None;
+                                        }
+                                    }
+                                    cx.notify();
+                                }))
+                                .child("删除"),
+                        ),
+                ),
+        )
+    }
+
     fn render_context_menu(&mut self, cx: &mut Context<Self>) -> Option<Div> {
         let menu = self.context_menu.clone()?;
         let style = self.style;
@@ -2023,6 +2309,9 @@ impl EditorView {
                                         format!("实例化预制体失败：{error}"),
                                     );
                                 }
+                            }
+                            (ContextTarget::Asset(path), "删除资产…") => {
+                                this.asset_delete = Some(path.clone());
                             }
                             (ContextTarget::Asset(path), "重命名资产…") => {
                                 let name = path.rsplit('/').next().unwrap_or(path).to_string();
@@ -2245,6 +2534,40 @@ impl Render for EditorView {
                     })),
             );
             root = root.child(prefab_save);
+        }
+
+        let theme_edit = self.render_theme_edit(cx);
+        if let Some(theme_edit) = theme_edit {
+            root = root.child(
+                div()
+                    .id("theme-edit-dismiss")
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full()
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.theme_edit = None;
+                        cx.notify();
+                    })),
+            );
+            root = root.child(theme_edit);
+        }
+
+        let asset_delete = self.render_asset_delete(cx);
+        if let Some(asset_delete) = asset_delete {
+            root = root.child(
+                div()
+                    .id("asset-delete-dismiss")
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full()
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.asset_delete = None;
+                        cx.notify();
+                    })),
+            );
+            root = root.child(asset_delete);
         }
 
         let asset_rename = self.render_asset_rename(cx);

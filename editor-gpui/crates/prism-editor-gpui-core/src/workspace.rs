@@ -521,6 +521,37 @@ impl Workspace {
         Ok(path)
     }
 
+    /// 删除资产文件（只允许 `assets/` 内，场景/预制体走文档流程）。
+    /// 引用不会自动清理（与 Web 编辑器一致：引用变成悬空值，由检查器提示）。
+    pub fn delete_asset(&mut self, path: &str) -> io::Result<()> {
+        let root = self.project_root.clone().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotFound, "没有绑定项目根，无法删除资产")
+        })?;
+        if !path.starts_with("assets/") {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "只允许删除 assets/ 内的文件",
+            ));
+        }
+        if path.ends_with(".scene.json") || path.ends_with(".prefab.json") {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "场景 / 预制体请用文档面板",
+            ));
+        }
+        let full = root.join(path);
+        if !full.is_file() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("{path} 不存在"),
+            ));
+        }
+        std::fs::remove_file(full)?;
+        self.refresh_project_files();
+        self.log(LogSource::Editor, LogLevel::Info, format!("已删除 {path}"));
+        Ok(())
+    }
+
     /// 资产重命名 / 移动：先改磁盘文件，再改写所有打开文档里的精确路径引用，
     /// 并同步文档自身的路径。返回 `(替换次数, 受影响文档)`。
     pub fn rename_asset(&mut self, from: &str, to: &str) -> io::Result<(usize, Vec<String>)> {
@@ -2332,6 +2363,31 @@ mod tests {
             .root
             .join("assets/prefabs/Untitled.prefab.json")
             .exists());
+    }
+
+    #[test]
+    fn delete_asset_only_removes_regular_assets() {
+        let project = TempProject::new("delete-asset");
+        std::fs::create_dir_all(project.root.join("assets/textures")).unwrap();
+        std::fs::write(project.root.join("assets/textures/a.png"), b"png").unwrap();
+        std::fs::write(
+            project.root.join("assets/scenes/main.scene.json"),
+            r#"{"version":3,"entities":[]}"#,
+        )
+        .unwrap();
+
+        let mut workspace = Workspace::load_fixture(&fixture());
+        workspace.load_project(project.root.clone()).unwrap();
+
+        assert!(workspace.delete_asset("outside.txt").is_err());
+        assert!(workspace
+            .delete_asset("assets/textures/missing.png")
+            .is_err());
+        assert!(workspace
+            .delete_asset("assets/scenes/main.scene.json")
+            .is_err());
+        workspace.delete_asset("assets/textures/a.png").unwrap();
+        assert!(!project.root.join("assets/textures/a.png").exists());
     }
 
     #[test]

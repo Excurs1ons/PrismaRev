@@ -54,7 +54,7 @@
 |---|---|
 | 层级 | 实体树、搜索（匹配项忽略折叠、按层级缩进）、展开/折叠、多选（Shift 按可见行区间 / Ctrl 切换）、双击或 F2 重命名（一次撤销 / Esc 回滚）、眼睛切 Active、拖拽改父级/排序（上 25% / 下 25% / 中间）、按预设新建、Ctrl+D 复制整棵子树 |
 | 检查器 | 实体面包屑 + schema 驱动：bool / int / float / 滑杆 / 向量 / 四元数 / 颜色 / 枚举 / 文本 / 只读；拖动调值（Shift+点击输入）、组件卡折叠、复制/移除、添加组件（分类 + 搜索）、无 schema 时显示原始 JSON；**多选时只显示公共组件，字段修改一次应用到全部（一次撤销回退）** |
-| 资产 | 目录树 + 文件列表、分类 chips、搜索、选中详情（导入器 / 体积 / 分类）；右键**重命名 / 移动**（磁盘改名 + 打开文档里的精确路径引用自动改写） |
+| 资产 | 目录树 + 文件列表、分类 chips、搜索、选中详情（导入器 / 体积 / 分类）；右键**重命名 / 移动**（磁盘改名 + 打开文档里的精确路径引用自动改写）与**删除**（二次确认，不清理悬空引用） |
 | 日志 | 级别 × 来源过滤、搜索、错误/告警计数、窗口化 `uniform_list`（固定 18px 行高） |
 | 场景视图 | `canvas` 绘制的世界网格、实体线框、选中高亮 + gizmo 三轴；**点击拾取实体**、**双击聚焦**、**拖 gizmo 移动**（Ctrl 吸附 0.25）、空白处左键轨道、右键平移、滚轮缩放 |
 | 游戏视图 | 文档相机视角 + Play 状态；Play 时实体轻微上下浮动（模拟 tick） |
@@ -73,6 +73,7 @@
 - 本地状态：`EditorState`（布局 + 主题 + 语言 + 首选项）的宽容读写与回退
 - 项目设置：`assets/settings.toml` 的 `[app]` / `[window]` / `[build]` 读写（合并写回，保留其它段）
 - 资产重命名 / 移动：文件改名 + 文档引用改写（精确匹配，含嵌套数组/对象）
+- 资产删除：只允许 `assets/` 内的普通文件（场景/预制体走文档流程）
 - 存为预制体：子树提取 + 名字清洗 + 重名去重 + 落盘
 - 预制体实例化到场景：磁盘优先 / fixture 回退模板，自动挂到选中实体并选中新根
 - 项目文件层：向上找 `assets/`、扫描 / 读写文档、默认保存路径防重名、
@@ -137,8 +138,8 @@ editor-gpui/
 - **Scene View 目前是 CPU 投影的 `canvas` 绘制**，不是 `prism-render` 的真实画面。
   接线点已经留好：把 `paint_scene` 换成离屏 `GraphRenderer` 的帧（或原生 Vulkan
   popup 窗口 + 输入转发），面板本身不需要改。
-- **删除仍是占位**：删除文档 / 资产、真实构建与 cook 只写日志（构建面板步骤是占位）。
-  保存 / 另存为 / 重新读取 / settings.toml / 资产重命名与移动已真实落盘。
+- **文档删除与构建仍是占位**：删除场景/预制体、真实构建与 cook 只写日志。
+  保存 / 另存为 / 重新读取 / settings.toml / 资产改名、删除、实例化与预制体写入已真实落盘。
 - **文本输入是最小实现**：单击/双击进入内联编辑，支持退格/回车/Esc 与普通字符，
   没有 IME、选区、光标移动；搜索框同理。补 IME 时需要 `ElementInputHandler`。
 - 图标用文本符号（`▶`/`◉`/`▾`…），没有引入图标库；Web 编辑器用 `lucide-vue-next`。
@@ -148,7 +149,7 @@ editor-gpui/
 
 ## 验证记录
 
-- `cargo test -p prism-editor-gpui-core`：**114 passed**。
+- `cargo test -p prism-editor-gpui-core`：**115 passed**。
 - `cargo check -p prism-editor-gpui --target x86_64-pc-windows-gnu`：通过。
 - `cargo clippy -p prism-editor-gpui -p prism-editor-gpui-core --target x86_64-pc-windows-gnu`：
   无 warning（仅 `proc-macro-error2` 的 future-incompat 提示）。
