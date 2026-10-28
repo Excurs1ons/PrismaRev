@@ -802,6 +802,14 @@ export function viewportSelectionBounds(
   return call<ProjectedBoundBox[]>("editor_viewport_selection_bounds", { id, indices });
 }
 
+/** 将指定实体集合向下平移贴落至世界地面 (Y = 0)。 */
+export function viewportDropToFloor(
+  id: string,
+  indices: number[],
+): Promise<EntityTransformUpdate[]> {
+  return call<EntityTransformUpdate[]>("editor_viewport_drop_to_floor", { id, indices });
+}
+
 /** 光标下的变换手柄（`"x"` / `"y"` / `"z"` / `"xy"` / `"xz"` / `"yz"` / `"xyz"`，没有则 `null`）。 */
 export function viewportGizmoHit(id: string, x: number, y: number): Promise<string | null> {
   return call<string | null>("editor_viewport_gizmo_hit", { id, x, y });

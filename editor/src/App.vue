@@ -1336,6 +1336,23 @@ function onViewportScale(
   commit({ ...doc.value, entities }, `drag-scale:${index}`);
 }
 
+/** 视口一键贴地：将受影响的实体写回文档并生成一次撤销记录。 */
+function onViewportDropToFloor(updates: api.EntityTransformUpdate[]) {
+  if (!doc.value || !updates.length) return;
+  const entities = doc.value.entities.slice();
+  for (const update of updates) {
+    const ent = entities[update.index];
+    if (ent && update.position) {
+      entities[update.index] = {
+        ...ent,
+        transform: { ...ent.transform, position: [...update.position] },
+      };
+    }
+  }
+  const editKey = `snap-floor:${selection.value.join("-")}`;
+  commit({ ...doc.value, entities }, editKey);
+}
+
 function onSelect(indices: number[]) {
   selection.value = indices.length ? indices : [];
   if (indices.length) {
@@ -2431,6 +2448,10 @@ onUnmounted(() => {
             @move="onViewportMove"
             @rotate="onViewportRotate"
             @scale="onViewportScale"
+            @set-tool="activeTool = $event"
+            @toggle-pivot="activePivot = activePivot === 'pivot' ? 'center' : 'pivot'"
+            @toggle-space="activeSpace = activeSpace === 'global' ? 'local' : 'global'"
+            @drop-to-floor="onViewportDropToFloor"
           />
         </template>
         <template #gameView>

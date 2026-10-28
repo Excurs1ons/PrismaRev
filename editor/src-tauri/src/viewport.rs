@@ -789,6 +789,120 @@ impl HostState {
         out
     }
 
+    /// 计算选中实体集合的包围盒底面，并将其平移贴至世界地面 (Y = 0)。
+    ///
+    /// 返回所有受影响实体的局部变换更新项。
+    fn drop_to_floor(&mut self, indices: &[usize]) -> Option<Vec<EntityTransformUpdate>> {
+        const LOCAL_CORNERS: [Vec3; 8] = [
+            Vec3::new(-0.5, -0.5, -0.5),
+            Vec3::new(0.5, -0.5, -0.5),
+            Vec3::new(-0.5, 0.5, -0.5),
+            Vec3::new(0.5, 0.5, -0.5),
+            Vec3::new(-0.5, -0.5, 0.5),
+            Vec3::new(0.5, -0.5, 0.5),
+            Vec3::new(-0.5, 0.5, 0.5),
+            Vec3::new(0.5, 0.5, 0.5),
+        ];
+
+        let target_indices = if indices.is_empty() {
+            &self.selected_indices[..]
+        } else {
+            indices
+        };
+        if target_indices.is_empty() {
+            return None;
+        }
+
+        let world = self.app.engine_mut().world();
+        let mut min_y = f32::INFINITY;
+        let mut affected = Vec::new();
+
+        for &idx in target_indices {
+            let Some(&entity) = self.entities.get(idx) else {
+                continue;
+            };
+            if !world.is_alive(entity) {
+                continue;
+            }
+            let ltw = world
+                .get::<LocalToWorld>(entity)
+                .map(|t| t.0)
+                .or_else(|| {
+                    world.get::<LocalTransform>(entity).map(|lt| {
+                        Mat4::from_scale_rotation_translation(lt.scale, lt.rotation, lt.position)
+                    })
+                })
+                .unwrap_or(Mat4::IDENTITY);
+
+            let local_transform = world
+                .get::<LocalTransform>(entity)
+                .cloned()
+                .unwrap_or_default();
+
+            let parent_inv = world
+                .get::<Parent>(entity)
+                .and_then(|p| world.get::<LocalToWorld>(p.0))
+                .map(|pltw| pltw.0.inverse())
+                .unwrap_or(Mat4::IDENTITY);
+
+            for corner in LOCAL_CORNERS {
+                let world_pt = ltw.transform_point3(corner);
+                if world_pt.y < min_y {
+                    min_y = world_pt.y;
+                }
+            }
+
+            let start_world_pos = ltw.col(3).truncate();
+            affected.push((idx, entity, local_transform, parent_inv, start_world_pos));
+        }
+
+        if !min_y.is_finite() || affected.is_empty() {
+            return None;
+        }
+
+        let delta_y = -min_y;
+        let delta_world = Vec3::new(0.0, delta_y, 0.0);
+
+        let mut updates = Vec::new();
+        let world = self.app.engine_mut().world_mut();
+
+        for (idx, entity, mut local_transform, parent_inv, start_world_pos) in affected {
+            let new_world_pos = start_world_pos + delta_world;
+            let new_local_pos = parent_inv.transform_point3(new_world_pos);
+
+            local_transform.position = new_local_pos;
+            if let Some(lt) = world.get_mut::<LocalTransform>(entity) {
+                lt.position = new_local_pos;
+            }
+            if let Some(ltw) = world.get_mut::<LocalToWorld>(entity) {
+                ltw.0 = Mat4::from_scale_rotation_translation(
+                    local_transform.scale,
+                    local_transform.rotation,
+                    new_world_pos,
+                );
+            }
+
+            updates.push(EntityTransformUpdate {
+                index: idx,
+                position: Some(new_local_pos.to_array()),
+                rotation: None,
+                scale: None,
+            });
+        }
+
+        let position = self.compute_selection_center();
+        let length = match position {
+            Some(_) => self
+                .gizmo_context()
+                .map(|ctx| self.gizmo_length(&ctx))
+                .unwrap_or(GIZMO_ARROW_LENGTH),
+            None => GIZMO_ARROW_LENGTH,
+        };
+        self.sync_marker(position, length);
+
+        Some(updates)
+    }
+
     /// 计算 gizmo 命中 / 拖动所需的相机与选中项。
     ///
     /// 只有 Scene view 有编辑器相机与 gizmo；Game view 返回 `None`。
@@ -2686,6 +2800,21 @@ pub async fn editor_viewport_selection_bounds(
     Ok(bounds.unwrap_or_default())
 }
 
+/// 将选中实体向下平移贴至世界地面 (Y = 0)。
+#[tauri::command]
+pub async fn editor_viewport_drop_to_floor(
+    id: String,
+    indices: Vec<usize>,
+    manager: State<'_, ViewportManager>,
+) -> Result<Vec<EntityTransformUpdate>, String> {
+    let updates = ask_viewport(&manager, &id, move |state, tx| {
+        let res = state.drop_to_floor(&indices).unwrap_or_default();
+        let _ = tx.send(res);
+    })
+    .await?;
+    Ok(updates.unwrap_or_default())
+}
+
 /// 把一个问题交给视口线程并等回答。
 ///
 /// `Ok(None)` = 视口不存在或线程超时没回话；闭包里再套一层 `Option` 表示
@@ -3650,5 +3779,39 @@ mod tests {
             orbit_multi.distance,
             orbit_single.distance
         );
+    }
+
+    #[test]
+    fn drop_to_floor_aligns_lowest_point_with_ground() {
+        let mut state = test_state("drop-to-floor");
+        // entity 1 在原点 (0, 0, 0)，单位盒子局部 Y 范围为 [-0.5, 0.5]
+        // 将其抬升至 (0, 5, 0)
+        {
+            let world = state.app.engine_mut().world_mut();
+            let ent = state.entities[1];
+            if let Some(lt) = world.get_mut::<LocalTransform>(ent) {
+                lt.position = Vec3::new(0.0, 5.0, 0.0);
+            }
+            if let Some(ltw) = world.get_mut::<LocalToWorld>(ent) {
+                ltw.0 = Mat4::from_translation(Vec3::new(0.0, 5.0, 0.0));
+            }
+        }
+        state.apply_selection(&[1]);
+
+        // 执行 drop_to_floor
+        let updates = state.drop_to_floor(&[1]).expect("应成功计算贴地");
+        assert_eq!(updates.len(), 1);
+        let pos = updates[0].position.unwrap();
+
+        // 实体高度为 1 (half = 0.5)，贴地时中心 Y 应该在 0.5（底面 y = 0.0）
+        assert!((pos[1] - 0.5).abs() < 1e-4, "中心 Y 应对齐至 0.5: {pos:?}");
+
+        // 验证 ECS 中的实体也跟手更新
+        let world = state.app.engine_mut().world();
+        let e1_pos = world
+            .get::<LocalTransform>(state.entities[1])
+            .unwrap()
+            .position;
+        assert!((e1_pos.y - 0.5).abs() < 1e-4);
     }
 }
