@@ -1017,11 +1017,57 @@ fn editor_write_project_settings(
     prism_editor_api::write_project_settings_diff(&root, &before, &after)
 }
 
-/// 重新 cook + 打包所有场景（`prism-build-pipeline build-scenes`）。
+/// 资源导入 / 场景打包的进度（前端据此显示进度浮窗）。
+#[derive(Clone, Default, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BuildStatus {
+    active: bool,
+    label: String,
+    message: String,
+    elapsed_ms: u64,
+}
+
+static BUILD_STATUS: Mutex<Option<BuildStatus>> = Mutex::new(None);
+
 #[tauri::command]
-fn editor_build_scenes() -> Result<String, String> {
+fn editor_build_status() -> Option<BuildStatus> {
+    BUILD_STATUS.lock().ok().and_then(|status| status.clone())
+}
+
+/// 重新 cook + 打包所有场景（`prism-build-pipeline build-scenes`）。
+///
+/// 放在阻塞线程池里跑：打包几十秒期间编辑器照常响应，进度经
+/// [`editor_build_status`] 上报给前端浮窗。
+#[tauri::command]
+async fn editor_build_scenes() -> Result<String, String> {
     let root = prism_editor_api::find_project_root()?;
-    run_pipeline(&root, &["build-scenes"])
+    if let Ok(mut status) = BUILD_STATUS.lock() {
+        *status = Some(BuildStatus {
+            active: true,
+            label: "构建场景包".to_string(),
+            message: "正在 cook 场景并打包 scenes.pak…".to_string(),
+            elapsed_ms: 0,
+        });
+    }
+
+    let started = std::time::Instant::now();
+    let result =
+        tauri::async_runtime::spawn_blocking(move || run_pipeline(&root, &["build-scenes"]))
+            .await
+            .map_err(|error| format!("构建任务崩溃: {error}"))?;
+
+    if let Ok(mut status) = BUILD_STATUS.lock() {
+        *status = Some(BuildStatus {
+            active: false,
+            label: "构建场景包".to_string(),
+            message: match &result {
+                Ok(_) => "场景包已更新".to_string(),
+                Err(_) => "构建失败，详见日志".to_string(),
+            },
+            elapsed_ms: started.elapsed().as_millis() as u64,
+        });
+    }
+    result
 }
 
 #[derive(serde::Deserialize)]
@@ -1555,6 +1601,7 @@ pub fn run() {
             editor_project_settings,
             editor_write_project_settings,
             editor_build_scenes,
+            editor_build_status,
             editor_build_project,
             editor_reveal_path,
             editor_play_scene,
@@ -1568,6 +1615,9 @@ pub fn run() {
             viewport::editor_viewport_camera,
             viewport::editor_viewport_reload,
             viewport::editor_viewport_set_playing,
+            viewport::editor_viewport_set_auto_refresh,
+            viewport::editor_viewport_auto_refresh,
+            viewport::editor_viewport_refresh_project,
             viewport::editor_viewport_set_paused,
             viewport::editor_viewport_step,
             viewport::editor_viewport_input,

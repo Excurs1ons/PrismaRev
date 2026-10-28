@@ -11,7 +11,7 @@
  * - Game view：Play 时模拟游戏循环；鼠标/键盘转发给引擎 `InputManager`。
  */
 import { Channel } from "@tauri-apps/api/core";
-import { HelpCircle, Pause, Play, RefreshCw, Square, StepForward, X } from "lucide-vue-next";
+import { HelpCircle, Pause, Play, RefreshCw, Square, StepForward, X, Zap } from "lucide-vue-next";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import * as api from "../api";
 import { t } from "../i18n";
@@ -994,6 +994,34 @@ function frameSelection() {
   return applyFrame(primarySelection() === null ? "all" : "selection");
 }
 
+// ── 项目模块编译（Unity 式 Auto Refresh）────────────────────────────────────
+
+/** 自动编译开关；关闭后只能靠 Ctrl+R 手动重编。 */
+const autoRefresh = ref(true);
+const projectRefreshing = ref(false);
+
+async function toggleAutoRefresh() {
+  autoRefresh.value = !autoRefresh.value;
+  await api.viewportSetAutoRefresh(autoRefresh.value).catch(() => undefined);
+}
+
+async function refreshProject() {
+  if (projectRefreshing.value) return;
+  projectRefreshing.value = true;
+  await api.viewportRefreshProject(viewId).catch(() => undefined);
+  projectRefreshing.value = false;
+}
+
+onMounted(() => {
+  if (!inTauri) return;
+  void api
+    .viewportAutoRefresh()
+    .then((enabled) => {
+      autoRefresh.value = enabled;
+    })
+    .catch(() => undefined);
+});
+
 // ── 生命周期 ───────────────────────────────────────────────────────────────
 
 onMounted(async () => {
@@ -1311,6 +1339,24 @@ const aspectOptions = computed<DropdownOption[]>(() => [
           <StepForward :size="13" />
         </button>
       </template>
+      <template v-if="!isScene">
+        <button
+          class="icon-button"
+          :class="{ active: autoRefresh }"
+          :title="autoRefresh ? $t('toolbar.autoRefreshOn') : $t('toolbar.autoRefreshOff')"
+          @click="toggleAutoRefresh"
+        >
+          <Zap :size="13" />
+        </button>
+        <button
+          class="icon-button"
+          :title="$t('toolbar.refreshProject')"
+          :disabled="projectRefreshing"
+          @click="refreshProject"
+        >
+          <RefreshCw :size="13" />
+        </button>
+      </template>
       <button
         v-if="!isScene"
         class="icon-button"
@@ -1326,6 +1372,14 @@ const aspectOptions = computed<DropdownOption[]>(() => [
 
     <!-- 视口渲染区域 -->
     <div ref="container" class="viewport-surface" :class="{ playing: !isScene && playing }">
+      <!-- 项目模块编译进度：编译在后台线程，视口照常出帧 -->
+      <div
+        v-if="!isScene && stats?.build?.phase === 'building'"
+        style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;background:rgba(0,0,0,0.45);z-index:5;pointer-events:none;font-size:12px"
+      >
+        <RefreshCw :size="20" />
+        <span>{{ stats?.build?.message || "正在编译项目模块…" }}</span>
+      </div>
       <div class="viewport-canvas-wrapper" :style="canvasContainerStyle">
         <canvas
           ref="canvasEl"

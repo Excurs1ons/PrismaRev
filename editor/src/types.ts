@@ -466,6 +466,12 @@ export interface ViewportSnapshot {
   height: number;
   /** Play 模式是否处于暂停（单步不改变它）。 */
   paused: boolean;
+  /** 项目模块编译进度（Game view）。 */
+  build?: {
+    phase: "idle" | "building" | "failed" | string;
+    message: string;
+    elapsedMs: number;
+  };
 }
 
 /** Scene view 的轨道相机（前端持有状态，整体下发）。 */

@@ -348,6 +348,16 @@ export function buildScenes(): Promise<string> {
   return call<string>("editor_build_scenes");
 }
 
+/** 后台构建 / 导入进度（无任务时返回当前最后一次的状态或 `null`）。 */
+export function buildStatus(): Promise<{
+  active: boolean;
+  label: string;
+  message: string;
+  elapsedMs: number;
+} | null> {
+  return call("editor_build_status");
+}
+
 // ── 离线工具 ────────────────────────────────────────────────────────────────
 
 /** 离线烘焙 GI probe volume，返回命令输出。 */
@@ -670,6 +680,20 @@ export function viewportReload(id: string, doc: SceneDoc): Promise<ViewportSnaps
 /** Game view 的 Play / Stop。 */
 export function viewportSetPlaying(id: string, playing: boolean): Promise<void> {
   return call<void>("editor_viewport_set_playing", { id, playing });
+}
+
+/** Ctrl+R：立即重编并重载项目模块（无视 Auto Refresh 开关）。 */
+export function viewportRefreshProject(id: string): Promise<void> {
+  return call<void>("editor_viewport_refresh_project", { id });
+}
+
+/** 项目模块自动编译开关（Unity 的 Auto Refresh）。 */
+export function viewportSetAutoRefresh(enabled: boolean): Promise<void> {
+  return call<void>("editor_viewport_set_auto_refresh", { enabled });
+}
+
+export function viewportAutoRefresh(): Promise<boolean> {
+  return call<boolean>("editor_viewport_auto_refresh");
 }
 
 /** Game view 的鼠标 / 键盘事件。 */

@@ -1659,6 +1659,9 @@ function onKey(event: KeyboardEvent) {
   if (key === "s") {
     event.preventDefault();
     void save();
+  } else if (key === "r") {
+    event.preventDefault();
+    void api.viewportRefreshProject("game").catch(() => undefined);
   } else if (key === "n") {
     event.preventDefault();
     void createDocumentOf("scene");
@@ -2184,9 +2187,35 @@ watch(playableScenes, (scenes) => {
   }
 });
 
+// ── 后台构建进度（资源导入 / 场景打包）─────────────────────────────────────
+
+const buildStatus = ref<{
+  active: boolean;
+  label: string;
+  message: string;
+  elapsedMs: number;
+} | null>(null);
+
+let buildStatusTimer: number | null = null;
+
+function pollBuildStatus() {
+  void api
+    .buildStatus()
+    .then((status) => {
+      buildStatus.value = status;
+    })
+    .catch(() => undefined);
+}
+
+onUnmounted(() => {
+  if (buildStatusTimer !== null) window.clearInterval(buildStatusTimer);
+});
+
 onMounted(() => {
   void bootstrap();
   window.addEventListener("keydown", onKey);
+  pollBuildStatus();
+  buildStatusTimer = window.setInterval(pollBuildStatus, 800);
   loadLayout();
   void loadWindowRegistry();
   void loadGameLogs();
@@ -2846,5 +2875,14 @@ onUnmounted(() => {
         {{ packageStatus.exists ? "scenes.pak 就绪" : "未打包" }}
       </span>
     </footer>
+
+    <!-- 构建 / 导入进度：后台执行，界面照常可用 -->
+    <div
+      v-if="buildStatus?.active"
+      style="position:fixed;left:50%;bottom:48px;transform:translateX(-50%);z-index:2000;display:flex;align-items:center;gap:10px;padding:10px 16px;border-radius:8px;background:var(--panel-bg,#1b1f27);border:1px solid var(--border,#333);box-shadow:0 6px 24px rgba(0,0,0,.35);font-size:12px"
+    >
+      <RefreshCw :size="16" />
+      <span>{{ buildStatus.label }}：{{ buildStatus.message }}</span>
+    </div>
   </div>
 </template>
