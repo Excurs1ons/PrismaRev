@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 import { ChevronDown, ChevronUp, Plus, X } from "lucide-vue-next";
+import EditorDropdown, { type DropdownOption } from "./EditorDropdown.vue";
 import * as api from "../api";
 import type {
   BuildProfile,
@@ -68,6 +69,23 @@ const availableScenes = computed(() =>
     (scene) => !manifest.value.some((entry) => entry.name === scene.name),
   ),
 );
+
+const targetOptions: DropdownOption[] = [
+  { value: "windows", label: "Windows Desktop" },
+];
+
+const profileOptions: DropdownOption[] = [
+  { value: "release", label: "Release" },
+  { value: "debug", label: "Debug" },
+];
+
+const addSceneOptions = computed<DropdownOption[]>(() => [
+  { value: "", label: "选择场景…" },
+  ...availableScenes.value.map((s) => ({
+    value: s.name,
+    label: `${s.name} (${s.fileName})`,
+  })),
+]);
 
 async function load() {
   try {
@@ -246,16 +264,19 @@ onMounted(() => void load());
           <div class="settings-group-title">目标</div>
           <label>
             <span>平台</span>
-            <select v-model="settings.build.target">
-              <option value="windows">Windows Desktop</option>
-            </select>
+            <EditorDropdown
+              v-model="settings.build.target"
+              :options="targetOptions"
+              block
+            />
           </label>
           <label>
             <span>配置</span>
-            <select v-model="settings.build.profile">
-              <option value="release">Release</option>
-              <option value="debug">Debug</option>
-            </select>
+            <EditorDropdown
+              v-model="settings.build.profile"
+              :options="profileOptions"
+              block
+            />
           </label>
           <label>
             <span>输出目录</span>
@@ -293,12 +314,11 @@ onMounted(() => void load());
           </div>
 
           <div class="build-add-scene">
-            <select v-model="addName" :disabled="!availableScenes.length">
-              <option value="">选择场景…</option>
-              <option v-for="scene in availableScenes" :key="scene.path" :value="scene.name">
-                {{ scene.name }}（{{ scene.fileName }}）
-              </option>
-            </select>
+            <EditorDropdown
+              v-model="addName"
+              :options="addSceneOptions"
+              :disabled="!availableScenes.length"
+            />
             <button :disabled="!addName" @click="addScene"><Plus :size="13" /> 添加场景</button>
             <button class="ghost" :disabled="!manifest.length" @click="saveSceneList">保存列表</button>
           </div>

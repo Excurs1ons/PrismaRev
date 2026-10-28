@@ -39,13 +39,13 @@ function resetAll() {
 <template>
   <div class="panel-pane settings-panel theme-panel">
     <div class="settings-tabs">
-      <strong>主题</strong>
+      <strong :title="$t('theme.storageNotice')">{{ $t("theme.title") }}</strong>
       <span class="spacer" />
-      <span class="hint">仅影响编辑器界面 · 保存在本机 localStorage</span>
+      <span class="hint" :title="$t('theme.storageNotice')">{{ $t("theme.scopeNotice") }}</span>
     </div>
     <div class="settings-body panel-scroll">
       <div class="settings-group">
-        <div class="settings-group-title">预设主题</div>
+        <div class="settings-group-title">{{ $t("theme.presets") }}</div>
         <div class="theme-preset-grid">
           <button
             v-for="item in THEME_PRESETS"
@@ -77,7 +77,6 @@ function resetAll() {
             </span>
             <span class="theme-preset-meta">
               <strong>{{ item.label }}</strong>
-              <span class="hint">{{ item.description }}</span>
             </span>
             <Check v-if="state.preset === item.id" :size="14" class="theme-preset-check" />
           </button>

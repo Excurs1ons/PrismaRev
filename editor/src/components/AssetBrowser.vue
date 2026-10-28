@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, inject, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 import { ChevronDown, ChevronRight, Plus } from "lucide-vue-next";
+import EditorDropdown, { type DropdownOption } from "./EditorDropdown.vue";
 import * as api from "../api";
 import { ASSETS_KEY } from "../keys";
 import { formatBytes } from "../format";
@@ -20,6 +21,7 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
+  (e: "select", asset: AssetInfo | null): void;
   (e: "jump", ref: AssetRef): void;
   (e: "changed", affected: string[]): void;
   /** 双击场景/预制体：请求宿主打开对应文档。 */
@@ -181,6 +183,10 @@ const kinds = computed(() => {
     ...Object.keys(KIND_LABELS).filter((key) => key !== "all" && present.has(key as AssetInfo["kind"])),
   ];
 });
+
+const kindDropdownOptions = computed<DropdownOption[]>(() =>
+  kinds.value.map((k) => ({ value: k, label: KIND_LABELS[k] ?? k })),
+);
 
 /**
  * Unity 风格过滤语法（`t:` 分类 / `l:` 标签 / `a:` 资产）。
@@ -386,6 +392,7 @@ function clearUsage() {
 async function select(asset: AssetInfo) {
   const token = ++usageToken;
   selected.value = asset;
+  emit("select", asset);
   usage.value = [];
   usageError.value = "";
   busy.value = true;
@@ -407,6 +414,7 @@ function onRowClick(node: TreeNode) {
   selectedNode.value = { path: node.path, name: node.name, dir: node.dir };
   if (node.dir) {
     selected.value = null;
+    emit("select", null);
     clearUsage();
     clearPreview();
     return;
@@ -429,15 +437,6 @@ function selectAssetRow(asset: AssetInfo) {
     dir: false,
   };
   void select(asset);
-}
-
-async function copyPath() {
-  if (!selected.value) return;
-  try {
-    await navigator.clipboard.writeText(selected.value.path);
-  } catch {
-    // 剪贴板不可用时忽略（浏览器权限）。
-  }
 }
 
 function openAssetMenu(node: TreeNode, event: MouseEvent) {
@@ -842,9 +841,11 @@ onUnmounted(() => {
         <Plus :size="14" />
       </button>
       <input v-model="search" type="text" :placeholder="`检索 ${total} 个资产…`" />
-      <select v-model="kind" title="按资产类型过滤">
-        <option v-for="k in kinds" :key="k" :value="k">{{ KIND_LABELS[k] ?? k }}</option>
-      </select>
+      <EditorDropdown
+        v-model="kind"
+        :options="kindDropdownOptions"
+        title="按资产类型过滤"
+      />
     </div>
     <div v-if="opError" class="error asset-op-error" :title="opError">{{ opError }}</div>
 
@@ -946,53 +947,6 @@ onUnmounted(() => {
     </div>
   </template>
     </div>
-
-  <div v-if="selected" class="asset-detail">
-    <div class="hint path">{{ selected.path }}</div>
-    <div class="hint" title="Unity AssetImporter.GetAtPath(...).GetType().Name">
-      {{ selected.kind }} · 导入器 {{ selected.importer }}
-    </div>
-
-    <div v-if="previewKind === 'document'" class="asset-preview-actions">
-      <button class="primary" @click="openSelected">打开文档</button>
-    </div>
-    <div v-else-if="previewBusy" class="hint">加载预览…</div>
-    <div v-else-if="previewError" class="hint error">{{ previewError }}</div>
-    <template v-else-if="previewKind === 'image' && previewUrl">
-      <img class="asset-preview-image" :src="previewUrl" :alt="selected.path" />
-    </template>
-    <template v-else-if="previewKind === 'text'">
-      <pre class="asset-preview-text">{{ previewText }}</pre>
-      <div v-if="previewTruncated" class="asset-preview-note">已截断，仅显示前 512 KB</div>
-    </template>
-
-    <div class="hint">
-      引用：<template v-if="busy">…</template>
-      <template v-else-if="usageError">{{ usageError }}</template>
-      <template v-else-if="usage.length">{{ usage.length }} 处</template>
-      <template v-else>未被任何场景 / 预制体 / 构建清单引用</template>
-    </div>
-    <button
-      v-for="(ref, i) in usage"
-      :key="i"
-      class="usage-link"
-      :title="
-        ref.kind === 'manifest'
-          ? '构建清单（assets/scenes.toml）里的场景条目'
-          : '打开该文档并定位到这个字段'
-      "
-      @click="emit('jump', ref)"
-    >
-      <template v-if="ref.kind === 'manifest'">
-        {{ ref.scene }} · {{ ref.entity }}
-      </template>
-      <template v-else>
-        {{ ref.scene }} · #{{ ref.entityIndex }} {{ ref.entity }} ·
-        {{ ref.component.split("::").pop() }}.{{ ref.field }}
-      </template>
-    </button>
-    <button class="ghost icon" style="margin-top: 4px" @click="copyPath">复制路径</button>
-  </div>
   </div>
 
   <Teleport to="body">
