@@ -27,6 +27,7 @@ impl GizmoTool {
         }
     }
 
+    #[allow(dead_code)]
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Translate => "move",
@@ -383,8 +384,10 @@ mod tests {
             Some(Axis::XYZ)
         );
 
-        // Z 轴环在 XY 平面上，(1.5, 0, 0) 是它的一点
-        let pt = screen.project(Vec3::X * 1.5).unwrap();
+        // Z 轴环在 XY 平面上，45度方向上只属于 Z 环
+        let pt = screen
+            .project((Vec3::X + Vec3::Y).normalize() * 1.5)
+            .unwrap();
         assert_eq!(
             pick_rotate_axis(&screen, Vec3::ZERO, 1.5, pt, 12.0),
             Some(Axis::Z)

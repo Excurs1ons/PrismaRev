@@ -212,6 +212,20 @@ struct HostState {
     step_pending: bool,
 }
 
+/// 拖动过程中的实时交互反馈（浮层数值提示、旋转弧面等）。
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DragFeedback {
+    pub tool: String,
+    pub axis: String,
+    pub text: String,
+    pub center_screen: [f32; 2],
+    pub start_screen: Option<[f32; 2]>,
+    pub current_screen: Option<[f32; 2]>,
+    pub angle_deg: Option<f32>,
+    pub radius: Option<f32>,
+}
+
 /// 变换拖动产生的局部属性更新结果。
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -219,6 +233,7 @@ pub struct DragTransformResult {
     pub position: Option<[f32; 3]>,
     pub rotation: Option<[f32; 4]>,
     pub scale: Option<[f32; 3]>,
+    pub feedback: Option<DragFeedback>,
 }
 
 /// Gizmo 拖动会话（平移 / 旋转 / 缩放）。
@@ -595,6 +610,13 @@ impl HostState {
         let (origin, dir) =
             pick::screen_ray(&ctx.camera_world, ctx.fov, self.width, self.height, x, y)?;
         let gizmo_len = self.gizmo_length(&ctx).max(1e-4);
+        let screen = gizmo::Screen {
+            view: ctx.view,
+            fov_y_degrees: ctx.fov,
+            width: self.width as f32,
+            height: self.height as f32,
+        };
+        let center_screen = screen.project(ctx.center).unwrap_or(glam::Vec2::new(x, y));
 
         match drag {
             ActiveDrag::Translate {
@@ -604,7 +626,8 @@ impl HostState {
                 ..
             } => {
                 let parameter = gizmo::axis_parameter(origin, dir, start_world, axis.vector())?;
-                let target = start_world + axis.vector() * (parameter - start_parameter);
+                let delta = parameter - start_parameter;
+                let target = start_world + axis.vector() * delta;
                 let local = {
                     let world = self.app.engine_mut().world_mut();
                     let local = match world.get::<Parent>(ctx.entity).map(|parent| parent.0) {
@@ -627,10 +650,21 @@ impl HostState {
                     local
                 };
                 self.sync_marker(Some(target), gizmo_len);
+                let feedback = DragFeedback {
+                    tool: "translate".to_string(),
+                    axis: axis.name().to_string(),
+                    text: format!("{}: {:+.2} m", axis.name().to_uppercase(), delta),
+                    center_screen: center_screen.to_array(),
+                    start_screen: None,
+                    current_screen: None,
+                    angle_deg: None,
+                    radius: None,
+                };
                 Some(DragTransformResult {
                     position: Some(local.to_array()),
                     rotation: None,
                     scale: None,
+                    feedback: Some(feedback),
                 })
             }
             ActiveDrag::Rotate {
@@ -675,10 +709,30 @@ impl HostState {
                         },
                     ),
                 }
+
+                let angle_deg = angle.to_degrees();
+                let start_pt = ctx.center + start_vec * gizmo_len;
+                let current_pt = ctx.center + current_vec * gizmo_len;
+                let start_screen = screen.project(start_pt);
+                let current_screen = screen.project(current_pt);
+                let radius = start_screen
+                    .map(|s| s.distance(center_screen))
+                    .unwrap_or(gizmo_len * 50.0);
+                let feedback = DragFeedback {
+                    tool: "rotate".to_string(),
+                    axis: axis.name().to_string(),
+                    text: format!("∠ {:+.1}°", angle_deg),
+                    center_screen: center_screen.to_array(),
+                    start_screen: start_screen.map(|s| s.to_array()),
+                    current_screen: current_screen.map(|s| s.to_array()),
+                    angle_deg: Some(angle_deg),
+                    radius: Some(radius),
+                };
                 Some(DragTransformResult {
                     position: None,
                     rotation: Some(new_local_rot.to_array()),
                     scale: None,
+                    feedback: Some(feedback),
                 })
             }
             ActiveDrag::Scale {
@@ -688,12 +742,12 @@ impl HostState {
                 start_cursor,
                 ..
             } => {
-                let new_scale = if axis == Axis::XYZ {
+                let (new_scale, factor) = if axis == Axis::XYZ {
                     let dx = x - start_cursor.x;
                     let dy = y - start_cursor.y;
                     let delta = (dx - dy) * 0.005;
                     let factor = (1.0 + delta).max(0.01);
-                    start_scale * factor
+                    (start_scale * factor, factor)
                 } else {
                     let parameter = gizmo::axis_parameter(origin, dir, ctx.center, axis.vector())?;
                     let delta = (parameter - start_parameter) / gizmo_len;
@@ -705,7 +759,7 @@ impl HostState {
                         Axis::Z => s.z = (s.z * factor).max(0.001),
                         _ => (),
                     }
-                    s
+                    (s, factor)
                 };
 
                 let world = self.app.engine_mut().world_mut();
@@ -719,10 +773,27 @@ impl HostState {
                         },
                     ),
                 }
+
+                let text = if axis == Axis::XYZ {
+                    format!("{:.2}x", factor)
+                } else {
+                    format!("{}: {:.2}x", axis.name().to_uppercase(), factor)
+                };
+                let feedback = DragFeedback {
+                    tool: "scale".to_string(),
+                    axis: axis.name().to_string(),
+                    text,
+                    center_screen: center_screen.to_array(),
+                    start_screen: None,
+                    current_screen: None,
+                    angle_deg: None,
+                    radius: None,
+                };
                 Some(DragTransformResult {
                     position: None,
                     rotation: None,
                     scale: Some(new_scale.to_array()),
+                    feedback: Some(feedback),
                 })
             }
         }
@@ -1880,5 +1951,49 @@ mod tests {
         // 局部坐标必须换过基底：绕 Y 转 90° 后世界 +X 变成局部 ±Z。
         assert!(pos[0].abs() < 1e-3, "局部 X 应该为 0: {pos:?}");
         assert!(pos[2].abs() > 1.0, "世界 +X 落在局部 Z 上: {pos:?}");
+    }
+
+    #[test]
+    fn dragging_provides_feedback_for_all_tools() {
+        let mut state = test_state("drag-feedback");
+        state.apply_selection(Some(1));
+        let (center, _) = gizmo_screen_points(&mut state);
+
+        // 1. Translate feedback
+        state.tool = GizmoTool::Translate;
+        state.begin_drag(Axis::X, center.x, center.y).unwrap();
+        let res = state.drag_to(center.x + 20.0, center.y).unwrap();
+        let fb = res.feedback.expect("Translate 应该提供 feedback");
+        assert_eq!(fb.tool, "translate");
+        assert_eq!(fb.axis, "x");
+        assert!(fb.text.contains("X:"));
+        assert!(fb.text.contains("m"));
+        state.end_drag();
+
+        // 2. Rotate feedback
+        state.tool = GizmoTool::Rotate;
+        state
+            .begin_drag(Axis::Z, center.x + 30.0, center.y)
+            .unwrap();
+        let res = state.drag_to(center.x, center.y + 30.0).unwrap();
+        let fb = res.feedback.expect("Rotate 应该提供 feedback");
+        assert_eq!(fb.tool, "rotate");
+        assert_eq!(fb.axis, "z");
+        assert!(fb.text.contains("∠"));
+        assert!(fb.angle_deg.is_some());
+        assert!(fb.start_screen.is_some());
+        assert!(fb.current_screen.is_some());
+        assert!(fb.radius.is_some());
+        state.end_drag();
+
+        // 3. Scale feedback
+        state.tool = GizmoTool::Scale;
+        state.begin_drag(Axis::XYZ, center.x, center.y).unwrap();
+        let res = state.drag_to(center.x + 25.0, center.y - 25.0).unwrap();
+        let fb = res.feedback.expect("Scale 应该提供 feedback");
+        assert_eq!(fb.tool, "scale");
+        assert_eq!(fb.axis, "xyz");
+        assert!(fb.text.contains("x"));
+        state.end_drag();
     }
 }
