@@ -16,7 +16,7 @@ use prism_editor_gpui_core::dock::ResizeDirection;
 use prism_editor_gpui_core::keys::{command_for, Command, KeyChord};
 use prism_editor_gpui_core::settings::ProjectSettings;
 use prism_editor_gpui_core::state::{EditorState, Preferences};
-use prism_editor_gpui_core::{Locale, ThemeToken, Workspace};
+use prism_editor_gpui_core::{Locale, TextInput, ThemeToken, Workspace};
 
 use crate::style::{Style, FONT_BASE, MENU_HEIGHT, STATUS_HEIGHT, TOOLBAR_HEIGHT};
 
@@ -113,7 +113,13 @@ pub enum TextTarget {
 #[derive(Debug, Clone)]
 pub struct TextEditState {
     pub target: TextTarget,
-    pub buffer: String,
+    pub input: TextInput,
+}
+
+impl TextEditState {
+    pub fn text(&self) -> &str {
+        self.input.text()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -505,36 +511,48 @@ impl EditorView {
         let key = keystroke.key.clone();
 
         if let Some(mut editing) = self.editing.clone() {
+            let shift = modifiers.shift;
+            let control = modifiers.control;
             match key.as_str() {
-                "backspace" => {
-                    editing.buffer.pop();
-                }
                 "escape" => {
                     self.cancel_edit();
+                    cx.notify();
+                    return;
                 }
                 "enter" => {
-                    self.commit_edit(editing.clone());
+                    self.commit_edit(editing);
+                    return;
                 }
-                _ => {}
-            }
-            if !matches!(key.as_str(), "backspace" | "escape" | "enter") {
-                if let Some(text) = keystroke.key_char.as_deref() {
-                    if !modifiers.control
-                        && !modifiers.alt
-                        && !text.chars().any(|ch| ch.is_control())
-                    {
-                        let mut buffer = self
-                            .editing
-                            .as_ref()
-                            .map(|editing| editing.buffer.clone())
-                            .unwrap_or_default();
-                        buffer.push_str(text);
-                        if let Some(editing) = self.editing.as_mut() {
-                            editing.buffer = buffer;
+                "backspace" => {
+                    if control {
+                        editing.input.delete_word_backward();
+                    } else {
+                        editing.input.backspace();
+                    }
+                }
+                "delete" => {
+                    if control {
+                        editing.input.delete_word_forward();
+                    } else {
+                        editing.input.delete_forward();
+                    }
+                }
+                "left" => editing.input.move_left(shift, control),
+                "right" => editing.input.move_right(shift, control),
+                "home" | "up" => editing.input.move_home(shift),
+                "end" | "down" => editing.input.move_end(shift),
+                "a" if control => editing.input.select_all(),
+                _ => {
+                    if !control && !modifiers.alt {
+                        if let Some(text) = keystroke.key_char.as_deref() {
+                            if !text.chars().any(|ch| ch.is_control()) {
+                                editing.input.insert(text);
+                            }
                         }
                     }
                 }
             }
+            self.editing = Some(editing);
             // 内联编辑时把已提交状态同步回控件。
             self.preview_edit();
             cx.notify();
@@ -635,22 +653,22 @@ impl EditorView {
             return;
         };
         match &editing.target {
-            TextTarget::HierarchySearch => self.hierarchy_search = editing.buffer.clone(),
-            TextTarget::AssetSearch => self.asset_search = editing.buffer.clone(),
+            TextTarget::HierarchySearch => self.hierarchy_search = editing.text().to_string(),
+            TextTarget::AssetSearch => self.asset_search = editing.text().to_string(),
             TextTarget::LogSearch => {
-                self.log_search = editing.buffer.clone();
-                self.workspace.log.filter_mut().search = editing.buffer.clone();
+                self.log_search = editing.text().to_string();
+                self.workspace.log.filter_mut().search = editing.text().to_string();
             }
-            TextTarget::ComponentSearch => self.component_search = editing.buffer.clone(),
+            TextTarget::ComponentSearch => self.component_search = editing.text().to_string(),
             TextTarget::RenameEntity(index) => {
-                self.workspace.preview_rename(*index, &editing.buffer);
+                self.workspace.preview_rename(*index, editing.text());
             }
             TextTarget::Field {
                 entity_ids,
                 component,
                 path,
             } => {
-                if let Ok(value) = editing.buffer.parse::<f32>() {
+                if let Ok(value) = editing.text().parse::<f32>() {
                     if component == "Transform" {
                         if let (Some(entity_id), Some((field, rest))) =
                             (entity_ids.first(), path.split_once('['))
@@ -675,14 +693,14 @@ impl EditorView {
     fn commit_edit(&mut self, editing: TextEditState) {
         match &editing.target {
             TextTarget::RenameEntity(index) => {
-                self.workspace.preview_rename(*index, &editing.buffer);
+                self.workspace.preview_rename(*index, editing.text());
             }
             TextTarget::Field {
                 entity_ids,
                 component,
                 path,
             } => {
-                if let Ok(value) = editing.buffer.parse::<f32>() {
+                if let Ok(value) = editing.text().parse::<f32>() {
                     if component == "Transform" {
                         if let (Some(entity_id), Some((field, rest))) =
                             (entity_ids.first(), path.split_once('['))
@@ -697,7 +715,7 @@ impl EditorView {
                     }
                 }
             }
-            TextTarget::SaveAs => match self.workspace.save_active_as(&editing.buffer) {
+            TextTarget::SaveAs => match self.workspace.save_active_as(editing.text()) {
                 Ok(path) => {
                     self.save_as = None;
                     self.workspace.status = format!("已另存为 {path}");
@@ -712,7 +730,7 @@ impl EditorView {
             },
             TextTarget::AssetRename => {
                 if let Some((from, _)) = self.asset_rename.clone() {
-                    let mut target = editing.buffer.trim().replace('\\', "/");
+                    let mut target = editing.text().trim().replace('\\', "/");
                     if !target.contains('/') {
                         let folder = from
                             .rsplit_once('/')
@@ -742,7 +760,8 @@ impl EditorView {
                                 self.selected_asset = Some(target);
                             }
                             Err(error) => {
-                                self.asset_rename = Some((from.clone(), editing.buffer.clone()));
+                                self.asset_rename =
+                                    Some((from.clone(), editing.text().to_string()));
                                 self.workspace.log(
                                     prism_editor_gpui_core::LogSource::Editor,
                                     prism_editor_gpui_core::LogLevel::Error,
@@ -754,14 +773,14 @@ impl EditorView {
                 }
             }
             TextTarget::PrefabSave => {
-                match self.workspace.save_selection_as_prefab(&editing.buffer) {
+                match self.workspace.save_selection_as_prefab(editing.text()) {
                     Ok(path) => {
                         self.prefab_save = None;
                         self.workspace.status = format!("已存为预制体 {path}");
                     }
                     Err(error) => {
                         if let Some((index, _)) = self.prefab_save.clone() {
-                            self.prefab_save = Some((index, editing.buffer.clone()));
+                            self.prefab_save = Some((index, editing.text().to_string()));
                         }
                         self.workspace.log(
                             prism_editor_gpui_core::LogSource::Editor,
@@ -772,7 +791,7 @@ impl EditorView {
                 }
             }
             TextTarget::ProjectSettings(key) => {
-                let value = editing.buffer.clone();
+                let value = editing.text().to_string();
                 match *key {
                     "company" => self.project.app.company = value,
                     "name" => self.project.app.name = value,
@@ -809,7 +828,7 @@ impl EditorView {
     ) {
         self.editing = Some(TextEditState {
             target,
-            buffer: initial.into(),
+            input: TextInput::new(initial),
         });
         cx.notify();
     }
@@ -1698,7 +1717,7 @@ impl EditorView {
             .editing
             .as_ref()
             .filter(|editing| editing.target == TextTarget::SaveAs)
-            .map(|editing| editing.buffer.clone())
+            .map(|editing| editing.text().to_string())
             .unwrap_or(value);
 
         Some(
@@ -1808,7 +1827,7 @@ impl EditorView {
             .editing
             .as_ref()
             .filter(|editing| editing.target == TextTarget::AssetRename)
-            .map(|editing| editing.buffer.clone())
+            .map(|editing| editing.text().to_string())
             .unwrap_or_default();
         Some(
             div()
@@ -1913,7 +1932,7 @@ impl EditorView {
             .editing
             .as_ref()
             .filter(|editing| editing.target == TextTarget::PrefabSave)
-            .map(|editing| editing.buffer.clone())
+            .map(|editing| editing.text().to_string())
             .unwrap_or_default();
         Some(
             div()

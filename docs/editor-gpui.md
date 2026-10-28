@@ -1,6 +1,6 @@
 # GPUI 原生编辑器（`editor-gpui/`）
 
-> 状态：**可编译的类型检查 + 76 个数据层单测通过**；桌面运行尚未在 CI 上跑过
+> 状态：**可编译的类型检查 + 133 个数据层单测通过**；桌面运行尚未在 CI 上跑过
 > （GPUI 需要 Windows/macOS/Linux 桌面与 GPU）。
 >
 > 本文说明「为什么做、边界在哪、怎么接真实引擎」，功能清单见
@@ -97,6 +97,10 @@ Unity 形状的编辑器，又不会把 `prism-render` 绑死在某套 UI 生命
 - **多对象编辑**：只显示所有选中实体的公共组件（`common_components`），字段写入走
   `set_field_multi`（一次快照 = 一次撤销），组件移除走 `remove_component_multi`；
   Transform 不参与批量编辑（避免不同父级下的局部坐标歧义）。
+- **内联输入**：所有文本目标（重命名 / 字段 / 搜索 / 另存为 / 资产重命名 / 预制体名）
+  共用 `core/src/textinput.rs` 的 `TextInput`：光标 + 锚点（字节偏移、始终在 char 边界），
+  支持选区替换、Home/End、Shift 扩选、Ctrl/Alt 按词左右移动、Ctrl+Backspace/Delete
+  按词删除、Ctrl+A 全选。UI 只把按键映射成方法调用，提交/预览逻辑不变。
 
 ## 6. 项目文件
 
@@ -177,7 +181,7 @@ Unity 形状的编辑器，又不会把 `prism-render` 绑死在某套 UI 生命
 
 ```sh
 cd editor-gpui
-cargo test -p prism-editor-gpui-core                                  # 118 passed
+cargo test -p prism-editor-gpui-core                                  # 133 passed
 cargo check -p prism-editor-gpui --target x86_64-pc-windows-gnu       # 类型检查
 cargo clippy -p prism-editor-gpui -p prism-editor-gpui-core \
     --target x86_64-pc-windows-gnu                                    # clean

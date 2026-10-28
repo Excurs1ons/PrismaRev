@@ -60,7 +60,7 @@ impl EditorView {
 
         let search_value = if let Some(editing) = &self.editing {
             if editing.target == TextTarget::HierarchySearch {
-                editing.buffer.clone()
+                editing.text().to_string()
             } else {
                 self.hierarchy_search.clone()
             }

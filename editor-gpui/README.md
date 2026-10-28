@@ -141,13 +141,14 @@ editor-gpui/
   popup 窗口 + 输入转发），面板本身不需要改。
 - **文档删除与构建仍是占位**：删除场景/预制体、真实构建与 cook 只写日志。
   保存 / 另存为 / 重新读取 / settings.toml / 资产改名、删除、实例化与预制体写入已真实落盘。
-- **文本输入是最小实现**：单击/双击进入内联编辑，支持退格/回车/Esc 与普通字符，
-  没有 IME、选区、光标移动；搜索框同理。补 IME 时需要 `ElementInputHandler`。
+- **文本输入**走 `prism-editor-gpui-core::TextInput`（光标 / 选区 / 按词移动与删除，
+  Unicode 安全），但**没有 IME**，也还不画插入符与选区高亮（需要文本测量）。
+  补 IME 时需要 `ElementInputHandler`。
 - 图标用文本符号（`▶`/`◉`/`▾`…），没有引入图标库；Web 编辑器用 `lucide-vue-next`。
 - 旋转 / 缩放 gizmo 是**世界轴**（忽略实体自身旋转）；Unity 的 local/global 切换尚未做。
 - 渲染图面板是**静态快照**（形状与 `prism-render-graph.json` 一致），
   尚未读取真实报告。
-- 主题面板可切预设并预览 token，但逐项覆盖（override）的编辑器还没做 UI。
+- 主题面板可切预设并逐 token 编辑颜色覆盖（只处理 RGBA token），但不能导入/导出主题文件。
 
 ## 验证记录
 

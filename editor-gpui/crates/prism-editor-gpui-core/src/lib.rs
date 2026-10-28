@@ -25,6 +25,7 @@ pub mod project;
 pub mod schema;
 pub mod settings;
 pub mod state;
+pub mod textinput;
 pub mod theme;
 pub mod undo;
 pub mod viewport_math;
@@ -45,6 +46,7 @@ pub use schema::{
 };
 pub use settings::ProjectSettings;
 pub use state::{EditorState, Preferences};
+pub use textinput::TextInput;
 pub use theme::{Rgba, ThemeColors, ThemePreset, ThemeState, ThemeToken, THEME_PRESETS};
 pub use undo::UndoStack;
 pub use workspace::{DocKind, Document, OrbitCamera, PanelInfo, Workspace};
