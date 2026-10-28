@@ -122,6 +122,7 @@ export const enUS: LocaleMessages = {
     loadingOverlay: "Compiling pipelines / Loading scene…",
     needDesktopOverlay: "In-process viewport requires desktop host (Vulkan offscreen rendering)",
     waitingDocOverlay: "Waiting for scene document…",
+    resetView: "Reset View / Perspective Mode",
   },
   hierarchy: {
     title: "Hierarchy",

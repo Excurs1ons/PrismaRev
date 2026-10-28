@@ -120,6 +120,7 @@ export const zhCN = {
     loadingOverlay: "编译管线 / 加载场景…",
     needDesktopOverlay: "内置视口需要桌面编辑器（浏览器环境不支持 Vulkan 离屏渲染）",
     waitingDocOverlay: "等待场景文档…",
+    resetView: "重置视角 / 透视模式",
   },
   hierarchy: {
     title: "层级",
