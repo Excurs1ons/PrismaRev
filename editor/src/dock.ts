@@ -239,13 +239,25 @@ export function insertPanel(
   tab: string,
   zone: DockZone,
   ratio = 0.3,
+  targetIndex?: number,
 ): DockNode {
   const target = findLeafById(root, targetLeafId);
   if (!target) return root;
 
   if (zone === "center") {
     if (target.tabs.includes(tab)) {
-      return activateTab(root, target.id, tab);
+      // 在同一 leaf 内部拖拽标签页：支持重新排序
+      const filtered = target.tabs.filter((item) => item !== tab);
+      const insertAt =
+        targetIndex !== undefined
+          ? Math.max(0, Math.min(targetIndex, filtered.length))
+          : filtered.length;
+      filtered.splice(insertAt, 0, tab);
+      return replaceLeaf(root, targetLeafId, {
+        ...target,
+        tabs: filtered,
+        active: tab,
+      });
     }
     const detached = removePanel(root, tab) ?? root;
     const nextTarget = findLeafById(detached, targetLeafId);
@@ -253,9 +265,15 @@ export function insertPanel(
       // 目标 leaf 因为拖走的是它唯一的面板而消失了：直接放回原位。
       return detached;
     }
+    const nextTabs = [...nextTarget.tabs];
+    const insertAt =
+      targetIndex !== undefined
+        ? Math.max(0, Math.min(targetIndex, nextTabs.length))
+        : nextTabs.length;
+    nextTabs.splice(insertAt, 0, tab);
     return replaceLeaf(detached, targetLeafId, {
       ...nextTarget,
-      tabs: [...nextTarget.tabs, tab],
+      tabs: nextTabs,
       active: tab,
     });
   }
