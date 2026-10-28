@@ -114,6 +114,24 @@ fn find_asset_root(roots: &[PathBuf]) -> Option<PathBuf> {
         .cloned()
 }
 
+/// 松散资产（`.pak` 之外）是否存在。编辑器预览与用户项目的关卡 JSON、
+/// 按时段回落的贴图都走这里，不要再自己拼 `assets/` 相对路径。
+pub fn asset_exists(relative: impl AsRef<Path>) -> bool {
+    asset_path(relative).is_some_and(|path| path.is_file())
+}
+
+/// 读取松散文本资产（关卡配置、清单等）。
+pub fn read_asset_text(relative: impl AsRef<Path>) -> std::io::Result<String> {
+    let relative = relative.as_ref();
+    let path = asset_path(relative).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("asset root not found for {}", relative.display()),
+        )
+    })?;
+    std::fs::read_to_string(&path)
+}
+
 #[cfg(test)]
 #[path = "asset_paths_tests.rs"]
 mod tests;

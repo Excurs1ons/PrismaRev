@@ -2540,6 +2540,7 @@ version = "0.1.0"
 dependencies = [
  "log",
  "prism-ecs",
+ "prism-engine",
  "prism-project-api",
  "prism-reflect",
 ]
