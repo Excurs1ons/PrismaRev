@@ -137,6 +137,9 @@ Unity 形状的编辑器，又不会把 `prism-render` 绑死在某套 UI 生命
 - 文档删除：`delete_document` 删磁盘文件 + 打开标签 + 项目文件表，并移除
   `scenes.toml` 里对应的条目（立即写盘）；预制体实例保留为悬空链接。菜单与资产面板
   都先弹确认层，确认后才执行。
+- 关闭标签：`close_document` 删除标签并修正 `active` 下标（关闭前面的标签不会跳错文档）；
+  UI 对 dirty 文档先弹「保存并关闭 / 不保存 / 取消」，保存走 `save_document(index)`，
+  因此未激活的标签也能直接保存。
 - 资产面板双击 `.scene.json` / `.prefab.json` 调 `open_project_file`：已打开的标签直接切过去，
   否则从磁盘读入并激活。
 - 资产重命名 / 移动：`rename_path` 只允许 `assets/` 内、拒绝覆盖；随后

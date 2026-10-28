@@ -728,23 +728,31 @@ impl Workspace {
 
     /// 保存当前文档；未命名文档落到 `assets/scenes|prefabs` 下的默认路径。
     pub fn save_active(&mut self) -> io::Result<String> {
+        let index = self.active;
+        self.save_document(index)
+    }
+
+    /// 保存指定文档（可以是未激活标签）；返回写入的相对路径。
+    pub fn save_document(&mut self, index: usize) -> io::Result<String> {
         let root = self
             .project_root
             .clone()
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "没有绑定项目根，无法保存"))?;
 
-        let (path, kind, doc) = {
-            let document = self.document();
+        let (path, doc) = {
+            let document = self
+                .docs
+                .get(index)
+                .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "文档不存在"))?;
             let path = match &document.path {
                 Some(path) => path.clone(),
                 None => project::default_save_path(&root, document.kind, &document.title()),
             };
-            (path, document.kind, document.doc.clone())
+            (path, document.doc.clone())
         };
-        let _ = kind;
         project::write_document(&root, &path, &doc)?;
         {
-            let document = self.document_mut();
+            let document = self.docs.get_mut(index).expect("checked above");
             document.path = Some(path.clone());
             document.dirty = false;
         }
@@ -995,6 +1003,9 @@ impl Workspace {
             return;
         }
         self.docs.remove(index);
+        if index < self.active {
+            self.active -= 1;
+        }
         if self.active >= self.docs.len() {
             self.active = self.docs.len() - 1;
         }
@@ -3170,6 +3181,38 @@ mod tests {
             .delete_document("assets/scenes/a.scene.json")
             .is_err());
         assert!(workspace.delete_document("assets/settings.toml").is_err());
+    }
+
+    #[test]
+    fn save_document_can_target_an_inactive_tab() {
+        let project = TempProject::new("save-inactive");
+        let mut workspace = Workspace::load_fixture(&fixture());
+        workspace.load_project(project.root.clone()).unwrap();
+        workspace.new_document(DocKind::Scene, None);
+        let index = workspace.docs.len() - 1;
+        workspace.set_active(0);
+        workspace.docs[index].dirty = true;
+
+        let path = workspace.save_document(index).unwrap();
+        assert_eq!(workspace.active, 0);
+        assert_eq!(workspace.docs[index].path.as_deref(), Some(path.as_str()));
+        assert!(!workspace.docs[index].dirty);
+        assert!(project.root.join(&path).exists());
+    }
+
+    #[test]
+    fn closing_documents_keeps_active_index_valid() {
+        let mut workspace = Workspace::load_fixture(&fixture());
+        workspace.new_document(DocKind::Scene, None);
+        workspace.new_document(DocKind::Scene, None);
+        assert!(workspace.docs.len() >= 3);
+        workspace.set_active(2);
+
+        workspace.close_document(0);
+        assert_eq!(workspace.active, 1);
+        workspace.close_document(1);
+        assert!(workspace.active < workspace.docs.len());
+        assert!(!workspace.docs.is_empty());
     }
 
     #[test]

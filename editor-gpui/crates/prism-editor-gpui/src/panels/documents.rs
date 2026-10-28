@@ -125,6 +125,37 @@ impl EditorView {
                             .text_size(px(9.0))
                             .text_color(style.muted())
                             .child(SharedString::from(path)),
+                    )
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("doc-close-{index}")))
+                            .w(px(18.0))
+                            .h(px(18.0))
+                            .flex_none()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded_sm()
+                            .text_size(px(10.0))
+                            .text_color(style.muted())
+                            .cursor_pointer()
+                            .hover(move |this| this.bg(style.row_hover()))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                cx.stop_propagation();
+                                let dirty = this
+                                    .workspace
+                                    .docs
+                                    .get(index)
+                                    .map(|doc| doc.dirty)
+                                    .unwrap_or(false);
+                                if dirty {
+                                    this.pending_close = Some(index);
+                                } else {
+                                    this.workspace.close_document(index);
+                                }
+                                cx.notify();
+                            }))
+                            .child("✕"),
                     ),
             );
         }

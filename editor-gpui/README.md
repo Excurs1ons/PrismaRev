@@ -40,7 +40,7 @@
 - **真实文件 IO**：自动从 cwd / 可执行文件目录向上找 `assets/`；打开磁盘上的
   `assets/scenes/*.scene.json`、`assets/prefabs/*.prefab.json`；`Ctrl+S` 保存
   （未命名文档自动落到默认路径）、`Ctrl+Shift+S` 另存为（弹层输入相对路径）、
-  重新读取当前文档
+  重新读取当前文档；文档标签右侧 ✕ 关闭，有未保存修改时先问「保存并关闭 / 不保存 / 取消」
 - **自动保存**：首选项开启时每 5s 保存有改动的当前文档（Play 中跳过）
 - **项目资产扫描**：项目模式启动时递归扫描整个 `assets/`（最多 12 层），填充资产面板
   与检查器资产选择器；扩展名决定分类 / 导入器
@@ -67,7 +67,7 @@
 | 渲染图 | pass 链（ShadowMap → Forward → Gtao → Post）+ 图资源表（scene/swapchain/frame 生命周期） |
 | 项目设置 / 首选项 / 主题 / 构建 / 离线工具 / 快捷键 / 关于 | 直接编辑设置、主题预设与 38 个 token 预览、真实 cargo/cook 构建日志、bake-gi 与 heightmap 命令预览 |
 
-**数据层**（`prism-editor-gpui-core`，UI 框架无关，171 个单元测试）
+**数据层**（`prism-editor-gpui-core`，UI 框架无关，173 个单元测试）
 
 - `.scene.json` / `.prefab.json`：稳定 id、parent 迁移、删除孤儿子级变根、reparent 防环、
   子树提取（存预制体）、预制体实例化（id 平移 + 名字去重 + 反向链接）、字段引用扫描
@@ -171,7 +171,7 @@ editor-gpui/
 
 ## 验证记录
 
-- `cargo test -p prism-editor-gpui-core`：**171 passed**。
+- `cargo test -p prism-editor-gpui-core`：**173 passed**。
 - `cargo check -p prism-editor-gpui --target x86_64-pc-windows-gnu`：通过。
 - `cargo clippy -p prism-editor-gpui -p prism-editor-gpui-core --target x86_64-pc-windows-gnu`：
   无 warning（仅 `proc-macro-error2` 的 future-incompat 提示）。

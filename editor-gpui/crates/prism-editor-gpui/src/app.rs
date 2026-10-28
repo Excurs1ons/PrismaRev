@@ -343,6 +343,8 @@ pub struct EditorView {
     pub asset_delete: Option<String>,
     /// 删除当前文档前的确认弹层（路径）。
     pub document_delete: Option<String>,
+    /// 关闭有未保存修改的文档前先确认。
+    pub pending_close: Option<usize>,
     /// 检查器「选择资产」弹层。
     pub asset_picker: Option<AssetPickerState>,
     /// Scene / Game View 最近一次绘制的屏幕矩形（拾取与 gizmo 用）。
@@ -401,6 +403,7 @@ impl EditorView {
             theme_edit: None,
             asset_delete: None,
             document_delete: None,
+            pending_close: None,
             asset_picker: None,
             rename_base: None,
             last_pick: None,
@@ -722,6 +725,7 @@ impl EditorView {
                 self.theme_edit = None;
                 self.asset_delete = None;
                 self.document_delete = None;
+                self.pending_close = None;
                 self.asset_picker = None;
                 cx.notify();
             }
@@ -2797,6 +2801,117 @@ impl EditorView {
         )
     }
 
+    fn render_close_confirm(&mut self, cx: &mut Context<Self>) -> Option<Div> {
+        let index = self.pending_close?;
+        let title = self.workspace.docs.get(index)?.title_with_dirty();
+        let style = self.style;
+        Some(
+            div()
+                .absolute()
+                .top(px(170.0))
+                .left(px(f32::from(self.window_size.width) * 0.5 - 220.0))
+                .w(px(440.0))
+                .bg(style.panel_raised())
+                .border_1()
+                .border_color(style.accent())
+                .rounded_sm()
+                .shadow_lg()
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .px_2()
+                        .py_1()
+                        .text_sm()
+                        .text_color(style.text_strong())
+                        .child("关闭文档"),
+                )
+                .child(
+                    div()
+                        .px_2()
+                        .text_size(px(10.0))
+                        .text_color(style.text_soft())
+                        .child(SharedString::from(title)),
+                )
+                .child(
+                    div()
+                        .px_2()
+                        .py_1()
+                        .text_size(px(9.0))
+                        .text_color(style.muted())
+                        .child("这个文档有未保存的修改。"),
+                )
+                .child(
+                    div()
+                        .px_2()
+                        .pb_2()
+                        .flex()
+                        .flex_row()
+                        .justify_end()
+                        .gap_2()
+                        .child(
+                            div()
+                                .id("close-doc-cancel")
+                                .px_2()
+                                .py_0p5()
+                                .rounded_sm()
+                                .text_size(px(10.0))
+                                .text_color(style.text_soft())
+                                .cursor_pointer()
+                                .hover(move |this| this.bg(style.row_hover()))
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.pending_close = None;
+                                    cx.notify();
+                                }))
+                                .child("取消"),
+                        )
+                        .child(
+                            div()
+                                .id("close-doc-discard")
+                                .px_2()
+                                .py_0p5()
+                                .rounded_sm()
+                                .text_size(px(10.0))
+                                .text_color(style.danger())
+                                .cursor_pointer()
+                                .hover(move |this| this.bg(style.row_hover()))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.workspace.close_document(index);
+                                    this.pending_close = None;
+                                    cx.notify();
+                                }))
+                                .child("不保存"),
+                        )
+                        .child(
+                            div()
+                                .id("close-doc-save")
+                                .px_2()
+                                .py_0p5()
+                                .rounded_sm()
+                                .bg(style.accent())
+                                .text_size(px(10.0))
+                                .text_color(style.color(ThemeToken::OnAccent))
+                                .cursor_pointer()
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    match this.workspace.save_document(index) {
+                                        Ok(_) => {
+                                            this.workspace.close_document(index);
+                                            this.pending_close = None;
+                                        }
+                                        Err(error) => this.workspace.log(
+                                            prism_editor_gpui_core::LogSource::Editor,
+                                            prism_editor_gpui_core::LogLevel::Error,
+                                            format!("保存失败：{error}"),
+                                        ),
+                                    }
+                                    cx.notify();
+                                }))
+                                .child("保存并关闭"),
+                        ),
+                ),
+        )
+    }
+
     fn render_context_menu(&mut self, cx: &mut Context<Self>) -> Option<Div> {
         let menu = self.context_menu.clone()?;
         let style = self.style;
@@ -3267,6 +3382,23 @@ impl Render for EditorView {
                     })),
             );
             root = root.child(document_delete);
+        }
+
+        let close_confirm = self.render_close_confirm(cx);
+        if let Some(close_confirm) = close_confirm {
+            root = root.child(
+                div()
+                    .id("close-doc-dismiss")
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full()
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.pending_close = None;
+                        cx.notify();
+                    })),
+            );
+            root = root.child(close_confirm);
         }
 
         let asset_rename = self.render_asset_rename(cx);
