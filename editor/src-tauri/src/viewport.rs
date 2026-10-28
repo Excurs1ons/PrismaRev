@@ -59,6 +59,21 @@ const IDLE_POLL: Duration = Duration::from_millis(50);
 type Job = Box<dyn FnOnce(&mut HostState) + Send>;
 
 /// 视觉上属于哪个视口。
+/// 视口宿主提供的松散资产访问：仍然只有 `prism-engine::asset_paths` 一份实现。
+struct EngineAssets;
+
+impl prism_runtime_host::AssetIo for EngineAssets {
+    fn exists(&self, path: &str) -> bool {
+        prism_engine::asset_paths::asset_exists(path)
+    }
+
+    fn read(&self, path: &str) -> std::io::Result<Vec<u8>> {
+        prism_engine::asset_paths::read_asset_file(path)
+    }
+}
+
+static ENGINE_ASSETS: EngineAssets = EngineAssets;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ViewKind {
     /// 编辑态：不跑游戏 system，叠加一台编辑器相机（depth 1000）。
@@ -1903,7 +1918,8 @@ fn viewport_thread(
                         state.app.engine_mut().world_mut(),
                         &state.components,
                         state.scene_generation,
-                    );
+                    )
+                    .with_assets(&ENGINE_ASSETS);
                     commands.set_input(input);
                     let host = commands.api();
                     if let Err(error) = project.tick(&host, frame_budget.as_secs_f32()) {

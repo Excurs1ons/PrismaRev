@@ -154,10 +154,7 @@ impl<'a> GameWorld<'a> {
             #[cfg(feature = "host")]
             Backend::Host(_) => prism_engine::asset_paths::asset_exists(relative),
             #[cfg(feature = "plugin")]
-            Backend::Plugin(_) => {
-                let _ = relative;
-                false
-            }
+            Backend::Plugin(backend) => backend.asset_exists(relative),
         }
     }
 
@@ -167,13 +164,7 @@ impl<'a> GameWorld<'a> {
             #[cfg(feature = "host")]
             Backend::Host(_) => prism_engine::asset_paths::read_asset_text(relative),
             #[cfg(feature = "plugin")]
-            Backend::Plugin(_) => {
-                let _ = relative;
-                Err(std::io::Error::new(
-                    std::io::ErrorKind::Unsupported,
-                    "asset access is not exposed to project modules yet",
-                ))
-            }
+            Backend::Plugin(backend) => backend.read_asset_text(relative),
         }
     }
 
@@ -420,6 +411,43 @@ impl PluginBackend<'_> {
         let status = unsafe { remove(self.api.user_data, entity, name.as_ptr(), name.len()) };
         status == SUCCESS
     }
+
+    /// 走宿主的 `HOST_CAP_ASSET`：项目不自己拼 `assets/` 路径。
+    fn asset_exists(&self, relative: &str) -> bool {
+        let Some(callback) = self.api.asset_exists else {
+            return false;
+        };
+        unsafe { callback(self.api.user_data, relative.as_ptr(), relative.len()) == 1 }
+    }
+
+    fn read_asset_text(&self, relative: &str) -> std::io::Result<String> {
+        let Some(callback) = self.api.read_asset_file else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "host does not expose loose asset access",
+            ));
+        };
+        let mut ptr: *const u8 = std::ptr::null();
+        let mut len = 0usize;
+        let status = unsafe {
+            callback(
+                self.api.user_data,
+                relative.as_ptr(),
+                relative.len(),
+                &mut ptr,
+                &mut len,
+            )
+        };
+        if status != SUCCESS || (ptr.is_null() && len != 0) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("asset `{relative}` not found"),
+            ));
+        }
+        let bytes = unsafe { std::slice::from_raw_parts(ptr, len) };
+        String::from_utf8(bytes.to_vec())
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+    }
 }
 
 #[cfg(test)]
@@ -429,6 +457,45 @@ mod tests {
     #[derive(Reflect, Clone, Debug, Default, PartialEq)]
     struct Health {
         value: f32,
+    }
+
+    #[cfg(feature = "plugin")]
+    struct TestAssets;
+
+    #[cfg(feature = "plugin")]
+    impl prism_runtime_host::AssetIo for TestAssets {
+        fn exists(&self, path: &str) -> bool {
+            path == "lake_layers.json"
+        }
+
+        fn read(&self, path: &str) -> std::io::Result<Vec<u8>> {
+            if path == "lake_layers.json" {
+                Ok(br#"{"layers":[]}"#.to_vec())
+            } else {
+                Err(std::io::Error::new(std::io::ErrorKind::NotFound, path))
+            }
+        }
+    }
+
+    /// 插件后端通过 `HOST_CAP_ASSET` 读松散资产，签名与 host 后端一致。
+    #[cfg(feature = "plugin")]
+    #[test]
+    fn plugin_backend_reads_assets_through_the_host() {
+        let mut world = World::new();
+        let mut components = prism_scene::ComponentRegistry::new();
+        prism_scene::register_builtin_components(&mut components);
+        let mut commands = prism_runtime_host::WorldCommands::new(&mut world, &components, 1)
+            .with_assets(&TestAssets);
+        let host = commands.api();
+        let api = GameWorld::plugin(&host, components.type_registry());
+
+        assert!(api.asset_exists("lake_layers.json"));
+        assert!(!api.asset_exists("missing.json"));
+        assert_eq!(
+            api.read_asset_text("lake_layers.json").unwrap(),
+            r#"{"layers":[]}"#
+        );
+        assert!(api.read_asset_text("missing.json").is_err());
     }
 
     #[test]
