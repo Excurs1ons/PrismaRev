@@ -305,3 +305,37 @@ impl InputManager {
 #[cfg(test)]
 #[path = "input_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod abi_key_tests {
+    use super::KeyCode;
+    use prism_project_api::keys;
+
+    /// 键位编号是宿主/项目共用的 ABI：改 `bit_index` 必须同步更新
+    /// `prism_project_api::keys`，否则动态模块读到的输入会错位。
+    #[test]
+    fn abi_key_table_matches_bit_index() {
+        assert_eq!(KeyCode::KeyW.bit_index(), keys::KEY_W);
+        assert_eq!(KeyCode::KeyA.bit_index(), keys::KEY_A);
+        assert_eq!(KeyCode::KeyS.bit_index(), keys::KEY_S);
+        assert_eq!(KeyCode::KeyD.bit_index(), keys::KEY_D);
+        assert_eq!(KeyCode::KeyQ.bit_index(), keys::KEY_Q);
+        assert_eq!(KeyCode::KeyE.bit_index(), keys::KEY_E);
+        assert_eq!(KeyCode::Space.bit_index(), keys::SPACE);
+        assert_eq!(KeyCode::ShiftLeft.bit_index(), keys::SHIFT_LEFT);
+        assert_eq!(KeyCode::ShiftRight.bit_index(), keys::SHIFT_RIGHT);
+        assert_eq!(KeyCode::ControlLeft.bit_index(), keys::CONTROL_LEFT);
+        assert_eq!(KeyCode::ControlRight.bit_index(), keys::CONTROL_RIGHT);
+        assert_eq!(KeyCode::AltLeft.bit_index(), keys::ALT_LEFT);
+        assert_eq!(KeyCode::AltRight.bit_index(), keys::ALT_RIGHT);
+        assert_eq!(KeyCode::Escape.bit_index(), keys::ESCAPE);
+        assert_eq!(KeyCode::Tab.bit_index(), keys::TAB);
+        assert_eq!(KeyCode::Enter.bit_index(), keys::ENTER);
+        assert_eq!(KeyCode::ArrowUp.bit_index(), keys::ARROW_UP);
+        assert_eq!(KeyCode::ArrowDown.bit_index(), keys::ARROW_DOWN);
+        assert_eq!(KeyCode::ArrowLeft.bit_index(), keys::ARROW_LEFT);
+        assert_eq!(KeyCode::ArrowRight.bit_index(), keys::ARROW_RIGHT);
+        assert_eq!(KeyCode::Digit0.bit_index(), keys::DIGIT_0);
+        assert_eq!(KeyCode::Other(5).bit_index(), keys::OTHER_BASE + 5);
+    }
+}

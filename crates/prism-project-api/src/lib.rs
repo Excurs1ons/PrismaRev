@@ -11,6 +11,36 @@
 //! RTTIBin 编码，宿主用自己的 `ComponentRegistry` 解码 —— 这样新增组件类型
 //! 不需要改 ABI，也不需要在这里为每个组件写一遍绑定。
 
+/// ABI 键位编号（`InputSnapshot::keys` 的位序）。
+///
+/// 这是宿主与项目之间的契约：**只能追加，不能重排**。引擎的
+/// `KeyCode::bit_index` 必须与这里逐项一致（`prism-engine` 有对应测试）。
+pub mod keys {
+    pub const KEY_W: usize = 0;
+    pub const KEY_A: usize = 1;
+    pub const KEY_S: usize = 2;
+    pub const KEY_D: usize = 3;
+    pub const KEY_Q: usize = 4;
+    pub const KEY_E: usize = 5;
+    pub const SPACE: usize = 6;
+    pub const SHIFT_LEFT: usize = 7;
+    pub const SHIFT_RIGHT: usize = 8;
+    pub const CONTROL_LEFT: usize = 9;
+    pub const CONTROL_RIGHT: usize = 10;
+    pub const ALT_LEFT: usize = 11;
+    pub const ALT_RIGHT: usize = 12;
+    pub const ESCAPE: usize = 13;
+    pub const TAB: usize = 14;
+    pub const ENTER: usize = 15;
+    pub const ARROW_UP: usize = 16;
+    pub const ARROW_DOWN: usize = 17;
+    pub const ARROW_LEFT: usize = 18;
+    pub const ARROW_RIGHT: usize = 19;
+    pub const DIGIT_0: usize = 20;
+    /// 平台原始键码从这里往上排（`30 + code % 226`）。
+    pub const OTHER_BASE: usize = 30;
+}
+
 pub const ABI_VERSION: u32 = 4;
 
 pub const SUCCESS: i32 = 0;

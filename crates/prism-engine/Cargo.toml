@@ -45,4 +45,5 @@ android-activity = { version = "0.6", features = ["game-activity"] }
 log = { workspace = true }
 
 [dev-dependencies]
+prism-project-api = { path = "../prism-project-api" }
 jni = "0.22"
