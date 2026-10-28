@@ -215,7 +215,7 @@ deviating from those conventions is a bug. (`README.md` is the human-facing over
   资产重命名会改磁盘文件并精确改写打开文档的路径引用；
   项目设置面板会合并写回 `assets/settings.toml`（保留 `[render]` 等其它段）；
   构建面板会真实读写 `assets/scenes.toml`（勾选 / 排序 / 移除 / 从 `assets/scenes` 添加），
-  「构建项目 / 构建场景包」会真的 spawn cargo 并把产物拷到输出目录；
+  「构建项目 / 构建场景包」会真的 spawn cargo 并把产物拷到输出目录（面板显示步骤进度）；
   删除文档会删文件、打开标签与清单条目（带确认）；
   Scene View 支持点击拾取、双击聚焦、空白拖拽框选与 W/E/R 三种 gizmo（移动 / 旋转 / 缩放，
   Ctrl 吸附，X 切换世界 / 局部坐标，G 开关网格）；

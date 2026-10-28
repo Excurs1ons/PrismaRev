@@ -397,59 +397,66 @@ impl EditorView {
 
     pub fn build_panel(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let style = self.style;
+        let build_step = self.build_step.clone();
+        let status = match &build_step {
+            Some((index, total, label)) => format!("构建中 {index}/{total} · {label}"),
+            None => format!(
+                "{} · {} · {}",
+                self.project.build.target,
+                self.project.build.profile,
+                self.project.build.output_dir
+            ),
+        };
         let mut header = header_row(style, self.workspace.t("menu.buildPanel")).justify_between();
-        header =
-            header
-                .child(div().text_size(px(9.0)).text_color(style.muted()).child(
-                    SharedString::from(format!(
-                        "{} · {} · {}",
-                        self.project.build.target,
-                        self.project.build.profile,
-                        self.project.build.output_dir
-                    )),
-                ))
-                .child(
-                    div()
-                        .flex()
-                        .flex_row()
-                        .gap_1()
-                        .child(
-                            div()
-                                .id("build-cook")
-                                .px_2()
-                                .py_0p5()
-                                .rounded_sm()
-                                .border_1()
-                                .border_color(style.border())
-                                .text_size(px(9.0))
-                                .text_color(style.text_soft())
-                                .cursor_pointer()
-                                .hover(move |this| this.bg(style.row_hover()))
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.run_cook();
-                                    cx.notify();
-                                }))
-                                .child("构建场景包"),
-                        )
-                        .child(
-                            div()
-                                .id("build-run")
-                                .px_2()
-                                .py_0p5()
-                                .rounded_sm()
-                                .border_1()
-                                .border_color(style.success())
-                                .text_size(px(9.0))
-                                .text_color(style.success())
-                                .cursor_pointer()
-                                .hover(move |this| this.bg(style.row_hover()))
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.run_build();
-                                    cx.notify();
-                                }))
-                                .child("构建项目"),
-                        ),
-                );
+        header = header
+            .child(
+                div()
+                    .text_size(px(9.0))
+                    .text_color(style.muted())
+                    .child(SharedString::from(status)),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap_1()
+                    .child(
+                        div()
+                            .id("build-cook")
+                            .px_2()
+                            .py_0p5()
+                            .rounded_sm()
+                            .border_1()
+                            .border_color(style.border())
+                            .text_size(px(9.0))
+                            .text_color(style.text_soft())
+                            .cursor_pointer()
+                            .hover(move |this| this.bg(style.row_hover()))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.run_cook();
+                                cx.notify();
+                            }))
+                            .child("构建场景包"),
+                    )
+                    .child(
+                        div()
+                            .id("build-run")
+                            .px_2()
+                            .py_0p5()
+                            .rounded_sm()
+                            .border_1()
+                            .border_color(style.success())
+                            .text_size(px(9.0))
+                            .text_color(style.success())
+                            .cursor_pointer()
+                            .hover(move |this| this.bg(style.row_hover()))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.run_build();
+                                cx.notify();
+                            }))
+                            .child("构建项目"),
+                    ),
+            );
 
         let entries: Vec<(usize, String, String, bool)> = self
             .workspace
@@ -470,6 +477,17 @@ impl EditorView {
         let total = entries.len();
 
         let mut body = self.settings_scroll("build-body", cx);
+        if let Some((index, total_steps, _)) = &build_step {
+            let mut bar = div().flex().flex_row().gap_1().px_2().pb_1();
+            for step in 0..*total_steps {
+                bar = bar.child(div().flex_1().h(px(3.0)).rounded_sm().bg(if step < *index {
+                    style.accent()
+                } else {
+                    style.border()
+                }));
+            }
+            body = body.child(bar);
+        }
         body = body.child(section_title(style, "构建场景（顺序即构建/启动顺序）"));
         body = body.child(muted(
             style,
@@ -1146,6 +1164,7 @@ impl EditorView {
     ) {
         self.build_log.clear();
         self.building = true;
+        self.build_step = None;
         self.build_log
             .push(format!("输出目录：{}", output_dir.display()));
         for step in &steps {
@@ -1155,7 +1174,13 @@ impl EditorView {
         let (tx, rx) = std::sync::mpsc::channel();
         self.build_rx = Some(rx);
         std::thread::spawn(move || {
-            for step in &steps {
+            let total = steps.len();
+            for (position, step) in steps.iter().enumerate() {
+                let _ = tx.send(BuildEvent::Step {
+                    index: position + 1,
+                    total,
+                    label: step.label.clone(),
+                });
                 let _ = tx.send(BuildEvent::Line(format!("▶ {}", step.label)));
                 let output = std::process::Command::new(&step.program)
                     .args(&step.args)

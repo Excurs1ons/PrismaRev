@@ -204,6 +204,11 @@ impl GizmoMode {
 #[derive(Debug, Clone)]
 pub enum BuildEvent {
     Line(String),
+    Step {
+        index: usize,
+        total: usize,
+        label: String,
+    },
     Done(bool),
 }
 
@@ -327,6 +332,8 @@ pub struct EditorView {
     pub building: bool,
     /// 后台构建线程 → UI 的行 / 完成事件。
     pub build_rx: Option<std::sync::mpsc::Receiver<BuildEvent>>,
+    /// 当前构建步骤（index 从 1 开始）。
+    pub build_step: Option<(usize, usize, String)>,
     /// 「另存为」弹层的输入缓冲；`Some` 时显示弹层。
     pub save_as: Option<String>,
     /// 「重命名资产」弹层：`(源路径, 新名字提示)`。
@@ -395,6 +402,7 @@ impl EditorView {
             build_log: Vec::new(),
             building: false,
             build_rx: None,
+            build_step: None,
             save_as: None,
             asset_rename: None,
             prefab_save: None,
@@ -534,6 +542,14 @@ impl EditorView {
                     );
                     lines += 1;
                 }
+                Some(BuildEvent::Step {
+                    index,
+                    total,
+                    label,
+                }) => {
+                    self.build_step = Some((index, total, label.clone()));
+                    self.build_log.push(format!("[{index}/{total}] {label}"));
+                }
                 Some(BuildEvent::Done(ok)) => {
                     finished = Some(ok);
                     break;
@@ -544,6 +560,7 @@ impl EditorView {
         if let Some(ok) = finished {
             self.build_rx = None;
             self.building = false;
+            self.build_step = None;
             self.build_log.push(if ok {
                 "✓ 构建完成".to_string()
             } else {

@@ -155,7 +155,7 @@ editor-gpui/
   `cargo build --manifest-path <game>/Cargo.toml [--release]` 与
   `cargo run -p prism-build-pipeline -- build-scenes`，stdout/stderr 流式进构建日志与日志面板；
   成功后把 exe / `scenes.pak` / `settings.toml` 拷到 `[build].output_dir`（缺失的产物跳过）。
-  子进程在后台线程跑，UI 每 tick 消费最多 40 行。桌面运行时回归尚未做。
+  子进程在后台线程跑，UI 每 tick 消费最多 40 行；构建面板头部显示当前步骤并画出分段进度条。桌面运行时回归尚未做。
   文档删除已真实落盘（菜单「文件 → 删除文档」或资产面板右键，都会先确认，
   并同时清理打开标签与 `scenes.toml` 条目）。
   保存 / 另存为 / 重新读取 / settings.toml / scenes.toml / 资产改名、删除、实例化与预制体写入已真实落盘。

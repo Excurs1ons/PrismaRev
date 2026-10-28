@@ -191,9 +191,10 @@ Unity 形状的编辑器，又不会把 `prism-render` 绑死在某套 UI 生命
 - 产物：`projects/<game>/target/{debug,release}/prisma[.exe]`、`assets/scenes.pak`、
   `assets/settings.toml` → `[build].output_dir`（相对路径相对项目根）；
 - `copy_artifacts` 跳过不存在的产物（例如还没 cook 过 `scenes.pak`），不算失败。
-- UI 用后台线程 + `mpsc` 发 `BuildEvent::{Line,Done}`；stdout/stderr 各一个读取线程
+- UI 用后台线程 + `mpsc` 发 `BuildEvent::{Line,Step,Done}`；stdout/stderr 各一个读取线程
   （避免管道写满死锁），`background_tick` 每 tick 最多消费 40 行，日志同时进
-  构建面板与日志面板。
+  构建面板与日志面板。每个 step 开始时发 `Step { index, total, label }`，面板头部显示
+  「构建中 i/n · 步骤名」，并用 n 段进度条标出已完成步骤。
 
 ## 9. Scene / Game View 的现状与接线
 
