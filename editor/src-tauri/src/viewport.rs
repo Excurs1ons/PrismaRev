@@ -203,6 +203,32 @@ impl CoordinateSpace {
     }
 }
 
+/// 变换轴心模式（Pivot vs Center）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum PivotMode {
+    #[default]
+    Pivot,
+    Center,
+}
+
+impl PivotMode {
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "pivot" | "Pivot" => Some(Self::Pivot),
+            "center" | "Center" => Some(Self::Center),
+            _ => None,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pivot => "pivot",
+            Self::Center => "center",
+        }
+    }
+}
+
 struct HostState {
     /// Declared before `app` so Rust drops the project session first. Project
     /// callbacks must be gone before the engine host is torn down.
@@ -224,12 +250,16 @@ struct HostState {
     entities: Vec<Entity>,
     /// 选中标记的实体（挂了 [`Gizmo`]，没有选中时 `enabled = false`）。
     marker: Option<Entity>,
-    /// 当前选中的文档下标（由前端下发，重载后保留）。
+    /// 当前选中的主文档下标（由前端下发，重载后保留）。
     selection: Option<usize>,
+    /// 当前全部选中的文档下标（支持多选成组变换）。
+    selected_indices: Vec<usize>,
     /// 当前使用的变换工具。
     tool: GizmoTool,
     /// 当前使用的坐标系（Global vs Local）。
     space: CoordinateSpace,
+    /// 当前使用的轴心模式（Pivot vs Center）。
+    pivot_mode: PivotMode,
     /// 正在进行的轴拖动（`None` = 没在拖）。
     drag: Option<ActiveDrag>,
     /// Play 模式暂停：仍然渲染，但不推进模拟。
@@ -264,6 +294,16 @@ pub struct GizmoHoverInfo {
     pub ring_pts: Option<Vec<[f32; 2]>>,
 }
 
+/// 单个实体的局部变换更新项。
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EntityTransformUpdate {
+    pub index: usize,
+    pub position: Option<[f32; 3]>,
+    pub rotation: Option<[f32; 4]>,
+    pub scale: Option<[f32; 3]>,
+}
+
 /// 变换拖动产生的局部属性更新结果。
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -272,6 +312,7 @@ pub struct DragTransformResult {
     pub rotation: Option<[f32; 4]>,
     pub scale: Option<[f32; 3]>,
     pub feedback: Option<DragFeedback>,
+    pub multi_updates: Option<Vec<EntityTransformUpdate>>,
 }
 
 /// 实体在视口屏幕上的 3D 投影包围盒（用于 SceneView 框线高亮）。
@@ -284,28 +325,37 @@ pub struct ProjectedBoundBox {
     pub rect: [f32; 4],
 }
 
-/// Gizmo 拖动会话（平移 / 旋转 / 缩放）。
-#[derive(Clone, Copy)]
+#[derive(Clone, Debug)]
+struct DragEntityState {
+    index: usize,
+    entity: Entity,
+    start_world_pos: Vec3,
+    start_world_rot: Quat,
+    start_local_scale: Vec3,
+}
+
+/// Gizmo 拖动会话（平移 / 旋转 / 缩放，支持多选）。
+#[derive(Clone)]
 enum ActiveDrag {
     Translate {
-        index: usize,
         axis: Axis,
         start_world: Vec3,
         start_parameter: f32,
         start_plane_offset: Vec3,
+        entities: Vec<DragEntityState>,
     },
     Rotate {
-        index: usize,
         axis: Axis,
-        start_world_rot: Quat,
+        start_world_center: Vec3,
         start_vec: Vec3,
+        entities: Vec<DragEntityState>,
     },
     Scale {
-        index: usize,
         axis: Axis,
-        start_scale: Vec3,
+        start_world_center: Vec3,
         start_parameter: f32,
         start_cursor: glam::Vec2,
+        entities: Vec<DragEntityState>,
     },
 }
 
@@ -328,7 +378,6 @@ struct GizmoContext {
     fov: f32,
     center: Vec3,
     orientation: glam::Quat,
-    entity: Entity,
 }
 
 impl HostState {
@@ -395,8 +444,14 @@ impl HostState {
         }
         self.marker = Some(spawn_selection_marker(&mut self.app));
         self.place_camera();
-        let selection = self.selection;
-        self.apply_selection(selection);
+        let selected = self.selected_indices.clone();
+        if !selected.is_empty() {
+            self.apply_selection(&selected);
+        } else if let Some(sel) = self.selection {
+            self.apply_selection(&[sel]);
+        } else {
+            self.apply_selection(&[]);
+        }
         Ok(count)
     }
 
@@ -404,22 +459,16 @@ impl HostState {
     ///
     /// 引擎没有「描边 / 选中框」这种编辑器概念，所以复用 ECS 里已有的
     /// [`Gizmo`]（世界坐标轴三色箭头，始终置顶）——不改渲染图、不加组件类型。
-    fn apply_selection(&mut self, index: Option<usize>) {
-        let index = index.filter(|index| *index < self.entities.len());
-        self.selection = index;
+    fn apply_selection(&mut self, indices: &[usize]) {
+        let valid: Vec<usize> = indices
+            .iter()
+            .copied()
+            .filter(|&idx| idx < self.entities.len())
+            .collect();
+        self.selection = valid.last().copied();
+        self.selected_indices = valid;
         self.drag = None;
-        let position = index.and_then(|index| {
-            let entity = self.entities[index];
-            let world = self.app.engine_mut().world();
-            world
-                .get::<LocalToWorld>(entity)
-                .map(|transform| transform.0.col(3).truncate())
-                .or_else(|| {
-                    world
-                        .get::<LocalTransform>(entity)
-                        .map(|local| local.position)
-                })
-        });
+        let position = self.compute_selection_center();
         let length = match position {
             Some(_) => self
                 .gizmo_context()
@@ -428,6 +477,56 @@ impl HostState {
             None => GIZMO_ARROW_LENGTH,
         };
         self.sync_marker(position, length);
+    }
+
+    /// 计算当前选中的世界中心（受 `pivot_mode` 影响：Pivot 为主实体锚点，Center 为选区几何中心）。
+    fn calc_selection_center(
+        world: &prism_engine::ecs::World,
+        entities: &[Entity],
+        selected_indices: &[usize],
+        selection: Option<usize>,
+        pivot_mode: PivotMode,
+    ) -> Option<Vec3> {
+        if pivot_mode == PivotMode::Center && !selected_indices.is_empty() {
+            let mut sum = Vec3::ZERO;
+            let mut count = 0.0;
+            for &idx in selected_indices {
+                if let Some(&ent) = entities.get(idx) {
+                    if let Some(pos) = world
+                        .get::<LocalToWorld>(ent)
+                        .map(|ltw| ltw.0.col(3).truncate())
+                        .or_else(|| world.get::<LocalTransform>(ent).map(|lt| lt.position))
+                    {
+                        sum += pos;
+                        count += 1.0;
+                    }
+                }
+            }
+            if count > 0.0 {
+                return Some(sum / count);
+            }
+        }
+        let index = selection?;
+        let entity = *entities.get(index)?;
+        world
+            .get::<LocalToWorld>(entity)
+            .map(|transform| transform.0.col(3).truncate())
+            .or_else(|| {
+                world
+                    .get::<LocalTransform>(entity)
+                    .map(|local| local.position)
+            })
+    }
+
+    fn compute_selection_center(&mut self) -> Option<Vec3> {
+        let world = self.app.engine_mut().world();
+        Self::calc_selection_center(
+            world,
+            &self.entities,
+            &self.selected_indices,
+            self.selection,
+            self.pivot_mode,
+        )
     }
 
     /// 屏幕像素 → 命中的文档下标（最近的实体）。
@@ -672,14 +771,13 @@ impl HostState {
             .get::<Camera>(camera)
             .map(|camera| camera.fov_y_degrees)
             .unwrap_or(60.0);
-        let center = world
-            .get::<LocalToWorld>(entity)
-            .map(|transform| transform.0.col(3).truncate())
-            .or_else(|| {
-                world
-                    .get::<LocalTransform>(entity)
-                    .map(|local| local.position)
-            })?;
+        let center = Self::calc_selection_center(
+            world,
+            &self.entities,
+            &self.selected_indices,
+            self.selection,
+            self.pivot_mode,
+        )?;
         let orientation = if self.space == CoordinateSpace::Local {
             world
                 .get::<LocalToWorld>(entity)
@@ -700,7 +798,6 @@ impl HostState {
             fov,
             center,
             orientation,
-            entity,
         })
     }
 
@@ -905,12 +1002,43 @@ impl HostState {
         let ctx = self
             .gizmo_context()
             .ok_or_else(|| "没有选中的实体，无法拖动".to_string())?;
-        let index = self.selection.ok_or_else(|| "没有选中".to_string())?;
         let (origin, dir) =
             pick::screen_ray(&ctx.camera_world, ctx.fov, self.width, self.height, x, y)
                 .ok_or_else(|| "点击位置无法生成射线".to_string())?;
         let world = self.app.engine_mut().world();
-        let entity = ctx.entity;
+
+        let selected_indices = if !self.selected_indices.is_empty() {
+            self.selected_indices.clone()
+        } else {
+            self.selection.into_iter().collect()
+        };
+
+        let mut drag_entities = Vec::new();
+        for &idx in &selected_indices {
+            if let Some(&ent) = self.entities.get(idx) {
+                let start_world_pos = world
+                    .get::<LocalToWorld>(ent)
+                    .map(|ltw| ltw.0.col(3).truncate())
+                    .or_else(|| world.get::<LocalTransform>(ent).map(|lt| lt.position))
+                    .unwrap_or(Vec3::ZERO);
+                let start_world_rot = world
+                    .get::<LocalToWorld>(ent)
+                    .map(|ltw| Quat::from_mat4(&ltw.0))
+                    .or_else(|| world.get::<LocalTransform>(ent).map(|lt| lt.rotation))
+                    .unwrap_or(Quat::IDENTITY);
+                let start_local_scale = world
+                    .get::<LocalTransform>(ent)
+                    .map(|lt| lt.scale)
+                    .unwrap_or(Vec3::ONE);
+                drag_entities.push(DragEntityState {
+                    index: idx,
+                    entity: ent,
+                    start_world_pos,
+                    start_world_rot,
+                    start_local_scale,
+                });
+            }
+        }
 
         match self.tool {
             GizmoTool::Select => return Err("选择工具不支持拖动手柄".to_string()),
@@ -920,22 +1048,22 @@ impl HostState {
                     let hit_pt = gizmo::plane_intersection_vector(origin, dir, ctx.center, normal)
                         .ok_or_else(|| "视线与平面平行，请换个角度".to_string())?;
                     self.drag = Some(ActiveDrag::Translate {
-                        index,
                         axis,
                         start_world: ctx.center,
                         start_parameter: 0.0,
                         start_plane_offset: hit_pt,
+                        entities: drag_entities,
                     });
                 } else {
                     let axis_dir = ctx.orientation * axis.vector();
                     let start_parameter = gizmo::axis_parameter(origin, dir, ctx.center, axis_dir)
                         .ok_or_else(|| "视线与这根轴平行，请换个角度".to_string())?;
                     self.drag = Some(ActiveDrag::Translate {
-                        index,
                         axis,
                         start_world: ctx.center,
                         start_parameter,
                         start_plane_offset: Vec3::ZERO,
+                        entities: drag_entities,
                     });
                 }
             }
@@ -944,22 +1072,14 @@ impl HostState {
                 let start_vec =
                     gizmo::plane_intersection_vector(origin, dir, ctx.center, axis_normal)
                         .ok_or_else(|| "视线与旋转平面平行，请换个角度".to_string())?;
-                let start_world_rot = world
-                    .get::<LocalToWorld>(entity)
-                    .map(|ltw| Quat::from_mat4(&ltw.0))
-                    .unwrap_or(Quat::IDENTITY);
                 self.drag = Some(ActiveDrag::Rotate {
-                    index,
                     axis,
-                    start_world_rot,
+                    start_world_center: ctx.center,
                     start_vec: start_vec.normalize_or_zero(),
+                    entities: drag_entities,
                 });
             }
             GizmoTool::Scale => {
-                let start_scale = world
-                    .get::<LocalTransform>(entity)
-                    .map(|lt| lt.scale)
-                    .unwrap_or(Vec3::ONE);
                 let start_parameter = if axis != Axis::XYZ {
                     let axis_dir = ctx.orientation * axis.vector();
                     gizmo::axis_parameter(origin, dir, ctx.center, axis_dir).unwrap_or(0.0)
@@ -967,11 +1087,11 @@ impl HostState {
                     0.0
                 };
                 self.drag = Some(ActiveDrag::Scale {
-                    index,
                     axis,
-                    start_scale,
+                    start_world_center: ctx.center,
                     start_parameter,
                     start_cursor: glam::Vec2::new(x, y),
+                    entities: drag_entities,
                 });
             }
         }
@@ -983,18 +1103,8 @@ impl HostState {
     /// 同时直接改 ECS 里的 `LocalTransform`，所以视口跟手 —— 前端把文档
     /// 重载压到拖动结束之后，拖动过程中画面来自引擎，不靠 reload。
     fn drag_to(&mut self, x: f32, y: f32, snap: bool) -> Option<DragTransformResult> {
-        let drag = self.drag?;
+        let drag = self.drag.as_ref()?.clone();
         let ctx = self.gizmo_context()?;
-        let drag_index = match drag {
-            ActiveDrag::Translate { index, .. }
-            | ActiveDrag::Rotate { index, .. }
-            | ActiveDrag::Scale { index, .. } => index,
-        };
-        if ctx.entity != self.entities.get(drag_index).copied()? {
-            // 场景重载换了 ECS 句柄：这次拖动失效。
-            self.drag = None;
-            return None;
-        }
         let (origin, dir) =
             pick::screen_ray(&ctx.camera_world, ctx.fov, self.width, self.height, x, y)?;
         let gizmo_len = self.gizmo_length(&ctx).max(1e-4);
@@ -1012,7 +1122,7 @@ impl HostState {
                 start_world,
                 start_parameter,
                 start_plane_offset,
-                ..
+                entities,
             } => {
                 let (target, text) = if axis.is_plane() {
                     let normal = ctx.orientation * axis.vector();
@@ -1027,21 +1137,36 @@ impl HostState {
                     }
                     let target = start_world + delta;
                     let snap_suffix = if snap { " (Snap 1m)" } else { "" };
+                    let count_suffix = if entities.len() > 1 {
+                        format!(" [{}]", entities.len())
+                    } else {
+                        String::new()
+                    };
                     let text = match axis {
                         Axis::XZ => {
-                            format!("XZ: ({:+.2}, {:+.2}) m{}", delta.x, delta.z, snap_suffix)
+                            format!(
+                                "XZ: ({:+.2}, {:+.2}) m{}{}",
+                                delta.x, delta.z, snap_suffix, count_suffix
+                            )
                         }
                         Axis::XY => {
-                            format!("XY: ({:+.2}, {:+.2}) m{}", delta.x, delta.y, snap_suffix)
+                            format!(
+                                "XY: ({:+.2}, {:+.2}) m{}{}",
+                                delta.x, delta.y, snap_suffix, count_suffix
+                            )
                         }
                         Axis::YZ => {
-                            format!("YZ: ({:+.2}, {:+.2}) m{}", delta.y, delta.z, snap_suffix)
+                            format!(
+                                "YZ: ({:+.2}, {:+.2}) m{}{}",
+                                delta.y, delta.z, snap_suffix, count_suffix
+                            )
                         }
                         _ => format!(
-                            "{}: {:+.2} m{}",
+                            "{}: {:+.2} m{}{}",
                             axis.name().to_uppercase(),
                             delta.length(),
-                            snap_suffix
+                            snap_suffix,
+                            count_suffix
                         ),
                     };
                     (target, text)
@@ -1055,35 +1180,58 @@ impl HostState {
                     }
                     let target = start_world + axis_dir * delta;
                     let snap_suffix = if snap { " (Snap 1m)" } else { "" };
+                    let count_suffix = if entities.len() > 1 {
+                        format!(" [{}]", entities.len())
+                    } else {
+                        String::new()
+                    };
                     let text = format!(
-                        "{}: {:+.2} m{}",
+                        "{}: {:+.2} m{}{}",
                         axis.name().to_uppercase(),
                         delta,
-                        snap_suffix
+                        snap_suffix,
+                        count_suffix
                     );
                     (target, text)
                 };
-                let local = {
+
+                let delta_world = target - start_world;
+                let mut multi_updates = Vec::with_capacity(entities.len());
+                let mut primary_local: Option<[f32; 3]> = None;
+
+                {
                     let world = self.app.engine_mut().world_mut();
-                    let local = match world.get::<Parent>(ctx.entity).map(|parent| parent.0) {
-                        Some(parent) if world.is_alive(parent) => world
-                            .get::<LocalToWorld>(parent)
-                            .map(|transform| transform.0.inverse().transform_point3(target))
-                            .unwrap_or(target),
-                        _ => target,
-                    };
-                    match world.get_mut::<LocalTransform>(ctx.entity) {
-                        Some(local_transform) => local_transform.position = local,
-                        None => world.insert(
-                            ctx.entity,
-                            LocalTransform {
-                                position: local,
-                                ..LocalTransform::default()
-                            },
-                        ),
+                    for ent in &entities {
+                        let new_world = ent.start_world_pos + delta_world;
+                        let local = match world.get::<Parent>(ent.entity).map(|p| p.0) {
+                            Some(parent) if world.is_alive(parent) => world
+                                .get::<LocalToWorld>(parent)
+                                .map(|transform| transform.0.inverse().transform_point3(new_world))
+                                .unwrap_or(new_world),
+                            _ => new_world,
+                        };
+                        match world.get_mut::<LocalTransform>(ent.entity) {
+                            Some(local_transform) => local_transform.position = local,
+                            None => world.insert(
+                                ent.entity,
+                                LocalTransform {
+                                    position: local,
+                                    ..LocalTransform::default()
+                                },
+                            ),
+                        }
+                        if Some(ent.index) == self.selection {
+                            primary_local = Some(local.to_array());
+                        }
+                        multi_updates.push(EntityTransformUpdate {
+                            index: ent.index,
+                            position: Some(local.to_array()),
+                            rotation: None,
+                            scale: None,
+                        });
                     }
-                    local
-                };
+                }
+
                 self.sync_marker(Some(target), gizmo_len);
                 let feedback = DragFeedback {
                     tool: "translate".to_string(),
@@ -1096,21 +1244,22 @@ impl HostState {
                     radius: None,
                 };
                 Some(DragTransformResult {
-                    position: Some(local.to_array()),
+                    position: primary_local,
                     rotation: None,
                     scale: None,
                     feedback: Some(feedback),
+                    multi_updates: Some(multi_updates),
                 })
             }
             ActiveDrag::Rotate {
                 axis,
-                start_world_rot,
+                start_world_center,
                 start_vec,
-                ..
+                entities,
             } => {
                 let normal = ctx.orientation * axis.vector();
                 let current_vec_raw =
-                    gizmo::plane_intersection_vector(origin, dir, ctx.center, normal)?
+                    gizmo::plane_intersection_vector(origin, dir, start_world_center, normal)?
                         .normalize_or_zero();
                 if start_vec.length_squared() < 1e-4 || current_vec_raw.length_squared() < 1e-4 {
                     return None;
@@ -1124,45 +1273,90 @@ impl HostState {
                     angle = (angle / step_rad).round() * step_rad;
                 }
                 let delta_rot = Quat::from_axis_angle(normal, angle);
-                let new_world_rot = delta_rot * start_world_rot;
 
-                let world = self.app.engine_mut().world_mut();
-                let new_local_rot = match world.get::<Parent>(ctx.entity).map(|parent| parent.0) {
-                    Some(parent) if world.is_alive(parent) => {
-                        let parent_rot = world
-                            .get::<LocalToWorld>(parent)
-                            .map(|ltw| Quat::from_mat4(&ltw.0))
-                            .unwrap_or(Quat::IDENTITY);
-                        parent_rot.inverse() * new_world_rot
+                let mut multi_updates = Vec::with_capacity(entities.len());
+                let mut primary_local_rot: Option<[f32; 4]> = None;
+
+                {
+                    let world = self.app.engine_mut().world_mut();
+                    let rotate_around_center =
+                        entities.len() > 1 || self.pivot_mode == PivotMode::Center;
+                    for ent in &entities {
+                        let new_world_pos = if rotate_around_center {
+                            let offset = ent.start_world_pos - start_world_center;
+                            start_world_center + delta_rot * offset
+                        } else {
+                            ent.start_world_pos
+                        };
+                        let new_world_rot = delta_rot * ent.start_world_rot;
+
+                        let (local_pos, local_rot) =
+                            match world.get::<Parent>(ent.entity).map(|p| p.0) {
+                                Some(parent) if world.is_alive(parent) => {
+                                    let parent_mat = world
+                                        .get::<LocalToWorld>(parent)
+                                        .map(|ltw| ltw.0)
+                                        .unwrap_or(Mat4::IDENTITY);
+                                    let parent_rot = Quat::from_mat4(&parent_mat);
+                                    (
+                                        parent_mat.inverse().transform_point3(new_world_pos),
+                                        parent_rot.inverse() * new_world_rot,
+                                    )
+                                }
+                                _ => (new_world_pos, new_world_rot),
+                            };
+
+                        match world.get_mut::<LocalTransform>(ent.entity) {
+                            Some(lt) => {
+                                if rotate_around_center {
+                                    lt.position = local_pos;
+                                }
+                                lt.rotation = local_rot;
+                            }
+                            None => world.insert(
+                                ent.entity,
+                                LocalTransform {
+                                    position: local_pos,
+                                    rotation: local_rot,
+                                    ..LocalTransform::default()
+                                },
+                            ),
+                        }
+                        if Some(ent.index) == self.selection {
+                            primary_local_rot = Some(local_rot.to_array());
+                        }
+                        multi_updates.push(EntityTransformUpdate {
+                            index: ent.index,
+                            position: if rotate_around_center {
+                                Some(local_pos.to_array())
+                            } else {
+                                None
+                            },
+                            rotation: Some(local_rot.to_array()),
+                            scale: None,
+                        });
                     }
-                    _ => new_world_rot,
-                };
-
-                match world.get_mut::<LocalTransform>(ctx.entity) {
-                    Some(lt) => lt.rotation = new_local_rot,
-                    None => world.insert(
-                        ctx.entity,
-                        LocalTransform {
-                            rotation: new_local_rot,
-                            ..LocalTransform::default()
-                        },
-                    ),
                 }
 
                 let angle_deg = angle.to_degrees();
                 let current_vec = delta_rot * start_vec;
-                let start_pt = ctx.center + start_vec * gizmo_len;
-                let current_pt = ctx.center + current_vec * gizmo_len;
+                let start_pt = start_world_center + start_vec * gizmo_len;
+                let current_pt = start_world_center + current_vec * gizmo_len;
                 let start_screen = screen.project(start_pt);
                 let current_screen = screen.project(current_pt);
                 let radius = start_screen
                     .map(|s| s.distance(center_screen))
                     .unwrap_or(gizmo_len * 50.0);
                 let snap_suffix = if snap { " (Snap 15°)" } else { "" };
+                let count_suffix = if entities.len() > 1 {
+                    format!(" [{}]", entities.len())
+                } else {
+                    String::new()
+                };
                 let feedback = DragFeedback {
                     tool: "rotate".to_string(),
                     axis: axis.name().to_string(),
-                    text: format!("∠ {:+.1}°{}", angle_deg, snap_suffix),
+                    text: format!("∠ {:+.1}°{}{}", angle_deg, snap_suffix, count_suffix),
                     center_screen: center_screen.to_array(),
                     start_screen: start_screen.map(|s| s.to_array()),
                     current_screen: current_screen.map(|s| s.to_array()),
@@ -1171,72 +1365,122 @@ impl HostState {
                 };
                 Some(DragTransformResult {
                     position: None,
-                    rotation: Some(new_local_rot.to_array()),
+                    rotation: primary_local_rot,
                     scale: None,
                     feedback: Some(feedback),
+                    multi_updates: Some(multi_updates),
                 })
             }
             ActiveDrag::Scale {
                 axis,
-                start_scale,
+                start_world_center,
                 start_parameter,
                 start_cursor,
-                ..
+                entities,
             } => {
-                let (new_scale, factor) = if axis == Axis::XYZ {
+                let (raw_scale_factor, scale_vec) = if axis == Axis::XYZ {
                     let dx = x - start_cursor.x;
                     let dy = y - start_cursor.y;
                     let delta = (dx - dy) * 0.005;
-                    let mut factor = (1.0 + delta).max(0.01);
-                    if snap {
-                        factor = (factor / 0.1).round() * 0.1;
-                    }
-                    (start_scale * factor, factor)
+                    let factor = (1.0 + delta).max(0.01);
+                    (factor, Vec3::splat(factor))
                 } else {
                     let axis_dir = ctx.orientation * axis.vector();
-                    let parameter = gizmo::axis_parameter(origin, dir, ctx.center, axis_dir)?;
-                    let delta = (parameter - start_parameter) / gizmo_len;
-                    let mut factor = (1.0 + delta).max(0.01);
-                    if snap {
-                        factor = (factor / 0.1).round() * 0.1;
-                    }
-                    let mut s = start_scale;
+                    let current_param =
+                        gizmo::axis_parameter(origin, dir, start_world_center, axis_dir)
+                            .unwrap_or(start_parameter);
+                    let delta = (current_param - start_parameter) / gizmo_len;
+                    let factor = (1.0 + delta).max(0.01);
+                    let mut s = Vec3::ONE;
                     match axis {
-                        Axis::X => s.x = (s.x * factor).max(0.001),
-                        Axis::Y => s.y = (s.y * factor).max(0.001),
-                        Axis::Z => s.z = (s.z * factor).max(0.001),
-                        _ => (),
+                        Axis::X => s.x = factor,
+                        Axis::Y => s.y = factor,
+                        Axis::Z => s.z = factor,
+                        _ => s = Vec3::splat(factor),
                     }
-                    (s, factor)
+                    (factor, s)
                 };
 
-                let world = self.app.engine_mut().world_mut();
-                match world.get_mut::<LocalTransform>(ctx.entity) {
-                    Some(lt) => lt.scale = new_scale,
-                    None => world.insert(
-                        ctx.entity,
-                        LocalTransform {
-                            scale: new_scale,
-                            ..LocalTransform::default()
-                        },
-                    ),
+                let (scale_factor, scale_vec) = if snap {
+                    let step = 0.1_f32;
+                    let snapped_factor = (raw_scale_factor / step).round() * step;
+                    let snapped_vec = match axis {
+                        Axis::X => Vec3::new(snapped_factor, 1.0, 1.0),
+                        Axis::Y => Vec3::new(1.0, snapped_factor, 1.0),
+                        Axis::Z => Vec3::new(1.0, 1.0, snapped_factor),
+                        _ => Vec3::splat(snapped_factor),
+                    };
+                    (snapped_factor, snapped_vec)
+                } else {
+                    (raw_scale_factor, scale_vec)
+                };
+
+                let mut multi_updates = Vec::with_capacity(entities.len());
+                let mut primary_local_scale: Option<[f32; 3]> = None;
+
+                {
+                    let world = self.app.engine_mut().world_mut();
+                    let scale_around_center =
+                        entities.len() > 1 || self.pivot_mode == PivotMode::Center;
+                    for ent in &entities {
+                        let new_world_pos = if scale_around_center {
+                            let offset = ent.start_world_pos - start_world_center;
+                            start_world_center + offset * scale_factor
+                        } else {
+                            ent.start_world_pos
+                        };
+                        let new_scale = ent.start_local_scale * scale_vec;
+
+                        let local_pos = match world.get::<Parent>(ent.entity).map(|p| p.0) {
+                            Some(parent) if world.is_alive(parent) => world
+                                .get::<LocalToWorld>(parent)
+                                .map(|ltw| ltw.0.inverse().transform_point3(new_world_pos))
+                                .unwrap_or(new_world_pos),
+                            _ => new_world_pos,
+                        };
+
+                        match world.get_mut::<LocalTransform>(ent.entity) {
+                            Some(lt) => {
+                                if scale_around_center {
+                                    lt.position = local_pos;
+                                }
+                                lt.scale = new_scale;
+                            }
+                            None => world.insert(
+                                ent.entity,
+                                LocalTransform {
+                                    position: local_pos,
+                                    scale: new_scale,
+                                    ..LocalTransform::default()
+                                },
+                            ),
+                        }
+                        if Some(ent.index) == self.selection {
+                            primary_local_scale = Some(new_scale.to_array());
+                        }
+                        multi_updates.push(EntityTransformUpdate {
+                            index: ent.index,
+                            position: if scale_around_center {
+                                Some(local_pos.to_array())
+                            } else {
+                                None
+                            },
+                            rotation: None,
+                            scale: Some(new_scale.to_array()),
+                        });
+                    }
                 }
 
                 let snap_suffix = if snap { " (Snap 0.1x)" } else { "" };
-                let text = if axis == Axis::XYZ {
-                    format!("{:.2}x{}", factor, snap_suffix)
+                let count_suffix = if entities.len() > 1 {
+                    format!(" [{}]", entities.len())
                 } else {
-                    format!(
-                        "{}: {:.2}x{}",
-                        axis.name().to_uppercase(),
-                        factor,
-                        snap_suffix
-                    )
+                    String::new()
                 };
                 let feedback = DragFeedback {
                     tool: "scale".to_string(),
                     axis: axis.name().to_string(),
-                    text,
+                    text: format!("{:+.2}x{}{}", scale_factor, snap_suffix, count_suffix),
                     center_screen: center_screen.to_array(),
                     start_screen: None,
                     current_screen: None,
@@ -1246,8 +1490,9 @@ impl HostState {
                 Some(DragTransformResult {
                     position: None,
                     rotation: None,
-                    scale: Some(new_scale.to_array()),
+                    scale: primary_local_scale,
                     feedback: Some(feedback),
+                    multi_updates: Some(multi_updates),
                 })
             }
         }
@@ -1263,7 +1508,13 @@ impl HostState {
     /// 距离按包围球占满垂直视场（留 20% 余量）算出来，`yaw` / `pitch` 保持不变。
     fn frame(&mut self, mode: FrameMode) -> Option<CameraOrbit> {
         let indices: Vec<usize> = match mode {
-            FrameMode::Selection => self.selection.into_iter().collect(),
+            FrameMode::Selection => {
+                if !self.selected_indices.is_empty() {
+                    self.selected_indices.clone()
+                } else {
+                    self.selection.into_iter().collect()
+                }
+            }
             FrameMode::All => (0..self.entities.len()).collect(),
         };
         if indices.is_empty() {
@@ -1460,8 +1711,10 @@ fn viewport_thread(
         entities: Vec::new(),
         marker: None,
         selection: None,
+        selected_indices: Vec::new(),
         tool: GizmoTool::Translate,
         space: CoordinateSpace::Global,
+        pivot_mode: PivotMode::Pivot,
         drag: None,
         paused: false,
         step_pending: false,
@@ -2046,10 +2299,12 @@ pub fn editor_viewport_input(
 /// 高亮当前选中项（层级 / 检查器改动选择时下发）。
 ///
 /// `index` 是 `.scene.json` 里 `entities` 的下标；`None` = 取消选中。
+/// `indices` 可选下发完整的多选集合。
 #[tauri::command]
 pub fn editor_viewport_select(
     id: String,
     index: Option<usize>,
+    indices: Option<Vec<usize>>,
     manager: State<'_, ViewportManager>,
 ) -> Result<(), String> {
     let views = manager
@@ -2058,7 +2313,39 @@ pub fn editor_viewport_select(
         .map_err(|_| "视口状态锁失败".to_string())?;
     if let Some(handle) = views.get(&id) {
         let _ = handle.tx.send(Box::new(move |state: &mut HostState| {
-            state.apply_selection(index);
+            if let Some(indices) = indices {
+                state.apply_selection(&indices);
+            } else if let Some(i) = index {
+                state.apply_selection(&[i]);
+            } else {
+                state.apply_selection(&[]);
+            }
+        }));
+    }
+    Ok(())
+}
+
+/// 切换当前场景视口的轴心模式（"pivot" | "center"）。
+#[tauri::command]
+pub fn editor_viewport_set_pivot(
+    id: String,
+    pivot: String,
+    manager: State<'_, ViewportManager>,
+) -> Result<(), String> {
+    let Some(parsed_pivot) = PivotMode::parse(&pivot) else {
+        return Err(format!("未知的轴心模式：{pivot}"));
+    };
+    let views = manager
+        .views
+        .lock()
+        .map_err(|_| "视口状态锁失败".to_string())?;
+    if let Some(handle) = views.get(&id) {
+        let _ = handle.tx.send(Box::new(move |state: &mut HostState| {
+            state.pivot_mode = parsed_pivot;
+            if let Some(ctx) = state.gizmo_context() {
+                let length = state.gizmo_length(&ctx);
+                state.sync_marker(Some(ctx.center), length);
+            }
         }));
     }
     Ok(())
@@ -2449,8 +2736,10 @@ mod tests {
             entities: Vec::new(),
             marker: None,
             selection: None,
+            selected_indices: Vec::new(),
             tool: GizmoTool::Translate,
             space: CoordinateSpace::Global,
+            pivot_mode: PivotMode::Pivot,
             drag: None,
             paused: false,
             step_pending: false,
@@ -2482,7 +2771,7 @@ mod tests {
         let mut state = test_state("selection");
         let marker = state.marker.expect("标记实体应该已创建");
 
-        state.apply_selection(Some(1));
+        state.apply_selection(&[1]);
         let world = state.app.engine_mut().world_mut();
         assert!(world.get::<Gizmo>(marker).unwrap().enabled);
         let position = world
@@ -2494,7 +2783,7 @@ mod tests {
         assert!(position.length() < 1e-4, "标记应停在原点: {position:?}");
 
         // 文档被裁剪后再下发旧下标：当作没有选中，而不是让标记乱跑。
-        state.apply_selection(Some(99));
+        state.apply_selection(&[99]);
         let world = state.app.engine_mut().world_mut();
         assert!(!world.get::<Gizmo>(marker).unwrap().enabled);
         assert_eq!(state.selection, None);
@@ -2515,7 +2804,7 @@ mod tests {
     #[test]
     fn framing_selection_ignores_the_rest_of_the_document() {
         let mut state = test_state("frame-selection");
-        state.apply_selection(Some(1));
+        state.apply_selection(&[1]);
         let orbit = state
             .frame(FrameMode::Selection)
             .expect("选中项应该有包围盒");
@@ -2524,7 +2813,7 @@ mod tests {
         assert!(orbit.distance < 5.0, "{orbit:?}");
 
         // 没有选中项时什么也不做（调用方自己退回 All）。
-        state.apply_selection(None);
+        state.apply_selection(&[]);
         assert!(state.frame(FrameMode::Selection).is_none());
     }
 
@@ -2571,20 +2860,20 @@ mod tests {
     #[test]
     fn gizmo_hit_test_finds_the_axis_under_the_cursor() {
         let mut state = test_state("gizmo-hit");
-        state.apply_selection(Some(1));
+        state.apply_selection(&[1]);
         let (center, x_tip) = gizmo_screen_points(&mut state);
         assert_eq!(state.gizmo_axis_at(x_tip.x, x_tip.y), Some(Axis::X));
         // 远离任何一根轴：不抢实体的点选。
         assert_eq!(state.gizmo_axis_at(center.x + 60.0, center.y + 40.0), None);
         // 没有选中项时没有手柄。
-        state.apply_selection(None);
+        state.apply_selection(&[]);
         assert_eq!(state.gizmo_axis_at(x_tip.x, x_tip.y), None);
     }
 
     #[test]
     fn dragging_the_x_axis_moves_the_entity_along_world_x() {
         let mut state = test_state("gizmo-drag");
-        state.apply_selection(Some(1));
+        state.apply_selection(&[1]);
         let (center, _) = gizmo_screen_points(&mut state);
         let entity = state.entities[1];
 
@@ -2643,7 +2932,7 @@ mod tests {
         let mut state = test_state_from("gizmo-child", CHILD);
         state.orbit.target = [5.0, 0.0, 0.0];
         state.place_camera();
-        state.apply_selection(Some(1));
+        state.apply_selection(&[1]);
 
         let ctx = state.gizmo_context().unwrap();
         let center = gizmo::project(&ctx.view, ctx.fov, 200.0, 100.0, ctx.center).unwrap();
@@ -2673,7 +2962,7 @@ mod tests {
     #[test]
     fn dragging_provides_feedback_for_all_tools() {
         let mut state = test_state("drag-feedback");
-        state.apply_selection(Some(1));
+        state.apply_selection(&[1]);
         let (center, _) = gizmo_screen_points(&mut state);
 
         // 1. Translate feedback
@@ -2723,11 +3012,11 @@ mod tests {
         state.orbit.pitch = 0.5;
         state.orbit.distance = 10.0;
         state.place_camera();
-        state.apply_selection(Some(1));
+        state.apply_selection(&[1]);
 
         let ctx = state.gizmo_context().unwrap();
         // XZ 面中间点
-        let plane_center = ctx.center + Vec3::new(0.5, 0.0, 0.5);
+        let plane_center = ctx.center + Vec3::new(0.35, 0.0, 0.35);
         let screen_pt = gizmo::project(&ctx.view, ctx.fov, 200.0, 100.0, plane_center).unwrap();
 
         state
@@ -2748,7 +3037,7 @@ mod tests {
     #[test]
     fn dragging_with_snap_quantizes_transforms() {
         let mut state = test_state("drag-snap");
-        state.apply_selection(Some(1));
+        state.apply_selection(&[1]);
         let (center, _) = gizmo_screen_points(&mut state);
 
         // 1. Translate snap (snaps to integer meter)
@@ -2793,7 +3082,7 @@ mod tests {
         state.orbit.pitch = 0.5;
         state.orbit.distance = 10.0;
         state.place_camera();
-        state.apply_selection(Some(1));
+        state.apply_selection(&[1]);
 
         let ctx = state.gizmo_context().unwrap();
         let length = state.gizmo_length(&ctx);
@@ -2930,7 +3219,7 @@ mod tests {
     #[test]
     fn select_tool_disables_gizmo_marker_and_hit_testing() {
         let mut state = test_state("select-tool");
-        state.apply_selection(Some(1));
+        state.apply_selection(&[1]);
         state.tool = GizmoTool::Select;
         let ctx = state.gizmo_context().unwrap();
         let length = state.gizmo_length(&ctx);
@@ -2950,7 +3239,7 @@ mod tests {
     #[test]
     fn coordinate_space_local_orients_gizmo_with_entity() {
         let mut state = test_state("coord-space");
-        state.apply_selection(Some(1));
+        state.apply_selection(&[1]);
         // 将 entity 1 绕 Z 轴旋转 90 度
         let rot = glam::Quat::from_rotation_z(90.0_f32.to_radians());
         {
@@ -2978,7 +3267,7 @@ mod tests {
     #[test]
     fn selection_bounds_projects_corners_to_screen() {
         let mut state = test_state("selection-bounds");
-        state.apply_selection(Some(1));
+        state.apply_selection(&[1]);
         let bounds = state.selection_bounds(&[0, 1]);
         assert_eq!(bounds.len(), 2, "应返回选中的 2 个实体的包围盒");
 
@@ -2995,6 +3284,97 @@ mod tests {
         assert!(
             (center_x - 100.0).abs() < 1e-3,
             "包围盒中心 X 应在 100: {center_x}"
+        );
+    }
+
+    #[test]
+    fn multi_selection_moves_all_selected_entities_together() {
+        let mut state = test_state("multi-drag");
+        state.apply_selection(&[0, 1]);
+        assert_eq!(state.selected_indices, vec![0, 1]);
+
+        let (center, _) = gizmo_screen_points(&mut state);
+        state.begin_drag(Axis::X, center.x, center.y).unwrap();
+        let res = state
+            .drag_to(center.x + 30.0, center.y, false)
+            .expect("多选拖动应返回结果");
+
+        let updates = res.multi_updates.expect("多选应返回 multi_updates 批更新");
+        assert_eq!(updates.len(), 2, "应包含 2 个选中实体的更新");
+
+        let update0 = updates.iter().find(|u| u.index == 0).unwrap();
+        let update1 = updates.iter().find(|u| u.index == 1).unwrap();
+        let pos0 = update0.position.unwrap();
+        let pos1 = update1.position.unwrap();
+
+        assert!(pos0[0] > 0.5, "实体 0 应沿 +X 移动: {pos0:?}");
+        assert!(pos1[0] > 0.5, "实体 1 应沿 +X 移动: {pos1:?}");
+        assert!(
+            (pos0[0] - pos1[0]).abs() < 1e-3,
+            "平移下所有实体的位移增量应相同: pos0={pos0:?}, pos1={pos1:?}"
+        );
+
+        // 验证 ECS world 中两者的 LocalTransform 都跟手更新
+        let world = state.app.engine_mut().world_mut();
+        let e0_pos = world
+            .get::<LocalTransform>(state.entities[0])
+            .unwrap()
+            .position;
+        let e1_pos = world
+            .get::<LocalTransform>(state.entities[1])
+            .unwrap()
+            .position;
+        assert!((e0_pos.x - pos0[0]).abs() < 1e-4);
+        assert!((e1_pos.x - pos1[0]).abs() < 1e-4);
+    }
+
+    #[test]
+    fn pivot_vs_center_mode_positions_gizmo_correctly() {
+        let mut state = test_state("pivot-vs-center");
+        state.apply_selection(&[0, 1]);
+
+        // 1. Pivot 模式：gizmo 位于主选实体（index 1）锚点 (0, 0, 0)
+        state.pivot_mode = PivotMode::Pivot;
+        state.apply_selection(&[0, 1]);
+        let ctx_pivot = state.gizmo_context().unwrap();
+        assert!(
+            (ctx_pivot.center - Vec3::ZERO).length() < 1e-4,
+            "Pivot 模式应定位在 primary 实体锚点: {:?}",
+            ctx_pivot.center
+        );
+
+        // 2. Center 模式：gizmo 位于选区平均几何中心
+        // entity 0 在 (0,0,-20)，entity 1 在 (0,0,0) -> 中心为 (0,0,-10)
+        state.pivot_mode = PivotMode::Center;
+        state.apply_selection(&[0, 1]);
+        let ctx_center = state.gizmo_context().unwrap();
+        assert!(
+            (ctx_center.center.z - (-10.0)).abs() < 1e-3,
+            "Center 模式应定位在几何平均中心: {:?}",
+            ctx_center.center
+        );
+    }
+
+    #[test]
+    fn framing_selection_covers_all_selected_entities() {
+        let mut state = test_state("frame-multi-selection");
+        state.apply_selection(&[1]);
+        let orbit_single = state.frame(FrameMode::Selection).unwrap();
+
+        state.apply_selection(&[0, 1]);
+        let orbit_multi = state.frame(FrameMode::Selection).unwrap();
+
+        // 多选包含了 z = -5 的 entity 0，目标注视点应向 -Z 偏移，相机距离也应更大
+        assert!(
+            orbit_multi.target[2] < -1.0,
+            "多选取景目标应覆盖更远的实体: {:?}",
+            orbit_multi.target
+        );
+        assert!(
+            orbit_multi.distance > orbit_single.distance,
+            "多选包围盒更大，相机距离应拉大: multi={} vs single={}",
+            orbit_multi.distance,
+            orbit_single.distance
         );
     }
 }

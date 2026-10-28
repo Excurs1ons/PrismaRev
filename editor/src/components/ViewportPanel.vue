@@ -27,6 +27,8 @@ const props = defineProps<{
   activeTool?: "select" | "move" | "rotate" | "scale";
   /** 当前主工具栏选择的坐标系（Global vs Local）。 */
   activeSpace?: "global" | "local";
+  /** 当前主工具栏选择的轴心模式（Pivot vs Center）。 */
+  activePivot?: "pivot" | "center";
   /** Game view 的 Play 状态（由工具栏统一控制）。 */
   playing?: boolean;
   /** Game view 是否暂停（由工具栏控制，暂停时仍渲染）。 */
@@ -41,12 +43,12 @@ const emit = defineEmits<{
   (event: "select", index: number | null): void;
   /** Shift / Ctrl 多选：批量更新选中项。 */
   (event: "select-multiple", indices: number[]): void;
-  /** 拖动平移手柄后的新局部位置 `[x, y, z]`。 */
-  (event: "move", position: [number, number, number]): void;
-  /** 拖动旋转圆环后的新局部四元数 `[x, y, z, w]`。 */
-  (event: "rotate", rotation: [number, number, number, number]): void;
-  /** 拖动缩放手柄后的新局部缩放 `[x, y, z]`。 */
-  (event: "scale", scale: [number, number, number]): void;
+  /** 拖动平移手柄后的新局部位置 `[x, y, z]` 与多选批更新。 */
+  (event: "move", position: [number, number, number], multiUpdates?: api.EntityTransformUpdate[]): void;
+  /** 拖动旋转圆环后的新局部四元数 `[x, y, z, w]` 与多选批更新。 */
+  (event: "rotate", rotation: [number, number, number, number], multiUpdates?: api.EntityTransformUpdate[]): void;
+  /** 拖动缩放手柄后的新局部缩放 `[x, y, z]` 与多选批更新。 */
+  (event: "scale", scale: [number, number, number], multiUpdates?: api.EntityTransformUpdate[]): void;
   /** Game view：暂停 / 继续 Play。 */
   (event: "toggle-pause"): void;
   /** Game view：暂停中前进一帧。 */
@@ -141,6 +143,9 @@ async function open() {
     }
     if (props.activeSpace && isScene.value) {
       void api.viewportSetSpace(viewId, props.activeSpace).catch(() => undefined);
+    }
+    if (props.activePivot && isScene.value) {
+      void api.viewportSetPivot(viewId, props.activePivot).catch(() => undefined);
     }
     // 第一帧到达时 drawFrame 才切到 live：渲染器还在建管线时先保留 loading 浮层，
     // 否则会先闪一段黑屏。
@@ -749,9 +754,9 @@ function pushDrag(point: { x: number; y: number }, snap: boolean) {
       .viewportDrag(viewId, target.x, target.y, target.snap)
       .then((res) => {
         if (!res) return;
-        if (res.position) emit("move", res.position);
-        if (res.rotation) emit("rotate", res.rotation);
-        if (res.scale) emit("scale", res.scale);
+        if (res.position) emit("move", res.position, res.multiUpdates);
+        if (res.rotation) emit("rotate", res.rotation, res.multiUpdates);
+        if (res.scale) emit("scale", res.scale, res.multiUpdates);
         if (res.feedback) dragFeedback.value = res.feedback;
         scheduleFetchSelectionBounds();
         // 拖动期间文档在变，但重载会换掉 ECS 句柄：等松手再同步。
@@ -913,7 +918,9 @@ function primarySelection(): number | null {
 function pushSelection() {
   scheduleFetchSelectionBounds();
   if (!inTauri || !channel || !isScene.value) return;
-  void api.viewportSelect(viewId, primarySelection()).catch(() => undefined);
+  void api
+    .viewportSelect(viewId, primarySelection(), props.selection)
+    .catch(() => undefined);
 }
 
 function onWheel(event: WheelEvent) {
@@ -1052,6 +1059,13 @@ watch(
   (space) => {
     if (!inTauri || !channel || !space || !isScene.value) return;
     void api.viewportSetSpace(viewId, space).catch(() => undefined);
+  },
+);
+watch(
+  () => props.activePivot,
+  (pivot) => {
+    if (!inTauri || !channel || !pivot || !isScene.value) return;
+    void api.viewportSetPivot(viewId, pivot).catch(() => undefined);
   },
 );
 watch(
