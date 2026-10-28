@@ -74,6 +74,21 @@ function startResize(event: PointerEvent) {
   document.body.style.userSelect = "none";
 }
 
+function onTabsWheel(event: WheelEvent) {
+  const target = event.currentTarget as HTMLElement | null;
+  if (!target) return;
+  if (Math.abs(event.deltaY) > Math.abs(event.deltaX)) {
+    target.scrollLeft += event.deltaY;
+  }
+}
+
+function onTabAuxClick(tab: string, event: MouseEvent) {
+  if (event.button === 1) {
+    event.preventDefault();
+    ctx.close(tab);
+  }
+}
+
 onUnmounted(() => endResize?.());
 
 </script>
@@ -108,7 +123,11 @@ onUnmounted(() => endResize?.());
   </div>
 
   <div v-else class="dock-leaf" :data-leaf-id="node.id">
-    <div class="dock-tabs">
+    <div
+      class="dock-tabs"
+      :class="{ 'dock-tabs-inserting': hoverZone === 'center' && hoverTargetIndex !== undefined }"
+      @wheel.passive="onTabsWheel"
+    >
       <template v-for="(tab, idx) in node.tabs" :key="tab">
         <div
           v-if="hoverZone === 'center' && hoverTargetIndex === idx"
@@ -116,9 +135,13 @@ onUnmounted(() => endResize?.());
         />
         <div
           class="dock-tab"
-          :class="{ active: tab === node.active }"
-          :title="`${ctx.titleOf(tab)}（拖动可停靠；按住 Alt 拖出为浮动窗口）`"
+          :class="{
+            active: tab === node.active,
+            dragging: tab === ctx.dragPanel.value,
+          }"
+          :title="`${ctx.titleOf(tab)}（拖动可停靠；按住 Alt 拖出为浮动窗口；鼠标中键关闭）`"
           @click="ctx.select(node.id, tab)"
+          @auxclick.stop="onTabAuxClick(tab, $event)"
           @pointerdown="ctx.startDrag(tab, $event)"
         >
           <span class="dock-tab-title">{{ ctx.titleOf(tab) }}</span>
@@ -149,7 +172,11 @@ onUnmounted(() => endResize?.());
       </div>
     </div>
 
-    <div v-if="hoverZone" class="dock-drop" :class="`zone-${hoverZone}`">
+    <div
+      v-if="hoverZone && hoverTargetIndex === undefined"
+      class="dock-drop"
+      :class="`zone-${hoverZone}`"
+    >
       <span>{{ hoverZone === "center" ? "合并为标签页" : "停靠" }}</span>
     </div>
   </div>

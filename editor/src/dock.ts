@@ -238,7 +238,7 @@ export function insertPanel(
   targetLeafId: string,
   tab: string,
   zone: DockZone,
-  ratio = 0.3,
+  ratio = 0.5,
   targetIndex?: number,
 ): DockNode {
   const target = findLeafById(root, targetLeafId);
@@ -247,11 +247,17 @@ export function insertPanel(
   if (zone === "center") {
     if (target.tabs.includes(tab)) {
       // 在同一 leaf 内部拖拽标签页：支持重新排序
+      const currentIndex = target.tabs.indexOf(tab);
       const filtered = target.tabs.filter((item) => item !== tab);
-      const insertAt =
-        targetIndex !== undefined
-          ? Math.max(0, Math.min(targetIndex, filtered.length))
-          : filtered.length;
+      let insertAt: number;
+      if (targetIndex !== undefined) {
+        // 当从左向右拖拽跨越标签时，原 targetIndex 位于移除项之后；
+        // 在 filtered 列表中需要减 1 才能精确对齐视觉插入标记。
+        const adjusted = targetIndex > currentIndex ? targetIndex - 1 : targetIndex;
+        insertAt = Math.max(0, Math.min(adjusted, filtered.length));
+      } else {
+        insertAt = filtered.length;
+      }
       filtered.splice(insertAt, 0, tab);
       return replaceLeaf(root, targetLeafId, {
         ...target,
