@@ -761,8 +761,9 @@ export function viewportDrag(
   id: string,
   x: number,
   y: number,
+  snap = false,
 ): Promise<DragTransformResult | null> {
-  return call<DragTransformResult | null>("editor_viewport_drag", { id, x, y });
+  return call<DragTransformResult | null>("editor_viewport_drag", { id, x, y, snap });
 }
 
 /** 结束拖动。 */

@@ -2336,6 +2336,7 @@ onUnmounted(() => {
             :selection="selection"
             :active-tool="activeTool"
             @select="onViewportSelect"
+            @select-multiple="onSelect"
             @move="onViewportMove"
             @rotate="onViewportRotate"
             @scale="onViewportScale"

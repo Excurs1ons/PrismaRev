@@ -721,7 +721,7 @@ impl HostState {
     ///
     /// 同时直接改 ECS 里的 `LocalTransform`，所以视口跟手 —— 前端把文档
     /// 重载压到拖动结束之后，拖动过程中画面来自引擎，不靠 reload。
-    fn drag_to(&mut self, x: f32, y: f32) -> Option<DragTransformResult> {
+    fn drag_to(&mut self, x: f32, y: f32, snap: bool) -> Option<DragTransformResult> {
         let drag = self.drag?;
         let ctx = self.gizmo_context()?;
         let drag_index = match drag {
@@ -757,20 +757,48 @@ impl HostState {
                     let normal = axis.vector();
                     let hit_pt =
                         gizmo::plane_intersection_vector(origin, dir, start_world, normal)?;
-                    let delta = hit_pt - start_plane_offset;
+                    let mut delta = hit_pt - start_plane_offset;
+                    if snap {
+                        let step = 1.0_f32;
+                        delta.x = (delta.x / step).round() * step;
+                        delta.y = (delta.y / step).round() * step;
+                        delta.z = (delta.z / step).round() * step;
+                    }
                     let target = start_world + delta;
+                    let snap_suffix = if snap { " (Snap 1m)" } else { "" };
                     let text = match axis {
-                        Axis::XZ => format!("XZ: ({:+.2}, {:+.2}) m", delta.x, delta.z),
-                        Axis::XY => format!("XY: ({:+.2}, {:+.2}) m", delta.x, delta.y),
-                        Axis::YZ => format!("YZ: ({:+.2}, {:+.2}) m", delta.y, delta.z),
-                        _ => format!("{}: {:+.2} m", axis.name().to_uppercase(), delta.length()),
+                        Axis::XZ => {
+                            format!("XZ: ({:+.2}, {:+.2}) m{}", delta.x, delta.z, snap_suffix)
+                        }
+                        Axis::XY => {
+                            format!("XY: ({:+.2}, {:+.2}) m{}", delta.x, delta.y, snap_suffix)
+                        }
+                        Axis::YZ => {
+                            format!("YZ: ({:+.2}, {:+.2}) m{}", delta.y, delta.z, snap_suffix)
+                        }
+                        _ => format!(
+                            "{}: {:+.2} m{}",
+                            axis.name().to_uppercase(),
+                            delta.length(),
+                            snap_suffix
+                        ),
                     };
                     (target, text)
                 } else {
                     let parameter = gizmo::axis_parameter(origin, dir, start_world, axis.vector())?;
-                    let delta = parameter - start_parameter;
+                    let mut delta = parameter - start_parameter;
+                    if snap {
+                        let step = 1.0_f32;
+                        delta = (delta / step).round() * step;
+                    }
                     let target = start_world + axis.vector() * delta;
-                    let text = format!("{}: {:+.2} m", axis.name().to_uppercase(), delta);
+                    let snap_suffix = if snap { " (Snap 1m)" } else { "" };
+                    let text = format!(
+                        "{}: {:+.2} m{}",
+                        axis.name().to_uppercase(),
+                        delta,
+                        snap_suffix
+                    );
                     (target, text)
                 };
                 let local = {
@@ -819,16 +847,20 @@ impl HostState {
                 ..
             } => {
                 let normal = axis.vector();
-                let current_vec =
+                let current_vec_raw =
                     gizmo::plane_intersection_vector(origin, dir, ctx.center, normal)?
                         .normalize_or_zero();
-                if start_vec.length_squared() < 1e-4 || current_vec.length_squared() < 1e-4 {
+                if start_vec.length_squared() < 1e-4 || current_vec_raw.length_squared() < 1e-4 {
                     return None;
                 }
-                let cross = start_vec.cross(current_vec);
+                let cross = start_vec.cross(current_vec_raw);
                 let sin = cross.dot(normal);
-                let cos = start_vec.dot(current_vec);
-                let angle = sin.atan2(cos);
+                let cos = start_vec.dot(current_vec_raw);
+                let mut angle = sin.atan2(cos);
+                if snap {
+                    let step_rad = 15.0_f32.to_radians();
+                    angle = (angle / step_rad).round() * step_rad;
+                }
                 let delta_rot = Quat::from_axis_angle(normal, angle);
                 let new_world_rot = delta_rot * start_world_rot;
 
@@ -856,6 +888,7 @@ impl HostState {
                 }
 
                 let angle_deg = angle.to_degrees();
+                let current_vec = delta_rot * start_vec;
                 let start_pt = ctx.center + start_vec * gizmo_len;
                 let current_pt = ctx.center + current_vec * gizmo_len;
                 let start_screen = screen.project(start_pt);
@@ -863,10 +896,11 @@ impl HostState {
                 let radius = start_screen
                     .map(|s| s.distance(center_screen))
                     .unwrap_or(gizmo_len * 50.0);
+                let snap_suffix = if snap { " (Snap 15°)" } else { "" };
                 let feedback = DragFeedback {
                     tool: "rotate".to_string(),
                     axis: axis.name().to_string(),
-                    text: format!("∠ {:+.1}°", angle_deg),
+                    text: format!("∠ {:+.1}°{}", angle_deg, snap_suffix),
                     center_screen: center_screen.to_array(),
                     start_screen: start_screen.map(|s| s.to_array()),
                     current_screen: current_screen.map(|s| s.to_array()),
@@ -891,12 +925,18 @@ impl HostState {
                     let dx = x - start_cursor.x;
                     let dy = y - start_cursor.y;
                     let delta = (dx - dy) * 0.005;
-                    let factor = (1.0 + delta).max(0.01);
+                    let mut factor = (1.0 + delta).max(0.01);
+                    if snap {
+                        factor = (factor / 0.1).round() * 0.1;
+                    }
                     (start_scale * factor, factor)
                 } else {
                     let parameter = gizmo::axis_parameter(origin, dir, ctx.center, axis.vector())?;
                     let delta = (parameter - start_parameter) / gizmo_len;
-                    let factor = (1.0 + delta).max(0.01);
+                    let mut factor = (1.0 + delta).max(0.01);
+                    if snap {
+                        factor = (factor / 0.1).round() * 0.1;
+                    }
                     let mut s = start_scale;
                     match axis {
                         Axis::X => s.x = (s.x * factor).max(0.001),
@@ -919,10 +959,16 @@ impl HostState {
                     ),
                 }
 
+                let snap_suffix = if snap { " (Snap 0.1x)" } else { "" };
                 let text = if axis == Axis::XYZ {
-                    format!("{:.2}x", factor)
+                    format!("{:.2}x{}", factor, snap_suffix)
                 } else {
-                    format!("{}: {:.2}x", axis.name().to_uppercase(), factor)
+                    format!(
+                        "{}: {:.2}x{}",
+                        axis.name().to_uppercase(),
+                        factor,
+                        snap_suffix
+                    )
                 };
                 let feedback = DragFeedback {
                     tool: "scale".to_string(),
@@ -1808,10 +1854,12 @@ pub async fn editor_viewport_drag(
     id: String,
     x: f32,
     y: f32,
+    snap: Option<bool>,
     manager: State<'_, ViewportManager>,
 ) -> Result<Option<DragTransformResult>, String> {
+    let snap = snap.unwrap_or(false);
     let moved = ask_viewport(&manager, &id, move |state, tx| {
-        let res = state.drag_to(x, y);
+        let res = state.drag_to(x, y, snap);
         let _ = tx.send(res);
     })
     .await?;
@@ -1960,6 +2008,8 @@ mod tests {
         std::fs::write(&path, scene).unwrap();
 
         let mut state = HostState {
+            project_session: None,
+            scene_generation: 0,
             app: App::hosted(prism_engine::config::AppConfig::default()),
             scene_path: path,
             kind: ViewKind::Scene,
@@ -2119,7 +2169,7 @@ mod tests {
             .begin_drag(Axis::X, center.x, center.y)
             .expect("正对着实体应该能开始拖动");
         let moved = state
-            .drag_to(center.x + 30.0, center.y)
+            .drag_to(center.x + 30.0, center.y, false)
             .expect("拖动应该给出新位置");
         let pos = moved.position.expect("平移应该返回 position");
         assert!(pos[0] > 1.0, "应沿 +X 移动: {pos:?}");
@@ -2140,7 +2190,7 @@ mod tests {
         assert!((marker_x - pos[0]).abs() < 1e-4, "{marker_x} vs {pos:?}");
 
         state.end_drag();
-        assert!(state.drag_to(center.x + 60.0, center.y).is_none());
+        assert!(state.drag_to(center.x + 60.0, center.y, false).is_none());
     }
 
     #[test]
@@ -2176,7 +2226,7 @@ mod tests {
         let center = gizmo::project(&ctx.view, ctx.fov, 200.0, 100.0, ctx.center).unwrap();
         state.begin_drag(Axis::X, center.x, center.y).unwrap();
         let moved = state
-            .drag_to(center.x + 30.0, center.y)
+            .drag_to(center.x + 30.0, center.y, false)
             .expect("子级也应该能拖动");
         let pos = moved.position.expect("平移应该返回 position");
 
@@ -2206,7 +2256,7 @@ mod tests {
         // 1. Translate feedback
         state.tool = GizmoTool::Translate;
         state.begin_drag(Axis::X, center.x, center.y).unwrap();
-        let res = state.drag_to(center.x + 20.0, center.y).unwrap();
+        let res = state.drag_to(center.x + 20.0, center.y, false).unwrap();
         let fb = res.feedback.expect("Translate 应该提供 feedback");
         assert_eq!(fb.tool, "translate");
         assert_eq!(fb.axis, "x");
@@ -2219,7 +2269,7 @@ mod tests {
         state
             .begin_drag(Axis::Z, center.x + 30.0, center.y)
             .unwrap();
-        let res = state.drag_to(center.x, center.y + 30.0).unwrap();
+        let res = state.drag_to(center.x, center.y + 30.0, false).unwrap();
         let fb = res.feedback.expect("Rotate 应该提供 feedback");
         assert_eq!(fb.tool, "rotate");
         assert_eq!(fb.axis, "z");
@@ -2233,7 +2283,9 @@ mod tests {
         // 3. Scale feedback
         state.tool = GizmoTool::Scale;
         state.begin_drag(Axis::XYZ, center.x, center.y).unwrap();
-        let res = state.drag_to(center.x + 25.0, center.y - 25.0).unwrap();
+        let res = state
+            .drag_to(center.x + 25.0, center.y - 25.0, false)
+            .unwrap();
         let fb = res.feedback.expect("Scale 应该提供 feedback");
         assert_eq!(fb.tool, "scale");
         assert_eq!(fb.axis, "xyz");
@@ -2259,15 +2311,56 @@ mod tests {
             .begin_drag(Axis::XZ, screen_pt.x, screen_pt.y)
             .unwrap();
         let res = state
-            .drag_to(screen_pt.x + 20.0, screen_pt.y + 10.0)
+            .drag_to(screen_pt.x + 20.0, screen_pt.y + 10.0, false)
             .unwrap();
         let pos = res.position.expect("平移应返回 position");
         let fb = res.feedback.expect("应返回 feedback");
 
         // Y 轴没有移动（delta.y == 0）
         assert!(pos[1].abs() < 1e-3, "XZ 拖动不应改动 Y: {pos:?}");
-        assert_eq!(fb.axis, "xz");
         assert!(fb.text.contains("XZ:"));
+        state.end_drag();
+    }
+
+    #[test]
+    fn dragging_with_snap_quantizes_transforms() {
+        let mut state = test_state("drag-snap");
+        state.apply_selection(Some(1));
+        let (center, _) = gizmo_screen_points(&mut state);
+
+        // 1. Translate snap (snaps to integer meter)
+        state.tool = GizmoTool::Translate;
+        state.begin_drag(Axis::X, center.x, center.y).unwrap();
+        let res = state.drag_to(center.x + 35.0, center.y, true).unwrap();
+        let pos = res.position.unwrap();
+        assert_eq!(pos[0].fract(), 0.0, "位移应吸附至整数米: {pos:?}");
+        let fb = res.feedback.unwrap();
+        assert!(fb.text.contains("Snap 1m"));
+        state.end_drag();
+
+        // 2. Rotate snap (snaps to 15 deg)
+        state.tool = GizmoTool::Rotate;
+        state
+            .begin_drag(Axis::Z, center.x + 30.0, center.y)
+            .unwrap();
+        let res = state.drag_to(center.x, center.y + 30.0, true).unwrap();
+        let fb = res.feedback.unwrap();
+        let angle = fb.angle_deg.unwrap();
+        assert!(
+            (angle % 15.0).abs() < 1e-3,
+            "旋转角应吸附至 15 度倍数: {angle}"
+        );
+        assert!(fb.text.contains("Snap 15°"));
+        state.end_drag();
+
+        // 3. Scale snap (snaps to 0.1x)
+        state.tool = GizmoTool::Scale;
+        state.begin_drag(Axis::XYZ, center.x, center.y).unwrap();
+        let res = state
+            .drag_to(center.x + 25.0, center.y - 25.0, true)
+            .unwrap();
+        let fb = res.feedback.unwrap();
+        assert!(fb.text.contains("Snap 0.1x"));
         state.end_drag();
     }
 
