@@ -364,6 +364,7 @@ fn render_one_frame(
         clear_color: scene.clear_color,
         shadows_enabled: scene.shadows_enabled,
         ui_overlay: Some(&packet.ui_overlay),
+        show_grid: settings.show_grid,
     };
 
     let ctx = match renderer.begin_frame()? {

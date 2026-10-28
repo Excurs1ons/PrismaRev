@@ -48,6 +48,7 @@ pub mod forward_pass;
 pub mod gi;
 pub mod gizmo;
 pub mod graph_renderer;
+pub mod ground_grid;
 pub mod gtao;
 pub mod hdr;
 pub mod ibl;
@@ -98,6 +99,7 @@ pub use gi::{
 };
 pub use gizmo::{Gizmo, GizmoInstance};
 pub use graph_renderer::{FrameCtx, FrameInput, GraphRenderer};
+pub use ground_grid::GroundGrid;
 pub use gtao::{GtaoFrameInputs, GtaoPass};
 pub use mesh::{Mesh, Vertex};
 pub use pipeline::GraphicsPipeline;

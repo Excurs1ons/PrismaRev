@@ -1131,6 +1131,9 @@ fn viewport_thread(
         paused: false,
         step_pending: false,
     };
+    if kind == ViewKind::Scene {
+        state.app.render_settings_mut().show_grid = true;
+    }
 
     match state.reload() {
         Ok(count) => *shared.entities.lock().unwrap() = count,
@@ -1686,6 +1689,25 @@ pub async fn editor_viewport_gizmo_hover(
     })
     .await?;
     Ok(hover.flatten())
+}
+
+/// 切换视口地面参考网格的显隐。
+#[tauri::command]
+pub fn editor_viewport_set_grid(
+    id: String,
+    enabled: bool,
+    manager: State<'_, ViewportManager>,
+) -> Result<(), String> {
+    let views = manager
+        .views
+        .lock()
+        .map_err(|_| "视口状态锁失败".to_string())?;
+    if let Some(handle) = views.get(&id) {
+        let _ = handle.tx.send(Box::new(move |state: &mut HostState| {
+            state.app.render_settings_mut().show_grid = enabled;
+        }));
+    }
+    Ok(())
 }
 
 /// 开始拖动选中实体的某根轴（`axis` = `"x"` / `"y"` / `"z"`）。
@@ -2292,5 +2314,20 @@ mod tests {
         state.place_camera();
         let eye_bottom = get_eye(&mut state);
         assert!(eye_bottom.y < -9.0, "{eye_bottom:?}");
+    }
+
+    #[test]
+    fn viewport_grid_setting_toggles_render_settings() {
+        let mut state = test_state("grid-toggle");
+        // Default in hosted test_state is false
+        assert!(!state.app.render_settings_mut().show_grid);
+
+        // Turn on
+        state.app.render_settings_mut().show_grid = true;
+        assert!(state.app.render_settings_mut().show_grid);
+
+        // Turn off
+        state.app.render_settings_mut().show_grid = false;
+        assert!(!state.app.render_settings_mut().show_grid);
     }
 }
