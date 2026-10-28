@@ -57,6 +57,23 @@ impl IntroState {
     }
 }
 
+/// 检查缓存的场景实体句柄是否仍属于当前场景。
+fn state_is_valid(world: &World, state: &IntroState) -> bool {
+    let entities = [
+        state.overlay_entity,
+        state.title_entity,
+        state.subtitle_entity,
+        state.prompt_entity,
+    ];
+    entities.iter().all(|&entity| world.is_alive(entity))
+        && world.get::<Style>(state.overlay_entity).is_some()
+        && world.get::<Style>(state.title_entity).is_some()
+        && world.get::<Style>(state.subtitle_entity).is_some()
+        && world.get::<Text>(state.title_entity).is_some()
+        && world.get::<Text>(state.subtitle_entity).is_some()
+        && world.get::<Text>(state.prompt_entity).is_some()
+}
+
 /// 在第一帧按 Name 查找场景实体，构造 IntroState。
 fn initialize_intro(world: &mut World) -> Option<IntroState> {
     let mut entities: std::collections::HashMap<&str, Entity> = std::collections::HashMap::new();
@@ -131,6 +148,13 @@ fn should_skip(input: &UiInputState) -> bool {
 /// 第一帧按 `Name` 组件查找实体并创建 [`IntroState`] 作为 ECS resource。
 /// 跳过检测读 [`UiInputState`]（引擎每帧插入的输入快照）——任意键或点击。
 pub fn tick(world: &mut World, dt: f32) {
+    if world
+        .get_resource::<IntroState>()
+        .is_some_and(|state| !state_is_valid(world, state))
+    {
+        world.remove_resource::<IntroState>();
+    }
+
     // 1. 惰性初始化：第一帧按 Name 查找实体。
     if world.get_resource::<IntroState>().is_none() {
         if let Some(state) = initialize_intro(world) {
@@ -230,9 +254,14 @@ pub fn tick(world: &mut World, dt: f32) {
 
 #[cfg(test)]
 mod tests {
-    use super::should_skip;
+    use super::{
+        initialize_intro, should_skip, state_is_valid, ENTITY_OVERLAY, ENTITY_PROMPT,
+        ENTITY_SUBTITLE, ENTITY_TITLE,
+    };
     use prism_engine::input::KeyCode;
-    use prism_engine::ui::UiInputState;
+    use prism_engine::scene::components::Name;
+    use prism_engine::ui::{Text, UiInputState};
+    use prism_engine::{ecs::World, ui::Style};
 
     fn input(keys: &[KeyCode], clicked: bool) -> UiInputState {
         UiInputState {
@@ -258,5 +287,24 @@ mod tests {
     #[test]
     fn idle_input_does_not_skip() {
         assert!(!should_skip(&input(&[], false)));
+    }
+
+    #[test]
+    fn cached_intro_handles_are_invalidated_after_scene_entities_are_replaced() {
+        let mut world = World::new();
+        let names = [ENTITY_OVERLAY, ENTITY_TITLE, ENTITY_SUBTITLE, ENTITY_PROMPT];
+        for name in names {
+            let entity = world.spawn();
+            world.insert(entity, Name(name.to_owned()));
+            world.insert(entity, Style::default());
+            if name != ENTITY_OVERLAY {
+                world.insert(entity, Text::default());
+            }
+        }
+        let state = initialize_intro(&mut world).expect("scene entities should bind");
+        assert!(state_is_valid(&world, &state));
+
+        world.despawn(state.title_entity);
+        assert!(!state_is_valid(&world, &state));
     }
 }

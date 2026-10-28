@@ -40,6 +40,7 @@ pub type LogMessage = unsafe extern "C" fn(
 pub struct HostApi {
     pub abi_version: u32,
     pub capabilities: u64,
+    pub scene_generation: u64,
     pub user_data: *mut core::ffi::c_void,
     pub log: Option<LogMessage>,
     pub spawn_entity: Option<SpawnEntity>,
@@ -51,6 +52,7 @@ impl HostApi {
         Self {
             abi_version: ABI_VERSION,
             capabilities: HOST_CAP_LOGGING,
+            scene_generation: 0,
             user_data: core::ptr::null_mut(),
             log: None,
             spawn_entity: None,

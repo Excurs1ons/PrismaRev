@@ -43,7 +43,7 @@ pub unsafe extern "C" fn prism_project_get_api(out: *mut prism_project_api::Proj
 #[cfg(not(target_os = "android"))]
 struct PreviewState {
     ticks: u64,
-    spawned: bool,
+    scene_generation: Option<u64>,
 }
 
 #[cfg(not(target_os = "android"))]
@@ -60,7 +60,7 @@ unsafe extern "C" fn preview_create(
     }
     let state = Box::new(PreviewState {
         ticks: 0,
-        spawned: false,
+        scene_generation: None,
     });
     unsafe { *out = Box::into_raw(state).cast() };
     if let Some(log) = host.log {
@@ -84,7 +84,7 @@ unsafe extern "C" fn preview_tick(
         return prism_project_api::INVALID_ARGUMENT;
     }
     let host = unsafe { &*host_api };
-    if !state.spawned {
+    if state.scene_generation != Some(host.scene_generation) {
         let Some(spawn_entity) = host.spawn_entity else {
             return prism_project_api::REGISTRATION_FAILED;
         };
@@ -101,7 +101,7 @@ unsafe extern "C" fn preview_tick(
         {
             return prism_project_api::REGISTRATION_FAILED;
         }
-        state.spawned = true;
+        state.scene_generation = Some(host.scene_generation);
     }
     if state.ticks == 1 {
         if let Some(log) = host.log {

@@ -43,17 +43,22 @@ pub enum ProjectModuleError {
 
 pub struct WorldCommands {
     world: *mut prism_ecs::World,
+    scene_generation: u64,
 }
 
 impl WorldCommands {
-    pub fn new(world: &mut prism_ecs::World) -> Self {
-        Self { world }
+    pub fn new(world: &mut prism_ecs::World, scene_generation: u64) -> Self {
+        Self {
+            world,
+            scene_generation,
+        }
     }
 
     pub fn api(&mut self) -> HostApi {
         HostApi {
             abi_version: ABI_VERSION,
             capabilities: HOST_CAP_LOGGING | prism_project_api::HOST_CAP_WORLD_COMMANDS,
+            scene_generation: self.scene_generation,
             user_data: self.world.cast(),
             log: Some(host_log),
             spawn_entity: Some(host_spawn_entity),
@@ -224,7 +229,11 @@ unsafe extern "C" fn host_log(
     if message.is_null() {
         return;
     }
-    let bytes = unsafe { std::slice::from_raw_parts(message, message_len) };
+    let bytes = if message_len == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(message, message_len) }
+    };
     let text = String::from_utf8_lossy(bytes);
     match level {
         0 => log::error!("project: {text}"),
@@ -263,7 +272,7 @@ mod tests {
         let module = ProjectModule::load(path).expect("project module should load");
         let mut session = module.start().expect("project session should start");
         let mut world = prism_ecs::World::new();
-        let mut commands = WorldCommands::new(&mut world);
+        let mut commands = WorldCommands::new(&mut world, 1);
         let host = commands.api();
         session
             .tick(&host, 1.0 / 60.0)
@@ -273,7 +282,7 @@ mod tests {
     #[test]
     fn world_commands_spawn_and_name_entities_through_opaque_handles() {
         let mut world = prism_ecs::World::new();
-        let mut commands = WorldCommands::new(&mut world);
+        let mut commands = WorldCommands::new(&mut world, 1);
         let api = commands.api();
         assert_ne!(
             api.capabilities & prism_project_api::HOST_CAP_WORLD_COMMANDS,

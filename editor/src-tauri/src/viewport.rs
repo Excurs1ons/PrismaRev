@@ -189,6 +189,7 @@ struct HostState {
     /// Declared before `app` so Rust drops the project session first. Project
     /// callbacks must be gone before the engine host is torn down.
     project_session: Option<prism_runtime_host::ProjectSession>,
+    scene_generation: u64,
     app: App,
     scene_path: PathBuf,
     kind: ViewKind,
@@ -327,6 +328,7 @@ impl HostState {
     /// 重新加载场景；编辑器相机、轨道参数与选中项保留。
     fn reload(&mut self) -> Result<usize, String> {
         let entities = self.app.load_scene_json_file(&self.scene_path)?;
+        self.scene_generation = self.scene_generation.wrapping_add(1).max(1);
         let count = entities.len();
         self.entities = entities;
         // 加载器只保证「根实体」的 LocalToWorld；子级要等第一次
@@ -996,6 +998,7 @@ fn viewport_thread(
     };
     let mut state = HostState {
         project_session,
+        scene_generation: 0,
         app: App::hosted(prism_engine::config::AppConfig::default()),
         scene_path,
         kind,
@@ -1043,8 +1046,10 @@ fn viewport_thread(
             let simulate = state.simulate_now();
             if simulate {
                 if let Some(project) = state.project_session.as_mut() {
-                    let mut commands =
-                        prism_runtime_host::WorldCommands::new(state.app.engine_mut().world_mut());
+                    let mut commands = prism_runtime_host::WorldCommands::new(
+                        state.app.engine_mut().world_mut(),
+                        state.scene_generation,
+                    );
                     let host = commands.api();
                     if let Err(error) = project.tick(&host, frame_budget.as_secs_f32()) {
                         log::warn!("viewport: project preview tick failed: {error}");
