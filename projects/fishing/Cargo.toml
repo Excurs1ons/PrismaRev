@@ -14,6 +14,8 @@ crate-type = ["lib", "cdylib"]
 [dependencies]
 prism-app = { path = "../../crates/prism-app" }
 prism-engine = { path = "../../crates/prism-engine" }
+prism-game-api = { path = "../../crates/prism-game-api" }
+prism-scene = { path = "../../crates/prism-scene" }
 log = "0.4"
 glam = "0.33.2"
 serde = { version = "1", features = ["derive"] }

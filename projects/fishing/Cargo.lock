@@ -1194,6 +1194,8 @@ dependencies = [
  "log",
  "prism-app",
  "prism-engine",
+ "prism-game-api",
+ "prism-scene",
  "serde",
  "serde_json",
 ]
@@ -2533,6 +2535,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "prism-game-api"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "prism-ecs",
+ "prism-engine",
+ "prism-project-api",
+ "prism-reflect",
+]
+
+[[package]]
 name = "prism-gfx"
 version = "0.1.0"
 dependencies = [
@@ -2551,6 +2564,10 @@ dependencies = [
  "raw-window-handle",
  "winit",
 ]
+
+[[package]]
+name = "prism-project-api"
+version = "0.1.0"
 
 [[package]]
 name = "prism-reflect"

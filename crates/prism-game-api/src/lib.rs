@@ -114,6 +114,68 @@ impl<'a> GameWorld<'a> {
         self.input().screen
     }
 
+    /// 让宿主重新解析该实体的精灵贴图（改过 `SpriteRenderer::sprite_path`
+    /// 之后必须调用）。`SpriteRef` 是引擎内部的资产解析协议，不应该出现在
+    /// 用户项目里；插件后端会在资产能力位接好后走同一条实现。
+    pub fn refresh_sprite(&mut self, entity: EntityHandle) {
+        match &mut self.backend {
+            #[cfg(feature = "host")]
+            Backend::Host(world) => {
+                use prism_engine::scene::components::{SceneAssetId, SpriteRef};
+                let entity = entity_from_handle(entity);
+                let mut sprite = world
+                    .get::<SpriteRef>(entity)
+                    .cloned()
+                    .unwrap_or(SpriteRef {
+                        asset_id: SceneAssetId::generate(),
+                        texture_slot: 0,
+                        size: [0, 0],
+                        generation: 0,
+                    });
+                sprite.generation = 0;
+                world.insert(entity, sprite);
+            }
+            #[cfg(feature = "plugin")]
+            Backend::Plugin(_) => {}
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // 资产（松散文件；`.pak` 内容仍由运行时资源包负责）
+    // ------------------------------------------------------------------
+
+    /// 松散资产是否存在（关卡 JSON、按时段回落的贴图等）。
+    ///
+    /// 插件后端还没有资产能力位，因此模块里恒为 `false`：需要资产的逻辑
+    /// 目前只在静态 Player 里跑。
+    pub fn asset_exists(&self, relative: &str) -> bool {
+        match &self.backend {
+            #[cfg(feature = "host")]
+            Backend::Host(_) => prism_engine::asset_paths::asset_exists(relative),
+            #[cfg(feature = "plugin")]
+            Backend::Plugin(_) => {
+                let _ = relative;
+                false
+            }
+        }
+    }
+
+    /// 读取松散文本资产。
+    pub fn read_asset_text(&self, relative: &str) -> std::io::Result<String> {
+        match &self.backend {
+            #[cfg(feature = "host")]
+            Backend::Host(_) => prism_engine::asset_paths::read_asset_text(relative),
+            #[cfg(feature = "plugin")]
+            Backend::Plugin(_) => {
+                let _ = relative;
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::Unsupported,
+                    "asset access is not exposed to project modules yet",
+                ))
+            }
+        }
+    }
+
     // ------------------------------------------------------------------
     // 实体
     // ------------------------------------------------------------------

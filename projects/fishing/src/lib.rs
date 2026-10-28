@@ -11,10 +11,36 @@ pub fn build_app() -> prism_app::App {
         .with_subsystem(prism_app::Subsystem::Render)
         .with_subsystem(prism_app::Subsystem::Audio);
 
-    app.add_system("game::world", game::world::tick);
+    app.add_system("game::world", world_system);
     app.add_system("game::fishing", game::fishing::tick)
-        .add_system("game::boat", game::boat::tick);
+        .add_system("game::boat", boat_system);
     app
+}
+
+fn world_system(world: &mut prism_engine::ecs::World, dt: f32) {
+    let mut state = world.remove_resource::<game::world::LakeWorld>();
+    {
+        let mut api = prism_game_api::GameWorld::host(world);
+        game::world::tick(&mut state, &mut api, dt);
+    }
+    if let Some(state) = state {
+        world.insert_resource(state);
+    }
+}
+
+/// `boat::tick` 的 Player 适配器。
+///
+/// `BoatState` 是项目私有类型：这里临时放进 ECS resource，交给与插件形态
+/// 相同的 `tick`，再放回去。引擎只认自己的通用 resource 机制。
+fn boat_system(world: &mut prism_engine::ecs::World, dt: f32) {
+    let mut state = world.remove_resource::<game::boat::BoatState>();
+    {
+        let mut api = prism_game_api::GameWorld::host(world);
+        game::boat::tick(&mut state, &mut api, dt);
+    }
+    if let Some(state) = state {
+        world.insert_resource(state);
+    }
 }
 
 // ===========================================================================

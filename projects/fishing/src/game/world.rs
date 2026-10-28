@@ -12,13 +12,12 @@
 //! 图层列表与顺序来自参考实现的关卡数据（`scripts/build_lake_layers.py`），
 //! 美术由 `scripts/sync_fishing_art.py`（参考素材，本地）或
 //! `scripts/gen_placeholder_sprites.py`（原创占位）生成，二者文件名一致。
+//!
+//! 状态与读写都走 [`prism_game_api::GameWorld`]（与 `boat.rs` 同构），所以这份
+//! 关卡逻辑既能编译进静态 Player，也能原样作为编辑器加载的动态模块运行。
 
-use std::path::Path;
-
-use prism_engine::ecs::{Entity, World};
-use prism_engine::scene::components::{
-    Active, Camera, LocalTransform, SceneAssetId, SpriteRef, SpriteRenderer,
-};
+use prism_game_api::GameWorld;
+use prism_scene::components::{Active, Camera, LocalTransform, SpriteRenderer};
 use serde::Deserialize;
 
 /// 每世界单位的像素数。参考实现是 1 像素 = 1 世界单位（Sprite.m_PixelsToUnits
@@ -59,17 +58,17 @@ struct LayerDef {
 
 /// 单个图层实体。
 struct LayerInstance {
-    entity: Entity,
+    entity: prism_game_api::EntityHandle,
     base: glam::Vec3,
     parallax: f32,
     slug: String,
     /// 水面下的镜像实体（同层同视差，y 由水面镜像得到）。
-    reflection: Option<Entity>,
+    reflection: Option<prism_game_api::EntityHandle>,
 }
 
-/// 湖面状态（ECS 资源）。
+/// 湖面状态——**项目私有**，由调用方持有（Player 侧放在 ECS resource 里）。
 pub struct LakeWorld {
-    camera: Option<Entity>,
+    camera: Option<prism_game_api::EntityHandle>,
     layers: Vec<LayerInstance>,
     tods: Vec<String>,
     current_tod: usize,
@@ -81,10 +80,10 @@ pub struct LakeWorld {
 }
 
 impl LakeWorld {
-    fn build(world: &mut World) -> Self {
-        let camera = world.query::<Camera>().next().map(|(entity, _)| entity);
+    fn build(world: &mut GameWorld<'_>) -> Self {
+        let camera = world.query::<Camera>().first().copied();
 
-        let (layers_def, tods, camera_origin, water_line) = match load_layers() {
+        let (layers_def, tods, camera_origin, water_line) = match load_layers(world) {
             Ok(file) => (
                 file.layers,
                 file.time_of_day,
@@ -102,10 +101,10 @@ impl LakeWorld {
 
         let mut layers = Vec::new();
         for (order, def) in layers_def.iter().enumerate() {
-            let path = layer_path(&def.slug, &tod_name);
+            let path = layer_path(world, &def.slug, &tod_name);
             let entity = world.spawn();
             let base = glam::Vec3::new(def.x, def.y, BG_Z + order as f32 * 0.01);
-            world.insert(
+            world.set(
                 entity,
                 LocalTransform {
                     position: base,
@@ -113,7 +112,7 @@ impl LakeWorld {
                     ..LocalTransform::default()
                 },
             );
-            world.insert(
+            world.set(
                 entity,
                 SpriteRenderer {
                     sprite_path: path.clone(),
@@ -124,30 +123,22 @@ impl LakeWorld {
                     ..SpriteRenderer::default()
                 },
             );
-            // 运行时句柄：generation 0 表示待解析，资产系统会回填。
-            world.insert(
-                entity,
-                SpriteRef {
-                    asset_id: SceneAssetId::generate(),
-                    texture_slot: 0,
-                    size: [0, 0],
-                    generation: 0,
-                },
-            );
-            world.insert(entity, Active(true));
+            // 首次解析：`SpriteRef` 由宿主创建，项目侧不碰引擎的资产协议。
+            world.refresh_sprite(entity);
+            world.set(entity, Active(true));
 
             // 水面反射：同一张贴图上下翻转、轴心改为顶部中心，
             // 位置由 tick 按 `y = 2 * water_line - source.y` 镜像。
             let reflection = def.reflect.then(|| {
                 let mirror = world.spawn();
-                world.insert(
+                world.set(
                     mirror,
                     LocalTransform {
                         position: glam::Vec3::new(def.x, 2.0 * water_line - def.y, base.z + 0.005),
                         ..LocalTransform::default()
                     },
                 );
-                world.insert(
+                world.set(
                     mirror,
                     SpriteRenderer {
                         sprite_path: path.clone(),
@@ -161,16 +152,8 @@ impl LakeWorld {
                         ..SpriteRenderer::default()
                     },
                 );
-                world.insert(
-                    mirror,
-                    SpriteRef {
-                        asset_id: SceneAssetId::generate(),
-                        texture_slot: 0,
-                        size: [0, 0],
-                        generation: 0,
-                    },
-                );
-                world.insert(mirror, Active(true));
+                world.refresh_sprite(mirror);
+                world.set(mirror, Active(true));
                 mirror
             });
 
@@ -201,37 +184,36 @@ impl LakeWorld {
     }
 
     /// 切换时段：只换贴图路径并让资产系统重新解析。
-    fn apply_time_of_day(&self, world: &mut World, tod: &str) {
+    fn apply_time_of_day(&self, world: &mut GameWorld<'_>, tod: &str) {
         for layer in &self.layers {
-            let path = layer_path(&layer.slug, tod);
+            let path = layer_path(world, &layer.slug, tod);
             for entity in std::iter::once(layer.entity).chain(layer.reflection) {
-                if let Some(sprite) = world.get_mut::<SpriteRenderer>(entity) {
+                if let Some(mut sprite) = world.get::<SpriteRenderer>(entity) {
                     if sprite.sprite_path == path {
                         continue;
                     }
                     sprite.sprite_path = path.clone();
+                    world.set(entity, sprite);
                 }
-                if let Some(sprite_ref) = world.get_mut::<SpriteRef>(entity) {
-                    sprite_ref.generation = 0;
-                }
+                world.refresh_sprite(entity);
             }
         }
     }
 }
 
-/// 图层贴图路径；该时段缺图时回落到 `day`（再缺就用该时段的名字，
-/// 解析失败只是不画，不会崩）。
 fn unit_scale() -> f32 {
     1.0
 }
 
-fn layer_path(slug: &str, tod: &str) -> String {
+/// 图层贴图路径；该时段缺图时回落到 `day`（再缺就用该时段的名字，
+/// 解析失败只是不画，不会崩）。
+fn layer_path(world: &GameWorld<'_>, slug: &str, tod: &str) -> String {
     let candidate = format!("sprites/bg/{slug}@{tod}.png");
-    if Path::new("assets").join(&candidate).is_file() {
+    if world.asset_exists(&candidate) {
         return candidate;
     }
     let fallback = format!("sprites/bg/{slug}@day.png");
-    if Path::new("assets").join(&fallback).is_file() {
+    if world.asset_exists(&fallback) {
         return fallback;
     }
     candidate
@@ -242,61 +224,60 @@ fn initial_tod(tods: &[String]) -> usize {
     tods.iter().position(|t| t == "day").unwrap_or(0)
 }
 
-fn load_layers() -> Result<LayersFile, String> {
-    let path = Path::new("assets/lake_layers.json");
-    let text =
-        std::fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
-    serde_json::from_str(&text).map_err(|e| format!("parse {}: {e}", path.display()))
+fn load_layers(world: &GameWorld<'_>) -> Result<LayersFile, String> {
+    let text = world
+        .read_asset_text("lake_layers.json")
+        .map_err(|e| format!("read lake_layers.json: {e}"))?;
+    serde_json::from_str(&text).map_err(|e| format!("parse lake_layers.json: {e}"))
 }
 
 /// 每帧：推进昼夜、平移各层。
-pub fn tick(world: &mut World, dt: f32) {
-    if world.get_resource::<LakeWorld>().is_none() {
-        let state = LakeWorld::build(world);
-        world.insert_resource(state);
+pub fn tick(state: &mut Option<LakeWorld>, world: &mut GameWorld<'_>, dt: f32) {
+    if state.is_none() {
+        *state = Some(LakeWorld::build(world));
     }
-    let Some(mut state) = world.remove_resource::<LakeWorld>() else {
+    let Some(current) = state.as_mut() else {
         return;
     };
 
-    state.elapsed += dt;
+    current.elapsed += dt;
 
     // --- 昼夜轮换 -------------------------------------------------------
-    if !state.tods.is_empty() {
-        let step = (state.elapsed / CYCLE_SECONDS).floor() as usize;
-        let tod = step % state.tods.len();
-        if tod != state.current_tod {
-            state.current_tod = tod;
-            let name = state.tods[tod].clone();
-            state.apply_time_of_day(world, &name);
+    if !current.tods.is_empty() {
+        let step = (current.elapsed / CYCLE_SECONDS).floor() as usize;
+        let tod = step % current.tods.len();
+        if tod != current.current_tod {
+            current.current_tod = tod;
+            let name = current.tods[tod].clone();
             log::info!("time of day -> {name}");
+            current.apply_time_of_day(world, &name);
         }
     }
 
     // --- 视差 -----------------------------------------------------------
-    let camera_pos = state
+    let camera_pos = current
         .camera
         .and_then(|camera| world.get::<LocalTransform>(camera))
         .map(|transform| transform.position)
         .unwrap_or_default();
 
-    for layer in &state.layers {
-        let x = layer.base.x + (camera_pos.x - state.camera_origin.x) * layer.parallax;
-        let y = layer.base.y + (camera_pos.y - state.camera_origin.y) * layer.parallax;
-        if let Some(transform) = world.get_mut::<LocalTransform>(layer.entity) {
+    for layer in &current.layers {
+        let x = layer.base.x + (camera_pos.x - current.camera_origin.x) * layer.parallax;
+        let y = layer.base.y + (camera_pos.y - current.camera_origin.y) * layer.parallax;
+        if let Some(mut transform) = world.get::<LocalTransform>(layer.entity) {
             transform.position.x = x;
             transform.position.y = y;
+            world.set(layer.entity, transform);
         }
         if let Some(mirror) = layer.reflection {
-            if let Some(transform) = world.get_mut::<LocalTransform>(mirror) {
+            if let Some(mut transform) = world.get::<LocalTransform>(mirror) {
                 transform.position.x = x;
                 // 镜像顶边 = 源层底边（轴心在顶部中心）。山体底边本来就埋在水面
                 // 之下用来藏贴图的裁切边，所以按水面翻转会让镜像越过水线露在外面；
                 // 取 `min` 让底边高于水面的层仍然贴着水面翻转。
-                transform.position.y = y.min(state.water_line);
+                transform.position.y = y.min(current.water_line);
+                world.set(mirror, transform);
             }
         }
     }
-
-    world.insert_resource(state);
 }

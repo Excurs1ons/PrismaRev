@@ -11,7 +11,7 @@ description = "Engine-independent gameplay API shared by the runtime host and pr
 # 插件构建只需 `--no-default-features --features plugin`。
 [features]
 default = ["host", "plugin"]
-host = []
+host = ["dep:prism-engine"]
 plugin = []
 
 [dependencies]
@@ -20,6 +20,8 @@ prism-project-api = { path = "../prism-project-api" }
 # 纯数据 ECS（无 Vulkan / 无 UI）。插件侧只用它的 `Entity` 句柄布局与
 # `Component` blanket impl，永远不会把宿主的 `World` 指针传出去。
 prism-ecs = { path = "../prism-ecs" }
+# 仅 `host` 后端用于松散资产定位（插件构建不会拉进引擎）。
+prism-engine = { path = "../prism-engine", optional = true }
 log.workspace = true
 
 [dev-dependencies]
