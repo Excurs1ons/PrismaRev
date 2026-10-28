@@ -418,7 +418,7 @@ fn paint_scene(
     }
 
     // 选中：线框立方体（0.5 单位）+ gizmo 三轴。
-    for position in &snapshot.selection {
+    for (position_index, position) in snapshot.selection.iter().enumerate() {
         let mut corners = Vec::new();
         for dx in [-0.5f32, 0.5] {
             for dy in [-0.5f32, 0.5] {
@@ -451,8 +451,11 @@ fn paint_scene(
             }
         }
 
-        // 多选时只画线框，gizmo 只跟单选（批量 Transform 编辑还未做）。
-        if snapshot.selection.len() > 1 {
+        // gizmo 画在主选择（第一个选中项）上：单选永远显示，
+        // 多选只在平移模式显示（批量平移；旋转 / 缩放仍只支持单选）。
+        let gizmo_visible = snapshot.selection.len() == 1
+            || (snapshot.gizmo_mode == GizmoMode::Translate && position_index == 0);
+        if !gizmo_visible {
             continue;
         }
 

@@ -28,6 +28,10 @@ pub enum Command {
         before: TransformJson,
         after: TransformJson,
     },
+    /// 多选 gizmo 拖动：同一帧只产生一个撤销步，拖动中按 key 合并。
+    TransformBatch {
+        changes: Vec<(u32, TransformJson, TransformJson)>,
+    },
     Snapshot {
         before: Box<SceneDoc>,
         after: Box<SceneDoc>,
@@ -39,6 +43,7 @@ impl Command {
         match self {
             Command::SetField { .. } => "修改字段",
             Command::Transform { .. } => "修改 Transform",
+            Command::TransformBatch { .. } => "修改 Transform",
             Command::Snapshot { .. } => "编辑场景",
         }
     }
@@ -72,7 +77,7 @@ impl Entry {
     pub fn is_field_edit(&self) -> bool {
         matches!(
             self.command,
-            Command::SetField { .. } | Command::Transform { .. }
+            Command::SetField { .. } | Command::Transform { .. } | Command::TransformBatch { .. }
         )
     }
 }
@@ -229,6 +234,59 @@ impl UndoStack {
         self.trim();
     }
 
+    /// 多选 Transform 的一次拖动：`changes` 是 (实体 id, before, after)，
+    /// 同一 `coalesce` key 的连续拖动合并成一步（整组一起撤销）。
+    pub fn push_transform_batch(
+        &mut self,
+        doc: &mut SceneDoc,
+        changes: Vec<(u32, TransformJson, TransformJson)>,
+        coalesce: String,
+        now_ms: u64,
+    ) {
+        let changes: Vec<_> = changes
+            .into_iter()
+            .filter(|(_, before, after)| before != after)
+            .collect();
+        if changes.is_empty() {
+            return;
+        }
+        if let Some(last) = self.undo.last_mut() {
+            if last.coalesce.as_deref() == Some(coalesce.as_str())
+                && now_ms.saturating_sub(last.at_ms) <= self.coalesce_ms
+            {
+                if let Command::TransformBatch {
+                    changes: last_changes,
+                } = &mut last.command
+                {
+                    for (entity_id, before, after) in &changes {
+                        match last_changes
+                            .iter_mut()
+                            .find(|(existing, _, _)| existing == entity_id)
+                        {
+                            Some(slot) => slot.2 = *after,
+                            None => last_changes.push((*entity_id, *before, *after)),
+                        }
+                        apply_transform(doc, *entity_id, after);
+                    }
+                    last.at_ms = now_ms;
+                    self.redo.clear();
+                    return;
+                }
+            }
+        }
+        for (entity_id, _, after) in &changes {
+            apply_transform(doc, *entity_id, after);
+        }
+        self.undo.push(Entry {
+            label: "修改 Transform".to_string(),
+            command: Command::TransformBatch { changes },
+            coalesce: Some(coalesce),
+            at_ms: now_ms,
+        });
+        self.redo.clear();
+        self.trim();
+    }
+
     /// 结构性编辑：把 `before` 快照与编辑后的文档整体记成一步。
     pub fn push_snapshot(&mut self, label: impl Into<String>, before: SceneDoc, after: &SceneDoc) {
         if before == *after {
@@ -264,6 +322,11 @@ impl UndoStack {
             } => {
                 apply_transform(doc, *entity_id, before);
             }
+            Command::TransformBatch { changes } => {
+                for (entity_id, before, _) in changes {
+                    apply_transform(doc, *entity_id, before);
+                }
+            }
             Command::Snapshot { before, .. } => {
                 *doc = (**before).clone();
             }
@@ -290,6 +353,11 @@ impl UndoStack {
                 entity_id, after, ..
             } => {
                 apply_transform(doc, *entity_id, after);
+            }
+            Command::TransformBatch { changes } => {
+                for (entity_id, _, after) in changes {
+                    apply_transform(doc, *entity_id, after);
+                }
             }
             Command::Snapshot { after, .. } => {
                 *doc = (**after).clone();

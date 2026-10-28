@@ -1671,14 +1671,56 @@ impl Workspace {
         let delta_local = quat_rotate(quat_conjugate(parent_rotation), delta_world);
         let before = self.document().doc.entities[index].transform;
         let mut after = before;
-        for axis in 0..3 {
-            after.position[axis] += delta_local[axis];
+        for (position, delta) in after.position.iter_mut().zip(delta_local) {
+            *position += delta;
         }
         let now = now_ms();
         let document = self.document_mut();
         document
             .undo
             .push_transform(&mut document.doc, entity_id, before, after, now);
+        document.dirty = true;
+    }
+
+    /// 多选 gizmo 平移：每个实体各自换算父空间位移，但整次拖动只产生一个撤销步。
+    pub fn translate_entities_world(&mut self, entity_ids: &[u32], delta_world: [f32; 3]) {
+        if entity_ids.is_empty() || delta_world.iter().all(|value| value.abs() < 1e-6) {
+            return;
+        }
+        let mut ids: Vec<u32> = entity_ids.to_vec();
+        ids.sort_unstable();
+        ids.dedup();
+        let doc = &self.document().doc;
+        let mut changes = Vec::new();
+        for entity_id in &ids {
+            let Some(index) = doc.index_of_id(*entity_id) else {
+                continue;
+            };
+            let parent_rotation = parent_world_rotation(doc, index);
+            let delta_local = quat_rotate(quat_conjugate(parent_rotation), delta_world);
+            let before = doc.entities[index].transform;
+            let mut after = before;
+            for (position, delta) in after.position.iter_mut().zip(delta_local) {
+                *position += delta;
+            }
+            changes.push((*entity_id, before, after));
+        }
+        if changes.is_empty() {
+            return;
+        }
+        let now = now_ms();
+        let document = self.document_mut();
+        if changes.len() == 1 {
+            let (entity_id, before, after) = changes[0];
+            document
+                .undo
+                .push_transform(&mut document.doc, entity_id, before, after, now);
+        } else {
+            let key = format!("transform-group/{ids:?}");
+            document
+                .undo
+                .push_transform_batch(&mut document.doc, changes, key, now);
+        }
         document.dirty = true;
     }
 
@@ -2531,6 +2573,45 @@ mod tests {
             );
         }
         assert!(workspace.can_undo());
+    }
+
+    #[test]
+    fn batch_translate_moves_all_entities_in_one_undo_step() {
+        let mut workspace = Workspace::sample();
+        let cube = index_named(&workspace, "Cube");
+        let light = index_named(&workspace, "Directional Light");
+        let cube_id = workspace.document().doc.entities[cube].id.unwrap();
+        let light_id = workspace.document().doc.entities[light].id.unwrap();
+        let cube_before = workspace.document().doc.entities[cube].transform.position;
+        let light_before = workspace.document().doc.entities[light].transform.position;
+
+        workspace.translate_entities_world(&[cube_id, light_id], [1.0, 0.0, 0.0]);
+        workspace.translate_entities_world(&[cube_id, light_id], [1.0, 0.0, 0.0]);
+
+        assert!(
+            (workspace.document().doc.entities[cube].transform.position[0] - cube_before[0] - 2.0)
+                .abs()
+                < 1e-4
+        );
+        assert!(
+            (workspace.document().doc.entities[light].transform.position[0]
+                - light_before[0]
+                - 2.0)
+                .abs()
+                < 1e-4
+        );
+        assert_eq!(workspace.document().undo.history().len(), 1);
+
+        workspace.undo();
+        assert_eq!(
+            workspace.document().doc.entities[cube].transform.position,
+            cube_before
+        );
+        assert_eq!(
+            workspace.document().doc.entities[light].transform.position,
+            light_before
+        );
+        assert!(!workspace.can_undo());
     }
 
     #[test]

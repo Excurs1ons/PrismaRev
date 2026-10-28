@@ -206,9 +206,10 @@ deviating from those conventions is a bug. (`README.md` is the human-facing over
   `editor/src/dock.ts` v4 同形）+ 层级/检查器（schema 驱动）/资产/日志（窗口化
   `uniform_list`）/文档/渲染图/设置面板 + Scene/Game View（目前是 `canvas` 的 CPU
   投影，接线点见 `viewport.rs::paint_scene`）。数据层 `prism-editor-gpui-core` 与 UI
-  框架无关（166 单测：dock/doc/schema/undo/theme/i18n/log/assets/keys/project/
+  框架无关（167 单测：dock/doc/schema/undo/theme/i18n/log/assets/keys/project/
   viewport_math/state/settings/textinput/manifest/build）；内联输入走 `TextInput`（光标 / 选区 /
-  按词移动与删除，Unicode 安全）；实体剪贴板 Ctrl+C/X/V + 粘贴为子级（多根、保留预制体链接）；检查器支持多选批量改字段（公共组件、一次撤销）；
+  按词移动与删除，Unicode 安全）；实体剪贴板 Ctrl+C/X/V + 粘贴为子级（多根、保留预制体链接）；
+  多选可整体平移（一个撤销步）；检查器支持多选批量改字段（公共组件、一次撤销）；
   选中实体可「存为预制体」，资产面板可把 `.prefab.json` 实例化到场景；
   资产重命名会改磁盘文件并精确改写打开文档的路径引用；
   项目设置面板会合并写回 `assets/settings.toml`（保留 `[render]` 等其它段）；
