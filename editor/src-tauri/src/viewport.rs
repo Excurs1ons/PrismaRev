@@ -311,6 +311,7 @@ pub struct DragFeedback {
     pub current_screen: Option<[f32; 2]>,
     pub angle_deg: Option<f32>,
     pub radius: Option<f32>,
+    pub snap_point: Option<[f32; 2]>,
 }
 
 /// 鼠标悬停在手柄上时的屏幕投影轮廓（供前端渲染高亮提示）。
@@ -355,6 +356,18 @@ pub struct ProjectedBoundBox {
     pub corners: Option<[[f32; 2]; 8]>,
     pub rect: [f32; 4],
 }
+
+/// 局部空间单位立方体 8 个角顶点。
+pub const LOCAL_UNIT_CORNERS: [Vec3; 8] = [
+    Vec3::new(-0.5, -0.5, -0.5),
+    Vec3::new(0.5, -0.5, -0.5),
+    Vec3::new(-0.5, 0.5, -0.5),
+    Vec3::new(0.5, 0.5, -0.5),
+    Vec3::new(-0.5, -0.5, 0.5),
+    Vec3::new(0.5, -0.5, 0.5),
+    Vec3::new(-0.5, 0.5, 0.5),
+    Vec3::new(0.5, 0.5, 0.5),
+];
 
 #[derive(Clone, Debug)]
 struct DragEntityState {
@@ -635,16 +648,7 @@ impl HostState {
             height: self.height as f32,
         };
 
-        let corners = [
-            Vec3::new(-0.5, -0.5, -0.5),
-            Vec3::new(0.5, -0.5, -0.5),
-            Vec3::new(-0.5, 0.5, -0.5),
-            Vec3::new(0.5, 0.5, -0.5),
-            Vec3::new(-0.5, -0.5, 0.5),
-            Vec3::new(0.5, -0.5, 0.5),
-            Vec3::new(-0.5, 0.5, 0.5),
-            Vec3::new(0.5, 0.5, 0.5),
-        ];
+        let corners = LOCAL_UNIT_CORNERS;
 
         let mut hits = Vec::new();
         for (index, entity) in self.entities.iter().enumerate() {
@@ -724,17 +728,6 @@ impl HostState {
             height: self.height as f32,
         };
 
-        const LOCAL_CORNERS: [Vec3; 8] = [
-            Vec3::new(-0.5, -0.5, -0.5),
-            Vec3::new(0.5, -0.5, -0.5),
-            Vec3::new(-0.5, 0.5, -0.5),
-            Vec3::new(0.5, 0.5, -0.5),
-            Vec3::new(-0.5, -0.5, 0.5),
-            Vec3::new(0.5, -0.5, 0.5),
-            Vec3::new(-0.5, 0.5, 0.5),
-            Vec3::new(0.5, 0.5, 0.5),
-        ];
-
         let primary_index = self.selection;
         let mut out = Vec::new();
 
@@ -764,7 +757,7 @@ impl HostState {
             let mut min_y = f32::INFINITY;
             let mut max_y = f32::NEG_INFINITY;
 
-            for (i, corner) in LOCAL_CORNERS.iter().enumerate() {
+            for (i, corner) in LOCAL_UNIT_CORNERS.iter().enumerate() {
                 let world_pt = model.transform_point3(*corner);
                 if let Some(sc) = screen.project(world_pt) {
                     projected[i] = [sc.x, sc.y];
@@ -793,17 +786,6 @@ impl HostState {
     ///
     /// 返回所有受影响实体的局部变换更新项。
     fn drop_to_floor(&mut self, indices: &[usize]) -> Option<Vec<EntityTransformUpdate>> {
-        const LOCAL_CORNERS: [Vec3; 8] = [
-            Vec3::new(-0.5, -0.5, -0.5),
-            Vec3::new(0.5, -0.5, -0.5),
-            Vec3::new(-0.5, 0.5, -0.5),
-            Vec3::new(0.5, 0.5, -0.5),
-            Vec3::new(-0.5, -0.5, 0.5),
-            Vec3::new(0.5, -0.5, 0.5),
-            Vec3::new(-0.5, 0.5, 0.5),
-            Vec3::new(0.5, 0.5, 0.5),
-        ];
-
         let target_indices = if indices.is_empty() {
             &self.selected_indices[..]
         } else {
@@ -845,7 +827,7 @@ impl HostState {
                 .map(|pltw| pltw.0.inverse())
                 .unwrap_or(Mat4::IDENTITY);
 
-            for corner in LOCAL_CORNERS {
+            for corner in LOCAL_UNIT_CORNERS {
                 let world_pt = ltw.transform_point3(corner);
                 if world_pt.y < min_y {
                     min_y = world_pt.y;
@@ -901,6 +883,48 @@ impl HostState {
         self.sync_marker(position, length);
 
         Some(updates)
+    }
+
+    /// 视口光标位置世界空间光线投射：拾取场景物体表面或世界地面 (Y=0) 上的三维坐标。
+    pub fn raycast_ground_or_scene(&mut self, x: f32, y: f32) -> Option<[f32; 3]> {
+        let camera = self.camera?;
+        let world = self.app.engine_mut().world();
+        let camera_world = world.get::<LocalToWorld>(camera).map(|ltw| ltw.0)?;
+        let fov = world
+            .get::<Camera>(camera)
+            .map(|c| c.fov_y_degrees)
+            .unwrap_or(60.0);
+        let (origin, dir) = pick::screen_ray(&camera_world, fov, self.width, self.height, x, y)?;
+
+        // 1. 优先与场景中的实体代理包围盒求交
+        let mut best_t = f32::INFINITY;
+        for &entity in &self.entities {
+            if !world.is_alive(entity) {
+                continue;
+            }
+            if let Some(model) = world.get::<LocalToWorld>(entity).map(|ltw| ltw.0) {
+                if let Some(t) = pick::ray_entity(origin, dir, &model) {
+                    if t > 0.0 && t < best_t {
+                        best_t = t;
+                    }
+                }
+            }
+        }
+
+        // 2. 与世界地面平面 Y = 0 求交
+        if dir.y.abs() > 1e-5 {
+            let t_ground = -origin.y / dir.y;
+            if t_ground > 0.0 && t_ground < best_t {
+                best_t = t_ground;
+            }
+        }
+
+        if best_t.is_finite() {
+            Some((origin + dir * best_t).to_array())
+        } else {
+            // 朝向天空或未命中地面：默认落在相机注视中心
+            Some(self.orbit.target)
+        }
     }
 
     /// 计算 gizmo 命中 / 拖动所需的相机与选中项。
@@ -1247,7 +1271,7 @@ impl HostState {
     ///
     /// 同时直接改 ECS 里的 `LocalTransform`，所以视口跟手 —— 前端把文档
     /// 重载压到拖动结束之后，拖动过程中画面来自引擎，不靠 reload。
-    fn drag_to(&mut self, x: f32, y: f32, snap: bool) -> Option<DragTransformResult> {
+    fn drag_to(&mut self, x: f32, y: f32, snap: bool, vsnap: bool) -> Option<DragTransformResult> {
         let drag = self.drag.as_ref()?.clone();
         let ctx = self.gizmo_context()?;
         let (origin, dir) =
@@ -1340,6 +1364,61 @@ impl HostState {
                     (target, text)
                 };
 
+                let mut target = target;
+                let mut text = text;
+                let mut snap_point: Option<[f32; 2]> = None;
+
+                if vsnap {
+                    let moving_indices: std::collections::HashSet<usize> =
+                        entities.iter().map(|e| e.index).collect();
+                    let tentative_delta = target - start_world;
+
+                    // 1. 收集其它场景实体的 8 角顶点及原点作为吸附目标
+                    let mut dst_corners = vec![Vec3::ZERO];
+                    {
+                        let world = self.app.engine_mut().world();
+                        for (idx, &ent) in self.entities.iter().enumerate() {
+                            if moving_indices.contains(&idx) || !world.is_alive(ent) {
+                                continue;
+                            }
+                            if let Some(model) = world.get::<LocalToWorld>(ent).map(|ltw| ltw.0) {
+                                for corner in &LOCAL_UNIT_CORNERS {
+                                    dst_corners.push(model.transform_point3(*corner));
+                                }
+                            }
+                        }
+                    }
+
+                    // 2. 找到与移动物体角顶点欧氏距离最小的目标顶点
+                    let mut best_dist_sq = 1.0_f32 * 1.0_f32; // 1.0m 顶点吸附判定半径
+                    let mut best_pair: Option<(Vec3, Vec3)> = None;
+
+                    for ent in &entities {
+                        let base_pos = ent.start_world_pos + tentative_delta;
+                        for corner in &LOCAL_UNIT_CORNERS {
+                            let src_pt =
+                                base_pos + ent.start_world_rot * (*corner * ent.start_local_scale);
+                            for &dst_pt in &dst_corners {
+                                let d_sq = (src_pt - dst_pt).length_squared();
+                                if d_sq < best_dist_sq {
+                                    best_dist_sq = d_sq;
+                                    best_pair = Some((src_pt, dst_pt));
+                                }
+                            }
+                        }
+                    }
+
+                    if let Some((best_src, best_dst)) = best_pair {
+                        let snap_offset = best_dst - best_src;
+                        target += snap_offset;
+                        snap_point = screen.project(best_dst).map(|sc| [sc.x, sc.y]);
+                        text = format!(
+                            "V-Snap: ({:+.2}, {:+.2}, {:+.2}) m",
+                            best_dst.x, best_dst.y, best_dst.z
+                        );
+                    }
+                }
+
                 let delta_world = target - start_world;
                 let mut multi_updates = Vec::with_capacity(entities.len());
                 let mut primary_local: Option<[f32; 3]> = None;
@@ -1387,6 +1466,7 @@ impl HostState {
                     current_screen: None,
                     angle_deg: None,
                     radius: None,
+                    snap_point,
                 };
                 Some(DragTransformResult {
                     position: primary_local,
@@ -1507,6 +1587,7 @@ impl HostState {
                     current_screen: current_screen.map(|s| s.to_array()),
                     angle_deg: Some(angle_deg),
                     radius: Some(radius),
+                    snap_point: None,
                 };
                 Some(DragTransformResult {
                     position: None,
@@ -1631,6 +1712,7 @@ impl HostState {
                     current_screen: None,
                     angle_deg: None,
                     radius: None,
+                    snap_point: None,
                 };
                 Some(DragTransformResult {
                     position: None,
@@ -2815,6 +2897,22 @@ pub async fn editor_viewport_drop_to_floor(
     Ok(updates.unwrap_or_default())
 }
 
+/// 视口光标位置世界空间光线投射：拾取场景物体表面或世界地面 (Y=0) 上的三维坐标。
+#[tauri::command]
+pub async fn editor_viewport_raycast(
+    id: String,
+    x: f32,
+    y: f32,
+    manager: State<'_, ViewportManager>,
+) -> Result<Option<[f32; 3]>, String> {
+    let hit = ask_viewport(&manager, &id, move |state, tx| {
+        let pos = state.raycast_ground_or_scene(x, y);
+        let _ = tx.send(pos);
+    })
+    .await?;
+    Ok(hit.flatten())
+}
+
 /// 把一个问题交给视口线程并等回答。
 ///
 /// `Ok(None)` = 视口不存在或线程超时没回话；闭包里再套一层 `Option` 表示
@@ -2936,11 +3034,13 @@ pub async fn editor_viewport_drag(
     x: f32,
     y: f32,
     snap: Option<bool>,
+    vsnap: Option<bool>,
     manager: State<'_, ViewportManager>,
 ) -> Result<Option<DragTransformResult>, String> {
     let snap = snap.unwrap_or(false);
+    let vsnap = vsnap.unwrap_or(false);
     let moved = ask_viewport(&manager, &id, move |state, tx| {
-        let res = state.drag_to(x, y, snap);
+        let res = state.drag_to(x, y, snap, vsnap);
         let _ = tx.send(res);
     })
     .await?;
@@ -3284,7 +3384,7 @@ mod tests {
             .begin_drag(Axis::X, center.x, center.y)
             .expect("正对着实体应该能开始拖动");
         let moved = state
-            .drag_to(center.x + 30.0, center.y, false)
+            .drag_to(center.x + 30.0, center.y, false, false)
             .expect("拖动应该给出新位置");
         let pos = moved.position.expect("平移应该返回 position");
         assert!(pos[0] > 1.0, "应沿 +X 移动: {pos:?}");
@@ -3305,7 +3405,9 @@ mod tests {
         assert!((marker_x - pos[0]).abs() < 1e-4, "{marker_x} vs {pos:?}");
 
         state.end_drag();
-        assert!(state.drag_to(center.x + 60.0, center.y, false).is_none());
+        assert!(state
+            .drag_to(center.x + 60.0, center.y, false, false)
+            .is_none());
     }
 
     #[test]
@@ -3341,7 +3443,7 @@ mod tests {
         let center = gizmo::project(&ctx.view, ctx.fov, 200.0, 100.0, ctx.center).unwrap();
         state.begin_drag(Axis::X, center.x, center.y).unwrap();
         let moved = state
-            .drag_to(center.x + 30.0, center.y, false)
+            .drag_to(center.x + 30.0, center.y, false, false)
             .expect("子级也应该能拖动");
         let pos = moved.position.expect("平移应该返回 position");
 
@@ -3371,7 +3473,9 @@ mod tests {
         // 1. Translate feedback
         state.tool = GizmoTool::Translate;
         state.begin_drag(Axis::X, center.x, center.y).unwrap();
-        let res = state.drag_to(center.x + 20.0, center.y, false).unwrap();
+        let res = state
+            .drag_to(center.x + 20.0, center.y, false, false)
+            .unwrap();
         let fb = res.feedback.expect("Translate 应该提供 feedback");
         assert_eq!(fb.tool, "translate");
         assert_eq!(fb.axis, "x");
@@ -3384,7 +3488,9 @@ mod tests {
         state
             .begin_drag(Axis::Z, center.x + 30.0, center.y)
             .unwrap();
-        let res = state.drag_to(center.x, center.y + 30.0, false).unwrap();
+        let res = state
+            .drag_to(center.x, center.y + 30.0, false, false)
+            .unwrap();
         let fb = res.feedback.expect("Rotate 应该提供 feedback");
         assert_eq!(fb.tool, "rotate");
         assert_eq!(fb.axis, "z");
@@ -3399,7 +3505,7 @@ mod tests {
         state.tool = GizmoTool::Scale;
         state.begin_drag(Axis::XYZ, center.x, center.y).unwrap();
         let res = state
-            .drag_to(center.x + 25.0, center.y - 25.0, false)
+            .drag_to(center.x + 25.0, center.y - 25.0, false, false)
             .unwrap();
         let fb = res.feedback.expect("Scale 应该提供 feedback");
         assert_eq!(fb.tool, "scale");
@@ -3426,7 +3532,7 @@ mod tests {
             .begin_drag(Axis::XZ, screen_pt.x, screen_pt.y)
             .unwrap();
         let res = state
-            .drag_to(screen_pt.x + 20.0, screen_pt.y + 10.0, false)
+            .drag_to(screen_pt.x + 20.0, screen_pt.y + 10.0, false, false)
             .unwrap();
         let pos = res.position.expect("平移应返回 position");
         let fb = res.feedback.expect("应返回 feedback");
@@ -3446,7 +3552,9 @@ mod tests {
         // 1. Translate snap (snaps to integer meter)
         state.tool = GizmoTool::Translate;
         state.begin_drag(Axis::X, center.x, center.y).unwrap();
-        let res = state.drag_to(center.x + 35.0, center.y, true).unwrap();
+        let res = state
+            .drag_to(center.x + 35.0, center.y, true, false)
+            .unwrap();
         let pos = res.position.unwrap();
         assert_eq!(pos[0].fract(), 0.0, "位移应吸附至整数米: {pos:?}");
         let fb = res.feedback.unwrap();
@@ -3458,7 +3566,9 @@ mod tests {
         state
             .begin_drag(Axis::Z, center.x + 30.0, center.y)
             .unwrap();
-        let res = state.drag_to(center.x, center.y + 30.0, true).unwrap();
+        let res = state
+            .drag_to(center.x, center.y + 30.0, true, false)
+            .unwrap();
         let fb = res.feedback.unwrap();
         let angle = fb.angle_deg.unwrap();
         assert!(
@@ -3472,7 +3582,7 @@ mod tests {
         state.tool = GizmoTool::Scale;
         state.begin_drag(Axis::XYZ, center.x, center.y).unwrap();
         let res = state
-            .drag_to(center.x + 25.0, center.y - 25.0, true)
+            .drag_to(center.x + 25.0, center.y - 25.0, true, false)
             .unwrap();
         let fb = res.feedback.unwrap();
         assert!(fb.text.contains("Snap 0.1x"));
@@ -3699,7 +3809,7 @@ mod tests {
         let (center, _) = gizmo_screen_points(&mut state);
         state.begin_drag(Axis::X, center.x, center.y).unwrap();
         let res = state
-            .drag_to(center.x + 30.0, center.y, false)
+            .drag_to(center.x + 30.0, center.y, false, false)
             .expect("多选拖动应返回结果");
 
         let updates = res.multi_updates.expect("多选应返回 multi_updates 批更新");
@@ -3813,5 +3923,64 @@ mod tests {
             .unwrap()
             .position;
         assert!((e1_pos.y - 0.5).abs() < 1e-4);
+    }
+
+    #[test]
+    fn raycast_ground_or_scene_hits_ground_and_entities() {
+        let mut state = test_state("raycast-test");
+        state.place_camera();
+
+        // 视口中心 (100, 50) 正对着原点处的实体 0（单位立方体）
+        let hit = state.raycast_ground_or_scene(100.0, 50.0);
+        assert!(hit.is_some(), "中心射线应命中原点处物体或地面");
+        let pt = hit.unwrap();
+        // 原点处物体的顶面/前面在 [-0.5, 0.5] 范围内
+        assert!(pt[0].abs() <= 1.0, "{pt:?}");
+        assert!(pt[2].abs() <= 2.0, "{pt:?}");
+
+        // 偏下方的视口光标投射向世界地面 Y = 0
+        let ground_hit = state.raycast_ground_or_scene(100.0, 80.0);
+        assert!(ground_hit.is_some(), "向下射线应命中地面");
+        let gpt = ground_hit.unwrap();
+        assert!(gpt[1].abs() < 0.1, "地面命中点 Y 应接近 0: {gpt:?}");
+    }
+
+    #[test]
+    fn vertex_snap_locks_moving_entity_to_nearest_corner() {
+        const ADJACENT_SCENE: &str = r#"{
+          "version": 1,
+          "entities": [
+            {
+              "name": "target_cube",
+              "parent": null,
+              "transform": { "position": [1.2,0,0], "rotation": [0,0,0,1], "scale": [1,1,1] },
+              "components": {}
+            },
+            {
+              "name": "moving_cube",
+              "parent": null,
+              "transform": { "position": [0,0,0], "rotation": [0,0,0,1], "scale": [1,1,1] },
+              "components": {}
+            }
+          ]
+        }"#;
+        let mut state = test_state_from("vsnap-test", ADJACENT_SCENE);
+        state.apply_selection(&[1]);
+        let (center, _) = gizmo_screen_points(&mut state);
+
+        state.tool = GizmoTool::Translate;
+        state.begin_drag(Axis::X, center.x, center.y).unwrap();
+        // 沿 X 轴轻微拖动靠近 target_cube 并开启 vsnap = true
+        let res = state
+            .drag_to(center.x + 10.0, center.y, false, true)
+            .unwrap();
+        let fb = res.feedback.unwrap();
+        assert!(
+            fb.text.contains("V-Snap:"),
+            "feedback text was: {}",
+            fb.text
+        );
+        assert!(fb.snap_point.is_some(), "应返回投影屏幕吸附点");
+        state.end_drag();
     }
 }

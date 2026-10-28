@@ -115,11 +115,11 @@ export interface SnapResult {
   }>;
 }
 
-export const SNAP_THRESHOLD = 8;
+export const SNAP_THRESHOLD = 10;
 
 /**
  * 浮动窗口磁吸计算：
- * 与视口边缘（左、右、顶、底）以及其他浮动面板的四边进行对齐或紧贴吸附。
+ * 与视口边缘（左、右、顶、底）以及其他浮动面板的四边、中心线、级联偏移进行对齐或紧贴吸附。
  */
 export function snapFloatPosition(
   panel: { x: number; y: number; width: number; height: number },
@@ -149,12 +149,19 @@ export function snapFloatPosition(
     { target: bottomLimit, line: viewportHeight - 24 },
   ];
 
-  // 2. 其它浮动面板的边缘候选
+  // 2. 其它浮动面板的边缘、居中与堆叠级联候选
   for (const other of otherPanels) {
     // 自身左边与其他面板左边对齐
     xCandidates.push({ target: other.x, line: other.x });
     // 自身右边与其他面板右边对齐
     xCandidates.push({ target: other.x + other.width - panel.width, line: other.x + other.width });
+    // 自身水平居中与其他面板居中对齐
+    xCandidates.push({
+      target: other.x + (other.width - panel.width) * 0.5,
+      line: other.x + other.width * 0.5,
+    });
+    // 级联层叠对齐 (+28px 标题栏偏移)
+    xCandidates.push({ target: other.x + 28, line: other.x + 28 });
     // 紧贴在其他面板右侧
     xCandidates.push({ target: other.x + other.width, line: other.x + other.width });
     // 紧贴在其他面板左侧
@@ -164,6 +171,13 @@ export function snapFloatPosition(
     yCandidates.push({ target: other.y, line: other.y });
     // 自身底边与其他面板底边对齐
     yCandidates.push({ target: other.y + other.height - panel.height, line: other.y + other.height });
+    // 自身垂直居中与其他面板居中对齐
+    yCandidates.push({
+      target: other.y + (other.height - panel.height) * 0.5,
+      line: other.y + other.height * 0.5,
+    });
+    // 级联层叠对齐 (+28px 标题栏偏移)
+    yCandidates.push({ target: other.y + 28, line: other.y + 28 });
     // 紧贴在其他面板下方
     yCandidates.push({ target: other.y + other.height, line: other.y + other.height });
     // 紧贴在其他面板上方

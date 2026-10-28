@@ -725,6 +725,7 @@ export interface DragFeedback {
   currentScreen?: [number, number];
   angleDeg?: number;
   radius?: number;
+  snapPoint?: [number, number];
 }
 
 /** 单个实体的局部变换更新项。 */
@@ -850,8 +851,18 @@ export function viewportDrag(
   x: number,
   y: number,
   snap = false,
+  vsnap = false,
 ): Promise<DragTransformResult | null> {
-  return call<DragTransformResult | null>("editor_viewport_drag", { id, x, y, snap });
+  return call<DragTransformResult | null>("editor_viewport_drag", { id, x, y, snap, vsnap });
+}
+
+/** 视口屏幕坐标射线拾取场景表面或世界地面 (Y=0) 的三维点坐标。 */
+export function viewportRaycast(
+  id: string,
+  x: number,
+  y: number,
+): Promise<[number, number, number] | null> {
+  return call<[number, number, number] | null>("editor_viewport_raycast", { id, x, y });
 }
 
 /** 结束拖动。 */
