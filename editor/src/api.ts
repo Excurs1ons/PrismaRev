@@ -348,6 +348,16 @@ export function buildScenes(): Promise<string> {
   return call<string>("editor_build_scenes");
 }
 
+/** 后台构建 / 导入进度（无任务时返回当前最后一次的状态或 `null`）。 */
+export function buildStatus(): Promise<{
+  active: boolean;
+  label: string;
+  message: string;
+  elapsedMs: number;
+} | null> {
+  return call("editor_build_status");
+}
+
 // ── 离线工具 ────────────────────────────────────────────────────────────────
 
 /** 离线烘焙 GI probe volume，返回命令输出。 */
