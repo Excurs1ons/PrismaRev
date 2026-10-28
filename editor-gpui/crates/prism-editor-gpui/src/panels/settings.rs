@@ -7,7 +7,7 @@ use gpui::{div, prelude::*, px, AnyElement, Context, Div, SharedString, Stateful
 use prism_editor_gpui_core::{Locale, ThemeToken, THEME_PRESETS};
 
 use crate::app::{EditorView, TextTarget};
-use crate::panels::{header_row, muted};
+use crate::panels::{header_row, icon_button, muted};
 use crate::style::ROW_HEIGHT;
 
 impl EditorView {
@@ -425,25 +425,40 @@ impl EditorView {
                         .child("构建项目"),
                 );
 
-        let scenes: Vec<(String, String)> = self
+        let entries: Vec<(usize, String, String, bool)> = self
             .workspace
-            .docs
+            .scene_manifest
+            .scenes
             .iter()
-            .filter(|doc| doc.kind == prism_editor_gpui_core::DocKind::Scene)
-            .map(|doc| {
-                (
-                    doc.title(),
-                    doc.path.clone().unwrap_or_else(|| "（未保存）".to_string()),
-                )
-            })
+            .enumerate()
+            .map(|(index, entry)| (index, entry.name.clone(), entry.path.clone(), entry.enabled))
             .collect();
+        let available = self.workspace.available_scene_documents();
+        let active_scene = self
+            .workspace
+            .scene_manifest
+            .active()
+            .map(|entry| entry.name.clone())
+            .unwrap_or_else(|| "（无启用场景）".to_string());
+        let enabled_count = entries.iter().filter(|(_, _, _, enabled)| *enabled).count();
+        let total = entries.len();
 
         let mut body = self.settings_scroll("build-body", cx);
-        body = body.child(section_title(style, "场景（顺序即构建顺序）"));
-        if scenes.is_empty() {
-            body = body.child(muted(style, "没有场景"));
+        body = body.child(section_title(style, "构建场景（顺序即构建/启动顺序）"));
+        body = body.child(muted(
+            style,
+            format!(
+                "启动场景：{active_scene} · 启用 {enabled_count}/{total} · assets/scenes.toml（改动立即写盘）"
+            ),
+        ));
+        if entries.is_empty() {
+            body = body.child(muted(
+                style,
+                "scenes.toml 为空：从下面的列表添加，或先保存一个场景文档。",
+            ));
         }
-        for (index, (name, path)) in scenes.iter().enumerate() {
+        for (index, name, path, enabled) in entries.iter().cloned() {
+            let checkbox = if enabled { "☑" } else { "☐" };
             body = body.child(
                 div()
                     .flex()
@@ -453,11 +468,28 @@ impl EditorView {
                     .h(ROW_HEIGHT)
                     .px_2()
                     .text_size(px(10.0))
+                    .when(!enabled, |row| row.opacity(0.55))
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("scene-enabled-{index}")))
+                            .w(px(16.0))
+                            .cursor_pointer()
+                            .text_color(if enabled {
+                                style.success()
+                            } else {
+                                style.muted()
+                            })
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.workspace.set_scene_enabled(index, !enabled);
+                                cx.notify();
+                            }))
+                            .child(SharedString::from(checkbox)),
+                    )
                     .child(
                         div()
                             .w(px(18.0))
                             .text_color(style.muted())
-                            .child(SharedString::from(format!("{}", index))),
+                            .child(SharedString::from(format!("{index}"))),
                     )
                     .child(
                         div()
@@ -470,8 +502,86 @@ impl EditorView {
                             .text_size(px(9.0))
                             .text_color(style.muted())
                             .child(SharedString::from(path.clone())),
+                    )
+                    .child(
+                        icon_button(
+                            style,
+                            SharedString::from(format!("scene-up-{index}")),
+                            "↑",
+                            index > 0,
+                            ThemeToken::TextSoft,
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.workspace.move_scene_entry(index, -1);
+                            cx.notify();
+                        })),
+                    )
+                    .child(
+                        icon_button(
+                            style,
+                            SharedString::from(format!("scene-down-{index}")),
+                            "↓",
+                            index + 1 < total,
+                            ThemeToken::TextSoft,
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.workspace.move_scene_entry(index, 1);
+                            cx.notify();
+                        })),
+                    )
+                    .child(
+                        icon_button(
+                            style,
+                            SharedString::from(format!("scene-remove-{index}")),
+                            "✕",
+                            true,
+                            ThemeToken::Danger,
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.workspace.remove_scene_entry(index);
+                            cx.notify();
+                        })),
                     ),
             );
+        }
+
+        body = body.child(section_title(style, "从 assets/scenes 添加"));
+        if available.is_empty() {
+            body = body.child(muted(style, "所有场景文档都已在清单里"));
+        }
+        for relative in available.iter().take(20) {
+            let relative = relative.clone();
+            let doc = relative.clone();
+            body = body.child(
+                div()
+                    .id(SharedString::from(format!("scene-add-{relative}")))
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_2()
+                    .h(ROW_HEIGHT)
+                    .px_2()
+                    .text_size(px(10.0))
+                    .cursor_pointer()
+                    .hover(move |this| this.bg(style.row_hover()))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.workspace.add_scene_document(&doc);
+                        cx.notify();
+                    }))
+                    .child(div().w(px(12.0)).text_color(style.success()).child("+"))
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_color(style.text_soft())
+                            .child(SharedString::from(relative)),
+                    ),
+            );
+        }
+        if available.len() > 20 {
+            body = body.child(muted(
+                style,
+                format!("还有 {} 个文档未显示…", available.len() - 20),
+            ));
         }
 
         body = body.child(section_title(style, "构建日志"));

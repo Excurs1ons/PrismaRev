@@ -1,6 +1,6 @@
 # GPUI 原生编辑器（`editor-gpui/`）
 
-> 状态：**可编译的类型检查 + 140 个数据层单测通过**；桌面运行尚未在 CI 上跑过
+> 状态：**可编译的类型检查 + 150 个数据层单测通过**；桌面运行尚未在 CI 上跑过
 > （GPUI 需要 Windows/macOS/Linux 桌面与 GPU）。
 >
 > 本文说明「为什么做、边界在哪、怎么接真实引擎」，功能清单见
@@ -147,6 +147,18 @@ Unity 形状的编辑器，又不会把 `prism-render` 绑死在某套 UI 生命
   里我们负责的键，`[render]` 与未知键原样保留；
 - 面板上的「应用设置」调用它；没有项目根时只记录警告，不写文件。
 
+## 8.1 场景清单（`assets/scenes.toml`）
+
+`core/src/manifest.rs` 与 Web 编辑器的 Build Settings 同语义：
+
+- 数组顺序 = 构建顺序 = 启动顺序；第一个 `enabled = true` 是启动场景；
+- 缺文件 = 空清单；旧条目没有 `enabled` 字段时按 `true` 处理；
+- 写回前校验名字/路径非空、名字不重复；直接覆盖原文件（注释会丢，与 Web 编辑器一致）；
+- `doc_relative_path` 在 `scenes/x.rscn` ↔ `scenes/x.scene.json` 之间映射，外部格式
+  （glTF 等）返回 `None`；
+- 构建面板可以勾选/上下移/移除条目，并从 `assets/scenes` 里把尚未入清单的文档加进来
+  （名字自动去重为 `foo-2`，路径写成 `scenes/foo.rscn`）；每次改动立即写盘。
+
 ## 9. Scene / Game View 的现状与接线
 
 当前 `viewport.rs` 用 `gpui::canvas` 做**CPU 投影**：
@@ -185,7 +197,7 @@ Unity 形状的编辑器，又不会把 `prism-render` 绑死在某套 UI 生命
 
 ```sh
 cd editor-gpui
-cargo test -p prism-editor-gpui-core                                  # 140 passed
+cargo test -p prism-editor-gpui-core                                  # 150 passed
 cargo check -p prism-editor-gpui --target x86_64-pc-windows-gnu       # 类型检查
 cargo clippy -p prism-editor-gpui -p prism-editor-gpui-core \
     --target x86_64-pc-windows-gnu                                    # clean

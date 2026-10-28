@@ -12,6 +12,7 @@ use crate::dock::{
 use crate::i18n::{I18n, Locale};
 use crate::keys::Command;
 use crate::logbuf::{LogBuffer, LogLevel, LogSource};
+use crate::manifest::SceneManifest;
 use crate::project::{self, ProjectFile};
 use crate::schema::{component_value_with_overrides, EntityPreset, Schema, TypeSchema};
 use crate::theme::{ThemeColors, ThemeState, ThemeToken};
@@ -215,6 +216,8 @@ pub struct Workspace {
     pub project_root: Option<PathBuf>,
     /// 磁盘上的场景 / 预制体（`assets/scenes`、`assets/prefabs`）。
     pub project_files: Vec<ProjectFile>,
+    /// `assets/scenes.toml` 的场景清单（顺序 = 构建 / 启动顺序）。
+    pub scene_manifest: SceneManifest,
 }
 
 impl Default for Workspace {
@@ -266,6 +269,7 @@ impl Workspace {
             layout_preset: "default".to_string(),
             project_root: None,
             project_files: Vec::new(),
+            scene_manifest: SceneManifest::default(),
         };
         workspace.log(
             LogSource::Editor,
@@ -433,6 +437,15 @@ impl Workspace {
 
         self.project_root = Some(root);
         self.project_files = files;
+        match SceneManifest::read(self.project_root.as_deref().expect("project_root 刚刚赋值"))
+        {
+            Ok(manifest) => self.scene_manifest = manifest,
+            Err(error) => self.log(
+                LogSource::Editor,
+                LogLevel::Warn,
+                format!("读取 assets/scenes.toml 失败: {error}"),
+            ),
+        }
         if !opened.is_empty() {
             self.docs = opened;
             // 优先打开场景（而不是预制体）作为当前文档。
@@ -746,6 +759,78 @@ impl Workspace {
                 None => format!("{}/{}", document.kind.folder(), document.title()),
             },
         }
+    }
+
+    // ── 场景清单（assets/scenes.toml） ───────────────────────────────────
+
+    /// 落盘失败只记日志：清单编辑不应打断编辑器的其它操作。
+    fn persist_scene_manifest(&mut self) {
+        let Some(root) = self.project_root.clone() else {
+            return;
+        };
+        if let Err(error) = self.scene_manifest.write(&root) {
+            self.log(
+                LogSource::Editor,
+                LogLevel::Error,
+                format!("写入 assets/scenes.toml 失败: {error}"),
+            );
+        }
+    }
+
+    pub fn reload_scene_manifest(&mut self) -> io::Result<()> {
+        let Some(root) = self.project_root.clone() else {
+            return Err(io::Error::new(io::ErrorKind::NotFound, "没有绑定项目根"));
+        };
+        self.scene_manifest = SceneManifest::read(&root)?;
+        Ok(())
+    }
+
+    pub fn set_scene_enabled(&mut self, index: usize, enabled: bool) {
+        if self.scene_manifest.set_enabled(index, enabled) {
+            self.persist_scene_manifest();
+        }
+    }
+
+    /// 上移 / 下移一条，返回新下标。
+    pub fn move_scene_entry(&mut self, index: usize, delta: i32) -> Option<usize> {
+        let moved = self.scene_manifest.move_entry(index, delta);
+        if moved.is_some() {
+            self.persist_scene_manifest();
+        }
+        moved
+    }
+
+    pub fn remove_scene_entry(&mut self, index: usize) -> bool {
+        let removed = self.scene_manifest.remove(index).is_some();
+        if removed {
+            self.persist_scene_manifest();
+        }
+        removed
+    }
+
+    /// 把磁盘上的场景文档加入清单；已存在 / 无项目根时返回 `None`。
+    pub fn add_scene_document(&mut self, doc_relative: &str) -> Option<usize> {
+        if self.project_root.is_none() {
+            return None;
+        }
+        let added = self.scene_manifest.add_document(doc_relative);
+        if added.is_some() {
+            self.persist_scene_manifest();
+        }
+        added
+    }
+
+    /// `assets/scenes` 下尚未写进清单的场景文档（相对 `assets/`）。
+    pub fn available_scene_documents(&self) -> Vec<String> {
+        let mut docs: Vec<String> = self
+            .project_files
+            .iter()
+            .filter(|file| file.kind == DocKind::Scene)
+            .map(|file| file.path.trim_start_matches("assets/").to_string())
+            .filter(|relative| !self.scene_manifest.contains_document(relative))
+            .collect();
+        docs.sort();
+        docs
     }
 
     // ── 文档 ─────────────────────────────────────────────────────────────
@@ -2424,6 +2509,67 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.root);
         }
+    }
+
+    #[test]
+    fn project_scene_manifest_is_loaded_and_saved() {
+        let project = TempProject::new("manifest-load");
+        std::fs::write(
+            project.root.join("assets/scenes.toml"),
+            "[[scenes]]\nname = \"intro\"\npath = \"scenes/intro.rscn\"\nenabled = true\n\n\
+             [[scenes]]\nname = \"level\"\npath = \"scenes/level.rscn\"\nenabled = false\n",
+        )
+        .unwrap();
+        let mut workspace = Workspace::load_fixture(&fixture());
+        workspace.load_project(project.root.clone()).unwrap();
+        assert_eq!(workspace.scene_manifest.scenes.len(), 2);
+        assert_eq!(workspace.scene_manifest.active().unwrap().name, "intro");
+
+        workspace.set_scene_enabled(0, false);
+        let reloaded = SceneManifest::read(&project.root).unwrap();
+        assert!(!reloaded.scenes[0].enabled);
+        assert!(reloaded.active().is_none(), "level 本来就没启用");
+
+        workspace.set_scene_enabled(1, true);
+        let reloaded = SceneManifest::read(&project.root).unwrap();
+        assert_eq!(reloaded.active().unwrap().name, "level");
+    }
+
+    #[test]
+    fn manifest_add_move_remove_and_available_documents() {
+        let project = TempProject::new("manifest-edit");
+        let scene = r#"{"version":3,"entities":[]}"#;
+        std::fs::write(project.root.join("assets/scenes/a.scene.json"), scene).unwrap();
+        std::fs::write(project.root.join("assets/scenes/b.scene.json"), scene).unwrap();
+        std::fs::write(
+            project.root.join("assets/scenes.toml"),
+            "[[scenes]]\nname = \"a\"\npath = \"scenes/a.rscn\"\n",
+        )
+        .unwrap();
+        let mut workspace = Workspace::load_fixture(&fixture());
+        workspace.load_project(project.root.clone()).unwrap();
+
+        assert_eq!(
+            workspace.available_scene_documents(),
+            vec!["scenes/b.scene.json".to_string()]
+        );
+        let index = workspace
+            .add_scene_document("assets/scenes/b.scene.json")
+            .expect("b 应能加入");
+        assert_eq!(index, 1);
+        assert!(workspace.available_scene_documents().is_empty());
+        assert!(workspace
+            .add_scene_document("scenes/b.scene.json")
+            .is_none());
+
+        assert_eq!(workspace.move_scene_entry(1, -1), Some(0));
+        assert_eq!(
+            SceneManifest::read(&project.root).unwrap().scenes[0].name,
+            "b"
+        );
+        assert!(workspace.remove_scene_entry(0));
+        assert_eq!(SceneManifest::read(&project.root).unwrap().scenes.len(), 1);
+        assert!(!workspace.remove_scene_entry(9));
     }
 
     #[test]

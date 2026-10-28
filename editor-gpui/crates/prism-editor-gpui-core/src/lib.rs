@@ -21,6 +21,7 @@ pub mod dock;
 pub mod i18n;
 pub mod keys;
 pub mod logbuf;
+pub mod manifest;
 pub mod project;
 pub mod schema;
 pub mod settings;
@@ -39,6 +40,7 @@ pub use dock::{
 pub use i18n::{I18n, Locale};
 pub use keys::{command_for, Command, KeyChord, SHORTCUTS};
 pub use logbuf::{LogBuffer, LogFilter, LogLevel, LogLine, LogSource, LOG_ROW_HEIGHT};
+pub use manifest::{doc_relative_path, SceneEntry, SceneManifest};
 pub use project::{find_project_root, scan_documents, ProjectFile};
 pub use schema::{
     component_value_with_overrides, get_at, set_at_path, EntityPreset, FieldSchema, FieldWidget,
