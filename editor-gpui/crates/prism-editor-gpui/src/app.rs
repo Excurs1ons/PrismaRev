@@ -252,6 +252,9 @@ impl MenuId {
                 Command::DuplicateEntity,
                 Command::DeleteSelection,
                 Command::SelectAll,
+                Command::CopyEntity,
+                Command::CutEntity,
+                Command::PasteEntity,
                 Command::PasteComponent,
                 Command::Preferences,
                 Command::ProjectSettings,
@@ -2617,7 +2620,17 @@ impl EditorView {
                     .get(index)
                     .map(|entity| entity.prefab_link().is_some())
                     .unwrap_or(false);
-                items.push(("复制实体".into(), true));
+                items.push(("复制".into(), true));
+                items.push(("剪切".into(), self.workspace.is_enabled(Command::CutEntity)));
+                items.push((
+                    "粘贴".into(),
+                    self.workspace.is_enabled(Command::PasteEntity),
+                ));
+                items.push((
+                    "粘贴为子级".into(),
+                    self.workspace.is_enabled(Command::PasteEntity),
+                ));
+                items.push(("创建副本".into(), true));
                 items.push(("删除实体".into(), true));
                 items.push(("重命名…".into(), true));
                 items.push(("存为预制体…".into(), true));
@@ -2663,7 +2676,30 @@ impl EditorView {
                         }
                         this.context_menu = None;
                         match (&target, label.as_str()) {
-                            (ContextTarget::Entity(index), "复制实体") => {
+                            (ContextTarget::Entity(index), "复制") => {
+                                this.workspace.select(*index, false);
+                                this.workspace.copy_selection();
+                            }
+                            (ContextTarget::Entity(index), "剪切") => {
+                                this.workspace.select(*index, false);
+                                this.workspace.cut_selection();
+                            }
+                            (ContextTarget::Entity(index), "粘贴") => {
+                                let parent = {
+                                    let doc = &this.workspace.document().doc;
+                                    doc.entities
+                                        .get(*index)
+                                        .and_then(|entity| entity.parent)
+                                        .and_then(|parent_id| doc.index_of_id(parent_id))
+                                };
+                                this.workspace.select(*index, false);
+                                this.workspace.paste_entities(parent);
+                            }
+                            (ContextTarget::Entity(index), "粘贴为子级") => {
+                                this.workspace.select(*index, false);
+                                this.workspace.paste_entities(Some(*index));
+                            }
+                            (ContextTarget::Entity(index), "创建副本") => {
                                 this.workspace.select(*index, false);
                                 this.workspace.duplicate_selection();
                             }

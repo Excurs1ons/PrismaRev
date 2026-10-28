@@ -470,6 +470,16 @@ impl SceneDoc {
     /// 提取选中实体子树为独立文档（「存为预制体」）。
     /// 根上的预制体实例链接会被剥掉，避免预制体引用自己。
     pub fn extract_subtree(&self, roots: &[usize]) -> SceneDoc {
+        self.extract_subtree_inner(roots, true)
+    }
+
+    /// 复制 / 剪切用：与 `extract_subtree` 相同，但保留根上的预制体链接，
+    /// 这样粘贴出来的仍是同源实例（Unity 的复制预制体实例行为）。
+    pub fn extract_subtree_preserving_links(&self, roots: &[usize]) -> SceneDoc {
+        self.extract_subtree_inner(roots, false)
+    }
+
+    fn extract_subtree_inner(&self, roots: &[usize], strip_root_links: bool) -> SceneDoc {
         let mut selected: Vec<usize> = Vec::new();
         for root in roots {
             select_subtree(self, *root, &mut selected);
@@ -504,7 +514,10 @@ impl SceneDoc {
                     // 根实体不能保留指向外部父级的 parent。
                     old_id.map(|id| !root_set.contains(&id)).unwrap_or(false)
                 });
-            entity.components.remove(PREFAB_LINK_COMPONENT);
+            let is_root = old_id.map(|id| root_set.contains(&id)).unwrap_or(false);
+            if strip_root_links && is_root {
+                entity.components.remove(PREFAB_LINK_COMPONENT);
+            }
             doc.entities.push(entity);
         }
         doc.normalize();
@@ -792,6 +805,37 @@ mod tests {
             .get(PREFAB_LINK_COMPONENT)
             .is_none());
         assert_eq!(prefab.entities[1].parent, Some(1));
+    }
+
+    #[test]
+    fn extract_subtree_keeps_nested_instance_links() {
+        let mut doc = doc_with_tree();
+        doc.entities[1].components.insert(
+            PREFAB_LINK_COMPONENT.to_string(),
+            serde_json::json!({"prefab": "assets/prefabs/child.prefab.json"}),
+        );
+        let prefab = doc.extract_subtree(&[0]);
+        assert_eq!(
+            prefab.entities[1].prefab_link(),
+            Some("assets/prefabs/child.prefab.json")
+        );
+        assert!(prefab.entities[0].prefab_link().is_none());
+    }
+
+    #[test]
+    fn extract_subtree_preserving_links_keeps_root_link() {
+        let mut doc = doc_with_tree();
+        doc.entities[0].components.insert(
+            PREFAB_LINK_COMPONENT.to_string(),
+            serde_json::json!({"prefab": "assets/prefabs/root.prefab.json"}),
+        );
+        let copy = doc.extract_subtree_preserving_links(&[0]);
+        assert_eq!(
+            copy.entities[0].prefab_link(),
+            Some("assets/prefabs/root.prefab.json")
+        );
+        let stripped = doc.extract_subtree(&[0]);
+        assert!(stripped.entities[0].prefab_link().is_none());
     }
 
     #[test]

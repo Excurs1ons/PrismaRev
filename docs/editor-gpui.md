@@ -101,6 +101,12 @@ Unity 形状的编辑器，又不会把 `prism-render` 绑死在某套 UI 生命
   共用 `core/src/textinput.rs` 的 `TextInput`：光标 + 锚点（字节偏移、始终在 char 边界），
   支持选区替换、Home/End、Shift 扩选、Ctrl/Alt 按词左右移动、Ctrl+Backspace/Delete
   按词删除、Ctrl+A 全选。UI 只把按键映射成方法调用，提交/预览逻辑不变。
+- **实体剪贴板**（Ctrl+C / X / V）与组件剪贴板分开（组件粘贴改成 Ctrl+Shift+V）：
+  `copy_selection` 只取 `selection_roots()`（父级也被选中时去掉子级，避免重复），
+  每棵树经 `extract_subtree_preserving_links` 重新编号；`paste_entities(parent)`
+  逐棵 `instantiate_prefab`（空路径 = 不覆盖链接），根挂到 `parent` 或根级，
+  名字按当前文档去重。右键「粘贴」= 挂到被点实体的父级，「粘贴为子级」= 挂到它下面。
+  剪切 = 复制 + 删除；多选 Ctrl+D / 创建副本会复制每个顶层子树并选中全部新根。
 
 ## 6. 项目文件
 

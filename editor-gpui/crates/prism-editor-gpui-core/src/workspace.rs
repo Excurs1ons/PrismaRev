@@ -137,6 +137,14 @@ pub struct ComponentClipboard {
     pub value: Value,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct EntityClipboard {
+    /// 每个顶层选中实体对应一棵独立子树（id 已从 1 重新编号）。
+    pub trees: Vec<SceneDoc>,
+    /// 是否来自剪切（仅用于界面提示，粘贴行为相同）。
+    pub cut: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct OrbitCamera {
     pub target: [f32; 3],
@@ -201,6 +209,8 @@ pub struct Workspace {
     pub selection: Vec<usize>,
     pub expanded: HashSet<u32>,
     pub clipboard: Option<ComponentClipboard>,
+    /// 实体剪贴板（Ctrl+C/X/V）：每项是一棵已重新编号的子树。
+    pub entity_clipboard: Option<EntityClipboard>,
     pub theme: ThemeState,
     pub i18n: I18n,
     pub log: LogBuffer,
@@ -259,6 +269,7 @@ impl Workspace {
             selection: Vec::new(),
             expanded: HashSet::new(),
             clipboard: None,
+            entity_clipboard: None,
             theme: ThemeState::default(),
             i18n: I18n::default(),
             log: LogBuffer::default(),
@@ -1112,16 +1123,140 @@ impl Workspace {
         self.selection.clear();
     }
 
-    pub fn duplicate_selection(&mut self) {
-        let Some(index) = self.primary_selection() else {
-            return;
+    /// 顶层选中实体：去掉“父级也在选中集合里”的项，避免复制整棵子树两次。
+    pub fn selection_roots(&self) -> Vec<usize> {
+        let doc = &self.document().doc;
+        let ids: HashSet<u32> = self
+            .selection
+            .iter()
+            .filter_map(|index| doc.entities.get(*index).and_then(|entity| entity.id))
+            .collect();
+        let mut roots = Vec::new();
+        for index in &self.selection {
+            let Some(entity) = doc.entities.get(*index) else {
+                continue;
+            };
+            let mut parent = entity.parent;
+            let mut nested = false;
+            let mut depth = 0;
+            while let Some(parent_id) = parent {
+                if ids.contains(&parent_id) {
+                    nested = true;
+                    break;
+                }
+                depth += 1;
+                if depth > 64 {
+                    break;
+                }
+                parent = doc
+                    .index_of_id(parent_id)
+                    .and_then(|parent_index| doc.entities.get(parent_index))
+                    .and_then(|parent| parent.parent);
+            }
+            if !nested {
+                roots.push(*index);
+            }
+        }
+        roots.sort_unstable();
+        roots.dedup();
+        roots
+    }
+
+    /// 复制选中实体到内部剪贴板（不写系统剪贴板）。返回实体数。
+    pub fn copy_selection(&mut self) -> usize {
+        let roots = self.selection_roots();
+        if roots.is_empty() {
+            return 0;
+        }
+        let trees: Vec<SceneDoc> = roots
+            .iter()
+            .map(|index| {
+                self.document()
+                    .doc
+                    .extract_subtree_preserving_links(&[*index])
+            })
+            .collect();
+        let count: usize = trees.iter().map(|tree| tree.entities.len()).sum();
+        self.entity_clipboard = Some(EntityClipboard { trees, cut: false });
+        self.log(
+            LogSource::Editor,
+            LogLevel::Debug,
+            format!("已复制 {count} 个实体"),
+        );
+        count
+    }
+
+    /// 剪切 = 复制 + 删除（一次删除撤销步）。
+    pub fn cut_selection(&mut self) -> usize {
+        let count = self.copy_selection();
+        if count > 0 {
+            if let Some(clipboard) = &mut self.entity_clipboard {
+                clipboard.cut = true;
+            }
+            self.delete_selection();
+        }
+        count
+    }
+
+    /// 粘贴实体剪贴板：`parent = None` 落到根级，否则挂到该实体下。
+    /// 返回粘贴出来的根实体下标（并设为当前选择）。
+    pub fn paste_entities(&mut self, parent: Option<usize>) -> Vec<usize> {
+        let Some(clipboard) = self.entity_clipboard.clone() else {
+            return Vec::new();
         };
-        let new_index = self.edit("复制实体", |document| {
-            document.doc.duplicate_subtree(index)
+        if clipboard.trees.is_empty() {
+            return Vec::new();
+        }
+        let parent_valid = parent.filter(|index| *index < self.document().doc.entities.len());
+        let roots = self.edit("粘贴实体", |document| {
+            let mut roots = Vec::new();
+            for tree in &clipboard.trees {
+                let inserted = document.doc.instantiate_prefab(tree, parent_valid, "");
+                if let Some(root) = inserted.first() {
+                    roots.push(*root);
+                }
+            }
+            roots
         });
-        if let Some(new_index) = new_index {
-            self.selection = vec![new_index];
-            if let Some(id) = self.document().doc.id_of_index(new_index) {
+        if roots.is_empty() {
+            return roots;
+        }
+        self.selection = roots.clone();
+        for index in &roots {
+            if let Some(id) = self.document().doc.id_of_index(*index) {
+                self.expanded.insert(id);
+            }
+        }
+        self.log(
+            LogSource::Editor,
+            LogLevel::Info,
+            format!("已粘贴 {} 个实体", roots.len()),
+        );
+        roots
+    }
+
+    pub fn duplicate_selection(&mut self) {
+        if self.selection.is_empty() {
+            return;
+        }
+        let roots = self.selection_roots();
+        let mut inserted = self.edit("复制实体", |document| {
+            let mut inserted = Vec::new();
+            // 从后往前复制，前面的下标不会被新追加的实体挤动。
+            for index in roots.iter().rev() {
+                if let Some(new_index) = document.doc.duplicate_subtree(*index) {
+                    inserted.push(new_index);
+                }
+            }
+            inserted
+        });
+        if inserted.is_empty() {
+            return;
+        }
+        inserted.sort_unstable();
+        self.selection = inserted.clone();
+        for index in &inserted {
+            if let Some(id) = self.document().doc.id_of_index(*index) {
                 self.expanded.insert(id);
             }
         }
@@ -1929,6 +2064,15 @@ impl Workspace {
                 self.selection = (0..self.document().doc.entities.len()).collect();
             }
             Command::PasteComponent => self.paste_component(),
+            Command::CopyEntity => {
+                self.copy_selection();
+            }
+            Command::CutEntity => {
+                self.cut_selection();
+            }
+            Command::PasteEntity => {
+                self.paste_entities(None);
+            }
             Command::BuildProject => {
                 self.log(LogSource::System, LogLevel::Info, "构建项目（占位）");
             }
@@ -1960,9 +2104,12 @@ impl Workspace {
         match command {
             Command::Undo => self.can_undo(),
             Command::Redo => self.can_redo(),
-            Command::DuplicateEntity | Command::DeleteSelection | Command::FrameSelection => {
-                !self.selection.is_empty()
-            }
+            Command::DuplicateEntity
+            | Command::DeleteSelection
+            | Command::CopyEntity
+            | Command::CutEntity
+            | Command::FrameSelection => !self.selection.is_empty(),
+            Command::PasteEntity => self.entity_clipboard.is_some(),
             Command::PasteComponent => self.clipboard.is_some() && !self.selection.is_empty(),
             Command::Pause | Command::Stop | Command::Step => self.playing,
             Command::Play => !self.playing,
@@ -3154,5 +3301,123 @@ mod tests {
         assert!(workspace.document().doc.entities[1].parent.is_none());
         workspace.undo();
         assert_eq!(workspace.document().doc.entities[1].parent, Some(1));
+    }
+
+    fn index_named(workspace: &Workspace, name: &str) -> usize {
+        workspace
+            .document()
+            .doc
+            .entities
+            .iter()
+            .position(|entity| entity.display_name() == name)
+            .unwrap_or_else(|| panic!("missing entity {name}"))
+    }
+
+    #[test]
+    fn selection_roots_drops_nested_entities() {
+        let mut workspace = Workspace::sample();
+        let cube = index_named(&workspace, "Cube");
+        let detail = index_named(&workspace, "Detail");
+        workspace.select(cube, false);
+        workspace.select(detail, true);
+        assert_eq!(workspace.selection_roots(), vec![cube]);
+    }
+
+    #[test]
+    fn copy_paste_keeps_subtree_and_attaches_parent() {
+        let mut workspace = Workspace::sample();
+        let cube = index_named(&workspace, "Cube");
+        let light = index_named(&workspace, "Directional Light");
+        workspace.select(cube, false);
+        assert_eq!(workspace.copy_selection(), 2, "Cube + Detail");
+
+        let before = workspace.document().doc.entities.len();
+        let pasted = workspace.paste_entities(None);
+        assert_eq!(pasted.len(), 1);
+        assert_eq!(workspace.document().doc.entities.len(), before + 2);
+        assert_eq!(workspace.selection, pasted);
+        let root = &workspace.document().doc.entities[pasted[0]];
+        assert_eq!(root.display_name(), "Cube (1)");
+        assert!(root.parent.is_none());
+
+        let pasted = workspace.paste_entities(Some(light));
+        let light_id = workspace.document().doc.entities[light].id;
+        assert_eq!(
+            workspace.document().doc.entities[pasted[0]].parent,
+            light_id
+        );
+    }
+
+    #[test]
+    fn cut_removes_source_then_paste_restores() {
+        let mut workspace = Workspace::sample();
+        let before = workspace.document().doc.entities.len();
+        let detail = index_named(&workspace, "Detail");
+        workspace.select(detail, false);
+        assert_eq!(workspace.cut_selection(), 1);
+        assert!(workspace
+            .document()
+            .doc
+            .entities
+            .iter()
+            .all(|entity| entity.display_name() != "Detail"));
+        assert!(workspace.entity_clipboard.as_ref().unwrap().cut);
+
+        let pasted = workspace.paste_entities(None);
+        assert_eq!(
+            workspace.document().doc.entities[pasted[0]].display_name(),
+            "Detail"
+        );
+        workspace.undo();
+        workspace.undo();
+        assert_eq!(workspace.document().doc.entities.len(), before);
+        assert_eq!(
+            workspace.document().doc.entities[detail].display_name(),
+            "Detail"
+        );
+    }
+
+    #[test]
+    fn copy_preserves_prefab_instance_link() {
+        let mut workspace = Workspace::sample();
+        let cube = index_named(&workspace, "Cube");
+        workspace.document_mut().doc.entities[cube]
+            .components
+            .insert(
+                PREFAB_LINK_COMPONENT.to_string(),
+                serde_json::json!({ "prefab": "assets/prefabs/cube.prefab.json" }),
+            );
+        workspace.select(cube, false);
+        workspace.copy_selection();
+        let pasted = workspace.paste_entities(None);
+        assert_eq!(
+            workspace.document().doc.entities[pasted[0]].prefab_link(),
+            Some("assets/prefabs/cube.prefab.json")
+        );
+    }
+
+    #[test]
+    fn duplicate_multiple_roots_copies_each_subtree() {
+        let mut workspace = Workspace::sample();
+        let cube = index_named(&workspace, "Cube");
+        let light = index_named(&workspace, "Directional Light");
+        workspace.select(cube, false);
+        workspace.select(light, true);
+        let before = workspace.document().doc.entities.len();
+        workspace.run(Command::DuplicateEntity);
+        assert_eq!(workspace.document().doc.entities.len(), before + 3);
+        assert_eq!(workspace.selection.len(), 2);
+    }
+
+    #[test]
+    fn entity_clipboard_commands_enable_state() {
+        let mut workspace = Workspace::sample();
+        assert!(!workspace.is_enabled(Command::PasteEntity));
+        workspace.select(0, false);
+        assert!(workspace.is_enabled(Command::CopyEntity));
+        workspace.run(Command::CopyEntity);
+        assert!(workspace.is_enabled(Command::PasteEntity));
+        workspace.run(Command::CutEntity);
+        assert!(workspace.entity_clipboard.as_ref().unwrap().cut);
     }
 }

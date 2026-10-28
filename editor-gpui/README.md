@@ -28,13 +28,14 @@
 
 **外壳**
 
-- 菜单栏（文件/编辑/构建/窗口/帮助）与快捷键（`Ctrl+S/Z/Shift+Z/D/A/V`、`Del`、`F`、`Home`…）
+- 菜单栏（文件/编辑/构建/窗口/帮助）与快捷键（`Ctrl+S/Z/Shift+Z/C/X/V/D/A`、`Del`、`F`、`Home`…）
 - 工具栏：布局预设（Default / 2 by 3 / Tall / Wide）、文档标签、Play/Pause/Step/Stop、
   取景（全部 / 选中）、主题与语言切换、状态栏（脏标记 / 实体数 / 选中数 / 错误与告警计数）
 - **split-tree docking**：同侧 ratio 共享、splitter 拖拽、tab 拖到 leaf 中央合并/split、
   拖到主窗口三边新开整列/整行、拖出窗口变浮动面板、8 方向 resize、磁吸、z-order
 - 浮动窗口标题栏拖动、关闭；`window/toggle/<id>` 与「显示面板」菜单
-- 右键菜单（层级实体 / 组件卡 / 资产）：复制、删除、重命名、**存为预制体**、
+- 右键菜单（层级实体 / 组件卡 / 资产）：复制 / 剪切 / 粘贴 / 粘贴为子级 / 创建副本、
+  删除、重命名、**存为预制体**、
   还原 / 同步 / 解除预制体实例、复制/移除/粘贴组件、打开文档、重命名资产、复制路径
 - **真实文件 IO**：自动从 cwd / 可执行文件目录向上找 `assets/`；打开磁盘上的
   `assets/scenes/*.scene.json`、`assets/prefabs/*.prefab.json`；`Ctrl+S` 保存
@@ -69,6 +70,8 @@
 - 撤销栈：字段级合并（同一实体/组件/路径 800ms 内合并）、Transform 单独合并、结构编辑用整文档快照
 - 多对象编辑：公共组件求交、批量字段写入（一次快照撤销）、批量移除组件
 - 子树复制：内部 parent 重映射、根保持父级、名字加 `(1)`；重命名预览不产生撤销步
+- 实体剪贴板：Ctrl+C/X/V、右键「粘贴 / 粘贴为子级」、多根批量复制；预制体实例
+  复制后保留同源链接（`extract_subtree_preserving_links`）
 - 视口数学：世界↔屏幕投影、屏幕射线、AABB 拾取、gizmo 轴/圆环命中、像素↔世界换算、
   四元数世界/局部轴旋转、父链世界旋转与父空间位移换算
 - 本地状态：`EditorState`（布局 + 主题 + 语言 + 首选项）的宽容读写与回退
@@ -160,7 +163,7 @@ editor-gpui/
 
 ## 验证记录
 
-- `cargo test -p prism-editor-gpui-core`：**118 passed**。
+- `cargo test -p prism-editor-gpui-core`：**166 passed**。
 - `cargo check -p prism-editor-gpui --target x86_64-pc-windows-gnu`：通过。
 - `cargo clippy -p prism-editor-gpui -p prism-editor-gpui-core --target x86_64-pc-windows-gnu`：
   无 warning（仅 `proc-macro-error2` 的 future-incompat 提示）。
