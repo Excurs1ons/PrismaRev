@@ -687,11 +687,24 @@ export function viewportSelect(id: string, index: number | null): Promise<void> 
   return call<void>("editor_viewport_select", { id, index });
 }
 
+/** 拖动过程中的实时交互反馈（浮层数值提示、旋转弧面等）。 */
+export interface DragFeedback {
+  tool: "translate" | "rotate" | "scale";
+  axis: string;
+  text: string;
+  centerScreen: [number, number];
+  startScreen?: [number, number];
+  currentScreen?: [number, number];
+  angleDeg?: number;
+  radius?: number;
+}
+
 /** 视口变换手柄拖动返回的结果。 */
 export interface DragTransformResult {
   position?: [number, number, number];
   rotation?: [number, number, number, number];
   scale?: [number, number, number];
+  feedback?: DragFeedback;
 }
 
 /** 切换视口的当前变换工具模式（"move" | "rotate" | "scale"）。 */

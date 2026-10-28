@@ -263,6 +263,60 @@ let lastPointer = { x: 0, y: 0 };
 let clickStart: { x: number; y: number; at: number } | null = null;
 /** 正在拖动的平移手柄（`"x"` / `"y"` / `"z"`），`null` = 没在拖。 */
 const draggingAxis = ref<string | null>(null);
+/** 拖动过程中的实时交互反馈（浮层数值提示、旋转弧面等）。 */
+const dragFeedback = ref<api.DragFeedback | null>(null);
+
+/** 旋转手柄拖拽时的 SVG 扇面与弧线路径。 */
+const rotateArcPath = computed(() => {
+  const fb = dragFeedback.value;
+  if (!fb || fb.tool !== "rotate" || !fb.startScreen || !fb.currentScreen) return null;
+  const [cx, cy] = fb.centerScreen;
+  const [x1, y1] = fb.startScreen;
+  const [x2, y2] = fb.currentScreen;
+  const r = fb.radius && fb.radius > 5 ? fb.radius : Math.hypot(x1 - cx, y1 - cy);
+  if (r < 2) return null;
+
+  // 2D 叉积判定顺逆时针（SVG 屏幕坐标系 y 朝下）
+  const v1x = x1 - cx;
+  const v1y = y1 - cy;
+  const v2x = x2 - cx;
+  const v2y = y2 - cy;
+  const cross = v1x * v2y - v1y * v2x;
+  const sweep = cross >= 0 ? 1 : 0;
+
+  const angleDeg = Math.abs(fb.angleDeg ?? 0);
+  const largeArc = angleDeg > 180 ? 1 : 0;
+
+  return {
+    cx,
+    cy,
+    x1,
+    y1,
+    x2,
+    y2,
+    r,
+    wedgeD: `M ${cx.toFixed(1)} ${cy.toFixed(1)} L ${x1.toFixed(1)} ${y1.toFixed(1)} A ${r.toFixed(1)} ${r.toFixed(1)} 0 ${largeArc} ${sweep} ${x2.toFixed(1)} ${y2.toFixed(1)} Z`,
+    arcD: `M ${x1.toFixed(1)} ${y1.toFixed(1)} A ${r.toFixed(1)} ${r.toFixed(1)} 0 ${largeArc} ${sweep} ${x2.toFixed(1)} ${y2.toFixed(1)}`,
+  };
+});
+
+/** 拖拽浮动数值 Badge 的位置（限制在视口边界内，防遮挡手柄）。 */
+const badgePosition = computed(() => {
+  const fb = dragFeedback.value;
+  if (!fb) return null;
+  const w = canvasEl.value?.width || 1280;
+  const h = canvasEl.value?.height || 720;
+  let rawX = fb.centerScreen[0] + 18;
+  let rawY = fb.centerScreen[1] - 14;
+  if (fb.tool === "rotate" && fb.currentScreen) {
+    rawX = fb.currentScreen[0] + 16;
+    rawY = fb.currentScreen[1] - 16;
+  }
+  const bw = Math.max(68, fb.text.length * 8 + 16);
+  const x = Math.max(10, Math.min(w - bw - 10, rawX));
+  const y = Math.max(24, Math.min(h - 10, rawY));
+  return { x, y, width: bw };
+});
 /** 拖动期间待下发的光标位置 / 是否攒了未同步的文档重载。 */
 let pendingDrag: { x: number; y: number } | null = null;
 let reloadPending = false;
@@ -407,6 +461,7 @@ function pushDrag(point: { x: number; y: number }) {
         if (res.position) emit("move", res.position);
         if (res.rotation) emit("rotate", res.rotation);
         if (res.scale) emit("scale", res.scale);
+        if (res.feedback) dragFeedback.value = res.feedback;
         // 拖动期间文档在变，但重载会换掉 ECS 句柄：等松手再同步。
         reloadPending = true;
       })
@@ -419,6 +474,7 @@ function onPointerUp(event: PointerEvent) {
   if (isScene.value) {
     if (draggingAxis.value) {
       draggingAxis.value = null;
+      dragFeedback.value = null;
       pendingDrag = null;
       if (dragFrame) {
         cancelAnimationFrame(dragFrame);
@@ -866,6 +922,49 @@ const aspectOptions = computed<DropdownOption[]>(() => [
           @keyup="onKey($event, false)"
           @contextmenu.prevent
         />
+        <!-- 变换拖拽实时交互反馈浮层 (Unity 风格黄色旋转弧面与数值 HUD) -->
+        <svg
+          v-if="dragFeedback"
+          class="viewport-drag-overlay"
+          :viewBox="`0 0 ${canvasEl?.width || 1280} ${canvasEl?.height || 720}`"
+        >
+          <!-- 旋转黄色半透明扇面与基准线 -->
+          <template v-if="rotateArcPath">
+            <path :d="rotateArcPath.wedgeD" class="drag-wedge" />
+            <path :d="rotateArcPath.arcD" class="drag-arc-edge" />
+            <line
+              :x1="rotateArcPath.cx"
+              :y1="rotateArcPath.cy"
+              :x2="rotateArcPath.x1"
+              :y2="rotateArcPath.y1"
+              class="drag-start-line"
+            />
+            <line
+              :x1="rotateArcPath.cx"
+              :y1="rotateArcPath.cy"
+              :x2="rotateArcPath.x2"
+              :y2="rotateArcPath.y2"
+              class="drag-current-line"
+            />
+          </template>
+
+          <!-- 交互数值 HUD Badge -->
+          <g v-if="badgePosition" :transform="`translate(${badgePosition.x}, ${badgePosition.y})`">
+            <rect
+              x="0"
+              y="-18"
+              :width="badgePosition.width"
+              height="22"
+              rx="4"
+              class="drag-badge-bg"
+            />
+            <text
+              x="8"
+              y="-4"
+              class="drag-badge-text"
+            >{{ dragFeedback.text }}</text>
+          </g>
+        </svg>
       </div>
 
       <!-- Unity 风格 Statistics 半透明悬浮状态窗口 -->
@@ -1073,10 +1172,57 @@ const aspectOptions = computed<DropdownOption[]>(() => [
 }
 
 .viewport-canvas-wrapper {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
   transition: transform 0.08s ease;
+}
+
+.viewport-drag-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 5;
+}
+
+.drag-wedge {
+  fill: rgba(255, 230, 0, 0.28);
+}
+
+.drag-arc-edge {
+  fill: none;
+  stroke: #ffe600;
+  stroke-width: 2.5;
+  stroke-linecap: round;
+}
+
+.drag-start-line {
+  stroke: rgba(255, 255, 255, 0.7);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 3;
+}
+
+.drag-current-line {
+  stroke: #ffe600;
+  stroke-width: 2;
+}
+
+.drag-badge-bg {
+  fill: rgba(20, 20, 20, 0.88);
+  stroke: rgba(255, 255, 255, 0.22);
+  stroke-width: 1;
+}
+
+.drag-badge-text {
+  fill: #ffffff;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  font-weight: 600;
+  dominant-baseline: middle;
 }
 
 .viewport-canvas {
