@@ -9,13 +9,15 @@ import {
   insertPanel,
   leaf,
   removePanel,
+  resizeFloatRect,
   setRatio,
-  MIN_FLOAT_HEIGHT,
-  MIN_FLOAT_WIDTH,
+  snapFloatPosition,
   type DockEdge,
   type DockNode as DockNodeType,
   type DockZone,
   type FloatPanel,
+  type FloatRect,
+  type ResizeDirection,
 } from "../dock";
 import { DOCK_KEY, type DockHover } from "../dockContext";
 
@@ -31,6 +33,7 @@ const dragPanel = ref<string | null>(null);
 const draggingFloatTab = ref<string | null>(null);
 const hover = ref<DockHover | null>(null);
 const edgeHover = ref<DockEdge | null>(null);
+const activeSnapLines = ref<Array<{ type: "vertical" | "horizontal"; coord: number }>>([]);
 const dragPos = reactive({ x: 0, y: 0 });
 /** 只允许一个拖拽会话，避免旧 pointer 监听器在新拖拽的 pointerup 上重复触发。 */
 let dragSeq = 0;
@@ -39,22 +42,33 @@ let endActiveDrag: (() => void) | null = null;
 
 const titles = computed(() => new Map(props.panels.map((panel) => [panel.id, panel.title])));
 const floatingSorted = computed(() => [...floating.value].sort((a, b) => a.z - b.z));
+const maxZ = computed(() => floating.value.reduce((max, panel) => Math.max(max, panel.z), 0));
 
 function titleOf(id: string): string {
   return titles.value.get(id) ?? id;
 }
 
 function nextZ(): number {
-  return floating.value.reduce((max, panel) => Math.max(max, panel.z), 0) + 1;
+  return maxZ.value + 1;
+}
+
+function isFocused(panel: FloatPanel): boolean {
+  return floating.value.length > 0 && panel.z === maxZ.value;
 }
 
 /** 点击/拖动浮动面板时置顶。 */
 function focus(tab: string) {
   const panel = floating.value.find((item) => item.tab === tab);
   if (!panel) return;
-  const z = nextZ();
-  if (panel.z === z) return;
-  floating.value = floating.value.map((item) => (item.tab === tab ? { ...item, z } : item));
+  const currentMax = maxZ.value;
+  if (panel.z === currentMax && floating.value.length > 0) return;
+  const z = currentMax + 1;
+  let next = floating.value.map((item) => (item.tab === tab ? { ...item, z } : item));
+  if (z > 200) {
+    const sorted = [...next].sort((a, b) => a.z - b.z);
+    next = sorted.map((item, idx) => ({ ...item, z: idx + 1 }));
+  }
+  floating.value = next;
 }
 
 function select(leafId: string, tab: string) {
@@ -330,8 +344,26 @@ function startFloatDrag(tab: string, event: PointerEvent) {
     }
     const dx = ev.clientX - startX;
     const dy = ev.clientY - startY;
+    let targetX = originX + dx;
+    let targetY = originY + dy;
+
+    if (!forceFloat && !hover.value && !edgeHover.value) {
+      const otherPanels = floating.value.filter((item) => item.tab !== tab);
+      const snap = snapFloatPosition(
+        { x: targetX, y: targetY, width: panel.width, height: panel.height },
+        otherPanels,
+        window.innerWidth,
+        window.innerHeight,
+      );
+      targetX = snap.x;
+      targetY = snap.y;
+      activeSnapLines.value = snap.snapLines;
+    } else {
+      activeSnapLines.value = [];
+    }
+
     floating.value = floating.value.map((item) =>
-      item.tab === tab ? { ...item, x: originX + dx, y: originY + dy } : item,
+      item.tab === tab ? { ...item, x: targetX, y: targetY } : item,
     );
   };
 
@@ -341,6 +373,7 @@ function startFloatDrag(tab: string, event: PointerEvent) {
     document.body.style.userSelect = "";
     document.body.style.cursor = "";
     draggingFloatTab.value = null;
+    activeSnapLines.value = [];
 
     const edge = edgeHover.value;
     const target = hover.value;
@@ -370,6 +403,7 @@ function startFloatDrag(tab: string, event: PointerEvent) {
     document.body.style.userSelect = "";
     document.body.style.cursor = "";
     draggingFloatTab.value = null;
+    activeSnapLines.value = [];
     hover.value = null;
     edgeHover.value = null;
   }
@@ -380,8 +414,8 @@ function startFloatDrag(tab: string, event: PointerEvent) {
   window.addEventListener("pointercancel", cancel);
 }
 
-/** 拖动右下角调整浮动窗口尺寸。 */
-function startFloatResize(tab: string, event: PointerEvent) {
+/** 8 方向调整浮动窗口尺寸。 */
+function startFloatResize(tab: string, dir: ResizeDirection, event: PointerEvent) {
   if (event.button !== 0) return;
   endActiveDrag?.();
   const seq = ++dragSeq;
@@ -393,15 +427,27 @@ function startFloatResize(tab: string, event: PointerEvent) {
   capture?.setPointerCapture?.(event.pointerId);
   const startX = event.clientX;
   const startY = event.clientY;
-  const originW = panel.width;
-  const originH = panel.height;
+  const initial: FloatRect = {
+    x: panel.x,
+    y: panel.y,
+    width: panel.width,
+    height: panel.height,
+  };
 
   const move = (ev: PointerEvent) => {
     if (seq !== dragSeq) return;
-    const width = Math.max(MIN_FLOAT_WIDTH, originW + ev.clientX - startX);
-    const height = Math.max(MIN_FLOAT_HEIGHT, originH + ev.clientY - startY);
+    const dx = ev.clientX - startX;
+    const dy = ev.clientY - startY;
+    const nextRect = resizeFloatRect(
+      initial,
+      dir,
+      dx,
+      dy,
+      window.innerWidth,
+      window.innerHeight,
+    );
     floating.value = floating.value.map((item) =>
-      item.tab === tab ? { ...item, width, height } : item,
+      item.tab === tab ? { ...item, ...nextRect } : item,
     );
   };
 
@@ -473,7 +519,10 @@ provide(DOCK_KEY, {
       v-for="panel in floatingSorted"
       :key="panel.tab"
       class="dock-float"
-      :class="{ 'is-dragging': draggingFloatTab === panel.tab }"
+      :class="{
+        'is-focused': isFocused(panel),
+        'is-dragging': draggingFloatTab === panel.tab,
+      }"
       :style="{
         left: `${panel.x}px`,
         top: `${panel.y}px`,
@@ -501,12 +550,56 @@ provide(DOCK_KEY, {
       <div class="dock-float-body">
         <slot :name="panel.tab" />
       </div>
+
+      <!-- 8 方向尺寸调整边框与手柄 -->
       <div
-        class="dock-float-resize"
+        class="dock-float-resize edge-n"
+        @pointerdown.stop="startFloatResize(panel.tab, 'n', $event)"
+      />
+      <div
+        class="dock-float-resize edge-s"
+        @pointerdown.stop="startFloatResize(panel.tab, 's', $event)"
+      />
+      <div
+        class="dock-float-resize edge-w"
+        @pointerdown.stop="startFloatResize(panel.tab, 'w', $event)"
+      />
+      <div
+        class="dock-float-resize edge-e"
+        @pointerdown.stop="startFloatResize(panel.tab, 'e', $event)"
+      />
+      <div
+        class="dock-float-resize corner-nw"
+        @pointerdown.stop="startFloatResize(panel.tab, 'nw', $event)"
+      />
+      <div
+        class="dock-float-resize corner-ne"
+        @pointerdown.stop="startFloatResize(panel.tab, 'ne', $event)"
+      />
+      <div
+        class="dock-float-resize corner-sw"
+        @pointerdown.stop="startFloatResize(panel.tab, 'sw', $event)"
+      />
+      <div
+        class="dock-float-resize corner-se"
         title="调整窗口大小"
-        @pointerdown.stop="startFloatResize(panel.tab, $event)"
+        @pointerdown.stop="startFloatResize(panel.tab, 'se', $event)"
       />
     </div>
+
+    <!-- 磁吸对齐指示线 -->
+    <template v-for="(line, idx) in activeSnapLines" :key="idx">
+      <div
+        v-if="line.type === 'vertical'"
+        class="dock-snap-guide vertical"
+        :style="{ left: `${line.coord}px` }"
+      />
+      <div
+        v-else
+        class="dock-snap-guide horizontal"
+        :style="{ top: `${line.coord}px` }"
+      />
+    </template>
 
     <div v-if="edgeHover" class="dock-edge-drop" :class="`edge-${edgeHover}`">
       <span>

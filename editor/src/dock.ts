@@ -45,6 +45,160 @@ export interface FloatPanel {
 export const MIN_FLOAT_WIDTH = 220;
 export const MIN_FLOAT_HEIGHT = 140;
 
+export type ResizeDirection = "n" | "s" | "e" | "w" | "nw" | "ne" | "sw" | "se";
+
+export interface FloatRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * 8 方向调整浮动窗口大小与位置。
+ *
+ * 保证：
+ * - 宽度不小于 `MIN_FLOAT_WIDTH`，高度不小于 `MIN_FLOAT_HEIGHT`；
+ * - 拖拽上/左边框时，相对锚点（下/右边框）固定；
+ * - 拖拽下/右边框时，相对锚点（上/左边框）固定；
+ * - 视口边界约束：不超出视口边缘（左/右/底边留 margin，顶边不低于工具栏 36px）。
+ */
+export function resizeFloatRect(
+  initial: FloatRect,
+  dir: ResizeDirection,
+  dx: number,
+  dy: number,
+  viewportWidth: number,
+  viewportHeight: number,
+): FloatRect {
+  const margin = 8;
+  const topLimit = 36;
+  const bottomLimit = Math.max(topLimit + MIN_FLOAT_HEIGHT, viewportHeight - margin);
+  const rightLimit = Math.max(margin + MIN_FLOAT_WIDTH, viewportWidth - margin);
+
+  let x = initial.x;
+  let y = initial.y;
+  let width = initial.width;
+  let height = initial.height;
+
+  // 水平调整
+  if (dir.includes("e")) {
+    const maxWidth = Math.max(MIN_FLOAT_WIDTH, rightLimit - initial.x);
+    width = Math.min(maxWidth, Math.max(MIN_FLOAT_WIDTH, initial.width + dx));
+  } else if (dir.includes("w")) {
+    const maxX = initial.x + initial.width - MIN_FLOAT_WIDTH;
+    const requestedX = initial.x + dx;
+    x = Math.max(margin, Math.min(maxX, requestedX));
+    width = initial.x + initial.width - x;
+  }
+
+  // 垂直调整
+  if (dir.includes("s")) {
+    const maxHeight = Math.max(MIN_FLOAT_HEIGHT, bottomLimit - initial.y);
+    height = Math.min(maxHeight, Math.max(MIN_FLOAT_HEIGHT, initial.height + dy));
+  } else if (dir.includes("n")) {
+    const maxY = initial.y + initial.height - MIN_FLOAT_HEIGHT;
+    const requestedY = initial.y + dy;
+    y = Math.max(topLimit, Math.min(maxY, requestedY));
+    height = initial.y + initial.height - y;
+  }
+
+  return { x, y, width, height };
+}
+
+export interface SnapResult {
+  x: number;
+  y: number;
+  snapLines: Array<{
+    type: "vertical" | "horizontal";
+    coord: number;
+  }>;
+}
+
+export const SNAP_THRESHOLD = 8;
+
+/**
+ * 浮动窗口磁吸计算：
+ * 与视口边缘（左、右、顶、底）以及其他浮动面板的四边进行对齐或紧贴吸附。
+ */
+export function snapFloatPosition(
+  panel: { x: number; y: number; width: number; height: number },
+  otherPanels: Array<{ x: number; y: number; width: number; height: number }>,
+  viewportWidth: number,
+  viewportHeight: number,
+  threshold = SNAP_THRESHOLD,
+): SnapResult {
+  const margin = 8;
+  const topLimit = 36;
+  const bottomLimit = Math.max(topLimit, viewportHeight - panel.height - 24);
+  const rightLimit = Math.max(margin, viewportWidth - panel.width - margin);
+
+  let snappedX = panel.x;
+  let snappedY = panel.y;
+  let bestDistX = threshold + 1;
+  let bestDistY = threshold + 1;
+  const snapLines: Array<{ type: "vertical" | "horizontal"; coord: number }> = [];
+
+  // 1. 视口边缘候选吸附点
+  const xCandidates: Array<{ target: number; line: number }> = [
+    { target: margin, line: margin },
+    { target: rightLimit, line: viewportWidth - margin },
+  ];
+  const yCandidates: Array<{ target: number; line: number }> = [
+    { target: topLimit, line: topLimit },
+    { target: bottomLimit, line: viewportHeight - 24 },
+  ];
+
+  // 2. 其它浮动面板的边缘候选
+  for (const other of otherPanels) {
+    // 自身左边与其他面板左边对齐
+    xCandidates.push({ target: other.x, line: other.x });
+    // 自身右边与其他面板右边对齐
+    xCandidates.push({ target: other.x + other.width - panel.width, line: other.x + other.width });
+    // 紧贴在其他面板右侧
+    xCandidates.push({ target: other.x + other.width, line: other.x + other.width });
+    // 紧贴在其他面板左侧
+    xCandidates.push({ target: other.x - panel.width, line: other.x });
+
+    // 自身顶边与其他面板顶边对齐
+    yCandidates.push({ target: other.y, line: other.y });
+    // 自身底边与其他面板底边对齐
+    yCandidates.push({ target: other.y + other.height - panel.height, line: other.y + other.height });
+    // 紧贴在其他面板下方
+    yCandidates.push({ target: other.y + other.height, line: other.y + other.height });
+    // 紧贴在其他面板上方
+    yCandidates.push({ target: other.y - panel.height, line: other.y });
+  }
+
+  let chosenLineX: number | null = null;
+  for (const { target, line } of xCandidates) {
+    const dist = Math.abs(panel.x - target);
+    if (dist <= threshold && dist < bestDistX) {
+      bestDistX = dist;
+      snappedX = target;
+      chosenLineX = line;
+    }
+  }
+  if (chosenLineX !== null) {
+    snapLines.push({ type: "vertical", coord: chosenLineX });
+  }
+
+  let chosenLineY: number | null = null;
+  for (const { target, line } of yCandidates) {
+    const dist = Math.abs(panel.y - target);
+    if (dist <= threshold && dist < bestDistY) {
+      bestDistY = dist;
+      snappedY = target;
+      chosenLineY = line;
+    }
+  }
+  if (chosenLineY !== null) {
+    snapLines.push({ type: "horizontal", coord: chosenLineY });
+  }
+
+  return { x: snappedX, y: snappedY, snapLines };
+}
+
 const MIN_RATIO = 0.12;
 const MAX_RATIO = 0.88;
 

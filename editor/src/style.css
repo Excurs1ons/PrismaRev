@@ -2393,16 +2393,20 @@ html.compact .dock-tab {
   flex-direction: column;
   min-width: 220px;
   min-height: 140px;
-  overflow: hidden;
+  overflow: visible;
   background: var(--panel);
-  border: 1px solid var(--accent);
+  border: 1px solid var(--border);
   border-radius: 6px;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
-  transition: opacity 0.15s ease, box-shadow 0.15s ease;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  transition: opacity 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+}
+.dock-float.is-focused {
+  border-color: var(--accent);
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.65), 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
 }
 .dock-float.is-dragging {
-  opacity: 0.85;
-  box-shadow: 0 20px 48px rgba(0, 0, 0, 0.7), 0 0 0 1.5px var(--accent);
+  opacity: 0.88;
+  box-shadow: 0 22px 50px rgba(0, 0, 0, 0.75), 0 0 0 1.5px var(--accent);
   backdrop-filter: blur(4px);
 }
 .dock-float.is-dragging .dock-float-head {
@@ -2417,8 +2421,15 @@ html.compact .dock-tab {
   padding: 0 6px 0 10px;
   background: var(--bg-sunken);
   border-bottom: 1px solid var(--border);
+  border-top-left-radius: 5px;
+  border-top-right-radius: 5px;
   cursor: grab;
   user-select: none;
+  transition: background 0.15s ease;
+}
+.dock-float.is-focused .dock-float-head {
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-sunken));
+  border-bottom-color: color-mix(in srgb, var(--accent) 30%, var(--border));
 }
 .dock-float-head:active {
   cursor: grabbing;
@@ -2426,10 +2437,15 @@ html.compact .dock-tab {
 .dock-float-title {
   flex: 1;
   overflow: hidden;
-  color: var(--text);
+  color: var(--muted);
   font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
+  transition: color 0.15s ease;
+}
+.dock-float.is-focused .dock-float-title {
+  color: var(--text-bright, #fff);
+  font-weight: 500;
 }
 .dock-float-close {
   display: inline-flex;
@@ -2453,6 +2469,8 @@ html.compact .dock-tab {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  border-bottom-left-radius: 5px;
+  border-bottom-right-radius: 5px;
 }
 .dock-float-body > .section-body,
 .dock-float-body > .log,
@@ -2467,13 +2485,70 @@ html.compact .dock-tab {
 }
 .dock-float-resize {
   position: absolute;
+  z-index: 10;
+  user-select: none;
+}
+.dock-float-resize.edge-n {
+  top: -4px;
+  left: 8px;
+  right: 8px;
+  height: 8px;
+  cursor: ns-resize;
+}
+.dock-float-resize.edge-s {
+  bottom: -4px;
+  left: 8px;
+  right: 8px;
+  height: 8px;
+  cursor: ns-resize;
+}
+.dock-float-resize.edge-w {
+  left: -4px;
+  top: 8px;
+  bottom: 8px;
+  width: 8px;
+  cursor: ew-resize;
+}
+.dock-float-resize.edge-e {
+  right: -4px;
+  top: 8px;
+  bottom: 8px;
+  width: 8px;
+  cursor: ew-resize;
+}
+.dock-float-resize.corner-nw {
+  top: -4px;
+  left: -4px;
+  width: 14px;
+  height: 14px;
+  cursor: nwse-resize;
+  z-index: 11;
+}
+.dock-float-resize.corner-ne {
+  top: -4px;
+  right: -4px;
+  width: 14px;
+  height: 14px;
+  cursor: nesw-resize;
+  z-index: 11;
+}
+.dock-float-resize.corner-sw {
+  bottom: -4px;
+  left: -4px;
+  width: 14px;
+  height: 14px;
+  cursor: nesw-resize;
+  z-index: 11;
+}
+.dock-float-resize.corner-se {
   right: 0;
   bottom: 0;
   width: 16px;
   height: 16px;
   cursor: nwse-resize;
+  z-index: 11;
 }
-.dock-float-resize::after {
+.dock-float-resize.corner-se::after {
   position: absolute;
   right: 3px;
   bottom: 3px;
@@ -2482,6 +2557,25 @@ html.compact .dock-tab {
   border-right: 1px solid var(--muted);
   border-bottom: 1px solid var(--muted);
   content: "";
+}
+.dock-snap-guide {
+  position: fixed;
+  z-index: 9999;
+  pointer-events: none;
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent);
+}
+.dock-snap-guide.vertical {
+  top: 0;
+  bottom: 0;
+  width: 1.5px;
+  transform: translateX(-50%);
+}
+.dock-snap-guide.horizontal {
+  left: 0;
+  right: 0;
+  height: 1.5px;
+  transform: translateY(-50%);
 }
 .dock-drag-ghost {
   position: fixed;
