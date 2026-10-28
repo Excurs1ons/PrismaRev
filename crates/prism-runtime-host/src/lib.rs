@@ -4,13 +4,22 @@
 //! required because the engine schedule stores callbacks owned by the module.
 //! Unloading before the engine is dropped would leave dangling function/code
 //! pointers.
+//!
+//! ## 边界
+//!
+//! 宿主从不把 `World` / `Engine` 指针交给项目模块。模块只能通过
+//! [`WorldCommands`] 构造的 [`HostApi`] 函数表操作世界；组件数据以 RTTIBin
+//! 字节流往返，类型解析留在宿主自己的 `ComponentRegistry` 里。
 
 use std::path::{Path, PathBuf};
 
 use libloading::{Library, Symbol};
 use prism_project_api::{
-    GetProjectApi, HostApi, ProjectApi, ABI_VERSION, HOST_CAP_LOGGING, SUCCESS,
+    EntityHandle, GetProjectApi, HostApi, InputSnapshot, ProjectApi, ABI_VERSION, BUFFER_TOO_SMALL,
+    HOST_CAP_COMPONENTS, HOST_CAP_LOGGING, HOST_CAP_WORLD_COMMANDS, INVALID_ARGUMENT, SUCCESS,
+    UNKNOWN_TYPE,
 };
+use prism_reflect::rtti_bin;
 use thiserror::Error;
 
 const GET_API_SYMBOL: &[u8] = b"prism_project_get_api\0";
@@ -41,74 +50,281 @@ pub enum ProjectModuleError {
     Tick { path: PathBuf, status: i32 },
 }
 
-pub struct WorldCommands {
-    world: *mut prism_ecs::World,
+/// 宿主侧一次 tick 的命令上下文。
+///
+/// 回调只拿到一份 `user_data`，所以世界、注册表和临时缓冲必须打包在同一个
+/// 结构里；它的生命周期由 [`WorldCommands`] 保证，不会活过本次 tick。
+struct CommandContext<'a> {
+    world: &'a mut prism_ecs::World,
+    registry: &'a prism_scene::ComponentRegistry,
+    /// `get_component` 的返回缓冲：指针只在下次宿主调用前有效。
+    scratch: Vec<u8>,
     scene_generation: u64,
+    input: InputSnapshot,
 }
 
-impl WorldCommands {
-    pub fn new(world: &mut prism_ecs::World, scene_generation: u64) -> Self {
+/// 把宿主世界包装成 [`HostApi`] 函数表。
+pub struct WorldCommands<'a> {
+    context: CommandContext<'a>,
+}
+
+impl<'a> WorldCommands<'a> {
+    pub fn new(
+        world: &'a mut prism_ecs::World,
+        registry: &'a prism_scene::ComponentRegistry,
+        scene_generation: u64,
+    ) -> Self {
         Self {
-            world,
-            scene_generation,
+            context: CommandContext {
+                world,
+                registry,
+                scratch: Vec::new(),
+                scene_generation,
+                input: InputSnapshot::default(),
+            },
         }
     }
 
+    /// 本帧输入快照；`ui`/项目代码通过 `HostApi::input` 读取。
+    pub fn set_input(&mut self, input: InputSnapshot) {
+        self.context.input = input;
+    }
+
+    /// 构造本 tick 的能力表。指针只在 `api` 返回后到本 tick 结束之间有效。
     pub fn api(&mut self) -> HostApi {
         HostApi {
             abi_version: ABI_VERSION,
-            capabilities: HOST_CAP_LOGGING | prism_project_api::HOST_CAP_WORLD_COMMANDS,
-            scene_generation: self.scene_generation,
-            user_data: self.world.cast(),
+            capabilities: HOST_CAP_LOGGING | HOST_CAP_WORLD_COMMANDS | HOST_CAP_COMPONENTS,
+            scene_generation: self.context.scene_generation,
+            user_data: (&mut self.context as *mut CommandContext).cast(),
+            input: self.context.input,
             log: Some(host_log),
             spawn_entity: Some(host_spawn_entity),
             set_entity_name: Some(host_set_entity_name),
+            query_entities: Some(host_query_entities),
+            get_component: Some(host_get_component),
+            set_component: Some(host_set_component),
+            remove_component: Some(host_remove_component),
         }
     }
+}
+
+/// # Safety
+/// `user_data` 必须来自本 tick 的 [`WorldCommands::api`]。
+unsafe fn context<'a>(user_data: *mut std::ffi::c_void) -> Option<&'a mut CommandContext<'a>> {
+    if user_data.is_null() {
+        return None;
+    }
+    unsafe { user_data.cast::<CommandContext>().as_mut() }
+}
+
+/// # Safety
+/// `ptr`/`len` 必须描述一块本次调用期间有效的 UTF-8 字节。
+unsafe fn type_name<'a>(ptr: *const u8, len: usize) -> Option<&'a str> {
+    if len == 0 {
+        return None;
+    }
+    if ptr.is_null() {
+        return None;
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(ptr, len) };
+    std::str::from_utf8(bytes).ok()
+}
+
+fn handle_to_entity(handle: EntityHandle) -> prism_ecs::Entity {
+    prism_ecs::Entity::from_raw(handle.id, handle.generation)
 }
 
 unsafe extern "C" fn host_spawn_entity(
     user_data: *mut std::ffi::c_void,
-    out_entity: *mut prism_project_api::EntityHandle,
+    out_entity: *mut EntityHandle,
 ) -> i32 {
-    if user_data.is_null() || out_entity.is_null() {
-        return prism_project_api::INVALID_ARGUMENT;
+    let Some(context) = (unsafe { context(user_data) }) else {
+        return INVALID_ARGUMENT;
+    };
+    if out_entity.is_null() {
+        return INVALID_ARGUMENT;
     }
-    let world = unsafe { &mut *user_data.cast::<prism_ecs::World>() };
-    let entity = world.spawn();
+    let entity = context.world.spawn();
     unsafe {
-        *out_entity = prism_project_api::EntityHandle {
+        *out_entity = EntityHandle {
             id: entity.id(),
             generation: entity.generation(),
         };
     }
-    prism_project_api::SUCCESS
+    SUCCESS
 }
 
 unsafe extern "C" fn host_set_entity_name(
     user_data: *mut std::ffi::c_void,
-    entity: prism_project_api::EntityHandle,
+    entity: EntityHandle,
     name: *const u8,
     name_len: usize,
 ) -> i32 {
-    if user_data.is_null() || (name.is_null() && name_len != 0) {
-        return prism_project_api::INVALID_ARGUMENT;
+    let Some(context) = (unsafe { context(user_data) }) else {
+        return INVALID_ARGUMENT;
+    };
+    let Some(name) = (unsafe { type_name(name, name_len) }) else {
+        return INVALID_ARGUMENT;
+    };
+    let entity = handle_to_entity(entity);
+    if !context.world.is_alive(entity) {
+        return INVALID_ARGUMENT;
     }
-    let bytes = if name_len == 0 {
-        &[]
+    context
+        .world
+        .insert(entity, prism_scene::components::Name(name.to_owned()));
+    SUCCESS
+}
+
+unsafe extern "C" fn host_query_entities(
+    user_data: *mut std::ffi::c_void,
+    type_name_ptr: *const u8,
+    type_name_len: usize,
+    out_entities: *mut EntityHandle,
+    capacity: usize,
+    out_count: *mut usize,
+) -> i32 {
+    let Some(context) = (unsafe { context(user_data) }) else {
+        return INVALID_ARGUMENT;
+    };
+    if out_count.is_null() {
+        return INVALID_ARGUMENT;
+    }
+    let Some(name) = (unsafe { type_name(type_name_ptr, type_name_len) }) else {
+        return INVALID_ARGUMENT;
+    };
+    let Some(type_id) = context.registry.type_id(name) else {
+        return UNKNOWN_TYPE;
+    };
+    let entities = context
+        .registry
+        .entities_with(context.world, type_id)
+        .unwrap_or_default();
+
+    unsafe { *out_count = entities.len() };
+    if out_entities.is_null() {
+        return SUCCESS;
+    }
+    if capacity < entities.len() {
+        return BUFFER_TOO_SMALL;
+    }
+    for (index, entity) in entities.iter().enumerate() {
+        let handle = EntityHandle {
+            id: entity.id(),
+            generation: entity.generation(),
+        };
+        unsafe { *out_entities.add(index) = handle };
+    }
+    SUCCESS
+}
+
+unsafe extern "C" fn host_get_component(
+    user_data: *mut std::ffi::c_void,
+    entity: EntityHandle,
+    type_name_ptr: *const u8,
+    type_name_len: usize,
+    out_bytes: *mut *const u8,
+    out_len: *mut usize,
+) -> i32 {
+    let Some(context) = (unsafe { context(user_data) }) else {
+        return INVALID_ARGUMENT;
+    };
+    if out_bytes.is_null() || out_len.is_null() {
+        return INVALID_ARGUMENT;
+    }
+    let Some(name) = (unsafe { type_name(type_name_ptr, type_name_len) }) else {
+        return INVALID_ARGUMENT;
+    };
+    let Some(type_id) = context.registry.type_id(name) else {
+        return UNKNOWN_TYPE;
+    };
+    let entity = handle_to_entity(entity);
+    if !context.world.is_alive(entity) {
+        return INVALID_ARGUMENT;
+    }
+    let Some(object) = context
+        .registry
+        .extract_object(context.world, entity, type_id)
+    else {
+        return INVALID_ARGUMENT;
+    };
+    let bytes = match rtti_bin::encode_one(&object, context.registry.type_registry()) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            log::warn!("project host: encode `{name}` failed: {error}");
+            return INVALID_ARGUMENT;
+        }
+    };
+    context.scratch = bytes;
+    unsafe {
+        *out_bytes = context.scratch.as_ptr();
+        *out_len = context.scratch.len();
+    }
+    SUCCESS
+}
+
+unsafe extern "C" fn host_set_component(
+    user_data: *mut std::ffi::c_void,
+    entity: EntityHandle,
+    bytes: *const u8,
+    len: usize,
+) -> i32 {
+    let Some(context) = (unsafe { context(user_data) }) else {
+        return INVALID_ARGUMENT;
+    };
+    if bytes.is_null() || len == 0 {
+        return INVALID_ARGUMENT;
+    }
+    let payload = unsafe { std::slice::from_raw_parts(bytes, len) };
+    let decoded = match rtti_bin::decode(payload) {
+        Ok(decoded) => decoded,
+        Err(error) => {
+            log::warn!("project host: decode component failed: {error}");
+            return INVALID_ARGUMENT;
+        }
+    };
+    let Some(object) = decoded.objects.first() else {
+        return INVALID_ARGUMENT;
+    };
+    let entity = handle_to_entity(entity);
+    if !context.world.is_alive(entity) {
+        return INVALID_ARGUMENT;
+    }
+    if context.registry.apply_object(context.world, entity, object) {
+        SUCCESS
     } else {
-        unsafe { std::slice::from_raw_parts(name, name_len) }
-    };
-    let Ok(name) = std::str::from_utf8(bytes) else {
-        return prism_project_api::INVALID_ARGUMENT;
-    };
-    let world = unsafe { &mut *user_data.cast::<prism_ecs::World>() };
-    let entity = prism_ecs::Entity::from_raw(entity.id, entity.generation);
-    if !world.is_alive(entity) {
-        return prism_project_api::INVALID_ARGUMENT;
+        UNKNOWN_TYPE
     }
-    world.insert(entity, prism_scene::components::Name(name.to_owned()));
-    prism_project_api::SUCCESS
+}
+
+unsafe extern "C" fn host_remove_component(
+    user_data: *mut std::ffi::c_void,
+    entity: EntityHandle,
+    type_name_ptr: *const u8,
+    type_name_len: usize,
+) -> i32 {
+    let Some(context) = (unsafe { context(user_data) }) else {
+        return INVALID_ARGUMENT;
+    };
+    let Some(name) = (unsafe { type_name(type_name_ptr, type_name_len) }) else {
+        return INVALID_ARGUMENT;
+    };
+    let Some(type_id) = context.registry.type_id(name) else {
+        return UNKNOWN_TYPE;
+    };
+    let entity = handle_to_entity(entity);
+    if !context.world.is_alive(entity) {
+        return INVALID_ARGUMENT;
+    }
+    if context
+        .registry
+        .remove_component(context.world, entity, type_id)
+    {
+        SUCCESS
+    } else {
+        INVALID_ARGUMENT
+    }
 }
 
 pub struct ProjectModule {
@@ -256,6 +472,13 @@ impl std::fmt::Debug for ProjectModule {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use prism_reflect::Reflect;
+
+    fn registry() -> prism_scene::ComponentRegistry {
+        let mut registry = prism_scene::ComponentRegistry::new();
+        prism_scene::register_builtin_components(&mut registry);
+        registry
+    }
 
     #[test]
     fn missing_module_reports_path() {
@@ -272,7 +495,8 @@ mod tests {
         let module = ProjectModule::load(path).expect("project module should load");
         let mut session = module.start().expect("project session should start");
         let mut world = prism_ecs::World::new();
-        let mut commands = WorldCommands::new(&mut world, 1);
+        let registry = registry();
+        let mut commands = WorldCommands::new(&mut world, &registry, 1);
         let host = commands.api();
         session
             .tick(&host, 1.0 / 60.0)
@@ -282,13 +506,12 @@ mod tests {
     #[test]
     fn world_commands_spawn_and_name_entities_through_opaque_handles() {
         let mut world = prism_ecs::World::new();
-        let mut commands = WorldCommands::new(&mut world, 1);
+        let registry = registry();
+        let mut commands = WorldCommands::new(&mut world, &registry, 1);
         let api = commands.api();
-        assert_ne!(
-            api.capabilities & prism_project_api::HOST_CAP_WORLD_COMMANDS,
-            0
-        );
-        let mut raw = prism_project_api::EntityHandle::default();
+        assert_ne!(api.capabilities & HOST_CAP_COMPONENTS, 0);
+
+        let mut raw = EntityHandle::default();
         let spawn = api.spawn_entity.expect("world command capability");
         let set_name = api.set_entity_name.expect("world command capability");
         assert_eq!(unsafe { spawn(api.user_data, &mut raw) }, SUCCESS);
@@ -297,7 +520,7 @@ mod tests {
             unsafe { set_name(api.user_data, raw, name.as_ptr(), name.len()) },
             SUCCESS
         );
-        let entity = prism_ecs::Entity::from_raw(raw.id, raw.generation);
+        let entity = handle_to_entity(raw);
         assert!(world.is_alive(entity));
         assert_eq!(
             world
@@ -310,7 +533,126 @@ mod tests {
         world.despawn(entity);
         assert_eq!(
             unsafe { set_name(api.user_data, raw, name.as_ptr(), name.len()) },
-            prism_project_api::INVALID_ARGUMENT
+            INVALID_ARGUMENT
+        );
+    }
+
+    #[test]
+    fn components_round_trip_as_rttibin_bytes() {
+        let mut world = prism_ecs::World::new();
+        let registry = registry();
+        let mut commands = WorldCommands::new(&mut world, &registry, 1);
+        let api = commands.api();
+
+        let entity = world.spawn();
+        let handle = EntityHandle {
+            id: entity.id(),
+            generation: entity.generation(),
+        };
+        let name = prism_scene::components::Name("round_trip".to_owned());
+        let object = name.to_object();
+        let bytes = rtti_bin::encode_one(&object, registry.type_registry()).expect("encode");
+
+        let set = api.set_component.expect("component capability");
+        assert_eq!(
+            unsafe { set(api.user_data, handle, bytes.as_ptr(), bytes.len()) },
+            SUCCESS
+        );
+        assert_eq!(
+            world
+                .get::<prism_scene::components::Name>(entity)
+                .unwrap()
+                .0,
+            "round_trip"
+        );
+
+        // 查询：先探长度再填充。
+        let query = api.query_entities.expect("component capability");
+        let type_name = prism_scene::components::Name::type_desc().name.as_bytes();
+        let mut count = 0usize;
+        assert_eq!(
+            unsafe {
+                query(
+                    api.user_data,
+                    type_name.as_ptr(),
+                    type_name.len(),
+                    std::ptr::null_mut(),
+                    0,
+                    &mut count,
+                )
+            },
+            SUCCESS
+        );
+        assert_eq!(count, 1);
+        let mut out = [EntityHandle::default(); 4];
+        assert_eq!(
+            unsafe {
+                query(
+                    api.user_data,
+                    type_name.as_ptr(),
+                    type_name.len(),
+                    out.as_mut_ptr(),
+                    out.len(),
+                    &mut count,
+                )
+            },
+            SUCCESS
+        );
+        assert_eq!(out[0], handle);
+
+        // 读取：指针在下次宿主调用前有效，立刻拷贝。
+        let get = api.get_component.expect("component capability");
+        let mut ptr: *const u8 = std::ptr::null();
+        let mut len = 0usize;
+        assert_eq!(
+            unsafe {
+                get(
+                    api.user_data,
+                    handle,
+                    type_name.as_ptr(),
+                    type_name.len(),
+                    &mut ptr,
+                    &mut len,
+                )
+            },
+            SUCCESS
+        );
+        let payload = unsafe { std::slice::from_raw_parts(ptr, len) }.to_vec();
+        let decoded = rtti_bin::decode(&payload).expect("decode");
+        let restored =
+            prism_scene::components::Name::from_object(&decoded.objects[0]).expect("restore");
+        assert_eq!(restored.0, "round_trip");
+
+        // 移除。
+        let remove = api.remove_component.expect("component capability");
+        assert_eq!(
+            unsafe { remove(api.user_data, handle, type_name.as_ptr(), type_name.len()) },
+            SUCCESS
+        );
+        assert!(world.get::<prism_scene::components::Name>(entity).is_none());
+    }
+
+    #[test]
+    fn unknown_type_names_are_rejected() {
+        let mut world = prism_ecs::World::new();
+        let registry = registry();
+        let mut commands = WorldCommands::new(&mut world, &registry, 1);
+        let api = commands.api();
+        let query = api.query_entities.expect("component capability");
+        let name = b"prism_engine::does::NotExist";
+        let mut count = 0usize;
+        assert_eq!(
+            unsafe {
+                query(
+                    api.user_data,
+                    name.as_ptr(),
+                    name.len(),
+                    std::ptr::null_mut(),
+                    0,
+                    &mut count,
+                )
+            },
+            UNKNOWN_TYPE
         );
     }
 }

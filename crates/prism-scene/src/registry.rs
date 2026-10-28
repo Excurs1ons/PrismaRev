@@ -31,6 +31,10 @@ type ReflectApplyFn = fn(&mut World, Entity, &Object) -> bool;
 type ReflectExtractFn = fn(&World, Entity) -> Option<Object>;
 /// 在反射对象上按字段名写入（`Object -> C -> set_field -> Object`）。
 type ReflectSetFn = fn(&mut Object, &str, Value) -> Result<(), ReflectError>;
+/// 列出拥有该组件的实体（类型擦除的 `World::query`）。
+type ReflectQueryFn = fn(&World) -> Vec<Entity>;
+/// 移除该组件并报告它是否存在（类型擦除的 `World::remove`）。
+type ReflectRemoveFn = fn(&mut World, Entity) -> bool;
 
 /// 一个组件的反射适配器：`Object <-> 具体 ECS 组件`。
 struct ReflectEntry {
@@ -38,6 +42,8 @@ struct ReflectEntry {
     apply: ReflectApplyFn,
     extract: ReflectExtractFn,
     set_field: ReflectSetFn,
+    query: ReflectQueryFn,
+    remove: ReflectRemoveFn,
 }
 
 /// 组件反序列化注册表。
@@ -139,6 +145,8 @@ impl ComponentRegistry {
                     *object = component.to_object();
                     Ok(())
                 },
+                query: |world| world.query::<C>().map(|(entity, _)| entity).collect(),
+                remove: |world, entity| world.remove::<C>(entity).is_some(),
             },
         );
     }
@@ -309,6 +317,24 @@ impl ComponentRegistry {
     /// 类型名 → 稳定类型 id。
     pub fn type_id(&self, name: &str) -> Option<TypeId> {
         self.name_to_id.get(name).copied()
+    }
+
+    /// 列出拥有组件 `type_id` 的实体（类型擦除，供宿主 ABI 使用）。
+    ///
+    /// 返回 `None` 表示该类型没有注册反射组件。
+    pub fn entities_with(&self, world: &World, type_id: TypeId) -> Option<Vec<Entity>> {
+        let entry = self.reflect_entries.get(&type_id)?;
+        Some((entry.query)(world))
+    }
+
+    /// 按 `type_id` 移除组件，返回它是否存在过。
+    ///
+    /// 类型未注册时返回 `false`（与「组件不存在」一致，调用方无需区分）。
+    pub fn remove_component(&self, world: &mut World, entity: Entity, type_id: TypeId) -> bool {
+        match self.reflect_entries.get(&type_id) {
+            Some(entry) => (entry.remove)(world, entity),
+            None => false,
+        }
     }
 
     /// 类型描述（编辑器属性面板 / schema 浏览用）。

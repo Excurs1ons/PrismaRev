@@ -208,6 +208,8 @@ struct HostState {
     /// callbacks must be gone before the engine host is torn down.
     project_session: Option<prism_runtime_host::ProjectSession>,
     scene_generation: u64,
+    /// 组件 schema（宿主侧解释 RTTIBin 载荷）；只读，跨 tick 复用。
+    components: prism_scene::ComponentRegistry,
     app: App,
     scene_path: PathBuf,
     kind: ViewKind,
@@ -1446,6 +1448,7 @@ fn viewport_thread(
     let mut state = HostState {
         project_session,
         scene_generation: 0,
+        components: builtin_component_registry(),
         app: App::hosted(prism_engine::config::AppConfig::default()),
         scene_path,
         kind,
@@ -1499,6 +1502,7 @@ fn viewport_thread(
                 if let Some(project) = state.project_session.as_mut() {
                     let mut commands = prism_runtime_host::WorldCommands::new(
                         state.app.engine_mut().world_mut(),
+                        &state.components,
                         state.scene_generation,
                     );
                     let host = commands.api();
@@ -1533,6 +1537,16 @@ fn viewport_thread(
 
     log::info!("viewport: shutting down ({:?})", state.kind);
     state.app.shutdown_hosted();
+}
+
+/// 宿主侧组件 schema：解释项目模块送来的 RTTIBin 载荷。
+///
+/// 与场景 cook / 编辑器共用同一份内建注册表，所以新增组件不需要在 ABI 里
+/// 再加一遍绑定。
+fn builtin_component_registry() -> prism_scene::ComponentRegistry {
+    let mut registry = prism_scene::ComponentRegistry::new();
+    prism_scene::register_builtin_components(&mut registry);
+    registry
 }
 
 fn project_module_path(scene_path: &Path) -> Result<PathBuf, String> {
@@ -2331,6 +2345,7 @@ mod tests {
         let mut state = HostState {
             project_session: None,
             scene_generation: 0,
+            components: builtin_component_registry(),
             app: App::hosted(prism_engine::config::AppConfig::default()),
             scene_path: path,
             kind: ViewKind::Scene,

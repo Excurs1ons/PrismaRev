@@ -9,6 +9,7 @@ description = "Desktop project module loader for editor/runtime hosts"
 libloading = "0.8"
 prism-ecs = { path = "../prism-ecs" }
 prism-project-api = { path = "../prism-project-api" }
+prism-reflect = { path = "../prism-reflect" }
 prism-scene = { path = "../prism-scene" }
 log.workspace = true
 thiserror.workspace = true
