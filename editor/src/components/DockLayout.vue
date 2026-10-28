@@ -28,6 +28,7 @@ const floating = defineModel<FloatPanel[]>("floating", { default: () => [] });
 
 const rootEl = ref<HTMLElement | null>(null);
 const dragPanel = ref<string | null>(null);
+const draggingFloatTab = ref<string | null>(null);
 const hover = ref<DockHover | null>(null);
 const edgeHover = ref<DockEdge | null>(null);
 const dragPos = reactive({ x: 0, y: 0 });
@@ -79,7 +80,7 @@ function drop(leafId: string, zone: DockZone, tab: string, targetIndex?: number)
     hover.value = null;
     return;
   }
-  layout.value = insertPanel(layout.value, leafId, tab, zone, 0.3, targetIndex);
+  layout.value = insertPanel(layout.value, leafId, tab, zone, 0.5, targetIndex);
   dragPanel.value = null;
   hover.value = null;
 }
@@ -307,6 +308,7 @@ function startFloatDrag(tab: string, event: PointerEvent) {
   endActiveDrag?.();
   const seq = ++dragSeq;
   focus(tab);
+  draggingFloatTab.value = tab;
   const panel = floating.value.find((item) => item.tab === tab);
   if (!panel) return;
   const capture = event.currentTarget as HTMLElement | null;
@@ -338,6 +340,7 @@ function startFloatDrag(tab: string, event: PointerEvent) {
     if (seq !== dragSeq) return;
     document.body.style.userSelect = "";
     document.body.style.cursor = "";
+    draggingFloatTab.value = null;
 
     const edge = edgeHover.value;
     const target = hover.value;
@@ -366,6 +369,7 @@ function startFloatDrag(tab: string, event: PointerEvent) {
     if (seq !== dragSeq) return;
     document.body.style.userSelect = "";
     document.body.style.cursor = "";
+    draggingFloatTab.value = null;
     hover.value = null;
     edgeHover.value = null;
   }
@@ -469,6 +473,7 @@ provide(DOCK_KEY, {
       v-for="panel in floatingSorted"
       :key="panel.tab"
       class="dock-float"
+      :class="{ 'is-dragging': draggingFloatTab === panel.tab }"
       :style="{
         left: `${panel.x}px`,
         top: `${panel.y}px`,

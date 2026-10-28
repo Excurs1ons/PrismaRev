@@ -2194,8 +2194,18 @@ html.compact .dock-tab {
   align-items: stretch;
   min-height: 28px;
   overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
   border-bottom: 1px solid var(--border);
   background: var(--bg-sunken);
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.dock-tabs::-webkit-scrollbar {
+  display: none;
+}
+.dock-tabs.dock-tabs-inserting {
+  border-bottom-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg-sunken));
 }
 .dock-tab {
   display: flex;
@@ -2208,13 +2218,21 @@ html.compact .dock-tab {
   cursor: grab;
   user-select: none;
   white-space: nowrap;
+  transition: background 0.1s ease, color 0.1s ease, opacity 0.12s ease;
+}
+.dock-tab.dragging {
+  opacity: 0.35;
+  filter: grayscale(0.5);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border-right-style: dashed;
+  cursor: grabbing;
 }
 .dock-tab-insert-marker {
   width: 3px;
   margin: 3px -1px;
   background: var(--accent, #388bfd);
   border-radius: 2px;
-  box-shadow: 0 0 8px var(--accent, #388bfd);
+  box-shadow: 0 0 10px var(--accent, #388bfd), 0 0 4px #fff;
   animation: dockMarkerPulse 0.7s ease-in-out infinite alternate;
   z-index: 10;
   flex-shrink: 0;
@@ -2380,6 +2398,15 @@ html.compact .dock-tab {
   border: 1px solid var(--accent);
   border-radius: 6px;
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+  transition: opacity 0.15s ease, box-shadow 0.15s ease;
+}
+.dock-float.is-dragging {
+  opacity: 0.85;
+  box-shadow: 0 20px 48px rgba(0, 0, 0, 0.7), 0 0 0 1.5px var(--accent);
+  backdrop-filter: blur(4px);
+}
+.dock-float.is-dragging .dock-float-head {
+  cursor: grabbing;
 }
 .dock-float-head {
   flex: 0 0 auto;
@@ -2473,6 +2500,15 @@ html.compact .dock-tab {
   display: flex;
   align-items: center;
   gap: 6px;
+}
+.dock-drag-ghost::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent);
 }
 
 /* ── 帮助 / 关于面板 ───────────────────────────────────────────────────── */
