@@ -1551,6 +1551,18 @@ pub fn run() {
         .manage(PreviewState::default())
         .setup(|app| {
             let _ = LOG_APP.set(app.handle().clone());
+            if std::env::var_os(prism_engine::asset_paths::ASSET_ROOT_ENV).is_none() {
+                match prism_editor_api::find_project_root() {
+                    Ok(root) => {
+                        // The Tauri executable lives below src-tauri, which may
+                        // contain an empty assets directory. Pin preview assets
+                        // to the editor's project root before constructing Apps.
+                        std::env::set_var(prism_engine::asset_paths::ASSET_ROOT_ENV, &root);
+                        log::info!("editor asset root: {}", root.display());
+                    }
+                    Err(error) => log::warn!("editor project root unavailable at startup: {error}"),
+                }
+            }
             Ok(())
         })
         .manage(viewport::ViewportManager::default())
@@ -1640,6 +1652,9 @@ pub fn run() {
             editor_preview_logs,
             editor_render_graph_report,
             viewport::editor_viewport_open,
+            #[cfg(windows)]
+            viewport::editor_viewport_native_bounds,
+            viewport::editor_viewport_native_cursor,
             viewport::editor_viewport_resize,
             viewport::editor_viewport_set_active,
             viewport::editor_viewport_camera,

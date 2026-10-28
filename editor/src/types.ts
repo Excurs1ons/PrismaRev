@@ -466,6 +466,8 @@ export interface ViewportSnapshot {
   height: number;
   /** Play 模式是否处于暂停（单步不改变它）。 */
   paused: boolean;
+  /** 该视口由原生承载窗口直接显示 GPU 画面（无 Channel 帧）。 */
+  native?: boolean;
   /** 项目模块编译进度（Game view）。 */
   build?: {
     phase: "idle" | "building" | "failed" | string;
