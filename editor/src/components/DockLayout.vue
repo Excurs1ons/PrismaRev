@@ -483,6 +483,37 @@ function clampAllFloating() {
   );
 }
 
+/** 记录最大化之前的浮动面板尺寸与坐标，用于双击还原。 */
+const preMaximizedBounds = new Map<string, { x: number; y: number; width: number; height: number }>();
+
+function toggleMaximize(tab: string) {
+  const panel = floating.value.find((item) => item.tab === tab);
+  if (!panel) return;
+  focus(tab);
+  const stored = preMaximizedBounds.get(tab);
+  if (stored) {
+    // 还原
+    floating.value = floating.value.map((item) =>
+      item.tab === tab
+        ? { ...item, x: stored.x, y: stored.y, width: stored.width, height: stored.height }
+        : item,
+    );
+    preMaximizedBounds.delete(tab);
+  } else {
+    // 最大化铺满工作区（保留顶部工具栏 38px 和边距 12px）
+    preMaximizedBounds.set(tab, { x: panel.x, y: panel.y, width: panel.width, height: panel.height });
+    const pad = 12;
+    const topBar = 38;
+    const maxW = Math.max(300, window.innerWidth - pad * 2);
+    const maxH = Math.max(200, window.innerHeight - topBar - 28 - pad);
+    floating.value = floating.value.map((item) =>
+      item.tab === tab
+        ? { ...item, x: pad, y: topBar + 6, width: maxW, height: maxH }
+        : item,
+    );
+  }
+}
+
 onMounted(() => window.addEventListener("resize", clampAllFloating));
 onUnmounted(() => {
   window.removeEventListener("resize", clampAllFloating);
@@ -534,8 +565,9 @@ provide(DOCK_KEY, {
     >
       <div
         class="dock-float-head"
-        title="拖动移动；按住 Alt 可自由摆放，拖到面板上可重新停靠"
+        title="拖动移动；双击最大化/还原；按住 Alt 自由摆放，拖到面板边缘可停靠"
         @pointerdown="startFloatDrag(panel.tab, $event)"
+        @dblclick.stop="toggleMaximize(panel.tab)"
       >
         <span class="dock-float-title">{{ titleOf(panel.tab) }}</span>
         <button

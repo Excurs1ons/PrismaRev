@@ -13,18 +13,32 @@
 import { Channel } from "@tauri-apps/api/core";
 import {
   ArrowDownToLine,
+  Box,
+  Camera as CameraIcon,
+  ChevronRight,
+  Circle,
+  Copy,
+  Cylinder,
+  Eye,
   Focus,
+  Globe,
   Grid,
   HelpCircle,
+  Layers,
   Maximize2,
   MousePointer,
   Move,
   Pause,
   Play,
+  Plus,
   RefreshCw,
+  RotateCcw,
   RotateCw,
   Square,
   StepForward,
+  Sun,
+  Trash2,
+  Video,
   X,
   Zap,
 } from "lucide-vue-next";
@@ -77,6 +91,14 @@ const emit = defineEmits<{
   (event: "toggle-space"): void;
   /** 一键贴落至地面返回批更新。 */
   (event: "drop-to-floor", updates: api.EntityTransformUpdate[]): void;
+  /** 在场景视口鼠标命中点创建实体。 */
+  (event: "create-entity", presetId: string, position?: [number, number, number]): void;
+  /** 重置选中实体变换。 */
+  (event: "reset-transform"): void;
+  /** 复制选中实体。 */
+  (event: "duplicate"): void;
+  /** 删除选中实体。 */
+  (event: "delete"): void;
 }>();
 
 const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -299,11 +321,20 @@ function scheduleReload() {
 const dragMode = ref<"orbit" | "pan" | "zoom" | "marquee" | null>(null);
 /** Alt 键是否处于按住状态（用于切换 Unity 风格视口导航光标与手势）。 */
 const altHeld = ref(false);
+/** V 键是否处于按住状态（用于切换 Unity 风格顶点吸附 Vertex Snapping）。 */
+const vKeyHeld = ref(false);
 /** 地面参考网格显隐。 */
 const showGrid = ref(true);
 let lastPointer = { x: 0, y: 0 };
 /** 判定「点选」还是「拖动相机」：按下位置 + 时间。 */
 let clickStart: { x: number; y: number; at: number } | null = null;
+/** 判定「右键短击菜单」还是「漫游飞行」：右键按下位置 + 时间。 */
+let rightClickStart: { x: number; y: number; at: number } | null = null;
+/** 视口右键上下文菜单位置与三维空间拾取点。 */
+const contextMenu = ref<{ x: number; y: number } | null>(null);
+let contextMenuWorldPos: [number, number, number] | null = null;
+const submenuOpen = ref(false);
+const hasSelection = computed(() => (props.selection?.length ?? 0) > 0);
 /** 正在拖动的平移手柄（`"x"` / `"y"` / `"z"`），`null` = 没在拖。 */
 const draggingAxis = ref<string | null>(null);
 /** 拖动过程中的实时交互反馈（浮层数值提示、旋转弧面等）。 */
@@ -499,7 +530,7 @@ const badgePosition = computed(() => {
   return { x, y, width: bw };
 });
 /** 拖动期间待下发的光标位置 / 是否攒了未同步的文档重载。 */
-let pendingDrag: { x: number; y: number; snap: boolean } | null = null;
+let pendingDrag: { x: number; y: number; snap: boolean; vsnap: boolean } | null = null;
 let reloadPending = false;
 let dragFrame = 0;
 let cameraAnimFrame = 0;
@@ -589,6 +620,8 @@ function onPointerDown(event: PointerEvent) {
   const canvas = canvasEl.value;
   if (!canvas) return;
   canvas.focus();
+  contextMenu.value = null;
+  submenuOpen.value = false;
   if (isScene.value) {
     if (cameraAnimFrame) {
       cancelAnimationFrame(cameraAnimFrame);
@@ -613,8 +646,9 @@ function onPointerDown(event: PointerEvent) {
       return;
     }
 
-    // 2. 无 Alt 时的右键：进入第一人称漫游飞行模式 (WASD + QE)
+    // 2. 无 Alt 时的右键：记录起始位置与时间，若拖动则漫游飞行，原地抬起弹出上下文菜单
     if (event.button === 2) {
+      rightClickStart = { x: event.clientX, y: event.clientY, at: Date.now() };
       flyMode.value = true;
       startFlyLoop();
       lastPointer = { x: event.clientX, y: event.clientY };
@@ -730,7 +764,7 @@ function onPointerMove(event: PointerEvent) {
     if (draggingAxis.value) {
       hoveredGizmo.value = null;
       const point = canvasPoint(event);
-      if (point) pushDrag(point, event.ctrlKey || event.metaKey);
+      if (point) pushDrag(point, event.ctrlKey || event.metaKey, vKeyHeld.value);
       return;
     }
     if (dragMode.value) {
@@ -783,17 +817,17 @@ function requestStep() {
 }
 
 /** 拖动按 rAF 合并：每帧最多问一次后端，中间的光标位置直接丢掉。 */
-function pushDrag(point: { x: number; y: number }, snap: boolean) {
+function pushDrag(point: { x: number; y: number }, snap: boolean, vsnap: boolean) {
   if (dragFrame) {
-    pendingDrag = { x: point.x, y: point.y, snap };
+    pendingDrag = { x: point.x, y: point.y, snap, vsnap };
     return;
   }
   dragFrame = requestAnimationFrame(() => {
     dragFrame = 0;
-    const target = pendingDrag ?? { x: point.x, y: point.y, snap };
+    const target = pendingDrag ?? { x: point.x, y: point.y, snap, vsnap };
     pendingDrag = null;
     void api
-      .viewportDrag(viewId, target.x, target.y, target.snap)
+      .viewportDrag(viewId, target.x, target.y, target.snap, target.vsnap)
       .then((res) => {
         if (!res) return;
         if (res.position) emit("move", res.position, res.multiUpdates);
@@ -895,10 +929,87 @@ function onPointerUp(event: PointerEvent) {
       Math.abs(event.clientY - start.y) < 4
     ) {
       void pickAt(event);
+      return;
+    }
+    // 右键按下后原地抬起 = 视口上下文菜单
+    if (event.button === 2 && rightClickStart) {
+      const rStart = rightClickStart;
+      rightClickStart = null;
+      if (
+        Date.now() - rStart.at < 450 &&
+        Math.abs(event.clientX - rStart.x) < 6 &&
+        Math.abs(event.clientY - rStart.y) < 6
+      ) {
+        void openContextMenu(event);
+        return;
+      }
     }
     return;
   }
   void sendInput({ type: "mouseButton", button: event.button, pressed: false });
+}
+
+async function openContextMenu(event: PointerEvent) {
+  const canvas = canvasEl.value;
+  if (!canvas) return;
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  const px = (event.clientX - rect.left) * scaleX;
+  const py = (event.clientY - rect.top) * scaleY;
+
+  contextMenuWorldPos = await api.viewportRaycast(viewId, px, py).catch(() => null);
+  const menuX = Math.min(window.innerWidth - 220, Math.max(10, event.clientX));
+  const menuY = Math.min(window.innerHeight - 340, Math.max(10, event.clientY));
+  contextMenu.value = { x: menuX, y: menuY };
+  submenuOpen.value = false;
+}
+
+function handleCreateEntity(presetId: string) {
+  const pos = contextMenuWorldPos ?? undefined;
+  contextMenu.value = null;
+  submenuOpen.value = false;
+  emit("create-entity", presetId, pos);
+}
+
+function handleMenuFrameSelection() {
+  contextMenu.value = null;
+  void frameSelection();
+}
+
+function handleMenuFrameAll() {
+  contextMenu.value = null;
+  void frameAll();
+}
+
+function handleAlignViewToSelected() {
+  contextMenu.value = null;
+  void alignViewToSelected();
+}
+
+function handleAlignSelectedToView() {
+  contextMenu.value = null;
+  void alignSelectedToView();
+}
+
+function handleDropToFloor() {
+  contextMenu.value = null;
+  void dropToFloor();
+}
+
+function handleResetTransform() {
+  contextMenu.value = null;
+  emit("reset-transform");
+}
+
+function handleDuplicate() {
+  contextMenu.value = null;
+  emit("duplicate");
+}
+
+function handleDelete() {
+  contextMenu.value = null;
+  emit("delete");
 }
 
 /**
@@ -989,6 +1100,9 @@ function onKey(event: KeyboardEvent, pressed: boolean) {
   if (isScene.value) {
     if (event.key === "Alt" || event.code === "AltLeft" || event.code === "AltRight") {
       altHeld.value = pressed;
+    }
+    if (event.key === "v" || event.key === "V" || event.code === "KeyV") {
+      vKeyHeld.value = pressed;
     }
     if (flyMode.value) {
       const code = event.code;
@@ -1711,6 +1825,17 @@ const aspectOptions = computed<DropdownOption[]>(() => [
             />
           </template>
 
+          <!-- 顶点吸附 (V-Snap) 目标指示器 (Unity 风格黄色菱形与光晕圆环) -->
+          <g
+            v-if="dragFeedback?.snapPoint"
+            :transform="`translate(${dragFeedback.snapPoint[0]}, ${dragFeedback.snapPoint[1]})`"
+            class="vsnap-indicator"
+          >
+            <circle r="12" class="vsnap-pulse-ring" />
+            <circle r="6" class="vsnap-inner-ring" />
+            <polygon points="0,-5 5,0 0,5 -5,0" class="vsnap-diamond" />
+          </g>
+
           <!-- 交互数值 HUD Badge -->
           <g v-if="badgePosition && dragFeedback" :transform="`translate(${badgePosition.x}, ${badgePosition.y})`">
             <rect
@@ -1743,6 +1868,109 @@ const aspectOptions = computed<DropdownOption[]>(() => [
         @align="alignCameraTo"
         @reset="resetCameraView"
       />
+
+      <!-- 视口右键上下文菜单 (Unity / Unreal 风格 SceneView Context Menu) -->
+      <div
+        v-if="contextMenu"
+        class="viewport-context-menu"
+        :style="{
+          left: `${contextMenu.x}px`,
+          top: `${contextMenu.y}px`,
+        }"
+        @pointerdown.stop
+        @contextmenu.prevent
+      >
+        <div class="menu-item has-submenu" @mouseenter="submenuOpen = true">
+          <Plus :size="13" class="menu-icon" />
+          <span class="menu-label">在此处创建</span>
+          <ChevronRight :size="12" class="submenu-arrow" />
+
+          <div v-if="submenuOpen" class="viewport-sub-menu" @pointerdown.stop>
+            <div class="menu-item" @click="handleCreateEntity('cube')">
+              <Box :size="13" class="menu-icon" />
+              <span class="menu-label">立方体 (Cube)</span>
+            </div>
+            <div class="menu-item" @click="handleCreateEntity('sphere')">
+              <Circle :size="13" class="menu-icon" />
+              <span class="menu-label">球体 (Sphere)</span>
+            </div>
+            <div class="menu-item" @click="handleCreateEntity('cylinder')">
+              <Cylinder :size="13" class="menu-icon" />
+              <span class="menu-label">圆柱体 (Cylinder)</span>
+            </div>
+            <div class="menu-item" @click="handleCreateEntity('plane')">
+              <Square :size="13" class="menu-icon" />
+              <span class="menu-label">平面 (Plane)</span>
+            </div>
+            <div class="menu-separator" />
+            <div class="menu-item" @click="handleCreateEntity('light')">
+              <Sun :size="13" class="menu-icon" />
+              <span class="menu-label">平行光 (Light)</span>
+            </div>
+            <div class="menu-item" @click="handleCreateEntity('camera')">
+              <CameraIcon :size="13" class="menu-icon" />
+              <span class="menu-label">相机 (Camera)</span>
+            </div>
+            <div class="menu-item" @click="handleCreateEntity('empty')">
+              <Layers :size="13" class="menu-icon" />
+              <span class="menu-label">空实体 (Empty)</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="menu-separator" />
+
+        <div class="menu-item" :class="{ disabled: !hasSelection }" @click="handleMenuFrameSelection">
+          <Focus :size="13" class="menu-icon" />
+          <span class="menu-label">聚焦选中项</span>
+          <span class="menu-key">F</span>
+        </div>
+
+        <div class="menu-item" @click="handleMenuFrameAll">
+          <Globe :size="13" class="menu-icon" />
+          <span class="menu-label">全景查看</span>
+          <span class="menu-key">A</span>
+        </div>
+
+        <div class="menu-separator" />
+
+        <div class="menu-item" :class="{ disabled: !hasSelection }" @click="handleAlignViewToSelected">
+          <Eye :size="13" class="menu-icon" />
+          <span class="menu-label">视角对齐到选中项</span>
+          <span class="menu-key">Ctrl+Shift+F</span>
+        </div>
+
+        <div class="menu-item" :class="{ disabled: !hasSelection }" @click="handleAlignSelectedToView">
+          <Video :size="13" class="menu-icon" />
+          <span class="menu-label">选中项对齐到当前视角</span>
+          <span class="menu-key">Ctrl+Alt+F</span>
+        </div>
+
+        <div class="menu-item" :class="{ disabled: !hasSelection }" @click="handleDropToFloor">
+          <ArrowDownToLine :size="13" class="menu-icon" />
+          <span class="menu-label">落到地面</span>
+          <span class="menu-key">End</span>
+        </div>
+
+        <div class="menu-separator" />
+
+        <div class="menu-item" :class="{ disabled: !hasSelection }" @click="handleResetTransform">
+          <RotateCcw :size="13" class="menu-icon" />
+          <span class="menu-label">重置变换</span>
+        </div>
+
+        <div class="menu-item" :class="{ disabled: !hasSelection }" @click="handleDuplicate">
+          <Copy :size="13" class="menu-icon" />
+          <span class="menu-label">复制</span>
+          <span class="menu-key">Ctrl+D</span>
+        </div>
+
+        <div class="menu-item danger" :class="{ disabled: !hasSelection }" @click="handleDelete">
+          <Trash2 :size="13" class="menu-icon" />
+          <span class="menu-label">删除</span>
+          <span class="menu-key">Del</span>
+        </div>
+      </div>
 
       <!-- Unity 风格 Statistics 半透明悬浮状态窗口 -->
       <div v-if="showStats" class="unity-stats-window" @pointerdown.stop>
@@ -2294,5 +2522,130 @@ const aspectOptions = computed<DropdownOption[]>(() => [
   height: 14px;
   background: color-mix(in srgb, var(--border, #2d333b) 80%, transparent);
   margin: 0 2px;
+}
+
+/* 视口右键上下文菜单与级联子菜单 (Unity 风格 SceneView Context Menu) */
+.viewport-context-menu {
+  position: fixed;
+  z-index: 10000;
+  min-width: 175px;
+  background: color-mix(in srgb, var(--chrome, #1c2128) 96%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border, #373e47) 90%, transparent);
+  border-radius: 6px;
+  padding: 4px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(10px);
+  user-select: none;
+  font-size: 11px;
+}
+
+.viewport-context-menu .menu-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 4px;
+  color: var(--text, #cdd9e5);
+  cursor: pointer;
+  transition: background 0.1s ease, color 0.1s ease;
+}
+
+.viewport-context-menu .menu-item:hover:not(.disabled) {
+  background: color-mix(in srgb, var(--accent, #388bfd) 20%, transparent);
+  color: #fff;
+}
+
+.viewport-context-menu .menu-item.disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.viewport-context-menu .menu-item.danger:hover:not(.disabled) {
+  background: color-mix(in srgb, var(--danger, #f85149) 25%, transparent);
+  color: #ff7b72;
+}
+
+.viewport-context-menu .menu-icon {
+  flex-shrink: 0;
+  color: var(--text-dim, #768390);
+}
+
+.viewport-context-menu .menu-item:hover:not(.disabled) .menu-icon {
+  color: inherit;
+}
+
+.viewport-context-menu .menu-label {
+  flex: 1;
+  white-space: nowrap;
+}
+
+.viewport-context-menu .menu-key {
+  font-size: 10px;
+  color: var(--text-dim, #768390);
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 3px;
+  padding: 1px 4px;
+  margin-left: 10px;
+}
+
+.viewport-context-menu .submenu-arrow {
+  margin-left: auto;
+  color: var(--text-dim, #768390);
+}
+
+.viewport-context-menu .menu-separator {
+  height: 1px;
+  background: color-mix(in srgb, var(--border, #2d333b) 80%, transparent);
+  margin: 3px 2px;
+}
+
+.viewport-sub-menu {
+  position: absolute;
+  top: -4px;
+  left: 100%;
+  margin-left: 3px;
+  min-width: 155px;
+  background: color-mix(in srgb, var(--chrome, #1c2128) 96%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border, #373e47) 90%, transparent);
+  border-radius: 6px;
+  padding: 4px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(10px);
+}
+
+/* 顶点吸附 (V-Snap) 目标指示器与光晕动画 */
+.vsnap-indicator {
+  pointer-events: none;
+}
+
+.vsnap-pulse-ring {
+  fill: none;
+  stroke: #ffcc00;
+  stroke-width: 1.5;
+  animation: vsnap-pulse 1.1s cubic-bezier(0.2, 0.8, 0.2, 1) infinite;
+}
+
+.vsnap-inner-ring {
+  fill: rgba(255, 204, 0, 0.25);
+  stroke: #ffcc00;
+  stroke-width: 1.2;
+}
+
+.vsnap-diamond {
+  fill: #ffe066;
+  stroke: #1a1a1a;
+  stroke-width: 1;
+}
+
+@keyframes vsnap-pulse {
+  0% {
+    r: 6px;
+    opacity: 0.9;
+  }
+  100% {
+    r: 16px;
+    opacity: 0;
+  }
 }
 </style>

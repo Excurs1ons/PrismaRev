@@ -2431,6 +2431,12 @@ html.compact .dock-tab {
   background: color-mix(in srgb, var(--accent) 12%, var(--bg-sunken));
   border-bottom-color: color-mix(in srgb, var(--accent) 30%, var(--border));
 }
+.dock-float:not(.is-focused) .dock-float-head {
+  opacity: 0.82;
+}
+.dock-float:not(.is-focused):hover .dock-float-head {
+  opacity: 1;
+}
 .dock-float-head:active {
   cursor: grabbing;
 }

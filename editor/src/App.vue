@@ -1491,7 +1491,7 @@ function nextEntityId(entities: EntityJson[]): number {
   return max + 1;
 }
 
-function addEntity(targetPresetId?: string, parentIndex?: number | null) {
+function addEntity(targetPresetId?: string, parentIndex?: number | null, customPosition?: [number, number, number]) {
   if (!doc.value) return;
   const pId = targetPresetId || presetId.value;
   let preset = presets.value.find((p) => p.id === pId);
@@ -1506,6 +1506,12 @@ function addEntity(targetPresetId?: string, parentIndex?: number | null) {
       preset = { id: "cylinder", label: "Cylinder", name: "Cylinder", components: ["prism_engine::scene::MeshRenderer", "prism_engine::scene::Active"], overrides: {}, rotation: [0, 0, 0, 1], position: [0, 0, 0] };
     } else if (pId === "plane") {
       preset = { id: "plane", label: "Plane", name: "Plane", components: ["prism_engine::scene::MeshRenderer", "prism_engine::scene::Active"], overrides: {}, rotation: [0, 0, 0, 1], position: [0, 0, 0] };
+    } else if (pId === "light") {
+      preset = { id: "light", label: "Directional Light", name: "DirectionalLight", components: ["prism_engine::scene::Light", "prism_engine::scene::Active"], overrides: {}, rotation: [0, 0, 0, 1], position: [0, 3, 0] };
+    } else if (pId === "camera") {
+      preset = { id: "camera", label: "Camera", name: "MainCamera", components: ["prism_engine::scene::Camera", "prism_engine::scene::Active"], overrides: {}, rotation: [0, 0, 0, 1], position: [0, 1, 5] };
+    } else if (pId === "empty") {
+      preset = { id: "empty", label: "Empty Entity", name: "Entity", components: ["prism_engine::scene::Active"], overrides: {}, rotation: [0, 0, 0, 1], position: [0, 0, 0] };
     } else {
       preset = presets.value.find((p) => p.id === presetId.value) || presets.value[0];
     }
@@ -1535,7 +1541,7 @@ function addEntity(targetPresetId?: string, parentIndex?: number | null) {
     name: uniqueName(preset?.name ?? "entity"),
     parent: parentId,
     transform: {
-      position: (preset?.position ?? [0, 0, 0]) as number[],
+      position: (customPosition ?? (preset?.position ?? [0, 0, 0])) as number[],
       rotation: (preset?.rotation ?? [0, 0, 0, 1]) as number[],
       scale: [1, 1, 1],
     },
@@ -1543,6 +1549,24 @@ function addEntity(targetPresetId?: string, parentIndex?: number | null) {
   });
   commit({ ...doc.value, entities }, `add-entity#${entities.length}`);
   selection.value = [entities.length - 1];
+}
+
+function onViewportResetTransform() {
+  if (!doc.value || !selection.value || selection.value.length === 0) return;
+  const entities = doc.value.entities.slice();
+  for (const idx of selection.value) {
+    if (idx >= 0 && idx < entities.length) {
+      entities[idx] = {
+        ...entities[idx],
+        transform: {
+          position: [0, 0, 0],
+          rotation: [0, 0, 0, 1],
+          scale: [1, 1, 1],
+        },
+      };
+    }
+  }
+  commit({ ...doc.value, entities }, "reset-transform");
 }
 
 function duplicateEntity() {
@@ -2452,6 +2476,10 @@ onUnmounted(() => {
             @toggle-pivot="activePivot = activePivot === 'pivot' ? 'center' : 'pivot'"
             @toggle-space="activeSpace = activeSpace === 'global' ? 'local' : 'global'"
             @drop-to-floor="onViewportDropToFloor"
+            @create-entity="(pId, pos) => addEntity(pId, null, pos)"
+            @reset-transform="onViewportResetTransform"
+            @duplicate="duplicateEntity"
+            @delete="deleteSelection"
           />
         </template>
         <template #gameView>
