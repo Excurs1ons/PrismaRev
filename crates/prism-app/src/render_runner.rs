@@ -71,6 +71,13 @@ pub enum RenderTarget {
         extensions: Vec<String>,
         vsync: bool,
     },
+    /// Native surface supplied by an embedding host. The host owns the
+    /// window; the renderer owns only the Vulkan surface and swapchain.
+    NativeSurface {
+        handles: SendWindowHandles,
+        extensions: Vec<String>,
+        vsync: bool,
+    },
     /// 无窗口离屏图像（编辑器视口）。帧由宿主经 [`RenderShared::request_frame`]
     /// 请求，渲染线程读回 CPU 后放进 [`RenderShared::frame`]。
     Offscreen { width: u32, height: u32 },
@@ -108,6 +115,24 @@ pub fn render_thread_main(
     // 原始句柄包装成 Has*Handle——raw 句柄是进程级的，跨线程安全。
     let created = match &target {
         RenderTarget::Surface {
+            handles,
+            extensions,
+            vsync,
+        } => {
+            let extensions_ref: Vec<&str> = extensions.iter().map(|s| s.as_str()).collect();
+            let handle_bridge = RawHandleBridge {
+                display: &handles.display,
+                window: &handles.window,
+            };
+            GraphRenderer::new_with_vsync(
+                extensions_ref,
+                &handle_bridge,
+                &handle_bridge,
+                None,
+                *vsync,
+            )
+        }
+        RenderTarget::NativeSurface {
             handles,
             extensions,
             vsync,
@@ -168,6 +193,8 @@ pub fn render_thread_main(
     let mut smoothed_fps = 0.0f32;
     let mut frame_count: u64 = 0;
     let mut first_frame_presented = false;
+    let mut first_packet_received = false;
+    let mut consecutive_errors: u32 = 0;
     let screenshot = crate::screenshot::ScreenshotPlan::from_env();
     let mut screenshot_done = false;
 
@@ -191,7 +218,6 @@ pub fn render_thread_main(
         let packet = shared.take_packet();
         // 应用主线程投递的叠加层消息（如"新的宿主 UI 帧"）。
         let overlay_messages = shared.take_overlay_messages();
-        let has_overlay_messages = !overlay_messages.is_empty();
         for msg in overlay_messages {
             renderer.apply_overlay_message(msg);
         }
@@ -202,10 +228,32 @@ pub fn render_thread_main(
             msg(&mut renderer);
         }
 
-        // If no packet yet, spin-wait briefly.
-        let Some(packet) = packet else {
-            std::thread::sleep(std::time::Duration::from_micros(500));
-            continue;
+        // The host drives this loop. Do not add a frame-rate sleep here.
+        let packet = match packet {
+            Some(packet) => {
+                if !first_packet_received {
+                    first_packet_received = true;
+                    log::info!(
+                        "first render packet received: draws={}, camera={}, gizmos={}, extent={}x{}",
+                        packet.draw_items.len(),
+                        packet.scene.has_camera,
+                        packet.gizmos.len(),
+                        renderer.extent().width,
+                        renderer.extent().height,
+                    );
+                }
+                packet
+            }
+            None => {
+                let guard = shared.packet.lock().unwrap();
+                if guard.is_none() && shared.running.load(std::sync::atomic::Ordering::Relaxed) {
+                    let _ = shared
+                        .packet_ready
+                        .wait_timeout(guard, std::time::Duration::from_millis(50))
+                        .unwrap();
+                }
+                continue;
+            }
         };
 
         let frame_start = Instant::now();
@@ -213,16 +261,52 @@ pub fn render_thread_main(
         let frame_plan = screenshot
             .as_ref()
             .filter(|plan| !screenshot_done && plan.fires_on(frame_count + 1));
-        if let Err(e) = render_one_frame(
+        let presented = match render_one_frame(
             &mut renderer,
             &packet,
             &mut dirty_router,
             &packet.settings,
             frame_plan,
         ) {
-            log::error!("Render thread error: {e:#}");
-        } else if !first_frame_presented {
+            Ok(presented) => {
+                consecutive_errors = 0;
+                presented
+            }
+            Err(e) => {
+                consecutive_errors += 1;
+                let text = format!("{e:#}");
+                // Device-lost / surface failure is terminal: retrying only spins
+                // the CPU and floods the log (observed: >1M lines). Report it to
+                // the host so the viewport can stop and surface the reason.
+                let fatal = text.contains("device has been lost")
+                    || text.contains("DEVICE_LOST")
+                    || text.contains("surface has been lost")
+                    || consecutive_errors >= 3;
+                if fatal {
+                    let message =
+                        format!("render failed after {consecutive_errors} attempt(s): {text}");
+                    log::error!("Render thread: {message}");
+                    shared.fail_render(message);
+                    break;
+                }
+                log::error!("Render thread error: {e:#}");
+                false
+            }
+        };
+        if presented && !first_frame_presented {
             first_frame_presented = true;
+            log::info!(
+                "first frame presented: extent={}x{}, draws={}, camera={}, target={}",
+                renderer.extent().width,
+                renderer.extent().height,
+                packet.draw_items.len(),
+                packet.scene.has_camera,
+                if renderer.is_headless() {
+                    "offscreen"
+                } else {
+                    "surface"
+                },
+            );
             shared.mark("first_frame");
             shared.print_startup_report();
         }
@@ -282,11 +366,6 @@ pub fn render_thread_main(
 
         // 归还数据包：主线程下一帧 clear() + 重填，跳过每帧的 Vec 重分配（#66）。
         shared.recycle_packet(packet);
-
-        // Throttle if no 叠加层消息 pending to avoid 100% CPU spin when idle.
-        if !has_overlay_messages && frame_time_ms < 1.0 {
-            std::thread::sleep(std::time::Duration::from_micros(500));
-        }
     }
 
     log::info!("Render thread exiting — destroying renderer");
@@ -301,7 +380,7 @@ fn render_one_frame(
     dirty_router: &mut DirtyRouter,
     settings: &RenderSettings,
     screenshot: Option<&crate::screenshot::ScreenshotPlan>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<bool> {
     let scene = &packet.scene;
     let draw_items = &packet.draw_items;
 
@@ -369,7 +448,7 @@ fn render_one_frame(
 
     let ctx = match renderer.begin_frame()? {
         Some(c) => c,
-        None => return Ok(()),
+        None => return Ok(false),
     };
     if let Some(plan) = screenshot {
         renderer.request_screenshot(plan.path.clone(), plan.size, plan.scale);
@@ -381,13 +460,16 @@ fn render_one_frame(
             let _ = renderer.present(&ctx);
             let _ = renderer.end_frame(&ctx, false);
         })?;
-    let presented = renderer.present(&ctx)?;
+    // `GraphRenderer::present` returns whether the swapchain was out of date,
+    // not whether queue submission/present succeeded. Reaching this point
+    // means the frame was submitted to the native surface.
+    let out_of_date = renderer.present(&ctx)?;
     if screenshot.is_some() {
         if let Err(err) = renderer.finish_screenshot(&ctx) {
             log::error!("screenshot failed: {err:#}");
         }
     }
-    renderer.end_frame(&ctx, presented)?;
+    renderer.end_frame(&ctx, out_of_date)?;
 
-    Ok(())
+    Ok(true)
 }

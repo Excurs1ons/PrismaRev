@@ -17,11 +17,11 @@
 //! `pt_reset_requested` 同理（主线程 → 渲染线程）。
 
 use std::collections::HashMap;
-use std::sync::Mutex;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, OnceLock,
 };
+use std::sync::{Condvar, Mutex};
 use std::time::Instant;
 
 use prism_engine::ecs::Entity;
@@ -82,6 +82,8 @@ pub struct RenderShared {
     pub running: Arc<AtomicBool>,
     /// 来自游戏循环的最新帧数据包（主线程→渲染线程）
     pub packet: Mutex<Option<FramePacket>>,
+    /// Wakes the renderer when a new packet or renderer-side command arrives.
+    pub packet_ready: Condvar,
     /// 渲染线程用完归还的空包（渲染线程→主线程），主线程下一帧
     /// `clear()` + 重填，复用里面的 `Vec` 容量（issue #66）。
     pub spare_packet: Mutex<Option<FramePacket>>,
@@ -121,6 +123,7 @@ impl RenderShared {
         let shared = Arc::new(Self {
             running: running.clone(),
             packet: Mutex::new(None),
+            packet_ready: Condvar::new(),
             spare_packet: Mutex::new(None),
             overlay_messages: Mutex::new(Vec::new()),
             renderer_messages: Mutex::new(Vec::new()),
@@ -143,6 +146,7 @@ impl RenderShared {
     /// Submit the latest 帧 packet (main 线程 → 渲染 线程
     pub fn send_packet(&self, packet: FramePacket) {
         *self.packet.lock().unwrap() = Some(packet);
+        self.packet_ready.notify_one();
     }
 
     /// 入队一条叠加层消息（主线程 → 渲染线程）。
@@ -187,6 +191,12 @@ impl RenderShared {
     /// 掉帧时自然降频，不会堆积请求。
     pub fn request_frame(&self) {
         self.frame_requested.store(true, Ordering::Relaxed);
+        self.packet_ready.notify_one();
+    }
+
+    /// Wake the render thread without requesting a CPU readback.
+    pub fn wake_renderer(&self) {
+        self.packet_ready.notify_one();
     }
 
     /// 取走最近读回的帧（主线程）；没有新帧时返回 `None`。
@@ -202,6 +212,7 @@ impl RenderShared {
     /// 应用到 `&mut GraphRenderer`。用于跨线程触发 `set_environment` 等。
     pub fn send_renderer_message(&self, msg: RendererMessage) {
         self.renderer_messages.lock().unwrap().push(msg);
+        self.packet_ready.notify_one();
     }
 
     /// 取走所有排队中的渲染器命令（渲染线程）。

@@ -10,6 +10,8 @@ mod context;
 mod input;
 
 pub use config::WindowConfig;
+#[cfg(windows)]
+pub use context::raw_win32_window_handles;
 pub use context::required_vulkan_extensions;
 pub use context::{raw_window_handles, PlatformContext, SendWindowHandles};
 pub use input::{
