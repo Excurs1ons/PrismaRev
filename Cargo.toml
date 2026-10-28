@@ -10,6 +10,8 @@ members = [
     "crates/prism-render",
     "crates/prism-engine",
     "crates/prism-app",
+    "crates/prism-project-api",
+    "crates/prism-runtime-host",
     "crates/prism-platform",
     "crates/prism-editor-tool",
     "crates/prism-editor-api",

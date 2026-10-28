@@ -18,5 +18,6 @@ crate-type = ["lib", "cdylib"]
 [dependencies]
 prism-app = { path = "../../crates/prism-app" }
 prism-engine = { path = "../../crates/prism-engine" }
+prism-project-api = { path = "../../crates/prism-project-api" }
 keyframe = "1.1"
 log = "0.4"

@@ -23,6 +23,7 @@ prism-editor-api = { path = "../../crates/prism-editor-api" }
 prism-app = { path = "../../crates/prism-app" }
 prism-engine = { path = "../../crates/prism-engine" }
 prism-scene = { path = "../../crates/prism-scene" }
+prism-runtime-host = { path = "../../crates/prism-runtime-host" }
 glam = "0.33"
 log = "0.4"
 env_logger = "0.11"
