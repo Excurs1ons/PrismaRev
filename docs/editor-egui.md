@@ -155,9 +155,13 @@ instance / device 并返回 `AshRenderState`，因此可以做到 Unity 的模�
   docking 手感都需要桌面复核。
 - **尚未实现**：材质 / 贴图拖到场景里自动挂 `MeshRenderer`；层级多选整组插入排序
   （整组只支持改父级）；多窗口（egui viewport）的独立 DPI。
-- **被引擎阻塞**：`3D Object ▸ Cube/Sphere/Cylinder/Capsule/Quad` 需要引擎提供程序化
-  基础网格（当前 `MeshRenderer.mesh_path` 只能指向已 cook 的资产，仓库里没有这些
-  内置图元），所以菜单里只保留 `Rendering ▸ Mesh Renderer`（空 mesh_path 的容器）。
+- **内置图元（已打通）**：`crates/prism-render/src/primitives.rs` 生成 box / sphere /
+  cylinder / capsule / quad 的顶点与索引；`mesh_path = "__builtin/<name>"` 由
+  `prism-engine` 的资产解析器短路，不读 `.pak`、不需要 cook。对应的实体预设
+  （`cube / sphere / cylinder / capsule / quad / plane`）在 `prism-editor-api`
+  的 `entity_presets()` 里，GameObject → Create Other → 3D Object 直接用。
+  尺寸与 Unity 一致：box/sphere/cylinder 1 单位，capsule 总高 2（半径 0.5），
+  quad/plane 是 `y = 0` 上的 1×1 XZ 面、法线 +Y。
 - **性能**：每次文档变化都会整场重载两个引擎实例（防抖 120ms），大场景下偏重；
   后续可以改成「只重建变化的实体」或引入 delta 上传。
 - **两个引擎实例**意味着两份 GPU 资源（管线、IBL、网格）。如果以后只保留一个

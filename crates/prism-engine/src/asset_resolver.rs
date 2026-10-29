@@ -354,6 +354,11 @@ impl GpuAssetResolver {
 
     /// CPU 段：加载网格资源 + 解交织顶点 data → `MeshUploadInput`。
     fn load_mesh_inputs(&mut self, path: &str) -> Option<MeshUploadInput> {
+        // 内置基础网格（编辑器 3D Object 预设）：不读 `.pak`、不需要 cook。
+        if prism_render::primitives::is_builtin(path) {
+            return prism_render::primitives::builtin(path);
+        }
+
         let id = self.resource_manager.id_by_path(path).or_else(|| {
             log::warn!("load_mesh_inputs: path '{path}' not in manifest");
             None

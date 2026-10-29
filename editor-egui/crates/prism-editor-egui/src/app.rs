@@ -888,6 +888,22 @@ impl EditorApp {
                 self.menu_do(ui, "Create Empty Parent", |app| app.create_empty_parent());
                 ui.separator();
                 ui.menu_button("Create Other", |ui| {
+                    ui.menu_button("3D Object", |ui| {
+                        for (id, label) in [
+                            ("cube", "Cube"),
+                            ("sphere", "Sphere"),
+                            ("cylinder", "Cylinder"),
+                            ("capsule", "Capsule"),
+                            ("quad", "Quad"),
+                            ("plane", "Plane"),
+                        ] {
+                            let known = self.workspace.presets.iter().any(|p| p.id == id);
+                            if ui.add_enabled(known, egui::Button::new(label)).clicked() {
+                                self.workspace.add_entity(id);
+                                ui.close();
+                            }
+                        }
+                    });
                     ui.menu_button("Rendering", |ui| {
                         for (id, label) in [("mesh", "Mesh Renderer"), ("skybox", "Skybox")] {
                             let known = self.workspace.presets.iter().any(|p| p.id == id);
