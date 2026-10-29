@@ -13,6 +13,15 @@ use crate::capabilities::{self, RayTracingCaps};
 /// 调试构建/当加载器存在时请求的验证层。
 const VALIDATION_LAYERS: [&str; 1] = ["VK_LAYER_KHRONOS_validation"];
 
+/// 谁拥有上下文背后的 Vulkan 对象。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ContextOwnership {
+    /// [`VulkanContext::new`] 创建，随上下文一起销毁。
+    Owned,
+    /// 宿主（编辑器 UI 框架）创建并与渲染器共享；上下文析构时**不销毁**。
+    External,
+}
+
 /// All the long-lived Vulkan 状态 the 渲染器 needs to do anything.
 pub struct VulkanContext {
     pub entry: ash::Entry,
@@ -39,6 +48,9 @@ pub struct VulkanContext {
     /// 设备 扩展 names that were actually 启用 (RT extensions are
     /// conditional; the rest are always-on). Stored for later RT modules.
     enabled_extensions: Vec<CString>,
+
+    /// 对象所有权：`Owned` 在析构时销毁设备/实例，`External` 留给宿主。
+    ownership: ContextOwnership,
 
     // Held for 放置 ordering / FFI 生命周期
     _debug_messenger: Option<vk::DebugUtilsMessengerEXT>,
@@ -81,6 +93,7 @@ impl VulkanContext {
             graphics_queue_family,
             &rt_caps,
             !window_extensions.is_empty(),
+            &[],
         )?;
 
         let graphics_queue = unsafe { device.get_device_queue(graphics_queue_family, 0) };
@@ -106,7 +119,67 @@ impl VulkanContext {
             rt_caps,
             acceleration_structure_fn,
             enabled_extensions,
+            ownership: ContextOwnership::Owned,
             _debug_messenger: debug_messenger,
+        })
+    }
+
+    /// 宿主（编辑器 / UI 框架）已经建好 instance 与物理设备，但希望渲染器与
+    /// UI **共用同一个 `VkDevice`** 时使用。
+    ///
+    /// 设备仍由本函数按与 [`VulkanContext::new`] 相同的特性集创建（bindless、
+    /// 时间线信号量、synchronization2 …… 的前提都在这里），宿主只需要额外
+    /// 声明自己的设备扩展（例如 `VK_KHR_swapchain`）。
+    ///
+    /// 所有权：`instance` 与 `device` 归宿主，上下文析构时**不会**销毁它们；
+    /// 宿主必须在渲染器全部销毁之后再销毁设备/实例。
+    pub fn from_host(
+        entry: ash::Entry,
+        instance: ash::Instance,
+        physical_device: vk::PhysicalDevice,
+        graphics_queue_family: u32,
+        extra_device_extensions: &[&str],
+    ) -> anyhow::Result<Self> {
+        let physical_device_properties =
+            unsafe { instance.get_physical_device_properties(physical_device) };
+        let physical_device_memory_properties =
+            unsafe { instance.get_physical_device_memory_properties(physical_device) };
+
+        let rt_caps = unsafe { capabilities::probe(&instance, physical_device) };
+        log::info!("RT capabilities (host device): {rt_caps}");
+
+        let (device, enabled_extensions) = create_device(
+            &instance,
+            physical_device,
+            graphics_queue_family,
+            &rt_caps,
+            true,
+            extra_device_extensions,
+        )?;
+        let graphics_queue = unsafe { device.get_device_queue(graphics_queue_family, 0) };
+
+        let acceleration_structure_fn = if rt_caps.acceleration_structure {
+            Some(ash::khr::acceleration_structure::Device::new(
+                &instance, &device,
+            ))
+        } else {
+            None
+        };
+
+        Ok(Self {
+            entry,
+            instance,
+            physical_device,
+            device,
+            graphics_queue_family,
+            graphics_queue,
+            physical_device_properties,
+            physical_device_memory_properties,
+            rt_caps,
+            acceleration_structure_fn,
+            enabled_extensions,
+            ownership: ContextOwnership::External,
+            _debug_messenger: None,
         })
     }
 
@@ -146,6 +219,11 @@ impl VulkanContext {
 
 impl Drop for VulkanContext {
     fn drop(&mut self) {
+        // 外部（宿主）创建的对象由宿主销毁：UI 框架的 device 生命周期比渲染器长，
+        // 在这里销毁会让 UI 侧句柄悬空。
+        if self.ownership == ContextOwnership::External {
+            return;
+        }
         unsafe {
             // 销毁 the 调试 messenger *before* the 实例 The old 代码
             // guarded the 销毁 on `debug_utils_instance()`, which itself
@@ -166,6 +244,66 @@ impl Drop for VulkanContext {
 // ---------------------------------------------------------------------------
 // 实例
 // ---------------------------------------------------------------------------
+
+/// 为**宿主**创建 Vulkan 实例（编辑器 UI 框架需要自己持有 instance 来创建
+/// surface / swapchain，同时又要和渲染器共用设备）。
+///
+/// 扩展列表由宿主给出（通常是 `ash_window::enumerate_required_extensions` 的
+/// 结果）；debug/validation 策略与 [`VulkanContext::new`] 一致。
+pub fn create_host_instance(
+    entry: &ash::Entry,
+    extensions: &[&str],
+) -> anyhow::Result<(ash::Instance, Option<vk::DebugUtilsMessengerEXT>)> {
+    let enable_debug = cfg!(debug_assertions);
+    let instance = create_instance(entry, extensions, enable_debug)?;
+    let messenger = if enable_debug {
+        setup_debug_messenger(entry, &instance)
+    } else {
+        None
+    };
+    Ok((instance, messenger))
+}
+
+/// 选择一块能向 `surface` 呈现、且有图形队列的物理设备。
+///
+/// 渲染器要求 `maxPushConstantsSize >= 144`（PathTracePass），这里一并校验，
+/// 避免宿主先建好设备、渲染器初始化时才失败。
+pub fn pick_host_physical_device(
+    instance: &ash::Instance,
+    surface_loader: &ash::khr::surface::Instance,
+    surface: vk::SurfaceKHR,
+) -> anyhow::Result<vk::PhysicalDevice> {
+    pick_physical_device_impl(instance, |device| {
+        pick_present_queue_family(instance, device, surface_loader, surface).is_some()
+    })
+}
+
+/// 同时支持图形与呈现的队列 family（共享设备的宿主只能用同一个队列族）。
+pub fn pick_present_queue_family(
+    instance: &ash::Instance,
+    physical_device: vk::PhysicalDevice,
+    surface_loader: &ash::khr::surface::Instance,
+    surface: vk::SurfaceKHR,
+) -> Option<u32> {
+    let families = unsafe { instance.get_physical_device_queue_family_properties(physical_device) };
+    for (index, family) in families.iter().enumerate() {
+        if !family.queue_flags.contains(vk::QueueFlags::GRAPHICS) {
+            continue;
+        }
+        let supported = unsafe {
+            surface_loader.get_physical_device_surface_support(
+                physical_device,
+                index as u32,
+                surface,
+            )
+        }
+        .unwrap_or(false);
+        if supported {
+            return Some(index as u32);
+        }
+    }
+    None
+}
 
 fn create_instance(
     entry: &ash::Entry,
@@ -236,6 +374,13 @@ fn create_instance(
 // ---------------------------------------------------------------------------
 
 fn pick_physical_device(instance: &ash::Instance) -> anyhow::Result<vk::PhysicalDevice> {
+    pick_physical_device_impl(instance, |_| true)
+}
+
+fn pick_physical_device_impl(
+    instance: &ash::Instance,
+    accept: impl Fn(vk::PhysicalDevice) -> bool,
+) -> anyhow::Result<vk::PhysicalDevice> {
     use anyhow::Context as _;
     let devices = unsafe { instance.enumerate_physical_devices() }
         .context("failed to enumerate physical devices")?;
@@ -247,6 +392,9 @@ fn pick_physical_device(instance: &ash::Instance) -> anyhow::Result<vk::Physical
     let mut best = None;
     let mut best_score = -1i32;
     for device in devices {
+        if !accept(device) {
+            continue;
+        }
         let props = unsafe { instance.get_physical_device_properties(device) };
         let score = match props.device_type {
             vk::PhysicalDeviceType::DISCRETE_GPU => 3,
@@ -301,6 +449,7 @@ fn create_device(
     graphics_queue_family: u32,
     rt_caps: &RayTracingCaps,
     has_surface: bool,
+    extra_device_extensions: &[&str],
 ) -> anyhow::Result<(ash::Device, Vec<CString>)> {
     use anyhow::Context as _;
     let priorities = [1.0f32];
@@ -349,6 +498,16 @@ fn create_device(
     }
     for rt_ext in capabilities::rt_extension_names(rt_caps) {
         enabled_extensions.push(rt_ext.into());
+    }
+    // 宿主额外要求的扩展（例如 UI 框架的 `VK_KHR_swapchain`）。去重，避免
+    // `VUID-VkDeviceCreateInfo-ppEnabledExtensionNames-00374`（重复扩展名）。
+    for name in extra_device_extensions {
+        let already = enabled_extensions
+            .iter()
+            .any(|existing| existing.to_str().map(|s| s == *name).unwrap_or(false));
+        if !already {
+            enabled_extensions.push(CString::new(*name).expect("extension name"));
+        }
     }
     let extension_ptrs: Vec<*const c_char> =
         enabled_extensions.iter().map(|c| c.as_ptr()).collect();
