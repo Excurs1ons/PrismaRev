@@ -77,6 +77,13 @@ instance / device 并返回 `AshRenderState`，因此可以做到 Unity 的模�
   单位像素」换算世界位移，交给 `Workspace::translate_entity_world`；
 - 选中高亮复用引擎的 `Gizmo` 组件（世界三色轴箭头），不引入新的渲染概念。
 
+## 4.1 日志
+
+`logging.rs` 把 `env_logger` 包一层 tee：同一条 `log` 记录既进终端（`RUST_LOG`
+语义不变），也进 `prism-editor-core` 的 `LogBuffer`，所以 Console 面板能看到
+视口里 `prism_render` / `prism_engine` 的警告（与 Tauri 编辑器的 `EditorLogger`
+是同一思路）。`Trace` 不转发，避免淹没窗口。
+
 ## 5. 与另外两个编辑器的关系
 
 | | Web（`editor/`） | GPUI（`editor-gpui/`） | egui（`editor-egui/`） |
@@ -94,9 +101,8 @@ instance / device 并返回 `AshRenderState`，因此可以做到 Unity 的模�
 - **未在真实设备上运行**：开发机是 Termux（aarch64、无显示），只做了
   `cargo check`（本机 + `x86_64-pc-windows-gnu`）。首帧呈现、resize、字体、
   docking 手感都需要桌面复核。
-- **没有实现**：资产拖拽到字段 / 层级、预制体完整工作流（还原 / 同步 / 应用）、
-  构建与 cook 的真实子进程、渲染设置面板（曝光 / 色调映射 / PT 参数）、
-  框选、旋转 / 缩放 gizmo、多 viewport 浮动窗口的 DPI 处理。
+- **尚未实现**：资产拖拽到字段 / 层级、预制体完整工作流（同步 / 应用到预制体）、
+  构建与 cook 的真实子进程、框选、旋转 / 缩放 gizmo、多 viewport 的 DPI 处理。
 - **性能**：每次文档变化都会整场重载两个引擎实例（防抖 120ms），大场景下偏重；
   后续可以改成「只重建变化的实体」或引入 delta 上传。
 - **两个引擎实例**意味着两份 GPU 资源（管线、IBL、网格）。如果以后只保留一个

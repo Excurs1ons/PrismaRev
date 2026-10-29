@@ -40,7 +40,8 @@ crates/prism-editor-egui/src/
 ├── app.rs           外壳：菜单、工具栏、状态栏、docking、文档同步、Play 控制
 ├── engine_host.rs   进程内引擎宿主：Engine + GraphRenderer + 资产上传（同步）
 ├── viewport.rs      Scene/Game 视口：离屏图像 → egui 纹理、轨道/拾取/gizmo
-├── panels.rs        层级、检查器、资产、文档、日志、历史、设置类面板
+├── panels.rs        层级、检查器、资产、文档、日志、历史、渲染图 / 设置类面板
+├── logging.rs       `log` tee：引擎 / 渲染警告同时进 Console 面板
 ├── widgets.rs       schema 驱动的字段控件
 └── theme.rs         数据层主题 token → egui visuals + CJK 字体回退
 ```

@@ -628,17 +628,82 @@ pub fn history(ui: &mut Ui, workspace: &mut Workspace) {
 // 渲染图
 // ---------------------------------------------------------------------------
 
-pub fn render_graph(ui: &mut Ui, report: Option<&str>) {
+pub fn render_graph(
+    ui: &mut Ui,
+    report: Option<&str>,
+    settings: &mut prism_engine::render_settings::RenderSettings,
+) -> bool {
+    let mut changed = false;
+    ui.heading("Render Settings");
+    egui::Grid::new("render-settings")
+        .num_columns(2)
+        .spacing([8.0, 4.0])
+        .show(ui, |ui| {
+            ui.label("Tonemap");
+            egui::ComboBox::from_id_salt("tonemap")
+                .selected_text(match settings.tonemap_mode {
+                    0 => "Reinhard",
+                    1 => "ACES",
+                    _ => "Passthrough",
+                })
+                .show_ui(ui, |ui| {
+                    for (mode, label) in [(0u32, "Reinhard"), (1, "ACES"), (2, "Passthrough")] {
+                        if ui
+                            .selectable_label(settings.tonemap_mode == mode, label)
+                            .clicked()
+                        {
+                            settings.tonemap_mode = mode;
+                            changed = true;
+                        }
+                    }
+                });
+            ui.end_row();
+
+            ui.label("Mode");
+            let mut path_trace = matches!(
+                settings.render_mode,
+                prism_engine::render_settings::RenderMode::PathTrace
+            );
+            if ui.checkbox(&mut path_trace, "Path traced").changed() {
+                settings.render_mode = if path_trace {
+                    prism_engine::render_settings::RenderMode::PathTrace
+                } else {
+                    prism_engine::render_settings::RenderMode::Raster
+                };
+                changed = true;
+            }
+            ui.end_row();
+
+            if path_trace {
+                ui.label("Max bounces");
+                changed |= ui
+                    .add(egui::Slider::new(&mut settings.pt_max_bounces, 1..=16))
+                    .changed();
+                ui.end_row();
+                ui.label("Samples");
+                changed |= ui
+                    .add(egui::Slider::new(&mut settings.pt_max_iterations, 0..=4096))
+                    .changed();
+                ui.end_row();
+            }
+
+            ui.label("Grid");
+            changed |= ui
+                .checkbox(&mut settings.show_grid, "Show ground grid")
+                .changed();
+            ui.end_row();
+        });
+
+    ui.separator();
     ui.heading("Render Graph");
     ui.label(
         RichText::new(
-            "Passes (Shadow → Scene → GTAO → PathTrace → Sprite → Sky → Post) run on one queue; \
+            "Shadow → Scene → GTAO → PathTrace → Sprite → Sky → Post run on one queue; \
              the Scene/Game viewports sample the final offscreen image directly.",
         )
         .weak()
         .size(11.0),
     );
-    ui.separator();
     match report {
         Some(json) => {
             ui.label(
@@ -660,6 +725,7 @@ pub fn render_graph(ui: &mut Ui, report: Option<&str>) {
             );
         }
     }
+    changed
 }
 
 // ---------------------------------------------------------------------------

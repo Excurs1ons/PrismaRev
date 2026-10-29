@@ -15,6 +15,7 @@ use prism_editor_core::{Command, DockDirection, DockNode, Locale, Preferences, W
 
 use crate::engine_host::ViewKind;
 use crate::gpu::SharedVulkan;
+use crate::logging;
 use crate::panels::{self, UiState};
 use crate::theme;
 use crate::viewport::{ImageBridge, ViewportState};
@@ -65,6 +66,8 @@ pub struct EditorApp {
     playing: bool,
     paused: bool,
     render_report: Option<String>,
+    /// 两个视口共享的渲染设置（Console 里的「渲染图」面板可改）。
+    render_settings: prism_engine::render_settings::RenderSettings,
     /// 已应用的 (preset, overrides) 签名，避免每帧重建 style。
     theme_signature: String,
     state_path: PathBuf,
@@ -137,6 +140,7 @@ impl EditorApp {
             playing: false,
             paused: false,
             render_report: None,
+            render_settings: prism_engine::render_settings::RenderSettings::default(),
             theme_signature: String::new(),
             autosave_at: Instant::now(),
             workspace,
@@ -156,10 +160,19 @@ impl EditorApp {
         };
 
         // 首帧：把当前文档交给引擎，并创建 Scene view。
+        if !app.workspace.document().doc.entities.is_empty() {
+            // 与 Unity 一致：打开场景时自动框住全部内容。
+            app.workspace.frame_all();
+        }
         app.write_preview_scene();
         app.ensure_view(ViewKind::Scene);
         app.doc_hash = document_hash(&app.workspace);
         app.render_report = read_report(app.project_root.as_deref());
+        app.workspace.log(
+            prism_editor_core::LogSource::Editor,
+            prism_editor_core::LogLevel::Info,
+            "PrismaRev editor ready — Scene/Game viewports share the egui VkDevice (zero-copy)",
+        );
         Ok(app)
     }
 
@@ -745,7 +758,12 @@ impl EditorApp {
             "docs" => panels::docs(ui, &mut self.workspace, &mut self.state),
             "log" => panels::log(ui, &mut self.workspace, &mut self.state),
             "history" => panels::history(ui, &mut self.workspace),
-            "renderGraph" => panels::render_graph(ui, self.render_report.as_deref()),
+            "renderGraph" => {
+                let mut settings = self.render_settings.clone();
+                if panels::render_graph(ui, self.render_report.as_deref(), &mut settings) {
+                    self.apply_render_settings(settings);
+                }
+            }
             "projectSettings" => {
                 panels::project_settings(ui, self.project_root.as_deref(), &mut self.state)
             }
@@ -938,6 +956,29 @@ impl EditorApp {
 }
 
 impl EditorApp {
+    /// 把 `log` 记录搬进 Console 面板（每帧一次）。
+    fn drain_engine_logs(&mut self) {
+        let entries = logging::drain();
+        for (source, level, text) in entries {
+            self.workspace.log.push(source, level, text);
+        }
+    }
+
+    /// 渲染设置改动 → 应用到两个引擎实例 → 下一帧重绘。
+    fn apply_render_settings(&mut self, settings: prism_engine::render_settings::RenderSettings) {
+        self.render_settings = settings;
+        for kind in [ViewKind::Scene, ViewKind::Game] {
+            let view = match kind {
+                ViewKind::Scene => self.scene_view.as_mut(),
+                ViewKind::Game => self.game_view.as_mut(),
+            };
+            if let Some(view) = view {
+                *view.host.settings_mut() = self.render_settings.clone();
+                view.mark_dirty();
+            }
+        }
+    }
+
     /// egui-ash 需要的渲染状态（同一设备 / 队列 / 分配器）。
     pub fn render_state(
         &self,
@@ -948,6 +989,7 @@ impl EditorApp {
 
 impl App for EditorApp {
     fn ui(&mut self, ctx: &egui::Context) {
+        self.drain_engine_logs();
         self.sync_document();
         self.handle_shortcuts(ctx);
 

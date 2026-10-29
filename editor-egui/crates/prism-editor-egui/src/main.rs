@@ -10,6 +10,7 @@
 mod app;
 mod engine_host;
 mod gpu;
+mod logging;
 mod panels;
 mod theme;
 mod viewport;
@@ -37,9 +38,7 @@ impl AppCreator<Arc<Mutex<Allocator>>> for EditorCreator {
 }
 
 fn main() -> std::process::ExitCode {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn"))
-        .format_timestamp(None)
-        .init();
+    logging::install("warn");
 
     let options = RunOption {
         clear_color: [0.055, 0.06, 0.07, 1.0],

@@ -148,6 +148,11 @@ impl ViewportState {
             ((rect.width() * ppp).round() as u32).clamp(1, 4096),
             ((rect.height() * ppp).round() as u32).clamp(1, 4096),
         );
+        // 面板尺寸变化（splitter / 窗口 resize）必须重建离屏目标，否则图像会被拉伸。
+        let current = self.host.renderer().extent();
+        if (current.width, current.height) != self.extent {
+            self.dirty = true;
+        }
 
         // 1) 按需出帧（Play 时每帧）。
         if self.dirty || playing {
