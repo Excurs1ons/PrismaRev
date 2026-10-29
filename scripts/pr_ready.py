@@ -142,6 +142,35 @@ def workspace_members() -> list[str]:
         return re.findall(r'"crates/([^"/]+)"', text)
 
 
+def crate_test_command(crate: str) -> list[str]:
+    """Build a test command matching the targets actually declared by a crate.
+
+    Some workspace members, such as `prism-editor-mcp`, are binary-only. Passing
+    `--lib` unconditionally makes Cargo reject those packages before running any
+    tests. Keep the original lib/bin/integration coverage, but only request the
+    target kinds the package provides.
+    """
+    manifest = ROOT / "crates" / crate / "Cargo.toml"
+    has_lib = (manifest.parent / "src" / "lib.rs").is_file()
+    has_bin = (manifest.parent / "src" / "main.rs").is_file()
+    try:
+        import tomllib
+
+        data = tomllib.loads(manifest.read_text(encoding="utf-8"))
+        has_lib = has_lib or "lib" in data
+        has_bin = has_bin or "bin" in data
+    except (OSError, ValueError):
+        pass
+
+    command = ["cargo", "test", "-p", crate]
+    if has_lib:
+        command.append("--lib")
+    if has_bin:
+        command.append("--bins")
+    command.append("--tests")
+    return command
+
+
 def has_prefix(paths: list[str], prefix: str) -> bool:
     return any(path.startswith(prefix) for path in paths)
 
@@ -592,11 +621,11 @@ def main() -> int:
         checks.append(Check(f"clippy ({len(default_crates)} crate{'s' if len(default_crates) > 1 else ''})", clippy_cmd))
 
         if not args.quick:
-            test_cmd = ["cargo", "test"]
+            # Run each package separately because Cargo applies `--lib` and
+            # `--bins` to the whole selection. A binary-only package must not
+            # inherit `--lib` from a neighboring library package.
             for crate in default_crates:
-                test_cmd += ["-p", crate]
-            test_cmd += ["--lib", "--bins", "--tests"]
-            checks.append(Check(f"test ({len(default_crates)} crate{'s' if len(default_crates) > 1 else ''})", test_cmd))
+                checks.append(Check(f"test ({crate})", crate_test_command(crate)))
 
     if args.all or has_prefix(changed, "crates/xtask/"):
         checks.append(
