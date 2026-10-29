@@ -90,6 +90,8 @@ instance / device 并返回 `AshRenderState`，因此可以做到 Unity 的模�
   单位像素」换算世界位移，交给 `Workspace::translate_entity_world`；
 - 选中高亮复用引擎的 `Gizmo` 组件（世界三色轴箭头），不引入新的渲染概念。
 - 工具：`W` / `E` / `R` 切换移动 / 旋转 / 缩放 gizmo，`X` 切世界/局部，`G` 开关网格；
+  `S` 开关 Scene view 背景（场景天空盒 / 纯色，与 Unity 的
+  `SceneViewState.showSkybox` 同语义，默认开）；
   旋转走 `pick_rotation_axis` + `screen_angle`，缩放走 `set_scale_axis`。
 - 空白拖拽 = 框选（`box_select`），`Alt`+拖 / 右键拖 = 轨道，双击 = 聚焦选中项。
 
@@ -119,7 +121,7 @@ instance / device 并返回 `AshRenderState`，因此可以做到 Unity 的模�
 
 快捷键（Unity 习惯）：`Ctrl+1..5` = Scene / Game / Inspector / Hierarchy / Project，
 `Ctrl+Shift+C` = Console，`Ctrl+B` = Build And Run，`Ctrl+I` = 反选，
-`W/E/R` = 移动 / 旋转 / 缩放，`X` 世界/局部，`G` 网格，`F` 框住全部，`Del` 删除。
+`W/E/R` = 移动 / 旋转 / 缩放，`X` 世界/局部，`G` 网格，`S` 天空盒，`F` 框住全部，`Del` 删除。
 
 命名布局存在 `target/editor-egui/layouts.json`（`{name: {version,dock,floating}}`），
 可以整份导出/导入成 JSON 文件（与 Web 的 `prisma-editor.dock.v4` 同形）。

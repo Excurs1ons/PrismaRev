@@ -60,6 +60,8 @@ pub struct EngineHost {
     focus_marker: Option<Entity>,
     width: u32,
     height: u32,
+    /// Scene view 的编辑器相机是否用场景天空盒当背景（Unity 默认开）。
+    show_skybox: bool,
     simulate: bool,
     paused: bool,
     step_pending: bool,
@@ -100,6 +102,7 @@ impl EngineHost {
             focus_marker: None,
             width,
             height,
+            show_skybox: true,
             simulate: false,
             paused: false,
             step_pending: false,
@@ -177,6 +180,33 @@ impl EngineHost {
         Ok(count)
     }
 
+    /// Scene view 的编辑器相机 + 背景策略。
+    ///
+    /// Unity 的 Scene view 默认把场景天空盒当背景（`SceneViewState.showSkybox`），
+    /// 所以这里的编辑器相机默认是 `Skybox` 而不是纯色。
+    fn editor_clear_flags(&self) -> prism_scene::CameraClearFlags {
+        if self.show_skybox {
+            prism_scene::CameraClearFlags::Skybox
+        } else {
+            prism_scene::CameraClearFlags::SolidColor
+        }
+    }
+
+    /// 切换 Scene view 背景（天空盒 / 纯色），立即作用到编辑器相机。
+    pub fn set_show_skybox(&mut self, on: bool) {
+        if self.show_skybox == on {
+            return;
+        }
+        self.show_skybox = on;
+        let Some(entity) = self.editor_camera else {
+            return;
+        };
+        let flags = self.editor_clear_flags();
+        if let Some(camera) = self.engine.world_mut().get_mut::<Camera>(entity) {
+            camera.clear_flags = flags;
+        }
+    }
+
     /// 编辑器相机 + 选中标记（只在 Scene view 创建）。
     fn ensure_helper_entities(&mut self) {
         if self.kind == ViewKind::Scene {
@@ -185,7 +215,7 @@ impl EngineHost {
                     depth: 1000.0,
                     far: 5000.0,
                     aspect: self.width as f32 / self.height.max(1) as f32,
-                    clear_flags: prism_scene::CameraClearFlags::SolidColor,
+                    clear_flags: self.editor_clear_flags(),
                     background_color: [0.11, 0.12, 0.14, 1.0],
                     ..Camera::default()
                 };

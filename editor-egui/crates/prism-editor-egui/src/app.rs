@@ -251,7 +251,12 @@ impl EditorApp {
             named_layouts,
             layouts_path,
             build: None,
-            render_settings: prism_engine::render_settings::RenderSettings::default(),
+            // 引擎默认 `show_grid = false`（游戏里不该画网格），编辑器要从工作区
+            // 的默认值（`true`，与 Unity 一致）出发，否则工具栏和实际画面不一致。
+            render_settings: prism_engine::render_settings::RenderSettings {
+                show_grid: workspace.show_grid,
+                ..Default::default()
+            },
             theme_signature: String::new(),
             autosave_at: Instant::now(),
             workspace,
@@ -311,6 +316,9 @@ impl EditorApp {
         let created = ViewportState::new(kind, self.gpu.context.clone(), size.0, size.1);
         match created {
             Ok(mut view) => {
+                // 新视口从编辑器当前设置出发（网格 / 天空盒），否则首帧会和工具栏不一致。
+                *view.host.settings_mut() = self.render_settings.clone();
+                view.host.set_show_skybox(self.workspace.show_skybox);
                 if let Err(error) = view.host.load_scene(&self.preview_scene) {
                     let message = format!("load scene failed: {error}");
                     self.workspace.log(
@@ -1316,6 +1324,19 @@ impl EditorApp {
                 settings.show_grid = !grid_on;
                 self.apply_render_settings(settings);
             }
+            let skybox_on = self.workspace.show_skybox;
+            if ui
+                .selectable_label(skybox_on, "Skybox (S)")
+                .on_hover_text("Scene view background: scene skybox or a flat color")
+                .clicked()
+            {
+                self.workspace.toggle_skybox();
+                let on = self.workspace.show_skybox;
+                if let Some(view) = self.scene_view.as_mut() {
+                    view.host.set_show_skybox(on);
+                    view.mark_dirty();
+                }
+            }
 
             ui.separator();
             if ui.button("Frame All (F)").clicked() {
@@ -1978,6 +1999,14 @@ impl EditorApp {
                 let mut settings = self.render_settings.clone();
                 settings.show_grid = !settings.show_grid;
                 self.apply_render_settings(settings);
+            }
+            if ctx.input(|input| input.key_pressed(egui::Key::S)) {
+                self.workspace.toggle_skybox();
+                let on = self.workspace.show_skybox;
+                if let Some(view) = self.scene_view.as_mut() {
+                    view.host.set_show_skybox(on);
+                    view.mark_dirty();
+                }
             }
             // Unity 的面板快捷键：Ctrl+1..5 = Scene / Game / Inspector / Hierarchy / Project，
             // Ctrl+Shift+C = Console。

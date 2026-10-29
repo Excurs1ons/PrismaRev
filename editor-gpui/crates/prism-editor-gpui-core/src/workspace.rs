@@ -219,6 +219,10 @@ pub struct Workspace {
     pub gizmo_space: GizmoSpace,
     /// Scene View 是否画世界网格。
     pub show_grid: bool,
+    /// Scene View 是否用场景的天空盒当背景（关闭时退回纯色）。
+    ///
+    /// 对应 Unity 的 `SceneViewState.showSkybox`（默认开）。
+    pub show_skybox: bool,
     pub playing: bool,
     pub paused: bool,
     pub play_time_s: f32,
@@ -276,6 +280,7 @@ impl Workspace {
             camera: OrbitCamera::default(),
             gizmo_space: GizmoSpace::World,
             show_grid: true,
+            show_skybox: true,
             playing: false,
             paused: false,
             play_time_s: 0.0,
@@ -1962,6 +1967,11 @@ impl Workspace {
         self.show_grid = !self.show_grid;
     }
 
+    /// Scene View 天空盒开关（Unity 的 Scene view 默认画天空盒）。
+    pub fn toggle_skybox(&mut self) {
+        self.show_skybox = !self.show_skybox;
+    }
+
     /// 把世界空间位移换算到父级空间后加到实体 `position` 上（gizmo 拖动用）。
     pub fn translate_entity_world(&mut self, entity_id: u32, delta_world: [f32; 3]) {
         if delta_world.iter().all(|value| value.abs() < 1e-6) {
@@ -3510,6 +3520,16 @@ mod tests {
         assert!(!workspace.show_grid);
         workspace.toggle_grid();
         assert!(workspace.show_grid);
+    }
+
+    #[test]
+    fn skybox_toggle_flips_flag_and_defaults_on() {
+        let mut workspace = Workspace::sample();
+        assert!(workspace.show_skybox, "Unity 的 Scene view 默认画天空盒");
+        workspace.toggle_skybox();
+        assert!(!workspace.show_skybox);
+        workspace.toggle_skybox();
+        assert!(workspace.show_skybox);
     }
 
     #[test]
