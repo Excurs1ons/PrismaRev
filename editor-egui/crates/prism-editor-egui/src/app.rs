@@ -129,6 +129,9 @@ impl EditorApp {
             workspace.dock = layout.dock;
             workspace.floating = layout.floating;
             workspace.set_locale(Locale::parse(&state.locale));
+            if !state.theme_preset.is_empty() {
+                workspace.set_theme_preset(&state.theme_preset);
+            }
         }
 
         let mut app = Self {
@@ -273,6 +276,11 @@ impl EditorApp {
     }
 
     fn apply_command(&mut self, command: Command) {
+        if command == Command::SaveAs {
+            let title = self.workspace.document().title();
+            self.state.save_as = Some(title);
+            return;
+        }
         let was_playing = self.workspace.playing;
         let was_paused = self.workspace.paused;
         self.workspace.run(command);
@@ -328,7 +336,7 @@ impl EditorApp {
     fn menu_bar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         egui::MenuBar::new().ui(ui, |ui| {
             ui.menu_button("File", |ui| {
-                if ui.button("New Scene").clicked() {
+                if ui.button("New Scene            Ctrl+N").clicked() {
                     self.apply_command(Command::NewScene);
                     ui.close();
                 }
@@ -336,9 +344,35 @@ impl EditorApp {
                     self.apply_command(Command::NewPrefab);
                     ui.close();
                 }
+                let templates: Vec<(String, String, prism_editor_core::DocKind)> = self
+                    .workspace
+                    .templates
+                    .iter()
+                    .map(|template| (template.id.clone(), template.label.clone(), template.kind))
+                    .collect();
+                if !templates.is_empty() {
+                    ui.menu_button("New from Template", |ui| {
+                        for (id, label, kind) in &templates {
+                            if ui.button(label).clicked() {
+                                self.workspace.new_document(*kind, Some(id));
+                                self.doc_hash = 0;
+                                ui.close();
+                            }
+                        }
+                    });
+                }
                 ui.separator();
-                if ui.button("Save            Ctrl+S").clicked() {
+                if ui.button("Open Document       Ctrl+O").clicked() {
+                    self.apply_command(Command::OpenDocument);
+                    ui.close();
+                }
+                if ui.button("Save                Ctrl+S").clicked() {
                     self.apply_command(Command::Save);
+                    ui.close();
+                }
+                if ui.button("Save As…     Ctrl+Shift+S").clicked() {
+                    let title = self.workspace.document().title();
+                    self.state.save_as = Some(title);
                     ui.close();
                 }
                 if ui.button("Reload from disk").clicked() {
@@ -372,9 +406,54 @@ impl EditorApp {
                     self.apply_command(Command::DeleteSelection);
                     ui.close();
                 }
+                if ui.button("Select All   Ctrl+A").clicked() {
+                    self.apply_command(Command::SelectAll);
+                    ui.close();
+                }
                 ui.separator();
+                if ui.button("Copy Entity  Ctrl+C").clicked() {
+                    self.apply_command(Command::CopyEntity);
+                    ui.close();
+                }
+                if ui.button("Cut Entity   Ctrl+X").clicked() {
+                    self.apply_command(Command::CutEntity);
+                    ui.close();
+                }
+                if ui.button("Paste Entity Ctrl+V").clicked() {
+                    self.apply_command(Command::PasteEntity);
+                    ui.close();
+                }
+                if ui
+                    .add_enabled(
+                        self.workspace.clipboard.is_some(),
+                        egui::Button::new("Paste Component          Ctrl+Shift+V"),
+                    )
+                    .clicked()
+                {
+                    self.apply_command(Command::PasteComponent);
+                    ui.close();
+                }
+                if ui
+                    .add_enabled(
+                        self.workspace.clipboard.is_some(),
+                        egui::Button::new("Clear Component Clipboard"),
+                    )
+                    .clicked()
+                {
+                    self.apply_command(Command::ClearComponentClipboard);
+                    ui.close();
+                }
+                ui.separator();
+                if ui.button("Project Settings").clicked() {
+                    self.apply_command(Command::ProjectSettings);
+                    ui.close();
+                }
                 if ui.button("Preferences").clicked() {
                     self.apply_command(Command::Preferences);
+                    ui.close();
+                }
+                if ui.button("Theme").clicked() {
+                    self.apply_command(Command::ThemePanel);
                     ui.close();
                 }
             });
@@ -404,6 +483,10 @@ impl EditorApp {
                     ("History", Command::ToggleHistory),
                     ("Render Graph", Command::ToggleRenderGraph),
                     ("Project Settings", Command::ProjectSettings),
+                    ("Preferences", Command::Preferences),
+                    ("Theme", Command::ThemePanel),
+                    ("Build", Command::ToggleBuild),
+                    ("Tools", Command::ToggleTools),
                 ] {
                     if ui.button(label).clicked() {
                         self.apply_command(command);
@@ -843,6 +926,46 @@ impl EditorApp {
     // 快捷键 & 浮动窗口
     // -----------------------------------------------------------------------
 
+    /// Save As 输入框（Unity 的「另存为…」）。
+    fn save_as_dialog(&mut self, ctx: &egui::Context) {
+        let Some(mut buffer) = self.state.save_as.clone() else {
+            return;
+        };
+        let mut open = true;
+        let mut commit = false;
+        egui::Window::new("Save As")
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.label("assets/ 下的相对路径（.scene.json / .prefab.json）");
+                let response = ui.add(
+                    egui::TextEdit::singleline(&mut buffer)
+                        .desired_width(360.0)
+                        .hint_text("scenes/new.scene.json"),
+                );
+                if !response.has_focus() && !response.lost_focus() {
+                    response.request_focus();
+                }
+                commit = ui.button("Save").clicked()
+                    || ui.input(|input| input.key_pressed(egui::Key::Enter));
+            });
+        if commit {
+            match self.workspace.save_active_as(&buffer) {
+                Ok(path) => {
+                    self.state.status = format!("saved {path}");
+                    self.doc_hash = 0;
+                    self.state.save_as = None;
+                }
+                Err(error) => self.state.status = format!("save as failed: {error}"),
+            }
+        } else if !open {
+            self.state.save_as = None;
+        } else {
+            self.state.save_as = Some(buffer);
+        }
+    }
+
     fn handle_shortcuts(&mut self, ctx: &egui::Context) {
         use egui::{Key, KeyboardShortcut, Modifiers};
         let shortcuts = [
@@ -873,6 +996,10 @@ impl EditorApp {
             (
                 KeyboardShortcut::new(Modifiers::CTRL, Key::V),
                 Command::PasteEntity,
+            ),
+            (
+                KeyboardShortcut::new(Modifiers::CTRL | Modifiers::SHIFT, Key::V),
+                Command::PasteComponent,
             ),
             (
                 KeyboardShortcut::new(Modifiers::CTRL, Key::N),
@@ -1031,6 +1158,8 @@ impl App for EditorApp {
             .show(ctx, |ui| self.dock_tree(ui));
 
         self.floating_panels(ctx);
+
+        self.save_as_dialog(ctx);
 
         let mut about = self.state.about_open;
         panels::boolean_window(ctx, &mut about, "About", panels::about);

@@ -26,6 +26,8 @@ pub struct UiState {
     pub preset_choice: usize,
     pub status: String,
     pub about_open: bool,
+    /// Save As 对话框的输入缓冲（None = 关闭）。
+    pub save_as: Option<String>,
     pub shortcuts_open: bool,
 }
 
