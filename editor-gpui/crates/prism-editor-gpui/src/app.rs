@@ -122,6 +122,7 @@ pub enum TextTarget {
     ProjectSettings(&'static str),
     SaveAs,
     AssetRename,
+    AssetNewFolder,
     PrefabSave,
 }
 
@@ -343,6 +344,17 @@ pub struct EditorView {
     pub add_component_open: bool,
     pub collapsed_components: HashSet<String>,
     pub selected_asset: Option<String>,
+    /// 资产浏览器当前目录（`None` = `assets/` 根）。
+    pub asset_folder: Option<String>,
+    /// 资产浏览器的前进 / 后退历史。
+    pub asset_history: Vec<Option<String>>,
+    pub asset_history_pos: usize,
+    /// 列表 / 网格视图。
+    pub asset_grid: bool,
+    /// 「新建文件夹」输入框的父目录（`None` = 未打开）。
+    pub asset_new_folder: Option<String>,
+    /// 选中资产的详情缓存（GUID / 预览 / 引用）。
+    pub asset_details: Option<prism_editor_gpui_core::assets::AssetDetails>,
     pub window_size: Size<Pixels>,
     pub hierarchy_anchor: Option<usize>,
     pub hierarchy_rows: Vec<(usize, f32, f32)>,
@@ -414,6 +426,12 @@ impl EditorView {
             add_component_open: false,
             collapsed_components: HashSet::new(),
             selected_asset: None,
+            asset_folder: None,
+            asset_history: vec![None],
+            asset_history_pos: 0,
+            asset_grid: false,
+            asset_new_folder: None,
+            asset_details: None,
             window_size: size(px(1440.0), px(900.0)),
             hierarchy_anchor: None,
             hierarchy_rows: Vec::new(),
@@ -636,6 +654,88 @@ impl EditorView {
             cx.notify();
         } else if lines > 0 {
             cx.notify();
+        }
+    }
+
+    // ── 资产浏览器导航 ─────────────────────────────────────────────────
+
+    /// 选中资产并刷新详情缓存（GUID / 预览 / 引用）。
+    pub fn select_asset(&mut self, path: Option<String>) {
+        self.asset_details = path
+            .as_deref()
+            .and_then(|path| self.workspace.asset_details(path));
+        self.selected_asset = path;
+    }
+
+    /// 选中目录（资产检查器显示目录信息）。
+    pub fn select_asset_folder(&mut self, path: String) {
+        self.selected_asset = Some(path);
+        self.asset_details = None;
+    }
+
+    pub fn refresh_asset_details(&mut self) {
+        self.asset_details = self
+            .selected_asset
+            .as_deref()
+            .and_then(|path| self.workspace.asset_details(path));
+    }
+
+    /// 切到某个资产目录，并写入前进 / 后退历史。
+    pub fn navigate_asset_folder(&mut self, folder: Option<String>) {
+        if self.asset_folder == folder {
+            return;
+        }
+        self.asset_history.truncate(self.asset_history_pos + 1);
+        self.asset_history.push(folder.clone());
+        self.asset_history_pos = self.asset_history.len() - 1;
+        self.asset_folder = folder.clone();
+        if let Some(folder) = &folder {
+            let mut prefix = String::new();
+            for part in folder.split('/') {
+                if !prefix.is_empty() {
+                    prefix.push('/');
+                }
+                prefix.push_str(part);
+                self.workspace.expanded_assets.insert(prefix.clone());
+            }
+        }
+    }
+
+    pub fn asset_go_back(&mut self) {
+        if self.asset_history_pos > 0 {
+            self.asset_history_pos -= 1;
+            self.asset_folder = self.asset_history[self.asset_history_pos].clone();
+        }
+    }
+
+    pub fn asset_go_forward(&mut self) {
+        if self.asset_history_pos + 1 < self.asset_history.len() {
+            self.asset_history_pos += 1;
+            self.asset_folder = self.asset_history[self.asset_history_pos].clone();
+        }
+    }
+
+    /// 跳转到资产引用：打开对应文档并选中实体（供资产检查器使用）。
+    pub fn jump_to_asset_reference(&mut self, document: &str, entity_id: u32) {
+        if self.workspace.project_root.is_some() {
+            if let Err(error) = self.workspace.open_project_file(document) {
+                self.workspace.log(
+                    prism_editor_gpui_core::LogSource::Editor,
+                    prism_editor_gpui_core::LogLevel::Warn,
+                    format!("打开 {document} 失败：{error}"),
+                );
+            }
+        }
+        let doc = self.workspace.document().doc.clone();
+        if let Some(index) = doc.index_of_id(entity_id) {
+            for ancestor in doc.path_of(index) {
+                if let Some(id) = doc.entities.get(ancestor).and_then(|entity| entity.id) {
+                    self.workspace.expanded.insert(id);
+                }
+            }
+            self.workspace.selection = vec![index];
+            self.selected_asset = None;
+            self.asset_details = None;
         }
     }
 
@@ -883,6 +983,7 @@ impl EditorView {
             TextTarget::ProjectSettings(_)
             | TextTarget::SaveAs
             | TextTarget::AssetRename
+            | TextTarget::AssetNewFolder
             | TextTarget::PrefabSave => {}
         }
     }
@@ -957,6 +1058,40 @@ impl EditorView {
                                     prism_editor_gpui_core::LogSource::Editor,
                                     prism_editor_gpui_core::LogLevel::Error,
                                     format!("重命名失败：{error}"),
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+            TextTarget::AssetNewFolder => {
+                if let Some(base) = self.asset_new_folder.clone() {
+                    let name = editing.text().trim().replace('\\', "/");
+                    if name.is_empty() {
+                        self.workspace.log(
+                            prism_editor_gpui_core::LogSource::Editor,
+                            prism_editor_gpui_core::LogLevel::Warn,
+                            "新建文件夹：名字不能为空",
+                        );
+                    } else if name.contains('/') {
+                        self.workspace.log(
+                            prism_editor_gpui_core::LogSource::Editor,
+                            prism_editor_gpui_core::LogLevel::Warn,
+                            "新建文件夹：只填写单层名字",
+                        );
+                    } else {
+                        let relative = format!("{}/{}", base.trim_end_matches('/'), name);
+                        match self.workspace.create_asset_folder(&relative) {
+                            Ok(path) => {
+                                self.asset_new_folder = None;
+                                self.navigate_asset_folder(Some(path.clone()));
+                                self.select_asset_folder(path);
+                            }
+                            Err(error) => {
+                                self.workspace.log(
+                                    prism_editor_gpui_core::LogSource::Editor,
+                                    prism_editor_gpui_core::LogLevel::Error,
+                                    format!("新建文件夹失败：{error}"),
                                 );
                             }
                         }
@@ -1227,6 +1362,8 @@ impl EditorView {
                 })
                 .unwrap_or(false);
             self.workspace.select(picked, false);
+            self.selected_asset = None;
+            self.asset_details = None;
             self.hierarchy_anchor = Some(picked);
             if double_click {
                 self.workspace.frame_selection();
@@ -1536,6 +1673,8 @@ impl EditorView {
                             rect, &frame, width, height, &entities,
                         );
                         self.workspace.select_many(&picked, additive);
+                        self.selected_asset = None;
+                        self.asset_details = None;
                     }
                 }
                 cx.notify();
@@ -3031,6 +3170,9 @@ impl EditorView {
                     path.ends_with(".scene.json") || path.ends_with(".prefab.json"),
                 ));
                 items.push(("复制路径到日志".into(), true));
+                items.push(("复制路径".into(), true));
+                items.push(("复制 GUID".into(), true));
+                items.push(("创建副本".into(), true));
             }
         }
 
@@ -3225,6 +3367,28 @@ impl EditorView {
                                     prism_editor_gpui_core::LogLevel::Info,
                                     path.clone(),
                                 );
+                            }
+                            (ContextTarget::Asset(path), "复制路径") => {
+                                cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                                    path.clone(),
+                                ));
+                                this.workspace.status = "已复制资产路径".to_string();
+                            }
+                            (ContextTarget::Asset(path), "复制 GUID") => {
+                                cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                                    prism_editor_gpui_core::assets::asset_guid(path),
+                                ));
+                                this.workspace.status = "已复制 GUID".to_string();
+                            }
+                            (ContextTarget::Asset(path), "创建副本") => {
+                                match this.workspace.duplicate_asset(path) {
+                                    Ok(copy) => this.select_asset(Some(copy)),
+                                    Err(error) => this.workspace.log(
+                                        prism_editor_gpui_core::LogSource::Editor,
+                                        prism_editor_gpui_core::LogLevel::Error,
+                                        format!("复制失败：{error}"),
+                                    ),
+                                }
                             }
                             _ => {}
                         }

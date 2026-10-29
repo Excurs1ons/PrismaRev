@@ -3,7 +3,7 @@
 //! 这一层**不依赖任何 UI 框架**，GPUI 只是它的一个视图。因此同一份状态可以
 //! 单测，也可以在将来喂给别的宿主（例如自动化脚本）。
 
-use crate::assets::{AssetInfo, AssetKind, AssetQuery, AssetTree};
+use crate::assets::{AssetDetails, AssetInfo, AssetKind, AssetQuery, AssetReference, AssetTree};
 use crate::doc::{EntityJson, SceneDoc, TransformJson, PREFAB_LINK_COMPONENT};
 use crate::dock::{
     self, collect_tabs, find_leaf, find_leaf_by_id, insert_panel, leaf, remove_panel, DockEdge,
@@ -454,6 +454,9 @@ impl Workspace {
         if let Some(root) = self.project_root.clone() {
             self.assets = project::scan_assets(&root);
             self.tree = AssetTree::build(&self.assets);
+            for folder in project::scan_asset_dirs(&root) {
+                self.tree.insert_dir(&folder);
+            }
         }
         match SceneManifest::read(self.project_root.as_deref().expect("project_root 刚刚赋值"))
         {
@@ -535,6 +538,15 @@ impl Workspace {
     /// 把当前选中实体子树存成预制体文件（Unity「另存为预制体」）。
     /// 重名自动追加 `-2`、`-3`；不修改当前场景。
     pub fn save_selection_as_prefab(&mut self, name: &str) -> io::Result<String> {
+        self.save_selection_as_prefab_at(Some("assets/prefabs"), name)
+    }
+
+    /// 把当前选择存成预制体到指定 `assets/...` 目录（层级拖到资产目录用）。
+    pub fn save_selection_as_prefab_at(
+        &mut self,
+        folder: Option<&str>,
+        name: &str,
+    ) -> io::Result<String> {
         let root = self.project_root.clone().ok_or_else(|| {
             io::Error::new(io::ErrorKind::NotFound, "没有绑定项目根，无法保存预制体")
         })?;
@@ -543,14 +555,18 @@ impl Workspace {
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "未选择实体"))?;
         let doc = self.document().doc.extract_subtree(&[index]);
         let stem = project::sanitize_stem(name);
-        let mut path = format!("assets/prefabs/{stem}.prefab.json");
+        let folder = folder
+            .filter(|folder| folder.starts_with("assets/"))
+            .unwrap_or("assets/prefabs");
+        let mut path = format!("{folder}/{stem}.prefab.json");
         let mut suffix = 2;
         while root.join(&path).exists() {
-            path = format!("assets/prefabs/{stem}-{suffix}.prefab.json");
+            path = format!("{folder}/{stem}-{suffix}.prefab.json");
             suffix += 1;
         }
         project::write_document(&root, &path, &doc)?;
         self.refresh_project_files();
+        self.refresh_assets();
         self.log(
             LogSource::Editor,
             LogLevel::Info,
@@ -715,6 +731,7 @@ impl Workspace {
             }
         }
         self.refresh_project_files();
+        self.refresh_assets();
         self.log(
             LogSource::Editor,
             LogLevel::Info,
@@ -730,6 +747,146 @@ impl Workspace {
         if let Some(root) = &self.project_root {
             self.project_files = project::scan_documents(root);
         }
+    }
+
+    /// 重新扫描 `assets/` 并重建资产树（新建目录 / 复制 / 移动后调用）。
+    pub fn refresh_assets(&mut self) {
+        let Some(root) = self.project_root.clone() else {
+            return;
+        };
+        self.assets = project::scan_assets(&root);
+        let tree = {
+            let mut tree = AssetTree::build(&self.assets);
+            for folder in project::scan_asset_dirs(&root) {
+                tree.insert_dir(&folder);
+            }
+            tree
+        };
+        self.expanded_assets
+            .retain(|path| tree.find(path).is_some());
+        self.tree = tree;
+    }
+
+    /// 新建资产目录（相对项目根，必须位于 `assets/` 内）。
+    pub fn create_asset_folder(&mut self, relative: &str) -> io::Result<String> {
+        let root = self.project_root.clone().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotFound, "没有绑定项目根，无法新建目录")
+        })?;
+        let relative = relative.trim_end_matches('/');
+        if !relative.starts_with("assets/") || relative == "assets" {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "目录必须位于 assets/ 内",
+            ));
+        }
+        if root.join(relative).exists() {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!("{relative} 已存在"),
+            ));
+        }
+        project::create_folder(&root, relative)?;
+        if let Some(parent) = relative.rsplit_once('/').map(|(parent, _)| parent) {
+            self.expanded_assets.insert(parent.to_string());
+        }
+        self.refresh_assets();
+        self.log(
+            LogSource::Editor,
+            LogLevel::Info,
+            format!("已新建目录 {relative}"),
+        );
+        Ok(relative.to_string())
+    }
+
+    /// 复制资产到同目录下的 `-2` / `-3` 路径。
+    pub fn duplicate_asset(&mut self, path: &str) -> io::Result<String> {
+        let root = self.project_root.clone().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotFound, "没有绑定项目根，无法复制资产")
+        })?;
+        let target = crate::assets::unique_asset_path(&self.assets, path);
+        project::copy_file(&root, path, &target)?;
+        self.refresh_project_files();
+        self.refresh_assets();
+        self.log(
+            LogSource::Editor,
+            LogLevel::Info,
+            format!("已复制 {path} → {target}"),
+        );
+        Ok(target)
+    }
+
+    /// 把资产移动到某个目录（拖拽到目录行）。场景 / 预制体请用另存为。
+    pub fn move_asset_to_folder(&mut self, from: &str, folder: Option<&str>) -> io::Result<String> {
+        let name = from.rsplit('/').next().unwrap_or(from);
+        let folder = folder.unwrap_or("assets").trim_end_matches('/');
+        let to = format!("{folder}/{name}");
+        if to == from {
+            return Ok(to);
+        }
+        if from.ends_with(".scene.json") || from.ends_with(".prefab.json") {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "场景 / 预制体请用另存为移动",
+            ));
+        }
+        self.rename_asset(from, &to)?;
+        Ok(to)
+    }
+
+    /// 资产详情：GUID、按内容类型生成的预览、所有打开 / 磁盘文档里的引用。
+    pub fn asset_details(&self, path: &str) -> Option<AssetDetails> {
+        let asset = self.assets.iter().find(|asset| asset.path == path)?.clone();
+        let root = self.project_root.as_deref();
+        let preview = crate::assets::asset_preview(root, &asset, 32 * 1024);
+
+        let mut references = Vec::new();
+        let collect = |document: &str, doc: &SceneDoc, out: &mut Vec<AssetReference>| {
+            for (entity, field, _) in doc.field_references(&asset.path) {
+                out.push(AssetReference {
+                    document: document.to_string(),
+                    entity: doc
+                        .entities
+                        .get(entity)
+                        .and_then(|entity| entity.id)
+                        .unwrap_or(0),
+                    entity_name: doc
+                        .entities
+                        .get(entity)
+                        .map(|entity| entity.display_name())
+                        .unwrap_or_else(|| "(已删除)".to_string()),
+                    field,
+                });
+            }
+        };
+        for document in &self.docs {
+            let name = document.path.clone().unwrap_or_else(|| document.title());
+            collect(&name, &document.doc, &mut references);
+        }
+        if let Some(root) = root {
+            for file in &self.project_files {
+                if self
+                    .docs
+                    .iter()
+                    .any(|document| document.path.as_deref() == Some(file.path.as_str()))
+                {
+                    continue;
+                }
+                if let Ok(doc) = project::read_document(root, &file.path) {
+                    collect(&file.path, &doc, &mut references);
+                }
+            }
+        }
+        references.sort_by(|a, b| {
+            (&a.document, a.entity, &a.field).cmp(&(&b.document, b.entity, &b.field))
+        });
+        references.dedup();
+
+        Some(AssetDetails {
+            asset,
+            guid: crate::assets::asset_guid(path),
+            preview,
+            references,
+        })
     }
 
     /// 打开（或切到）磁盘上的文档。
@@ -3311,6 +3468,49 @@ mod tests {
             .visible_rows(&expanded)
             .iter()
             .any(|(node, _)| node.name == "meshes"));
+    }
+
+    #[test]
+    fn asset_folders_copy_move_and_details() {
+        let project = TempProject::new("asset-ops");
+        std::fs::create_dir_all(project.root.join("assets/meshes")).unwrap();
+        std::fs::write(project.root.join("assets/meshes/cube.fbx"), b"fbx").unwrap();
+        std::fs::write(
+            project.root.join("assets/scenes/a.scene.json"),
+            r#"{"version":3,"entities":[{"id":1,"name":"Mesh","components":{"prism_engine::scene::MeshRenderer":{"mesh_path":"assets/meshes/cube.fbx"}}}]}"#,
+        )
+        .unwrap();
+        let mut workspace = Workspace::load_fixture(&fixture());
+        workspace.load_project(project.root.clone()).unwrap();
+
+        workspace.create_asset_folder("assets/meshes/new").unwrap();
+        assert!(project.root.join("assets/meshes/new").is_dir());
+        assert!(workspace.tree.find("assets/meshes/new").is_some());
+
+        let copy = workspace.duplicate_asset("assets/meshes/cube.fbx").unwrap();
+        assert_eq!(copy, "assets/meshes/cube-2.fbx");
+        assert!(project.root.join(&copy).is_file());
+
+        let moved = workspace
+            .move_asset_to_folder(&copy, Some("assets/meshes/new"))
+            .unwrap();
+        assert_eq!(moved, "assets/meshes/new/cube-2.fbx");
+        assert!(project.root.join(&moved).is_file());
+        assert!(workspace.assets.iter().any(|asset| asset.path == moved));
+
+        let details = workspace.asset_details("assets/meshes/cube.fbx").unwrap();
+        assert_eq!(details.guid.len(), 32);
+        assert_eq!(details.references.len(), 1);
+        assert_eq!(details.references[0].entity_name, "Mesh");
+        assert!(details
+            .references
+            .iter()
+            .any(|reference| reference.field.contains("mesh_path")));
+
+        // 场景 / 预制体不能通过资产拖拽移动（走另存为）。
+        assert!(workspace
+            .move_asset_to_folder("assets/scenes/a.scene.json", Some("assets"))
+            .is_err());
     }
 
     #[test]

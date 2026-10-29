@@ -1,6 +1,6 @@
 # GPUI 原生编辑器（`editor-gpui/`）
 
-> 状态：**可编译的类型检查 + 179 个数据层单测通过**；桌面运行尚未在 CI 上跑过
+> 状态：**可编译的类型检查 + 185 个数据层单测通过**；桌面运行尚未在 CI 上跑过
 > （GPUI 需要 Windows/macOS/Linux 桌面与 GPU）。
 >
 > 本文说明「为什么做、边界在哪、怎么接真实引擎」，功能清单见
@@ -116,6 +116,13 @@ Unity 形状的编辑器，又不会把 `prism-render` 绑死在某套 UI 生命
 - **资产拖拽**：资产列表行用 GPUI `on_drag`（`AssetDragPreview` 小卡片），检查器资产
   字段和层级实体行是 drop target：拖到字段直接 `apply_field(String)`，拖 `.prefab.json`
   到层级实体会 `instantiate_prefab_asset` 到该实体下并选中新根。
+- **资产浏览器**：目录树 + 面包屑 + 前进/后退历史、列表/网格切换、新建文件夹（写盘后重建
+  资产树，空目录也会保留）、目录行作为 drop target（`move_asset_to_folder` → `rename_path`）。
+  搜索 / 分类过滤时列全项目资产，否则只列当前目录的直接子项。右键可创建副本
+  （`unique_asset_path` 保留 `.scene.json` / `.prefab.json` 双后缀）、复制路径 / GUID、删除。
+- **资产检查器**：选中资产时检查器优先显示 `AssetDetails` —— 稳定 GUID、体积、导入器、
+  文本预览（UTF-8 边界截断）或图片尺寸（PNG/GIF/BMP/JPEG 文件头解析），以及跨打开 /
+  磁盘文档的引用；点击引用会打开对应文档并选中实体。选中实体或视口拾取会清掉资产选择。
 - **多选拖拽层级**：拖到行中间时若被拖的实体在选中集合里，`reparent_selection` 把
   `selection_roots()` 整组挂到目标下（一次快照撤销）；行上/下 25% 仍是单实体排序。
 - **递归展开**：`Alt`+点箭头走 `set_subtree_expanded`（根 + 全部后代一起展开 / 收起），
@@ -252,7 +259,7 @@ Unity 形状的编辑器，又不会把 `prism-render` 绑死在某套 UI 生命
 
 ```sh
 cd editor-gpui
-cargo test -p prism-editor-gpui-core                                  # 179 passed
+cargo test -p prism-editor-gpui-core                                  # 185 passed
 cargo check -p prism-editor-gpui --target x86_64-pc-windows-gnu       # 类型检查
 cargo clippy -p prism-editor-gpui -p prism-editor-gpui-core \
     --target x86_64-pc-windows-gnu                                    # clean

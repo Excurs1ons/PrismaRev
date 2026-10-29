@@ -286,6 +286,47 @@ impl AssetTree {
         out
     }
 
+    /// 插入一个空目录节点（`scan_assets` 只返回文件，空目录需要单独补）。
+    pub fn insert_dir(&mut self, path: &str) {
+        let parts: Vec<&str> = path.split('/').filter(|part| !part.is_empty()).collect();
+        let Some(start) = parts.iter().position(|part| *part != "assets") else {
+            return;
+        };
+        let mut nodes = &mut self.roots;
+        let mut current = String::from("assets");
+        for part in &parts[start..] {
+            current.push('/');
+            current.push_str(part);
+            let position = nodes
+                .iter()
+                .position(|node| node.is_dir && node.path == current);
+            let index = if let Some(position) = position {
+                position
+            } else {
+                let node = AssetNode {
+                    name: (*part).to_string(),
+                    path: current.clone(),
+                    is_dir: true,
+                    kind: None,
+                    size_bytes: 0,
+                    children: Vec::new(),
+                };
+                let first_file = nodes
+                    .iter()
+                    .position(|node| !node.is_dir)
+                    .unwrap_or(nodes.len());
+                let key = part.to_lowercase();
+                let insert_at = nodes[..first_file]
+                    .iter()
+                    .position(|node| node.name.to_lowercase() > key)
+                    .unwrap_or(first_file);
+                nodes.insert(insert_at, node);
+                insert_at
+            };
+            nodes = &mut nodes[index].children;
+        }
+    }
+
     /// 某个目录下（递归）的全部文件。
     pub fn files_under<'a>(&'a self, folder: Option<&str>) -> Vec<&'a AssetNode> {
         let mut out = Vec::new();
@@ -306,6 +347,180 @@ impl AssetTree {
         out.sort_by(|a, b| a.path.cmp(&b.path));
         out
     }
+}
+
+/// 稳定的资产 GUID（32 位十六进制，形状与 Unity `.meta` 里的 guid 一致）。
+///
+/// 用 FNV-1a 64 位哈希路径：不引入 uuid 依赖，同一路径跨进程稳定。
+pub fn asset_guid(path: &str) -> String {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for byte in path.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("{hash:016x}{hash:016x}")
+}
+
+/// 复制资产时生成不冲突的路径：`rock.png` → `rock-2.png`。
+///
+/// `.scene.json` / `.prefab.json` 的双后缀会整体保留（`a-2.scene.json`），
+/// 不会生成 `a.scene-2.json`。
+pub fn unique_asset_path(assets: &[AssetInfo], path: &str) -> String {
+    let taken: std::collections::HashSet<&str> =
+        assets.iter().map(|asset| asset.path.as_str()).collect();
+    if !taken.contains(path) {
+        return path.to_string();
+    }
+    let (stem, suffix) = split_asset_suffix(path);
+    for index in 2..1000 {
+        let candidate = format!("{stem}-{index}{suffix}");
+        if !taken.contains(candidate.as_str()) {
+            return candidate;
+        }
+    }
+    format!("{stem}-copy{suffix}")
+}
+
+fn split_asset_suffix(path: &str) -> (&str, &str) {
+    for suffix in [".scene.json", ".prefab.json"] {
+        if let Some(stem) = path.strip_suffix(suffix) {
+            return (stem, suffix);
+        }
+    }
+    match path.rsplit_once('.') {
+        Some((stem, _extension)) if !stem.is_empty() => (stem, &path[stem.len()..]),
+        _ => (path, ""),
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum AssetPreview {
+    Text {
+        text: String,
+        truncated: bool,
+    },
+    Image {
+        width: Option<u32>,
+        height: Option<u32>,
+        bytes: u64,
+    },
+    Document,
+    None,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AssetReference {
+    pub document: String,
+    pub entity: u32,
+    pub entity_name: String,
+    pub field: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AssetDetails {
+    pub asset: AssetInfo,
+    pub guid: String,
+    pub preview: AssetPreview,
+    pub references: Vec<AssetReference>,
+}
+
+/// 读文本预览（最多 `max_bytes`，按 UTF-8 边界截断）。
+pub fn text_preview(
+    root: &std::path::Path,
+    relative: &str,
+    max_bytes: usize,
+) -> Option<(String, bool)> {
+    let bytes = std::fs::read(root.join(relative)).ok()?;
+    let truncated = bytes.len() > max_bytes;
+    let slice = &bytes[..bytes.len().min(max_bytes)];
+    let mut text = String::from_utf8_lossy(slice).to_string();
+    while !text.is_char_boundary(text.len()) {
+        text.pop();
+    }
+    Some((text, truncated))
+}
+
+/// 图片尺寸：支持 PNG / GIF / BMP / JPEG（只读文件头，不引入解码库）。
+pub fn image_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") && bytes.len() >= 24 {
+        let width = u32::from_be_bytes(bytes[16..20].try_into().ok()?);
+        let height = u32::from_be_bytes(bytes[20..24].try_into().ok()?);
+        return Some((width, height));
+    }
+    if (bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a")) && bytes.len() >= 10 {
+        let width = u16::from_le_bytes(bytes[6..8].try_into().ok()?) as u32;
+        let height = u16::from_le_bytes(bytes[8..10].try_into().ok()?) as u32;
+        return Some((width, height));
+    }
+    if bytes.starts_with(b"BM") && bytes.len() >= 26 {
+        let width = i32::from_le_bytes(bytes[18..22].try_into().ok()?) as u32;
+        let height = i32::from_le_bytes(bytes[22..26].try_into().ok()?).unsigned_abs();
+        return Some((width, height));
+    }
+    if bytes.starts_with(&[0xff, 0xd8]) {
+        let mut offset = 2;
+        while offset + 9 < bytes.len() {
+            if bytes[offset] != 0xff {
+                offset += 1;
+                continue;
+            }
+            let marker = bytes[offset + 1];
+            let length = u16::from_be_bytes([bytes[offset + 2], bytes[offset + 3]]) as usize;
+            let is_sof = matches!(
+                marker,
+                0xc0 | 0xc1
+                    | 0xc2
+                    | 0xc3
+                    | 0xc5
+                    | 0xc6
+                    | 0xc7
+                    | 0xc9
+                    | 0xca
+                    | 0xcb
+                    | 0xcd
+                    | 0xce
+                    | 0xcf
+            );
+            if is_sof && offset + 9 < bytes.len() {
+                let height = u16::from_be_bytes([bytes[offset + 5], bytes[offset + 6]]) as u32;
+                let width = u16::from_be_bytes([bytes[offset + 7], bytes[offset + 8]]) as u32;
+                return Some((width, height));
+            }
+            offset += 2 + length;
+        }
+    }
+    None
+}
+
+pub fn asset_preview(
+    root: Option<&std::path::Path>,
+    asset: &AssetInfo,
+    max_text_bytes: usize,
+) -> AssetPreview {
+    if asset.kind == AssetKind::Scene || asset.kind == AssetKind::Prefab {
+        return AssetPreview::Document;
+    }
+    let Some(root) = root else {
+        return AssetPreview::None;
+    };
+    if asset.kind == AssetKind::Texture || asset.kind == AssetKind::Env {
+        let bytes = std::fs::read(root.join(&asset.path)).unwrap_or_default();
+        let dimensions = image_dimensions(&bytes);
+        return AssetPreview::Image {
+            width: dimensions.map(|(width, _)| width),
+            height: dimensions.map(|(_, height)| height),
+            bytes: bytes.len() as u64,
+        };
+    }
+    if asset.kind.is_text_like() || asset.kind == AssetKind::Audio || asset.kind == AssetKind::Other
+    {
+        if let Some((text, truncated)) = text_preview(root, &asset.path, max_text_bytes) {
+            if !text.contains('\u{0}') {
+                return AssetPreview::Text { text, truncated };
+            }
+        }
+    }
+    AssetPreview::None
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -473,5 +688,64 @@ mod tests {
         assert!(!AssetKind::Texture.is_text_like());
         assert_eq!(AssetKind::parse("texture"), AssetKind::Texture);
         assert_eq!(AssetKind::parse("weird"), AssetKind::Other);
+    }
+
+    #[test]
+    fn guid_is_stable_and_path_specific() {
+        let first = asset_guid("assets/rock.png");
+        assert_eq!(first.len(), 32);
+        assert_eq!(first, asset_guid("assets/rock.png"));
+        assert_ne!(first, asset_guid("assets/rock2.png"));
+    }
+
+    #[test]
+    fn unique_asset_path_keeps_document_suffix() {
+        let assets = sample();
+        assert_eq!(
+            unique_asset_path(&assets, "assets/scenes/new.scene.json"),
+            "assets/scenes/new.scene.json"
+        );
+        assert_eq!(
+            unique_asset_path(&assets, "assets/scenes/default.scene.json"),
+            "assets/scenes/default-2.scene.json"
+        );
+        assert_eq!(
+            unique_asset_path(&assets, "assets/textures/brick.png"),
+            "assets/textures/brick-2.png"
+        );
+    }
+
+    #[test]
+    fn reads_image_dimensions_from_headers() {
+        let mut png = vec![0_u8; 24];
+        png[..8].copy_from_slice(b"\x89PNG\r\n\x1a\n");
+        png[16..20].copy_from_slice(&640_u32.to_be_bytes());
+        png[20..24].copy_from_slice(&480_u32.to_be_bytes());
+        assert_eq!(image_dimensions(&png), Some((640, 480)));
+
+        let mut gif = vec![0_u8; 10];
+        gif[..6].copy_from_slice(b"GIF89a");
+        gif[6..8].copy_from_slice(&32_u16.to_le_bytes());
+        gif[8..10].copy_from_slice(&16_u16.to_le_bytes());
+        assert_eq!(image_dimensions(&gif), Some((32, 16)));
+        assert_eq!(image_dimensions(b"not an image"), None);
+    }
+
+    #[test]
+    fn text_preview_truncates_on_char_boundary() {
+        let root = std::env::temp_dir().join(format!(
+            "prism-asset-preview-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(root.join("assets")).unwrap();
+        std::fs::write(root.join("assets/note.txt"), "hello world").unwrap();
+        let (text, truncated) = text_preview(&root, "assets/note.txt", 5).unwrap();
+        assert_eq!(text, "hello");
+        assert!(truncated);
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

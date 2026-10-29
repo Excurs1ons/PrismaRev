@@ -107,6 +107,34 @@ pub fn asset_kind(path: &str) -> crate::assets::AssetKind {
     }
 }
 
+/// 扫描 `assets/` 下所有目录（含空目录），路径带 `assets/` 前缀。
+pub fn scan_asset_dirs(root: &Path) -> Vec<String> {
+    fn walk(dir: &Path, relative: &str, depth: usize, out: &mut Vec<String>) {
+        if depth > 12 {
+            return;
+        }
+        let Ok(entries) = fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') || name == "target" || name == "node_modules" {
+                continue;
+            }
+            if !entry.path().is_dir() {
+                continue;
+            }
+            let child = format!("{relative}/{name}");
+            out.push(child.clone());
+            walk(&entry.path(), &child, depth + 1, out);
+        }
+    }
+    let mut out = Vec::new();
+    walk(&root.join("assets"), "assets", 0, &mut out);
+    out.sort();
+    out
+}
+
 fn importer_for(path: &str) -> String {
     use crate::assets::AssetKind;
     match asset_kind(path) {
@@ -200,6 +228,45 @@ pub fn rename_path(root: &Path, from: &str, to: &str) -> io::Result<()> {
         fs::create_dir_all(parent)?;
     }
     fs::rename(source, target)
+}
+
+/// 新建资产目录（只允许 `assets/` 内）。
+pub fn create_folder(root: &Path, relative: &str) -> io::Result<()> {
+    if !relative.starts_with("assets/") {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "只允许在 assets/ 内新建目录",
+        ));
+    }
+    fs::create_dir_all(root.join(relative))
+}
+
+/// 复制资产文件（只允许 `assets/` 内），目标已存在时失败。
+pub fn copy_file(root: &Path, from: &str, to: &str) -> io::Result<()> {
+    if !from.starts_with("assets/") || !to.starts_with("assets/") {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "只允许复制 assets/ 内的文件",
+        ));
+    }
+    let source = root.join(from);
+    let target = root.join(to);
+    if !source.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("{from} 不存在"),
+        ));
+    }
+    if target.exists() {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            format!("{to} 已存在"),
+        ));
+    }
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::copy(source, target).map(|_| ())
 }
 
 /// 未保存文档的默认落盘路径；重名时追加 `-2`、`-3`。
@@ -398,6 +465,36 @@ mod tests {
             "assets/scenes/sub/b.scene.json"
         )
         .is_ok());
+    }
+
+    #[test]
+    fn creates_folders_and_copies_assets() {
+        let project = TempProject::new();
+        create_folder(&project.root, "assets/textures/ui").unwrap(); // 允许嵌套
+        assert!(project.root.join("assets/textures/ui").is_dir());
+        assert!(create_folder(&project.root, "outside").is_err());
+
+        fs::write(project.root.join("assets/scenes/a.scene.json"), "{}").unwrap();
+        copy_file(
+            &project.root,
+            "assets/scenes/a.scene.json",
+            "assets/scenes/copy.scene.json",
+        )
+        .unwrap();
+        assert!(project.root.join("assets/scenes/copy.scene.json").is_file());
+
+        assert!(copy_file(
+            &project.root,
+            "assets/scenes/a.scene.json",
+            "assets/scenes/copy.scene.json"
+        )
+        .is_err());
+        assert!(copy_file(
+            &project.root,
+            "assets/scenes/missing.scene.json",
+            "assets/scenes/x.scene.json"
+        )
+        .is_err());
     }
 
     #[test]

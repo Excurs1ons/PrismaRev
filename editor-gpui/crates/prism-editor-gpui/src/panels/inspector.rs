@@ -13,6 +13,9 @@ use crate::panels::{header_row, icon_button, muted};
 
 impl EditorView {
     pub fn inspector_panel(&mut self, cx: &mut gpui::Context<Self>) -> AnyElement {
+        if self.selected_asset.is_some() {
+            return self.asset_inspector(cx);
+        }
         let style = self.style;
         let selection = self.workspace.selection.clone();
 
@@ -70,6 +73,394 @@ impl EditorView {
             root = root.child(self.add_component_menu(cx));
         }
         root.into_any_element()
+    }
+
+    /// 选中资产时替代实体检查器（对齐 Web 的 `AssetInspector.vue`）。
+    pub fn asset_inspector(&mut self, cx: &mut gpui::Context<Self>) -> AnyElement {
+        use prism_editor_gpui_core::assets::{format_bytes, AssetDetails, AssetKind, AssetPreview};
+
+        let style = self.style;
+        let Some(path) = self.selected_asset.clone() else {
+            return div().into_any_element();
+        };
+        let details: Option<AssetDetails> = self.asset_details.clone();
+        let asset = details
+            .as_ref()
+            .map(|details| details.asset.clone())
+            .or_else(|| {
+                self.workspace
+                    .assets
+                    .iter()
+                    .find(|asset| asset.path == path)
+                    .cloned()
+            });
+        let is_dir = self
+            .workspace
+            .tree
+            .find(&path)
+            .map(|node| node.is_dir)
+            .unwrap_or(false);
+        let name = path.rsplit('/').next().unwrap_or(&path).to_string();
+        // 目录选中时不会生成 AssetDetails，用空引用表。
+        let empty_details = AssetDetails {
+            asset: asset
+                .clone()
+                .unwrap_or_else(|| prism_editor_gpui_core::assets::AssetInfo {
+                    path: path.clone(),
+                    size_bytes: 0,
+                    kind: AssetKind::Other,
+                    importer: String::new(),
+                }),
+            guid: prism_editor_gpui_core::assets::asset_guid(&path),
+            preview: AssetPreview::None,
+            references: Vec::new(),
+        };
+        let details = details.unwrap_or(empty_details);
+
+        let header = header_row(style, if is_dir { "目录" } else { "资产检查器" })
+            .justify_between()
+            .child(
+                div()
+                    .id("asset-insp-close")
+                    .px_1()
+                    .rounded_sm()
+                    .text_size(px(9.0))
+                    .text_color(style.muted())
+                    .cursor_pointer()
+                    .hover(move |this| this.bg(style.row_hover()))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.selected_asset = None;
+                        this.asset_details = None;
+                        cx.notify();
+                    }))
+                    .child("关闭"),
+            );
+
+        let mut body = div()
+            .id("asset-insp-body")
+            .flex_1()
+            .overflow_y_scroll()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .p_2();
+
+        body = body.child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_2()
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(style.text_strong())
+                        .child(SharedString::from(name.clone())),
+                )
+                .child(
+                    div()
+                        .px_1()
+                        .rounded_sm()
+                        .bg(style.panel_alt())
+                        .text_size(px(9.0))
+                        .text_color(style.text_soft())
+                        .child(if is_dir {
+                            "目录".to_string()
+                        } else {
+                            details.asset.kind.label().to_string()
+                        }),
+                ),
+        );
+
+        body = body.child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_1()
+                .child(
+                    div()
+                        .flex_1()
+                        .text_size(px(9.0))
+                        .text_color(style.muted())
+                        .text_ellipsis()
+                        .child(SharedString::from(path.clone())),
+                )
+                .child(
+                    div()
+                        .id("asset-insp-copy-path")
+                        .px_1()
+                        .rounded_sm()
+                        .text_size(px(9.0))
+                        .text_color(style.text_soft())
+                        .cursor_pointer()
+                        .hover(move |this| this.bg(style.row_hover()))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            if let Some(path) = this.selected_asset.clone() {
+                                cx.write_to_clipboard(gpui::ClipboardItem::new_string(path));
+                                this.workspace.status = "已复制资产路径".to_string();
+                            }
+                        }))
+                        .child("复制路径"),
+                ),
+        );
+
+        if !is_dir {
+            let size = format_bytes(details.asset.size_bytes);
+            let importer = details.asset.importer.clone();
+            let guid = details.guid.clone();
+            let guid_for_copy = guid.clone();
+            body = body.child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .flex_wrap()
+                    .items_center()
+                    .gap_2()
+                    .text_size(px(9.0))
+                    .text_color(style.muted())
+                    .child(SharedString::from(format!("大小 {size}")))
+                    .child(SharedString::from(format!("导入器 {importer}")))
+                    .child(
+                        div()
+                            .id("asset-insp-copy-guid")
+                            .cursor_pointer()
+                            .text_color(style.text_soft())
+                            .hover(move |this| this.text_color(style.accent()))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                                    guid_for_copy.clone(),
+                                ));
+                                this.workspace.status = "已复制 GUID".to_string();
+                            }))
+                            .child(SharedString::from(format!("GUID {guid}"))),
+                    ),
+            );
+
+            let mut actions = div().flex().flex_row().gap_1().flex_wrap();
+            let for_open = path.clone();
+            let rename_path = path.clone();
+            let rename_name = name.clone();
+            let delete_path = path.clone();
+            actions = actions.child(
+                div()
+                    .id("asset-insp-open")
+                    .px_1()
+                    .rounded_sm()
+                    .bg(style.panel_alt())
+                    .text_size(px(9.0))
+                    .text_color(style.text_soft())
+                    .cursor_pointer()
+                    .hover(move |this| this.bg(style.row_hover()))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.open_asset_document(&for_open, cx);
+                        cx.notify();
+                    }))
+                    .child("打开"),
+            );
+            actions = actions.child(
+                div()
+                    .id("asset-insp-rename")
+                    .px_1()
+                    .rounded_sm()
+                    .text_size(px(9.0))
+                    .text_color(style.text_soft())
+                    .cursor_pointer()
+                    .hover(move |this| this.bg(style.row_hover()))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.asset_rename = Some((rename_path.clone(), rename_name.clone()));
+                        this.begin_edit(TextTarget::AssetRename, rename_name.clone(), cx);
+                    }))
+                    .child("重命名"),
+            );
+            actions = actions.child(
+                div()
+                    .id("asset-insp-duplicate")
+                    .px_1()
+                    .rounded_sm()
+                    .text_size(px(9.0))
+                    .text_color(style.text_soft())
+                    .cursor_pointer()
+                    .hover(move |this| this.bg(style.row_hover()))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if let Some(path) = this.selected_asset.clone() {
+                            match this.workspace.duplicate_asset(&path) {
+                                Ok(copy) => this.select_asset(Some(copy)),
+                                Err(error) => this.workspace.log(
+                                    prism_editor_gpui_core::LogSource::Editor,
+                                    prism_editor_gpui_core::LogLevel::Error,
+                                    format!("复制失败：{error}"),
+                                ),
+                            }
+                        }
+                        cx.notify();
+                    }))
+                    .child("创建副本"),
+            );
+            actions = actions.child(
+                div()
+                    .id("asset-insp-delete")
+                    .px_1()
+                    .rounded_sm()
+                    .text_size(px(9.0))
+                    .text_color(style.color(ThemeToken::DangerSoft))
+                    .cursor_pointer()
+                    .hover(move |this| this.bg(style.row_hover()))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.asset_delete = Some(delete_path.clone());
+                        cx.notify();
+                    }))
+                    .child("删除…"),
+            );
+            body = body.child(actions);
+
+            // 预览
+            body = body.child(
+                div()
+                    .mt_1()
+                    .text_size(px(9.0))
+                    .text_color(style.muted())
+                    .child("预览"),
+            );
+            match &details.preview {
+                AssetPreview::Text { text, truncated } => {
+                    let lines: Vec<&str> = text.lines().take(24).collect();
+                    let mut preview = String::new();
+                    for (index, line) in lines.iter().enumerate() {
+                        if index > 0 {
+                            preview.push('\n');
+                        }
+                        preview.push_str(line);
+                    }
+                    if *truncated {
+                        preview.push_str("\n…（已截断）");
+                    }
+                    body = body.child(
+                        div()
+                            .p_1()
+                            .rounded_sm()
+                            .bg(style.bg_sunken())
+                            .border_1()
+                            .border_color(style.border())
+                            .text_size(px(9.0))
+                            .text_color(style.text_soft())
+                            .child(SharedString::from(preview)),
+                    );
+                }
+                AssetPreview::Image {
+                    width,
+                    height,
+                    bytes,
+                } => {
+                    let dimensions = match (width, height) {
+                        (Some(width), Some(height)) => format!("{width} × {height}"),
+                        _ => "尺寸未知".to_string(),
+                    };
+                    body = body.child(
+                        div()
+                            .h(px(90.0))
+                            .rounded_sm()
+                            .border_1()
+                            .border_color(style.border())
+                            .bg(style.panel_alt())
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .text_size(px(9.0))
+                            .text_color(style.muted())
+                            .child(SharedString::from(format!(
+                                "{dimensions} · {}（图像预览需 GPU 解码）",
+                                format_bytes(*bytes)
+                            ))),
+                    );
+                }
+                AssetPreview::Document => {
+                    body = body.child(
+                        div()
+                            .p_1()
+                            .rounded_sm()
+                            .bg(style.bg_sunken())
+                            .text_size(px(9.0))
+                            .text_color(style.muted())
+                            .child("场景 / 预制体文档：双击资产或点击「打开」编辑。"),
+                    );
+                }
+                AssetPreview::None => {
+                    body = body.child(
+                        div()
+                            .p_1()
+                            .text_size(px(9.0))
+                            .text_color(style.muted())
+                            .child("没有可用预览"),
+                    );
+                }
+            }
+        }
+
+        // 引用位置
+        let references = details.references.clone();
+        body = body.child(
+            div()
+                .mt_1()
+                .text_size(px(9.0))
+                .text_color(style.muted())
+                .child(SharedString::from(format!("引用（{}）", references.len()))),
+        );
+        if references.is_empty() {
+            body = body.child(
+                div()
+                    .text_size(px(9.0))
+                    .text_color(style.muted())
+                    .child("没有被任何文档引用"),
+            );
+        }
+        for reference in references {
+            let document = reference.document.clone();
+            let entity = reference.entity;
+            body = body.child(
+                div()
+                    .id(SharedString::from(format!(
+                        "asset-ref-{document}-{entity}-{}",
+                        reference.field
+                    )))
+                    .flex()
+                    .flex_col()
+                    .px_1()
+                    .py_0p5()
+                    .rounded_sm()
+                    .cursor_pointer()
+                    .hover(move |this| this.bg(style.row_hover()))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.jump_to_asset_reference(&document, entity);
+                        cx.notify();
+                    }))
+                    .child(
+                        div()
+                            .text_size(px(9.0))
+                            .text_color(style.text_soft())
+                            .text_ellipsis()
+                            .child(SharedString::from(reference.entity_name.clone())),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(8.0))
+                            .text_color(style.muted())
+                            .text_ellipsis()
+                            .child(SharedString::from(format!(
+                                "{} · {}",
+                                reference.document, reference.field
+                            ))),
+                    ),
+            );
+        }
+
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .child(header)
+            .child(body)
+            .into_any_element()
     }
 
     fn multi_inspector(&mut self, selection: &[usize], cx: &mut gpui::Context<Self>) -> AnyElement {

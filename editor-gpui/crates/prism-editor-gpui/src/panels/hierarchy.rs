@@ -192,6 +192,8 @@ impl EditorView {
                     MouseButton::Right,
                     cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
                         this.workspace.select(index, false);
+                        this.selected_asset = None;
+                        this.asset_details = None;
                         this.open_context_menu(event.position, ContextTarget::Entity(index), cx);
                     }),
                 )
@@ -221,6 +223,8 @@ impl EditorView {
                         this.workspace.select(index, false);
                         this.hierarchy_anchor = Some(index);
                     }
+                    this.selected_asset = None;
+                    this.asset_details = None;
                     cx.notify();
                 }))
                 .on_drop(cx.listener(move |this, path: &String, _, cx| {
