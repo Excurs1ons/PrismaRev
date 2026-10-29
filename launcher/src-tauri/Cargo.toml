@@ -1,7 +1,7 @@
 [package]
 name = "tauri-android-app"
 version = "0.1.0"
-description = "A Tauri App"
+description = "PrismaRev Android 启动壳"
 authors = ["you"]
 edition = "2021"
 
@@ -19,8 +19,6 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = [] }
-# 原生目录选择器（添加工程 / 选择新建位置）。
-tauri-plugin-dialog = "2"
 log = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

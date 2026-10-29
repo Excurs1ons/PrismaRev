@@ -58,12 +58,14 @@ deviating from those conventions is a bug. (`README.md` is the human-facing over
 - `crates/prism-cooker` — **build-time** layer: importers, cookers, asset database, CookProfile,
   and the `prism-cook` CLI (`src/main.rs`). Depends on `prism-asset` + `prism-scene`; never
   pulled into the game runtime. See DESIGN.md §10.
-- `launcher/` — PrismaRev Hub：Tauri 2 + Vue 3 的 Unity Hub 形态桌面启动器
-  （工程列表 / 新建 / 添加 / 用 `editor/` 打开），同时负责 Android APK 打包；
-  **own standalone workspace**, NOT a root member。工程列表持久化在 app 数据目录
-  `hub.json`；编辑器二进制定位顺序 `PRISMREV_EDITOR_BIN` → Hub 同目录 →
-  `editor/src-tauri/target/{debug,release}`，不查 `PATH`。Android 上仍渲染
-  「开始游戏」页并拉起 GameActivity。
+- `launcher/` — **Android 启动壳**（Tauri 2 + Vue 3）：APK 的「开始游戏」页，
+  通过 Kotlin plugin 启动 `com.prisma.MainActivity`（`GameActivity`），同时承载
+  Android 打包配置（`gen/android/`）；**own standalone workspace**, NOT a root member。
+  桌面 Hub（工程管理 / 编辑器版本管理 / 工程版本识别）已拆到独立仓库
+  [`Excurs1ons/prisma-hub`](https://github.com/Excurs1ons/prisma-hub)，本仓库不再包含
+  桌面工程管理器。桌面端保留 `launch_game` 只为调试启动页：二进制定位顺序
+  `PRISMREV_GAME_BIN` → 启动壳同目录 → `projects/prisma/target/{debug,release}`，
+  不查 `PATH`。
 - `editor/` — **web UI 编辑器**（Tauri 2 + Vue 3 + Vite）：层级树（拖拽重排/改父级/就地重命名/
   多选）+ schema 驱动的组件检查器（拖动调值、取色盘、属性检索）、撤销/重做（按字段合并连续输入）、
   组件复制粘贴、模板新建、重命名/删除、**Cook**、资产管理器（检索/分类/引用位置）与
@@ -303,9 +305,11 @@ The user project's dependency chain must stay **UI-framework-free and editor-fre
 - 提交前自检：`python scripts/pr_ready.py`（`--quick` 快速回路；`--all` 全 workspace）。
   CI 见 `.github/workflows/ci.yml`。
 - Build: `scripts/run.ps1` (Windows; sets `VK_SDK`, `RUST_LOG`, runs `bash assets/shaders/compile.sh`, `cargo build`, then `prism-build-pipeline build-scenes`).
-  Note: the root workspace has no **game/editor entry** binary — the desktop entry is PrismaRev Hub in `launcher/`
-  (`cd launcher && pnpm tauri dev`). Hub 管理工程并用 `editor/` 打开；游戏二进制
-  （`projects/prisma/`，`cd projects/prisma && cargo run`）仍由 `launch_game` 命令 / Android 启动页拉起。
+  Note: the root workspace has no **game/editor entry** binary — the desktop entry is the
+  separate [`prisma-hub`](https://github.com/Excurs1ons/prisma-hub) repo (工程管理 / 编辑器版本管理，
+  在那里 `pnpm tauri dev`)；`launcher/` 只是 Android 启动壳。游戏二进制
+  （`projects/prisma/`，`cd projects/prisma && cargo run`）由 Hub 或 Android 启动页通过
+  `launch_game` 拉起。
   - 桌面端 `launch_game` **不查 `PATH`**：先看 launcher 可执行文件同目录的 `prisma[.exe]`（打包布局），
     再按 `projects/prisma/target/{debug,release}/prisma[.exe]`（开发布局，仓库根由 exe 所在目录逐级向上找
     `projects/prisma/Cargo.toml`）；`PRISMREV_GAME_BIN` 可覆盖（指向不存在的文件直接报错，不回退）。
@@ -317,6 +321,9 @@ The user project's dependency chain must stay **UI-framework-free and editor-fre
   Without it, Tauri commands fail loudly instead of silently falling back to mock data; regenerate
   the fixture with `cd editor && pnpm fixture` (it dumps `build_schema`/templates/presets/scenes from the real
   registry, so it cannot drift from the Rust schema).
+  - `editor/src-tauri/src/main.rs` 支持 `prisma-editor --version`（输出
+    `prisma-editor <CARGO_PKG_VERSION>`，在创建窗口之前返回）。桌面 Hub 用它探测安装版本；
+    不要把它挪到 `run()` 之后，否则 `--version` 会打开一个窗口。
 - Checks: `cargo check -p prism-render`, `cargo build`, `cargo test`.
 - `crates/xtask` is excluded from the workspace — run it explicitly from a desktop host; do not add it to default `members`.
 - Prism-asset / scene / cooker: `cargo test -p prism-asset`, `cargo test -p prism-scene`,

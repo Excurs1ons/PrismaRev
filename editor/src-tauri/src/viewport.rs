@@ -3174,7 +3174,8 @@ pub fn editor_viewport_resize(
 pub fn editor_viewport_set_active(
     id: String,
     active: bool,
-    app: tauri::AppHandle,
+    // 只在 Windows 原生承载窗口里用到；非 Windows 目标会编译出未使用告警。
+    #[cfg_attr(not(windows), allow(unused_variables))] app: tauri::AppHandle,
     manager: State<'_, ViewportManager>,
 ) -> Result<(), String> {
     let views = manager
