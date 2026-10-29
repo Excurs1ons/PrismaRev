@@ -2194,7 +2194,12 @@ impl EditorApp {
                 &mut self.state,
             ),
             "theme" => panels::theme(ui, &mut self.workspace),
-            "build" => panels::build(ui, &mut self.workspace, &mut self.state),
+            "build" => {
+                panels::build(ui, &mut self.workspace, &mut self.state);
+                if let Some(kind) = self.state.pending_build.take() {
+                    self.start_build(kind);
+                }
+            }
             "tools" => panels::tools(ui, &mut self.state),
             "shortcuts" => panels::shortcuts(ui),
             "about" => panels::about(ui),
@@ -2743,6 +2748,7 @@ impl EditorApp {
 impl App for EditorApp {
     fn ui(&mut self, ctx: &egui::Context) {
         self.frame_count += 1;
+        self.state.build_running = self.build_job_running();
         self.poll_control(ctx);
         self.drain_engine_logs();
         self.poll_build();

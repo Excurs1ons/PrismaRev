@@ -116,6 +116,10 @@ pub struct UiState {
     pub dragging: Option<usize>,
     pub drop_target: Option<(usize, DropZone)>,
     pub shortcuts_open: bool,
+    /// Build 面板里点击的构建请求，由 `EditorApp` 在同一帧取走并真正启动。
+    pub pending_build: Option<crate::build::BuildKind>,
+    /// 当前是否有构建子进程在跑（由 `EditorApp` 每帧同步，用来禁用按钮）。
+    pub build_running: bool,
 }
 
 /// 二级 / 三级菜单和对话框复用的输入框种类。
@@ -1553,7 +1557,68 @@ pub fn build(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
             }
         }
     }
+
+    // ---- Add scenes that exist on disk but are missing from the manifest ----
+    let available = workspace.available_scene_documents();
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("Add").size(11.0));
+        ui.add_enabled_ui(!available.is_empty() && !state.build_running, |ui| {
+            egui::ComboBox::from_id_salt("build-add-scene")
+                .selected_text(if available.is_empty() {
+                    "all scenes in build"
+                } else {
+                    "scene…"
+                })
+                .show_ui(ui, |ui| {
+                    for path in &available {
+                        if ui.selectable_label(false, path).clicked() {
+                            if workspace.add_scene_document(path).is_some() {
+                                state.status = format!("added {path} to build");
+                            }
+                        }
+                    }
+                });
+        });
+    });
+
+    // ---- The active document may not be part of the build yet ----
+    if let Some(path) = workspace.document().path.clone() {
+        let relative = path.trim_start_matches("assets/").to_string();
+        if relative.ends_with(".scene.json")
+            && !workspace.scene_manifest.contains_document(&relative)
+        {
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new("This scene is not in the build")
+                        .weak()
+                        .size(11.0),
+                );
+                if ui
+                    .small_button("+ Add to build")
+                    .on_hover_text("Append this document to assets/scenes.toml")
+                    .clicked()
+                    && workspace.add_scene_document(&relative).is_some()
+                {
+                    state.status = format!("added {relative} to build");
+                }
+            });
+        }
+    }
+
     ui.separator();
+    ui.horizontal(|ui| {
+        ui.add_enabled_ui(!state.build_running, |ui| {
+            if ui.button("Build").clicked() {
+                state.pending_build = Some(crate::build::BuildKind::ScenePack);
+            }
+            if ui.button("Build And Run").clicked() {
+                state.pending_build = Some(crate::build::BuildKind::PlayerRun);
+            }
+        });
+        if state.build_running {
+            ui.label(RichText::new("building…").weak().size(11.0));
+        }
+    });
     ui.label(
         RichText::new(
             "Building runs `cargo build` + `prism-build-pipeline build-scenes` on the host; \
