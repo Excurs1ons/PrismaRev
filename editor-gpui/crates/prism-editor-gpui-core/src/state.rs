@@ -25,7 +25,6 @@ pub struct Preferences {
     pub confirm_delete: bool,
     pub compact: bool,
     pub max_log_lines: f32,
-    pub default_scene: String,
     pub locale_auto: bool,
 }
 
@@ -36,7 +35,6 @@ impl Default for Preferences {
             confirm_delete: true,
             compact: false,
             max_log_lines: 5000.0,
-            default_scene: "assets/scenes/default.scene.json".into(),
             locale_auto: true,
         }
     }
