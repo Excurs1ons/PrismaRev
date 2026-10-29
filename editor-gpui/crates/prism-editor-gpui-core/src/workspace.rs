@@ -2822,10 +2822,11 @@ impl Workspace {
                 self.paste_entities(None);
             }
             Command::BuildProject => {
-                self.log(LogSource::System, LogLevel::Info, "构建项目（占位）");
+                // 真正可用的构建入口是 build 面板（编辑器里由 `ToggleBuild` 打开）。
+                self.toggle_panel("build");
             }
             Command::CookScenes => {
-                self.log(LogSource::System, LogLevel::Info, "构建场景包（占位）");
+                self.toggle_panel("build");
             }
             Command::Play => self.play(),
             Command::Pause => {

@@ -12,6 +12,45 @@ use serde_json::{json, Value};
 use crate::{theme, widgets};
 use egui_phosphor::regular as icons;
 
+/// 在系统文件管理器里定位一个项目内资产（Unity 的 `Reveal in Finder` / `Show in Explorer`）。
+///
+/// Windows 的 `explorer /select,<path>` 成功时也可能返回非零退出码，所以这里只检查能否
+/// 启动进程，不检查退出码。
+pub fn reveal_asset(workspace: &Workspace, path: &str) -> Result<(), String> {
+    let root = workspace
+        .project_root
+        .clone()
+        .ok_or_else(|| "no project root; cannot reveal assets".to_string())?;
+    let absolute = root.join(path);
+    if !absolute.exists() {
+        return Err(format!("{} does not exist", absolute.display()));
+    }
+
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut command = std::process::Command::new("explorer");
+        command.arg(format!("/select,{}", absolute.display()));
+        command
+    };
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut command = std::process::Command::new("open");
+        command.arg("-R").arg(&absolute);
+        command
+    };
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    let mut command = {
+        let mut command = std::process::Command::new("xdg-open");
+        command.arg(absolute.parent().unwrap_or(absolute.as_path()));
+        command
+    };
+
+    command
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("cannot open file manager: {error}"))
+}
+
 /// 资产类型 → Phosphor 图标。
 ///
 /// Unity 的 Project 窗口按类型换图标；之前这里直接写 `AssetKind::label()`
@@ -1377,6 +1416,13 @@ pub fn assets(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
                     if ui.button("Copy Path").clicked() {
                         ui.ctx().copy_text(path.clone());
                         state.status = format!("copied {path}");
+                        ui.close();
+                    }
+                    if ui.button("Show in Explorer").clicked() {
+                        state.status = match reveal_asset(workspace, path) {
+                            Ok(()) => format!("revealed {path}"),
+                            Err(error) => error,
+                        };
                         ui.close();
                     }
                     if ui.button("Delete").clicked() {
