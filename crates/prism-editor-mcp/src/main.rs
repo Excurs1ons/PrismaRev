@@ -13,6 +13,7 @@
 //! `.scene.json`、跑反射校验，需要画面时用 `screenshot` 起一个子进程。
 
 mod cdp;
+mod editor_egui;
 mod game;
 mod protocol;
 mod tools;
@@ -37,6 +38,7 @@ fn main() {
     log::info!("project root: {}", root.display());
 
     let host = game::GameHost::new();
+    let editor = editor_egui::EditorHost::new();
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
 
@@ -58,7 +60,7 @@ fn main() {
             continue;
         }
         let id = request.id.clone().unwrap_or(Value::Null);
-        let response = handle(&root, &host, &request, id);
+        let response = handle(&root, &host, &editor, &request, id);
         let encoded = serde_json::to_string(&response).unwrap_or_else(|_| "{}".into());
         if writeln!(stdout, "{encoded}").is_err() {
             break;
@@ -67,7 +69,13 @@ fn main() {
     }
 }
 
-fn handle(root: &std::path::Path, host: &game::GameHost, request: &Request, id: Value) -> Value {
+fn handle(
+    root: &std::path::Path,
+    host: &game::GameHost,
+    editor: &editor_egui::EditorHost,
+    request: &Request,
+    id: Value,
+) -> Value {
     match request.method.as_str() {
         "initialize" => protocol::success(id, protocol::initialize_result()),
         "ping" => protocol::success(id, json!({})),
@@ -75,6 +83,7 @@ fn handle(root: &std::path::Path, host: &game::GameHost, request: &Request, id: 
             let mut defs: Vec<ToolDef> = tools::definitions();
             defs.extend(game::definitions());
             defs.extend(ui::definitions());
+            defs.extend(editor_egui::definitions());
             protocol::success(id, json!({ "tools": defs }))
         }
         "tools/call" => {
@@ -91,6 +100,11 @@ fn handle(root: &std::path::Path, host: &game::GameHost, request: &Request, id: 
                 .unwrap_or_else(|| json!({}));
             let outcome = if ui::definitions().iter().any(|def| def.name == name) {
                 ui::call(&name, &args)
+            } else if editor_egui::definitions()
+                .iter()
+                .any(|def| def.name == name)
+            {
+                editor.call(root, &name, &args)
             } else if game::definitions().iter().any(|def| def.name == name) {
                 host.call(root, &name, &args)
             } else {

@@ -227,8 +227,18 @@ deviating from those conventions is a bug. (`README.md` is the human-facing over
     静止视口零 GPU 工作，只在文档 / 相机 / 选择 / resize / Play 时重渲染。
   - Scene 与 Game 各持有一个引擎实例（相机互不干扰）；文档变化防抖 120ms 后两份
     世界一起整场重载。
-  - 首版只做类型检查（本机 Termux + `--target x86_64-pc-windows-gnu`），**尚未在真实
-    Vulkan 设备上运行**；设计说明见 `docs/editor-egui.md`，用法见 `editor-egui/README.md`。
+  - Scene view 的编辑器相机默认 `CameraClearFlags::Skybox`（Unity 的
+    `SceneViewState.showSkybox`），工具栏 `Skybox (S)` / `G` 可关；引擎 `RenderSettings`
+    默认 `show_grid = false`（游戏里不画网格），编辑器从 `Workspace::show_grid` 出发。
+  - **内置截图 + 本地控制通道**：启动时监听 `127.0.0.1:0` 并把端口写到
+    `<项目根>/target/editor-egui/control.port`（`control.rs`，一行 JSON：`ping` /
+    `status` / `capture` / `quit`）；`crates/prism-editor-mcp` 的 `editor_launch` /
+    `editor_status` / `editor_capture` / `editor_quit` 通过它驱动。整窗截图走 Windows
+    `PrintWindow`（**必须在工作线程**，UI 线程同步调用会自己给自己发消息而死锁）；
+    视口截图走 `copy_offscreen_to_readback` + `readback_pixels`（`PRESENT_SRC_KHR`
+    布局，必须在转采样布局之前）。**不要**再把截图做成环境变量触发。
+  - 设计说明见 `docs/editor-egui.md`，用法见 `editor-egui/README.md`，
+    MCP 工具见 `docs/editor-mcp.md`。
 - `editor-gpui/` — **GPUI 原生编辑器壳（已停止维护，legacy）**（Rust-only，独立 workspace，不挂根成员）：
   菜单/工具栏 + split-tree docking（含浮动窗口、8 方向 resize、磁吸；布局 JSON 与
   `editor/src/dock.ts` v4 同形）+ 层级/检查器（schema 驱动）/资产/日志（窗口化

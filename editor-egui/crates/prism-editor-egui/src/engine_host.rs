@@ -12,7 +12,7 @@
 //! `apply_asset_requests` → `apply_results` 写回 ECS，原本分属两个线程的
 //! 两段在这里串起来。
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -62,6 +62,8 @@ pub struct EngineHost {
     height: u32,
     /// Scene view 的编辑器相机是否用场景天空盒当背景（Unity 默认开）。
     show_skybox: bool,
+    /// 下一次出帧后把离屏图像读回写到这个路径（编辑器截图）。
+    capture_path: Option<PathBuf>,
     simulate: bool,
     paused: bool,
     step_pending: bool,
@@ -103,6 +105,7 @@ impl EngineHost {
             width,
             height,
             show_skybox: true,
+            capture_path: None,
             simulate: false,
             paused: false,
             step_pending: false,
@@ -485,6 +488,14 @@ impl EngineHost {
             return Err(error);
         }
 
+        // 截图要读 `PRESENT_SRC_KHR` 布局的图像，所以必须在转采样布局**之前**做。
+        if let Some(path) = self.capture_path.take() {
+            match self.capture_offscreen(&path) {
+                Ok(path) => log::info!("viewport capture: {}", path.display()),
+                Err(error) => log::warn!("viewport capture failed: {error:#}"),
+            }
+        }
+
         // PRESENT_SRC_KHR → SHADER_READ_ONLY_OPTIMAL：egui 的采样描述符要求
         // 后者，且这一步在同一个队列上完成，不需要额外 semaphore。
         self.renderer.offscreen_present_for_sampling()?;
@@ -493,6 +504,22 @@ impl EngineHost {
             .renderer
             .offscreen_image_view()
             .map(|view| (view, extent)))
+    }
+
+    /// 请求**下一次出帧**时把离屏图像读回并写成 PNG（编辑器截图用）。
+    pub fn request_capture(&mut self, path: PathBuf) {
+        self.capture_path = Some(path);
+    }
+
+    /// 离屏图像 → host-visible 缓冲区 → RGBA8 → PNG。
+    fn capture_offscreen(&mut self, path: &Path) -> anyhow::Result<PathBuf> {
+        let extent = self
+            .renderer
+            .offscreen_extent()
+            .context("no offscreen target to capture")?;
+        self.renderer.copy_offscreen_to_readback()?;
+        let pixels = self.renderer.readback_pixels()?;
+        prism_render::screenshot::save_rgba_png(path, extent.width, extent.height, &pixels, None)
     }
 
     pub fn shutdown(&mut self) {

@@ -164,6 +164,18 @@ pub struct EditorApp {
     theme_signature: String,
     state_path: PathBuf,
     autosave_at: Instant,
+    /// 根窗口的 HWND（Windows 截图用；其它平台为 `None`）。
+    hwnd: Option<isize>,
+    /// 本地控制通道（MCP 驱动截图 / 状态 / 退出）。
+    control: Option<crate::control::ControlServer>,
+    /// 已渲染帧数（状态汇报用）。
+    frame_count: u64,
+    /// 还没到「画面稳定」帧的截图请求：等 `ready_at` 帧再抓，回执延迟发送。
+    pending_captures: Vec<PendingCapture>,
+    /// 上一帧各面板的屏幕矩形（`ui.snapshot` 用）。
+    panel_rects: std::collections::BTreeMap<String, egui::Rect>,
+    /// 上一帧的 dock leaf：(leaf id, 激活 tab, 所有 tab)。
+    dock_leaves: Vec<(String, String, Vec<String>)>,
 }
 
 impl EditorApp {
@@ -273,6 +285,19 @@ impl EditorApp {
             game_view: None,
             exit_signal: cc.exit_signal.clone(),
             state_path: state_path.clone(),
+            hwnd: main_window_hwnd(cc.main_window),
+            control: crate::control::ControlServer::start(
+                state_path.parent().unwrap_or_else(|| Path::new(".")),
+            )
+            .map_err(|error| {
+                log::warn!("control channel disabled: {error:#}");
+                error
+            })
+            .ok(),
+            frame_count: 0,
+            pending_captures: Vec::new(),
+            panel_rects: std::collections::BTreeMap::new(),
+            dock_leaves: Vec::new(),
         };
 
         // 首帧：把当前文档交给引擎，并创建 Scene view。
@@ -477,6 +502,423 @@ impl EditorApp {
     }
 
     /// 直接执行一段操作（菜单里的非 `Command` 项，例如新建目录 / 实例化预制体）。
+    /// 处理本地控制通道的请求（MCP 驱动）。每帧取一次，同一帧内完成。
+    fn poll_control(&mut self, ctx: &egui::Context) {
+        if let Some(control) = self.control.as_ref() {
+            for request in control.drain() {
+                if let Some(response) =
+                    self.handle_command(ctx, &request.command, &request.args, request.reply.clone())
+                {
+                    let _ = request.reply.send(response);
+                }
+            }
+        }
+        // 延迟的截图请求：等到「已经呈现过一帧」再抓（刚启动时窗口还没合成）。
+        let due: Vec<usize> = self
+            .pending_captures
+            .iter()
+            .enumerate()
+            .filter(|(_, pending)| self.frame_count >= pending.ready_at)
+            .map(|(index, _)| index)
+            .collect();
+        for index in due.into_iter().rev() {
+            let pending = self.pending_captures.remove(index);
+            match pending.target {
+                // 整窗截图必须离开 UI 线程：`PrintWindow` 会给自己的窗口发消息。
+                crate::screenshot::CaptureTarget::Window => {
+                    let Some(hwnd) = self.hwnd else {
+                        let _ = pending.reply.send(serde_json::json!({
+                            "ok": false,
+                            "error": "window capture unavailable on this platform",
+                        }));
+                        continue;
+                    };
+                    let path = pending.path.clone();
+                    let size = pending.size;
+                    let reply = pending.reply;
+                    std::thread::Builder::new()
+                        .name("editor-window-capture".to_owned())
+                        .spawn(move || {
+                            let response = match crate::screenshot::save_window_png(hwnd, &path, size)
+                            {
+                                Ok(path) => serde_json::json!({
+                                    "ok": true,
+                                    "path": path.display().to_string(),
+                                    "target": "window",
+                                }),
+                                Err(error) => {
+                                    serde_json::json!({ "ok": false, "error": format!("{error:#}") })
+                                }
+                            };
+                            let _ = reply.send(response);
+                        })
+                        .ok();
+                    self.state.status = format!("screenshot: {}", pending.path.display());
+                }
+                target => {
+                    let response = match self.capture(target, &pending.path, pending.size) {
+                        Ok(path) => serde_json::json!({
+                            "ok": true,
+                            "path": path.display().to_string(),
+                            "target": target.name(),
+                        }),
+                        Err(error) => {
+                            serde_json::json!({ "ok": false, "error": format!("{error:#}") })
+                        }
+                    };
+                    let _ = pending.reply.send(response);
+                }
+            }
+        }
+        if !self.pending_captures.is_empty() {
+            ctx.request_repaint();
+        }
+    }
+
+    /// `ui.click` 的节点分派：走和界面完全相同的代码路径。
+    fn ui_click(&mut self, node: &str) -> Result<String, String> {
+        if let Some(name) = node.strip_prefix("command:") {
+            let command = crate::ui_tree::command_by_name(name)
+                .ok_or_else(|| format!("unknown command '{name}'"))?;
+            self.apply_command(command);
+            return Ok(format!("command {name}"));
+        }
+        if let Some(rest) = node.strip_prefix("doc:") {
+            let index = rest
+                .parse::<usize>()
+                .map_err(|_| format!("bad document index '{rest}'"))?;
+            if index >= self.workspace.docs.len() {
+                return Err(format!("document {index} does not exist"));
+            }
+            self.workspace.set_active(index);
+            return Ok(format!("activate document {index}"));
+        }
+        if let Some(rest) = node.strip_prefix("entity:") {
+            let id = rest
+                .parse::<u32>()
+                .map_err(|_| format!("bad entity id '{rest}'"))?;
+            let index = self
+                .workspace
+                .document()
+                .doc
+                .index_of_id(id)
+                .ok_or_else(|| format!("entity {id} not found"))?;
+            self.workspace.select(index, false);
+            return Ok(format!("select entity {id}"));
+        }
+        if let Some(path) = node.strip_prefix("asset:") {
+            self.state.asset_selection = Some(path.to_owned());
+            return Ok(format!("select asset {path}"));
+        }
+        if let Some(tab) = node.strip_prefix("panel:") {
+            // 面板可能在某个 leaf 里（切到那个 tab），也可能关着（打开它）。
+            let leaf = self
+                .dock_leaves
+                .iter()
+                .find(|(_, _, tabs)| tabs.iter().any(|name| name == tab))
+                .map(|(leaf, _, _)| leaf.clone());
+            match leaf {
+                Some(leaf) => self.workspace.activate_panel(&leaf, tab),
+                None => self.workspace.toggle_panel(tab),
+            }
+            return Ok(format!("open panel {tab}"));
+        }
+        Err(format!(
+            "unsupported node '{node}' (command:… / panel:… / doc:… / entity:… / asset:…)"
+        ))
+    }
+
+    /// `ui.set`：目前支持检查器字段 `field:<entity>:<component>:<path>`。
+    fn ui_set(&mut self, node: &str, value: serde_json::Value) -> Result<String, String> {
+        let rest = node.strip_prefix("field:").ok_or_else(|| {
+            format!("unsupported node '{node}' (field:<entity>:<component>:<path>)")
+        })?;
+        // 组件名本身可以带 `::`（`prism_engine::scene::DirectionalLight`），
+        // 所以 entity 从左边切、path 从右边切（path 里没有冒号）。
+        let (entity, rest) = rest
+            .split_once(':')
+            .ok_or_else(|| "field node needs an entity id".to_string())?;
+        let entity = entity
+            .parse::<u32>()
+            .map_err(|_| "field node needs an entity id".to_string())?;
+        let (component, path) = rest
+            .rsplit_once(':')
+            .ok_or_else(|| "field node needs <component>:<path>".to_string())?;
+        let component = component.to_owned();
+        let path = path.to_owned();
+        // 先确认路径真的存在：`set_field` 找不到路径时是静默返回的，
+        // agent 会误以为写成功。
+        let current = self
+            .workspace
+            .document()
+            .doc
+            .index_of_id(entity)
+            .and_then(|index| {
+                let doc = &self.workspace.document().doc;
+                let entity = doc.entities.get(index)?;
+                if component == "Transform" {
+                    Some(serde_json::to_value(&entity.transform).unwrap_or_default())
+                } else {
+                    entity.components.get(&component).cloned()
+                }
+            })
+            .ok_or_else(|| format!("entity {entity} 没有组件 '{component}'"))?;
+        if prism_editor_core::schema::get_at(&current, &path).is_none() {
+            let mut available = Vec::new();
+            crate::ui_tree::flatten_paths(&current, "", &mut |path, _| {
+                available.push(path.to_string())
+            });
+            available.truncate(24);
+            return Err(format!(
+                "'{component}' 里没有字段 '{path}'；可用：{}",
+                available.join(", ")
+            ));
+        }
+        if component == "Transform" {
+            // Transform 不在 `components` 里（是实体的结构字段），要走专用 setter
+            // 才能进撤销栈；`Workspace::set_field` 对它是静默 no-op。
+            let (field, axis) = split_axis(&path).ok_or_else(|| {
+                format!("Transform 只支持 position/rotation/scale 的 [轴] 写法，收到 '{path}'")
+            })?;
+            let axes: Vec<(usize, f64)> = match value.as_array() {
+                Some(items) => items
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(axis, item)| item.as_f64().map(|value| (axis, value)))
+                    .collect(),
+                None => {
+                    let scalar = value
+                        .as_f64()
+                        .ok_or_else(|| format!("Transform.{field}[{axis}] 需要数字"))?;
+                    vec![(axis, scalar)]
+                }
+            };
+            for (axis, value) in axes {
+                self.workspace
+                    .set_transform_axis(entity, field, axis, value as f32);
+            }
+            return Ok(format!("set Transform.{path}"));
+        }
+        self.workspace.set_field(entity, &component, &path, value);
+        Ok(format!("set {component}.{path}"))
+    }
+
+    /// 请求退出。
+    ///
+    /// `egui-ash` 的 `ExitSignal` 并没有接进事件循环（`run.rs` 里轮询它的那段是注释掉的），
+    /// 唯一生效的路径是给根视口发 `Close`：winit 的 `CloseRequested` →
+    /// `event_loop.exit()`。
+    fn request_quit(&self, ctx: &egui::Context) {
+        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+    }
+
+    /// 一条控制命令 → 回执 JSON（`None` = 稍后由 `pending_captures` 回复）。
+    fn handle_command(
+        &mut self,
+        ctx: &egui::Context,
+        command: &str,
+        args: &serde_json::Value,
+        reply: std::sync::mpsc::Sender<serde_json::Value>,
+    ) -> Option<serde_json::Value> {
+        use serde_json::json;
+        let direct = match command {
+            "ping" => json!({
+                "ok": true,
+                "pid": std::process::id(),
+                "frames": self.frame_count,
+                "scene": self.workspace.document().path.clone(),
+            }),
+            "status" => json!({
+                "ok": true,
+                "pid": std::process::id(),
+                "frames": self.frame_count,
+                "playing": self.playing,
+                "paused": self.paused,
+                "scene": self.workspace.document().path.clone(),
+                "dirty": self.workspace.document().dirty,
+                "project_root": self
+                    .project_root
+                    .as_ref()
+                    .map(|path| path.display().to_string()),
+                "selection": self.workspace.selection.clone(),
+                "status": self.state.status.clone(),
+            }),
+            "capture" => {
+                let target = args
+                    .get("target")
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(crate::screenshot::CaptureTarget::parse)
+                    .unwrap_or(crate::screenshot::CaptureTarget::Window);
+                let size = args
+                    .get("size")
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(crate::screenshot::parse_size);
+                let path = match args.get("path").and_then(serde_json::Value::as_str) {
+                    Some(value) => std::path::PathBuf::from(value),
+                    None => crate::screenshot::default_path(&self.capture_dir(), target),
+                };
+                // **永远延后一帧**：整窗截图走 `PrintWindow`，它对目标窗口
+                // `SendMessage`，在 UI 线程里同步调用会自己等自己（死锁）。
+                // 前几帧窗口还没合成，PS 抓下来是全白，所以至少等到 STABLE_FRAME。
+                const STABLE_FRAME: u64 = 3;
+                let ready_at = (self.frame_count + 1).max(STABLE_FRAME);
+                self.pending_captures.push(PendingCapture {
+                    target,
+                    path,
+                    size,
+                    ready_at,
+                    reply,
+                });
+                ctx.request_repaint();
+                return None;
+            }
+            "ui.snapshot" | "ui_snapshot" => {
+                let logs: Vec<String> = self
+                    .workspace
+                    .log
+                    .visible_lines()
+                    .iter()
+                    .map(|line| format!("[{:?}] {}", line.level, line.text))
+                    .collect();
+                let input = crate::ui_tree::SnapshotInput {
+                    workspace: &self.workspace,
+                    playing: self.playing,
+                    paused: self.paused,
+                    status: &self.state.status,
+                    frames: self.frame_count,
+                    rects: &self.panel_rects,
+                    leaves: &self.dock_leaves,
+                    logs: &logs,
+                };
+                crate::ui_tree::snapshot(&input)
+            }
+            "ui.click" | "ui_click" => {
+                let node = args
+                    .get("node")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default();
+                match self.ui_click(node) {
+                    Ok(message) => json!({ "ok": true, "node": node, "action": message }),
+                    Err(error) => json!({ "ok": false, "node": node, "error": error }),
+                }
+            }
+            "ui.set" | "ui_set" => {
+                let node = args
+                    .get("node")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default();
+                let value = args
+                    .get("value")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null);
+                match self.ui_set(node, value) {
+                    Ok(message) => json!({ "ok": true, "node": node, "action": message }),
+                    Err(error) => json!({ "ok": false, "node": node, "error": error }),
+                }
+            }
+            "quit" => {
+                self.request_quit(ctx);
+                json!({ "ok": true })
+            }
+            other => json!({ "ok": false, "error": format!("unknown cmd: {other}") }),
+        };
+        Some(direct)
+    }
+
+    /// `target/editor-egui/captures/`（state 文件所在目录下）。
+    fn capture_dir(&self) -> PathBuf {
+        self.state_path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."))
+    }
+
+    /// 统一的截图入口：`window` / `scene` / `game`。
+    fn capture(
+        &mut self,
+        target: crate::screenshot::CaptureTarget,
+        path: &Path,
+        size: Option<[u32; 2]>,
+    ) -> anyhow::Result<PathBuf> {
+        match target {
+            crate::screenshot::CaptureTarget::Window => {
+                let hwnd = self.hwnd.ok_or_else(|| {
+                    anyhow::anyhow!("window capture unavailable on this platform")
+                })?;
+                let path = crate::screenshot::save_window_png(hwnd, path, size)?;
+                self.state.status = format!("screenshot: {}", path.display());
+                self.workspace.log(
+                    prism_editor_core::LogSource::Editor,
+                    prism_editor_core::LogLevel::Info,
+                    format!("screenshot saved: {}", path.display()),
+                );
+                Ok(path)
+            }
+            crate::screenshot::CaptureTarget::Scene | crate::screenshot::CaptureTarget::Game => {
+                let bridge = ImageBridge {
+                    registry: self.bridge.registry.clone(),
+                    sampler: self.bridge.sampler,
+                };
+                let Some(view) = self.view_for(target) else {
+                    anyhow::bail!("view not available (GPU init failed?)");
+                };
+                view.host.request_capture(path.to_path_buf());
+                view.mark_dirty();
+                let render_error = view.render_frame(&bridge);
+                if view.error.is_some() {
+                    anyhow::bail!(
+                        "view render failed: {}",
+                        view.error.clone().unwrap_or_default()
+                    );
+                }
+                let _ = render_error;
+                if !path.exists() {
+                    anyhow::bail!("viewport capture wrote nothing (no frame?)");
+                }
+                self.state.status = format!("screenshot: {}", path.display());
+                self.workspace.log(
+                    prism_editor_core::LogSource::Editor,
+                    prism_editor_core::LogLevel::Info,
+                    format!("viewport screenshot: {}", path.display()),
+                );
+                Ok(path.to_path_buf())
+            }
+        }
+    }
+
+    fn view_for(&mut self, target: crate::screenshot::CaptureTarget) -> Option<&mut ViewportState> {
+        let kind = match target {
+            crate::screenshot::CaptureTarget::Scene => ViewKind::Scene,
+            _ => ViewKind::Game,
+        };
+        if !self.ensure_view(kind) {
+            return None;
+        }
+        match kind {
+            ViewKind::Scene => self.scene_view.as_mut(),
+            ViewKind::Game => self.game_view.as_mut(),
+        }
+    }
+
+    /// 菜单命令：抓整窗到 `<state 目录>/captures/`。
+    ///
+    /// 走和 MCP 一样的延后 + 工作线程路径（`PrintWindow` 不能在 UI 线程同步调用）。
+    fn capture_window_now(&mut self) {
+        let path = crate::screenshot::default_path(
+            &self.capture_dir(),
+            crate::screenshot::CaptureTarget::Window,
+        );
+        let (reply, _unused) = std::sync::mpsc::channel();
+        self.pending_captures.push(PendingCapture {
+            target: crate::screenshot::CaptureTarget::Window,
+            path: path.clone(),
+            size: None,
+            ready_at: self.frame_count + 1,
+            reply,
+        });
+        self.state.status = format!("screenshot: {}", path.display());
+    }
+
     fn menu_do(&mut self, ui: &mut egui::Ui, label: &str, action: impl FnOnce(&mut Self)) {
         if ui.button(label).clicked() {
             action(self);
@@ -836,9 +1278,8 @@ impl EditorApp {
                     ui.close();
                 }
                 ui.separator();
-                self.menu_do(ui, "Exit", |app| {
-                    app.exit_signal.send(std::process::ExitCode::SUCCESS)
-                });
+                let quit_ctx = ui.ctx().clone();
+                self.menu_do(ui, "Exit", |app| app.request_quit(&quit_ctx));
             });
 
             // ---- Edit ----
@@ -1136,6 +1577,8 @@ impl EditorApp {
                         self.menu_item(ui, label, "", command);
                     }
                 });
+                ui.separator();
+                self.menu_do(ui, "Capture Window", |app| app.capture_window_now());
                 ui.menu_button("Layouts", |ui| {
                     for (id, label) in prism_editor_core::workspace::layout_preset_ids() {
                         let active = self.workspace.layout_preset == id;
@@ -1547,6 +1990,9 @@ impl EditorApp {
                 .layout(Layout::top_down(Align::Min)),
         );
         child.set_clip_rect(rect);
+        self.dock_leaves.retain(|(id, _, _)| id != leaf_id);
+        self.dock_leaves
+            .push((leaf_id.to_owned(), active.to_owned(), tabs.to_vec()));
 
         // 面板底 + 1px 边框（Web `.dock-leaf` 是 panel + 1px border）。
         let colors = self.workspace.colors();
@@ -1700,6 +2146,7 @@ impl EditorApp {
     }
 
     fn panel_body(&mut self, ui: &mut egui::Ui, tab: &str, rect: Rect) {
+        self.panel_rects.insert(tab.to_owned(), rect);
         // 调试开关：完全跳过引擎 / 用户纹理注册，用来区分「UI 自身的渲染问题」与
         // 「引擎离屏图像注册进来的问题」（无窗口/软件 Vulkan 时排查用）。
         let no_viewport = std::env::var("PRISMREV_EDITOR_NO_VIEWPORT").is_ok();
@@ -2295,6 +2742,8 @@ impl EditorApp {
 
 impl App for EditorApp {
     fn ui(&mut self, ctx: &egui::Context) {
+        self.frame_count += 1;
+        self.poll_control(ctx);
         self.drain_engine_logs();
         self.poll_build();
         self.sync_document();
@@ -2514,5 +2963,46 @@ mod tests {
         assert_eq!(dock_zone(rect, egui::pos2(300.0, 110.0)), DockZone::Top);
         assert_eq!(dock_zone(rect, egui::pos2(300.0, 390.0)), DockZone::Bottom);
         assert_eq!(dock_zone(rect, egui::pos2(300.0, 250.0)), DockZone::Center);
+    }
+}
+
+/// `position[1]` → (`position`, 1)；没有下标就是 (`position`, 0)。
+fn split_axis(path: &str) -> Option<(&str, usize)> {
+    match path.split_once('[') {
+        Some((field, rest)) => {
+            let axis = rest.trim_end_matches(']').parse::<usize>().ok()?;
+            Some((field, axis))
+        }
+        None => match path {
+            "position" | "rotation" | "scale" => Some((path, 0)),
+            _ => None,
+        },
+    }
+}
+
+/// 还没到「画面稳定」帧的截图请求。
+struct PendingCapture {
+    target: crate::screenshot::CaptureTarget,
+    path: PathBuf,
+    size: Option<[u32; 2]>,
+    ready_at: u64,
+    reply: std::sync::mpsc::Sender<serde_json::Value>,
+}
+
+/// 根窗口的 `HWND`（只有 Windows 有意义，其它平台返回 `None`）。
+fn main_window_hwnd(window: &egui_ash::winit::window::Window) -> Option<isize> {
+    #[cfg(target_os = "windows")]
+    {
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        let handle = window.window_handle().ok()?;
+        match handle.as_raw() {
+            RawWindowHandle::Win32(win32) => Some(win32.hwnd.get()),
+            _ => None,
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = window;
+        None
     }
 }
