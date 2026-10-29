@@ -12,12 +12,10 @@
 //! 设计边界：这个进程**不链接** engine / render，也不开 Vulkan —— 它只读写
 //! `.scene.json`、跑反射校验，需要画面时用 `screenshot` 起一个子进程。
 
-mod cdp;
 mod editor_egui;
 mod game;
 mod protocol;
 mod tools;
-mod ui;
 
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
@@ -82,7 +80,6 @@ fn handle(
         "tools/list" => {
             let mut defs: Vec<ToolDef> = tools::definitions();
             defs.extend(game::definitions());
-            defs.extend(ui::definitions());
             defs.extend(editor_egui::definitions());
             protocol::success(id, json!({ "tools": defs }))
         }
@@ -98,9 +95,7 @@ fn handle(
                 .get("arguments")
                 .cloned()
                 .unwrap_or_else(|| json!({}));
-            let outcome = if ui::definitions().iter().any(|def| def.name == name) {
-                ui::call(&name, &args)
-            } else if editor_egui::definitions()
+            let outcome = if editor_egui::definitions()
                 .iter()
                 .any(|def| def.name == name)
             {
