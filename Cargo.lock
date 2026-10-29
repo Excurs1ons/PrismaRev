@@ -2635,6 +2635,7 @@ dependencies = [
  "env_logger",
  "flume",
  "glam 0.33.2",
+ "image",
  "log",
  "ndk",
  "prism-asset",
