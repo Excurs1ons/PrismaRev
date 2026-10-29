@@ -93,10 +93,10 @@ instance / device 并返回 `AshRenderState`，因此可以做到 Unity 的模�
 
 | 菜单 | 二级 / 三级 |
 |---|---|
-| File | New Scene / New Scene From Template ▸ / New Prefab / Open / Save / Save As / Save Project / Reload / Build Settings / Build Scene Pack / Cook Active Scene / Build Player / Exit |
-| Edit | Undo / Redo / Cut / Copy / Paste / Duplicate / Delete / Select All / Deselect All / Paste Component / Play / Pause / Step / Project Settings / Preferences / Theme |
-| Assets | Create ▸ (Scene / Prefab / Folder…) / Open / Show in Explorer / Copy Path / Duplicate / Delete / Instantiate In Scene / Refresh |
-| GameObject | Create Empty / Create Empty Child / Create Other ▸ (3D Object ▸ Cube… / Light ▸ / Camera ▸) / Move To View / Align View to Selected / Snap to Ground |
+| File | New Scene / New Scene From Template ▸ / New Prefab / Open / Recent Scenes ▸ / Save / Save As / Save Project / Reload / Build Settings / Build Scene Pack / Cook Active Scene / Build Player / Build And Run / Clean Build / Exit |
+| Edit | Undo / Redo / Cut / Copy / Paste / Duplicate / Delete / Select All / Deselect All / Invert Selection / Select Children / Select Prefab Root / Next·Previous Selection / Copy·Paste Transform ▸ / Paste Component / Play / Pause / Step / Project Settings / Preferences / Theme |
+| Assets | Create ▸ (Scene / Prefab / Folder…) / Open / Show in Explorer / Copy Path / Duplicate / Delete / Instantiate In Scene / Find References In Scene / Find References In Project / Refresh |
+| GameObject | Create Empty / Create Empty Child / Create Empty Parent / Create Other ▸ (3D Object ▸ Cube… / Light ▸ / Camera ▸) / Move To View / Align View to Selected / Snap to Ground |
 | Component | schema 分类 ▸ 组件列表 |
 | Window | General ▸ 面板开关 / Layouts ▸ 预设 / Reset Layout |
 | Help | Shortcuts / Editor Guide / About |

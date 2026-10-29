@@ -22,6 +22,10 @@ pub enum BuildKind {
     Cook(PathBuf),
     /// `cargo build` 用户项目（`projects/<p>/Cargo.toml`，存在才跑）。
     Player,
+    /// `cargo run` 用户项目（Unity 的 Build And Run）。
+    PlayerRun,
+    /// `cargo clean`（Unity 的 Clean Build）。
+    Clean,
 }
 
 impl BuildKind {
@@ -30,6 +34,8 @@ impl BuildKind {
             BuildKind::ScenePack => "build-scenes".to_string(),
             BuildKind::Cook(path) => format!("cook {}", path.display()),
             BuildKind::Player => "cargo build".to_string(),
+            BuildKind::PlayerRun => "build and run".to_string(),
+            BuildKind::Clean => "cargo clean".to_string(),
         }
     }
 }
@@ -54,6 +60,18 @@ impl BuildJob {
                 BuildKind::Cook(path) => {
                     args.push("cook".into());
                     args.push(path.display().to_string());
+                }
+                BuildKind::Clean => {
+                    args = vec!["clean".into()];
+                }
+                BuildKind::PlayerRun => {
+                    args = vec![
+                        "run".into(),
+                        "--manifest-path".into(),
+                        root.join("projects/prisma/Cargo.toml")
+                            .display()
+                            .to_string(),
+                    ];
                 }
                 BuildKind::Player => {
                     // 玩家二进制是独立 workspace：直接 cargo build 它的 manifest。

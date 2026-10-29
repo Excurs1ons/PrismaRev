@@ -402,6 +402,165 @@ impl EditorApp {
         self.state.status = "project saved".to_string();
     }
 
+    fn create_empty_parent(&mut self) {
+        let parents: Vec<usize> = self.workspace.selection.clone();
+        if parents.is_empty() {
+            self.create_empty_child();
+            return;
+        }
+        let before = self.workspace.document().doc.entities.len();
+        self.workspace.add_entity("");
+        let created = self
+            .workspace
+            .document()
+            .doc
+            .entities
+            .len()
+            .saturating_sub(1);
+        if created >= before {
+            for index in parents {
+                self.workspace.reparent(index, Some(created), None);
+            }
+            self.workspace.select(created, false);
+        }
+    }
+
+    fn invert_selection(&mut self) {
+        let total = self.workspace.document().doc.entities.len();
+        let inverted: Vec<usize> = (0..total)
+            .filter(|index| !self.workspace.selection.contains(index))
+            .collect();
+        self.workspace.select_many(&inverted, false);
+    }
+
+    fn select_children_of_selection(&mut self) {
+        let indices = self.workspace.selection.clone();
+        let mut children = Vec::new();
+        for index in indices {
+            children.extend(self.workspace.document().doc.descendants(index));
+        }
+        if !children.is_empty() {
+            self.workspace.select_many(&children, false);
+        }
+    }
+
+    fn select_prefab_root(&mut self) {
+        let Some(mut index) = self.workspace.primary_selection() else {
+            return;
+        };
+        let doc = &self.workspace.document().doc;
+        let Some(link) = doc.entities[index]
+            .prefab_link()
+            .map(|link| link.to_string())
+        else {
+            self.state.status = "selection is not a prefab instance".to_string();
+            return;
+        };
+        while let Some(parent) = doc.entities[index].parent {
+            let Some(parent_index) = doc.index_of_id(parent) else {
+                break;
+            };
+            if doc.entities[parent_index].prefab_link() != Some(link.as_str()) {
+                break;
+            }
+            index = parent_index;
+        }
+        self.workspace.select(index, false);
+    }
+
+    fn cycle_selection(&mut self, delta: i32) {
+        let total = self.workspace.document().doc.entities.len();
+        if total == 0 {
+            return;
+        }
+        let current = self.workspace.primary_selection().unwrap_or(0) as i64;
+        let next = ((current + delta as i64).rem_euclid(total as i64)) as usize;
+        self.workspace.select(next, false);
+    }
+
+    fn copy_transform(&mut self, field: &str) {
+        let Some(index) = self.workspace.primary_selection() else {
+            return;
+        };
+        let transform = self.workspace.document().doc.entities[index].transform;
+        let values = match field {
+            "position" => transform.position.to_vec(),
+            "rotation" => transform.rotation.to_vec(),
+            "scale" => transform.scale.to_vec(),
+            _ => return,
+        };
+        self.state.transform_clip = Some((field.to_string(), values));
+        self.state.status = format!("copied {field}");
+    }
+
+    fn paste_transform(&mut self, field: &str) {
+        let Some((clipboard_field, values)) = self.state.transform_clip.clone() else {
+            self.state.status = "transform clipboard is empty".to_string();
+            return;
+        };
+        if clipboard_field != field {
+            self.state.status =
+                format!("clipboard holds {clipboard_field}, not {field} — copy it first");
+            return;
+        }
+        let ids: Vec<u32> = self
+            .workspace
+            .selection
+            .iter()
+            .filter_map(|index| self.workspace.document().doc.id_of_index(*index))
+            .collect();
+        if ids.is_empty() {
+            return;
+        }
+        for entity in &ids {
+            for (axis, value) in values.iter().enumerate() {
+                self.workspace
+                    .set_transform_axis(*entity, field, axis, *value);
+            }
+        }
+        self.state.status = format!("pasted {field} to {} entities", ids.len());
+    }
+
+    fn find_references(&mut self, path: &str, project_wide: bool) {
+        let mut hits = Vec::new();
+        let docs = if project_wide {
+            self.workspace.docs.len()
+        } else {
+            self.workspace.active_index() + 1
+        };
+        let start = if project_wide {
+            0
+        } else {
+            self.workspace.active_index()
+        };
+        for index in start..docs {
+            let Some(doc) = self.workspace.docs.get(index) else {
+                continue;
+            };
+            for (entity, component, field) in doc.doc.field_references(path) {
+                let name = doc
+                    .doc
+                    .entities
+                    .get(entity)
+                    .map(|entity| entity.display_name())
+                    .unwrap_or_else(|| format!("#{entity}"));
+                hits.push(format!("{}: {name} · {component}.{field}", doc.title()));
+            }
+        }
+        if hits.is_empty() {
+            self.state.status = format!("no references to {path}");
+        } else {
+            self.state.status = format!("{} reference(s) to {path}", hits.len());
+        }
+        for hit in hits {
+            self.workspace.log(
+                prism_editor_core::LogSource::Editor,
+                prism_editor_core::LogLevel::Info,
+                hit,
+            );
+        }
+    }
+
     fn create_empty_child(&mut self) {
         let parent = self.workspace.primary_selection();
         let before = self.workspace.document().doc.entities.len();
@@ -480,6 +639,24 @@ impl EditorApp {
                 self.menu_item(ui, "New Prefab", "", Command::NewPrefab);
                 ui.separator();
                 self.menu_item(ui, "Open Scene…", "Ctrl+O", Command::OpenDocument);
+                let docs: Vec<(usize, String, bool)> = self
+                    .workspace
+                    .docs
+                    .iter()
+                    .enumerate()
+                    .map(|(index, doc)| {
+                        (index, doc.title(), index == self.workspace.active_index())
+                    })
+                    .collect();
+                ui.menu_button("Recent Scenes", |ui| {
+                    for (index, title, active) in &docs {
+                        if ui.selectable_label(*active, title).clicked() {
+                            self.workspace.set_active(*index);
+                            self.doc_hash = 0;
+                            ui.close();
+                        }
+                    }
+                });
                 self.menu_item(ui, "Save", "Ctrl+S", Command::Save);
                 self.menu_item(ui, "Save As…", "Ctrl+Shift+S", Command::SaveAs);
                 self.menu_do(ui, "Save Project", |app| app.save_all_documents());
@@ -513,6 +690,23 @@ impl EditorApp {
                     self.start_build(crate::build::BuildKind::Player);
                     ui.close();
                 }
+                if ui
+                    .add_enabled(
+                        !self.build_job_running(),
+                        egui::Button::new("Build And Run  (Ctrl+B)"),
+                    )
+                    .clicked()
+                {
+                    self.start_build(crate::build::BuildKind::PlayerRun);
+                    ui.close();
+                }
+                if ui
+                    .add_enabled(!self.build_job_running(), egui::Button::new("Clean Build"))
+                    .clicked()
+                {
+                    self.start_build(crate::build::BuildKind::Clean);
+                    ui.close();
+                }
                 ui.separator();
                 self.menu_do(ui, "Exit", |app| {
                     app.exit_signal.send(std::process::ExitCode::SUCCESS)
@@ -532,6 +726,31 @@ impl EditorApp {
                 ui.separator();
                 self.menu_item(ui, "Select All", "Ctrl+A", Command::SelectAll);
                 self.menu_do(ui, "Deselect All", |app| app.workspace.clear_selection());
+                self.menu_do(ui, "Invert Selection", |app| app.invert_selection());
+                self.menu_do(ui, "Select Children", |app| {
+                    app.select_children_of_selection()
+                });
+                self.menu_do(ui, "Select Prefab Root", |app| app.select_prefab_root());
+                ui.separator();
+                self.menu_do(ui, "Next Selection", |app| app.cycle_selection(1));
+                self.menu_do(ui, "Previous Selection", |app| app.cycle_selection(-1));
+                ui.separator();
+                ui.menu_button("Copy Transform", |ui| {
+                    for field in ["position", "rotation", "scale"] {
+                        if ui.button(field).clicked() {
+                            self.copy_transform(field);
+                            ui.close();
+                        }
+                    }
+                });
+                ui.menu_button("Paste Transform", |ui| {
+                    for field in ["position", "rotation", "scale"] {
+                        if ui.button(field).clicked() {
+                            self.paste_transform(field);
+                            ui.close();
+                        }
+                    }
+                });
                 ui.separator();
                 self.menu_item(
                     ui,
@@ -621,6 +840,17 @@ impl EditorApp {
                     ui.add_enabled(false, egui::Button::new("Delete"));
                 }
                 ui.separator();
+                self.menu_do(ui, "Find References In Scene", |app| {
+                    if let Some(path) = app.state.asset_selection.clone() {
+                        app.find_references(&path, false);
+                    }
+                });
+                self.menu_do(ui, "Find References In Project", |app| {
+                    if let Some(path) = app.state.asset_selection.clone() {
+                        app.find_references(&path, true);
+                    }
+                });
+                ui.separator();
                 self.menu_do(ui, "Refresh", |app| {
                     app.workspace.refresh_project_files();
                     app.state.status = "assets refreshed".to_string();
@@ -631,6 +861,7 @@ impl EditorApp {
             ui.menu_button("GameObject", |ui| {
                 self.menu_do(ui, "Create Empty", |app| app.workspace.add_entity(""));
                 self.menu_do(ui, "Create Empty Child", |app| app.create_empty_child());
+                self.menu_do(ui, "Create Empty Parent", |app| app.create_empty_parent());
                 ui.separator();
                 ui.menu_button("Create Other", |ui| {
                     ui.menu_button("3D Object", |ui| {
@@ -1463,6 +1694,25 @@ impl EditorApp {
                 let mut settings = self.render_settings.clone();
                 settings.show_grid = !settings.show_grid;
                 self.apply_render_settings(settings);
+            }
+            // Ctrl+B = Build And Run，Ctrl+I = 反选（Unity 的默认绑定）。
+            if ctx.input_mut(|input| {
+                input.consume_shortcut(&egui::KeyboardShortcut::new(
+                    egui::Modifiers::CTRL,
+                    egui::Key::B,
+                ))
+            }) {
+                if !self.build_job_running() {
+                    self.start_build(crate::build::BuildKind::PlayerRun);
+                }
+            }
+            if ctx.input_mut(|input| {
+                input.consume_shortcut(&egui::KeyboardShortcut::new(
+                    egui::Modifiers::CTRL,
+                    egui::Key::I,
+                ))
+            }) {
+                self.invert_selection();
             }
         }
 

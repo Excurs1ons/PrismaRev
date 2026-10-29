@@ -40,6 +40,8 @@ pub struct UiState {
     pub tab_drag: Option<(String, String)>,
     /// 拖拽落点：(目标 leaf id, 区域, 比例)。
     pub tab_drop: Option<(String, prism_editor_core::dock::DockZone, f32)>,
+    /// 变换剪贴板：(字段, 分量值) —— Unity 的 Copy / Paste Transform。
+    pub transform_clip: Option<(String, Vec<f32>)>,
     /// 层级拖拽：正在拖的实体下标 + 悬停目标。
     pub dragging: Option<usize>,
     pub drop_target: Option<(usize, DropZone)>,
@@ -278,6 +280,20 @@ pub fn hierarchy(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
                     }
                     if ui.button("Delete").clicked() {
                         action = Some(TreeAction::Delete(index));
+                        ui.close();
+                    }
+                    if ui.button("Select Children").clicked() {
+                        let children = workspace.document().doc.descendants(index);
+                        workspace.select_many(&children, false);
+                        ui.close();
+                    }
+                    if ui.button("Set as First Sibling").clicked() {
+                        let _ = workspace.document_mut().doc.move_entity(index, 0);
+                        ui.close();
+                    }
+                    if ui.button("Set as Last Sibling").clicked() {
+                        let last = workspace.document().doc.entities.len().saturating_sub(1);
+                        let _ = workspace.document_mut().doc.move_entity(index, last);
                         ui.close();
                     }
                     if ui.button("Move to Root").clicked() {
