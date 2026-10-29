@@ -1225,7 +1225,12 @@ impl EditorApp {
             "history" => panels::history(ui, &mut self.workspace),
             "renderGraph" => {
                 let mut settings = self.render_settings.clone();
-                if panels::render_graph(ui, self.render_report.as_deref(), &mut settings) {
+                if panels::render_graph(
+                    ui,
+                    self.render_report.as_deref(),
+                    &mut settings,
+                    &mut self.state.viewport_scale,
+                ) {
                     self.apply_render_settings(settings);
                 }
             }
@@ -1295,7 +1300,8 @@ impl EditorApp {
             };
             if let Some(view) = view {
                 let rerender = playing && kind == ViewKind::Game;
-                let response = view.show(ui, workspace, bridge, rerender);
+                let response =
+                    view.show(ui, workspace, bridge, rerender, self.state.viewport_scale);
                 document_changed = response.document_changed;
             }
         }

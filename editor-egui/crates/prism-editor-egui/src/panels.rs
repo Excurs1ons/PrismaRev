@@ -17,6 +17,8 @@ pub struct UiState {
     pub inspector_search: String,
     pub hierarchy_search: String,
     pub asset_search: String,
+    /// 视口渲染分辨率倍率（高 DPI 屏上可降到 0.5 省 GPU）。
+    pub viewport_scale: f32,
     pub log_levels: Vec<LogLevel>,
     pub log_sources: Vec<LogSource>,
     pub log_search: String,
@@ -84,6 +86,7 @@ impl UiState {
     pub fn new() -> Self {
         Self {
             log_autoscroll: true,
+            viewport_scale: 1.0,
             asset_folder: "assets".to_string(),
             asset_history: vec!["assets".to_string()],
             asset_history_pos: 0,
@@ -298,6 +301,16 @@ pub fn hierarchy(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
                 let parent_of_to = workspace.document().doc.entities[to]
                     .parent
                     .and_then(|id| workspace.document().doc.index_of_id(id));
+                // 拖的是多选中的一员时，整组（顶层根）一起改父级。
+                let group = workspace.selection.len() > 1 && workspace.selection.contains(&from);
+                if group && zone == DropZone::Child {
+                    let moved = workspace.reparent_selection(Some(to));
+                    if moved > 0 {
+                        state.status = format!("reparented {moved} entities");
+                    }
+                    state.drop_target = None;
+                    return;
+                }
                 match zone {
                     DropZone::Child => workspace.reparent(from, Some(to), None),
                     DropZone::Before => {
@@ -1069,6 +1082,7 @@ pub fn render_graph(
     ui: &mut Ui,
     report: Option<&str>,
     settings: &mut prism_engine::render_settings::RenderSettings,
+    viewport_scale: &mut f32,
 ) -> bool {
     let mut changed = false;
     ui.heading("Render Settings");
@@ -1127,6 +1141,12 @@ pub fn render_graph(
             ui.label("Grid");
             changed |= ui
                 .checkbox(&mut settings.show_grid, "Show ground grid")
+                .changed();
+            ui.end_row();
+
+            ui.label("Viewport res");
+            changed |= ui
+                .add(egui::Slider::new(viewport_scale, 0.5..=1.5).suffix("×"))
                 .changed();
             ui.end_row();
         });

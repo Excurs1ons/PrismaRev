@@ -172,12 +172,16 @@ impl ViewportState {
         workspace: &mut Workspace,
         bridge: &ImageBridge,
         playing: bool,
+        scale: f32,
     ) -> ViewportResponse {
         let rect = ui.available_rect_before_wrap();
         let ppp = ui.ctx().pixels_per_point();
+        // `scale` 是「渲染分辨率倍率」：高 DPI 屏上可以降到 0.5–1.0 省 GPU，
+        // 只影响离屏目标大小，不影响 UI 布局的 points 尺寸。
+        let scale = scale.clamp(0.25, 2.0);
         self.extent = (
-            ((rect.width() * ppp).round() as u32).clamp(1, 4096),
-            ((rect.height() * ppp).round() as u32).clamp(1, 4096),
+            ((rect.width() * ppp * scale).round() as u32).clamp(1, 4096),
+            ((rect.height() * ppp * scale).round() as u32).clamp(1, 4096),
         );
         // 面板尺寸变化（splitter / 窗口 resize）必须重建离屏目标，否则图像会被拉伸。
         let current = self.host.renderer().extent();
@@ -193,6 +197,70 @@ impl ViewportState {
         // 2) 采样纹理（同一设备、同一命令缓冲区 → 零拷贝）。
         let response = ui.allocate_rect(rect, Sense::click_and_drag());
         let painter = ui.painter_at(rect);
+
+        // Project → 场景视口：预制体落到地面（y = 0）生成实例，场景文件则打开文档。
+        if response
+            .dnd_hover_payload::<crate::widgets::AssetDrag>()
+            .is_some()
+        {
+            painter.rect_stroke(
+                rect.shrink(2.0),
+                egui::CornerRadius::ZERO,
+                egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(90, 170, 120)),
+                egui::StrokeKind::Inside,
+            );
+        }
+        if let Some(payload) = response.dnd_release_payload::<crate::widgets::AssetDrag>() {
+            let path = payload.path.clone();
+            let drop_local = response
+                .interact_pointer_pos()
+                .map(|pos| (pos.x - rect.min.x, pos.y - rect.min.y));
+            if path.ends_with(".prefab.json") {
+                match workspace.instantiate_prefab_asset(&path, None) {
+                    Ok(_) => {
+                        if let Some(local) = drop_local {
+                            let frame = vm::camera_frame(&workspace.camera);
+                            let (origin, dir) = vm::ray_from_screen(
+                                local.0,
+                                local.1,
+                                &frame,
+                                rect.width(),
+                                rect.height(),
+                            );
+                            if dir[1].abs() > 1e-4 {
+                                let t = -origin[1] / dir[1];
+                                if t.is_finite() && t > 0.0 {
+                                    let point =
+                                        [origin[0] + dir[0] * t, 0.0, origin[2] + dir[2] * t];
+                                    if let Some(index) = workspace.primary_selection() {
+                                        let entity = workspace
+                                            .document()
+                                            .doc
+                                            .id_of_index(index)
+                                            .unwrap_or(0);
+                                        let current =
+                                            vm::world_position(&workspace.document().doc, index);
+                                        let delta = [
+                                            point[0] - current[0],
+                                            point[1] - current[1],
+                                            point[2] - current[2],
+                                        ];
+                                        workspace.translate_entity_world(entity, delta);
+                                    }
+                                }
+                            }
+                        }
+                        self.dirty = true;
+                    }
+                    Err(error) => self.error = Some(format!("instantiate failed: {error}")),
+                }
+            } else if path.ends_with(".scene.json") {
+                if let Err(error) = workspace.open_project_file(&path) {
+                    self.error = Some(format!("open {path} failed: {error}"));
+                }
+            }
+        }
+
         if let Some(texture) = &self.texture {
             painter.image(
                 texture.id,
