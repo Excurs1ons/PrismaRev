@@ -73,10 +73,10 @@
 | 场景视图 | `canvas` 绘制的世界网格（`G` 开关）、实体线框、选中高亮；**点击拾取实体**、**双击聚焦**、空白处左键拖**框选**（Shift 追加）、`Alt`+左键或右键轨道旋转、中键平移、滚轮缩放；gizmo 工具（`Q` 选择 / `W` 移动 / `E` 旋转 / `R` 缩放，Ctrl 吸附 0.25）：移动与缩放拖轴、旋转拖圆环，均可撤销（`X` 切世界/局部）；`End` 贴地、`Ctrl+Shift+F` 视角对齐选中、`Ctrl+Alt+F` 选中移到视角中心；右上角方向 gizmo 点击换轴，统计浮层显示 FPS / 实体数 / 相机距离 |
 | 游戏视图 | 文档相机视角 + Play 状态；Play 时实体轻微上下浮动（模拟 tick） |
 | 文档 | 打开的文档、新建场景/预制体、模板 |
-| 渲染图 | pass 链（ShadowMap → Forward → Gtao → Post）+ 图资源表（scene/swapchain/frame 生命周期） |
+| 渲染图 | 有 `target/prism-render-graph.json` 时显示实时 pass 链 / 资源表；否则回退到 ShadowMap → Forward → Gtao → Post 静态快照 |
 | 项目设置 / 首选项 / 主题 / 构建 / 离线工具 / 快捷键 / 关于 | 直接编辑设置、主题预设与 38 个 token 预览、真实 cargo/cook 构建日志、bake-gi 与 heightmap 命令预览 |
 
-**数据层**（`prism-editor-gpui-core`，UI 框架无关，190 个单元测试）
+**数据层**（`prism-editor-gpui-core`，UI 框架无关，192 个单元测试）
 
 - `.scene.json` / `.prefab.json`：稳定 id、parent 迁移、删除孤儿子级变根、reparent 防环、
   子树提取（存预制体）、预制体实例化（id 平移 + 名字去重 + 反向链接）、字段引用扫描
@@ -181,13 +181,14 @@ editor-gpui/
 - 图标用文本符号（`▶`/`◉`/`▾`…），没有引入图标库；Web 编辑器用 `lucide-vue-next`。
 - gizmo 支持**世界 / 局部**两种坐标（`X` 或视口标题栏按钮切换，选中实体按父链累积旋转）；
   旋转在局部空间右乘、平移经父级旋转逆换算，父级旋转后也不会漂。
-- 渲染图面板是**静态快照**（形状与 `prism-render-graph.json` 一致），
+- 渲染图面板 2s 轮询 `target/prism-render-graph.json`（或 `PRISMREV_RENDER_GRAPH_REPORT`），
+  有报告时按 handle 解析 pass 读写与资源格式 / 尺寸；没有报告时回退静态快照，
   尚未读取真实报告。
 - 主题面板可切预设并逐 token 编辑颜色覆盖（只处理 RGBA token），但不能导入/导出主题文件。
 
 ## 验证记录
 
-- `cargo test -p prism-editor-gpui-core`：**190 passed**。
+- `cargo test -p prism-editor-gpui-core`：**192 passed**。
 - `cargo check -p prism-editor-gpui --target x86_64-pc-windows-gnu`：通过。
 - `cargo clippy -p prism-editor-gpui -p prism-editor-gpui-core --target x86_64-pc-windows-gnu`：
   无 warning（仅 `proc-macro-error2` 的 future-incompat 提示）。

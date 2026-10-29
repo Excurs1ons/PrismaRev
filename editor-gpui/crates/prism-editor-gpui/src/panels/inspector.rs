@@ -485,23 +485,43 @@ impl EditorView {
                         (Some(width), Some(height)) => format!("{width} × {height}"),
                         _ => "尺寸未知".to_string(),
                     };
-                    body = body.child(
-                        div()
-                            .h(px(90.0))
-                            .rounded_sm()
-                            .border_1()
-                            .border_color(style.border())
-                            .bg(style.panel_alt())
-                            .flex()
-                            .items_center()
-                            .justify_center()
+                    let full_path = self
+                        .workspace
+                        .project_root
+                        .as_ref()
+                        .map(|root| root.join(&details.asset.path));
+                    let has_image = full_path.as_ref().is_some_and(|path| path.is_file());
+                    let mut preview_box = div()
+                        .h(px(120.0))
+                        .w_full()
+                        .rounded_sm()
+                        .border_1()
+                        .border_color(style.border())
+                        .bg(style.panel_alt())
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .overflow_hidden();
+                    if has_image {
+                        preview_box = preview_box.child(
+                            gpui::img(full_path.unwrap())
+                                .object_fit(gpui::ObjectFit::Contain)
+                                .w_full()
+                                .h_full(),
+                        );
+                    } else {
+                        preview_box = preview_box
                             .text_size(px(9.0))
                             .text_color(style.muted())
                             .child(SharedString::from(format!(
-                                "{dimensions} · {}（图像预览需 GPU 解码）",
+                                "{dimensions} · {}（项目模式下可预览图片）",
                                 format_bytes(*bytes)
-                            ))),
-                    );
+                            )));
+                    }
+                    body = body.child(preview_box);
+                    body = body.child(div().text_size(px(9.0)).text_color(style.muted()).child(
+                        SharedString::from(format!("{dimensions} · {}", format_bytes(*bytes))),
+                    ));
                 }
                 AssetPreview::Document => {
                     body = body.child(

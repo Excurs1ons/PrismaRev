@@ -24,6 +24,7 @@ pub mod keys;
 pub mod logbuf;
 pub mod manifest;
 pub mod project;
+pub mod render_graph;
 pub mod schema;
 pub mod settings;
 pub mod state;

@@ -369,6 +369,8 @@ pub struct EditorView {
     pub asset_new_folder: Option<String>,
     /// 选中资产的详情缓存（GUID / 预览 / 引用）。
     pub asset_details: Option<prism_editor_gpui_core::assets::AssetDetails>,
+    /// 运行时渲染图报告（`target/prism-render-graph.json`），2s 轮询一次。
+    pub graph_report: Option<prism_editor_gpui_core::render_graph::RenderGraphReport>,
     pub window_size: Size<Pixels>,
     pub hierarchy_anchor: Option<usize>,
     pub hierarchy_rows: Vec<(usize, f32, f32)>,
@@ -423,6 +425,7 @@ pub struct EditorView {
     last_state: String,
     last_persist: std::time::Instant,
     last_autosave: std::time::Instant,
+    last_graph_report: std::time::Instant,
 }
 
 impl EditorView {
@@ -449,6 +452,7 @@ impl EditorView {
             asset_grid: false,
             asset_new_folder: None,
             asset_details: None,
+            graph_report: None,
             window_size: size(px(1440.0), px(900.0)),
             hierarchy_anchor: None,
             hierarchy_rows: Vec::new(),
@@ -486,6 +490,7 @@ impl EditorView {
             last_state: String::new(),
             last_persist: std::time::Instant::now(),
             last_autosave: std::time::Instant::now(),
+            last_graph_report: std::time::Instant::now(),
         };
         if let Some(root) = view.workspace.project_root.clone() {
             match ProjectSettings::read(&root) {
@@ -600,6 +605,21 @@ impl EditorView {
         }
 
         let now = std::time::Instant::now();
+        if now.duration_since(self.last_graph_report) >= std::time::Duration::from_secs(2) {
+            self.last_graph_report = now;
+            let path = prism_editor_gpui_core::render_graph::report_path(
+                self.workspace.project_root.as_deref(),
+            );
+            let report = path
+                .as_deref()
+                .and_then(prism_editor_gpui_core::render_graph::RenderGraphReport::load);
+            let changed = report.as_ref().map(|report| report.frame)
+                != self.graph_report.as_ref().map(|report| report.frame);
+            self.graph_report = report;
+            if changed {
+                cx.notify();
+            }
+        }
         if now.duration_since(self.last_autosave) >= std::time::Duration::from_secs(5) {
             self.last_autosave = now;
             if self.preferences.autosave && !self.workspace.playing && self.workspace.has_project()
