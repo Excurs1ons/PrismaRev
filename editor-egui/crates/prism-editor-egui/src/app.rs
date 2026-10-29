@@ -1232,7 +1232,7 @@ impl EditorApp {
                 self.menu_do(ui, "Save Project", |app| app.save_all_documents());
                 self.menu_item(ui, "Reload Scene", "", Command::ReloadDocument);
                 ui.separator();
-                self.menu_item(ui, "Build Settings…", "", Command::BuildProject);
+                self.menu_item(ui, "Build Settings…", "", Command::ToggleBuild);
                 if ui
                     .add_enabled(
                         !self.build_job_running(),
@@ -1377,17 +1377,19 @@ impl EditorApp {
                             app.state.status = format!("open {path} failed: {error}");
                         }
                     });
+                    let selected_path = path.to_string();
                     self.menu_do(ui, "Show in Explorer", |app| {
-                        app.state.status = format!(
-                            "{}",
-                            app.project_root
-                                .as_ref()
-                                .map(|root| root.join(path).display().to_string())
-                                .unwrap_or_else(|| path.to_string())
-                        )
+                        app.state.status =
+                            match panels::reveal_asset(&app.workspace, &selected_path) {
+                                Ok(()) => format!("revealed {selected_path}"),
+                                Err(error) => error,
+                            };
                     });
-                    self.menu_do(ui, "Copy Path", |app| {
-                        app.state.status = format!("copied {path}");
+                    let ctx_copy = ui.ctx().clone();
+                    let copy_path = selected_path.clone();
+                    self.menu_do(ui, "Copy Path", move |app| {
+                        ctx_copy.copy_text(copy_path.clone());
+                        app.state.status = format!("copied {copy_path}");
                     });
                     self.menu_do(ui, "Duplicate", |app| {
                         match app.workspace.duplicate_asset(path) {
