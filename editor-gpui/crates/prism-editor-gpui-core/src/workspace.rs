@@ -2191,6 +2191,18 @@ impl Workspace {
         self.document().undo.can_redo()
     }
 
+    /// 开始一次交互（拖动 gizmo / 拖拽输入框）：期间所有 Transform 改动并成一步，
+    /// 不受 800ms 合并窗口影响 —— 中途停顿不会把一次拖动拆成两步。
+    pub fn begin_interaction(&mut self) {
+        self.document_mut().undo.begin_interaction();
+    }
+
+    /// 结束一次交互：把本次交互压成一步，下一次修改必然开新步 ——
+    /// 两次相邻拖动不会合并成一步。
+    pub fn end_interaction(&mut self) {
+        self.document_mut().undo.commit();
+    }
+
     /// 当前文档的撤销历史（最近 → 最早），供「撤销历史」面板使用。
     pub fn undo_history(&self) -> Vec<String> {
         self.document()

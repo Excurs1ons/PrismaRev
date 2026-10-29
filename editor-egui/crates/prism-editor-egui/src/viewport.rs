@@ -373,6 +373,9 @@ impl ViewportState {
                             last_angle: vm::screen_angle(local, angle_center),
                             start_scale,
                         });
+                        // 一次拖动 = 一个撤销步：交互期间忽略 800ms 合并窗口，
+                        // 中途停顿不会把同一次拖动拆成两步。
+                        workspace.begin_interaction();
                         self.box_start = None;
                     } else if !alt && response.dragged_by(egui::PointerButton::Primary) {
                         self.box_start = Some(pos);
@@ -472,6 +475,8 @@ impl ViewportState {
                 }
             }
             self.gizmo = None;
+            // 交互结束：下一次拖动 / 字段输入必然开新的撤销步。
+            workspace.end_interaction();
         }
         if response.hovered() {
             let scroll = ui.input(|i| i.raw_scroll_delta.y);
