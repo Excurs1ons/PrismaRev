@@ -5,7 +5,8 @@
 
 use egui::{Align, Layout, RichText, Ui, Vec2};
 use prism_editor_core::{
-    AssetKind, Locale, LogLevel, LogSource, Preferences, ProjectSettings, Workspace, THEME_PRESETS,
+    AssetKind, Locale, LogLevel, LogSource, Preferences, ProjectSettings, SceneDoc, Workspace,
+    THEME_PRESETS,
 };
 use serde_json::Value;
 
@@ -179,12 +180,29 @@ impl UiState {
 
 enum TreeAction {
     Select(usize, bool),
+    Toggle(usize),
     ToggleExpand(usize),
     ToggleActive(usize),
     Delete(usize),
     Duplicate(usize),
     CommitRename(usize, String),
     BeginRename(usize, String),
+}
+
+/// 层级搜索命中项及其祖先（`path_of` 已包含自身）。
+///
+/// 搜索必须能看见折叠父级下的对象，否则会出现「明明有这个实体却搜不到」。
+fn search_matches(doc: &SceneDoc, filter: &str) -> std::collections::HashSet<usize> {
+    let mut keep = std::collections::HashSet::new();
+    if filter.is_empty() {
+        return keep;
+    }
+    for (index, entity) in doc.entities.iter().enumerate() {
+        if entity.display_name().to_lowercase().contains(filter) {
+            keep.extend(doc.path_of(index));
+        }
+    }
+    keep
 }
 
 pub fn hierarchy(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
@@ -219,9 +237,22 @@ pub fn hierarchy(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
     });
     ui.separator();
 
+    let filter = state.hierarchy_search.to_lowercase();
+    let searching = !filter.is_empty();
+    // 命中项 + 祖先：折叠父级下的对象也要能被搜到（Unity 会展开祖先并显示路径）。
+    let search = search_matches(&workspace.document().doc, &filter);
+    if searching {
+        let ids: Vec<u32> = {
+            let doc = &workspace.document().doc;
+            search
+                .iter()
+                .filter_map(|index| doc.id_of_index(*index))
+                .collect()
+        };
+        workspace.expanded.extend(ids);
+    }
     let expanded = workspace.expanded.clone();
     let rows = workspace.document().doc.visible_rows(&expanded);
-    let filter = state.hierarchy_search.to_lowercase();
     let mut action: Option<TreeAction> = None;
     // 资产拖到实体上 = 实例化预制体（Unity 的 Project → Hierarchy 拖拽）。
     let mut asset_drop: Option<(usize, String)> = None;
@@ -236,7 +267,7 @@ pub fn hierarchy(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
                     continue;
                 };
                 let name = entity.display_name();
-                if !filter.is_empty() && !name.to_lowercase().contains(&filter) {
+                if searching && !search.contains(&index) {
                     continue;
                 }
                 let depth = doc.path_of(index).len().saturating_sub(1);
@@ -348,8 +379,13 @@ pub fn hierarchy(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
                 // 行级交互：单击选中、双击重命名（子控件会先吃掉自己的点击）。
                 if !renaming {
                     if row.clicked() {
-                        let extend = ui.input(|i| i.modifiers.shift);
-                        action = Some(TreeAction::Select(index, extend));
+                        let modifiers = ui.input(|i| i.modifiers);
+                        // Ctrl/Cmd 单击 = 切换（Unity 的多选开关），Shift = 追加。
+                        if modifiers.ctrl || modifiers.command {
+                            action = Some(TreeAction::Toggle(index));
+                        } else {
+                            action = Some(TreeAction::Select(index, modifiers.shift));
+                        }
                     }
                     if row.double_clicked() {
                         action = Some(TreeAction::BeginRename(index, name.clone()));
@@ -505,6 +541,19 @@ pub fn hierarchy(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
     if let Some(action) = action {
         match action {
             TreeAction::Select(index, extend) => workspace.select(index, extend),
+            TreeAction::Toggle(index) => {
+                if workspace.selection.contains(&index) {
+                    let remaining: Vec<usize> = workspace
+                        .selection
+                        .iter()
+                        .copied()
+                        .filter(|selected| *selected != index)
+                        .collect();
+                    workspace.select_many(&remaining, false);
+                } else {
+                    workspace.select_many(&[index], true);
+                }
+            }
             TreeAction::ToggleExpand(index) => workspace.toggle_expanded(index),
             TreeAction::ToggleActive(index) => {
                 let active = workspace.document().doc.entities[index].active();
@@ -1626,5 +1675,29 @@ pub fn boolean_window(
         .show(ctx, |ui| body(ui));
     if !visible {
         *open = false;
+    }
+}
+
+#[cfg(test)]
+mod hierarchy_search_tests {
+    use super::*;
+
+    #[test]
+    fn search_keeps_ancestors_of_matches() {
+        let mut doc = SceneDoc {
+            version: 3,
+            entities: Vec::new(),
+        };
+        let parent = doc.add_named_child(None, "Boat");
+        let child = doc.add_named_child(Some(parent), "Rod");
+        doc.add_named_child(None, "Water");
+
+        let keep = search_matches(&doc, "rod");
+        assert!(keep.contains(&child));
+        assert!(keep.contains(&parent), "collapsed parent must stay visible");
+        assert_eq!(keep.len(), 2);
+
+        assert!(search_matches(&doc, "").is_empty());
+        assert!(search_matches(&doc, "missing").is_empty());
     }
 }
