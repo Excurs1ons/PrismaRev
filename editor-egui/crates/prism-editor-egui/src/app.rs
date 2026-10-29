@@ -2521,11 +2521,14 @@ impl EditorApp {
     }
 
     fn floating_panels(&mut self, ctx: &egui::Context) {
-        let floating = self.workspace.floating.clone();
-        for panel in floating {
+        let mut to_close: Vec<String> = Vec::new();
+        for index in 0..self.workspace.floating.len() {
+            let Some(panel) = self.workspace.floating.get(index).cloned() else {
+                continue;
+            };
             let mut open = true;
             let mut titled = false;
-            egui::Window::new(tab_title(&panel.tab))
+            let shown = egui::Window::new(tab_title(&panel.tab))
                 .id(egui::Id::new(("float", &panel.tab)))
                 .open(&mut open)
                 .default_pos(egui::pos2(panel.x, panel.y))
@@ -2538,9 +2541,29 @@ impl EditorApp {
                     self.panel_body(ui, &panel.tab, rect);
                 });
             let _ = titled;
-            if !open {
-                self.workspace.close_floating(&panel.tab);
+            // 把拖拽 / 缩放后的真实矩形写回模型：布局序列化（自动保存、
+            // Save Layout、跨会话恢复）读的就是这份数据。
+            if let Some(shown) = shown {
+                let rect = shown.response.rect;
+                let moved =
+                    (rect.min.x - panel.x).abs() > 0.5 || (rect.min.y - panel.y).abs() > 0.5;
+                let resized = (rect.width() - panel.width).abs() > 0.5
+                    || (rect.height() - panel.height).abs() > 0.5;
+                if moved || resized {
+                    if let Some(slot) = self.workspace.floating.get_mut(index) {
+                        slot.x = rect.min.x;
+                        slot.y = rect.min.y;
+                        slot.width = rect.width();
+                        slot.height = rect.height();
+                    }
+                }
             }
+            if !open {
+                to_close.push(panel.tab.clone());
+            }
+        }
+        for tab in to_close {
+            self.workspace.close_floating(&tab);
         }
     }
 
