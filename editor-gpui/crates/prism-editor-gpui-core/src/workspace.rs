@@ -2835,6 +2835,7 @@ fn build_entity(
     parent: Option<usize>,
     doc: &SceneDoc,
 ) -> EntityJson {
+    let parent_id = parent.and_then(|index| doc.id_of_index(index));
     let (name, components, position, rotation) = match preset {
         Some(preset) => (
             preset.name.clone(),
@@ -2850,8 +2851,8 @@ fn build_entity(
         ),
     };
     let mut entity = EntityJson {
-        name: Some(name),
-        parent: parent.and_then(|index| doc.id_of_index(index)),
+        name: Some(doc.unique_name(&name, parent_id)),
+        parent: parent_id,
         transform: TransformJson {
             position,
             rotation,
@@ -2985,6 +2986,22 @@ mod tests {
         assert_eq!(added.parent, Some(1), "挂在选中的相机下面");
         assert!(added.has_component("prism_engine::scene::Camera"));
         assert!(workspace.can_undo());
+    }
+
+    #[test]
+    fn add_entity_names_stay_unique_among_siblings() {
+        let mut workspace = Workspace::load_fixture(&fixture());
+        workspace.clear_selection();
+        workspace.add_entity("");
+        workspace.add_entity("");
+        let doc = &workspace.document().doc;
+        let names: Vec<String> = doc
+            .entities
+            .iter()
+            .map(|entity| entity.display_name())
+            .collect();
+        assert!(names.contains(&"GameObject".to_string()));
+        assert!(names.contains(&"GameObject (1)".to_string()));
     }
 
     #[test]
