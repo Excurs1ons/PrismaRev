@@ -7,7 +7,7 @@ use egui::{Align, Layout, RichText, Ui, Vec2};
 use prism_editor_core::{
     AssetKind, Locale, LogLevel, LogSource, Preferences, ProjectSettings, Workspace, THEME_PRESETS,
 };
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use crate::{theme, widgets};
 use egui_phosphor::regular as icons;
@@ -225,6 +225,7 @@ pub fn hierarchy(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
     let mut action: Option<TreeAction> = None;
     // 资产拖到实体上 = 实例化预制体（Unity 的 Project → Hierarchy 拖拽）。
     let mut asset_drop: Option<(usize, String)> = None;
+    let mut hovered_drop_target = false;
 
     egui::ScrollArea::vertical()
         .id_salt("hierarchy-scroll")
@@ -357,40 +358,54 @@ pub fn hierarchy(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
                 }
 
                 // ---- Unity 式拖拽：上/下 25% 插入，中间挂成子级 ----
-                if row.drag_started() {
+                if row.drag_started_by(egui::PointerButton::Primary) {
                     state.dragging = Some(index);
                 }
                 if state.dragging.is_some() && state.dragging != Some(index) && row.hovered() {
-                    let pointer_y = ui
-                        .input(|input| input.pointer.interact_pos())
-                        .map(|pos| pos.y)
-                        .unwrap_or(row.rect.center().y);
-                    let ratio = (pointer_y - row.rect.top()) / row.rect.height().max(1.0);
-                    let zone = if ratio < 0.25 {
-                        DropZone::Before
-                    } else if ratio > 0.75 {
-                        DropZone::After
-                    } else {
-                        DropZone::Child
-                    };
-                    state.drop_target = Some((index, zone));
+                    let from = state.dragging.expect("dragging checked above");
+                    let invalid = from == index
+                        || workspace.document().doc.descendants(from).contains(&index);
+                    hovered_drop_target = true;
                     let painter = ui.painter();
-                    match zone {
-                        DropZone::Before => painter.line_segment(
-                            [row.rect.left_top(), row.rect.right_top()],
-                            egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(90, 160, 240)),
-                        ),
-                        DropZone::After => painter.line_segment(
-                            [row.rect.left_bottom(), row.rect.right_bottom()],
-                            egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(90, 160, 240)),
-                        ),
-                        DropZone::Child => painter.rect_stroke(
+                    if invalid {
+                        state.drop_target = None;
+                        painter.rect_stroke(
                             row.rect,
                             egui::CornerRadius::ZERO,
-                            egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(90, 160, 240)),
+                            egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(220, 90, 90)),
                             egui::StrokeKind::Inside,
-                        ),
-                    };
+                        );
+                    } else {
+                        let pointer_y = ui
+                            .input(|input| input.pointer.interact_pos())
+                            .map(|pos| pos.y)
+                            .unwrap_or(row.rect.center().y);
+                        let ratio = (pointer_y - row.rect.top()) / row.rect.height().max(1.0);
+                        let zone = if ratio < 0.25 {
+                            DropZone::Before
+                        } else if ratio > 0.75 {
+                            DropZone::After
+                        } else {
+                            DropZone::Child
+                        };
+                        state.drop_target = Some((index, zone));
+                        match zone {
+                            DropZone::Before => painter.line_segment(
+                                [row.rect.left_top(), row.rect.right_top()],
+                                egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(90, 160, 240)),
+                            ),
+                            DropZone::After => painter.line_segment(
+                                [row.rect.left_bottom(), row.rect.right_bottom()],
+                                egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(90, 160, 240)),
+                            ),
+                            DropZone::Child => painter.rect_stroke(
+                                row.rect,
+                                egui::CornerRadius::ZERO,
+                                egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(90, 160, 240)),
+                                egui::StrokeKind::Inside,
+                            ),
+                        };
+                    }
                 }
 
                 if row.dnd_hover_payload::<widgets::AssetDrag>().is_some() {
@@ -447,8 +462,54 @@ pub fn hierarchy(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
             }
         });
 
+    if state.dragging.is_some() && !hovered_drop_target {
+        state.drop_target = None;
+    }
+
+    // Unity Hierarchy keeps a lightweight ghost under the pointer while dragging.
+    // It makes the operation legible even when the pointer is between rows or over
+    // the empty tail of the scroll area.
+    if let (Some(from), Some(pointer)) = (
+        state.dragging,
+        ui.input(|input| input.pointer.interact_pos()),
+    ) {
+        let label = workspace
+            .document()
+            .doc
+            .entities
+            .get(from)
+            .map(|entity| entity.display_name())
+            .unwrap_or_else(|| "Entity".to_string());
+        let ghost = egui::Rect::from_min_size(
+            pointer + egui::vec2(12.0, 12.0),
+            egui::vec2((label.len() as f32 * 7.0 + 30.0).clamp(96.0, 260.0), 22.0),
+        );
+        let painter = ui.ctx().layer_painter(egui::LayerId::new(
+            egui::Order::Foreground,
+            egui::Id::new("hierarchy-drag-preview"),
+        ));
+        painter.rect_filled(
+            ghost,
+            egui::CornerRadius::same(3),
+            egui::Color32::from_rgba_unmultiplied(35, 42, 54, 235),
+        );
+        painter.rect_stroke(
+            ghost,
+            egui::CornerRadius::same(3),
+            egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(100, 170, 245)),
+            egui::StrokeKind::Inside,
+        );
+        painter.text(
+            ghost.left_center() + egui::vec2(8.0, 0.0),
+            egui::Align2::LEFT_CENTER,
+            label,
+            egui::FontId::proportional(11.0),
+            egui::Color32::WHITE,
+        );
+    }
+
     // 松手 → 应用拖拽结果
-    if ui.input(|input| input.pointer.any_released()) {
+    if ui.input(|input| input.pointer.button_released(egui::PointerButton::Primary)) {
         if let (Some(from), Some((to, zone))) = (state.dragging.take(), state.drop_target.take()) {
             if from != to {
                 let parent_of_to = workspace.document().doc.entities[to]
@@ -467,27 +528,18 @@ pub fn hierarchy(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
                 match zone {
                     DropZone::Child => workspace.reparent(from, Some(to), None),
                     DropZone::Before => {
-                        let slot = parent_of_to.and_then(|parent| {
-                            workspace
-                                .document()
-                                .doc
-                                .children(parent)
-                                .iter()
-                                .position(|child| *child == to)
-                        });
-                        workspace.reparent(from, parent_of_to, slot.or(Some(to)));
+                        let mut position = to;
+                        if from < position {
+                            position = position.saturating_sub(1);
+                        }
+                        workspace.reparent(from, parent_of_to, Some(position));
                     }
                     DropZone::After => {
-                        let slot = parent_of_to.and_then(|parent| {
-                            workspace
-                                .document()
-                                .doc
-                                .children(parent)
-                                .iter()
-                                .position(|child| *child == to)
-                                .map(|slot| slot + 1)
-                        });
-                        workspace.reparent(from, parent_of_to, slot.or(Some(to + 1)));
+                        let mut position = to.saturating_add(1);
+                        if from < position {
+                            position = position.saturating_sub(1);
+                        }
+                        workspace.reparent(from, parent_of_to, Some(position));
                     }
                 }
             }
@@ -764,12 +816,236 @@ fn inspector_single(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState,
             &mut set,
             &asset_paths,
         );
+        if name == "prism_engine::scene::LineRenderer" {
+            line_renderer_editor(ui, workspace, entity_id, &schema.name, &value);
+        } else if name == "prism_engine::scene::SpriteAnimation" {
+            sprite_animation_editor(ui, workspace, index, entity_id, &value);
+        }
     }
     for action in actions {
         match action {
             widgets::CardAction::Copy(name) => workspace.copy_component_at(index, &name),
             widgets::CardAction::Remove(name) => workspace.remove_component(&name),
         }
+    }
+}
+
+fn line_renderer_editor(
+    ui: &mut Ui,
+    workspace: &mut Workspace,
+    entity_id: u32,
+    component: &str,
+    value: &Value,
+) {
+    let Some(points) = value.get("points").and_then(Value::as_array) else {
+        return;
+    };
+    ui.label(RichText::new("Positions").strong().size(11.0));
+    let mut updated = points.clone();
+    let mut action = None;
+    for (index, point) in points.iter().enumerate() {
+        let mut coords = [0.0f64; 3];
+        for (axis, value) in coords.iter_mut().enumerate() {
+            *value = point.get(axis).and_then(Value::as_f64).unwrap_or_default();
+        }
+        ui.horizontal(|ui| {
+            ui.label(format!("{index}"));
+            let mut changed = false;
+            for coord in &mut coords {
+                changed |= ui.add(egui::DragValue::new(coord).speed(0.05)).changed();
+            }
+            if changed {
+                updated[index] = json!([coords[0], coords[1], coords[2]]);
+            }
+            if index + 1 < points.len()
+                && ui
+                    .small_button("+")
+                    .on_hover_text("Subdivide after this point")
+                    .clicked()
+            {
+                action = Some(LinePointAction::Subdivide(index));
+            }
+            if ui.small_button("x").on_hover_text("Remove point").clicked() {
+                action = Some(LinePointAction::Remove(index));
+            }
+        });
+    }
+    if ui.small_button("Add Position").clicked() {
+        action = Some(LinePointAction::Add);
+    }
+    if let Some(action) = action {
+        apply_line_point_action(&mut updated, action);
+    }
+    if updated.as_slice() != points {
+        workspace.set_field(entity_id, component, "points", Value::Array(updated));
+    }
+}
+
+#[derive(Clone, Copy)]
+enum LinePointAction {
+    Add,
+    Remove(usize),
+    Subdivide(usize),
+}
+
+fn apply_line_point_action(points: &mut Vec<Value>, action: LinePointAction) {
+    match action {
+        LinePointAction::Add => {
+            let next = points
+                .last()
+                .and_then(Value::as_array)
+                .map(|point| {
+                    [0, 1, 2]
+                        .map(|axis| point.get(axis).and_then(Value::as_f64).unwrap_or_default())
+                })
+                .unwrap_or([0.0, 0.0, 0.0]);
+            points.push(json!(next));
+        }
+        LinePointAction::Remove(index) => {
+            if index < points.len() {
+                points.remove(index);
+            }
+        }
+        LinePointAction::Subdivide(index) => {
+            let Some(a) = points.get(index).and_then(Value::as_array) else {
+                return;
+            };
+            let Some(b) = points.get(index + 1).and_then(Value::as_array) else {
+                return;
+            };
+            let midpoint = (0..3)
+                .map(|axis| {
+                    (a.get(axis).and_then(Value::as_f64).unwrap_or_default()
+                        + b.get(axis).and_then(Value::as_f64).unwrap_or_default())
+                        * 0.5
+                })
+                .collect::<Vec<_>>();
+            points.insert(index + 1, json!(midpoint));
+        }
+    }
+}
+
+fn sprite_animation_editor(
+    ui: &mut Ui,
+    workspace: &mut Workspace,
+    index: usize,
+    entity_id: u32,
+    value: &Value,
+) {
+    let frames = value
+        .get("frames")
+        .and_then(Value::as_u64)
+        .unwrap_or_default() as u32;
+    let playing = value
+        .get("playing")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let current = workspace
+        .document()
+        .doc
+        .entities
+        .get(index)
+        .and_then(|entity| entity.components.get("prism_engine::scene::SpriteRenderer"))
+        .and_then(|renderer| renderer.get("frame_index"))
+        .and_then(Value::as_u64)
+        .unwrap_or_default() as u32;
+    let max_frame = frames.saturating_sub(1);
+    let current = current.min(max_frame);
+
+    ui.label(RichText::new("Sprite Sheet Preview").strong().size(11.0));
+    let mut target_frame = None;
+    ui.horizontal(|ui| {
+        if ui
+            .add_enabled(frames > 0 && !playing, egui::Button::new(icons::SKIP_BACK))
+            .on_hover_text("First frame")
+            .clicked()
+        {
+            target_frame = Some(0);
+        }
+        if ui
+            .add_enabled(frames > 0 && !playing, egui::Button::new(icons::CARET_LEFT))
+            .on_hover_text("Previous frame")
+            .clicked()
+        {
+            target_frame = Some(current.saturating_sub(1));
+        }
+        ui.label(if frames == 0 { "No frames" } else { "Frame" });
+        let mut selected = current;
+        if ui
+            .add_enabled(
+                frames > 0 && !playing,
+                egui::DragValue::new(&mut selected).range(0..=max_frame),
+            )
+            .changed()
+        {
+            target_frame = Some(selected);
+        }
+        ui.label(format!("/ {frames}"));
+        if ui
+            .add_enabled(
+                frames > 0 && !playing,
+                egui::Button::new(icons::CARET_RIGHT),
+            )
+            .on_hover_text("Next frame")
+            .clicked()
+        {
+            target_frame = Some(current.saturating_add(1).min(max_frame));
+        }
+        if ui
+            .add_enabled(
+                frames > 0 && !playing,
+                egui::Button::new(icons::SKIP_FORWARD),
+            )
+            .on_hover_text("Last frame")
+            .clicked()
+        {
+            target_frame = Some(max_frame);
+        }
+    });
+    if playing {
+        ui.label(
+            RichText::new("Pause playback to preview a frame.")
+                .weak()
+                .size(10.0),
+        );
+    }
+    if let Some(frame) = target_frame {
+        set_sprite_frame(workspace, entity_id, frame);
+    }
+}
+
+fn set_sprite_frame(workspace: &mut Workspace, entity_id: u32, frame: u32) {
+    workspace.set_field(
+        entity_id,
+        "prism_engine::scene::SpriteRenderer",
+        "frame_index",
+        json!(frame),
+    );
+}
+
+#[cfg(test)]
+mod line_renderer_tests {
+    use super::*;
+
+    #[test]
+    fn subdivide_inserts_midpoint_between_adjacent_positions() {
+        let mut points = vec![json!([0.0, 2.0, 4.0]), json!([2.0, 4.0, 8.0])];
+        apply_line_point_action(&mut points, LinePointAction::Subdivide(0));
+        assert_eq!(
+            Value::Array(points),
+            json!([[0.0, 2.0, 4.0], [1.0, 3.0, 6.0], [2.0, 4.0, 8.0]])
+        );
+    }
+
+    #[test]
+    fn remove_and_add_positions_preserve_existing_points() {
+        let mut points = vec![json!([1.0, 2.0, 3.0]), json!([4.0, 5.0, 6.0])];
+        apply_line_point_action(&mut points, LinePointAction::Remove(0));
+        apply_line_point_action(&mut points, LinePointAction::Add);
+        assert_eq!(
+            Value::Array(points),
+            json!([[4.0, 5.0, 6.0], [4.0, 5.0, 6.0]])
+        );
     }
 }
 
