@@ -2172,7 +2172,7 @@ impl EditorApp {
             "assets" => panels::assets(ui, &mut self.workspace, &mut self.state),
             "docs" => panels::docs(ui, &mut self.workspace, &mut self.state),
             "log" => panels::log(ui, &mut self.workspace, &mut self.state),
-            "history" => panels::history(ui, &mut self.workspace),
+            "history" => panels::history(ui, &mut self.workspace, &mut self.state),
             "renderGraph" => {
                 let mut settings = self.render_settings.clone();
                 if panels::render_graph(
