@@ -1130,6 +1130,21 @@ impl EditorApp {
             .unwrap_or(false)
     }
 
+    /// 中断正在跑的构建（`File → Cancel Build` / 状态栏的 Cancel）。
+    fn cancel_build(&mut self) {
+        let Some(job) = self.build.as_ref() else {
+            return;
+        };
+        job.cancel();
+        let label = job.label().to_string();
+        self.state.status = format!("cancelling build: {label}");
+        self.workspace.log(
+            prism_editor_core::LogSource::System,
+            prism_editor_core::LogLevel::Warn,
+            format!("build cancel requested: {label}"),
+        );
+    }
+
     fn start_build(&mut self, kind: crate::build::BuildKind) {
         let Some(root) = self.project_root.clone() else {
             self.state.status = "no project root — cannot build".to_string();
@@ -1275,6 +1290,10 @@ impl EditorApp {
                     .clicked()
                 {
                     self.start_build(crate::build::BuildKind::Clean);
+                    ui.close();
+                }
+                if self.build_job_running() && ui.button("Cancel Build").clicked() {
+                    self.cancel_build();
                     ui.close();
                 }
                 ui.separator();
@@ -1668,14 +1687,25 @@ impl EditorApp {
                             .weak(),
                     );
                 }
-                if let Some(job) = &self.build {
-                    if job.running() {
-                        ui.label(
-                            RichText::new(format!("building: {}", job.label()))
-                                .size(10.0)
-                                .color(egui::Color32::from_rgb(224, 176, 80)),
-                        );
+                let build_label = self
+                    .build
+                    .as_ref()
+                    .filter(|job| job.running())
+                    .map(|job| job.label().to_string());
+                if let Some(label) = build_label {
+                    // 构建是几十秒的阻塞操作：状态栏必须能一键中断。
+                    if ui
+                        .small_button(RichText::new("Cancel").size(10.0))
+                        .on_hover_text("Stop the running cargo build")
+                        .clicked()
+                    {
+                        self.cancel_build();
                     }
+                    ui.label(
+                        RichText::new(format!("building: {label}"))
+                            .size(10.0)
+                            .color(egui::Color32::from_rgb(224, 176, 80)),
+                    );
                 }
             });
         });
@@ -2699,12 +2729,23 @@ impl EditorApp {
             );
         }
         if !running {
-            self.state.status = format!("build finished: {}", job.label());
-            self.workspace.log(
-                prism_editor_core::LogSource::System,
-                prism_editor_core::LogLevel::Info,
-                format!("build finished: {}", job.label()),
-            );
+            let cancelled = job.was_cancelled();
+            let label = job.label().to_string();
+            if cancelled {
+                self.state.status = format!("build cancelled: {label}");
+                self.workspace.log(
+                    prism_editor_core::LogSource::System,
+                    prism_editor_core::LogLevel::Warn,
+                    format!("build cancelled: {label}"),
+                );
+            } else {
+                self.state.status = format!("build finished: {label}");
+                self.workspace.log(
+                    prism_editor_core::LogSource::System,
+                    prism_editor_core::LogLevel::Info,
+                    format!("build finished: {label}"),
+                );
+            }
             self.build = None;
         }
     }
