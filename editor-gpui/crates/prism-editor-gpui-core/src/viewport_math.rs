@@ -230,6 +230,113 @@ pub fn parent_world_rotation(doc: &SceneDoc, index: usize) -> [f32; 4] {
         .unwrap_or(IDENTITY_ROTATION)
 }
 
+/// 实体世界位置（父链累积：父旋转 + 父缩放作用在子局部位置上）。
+pub fn world_position(doc: &SceneDoc, index: usize) -> [f32; 3] {
+    fn walk(doc: &SceneDoc, index: usize, depth: usize) -> [f32; 3] {
+        let Some(entity) = doc.entities.get(index) else {
+            return [0.0; 3];
+        };
+        let local = entity.transform.position;
+        if depth > 64 {
+            return local;
+        }
+        let Some(parent_index) = entity.parent.and_then(|parent| doc.index_of_id(parent)) else {
+            return local;
+        };
+        let parent_world = walk(doc, parent_index, depth + 1);
+        let parent_rotation = world_rotation(doc, parent_index);
+        let rotated = quat_rotate(parent_rotation, local);
+        let parent_scale = doc.entities[parent_index].transform.scale;
+        add(
+            parent_world,
+            [
+                rotated[0] * parent_scale[0],
+                rotated[1] * parent_scale[1],
+                rotated[2] * parent_scale[2],
+            ],
+        )
+    }
+    walk(doc, index, 0)
+}
+
+/// 实体世界缩放（父链分量相乘）。
+pub fn world_scale(doc: &SceneDoc, index: usize) -> [f32; 3] {
+    let mut scale = doc
+        .entities
+        .get(index)
+        .map(|entity| entity.transform.scale)
+        .unwrap_or([1.0; 3]);
+    let mut current = doc.entities.get(index).and_then(|entity| entity.parent);
+    let mut depth = 0;
+    while let Some(id) = current {
+        if depth > 64 {
+            break;
+        }
+        let Some(parent_index) = doc.index_of_id(id) else {
+            break;
+        };
+        let parent_scale = doc.entities[parent_index].transform.scale;
+        for axis in 0..3 {
+            scale[axis] *= parent_scale[axis];
+        }
+        current = doc.entities[parent_index].parent;
+        depth += 1;
+    }
+    scale
+}
+
+/// 世界轴在当前相机里的屏幕方向（x 右、y 下）。
+pub fn orientation_axis_direction(frame: &CameraFrame, axis: usize, sign: f32) -> [f32; 2] {
+    let world = match axis {
+        0 => [sign, 0.0, 0.0],
+        1 => [0.0, sign, 0.0],
+        _ => [0.0, 0.0, sign],
+    };
+    [dot(world, frame.right), -dot(world, frame.up)]
+}
+
+/// 方向 gizmo 某根轴的端点（屏幕坐标）。
+pub fn orientation_axis_end(
+    frame: &CameraFrame,
+    axis: usize,
+    sign: f32,
+    center: (f32, f32),
+    radius: f32,
+) -> (f32, f32) {
+    let direction = orientation_axis_direction(frame, axis, sign);
+    (
+        center.0 + direction[0] * radius,
+        center.1 + direction[1] * radius,
+    )
+}
+
+/// 点中方向 gizmo 的哪根轴（返回 `(axis, sign)`），容差 9px。
+pub fn pick_orientation_axis(
+    position: (f32, f32),
+    center: (f32, f32),
+    radius: f32,
+    frame: &CameraFrame,
+) -> Option<(usize, f32)> {
+    let mut best: Option<(usize, f32, f32)> = None;
+    for axis in 0..3 {
+        for sign in [1.0_f32, -1.0] {
+            let direction = orientation_axis_direction(frame, axis, sign);
+            // 正对相机的轴投影长度为 0，无法点击。
+            if (direction[0] * direction[0] + direction[1] * direction[1]).sqrt() < 0.2 {
+                continue;
+            }
+            let end = orientation_axis_end(frame, axis, sign, center, radius);
+            let dx = end.0 - position.0;
+            let dy = end.1 - position.1;
+            let distance = (dx * dx + dy * dy).sqrt();
+            if distance <= 9.0 && best.is_none_or(|(_, _, best)| distance < best) {
+                best = Some((axis, sign, distance));
+            }
+        }
+    }
+    best.map(|(axis, sign, _)| (axis, sign))
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct CameraFrame {
     pub eye: [f32; 3],
@@ -753,6 +860,42 @@ mod tests {
             vec![0, 1]
         );
         assert!(box_select((0.0, 0.0, 4.0, 4.0), &frame, 800.0, 600.0, &entities).is_empty());
+    }
+
+    #[test]
+    fn world_position_and_scale_follow_parent_chain() {
+        let mut doc = SceneDoc::default();
+        let parent = doc.add_named_child(None, "Parent");
+        doc.entities[parent].transform.position = [1.0, 2.0, 3.0];
+        doc.entities[parent].transform.scale = [2.0, 2.0, 2.0];
+        let child = doc.add_named_child(Some(parent), "Child");
+        doc.entities[child].transform.position = [1.0, 0.0, 0.0];
+        let world = world_position(&doc, child);
+        assert!(
+            (world[0] - 3.0).abs() < 1e-4,
+            "父缩放作用在子局部位置上: {world:?}"
+        );
+        assert!((world[1] - 2.0).abs() < 1e-4);
+        assert!((world[2] - 3.0).abs() < 1e-4);
+        let scale = world_scale(&doc, child);
+        assert_eq!(scale, [2.0, 2.0, 2.0]);
+    }
+
+    #[test]
+    fn orientation_axes_project_and_pick() {
+        let camera = camera();
+        let frame = camera_frame(&camera);
+        let center = (100.0, 100.0);
+        let x_end = orientation_axis_end(&frame, 0, 1.0, center, 40.0);
+        assert!(x_end.0 > center.0);
+        assert_eq!(
+            pick_orientation_axis(x_end, center, 40.0, &frame),
+            Some((0, 1.0))
+        );
+        assert_eq!(
+            pick_orientation_axis((center.0, center.1), center, 40.0, &frame),
+            None
+        );
     }
 
     #[test]

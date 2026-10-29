@@ -123,6 +123,7 @@ pub enum TextTarget {
     SaveAs,
     AssetRename,
     AssetNewFolder,
+    ColorHex,
     PrefabSave,
 }
 
@@ -144,6 +145,15 @@ pub struct AssetPickerState {
     pub component: String,
     pub path: String,
     pub current: String,
+}
+
+/// 颜色字段的 hex / 预设弹层。
+#[derive(Debug, Clone)]
+pub struct ColorEditState {
+    pub entity_ids: Vec<u32>,
+    pub component: String,
+    pub path: String,
+    pub alpha: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -186,6 +196,7 @@ impl Default for HeightmapForm {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GizmoMode {
+    Select,
     Translate,
     Rotate,
     Scale,
@@ -194,6 +205,7 @@ pub enum GizmoMode {
 impl GizmoMode {
     pub fn label(self) -> &'static str {
         match self {
+            GizmoMode::Select => "选择 Q",
             GizmoMode::Translate => "移动 W",
             GizmoMode::Rotate => "旋转 E",
             GizmoMode::Scale => "缩放 R",
@@ -382,6 +394,8 @@ pub struct EditorView {
     pub prefab_save: Option<(usize, String)>,
     /// Scene View 的 gizmo 模式（W/E/R）。
     pub gizmo_mode: GizmoMode,
+    /// Scene View 统计浮层。
+    pub show_stats: bool,
     /// 框选的屏幕矩形（窗口坐标，用于绘制）。
     pub box_select: Option<(Point<Pixels>, Point<Pixels>)>,
     /// 主题 token 覆盖编辑器当前打开的 token。
@@ -394,6 +408,7 @@ pub struct EditorView {
     pub pending_close: Option<usize>,
     /// 检查器「选择资产」弹层。
     pub asset_picker: Option<AssetPickerState>,
+    pub color_edit: Option<ColorEditState>,
     /// Scene / Game View 最近一次绘制的屏幕矩形（拾取与 gizmo 用）。
     /// 内联重命名的起始快照（提交时补一个撤销步，Esc 时回滚）。
     pub rename_base: Option<prism_editor_gpui_core::SceneDoc>,
@@ -453,12 +468,14 @@ impl EditorView {
             asset_rename: None,
             prefab_save: None,
             gizmo_mode: GizmoMode::Translate,
+            show_stats: false,
             box_select: None,
             theme_edit: None,
             asset_delete: None,
             document_delete: None,
             pending_close: None,
             asset_picker: None,
+            color_edit: None,
             rename_base: None,
             last_pick: None,
             scene_bounds: Rc::new(Cell::new(None)),
@@ -858,6 +875,10 @@ impl EditorView {
         }
 
         match key.as_str() {
+            "q" if !modifiers.control && !modifiers.alt => {
+                self.gizmo_mode = GizmoMode::Select;
+                cx.notify();
+            }
             "w" if !modifiers.control && !modifiers.alt => {
                 self.gizmo_mode = GizmoMode::Translate;
                 cx.notify();
@@ -876,6 +897,18 @@ impl EditorView {
             }
             "g" if !modifiers.control && !modifiers.alt => {
                 self.workspace.toggle_grid();
+                cx.notify();
+            }
+            "end" if !self.workspace.selection.is_empty() => {
+                self.workspace.snap_selection_to_ground();
+                cx.notify();
+            }
+            "f" if modifiers.control && modifiers.shift => {
+                self.workspace.align_view_to_selection();
+                cx.notify();
+            }
+            "f" if modifiers.control && modifiers.alt => {
+                self.workspace.align_selection_to_view();
                 cx.notify();
             }
             "f2" if !self.workspace.selection.is_empty() => {
@@ -902,6 +935,8 @@ impl EditorView {
                 self.document_delete = None;
                 self.pending_close = None;
                 self.asset_picker = None;
+                self.color_edit = None;
+                self.asset_new_folder = None;
                 cx.notify();
             }
             "down" if !self.workspace.selection.is_empty() => {
@@ -984,6 +1019,7 @@ impl EditorView {
             | TextTarget::SaveAs
             | TextTarget::AssetRename
             | TextTarget::AssetNewFolder
+            | TextTarget::ColorHex
             | TextTarget::PrefabSave => {}
         }
     }
@@ -1098,6 +1134,12 @@ impl EditorView {
                     }
                 }
             }
+            TextTarget::ColorHex => {
+                if self.color_edit.is_some() {
+                    self.apply_color_hex(editing.text());
+                    self.color_edit = None;
+                }
+            }
             TextTarget::PrefabSave => {
                 match self.workspace.save_selection_as_prefab(editing.text()) {
                     Ok(path) => {
@@ -1175,6 +1217,35 @@ impl EditorView {
         }
     }
 
+    /// 用 `#rrggbb[aa]` 写当前颜色字段（hex 弹层 / 预设色块共用）。
+    pub fn apply_color_hex(&mut self, hex: &str) {
+        let Some(state) = self.color_edit.clone() else {
+            return;
+        };
+        let Some(rgba) = prism_editor_gpui_core::theme::hex_to_rgba(hex) else {
+            self.workspace.log(
+                prism_editor_gpui_core::LogSource::Editor,
+                prism_editor_gpui_core::LogLevel::Warn,
+                "颜色格式应为 #rrggbb 或 #rrggbbaa",
+            );
+            return;
+        };
+        let components = if state.alpha { 4 } else { 3 };
+        let value = serde_json::Value::Array(
+            rgba[..components]
+                .iter()
+                .map(|value| {
+                    serde_json::Value::Number(
+                        serde_json::Number::from_f64(*value as f64)
+                            .unwrap_or_else(|| serde_json::Number::from_f64(0.0).unwrap()),
+                    )
+                })
+                .collect(),
+        );
+        let ids = state.entity_ids.clone();
+        self.apply_field(&ids, &state.component, &state.path, value);
+    }
+
     /// Transform 的 `position[1]` 形式：多选时写同一分量到所有实体。
     fn apply_transform_axis(&mut self, entity_ids: &[u32], path: &str, value: f32) {
         let Some((field, rest)) = path.split_once('[') else {
@@ -1217,6 +1288,23 @@ impl EditorView {
             return;
         }
 
+        // 右上角方向 gizmo：点轴端把相机转到该轴。
+        let orientation_frame =
+            prism_editor_gpui_core::viewport_math::camera_frame(&self.workspace.camera);
+        let orientation_center = (
+            width - crate::panels::viewport::ORIENTATION_MARGIN,
+            crate::panels::viewport::ORIENTATION_MARGIN,
+        );
+        if let Some((axis, sign)) = prism_editor_gpui_core::viewport_math::pick_orientation_axis(
+            local,
+            orientation_center,
+            crate::panels::viewport::ORIENTATION_RADIUS,
+            &orientation_frame,
+        ) {
+            self.workspace.look_along_axis(axis, sign);
+            return;
+        }
+
         let frame = prism_editor_gpui_core::viewport_math::camera_frame(&self.workspace.camera);
         let length =
             prism_editor_gpui_core::viewport_math::gizmo_world_length(&self.workspace.camera);
@@ -1245,6 +1333,7 @@ impl EditorView {
             .collect();
         if let Some((_entity_id, world_position, start_scale)) = candidate {
             match self.gizmo_mode {
+                GizmoMode::Select => {}
                 GizmoMode::Translate | GizmoMode::Scale => {
                     if let Some((axis, direction, px_per_unit)) =
                         prism_editor_gpui_core::viewport_math::pick_gizmo_axis_oriented(

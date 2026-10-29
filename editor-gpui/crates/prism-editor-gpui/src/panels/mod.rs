@@ -8,7 +8,7 @@ mod hierarchy;
 mod history;
 mod inspector;
 mod settings;
-mod viewport;
+pub(crate) mod viewport;
 
 use gpui::{div, prelude::*, Div, SharedString};
 use prism_editor_gpui_core::ThemeToken;

@@ -50,6 +50,8 @@
   以及跨文档的引用位置（点击跳转到实体）
 - **检查器资产选择器**：`*_path` / `env_map` / `volume` / `prefab` 字段右侧「…」按字段名
   过滤类别（模型 / 纹理 / 环境 / 音频 / 材质 / 预制体 / 场景），单击写回路径，可清除
+- **颜色选择器**：颜色字段的色块可点开弹层，输入 `#rrggbb[aa]` 或点预设色块；写回仍是
+  `apply_field`（多选一次撤销）
 - **资产重命名 / 移动**：只允许 `assets/` 内；改磁盘文件并把打开文档里精确匹配的路径
   字段一起改写（不做子串替换），撤销仍然可用（文档标记 dirty）
 - **存为预制体**：把选中实体子树写成 `assets/prefabs/<名字>.prefab.json`（重名加 `-2`），
@@ -68,13 +70,13 @@
 | 资产 | 目录树 + 面包屑/前进后退 + 列表/网格、分类 chips、搜索、新建文件夹、拖拽移动；选中详情（导入器 / 体积 / 分类 / GUID）；**双击场景/预制体打开文档**；**拖资产到检查器字段写路径、拖预制体到层级实体实例化**；右键**重命名 / 移动**（磁盘改名 + 打开文档里的精确路径引用自动改写）、**创建副本 / 复制路径 / 复制 GUID / 删除**（二次确认，不清理悬空引用）；选中资产时检查器显示预览与引用位置 |
 | 日志 | 级别 × 来源过滤、搜索、错误/告警计数、窗口化 `uniform_list`（固定 18px 行高） |
 | 撤销历史 | 当前文档的撤销栈（最近 → 最早），点击某条回退到该操作之前；一键清空 |
-| 场景视图 | `canvas` 绘制的世界网格（`G` 开关）、实体线框、选中高亮；**点击拾取实体**、**双击聚焦**、空白处左键拖**框选**（Shift 追加）、`Alt`+左键或右键轨道旋转、中键平移、滚轮缩放；gizmo 三模式（`W` 移动 / `E` 旋转 / `R` 缩放，Ctrl 吸附 0.25）：移动与缩放拖轴、旋转拖圆环，均可撤销（`X` 切世界/局部） |
+| 场景视图 | `canvas` 绘制的世界网格（`G` 开关）、实体线框、选中高亮；**点击拾取实体**、**双击聚焦**、空白处左键拖**框选**（Shift 追加）、`Alt`+左键或右键轨道旋转、中键平移、滚轮缩放；gizmo 工具（`Q` 选择 / `W` 移动 / `E` 旋转 / `R` 缩放，Ctrl 吸附 0.25）：移动与缩放拖轴、旋转拖圆环，均可撤销（`X` 切世界/局部）；`End` 贴地、`Ctrl+Shift+F` 视角对齐选中、`Ctrl+Alt+F` 选中移到视角中心；右上角方向 gizmo 点击换轴，统计浮层显示 FPS / 实体数 / 相机距离 |
 | 游戏视图 | 文档相机视角 + Play 状态；Play 时实体轻微上下浮动（模拟 tick） |
 | 文档 | 打开的文档、新建场景/预制体、模板 |
 | 渲染图 | pass 链（ShadowMap → Forward → Gtao → Post）+ 图资源表（scene/swapchain/frame 生命周期） |
 | 项目设置 / 首选项 / 主题 / 构建 / 离线工具 / 快捷键 / 关于 | 直接编辑设置、主题预设与 38 个 token 预览、真实 cargo/cook 构建日志、bake-gi 与 heightmap 命令预览 |
 
-**数据层**（`prism-editor-gpui-core`，UI 框架无关，185 个单元测试）
+**数据层**（`prism-editor-gpui-core`，UI 框架无关，190 个单元测试）
 
 - `.scene.json` / `.prefab.json`：稳定 id、parent 迁移、删除孤儿子级变根、reparent 防环、
   子树提取（存预制体）、预制体实例化（id 平移 + 名字去重 + 反向链接）、字段引用扫描
@@ -185,7 +187,7 @@ editor-gpui/
 
 ## 验证记录
 
-- `cargo test -p prism-editor-gpui-core`：**185 passed**。
+- `cargo test -p prism-editor-gpui-core`：**190 passed**。
 - `cargo check -p prism-editor-gpui --target x86_64-pc-windows-gnu`：通过。
 - `cargo clippy -p prism-editor-gpui -p prism-editor-gpui-core --target x86_64-pc-windows-gnu`：
   无 warning（仅 `proc-macro-error2` 的 future-incompat 提示）。

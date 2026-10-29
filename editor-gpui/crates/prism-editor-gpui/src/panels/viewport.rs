@@ -93,29 +93,34 @@ impl EditorView {
             )
             .child(div().w(px(8.0)))
             .children(
-                [GizmoMode::Translate, GizmoMode::Rotate, GizmoMode::Scale]
-                    .into_iter()
-                    .map(|mode| {
-                        let active = self.gizmo_mode == mode;
-                        div()
-                            .id(SharedString::from(format!("gizmo-mode-{:?}", mode)))
-                            .px_1()
-                            .rounded_sm()
-                            .cursor_pointer()
-                            .text_size(px(9.0))
-                            .text_color(if active {
-                                style.text_strong()
-                            } else {
-                                style.text_soft()
-                            })
-                            .when(active, |this| this.bg(style.selection()))
-                            .hover(move |this| this.bg(style.row_hover()))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.gizmo_mode = mode;
-                                cx.notify();
-                            }))
-                            .child(SharedString::from(mode.label()))
-                    }),
+                [
+                    GizmoMode::Select,
+                    GizmoMode::Translate,
+                    GizmoMode::Rotate,
+                    GizmoMode::Scale,
+                ]
+                .into_iter()
+                .map(|mode| {
+                    let active = self.gizmo_mode == mode;
+                    div()
+                        .id(SharedString::from(format!("gizmo-mode-{:?}", mode)))
+                        .px_1()
+                        .rounded_sm()
+                        .cursor_pointer()
+                        .text_size(px(9.0))
+                        .text_color(if active {
+                            style.text_strong()
+                        } else {
+                            style.text_soft()
+                        })
+                        .when(active, |this| this.bg(style.selection()))
+                        .hover(move |this| this.bg(style.row_hover()))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.gizmo_mode = mode;
+                            cx.notify();
+                        }))
+                        .child(SharedString::from(mode.label()))
+                }),
             )
             .when(scene, |header| {
                 header.child(
@@ -153,6 +158,28 @@ impl EditorView {
                             cx.notify();
                         }))
                         .child("网格"),
+                )
+            })
+            .when(scene, |header| {
+                header.child(
+                    div()
+                        .id("stats-toggle")
+                        .px_1()
+                        .rounded_sm()
+                        .cursor_pointer()
+                        .text_size(px(9.0))
+                        .text_color(if self.show_stats {
+                            style.text_strong()
+                        } else {
+                            style.muted()
+                        })
+                        .when(self.show_stats, |this| this.bg(style.selection()))
+                        .hover(move |this| this.bg(style.row_hover()))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.show_stats = !this.show_stats;
+                            cx.notify();
+                        }))
+                        .child("统计"),
                 )
             })
             .child(div().flex_1())
@@ -223,6 +250,50 @@ impl EditorView {
                 gpui::CursorStyle::Arrow
             })
             .child(div().absolute().top_0().left_0().size_full().child(canvas))
+            .when(self.show_stats && scene, |this| {
+                this.child(
+                    div()
+                        .absolute()
+                        .top(px(8.0))
+                        .right(px(8.0))
+                        .w(px(150.0))
+                        .p_2()
+                        .rounded_sm()
+                        .bg(style.alpha(ThemeToken::BgSunken, 0.88))
+                        .border_1()
+                        .border_color(style.border())
+                        .flex()
+                        .flex_col()
+                        .gap_0p5()
+                        .text_size(px(9.0))
+                        .text_color(style.text_soft())
+                        .child("Statistics")
+                        .child(SharedString::from(format!("FPS      {:.0}", self.fps)))
+                        .child(SharedString::from(format!(
+                            "Frame    {}",
+                            self.frame_counter
+                        )))
+                        .child(SharedString::from(format!("Entities {entity_count}")))
+                        .child(SharedString::from(format!(
+                            "Selected {}",
+                            self.workspace.selection.len()
+                        )))
+                        .child(SharedString::from(format!(
+                            "Play     {:.1}s",
+                            self.workspace.play_time_s
+                        )))
+                        .child(SharedString::from(format!(
+                            "Target   {:.1}, {:.1}, {:.1}",
+                            self.workspace.camera.target[0],
+                            self.workspace.camera.target[1],
+                            self.workspace.camera.target[2]
+                        )))
+                        .child(SharedString::from(format!(
+                            "Camera   {:.1} m",
+                            self.workspace.camera.distance
+                        ))),
+                )
+            })
             .child(
                 div()
                     .absolute()
@@ -467,6 +538,7 @@ fn paint_scene(
         for (axis, token) in axes {
             let color = style.alpha(token, 0.9);
             match snapshot.gizmo_mode {
+                GizmoMode::Select => {}
                 GizmoMode::Rotate => {
                     // 垂直于轴的圆环（48 段折线）；局部模式用实体自身轴。
                     let (u, v) = match axis {
@@ -576,6 +648,11 @@ fn paint_scene(
         }
     }
 
+    // 方向 gizmo（右上角，Scene View）。
+    if scene {
+        draw_orientation_gizmo(window, bounds, &frame, style);
+    }
+
     // 画布边缘一点内阴影感（一条细边）。
     window.paint_quad(gpui::quad(
         bounds,
@@ -585,6 +662,98 @@ fn paint_scene(
         style.border(),
         Default::default(),
     ));
+}
+
+pub const ORIENTATION_RADIUS: f32 = 44.0;
+pub const ORIENTATION_MARGIN: f32 = 70.0;
+
+/// 右上角方向 gizmo：三根世界轴 + 端点方块（点击由 `scene_mouse_down` 处理）。
+fn draw_orientation_gizmo(
+    window: &mut gpui::Window,
+    bounds: gpui::Bounds<gpui::Pixels>,
+    frame: &CameraFrame,
+    style: crate::style::Style,
+) {
+    let width = f32::from(bounds.size.width);
+    let center = (width - ORIENTATION_MARGIN, ORIENTATION_MARGIN);
+    // 背景圆盘
+    let mut disk = PathBuilder::fill();
+    let mut first = true;
+    for step in 0..=40 {
+        let angle = step as f32 / 40.0 * std::f32::consts::TAU;
+        let point = gpui::point(
+            bounds.origin.x + px(center.0 + angle.cos() * (ORIENTATION_RADIUS + 10.0)),
+            bounds.origin.y + px(center.1 + angle.sin() * (ORIENTATION_RADIUS + 10.0)),
+        );
+        if first {
+            disk.move_to(point);
+            first = false;
+        } else {
+            disk.line_to(point);
+        }
+    }
+    if let Ok(path) = disk.build() {
+        window.paint_path(path, style.alpha(ThemeToken::BgSunken, 0.55));
+    }
+
+    let axes = [
+        (0usize, ThemeToken::Danger),
+        (1, ThemeToken::Success),
+        (2, ThemeToken::Accent),
+    ];
+    for (axis, token) in axes {
+        for sign in [1.0_f32, -1.0] {
+            let direction = prism_editor_gpui_core::viewport_math::orientation_axis_direction(
+                frame, axis, sign,
+            );
+            let length = (direction[0] * direction[0] + direction[1] * direction[1]).sqrt();
+            if length < 0.2 {
+                continue;
+            }
+            let end = (
+                center.0 + direction[0] * ORIENTATION_RADIUS,
+                center.1 + direction[1] * ORIENTATION_RADIUS,
+            );
+            let color = style.alpha(token, if sign > 0.0 { 0.95 } else { 0.45 });
+            paint_screen_segment(window, bounds, center, end, color, 2.0);
+            window.paint_quad(gpui::quad(
+                gpui::Bounds {
+                    origin: gpui::point(
+                        bounds.origin.x + px(end.0 - 3.0),
+                        bounds.origin.y + px(end.1 - 3.0),
+                    ),
+                    size: gpui::size(px(6.0), px(6.0)),
+                },
+                px(1.0),
+                color,
+                px(0.0),
+                color,
+                Default::default(),
+            ));
+        }
+    }
+}
+
+fn paint_screen_segment(
+    window: &mut gpui::Window,
+    bounds: gpui::Bounds<gpui::Pixels>,
+    start: (f32, f32),
+    end: (f32, f32),
+    color: gpui::Hsla,
+    width: f32,
+) {
+    let mut builder = PathBuilder::stroke(px(width));
+    builder.move_to(gpui::point(
+        bounds.origin.x + px(start.0),
+        bounds.origin.y + px(start.1),
+    ));
+    builder.line_to(gpui::point(
+        bounds.origin.x + px(end.0),
+        bounds.origin.y + px(end.1),
+    ));
+    if let Ok(path) = builder.build() {
+        window.paint_path(path, color);
+    }
 }
 
 fn draw_line(

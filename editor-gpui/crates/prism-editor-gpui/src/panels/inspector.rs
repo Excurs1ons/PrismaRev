@@ -8,7 +8,9 @@ use gpui::{div, prelude::*, px, AnyElement, Div, MouseButton, SharedString, Stat
 use prism_editor_gpui_core::{FieldSchema, FieldWidget, ThemeToken, TypeSchema};
 use serde_json::Value;
 
-use crate::app::{AssetPickerState, ContextTarget, DragState, EditorView, TextTarget};
+use crate::app::{
+    AssetPickerState, ColorEditState, ContextTarget, DragState, EditorView, TextTarget,
+};
 use crate::panels::{header_row, icon_button, muted};
 
 impl EditorView {
@@ -72,7 +74,134 @@ impl EditorView {
         if self.add_component_open {
             root = root.child(self.add_component_menu(cx));
         }
+        if self.color_edit.is_some() {
+            root = root.child(self.color_popover(cx));
+        }
         root.into_any_element()
+    }
+
+    /// 颜色字段弹层：hex 输入 + 预设色块。
+    fn color_popover(&mut self, cx: &mut gpui::Context<Self>) -> Div {
+        let style = self.style;
+        let hex = self
+            .editing
+            .as_ref()
+            .filter(|editing| editing.target == TextTarget::ColorHex)
+            .map(|editing| editing.text().to_string())
+            .unwrap_or_default();
+        let color = prism_editor_gpui_core::theme::hex_to_rgba(&hex)
+            .map(|rgba| {
+                gpui::rgba(
+                    ((rgba[0].clamp(0.0, 1.0) * 255.0) as u32) << 24
+                        | ((rgba[1].clamp(0.0, 1.0) * 255.0) as u32) << 16
+                        | ((rgba[2].clamp(0.0, 1.0) * 255.0) as u32) << 8
+                        | ((rgba[3].clamp(0.0, 1.0) * 255.0) as u32),
+                )
+            })
+            .unwrap_or_else(|| gpui::rgba(0x00000000));
+
+        let presets = [
+            "#ffffff", "#e74c3c", "#f39c12", "#f1c40f", "#2ecc71", "#3498db", "#9b59b6", "#34495e",
+        ];
+        let mut preset_row = div().flex().flex_row().flex_wrap().gap_1();
+        for preset in presets {
+            preset_row = preset_row.child(
+                div()
+                    .id(SharedString::from(format!("color-preset-{preset}")))
+                    .w(px(18.0))
+                    .h(px(18.0))
+                    .rounded_sm()
+                    .border_1()
+                    .border_color(style.border())
+                    .cursor_pointer()
+                    .bg(prism_editor_gpui_core::theme::hex_to_rgba(preset)
+                        .map(|rgba| {
+                            gpui::rgba(
+                                ((rgba[0] * 255.0) as u32) << 24
+                                    | ((rgba[1] * 255.0) as u32) << 16
+                                    | ((rgba[2] * 255.0) as u32) << 8
+                                    | 0xff,
+                            )
+                        })
+                        .unwrap_or_else(|| gpui::rgba(0x00000000)))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.apply_color_hex(preset);
+                        this.color_edit = None;
+                        this.editing = None;
+                        cx.notify();
+                    })),
+            );
+        }
+
+        div()
+            .absolute()
+            .top(px(96.0))
+            .right(px(6.0))
+            .w(px(220.0))
+            .p_2()
+            .bg(style.panel_raised())
+            .border_1()
+            .border_color(style.border_strong())
+            .rounded_sm()
+            .shadow_lg()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(style.text_strong())
+                            .child("颜色"),
+                    )
+                    .child(
+                        div()
+                            .id("color-close")
+                            .text_size(px(9.0))
+                            .text_color(style.muted())
+                            .cursor_pointer()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.color_edit = None;
+                                this.editing = None;
+                                cx.notify();
+                            }))
+                            .child("关闭"),
+                    ),
+            )
+            .child(
+                div()
+                    .h(px(28.0))
+                    .rounded_sm()
+                    .border_1()
+                    .border_color(style.border())
+                    .bg(color),
+            )
+            .child(
+                div()
+                    .id("color-hex-input")
+                    .h(px(20.0))
+                    .px_1()
+                    .rounded_sm()
+                    .border_1()
+                    .border_color(style.accent())
+                    .bg(style.bg_sunken())
+                    .flex()
+                    .items_center()
+                    .cursor_text()
+                    .text_size(px(10.0))
+                    .text_color(style.text())
+                    .child(SharedString::from(if hex.is_empty() {
+                        "输入 #rrggbb / #rrggbbaa".to_string()
+                    } else {
+                        hex.clone()
+                    })),
+            )
+            .child(preset_row)
     }
 
     /// 选中资产时替代实体检查器（对齐 Web 的 `AssetInspector.vue`）。
@@ -1243,6 +1372,34 @@ impl EditorView {
                             .rounded_sm()
                             .border_1()
                             .border_color(style.border_strong())
+                            .id(SharedString::from(format!(
+                                "color-swatch-{index}-{component}-{path}"
+                            )))
+                            .cursor_pointer()
+                            .on_click(cx.listener({
+                                let ids = entity_ids.to_vec();
+                                let component = component.to_string();
+                                let path = path.to_string();
+                                let current = rgba.clone();
+                                move |this, _, _, cx| {
+                                    this.color_edit = Some(ColorEditState {
+                                        entity_ids: ids.clone(),
+                                        component: component.clone(),
+                                        path: path.clone(),
+                                        alpha,
+                                    });
+                                    let hex = prism_editor_gpui_core::theme::rgba_to_hex(
+                                        [
+                                            current[0],
+                                            current[1],
+                                            current[2],
+                                            current[3.min(current.len() - 1)],
+                                        ],
+                                        alpha,
+                                    );
+                                    this.begin_edit(TextTarget::ColorHex, hex, cx);
+                                }
+                            }))
                             .bg(gpui::rgba(
                                 ((rgba[0].clamp(0.0, 1.0) * 255.0) as u32) << 24
                                     | ((rgba[1].clamp(0.0, 1.0) * 255.0) as u32) << 16

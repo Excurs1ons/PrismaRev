@@ -18,7 +18,7 @@ use crate::schema::{component_value_with_overrides, EntityPreset, Schema, TypeSc
 use crate::theme::{ThemeColors, ThemeState, ThemeToken};
 use crate::viewport_math::{
     basis_from_quat, parent_world_rotation, quat_axis_angle, quat_conjugate, quat_mul,
-    quat_normalize, quat_rotate, world_rotation, GizmoSpace,
+    quat_normalize, quat_rotate, world_position, world_rotation, world_scale, GizmoSpace,
 };
 use serde_json::Value;
 use std::collections::HashSet;
@@ -2540,6 +2540,116 @@ impl Workspace {
         self.camera.focus(center, 2.0);
     }
 
+    /// 选择集在世界空间的中心（父链累积位置）。
+    pub fn selection_center_world(&self) -> Option<[f32; 3]> {
+        let doc = &self.document().doc;
+        let mut center = [0.0; 3];
+        let mut count = 0;
+        for index in &self.selection {
+            let position = world_position(doc, *index);
+            center[0] += position[0];
+            center[1] += position[1];
+            center[2] += position[2];
+            count += 1;
+        }
+        (count > 0).then(|| {
+            [
+                center[0] / count as f32,
+                center[1] / count as f32,
+                center[2] / count as f32,
+            ]
+        })
+    }
+
+    /// Unity「Align View to Selected」：把轨道中心对准选中项（保留距离与角度）。
+    pub fn align_view_to_selection(&mut self) -> bool {
+        let Some(center) = self.selection_center_world() else {
+            return false;
+        };
+        self.camera.target = center;
+        true
+    }
+
+    /// Unity「Align Selected to View」：把选中项平移到当前轨道中心。
+    pub fn align_selection_to_view(&mut self) -> bool {
+        let Some(center) = self.selection_center_world() else {
+            return false;
+        };
+        let delta = [
+            self.camera.target[0] - center[0],
+            self.camera.target[1] - center[1],
+            self.camera.target[2] - center[2],
+        ];
+        let ids: Vec<u32> = self
+            .selection
+            .iter()
+            .filter_map(|index| self.document().doc.entities.get(*index)?.id)
+            .collect();
+        self.translate_entities_world(&ids, delta);
+        true
+    }
+
+    /// 方向 gizmo：沿世界轴看过去（`axis` 0/1/2，`sign` ±1）。
+    pub fn look_along_axis(&mut self, axis: usize, sign: f32) {
+        let direction = match axis {
+            0 => [sign, 0.0, 0.0],
+            1 => [0.0, sign, 0.0],
+            _ => [0.0, 0.0, sign],
+        };
+        self.camera.yaw = direction[0].atan2(direction[2]);
+        self.camera.pitch = direction[1].asin().clamp(-1.55, 1.55);
+    }
+
+    /// 选中项贴地：每个实体把自己的世界 AABB 底面移到 y = 0（一次撤销步）。
+    pub fn snap_selection_to_ground(&mut self) -> usize {
+        let doc = self.document().doc.clone();
+        let mut changes = Vec::new();
+        for index in &self.selection {
+            let Some(entity) = doc.entities.get(*index) else {
+                continue;
+            };
+            let Some(entity_id) = entity.id else {
+                continue;
+            };
+            let world = world_position(&doc, *index);
+            let half_height = (world_scale(&doc, *index)[1] * 0.5).abs();
+            let delta_y = half_height - world[1];
+            if delta_y.abs() < 1e-4 {
+                continue;
+            }
+            let delta_local = quat_rotate(
+                quat_conjugate(parent_world_rotation(&doc, *index)),
+                [0.0, delta_y, 0.0],
+            );
+            let before = entity.transform;
+            let mut after = before;
+            for (position, delta) in after.position.iter_mut().zip(delta_local) {
+                *position += delta;
+            }
+            changes.push((entity_id, before, after));
+        }
+        if changes.is_empty() {
+            return 0;
+        }
+        let ids: Vec<u32> = changes.iter().map(|(id, _, _)| *id).collect();
+        let count = changes.len();
+        let now = now_ms();
+        let document = self.document_mut();
+        document.undo.push_transform_batch(
+            &mut document.doc,
+            changes,
+            format!("snap-ground/{ids:?}"),
+            now,
+        );
+        document.dirty = true;
+        self.log(
+            LogSource::Editor,
+            LogLevel::Info,
+            format!("已把 {count} 个实体贴到地面"),
+        );
+        count
+    }
+
     // ── 命令分发（菜单 / 快捷键共用） ──────────────────────────────────
 
     pub fn run(&mut self, command: Command) {
@@ -3511,6 +3621,40 @@ mod tests {
         assert!(workspace
             .move_asset_to_folder("assets/scenes/a.scene.json", Some("assets"))
             .is_err());
+    }
+
+    #[test]
+    fn snap_ground_and_align_operations() {
+        let mut workspace = Workspace::sample();
+        // sample：0 Main Camera、1 Cube、2 Directional Light、3 Detail。
+        let cube = 1;
+        workspace.selection = vec![cube];
+        workspace.document_mut().doc.entities[cube]
+            .transform
+            .position = [0.0, 3.0, 0.0];
+        workspace.document_mut().doc.entities[cube].transform.scale = [2.0, 2.0, 2.0];
+        assert_eq!(workspace.snap_selection_to_ground(), 1);
+        let position = workspace.document().doc.entities[cube].transform.position;
+        assert!(
+            (position[1] - 1.0).abs() < 1e-3,
+            "半高 1 → y=1，实际 {position:?}"
+        );
+        assert!(workspace.can_undo());
+
+        workspace.camera.target = [9.0, 9.0, 9.0];
+        assert!(workspace.align_selection_to_view());
+        let position = workspace.document().doc.entities[cube].transform.position;
+        assert!(
+            (position[0] - 9.0).abs() < 1e-3,
+            "应平移到轨道中心: {position:?}"
+        );
+
+        assert!(workspace.align_view_to_selection());
+        assert!((workspace.camera.target[0] - 9.0).abs() < 1e-3);
+        assert!((workspace.camera.target[1] - 9.0).abs() < 1e-3);
+
+        workspace.look_along_axis(0, 1.0);
+        assert!((workspace.camera.yaw - std::f32::consts::FRAC_PI_2).abs() < 1e-3);
     }
 
     #[test]

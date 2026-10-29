@@ -713,3 +713,117 @@ impl ThemeState {
         self.overrides.remove(&token);
     }
 }
+
+/// RGB（0..1）→ HSV（色相 0..360，饱和度/明度 0..1）。
+pub fn rgb_to_hsv(rgb: [f32; 3]) -> [f32; 3] {
+    let [r, g, b] = rgb.map(|value| value.clamp(0.0, 1.0));
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let delta = max - min;
+    let hue = if delta < 1e-6 {
+        0.0
+    } else if max == r {
+        60.0 * (((g - b) / delta) % 6.0)
+    } else if max == g {
+        60.0 * ((b - r) / delta + 2.0)
+    } else {
+        60.0 * ((r - g) / delta + 4.0)
+    };
+    let hue = if hue < 0.0 { hue + 360.0 } else { hue };
+    let saturation = if max < 1e-6 { 0.0 } else { delta / max };
+    [hue, saturation, max]
+}
+
+/// HSV（色相 0..360，饱和度/明度 0..1）→ RGB（0..1）。
+pub fn hsv_to_rgb(hsv: [f32; 3]) -> [f32; 3] {
+    let hue = hsv[0].rem_euclid(360.0);
+    let saturation = hsv[1].clamp(0.0, 1.0);
+    let value = hsv[2].clamp(0.0, 1.0);
+    let chroma = value * saturation;
+    let section = hue / 60.0;
+    let x = chroma * (1.0 - (section % 2.0 - 1.0).abs());
+    let (r, g, b) = match section as u32 {
+        0 => (chroma, x, 0.0),
+        1 => (x, chroma, 0.0),
+        2 => (0.0, chroma, x),
+        3 => (0.0, x, chroma),
+        4 => (x, 0.0, chroma),
+        _ => (chroma, 0.0, x),
+    };
+    let m = value - chroma;
+    [r + m, g + m, b + m]
+}
+
+/// `[r, g, b, a]`（0..1）→ `#rrggbb`（`alpha` 为真时 `#rrggbbaa`）。
+pub fn rgba_to_hex(rgba: [f32; 4], alpha: bool) -> String {
+    let byte = |value: f32| (value.clamp(0.0, 1.0) * 255.0).round() as u8;
+    if alpha {
+        format!(
+            "#{:02x}{:02x}{:02x}{:02x}",
+            byte(rgba[0]),
+            byte(rgba[1]),
+            byte(rgba[2]),
+            byte(rgba[3])
+        )
+    } else {
+        format!(
+            "#{:02x}{:02x}{:02x}",
+            byte(rgba[0]),
+            byte(rgba[1]),
+            byte(rgba[2])
+        )
+    }
+}
+
+/// `#rgb` / `#rrggbb` / `#rrggbbaa` → `[r, g, b, a]`（0..1）。
+pub fn hex_to_rgba(hex: &str) -> Option<[f32; 4]> {
+    let hex = hex.trim().trim_start_matches('#');
+    let parse = |range: std::ops::Range<usize>| {
+        u8::from_str_radix(hex.get(range)?, 16)
+            .ok()
+            .map(|value| f32::from(value) / 255.0)
+    };
+    match hex.len() {
+        6 => Some([parse(0..2)?, parse(2..4)?, parse(4..6)?, 1.0]),
+        8 => Some([parse(0..2)?, parse(2..4)?, parse(4..6)?, parse(6..8)?]),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hsv_and_rgb_round_trip() {
+        for rgb in [
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [0.2, 0.6, 0.9],
+            [0.5, 0.5, 0.5],
+        ] {
+            let hsv = rgb_to_hsv(rgb);
+            let back = hsv_to_rgb(hsv);
+            for axis in 0..3 {
+                assert!(
+                    (back[axis] - rgb[axis]).abs() < 1e-3,
+                    "{rgb:?} → {hsv:?} → {back:?}"
+                );
+            }
+        }
+        assert_eq!(rgb_to_hsv([0.0, 0.0, 0.0])[2], 0.0);
+    }
+
+    #[test]
+    fn hex_parses_and_formats_rgba() {
+        assert_eq!(rgba_to_hex([1.0, 0.5, 0.0, 1.0], false), "#ff8000");
+        assert_eq!(rgba_to_hex([1.0, 0.5, 0.0, 0.5], true), "#ff800080");
+        let color = hex_to_rgba("#ff8000").unwrap();
+        assert!((color[0] - 1.0).abs() < 1e-3);
+        assert!((color[3] - 1.0).abs() < 1e-3);
+        assert!((hex_to_rgba("ff800080").unwrap()[3] - 128.0 / 255.0).abs() < 1e-3);
+        assert_eq!(hex_to_rgba("#xyz"), None);
+        assert_eq!(hex_to_rgba("#fff"), None);
+    }
+}

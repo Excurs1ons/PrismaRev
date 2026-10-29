@@ -1,6 +1,6 @@
 # GPUI 原生编辑器（`editor-gpui/`）
 
-> 状态：**可编译的类型检查 + 185 个数据层单测通过**；桌面运行尚未在 CI 上跑过
+> 状态：**可编译的类型检查 + 190 个数据层单测通过**；桌面运行尚未在 CI 上跑过
 > （GPUI 需要 Windows/macOS/Linux 桌面与 GPU）。
 >
 > 本文说明「为什么做、边界在哪、怎么接真实引擎」，功能清单见
@@ -123,6 +123,9 @@ Unity 形状的编辑器，又不会把 `prism-render` 绑死在某套 UI 生命
 - **资产检查器**：选中资产时检查器优先显示 `AssetDetails` —— 稳定 GUID、体积、导入器、
   文本预览（UTF-8 边界截断）或图片尺寸（PNG/GIF/BMP/JPEG 文件头解析），以及跨打开 /
   磁盘文档的引用；点击引用会打开对应文档并选中实体。选中实体或视口拾取会清掉资产选择。
+- **颜色选择器**：颜色字段的色块点开弹层，可输入 `#rrggbb` / `#rrggbbaa` 或点 8 个预设
+  色块；`hex_to_rgba` / `rgba_to_hex` / HSV 互转在 `core/src/theme.rs`，写回仍走
+  `apply_field`（多选一次撤销）。
 - **多选拖拽层级**：拖到行中间时若被拖的实体在选中集合里，`reparent_selection` 把
   `selection_roots()` 整组挂到目标下（一次快照撤销）；行上/下 25% 仍是单实体排序。
 - **递归展开**：`Alt`+点箭头走 `set_subtree_expanded`（根 + 全部后代一起展开 / 收起），
@@ -224,13 +227,17 @@ Unity 形状的编辑器，又不会把 `prism-render` 绑死在某套 UI 生命
 
 - 轨道相机（target / yaw / pitch / distance）投影到屏幕，画 21×21 世界网格、
   未选中实体的线框、选中实体的线框 + 三色 gizmo 轴；
-- 左键：先试 gizmo（移动/缩放拖轴 8px 内；旋转拖圆环 10px 内，Ctrl 吸附 0.25），
+- 左键：先试方向 gizmo（右上角三轴端点，9px 内 → 相机转到该轴），再试 gizmo
+  （移动/缩放拖轴 8px 内；旋转拖圆环 10px 内，Ctrl 吸附 0.25），
   否则射线拾取实体（单位立方体 × scale 的近似，双击同一实体 = 取景）；点击空白清空选择，
   在空白处拖拽 = **框选**（投影中心 / 8 个角任一落在矩形内即选中，Shift 追加）；
-  `Alt`+左键或右键轨道旋转、中键平移、滚轮缩放；`W` / `E` / `R` 切换移动 / 旋转 /
-  缩放 gizmo，`X` 或标题栏按钮切换世界 / 局部坐标，`G` 开关网格。多选时线框全画、
-  gizmo 画在主选择上，三种模式都支持**批量变换**（整组一个撤销步）：平移共用世界位移，
-  旋转绕各自位置，缩放保留各自起始比例。
+  `Alt`+左键或右键轨道旋转、中键平移、滚轮缩放；`Q` / `W` / `E` / `R` 切换选择 / 移动 /
+  旋转 / 缩放工具，`X` 或标题栏按钮切换世界 / 局部坐标，`G` 开关网格，
+  `End` 把选中实体贴到地面（`snap_selection_to_ground`，按世界 AABB 半高），
+  `Ctrl+Shift+F` 视角对准选中、`Ctrl+Alt+F` 把选中移到轨道中心。多选时线框全画、
+  gizmo 画在主选择上，三种变换都支持**批量变换**（整组一个撤销步）：平移共用世界位移，
+  旋转绕各自位置，缩放保留各自起始比例。标题栏「统计」显示 FPS / 帧号 / 实体数 /
+  选中数 / Play 时间 / 相机 target 与距离。
 - 旋转在世界空间左乘 `q_axis * q_old`，局部空间右乘 `q_old * q_axis`；局部模式的
   三轴取实体沿父链累积的世界旋转（`world_rotation` / `gizmo_basis`）。平移把世界位移
   经**父级世界旋转的逆**换算成 `position` 增量（`translate_entity_world`），所以父级
@@ -259,7 +266,7 @@ Unity 形状的编辑器，又不会把 `prism-render` 绑死在某套 UI 生命
 
 ```sh
 cd editor-gpui
-cargo test -p prism-editor-gpui-core                                  # 185 passed
+cargo test -p prism-editor-gpui-core                                  # 190 passed
 cargo check -p prism-editor-gpui --target x86_64-pc-windows-gnu       # 类型检查
 cargo clippy -p prism-editor-gpui -p prism-editor-gpui-core \
     --target x86_64-pc-windows-gnu                                    # clean
