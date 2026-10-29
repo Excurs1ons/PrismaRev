@@ -254,6 +254,20 @@ Unity 形状的编辑器，又不会把 `prism-render` 绑死在某套 UI 生命
   `canvas` 以 overlay-only 模式画在帧上。
 - 没有 feature 时 `paint_scene` 是纯 CPU 投影；两条路共用同一套拾取 / gizmo 数学，
   所以交互不依赖引擎是否可用。
+- **当前仍是 CPU 回读**：引擎离屏 image → `vkCmdCopyImageToBuffer` → CPU `Vec<u8>` →
+  channel → GPUI `RenderImage`（再上传为 GPUI 纹理）。1280×720 RGBA 每帧 ~3.5 MiB，
+  30 Hz 约 105 MB/s；静止时引擎线程不再 `host_tick`，只保留首帧/文档变更/Play 时的回读。
+- **GPUI 0.2.2 没有通用 GPU interop**：`gpui::surface()` / `Window::paint_surface`
+  只接受 macOS `CVPixelBuffer`（`#[cfg(target_os = "macos")]`），Windows/Linux 没有
+  公开的外部纹理导入 API；`wgpu-graft` 的 GPUI demo 也因此故意走 CPU 回读。上游
+  「external compositor」仍是 proposal（zd#60572），不在 0.2.2。
+  要真正零拷贝只有三条路：
+  1. 原生 surface / overlay 窗口（`window.window_handle()` 拿原生句柄，自己建 swapchain；
+     Tauri 的 Win32 popup 已验证，但输入、层级、DPI、浮动面板遮挡都要自己处理）；
+  2. fork / 升级 GPUI，实现 external compositor 或暴露 `wgpu::Device` 导入 Vulkan
+     external memory（需要引擎侧导出 dmabuf / NT handle / IOSurface）；
+  3. 只接受 macOS 的 `CVPixelBuffer` 路径（引擎需要 IOSurface external memory）。
+  没有现成的 `gpui_interop` 依赖可以直接加。
 - 原生 surface（Windows owner popup + 输入转发）仍是可选的下一步，离屏图像路线已经覆盖
   跨平台需求。
 

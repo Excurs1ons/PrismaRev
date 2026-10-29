@@ -174,6 +174,8 @@ editor-gpui/
   变化 resize，Play/Pause/Step 同步模拟。覆盖层（选中线框 / gizmo / 方向 gizmo）仍由
   `canvas` 画在帧上。
   需要桌面 Vulkan 设备与已编译 `.spv`（`bash assets/shaders/compile.sh`）；
+  当前帧仍走 CPU 回读（静止画面不再轮询），GPUI 0.2.2 没有通用 GPU interop，
+  零拷贝需要原生 surface 或 fork GPUI（见 `docs/editor-gpui.md` §9）；
   `cargo check --features engine-viewport --target x86_64-pc-windows-gnu` 已验证可编译，
   运行时回归仍需在有 GPU 的桌面做。
 - **构建是真实子进程**：构建面板 / 「构建项目」「构建场景包」菜单按 `core::build` 的计划执行

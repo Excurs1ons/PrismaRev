@@ -116,6 +116,8 @@ fn engine_loop(
 
     let mut simulate = false;
     let mut step_once = false;
+    let mut dirty = true;
+    let mut warmup = 3u8;
     let mut last_frame_at = std::time::Instant::now();
     let mut frame_count = 0u32;
     loop {
@@ -126,10 +128,22 @@ fn engine_loop(
                         let _ =
                             updates.send(EngineUpdate::Error(format!("重新加载场景失败：{error}")));
                     }
+                    dirty = true;
+                    warmup = 2;
                 }
-                EngineCommand::Resize(width, height) => app.host_resize(width, height),
-                EngineCommand::Simulate(value) => simulate = value,
-                EngineCommand::Step => step_once = true,
+                EngineCommand::Resize(width, height) => {
+                    app.host_resize(width, height);
+                    dirty = true;
+                    warmup = 2;
+                }
+                EngineCommand::Simulate(value) => {
+                    simulate = value;
+                    dirty = true;
+                }
+                EngineCommand::Step => {
+                    step_once = true;
+                    dirty = true;
+                }
                 EngineCommand::Shutdown => {
                     app.shutdown_hosted();
                     return;
@@ -137,21 +151,27 @@ fn engine_loop(
             }
         }
 
-        app.host_tick(simulate || step_once);
-        step_once = false;
+        // 只有模拟、场景变更或启动预热时才真正渲染 / 读回；静止的编辑器视口
+        // 不再每帧走 GPU→CPU 回读。
+        if simulate || step_once || dirty || warmup > 0 {
+            app.host_tick(simulate || step_once);
+            step_once = false;
+            dirty = false;
+            warmup = warmup.saturating_sub(1);
 
-        if let Some(frame) = app.take_hosted_frame() {
-            let _ = updates.send(EngineUpdate::Frame(EngineFrame {
-                width: frame.width,
-                height: frame.height,
-                pixels: frame.pixels,
-            }));
-            frame_count += 1;
-        }
-        if frame_count >= 15 {
-            frame_count = 0;
-            if let Some(stats) = app.render_stats() {
-                let _ = updates.send(EngineUpdate::Stats { fps: stats.fps });
+            if let Some(frame) = app.take_hosted_frame() {
+                let _ = updates.send(EngineUpdate::Frame(EngineFrame {
+                    width: frame.width,
+                    height: frame.height,
+                    pixels: frame.pixels,
+                }));
+                frame_count += 1;
+            }
+            if frame_count >= 15 {
+                frame_count = 0;
+                if let Some(stats) = app.render_stats() {
+                    let _ = updates.send(EngineUpdate::Stats { fps: stats.fps });
+                }
             }
         }
         if let Some(error) = app.render_failure() {
