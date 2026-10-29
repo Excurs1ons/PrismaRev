@@ -38,7 +38,7 @@ pub fn candidates(exe_dir: &Path, profile: &str) -> Vec<PathBuf> {
     out
 }
 
-fn repo_root_from(start: &Path) -> Option<PathBuf> {
+pub(crate) fn repo_root_from(start: &Path) -> Option<PathBuf> {
     start
         .ancestors()
         .find(|dir| dir.join(GAME_CRATE_DIR).join("Cargo.toml").is_file())
