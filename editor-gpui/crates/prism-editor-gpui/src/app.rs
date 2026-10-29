@@ -314,6 +314,7 @@ impl MenuId {
                 Command::CutEntity,
                 Command::PasteEntity,
                 Command::PasteComponent,
+                Command::ClearComponentClipboard,
                 Command::Preferences,
                 Command::ProjectSettings,
                 Command::ThemePanel,
@@ -335,6 +336,7 @@ impl MenuId {
                 Command::ToggleBuild,
                 Command::ToggleTools,
                 Command::ToggleHistory,
+                Command::ResetLayout,
             ],
             MenuId::Help => &[Command::Shortcuts, Command::About],
         }

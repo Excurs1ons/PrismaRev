@@ -2689,6 +2689,11 @@ impl Workspace {
                 self.selection = (0..self.document().doc.entities.len()).collect();
             }
             Command::PasteComponent => self.paste_component(),
+            Command::ClearComponentClipboard => {
+                self.clipboard = None;
+                self.status = "已清空组件剪贴板".to_string();
+            }
+            Command::ResetLayout => self.set_layout_preset("default"),
             Command::CopyEntity => {
                 self.copy_selection();
             }
@@ -2736,6 +2741,7 @@ impl Workspace {
             | Command::FrameSelection => !self.selection.is_empty(),
             Command::PasteEntity => self.entity_clipboard.is_some(),
             Command::PasteComponent => self.clipboard.is_some() && !self.selection.is_empty(),
+            Command::ClearComponentClipboard => self.clipboard.is_some(),
             Command::Pause | Command::Stop | Command::Step => self.playing,
             Command::Play => !self.playing,
             Command::BuildProject | Command::CookScenes | Command::OfflineTools => true,
