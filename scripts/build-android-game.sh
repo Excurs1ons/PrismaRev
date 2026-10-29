@@ -17,7 +17,7 @@
 #     NDK 换成本机可执行的 clang shim）
 #   - build-tools 里的 aapt2/aidl/zipalign/split-select 换成 aarch64 版（Google 只发
 #     x86_64），本脚本会自动用 -Pandroid.aapt2FromMavenOverride 指向 SDK 里能跑的那个
-# 详见 docs/android-arm64.md。
+# 详见 docs/android-apk.md；aarch64 主机另见 docs/android-arm64.md。
 set -euo pipefail
 
 MODE="${1:-debug}"

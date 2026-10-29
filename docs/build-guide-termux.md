@@ -105,11 +105,14 @@ cargo test --workspace                 # ~400 测试（含 CRT 状态机单测�
 两条路，按需选：
 
 - **game-only（无 launcher）**：`projects/prisma/android/` + `scripts/build-android-game.sh`。
-  打出的 APK 里只有 `GameActivity` + `libprisma.so` + `assets/game/`，不含 Tauri / WebView，
-  aarch64 主机上的完整流程（NDK shim、aarch64 aapt2）见 [`docs/android-arm64.md`](android-arm64.md)。
+  打出的 APK 里只有 `GameActivity` + `libprisma.so` + `assets/game/`，不含 Tauri / WebView。
+  流程见 [`docs/android-apk.md`](android-apk.md)。
 - **launcher + 游戏（双 Activity）**：Tauri 的 `launcher/src-tauri/gen/android/`，
   `scripts/build-android.ps1`（Windows）。Termux 上也可以直接把新 `.so` 替换进已有 APK
   并用 `apksigner` 重签。
+
+> Termux / aarch64 主机额外要换 NDK 与 build-tools 里的 x86_64 原生二进制，
+> 见 [`docs/android-arm64.md`](android-arm64.md)（**x86_64 主机不需要**）。
 
 只编 `.so`（不打包）时仍可用 cargo-ndk：
 
