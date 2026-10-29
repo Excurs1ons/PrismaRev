@@ -1587,6 +1587,13 @@ impl EditorApp {
 
             // ---- Component ----
             ui.menu_button("Component", |ui| {
+                // 与检查器的 Add Component 一致：已挂的组件不列出。
+                let attachable: std::collections::HashSet<String> = self
+                    .workspace
+                    .component_types()
+                    .into_iter()
+                    .map(|component| component.name.clone())
+                    .collect();
                 let categories: Vec<(String, Vec<(String, String)>)> = self
                     .workspace
                     .schema
@@ -1597,13 +1604,15 @@ impl EditorApp {
                             category.to_string(),
                             items
                                 .into_iter()
+                                .filter(|item| attachable.contains(&item.name))
                                 .map(|item| (item.name.clone(), item.display_name().to_string()))
                                 .collect(),
                         )
                     })
+                    .filter(|(_, items): &(String, Vec<(String, String)>)| !items.is_empty())
                     .collect();
                 if categories.is_empty() {
-                    ui.label("no schema loaded");
+                    ui.label("no more components");
                 }
                 for (category, items) in categories {
                     ui.menu_button(category, |ui| {

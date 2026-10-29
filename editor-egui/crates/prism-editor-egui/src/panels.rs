@@ -613,6 +613,12 @@ fn add_component_menu(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiStat
     ui.menu_button("Add Component", |ui| {
         ui.add(egui::TextEdit::singleline(&mut state.add_component_query).hint_text("search"));
         let query = state.add_component_query.to_lowercase();
+        // 只列**当前实体还没挂**的组件：已挂的再点一次会把参数重置成默认值。
+        let attachable: std::collections::HashSet<String> = workspace
+            .component_types()
+            .into_iter()
+            .map(|component| component.name.clone())
+            .collect();
         let categories: Vec<(String, Vec<(String, String)>)> = workspace
             .schema
             .component_menu()
@@ -622,6 +628,7 @@ fn add_component_menu(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiStat
                     category.to_string(),
                     items
                         .into_iter()
+                        .filter(|item| attachable.contains(&item.name))
                         .filter(|item| {
                             query.is_empty() || item.name.to_lowercase().contains(&query)
                         })
@@ -632,6 +639,9 @@ fn add_component_menu(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiStat
             .filter(|(_, items): &(String, Vec<(String, String)>)| !items.is_empty())
             .collect();
         let mut picked = None;
+        if categories.is_empty() {
+            ui.label(RichText::new("no more components").weak());
+        }
         for (category, items) in categories {
             ui.menu_button(category, |ui| {
                 for (name, label) in items {
