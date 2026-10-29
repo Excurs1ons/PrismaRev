@@ -2888,6 +2888,11 @@ impl EditorApp {
 impl App for EditorApp {
     fn ui(&mut self, ctx: &egui::Context) {
         self.frame_count += 1;
+        // 鼠标松开 = 一次交互结束（拖动 gizmo / 拖拽检查器数字框）：
+        // 本次交互压成一步，下一次修改必然开新撤销步。
+        if ctx.input(|input| input.pointer.any_released()) {
+            self.workspace.end_interaction();
+        }
         self.poll_control(ctx);
         self.drain_engine_logs();
         self.poll_build();
