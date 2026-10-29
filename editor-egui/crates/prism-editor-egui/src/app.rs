@@ -1888,6 +1888,10 @@ impl EditorApp {
                 settings.show_grid = !grid_on;
                 self.apply_render_settings(settings);
             }
+            let mut settings = self.render_settings.clone();
+            if panels::scene_render_mode_combo(ui, &mut settings) {
+                self.apply_render_settings(settings);
+            }
             let skybox_on = self.workspace.show_skybox;
             if ui
                 .selectable_label(skybox_on, "Skybox (S)")
