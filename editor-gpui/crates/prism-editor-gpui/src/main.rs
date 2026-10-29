@@ -8,6 +8,8 @@
 
 mod app;
 mod dock_view;
+#[cfg(feature = "engine-viewport")]
+mod engine_viewport;
 mod panels;
 mod style;
 

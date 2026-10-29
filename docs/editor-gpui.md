@@ -244,18 +244,18 @@ Unity 形状的编辑器，又不会把 `prism-render` 绑死在某套 UI 生命
   旋转后拖轴也不会漂。缩放夹在 0.01..=1000，避免退化矩阵。两者都走 `push_transform`，
   一次拖动合并成一步撤销。
   Game View 只读，点击按归一化视口坐标记日志（将来直接转成游戏输入）。
-- 拾取 / gizmo 的数学在 `core/src/viewport_math.rs`（纯函数 + 13 个单测），UI 侧
-  只负责把 `canvas` 的实际 `Bounds` 记下来（`scene_bounds` / `game_bounds`）。
-- 这不是 `prism-render` 的帧，但**接口形状**已经是「面板 + 相机 + 鼠标事件」。
-
-接真实引擎的两条路（都只需要改 `viewport.rs` 与 `app.rs` 的少量代码）：
-
-1. **离屏 + 图像**：复用 `prism-app::App::hosted` / `GraphRenderer::offscreen_new`
-   + `take_hosted_frame`（Web 编辑器已有这套），把 RGBA 上传成 GPUI 的 image
-   （`window.paint_image` / `img`），每帧 `cx.notify()`。
-2. **原生 surface**：在 Windows 上用 owner popup 窗口 + `WS_EX_NOACTIVATE`
-   （`editor/src-tauri/src/viewport.rs` 已验证的坑：WebView2 会盖住 `WS_CHILD`），
-   把 wndproc 的鼠标事件转成 `gpui::MouseDownEvent` 等；GPUI 只负责面板布局与生命周期。
+- **真实 Vulkan 帧（可选 feature `engine-viewport`）**：`engine_viewport.rs` 在后台线程
+  创建 `prism_app::App::hosted`，`load_scene_json_file` 加载
+  `<project>/target/editor-gpui/engine-viewport.scene.json`，`start_hosted` 后 30Hz
+  `host_tick`；RGBA 帧经 channel 回到 UI，用 `image::Frame` + `RenderImage` 贴图。
+  文档变化 300ms 节流重写快照并 `reload`，视口尺寸变化 `host_resize`，
+  Play/Pause/Step 通过 `set_simulate` / `step` 同步。引擎初始化失败（无 Vulkan 设备）
+  会回退 CPU 投影并在视口左上角显示错误条。选中线框 / gizmo / 方向 gizmo 仍由
+  `canvas` 以 overlay-only 模式画在帧上。
+- 没有 feature 时 `paint_scene` 是纯 CPU 投影；两条路共用同一套拾取 / gizmo 数学，
+  所以交互不依赖引擎是否可用。
+- 原生 surface（Windows owner popup + 输入转发）仍是可选的下一步，离屏图像路线已经覆盖
+  跨平台需求。
 
 选 1 还是 2 取决于：Scene View 是否需要 DOM/canvas 覆盖层（GPUI 没有 DOM，
 覆盖层可以自己画，所以路线 1 的缺点比 WebView 小），以及是否接受一帧 CPU 拷贝。

@@ -371,6 +371,22 @@ pub struct EditorView {
     pub asset_details: Option<prism_editor_gpui_core::assets::AssetDetails>,
     /// 运行时渲染图报告（`target/prism-render-graph.json`），2s 轮询一次。
     pub graph_report: Option<prism_editor_gpui_core::render_graph::RenderGraphReport>,
+    /// 是否切到真实引擎帧（只有 `engine-viewport` feature 且 Vulkan 可用时生效）。
+    pub engine_enabled: bool,
+    #[cfg(feature = "engine-viewport")]
+    pub engine_viewport: Option<crate::engine_viewport::EngineViewport>,
+    #[cfg(feature = "engine-viewport")]
+    pub engine_frame: Option<std::sync::Arc<gpui::RenderImage>>,
+    #[cfg(feature = "engine-viewport")]
+    pub engine_fps: f32,
+    #[cfg(feature = "engine-viewport")]
+    pub engine_error: Option<String>,
+    #[cfg(feature = "engine-viewport")]
+    engine_size: (u32, u32),
+    #[cfg(feature = "engine-viewport")]
+    engine_scene_json: String,
+    #[cfg(feature = "engine-viewport")]
+    engine_last_sync: std::time::Instant,
     pub window_size: Size<Pixels>,
     pub hierarchy_anchor: Option<usize>,
     pub hierarchy_rows: Vec<(usize, f32, f32)>,
@@ -453,6 +469,21 @@ impl EditorView {
             asset_new_folder: None,
             asset_details: None,
             graph_report: None,
+            engine_enabled: false,
+            #[cfg(feature = "engine-viewport")]
+            engine_viewport: None,
+            #[cfg(feature = "engine-viewport")]
+            engine_frame: None,
+            #[cfg(feature = "engine-viewport")]
+            engine_fps: 0.0,
+            #[cfg(feature = "engine-viewport")]
+            engine_error: None,
+            #[cfg(feature = "engine-viewport")]
+            engine_size: (0, 0),
+            #[cfg(feature = "engine-viewport")]
+            engine_scene_json: String::new(),
+            #[cfg(feature = "engine-viewport")]
+            engine_last_sync: std::time::Instant::now(),
             window_size: size(px(1440.0), px(900.0)),
             hierarchy_anchor: None,
             hierarchy_rows: Vec::new(),
@@ -598,7 +629,228 @@ impl EditorView {
         }
     }
 
+    // ── 真实引擎视口（feature `engine-viewport`）────────────────────────
+
+    #[cfg(feature = "engine-viewport")]
+    fn engine_scene_path(&self) -> std::path::PathBuf {
+        let base = self
+            .workspace
+            .project_root
+            .clone()
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_default();
+        base.join("target/editor-gpui/engine-viewport.scene.json")
+    }
+
+    /// 当前应显示的真实引擎帧（未启用 / 未收到帧时 `None`）。
+    pub fn engine_image(&self) -> Option<std::sync::Arc<gpui::RenderImage>> {
+        #[cfg(feature = "engine-viewport")]
+        {
+            self.engine_frame.clone()
+        }
+        #[cfg(not(feature = "engine-viewport"))]
+        {
+            None
+        }
+    }
+
+    pub fn engine_fps_value(&self) -> f32 {
+        #[cfg(feature = "engine-viewport")]
+        {
+            self.engine_fps
+        }
+        #[cfg(not(feature = "engine-viewport"))]
+        {
+            0.0
+        }
+    }
+
+    pub fn engine_error_message(&self) -> Option<String> {
+        #[cfg(feature = "engine-viewport")]
+        {
+            self.engine_error.clone()
+        }
+        #[cfg(not(feature = "engine-viewport"))]
+        {
+            None
+        }
+    }
+
+    /// 切换真实 Vulkan 视口；没有 feature 时只写一条日志。
+    #[cfg(feature = "engine-viewport")]
+    pub fn toggle_engine_viewport(&mut self) {
+        if self.engine_enabled {
+            if let Some(mut engine) = self.engine_viewport.take() {
+                engine.shutdown();
+            }
+            self.engine_frame = None;
+            self.engine_enabled = false;
+            self.workspace.status = "已切回 CPU 投影".to_string();
+            return;
+        }
+        let Ok(json) = serde_json::to_string(&self.workspace.document().doc) else {
+            self.workspace.log(
+                prism_editor_gpui_core::LogSource::Editor,
+                prism_editor_gpui_core::LogLevel::Error,
+                "序列化当前场景失败",
+            );
+            return;
+        };
+        let path = self.engine_scene_path();
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Err(error) = std::fs::write(&path, &json) {
+            self.workspace.log(
+                prism_editor_gpui_core::LogSource::Editor,
+                prism_editor_gpui_core::LogLevel::Error,
+                format!("写入视口场景失败：{error}"),
+            );
+            return;
+        }
+        let (width, height) = self
+            .scene_bounds
+            .get()
+            .map(|bounds| {
+                (
+                    f32::from(bounds.size.width).max(64.0) as u32,
+                    f32::from(bounds.size.height).max(64.0) as u32,
+                )
+            })
+            .unwrap_or((1280, 720));
+        self.engine_viewport = Some(crate::engine_viewport::EngineViewport::start(
+            path, width, height,
+        ));
+        self.engine_enabled = true;
+        self.engine_error = None;
+        self.engine_frame = None;
+        self.engine_scene_json = json;
+        self.engine_size = (width, height);
+        self.engine_last_sync = std::time::Instant::now();
+        self.workspace.status = "正在启动 Vulkan 视口…".to_string();
+    }
+
+    #[cfg(not(feature = "engine-viewport"))]
+    pub fn toggle_engine_viewport(&mut self) {
+        self.workspace.log(
+            prism_editor_gpui_core::LogSource::Editor,
+            prism_editor_gpui_core::LogLevel::Warn,
+            "此构建未启用 engine-viewport feature：请用 \
+             `cargo run -p prism-editor-gpui --features engine-viewport` 编译",
+        );
+    }
+
+    #[cfg(feature = "engine-viewport")]
+    pub fn poll_engine(&mut self, cx: &mut Context<Self>) {
+        let updates = self
+            .engine_viewport
+            .as_ref()
+            .map(|engine| engine.poll())
+            .unwrap_or_default();
+        if updates.is_empty() {
+            return;
+        }
+        for update in updates {
+            match update {
+                crate::engine_viewport::EngineUpdate::Ready => {
+                    self.workspace.status = "Vulkan 视口已就绪".to_string();
+                    self.engine_error = None;
+                }
+                crate::engine_viewport::EngineUpdate::Frame(frame) => {
+                    if let Some(buffer) =
+                        image::RgbaImage::from_raw(frame.width, frame.height, frame.pixels)
+                    {
+                        let image = image::Frame::new(buffer);
+                        self.engine_frame =
+                            Some(std::sync::Arc::new(gpui::RenderImage::new(vec![image])));
+                    }
+                }
+                crate::engine_viewport::EngineUpdate::Stats { fps } => {
+                    self.engine_fps = fps;
+                }
+                crate::engine_viewport::EngineUpdate::Error(error) => {
+                    self.engine_error = Some(error.clone());
+                    self.workspace.log(
+                        prism_editor_gpui_core::LogSource::Editor,
+                        prism_editor_gpui_core::LogLevel::Error,
+                        format!("Vulkan 视口：{error}"),
+                    );
+                    self.engine_enabled = false;
+                    if let Some(mut engine) = self.engine_viewport.take() {
+                        engine.shutdown();
+                    }
+                    self.engine_frame = None;
+                }
+            }
+        }
+        cx.notify();
+    }
+
+    #[cfg(not(feature = "engine-viewport"))]
+    pub fn poll_engine(&mut self, _cx: &mut Context<Self>) {}
+
+    /// 把当前文档同步到临时 `.scene.json`（300ms 节流）并按需 resize。
+    #[cfg(feature = "engine-viewport")]
+    pub fn sync_engine_scene(&mut self) {
+        if !self.engine_enabled {
+            return;
+        }
+        if let Some(bounds) = self.scene_bounds.get() {
+            let width = f32::from(bounds.size.width).max(64.0) as u32;
+            let height = f32::from(bounds.size.height).max(64.0) as u32;
+            if width.abs_diff(self.engine_size.0) > 2 || height.abs_diff(self.engine_size.1) > 2 {
+                self.engine_size = (width, height);
+                if let Some(engine) = &self.engine_viewport {
+                    engine.resize(width, height);
+                }
+            }
+        }
+        if self.engine_last_sync.elapsed() < std::time::Duration::from_millis(300) {
+            return;
+        }
+        self.engine_last_sync = std::time::Instant::now();
+        let Ok(json) = serde_json::to_string(&self.workspace.document().doc) else {
+            return;
+        };
+        if json == self.engine_scene_json {
+            return;
+        }
+        let path = self.engine_scene_path();
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if std::fs::write(&path, &json).is_ok() {
+            if let Some(engine) = &self.engine_viewport {
+                engine.reload(path);
+            }
+            self.engine_scene_json = json;
+        }
+    }
+
+    #[cfg(not(feature = "engine-viewport"))]
+    pub fn sync_engine_scene(&mut self) {}
+
+    #[cfg(feature = "engine-viewport")]
+    pub fn engine_set_playing(&mut self, playing: bool, paused: bool, step: bool) {
+        if let Some(engine) = &self.engine_viewport {
+            if step {
+                engine.set_simulate(false);
+                engine.step();
+            } else {
+                engine.set_simulate(playing && !paused);
+            }
+        }
+    }
+
+    #[cfg(not(feature = "engine-viewport"))]
+    pub fn engine_set_playing(&mut self, _playing: bool, _paused: bool, _step: bool) {}
+
     pub fn background_tick(&mut self, cx: &mut Context<Self>) {
+        self.poll_engine(cx);
+        self.sync_engine_scene();
+        if self.engine_enabled {
+            self.engine_set_playing(self.workspace.playing, self.workspace.paused, false);
+        }
         if self.workspace.playing && !self.workspace.paused {
             self.workspace.tick(0.033);
             cx.notify();
@@ -825,6 +1077,9 @@ impl EditorView {
         }
         self.add_component_open = false;
         self.workspace.run(command);
+        if command == Command::Step {
+            self.engine_set_playing(self.workspace.playing, self.workspace.paused, true);
+        }
         if matches!(
             command,
             Command::Preferences | Command::ProjectSettings | Command::ThemePanel

@@ -14,3 +14,12 @@ prism-editor-gpui-core = { path = "../prism-editor-gpui-core" }
 gpui = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+prism-app = { path = "../../../crates/prism-app", optional = true }
+prism-engine = { path = "../../../crates/prism-engine", optional = true }
+image = { version = "0.25", optional = true }
+
+[features]
+default = []
+# 真实 Vulkan Scene View：链接 prism-app / prism-engine，在后台线程跑 hosted
+# 模式并把 RGBA 帧贴到 GPUI。需要可用的 Vulkan 设备与预编译 `.spv`（桌面 / CI）。
+engine-viewport = ["dep:prism-app", "dep:prism-engine", "dep:image"]

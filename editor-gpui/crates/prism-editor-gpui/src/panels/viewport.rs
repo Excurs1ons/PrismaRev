@@ -182,6 +182,32 @@ impl EditorView {
                         .child("统计"),
                 )
             })
+            .when(scene, |header| {
+                header.child(
+                    div()
+                        .id("engine-toggle")
+                        .px_1()
+                        .rounded_sm()
+                        .cursor_pointer()
+                        .text_size(px(9.0))
+                        .text_color(if self.engine_enabled {
+                            style.success()
+                        } else {
+                            style.text_soft()
+                        })
+                        .when(self.engine_enabled, |this| this.bg(style.selection()))
+                        .hover(move |this| this.bg(style.row_hover()))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.toggle_engine_viewport();
+                            cx.notify();
+                        }))
+                        .child(SharedString::from(if self.engine_enabled {
+                            "Vulkan"
+                        } else {
+                            "引擎视口"
+                        })),
+                )
+            })
             .child(div().flex_1())
             .child(SharedString::from(format!("{entity_count} 实体")))
             .child(SharedString::from(format!(
@@ -221,6 +247,8 @@ impl EditorView {
 
         let style_for_canvas = style;
         let snapshot_for_canvas = snapshot.clone();
+        let engine_image = self.engine_image();
+        let overlay_only = engine_image.is_some();
         let canvas = gpui::canvas(
             move |bounds, _, _| bounds,
             move |bounds, _, window, _| {
@@ -230,12 +258,18 @@ impl EditorView {
                     &snapshot_for_canvas,
                     style_for_canvas,
                     scene,
+                    overlay_only,
                 );
             },
         )
         .size_full();
 
         let orbit_enabled = scene;
+        let display_fps = if self.engine_enabled {
+            self.engine_fps_value()
+        } else {
+            self.fps
+        };
         let mut surface = div()
             .id(if scene {
                 "scene-surface"
@@ -248,8 +282,39 @@ impl EditorView {
                 gpui::CursorStyle::Crosshair
             } else {
                 gpui::CursorStyle::Arrow
-            })
+            });
+        if let Some(image) = engine_image {
+            surface = surface.child(
+                div().absolute().top_0().left_0().size_full().child(
+                    gpui::img(image)
+                        .object_fit(gpui::ObjectFit::Contain)
+                        .size_full(),
+                ),
+            );
+        }
+        let engine_error = self.engine_error_message();
+        surface = surface
             .child(div().absolute().top_0().left_0().size_full().child(canvas))
+            .when(engine_error.is_some(), |this| {
+                this.child(
+                    div()
+                        .absolute()
+                        .top(px(8.0))
+                        .left(px(8.0))
+                        .max_w(px(420.0))
+                        .p_2()
+                        .rounded_sm()
+                        .bg(style.alpha(ThemeToken::DangerSoft, 0.18))
+                        .border_1()
+                        .border_color(style.color(ThemeToken::Danger))
+                        .text_size(px(9.0))
+                        .text_color(style.text_soft())
+                        .child(SharedString::from(format!(
+                            "Vulkan 视口失败：{}（已回退 CPU 投影）",
+                            engine_error.clone().unwrap_or_default()
+                        ))),
+                )
+            })
             .when(self.show_stats && scene, |this| {
                 this.child(
                     div()
@@ -268,7 +333,7 @@ impl EditorView {
                         .text_size(px(9.0))
                         .text_color(style.text_soft())
                         .child("Statistics")
-                        .child(SharedString::from(format!("FPS      {:.0}", self.fps)))
+                        .child(SharedString::from(format!("FPS      {:.0}", display_fps)))
                         .child(SharedString::from(format!(
                             "Frame    {}",
                             self.frame_counter
@@ -399,27 +464,30 @@ fn paint_scene(
     snapshot: &SceneSnapshot,
     style: Style,
     scene: bool,
+    overlay_only: bool,
 ) {
     let width = f32::from(bounds.size.width);
     let height = f32::from(bounds.size.height);
     let frame = camera_frame(&snapshot.camera);
 
     // 背景：稍微比面板深一点，让视口像一个独立表面。
-    window.paint_quad(gpui::quad(
-        bounds,
-        px(0.0),
-        style.bg_sunken(),
-        px(0.0),
-        gpui::transparent_black(),
-        Default::default(),
-    ));
+    if !overlay_only {
+        window.paint_quad(gpui::quad(
+            bounds,
+            px(0.0),
+            style.bg_sunken(),
+            px(0.0),
+            gpui::transparent_black(),
+            Default::default(),
+        ));
+    }
 
     let grid_color = style.alpha(ThemeToken::Border, 0.9);
     let axis_x = style.alpha(ThemeToken::Danger, 0.45);
     let axis_z = style.alpha(ThemeToken::Accent, 0.45);
 
     // y = 0 平面网格，每格 1 世界单位，±10。
-    if snapshot.show_grid {
+    if snapshot.show_grid && !overlay_only {
         for i in -10..=10 {
             let color = if i == 0 { axis_z } else { grid_color };
             draw_line(
@@ -445,45 +513,47 @@ fn paint_scene(
     }
 
     // 实体标记：未选中的小十字，选中的线框立方体 + 三色轴。
-    for (position, active) in &snapshot.entities {
-        let bob = if snapshot.playing {
-            ((snapshot.play_time * 2.0 + position[0]).sin() * 0.1).abs()
-        } else {
-            0.0
-        };
-        let position = [position[0], position[1] + bob, position[2]];
-        if !active {
-            continue;
-        }
-        let mut corners = Vec::new();
-        for dx in [-0.25f32, 0.25] {
-            for dy in [-0.25f32, 0.25] {
-                for dz in [-0.25f32, 0.25] {
-                    corners.push([position[0] + dx, position[1] + dy, position[2] + dz]);
+    if !overlay_only {
+        for (position, active) in &snapshot.entities {
+            let bob = if snapshot.playing {
+                ((snapshot.play_time * 2.0 + position[0]).sin() * 0.1).abs()
+            } else {
+                0.0
+            };
+            let position = [position[0], position[1] + bob, position[2]];
+            if !active {
+                continue;
+            }
+            let mut corners = Vec::new();
+            for dx in [-0.25f32, 0.25] {
+                for dy in [-0.25f32, 0.25] {
+                    for dz in [-0.25f32, 0.25] {
+                        corners.push([position[0] + dx, position[1] + dy, position[2] + dz]);
+                    }
                 }
             }
-        }
-        let projected: Vec<Option<(f32, f32, f32)>> = corners
-            .iter()
-            .map(|corner| project(*corner, &frame, width, height))
-            .collect();
-        let color = style.alpha(ThemeToken::TextSoft, 0.35);
-        for (a, b) in [
-            (0, 1),
-            (0, 2),
-            (0, 4),
-            (1, 3),
-            (1, 5),
-            (2, 3),
-            (2, 6),
-            (3, 7),
-            (4, 5),
-            (4, 6),
-            (5, 7),
-            (6, 7),
-        ] {
-            if let (Some(start), Some(end)) = (projected[a], projected[b]) {
-                paint_segment(window, bounds, start, end, color, 1.0);
+            let projected: Vec<Option<(f32, f32, f32)>> = corners
+                .iter()
+                .map(|corner| project(*corner, &frame, width, height))
+                .collect();
+            let color = style.alpha(ThemeToken::TextSoft, 0.35);
+            for (a, b) in [
+                (0, 1),
+                (0, 2),
+                (0, 4),
+                (1, 3),
+                (1, 5),
+                (2, 3),
+                (2, 6),
+                (3, 7),
+                (4, 5),
+                (4, 6),
+                (5, 7),
+                (6, 7),
+            ] {
+                if let (Some(start), Some(end)) = (projected[a], projected[b]) {
+                    paint_segment(window, bounds, start, end, color, 1.0);
+                }
             }
         }
     }

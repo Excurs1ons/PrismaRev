@@ -204,8 +204,9 @@ deviating from those conventions is a bug. (`README.md` is the human-facing over
 - `editor-gpui/` — **GPUI 原生编辑器壳**（Rust-only，独立 workspace，不挂根成员）：
   菜单/工具栏 + split-tree docking（含浮动窗口、8 方向 resize、磁吸；布局 JSON 与
   `editor/src/dock.ts` v4 同形）+ 层级/检查器（schema 驱动）/资产/日志（窗口化
-  `uniform_list`）/文档/渲染图/设置面板 + Scene/Game View（目前是 `canvas` 的 CPU
-  投影，接线点见 `viewport.rs::paint_scene`）。数据层 `prism-editor-gpui-core` 与 UI
+  `uniform_list`）/文档/渲染图/设置面板 + Scene/Game View（默认是 `canvas` 的 CPU
+  投影；`--features engine-viewport` 时后台跑 `prism-app` hosted Vulkan 离屏帧，
+  失败回退 CPU，接线点见 `viewport.rs::paint_scene`）。数据层 `prism-editor-gpui-core` 与 UI
   框架无关（192 单测：dock/doc/schema/undo/theme/i18n/log/assets/keys/project/
   viewport_math/state/settings/textinput/manifest/build）；内联输入走 `TextInput`（光标 / 选区 /
   按词移动与删除，Unicode 安全）；资产浏览器有面包屑 / 前进后退 / 列表网格 / 新建目录 /
@@ -230,8 +231,9 @@ deviating from those conventions is a bug. (`README.md` is the human-facing over
   **GPUI 只允许出现在这个 workspace**，不得进入 `prism-app`/`prism-engine`/`prism-render`。
   Termux/Android 无法运行 GPUI（无 X11/Wayland），本机验证用
   `cargo test -p prism-editor-gpui-core` +
-  `cargo check -p prism-editor-gpui --target x86_64-pc-windows-gnu`。设计说明见
-  `docs/editor-gpui.md`。
+  `cargo check -p prism-editor-gpui --target x86_64-pc-windows-gnu`；
+  真实视口可加 `--features engine-viewport`（编译需 `.spv`，运行需 Vulkan 设备）。
+  设计说明见 `docs/editor-gpui.md`。
 - `projects/prisma/` — 用户游戏项目（package/crate `prisma`；`prisma` 桌面二进制 + Android
   cdylib `libprisma.so`；keyframe 开场 intro、`register_scene("intro", ...)` 注册场景、
   `lib.rs` 的 `android_main`）；**own standalone workspace**, NOT a root member.

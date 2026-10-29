@@ -132,6 +132,8 @@ cargo clippy -p prism-editor-gpui -p prism-editor-gpui-core --target x86_64-pc-w
 cd editor-gpui
 cargo run -p prism-editor-gpui                 # 自动找 editor/public/demo.json，否则用内嵌 fixture
 cargo run -p prism-editor-gpui -- --fixture ../../editor/public/demo.json
+# 真实 Vulkan 视口（需要桌面 GPU + 已编译 .spv）
+cargo run -p prism-editor-gpui --features engine-viewport
 ```
 
 启动时会从 **cwd**（其次可执行文件目录）向上找 `assets/`：找到就进入「项目模式」
@@ -164,9 +166,16 @@ editor-gpui/
 
 ## 已知限制（刻意的下一步）
 
-- **Scene View 目前是 CPU 投影的 `canvas` 绘制**，不是 `prism-render` 的真实画面。
-  接线点已经留好：把 `paint_scene` 换成离屏 `GraphRenderer` 的帧（或原生 Vulkan
-  popup 窗口 + 输入转发），面板本身不需要改。
+- **Scene View 默认是 CPU 投影的 `canvas` 绘制**；`--features engine-viewport` 时切到
+  `prism-app` hosted 离屏 Vulkan 帧（见下），失败会自动回退 CPU 并显示错误条。
+- **真实 Vulkan Scene View（可选）**：后台线程 `App::hosted` + `start_hosted`，把当前
+  文档写成 `target/editor-gpui/engine-viewport.scene.json` 后加载，30Hz `host_tick`，
+  RGBA 帧经 channel 转成 GPUI `RenderImage` 贴到面板；改动文档 300ms 节流重载、窗口尺寸
+  变化 resize，Play/Pause/Step 同步模拟。覆盖层（选中线框 / gizmo / 方向 gizmo）仍由
+  `canvas` 画在帧上。
+  需要桌面 Vulkan 设备与已编译 `.spv`（`bash assets/shaders/compile.sh`）；
+  `cargo check --features engine-viewport --target x86_64-pc-windows-gnu` 已验证可编译，
+  运行时回归仍需在有 GPU 的桌面做。
 - **构建是真实子进程**：构建面板 / 「构建项目」「构建场景包」菜单按 `core::build` 的计划执行
   `cargo build --manifest-path <game>/Cargo.toml [--release]` 与
   `cargo run -p prism-build-pipeline -- build-scenes`，stdout/stderr 流式进构建日志与日志面板；
@@ -182,8 +191,7 @@ editor-gpui/
 - gizmo 支持**世界 / 局部**两种坐标（`X` 或视口标题栏按钮切换，选中实体按父链累积旋转）；
   旋转在局部空间右乘、平移经父级旋转逆换算，父级旋转后也不会漂。
 - 渲染图面板 2s 轮询 `target/prism-render-graph.json`（或 `PRISMREV_RENDER_GRAPH_REPORT`），
-  有报告时按 handle 解析 pass 读写与资源格式 / 尺寸；没有报告时回退静态快照，
-  尚未读取真实报告。
+  有报告时按 handle 解析 pass 读写与资源格式 / 尺寸；没有报告时回退静态快照。
 - 主题面板可切预设并逐 token 编辑颜色覆盖（只处理 RGBA token），但不能导入/导出主题文件。
 
 ## 验证记录
