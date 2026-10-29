@@ -1309,6 +1309,116 @@ pub fn history(ui: &mut Ui, workspace: &mut Workspace) {
 // 渲染图
 // ---------------------------------------------------------------------------
 
+/// Scene View 的调试渲染模式（对应 Unity 的 `SceneRenderModeWindow` 第一组）。
+///
+/// 只映射引擎**已有**的 `debug_flags` / `debug_rt`：PBR 分量隔离用
+/// `PBR_FLAG_NAMES` 里的位，深度 / 视图空间法线用 PostPass 的调试 RT。
+/// 线框（Wireframe / Shaded Wireframe）需要渲染管线支持 `POLYGON_MODE_LINE`，
+/// 不在这里假装实现。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SceneRenderMode {
+    Shaded,
+    Direct,
+    Specular,
+    Metallic,
+    Roughness,
+    AmbientOcclusion,
+    Emissive,
+    Depth,
+    ViewNormals,
+}
+
+impl SceneRenderMode {
+    pub const ALL: [SceneRenderMode; 9] = [
+        SceneRenderMode::Shaded,
+        SceneRenderMode::Direct,
+        SceneRenderMode::Specular,
+        SceneRenderMode::Metallic,
+        SceneRenderMode::Roughness,
+        SceneRenderMode::AmbientOcclusion,
+        SceneRenderMode::Emissive,
+        SceneRenderMode::Depth,
+        SceneRenderMode::ViewNormals,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            SceneRenderMode::Shaded => "Shaded",
+            SceneRenderMode::Direct => "Direct",
+            SceneRenderMode::Specular => "Specular",
+            SceneRenderMode::Metallic => "Metallic",
+            SceneRenderMode::Roughness => "Roughness",
+            SceneRenderMode::AmbientOcclusion => "AO",
+            SceneRenderMode::Emissive => "Emissive",
+            SceneRenderMode::Depth => "Depth",
+            SceneRenderMode::ViewNormals => "View Normals",
+        }
+    }
+
+    /// `PBR_FLAG_*` 位（见 `PBR_FLAG_NAMES`）；`0` = 正常着色。
+    fn debug_flags(self) -> u32 {
+        match self {
+            SceneRenderMode::Direct => 1 << 0,
+            SceneRenderMode::Specular => 1 << 2,
+            SceneRenderMode::Metallic => 1 << 3,
+            SceneRenderMode::Roughness => 1 << 4,
+            SceneRenderMode::AmbientOcclusion => 1 << 8,
+            SceneRenderMode::Emissive => 1 << 9,
+            _ => 0,
+        }
+    }
+
+    /// PostPass 调试 RT：`0` 正常、`1` 线性深度、`2` 视图空间法线。
+    fn debug_rt(self) -> u32 {
+        match self {
+            SceneRenderMode::Depth => 1,
+            SceneRenderMode::ViewNormals => 2,
+            _ => 0,
+        }
+    }
+
+    /// 从当前设置**反推**模式；引擎设置被其它入口改成组合值时返回 `None`。
+    pub fn from_settings(settings: &prism_engine::render_settings::RenderSettings) -> Option<Self> {
+        Self::ALL.into_iter().find(|mode| {
+            mode.debug_flags() == settings.debug_flags && mode.debug_rt() == settings.debug_rt
+        })
+    }
+
+    pub fn apply(self, settings: &mut prism_engine::render_settings::RenderSettings) {
+        settings.debug_flags = self.debug_flags();
+        settings.debug_rt = self.debug_rt();
+    }
+}
+
+/// 工具栏 / 渲染设置面板共用的「渲染模式」下拉框。返回是否改动。
+pub fn scene_render_mode_combo(
+    ui: &mut Ui,
+    settings: &mut prism_engine::render_settings::RenderSettings,
+) -> bool {
+    let current = SceneRenderMode::from_settings(settings);
+    let selected = current.map(|mode| mode.label()).unwrap_or("Custom");
+    let mut chosen = current;
+    egui::ComboBox::from_id_salt("scene-render-mode")
+        .selected_text(selected)
+        .show_ui(ui, |ui| {
+            for mode in SceneRenderMode::ALL {
+                if ui
+                    .selectable_label(current == Some(mode), mode.label())
+                    .clicked()
+                {
+                    chosen = Some(mode);
+                }
+            }
+        });
+    match chosen {
+        Some(mode) if current != Some(mode) => {
+            mode.apply(settings);
+            true
+        }
+        _ => false,
+    }
+}
+
 pub fn render_graph(
     ui: &mut Ui,
     report: Option<&str>,
@@ -1321,6 +1431,10 @@ pub fn render_graph(
         .num_columns(2)
         .spacing([8.0, 4.0])
         .show(ui, |ui| {
+            ui.label("Mode");
+            changed |= scene_render_mode_combo(ui, settings);
+            ui.end_row();
+
             ui.label("Tonemap");
             egui::ComboBox::from_id_salt("tonemap")
                 .selected_text(match settings.tonemap_mode {
@@ -1341,7 +1455,7 @@ pub fn render_graph(
                 });
             ui.end_row();
 
-            ui.label("Mode");
+            ui.label("Path trace");
             let mut path_trace = matches!(
                 settings.render_mode,
                 prism_engine::render_settings::RenderMode::PathTrace
@@ -1626,5 +1740,37 @@ pub fn boolean_window(
         .show(ctx, |ui| body(ui));
     if !visible {
         *open = false;
+    }
+}
+
+#[cfg(test)]
+mod render_mode_tests {
+    use super::*;
+    use prism_engine::render_settings::RenderSettings;
+
+    #[test]
+    fn every_scene_mode_round_trips_through_render_settings() {
+        for mode in SceneRenderMode::ALL {
+            let mut settings = RenderSettings::default();
+            mode.apply(&mut settings);
+            assert_eq!(
+                SceneRenderMode::from_settings(&settings),
+                Some(mode),
+                "{} did not round-trip",
+                mode.label()
+            );
+        }
+    }
+
+    #[test]
+    fn shaded_clears_flags_and_unknown_combinations_report_none() {
+        let mut settings = RenderSettings::default();
+        SceneRenderMode::Metallic.apply(&mut settings);
+        assert_ne!(settings.debug_flags, 0);
+        SceneRenderMode::Shaded.apply(&mut settings);
+        assert_eq!((settings.debug_flags, settings.debug_rt), (0, 0));
+
+        settings.debug_flags = (1 << 0) | (1 << 3);
+        assert_eq!(SceneRenderMode::from_settings(&settings), None);
     }
 }
