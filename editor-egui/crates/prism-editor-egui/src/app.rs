@@ -461,8 +461,17 @@ impl EditorApp {
         if command == Command::Stop && was_playing {
             self.playing = false;
             self.paused = false;
-            // 停止后从磁盘快照重建，编辑器状态 = 运行前状态。
-            self.doc_hash = 0;
+            // Stop must clear the live runtime immediately; do not wait for the
+            // document debounce path to reload the Game view.
+            if let Some(view) = self.game_view.as_mut() {
+                if let Err(error) = view.host.load_scene(&self.preview_scene) {
+                    view.error = Some(format!("{error}"));
+                }
+                view.host.set_simulate(false);
+                view.host.set_paused(false);
+                view.mark_dirty();
+            }
+            self.doc_hash = document_hash(&self.workspace);
             self.pending_doc = None;
         }
         if command == Command::Pause || command == Command::Step {
@@ -726,12 +735,14 @@ impl EditorApp {
                 "ok": true,
                 "pid": std::process::id(),
                 "frames": self.frame_count,
+                "fps": self.game_view.as_ref().map(|view| view.fps).unwrap_or(0.0),
                 "scene": self.workspace.document().path.clone(),
             }),
             "status" => json!({
                 "ok": true,
                 "pid": std::process::id(),
                 "frames": self.frame_count,
+                "fps": self.game_view.as_ref().map(|view| view.fps).unwrap_or(0.0),
                 "playing": self.playing,
                 "paused": self.paused,
                 "scene": self.workspace.document().path.clone(),
@@ -786,6 +797,7 @@ impl EditorApp {
                     paused: self.paused,
                     status: &self.state.status,
                     frames: self.frame_count,
+                    fps: self.game_view.as_ref().map(|view| view.fps).unwrap_or(0.0),
                     gizmo_tool: self.scene_view.as_ref().map(|view| view.tool.label()),
                     // Keep the control protocol locale-independent. The toolbar may use
                     // localized labels, but MCP clients need stable enum-like values.

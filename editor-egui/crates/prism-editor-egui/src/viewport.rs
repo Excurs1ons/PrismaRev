@@ -18,6 +18,17 @@ use prism_editor_core::{viewport_math as vm, TransformJson, Workspace};
 
 use crate::engine_host::{EngineHost, ViewKind};
 
+fn pan_camera(camera: &mut prism_editor_core::workspace::OrbitCamera, dx: f32, dy: f32) {
+    let (sin_yaw, cos_yaw) = camera.yaw.sin_cos();
+    let (sin_pitch, cos_pitch) = camera.pitch.sin_cos();
+    let right = [cos_yaw, 0.0, -sin_yaw];
+    let up = [-sin_pitch * sin_yaw, cos_pitch, -sin_pitch * cos_yaw];
+    let scale = camera.distance * 0.0015;
+    for axis in 0..3 {
+        camera.target[axis] += (-dx * right[axis] + dy * up[axis]) * scale;
+    }
+}
+
 /// 共享给视口的 GPU 句柄（设备 + egui 纹理表 + 采样器）。
 pub struct ImageBridge {
     pub registry: ImageRegistry,
@@ -80,7 +91,10 @@ pub struct ViewportState {
     pub dirty: bool,
     pub error: Option<String>,
     pub last_frame_ms: f32,
+    pub fps: f32,
     pub frames: u64,
+    fps_window_started: Instant,
+    fps_window_frames: u32,
     /// 当前 gizmo 工具（W / E / R）。
     pub tool: GizmoTool,
     gizmo: Option<GizmoDrag>,
@@ -110,7 +124,10 @@ impl ViewportState {
             dirty: true,
             error: None,
             last_frame_ms: 0.0,
+            fps: 0.0,
             frames: 0,
+            fps_window_started: Instant::now(),
+            fps_window_frames: 0,
             tool: GizmoTool::Translate,
             gizmo: None,
             box_start: None,
@@ -146,6 +163,13 @@ impl ViewportState {
                 }
                 self.last_frame_ms = started.elapsed().as_secs_f32() * 1000.0;
                 self.frames += 1;
+                self.fps_window_frames += 1;
+                let elapsed = self.fps_window_started.elapsed().as_secs_f32();
+                if elapsed >= 0.25 {
+                    self.fps = self.fps_window_frames as f32 / elapsed;
+                    self.fps_window_frames = 0;
+                    self.fps_window_started = Instant::now();
+                }
                 self.dirty = false;
                 self.error = None;
                 true
@@ -317,7 +341,10 @@ impl ViewportState {
         let alt = ui.input(|input| input.modifiers.alt);
         let local_of = |pos: egui::Pos2| (pos.x - rect.min.x, pos.y - rect.min.y);
 
-        if response.drag_started() && self.kind() == ViewKind::Scene {
+        if response.drag_started_by(egui::PointerButton::Primary)
+            && self.kind() == ViewKind::Scene
+            && !alt
+        {
             if let Some(pos) = response.interact_pointer_pos() {
                 let local = local_of(pos);
                 let center = workspace.selection_center_world();
@@ -328,11 +355,13 @@ impl ViewportState {
                         .and_then(|index| workspace.document().doc.id_of_index(index)),
                 ) {
                     let world_length = vm::gizmo_world_length(&workspace.camera);
+                    let basis = workspace.gizmo_basis();
                     let hit = match self.tool {
-                        GizmoTool::Rotate => vm::pick_rotation_axis(
+                        GizmoTool::Rotate => vm::pick_rotation_axis_oriented(
                             local,
                             &frame,
                             center,
+                            basis,
                             world_length,
                             rect.width(),
                             rect.height(),
@@ -341,10 +370,11 @@ impl ViewportState {
                             let dir = [1.0f32, 0.0];
                             (axis, dir, 60.0)
                         }),
-                        GizmoTool::Translate | GizmoTool::Scale => vm::pick_gizmo_axis(
+                        GizmoTool::Translate | GizmoTool::Scale => vm::pick_gizmo_axis_oriented(
                             local,
                             &frame,
                             center,
+                            basis,
                             world_length,
                             rect.width(),
                             rect.height(),
@@ -355,9 +385,10 @@ impl ViewportState {
                             [workspace.document().doc.index_of_id(entity).unwrap_or(0)]
                         .transform
                         .scale[axis];
-                        let angle_center = vm::ring_screen_radius(
+                        let angle_center = vm::ring_screen_radius_oriented(
                             &frame,
                             center,
+                            basis,
                             axis,
                             world_length,
                             rect.width(),
@@ -378,15 +409,18 @@ impl ViewportState {
                         self.box_start = Some(pos);
                         self.box_current = Some(pos);
                     }
-                } else if !alt {
+                } else if !alt && response.dragged_by(egui::PointerButton::Primary) {
                     self.box_start = Some(pos);
                     self.box_current = Some(pos);
                 }
             }
         }
 
-        if response.dragged() {
-            let delta = ui.input(|i| i.pointer.delta());
+        let pointer_delta = ui.input(|i| i.pointer.delta());
+        if response.dragged_by(egui::PointerButton::Primary)
+            && !(self.kind() == ViewKind::Scene && alt)
+        {
+            let delta = pointer_delta;
             if let Some(drag) = self.gizmo.as_ref() {
                 let (axis, entity) = (drag.axis, drag.entity);
                 match self.tool {
@@ -394,8 +428,8 @@ impl ViewportState {
                         let amount = (delta.x * drag.screen_dir[0] + delta.y * drag.screen_dir[1])
                             / drag.px_per_unit.max(4.0);
                         if amount.abs() > f32::EPSILON {
-                            let mut world = [0.0f32; 3];
-                            world[axis] = amount;
+                            let basis = workspace.gizmo_basis();
+                            let world = basis[axis].map(|component| component * amount);
                             workspace.translate_entity_world(entity, world);
                             document_changed = true;
                         }
@@ -404,9 +438,10 @@ impl ViewportState {
                         if let Some(pos) = response.interact_pointer_pos() {
                             let center = workspace.selection_center_world().unwrap_or([0.0; 3]);
                             let world_length = vm::gizmo_world_length(&workspace.camera);
-                            let angle_center = vm::ring_screen_radius(
+                            let angle_center = vm::ring_screen_radius_oriented(
                                 &frame,
                                 center,
+                                workspace.gizmo_basis(),
                                 axis,
                                 world_length,
                                 rect.width(),
@@ -447,19 +482,41 @@ impl ViewportState {
                         egui::StrokeKind::Inside,
                     );
                 }
-            } else if alt || response.dragged_by(egui::PointerButton::Secondary) {
-                workspace.camera.orbit(delta.x, delta.y);
+            }
+        }
+        if self.kind() == ViewKind::Scene {
+            if response.dragged_by(egui::PointerButton::Middle) {
+                pan_camera(&mut workspace.camera, pointer_delta.x, pointer_delta.y);
+                self.dirty = true;
+            } else if response.dragged_by(egui::PointerButton::Secondary) {
+                workspace.camera.orbit(pointer_delta.x, pointer_delta.y);
                 self.dirty = true;
             }
         }
+        if self.kind() == ViewKind::Scene
+            && alt
+            && response.dragged_by(egui::PointerButton::Primary)
+        {
+            workspace.camera.orbit(pointer_delta.x, pointer_delta.y);
+            self.dirty = true;
+            self.gizmo = None;
+            self.box_start = None;
+            self.box_current = None;
+        }
 
-        if response.drag_stopped() {
+        if response.drag_stopped_by(egui::PointerButton::Primary) {
             // 框选落定：一次写入选中集合（与 Unity 的矩形选择一致）。
             if let (Some(start), Some(end)) = (self.box_start.take(), self.box_current.take()) {
-                let rect = egui::Rect::from_two_pos(start, end);
-                if rect.width() > 3.0 || rect.height() > 3.0 {
-                    let local_start = (rect.min.x - rect.min.x, rect.min.y - rect.min.y);
-                    let local_end = (rect.max.x - rect.min.x, rect.max.y - rect.min.y);
+                let selection_rect = egui::Rect::from_two_pos(start, end);
+                if selection_rect.width() > 3.0 || selection_rect.height() > 3.0 {
+                    let local_start = (
+                        selection_rect.min.x - rect.min.x,
+                        selection_rect.min.y - rect.min.y,
+                    );
+                    let local_end = (
+                        selection_rect.max.x - rect.min.x,
+                        selection_rect.max.y - rect.min.y,
+                    );
                     let hits = vm::box_select(
                         (local_start.0, local_start.1, local_end.0, local_end.1),
                         &frame,
@@ -467,7 +524,14 @@ impl ViewportState {
                         rect.height(),
                         &proxies(workspace),
                     );
-                    workspace.select_many(&hits, false);
+                    let modifiers = ui.input(|input| input.modifiers);
+                    if modifiers.ctrl || modifiers.command {
+                        workspace.selection.retain(|index| !hits.contains(index));
+                    } else if modifiers.shift {
+                        workspace.select_many(&hits, true);
+                    } else {
+                        workspace.select_many(&hits, false);
+                    }
                     self.dirty = true;
                 }
             }
@@ -514,10 +578,11 @@ impl ViewportState {
 
         // 5) 角标：FPS / 帧耗时 / 分辨率。
         let stats = format!(
-            "{} · {} · {:.1} ms · {} frames",
+            "{} · {} · {:.1} ms · {:.1} FPS · {} frames",
             self.kind().label(),
             self.tool.label(),
             self.last_frame_ms,
+            self.fps,
             self.frames
         );
         let pos = rect.left_bottom() + egui::vec2(6.0, -6.0);
@@ -778,6 +843,7 @@ impl ViewportState {
             return;
         };
         let world_length = vm::gizmo_world_length(&workspace.camera);
+        let basis = workspace.gizmo_basis();
         let origin = rect.min;
         let (width, height) = (rect.width(), rect.height());
         let colors = [
@@ -794,9 +860,15 @@ impl ViewportState {
             let width_px = if active { 3.5_f32 } else { 2.0_f32 };
             match self.tool {
                 GizmoTool::Rotate => {
-                    if let Some((cx, cy, radius)) =
-                        vm::ring_screen_radius(frame, center, axis, world_length, width, height)
-                    {
+                    if let Some((cx, cy, radius)) = vm::ring_screen_radius_oriented(
+                        frame,
+                        center,
+                        basis,
+                        axis,
+                        world_length,
+                        width,
+                        height,
+                    ) {
                         if radius > 6.0 {
                             painter.circle_stroke(
                                 origin + egui::vec2(cx, cy),
@@ -807,9 +879,14 @@ impl ViewportState {
                     }
                 }
                 GizmoTool::Translate | GizmoTool::Scale => {
-                    let Some((start, end, _)) =
-                        vm::axis_screen_segment(frame, center, axis, world_length, width, height)
-                    else {
+                    let Some((start, end, _)) = vm::axis_screen_segment_oriented(
+                        frame,
+                        center,
+                        basis[axis],
+                        world_length,
+                        width,
+                        height,
+                    ) else {
                         continue;
                     };
                     let a = origin + egui::vec2(start.0, start.1);

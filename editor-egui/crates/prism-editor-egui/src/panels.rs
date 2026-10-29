@@ -225,6 +225,7 @@ pub fn hierarchy(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
     let mut action: Option<TreeAction> = None;
     // 资产拖到实体上 = 实例化预制体（Unity 的 Project → Hierarchy 拖拽）。
     let mut asset_drop: Option<(usize, String)> = None;
+    let mut hovered_drop_target = false;
 
     egui::ScrollArea::vertical()
         .id_salt("hierarchy-scroll")
@@ -357,40 +358,54 @@ pub fn hierarchy(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
                 }
 
                 // ---- Unity 式拖拽：上/下 25% 插入，中间挂成子级 ----
-                if row.drag_started() {
+                if row.drag_started_by(egui::PointerButton::Primary) {
                     state.dragging = Some(index);
                 }
                 if state.dragging.is_some() && state.dragging != Some(index) && row.hovered() {
-                    let pointer_y = ui
-                        .input(|input| input.pointer.interact_pos())
-                        .map(|pos| pos.y)
-                        .unwrap_or(row.rect.center().y);
-                    let ratio = (pointer_y - row.rect.top()) / row.rect.height().max(1.0);
-                    let zone = if ratio < 0.25 {
-                        DropZone::Before
-                    } else if ratio > 0.75 {
-                        DropZone::After
-                    } else {
-                        DropZone::Child
-                    };
-                    state.drop_target = Some((index, zone));
+                    let from = state.dragging.expect("dragging checked above");
+                    let invalid = from == index
+                        || workspace.document().doc.descendants(from).contains(&index);
+                    hovered_drop_target = true;
                     let painter = ui.painter();
-                    match zone {
-                        DropZone::Before => painter.line_segment(
-                            [row.rect.left_top(), row.rect.right_top()],
-                            egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(90, 160, 240)),
-                        ),
-                        DropZone::After => painter.line_segment(
-                            [row.rect.left_bottom(), row.rect.right_bottom()],
-                            egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(90, 160, 240)),
-                        ),
-                        DropZone::Child => painter.rect_stroke(
+                    if invalid {
+                        state.drop_target = None;
+                        painter.rect_stroke(
                             row.rect,
                             egui::CornerRadius::ZERO,
-                            egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(90, 160, 240)),
+                            egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(220, 90, 90)),
                             egui::StrokeKind::Inside,
-                        ),
-                    };
+                        );
+                    } else {
+                        let pointer_y = ui
+                            .input(|input| input.pointer.interact_pos())
+                            .map(|pos| pos.y)
+                            .unwrap_or(row.rect.center().y);
+                        let ratio = (pointer_y - row.rect.top()) / row.rect.height().max(1.0);
+                        let zone = if ratio < 0.25 {
+                            DropZone::Before
+                        } else if ratio > 0.75 {
+                            DropZone::After
+                        } else {
+                            DropZone::Child
+                        };
+                        state.drop_target = Some((index, zone));
+                        match zone {
+                            DropZone::Before => painter.line_segment(
+                                [row.rect.left_top(), row.rect.right_top()],
+                                egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(90, 160, 240)),
+                            ),
+                            DropZone::After => painter.line_segment(
+                                [row.rect.left_bottom(), row.rect.right_bottom()],
+                                egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(90, 160, 240)),
+                            ),
+                            DropZone::Child => painter.rect_stroke(
+                                row.rect,
+                                egui::CornerRadius::ZERO,
+                                egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(90, 160, 240)),
+                                egui::StrokeKind::Inside,
+                            ),
+                        };
+                    }
                 }
 
                 if row.dnd_hover_payload::<widgets::AssetDrag>().is_some() {
@@ -447,8 +462,54 @@ pub fn hierarchy(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
             }
         });
 
+    if state.dragging.is_some() && !hovered_drop_target {
+        state.drop_target = None;
+    }
+
+    // Unity Hierarchy keeps a lightweight ghost under the pointer while dragging.
+    // It makes the operation legible even when the pointer is between rows or over
+    // the empty tail of the scroll area.
+    if let (Some(from), Some(pointer)) = (
+        state.dragging,
+        ui.input(|input| input.pointer.interact_pos()),
+    ) {
+        let label = workspace
+            .document()
+            .doc
+            .entities
+            .get(from)
+            .map(|entity| entity.display_name())
+            .unwrap_or_else(|| "Entity".to_string());
+        let ghost = egui::Rect::from_min_size(
+            pointer + egui::vec2(12.0, 12.0),
+            egui::vec2((label.len() as f32 * 7.0 + 30.0).clamp(96.0, 260.0), 22.0),
+        );
+        let painter = ui.ctx().layer_painter(egui::LayerId::new(
+            egui::Order::Foreground,
+            egui::Id::new("hierarchy-drag-preview"),
+        ));
+        painter.rect_filled(
+            ghost,
+            egui::CornerRadius::same(3),
+            egui::Color32::from_rgba_unmultiplied(35, 42, 54, 235),
+        );
+        painter.rect_stroke(
+            ghost,
+            egui::CornerRadius::same(3),
+            egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(100, 170, 245)),
+            egui::StrokeKind::Inside,
+        );
+        painter.text(
+            ghost.left_center() + egui::vec2(8.0, 0.0),
+            egui::Align2::LEFT_CENTER,
+            label,
+            egui::FontId::proportional(11.0),
+            egui::Color32::WHITE,
+        );
+    }
+
     // 松手 → 应用拖拽结果
-    if ui.input(|input| input.pointer.any_released()) {
+    if ui.input(|input| input.pointer.button_released(egui::PointerButton::Primary)) {
         if let (Some(from), Some((to, zone))) = (state.dragging.take(), state.drop_target.take()) {
             if from != to {
                 let parent_of_to = workspace.document().doc.entities[to]
@@ -467,27 +528,18 @@ pub fn hierarchy(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
                 match zone {
                     DropZone::Child => workspace.reparent(from, Some(to), None),
                     DropZone::Before => {
-                        let slot = parent_of_to.and_then(|parent| {
-                            workspace
-                                .document()
-                                .doc
-                                .children(parent)
-                                .iter()
-                                .position(|child| *child == to)
-                        });
-                        workspace.reparent(from, parent_of_to, slot.or(Some(to)));
+                        let mut position = to;
+                        if from < position {
+                            position = position.saturating_sub(1);
+                        }
+                        workspace.reparent(from, parent_of_to, Some(position));
                     }
                     DropZone::After => {
-                        let slot = parent_of_to.and_then(|parent| {
-                            workspace
-                                .document()
-                                .doc
-                                .children(parent)
-                                .iter()
-                                .position(|child| *child == to)
-                                .map(|slot| slot + 1)
-                        });
-                        workspace.reparent(from, parent_of_to, slot.or(Some(to + 1)));
+                        let mut position = to.saturating_add(1);
+                        if from < position {
+                            position = position.saturating_sub(1);
+                        }
+                        workspace.reparent(from, parent_of_to, Some(position));
                     }
                 }
             }

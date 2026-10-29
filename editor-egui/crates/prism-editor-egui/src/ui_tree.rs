@@ -28,6 +28,7 @@ pub struct SnapshotInput<'a> {
     pub paused: bool,
     pub status: &'a str,
     pub frames: u64,
+    pub fps: f32,
     pub gizmo_tool: Option<&'a str>,
     pub gizmo_space: &'a str,
     /// `panel_body` 每帧记录的 tab → 屏幕矩形。
@@ -45,6 +46,7 @@ pub fn snapshot(input: &SnapshotInput<'_>) -> Value {
         "role": "editor",
         "status": input.status,
         "frames": input.frames,
+        "fps": input.fps,
         "playing": input.playing,
         "paused": input.paused,
         "gizmo": {
@@ -341,6 +343,7 @@ mod tests {
             paused: false,
             status: "ready",
             frames: 3,
+            fps: 60.0,
             gizmo_tool: Some("Move"),
             gizmo_space: "World",
             rects: &rects,
@@ -350,5 +353,6 @@ mod tests {
         let value = snapshot(&input);
         assert_eq!(value["gizmo"]["tool"], "Move");
         assert_eq!(value["gizmo"]["space"], "World");
+        assert_eq!(value["fps"], 60.0);
     }
 }
