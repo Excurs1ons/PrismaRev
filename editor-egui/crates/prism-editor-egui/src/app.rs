@@ -936,16 +936,32 @@ impl EditorApp {
         self.state.prompt = Some(panels::Prompt::new(kind, title, hint, value));
     }
 
-    fn save_all_documents(&mut self) {
+    /// 保存所有脏文档。返回保存数量；任何一份失败就返回错误（调用方决定是否继续，
+    /// 构建路径必须因此中止，否则会打包旧内容）。
+    fn save_all_documents(&mut self) -> Result<usize, String> {
         let count = self.workspace.docs.len();
+        let mut saved = 0usize;
+        let mut failures: Vec<String> = Vec::new();
         for index in 0..count {
             if self.workspace.docs[index].dirty {
-                if let Err(error) = self.workspace.save_document(index) {
-                    self.state.status = format!("save failed: {error}");
+                match self.workspace.save_document(index) {
+                    Ok(_) => saved += 1,
+                    Err(error) => failures.push(format!("{error}")),
                 }
             }
         }
-        self.state.status = "project saved".to_string();
+        if failures.is_empty() {
+            self.state.status = if saved == 0 {
+                "nothing to save".to_string()
+            } else {
+                format!("saved {saved} document(s)")
+            };
+            Ok(saved)
+        } else {
+            let message = failures.join("; ");
+            self.state.status = format!("save failed: {message}");
+            Err(message)
+        }
     }
 
     fn create_empty_parent(&mut self) {
@@ -1135,6 +1151,16 @@ impl EditorApp {
             self.state.status = "no project root — cannot build".to_string();
             return;
         };
+        // 构建读的是磁盘上的作者文档：未保存的改动必须先落盘，否则打出来的是旧内容。
+        if let Err(error) = self.save_all_documents() {
+            self.state.status = format!("build aborted: {error}");
+            self.workspace.log(
+                prism_editor_core::LogSource::System,
+                prism_editor_core::LogLevel::Error,
+                format!("build aborted: save failed ({error})"),
+            );
+            return;
+        }
         let label = kind.label();
         self.workspace.log(
             prism_editor_core::LogSource::System,
@@ -1229,7 +1255,9 @@ impl EditorApp {
                 });
                 self.menu_item(ui, "Save", "Ctrl+S", Command::Save);
                 self.menu_item(ui, "Save As…", "Ctrl+Shift+S", Command::SaveAs);
-                self.menu_do(ui, "Save Project", |app| app.save_all_documents());
+                self.menu_do(ui, "Save Project", |app| {
+                    let _ = app.save_all_documents();
+                });
                 self.menu_item(ui, "Reload Scene", "", Command::ReloadDocument);
                 ui.separator();
                 self.menu_item(ui, "Build Settings…", "", Command::BuildProject);
