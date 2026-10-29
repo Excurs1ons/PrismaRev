@@ -33,6 +33,60 @@ pub struct ScreenshotRequest {
     pub scale: Option<f32>,
 }
 
+/// 把 RGBA8 像素写成 PNG，可选最近邻缩放到目标分辨率。
+///
+/// 供宿主（编辑器窗口截图、离屏出图）复用：调用方只负责拿到 RGBA8。
+pub fn save_rgba_png(
+    path: &std::path::Path,
+    width: u32,
+    height: u32,
+    pixels: &[u8],
+    size: Option<[u32; 2]>,
+) -> Result<PathBuf> {
+    let expected = (width as usize) * (height as usize) * 4;
+    if pixels.len() != expected {
+        anyhow::bail!(
+            "screenshot: pixel buffer is {} bytes, expected {expected} for {width}x{height}",
+            pixels.len()
+        );
+    }
+    let mut image = image::RgbaImage::from_raw(width, height, pixels.to_vec())
+        .context("screenshot: build image buffer")?;
+    if let Some([target_w, target_h]) = size {
+        if target_w != width || target_h != height {
+            image = image::imageops::resize(
+                &image,
+                target_w,
+                target_h,
+                image::imageops::FilterType::Nearest,
+            );
+        }
+    }
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() && !parent.exists() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("screenshot: create {}", parent.display()))?;
+        }
+    }
+    image
+        .save(path)
+        .with_context(|| format!("screenshot: write {}", path.display()))?;
+    log::info!(
+        "screenshot: {}x{} -> {}",
+        image.width(),
+        image.height(),
+        path.display()
+    );
+    Ok(path.to_path_buf())
+}
+
+/// 把 BGRA8 就地转成 RGBA8（交换链 / Win32 DIB 都是 BGRA 顺序）。
+pub fn bgra_to_rgba_in_place(pixels: &mut [u8]) {
+    for texel in pixels.as_chunks_mut::<4>().0 {
+        texel.swap(0, 2);
+    }
+}
+
 /// 一次进行中的截图：host-visible 缓冲区 + 请求。
 pub(crate) struct ScreenshotCapture {
     buffer: vk::Buffer,

@@ -9,11 +9,14 @@
 
 mod app;
 mod build;
+mod control;
 mod engine_host;
 mod gpu;
 mod logging;
 mod panels;
+mod screenshot;
 mod theme;
+mod ui_tree;
 mod viewport;
 mod widgets;
 

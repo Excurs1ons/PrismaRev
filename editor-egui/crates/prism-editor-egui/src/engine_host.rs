@@ -12,7 +12,7 @@
 //! `apply_asset_requests` → `apply_results` 写回 ECS，原本分属两个线程的
 //! 两段在这里串起来。
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -60,6 +60,10 @@ pub struct EngineHost {
     focus_marker: Option<Entity>,
     width: u32,
     height: u32,
+    /// Scene view 的编辑器相机是否用场景天空盒当背景（Unity 默认开）。
+    show_skybox: bool,
+    /// 下一次出帧后把离屏图像读回写到这个路径（编辑器截图）。
+    capture_path: Option<PathBuf>,
     simulate: bool,
     paused: bool,
     step_pending: bool,
@@ -100,6 +104,8 @@ impl EngineHost {
             focus_marker: None,
             width,
             height,
+            show_skybox: true,
+            capture_path: None,
             simulate: false,
             paused: false,
             step_pending: false,
@@ -177,6 +183,33 @@ impl EngineHost {
         Ok(count)
     }
 
+    /// Scene view 的编辑器相机 + 背景策略。
+    ///
+    /// Unity 的 Scene view 默认把场景天空盒当背景（`SceneViewState.showSkybox`），
+    /// 所以这里的编辑器相机默认是 `Skybox` 而不是纯色。
+    fn editor_clear_flags(&self) -> prism_scene::CameraClearFlags {
+        if self.show_skybox {
+            prism_scene::CameraClearFlags::Skybox
+        } else {
+            prism_scene::CameraClearFlags::SolidColor
+        }
+    }
+
+    /// 切换 Scene view 背景（天空盒 / 纯色），立即作用到编辑器相机。
+    pub fn set_show_skybox(&mut self, on: bool) {
+        if self.show_skybox == on {
+            return;
+        }
+        self.show_skybox = on;
+        let Some(entity) = self.editor_camera else {
+            return;
+        };
+        let flags = self.editor_clear_flags();
+        if let Some(camera) = self.engine.world_mut().get_mut::<Camera>(entity) {
+            camera.clear_flags = flags;
+        }
+    }
+
     /// 编辑器相机 + 选中标记（只在 Scene view 创建）。
     fn ensure_helper_entities(&mut self) {
         if self.kind == ViewKind::Scene {
@@ -185,7 +218,7 @@ impl EngineHost {
                     depth: 1000.0,
                     far: 5000.0,
                     aspect: self.width as f32 / self.height.max(1) as f32,
-                    clear_flags: prism_scene::CameraClearFlags::SolidColor,
+                    clear_flags: self.editor_clear_flags(),
                     background_color: [0.11, 0.12, 0.14, 1.0],
                     ..Camera::default()
                 };
@@ -455,6 +488,14 @@ impl EngineHost {
             return Err(error);
         }
 
+        // 截图要读 `PRESENT_SRC_KHR` 布局的图像，所以必须在转采样布局**之前**做。
+        if let Some(path) = self.capture_path.take() {
+            match self.capture_offscreen(&path) {
+                Ok(path) => log::info!("viewport capture: {}", path.display()),
+                Err(error) => log::warn!("viewport capture failed: {error:#}"),
+            }
+        }
+
         // PRESENT_SRC_KHR → SHADER_READ_ONLY_OPTIMAL：egui 的采样描述符要求
         // 后者，且这一步在同一个队列上完成，不需要额外 semaphore。
         self.renderer.offscreen_present_for_sampling()?;
@@ -463,6 +504,22 @@ impl EngineHost {
             .renderer
             .offscreen_image_view()
             .map(|view| (view, extent)))
+    }
+
+    /// 请求**下一次出帧**时把离屏图像读回并写成 PNG（编辑器截图用）。
+    pub fn request_capture(&mut self, path: PathBuf) {
+        self.capture_path = Some(path);
+    }
+
+    /// 离屏图像 → host-visible 缓冲区 → RGBA8 → PNG。
+    fn capture_offscreen(&mut self, path: &Path) -> anyhow::Result<PathBuf> {
+        let extent = self
+            .renderer
+            .offscreen_extent()
+            .context("no offscreen target to capture")?;
+        self.renderer.copy_offscreen_to_readback()?;
+        let pixels = self.renderer.readback_pixels()?;
+        prism_render::screenshot::save_rgba_png(path, extent.width, extent.height, &pixels, None)
     }
 
     pub fn shutdown(&mut self) {

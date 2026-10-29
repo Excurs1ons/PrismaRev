@@ -90,6 +90,8 @@ instance / device 并返回 `AshRenderState`，因此可以做到 Unity 的模�
   单位像素」换算世界位移，交给 `Workspace::translate_entity_world`；
 - 选中高亮复用引擎的 `Gizmo` 组件（世界三色轴箭头），不引入新的渲染概念。
 - 工具：`W` / `E` / `R` 切换移动 / 旋转 / 缩放 gizmo，`X` 切世界/局部，`G` 开关网格；
+  `S` 开关 Scene view 背景（场景天空盒 / 纯色，与 Unity 的
+  `SceneViewState.showSkybox` 同语义，默认开）；
   旋转走 `pick_rotation_axis` + `screen_angle`，缩放走 `set_scale_axis`。
 - 空白拖拽 = 框选（`box_select`），`Alt`+拖 / 右键拖 = 轨道，双击 = 聚焦选中项。
 
@@ -119,7 +121,7 @@ instance / device 并返回 `AshRenderState`，因此可以做到 Unity 的模�
 
 快捷键（Unity 习惯）：`Ctrl+1..5` = Scene / Game / Inspector / Hierarchy / Project，
 `Ctrl+Shift+C` = Console，`Ctrl+B` = Build And Run，`Ctrl+I` = 反选，
-`W/E/R` = 移动 / 旋转 / 缩放，`X` 世界/局部，`G` 网格，`F` 框住全部，`Del` 删除。
+`W/E/R` = 移动 / 旋转 / 缩放，`X` 世界/局部，`G` 网格，`S` 天空盒，`F` 框住全部，`Del` 删除。
 
 命名布局存在 `target/editor-egui/layouts.json`（`{name: {version,dock,floating}}`），
 可以整份导出/导入成 JSON 文件（与 Web 的 `prisma-editor.dock.v4` 同形）。
@@ -148,6 +150,23 @@ instance / device 并返回 `AshRenderState`，因此可以做到 Unity 的模�
 - **资产选择器**：检查器的路径字段右侧有 `⋯` 按钮，按字段名过滤扩展名
   （`mesh_path` → 模型、`sprite_path` → 贴图、`hdr_path`/`env_map` → HDR…），
   选中的相对路径直接写入字段。
+
+## 4.4 内置截图与控制通道
+
+截图在编辑器进程里做（`editor-egui/crates/prism-editor-egui/src/screenshot.rs`）：
+
+| target | 取法 | 说明 |
+|---|---|---|
+| `window` | Windows `PrintWindow` + `PW_RENDERFULLCONTENT` 画进 32bpp DIB | 连 UI 一起抓；DWM 合成后取样，窗口部分在屏幕外也能抓全。交换链由 egui-ash 持有，宿主拿不到 `VkImage`，这是唯一路径 |
+| `scene` / `game` | `GraphRenderer::copy_offscreen_to_readback` + `readback_pixels` | 引擎离屏图（`PRESENT_SRC_KHR` → 读回 → PNG），不需要窗口，无显示器 / CI 可用 |
+
+触发方式（都不是环境变量）：MCP 的 `editor_capture`（见 `docs/editor-mcp.md`），
+或菜单「Window → Capture Window」（默认写到 `target/editor-egui/captures/`）。
+
+控制通道（`src/control.rs`）：启动时在 `127.0.0.1:0` 上监听并把端口写进
+`<项目根>/target/editor-egui/control.port`，一行 JSON 一问一答：
+`ping` / `status` / `capture` / `ui.snapshot` / `ui.click` / `ui.set` / `quit`。请求经 `mpsc` 排进 UI 线程，所以截图和
+界面状态是同一帧的；启动前三帧内的 `capture` 会延后到画面合成后再抓（否则是白图）。
 
 ## 5. 与另外两个编辑器的关系
 

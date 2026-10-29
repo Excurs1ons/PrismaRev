@@ -34,6 +34,24 @@ cargo run -p prism-editor-egui
 | `PRISMREV_EDITOR_DEMO` | 指定 fixture JSON 路径 |
 | `RUST_LOG` | 日志级别（默认 `warn`） |
 
+## 截图 / 被 MCP 驱动
+
+编辑器启动时会在 `127.0.0.1:0` 上开一个本地控制通道，并把端口写进
+`<项目根>/target/editor-egui/control.port`。`crates/prism-editor-mcp` 用它驱动
+预览：`editor_launch` / `editor_status` / `editor_capture` / `editor_quit`
+（详见 `docs/editor-mcp.md`）。菜单「Window → Capture Window」是同一套实现的本地入口。
+
+- `window`：整窗 PNG（UI + 视口）。Windows 走 `PrintWindow`，DWM 合成后取样，
+  窗口部分在屏幕外也能抓全；其它平台不支持。
+- `scene` / `game`：只抓该视口的引擎离屏图（`PRESENT_SRC_KHR` 读回），
+  不需要窗口，无显示器 / CI 可用。
+
+界面本身也能被 agent 读和操作（`editor_ui`）：`snapshot` 返回一棵 UI 节点树
+（dock 面板 / 激活 tab / 打开的文档 / 层级实体 / 资产条目 / 检查器组件字段 /
+`Command` 列表），节点 id 形如 `panel:hierarchy`、`entity:3`、`doc:0`、
+`asset:assets/x.prefab.json`、`field:3:Transform:position[1]`、`command:Save`；
+`click` / `set` 按 id 走和界面相同的代码路径（`ui_tree.rs`）。
+
 ## 结构
 
 ```
@@ -41,6 +59,8 @@ crates/prism-editor-egui/src/
 ├── main.rs          egui-ash 入口（AppCreator + RunOption）
 ├── gpu.rs           共享 VkDevice：instance / 物理设备 / 设备 / 分配器 / 命令池
 ├── build.rs         构建 / cook 子进程（`prism-build-pipeline`），输出进 Console
+├── control.rs       本地控制通道（TCP + 一行 JSON：ping/status/capture/quit）
+├── screenshot.rs    内置截图：整窗（PrintWindow）/ 视口（离屏读回）
 ├── app.rs           外壳：Unity 式菜单（二/三级）、工具栏、状态栏、docking、Play
 ├── engine_host.rs   进程内引擎宿主：Engine + GraphRenderer + 资产上传（同步）
 ├── viewport.rs      Scene/Game 视口：离屏图像 → egui 纹理、轨道/拾取/gizmo

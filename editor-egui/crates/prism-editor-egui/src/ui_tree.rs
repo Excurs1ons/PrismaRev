@@ -1,0 +1,325 @@
+//! 给 agent 看的 UI 节点树（类似浏览器 MCP 的 DOM / 可访问性快照）。
+//!
+//! egui 没有 DOM，也没有稳定到可以外部点击的控件句柄，所以这里不猜坐标：节点树
+//! 直接来自**数据模型**（`Workspace` / `UiState`）+ 每帧记录的 dock 面板矩形。
+//! 每个节点有稳定的 `id`，`ui.click` / `ui.set` 按 id 走和界面完全相同的代码路径
+//! （`Command` / `Workspace::select` / `Workspace::set_field`），不注入合成鼠标事件。
+//!
+//! 节点 id 约定：
+//!
+//! | 前缀 | 含义 | 可点击 | 可设值 |
+//! |---|---|---|---|
+//! | `command:<Name>` | `Command` 枚举成员（`Command::ALL`） | ✅ | — |
+//! | `panel:<tab>` | dock 里的面板（`sceneView` / `hierarchy` / …） | ✅ | — |
+//! | `doc:<index>` | 打开的文档 | ✅ | — |
+//! | `entity:<id>` | 层级树实体 | ✅ | — |
+//! | `asset:<path>` | 资产面板条目 | ✅ | — |
+//! | `field:<entity>:<component>:<path>` | 检查器字段 | — | ✅ |
+
+use std::collections::BTreeMap;
+
+use prism_editor_core::{Command, Workspace};
+use serde_json::{json, Value};
+
+/// 快照需要的运行时状态（都是 `EditorApp` 的字段，单独传进来便于测试）。
+pub struct SnapshotInput<'a> {
+    pub workspace: &'a Workspace,
+    pub playing: bool,
+    pub paused: bool,
+    pub status: &'a str,
+    pub frames: u64,
+    /// `panel_body` 每帧记录的 tab → 屏幕矩形。
+    pub rects: &'a BTreeMap<String, egui::Rect>,
+    /// leaf id → 当前激活的 tab。
+    pub leaves: &'a [(String, String, Vec<String>)],
+    /// Console 里当前可见的日志行（已按用户过滤），最多用前 50 条。
+    pub logs: &'a [String],
+}
+
+/// 整个编辑器界面的节点树。
+pub fn snapshot(input: &SnapshotInput<'_>) -> Value {
+    let workspace = input.workspace;
+    let mut root = json!({
+        "role": "editor",
+        "status": input.status,
+        "frames": input.frames,
+        "playing": input.playing,
+        "paused": input.paused,
+    });
+
+    let mut dock = Vec::new();
+    for (leaf, active, tabs) in input.leaves {
+        for tab in tabs {
+            let mut node = json!({
+                "id": format!("panel:{tab}"),
+                "role": "panel",
+                "label": panel_title(tab),
+                "leaf": leaf,
+                "tabs": tabs,
+                "active": tab == active,
+            });
+            if let Some(rect) = input.rects.get(tab) {
+                node["bounds"] = json!([rect.min.x, rect.min.y, rect.width(), rect.height()]);
+            }
+            if tab == active {
+                node["children"] = panel_children(input, tab);
+            }
+            dock.push(node);
+        }
+    }
+    root["dock"] = Value::Array(dock);
+
+    root["documents"] = Value::Array(
+        workspace
+            .docs
+            .iter()
+            .enumerate()
+            .map(|(index, doc)| {
+                json!({
+                    "id": format!("doc:{index}"),
+                    "role": "document",
+                    "label": doc
+                        .path
+                        .as_deref()
+                        .map(file_name)
+                        .unwrap_or_else(|| format!("untitled:{index}")),
+                    "path": doc.path,
+                    "dirty": doc.dirty,
+                    "active": index == workspace.active_index(),
+                })
+            })
+            .collect(),
+    );
+
+    root["assets"] = asset_tree(input);
+    root["commands"] = Value::Array(
+        Command::ALL
+            .iter()
+            .map(|command| json!(command_name(*command)))
+            .collect(),
+    );
+    root
+}
+
+/// 面板内容节点（只有激活的 tab 展开）。
+fn panel_children(input: &SnapshotInput<'_>, tab: &str) -> Value {
+    let workspace = input.workspace;
+    match tab {
+        "hierarchy" => Value::Array(hierarchy_nodes(workspace)),
+        "inspector" => Value::Array(inspector_components(workspace)),
+        "docs" => Value::Array(
+            workspace
+                .docs
+                .iter()
+                .enumerate()
+                .map(|(index, doc)| {
+                    json!({
+                        "id": format!("doc:{index}"),
+                        "role": "document",
+                        "label": doc.path.as_deref().map(file_name).unwrap_or_default(),
+                        "dirty": doc.dirty,
+                        "active": index == workspace.active_index(),
+                    })
+                })
+                .collect(),
+        ),
+        "log" => Value::Array(
+            input
+                .logs
+                .iter()
+                .rev()
+                .take(50)
+                .map(|line| json!({ "role": "log", "message": line }))
+                .collect(),
+        ),
+        _ => Value::Array(Vec::new()),
+    }
+}
+
+/// 层级树（按文档顺序，带 `depth`）。
+fn hierarchy_nodes(workspace: &Workspace) -> Vec<Value> {
+    let doc = &workspace.document().doc;
+    let mut out = Vec::new();
+    for (index, entity) in doc.entities.iter().enumerate() {
+        let id = entity.id.unwrap_or(index as u32);
+        out.push(json!({
+            "id": format!("entity:{id}"),
+            "role": "entity",
+            "label": entity.display_name(),
+            "parent": entity.parent,
+            "selected": workspace.selection.contains(&index),
+            "components": entity.components.keys().cloned().collect::<Vec<_>>(),
+        }));
+    }
+    out
+}
+
+/// 选中实体的组件字段（可 `ui.set` 的路径）。
+fn inspector_components(workspace: &Workspace) -> Vec<Value> {
+    let doc = &workspace.document().doc;
+    let mut out = Vec::new();
+    for index in workspace.selection.iter().take(4) {
+        let Some(entity) = doc.entities.get(*index) else {
+            continue;
+        };
+        let entity_id = entity.id.unwrap_or(*index as u32);
+        let mut components = Vec::new();
+        components.push(component_node(
+            entity_id,
+            "Transform",
+            &serde_json::to_value(&entity.transform).unwrap_or(Value::Null),
+        ));
+        for (name, value) in &entity.components {
+            components.push(component_node(entity_id, name, value));
+        }
+        out.push(json!({
+            "id": format!("entity:{entity_id}"),
+            "role": "entity",
+            "label": entity.display_name(),
+            "entity": entity_id,
+            "children": components,
+        }));
+    }
+    out
+}
+
+fn component_node(entity_id: u32, name: &str, value: &Value) -> Value {
+    let mut fields = Vec::new();
+    flatten(value, "", &mut |path, value| {
+        fields.push(json!({
+            "id": format!("field:{entity_id}:{name}:{path}"),
+            "role": "field",
+            "path": path,
+            "value": value,
+        }));
+    });
+    json!({
+        "id": format!("component:{entity_id}:{name}"),
+        "role": "component",
+        "label": name,
+        "children": fields,
+    })
+}
+
+/// 把嵌套对象摊平成字段路径。
+///
+/// 对象用点号（`position.x`），数组**同时**给出整体值和下标
+/// （`position` 是 `[x,y,z]`，另有 `position[0]` …），这样 agent 既能整组替换
+/// 也能改单个分量（`prism_editor_core::schema::parse_path` 认 `a.b[2]`）。
+fn flatten(value: &Value, prefix: &str, push: &mut impl FnMut(String, Value)) {
+    match value {
+        Value::Object(map) => {
+            for (key, child) in map {
+                let path = if prefix.is_empty() {
+                    key.clone()
+                } else {
+                    format!("{prefix}.{key}")
+                };
+                flatten(child, &path, push);
+            }
+        }
+        Value::Array(items) => {
+            push(prefix.to_string(), value.clone());
+            for (index, child) in items.iter().enumerate() {
+                if child.is_array() || child.is_object() {
+                    flatten(child, &format!("{prefix}[{index}]"), push);
+                } else {
+                    push(format!("{prefix}[{index}]"), child.clone());
+                }
+            }
+        }
+        other => push(prefix.to_string(), other.clone()),
+    }
+}
+
+fn asset_tree(input: &SnapshotInput<'_>) -> Value {
+    let workspace = input.workspace;
+    let assets = workspace
+        .filtered_assets()
+        .into_iter()
+        .map(|asset| {
+            json!({
+                "id": format!("asset:{}", asset.path),
+                "role": "asset",
+                "label": file_name(&asset.path),
+                "path": asset.path,
+                "kind": format!("{:?}", asset.kind).to_ascii_lowercase(),
+            })
+        })
+        .collect::<Vec<_>>();
+    json!({ "role": "panel", "children": assets })
+}
+
+fn file_name(path: &str) -> String {
+    path.rsplit(['/', '\\']).next().unwrap_or(path).to_string()
+}
+
+/// `panel:<tab>` → 界面上的标题。
+pub fn panel_title(tab: &str) -> &'static str {
+    match tab {
+        "sceneView" => "Scene",
+        "gameView" => "Game",
+        "hierarchy" => "Hierarchy",
+        "inspector" => "Inspector",
+        "assets" => "Assets",
+        "docs" => "Documents",
+        "log" => "Console",
+        "history" => "History",
+        "renderGraph" => "Render Graph",
+        "build" => "Build Settings",
+        "tools" => "Offline Tools",
+        "settings" => "Project Settings",
+        "preferences" => "Preferences",
+        "theme" => "Theme",
+        _ => "Panel",
+    }
+}
+
+/// `Command` 的稳定名字（和 `Debug` 一致，agent 用这个名字点击）。
+pub fn command_name(command: Command) -> String {
+    format!("{command:?}")
+}
+
+/// 名字 → `Command`（`ui.click` 的 `command:<Name>`）。
+pub fn command_by_name(name: &str) -> Option<Command> {
+    Command::ALL
+        .iter()
+        .copied()
+        .find(|command| command_name(*command) == name)
+}
+
+/// 暴露给 `ui.set` 的错误提示：列出组件里可写的字段路径。
+pub fn flatten_paths(value: &Value, prefix: &str, push: &mut impl FnMut(&str, &Value)) {
+    flatten(value, prefix, &mut |path, value| push(&path, &value));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn flatten_produces_dotted_paths() {
+        let value = json!({ "position": { "x": 1.0, "y": 2 }, "tags": [1, 2] });
+        let mut paths = Vec::new();
+        flatten(&value, "", &mut |path, value| paths.push((path, value)));
+        let names: Vec<&str> = paths.iter().map(|(path, _)| path.as_str()).collect();
+        assert!(names.contains(&"position.x"));
+        assert!(names.contains(&"position.y"));
+        assert!(names.contains(&"tags"));
+        assert!(names.contains(&"tags[0]"));
+    }
+
+    #[test]
+    fn command_names_round_trip() {
+        for command in Command::ALL {
+            assert_eq!(command_by_name(&command_name(*command)), Some(*command));
+        }
+        assert_eq!(command_by_name("Nope"), None);
+    }
+
+    #[test]
+    fn panel_titles_are_stable() {
+        assert_eq!(panel_title("sceneView"), "Scene");
+        assert_eq!(panel_title("hierarchy"), "Hierarchy");
+    }
+}

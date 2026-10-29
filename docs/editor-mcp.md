@@ -70,6 +70,56 @@ cargo run -p prism-editor-mcp -- --project projects/fishing
 - 不实现 resource / prompt / sampling；`tools/list` 之外只有 `ping`。
 - 没有并发保护：同一个文档别同时开两个 agent 写（`document_write` 是整文件覆盖）。
 
+## egui 编辑器（`editor-egui/`）
+
+egui 编辑器是**独立进程**（Rust + egui-ash），窗口截图和视口零拷贝图像都只能
+在它自己的进程里取，所以它开了一个本地控制通道，MCP 通过它下命令：
+
+```text
+editor-egui 启动 → 监听 127.0.0.1:<随机端口> → 写 <项目根>/target/editor-egui/control.port
+MCP 工具        → 读端口文件 → TCP 一行 JSON 请求 / 一行 JSON 回执
+```
+
+- 只监听回环；端口文件在编辑器退出时删除（`PRISMREV_EDITOR_CONTROL` 可覆盖成端口号）。
+- 请求在 UI 线程处理，所以截图和界面状态是**同一帧**的。
+
+| 工具 | 参数 | 作用 |
+|---|---|---|
+| `editor_launch` | `command?` `wait_ms?` | 起 `editor-egui/target/{release,debug}/prism-editor-egui`（没构建过退回 `cargo run`），等控制通道就绪 |
+| `editor_status` | — | 帧数、当前场景、选中实体、Play / 暂停、未保存标记、项目根 |
+| `editor_capture` | `target`(`window`/`scene`/`game`) `path?` `size?` | 抓整窗（UI + 视口）或某个视口的引擎离屏图，返回 PNG 路径 |
+| `editor_ui` | `action`(`snapshot`/`click`/`set`) `node?` `value?` | UI 节点树：快照 / 按节点点击 / 按节点设值 |
+| `editor_quit` | — | 走正常退出路径（会写 `state.json`） |
+
+### UI 节点树（`editor_ui`）
+
+egui 没有 DOM，也拿不到可以外部点击的控件句柄，所以节点树来自**数据模型** +
+每帧记录的 dock 面板矩形，`click` / `set` 走和界面完全相同的代码路径（`Command` /
+`Workspace::select` / `Workspace::set_field`），不注入合成鼠标事件。
+
+`snapshot` 返回：`dock`（每个 tab 一个节点，激活的那个展开子节点，带
+`bounds`）、`documents`、`assets`、`commands`，以及激活面板的子节点
+（`hierarchy` → 实体、`inspector` → 组件字段、`log` → 最近 50 行）。
+
+| 节点 id | 例子 | `click` | `set` |
+|---|---|---|---|
+| `command:<Name>` | `command:Save` | ✅ | — |
+| `panel:<tab>` | `panel:hierarchy` | ✅（已开则切 tab，未开则打开） | — |
+| `doc:<index>` | `doc:0` | ✅ | — |
+| `entity:<id>` | `entity:3` | ✅（选中） | — |
+| `asset:<path>` | `asset:assets/prefabs/a.prefab.json` | ✅ | — |
+| `field:<entity>:<component>:<path>` | `field:3:Transform:position[1]` | — | ✅ |
+
+`field` 的 `path` 就是组件 JSON 的路径：对象用点号（`position.x`），数组既给出整体
+（`position` = `[x,y,z]`）也给出下标（`position[1]`）。路径不存在时 `ui.set` 会
+**报错并列出可用路径**（`Workspace::set_field` 自己找不到字段是静默返回的）。
+写回走 `Workspace::set_field`，所以是一次可撤销的字段修改。
+
+`target=window` 走 Windows `PrintWindow`（`PW_RENDERFULLCONTENT`）：DWM 合成
+之后取样，所以 Vulkan 交换链内容和 UI 一起抓到，窗口部分在屏幕外也行；其它平台
+只支持 `scene` / `game`（引擎离屏图，不需要窗口）。编辑器菜单
+「Window → Capture Window」是同一套实现的本地快捷键。
+
 ## 编辑器 UI 操作（CDP）
 
 除了改数据，还能像浏览器 MCP 那样操作**编辑器界面本身**：列出按钮 / 文本 /
