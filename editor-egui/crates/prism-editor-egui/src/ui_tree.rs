@@ -28,6 +28,8 @@ pub struct SnapshotInput<'a> {
     pub paused: bool,
     pub status: &'a str,
     pub frames: u64,
+    pub gizmo_tool: Option<&'a str>,
+    pub gizmo_space: &'a str,
     /// `panel_body` 每帧记录的 tab → 屏幕矩形。
     pub rects: &'a BTreeMap<String, egui::Rect>,
     /// leaf id → 当前激活的 tab。
@@ -45,6 +47,10 @@ pub fn snapshot(input: &SnapshotInput<'_>) -> Value {
         "frames": input.frames,
         "playing": input.playing,
         "paused": input.paused,
+        "gizmo": {
+            "tool": input.gizmo_tool,
+            "space": input.gizmo_space,
+        },
     });
 
     let mut dock = Vec::new();
@@ -321,5 +327,28 @@ mod tests {
     fn panel_titles_are_stable() {
         assert_eq!(panel_title("sceneView"), "Scene");
         assert_eq!(panel_title("hierarchy"), "Hierarchy");
+    }
+
+    #[test]
+    fn snapshot_includes_gizmo_tool_and_space() {
+        let workspace = Workspace::sample();
+        let rects = BTreeMap::new();
+        let leaves = Vec::new();
+        let logs = Vec::new();
+        let input = SnapshotInput {
+            workspace: &workspace,
+            playing: false,
+            paused: false,
+            status: "ready",
+            frames: 3,
+            gizmo_tool: Some("Move"),
+            gizmo_space: "世界",
+            rects: &rects,
+            leaves: &leaves,
+            logs: &logs,
+        };
+        let value = snapshot(&input);
+        assert_eq!(value["gizmo"]["tool"], "Move");
+        assert_eq!(value["gizmo"]["space"], "世界");
     }
 }

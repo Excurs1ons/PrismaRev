@@ -786,6 +786,8 @@ impl EditorApp {
                     paused: self.paused,
                     status: &self.state.status,
                     frames: self.frame_count,
+                    gizmo_tool: self.scene_view.as_ref().map(|view| view.tool.label()),
+                    gizmo_space: self.workspace.gizmo_space.label(),
                     rects: &self.panel_rects,
                     leaves: &self.dock_leaves,
                     logs: &logs,

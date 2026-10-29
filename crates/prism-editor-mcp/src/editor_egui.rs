@@ -302,8 +302,9 @@ fn request(root: &Path, body: Value) -> Result<Value, String> {
 }
 
 fn default_command(root: &Path) -> String {
-    let debug = root.join("editor-egui/target/debug/prism-editor-egui");
-    let release = root.join("editor-egui/target/release/prism-editor-egui");
+    let editor_root = find_editor_root(root).unwrap_or_else(|| root.to_path_buf());
+    let debug = editor_root.join("editor-egui/target/debug/prism-editor-egui");
+    let release = editor_root.join("editor-egui/target/release/prism-editor-egui");
     for candidate in [release, debug] {
         let with_exe = if cfg!(windows) {
             candidate.with_extension("exe")
@@ -315,7 +316,21 @@ fn default_command(root: &Path) -> String {
         }
     }
     // 没构建过就退回 cargo（会编译，慢但可用）。
-    "cargo run -p prism-editor-egui --manifest-path editor-egui/Cargo.toml".to_string()
+    format!(
+        "cargo run -p prism-editor-egui --manifest-path {}",
+        editor_root.join("editor-egui/Cargo.toml").display()
+    )
+}
+
+fn find_editor_root(root: &Path) -> Option<PathBuf> {
+    let mut current = Some(root);
+    while let Some(dir) = current {
+        if dir.join("editor-egui/Cargo.toml").is_file() {
+            return Some(dir.to_path_buf());
+        }
+        current = dir.parent();
+    }
+    None
 }
 
 /// 端口文件存在但编辑器已经死了 → 清掉陈旧文件（`editor_launch` 前用）。
@@ -339,4 +354,19 @@ fn free_port_probe() -> Option<u16> {
         .ok()
         .and_then(|listener| listener.local_addr().ok())
         .map(|addr| addr.port())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn finds_editor_from_nested_user_project() {
+        let mut repo = std::env::current_dir().unwrap();
+        while !repo.join("editor-egui/Cargo.toml").is_file() {
+            repo = repo.parent().expect("repository root").to_path_buf();
+        }
+        let fishing = repo.join("projects/fishing");
+        assert_eq!(find_editor_root(&fishing), Some(repo));
+    }
 }
