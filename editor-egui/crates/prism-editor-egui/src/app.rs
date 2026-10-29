@@ -300,6 +300,11 @@ impl EditorApp {
             dock_leaves: Vec::new(),
         };
 
+        // Preferences 的日志上限在启动时生效，而不是等用户再拖一次滑条。
+        app.workspace
+            .log
+            .set_capacity(app.preferences.max_log_lines as usize);
+
         // 首帧：把当前文档交给引擎，并创建 Scene view。
         if !app.workspace.document().doc.entities.is_empty() {
             // 与 Unity 一致：打开场景时自动框住全部内容。
@@ -425,6 +430,13 @@ impl EditorApp {
     }
 
     fn apply_command(&mut self, command: Command) {
+        if command == Command::DeleteSelection
+            && self.state.confirm_delete
+            && !self.workspace.selection.is_empty()
+        {
+            self.state.pending_entity_delete = Some(self.workspace.selection.clone());
+            return;
+        }
         if command == Command::SaveAs {
             let title = self.workspace.document().title();
             self.open_prompt(
@@ -2964,6 +2976,10 @@ impl App for EditorApp {
         self.floating_panels(ctx);
 
         self.prompt_dialog(ctx);
+        // Preferences 是编辑器本机设置，界面直接读镜像；这里每帧同步一次。
+        self.state.compact = self.preferences.compact;
+        self.state.confirm_delete = self.preferences.confirm_delete;
+        panels::entity_delete_confirm(ctx, &mut self.workspace, &mut self.state);
 
         let mut about = self.state.about_open;
         panels::boolean_window(ctx, &mut about, "About", panels::about);

@@ -32,16 +32,37 @@ fn asset_kind_icon(kind: AssetKind) -> &'static str {
     }
 }
 
+/// 层级树行高：比资产 / 文档列表更紧凑（Unity 的 Hierarchy 也是）。
+pub fn tree_row_height(compact: bool) -> f32 {
+    if compact {
+        15.0
+    } else {
+        18.0
+    }
+}
+
+/// 列表行高：Preferences 的「Compact layout」直接决定它。
+pub fn row_height(compact: bool) -> f32 {
+    if compact {
+        16.0
+    } else {
+        20.0
+    }
+}
+
 /// 列表行（Unity / Web 风格）：整行底色 + 文本，用于资产 / 文档这类列表。
 fn list_row(
     ui: &mut Ui,
     colors: &prism_editor_core::ThemeColors,
     selected: bool,
+    compact: bool,
     text: &str,
 ) -> egui::Response {
     use prism_editor_core::ThemeToken;
-    let (rect, response) =
-        ui.allocate_exact_size(Vec2::new(ui.available_width(), 20.0), egui::Sense::click());
+    let (rect, response) = ui.allocate_exact_size(
+        Vec2::new(ui.available_width(), row_height(compact)),
+        egui::Sense::click(),
+    );
     if ui.is_rect_visible(rect) {
         let bg = if selected {
             Some(theme::color32(colors, ThemeToken::Selection))
@@ -112,6 +133,12 @@ pub struct UiState {
     pub tab_drop: Option<(String, prism_editor_core::dock::DockZone, f32)>,
     /// 变换剪贴板：(字段, 分量值) —— Unity 的 Copy / Paste Transform。
     pub transform_clip: Option<(String, Vec<f32>)>,
+    /// Preferences 的镜像：列表行高（紧凑布局）。
+    pub compact: bool,
+    /// Preferences 的镜像：删除实体前是否弹确认。
+    pub confirm_delete: bool,
+    /// 等待确认删除的实体下标（None = 没有待确认的删除）。
+    pub pending_entity_delete: Option<Vec<usize>>,
     /// 层级拖拽：正在拖的实体下标 + 悬停目标。
     pub dragging: Option<usize>,
     pub drop_target: Option<(usize, DropZone)>,
@@ -257,7 +284,7 @@ pub fn hierarchy(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
                 // 整行选中（Unity：点行任意位置都选中，只有文字可点会很别扭），
                 // 行高固定 18px，用来画整行底色 / 拖拽插入线。
                 let (row_rect, row) = ui.allocate_exact_size(
-                    Vec2::new(ui.available_width(), 18.0),
+                    Vec2::new(ui.available_width(), tree_row_height(state.compact)),
                     egui::Sense::click_and_drag(),
                 );
                 if ui.is_rect_visible(row_rect) {
@@ -568,7 +595,11 @@ pub fn hierarchy(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
             }
             TreeAction::Delete(index) => {
                 workspace.select(index, false);
-                workspace.delete_selection();
+                if state.confirm_delete {
+                    state.pending_entity_delete = Some(vec![index]);
+                } else {
+                    workspace.delete_selection();
+                }
                 state.rename = None;
             }
             TreeAction::Duplicate(index) => {
@@ -1298,7 +1329,7 @@ pub fn assets(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
                     icons::FOLDER,
                     path.rsplit('/').next().unwrap_or(path)
                 );
-                if list_row(ui, &colors, false, &label).clicked() {
+                if list_row(ui, &colors, false, state.compact, &label).clicked() {
                     navigate_assets(state, path);
                 }
             }
@@ -1313,7 +1344,7 @@ pub fn assets(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
                 let payload = widgets::AssetDrag { path: path.clone() };
                 let response = ui
                     .dnd_drag_source(drag_id, payload, |ui| {
-                        list_row(ui, &workspace.colors(), selected, &label)
+                        list_row(ui, &workspace.colors(), selected, state.compact, &label)
                     })
                     .inner;
                 if response.clicked() {
@@ -1465,8 +1496,10 @@ pub fn docs(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
         let active = workspace.active_index() == index;
         let colors = workspace.colors();
         // 整行可点（Unity / Web 的文档列表都是整行选中），行内按钮用无框图标。
-        let (rect, row) =
-            ui.allocate_exact_size(Vec2::new(ui.available_width(), 20.0), egui::Sense::click());
+        let (rect, row) = ui.allocate_exact_size(
+            Vec2::new(ui.available_width(), row_height(state.compact)),
+            egui::Sense::click(),
+        );
         if ui.is_rect_visible(rect) {
             let bg = if active {
                 Some(theme::color32(
@@ -1813,12 +1846,18 @@ pub fn preferences(
     workspace: &mut Workspace,
     state: &mut UiState,
 ) {
-    ui.checkbox(&mut preferences.autosave, "Auto save");
+    ui.checkbox(&mut preferences.autosave, "Auto save layout");
     ui.checkbox(&mut preferences.confirm_delete, "Confirm before delete");
     ui.checkbox(&mut preferences.compact, "Compact layout");
     ui.horizontal(|ui| {
         ui.label("Max log lines");
-        ui.add(egui::DragValue::new(&mut preferences.max_log_lines).range(500.0..=20_000.0));
+        let response =
+            ui.add(egui::DragValue::new(&mut preferences.max_log_lines).range(500.0..=20_000.0));
+        if response.changed() {
+            workspace
+                .log
+                .set_capacity(preferences.max_log_lines as usize);
+        }
     });
     ui.horizontal(|ui| {
         ui.label("Language");
@@ -1838,6 +1877,45 @@ pub fn preferences(
             state.status = "locale: zh-CN".to_string();
         }
     });
+}
+
+/// Preferences 的「Confirm before delete」：删除实体前弹一次确认。
+pub fn entity_delete_confirm(ctx: &egui::Context, workspace: &mut Workspace, state: &mut UiState) {
+    let Some(indices) = state.pending_entity_delete.clone() else {
+        return;
+    };
+    let mut decision: Option<bool> = None;
+    egui::Window::new("Delete")
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+        .show(ctx, |ui| {
+            let count = indices.len();
+            if count == 1 {
+                ui.label("Delete the selected entity and its children?");
+            } else {
+                ui.label(format!(
+                    "Delete {count} selected entities and their children?"
+                ));
+            }
+            ui.horizontal(|ui| {
+                if ui.button("Delete").clicked() {
+                    decision = Some(true);
+                }
+                if ui.button("Cancel").clicked() {
+                    decision = Some(false);
+                }
+            });
+        });
+    match decision {
+        Some(true) => {
+            workspace.select_many(&indices, false);
+            workspace.delete_selection();
+            state.pending_entity_delete = None;
+        }
+        Some(false) => state.pending_entity_delete = None,
+        None => {}
+    }
 }
 
 pub fn theme(ui: &mut Ui, workspace: &mut Workspace) {
