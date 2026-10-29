@@ -1,91 +1,26 @@
-use serde::Serialize;
-use std::time::{SystemTime, UNIX_EPOCH};
-use tauri::{Emitter, Manager, Wry};
-#[cfg(mobile)]
-use tauri_plugin_fs::FsExt;
+//! PrismaRev Hub 的 Tauri 外壳。
+//!
+//! 桌面端是 Unity Hub 形态的工程管理窗口（工程列表 / 新建 / 添加 / 打开
+//! 编辑器），工程逻辑在 [`hub`]；Android 端仍然只负责拉起游戏 Activity。
 
 #[cfg(not(mobile))]
 mod game_launcher;
+#[cfg(not(mobile))]
+mod hub;
 
-// ==================== 1. 前后端通信演示 ====================
+#[cfg(not(mobile))]
+use hub::{
+    hub_add_project, hub_create_project, hub_editor_info, hub_environment, hub_open_project,
+    hub_projects, hub_remove_project, hub_reveal_project, HubState,
+};
+use tauri::Manager;
+use tauri::Wry;
 
-/// 基础命令:接收参数,返回字符串
-#[tauri::command]
-fn greet(name: &str) -> String {
-    format!("Hello, {}! You've been greeted from Rust!", name)
-}
-
-/// 返回结构体的命令:演示 Rust -> JS 的复杂数据传递
-#[derive(Serialize)]
-struct ServerInfo {
-    rust_version: String,
-    timestamp: u64,
-    message: String,
-}
-
-#[tauri::command]
-fn get_server_info() -> ServerInfo {
-    ServerInfo {
-        rust_version: env!("CARGO_PKG_RUST_VERSION", "unknown").to_string(),
-        timestamp: SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs(),
-        message: "这条数据来自 Rust 后端".to_string(),
-    }
-}
-
-/// Rust 主动向前端发送事件(演示后端 -> 前端的事件推送)
-#[tauri::command]
-fn send_event_to_frontend(app: tauri::AppHandle<Wry>) -> Result<(), String> {
-    // 延迟 500ms 后发事件,模拟异步通知场景
-    let handle = app.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(500));
-        let _ = handle.emit(
-            "rust-event",
-            serde_json::json!({
-                "title": "来自 Rust 的事件",
-                "body": format!("事件触发时间戳: {}", SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis()),
-            }),
-        );
-    });
-    Ok(())
-}
-
-// ==================== 2. 文件系统演示(官方 tauri-plugin-fs) ====================
-
-/// 在 app 私有目录写入文件,返回写入路径
-#[tauri::command]
-fn write_demo_file(app: tauri::AppHandle<Wry>, content: String) -> Result<String, String> {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("获取目录失败: {e}"))?;
-    std::fs::create_dir_all(&dir).map_err(|e| format!("创建目录失败: {e}"))?;
-    let file_path = dir.join("demo.txt");
-    std::fs::write(&file_path, &content).map_err(|e| format!("写入失败: {e}"))?;
-    Ok(file_path.to_string_lossy().to_string())
-}
-
-/// 读取刚才写入的文件
-#[tauri::command]
-fn read_demo_file(app: tauri::AppHandle<Wry>) -> Result<String, String> {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("获取目录失败: {e}"))?;
-    let file_path = dir.join("demo.txt");
-    std::fs::read_to_string(&file_path).map_err(|e| format!("读取失败: {e}"))
-}
-
-// ==================== 3. 自定义 Mobile Plugin:原生 API 访问 ====================
+// ==================== Android: 自定义 Native Plugin ====================
 //
-// 这个插件通过 Kotlin 调用 Android 原生 API,演示:
-//   - toggle_immersive:  切换全屏沉浸模式(隐藏/显示状态栏)
-//   - set_status_bar_color: 修改状态栏颜色
-//   - vibrate:  震动(硬件访问)
-//   - get_device_info: 获取设备信息(机型/Android版本/CPU/屏幕)
+// 通过 Kotlin 调用 Android 原生 API：
+//   - toggle_immersive / set_status_bar_color / vibrate / get_device_info
+//   - launch_game：启动 GameActivity
 
 #[cfg(mobile)]
 use tauri::plugin::PluginHandle;
@@ -93,7 +28,7 @@ use tauri::plugin::PluginHandle;
 #[cfg(mobile)]
 const NATIVE_PLUGIN_IDENTIFIER: &str = "com.example.tauriandroidapp";
 
-/// 封装对 Kotlin plugin 的调用
+/// 封装对 Kotlin plugin 的调用。
 #[cfg(mobile)]
 struct NativeApi(PluginHandle<Wry>);
 
@@ -110,7 +45,6 @@ impl NativeApi {
     }
 }
 
-/// 切换全屏沉浸模式
 #[tauri::command]
 #[cfg(mobile)]
 fn toggle_immersive(state: tauri::State<NativeApi>) -> Result<bool, String> {
@@ -121,7 +55,6 @@ fn toggle_immersive(state: tauri::State<NativeApi>) -> Result<bool, String> {
         .ok_or("Kotlin 返回格式异常".to_string())
 }
 
-/// 设置状态栏颜色 (hex, 如 "#FF5722")
 #[tauri::command]
 #[cfg(mobile)]
 fn set_status_bar_color(state: tauri::State<NativeApi>, color: String) -> Result<(), String> {
@@ -132,7 +65,6 @@ fn set_status_bar_color(state: tauri::State<NativeApi>, color: String) -> Result
     Ok(())
 }
 
-/// 震动(毫秒)
 #[tauri::command]
 #[cfg(mobile)]
 fn vibrate(state: tauri::State<NativeApi>, duration: u64) -> Result<(), String> {
@@ -140,14 +72,13 @@ fn vibrate(state: tauri::State<NativeApi>, duration: u64) -> Result<(), String> 
     Ok(())
 }
 
-/// 获取设备信息
 #[tauri::command]
 #[cfg(mobile)]
 fn get_device_info(state: tauri::State<NativeApi>) -> Result<serde_json::Value, String> {
     state.call("get_device_info", ())
 }
 
-// Desktop 桩实现:让命令在桌面端也能编译,调用时返回提示
+// Desktop 桩实现：让命令在桌面端也能编译，调用时返回提示。
 #[cfg(not(mobile))]
 #[tauri::command]
 fn toggle_immersive() -> Result<bool, String> {
@@ -175,9 +106,9 @@ fn get_device_info() -> Result<serde_json::Value, String> {
     }))
 }
 
-/// 启动游戏:移动端通过 Kotlin plugin 启动 GameActivity;桌面端拉起
-/// `prisma` 二进制。`config` 为可选 LaunchConfig JSON(场景/日志级别等),
-/// 经 `PRISMREV_LAUNCH_CONFIG` env(桌面)或 files 目录文件(Android)传递。
+/// 启动游戏：移动端通过 Kotlin plugin 启动 GameActivity；桌面端拉起
+/// `prisma` 二进制。`config` 为可选 LaunchConfig JSON（场景 / 日志级别等），
+/// 经 `PRISMREV_LAUNCH_CONFIG` env（桌面）或 files 目录文件（Android）传递。
 #[cfg(mobile)]
 #[tauri::command]
 fn launch_game(state: tauri::State<NativeApi>, config: Option<String>) -> Result<(), String> {
@@ -197,7 +128,18 @@ fn launch_game(
     state.launch(config)
 }
 
-/// 初始化自定义原生插件(mobile 端注册 Kotlin plugin)
+/// 前端据此决定渲染 Hub 还是 Android 的「开始游戏」页。
+#[cfg(mobile)]
+#[tauri::command]
+fn hub_environment() -> serde_json::Value {
+    serde_json::json!({
+        "platform": "mobile",
+        "editor": { "found": false, "path": null, "version": "", "hint": null },
+        "repoRoot": null,
+    })
+}
+
+/// 初始化自定义原生插件（mobile 端注册 Kotlin plugin）。
 pub fn init_native_plugin() -> tauri::plugin::TauriPlugin<Wry> {
     tauri::plugin::Builder::<Wry>::new("native-api")
         .setup(|_app, _api| {
@@ -215,38 +157,40 @@ pub fn init_native_plugin() -> tauri::plugin::TauriPlugin<Wry> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(init_native_plugin());
+
     #[cfg(not(mobile))]
-    let builder = builder.manage(game_launcher::RunningGame::default());
-    builder
-        // 允许前端访问 app 数据目录(fs 插件 scope)
+    let builder = builder
+        .manage(game_launcher::RunningGame::default())
         .setup(|app| {
-            #[cfg(mobile)]
-            {
-                let data_dir = app
-                    .path()
-                    .app_data_dir()
-                    .unwrap_or_else(|_| std::path::PathBuf::from("."));
-                if let Some(fs_scope) = app.try_fs_scope() {
-                    let _ = fs_scope.allow_directory(data_dir, true);
-                }
-            }
-            let _ = app;
+            let state = HubState::load(app.handle()).map_err(Box::<dyn std::error::Error>::from)?;
+            app.manage(state);
             Ok(())
-        })
+        });
+
+    builder
         .invoke_handler(tauri::generate_handler![
-            greet,
-            get_server_info,
-            send_event_to_frontend,
-            write_demo_file,
-            read_demo_file,
+            launch_game,
+            hub_environment,
             toggle_immersive,
             set_status_bar_color,
             vibrate,
             get_device_info,
-            launch_game,
+            #[cfg(not(mobile))]
+            hub_editor_info,
+            #[cfg(not(mobile))]
+            hub_projects,
+            #[cfg(not(mobile))]
+            hub_add_project,
+            #[cfg(not(mobile))]
+            hub_remove_project,
+            #[cfg(not(mobile))]
+            hub_create_project,
+            #[cfg(not(mobile))]
+            hub_open_project,
+            #[cfg(not(mobile))]
+            hub_reveal_project,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

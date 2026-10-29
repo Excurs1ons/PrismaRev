@@ -58,7 +58,12 @@ deviating from those conventions is a bug. (`README.md` is the human-facing over
 - `crates/prism-cooker` — **build-time** layer: importers, cookers, asset database, CookProfile,
   and the `prism-cook` CLI (`src/main.rs`). Depends on `prism-asset` + `prism-scene`; never
   pulled into the game runtime. See DESIGN.md §10.
-- `launcher/` — Tauri 2 desktop shell + Android APK packaging; **own standalone workspace**, NOT a root member.
+- `launcher/` — PrismaRev Hub：Tauri 2 + Vue 3 的 Unity Hub 形态桌面启动器
+  （工程列表 / 新建 / 添加 / 用 `editor/` 打开），同时负责 Android APK 打包；
+  **own standalone workspace**, NOT a root member。工程列表持久化在 app 数据目录
+  `hub.json`；编辑器二进制定位顺序 `PRISMREV_EDITOR_BIN` → Hub 同目录 →
+  `editor/src-tauri/target/{debug,release}`，不查 `PATH`。Android 上仍渲染
+  「开始游戏」页并拉起 GameActivity。
 - `editor/` — **web UI 编辑器**（Tauri 2 + Vue 3 + Vite）：层级树（拖拽重排/改父级/就地重命名/
   多选）+ schema 驱动的组件检查器（拖动调值、取色盘、属性检索）、撤销/重做（按字段合并连续输入）、
   组件复制粘贴、模板新建、重命名/删除、**Cook**、资产管理器（检索/分类/引用位置）与
@@ -298,8 +303,9 @@ The user project's dependency chain must stay **UI-framework-free and editor-fre
 - 提交前自检：`python scripts/pr_ready.py`（`--quick` 快速回路；`--all` 全 workspace）。
   CI 见 `.github/workflows/ci.yml`。
 - Build: `scripts/run.ps1` (Windows; sets `VK_SDK`, `RUST_LOG`, runs `bash assets/shaders/compile.sh`, `cargo build`, then `prism-build-pipeline build-scenes`).
-  Note: the root workspace has no **game/editor entry** binary — the desktop entry is the Tauri app in `launcher/`
-  (`cd launcher && pnpm tauri dev`), which spawns the game binary `prisma` (built in `projects/prisma/`: `cd projects/prisma && cargo run`).
+  Note: the root workspace has no **game/editor entry** binary — the desktop entry is PrismaRev Hub in `launcher/`
+  (`cd launcher && pnpm tauri dev`). Hub 管理工程并用 `editor/` 打开；游戏二进制
+  （`projects/prisma/`，`cd projects/prisma && cargo run`）仍由 `launch_game` 命令 / Android 启动页拉起。
   - 桌面端 `launch_game` **不查 `PATH`**：先看 launcher 可执行文件同目录的 `prisma[.exe]`（打包布局），
     再按 `projects/prisma/target/{debug,release}/prisma[.exe]`（开发布局，仓库根由 exe 所在目录逐级向上找
     `projects/prisma/Cargo.toml`）；`PRISMREV_GAME_BIN` 可覆盖（指向不存在的文件直接报错，不回退）。

@@ -1,4 +1,4 @@
 <resources>
-    <string name="app_name">"tauri-android-app"</string>
-    <string name="main_activity_title">"tauri-android-app"</string>
+    <string name="app_name">"PrismaRev Hub"</string>
+    <string name="main_activity_title">"PrismaRev Hub"</string>
 </resources>
