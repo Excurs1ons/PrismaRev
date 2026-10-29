@@ -342,13 +342,13 @@ mod tests {
             status: "ready",
             frames: 3,
             gizmo_tool: Some("Move"),
-            gizmo_space: "世界",
+            gizmo_space: "World",
             rects: &rects,
             leaves: &leaves,
             logs: &logs,
         };
         let value = snapshot(&input);
         assert_eq!(value["gizmo"]["tool"], "Move");
-        assert_eq!(value["gizmo"]["space"], "世界");
+        assert_eq!(value["gizmo"]["space"], "World");
     }
 }

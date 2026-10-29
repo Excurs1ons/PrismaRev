@@ -787,7 +787,12 @@ impl EditorApp {
                     status: &self.state.status,
                     frames: self.frame_count,
                     gizmo_tool: self.scene_view.as_ref().map(|view| view.tool.label()),
-                    gizmo_space: self.workspace.gizmo_space.label(),
+                    // Keep the control protocol locale-independent. The toolbar may use
+                    // localized labels, but MCP clients need stable enum-like values.
+                    gizmo_space: match self.workspace.gizmo_space {
+                        prism_editor_core::viewport_math::GizmoSpace::World => "World",
+                        prism_editor_core::viewport_math::GizmoSpace::Local => "Local",
+                    },
                     rects: &self.panel_rects,
                     leaves: &self.dock_leaves,
                     logs: &logs,
