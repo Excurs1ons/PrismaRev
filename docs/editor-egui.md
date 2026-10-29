@@ -76,6 +76,9 @@ instance / device 并返回 `AshRenderState`，因此可以做到 Unity 的模�
 - 平移 gizmo：`pick_gizmo_axis` 命中轴后，按「屏幕位移 · 轴屏幕方向 / 每世界
   单位像素」换算世界位移，交给 `Workspace::translate_entity_world`；
 - 选中高亮复用引擎的 `Gizmo` 组件（世界三色轴箭头），不引入新的渲染概念。
+- 工具：`W` / `E` / `R` 切换移动 / 旋转 / 缩放 gizmo，`X` 切世界/局部，`G` 开关网格；
+  旋转走 `pick_rotation_axis` + `screen_angle`，缩放走 `set_scale_axis`。
+- 空白拖拽 = 框选（`box_select`），`Alt`+拖 / 右键拖 = 轨道，双击 = 聚焦选中项。
 
 ## 4.1 日志
 
@@ -83,6 +86,32 @@ instance / device 并返回 `AshRenderState`，因此可以做到 Unity 的模�
 语义不变），也进 `prism-editor-core` 的 `LogBuffer`，所以 Console 面板能看到
 视口里 `prism_render` / `prism_engine` 的警告（与 Tauri 编辑器的 `EditorLogger`
 是同一思路）。`Trace` 不转发，避免淹没窗口。
+
+## 4.2 菜单（Unity 结构）
+
+菜单按 Unity 的分组组织，二 / 三级菜单里都是真实命令：
+
+| 菜单 | 二级 / 三级 |
+|---|---|
+| File | New Scene / New Scene From Template ▸ / New Prefab / Open / Save / Save As / Save Project / Reload / Build Settings / Build Scene Pack / Cook Active Scene / Build Player / Exit |
+| Edit | Undo / Redo / Cut / Copy / Paste / Duplicate / Delete / Select All / Deselect All / Paste Component / Play / Pause / Step / Project Settings / Preferences / Theme |
+| Assets | Create ▸ (Scene / Prefab / Folder…) / Open / Show in Explorer / Copy Path / Duplicate / Delete / Instantiate In Scene / Refresh |
+| GameObject | Create Empty / Create Empty Child / Create Other ▸ (3D Object ▸ Cube… / Light ▸ / Camera ▸) / Move To View / Align View to Selected / Snap to Ground |
+| Component | schema 分类 ▸ 组件列表 |
+| Window | General ▸ 面板开关 / Layouts ▸ 预设 / Reset Layout |
+| Help | Shortcuts / Editor Guide / About |
+
+`Build*` 与 `Cook Active Scene` 通过子进程调用 `prism-build-pipeline`（编辑器仍然
+不链接 cooker），输出进 Console。
+
+## 4.3 面板能力
+
+- **层级**：搜索、Unity 式拖拽（上/下 25% 插入、中间挂成子级）、就地重命名（双击）、
+  显隐、复制 / 删除 / 改父级、Create 下拉；
+- **检查器**：单选 + 多选（公共组件批量改字段，一次撤销）；预制体区块（Revert /
+  Sync All / Save as Prefab…）；组件卡头的复制 / 移除；Add Component 分类菜单；
+- **Project（资产）**：后退 / 前进 / 面包屑、目录浏览、类型过滤、搜索、重命名 /
+  复制 / 删除 / 复制路径 / 实例化预制体。
 
 ## 5. 与另外两个编辑器的关系
 
@@ -101,8 +130,8 @@ instance / device 并返回 `AshRenderState`，因此可以做到 Unity 的模�
 - **未在真实设备上运行**：开发机是 Termux（aarch64、无显示），只做了
   `cargo check`（本机 + `x86_64-pc-windows-gnu`）。首帧呈现、resize、字体、
   docking 手感都需要桌面复核。
-- **尚未实现**：资产拖拽到字段 / 层级、预制体完整工作流（同步 / 应用到预制体）、
-  构建与 cook 的真实子进程、框选、旋转 / 缩放 gizmo、多 viewport 的 DPI 处理。
+- **尚未实现**：资产拖拽到字段 / 层级（拖拽移动目录）、预制体「应用到预制体」、
+  多 viewport 的 DPI 处理、docking 的 tab 拖拽分屏。
 - **性能**：每次文档变化都会整场重载两个引擎实例（防抖 120ms），大场景下偏重；
   后续可以改成「只重建变化的实体」或引入 delta 上传。
 - **两个引擎实例**意味着两份 GPU 资源（管线、IBL、网格）。如果以后只保留一个

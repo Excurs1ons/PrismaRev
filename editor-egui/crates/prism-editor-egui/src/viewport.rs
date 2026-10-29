@@ -28,11 +28,34 @@ struct ViewportTexture {
     id: egui::TextureId,
 }
 
+/// Unity 的 W / E / R 工具。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GizmoTool {
+    #[default]
+    Translate,
+    Rotate,
+    Scale,
+}
+
+impl GizmoTool {
+    pub fn label(self) -> &'static str {
+        match self {
+            GizmoTool::Translate => "Move",
+            GizmoTool::Rotate => "Rotate",
+            GizmoTool::Scale => "Scale",
+        }
+    }
+}
+
 struct GizmoDrag {
     entity: u32,
     axis: usize,
     screen_dir: [f32; 2],
     px_per_unit: f32,
+    /// 旋转拖动：上一帧的光标角度（屏幕空间）。
+    last_angle: f32,
+    /// 缩放拖动：起始缩放分量。
+    start_scale: f32,
 }
 
 /// 一个视口面板的状态。
@@ -46,7 +69,12 @@ pub struct ViewportState {
     pub error: Option<String>,
     pub last_frame_ms: f32,
     pub frames: u64,
+    /// 当前 gizmo 工具（W / E / R）。
+    pub tool: GizmoTool,
     gizmo: Option<GizmoDrag>,
+    /// 框选起点 / 当前点（视口局部坐标）。
+    box_start: Option<egui::Pos2>,
+    box_current: Option<egui::Pos2>,
 }
 
 pub struct ViewportResponse {
@@ -71,7 +99,10 @@ impl ViewportState {
             error: None,
             last_frame_ms: 0.0,
             frames: 0,
+            tool: GizmoTool::Translate,
             gizmo: None,
+            box_start: None,
+            box_current: None,
         })
     }
 
@@ -184,64 +215,175 @@ impl ViewportState {
             );
         }
 
-        // 3) 选中标记 / gizmo（用同一套 CPU 投影数学，与引擎无关）。
+        // 3) gizmo / 选中标记。
         let mut document_changed = false;
         let frame = vm::camera_frame(&workspace.camera);
         if self.kind() == ViewKind::Scene {
             self.draw_gizmo(&painter, rect, workspace, &frame);
         }
 
-        // 4) 交互：拖动 gizmo 轴 → 平移；拖动空白/右键 → 轨道；滚轮 → 缩放；
-        //    单击 → 点选。
+        // 4) 交互（Unity 习惯）：
+        //    · LMB 拖 gizmo → 移动 / 旋转 / 缩放
+        //    · LMB 拖空白 → 框选
+        //    · Alt+LMB / RMB / MMB 拖 → 轨道
+        //    · 滚轮 → 缩放；双击 → 聚焦选中项
+        let alt = ui.input(|input| input.modifiers.alt);
+        let local_of = |pos: egui::Pos2| (pos.x - rect.min.x, pos.y - rect.min.y);
+
         if response.drag_started() && self.kind() == ViewKind::Scene {
             if let Some(pos) = response.interact_pointer_pos() {
-                let local = (pos.x - rect.min.x, pos.y - rect.min.y);
-                if let Some(center) = workspace.selection_center_world() {
+                let local = local_of(pos);
+                let center = workspace.selection_center_world();
+                if let (Some(center), Some(entity)) = (
+                    center,
+                    workspace
+                        .primary_selection()
+                        .and_then(|index| workspace.document().doc.id_of_index(index)),
+                ) {
                     let world_length = vm::gizmo_world_length(&workspace.camera);
-                    if let Some((axis, dir, px_per_unit)) = vm::pick_gizmo_axis(
-                        local,
-                        &frame,
-                        center,
-                        world_length,
-                        rect.width(),
-                        rect.height(),
-                    ) {
-                        if let Some(entity) = workspace
-                            .primary_selection()
-                            .and_then(|index| workspace.document().doc.id_of_index(index))
-                        {
-                            self.gizmo = Some(GizmoDrag {
-                                entity,
-                                axis,
-                                screen_dir: dir,
-                                px_per_unit,
-                            });
-                        }
+                    let hit = match self.tool {
+                        GizmoTool::Rotate => vm::pick_rotation_axis(
+                            local,
+                            &frame,
+                            center,
+                            world_length,
+                            rect.width(),
+                            rect.height(),
+                        )
+                        .map(|axis| {
+                            let dir = [1.0f32, 0.0];
+                            (axis, dir, 60.0)
+                        }),
+                        GizmoTool::Translate | GizmoTool::Scale => vm::pick_gizmo_axis(
+                            local,
+                            &frame,
+                            center,
+                            world_length,
+                            rect.width(),
+                            rect.height(),
+                        ),
+                    };
+                    if let Some((axis, dir, px_per_unit)) = hit {
+                        let start_scale = workspace.document().doc.entities
+                            [workspace.document().doc.index_of_id(entity).unwrap_or(0)]
+                        .transform
+                        .scale[axis];
+                        let angle_center = vm::ring_screen_radius(
+                            &frame,
+                            center,
+                            axis,
+                            world_length,
+                            rect.width(),
+                            rect.height(),
+                        )
+                        .map(|(cx, cy, _)| (cx, cy))
+                        .unwrap_or((rect.width() * 0.5, rect.height() * 0.5));
+                        self.gizmo = Some(GizmoDrag {
+                            entity,
+                            axis,
+                            screen_dir: dir,
+                            px_per_unit,
+                            last_angle: vm::screen_angle(local, angle_center),
+                            start_scale,
+                        });
+                        self.box_start = None;
+                    } else if !alt && response.dragged_by(egui::PointerButton::Primary) {
+                        self.box_start = Some(pos);
+                        self.box_current = Some(pos);
                     }
+                } else if !alt {
+                    self.box_start = Some(pos);
+                    self.box_current = Some(pos);
                 }
             }
         }
 
         if response.dragged() {
+            let delta = ui.input(|i| i.pointer.delta());
             if let Some(drag) = self.gizmo.as_ref() {
-                let delta = ui.input(|i| i.pointer.delta());
-                let amount = (delta.x * drag.screen_dir[0] + delta.y * drag.screen_dir[1])
-                    / drag.px_per_unit.max(4.0_f32);
-                if amount.abs() > f32::EPSILON {
-                    let (axis, entity) = (drag.axis, drag.entity);
-                    let mut world = [0.0f32; 3];
-                    world[axis] = amount;
-                    workspace.translate_entity_world(entity, world);
-                    document_changed = true;
-                    self.dirty = true;
+                let (axis, entity) = (drag.axis, drag.entity);
+                match self.tool {
+                    GizmoTool::Translate => {
+                        let amount = (delta.x * drag.screen_dir[0] + delta.y * drag.screen_dir[1])
+                            / drag.px_per_unit.max(4.0);
+                        if amount.abs() > f32::EPSILON {
+                            let mut world = [0.0f32; 3];
+                            world[axis] = amount;
+                            workspace.translate_entity_world(entity, world);
+                            document_changed = true;
+                        }
+                    }
+                    GizmoTool::Rotate => {
+                        if let Some(pos) = response.interact_pointer_pos() {
+                            let center = workspace.selection_center_world().unwrap_or([0.0; 3]);
+                            let world_length = vm::gizmo_world_length(&workspace.camera);
+                            let angle_center = vm::ring_screen_radius(
+                                &frame,
+                                center,
+                                axis,
+                                world_length,
+                                rect.width(),
+                                rect.height(),
+                            )
+                            .map(|(cx, cy, _)| (cx, cy))
+                            .unwrap_or((rect.width() * 0.5, rect.height() * 0.5));
+                            let angle = vm::screen_angle(local_of(pos), angle_center);
+                            if let Some(drag) = self.gizmo.as_mut() {
+                                let delta_angle = vm::wrap_angle(angle - drag.last_angle);
+                                drag.last_angle = angle;
+                                if delta_angle.abs() > 1e-4 {
+                                    workspace.rotate_entity(entity, axis, -delta_angle);
+                                    document_changed = true;
+                                }
+                            }
+                        }
+                    }
+                    GizmoTool::Scale => {
+                        let amount = (delta.x * drag.screen_dir[0] + delta.y * drag.screen_dir[1])
+                            / drag.px_per_unit.max(4.0)
+                            * 1.5;
+                        let next = (drag.start_scale + amount).max(0.01);
+                        if (next - drag.start_scale).abs() > 1e-4 {
+                            workspace.set_scale_axis(entity, axis, next);
+                            document_changed = true;
+                        }
+                    }
                 }
-            } else {
-                let delta = ui.input(|i| i.pointer.delta());
+                self.dirty = true;
+            } else if let Some(start) = self.box_start {
+                if let Some(pos) = response.interact_pointer_pos() {
+                    self.box_current = Some(pos);
+                    painter.rect_stroke(
+                        egui::Rect::from_two_pos(start, pos),
+                        egui::CornerRadius::ZERO,
+                        egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(90, 160, 240)),
+                        egui::StrokeKind::Inside,
+                    );
+                }
+            } else if alt || response.dragged_by(egui::PointerButton::Secondary) {
                 workspace.camera.orbit(delta.x, delta.y);
                 self.dirty = true;
             }
         }
+
         if response.drag_stopped() {
+            // 框选落定：一次写入选中集合（与 Unity 的矩形选择一致）。
+            if let (Some(start), Some(end)) = (self.box_start.take(), self.box_current.take()) {
+                let rect = egui::Rect::from_two_pos(start, end);
+                if rect.width() > 3.0 || rect.height() > 3.0 {
+                    let local_start = (rect.min.x - rect.min.x, rect.min.y - rect.min.y);
+                    let local_end = (rect.max.x - rect.min.x, rect.max.y - rect.min.y);
+                    let hits = vm::box_select(
+                        (local_start.0, local_start.1, local_end.0, local_end.1),
+                        &frame,
+                        rect.width(),
+                        rect.height(),
+                        &proxies(workspace),
+                    );
+                    workspace.select_many(&hits, false);
+                    self.dirty = true;
+                }
+            }
             self.gizmo = None;
         }
         if response.hovered() {
@@ -251,9 +393,13 @@ impl ViewportState {
                 self.dirty = true;
             }
         }
+        if response.double_clicked() && self.kind() == ViewKind::Scene {
+            workspace.frame_selection();
+            self.dirty = true;
+        }
         if response.clicked() {
             if let Some(pos) = response.interact_pointer_pos() {
-                let local = (pos.x - rect.min.x, pos.y - rect.min.y);
+                let local = local_of(pos);
                 if self.kind() == ViewKind::Scene {
                     match pick(workspace, local, rect.size(), &frame) {
                         Some(index) => workspace.select(index, false),
@@ -266,8 +412,9 @@ impl ViewportState {
 
         // 5) 角标：FPS / 帧耗时 / 分辨率。
         let stats = format!(
-            "{}  {:.1} ms · {} 帧",
+            "{} · {} · {:.1} ms · {} frames",
             self.kind().label(),
+            self.tool.label(),
             self.last_frame_ms,
             self.frames
         );
@@ -302,23 +449,47 @@ impl ViewportState {
             egui::Color32::from_rgb(80, 140, 235),
         ];
         for axis in 0..3 {
-            let Some((start, end, _)) =
-                vm::axis_screen_segment(frame, center, axis, world_length, width, height)
-            else {
-                continue;
-            };
-            let a = origin + egui::vec2(start.0, start.1);
-            let b = origin + egui::vec2(end.0, end.1);
             let active = self
                 .gizmo
                 .as_ref()
                 .map(|drag| drag.axis == axis)
                 .unwrap_or(false);
-            painter.line_segment(
-                [a, b],
-                egui::Stroke::new(if active { 3.5_f32 } else { 2.0_f32 }, colors[axis]),
-            );
-            painter.circle_filled(b, if active { 5.0 } else { 4.0 }, colors[axis]);
+            let width_px = if active { 3.5_f32 } else { 2.0_f32 };
+            match self.tool {
+                GizmoTool::Rotate => {
+                    if let Some((cx, cy, radius)) =
+                        vm::ring_screen_radius(frame, center, axis, world_length, width, height)
+                    {
+                        if radius > 6.0 {
+                            painter.circle_stroke(
+                                origin + egui::vec2(cx, cy),
+                                radius,
+                                egui::Stroke::new(width_px, colors[axis]),
+                            );
+                        }
+                    }
+                }
+                GizmoTool::Translate | GizmoTool::Scale => {
+                    let Some((start, end, _)) =
+                        vm::axis_screen_segment(frame, center, axis, world_length, width, height)
+                    else {
+                        continue;
+                    };
+                    let a = origin + egui::vec2(start.0, start.1);
+                    let b = origin + egui::vec2(end.0, end.1);
+                    painter.line_segment([a, b], egui::Stroke::new(width_px, colors[axis]));
+                    if self.tool == GizmoTool::Scale {
+                        let half = if active { 5.0 } else { 4.0 };
+                        painter.rect_filled(
+                            egui::Rect::from_center_size(b, egui::vec2(half * 2.0, half * 2.0)),
+                            0.0,
+                            colors[axis],
+                        );
+                    } else {
+                        painter.circle_filled(b, if active { 5.0 } else { 4.0 }, colors[axis]);
+                    }
+                }
+            }
         }
     }
 }

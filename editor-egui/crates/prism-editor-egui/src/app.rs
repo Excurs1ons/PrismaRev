@@ -66,6 +66,8 @@ pub struct EditorApp {
     playing: bool,
     paused: bool,
     render_report: Option<String>,
+    /// 正在跑的构建 / cook 子进程。
+    build: Option<crate::build::BuildJob>,
     /// 两个视口共享的渲染设置（Console 里的「渲染图」面板可改）。
     render_settings: prism_engine::render_settings::RenderSettings,
     /// 已应用的 (preset, overrides) 签名，避免每帧重建 style。
@@ -143,6 +145,7 @@ impl EditorApp {
             playing: false,
             paused: false,
             render_report: None,
+            build: None,
             render_settings: prism_engine::render_settings::RenderSettings::default(),
             theme_signature: String::new(),
             autosave_at: Instant::now(),
@@ -278,7 +281,12 @@ impl EditorApp {
     fn apply_command(&mut self, command: Command) {
         if command == Command::SaveAs {
             let title = self.workspace.document().title();
-            self.state.save_as = Some(title);
+            self.open_prompt(
+                panels::PromptKind::SaveAs,
+                "Save As",
+                "assets/ 下的相对路径（.scene.json / .prefab.json）",
+                title,
+            );
             return;
         }
         let was_playing = self.workspace.playing;
@@ -333,181 +341,411 @@ impl EditorApp {
     // 菜单 / 工具栏 / 状态栏
     // -----------------------------------------------------------------------
 
-    fn menu_bar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+    /// 菜单项：`label 	 shortcut`，禁用状态来自 `Workspace::is_enabled`。
+    fn menu_item(&mut self, ui: &mut egui::Ui, label: &str, shortcut: &str, command: Command) {
+        let enabled = self.workspace.is_enabled(command);
+        let text = if shortcut.is_empty() {
+            label.to_owned()
+        } else {
+            format!("{label}\t{shortcut}")
+        };
+        if ui.add_enabled(enabled, egui::Button::new(text)).clicked() {
+            self.apply_command(command);
+            ui.close();
+        }
+    }
+
+    /// 直接执行一段操作（菜单里的非 `Command` 项，例如新建目录 / 实例化预制体）。
+    fn menu_do(&mut self, ui: &mut egui::Ui, label: &str, action: impl FnOnce(&mut Self)) {
+        if ui.button(label).clicked() {
+            action(self);
+            ui.close();
+        }
+    }
+
+    fn open_prompt(
+        &mut self,
+        kind: panels::PromptKind,
+        title: &str,
+        hint: &str,
+        value: impl Into<String>,
+    ) {
+        self.state.prompt = Some(panels::Prompt::new(kind, title, hint, value));
+    }
+
+    fn save_all_documents(&mut self) {
+        let count = self.workspace.docs.len();
+        for index in 0..count {
+            if self.workspace.docs[index].dirty {
+                if let Err(error) = self.workspace.save_document(index) {
+                    self.state.status = format!("save failed: {error}");
+                }
+            }
+        }
+        self.state.status = "project saved".to_string();
+    }
+
+    fn create_empty_child(&mut self) {
+        let parent = self.workspace.primary_selection();
+        let before = self.workspace.document().doc.entities.len();
+        self.workspace.add_entity("");
+        let created = self
+            .workspace
+            .document()
+            .doc
+            .entities
+            .len()
+            .saturating_sub(1);
+        if created >= before {
+            self.workspace.reparent(created, parent, None);
+        }
+    }
+
+    fn build_job_running(&self) -> bool {
+        self.build
+            .as_ref()
+            .map(|job| job.running())
+            .unwrap_or(false)
+    }
+
+    fn start_build(&mut self, kind: crate::build::BuildKind) {
+        let Some(root) = self.project_root.clone() else {
+            self.state.status = "no project root — cannot build".to_string();
+            return;
+        };
+        let label = kind.label();
+        self.workspace.log(
+            prism_editor_core::LogSource::System,
+            prism_editor_core::LogLevel::Info,
+            format!("build started: {label}"),
+        );
+        self.build = Some(crate::build::BuildJob::spawn(kind, &root));
+    }
+
+    fn cook_active_scene(&mut self) {
+        let Some(root) = self.project_root.clone() else {
+            self.state.status = "no project root — cannot cook".to_string();
+            return;
+        };
+        // 先把未保存的文档落盘，再让 cooker 读磁盘上的作者文档。
+        let _ = self.workspace.save_active_if_dirty();
+        let Some(path) = self.workspace.document().path.clone() else {
+            self.state.status = "current document has no path".to_string();
+            return;
+        };
+        self.start_build(crate::build::BuildKind::Cook(root.join(&path)));
+    }
+
+    fn menu_bar(&mut self, ui: &mut egui::Ui, _ctx: &egui::Context) {
         egui::MenuBar::new().ui(ui, |ui| {
+            // ---- File ----
             ui.menu_button("File", |ui| {
-                if ui.button("New Scene            Ctrl+N").clicked() {
-                    self.apply_command(Command::NewScene);
-                    ui.close();
-                }
-                if ui.button("New Prefab").clicked() {
-                    self.apply_command(Command::NewPrefab);
-                    ui.close();
-                }
-                let templates: Vec<(String, String, prism_editor_core::DocKind)> = self
+                self.menu_item(ui, "New Scene", "Ctrl+N", Command::NewScene);
+                let scene_templates: Vec<(String, String)> = self
                     .workspace
                     .templates
                     .iter()
-                    .map(|template| (template.id.clone(), template.label.clone(), template.kind))
+                    .filter(|template| template.kind == prism_editor_core::DocKind::Scene)
+                    .map(|template| (template.id.clone(), template.label.clone()))
                     .collect();
-                if !templates.is_empty() {
-                    ui.menu_button("New from Template", |ui| {
-                        for (id, label, kind) in &templates {
+                if !scene_templates.is_empty() {
+                    ui.menu_button("New Scene From Template", |ui| {
+                        for (id, label) in &scene_templates {
                             if ui.button(label).clicked() {
-                                self.workspace.new_document(*kind, Some(id));
+                                self.workspace
+                                    .new_document(prism_editor_core::DocKind::Scene, Some(id));
                                 self.doc_hash = 0;
                                 ui.close();
                             }
                         }
                     });
                 }
+                self.menu_item(ui, "New Prefab", "", Command::NewPrefab);
                 ui.separator();
-                if ui.button("Open Document       Ctrl+O").clicked() {
-                    self.apply_command(Command::OpenDocument);
+                self.menu_item(ui, "Open Scene…", "Ctrl+O", Command::OpenDocument);
+                self.menu_item(ui, "Save", "Ctrl+S", Command::Save);
+                self.menu_item(ui, "Save As…", "Ctrl+Shift+S", Command::SaveAs);
+                self.menu_do(ui, "Save Project", |app| app.save_all_documents());
+                self.menu_item(ui, "Reload Scene", "", Command::ReloadDocument);
+                ui.separator();
+                self.menu_item(ui, "Build Settings…", "", Command::BuildProject);
+                if ui
+                    .add_enabled(
+                        !self.build_job_running(),
+                        egui::Button::new("Build Scene Pack"),
+                    )
+                    .clicked()
+                {
+                    self.start_build(crate::build::BuildKind::ScenePack);
                     ui.close();
                 }
-                if ui.button("Save                Ctrl+S").clicked() {
-                    self.apply_command(Command::Save);
+                if ui
+                    .add_enabled(
+                        !self.build_job_running(),
+                        egui::Button::new("Cook Active Scene"),
+                    )
+                    .clicked()
+                {
+                    self.cook_active_scene();
                     ui.close();
                 }
-                if ui.button("Save As…     Ctrl+Shift+S").clicked() {
-                    let title = self.workspace.document().title();
-                    self.state.save_as = Some(title);
+                if ui
+                    .add_enabled(!self.build_job_running(), egui::Button::new("Build Player"))
+                    .clicked()
+                {
+                    self.start_build(crate::build::BuildKind::Player);
                     ui.close();
                 }
-                if ui.button("Reload from disk").clicked() {
-                    self.apply_command(Command::ReloadDocument);
-                    ui.close();
-                }
+                ui.separator();
+                self.menu_do(ui, "Exit", |app| {
+                    app.exit_signal.send(std::process::ExitCode::SUCCESS)
+                });
             });
+
+            // ---- Edit ----
             ui.menu_button("Edit", |ui| {
-                let undo = self.workspace.can_undo();
-                let redo = self.workspace.can_redo();
-                if ui
-                    .add_enabled(undo, egui::Button::new("Undo        Ctrl+Z"))
-                    .clicked()
-                {
-                    self.apply_command(Command::Undo);
-                    ui.close();
-                }
-                if ui
-                    .add_enabled(redo, egui::Button::new("Redo        Ctrl+Y"))
-                    .clicked()
-                {
-                    self.apply_command(Command::Redo);
-                    ui.close();
-                }
+                self.menu_item(ui, "Undo", "Ctrl+Z", Command::Undo);
+                self.menu_item(ui, "Redo", "Ctrl+Y", Command::Redo);
                 ui.separator();
-                if ui.button("Duplicate    Ctrl+D").clicked() {
-                    self.apply_command(Command::DuplicateEntity);
-                    ui.close();
-                }
-                if ui.button("Delete       Del").clicked() {
-                    self.apply_command(Command::DeleteSelection);
-                    ui.close();
-                }
-                if ui.button("Select All   Ctrl+A").clicked() {
-                    self.apply_command(Command::SelectAll);
-                    ui.close();
-                }
+                self.menu_item(ui, "Cut", "Ctrl+X", Command::CutEntity);
+                self.menu_item(ui, "Copy", "Ctrl+C", Command::CopyEntity);
+                self.menu_item(ui, "Paste", "Ctrl+V", Command::PasteEntity);
+                self.menu_item(ui, "Duplicate", "Ctrl+D", Command::DuplicateEntity);
+                self.menu_item(ui, "Delete", "Del", Command::DeleteSelection);
                 ui.separator();
-                if ui.button("Copy Entity  Ctrl+C").clicked() {
-                    self.apply_command(Command::CopyEntity);
-                    ui.close();
-                }
-                if ui.button("Cut Entity   Ctrl+X").clicked() {
-                    self.apply_command(Command::CutEntity);
-                    ui.close();
-                }
-                if ui.button("Paste Entity Ctrl+V").clicked() {
-                    self.apply_command(Command::PasteEntity);
-                    ui.close();
-                }
-                if ui
-                    .add_enabled(
-                        self.workspace.clipboard.is_some(),
-                        egui::Button::new("Paste Component          Ctrl+Shift+V"),
-                    )
-                    .clicked()
-                {
-                    self.apply_command(Command::PasteComponent);
-                    ui.close();
-                }
-                if ui
-                    .add_enabled(
-                        self.workspace.clipboard.is_some(),
-                        egui::Button::new("Clear Component Clipboard"),
-                    )
-                    .clicked()
-                {
-                    self.apply_command(Command::ClearComponentClipboard);
-                    ui.close();
-                }
+                self.menu_item(ui, "Select All", "Ctrl+A", Command::SelectAll);
+                self.menu_do(ui, "Deselect All", |app| app.workspace.clear_selection());
                 ui.separator();
-                if ui.button("Project Settings").clicked() {
-                    self.apply_command(Command::ProjectSettings);
-                    ui.close();
-                }
-                if ui.button("Preferences").clicked() {
-                    self.apply_command(Command::Preferences);
-                    ui.close();
-                }
-                if ui.button("Theme").clicked() {
-                    self.apply_command(Command::ThemePanel);
-                    ui.close();
-                }
+                self.menu_item(
+                    ui,
+                    "Paste Component",
+                    "Ctrl+Shift+V",
+                    Command::PasteComponent,
+                );
+                self.menu_item(
+                    ui,
+                    "Clear Component Clipboard",
+                    "",
+                    Command::ClearComponentClipboard,
+                );
+                ui.separator();
+                self.menu_item(ui, "Play", "Ctrl+P", Command::Play);
+                self.menu_item(ui, "Pause", "Ctrl+Shift+P", Command::Pause);
+                self.menu_item(ui, "Step", "Ctrl+Alt+P", Command::Step);
+                ui.separator();
+                self.menu_item(ui, "Project Settings…", "", Command::ProjectSettings);
+                self.menu_item(ui, "Preferences…", "", Command::Preferences);
+                self.menu_item(ui, "Theme…", "", Command::ThemePanel);
             });
-            ui.menu_button("Build", |ui| {
-                if ui.button("Build Settings").clicked() {
-                    self.apply_command(Command::BuildProject);
-                    ui.close();
-                }
-                if ui.button("Cook Scenes").clicked() {
-                    self.apply_command(Command::CookScenes);
-                    ui.close();
-                }
-                if ui.button("Offline Tools").clicked() {
-                    self.apply_command(Command::OfflineTools);
-                    ui.close();
-                }
-            });
-            ui.menu_button("Window", |ui| {
-                for (label, command) in [
-                    ("Scene View", Command::ToggleSceneView),
-                    ("Game View", Command::ToggleGameView),
-                    ("Hierarchy", Command::ToggleHierarchy),
-                    ("Inspector", Command::ToggleInspector),
-                    ("Assets", Command::ToggleAssets),
-                    ("Documents", Command::ToggleDocs),
-                    ("Console", Command::ToggleLog),
-                    ("History", Command::ToggleHistory),
-                    ("Render Graph", Command::ToggleRenderGraph),
-                    ("Project Settings", Command::ProjectSettings),
-                    ("Preferences", Command::Preferences),
-                    ("Theme", Command::ThemePanel),
-                    ("Build", Command::ToggleBuild),
-                    ("Tools", Command::ToggleTools),
-                ] {
-                    if ui.button(label).clicked() {
-                        self.apply_command(command);
-                        ui.close();
+
+            // ---- Assets ----
+            ui.menu_button("Assets", |ui| {
+                ui.menu_button("Create", |ui| {
+                    self.menu_item(ui, "Scene", "", Command::NewScene);
+                    self.menu_item(ui, "Prefab", "", Command::NewPrefab);
+                    self.menu_do(ui, "Folder…", |app| {
+                        app.open_prompt(
+                            panels::PromptKind::NewFolder,
+                            "New Folder",
+                            "assets/ 下的相对目录，例如 prefabs/enemies",
+                            "assets/",
+                        )
+                    });
+                });
+                let selected = self.state.asset_selection.clone();
+                if let Some(path) = selected.as_deref() {
+                    self.menu_do(ui, "Open", |app| {
+                        if let Err(error) = app.workspace.open_project_file(path) {
+                            app.state.status = format!("open {path} failed: {error}");
+                        }
+                    });
+                    self.menu_do(ui, "Show in Explorer", |app| {
+                        app.state.status = format!(
+                            "{}",
+                            app.project_root
+                                .as_ref()
+                                .map(|root| root.join(path).display().to_string())
+                                .unwrap_or_else(|| path.to_string())
+                        )
+                    });
+                    self.menu_do(ui, "Copy Path", |app| {
+                        app.state.status = format!("copied {path}");
+                    });
+                    self.menu_do(ui, "Duplicate", |app| {
+                        match app.workspace.duplicate_asset(path) {
+                            Ok(copy) => app.state.status = format!("duplicated → {copy}"),
+                            Err(error) => app.state.status = format!("duplicate failed: {error}"),
+                        }
+                    });
+                    self.menu_do(ui, "Delete", |app| match app.workspace.delete_asset(path) {
+                        Ok(()) => {
+                            app.state.asset_selection = None;
+                            app.state.status = format!("deleted {path}");
+                        }
+                        Err(error) => app.state.status = format!("delete failed: {error}"),
+                    });
+                    if path.ends_with(".prefab.json") {
+                        self.menu_do(ui, "Instantiate In Scene", |app| {
+                            match app.workspace.instantiate_prefab_asset(path, None) {
+                                Ok(count) => {
+                                    app.state.status = format!("instantiated {count} entities");
+                                    app.doc_hash = 0;
+                                }
+                                Err(error) => {
+                                    app.state.status = format!("instantiate failed: {error}")
+                                }
+                            }
+                        });
                     }
+                } else {
+                    ui.add_enabled(false, egui::Button::new("Open"));
+                    ui.add_enabled(false, egui::Button::new("Show in Explorer"));
+                    ui.add_enabled(false, egui::Button::new("Duplicate"));
+                    ui.add_enabled(false, egui::Button::new("Delete"));
                 }
                 ui.separator();
-                if ui.button("Reset Layout").clicked() {
-                    self.apply_command(Command::ResetLayout);
-                    ui.close();
+                self.menu_do(ui, "Refresh", |app| {
+                    app.workspace.refresh_project_files();
+                    app.state.status = "assets refreshed".to_string();
+                });
+            });
+
+            // ---- GameObject ----
+            ui.menu_button("GameObject", |ui| {
+                self.menu_do(ui, "Create Empty", |app| app.workspace.add_entity(""));
+                self.menu_do(ui, "Create Empty Child", |app| app.create_empty_child());
+                ui.separator();
+                ui.menu_button("Create Other", |ui| {
+                    ui.menu_button("3D Object", |ui| {
+                        for (id, label) in [
+                            ("cube", "Cube"),
+                            ("sphere", "Sphere"),
+                            ("cylinder", "Cylinder"),
+                            ("plane", "Plane"),
+                        ] {
+                            let known = self.workspace.presets.iter().any(|p| p.id == id);
+                            if ui.add_enabled(known, egui::Button::new(label)).clicked() {
+                                self.workspace.add_entity(id);
+                                ui.close();
+                            }
+                        }
+                    });
+                    ui.menu_button("Light", |ui| {
+                        for (id, label) in [
+                            ("light", "Directional Light"),
+                            ("point-light", "Point Light"),
+                            ("spot-light", "Spot Light"),
+                        ] {
+                            let known = self.workspace.presets.iter().any(|p| p.id == id);
+                            if ui.add_enabled(known, egui::Button::new(label)).clicked() {
+                                self.workspace.add_entity(id);
+                                ui.close();
+                            }
+                        }
+                    });
+                    ui.menu_button("Camera", |ui| {
+                        let known = self.workspace.presets.iter().any(|p| p.id == "camera");
+                        if ui.add_enabled(known, egui::Button::new("Camera")).clicked() {
+                            self.workspace.add_entity("camera");
+                            ui.close();
+                        }
+                    });
+                });
+                ui.separator();
+                self.menu_do(ui, "Move To View", |app| {
+                    if app.workspace.align_selection_to_view() {
+                        app.state.status = "moved selection to view".to_string();
+                        app.mark_scene_dirty();
+                    } else {
+                        app.state.status = "Move To View needs a selection".to_string();
+                    }
+                });
+                self.menu_do(ui, "Align View to Selected", |app| {
+                    if app.workspace.align_view_to_selection() {
+                        app.mark_scene_dirty();
+                    }
+                });
+                self.menu_do(ui, "Snap to Ground", |app| {
+                    let count = app.workspace.snap_selection_to_ground();
+                    app.state.status = format!("snapped {count} entities");
+                    app.mark_scene_dirty();
+                });
+            });
+
+            // ---- Component ----
+            ui.menu_button("Component", |ui| {
+                let categories: Vec<(String, Vec<(String, String)>)> = self
+                    .workspace
+                    .schema
+                    .component_menu()
+                    .into_iter()
+                    .map(|(category, items)| {
+                        (
+                            category.to_string(),
+                            items
+                                .into_iter()
+                                .map(|item| (item.name.clone(), item.display_name().to_string()))
+                                .collect(),
+                        )
+                    })
+                    .collect();
+                if categories.is_empty() {
+                    ui.label("no schema loaded");
+                }
+                for (category, items) in categories {
+                    ui.menu_button(category, |ui| {
+                        for (name, label) in &items {
+                            if ui.button(label).clicked() {
+                                self.workspace.add_component(name);
+                                ui.close();
+                            }
+                        }
+                    });
                 }
             });
+
+            // ---- Window ----
+            ui.menu_button("Window", |ui| {
+                ui.menu_button("General", |ui| {
+                    for (label, command) in [
+                        ("Scene", Command::ToggleSceneView),
+                        ("Game", Command::ToggleGameView),
+                        ("Hierarchy", Command::ToggleHierarchy),
+                        ("Project", Command::ToggleAssets),
+                        ("Inspector", Command::ToggleInspector),
+                        ("Console", Command::ToggleLog),
+                        ("Documents", Command::ToggleDocs),
+                        ("History", Command::ToggleHistory),
+                        ("Render Graph", Command::ToggleRenderGraph),
+                        ("Build Settings", Command::ToggleBuild),
+                        ("Offline Tools", Command::ToggleTools),
+                        ("Project Settings", Command::ProjectSettings),
+                        ("Preferences", Command::Preferences),
+                        ("Theme", Command::ThemePanel),
+                    ] {
+                        self.menu_item(ui, label, "", command);
+                    }
+                });
+                ui.menu_button("Layouts", |ui| {
+                    for (id, label) in prism_editor_core::workspace::layout_preset_ids() {
+                        let active = self.workspace.layout_preset == id;
+                        if ui.selectable_label(active, label).clicked() {
+                            self.workspace.set_layout_preset(id);
+                            ui.close();
+                        }
+                    }
+                });
+                ui.separator();
+                self.menu_item(ui, "Reset Layout", "", Command::ResetLayout);
+            });
+
+            // ---- Help ----
             ui.menu_button("Help", |ui| {
-                if ui.button("Shortcuts").clicked() {
-                    self.state.shortcuts_open = true;
-                    ui.close();
-                }
-                if ui.button("About PrismaRev").clicked() {
-                    self.state.about_open = true;
-                    ui.close();
-                }
+                self.menu_item(ui, "Shortcuts", "", Command::Shortcuts);
+                self.menu_do(ui, "Editor Guide", |app| {
+                    app.state.status = "docs/editor-egui.md".to_string();
+                });
+                self.menu_item(ui, "About PrismaRev", "", Command::About);
             });
 
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -525,9 +763,17 @@ impl EditorApp {
                             .weak(),
                     );
                 }
+                if let Some(job) = &self.build {
+                    if job.running() {
+                        ui.label(
+                            RichText::new(format!("building: {}", job.label()))
+                                .size(10.0)
+                                .color(egui::Color32::from_rgb(224, 176, 80)),
+                        );
+                    }
+                }
             });
         });
-        let _ = ctx;
     }
 
     fn toolbar(&mut self, ui: &mut egui::Ui) {
@@ -585,6 +831,41 @@ impl EditorApp {
                         }
                     }
                 });
+
+            ui.separator();
+            // Unity 的工具条：Q/W/E/R + 世界/局部 + 网格。
+            for (tool, label, key) in [
+                (crate::viewport::GizmoTool::Translate, "Move", "W"),
+                (crate::viewport::GizmoTool::Rotate, "Rotate", "E"),
+                (crate::viewport::GizmoTool::Scale, "Scale", "R"),
+            ] {
+                let active = self
+                    .scene_view
+                    .as_ref()
+                    .map(|view| view.tool == tool)
+                    .unwrap_or(false);
+                if ui
+                    .selectable_label(active, format!("{label} ({key})"))
+                    .clicked()
+                {
+                    self.set_gizmo_tool(tool);
+                }
+            }
+            let space = self.workspace.gizmo_space;
+            if ui
+                .button(format!("{:?} (X)", space))
+                .on_hover_text("Toggle world / local gizmo space")
+                .clicked()
+            {
+                self.workspace.toggle_gizmo_space();
+                self.mark_scene_dirty();
+            }
+            let grid_on = self.render_settings.show_grid;
+            if ui.selectable_label(grid_on, "Grid (G)").clicked() {
+                let mut settings = self.render_settings.clone();
+                settings.show_grid = !grid_on;
+                self.apply_render_settings(settings);
+            }
 
             ui.separator();
             if ui.button("Frame All (F)").clicked() {
@@ -926,43 +1207,66 @@ impl EditorApp {
     // 快捷键 & 浮动窗口
     // -----------------------------------------------------------------------
 
-    /// Save As 输入框（Unity 的「另存为…」）。
-    fn save_as_dialog(&mut self, ctx: &egui::Context) {
-        let Some(mut buffer) = self.state.save_as.clone() else {
+    /// 统一输入框：另存为 / 新建目录 / 存为预制体 / 重命名。
+    fn prompt_dialog(&mut self, ctx: &egui::Context) {
+        let Some(mut prompt) = self.state.prompt.clone() else {
             return;
         };
         let mut open = true;
         let mut commit = false;
-        egui::Window::new("Save As")
+        egui::Window::new(&prompt.title)
             .collapsible(false)
             .resizable(false)
             .open(&mut open)
             .show(ctx, |ui| {
-                ui.label("assets/ 下的相对路径（.scene.json / .prefab.json）");
-                let response = ui.add(
-                    egui::TextEdit::singleline(&mut buffer)
-                        .desired_width(360.0)
-                        .hint_text("scenes/new.scene.json"),
-                );
+                ui.label(&prompt.hint);
+                let response =
+                    ui.add(egui::TextEdit::singleline(&mut prompt.value).desired_width(380.0));
                 if !response.has_focus() && !response.lost_focus() {
                     response.request_focus();
                 }
-                commit = ui.button("Save").clicked()
+                commit = ui.button("OK").clicked()
                     || ui.input(|input| input.key_pressed(egui::Key::Enter));
             });
+
         if commit {
-            match self.workspace.save_active_as(&buffer) {
-                Ok(path) => {
-                    self.state.status = format!("saved {path}");
-                    self.doc_hash = 0;
-                    self.state.save_as = None;
+            let value = prompt.value.trim().to_string();
+            let result = match prompt.kind {
+                panels::PromptKind::SaveAs => self
+                    .workspace
+                    .save_active_as(&value)
+                    .map(|path| format!("saved {path}")),
+                panels::PromptKind::NewFolder => self
+                    .workspace
+                    .create_asset_folder(&value)
+                    .map(|path| format!("created {path}")),
+                panels::PromptKind::SavePrefab => self
+                    .workspace
+                    .save_selection_as_prefab_at(Some("assets/prefabs"), &value)
+                    .map(|path| format!("saved prefab {path}")),
+                panels::PromptKind::RenameAsset => {
+                    let from = self.state.asset_selection.clone().unwrap_or_default();
+                    let to = match from.rsplit_once('/') {
+                        Some((folder, _)) => format!("{folder}/{value}"),
+                        None => value.clone(),
+                    };
+                    self.workspace
+                        .rename_asset(&from, &to)
+                        .map(|(count, _)| format!("renamed ({count} references updated)"))
                 }
-                Err(error) => self.state.status = format!("save as failed: {error}"),
+            };
+            match result {
+                Ok(message) => {
+                    self.state.status = message;
+                    self.doc_hash = 0;
+                    self.state.prompt = None;
+                }
+                Err(error) => self.state.status = format!("{error}"),
             }
         } else if !open {
-            self.state.save_as = None;
+            self.state.prompt = None;
         } else {
-            self.state.save_as = Some(buffer);
+            self.state.prompt = Some(prompt);
         }
     }
 
@@ -1006,6 +1310,18 @@ impl EditorApp {
                 Command::NewScene,
             ),
             (
+                KeyboardShortcut::new(Modifiers::CTRL | Modifiers::SHIFT, Key::P),
+                Command::Pause,
+            ),
+            (
+                KeyboardShortcut::new(Modifiers::CTRL | Modifiers::ALT, Key::P),
+                Command::Step,
+            ),
+            (
+                KeyboardShortcut::new(Modifiers::CTRL, Key::P),
+                Command::Play,
+            ),
+            (
                 KeyboardShortcut::new(Modifiers::NONE, Key::Delete),
                 Command::DeleteSelection,
             ),
@@ -1020,6 +1336,29 @@ impl EditorApp {
         ];
 
         let wants_keyboard = ctx.memory(|memory| memory.focused()).is_some();
+        // W / E / R 工具、X 世界/局部、G 网格（文本输入时不抢键）。
+        if !wants_keyboard {
+            use crate::viewport::GizmoTool;
+            if ctx.input(|input| input.key_pressed(egui::Key::W)) {
+                self.set_gizmo_tool(GizmoTool::Translate);
+            }
+            if ctx.input(|input| input.key_pressed(egui::Key::E)) {
+                self.set_gizmo_tool(GizmoTool::Rotate);
+            }
+            if ctx.input(|input| input.key_pressed(egui::Key::R)) {
+                self.set_gizmo_tool(GizmoTool::Scale);
+            }
+            if ctx.input(|input| input.key_pressed(egui::Key::X)) {
+                self.workspace.toggle_gizmo_space();
+                self.mark_scene_dirty();
+            }
+            if ctx.input(|input| input.key_pressed(egui::Key::G)) {
+                let mut settings = self.render_settings.clone();
+                settings.show_grid = !settings.show_grid;
+                self.apply_render_settings(settings);
+            }
+        }
+
         for (shortcut, command) in shortcuts {
             if ctx.input_mut(|input| input.consume_shortcut(&shortcut)) {
                 // 纯字母 / Delete 这类快捷键只在没有文本控件聚焦时生效。
@@ -1083,6 +1422,45 @@ impl EditorApp {
 }
 
 impl EditorApp {
+    /// 相机 / 选中标记 / 相机视角变了 → 下一帧重绘 Scene view。
+    fn set_gizmo_tool(&mut self, tool: crate::viewport::GizmoTool) {
+        self.ensure_view(ViewKind::Scene);
+        if let Some(view) = self.scene_view.as_mut() {
+            view.tool = tool;
+            view.mark_dirty();
+        }
+    }
+
+    fn mark_scene_dirty(&mut self) {
+        if let Some(view) = self.scene_view.as_mut() {
+            view.mark_dirty();
+        }
+    }
+
+    /// 每帧取走构建子进程的输出（写进 Console，System 来源）。
+    fn poll_build(&mut self) {
+        let Some(job) = self.build.as_mut() else {
+            return;
+        };
+        let (lines, running) = job.poll();
+        for line in lines {
+            self.workspace.log(
+                prism_editor_core::LogSource::System,
+                prism_editor_core::LogLevel::Info,
+                line,
+            );
+        }
+        if !running {
+            self.state.status = format!("build finished: {}", job.label());
+            self.workspace.log(
+                prism_editor_core::LogSource::System,
+                prism_editor_core::LogLevel::Info,
+                format!("build finished: {}", job.label()),
+            );
+            self.build = None;
+        }
+    }
+
     /// 把 `log` 记录搬进 Console 面板（每帧一次）。
     fn drain_engine_logs(&mut self) {
         let entries = logging::drain();
@@ -1117,6 +1495,7 @@ impl EditorApp {
 impl App for EditorApp {
     fn ui(&mut self, ctx: &egui::Context) {
         self.drain_engine_logs();
+        self.poll_build();
         self.sync_document();
         self.handle_shortcuts(ctx);
 
@@ -1159,7 +1538,7 @@ impl App for EditorApp {
 
         self.floating_panels(ctx);
 
-        self.save_as_dialog(ctx);
+        self.prompt_dialog(ctx);
 
         let mut about = self.state.about_open;
         panels::boolean_window(ctx, &mut about, "About", panels::about);

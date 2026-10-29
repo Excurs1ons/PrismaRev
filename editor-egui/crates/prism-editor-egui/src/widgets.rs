@@ -5,18 +5,25 @@
 //! 这里。写回统一走 `Workspace::set_field`（反射校验 + 撤销合并）。
 
 use egui::Ui;
-use prism_editor_core::{FieldSchema, FieldWidget, TypeSchema, Workspace};
+use prism_editor_core::{FieldSchema, FieldWidget, TypeSchema};
 use serde_json::Value;
 
-/// 一个组件卡片：标题栏 + 字段列表 + 删除按钮。
+/// 组件卡片上的按钮动作（先收集，渲染结束后由调用方应用）。
+pub enum CardAction {
+    Copy(String),
+    Remove(String),
+}
+
+/// 一个组件卡片：标题栏 + 字段列表 + 复制/删除按钮。
+///
+/// `set(field, value)` 由调用方决定写到哪个实体（单选 / 多选批量）。
 pub fn component_card(
     ui: &mut Ui,
-    workspace: &mut Workspace,
-    entity_index: usize,
     component: &TypeSchema,
     value: &Value,
-) -> bool {
-    let mut removed = false;
+    actions: &mut Vec<CardAction>,
+    set: &mut dyn FnMut(&str, Value),
+) {
     egui::Frame::group(ui.style())
         .inner_margin(egui::Margin::symmetric(6, 4))
         .show(ui, |ui| {
@@ -27,8 +34,19 @@ pub fn component_card(
                         .size(12.0),
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.small_button("✕").on_hover_text("移除组件").clicked() {
-                        removed = true;
+                    if ui
+                        .small_button("✕")
+                        .on_hover_text("Remove Component")
+                        .clicked()
+                    {
+                        actions.push(CardAction::Remove(component.name.clone()));
+                    }
+                    if ui
+                        .small_button("⧉")
+                        .on_hover_text("Copy Component")
+                        .clicked()
+                    {
+                        actions.push(CardAction::Copy(component.name.clone()));
                     }
                 });
             });
@@ -42,40 +60,23 @@ pub fn component_card(
                 if field.name == "type_id" {
                     continue;
                 }
-                field_row(
-                    ui,
-                    workspace,
-                    entity_index,
-                    &component.name,
-                    field,
-                    field_value,
-                );
+                field_row(ui, field, field_value, set);
             }
-            let _ = component;
+            let _ = &component;
         });
-    if removed {
-        workspace.remove_component(&component.name);
-    }
-    removed
 }
 
-/// 单个字段的编辑控件。
+/// 单个字段的编辑控件。`set(field, value)` 写回（单选走 `set_field`，
+/// 多选走 `set_field_multi`），所以这里不关心实体。
 pub fn field_row(
     ui: &mut Ui,
-    workspace: &mut Workspace,
-    entity_index: usize,
-    component: &str,
     field: &FieldSchema,
     value: &Value,
+    set: &mut dyn FnMut(&str, Value),
 ) {
-    let Some(entity_id) = workspace.document().doc.id_of_index(entity_index) else {
-        return;
-    };
     let widget = field.widget();
     let label = field.label();
-    let mut set = |value: Value| {
-        workspace.set_field(entity_id, component, &field.name, value);
-    };
+    let name = field.name.clone();
 
     match widget {
         FieldWidget::ReadOnly => {
@@ -94,7 +95,7 @@ pub fn field_row(
         FieldWidget::Bool => {
             let mut checked = value.as_bool().unwrap_or(false);
             if ui.checkbox(&mut checked, label).changed() {
-                set(Value::Bool(checked));
+                set(&name, Value::Bool(checked));
             }
         }
         FieldWidget::Integer => {
@@ -103,7 +104,7 @@ pub fn field_row(
                 ui.label(label);
                 let drag = ui.add(egui::DragValue::new(&mut current).speed(1.0));
                 if drag.changed() {
-                    set(Value::from(current));
+                    set(&name, Value::from(current));
                 }
             });
         }
@@ -125,7 +126,7 @@ pub fn field_row(
                 }
                 let response = ui.add(drag);
                 if response.changed() {
-                    set(Value::from(current as f64));
+                    set(&name, Value::from(current as f64));
                 }
             });
         }
@@ -134,7 +135,7 @@ pub fn field_row(
             ui.horizontal(|ui| {
                 ui.label(label);
                 if ui.text_edit_singleline(&mut current).changed() {
-                    set(Value::String(current.clone()));
+                    set(&name, Value::String(current.clone()));
                 }
             });
         }
@@ -142,7 +143,7 @@ pub fn field_row(
             let mut current = value.as_str().unwrap_or_default().to_string();
             ui.label(label);
             if ui.text_edit_multiline(&mut current).changed() {
-                set(Value::String(current.clone()));
+                set(&name, Value::String(current.clone()));
             }
         }
         FieldWidget::Vector { len } => {
@@ -157,21 +158,20 @@ pub fn field_row(
                 .collect();
             ui.horizontal(|ui| {
                 for (axis, item) in values.iter_mut().enumerate() {
-                    let changed = ui.add(egui::DragValue::new(item).speed(0.01)).changed();
-                    if changed {
+                    if ui.add(egui::DragValue::new(item).speed(0.01)).changed() {
                         let mut next = value.clone();
                         if let Some(array) = next.as_array_mut() {
                             if let Some(slot) = array.get_mut(axis) {
                                 *slot = Value::from(*item as f64);
                             }
-                            set(next);
+                            set(&name, next);
                         }
                     }
                 }
             });
         }
         FieldWidget::Quat => {
-            // 四元数按分量编辑（欧拉角换算留给引擎 / 检查器以外的地方）。
+            // 四元数按分量编辑（欧拉角换算留给引擎 / 其它工具）。
             ui.label(label);
             let mut values: Vec<f32> = (0..4)
                 .map(|axis| {
@@ -192,7 +192,7 @@ pub fn field_row(
                             if let Some(slot) = array.get_mut(axis) {
                                 *slot = Value::from(*item as f64);
                             }
-                            set(next);
+                            set(&name, next);
                         }
                     }
                 }
@@ -203,7 +203,7 @@ pub fn field_row(
             ui.horizontal(|ui| {
                 ui.label(label);
                 if ui.color_edit_button_rgba_unmultiplied(&mut rgba).changed() {
-                    set(color_value(rgba, alpha));
+                    set(&name, color_value(rgba, alpha));
                 }
             });
         }
@@ -211,12 +211,12 @@ pub fn field_row(
             let current = value.as_str().unwrap_or_default().to_string();
             ui.horizontal(|ui| {
                 ui.label(label);
-                egui::ComboBox::from_id_salt((component, &field.name))
+                egui::ComboBox::from_id_salt((name.clone(), field.name.clone()))
                     .selected_text(current.clone())
                     .show_ui(ui, |ui| {
                         for variant in &variants {
                             if ui.selectable_label(*variant == current, variant).clicked() {
-                                set(Value::String(variant.clone()));
+                                set(&name, Value::String(variant.clone()));
                             }
                         }
                     });

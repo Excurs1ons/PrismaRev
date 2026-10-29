@@ -37,7 +37,8 @@ cargo run -p prism-editor-egui
 crates/prism-editor-egui/src/
 ├── main.rs          egui-ash 入口（AppCreator + RunOption）
 ├── gpu.rs           共享 VkDevice：instance / 物理设备 / 设备 / 分配器 / 命令池
-├── app.rs           外壳：菜单、工具栏、状态栏、docking、文档同步、Play 控制
+├── build.rs         构建 / cook 子进程（`prism-build-pipeline`），输出进 Console
+├── app.rs           外壳：Unity 式菜单（二/三级）、工具栏、状态栏、docking、Play
 ├── engine_host.rs   进程内引擎宿主：Engine + GraphRenderer + 资产上传（同步）
 ├── viewport.rs      Scene/Game 视口：离屏图像 → egui 纹理、轨道/拾取/gizmo
 ├── panels.rs        层级、检查器、资产、文档、日志、历史、渲染图 / 设置类面板

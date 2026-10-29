@@ -8,6 +8,7 @@
 //! 运行：`cargo run -p prism-editor-egui`（需要 Vulkan 设备 + 已编译的 `.spv`）。
 
 mod app;
+mod build;
 mod engine_host;
 mod gpu;
 mod logging;
