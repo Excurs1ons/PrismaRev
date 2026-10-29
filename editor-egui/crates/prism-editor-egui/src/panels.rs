@@ -54,7 +54,13 @@ pub enum PromptKind {
     SaveAs,
     NewFolder,
     SavePrefab,
+    PrefabVariant,
     RenameAsset,
+    /// 命名布局（Window → Layouts → Save Layout…）。
+    LayoutName,
+    /// 布局文件路径（Load / Save Layout to File…）。
+    LayoutFileSave,
+    LayoutFileLoad,
 }
 
 #[derive(Clone)]

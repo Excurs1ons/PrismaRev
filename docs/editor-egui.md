@@ -95,14 +95,24 @@ instance / device 并返回 `AshRenderState`，因此可以做到 Unity 的模�
 |---|---|
 | File | New Scene / New Scene From Template ▸ / New Prefab / Open / Recent Scenes ▸ / Save / Save As / Save Project / Reload / Build Settings / Build Scene Pack / Cook Active Scene / Build Player / Build And Run / Clean Build / Exit |
 | Edit | Undo / Redo / Cut / Copy / Paste / Duplicate / Delete / Select All / Deselect All / Invert Selection / Select Children / Select Prefab Root / Next·Previous Selection / Copy·Paste Transform ▸ / Paste Component / Play / Pause / Step / Project Settings / Preferences / Theme |
-| Assets | Create ▸ (Scene / Prefab / Folder…) / Open / Show in Explorer / Copy Path / Duplicate / Delete / Instantiate In Scene / Find References In Scene / Find References In Project / Refresh |
-| GameObject | Create Empty / Create Empty Child / Create Empty Parent / Create Other ▸ (3D Object ▸ Cube… / Light ▸ / Camera ▸) / Move To View / Align View to Selected / Snap to Ground |
+| Assets | Create ▸ (Scene / Prefab / **Prefab Variant…** / Folder…) / Open / Show in Explorer / Copy Path / Duplicate / Delete / Instantiate In Scene / Find References In Scene / Find References In Project / Refresh |
+| GameObject | Create Empty / Create Empty Child / Create Empty Parent / Create Other ▸ (Rendering ▸ Mesh Renderer·Skybox / Light ▸ Directional·Point·Spot / Camera / UI) / Move To View / Align View to Selected / Snap to Ground |
 | Component | schema 分类 ▸ 组件列表 |
-| Window | General ▸ 面板开关 / Layouts ▸ 预设 / Reset Layout |
+| Window | General ▸ 面板开关 / Layouts ▸ 预设 + 命名布局（Load/Delete）+ Save Layout… + Save·Load Layout to File… + Reset All Layouts / Reset Layout |
 | Help | Shortcuts / Editor Guide / About |
 
-`Build*` 与 `Cook Active Scene` 通过子进程调用 `prism-build-pipeline`（编辑器仍然
-不链接 cooker），输出进 Console。
+`Build*` / `Cook Active Scene` / `Clean Build` 通过子进程调用 `prism-build-pipeline`
+或 `cargo`（编辑器仍然不链接 cooker），输出进 Console。
+
+快捷键（Unity 习惯）：`Ctrl+1..5` = Scene / Game / Inspector / Hierarchy / Project，
+`Ctrl+Shift+C` = Console，`Ctrl+B` = Build And Run，`Ctrl+I` = 反选，
+`W/E/R` = 移动 / 旋转 / 缩放，`X` 世界/局部，`G` 网格，`F` 框住全部，`Del` 删除。
+
+命名布局存在 `target/editor-egui/layouts.json`（`{name: {version,dock,floating}}`），
+可以整份导出/导入成 JSON 文件（与 Web 的 `prisma-editor.dock.v4` 同形）。
+
+`Create → Prefab Variant…`：把选中实例用 `extract_subtree_preserving_links` 存成
+「继承 base + 覆盖」的预制体文件，再把场景里的这个实例改指向新变体（Unity 行为）。
 
 ## 4.3 面板能力
 
@@ -143,9 +153,11 @@ instance / device 并返回 `AshRenderState`，因此可以做到 Unity 的模�
 - **未在真实设备上运行**：开发机是 Termux（aarch64、无显示），只做了
   `cargo check`（本机 + `x86_64-pc-windows-gnu`）。首帧呈现、resize、字体、
   docking 手感都需要桌面复核。
-- **尚未实现**：材质 / 贴图拖到场景里自动挂 `MeshRenderer`（目前只有预制体和场景
-  文件有落点语义）、层级多选拖到两个实体之间做整组排序（整组只支持改父级）、
-  多窗口（egui viewport）的独立 DPI。
+- **尚未实现**：材质 / 贴图拖到场景里自动挂 `MeshRenderer`；层级多选整组插入排序
+  （整组只支持改父级）；多窗口（egui viewport）的独立 DPI。
+- **被引擎阻塞**：`3D Object ▸ Cube/Sphere/Cylinder/Capsule/Quad` 需要引擎提供程序化
+  基础网格（当前 `MeshRenderer.mesh_path` 只能指向已 cook 的资产，仓库里没有这些
+  内置图元），所以菜单里只保留 `Rendering ▸ Mesh Renderer`（空 mesh_path 的容器）。
 - **性能**：每次文档变化都会整场重载两个引擎实例（防抖 120ms），大场景下偏重；
   后续可以改成「只重建变化的实体」或引入 delta 上传。
 - **两个引擎实例**意味着两份 GPU 资源（管线、IBL、网格）。如果以后只保留一个

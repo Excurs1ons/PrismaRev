@@ -83,6 +83,9 @@ pub struct EditorApp {
     playing: bool,
     paused: bool,
     render_report: Option<String>,
+    /// 命名布局（Window → Layouts）：name → DockLayout JSON。
+    named_layouts: std::collections::BTreeMap<String, serde_json::Value>,
+    layouts_path: PathBuf,
     /// 正在跑的构建 / cook 子进程。
     build: Option<crate::build::BuildJob>,
     /// 两个视口共享的渲染设置（Console 里的「渲染图」面板可改）。
@@ -137,6 +140,12 @@ impl EditorApp {
             .join("target/editor-egui/state.json");
 
         // 恢复上次的 dock 布局 / 浮动窗口 / 语言（与 Web 的 `prisma-editor.dock.v4` 同形）。
+        let layouts_path = state_path
+            .parent()
+            .map(|dir| dir.join("layouts.json"))
+            .unwrap_or_else(|| PathBuf::from("layouts.json"));
+        let named_layouts = read_named_layouts(&layouts_path);
+
         let saved_state = read_editor_state(&state_path);
         if let Some(state) = &saved_state {
             let layout = prism_editor_core::DockLayout::from_json(
@@ -162,6 +171,8 @@ impl EditorApp {
             playing: false,
             paused: false,
             render_report: None,
+            named_layouts,
+            layouts_path,
             build: None,
             render_settings: prism_engine::render_settings::RenderSettings::default(),
             theme_signature: String::new(),
@@ -779,6 +790,19 @@ impl EditorApp {
                 ui.menu_button("Create", |ui| {
                     self.menu_item(ui, "Scene", "", Command::NewScene);
                     self.menu_item(ui, "Prefab", "", Command::NewPrefab);
+                    let can_variant = self.has_prefab_instance();
+                    if ui
+                        .add_enabled(can_variant, egui::Button::new("Prefab Variant…"))
+                        .clicked()
+                    {
+                        self.open_prompt(
+                            panels::PromptKind::PrefabVariant,
+                            "Create Prefab Variant",
+                            "变体文件名（不含目录，写到 assets/prefabs/）",
+                            "Variant",
+                        );
+                        ui.close();
+                    }
                     self.menu_do(ui, "Folder…", |app| {
                         app.open_prompt(
                             panels::PromptKind::NewFolder,
@@ -864,13 +888,8 @@ impl EditorApp {
                 self.menu_do(ui, "Create Empty Parent", |app| app.create_empty_parent());
                 ui.separator();
                 ui.menu_button("Create Other", |ui| {
-                    ui.menu_button("3D Object", |ui| {
-                        for (id, label) in [
-                            ("cube", "Cube"),
-                            ("sphere", "Sphere"),
-                            ("cylinder", "Cylinder"),
-                            ("plane", "Plane"),
-                        ] {
+                    ui.menu_button("Rendering", |ui| {
+                        for (id, label) in [("mesh", "Mesh Renderer"), ("skybox", "Skybox")] {
                             let known = self.workspace.presets.iter().any(|p| p.id == id);
                             if ui.add_enabled(known, egui::Button::new(label)).clicked() {
                                 self.workspace.add_entity(id);
@@ -880,9 +899,9 @@ impl EditorApp {
                     });
                     ui.menu_button("Light", |ui| {
                         for (id, label) in [
-                            ("light", "Directional Light"),
-                            ("point-light", "Point Light"),
-                            ("spot-light", "Spot Light"),
+                            ("sun", "Directional Light"),
+                            ("point_light", "Point Light"),
+                            ("spot_light", "Spot Light"),
                         ] {
                             let known = self.workspace.presets.iter().any(|p| p.id == id);
                             if ui.add_enabled(known, egui::Button::new(label)).clicked() {
@@ -895,6 +914,16 @@ impl EditorApp {
                         let known = self.workspace.presets.iter().any(|p| p.id == "camera");
                         if ui.add_enabled(known, egui::Button::new("Camera")).clicked() {
                             self.workspace.add_entity("camera");
+                            ui.close();
+                        }
+                    });
+                    ui.menu_button("UI", |ui| {
+                        let known = self.workspace.presets.iter().any(|p| p.id == "ui");
+                        if ui
+                            .add_enabled(known, egui::Button::new("UI Element"))
+                            .clicked()
+                        {
+                            self.workspace.add_entity("ui");
                             ui.close();
                         }
                     });
@@ -982,6 +1011,58 @@ impl EditorApp {
                             ui.close();
                         }
                     }
+                    ui.separator();
+                    let names: Vec<String> = self.named_layouts.keys().cloned().collect();
+                    for name in names {
+                        ui.menu_button(&name, |ui| {
+                            if ui.button("Load").clicked() {
+                                let value = self.named_layouts.get(&name).cloned();
+                                if let Some(value) = value {
+                                    self.apply_layout_json(&value);
+                                    self.state.status = format!("layout loaded: {name}");
+                                }
+                                ui.close();
+                            }
+                            if ui.button("Delete").clicked() {
+                                self.named_layouts.remove(&name);
+                                self.write_named_layouts();
+                                ui.close();
+                            }
+                        });
+                    }
+                    if !self.named_layouts.is_empty() {
+                        ui.separator();
+                    }
+                    self.menu_do(ui, "Save Layout…", |app| {
+                        app.open_prompt(
+                            panels::PromptKind::LayoutName,
+                            "Save Layout",
+                            "布局名（写进 target/editor-egui/layouts.json）",
+                            "My Layout",
+                        )
+                    });
+                    self.menu_do(ui, "Save Layout to File…", |app| {
+                        app.open_prompt(
+                            panels::PromptKind::LayoutFileSave,
+                            "Save Layout to File",
+                            "输出 JSON 路径",
+                            "target/editor-egui/layout.json",
+                        )
+                    });
+                    self.menu_do(ui, "Load Layout from File…", |app| {
+                        app.open_prompt(
+                            panels::PromptKind::LayoutFileLoad,
+                            "Load Layout from File",
+                            "读取 JSON 路径（v4 {version,dock,floating}）",
+                            "target/editor-egui/layout.json",
+                        )
+                    });
+                    self.menu_do(ui, "Reset All Layouts", |app| {
+                        app.named_layouts.clear();
+                        app.write_named_layouts();
+                        app.workspace.set_layout_preset("default");
+                        app.state.status = "layouts reset".to_string();
+                    });
                 });
                 ui.separator();
                 self.menu_item(ui, "Reset Layout", "", Command::ResetLayout);
@@ -1582,6 +1663,39 @@ impl EditorApp {
                     .workspace
                     .save_selection_as_prefab_at(Some("assets/prefabs"), &value)
                     .map(|path| format!("saved prefab {path}")),
+                panels::PromptKind::PrefabVariant => self.create_prefab_variant(&value),
+                panels::PromptKind::LayoutName => {
+                    self.save_named_layout(&value);
+                    Ok(format!("layout saved: {value}"))
+                }
+                panels::PromptKind::LayoutFileSave => {
+                    let path = PathBuf::from(&value);
+                    if let Some(dir) = path.parent() {
+                        let _ = std::fs::create_dir_all(dir);
+                    }
+                    std::fs::write(
+                        &path,
+                        serde_json::to_string_pretty(&self.current_layout_json())
+                            .unwrap_or_default(),
+                    )
+                    .map(|()| format!("layout written: {}", path.display()))
+                }
+                panels::PromptKind::LayoutFileLoad => {
+                    let text = std::fs::read_to_string(&value);
+                    match text {
+                        Ok(text) => match serde_json::from_str::<serde_json::Value>(&text) {
+                            Ok(json) => {
+                                self.apply_layout_json(&json);
+                                Ok(format!("layout loaded: {value}"))
+                            }
+                            Err(error) => Err(std::io::Error::new(
+                                std::io::ErrorKind::InvalidData,
+                                format!("invalid layout json: {error}"),
+                            )),
+                        },
+                        Err(error) => Err(error),
+                    }
+                }
                 panels::PromptKind::RenameAsset => {
                     let from = self.state.asset_selection.clone().unwrap_or_default();
                     let to = match from.rsplit_once('/') {
@@ -1695,6 +1809,30 @@ impl EditorApp {
                 settings.show_grid = !settings.show_grid;
                 self.apply_render_settings(settings);
             }
+            // Unity 的面板快捷键：Ctrl+1..5 = Scene / Game / Inspector / Hierarchy / Project，
+            // Ctrl+Shift+C = Console。
+            for (key, command) in [
+                (egui::Key::Num1, Command::ToggleSceneView),
+                (egui::Key::Num2, Command::ToggleGameView),
+                (egui::Key::Num3, Command::ToggleInspector),
+                (egui::Key::Num4, Command::ToggleHierarchy),
+                (egui::Key::Num5, Command::ToggleAssets),
+            ] {
+                if ctx.input_mut(|input| {
+                    input.consume_shortcut(&egui::KeyboardShortcut::new(egui::Modifiers::CTRL, key))
+                }) {
+                    self.apply_command(command);
+                }
+            }
+            if ctx.input_mut(|input| {
+                input.consume_shortcut(&egui::KeyboardShortcut::new(
+                    egui::Modifiers::CTRL | egui::Modifiers::SHIFT,
+                    egui::Key::C,
+                ))
+            }) {
+                self.apply_command(Command::ToggleLog);
+            }
+
             // Ctrl+B = Build And Run，Ctrl+I = 反选（Unity 的默认绑定）。
             if ctx.input_mut(|input| {
                 input.consume_shortcut(&egui::KeyboardShortcut::new(
@@ -1780,6 +1918,113 @@ impl EditorApp {
 
 impl EditorApp {
     /// 相机 / 选中标记 / 相机视角变了 → 下一帧重绘 Scene view。
+    /// Unity 的 Create → Prefab Variant：把选中的实例存成「继承 base + 覆盖」的预制体，
+    /// 然后把场景里的这个实例改指向新变体。
+    fn create_prefab_variant(&mut self, name: &str) -> std::io::Result<String> {
+        let root_dir = self
+            .project_root
+            .clone()
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "no project root"))?;
+        let Some(index) = self.workspace.selection.iter().copied().find(|index| {
+            self.workspace
+                .document()
+                .doc
+                .entities
+                .get(*index)
+                .is_some_and(|entity| entity.prefab_link().is_some())
+        }) else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "selection has no prefab instance",
+            ));
+        };
+        let name = name.trim().trim_end_matches(".prefab.json");
+        let stem = if name.is_empty() { "Variant" } else { name };
+        let doc = self
+            .workspace
+            .document()
+            .doc
+            .extract_subtree_preserving_links(&[index]);
+        let mut relative = format!("assets/prefabs/{stem}.prefab.json");
+        let mut suffix = 2;
+        while root_dir.join(&relative).exists() {
+            relative = format!("assets/prefabs/{stem}-{suffix}.prefab.json");
+            suffix += 1;
+        }
+        prism_editor_core::project::write_document(&root_dir, &relative, &doc)?;
+        self.workspace.refresh_project_files();
+        // 场景里的这个实例改为指向新变体（Unity 的行为）。
+        if let Some(entity) = self.workspace.document().doc.id_of_index(index) {
+            self.workspace.set_field(
+                entity,
+                "prism_engine::scene::PrefabInstance",
+                "prefab",
+                serde_json::Value::String(relative.clone()),
+            );
+        }
+        self.workspace.log(
+            prism_editor_core::LogSource::Editor,
+            prism_editor_core::LogLevel::Info,
+            format!("prefab variant created: {relative}"),
+        );
+        self.doc_hash = 0;
+        Ok(relative)
+    }
+
+    fn has_prefab_instance(&self) -> bool {
+        let doc = &self.workspace.document().doc;
+        self.workspace.selection.iter().any(|index| {
+            doc.entities
+                .get(*index)
+                .is_some_and(|entity| entity.prefab_link().is_some())
+        })
+    }
+
+    fn current_layout_json(&self) -> serde_json::Value {
+        let layout = prism_editor_core::DockLayout {
+            version: prism_editor_core::DockLayout::VERSION,
+            dock: self.workspace.dock.clone(),
+            floating: self.workspace.floating.clone(),
+        };
+        layout.to_json()
+    }
+
+    fn write_named_layouts(&mut self) {
+        if let Some(dir) = self.layouts_path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let value = serde_json::json!(self.named_layouts);
+        match std::fs::write(
+            &self.layouts_path,
+            serde_json::to_string_pretty(&value).unwrap_or_default(),
+        ) {
+            Ok(()) => self.state.status = format!("layouts saved: {}", self.layouts_path.display()),
+            Err(error) => self.state.status = format!("save layouts failed: {error}"),
+        }
+    }
+
+    fn apply_layout_json(&mut self, value: &serde_json::Value) {
+        let known: Vec<String> = self
+            .workspace
+            .panels
+            .iter()
+            .map(|panel| panel.id.clone())
+            .collect();
+        let layout = prism_editor_core::DockLayout::from_json(value, &known, 1440.0, 900.0);
+        self.workspace.dock = layout.dock;
+        self.workspace.floating = layout.floating;
+    }
+
+    fn save_named_layout(&mut self, name: &str) {
+        let name = name.trim();
+        if name.is_empty() {
+            return;
+        }
+        let value = self.current_layout_json();
+        self.named_layouts.insert(name.to_string(), value);
+        self.write_named_layouts();
+    }
+
     fn set_gizmo_tool(&mut self, tool: crate::viewport::GizmoTool) {
         self.ensure_view(ViewKind::Scene);
         if let Some(view) = self.scene_view.as_mut() {
@@ -1986,6 +2231,13 @@ fn attach_project(workspace: &mut Workspace) {
             format!("load project failed: {error}"),
         ),
     }
+}
+
+fn read_named_layouts(path: &Path) -> std::collections::BTreeMap<String, serde_json::Value> {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return std::collections::BTreeMap::new();
+    };
+    serde_json::from_str(&text).unwrap_or_default()
 }
 
 fn read_editor_state(path: &Path) -> Option<prism_editor_core::EditorState> {
