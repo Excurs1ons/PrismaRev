@@ -12,6 +12,7 @@ anyhow = "1"
 ash = { version = "0.38", default-features = false }
 ash-window = "0.13"
 egui = "0.33.3"
+egui-phosphor = { version = "0.11", default-features = true }
 egui-ash = { git = "https://github.com/tyrypyrking/egui-ash", rev = "258aee2347e66bdb3fdf2f9fc4aa76da06228b0f", features = [
   "gpu-allocator",
 ] }

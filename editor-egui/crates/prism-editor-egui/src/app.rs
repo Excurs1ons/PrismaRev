@@ -19,6 +19,7 @@ use crate::logging;
 use crate::panels::{self, UiState};
 use crate::theme;
 use crate::viewport::{ImageBridge, ViewportState};
+use egui_phosphor::regular as icons;
 
 /// 面板 tab 的高度（与 Web `.dock-tabs` 的 28px 对齐，这里按 egui 行高收到 26）。
 const TAB_BAR_HEIGHT: f32 = 26.0;
@@ -276,6 +277,14 @@ impl EditorApp {
         }
         app.write_preview_scene();
         app.ensure_view(ViewKind::Scene);
+        // Game view 的引擎在这里一起建好。留到第一次切 tab 再建的话，会卡住整个
+        // UI 线程 ~2s（IBL 预过滤 1.5s + 管线创建 + 场景加载），观感就是「切 tab 卡半天」。
+        let started = Instant::now();
+        app.ensure_view(ViewKind::Game);
+        log::info!(
+            "game view engine ready in {:.0} ms",
+            started.elapsed().as_secs_f32() * 1000.0
+        );
         app.doc_hash = document_hash(&app.workspace);
         app.render_report = read_report(app.project_root.as_deref());
         app.workspace.log(
@@ -1225,25 +1234,27 @@ impl EditorApp {
         ui.horizontal(|ui| {
             let playing = self.playing;
             let paused = self.paused;
-            if ui
-                .add_enabled(!playing, egui::Button::new("Play"))
-                .clicked()
-            {
+            // Unity 的运输控件是纯图标（tooltip 补文字）。
+            let transport = |ui: &mut egui::Ui, glyph: &str, tip: &str, enabled: bool| {
+                ui.add_enabled(enabled, egui::Button::new(RichText::new(glyph).size(14.0)))
+                    .on_hover_text(tip)
+                    .clicked()
+            };
+            if transport(ui, icons::PLAY, "Play", !playing) {
                 self.apply_command(Command::Play);
             }
-            if ui
-                .add_enabled(
-                    playing,
-                    egui::Button::new(if paused { "Resume" } else { "Pause" }),
-                )
-                .clicked()
-            {
+            if transport(
+                ui,
+                if paused { icons::PLAY } else { icons::PAUSE },
+                if paused { "Resume" } else { "Pause" },
+                playing,
+            ) {
                 self.apply_command(Command::Pause);
             }
-            if ui.add_enabled(playing, egui::Button::new("Step")).clicked() {
+            if transport(ui, icons::SKIP_FORWARD, "Step", playing) {
                 self.apply_command(Command::Step);
             }
-            if ui.add_enabled(playing, egui::Button::new("Stop")).clicked() {
+            if transport(ui, icons::STOP, "Stop", playing) {
                 self.apply_command(Command::Stop);
             }
 

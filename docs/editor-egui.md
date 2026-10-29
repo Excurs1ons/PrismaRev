@@ -65,8 +65,21 @@ instance / device 并返回 `AshRenderState`，因此可以做到 Unity 的模�
 - 资产上传也同步：`GpuAssetResolver::prepare_requests` → `GraphRenderer::
   apply_asset_requests` → `apply_responses` 写回 ECS（原本是两个线程各一半）；
 - 视口只在「文档变化 / 相机变化 / 选中变化 / resize / Play / 首帧」时重渲染，
-  静止时零 GPU 工作；
+  静止时零 GPU 工作。判断 resize 必须用 `GraphRenderer::offscreen_extent()`
+  （`extent()` 是 swapchain 的，离屏时恒为 `0x0`，拿它比较会让视口**每帧**
+  重建离屏目标并重渲染，约 15 ms/帧白烧 GPU）；
+- 两个引擎（Scene / Game）都在启动时建好：首个 Game view 要跑一次 IBL 预过滤
+  （约 1.5 s）+ 管线创建，留到第一次切 tab 才建就表现为「切 tab 卡半天」；
 - Play 时 Game view 每帧 `tick()` + 重渲染；Scene view 仍是编辑态。
+
+## 3.1 字体与图标
+
+- 正文字体优先用系统 UI 无衬线（Segoe UI / Liberation Sans / Noto Sans），
+  找不到再用 egui 内置字体；CJK 字体作为回退追加在最末尾。
+- 图标用 **Phosphor Icons**（`egui-phosphor 0.11`，MIT OR Apache-2.0，对应 egui
+  0.33）：`egui_phosphor::regular::{PLAY, PAUSE, EYE, FOLDER, FLOPPY_DISK, ...}`
+  就是普通文本字形，因此传输控件 / 层级眼睛 / 资产文件夹 / 关闭按钮都不再依赖
+  Unicode 符号（`▶ ⏸ ✕ ⧉` 这类在多数 UI 字体里缺字形，会显示成方块）。
 
 ## 4. 交互
 

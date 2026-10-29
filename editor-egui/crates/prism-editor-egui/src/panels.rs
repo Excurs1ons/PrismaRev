@@ -10,6 +10,7 @@ use prism_editor_core::{
 use serde_json::Value;
 
 use crate::{theme, widgets};
+use egui_phosphor::regular as icons;
 
 /// 列表行（Unity / Web 风格）：整行底色 + 文本，用于资产 / 文档这类列表。
 fn list_row(
@@ -70,6 +71,9 @@ pub struct UiState {
     pub log_search: String,
     pub log_autoscroll: bool,
     pub rename: Option<(usize, String)>,
+    /// 重命名刚打开的那一帧要抢一次焦点；之后不能每帧抢，否则
+    /// TextEdit 永远保持焦点、点空白处不会退出编辑。
+    pub rename_focus: bool,
     pub add_component_query: String,
     pub preset_choice: usize,
     pub status: String,
@@ -252,14 +256,18 @@ pub fn hierarchy(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
                 );
                 row_ui.add_space(6.0 + depth as f32 * 12.0);
                 if expandable {
-                    let arrow = if expanded_here { "▾" } else { "▸" };
+                    let arrow = if expanded_here {
+                        icons::CARET_DOWN
+                    } else {
+                        icons::CARET_RIGHT
+                    };
                     if flat_icon(&mut row_ui, arrow).clicked() {
                         action = Some(TreeAction::ToggleExpand(index));
                     }
                 } else {
                     row_ui.add_space(16.0);
                 }
-                let eye = if active { "👁" } else { "–" };
+                let eye = if active { icons::EYE } else { icons::EYE_SLASH };
                 if flat_icon(&mut row_ui, eye)
                     .on_hover_text("Toggle Active")
                     .clicked()
@@ -272,9 +280,27 @@ pub fn hierarchy(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
                             egui::TextEdit::singleline(buffer)
                                 .desired_width(row_ui.available_width().max(60.0)),
                         );
-                        response.request_focus();
-                        let enter = ui.input(|input| input.key_pressed(egui::Key::Enter));
-                        if enter || response.lost_focus() {
+                        if state.rename_focus {
+                            response.request_focus();
+                            state.rename_focus = false;
+                        }
+                        let (enter, escape, clicked) = ui.input(|input| {
+                            (
+                                input.key_pressed(egui::Key::Enter),
+                                input.key_pressed(egui::Key::Escape),
+                                input.pointer.any_click(),
+                            )
+                        });
+                        // 点空白 / 点别处 = 提交（Unity 的行为），Esc = 放弃。
+                        let clicked_outside = clicked
+                            && ui
+                                .input(|input| input.pointer.interact_pos())
+                                .map(|pos| !row_rect.contains(pos))
+                                .unwrap_or(false);
+                        if escape {
+                            state.rename = None;
+                            state.rename_focus = false;
+                        } else if enter || clicked_outside || response.lost_focus() {
                             action = Some(TreeAction::CommitRename(index, buffer.clone()));
                         }
                     }
@@ -473,7 +499,10 @@ pub fn hierarchy(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
                 workspace.select(index, false);
                 workspace.duplicate_selection();
             }
-            TreeAction::BeginRename(index, name) => state.rename = Some((index, name)),
+            TreeAction::BeginRename(index, name) => {
+                state.rename = Some((index, name));
+                state.rename_focus = true;
+            }
             TreeAction::CommitRename(index, name) => {
                 let name = name.trim().to_string();
                 if !name.is_empty() {
@@ -833,12 +862,15 @@ pub fn assets(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
     ui.horizontal(|ui| {
         let can_back = state.asset_history_pos > 0;
         let can_forward = state.asset_history_pos + 1 < state.asset_history.len();
-        if ui.add_enabled(can_back, egui::Button::new("◀")).clicked() {
+        if ui
+            .add_enabled(can_back, egui::Button::new(icons::CARET_LEFT))
+            .clicked()
+        {
             state.asset_history_pos -= 1;
             state.asset_folder = state.asset_history[state.asset_history_pos].clone();
         }
         if ui
-            .add_enabled(can_forward, egui::Button::new("▶"))
+            .add_enabled(can_forward, egui::Button::new(icons::CARET_RIGHT))
             .clicked()
         {
             state.asset_history_pos += 1;
@@ -862,7 +894,11 @@ pub fn assets(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
             navigate_assets(state, &target);
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.small_button("⟳").on_hover_text("Refresh").clicked() {
+            if ui
+                .small_button(icons::ARROWS_CLOCKWISE)
+                .on_hover_text("Refresh")
+                .clicked()
+            {
                 workspace.refresh_project_files();
             }
         });
@@ -931,7 +967,10 @@ pub fn assets(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
         .auto_shrink([false, false])
         .show(ui, |ui| {
             if folder != "assets" {
-                if ui.selectable_label(false, "📁 ..").clicked() {
+                if ui
+                    .selectable_label(false, format!("{} ..", icons::FOLDER))
+                    .clicked()
+                {
                     let parent = folder.rsplit_once('/').map(|(p, _)| p.to_string());
                     if let Some(parent) = parent {
                         navigate_assets(state, &parent);
@@ -940,7 +979,11 @@ pub fn assets(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
             }
             let colors = workspace.colors();
             for path in &folders {
-                let label = format!("📁 {}", path.rsplit('/').next().unwrap_or(path));
+                let label = format!(
+                    "{} {}",
+                    icons::FOLDER,
+                    path.rsplit('/').next().unwrap_or(path)
+                );
                 if list_row(ui, &colors, false, &label).clicked() {
                     navigate_assets(state, path);
                 }
@@ -1099,10 +1142,10 @@ pub fn docs(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
         row_ui.add_space(6.0);
         row_ui.label(RichText::new(title).size(12.0).color(text_color));
         row_ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if flat_icon(ui, "×").clicked() {
+            if flat_icon(ui, icons::X).clicked() {
                 close = Some(index);
             }
-            if dirty && flat_icon(ui, "💾").clicked() {
+            if dirty && flat_icon(ui, icons::FLOPPY_DISK).clicked() {
                 save = Some(index);
             }
         });
@@ -1465,15 +1508,15 @@ pub fn build(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
                 changed = true;
             }
             ui.label(RichText::new(path).size(11.0));
-            if ui.small_button("↑").clicked() {
+            if ui.small_button(icons::ARROW_UP).clicked() {
                 workspace.move_scene_entry(index, -1);
                 changed = true;
             }
-            if ui.small_button("↓").clicked() {
+            if ui.small_button(icons::ARROW_DOWN).clicked() {
                 workspace.move_scene_entry(index, 1);
                 changed = true;
             }
-            if ui.small_button("×").clicked() {
+            if ui.small_button(icons::X).clicked() {
                 workspace.remove_scene_entry(index);
                 changed = true;
             }

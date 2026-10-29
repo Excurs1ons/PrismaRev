@@ -205,6 +205,9 @@ pub fn install_fonts(ctx: &egui::Context) {
 
     let mut fonts = egui::FontDefinitions::default();
     let mut loaded = 0;
+    // Phosphor Icons（MIT/Apache-2.0）作为图标字形，插在正文 UI 字体后面，
+    // 这样 `PLAY` / `EYE` / `FOLDER` 这些常量都能按文本直接画。
+    egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
 
     if let Some((path, bytes)) = first_existing(UI_SANS) {
         fonts.font_data.insert(
@@ -250,7 +253,6 @@ pub fn install_fonts(ctx: &egui::Context) {
 
     if loaded == 0 {
         log::debug!("no system fonts found; using egui built-in fonts");
-        return;
     }
     ctx.set_fonts(fonts);
 }

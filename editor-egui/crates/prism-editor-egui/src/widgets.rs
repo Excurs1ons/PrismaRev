@@ -5,6 +5,7 @@
 //! 这里。写回统一走 `Workspace::set_field`（反射校验 + 撤销合并）。
 
 use egui::Ui;
+use egui_phosphor::regular as icons;
 use prism_editor_core::{FieldSchema, FieldWidget, TypeSchema};
 use serde_json::Value;
 
@@ -43,14 +44,14 @@ pub fn component_card_with_assets(
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui
-                        .small_button("×")
+                        .small_button(icons::X)
                         .on_hover_text("Remove Component")
                         .clicked()
                     {
                         actions.push(CardAction::Remove(component.name.clone()));
                     }
                     if ui
-                        .small_button("📋")
+                        .small_button(icons::COPY)
                         .on_hover_text("Copy Component")
                         .clicked()
                     {

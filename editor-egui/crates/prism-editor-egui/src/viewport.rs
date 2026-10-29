@@ -164,8 +164,13 @@ impl ViewportState {
         if target.0 == 0 || target.1 == 0 {
             return Ok(());
         }
-        let current = self.host.renderer().extent();
-        if current.width == target.0 && current.height == target.1 {
+        let current = self
+            .host
+            .renderer()
+            .offscreen_extent()
+            .map(|extent| (extent.width, extent.height))
+            .unwrap_or_default();
+        if current == target {
             return Ok(());
         }
         self.host.resize(target.0, target.1)?;
@@ -190,8 +195,13 @@ impl ViewportState {
         let ppp = ui.ctx().pixels_per_point();
         self.extent = viewport_extent(rect.width(), rect.height(), ppp, scale);
         // 面板尺寸变化（splitter / 窗口 resize）必须重建离屏目标，否则图像会被拉伸。
-        let current = self.host.renderer().extent();
-        if (current.width, current.height) != self.extent {
+        let current = self
+            .host
+            .renderer()
+            .offscreen_extent()
+            .map(|extent| (extent.width, extent.height))
+            .unwrap_or_default();
+        if current != self.extent {
             self.dirty = true;
         }
 
@@ -292,7 +302,10 @@ impl ViewportState {
         // 3) gizmo / 选中标记。
         let mut document_changed = false;
         let frame = vm::camera_frame(&workspace.camera);
+        let mut icon_hits: Vec<(usize, egui::Pos2)> = Vec::new();
         if self.kind() == ViewKind::Scene {
+            // Unity 的 SceneView Gizmos：相机画视锥、光源画图标（点选图标 = 选中对象）。
+            icon_hits = self.draw_component_icons(&painter, rect, workspace, &frame);
             self.draw_gizmo(&painter, rect, workspace, &frame);
         }
 
@@ -475,9 +488,24 @@ impl ViewportState {
             if let Some(pos) = response.interact_pointer_pos() {
                 let local = local_of(pos);
                 if self.kind() == ViewKind::Scene {
-                    match pick(workspace, local, rect.size(), &frame) {
-                        Some(index) => workspace.select(index, false),
-                        None => workspace.clear_selection(),
+                    // 图标（相机 / 光源）比网格体优先命中，和 Unity 一致。
+                    let icon = icon_hits
+                        .iter()
+                        .map(|(index, center)| {
+                            let dx = local.0 - (center.x - rect.min.x);
+                            let dy = local.1 - (center.y - rect.min.y);
+                            (*index, (dx * dx + dy * dy).sqrt())
+                        })
+                        .filter(|(_, distance)| *distance <= 11.0)
+                        .min_by(|a, b| a.1.total_cmp(&b.1))
+                        .map(|(index, _)| index);
+                    if let Some(index) = icon {
+                        workspace.select(index, false);
+                    } else {
+                        match pick(workspace, local, rect.size(), &frame) {
+                            Some(index) => workspace.select(index, false),
+                            None => workspace.clear_selection(),
+                        }
                     }
                     self.dirty = true;
                 }
@@ -502,6 +530,241 @@ impl ViewportState {
         );
 
         ViewportResponse { document_changed }
+    }
+
+    /// Unity 的 SceneView Gizmos：相机画视锥、光源画图标与范围。
+    ///
+    /// 引擎只画实体本身（网格 / 光栅化结果），编辑器侧的「组件图标」由 egui 覆盖层
+    /// 画在视口图像上：世界坐标 → 屏幕坐标用和点选同一套 `vm::project`。
+    fn draw_component_icons(
+        &self,
+        painter: &egui::Painter,
+        rect: Rect,
+        workspace: &Workspace,
+        frame: &vm::CameraFrame,
+    ) -> Vec<(usize, egui::Pos2)> {
+        use egui::Color32;
+
+        const CAMERA: &str = "prism_engine::scene::Camera";
+        const LIGHT: &str = "prism_engine::scene::Light";
+        const POINT: &str = "prism_engine::scene::PointLight";
+        const SPOT: &str = "prism_engine::scene::SpotLight";
+        const DIRECTIONAL: &str = "prism_engine::scene::DirectionalLight";
+
+        fn number(
+            entity: &prism_editor_core::EntityJson,
+            component: &str,
+            field: &str,
+        ) -> Option<f32> {
+            entity
+                .component(component)
+                .and_then(|value| value.get(field))
+                .and_then(|value| value.as_f64())
+                .map(|value| value as f32)
+        }
+        fn color(entity: &prism_editor_core::EntityJson, component: &str, alpha: u8) -> Color32 {
+            let channel = |index: usize| {
+                entity
+                    .component(component)
+                    .and_then(|value| value.get("color"))
+                    .and_then(|value| value.get(index))
+                    .and_then(|value| value.as_f64())
+                    .unwrap_or(1.0)
+                    .clamp(0.0, 1.0) as f32
+            };
+            // 场景里的光是线性 RGB，图标按 sRGB 近似，暗光也保持可见。
+            let to_srgb = |c: f32| (c.max(0.05).powf(1.0 / 2.2) * 255.0).min(255.0) as u8;
+            Color32::from_rgba_unmultiplied(
+                to_srgb(channel(0)),
+                to_srgb(channel(1)),
+                to_srgb(channel(2)),
+                alpha,
+            )
+        }
+
+        let doc = &workspace.document().doc;
+        let (width, height) = (rect.width(), rect.height());
+        let world_len = vm::gizmo_world_length(&workspace.camera);
+        let mut hits = Vec::new();
+
+        for (index, entity) in doc.entities.iter().enumerate() {
+            if !entity.active() {
+                continue;
+            }
+            let is_camera = entity.has_component(CAMERA);
+            let is_light = entity.has_component(LIGHT)
+                || entity.has_component(POINT)
+                || entity.has_component(SPOT)
+                || entity.has_component(DIRECTIONAL);
+            if !is_camera && !is_light {
+                continue;
+            }
+            let position = vm::world_position(doc, index);
+            let Some((sx, sy, _)) = vm::project(position, frame, width, height) else {
+                continue;
+            };
+            let center = rect.min + egui::vec2(sx, sy);
+            if !rect.expand(48.0).contains(center) {
+                continue;
+            }
+            let selected = workspace.selection.contains(&index);
+            let alpha = if selected { 255 } else { 180 };
+            hits.push((index, center));
+
+            let rotation = vm::world_rotation(doc, index);
+            let basis = vm::basis_from_quat(rotation);
+            // 相机 / 聚光灯都看 -Z（与引擎的相机约定一致）。
+            let forward = [-basis[2][0], -basis[2][1], -basis[2][2]];
+            let stroke =
+                |color: Color32| egui::Stroke::new(if selected { 1.6_f32 } else { 1.1_f32 }, color);
+
+            if is_camera {
+                let color = Color32::from_rgba_unmultiplied(150, 185, 225, alpha);
+                // 视锥：fov 取相机组件，宽高比固定 16:9 近似（编辑器里只做示意）。
+                let fov = number(entity, CAMERA, "fov_y_degrees").unwrap_or(60.0);
+                let far = world_len * 1.4;
+                let hh = (fov.to_radians() * 0.5).tan() * far;
+                let hw = hh * 1.6;
+                let corner = |du: f32, dv: f32| {
+                    let point = [
+                        position[0]
+                            + forward[0] * far
+                            + basis[0][0] * hw * du
+                            + basis[1][0] * hh * dv,
+                        position[1]
+                            + forward[1] * far
+                            + basis[0][1] * hw * du
+                            + basis[1][1] * hh * dv,
+                        position[2]
+                            + forward[2] * far
+                            + basis[0][2] * hw * du
+                            + basis[1][2] * hh * dv,
+                    ];
+                    vm::project(point, frame, width, height)
+                        .map(|(x, y, _)| rect.min + egui::vec2(x, y))
+                };
+                let corners = [
+                    corner(-1.0, -1.0),
+                    corner(1.0, -1.0),
+                    corner(1.0, 1.0),
+                    corner(-1.0, 1.0),
+                ];
+                for corner in corners.iter().flatten() {
+                    painter.line_segment([center, *corner], stroke(color));
+                }
+                for pair in 0..4 {
+                    if let (Some(a), Some(b)) = (corners[pair], corners[(pair + 1) % 4]) {
+                        painter.line_segment([a, b], stroke(color));
+                    }
+                }
+                // 机身：一个小方框 + 镜头一侧的横线。
+                let body = egui::Rect::from_center_size(center, egui::vec2(11.0, 8.0));
+                painter.rect_filled(body, 0.0, Color32::from_rgba_unmultiplied(28, 34, 44, 220));
+                painter.rect_stroke(
+                    body,
+                    egui::CornerRadius::ZERO,
+                    stroke(color),
+                    egui::StrokeKind::Inside,
+                );
+                painter.line_segment(
+                    [body.right_top(), body.right_bottom()],
+                    stroke(Color32::from_rgba_unmultiplied(120, 200, 150, alpha)),
+                );
+                continue;
+            }
+
+            // ---- 光源 ----
+            let (light_type, component) = if entity.has_component(LIGHT) {
+                let kind = entity
+                    .component(LIGHT)
+                    .and_then(|value| value.get("light_type"))
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("Point");
+                let kind = match kind {
+                    "Directional" | "Sun" => 0,
+                    "Spot" => 2,
+                    _ => 1,
+                };
+                (kind, LIGHT)
+            } else if entity.has_component(DIRECTIONAL) {
+                (0, DIRECTIONAL)
+            } else if entity.has_component(SPOT) {
+                (2, SPOT)
+            } else {
+                (1, POINT)
+            };
+            let color = color(entity, component, alpha);
+            let radius = if selected { 7.5 } else { 6.0 };
+            match light_type {
+                0 => {
+                    // 平行光：中间太阳 + 8 条光线 + 指向。
+                    painter.circle_filled(center, radius, color);
+                    for step in 0..8 {
+                        let angle = step as f32 * std::f32::consts::TAU / 8.0;
+                        let dir = egui::vec2(angle.cos(), angle.sin());
+                        painter.line_segment(
+                            [center + dir * (radius + 2.0), center + dir * (radius + 6.0)],
+                            stroke(color),
+                        );
+                    }
+                    if let Some(tip) = vm::project(
+                        [
+                            position[0] + forward[0] * world_len * 1.2,
+                            position[1] + forward[1] * world_len * 1.2,
+                            position[2] + forward[2] * world_len * 1.2,
+                        ],
+                        frame,
+                        width,
+                        height,
+                    )
+                    .map(|(x, y, _)| rect.min + egui::vec2(x, y))
+                    {
+                        painter.line_segment([center + (tip - center) * 0.12, tip], stroke(color));
+                    }
+                }
+                2 => {
+                    // 聚光灯：圆 + 锥（外锥角的一半）。
+                    painter.circle_stroke(center, radius, stroke(color));
+                    let half = number(entity, component, "spot_angle")
+                        .or_else(|| {
+                            number(entity, component, "outer_cone_angle").map(f32::to_degrees)
+                        })
+                        .unwrap_or(60.0)
+                        .to_radians()
+                        * 0.5;
+                    let far = world_len * 1.2;
+                    for sign in [-1.0_f32, 1.0] {
+                        let (sin, cos) = (half * sign).sin_cos();
+                        let point = [
+                            position[0] + (forward[0] * cos + basis[0][0] * sin) * far,
+                            position[1] + (forward[1] * cos + basis[0][1] * sin) * far,
+                            position[2] + (forward[2] * cos + basis[0][2] * sin) * far,
+                        ];
+                        if let Some((x, y, _)) = vm::project(point, frame, width, height) {
+                            painter
+                                .line_segment([center, rect.min + egui::vec2(x, y)], stroke(color));
+                        }
+                    }
+                }
+                _ => {
+                    // 点光：圆 + 中心点 + 四个方向短线（Unity 的点光图标）。
+                    painter.circle_stroke(center, radius, stroke(color));
+                    painter.circle_filled(center, 2.0, color);
+                    for dir in [
+                        egui::vec2(0.0, -1.0),
+                        egui::vec2(0.0, 1.0),
+                        egui::vec2(-1.0, 0.0),
+                        egui::vec2(1.0, 0.0),
+                    ] {
+                        painter.line_segment(
+                            [center + dir * (radius + 2.0), center + dir * (radius + 5.0)],
+                            stroke(color),
+                        );
+                    }
+                }
+            }
+        }
+        hits
     }
 
     fn draw_gizmo(
