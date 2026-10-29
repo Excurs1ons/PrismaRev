@@ -1274,7 +1274,30 @@ impl EditorApp {
                     .add_enabled(!self.build_job_running(), egui::Button::new("Clean Build"))
                     .clicked()
                 {
-                    self.start_build(crate::build::BuildKind::Clean);
+                    // Unity 的 Clean Build 只清构建缓存 / 输出，不动引擎编译产物。
+                    self.state.confirm = Some(panels::Confirm::new(
+                        panels::ConfirmKind::CleanPlayer,
+                        "Clean Build",
+                        "清理玩家工程（projects/prisma）的编译产物，下次 Build 会全量重编。\n\
+                         不会动仓库根的引擎 target。",
+                        "Clean Player",
+                    ));
+                    ui.close();
+                }
+                if ui
+                    .add_enabled(
+                        !self.build_job_running(),
+                        egui::Button::new("Clean Engine Cache…"),
+                    )
+                    .clicked()
+                {
+                    self.state.confirm = Some(panels::Confirm::new(
+                        panels::ConfirmKind::CleanEngine,
+                        "Clean Engine Cache",
+                        "清理仓库根 workspace 的 target/（引擎 + 全部 crate 的编译产物，\n\
+                         通常几个 GB，重编需要十几分钟）。",
+                        "Clean Engine",
+                    ));
                     ui.close();
                 }
                 ui.separator();
@@ -2265,6 +2288,45 @@ impl EditorApp {
     // -----------------------------------------------------------------------
 
     /// 统一输入框：另存为 / 新建目录 / 存为预制体 / 重命名。
+    /// 破坏性操作的确认框（Unity 的 `EditorUtility.DisplayDialog`）。
+    fn confirm_dialog(&mut self, ctx: &egui::Context) {
+        let Some(confirm) = self.state.confirm.clone() else {
+            return;
+        };
+        let mut open = true;
+        let mut accepted = false;
+        let mut cancelled = false;
+        egui::Window::new(&confirm.title)
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.label(&confirm.message);
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button(confirm.ok.as_str()).clicked() {
+                        accepted = true;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        cancelled = true;
+                    }
+                });
+            });
+        if accepted {
+            self.state.confirm = None;
+            match confirm.kind {
+                panels::ConfirmKind::CleanPlayer => {
+                    self.start_build(crate::build::BuildKind::Clean)
+                }
+                panels::ConfirmKind::CleanEngine => {
+                    self.start_build(crate::build::BuildKind::CleanEngine)
+                }
+            }
+        } else if cancelled || !open {
+            self.state.confirm = None;
+        }
+    }
+
     fn prompt_dialog(&mut self, ctx: &egui::Context) {
         let Some(mut prompt) = self.state.prompt.clone() else {
             return;
@@ -2814,6 +2876,7 @@ impl App for EditorApp {
         self.floating_panels(ctx);
 
         self.prompt_dialog(ctx);
+        self.confirm_dialog(ctx);
 
         let mut about = self.state.about_open;
         panels::boolean_window(ctx, &mut about, "About", panels::about);

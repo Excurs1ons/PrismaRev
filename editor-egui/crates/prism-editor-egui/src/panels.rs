@@ -116,6 +116,37 @@ pub struct UiState {
     pub dragging: Option<usize>,
     pub drop_target: Option<(usize, DropZone)>,
     pub shortcuts_open: bool,
+    /// 待确认的破坏性操作（Unity 的 `EditorUtility.DisplayDialog`）。
+    pub confirm: Option<Confirm>,
+}
+
+/// 需要二次确认的破坏性操作。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfirmKind {
+    /// `File → Clean Build`：只清玩家 workspace 的 target。
+    CleanPlayer,
+    /// `File → Clean Engine Cache…`：清仓库根 workspace 的 target。
+    CleanEngine,
+}
+
+/// 一个待确认的对话框（Unity 的 `EditorUtility.DisplayDialog`）。
+#[derive(Clone)]
+pub struct Confirm {
+    pub kind: ConfirmKind,
+    pub title: String,
+    pub message: String,
+    pub ok: String,
+}
+
+impl Confirm {
+    pub fn new(kind: ConfirmKind, title: &str, message: impl Into<String>, ok: &str) -> Self {
+        Self {
+            kind,
+            title: title.to_string(),
+            message: message.into(),
+            ok: ok.to_string(),
+        }
+    }
 }
 
 /// 二级 / 三级菜单和对话框复用的输入框种类。

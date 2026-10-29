@@ -24,8 +24,13 @@ pub enum BuildKind {
     Player,
     /// `cargo run` 用户项目（Unity 的 Build And Run）。
     PlayerRun,
-    /// `cargo clean`（Unity 的 Clean Build）。
+    /// `cargo clean` 玩家工程（Unity 的 Clean Build）。
+    ///
+    /// 玩家是**独立 workspace**（`projects/<p>/target`），清理它才是 Clean Build 的本意；
+    /// 清仓库根的 `target/` 会连带删掉引擎和所有 crate 的产物，属于另一件事。
     Clean,
+    /// `cargo clean` 仓库根 workspace（引擎 + 全部 crate 的编译缓存）。
+    CleanEngine,
 }
 
 impl BuildKind {
@@ -35,7 +40,8 @@ impl BuildKind {
             BuildKind::Cook(path) => format!("cook {}", path.display()),
             BuildKind::Player => "cargo build".to_string(),
             BuildKind::PlayerRun => "build and run".to_string(),
-            BuildKind::Clean => "cargo clean".to_string(),
+            BuildKind::Clean => "cargo clean (player)".to_string(),
+            BuildKind::CleanEngine => "cargo clean (engine)".to_string(),
         }
     }
 }
@@ -62,7 +68,21 @@ impl BuildJob {
                     args.push(path.display().to_string());
                 }
                 BuildKind::Clean => {
-                    args = vec!["clean".into()];
+                    // 只清玩家 workspace 的 target；根 target 见 CleanEngine。
+                    args = vec![
+                        "clean".into(),
+                        "--manifest-path".into(),
+                        root.join("projects/prisma/Cargo.toml")
+                            .display()
+                            .to_string(),
+                    ];
+                }
+                BuildKind::CleanEngine => {
+                    args = vec![
+                        "clean".into(),
+                        "--manifest-path".into(),
+                        root.join("Cargo.toml").display().to_string(),
+                    ];
                 }
                 BuildKind::PlayerRun => {
                     args = vec![
