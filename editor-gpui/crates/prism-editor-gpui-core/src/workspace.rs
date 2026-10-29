@@ -25,6 +25,41 @@ use std::collections::HashSet;
 use std::io;
 use std::path::PathBuf;
 
+fn world_delta_to_parent_local(doc: &SceneDoc, index: usize, delta_world: [f32; 3]) -> [f32; 3] {
+    let parent = doc.entities[index]
+        .parent
+        .and_then(|parent_id| doc.index_of_id(parent_id));
+    let parent_rotation = parent
+        .map(|parent| world_rotation(doc, parent))
+        .unwrap_or(crate::viewport_math::IDENTITY_ROTATION);
+    let scale = parent
+        .map(|parent| world_scale(doc, parent))
+        .unwrap_or([1.0; 3]);
+    let unscaled = [
+        delta_world[0] / scale[0].abs().max(1e-6),
+        delta_world[1] / scale[1].abs().max(1e-6),
+        delta_world[2] / scale[2].abs().max(1e-6),
+    ];
+    let rotated = quat_rotate(quat_conjugate(parent_rotation), unscaled);
+    rotated
+}
+
+fn world_position_to_local(doc: &SceneDoc, index: usize, target_world: [f32; 3]) -> [f32; 3] {
+    let Some(parent) = doc.entities[index]
+        .parent
+        .and_then(|parent_id| doc.index_of_id(parent_id))
+    else {
+        return target_world;
+    };
+    let parent_position = world_position(doc, parent);
+    let delta = [
+        target_world[0] - parent_position[0],
+        target_world[1] - parent_position[1],
+        target_world[2] - parent_position[2],
+    ];
+    world_delta_to_parent_local(doc, index, delta)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DocKind {
     Scene,
@@ -1864,7 +1899,7 @@ impl Workspace {
         document.dirty = true;
     }
 
-    /// 绕世界轴旋转实体（旋转 gizmo）；四元数 `q_axis * q_old`，按实体合并撤销。
+    /// 绕 gizmo 轴旋转实体（旋转 gizmo）；按实体合并撤销。
     pub fn rotate_entity(&mut self, entity_id: u32, axis: usize, delta_radians: f32) {
         if !delta_radians.is_finite() || delta_radians.abs() < 1e-6 {
             return;
@@ -1873,9 +1908,18 @@ impl Workspace {
             return;
         };
         let before = self.document().doc.entities[index].transform;
-        // 世界空间：左乘（绕世界轴）；局部空间：右乘（绕实体自身轴）。
+        // 世界空间的旋转先换算到父级空间；否则旋转父级下的子实体会被父级
+        // 旋转再次偏转。局部空间仍然直接绕实体自身轴旋转。
         let after_rotation = match self.gizmo_space {
-            GizmoSpace::World => quat_mul(quat_axis_angle(axis, delta_radians), before.rotation),
+            GizmoSpace::World => {
+                let delta_world = quat_axis_angle(axis, delta_radians);
+                let parent_rotation = parent_world_rotation(&self.document().doc, index);
+                let parent_delta = quat_mul(
+                    quat_mul(quat_conjugate(parent_rotation), delta_world),
+                    parent_rotation,
+                );
+                quat_mul(parent_delta, before.rotation)
+            }
             GizmoSpace::Local => quat_mul(before.rotation, quat_axis_angle(axis, delta_radians)),
         };
         let after = TransformJson {
@@ -1901,24 +1945,62 @@ impl Workspace {
         ids.dedup();
         let space = self.gizmo_space;
         let doc = &self.document().doc;
+        let center = if space == GizmoSpace::World && ids.len() > 1 {
+            let mut center = [0.0; 3];
+            let mut count = 0.0;
+            for entity_id in &ids {
+                if let Some(index) = doc.index_of_id(*entity_id) {
+                    let position = world_position(doc, index);
+                    for axis in 0..3 {
+                        center[axis] += position[axis];
+                    }
+                    count += 1.0;
+                }
+            }
+            (count > 0.0).then(|| center.map(|value| value / count))
+        } else {
+            None
+        };
         let mut changes = Vec::new();
         for entity_id in &ids {
             let Some(index) = doc.index_of_id(*entity_id) else {
                 continue;
             };
             let before = doc.entities[index].transform;
+            let delta_world = quat_axis_angle(axis, delta_radians);
             let after_rotation = match space {
                 GizmoSpace::World => {
-                    quat_mul(quat_axis_angle(axis, delta_radians), before.rotation)
+                    let parent_rotation = parent_world_rotation(doc, index);
+                    let parent_delta = quat_mul(
+                        quat_mul(quat_conjugate(parent_rotation), delta_world),
+                        parent_rotation,
+                    );
+                    quat_mul(parent_delta, before.rotation)
                 }
                 GizmoSpace::Local => {
                     quat_mul(before.rotation, quat_axis_angle(axis, delta_radians))
                 }
             };
+            let after_position = center.map_or(before.position, |center| {
+                let world = world_position(doc, index);
+                let offset = [
+                    world[0] - center[0],
+                    world[1] - center[1],
+                    world[2] - center[2],
+                ];
+                let rotated = quat_rotate(delta_world, offset);
+                let target_world = [
+                    center[0] + rotated[0],
+                    center[1] + rotated[1],
+                    center[2] + rotated[2],
+                ];
+                world_position_to_local(doc, index, target_world)
+            });
             changes.push((
                 *entity_id,
                 before,
                 TransformJson {
+                    position: after_position,
                     rotation: quat_normalize(after_rotation),
                     ..before
                 },
@@ -1980,8 +2062,7 @@ impl Workspace {
         let Some(index) = self.document().doc.index_of_id(entity_id) else {
             return;
         };
-        let parent_rotation = parent_world_rotation(&self.document().doc, index);
-        let delta_local = quat_rotate(quat_conjugate(parent_rotation), delta_world);
+        let delta_local = world_delta_to_parent_local(&self.document().doc, index, delta_world);
         let before = self.document().doc.entities[index].transform;
         let mut after = before;
         for (position, delta) in after.position.iter_mut().zip(delta_local) {
@@ -2009,8 +2090,7 @@ impl Workspace {
             let Some(index) = doc.index_of_id(*entity_id) else {
                 continue;
             };
-            let parent_rotation = parent_world_rotation(doc, index);
-            let delta_local = quat_rotate(quat_conjugate(parent_rotation), delta_world);
+            let delta_local = world_delta_to_parent_local(doc, index, delta_world);
             let before = doc.entities[index].transform;
             let mut after = before;
             for (position, delta) in after.position.iter_mut().zip(delta_local) {
@@ -3173,6 +3253,92 @@ mod tests {
             );
         }
         assert!(workspace.can_undo());
+    }
+
+    #[test]
+    fn translate_entity_world_inverts_parent_scale_and_rotation() {
+        let mut workspace = Workspace::sample();
+        let parent = index_named(&workspace, "Cube");
+        let child = index_named(&workspace, "Detail");
+        workspace.document_mut().doc.entities[parent]
+            .transform
+            .scale = [2.0, 3.0, 4.0];
+        workspace.document_mut().doc.entities[parent]
+            .transform
+            .rotation = crate::viewport_math::quat_axis_angle(1, std::f32::consts::FRAC_PI_2);
+        let child_id = workspace.document().doc.entities[child].id.unwrap();
+        let before = crate::viewport_math::world_position(&workspace.document().doc, child);
+        let delta = [0.8, -1.2, 2.0];
+
+        workspace.translate_entity_world(child_id, delta);
+
+        let after = crate::viewport_math::world_position(&workspace.document().doc, child);
+        for axis in 0..3 {
+            assert!((after[axis] - before[axis] - delta[axis]).abs() < 1e-3);
+        }
+    }
+
+    #[test]
+    fn world_rotation_is_converted_through_parent_rotation() {
+        let mut workspace = Workspace::sample();
+        let parent = index_named(&workspace, "Cube");
+        let child = index_named(&workspace, "Detail");
+        workspace.document_mut().doc.entities[parent]
+            .transform
+            .rotation = crate::viewport_math::quat_axis_angle(1, std::f32::consts::FRAC_PI_2);
+        let child_id = workspace.document().doc.entities[child].id.unwrap();
+        let before = crate::viewport_math::world_rotation(&workspace.document().doc, child);
+        let delta = crate::viewport_math::quat_axis_angle(0, std::f32::consts::FRAC_PI_2);
+
+        workspace.rotate_entity(child_id, 0, std::f32::consts::FRAC_PI_2);
+
+        let after = crate::viewport_math::world_rotation(&workspace.document().doc, child);
+        let expected = crate::viewport_math::quat_mul(delta, before);
+        let expected_x = crate::viewport_math::quat_rotate(expected, [1.0, 0.0, 0.0]);
+        let actual_x = crate::viewport_math::quat_rotate(after, [1.0, 0.0, 0.0]);
+        for axis in 0..3 {
+            assert!((actual_x[axis] - expected_x[axis]).abs() < 1e-3);
+        }
+    }
+
+    #[test]
+    fn batch_world_rotation_moves_entities_around_selection_center() {
+        let mut workspace = Workspace::sample();
+        let cube = index_named(&workspace, "Cube");
+        let light = index_named(&workspace, "Directional Light");
+        let cube_id = workspace.document().doc.entities[cube].id.unwrap();
+        let light_id = workspace.document().doc.entities[light].id.unwrap();
+        let cube_before = crate::viewport_math::world_position(&workspace.document().doc, cube);
+        let light_before = crate::viewport_math::world_position(&workspace.document().doc, light);
+        let center = [
+            (cube_before[0] + light_before[0]) * 0.5,
+            (cube_before[1] + light_before[1]) * 0.5,
+            (cube_before[2] + light_before[2]) * 0.5,
+        ];
+
+        workspace.rotate_entities(&[cube_id, light_id], 1, std::f32::consts::FRAC_PI_2);
+
+        for (index, before) in [(cube, cube_before), (light, light_before)] {
+            let offset = [
+                before[0] - center[0],
+                before[1] - center[1],
+                before[2] - center[2],
+            ];
+            let rotated = crate::viewport_math::quat_rotate(
+                crate::viewport_math::quat_axis_angle(1, std::f32::consts::FRAC_PI_2),
+                offset,
+            );
+            let expected = [
+                center[0] + rotated[0],
+                center[1] + rotated[1],
+                center[2] + rotated[2],
+            ];
+            let actual = crate::viewport_math::world_position(&workspace.document().doc, index);
+            for axis in 0..3 {
+                assert!((actual[axis] - expected[axis]).abs() < 1e-3);
+            }
+        }
+        assert_eq!(workspace.document().undo.history().len(), 1);
     }
 
     #[test]
