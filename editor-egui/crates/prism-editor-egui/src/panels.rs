@@ -116,6 +116,15 @@ pub struct UiState {
     pub dragging: Option<usize>,
     pub drop_target: Option<(usize, DropZone)>,
     pub shortcuts_open: bool,
+    /// 等待用户回答的关闭请求（有未保存改动时才会出现）。
+    pub pending_close: Option<CloseTarget>,
+}
+
+/// 关闭前确认的目标：某个文档标签，或整个编辑器窗口。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CloseTarget {
+    Document(usize),
+    App,
 }
 
 /// 二级 / 三级菜单和对话框复用的输入框种类。
@@ -1187,6 +1196,21 @@ pub fn docs(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
         }
     }
     if let Some(index) = close {
+        request_close_document(workspace, state, index);
+    }
+}
+
+/// 关闭文档标签：有未保存改动时挂起，交给 `close_confirm_dialog` 询问；
+/// 干净的文档直接关闭（Unity 的行为）。
+pub fn request_close_document(workspace: &mut Workspace, state: &mut UiState, index: usize) {
+    let dirty = workspace
+        .docs
+        .get(index)
+        .map(|document| document.dirty)
+        .unwrap_or(false);
+    if dirty {
+        state.pending_close = Some(CloseTarget::Document(index));
+    } else {
         workspace.close_document(index);
     }
 }
@@ -1626,5 +1650,35 @@ pub fn boolean_window(
         .show(ctx, |ui| body(ui));
     if !visible {
         *open = false;
+    }
+}
+
+#[cfg(test)]
+mod close_guard_tests {
+    use super::*;
+
+    #[test]
+    fn dirty_document_close_is_deferred_until_confirmed() {
+        let mut workspace = Workspace::sample();
+        let mut state = UiState::new();
+        workspace.add_entity("");
+        let active = workspace.active_index();
+        assert!(workspace.document().dirty);
+
+        let count = workspace.docs.len();
+        request_close_document(&mut workspace, &mut state, active);
+
+        assert_eq!(workspace.docs.len(), count, "dirty document must stay open");
+        assert_eq!(state.pending_close, Some(CloseTarget::Document(active)));
+    }
+
+    #[test]
+    fn clean_document_close_is_not_deferred() {
+        let mut workspace = Workspace::sample();
+        let mut state = UiState::new();
+
+        request_close_document(&mut workspace, &mut state, 0);
+
+        assert!(state.pending_close.is_none());
     }
 }

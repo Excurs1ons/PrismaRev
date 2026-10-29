@@ -130,6 +130,13 @@ fn tab_title(tab: &str) -> &str {
     }
 }
 
+/// 关闭确认框的三个回答。
+enum CloseDecision {
+    Save,
+    Discard,
+    Cancel,
+}
+
 pub struct EditorApp {
     pub workspace: Workspace,
     pub state: UiState,
@@ -152,6 +159,8 @@ pub struct EditorApp {
     last_frame: Instant,
     playing: bool,
     paused: bool,
+    /// 控制协议 / 自动化请求退出：跳过未保存确认。
+    force_quit: bool,
     render_report: Option<String>,
     /// 命名布局（Window → Layouts）：name → DockLayout JSON。
     named_layouts: std::collections::BTreeMap<String, serde_json::Value>,
@@ -259,6 +268,7 @@ impl EditorApp {
             last_frame: Instant::now(),
             playing: false,
             paused: false,
+            force_quit: false,
             render_report: None,
             named_layouts,
             layouts_path,
@@ -703,13 +713,17 @@ impl EditorApp {
         Ok(format!("set {component}.{path}"))
     }
 
-    /// 请求退出。
+    /// 请求退出：有未保存改动时先弹确认，否则直接关窗口。
     ///
     /// `egui-ash` 的 `ExitSignal` 并没有接进事件循环（`run.rs` 里轮询它的那段是注释掉的），
     /// 唯一生效的路径是给根视口发 `Close`：winit 的 `CloseRequested` →
     /// `event_loop.exit()`。
-    fn request_quit(&self, ctx: &egui::Context) {
-        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+    fn request_quit(&mut self, ctx: &egui::Context) {
+        if self.workspace.docs.iter().any(|document| document.dirty) {
+            self.state.pending_close = Some(panels::CloseTarget::App);
+        } else {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
     }
 
     /// 一条控制命令 → 回执 JSON（`None` = 稍后由 `pending_captures` 回复）。
@@ -817,6 +831,8 @@ impl EditorApp {
                 }
             }
             "quit" => {
+                // 自动化路径（MCP / 脚本）要求确定性地退出，跳过未保存确认。
+                self.force_quit = true;
                 self.request_quit(ctx);
                 json!({ "ok": true })
             }
@@ -2360,6 +2376,114 @@ impl EditorApp {
         }
     }
 
+    /// 关闭未保存文档 / 窗口时的三选一确认（Unity 的 Save / Don't Save / Cancel）。
+    fn close_confirm_dialog(&mut self, ctx: &egui::Context) {
+        let Some(target) = self.state.pending_close else {
+            return;
+        };
+        let (message, detail) = match target {
+            panels::CloseTarget::Document(index) => {
+                let title = self
+                    .workspace
+                    .docs
+                    .get(index)
+                    .map(|document| document.title())
+                    .unwrap_or_else(|| "document".to_string());
+                (
+                    format!("{title} has unsaved changes."),
+                    "Close it anyway?".to_string(),
+                )
+            }
+            panels::CloseTarget::App => {
+                let count = self
+                    .workspace
+                    .docs
+                    .iter()
+                    .filter(|document| document.dirty)
+                    .count();
+                (
+                    format!("{count} document(s) have unsaved changes."),
+                    "Quit anyway?".to_string(),
+                )
+            }
+        };
+
+        let mut open = true;
+        let mut decision: Option<CloseDecision> = None;
+        egui::Window::new("Unsaved Changes")
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.label(message);
+                ui.label(egui::RichText::new(detail).weak());
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Save").clicked() {
+                        decision = Some(CloseDecision::Save);
+                    }
+                    if ui.button("Don't Save").clicked() {
+                        decision = Some(CloseDecision::Discard);
+                    }
+                    if ui.button("Cancel").clicked() {
+                        decision = Some(CloseDecision::Cancel);
+                    }
+                });
+            });
+
+        match decision {
+            Some(CloseDecision::Save) => match self.save_before_close(target) {
+                Ok(()) => self.finish_close(ctx, target),
+                Err(error) => self.state.status = format!("save failed: {error}"),
+            },
+            Some(CloseDecision::Discard) => self.finish_close(ctx, target),
+            Some(CloseDecision::Cancel) => self.state.pending_close = None,
+            None => {
+                // 标题栏的 × 等同 Cancel。
+                if !open {
+                    self.state.pending_close = None;
+                }
+            }
+        }
+    }
+
+    /// 保存关闭目标涉及的所有未保存文档；任一失败就保留确认框。
+    fn save_before_close(&mut self, target: panels::CloseTarget) -> Result<(), String> {
+        match target {
+            panels::CloseTarget::Document(index) => self
+                .workspace
+                .save_document(index)
+                .map(|path| {
+                    self.state.status = format!("saved {path}");
+                })
+                .map_err(|error| error.to_string()),
+            panels::CloseTarget::App => {
+                let mut failure: Option<String> = None;
+                for index in 0..self.workspace.docs.len() {
+                    if !self.workspace.docs[index].dirty {
+                        continue;
+                    }
+                    if let Err(error) = self.workspace.save_document(index) {
+                        failure = Some(error.to_string());
+                    }
+                }
+                failure.map_or(Ok(()), Err)
+            }
+        }
+    }
+
+    /// 确认后的真正关闭动作。
+    fn finish_close(&mut self, ctx: &egui::Context, target: panels::CloseTarget) {
+        self.state.pending_close = None;
+        match target {
+            panels::CloseTarget::Document(index) => self.workspace.close_document(index),
+            panels::CloseTarget::App => {
+                self.autosave_state();
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        }
+    }
+
     fn handle_shortcuts(&mut self, ctx: &egui::Context) {
         use egui::{Key, KeyboardShortcut, Modifiers};
         let shortcuts = [
@@ -2814,6 +2938,7 @@ impl App for EditorApp {
         self.floating_panels(ctx);
 
         self.prompt_dialog(ctx);
+        self.close_confirm_dialog(ctx);
 
         let mut about = self.state.about_open;
         panels::boolean_window(ctx, &mut about, "About", panels::about);
@@ -2823,9 +2948,14 @@ impl App for EditorApp {
         panels::boolean_window(ctx, &mut shortcuts, "Shortcuts", panels::shortcuts);
         self.state.shortcuts_open = shortcuts;
 
-        // 关闭窗口 = 退出（与游戏窗口一致的行为）。
+        // 关闭窗口 = 退出（与游戏窗口一致的行为）；有未保存改动时先拦截。
         if ctx.input(|input| input.viewport().close_requested()) {
-            self.exit_signal.send(std::process::ExitCode::SUCCESS);
+            if !self.force_quit && self.workspace.docs.iter().any(|document| document.dirty) {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                self.state.pending_close = Some(panels::CloseTarget::App);
+            } else {
+                self.exit_signal.send(std::process::ExitCode::SUCCESS);
+            }
         }
 
         self.autosave_state();
