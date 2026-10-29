@@ -1,0 +1,30 @@
+[package]
+name = "prism-editor-egui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "PrismaRev 的 egui 编辑器：Unity 风格布局 + Scene/Game 视口零拷贝"
+
+[[bin]]
+name = "prism-editor-egui"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+ash = { workspace = true }
+ash-window = { workspace = true }
+egui = { workspace = true }
+egui-ash = { workspace = true }
+env_logger = { workspace = true }
+glam = { workspace = true }
+gpu-allocator = { workspace = true }
+log = { workspace = true }
+raw-window-handle = { workspace = true }
+serde_json = { workspace = true }
+
+prism-render = { path = "../../../crates/prism-render" }
+prism-engine = { path = "../../../crates/prism-engine" }
+prism-scene = { path = "../../../crates/prism-scene" }
+# 数据层与 GPUI 编辑器共用（UI 框架无关）：dock 布局、文档模型、schema、
+# 撤销栈、日志缓冲、i18n、项目读写。
+prism-editor-core = { package = "prism-editor-gpui-core", path = "../../../editor-gpui/crates/prism-editor-gpui-core" }

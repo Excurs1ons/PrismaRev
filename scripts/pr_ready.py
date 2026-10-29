@@ -495,6 +495,49 @@ def editor_gpui_checks(changed: list[str], quick: bool) -> list[Check]:
     return [core, ui]
 
 
+def editor_egui_checks(changed: list[str], quick: bool) -> list[Check]:
+    """`editor-egui/` 是独立 workspace（egui + ash），只能在有 Vulkan 的桌面上运行。
+
+    Termux 上只做类型检查：它同时链接 `prism-render` / `prism-engine`，所以
+    根 workspace 的渲染 / 引擎改动也要复查一遍编辑器。
+    """
+    manifest = ROOT / "editor-egui" / "Cargo.toml"
+    check = Check(
+        "editor-egui check",
+        [
+            "cargo",
+            "check",
+            "--manifest-path",
+            str(manifest),
+            "--target",
+            "x86_64-pc-windows-gnu",
+        ],
+    )
+
+    touched = (
+        has_prefix(changed, "editor-egui/")
+        or has_prefix(changed, "crates/prism-render/")
+        or has_prefix(changed, "crates/prism-engine/")
+        or has_prefix(changed, "crates/prism-scene/")
+    )
+    if not touched:
+        check.status = "skip"
+        check.detail = "editor-egui untouched"
+        check.done = True
+        return [check]
+
+    code, installed = run(["rustup", "target", "list", "--installed"])
+    if code != 0 or "x86_64-pc-windows-gnu" not in installed:
+        check.status = "skip"
+        check.detail = "rustup target x86_64-pc-windows-gnu 未安装"
+        check.done = True
+    elif quick:
+        check.status = "skip"
+        check.detail = "quick mode"
+        check.done = True
+    return [check]
+
+
 # --------------------------------------------------------------------------- #
 # 主流程
 # --------------------------------------------------------------------------- #
@@ -560,6 +603,7 @@ def main() -> int:
     checks.append(shader_bindings_check(changed))
 
     checks.extend(editor_gpui_checks(changed, args.quick))
+    checks.extend(editor_egui_checks(changed, args.quick))
 
     if not args.quick:
         checks.append(editor_fixture_check(changed))
@@ -597,6 +641,8 @@ def main() -> int:
         elif check.name == "editor-gpui core tests" and check.status == "ok":
             check.detail = test_summary(check.output)
         elif check.name == "editor-gpui UI check" and check.status == "ok":
+            check.detail = "x86_64-pc-windows-gnu"
+        elif check.name == "editor-egui check" and check.status == "ok":
             check.detail = "x86_64-pc-windows-gnu"
 
         elif check.name.startswith("clippy (") and check.status == "ok":

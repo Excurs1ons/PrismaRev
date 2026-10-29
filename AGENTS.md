@@ -201,7 +201,28 @@ deviating from those conventions is a bug. (`README.md` is the human-facing over
       `LocalToWorld`，子级要等这一刻，否则重载后第一帧的高亮 / 点选会落在错误位置。
     - 不要在 `prism-app` / `prism-engine` 里加视口/面板概念；它们只提供
       「离屏渲染 + 帧读回」这一层通用能力。
-- `editor-gpui/` — **GPUI 原生编辑器壳**（Rust-only，独立 workspace，不挂根成员）：
+- `editor-egui/` — **egui 编辑器（当前主线）**，Rust-only、独立 workspace、不挂根成员：
+  菜单栏 / 主工具栏 / 状态栏 + split-tree docking（拖 splitter、tab 切换、浮动窗口）+
+  层级 / 检查器 / 资产 / 文档 / 日志 / 历史 / 设置类面板；数据层直接复用
+  `editor-gpui/crates/prism-editor-gpui-core`（不依赖 GPUI，只是历史命名）。
+  **Scene / Game 视图零拷贝**：`prism-render` 渲染到自己的离屏 `VkImage`，egui-ash 与
+  引擎共用同一个 `VkDevice` / 队列，`ImageRegistry::register_user_texture` 注册
+  `offscreen_image_view()` 后由 `painter.image()` 直接采样 —— 没有
+  `vkCmdCopyImageToBuffer`、没有 CPU 回读。
+  - 共享设备入口：`prism_render::context::create_host_instance` +
+    `VulkanContext::from_host`（`ContextOwnership::External`：**不销毁**宿主 device）；
+    `pick_host_physical_device` / `pick_present_queue_family` 负责「图形 + 呈现」。
+  - 帧结束必须调 `GraphRenderer::offscreen_present_for_sampling()`
+    （`PRESENT_SRC_KHR → SHADER_READ_ONLY_OPTIMAL`）再交给 egui；resize 走
+    `resize_offscreen` 并重新注册纹理 id（旧 id 先 unregister）。
+  - 编辑器**不建渲染线程**：`Engine` + `GraphRenderer` 跑在 egui-ash 事件循环线程上，
+    资产上传同步完成（`prepare_requests` → `apply_asset_requests` → `apply_results`）。
+    静止视口零 GPU 工作，只在文档 / 相机 / 选择 / resize / Play 时重渲染。
+  - Scene 与 Game 各持有一个引擎实例（相机互不干扰）；文档变化防抖 120ms 后两份
+    世界一起整场重载。
+  - 首版只做类型检查（本机 Termux + `--target x86_64-pc-windows-gnu`），**尚未在真实
+    Vulkan 设备上运行**；设计说明见 `docs/editor-egui.md`，用法见 `editor-egui/README.md`。
+- `editor-gpui/` — **GPUI 原生编辑器壳（已停止维护，legacy）**（Rust-only，独立 workspace，不挂根成员）：
   菜单/工具栏 + split-tree docking（含浮动窗口、8 方向 resize、磁吸；布局 JSON 与
   `editor/src/dock.ts` v4 同形）+ 层级/检查器（schema 驱动）/资产/日志（窗口化
   `uniform_list`）/文档/渲染图/设置面板 + Scene/Game View（默认是 `canvas` 的 CPU

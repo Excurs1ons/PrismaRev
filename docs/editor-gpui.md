@@ -1,7 +1,14 @@
-# GPUI 原生编辑器（`editor-gpui/`）
+# GPUI 原生编辑器（`editor-gpui/`）— 已停止维护
 
-> 状态：**可编译的类型检查 + 192 个数据层单测通过**；桌面运行尚未在 CI 上跑过
-> （GPUI 需要 Windows/macOS/Linux 桌面与 GPU）。
+> **状态：停止维护（legacy）。** 主线已切到 [`editor-egui/`](../editor-egui/README.md)
+> （egui + ash，Scene/Game 视口零拷贝，见 [`docs/editor-egui.md`](editor-egui.md)）。
+> GPUI 0.2.2 没有外部纹理导入入口（[#60572](https://github.com/zed-industries/zed/discussions/60572)
+> 仍是 proposal），只能 CPU 回读或原生 overlay，达不到零拷贝目标。
+>
+> 本目录仍然保留：`crates/prism-editor-gpui-core` 是 UI 框架无关的数据层，
+> `editor-egui` 直接依赖它。`editor/`（Tauri + Vue）仍是内容与发布的参考实现。
+>
+> 下面记录的是 GPUI 壳的实现与调研结论，供历史参考。
 >
 > 本文说明「为什么做、边界在哪、怎么接真实引擎」，功能清单见
 > [`editor-gpui/README.md`](../editor-gpui/README.md)。
