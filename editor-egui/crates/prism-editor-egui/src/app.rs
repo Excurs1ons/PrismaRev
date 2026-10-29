@@ -2814,6 +2814,7 @@ impl App for EditorApp {
         self.floating_panels(ctx);
 
         self.prompt_dialog(ctx);
+        panels::doc_delete_confirm(ctx, &mut self.workspace, &mut self.state);
 
         let mut about = self.state.about_open;
         panels::boolean_window(ctx, &mut about, "About", panels::about);

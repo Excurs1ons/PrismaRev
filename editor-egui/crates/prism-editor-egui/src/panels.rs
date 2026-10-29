@@ -116,6 +116,9 @@ pub struct UiState {
     pub dragging: Option<usize>,
     pub drop_target: Option<(usize, DropZone)>,
     pub shortcuts_open: bool,
+    /// 等待确认删除的场景 / 预制体（相对项目根路径）。删除不可撤销，
+    /// 资产面板与文档面板共用同一个确认框。
+    pub pending_doc_delete: Option<String>,
 }
 
 /// 二级 / 三级菜单和对话框复用的输入框种类。
@@ -1093,15 +1096,69 @@ pub fn assets(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
         ));
     }
     if let Some(path) = delete {
-        match workspace.delete_asset(&path) {
-            Ok(()) => {
-                if state.asset_selection.as_deref() == Some(path.as_str()) {
-                    state.asset_selection = None;
+        if is_document_path(&path) {
+            // 场景 / 预制体走同一个确认框（`Workspace::delete_asset` 会拒绝它们）。
+            state.pending_doc_delete = Some(path);
+        } else {
+            match workspace.delete_asset(&path) {
+                Ok(()) => {
+                    if state.asset_selection.as_deref() == Some(path.as_str()) {
+                        state.asset_selection = None;
+                    }
+                    state.status = format!("deleted {path}");
                 }
-                state.status = format!("deleted {path}");
+                Err(error) => state.status = format!("delete failed: {error}"),
             }
-            Err(error) => state.status = format!("delete failed: {error}"),
         }
+    }
+}
+
+fn is_document_path(path: &str) -> bool {
+    path.ends_with(".scene.json") || path.ends_with(".prefab.json")
+}
+
+/// 删除场景 / 预制体前的确认框：删磁盘文件 + 关标签 + 清 `scenes.toml`。
+pub fn doc_delete_confirm(ctx: &egui::Context, workspace: &mut Workspace, state: &mut UiState) {
+    let Some(path) = state.pending_doc_delete.clone() else {
+        return;
+    };
+    let mut decision = None;
+    egui::Window::new("Delete Document")
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
+        .show(ctx, |ui| {
+            ui.label(format!("Delete {path}?"));
+            ui.label(
+                RichText::new(
+                    "The file, its open tab and its Build Settings entry are removed. This cannot be undone.",
+                )
+                .weak(),
+            );
+            ui.horizontal(|ui| {
+                if ui.button("Delete").clicked() {
+                    decision = Some(true);
+                }
+                if ui.button("Cancel").clicked() {
+                    decision = Some(false);
+                }
+            });
+        });
+    match decision {
+        Some(true) => {
+            match workspace.delete_document(&path) {
+                Ok(()) => {
+                    if state.asset_selection.as_deref() == Some(path.as_str()) {
+                        state.asset_selection = None;
+                    }
+                    state.status = format!("deleted {path}");
+                }
+                Err(error) => state.status = format!("delete failed: {error}"),
+            }
+            state.pending_doc_delete = None;
+        }
+        Some(false) => state.pending_doc_delete = None,
+        None => {}
     }
 }
 
@@ -1123,6 +1180,7 @@ pub fn docs(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
     let mut activate: Option<usize> = None;
     let mut close: Option<usize> = None;
     let mut save: Option<usize> = None;
+    let mut delete_doc: Option<String> = None;
     let count = workspace.docs.len();
     for index in 0..count {
         let title = workspace.docs[index].title_with_dirty();
@@ -1176,6 +1234,15 @@ pub fn docs(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
         if row.clicked() {
             activate = Some(index);
         }
+        // 文档行右键：删除磁盘文件（资产面板拒绝直接删文档，入口收在这里）。
+        if let Some(path) = workspace.docs[index].path.clone() {
+            row.context_menu(|ui| {
+                if ui.button("Delete…").clicked() {
+                    delete_doc = Some(path);
+                    ui.close();
+                }
+            });
+        }
     }
     if let Some(index) = activate {
         workspace.set_active(index);
@@ -1188,6 +1255,9 @@ pub fn docs(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
     }
     if let Some(index) = close {
         workspace.close_document(index);
+    }
+    if let Some(path) = delete_doc {
+        state.pending_doc_delete = Some(path);
     }
 }
 
