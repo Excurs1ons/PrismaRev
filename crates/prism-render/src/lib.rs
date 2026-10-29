@@ -58,6 +58,7 @@ pub mod offscreen;
 pub mod pipeline;
 pub mod plugin;
 pub mod post;
+pub mod primitives;
 pub mod probe_loader;
 pub mod pt_pass;
 pub mod render_graph;

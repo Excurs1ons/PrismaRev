@@ -93,7 +93,39 @@ pub fn entity_presets() -> Vec<EntityPreset> {
         p
     };
 
+    // Unity `GameObject → 3D Object` 的等价物：`mesh_path` 指内置程序化网格
+    // （`prism_render::primitives`），不读 `.pak`、不需要 cook。
+    let primitive = |id: &str, label: &str, name: &str, mesh: &str, position: [f32; 3]| {
+        let mut p = preset(
+            id,
+            label,
+            name,
+            &[
+                "prism_engine::scene::MeshRenderer",
+                "prism_engine::scene::Active",
+            ],
+            position,
+        );
+        p.overrides.insert(
+            "prism_engine::scene::MeshRenderer".to_string(),
+            json!({ "mesh_path": format!("__builtin/{mesh}") }),
+        );
+        p
+    };
+
     vec![
+        primitive("cube", "立方体", "Cube", "box", [0.0, 0.5, 0.0]),
+        primitive("sphere", "球体", "Sphere", "sphere", [0.0, 0.5, 0.0]),
+        primitive(
+            "cylinder",
+            "圆柱体",
+            "Cylinder",
+            "cylinder",
+            [0.0, 0.5, 0.0],
+        ),
+        primitive("capsule", "胶囊体", "Capsule", "capsule", [0.0, 1.0, 0.0]),
+        primitive("quad", "四边形", "Quad", "quad", [0.0, 0.0, 0.0]),
+        primitive("plane", "平面", "Plane", "quad", [0.0, 0.0, 0.0]),
         preset("empty", "空实体", "entity", &[], [0.0, 0.0, 0.0]),
         preset(
             "camera",

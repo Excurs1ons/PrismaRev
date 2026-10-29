@@ -17,21 +17,46 @@ use crate::context::VulkanContext;
 /// Owns a dedicated 命令 池 (created from
 /// [`VulkanContext::graphics_queue_family`]) so it can submit 清空 + 复制
 /// operations without borrowing a 池 from another subsystem.
-pub(crate) struct OffscreenTarget {
-    pub image: vk::Image,
+///
+/// 编辑器宿主模式用它实现**零拷贝**视口：帧结束时把图像转到
+/// `SHADER_READ_ONLY_OPTIMAL`，再把 [`image_view`](Self::image_view) 交给
+/// UI 框架采样（`egui-ash` 的 `ImageRegistry`、wgpu 的 native texture ……），
+/// 不需要 `TRANSFER_SRC` 回读。
+pub struct OffscreenTarget {
+    image: vk::Image,
     image_memory: vk::DeviceMemory,
-    pub image_view: vk::ImageView,
+    image_view: vk::ImageView,
     command_pool: vk::CommandPool,
     buffer: vk::Buffer,
     buffer_memory: vk::DeviceMemory,
     readback_cmd: Option<vk::CommandBuffer>,
     readback_fence: Option<vk::Fence>,
-    pub extent: vk::Extent2D,
-    pub(crate) format: vk::Format,
+    extent: vk::Extent2D,
+    format: vk::Format,
 }
 
 impl OffscreenTarget {
     const FORMAT: vk::Format = vk::Format::R8G8B8A8_UNORM;
+
+    /// 图像句柄（布局在帧结束后为 `PRESENT_SRC_KHR`，调用
+    /// [`transition_to_shader_read`](Self::transition_to_shader_read) 后为
+    /// `SHADER_READ_ONLY_OPTIMAL`）。
+    pub fn image(&self) -> vk::Image {
+        self.image
+    }
+
+    /// 可直接注册进 UI 框架纹理表的视图（`R8G8B8A8_UNORM`，mip 1）。
+    pub fn image_view(&self) -> vk::ImageView {
+        self.image_view
+    }
+
+    pub fn extent(&self) -> vk::Extent2D {
+        self.extent
+    }
+
+    pub fn format(&self) -> vk::Format {
+        self.format
+    }
 
     /// 创建 the offscreen 图像 a host-visible readback 缓冲区 and a
     /// dedicated 命令 池
@@ -63,6 +88,7 @@ impl OffscreenTarget {
                     .tiling(vk::ImageTiling::OPTIMAL)
                     .usage(
                         vk::ImageUsageFlags::COLOR_ATTACHMENT
+                            | vk::ImageUsageFlags::SAMPLED
                             | vk::ImageUsageFlags::TRANSFER_DST
                             | vk::ImageUsageFlags::TRANSFER_SRC,
                     ),
@@ -263,6 +289,68 @@ impl OffscreenTarget {
 
     /// Copy the current offscreen image contents to the host-visible readback buffer
     /// without clearing. Afterwards call [`readback`](Self::readback).
+    /// 把帧结束后的图像从 `current_layout` 转到 `SHADER_READ_ONLY_OPTIMAL`，
+    /// 供 UI 框架采样（零拷贝视口）。提交并等待完成，随后可以安全地交给
+    /// 另一个命令缓冲区（同一队列）读取。
+    pub fn transition_to_shader_read(
+        &mut self,
+        context: &VulkanContext,
+        current_layout: vk::ImageLayout,
+    ) -> anyhow::Result<()> {
+        if current_layout == vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL {
+            return Ok(());
+        }
+        let device = &context.device;
+
+        let alloc_info = vk::CommandBufferAllocateInfo::default()
+            .command_pool(self.command_pool)
+            .level(vk::CommandBufferLevel::PRIMARY)
+            .command_buffer_count(1);
+        let cmd = unsafe { device.allocate_command_buffers(&alloc_info) }
+            .context("allocate offscreen sample-layout cmd buffer")?[0];
+
+        let result = (|| -> anyhow::Result<()> {
+            let begin_info = vk::CommandBufferBeginInfo::default()
+                .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+            unsafe { device.begin_command_buffer(cmd, &begin_info) }
+                .context("begin offscreen sample-layout cmd buffer")?;
+
+            image_barrier(
+                device,
+                cmd,
+                self.image,
+                current_layout,
+                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                vk::AccessFlags::COLOR_ATTACHMENT_WRITE | vk::AccessFlags::MEMORY_WRITE,
+                vk::AccessFlags::SHADER_READ,
+                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+                    | vk::PipelineStageFlags::ALL_COMMANDS,
+                vk::PipelineStageFlags::FRAGMENT_SHADER,
+            );
+
+            unsafe { device.end_command_buffer(cmd) }
+                .context("end offscreen sample-layout cmd buffer")?;
+
+            let fence_info = vk::FenceCreateInfo::default();
+            let fence = unsafe { device.create_fence(&fence_info, None) }
+                .context("create sample-layout fence")?;
+            let cmd_bufs = [cmd];
+            let submit = vk::SubmitInfo::default().command_buffers(&cmd_bufs);
+            let submitted =
+                unsafe { device.queue_submit(context.graphics_queue, &[submit], fence) }
+                    .context("submit offscreen sample-layout barrier");
+            if submitted.is_ok() {
+                unsafe { device.wait_for_fences(&[fence], true, u64::MAX) }
+                    .context("wait for sample-layout fence")?;
+            }
+            unsafe { device.destroy_fence(fence, None) };
+            submitted
+        })();
+
+        unsafe { device.free_command_buffers(self.command_pool, &[cmd]) };
+        result
+    }
+
     pub fn copy_to_readback(
         &mut self,
         context: &VulkanContext,

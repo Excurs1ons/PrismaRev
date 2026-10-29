@@ -496,7 +496,32 @@ impl GraphRenderer {
 
     /// 离屏渲染目标的尺寸（无窗口宿主模式）；有交换链时返回 `None`。
     pub fn offscreen_extent(&self) -> Option<ash::vk::Extent2D> {
-        self.offscreen.as_ref().map(|target| target.extent)
+        self.offscreen.as_ref().map(|target| target.extent())
+    }
+
+    /// 离屏颜色图像视图（`R8G8B8A8_UNORM`）。帧结束后先调用
+    /// [`Self::offscreen_present_for_sampling`]，再把它注册成 UI 纹理。
+    pub fn offscreen_image_view(&self) -> Option<ash::vk::ImageView> {
+        self.offscreen.as_ref().map(|target| target.image_view())
+    }
+
+    /// 离屏颜色图像的格式。
+    pub fn offscreen_image_format(&self) -> Option<ash::vk::Format> {
+        self.offscreen.as_ref().map(|target| target.format())
+    }
+
+    /// 把帧结束后的离屏图像转到 `SHADER_READ_ONLY_OPTIMAL` 并等待 GPU
+    /// 完成，供 UI 框架直接采样（零拷贝视口）。
+    ///
+    /// `present` 之后图像停留在 `PRESENT_SRC_KHR`；下一次帧的 PostPass 用
+    /// `initial_layout = UNDEFINED`（load op clear），因此从任何布局回来都合法。
+    pub fn offscreen_present_for_sampling(&mut self) -> anyhow::Result<()> {
+        let context = self.runtime.context.clone();
+        let target = self
+            .offscreen
+            .as_mut()
+            .context("offscreen_present_for_sampling: no OffscreenTarget")?;
+        target.transition_to_shader_read(&context, ash::vk::ImageLayout::PRESENT_SRC_KHR)
     }
 
     // ── headless 众数 ──────────────────────────────────────────────
@@ -522,8 +547,26 @@ impl GraphRenderer {
         env_bytes: Option<Vec<u8>>,
     ) -> anyhow::Result<Self> {
         let context = Arc::new(VulkanContext::new(&[])?);
+        Self::offscreen_new_with_context(context, width, height, env_bytes)
+    }
+
+    /// Like [`Self::offscreen_new`], but on a **host-provided** context.
+    ///
+    /// This is the zero-copy host path: the editor creates the `VkDevice`
+    /// (shared with its UI framework via [`VulkanContext::from_host`]) and the
+    /// renderer draws into its own offscreen image. After each frame
+    /// [`Self::offscreen_present_for_sampling`] turns that image into a
+    /// `SHADER_READ_ONLY_OPTIMAL` texture and
+    /// [`Self::offscreen_image_view`] hands it to the UI framework —
+    /// no `vkCmdCopyImageToBuffer` / CPU round-trip.
+    pub fn offscreen_new_with_context(
+        context: Arc<VulkanContext>,
+        width: u32,
+        height: u32,
+        env_bytes: Option<Vec<u8>>,
+    ) -> anyhow::Result<Self> {
         let offscreen = OffscreenTarget::new(&context, width, height)?;
-        let color_format = offscreen.format;
+        let color_format = offscreen.format();
 
         let fence_info = vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED);
         let headless_fence = unsafe { context.device.create_fence(&fence_info, None) }
@@ -620,7 +663,7 @@ impl GraphRenderer {
             .context("ForwardPass::set_resources (headless)")?;
 
         let gtao_pass =
-            crate::gtao::GtaoPass::new(&context, runtime.command_pool, offscreen.extent)
+            crate::gtao::GtaoPass::new(&context, runtime.command_pool, offscreen.extent())
                 .context("GtaoPass::new (headless)")?;
 
         let frame_count = 2u32;
@@ -652,7 +695,7 @@ impl GraphRenderer {
         graph.add_pass(Box::new(forward_pass));
         if let Some(forward_pass) = graph.pass_mut::<ForwardPass>() {
             forward_pass.set_image_count(1);
-            forward_pass.set_target(&context.device, &context, 1, 0, offscreen.extent)?;
+            forward_pass.set_target(&context.device, &context, 1, 0, offscreen.extent())?;
         }
         graph.add_pass(Box::new(gtao_pass));
         graph.add_pass(Box::new(rt_scheduler));
@@ -663,9 +706,9 @@ impl GraphRenderer {
         if let Some(post_pass) = graph.pass_mut::<crate::post::PostPass>() {
             post_pass.set_target(
                 &context.device,
-                std::slice::from_ref(&offscreen.image_view),
+                std::slice::from_ref(&offscreen.image_view()),
                 0,
-                offscreen.extent,
+                offscreen.extent(),
             )?;
         }
 
@@ -1319,7 +1362,7 @@ impl GraphRenderer {
         let Some(target) = self.offscreen.as_ref() else {
             return Ok(());
         };
-        if target.extent.width == width && target.extent.height == height {
+        if target.extent().width == width && target.extent().height == height {
             return Ok(());
         }
 
@@ -1339,14 +1382,14 @@ impl GraphRenderer {
 
         let context = self.runtime.context.clone();
         let fresh = OffscreenTarget::new(&context, width, height)?;
-        let extent = fresh.extent;
+        let extent = fresh.extent();
         if let Some(mut old) = self.offscreen.replace(fresh) {
             unsafe { old.destroy(&context.device) };
         }
         let view = self
             .offscreen
             .as_ref()
-            .map(|target| target.image_view)
+            .map(|target| target.image_view())
             .unwrap_or(vk::ImageView::null());
 
         if let Some(forward_pass) = self.graph.pass_mut::<ForwardPass>() {
@@ -1415,7 +1458,7 @@ impl GraphRenderer {
             let extent = self
                 .offscreen
                 .as_ref()
-                .map(|o| o.extent)
+                .map(|o| o.extent())
                 .unwrap_or(vk::Extent2D {
                     width: 256,
                     height: 256,
@@ -1562,7 +1605,7 @@ impl GraphRenderer {
                 .pass_mut::<crate::gtao::GtaoPass>()
                 .map(|g| g.ao_view((frame as u32 + 1) % 2))
                 .unwrap_or_else(vk::ImageView::null);
-            let offscreen_views = self.offscreen.as_ref().map(|o| [o.image_view]);
+            let offscreen_views = self.offscreen.as_ref().map(|o| [o.image_view()]);
             let swapchain_views: &[vk::ImageView] = match (&self.swapchain, &offscreen_views) {
                 (Some(sw), _) => sw.views.as_slice(),
                 (None, Some(ov)) => ov.as_slice(),
