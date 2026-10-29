@@ -12,6 +12,26 @@ use serde_json::Value;
 use crate::{theme, widgets};
 use egui_phosphor::regular as icons;
 
+/// 资产类型 → Phosphor 图标。
+///
+/// Unity 的 Project 窗口按类型换图标；之前这里直接写 `AssetKind::label()`
+/// 的中文类别词（"模型" / "数据" / "包"…），窄面板下会和文件名挤在一起，
+/// 看起来像乱码。
+fn asset_kind_icon(kind: AssetKind) -> &'static str {
+    match kind {
+        AssetKind::Model => icons::CUBE,
+        AssetKind::Texture => icons::IMAGE,
+        AssetKind::Env => icons::GLOBE,
+        AssetKind::Scene => icons::TREE_STRUCTURE,
+        AssetKind::Prefab => icons::PACKAGE,
+        AssetKind::Package => icons::ARCHIVE_BOX,
+        AssetKind::Material => icons::PALETTE,
+        AssetKind::Audio => icons::MUSIC_NOTES,
+        AssetKind::Data => icons::FILE_TEXT,
+        AssetKind::Other => icons::FILE,
+    }
+}
+
 /// 列表行（Unity / Web 风格）：整行底色 + 文本，用于资产 / 文档这类列表。
 fn list_row(
     ui: &mut Ui,
@@ -917,7 +937,11 @@ pub fn assets(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
             AssetKind::Material,
         ] {
             let enabled = workspace.asset_query.kinds.contains(&kind);
-            if ui.selectable_label(enabled, kind.label()).clicked() {
+            if ui
+                .selectable_label(enabled, asset_kind_icon(kind))
+                .on_hover_text(kind.label())
+                .clicked()
+            {
                 workspace.toggle_asset_kind(kind);
             }
         }
@@ -992,7 +1016,7 @@ pub fn assets(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
                 let selected = state.asset_selection.as_deref() == Some(path.as_str());
                 let label = format!(
                     "{} {}",
-                    kind.label(),
+                    asset_kind_icon(*kind),
                     path.rsplit('/').next().unwrap_or(path)
                 );
                 let drag_id = egui::Id::new(("asset-drag", path.as_str()));
