@@ -268,6 +268,20 @@ Unity 形状的编辑器，又不会把 `prism-render` 绑死在某套 UI 生命
      external memory（需要引擎侧导出 dmabuf / NT handle / IOSurface）；
   3. 只接受 macOS 的 `CVPixelBuffer` 路径（引擎需要 IOSurface external memory）。
   没有现成的 `gpui_interop` 依赖可以直接加。
+- **同类问题的现状（2026-10 调研）**：
+  | 方案 | 状态 |
+  |---|---|
+  | Zed 上游 `external compositor`（[#60572](https://github.com/zed-industries/zed/discussions/60572) / PR #60573） | 仅有 proposal + fork `0xCarbon/zed/external-compositor`，Wayland + RADV 验证过 zero-copy；未合入 0.2.2，且目标树是拆分后的 `gpui_wgpu` |
+  | [wgpui](https://github.com/nestrilabs/wgpui)（GPUI-CE 的 wgpu + winit fork） | 已有 `WgpuSurface`：双缓冲 `wgpu::Texture`，外部渲染器写 `back_buffer_view()` 后 `present()`，合成器直接采样，无 CPU 拷贝 |
+  | `mdeand/gpui-wgpu` | 同样提供 `WgpuSurface` / 外部渲染集成 |
+  | gpui-native 的 fork | 有 leased external surface（WebGPU canvas），但明确不是 Windows 零拷贝；GPU 拷贝路径 |
+  | longbridge/gpui-kit [#3168](https://github.com/longbridge/gpui-kit/issues/3168) | 仍在请求稳定 seam，下游靠 patch fork |
+  | [wgpu-graft](https://github.com/merely-made/wgpu-graft) / `wgpu-native-texture-interop` | 提供 Vulkan image / dmabuf / IOSurface / DX12 shared texture → wgpu 的导入；其 GPUI demo 仍走 CPU 回读，因为公开 GPUI 不暴露设备 |
+  OS 层原语本身都成熟：Windows 用 D3D12 shared NT handle ↔ `VK_KHR_external_memory_win32`（同适配器、共享 fence / keyed mutex）；Linux 用 dmabuf + `VK_KHR_external_memory_fd` / DRM format modifier + sync_file；macOS 用 IOSurface（MoltenVK `VK_EXT_metal_objects`）；Android 用 AHardwareBuffer。难点在 GPUI 侧没有导入入口，以及格式/tiling/同步/适配器兼容。
+- 对 PrismaRev 来说，`prism-render` 是 ash Vulkan：
+  1. 继续用 GPUI 0.2.2 → 只能 CPU 回读或原生 overlay surface；
+  2. 迁到 wgpui / wgpu-based fork → 引擎需要 wgpu 设备，或在 wgpu 侧用 external memory 导入 Vulkan image（GPU→GPU 拷贝一次，仍无 CPU 回读）；
+  3. 跟进 0xCarbon/zed 的 external compositor → 要先升级到拆分后的 GPUI 树，成本最大。
 - 原生 surface（Windows owner popup + 输入转发）仍是可选的下一步，离屏图像路线已经覆盖
   跨平台需求。
 
