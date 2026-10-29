@@ -1704,6 +1704,22 @@ impl Workspace {
         let Some(component) = self.schema.component(component_name) else {
             return;
         };
+        // 已挂着的组件再点一次不能静默重置成默认值（Unity 里它根本不出现在菜单里）。
+        if self
+            .document()
+            .doc
+            .entities
+            .get(index)
+            .map(|entity| entity.has_component(component_name))
+            .unwrap_or(false)
+        {
+            self.log(
+                LogSource::Editor,
+                LogLevel::Warn,
+                format!("{} 已有该组件，未做修改", component.display_name()),
+            );
+            return;
+        }
         let name = component.name.clone();
         let value = component_value_with_overrides(&component.default_value(), None);
         self.edit("添加组件", |document| {
@@ -3468,6 +3484,24 @@ mod tests {
         assert!(workspace.document().doc.entities[1].has_component("prism_engine::scene::Camera"));
         workspace.remove_component("prism_engine::scene::Camera");
         assert!(!workspace.document().doc.entities[1].has_component("prism_engine::scene::Camera"));
+    }
+
+    #[test]
+    fn add_component_does_not_reset_an_attached_component() {
+        let mut workspace = Workspace::load_fixture(&fixture());
+        workspace.select(0, false);
+        let path = "prism_engine::scene::Camera";
+        workspace.set_field(1, path, "fov_y_degrees", json!(30.0));
+        let undo_before = workspace.undo_history().len();
+
+        // 再「添加」一次：不能把调好的参数重置成默认值，也不该产生撤销步。
+        workspace.add_component(path);
+
+        assert_eq!(
+            workspace.document().doc.entities[0].components[path]["fov_y_degrees"],
+            json!(30.0)
+        );
+        assert_eq!(workspace.undo_history().len(), undo_before);
     }
 
     #[test]
