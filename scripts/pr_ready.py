@@ -502,6 +502,10 @@ def editor_egui_checks(changed: list[str], quick: bool) -> list[Check]:
     根 workspace 的渲染 / 引擎改动也要复查一遍编辑器。
     """
     manifest = ROOT / "editor-egui" / "Cargo.toml"
+    tests = Check(
+        "editor-egui tests",
+        ["cargo", "test", "--manifest-path", str(manifest)],
+    )
     check = Check(
         "editor-egui check",
         [
@@ -521,21 +525,23 @@ def editor_egui_checks(changed: list[str], quick: bool) -> list[Check]:
         or has_prefix(changed, "crates/prism-scene/")
     )
     if not touched:
-        check.status = "skip"
-        check.detail = "editor-egui untouched"
-        check.done = True
-        return [check]
+        for item in (tests, check):
+            item.status = "skip"
+            item.detail = "editor-egui untouched"
+            item.done = True
+        return [tests, check]
 
     code, installed = run(["rustup", "target", "list", "--installed"])
     if code != 0 or "x86_64-pc-windows-gnu" not in installed:
         check.status = "skip"
         check.detail = "rustup target x86_64-pc-windows-gnu 未安装"
         check.done = True
-    elif quick:
-        check.status = "skip"
-        check.detail = "quick mode"
-        check.done = True
-    return [check]
+    if quick:
+        for item in (tests, check):
+            item.status = "skip"
+            item.detail = "quick mode"
+            item.done = True
+    return [tests, check]
 
 
 # --------------------------------------------------------------------------- #
@@ -644,6 +650,8 @@ def main() -> int:
             check.detail = "x86_64-pc-windows-gnu"
         elif check.name == "editor-egui check" and check.status == "ok":
             check.detail = "x86_64-pc-windows-gnu"
+        elif check.name == "editor-egui tests" and check.status == "ok":
+            check.detail = test_summary(check.output)
 
         elif check.name.startswith("clippy (") and check.status == "ok":
             check.detail = "-D warnings"

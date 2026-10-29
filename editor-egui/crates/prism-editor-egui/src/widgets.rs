@@ -23,12 +23,14 @@ pub enum CardAction {
 /// 一个组件卡片：标题栏 + 字段列表 + 复制/删除按钮。
 ///
 /// `set(field, value)` 由调用方决定写到哪个实体（单选 / 多选批量）。
-pub fn component_card(
+/// 同 [`component_card`]，但路径字段带资产选择器。
+pub fn component_card_with_assets(
     ui: &mut Ui,
     component: &TypeSchema,
     value: &Value,
     actions: &mut Vec<CardAction>,
     set: &mut dyn FnMut(&str, Value),
+    assets: &[String],
 ) {
     egui::Frame::group(ui.style())
         .inner_margin(egui::Margin::symmetric(6, 4))
@@ -66,7 +68,7 @@ pub fn component_card(
                 if field.name == "type_id" {
                     continue;
                 }
-                field_row(ui, field, field_value, set);
+                field_row_with_assets(ui, field, field_value, set, assets);
             }
             let _ = &component;
         });
@@ -74,11 +76,39 @@ pub fn component_card(
 
 /// 单个字段的编辑控件。`set(field, value)` 写回（单选走 `set_field`，
 /// 多选走 `set_field_multi`），所以这里不关心实体。
-pub fn field_row(
+/// 资产字段的扩展名过滤（Unity 的 object field 只列可接受的类型）。
+fn asset_filter(name: &str) -> Option<&'static [&'static str]> {
+    if name.contains("mesh") {
+        Some(&["obj", "gltf", "glb", "fbx", "mesh"])
+    } else if name.contains("sprite") || name.contains("texture") || name.ends_with("_tex") {
+        Some(&["png", "jpg", "jpeg", "ktx2", "dds"])
+    } else if name.contains("hdr") || name.contains("env") {
+        Some(&["hdr", "exr"])
+    } else if name.contains("volume") || name.contains("prefab") {
+        Some(&["json"])
+    } else if name.ends_with("_path") {
+        Some(&[])
+    } else {
+        None
+    }
+}
+
+fn asset_matches(name: &str, path: &str) -> bool {
+    match asset_filter(name) {
+        Some([]) | None => true,
+        Some(extensions) => extensions
+            .iter()
+            .any(|extension| path.to_lowercase().ends_with(&format!(".{extension}"))),
+    }
+}
+
+/// 带资产选择器的字段行（路径字段右侧多一个 `⋯` 按钮，列出 `assets` 里的候选）。
+pub fn field_row_with_assets(
     ui: &mut Ui,
     field: &FieldSchema,
     value: &Value,
     set: &mut dyn FnMut(&str, Value),
+    assets: &[String],
 ) {
     let widget = field.widget();
     let label = field.label();
@@ -150,6 +180,29 @@ pub fn field_row(
                 if looks_like_asset {
                     if let Some(payload) = response.dnd_release_payload::<AssetDrag>() {
                         set(&name, Value::String(payload.path.clone()));
+                    }
+                    let mut picked: Option<String> = None;
+                    ui.menu_button("⋯", |ui| {
+                        egui::ScrollArea::vertical()
+                            .id_salt((name.clone(), "asset-picker"))
+                            .max_height(260.0)
+                            .show(ui, |ui| {
+                                if assets.is_empty() {
+                                    ui.label(egui::RichText::new("no assets").weak().size(10.0));
+                                }
+                                for path in assets {
+                                    if !asset_matches(&name, path) {
+                                        continue;
+                                    }
+                                    if ui.selectable_label(current == *path, path).clicked() {
+                                        picked = Some(path.clone());
+                                        ui.close();
+                                    }
+                                }
+                            });
+                    });
+                    if let Some(path) = picked {
+                        set(&name, Value::String(path));
                     }
                 }
             });

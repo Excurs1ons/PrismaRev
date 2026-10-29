@@ -122,6 +122,9 @@ instance / device 并返回 `AshRenderState`，因此可以做到 Unity 的模�
 - **分辨率倍率**：渲染图面板里的 `Viewport res`（0.5×–1.5×）只缩放离屏目标，
   不改变 UI 的 points 布局，给高 DPI 屏 / 弱 GPU 一个折中。
 - **多选拖拽**：拖多选中的任一行且落在行的中间区 = `reparent_selection` 整组改父级。
+- **资产选择器**：检查器的路径字段右侧有 `⋯` 按钮，按字段名过滤扩展名
+  （`mesh_path` → 模型、`sprite_path` → 贴图、`hdr_path`/`env_map` → HDR…），
+  选中的相对路径直接写入字段。
 
 ## 5. 与另外两个编辑器的关系
 

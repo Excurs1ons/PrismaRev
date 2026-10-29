@@ -1771,3 +1771,23 @@ fn read_report(root: Option<&Path>) -> Option<String> {
     let path = root.join("target/prism-render-graph.json");
     std::fs::read_to_string(path).ok()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rect() -> Rect {
+        Rect::from_min_size(egui::pos2(100.0, 100.0), egui::vec2(400.0, 300.0))
+    }
+
+    #[test]
+    fn dock_zone_uses_quarter_bands() {
+        use prism_editor_core::dock::DockZone;
+        let rect = rect();
+        assert_eq!(dock_zone(rect, egui::pos2(110.0, 250.0)), DockZone::Left);
+        assert_eq!(dock_zone(rect, egui::pos2(490.0, 250.0)), DockZone::Right);
+        assert_eq!(dock_zone(rect, egui::pos2(300.0, 110.0)), DockZone::Top);
+        assert_eq!(dock_zone(rect, egui::pos2(300.0, 390.0)), DockZone::Bottom);
+        assert_eq!(dock_zone(rect, egui::pos2(300.0, 250.0)), DockZone::Center);
+    }
+}

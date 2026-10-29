@@ -576,6 +576,11 @@ fn inspector_single(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState,
         .map(|(name, value)| (name.clone(), value.clone()))
         .collect();
     let filter = state.inspector_search.to_lowercase();
+    let asset_paths: Vec<String> = workspace
+        .assets
+        .iter()
+        .map(|asset| asset.path.clone())
+        .collect();
     let mut actions: Vec<widgets::CardAction> = Vec::new();
     for (name, value) in components {
         if name == "prism_engine::scene::Active" {
@@ -595,7 +600,14 @@ fn inspector_single(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState,
         let mut set = |field: &str, value: Value| {
             workspace.set_field(entity_id, &schema.name, field, value);
         };
-        widgets::component_card(ui, &schema, &value, &mut actions, &mut set);
+        widgets::component_card_with_assets(
+            ui,
+            &schema,
+            &value,
+            &mut actions,
+            &mut set,
+            &asset_paths,
+        );
     }
     for action in actions {
         match action {
@@ -653,6 +665,11 @@ fn inspector_multi(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState, 
             Some((component.name.clone(), value))
         })
         .collect();
+    let asset_paths: Vec<String> = workspace
+        .assets
+        .iter()
+        .map(|asset| asset.path.clone())
+        .collect();
     let mut actions: Vec<widgets::CardAction> = Vec::new();
     for (name, value) in values {
         let Some(schema) = workspace.schema.component(&name).cloned() else {
@@ -661,7 +678,14 @@ fn inspector_multi(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState, 
         let mut set = |field: &str, value: Value| {
             workspace.set_field_multi(&ids, &schema.name, field, value);
         };
-        widgets::component_card(ui, &schema, &value, &mut actions, &mut set);
+        widgets::component_card_with_assets(
+            ui,
+            &schema,
+            &value,
+            &mut actions,
+            &mut set,
+            &asset_paths,
+        );
     }
     for action in actions {
         match action {

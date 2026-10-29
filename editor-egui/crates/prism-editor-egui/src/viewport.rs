@@ -28,6 +28,18 @@ struct ViewportTexture {
     id: egui::TextureId,
 }
 
+/// 离屏目标尺寸：points × pixels_per_point × 倍率，夹在 `1..=4096`。
+///
+/// `scale` 是「渲染分辨率倍率」：高 DPI 屏上可以降到 0.5–1.0 省 GPU，
+/// 只影响离屏目标大小，不影响 UI 布局的 points 尺寸。
+pub fn viewport_extent(width: f32, height: f32, ppp: f32, scale: f32) -> (u32, u32) {
+    let scale = scale.clamp(0.25, 2.0);
+    (
+        ((width * ppp * scale).round() as u32).clamp(1, 4096),
+        ((height * ppp * scale).round() as u32).clamp(1, 4096),
+    )
+}
+
 /// Unity 的 W / E / R 工具。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum GizmoTool {
@@ -176,13 +188,7 @@ impl ViewportState {
     ) -> ViewportResponse {
         let rect = ui.available_rect_before_wrap();
         let ppp = ui.ctx().pixels_per_point();
-        // `scale` 是「渲染分辨率倍率」：高 DPI 屏上可以降到 0.5–1.0 省 GPU，
-        // 只影响离屏目标大小，不影响 UI 布局的 points 尺寸。
-        let scale = scale.clamp(0.25, 2.0);
-        self.extent = (
-            ((rect.width() * ppp * scale).round() as u32).clamp(1, 4096),
-            ((rect.height() * ppp * scale).round() as u32).clamp(1, 4096),
-        );
+        self.extent = viewport_extent(rect.width(), rect.height(), ppp, scale);
         // 面板尺寸变化（splitter / 窗口 resize）必须重建离屏目标，否则图像会被拉伸。
         let current = self.host.renderer().extent();
         if (current.width, current.height) != self.extent {
@@ -595,4 +601,24 @@ fn pick(
     frame: &vm::CameraFrame,
 ) -> Option<usize> {
     vm::pick_entity(point, frame, size.x, size.y, &proxies(workspace))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extent_follows_scale_and_dpi() {
+        assert_eq!(viewport_extent(800.0, 600.0, 1.0, 1.0), (800, 600));
+        assert_eq!(viewport_extent(800.0, 600.0, 2.0, 1.0), (1600, 1200));
+        assert_eq!(viewport_extent(800.0, 600.0, 1.0, 0.5), (400, 300));
+    }
+
+    #[test]
+    fn extent_clamps_degenerate_input() {
+        assert_eq!(viewport_extent(0.0, 0.0, 1.0, 1.0), (1, 1));
+        assert_eq!(viewport_extent(9000.0, 9000.0, 1.0, 2.0), (4096, 4096));
+        // 倍率本身也被夹在 0.25..=2.0。
+        assert_eq!(viewport_extent(100.0, 100.0, 1.0, 0.0), (25, 25));
+    }
 }
