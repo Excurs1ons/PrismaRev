@@ -116,6 +116,10 @@ pub struct UiState {
     pub dragging: Option<usize>,
     pub drop_target: Option<(usize, DropZone)>,
     pub shortcuts_open: bool,
+    /// 最后点过的面板（Unity 的 `focusedWindow`）：快捷键按它分派。
+    pub focused_panel: Option<String>,
+    /// 等待确认删除的资产路径。
+    pub pending_asset_delete: Option<String>,
 }
 
 /// 二级 / 三级菜单和对话框复用的输入框种类。
@@ -1093,15 +1097,60 @@ pub fn assets(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
         ));
     }
     if let Some(path) = delete {
-        match workspace.delete_asset(&path) {
-            Ok(()) => {
-                if state.asset_selection.as_deref() == Some(path.as_str()) {
-                    state.asset_selection = None;
-                }
-                state.status = format!("deleted {path}");
+        request_delete_asset(workspace, state, &path);
+    }
+    asset_delete_confirm(ui, workspace, state);
+}
+
+/// 删除资产：按首选项决定是否先弹确认框。
+pub fn request_delete_asset(workspace: &mut Workspace, state: &mut UiState, path: &str) {
+    if state.pending_asset_delete.is_some() {
+        return;
+    }
+    state.pending_asset_delete = Some(path.to_string());
+    let _ = workspace;
+}
+
+/// 真正执行删除（确认框 / 关闭确认后调用）。
+pub fn delete_asset_now(workspace: &mut Workspace, state: &mut UiState, path: &str) {
+    match workspace.delete_asset(path) {
+        Ok(()) => {
+            if state.asset_selection.as_deref() == Some(path) {
+                state.asset_selection = None;
             }
-            Err(error) => state.status = format!("delete failed: {error}"),
+            state.status = format!("deleted {path}");
         }
+        Err(error) => state.status = format!("delete failed: {error}"),
+    }
+}
+
+/// 资产删除确认框（绘制在资产面板内，使用全局 `ctx`）。
+pub fn asset_delete_confirm(ui: &Ui, workspace: &mut Workspace, state: &mut UiState) {
+    let Some(path) = state.pending_asset_delete.clone() else {
+        return;
+    };
+    let mut confirmed = false;
+    let mut cancelled = false;
+    egui::Window::new("Delete Asset")
+        .collapsible(false)
+        .resizable(false)
+        .show(ui.ctx(), |ui| {
+            ui.label(format!("删除 {path}？此操作不可撤销。"));
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                if ui.button("Delete").clicked() {
+                    confirmed = true;
+                }
+                if ui.button("Cancel").clicked() {
+                    cancelled = true;
+                }
+            });
+        });
+    if confirmed {
+        state.pending_asset_delete = None;
+        delete_asset_now(workspace, state, &path);
+    } else if cancelled {
+        state.pending_asset_delete = None;
     }
 }
 

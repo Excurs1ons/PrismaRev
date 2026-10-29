@@ -948,6 +948,49 @@ impl EditorApp {
         self.state.status = "project saved".to_string();
     }
 
+    /// 资产面板的 Delete：按首选项决定是否先确认。
+    fn request_asset_delete(&mut self) {
+        let Some(path) = self.state.asset_selection.clone() else {
+            self.state.status = "no asset selected".to_string();
+            return;
+        };
+        if self.preferences.confirm_delete {
+            panels::request_delete_asset(&mut self.workspace, &mut self.state, &path);
+        } else {
+            panels::delete_asset_now(&mut self.workspace, &mut self.state, &path);
+        }
+    }
+
+    /// 资产面板的 Ctrl+D。
+    fn duplicate_selected_asset(&mut self) {
+        let Some(path) = self.state.asset_selection.clone() else {
+            self.state.status = "no asset selected".to_string();
+            return;
+        };
+        match self.workspace.duplicate_asset(&path) {
+            Ok(created) => {
+                self.state.asset_selection = Some(created.clone());
+                self.state.status = format!("duplicated {path} → {created}");
+            }
+            Err(error) => self.state.status = format!("duplicate failed: {error}"),
+        }
+    }
+
+    /// 资产面板的 F2。
+    fn rename_selected_asset_prompt(&mut self) {
+        let Some(path) = self.state.asset_selection.clone() else {
+            self.state.status = "no asset selected".to_string();
+            return;
+        };
+        let name = path.rsplit('/').next().unwrap_or(&path).to_string();
+        self.open_prompt(
+            panels::PromptKind::RenameAsset,
+            "Rename Asset",
+            "新文件名（含扩展名）",
+            name,
+        );
+    }
+
     fn create_empty_parent(&mut self) {
         let parents: Vec<usize> = self.workspace.selection.clone();
         if parents.is_empty() {
@@ -2147,6 +2190,10 @@ impl EditorApp {
 
     fn panel_body(&mut self, ui: &mut egui::Ui, tab: &str, rect: Rect) {
         self.panel_rects.insert(tab.to_owned(), rect);
+        // Unity 的 focusedWindow：点过哪个面板，快捷键就作用在哪个面板上。
+        if ui.rect_contains_pointer(rect) && ui.input(|input| input.pointer.any_click()) {
+            self.state.focused_panel = Some(tab.to_owned());
+        }
         // 调试开关：完全跳过引擎 / 用户纹理注册，用来区分「UI 自身的渲染问题」与
         // 「引擎离屏图像注册进来的问题」（无窗口/软件 Vulkan 时排查用）。
         let no_viewport = std::env::var("PRISMREV_EDITOR_NO_VIEWPORT").is_ok();
@@ -2500,6 +2547,11 @@ impl EditorApp {
             }
         }
 
+        // Unity 的快捷键跟着焦点面板走：在资产面板按 Delete 不能删场景实体。
+        let focus = self.state.focused_panel.clone().unwrap_or_default();
+        let assets_focused = focus == "assets";
+        let inspector_focused = focus == "inspector";
+
         for (shortcut, command) in shortcuts {
             if ctx.input_mut(|input| input.consume_shortcut(&shortcut)) {
                 // 纯字母 / Delete 这类快捷键只在没有文本控件聚焦时生效。
@@ -2510,12 +2562,54 @@ impl EditorApp {
                 if wants_keyboard && plain {
                     continue;
                 }
+                if assets_focused {
+                    match command {
+                        Command::DeleteSelection => {
+                            self.request_asset_delete();
+                            continue;
+                        }
+                        Command::DuplicateEntity => {
+                            self.duplicate_selected_asset();
+                            continue;
+                        }
+                        // 资产面板里的复制 / 剪切 / 粘贴 / 全选暂时没有资产语义，
+                        // 绝不能落到场景实体上。
+                        Command::CopyEntity
+                        | Command::CutEntity
+                        | Command::PasteEntity
+                        | Command::SelectAll => continue,
+                        _ => {}
+                    }
+                }
+                if inspector_focused
+                    && matches!(
+                        command,
+                        Command::DeleteSelection
+                            | Command::DuplicateEntity
+                            | Command::CopyEntity
+                            | Command::CutEntity
+                            | Command::PasteEntity
+                    )
+                {
+                    continue;
+                }
                 self.apply_command(command);
                 if matches!(command, Command::FrameSelection) {
                     if let Some(view) = self.scene_view.as_mut() {
                         view.mark_dirty();
                     }
                 }
+            }
+        }
+
+        // Unity 的 F2：重命名当前面板里的选中项。
+        if !wants_keyboard && ctx.input(|input| input.key_pressed(egui::Key::F2)) {
+            if assets_focused {
+                self.rename_selected_asset_prompt();
+            } else if let Some(index) = self.workspace.primary_selection() {
+                let name = self.workspace.document().doc.entities[index].display_name();
+                self.state.rename = Some((index, name));
+                self.state.rename_focus = true;
             }
         }
     }
