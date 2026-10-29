@@ -8,6 +8,12 @@ use egui::Ui;
 use prism_editor_core::{FieldSchema, FieldWidget, TypeSchema};
 use serde_json::Value;
 
+/// 资产拖拽载荷：从 Project 面板拖到层级 / 检查器字段 / 目录。
+#[derive(Clone, Debug)]
+pub struct AssetDrag {
+    pub path: String,
+}
+
 /// 组件卡片上的按钮动作（先收集，渲染结束后由调用方应用）。
 pub enum CardAction {
     Copy(String),
@@ -134,8 +140,17 @@ pub fn field_row(
             let mut current = value.as_str().unwrap_or_default().to_string();
             ui.horizontal(|ui| {
                 ui.label(label);
-                if ui.text_edit_singleline(&mut current).changed() {
+                let response = ui.text_edit_singleline(&mut current);
+                if response.changed() {
                     set(&name, Value::String(current.clone()));
+                }
+                // Unity 的「把资产拖到对象字段」：路径类字段接受资产拖放。
+                let looks_like_asset = name.ends_with("_path")
+                    || matches!(name.as_str(), "prefab" | "env_map" | "volume" | "mesh");
+                if looks_like_asset {
+                    if let Some(payload) = response.dnd_release_payload::<AssetDrag>() {
+                        set(&name, Value::String(payload.path.clone()));
+                    }
                 }
             });
         }

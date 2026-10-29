@@ -21,6 +21,23 @@ use crate::theme;
 use crate::viewport::{ImageBridge, ViewportState};
 
 /// 面板 tab 的英文标题（i18n 字典里也有，这里直接用英文，避免依赖字体）。
+/// 鼠标落在 leaf 的哪个区域（Unity 的分屏 / 合并判定）。
+fn dock_zone(rect: Rect, pos: egui::Pos2) -> prism_editor_core::dock::DockZone {
+    let fx = (pos.x - rect.left()) / rect.width().max(1.0);
+    let fy = (pos.y - rect.top()) / rect.height().max(1.0);
+    if fx < 0.25 {
+        prism_editor_core::dock::DockZone::Left
+    } else if fx > 0.75 {
+        prism_editor_core::dock::DockZone::Right
+    } else if fy < 0.25 {
+        prism_editor_core::dock::DockZone::Top
+    } else if fy > 0.75 {
+        prism_editor_core::dock::DockZone::Bottom
+    } else {
+        prism_editor_core::dock::DockZone::Center
+    }
+}
+
 fn tab_title(tab: &str) -> &str {
     match tab {
         "sceneView" => "Scene",
@@ -1077,6 +1094,7 @@ impl EditorApp {
         // tab bar
         let mut activate: Option<String> = None;
         let mut float: Option<String> = None;
+        let mut begin_drag: Option<String> = None;
         child.horizontal(|ui| {
             for tab in tabs {
                 let selected = tab == active;
@@ -1084,6 +1102,9 @@ impl EditorApp {
                 let response = ui.selectable_label(selected, RichText::new(title).size(11.5));
                 if response.clicked() {
                     activate = Some(tab.clone());
+                }
+                if response.drag_started() {
+                    begin_drag = Some(tab.clone());
                 }
                 response.context_menu(|ui| {
                     if tabs.len() > 1 && ui.button("Float panel").clicked() {
@@ -1104,11 +1125,91 @@ impl EditorApp {
         body_ui.set_clip_rect(body);
         self.panel_body(&mut body_ui, active, body);
 
+        if let Some(tab) = begin_drag {
+            self.state.tab_drag = Some((tab, leaf_id.to_string()));
+        }
+
+        // 拖拽标签到本 leaf 的边缘 = 分屏；中间 = 合并成标签页。
+        if let Some((drag_tab, source)) = self.state.tab_drag.clone() {
+            let pointer = ui.input(|input| input.pointer.hover_pos());
+            if let Some(pos) = pointer {
+                if rect.contains(pos) {
+                    let zone = dock_zone(rect, pos);
+                    if zone != prism_editor_core::dock::DockZone::Center || source != leaf_id {
+                        self.state.tab_drop = Some((leaf_id.to_string(), zone, 0.5));
+                        let preview = match zone {
+                            prism_editor_core::dock::DockZone::Center => rect.shrink(4.0),
+                            prism_editor_core::dock::DockZone::Left => Rect::from_min_max(
+                                rect.min,
+                                egui::pos2(rect.center().x, rect.max.y),
+                            ),
+                            prism_editor_core::dock::DockZone::Right => Rect::from_min_max(
+                                egui::pos2(rect.center().x, rect.min.y),
+                                rect.max,
+                            ),
+                            prism_editor_core::dock::DockZone::Top => Rect::from_min_max(
+                                rect.min,
+                                egui::pos2(rect.max.x, rect.center().y),
+                            ),
+                            prism_editor_core::dock::DockZone::Bottom => Rect::from_min_max(
+                                egui::pos2(rect.min.x, rect.center().y),
+                                rect.max,
+                            ),
+                        };
+                        ui.painter().rect_filled(
+                            preview,
+                            egui::CornerRadius::ZERO,
+                            egui::Color32::from_rgba_unmultiplied(80, 140, 230, 48),
+                        );
+                        ui.painter().rect_stroke(
+                            preview,
+                            egui::CornerRadius::ZERO,
+                            egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(90, 160, 240)),
+                            egui::StrokeKind::Inside,
+                        );
+                        let _ = &drag_tab;
+                    }
+                }
+            }
+        }
+
         if let Some(tab) = activate {
             self.workspace.activate_panel(leaf_id, &tab);
         }
         if let Some(tab) = float {
             self.workspace.float_panel(&tab, 260.0, 160.0);
+        }
+    }
+
+    /// 松手：把拖动的标签页停靠到目标 leaf（分屏 / 合并），拖到面板区外则浮动。
+    fn finish_tab_drag(&mut self, ctx: &egui::Context) {
+        if !ctx.input(|input| input.pointer.any_released()) {
+            self.state.tab_drop = None;
+            return;
+        }
+        let Some((tab, source)) = self.state.tab_drag.take() else {
+            self.state.tab_drop = None;
+            return;
+        };
+        match self.state.tab_drop.take() {
+            Some((target, zone, ratio)) => {
+                if target != source || zone != prism_editor_core::dock::DockZone::Center {
+                    let dock = prism_editor_core::dock::insert_panel(
+                        &self.workspace.dock,
+                        &target,
+                        &tab,
+                        zone,
+                        ratio,
+                        None,
+                    );
+                    self.workspace.dock = dock;
+                }
+            }
+            None => {
+                if let Some(pos) = ctx.input(|input| input.pointer.interact_pos()) {
+                    self.workspace.float_panel(&tab, pos.x, pos.y);
+                }
+            }
         }
     }
 
@@ -1536,6 +1637,7 @@ impl App for EditorApp {
             .frame(egui::Frame::new().inner_margin(egui::Margin::same(2)))
             .show(ctx, |ui| self.dock_tree(ui));
 
+        self.finish_tab_drag(ctx);
         self.floating_panels(ctx);
 
         self.prompt_dialog(ctx);

@@ -34,6 +34,10 @@ pub struct UiState {
     pub asset_folder: String,
     pub asset_history: Vec<String>,
     pub asset_history_pos: usize,
+    /// 正在拖的 docking 标签页：(tab, 源 leaf id)。
+    pub tab_drag: Option<(String, String)>,
+    /// 拖拽落点：(目标 leaf id, 区域, 比例)。
+    pub tab_drop: Option<(String, prism_editor_core::dock::DockZone, f32)>,
     /// 层级拖拽：正在拖的实体下标 + 悬停目标。
     pub dragging: Option<usize>,
     pub drop_target: Option<(usize, DropZone)>,
@@ -138,6 +142,8 @@ pub fn hierarchy(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
     let rows = workspace.document().doc.visible_rows(&expanded);
     let filter = state.hierarchy_search.to_lowercase();
     let mut action: Option<TreeAction> = None;
+    // 资产拖到实体上 = 实例化预制体（Unity 的 Project → Hierarchy 拖拽）。
+    let mut asset_drop: Option<(usize, String)> = None;
 
     egui::ScrollArea::vertical()
         .id_salt("hierarchy-scroll")
@@ -245,6 +251,19 @@ pub fn hierarchy(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
                     };
                 }
 
+                if row.dnd_hover_payload::<widgets::AssetDrag>().is_some() {
+                    ui.painter().rect_filled(
+                        row.rect,
+                        egui::CornerRadius::ZERO,
+                        egui::Color32::from_rgba_unmultiplied(90, 170, 120, 40),
+                    );
+                }
+                if let Some(payload) = row.dnd_release_payload::<widgets::AssetDrag>() {
+                    if payload.path.ends_with(".prefab.json") {
+                        asset_drop = Some((index, payload.path.clone()));
+                    }
+                }
+
                 row.context_menu(|ui| {
                     if ui.button("Rename").clicked() {
                         action = Some(TreeAction::BeginRename(index, name.clone()));
@@ -308,6 +327,13 @@ pub fn hierarchy(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
             }
         }
         state.drop_target = None;
+    }
+
+    if let Some((parent, prefab)) = asset_drop {
+        match workspace.instantiate_prefab_asset(&prefab, Some(parent)) {
+            Ok(count) => state.status = format!("instantiated {count} entities from {prefab}"),
+            Err(error) => state.status = format!("instantiate failed: {error}"),
+        }
     }
 
     if let Some(action) = action {
@@ -478,6 +504,19 @@ fn inspector_single(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState,
                         Err(error) => state.status = format!("sync failed: {error}"),
                     }
                 }
+                if ui
+                    .small_button("Apply to Prefab")
+                    .on_hover_text("Overwrite the prefab asset with this instance's subtree")
+                    .clicked()
+                {
+                    match apply_to_prefab(workspace, index, link) {
+                        Ok(count) => {
+                            state.status = format!("applied {count} entities to {link}");
+                            let _ = workspace.sync_prefab_instances(link);
+                        }
+                        Err(error) => state.status = format!("apply failed: {error}"),
+                    }
+                }
             });
         }
         None => {
@@ -625,6 +664,22 @@ fn inspector_multi(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState, 
     }
 }
 
+/// 实例 → 预制体：用当前子树覆盖预制体文件，再同步同源实例。
+fn apply_to_prefab(
+    workspace: &mut Workspace,
+    index: usize,
+    prefab: &str,
+) -> std::io::Result<usize> {
+    let root = workspace
+        .project_root
+        .clone()
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "没有绑定项目根"))?;
+    let doc = workspace.document().doc.extract_subtree(&[index]);
+    let count = doc.entities.len();
+    prism_editor_core::project::write_document(&root, prefab, &doc)?;
+    Ok(count)
+}
+
 // ---------------------------------------------------------------------------
 // 资产
 // ---------------------------------------------------------------------------
@@ -755,7 +810,13 @@ pub fn assets(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
                     kind.label(),
                     path.rsplit('/').next().unwrap_or(path)
                 );
-                let response = ui.selectable_label(selected, RichText::new(label).size(11.5));
+                let drag_id = egui::Id::new(("asset-drag", path.as_str()));
+                let payload = widgets::AssetDrag { path: path.clone() };
+                let response = ui
+                    .dnd_drag_source(drag_id, payload, |ui| {
+                        ui.selectable_label(selected, RichText::new(label).size(11.5))
+                    })
+                    .inner;
                 if response.clicked() {
                     state.asset_selection = Some(path.clone());
                 }
