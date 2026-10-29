@@ -1654,6 +1654,7 @@ pub fn run() {
             viewport::editor_viewport_open,
             #[cfg(windows)]
             viewport::editor_viewport_native_bounds,
+            #[cfg(windows)]
             viewport::editor_viewport_native_cursor,
             viewport::editor_viewport_resize,
             viewport::editor_viewport_set_active,

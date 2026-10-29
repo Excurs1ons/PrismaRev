@@ -13,7 +13,7 @@ PrismaRev 是从零实现的 Rust 游戏引擎：**Vulkan** 渲染，**Android �
 |---|---|
 | Rust stable（见 `rust-toolchain.toml`） | 全部 Rust 代码 |
 | Vulkan SDK（含 `slangc`） | 编译 `assets/shaders/slang/*.slang` → `.spv` |
-| Node 20+ / pnpm | `editor/`、`launcher/` 两个独立前端 workspace |
+| Node 20+ / pnpm | `editor/`、Android 启动壳 `launcher/` 两个独立前端 workspace |
 | Android NDK（可选） | 打 APK，见 `scripts/build-android.ps1` |
 | Python 3.11+ | `scripts/pr_ready.py` 自检 |
 

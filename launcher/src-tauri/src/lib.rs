@@ -1,29 +1,28 @@
-//! PrismaRev Hub 的 Tauri 外壳。
+//! PrismaRev Android 启动壳的 Tauri 外壳。
 //!
-//! 桌面端是 Unity Hub 形态的工程管理窗口（工程列表 / 新建 / 添加 / 打开
-//! 编辑器），工程逻辑在 [`hub`]；Android 端仍然只负责拉起游戏 Activity。
+//! 桌面 Hub 已拆到独立仓库 [`prisma-hub`](https://github.com/Excurs1ons/prisma-hub)；
+//! 这里只保留 APK 的「开始游戏」页：
+//!
+//! - **Android**：通过 Kotlin plugin 启动 `com.prisma.MainActivity`（GameActivity）；
+//! - **桌面**：拉起本地游戏二进制，方便不打包也能验证启动页与参数传递。
+//!
+//! 工程管理、编辑器安装、工程版本识别都不在这里——那些属于桌面 Hub。
 
 #[cfg(not(mobile))]
 mod game_launcher;
-#[cfg(not(mobile))]
-mod hub;
 
-#[cfg(not(mobile))]
-use hub::{
-    hub_add_project, hub_create_project, hub_editor_info, hub_environment, hub_open_project,
-    hub_projects, hub_remove_project, hub_reveal_project, HubState,
-};
-use tauri::Manager;
 use tauri::Wry;
+
+#[cfg(mobile)]
+use tauri::plugin::PluginHandle;
+#[cfg(mobile)]
+use tauri::Manager;
 
 // ==================== Android: 自定义 Native Plugin ====================
 //
 // 通过 Kotlin 调用 Android 原生 API：
 //   - toggle_immersive / set_status_bar_color / vibrate / get_device_info
 //   - launch_game：启动 GameActivity
-
-#[cfg(mobile)]
-use tauri::plugin::PluginHandle;
 
 #[cfg(mobile)]
 const NATIVE_PLUGIN_IDENTIFIER: &str = "com.example.tauriandroidapp";
@@ -128,17 +127,6 @@ fn launch_game(
     state.launch(config)
 }
 
-/// 前端据此决定渲染 Hub 还是 Android 的「开始游戏」页。
-#[cfg(mobile)]
-#[tauri::command]
-fn hub_environment() -> serde_json::Value {
-    serde_json::json!({
-        "platform": "mobile",
-        "editor": { "found": false, "path": null, "version": "", "hint": null },
-        "repoRoot": null,
-    })
-}
-
 /// 初始化自定义原生插件（mobile 端注册 Kotlin plugin）。
 pub fn init_native_plugin() -> tauri::plugin::TauriPlugin<Wry> {
     tauri::plugin::Builder::<Wry>::new("native-api")
@@ -156,42 +144,19 @@ pub fn init_native_plugin() -> tauri::plugin::TauriPlugin<Wry> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let builder = tauri::Builder::default()
-        .plugin(tauri_plugin_dialog::init())
-        .plugin(init_native_plugin());
+    let builder = tauri::Builder::default().plugin(init_native_plugin());
 
     #[cfg(not(mobile))]
-    let builder = builder
-        .manage(game_launcher::RunningGame::default())
-        .setup(|app| {
-            let state = HubState::load(app.handle()).map_err(Box::<dyn std::error::Error>::from)?;
-            app.manage(state);
-            Ok(())
-        });
+    let builder = builder.manage(game_launcher::RunningGame::default());
 
     builder
         .invoke_handler(tauri::generate_handler![
             launch_game,
-            hub_environment,
             toggle_immersive,
             set_status_bar_color,
             vibrate,
             get_device_info,
-            #[cfg(not(mobile))]
-            hub_editor_info,
-            #[cfg(not(mobile))]
-            hub_projects,
-            #[cfg(not(mobile))]
-            hub_add_project,
-            #[cfg(not(mobile))]
-            hub_remove_project,
-            #[cfg(not(mobile))]
-            hub_create_project,
-            #[cfg(not(mobile))]
-            hub_open_project,
-            #[cfg(not(mobile))]
-            hub_reveal_project,
         ])
         .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .expect("error while running PrismaRev launcher");
 }
