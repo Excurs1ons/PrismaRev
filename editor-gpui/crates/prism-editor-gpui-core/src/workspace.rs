@@ -2336,6 +2336,50 @@ impl Workspace {
         self.log(LogSource::Editor, LogLevel::Info, "已清空撤销历史");
     }
 
+    /// 完整历史（最早 → 最新），`bool` 表示该步骤当前处于「已撤销」状态。
+    pub fn history_entries(&self) -> Vec<(String, bool)> {
+        self.document().undo.history_entries()
+    }
+
+    /// 当前状态在 `history_entries()` 中的位置（= 已执行步骤数）。
+    pub fn history_cursor(&self) -> usize {
+        self.document().undo.history_cursor()
+    }
+
+    /// 跳到历史中的绝对位置（`target` ∈ `0..=history_entries().len()`）。
+    ///
+    /// 与 `undo_to` 不同：往前是撤销，往后是重做，所以撤销过的步骤还能点回去；
+    /// 返回实际移动的步数。
+    pub fn jump_history(&mut self, target: usize) -> usize {
+        let cursor = self.history_cursor();
+        let mut moved = 0;
+        if target < cursor {
+            for _ in target..cursor {
+                if !self.can_undo() {
+                    break;
+                }
+                self.undo();
+                moved += 1;
+            }
+        } else {
+            for _ in cursor..target {
+                if !self.can_redo() {
+                    break;
+                }
+                self.redo();
+                moved += 1;
+            }
+        }
+        if moved > 0 {
+            self.log(
+                LogSource::Editor,
+                LogLevel::Info,
+                format!("history jump: {} step(s)", moved),
+            );
+        }
+        moved
+    }
+
     // ── 面板 / 布局 ─────────────────────────────────────────────────────
 
     pub fn panel(&self, id: &str) -> Option<&PanelInfo> {
@@ -3487,6 +3531,46 @@ mod tests {
                 assert!((a - b).abs() < 1e-4);
             }
         }
+    }
+
+    #[test]
+    fn history_entries_keep_undone_steps_and_jump_both_ways() {
+        let mut workspace = Workspace::sample();
+        let initial = workspace.document().doc.entities.len();
+        workspace.add_entity("camera");
+        workspace.add_entity("camera");
+        workspace.add_entity("camera");
+        assert_eq!(workspace.history_cursor(), 3);
+        let entries = workspace.history_entries();
+        assert_eq!(entries.len(), 3);
+        assert!(entries.iter().all(|(_, undone)| !undone));
+
+        // 撤销两步：位置回到 1，但两步仍然留在列表里，并且被标记为已撤销。
+        assert_eq!(workspace.jump_history(1), 2);
+        assert_eq!(workspace.history_cursor(), 1);
+        assert_eq!(workspace.document().doc.entities.len(), initial + 1);
+        let entries = workspace.history_entries();
+        assert_eq!(entries.len(), 3);
+        assert_eq!(
+            entries.iter().filter(|(_, undone)| *undone).count(),
+            2,
+            "撤销过的步骤不能从历史里消失"
+        );
+
+        // 点回去（redo）恢复。
+        assert_eq!(workspace.jump_history(3), 2);
+        assert_eq!(workspace.history_cursor(), 3);
+        assert_eq!(workspace.document().doc.entities.len(), initial + 3);
+        assert!(workspace
+            .history_entries()
+            .iter()
+            .all(|(_, undone)| !undone));
+
+        // 跳回开头。
+        assert_eq!(workspace.jump_history(0), 3);
+        assert_eq!(workspace.history_cursor(), 0);
+        assert_eq!(workspace.document().doc.entities.len(), initial);
+        assert_eq!(workspace.jump_history(0), 0, "原地跳转是空操作");
     }
 
     #[test]

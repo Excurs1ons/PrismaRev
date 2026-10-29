@@ -144,6 +144,8 @@ pub struct UiState {
     pub inspector_search: String,
     pub hierarchy_search: String,
     pub asset_search: String,
+    /// 历史面板的排序：`true` = 最新在上（Unity 的 `m_ShowLatestFirst`）。
+    pub history_latest_first: bool,
     /// 视口渲染分辨率倍率（高 DPI 屏上可降到 0.5 省 GPU）。
     pub viewport_scale: f32,
     pub log_levels: Vec<LogLevel>,
@@ -1702,24 +1704,63 @@ pub fn log(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
 // 撤销历史
 // ---------------------------------------------------------------------------
 
-pub fn history(ui: &mut Ui, workspace: &mut Workspace) {
-    let entries = workspace.undo_history();
-    let mut revert: Option<usize> = None;
+pub fn history(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
+    let entries = workspace.history_entries();
+    let cursor = workspace.history_cursor();
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut state.history_latest_first, "Latest first");
+        ui.label(RichText::new(format!("{cursor}/{}", entries.len())).weak());
+    });
+    ui.separator();
+
+    let mut jump: Option<usize> = None;
+    let order: Vec<usize> = if state.history_latest_first {
+        (0..entries.len()).rev().collect()
+    } else {
+        (0..entries.len()).collect()
+    };
     egui::ScrollArea::vertical()
         .id_salt("history-scroll")
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            for (position, label) in entries.iter().enumerate() {
-                if ui
-                    .selectable_label(false, RichText::new(label).size(11.0))
-                    .clicked()
-                {
-                    revert = Some(position);
-                }
+            if !state.history_latest_first {
+                history_row(ui, "Initial state", cursor == 0, cursor != 0, 0, &mut jump);
+            }
+            for index in &order {
+                let (label, undone) = &entries[*index];
+                // 行 = 「执行完这一步之后的状态」，所以下标要 +1。
+                let target = index + 1;
+                let current = target == cursor;
+                history_row(ui, label, current, *undone, target, &mut jump);
+            }
+            if state.history_latest_first {
+                history_row(ui, "Initial state", cursor == 0, cursor != 0, 0, &mut jump);
             }
         });
-    if let Some(position) = revert {
-        workspace.undo_to(position);
+    if let Some(target) = jump {
+        workspace.jump_history(target);
+    }
+}
+
+/// 历史面板的一行：`weak` 表示这步当前处于「已撤销」状态。
+fn history_row(
+    ui: &mut Ui,
+    label: &str,
+    current: bool,
+    weak: bool,
+    target: usize,
+    jump: &mut Option<usize>,
+) {
+    let mut text = if weak {
+        RichText::new(format!("(undone) {label}")).weak()
+    } else {
+        RichText::new(label)
+    };
+    if current {
+        text = text.strong();
+    }
+    if ui.selectable_label(current, text.size(11.0)).clicked() {
+        *jump = Some(target);
     }
 }
 

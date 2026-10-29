@@ -155,6 +155,32 @@ impl UndoStack {
             .collect()
     }
 
+    /// 完整历史（最早 → 最新），已撤销的步骤附在末尾并标记 `undone`。
+    ///
+    /// 和 `history()` 不同，这里包含 redo 栈：Unity 的撤销历史窗口会把撤销过的
+    /// 步骤继续列出来，点回去就是 redo，而不是让它们凭空消失。
+    pub fn history_entries(&self) -> Vec<(String, bool)> {
+        let mut out: Vec<(String, bool)> = self
+            .undo
+            .iter()
+            .map(|entry| (entry.label.clone(), false))
+            .collect();
+        // redo 栈的最后一个元素是下一次 redo 要执行的步骤，所以整体反转后
+        // 才是「按时间顺序」接在 undo 之后的步骤。
+        out.extend(
+            self.redo
+                .iter()
+                .rev()
+                .map(|entry| (entry.label.clone(), true)),
+        );
+        out
+    }
+
+    /// 当前状态在 `history_entries()` 中的位置（= 已执行步骤数）。
+    pub fn history_cursor(&self) -> usize {
+        self.undo.len()
+    }
+
     pub fn clear(&mut self) {
         self.undo.clear();
         self.redo.clear();
