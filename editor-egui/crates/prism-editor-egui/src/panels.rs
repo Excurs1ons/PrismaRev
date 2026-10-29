@@ -873,6 +873,7 @@ fn inspector_single(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState,
         .iter()
         .map(|asset| asset.path.clone())
         .collect();
+    let registry = workspace.schema.clone();
     let mut actions: Vec<widgets::CardAction> = Vec::new();
     for (name, value) in components {
         if name == "prism_engine::scene::Active" {
@@ -894,6 +895,7 @@ fn inspector_single(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState,
         };
         widgets::component_card_with_assets(
             ui,
+            &registry,
             &schema,
             &value,
             &mut actions,
@@ -1186,6 +1188,7 @@ fn inspector_multi(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState, 
         .iter()
         .map(|asset| asset.path.clone())
         .collect();
+    let registry = workspace.schema.clone();
     let mut actions: Vec<widgets::CardAction> = Vec::new();
     for (name, value) in values {
         let Some(schema) = workspace.schema.component(&name).cloned() else {
@@ -1196,6 +1199,7 @@ fn inspector_multi(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState, 
         };
         widgets::component_card_with_assets(
             ui,
+            &registry,
             &schema,
             &value,
             &mut actions,
