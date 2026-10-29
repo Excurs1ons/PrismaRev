@@ -101,18 +101,27 @@ cargo test --workspace                 # ~400 测试（含 CRT 状态机单测�
 - 本地 Cargo 镜像（可选，加速）：`~/.cargo/config.toml` 用 rsproxy：
   `sparse+https://rsproxy.cn/index/`。
 
-## 5. Android .so（可选）
+## 5. Android APK（可选）
+
+两条路，按需选：
+
+- **game-only（无 launcher）**：`projects/prisma/android/` + `scripts/build-android-game.sh`。
+  打出的 APK 里只有 `GameActivity` + `libprisma.so` + `assets/game/`，不含 Tauri / WebView。
+  流程见 [`docs/android-apk.md`](android-apk.md)。
+- **launcher + 游戏（双 Activity）**：Tauri 的 `launcher/src-tauri/gen/android/`，
+  `scripts/build-android.ps1`（Windows）。Termux 上也可以直接把新 `.so` 替换进已有 APK
+  并用 `apksigner` 重签。
+
+> Termux / aarch64 主机额外要换 NDK 与 build-tools 里的 x86_64 原生二进制，
+> 见 [`docs/android-arm64.md`](android-arm64.md)（**x86_64 主机不需要**）。
+
+只编 `.so`（不打包）时仍可用 cargo-ndk：
 
 ```bash
-# 在 game/ 或根 workspace 编译 aarch64 .so（记忆：cargo-ndk 即可，无需 Gradle 工程）
 # -P 必须 >= 26：libaaudio.so 从 API 26 才有，cargo-ndk 默认 21 会报 -laaudio not found。
 # 同时不要高于项目的 minSdk（当前为 31），否则会在旧设备上链接到不存在的符号。
 cargo ndk -P 26 -t arm64-v8a -o <输出目录> build
 ```
-
-Tauri launcher 的 `gen/android/` 负责 APK 打包；Termux 上可直接把新 `.so`
-替换进已有 APK 并用 `apksigner` 重签（Android 构建详见 `AGENTS.md` §Android packaging chain
-与 `scripts/build-android.ps1`）。
 
 ## 常见坑速查
 

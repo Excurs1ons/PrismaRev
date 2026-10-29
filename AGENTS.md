@@ -210,7 +210,13 @@ deviating from those conventions is a bug. (`README.md` is the human-facing over
       「离屏渲染 + 帧读回」这一层通用能力。
 - `projects/prisma/` — 用户游戏项目（package/crate `prisma`；`prisma` 桌面二进制 + Android
   cdylib `libprisma.so`；keyframe 开场 intro、`register_scene("intro", ...)` 注册场景、
-  `lib.rs` 的 `android_main`）；**own standalone workspace**, NOT a root member.
+  `lib.rs` 的 `android_main`）；**own standalone workspace**, NOT a root member。
+  - `projects/prisma/android/` — **game-only Android 宿主**（独立 Gradle 工程）：只有一个
+    `GameActivity` 子类 + `AndroidManifest.xml`，打出的 APK 不含 Tauri / WebView / 启动器 UI。
+    入口是 `scripts/build-android-game.sh`，流程见 [`docs/android-apk.md`](docs/android-apk.md)；
+    **只有宿主机是 aarch64**（Asahi / 树莓派 / ARM 服务器 / Termux）时还需要
+    [`docs/android-arm64.md`](docs/android-arm64.md) 的 NDK / build-tools 替换步骤。
+    与 `launcher/` 那条「启动器 + 游戏」双 Activity 的路互不影响，不要把它们合并。
 - `projects/prisma-sponza/` — Sponza 样例用户项目，
   同为独立 workspace（package 名与目录名一致）。
 - `crates/xtask` — **excluded** from default workspace; desktop/CI only (needs `slangc`).
