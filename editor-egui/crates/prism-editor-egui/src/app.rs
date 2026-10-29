@@ -251,6 +251,25 @@ impl EditorApp {
             }
         }
 
+        let restored_scene = saved_state
+            .as_ref()
+            .map(|state| state.scene.clone())
+            .unwrap_or_default();
+        let restored_tool = match restored_scene.gizmo_tool.as_str() {
+            "Rotate" => crate::viewport::GizmoTool::Rotate,
+            "Scale" => crate::viewport::GizmoTool::Scale,
+            _ => crate::viewport::GizmoTool::Translate,
+        };
+        let render_settings = restored_scene
+            .render
+            .as_ref()
+            .map(|value| render_settings_from_json(value, workspace.show_grid))
+            .unwrap_or_else(|| prism_engine::render_settings::RenderSettings {
+                show_grid: workspace.show_grid,
+                ..Default::default()
+            });
+        workspace.show_grid = render_settings.show_grid;
+
         let mut app = Self {
             doc_hash: 0,
             selection_hash: 0,
@@ -263,12 +282,9 @@ impl EditorApp {
             named_layouts,
             layouts_path,
             build: None,
-            // 引擎默认 `show_grid = false`（游戏里不该画网格），编辑器要从工作区
-            // 的默认值（`true`，与 Unity 一致）出发，否则工具栏和实际画面不一致。
-            render_settings: prism_engine::render_settings::RenderSettings {
-                show_grid: workspace.show_grid,
-                ..Default::default()
-            },
+            // 引擎默认 `show_grid = false`（游戏里不该画网格），编辑器要从上次保存的
+            // Scene 设置出发（旧存档没有这段时退回工作区默认值）。
+            render_settings,
             theme_signature: String::new(),
             autosave_at: Instant::now(),
             workspace,
@@ -307,6 +323,10 @@ impl EditorApp {
         }
         app.write_preview_scene();
         app.ensure_view(ViewKind::Scene);
+        // 恢复上次的 gizmo 工具（W / E / R），否则每次启动都回到 Move。
+        if let Some(view) = app.scene_view.as_mut() {
+            view.tool = restored_tool;
+        }
         // Game view 的引擎在这里一起建好。留到第一次切 tab 再建的话，会卡住整个
         // UI 线程 ~2s（IBL 预过滤 1.5s + 管线创建 + 场景加载），观感就是「切 tab 卡半天」。
         let started = Instant::now();
@@ -2549,7 +2569,16 @@ impl EditorApp {
             && self.autosave_at.elapsed() > std::time::Duration::from_secs(5)
         {
             self.autosave_at = Instant::now();
-            let state = prism_editor_core::EditorState::capture(&self.workspace, &self.preferences);
+            let mut state =
+                prism_editor_core::EditorState::capture(&self.workspace, &self.preferences);
+            if let Some(view) = self.scene_view.as_ref() {
+                state.scene.gizmo_tool = match view.tool {
+                    crate::viewport::GizmoTool::Translate => "Translate".to_string(),
+                    crate::viewport::GizmoTool::Rotate => "Rotate".to_string(),
+                    crate::viewport::GizmoTool::Scale => "Scale".to_string(),
+                };
+            }
+            state.scene.render = Some(render_settings_json(&self.render_settings));
             if let Ok(text) = serde_json::to_string_pretty(&state) {
                 if let Some(parent) = self.state_path.parent() {
                     std::fs::create_dir_all(parent).ok();
@@ -2915,6 +2944,70 @@ fn read_named_layouts(path: &Path) -> std::collections::BTreeMap<String, serde_j
 fn read_editor_state(path: &Path) -> Option<prism_editor_core::EditorState> {
     let text = std::fs::read_to_string(path).ok()?;
     serde_json::from_str(&text).ok()
+}
+
+/// 把 `RenderSettings` 映射成可持久化的 JSON。
+///
+/// 引擎结构体没有 serde 派生（也不该为编辑器加），编辑器自己列一遍字段；
+/// 新增引擎字段时这里要同步，缺失字段回落到默认值以兼容旧存档。
+fn render_settings_json(
+    settings: &prism_engine::render_settings::RenderSettings,
+) -> serde_json::Value {
+    use prism_engine::render_settings::RenderMode;
+    serde_json::json!({
+        "debugFlags": settings.debug_flags,
+        "tonemapMode": settings.tonemap_mode,
+        "debugRt": settings.debug_rt,
+        "pathTrace": settings.render_mode == RenderMode::PathTrace,
+        "ptMaxBounces": settings.pt_max_bounces,
+        "ptRayMaxDistance": settings.pt_ray_max_distance,
+        "ptMaxIterations": settings.pt_max_iterations,
+        "showGrid": settings.show_grid,
+    })
+}
+
+/// `render_settings_json` 的逆过程；`fallback_grid` 用于旧存档没有该字段时跟随工作区默认值。
+fn render_settings_from_json(
+    value: &serde_json::Value,
+    fallback_grid: bool,
+) -> prism_engine::render_settings::RenderSettings {
+    use prism_engine::render_settings::RenderMode;
+    let base = prism_engine::render_settings::RenderSettings::default();
+    let u32_field = |key: &str, default: u32| {
+        value
+            .get(key)
+            .and_then(|value| value.as_u64())
+            .map(|value| value as u32)
+            .unwrap_or(default)
+    };
+    let f32_field = |key: &str, default: f32| {
+        value
+            .get(key)
+            .and_then(|value| value.as_f64())
+            .map(|value| value as f32)
+            .unwrap_or(default)
+    };
+    let path_trace = value
+        .get("pathTrace")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+    prism_engine::render_settings::RenderSettings {
+        debug_flags: u32_field("debugFlags", base.debug_flags),
+        tonemap_mode: u32_field("tonemapMode", base.tonemap_mode),
+        debug_rt: u32_field("debugRt", base.debug_rt),
+        render_mode: if path_trace {
+            RenderMode::PathTrace
+        } else {
+            RenderMode::Raster
+        },
+        pt_max_bounces: u32_field("ptMaxBounces", base.pt_max_bounces),
+        pt_ray_max_distance: f32_field("ptRayMaxDistance", base.pt_ray_max_distance),
+        pt_max_iterations: u32_field("ptMaxIterations", base.pt_max_iterations),
+        show_grid: value
+            .get("showGrid")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(fallback_grid),
+    }
 }
 
 fn selection_hash(workspace: &Workspace) -> u64 {
