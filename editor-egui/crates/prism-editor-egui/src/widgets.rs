@@ -43,14 +43,14 @@ pub fn component_card_with_assets(
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui
-                        .small_button("✕")
+                        .small_button("×")
                         .on_hover_text("Remove Component")
                         .clicked()
                     {
                         actions.push(CardAction::Remove(component.name.clone()));
                     }
                     if ui
-                        .small_button("⧉")
+                        .small_button("📋")
                         .on_hover_text("Copy Component")
                         .clicked()
                     {
@@ -102,7 +102,7 @@ fn asset_matches(name: &str, path: &str) -> bool {
     }
 }
 
-/// 带资产选择器的字段行（路径字段右侧多一个 `⋯` 按钮，列出 `assets` 里的候选）。
+/// 带资产选择器的字段行（路径字段右侧多一个 `…` 按钮，列出 `assets` 里的候选）。
 pub fn field_row_with_assets(
     ui: &mut Ui,
     field: &FieldSchema,
@@ -182,7 +182,7 @@ pub fn field_row_with_assets(
                         set(&name, Value::String(payload.path.clone()));
                     }
                     let mut picked: Option<String> = None;
-                    ui.menu_button("⋯", |ui| {
+                    ui.menu_button("…", |ui| {
                         egui::ScrollArea::vertical()
                             .id_salt((name.clone(), "asset-picker"))
                             .max_height(260.0)

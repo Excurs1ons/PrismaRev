@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::Context as _;
-use egui::{Align, Color32, CursorIcon, Layout, Rect, RichText, Sense, Vec2};
+use egui::{Align, Color32, CursorIcon, Layout, Rect, RichText, Sense, Stroke, Vec2};
 use egui_ash::{App, CreationContext, ExitSignal, HandleRedraw};
 
 use prism_editor_core::{Command, DockDirection, DockNode, Locale, Preferences, Workspace};
@@ -19,6 +19,75 @@ use crate::logging;
 use crate::panels::{self, UiState};
 use crate::theme;
 use crate::viewport::{ImageBridge, ViewportState};
+
+/// 面板 tab 的高度（与 Web `.dock-tabs` 的 28px 对齐，这里按 egui 行高收到 26）。
+const TAB_BAR_HEIGHT: f32 = 26.0;
+
+/// 自绘 tab（对齐 Web `.dock-tab`）：`bg-sunken` 底、右侧 1px 分隔线、
+/// 选中 = `panel-alt` 底 + 2px 强调下划线。egui 的 `selectable_label` 用整块蓝底，
+/// 会让整个界面看起来发蓝，所以不使用它。
+fn dock_tab(
+    ui: &mut egui::Ui,
+    title: &str,
+    active: bool,
+    colors: &prism_editor_core::ThemeColors,
+) -> egui::Response {
+    use prism_editor_core::ThemeToken;
+    let text_color = theme::color32(
+        colors,
+        if active {
+            ThemeToken::Text
+        } else {
+            ThemeToken::Muted
+        },
+    );
+    let galley = ui.painter().layout_no_wrap(
+        title.to_owned(),
+        egui::FontId::proportional(12.0),
+        text_color,
+    );
+    let pad = Vec2::new(10.0, 5.0);
+    let size = Vec2::new(galley.size().x + pad.x * 2.0, TAB_BAR_HEIGHT);
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click_and_drag());
+    if ui.is_rect_visible(rect) {
+        let paintable = ui.painter();
+        let bg = if active {
+            theme::color32(colors, ThemeToken::PanelAlt)
+        } else if response.hovered() || response.dragged() {
+            theme::color32(colors, ThemeToken::RowHover)
+        } else {
+            Color32::TRANSPARENT
+        };
+        if bg != Color32::TRANSPARENT {
+            paintable.rect_filled(rect, 0.0, bg);
+        }
+        // 右侧分隔线（Web: border-right 1px）
+        paintable.rect_filled(
+            Rect::from_min_max(
+                egui::pos2(rect.right() - 1.0, rect.top()),
+                egui::pos2(rect.right(), rect.bottom()),
+            ),
+            0.0,
+            theme::border(colors),
+        );
+        if active {
+            paintable.rect_filled(
+                Rect::from_min_max(
+                    egui::pos2(rect.left(), rect.bottom() - 2.0),
+                    egui::pos2(rect.right() - 1.0, rect.bottom()),
+                ),
+                0.0,
+                theme::color32(colors, ThemeToken::Accent),
+            );
+        }
+        paintable.galley(
+            egui::pos2(rect.left() + pad.x, rect.center().y - galley.size().y * 0.5),
+            galley,
+            text_color,
+        );
+    }
+    response
+}
 
 /// 面板 tab 的英文标题（i18n 字典里也有，这里直接用英文，避免依赖字体）。
 /// 鼠标落在 leaf 的哪个区域（Unity 的分屏 / 合并判定）。
@@ -119,8 +188,15 @@ impl EditorApp {
             sampler,
         };
 
-        theme::install_cjk_fallback(&cc.context);
-        cc.context.set_visuals(egui::Visuals::dark());
+        theme::install_fonts(&cc.context);
+
+        // egui-ash 建根窗口时用的是 winit 默认属性（800×600 + 标题 "egui-ash"），
+        // `RunOption::viewport_builder` 的 inner_size / title 不会生效。这里用
+        // 视口命令补一次，否则一进来就是 800×600 的挤压布局。
+        cc.context
+            .send_viewport_cmd(egui::ViewportCommand::Title("PrismaRev Editor".to_owned()));
+        cc.context
+            .send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(1440.0, 900.0)));
 
         let mut workspace = load_workspace();
         workspace.set_locale(Locale::EnUs);
@@ -624,6 +700,30 @@ impl EditorApp {
     }
 
     fn menu_bar(&mut self, ui: &mut egui::Ui, _ctx: &egui::Context) {
+        // Web 的 `.menu-trigger`：无底色、无边框，hover 是 `menu-hover`，
+        // 展开时 `menu-active`。egui 默认给 MenuButton 铺一块立体按钮底，
+        // 那是 imGui 味的主要来源之一。
+        let colors = self.workspace.colors();
+        let text_soft = theme::color32(&colors, prism_editor_core::ThemeToken::TextSoft);
+        let text_strong = theme::color32(&colors, prism_editor_core::ThemeToken::TextStrong);
+        let menu_hover = theme::color32(&colors, prism_editor_core::ThemeToken::MenuHover);
+        let menu_active = theme::color32(&colors, prism_editor_core::ThemeToken::MenuActive);
+        let style = ui.style_mut();
+        style.spacing.button_padding = egui::vec2(7.0, 1.0);
+        let widgets = &mut style.visuals.widgets;
+        widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
+        widgets.inactive.bg_fill = Color32::TRANSPARENT;
+        widgets.inactive.bg_stroke = Stroke::NONE;
+        widgets.inactive.fg_stroke = Stroke::new(1.0_f32, text_soft);
+        widgets.hovered.weak_bg_fill = menu_hover;
+        widgets.hovered.bg_fill = menu_hover;
+        widgets.hovered.bg_stroke = Stroke::NONE;
+        widgets.hovered.fg_stroke = Stroke::new(1.0_f32, text_strong);
+        widgets.open.weak_bg_fill = menu_active;
+        widgets.open.bg_fill = menu_active;
+        widgets.open.bg_stroke = Stroke::NONE;
+        widgets.open.fg_stroke = Stroke::new(1.0_f32, text_strong);
+
         egui::MenuBar::new().ui(ui, |ui| {
             // ---- File ----
             ui.menu_button("File", |ui| {
@@ -1126,7 +1226,7 @@ impl EditorApp {
             let playing = self.playing;
             let paused = self.paused;
             if ui
-                .add_enabled(!playing, egui::Button::new("▶ Play"))
+                .add_enabled(!playing, egui::Button::new("Play"))
                 .clicked()
             {
                 self.apply_command(Command::Play);
@@ -1134,22 +1234,16 @@ impl EditorApp {
             if ui
                 .add_enabled(
                     playing,
-                    egui::Button::new(if paused { "▶ Resume" } else { "⏸ Pause" }),
+                    egui::Button::new(if paused { "Resume" } else { "Pause" }),
                 )
                 .clicked()
             {
                 self.apply_command(Command::Pause);
             }
-            if ui
-                .add_enabled(playing, egui::Button::new("⏭ Step"))
-                .clicked()
-            {
+            if ui.add_enabled(playing, egui::Button::new("Step")).clicked() {
                 self.apply_command(Command::Step);
             }
-            if ui
-                .add_enabled(playing, egui::Button::new("⏹ Stop"))
-                .clicked()
-            {
+            if ui.add_enabled(playing, egui::Button::new("Stop")).clicked() {
                 self.apply_command(Command::Stop);
             }
 
@@ -1361,11 +1455,14 @@ impl EditorApp {
         if response.hovered() || response.dragged() {
             ui.ctx().set_cursor_icon(cursor);
         }
+        // 分隔条平时就是 1px 边框色（没有蓝灰），拖动时才亮成强调色。
+        let colors = self.workspace.colors();
         let color = if response.dragged() {
-            let colors = self.workspace.colors();
             theme::color32(&colors, prism_editor_core::ThemeToken::Accent)
+        } else if response.hovered() {
+            theme::color32(&colors, prism_editor_core::ThemeToken::BorderStrong)
         } else {
-            Color32::from_rgb(38, 42, 48)
+            theme::border(&colors)
         };
         ui.painter().rect_filled(rect, 0.0, color);
         if response.dragged() {
@@ -1419,30 +1516,59 @@ impl EditorApp {
         );
         child.set_clip_rect(rect);
 
-        // tab bar
+        // 面板底 + 1px 边框（Web `.dock-leaf` 是 panel + 1px border）。
+        let colors = self.workspace.colors();
+        let sunken = theme::color32(&colors, prism_editor_core::ThemeToken::BgSunken);
+        let border = theme::border(&colors);
+        child
+            .painter()
+            .rect_filled(rect, 0.0, theme::panel_fill(&colors));
+        child.painter().rect_stroke(
+            rect,
+            egui::CornerRadius::ZERO,
+            Stroke::new(1.0_f32, border),
+            egui::StrokeKind::Inside,
+        );
+
+        // tab bar：`bg-sunken` 底 + 底部 1px 边框；选中页 = `panel-alt` + 2px 强调下划线。
         let mut activate: Option<String> = None;
         let mut float: Option<String> = None;
         let mut begin_drag: Option<String> = None;
-        child.horizontal(|ui| {
-            for tab in tabs {
-                let selected = tab == active;
-                let title = tab_title(tab);
-                let response = ui.selectable_label(selected, RichText::new(title).size(11.5));
-                if response.clicked() {
-                    activate = Some(tab.clone());
-                }
-                if response.drag_started() {
-                    begin_drag = Some(tab.clone());
-                }
-                response.context_menu(|ui| {
-                    if tabs.len() > 1 && ui.button("Float panel").clicked() {
-                        float = Some(tab.clone());
-                        ui.close();
-                    }
-                });
+        let (bar, _) = child.allocate_exact_size(
+            Vec2::new(child.available_width(), TAB_BAR_HEIGHT),
+            egui::Sense::hover(),
+        );
+        child.painter().rect_filled(bar, 0.0, sunken);
+        child.painter().rect_filled(
+            Rect::from_min_max(
+                egui::pos2(bar.left(), bar.bottom() - 1.0),
+                egui::pos2(bar.right(), bar.bottom()),
+            ),
+            0.0,
+            border,
+        );
+        let mut bar_ui = child.new_child(
+            egui::UiBuilder::new()
+                .max_rect(bar)
+                .layout(Layout::left_to_right(Align::Center)),
+        );
+        bar_ui.set_clip_rect(bar);
+        for tab in tabs {
+            let selected = tab == active;
+            let response = dock_tab(&mut bar_ui, &tab_title(tab), selected, &colors);
+            if response.clicked() {
+                activate = Some(tab.clone());
             }
-        });
-        child.separator();
+            if response.drag_started() {
+                begin_drag = Some(tab.clone());
+            }
+            response.context_menu(|ui| {
+                if tabs.len() > 1 && ui.button("Float panel").clicked() {
+                    float = Some(tab.clone());
+                    ui.close();
+                }
+            });
+        }
 
         let body = child.available_rect_before_wrap();
         let mut body_ui = child.new_child(
@@ -1542,7 +1668,24 @@ impl EditorApp {
     }
 
     fn panel_body(&mut self, ui: &mut egui::Ui, tab: &str, rect: Rect) {
+        // 调试开关：完全跳过引擎 / 用户纹理注册，用来区分「UI 自身的渲染问题」与
+        // 「引擎离屏图像注册进来的问题」（无窗口/软件 Vulkan 时排查用）。
+        let no_viewport = std::env::var("PRISMREV_EDITOR_NO_VIEWPORT").is_ok();
         match tab {
+            "sceneView" if no_viewport => {
+                ui.centered_and_justified(|ui| {
+                    ui.label(
+                        RichText::new("viewport disabled (PRISMREV_EDITOR_NO_VIEWPORT)").weak(),
+                    )
+                });
+            }
+            "gameView" if no_viewport => {
+                ui.centered_and_justified(|ui| {
+                    ui.label(
+                        RichText::new("viewport disabled (PRISMREV_EDITOR_NO_VIEWPORT)").weak(),
+                    )
+                });
+            }
             "sceneView" => self.show_viewport(ui, ViewKind::Scene, rect),
             "gameView" => self.show_viewport(ui, ViewKind::Game, rect),
             "hierarchy" => panels::hierarchy(ui, &mut self.workspace, &mut self.state),
@@ -2136,22 +2279,46 @@ impl App for EditorApp {
             theme::apply(ctx, &self.workspace.colors());
         }
 
+        // 与 Web 编辑器同构的三段式：菜单栏 22px（chrome）、工具栏 32px（panel）、
+        // 状态栏 22px（chrome），中间是 bg 色的面板区（面板之间的缝）。
+        let colors = self.workspace.colors();
+        let chrome_fill = theme::chrome_fill(&colors);
+        let panel_fill = theme::panel_fill(&colors);
+        let bg_fill = theme::color32(&colors, prism_editor_core::ThemeToken::Bg);
+
         egui::TopBottomPanel::top("menu-bar")
-            .frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(4, 2)))
+            .exact_height(22.0)
+            .frame(
+                egui::Frame::new()
+                    .fill(chrome_fill)
+                    .inner_margin(egui::Margin::symmetric(4, 1)),
+            )
             .show(ctx, |ui| self.menu_bar(ui, ctx));
 
         egui::TopBottomPanel::top("toolbar")
-            .exact_height(30.0)
-            .frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(6, 2)))
+            .exact_height(32.0)
+            .frame(
+                egui::Frame::new()
+                    .fill(panel_fill)
+                    .inner_margin(egui::Margin::symmetric(8, 2)),
+            )
             .show(ctx, |ui| self.toolbar(ui));
 
         egui::TopBottomPanel::bottom("status-bar")
             .exact_height(22.0)
-            .frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(6, 1)))
+            .frame(
+                egui::Frame::new()
+                    .fill(chrome_fill)
+                    .inner_margin(egui::Margin::symmetric(6, 1)),
+            )
             .show(ctx, |ui| self.status_bar(ui));
 
         egui::CentralPanel::default()
-            .frame(egui::Frame::new().inner_margin(egui::Margin::same(2)))
+            .frame(
+                egui::Frame::new()
+                    .fill(bg_fill)
+                    .inner_margin(egui::Margin::same(4)),
+            )
             .show(ctx, |ui| self.dock_tree(ui));
 
         self.finish_tab_drag(ctx);

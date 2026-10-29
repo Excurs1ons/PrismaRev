@@ -3,13 +3,59 @@
 //! 数据与命令全部走 `prism-editor-core`（与 Web 编辑器、GPUI 编辑器同一份
 //! 文档模型 / schema / 撤销栈），这里只负责画 egui 控件。
 
-use egui::{RichText, Ui};
+use egui::{Align, Layout, RichText, Ui, Vec2};
 use prism_editor_core::{
     AssetKind, Locale, LogLevel, LogSource, Preferences, ProjectSettings, Workspace, THEME_PRESETS,
 };
 use serde_json::Value;
 
-use crate::widgets;
+use crate::{theme, widgets};
+
+/// 列表行（Unity / Web 风格）：整行底色 + 文本，用于资产 / 文档这类列表。
+fn list_row(
+    ui: &mut Ui,
+    colors: &prism_editor_core::ThemeColors,
+    selected: bool,
+    text: &str,
+) -> egui::Response {
+    use prism_editor_core::ThemeToken;
+    let (rect, response) =
+        ui.allocate_exact_size(Vec2::new(ui.available_width(), 20.0), egui::Sense::click());
+    if ui.is_rect_visible(rect) {
+        let bg = if selected {
+            Some(theme::color32(colors, ThemeToken::Selection))
+        } else if response.hovered() {
+            Some(theme::color32(colors, ThemeToken::RowHover))
+        } else {
+            None
+        };
+        if let Some(bg) = bg {
+            ui.painter().rect_filled(rect, 0.0, bg);
+        }
+    }
+    let text_color = theme::color32(
+        colors,
+        if selected {
+            ThemeToken::OnAccent
+        } else {
+            ThemeToken::Text
+        },
+    );
+    // 用 painter 直接画文字：`Label` 会参与命中测试，把整行的点击吃掉。
+    ui.painter().text(
+        egui::pos2(rect.left() + 6.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        text,
+        egui::FontId::proportional(11.5),
+        text_color,
+    );
+    response
+}
+
+/// 无底色的图标按钮（Unity 层级的眼睛 / 展开箭头：只有图标，没有按钮框）。
+fn flat_icon(ui: &mut Ui, glyph: &str) -> egui::Response {
+    ui.add(egui::Button::new(RichText::new(glyph).size(11.0)).frame(false))
+}
 
 /// egui 侧的临时 UI 状态（不进文档、不进撤销栈）。
 #[derive(Default)]
@@ -179,51 +225,90 @@ pub fn hierarchy(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
                 let active = entity.active();
                 let renaming = matches!(&state.rename, Some((target, _)) if *target == index);
 
-                let row = ui
-                    .horizontal(|ui| {
-                        ui.add_space(depth as f32 * 12.0);
-                        if expandable {
-                            let arrow = if expanded_here { "▾" } else { "▸" };
-                            if ui.small_button(arrow).clicked() {
-                                action = Some(TreeAction::ToggleExpand(index));
-                            }
+                // 整行选中（Unity：点行任意位置都选中，只有文字可点会很别扭），
+                // 行高固定 18px，用来画整行底色 / 拖拽插入线。
+                let (row_rect, row) = ui.allocate_exact_size(
+                    Vec2::new(ui.available_width(), 18.0),
+                    egui::Sense::click_and_drag(),
+                );
+                if ui.is_rect_visible(row_rect) {
+                    use prism_editor_core::ThemeToken;
+                    let colors = workspace.colors();
+                    let bg = if selected {
+                        Some(theme::color32(&colors, ThemeToken::Selection))
+                    } else if row.hovered() {
+                        Some(theme::color32(&colors, ThemeToken::RowHover))
+                    } else {
+                        None
+                    };
+                    if let Some(bg) = bg {
+                        ui.painter().rect_filled(row_rect, 0.0, bg);
+                    }
+                }
+                let mut row_ui = ui.new_child(
+                    egui::UiBuilder::new()
+                        .max_rect(row_rect)
+                        .layout(Layout::left_to_right(Align::Center)),
+                );
+                row_ui.add_space(6.0 + depth as f32 * 12.0);
+                if expandable {
+                    let arrow = if expanded_here { "▾" } else { "▸" };
+                    if flat_icon(&mut row_ui, arrow).clicked() {
+                        action = Some(TreeAction::ToggleExpand(index));
+                    }
+                } else {
+                    row_ui.add_space(16.0);
+                }
+                let eye = if active { "👁" } else { "–" };
+                if flat_icon(&mut row_ui, eye)
+                    .on_hover_text("Toggle Active")
+                    .clicked()
+                {
+                    action = Some(TreeAction::ToggleActive(index));
+                }
+                if renaming {
+                    if let Some((_, buffer)) = state.rename.as_mut() {
+                        let response = row_ui.add(
+                            egui::TextEdit::singleline(buffer)
+                                .desired_width(row_ui.available_width().max(60.0)),
+                        );
+                        response.request_focus();
+                        let enter = ui.input(|input| input.key_pressed(egui::Key::Enter));
+                        if enter || response.lost_focus() {
+                            action = Some(TreeAction::CommitRename(index, buffer.clone()));
+                        }
+                    }
+                } else {
+                    use prism_editor_core::ThemeToken;
+                    let colors = workspace.colors();
+                    let text_color = theme::color32(
+                        &colors,
+                        if selected {
+                            ThemeToken::OnAccent
                         } else {
-                            ui.add_space(18.0);
-                        }
-                        let eye = if active { "👁" } else { "–" };
-                        if ui
-                            .small_button(eye)
-                            .on_hover_text("Toggle Active")
-                            .clicked()
-                        {
-                            action = Some(TreeAction::ToggleActive(index));
-                        }
-                        if renaming {
-                            if let Some((_, buffer)) = state.rename.as_mut() {
-                                let response = ui.add(
-                                    egui::TextEdit::singleline(buffer)
-                                        .desired_width(ui.available_width().max(60.0)),
-                                );
-                                response.request_focus();
-                                let enter = ui.input(|input| input.key_pressed(egui::Key::Enter));
-                                if enter || response.lost_focus() {
-                                    action = Some(TreeAction::CommitRename(index, buffer.clone()));
-                                }
-                            }
-                        } else {
-                            let label = ui
-                                .selectable_label(selected, RichText::new(name.clone()).size(12.0));
-                            if label.clicked() {
-                                let extend = ui.input(|i| i.modifiers.shift);
-                                action = Some(TreeAction::Select(index, extend));
-                            }
-                            if label.double_clicked() {
-                                action = Some(TreeAction::BeginRename(index, name.clone()));
-                            }
-                        }
-                    })
-                    .response
-                    .interact(egui::Sense::click_and_drag());
+                            ThemeToken::Text
+                        },
+                    );
+                    // 同样用 painter 画，避免 Label 抢走整行点击。
+                    let text_pos = row_ui.cursor().min;
+                    row_ui.painter().text(
+                        egui::pos2(text_pos.x, row_ui.max_rect().center().y),
+                        egui::Align2::LEFT_CENTER,
+                        &name,
+                        egui::FontId::proportional(12.0),
+                        text_color,
+                    );
+                }
+                // 行级交互：单击选中、双击重命名（子控件会先吃掉自己的点击）。
+                if !renaming {
+                    if row.clicked() {
+                        let extend = ui.input(|i| i.modifiers.shift);
+                        action = Some(TreeAction::Select(index, extend));
+                    }
+                    if row.double_clicked() {
+                        action = Some(TreeAction::BeginRename(index, name.clone()));
+                    }
+                }
 
                 // ---- Unity 式拖拽：上/下 25% 插入，中间挂成子级 ----
                 if row.drag_started() {
@@ -853,12 +938,10 @@ pub fn assets(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
                     }
                 }
             }
+            let colors = workspace.colors();
             for path in &folders {
                 let label = format!("📁 {}", path.rsplit('/').next().unwrap_or(path));
-                if ui
-                    .selectable_label(false, RichText::new(label).size(11.5))
-                    .clicked()
-                {
+                if list_row(ui, &colors, false, &label).clicked() {
                     navigate_assets(state, path);
                 }
             }
@@ -873,7 +956,7 @@ pub fn assets(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
                 let payload = widgets::AssetDrag { path: path.clone() };
                 let response = ui
                     .dnd_drag_source(drag_id, payload, |ui| {
-                        ui.selectable_label(selected, RichText::new(label).size(11.5))
+                        list_row(ui, &workspace.colors(), selected, &label)
                     })
                     .inner;
                 if response.clicked() {
@@ -976,21 +1059,56 @@ pub fn docs(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
     let count = workspace.docs.len();
     for index in 0..count {
         let title = workspace.docs[index].title_with_dirty();
+        let dirty = title.ends_with(" *");
         let active = workspace.active_index() == index;
-        ui.horizontal(|ui| {
-            if ui
-                .selectable_label(active, RichText::new(title).size(12.0))
-                .clicked()
-            {
-                activate = Some(index);
+        let colors = workspace.colors();
+        // 整行可点（Unity / Web 的文档列表都是整行选中），行内按钮用无框图标。
+        let (rect, row) =
+            ui.allocate_exact_size(Vec2::new(ui.available_width(), 20.0), egui::Sense::click());
+        if ui.is_rect_visible(rect) {
+            let bg = if active {
+                Some(theme::color32(
+                    &colors,
+                    prism_editor_core::ThemeToken::Selection,
+                ))
+            } else if row.hovered() {
+                Some(theme::color32(
+                    &colors,
+                    prism_editor_core::ThemeToken::RowHover,
+                ))
+            } else {
+                None
+            };
+            if let Some(bg) = bg {
+                ui.painter().rect_filled(rect, 0.0, bg);
             }
-            if ui.small_button("💾").clicked() {
-                save = Some(index);
-            }
-            if ui.small_button("✕").clicked() {
+        }
+        let text_color = theme::color32(
+            &colors,
+            if active {
+                prism_editor_core::ThemeToken::OnAccent
+            } else {
+                prism_editor_core::ThemeToken::Text
+            },
+        );
+        let mut row_ui = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(rect)
+                .layout(Layout::left_to_right(Align::Center)),
+        );
+        row_ui.add_space(6.0);
+        row_ui.label(RichText::new(title).size(12.0).color(text_color));
+        row_ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            if flat_icon(ui, "×").clicked() {
                 close = Some(index);
             }
+            if dirty && flat_icon(ui, "💾").clicked() {
+                save = Some(index);
+            }
         });
+        if row.clicked() {
+            activate = Some(index);
+        }
     }
     if let Some(index) = activate {
         workspace.set_active(index);
@@ -1355,7 +1473,7 @@ pub fn build(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
                 workspace.move_scene_entry(index, 1);
                 changed = true;
             }
-            if ui.small_button("✕").clicked() {
+            if ui.small_button("×").clicked() {
                 workspace.remove_scene_entry(index);
                 changed = true;
             }
