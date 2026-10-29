@@ -938,14 +938,30 @@ impl EditorApp {
 
     fn save_all_documents(&mut self) {
         let count = self.workspace.docs.len();
+        let mut failures = Vec::new();
+        let mut saved = 0usize;
         for index in 0..count {
             if self.workspace.docs[index].dirty {
-                if let Err(error) = self.workspace.save_document(index) {
-                    self.state.status = format!("save failed: {error}");
+                match self.workspace.save_document(index) {
+                    Ok(_) => saved += 1,
+                    Err(error) => failures.push(error.to_string()),
                 }
             }
         }
-        self.state.status = "project saved".to_string();
+        if failures.is_empty() {
+            self.state.status = if saved == 0 {
+                "nothing to save".to_string()
+            } else {
+                format!("project saved ({saved})")
+            };
+        } else {
+            // 失败信息不能被「project saved」吞掉。
+            self.state.status = format!(
+                "save failed for {} document(s): {}",
+                failures.len(),
+                failures.join("; ")
+            );
+        }
     }
 
     fn create_empty_parent(&mut self) {
