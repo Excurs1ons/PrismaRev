@@ -422,6 +422,13 @@ The user project's dependency chain must stay **UI-framework-free and editor-fre
 - egui 编辑器（当前主线）的界面用 `editor_ui` 驱动（`snapshot` / `click` / `set`），
   走下面的本地控制通道，不依赖 CDP；旧的 web 编辑器 CDP 工具已移除。
 
+## 发布档（nightly build-std）
+- 发布包用 `bash scripts/build-dist.sh <project> [target]`（Windows：`scripts/build-dist.ps1`）：
+  nightly + `-Z build-std` + `-Cpanic=immediate-abort`，比 stable `dist` 再小 ~10%。
+- **不要**把 `panic = "immediate-abort"` 或 `cargo-features` 写进任何 `Cargo.toml`：
+  stable cargo 会直接拒绝解析清单。参数只留在脚本的 RUSTFLAGS 里。
+- 日常开发/CI 的 PR 流程仍用 stable，只有 master 的 `dist-size` job 走 nightly。
+
 ## Built-in screenshot (automation / art tuning)
 - `PRISMREV_SCREENSHOT=<path>` 让渲染线程在第 N 帧把**屏幕上那一帧**写成 PNG
   （`crates/prism-render/src/screenshot.rs` + `crates/prism-app/src/screenshot.rs`）。
