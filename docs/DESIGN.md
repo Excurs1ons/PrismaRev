@@ -1201,9 +1201,14 @@ cp target/release/prisma /tmp/p && strip /tmp/p && ls -l /tmp/p   # strip 后（
 |------|-------------|-------|------|
 | 3D 全量 | `pathtrace,ui,x11,wayland,group-3d,group-2d,group-ui` | 148 | 4.47 MB |
 | 2D + UI | `pathtrace,ui,x11,wayland,group-2d,group-ui` | 148 | 4.27 MB（−197 KB） |
-| 2D 极简 | `pathtrace,x11,wayland,group-2d` | 141 | **4.14 MB**（−331 KB） |
+| 2D 极简 | `pathtrace,x11,wayland,group-2d` | 141 | 4.14 MB（−331 KB） |
+| 2D 极简 + 仅 X11 | `pathtrace,x11,group-2d` | 130 | **3.02 MB（−1.45 MB，−32%）** |
 
-这三档就是 hub「新建项目」向导的选项组合（2D/3D × UI 开关）。**预设是语义承诺**：
+这四档就是 hub「新建项目」向导的选项组合（2D/3D × UI × 窗口后端）。
+
+**Wayland 是 Linux 上最大的单项**：`winit` 的 `sctk-adwaita`（客户端装饰）会带进
+`tiny-skia` + `ttf-parser` + `wayland-client` 整条链，共约 1.1 MB。仅 X11 的构建
+连字体光栅化都不需要——所以「Linux 极简」档直接把 2D 项目压到 3 MB 出头。**预设是语义承诺**：
 往某一档里加 feature 等于给该档所有项目加负担，改动必须写清理由。
 
 #### 组件分组的实测
