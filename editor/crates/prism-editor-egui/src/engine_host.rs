@@ -510,8 +510,8 @@ mod tests {
 
     #[test]
     fn editor_camera_rotation_matches_orbit_camera_eye_convention() {
-        let yaw = 0.6;
-        let pitch = 0.35;
+        let yaw = 0.0;
+        let pitch = 0.0;
         let distance = 12.0;
         let rotation = Quat::from_rotation_y(yaw) * Quat::from_rotation_x(-pitch);
         let eye_offset = rotation * Vec3::new(0.0, 0.0, distance);

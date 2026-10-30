@@ -192,8 +192,8 @@ impl Default for OrbitCamera {
     fn default() -> Self {
         Self {
             target: [0.0, 0.0, 0.0],
-            yaw: 0.6,
-            pitch: 0.6,
+            yaw: 0.0,
+            pitch: 0.0,
             distance: 12.0,
         }
     }
@@ -3156,8 +3156,8 @@ mod tests {
         for axis in 0..3 {
             assert!((next_eye[axis] - eye[axis]).abs() < 1e-5);
         }
-        assert!((camera.yaw - 0.5).abs() < 1e-6);
-        assert!((camera.pitch - 0.3).abs() < 1e-6);
+        assert!((camera.yaw + 0.1).abs() < 1e-6);
+        assert!((camera.pitch + 0.05).abs() < 1e-6);
     }
 
     #[test]
@@ -3187,7 +3187,8 @@ mod tests {
         workspace.camera.distance = 42.0;
         workspace.run(Command::ResetSceneCamera);
         assert_eq!(workspace.camera, OrbitCamera::default());
-        assert!((workspace.camera.pitch - 0.6).abs() < f32::EPSILON);
+        assert_eq!(workspace.camera.yaw, 0.0);
+        assert_eq!(workspace.camera.pitch, 0.0);
     }
 
     fn fixture() -> Value {
