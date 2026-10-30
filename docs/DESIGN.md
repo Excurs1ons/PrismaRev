@@ -1000,3 +1000,48 @@ cp target/release/prisma /tmp/p && strip /tmp/p && ls -l /tmp/p   # strip 后（
 
 **结论**：依赖数量与编译时间是"默认清爽"的指标；**二进制体积靠 feature 关掉大件能力**，
 不靠删零散依赖。
+
+---
+
+## 12. Lego：项目模板决定编译哪些子系统
+
+引擎不替项目做取舍。**能力 = 砖块，`Cargo.toml` = 图纸**：项目模板挑哪些 feature，
+就只编译、只链接哪些子系统。引擎自身的 `default` 保持「全量」，这样库和示例不会被
+某个项目的口味绑架；精简来自**模板**，不是来自删默认值。
+
+### 12.1 两层机制（不要混用）
+
+| 层 | 机制 | 例子 |
+|---|---|---|
+| **子系统** | cargo feature（编译期，真的不生成代码/不链接依赖） | `pathtrace`、`audio`、`physics`、`async-io` |
+| **组件** | `ComponentRegistry` 分组（运行期注册） | 场景里用不到的组件组不注册，加载时按「未知组件」处理 |
+
+组件**不要**做成 cargo feature：N 个组件就是 2^N 个组合，CI 编不完、模板也写不出来。
+组件级的取舍交给注册表分组 + 场景 cook（未注册组 = 不被提取，代码不链接）。
+
+### 12.2 当前砖块
+
+| 砖块 | feature | 默认 | 关掉后省什么 |
+|---|---|---|---|
+| 路径追踪 | `prism-render/pathtrace` | on | `pt_pass.rs`（~1.6k 行）+ 累积/BLAS-TLAS 资源 |
+| 音频 | `prism-app/audio` + `prism-engine/audio` | off | cpal + firewheel + symphonia（~60 crate，−3.1 MB） |
+| 物理 | `prism-app/physics` | off | rapier3d + parry3d（~40 crate） |
+| 异步资产 IO | `prism-asset/async-io` | off | tokio |
+
+**待拆**（按收益排序，每拆一块都要进 §12.2 表格与 `check_features.py` 矩阵）：
+
+- `2d` / `3d`：`SpritePass` 目前寄生在 `ForwardPass` 的 render pass 里，拆成独立 pass
+  之后，2D 项目可以完全不编译 3D（forward/shadow/skybox/mesh/primitives）。
+- `ibl`（2.3k 行 + HDR 环境资源）、`gtao`（1k 行）、`gi`（probe 烘焙）、`shadow`。
+- `ui`（fontdue/tiny-skia + `ui_overlay`）、`screenshot`。
+
+### 12.3 硬规则
+
+1. **每个 feature 必须能被单独关掉并编译通过**——`scripts/check_features.py` 的矩阵 +
+   CI 的 `features` job 就是这条规则的执行者；新增 feature 必须加一条最小组合。
+2. **默认值只增不减**：新能力默认进 `default`，模板要精简就显式 `default-features = false`；
+   不要为了某个项目的体积去改引擎默认值（会让其它项目静默失去功能）。
+3. **关掉要可诊断**：feature 关闭导致某能力不可用时，启动/使用时 `log::warn!` 说明
+   「需要开哪个 feature」，不要静默降级（`Subsystem::Audio` 已按此实现）。
+4. **模板 = `Cargo.toml` 的 feature 列表 + `build_app()` 的子系统列表**；两者必须一致
+   （开了 feature 却不装子系统等于白编译，装了子系统却没开 feature 会告警）。

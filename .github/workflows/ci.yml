@@ -99,6 +99,33 @@ jobs:
         run: python3 scripts/check_deps.py
 
   # ---------------------------------------------------------------------------
+  # 0c. Lego 特性矩阵：关掉某块能力之后仍然要能编译。feature 一旦没人编译就会
+  #     烂掉，模板宣称的「2D 项目不编 3D/PT」必须由 CI 真的验证。
+  # ---------------------------------------------------------------------------
+  features:
+    name: lego feature matrix
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ env.CACHE_VERSION }}-features
+
+      # prism-render 的 include_bytes! 需要 .spv（gitignored）。
+      - name: Setup slang + compile shaders
+        uses: ./.github/actions/setup-slang
+
+      - name: Feature matrix
+        run: python3 scripts/check_features.py
+
+  # ---------------------------------------------------------------------------
   # 1. Lint gate.
   # ---------------------------------------------------------------------------
   lint:
