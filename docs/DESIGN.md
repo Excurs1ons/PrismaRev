@@ -1336,3 +1336,31 @@ build-std 档绝对值更小，但 64 KB 段对齐的结论不变。
 所以开发仍是 stable（`cargo run` 一行不变），只有 `scripts/build-dist.sh` 需要 nightly + `rust-src`。
 
 体积账本（`§12.4`）里的 dist 数字默认指 stable 档；发布包按本节再乘 ~0.9。
+
+#### 极限体积档：`--size`（竞赛 / 演示用）
+
+```bash
+bash scripts/build-dist.sh --size projects/prisma
+```
+
+= `tiny` profile（`opt-level = "z"` + fat LTO + `cu=1` + `panic=abort` + strip）
++ `-C llvm-args=-inline-threshold=0 -C llvm-args=-inlinehint-threshold=0`
++ `build-std` + `immediate-abort`。
+
+| 档位（aarch64 Linux，3D 全量） | 体积 |
+|------|------|
+| stable `dist`（opt-level 3） | 4,465,304 |
+| `dist` + build-std（`build-dist.sh`） | 3,940,904 |
+| **`tiny` + build-std（`--size`）** | **2,695,720（−40%）** |
+
+代价：禁内联后 CPU 热路径慢 10–30%，GPU-bound 场景基本无感、CPU-bound 场景明显。
+想两者兼得就给关键 crate 单独开回 `opt-level = 3`：
+
+```toml
+[profile.tiny.package.prism-engine]
+opt-level = 3
+```
+
+**边界要说清**：`--size` 的现实区间是 **2.5–3.2 MB**。真正的 64k intro（30–60 KB）
+靠的是 `no_std` + 手写系统 API + Crinkler 类 PE 压缩器，和这里的 flag 不是一回事；
+不要在向导里把「体积档」宣传成竞赛级。

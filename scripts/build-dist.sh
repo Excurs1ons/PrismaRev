@@ -4,6 +4,7 @@
 #   bash scripts/build-dist.sh                        # 默认 projects/prisma，宿主 target
 #   bash scripts/build-dist.sh projects/fishing       # 指定工程
 #   bash scripts/build-dist.sh projects/prisma aarch64-linux-android
+#   bash scripts/build-dist.sh --size [project] [target]   # 极限体积（tiny profile + 禁内联）
 #   PROFILE=dist bash scripts/build-dist.sh           # 换 profile
 #
 # 为什么要它：官方 libstd 是预编译的，链接时只能整块接受；`-Z build-std` 让 std 和你的
@@ -18,9 +19,23 @@
 set -euo pipefail
 
 readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PROJECT="${1:-projects/prisma}"
-TARGET="${2:-}"
-PROFILE="${PROFILE:-dist}"
+
+# --size：极限体积档（tiny profile + 禁止内联）。位置参数保持向后兼容。
+SIZE_MODE=0
+ARGS=()
+for arg in "$@"; do
+    case "$arg" in
+        --size|--tiny) SIZE_MODE=1 ;;
+        *) ARGS+=("$arg") ;;
+    esac
+done
+PROJECT="${ARGS[0]:-projects/prisma}"
+TARGET="${ARGS[1]:-}"
+if [ "${SIZE_MODE}" = "1" ]; then
+    PROFILE="${PROFILE:-tiny}"
+else
+    PROFILE="${PROFILE:-dist}"
+fi
 NIGHTLY="${NIGHTLY:-nightly}"
 
 # ---------------------------------------------------------------- 环境检查
@@ -61,7 +76,14 @@ echo "build-dist: ${PROJECT} (${PKG}) → ${TARGET} / profile=${PROFILE}"
 # ---------------------------------------------------------------- 构建
 # RUSTFLAGS 同时作用于 std 与工程，保证 panic 策略一致；
 # 不写进 Cargo.toml，stable 构建因此完全不受影响。
-RUSTFLAGS="-Zunstable-options -Cpanic=immediate-abort" \
+# --size 再叠一刀：禁内联（纯体积手段）。热路径会慢 10–30%，只建议竞赛/极限场景用；
+# 想两者兼得就在工程 Cargo.toml 里给关键 crate 单独写 [profile.tiny.package.<crate>] opt-level = 3。
+EXTRA_RUSTFLAGS=""
+if [ "${SIZE_MODE}" = "1" ]; then
+    EXTRA_RUSTFLAGS=" -C llvm-args=-inline-threshold=0 -C llvm-args=-inlinehint-threshold=0"
+fi
+
+RUSTFLAGS="-Zunstable-options -Cpanic=immediate-abort${EXTRA_RUSTFLAGS}" \
     cargo "+${NIGHTLY}" build \
     --manifest-path "${MANIFEST}" \
     --profile "${PROFILE}" \

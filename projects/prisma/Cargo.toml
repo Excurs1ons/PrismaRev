@@ -42,6 +42,19 @@ log = "0.4"
 
 # 玩家 / Android 打包：体积优先（fat LTO + 单 codegen unit + abort + strip）。
 # 编辑器/工具跑在引擎进程内，不能用这个 profile。
+# 体积优先档：opt-level=z 关掉内联与循环展开，配合 scripts/build-dist.sh --size
+# 使用（那里还会加 -C llvm-args=-inline-threshold=0、build-std 与 immediate-abort）。
+# 竞赛/极限体积场景用；命热路径掉帧明显时可把关键 crate 覆盖回 3：
+#   [profile.tiny.package.prism-engine]
+#   opt-level = 3
+[profile.tiny]
+inherits = "release"
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+
 [profile.dist]
 inherits = "release"
 lto = "fat"
