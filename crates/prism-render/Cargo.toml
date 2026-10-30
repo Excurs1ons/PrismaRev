@@ -8,7 +8,7 @@ description = "Vulkan rendering backend for PrismaRev"
 [features]
 # ---- Lego：项目模板决定编译哪些能力（见 docs/DESIGN.md §12） ----
 # 默认「全量」，库和示例行为不变；项目模板按需挑砖。
-default = ["pathtrace", "ui", "ibl", "shadows", "gtao"]
+default = ["pathtrace", "ui", "ibl", "skybox", "shadows", "gtao"]
 # UI 叠加（fontdue 文本光栅 + ttf-parser，约 90 KB）。纯 3D/无 UI 项目可关：
 # 关掉后 `ui_overlay` 只保留输入数据结构，渲染侧忽略 UI 命令。
 ui = ["dep:fontdue"]
@@ -17,9 +17,13 @@ pathtrace = []
 # 图像光照（IBL）：环境 cubemap 卷积 / irradiance / prefilter / BRDF LUT + HDR 解码。
 # 2D 或纯色场景可关，`IblResources` 退化为 1x1 中性灰（descriptor 布局不变）。
 ibl = []
-# 阴影贴图 pass。2D 项目可关；关掉后 forward pass 不再绑定/采样阴影贴图。
+# 天空盒 pass（skybox.vert/frag.spv + 管线）。依赖 `ibl`：没有环境 cubemap 就
+# 没有可画的背景。关掉后 `SkyboxPass` 退化成空实现，`ForwardPass` 调用点不变。
+skybox = ["ibl"]
+# 阴影贴图 pass（shadow_map_pass.rs）。关掉后 set 3 绑定 1x1 远深度 dummy，
+# 场景没有实时阴影（descriptor 布局不变，验证层干净）。
 shadows = []
-# GTAO（半分辨率环境光遮蔽）。2D 项目可关。
+# GTAO（半分辨率环境光遮蔽，gtao.rs）。关掉后 set 4 绑定 1x1 白色 dummy。
 gtao = []
 
 [dependencies]
