@@ -7,10 +7,49 @@ use egui::{Align, Layout, RichText, Ui, Vec2};
 use prism_editor_core::{
     AssetKind, Locale, LogLevel, LogSource, Preferences, ProjectSettings, Workspace, THEME_PRESETS,
 };
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use crate::{theme, widgets};
 use egui_phosphor::regular as icons;
+
+/// 在系统文件管理器里定位一个项目内资产（Unity 的 `Reveal in Finder` / `Show in Explorer`）。
+///
+/// Windows 的 `explorer /select,<path>` 成功时也可能返回非零退出码，所以这里只检查能否
+/// 启动进程，不检查退出码。
+pub fn reveal_asset(workspace: &Workspace, path: &str) -> Result<(), String> {
+    let root = workspace
+        .project_root
+        .clone()
+        .ok_or_else(|| "no project root; cannot reveal assets".to_string())?;
+    let absolute = root.join(path);
+    if !absolute.exists() {
+        return Err(format!("{} does not exist", absolute.display()));
+    }
+
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut command = std::process::Command::new("explorer");
+        command.arg(format!("/select,{}", absolute.display()));
+        command
+    };
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut command = std::process::Command::new("open");
+        command.arg("-R").arg(&absolute);
+        command
+    };
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    let mut command = {
+        let mut command = std::process::Command::new("xdg-open");
+        command.arg(absolute.parent().unwrap_or(absolute.as_path()));
+        command
+    };
+
+    command
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("cannot open file manager: {error}"))
+}
 
 /// 资产类型 → Phosphor 图标。
 ///
@@ -32,16 +71,37 @@ fn asset_kind_icon(kind: AssetKind) -> &'static str {
     }
 }
 
+/// 层级树行高：比资产 / 文档列表更紧凑（Unity 的 Hierarchy 也是）。
+pub fn tree_row_height(compact: bool) -> f32 {
+    if compact {
+        15.0
+    } else {
+        18.0
+    }
+}
+
+/// 列表行高：Preferences 的「Compact layout」直接决定它。
+pub fn row_height(compact: bool) -> f32 {
+    if compact {
+        16.0
+    } else {
+        20.0
+    }
+}
+
 /// 列表行（Unity / Web 风格）：整行底色 + 文本，用于资产 / 文档这类列表。
 fn list_row(
     ui: &mut Ui,
     colors: &prism_editor_core::ThemeColors,
     selected: bool,
+    compact: bool,
     text: &str,
 ) -> egui::Response {
     use prism_editor_core::ThemeToken;
-    let (rect, response) =
-        ui.allocate_exact_size(Vec2::new(ui.available_width(), 20.0), egui::Sense::click());
+    let (rect, response) = ui.allocate_exact_size(
+        Vec2::new(ui.available_width(), row_height(compact)),
+        egui::Sense::click(),
+    );
     if ui.is_rect_visible(rect) {
         let bg = if selected {
             Some(theme::color32(colors, ThemeToken::Selection))
@@ -84,6 +144,8 @@ pub struct UiState {
     pub inspector_search: String,
     pub hierarchy_search: String,
     pub asset_search: String,
+    /// 历史面板的排序：`true` = 最新在上（Unity 的 `m_ShowLatestFirst`）。
+    pub history_latest_first: bool,
     /// 视口渲染分辨率倍率（高 DPI 屏上可降到 0.5 省 GPU）。
     pub viewport_scale: f32,
     pub log_levels: Vec<LogLevel>,
@@ -112,12 +174,22 @@ pub struct UiState {
     pub tab_drop: Option<(String, prism_editor_core::dock::DockZone, f32)>,
     /// 变换剪贴板：(字段, 分量值) —— Unity 的 Copy / Paste Transform。
     pub transform_clip: Option<(String, Vec<f32>)>,
+    /// Preferences 的镜像：列表行高（紧凑布局）。
+    pub compact: bool,
+    /// Preferences 的镜像：删除实体前是否弹确认。
+    pub confirm_delete: bool,
+    /// 等待确认删除的实体下标（None = 没有待确认的删除）。
+    pub pending_entity_delete: Option<Vec<usize>>,
     /// 层级拖拽：正在拖的实体下标 + 悬停目标。
     pub dragging: Option<usize>,
     pub drop_target: Option<(usize, DropZone)>,
     pub shortcuts_open: bool,
     /// 待确认的破坏性操作（Unity 的 `EditorUtility.DisplayDialog`）。
     pub confirm: Option<Confirm>,
+    /// 最后点过的面板（Unity 的 `focusedWindow`）：快捷键按它分派。
+    pub focused_panel: Option<String>,
+    /// 等待确认删除的资产路径。
+    pub pending_asset_delete: Option<String>,
 }
 
 /// 需要二次确认的破坏性操作。
@@ -256,6 +328,7 @@ pub fn hierarchy(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
     let mut action: Option<TreeAction> = None;
     // 资产拖到实体上 = 实例化预制体（Unity 的 Project → Hierarchy 拖拽）。
     let mut asset_drop: Option<(usize, String)> = None;
+    let mut hovered_drop_target = false;
 
     egui::ScrollArea::vertical()
         .id_salt("hierarchy-scroll")
@@ -283,7 +356,7 @@ pub fn hierarchy(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
                 // 整行选中（Unity：点行任意位置都选中，只有文字可点会很别扭），
                 // 行高固定 18px，用来画整行底色 / 拖拽插入线。
                 let (row_rect, row) = ui.allocate_exact_size(
-                    Vec2::new(ui.available_width(), 18.0),
+                    Vec2::new(ui.available_width(), tree_row_height(state.compact)),
                     egui::Sense::click_and_drag(),
                 );
                 if ui.is_rect_visible(row_rect) {
@@ -388,40 +461,54 @@ pub fn hierarchy(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
                 }
 
                 // ---- Unity 式拖拽：上/下 25% 插入，中间挂成子级 ----
-                if row.drag_started() {
+                if row.drag_started_by(egui::PointerButton::Primary) {
                     state.dragging = Some(index);
                 }
                 if state.dragging.is_some() && state.dragging != Some(index) && row.hovered() {
-                    let pointer_y = ui
-                        .input(|input| input.pointer.interact_pos())
-                        .map(|pos| pos.y)
-                        .unwrap_or(row.rect.center().y);
-                    let ratio = (pointer_y - row.rect.top()) / row.rect.height().max(1.0);
-                    let zone = if ratio < 0.25 {
-                        DropZone::Before
-                    } else if ratio > 0.75 {
-                        DropZone::After
-                    } else {
-                        DropZone::Child
-                    };
-                    state.drop_target = Some((index, zone));
+                    let from = state.dragging.expect("dragging checked above");
+                    let invalid = from == index
+                        || workspace.document().doc.descendants(from).contains(&index);
+                    hovered_drop_target = true;
                     let painter = ui.painter();
-                    match zone {
-                        DropZone::Before => painter.line_segment(
-                            [row.rect.left_top(), row.rect.right_top()],
-                            egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(90, 160, 240)),
-                        ),
-                        DropZone::After => painter.line_segment(
-                            [row.rect.left_bottom(), row.rect.right_bottom()],
-                            egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(90, 160, 240)),
-                        ),
-                        DropZone::Child => painter.rect_stroke(
+                    if invalid {
+                        state.drop_target = None;
+                        painter.rect_stroke(
                             row.rect,
                             egui::CornerRadius::ZERO,
-                            egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(90, 160, 240)),
+                            egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(220, 90, 90)),
                             egui::StrokeKind::Inside,
-                        ),
-                    };
+                        );
+                    } else {
+                        let pointer_y = ui
+                            .input(|input| input.pointer.interact_pos())
+                            .map(|pos| pos.y)
+                            .unwrap_or(row.rect.center().y);
+                        let ratio = (pointer_y - row.rect.top()) / row.rect.height().max(1.0);
+                        let zone = if ratio < 0.25 {
+                            DropZone::Before
+                        } else if ratio > 0.75 {
+                            DropZone::After
+                        } else {
+                            DropZone::Child
+                        };
+                        state.drop_target = Some((index, zone));
+                        match zone {
+                            DropZone::Before => painter.line_segment(
+                                [row.rect.left_top(), row.rect.right_top()],
+                                egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(90, 160, 240)),
+                            ),
+                            DropZone::After => painter.line_segment(
+                                [row.rect.left_bottom(), row.rect.right_bottom()],
+                                egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(90, 160, 240)),
+                            ),
+                            DropZone::Child => painter.rect_stroke(
+                                row.rect,
+                                egui::CornerRadius::ZERO,
+                                egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(90, 160, 240)),
+                                egui::StrokeKind::Inside,
+                            ),
+                        };
+                    }
                 }
 
                 if row.dnd_hover_payload::<widgets::AssetDrag>().is_some() {
@@ -478,8 +565,54 @@ pub fn hierarchy(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
             }
         });
 
+    if state.dragging.is_some() && !hovered_drop_target {
+        state.drop_target = None;
+    }
+
+    // Unity Hierarchy keeps a lightweight ghost under the pointer while dragging.
+    // It makes the operation legible even when the pointer is between rows or over
+    // the empty tail of the scroll area.
+    if let (Some(from), Some(pointer)) = (
+        state.dragging,
+        ui.input(|input| input.pointer.interact_pos()),
+    ) {
+        let label = workspace
+            .document()
+            .doc
+            .entities
+            .get(from)
+            .map(|entity| entity.display_name())
+            .unwrap_or_else(|| "Entity".to_string());
+        let ghost = egui::Rect::from_min_size(
+            pointer + egui::vec2(12.0, 12.0),
+            egui::vec2((label.len() as f32 * 7.0 + 30.0).clamp(96.0, 260.0), 22.0),
+        );
+        let painter = ui.ctx().layer_painter(egui::LayerId::new(
+            egui::Order::Foreground,
+            egui::Id::new("hierarchy-drag-preview"),
+        ));
+        painter.rect_filled(
+            ghost,
+            egui::CornerRadius::same(3),
+            egui::Color32::from_rgba_unmultiplied(35, 42, 54, 235),
+        );
+        painter.rect_stroke(
+            ghost,
+            egui::CornerRadius::same(3),
+            egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(100, 170, 245)),
+            egui::StrokeKind::Inside,
+        );
+        painter.text(
+            ghost.left_center() + egui::vec2(8.0, 0.0),
+            egui::Align2::LEFT_CENTER,
+            label,
+            egui::FontId::proportional(11.0),
+            egui::Color32::WHITE,
+        );
+    }
+
     // 松手 → 应用拖拽结果
-    if ui.input(|input| input.pointer.any_released()) {
+    if ui.input(|input| input.pointer.button_released(egui::PointerButton::Primary)) {
         if let (Some(from), Some((to, zone))) = (state.dragging.take(), state.drop_target.take()) {
             if from != to {
                 let parent_of_to = workspace.document().doc.entities[to]
@@ -498,27 +631,18 @@ pub fn hierarchy(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
                 match zone {
                     DropZone::Child => workspace.reparent(from, Some(to), None),
                     DropZone::Before => {
-                        let slot = parent_of_to.and_then(|parent| {
-                            workspace
-                                .document()
-                                .doc
-                                .children(parent)
-                                .iter()
-                                .position(|child| *child == to)
-                        });
-                        workspace.reparent(from, parent_of_to, slot.or(Some(to)));
+                        let mut position = to;
+                        if from < position {
+                            position = position.saturating_sub(1);
+                        }
+                        workspace.reparent(from, parent_of_to, Some(position));
                     }
                     DropZone::After => {
-                        let slot = parent_of_to.and_then(|parent| {
-                            workspace
-                                .document()
-                                .doc
-                                .children(parent)
-                                .iter()
-                                .position(|child| *child == to)
-                                .map(|slot| slot + 1)
-                        });
-                        workspace.reparent(from, parent_of_to, slot.or(Some(to + 1)));
+                        let mut position = to.saturating_add(1);
+                        if from < position {
+                            position = position.saturating_sub(1);
+                        }
+                        workspace.reparent(from, parent_of_to, Some(position));
                     }
                 }
             }
@@ -543,7 +667,11 @@ pub fn hierarchy(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
             }
             TreeAction::Delete(index) => {
                 workspace.select(index, false);
-                workspace.delete_selection();
+                if state.confirm_delete {
+                    state.pending_entity_delete = Some(vec![index]);
+                } else {
+                    workspace.delete_selection();
+                }
                 state.rename = None;
             }
             TreeAction::Duplicate(index) => {
@@ -588,6 +716,12 @@ fn add_component_menu(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiStat
     ui.menu_button("Add Component", |ui| {
         ui.add(egui::TextEdit::singleline(&mut state.add_component_query).hint_text("search"));
         let query = state.add_component_query.to_lowercase();
+        // 只列**当前实体还没挂**的组件：已挂的再点一次会把参数重置成默认值。
+        let attachable: std::collections::HashSet<String> = workspace
+            .component_types()
+            .into_iter()
+            .map(|component| component.name.clone())
+            .collect();
         let categories: Vec<(String, Vec<(String, String)>)> = workspace
             .schema
             .component_menu()
@@ -597,6 +731,7 @@ fn add_component_menu(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiStat
                     category.to_string(),
                     items
                         .into_iter()
+                        .filter(|item| attachable.contains(&item.name))
                         .filter(|item| {
                             query.is_empty() || item.name.to_lowercase().contains(&query)
                         })
@@ -607,6 +742,9 @@ fn add_component_menu(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiStat
             .filter(|(_, items): &(String, Vec<(String, String)>)| !items.is_empty())
             .collect();
         let mut picked = None;
+        if categories.is_empty() {
+            ui.label(RichText::new("no more components").weak());
+        }
         for (category, items) in categories {
             ui.menu_button(category, |ui| {
                 for (name, label) in items {
@@ -768,6 +906,7 @@ fn inspector_single(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState,
         .iter()
         .map(|asset| asset.path.clone())
         .collect();
+    let registry = workspace.schema.clone();
     let mut actions: Vec<widgets::CardAction> = Vec::new();
     for (name, value) in components {
         if name == "prism_engine::scene::Active" {
@@ -789,18 +928,243 @@ fn inspector_single(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState,
         };
         widgets::component_card_with_assets(
             ui,
+            &registry,
             &schema,
             &value,
             &mut actions,
             &mut set,
             &asset_paths,
         );
+        if name == "prism_engine::scene::LineRenderer" {
+            line_renderer_editor(ui, workspace, entity_id, &schema.name, &value);
+        } else if name == "prism_engine::scene::SpriteAnimation" {
+            sprite_animation_editor(ui, workspace, index, entity_id, &value);
+        }
     }
     for action in actions {
         match action {
             widgets::CardAction::Copy(name) => workspace.copy_component_at(index, &name),
             widgets::CardAction::Remove(name) => workspace.remove_component(&name),
         }
+    }
+}
+
+fn line_renderer_editor(
+    ui: &mut Ui,
+    workspace: &mut Workspace,
+    entity_id: u32,
+    component: &str,
+    value: &Value,
+) {
+    let Some(points) = value.get("points").and_then(Value::as_array) else {
+        return;
+    };
+    ui.label(RichText::new("Positions").strong().size(11.0));
+    let mut updated = points.clone();
+    let mut action = None;
+    for (index, point) in points.iter().enumerate() {
+        let mut coords = [0.0f64; 3];
+        for (axis, value) in coords.iter_mut().enumerate() {
+            *value = point.get(axis).and_then(Value::as_f64).unwrap_or_default();
+        }
+        ui.horizontal(|ui| {
+            ui.label(format!("{index}"));
+            let mut changed = false;
+            for coord in &mut coords {
+                changed |= ui.add(egui::DragValue::new(coord).speed(0.05)).changed();
+            }
+            if changed {
+                updated[index] = json!([coords[0], coords[1], coords[2]]);
+            }
+            if index + 1 < points.len()
+                && ui
+                    .small_button("+")
+                    .on_hover_text("Subdivide after this point")
+                    .clicked()
+            {
+                action = Some(LinePointAction::Subdivide(index));
+            }
+            if ui.small_button("x").on_hover_text("Remove point").clicked() {
+                action = Some(LinePointAction::Remove(index));
+            }
+        });
+    }
+    if ui.small_button("Add Position").clicked() {
+        action = Some(LinePointAction::Add);
+    }
+    if let Some(action) = action {
+        apply_line_point_action(&mut updated, action);
+    }
+    if updated.as_slice() != points {
+        workspace.set_field(entity_id, component, "points", Value::Array(updated));
+    }
+}
+
+#[derive(Clone, Copy)]
+enum LinePointAction {
+    Add,
+    Remove(usize),
+    Subdivide(usize),
+}
+
+fn apply_line_point_action(points: &mut Vec<Value>, action: LinePointAction) {
+    match action {
+        LinePointAction::Add => {
+            let next = points
+                .last()
+                .and_then(Value::as_array)
+                .map(|point| {
+                    [0, 1, 2]
+                        .map(|axis| point.get(axis).and_then(Value::as_f64).unwrap_or_default())
+                })
+                .unwrap_or([0.0, 0.0, 0.0]);
+            points.push(json!(next));
+        }
+        LinePointAction::Remove(index) => {
+            if index < points.len() {
+                points.remove(index);
+            }
+        }
+        LinePointAction::Subdivide(index) => {
+            let Some(a) = points.get(index).and_then(Value::as_array) else {
+                return;
+            };
+            let Some(b) = points.get(index + 1).and_then(Value::as_array) else {
+                return;
+            };
+            let midpoint = (0..3)
+                .map(|axis| {
+                    (a.get(axis).and_then(Value::as_f64).unwrap_or_default()
+                        + b.get(axis).and_then(Value::as_f64).unwrap_or_default())
+                        * 0.5
+                })
+                .collect::<Vec<_>>();
+            points.insert(index + 1, json!(midpoint));
+        }
+    }
+}
+
+fn sprite_animation_editor(
+    ui: &mut Ui,
+    workspace: &mut Workspace,
+    index: usize,
+    entity_id: u32,
+    value: &Value,
+) {
+    let frames = value
+        .get("frames")
+        .and_then(Value::as_u64)
+        .unwrap_or_default() as u32;
+    let playing = value
+        .get("playing")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let current = workspace
+        .document()
+        .doc
+        .entities
+        .get(index)
+        .and_then(|entity| entity.components.get("prism_engine::scene::SpriteRenderer"))
+        .and_then(|renderer| renderer.get("frame_index"))
+        .and_then(Value::as_u64)
+        .unwrap_or_default() as u32;
+    let max_frame = frames.saturating_sub(1);
+    let current = current.min(max_frame);
+
+    ui.label(RichText::new("Sprite Sheet Preview").strong().size(11.0));
+    let mut target_frame = None;
+    ui.horizontal(|ui| {
+        if ui
+            .add_enabled(frames > 0 && !playing, egui::Button::new(icons::SKIP_BACK))
+            .on_hover_text("First frame")
+            .clicked()
+        {
+            target_frame = Some(0);
+        }
+        if ui
+            .add_enabled(frames > 0 && !playing, egui::Button::new(icons::CARET_LEFT))
+            .on_hover_text("Previous frame")
+            .clicked()
+        {
+            target_frame = Some(current.saturating_sub(1));
+        }
+        ui.label(if frames == 0 { "No frames" } else { "Frame" });
+        let mut selected = current;
+        if ui
+            .add_enabled(
+                frames > 0 && !playing,
+                egui::DragValue::new(&mut selected).range(0..=max_frame),
+            )
+            .changed()
+        {
+            target_frame = Some(selected);
+        }
+        ui.label(format!("/ {frames}"));
+        if ui
+            .add_enabled(
+                frames > 0 && !playing,
+                egui::Button::new(icons::CARET_RIGHT),
+            )
+            .on_hover_text("Next frame")
+            .clicked()
+        {
+            target_frame = Some(current.saturating_add(1).min(max_frame));
+        }
+        if ui
+            .add_enabled(
+                frames > 0 && !playing,
+                egui::Button::new(icons::SKIP_FORWARD),
+            )
+            .on_hover_text("Last frame")
+            .clicked()
+        {
+            target_frame = Some(max_frame);
+        }
+    });
+    if playing {
+        ui.label(
+            RichText::new("Pause playback to preview a frame.")
+                .weak()
+                .size(10.0),
+        );
+    }
+    if let Some(frame) = target_frame {
+        set_sprite_frame(workspace, entity_id, frame);
+    }
+}
+
+fn set_sprite_frame(workspace: &mut Workspace, entity_id: u32, frame: u32) {
+    workspace.set_field(
+        entity_id,
+        "prism_engine::scene::SpriteRenderer",
+        "frame_index",
+        json!(frame),
+    );
+}
+
+#[cfg(test)]
+mod line_renderer_tests {
+    use super::*;
+
+    #[test]
+    fn subdivide_inserts_midpoint_between_adjacent_positions() {
+        let mut points = vec![json!([0.0, 2.0, 4.0]), json!([2.0, 4.0, 8.0])];
+        apply_line_point_action(&mut points, LinePointAction::Subdivide(0));
+        assert_eq!(
+            Value::Array(points),
+            json!([[0.0, 2.0, 4.0], [1.0, 3.0, 6.0], [2.0, 4.0, 8.0]])
+        );
+    }
+
+    #[test]
+    fn remove_and_add_positions_preserve_existing_points() {
+        let mut points = vec![json!([1.0, 2.0, 3.0]), json!([4.0, 5.0, 6.0])];
+        apply_line_point_action(&mut points, LinePointAction::Remove(0));
+        apply_line_point_action(&mut points, LinePointAction::Add);
+        assert_eq!(
+            Value::Array(points),
+            json!([[4.0, 5.0, 6.0], [4.0, 5.0, 6.0]])
+        );
     }
 }
 
@@ -857,6 +1221,7 @@ fn inspector_multi(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState, 
         .iter()
         .map(|asset| asset.path.clone())
         .collect();
+    let registry = workspace.schema.clone();
     let mut actions: Vec<widgets::CardAction> = Vec::new();
     for (name, value) in values {
         let Some(schema) = workspace.schema.component(&name).cloned() else {
@@ -867,6 +1232,7 @@ fn inspector_multi(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState, 
         };
         widgets::component_card_with_assets(
             ui,
+            &registry,
             &schema,
             &value,
             &mut actions,
@@ -1039,7 +1405,7 @@ pub fn assets(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
                     icons::FOLDER,
                     path.rsplit('/').next().unwrap_or(path)
                 );
-                if list_row(ui, &colors, false, &label).clicked() {
+                if list_row(ui, &colors, false, state.compact, &label).clicked() {
                     navigate_assets(state, path);
                 }
             }
@@ -1054,7 +1420,7 @@ pub fn assets(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
                 let payload = widgets::AssetDrag { path: path.clone() };
                 let response = ui
                     .dnd_drag_source(drag_id, payload, |ui| {
-                        list_row(ui, &workspace.colors(), selected, &label)
+                        list_row(ui, &workspace.colors(), selected, state.compact, &label)
                     })
                     .inner;
                 if response.clicked() {
@@ -1087,6 +1453,13 @@ pub fn assets(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
                     if ui.button("Copy Path").clicked() {
                         ui.ctx().copy_text(path.clone());
                         state.status = format!("copied {path}");
+                        ui.close();
+                    }
+                    if ui.button("Show in Explorer").clicked() {
+                        state.status = match reveal_asset(workspace, path) {
+                            Ok(()) => format!("revealed {path}"),
+                            Err(error) => error,
+                        };
                         ui.close();
                     }
                     if ui.button("Delete").clicked() {
@@ -1124,15 +1497,60 @@ pub fn assets(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
         ));
     }
     if let Some(path) = delete {
-        match workspace.delete_asset(&path) {
-            Ok(()) => {
-                if state.asset_selection.as_deref() == Some(path.as_str()) {
-                    state.asset_selection = None;
-                }
-                state.status = format!("deleted {path}");
+        request_delete_asset(workspace, state, &path);
+    }
+    asset_delete_confirm(ui, workspace, state);
+}
+
+/// 删除资产：按首选项决定是否先弹确认框。
+pub fn request_delete_asset(workspace: &mut Workspace, state: &mut UiState, path: &str) {
+    if state.pending_asset_delete.is_some() {
+        return;
+    }
+    state.pending_asset_delete = Some(path.to_string());
+    let _ = workspace;
+}
+
+/// 真正执行删除（确认框 / 关闭确认后调用）。
+pub fn delete_asset_now(workspace: &mut Workspace, state: &mut UiState, path: &str) {
+    match workspace.delete_asset(path) {
+        Ok(()) => {
+            if state.asset_selection.as_deref() == Some(path) {
+                state.asset_selection = None;
             }
-            Err(error) => state.status = format!("delete failed: {error}"),
+            state.status = format!("deleted {path}");
         }
+        Err(error) => state.status = format!("delete failed: {error}"),
+    }
+}
+
+/// 资产删除确认框（绘制在资产面板内，使用全局 `ctx`）。
+pub fn asset_delete_confirm(ui: &Ui, workspace: &mut Workspace, state: &mut UiState) {
+    let Some(path) = state.pending_asset_delete.clone() else {
+        return;
+    };
+    let mut confirmed = false;
+    let mut cancelled = false;
+    egui::Window::new("Delete Asset")
+        .collapsible(false)
+        .resizable(false)
+        .show(ui.ctx(), |ui| {
+            ui.label(format!("删除 {path}？此操作不可撤销。"));
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                if ui.button("Delete").clicked() {
+                    confirmed = true;
+                }
+                if ui.button("Cancel").clicked() {
+                    cancelled = true;
+                }
+            });
+        });
+    if confirmed {
+        state.pending_asset_delete = None;
+        delete_asset_now(workspace, state, &path);
+    } else if cancelled {
+        state.pending_asset_delete = None;
     }
 }
 
@@ -1161,8 +1579,10 @@ pub fn docs(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
         let active = workspace.active_index() == index;
         let colors = workspace.colors();
         // 整行可点（Unity / Web 的文档列表都是整行选中），行内按钮用无框图标。
-        let (rect, row) =
-            ui.allocate_exact_size(Vec2::new(ui.available_width(), 20.0), egui::Sense::click());
+        let (rect, row) = ui.allocate_exact_size(
+            Vec2::new(ui.available_width(), row_height(state.compact)),
+            egui::Sense::click(),
+        );
         if ui.is_rect_visible(rect) {
             let bg = if active {
                 Some(theme::color32(
@@ -1315,30 +1735,179 @@ pub fn log(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
 // 撤销历史
 // ---------------------------------------------------------------------------
 
-pub fn history(ui: &mut Ui, workspace: &mut Workspace) {
-    let entries = workspace.undo_history();
-    let mut revert: Option<usize> = None;
+pub fn history(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
+    let entries = workspace.history_entries();
+    let cursor = workspace.history_cursor();
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut state.history_latest_first, "Latest first");
+        ui.label(RichText::new(format!("{cursor}/{}", entries.len())).weak());
+    });
+    ui.separator();
+
+    let mut jump: Option<usize> = None;
+    let order: Vec<usize> = if state.history_latest_first {
+        (0..entries.len()).rev().collect()
+    } else {
+        (0..entries.len()).collect()
+    };
     egui::ScrollArea::vertical()
         .id_salt("history-scroll")
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            for (position, label) in entries.iter().enumerate() {
-                if ui
-                    .selectable_label(false, RichText::new(label).size(11.0))
-                    .clicked()
-                {
-                    revert = Some(position);
-                }
+            if !state.history_latest_first {
+                history_row(ui, "Initial state", cursor == 0, cursor != 0, 0, &mut jump);
+            }
+            for index in &order {
+                let (label, undone) = &entries[*index];
+                // 行 = 「执行完这一步之后的状态」，所以下标要 +1。
+                let target = index + 1;
+                let current = target == cursor;
+                history_row(ui, label, current, *undone, target, &mut jump);
+            }
+            if state.history_latest_first {
+                history_row(ui, "Initial state", cursor == 0, cursor != 0, 0, &mut jump);
             }
         });
-    if let Some(position) = revert {
-        workspace.undo_to(position);
+    if let Some(target) = jump {
+        workspace.jump_history(target);
+    }
+}
+
+/// 历史面板的一行：`weak` 表示这步当前处于「已撤销」状态。
+fn history_row(
+    ui: &mut Ui,
+    label: &str,
+    current: bool,
+    weak: bool,
+    target: usize,
+    jump: &mut Option<usize>,
+) {
+    let mut text = if weak {
+        RichText::new(format!("(undone) {label}")).weak()
+    } else {
+        RichText::new(label)
+    };
+    if current {
+        text = text.strong();
+    }
+    if ui.selectable_label(current, text.size(11.0)).clicked() {
+        *jump = Some(target);
     }
 }
 
 // ---------------------------------------------------------------------------
 // 渲染图
 // ---------------------------------------------------------------------------
+
+/// Scene View 的调试渲染模式（对应 Unity 的 `SceneRenderModeWindow` 第一组）。
+///
+/// 只映射引擎**已有**的 `debug_flags` / `debug_rt`：PBR 分量隔离用
+/// `PBR_FLAG_NAMES` 里的位，深度 / 视图空间法线用 PostPass 的调试 RT。
+/// 线框（Wireframe / Shaded Wireframe）需要渲染管线支持 `POLYGON_MODE_LINE`，
+/// 不在这里假装实现。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SceneRenderMode {
+    Shaded,
+    Direct,
+    Specular,
+    Metallic,
+    Roughness,
+    AmbientOcclusion,
+    Emissive,
+    Depth,
+    ViewNormals,
+}
+
+impl SceneRenderMode {
+    pub const ALL: [SceneRenderMode; 9] = [
+        SceneRenderMode::Shaded,
+        SceneRenderMode::Direct,
+        SceneRenderMode::Specular,
+        SceneRenderMode::Metallic,
+        SceneRenderMode::Roughness,
+        SceneRenderMode::AmbientOcclusion,
+        SceneRenderMode::Emissive,
+        SceneRenderMode::Depth,
+        SceneRenderMode::ViewNormals,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            SceneRenderMode::Shaded => "Shaded",
+            SceneRenderMode::Direct => "Direct",
+            SceneRenderMode::Specular => "Specular",
+            SceneRenderMode::Metallic => "Metallic",
+            SceneRenderMode::Roughness => "Roughness",
+            SceneRenderMode::AmbientOcclusion => "AO",
+            SceneRenderMode::Emissive => "Emissive",
+            SceneRenderMode::Depth => "Depth",
+            SceneRenderMode::ViewNormals => "View Normals",
+        }
+    }
+
+    /// `PBR_FLAG_*` 位（见 `PBR_FLAG_NAMES`）；`0` = 正常着色。
+    fn debug_flags(self) -> u32 {
+        match self {
+            SceneRenderMode::Direct => 1 << 0,
+            SceneRenderMode::Specular => 1 << 2,
+            SceneRenderMode::Metallic => 1 << 3,
+            SceneRenderMode::Roughness => 1 << 4,
+            SceneRenderMode::AmbientOcclusion => 1 << 8,
+            SceneRenderMode::Emissive => 1 << 9,
+            _ => 0,
+        }
+    }
+
+    /// PostPass 调试 RT：`0` 正常、`1` 线性深度、`2` 视图空间法线。
+    fn debug_rt(self) -> u32 {
+        match self {
+            SceneRenderMode::Depth => 1,
+            SceneRenderMode::ViewNormals => 2,
+            _ => 0,
+        }
+    }
+
+    /// 从当前设置**反推**模式；引擎设置被其它入口改成组合值时返回 `None`。
+    pub fn from_settings(settings: &prism_engine::render_settings::RenderSettings) -> Option<Self> {
+        Self::ALL.into_iter().find(|mode| {
+            mode.debug_flags() == settings.debug_flags && mode.debug_rt() == settings.debug_rt
+        })
+    }
+
+    pub fn apply(self, settings: &mut prism_engine::render_settings::RenderSettings) {
+        settings.debug_flags = self.debug_flags();
+        settings.debug_rt = self.debug_rt();
+    }
+}
+
+/// 工具栏 / 渲染设置面板共用的「渲染模式」下拉框。返回是否改动。
+pub fn scene_render_mode_combo(
+    ui: &mut Ui,
+    settings: &mut prism_engine::render_settings::RenderSettings,
+) -> bool {
+    let current = SceneRenderMode::from_settings(settings);
+    let selected = current.map(|mode| mode.label()).unwrap_or("Custom");
+    let mut chosen = current;
+    egui::ComboBox::from_id_salt("scene-render-mode")
+        .selected_text(selected)
+        .show_ui(ui, |ui| {
+            for mode in SceneRenderMode::ALL {
+                if ui
+                    .selectable_label(current == Some(mode), mode.label())
+                    .clicked()
+                {
+                    chosen = Some(mode);
+                }
+            }
+        });
+    match chosen {
+        Some(mode) if current != Some(mode) => {
+            mode.apply(settings);
+            true
+        }
+        _ => false,
+    }
+}
 
 pub fn render_graph(
     ui: &mut Ui,
@@ -1352,6 +1921,10 @@ pub fn render_graph(
         .num_columns(2)
         .spacing([8.0, 4.0])
         .show(ui, |ui| {
+            ui.label("Mode");
+            changed |= scene_render_mode_combo(ui, settings);
+            ui.end_row();
+
             ui.label("Tonemap");
             egui::ComboBox::from_id_salt("tonemap")
                 .selected_text(match settings.tonemap_mode {
@@ -1372,7 +1945,7 @@ pub fn render_graph(
                 });
             ui.end_row();
 
-            ui.label("Mode");
+            ui.label("Path trace");
             let mut path_trace = matches!(
                 settings.render_mode,
                 prism_engine::render_settings::RenderMode::PathTrace
@@ -1509,12 +2082,18 @@ pub fn preferences(
     workspace: &mut Workspace,
     state: &mut UiState,
 ) {
-    ui.checkbox(&mut preferences.autosave, "Auto save");
+    ui.checkbox(&mut preferences.autosave, "Auto save layout");
     ui.checkbox(&mut preferences.confirm_delete, "Confirm before delete");
     ui.checkbox(&mut preferences.compact, "Compact layout");
     ui.horizontal(|ui| {
         ui.label("Max log lines");
-        ui.add(egui::DragValue::new(&mut preferences.max_log_lines).range(500.0..=20_000.0));
+        let response =
+            ui.add(egui::DragValue::new(&mut preferences.max_log_lines).range(500.0..=20_000.0));
+        if response.changed() {
+            workspace
+                .log
+                .set_capacity(preferences.max_log_lines as usize);
+        }
     });
     ui.horizontal(|ui| {
         ui.label("Language");
@@ -1534,6 +2113,45 @@ pub fn preferences(
             state.status = "locale: zh-CN".to_string();
         }
     });
+}
+
+/// Preferences 的「Confirm before delete」：删除实体前弹一次确认。
+pub fn entity_delete_confirm(ctx: &egui::Context, workspace: &mut Workspace, state: &mut UiState) {
+    let Some(indices) = state.pending_entity_delete.clone() else {
+        return;
+    };
+    let mut decision: Option<bool> = None;
+    egui::Window::new("Delete")
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+        .show(ctx, |ui| {
+            let count = indices.len();
+            if count == 1 {
+                ui.label("Delete the selected entity and its children?");
+            } else {
+                ui.label(format!(
+                    "Delete {count} selected entities and their children?"
+                ));
+            }
+            ui.horizontal(|ui| {
+                if ui.button("Delete").clicked() {
+                    decision = Some(true);
+                }
+                if ui.button("Cancel").clicked() {
+                    decision = Some(false);
+                }
+            });
+        });
+    match decision {
+        Some(true) => {
+            workspace.select_many(&indices, false);
+            workspace.delete_selection();
+            state.pending_entity_delete = None;
+        }
+        Some(false) => state.pending_entity_delete = None,
+        None => {}
+    }
 }
 
 pub fn theme(ui: &mut Ui, workspace: &mut Workspace) {
@@ -1657,5 +2275,37 @@ pub fn boolean_window(
         .show(ctx, |ui| body(ui));
     if !visible {
         *open = false;
+    }
+}
+
+#[cfg(test)]
+mod render_mode_tests {
+    use super::*;
+    use prism_engine::render_settings::RenderSettings;
+
+    #[test]
+    fn every_scene_mode_round_trips_through_render_settings() {
+        for mode in SceneRenderMode::ALL {
+            let mut settings = RenderSettings::default();
+            mode.apply(&mut settings);
+            assert_eq!(
+                SceneRenderMode::from_settings(&settings),
+                Some(mode),
+                "{} did not round-trip",
+                mode.label()
+            );
+        }
+    }
+
+    #[test]
+    fn shaded_clears_flags_and_unknown_combinations_report_none() {
+        let mut settings = RenderSettings::default();
+        SceneRenderMode::Metallic.apply(&mut settings);
+        assert_ne!(settings.debug_flags, 0);
+        SceneRenderMode::Shaded.apply(&mut settings);
+        assert_eq!((settings.debug_flags, settings.debug_rt), (0, 0));
+
+        settings.debug_flags = (1 << 0) | (1 << 3);
+        assert_eq!(SceneRenderMode::from_settings(&settings), None);
     }
 }

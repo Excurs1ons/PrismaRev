@@ -33,6 +33,73 @@ pub enum BuildKind {
     CleanEngine,
 }
 
+fn game_manifest_path(root: &Path) -> PathBuf {
+    let nested = root.join("projects/prisma/Cargo.toml");
+    if nested.is_file() {
+        nested
+    } else {
+        root.join("Cargo.toml")
+    }
+}
+
+fn pipeline_manifest_path(root: &Path) -> Option<PathBuf> {
+    let mut current = Some(root);
+    while let Some(dir) = current {
+        let manifest = dir.join("crates/prism-build-pipeline/Cargo.toml");
+        if manifest.is_file() {
+            return Some(dir.join("Cargo.toml"));
+        }
+        current = dir.parent();
+    }
+    None
+}
+
+fn command_args(kind: &BuildKind, root: &Path) -> Result<Vec<String>, String> {
+    let mut args: Vec<String> = pipeline_manifest_path(root)
+        .map(|manifest| {
+            vec![
+                "run".into(),
+                "--manifest-path".into(),
+                manifest.display().to_string(),
+                "-p".into(),
+                "prism-build-pipeline".into(),
+                "--".into(),
+            ]
+        })
+        .unwrap_or_default();
+    match kind {
+        BuildKind::ScenePack => {
+            if args.is_empty() {
+                return Err("cannot find prism-build-pipeline workspace".into());
+            }
+            args.push("build-scenes".into());
+        }
+        BuildKind::Cook(path) => {
+            if args.is_empty() {
+                return Err("cannot find prism-build-pipeline workspace".into());
+            }
+            args.push("cook".into());
+            args.push(path.display().to_string());
+        }
+        BuildKind::Clean => args = vec!["clean".into()],
+        BuildKind::PlayerRun => {
+            args = vec![
+                "run".into(),
+                "--manifest-path".into(),
+                game_manifest_path(root).display().to_string(),
+            ];
+        }
+        BuildKind::Player => {
+            args = vec![
+                "build".into(),
+                "--manifest-path".into(),
+                game_manifest_path(root).display().to_string(),
+            ];
+        }
+    }
+    Ok(args)
+}
+
 impl BuildKind {
     pub fn label(&self) -> String {
         match self {
@@ -53,57 +120,13 @@ impl BuildJob {
         let (tx, rx) = channel();
         let root = root.to_path_buf();
         std::thread::spawn(move || {
-            let mut args: Vec<String> = vec![
-                "run".into(),
-                "--manifest-path".into(),
-                root.join("Cargo.toml").display().to_string(),
-                "-p".into(),
-                "prism-build-pipeline".into(),
-                "--".into(),
-            ];
-            match &kind {
-                BuildKind::ScenePack => args.push("build-scenes".into()),
-                BuildKind::Cook(path) => {
-                    args.push("cook".into());
-                    args.push(path.display().to_string());
+            let args = match command_args(&kind, &root) {
+                Ok(args) => args,
+                Err(error) => {
+                    let _ = tx.send(error);
+                    return;
                 }
-                BuildKind::Clean => {
-                    // 只清玩家 workspace 的 target；根 target 见 CleanEngine。
-                    args = vec![
-                        "clean".into(),
-                        "--manifest-path".into(),
-                        root.join("projects/prisma/Cargo.toml")
-                            .display()
-                            .to_string(),
-                    ];
-                }
-                BuildKind::CleanEngine => {
-                    args = vec![
-                        "clean".into(),
-                        "--manifest-path".into(),
-                        root.join("Cargo.toml").display().to_string(),
-                    ];
-                }
-                BuildKind::PlayerRun => {
-                    args = vec![
-                        "run".into(),
-                        "--manifest-path".into(),
-                        root.join("projects/prisma/Cargo.toml")
-                            .display()
-                            .to_string(),
-                    ];
-                }
-                BuildKind::Player => {
-                    // 玩家二进制是独立 workspace：直接 cargo build 它的 manifest。
-                    args = vec![
-                        "build".into(),
-                        "--manifest-path".into(),
-                        root.join("projects/prisma/Cargo.toml")
-                            .display()
-                            .to_string(),
-                    ];
-                }
-            }
+            };
             let _ = tx.send(format!("$ cargo {}", args.join(" ")));
             let output = std::process::Command::new("cargo")
                 .args(&args)
@@ -155,5 +178,58 @@ impl BuildJob {
             }
         }
         (lines, self.running)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn player_build_targets_project_root_manifest() {
+        let mut repo = std::env::current_dir().unwrap();
+        while !repo
+            .join("crates/prism-build-pipeline/Cargo.toml")
+            .is_file()
+        {
+            repo = repo.parent().expect("repository root").to_path_buf();
+        }
+        let root = repo.join("projects/fishing");
+        assert_eq!(
+            command_args(&BuildKind::Player, &root).unwrap(),
+            vec![
+                "build".to_string(),
+                "--manifest-path".to_string(),
+                root.join("Cargo.toml").display().to_string()
+            ]
+        );
+        assert_eq!(
+            command_args(&BuildKind::PlayerRun, &root).unwrap(),
+            vec![
+                "run".to_string(),
+                "--manifest-path".to_string(),
+                root.join("Cargo.toml").display().to_string()
+            ]
+        );
+        assert_eq!(
+            game_manifest_path(&repo),
+            repo.join("projects/prisma/Cargo.toml")
+        );
+    }
+
+    #[test]
+    fn pipeline_manifest_search_walks_to_repository_root() {
+        let mut root = std::env::current_dir().unwrap();
+        while !root
+            .join("crates/prism-build-pipeline/Cargo.toml")
+            .is_file()
+        {
+            root = root.parent().expect("repository root").to_path_buf();
+        }
+        root.push("projects/fishing");
+        assert_eq!(
+            pipeline_manifest_path(&root),
+            Some(root.ancestors().nth(2).unwrap().join("Cargo.toml"))
+        );
     }
 }

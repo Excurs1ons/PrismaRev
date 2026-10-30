@@ -39,6 +39,10 @@ projects/fishing/assets/sprites/
 __pycache__/
 *.pyc
 
+# 场景保存的原子写临时文件与备份（见 editor-gpui core project.rs）
+*.json.tmp
+*.json.bak
+
 # Node / Vite frontends (launcher + editor)
 node_modules/
 /editor/dist/
