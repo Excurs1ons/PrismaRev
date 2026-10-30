@@ -1176,7 +1176,7 @@ cp target/release/prisma /tmp/p && strip /tmp/p && ls -l /tmp/p   # strip 后（
 | 其它第三方 | 0.49 MB | 12% | 个案处理 |
 | **日志正则（env_logger → regex）** | **0.47 MB** | **12%** | **最容易的一刀：换掉 env_filter/regex 即可** |
 | 字体/2D（tiny_skia/ttf_parser/fontdue） | 0.23 MB | 6% | `ui` feature |
-| 序列化（toml/serde_json） | 0.14 MB | 3.5% | 配置 feature |
+| 序列化（serde_json；`toml` 已移除，−128 KB） | ~0.02 MB | <1% | 场景文档/清单共用，基本到底 |
 | 压缩（zstd/flate2） | 0.04 MB | 1% | 几乎不值得 |
 
 **窗口栈按平台裁剪**（实测，`dist` strip 后）：
@@ -1242,7 +1242,7 @@ cp target/release/prisma /tmp/p && strip /tmp/p && ls -l /tmp/p   # strip 后（
 | `prism_scene` | 244 KB | 组件注册表 + 全组件 serde：**下一个大件** |
 | `wayland_client` / `x11_dl` / `x11rb` / `smithay` / `tiny_skia` | ~450 KB | 只在 Linux 双后端；x11-only 或 Windows 直接消失 |
 | `prism_render` / `prism_engine` / `prism_app` / `prism_ecs` / `prism_reflect` | ~640 KB | 自研主体 |
-| `toml` + `toml_parser` + `serde_json` | ~110 KB | 配置解析；换小格式或 feature 化 |
+| `serde_json` | 未单列 | `.scene.json` / `scenes.json` / `.pak.meta.json` 共用，必需（`toml` 已移除，实测 −128 KB） |
 | `fontdue` 系（`ttf_parser` 等） | ~90 KB→64 KB | `ui` feature（本 PR） |
 | `gimli` / `addr2line` | 33 KB | std 的 panic 回溯；需 build-std |
 | `libloading` | 33 KB | ash 动态加载 `vulkan-1`；必需的代价 |
@@ -1250,7 +1250,7 @@ cp target/release/prisma /tmp/p && strip /tmp/p && ls -l /tmp/p   # strip 后（
 | `zstd` / flate2 / crc32 | ~44 KB | `.pak` 解压；资产压缩必需 |
 
 按这个地图，**还能稳定拿到的**是：`screenshot`（~20 KB）、`prism_scene` 组件分组（百 KB 量级，
-但要先设计注册表分组）、`toml`（~110 KB，需替换配置解析）。其余要么是平台必需的，要么要 nightly。
+但要先设计注册表分组）。其余要么是平台必需的，要么要 nightly。
 
 #### 预设档位（`dist`，strip，x11+wayland；crate 数含 workspace 内 crate）
 
@@ -1314,8 +1314,11 @@ cp target/release/prisma /tmp/p && strip /tmp/p && ls -l /tmp/p   # strip 后（
 数字用的是 stable `--profile dist`（与 §12.5 左列同口径）；`scripts/build-dist.sh` 的
 build-std 档绝对值更小，但 64 KB 段对齐的结论不变。
 
-剩下能动的只有两块：`toml` 依赖链已由自写 INI 解析器移除（`settings.ini` + `scenes.json`，
-见 §13），`serde_json` 仍是运行时依赖；Rust 基线走 `build-std`（§12.5）。
+剩下能动的只有两块：
+
+- Rust 基线 ~678 KB（core/std/alloc/hashbrown）——要 nightly `build-std`，会抬高贡献门槛（§12.5）；
+- `serde_json`（配置、场景清单、`.pak` 路径清单共用；`toml` 已整条移除，实测 −128 KB）——
+  再想减小只能换二进制配置，作者体验会明显变差。
 
 #### 发布档：nightly `-Z build-std`（`scripts/build-dist.sh`）
 
