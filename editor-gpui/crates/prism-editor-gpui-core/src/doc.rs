@@ -416,7 +416,7 @@ impl SceneDoc {
         Ok(to)
     }
 
-    /// 复制整棵子树（Unity 的 Ctrl+D）：内部 parent 重映射到新 id，根保持原父级。
+    /// 复制整棵子树（引擎的 Ctrl+D）：内部 parent 重映射到新 id，根保持原父级。
     pub fn duplicate_subtree(&mut self, index: usize) -> Option<usize> {
         self.entities.get(index)?;
         // 收集子树（根 + 后代），保持数组顺序，保证父级先于子级。
@@ -513,7 +513,7 @@ impl SceneDoc {
     }
 
     /// 复制 / 剪切用：与 `extract_subtree` 相同，但保留根上的预制体链接，
-    /// 这样粘贴出来的仍是同源实例（Unity 的复制预制体实例行为）。
+    /// 这样粘贴出来的仍是同源实例（引擎的复制预制体实例行为）。
     pub fn extract_subtree_preserving_links(&self, roots: &[usize]) -> SceneDoc {
         self.extract_subtree_inner(roots, false)
     }
@@ -605,7 +605,7 @@ impl SceneDoc {
         result
     }
 
-    /// Unity 的 `GetUniqueNameForSibling`：剥掉末尾的 ` (数字)` 得到基名，
+    /// 引擎的 `GetUniqueNameForSibling`：剥掉末尾的 ` (数字)` 得到基名，
     /// 再在同级里找最小的未占用序号（第一个同名实体不加后缀）。
     pub fn unique_name(&self, base: &str, parent: Option<u32>) -> String {
         let base = strip_name_suffix(base);
@@ -725,7 +725,7 @@ fn select_subtree(doc: &SceneDoc, index: usize, out: &mut Vec<usize>) {
     }
 }
 
-/// 剥掉 Unity 风格的 ` (数字)` 后缀：`Cube (3)` → `Cube`。
+/// 剥掉 既有的 ` (数字)` 后缀：`Cube (3)` → `Cube`。
 fn strip_name_suffix(name: &str) -> &str {
     let trimmed = name.trim_end();
     if !trimmed.ends_with(')') {

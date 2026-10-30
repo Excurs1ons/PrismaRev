@@ -1,6 +1,6 @@
-//! Unity `UnityEditor.Build.Reporting.BuildReport` 形状。
+//! 编辑器接口。
 //!
-//! | Unity | 这里 |
+//! | | 这里 |
 //! |---|---|
 //! | `BuildReport.summary` | [`BuildReport::summary`] |
 //! | `BuildSummary.result` | [`BuildResult`] |
@@ -12,16 +12,16 @@
 //!
 //! 这里只做 **DTO**：真正执行构建的是 `editor/src-tauri`
 //! （`cargo build` + `build-scenes` + 复制产物到输出目录）。它把结果整理成
-//! Unity 的形状，供「构建项目」面板显示产物大小 / 各阶段耗时。
+//! 引擎的形状，供「构建项目」面板显示产物大小 / 各阶段耗时。
 //!
-//! 与 Unity 的差异：Rust 没有托管程序集，因此 `BuildStep` 只记录
-//! 命令级阶段（编译 / 烤场景 / 收集产物），不是 Unity 的 asset bundle 步骤。
+//! 与引擎的差异：Rust 没有托管程序集，因此 `BuildStep` 只记录
+//! 命令级阶段（编译 / 烤场景 / 收集产物），不是引擎的 asset bundle 步骤。
 
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-/// 构建结果 = Unity `BuildResult`。
+/// 构建结果 = `BuildResult`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum BuildResult {
@@ -37,7 +37,7 @@ impl BuildResult {
     }
 }
 
-/// 产物角色 = Unity `BuildFile` 的分类（Unity 用 `BuildFile.role`）。
+/// 产物角色 = `BuildFile` 的分类（用 `BuildFile.role`）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum BuildFileRole {
@@ -53,7 +53,7 @@ pub enum BuildFileRole {
     Other,
 }
 
-/// 一个产物文件 = Unity `BuildFile`。
+/// 一个产物文件 = `BuildFile`。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BuildFile {
@@ -62,7 +62,7 @@ pub struct BuildFile {
     pub size_bytes: u64,
 }
 
-/// 一个构建阶段 = Unity `BuildStep`。
+/// 一个构建阶段 = `BuildStep`。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BuildStep {
@@ -80,12 +80,12 @@ impl BuildStep {
     }
 }
 
-/// 构建摘要 = Unity `BuildSummary`。
+/// 构建摘要 = `BuildSummary`。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BuildSummary {
     pub result: BuildResult,
-    /// 输出目录（Unity 的 `summary.outputPath` 是产物根目录）。
+    /// 输出目录（引擎的 `summary.outputPath` 是产物根目录）。
     pub output_path: String,
     /// 构建目标（当前只有 `windows`）。
     pub platform: String,
@@ -96,7 +96,7 @@ pub struct BuildSummary {
     pub total_warnings: usize,
 }
 
-/// 一次构建的报告 = Unity `BuildReport`。
+/// 一次构建的报告 = `BuildReport`。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BuildReport {

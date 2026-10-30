@@ -8,7 +8,7 @@ use prism_render::{DrawItem, DrawState};
 
 use crate::scene::components::*;
 
-/// 从 `MeshRenderer` 的渲染状态字段构造绘制状态（Unity 材质/渲染器状态）。
+/// 从 `MeshRenderer` 的渲染状态字段构造绘制状态（材质/渲染器状态）。
 ///
 /// 没有该组件的运行时实体按 [`DrawState::default`]（不透明、队列 2000、
 /// 背面剔除、写深度）处理。
@@ -57,7 +57,7 @@ pub fn scene_render_system_into(world: &World, out: &mut Vec<DrawItem>) {
             .query2::<LocalToWorld, MeshRef>()
             .filter(|(e, _, _)| world.get::<Active>(*e).map(|a| a.0).unwrap_or(true))
             .map(|(entity, wt, mr)| {
-                // `MeshRenderer.shadow_casting_mode` / `cull_mode`（Unity
+                // `MeshRenderer.shadow_casting_mode` / `cull_mode`（
                 // `shadowCastingMode` / `CullMode`）。没有该组件的运行时实体按
                 // 默认值处理（`On` / `Back`）。
                 let renderer = world.get::<MeshRenderer>(entity);
@@ -153,7 +153,7 @@ fn sprite_entries(world: &World) -> Vec<(SortKey, prism_render::SpriteDrawItem)>
         })
         .map(|(entity, world_transform, sprite, sref)| {
             let size = sprite.world_size(sref.size);
-            // Place the entity origin on the sprite pivot (Unity convention:
+            // Place the entity origin on the sprite pivot (convention:
             // (0,0) is the bottom-left corner).
             let offset = glam::vec3(
                 -(sprite.pivot[0] - 0.5) * size[0],

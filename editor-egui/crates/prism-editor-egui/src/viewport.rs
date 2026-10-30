@@ -3,7 +3,7 @@
 //! 引擎把帧渲染进自己的离屏 `VkImage`（`GraphRenderer` 的 `OffscreenTarget`），
 //! 我们只把这个图像的 `VkImageView` + 一个线性采样器注册到 egui-ash 的
 //! `ImageRegistry`，然后用 `painter.image()` 在同一块 `VkDevice`、同一条命令
-//! 缓冲区里采样 —— 与 Unity 的 `Camera.targetTexture` + `GUI.DrawTexture`
+//! 缓冲区里采样 —— 与引擎的 `Camera.targetTexture` + `GUI.DrawTexture`
 //! 是同一个模型，没有 GPU→CPU 回读。
 //!
 //! 帧节奏：只在「文档变化 / 相机变化 / Play / resize / 首帧」时重渲染，
@@ -51,7 +51,7 @@ pub fn viewport_extent(width: f32, height: f32, ppp: f32, scale: f32) -> (u32, u
     )
 }
 
-/// Unity 的 W / E / R 工具。
+/// 引擎的 W / E / R 工具。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum GizmoTool {
     #[default]
@@ -328,12 +328,12 @@ impl ViewportState {
         let frame = vm::camera_frame(&workspace.camera);
         let mut icon_hits: Vec<(usize, egui::Pos2)> = Vec::new();
         if self.kind() == ViewKind::Scene {
-            // Unity 的 SceneView Gizmos：相机画视锥、光源画图标（点选图标 = 选中对象）。
+            // 引擎的 SceneView Gizmos：相机画视锥、光源画图标（点选图标 = 选中对象）。
             icon_hits = self.draw_component_icons(&painter, rect, workspace, &frame);
             self.draw_gizmo(&painter, rect, workspace, &frame);
         }
 
-        // 4) 交互（Unity 习惯）：
+        // 4) 交互（常用习惯）：
         //    · LMB 拖 gizmo → 移动 / 旋转 / 缩放
         //    · LMB 拖空白 → 框选
         //    · Alt+LMB / RMB / MMB 拖 → 轨道
@@ -508,7 +508,7 @@ impl ViewportState {
         }
 
         if response.drag_stopped_by(egui::PointerButton::Primary) {
-            // 框选落定：一次写入选中集合（与 Unity 的矩形选择一致）。
+            // 框选落定：一次写入选中集合（与引擎的矩形选择一致）。
             if let (Some(start), Some(end)) = (self.box_start.take(), self.box_current.take()) {
                 let selection_rect = egui::Rect::from_two_pos(start, end);
                 if selection_rect.width() > 3.0 || selection_rect.height() > 3.0 {
@@ -557,7 +557,7 @@ impl ViewportState {
             if let Some(pos) = response.interact_pointer_pos() {
                 let local = local_of(pos);
                 if self.kind() == ViewKind::Scene {
-                    // 图标（相机 / 光源）比网格体优先命中，和 Unity 一致。
+                    // 图标（相机 / 光源）比网格体优先命中，和 一致。
                     let icon = icon_hits
                         .iter()
                         .map(|(index, center)| {
@@ -602,7 +602,7 @@ impl ViewportState {
         ViewportResponse { document_changed }
     }
 
-    /// Unity 的 SceneView Gizmos：相机画视锥、光源画图标与范围。
+    /// 引擎的 SceneView Gizmos：相机画视锥、光源画图标与范围。
     ///
     /// 引擎只画实体本身（网格 / 光栅化结果），编辑器侧的「组件图标」由 egui 覆盖层
     /// 画在视口图像上：世界坐标 → 屏幕坐标用和点选同一套 `vm::project`。
@@ -817,7 +817,7 @@ impl ViewportState {
                     }
                 }
                 _ => {
-                    // 点光：圆 + 中心点 + 四个方向短线（Unity 的点光图标）。
+                    // 点光：圆 + 中心点 + 四个方向短线（引擎的点光图标）。
                     painter.circle_stroke(center, radius, stroke(color));
                     painter.circle_filled(center, 2.0, color);
                     for dir in [

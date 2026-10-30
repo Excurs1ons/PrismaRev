@@ -3,7 +3,7 @@ name = "fishing"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-description = "Cozy Fishing — Cast n Chill 风格的 2D 像素钓鱼游戏（用户项目）"
+description = "Cozy Fishing — 2D 像素钓鱼游戏（用户项目）"
 
 # 独立 workspace（与 projects/prisma 同构），不挂根 PrismaRev workspace。
 [workspace]

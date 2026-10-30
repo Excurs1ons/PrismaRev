@@ -22,7 +22,7 @@ const settings = ref<ProjectSettingsData | null>(null);
 /** 面板打开 / 上次保存时的快照：保存时只把差异交给后端写入。 */
 const loadedSettings = ref<ProjectSettingsData | null>(null);
 const manifest = ref<SceneListEntry[]>([]);
-/** 后端派生的 Unity `Build.Profile`（目标组 / 构建选项 / 构建顺序）。 */
+/** 后端派生的 `Build.Profile`（目标组 / 构建选项 / 构建顺序）。 */
 const profile = ref<BuildProfile | null>(null);
 const addName = ref("");
 const manifestDirty = ref(false);
@@ -106,14 +106,14 @@ async function load() {
 }
 
 /**
- * Unity 的 build index：只数**启用**的场景，所以禁用的行不占号。
+ * 引擎的 build index：只数**启用**的场景，所以禁用的行不占号。
  * 与后端 `BuildProfile.scenes[].buildIndex` 的规则一致。
  */
 function effectiveIndex(index: number): number {
   return manifest.value.slice(0, index).filter((entry) => entry.enabled).length;
 }
 
-/** 已启用场景数（Unity `EditorBuildSettings.scenes` 里 enabled 的项）。 */
+/** 已启用场景数（`EditorBuildSettings.scenes` 里 enabled 的项）。 */
 const enabledCount = computed(
   () => manifest.value.filter((entry) => entry.enabled).length,
 );
@@ -137,7 +137,7 @@ function targetGroup(target: string): string {
   }
 }
 
-/** 随配置与平台选择实时响应的 Unity `Build.Profile` 派生摘要。 */
+/** 随配置与平台选择实时响应的 `Build.Profile` 派生摘要。 */
 const activeProfile = computed(() => {
   const name = settings.value?.build.profile ?? profile.value?.name ?? "release";
   const target = settings.value?.build.target ?? profile.value?.target ?? "windows";
@@ -329,7 +329,7 @@ onMounted(() => void load());
         </div>
 
         <p class="hint">
-          Unity <code>Build.Profile</code>：<strong>{{ activeProfile.name }}</strong> ·
+          构建配置 <code>Build.Profile</code>：<strong>{{ activeProfile.name }}</strong> ·
           {{ activeProfile.targetGroup }} / {{ activeProfile.target }} ·
           {{ enabledCount }} 个启用场景 ·
           {{ activeProfile.options.development ? "开发构建" : "发布构建" }}

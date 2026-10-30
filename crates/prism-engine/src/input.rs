@@ -195,17 +195,17 @@ impl InputManager {
         self.mouse_just_pressed.contains(&button)
     }
 
-    /// 本帧刚按下的所有鼠标键（Unity `Input.anyKeyDown` 的鼠标部分）。
+    /// 本帧刚按下的所有鼠标键（`Input.anyKeyDown` 的鼠标部分）。
     pub fn buttons_just_pressed(&self) -> &[MouseButton] {
         &self.mouse_just_pressed
     }
 
-    /// 鼠标键本帧刚释放（Unity `Input.GetMouseButtonUp`）。
+    /// 鼠标键本帧刚释放（`Input.GetMouseButtonUp`）。
     pub fn mouse_just_released(&self, button: MouseButton) -> bool {
         self.mouse_just_released.contains(&button)
     }
 
-    /// 当前是否有任意键按住（Unity `Input.anyKey` 的键盘部分）。
+    /// 当前是否有任意键按住（`Input.anyKey` 的键盘部分）。
     pub fn any_key_held(&self) -> bool {
         !self.keys_held.is_empty()
     }

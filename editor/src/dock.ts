@@ -6,7 +6,7 @@
  * - `split`：水平/垂直二分，`ratio` 是前半部分占的比例。
  *
  * 调整一个 splitter 只改 `ratio`，所以同一侧所有对齐的面板会一起变尺寸；
- * 这也是 Unity / ImGui docking 的核心行为。
+ * 这也是 ImGui docking 的核心行为。
  */
 
 export type DockDirection = "row" | "column";
@@ -304,7 +304,7 @@ export function defaultDock(): DockNode {
   return split("row", left, main, 0.19);
 }
 
-/** Unity 经典 2 by 3 布局：左视口（Scene+Game 上下），中层级/资产，右检查器。 */
+/** 经典 2 by 3 布局：左视口（Scene+Game 上下），中层级/资产，右检查器。 */
 export function twoByThreeDock(): DockNode {
   const leftViewports = split("column", leaf(["sceneView"]), leaf(["gameView"]), 0.5);
   const midTrees = split("column", leaf(["hierarchy", "docs"]), leaf(["assets", "log"]), 0.55);
@@ -312,14 +312,14 @@ export function twoByThreeDock(): DockNode {
   return split("row", leftAndMid, leaf(["inspector"]), 0.78);
 }
 
-/** Unity 经典 Tall 布局：左侧上下视口，右侧单列竖排（层级/资产/检查器）。 */
+/** 经典 Tall 布局：左侧上下视口，右侧单列竖排（层级/资产/检查器）。 */
 export function tallDock(): DockNode {
   const leftViewports = split("column", leaf(["sceneView"]), leaf(["gameView"]), 0.5);
   const rightColumn = split("column", leaf(["hierarchy", "assets"]), leaf(["inspector"]), 0.45);
   return split("row", leftViewports, rightColumn, 0.72);
 }
 
-/** Unity 经典 Wide 布局：上方宽幅视口，下方横排面板。 */
+/** 经典 Wide 布局：上方宽幅视口，下方横排面板。 */
 export function wideDock(): DockNode {
   const topViewports = split("row", leaf(["sceneView"]), leaf(["gameView"]), 0.5);
   const bottomPanels = split(

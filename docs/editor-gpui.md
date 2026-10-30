@@ -46,7 +46,7 @@
 
 前面比较过 egui / Dear ImGui / GPUI / Tauri WebView，结论是：
 
-- **WebView 在 Unity 风格编辑器里是嵌入成本最高的一类**：原生 Vulkan 视口要和
+- **WebView 在编辑器里是嵌入成本最高的一类**：原生 Vulkan 视口要和
   WebView2 的合成层、输入转发、DPI、焦点搏斗（`editor/` 已经付出过这份成本）。
 - **egui** 的 Vulkan/Ash 集成证据最足，但 docking、复杂属性面板、资产树需要大量自建，
   产品上限受 immediate-mode 约束。
@@ -56,7 +56,7 @@
 
 所以这次的做法是：**先用 GPUI 把「编辑器产品层」完整做出来**，把 Vulkan 视口
 留成一个明确的接线点（`viewport.rs::paint_scene`）。这样既能验证 GPUI 是否撑得住
-Unity 形状的编辑器，又不会把 `prism-render` 绑死在某套 UI 生命周期上。
+形状的编辑器，又不会把 `prism-render` 绑死在某套 UI 生命周期上。
 
 ## 3. 与 Web 编辑器的共享契约
 
@@ -75,7 +75,7 @@ Unity 形状的编辑器，又不会把 `prism-render` 绑死在某套 UI 生命
 ## 4. Dock 模型（与 Web 一致）
 
 - `DockNode::{Leaf, Split}`；`Split { dir, ratio, a, b }`。
-- 拖 splitter 只改共享 `ratio` → 同侧对齐的面板一起缩放（Unity/VS 的行为）。
+- 拖 splitter 只改共享 `ratio` → 同侧对齐的面板一起缩放（/VS 的行为）。
 - tab 拖拽：leaf 中央 = 合并成 tab（支持同 leaf 内重排）；上下左右 25% = 新开分屏；
   主窗口左/右/底边 12px = 新开整列/整行；窗口内其它位置 = 浮动。
 - 浮动窗口：`{x,y,width,height,z}`，8 方向 resize、松手磁吸（视口边缘 + 其它面板
@@ -98,7 +98,7 @@ Unity 形状的编辑器，又不会把 `prism-render` 绑死在某套 UI 生命
 - `Transform` 不在 `components` 里（作者字段），走 `set_transform_axis`，撤销也单独合并。
 - 没有 schema 的组件 → 直接显示 pretty JSON（保证旧文档/新组件不会「打不开」）。
 - **删除 / 复制**：删除整棵子树；`duplicate_subtree` 复制根 + 后代并把内部 parent
-  映射到新 id，根保留原父级（Unity Ctrl+D 语义）。
+  映射到新 id，根保留原父级（Ctrl+D 语义）。
 - **重命名**：`preview_rename` 逐字改文档但不入栈，`finish_rename(base)` 在提交时补一个
   快照撤销步；Esc 直接回滚到 `base`。
 - **多对象编辑**：只显示所有选中实体的公共组件（`common_components`），字段写入走

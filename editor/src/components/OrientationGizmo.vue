@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * Unity 风格 SceneView 右上角 3D 方向坐标轴导航指示器 (Orientation Gizmo)。
+ * SceneView 右上角 3D 方向坐标轴导航指示器 (Orientation Gizmo)。
  *
  * 实时反映当前相机视角的红绿蓝三轴方向 (X=红, Y=绿, Z=蓝)，支持点击对应方向锥体
  * 快速平滑对齐视口相机（Top, Bottom, Left, Right, Front, Back）。

@@ -302,7 +302,7 @@ mod tests {
         assert_eq!(target.gizmo_space, crate::viewport_math::GizmoSpace::Local);
 
         // 旧存档没有 `scene` 段：走默认值，不能读失败。
-        let old = json!({ "version": 1, "dock": {}, "themePreset": "unity" });
+        let old = json!({ "version": 1, "dock": {}, "themePreset": "studio" });
         let old_state = EditorState::from_json(&old);
         assert!(old_state.scene.show_grid);
         assert_eq!(old_state.scene.gizmo_tool, "Translate");
@@ -346,7 +346,7 @@ mod tests {
         let value = state.to_json();
         assert_eq!(value["version"], STATE_VERSION);
         assert!(value["dock"]["dock"].is_object());
-        assert_eq!(value["themePreset"], "unity");
+        assert_eq!(value["themePreset"], "studio");
         assert_eq!(value["locale"], "zh-CN");
         assert!(value["preferences"]["maxLogLines"].is_number());
     }

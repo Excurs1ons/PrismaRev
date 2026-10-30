@@ -241,7 +241,7 @@ function detach(tab: string, x: number, y: number) {
  *
  * 不使用 HTML5 drag-and-drop：Tauri/WebView2 会接管原生拖放，
  * 且不同平台的 drag 事件时序不稳定。这里直接跟踪 pointer，
- * 用 `elementsFromPoint` 找停靠目标，行为与 Unity/ImGui 一致。
+ * 用 `elementsFromPoint` 找停靠目标，行为与 /ImGui 一致。
  */
 function startDrag(tab: string, event: PointerEvent) {
   if (event.button !== 0) return;

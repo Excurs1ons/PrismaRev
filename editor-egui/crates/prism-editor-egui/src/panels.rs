@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 use crate::{theme, widgets};
 use egui_phosphor::regular as icons;
 
-/// 在系统文件管理器里定位一个项目内资产（Unity 的 `Reveal in Finder` / `Show in Explorer`）。
+/// 在系统文件管理器里定位一个项目内资产（引擎的 `Reveal in Finder` / `Show in Explorer`）。
 ///
 /// Windows 的 `explorer /select,<path>` 成功时也可能返回非零退出码，所以这里只检查能否
 /// 启动进程，不检查退出码。
@@ -54,7 +54,7 @@ pub fn reveal_asset(workspace: &Workspace, path: &str) -> Result<(), String> {
 
 /// 资产类型 → Phosphor 图标。
 ///
-/// Unity 的 Project 窗口按类型换图标；之前这里直接写 `AssetKind::label()`
+/// 引擎的 Project 窗口按类型换图标；之前这里直接写 `AssetKind::label()`
 /// 的中文类别词（"模型" / "数据" / "包"…），窄面板下会和文件名挤在一起，
 /// 看起来像乱码。
 fn asset_kind_icon(kind: AssetKind) -> &'static str {
@@ -72,7 +72,7 @@ fn asset_kind_icon(kind: AssetKind) -> &'static str {
     }
 }
 
-/// 层级树行高：比资产 / 文档列表更紧凑（Unity 的 Hierarchy 也是）。
+/// 层级树行高：比资产 / 文档列表更紧凑（引擎的 Hierarchy 也是）。
 pub fn tree_row_height(compact: bool) -> f32 {
     if compact {
         15.0
@@ -90,7 +90,7 @@ pub fn row_height(compact: bool) -> f32 {
     }
 }
 
-/// 列表行（Unity / Web 风格）：整行底色 + 文本，用于资产 / 文档这类列表。
+/// 列表行（桌面 / Web 风格）：整行底色 + 文本，用于资产 / 文档这类列表。
 fn list_row(
     ui: &mut Ui,
     colors: &prism_editor_core::ThemeColors,
@@ -134,7 +134,7 @@ fn list_row(
     response
 }
 
-/// 无底色的图标按钮（Unity 层级的眼睛 / 展开箭头：只有图标，没有按钮框）。
+/// 无底色的图标按钮（层级的眼睛 / 展开箭头：只有图标，没有按钮框）。
 fn flat_icon(ui: &mut Ui, glyph: &str) -> egui::Response {
     ui.add(egui::Button::new(RichText::new(glyph).size(11.0)).frame(false))
 }
@@ -145,7 +145,7 @@ pub struct UiState {
     pub inspector_search: String,
     pub hierarchy_search: String,
     pub asset_search: String,
-    /// 历史面板的排序：`true` = 最新在上（Unity 的 `m_ShowLatestFirst`）。
+    /// 历史面板的排序：`true` = 最新在上（引擎的 `m_ShowLatestFirst`）。
     pub history_latest_first: bool,
     /// 视口渲染分辨率倍率（高 DPI 屏上可降到 0.5 省 GPU）。
     pub viewport_scale: f32,
@@ -163,7 +163,7 @@ pub struct UiState {
     pub about_open: bool,
     /// 当前打开的输入框（保存 / 新建目录 / 预制体命名…），None = 关闭。
     pub prompt: Option<Prompt>,
-    /// 资产面板里当前选中的资产（Unity 的 Project 选择）。
+    /// 资产面板里当前选中的资产（引擎的 Project 选择）。
     pub asset_selection: Option<String>,
     /// 资产面板当前目录（`assets` 开头）、后退栈与游标。
     pub asset_folder: String,
@@ -173,7 +173,7 @@ pub struct UiState {
     pub tab_drag: Option<(String, String)>,
     /// 拖拽落点：(目标 leaf id, 区域, 比例)。
     pub tab_drop: Option<(String, prism_editor_core::dock::DockZone, f32)>,
-    /// 变换剪贴板：(字段, 分量值) —— Unity 的 Copy / Paste Transform。
+    /// 变换剪贴板：(字段, 分量值) —— 引擎的 Copy / Paste Transform。
     pub transform_clip: Option<(String, Vec<f32>)>,
     /// Preferences 的镜像：列表行高（紧凑布局）。
     pub compact: bool,
@@ -192,9 +192,9 @@ pub struct UiState {
     pub pending_build: Option<crate::build::BuildKind>,
     /// 当前是否有构建子进程在跑（由 `EditorApp` 每帧同步，用来禁用按钮）。
     pub build_running: bool,
-    /// 待确认的破坏性操作（Unity 的 `EditorUtility.DisplayDialog`）。
+    /// 待确认的破坏性操作（引擎的 `EditorUtility.DisplayDialog`）。
     pub confirm: Option<Confirm>,
-    /// 最后点过的面板（Unity 的 `focusedWindow`）：快捷键按它分派。
+    /// 最后点过的面板（引擎的 `focusedWindow`）：快捷键按它分派。
     pub focused_panel: Option<String>,
     /// 等待确认删除的资产路径。
     pub pending_asset_delete: Option<String>,
@@ -218,7 +218,7 @@ pub enum ConfirmKind {
     CleanEngine,
 }
 
-/// 一个待确认的对话框（Unity 的 `EditorUtility.DisplayDialog`）。
+/// 一个待确认的对话框（引擎的 `EditorUtility.DisplayDialog`）。
 #[derive(Clone)]
 pub struct Confirm {
     pub kind: ConfirmKind,
@@ -325,7 +325,7 @@ fn search_matches(doc: &SceneDoc, filter: &str) -> std::collections::HashSet<usi
 }
 
 pub fn hierarchy(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
-    // ---- 顶部工具条：搜索 + 新建实体（Unity 的 Create 下拉） ----
+    // ---- 顶部工具条：搜索 + 新建实体（引擎的 Create 下拉） ----
     ui.horizontal(|ui| {
         ui.add(
             egui::TextEdit::singleline(&mut state.hierarchy_search)
@@ -358,7 +358,7 @@ pub fn hierarchy(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
 
     let filter = state.hierarchy_search.to_lowercase();
     let searching = !filter.is_empty();
-    // 命中项 + 祖先：折叠父级下的对象也要能被搜到（Unity 会展开祖先并显示路径）。
+    // 命中项 + 祖先：折叠父级下的对象也要能被搜到（会展开祖先并显示路径）。
     let search = search_matches(&workspace.document().doc, &filter);
     if searching {
         let ids: Vec<u32> = {
@@ -373,7 +373,7 @@ pub fn hierarchy(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
     let expanded = workspace.expanded.clone();
     let rows = workspace.document().doc.visible_rows(&expanded);
     let mut action: Option<TreeAction> = None;
-    // 资产拖到实体上 = 实例化预制体（Unity 的 Project → Hierarchy 拖拽）。
+    // 资产拖到实体上 = 实例化预制体（引擎的 Project → Hierarchy 拖拽）。
     let mut asset_drop: Option<(usize, String)> = None;
     let mut hovered_drop_target = false;
 
@@ -400,7 +400,7 @@ pub fn hierarchy(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
                 let active = entity.active();
                 let renaming = matches!(&state.rename, Some((target, _)) if *target == index);
 
-                // 整行选中（Unity：点行任意位置都选中，只有文字可点会很别扭），
+                // 整行选中（点行任意位置都选中，只有文字可点会很别扭），
                 // 行高固定 18px，用来画整行底色 / 拖拽插入线。
                 let (row_rect, row) = ui.allocate_exact_size(
                     Vec2::new(ui.available_width(), tree_row_height(state.compact)),
@@ -462,7 +462,7 @@ pub fn hierarchy(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
                                 input.pointer.any_click(),
                             )
                         });
-                        // 点空白 / 点别处 = 提交（Unity 的行为），Esc = 放弃。
+                        // 点空白 / 点别处 = 提交（引擎的行为），Esc = 放弃。
                         let clicked_outside = clicked
                             && ui
                                 .input(|input| input.pointer.interact_pos())
@@ -500,7 +500,7 @@ pub fn hierarchy(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
                 if !renaming {
                     if row.clicked() {
                         let modifiers = ui.input(|i| i.modifiers);
-                        // Ctrl/Cmd 单击 = 切换（Unity 的多选开关），Shift = 追加。
+                        // Ctrl/Cmd 单击 = 切换（引擎的多选开关），Shift = 追加。
                         if modifiers.ctrl || modifiers.command {
                             action = Some(TreeAction::Toggle(index));
                         } else {
@@ -512,7 +512,7 @@ pub fn hierarchy(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
                     }
                 }
 
-                // ---- Unity 式拖拽：上/下 25% 插入，中间挂成子级 ----
+                // ---- 引擎式拖拽：上/下 25% 插入，中间挂成子级 ----
                 if row.drag_started_by(egui::PointerButton::Primary) {
                     state.dragging = Some(index);
                 }
@@ -621,7 +621,7 @@ pub fn hierarchy(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
         state.drop_target = None;
     }
 
-    // Unity Hierarchy keeps a lightweight ghost under the pointer while dragging.
+    // Hierarchy keeps a lightweight ghost under the pointer while dragging.
     // It makes the operation legible even when the pointer is between rows or over
     // the empty tail of the scroll area.
     if let (Some(from), Some(pointer)) = (
@@ -883,7 +883,7 @@ fn inspector_single(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState,
         }
     });
 
-    // ---- 预制体（Unity 的 Prefab 区块） ----
+    // ---- 预制体（引擎的 Prefab 区块） ----
     match &prefab {
         Some(link) => {
             ui.horizontal_wrapped(|ui| {
@@ -1340,7 +1340,7 @@ fn apply_to_prefab(
 // ---------------------------------------------------------------------------
 
 pub fn assets(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
-    // ---- 导航：后退 / 前进 / 面包屑（Unity Project 窗口的路径栏） ----
+    // ---- 导航：后退 / 前进 / 面包屑（Project 窗口的路径栏） ----
     ui.horizontal(|ui| {
         let can_back = state.asset_history_pos > 0;
         let can_forward = state.asset_history_pos + 1 < state.asset_history.len();
@@ -1698,7 +1698,7 @@ pub fn docs(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
         let dirty = title.ends_with(" *");
         let active = workspace.active_index() == index;
         let colors = workspace.colors();
-        // 整行可点（Unity / Web 的文档列表都是整行选中），行内按钮用无框图标。
+        // 整行可点（桌面 / Web 的文档列表都是整行选中），行内按钮用无框图标。
         let (rect, row) = ui.allocate_exact_size(
             Vec2::new(ui.available_width(), row_height(state.compact)),
             egui::Sense::click(),
@@ -1775,7 +1775,7 @@ pub fn docs(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
 }
 
 /// 关闭文档标签：有未保存改动时挂起，交给 `close_confirm_dialog` 询问；
-/// 干净的文档直接关闭（Unity 的行为）。
+/// 干净的文档直接关闭（引擎的行为）。
 pub fn request_close_document(workspace: &mut Workspace, state: &mut UiState, index: usize) {
     let dirty = workspace
         .docs
@@ -1946,7 +1946,7 @@ fn history_row(
 // 渲染图
 // ---------------------------------------------------------------------------
 
-/// Scene View 的调试渲染模式（对应 Unity 的 `SceneRenderModeWindow` 第一组）。
+/// Scene View 的调试渲染模式（对应引擎的 `SceneRenderModeWindow` 第一组）。
 ///
 /// 只映射引擎**已有**的 `debug_flags` / `debug_rt`：PBR 分量隔离用
 /// `PBR_FLAG_NAMES` 里的位，深度 / 视图空间法线用 PostPass 的调试 RT。

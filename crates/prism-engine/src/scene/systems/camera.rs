@@ -32,7 +32,7 @@ pub fn collect_camera(world: &World) -> Option<Camera> {
     world.query::<Camera>().next().map(|(_, c)| c.clone())
 }
 
-/// 所有**启用**相机，按 `Camera.depth` 升序（数值大的后绘制）= Unity `Camera.allCameras`。
+/// 所有**启用**相机，按 `Camera.depth` 升序（数值大的后绘制）= `Camera.allCameras`。
 pub fn all_cameras(world: &World) -> Vec<prism_ecs::Entity> {
     let mut cameras: Vec<(f32, prism_ecs::Entity)> = world
         .query::<Camera>()
@@ -44,7 +44,7 @@ pub fn all_cameras(world: &World) -> Vec<prism_ecs::Entity> {
     cameras.into_iter().map(|(_, entity)| entity).collect()
 }
 
-/// 主相机 = `depth` 最大的启用相机 = Unity `Camera.main`。
+/// 主相机 = `depth` 最大的启用相机 = `Camera.main`。
 pub fn main_camera(world: &World) -> Option<prism_ecs::Entity> {
     all_cameras(world).pop()
 }
@@ -63,7 +63,7 @@ pub fn active_camera(world: &World) -> Option<prism_ecs::Entity> {
 /// 无相机时使用的清屏色（中性灰：与纯黑/纯白区分，便于看出"什么都没画"）。
 pub const DEFAULT_CLEAR_COLOR: [f32; 4] = [0.5, 0.5, 0.5, 1.0];
 
-/// 指定相机的清屏色 = Unity `Camera.backgroundColor`。
+/// 指定相机的清屏色 = `Camera.backgroundColor`。
 ///
 /// **取景与清屏必须同源**：调用方传入 [`CameraOutput::entity`]（真正产生 view 的
 /// 那台相机），这里不再自己挑相机，所以两处不会因为选择规则不同而分叉。
@@ -75,10 +75,10 @@ pub fn clear_color(world: &World, camera: prism_ecs::Entity) -> [f32; 4] {
         .unwrap_or(DEFAULT_CLEAR_COLOR)
 }
 
-/// 指定相机的清屏方式 = Unity `Camera.clearFlags`。
+/// 指定相机的清屏方式 = `Camera.clearFlags`。
 ///
 /// 与 [`clear_color`] 同源：调用方传 [`CameraOutput::entity`]，缺省回退到
-/// [`CameraClearFlags::Skybox`]（Unity 新建相机的默认值，也是引擎既有行为）。
+/// [`CameraClearFlags::Skybox`]（新建相机的默认值，也是引擎既有行为）。
 pub fn clear_flags(world: &World, camera: prism_ecs::Entity) -> CameraClearFlags {
     world
         .get::<Camera>(camera)
@@ -143,7 +143,7 @@ pub fn fallback_camera_output(surface_rotation: &Mat4, aspect: f32) -> CameraOut
 /// [`clear_color`]，两边就不会各自挑一次相机。
 ///
 /// 没有 `FlyCameraController` 时回退到实体自身的朝向（`LocalToWorld` 的逆），
-/// 也就是 Unity 里"相机由 Transform 驱动"的形状 —— 这样场景里只放一个
+/// 也就是 里"相机由 Transform 驱动"的形状 —— 这样场景里只放一个
 /// `Camera` + 变换就能出画面，不必强迫作者再加飞行控制器。
 ///
 /// `surface_rotation` is the device-orientation 矩阵 applied on 顶部 of the

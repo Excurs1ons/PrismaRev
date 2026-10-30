@@ -15,12 +15,12 @@ import { t } from "../i18n";
 import type { EntityJson } from "../types";
 
 /**
- * 实体层级树（Unity 7 Hierarchy 标准实现）：
+ * 实体层级树（7 Hierarchy 标准实现）：
  * - 单击选中，`Ctrl/Cmd+单击` 切换多选，`Shift+单击` 按可见顺序范围多选；
- * - 预制体高亮：实体拥有 `PrefabInstance` 组件或属于预制体实例时，文本呈现 Unity 标志性亮蓝色（#4da6ff），根实体带有蓝色立方体图标；
+ * - 预制体高亮：实体拥有 `PrefabInstance` 组件或属于预制体实例时，文本呈现 标志性亮蓝色（#4da6ff），根实体带有蓝色立方体图标；
  * - 双击名字就地重命名（回车/失焦提交，Esc 取消）；
  * - 拖拽重排与嵌套：落在行的上/下缘 = 作为兄弟插入其前后，落在行中间 = 挂为其子级，落在底部空白 = 变为根实体；
- * - 级联创建菜单（Cascading Menu）：`+` 按钮或右键弹出对齐 Unity 的级联创建菜单（Create Empty / 3D Object / Light / Camera / UI）。
+ * - 级联创建菜单（Cascading Menu）：`+` 按钮或右键弹出对齐引擎的级联创建菜单（Create Empty / 3D Object / Light / Camera / UI）。
  */
 const props = defineProps<{
   entities: EntityJson[];
@@ -403,7 +403,7 @@ function onRootDrop(event: DragEvent) {
 </script>
 
 <template>
-  <!-- 顶部 Unity 风格工具栏 -->
+  <!-- 顶部工具栏 -->
   <div class="tree-tools">
     <div class="hierarchy-filter-row">
       <button

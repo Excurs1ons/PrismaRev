@@ -1,4 +1,4 @@
-//! 检查器面板：schema 驱动的字段控件（Unity `PropertyDrawer` 的等价物）。
+//! 检查器面板：schema 驱动的字段控件（`PropertyDrawer` 的等价物）。
 //!
 //! - 布尔 = 勾选框；数值 = 可拖动（Shift+点击进入输入）；枚举 = 点击循环；
 //!   颜色 = 色块 + RGBA 分量；向量 = 分量拖动。

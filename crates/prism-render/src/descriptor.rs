@@ -168,7 +168,7 @@ pub struct GpuLight {
     pub position: [f32; 4],
     /// rgb = radiant intensity, w = kind ([`GPU_LIGHT_KIND_POINT`] / [`GPU_LIGHT_KIND_SPOT`])
     pub color: [f32; 4],
-    /// xyz = 光源朝向（Unity `transform.forward`）, w = cos(outer half-angle)
+    /// xyz = 光源朝向（`transform.forward`）, w = cos(outer half-angle)
     pub direction: [f32; 4],
     /// x = cos(inner half-angle)；yzw 保留
     pub params: [f32; 4],
@@ -286,7 +286,7 @@ pub struct FrameUBOData {
     /// 颜色 before tonemapping. 默认 1.0 = no scaling; 检查器 滑动条
     /// lets the user brighten/darken the entire 图像 uniformly. 偏移 252.
     pub exposure: f32, // offset 252
-    /// 阴影强度 = Unity `Light.shadowStrength`（0 = 无阴影，1 = 全强度）。
+    /// 阴影强度 = `Light.shadowStrength`（0 = 无阴影，1 = 全强度）。
     ///
     /// 复用原来的 `_pad2` 槽位，`FrameUBO` 仍是 272 字节；着色器在
     /// `sample_shadow` 末尾用 `lerp(1, shadow, shadowStrength)` 应用。

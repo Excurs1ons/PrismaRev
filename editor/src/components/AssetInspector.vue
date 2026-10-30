@@ -14,9 +14,9 @@ import { formatBytes } from "../format";
 import type { AssetInfo, AssetRef } from "../types";
 
 /**
- * 资产检查器（对齐 Unity Asset Inspector 规范）：
+ * 资产检查器（Asset Inspector 规范）：
  * - 当在 Project / 资产管理器中选中资产时，在 Inspector 面板展示该资产的导入配置、引用关系与大图/文本预览。
- * - 底部提供 Unity 规范的 Asset Preview 区域。
+ * - 底部提供 规范的 Asset Preview 区域。
  */
 const props = defineProps<{
   asset: AssetInfo;
@@ -186,7 +186,7 @@ async function copyGuid() {
 
 <template>
   <div class="asset-inspector">
-    <!-- Unity 风格资产标头 (Asset Header) -->
+    <!--资产标头 (Asset Header) -->
     <div class="asset-inspector-header">
       <div class="asset-icon-box">
         <ImageIcon v-if="previewKind === 'image'" :size="24" class="icon-image" />
@@ -279,7 +279,7 @@ async function copyGuid() {
       </div>
     </div>
 
-    <!-- Unity 风格底部资产预览区域 (Asset Preview) -->
+    <!--底部资产预览区域 (Asset Preview) -->
     <div class="card preview-card">
       <header>
         <span class="title">Preview</span>

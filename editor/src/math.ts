@@ -1,7 +1,7 @@
 /**
- * 3D 变换数学工具函数（对齐 Unity 坐标与欧拉角约定）。
+ * 3D 变换数学工具函数（坐标与欧拉角约定）。
  *
- * Unity 采用 YXZ 顺规的内旋欧拉角（Pitch-Yaw-Roll），角度单位为度（deg）：
+ * 采用 YXZ 顺规的内旋欧拉角（Pitch-Yaw-Roll），角度单位为度（deg）：
  * - X: Pitch (俯仰角)
  * - Y: Yaw (偏航角)
  * - Z: Roll (翻滚角)
@@ -21,7 +21,7 @@ export function eulerToQuaternion(
   const cZ = Math.cos(rollDeg * rad * 0.5);
   const sZ = Math.sin(rollDeg * rad * 0.5);
 
-  // Unity YXZ 顺规: q = qY * qX * qZ
+  // YXZ 顺规: q = qY * qX * qZ
   const w = cY * cX * cZ + sY * sX * sZ;
   const x = cY * sX * cZ + sY * cX * sZ;
   const y = sY * cX * cZ - cY * sX * sZ;

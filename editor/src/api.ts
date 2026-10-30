@@ -75,12 +75,12 @@ export function fetchSchema(): Promise<Schema> {
   return call<Schema>("editor_schema");
 }
 
-/** 编辑器面板注册表 = Unity `EditorWindow` / `[MenuItem]` 的声明式 DTO。 */
+/** 编辑器面板注册表 = `EditorWindow` / `[MenuItem]` 的声明式 DTO。 */
 export function fetchEditorWindows(): Promise<EditorWindowDescriptor[]> {
   return call<EditorWindowDescriptor[]>("editor_windows");
 }
 
-/** Unity `Build.Profile.BuildProfile`（目标组 / 构建选项 / 场景构建顺序）。 */
+/** `Build.Profile.BuildProfile`（目标组 / 构建选项 / 场景构建顺序）。 */
 export function fetchBuildProfile(): Promise<BuildProfile> {
   return call<BuildProfile>("editor_build_profile");
 }
@@ -453,7 +453,7 @@ export function renderGraphReport(): Promise<RenderGraphReport | null> {
   return call<RenderGraphReport | null>("editor_render_graph_report");
 }
 
-// ── AssetDatabase（对应 `UnityEditor.AssetDatabase`） ───────────────────────
+// ── AssetDatabase ───────────────────────
 
 /** 资产路径 → GUID（路径派生，故重命名会变）。 */
 export function assetGuid(path: string): Promise<string> {
@@ -471,7 +471,7 @@ export function assetAllPaths(): Promise<string[]> {
 }
 
 /**
- * Unity 风格检索 = `FindAssets`：空白分词取 **AND**，
+ *检索 = `FindAssets`：空白分词取 **AND**，
  * `t:<分类>` 按分类、`l:<标签>` 暂被忽略，其余按路径子串。
  */
 export function findAssets(filter: string): Promise<string[]> {
@@ -513,7 +513,7 @@ export function refreshAssets(): Promise<number> {
   return call<number>("editor_refresh_assets");
 }
 
-// ── PrefabUtility（对应 `UnityEditor.PrefabUtility`） ───────────────────────
+// ── PrefabUtility ───────────────────────
 
 /** 把实例内容写回预制体文件 = `ApplyPrefabInstance`。 */
 export function applyPrefabInstance(doc: SceneDoc, rootIndex: number): Promise<SceneDoc> {
@@ -552,7 +552,7 @@ export function isPartOfPrefabInstance(doc: SceneDoc, rootIndex: number): Promis
   return call<boolean>("editor_is_part_of_prefab_instance", { doc, rootIndex });
 }
 
-// ── SceneManagement（对应 `UnityEditor.SceneManagement`） ───────────────────
+// ── SceneManagement ───────────────────
 
 /** 场景元信息列表（名字 / 路径 / GUID / 实体数 / 构建序号）。 */
 export function scenesMeta(): Promise<SceneMeta[]> {
@@ -584,7 +584,7 @@ export function sceneFromDoc(name: string, path: string, doc: SceneDoc): Promise
   return call<SceneMeta>("editor_scene_from_doc", { name, path, doc });
 }
 
-// ── Selection（对应 `UnityEditor.Selection.GetFiltered`） ───────────────────
+// ── Selection ───────────────────
 
 /** 在给定下标集合上按模式过滤。 */
 export function selectionFiltered(
@@ -614,7 +614,7 @@ export function selectionAllMatching(
   });
 }
 
-// ── EditorApplication（对应 `UnityEditor.EditorApplication` / `Application`） ──
+// ── EditorApplication（对应编辑器命令 / `Application`） ──
 
 /** 引擎版本（「关于」面板用）。 */
 export function engineVersion(): Promise<string> {
@@ -715,7 +715,7 @@ export function viewportRefreshProject(id: string): Promise<void> {
   return call<void>("editor_viewport_refresh_project", { id });
 }
 
-/** 项目模块自动编译开关（Unity 的 Auto Refresh）。 */
+/** 项目模块自动编译开关（引擎的 Auto Refresh）。 */
 export function viewportSetAutoRefresh(enabled: boolean): Promise<void> {
   return call<void>("editor_viewport_set_auto_refresh", { enabled });
 }

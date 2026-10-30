@@ -1,6 +1,6 @@
 //! 编辑器外壳：菜单 / 工具栏 / 状态栏 + split-tree docking + Scene/Game 视口。
 //!
-//! 布局与功能对齐 Web 编辑器（`editor/`）与 Unity 的经典布局；数据模型、
+//! 布局与功能对齐 Web 编辑器（`editor/`）与引擎的经典布局；数据模型、
 //! 命令与撤销都来自 `prism-editor-core`（与 GPUI 编辑器共用同一份）。
 
 use std::path::{Path, PathBuf};
@@ -91,7 +91,7 @@ fn dock_tab(
 }
 
 /// 面板 tab 的英文标题（i18n 字典里也有，这里直接用英文，避免依赖字体）。
-/// 鼠标落在 leaf 的哪个区域（Unity 的分屏 / 合并判定）。
+/// 鼠标落在 leaf 的哪个区域（引擎的分屏 / 合并判定）。
 fn dock_zone(rect: Rect, pos: egui::Pos2) -> prism_editor_core::dock::DockZone {
     let fx = (pos.x - rect.left()) / rect.width().max(1.0);
     let fy = (pos.y - rect.top()) / rect.height().max(1.0);
@@ -333,7 +333,7 @@ impl EditorApp {
 
         // 首帧：把当前文档交给引擎，并创建 Scene view。
         if !app.workspace.document().doc.entities.is_empty() {
-            // 与 Unity 一致：打开场景时自动框住全部内容。
+            // 打开场景时自动框住全部内容。
             app.workspace.frame_all();
         }
         app.write_preview_scene();
@@ -1427,7 +1427,7 @@ impl EditorApp {
                     .add_enabled(!self.build_job_running(), egui::Button::new("Clean Build"))
                     .clicked()
                 {
-                    // Unity 的 Clean Build 只清构建缓存 / 输出，不动引擎编译产物。
+                    // 引擎的 Clean Build 只清构建缓存 / 输出，不动引擎编译产物。
                     self.state.confirm = Some(panels::Confirm::new(
                         panels::ConfirmKind::CleanPlayer,
                         "Clean Build",
@@ -1887,7 +1887,7 @@ impl EditorApp {
         ui.horizontal(|ui| {
             let playing = self.playing;
             let paused = self.paused;
-            // Unity 的运输控件是纯图标（tooltip 补文字）。
+            // 引擎的运输控件是纯图标（tooltip 补文字）。
             let transport = |ui: &mut egui::Ui, glyph: &str, tip: &str, enabled: bool| {
                 ui.add_enabled(enabled, egui::Button::new(RichText::new(glyph).size(14.0)))
                     .on_hover_text(tip)
@@ -1936,7 +1936,7 @@ impl EditorApp {
                 });
 
             ui.separator();
-            // Unity 的工具条：Q/W/E/R + 世界/局部 + 网格。
+            // 引擎的工具条：Q/W/E/R + 世界/局部 + 网格。
             for (tool, label, key) in [
                 (crate::viewport::GizmoTool::Translate, "Move", "W"),
                 (crate::viewport::GizmoTool::Rotate, "Rotate", "E"),
@@ -2353,7 +2353,7 @@ impl EditorApp {
 
     fn panel_body(&mut self, ui: &mut egui::Ui, tab: &str, rect: Rect) {
         self.panel_rects.insert(tab.to_owned(), rect);
-        // Unity 的 focusedWindow：点过哪个面板，快捷键就作用在哪个面板上。
+        // 引擎的 focusedWindow：点过哪个面板，快捷键就作用在哪个面板上。
         if ui.rect_contains_pointer(rect) && ui.input(|input| input.pointer.any_click()) {
             self.state.focused_panel = Some(tab.to_owned());
         }
@@ -2480,7 +2480,7 @@ impl EditorApp {
     // -----------------------------------------------------------------------
 
     /// 统一输入框：另存为 / 新建目录 / 存为预制体 / 重命名。
-    /// 破坏性操作的确认框（Unity 的 `EditorUtility.DisplayDialog`）。
+    /// 破坏性操作的确认框（引擎的 `EditorUtility.DisplayDialog`）。
     fn confirm_dialog(&mut self, ctx: &egui::Context) {
         let Some(confirm) = self.state.confirm.clone() else {
             return;
@@ -2614,7 +2614,7 @@ impl EditorApp {
         }
     }
 
-    /// 关闭未保存文档 / 窗口时的三选一确认（Unity 的 Save / Don't Save / Cancel）。
+    /// 关闭未保存文档 / 窗口时的三选一确认（引擎的 Save / Don't Save / Cancel）。
     fn close_confirm_dialog(&mut self, ctx: &egui::Context) {
         let Some(target) = self.state.pending_close else {
             return;
@@ -2817,7 +2817,7 @@ impl EditorApp {
                     view.mark_dirty();
                 }
             }
-            // Unity 的面板快捷键：Ctrl+1..5 = Scene / Game / Inspector / Hierarchy / Project，
+            // 引擎的面板快捷键：Ctrl+1..5 = Scene / Game / Inspector / Hierarchy / Project，
             // Ctrl+Shift+C = Console。
             for (key, command) in [
                 (egui::Key::Num1, Command::ToggleSceneView),
@@ -2841,7 +2841,7 @@ impl EditorApp {
                 self.apply_command(Command::ToggleLog);
             }
 
-            // Ctrl+B = Build And Run，Ctrl+I = 反选（Unity 的默认绑定）。
+            // Ctrl+B = Build And Run，Ctrl+I = 反选（引擎的默认绑定）。
             if ctx.input_mut(|input| {
                 input.consume_shortcut(&egui::KeyboardShortcut::new(
                     egui::Modifiers::CTRL,
@@ -2862,7 +2862,7 @@ impl EditorApp {
             }
         }
 
-        // Unity 的快捷键跟着焦点面板走：在资产面板按 Delete 不能删场景实体。
+        // 引擎的快捷键跟着焦点面板走：在资产面板按 Delete 不能删场景实体。
         let focus = self.state.focused_panel.clone().unwrap_or_default();
         let assets_focused = focus == "assets";
         let inspector_focused = focus == "inspector";
@@ -2917,7 +2917,7 @@ impl EditorApp {
             }
         }
 
-        // Unity 的 F2：重命名当前面板里的选中项。
+        // 引擎的 F2：重命名当前面板里的选中项。
         if !wants_keyboard && ctx.input(|input| input.key_pressed(egui::Key::F2)) {
             if assets_focused {
                 self.rename_selected_asset_prompt();
@@ -3005,7 +3005,7 @@ impl EditorApp {
 
 impl EditorApp {
     /// 相机 / 选中标记 / 相机视角变了 → 下一帧重绘 Scene view。
-    /// Unity 的 Create → Prefab Variant：把选中的实例存成「继承 base + 覆盖」的预制体，
+    /// 引擎的 Create → Prefab Variant：把选中的实例存成「继承 base + 覆盖」的预制体，
     /// 然后把场景里的这个实例改指向新变体。
     fn create_prefab_variant(&mut self, name: &str) -> std::io::Result<String> {
         let root_dir = self
@@ -3040,7 +3040,7 @@ impl EditorApp {
         }
         prism_editor_core::project::write_document(&root_dir, &relative, &doc)?;
         self.workspace.refresh_project_files();
-        // 场景里的这个实例改为指向新变体（Unity 的行为）。
+        // 场景里的这个实例改为指向新变体（引擎的行为）。
         if let Some(entity) = self.workspace.document().doc.id_of_index(index) {
             self.workspace.set_field(
                 entity,

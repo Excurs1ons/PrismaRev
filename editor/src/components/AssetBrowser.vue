@@ -27,12 +27,12 @@ import { t } from "../i18n";
 import type { AssetInfo, AssetMutation, AssetRef } from "../types";
 
 /**
- * 资产管理器面板（Unity 7 Project Browser 标准双栏设计）：
+ * 资产管理器面板（7 Project Browser 标准双栏设计）：
  * - 左侧：文件夹树（仅展示目录层级，支持展开/折叠、点击切换当前目录、拖拽移动与预制体保存）。
  * - 竖向 Splitter：可平滑拖拽调整左右栏宽度，记忆到 localStorage。
- * - 顶部工具栏：Unity 风格后退/前进导航历史、面包屑导航（点击快速跳转上级）、搜索过滤与分类下拉。
+ * - 顶部工具栏：后退/前进导航历史、面包屑导航（点击快速跳转上级）、搜索过滤与分类下拉。
  * - 右侧：文件夹内容区（ListArea），展示当前目录下的子文件夹与资产。
- * - 底部状态栏：显示项目计数或选中资产信息，以及 Unity 标准图标大小滑块（16px 为列表视图，>16px 为网格视图）。
+ * - 底部状态栏：显示项目计数或选中资产信息，以及 常用标准图标大小滑块（16px 为列表视图，>16px 为网格视图）。
  * - 自定义 Editor UI 对话框与右键菜单，禁止使用原生 window.confirm/prompt。
  */
 const props = defineProps<{
@@ -941,7 +941,7 @@ onUnmounted(() => {
 
 <template>
   <div ref="browserRoot" class="asset-browser">
-    <!-- 顶部 Unity 风格工具栏 -->
+    <!-- 顶部工具栏 -->
     <div class="project-toolbar">
       <!-- 导航前进后退按钮 -->
       <div class="nav-actions">

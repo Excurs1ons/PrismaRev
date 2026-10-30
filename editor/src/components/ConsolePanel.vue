@@ -152,7 +152,7 @@ const displayLogs = computed<LogViewLine[]>(() => {
     return filtered;
   }
 
-  // Unity 风格 Collapse：按 level + line 去重归类，统计出现频次
+  // Collapse：按 level + line 去重归类，统计出现频次
   const map = new Map<string, LogViewLine>();
   for (const item of filtered) {
     const key = `${item.level}:${item.line}`;
@@ -298,7 +298,7 @@ onUnmounted(() => {
 
 <template>
   <div ref="logContainerEl" class="console-panel">
-    <!-- Unity 风格控制台顶部工具条 -->
+    <!--控制台顶部工具条 -->
     <div class="console-toolbar">
       <button class="ghost icon tool-action-btn" :title="$t('console.clear')" @click="emit('clear')">
         <Trash2 :size="13" />
@@ -375,7 +375,7 @@ onUnmounted(() => {
 
       <span class="spacer" />
 
-      <!-- Unity 风格三色药丸徽章 -->
+      <!--三色药丸徽章 -->
       <div class="log-counts-group">
         <button
           class="log-count-btn info-count"

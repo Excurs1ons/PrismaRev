@@ -37,13 +37,13 @@ fn editor_schema() -> Schema {
     prism_editor_api::build_schema()
 }
 
-/// 编辑器面板注册表 = Unity `EditorWindow` / `[MenuItem]` 的声明式 DTO。
+/// 编辑器面板注册表 = `EditorWindow` / `[MenuItem]` 的声明式 DTO。
 #[tauri::command]
 fn editor_windows() -> Vec<EditorWindowDescriptor> {
     prism_editor_api::build_window_registry().windows().to_vec()
 }
 
-/// Unity `Build.Profile.BuildProfile`：构建目标组 / `BuildOptions` / 场景构建顺序。
+/// `Build.Profile.BuildProfile`：构建目标组 / `BuildOptions` / 场景构建顺序。
 #[tauri::command]
 fn editor_build_profile() -> Result<prism_editor_api::BuildProfile, String> {
     let root = prism_editor_api::find_project_root()?;
@@ -372,9 +372,9 @@ fn editor_extract_subtree(
 }
 
 // ---------------------------------------------------------------------------
-// AssetDatabase（对应 `UnityEditor.AssetDatabase`）
+// AssetDatabase
 //
-// `prism-editor-api` 把资产数据库暴露成 Unity 形状的门面；这里只做命令映射。
+// `prism-editor-api` 把资产数据库暴露成 编辑器门面；这里只做命令映射。
 // ---------------------------------------------------------------------------
 
 /// `editor_import_asset` 的返回：规范化路径 + 分类。
@@ -402,7 +402,7 @@ fn editor_asset_all_paths() -> Result<Vec<String>, String> {
     prism_editor_api::get_all_asset_paths(&prism_editor_api::find_project_root()?)
 }
 
-/// Unity 风格检索 = `AssetDatabase.FindAssets`：空白分词取 **AND**；
+///检索 = `AssetDatabase.FindAssets`：空白分词取 **AND**；
 /// `t:<分类>` 匹配分类（或扩展名）、`l:<标签>` 暂被忽略，其余按路径子串。
 #[tauri::command]
 fn editor_find_assets(filter: String) -> Result<Vec<String>, String> {
@@ -440,7 +440,7 @@ fn editor_asset_is_valid_folder(path: String) -> Result<bool, String> {
     ))
 }
 
-/// 复制资产（目录递归）= `AssetDatabase.CopyAsset`；**不改写引用**（与 Unity 一致）。
+/// 复制资产（目录递归）= `AssetDatabase.CopyAsset`；**不改写引用**（保持引用不变）。
 #[tauri::command]
 fn editor_copy_asset(from: String, to: String) -> Result<AssetMutation, String> {
     prism_editor_api::copy_asset(&prism_editor_api::find_project_root()?, &from, &to)
@@ -464,7 +464,7 @@ fn editor_refresh_assets() -> Result<usize, String> {
 }
 
 // ---------------------------------------------------------------------------
-// PrefabUtility（对应 `UnityEditor.PrefabUtility`）
+// PrefabUtility
 // ---------------------------------------------------------------------------
 
 /// 未知的解包模式。
@@ -535,7 +535,7 @@ fn editor_is_part_of_prefab_instance(doc: serde_json::Value, root_index: usize) 
 }
 
 // ---------------------------------------------------------------------------
-// SceneManagement（对应 `UnityEditor.SceneManagement`）
+// SceneManagement
 // ---------------------------------------------------------------------------
 
 /// 场景元信息列表（名字 / 路径 / GUID / 实体数 / 构建序号）= 加载场景视图的数据源。
@@ -584,7 +584,7 @@ fn editor_scene_from_doc(
 }
 
 // ---------------------------------------------------------------------------
-// Selection（对应 `UnityEditor.Selection`）
+// Selection
 //
 // 选择状态本身由前端（Vue 响应式）持有以保证跟手；这里只暴露**无状态**的过滤。
 // ---------------------------------------------------------------------------
@@ -628,7 +628,7 @@ fn editor_selection_all_matching(
 }
 
 // ---------------------------------------------------------------------------
-// EditorApplication（对应 `UnityEditor.EditorApplication` / `Application`）
+// EditorApplication（对应编辑器命令 / `Application`）
 // ---------------------------------------------------------------------------
 
 /// 编辑器关键路径（`Application.dataPath` 等）。
@@ -1086,7 +1086,7 @@ struct BuildProjectResult {
     exe: String,
     output_dir: String,
     duration_ms: u64,
-    /// Unity `BuildReport`：构建阶段耗时 + 产物大小。
+    /// `BuildReport`：构建阶段耗时 + 产物大小。
     report: BuildReport,
 }
 
@@ -1193,7 +1193,7 @@ fn build_project_blocking(
     if !matches!(options.profile.as_str(), "debug" | "release") {
         return Err("构建配置只能是 debug 或 release".into());
     }
-    // Unity `BuildPipeline.BuildPlayer`：没有场景就直接失败。
+    // `BuildPipeline.BuildPlayer`：没有场景就直接失败。
     prism_editor_api::read_build_profile(&root)?.validate()?;
     let started = std::time::Instant::now();
     let manifest = game_project_manifest(&root)?;

@@ -13,14 +13,14 @@ use std::any::{Any, TypeId};
 use std::collections::HashMap;
 
 // ---------------------------------------------------------------------------
-// Unity DOTS 形状的对齐层（`Unity.Entities` / `Unity.Collections` / `Unity.Jobs`）
+// 数据导向 形状的对齐层（`.Entities` / `.Collections` / `.Jobs`）
 // ---------------------------------------------------------------------------
 
-/// Unity `Unity.Collections` 形状的容器（`NativeArray` / `NativeList` / ...）。
+/// `.Collections` 形状的容器（`NativeArray` / `NativeList` / ...）。
 pub mod collections;
 /// DOTS `EntityManager` 形状的 [`World`] 门面。
 pub mod entity_manager;
-/// Unity `Unity.Jobs` 形状的作业与完成句柄。
+/// `.Jobs` 形状的作业与完成句柄。
 pub mod jobs;
 /// DOTS `ISystem` / `SystemBase` / `ComponentSystemGroup` 形状的系统与系统组。
 pub mod systems;

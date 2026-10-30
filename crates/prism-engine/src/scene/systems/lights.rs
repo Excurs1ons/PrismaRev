@@ -2,7 +2,7 @@
 //!
 //! 两条路径并存：
 //!
-//! 1. **统一形状**（Unity `Light`）：[`Light`] 用 [`crate::scene::components::LightType`]
+//! 1. **统一形状**（`Light`）：[`Light`] 用 [`crate::scene::components::LightType`]
 //!    区分方向光 / 点光 / 聚光，方向与位置来自实体变换（`transform.forward` /
 //!    `LocalToWorld`）。
 //! 2. **旧组件**：[`DirectionalLight`] / [`PointLight`] / [`SpotLight`]，老场景还在用。
@@ -41,7 +41,7 @@ pub struct LightSample {
     pub kind: LightKind,
     /// 世界位置（方向光无意义，为 `ZERO`）。
     pub position: Vec3,
-    /// 光源朝向 = Unity `transform.forward`（方向光 / 聚光有效）。
+    /// 光源朝向 = `transform.forward`（方向光 / 聚光有效）。
     pub direction: Vec3,
     /// 线性颜色（已应用色温滤色片）。
     pub color: Vec3,
@@ -82,7 +82,7 @@ fn entity_transform(world: &World, entity: prism_ecs::Entity) -> (Vec3, Quat) {
     }
 }
 
-/// Unity 里光源朝向就是 `transform.forward`（+Z）。
+/// 里光源朝向就是 `transform.forward`（+Z）。
 fn forward(rotation: Quat) -> Vec3 {
     (rotation * Vec3::Z).normalize_or_zero()
 }
@@ -131,7 +131,7 @@ pub fn collect_light_samples(world: &World) -> Vec<LightSample> {
 pub fn collect_light_samples_into(world: &World, out: &mut Vec<LightSample>) {
     out.clear();
 
-    // 1. Unity 形状的 `Light`。
+    // 1. 形状的 `Light`。
     for (entity, light) in world.query::<Light>() {
         if !light.enabled || !component_is_active(world, entity) {
             continue;
@@ -151,7 +151,7 @@ pub fn collect_light_samples_into(world: &World, out: &mut Vec<LightSample>) {
             kind: LightKind::Directional,
             position: Vec3::ZERO,
             // `euler_xyz_deg_to_dir` 给的是「指向光源」的方向，而 `LightSample.direction`
-            // 统一存光传播方向（Unity `transform.forward`），这里取反。
+            // 统一存光传播方向（`transform.forward`），这里取反。
             direction: -euler_xyz_deg_to_dir(light.euler_xyz),
             color: light.color,
             intensity: light.intensity,
@@ -217,7 +217,7 @@ pub fn collect_light_samples_into(world: &World, out: &mut Vec<LightSample>) {
 
 /// 方向光的阴影状态 `(enabled, strength)`。
 ///
-/// `enabled` = Unity `Light.shadows != None`；`strength` = `Light.shadowStrength`
+/// `enabled` = `Light.shadows != None`；`strength` = `Light.shadowStrength`
 /// （clamp 到 `0..=1`）。没有方向光时两者都是「关闭」。
 pub fn directional_shadow_state(samples: &[LightSample]) -> (bool, f32) {
     match samples

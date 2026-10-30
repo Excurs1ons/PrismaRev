@@ -10,7 +10,7 @@ import { t } from "../i18n";
 import type { ComponentClipboard, EntityJson, FieldSchema, JsonValue, Schema } from "../types";
 
 /**
- * 单实体检查器：对齐 Unity Inspector 规范。
+ * 单实体检查器：Inspector 规范。
  * - 顶部 GameObjectHeader：激活复选框、名称输入、静态标记、Tag / Layer 下拉
  * - Transform 变换：支持欧拉角（度）与四元数无缝双向换算
  * - 组件容器：扁平卡片、折叠三角、右键 / 三点操作菜单
@@ -159,7 +159,7 @@ function setTransform(
   );
 }
 
-// ── 欧拉角转换（Unity 顺规） ────────────────────────────────────────────────
+// ── 欧拉角转换（顺规） ────────────────────────────────────────────────
 const eulerRotation = computed(() => {
   const rot = props.entity.transform.rotation ?? [0, 0, 0, 1];
   return quaternionToEuler(rot[0] ?? 0, rot[1] ?? 0, rot[2] ?? 0, rot[3] ?? 1);
@@ -310,7 +310,7 @@ const filteredAvailableComponents = computed(() => {
 </script>
 
 <template>
-  <!-- Unity 风格 GameObject Header -->
+  <!-- GameObject Header -->
   <div class="gameobject-header">
     <div class="gameobject-row-top">
       <input
@@ -516,7 +516,7 @@ const filteredAvailableComponents = computed(() => {
     {{ $t("inspector.noMatchingComponents", { query: filter }) }}
   </div>
 
-  <!-- Unity 风格居中 Add Component 按钮 -->
+  <!--居中 Add Component 按钮 -->
   <div class="add-component-container">
     <button class="add-component-button" @click="showAddPopup = !showAddPopup">
       {{ $t("inspector.addComponent") }}

@@ -1,25 +1,25 @@
-//! Unity `EditorWindow` / `[MenuItem]` 形状的面板注册表。
+//! `EditorWindow` / `[MenuItem]` 形状的面板注册表。
 //!
-//! Unity 里每个 dock 面板都是一个 `EditorWindow` 子类，菜单项用
+//! 里每个 dock 面板都是一个 `EditorWindow` 子类，菜单项用
 //! `[MenuItem("Window/Analysis/Render Graph")]` 声明。这一层把同一件事投影成
 //! **声明式 DTO**：面板的稳定 id、标签页标题、菜单路径、命令 id；前端 Vue
 //! 用它生成 `PANELS` 与「窗口 / 帮助」菜单（真正 UI 在 `editor/`）。
 //!
-//! 菜单项的**动作**仍留在前端（Unity 里也是绑定到方法）：DTO 只给 `command`
+//! 菜单项的**动作**仍留在前端（里也是绑定到方法）：DTO 只给 `command`
 //! （如 `window/toggle/hierarchy`），前端用自己的命令表分发。这样后端不链接
 //! 任何 UI 框架，也不需要在 Rust 里存闭包。
 
 use serde::{Deserialize, Serialize};
 
-/// 一个 dock 面板 = Unity `EditorWindow`。
+/// 一个 dock 面板 = `EditorWindow`。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EditorWindowDescriptor {
     /// 稳定面板 id（前端 `PanelId`、`localStorage` 布局键都用它）。
     pub id: String,
-    /// 标签页标题 = Unity `EditorWindow.titleContent`。
+    /// 标签页标题 = `EditorWindow.titleContent`。
     pub title: String,
-    /// 菜单路径 = Unity `[MenuItem("窗口/分析/实时渲染图")]`；**最后一段**是菜单文字。
+    /// 菜单路径 = `[MenuItem("窗口/分析/实时渲染图")]`；**最后一段**是菜单文字。
     pub menu_path: String,
     /// 快捷键提示（只用于显示；按键本身由前端 `keys.ts` 处理）。
     pub shortcut: Option<String>,
@@ -68,7 +68,7 @@ impl EditorWindowDescriptor {
     }
 }
 
-/// 面板注册表 = Unity 的 `EditorWindow` 发现 + `[MenuItem]` 声明。
+/// 面板注册表 = 引擎的 `EditorWindow` 发现 + `[MenuItem]` 声明。
 ///
 /// 内置列表与前端 `PANELS` 一一对应；`register` 按 id 覆盖，宿主可以替换
 /// 标题 / 菜单路径而不必改前端。
@@ -218,7 +218,7 @@ mod tests {
         let graph = registry.get("renderGraph").expect("renderGraph");
         assert_eq!(graph.menu_segments(), vec!["窗口", "分析", "实时渲染图"]);
         assert_eq!(graph.menu_label(), "实时渲染图");
-        // 标签页标题与菜单文字可以不同（Unity 里也常见）。
+        // 标签页标题与菜单文字可以不同（里也常见）。
         assert_eq!(graph.title, "渲染图");
 
         let shortcuts = registry.get("shortcuts").expect("shortcuts");

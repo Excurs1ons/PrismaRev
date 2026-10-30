@@ -78,7 +78,7 @@ pub fn component_card_with_assets(
 
 /// 单个字段的编辑控件。`set(field, value)` 写回（单选走 `set_field`，
 /// 多选走 `set_field_multi`），所以这里不关心实体。
-/// 资产字段的扩展名过滤（Unity 的 object field 只列可接受的类型）。
+/// 资产字段的扩展名过滤（引擎的 object field 只列可接受的类型）。
 fn asset_filter(name: &str) -> Option<&'static [&'static str]> {
     if name.contains("mesh") {
         Some(&["obj", "gltf", "glb", "fbx", "mesh"])
@@ -178,7 +178,7 @@ fn field_row_at(
                 if response.changed() {
                     set(&name, Value::String(current.clone()));
                 }
-                // Unity 的「把资产拖到对象字段」：路径类字段接受资产拖放。
+                // 引擎的「把资产拖到对象字段」：路径类字段接受资产拖放。
                 let looks_like_asset = name.ends_with("_path")
                     || matches!(name.as_str(), "prefab" | "env_map" | "volume" | "mesh");
                 if looks_like_asset {

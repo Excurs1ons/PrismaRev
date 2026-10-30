@@ -1,7 +1,7 @@
 //! 与 egui-ash 共享的 Vulkan 设备。
 //!
 //! egui-ash 要求宿主自己创建 instance / device 并返回 [`AshRenderState`]；
-//! 这正好给了我们 Unity 式的模型：**编辑器和引擎共用同一个 `VkDevice` /
+//! 这正好给了我们引擎式的模型：**编辑器和引擎共用同一个 `VkDevice` /
 //! 队列**，所以 Scene/Game 视口只需要把引擎离屏图像的 `VkImageView` 注册成
 //! egui 纹理（`ImageRegistry::register_user_texture`），没有任何 GPU↔CPU 拷贝。
 //!

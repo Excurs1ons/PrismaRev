@@ -99,7 +99,7 @@ fn world_to_camera_inverts_camera_to_world() {
 }
 
 #[test]
-fn defaults_follow_unity() {
+fn camera_defaults() {
     let cam = Camera::default();
     assert_eq!(cam.clear_flags, CameraClearFlags::Skybox);
     assert!(!cam.orthographic);
@@ -138,14 +138,14 @@ fn older_json_without_new_fields_uses_defaults() {
 }
 
 // ---------------------------------------------------------------------------
-// Light（Unity `Light` 形状）
+// Light
 // ---------------------------------------------------------------------------
 
 #[test]
-fn light_defaults_match_unity() {
+fn light_defaults() {
     let light = Light::default();
     assert!(light.enabled);
-    // Unity `new Light()` 默认是点光源；聚光角度与色温沿用 Unity 默认值。
+    // `new Light()` 默认是点光源；聚光角度与色温沿用引擎默认值。
     assert_eq!(light.light_type, LightType::Point);
     assert_eq!(light.shadows, LightShadows::None);
     assert_eq!(light.render_mode, LightRenderMode::Auto);
@@ -202,7 +202,7 @@ fn light_effective_color_applies_temperature_only_when_enabled() {
 fn light_cone_half_angles_are_derived_from_full_angles() {
     let light = Light {
         light_type: LightType::Spot,
-        // Unity 的 60° 全锥 = 30° 半锥。
+        // 引擎的 60° 全锥 = 30° 半锥。
         spot_angle: 60.0,
         inner_spot_angle: 20.0,
         ..Light::default()
@@ -241,7 +241,7 @@ fn light_shadow_caster_requires_enabled_and_shadow_mode() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn sprite_defaults_match_unity() {
+fn sprite_defaults() {
     let sprite = SpriteRenderer::default();
     assert!(!sprite.has_sprite());
     assert_eq!(sprite.frame_size, [0, 0]);
@@ -314,7 +314,7 @@ fn sprite_world_size_uses_frame_or_texture_and_ppu() {
 
 #[test]
 fn mesh_renderer_state_defaults_and_round_trips() {
-    // 老文档只有 mesh/material：所有新字段必须回退到 Unity 的不透明默认值。
+    // 老文档只有 mesh/material：所有新字段必须回退到引擎的不透明默认值。
     let legacy: MeshRenderer =
         serde_json::from_str(r#"{"mesh_path":"m.mesh","material_path":"m.mat"}"#)
             .expect("缺少渲染状态字段的老 JSON 仍然可读");
@@ -329,7 +329,7 @@ fn mesh_renderer_state_defaults_and_round_trips() {
     assert!(!legacy.blends());
 
     // 作者格式用变体名（与 `CameraClearFlags` / `TextAlign` 一致），
-    // 队列是数字（Unity `Material.renderQueue` 的 int 形状）。
+    // 队列是数字（`Material.renderQueue` 的 int 形状）。
     let json = serde_json::to_value(MeshRenderer {
         mesh_path: "m.mesh".into(),
         material_path: "m.mat".into(),

@@ -3,7 +3,7 @@ name = "prism-editor-gpui"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "PrismaRev 的 GPUI 原生编辑器（Unity 形状的 Editor Shell）"
+description = "PrismaRev 的 GPUI 原生编辑器（编辑器外壳）"
 
 [[bin]]
 name = "prisma-editor-gpui"

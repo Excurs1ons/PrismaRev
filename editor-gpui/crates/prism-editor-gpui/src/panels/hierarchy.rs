@@ -102,7 +102,7 @@ impl EditorView {
         let doc = &self.workspace.document().doc;
         let filter = self.hierarchy_search.trim().to_ascii_lowercase();
         // 搜索时忽略折叠状态：所有匹配项都列出来（缩进仍然表达层级），
-        // 与 Unity 层级搜索的「过滤」行为一致。
+        // 与 层级搜索的「过滤」行为一致。
         let candidates: Vec<(usize, u32)> = if filter.is_empty() {
             doc.visible_rows(&self.workspace.expanded)
         } else {
@@ -200,7 +200,7 @@ impl EditorView {
                 .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
                     let modifiers = event.modifiers();
                     if modifiers.shift {
-                        // Shift = 可见行区间选择（Unity：按屏幕顺序，不是数组下标）。
+                        // Shift = 可见行区间选择（按屏幕顺序，不是数组下标）。
                         let anchor = this.hierarchy_anchor.unwrap_or(index);
                         let rows = this
                             .workspace

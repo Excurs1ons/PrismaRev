@@ -129,7 +129,7 @@ export const enUS: LocaleMessages = {
   },
   hierarchy: {
     title: "Hierarchy",
-    createTooltip: "Create Entity (Unity Create Menu)",
+    createTooltip: "Create Entity (Create Menu)",
     filterPlaceholder: "Search Entity Name…",
     presetTypeTooltip: "Entity Template",
     empty: "(Empty)",

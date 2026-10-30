@@ -157,9 +157,9 @@ export interface ThemePreset {
 /** 预设主题。默认项与改造前的编辑器配色保持一致。 */
 export const THEME_PRESETS: ThemePreset[] = [
   {
-    id: "unity",
-    label: "Unity 暗色",
-    description: "默认 · Unity 工业级经典暗色中性灰",
+    id: "studio",
+    label: "工业暗色",
+    description: "默认 · 工业级经典暗色中性灰",
     mode: "dark",
     colors: {
       bg: "#1c1c1c",

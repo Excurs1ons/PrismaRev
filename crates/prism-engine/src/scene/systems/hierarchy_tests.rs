@@ -123,7 +123,7 @@ fn nested_hierarchy() {
 fn dead_parent_makes_the_child_a_root() {
     // 父实体被 despawn 后子实体的 `Parent` 仍指向死实体（despawn 只删自己的
     // 组件）。以前这种子节点既不是根、也够不到，`LocalToWorld` 会永远冻结在
-    // 旧值；现在按 Unity 语义提升为根，等于自己的 `LocalTransform`。
+    // 旧值；现在按 统一语义提升为根，等于自己的 `LocalTransform`。
     let mut world = World::new();
     let parent = world.spawn();
     let child = world.spawn();

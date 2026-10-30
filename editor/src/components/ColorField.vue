@@ -18,7 +18,7 @@ const emit = defineEmits<{ (e: "update:modelValue", value: JsonValue): void }>()
 
 const hex = computed(() => floatsToHex(props.modelValue));
 const hasAlpha = computed(() => props.showAlpha && props.modelValue.length === 4);
-/** 隐藏 alpha 时连第 4 个通道的数值框一起隐藏（Unity `[ColorUsage(showAlpha: false)]`）。 */
+/** 隐藏 alpha 时连第 4 个通道的数值框一起隐藏（`[ColorUsage(showAlpha: false)]`）。 */
 const channels = computed(() =>
   props.showAlpha ? props.modelValue : props.modelValue.slice(0, 3),
 );

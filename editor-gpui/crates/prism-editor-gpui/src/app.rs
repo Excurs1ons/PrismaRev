@@ -90,7 +90,7 @@ pub enum DragState {
         direction: [f32; 2],
         px_per_unit: f32,
     },
-    /// 在空白处拖拽框选（Unity 左键拖空白）。
+    /// 在空白处拖拽框选（左键拖空白）。
     BoxSelect {
         start: Point<Pixels>,
         current: Point<Pixels>,
@@ -432,7 +432,7 @@ pub struct EditorView {
     /// Scene / Game View 最近一次绘制的屏幕矩形（拾取与 gizmo 用）。
     /// 内联重命名的起始快照（提交时补一个撤销步，Esc 时回滚）。
     pub rename_base: Option<prism_editor_gpui_core::SceneDoc>,
-    /// 双击实体 = 取景（Unity 里双击层级/视口都会聚焦）。
+    /// 双击实体 = 取景（里双击层级/视口都会聚焦）。
     pub last_pick: Option<(usize, std::time::Instant)>,
     pub scene_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
     pub game_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,

@@ -182,7 +182,7 @@ const baseline = ref<string>("");
 
 /** 选中的实体（最后一个为「主选中」，检查器显示它）。 */
 const selection = ref<number[]>([]);
-/** 选中的资产（对齐 Unity：点击 Project 资产时在 Inspector 展示其导入配置与预览）。 */
+/** 选中的资产（点击 Project 资产时在 Inspector 展示其导入配置与预览）。 */
 const selectedAsset = ref<AssetInfo | null>(null);
 
 function onAssetSelect(asset: AssetInfo | null) {
@@ -209,7 +209,7 @@ const documentLabel = computed(() => {
   return hasDoc.value ? "未保存的文档" : "无文档";
 });
 
-// ── 顶部工具栏状态（对齐 Unity） ───────────────────────────────────────────
+// ── 顶部工具栏状态（按项目约定） ───────────────────────────────────────────
 const activeTool = ref<"select" | "move" | "rotate" | "scale">("move");
 const activePivot = ref<"pivot" | "center">("pivot");
 const activeSpace = ref<"global" | "local">("global");
@@ -253,7 +253,7 @@ const PANEL_IDS = [
 type PanelId = (typeof PANEL_IDS)[number];
 
 /**
- * 面板注册表的内置回退 = Unity `EditorWindow` / `[MenuItem]` 的前端镜像。
+ * 面板注册表的内置回退 = `EditorWindow` / `[MenuItem]` 的前端镜像。
  *
  * 正常启动时由后端 `editor_windows`（`prism_editor_api::editor_window`）覆盖；
  * 浏览器预览 / 旧后端拿不到命令时用这份，保证 UI 仍可用。
@@ -285,7 +285,7 @@ const PANELS = computed<Array<{ id: PanelId; title: string }>>(() =>
     .map((window) => ({ id: window.id as PanelId, title: window.title })),
 );
 /**
- * 拉取后端面板注册表 = Unity `EditorWindow` / `[MenuItem]` 声明。
+ * 拉取后端面板注册表 = `EditorWindow` / `[MenuItem]` 声明。
  *
  * 以 `FALLBACK_WINDOWS` 为骨架按下标覆盖：后端只改标题/菜单路径/快捷键/命令，
  * 不会因为少发一个窗口就让标签页消失。浏览器预览 / 旧后端失败时保持回退。
@@ -343,7 +343,7 @@ function togglePanel(id: PanelId) {
   else showPanelTab(id);
 }
 
-// —— 面板命令 = Unity `[MenuItem]` 的 action ——
+// —— 面板命令 = `[MenuItem]` 的 action ——
 // 后端只声明「命令 id」（`window/toggle/<panel>`），动作必须留在前端：它需要
 // docking 状态、localStorage 与轮询。未知命令直接忽略（向前兼容）。
 const PANEL_COMMANDS: Record<string, () => void> = Object.fromEntries(
@@ -371,7 +371,7 @@ function addMenuPath(items: MenuItem[], path: string[], item: MenuItem) {
 
 /**
  * 「窗口」与「帮助」菜单由注册表的 `menuPath` 派生
- * （= Unity `[MenuItem("窗口/文档")]`），顺序即注册表顺序。
+ * （= `[MenuItem("窗口/文档")]`），顺序即注册表顺序。
  */
 const panelMenuRoots = computed(() => {
   const window: MenuItem[] = [];
@@ -1680,7 +1680,7 @@ function onKey(event: KeyboardEvent) {
     return;
   }
 
-  // 场景视图变换快捷键（对齐 Unity）：Q 选择、W 平移、E 旋转、R 缩放
+  // 场景视图变换快捷键（按项目约定）：Q 选择、W 平移、E 旋转、R 缩放
   if (!mod) {
     if (key === "q") {
       activeTool.value = "select";
@@ -1893,7 +1893,7 @@ function toggleMenu(id: string) {
   openMenu.value = openMenu.value === id ? null : id;
 }
 
-/** 菜单已展开时，鼠标移到相邻菜单直接切换（UE / Unity 行为）。 */
+/** 菜单已展开时，鼠标移到相邻菜单直接切换（UE / 行为）。 */
 function hoverMenu(id: string) {
   if (openMenu.value) openMenu.value = id;
 }
@@ -2394,7 +2394,7 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <!-- 中间：Unity 经典对称三段式 Play / Pause / Step 运行控制 -->
+      <!-- 中间：经典对称三段式 Play / Pause / Step 运行控制 -->
       <div class="toolbar-section toolbar-center">
         <div class="segmented-group">
           <button
@@ -2583,7 +2583,7 @@ onUnmounted(() => {
 
         <template #inspector>
         <div class="editor-pane inspector-pane">
-          <!-- 选中资产时展示 Unity 风格 Asset Inspector（含大图/文本预览与导入元数据） -->
+          <!-- 选中资产时展示 Asset Inspector（含大图/文本预览与导入元数据） -->
           <AssetInspector
             v-if="selectedAsset"
             :asset="selectedAsset"

@@ -74,7 +74,7 @@ impl Default for Anchors {
 ///
 /// 只有**点锚点**（`Anchors` 该轴 `min == max`）才用 pivot 对齐尺寸；
 /// 拉伸轴（`min != max`）的矩形由锚点与边距决定，pivot 不参与
-/// （与 Unity 的 `anchorMin/anchorMax` + `pivot` 语义一致）。
+/// （与引擎的 `anchorMin/anchorMax` + `pivot` 语义一致）。
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, Reflect)]
 #[reflect(name = "prism_engine::ui::Pivot")]
 pub struct Pivot {

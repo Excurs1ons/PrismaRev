@@ -323,7 +323,7 @@ struct HostState {
     scene_generation: u64,
     /// 项目源码最近一次**成功编译**时的时间戳（热重载判据）。
     project_stamp: Option<std::time::SystemTime>,
-    /// 改动首次被观察到的时刻：Unity 式 debounce，等写盘落定再编译。
+    /// 改动首次被观察到的时刻：引擎式 debounce，等写盘落定再编译。
     project_pending_since: Option<std::time::Instant>,
     /// 当前加载的模块副本（构建产物会被下一次 cargo 覆盖，不能直接加载它）。
     project_module_copy: Option<PathBuf>,
@@ -2213,7 +2213,7 @@ fn project_module_path(scene_path: &Path) -> Result<PathBuf, String> {
     // target/debug 会互相覆盖并每次全量重编。
     let target_dir = project.join("target").join("preview-module");
 
-    // 编辑器负责编译项目模块（对应 Unity 的脚本编译）。默认 feature 是静态
+    // 编辑器负责编译项目模块（对应引擎的脚本编译）。默认 feature 是静态
     // Player，会把引擎打进同一个镜像；这里只构建 preview-module，模块因此
     // 绝不能链接引擎。cargo 增量缓存让未改动的重复构建接近空转。
     log::info!("viewport: building project preview module");
@@ -2297,15 +2297,15 @@ fn collect_newest_source(dir: &Path, newest: &mut Option<std::time::SystemTime>)
     }
 }
 
-/// 改动落定后再编译（Unity 式 debounce）：连续保存不会触发多次 cargo。
+/// 改动落定后再编译（引擎式 debounce）：连续保存不会触发多次 cargo。
 const PROJECT_COMPILE_DEBOUNCE: Duration = Duration::from_millis(350);
 
-/// 是否自动编译项目模块。关闭后只能靠 Ctrl+R（Unity 的 Auto Refresh 开关）。
+/// 是否自动编译项目模块。关闭后只能靠 Ctrl+R（引擎的 Auto Refresh 开关）。
 static PROJECT_AUTO_REFRESH: AtomicBool = AtomicBool::new(true);
 
 /// 项目模块按需编译 + 热重载。
 ///
-/// 参考 Unity 的编译时机：
+/// 参考引擎的编译时机：
 /// - 文件改动**落定**后编译，不逐帧抢跑；
 /// - Play 期间不打断（等停止后再换模块），除非显式 Ctrl+R；
 /// - 编译失败**保留**上一次成功的模块继续跑，只把错误报到面板；
@@ -2327,7 +2327,7 @@ fn maybe_compile_project(state: &mut HostState, shared: &Arc<Shared>, playing: b
             state.project_pending_since = None;
             return;
         }
-        // Play 期间不重载：换模块会丢掉项目状态，和 Unity 的 domain reload 一样打断试玩。
+        // Play 期间不重载：换模块会丢掉项目状态，和引擎的 domain reload 一样打断试玩。
         if playing {
             return;
         }
@@ -3267,8 +3267,8 @@ pub fn editor_viewport_reload(
 
 /// 运行 / 停止（Game view 的 Play 按钮）。
 ///
-/// 开始播放时重载场景，得到与磁盘一致的初始状态（Unity 的 enter play mode）。
-/// 打开/关闭项目模块的自动编译（Unity 的 Auto Refresh 开关）。
+/// 开始播放时重载场景，得到与磁盘一致的初始状态（引擎的 enter play mode）。
+/// 打开/关闭项目模块的自动编译（引擎的 Auto Refresh 开关）。
 ///
 /// 关闭后不再观察源码改动，只能靠 [`editor_viewport_refresh_project`]（Ctrl+R）
 /// 手动重编。
@@ -3285,7 +3285,7 @@ pub fn editor_viewport_auto_refresh() -> bool {
 /// Ctrl+R：立即重编并重载项目模块。
 ///
 /// 与自动刷新不同，它**无视** Auto Refresh 开关与 Play 状态 —— 这是用户显式
-/// 要求的重载，对应 Unity 的 Assets > Refresh。
+/// 要求的重载，对应引擎的 Assets > Refresh。
 #[tauri::command]
 pub fn editor_viewport_refresh_project(
     id: String,
@@ -3320,7 +3320,7 @@ pub fn editor_viewport_set_playing(
                 return;
             }
             // Play 开始 / 结束时都从磁盘快照重建：开始 = 回到初始状态，
-            // 结束 = 丢弃模拟出来的改动（Unity 的 enter/exit play mode）。
+            // 结束 = 丢弃模拟出来的改动（引擎的 enter/exit play mode）。
             state.simulate = playing;
             state.set_paused(false);
             shared.paused.store(false, Ordering::Relaxed);

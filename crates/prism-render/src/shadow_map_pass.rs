@@ -5,7 +5,7 @@
 //! [`crate::forward_pass::ForwardPass`] 用比较采样器采样判断遮挡。
 //! 纯深度管线（`color_attachment_count = 0`），默认背面剔除 + 坡度/常量
 //! 深度偏移以减少阴影痤疮与彼得潘现象；`ShadowCastingMode::TwoSided` 的 caster
-//! 走不剔除的第二套管线（Unity 语义），光源空间矩阵走推送常量。
+//! 走不剔除的第二套管线（统一语义），光源空间矩阵走推送常量。
 
 use anyhow::Context as _;
 use anyhow::Result;
@@ -42,7 +42,7 @@ pub struct ShadowMapPass {
     pipeline: Option<GraphicsPipeline>,
     /// 双面（不剔除）depth-only 管线，供 `ShadowCastingMode::TwoSided` 使用。
     ///
-    /// Unity 的 `ShadowCastingMode.TwoSided` 会在阴影渲染时关闭背面剔除，
+    /// 引擎的 `ShadowCastingMode.TwoSided` 会在阴影渲染时关闭背面剔除，
     /// 即使物体材质本身开启了背面剔除。
     pipeline_two_sided: Option<GraphicsPipeline>,
     /// Shadow 渲染 pass (depth-only).
@@ -158,7 +158,7 @@ impl ShadowMapPass {
         Ok(handle)
     }
 
-    /// 阴影通道使用的背面剔除模式（Unity `ShadowCastingMode.TwoSided` 关闭剔除）。
+    /// 阴影通道使用的背面剔除模式（`ShadowCastingMode.TwoSided` 关闭剔除）。
     ///
     /// 独立成函数便于单测：GPU 侧的管线选择只有这一个判定点。
     fn shadow_cull_mode(two_sided: bool) -> vk::CullModeFlags {
@@ -441,7 +441,7 @@ impl RenderPassNode for ShadowMapPass {
             // 按 draw 的剔除模式选管线，只在模式切换时重绑（`TwoSided` 关闭剔除）。
             let mut bound_two_sided: Option<bool> = None;
             for item in ctx.frame.draw_list {
-                // Unity `ShadowCastingMode::Off` -> 不写阴影贴图。
+                // `ShadowCastingMode::Off` -> 不写阴影贴图。
                 if !item.cast_shadow {
                     continue;
                 }
@@ -594,7 +594,7 @@ mod tests {
 
     #[test]
     fn two_sided_shadow_casting_disables_backface_culling() {
-        // Unity `ShadowCastingMode::TwoSided`：阴影渲染关闭背面剔除。
+        // `ShadowCastingMode::TwoSided`：阴影渲染关闭背面剔除。
         assert_eq!(
             ShadowMapPass::shadow_cull_mode(false),
             vk::CullModeFlags::BACK

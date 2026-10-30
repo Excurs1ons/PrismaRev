@@ -36,7 +36,7 @@ deviating from those conventions is a bug. (`README.md` is the human-facing over
 - `crates/prism-reflect-derive` — `#[derive(Reflect)]` 过程宏（仅编译期依赖）。
 - `crates/prism-gfx` — 跨场景/渲染共享的**纯数据**渲染状态枚举（`CullMode` /
   `CompareFunction` / `BlendMode` / `RenderQueue` / `ShadowCastingMode` / 光照与相机枚举）+
-  Unity 形状的反射编码。**不依赖 ash/Vulkan，也不依赖 ECS**；`prism-scene` 与
+  紧凑的反射编码（枚举按小整数写出）。**不依赖 ash/Vulkan，也不依赖 ECS**；`prism-scene` 与
   `prism-render` 都依赖它，`prism_scene::render_enums` 只是它的 re-export。
   翻译成 Vulkan 状态（剔除位、混合因子……）留在 `prism-render`。
 - `crates/prism-scene` — 场景 schema 层：纯数据组件、`ComponentRegistry`、`.scene.json`
@@ -91,7 +91,7 @@ deviating from those conventions is a bug. (`README.md` is the human-facing over
     导致 splitter 变成 6×6 且面板间距错乱。
   - 图标统一用 `lucide-vue-next`（`Play/Stop/Square/X/Check/Chevron*/Eye/EyeOff/Plus/Minus/RefreshCw`），
     不要用 `▶ ■ ✓ ✕ ▾ ▸ ›` 这类 Unicode 符号。
-  - 顶部是 UE / Unity 风格三段式：菜单栏（文件/编辑/构建/窗口/帮助）、主工具栏
+  - 顶部是经典三段式：菜单栏（文件/编辑/构建/窗口/帮助）、主工具栏
     （只放场景选择 + Play）、底部状态栏。撤销/重做/保存、构建场景包、新建文档都在
     菜单里；离线工具在「构建 → 离线工具」，渲染设置与主题在「编辑 → 项目设置 / 主题」，渲染图在
     「窗口 → 分析」。新建实体在层级面板顶部（类型下拉 + 「新建实体」按钮）。
@@ -122,7 +122,7 @@ deviating from those conventions is a bug. (`README.md` is the human-facing over
     (+`--release`) → `build-scenes` → 把 exe/scenes.pak/settings.ini 复制到
     `[build].output_dir`（默认 `build/windows`，已 gitignore），可选构建后运行。
     命令是 `editor_build_project`；编辑器仍不链接 cooker/build 流水线。
-  - Build Settings 的**场景列表可编辑**（Unity 风格）：勾选 `enabled`、上下移动、
+  - Build Settings 的**场景列表可编辑**：勾选 `enabled`、上下移动、
     移除、从 `assets/scenes` 添加；顺序即 `assets/scenes.json` 顺序，第一个启用项是
     启动场景。Tauri 命令 `editor_scene_manifest` / `editor_write_scene_manifest`；
     engine 的 `SceneManifestEntry.enabled` 与 build-scenes 都会跳过未启用项。
@@ -230,8 +230,8 @@ deviating from those conventions is a bug. (`README.md` is the human-facing over
     静止视口零 GPU 工作，只在文档 / 相机 / 选择 / resize / Play 时重渲染。
   - Scene 与 Game 各持有一个引擎实例（相机互不干扰）；文档变化防抖 120ms 后两份
     世界一起整场重载。
-  - Scene view 的编辑器相机默认 `CameraClearFlags::Skybox`（Unity 的
-    `SceneViewState.showSkybox`），工具栏 `Skybox (S)` / `G` 可关；引擎 `RenderSettings`
+  - Scene view 的编辑器相机默认 `CameraClearFlags::Skybox`（视图默认显示天空盒），
+    工具栏 `Skybox (S)` / `G` 可关；引擎 `RenderSettings`
     默认 `show_grid = false`（游戏里不画网格），编辑器从 `Workspace::show_grid` 出发。
   - **内置截图 + 本地控制通道**：启动时监听 `127.0.0.1:0` 并把端口写到
     `<项目根>/target/editor-egui/control.port`（`control.rs`，一行 JSON：`ping` /
@@ -320,8 +320,8 @@ The user project's dependency chain must stay **UI-framework-free and editor-fre
   - `editor/src-tauri/src/viewport.rs` — one thread per viewport, frames travel as
     `Raw` Tauri channel payloads (`8-byte w/h header + RGBA`), the Vue panel only does
     `putImageData`. Scene JSON snapshots live in `target/editor-preview/`.
-- **Project code runs as a dynamic module in Game View** (Unity model: editor hosts
-  scripts, players stay monolithic). Do not try to make the Android/desktop player load a
+- **Project code runs as a dynamic module in Game View** (the editor hosts project code,
+  players stay monolithic). Do not try to make the Android/desktop player load a
   plugin — `GameActivity` needs one `.so`, and the player is intentionally static.
   - `crates/prism-project-api` — the C ABI (`repr(C)` tables + POD payloads + RTTIBin
     component bytes). Never pass `Engine` / `World` / trait objects across it: editor and
@@ -342,7 +342,7 @@ The user project's dependency chain must stay **UI-framework-free and editor-fre
     projects/<p>/target/preview-module`. The separate target dir matters: the module and
     the player share the artifact name, so a shared `target/debug` would overwrite them
     and force full rebuilds.
-  - Compile timing follows Unity: 350 ms debounce after edits settle, deferred while
+  - Compile timing: 350 ms debounce after edits settle, deferred while
     playing, failing builds keep the previous module running, and the built file is
     copied to a unique name before loading (a loaded dll cannot be overwritten on
     Windows). Auto Refresh can be disabled; `Ctrl+R` forces a rebuild.

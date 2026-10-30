@@ -1,7 +1,7 @@
 //! 组件 schema（`prism_editor_api::build_schema` 的 Rust 镜像）。
 //!
 //! 检查器完全由 schema 驱动：字段的控件类型来自 `kind` / `structType` / `variants`
-//! 与 Unity 形状的 `PropertyDrawer`（`renderer` + `attributes`）。因此新增一个
+//! 与 形状的 `PropertyDrawer`（`renderer` + `attributes`）。因此新增一个
 //! 组件或字段不需要改 UI —— 与 Web 编辑器是同一份规则。
 
 use serde::{Deserialize, Serialize};

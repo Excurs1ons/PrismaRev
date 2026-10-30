@@ -1,42 +1,42 @@
-//! Unity DOTS（`Unity.Jobs`）形状的作业门面。
+//! 数据导向作业形状的作业门面。
 //!
-//! Unity 的 job 是 Burst 编译、由 `JobHandle` 显式 `Complete()` 的并行任务。
+//! 引擎的 job 是 Burst 编译、由 `JobHandle` 显式 `Complete()` 的并行任务。
 //! Rust 端用标准库线程实现同样的**使用形状**：`Schedule` 立即返回
 //! [`JobHandle`]，`Complete()` 等待所有工作线程结束。
 //!
-//! 命名对应（Rust 用 snake_case，括号内为 Unity 原名）：
+//! 命名对应（Rust 用 snake_case，括号内为 原名）：
 //! [`IJob::execute`]（`IJob.Execute`）、[`IJobParallelFor::execute`]
 //! （`IJobParallelFor.Execute(int)`）、[`JobHandle::complete`]（`JobHandle.Complete`）、
 //! [`schedule`]（`IJobExtensions.Schedule`）、
 //! [`schedule_parallel_for`]（`IJobParallelForExtensions.Schedule`）。
 //!
-//! 与 Unity 的差异：
+//! 与引擎的差异：
 //! - 没有 Burst、`JobRanges`、`AtomicSafetyHandle`；并行 job 通过 `&self` 执行，
-//!   需要共享可写状态时用 `Atomic*` / `Mutex`（Unity 用 `NativeArray` + 安全属性）。
-//! - `IJobParallelFor.Execute` 的下标是 `usize`，不是 Unity 的 `int`。
+//! 需要共享可写状态时用 `Atomic*` / `Mutex`（`NativeArray` + 安全属性）。
+//! - `IJobParallelFor.Execute` 的下标是 `usize`，不是引擎的 `int`。
 //! - 丢弃未 `complete()` 的 [`JobHandle`] 会分离线程（job 仍会跑完），不会自动等待。
 
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
-/// Unity `IJob`：只执行一次的作业。
+/// `IJob`：只执行一次的作业。
 pub trait IJob {
-    /// 执行作业（Unity：`IJob.Execute`）。
+    /// 执行作业（`IJob.Execute`）。
     fn execute(&self);
 }
 
-/// Unity `IJobParallelFor`：按下标并行执行的作业。
+/// `IJobParallelFor`：按下标并行执行的作业。
 pub trait IJobParallelFor {
-    /// 执行单个下标（Unity：`IJobParallelFor.Execute(int index)`）。
+    /// 执行单个下标（`IJobParallelFor.Execute(int index)`）。
     fn execute(&self, index: usize);
 }
 
-/// Unity `IJobFor`：按下标执行、但不要求固定 batch 的作业。
+/// `IJobFor`：按下标执行、但不要求固定 batch 的作业。
 ///
-/// 与 Unity 一致，它是 [`IJobParallelFor`] 的扩展 trait；实现者需要同时实现两者。
+/// 它是 [`IJobParallelFor`] 的扩展 trait；实现者需要同时实现两者。
 pub trait IJobFor: IJobParallelFor {}
 
-/// Unity `JobHandle`：作业完成句柄。
+/// `JobHandle`：作业完成句柄。
 ///
 /// 调度函数立即返回该句柄；[`complete`](Self::complete) 等待所有工作线程结束。
 /// 句柄被丢弃而没有 `complete()` 时线程会分离，作业不会取消。
@@ -46,12 +46,12 @@ pub struct JobHandle {
 }
 
 impl JobHandle {
-    /// 一个已经完成的空句柄（Unity：`default(JobHandle)`，但已处于完成态）。
+    /// 一个已经完成的空句柄（`default(JobHandle)`，但已处于完成态）。
     pub fn completed() -> Self {
         Self::default()
     }
 
-    /// 等待所有关联作业结束（Unity：`JobHandle.Complete`）。
+    /// 等待所有关联作业结束（`JobHandle.Complete`）。
     ///
     /// 任一作业线程 panic 时，等其余线程结束后把该 panic 继续抛给调用方。
     pub fn complete(mut self) {
@@ -66,14 +66,14 @@ impl JobHandle {
         }
     }
 
-    /// 合并两个句柄，完成返回的句柄会等待两者（Unity：
+    /// 合并两个句柄，完成返回的句柄会等待两者（
     /// `JobHandle.CombineDependencies`）。
     pub fn combine(mut self, other: JobHandle) -> Self {
         self.threads.extend(other.threads);
         self
     }
 
-    /// 合并一组句柄（Unity：`JobHandle.CombineDependencies(NativeArray<JobHandle>)`）。
+    /// 合并一组句柄（`JobHandle.CombineDependencies(NativeArray<JobHandle>)`）。
     pub fn combine_dependencies(handles: impl IntoIterator<Item = JobHandle>) -> Self {
         let mut combined = Self::completed();
         for handle in handles {
@@ -87,7 +87,7 @@ impl JobHandle {
     }
 }
 
-/// 调度一个 [`IJob`] 到工作线程（Unity：`IJobExtensions.Schedule`）。
+/// 调度一个 [`IJob`] 到工作线程（`IJobExtensions.Schedule`）。
 pub fn schedule<J>(job: J) -> JobHandle
 where
     J: IJob + Send + 'static,
@@ -96,14 +96,14 @@ where
 }
 
 /// 按 `batch_size` 分批并行调度 [`IJobParallelFor`]
-/// （Unity：`IJobParallelForExtensions.Schedule(job, length, batchSize)`）。
+/// （`IJobParallelForExtensions.Schedule(job, length, batchSize)`）。
 ///
 /// 每个 batch 是分配工作的最小单位；实际工作线程数取
 /// `min(batch 数, 可用并行度)`。
 ///
 /// # Panics
 ///
-/// `batch_size == 0` 时 panic（与 Unity 抛异常一致）。
+/// `batch_size == 0` 时 panic（与 抛异常一致）。
 pub fn schedule_parallel_for<J>(job: J, length: usize, batch_size: usize) -> JobHandle
 where
     J: IJobParallelFor + Send + Sync + 'static,
@@ -133,9 +133,9 @@ where
 }
 
 /// 调度一个 [`IJobFor`]，每个下标独立执行
-/// （Unity：`IJobForExtensions.Schedule`）。
+/// （`IJobForExtensions.Schedule`）。
 ///
-/// 等价于 `batch_size = 1` 的 [`schedule_parallel_for`]，但保留 Unity 的
+/// 等价于 `batch_size = 1` 的 [`schedule_parallel_for`]，但保留引擎的
 /// `IJobFor` 入口形状。
 pub fn schedule_for<J>(job: J, length: usize) -> JobHandle
 where

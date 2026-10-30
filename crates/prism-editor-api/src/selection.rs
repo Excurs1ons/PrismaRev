@@ -1,10 +1,10 @@
-//! Unity `UnityEditor.Selection` 形状的门面。
+//! 编辑器门面。
 //!
-//! Unity 的 Selection 操作 `UnityEngine.Object`；这里「对象」= 当前文档里的
+//! 引擎的 Selection 操作 编辑器接口；这里「对象」= 当前文档里的
 //! **实体下标**。状态是显式的 [`SelectionState`]（由宿主 / 前端持有并持久化），
 //! 不放在全局静态里，以免多文档互相污染。
 //!
-//! | Unity | 这里 |
+//! | | 这里 |
 //! |---|---|
 //! | `Selection.objects` / `gameObjects` | [`SelectionState::objects`] |
 //! | `Selection.activeObject` / `activeGameObject` | [`SelectionState::active_object`] |

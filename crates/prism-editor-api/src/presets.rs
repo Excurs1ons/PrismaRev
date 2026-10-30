@@ -93,7 +93,7 @@ pub fn entity_presets() -> Vec<EntityPreset> {
         p
     };
 
-    // Unity `GameObject → 3D Object` 的等价物：`mesh_path` 指内置程序化网格
+    // `GameObject → 3D Object` 的等价物：`mesh_path` 指内置程序化网格
     // （`prism_render::primitives`），不读 `.pak`、不需要 cook。
     let primitive = |id: &str, label: &str, name: &str, mesh: &str, position: [f32; 3]| {
         let mut p = preset(
@@ -237,7 +237,7 @@ mod light_preset_tests {
     }
 
     #[test]
-    fn light_presets_use_the_unity_light_component() {
+    fn light_presets_use_the_light_component() {
         for id in ["sun", "point_light", "spot_light"] {
             let preset = preset(id);
             assert_eq!(

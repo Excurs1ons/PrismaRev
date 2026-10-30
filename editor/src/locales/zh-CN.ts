@@ -127,7 +127,7 @@ export const zhCN = {
   },
   hierarchy: {
     title: "层级",
-    createTooltip: "新增实体（点击打开 Unity 创建菜单）",
+    createTooltip: "新增实体（点击打开创建菜单）",
     filterPlaceholder: "搜索实体名称…",
     presetTypeTooltip: "新增实体类型",
     empty: "（无实体）",

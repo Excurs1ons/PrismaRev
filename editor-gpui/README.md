@@ -1,6 +1,6 @@
 # editor-gpui — PrismaRev 的 GPUI 原生编辑器
 
-> 一个**从零实现**的 Unity 形状编辑器外壳：dock、层级、检查器、资产、日志、场景视口
+> 一个**从零实现**的编辑器外壳：dock、层级、检查器、资产、日志、场景视口
 > 全部由 GPUI 直接绘制，不经过 WebView。
 >
 > 它有自己的 workspace（和 `editor/`、`launcher/` 一样不挂根 workspace），

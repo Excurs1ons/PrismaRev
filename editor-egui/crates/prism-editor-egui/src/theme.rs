@@ -8,7 +8,7 @@
 //!   浮动窗口 `panel-raised`；蓝色只出现在**选中/按下/焦点**（`selection` /
 //!   `accent`），不要给普通控件铺蓝底。
 //! - 直角（`CornerRadius::ZERO`）为主，只有弹出菜单 3px；1px 分隔线用 `border`。
-//! - 控件不做 hover 放大（`expansion = 0`），Unity / Web 都不抖。
+//! - 控件不做 hover 放大（`expansion = 0`），桌面 / Web 都不抖。
 
 use egui::{Color32, CornerRadius, FontId, Stroke};
 use prism_editor_core::{ThemeColors, ThemeToken};
@@ -21,7 +21,7 @@ pub fn color32(colors: &ThemeColors, token: ThemeToken) -> Color32 {
 const RADIUS: CornerRadius = CornerRadius::ZERO;
 const POPUP_RADIUS: CornerRadius = CornerRadius::same(3);
 
-/// 应用一套紧凑的编辑器视觉（Unity 风格：深色、密排、零圆角）。
+/// 应用一套紧凑的编辑器视觉（深色、密排、零圆角）。
 pub fn apply(ctx: &egui::Context, colors: &ThemeColors) {
     let panel = color32(colors, ThemeToken::Panel);
     let panel_alt = color32(colors, ThemeToken::PanelAlt);

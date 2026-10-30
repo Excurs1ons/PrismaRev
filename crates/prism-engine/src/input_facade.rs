@@ -1,35 +1,19 @@
-//! `UnityEngine.Input` 形状的门面。
+//! 只读输入门面。
 //!
-//! Unity 的 `Input` 是静态类，游戏代码直接 `Input.GetKey(KeyCode.W)`。本项目
-//! 的输入状态在 [`InputManager`]（每帧由平台层填充），这里把它投影成同名的
-//! 只读查询入口，让熟悉 Unity 的人一眼能对上：
+//! 输入状态在 [`InputManager`]（每帧由平台层填充）；[`Input`] 是借用当帧状态的
+//! 轻量查询入口，键位直接用 [`KeyCode`] 查询。
 //!
-//! | Unity | 这里 |
-//! |---|---|
-//! | `Input.GetKey(k)` | [`Input::get_key`] |
-//! | `Input.GetKeyDown(k)` | [`Input::get_key_down`] |
-//! | `Input.GetKeyUp(k)` | [`Input::get_key_up`] |
-//! | `Input.GetMouseButton(b)` | [`Input::get_mouse_button`] |
-//! | `Input.GetMouseButtonDown(b)` | [`Input::get_mouse_button_down`] |
-//! | `Input.mousePosition` | [`Input::mouse_position`] |
-//! | `Input.mouseScrollDelta` | [`Input::mouse_scroll_delta`] |
-//! | `Input.anyKey` | [`Input::any_key`] |
-//! | `Input.anyKeyDown` | [`Input::any_key_down`] |
-//! | `Input.GetAxis("Mouse X"/"Mouse Y"/"Mouse ScrollWheel")` | [`Input::get_axis`] |
-//!
-//! 差异（刻意）：
-//! - 没有 `Input.GetButton("Fire1")` 这类 **Input Manager 命名轴**：本项目没有
-//!   `ProjectSettings/InputManager.asset`，键位由调用方直接查 `KeyCode`。
-//!   需要命名轴时在游戏代码里写一个小映射即可。
-//! - `GetAxis` 只实现鼠标三条内置轴，其余名字返回 `0.0`（不静默“假装有平滑”）。
-//! - 没有 `Input.simulateMouseWithTouches` / `multiTouchEnabled` / `imeIsSelected`
-//!   等平台开关：触摸走 [`InputManager::touches`]，开关交给平台层。
-//! - 没有 `Input.location` / `Input.compass` / `Input.acceleration` 等传感器：
-//!   本项目目前没有传感器后端（见 `docs/UNITY_ALIGNMENT.md` §5.3）。
+//! 约定：
+//! - 在每帧 [`InputManager::begin_frame`] 之前查询；`key_down` / `key_up` 只在当帧为真。
+//! - 鼠标按钮、位置、滚轮与触摸分别走对应查询。
+//! - `get_axis` 只实现鼠标三条内置轴，其余名字返回 `0.0`，不假装有平滑。
+//! - 没有命名字符串轴：需要时在游戏代码里写一个小映射。
+//! - 触摸走 [`InputManager::touches`]，平台开关交给平台层。
+//! - 传感器输入目前没有后端。
 
 use crate::input::{InputManager, KeyCode, MouseButton, TouchEvent};
 
-/// Unity `Input` 的只读门面（借用当帧的 [`InputManager`]）。
+/// 只读输入门面（借用当帧的 [`InputManager`]）。
 ///
 /// 构造很便宜：`Input::from(manager)` 拿一个借用，查询全部转发到 `InputManager`。
 /// 在每帧 [`InputManager::begin_frame`] 之前查询；`GetKeyDown` / `GetKeyUp`
@@ -94,7 +78,7 @@ impl<'a> Input<'a> {
         self.manager.mouse_just_released(button)
     }
 
-    /// 指针位置（`Input.mousePosition`）。原点在左下角，y 向上，与 Unity 一致。
+    /// 指针位置。原点在左下角，y 向上。
     pub fn mouse_position(&self) -> [f64; 2] {
         self.manager.mouse_position()
     }
@@ -106,7 +90,7 @@ impl<'a> Input<'a> {
 
     /// 命名轴（`Input.GetAxis`）。
     ///
-    /// 只支持 Unity 内置的鼠标轴：
+    /// 只支持内置的鼠标轴：
     /// - `"Mouse X"` → 本帧水平位移
     /// - `"Mouse Y"` → 本帧竖直位移
     /// - `"Mouse ScrollWheel"` → 本帧滚动增量

@@ -302,23 +302,23 @@ impl RenderSettings {
     }
 }
 
-/// 逐绘制的渲染状态（Unity `Material` / `Renderer` 上那组决定管线状态的字段）。
+/// 逐绘制的渲染状态（`Material` / `Renderer` 上那组决定管线状态的字段）。
 ///
 /// 它同时是 `ForwardPass` 的管线缓存键：混用不同状态的绘制各自拿到正确的
 /// 剔除 / 深度写 / 混合配置，而描述符集合布局与推送常量在所有变体之间相同。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct DrawState {
-    /// 剔除模式（Unity `CullMode`）。
+    /// 剔除模式（`CullMode`）。
     pub cull_mode: prism_gfx::CullMode,
-    /// 渲染队列（Unity `Material.renderQueue`），决定绘制顺序。
+    /// 渲染队列（`Material.renderQueue`），决定绘制顺序。
     pub render_queue: i32,
-    /// 是否写深度（Unity `_ZWrite`）。
+    /// 是否写深度（`_ZWrite`）。
     pub z_write: bool,
-    /// 源混合因子（Unity `_SrcBlend`）。
+    /// 源混合因子（`_SrcBlend`）。
     pub src_blend: prism_gfx::BlendMode,
-    /// 目标混合因子（Unity `_DstBlend`）。
+    /// 目标混合因子（`_DstBlend`）。
     pub dst_blend: prism_gfx::BlendMode,
-    /// 混合运算（Unity `_BlendOp`）。
+    /// 混合运算（`_BlendOp`）。
     pub blend_op: prism_gfx::BlendOp,
 }
 
@@ -328,7 +328,7 @@ impl Default for DrawState {
             cull_mode: prism_gfx::CullMode::Back,
             render_queue: prism_gfx::RenderQueue::GEOMETRY,
             z_write: true,
-            // Unity 的不透明默认值（与 `MeshRenderer::default` 保持一致）。
+            // 引擎的不透明默认值（与 `MeshRenderer::default` 保持一致）。
             src_blend: prism_gfx::BlendMode::One,
             dst_blend: prism_gfx::BlendMode::Zero,
             blend_op: prism_gfx::BlendOp::Add,
@@ -337,7 +337,7 @@ impl Default for DrawState {
 }
 
 impl DrawState {
-    /// 是否需要开启混合；Unity 用 `One` / `Zero` 表示不透明。
+    /// 是否需要开启混合；用 `One` / `Zero` 表示不透明。
     pub fn blends(&self) -> bool {
         self.src_blend != prism_gfx::BlendMode::One
             || self.dst_blend != prism_gfx::BlendMode::Zero
@@ -359,11 +359,11 @@ pub struct DrawItem {
     /// via `mat_map` when building the 绘制 列表 so passes can 推送 the
     /// 槽 directly without a per-draw `slot_of()` lookup.
     pub material: Option<u32>,
-    /// 是否写阴影贴图（Unity `ShadowCastingMode::casts_shadows`）。
+    /// 是否写阴影贴图（`ShadowCastingMode::casts_shadows`）。
     pub cast_shadow: bool,
     /// 是否在相机主通道可见（`ShadowsOnly` 为 `false`）。
     pub visible_in_main_pass: bool,
-    /// 阴影通道是否关闭背面剔除（Unity `ShadowCastingMode::TwoSided`）。
+    /// 阴影通道是否关闭背面剔除（`ShadowCastingMode::TwoSided`）。
     /// `false` = 背面剔除（默认），`true` = 双面投射。只被 `ShadowMapPass` 读取。
     pub cast_shadow_two_sided: bool,
     /// 管线状态（剔除 / 队列 / 深度写 / 混合），来自 `MeshRenderer`。
@@ -378,7 +378,7 @@ impl DrawItem {
     }
 }
 
-/// 按 Unity 的 `renderQueue` 规则给绘制列表排序。
+/// 按引擎的 `renderQueue` 规则给绘制列表排序。
 ///
 /// - 队列值升序；相等时保持原有顺序（`sort_by` 是稳定排序）。
 /// - 队列大于 [`prism_gfx::RenderQueue::GEOMETRY_LAST`]（透明段）内部按与

@@ -31,9 +31,9 @@ pub enum BuildKind {
     Cook(PathBuf),
     /// `cargo build` 用户项目（`projects/<p>/Cargo.toml`，存在才跑）。
     Player,
-    /// `cargo run` 用户项目（Unity 的 Build And Run）。
+    /// `cargo run` 用户项目（引擎的 Build And Run）。
     PlayerRun,
-    /// `cargo clean` 玩家工程（Unity 的 Clean Build）。
+    /// `cargo clean` 玩家工程（引擎的 Clean Build）。
     ///
     /// 玩家是**独立 workspace**（`projects/<p>/target`），清理它才是 Clean Build 的本意；
     /// 清仓库根的 `target/` 会连带删掉引擎和所有 crate 的产物，属于另一件事。

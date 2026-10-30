@@ -1,19 +1,19 @@
-//! Unity `UnityEditor.AssetImporter` 形状的门面。
+//! 资产导入器门面。
 //!
 //! PrismaRev 的资产是**按扩展名直接决定由谁处理**的（没有 `.meta`、没有导入数据库、
-//! 没有每资产的导入设置）。这一层把「这个文件由哪个 Importer 类负责」投影成 Unity
-//! 的类名，供编辑器展示与工具脚本判断。
+//! 没有每资产的导入设置）。这一层把「这个文件由哪个导入器负责」投影成类别名，
+//! 供编辑器展示与工具脚本判断。
 //!
-//! | Unity | 这里 |
+//! | 方法 | 这里 |
 //! |---|---|
-//! | `AssetImporter.GetAtPath(path)` | [`get_at_path`] |
-//! | `AssetImporter.assetPath` | [`AssetImporter::asset_path`] |
-//! | `AssetImporter.userData` | [`AssetImporter::user_data`] |
-//! | `AssetImporter.importSettingsMissing` | [`AssetImporter::import_settings_missing`] |
-//! | `TextureImporter` / `ModelImporter` / `AudioImporter` / … | [`ImporterClass`] |
+//! | `get_at_path(path)` | [`get_at_path`] |
+//! | `asset_path` | [`AssetImporter::asset_path`] |
+//! | `user_data` | [`AssetImporter::user_data`] |
+//! | `import_settings_missing` | [`AssetImporter::import_settings_missing`] |
+//! | 图片 / 模型 / 音频 / 文本 … | [`ImporterClass`] |
 //!
 //! 差异（重要，不要当成 bug）：没有导入设置存储，所以 `user_data` 恒为空、
-//! `import_settings_missing` 恒为 `true`；这两个字段存在是为了对齐 API 形状，
+//! `import_settings_missing` 恒为 `true`；这两个字段存在是为了保持接口形状，
 //! 而不是暗示有 sidecar 文件。真正的导入参数来自 cooker 的 `CookProfile`。
 
 use std::path::Path;
@@ -23,17 +23,17 @@ use serde::{Deserialize, Serialize};
 use crate::asset_ops::normalize_asset_path;
 use crate::assets;
 
-/// 负责某类资产的导入器 = Unity 的具体 `AssetImporter` 子类。
+/// 负责某类资产的导入器 = 引擎的具体 `AssetImporter` 子类。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ImporterClass {
-    /// 图片 → `TextureImporter`。
+    /// 图片 → `ImageImporter`。
     Texture,
     /// 模型 → `ModelImporter`。
     Model,
     /// 音频 → `AudioImporter`。
     Audio,
-    /// HDR / EXR 环境贴图 → `TextureImporter`（Unity 里也是纹理导入）。
+    /// HDR / EXR 环境贴图 → `ImageImporter`（里也是纹理导入）。
     Environment,
     /// `.scene.json` → `DefaultImporter`（PrismaRev 的文本场景格式）。
     Scene,
@@ -41,20 +41,20 @@ pub enum ImporterClass {
     Prefab,
     /// `.pak` → `DefaultImporter`（打包产物，导入即复制）。
     Package,
-    /// 文本 / 着色器源码 → `TextScriptImporter`。
+    /// 文本 / 着色器源码 → `TextImporter`。
     Text,
     /// 其余 → `DefaultImporter`。
     Default,
 }
 
 impl ImporterClass {
-    /// 对应 Unity 的具体导入器类名。
-    pub const fn unity_class_name(self) -> &'static str {
+    /// 具体导入器类名。
+    pub const fn importer_name(self) -> &'static str {
         match self {
-            Self::Texture | Self::Environment => "TextureImporter",
+            Self::Texture | Self::Environment => "ImageImporter",
             Self::Model => "ModelImporter",
             Self::Audio => "AudioImporter",
-            Self::Text => "TextScriptImporter",
+            Self::Text => "TextImporter",
             Self::Scene | Self::Prefab | Self::Package | Self::Default => "DefaultImporter",
         }
     }
@@ -92,7 +92,7 @@ impl ImporterClass {
 pub struct AssetImporter {
     /// 相对项目根的路径（`/` 分隔）。
     pub asset_path: String,
-    /// Unity 导入器类名（如 `TextureImporter`）。
+    /// 导入器类名（如 `ImageImporter`）。
     pub importer: &'static str,
     /// 主资产类型（粗分类，同 [`crate::assets::asset_kind`]）。
     pub main_asset_type: &'static str,
@@ -104,7 +104,7 @@ pub struct AssetImporter {
 
 /// 查某个资产的导入器 = `AssetImporter.GetAtPath`。
 ///
-/// 路径不存在或是目录时返回 `Err`（Unity 对目录返回 `null`）。
+/// 路径不存在或是目录时返回 `Err`（对目录返回 `null`）。
 pub fn get_at_path(project_root: &Path, asset_path: &str) -> Result<AssetImporter, String> {
     let rel = normalize_asset_path(asset_path)?;
     let full = project_root.join(&rel);
@@ -115,7 +115,7 @@ pub fn get_at_path(project_root: &Path, asset_path: &str) -> Result<AssetImporte
         return Err(format!("资产不存在：{rel}"));
     }
     Ok(AssetImporter {
-        importer: ImporterClass::from_path(&rel).unity_class_name(),
+        importer: ImporterClass::from_path(&rel).importer_name(),
         main_asset_type: assets::asset_kind(&rel),
         asset_path: rel,
         user_data: String::new(),
@@ -128,7 +128,7 @@ pub fn list_importers(project_root: &Path) -> Result<Vec<AssetImporter>, String>
     let importers = assets::list_assets(project_root)?
         .into_iter()
         .map(|path| AssetImporter {
-            importer: ImporterClass::from_path(&path).unity_class_name(),
+            importer: ImporterClass::from_path(&path).importer_name(),
             main_asset_type: assets::asset_kind(&path),
             asset_path: path,
             user_data: String::new(),
@@ -157,34 +157,34 @@ mod tests {
     }
 
     #[test]
-    fn maps_extensions_to_unity_importer_classes() {
+    fn maps_extensions_to_importer_classes() {
         assert_eq!(
-            ImporterClass::from_path("assets/tex/a.PNG").unity_class_name(),
-            "TextureImporter"
+            ImporterClass::from_path("assets/tex/a.PNG").importer_name(),
+            "ImageImporter"
         );
         assert_eq!(
-            ImporterClass::from_path("assets/models/a.gltf").unity_class_name(),
+            ImporterClass::from_path("assets/models/a.gltf").importer_name(),
             "ModelImporter"
         );
         assert_eq!(
-            ImporterClass::from_path("assets/audio/step.ogg").unity_class_name(),
+            ImporterClass::from_path("assets/audio/step.ogg").importer_name(),
             "AudioImporter"
         );
         assert_eq!(
-            ImporterClass::from_path("assets/env/valley.hdr").unity_class_name(),
-            "TextureImporter"
+            ImporterClass::from_path("assets/env/valley.hdr").importer_name(),
+            "ImageImporter"
         );
         assert_eq!(
-            ImporterClass::from_path("assets/shaders/x.slang").unity_class_name(),
-            "TextScriptImporter"
+            ImporterClass::from_path("assets/shaders/x.slang").importer_name(),
+            "TextImporter"
         );
         assert_eq!(
-            ImporterClass::from_path("assets/weird.xyz").unity_class_name(),
+            ImporterClass::from_path("assets/weird.xyz").importer_name(),
             "DefaultImporter"
         );
         // probe_volume.bin 等二进制数据走 DefaultImporter，避免误当模型
         assert_eq!(
-            ImporterClass::from_path("assets/gi/probe_volume.bin").unity_class_name(),
+            ImporterClass::from_path("assets/gi/probe_volume.bin").importer_name(),
             "DefaultImporter"
         );
     }
@@ -214,7 +214,7 @@ mod tests {
         std::fs::write(assets.join("tex/a.png"), b"x").unwrap();
 
         let importer = get_at_path(&root, "assets/tex/a.png").expect("importer");
-        assert_eq!(importer.importer, "TextureImporter");
+        assert_eq!(importer.importer, "ImageImporter");
         assert_eq!(importer.main_asset_type, "texture");
         assert_eq!(importer.asset_path, "assets/tex/a.png");
         assert!(importer.import_settings_missing);
@@ -255,7 +255,7 @@ mod tests {
     fn serializes_with_camel_case_keys() {
         let importer = AssetImporter {
             asset_path: "assets/tex/a.png".into(),
-            importer: "TextureImporter",
+            importer: "ImageImporter",
             main_asset_type: "texture",
             user_data: String::new(),
             import_settings_missing: true,

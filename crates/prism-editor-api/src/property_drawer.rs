@@ -1,14 +1,14 @@
-//! Unity `PropertyDrawer` / `PropertyAttribute` 形状的 schema 投影。
+//! `PropertyDrawer` / `PropertyAttribute` 形状的 schema 投影。
 //!
-//! Unity 里 `[Range]` / `[TextArea]` / `[ColorUsage]` 这类**特性**（attribute）由对应的
+//! 里 `[Range]` / `[TextArea]` / `[ColorUsage]` 这类**特性**（attribute）由对应的
 //! `PropertyDrawer` 渲染成滑动条 / 多行文本框 / 取色盘；`[CustomPropertyDrawer]` 则把
 //! 某个字段或某个类型整体交给自定义绘制器。
 //!
 //! 这一层只输出**声明式 DTO**（渲染器 + 特性列表），真正的 UI 在 `editor/` 的 Vue
 //! （[`FieldEditor.vue`](../../../editor/src/components/FieldEditor.vue)）里。这样既拿到
-//! Unity 的扩展体验，又保持 `prism-editor-api` 不链接 UI / engine / Vulkan。
+//! 引擎的扩展体验，又保持 `prism-editor-api` 不链接 UI / engine / Vulkan。
 //!
-//! | Unity | 这里 |
+//! | | 这里 |
 //! |---|---|
 //! | `[Range(min, max)]` | [`PropertyDrawer::range`] → [`PropertyRenderer::Slider`] |
 //! | `[Min]` / `[Max]` | [`PropertyDrawer::min`] / [`PropertyDrawer::max`] |
@@ -25,7 +25,7 @@
 
 use serde::{Deserialize, Serialize};
 
-/// 字段渲染器 = Unity 里选中哪个 `PropertyDrawer`。
+/// 字段渲染器 = 里选中哪个 `PropertyDrawer`。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum PropertyRenderer {
@@ -42,7 +42,7 @@ pub enum PropertyRenderer {
     Custom,
 }
 
-/// 一条 Unity 特性（`PropertyAttribute`）。
+/// 一条 特性（`PropertyAttribute`）。
 ///
 /// 序列化成 `{ "type": "range", "min": 0.0, "max": 5.0 }` 这类带标签的对象，
 /// 前端按 `type` 分发，未知类型直接忽略（保持向前兼容）。
@@ -147,7 +147,7 @@ impl PropertyDrawer {
 
     /// 追加一条特性。
     pub fn attribute(mut self, attribute: PropertyAttribute) -> Self {
-        // 重复的同类特性只保留最后一条（Unity 也只有一个 Range/Tooltip）。
+        // 重复的同类特性只保留最后一条（也只有一个 Range/Tooltip）。
         self.attributes.retain(|existing| {
             std::mem::discriminant(existing) != std::mem::discriminant(&attribute)
         });
@@ -263,10 +263,10 @@ struct DrawerEntry {
     drawer: PropertyDrawer,
 }
 
-/// 字段绘制器注册表 = Unity `PropertyDrawer` 的查找表。
+/// 字段绘制器注册表 = `PropertyDrawer` 的查找表。
 ///
 /// 查找顺序：**字段级声明优先于类型级**；同类声明后注册的覆盖先注册的
-/// （与 Unity 允许派生/后置特性覆盖一致）。
+/// （与 允许派生/后置特性覆盖一致）。
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct PropertyDrawerRegistry {
     entries: Vec<DrawerEntry>,
@@ -357,7 +357,7 @@ impl PropertyDrawerRegistry {
 
     /// 给某个类型整体登记绘制器 = `[CustomPropertyDrawer(typeof(X))]`。
     ///
-    /// 字段级声明仍会覆盖它（Unity 里字段上的特性优先于类型级绘制器）。
+    /// 字段级声明仍会覆盖它（里字段上的特性优先于类型级绘制器）。
     pub fn register_type(&mut self, type_name: impl Into<String>, drawer: PropertyDrawer) {
         let type_name = type_name.into();
         self.entries
@@ -383,7 +383,7 @@ impl PropertyDrawerRegistry {
     ///
     /// 查找顺序：
     /// 1. 字段级声明（`declaring_type` + `field`）；
-    /// 2. 字段值类型级声明（`value_type`，对齐 Unity `[CustomPropertyDrawer(typeof(X))]`）。
+    /// 2. 字段值类型级声明（`value_type`，`[CustomPropertyDrawer(typeof(X))]`）。
     pub fn drawer_for_field(
         &self,
         declaring_type: &str,
@@ -488,7 +488,7 @@ mod tests {
     #[test]
     fn lookup_prefers_field_scope_over_type_scope() {
         let mut registry = PropertyDrawerRegistry::new();
-        // 给类型 demo::X 登记类型级绘制器（Unity `[CustomPropertyDrawer(typeof(X))]`）
+        // 给类型 demo::X 登记类型级绘制器（`[CustomPropertyDrawer(typeof(X))]`）
         registry.register_type("demo::X", PropertyDrawer::custom("WholeType"));
 
         // 宿主包含 demo::X 类型的值字段：命中类型级绘制器

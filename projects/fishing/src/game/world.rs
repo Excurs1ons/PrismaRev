@@ -9,9 +9,8 @@
 //! - 按 `cycle_seconds` 轮换 dawn → day → dusk → night：只换贴图路径并让
 //!   资产系统重新解析（`SpriteRef.generation = 0`），不重复生成实体。
 //!
-//! 图层列表与顺序来自参考实现的关卡数据（`scripts/build_lake_layers.py`），
-//! 美术由 `scripts/sync_fishing_art.py`（参考素材，本地）或
-//! `scripts/gen_placeholder_sprites.py`（原创占位）生成，二者文件名一致。
+//! 图层列表与顺序见 `assets/lake_layers.json`；美术由
+//! `scripts/gen_placeholder_sprites.py` 生成，文件名与场景引用一致。
 //!
 //! 状态与读写都走 [`prism_game_api::GameWorld`]（与 `boat.rs` 同构），所以这份
 //! 关卡逻辑既能编译进静态 Player，也能原样作为编辑器加载的动态模块运行。
@@ -20,8 +19,8 @@ use prism_game_api::GameWorld;
 use prism_scene::components::{Active, Camera, LocalTransform, SpriteRenderer};
 use serde::Deserialize;
 
-/// 每世界单位的像素数。参考实现是 1 像素 = 1 世界单位（Sprite.m_PixelsToUnits
-/// = 1），相机正交半高 180 → 视口 360 美术像素（640×360 虚拟分辨率）。
+/// 每世界单位的像素数：1 像素 = 1 世界单位，相机正交半高 180 → 视口 360
+/// 美术像素（640×360 虚拟分辨率）。
 const PIXELS_PER_UNIT: f32 = 1.0;
 /// 一个完整昼夜的时长（秒）。
 const CYCLE_SECONDS: f32 = 48.0;
@@ -117,7 +116,7 @@ impl LakeWorld {
                 SpriteRenderer {
                     sprite_path: path.clone(),
                     pixels_per_unit: PIXELS_PER_UNIT,
-                    // 底边中心对齐 `y`（Unity 轴心约定：(0.5, 0.0) = 底边）。
+                    // 底边中心对齐 `y`（轴心约定：(0.5, 0.0) = 底边）。
                     pivot: [0.5, 0.0],
                     sorting_layer: def.sorting.unwrap_or(order as i32),
                     ..SpriteRenderer::default()

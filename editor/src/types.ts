@@ -1,10 +1,10 @@
 /** 与 `prism-editor-api`（serde camelCase）对齐的前端类型。 */
 
 /** 字段控件类型：`bool` / `i32` / `f32` / `string` / `struct` / `list` / `option` / `array`。 */
-/** 字段渲染器 = Unity `PropertyDrawer` 的选择。 */
+/** 字段渲染器 = `PropertyDrawer` 的选择。 */
 export type PropertyRenderer = "default" | "slider" | "textArea" | "color" | "custom";
 
-/** 一条 Unity 特性（`PropertyAttribute`），按 `type` 区分。 */
+/** 一条 特性（`PropertyAttribute`），按 `type` 区分。 */
 export type PropertyAttribute =
   | { type: "range"; min: number; max: number }
   | { type: "min"; min: number }
@@ -16,7 +16,7 @@ export type PropertyAttribute =
   | { type: "tooltip"; text: string }
   | { type: "delayed" };
 
-/** 字段绘制声明 = Unity `PropertyDrawer`（渲染器 + 特性）。 */
+/** 字段绘制声明 = `PropertyDrawer`（渲染器 + 特性）。 */
 export interface PropertyDrawer {
   renderer: PropertyRenderer;
   attributes: PropertyAttribute[];
@@ -51,14 +51,14 @@ export interface Schema {
 }
 
 /**
- * 一个 dock 面板 = Unity `EditorWindow`（`prism_editor_api::editor_window`）。
+ * 一个 dock 面板 = `EditorWindow`（`prism_editor_api::editor_window`）。
  *
  * 后端只声明 id / 标题 / 菜单路径 / 命令 id；动作由前端命令表分发。
  */
 export interface EditorWindowDescriptor {
   id: string;
   title: string;
-  /** Unity `[MenuItem("窗口/分析/实时渲染图")]` 的路径；最后一段是菜单文字。 */
+  /** `[MenuItem("窗口/分析/实时渲染图")]` 的路径；最后一段是菜单文字。 */
   menuPath: string;
   /** 快捷键提示（只用于显示）。 */
   shortcut: string | null;
@@ -117,7 +117,7 @@ export interface AssetInfo {
   path: string;
   sizeBytes: number;
   kind: "model" | "texture" | "env" | "scene" | "package" | "data" | "other";
-  /** Unity 导入器类名（`TextureImporter` / `ModelImporter` / `DefaultImporter`…）。 */
+  /** 导入器类名（`ImageImporter` / `ModelImporter` / `DefaultImporter`…）。 */
   importer: string;
 }
 
@@ -232,7 +232,7 @@ export interface SceneListEntry {
   enabled: boolean;
 }
 
-/** Unity `BuildOptions`（PrismaRev 由 `[build].profile == "debug"` 推导）。 */
+/** `BuildOptions`（PrismaRev 由 `[build].profile == "debug"` 推导）。 */
 export interface BuildOptions {
   development: boolean;
   allowDebugging: boolean;
@@ -248,11 +248,11 @@ export interface BuildScene {
   buildIndex: number | null;
 }
 
-/** Unity `Build.Profile.BuildProfile`：一次构建的完整描述。 */
+/** `Build.Profile.BuildProfile`：一次构建的完整描述。 */
 export interface BuildProfile {
   name: string;
   target: string;
-  /** Unity `BuildTargetGroup` 名字（Standalone / Android / …）。 */
+  /** `BuildTargetGroup` 名字（Standalone / Android / …）。 */
   targetGroup: string;
   options: BuildOptions;
   outputDir: string;
@@ -290,10 +290,10 @@ export interface BuildProjectOptions {
   runAfter: boolean;
 }
 
-/** Unity `BuildResult`：一次构建的最终结果。 */
+/** `BuildResult`：一次构建的最终结果。 */
 export type BuildResult = "succeeded" | "failed" | "cancelled";
 
-/** Unity `BuildFile.role`：产物分类。 */
+/** `BuildFile.role`：产物分类。 */
 export type BuildFileRole =
   | "executable"
   | "scenePackage"
@@ -301,20 +301,20 @@ export type BuildFileRole =
   | "metadata"
   | "other";
 
-/** Unity `BuildFile`：一个产物文件。 */
+/** `BuildFile`：一个产物文件。 */
 export interface BuildFile {
   path: string;
   role: BuildFileRole;
   sizeBytes: number;
 }
 
-/** Unity `BuildStep`：一个构建阶段（编译 / 烤场景 / 收集产物）。 */
+/** `BuildStep`：一个构建阶段（编译 / 烤场景 / 收集产物）。 */
 export interface BuildStep {
   name: string;
   durationMs: number;
 }
 
-/** Unity `BuildSummary`：构建结果 + 体积 + 耗时。 */
+/** `BuildSummary`：构建结果 + 体积 + 耗时。 */
 export interface BuildSummary {
   result: BuildResult;
   outputPath: string;
@@ -325,7 +325,7 @@ export interface BuildSummary {
   totalWarnings: number;
 }
 
-/** Unity `BuildReport`：摘要 + 阶段 + 产物。 */
+/** `BuildReport`：摘要 + 阶段 + 产物。 */
 export interface BuildReport {
   summary: BuildSummary;
   steps: BuildStep[];
@@ -337,7 +337,7 @@ export interface BuildProjectResult {
   exe: string;
   outputDir: string;
   durationMs: number;
-  /** Unity `BuildReport`：构建阶段耗时 + 产物大小。 */
+  /** `BuildReport`：构建阶段耗时 + 产物大小。 */
   report: BuildReport;
 }
 
@@ -361,7 +361,7 @@ export interface HeightmapOptions {
   seaLevel: number;
 }
 
-// ── Unity 形状的门面（AssetDatabase / PrefabUtility / SceneManagement / Selection / Application） ──
+// ── 编辑器门面（AssetDatabase / PrefabUtility / SceneManagement / Selection / Application） ──
 
 /** 资产分类（同 `AssetInfo["kind"]`）= `AssetDatabase.GetMainAssetTypeAtPath`。 */
 export type AssetKind = AssetInfo["kind"];
@@ -388,7 +388,7 @@ export interface PrefabInstanceInfo {
 /** 解包模式 = `PrefabUnpackMode`。 */
 export type PrefabUnpackMode = "outermost_root" | "completely";
 
-/** 编辑器场景元信息 = `UnityEngine.SceneManagement.Scene`。 */
+/** 编辑器场景元信息。 */
 export interface SceneMeta {
   name: string;
   path: string;
@@ -400,7 +400,7 @@ export interface SceneMeta {
   buildIndex: number;
 }
 
-/** 选择过滤模式 = `UnityEditor.SelectionMode`。 */
+/** 选择过滤模式。 */
 export type SelectionMode = "all" | "root" | "prefabRoot" | "hasComponent";
 
 /** 编辑器关键路径 = `Application.dataPath` / `streamingAssetsPath` 等。 */

@@ -1,9 +1,9 @@
-//! Unity `UnityEditor.AssetDatabase` 形状的门面。
+//! 编辑器门面。
 //!
-//! PrismaRev 的资产是**文件系统直接寻址**的（没有 Unity 的 `.meta` / 导入数据库），
+//! PrismaRev 的资产是**文件系统直接寻址**的（没有引擎的 `.meta` / 导入数据库），
 //! 所以这里是「同形状、同语义」的薄封装：
 //!
-//! | Unity | 这里 |
+//! | | 这里 |
 //! |---|---|
 //! | `AssetDatabase.GetAllAssetPaths()` | [`get_all_asset_paths`] |
 //! | `AssetDatabase.FindAssets(filter)` | [`find_assets`]（`t:` 类型 / 名字子串） |
@@ -18,7 +18,7 @@
 //! | `AssetDatabase.Refresh` / `SaveAssets` | [`refresh`] / [`save_assets`] |
 //!
 //! 差异：
-//! - GUID 由**路径哈希**派生（Unity 的存在 `.meta`、与路径无关），因此改名会改变 GUID；
+//! - GUID 由**路径哈希**派生（引擎的存在 `.meta`、与路径无关），因此改名会改变 GUID；
 //!   它只用于「给前端一个稳定 key / 反向查路径」。
 //! - `l:`（label）过滤不支持，会被忽略。
 //! - 没有导入步骤：资产写出后即可见，`import_asset` 只做校验并返回主资产类型。
@@ -28,7 +28,7 @@ use std::path::{Path, PathBuf};
 use crate::asset_ops::{self, normalize_asset_path, AssetMutation};
 use crate::assets;
 
-/// `assets/` 根目录名（对应 Unity 的 `Assets`，这里是小写）。
+/// `assets/` 根目录名（对应引擎的 `Assets`，这里是小写）。
 pub const ASSETS_FOLDER: &str = "assets";
 
 // ---------------------------------------------------------------------------
@@ -46,7 +46,7 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
 
 /// 由资产路径派生一个稳定的 32 位十六进制 GUID（`AssetPathToGUID`）。
 ///
-/// **改名会改变 GUID**（Unity 的 GUID 与路径无关）。用于前端稳定 key 与反向查路径。
+/// **改名会改变 GUID**（引擎的 GUID 与路径无关）。用于前端稳定 key 与反向查路径。
 pub fn asset_path_to_guid(asset_path: &str) -> Result<String, String> {
     let normalized = normalize_asset_path(asset_path)?;
     let forward = fnv1a64(normalized.as_bytes());
@@ -129,7 +129,7 @@ pub fn get_asset_dependency_hash(project_root: &Path, asset_path: &str) -> Resul
     ))
 }
 
-/// Unity 风格的搜索（`FindAssets`）。
+/// 既有的搜索（`FindAssets`）。
 ///
 /// 过滤串按空白切分，全部 token 都必须命中（AND）：
 /// - `t:<kind>`：主类型（[`crate::assets::asset_kind`] 的取值，或扩展名）匹配；
@@ -202,7 +202,7 @@ pub fn rename_asset(project_root: &Path, from: &str, to: &str) -> Result<AssetMu
 
 /// 复制资产 = `CopyAsset`（文件或目录，递归）。
 ///
-/// 与 Unity 一致：**不改写**文档引用（复制出来的资产需要用户自行重新指向）。
+/// **不改写**文档引用（复制出来的资产需要用户自行重新指向）。
 pub fn copy_asset(project_root: &Path, from: &str, to: &str) -> Result<AssetMutation, String> {
     let from_rel = normalize_asset_path(from)?;
     let to_rel = normalize_asset_path(to)?;

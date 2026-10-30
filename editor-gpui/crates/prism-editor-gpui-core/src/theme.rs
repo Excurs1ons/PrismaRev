@@ -362,9 +362,9 @@ pub struct ThemePreset {
 
 pub const THEME_PRESETS: &[ThemePreset] = &[
     ThemePreset {
-        id: "unity",
-        label: "Unity 暗色",
-        description: "默认 · Unity 工业级经典暗色中性灰",
+        id: "studio",
+        label: "工业暗色",
+        description: "默认 · 工业级经典暗色中性灰",
         mode: ThemeMode::Dark,
         colors: ThemeColors {
             values: [

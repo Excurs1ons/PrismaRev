@@ -2,10 +2,10 @@
 
 PrismaRev 的 **egui 编辑器**（egui + ash Vulkan）。独立 workspace，不挂根 workspace。
 
-- 布局与功能对齐 Web 编辑器（`editor/`）与 Unity 的经典布局：菜单栏 / 主工具栏 /
+- 布局与功能对齐 Web 编辑器（`editor/`）与引擎的经典布局：菜单栏 / 主工具栏 /
   状态栏 + split-tree docking（可拖 splitter、tab 切换、浮动窗口）。
-- 菜单 / 快捷键对齐 Unity（含 `Ctrl+1..5` 面板、命名布局、Prefab Variant）。
-- 交互对齐 Unity：菜单二/三级、层级拖拽改父级、检查器多选批量、W/E/R 三种 gizmo、
+- 菜单 / 快捷键按项目约定（含 `Ctrl+1..5` 面板、命名布局、Prefab Variant）。
+- 交互：菜单二/三级、层级拖拽改父级、检查器多选批量、W/E/R 三种 gizmo、
   框选、标签页拖拽分屏/浮动、资产拖拽（目录移动 / 层级实例化 / 字段写入）。
 - 数据层完全复用 `editor-gpui/crates/prism-editor-gpui-core`（UI 框架无关：
   文档模型、schema、撤销栈、dock 树、日志缓冲、资产树、i18n、项目读写）。
@@ -61,7 +61,7 @@ crates/prism-editor-egui/src/
 ├── build.rs         构建 / cook 子进程（`prism-build-pipeline`），输出进 Console
 ├── control.rs       本地控制通道（TCP + 一行 JSON：ping/status/capture/quit）
 ├── screenshot.rs    内置截图：整窗（PrintWindow）/ 视口（离屏读回）
-├── app.rs           外壳：Unity 式菜单（二/三级）、工具栏、状态栏、docking、Play
+├── app.rs 外壳：引擎式菜单（二/三级）、工具栏、状态栏、docking、Play
 ├── engine_host.rs   进程内引擎宿主：Engine + GraphRenderer + 资产上传（同步）
 ├── viewport.rs      Scene/Game 视口：离屏图像 → egui 纹理、轨道/拾取/gizmo
 ├── panels.rs        层级、检查器、资产、文档、日志、历史、渲染图 / 设置类面板

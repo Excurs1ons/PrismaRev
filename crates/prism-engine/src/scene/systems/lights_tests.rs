@@ -117,7 +117,7 @@ fn missing_active_component_defaults_to_visible() {
 }
 
 // ---------------------------------------------------------------------------
-// 统一 `Light`（Unity 形状）采样
+// 统一 `Light`（形状）采样
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -152,7 +152,7 @@ fn unified_point_light_uses_transform_position() {
 fn unified_directional_light_uses_transform_forward() {
     let mut world = World::new();
     let e = world.spawn();
-    // 绕 Y 轴转 90°：Unity 的 forward(+Z) 变成 +X。
+    // 绕 Y 轴转 90°：引擎的 forward(+Z) 变成 +X。
     world.insert(
         e,
         LocalTransform {
@@ -318,7 +318,7 @@ fn local_light_budget_caps_only_point_and_spot() {
 }
 
 // ---------------------------------------------------------------------------
-// 方向光阴影状态（Unity `Light.shadows` / `shadowStrength`）
+// 方向光阴影状态（`Light.shadows` / `shadowStrength`）
 // ---------------------------------------------------------------------------
 
 #[test]

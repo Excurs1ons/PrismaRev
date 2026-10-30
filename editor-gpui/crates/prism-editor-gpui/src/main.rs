@@ -1,4 +1,4 @@
-//! PrismaRev 的 GPUI 原生编辑器（Unity 形状的 Editor Shell）。
+//! PrismaRev 的 GPUI 原生编辑器（形状的 Editor Shell）。
 //!
 //! 启动顺序：
 //! 1. 读取 fixture（`--fixture <path>` / `PRISMREV_EDITOR_DEMO` / 仓库内

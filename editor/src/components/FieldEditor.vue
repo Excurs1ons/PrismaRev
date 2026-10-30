@@ -85,7 +85,7 @@ const enumDropdownOptions = computed<DropdownOption[]>(() =>
   (enumOptions.value ?? []).map((opt) => ({ value: opt, label: opt })),
 );
 
-// —— 字段绘制器 = Unity `PropertyDrawer` / `PropertyAttribute` ——
+// —— 字段绘制器 = `PropertyDrawer` / `PropertyAttribute` ——
 // 后端 schema 用声明式 DTO 说明「这个字段该用滑动条 / 多行框 / 取色盘」，
 // 前端只按 `renderer` + `attributes` 渲染；未知渲染器退回默认控件。
 const drawer = computed(() => hint.value?.drawer ?? leafHint.value?.drawer ?? null);
@@ -130,7 +130,7 @@ const localLineCount = ref<number | null>(null);
 
 /**
  * 依据当前文本行数在 [minLines, maxLines] 区间动态计算实际展示行数，
- * 并在行数超过上限时自动滚动，对齐 Unity `[TextArea(minLines, maxLines)]` 的行为。
+ * 并在行数超过上限时自动滚动，`[TextArea(minLines, maxLines)]` 的行为。
  */
 const dynamicTextAreaRows = computed(() => {
   if (!textAreaBounds.value) return 2;
@@ -482,7 +482,7 @@ function onScalarLabelPointerDown(event: PointerEvent) {
 </script>
 
 <template>
-  <!-- `[Header]` = Unity 的字段分组标题 -->
+  <!-- `[Header]` = 引擎的字段分组标题 -->
   <div v-if="headerText" class="drawer-header">{{ headerText }}</div>
 
   <!-- 对象：按 JSON 的键渲染，schema 提供字段类型/只读/嵌套类型 -->

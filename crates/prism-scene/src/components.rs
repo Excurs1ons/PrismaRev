@@ -5,7 +5,7 @@
 //! | 层次结构  | `Parent`, `Child` |
 //! | 变换     | `LocalTransform`, `LocalToWorld`, `TransformDirty` |
 //! | 渲染     | `MeshRenderer`, `SpriteRenderer`, `SpriteAnimation`, `Active` |
-//! | 光源     | `Light`（Unity 形状）, `DirectionalLight`, `PointLight`, `SpotLight`（旧） |
+//! | 光源 | `Light`（形状）, `DirectionalLight`, `PointLight`, `SpotLight`（旧） |
 //! | 相机     | `Camera`, `FlyCameraController` |
 //! | 天空盒   | `Skybox` |
 //! | 调试     | `Gizmo` |
@@ -62,7 +62,7 @@ impl SceneAssetId {
 // Hierarchy
 // ---------------------------------------------------------------------------
 
-/// 指向父实体的引用。对应 Unity DOTS `Unity.Transforms.Parent`（`.0` ≡ `.Value`）。
+/// 指向父实体的引用。对应 数据导向 `.Transforms.Parent`（`.0` ≡ `.Value`）。
 ///
 /// 没有 `Parent` 组件的实体是场景层次中的**根节点**。请用
 /// [`HierarchyHelper`](super::helpers::HierarchyHelper) 修改父子关系 —— 不要直接改 `Child`。
@@ -76,7 +76,7 @@ impl Parent {
     }
 }
 
-/// 派生的子实体列表。对应 Unity DOTS `Unity.Transforms.Child`（缓冲区）。
+/// 派生的子实体列表。对应 数据导向 `.Transforms.Child`（缓冲区）。
 ///
 /// 由 [`HierarchyHelper::reparent`] 保持同步；**不要**手工修改。
 /// 没有该组件的实体没有子节点。
@@ -101,7 +101,7 @@ impl Child {
 
 /// 相对父实体的局部变换（根节点则为世界空间）。
 ///
-/// 对应 Unity DOTS `Unity.Transforms.LocalTransform`
+/// 对应 数据导向 `.Transforms.LocalTransform`
 /// （`position` / `rotation` / `scale` ≡ DOTS 的 `Position` / `Rotation` / `Scale`）。
 #[derive(Debug, Clone, Serialize, Deserialize, Reflect)]
 #[reflect(name = "prism_engine::scene::LocalTransform")]
@@ -132,7 +132,7 @@ impl LocalTransform {
 
 /// 由层次系统（`HierarchySystem`）计算的世界空间变换矩阵，每帧更新。
 ///
-/// 对应 Unity DOTS `Unity.Transforms.LocalToWorld`（`.0` ≡ DOTS 的 `.Value`）。
+/// 对应 数据导向 `.Transforms.LocalToWorld`（`.0` ≡ DOTS 的 `.Value`）。
 #[derive(Debug, Clone, Copy)]
 pub struct LocalToWorld(pub glam::Mat4);
 
@@ -183,27 +183,27 @@ impl Default for Active {
 pub struct MeshRenderer {
     pub mesh_path: String,
     pub material_path: String,
-    /// 阴影投射模式 = Unity `Renderer.shadowCastingMode`。
+    /// 阴影投射模式 = `Renderer.shadowCastingMode`。
     ///
     /// 决定该物体是否写阴影贴图、是否出现在相机主通道（`ShadowsOnly` 只投影）。
     pub shadow_casting_mode: ShadowCastingMode,
-    /// 剔除模式 = Unity 材质/渲染器的 `CullMode`（着色器属性 `_Cull`）。
+    /// 剔除模式 = 材质/渲染器的 `CullMode`（着色器属性 `_Cull`）。
     ///
-    /// Unity 把它放在 `Material` 上；PrismaRev 的材质目前只有 PBR 参数，
+    /// 把它放在 `Material` 上；PrismaRev 的材质目前只有 PBR 参数，
     /// 所以先落在渲染器上，语义仍是「这一个绘制用哪一面」。
     pub cull_mode: CullMode,
-    /// 渲染队列 = Unity `Material.renderQueue`（`int`，不是枚举）。
+    /// 渲染队列 = `Material.renderQueue`（`int`，不是枚举）。
     ///
     /// 决定绘制顺序：小于 [`RenderQueue::GEOMETRY_LAST`] 的不透明物体先画，
     /// 之后才是（透明）队列，透明队列内部按距离从远到近。
     pub render_queue: RenderQueue,
-    /// 是否写深度 = Unity `_ZWrite`。透明物体通常关掉。
+    /// 是否写深度 = `_ZWrite`。透明物体通常关掉。
     pub z_write: bool,
-    /// 源混合因子 = Unity `_SrcBlend`。
+    /// 源混合因子 = `_SrcBlend`。
     pub src_blend: BlendMode,
-    /// 目标混合因子 = Unity `_DstBlend`。
+    /// 目标混合因子 = `_DstBlend`。
     pub dst_blend: BlendMode,
-    /// 混合运算 = Unity `_BlendOp`。
+    /// 混合运算 = `_BlendOp`。
     pub blend_op: BlendOp,
 }
 
@@ -216,7 +216,7 @@ impl Default for MeshRenderer {
             cull_mode: CullMode::default(),
             render_queue: RenderQueue::default(),
             z_write: true,
-            // Unity 的不透明默认值：One / Zero / Add（见 `blends`）。
+            // 引擎的不透明默认值：One / Zero / Add（见 `blends`）。
             src_blend: BlendMode::One,
             dst_blend: BlendMode::Zero,
             blend_op: BlendOp::Add,
@@ -231,7 +231,7 @@ impl MeshRenderer {
     pub fn has_material(&self) -> bool {
         !self.material_path.is_empty()
     }
-    /// 是否真的需要开启混合：Unity 用 `One` / `Zero` 表示「不混合」，
+    /// 是否真的需要开启混合：用 `One` / `Zero` 表示「不混合」，
     /// 所以默认值代表不透明。
     pub fn blends(&self) -> bool {
         self.src_blend != BlendMode::One
@@ -244,7 +244,7 @@ impl MeshRenderer {
 // 2D 精灵
 // ---------------------------------------------------------------------------
 
-/// 2D 精灵渲染器 = Unity `SpriteRenderer`（渲染子集）。
+/// 2D 精灵渲染器 = `SpriteRenderer`（渲染子集）。
 ///
 /// 只承载**作者态**字段：贴图路径、精灵表帧、排序层。GPU 纹理句柄在运行时由
 /// `SpriteRef`（`prism-engine::scene::runtime_components`）持有——和
@@ -257,26 +257,26 @@ impl MeshRenderer {
 #[reflect(name = "prism_engine::scene::SpriteRenderer")]
 #[serde(default)]
 pub struct SpriteRenderer {
-    /// 贴图资源路径 = Unity `SpriteRenderer.sprite`。空字符串 = 不绘制。
+    /// 贴图资源路径 = `SpriteRenderer.sprite`。空字符串 = 不绘制。
     pub sprite_path: String,
     /// 精灵表单帧像素尺寸；`[0, 0]` 表示整张纹理就是一帧。
     pub frame_size: [u32; 2],
     /// 当前帧索引（精灵表按横向排列）。
     pub frame_index: u32,
-    /// 每世界单位像素数 = Unity `Sprite.pixelsPerUnit`。
+    /// 每世界单位像素数 = `Sprite.pixelsPerUnit`。
     pub pixels_per_unit: f32,
-    /// 轴心（`0..1`，**左下角**为原点）= Unity `Sprite.pivot` 归一化形式。
+    /// 轴心（`0..1`，**左下角**为原点）= `Sprite.pivot` 归一化形式。
     /// `[0.5, 0.5]` = 居中，`[0.5, 0.0]` = 底边居中，`[0.5, 1.0]` = 顶边居中。
     pub pivot: [f32; 2],
-    /// 顶点色乘算（线性 RGBA）= Unity `SpriteRenderer.color`。
+    /// 顶点色乘算（线性 RGBA）= `SpriteRenderer.color`。
     pub color: [f32; 4],
-    /// 水平翻转 = Unity `SpriteRenderer.flipX`。
+    /// 水平翻转 = `SpriteRenderer.flipX`。
     pub flip_x: bool,
-    /// 垂直翻转 = Unity `SpriteRenderer.flipY`。
+    /// 垂直翻转 = `SpriteRenderer.flipY`。
     pub flip_y: bool,
-    /// 排序层，数值越大越靠前 = Unity `sortingLayerName` 的数值形式。
+    /// 排序层，数值越大越靠前 = `sortingLayerName` 的数值形式。
     pub sorting_layer: i32,
-    /// 同层内顺序 = Unity `sortingOrder`。
+    /// 同层内顺序 = `sortingOrder`。
     pub order_in_layer: i32,
 }
 
@@ -324,7 +324,7 @@ impl SpriteRenderer {
     }
 }
 
-/// 2D 精灵帧动画 = Unity `Animator` + `AnimationClip` 的最小替身。
+/// 2D 精灵帧动画 = `Animator` + `AnimationClip` 的最小替身。
 ///
 /// 只描述「怎么播」；当前帧写回 [`SpriteRenderer::frame_index`]，由引擎的
 /// `sprite_animation_system` 每帧推进（播放进度不进场景，见该系统的说明）。
@@ -359,9 +359,9 @@ impl Default for SpriteAnimation {
     }
 }
 
-/// 2D 折线渲染器 = Unity `LineRenderer`（2D 子集）。
+/// 2D 折线渲染器 = `LineRenderer`（2D 子集）。
 ///
-/// 点是**世界空间**的（等价 Unity `useWorldSpace = true`），引擎把折线展开成
+/// 点是**世界空间**的（等价 `useWorldSpace = true`），引擎把折线展开成
 /// 面向相机的加宽四边形并入精灵通道，因此排序/混合与精灵完全一致。
 ///
 /// 线的颜色走精灵通道的 `texture == u32::MAX`（纯色）分支，不采样贴图。
@@ -482,17 +482,17 @@ impl Default for SpotLight {
     }
 }
 
-/// 统一光源组件 = `UnityEngine.Light`。
+/// 统一光源组件。
 ///
-/// Unity 只有一个 `Light` 组件，用 [`LightType`] 区分方向光 / 点光 / 聚光；光源的
-/// **方向由实体变换决定**（Unity 里是 `light.transform.forward`），位置由
+/// 只有一个 `Light` 组件，用 [`LightType`] 区分方向光 / 点光 / 聚光；光源的
+/// **方向由实体变换决定**（里是 `light.transform.forward`），位置由
 /// `LocalToWorld` 决定。本组件就是那个形状。
 ///
 /// 旧的 [`DirectionalLight`] / [`PointLight`] / [`SpotLight`] 仍然可用（渲染器两者
 /// 都收，见 `prism-engine::scene::systems::lights`），所以老场景不需要迁移；
 /// 新场景建议只用本组件。
 ///
-/// 单位与旧组件一致，采用**物理量**（方向光 lux、点光/聚光 candela），而不是 Unity
+/// 单位与旧组件一致，采用**物理量**（方向光 lux、点光/聚光 candela），而不是
 /// 默认的归一化 `intensity = 1`：渲染器内部按 `LUX_TO_RADIANCE_SCALE` 折算，改
 /// `intensity` 的观感与旧组件相同。
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Reflect)]
@@ -501,27 +501,27 @@ impl Default for SpotLight {
 pub struct Light {
     /// `Behaviour.enabled`：为 `false` 时渲染器跳过该光源。
     pub enabled: bool,
-    /// 光源类型 = Unity `Light.type`。
+    /// 光源类型 = `Light.type`。
     pub light_type: LightType,
-    /// 线性 RGB 颜色 = Unity `Light.color`。
+    /// 线性 RGB 颜色 = `Light.color`。
     pub color: glam::Vec3,
-    /// 强度（方向光 lux / 点光与聚光 candela）= Unity `Light.intensity`。
+    /// 强度（方向光 lux / 点光与聚光 candela）= `Light.intensity`。
     pub intensity: f32,
-    /// 衰减半径（世界单位）= Unity `Light.range`（方向光忽略）。
+    /// 衰减半径（世界单位）= `Light.range`（方向光忽略）。
     pub range: f32,
-    /// 聚光**全锥角**（度）= Unity `Light.spotAngle`。
+    /// 聚光**全锥角**（度）= `Light.spotAngle`。
     pub spot_angle: f32,
-    /// 内锥**全锥角**（度）= Unity `Light.innerSpotAngle`；小于 `spot_angle`。
+    /// 内锥**全锥角**（度）= `Light.innerSpotAngle`；小于 `spot_angle`。
     pub inner_spot_angle: f32,
-    /// 阴影模式 = Unity `Light.shadows`。
+    /// 阴影模式 = `Light.shadows`。
     pub shadows: LightShadows,
-    /// 阴影强度 = Unity `Light.shadowStrength`（`0..=1`）。
+    /// 阴影强度 = `Light.shadowStrength`（`0..=1`）。
     pub shadow_strength: f32,
-    /// 色温（开尔文）= Unity `Light.colorTemperature`。
+    /// 色温（开尔文）= `Light.colorTemperature`。
     pub color_temperature: f32,
-    /// 是否让色温参与光源颜色 = Unity `Light.useColorTemperature`。
+    /// 是否让色温参与光源颜色 = `Light.useColorTemperature`。
     pub use_color_temperature: bool,
-    /// 渲染模式 = Unity `Light.renderMode`。
+    /// 渲染模式 = `Light.renderMode`。
     pub render_mode: LightRenderMode,
 }
 
@@ -529,7 +529,7 @@ impl Default for Light {
     fn default() -> Self {
         Self {
             enabled: true,
-            // Unity 的 `new Light()` 默认是点光源。
+            // 引擎的 `new Light()` 默认是点光源。
             light_type: LightType::Point,
             color: glam::Vec3::ONE,
             intensity: 100.0,
@@ -548,7 +548,7 @@ impl Default for Light {
 impl Light {
     /// 最终光源颜色 = `color`（× 色温滤色片）。
     ///
-    /// 对应 Unity 的 `ExtractColorTemperature` + `ApplyColorTemperature`：
+    /// 对应引擎的 `ExtractColorTemperature` + `ApplyColorTemperature`：
     /// 只有 `use_color_temperature` 为真时才乘色温，且不归一化。
     pub fn effective_color(&self) -> glam::Vec3 {
         if self.use_color_temperature {
@@ -560,7 +560,7 @@ impl Light {
 
     /// 聚光的内 / 外**半锥角**（弧度），供 GPU 与着色器使用。
     ///
-    /// Unity 的 `spotAngle` / `innerSpotAngle` 都是全锥角（度）；这里除以 2 转成
+    /// 引擎的 `spotAngle` / `innerSpotAngle` 都是全锥角（度）；这里除以 2 转成
     /// 半角，并把内角裁到 `[0, 外角]`，避免非法配置产生负的余弦区间。
     pub fn cone_half_angles_radians(&self) -> (f32, f32) {
         let outer = (self.spot_angle.max(0.0) * 0.5).to_radians();
@@ -634,15 +634,15 @@ pub struct Camera {
     /// When `false` the 相机 is skipped during scene 集合 (the
     /// 渲染器 falls 后 to the 下一个 available 相机
     pub enabled: bool,
-    /// 清屏方式 = Unity `Camera.clearFlags`（[`CameraClearFlags`]）。
+    /// 清屏方式 = `Camera.clearFlags`（[`CameraClearFlags`]）。
     pub clear_flags: CameraClearFlags,
-    /// 纯色背景 = Unity `Camera.backgroundColor`（线性 RGBA，`SolidColor` 时生效）。
+    /// 纯色背景 = `Camera.backgroundColor`（线性 RGBA，`SolidColor` 时生效）。
     pub background_color: [f32; 4],
-    /// 正交投影 = Unity `Camera.orthographic`。
+    /// 正交投影 = `Camera.orthographic`。
     pub orthographic: bool,
-    /// 正交视口半高（世界单位）= Unity `Camera.orthographicSize`。
+    /// 正交视口半高（世界单位）= `Camera.orthographicSize`。
     pub orthographic_size: f32,
-    /// 渲染顺序 = Unity `Camera.depth`；数值大的后绘制，`main_camera` 取最大者。
+    /// 渲染顺序 = `Camera.depth`；数值大的后绘制，`main_camera` 取最大者。
     pub depth: f32,
 }
 
@@ -665,9 +665,9 @@ impl Default for Camera {
 }
 
 impl Camera {
-    /// 投影矩阵（列主序）= Unity `Camera.projectionMatrix`。
+    /// 投影矩阵（列主序）= `Camera.projectionMatrix`。
     ///
-    /// 遵循项目约定：右手系、相机看向 −Z、Vulkan y-flip（`p[1][1] = -inv_tan`）、
+    /// 右手系、相机看向 −Z、Vulkan y-flip（`p[1][1] = -inv_tan`）、
     /// 深度范围 `[0, 1]`。`aspect` 由调用方给出（运行时来自 framebuffer，
     /// 编辑器里来自面板），非有限或非正时退化为 1.0。
     ///
@@ -700,12 +700,12 @@ impl Camera {
         }
     }
 
-    /// 世界 → 相机空间 = Unity `Camera.worldToCameraMatrix`（即 view 矩阵）。
+    /// 世界 → 相机空间 = `Camera.worldToCameraMatrix`（即 view 矩阵）。
     pub fn world_to_camera_matrix(camera_to_world: glam::Mat4) -> glam::Mat4 {
         camera_to_world.inverse()
     }
 
-    /// 相机 → 世界空间 = Unity `Camera.cameraToWorldMatrix`。
+    /// 相机 → 世界空间 = `Camera.cameraToWorldMatrix`。
     pub fn camera_to_world_matrix(world_to_camera: glam::Mat4) -> glam::Mat4 {
         world_to_camera.inverse()
     }

@@ -1,4 +1,4 @@
-//! 撤销历史：列出当前文档的撤销栈，点击某条回退到该操作之前（Unity Undo History）。
+//! 撤销历史：列出当前文档的撤销栈，点击某条回退到该操作之前（Undo History）。
 
 use gpui::{div, prelude::*, px, AnyElement, Context, SharedString};
 use prism_editor_gpui_core::ThemeToken;

@@ -22,9 +22,9 @@ pub(crate) fn cull_flags(mode: CullMode) -> vk::CullModeFlags {
     }
 }
 
-/// Unity [`BlendMode`] → Vulkan 混合因子。
+/// [`BlendMode`] → Vulkan 混合因子。
 ///
-/// **两边的数值顺序不同**（Unity 把 `DstColor` 放在 `SrcColor` 前面），所以必须
+/// **两边的数值顺序不同**（把 `DstColor` 放在 `SrcColor` 前面），所以必须
 /// 显式映射，不能按 `as i32` 转换。
 pub(crate) fn blend_factor(mode: BlendMode) -> vk::BlendFactor {
     match mode {
@@ -42,7 +42,7 @@ pub(crate) fn blend_factor(mode: BlendMode) -> vk::BlendFactor {
     }
 }
 
-/// Unity [`BlendOp`] → Vulkan 混合运算。
+/// [`BlendOp`] → Vulkan 混合运算。
 pub(crate) fn blend_operation(op: BlendOp) -> vk::BlendOp {
     match op {
         BlendOp::Add => vk::BlendOp::ADD,
@@ -278,8 +278,8 @@ mod tests {
     }
 
     #[test]
-    fn blend_factors_follow_unity_semantics_not_numeric_order() {
-        // Unity 的数值顺序与 Vulkan 不同：Zero/One 都是 0/1，但 Unity 的
+    fn blend_factors_follow_semantics_not_numeric_order() {
+        // 引擎的数值顺序与 Vulkan 不同：Zero/One 都是 0/1，但引擎的
         // DstColor=2 对应 Vulkan 的 DST_COLOR，SrcColor=3 对应 SRC_COLOR。
         assert_eq!(blend_factor(BlendMode::Zero), vk::BlendFactor::ZERO);
         assert_eq!(blend_factor(BlendMode::One), vk::BlendFactor::ONE);

@@ -1,7 +1,7 @@
 //! 资产管理器数据层（`AssetBrowser.vue` / `editor_asset_*` 的等价物）。
 //!
 //! 输入是 `assets/` 下的扁平路径列表（`AssetInfo`），这里负责：
-//! - 建目录树（Unity `Project` 面板的两栏：目录树 + 列表）；
+//! - 建目录树（`Project` 面板的两栏：目录树 + 列表）；
 //! - 按路径 / 分类 / 导入器检索；
 //! - 分类配色与体积格式化。
 
@@ -349,7 +349,7 @@ impl AssetTree {
     }
 }
 
-/// 稳定的资产 GUID（32 位十六进制，形状与 Unity `.meta` 里的 guid 一致）。
+/// 稳定的资产 GUID（32 位十六进制，形状与 `.meta` 里的 guid 一致）。
 ///
 /// 用 FNV-1a 64 位哈希路径：不引入 uuid 依赖，同一路径跨进程稳定。
 pub fn asset_guid(path: &str) -> String {

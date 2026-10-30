@@ -1,8 +1,8 @@
-//! 程序化基础网格（Unity `GameObject → 3D Object` 的等价物）。
+//! 程序化基础网格（`GameObject → 3D Object` 的等价物）。
 //!
 //! 编辑器预设用 `mesh_path = "__builtin/<name>"` 引用这些网格，
 //! `prism-engine` 的资产解析器遇到该前缀时直接在这里生成 `MeshUploadInput`，
-//! 不读 `.pak`、也不需要 cook —— 与 Unity 的内置 Cube/Sphere/Capsule 一致。
+//! 不读 `.pak`、也不需要 cook —— 与引擎的内置 Cube/Sphere/Capsule 一致。
 //!
 //! 单位约定（与引擎坐标一致：右手系、+Y 上）：
 //! - 盒子 / 球 / 圆柱 / 胶囊：外接尺寸 ≈ 1（半径 0.5、高 1），居中于原点；
@@ -354,7 +354,7 @@ mod tests {
         }
         for position in &mesh.positions {
             assert!(position.iter().all(|value| value.is_finite()));
-            // 胶囊 = 圆柱 1 + 两个半径 0.5 的半球 → 总高 2（与 Unity 默认一致）。
+            // 胶囊 = 圆柱 1 + 两个半径 0.5 的半球 → 总高 2（与引擎默认一致）。
             assert!(
                 position.iter().all(|value| value.abs() <= 1.05),
                 "primitive should be unit sized: {position:?}"

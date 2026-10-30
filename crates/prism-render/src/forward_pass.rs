@@ -1262,7 +1262,7 @@ impl ForwardPass {
                 depth_bias_enable: None,
                 depth_bias_constant_factor: None,
                 depth_bias_slope_factor: None,
-                // 透明物体通常 `ZWrite Off`（Unity `_ZWrite`）。
+                // 透明物体通常 `ZWrite Off`（`_ZWrite`）。
                 depth_write_enable: Some(state.z_write),
                 depth_test_enable: None,
                 color_attachment_count: None,
@@ -1591,7 +1591,7 @@ impl RenderPassNode for ForwardPass {
             // 变体之间一致，所以不需要重新绑定描述符集。
             let mut bound_state = DrawState::default();
             for item in ctx.frame.draw_list {
-                // `ShadowsOnly` 物体不参与相机主通道（Unity `ShadowCastingMode`）。
+                // `ShadowsOnly` 物体不参与相机主通道（`ShadowCastingMode`）。
                 if !item.visible_in_main_pass {
                     continue;
                 }
@@ -1801,7 +1801,7 @@ impl Drop for ForwardPass {
 
 /// 颜色附件的混合状态（MRT：附件 0 = 颜色，附件 1 = 视图法线）。
 ///
-/// 附件 0 按 Unity 材质状态（`_SrcBlend` / `_DstBlend` / `_BlendOp`）配置；
+/// 附件 0 按 材质状态（`_SrcBlend` / `_DstBlend` / `_BlendOp`）配置；
 /// 默认值 `One`/`Zero`/`Add` 表示不透明，此时直接关掉混合。附件 1 永远不混合
 /// （视图空间法线需要原样写入）。
 fn color_blend_attachments(state: DrawState) -> [vk::PipelineColorBlendAttachmentState; 2] {

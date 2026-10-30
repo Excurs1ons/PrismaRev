@@ -256,7 +256,7 @@ pub struct Workspace {
     pub show_grid: bool,
     /// Scene View 是否用场景的天空盒当背景（关闭时退回纯色）。
     ///
-    /// 对应 Unity 的 `SceneViewState.showSkybox`（默认开）。
+    /// 对应引擎的 `SceneViewState.showSkybox`（默认开）。
     pub show_skybox: bool,
     pub playing: bool,
     pub paused: bool,
@@ -532,7 +532,7 @@ impl Workspace {
         Ok(count)
     }
 
-    /// 从资产面板实例化预制体到场景（Unity 拖预制体到层级）。
+    /// 从资产面板实例化预制体到场景（拖预制体到层级）。
     /// 磁盘优先，fixture 模式回退同名模板；返回插入的实体数。
     pub fn instantiate_prefab_asset(
         &mut self,
@@ -575,7 +575,7 @@ impl Workspace {
         Ok(inserted.len())
     }
 
-    /// 把当前选中实体子树存成预制体文件（Unity「另存为预制体」）。
+    /// 把当前选中实体子树存成预制体文件（「另存为预制体」）。
     /// 重名自动追加 `-2`、`-3`；不修改当前场景。
     pub fn save_selection_as_prefab(&mut self, name: &str) -> io::Result<String> {
         self.save_selection_as_prefab_at(Some("assets/prefabs"), name)
@@ -615,7 +615,7 @@ impl Workspace {
         Ok(path)
     }
 
-    /// 把实例当前内容覆盖写回源预制体（Unity `PrefabUtility.ApplyPrefabInstance`）。
+    /// 把实例当前内容覆盖写回源预制体（`PrefabUtility.ApplyPrefabInstance`）。
     ///
     /// 只写预制体文件，不改变场景；根上的 `PrefabInstance` 链接会被剥掉，
     /// 避免预制体引用自己，嵌套实例的链接保持不变。
@@ -1578,7 +1578,7 @@ impl Workspace {
         );
     }
 
-    /// 预制体实例的还原 / 同步（Unity `PrefabUtility.RevertPrefabInstance`）。
+    /// 预制体实例的还原 / 同步（`PrefabUtility.RevertPrefabInstance`）。
     ///
     /// 用预制体当前内容覆盖实例子树：保留实例根的名字与父级，重新生成根上的链接组件。
     /// 数据来源优先磁盘（项目根 + 链接路径），纯 fixture 模式下回退到同名模板。
@@ -1739,7 +1739,7 @@ impl Workspace {
         let Some(component) = self.schema.component(component_name) else {
             return;
         };
-        // 已挂着的组件再点一次不能静默重置成默认值（Unity 里它根本不出现在菜单里）。
+        // 已挂着的组件再点一次不能静默重置成默认值（里它根本不出现在菜单里）。
         if self
             .document()
             .doc
@@ -2065,7 +2065,7 @@ impl Workspace {
         self.show_grid = !self.show_grid;
     }
 
-    /// Scene View 天空盒开关（Unity 的 Scene view 默认画天空盒）。
+    /// Scene View 天空盒开关（引擎的 Scene view 默认画天空盒）。
     pub fn toggle_skybox(&mut self) {
         self.show_skybox = !self.show_skybox;
     }
@@ -2723,7 +2723,7 @@ impl Workspace {
         })
     }
 
-    /// Unity「Align View to Selected」：把轨道中心对准选中项（保留距离与角度）。
+    /// 「Align View to Selected」：把轨道中心对准选中项（保留距离与角度）。
     pub fn align_view_to_selection(&mut self) -> bool {
         let Some(center) = self.selection_center_world() else {
             return false;
@@ -2732,7 +2732,7 @@ impl Workspace {
         true
     }
 
-    /// Unity「Align Selected to View」：把选中项平移到当前轨道中心。
+    /// 「Align Selected to View」：把选中项平移到当前轨道中心。
     pub fn align_selection_to_view(&mut self) -> bool {
         let Some(center) = self.selection_center_world() else {
             return false;
@@ -3839,7 +3839,7 @@ mod tests {
     #[test]
     fn skybox_toggle_flips_flag_and_defaults_on() {
         let mut workspace = Workspace::sample();
-        assert!(workspace.show_skybox, "Unity 的 Scene view 默认画天空盒");
+        assert!(workspace.show_skybox, "Scene view 默认画天空盒");
         workspace.toggle_skybox();
         assert!(!workspace.show_skybox);
         workspace.toggle_skybox();

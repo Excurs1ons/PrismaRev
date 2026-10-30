@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * Scene / Game 视口面板（Unity `SceneView` / `GameView` 的简化形态）。
+ * Scene / Game 视口面板（`SceneView` / `GameView` 的简化形态）。
  *
  * 渲染发生在**编辑器进程内**：Rust 侧的视口线程持有一个 `prism_app::App`
  * （离屏 Vulkan），把 tonemap 后的 RGBA 帧经 Tauri `Channel` 推过来，这里
@@ -438,7 +438,7 @@ function scheduleReload() {
     reloadPending = true;
     return;
   }
-  // Play 期间编辑文档不该打断运行中的模拟（Unity 里编辑也会被丢弃）；
+  // Play 期间编辑文档不该打断运行中的模拟（运行中编辑也会被丢弃）；
   // 停止时会先把当前文档刷进来，所以这里直接丢掉。
   if (props.playing) {
     reloadPending = false;
@@ -468,9 +468,9 @@ function scheduleReload() {
 
 /** 当前视口鼠标拖拽模式（轨道旋转 / 变焦 / 平移 / 框选）。 */
 const dragMode = ref<"orbit" | "pan" | "zoom" | "marquee" | null>(null);
-/** Alt 键是否处于按住状态（用于切换 Unity 风格视口导航光标与手势）。 */
+/** Alt 键是否处于按住状态（用于切换视口导航光标与手势）。 */
 const altHeld = ref(false);
-/** V 键是否处于按住状态（用于切换 Unity 风格顶点吸附 Vertex Snapping）。 */
+/** V 键是否处于按住状态（用于切换顶点吸附 Vertex Snapping）。 */
 const vKeyHeld = ref(false);
 /** 地面参考网格显隐。 */
 const showGrid = ref(true);
@@ -549,7 +549,7 @@ function scheduleFetchSelectionBounds() {
   });
 }
 
-/** Unity 风格第一人称飞行相机模式（右键按住 + WASD/QE 漫游）。 */
+/**第一人称飞行相机模式（右键按住 + WASD/QE 漫游）。 */
 const flyMode = ref(false);
 const flySpeed = ref(10.0);
 const flyKeys = {
@@ -778,7 +778,7 @@ function onPointerDown(event: ViewportPointer) {
     }
     hoveredGizmo.value = null;
 
-    // 1. Alt 组合键优先导航模式 (Unity 标准：Alt+LMB 轨道旋转, Alt+RMB 连续擦洗缩放, Alt+MMB 平移)
+    // 1. Alt 组合键优先导航模式 (常用标准：Alt+LMB 轨道旋转, Alt+RMB 连续擦洗缩放, Alt+MMB 平移)
     if (event.altKey) {
       if (event.button === 0) {
         dragMode.value = "orbit";
@@ -1370,7 +1370,7 @@ function frameSelection() {
   return applyFrame(primarySelection() === null ? "all" : "selection");
 }
 
-// ── 项目模块编译（Unity 式 Auto Refresh）────────────────────────────────────
+// ── 项目模块编译（引擎式 Auto Refresh）────────────────────────────────────
 
 /** 自动编译开关；关闭后只能靠 Ctrl+R 手动重编。 */
 const autoRefresh = ref(true);
@@ -1686,7 +1686,7 @@ const aspectOptions = computed<DropdownOption[]>(() => [
 
 <template>
   <div class="viewport-panel">
-    <!-- Unity 风格视口工具栏 -->
+    <!--视口工具栏 -->
     <div class="viewport-toolbar">
       <span class="viewport-title">{{ isScene ? $t("viewport.sceneView") : $t("viewport.gameView") }}</span>
 
@@ -1698,7 +1698,7 @@ const aspectOptions = computed<DropdownOption[]>(() => [
         :title="$t('viewport.shadingModeTooltip')"
       />
 
-      <!-- 分辨率 / 宽高比切换 (Unity Aspect Ratio) -->
+      <!-- 分辨率 / 宽高比切换 (Aspect Ratio) -->
       <EditorDropdown
         v-model="aspectMode"
         :options="aspectOptions"
@@ -1721,7 +1721,7 @@ const aspectOptions = computed<DropdownOption[]>(() => [
 
       <span class="viewport-spacer" />
 
-      <!-- Unity 经典 Stats 开关按钮 -->
+      <!-- 经典 Stats 开关按钮 -->
       <button
         class="stats-toggle-btn"
         :class="{ active: showStats }"
@@ -1849,7 +1849,7 @@ const aspectOptions = computed<DropdownOption[]>(() => [
           @contextmenu.prevent
         />
 
-        <!-- 视口左上方悬浮胶囊工具栏 (Unity 6 / UE5 风格 Floating Pill Toolbar) -->
+        <!-- 视口左上方悬浮胶囊工具栏 (6 / UE5 风格 Floating Pill Toolbar) -->
         <div v-if="isScene" class="viewport-pill-toolbar" @pointerdown.stop>
           <div class="pill-btn-group">
             <button
@@ -1943,7 +1943,7 @@ const aspectOptions = computed<DropdownOption[]>(() => [
             height: `${marqueeBox.height}px`,
           }"
         />
-        <!-- 变换拖拽与手柄悬停实时交互反馈浮层 (Unity 风格黄色高亮与数值 HUD) -->
+        <!-- 变换拖拽与手柄悬停实时交互反馈浮层 (黄色高亮与数值 HUD) -->
         <svg
           v-if="dragFeedback || (hoveredGizmo && draggingAxis === null) || selectionBounds.length > 0"
           class="viewport-drag-overlay"
@@ -2039,7 +2039,7 @@ const aspectOptions = computed<DropdownOption[]>(() => [
             />
           </template>
 
-          <!-- 顶点吸附 (V-Snap) 目标指示器 (Unity 风格黄色菱形与光晕圆环) -->
+          <!-- 顶点吸附 (V-Snap) 目标指示器 (黄色菱形与光晕圆环) -->
           <g
             v-if="dragFeedback?.snapPoint"
             :transform="`translate(${dragFeedback.snapPoint[0]}, ${dragFeedback.snapPoint[1]})`"
@@ -2068,13 +2068,13 @@ const aspectOptions = computed<DropdownOption[]>(() => [
           </g>
         </svg>
 
-        <!-- Unity 风格漫游飞行状态指示 -->
+        <!--漫游飞行状态指示 -->
         <div v-if="flyMode" class="viewport-fly-badge">
           <span>漫游飞行模式 (WASD 移动 · QE 升降 · Shift 加速 · 滚轮调速: {{ flySpeed.toFixed(1) }} m/s)</span>
         </div>
       </div>
 
-      <!-- Unity 风格右上角相机方向导航指示器 (Orientation Gizmo) -->
+      <!--右上角相机方向导航指示器 (Orientation Gizmo) -->
       <OrientationGizmo
         v-if="isScene"
         :orbit="orbit"
@@ -2083,7 +2083,7 @@ const aspectOptions = computed<DropdownOption[]>(() => [
         @reset="resetCameraView"
       />
 
-      <!-- 视口右键上下文菜单 (Unity / Unreal 风格 SceneView Context Menu) -->
+      <!-- 视口右键上下文菜单 (/ Unreal 风格 SceneView Context Menu) -->
       <div
         v-if="contextMenu"
         class="viewport-context-menu"
@@ -2186,8 +2186,8 @@ const aspectOptions = computed<DropdownOption[]>(() => [
         </div>
       </div>
 
-      <!-- Unity 风格 Statistics 半透明悬浮状态窗口 -->
-      <div v-if="showStats" class="unity-stats-window" @pointerdown.stop>
+      <!-- Statistics 半透明悬浮状态窗口 -->
+      <div v-if="showStats" class="viewport-stats-window" @pointerdown.stop>
         <div class="stats-header">
           <strong>{{ $t("viewport.statsTitle") }}</strong>
           <span class="stats-spacer" />
@@ -2525,9 +2525,9 @@ const aspectOptions = computed<DropdownOption[]>(() => [
   z-index: 30;
 }
 
-/* ── Unity 风格 Statistics 状态悬浮窗 ───────────────────────────────── */
+/* ── Statistics 状态悬浮窗 ───────────────────────────────── */
 
-.unity-stats-window {
+.viewport-stats-window {
   position: absolute;
   top: 8px;
   right: 8px;
@@ -2667,7 +2667,7 @@ const aspectOptions = computed<DropdownOption[]>(() => [
   cursor: crosshair !important;
 }
 
-/* ── SceneView 悬浮药丸工具栏 (Unity 6 / UE5 风格) ────────────────────────── */
+/* ── SceneView 悬浮药丸工具栏 (6 / UE5 风格) ────────────────────────── */
 .viewport-pill-toolbar {
   position: absolute;
   top: 10px;
@@ -2738,7 +2738,7 @@ const aspectOptions = computed<DropdownOption[]>(() => [
   margin: 0 2px;
 }
 
-/* 视口右键上下文菜单与级联子菜单 (Unity 风格 SceneView Context Menu) */
+/* 视口右键上下文菜单与级联子菜单 (SceneView Context Menu) */
 .viewport-context-menu {
   position: fixed;
   z-index: 10000;

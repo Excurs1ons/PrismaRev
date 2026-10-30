@@ -262,7 +262,7 @@ fn render_state_defaults_to_opaque_and_follows_the_component() {
     assert_eq!(items[0].state.cull_mode, CullMode::Back);
     assert!(!items[0].state.blends());
 
-    // 透明材质状态必须原样传到绘制项（Unity `CullMode.Off` / 队列 / 混合）。
+    // 透明材质状态必须原样传到绘制项（`CullMode.Off` / 队列 / 混合）。
     let mut world = World::new();
     spawn_renderable(
         &mut world,
@@ -294,7 +294,7 @@ fn two_sided_requests_two_sided_shadow_casting() {
     );
 
     let items = scene_render_system(&world);
-    // Unity `ShadowCastingMode::TwoSided`：投影且阴影通道关闭背面剔除。
+    // `ShadowCastingMode::TwoSided`：投影且阴影通道关闭背面剔除。
     assert!(items[0].cast_shadow);
     assert!(items[0].visible_in_main_pass);
     assert!(items[0].cast_shadow_two_sided);

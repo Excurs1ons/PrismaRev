@@ -5,7 +5,7 @@
 //! - `split`：水平/垂直二分，`ratio` 是前半部分占的比例。
 //!
 //! 调整一个 splitter 只改 `ratio`，所以同一侧所有对齐的面板会一起变尺寸；
-//! 这也是 Unity / ImGui docking 的核心行为。
+//! 这也是 ImGui docking 的核心行为。
 //!
 //! 序列化形状与前端 `prisma-editor.dock.v4` 完全一致（`{version, dock, floating}`），
 //! 因此同一份布局可以在 WebView 编辑器与 GPUI 编辑器之间搬运。
@@ -211,7 +211,7 @@ pub fn default_dock() -> DockNode {
     split(DockDirection::Row, left, main, 0.19)
 }
 
-/// Unity 经典 2 by 3 布局。
+/// 经典 2 by 3 布局。
 pub fn two_by_three_dock() -> DockNode {
     let left_viewports = split(
         DockDirection::Column,
@@ -229,7 +229,7 @@ pub fn two_by_three_dock() -> DockNode {
     split(DockDirection::Row, left_and_mid, leaf(["inspector"]), 0.78)
 }
 
-/// Unity 经典 Tall 布局。
+/// 经典 Tall 布局。
 pub fn tall_dock() -> DockNode {
     let left_viewports = split(
         DockDirection::Column,
@@ -246,7 +246,7 @@ pub fn tall_dock() -> DockNode {
     split(DockDirection::Row, left_viewports, right_column, 0.72)
 }
 
-/// Unity 经典 Wide 布局。
+/// 经典 Wide 布局。
 pub fn wide_dock() -> DockNode {
     let top_viewports = split(
         DockDirection::Row,

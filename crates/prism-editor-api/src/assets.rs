@@ -134,7 +134,7 @@ pub struct AssetInfo {
     pub size_bytes: u64,
     /// 粗分类：`model` / `texture` / `env` / `scene` / `package` / `data` / `other`。
     pub kind: &'static str,
-    /// 负责导入该文件的 Unity 导入器类名（`TextureImporter` / `ModelImporter` …）。
+    /// 负责导入该文件的导入器类名（`ImageImporter` / `ModelImporter` …）。
     pub importer: &'static str,
 }
 
@@ -167,7 +167,7 @@ pub fn list_assets_info(project_root: &Path) -> Result<Vec<AssetInfo>, String> {
                 .map(|meta| meta.len())
                 .unwrap_or(0);
             AssetInfo {
-                importer: crate::asset_importer::ImporterClass::from_path(&path).unity_class_name(),
+                importer: crate::asset_importer::ImporterClass::from_path(&path).importer_name(),
                 kind: asset_kind(&path),
                 path,
                 size_bytes,
@@ -559,7 +559,7 @@ mod tests {
         assert_eq!(info[0].size_bytes, 2);
         assert_eq!(info[1].path, "assets/valley.hdr");
         assert_eq!(info[1].kind, "env");
-        assert_eq!(info[1].importer, "TextureImporter");
+        assert_eq!(info[1].importer, "ImageImporter");
         assert_eq!(info[1].size_bytes, 4);
 
         std::fs::remove_dir_all(&root).ok();

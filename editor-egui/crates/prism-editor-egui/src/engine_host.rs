@@ -60,7 +60,7 @@ pub struct EngineHost {
     focus_marker: Option<Entity>,
     width: u32,
     height: u32,
-    /// Scene view 的编辑器相机是否用场景天空盒当背景（Unity 默认开）。
+    /// Scene view 的编辑器相机是否用场景天空盒当背景（引擎默认开）。
     show_skybox: bool,
     /// 下一次出帧后把离屏图像读回写到这个路径（编辑器截图）。
     capture_path: Option<PathBuf>,
@@ -185,7 +185,7 @@ impl EngineHost {
 
     /// Scene view 的编辑器相机 + 背景策略。
     ///
-    /// Unity 的 Scene view 默认把场景天空盒当背景（`SceneViewState.showSkybox`），
+    /// 引擎的 Scene view 默认把场景天空盒当背景（`SceneViewState.showSkybox`），
     /// 所以这里的编辑器相机默认是 `Skybox` 而不是纯色。
     fn editor_clear_flags(&self) -> prism_scene::CameraClearFlags {
         if self.show_skybox {

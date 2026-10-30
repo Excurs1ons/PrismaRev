@@ -1,19 +1,19 @@
-//! Unity `Build` / `Build.Profile` 形状的投影。
+//! `Build` / `Build.Profile` 形状的投影。
 //!
 //! 引擎的构建由 `prism-build-pipeline`（`build-scenes`）+ `cargo build` 完成，
 //! 编辑器只是把「构建哪个配置、哪些场景、输出到哪」整理成声明式数据。这一层
 //! 把现有 `assets/settings.ini` 的 `[build]` 段与 `assets/scenes.json` 投影成
-//! Unity 的形状，供属性面板 / 未来的原生宿主读取。
+//! 引擎的形状，供属性面板 / 未来的原生宿主读取。
 //!
-//! | Unity | 这里 |
+//! | | 这里 |
 //! |---|---|
-//! | `UnityEditor.Build.Profile.BuildProfile` | [`BuildProfile`] |
+//! | 编辑器接口 | [`BuildProfile`] |
 //! | `BuildPlayerOptions.scenes` / `EditorBuildSettings.scenes` | [`BuildScene`]（`build_index` = 实际构建顺序） |
 //! | `BuildTargetGroup` | [`BuildProfile::target_group`]（由 `[build].target` 推导） |
 //! | `BuildOptions.Development` / `AllowDebugging` | [`BuildOptions`]（由 `[build].profile == "debug"` 推导） |
 //!
 //! **不新增构建目标**：`[build].target` 目前只允许 `windows`（见
-//! [`crate::settings`] 的校验）；这里只做 Unity 命名的投影，不替引擎承诺
+//! [`crate::settings`] 的校验）；这里只做 命名的投影，不替引擎承诺
 //! 尚未实现的平台。
 
 use std::path::Path;
@@ -50,7 +50,7 @@ impl BuildScene {
     }
 }
 
-/// Unity `BuildOptions`（只投影引擎实际有语义的两位）。
+/// `BuildOptions`（只投影引擎实际有语义的两位）。
 ///
 /// PrismaRev 没有 profile 级别的任意 flag，因此两位都由
 /// `[build].profile == "debug"` 推导：debug 配置 = 开发构建 + 允许调试。
@@ -77,7 +77,7 @@ impl BuildOptions {
     }
 }
 
-/// 一次构建的完整描述 = Unity `Build.Profile.BuildProfile`。
+/// 一次构建的完整描述 = `Build.Profile.BuildProfile`。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BuildProfile {
@@ -85,7 +85,7 @@ pub struct BuildProfile {
     pub name: String,
     /// 构建目标（`[build].target`，当前只有 `windows`）。
     pub target: String,
-    /// Unity `BuildTargetGroup` 名字（`Standalone` / `Android` / …）。
+    /// `BuildTargetGroup` 名字（`Standalone` / `Android` / …）。
     pub target_group: &'static str,
     /// 由配置名推导的 `BuildOptions`。
     pub options: BuildOptions,
@@ -97,7 +97,7 @@ pub struct BuildProfile {
     pub scenes: Vec<BuildScene>,
 }
 
-/// `[build].target` → Unity `BuildTargetGroup` 名字。
+/// `[build].target` → `BuildTargetGroup` 名字。
 ///
 /// 未知目标返回 `Unknown`（而不是猜一个最接近的组）。
 pub fn target_group(target: &str) -> &'static str {
@@ -165,7 +165,7 @@ impl BuildProfile {
 
     /// 构建前的守卫：至少有一个启用场景、目标与输出目录非空，且启用场景必须为可构建格式。
     ///
-    /// 对应 Unity `BuildPipeline.BuildPlayer` 在没有场景时直接失败的行为。
+    /// 对应 `BuildPipeline.BuildPlayer` 在没有场景时直接失败的行为。
     pub fn validate(&self) -> Result<(), String> {
         if self.target.trim().is_empty() {
             return Err("构建目标不能为空".into());
@@ -234,7 +234,7 @@ mod tests {
     }
 
     #[test]
-    fn target_groups_match_unity_names() {
+    fn target_groups_match_names() {
         assert_eq!(target_group("windows"), "Standalone");
         assert_eq!(target_group("Linux"), "Standalone");
         assert_eq!(target_group("android"), "Android");

@@ -29,9 +29,7 @@ android/app/src/main/jniLibs/
 !launcher/src-tauri/icons/*.png
 !launcher/src-tauri/gen/android/app/src/main/res/**/*.png
 # User-project art assets are build inputs too (fishing slice sprites).
-# Fishing project art is generated locally: either reference art
-# (scripts/sync_fishing_art.py) or original placeholders
-# (scripts/gen_placeholder_sprites.py). Never commit extracted assets.
+# Fishing art is generated locally by scripts/gen_placeholder_sprites.py.
 projects/fishing/assets/sprites/
 !editor/src-tauri/icons/*.png
 

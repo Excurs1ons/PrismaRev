@@ -1,4 +1,4 @@
-//! 统一 CRT 调度器（Unity Custom Render Texture 管理系统）。
+//! 统一 CRT 调度器（Custom Render Texture 管理系统）。
 //!
 //! 引擎底层每帧遍历所有注册的 [`RenderTexture`]，按各自配置
 //! （[`RtUpdateMode`] + period + 绑定 shader）决定是否执行一次全屏 blit：
@@ -327,7 +327,7 @@ impl RenderPassNode for RenderTextureScheduler {
                     };
 
                     // 任意旧布局 → COLOR_ATTACHMENT_OPTIMAL。全屏重画，
-                    // 无内容保留需求（丢弃式更新，同 Unity Realtime 默认）。
+                    // 无内容保留需求（丢弃式更新，同 Realtime 默认）。
                     let barrier = vk::ImageMemoryBarrier2::default()
                         .old_layout(vk::ImageLayout::UNDEFINED)
                         .new_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
