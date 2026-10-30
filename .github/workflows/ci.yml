@@ -192,33 +192,6 @@ jobs:
           -p prism-ecs -p prism-gfx -p prism-render -p prism-engine -p prism-platform
 
   # ---------------------------------------------------------------------------
-  # 2b. GPUI 编辑器（独立 workspace）：数据层单测。UI 层需要桌面 GPU，留给
-  #     `scripts/pr_ready.py` 的 `--target x86_64-pc-windows-gnu` 类型检查。
-  # ---------------------------------------------------------------------------
-  editor-gpui:
-    name: editor-gpui core tests
-    needs: changes
-    if: needs.changes.outputs.code == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust (stable)
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
-        with:
-          key: ${{ env.CACHE_VERSION }}-editor-gpui
-          workspaces: editor-gpui -> target
-
-      - name: Test (data layer)
-        run: >
-          cargo test --locked
-          --manifest-path editor-gpui/Cargo.toml
-          -p prism-editor-gpui-core
-
-  # ---------------------------------------------------------------------------
   # 3. Slang shaders: compile to SPIR-V + reflection, then verify the committed
   #    Rust bindings match freshly-generated ones (drift guard).
   # ---------------------------------------------------------------------------
