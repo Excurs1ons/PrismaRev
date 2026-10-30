@@ -1,4 +1,4 @@
-#!/usr/bin/env pwsh
+﻿#!/usr/bin/env pwsh
 <#
 .SYNOPSIS
     Build PrismaRev for Android arm64-v8a: compile the game Rust cdylib

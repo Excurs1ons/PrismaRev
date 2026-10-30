@@ -1,4 +1,4 @@
-# PrismaRev 一键构建脚本 (Windows)
+﻿# PrismaRev 一键构建脚本 (Windows)
 # 用法: 在 PowerShell 中 cd 到本目录后执行  .\run.ps1
 # 需要: 已安装 Vulkan SDK (默认 D:\VulkanSDK\1.4.350.0，自带 slangc) 和 Rust
 $ErrorActionPreference = "Stop"

@@ -1400,6 +1400,7 @@ build-std 档绝对值更小，但 64 KB 段对齐的结论不变。
 
 ```bash
 bash scripts/build-dist.sh --size projects/prisma
+powershell -File scripts/build-dist.ps1 -Size projects/prisma   # Windows 主机，等价
 ```
 
 = `tiny` profile（`opt-level = "z"` + fat LTO + `cu=1` + `panic=abort` + strip）
