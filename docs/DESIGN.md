@@ -1045,3 +1045,31 @@ cp target/release/prisma /tmp/p && strip /tmp/p && ls -l /tmp/p   # strip 后（
    「需要开哪个 feature」，不要静默降级（`Subsystem::Audio` 已按此实现）。
 4. **模板 = `Cargo.toml` 的 feature 列表 + `build_app()` 的子系统列表**；两者必须一致
    （开了 feature 却不装子系统等于白编译，装了子系统却没开 feature 会告警）。
+
+### 12.4 体积账本（每块砖值多少字节）
+
+方法：`scripts/size_report.py` 临时改写 `projects/prisma` 的 feature 列表、按同一
+`release` profile 构建、记录未 strip 二进制大小。差值只来自 feature。
+
+| 砖块 | Δ 二进制（未 strip） | 说明 |
+|---|---|---|
+| `audio`（cpal+firewheel+symphonia） | **+4.14 MB** | 体积大头，50 个 crate 的运行时栈 |
+| `pathtrace` | +135 KB | 1.6k 行 + SPIR-V + BLAS/TLAS |
+| `physics` | +3 KB | 代码是死代码（`physics_runner` 未接线），只多编译时间 |
+| base（全关） | 10.24 MB | 见下方构成 |
+
+按 crate 归因（`nm -S`，base 构建）：自研代码合计 **~731 KB**（`prism-render` 205 KB、
+`prism-scene` 192 KB、`prism-ecs` 107 KB、`prism-engine` 98 KB、其余 ~130 KB），
+其余 ~4.7 MB 是 Rust 基线 + 窗口栈 + 第三方。
+
+两个必须记住的结论：
+
+1. **代码行数 ≈ 体积是错的**。1.6k 行的路径追踪只值 135 KB；一个「没接线」的物理模块
+   几乎为 0（链接器会删掉），但它仍然消耗 40 个 crate 的编译时间和依赖面。
+2. **3D/2D 拆分对体积几乎无收益**（3D pass 合计 ~200 KB 量级），它的收益是
+   **依赖面、编译时间、API 清晰度**。真正能改变二进制量级的是：
+   第三方大件（audio 4.1 MB、UI/字体栈、窗口栈）、release profile（`panic = "abort"`、
+   `lto = "fat"`、`codegen-units = 1`、strip）。
+3. **组件不是体积单位**。组件是 POD 数据 + 反射元数据，`prism-scene` 整个 crate
+   才 192 KB；关掉一个组件不改变二进制（代码共享、链接器本来就只保留被调用路径），
+   只影响场景数据与注册表。组件级的取舍是**运行期复杂度**问题，不是体积问题。
