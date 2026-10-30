@@ -1134,3 +1134,19 @@ cp target/release/prisma /tmp/p && strip /tmp/p && ls -l /tmp/p   # strip 后（
 结论：**5 MB 里真正属于「引擎」的只有 0.85 MB**，其余是语言基线、窗口栈和两个
 可以替换的第三方件（regex 日志、字体栈）。下一步优先级：去掉 env_logger 的 regex
 （−0.47 MB）> `ui` 砖块（−0.23 MB）> 序列化（−0.14 MB）。
+
+#### 跨平台二进制体积（`dist` profile，strip 后）
+
+| 目标 | 产物 | 大小 | text |
+|---|---|---|---|
+| Linux x86_64 / aarch64（x11 + wayland） | `prisma` | 5.12 MB | 4.97 MB |
+| Linux（仅 x11） | `prisma` | 4.07 MB | — |
+| Windows `x86_64-pc-windows-gnu` | `prisma.exe` | 4.11 MB | 4.09 MB |
+| Android `aarch64-linux-android` | `libprisma.so` | **3.26 MB** | 3.15 MB |
+
+- Windows 与「Linux x11-only」几乎一样（4.11 vs 4.07 MB），差值就是 wayland 栈——**印证了
+  0.84 MB 的窗口栈只在 Linux 双后端时存在**。
+- Android 最小（没 winit 平台栈，只有 NDK 胶水）；APK 体积另算（`.pak` 资产 + Java 壳）。
+- 交叉编译在本机可复现：Windows 用 mingw 链接器；Android 用
+  `scripts/make-ndk-host-native.sh` 处理过的 NDK（aarch64 主机 + x86_64 prebuilt shim），
+  需要同时设 `CC_/CXX_/AR_aarch64_linux_android`（`android-activity` 的 build.rs 会找 `clang++`）。
