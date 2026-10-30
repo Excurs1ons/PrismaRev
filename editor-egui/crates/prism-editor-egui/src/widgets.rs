@@ -6,7 +6,7 @@
 
 use egui::Ui;
 use egui_phosphor::regular as icons;
-use prism_editor_core::{FieldSchema, FieldWidget, TypeSchema};
+use prism_editor_core::{FieldSchema, FieldWidget, Schema, TypeSchema};
 use serde_json::Value;
 
 /// 资产拖拽载荷：从 Project 面板拖到层级 / 检查器字段 / 目录。
@@ -27,6 +27,7 @@ pub enum CardAction {
 /// 同 [`component_card`]，但路径字段带资产选择器。
 pub fn component_card_with_assets(
     ui: &mut Ui,
+    registry: &Schema,
     component: &TypeSchema,
     value: &Value,
     actions: &mut Vec<CardAction>,
@@ -69,7 +70,7 @@ pub fn component_card_with_assets(
                 if field.name == "type_id" {
                     continue;
                 }
-                field_row_with_assets(ui, field, field_value, set, assets);
+                field_row_at(ui, registry, field, field_value, "", set, assets);
             }
             let _ = &component;
         });
@@ -104,16 +105,18 @@ fn asset_matches(name: &str, path: &str) -> bool {
 }
 
 /// 带资产选择器的字段行（路径字段右侧多一个 `…` 按钮，列出 `assets` 里的候选）。
-pub fn field_row_with_assets(
+fn field_row_at(
     ui: &mut Ui,
+    registry: &Schema,
     field: &FieldSchema,
     value: &Value,
+    prefix: &str,
     set: &mut dyn FnMut(&str, Value),
     assets: &[String],
 ) {
     let widget = field.widget();
     let label = field.label();
-    let name = field.name.clone();
+    let name = format!("{prefix}{}", field.name);
 
     match widget {
         FieldWidget::ReadOnly => {
@@ -291,18 +294,149 @@ pub fn field_row_with_assets(
                     });
             });
         }
-        FieldWidget::List | FieldWidget::Option | FieldWidget::Struct => {
-            ui.horizontal(|ui| {
-                ui.label(label);
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(
-                        egui::RichText::new(format_json(value))
-                            .monospace()
-                            .weak()
-                            .size(10.0),
-                    );
-                });
-            });
+        FieldWidget::List => {
+            json_row(ui, label, value);
+        }
+        // `Option<T>`: a checkbox says whether the value exists, then the inner
+        // scalar is edited in place. Authors used to have to hand-edit JSON to
+        // set `Style.width` / `Style.height`.
+        FieldWidget::Option => {
+            let inner = field.inner.as_deref();
+            let mut enabled = !value.is_null();
+            if ui.checkbox(&mut enabled, label).changed() {
+                set(
+                    &name,
+                    if enabled {
+                        inner.map(default_value).unwrap_or(Value::Null)
+                    } else {
+                        Value::Null
+                    },
+                );
+            }
+            if enabled {
+                if let Some(inner) = inner {
+                    ui.horizontal(|ui| {
+                        ui.add_space(16.0);
+                        optional_scalar(ui, &name, inner, value, set);
+                    });
+                }
+            }
+        }
+        // Nested struct (`Style.anchors`, `Style.pivot`, `Margin` …): recurse
+        // through the registry so every leaf keeps its real widget and path.
+        FieldWidget::Struct => {
+            let fields = field
+                .struct_type
+                .as_deref()
+                .and_then(|name| registry.get(name))
+                .map(|schema| schema.fields.clone())
+                .unwrap_or_default();
+            if fields.is_empty() {
+                json_row(ui, label, value);
+            } else {
+                egui::CollapsingHeader::new(label)
+                    .id_salt(("struct", name.clone()))
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        let child_prefix = format!("{name}.");
+                        for child in &fields {
+                            let child_value =
+                                value.get(&child.name).cloned().unwrap_or(Value::Null);
+                            field_row_at(
+                                ui,
+                                registry,
+                                child,
+                                &child_value,
+                                &child_prefix,
+                                set,
+                                assets,
+                            );
+                        }
+                    });
+            }
+        }
+    }
+}
+
+/// 嵌套字段的灰色 JSON 兜底（列表、无法解析的 struct）。
+fn json_row(ui: &mut Ui, label: &str, value: &Value) {
+    ui.horizontal(|ui| {
+        ui.label(label);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.label(
+                egui::RichText::new(format_json(value))
+                    .monospace()
+                    .weak()
+                    .size(10.0),
+            );
+        });
+    });
+}
+
+/// `Option<T>` 有值时画哪个控件；完全由 `inner.widget()` 决定，不猜 JSON 类型。
+fn default_value(field: &FieldSchema) -> Value {
+    match field.widget() {
+        FieldWidget::Bool => Value::Bool(false),
+        FieldWidget::Integer => Value::from(0),
+        FieldWidget::Float => Value::from(0.0),
+        FieldWidget::Text | FieldWidget::Multiline => Value::String(String::new()),
+        FieldWidget::Vector { len } => Value::Array(vec![Value::from(0.0); len]),
+        FieldWidget::Color { alpha } => {
+            let mut channels = vec![Value::from(1.0), Value::from(1.0), Value::from(1.0)];
+            if alpha {
+                channels.push(Value::from(1.0));
+            }
+            Value::Array(channels)
+        }
+        _ => Value::Null,
+    }
+}
+
+fn optional_scalar(
+    ui: &mut Ui,
+    path: &str,
+    inner: &FieldSchema,
+    value: &Value,
+    set: &mut dyn FnMut(&str, Value),
+) {
+    match inner.widget() {
+        FieldWidget::Bool => {
+            let mut checked = value.as_bool().unwrap_or(false);
+            if ui.checkbox(&mut checked, "").changed() {
+                set(path, Value::Bool(checked));
+            }
+        }
+        FieldWidget::Integer => {
+            let mut current = value.as_i64().unwrap_or(0);
+            if ui
+                .add(egui::DragValue::new(&mut current).speed(1.0))
+                .changed()
+            {
+                set(path, Value::from(current));
+            }
+        }
+        FieldWidget::Float => {
+            let mut current = value.as_f64().unwrap_or(0.0) as f32;
+            if ui
+                .add(egui::DragValue::new(&mut current).speed(0.01))
+                .changed()
+            {
+                set(path, Value::from(current as f64));
+            }
+        }
+        FieldWidget::Text => {
+            let mut current = value.as_str().unwrap_or_default().to_string();
+            if ui.text_edit_singleline(&mut current).changed() {
+                set(path, Value::String(current));
+            }
+        }
+        _ => {
+            ui.label(
+                egui::RichText::new(format_json(value))
+                    .monospace()
+                    .weak()
+                    .size(10.0),
+            );
         }
     }
 }

@@ -189,14 +189,77 @@ pub fn read_document(root: &Path, relative: &str) -> io::Result<SceneDoc> {
 }
 
 /// 写回一个文档（自动创建父目录，2 空格缩进，与作者格式一致）。
+///
+/// 保存必须是**原子**的：先写 `<path>.tmp`、`sync_all`，把旧文件滚成 `<path>.bak`，
+/// 再 `rename` 到正式路径，最后回读解析一次。任何一步失败都恢复 `.bak`，
+/// 避免断电 / 磁盘写满时留下一个截断的 JSON。
 pub fn write_document(root: &Path, relative: &str, doc: &SceneDoc) -> io::Result<()> {
     let path = root.join(relative);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let text = serde_json::to_string_pretty(doc)
+    let mut text = serde_json::to_string_pretty(doc)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-    fs::write(path, text + "\n")
+    text.push('\n');
+    atomic_write(&path, &text)
+}
+
+/// 与 `path` 同目录的兄弟文件（追加后缀，保留原扩展名）。
+fn sibling_path(path: &Path, suffix: &str) -> PathBuf {
+    let mut name = path.as_os_str().to_os_string();
+    name.push(suffix);
+    PathBuf::from(name)
+}
+
+fn atomic_write(path: &Path, text: &str) -> io::Result<()> {
+    use std::io::Write as _;
+
+    let tmp = sibling_path(path, ".tmp");
+    let bak = sibling_path(path, ".bak");
+    {
+        let mut file = fs::File::create(&tmp)?;
+        file.write_all(text.as_bytes())?;
+        file.sync_all()?;
+    }
+
+    let had_original = path.exists();
+    if had_original {
+        let _ = fs::remove_file(&bak);
+        if let Err(error) = fs::rename(path, &bak) {
+            let _ = fs::remove_file(&tmp);
+            return Err(error);
+        }
+    }
+
+    // Windows 上 rename 不能覆盖已存在的目标，所以上一步先把原文件移走。
+    if let Err(error) = fs::rename(&tmp, path) {
+        if had_original {
+            let _ = fs::rename(&bak, path);
+        }
+        let _ = fs::remove_file(&tmp);
+        return Err(error);
+    }
+
+    // 回读校验：写进去的东西必须能解析回 `SceneDoc`，否则回滚。
+    let verified = fs::read_to_string(path)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+        .and_then(|text| {
+            serde_json::from_str::<SceneDoc>(&text)
+                .map(|_| ())
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+        });
+    if let Err(error) = verified {
+        if had_original {
+            let _ = fs::rename(&bak, path);
+        } else {
+            let _ = fs::remove_file(path);
+        }
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("saved document failed to read back: {error}"),
+        ));
+    }
+    Ok(())
 }
 
 /// 资产重命名 / 移动（只允许 `assets/` 内），目标存在时失败。
@@ -495,6 +558,33 @@ mod tests {
             "assets/scenes/x.scene.json"
         )
         .is_err());
+    }
+
+    #[test]
+    fn write_document_is_atomic_and_keeps_one_backup() {
+        let project = TempProject::new();
+        let relative = "assets/scenes/atomic.scene.json";
+        let path = project.root.join(relative);
+        let bak = sibling_path(&path, ".bak");
+        let tmp = sibling_path(&path, ".tmp");
+
+        let mut doc = SceneDoc::default();
+        doc.add_named_child(None, "first");
+        write_document(&project.root, relative, &doc).unwrap();
+        assert!(path.exists());
+        assert!(!tmp.exists(), "临时文件必须被 rename 掉");
+        assert!(!bak.exists(), "首次保存没有旧文件可备份");
+
+        let mut doc = SceneDoc::default();
+        doc.add_named_child(None, "second");
+        write_document(&project.root, relative, &doc).unwrap();
+
+        assert!(bak.exists(), "覆盖保存应留下上一份 .bak");
+        let backup: SceneDoc = serde_json::from_str(&fs::read_to_string(&bak).unwrap()).unwrap();
+        assert_eq!(backup.entities[0].display_name(), "first");
+        let current: SceneDoc = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(current.entities[0].display_name(), "second");
+        assert!(!tmp.exists());
     }
 
     #[test]
