@@ -2571,3 +2571,64 @@ mod render_mode_tests {
         assert_eq!(SceneRenderMode::from_settings(&settings), None);
     }
 }
+
+#[cfg(test)]
+mod window_smoke_tests {
+    use super::*;
+
+    fn run_frame(mut draw: impl FnMut(&mut egui::Ui, &mut Workspace, &mut UiState)) {
+        let ctx = egui::Context::default();
+        let mut workspace = Workspace::sample();
+        let mut state = UiState::new();
+        ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                draw(ui, &mut workspace, &mut state);
+            });
+        });
+    }
+
+    #[test]
+    fn every_editor_panel_builds_a_frame() {
+        run_frame(|ui, workspace, state| hierarchy(ui, workspace, state));
+        run_frame(|ui, workspace, state| inspector(ui, workspace, state));
+        run_frame(|ui, workspace, state| assets(ui, workspace, state));
+        run_frame(|ui, workspace, state| docs(ui, workspace, state));
+        run_frame(|ui, workspace, state| log(ui, workspace, state));
+        run_frame(|ui, workspace, state| history(ui, workspace, state));
+        run_frame(|ui, _workspace, _state| {
+            let mut settings = prism_engine::render_settings::RenderSettings::default();
+            let mut viewport_scale = 1.0;
+            let _ = render_graph(ui, None, &mut settings, &mut viewport_scale);
+        });
+        run_frame(|ui, _workspace, state| project_settings(ui, None, state));
+        run_frame(|ui, workspace, state| {
+            let mut prefs = Preferences::default();
+            preferences(ui, &mut prefs, workspace, state);
+        });
+        run_frame(|ui, workspace, _state| theme(ui, workspace));
+        run_frame(|ui, workspace, state| build(ui, workspace, state));
+        run_frame(|ui, _workspace, _state| shortcuts(ui));
+        run_frame(|ui, _workspace, _state| about(ui));
+        run_frame(|ui, _workspace, state| tools(ui, state));
+    }
+
+    #[test]
+    fn boolean_window_builds_and_can_be_closed() {
+        let ctx = egui::Context::default();
+        let mut open = true;
+        ctx.run(egui::RawInput::default(), |ctx| {
+            boolean_window(ctx, &mut open, "Test", |ui| {
+                ui.label("content");
+            });
+        });
+        assert!(open);
+    }
+
+    #[test]
+    fn panel_row_metrics_follow_compact_preference() {
+        assert_eq!(tree_row_height(true), 15.0);
+        assert_eq!(tree_row_height(false), 18.0);
+        assert_eq!(row_height(true), 16.0);
+        assert_eq!(row_height(false), 20.0);
+    }
+}

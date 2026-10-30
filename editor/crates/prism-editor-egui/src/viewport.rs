@@ -98,6 +98,9 @@ pub struct ViewportState {
     /// 当前 gizmo 工具（W / E / R）。
     pub tool: GizmoTool,
     gizmo: Option<GizmoDrag>,
+    orbit_last_pos: Option<egui::Pos2>,
+    /// 右键轨道拖动锁定到首次明显移动的轴，避免微小抖动同时旋转两个轴。
+    orbit_horizontal: Option<bool>,
     /// 框选起点 / 当前点（视口局部坐标）。
     box_start: Option<egui::Pos2>,
     box_current: Option<egui::Pos2>,
@@ -130,6 +133,8 @@ impl ViewportState {
             fps_window_frames: 0,
             tool: GizmoTool::Translate,
             gizmo: None,
+            orbit_last_pos: None,
+            orbit_horizontal: None,
             box_start: None,
             box_current: None,
         })
@@ -489,11 +494,35 @@ impl ViewportState {
         }
         if self.kind() == ViewKind::Scene {
             if response.dragged_by(egui::PointerButton::Middle) {
-                pan_camera(&mut workspace.camera, pointer_delta.x, pointer_delta.y);
+                if let Some(pos) = response.interact_pointer_pos() {
+                    let delta = self
+                        .orbit_last_pos
+                        .replace(pos)
+                        .map(|last| pos - last)
+                        .unwrap_or_default();
+                    pan_camera(&mut workspace.camera, delta.x, delta.y);
+                }
                 self.dirty = true;
             } else if response.dragged_by(egui::PointerButton::Secondary) {
-                workspace.camera.orbit(pointer_delta.x, pointer_delta.y);
+                if let Some(pos) = response.interact_pointer_pos() {
+                    let delta = self
+                        .orbit_last_pos
+                        .replace(pos)
+                        .map(|last| pos - last)
+                        .unwrap_or_default();
+                    if self.orbit_horizontal.is_none() && (delta.x != 0.0 || delta.y != 0.0) {
+                        self.orbit_horizontal = Some(delta.x.abs() >= delta.y.abs());
+                    }
+                    match self.orbit_horizontal {
+                        Some(true) => workspace.camera.orbit(delta.x, 0.0),
+                        Some(false) => workspace.camera.orbit(0.0, delta.y),
+                        None => {}
+                    }
+                }
                 self.dirty = true;
+            } else {
+                self.orbit_last_pos = None;
+                self.orbit_horizontal = None;
             }
         }
         if self.kind() == ViewKind::Scene
@@ -541,6 +570,12 @@ impl ViewportState {
             self.gizmo = None;
             // 交互结束：下一次拖动 / 字段输入必然开新的撤销步。
             workspace.end_interaction();
+        }
+        if response.drag_stopped_by(egui::PointerButton::Middle)
+            || response.drag_stopped_by(egui::PointerButton::Secondary)
+        {
+            self.orbit_last_pos = None;
+            self.orbit_horizontal = None;
         }
         if response.hovered() {
             let scroll = ui.input(|i| i.raw_scroll_delta.y);
