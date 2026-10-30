@@ -21,7 +21,7 @@ create() {
 # 区域
 create "area/render"    "1f77b4" "Vulkan 渲染、shader、swapchain"
 create "area/scene"     "2ca02c" "prism-scene / 反射 / RSCN"
-create "area/editor"    "9467bd" "Web 编辑器与 prism-editor-api"
+create "area/editor"    "9467bd" "编辑器与 prism-editor-api"
 create "area/engine"    "ff7f0e" "engine / app / platform / audio"
 create "area/assets"    "8c564b" "asset / cooker / build-pipeline"
 create "area/game"      "e377c2" "projects/ 用户游戏项目"

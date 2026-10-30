@@ -1,9 +1,9 @@
-//! PrismaRev web 编辑器的**后端数据层**。
+//! PrismaRev 编辑器 / MCP 的**后端数据层**。
 //!
 //! 这一层刻意保持纯净：只依赖 `prism-scene` / `prism-reflect`，
 //! **不依赖 egui、不依赖 Vulkan / 引擎 / 渲染**。它把「场景 schema」和
-//! 「`.scene.json` 文档 IO」暴露成可序列化的数据结构，供 Tauri 命令
-//! （见 `editor/src-tauri`）直接转成 JSON 传给 Vue 前端。
+//! 「`.scene.json` 文档 IO」暴露成可序列化的数据结构，供 MCP 工具
+//! （见 `crates/prism-editor-mcp`）直接转成 JSON。
 //!
 //! 职责划分：
 //! - [`schema`]：把 `prism-scene` 的组件注册表投影成前端可消费的属性面板

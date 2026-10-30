@@ -10,7 +10,7 @@
 //! | `BuildReport.steps` / `BuildStep` | [`BuildReport::steps`] |
 //! | `BuildReport.files` / `BuildFile` | [`BuildReport::files`] |
 //!
-//! 这里只做 **DTO**：真正执行构建的是 `editor/src-tauri`
+//! 这里只做 **DTO**：真正执行构建的是编辑器壳
 //! （`cargo build` + `build-scenes` + 复制产物到输出目录）。它把结果整理成
 //! 引擎的形状，供「构建项目」面板显示产物大小 / 各阶段耗时。
 //!

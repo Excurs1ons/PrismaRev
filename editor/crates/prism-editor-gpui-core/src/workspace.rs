@@ -333,7 +333,7 @@ impl Workspace {
         workspace
     }
 
-    /// 从 Web 编辑器的 fixture（`editor/public/demo.json`）恢复全部数据。
+    /// 从编辑器 fixture（`editor/public/demo.json`）恢复全部数据。
     pub fn load_fixture(value: &Value) -> Self {
         let mut workspace = Self::sample();
 

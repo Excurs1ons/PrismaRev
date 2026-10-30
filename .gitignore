@@ -31,20 +31,17 @@ android/app/src/main/jniLibs/
 # User-project art assets are build inputs too (fishing slice sprites).
 # Fishing art is generated locally by scripts/gen_placeholder_sprites.py.
 projects/fishing/assets/sprites/
-!editor/src-tauri/icons/*.png
 
 # Python 自检脚本缓存
 __pycache__/
 *.pyc
 
-# 场景保存的原子写临时文件与备份（见 editor-gpui core project.rs）
+# 场景保存的原子写临时文件与备份（见 editor core project.rs）
 *.json.tmp
 *.json.bak
 
 # Node / Vite frontends (launcher + editor)
 node_modules/
-/editor/dist/
-# Tauri 生成的 capability schemas（tauri dev/build 写出）
 **/src-tauri/gen/schemas/
 
 # Runtime logs

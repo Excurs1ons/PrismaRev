@@ -70,13 +70,13 @@ cargo run -p prism-editor-mcp -- --project projects/fishing
 - 不实现 resource / prompt / sampling；`tools/list` 之外只有 `ping`。
 - 没有并发保护：同一个文档别同时开两个 agent 写（`document_write` 是整文件覆盖）。
 
-## egui 编辑器（`editor-egui/`）
+## egui 编辑器（`editor/`）
 
 egui 编辑器是**独立进程**（Rust + egui-ash），窗口截图和视口零拷贝图像都只能
 在它自己的进程里取，所以它开了一个本地控制通道，MCP 通过它下命令：
 
 ```text
-editor-egui 启动 → 监听 127.0.0.1:<随机端口> → 写 <项目根>/target/editor-egui/control.port
+editor 启动 → 监听 127.0.0.1:<随机端口> → 写 <项目根>/target/editor-egui/control.port
 MCP 工具        → 读端口文件 → TCP 一行 JSON 请求 / 一行 JSON 回执
 ```
 
@@ -85,7 +85,7 @@ MCP 工具        → 读端口文件 → TCP 一行 JSON 请求 / 一行 JSON �
 
 | 工具 | 参数 | 作用 |
 |---|---|---|
-| `editor_launch` | `command?` `wait_ms?` | 起 `editor-egui/target/{release,debug}/prism-editor-egui`（没构建过退回 `cargo run`），等控制通道就绪 |
+| `editor_launch` | `command?` `wait_ms?` | 起 `editor/target/{release,debug}/prism-editor-egui`（没构建过退回 `cargo run`），等控制通道就绪 |
 | `editor_status` | — | 帧数、当前场景、选中实体、Play / 暂停、未保存标记、项目根 |
 | `editor_capture` | `target`(`window`/`scene`/`game`) `path?` `size?` | 抓整窗（UI + 视口）或某个视口的引擎离屏图，返回 PNG 路径 |
 | `editor_ui` | `action`(`snapshot`/`click`/`set`) `node?` `value?` | UI 节点树：快照 / 按节点点击 / 按节点设值 |

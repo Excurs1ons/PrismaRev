@@ -1,13 +1,13 @@
-# editor-egui
+# editor
 
 PrismaRev 的 **egui 编辑器**（egui + ash Vulkan）。独立 workspace，不挂根 workspace。
 
-- 布局与功能对齐 Web 编辑器（`editor/`）与引擎的经典布局：菜单栏 / 主工具栏 /
+- 沿用经典桌面编辑器布局：菜单栏 / 主工具栏 /
   状态栏 + split-tree docking（可拖 splitter、tab 切换、浮动窗口）。
 - 菜单 / 快捷键按项目约定（含 `Ctrl+1..5` 面板、命名布局、Prefab Variant）。
 - 交互：菜单二/三级、层级拖拽改父级、检查器多选批量、W/E/R 三种 gizmo、
   框选、标签页拖拽分屏/浮动、资产拖拽（目录移动 / 层级实例化 / 字段写入）。
-- 数据层完全复用 `editor-gpui/crates/prism-editor-gpui-core`（UI 框架无关：
+- 数据层完全复用 `editor/crates/prism-editor-gpui-core`（UI 框架无关：
   文档模型、schema、撤销栈、dock 树、日志缓冲、资产树、i18n、项目读写）。
 - **Scene / Game 视口零拷贝**：`prism-render` 渲染到自己的离屏 `VkImage`，
   编辑器和引擎共用同一个 `VkDevice` / 队列，egui 直接把该图像的 `VkImageView`
@@ -16,7 +16,7 @@ PrismaRev 的 **egui 编辑器**（egui + ash Vulkan）。独立 workspace，不
 ## 运行
 
 ```bash
-cd editor-egui
+cd editor
 cargo run -p prism-editor-egui
 ```
 
@@ -93,7 +93,7 @@ prism-render GraphRenderer（离屏 OffscreenTarget，R8G8B8A8_UNORM）
 | 模拟 | 永远编辑态（只传播层级） | Play 时跑 `fixed_update` / `update` / `late_update` |
 | 引擎实例 | 自己的 `Engine` + `GraphRenderer` | 自己的 `Engine` + `GraphRenderer`（首次显示时创建） |
 
-两个视口各持有一个引擎实例（与 Tauri 编辑器的两个视口线程同构），所以各自的
+两个视口各持有一个引擎实例，所以各自的
 相机不会互相干扰；文档变化时两份世界一起重新加载。
 
 ## 已验证 / 未验证
@@ -104,4 +104,4 @@ prism-render GraphRenderer（离屏 OffscreenTarget，R8G8B8A8_UNORM）
   Vulkan 设备），运行时行为（首帧呈现、resize、字体加载、docking 拖拽手感）需要
   在桌面上复核。
 - ❌ Android：egui-ash 支持 `android-game-activity`，但本 crate 还没有接入
-  `android_main`（Android 主线的编辑器仍然是 Tauri 版）。
+  `android_main`（Android 上还没有接入 egui 编辑器）。

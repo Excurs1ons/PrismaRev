@@ -51,9 +51,9 @@ deviating from those conventions is a bug. (`README.md` is the human-facing over
   `run_on_android` helper). **UI-framework-free**; the Android JNI entry lives in the user project.
 - `crates/prism-platform` — platform abstraction (window system, Vulkan surface, input routing).
 - `crates/prism-editor-tool` — editor tools (heightmap generator CLI, terrain utilities).
-- `crates/prism-editor-api` — web 编辑器的**数据层**：把 `prism-scene` 组件注册表投影成
-  属性面板 schema + `.scene.json` 定位/读写/校验。UI-framework-free、Vulkan-free，被 `editor/`
-  的 Tauri 命令直接调用；也是唯一允许 `editor/` 依赖的 crate。
+- `crates/prism-editor-api` — 编辑器 / MCP 的**数据层**：把 `prism-scene` 组件注册表投影成
+  属性面板 schema + `.scene.json` 定位/读写/校验。UI-framework-free、Vulkan-free，被
+  `crates/prism-editor-mcp` 使用。
 - `crates/prism-build-pipeline` — offline build pipeline (GI baking, asset cooking, heightmap CLI).
 - `crates/prism-audio` — audio subsystem.
 - `crates/prism-asset` — **runtime** asset layer only: `AssetId`/`Handle`, `.pak`
@@ -69,152 +69,10 @@ deviating from those conventions is a bug. (`README.md` is the human-facing over
   桌面工程管理器。桌面端保留 `launch_game` 只为调试启动页：二进制定位顺序
   `PRISMREV_GAME_BIN` → 启动壳同目录 → `projects/prisma/target/{debug,release}`，
   不查 `PATH`。
-- `editor/` — **web UI 编辑器**（Tauri 2 + Vue 3 + Vite）：层级树（拖拽重排/改父级/就地重命名/
-  多选）+ schema 驱动的组件检查器（拖动调值、取色盘、属性检索）、撤销/重做（按字段合并连续输入）、
-  组件复制粘贴、模板新建、重命名/删除、**Cook**、资产管理器（检索/分类/引用位置）与
-  **预制体**编辑。Rust 侧只是 `prism-editor-api` 的薄命令封装，
-  **不链接** cooker/build 流水线（Cook 以子进程调用
-  `cargo run -p prism-build-pipeline -- cook <file>`）。desktop-only，
-  **own standalone workspace**, NOT a root member.
-  - 布局是 **split-tree docking + 自由浮动窗口**（`editor/src/dock.ts` +
-    `DockNode.vue`/`DockLayout.vue`）：splitter 只改共享 `ratio`，所以同侧对齐的
-    面板一起缩放；tab 拖到别的 leaf 中央合并、边缘分屏，拖到主窗口左/右/底三边
-    （`dockPanelAtEdge`）会新开整列/整行，拖到面板区域外（或按住 Alt）变成浮动
-    窗口；浮动窗口可移动/缩放，拖回 leaf 或窗口三边会重新停靠。布局持久化在
-    `prisma-editor.dock.v4`（`{version,dock,floating}`，自动迁移旧 v3 tree）。
-    顶边是工具栏，不作为停靠目标。
-  - 标签/浮动窗口拖拽用 **pointer events + `setPointerCapture`**，不用 HTML5 DnD：
-    Windows WebView2 会截获原生拖放。资产拖到字段仍走 HTML5 DnD，所以窗口配置必须
-    `dragDropEnabled: false`。
-  - docking 的类名是 `.dock-row` / `.dock-col`，**不要**复用 `.row` / `.column`：
-    `.row` 是属性面板的全局网格类，会把 `align-items/gap/padding` 带进 splitter，
-    导致 splitter 变成 6×6 且面板间距错乱。
-  - 图标统一用 `lucide-vue-next`（`Play/Stop/Square/X/Check/Chevron*/Eye/EyeOff/Plus/Minus/RefreshCw`），
-    不要用 `▶ ■ ✓ ✕ ▾ ▸ ›` 这类 Unicode 符号。
-  - 顶部是经典三段式：菜单栏（文件/编辑/构建/窗口/帮助）、主工具栏
-    （只放场景选择 + Play）、底部状态栏。撤销/重做/保存、构建场景包、新建文档都在
-    菜单里；离线工具在「构建 → 离线工具」，渲染设置与主题在「编辑 → 项目设置 / 主题」，渲染图在
-    「窗口 → 分析」。新建实体在层级面板顶部（类型下拉 + 「新建实体」按钮）。
-    菜单/子菜单数据集中在 `App.vue` 的 `MENUS` computed（`children` 表示子菜单）；
-    新增命令时同时补菜单项与快捷键。渲染图、渲染设置、离线工具、快捷键、关于都是
-    **dock 面板**（`PANELS` + `DockLayout` 的命名 slot），默认并入检查器 leaf 的 tab，
-    可拖出浮动或重新分屏；不要再用带背景遮罩的 modal 实现窗口。
-  - 实体/组件操作走右键菜单：层级行 → 复制 / 删除，组件卡头 → 复制组件 / 移除组件。
-    资产树/列表也支持右键（打开文档 / 新建文件夹 / 重命名·移动 / 复制路径 / 删除）；
-    所有右键菜单用 `clampMenuPosition` 限制在视口内。
-    检查器顶部的复制/删除/存为预制体按钮已移除。预制体通过「层级实体拖到资产目录」
-    (`prefab-drop` → `editor_create_prefab_at`) 保存，可落到任意 `assets/...` 目录，
-    重名自动加 `-2` 后缀；`.prefab.json` 在资产树里递归枚举。反向拖 `.prefab.json`
-    到层级实体/空白处会实例化到该父级/根；层级行的眼睛按钮切换 `Active` 组件。
-  - 设置类窗口：`projectSettings`（`[app]`/`[window]`/`[build]` + `[render]`，写
-    `assets/settings.ini`）、`preferences`（本机 localStorage：自动保存/删除确认/
-    紧凑模式/日志上限/默认运行场景）、`theme`（本机 localStorage 的界面主题）、
-    `build`（构建项目）。从菜单打开时默认用较大的浮动面板，用户仍可拖回 dock。
-  - **主题**是纯前端配色层：`editor/src/theme.ts` 用 `THEME_TOKEN_GROUPS` 描述
-    「背景与表面 / 边框 / 文本 / 交互 / 强调 / 状态」几组 token（每个 token 对应
-    `style.css` 里同名 CSS 变量），`THEME_PRESETS` 提供「深空蓝（默认）/ 午夜紫 /
-    石墨灰 / 森林绿 / 纸白」五套预设，`applyTheme` 把 token 写到
-    `documentElement` 并设置 `color-scheme`，启动前在 `main.ts` 先套用以避免闪屏。
-    `style.css` 里**不要再写死颜色**：要么用 `var(--token)`，要么用
-    `color-mix(in srgb, var(--token) N%, transparent)` 派生透明色。主题状态存
-    `prisma-editor.theme.v1`（`{preset, overrides}`），只影响编辑器，不写项目文件。
-  - 「构建项目」= `cargo build --manifest-path projects/prisma/Cargo.toml`
-    (+`--release`) → `build-scenes` → 把 exe/scenes.pak/settings.ini 复制到
-    `[build].output_dir`（默认 `build/windows`，已 gitignore），可选构建后运行。
-    命令是 `editor_build_project`；编辑器仍不链接 cooker/build 流水线。
-  - Build Settings 的**场景列表可编辑**：勾选 `enabled`、上下移动、
-    移除、从 `assets/scenes` 添加；顺序即 `assets/scenes.json` 顺序，第一个启用项是
-    启动场景。Tauri 命令 `editor_scene_manifest` / `editor_write_scene_manifest`；
-    engine 的 `SceneManifestEntry.enabled` 与 build-scenes 都会跳过未启用项。
-  - 「日志」是独立 dock 面板（`log`），同时区分 **编辑器 / Game** 两个来源，并按
-    `error/warn/info/debug/trace/panic` 过滤。`editor_play_scene` 用 piped
-    stdout/stderr 启动游戏，读取线程把每行写入共享 ring buffer（`editor_preview_logs`
-    回填）并 emit `preview-log`；前端 `onPreviewLog` 追加到 `gameLogEntries`。
-    **进程内引擎的日志也进这个面板**（2026-10-28 起）：`editor/src-tauri` 装了一个包着
-    `env_logger` 的 `log::Log`（`EditorLogger`），把同一条记录额外写进 `PreviewState`
-    环形缓冲并 emit `preview-log`（`stream = "engine"`、带 `level`）。所以视口线程里
-    `prism_render` / `prism_engine` 的 warn/info 不用再去看终端；`RUST_LOG` 语义不变。
-    Rust 的 panic 不走 `log`，仍只在终端里。
-    面板本身是**窗口化**的（`editor/src/windowed.ts` 的 `windowRange` + `LOG_ROW_HEIGHT`）：
-    只渲染视口附近的行，其余用 spacer 占位，所以 `maxLogLines`（默认 5000、上限 20000）
-    不再等于 DOM 节点数。行的**固定 18px 高度**是前提（`.log-row` 里 `height/line-height: 18px`
-    且 `white-space: pre`，长行横向滚动 + `title` 显示全文），改行高必须同步
-    `App.vue` 的 `LOG_ROW_HEIGHT`，否则滚动位置会错位。
-  - 编辑器把**场景与预制体统一成「文档」**：同一 `{version, entities}` 形状，靠
-    `DocKind` 区分目录/后缀 —— 场景 `assets/scenes/*.scene.json`、预制体
-    `assets/prefabs/*.prefab.json`。因此层级树/检查器/撤销对两者完全通用；
-    「存为预制体」= 提取选中实体子树（`extract_subtree`，会剥掉根上的实例链接），
-    「插入」= `instantiate_prefab`（追加到场景末尾、内部父索引平移、根挂到选中实体、名字去重）。
-  - 实例**有反向链接**：插入时给预制体根打上 `prism_engine::scene::PrefabInstance`
-    （`{ prefab: <相对项目根路径> }`）。它是 `prism-scene` 里的普通组件 —— 引擎运行时不查询
-    它（纯编辑器元数据），但因为它走注册表，所以能随场景 cook/加载，不必引入 sidecar 文件。
-    基于它提供：`revert_prefab_instance`（用预制体当前内容覆盖实例，保留名字与父级）、
-    `sync_prefab_instances`（同步本文档全部同源实例，从大到小处理避免下标漂移）、
-    `unlink_prefab_instance`，以及「应用到预制体」= `extract_subtree` + 覆盖写回预制体文件。
-  - 组件字段改动**先本地即时提交**（拖动/输入要跟手），再交给 `editor_set_component_field`
-    做**反射写入**：`from_object` 还原出组件 → `Reflect::set_field` 写字段（`#[reflect(read_only)]`
-    被拒、类型经反射校验）→ `object_to_json` 还原作者 JSON，成功则静默回填（不新增撤销步）。
-    因此枚举字符串（`TextAlign`）与单字段 newtype（`Name`）都按作者 JSON 形状工作。
-  - 层级编辑也在 Rust 侧：`reparent_doc`（拒绝自父/成环）、`move_entity`（移动数组位置 +
-    全量父索引重映射）、`delete_entities`（孤儿子级变根 + 重映射）。前端只负责把拖拽判定
-    （行的上/下 25% = 兄弟插入，中间 = 挂为子级，底部空白 = 变根）翻译成这三个命令。
-  - **内置视口（2026-10-27）**：`sceneView` / `gameView` 两个 dock 面板由编辑器**进程内**
-    的 engine 实例渲染，不再 spawn 游戏进程。
-    - 每个视口 = 一个线程 + 一个 `prism_app::App`。**Windows 走原生 surface**（见下一条），
-      其他平台仍走离屏 target + Tauri `Channel`（8 字节宽高头 + RGBA8）推给 canvas，
-      分辨率上限 1600×900。不再有人为帧率上限。
-    - **Windows 原生承载窗口**：Vulkan 直接呈现到编辑器自己的 popup 窗口，不读回 CPU、
-      不走 IPC。两个关键约束别踩：
-      - WebView2 的合成层盖住同一顶层窗口下**所有** `WS_CHILD`，子 HWND 永远不会显示
-        （实测连 z-order 0 都不行）。所以用 `WS_POPUP` + owner，配
-        `WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE`。
-      - `Win32WindowHandle` 必须带 `hinstance`，否则 `create_surface` 返回
-        `ERROR_INITIALIZATION_FAILED`；HWND 在 `editor_viewport_open` 里（UI 线程）
-        先建好再起渲染线程，否则静默退回离屏。`DestroyWindow` 也必须在 UI 线程。
-    - 原生窗口吃掉了那块屏幕区域，DOM 指针事件到不了页面：wndproc 把鼠标事件经
-      `viewport-native-input` 发回 WebView，前端拼成 `NativePointerLike` 复用同一套
-      `onPointerDown/Move/Up/Wheel`（轨道、gizmo 拖动、拾取、框选只有一份实现）。
-      指针捕获由 `SetCapture` 负责，键盘不转发（popup 是 `WS_EX_NOACTIVATE`，焦点留在 WebView）。
-      代价：canvas 区域内的 DOM 覆层（HUD、gizmo 悬停高亮）被盖住。
-    - 场景来源是**当前编辑中的文档**：前端把（可能未保存的）JSON 发给后端，后端写
-      `target/editor-preview/<id>.scene.json` 后由 `Engine::load_scene_json_file` 加载
-      （`SceneSource::JsonFile` 路径），所以不依赖 `scenes.pak`、也不需要先 cook。
-    - Scene view 是编辑态：不跑 `Engine::update`，只传播层级；叠加一台 `depth = 1000`
-      的编辑器相机（轨道控制由前端持有后整体下发）。Game view 用文档相机，Play 时
-      才跑完整模拟。改 `scene/` 的相机选择或清屏规则前先看这里。
-    - 取景（`editor_viewport_frame`，`"all"` / `"selection"`）：用和点选同一套单位立方体
-      代理算世界包围球，按垂直视场换算距离（留 20% 余量），`yaw` / `pitch` 不变。
-      Scene view 第一次出帧自动框住场景，之后 `F` 聚焦选中项、`A` / `Home` 框住全场景。
-    - Play 支持**暂停 / 单步**（`editor_viewport_set_paused` / `editor_viewport_step`）：
-      暂停只是不推进模拟（`HostState::simulate_now`），渲染与出帧照旧；单步消费一次
-      模拟后停在暂停。开始 / 停止 Play 都从磁盘快照重建场景，并清掉暂停状态。
-    - **Play 期间不重载 Game view**：此时编辑文档（Scene view 拖 gizmo 等）只改编辑态，
-      不会打断运行中的模拟；停止 Play 时先把当前文档 `editor_viewport_reload` 一遍
-      再 `set_playing(false)`，所以编辑态看到的就是停止后的状态。
-    - 点选（`editor/src-tauri/src/pick.rs`）：屏幕像素 → 世界射线（与
-      `compute_camera_output` 同一套透视 / y-flip 约定），与实体的**局部单位立方体**
-      `[-0.5,0.5]³` × 世界矩阵求交，取最近命中。引擎没有 CPU 侧网格包围盒，这是
-      不改资产格式的折中（对编辑器模板基本体是精确的，对导入网格是近似）。
-      `Engine::load_scene_json_file` 返回**文档顺序**的实体表，所以命中的下标可以
-      直接当作 `.scene.json` 的 `entities[i]`，与层级 / 检查器的选择共用。
-    - 选中高亮复用引擎已有的 `Gizmo` 组件（世界坐标轴三色箭头，标记实体由视口
-      线程创建，`enabled` 控制显隐），不引入「描边 / 选中框」这种渲染侧编辑器概念。
-    - 平移 gizmo（`editor/src-tauri/src/gizmo.rs`）：点击命中某一根轴（屏幕空间线段
-      距离，容差 10px）就进入拖动，拖动量由「光标射线与轴线的最近点参数差」得到，
-      所以相机视角变化不会让实体漂移。世界位移写回文档前要经**父级世界矩阵的逆**
-      换成局部 `transform.position`；箭头靠 `Gizmo.scale` 保持屏幕比例
-      （`GIZMO_SCREEN_FRACTION`，基准长度是渲染侧的 1.5 世界单位）。
-    - 拖动过程中**不重载场景**：后端直接改 ECS 的 `LocalTransform`（画面来自引擎，
-      跟手），前端把文档写回合并成一次撤销，松手后才 `editor_viewport_reload` 同步。
-      重载会换掉 ECS 句柄，所以拖动期间任何整场重建都会让这次拖动失效。
-    - `HostState::reload` 加载完会立刻跑一遍 `hierarchy_system`：加载器只保证根实体的
-      `LocalToWorld`，子级要等这一刻，否则重载后第一帧的高亮 / 点选会落在错误位置。
-    - 不要在 `prism-app` / `prism-engine` 里加视口/面板概念；它们只提供
-      「离屏渲染 + 帧读回」这一层通用能力。
-- `editor-egui/` — **egui 编辑器（当前主线）**，Rust-only、独立 workspace、不挂根成员：
+- `editor/` — **egui 编辑器（唯一）**，Rust-only、独立 workspace、不挂根成员：
   菜单栏 / 主工具栏 / 状态栏 + split-tree docking（拖 splitter、tab 切换、浮动窗口）+
   层级 / 检查器 / 资产 / 文档 / 日志 / 历史 / 设置类面板；数据层直接复用
-  `editor-gpui/crates/prism-editor-gpui-core`（不依赖 GPUI，只是历史命名）。
+  `editor/crates/prism-editor-gpui-core`（历史包名，与 UI 框架无关）。
   **Scene / Game 视图零拷贝**：`prism-render` 渲染到自己的离屏 `VkImage`，egui-ash 与
   引擎共用同一个 `VkDevice` / 队列，`ImageRegistry::register_user_texture` 注册
   `offscreen_image_view()` 后由 `painter.image()` 直接采样 —— 没有
@@ -234,47 +92,14 @@ deviating from those conventions is a bug. (`README.md` is the human-facing over
     工具栏 `Skybox (S)` / `G` 可关；引擎 `RenderSettings`
     默认 `show_grid = false`（游戏里不画网格），编辑器从 `Workspace::show_grid` 出发。
   - **内置截图 + 本地控制通道**：启动时监听 `127.0.0.1:0` 并把端口写到
-    `<项目根>/target/editor-egui/control.port`（`control.rs`，一行 JSON：`ping` /
+    `<项目根>/target/editor/control.port`（`control.rs`，一行 JSON：`ping` /
     `status` / `capture` / `quit`）；`crates/prism-editor-mcp` 的 `editor_launch` /
     `editor_status` / `editor_capture` / `editor_quit` 通过它驱动。整窗截图走 Windows
     `PrintWindow`（**必须在工作线程**，UI 线程同步调用会自己给自己发消息而死锁）；
     视口截图走 `copy_offscreen_to_readback` + `readback_pixels`（`PRESENT_SRC_KHR`
     布局，必须在转采样布局之前）。**不要**再把截图做成环境变量触发。
-  - 设计说明见 `docs/editor-egui.md`，用法见 `editor-egui/README.md`，
+  - 设计说明见 `docs/editor-egui.md`，用法见 `editor/README.md`，
     MCP 工具见 `docs/editor-mcp.md`。
-- `editor-gpui/` — **GPUI 原生编辑器壳（已停止维护，legacy）**（Rust-only，独立 workspace，不挂根成员）：
-  菜单/工具栏 + split-tree docking（含浮动窗口、8 方向 resize、磁吸；布局 JSON 与
-  `editor/src/dock.ts` v4 同形）+ 层级/检查器（schema 驱动）/资产/日志（窗口化
-  `uniform_list`）/文档/渲染图/设置面板 + Scene/Game View（默认是 `canvas` 的 CPU
-  投影；`--features engine-viewport` 时后台跑 `prism-app` hosted Vulkan 离屏帧，
-  失败回退 CPU，接线点见 `viewport.rs::paint_scene`）。数据层 `prism-editor-gpui-core` 与 UI
-  框架无关（192 单测：dock/doc/schema/undo/theme/i18n/log/assets/keys/project/
-  viewport_math/state/settings/textinput/manifest/build）；内联输入走 `TextInput`（光标 / 选区 /
-  按词移动与删除，Unicode 安全）；资产浏览器有面包屑 / 前进后退 / 列表网格 / 新建目录 /
-  拖拽移动 / 副本 / 复制 GUID，选中资产时检查器显示 GUID、文本或图片尺寸预览与引用位置；
-  颜色字段有 hex + 预设色块弹层；渲染图面板会轮询 `target/prism-render-graph.json`（无报告时回退静态快照）；Scene View 有方向 gizmo、统计浮层、Q 选择工具、End 贴地、
-  Ctrl+Shift+F / Ctrl+Alt+F 对齐；实体剪贴板 Ctrl+C/X/V + 粘贴为子级（多根、保留预制体链接）；
-  多选可整体平移 / 旋转 / 缩放、整组改父级（一个撤销步），层级 `Alt`+点箭头递归展开；撤销历史面板可回退到任意一步；关闭未保存的文档前有确认；资产可拖到检查器字段或层级实体（预制体实例化）；检查器资产字段有按类别过滤的资产选择器，
-  项目模式会递归扫描 `assets/`；检查器支持多选批量改字段（公共组件、一次撤销）；
-  选中实体可「存为预制体」，资产面板可把 `.prefab.json` 实例化到场景，实例的 P 徽章可打开源预制体，
-  实例可应用修改回预制体 / 还原 / 同步；
-  资产重命名会改磁盘文件并精确改写打开文档的路径引用；
-  项目设置面板会合并写回 `assets/settings.ini`（保留 `[render]` 等其它段）；
-  构建面板会真实读写 `assets/scenes.json`（勾选 / 排序 / 移除 / 从 `assets/scenes` 添加），
-  「构建项目 / 构建场景包」会真的 spawn cargo 并把产物拷到输出目录（面板显示步骤进度）；
-  删除文档会删文件、打开标签与清单条目（带确认）；
-  Scene View 支持点击拾取、双击聚焦、空白拖拽框选与 W/E/R 三种 gizmo（移动 / 旋转 / 缩放，
-  Ctrl 吸附，X 切换世界 / 局部坐标，G 开关网格）；
-  布局 / 主题 / 语言 / 首选项持久化在 `<project>/target/editor-gpui/state.json`，
-  并有 5s 自动保存；
-  项目模式下会向上找 `assets/` 并真实读写 `.scene.json`（保存 / 另存为 / 重新读取、
-  预制体还原与同步），纯 fixture 模式只读；
-  **GPUI 只允许出现在这个 workspace**，不得进入 `prism-app`/`prism-engine`/`prism-render`。
-  Termux/Android 无法运行 GPUI（无 X11/Wayland），本机验证用
-  `cargo test -p prism-editor-gpui-core` +
-  `cargo check -p prism-editor-gpui --target x86_64-pc-windows-gnu`；
-  真实视口可加 `--features engine-viewport`（编译需 `.spv`，运行需 Vulkan 设备）。
-  设计说明见 `docs/editor-gpui.md`。
 - `projects/prisma/` — 用户游戏项目（package/crate `prisma`；`prisma` 桌面二进制 + Android
   cdylib `libprisma.so`；keyframe 开场 intro、`register_scene("intro", ...)` 注册场景、
   `lib.rs` 的 `android_main`）；**own standalone workspace**, NOT a root member。
@@ -297,16 +122,9 @@ The user project's dependency chain must stay **UI-framework-free and editor-fre
 可选能力**默认关**、按 feature 打开：`prism-app/physics`、`prism-app/audio`（连带
 `prism-engine/audio` 的 `AudioSource`）、`prism-asset/async-io`。玩家树由
 `scripts/check_deps.py` 守预算（黑名单 + crate 上限），本地和 CI 都跑，别调高常量。
-- The only editor is the Tauri web editor (`editor/`). **Since 2026-10-27 its Rust backend
-  links `prism-app` / `prism-engine` on purpose** (built-in Scene / Game view): the editor
-  owns engine instances and renders them offscreen inside its own process.
-  - It still uses `prism-editor-api` for schema / `.scene.json` / `.prefab.json` / project
-    settings, and still shells out to `prism-build-pipeline` for cook/build.
-  - **Play no longer spawns the game binary.** The toolbar 运行/停止 drives the editor's
-    Game view; the `editor_play_scene` command survives only for automation (MCP /
-    `scripts`) that wants the real game build in a separate process.
-  - The engine side of this must stay generic: no editor-only concepts (panels, docks,
-    selection) may leak into `prism-app` / `prism-engine` / `prism-render`.
+- The only editor is the egui editor (`editor/`, Rust + egui + ash). Its data layer lives in
+  `editor/crates/prism-editor-gpui-core`; the engine side must stay generic: no editor-only
+  concepts (panels, docks, selection) may leak into `prism-app` / `prism-engine` / `prism-render`.
 - Never add a UI framework (egui/egui-winit/egui-ash-renderer) to `prism-app` /
   `prism-engine` / `prism-render`. Verify with
   `cd projects/prisma && cargo tree | grep -i egui` (must print nothing).
@@ -317,9 +135,9 @@ The user project's dependency chain must stay **UI-framework-free and editor-fre
   - `prism-render` — `GraphRenderer::offscreen_new(w, h)` + `resize_offscreen`;
     PostPass tonemaps into the offscreen image, `copy_offscreen_to_readback` +
     `readback_pixels` return RGBA8. Do not read back before a frame is submitted.
-  - `editor/src-tauri/src/viewport.rs` — one thread per viewport, frames travel as
-    `Raw` Tauri channel payloads (`8-byte w/h header + RGBA`), the Vue panel only does
-    `putImageData`. Scene JSON snapshots live in `target/editor-preview/`.
+  - `editor/crates/prism-editor-egui/src/viewport.rs` — egui samples the offscreen
+    `VkImageView` directly through the shared `VkDevice`; there is no CPU readback.
+    Scene JSON snapshots live in `target/editor-preview/`.
 - **Project code runs as a dynamic module in Game View** (the editor hosts project code,
   players stay monolithic). Do not try to make the Android/desktop player load a
   plugin — `GameActivity` needs one `.so`, and the player is intentionally static.
@@ -390,16 +208,8 @@ The user project's dependency chain must stay **UI-framework-free and editor-fre
     再按 `projects/prisma/target/{debug,release}/prisma[.exe]`（开发布局，仓库根由 exe 所在目录逐级向上找
     `projects/prisma/Cargo.toml`）；`PRISMREV_GAME_BIN` 可覆盖（指向不存在的文件直接报错，不回退）。
     已有存活子进程时拒绝再起第二个，避免同时开两个游戏实例。
-- Web Editor: `cd editor && pnpm install && pnpm tauri dev` — Tauri 2 + Vue 3; the Rust side only
-  depends on `prism-editor-api` (no engine/Vulkan). Frontend checks: `cd editor && pnpm build`.
-  Browser-only preview (no Tauri): `cd editor && pnpm dev:web` — opens `/?demo=1`; only that
-  explicit demo flag (plus Vite DEV) loads the read-only fixture `editor/public/demo.json`.
-  Without it, Tauri commands fail loudly instead of silently falling back to mock data; regenerate
-  the fixture with `cd editor && pnpm fixture` (it dumps `build_schema`/templates/presets/scenes from the real
-  registry, so it cannot drift from the Rust schema).
-  - `editor/src-tauri/src/main.rs` 支持 `prisma-editor --version`（输出
-    `prisma-editor <CARGO_PKG_VERSION>`，在创建窗口之前返回）。桌面 Hub 用它探测安装版本；
-    不要把它挪到 `run()` 之后，否则 `--version` 会打开一个窗口。
+- Editor: `cd editor && cargo run -p prism-editor-egui` — Rust + egui + ash; needs Vulkan
+  and compiled `.spv`. Data-layer tests: `cargo test --manifest-path editor/Cargo.toml`.
 - Checks: `cargo check -p prism-render`, `cargo build`, `cargo test`.
 - `crates/xtask` is excluded from the workspace — run it explicitly from a desktop host; do not add it to default `members`.
 - Prism-asset / scene / cooker: `cargo test -p prism-asset`, `cargo test -p prism-scene`,
@@ -413,7 +223,7 @@ The user project's dependency chain must stay **UI-framework-free and editor-fre
 - Pack already-cooked files: `cargo run -p prism-build-pipeline -- pack assets/cooked`
   (writes `assets/packed/game.pak` + `.pak.meta.json`; low-level escape hatch).
 - The `projects/prisma/`, `projects/prisma-sponza/`, `launcher/` and `editor/` standalone workspaces need their own `cargo build` / `cargo clippy`
-  runs — a root-workspace build does **not** cover them. `editor/` additionally needs `pnpm`.
+  runs — a root-workspace build does **not** cover them.
 
 ## Editor MCP server (agent 改场景 / 跑游戏 / 抓图)
 - `crates/prism-editor-mcp` 把 `prism-editor-api` 暴露成 MCP 工具（stdio）：文档读写、
@@ -422,8 +232,8 @@ The user project's dependency chain must stay **UI-framework-free and editor-fre
   用法与工具表见 [`docs/editor-mcp.md`](docs/editor-mcp.md)。
 - 改场景字段优先用它而不是手改 `.scene.json`：`field_set` 会拒绝只读字段和非法类型。
 - 注意它写的是**作者文档**；运行时只读 `assets/scenes.pak`，改完还要重新 cook。
-- egui 编辑器（当前主线）的界面用 `editor_ui` 驱动（`snapshot` / `click` / `set`），
-  走下面的本地控制通道，不依赖 CDP；旧的 web 编辑器 CDP 工具已移除。
+- 编辑器的界面用 `editor_ui` 驱动（`snapshot` / `click` / `set`），
+  走本地控制通道，不依赖 CDP。
 
 ## 发布档（nightly build-std）
 - 发布包用 `bash scripts/build-dist.sh <project> [target]`（Windows：`scripts/build-dist.ps1`）：
@@ -631,8 +441,8 @@ The user project's dependency chain must stay **UI-framework-free and editor-fre
   `debug!`；重复 section 合并、后者覆盖前者。
 - 解析器有三份**同方言**实现，改一处必须同步另外两处：
   `crates/prism-engine/src/config/ini.rs`（引擎读取）、
-  `crates/prism-editor-api/src/ini.rs`（Web 编辑器，需保留未知段）、
-  `editor-gpui/crates/prism-editor-gpui-core/src/ini.rs`（GPUI/egui 数据层）。
+  `crates/prism-editor-api/src/ini.rs`（MCP / 工具，需保留未知段）、
+  `editor/crates/prism-editor-gpui-core/src/ini.rs`（编辑器数据层）。
 - 兼容旧项目：读端「新文件优先、旧 `.toml` 只读回退 + `warn!`」，`.pak` 里的旧
   `scenes.toml` 清单同样可解析；**写端只产出新格式**。一次性迁移 =
   `prism-build-pipeline build-scenes`（`migrate_legacy_config`，幂等，打印 `migrated …`）。

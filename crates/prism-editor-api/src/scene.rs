@@ -94,7 +94,7 @@ pub fn scenes_dir(project_root: &Path) -> PathBuf {
 
 /// 从当前工作目录向上查找包含 `assets/scenes` 的项目根。
 ///
-/// `tauri dev` 的 CWD 是 `editor/src-tauri`，所以这里逐级上溯；
+/// 编辑器 / MCP 的 CWD 可能不在仓库根，所以这里逐级上溯；
 /// 找不到时返回错误，前端可提示用户手动指定。
 pub fn find_project_root() -> Result<PathBuf, String> {
     let mut dir = std::env::current_dir().map_err(|e| format!("无法获取当前目录: {e}"))?;
