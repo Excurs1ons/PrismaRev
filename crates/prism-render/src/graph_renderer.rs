@@ -223,6 +223,7 @@ pub struct GraphRenderer {
     /// ECS UI 叠加 (GPU-only) — quads + fontdue glyph text, rendered on 顶部
     /// of the ForwardPass 输出 (below the external overlay). Created lazily
     /// on the 渲染 线程 when the 引擎 sends UI 命令
+    #[cfg(feature = "ui")]
     ui_overlay: Option<crate::ui_overlay::UiOverlay>,
     /// True when no 表面 is available (headless / CI / server 众数
     is_headless: bool,
@@ -469,6 +470,7 @@ impl GraphRenderer {
             shadow_view,
             color_format,
             external_overlay: None,
+            #[cfg(feature = "ui")]
             ui_overlay: None,
             is_headless: false,
             offscreen: None,
@@ -735,6 +737,7 @@ impl GraphRenderer {
             shadow_view,
             color_format,
             external_overlay: None,
+            #[cfg(feature = "ui")]
             ui_overlay: None,
             is_headless: true,
             pending_screenshot: None,
@@ -1305,6 +1308,7 @@ impl GraphRenderer {
         // 销毁旧 image view **之前**释放，否则 framebuffer 会引用已销毁的
         // view（VUID-vkDestroyImageView-imageView-01026），可导致验证错误/
         // device lost。此处 device 已 idle。
+        #[cfg(feature = "ui")]
         if let Some(gpu) = self.ui_overlay.as_mut() {
             gpu.on_swapchain_views_changed();
         }
@@ -1390,6 +1394,7 @@ impl GraphRenderer {
             post.drop_target(&self.runtime.context.device);
         }
         // UI 叠加按 image view 缓存 framebuffer，必须先于旧视图销毁释放。
+        #[cfg(feature = "ui")]
         if let Some(gpu) = self.ui_overlay.as_mut() {
             gpu.on_swapchain_views_changed();
         }
@@ -1591,6 +1596,8 @@ impl GraphRenderer {
             ui_overlay,
             show_grid,
         } = input;
+        #[cfg(not(feature = "ui"))]
+        let _ = ui_overlay;
         let light_view_proj = *light_view_proj;
         let inv_projection = *inv_projection;
         let debug_flags = *debug_flags;
@@ -1699,6 +1706,7 @@ impl GraphRenderer {
         // 图 末尾 pass（RtPreview）final = PRESENT_SRC_KHR，所以 swapchain
         // image 在 graph 后已是展示布局；UI/overlay render pass 期望
         // COLOR_ATTACHMENT_OPTIMAL 初始布局 → 各自 record 前都要显式转回。
+        #[cfg(feature = "ui")]
         if record.is_ok() {
             let has_ui = ui_overlay.is_some_and(|o| !o.quads.is_empty() || !o.texts.is_empty());
             if has_ui {

@@ -120,4 +120,6 @@ pub use shadow_map_pass::ShadowMapPass;
 pub use skybox_pass::SkyboxSettings;
 pub use sprite_pass::SpritePass;
 pub use swapchain::Swapchain;
-pub use ui_overlay::{UiOverlay, UiOverlayInput};
+#[cfg(feature = "ui")]
+pub use ui_overlay::UiOverlay;
+pub use ui_overlay::UiOverlayInput;
