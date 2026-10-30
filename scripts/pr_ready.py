@@ -63,6 +63,18 @@ BAD_NAMES = {".env", "local.properties", "id_rsa", "id_ed25519"}
 # --------------------------------------------------------------------------- #
 # 基础设施
 # --------------------------------------------------------------------------- #
+
+def _force_utf8_streams() -> None:
+    """Windows 控制台默认 GBK：打印 ✅ / ⚠ 会抛 UnicodeEncodeError（PR 自检假红）。"""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(encoding="utf-8", errors="replace")
+
+
+_force_utf8_streams()
+
+
 def eprint(*args: object) -> None:
     print(*args, file=sys.stderr, flush=True)
 

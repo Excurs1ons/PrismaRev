@@ -50,6 +50,16 @@ BANNED: dict[str, str] = {
 }
 
 
+def _force_utf8_streams() -> None:
+    """Windows 控制台默认 GBK：打印 ✅ / ⚠ 会抛 UnicodeEncodeError（PR 自检假红）。"""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(encoding="utf-8", errors="replace")
+
+
+_force_utf8_streams()
+
 def player_tree() -> list[str]:
     """解析 `cargo tree -p prism-app`，返回唯一的 crate 名列表。"""
     proc = subprocess.run(
