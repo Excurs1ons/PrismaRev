@@ -91,3 +91,13 @@ opt-level = 1          # ash/Vulkan has a lot of codegen; light opt keeps debug 
 [profile.release]
 opt-level = 3
 lto = "thin"
+
+# 玩家 / Android 打包专用配置：体积优先，**不要用于编辑器**。
+# `panic = "abort"` 会让进程内跑引擎的 editor-egui 整体崩溃而不是让某个视口失败，
+# 所以它不在 `release` 里，只在这个 profile 里。用法：`cargo build --profile dist`。
+[profile.dist]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"

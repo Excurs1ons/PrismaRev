@@ -1073,3 +1073,28 @@ cp target/release/prisma /tmp/p && strip /tmp/p && ls -l /tmp/p   # strip 后（
 3. **组件不是体积单位**。组件是 POD 数据 + 反射元数据，`prism-scene` 整个 crate
    才 192 KB；关掉一个组件不改变二进制（代码共享、链接器本来就只保留被调用路径），
    只影响场景数据与注册表。组件级的取舍是**运行期复杂度**问题，不是体积问题。
+
+### 12.5 发布配置分层（debug / release / dist）
+
+构建配置也属于「图纸」的一部分：不同消费者用不同 profile，不要用一个 release 硬扛。
+
+| profile | 用途 | 关键设置 |
+|---|---|---|
+| `dev` | 开发、编辑器 | `opt-level = 1`、完整调试信息、`panic = unwind` |
+| `release` | 编辑器 / 工具 / CI | `opt-level = 3`、`lto = "thin"`、`panic = unwind` |
+| `dist` | 玩家 / Android 打包 | `lto = "fat"`、`codegen-units = 1`、`panic = "abort"`、`strip = "symbols"` |
+
+`panic = "abort"` **不能**进 `release`：editor-egui 在进程内跑引擎，abort 会让整个编辑器
+崩溃而不是让某个视口失败。用法：`cargo build --profile dist`（Android 打包脚本已切到它）。
+
+实测（`projects/prisma`，默认 feature，Termux aarch64）：
+
+| 配置 | 未 strip | strip 后 |
+|---|---|---|
+| `release`（thin LTO, cu=16, unwind） | 10.38 MB | 6.70 MB |
+| `release` + fat LTO + cu=1（仍 unwind） | 7.41 MB（−28.6%） | 5.64 MB（−15.7%） |
+| `dist`（再加 panic=abort, strip） | **6.61 MB（−36.3%）** | **5.12 MB（−23.5%）** |
+
+结论：**收益主要来自 fat LTO + 单 codegen unit（−28.6%），不是 panic=abort**（后者再省
+0.81 MB）。因此编辑器完全可以留在 `release`（保留 unwind 与回溯），只让玩家/Android 走 `dist`。
+本机实测 fat LTO 的构建时间几乎没变（1m31s vs 1m35s），不必为它担心 CI。
