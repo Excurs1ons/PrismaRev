@@ -1028,6 +1028,7 @@ cp target/release/prisma /tmp/p && strip /tmp/p && ls -l /tmp/p   # strip 后（
 | 物理 | `prism-app/physics` | off | rapier3d + parry3d（~40 crate） |
 | 异步资产 IO | `prism-asset/async-io` | off | tokio |
 | 窗口后端 | `prism-app/x11`、`prism-app/wayland`（透传 `prism-platform`） | 两个都 on | Linux 上只留一个：−0.46 MB（wayland 独留）～ −1.05 MB（x11 独留） |
+| UI 叠加 | `prism-render/ui`（透传 `prism-app/ui`） | on | fontdue + ttf-parser + 字形图集：−64 KB；关掉后 UI 命令照常填充、渲染侧忽略 |
 
 **待拆**（按收益排序，每拆一块都要进 §12.2 表格与 `check_features.py` 矩阵）：
 
@@ -1171,3 +1172,22 @@ cp target/release/prisma /tmp/p && strip /tmp/p && ls -l /tmp/p   # strip 后（
 | Linux（x11+wayland） | 5.12 MB | **4.47 MB** | −0.66 MB（−12.8%） |
 | Windows | 4.11 MB | **3.26 MB** | −0.85 MB（−20.7%） |
 | Android | 3.26 MB | 3.26 MB | 0（regex 代码在 fat LTO 下本来就被回收，但仍占编译时间与依赖面） |
+
+#### 剩余"水分"地图（`dist`，strip 后，Linux）
+
+| crate / 来源 | 大小 | 说明 / 可减性 |
+|---|---|---|
+| `winit` | 375 KB | 平台后端本身；已可按 x11/wayland 裁剪 |
+| `core` + `std` + `alloc` + `hashbrown` | 678 KB | Rust 基线，只能 nightly `build-std` |
+| `prism_scene` | 244 KB | 组件注册表 + 全组件 serde：**下一个大件** |
+| `wayland_client` / `x11_dl` / `x11rb` / `smithay` / `tiny_skia` | ~450 KB | 只在 Linux 双后端；x11-only 或 Windows 直接消失 |
+| `prism_render` / `prism_engine` / `prism_app` / `prism_ecs` / `prism_reflect` | ~640 KB | 自研主体 |
+| `toml` + `toml_parser` + `serde_json` | ~110 KB | 配置解析；换小格式或 feature 化 |
+| `fontdue` 系（`ttf_parser` 等） | ~90 KB→64 KB | `ui` feature（本 PR） |
+| `gimli` / `addr2line` | 33 KB | std 的 panic 回溯；需 build-std |
+| `libloading` | 33 KB | ash 动态加载 `vulkan-1`；必需的代价 |
+| `image` + png | ~21 KB | 截图；可做成 `screenshot` feature |
+| `zstd` / flate2 / crc32 | ~44 KB | `.pak` 解压；资产压缩必需 |
+
+按这个地图，**还能稳定拿到的**是：`screenshot`（~20 KB）、`prism_scene` 组件分组（百 KB 量级，
+但要先设计注册表分组）、`toml`（~110 KB，需替换配置解析）。其余要么是平台必需的，要么要 nightly。

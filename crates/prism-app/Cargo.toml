@@ -14,12 +14,13 @@ crate-type = ["lib"]
 # 物理是**可选**能力。`physics_runner` 目前仍是骨架（独立线程 + step/result 通道），
 # 尚未接进 `Engine::update`；不让它默认把 rapier3d / parry3d 拉进玩家二进制。
 # 需要物理时在用户项目里开：`prism-app = { path = "...", features = ["physics"] }`。
-default = ["pathtrace", "x11", "wayland"]
+default = ["pathtrace", "ui", "x11", "wayland"]
 # 窗口后端（透传 prism-platform）：Linux 体积敏感时只留一个。
 x11 = ["prism-platform/x11"]
 wayland = ["prism-platform/wayland"]
 # Lego 开关：透传到 prism-render / prism-engine（见 docs/DESIGN.md §12）。
 pathtrace = ["prism-render/pathtrace", "prism-engine/pathtrace"]
+ui = ["prism-render/ui", "prism-engine/ui"]
 physics = ["dep:rapier3d"]
 # 音频后端（cpal + firewheel + symphonia，约 60 个 crate）。默认关：仓库里没有
 # 任何地方真的在放声音（`Subsystem::Audio` 只是建引擎 + 解码线程）。需要声音的项目

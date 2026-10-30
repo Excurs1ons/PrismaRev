@@ -8,7 +8,10 @@ description = "Vulkan rendering backend for PrismaRev"
 [features]
 # ---- Lego：项目模板决定编译哪些能力（见 docs/DESIGN.md §12） ----
 # 默认「全量」，库和示例行为不变；项目模板按需挑砖。
-default = ["pathtrace"]
+default = ["pathtrace", "ui"]
+# UI 叠加（fontdue 文本光栅 + ttf-parser，约 90 KB）。纯 3D/无 UI 项目可关：
+# 关掉后 `ui_overlay` 只保留输入数据结构，渲染侧忽略 UI 命令。
+ui = ["dep:fontdue"]
 # 实时路径追踪（pt_pass.rs + acceleration structure 使用）。纯光栅项目可关。
 pathtrace = []
 
@@ -23,4 +26,4 @@ slotmap = { workspace = true }
 # 只需要 PNG 编码（截图 + 最近邻缩放）。RGBe/HDR 解码是 `hdr.rs::load_rgbe`
 # 自己实现的，不依赖 image 的 `hdr` feature。
 image = { workspace = true, features = ["png"] }
-fontdue = "0.9"
+fontdue = { version = "0.9", optional = true }
