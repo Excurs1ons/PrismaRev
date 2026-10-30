@@ -5,6 +5,13 @@ edition.workspace = true
 license.workspace = true
 description = "Vulkan rendering backend for PrismaRev"
 
+[features]
+# ---- Lego：项目模板决定编译哪些能力（见 docs/DESIGN.md §12） ----
+# 默认「全量」，库和示例行为不变；项目模板按需挑砖。
+default = ["pathtrace"]
+# 实时路径追踪（pt_pass.rs + acceleration structure 使用）。纯光栅项目可关。
+pathtrace = []
+
 [dependencies]
 prism-gfx = { path = "../prism-gfx" }
 ash = { workspace = true }

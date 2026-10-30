@@ -329,6 +329,11 @@ def dependency_budget_check() -> Check:
     return Check("依赖预算 (player)", [sys.executable, str(ROOT / "scripts" / "check_deps.py")])
 
 
+def feature_matrix_check() -> Check:
+    """Lego 特性矩阵：关掉某个子系统后仍要能编译（`scripts/check_features.py`）。"""
+    return Check("Lego 特性矩阵", [sys.executable, str(ROOT / "scripts" / "check_features.py")])
+
+
 def artifact_guard(changed: list[str]) -> Check:
     check = Check("artifact / secret guard", ["git", "diff --name-only"])
     check.done = True
@@ -593,6 +598,8 @@ def main() -> int:
 
     checks.append(shader_bindings_check(changed))
     checks.append(dependency_budget_check())
+    if args.all or any(path.endswith("Cargo.toml") for path in changed):
+        checks.append(feature_matrix_check())
 
     checks.extend(editor_egui_checks(changed, args.quick))
 
@@ -633,6 +640,9 @@ def main() -> int:
             check.detail = "x86_64-pc-windows-gnu"
         elif check.name == "editor-egui tests" and check.status == "ok":
             check.detail = test_summary(check.output)
+
+        elif check.name.startswith("Lego 特性矩阵") and check.status == "ok":
+            check.detail = check.output.strip().split("|")[-2].strip()
 
         elif check.name.startswith("依赖预算") and check.status == "ok":
             match = re.search(r"player (\d+)/(\d+) crates", check.output)

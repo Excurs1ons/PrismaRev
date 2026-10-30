@@ -23,6 +23,7 @@ use crate::managers::{
 };
 use crate::mesh::Vertex;
 use crate::offscreen::OffscreenTarget;
+#[cfg(feature = "pathtrace")]
 use crate::pt_pass::PathTracePass;
 use crate::render_graph::{
     DrawItem, GraphFrame, RenderGraph, RenderGraphBuilder, RenderMode, RenderPassNode,
@@ -410,6 +411,9 @@ impl GraphRenderer {
         // Registered when hardware acceleration structures are supported;
         // checks RenderSettings.render_mode internally to decide whether to
         // dispatch. Scene geometry is uploaded later via set_geometry.
+        // `pathtrace` feature 关闭时整块不编译（Lego，见 DESIGN §12）。
+        #[cfg(feature = "pathtrace")]
+        #[cfg(feature = "pathtrace")]
         let pt_pass = if context.rt_caps.acceleration_structure {
             match PathTracePass::new(&context) {
                 Ok(mut pt) => {
@@ -443,6 +447,7 @@ impl GraphRenderer {
         }
         graph.add_pass(Box::new(gtao_pass));
         graph.add_pass(Box::new(rt_scheduler));
+        #[cfg(feature = "pathtrace")]
         if let Some(pt) = pt_pass {
             graph.add_pass(Box::new(pt));
         }
@@ -673,6 +678,7 @@ impl GraphRenderer {
         // CRT 调度器（headless 下同样接入图，支持无窗口离屏 RT 调度）。
         let rt_scheduler = crate::rt_scheduler::RenderTextureScheduler::new(&context);
 
+        #[cfg(feature = "pathtrace")]
         let pt_pass = if context.rt_caps.acceleration_structure {
             match PathTracePass::new(&context) {
                 Ok(mut pt) => {
@@ -699,6 +705,7 @@ impl GraphRenderer {
         }
         graph.add_pass(Box::new(gtao_pass));
         graph.add_pass(Box::new(rt_scheduler));
+        #[cfg(feature = "pathtrace")]
         if let Some(pt) = pt_pass {
             graph.add_pass(Box::new(pt));
         }
@@ -806,6 +813,7 @@ impl GraphRenderer {
     /// bounces, exposure, 光源 color/direction/intensity, scene reload, ...).
     /// No-op if PathTracePass isn't in the 图
     pub fn request_pt_reset(&mut self) {
+        #[cfg(feature = "pathtrace")]
         if let Some(pt) = self.graph.pass_mut::<PathTracePass>() {
             pt.request_reset();
         }
@@ -816,6 +824,11 @@ impl GraphRenderer {
     /// doesn't keep counting after the 着色器 stops accumulating.
     /// Returns `None` if the path-trace pass is not in the 图
     pub fn pt_frame_count(&self) -> Option<u32> {
+        #[cfg(not(feature = "pathtrace"))]
+        {
+            return None;
+        }
+        #[cfg(feature = "pathtrace")]
         self.graph.pass_ref::<PathTracePass>().map(|pt| {
             let fc = pt.frame_count();
             let max = self.settings.pt_max_iterations;
@@ -896,6 +909,7 @@ impl GraphRenderer {
         if let Some(fp) = self.graph.pass_mut::<ForwardPass>() {
             fp.set_ibl(new_ibl.descriptor_set, self.brdf_bindless_slot);
         }
+        #[cfg(feature = "pathtrace")]
         if let Some(pt) = self.graph.pass_mut::<PathTracePass>() {
             pt.set_ibl_resources(new_ibl.descriptor_set, self.ibl.descriptor_set_layout);
         }
@@ -2081,6 +2095,7 @@ impl GraphRenderer {
 
         // 销毁 PathTracePass (accumulation images, geometry buffers,
         // BLAS/TLAS, 描述符 集合 布局 池
+        #[cfg(feature = "pathtrace")]
         if let Some(pt) = self.graph.pass_mut::<PathTracePass>() {
             pt.destroy(device);
         }
