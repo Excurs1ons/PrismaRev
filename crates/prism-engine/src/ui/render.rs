@@ -142,15 +142,19 @@ pub fn convert_ui_draw_list_to_overlay_into(world: &World, out: &mut prism_rende
 
     for q in &draw_list.quads {
         let [px, py, pw, ph] = q.rect; // pixel left, top, width, height
-                                       // NDC: [-1,1] x [-1,1], Y-up, origin center.
+                                       // NDC: [-1,1] x [-1,1]，origin center。**Vulkan 的 Y 轴朝下**：
+                                       // `y = -1` 是屏幕顶、`+1` 是屏幕底（相机投影里的
+                                       // `p[1][1] = -inv_tan` 正是按这个约定翻的）。
+                                       // 像素坐标 y 也是向下增长，所以这里**不翻**：
+                                       // 再翻一次会把整个 UI 层上下镜像。
         let x0 = (px / w) * 2.0 - 1.0;
-        let y0 = ((h - py) / h) * 2.0 - 1.0; // flip Y
+        let y0 = (py / h) * 2.0 - 1.0;
         let x1 = ((px + pw) / w) * 2.0 - 1.0;
-        let y1 = ((h - (py + ph)) / h) * 2.0 - 1.0;
+        let y1 = ((py + ph) / h) * 2.0 - 1.0;
         // NDC border 半径 近似
         let br_ndc = q.border_radius / w.max(h) * 2.0;
         out.quads.push(prism_render::ui_overlay::UiQuad {
-            rect: [x0, y1, x1, y0], // NDC [xmin, ymin, xmax, ymax]
+            rect: [x0, y0, x1, y1], // NDC [xmin, ymin, xmax, ymax]
             color: q.color,
             border_radius: br_ndc,
         });
