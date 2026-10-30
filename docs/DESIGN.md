@@ -1027,6 +1027,7 @@ cp target/release/prisma /tmp/p && strip /tmp/p && ls -l /tmp/p   # strip 后（
 | 音频 | `prism-app/audio` + `prism-engine/audio` | off | cpal + firewheel + symphonia（~60 crate，−3.1 MB） |
 | 物理 | `prism-app/physics` | off | rapier3d + parry3d（~40 crate） |
 | 异步资产 IO | `prism-asset/async-io` | off | tokio |
+| 窗口后端 | `prism-app/x11`、`prism-app/wayland`（透传 `prism-platform`） | 两个都 on | Linux 上只留一个：−0.46 MB（wayland 独留）～ −1.05 MB（x11 独留） |
 
 **待拆**（按收益排序，每拆一块都要进 §12.2 表格与 `check_features.py` 矩阵）：
 
@@ -1116,6 +1117,19 @@ cp target/release/prisma /tmp/p && strip /tmp/p && ls -l /tmp/p   # strip 后（
 | 字体/2D（tiny_skia/ttf_parser/fontdue） | 0.23 MB | 6% | `ui` feature |
 | 序列化（toml/serde_json） | 0.14 MB | 3.5% | 配置 feature |
 | 压缩（zstd/flate2） | 0.04 MB | 1% | 几乎不值得 |
+
+**窗口栈按平台裁剪**（实测，`dist` strip 后）：
+
+| 组合 | 二进制 | 说明 |
+|---|---|---|
+| X11 + Wayland（默认） | 5.12 MB | 两种会话都能启动 |
+| 仅 Wayland | 4.66 MB（−0.46 MB） | 纯 X11 环境无法启动 |
+| 仅 X11 | **4.07 MB（−1.05 MB）** | 纯 Wayland 环境需要 XWayland 兜底 |
+
+- **Windows / Android 本来就不付这笔钱**：winit 的平台依赖按 target 裁剪，
+  `cargo tree --target aarch64-linux-android` 里 wayland/x11 计数为 0，Windows 用系统 DLL。
+- 只有 Linux 需要选，而且**必须选一个**（winit 无后端会编译失败），所以模板的最小组合是
+  `--no-default-features --features x11`，而不是"全关"。
 
 结论：**5 MB 里真正属于「引擎」的只有 0.85 MB**，其余是语言基线、窗口栈和两个
 可以替换的第三方件（regex 日志、字体栈）。下一步优先级：去掉 env_logger 的 regex

@@ -22,8 +22,14 @@ ROOT = Path(__file__).resolve().parents[1]
 # (标签, cargo 参数)。每条都必须是「项目模板会真的这样构建」的组合。
 MATRIX: list[tuple[str, list[str]]] = [
     ("prism-render 全关", ["check", "-p", "prism-render", "--no-default-features"]),
-    ("prism-app 全关", ["check", "-p", "prism-app", "--no-default-features"]),
-    ("prism-app + pathtrace", ["check", "-p", "prism-app", "--no-default-features", "--features", "pathtrace"]),
+    # Linux 上 winit 必须至少有一个窗口后端，所以「全关」不是合法组合；
+    # 最小可用组合是 x11-only（或 wayland-only）。
+    ("prism-app 最小 (x11)", ["check", "-p", "prism-app", "--no-default-features", "--features", "x11"]),
+    ("prism-app 最小 (wayland)", ["check", "-p", "prism-app", "--no-default-features", "--features", "wayland"]),
+    (
+        "prism-app x11 + pathtrace",
+        ["check", "-p", "prism-app", "--no-default-features", "--features", "x11,pathtrace"],
+    ),
     ("prism-app 默认（全量）", ["check", "-p", "prism-app"]),
 ]
 

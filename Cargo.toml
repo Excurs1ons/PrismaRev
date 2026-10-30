@@ -38,7 +38,10 @@ ash-window = "0.13"
 raw-window-handle = "0.6"
 
 # Window / events
-winit = { version = "0.30", features = ["android-game-activity"] }
+# 平台后端由使用方显式选择（见 prism-platform 的 x11 / wayland feature）：
+# Linux 上 winit 默认会把 X11 + Wayland 两套栈全编进来（~1 MB），
+# Windows/Android 本来就只有系统库/NDK，不受影响。
+winit = { version = "0.30", default-features = false, features = ["rwh_06", "android-game-activity"] }
 
 # Maths
 glam = { version = "0.33.2", features = ["serde"] }
