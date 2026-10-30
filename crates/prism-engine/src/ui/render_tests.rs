@@ -226,3 +226,27 @@ fn text_without_style_is_still_drawn() {
         "缺少 Style 的文本按可见处理（与 `visible` 的默认值一致）"
     );
 }
+
+#[test]
+fn overlay_ndc_keeps_screen_orientation() {
+    // Vulkan NDC：`y = -1` 是屏幕顶。像素左上角必须落在 (-1, -1)，
+    // 否则整个 UI 层会被上下镜像（intro 的标题倒着显示就是这个 bug）。
+    let mut world = world_with_screen(); // 800x600
+    spawn_quad(&mut world, [0.0, 0.0, 400.0, 300.0]);
+    ui_render_system(&mut world);
+
+    let overlay = convert_ui_draw_list_to_overlay(&world);
+    assert_eq!(overlay.quads.len(), 1);
+    let [x0, y0, x1, y1] = overlay.quads[0].rect;
+    assert_eq!([x0, y0], [-1.0, -1.0], "左上角像素 → NDC 左上角");
+    assert_eq!([x1, y1], [0.0, 0.0], "屏幕中心 → NDC 原点");
+
+    // 竖直方向单调：更靠下的像素产生更大的 NDC y。
+    let mut world = world_with_screen();
+    spawn_quad(&mut world, [0.0, 100.0, 10.0, 10.0]);
+    ui_render_system(&mut world);
+    let overlay = convert_ui_draw_list_to_overlay(&world);
+    let [_, top, _, bottom] = overlay.quads[0].rect;
+    assert!(top < bottom, "NDC 上边必须小于下边");
+    assert!(top > -1.0, "y=100 应该已经离开屏幕顶");
+}

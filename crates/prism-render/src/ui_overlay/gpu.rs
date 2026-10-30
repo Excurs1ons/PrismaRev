@@ -913,10 +913,12 @@ impl UiOverlay {
             if let Some([gx, gy, gw, gh]) = glyph.rect {
                 let px = cursor_x + glyph.xmin as f32;
                 let py = baseline + glyph.ymin as f32;
+                // 像素坐标（左上角原点，y 向下）→ Vulkan NDC（y=-1 屏幕顶，y=+1 屏幕底）。
+                // 两者 y 方向一致，所以不做翻转；翻一次会把文字画成倒的。
                 let x0 = (px / w) * 2.0 - 1.0;
-                let y0 = ((h - py) / h) * 2.0 - 1.0;
+                let y0 = pixel_y_to_ndc(py, h);
                 let x1 = ((px + gw as f32) / w) * 2.0 - 1.0;
-                let y1 = ((h - (py + gh as f32)) / h) * 2.0 - 1.0;
+                let y1 = pixel_y_to_ndc(py + gh as f32, h);
                 let inv = 1.0 / ATLAS_SIZE as f32;
                 let u0 = gx as f32 * inv;
                 let v0 = gy as f32 * inv;
@@ -1053,4 +1055,38 @@ fn find_memory_type(
         }
     }
     panic!("no suitable memory type found");
+}
+
+/// 像素 y（左上角原点、向下增长）→ Vulkan NDC y（`-1` = 屏幕顶，`+1` = 屏幕底）。
+///
+/// 相机投影里的 `p[1][1] = -inv_tan` 就是按这个约定翻的，所以 UI 这里**不能再翻**：
+/// 早先写成 `(h - py) / h * 2 - 1`（OpenGL 的 Y-up 直觉）把整个 UI 层画成了上下镜像
+/// —— intro 的标题倒着显示、锚在底部的 prompt 跑到屏幕顶部。
+fn pixel_y_to_ndc(py: f32, h: f32) -> f32 {
+    (py / h) * 2.0 - 1.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::pixel_y_to_ndc;
+
+    #[test]
+    fn pixel_y_maps_screen_top_to_negative_one() {
+        // Vulkan NDC y 朝下：像素顶端是 -1，像素底端是 +1，屏幕中线是 0。
+        assert_eq!(pixel_y_to_ndc(0.0, 720.0), -1.0);
+        assert_eq!(pixel_y_to_ndc(720.0, 720.0), 1.0);
+        assert_eq!(pixel_y_to_ndc(360.0, 720.0), 0.0);
+    }
+
+    #[test]
+    fn pixel_y_keeps_vertical_order() {
+        // 单调递增：像素 y 更大的点必须落在更下方（NDC y 更大）。
+        // 这正是旧实现（`h - py`）违反的性质。
+        let ys: Vec<f32> = (0..=10)
+            .map(|i| pixel_y_to_ndc(i as f32 * 72.0, 720.0))
+            .collect();
+        for pair in ys.windows(2) {
+            assert!(pair[1] > pair[0], "NDC y 必须随像素 y 单调递增");
+        }
+    }
 }
