@@ -36,7 +36,7 @@ prism-engine = { path = "../../crates/prism-engine", optional = true }
 prism-game-api = { path = "../../crates/prism-game-api" }
 prism-project-api = { path = "../../crates/prism-project-api", optional = true }
 # 纯数据层（组件 / UI schema），两种形态都需要。
-prism-scene = { path = "../../crates/prism-scene" }
+prism-scene = { path = "../../crates/prism-scene", default-features = false }
 keyframe = "1.1"
 log = "0.4"
 

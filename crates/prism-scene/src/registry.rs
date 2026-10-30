@@ -408,6 +408,7 @@ pub fn builtin_schema_fingerprint() -> u64 {
 
 pub fn register_builtin_components(registry: &mut ComponentRegistry) {
     use crate::components::*;
+    #[cfg(feature = "group-ui")]
     use crate::ui::{Anchors, ComputedLayout, Margin, Node, Pivot, Style, Text};
 
     // ── 场景基础组件 ──
@@ -434,30 +435,45 @@ pub fn register_builtin_components(registry: &mut ComponentRegistry) {
     });
 
     // ── 光源 ──
-    registry.register_reflect_serde::<Light>("prism_engine::scene::Light");
-    registry.register_reflect_serde::<DirectionalLight>("prism_engine::scene::DirectionalLight");
-    registry.register_reflect_serde::<PointLight>("prism_engine::scene::PointLight");
-    registry.register_reflect_serde::<SpotLight>("prism_engine::scene::SpotLight");
+    #[cfg(feature = "group-3d")]
+    {
+        registry.register_reflect_serde::<Light>("prism_engine::scene::Light");
+        registry
+            .register_reflect_serde::<DirectionalLight>("prism_engine::scene::DirectionalLight");
+        registry.register_reflect_serde::<PointLight>("prism_engine::scene::PointLight");
+        registry.register_reflect_serde::<SpotLight>("prism_engine::scene::SpotLight");
 
-    // ── 声明式光照（场景驱动 IBL / GI，避免引擎启动无条件加载）──
-    registry
-        .register_reflect_serde::<EnvironmentLighting>("prism_engine::scene::EnvironmentLighting");
-    registry.register_reflect_serde::<GiConfig>("prism_engine::scene::GiConfig");
+        // ── 声明式光照（场景驱动 IBL / GI，避免引擎启动无条件加载）──
+        registry.register_reflect_serde::<EnvironmentLighting>(
+            "prism_engine::scene::EnvironmentLighting",
+        );
+        registry.register_reflect_serde::<GiConfig>("prism_engine::scene::GiConfig");
+    }
 
     // ── 相机 ──
     registry.register_reflect_serde::<Camera>("prism_engine::scene::Camera");
-    registry
-        .register_reflect_serde::<FlyCameraController>("prism_engine::scene::FlyCameraController");
+    #[cfg(feature = "group-3d")]
+    {
+        registry.register_reflect_serde::<FlyCameraController>(
+            "prism_engine::scene::FlyCameraController",
+        );
+    }
 
     // ── 天空盒 / 渲染 bundle ──
-    registry.register_reflect_serde::<Skybox>("prism_engine::scene::Skybox");
-    registry.register_reflect_serde::<Gizmo>("prism_engine::scene::Gizmo");
-    registry.register_reflect_serde::<MeshRenderer>("prism_engine::scene::MeshRenderer");
+    #[cfg(feature = "group-3d")]
+    {
+        registry.register_reflect_serde::<Skybox>("prism_engine::scene::Skybox");
+        registry.register_reflect_serde::<Gizmo>("prism_engine::scene::Gizmo");
+        registry.register_reflect_serde::<MeshRenderer>("prism_engine::scene::MeshRenderer");
+    }
 
     // ── 2D 精灵（作者态；GPU 句柄由运行时 `SpriteRef` 持有）──
-    registry.register_reflect_serde::<SpriteRenderer>("prism_engine::scene::SpriteRenderer");
-    registry.register_reflect_serde::<LineRenderer>("prism_engine::scene::LineRenderer");
-    registry.register_reflect_serde::<SpriteAnimation>("prism_engine::scene::SpriteAnimation");
+    #[cfg(feature = "group-2d")]
+    {
+        registry.register_reflect_serde::<SpriteRenderer>("prism_engine::scene::SpriteRenderer");
+        registry.register_reflect_serde::<LineRenderer>("prism_engine::scene::LineRenderer");
+        registry.register_reflect_serde::<SpriteAnimation>("prism_engine::scene::SpriteAnimation");
+    }
 
     // ── 本地变换 ──
     // 只登记**类型**（RTTIBin 类型表 / 编辑器字段描述），不登记为可挂载组件：
@@ -471,21 +487,27 @@ pub fn register_builtin_components(registry: &mut ComponentRegistry) {
     registry.register_reflect_serde::<PrefabInstance>("prism_engine::scene::PrefabInstance");
 
     // ── UI 组件 ──
-    registry.register_reflect_serde::<Node>("prism_engine::ui::Node");
-    registry.register_reflect_serde::<Style>("prism_engine::ui::Style");
-    // `ComputedLayout` 是布局系统的输出（`rect` 每帧被重写），由
-    // `ui::layout` 自己 ensure；只登记类型，不让作者挂载。
-    registry.register_reflect_type::<ComputedLayout>();
-    registry.register_reflect_serde::<Text>("prism_engine::ui::Text");
+    #[cfg(feature = "group-ui")]
+    {
+        registry.register_reflect_serde::<Node>("prism_engine::ui::Node");
+        registry.register_reflect_serde::<Style>("prism_engine::ui::Style");
+        // `ComputedLayout` 是布局系统的输出（`rect` 每帧被重写），由
+        // `ui::layout` 自己 ensure；只登记类型，不让作者挂载。
+        registry.register_reflect_type::<ComputedLayout>();
+        registry.register_reflect_serde::<Text>("prism_engine::ui::Text");
+    }
 
     // ── 嵌套类型（类型表/cook 需要）──
     registry.register_reflect_type::<glam::Vec2>();
     registry.register_reflect_type::<glam::Vec3>();
     registry.register_reflect_type::<glam::Vec4>();
     registry.register_reflect_type::<glam::Quat>();
-    registry.register_reflect_type::<Anchors>();
-    registry.register_reflect_type::<Pivot>();
-    registry.register_reflect_type::<Margin>();
+    #[cfg(feature = "group-ui")]
+    {
+        registry.register_reflect_type::<Anchors>();
+        registry.register_reflect_type::<Pivot>();
+        registry.register_reflect_type::<Margin>();
+    }
 }
 
 #[cfg(test)]
