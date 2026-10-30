@@ -1029,6 +1029,9 @@ cp target/release/prisma /tmp/p && strip /tmp/p && ls -l /tmp/p   # strip 后（
 | 异步资产 IO | `prism-asset/async-io` | off | tokio |
 | 窗口后端 | `prism-app/x11`、`prism-app/wayland`（透传 `prism-platform`） | 两个都 on | Linux 上只留一个：−0.46 MB（wayland 独留）～ −1.05 MB（x11 独留） |
 | UI 叠加 | `prism-render/ui`（透传 `prism-app/ui`） | on | fontdue + ttf-parser + 字形图集：−64 KB；关掉后 UI 命令照常填充、渲染侧忽略 |
+| 组件组 3D | `prism-scene/group-3d`（透传 `prism-app`/`prism-engine`） | on | 灯光/天空盒/网格/相机控制/GI 配置不注册，serde 与反射代码不链接 |
+| 组件组 2D | `prism-scene/group-2d` | on | 精灵/线段/精灵动画不注册 |
+| 组件组 UI | `prism-scene/group-ui` | on | Node/Style/Text/布局类型不注册 |
 
 **待拆**（按收益排序，每拆一块都要进 §12.2 表格与 `check_features.py` 矩阵）：
 
@@ -1191,3 +1194,19 @@ cp target/release/prisma /tmp/p && strip /tmp/p && ls -l /tmp/p   # strip 后（
 
 按这个地图，**还能稳定拿到的**是：`screenshot`（~20 KB）、`prism_scene` 组件分组（百 KB 量级，
 但要先设计注册表分组）、`toml`（~110 KB，需替换配置解析）。其余要么是平台必需的，要么要 nightly。
+
+#### 组件分组的实测（`dist`，strip 后，同 x11+wayland+ui）
+
+| 组合 | 大小 | 说明 |
+|---|---|---|
+| 全部组（默认） | 4.47 MB | 3D + 2D + UI 组件都注册 |
+| 关掉 `group-3d` | **4.27 MB（−197 KB）** | 灯光/天空盒/网格/GI 配置的 serde 与反射代码不再链接 |
+| 关掉 3D 再关 UI | 再 −50 KB 量级 | Node/Style/Text |
+
+**关键坑**：`prism-scene` 的默认特性会在任何直接依赖它的地方（`prism-engine`、三个用户项目）
+把组件组重新打开，`prism-app` 的 `--no-default-features` 就失效了。所以凡是直接依赖
+`prism-scene` 的地方都必须写 `default-features = false`——这与 `prism-game-api` 那次是同一类
+错误，已在工程里全部修掉。
+
+组件分组的收益之所以远小于「一个组件 20 KB」的直觉：serde 的反序列化代码在多个类型间
+共享（同一个 `serde_json::from_value` 泛型实例化被 ICF 合并），关掉一组只回收该组独有的部分。
