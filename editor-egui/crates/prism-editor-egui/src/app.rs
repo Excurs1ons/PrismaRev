@@ -251,6 +251,25 @@ impl EditorApp {
             }
         }
 
+        let restored_scene = saved_state
+            .as_ref()
+            .map(|state| state.scene.clone())
+            .unwrap_or_default();
+        let restored_tool = match restored_scene.gizmo_tool.as_str() {
+            "Rotate" => crate::viewport::GizmoTool::Rotate,
+            "Scale" => crate::viewport::GizmoTool::Scale,
+            _ => crate::viewport::GizmoTool::Translate,
+        };
+        let render_settings = restored_scene
+            .render
+            .as_ref()
+            .map(|value| render_settings_from_json(value, workspace.show_grid))
+            .unwrap_or_else(|| prism_engine::render_settings::RenderSettings {
+                show_grid: workspace.show_grid,
+                ..Default::default()
+            });
+        workspace.show_grid = render_settings.show_grid;
+
         let mut app = Self {
             doc_hash: 0,
             selection_hash: 0,
@@ -263,12 +282,9 @@ impl EditorApp {
             named_layouts,
             layouts_path,
             build: None,
-            // 引擎默认 `show_grid = false`（游戏里不该画网格），编辑器要从工作区
-            // 的默认值（`true`，与 Unity 一致）出发，否则工具栏和实际画面不一致。
-            render_settings: prism_engine::render_settings::RenderSettings {
-                show_grid: workspace.show_grid,
-                ..Default::default()
-            },
+            // 引擎默认 `show_grid = false`（游戏里不该画网格），编辑器要从上次保存的
+            // Scene 设置出发（旧存档没有这段时退回工作区默认值）。
+            render_settings,
             theme_signature: String::new(),
             autosave_at: Instant::now(),
             workspace,
@@ -300,6 +316,11 @@ impl EditorApp {
             dock_leaves: Vec::new(),
         };
 
+        // Preferences 的日志上限在启动时生效，而不是等用户再拖一次滑条。
+        app.workspace
+            .log
+            .set_capacity(app.preferences.max_log_lines as usize);
+
         // 首帧：把当前文档交给引擎，并创建 Scene view。
         if !app.workspace.document().doc.entities.is_empty() {
             // 与 Unity 一致：打开场景时自动框住全部内容。
@@ -307,6 +328,10 @@ impl EditorApp {
         }
         app.write_preview_scene();
         app.ensure_view(ViewKind::Scene);
+        // 恢复上次的 gizmo 工具（W / E / R），否则每次启动都回到 Move。
+        if let Some(view) = app.scene_view.as_mut() {
+            view.tool = restored_tool;
+        }
         // Game view 的引擎在这里一起建好。留到第一次切 tab 再建的话，会卡住整个
         // UI 线程 ~2s（IBL 预过滤 1.5s + 管线创建 + 场景加载），观感就是「切 tab 卡半天」。
         let started = Instant::now();
@@ -425,6 +450,13 @@ impl EditorApp {
     }
 
     fn apply_command(&mut self, command: Command) {
+        if command == Command::DeleteSelection
+            && self.state.confirm_delete
+            && !self.workspace.selection.is_empty()
+        {
+            self.state.pending_entity_delete = Some(self.workspace.selection.clone());
+            return;
+        }
         if command == Command::SaveAs {
             let title = self.workspace.document().title();
             self.open_prompt(
@@ -461,8 +493,17 @@ impl EditorApp {
         if command == Command::Stop && was_playing {
             self.playing = false;
             self.paused = false;
-            // 停止后从磁盘快照重建，编辑器状态 = 运行前状态。
-            self.doc_hash = 0;
+            // Stop must clear the live runtime immediately; do not wait for the
+            // document debounce path to reload the Game view.
+            if let Some(view) = self.game_view.as_mut() {
+                if let Err(error) = view.host.load_scene(&self.preview_scene) {
+                    view.error = Some(format!("{error}"));
+                }
+                view.host.set_simulate(false);
+                view.host.set_paused(false);
+                view.mark_dirty();
+            }
+            self.doc_hash = document_hash(&self.workspace);
             self.pending_doc = None;
         }
         if command == Command::Pause || command == Command::Step {
@@ -726,12 +767,14 @@ impl EditorApp {
                 "ok": true,
                 "pid": std::process::id(),
                 "frames": self.frame_count,
+                "fps": self.game_view.as_ref().map(|view| view.fps).unwrap_or(0.0),
                 "scene": self.workspace.document().path.clone(),
             }),
             "status" => json!({
                 "ok": true,
                 "pid": std::process::id(),
                 "frames": self.frame_count,
+                "fps": self.game_view.as_ref().map(|view| view.fps).unwrap_or(0.0),
                 "playing": self.playing,
                 "paused": self.paused,
                 "scene": self.workspace.document().path.clone(),
@@ -786,6 +829,14 @@ impl EditorApp {
                     paused: self.paused,
                     status: &self.state.status,
                     frames: self.frame_count,
+                    fps: self.game_view.as_ref().map(|view| view.fps).unwrap_or(0.0),
+                    gizmo_tool: self.scene_view.as_ref().map(|view| view.tool.label()),
+                    // Keep the control protocol locale-independent. The toolbar may use
+                    // localized labels, but MCP clients need stable enum-like values.
+                    gizmo_space: match self.workspace.gizmo_space {
+                        prism_editor_core::viewport_math::GizmoSpace::World => "World",
+                        prism_editor_core::viewport_math::GizmoSpace::Local => "Local",
+                    },
                     rects: &self.panel_rects,
                     leaves: &self.dock_leaves,
                     logs: &logs,
@@ -936,16 +987,75 @@ impl EditorApp {
         self.state.prompt = Some(panels::Prompt::new(kind, title, hint, value));
     }
 
-    fn save_all_documents(&mut self) {
+    /// 保存所有脏文档。返回保存数量；任何一份失败就返回错误（调用方决定是否继续，
+    /// 构建路径必须因此中止，否则会打包旧内容）。
+    fn save_all_documents(&mut self) -> Result<usize, String> {
         let count = self.workspace.docs.len();
+        let mut failures = Vec::new();
+        let mut saved = 0usize;
         for index in 0..count {
             if self.workspace.docs[index].dirty {
-                if let Err(error) = self.workspace.save_document(index) {
-                    self.state.status = format!("save failed: {error}");
+                match self.workspace.save_document(index) {
+                    Ok(_) => saved += 1,
+                    Err(error) => failures.push(error.to_string()),
                 }
             }
         }
-        self.state.status = "project saved".to_string();
+        if failures.is_empty() {
+            self.state.status = if saved == 0 {
+                "nothing to save".to_string()
+            } else {
+                format!("saved {saved} document(s)")
+            };
+            Ok(saved)
+        } else {
+            let message = failures.join("; ");
+            self.state.status = format!("save failed: {message}");
+            Err(message)
+        }
+    }
+
+    /// 资产面板的 Delete：按首选项决定是否先确认。
+    fn request_asset_delete(&mut self) {
+        let Some(path) = self.state.asset_selection.clone() else {
+            self.state.status = "no asset selected".to_string();
+            return;
+        };
+        if self.preferences.confirm_delete {
+            panels::request_delete_asset(&mut self.workspace, &mut self.state, &path);
+        } else {
+            panels::delete_asset_now(&mut self.workspace, &mut self.state, &path);
+        }
+    }
+
+    /// 资产面板的 Ctrl+D。
+    fn duplicate_selected_asset(&mut self) {
+        let Some(path) = self.state.asset_selection.clone() else {
+            self.state.status = "no asset selected".to_string();
+            return;
+        };
+        match self.workspace.duplicate_asset(&path) {
+            Ok(created) => {
+                self.state.asset_selection = Some(created.clone());
+                self.state.status = format!("duplicated {path} → {created}");
+            }
+            Err(error) => self.state.status = format!("duplicate failed: {error}"),
+        }
+    }
+
+    /// 资产面板的 F2。
+    fn rename_selected_asset_prompt(&mut self) {
+        let Some(path) = self.state.asset_selection.clone() else {
+            self.state.status = "no asset selected".to_string();
+            return;
+        };
+        let name = path.rsplit('/').next().unwrap_or(&path).to_string();
+        self.open_prompt(
+            panels::PromptKind::RenameAsset,
+            "Rename Asset",
+            "新文件名（含扩展名）",
+            name,
+        );
     }
 
     fn create_empty_parent(&mut self) {
@@ -1130,11 +1240,36 @@ impl EditorApp {
             .unwrap_or(false)
     }
 
+    /// 中断正在跑的构建（`File → Cancel Build` / 状态栏的 Cancel）。
+    fn cancel_build(&mut self) {
+        let Some(job) = self.build.as_ref() else {
+            return;
+        };
+        job.cancel();
+        let label = job.label().to_string();
+        self.state.status = format!("cancelling build: {label}");
+        self.workspace.log(
+            prism_editor_core::LogSource::System,
+            prism_editor_core::LogLevel::Warn,
+            format!("build cancel requested: {label}"),
+        );
+    }
+
     fn start_build(&mut self, kind: crate::build::BuildKind) {
         let Some(root) = self.project_root.clone() else {
             self.state.status = "no project root — cannot build".to_string();
             return;
         };
+        // 构建读的是磁盘上的作者文档：未保存的改动必须先落盘，否则打出来的是旧内容。
+        if let Err(error) = self.save_all_documents() {
+            self.state.status = format!("build aborted: {error}");
+            self.workspace.log(
+                prism_editor_core::LogSource::System,
+                prism_editor_core::LogLevel::Error,
+                format!("build aborted: save failed ({error})"),
+            );
+            return;
+        }
         let label = kind.label();
         self.workspace.log(
             prism_editor_core::LogSource::System,
@@ -1229,10 +1364,12 @@ impl EditorApp {
                 });
                 self.menu_item(ui, "Save", "Ctrl+S", Command::Save);
                 self.menu_item(ui, "Save As…", "Ctrl+Shift+S", Command::SaveAs);
-                self.menu_do(ui, "Save Project", |app| app.save_all_documents());
+                self.menu_do(ui, "Save Project", |app| {
+                    let _ = app.save_all_documents();
+                });
                 self.menu_item(ui, "Reload Scene", "", Command::ReloadDocument);
                 ui.separator();
-                self.menu_item(ui, "Build Settings…", "", Command::BuildProject);
+                self.menu_item(ui, "Build Settings…", "", Command::ToggleBuild);
                 if ui
                     .add_enabled(
                         !self.build_job_running(),
@@ -1274,7 +1411,34 @@ impl EditorApp {
                     .add_enabled(!self.build_job_running(), egui::Button::new("Clean Build"))
                     .clicked()
                 {
-                    self.start_build(crate::build::BuildKind::Clean);
+                    // Unity 的 Clean Build 只清构建缓存 / 输出，不动引擎编译产物。
+                    self.state.confirm = Some(panels::Confirm::new(
+                        panels::ConfirmKind::CleanPlayer,
+                        "Clean Build",
+                        "清理玩家工程（projects/prisma）的编译产物，下次 Build 会全量重编。\n\
+                         不会动仓库根的引擎 target。",
+                        "Clean Player",
+                    ));
+                    ui.close();
+                }
+                if ui
+                    .add_enabled(
+                        !self.build_job_running(),
+                        egui::Button::new("Clean Engine Cache…"),
+                    )
+                    .clicked()
+                {
+                    self.state.confirm = Some(panels::Confirm::new(
+                        panels::ConfirmKind::CleanEngine,
+                        "Clean Engine Cache",
+                        "清理仓库根 workspace 的 target/（引擎 + 全部 crate 的编译产物，\n\
+                         通常几个 GB，重编需要十几分钟）。",
+                        "Clean Engine",
+                    ));
+                    ui.close();
+                }
+                if self.build_job_running() && ui.button("Cancel Build").clicked() {
+                    self.cancel_build();
                     ui.close();
                 }
                 ui.separator();
@@ -1377,17 +1541,19 @@ impl EditorApp {
                             app.state.status = format!("open {path} failed: {error}");
                         }
                     });
+                    let selected_path = path.to_string();
                     self.menu_do(ui, "Show in Explorer", |app| {
-                        app.state.status = format!(
-                            "{}",
-                            app.project_root
-                                .as_ref()
-                                .map(|root| root.join(path).display().to_string())
-                                .unwrap_or_else(|| path.to_string())
-                        )
+                        app.state.status =
+                            match panels::reveal_asset(&app.workspace, &selected_path) {
+                                Ok(()) => format!("revealed {selected_path}"),
+                                Err(error) => error,
+                            };
                     });
-                    self.menu_do(ui, "Copy Path", |app| {
-                        app.state.status = format!("copied {path}");
+                    let ctx_copy = ui.ctx().clone();
+                    let copy_path = selected_path.clone();
+                    self.menu_do(ui, "Copy Path", move |app| {
+                        ctx_copy.copy_text(copy_path.clone());
+                        app.state.status = format!("copied {copy_path}");
                     });
                     self.menu_do(ui, "Duplicate", |app| {
                         match app.workspace.duplicate_asset(path) {
@@ -1525,6 +1691,13 @@ impl EditorApp {
 
             // ---- Component ----
             ui.menu_button("Component", |ui| {
+                // 与检查器的 Add Component 一致：已挂的组件不列出。
+                let attachable: std::collections::HashSet<String> = self
+                    .workspace
+                    .component_types()
+                    .into_iter()
+                    .map(|component| component.name.clone())
+                    .collect();
                 let categories: Vec<(String, Vec<(String, String)>)> = self
                     .workspace
                     .schema
@@ -1535,13 +1708,15 @@ impl EditorApp {
                             category.to_string(),
                             items
                                 .into_iter()
+                                .filter(|item| attachable.contains(&item.name))
                                 .map(|item| (item.name.clone(), item.display_name().to_string()))
                                 .collect(),
                         )
                     })
+                    .filter(|(_, items): &(String, Vec<(String, String)>)| !items.is_empty())
                     .collect();
                 if categories.is_empty() {
-                    ui.label("no schema loaded");
+                    ui.label("no more components");
                 }
                 for (category, items) in categories {
                     ui.menu_button(category, |ui| {
@@ -1668,14 +1843,25 @@ impl EditorApp {
                             .weak(),
                     );
                 }
-                if let Some(job) = &self.build {
-                    if job.running() {
-                        ui.label(
-                            RichText::new(format!("building: {}", job.label()))
-                                .size(10.0)
-                                .color(egui::Color32::from_rgb(224, 176, 80)),
-                        );
+                let build_label = self
+                    .build
+                    .as_ref()
+                    .filter(|job| job.running())
+                    .map(|job| job.label().to_string());
+                if let Some(label) = build_label {
+                    // 构建是几十秒的阻塞操作：状态栏必须能一键中断。
+                    if ui
+                        .small_button(RichText::new("Cancel").size(10.0))
+                        .on_hover_text("Stop the running cargo build")
+                        .clicked()
+                    {
+                        self.cancel_build();
                     }
+                    ui.label(
+                        RichText::new(format!("building: {label}"))
+                            .size(10.0)
+                            .color(egui::Color32::from_rgb(224, 176, 80)),
+                    );
                 }
             });
         });
@@ -1765,6 +1951,10 @@ impl EditorApp {
             if ui.selectable_label(grid_on, "Grid (G)").clicked() {
                 let mut settings = self.render_settings.clone();
                 settings.show_grid = !grid_on;
+                self.apply_render_settings(settings);
+            }
+            let mut settings = self.render_settings.clone();
+            if panels::scene_render_mode_combo(ui, &mut settings) {
                 self.apply_render_settings(settings);
             }
             let skybox_on = self.workspace.show_skybox;
@@ -2147,6 +2337,10 @@ impl EditorApp {
 
     fn panel_body(&mut self, ui: &mut egui::Ui, tab: &str, rect: Rect) {
         self.panel_rects.insert(tab.to_owned(), rect);
+        // Unity 的 focusedWindow：点过哪个面板，快捷键就作用在哪个面板上。
+        if ui.rect_contains_pointer(rect) && ui.input(|input| input.pointer.any_click()) {
+            self.state.focused_panel = Some(tab.to_owned());
+        }
         // 调试开关：完全跳过引擎 / 用户纹理注册，用来区分「UI 自身的渲染问题」与
         // 「引擎离屏图像注册进来的问题」（无窗口/软件 Vulkan 时排查用）。
         let no_viewport = std::env::var("PRISMREV_EDITOR_NO_VIEWPORT").is_ok();
@@ -2172,7 +2366,7 @@ impl EditorApp {
             "assets" => panels::assets(ui, &mut self.workspace, &mut self.state),
             "docs" => panels::docs(ui, &mut self.workspace, &mut self.state),
             "log" => panels::log(ui, &mut self.workspace, &mut self.state),
-            "history" => panels::history(ui, &mut self.workspace),
+            "history" => panels::history(ui, &mut self.workspace, &mut self.state),
             "renderGraph" => {
                 let mut settings = self.render_settings.clone();
                 if panels::render_graph(
@@ -2270,6 +2464,45 @@ impl EditorApp {
     // -----------------------------------------------------------------------
 
     /// 统一输入框：另存为 / 新建目录 / 存为预制体 / 重命名。
+    /// 破坏性操作的确认框（Unity 的 `EditorUtility.DisplayDialog`）。
+    fn confirm_dialog(&mut self, ctx: &egui::Context) {
+        let Some(confirm) = self.state.confirm.clone() else {
+            return;
+        };
+        let mut open = true;
+        let mut accepted = false;
+        let mut cancelled = false;
+        egui::Window::new(&confirm.title)
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.label(&confirm.message);
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button(confirm.ok.as_str()).clicked() {
+                        accepted = true;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        cancelled = true;
+                    }
+                });
+            });
+        if accepted {
+            self.state.confirm = None;
+            match confirm.kind {
+                panels::ConfirmKind::CleanPlayer => {
+                    self.start_build(crate::build::BuildKind::Clean)
+                }
+                panels::ConfirmKind::CleanEngine => {
+                    self.start_build(crate::build::BuildKind::CleanEngine)
+                }
+            }
+        } else if cancelled || !open {
+            self.state.confirm = None;
+        }
+    }
+
     fn prompt_dialog(&mut self, ctx: &egui::Context) {
         let Some(mut prompt) = self.state.prompt.clone() else {
             return;
@@ -2505,6 +2738,11 @@ impl EditorApp {
             }
         }
 
+        // Unity 的快捷键跟着焦点面板走：在资产面板按 Delete 不能删场景实体。
+        let focus = self.state.focused_panel.clone().unwrap_or_default();
+        let assets_focused = focus == "assets";
+        let inspector_focused = focus == "inspector";
+
         for (shortcut, command) in shortcuts {
             if ctx.input_mut(|input| input.consume_shortcut(&shortcut)) {
                 // 纯字母 / Delete 这类快捷键只在没有文本控件聚焦时生效。
@@ -2515,6 +2753,37 @@ impl EditorApp {
                 if wants_keyboard && plain {
                     continue;
                 }
+                if assets_focused {
+                    match command {
+                        Command::DeleteSelection => {
+                            self.request_asset_delete();
+                            continue;
+                        }
+                        Command::DuplicateEntity => {
+                            self.duplicate_selected_asset();
+                            continue;
+                        }
+                        // 资产面板里的复制 / 剪切 / 粘贴 / 全选暂时没有资产语义，
+                        // 绝不能落到场景实体上。
+                        Command::CopyEntity
+                        | Command::CutEntity
+                        | Command::PasteEntity
+                        | Command::SelectAll => continue,
+                        _ => {}
+                    }
+                }
+                if inspector_focused
+                    && matches!(
+                        command,
+                        Command::DeleteSelection
+                            | Command::DuplicateEntity
+                            | Command::CopyEntity
+                            | Command::CutEntity
+                            | Command::PasteEntity
+                    )
+                {
+                    continue;
+                }
                 self.apply_command(command);
                 if matches!(command, Command::FrameSelection) {
                     if let Some(view) = self.scene_view.as_mut() {
@@ -2523,14 +2792,28 @@ impl EditorApp {
                 }
             }
         }
+
+        // Unity 的 F2：重命名当前面板里的选中项。
+        if !wants_keyboard && ctx.input(|input| input.key_pressed(egui::Key::F2)) {
+            if assets_focused {
+                self.rename_selected_asset_prompt();
+            } else if let Some(index) = self.workspace.primary_selection() {
+                let name = self.workspace.document().doc.entities[index].display_name();
+                self.state.rename = Some((index, name));
+                self.state.rename_focus = true;
+            }
+        }
     }
 
     fn floating_panels(&mut self, ctx: &egui::Context) {
-        let floating = self.workspace.floating.clone();
-        for panel in floating {
+        let mut to_close: Vec<String> = Vec::new();
+        for index in 0..self.workspace.floating.len() {
+            let Some(panel) = self.workspace.floating.get(index).cloned() else {
+                continue;
+            };
             let mut open = true;
             let mut titled = false;
-            egui::Window::new(tab_title(&panel.tab))
+            let shown = egui::Window::new(tab_title(&panel.tab))
                 .id(egui::Id::new(("float", &panel.tab)))
                 .open(&mut open)
                 .default_pos(egui::pos2(panel.x, panel.y))
@@ -2543,9 +2826,29 @@ impl EditorApp {
                     self.panel_body(ui, &panel.tab, rect);
                 });
             let _ = titled;
-            if !open {
-                self.workspace.close_floating(&panel.tab);
+            // 把拖拽 / 缩放后的真实矩形写回模型：布局序列化（自动保存、
+            // Save Layout、跨会话恢复）读的就是这份数据。
+            if let Some(shown) = shown {
+                let rect = shown.response.rect;
+                let moved =
+                    (rect.min.x - panel.x).abs() > 0.5 || (rect.min.y - panel.y).abs() > 0.5;
+                let resized = (rect.width() - panel.width).abs() > 0.5
+                    || (rect.height() - panel.height).abs() > 0.5;
+                if moved || resized {
+                    if let Some(slot) = self.workspace.floating.get_mut(index) {
+                        slot.x = rect.min.x;
+                        slot.y = rect.min.y;
+                        slot.width = rect.width();
+                        slot.height = rect.height();
+                    }
+                }
             }
+            if !open {
+                to_close.push(panel.tab.clone());
+            }
+        }
+        for tab in to_close {
+            self.workspace.close_floating(&tab);
         }
     }
 
@@ -2554,7 +2857,16 @@ impl EditorApp {
             && self.autosave_at.elapsed() > std::time::Duration::from_secs(5)
         {
             self.autosave_at = Instant::now();
-            let state = prism_editor_core::EditorState::capture(&self.workspace, &self.preferences);
+            let mut state =
+                prism_editor_core::EditorState::capture(&self.workspace, &self.preferences);
+            if let Some(view) = self.scene_view.as_ref() {
+                state.scene.gizmo_tool = match view.tool {
+                    crate::viewport::GizmoTool::Translate => "Translate".to_string(),
+                    crate::viewport::GizmoTool::Rotate => "Rotate".to_string(),
+                    crate::viewport::GizmoTool::Scale => "Scale".to_string(),
+                };
+            }
+            state.scene.render = Some(render_settings_json(&self.render_settings));
             if let Ok(text) = serde_json::to_string_pretty(&state) {
                 if let Some(parent) = self.state_path.parent() {
                     std::fs::create_dir_all(parent).ok();
@@ -2704,12 +3016,23 @@ impl EditorApp {
             );
         }
         if !running {
-            self.state.status = format!("build finished: {}", job.label());
-            self.workspace.log(
-                prism_editor_core::LogSource::System,
-                prism_editor_core::LogLevel::Info,
-                format!("build finished: {}", job.label()),
-            );
+            let cancelled = job.was_cancelled();
+            let label = job.label().to_string();
+            if cancelled {
+                self.state.status = format!("build cancelled: {label}");
+                self.workspace.log(
+                    prism_editor_core::LogSource::System,
+                    prism_editor_core::LogLevel::Warn,
+                    format!("build cancelled: {label}"),
+                );
+            } else {
+                self.state.status = format!("build finished: {label}");
+                self.workspace.log(
+                    prism_editor_core::LogSource::System,
+                    prism_editor_core::LogLevel::Info,
+                    format!("build finished: {label}"),
+                );
+            }
             self.build = None;
         }
     }
@@ -2749,6 +3072,11 @@ impl App for EditorApp {
     fn ui(&mut self, ctx: &egui::Context) {
         self.frame_count += 1;
         self.state.build_running = self.build_job_running();
+        // 鼠标松开 = 一次交互结束（拖动 gizmo / 拖拽检查器数字框）：
+        // 本次交互压成一步，下一次修改必然开新撤销步。
+        if ctx.input(|input| input.pointer.any_released()) {
+            self.workspace.end_interaction();
+        }
         self.poll_control(ctx);
         self.drain_engine_logs();
         self.poll_build();
@@ -2820,6 +3148,11 @@ impl App for EditorApp {
         self.floating_panels(ctx);
 
         self.prompt_dialog(ctx);
+        // Preferences 是编辑器本机设置，界面直接读镜像；这里每帧同步一次。
+        self.state.compact = self.preferences.compact;
+        self.state.confirm_delete = self.preferences.confirm_delete;
+        panels::entity_delete_confirm(ctx, &mut self.workspace, &mut self.state);
+        self.confirm_dialog(ctx);
 
         let mut about = self.state.about_open;
         panels::boolean_window(ctx, &mut about, "About", panels::about);
@@ -2921,6 +3254,70 @@ fn read_named_layouts(path: &Path) -> std::collections::BTreeMap<String, serde_j
 fn read_editor_state(path: &Path) -> Option<prism_editor_core::EditorState> {
     let text = std::fs::read_to_string(path).ok()?;
     serde_json::from_str(&text).ok()
+}
+
+/// 把 `RenderSettings` 映射成可持久化的 JSON。
+///
+/// 引擎结构体没有 serde 派生（也不该为编辑器加），编辑器自己列一遍字段；
+/// 新增引擎字段时这里要同步，缺失字段回落到默认值以兼容旧存档。
+fn render_settings_json(
+    settings: &prism_engine::render_settings::RenderSettings,
+) -> serde_json::Value {
+    use prism_engine::render_settings::RenderMode;
+    serde_json::json!({
+        "debugFlags": settings.debug_flags,
+        "tonemapMode": settings.tonemap_mode,
+        "debugRt": settings.debug_rt,
+        "pathTrace": settings.render_mode == RenderMode::PathTrace,
+        "ptMaxBounces": settings.pt_max_bounces,
+        "ptRayMaxDistance": settings.pt_ray_max_distance,
+        "ptMaxIterations": settings.pt_max_iterations,
+        "showGrid": settings.show_grid,
+    })
+}
+
+/// `render_settings_json` 的逆过程；`fallback_grid` 用于旧存档没有该字段时跟随工作区默认值。
+fn render_settings_from_json(
+    value: &serde_json::Value,
+    fallback_grid: bool,
+) -> prism_engine::render_settings::RenderSettings {
+    use prism_engine::render_settings::RenderMode;
+    let base = prism_engine::render_settings::RenderSettings::default();
+    let u32_field = |key: &str, default: u32| {
+        value
+            .get(key)
+            .and_then(|value| value.as_u64())
+            .map(|value| value as u32)
+            .unwrap_or(default)
+    };
+    let f32_field = |key: &str, default: f32| {
+        value
+            .get(key)
+            .and_then(|value| value.as_f64())
+            .map(|value| value as f32)
+            .unwrap_or(default)
+    };
+    let path_trace = value
+        .get("pathTrace")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+    prism_engine::render_settings::RenderSettings {
+        debug_flags: u32_field("debugFlags", base.debug_flags),
+        tonemap_mode: u32_field("tonemapMode", base.tonemap_mode),
+        debug_rt: u32_field("debugRt", base.debug_rt),
+        render_mode: if path_trace {
+            RenderMode::PathTrace
+        } else {
+            RenderMode::Raster
+        },
+        pt_max_bounces: u32_field("ptMaxBounces", base.pt_max_bounces),
+        pt_ray_max_distance: f32_field("ptRayMaxDistance", base.pt_ray_max_distance),
+        pt_max_iterations: u32_field("ptMaxIterations", base.pt_max_iterations),
+        show_grid: value
+            .get("showGrid")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(fallback_grid),
+    }
 }
 
 fn selection_hash(workspace: &Workspace) -> u64 {

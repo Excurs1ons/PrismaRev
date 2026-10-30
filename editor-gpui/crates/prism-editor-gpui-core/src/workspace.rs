@@ -25,6 +25,41 @@ use std::collections::HashSet;
 use std::io;
 use std::path::PathBuf;
 
+fn world_delta_to_parent_local(doc: &SceneDoc, index: usize, delta_world: [f32; 3]) -> [f32; 3] {
+    let parent = doc.entities[index]
+        .parent
+        .and_then(|parent_id| doc.index_of_id(parent_id));
+    let parent_rotation = parent
+        .map(|parent| world_rotation(doc, parent))
+        .unwrap_or(crate::viewport_math::IDENTITY_ROTATION);
+    let scale = parent
+        .map(|parent| world_scale(doc, parent))
+        .unwrap_or([1.0; 3]);
+    let unscaled = [
+        delta_world[0] / scale[0].abs().max(1e-6),
+        delta_world[1] / scale[1].abs().max(1e-6),
+        delta_world[2] / scale[2].abs().max(1e-6),
+    ];
+    let rotated = quat_rotate(quat_conjugate(parent_rotation), unscaled);
+    rotated
+}
+
+fn world_position_to_local(doc: &SceneDoc, index: usize, target_world: [f32; 3]) -> [f32; 3] {
+    let Some(parent) = doc.entities[index]
+        .parent
+        .and_then(|parent_id| doc.index_of_id(parent_id))
+    else {
+        return target_world;
+    };
+    let parent_position = world_position(doc, parent);
+    let delta = [
+        target_world[0] - parent_position[0],
+        target_world[1] - parent_position[1],
+        target_world[2] - parent_position[2],
+    ];
+    world_delta_to_parent_local(doc, index, delta)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DocKind {
     Scene,
@@ -1704,6 +1739,22 @@ impl Workspace {
         let Some(component) = self.schema.component(component_name) else {
             return;
         };
+        // 已挂着的组件再点一次不能静默重置成默认值（Unity 里它根本不出现在菜单里）。
+        if self
+            .document()
+            .doc
+            .entities
+            .get(index)
+            .map(|entity| entity.has_component(component_name))
+            .unwrap_or(false)
+        {
+            self.log(
+                LogSource::Editor,
+                LogLevel::Warn,
+                format!("{} 已有该组件，未做修改", component.display_name()),
+            );
+            return;
+        }
         let name = component.name.clone();
         let value = component_value_with_overrides(&component.default_value(), None);
         self.edit("添加组件", |document| {
@@ -1864,7 +1915,7 @@ impl Workspace {
         document.dirty = true;
     }
 
-    /// 绕世界轴旋转实体（旋转 gizmo）；四元数 `q_axis * q_old`，按实体合并撤销。
+    /// 绕 gizmo 轴旋转实体（旋转 gizmo）；按实体合并撤销。
     pub fn rotate_entity(&mut self, entity_id: u32, axis: usize, delta_radians: f32) {
         if !delta_radians.is_finite() || delta_radians.abs() < 1e-6 {
             return;
@@ -1873,9 +1924,18 @@ impl Workspace {
             return;
         };
         let before = self.document().doc.entities[index].transform;
-        // 世界空间：左乘（绕世界轴）；局部空间：右乘（绕实体自身轴）。
+        // 世界空间的旋转先换算到父级空间；否则旋转父级下的子实体会被父级
+        // 旋转再次偏转。局部空间仍然直接绕实体自身轴旋转。
         let after_rotation = match self.gizmo_space {
-            GizmoSpace::World => quat_mul(quat_axis_angle(axis, delta_radians), before.rotation),
+            GizmoSpace::World => {
+                let delta_world = quat_axis_angle(axis, delta_radians);
+                let parent_rotation = parent_world_rotation(&self.document().doc, index);
+                let parent_delta = quat_mul(
+                    quat_mul(quat_conjugate(parent_rotation), delta_world),
+                    parent_rotation,
+                );
+                quat_mul(parent_delta, before.rotation)
+            }
             GizmoSpace::Local => quat_mul(before.rotation, quat_axis_angle(axis, delta_radians)),
         };
         let after = TransformJson {
@@ -1901,24 +1961,62 @@ impl Workspace {
         ids.dedup();
         let space = self.gizmo_space;
         let doc = &self.document().doc;
+        let center = if space == GizmoSpace::World && ids.len() > 1 {
+            let mut center = [0.0; 3];
+            let mut count = 0.0;
+            for entity_id in &ids {
+                if let Some(index) = doc.index_of_id(*entity_id) {
+                    let position = world_position(doc, index);
+                    for axis in 0..3 {
+                        center[axis] += position[axis];
+                    }
+                    count += 1.0;
+                }
+            }
+            (count > 0.0).then(|| center.map(|value| value / count))
+        } else {
+            None
+        };
         let mut changes = Vec::new();
         for entity_id in &ids {
             let Some(index) = doc.index_of_id(*entity_id) else {
                 continue;
             };
             let before = doc.entities[index].transform;
+            let delta_world = quat_axis_angle(axis, delta_radians);
             let after_rotation = match space {
                 GizmoSpace::World => {
-                    quat_mul(quat_axis_angle(axis, delta_radians), before.rotation)
+                    let parent_rotation = parent_world_rotation(doc, index);
+                    let parent_delta = quat_mul(
+                        quat_mul(quat_conjugate(parent_rotation), delta_world),
+                        parent_rotation,
+                    );
+                    quat_mul(parent_delta, before.rotation)
                 }
                 GizmoSpace::Local => {
                     quat_mul(before.rotation, quat_axis_angle(axis, delta_radians))
                 }
             };
+            let after_position = center.map_or(before.position, |center| {
+                let world = world_position(doc, index);
+                let offset = [
+                    world[0] - center[0],
+                    world[1] - center[1],
+                    world[2] - center[2],
+                ];
+                let rotated = quat_rotate(delta_world, offset);
+                let target_world = [
+                    center[0] + rotated[0],
+                    center[1] + rotated[1],
+                    center[2] + rotated[2],
+                ];
+                world_position_to_local(doc, index, target_world)
+            });
             changes.push((
                 *entity_id,
                 before,
                 TransformJson {
+                    position: after_position,
                     rotation: quat_normalize(after_rotation),
                     ..before
                 },
@@ -1980,8 +2078,7 @@ impl Workspace {
         let Some(index) = self.document().doc.index_of_id(entity_id) else {
             return;
         };
-        let parent_rotation = parent_world_rotation(&self.document().doc, index);
-        let delta_local = quat_rotate(quat_conjugate(parent_rotation), delta_world);
+        let delta_local = world_delta_to_parent_local(&self.document().doc, index, delta_world);
         let before = self.document().doc.entities[index].transform;
         let mut after = before;
         for (position, delta) in after.position.iter_mut().zip(delta_local) {
@@ -2009,8 +2106,7 @@ impl Workspace {
             let Some(index) = doc.index_of_id(*entity_id) else {
                 continue;
             };
-            let parent_rotation = parent_world_rotation(doc, index);
-            let delta_local = quat_rotate(quat_conjugate(parent_rotation), delta_world);
+            let delta_local = world_delta_to_parent_local(doc, index, delta_world);
             let before = doc.entities[index].transform;
             let mut after = before;
             for (position, delta) in after.position.iter_mut().zip(delta_local) {
@@ -2191,6 +2287,18 @@ impl Workspace {
         self.document().undo.can_redo()
     }
 
+    /// 开始一次交互（拖动 gizmo / 拖拽输入框）：期间所有 Transform 改动并成一步，
+    /// 不受 800ms 合并窗口影响 —— 中途停顿不会把一次拖动拆成两步。
+    pub fn begin_interaction(&mut self) {
+        self.document_mut().undo.begin_interaction();
+    }
+
+    /// 结束一次交互：把本次交互压成一步，下一次修改必然开新步 ——
+    /// 两次相邻拖动不会合并成一步。
+    pub fn end_interaction(&mut self) {
+        self.document_mut().undo.commit();
+    }
+
     /// 当前文档的撤销历史（最近 → 最早），供「撤销历史」面板使用。
     pub fn undo_history(&self) -> Vec<String> {
         self.document()
@@ -2226,6 +2334,50 @@ impl Workspace {
     pub fn clear_history(&mut self) {
         self.document_mut().undo.clear();
         self.log(LogSource::Editor, LogLevel::Info, "已清空撤销历史");
+    }
+
+    /// 完整历史（最早 → 最新），`bool` 表示该步骤当前处于「已撤销」状态。
+    pub fn history_entries(&self) -> Vec<(String, bool)> {
+        self.document().undo.history_entries()
+    }
+
+    /// 当前状态在 `history_entries()` 中的位置（= 已执行步骤数）。
+    pub fn history_cursor(&self) -> usize {
+        self.document().undo.history_cursor()
+    }
+
+    /// 跳到历史中的绝对位置（`target` ∈ `0..=history_entries().len()`）。
+    ///
+    /// 与 `undo_to` 不同：往前是撤销，往后是重做，所以撤销过的步骤还能点回去；
+    /// 返回实际移动的步数。
+    pub fn jump_history(&mut self, target: usize) -> usize {
+        let cursor = self.history_cursor();
+        let mut moved = 0;
+        if target < cursor {
+            for _ in target..cursor {
+                if !self.can_undo() {
+                    break;
+                }
+                self.undo();
+                moved += 1;
+            }
+        } else {
+            for _ in cursor..target {
+                if !self.can_redo() {
+                    break;
+                }
+                self.redo();
+                moved += 1;
+            }
+        }
+        if moved > 0 {
+            self.log(
+                LogSource::Editor,
+                LogLevel::Info,
+                format!("history jump: {} step(s)", moved),
+            );
+        }
+        moved
     }
 
     // ── 面板 / 布局 ─────────────────────────────────────────────────────
@@ -2714,10 +2866,11 @@ impl Workspace {
                 self.paste_entities(None);
             }
             Command::BuildProject => {
-                self.log(LogSource::System, LogLevel::Info, "构建项目（占位）");
+                // 真正可用的构建入口是 build 面板（编辑器里由 `ToggleBuild` 打开）。
+                self.toggle_panel("build");
             }
             Command::CookScenes => {
-                self.log(LogSource::System, LogLevel::Info, "构建场景包（占位）");
+                self.toggle_panel("build");
             }
             Command::Play => self.play(),
             Command::Pause => {
@@ -2835,6 +2988,7 @@ fn build_entity(
     parent: Option<usize>,
     doc: &SceneDoc,
 ) -> EntityJson {
+    let parent_id = parent.and_then(|index| doc.id_of_index(index));
     let (name, components, position, rotation) = match preset {
         Some(preset) => (
             preset.name.clone(),
@@ -2850,8 +3004,8 @@ fn build_entity(
         ),
     };
     let mut entity = EntityJson {
-        name: Some(name),
-        parent: parent.and_then(|index| doc.id_of_index(index)),
+        name: Some(doc.unique_name(&name, parent_id)),
+        parent: parent_id,
         transform: TransformJson {
             position,
             rotation,
@@ -2985,6 +3139,22 @@ mod tests {
         assert_eq!(added.parent, Some(1), "挂在选中的相机下面");
         assert!(added.has_component("prism_engine::scene::Camera"));
         assert!(workspace.can_undo());
+    }
+
+    #[test]
+    fn add_entity_names_stay_unique_among_siblings() {
+        let mut workspace = Workspace::load_fixture(&fixture());
+        workspace.clear_selection();
+        workspace.add_entity("");
+        workspace.add_entity("");
+        let doc = &workspace.document().doc;
+        let names: Vec<String> = doc
+            .entities
+            .iter()
+            .map(|entity| entity.display_name())
+            .collect();
+        assert!(names.contains(&"GameObject".to_string()));
+        assert!(names.contains(&"GameObject (1)".to_string()));
     }
 
     #[test]
@@ -3176,6 +3346,92 @@ mod tests {
     }
 
     #[test]
+    fn translate_entity_world_inverts_parent_scale_and_rotation() {
+        let mut workspace = Workspace::sample();
+        let parent = index_named(&workspace, "Cube");
+        let child = index_named(&workspace, "Detail");
+        workspace.document_mut().doc.entities[parent]
+            .transform
+            .scale = [2.0, 3.0, 4.0];
+        workspace.document_mut().doc.entities[parent]
+            .transform
+            .rotation = crate::viewport_math::quat_axis_angle(1, std::f32::consts::FRAC_PI_2);
+        let child_id = workspace.document().doc.entities[child].id.unwrap();
+        let before = crate::viewport_math::world_position(&workspace.document().doc, child);
+        let delta = [0.8, -1.2, 2.0];
+
+        workspace.translate_entity_world(child_id, delta);
+
+        let after = crate::viewport_math::world_position(&workspace.document().doc, child);
+        for axis in 0..3 {
+            assert!((after[axis] - before[axis] - delta[axis]).abs() < 1e-3);
+        }
+    }
+
+    #[test]
+    fn world_rotation_is_converted_through_parent_rotation() {
+        let mut workspace = Workspace::sample();
+        let parent = index_named(&workspace, "Cube");
+        let child = index_named(&workspace, "Detail");
+        workspace.document_mut().doc.entities[parent]
+            .transform
+            .rotation = crate::viewport_math::quat_axis_angle(1, std::f32::consts::FRAC_PI_2);
+        let child_id = workspace.document().doc.entities[child].id.unwrap();
+        let before = crate::viewport_math::world_rotation(&workspace.document().doc, child);
+        let delta = crate::viewport_math::quat_axis_angle(0, std::f32::consts::FRAC_PI_2);
+
+        workspace.rotate_entity(child_id, 0, std::f32::consts::FRAC_PI_2);
+
+        let after = crate::viewport_math::world_rotation(&workspace.document().doc, child);
+        let expected = crate::viewport_math::quat_mul(delta, before);
+        let expected_x = crate::viewport_math::quat_rotate(expected, [1.0, 0.0, 0.0]);
+        let actual_x = crate::viewport_math::quat_rotate(after, [1.0, 0.0, 0.0]);
+        for axis in 0..3 {
+            assert!((actual_x[axis] - expected_x[axis]).abs() < 1e-3);
+        }
+    }
+
+    #[test]
+    fn batch_world_rotation_moves_entities_around_selection_center() {
+        let mut workspace = Workspace::sample();
+        let cube = index_named(&workspace, "Cube");
+        let light = index_named(&workspace, "Directional Light");
+        let cube_id = workspace.document().doc.entities[cube].id.unwrap();
+        let light_id = workspace.document().doc.entities[light].id.unwrap();
+        let cube_before = crate::viewport_math::world_position(&workspace.document().doc, cube);
+        let light_before = crate::viewport_math::world_position(&workspace.document().doc, light);
+        let center = [
+            (cube_before[0] + light_before[0]) * 0.5,
+            (cube_before[1] + light_before[1]) * 0.5,
+            (cube_before[2] + light_before[2]) * 0.5,
+        ];
+
+        workspace.rotate_entities(&[cube_id, light_id], 1, std::f32::consts::FRAC_PI_2);
+
+        for (index, before) in [(cube, cube_before), (light, light_before)] {
+            let offset = [
+                before[0] - center[0],
+                before[1] - center[1],
+                before[2] - center[2],
+            ];
+            let rotated = crate::viewport_math::quat_rotate(
+                crate::viewport_math::quat_axis_angle(1, std::f32::consts::FRAC_PI_2),
+                offset,
+            );
+            let expected = [
+                center[0] + rotated[0],
+                center[1] + rotated[1],
+                center[2] + rotated[2],
+            ];
+            let actual = crate::viewport_math::world_position(&workspace.document().doc, index);
+            for axis in 0..3 {
+                assert!((actual[axis] - expected[axis]).abs() < 1e-3);
+            }
+        }
+        assert_eq!(workspace.document().undo.history().len(), 1);
+    }
+
+    #[test]
     fn batch_translate_moves_all_entities_in_one_undo_step() {
         let mut workspace = Workspace::sample();
         let cube = index_named(&workspace, "Cube");
@@ -3275,6 +3531,46 @@ mod tests {
                 assert!((a - b).abs() < 1e-4);
             }
         }
+    }
+
+    #[test]
+    fn history_entries_keep_undone_steps_and_jump_both_ways() {
+        let mut workspace = Workspace::sample();
+        let initial = workspace.document().doc.entities.len();
+        workspace.add_entity("camera");
+        workspace.add_entity("camera");
+        workspace.add_entity("camera");
+        assert_eq!(workspace.history_cursor(), 3);
+        let entries = workspace.history_entries();
+        assert_eq!(entries.len(), 3);
+        assert!(entries.iter().all(|(_, undone)| !undone));
+
+        // 撤销两步：位置回到 1，但两步仍然留在列表里，并且被标记为已撤销。
+        assert_eq!(workspace.jump_history(1), 2);
+        assert_eq!(workspace.history_cursor(), 1);
+        assert_eq!(workspace.document().doc.entities.len(), initial + 1);
+        let entries = workspace.history_entries();
+        assert_eq!(entries.len(), 3);
+        assert_eq!(
+            entries.iter().filter(|(_, undone)| *undone).count(),
+            2,
+            "撤销过的步骤不能从历史里消失"
+        );
+
+        // 点回去（redo）恢复。
+        assert_eq!(workspace.jump_history(3), 2);
+        assert_eq!(workspace.history_cursor(), 3);
+        assert_eq!(workspace.document().doc.entities.len(), initial + 3);
+        assert!(workspace
+            .history_entries()
+            .iter()
+            .all(|(_, undone)| !undone));
+
+        // 跳回开头。
+        assert_eq!(workspace.jump_history(0), 3);
+        assert_eq!(workspace.history_cursor(), 0);
+        assert_eq!(workspace.document().doc.entities.len(), initial);
+        assert_eq!(workspace.jump_history(0), 0, "原地跳转是空操作");
     }
 
     #[test]
@@ -3468,6 +3764,24 @@ mod tests {
         assert!(workspace.document().doc.entities[1].has_component("prism_engine::scene::Camera"));
         workspace.remove_component("prism_engine::scene::Camera");
         assert!(!workspace.document().doc.entities[1].has_component("prism_engine::scene::Camera"));
+    }
+
+    #[test]
+    fn add_component_does_not_reset_an_attached_component() {
+        let mut workspace = Workspace::load_fixture(&fixture());
+        workspace.select(0, false);
+        let path = "prism_engine::scene::Camera";
+        workspace.set_field(1, path, "fov_y_degrees", json!(30.0));
+        let undo_before = workspace.undo_history().len();
+
+        // 再「添加」一次：不能把调好的参数重置成默认值，也不该产生撤销步。
+        workspace.add_component(path);
+
+        assert_eq!(
+            workspace.document().doc.entities[0].components[path]["fov_y_degrees"],
+            json!(30.0)
+        );
+        assert_eq!(workspace.undo_history().len(), undo_before);
     }
 
     #[test]
