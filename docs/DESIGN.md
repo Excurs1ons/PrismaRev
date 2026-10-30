@@ -1192,6 +1192,26 @@ cp target/release/prisma /tmp/p && strip /tmp/p && ls -l /tmp/p   # strip 后（
 - 只有 Linux 需要选，而且**必须选一个**（winit 无后端会编译失败），所以模板的最小组合是
   `--no-default-features --features x11`，而不是"全关"。
 
+**Windows：可以完全不要 winit**（`win32-native`，2026-10）。`prism-platform` 里新增了
+一个只用 Win32 API 的窗口后端（`RegisterClassExW` / `CreateWindowExW` / `PeekMessageW`
+消息泵），`prism-app` 的 `winit` 变成可选依赖，两个后端共用同一套引擎/渲染/关闭逻辑，
+事件先落到中立的 `PlatformEvent` 再进 `InputManager`。启用 `win32-native` 时依赖树里
+winit 计数为 0（`cargo tree --target x86_64-pc-windows-gnu | grep -c winit`），
+不是"编进来再被 LTO 删掉"。
+
+实测（`bash scripts/build-dist.sh projects/prisma x86_64-pc-windows-gnu`，dist + strip）：
+
+| Windows 窗口后端 | `prisma.exe` | 说明 |
+|---|---|---|
+| `winit-window`（默认） | 3,146,240 B（3.00 MB） | winit 0.30 + 系统 DLL |
+| `win32-window`（`win32-native`） | **2,978,816 B（2.84 MB）** | −167,424 B（−163.5 KiB / −5.3%） |
+
+- 比 Linux 那边的 `winit ≈ 375 KB` 小得多：Windows 上 winit 的窗口/消息/DPI 全靠
+  user32/dwmapi，不像 Linux 要自带 x11/wayland/smithay 一整套协议栈。
+- 代价：Win32 后端没有 IME、拖放、多显示器 DPI 平滑、任务栏进度、触摸；
+  指针锁定是「隐藏 + ClipCursor + 回中」而非 Raw Input。见
+  `crates/prism-platform/src/win32.rs` 的模块文档与 `AGENTS.md`。
+
 结论：**5 MB 里真正属于「引擎」的只有 0.85 MB**，其余是语言基线、窗口栈和两个
 可以替换的第三方件（regex 日志、字体栈）。下一步优先级：去掉 env_logger 的 regex
 （−0.47 MB）> `ui` 砖块（−0.23 MB）> 序列化（−0.14 MB）。
@@ -1202,7 +1222,8 @@ cp target/release/prisma /tmp/p && strip /tmp/p && ls -l /tmp/p   # strip 后（
 |---|---|---|---|
 | Linux x86_64 / aarch64（x11 + wayland） | `prisma` | 5.12 MB | 4.97 MB |
 | Linux（仅 x11） | `prisma` | 4.07 MB | — |
-| Windows `x86_64-pc-windows-gnu` | `prisma.exe` | 4.11 MB | 4.09 MB |
+| Windows `x86_64-pc-windows-gnu`（winit） | `prisma.exe` | 4.11 MB | 4.09 MB |
+| Windows `x86_64-pc-windows-gnu`（`win32-native`，无 winit） | `prisma.exe` | 见下方「窗口栈按平台裁剪」 | — |
 | Android `aarch64-linux-android` | `libprisma.so` | **3.26 MB** | 3.15 MB |
 
 - Windows 与「Linux x11-only」几乎一样（4.11 vs 4.07 MB），差值就是 wayland 栈——**印证了

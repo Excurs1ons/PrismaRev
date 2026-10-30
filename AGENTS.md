@@ -657,6 +657,22 @@ The user project's dependency chain must stay **UI-framework-free and editor-fre
 - Keep changes Vulkan-validation-clean; the project is sensitive to framebuffer/descriptor
   lifetime ordering (see lessons in `docs/lessons-learned.md`).
 
+## Window backends (winit vs Win32)
+- `prism-platform` / `prism-app` 的窗口后端是**互斥 feature**，不是运行时分支：
+  `winit-backend`（默认，桌面 + Android）与 `win32-native`（默认关，仅 Windows，
+  直接用 `RegisterClassExW` / `CreateWindowExW` / 消息循环，**不链接 winit**）。
+  两个都开时以 winit 为准。
+- `prism-platform` 的 `PlatformWindow` / `PlatformEvent` 是唯一的中立层：`prism-app`
+  与 `FrameHook` 只看到它们，禁止再把 `winit::window::Window` / `winit::event::WindowEvent`
+  写进共享代码（`hook.rs` 的 `on_window_event` 是 winit-only 的例外）。
+- Win32 后端的既定边界（别当 bug 报）：无 IME/文本输入、无拖放、无多显示器 DPI 平滑、
+  无任务栏进度、无触摸、左右修饰键按左侧处理；指针锁定是「隐藏 + `ClipCursor` + 回中」，
+  不是 Raw Input。细节见 `crates/prism-platform/src/win32.rs` 的模块文档。
+- Win32 后端**只做过交叉编译验证**：改它要同步更新 PR 的「需真机冒烟」清单。
+- 用户项目侧用 feature 选择：`projects/prisma` 的 `winit-window`（默认）/ `win32-window`，
+  `prism-app` 在项目里必须 `default-features = false`，否则 Cargo 的 feature 只能加不能减，
+  选中 win32 也仍会带进 winit。
+
 ## Android packaging chain (game + launcher in one APK)
 - The `android_main` JNI entry lives in the **user project** (`projects/prisma/src/lib.rs`), not in
   `prism-app`; it calls `prism_app::run_on_android(build_app, android_app)` with a builder closure.

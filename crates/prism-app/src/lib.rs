@@ -1,7 +1,17 @@
 //! PrismaRev 平台应用层
 //!
-//! 拥有事件循环、窗口和帧编排——连接平台输入（winit）、
-//! 引擎（ECS/逻辑）和渲染器（Vulkan）的胶水层。
+//! 拥有事件循环、窗口和帧编排——连接平台输入、引擎（ECS/逻辑）和
+//! 渲染器（Vulkan）的胶水层。
+//!
+//! ## 窗口后端（feature）
+//!
+//! - `winit-backend`（默认）：winit 事件循环 + `ApplicationHandler`。
+//! - `win32-native`（默认关，仅 Windows）：Win32 原生窗口 + 自己的消息循环
+//!   （[`App::run_win32`]）。启用它必须关掉 `winit-backend`，否则本 crate
+//!   里仍会有 winit 代码参与编译（体积省不下来）。两个都开时以 winit 为准。
+//!
+//! 两个后端共用同一份引擎/渲染逻辑（[`App::tick_frame`] / [`App::shutdown`]），
+//! 差别只在「窗口怎么来、事件怎么派发」。
 //!
 //! ## 用户项目接入（完全 ECS 体验）
 //!
@@ -24,8 +34,8 @@
 //!
 //! - [`App::add_system`] / [`App::insert_resource`]：注册 ECS 系统与资源；
 //! - [`App::engine_mut`]：完全 ECS 访问（world / schedule / timer）；
-//! - [`App::run`]：桌面入口（自建 winit EventLoop）；
-//! - [`App::run_on`]：Android 入口（外部 EventLoop）。
+//! - [`App::run`]：桌面入口（自建 EventLoop / Win32 消息循环）；
+//! - [`App::run_on`]：Android 入口（外部 winit EventLoop，仅 `winit-backend`）。
 //!
 //! UI 用引擎自研 ECS 组件 UI（`Node` / `Style` / `Text`），随主渲染
 //! 通道每帧绘制。
@@ -83,13 +93,21 @@ mod screenshot;
 
 use prism_engine::config::AppConfig;
 
+#[cfg(all(feature = "win32-native", not(windows)))]
+compile_error!("prism-app: `win32-native` 只在 Windows 目标上有效");
+
+#[cfg(not(any(feature = "winit-backend", all(windows, feature = "win32-native"))))]
+compile_error!(
+    "prism-app: 至少启用一个窗口后端（`winit-backend`，或 Windows 上的 `win32-native`）"
+);
+
 pub use app::{App, Subsystem};
 pub use debug_hud::DebugHud;
 pub use hook::FrameHook;
 pub use render_shared::{FrameImage, RenderShared, RenderStats};
 
 /// 用户项目 Android 入口所需的平台句柄；具体窗口库类型由 app 层封装。
-#[cfg(target_os = "android")]
+#[cfg(all(target_os = "android", feature = "winit-backend"))]
 pub use winit::platform::android::activity::AndroidApp;
 
 /// 把 APK assets 复制到内部存储并切换 cwd。
@@ -172,7 +190,7 @@ pub fn app() -> App {
 /// ```
 ///
 /// 与桌面 [`App::run`] 等价，但使用外部传入的 winit EventLoop。
-#[cfg(target_os = "android")]
+#[cfg(all(target_os = "android", feature = "winit-backend"))]
 pub fn run_on_android<F>(
     build_app: F,
     android_app: winit::platform::android::activity::AndroidApp,

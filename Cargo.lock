@@ -2643,6 +2643,7 @@ dependencies = [
  "prism-platform",
  "prism-render",
  "rapier3d",
+ "raw-window-handle",
  "serde",
  "serde_json",
  "winit",
@@ -2814,6 +2815,7 @@ dependencies = [
  "ash-window",
  "log",
  "raw-window-handle",
+ "windows-sys 0.61.2",
  "winit",
 ]
 

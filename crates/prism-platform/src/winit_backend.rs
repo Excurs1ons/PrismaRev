@@ -1,77 +1,116 @@
-//! Winit → engine domain-type conversions, pointer-lock helpers, and
-//! 输入 事件 routing.
+//! winit 后端：窗口创建 + winit 事件 → 中立事件（[`PlatformEvent`]）转换。
+//!
+//! 只有启用 `winit-backend` 时才编译；`win32-native` 独占构建里本模块
+//! 整个不参与，winit 也就不会被链接进产物。
+
+use std::time::Instant;
 
 use winit::event::WindowEvent;
+use winit::event_loop::ActiveEventLoop;
 use winit::window::Window;
 
-/// 与窗口库无关的平台事件快照。
-///
-/// `prism-app` 和宿主扩展最终应消费此类型，而不是直接依赖 winit 的
-/// `WindowEvent`。暂时保留原始事件路由 API，以便分阶段迁移调用方。
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum PlatformEvent {
-    CloseRequested,
-    Focused(bool),
-    Resized {
-        width: u32,
-        height: u32,
-    },
-    CursorMoved {
-        x: f64,
-        y: f64,
-    },
-    MouseButton {
-        button: u16,
-        pressed: bool,
-    },
-    MouseWheel {
-        /// 垂直滚动量，**单位是「滚轮行」**（一格传统滚轮 = 1.0）。
-        ///
-        /// winit 在部分平台/设备上给的是像素增量（触控板、precision 滚轮），
-        /// 平台层已按 [`PIXELS_PER_SCROLL_LINE`] 折算成行，所以消费方可以
-        /// 统一按「1.0 ≈ 一格」处理，不必知道来源设备。
-        delta: f64,
-    },
-    Key {
-        key: u32,
-        pressed: bool,
-    },
-    Touch {
-        /// 触点 id（同一根手指的手指按下到抬起保持不变，多点触控据此区分）。
-        id: u64,
-        x: f64,
-        y: f64,
-        phase: TouchPhase,
-    },
-    Other,
+use crate::config::WindowConfig;
+use crate::event::{Key, Modifiers, PlatformEvent, TouchPhase};
+use crate::window::PlatformWindow;
+
+/// 在**主线程**创建 winit 窗口（快速，不触碰 Vulkan / GPU）。
+pub(crate) fn create_window(
+    event_loop: &ActiveEventLoop,
+    window_cfg: &WindowConfig,
+) -> PlatformWindow {
+    let t_start = Instant::now();
+
+    let mut attrs = Window::default_attributes()
+        .with_title(&window_cfg.title)
+        .with_inner_size(winit::dpi::LogicalSize::new(
+            window_cfg.width as f64,
+            window_cfg.height as f64,
+        ))
+        .with_resizable(window_cfg.resizable)
+        .with_maximized(window_cfg.maximized)
+        .with_visible(window_cfg.visible)
+        .with_decorations(window_cfg.decorations);
+
+    if let (Some(w), Some(h)) = (window_cfg.min_width, window_cfg.min_height) {
+        attrs = attrs.with_min_inner_size(winit::dpi::LogicalSize::new(w as f64, h as f64));
+    }
+    if let (Some(w), Some(h)) = (window_cfg.max_width, window_cfg.max_height) {
+        attrs = attrs.with_max_inner_size(winit::dpi::LogicalSize::new(w as f64, h as f64));
+    }
+    if let (Some(x), Some(y)) = (window_cfg.position_x, window_cfg.position_y) {
+        attrs = attrs.with_position(winit::dpi::LogicalPosition::new(x as f64, y as f64));
+    }
+    if window_cfg.fullscreen {
+        attrs = attrs.with_fullscreen(Some(winit::window::Fullscreen::Borderless(None)));
+    }
+
+    let window = event_loop
+        .create_window(attrs)
+        .expect("failed to create window");
+
+    log::info!(
+        "PlatformContext: window created in {}ms",
+        (Instant::now() - t_start).as_millis(),
+    );
+
+    // winit 的 `Window` 本身就是窗口所有者；渲染线程只拿原始句柄，
+    // 不再需要 `Window` 本身。
+    PlatformWindow::from_winit(window)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TouchPhase {
-    Started,
-    Moved,
-    Ended,
-    Cancelled,
-}
-
-/// 像素增量折算成滚轮行的换算常量（50 px ≈ 一格）。
-///
-/// winit 的 [`winit::event::MouseScrollDelta`] 有两个单位互不相同的变体：
-/// 传统滚轮报 [`LineDelta`](winit::event::MouseScrollDelta::LineDelta)（一格
-/// `1.0`），触控板/高精度滚轮报
-/// [`PixelDelta`](winit::event::MouseScrollDelta::PixelDelta)（一格通常几十到
-/// 上百像素）。两者直接混用会让同一份缩放在不同平台上快 60–120 倍，所以平台层
-/// 在这里统一折算，`PlatformEvent::MouseWheel` 的 `delta` 与
-/// `InputManager::scroll_delta` 只以「行」为准。
-///
-/// 50 是经验值（Windows 的 `WHEEL_DELTA` 与各平台触控板的常见步长都落在这个
-/// 量级），不是任何平台的协议常量；只有「同一格滚轮在两种单位下折算结果一致」
-/// 是必须保持的契约，调这个数值不会改变缩放曲线的手感定义。
-pub const PIXELS_PER_SCROLL_LINE: f64 = 50.0;
-
-/// 把 winit 的像素级滚动增量折算成滚轮行（保留小数，触控板滑动平滑累积）。
-pub fn scroll_lines_from_pixels(pixels: f64) -> f64 {
-    pixels / PIXELS_PER_SCROLL_LINE
+impl Key {
+    /// winit 物理键码 → 中立键。
+    ///
+    /// 未列出的键退化为 [`Key::Other`]（载荷是 winit 判别值），避免静默丢弃。
+    pub fn from_winit(code: winit::keyboard::KeyCode) -> Self {
+        use winit::keyboard::KeyCode as Wk;
+        match code {
+            Wk::KeyW => Key::KeyW,
+            Wk::KeyA => Key::KeyA,
+            Wk::KeyS => Key::KeyS,
+            Wk::KeyD => Key::KeyD,
+            Wk::KeyQ => Key::KeyQ,
+            Wk::KeyE => Key::KeyE,
+            Wk::KeyT => Key::KeyT,
+            Wk::Space => Key::Space,
+            Wk::ShiftLeft => Key::ShiftLeft,
+            Wk::ShiftRight => Key::ShiftRight,
+            Wk::ControlLeft => Key::ControlLeft,
+            Wk::ControlRight => Key::ControlRight,
+            Wk::AltLeft => Key::AltLeft,
+            Wk::AltRight => Key::AltRight,
+            Wk::Escape => Key::Escape,
+            Wk::Tab => Key::Tab,
+            Wk::Enter => Key::Enter,
+            Wk::ArrowUp => Key::ArrowUp,
+            Wk::ArrowDown => Key::ArrowDown,
+            Wk::ArrowLeft => Key::ArrowLeft,
+            Wk::ArrowRight => Key::ArrowRight,
+            Wk::Digit0 => Key::Digit0,
+            Wk::Digit1 => Key::Digit1,
+            Wk::Digit2 => Key::Digit2,
+            Wk::Digit3 => Key::Digit3,
+            Wk::Digit4 => Key::Digit4,
+            Wk::Digit5 => Key::Digit5,
+            Wk::Digit6 => Key::Digit6,
+            Wk::Digit7 => Key::Digit7,
+            Wk::Digit8 => Key::Digit8,
+            Wk::Digit9 => Key::Digit9,
+            Wk::F1 => Key::F1,
+            Wk::F2 => Key::F2,
+            Wk::F3 => Key::F3,
+            Wk::F4 => Key::F4,
+            Wk::F5 => Key::F5,
+            Wk::F6 => Key::F6,
+            Wk::F7 => Key::F7,
+            Wk::F8 => Key::F8,
+            Wk::F9 => Key::F9,
+            Wk::F10 => Key::F10,
+            Wk::F11 => Key::F11,
+            Wk::F12 => Key::F12,
+            other => Key::Other(other as u32),
+        }
+    }
 }
 
 /// 将 winit 事件转换成平台无关事件。
@@ -101,16 +140,26 @@ pub fn to_platform_event(event: &WindowEvent) -> PlatformEvent {
         WindowEvent::MouseWheel { delta, .. } => PlatformEvent::MouseWheel {
             delta: match delta {
                 winit::event::MouseScrollDelta::LineDelta(_, y) => *y as f64,
-                winit::event::MouseScrollDelta::PixelDelta(pos) => scroll_lines_from_pixels(pos.y),
+                winit::event::MouseScrollDelta::PixelDelta(pos) => {
+                    crate::event::scroll_lines_from_pixels(pos.y)
+                }
             },
         },
         WindowEvent::KeyboardInput { event, .. } => PlatformEvent::Key {
             key: match event.physical_key {
-                winit::keyboard::PhysicalKey::Code(code) => code as u32,
-                winit::keyboard::PhysicalKey::Unidentified(_) => u32::MAX,
+                winit::keyboard::PhysicalKey::Code(code) => Key::from_winit(code),
+                winit::keyboard::PhysicalKey::Unidentified(_) => Key::Other(u32::MAX),
             },
             pressed: event.state == winit::event::ElementState::Pressed,
         },
+        WindowEvent::ModifiersChanged(modifiers) => {
+            let state = modifiers.state();
+            PlatformEvent::Modifiers(Modifiers {
+                shift: state.shift_key(),
+                control: state.control_key(),
+                alt: state.alt_key(),
+            })
+        }
         WindowEvent::Touch(touch) => PlatformEvent::Touch {
             id: touch.id,
             x: touch.location.x,
@@ -125,30 +174,6 @@ pub fn to_platform_event(event: &WindowEvent) -> PlatformEvent {
         _ => PlatformEvent::Other,
     }
 }
-
-// ===========================================================================
-// Pointer-lock helpers (cursor grab / 可见性
-// ===========================================================================
-
-/// Grab the cursor (hide + confine) for FPS-style 指针 lock.
-pub fn grab_pointer(window: &Window) {
-    window.set_cursor_visible(false);
-    if let Err(e) = window.set_cursor_grab(winit::window::CursorGrabMode::Confined) {
-        log::warn!("failed to grab cursor (pointer lock): {e}");
-    }
-}
-
-/// 释放 the cursor (show + unconfine).
-pub fn release_pointer(window: &Window) {
-    window.set_cursor_visible(true);
-    if let Err(e) = window.set_cursor_grab(winit::window::CursorGrabMode::None) {
-        log::warn!("failed to release cursor grab: {e}");
-    }
-}
-
-// ===========================================================================
-// 输入 事件 routing (winit → engine)
-// ===========================================================================
 
 #[cfg(test)]
 mod tests {
@@ -264,24 +289,32 @@ mod tests {
         );
         assert_eq!(
             wheel_lines(W::PixelDelta(PhysicalPosition::new(0.0, 12.0))),
-            12.0 / PIXELS_PER_SCROLL_LINE
+            12.0 / crate::event::PIXELS_PER_SCROLL_LINE
         );
     }
 
-    /// 回归守卫：同一格滚轮无论走哪个单位，引擎看到的都是 1.0 行，
-    /// 否则 zoom/移动速度会按平台差 60–120 倍。
+    /// 键盘映射是手工表：抽查移动/修饰/功能/数字键，防止 winit 侧改动后
+    /// 两边悄悄错位。
     #[test]
-    fn one_notch_is_one_line_in_either_unit() {
-        use winit::dpi::PhysicalPosition;
-        use winit::event::MouseScrollDelta as W;
-        let line = wheel_lines(W::LineDelta(0.0, 1.0));
-        let pixel = wheel_lines(W::PixelDelta(PhysicalPosition::new(
-            0.0,
-            PIXELS_PER_SCROLL_LINE,
-        )));
-        assert!(
-            (line - pixel).abs() < 1e-9,
-            "line delta {line} and one line worth of pixels {pixel} must agree"
-        );
+    fn winit_keycodes_map_to_native_keys() {
+        use winit::keyboard::KeyCode as Wk;
+        for (winit, expected) in [
+            (Wk::KeyW, Key::KeyW),
+            (Wk::KeyA, Key::KeyA),
+            (Wk::KeyS, Key::KeyS),
+            (Wk::KeyD, Key::KeyD),
+            (Wk::Space, Key::Space),
+            (Wk::Escape, Key::Escape),
+            (Wk::Tab, Key::Tab),
+            (Wk::Enter, Key::Enter),
+            (Wk::ArrowUp, Key::ArrowUp),
+            (Wk::Digit0, Key::Digit0),
+            (Wk::Digit9, Key::Digit9),
+            (Wk::F3, Key::F3),
+        ] {
+            assert_eq!(Key::from_winit(winit), expected, "{winit:?}");
+        }
+        // 未列出的键不能丢：退化为 winit 判别值。
+        assert_eq!(Key::from_winit(Wk::KeyZ), Key::Other(Wk::KeyZ as u32));
     }
 }

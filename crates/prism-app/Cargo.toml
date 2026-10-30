@@ -14,10 +14,20 @@ crate-type = ["lib"]
 # 物理是**可选**能力。`physics_runner` 目前仍是骨架（独立线程 + step/result 通道），
 # 尚未接进 `Engine::update`；不让它默认把 rapier3d / parry3d 拉进玩家二进制。
 # 需要物理时在用户项目里开：`prism-app = { path = "...", features = ["physics"] }`。
-default = ["pathtrace", "ui", "ibl", "skybox", "shadows", "gtao", "x11", "wayland", "group-3d", "group-2d", "group-ui"]
-# 窗口后端（透传 prism-platform）：Linux 体积敏感时只留一个。
-x11 = ["prism-platform/x11"]
-wayland = ["prism-platform/wayland"]
+default = ["pathtrace", "ui", "ibl", "skybox", "shadows", "gtao", "winit-backend", "x11", "wayland", "group-3d", "group-2d", "group-ui"]
+# 窗口后端二选一：
+# - `winit-backend`（默认）：winit 窗口 + 事件循环（桌面 / Android）。
+# - `win32-native`（默认关，仅 Windows）：Win32 原生窗口，**不编译任何 winit 代码**，
+#   Windows 发布包因此省掉 winit 的体积。启用它请关掉 `winit-backend`：
+#   `--no-default-features --features "win32-native,pathtrace,ui,ibl,skybox,shadows,gtao,group-3d,group-2d,group-ui"`。
+# 两个都开时以 winit 为准（`win32-native` 被忽略），方便调试混搭。
+winit-backend = ["dep:winit", "prism-platform/winit-backend"]
+win32-native = ["prism-platform/win32-native"]
+# Linux 上 winit 的子后端（透传 prism-platform）：体积敏感时只留一个。
+# 它们**蕴含** `winit-backend`：`--no-default-features --features x11` 仍是
+# 「只有 winit + X11」这个最小合法组合（`scripts/check_features.py` 依赖这条）。
+x11 = ["winit-backend", "prism-platform/x11"]
+wayland = ["winit-backend", "prism-platform/wayland"]
 # Lego 开关：透传到 prism-render / prism-engine（见 docs/DESIGN.md §12）。
 pathtrace = ["prism-render/pathtrace", "prism-engine/pathtrace"]
 ui = ["prism-render/ui", "prism-engine/ui"]
@@ -44,7 +54,10 @@ glam.workspace = true
 rapier3d = { workspace = true, optional = true }
 flume.workspace = true
 
-winit = { workspace = true }
+winit = { workspace = true, optional = true }
+# 中立原始窗口句柄（winit 的 `raw_window_handle` 重导出就是这一份 crate）。
+# 直接依赖它，`win32-native` 构建就不会因为 `use winit::raw_window_handle` 带进 winit。
+raw-window-handle = { workspace = true }
 log = { workspace = true }
 # `regex` 只用于 RUST_LOG 的正则过滤（`env_filter` 的 `regex` feature），
 # 默认开着一整套 regex 引擎（regex-automata + regex-syntax + aho-corasick ≈ 0.47 MB）。

@@ -6,15 +6,37 @@ license.workspace = true
 description = "Platform abstraction — window system, Vulkan surface, input routing"
 
 [features]
-# Linux 窗口后端二选一或全开（默认全开，保证两种会话都能启动）。
+# 窗口后端（显式选择，不再隐式拉 winit）：
+# - `winit-backend`：桌面 / Android 的 winit 窗口 + 事件循环。
+# - `win32-native`：Windows 专用，直接用 Win32 API 开窗口，**不链接 winit**。
+# Linux 上 x11 / wayland 只是 winit 的子后端开关，默认全开（两种会话都能启动）；
 # 体积敏感的分发可以只留一个：`--no-default-features --features x11`。
-default = ["x11", "wayland"]
-x11 = ["winit/x11"]
-wayland = ["winit/wayland", "winit/wayland-dlopen", "winit/wayland-csd-adwaita"]
+default = ["winit-backend", "x11", "wayland"]
+winit-backend = ["dep:winit"]
+x11 = ["winit-backend", "winit/x11"]
+wayland = [
+    "winit-backend",
+    "winit/wayland",
+    "winit/wayland-dlopen",
+    "winit/wayland-csd-adwaita",
+]
+# 仅 Windows 生效（无 winit）。见 `src/win32.rs` 的模块文档。
+win32-native = []
 
 [dependencies]
-winit = { workspace = true }
+winit = { workspace = true, optional = true }
 ash-window = { workspace = true }
 raw-window-handle = { workspace = true }
 log = { workspace = true }
 anyhow = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+# 只给 `win32-native` 用；signed 常量与 `GetMessageW` 都在这里。
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_LibraryLoader",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+] }
