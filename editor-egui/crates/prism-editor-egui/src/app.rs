@@ -130,6 +130,13 @@ fn tab_title(tab: &str) -> &str {
     }
 }
 
+/// 关闭确认框的三个回答。
+enum CloseDecision {
+    Save,
+    Discard,
+    Cancel,
+}
+
 pub struct EditorApp {
     pub workspace: Workspace,
     pub state: UiState,
@@ -152,6 +159,8 @@ pub struct EditorApp {
     last_frame: Instant,
     playing: bool,
     paused: bool,
+    /// 控制协议 / 自动化请求退出：跳过未保存确认。
+    force_quit: bool,
     render_report: Option<String>,
     /// 命名布局（Window → Layouts）：name → DockLayout JSON。
     named_layouts: std::collections::BTreeMap<String, serde_json::Value>,
@@ -278,6 +287,7 @@ impl EditorApp {
             last_frame: Instant::now(),
             playing: false,
             paused: false,
+            force_quit: false,
             render_report: None,
             named_layouts,
             layouts_path,
@@ -744,13 +754,17 @@ impl EditorApp {
         Ok(format!("set {component}.{path}"))
     }
 
-    /// 请求退出。
+    /// 请求退出：有未保存改动时先弹确认，否则直接关窗口。
     ///
     /// `egui-ash` 的 `ExitSignal` 并没有接进事件循环（`run.rs` 里轮询它的那段是注释掉的），
     /// 唯一生效的路径是给根视口发 `Close`：winit 的 `CloseRequested` →
     /// `event_loop.exit()`。
-    fn request_quit(&self, ctx: &egui::Context) {
-        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+    fn request_quit(&mut self, ctx: &egui::Context) {
+        if self.workspace.docs.iter().any(|document| document.dirty) {
+            self.state.pending_close = Some(panels::CloseTarget::App);
+        } else {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
     }
 
     /// 一条控制命令 → 回执 JSON（`None` = 稍后由 `pending_captures` 回复）。
@@ -868,6 +882,8 @@ impl EditorApp {
                 }
             }
             "quit" => {
+                // 自动化路径（MCP / 脚本）要求确定性地退出，跳过未保存确认。
+                self.force_quit = true;
                 self.request_quit(ctx);
                 json!({ "ok": true })
             }
@@ -987,7 +1003,9 @@ impl EditorApp {
         self.state.prompt = Some(panels::Prompt::new(kind, title, hint, value));
     }
 
-    fn save_all_documents(&mut self) {
+    /// 保存所有脏文档。返回保存数量；任何一份失败就返回错误（调用方决定是否继续，
+    /// 构建路径必须因此中止，否则会打包旧内容）。
+    fn save_all_documents(&mut self) -> Result<usize, String> {
         let count = self.workspace.docs.len();
         let mut failures = Vec::new();
         let mut saved = 0usize;
@@ -1003,15 +1021,13 @@ impl EditorApp {
             self.state.status = if saved == 0 {
                 "nothing to save".to_string()
             } else {
-                format!("project saved ({saved})")
+                format!("saved {saved} document(s)")
             };
+            Ok(saved)
         } else {
-            // 失败信息不能被「project saved」吞掉。
-            self.state.status = format!(
-                "save failed for {} document(s): {}",
-                failures.len(),
-                failures.join("; ")
-            );
+            let message = failures.join("; ");
+            self.state.status = format!("save failed: {message}");
+            Err(message)
         }
     }
 
@@ -1240,11 +1256,36 @@ impl EditorApp {
             .unwrap_or(false)
     }
 
+    /// 中断正在跑的构建（`File → Cancel Build` / 状态栏的 Cancel）。
+    fn cancel_build(&mut self) {
+        let Some(job) = self.build.as_ref() else {
+            return;
+        };
+        job.cancel();
+        let label = job.label().to_string();
+        self.state.status = format!("cancelling build: {label}");
+        self.workspace.log(
+            prism_editor_core::LogSource::System,
+            prism_editor_core::LogLevel::Warn,
+            format!("build cancel requested: {label}"),
+        );
+    }
+
     fn start_build(&mut self, kind: crate::build::BuildKind) {
         let Some(root) = self.project_root.clone() else {
             self.state.status = "no project root — cannot build".to_string();
             return;
         };
+        // 构建读的是磁盘上的作者文档：未保存的改动必须先落盘，否则打出来的是旧内容。
+        if let Err(error) = self.save_all_documents() {
+            self.state.status = format!("build aborted: {error}");
+            self.workspace.log(
+                prism_editor_core::LogSource::System,
+                prism_editor_core::LogLevel::Error,
+                format!("build aborted: save failed ({error})"),
+            );
+            return;
+        }
         let label = kind.label();
         self.workspace.log(
             prism_editor_core::LogSource::System,
@@ -1339,7 +1380,9 @@ impl EditorApp {
                 });
                 self.menu_item(ui, "Save", "Ctrl+S", Command::Save);
                 self.menu_item(ui, "Save As…", "Ctrl+Shift+S", Command::SaveAs);
-                self.menu_do(ui, "Save Project", |app| app.save_all_documents());
+                self.menu_do(ui, "Save Project", |app| {
+                    let _ = app.save_all_documents();
+                });
                 self.menu_item(ui, "Reload Scene", "", Command::ReloadDocument);
                 ui.separator();
                 self.menu_item(ui, "Build Settings…", "", Command::ToggleBuild);
@@ -1384,7 +1427,34 @@ impl EditorApp {
                     .add_enabled(!self.build_job_running(), egui::Button::new("Clean Build"))
                     .clicked()
                 {
-                    self.start_build(crate::build::BuildKind::Clean);
+                    // Unity 的 Clean Build 只清构建缓存 / 输出，不动引擎编译产物。
+                    self.state.confirm = Some(panels::Confirm::new(
+                        panels::ConfirmKind::CleanPlayer,
+                        "Clean Build",
+                        "清理玩家工程（projects/prisma）的编译产物，下次 Build 会全量重编。\n\
+                         不会动仓库根的引擎 target。",
+                        "Clean Player",
+                    ));
+                    ui.close();
+                }
+                if ui
+                    .add_enabled(
+                        !self.build_job_running(),
+                        egui::Button::new("Clean Engine Cache…"),
+                    )
+                    .clicked()
+                {
+                    self.state.confirm = Some(panels::Confirm::new(
+                        panels::ConfirmKind::CleanEngine,
+                        "Clean Engine Cache",
+                        "清理仓库根 workspace 的 target/（引擎 + 全部 crate 的编译产物，\n\
+                         通常几个 GB，重编需要十几分钟）。",
+                        "Clean Engine",
+                    ));
+                    ui.close();
+                }
+                if self.build_job_running() && ui.button("Cancel Build").clicked() {
+                    self.cancel_build();
                     ui.close();
                 }
                 ui.separator();
@@ -1789,14 +1859,25 @@ impl EditorApp {
                             .weak(),
                     );
                 }
-                if let Some(job) = &self.build {
-                    if job.running() {
-                        ui.label(
-                            RichText::new(format!("building: {}", job.label()))
-                                .size(10.0)
-                                .color(egui::Color32::from_rgb(224, 176, 80)),
-                        );
+                let build_label = self
+                    .build
+                    .as_ref()
+                    .filter(|job| job.running())
+                    .map(|job| job.label().to_string());
+                if let Some(label) = build_label {
+                    // 构建是几十秒的阻塞操作：状态栏必须能一键中断。
+                    if ui
+                        .small_button(RichText::new("Cancel").size(10.0))
+                        .on_hover_text("Stop the running cargo build")
+                        .clicked()
+                    {
+                        self.cancel_build();
                     }
+                    ui.label(
+                        RichText::new(format!("building: {label}"))
+                            .size(10.0)
+                            .color(egui::Color32::from_rgb(224, 176, 80)),
+                    );
                 }
             });
         });
@@ -2323,7 +2404,12 @@ impl EditorApp {
                 &mut self.state,
             ),
             "theme" => panels::theme(ui, &mut self.workspace),
-            "build" => panels::build(ui, &mut self.workspace, &mut self.state),
+            "build" => {
+                panels::build(ui, &mut self.workspace, &mut self.state);
+                if let Some(kind) = self.state.pending_build.take() {
+                    self.start_build(kind);
+                }
+            }
             "tools" => panels::tools(ui, &mut self.state),
             "shortcuts" => panels::shortcuts(ui),
             "about" => panels::about(ui),
@@ -2394,6 +2480,45 @@ impl EditorApp {
     // -----------------------------------------------------------------------
 
     /// 统一输入框：另存为 / 新建目录 / 存为预制体 / 重命名。
+    /// 破坏性操作的确认框（Unity 的 `EditorUtility.DisplayDialog`）。
+    fn confirm_dialog(&mut self, ctx: &egui::Context) {
+        let Some(confirm) = self.state.confirm.clone() else {
+            return;
+        };
+        let mut open = true;
+        let mut accepted = false;
+        let mut cancelled = false;
+        egui::Window::new(&confirm.title)
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.label(&confirm.message);
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button(confirm.ok.as_str()).clicked() {
+                        accepted = true;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        cancelled = true;
+                    }
+                });
+            });
+        if accepted {
+            self.state.confirm = None;
+            match confirm.kind {
+                panels::ConfirmKind::CleanPlayer => {
+                    self.start_build(crate::build::BuildKind::Clean)
+                }
+                panels::ConfirmKind::CleanEngine => {
+                    self.start_build(crate::build::BuildKind::CleanEngine)
+                }
+            }
+        } else if cancelled || !open {
+            self.state.confirm = None;
+        }
+    }
+
     fn prompt_dialog(&mut self, ctx: &egui::Context) {
         let Some(mut prompt) = self.state.prompt.clone() else {
             return;
@@ -2486,6 +2611,114 @@ impl EditorApp {
             self.state.prompt = None;
         } else {
             self.state.prompt = Some(prompt);
+        }
+    }
+
+    /// 关闭未保存文档 / 窗口时的三选一确认（Unity 的 Save / Don't Save / Cancel）。
+    fn close_confirm_dialog(&mut self, ctx: &egui::Context) {
+        let Some(target) = self.state.pending_close else {
+            return;
+        };
+        let (message, detail) = match target {
+            panels::CloseTarget::Document(index) => {
+                let title = self
+                    .workspace
+                    .docs
+                    .get(index)
+                    .map(|document| document.title())
+                    .unwrap_or_else(|| "document".to_string());
+                (
+                    format!("{title} has unsaved changes."),
+                    "Close it anyway?".to_string(),
+                )
+            }
+            panels::CloseTarget::App => {
+                let count = self
+                    .workspace
+                    .docs
+                    .iter()
+                    .filter(|document| document.dirty)
+                    .count();
+                (
+                    format!("{count} document(s) have unsaved changes."),
+                    "Quit anyway?".to_string(),
+                )
+            }
+        };
+
+        let mut open = true;
+        let mut decision: Option<CloseDecision> = None;
+        egui::Window::new("Unsaved Changes")
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.label(message);
+                ui.label(egui::RichText::new(detail).weak());
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Save").clicked() {
+                        decision = Some(CloseDecision::Save);
+                    }
+                    if ui.button("Don't Save").clicked() {
+                        decision = Some(CloseDecision::Discard);
+                    }
+                    if ui.button("Cancel").clicked() {
+                        decision = Some(CloseDecision::Cancel);
+                    }
+                });
+            });
+
+        match decision {
+            Some(CloseDecision::Save) => match self.save_before_close(target) {
+                Ok(()) => self.finish_close(ctx, target),
+                Err(error) => self.state.status = format!("save failed: {error}"),
+            },
+            Some(CloseDecision::Discard) => self.finish_close(ctx, target),
+            Some(CloseDecision::Cancel) => self.state.pending_close = None,
+            None => {
+                // 标题栏的 × 等同 Cancel。
+                if !open {
+                    self.state.pending_close = None;
+                }
+            }
+        }
+    }
+
+    /// 保存关闭目标涉及的所有未保存文档；任一失败就保留确认框。
+    fn save_before_close(&mut self, target: panels::CloseTarget) -> Result<(), String> {
+        match target {
+            panels::CloseTarget::Document(index) => self
+                .workspace
+                .save_document(index)
+                .map(|path| {
+                    self.state.status = format!("saved {path}");
+                })
+                .map_err(|error| error.to_string()),
+            panels::CloseTarget::App => {
+                let mut failure: Option<String> = None;
+                for index in 0..self.workspace.docs.len() {
+                    if !self.workspace.docs[index].dirty {
+                        continue;
+                    }
+                    if let Err(error) = self.workspace.save_document(index) {
+                        failure = Some(error.to_string());
+                    }
+                }
+                failure.map_or(Ok(()), Err)
+            }
+        }
+    }
+
+    /// 确认后的真正关闭动作。
+    fn finish_close(&mut self, ctx: &egui::Context, target: panels::CloseTarget) {
+        self.state.pending_close = None;
+        match target {
+            panels::CloseTarget::Document(index) => self.workspace.close_document(index),
+            panels::CloseTarget::App => {
+                self.autosave_state();
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
         }
     }
 
@@ -2907,12 +3140,23 @@ impl EditorApp {
             );
         }
         if !running {
-            self.state.status = format!("build finished: {}", job.label());
-            self.workspace.log(
-                prism_editor_core::LogSource::System,
-                prism_editor_core::LogLevel::Info,
-                format!("build finished: {}", job.label()),
-            );
+            let cancelled = job.was_cancelled();
+            let label = job.label().to_string();
+            if cancelled {
+                self.state.status = format!("build cancelled: {label}");
+                self.workspace.log(
+                    prism_editor_core::LogSource::System,
+                    prism_editor_core::LogLevel::Warn,
+                    format!("build cancelled: {label}"),
+                );
+            } else {
+                self.state.status = format!("build finished: {label}");
+                self.workspace.log(
+                    prism_editor_core::LogSource::System,
+                    prism_editor_core::LogLevel::Info,
+                    format!("build finished: {label}"),
+                );
+            }
             self.build = None;
         }
     }
@@ -2951,6 +3195,7 @@ impl EditorApp {
 impl App for EditorApp {
     fn ui(&mut self, ctx: &egui::Context) {
         self.frame_count += 1;
+        self.state.build_running = self.build_job_running();
         // 鼠标松开 = 一次交互结束（拖动 gizmo / 拖拽检查器数字框）：
         // 本次交互压成一步，下一次修改必然开新撤销步。
         if ctx.input(|input| input.pointer.any_released()) {
@@ -3031,6 +3276,9 @@ impl App for EditorApp {
         self.state.compact = self.preferences.compact;
         self.state.confirm_delete = self.preferences.confirm_delete;
         panels::entity_delete_confirm(ctx, &mut self.workspace, &mut self.state);
+        self.confirm_dialog(ctx);
+        self.close_confirm_dialog(ctx);
+        panels::doc_delete_confirm(ctx, &mut self.workspace, &mut self.state);
 
         let mut about = self.state.about_open;
         panels::boolean_window(ctx, &mut about, "About", panels::about);
@@ -3040,9 +3288,14 @@ impl App for EditorApp {
         panels::boolean_window(ctx, &mut shortcuts, "Shortcuts", panels::shortcuts);
         self.state.shortcuts_open = shortcuts;
 
-        // 关闭窗口 = 退出（与游戏窗口一致的行为）。
+        // 关闭窗口 = 退出（与游戏窗口一致的行为）；有未保存改动时先拦截。
         if ctx.input(|input| input.viewport().close_requested()) {
-            self.exit_signal.send(std::process::ExitCode::SUCCESS);
+            if !self.force_quit && self.workspace.docs.iter().any(|document| document.dirty) {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                self.state.pending_close = Some(panels::CloseTarget::App);
+            } else {
+                self.exit_signal.send(std::process::ExitCode::SUCCESS);
+            }
         }
 
         self.autosave_state();

@@ -5,7 +5,8 @@
 
 use egui::{Align, Layout, RichText, Ui, Vec2};
 use prism_editor_core::{
-    AssetKind, Locale, LogLevel, LogSource, Preferences, ProjectSettings, Workspace, THEME_PRESETS,
+    AssetKind, Locale, LogLevel, LogSource, Preferences, ProjectSettings, SceneDoc, Workspace,
+    THEME_PRESETS,
 };
 use serde_json::{json, Value};
 
@@ -184,10 +185,57 @@ pub struct UiState {
     pub dragging: Option<usize>,
     pub drop_target: Option<(usize, DropZone)>,
     pub shortcuts_open: bool,
+    /// 等待确认删除的场景 / 预制体（相对项目根路径）。删除不可撤销，
+    /// 资产面板与文档面板共用同一个确认框。
+    pub pending_doc_delete: Option<String>,
+    /// Build 面板里点击的构建请求，由 `EditorApp` 在同一帧取走并真正启动。
+    pub pending_build: Option<crate::build::BuildKind>,
+    /// 当前是否有构建子进程在跑（由 `EditorApp` 每帧同步，用来禁用按钮）。
+    pub build_running: bool,
+    /// 待确认的破坏性操作（Unity 的 `EditorUtility.DisplayDialog`）。
+    pub confirm: Option<Confirm>,
     /// 最后点过的面板（Unity 的 `focusedWindow`）：快捷键按它分派。
     pub focused_panel: Option<String>,
     /// 等待确认删除的资产路径。
     pub pending_asset_delete: Option<String>,
+    /// 等待用户回答的关闭请求（有未保存改动时才会出现）。
+    pub pending_close: Option<CloseTarget>,
+}
+
+/// 关闭前确认的目标：某个文档标签，或整个编辑器窗口。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CloseTarget {
+    Document(usize),
+    App,
+}
+
+/// 需要二次确认的破坏性操作。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfirmKind {
+    /// `File → Clean Build`：只清玩家 workspace 的 target。
+    CleanPlayer,
+    /// `File → Clean Engine Cache…`：清仓库根 workspace 的 target。
+    CleanEngine,
+}
+
+/// 一个待确认的对话框（Unity 的 `EditorUtility.DisplayDialog`）。
+#[derive(Clone)]
+pub struct Confirm {
+    pub kind: ConfirmKind,
+    pub title: String,
+    pub message: String,
+    pub ok: String,
+}
+
+impl Confirm {
+    pub fn new(kind: ConfirmKind, title: &str, message: impl Into<String>, ok: &str) -> Self {
+        Self {
+            kind,
+            title: title.to_string(),
+            message: message.into(),
+            ok: ok.to_string(),
+        }
+    }
 }
 
 /// 二级 / 三级菜单和对话框复用的输入框种类。
@@ -251,12 +299,29 @@ impl UiState {
 
 enum TreeAction {
     Select(usize, bool),
+    Toggle(usize),
     ToggleExpand(usize),
     ToggleActive(usize),
     Delete(usize),
     Duplicate(usize),
     CommitRename(usize, String),
     BeginRename(usize, String),
+}
+
+/// 层级搜索命中项及其祖先（`path_of` 已包含自身）。
+///
+/// 搜索必须能看见折叠父级下的对象，否则会出现「明明有这个实体却搜不到」。
+fn search_matches(doc: &SceneDoc, filter: &str) -> std::collections::HashSet<usize> {
+    let mut keep = std::collections::HashSet::new();
+    if filter.is_empty() {
+        return keep;
+    }
+    for (index, entity) in doc.entities.iter().enumerate() {
+        if entity.display_name().to_lowercase().contains(filter) {
+            keep.extend(doc.path_of(index));
+        }
+    }
+    keep
 }
 
 pub fn hierarchy(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
@@ -291,9 +356,22 @@ pub fn hierarchy(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
     });
     ui.separator();
 
+    let filter = state.hierarchy_search.to_lowercase();
+    let searching = !filter.is_empty();
+    // 命中项 + 祖先：折叠父级下的对象也要能被搜到（Unity 会展开祖先并显示路径）。
+    let search = search_matches(&workspace.document().doc, &filter);
+    if searching {
+        let ids: Vec<u32> = {
+            let doc = &workspace.document().doc;
+            search
+                .iter()
+                .filter_map(|index| doc.id_of_index(*index))
+                .collect()
+        };
+        workspace.expanded.extend(ids);
+    }
     let expanded = workspace.expanded.clone();
     let rows = workspace.document().doc.visible_rows(&expanded);
-    let filter = state.hierarchy_search.to_lowercase();
     let mut action: Option<TreeAction> = None;
     // 资产拖到实体上 = 实例化预制体（Unity 的 Project → Hierarchy 拖拽）。
     let mut asset_drop: Option<(usize, String)> = None;
@@ -309,7 +387,7 @@ pub fn hierarchy(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
                     continue;
                 };
                 let name = entity.display_name();
-                if !filter.is_empty() && !name.to_lowercase().contains(&filter) {
+                if searching && !search.contains(&index) {
                     continue;
                 }
                 let depth = doc.path_of(index).len().saturating_sub(1);
@@ -421,8 +499,13 @@ pub fn hierarchy(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
                 // 行级交互：单击选中、双击重命名（子控件会先吃掉自己的点击）。
                 if !renaming {
                     if row.clicked() {
-                        let extend = ui.input(|i| i.modifiers.shift);
-                        action = Some(TreeAction::Select(index, extend));
+                        let modifiers = ui.input(|i| i.modifiers);
+                        // Ctrl/Cmd 单击 = 切换（Unity 的多选开关），Shift = 追加。
+                        if modifiers.ctrl || modifiers.command {
+                            action = Some(TreeAction::Toggle(index));
+                        } else {
+                            action = Some(TreeAction::Select(index, modifiers.shift));
+                        }
                     }
                     if row.double_clicked() {
                         action = Some(TreeAction::BeginRename(index, name.clone()));
@@ -629,6 +712,19 @@ pub fn hierarchy(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
     if let Some(action) = action {
         match action {
             TreeAction::Select(index, extend) => workspace.select(index, extend),
+            TreeAction::Toggle(index) => {
+                if workspace.selection.contains(&index) {
+                    let remaining: Vec<usize> = workspace
+                        .selection
+                        .iter()
+                        .copied()
+                        .filter(|selected| *selected != index)
+                        .collect();
+                    workspace.select_many(&remaining, false);
+                } else {
+                    workspace.select_many(&[index], true);
+                }
+            }
             TreeAction::ToggleExpand(index) => workspace.toggle_expanded(index),
             TreeAction::ToggleActive(index) => {
                 let active = workspace.document().doc.entities[index].active();
@@ -1466,7 +1562,12 @@ pub fn assets(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
         ));
     }
     if let Some(path) = delete {
-        request_delete_asset(workspace, state, &path);
+        if is_document_path(&path) {
+            // 场景 / 预制体走文档确认框（`Workspace::delete_asset` 会拒绝它们）。
+            state.pending_doc_delete = Some(path);
+        } else {
+            request_delete_asset(workspace, state, &path);
+        }
     }
     asset_delete_confirm(ui, workspace, state);
 }
@@ -1523,6 +1624,55 @@ pub fn asset_delete_confirm(ui: &Ui, workspace: &mut Workspace, state: &mut UiSt
     }
 }
 
+fn is_document_path(path: &str) -> bool {
+    path.ends_with(".scene.json") || path.ends_with(".prefab.json")
+}
+
+/// 删除场景 / 预制体前的确认框：删磁盘文件 + 关标签 + 清 `scenes.toml`。
+pub fn doc_delete_confirm(ctx: &egui::Context, workspace: &mut Workspace, state: &mut UiState) {
+    let Some(path) = state.pending_doc_delete.clone() else {
+        return;
+    };
+    let mut decision = None;
+    egui::Window::new("Delete Document")
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
+        .show(ctx, |ui| {
+            ui.label(format!("Delete {path}?"));
+            ui.label(
+                RichText::new(
+                    "The file, its open tab and its Build Settings entry are removed. This cannot be undone.",
+                )
+                .weak(),
+            );
+            ui.horizontal(|ui| {
+                if ui.button("Delete").clicked() {
+                    decision = Some(true);
+                }
+                if ui.button("Cancel").clicked() {
+                    decision = Some(false);
+                }
+            });
+        });
+    match decision {
+        Some(true) => {
+            match workspace.delete_document(&path) {
+                Ok(()) => {
+                    if state.asset_selection.as_deref() == Some(path.as_str()) {
+                        state.asset_selection = None;
+                    }
+                    state.status = format!("deleted {path}");
+                }
+                Err(error) => state.status = format!("delete failed: {error}"),
+            }
+            state.pending_doc_delete = None;
+        }
+        Some(false) => state.pending_doc_delete = None,
+        None => {}
+    }
+}
+
 fn navigate_assets(state: &mut UiState, folder: &str) {
     if state.asset_folder == folder {
         return;
@@ -1541,6 +1691,7 @@ pub fn docs(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
     let mut activate: Option<usize> = None;
     let mut close: Option<usize> = None;
     let mut save: Option<usize> = None;
+    let mut delete_doc: Option<String> = None;
     let count = workspace.docs.len();
     for index in 0..count {
         let title = workspace.docs[index].title_with_dirty();
@@ -1596,6 +1747,15 @@ pub fn docs(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
         if row.clicked() {
             activate = Some(index);
         }
+        // 文档行右键：删除磁盘文件（资产面板拒绝直接删文档，入口收在这里）。
+        if let Some(path) = workspace.docs[index].path.clone() {
+            row.context_menu(|ui| {
+                if ui.button("Delete…").clicked() {
+                    delete_doc = Some(path);
+                    ui.close();
+                }
+            });
+        }
     }
     if let Some(index) = activate {
         workspace.set_active(index);
@@ -1607,6 +1767,24 @@ pub fn docs(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
         }
     }
     if let Some(index) = close {
+        request_close_document(workspace, state, index);
+    }
+    if let Some(path) = delete_doc {
+        state.pending_doc_delete = Some(path);
+    }
+}
+
+/// 关闭文档标签：有未保存改动时挂起，交给 `close_confirm_dialog` 询问；
+/// 干净的文档直接关闭（Unity 的行为）。
+pub fn request_close_document(workspace: &mut Workspace, state: &mut UiState, index: usize) {
+    let dirty = workspace
+        .docs
+        .get(index)
+        .map(|document| document.dirty)
+        .unwrap_or(false);
+    if dirty {
+        state.pending_close = Some(CloseTarget::Document(index));
+    } else {
         workspace.close_document(index);
     }
 }
@@ -2171,7 +2349,68 @@ pub fn build(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
             }
         }
     }
+
+    // ---- Add scenes that exist on disk but are missing from the manifest ----
+    let available = workspace.available_scene_documents();
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("Add").size(11.0));
+        ui.add_enabled_ui(!available.is_empty() && !state.build_running, |ui| {
+            egui::ComboBox::from_id_salt("build-add-scene")
+                .selected_text(if available.is_empty() {
+                    "all scenes in build"
+                } else {
+                    "scene…"
+                })
+                .show_ui(ui, |ui| {
+                    for path in &available {
+                        if ui.selectable_label(false, path).clicked() {
+                            if workspace.add_scene_document(path).is_some() {
+                                state.status = format!("added {path} to build");
+                            }
+                        }
+                    }
+                });
+        });
+    });
+
+    // ---- The active document may not be part of the build yet ----
+    if let Some(path) = workspace.document().path.clone() {
+        let relative = path.trim_start_matches("assets/").to_string();
+        if relative.ends_with(".scene.json")
+            && !workspace.scene_manifest.contains_document(&relative)
+        {
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new("This scene is not in the build")
+                        .weak()
+                        .size(11.0),
+                );
+                if ui
+                    .small_button("+ Add to build")
+                    .on_hover_text("Append this document to assets/scenes.toml")
+                    .clicked()
+                    && workspace.add_scene_document(&relative).is_some()
+                {
+                    state.status = format!("added {relative} to build");
+                }
+            });
+        }
+    }
+
     ui.separator();
+    ui.horizontal(|ui| {
+        ui.add_enabled_ui(!state.build_running, |ui| {
+            if ui.button("Build").clicked() {
+                state.pending_build = Some(crate::build::BuildKind::ScenePack);
+            }
+            if ui.button("Build And Run").clicked() {
+                state.pending_build = Some(crate::build::BuildKind::PlayerRun);
+            }
+        });
+        if state.build_running {
+            ui.label(RichText::new("building…").weak().size(11.0));
+        }
+    });
     ui.label(
         RichText::new(
             "Building runs `cargo build` + `prism-build-pipeline build-scenes` on the host; \
@@ -2244,6 +2483,60 @@ pub fn boolean_window(
         .show(ctx, |ui| body(ui));
     if !visible {
         *open = false;
+    }
+}
+
+#[cfg(test)]
+mod hierarchy_search_tests {
+    use super::*;
+
+    #[test]
+    fn search_keeps_ancestors_of_matches() {
+        let mut doc = SceneDoc {
+            version: 3,
+            entities: Vec::new(),
+        };
+        let parent = doc.add_named_child(None, "Boat");
+        let child = doc.add_named_child(Some(parent), "Rod");
+        doc.add_named_child(None, "Water");
+
+        let keep = search_matches(&doc, "rod");
+        assert!(keep.contains(&child));
+        assert!(keep.contains(&parent), "collapsed parent must stay visible");
+        assert_eq!(keep.len(), 2);
+
+        assert!(search_matches(&doc, "").is_empty());
+        assert!(search_matches(&doc, "missing").is_empty());
+    }
+}
+
+#[cfg(test)]
+mod close_guard_tests {
+    use super::*;
+
+    #[test]
+    fn dirty_document_close_is_deferred_until_confirmed() {
+        let mut workspace = Workspace::sample();
+        let mut state = UiState::new();
+        workspace.add_entity("");
+        let active = workspace.active_index();
+        assert!(workspace.document().dirty);
+
+        let count = workspace.docs.len();
+        request_close_document(&mut workspace, &mut state, active);
+
+        assert_eq!(workspace.docs.len(), count, "dirty document must stay open");
+        assert_eq!(state.pending_close, Some(CloseTarget::Document(active)));
+    }
+
+    #[test]
+    fn clean_document_close_is_not_deferred() {
+        let mut workspace = Workspace::sample();
+        let mut state = UiState::new();
+
+        request_close_document(&mut workspace, &mut state, 0);
+
+        assert!(state.pending_close.is_none());
     }
 }
 
