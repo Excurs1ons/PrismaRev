@@ -125,6 +125,17 @@ jobs:
       - name: Feature matrix
         run: python3 scripts/check_features.py
 
+      # 文本光栅后端 B（`ui-directwrite`）只在 Windows 目标编译，Linux 上的
+      # `check_features.py` 覆盖不到它 —— 交叉 `cargo check` 是唯一在 CI 里能编译它的
+      # 方式（check 不链接，只需要目标标准库，不需要 mingw linker）。
+      - name: Windows text backends (cross check)
+        run: |
+          rustup target add x86_64-pc-windows-gnu
+          cargo check -p prism-render --target x86_64-pc-windows-gnu \
+            --no-default-features --features ui,ui-directwrite
+          cargo check -p prism-render --target x86_64-pc-windows-gnu \
+            --no-default-features --features ui,ui-fontdue
+
   # ---------------------------------------------------------------------------
   # 1. Lint gate.
   # ---------------------------------------------------------------------------

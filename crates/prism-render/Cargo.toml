@@ -8,10 +8,21 @@ description = "Vulkan rendering backend for PrismaRev"
 [features]
 # ---- Lego：项目模板决定编译哪些能力（见 docs/DESIGN.md §12） ----
 # 默认「全量」，库和示例行为不变；项目模板按需挑砖。
-default = ["pathtrace", "ui", "ibl", "skybox", "shadows", "gtao"]
-# UI 叠加（fontdue 文本光栅 + ttf-parser，约 90 KB）。纯 3D/无 UI 项目可关：
+default = ["pathtrace", "ui", "ui-fontdue", "ibl", "skybox", "shadows", "gtao"]
+# UI 叠加总开关（字形图集 + 管线 + 屏幕空间四边形）。纯 3D/无 UI 项目可关：
 # 关掉后 `ui_overlay` 只保留输入数据结构，渲染侧忽略 UI 命令。
-ui = ["dep:fontdue"]
+#
+# 它**不**决定谁光栅化字形——那是下面两个文本后端的事：
+#   `ui-fontdue`     fontdue + ttf-parser（全平台，默认）
+#   `ui-directwrite` Windows 系统 DirectWrite（仅 Windows，省掉 fontdue/ttf-parser）
+# 只开 `ui` 不开后端 = 只画 quad、不画文字（省约 90 KB），启动时 warn 一次。
+ui = []
+# 文本后端 A：fontdue 光栅 + ttf-parser（约 90 KB），全平台。
+ui-fontdue = ["ui", "dep:fontdue"]
+# 文本后端 B：Windows 系统 DirectWrite + GDI interop（`windows` 绑定只在 Windows 目标启用）。
+# 与 `ui-fontdue` **互斥**（同时开会白白把 fontdue/ttf-parser 留在二进制里），
+# 非 Windows 目标开它会直接编译失败（见 ui_overlay.rs 的 compile_error!）。
+ui-directwrite = ["ui", "dep:windows"]
 # 实时路径追踪（pt_pass.rs + acceleration structure 使用）。纯光栅项目可关。
 pathtrace = []
 # 图像光照（IBL）：环境 cubemap 卷积 / irradiance / prefilter / BRDF LUT + HDR 解码。
@@ -38,3 +49,12 @@ slotmap = { workspace = true }
 # 自己实现的，不依赖 image 的 `hdr` feature。
 image = { workspace = true, features = ["png"] }
 fontdue = { version = "0.9", optional = true }
+
+# 文本后端 B（`ui-directwrite`）：只用 Win32 的 DirectWrite + GDI 子集。
+# optional + 只在 windows 目标启用，所以 Linux/Android 的依赖图里不会出现它。
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, optional = true, features = [
+    "Win32_Foundation",
+    "Win32_Graphics_DirectWrite",
+    "Win32_Graphics_Gdi",
+] }

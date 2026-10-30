@@ -1081,7 +1081,9 @@ cp target/release/prisma /tmp/p && strip /tmp/p && ls -l /tmp/p   # strip 后（
 | 物理 | `prism-app/physics` | off | rapier3d + parry3d（~40 crate） |
 | 异步资产 IO | `prism-asset/async-io` | off | tokio |
 | 窗口后端 | `prism-app/x11`、`prism-app/wayland`（透传 `prism-platform`） | 两个都 on | Linux 上只留一个：−0.46 MB（wayland 独留）～ −1.05 MB（x11 独留） |
-| UI 叠加 | `prism-render/ui`（透传 `prism-app/ui`） | on | fontdue + ttf-parser + 字形图集：−64 KB；关掉后 UI 命令照常填充、渲染侧忽略 |
+| UI 叠加 | `prism-render/ui`（透传 `prism-app/ui`） | on | 字形图集 + ui_overlay 管线；关掉后 UI 命令照常填充、渲染侧忽略。文本光栅由下面的后端决定 |
+| 文本光栅 A | `prism-render/ui-fontdue`（透传） | on | fontdue + ttf-parser（全平台，约 90 KB）；换成 `ui-directwrite` 可省掉 |
+| 文本光栅 B | `prism-render/ui-directwrite`（透传，**Windows 专属**） | off | 用系统 `dwrite.dll` 光栅，fontdue/ttf-parser 不进二进制 |
 | 组件组 3D | `prism-scene/group-3d`（透传 `prism-app`/`prism-engine`） | on | 灯光/天空盒/网格/相机控制/GI 配置不注册，serde 与反射代码不链接 |
 | 组件组 2D | `prism-scene/group-2d` | on | 精灵/线段/精灵动画不注册 |
 | 组件组 UI | `prism-scene/group-ui` | on | Node/Style/Text/布局类型不注册 |
@@ -1089,6 +1091,30 @@ cp target/release/prisma /tmp/p && strip /tmp/p && ls -l /tmp/p   # strip 后（
 | 天空盒 | `prism-render/skybox`（依赖 `ibl`） | on | `skybox.vert/frag.spv` + 管线；`SkyboxPass` 退化成空实现，调用点不变 |
 | 阴影贴图 | `prism-render/shadows` | on | `shadow_map_pass` 不编译；forward 的 set 3 退化为 1x1 远深度 dummy |
 | GTAO | `prism-render/gtao` | on | 半分辨率 AO pass 不编译；forward 的 set 4 退化为 1x1 白色 dummy |
+
+**文本光栅后端**（`ui` 只决定「画不画 UI」，后端决定「谁来做字形位图」）：
+
+| | `ui-fontdue`（默认） | `ui-directwrite` |
+|---|---|---|
+| 平台 | 全平台 | 仅 Windows（其它目标开它 = `compile_error!`） |
+| 字形来源 | `fontdue` 读系统字体文件（msyh/Noto/DejaVu…） | 系统 `IDWriteFactory` → `IDWriteBitmapRenderTarget`（GDI interop） |
+| 字体族 | 按路径候选表 | `Microsoft YaHei` → `Microsoft YaHei UI` → `SimHei` → `Arial` → 兜底 `Segoe UI` |
+| 度量 | `horizontal_line_metrics` | `DWRITE_FONT_METRICS` |
+| 表单 | `fontdue::Font::rasterize` 直接给覆盖度 | 位图刷白 + 黑色灰度 AA 画字形，覆盖度 = `255 − R` |
+| 额外依赖 | fontdue + ttf-parser（~90 KB） | `windows` 绑定（`Win32_Graphics_DirectWrite` / `Gdi`，只在 Windows 目标） |
+
+两条硬规则：
+
+1. **互斥**：`ui-fontdue` 与 `ui-directwrite` 同时打开是 `compile_error!`——否则
+   fontdue/ttf-parser 会静默留在二进制里，开关等于没生效。
+2. **只开 `ui` 不开任何后端**是合法组合：只画屏幕空间四边形、不画文字（省 90 KB），
+   启动时 `warn` 一次说明缺哪个 feature。
+
+两个后端都只做**单字形 cmap 查表 + 覆盖度光栅**，明确不支持：复杂文本整形
+（阿拉伯 / 印度语系的连写与上下文替换）、可变字体 axis、Emoji 彩色字形、
+kerning / ligature。需要这些能力要引入 HarfBuzz / `IDWriteTextLayout` 级的整形管线，
+不在当前两个后端的范围内。DirectWrite 后端目前**只做过交叉编译验证**，
+真机还需冒烟：文本清晰度（灰度 AA）、DPI 缩放、字体回退（无微软雅黑时走 `Segoe UI`）。
 
 **待拆**（按收益排序，每拆一块都要进 §12.2 表格与 `check_features.py` 矩阵）：
 
@@ -1119,6 +1145,18 @@ cp target/release/prisma /tmp/p && strip /tmp/p && ls -l /tmp/p   # strip 后（
 | `pathtrace` | +135 KB | 1.6k 行 + SPIR-V + BLAS/TLAS |
 | `physics` | +3 KB | 代码是死代码（`physics_runner` 未接线），只多编译时间 |
 | base（全关） | 10.24 MB | 见下方构成 |
+
+`ui-fontdue` → `ui-directwrite`（Windows / `x86_64-pc-windows-gnu` / `dist` 档 +
+`build-dist.sh` 的 build-std，**已 strip**）：
+
+| 配置 | 二进制 | 差值 |
+|---|---|---|
+| `ui-fontdue`（默认） | 3 145 728 B | 基准 |
+| `ui-directwrite` | 3 084 288 B | **−61 440 B（−60 KiB，−2.0 %）** |
+
+省下来的是 fontdue + ttf-parser；`windows` 绑定（DirectWrite/GDI 那几十个 import）
+抵掉了其中一部分，所以差距小于 §12.2 里估的「fontdue 约 90 KB」。两个数字都是同一
+profile、同一 target、同一条构建命令，差值只来自文本后端。
 
 按 crate 归因（`nm -S`，base 构建）：自研代码合计 **~731 KB**（`prism-render` 205 KB、
 `prism-scene` 192 KB、`prism-ecs` 107 KB、`prism-engine` 98 KB、其余 ~130 KB），
@@ -1175,7 +1213,7 @@ cp target/release/prisma /tmp/p && strip /tmp/p && ls -l /tmp/p   # strip 后（
 | 窗口栈（winit/wayland/x11/smithay） | 0.84 MB | 21% | Linux 税；Windows 上换成系统 DLL，Android 换 android-activity |
 | 其它第三方 | 0.49 MB | 12% | 个案处理 |
 | **日志正则（env_logger → regex）** | **0.47 MB** | **12%** | **最容易的一刀：换掉 env_filter/regex 即可** |
-| 字体/2D（tiny_skia/ttf_parser/fontdue） | 0.23 MB | 6% | `ui` feature |
+| 字体/2D（tiny_skia/ttf_parser/fontdue） | 0.23 MB | 6% | `ui` feature；Windows 上换 `ui-directwrite`（−61 KiB） |
 | 序列化（serde_json；`toml` 已移除，−128 KB） | ~0.02 MB | <1% | 场景文档/清单共用，基本到底 |
 | 压缩（zstd/flate2） | 0.04 MB | 1% | 几乎不值得 |
 
@@ -1264,7 +1302,7 @@ winit 计数为 0（`cargo tree --target x86_64-pc-windows-gnu | grep -c winit`�
 | `wayland_client` / `x11_dl` / `x11rb` / `smithay` / `tiny_skia` | ~450 KB | 只在 Linux 双后端；x11-only 或 Windows 直接消失 |
 | `prism_render` / `prism_engine` / `prism_app` / `prism_ecs` / `prism_reflect` | ~640 KB | 自研主体 |
 | `serde_json` | 未单列 | `.scene.json` / `scenes.json` / `.pak.meta.json` 共用，必需（`toml` 已移除，实测 −128 KB） |
-| `fontdue` 系（`ttf_parser` 等） | ~90 KB→64 KB | `ui` feature（本 PR） |
+| `fontdue` 系（`ttf_parser` 等） | ~90 KB→64 KB | `ui` feature；Windows 上 `ui-directwrite` 换系统 DirectWrite（实测 −61 KiB） |
 | `gimli` / `addr2line` | 33 KB | std 的 panic 回溯；需 build-std |
 | `libloading` | 33 KB | ash 动态加载 `vulkan-1`；必需的代价 |
 | `image` + png | ~21 KB | 截图；可做成 `screenshot` feature |
