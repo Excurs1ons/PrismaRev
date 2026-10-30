@@ -529,7 +529,7 @@ impl EditorView {
                 Err(error) => view.workspace.log(
                     prism_editor_gpui_core::LogSource::Editor,
                     prism_editor_gpui_core::LogLevel::Warn,
-                    format!("读取 assets/settings.toml 失败：{error}"),
+                    format!("读取 assets/settings.ini 失败：{error}"),
                 ),
             }
         }
@@ -3323,7 +3323,7 @@ impl EditorView {
                         .py_1()
                         .text_size(px(9.0))
                         .text_color(style.muted())
-                        .child("磁盘文件、打开标签与 assets/scenes.toml 条目都会删除；不可撤销。"),
+                        .child("磁盘文件、打开标签与 assets/scenes.json 条目都会删除；不可撤销。"),
                 )
                 .child(
                     div()

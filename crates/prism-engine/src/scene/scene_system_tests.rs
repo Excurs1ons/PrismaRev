@@ -121,3 +121,46 @@ fn unloading_an_empty_world_is_a_no_op() {
     assert_eq!(unload_other_scenes(&mut world, keep), 0);
     assert!(world.is_alive(entity));
 }
+
+// ---------------------------------------------------------------------------
+// 清单解析：scenes.json 优先，旧 scenes.toml 回退
+// ---------------------------------------------------------------------------
+
+#[test]
+fn parses_the_json_manifest() {
+    let manifest = SceneManifest::parse(
+        r#"{"scenes":[{"name":"intro","path":"scenes/intro.rscn","enabled":true},
+                      {"name":"draft","path":"scenes/draft.rscn","enabled":false}]}"#,
+    )
+    .expect("json manifest");
+    assert_eq!(manifest.scenes.len(), 2);
+    assert_eq!(manifest.scenes[0].name, "intro");
+    assert!(manifest.scenes[0].enabled);
+    assert!(!manifest.scenes[1].enabled);
+}
+
+#[test]
+fn json_manifest_defaults_enabled_to_true() {
+    let manifest =
+        SceneManifest::parse(r#"{"scenes":[{"name":"a","path":"scenes/a.rscn"}]}"#).unwrap();
+    assert!(manifest.scenes[0].enabled);
+}
+
+#[test]
+fn falls_back_to_the_legacy_toml_manifest() {
+    let manifest = SceneManifest::parse(
+        "# hand written\n[[scenes]]\nname = \"intro\"\npath = \"scenes/intro.rscn\"\n\
+         [[scenes]]\nname = \"off\"\npath = \"scenes/off.rscn\"\nenabled = false\n",
+    )
+    .expect("legacy manifest");
+    assert_eq!(manifest.scenes.len(), 2);
+    assert_eq!(manifest.scenes[0].name, "intro");
+    assert!(manifest.scenes[0].enabled, "缺省 enabled 视为启用");
+    assert!(!manifest.scenes[1].enabled);
+}
+
+#[test]
+fn garbage_manifest_is_reported_instead_of_silently_empty() {
+    assert!(SceneManifest::parse("scenes = 3\n").is_err());
+    assert!(SceneManifest::parse("{ not json").is_err());
+}

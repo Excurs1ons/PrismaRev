@@ -267,7 +267,7 @@ pub struct Workspace {
     pub project_root: Option<PathBuf>,
     /// 磁盘上的场景 / 预制体（`assets/scenes`、`assets/prefabs`）。
     pub project_files: Vec<ProjectFile>,
-    /// `assets/scenes.toml` 的场景清单（顺序 = 构建 / 启动顺序）。
+    /// `assets/scenes.json` 的场景清单（顺序 = 构建 / 启动顺序）。
     pub scene_manifest: SceneManifest,
 }
 
@@ -504,7 +504,7 @@ impl Workspace {
             Err(error) => self.log(
                 LogSource::Editor,
                 LogLevel::Warn,
-                format!("读取 assets/scenes.toml 失败: {error}"),
+                format!("读取 assets/scenes.json 失败: {error}"),
             ),
         }
         if !opened.is_empty() {
@@ -688,7 +688,7 @@ impl Workspace {
         Ok(())
     }
 
-    /// 删除场景 / 预制体文档：磁盘文件、打开文档、项目文件表与 `scenes.toml` 条目一起清理。
+    /// 删除场景 / 预制体文档：磁盘文件、打开文档、项目文件表与 `scenes.json` 条目一起清理。
     ///
     /// 不可撤销，调用方负责确认；预制体实例会保留（链接悬空，便于发现）。
     pub fn delete_document(&mut self, path: &str) -> io::Result<()> {
@@ -1080,7 +1080,7 @@ impl Workspace {
         }
     }
 
-    // ── 场景清单（assets/scenes.toml） ───────────────────────────────────
+    // ── 场景清单（assets/scenes.json） ───────────────────────────────────
 
     /// 落盘失败只记日志：清单编辑不应打断编辑器的其它操作。
     fn persist_scene_manifest(&mut self) {
@@ -1091,7 +1091,7 @@ impl Workspace {
             self.log(
                 LogSource::Editor,
                 LogLevel::Error,
-                format!("写入 assets/scenes.toml 失败: {error}"),
+                format!("写入 assets/scenes.json 失败: {error}"),
             );
         }
     }
@@ -4001,9 +4001,11 @@ mod tests {
     fn project_scene_manifest_is_loaded_and_saved() {
         let project = TempProject::new("manifest-load");
         std::fs::write(
-            project.root.join("assets/scenes.toml"),
-            "[[scenes]]\nname = \"intro\"\npath = \"scenes/intro.rscn\"\nenabled = true\n\n\
-             [[scenes]]\nname = \"level\"\npath = \"scenes/level.rscn\"\nenabled = false\n",
+            project.root.join("assets/scenes.json"),
+            r#"{"scenes": [
+                {"name": "intro", "path": "scenes/intro.rscn", "enabled": true},
+                {"name": "level", "path": "scenes/level.rscn", "enabled": false}
+            ]}"#,
         )
         .unwrap();
         let mut workspace = Workspace::load_fixture(&fixture());
@@ -4028,8 +4030,8 @@ mod tests {
         std::fs::write(project.root.join("assets/scenes/a.scene.json"), scene).unwrap();
         std::fs::write(project.root.join("assets/scenes/b.scene.json"), scene).unwrap();
         std::fs::write(
-            project.root.join("assets/scenes.toml"),
-            "[[scenes]]\nname = \"a\"\npath = \"scenes/a.rscn\"\n",
+            project.root.join("assets/scenes.json"),
+            r#"{"scenes": [{"name": "a", "path": "scenes/a.rscn"}]}"#,
         )
         .unwrap();
         let mut workspace = Workspace::load_fixture(&fixture());
@@ -4065,9 +4067,11 @@ mod tests {
         std::fs::write(project.root.join("assets/scenes/a.scene.json"), scene).unwrap();
         std::fs::write(project.root.join("assets/scenes/b.scene.json"), scene).unwrap();
         std::fs::write(
-            project.root.join("assets/scenes.toml"),
-            "[[scenes]]\nname = \"a\"\npath = \"scenes/a.rscn\"\n\n\
-             [[scenes]]\nname = \"b\"\npath = \"scenes/b.rscn\"\n",
+            project.root.join("assets/scenes.json"),
+            r#"{"scenes": [
+                {"name": "a", "path": "scenes/a.rscn"},
+                {"name": "b", "path": "scenes/b.rscn"}
+            ]}"#,
         )
         .unwrap();
         let mut workspace = Workspace::load_fixture(&fixture());
@@ -4095,7 +4099,7 @@ mod tests {
         assert!(workspace
             .delete_document("assets/scenes/a.scene.json")
             .is_err());
-        assert!(workspace.delete_document("assets/settings.toml").is_err());
+        assert!(workspace.delete_document("assets/settings.ini").is_err());
     }
 
     #[test]

@@ -93,8 +93,8 @@
 - 视口数学：世界↔屏幕投影、屏幕射线、AABB 拾取、gizmo 轴/圆环命中、像素↔世界换算、
   四元数世界/局部轴旋转、父链世界旋转与父空间位移换算
 - 本地状态：`EditorState`（布局 + 主题 + 语言 + 首选项）的宽容读写与回退
-- 项目设置：`assets/settings.toml` 的 `[app]` / `[window]` / `[build]` 读写（合并写回，保留其它段）
-- 场景清单：`assets/scenes.toml` 顺序/enabled/启动场景、文档路径映射、名字去重、构建面板编辑
+- 项目设置：`assets/settings.ini` 的 `[app]` / `[window]` / `[build]` 读写（合并写回，保留其它段）
+- 场景清单：`assets/scenes.json` 顺序/enabled/启动场景、文档路径映射、名字去重、构建面板编辑
 - 资产重命名 / 移动：文件改名 + 文档引用改写（精确匹配，含嵌套数组/对象）
 - 资产复制 / 目录：`unique_asset_path`（保留 `.scene.json` 双后缀）、`create_folder`、`copy_file`
 - 资产详情：稳定 GUID（FNV-1a 32 位 hex）、文本预览（UTF-8 边界截断）、PNG/GIF/BMP/JPEG 尺寸、
@@ -181,11 +181,11 @@ editor-gpui/
 - **构建是真实子进程**：构建面板 / 「构建项目」「构建场景包」菜单按 `core::build` 的计划执行
   `cargo build --manifest-path <game>/Cargo.toml [--release]` 与
   `cargo run -p prism-build-pipeline -- build-scenes`，stdout/stderr 流式进构建日志与日志面板；
-  成功后把 exe / `scenes.pak` / `settings.toml` 拷到 `[build].output_dir`（缺失的产物跳过）。
+  成功后把 exe / `scenes.pak` / `settings.ini` 拷到 `[build].output_dir`（缺失的产物跳过）。
   子进程在后台线程跑，UI 每 tick 消费最多 40 行；构建面板头部显示当前步骤并画出分段进度条。桌面运行时回归尚未做。
   文档删除已真实落盘（菜单「文件 → 删除文档」或资产面板右键，都会先确认，
-  并同时清理打开标签与 `scenes.toml` 条目）。
-  保存 / 另存为 / 重新读取 / settings.toml / scenes.toml / 资产改名、删除、实例化与预制体写入已真实落盘。
+  并同时清理打开标签与 `scenes.json` 条目）。
+  保存 / 另存为 / 重新读取 / settings.ini / scenes.json / 资产改名、删除、实例化与预制体写入已真实落盘。
 - **文本输入**走 `prism-editor-gpui-core::TextInput`（光标 / 选区 / 按词移动与删除，
   Unicode 安全），但**没有 IME**，也还不画插入符与选区高亮（需要文本测量）。
   补 IME 时需要 `ElementInputHandler`。

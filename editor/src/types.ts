@@ -192,7 +192,7 @@ export type JsonValue =
   | JsonValue[]
   | { [key: string]: JsonValue };
 
-/** `assets/scenes.toml` 中的一个可运行场景。 */
+/** `assets/scenes.json` 中的一个可运行场景。 */
 export interface PlayableScene {
   name: string;
   path: string;
@@ -214,7 +214,7 @@ export interface PreviewLogLine {
   level?: "error" | "warn" | "info" | "debug" | "trace";
 }
 
-/** 项目级渲染设置（`assets/settings.toml` 的 `[render]`）。 */
+/** 项目级渲染设置（`assets/settings.ini` 的 `[render]`）。 */
 export interface RenderSettingsData {
   renderMode: "raster" | "path_trace";
   debugFlags: number;
@@ -260,7 +260,7 @@ export interface BuildProfile {
   scenes: BuildScene[];
 }
 
-/** 项目设置（`assets/settings.toml` 的 app/window/build 段）。 */
+/** 项目设置（`assets/settings.ini` 的 app/window/build 段）。 */
 export interface ProjectSettingsData {
   app: {
     company: string;

@@ -1628,7 +1628,7 @@ fn is_document_path(path: &str) -> bool {
     path.ends_with(".scene.json") || path.ends_with(".prefab.json")
 }
 
-/// 删除场景 / 预制体前的确认框：删磁盘文件 + 关标签 + 清 `scenes.toml`。
+/// 删除场景 / 预制体前的确认框：删磁盘文件 + 关标签 + 清 `scenes.json`。
 pub fn doc_delete_confirm(ctx: &egui::Context, workspace: &mut Workspace, state: &mut UiState) {
     let Some(path) = state.pending_doc_delete.clone() else {
         return;
@@ -2180,7 +2180,7 @@ pub fn project_settings(ui: &mut Ui, root: Option<&std::path::Path>, state: &mut
         Ok(settings) => settings,
         Err(error) => {
             ui.label(
-                RichText::new(format!("read assets/settings.toml: {error}"))
+                RichText::new(format!("read assets/settings.ini: {error}"))
                     .color(egui::Color32::from_rgb(232, 96, 96)),
             );
             return;
@@ -2217,7 +2217,7 @@ pub fn project_settings(ui: &mut Ui, root: Option<&std::path::Path>, state: &mut
         });
     if changed {
         match settings.write(root) {
-            Ok(()) => state.status = "assets/settings.toml saved".to_string(),
+            Ok(()) => state.status = "assets/settings.ini saved".to_string(),
             Err(error) => state.status = format!("settings save failed: {error}"),
         }
     }
@@ -2345,7 +2345,7 @@ pub fn build(ui: &mut Ui, workspace: &mut Workspace, state: &mut UiState) {
     if changed {
         if let Some(root) = workspace.project_root.clone() {
             if let Err(error) = workspace.scene_manifest.write(&root) {
-                state.status = format!("scenes.toml save failed: {error}");
+                state.status = format!("scenes.json save failed: {error}");
             }
         }
     }

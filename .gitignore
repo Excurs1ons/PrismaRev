@@ -71,8 +71,8 @@ assets/shaders/**/*.spv
 # `**/` prefix so it matches at any depth (e.g. crates/prism-render/assets/ibr/)
 **/assets/ibr/
 
-# Scene model assets (large; referenced via assets/scenes.toml virtual mapping,
-# not committed). The manifest file assets/scenes.toml itself stays tracked.
+# Scene model assets (large; referenced via the assets/scenes.json manifest,
+# not committed). The manifest file itself stays tracked.
 # Engine-builtin cooked scenes + their sources (.rscn / .scene.json) are small
 # and committed so the default scene loads without external assets.
 assets/scenes/*

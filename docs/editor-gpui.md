@@ -167,7 +167,7 @@ Unity 形状的编辑器，又不会把 `prism-render` 绑死在某套 UI 生命
 - 资产删除：`delete_asset` 只允许 `assets/` 内的普通文件，场景/预制体走文档面板；
   引用不做自动清理（检查器里保留悬空值，便于发现）。
 - 文档删除：`delete_document` 删磁盘文件 + 打开标签 + 项目文件表，并移除
-  `scenes.toml` 里对应的条目（立即写盘）；预制体实例保留为悬空链接。菜单与资产面板
+  `scenes.json` 里对应的条目（立即写盘）；预制体实例保留为悬空链接。菜单与资产面板
   都先弹确认层，确认后才执行。
 - 关闭标签：`close_document` 删除标签并修正 `active` 下标（关闭前面的标签不会跳错文档）；
   UI 对 dirty 文档先弹「保存并关闭 / 不保存 / 取消」，保存走 `save_document(index)`，
@@ -193,14 +193,14 @@ Unity 形状的编辑器，又不会把 `prism-render` 绑死在某套 UI 生命
 
 ## 8. 项目设置写回
 
-`core/src/settings.rs` 只读写 `assets/settings.toml` 的三段：
+`core/src/settings.rs` 只读写 `assets/settings.ini` 的三段：
 
 - 读：缺失键回退默认，数字做范围钳制（1..=16384），文件不存在 = 默认值；
 - 写：先把现有 TOML 解析成 `toml::Value`，只替换 `[app]` / `[window]` / `[build]`
   里我们负责的键，`[render]` 与未知键原样保留；
 - 面板上的「应用设置」调用它；没有项目根时只记录警告，不写文件。
 
-## 8.1 场景清单（`assets/scenes.toml`）
+## 8.1 场景清单（`assets/scenes.json`）
 
 `core/src/manifest.rs` 与 Web 编辑器的 Build Settings 同语义：
 
@@ -221,7 +221,7 @@ Unity 形状的编辑器，又不会把 `prism-render` 绑死在某套 UI 生命
 - 两步：`cargo build --manifest-path <game> [--release]`，然后
   `cargo run -p prism-build-pipeline -- build-scenes`（cwd = 项目根）；
 - 产物：`projects/<game>/target/{debug,release}/prisma[.exe]`、`assets/scenes.pak`、
-  `assets/settings.toml` → `[build].output_dir`（相对路径相对项目根）；
+  `assets/settings.ini` → `[build].output_dir`（相对路径相对项目根）；
 - `copy_artifacts` 跳过不存在的产物（例如还没 cook 过 `scenes.pak`），不算失败。
 - UI 用后台线程 + `mpsc` 发 `BuildEvent::{Line,Step,Done}`；stdout/stderr 各一个读取线程
   （避免管道写满死锁），`background_tick` 每 tick 最多消费 40 行，日志同时进

@@ -1,7 +1,7 @@
 //! 构建计划：把「构建项目」翻译成可执行的子进程步骤与产物拷贝。
 //!
 //! 与 Web 编辑器的 `editor_build_project` 同语义：先构建游戏 crate，再 cook
-//! `assets/scenes.toml`，最后把 exe / `scenes.pak` / `settings.toml` 拷到
+//! `assets/scenes.json`，最后把 exe / `scenes.pak` / `settings.ini` 拷到
 //! `[build].output_dir`。这里只产出纯数据，真正 spawn 由 UI 层做。
 
 use crate::settings::ProjectSettings;
@@ -93,8 +93,8 @@ pub fn plan_build(root: &Path, settings: &ProjectSettings) -> BuildPlan {
             to: output_dir.join("scenes.pak"),
         },
         ArtifactCopy {
-            from: root.join("assets/settings.toml"),
-            to: output_dir.join("settings.toml"),
+            from: root.join("assets/settings.ini"),
+            to: output_dir.join("settings.ini"),
         },
     ];
 

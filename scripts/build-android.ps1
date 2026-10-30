@@ -128,9 +128,12 @@ try {
 Copy-Item (Join-Path $ProjectRoot "assets\scenes.pak") $AndroidGameAssets -Force
 Copy-Item (Join-Path $ProjectRoot "assets\scenes.pak.meta.json") $AndroidGameAssets -Force
 
-$Settings = Join-Path $ProjectRoot "assets\settings.toml"
-if (Test-Path $Settings) {
-    Copy-Item $Settings (Join-Path $AndroidGameAssets "settings.toml") -Force
+# 新格式 `settings.ini`；旧项目还只有 `settings.toml` 时照样带上（引擎会回退读）。
+foreach ($Name in @("settings.ini", "settings.toml")) {
+    $Settings = Join-Path $ProjectRoot "assets\$Name"
+    if (Test-Path $Settings) {
+        Copy-Item $Settings (Join-Path $AndroidGameAssets $Name) -Force
+    }
 }
 
 $Environment = Join-Path $ProjectRoot "assets\valley_of_desolation_1k.hdr"

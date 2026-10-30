@@ -62,7 +62,7 @@ projects/prisma/android/app/build/outputs/apk/<变体>/*.apk
   package com.prisma, minSdk 31, targetSdk 36, arm64-v8a only
   lib/arm64-v8a/libprisma.so    ~12 MB（release）/ ~200 MB（debug，带调试符号）
   classes*.dex                  ~6 MB（GameActivity + appcompat）
-  assets/game/                  scenes.pak + meta + settings.toml + HDR
+  assets/game/                  scenes.pak + meta + settings.ini + HDR
 ```
 
 安装：`adb install -r app-debug.apk`，图标即启动游戏。

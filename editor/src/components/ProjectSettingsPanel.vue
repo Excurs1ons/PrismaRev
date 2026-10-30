@@ -100,7 +100,7 @@ async function save() {
     await api.writeRenderSettings(loadedRender.value, render.value);
     loadedProject.value = clone(project.value);
     loadedRender.value = clone(render.value);
-    status.value = "已写入 assets/settings.toml（游戏下次启动生效）";
+    status.value = "已写入 assets/settings.ini（游戏下次启动生效）";
   } catch (e) {
     error.value = `${e}`;
   } finally {

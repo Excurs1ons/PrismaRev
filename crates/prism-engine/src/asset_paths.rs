@@ -2,7 +2,7 @@
 //!
 //! 桌面端的启动方式不止一种：仓库根 `cargo run`、在 `projects/prisma/` 里运行、
 //! 双击 `target/release/prisma.exe`、launcher 用绝对路径 spawn、快捷方式改过
-//! 「起始位置」……而 `.pak` / `settings.toml` / `scenes.toml` / 环境贴图此前
+//! 「起始位置」……而 `.pak` / `settings.ini` / `scenes.json` / 环境贴图此前
 //! 都按 `assets/...` 直接相对 cwd 打开。cwd 不含 `assets/` 时它们全部静默失败，
 //! 表现为黑屏或「没有任何场景」。
 //!
@@ -30,7 +30,7 @@ static WARNED_MISSING_ROOT: AtomicBool = AtomicBool::new(false);
 
 /// 候选根目录，按优先级排序（见模块文档）。
 ///
-/// 需要自行尝试多个相对路径的调用方（例如 `scenes.toml` 还要兼容
+/// 需要自行尝试多个相对路径的调用方（例如场景清单还要兼容旧格式
 /// `crates/prism-engine/assets/`）可以直接遍历它。
 pub fn search_roots() -> Vec<PathBuf> {
     let cwd = std::env::current_dir().ok();
@@ -53,7 +53,7 @@ pub fn asset_root() -> Option<PathBuf> {
             if !WARNED_MISSING_ROOT.swap(true, Ordering::Relaxed) {
                 log::warn!(
                     "no `assets/` directory found from the current directory or the executable \
-                     directory; resources (.pak / settings.toml / scenes.toml) will not load \
+                     directory; resources (.pak / settings.ini / scenes.json) will not load \
                      (set {ASSET_ROOT_ENV} to override)"
                 );
             }

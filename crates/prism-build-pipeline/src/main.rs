@@ -3,7 +3,7 @@
 //! Subcommands:
 //!   bake-gi    — offline GI probe-volume baker (GPU ray-query, multi-bounce path tracing)
 //!   cook       — cook a `.scene.json` to RSCN v4 (delegates to prism-cooker)
-//!   build-scenes — cook `scenes.toml` entries and pack `scenes.pak`
+//!   build-scenes — cook `scenes.json` entries and pack `scenes.pak`
 //!   pack       — pack a cooked directory into a `.pak` + path manifest
 //!   heightmap  — generate + erode a procedural heightmap, write raw f32
 
@@ -44,10 +44,13 @@ enum Command {
         #[arg(long, default_value = "assets/cooked")]
         output: PathBuf,
     },
-    /// Cook all scenes in `scenes.toml` and build the runtime `scenes.pak`
+    /// Cook all scenes in `scenes.json` and build the runtime `scenes.pak`
+    ///
+    /// Also migrates a legacy project (`settings.toml` / `scenes.toml`) on the
+    /// first run after upgrading.
     BuildScenes {
-        /// Scene manifest to read (default: assets/scenes.toml)
-        #[arg(long, default_value = "assets/scenes.toml")]
+        /// Scene manifest to read (default: assets/scenes.json)
+        #[arg(long, default_value = "assets/scenes.json")]
         manifest: PathBuf,
         /// Generated staging directory (default: target/scene_pack)
         #[arg(long, default_value = "target/scene_pack")]
@@ -178,6 +181,7 @@ fn main() -> Result<()> {
             output,
             compression,
         } => {
+            let manifest = prism_build_pipeline::resolve_scene_manifest(&manifest)?;
             log::info!(
                 "build-scenes: {} -> {} -> {}",
                 manifest.display(),

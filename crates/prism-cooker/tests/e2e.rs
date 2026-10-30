@@ -168,7 +168,7 @@ fn find_id_by_suffix(db: &AssetDatabase, suffix: &str) -> Option<AssetId> {
 // Real 资源 源 paths (Sponza scene)
 // ---------------------------------------------------------------------------
 
-/// Root of the downloaded Sponza scene (configured in `assets/scenes.toml`).
+/// Root of the downloaded Sponza scene (configured in `assets/scenes.json`).
 const SPONZA_DIR: &str = "D:/Download/main_sponza/main_sponza";
 
 /// A real 4 K PBR base-colour PNG from the Sponza scene (~11 MB).  Picked as
@@ -182,7 +182,7 @@ const SPONZA_TEXTURE: &str = "textures/metal_door_01_BaseColor.png";
 
 /// E2E Test: 完整 管线 with real Sponza 纹理
 ///
-/// **需要外部数据**：Sponza 场景需按 `assets/scenes.toml` 下载，
+/// **需要外部数据**：Sponza 场景需按 `assets/scenes.json` 下载，
 /// 且纹理路径指向 [`SPONZA_DIR`]。默认 `#[ignore]`——运行前请先
 /// 下载场景，然后用 `cargo test -p prism-asset --test e2e -- --ignored e2e_full_pipeline` 手动执行。
 #[test]
@@ -204,7 +204,7 @@ fn e2e_full_pipeline() {
     assert!(
         sponza_tex_src.exists(),
         "Sponza texture not found at {}. Has the Sponza scene been downloaded?\n\
-         See assets/scenes.toml for the expected path.\n\
+         See assets/scenes.json for the expected path.\n\
          Test output (persistent): {test_out}",
         sponza_tex_src.display(),
     );

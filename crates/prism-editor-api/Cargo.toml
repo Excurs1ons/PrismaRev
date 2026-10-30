@@ -11,4 +11,3 @@ prism-reflect = { path = "../prism-reflect" }
 log = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-toml = { workspace = true }

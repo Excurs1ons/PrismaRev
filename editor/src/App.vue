@@ -1731,7 +1731,7 @@ function onKey(event: KeyboardEvent) {
 
 // ── 运行 / 预览 ─────────────────────────────────────────────────────────────
 
-/** 读取 `assets/scenes.toml` 与运行时包状态。 */
+/** 读取 `assets/scenes.json` 与运行时包状态。 */
 async function refreshPlayable() {
   playableScenes.value = await api.listPlayableScenes().catch(() => []);
   packageStatus.value = await api.scenePackageStatus().catch(() => ({

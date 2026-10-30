@@ -254,7 +254,7 @@ ShadowMapPass → ForwardPass → GtaoPass → PostPass
 
 ```
 assets/
-  scenes.toml
+  scenes.json
   scene_cache/                          ← .gitignore
     sponza/
       desktop/                          ← 桌面产物（BC7/BC5/BC4/BC6H）
@@ -772,7 +772,7 @@ prism-scene::rscn::encode_scene
 .rscn  ──►  prism-engine::SceneLoader（decode_scene + ComponentRegistry）
 ```
 
-- `prism-build-pipeline build-scenes` 读取 `assets/scenes.toml`，按其中的路径 cook 场景、
+- `prism-build-pipeline build-scenes` 读取 `assets/scenes.json`，按其中的路径 cook 场景、
   把 manifest 中 `.scene.json` 路径重写为 `.rscn` 后打进包，并产出运行时使用的
   `assets/scenes.pak` + `.pak.meta.json`；这是发布入口；
 - `prism-build-pipeline cook <input.scene.json>` 单场景 cook，直接调用 `SceneCooker`；
@@ -805,7 +805,7 @@ prism-scene::rscn::encode_scene
   `SpriteRef` 持 `Handle`），全链路 `CLI build → .pak → ResourceManager → GPU` 可手动验证。
 
 - **[G4] 构建脚本集成** ✅ **已落地**：`prism-build-pipeline build-scenes` 统一完成
-  `scenes.toml → cooked RSCN → scenes.pak + path manifest`；泛资产仍走 `prism-cook build`，
+  `scenes.json → cooked RSCN → scenes.pak + path manifest`；泛资产仍走 `prism-cook build`，
   `scripts/run.ps1` 在 `cargo build` 后自动调用它。`scripts/build-android.ps1` 会生成并复制
   `scenes.pak`/meta 到 APK 的 `assets/game/`；Android 启动时 `run_on_android` 再把
   `game/` 复制到内部存储并切 cwd。
@@ -947,6 +947,59 @@ id 的语义和编辑器的下标重映射**不能分开落地**：只要 `paren
 
 - `extract_subtree` 重编号后，预制体实例的「差异对比」是否要按结构路径而非 id 匹配 —— 留到
   预制体工作流真正落地时再定。
+
+### 10.14 项目配置文件（`settings.ini` / `scenes.json`）
+
+项目级配置只有两个文件，都放在 `assets/` 下：
+
+| 文件 | 作用 | 格式 |
+|------|------|------|
+| `assets/settings.ini` | `[app]` / `[build]` / `[render]` / `[window]` 段 | 自写 INI 方言（见下） |
+| `assets/scenes.json` | 场景清单（顺序 = 构建 = 启动顺序） | `{"scenes":[{"name","path","enabled"}]}` |
+
+**为什么不用 TOML**：配置只有几十个标量字段，TOML 引入的是
+`toml` + `toml_parser` + `winnow` + `toml_datetime` 整条链（玩家树里 60–80 KB）。
+场景清单本来就是数组，`serde_json` 已经在树里（`.scene.json` / `.pak.meta.json`），
+换成 JSON 不增加任何依赖。`serde_json` 保留，**`toml` 不再出现在任何 crate 里**
+（`cargo tree -p prism-app -e normal | grep toml` 必须为空）。
+
+#### INI 方言（唯一实现标准）
+
+1. `[section]` 行，节内 `key = value`；节与节之间顺序无关；
+2. 整行注释：`#` 或 `;` 开头（前导空白忽略）；**行内不解析注释**
+   ——路径里的 `#` / `;` 不会被截断；
+3. 值可加双引号，引号内支持 `\"` `\\` `\n`；不加引号时取到行尾并 trim；
+   未知转义（如 `C:\temp`）保留反斜杠本体；
+4. 解析器**只产出 `String`**；`u32` / `bool` / `f32` 转换由调用方做，
+   失败时用默认值 + `log::warn!`（配置文件坏了也要能启动）；
+5. 未知 section / 未知 key 一律忽略，`log::debug!` 记一条（编辑器会把
+   `[build]` 写进同一份文件，引擎不该报错）；
+6. 同一 section 出现两次：**合并**，同名 key 后者覆盖前者。
+
+写回时数字 / 布尔裸写（`width = 1600`、`vsync = false`），其余字符串加引号
+（`company = "Acme"`）；注释不在模型里，写回会丢（与之前的 TOML 往返一致）。
+
+实现（三处，方言必须一致，改一处要同步另外两处）：
+
+- `crates/prism-engine/src/config/ini.rs` —— 引擎读取（`AppConfig::from_ini`）；
+- `crates/prism-editor-api/src/ini.rs` —— Web 编辑器的文档模型（保留未知段）；
+- `editor-gpui/crates/prism-editor-gpui-core/src/ini.rs` —— GPUI/egui 数据层（独立 workspace）。
+
+#### 加载顺序与迁移
+
+两个文件都遵循「新文件优先、旧文件只读回退」：
+
+1. `assets/settings.ini` → 回退 `assets/settings.toml`（`log::warn!` 提示迁移）；
+2. `assets/scenes.json` → 回退 `assets/scenes.toml`（同上；`.pak` 内的旧清单
+   `scenes.toml` 同样可解析，所以旧场景包不会失效）。
+
+**写端只产出新格式**：Web 编辑器、GPUI/egui 编辑器、构建流水线都不再写 `.toml`。
+
+一次性迁移由 `prism-build-pipeline build-scenes` 完成：
+`migrate_legacy_config(assets/)` 在**新文件不存在**时把 `settings.toml` 重排成
+`settings.ini`、把 `scenes.toml` 转成 `scenes.json`，并打印一行 `migrated …`；
+旧文件保留（引擎优先读新文件），确认无碍后可手工删除。迁移是幂等的，
+重复执行不会再写。
 
 ---
 
@@ -1261,8 +1314,8 @@ cp target/release/prisma /tmp/p && strip /tmp/p && ls -l /tmp/p   # strip 后（
 数字用的是 stable `--profile dist`（与 §12.5 左列同口径）；`scripts/build-dist.sh` 的
 build-std 档绝对值更小，但 64 KB 段对齐的结论不变。
 
-剩下能动的只有 `toml` + `serde_json` ~85 KB（要改 `settings.toml` / 场景清单格式，
-向后兼容有成本），不是纯工程问题。
+剩下能动的只有两块：`toml` 依赖链已由自写 INI 解析器移除（`settings.ini` + `scenes.json`，
+见 §13），`serde_json` 仍是运行时依赖；Rust 基线走 `build-std`（§12.5）。
 
 #### 发布档：nightly `-Z build-std`（`scripts/build-dist.sh`）
 

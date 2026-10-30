@@ -1203,7 +1203,7 @@ Unity 的构建入口是 `BuildPipeline.BuildPlayer(BuildPlayerOptions)`，其�
 **已知遗留**
 - 还没有 `BuildReport`（构建结果 / 体积 / 耗时）；`Compilation`（`CompilationPipeline`）
   形状也未做。
-- fixture 不固化构建 profile：`assets/scenes.toml` 可能含本机绝对路径，浏览器预览的
+- fixture 不固化构建 profile：`assets/scenes.json` 可能含本机绝对路径，浏览器预览的
   `buildProfile` 由 `mock.ts` 用 fixture 内场景即时合成。
 
 ### P5c — `BuildReport` 形状 ✅
@@ -1224,7 +1224,7 @@ Unity 的构建结果不是一段日志，而是 `BuildReport`（`summary` + `st
 **editor/src-tauri**
 - `BuildProjectResult.report: BuildReport`。`build_project_blocking` 给三个阶段计时
   （`cargo build` / `build-scenes` / 复制产物的 `collect`），并按角色登记 exe、
-  `assets/scenes.pak`、`assets/scenes.pak.meta.json`、`assets/settings.toml`
+  `assets/scenes.pak`、`assets/scenes.pak.meta.json`、`assets/settings.ini`
   （`copy_if_exists` 之后仅登记真实存在的文件）。
 
 **editor（Vue）**

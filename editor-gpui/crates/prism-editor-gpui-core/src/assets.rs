@@ -247,7 +247,7 @@ impl AssetTree {
         self.roots.iter().filter(|node| node.is_dir).collect()
     }
 
-    /// 资产根目录下的散落文件（`assets/settings.toml` 之类）。
+    /// 资产根目录下的散落文件（`assets/settings.ini` 之类）。
     pub fn root_files(&self) -> Vec<&AssetNode> {
         self.roots.iter().filter(|node| !node.is_dir).collect()
     }
@@ -594,7 +594,7 @@ mod tests {
                 importer: "TextureImporter".into(),
             },
             AssetInfo {
-                path: "assets/settings.toml".into(),
+                path: "assets/settings.ini".into(),
                 size_bytes: 64,
                 kind: AssetKind::Data,
                 importer: "DefaultImporter".into(),
@@ -617,14 +617,14 @@ mod tests {
             .iter()
             .map(|node| node.name.as_str())
             .collect();
-        assert_eq!(root_files, vec!["settings.toml"]);
+        assert_eq!(root_files, vec!["settings.ini"]);
 
         let scenes = tree.find("assets/scenes").expect("scenes dir");
         let names: Vec<&str> = scenes.child_names();
         assert_eq!(names, vec!["default.scene.json", "rocket.scene.json"]);
 
         // 根目录的文件也在根节点里。
-        assert!(tree.find("assets/settings.toml").is_some());
+        assert!(tree.find("assets/settings.ini").is_some());
     }
 
     #[test]

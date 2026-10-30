@@ -95,7 +95,7 @@ impl Engine {
 
     /// 按名字加载场景；`scene_name = None` 等价于 [`Self::init_scene`]。
     ///
-    /// 名字对应 `assets/scenes.toml` 的 `scenes[].name`（见
+    /// 名字对应 `assets/scenes.json` 的 `scenes[].name`（见
     /// [`prism_engine::launch_config::LaunchConfig`]）。找不到该名字时
     /// 不加载任何场景并记录警告。
     pub fn init_scene_named(
@@ -104,7 +104,11 @@ impl Engine {
         scene_name: Option<&str>,
     ) {
         // 运行时优先从资源包读取 manifest，避免依赖当前工作目录。
-        if let Some(id) = rm.id_by_path("scenes.toml") {
+        // 旧包把清单打成 `scenes.toml`（RSCN 之前的 TOML 格式），仍可解析。
+        for name in ["scenes.json", "scenes.toml"] {
+            let Some(id) = rm.id_by_path(name) else {
+                continue;
+            };
             if let Ok(bytes) = rm.load_with_deps_raw(id) {
                 if let Ok(text) = std::str::from_utf8(&bytes) {
                     self.init_scene_from_manifest_text(rm, text, scene_name);
