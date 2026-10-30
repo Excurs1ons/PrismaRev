@@ -23,6 +23,9 @@ deviating from those conventions is a bug. (`README.md` is the human-facing over
 - **不猜**：改公开 API、存档格式（RSCN / RTTIBin / `.pak`）、坐标约定、workspace 分层，或要加依赖
   → 先改文档或先问人，再写代码。
 - **并行 agent 各用独立 worktree**；禁止未经确认的 `reset --hard` / `checkout -- .` / 覆盖他人未提交改动。
+- **推送前先拉主干、本地解冲突**：`git fetch origin && git rebase origin/master`，冲突在本分支内解决
+  并重新跑 `pr_ready.py` 再 push。**不要把「PR 冲突了」留给维护者或下一个 agent**——
+  别人的时间不该花在解你引入的冲突上。rebase 后必须 `--force-with-lease`，只推自己的分支。
 - 只读侦察交给 subagent，写操作留在主会话；交接时写清已完成 / 未完成 / 风险 / 验证命令。
   侦察 issue 也算调查 —— 派 subagent 之前先认领。
 
