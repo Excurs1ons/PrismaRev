@@ -1098,3 +1098,25 @@ cp target/release/prisma /tmp/p && strip /tmp/p && ls -l /tmp/p   # strip 后（
 结论：**收益主要来自 fat LTO + 单 codegen unit（−28.6%），不是 panic=abort**（后者再省
 0.81 MB）。因此编辑器完全可以留在 `release`（保留 unwind 与回溯），只让玩家/Android 走 `dist`。
 本机实测 fat LTO 的构建时间几乎没变（1m31s vs 1m35s），不必为它担心 CI。
+
+#### 5 MB 是怎么构成的（`dist`，5.12 MB strip 后）
+
+按 section（`size -A`）：`.text` 3.86 MB（75%）、`.rodata` 0.49 MB（10%）、
+`.eh_frame` 0.35 MB（7%）、`.rela.dyn` 0.20 MB（4%）、`.data` 0.15 MB。
+
+按代码来源（`nm -S` 归因，fat LTO 后符号会记在调用方，故为近似值）：
+
+| 类别 | 大小 | 占比 | 可否再减 |
+|---|---|---|---|
+| Rust 基线（core/std/alloc/hashbrown/gimli） | 0.88 MB | 22% | 只能靠 `build-std` + panic_abort（nightly） |
+| 引擎自研（prism_*） | 0.85 MB | 22% | 拆 feature |
+| 窗口栈（winit/wayland/x11/smithay） | 0.84 MB | 21% | Linux 税；Windows 上换成系统 DLL，Android 换 android-activity |
+| 其它第三方 | 0.49 MB | 12% | 个案处理 |
+| **日志正则（env_logger → regex）** | **0.47 MB** | **12%** | **最容易的一刀：换掉 env_filter/regex 即可** |
+| 字体/2D（tiny_skia/ttf_parser/fontdue） | 0.23 MB | 6% | `ui` feature |
+| 序列化（toml/serde_json） | 0.14 MB | 3.5% | 配置 feature |
+| 压缩（zstd/flate2） | 0.04 MB | 1% | 几乎不值得 |
+
+结论：**5 MB 里真正属于「引擎」的只有 0.85 MB**，其余是语言基线、窗口栈和两个
+可以替换的第三方件（regex 日志、字体栈）。下一步优先级：去掉 env_logger 的 regex
+（−0.47 MB）> `ui` 砖块（−0.23 MB）> 序列化（−0.14 MB）。
