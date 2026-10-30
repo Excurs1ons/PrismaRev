@@ -59,7 +59,25 @@ Worktree 目录：
 例：分支 `feat/editor-prefab-sync` → `.worktrees/20261025-feat-editor-prefab-sync`。
 日期是 worktree 创建日；不带仓库名（源头由 `git worktree list` 记录）；一个 worktree 只服务一个分支。
 
-### 3.2 标题行
+### 3.2 推送前必须同步主干
+
+**任何 push 之前**（包括第一次推、修 CI 重推、force-push）：
+
+```bash
+git fetch origin
+git rebase origin/master          # 有冲突就在本地解，解完重新验证
+python3 scripts/pr_ready.py       # 解冲突可能改变语义，必须重跑
+git push --force-with-lease       # 只推自己的分支
+```
+
+- **冲突是本分支的责任，不是维护者的**：留着「conflicts must be resolved」让别人点按钮，
+  等于把自己的工作量转嫁给别人。开 PR 前先 rebase 一次，CI 重跑前再 rebase 一次。
+- 解冲突后**必须重跑自检**：两边都改过同一段代码时，能编译不代表语义还对
+  （本仓库已经踩过：两个 PR 都往同一张表加行，机械合并后数字互相矛盾）。
+- 只 `--force-with-lease` 自己的分支；已进入 review 的公共分支一律不许 force-push。
+- 若冲突牵涉别人正在改的文件，先在该 PR 留言 `🤖 Agent:` 说明你要 rebase 并请求对方知情。
+
+### 3.3 标题行
 
 ```
 <type>(<scope>): <祈使句摘要>

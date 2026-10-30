@@ -651,6 +651,16 @@ def main() -> int:
         elif check.name.startswith("clippy (") and check.status == "ok":
             check.detail = "-D warnings"
 
+    # 推送前同步主干：落后多少 commit 要说出来，别把冲突留到 PR 上。
+    behind = 0
+    behind_code, behind_out = git("rev-list", "--count", f"HEAD..{base}")
+    if behind_code == 0 and behind_out.strip().isdigit():
+        behind = int(behind_out.strip())
+    if behind:
+        eprint(
+            f"  ⚠ 落后 {base} {behind} 个 commit —— 先在本地 `git rebase {base}` 解冲突再 push"
+        )
+
     sha_code, sha_out = git("rev-parse", "--short", "HEAD")
     sha = sha_out.strip() if sha_code == 0 else "unknown"
     dirty = bool(git("status", "--porcelain")[1].strip())
@@ -659,7 +669,9 @@ def main() -> int:
     lines = [
         "## Self-check (`scripts/pr_ready.py`)",
         "",
-        f"- mode: **{mode}** · base: `{base}` · HEAD: `{sha}`"
+        f"- mode: **{mode}** · base: `{base}`"
+        + (f"（**落后 {behind} 个 commit，未 rebase**）" if behind else "")
+        + f" · HEAD: `{sha}`"
         + (" · working tree dirty" if dirty else "")
         + f" · changed: {len(changed)} file(s)",
         f"- crates: {', '.join(f'`{c}`' for c in default_crates) or '—'}",
