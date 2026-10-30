@@ -1195,7 +1195,18 @@ cp target/release/prisma /tmp/p && strip /tmp/p && ls -l /tmp/p   # strip 后（
 按这个地图，**还能稳定拿到的**是：`screenshot`（~20 KB）、`prism_scene` 组件分组（百 KB 量级，
 但要先设计注册表分组）、`toml`（~110 KB，需替换配置解析）。其余要么是平台必需的，要么要 nightly。
 
-#### 组件分组的实测（`dist`，strip 后，同 x11+wayland+ui）
+#### 预设档位（`dist`，strip，x11+wayland；crate 数含 workspace 内 crate）
+
+| 档位 | feature 组合 | crate | 体积 |
+|------|-------------|-------|------|
+| 3D 全量 | `pathtrace,ui,x11,wayland,group-3d,group-2d,group-ui` | 148 | 4.47 MB |
+| 2D + UI | `pathtrace,ui,x11,wayland,group-2d,group-ui` | 148 | 4.27 MB（−197 KB） |
+| 2D 极简 | `pathtrace,x11,wayland,group-2d` | 141 | **4.14 MB**（−331 KB） |
+
+这三档就是 hub「新建项目」向导的选项组合（2D/3D × UI 开关）。**预设是语义承诺**：
+往某一档里加 feature 等于给该档所有项目加负担，改动必须写清理由。
+
+#### 组件分组的实测
 
 | 组合 | 大小 | 说明 |
 |---|---|---|
