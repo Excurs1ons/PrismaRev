@@ -42,6 +42,11 @@ impl AppCreator<Arc<Mutex<Allocator>>> for EditorCreator {
 }
 
 fn main() -> std::process::ExitCode {
+    if std::env::args().any(|arg| arg == "--version" || arg == "-V") {
+        println!("prism-editor-egui {}", env!("CARGO_PKG_VERSION"));
+        return std::process::ExitCode::SUCCESS;
+    }
+
     logging::install("warn");
 
     let options = RunOption {
