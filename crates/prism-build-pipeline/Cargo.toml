@@ -18,7 +18,7 @@ prism-cooker = { path = "../prism-cooker", default-features = false }
 ash = { workspace = true }
 anyhow = { workspace = true }
 log = { workspace = true }
-env_logger = { workspace = true }
+env_logger = { workspace = true, features = ["auto-color", "humantime", "regex"] }
 clap = { workspace = true }
 toml = { workspace = true }
 serde_json = { workspace = true }

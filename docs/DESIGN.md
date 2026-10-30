@@ -1150,3 +1150,24 @@ cp target/release/prisma /tmp/p && strip /tmp/p && ls -l /tmp/p   # strip 后（
 - 交叉编译在本机可复现：Windows 用 mingw 链接器；Android 用
   `scripts/make-ndk-host-native.sh` 处理过的 NDK（aarch64 主机 + x86_64 prebuilt shim），
   需要同时设 `CC_/CXX_/AR_aarch64_linux_android`（`android-activity` 的 build.rs 会找 `clang++`）。
+
+#### 回收日志正则（env_logger → env_filter → regex）
+
+`env_logger` 的默认特性 `regex` 只为 `RUST_LOG` 的正则过滤服务，却会拉进整套正则引擎
+（regex-automata + regex-syntax + aho-corasick）。我们只用 `module=level` 这种指令，
+`env_filter` 在关闭 `regex` 后会用**子串匹配**，语义足够。
+
+- 根 workspace 的 `env_logger` 改为 `default-features = false`，构建工具显式打开
+  `["auto-color", "humantime", "regex"]`，**玩家运行时只开 `["auto-color", "humantime"]`**。
+- Android 还有第二条路径：`android_logger` 的默认特性同样带 `env_filter/regex`，
+  一并关掉。
+- 代价：`RUST_LOG` 里不能再写正则（如 `prism_(render|engine)=debug`），
+  需要时给对应 crate 打开 `regex` 特性。
+
+实测（`dist`，strip 后）：
+
+| 平台 | 改前 | 改后 | Δ |
+|---|---|---|---|
+| Linux（x11+wayland） | 5.12 MB | **4.47 MB** | −0.66 MB（−12.8%） |
+| Windows | 4.11 MB | **3.26 MB** | −0.85 MB（−20.7%） |
+| Android | 3.26 MB | 3.26 MB | 0（regex 代码在 fat LTO 下本来就被回收，但仍占编译时间与依赖面） |

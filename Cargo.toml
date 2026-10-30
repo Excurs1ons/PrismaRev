@@ -54,7 +54,9 @@ flume = "0.12.0"
 
 # Logging
 log = "0.4"
-env_logger = "0.11"
+# 默认特性（含 `regex` 日志过滤，~0.47 MB）必须由使用方显式打开：
+# 玩家运行时用不到正则，构建工具需要。见 docs/DESIGN.md §12.4。
+env_logger = { version = "0.11", default-features = false }
 
 # Error handling
 anyhow = "1"
