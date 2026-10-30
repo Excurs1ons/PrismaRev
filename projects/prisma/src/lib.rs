@@ -21,9 +21,9 @@ pub mod intro;
 /// `intro::tick_system` 驱动动画。
 #[cfg(feature = "player")]
 pub fn build_app() -> prism_app::App {
-    let mut app = prism_app::app()
-        .with_subsystem(prism_app::Subsystem::Render)
-        .with_subsystem(prism_app::Subsystem::Audio);
+    // 音频子系统（`prism-app/audio`，默认关）不在这里启用：本项目没有 AudioSource，
+    // 开了也只是建一个空引擎 + 解码线程。要放声音时同时打开 feature 与这一行。
+    let mut app = prism_app::app().with_subsystem(prism_app::Subsystem::Render);
     app.add_system("intro::tick", intro::tick_system);
     app
 }

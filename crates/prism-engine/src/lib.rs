@@ -11,6 +11,7 @@ pub mod app;
 pub mod asset;
 pub mod asset_paths;
 pub mod asset_resolver;
+#[cfg(feature = "audio")]
 pub mod audio;
 pub mod calibration_spheres;
 pub mod camera;

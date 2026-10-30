@@ -35,6 +35,7 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+#[cfg(feature = "audio")]
 use prism_audio::AudioEngine;
 use prism_engine::asset_resolver::GpuAssetResolver;
 use prism_engine::config::AppConfig;
@@ -132,10 +133,14 @@ pub struct App {
     // ---------- 输入（主线程） ----------
     input: InputManager,
 
-    // ---------- 音频（主线程） ----------
+    // ---------- 音频（主线程，`audio` feature） ----------
+    #[cfg(feature = "audio")]
     audio: Option<AudioEngine>,
+    #[cfg(feature = "audio")]
     audio_decode_thread: Option<JoinHandle<()>>,
+    #[cfg(feature = "audio")]
     audio_decode_tx: Option<flume::Sender<crate::audio_decode_runner::DecodeRequest>>,
+    #[cfg(feature = "audio")]
     audio_decode_rx: Option<flume::Receiver<crate::audio_decode_runner::DecodeResult>>,
 
     // ---------- 窗口大小调整 ----------
@@ -267,9 +272,13 @@ impl App {
             display_aspect: 16.0 / 9.0,
             surface_rotation: glam::Mat4::IDENTITY,
             input: InputManager::new(),
+            #[cfg(feature = "audio")]
             audio: None,
+            #[cfg(feature = "audio")]
             audio_decode_thread: None,
+            #[cfg(feature = "audio")]
             audio_decode_tx: None,
+            #[cfg(feature = "audio")]
             audio_decode_rx: None,
             needs_resize: false,
             host_extent: None,
@@ -349,11 +358,19 @@ impl App {
                 log::info!("physics subsystem requested (skeleton — 已接线)");
             }
             Subsystem::Audio => {
-                self.audio = AudioEngine::new(prism_audio::AudioConfig::default()).ok();
-                if self.audio.is_none() {
-                    log::warn!("audio subsystem requested but failed to initialize");
+                #[cfg(feature = "audio")]
+                {
+                    self.audio = AudioEngine::new(prism_audio::AudioConfig::default()).ok();
+                    if self.audio.is_none() {
+                        log::warn!("audio subsystem requested but failed to initialize");
+                    }
+                    self.start_audio_decode_thread();
                 }
-                self.start_audio_decode_thread();
+                #[cfg(not(feature = "audio"))]
+                log::warn!(
+                    "audio subsystem requested but this build has no `audio` feature — \
+                     rebuild with `--features audio` to enable sound"
+                );
             }
             Subsystem::Network | Subsystem::Scene | Subsystem::Asset => {
                 log::warn!("{:?} subsystem requested — 已实现, ignoring", subsystem)
@@ -479,11 +496,13 @@ impl App {
 
     /// 停止宿主渲染线程并收尾（音频 / 引擎 pre/post shutdown）。
     pub fn shutdown_hosted(&mut self) {
+        #[cfg(feature = "audio")]
         self.stop_audio_decode_thread();
         self.stop_render_thread();
         if let Some(engine) = self.engine.as_mut() {
             engine.pre_shutdown();
         }
+        #[cfg(feature = "audio")]
         self.audio.take();
         if let Some(engine) = self.engine.as_mut() {
             engine.post_shutdown();
@@ -702,9 +721,10 @@ impl App {
     }
 
     // -----------------------------------------------------------------------
-    // 音频解码线程生命周期
+    // 音频解码线程生命周期（`audio` feature）
     // -----------------------------------------------------------------------
 
+    #[cfg(feature = "audio")]
     fn start_audio_decode_thread(&mut self) {
         if self.audio_decode_thread.is_some() {
             return;
@@ -722,6 +742,7 @@ impl App {
         self.audio_decode_thread = Some(thread);
     }
 
+    #[cfg(feature = "audio")]
     fn stop_audio_decode_thread(&mut self) {
         if let Some(tx) = self.audio_decode_tx.take() {
             let _ = tx.send(crate::audio_decode_runner::DecodeRequest::Shutdown);
@@ -803,22 +824,25 @@ impl App {
                 prism_engine::scene::systems::hierarchy::hierarchy_system(engine.world_mut());
             }
 
-            // --- 音频更新 ---
-            if let Some(audio) = self.audio.as_mut() {
-                audio.update();
-            }
+            // --- 音频更新（`audio` feature） ---
+            #[cfg(feature = "audio")]
+            {
+                if let Some(audio) = self.audio.as_mut() {
+                    audio.update();
+                }
 
-            // --- 处理音频解码结果 ---
-            if let Some(rx) = self.audio_decode_rx.as_ref() {
-                while let Ok(result) = rx.try_recv() {
-                    match result {
-                        crate::audio_decode_runner::DecodeResult::Decoded { data, .. } => {
-                            if let Some(audio) = self.audio.as_mut() {
-                                audio.play(&data);
+                // 处理音频解码结果。
+                if let Some(rx) = self.audio_decode_rx.as_ref() {
+                    while let Ok(result) = rx.try_recv() {
+                        match result {
+                            crate::audio_decode_runner::DecodeResult::Decoded { data, .. } => {
+                                if let Some(audio) = self.audio.as_mut() {
+                                    audio.play(&data);
+                                }
                             }
-                        }
-                        crate::audio_decode_runner::DecodeResult::Error { message, .. } => {
-                            log::warn!("Audio decode error: {message}");
+                            crate::audio_decode_runner::DecodeResult::Error { message, .. } => {
+                                log::warn!("Audio decode error: {message}");
+                            }
                         }
                     }
                 }
@@ -1063,6 +1087,7 @@ impl ApplicationHandler for App {
         // --- 音频子系统：恢复设备输出（T4）。若流已随 suspended 释放，
         // 则以挂起前配置重建并重新注册回调（Firewheel 图/活动节点保留，
         // 恢复即续播）；流仍活跃（如首次前台启动）则空操作。 ---
+        #[cfg(feature = "audio")]
         if self.has_subsystem(Subsystem::Audio) {
             if let Some(audio) = self.audio.as_mut() {
                 audio.resume_stream();
@@ -1251,6 +1276,7 @@ impl ApplicationHandler for App {
         if event_loop.exiting() {
             // === 后台线程关闭（顺序很重要） ===
             // 1. 停音频解码线程
+            #[cfg(feature = "audio")]
             self.stop_audio_decode_thread();
             // 2. 停渲染线程
             self.stop_render_thread();
@@ -1259,6 +1285,7 @@ impl ApplicationHandler for App {
                 engine.pre_shutdown();
             }
             // 5. 丢弃音频引擎（在平台/引擎之前停止音频流）
+            #[cfg(feature = "audio")]
             self.audio.take();
             // 6. 丢弃窗口（渲染器归渲染线程所有，已随渲染线程停止而销毁）
             self.platform = None;
@@ -1325,6 +1352,7 @@ impl ApplicationHandler for App {
 
         // --- 音频子系统：交还音频设备（T4）。drop cpal 流 → 停止回调线程；
         // Firewheel 图与活动播放节点保留，恢复时以挂起前配置重新注册并续播。 ---
+        #[cfg(feature = "audio")]
         if self.has_subsystem(Subsystem::Audio) {
             if let Some(audio) = self.audio.as_mut() {
                 audio.suspend_stream();
@@ -1336,6 +1364,7 @@ impl ApplicationHandler for App {
         }
 
         // 停止后台线程。
+        #[cfg(feature = "audio")]
         self.stop_audio_decode_thread();
 
         // 停止渲染线程（渲染器归渲染线程所有，停止即释放 Vulkan 表面）。

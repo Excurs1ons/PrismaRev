@@ -69,6 +69,7 @@
 #[cfg(any(target_os = "android", test))]
 mod android_assets;
 mod app;
+#[cfg(feature = "audio")]
 mod audio_decode_runner;
 mod debug_hud;
 mod hook;
