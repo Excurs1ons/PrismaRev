@@ -21,8 +21,12 @@ crate-type = ["lib", "cdylib"]
 #   `prism-game-api` / `prism-project-api`，否则 .so 里会带第二份引擎。
 [features]
 default = ["player", "winit-window"]
-# 引擎/渲染能力（`player`）与**窗口后端**分开，这样发布包能只留一个后端。
-player = [
+# 引擎/渲染能力（`player-core`）与**窗口后端**、**文本光栅后端**分开，
+# 这样发布包能只留一个窗口后端、一个文本后端。
+#
+# 文本后端从 `player-core` 里拆出来：`fontdue`（全平台）与系统 `DirectWrite`（仅 Windows）
+# 在 `prism-render` 里互斥，塞进 `player` 就没法在项目侧选 DirectWrite 了。
+player-core = [
     "dep:prism-app",
     "dep:prism-engine",
     "prism-app/pathtrace",
@@ -33,6 +37,27 @@ player = [
     "prism-app/group-3d",
     "prism-app/group-2d",
     "prism-app/group-ui",
+    "prism-engine/pathtrace",
+    "prism-engine/ui",
+    "prism-engine/ibl",
+    "prism-engine/skybox",
+    "prism-engine/shadows",
+    "prism-engine/gtao",
+    "prism-engine/group-3d",
+    "prism-engine/group-2d",
+    "prism-engine/group-ui",
+]
+# 「能出玩家二进制」的完整默认组合 = 能力 + fontdue 文本后端。
+# 需要 Windows 系统文本时用 `player-core,ui-directwrite`（见下）。
+player = ["player-core", "ui-fontdue"]
+# 文本后端 A：fontdue + ttf-parser（全平台，默认）。
+ui-fontdue = ["prism-app/ui-fontdue", "prism-engine/ui-fontdue"]
+# 文本后端 B：Windows 系统 DirectWrite（省掉 fontdue/ttf-parser，约 60 KiB）。
+# 用法：`cargo build --release --no-default-features --features ui-directwrite,win32-window`
+ui-directwrite = [
+    "player-core",
+    "prism-app/ui-directwrite",
+    "prism-engine/ui-directwrite",
 ]
 # 桌面 / Android 的 winit 后端（默认）。
 winit-window = ["prism-app/winit-backend", "prism-app/x11", "prism-app/wayland"]
@@ -44,14 +69,16 @@ preview-module = ["dep:prism-project-api"]
 [[bin]]
 name = "prisma"
 path = "src/main.rs"
-# 没有 `player` 时没有 `build_app`，所以 bin 也不应被构建。
-required-features = ["player"]
+# 没有 `player-core` 时没有 `build_app`，所以 bin 也不应被构建。
+required-features = ["player-core"]
 
 [dependencies]
 # `default-features = false`：窗口后端由本 crate 的 `winit-window` /
 # `win32-window` 显式选择（Cargo feature 只能加不能减，所以这里不能走默认值）。
 prism-app = { path = "../../crates/prism-app", optional = true, default-features = false }
-prism-engine = { path = "../../crates/prism-engine", optional = true }
+# 必须 default-features = false：文本后端由本 crate 的 ui-fontdue / ui-directwrite
+# 显式选择（Cargo feature 只能加不能减，否则 fontdue 永远进二进制）。
+prism-engine = { path = "../../crates/prism-engine", optional = true, default-features = false }
 prism-game-api = { path = "../../crates/prism-game-api" }
 prism-project-api = { path = "../../crates/prism-project-api", optional = true }
 # 纯数据层（组件 / UI schema），两种形态都需要。

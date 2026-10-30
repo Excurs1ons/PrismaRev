@@ -19,7 +19,7 @@ pub mod intro;
 /// 构造应用：引擎从 `assets/scenes.pak` 的路径清单加载 intro 场景实体
 /// （由 `assets/scenes/intro.scene.json` cook 而来），本项目只注册
 /// `intro::tick_system` 驱动动画。
-#[cfg(feature = "player")]
+#[cfg(feature = "player-core")]
 pub fn build_app() -> prism_app::App {
     // 音频子系统（`prism-app/audio`，默认关）不在这里启用：本项目没有 AudioSource，
     // 开了也只是建一个空引擎 + 解码线程。要放声音时同时打开 feature 与这一行。
@@ -143,7 +143,7 @@ pub unsafe extern "C" fn prism_project_get_api(out: *mut prism_project_api::Proj
 ///
 /// GameActivity's native glue resolves this symbol with `dlsym`, so it must
 /// keep C linkage and an unmangled name; a plain Rust `fn` is not exported.
-#[cfg(all(target_os = "android", feature = "player"))]
+#[cfg(all(target_os = "android", feature = "player-core"))]
 #[no_mangle]
 pub extern "C" fn android_main(android_app: prism_app::AndroidApp) {
     // `run_on_android` stages APK assets and the launch config before calling
