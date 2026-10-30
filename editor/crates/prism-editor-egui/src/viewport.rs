@@ -29,12 +29,6 @@ fn pan_camera(camera: &mut prism_editor_core::workspace::OrbitCamera, dx: f32, d
     }
 }
 
-fn orbit_axis(horizontal: Option<bool>, delta: egui::Vec2) -> Option<bool> {
-    horizontal.or_else(|| {
-        ((delta.x != 0.0) || (delta.y != 0.0)).then_some(delta.x.abs() >= delta.y.abs())
-    })
-}
-
 /// 共享给视口的 GPU 句柄（设备 + egui 纹理表 + 采样器）。
 pub struct ImageBridge {
     pub registry: ImageRegistry,
@@ -79,6 +73,7 @@ impl GizmoTool {
 struct GizmoDrag {
     entity: u32,
     axis: usize,
+    scale_axis: usize,
     screen_dir: [f32; 2],
     px_per_unit: f32,
     /// 旋转拖动：上一帧的光标角度（屏幕空间）。
@@ -95,6 +90,7 @@ pub struct ViewportState {
     extent: (u32, u32),
     /// 需要重渲染（文档 / 相机 / 选中变化）。
     pub dirty: bool,
+    flying_camera: bool,
     pub error: Option<String>,
     pub last_frame_ms: f32,
     pub fps: f32,
@@ -105,8 +101,6 @@ pub struct ViewportState {
     pub tool: GizmoTool,
     gizmo: Option<GizmoDrag>,
     orbit_last_pos: Option<egui::Pos2>,
-    /// 右键轨道拖动锁定到首次明显移动的轴，避免微小抖动同时旋转两个轴。
-    orbit_horizontal: Option<bool>,
     /// 框选起点 / 当前点（视口局部坐标）。
     box_start: Option<egui::Pos2>,
     box_current: Option<egui::Pos2>,
@@ -131,6 +125,7 @@ impl ViewportState {
             registered_view: vk::ImageView::null(),
             extent: (0, 0),
             dirty: true,
+            flying_camera: false,
             error: None,
             last_frame_ms: 0.0,
             fps: 0.0,
@@ -140,7 +135,6 @@ impl ViewportState {
             tool: GizmoTool::Translate,
             gizmo: None,
             orbit_last_pos: None,
-            orbit_horizontal: None,
             box_start: None,
             box_current: None,
         })
@@ -148,6 +142,10 @@ impl ViewportState {
 
     pub fn kind(&self) -> ViewKind {
         self.host.kind()
+    }
+
+    pub fn flying_camera(&self) -> bool {
+        self.flying_camera
     }
 
     pub fn mark_dirty(&mut self) {
@@ -392,10 +390,11 @@ impl ViewportState {
                         ),
                     };
                     if let Some((axis, dir, px_per_unit)) = hit {
+                        let scale_axis = workspace.gizmo_scale_axis(entity, axis);
                         let start_scale = workspace.document().doc.entities
                             [workspace.document().doc.index_of_id(entity).unwrap_or(0)]
                         .transform
-                        .scale[axis];
+                        .scale[scale_axis];
                         let angle_center = vm::ring_screen_radius_oriented(
                             &frame,
                             center,
@@ -410,6 +409,7 @@ impl ViewportState {
                         self.gizmo = Some(GizmoDrag {
                             entity,
                             axis,
+                            scale_axis,
                             screen_dir: dir,
                             px_per_unit,
                             last_angle: vm::screen_angle(local, angle_center),
@@ -480,7 +480,7 @@ impl ViewportState {
                             * 1.5;
                         let next = (drag.start_scale + amount).max(0.01);
                         if (next - drag.start_scale).abs() > 1e-4 {
-                            workspace.set_scale_axis(entity, axis, next);
+                            workspace.set_scale_axis(entity, drag.scale_axis, next);
                             document_changed = true;
                         }
                     }
@@ -499,6 +499,24 @@ impl ViewportState {
             }
         }
         if self.kind() == ViewKind::Scene {
+            let right_held =
+                ui.input(|input| input.pointer.button_down(egui::PointerButton::Secondary));
+            self.flying_camera = response.hovered() && right_held;
+            if self.flying_camera {
+                let (forward, right, vertical) = ui.input(|input| {
+                    let key = |key| if input.key_down(key) { 1.0 } else { 0.0 };
+                    (
+                        key(egui::Key::W) - key(egui::Key::S),
+                        key(egui::Key::D) - key(egui::Key::A),
+                        key(egui::Key::E) - key(egui::Key::Q),
+                    )
+                });
+                if forward != 0.0 || right != 0.0 || vertical != 0.0 {
+                    let dt = ui.input(|input| input.stable_dt);
+                    workspace.camera.fly_move(forward, right, vertical, dt);
+                    self.dirty = true;
+                }
+            }
             if response.dragged_by(egui::PointerButton::Middle) {
                 if let Some(pos) = response.interact_pointer_pos() {
                     let delta = self
@@ -516,18 +534,14 @@ impl ViewportState {
                         .replace(pos)
                         .map(|last| pos - last)
                         .unwrap_or_default();
-                    self.orbit_horizontal = orbit_axis(self.orbit_horizontal, delta);
-                    match self.orbit_horizontal {
-                        Some(true) => workspace.camera.orbit(delta.x, 0.0),
-                        Some(false) => workspace.camera.orbit(0.0, delta.y),
-                        None => {}
-                    }
+                    workspace.camera.look_in_place(delta.x, delta.y);
                 }
                 self.dirty = true;
             } else {
                 self.orbit_last_pos = None;
-                self.orbit_horizontal = None;
             }
+        } else {
+            self.flying_camera = false;
         }
         if self.kind() == ViewKind::Scene
             && alt
@@ -579,7 +593,6 @@ impl ViewportState {
             || response.drag_stopped_by(egui::PointerButton::Secondary)
         {
             self.orbit_last_pos = None;
-            self.orbit_horizontal = None;
         }
         if response.hovered() {
             let scroll = ui.input(|i| i.raw_scroll_delta.y);
@@ -990,15 +1003,6 @@ fn pick(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn orbit_axis_locks_to_dominant_initial_delta() {
-        assert_eq!(orbit_axis(None, egui::vec2(5.0, 1.0)), Some(true));
-        assert_eq!(orbit_axis(None, egui::vec2(1.0, -5.0)), Some(false));
-        assert_eq!(orbit_axis(None, egui::Vec2::ZERO), None);
-        assert_eq!(orbit_axis(Some(true), egui::vec2(0.0, 10.0)), Some(true));
-        assert_eq!(orbit_axis(Some(false), egui::vec2(10.0, 0.0)), Some(false));
-    }
 
     #[test]
     fn extent_follows_scale_and_dpi() {

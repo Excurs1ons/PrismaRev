@@ -17,13 +17,13 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Context as _;
-use glam::{EulerRot, Mat4, Quat, Vec3};
+use glam::{Mat4, Quat, Vec3};
 use prism_engine::asset_resolver::GpuAssetResolver;
 use prism_engine::ecs::{Entity, World};
 use prism_engine::input::InputManager;
 use prism_engine::render_settings::RenderSettings;
 use prism_engine::render_system::{extract_frame_packet_into, FramePacket};
-use prism_engine::scene::components::{Camera, Gizmo, LocalToWorld, LocalTransform};
+use prism_engine::scene::components::{Camera, LocalToWorld, LocalTransform};
 use prism_engine::Engine;
 use prism_render::descriptor::FrameUBOData;
 use prism_render::{FrameInput, GraphRenderer, VulkanContext};
@@ -57,7 +57,6 @@ pub struct EngineHost {
     /// `.scene.json` 文档顺序的实体表（= 层级 / 检查器下标）。
     entities: Vec<Entity>,
     editor_camera: Option<Entity>,
-    focus_marker: Option<Entity>,
     width: u32,
     height: u32,
     /// Scene view 的编辑器相机是否用场景天空盒当背景（引擎默认开）。
@@ -101,7 +100,6 @@ impl EngineHost {
             settings: RenderSettings::default(),
             entities: Vec::new(),
             editor_camera: None,
-            focus_marker: None,
             width,
             height,
             show_skybox: true,
@@ -151,7 +149,6 @@ impl EngineHost {
     pub fn load_scene(&mut self, path: &Path) -> Result<usize, String> {
         // 旧世界的实体句柄全部失效，helper 实体要重新创建。
         self.editor_camera = None;
-        self.focus_marker = None;
         self.engine = Engine::empty();
         self.asset_resolver = GpuAssetResolver::new();
         self.asset_resolver.load_resource_package();
@@ -229,21 +226,6 @@ impl EngineHost {
                 world.insert(entity, LocalToWorld(Mat4::IDENTITY));
                 self.editor_camera = Some(entity);
             }
-            if self.focus_marker.is_none() {
-                let world = self.engine.world_mut();
-                let entity = world.spawn();
-                world.insert(
-                    entity,
-                    Gizmo {
-                        enabled: false,
-                        scale: 1.0,
-                        mode: prism_scene::GizmoMode::Translate,
-                    },
-                );
-                world.insert(entity, LocalTransform::default());
-                world.insert(entity, LocalToWorld(Mat4::IDENTITY));
-                self.focus_marker = Some(entity);
-            }
         }
     }
 
@@ -256,7 +238,9 @@ impl EngineHost {
             return;
         };
         let target = Vec3::from_array(target);
-        let rotation = Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0);
+        // Keep the rendered camera on the same orbit as `OrbitCamera::eye()`:
+        // yaw is world-Y, while positive pitch raises the eye toward +Y.
+        let rotation = Quat::from_rotation_y(yaw) * Quat::from_rotation_x(-pitch);
         let eye = target + rotation * Vec3::new(0.0, 0.0, distance.max(0.05));
         let forward = (target - eye).normalize_or_zero();
         let look = if forward.length_squared() > 0.0 {
@@ -280,31 +264,6 @@ impl EngineHost {
         );
         if let Some(camera) = world.get_mut::<Camera>(entity) {
             camera.aspect = self.width as f32 / self.height.max(1) as f32;
-        }
-    }
-
-    /// 选中高亮：把 `Gizmo` 标记挪到世界位置（没有选中就关掉）。
-    pub fn set_focus_marker(&mut self, position: Option<[f32; 3]>) {
-        let Some(entity) = self.focus_marker else {
-            return;
-        };
-        let world = self.engine.world_mut();
-        let Some(gizmo) = world.get_mut::<Gizmo>(entity) else {
-            return;
-        };
-        gizmo.enabled = position.is_some();
-        if let Some(position) = position {
-            world.insert(
-                entity,
-                LocalTransform {
-                    position: Vec3::from_array(position),
-                    ..Default::default()
-                },
-            );
-            world.insert(
-                entity,
-                LocalToWorld(Mat4::from_translation(Vec3::from_array(position))),
-            );
         }
     }
 
@@ -531,4 +490,38 @@ impl EngineHost {
 /// 单步模拟使用的固定步长。
 fn xstep_dt() -> f32 {
     1.0 / 60.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn view_kind_metadata_is_stable() {
+        assert_eq!(ViewKind::Scene.icon(), "🎬");
+        assert_eq!(ViewKind::Game.icon(), "🎮");
+        assert_ne!(ViewKind::Scene, ViewKind::Game);
+    }
+
+    #[test]
+    fn simulation_step_uses_fixed_sixtieth_second() {
+        assert!((xstep_dt() - 1.0 / 60.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn editor_camera_rotation_matches_orbit_camera_eye_convention() {
+        let yaw = 0.6;
+        let pitch = 0.35;
+        let distance = 12.0;
+        let rotation = Quat::from_rotation_y(yaw) * Quat::from_rotation_x(-pitch);
+        let eye_offset = rotation * Vec3::new(0.0, 0.0, distance);
+        let (sin_yaw, cos_yaw) = yaw.sin_cos();
+        let (sin_pitch, cos_pitch) = pitch.sin_cos();
+        let expected = Vec3::new(
+            distance * cos_pitch * sin_yaw,
+            distance * sin_pitch,
+            distance * cos_pitch * cos_yaw,
+        );
+        assert!((eye_offset - expected).length() < 1e-5);
+    }
 }

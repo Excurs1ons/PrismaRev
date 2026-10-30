@@ -193,7 +193,7 @@ impl Default for OrbitCamera {
         Self {
             target: [0.0, 0.0, 0.0],
             yaw: 0.6,
-            pitch: 0.35,
+            pitch: 0.6,
             distance: 12.0,
         }
     }
@@ -214,6 +214,38 @@ impl OrbitCamera {
     pub fn orbit(&mut self, dx: f32, dy: f32) {
         self.yaw -= dx * 0.01;
         self.pitch = (self.pitch + dy * 0.01).clamp(-1.5, 1.5);
+    }
+
+    /// 飞行相机观察：保持相机位置不变，只改变视线方向。
+    pub fn look_in_place(&mut self, dx: f32, dy: f32) {
+        let eye = self.eye();
+        self.orbit(dx, dy);
+        let (sin_yaw, cos_yaw) = self.yaw.sin_cos();
+        let (sin_pitch, cos_pitch) = self.pitch.sin_cos();
+        self.target = [
+            eye[0] - self.distance * cos_pitch * sin_yaw,
+            eye[1] - self.distance * sin_pitch,
+            eye[2] - self.distance * cos_pitch * cos_yaw,
+        ];
+    }
+
+    /// Move the eye along its horizontal view basis and world vertical axis.
+    pub fn fly_move(&mut self, forward: f32, right: f32, vertical: f32, dt: f32) {
+        let (sin_yaw, cos_yaw) = self.yaw.sin_cos();
+        let (sin_pitch, cos_pitch) = self.pitch.sin_cos();
+        let speed = (self.distance * 0.5).clamp(2.0, 12.0) * dt.max(0.0);
+        let forward_axis = [-cos_pitch * sin_yaw, -sin_pitch, -cos_pitch * cos_yaw];
+        let right_axis = [cos_yaw, 0.0, -sin_yaw];
+        let delta = [
+            (forward_axis[0] * forward + right_axis[0] * right) * speed,
+            (forward_axis[1] * forward + vertical) * speed,
+            (forward_axis[2] * forward + right_axis[2] * right) * speed,
+        ];
+        self.target = [
+            self.target[0] + delta[0],
+            self.target[1] + delta[1],
+            self.target[2] + delta[2],
+        ];
     }
 
     pub fn zoom(&mut self, delta: f32) {
@@ -2052,6 +2084,28 @@ impl Workspace {
         }
     }
 
+    /// 将 gizmo 的轴索引映射到实体实际的局部缩放分量。
+    ///
+    /// 缩放数据只能表达沿实体局部轴的缩放，无法在没有 shear 的 Transform 中
+    /// 表达任意世界轴缩放。因此 World 模式选择与世界轴最对齐的局部轴，避免
+    /// 旋转实体后仍然错误地固定修改 `scale[axis]`。
+    pub fn gizmo_scale_axis(&self, entity_id: u32, gizmo_axis: usize) -> usize {
+        let Some(index) = self.document().doc.index_of_id(entity_id) else {
+            return gizmo_axis.min(2);
+        };
+        if self.gizmo_space == GizmoSpace::Local {
+            return gizmo_axis.min(2);
+        }
+        let basis = basis_from_quat(world_rotation(&self.document().doc, index));
+        (0..3)
+            .max_by(|&left, &right| {
+                basis[left][gizmo_axis.min(2)]
+                    .abs()
+                    .total_cmp(&basis[right][gizmo_axis.min(2)].abs())
+            })
+            .unwrap_or(gizmo_axis.min(2))
+    }
+
     pub fn toggle_gizmo_space(&mut self) {
         self.gizmo_space = self.gizmo_space.toggled();
         self.log(
@@ -2884,6 +2938,7 @@ impl Workspace {
             Command::Step => self.step(),
             Command::FrameAll => self.frame_all(),
             Command::FrameSelection => self.frame_selection(),
+            Command::ResetSceneCamera => self.camera = OrbitCamera::default(),
             other => {
                 if let Some(panel) = other.panel_id() {
                     self.toggle_panel(panel);
@@ -3061,6 +3116,79 @@ pub fn layout_preset_ids() -> Vec<(&'static str, &'static str)> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn orbit_applies_horizontal_and_vertical_deltas_independently() {
+        let mut camera = OrbitCamera::default();
+        let (yaw, pitch) = (camera.yaw, camera.pitch);
+        camera.orbit(10.0, 0.0);
+        assert!((camera.yaw - (yaw - 0.1)).abs() < 1e-6);
+        assert_eq!(camera.pitch, pitch);
+
+        camera = OrbitCamera::default();
+        let (yaw, pitch) = (camera.yaw, camera.pitch);
+        camera.orbit(0.0, 10.0);
+        assert_eq!(camera.yaw, yaw);
+        assert!((camera.pitch - (pitch + 0.1)).abs() < 1e-6);
+
+        camera = OrbitCamera::default();
+        let (yaw, pitch) = (camera.yaw, camera.pitch);
+        camera.orbit(10.0, -20.0);
+        assert!((camera.yaw - (yaw - 0.1)).abs() < 1e-6);
+        assert!((camera.pitch - (pitch - 0.2)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn orbit_keeps_pitch_inside_pole_limits() {
+        let mut camera = OrbitCamera::default();
+        camera.orbit(0.0, 1000.0);
+        assert_eq!(camera.pitch, 1.5);
+        camera.orbit(0.0, -1000.0);
+        assert_eq!(camera.pitch, -1.5);
+    }
+
+    #[test]
+    fn look_in_place_rotates_view_without_moving_eye() {
+        let mut camera = OrbitCamera::default();
+        let eye = camera.eye();
+        camera.look_in_place(10.0, -5.0);
+        let next_eye = camera.eye();
+        for axis in 0..3 {
+            assert!((next_eye[axis] - eye[axis]).abs() < 1e-5);
+        }
+        assert!((camera.yaw - 0.5).abs() < 1e-6);
+        assert!((camera.pitch - 0.3).abs() < 1e-6);
+    }
+
+    #[test]
+    fn fly_move_translates_eye_and_target_together() {
+        let mut camera = OrbitCamera::default();
+        let eye = camera.eye();
+        let target = camera.target;
+        camera.fly_move(1.0, 0.0, 0.0, 1.0);
+        let next_eye = camera.eye();
+        let delta = [
+            camera.target[0] - target[0],
+            camera.target[1] - target[1],
+            camera.target[2] - target[2],
+        ];
+        assert!(delta[2] < 0.0);
+        for axis in 0..3 {
+            assert!((next_eye[axis] - eye[axis] - delta[axis]).abs() < 1e-5);
+        }
+    }
+
+    #[test]
+    fn reset_scene_camera_restores_default_orbit() {
+        let mut workspace = Workspace::sample();
+        workspace.camera.target = [9.0, -4.0, 2.0];
+        workspace.camera.yaw = -1.2;
+        workspace.camera.pitch = 1.1;
+        workspace.camera.distance = 42.0;
+        workspace.run(Command::ResetSceneCamera);
+        assert_eq!(workspace.camera, OrbitCamera::default());
+        assert!((workspace.camera.pitch - 0.6).abs() < f32::EPSILON);
+    }
 
     fn fixture() -> Value {
         json!({
@@ -3306,6 +3434,22 @@ mod tests {
             "父级绕 Y 90° 后子级局部 X 指向 −Z，实际 {:?}",
             basis[0]
         );
+    }
+
+    #[test]
+    fn gizmo_scale_axis_distinguishes_world_and_local_space() {
+        let mut workspace = Workspace::sample();
+        let index = index_named(&workspace, "Cube");
+        let id = workspace.document().doc.entities[index].id.unwrap();
+        workspace.document_mut().doc.entities[index]
+            .transform
+            .rotation = crate::viewport_math::quat_axis_angle(1, std::f32::consts::FRAC_PI_2);
+
+        workspace.gizmo_space = GizmoSpace::Local;
+        assert_eq!(workspace.gizmo_scale_axis(id, 0), 0);
+
+        workspace.gizmo_space = GizmoSpace::World;
+        assert_eq!(workspace.gizmo_scale_axis(id, 0), 2);
     }
 
     #[test]

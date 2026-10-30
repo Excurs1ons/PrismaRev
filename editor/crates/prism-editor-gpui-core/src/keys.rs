@@ -56,6 +56,7 @@ pub enum Command {
     // 视口
     FrameAll,
     FrameSelection,
+    ResetSceneCamera,
 }
 
 impl Command {
@@ -104,6 +105,7 @@ impl Command {
         Command::About,
         Command::FrameAll,
         Command::FrameSelection,
+        Command::ResetSceneCamera,
     ];
 
     pub fn id(self) -> &'static str {
@@ -152,6 +154,7 @@ impl Command {
             Command::About => "help/about",
             Command::FrameAll => "viewport/frame-all",
             Command::FrameSelection => "viewport/frame-selection",
+            Command::ResetSceneCamera => "viewport/reset-scene-camera",
         }
     }
 
@@ -202,6 +205,7 @@ impl Command {
             Command::About => "menu.about",
             Command::FrameAll => "viewport.frameAll",
             Command::FrameSelection => "viewport.focusSelection",
+            Command::ResetSceneCamera => "viewport.resetSceneCamera",
         }
     }
 
@@ -321,6 +325,10 @@ pub const SHORTCUTS: &[ShortcutEntry] = &[
     ShortcutEntry {
         command: Command::FrameSelection,
         keys: "F",
+    },
+    ShortcutEntry {
+        command: Command::ResetSceneCamera,
+        keys: "Ctrl+0",
     },
 ];
 

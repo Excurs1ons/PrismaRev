@@ -2000,6 +2000,14 @@ impl EditorApp {
                     view.mark_dirty();
                 }
             }
+            if ui
+                .button("Reset Scene Cam (Ctrl+0)")
+                .on_hover_text("Reset Scene view camera to its default angle and distance")
+                .clicked()
+            {
+                self.apply_command(Command::ResetSceneCamera);
+                self.mark_scene_dirty();
+            }
 
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 let text = if self.playing {
@@ -2439,7 +2447,6 @@ impl EditorApp {
                 }
             }
             let camera = self.workspace.camera.clone();
-            let center = self.workspace.selection_center_world();
             if let Some(view) = self.scene_view.as_mut() {
                 view.host.place_editor_camera(
                     camera.yaw,
@@ -2447,7 +2454,6 @@ impl EditorApp {
                     camera.distance,
                     camera.target,
                 );
-                view.host.set_focus_marker(center);
             }
         }
 
@@ -2724,6 +2730,13 @@ impl EditorApp {
 
     fn handle_shortcuts(&mut self, ctx: &egui::Context) {
         use egui::{Key, KeyboardShortcut, Modifiers};
+        if self
+            .scene_view
+            .as_ref()
+            .is_some_and(|view| view.flying_camera())
+        {
+            return;
+        }
         let shortcuts = [
             (
                 KeyboardShortcut::new(Modifiers::CTRL, Key::S),
@@ -2780,6 +2793,10 @@ impl EditorApp {
             (
                 KeyboardShortcut::new(Modifiers::NONE, Key::F),
                 Command::FrameSelection,
+            ),
+            (
+                KeyboardShortcut::new(Modifiers::CTRL, Key::Num0),
+                Command::ResetSceneCamera,
             ),
             (
                 KeyboardShortcut::new(Modifiers::NONE, Key::A),
@@ -2909,7 +2926,7 @@ impl EditorApp {
                     continue;
                 }
                 self.apply_command(command);
-                if matches!(command, Command::FrameSelection) {
+                if matches!(command, Command::FrameSelection | Command::ResetSceneCamera) {
                     if let Some(view) = self.scene_view.as_mut() {
                         view.mark_dirty();
                     }
@@ -3497,6 +3514,42 @@ mod tests {
         assert_eq!(dock_zone(rect, egui::pos2(300.0, 110.0)), DockZone::Top);
         assert_eq!(dock_zone(rect, egui::pos2(300.0, 390.0)), DockZone::Bottom);
         assert_eq!(dock_zone(rect, egui::pos2(300.0, 250.0)), DockZone::Center);
+    }
+
+    #[test]
+    fn transform_paths_split_only_supported_fields_and_axes() {
+        assert_eq!(split_axis("position[2]"), Some(("position", 2)));
+        assert_eq!(split_axis("rotation"), Some(("rotation", 0)));
+        assert_eq!(split_axis("scale[bad]"), None);
+        assert_eq!(split_axis("name"), None);
+    }
+
+    #[test]
+    fn render_settings_round_trip_and_old_state_uses_grid_fallback() {
+        let mut settings = prism_engine::render_settings::RenderSettings::default();
+        settings.show_grid = true;
+        settings.pt_max_bounces = 7;
+        settings.pt_ray_max_distance = 123.5;
+        let value = render_settings_json(&settings);
+        let loaded = render_settings_from_json(&value, false);
+        assert_eq!(loaded.show_grid, true);
+        assert_eq!(loaded.pt_max_bounces, 7);
+        assert_eq!(loaded.pt_ray_max_distance, 123.5);
+        assert_eq!(
+            render_settings_from_json(&serde_json::json!({}), true).show_grid,
+            true
+        );
+    }
+
+    #[test]
+    fn workspace_hashes_change_with_document_and_selection() {
+        let mut workspace = Workspace::sample();
+        let document_before = document_hash(&workspace);
+        let selection_before = selection_hash(&workspace);
+        workspace.add_entity("Changed");
+        assert_ne!(document_hash(&workspace), document_before);
+        workspace.select(0, false);
+        assert_ne!(selection_hash(&workspace), selection_before);
     }
 }
 

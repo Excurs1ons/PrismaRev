@@ -120,6 +120,7 @@
     "shadingWireframe": "Wireframe (线框)",
     "gizmosTooltip": "显示/隐藏场景辅助手柄与标记 (Gizmos)",
     "frameAllTooltip": "框住场景全景（A / Home）",
+    "resetSceneCamera": "复位场景相机",
     "navHelpTooltip": "视口导航说明：\n• 拖动坐标轴：平移实体\n• F：聚焦选中项\n• A / Home：框住全场景\n• 左键拖拽：轨道旋转\n• 中键 / Shift+拖拽：平移视角\n• 滚轮：缩放视角",
     "loadingOverlay": "编译管线 / 加载场景…",
     "needDesktopOverlay": "内置视口需要桌面编辑器（浏览器环境不支持 Vulkan 离屏渲染）",

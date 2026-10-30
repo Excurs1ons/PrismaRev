@@ -120,6 +120,7 @@
     "shadingWireframe": "Wireframe",
     "gizmosTooltip": "Toggle Gizmos and Helpers",
     "frameAllTooltip": "Frame all scene content (A / Home)",
+    "resetSceneCamera": "Reset Scene Camera",
     "navHelpTooltip": "Viewport Navigation:\n• Drag Gizmo: Move entity\n• F: Focus selected entity\n• A / Home: Frame all\n• Left-click drag: Orbit camera\n• Middle / Shift+drag: Pan camera\n• Scroll: Zoom in/out",
     "loadingOverlay": "Compiling pipelines / Loading scene…",
     "needDesktopOverlay": "In-process viewport requires desktop host (Vulkan offscreen rendering)",
