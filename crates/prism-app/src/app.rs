@@ -1,9 +1,14 @@
-//! [`App`] — 平台应用层，拥有 winit [`ApplicationHandler`]。
+//! [`App`] — 平台应用层，拥有事件循环。
+//!
+//! 窗口后端由 feature 决定（见 crate 文档）：`winit-backend` 走
+//! [`ApplicationHandler`]，`win32-native` 走 [`App::run_win32`] 的
+//! Win32 消息循环。两者共用同一份引擎/渲染/关闭逻辑
+//! （[`App::tick_frame`] / [`App::shutdown`]），差别只在窗口与事件来源。
 //!
 //! # 架构（渲染线程 = 后台线程）
 //!
 //! ```text
-//! 主线程 (winit events)          渲染线程
+//! 主线程 (窗口事件)               渲染线程
 //!   ──────────────────────────         ──────────────
 //! about_to_wait: 循环
 //!     engine.fixed_update × N             take_packet()
@@ -43,11 +48,17 @@ use prism_engine::input::InputManager;
 use prism_engine::render_settings::RenderSettings;
 use prism_engine::render_system::extract_frame_packet_into;
 use prism_engine::Engine;
-use prism_platform::{required_vulkan_extensions, PlatformContext};
+use prism_platform::{
+    required_vulkan_extensions, Key, Modifiers, PlatformContext, PlatformEvent, PlatformWindow,
+    WindowConfig,
+};
+#[cfg(feature = "winit-backend")]
 use winit::application::ApplicationHandler;
+#[cfg(feature = "winit-backend")]
 use winit::event::{DeviceEvent, WindowEvent};
+#[cfg(feature = "winit-backend")]
 use winit::event_loop::{ActiveEventLoop, ControlFlow};
-use winit::keyboard::KeyCode;
+#[cfg(feature = "winit-backend")]
 use winit::window::WindowId;
 
 use crate::debug_hud::DebugHud;
@@ -99,7 +110,7 @@ impl Subsystem {
 // App
 // ===========================================================================
 
-/// Application shell implementing winit's [`ApplicationHandler`].
+/// Application shell：拥有引擎、窗口与渲染线程。
 pub struct App {
     // ---------- 启动配置 ----------
     config: AppConfig,
@@ -155,12 +166,12 @@ pub struct App {
     host_surface: Option<(prism_platform::SendWindowHandles, Vec<String>)>,
     host_native_surface: bool,
 
-    /// 最近一次 `ModifiersChanged` 记录的修饰键状态。
+    /// 最近一次修饰键快照（winit 的 `ModifiersChanged` / Win32 的 `GetKeyState`）。
     ///
-    /// `WindowEvent::KeyboardInput` 不携带修饰键，PBR 分量调试快捷键
+    /// 键盘事件本身不携带修饰键，PBR 分量调试快捷键
     /// （Shift+1..5 = 分量 bit 10..14）只能从这里判断 Shift 是否按下，
     /// 否则那 5 个 bit 永远不可达。
-    modifiers: winit::keyboard::ModifiersState,
+    modifiers: Modifiers,
 
     // ---------- lifecycle ----------
     fatal_error: Option<String>,
@@ -284,7 +295,7 @@ impl App {
             host_extent: None,
             host_surface: None,
             host_native_surface: false,
-            modifiers: winit::keyboard::ModifiersState::empty(),
+            modifiers: Modifiers::empty(),
             fatal_error: None,
             suspended: false,
             last_frame: None,
@@ -393,14 +404,14 @@ impl App {
 
     /// 当前渲染表面的逻辑尺寸（像素）。
     ///
-    /// 宿主模式用 [`Self::host_extent`]，游戏模式取 winit 窗口的内尺寸。
+    /// 宿主模式用 [`Self::host_extent`]，游戏模式取窗口客户区尺寸。
     fn surface_size(&self) -> (u32, u32) {
         if let Some(size) = self.host_extent {
             return size;
         }
         self.platform
             .as_ref()
-            .map(|platform| platform.window().inner_size().into())
+            .map(|platform| platform.window().inner_size())
             .unwrap_or((1920, 1080))
     }
 
@@ -606,9 +617,31 @@ impl App {
         }
     }
 
+    /// 构造这次启动要用的窗口参数（两个后端共用）。
+    fn window_config(&self) -> WindowConfig {
+        WindowConfig {
+            title: self.config.window.title.clone(),
+            width: self.config.window.width,
+            height: self.config.window.height,
+            min_width: self.config.window.min_width,
+            min_height: self.config.window.min_height,
+            max_width: self.config.window.max_width,
+            max_height: self.config.window.max_height,
+            position_x: self.config.window.position_x,
+            position_y: self.config.window.position_y,
+            resizable: self.config.window.resizable,
+            fullscreen: self.config.window.fullscreen,
+            maximized: self.config.window.maximized,
+            visible: self.config.window.visible,
+            decorations: self.config.window.decorations,
+            vsync: self.config.window.vsync,
+        }
+    }
+
     /// 启动事件循环（桌面入口，自建 winit EventLoop）。
     ///
     /// 内部构造 EventLoop 并交给 [`Self::run_on`]；致命错误直接 panic。
+    #[cfg(feature = "winit-backend")]
     pub fn run(self) {
         // 日志级别必须在 try_init 之前写入，否则 env_logger 已经读完 RUST_LOG。
         self.apply_launch_config();
@@ -624,9 +657,208 @@ impl App {
     ///
     /// Android 的 `android_main` 应在调用本函数 **之前** 自行注入
     /// `PRISMREV_LAUNCH_CONFIG` env（从 files 目录读取）。
+    #[cfg(feature = "winit-backend")]
     pub fn run_on(mut self, event_loop: winit::event_loop::EventLoop<()>) -> anyhow::Result<()> {
         self.apply_launch_config();
         event_loop.run_app(&mut self)?;
+        Ok(())
+    }
+
+    /// 启动应用（桌面入口，Win32 原生窗口 + 自己的消息循环）。
+    ///
+    /// 与 winit 入口等价——窗口、渲染线程、模拟循环、关闭顺序完全一致，
+    /// 只是窗口与消息来自 `prism-platform` 的 `win32-native` 后端。
+    #[cfg(all(windows, feature = "win32-native", not(feature = "winit-backend")))]
+    pub fn run(self) {
+        self.apply_launch_config();
+        let _ = env_logger::try_init();
+        self.run_win32().expect("fatal application error");
+    }
+
+    /// 恢复时重启随挂起释放的子系统（音频流 / 解码线程）。
+    fn resume_subsystems(&mut self) {
+        #[cfg(feature = "audio")]
+        if self.has_subsystem(Subsystem::Audio) {
+            if let Some(audio) = self.audio.as_mut() {
+                audio.resume_stream();
+            }
+            // `suspended()` shuts the decode thread down; restart it so
+            // playback queued after resume is decoded again.
+            self.start_audio_decode_thread();
+        }
+    }
+
+    /// 每帧主线程工作：渲染线程存活检查 → 模拟 → 宿主钩子。
+    ///
+    /// 返回 `Some(message)` 表示渲染线程已经死亡（初始化失败 / panic），
+    /// 调用方应弹出致命错误并关闭窗口，而不是空转一个白窗口。
+    fn tick_frame(&mut self) -> Option<String> {
+        // The render thread exclusively owns the Vulkan context. If it exited
+        // (renderer init failure or panic), stop instead of spinning a blank
+        // window at 100% CPU.
+        if let Some(handle) = self.render_thread.as_ref() {
+            if handle.is_finished() {
+                return Some(
+                    self.render_shared
+                        .as_ref()
+                        .and_then(|shared| shared.take_render_failure())
+                        .unwrap_or_else(|| {
+                            "render thread exited unexpectedly (see log)".to_string()
+                        }),
+                );
+            }
+        }
+
+        self.tick_sim(true);
+
+        // 帧钩子（宿主 UI 等）— 主线程。全部用字段级借用（不整体借 self）。
+        let window = self.platform.as_ref().map(PlatformContext::window_arc);
+        if let (Some(hook), Some(shared), Some(engine), Some(window)) = (
+            self.frame_hook.as_mut(),
+            self.render_shared.as_ref(),
+            self.engine.as_mut(),
+            window,
+        ) {
+            let stats = shared.read_render_stats();
+            hook.on_tick(
+                &window,
+                engine.world_mut(),
+                &mut self.render_settings,
+                &stats,
+                shared,
+            );
+        }
+
+        None
+    }
+
+    /// 关闭顺序（两个后端共用）——顺序很重要。
+    fn shutdown(&mut self) {
+        // 1. 停音频解码线程
+        #[cfg(feature = "audio")]
+        self.stop_audio_decode_thread();
+        // 2. 停渲染线程
+        self.stop_render_thread();
+        // 4. 引擎预关闭
+        if let Some(ref mut engine) = self.engine {
+            engine.pre_shutdown();
+        }
+        // 5. 丢弃音频引擎（在平台/引擎之前停止音频流）
+        #[cfg(feature = "audio")]
+        self.audio.take();
+        // 6. 丢弃窗口（渲染器归渲染线程所有，已随渲染线程停止而销毁）
+        self.platform = None;
+        // 7. 引擎后关闭
+        if let Some(ref mut engine) = self.engine {
+            engine.post_shutdown();
+        }
+    }
+
+    /// 取出致命错误文案（关闭窗口前弹的对话框内容）。
+    fn take_fatal_message(&mut self) -> String {
+        self.fatal_error
+            .take()
+            .unwrap_or_else(|| "An unknown fatal error occurred.".to_string())
+    }
+
+    /// Win32 原生窗口的主循环（`win32-native` 构建的 `run_app` 等价物）。
+    ///
+    /// 消息循环用 `PeekMessageW` 泵 + `MsgWaitForMultipleObjectsEx` 让出
+    /// CPU（原因见 `prism_platform::win32` 的模块文档）：主线程必须在没有
+    /// 窗口消息时继续推进模拟，阻塞式 `GetMessageW` 会让静止画面冻住。
+    #[cfg(all(windows, feature = "win32-native", not(feature = "winit-backend")))]
+    fn run_win32(mut self) -> anyhow::Result<()> {
+        // 复位挂起标志 + 恢复子系统（对应 winit 的 `resumed`）。
+        self.suspended = false;
+        self.resume_subsystems();
+
+        if !self.has_subsystem(Subsystem::Render) {
+            log::info!("render subsystem disabled — headless mode (no window, no GPU)");
+            return Ok(());
+        }
+
+        let resumed_entry = crate::render_shared::startup_ms();
+        let window_config = self.window_config();
+        let platform = match PlatformContext::create_window_native(&window_config) {
+            Ok(platform) => platform,
+            Err(error) => {
+                log::error!("failed to create native window: {error:#}");
+                return Err(error);
+            }
+        };
+        let window_built = crate::render_shared::startup_ms();
+
+        self.platform = Some(platform);
+        // 渲染线程异步构建渲染器 + 启动帧循环（重量级初始化不阻塞主线程）。
+        self.spawn_render_thread();
+
+        let spawned = crate::render_shared::startup_ms();
+        if let Some(shared) = self.render_shared.as_ref() {
+            shared.set_mark("resumed_entry", resumed_entry);
+            shared.set_mark("window_built", window_built);
+            shared.set_mark("render_thread_spawned", spawned);
+        }
+
+        let window = match self.platform.as_ref() {
+            Some(platform) => platform.window_arc(),
+            None => return Ok(()),
+        };
+
+        let mut exit = false;
+        while !exit {
+            // 1. 消息泵：把 WM_* 变成中立事件（含用户点关闭按钮）。
+            let events = window.poll_events();
+            for event in events {
+                if self.fatal_error.is_some() {
+                    exit = true;
+                    break;
+                }
+
+                // 先把事件发给帧钩子（宿主 UI 等）；被消费则跳过快捷键。
+                let consumed = match self.frame_hook.as_mut() {
+                    Some(hook) => hook.on_platform_event(&window, event),
+                    None => false,
+                };
+
+                // 路由到 InputManager；`false` = 用户关闭窗口。
+                if !self.handle_platform_event(&window, event) {
+                    exit = true;
+                    break;
+                }
+
+                if consumed {
+                    continue;
+                }
+
+                if let PlatformEvent::Key { key, pressed } = event {
+                    if pressed && self.handle_shortcut(key) {
+                        continue;
+                    }
+                }
+            }
+
+            if exit || window.close_requested() {
+                break;
+            }
+
+            // 2. 模拟 + 提取 + 提交渲染（与 winit 的 `about_to_wait` 同一份）。
+            if let Some(message) = self.tick_frame() {
+                log::error!("{message}");
+                self.fatal_error = Some(message);
+                break;
+            }
+
+            // 3. 让出 CPU：有消息立即返回，否则最多等 1 ms。
+            window.wait_events(1);
+        }
+
+        self.shutdown();
+
+        if self.fatal_error.is_some() {
+            let message = self.take_fatal_message();
+            let _choice =
+                prism_engine::crash_dialog::show_crash_dialog("PrismaRev - Fatal Error", &message);
+        }
         Ok(())
     }
 
@@ -641,8 +873,15 @@ impl App {
     /// 渲染线程内部才构建渲染器（~数百毫秒），因此 `resumed` 调用后能立即
     /// 返回，窗口事件（关闭/移动/缩放）全程不被阻塞。
     fn spawn_render_thread(&mut self) {
-        let window = match self.platform.as_ref().map(PlatformContext::window_arc) {
-            Some(w) => w,
+        // 原始句柄必须在**窗口创建线程**取好再跨线程传递（winit 的
+        // `window_handle()` 在其他线程会失败）；原始 HWND 是进程级值，
+        // 跨线程用于创建 Vulkan 表面是安全的（见 `SendWindowHandles`）。
+        let (handles, extensions) = match self.platform.as_ref().map(PlatformContext::window) {
+            Some(window) => (
+                prism_platform::raw_window_handles(window).expect("get raw window handles"),
+                // Vulkan 实例扩展名（依赖窗口 display handle，便宜）。
+                required_vulkan_extensions(window),
+            ),
             None => {
                 log::error!("spawn_render_thread: window not created");
                 return;
@@ -653,15 +892,6 @@ impl App {
         let scene_env = self.engine.as_ref().and_then(|engine| {
             engine.current_scene_env_bytes_with_provider(&mut self.asset_resolver.resource_manager)
         });
-
-        // winit 的 `Window::window_handle()` 在**非窗口创建线程**上会失败
-        // （"the underlying handle is not available"），因此必须在主线程把原始
-        // 句柄取出来再跨线程传给渲染线程。原始 HWND 是进程级值，跨线程用于
-        // 创建 Vulkan 表面是安全的（见 `SendWindowHandles`）。
-        let handles = prism_platform::raw_window_handles(&window).expect("get raw window handles");
-
-        // Vulkan 实例扩展名（依赖窗口 display handle，便宜）。
-        let extensions = required_vulkan_extensions(&window);
 
         // 外部叠加层工厂（宿主 UI 等）——仅提供工厂，渲染线程建好
         // 渲染器后调用一次产出叠加层（GPU 资源 record 时懒创建）。
@@ -916,137 +1146,179 @@ impl App {
     // PBR 调试 helpers
     // -----------------------------------------------------------------------
 
-    /// Route a [`WindowEvent`] into the [`InputManager`].
+    /// 把一个中立平台事件路由到 [`InputManager`] 与窗口状态。
     ///
-    /// Handles 键盘 输入 (both press and 释放 Cursor/mouse/scroll
-    /// events are handled inline in [`window_event`](Self::window_event).
-    fn route_window_event_to_input(&mut self, event_loop: &ActiveEventLoop, event: &WindowEvent) {
-        if let Some(platform) = self.platform.as_ref() {
-            let window = platform.window();
-            if let WindowEvent::KeyboardInput {
-                event: key_event, ..
-            } = event
-            {
-                if let winit::keyboard::PhysicalKey::Code(code) = key_event.physical_key {
-                    use prism_engine::input::ElementState;
-                    let key = engine_key_from_winit(code);
-                    let pressed = key_event.state == winit::event::ElementState::Pressed;
-                    if should_release_pointer_lock(key, pressed, self.input.pointer_locked) {
-                        prism_platform::release_pointer(window);
-                        self.input.set_locked(false);
-                    }
-                    self.input.handle_keyboard(
-                        key,
-                        if pressed {
-                            ElementState::Pressed
-                        } else {
-                            ElementState::Released
-                        },
-                    );
+    /// 返回 `false` 表示应用应退出（用户关闭窗口）。两个窗口后端共用这一份，
+    /// 所以 winit 与 Win32 的输入语义不会各写一遍再慢慢漂移。
+    fn handle_platform_event(&mut self, window: &PlatformWindow, event: PlatformEvent) -> bool {
+        use prism_engine::input::{ElementState, MouseButton};
+
+        match event {
+            PlatformEvent::CloseRequested => return false,
+            PlatformEvent::Focused(focused) => {
+                self.input.focus_return_click = !focused;
+                if !focused && self.input.pointer_locked {
+                    prism_platform::release_pointer(window);
+                    self.input.set_locked(false);
                 }
             }
-            match prism_platform::to_platform_event(event) {
-                prism_platform::PlatformEvent::CloseRequested => event_loop.exit(),
-                prism_platform::PlatformEvent::Focused(focused) => {
-                    self.input.focus_return_click = !focused;
-                    if !focused && self.input.pointer_locked {
-                        prism_platform::release_pointer(window);
-                        self.input.set_locked(false);
-                    }
-                }
-                prism_platform::PlatformEvent::CursorMoved { x, y } => {
-                    apply_window_cursor_move(&mut self.input, x, y);
-                }
-                prism_platform::PlatformEvent::MouseWheel { delta } => {
-                    self.input.handle_scroll(delta);
-                }
-                prism_platform::PlatformEvent::Touch { id, x, y, phase } => {
-                    // 触摸不走鼠标按钮模拟：多点触控必须保留触点 id 与 phase，
-                    // 由游戏逻辑经 `InputManager::touches()` 自行解释。
-                    self.input
-                        .handle_touch(id, engine_touch_phase(phase), [x, y]);
-                }
-                prism_platform::PlatformEvent::MouseButton { button, pressed } => {
-                    use prism_engine::input::{ElementState, MouseButton};
-                    let button = match button {
-                        0 => MouseButton::Left,
-                        1 => MouseButton::Right,
-                        2 => MouseButton::Middle,
-                        3 => MouseButton::Back,
-                        4 => MouseButton::Forward,
-                        other => MouseButton::Other(other),
-                    };
-                    if pressed && button == MouseButton::Left && !self.input.pointer_locked {
-                        prism_platform::grab_pointer(window);
-                        self.input.set_locked(true);
-                    }
-                    self.input.handle_mouse_button(
-                        button,
-                        if pressed {
-                            ElementState::Pressed
-                        } else {
-                            ElementState::Released
-                        },
-                    );
-                }
-                // 键盘已在上面单独映射（需要引擎键码表），这里不重复处理。
-                prism_platform::PlatformEvent::Key { .. } => {}
-                // 尺寸变化由渲染线程从平台上下文读取，不进 InputManager。
-                prism_platform::PlatformEvent::Resized { .. } => {}
-                // 尚未建模的事件：保持显式列出，避免 `_ => {}` 静默吞掉新变体
-                // （`PlatformEvent::Touch` 就是这样丢了整条触摸链路）。
-                prism_platform::PlatformEvent::Other => {}
+            PlatformEvent::CursorMoved { x, y } => {
+                apply_window_cursor_move(&mut self.input, x, y);
             }
+            // 锁定态下的原始设备增量（winit: `DeviceEvent::MouseMotion`，
+            // Win32: 回中式鼠标捕获的偏移）。
+            PlatformEvent::MouseMotion { dx, dy } => {
+                apply_device_mouse_motion(&mut self.input, dx, dy);
+            }
+            PlatformEvent::MouseWheel { delta } => self.input.handle_scroll(delta),
+            PlatformEvent::Touch { id, x, y, phase } => {
+                // 触摸不走鼠标按钮模拟：多点触控必须保留触点 id 与 phase，
+                // 由游戏逻辑经 `InputManager::touches()` 自行解释。
+                self.input
+                    .handle_touch(id, engine_touch_phase(phase), [x, y]);
+            }
+            PlatformEvent::MouseButton { button, pressed } => {
+                let button = match button {
+                    0 => MouseButton::Left,
+                    1 => MouseButton::Right,
+                    2 => MouseButton::Middle,
+                    3 => MouseButton::Back,
+                    4 => MouseButton::Forward,
+                    other => MouseButton::Other(other),
+                };
+                if pressed && button == MouseButton::Left && !self.input.pointer_locked {
+                    prism_platform::grab_pointer(window);
+                    self.input.set_locked(true);
+                }
+                self.input.handle_mouse_button(
+                    button,
+                    if pressed {
+                        ElementState::Pressed
+                    } else {
+                        ElementState::Released
+                    },
+                );
+            }
+            PlatformEvent::Key { key, pressed } => {
+                // `Other(u32::MAX)` = 平台没给出物理键（winit 的 `Unidentified`）。
+                // 旧实现直接丢弃这类事件，这里保持一致。
+                if key == Key::Other(u32::MAX) {
+                    return true;
+                }
+                let key = engine_key_from_native(key);
+                if should_release_pointer_lock(key, pressed, self.input.pointer_locked) {
+                    prism_platform::release_pointer(window);
+                    self.input.set_locked(false);
+                }
+                self.input.handle_keyboard(
+                    key,
+                    if pressed {
+                        ElementState::Pressed
+                    } else {
+                        ElementState::Released
+                    },
+                );
+            }
+            PlatformEvent::Modifiers(modifiers) => self.modifiers = modifiers,
+            // 尺寸变化同时更新宽高比（渲染线程从平台上下文读真实尺寸）。
+            PlatformEvent::Resized { width, height } => {
+                self.needs_resize = true;
+                if width > 0 && height > 0 {
+                    self.display_aspect = width as f32 / height as f32;
+                }
+            }
+            // 尚未建模的事件：保持显式列出，避免 `_ => {}` 静默吞掉新变体
+            // （`PlatformEvent::Touch` 就是这样丢了整条触摸链路）。
+            PlatformEvent::Other => {}
         }
+
+        true
+    }
+
+    /// 应用级键盘快捷键（F3 / Tab / T）+ PBR 分量隔离。
+    ///
+    /// 只在按键**按下**时调用；返回 `true` 表示这个键已被吃掉。
+    fn handle_shortcut(&mut self, key: Key) -> bool {
+        // 修饰键不在 `Key` 事件里，Shift 取最近一次 `Modifiers` 快照。
+        let shift = self.modifiers.shift;
+
+        if let Some(bit) = Self::pbr_debug_key_to_bit(key, shift) {
+            self.render_settings.debug_flags = if self.render_settings.debug_flags == (1u32 << bit)
+            {
+                0
+            } else {
+                1u32 << bit
+            };
+            log::info!(
+                "PBR isolate = {} (flags=0x{:x})",
+                self.pbr_flag_label(),
+                self.render_settings.debug_flags
+            );
+            return true;
+        }
+
+        match key {
+            Key::F3 => {
+                self.debug_hud.show = !self.debug_hud.show;
+                log::info!(
+                    "runtime HUD = {}",
+                    if self.debug_hud.show { "on" } else { "off" }
+                );
+            }
+            Key::Tab => {
+                self.render_settings.debug_rt = (self.render_settings.debug_rt + 1) % 3;
+                let name = match self.render_settings.debug_rt {
+                    0 => "normal (HDR tonemap)",
+                    1 => "depth (linearized)",
+                    2 => "normal (view-space)",
+                    _ => "?",
+                };
+                log::info!("debug RT = {} ({})", self.render_settings.debug_rt, name);
+            }
+            Key::KeyT => {
+                self.render_settings.tonemap_mode = if self.render_settings.tonemap_mode == 0 {
+                    1
+                } else {
+                    0
+                };
+                log::info!("tonemap mode = {}", self.render_settings.tonemap_mode);
+            }
+            _ => return false,
+        }
+        true
     }
 
     fn pbr_flag_label(&self) -> String {
         prism_engine::render_settings::pbr_flag_label(self.render_settings.debug_flags).to_string()
     }
 
-    fn pbr_debug_key_to_bit(code: KeyCode, shift: bool) -> Option<u32> {
-        Some(match (code, shift) {
-            (KeyCode::Digit1, false) => 0,
-            (KeyCode::Digit2, false) => 1,
-            (KeyCode::Digit3, false) => 2,
-            (KeyCode::Digit4, false) => 3,
-            (KeyCode::Digit5, false) => 4,
-            (KeyCode::Digit6, false) => 5,
-            (KeyCode::Digit7, false) => 6,
-            (KeyCode::Digit8, false) => 7,
-            (KeyCode::Digit9, false) => 8,
-            (KeyCode::Digit0, false) => 9,
-            (KeyCode::Digit1, true) => 10,
-            (KeyCode::Digit2, true) => 11,
-            (KeyCode::Digit3, true) => 12,
-            (KeyCode::Digit4, true) => 13,
-            (KeyCode::Digit5, true) => 14,
+    fn pbr_debug_key_to_bit(key: Key, shift: bool) -> Option<u32> {
+        Some(match (key, shift) {
+            (Key::Digit1, false) => 0,
+            (Key::Digit2, false) => 1,
+            (Key::Digit3, false) => 2,
+            (Key::Digit4, false) => 3,
+            (Key::Digit5, false) => 4,
+            (Key::Digit6, false) => 5,
+            (Key::Digit7, false) => 6,
+            (Key::Digit8, false) => 7,
+            (Key::Digit9, false) => 8,
+            (Key::Digit0, false) => 9,
+            (Key::Digit1, true) => 10,
+            (Key::Digit2, true) => 11,
+            (Key::Digit3, true) => 12,
+            (Key::Digit4, true) => 13,
+            (Key::Digit5, true) => 14,
             _ => return None,
         })
     }
 
+    #[cfg(feature = "winit-backend")]
     fn show_fatal_dialog(&mut self, event_loop: &ActiveEventLoop) {
-        let message = self
-            .fatal_error
-            .take()
-            .unwrap_or_else(|| "An unknown fatal error occurred.".to_string());
+        let message = self.take_fatal_message();
         let _choice =
             prism_engine::crash_dialog::show_crash_dialog("PrismaRev - Fatal Error", &message);
         event_loop.exit();
-    }
-}
-
-/// 记录 winit 的修饰键状态，返回该事件是否只是修饰键变化。
-///
-/// `WindowEvent::KeyboardInput` 不含修饰键，PBR 分量调试快捷键（Shift+1..5
-/// 对应 `1 << 10 .. 1 << 14`）必须靠这份状态才能与未按 Shift 的 1..0 区分。
-fn update_modifiers(state: &mut winit::keyboard::ModifiersState, event: &WindowEvent) -> bool {
-    match event {
-        WindowEvent::ModifiersChanged(modifiers) => {
-            *state = modifiers.state();
-            true
-        }
-        _ => false,
     }
 }
 
@@ -1074,6 +1346,7 @@ impl Default for App {
 // ApplicationHandler
 // ===========================================================================
 
+#[cfg(feature = "winit-backend")]
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         // Drive simulation/extraction continuously. With the default Wait mode
@@ -1083,19 +1356,7 @@ impl ApplicationHandler for App {
 
         // 复位挂起标志（必须先于任何子系统门控——audio 恢复不依赖 Render）。
         self.suspended = false;
-
-        // --- 音频子系统：恢复设备输出（T4）。若流已随 suspended 释放，
-        // 则以挂起前配置重建并重新注册回调（Firewheel 图/活动节点保留，
-        // 恢复即续播）；流仍活跃（如首次前台启动）则空操作。 ---
-        #[cfg(feature = "audio")]
-        if self.has_subsystem(Subsystem::Audio) {
-            if let Some(audio) = self.audio.as_mut() {
-                audio.resume_stream();
-            }
-            // `suspended()` shuts the decode thread down; restart it so
-            // playback queued after resume is decoded again.
-            self.start_audio_decode_thread();
-        }
+        self.resume_subsystems();
 
         if !self.has_subsystem(Subsystem::Render) {
             log::info!("render subsystem disabled — headless mode (no window, no GPU)");
@@ -1107,23 +1368,7 @@ impl ApplicationHandler for App {
         if self.platform.is_none() {
             // 主线程仅创建窗口（快速，~数毫秒），随后立即返回——窗口事件
             // （关闭/移动/缩放）此刻起即可被 winit 派发，不被任何初始化阻塞。
-            let window_config = prism_platform::WindowConfig {
-                title: self.config.window.title.clone(),
-                width: self.config.window.width,
-                height: self.config.window.height,
-                min_width: self.config.window.min_width,
-                min_height: self.config.window.min_height,
-                max_width: self.config.window.max_width,
-                max_height: self.config.window.max_height,
-                position_x: self.config.window.position_x,
-                position_y: self.config.window.position_y,
-                resizable: self.config.window.resizable,
-                fullscreen: self.config.window.fullscreen,
-                maximized: self.config.window.maximized,
-                visible: self.config.window.visible,
-                decorations: self.config.window.decorations,
-                vsync: self.config.window.vsync,
-            };
+            let window_config = self.window_config();
             let platform = PlatformContext::create_window(event_loop, &window_config);
             let window_built = crate::render_shared::startup_ms();
 
@@ -1162,30 +1407,38 @@ impl ApplicationHandler for App {
             return;
         }
 
+        let platform_event = prism_platform::to_platform_event(&event);
+
         // 先将事件转发给帧钩子（宿主 UI 等）；被消费则不再走应用
         // 自身的快捷键处理（输入仍会路由到 InputManager 保持按键状态一致）。
-        if let Some(hook) = self.frame_hook.as_mut() {
-            if let Some(ref platform) = self.platform {
+        let consumed = match (self.frame_hook.as_mut(), self.platform.as_ref()) {
+            (Some(hook), Some(platform)) => {
                 let window = platform.window();
-                let platform_event = prism_platform::to_platform_event(&event);
-                let consumed = hook.on_platform_event(window, platform_event)
-                    || hook.on_window_event(window, &event);
-                if consumed {
-                    self.route_window_event_to_input(event_loop, &event);
-                    return;
-                }
+                hook.on_platform_event(window, platform_event)
+                    || hook.on_window_event(window, &event)
+            }
+            _ => false,
+        };
+
+        // 路由窗口事件 → InputManager（始终路由，包括快捷键未处理的重复事件）。
+        if let Some(window) = self.platform.as_ref().map(PlatformContext::window_arc) {
+            if !self.handle_platform_event(&window, platform_event) {
+                event_loop.exit();
+                return;
             }
         }
 
-        // 路由窗口事件 → InputManager（始终路由，包括快捷键未处理的重复事件）。
-        self.route_window_event_to_input(event_loop, &event);
-
-        // 修饰键状态只随 `ModifiersChanged` 更新，该事件本身无需其他处理。
-        if update_modifiers(&mut self.modifiers, &event) {
+        if consumed {
             return;
         }
 
-        // 键盘快捷键（仅按下时触发）。
+        // 修饰键状态只随 `ModifiersChanged` 更新（路由已写入），事件本身无需处理。
+        if matches!(event, WindowEvent::ModifiersChanged(_)) {
+            return;
+        }
+
+        // 键盘快捷键（仅按下时触发）。`KeyboardInput` 不带修饰键，
+        // Shift 取自 `self.modifiers`。
         if let WindowEvent::KeyboardInput {
             event:
                 winit::event::KeyEvent {
@@ -1197,65 +1450,9 @@ impl ApplicationHandler for App {
         } = &event
         {
             if *state == winit::event::ElementState::Pressed {
-                let code = match physical_key {
-                    winit::keyboard::PhysicalKey::Code(c) => *c,
-                    _ => return,
-                };
-                // `KeyboardInput` 不带修饰键，Shift 取自 `ModifiersChanged`。
-                let shift = self.modifiers.shift_key();
-
-                if let Some(bit) = Self::pbr_debug_key_to_bit(code, shift) {
-                    self.render_settings.debug_flags =
-                        if self.render_settings.debug_flags == (1u32 << bit) {
-                            0
-                        } else {
-                            1u32 << bit
-                        };
-                    log::info!(
-                        "PBR isolate = {} (flags=0x{:x})",
-                        self.pbr_flag_label(),
-                        self.render_settings.debug_flags
-                    );
-                    return;
+                if let winit::keyboard::PhysicalKey::Code(code) = physical_key {
+                    self.handle_shortcut(Key::from_winit(*code));
                 }
-
-                match code {
-                    KeyCode::F3 => {
-                        self.debug_hud.show = !self.debug_hud.show;
-                        log::info!(
-                            "runtime HUD = {}",
-                            if self.debug_hud.show { "on" } else { "off" }
-                        );
-                    }
-                    KeyCode::Tab => {
-                        self.render_settings.debug_rt = (self.render_settings.debug_rt + 1) % 3;
-                        let name = match self.render_settings.debug_rt {
-                            0 => "normal (HDR tonemap)",
-                            1 => "depth (linearized)",
-                            2 => "normal (view-space)",
-                            _ => "?",
-                        };
-                        log::info!("debug RT = {} ({})", self.render_settings.debug_rt, name);
-                    }
-                    KeyCode::KeyT => {
-                        self.render_settings.tonemap_mode =
-                            if self.render_settings.tonemap_mode == 0 {
-                                1
-                            } else {
-                                0
-                            };
-                        log::info!("tonemap mode = {}", self.render_settings.tonemap_mode);
-                    }
-                    _ => {}
-                }
-            }
-            return;
-        }
-
-        if let WindowEvent::Resized(size) = &event {
-            self.needs_resize = true;
-            if size.width > 0 && size.height > 0 {
-                self.display_aspect = size.width as f32 / size.height as f32;
             }
         }
     }
@@ -1274,25 +1471,7 @@ impl ApplicationHandler for App {
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         if event_loop.exiting() {
-            // === 后台线程关闭（顺序很重要） ===
-            // 1. 停音频解码线程
-            #[cfg(feature = "audio")]
-            self.stop_audio_decode_thread();
-            // 2. 停渲染线程
-            self.stop_render_thread();
-            // 4. 引擎预关闭
-            if let Some(ref mut engine) = self.engine {
-                engine.pre_shutdown();
-            }
-            // 5. 丢弃音频引擎（在平台/引擎之前停止音频流）
-            #[cfg(feature = "audio")]
-            self.audio.take();
-            // 6. 丢弃窗口（渲染器归渲染线程所有，已随渲染线程停止而销毁）
-            self.platform = None;
-            // 7. 引擎后关闭
-            if let Some(ref mut engine) = self.engine {
-                engine.post_shutdown();
-            }
+            self.shutdown();
             return;
         }
 
@@ -1303,42 +1482,10 @@ impl ApplicationHandler for App {
             return;
         }
 
-        // The render thread exclusively owns the Vulkan context. If it exited
-        // (renderer init failure or panic), stop instead of spinning a blank
-        // window at 100% CPU.
-        if let Some(handle) = self.render_thread.as_ref() {
-            if handle.is_finished() {
-                let message = self
-                    .render_shared
-                    .as_ref()
-                    .and_then(|shared| shared.take_render_failure())
-                    .unwrap_or_else(|| "render thread exited unexpectedly (see log)".to_string());
-                log::error!("{message}");
-                self.fatal_error = Some(message);
-                self.show_fatal_dialog(event_loop);
-                return;
-            }
-        }
-
-        self.tick_sim(true);
-
-        // 帧钩子（宿主 UI 等）— 主线程
-        if let Some(hook) = self.frame_hook.as_mut() {
-            if let Some(ref platform) = self.platform {
-                let window = platform.window();
-                if let Some(ref shared) = self.render_shared {
-                    if let Some(ref mut engine) = self.engine {
-                        let stats = shared.read_render_stats();
-                        hook.on_tick(
-                            window,
-                            engine.world_mut(),
-                            &mut self.render_settings,
-                            &stats,
-                            shared,
-                        );
-                    }
-                }
-            }
+        if let Some(message) = self.tick_frame() {
+            log::error!("{message}");
+            self.fatal_error = Some(message);
+            self.show_fatal_dialog(event_loop);
         }
     }
 
@@ -1405,46 +1552,60 @@ fn apply_device_mouse_motion(input: &mut InputManager, dx: f64, dy: f64) {
     input.handle_mouse_move([cur[0] + dx, cur[1] + dy]);
 }
 
-/// winit 物理键码 → 引擎键码。
+/// 中立物理键 → 引擎键码。
 ///
-/// 转换留在 `prism-app`（同时依赖 winit 与 `prism-engine`），而不是
-/// `prism-platform`：平台层保持 engine-free，只产出与窗口库无关的
-/// [`prism_platform::PlatformEvent`]。未列出的键退化为 winit 判别值，避免静默丢弃。
-fn engine_key_from_winit(code: winit::keyboard::KeyCode) -> prism_engine::input::KeyCode {
+/// 转换留在 `prism-app`（同时依赖 `prism-platform` 与 `prism-engine`），
+/// 而不是 `prism-platform`：平台层保持 engine-free，只产出与窗口库无关的
+/// [`prism_platform::PlatformEvent`]。未列出的键退化为 `Key::Other` 的原始码，
+/// 避免静默丢弃。
+fn engine_key_from_native(key: Key) -> prism_engine::input::KeyCode {
     use prism_engine::input::KeyCode as Eng;
-    use winit::keyboard::KeyCode as Wk;
-    match code {
-        Wk::KeyW => Eng::KeyW,
-        Wk::KeyA => Eng::KeyA,
-        Wk::KeyS => Eng::KeyS,
-        Wk::KeyD => Eng::KeyD,
-        Wk::KeyQ => Eng::KeyQ,
-        Wk::KeyE => Eng::KeyE,
-        Wk::Space => Eng::Space,
-        Wk::ShiftLeft => Eng::ShiftLeft,
-        Wk::ShiftRight => Eng::ShiftRight,
-        Wk::ControlLeft => Eng::ControlLeft,
-        Wk::ControlRight => Eng::ControlRight,
-        Wk::AltLeft => Eng::AltLeft,
-        Wk::AltRight => Eng::AltRight,
-        Wk::Escape => Eng::Escape,
-        Wk::Tab => Eng::Tab,
-        Wk::Enter => Eng::Enter,
-        Wk::ArrowUp => Eng::ArrowUp,
-        Wk::ArrowDown => Eng::ArrowDown,
-        Wk::ArrowLeft => Eng::ArrowLeft,
-        Wk::ArrowRight => Eng::ArrowRight,
-        Wk::Digit0 => Eng::Digit0,
-        Wk::Digit1 => Eng::Digit1,
-        Wk::Digit2 => Eng::Digit2,
-        Wk::Digit3 => Eng::Digit3,
-        Wk::Digit4 => Eng::Digit4,
-        Wk::Digit5 => Eng::Digit5,
-        Wk::Digit6 => Eng::Digit6,
-        Wk::Digit7 => Eng::Digit7,
-        Wk::Digit8 => Eng::Digit8,
-        Wk::Digit9 => Eng::Digit9,
-        other => Eng::Other(other as u32),
+    match key {
+        Key::KeyW => Eng::KeyW,
+        Key::KeyA => Eng::KeyA,
+        Key::KeyS => Eng::KeyS,
+        Key::KeyD => Eng::KeyD,
+        Key::KeyQ => Eng::KeyQ,
+        Key::KeyE => Eng::KeyE,
+        Key::Space => Eng::Space,
+        Key::ShiftLeft => Eng::ShiftLeft,
+        Key::ShiftRight => Eng::ShiftRight,
+        Key::ControlLeft => Eng::ControlLeft,
+        Key::ControlRight => Eng::ControlRight,
+        Key::AltLeft => Eng::AltLeft,
+        Key::AltRight => Eng::AltRight,
+        Key::Escape => Eng::Escape,
+        Key::Tab => Eng::Tab,
+        Key::Enter => Eng::Enter,
+        Key::ArrowUp => Eng::ArrowUp,
+        Key::ArrowDown => Eng::ArrowDown,
+        Key::ArrowLeft => Eng::ArrowLeft,
+        Key::ArrowRight => Eng::ArrowRight,
+        Key::Digit0 => Eng::Digit0,
+        Key::Digit1 => Eng::Digit1,
+        Key::Digit2 => Eng::Digit2,
+        Key::Digit3 => Eng::Digit3,
+        Key::Digit4 => Eng::Digit4,
+        Key::Digit5 => Eng::Digit5,
+        Key::Digit6 => Eng::Digit6,
+        Key::Digit7 => Eng::Digit7,
+        Key::Digit8 => Eng::Digit8,
+        Key::Digit9 => Eng::Digit9,
+        // 引擎没有字母/T/F1–F12 的专用变体：保留原始虚拟键码，不丢键。
+        Key::KeyT
+        | Key::F1
+        | Key::F2
+        | Key::F3
+        | Key::F4
+        | Key::F5
+        | Key::F6
+        | Key::F7
+        | Key::F8
+        | Key::F9
+        | Key::F10
+        | Key::F11
+        | Key::F12
+        | Key::Other(_) => Eng::Other(key.to_vk()),
     }
 }
 
@@ -1469,6 +1630,8 @@ mod tests {
         );
     }
 
+    /// `touch_event` 走 winit 的 `WindowEvent`，只有 winit 后端才编得出来。
+    #[cfg(feature = "winit-backend")]
     fn touch_event(phase: winit::event::TouchPhase, id: u64) -> WindowEvent {
         WindowEvent::Touch(winit::event::Touch {
             device_id: winit::event::DeviceId::dummy(),
@@ -1480,7 +1643,8 @@ mod tests {
     }
 
     /// 触摸必须经平台快照落到 `InputManager::touches()`，并保留触点 id 与 phase
-    /// （回归防护：`route_window_event_to_input` 的 `_ => {}` 曾把整条链路丢掉）。
+    /// （回归防护：`handle_platform_event` 的 `_ => {}` 曾把整条链路丢掉）。
+    #[cfg(feature = "winit-backend")]
     #[test]
     fn touch_snapshot_reaches_input_manager() {
         let mut input = InputManager::new();
@@ -1549,7 +1713,7 @@ mod tests {
     /// 未按 Shift 的 1..9、0 覆盖分量 0..9。
     #[test]
     fn plain_digits_select_the_lower_pbr_components() {
-        use winit::keyboard::KeyCode as K;
+        use prism_platform::Key as K;
         for (code, bit) in [
             (K::Digit1, 0),
             (K::Digit2, 1),
@@ -1573,7 +1737,7 @@ mod tests {
     /// 回归防护：Shift 曾经被硬编码成 `false`，分量 10..14 完全不可达。
     #[test]
     fn shift_digits_select_the_upper_pbr_components() {
-        use winit::keyboard::KeyCode as K;
+        use prism_platform::Key as K;
         for (code, bit) in [
             (K::Digit1, 10),
             (K::Digit2, 11),
@@ -1600,62 +1764,42 @@ mod tests {
         }
     }
 
-    #[test]
-    fn modifiers_changed_is_tracked_and_consumed() {
-        use winit::event::Modifiers;
-        use winit::keyboard::ModifiersState;
-        let mut state = ModifiersState::empty();
-        assert!(update_modifiers(
-            &mut state,
-            &WindowEvent::ModifiersChanged(Modifiers::from(ModifiersState::SHIFT))
-        ));
-        assert!(state.shift_key());
-
-        assert!(update_modifiers(
-            &mut state,
-            &WindowEvent::ModifiersChanged(Modifiers::from(ModifiersState::empty()))
-        ));
-        assert!(!state.shift_key());
-
-        // 其它事件不改变状态，也不该被当作「已消费」。
-        assert!(!update_modifiers(&mut state, &WindowEvent::CloseRequested));
-        assert!(!state.shift_key());
-    }
-
-    /// 键盘映射是手工表：抽查移动/修饰/功能/数字键，防止 winit 侧改动后
+    /// 键盘映射是手工表：抽查移动/修饰/功能/数字键，防止平台层改动后
     /// 只有部分键还能到达 `InputManager`。
     #[test]
-    fn winit_keycodes_map_to_engine_keys() {
+    fn native_keys_map_to_engine_keys() {
         use prism_engine::input::KeyCode as Eng;
-        use winit::keyboard::KeyCode as Wk;
-        for (winit, expected) in [
-            (Wk::KeyW, Eng::KeyW),
-            (Wk::KeyA, Eng::KeyA),
-            (Wk::KeyS, Eng::KeyS),
-            (Wk::KeyD, Eng::KeyD),
-            (Wk::KeyQ, Eng::KeyQ),
-            (Wk::KeyE, Eng::KeyE),
-            (Wk::Space, Eng::Space),
-            (Wk::ShiftLeft, Eng::ShiftLeft),
-            (Wk::ShiftRight, Eng::ShiftRight),
-            (Wk::ControlLeft, Eng::ControlLeft),
-            (Wk::ControlRight, Eng::ControlRight),
-            (Wk::AltLeft, Eng::AltLeft),
-            (Wk::AltRight, Eng::AltRight),
-            (Wk::Escape, Eng::Escape),
-            (Wk::Tab, Eng::Tab),
-            (Wk::Enter, Eng::Enter),
-            (Wk::ArrowUp, Eng::ArrowUp),
-            (Wk::ArrowDown, Eng::ArrowDown),
-            (Wk::ArrowLeft, Eng::ArrowLeft),
-            (Wk::ArrowRight, Eng::ArrowRight),
-            (Wk::Digit0, Eng::Digit0),
-            (Wk::Digit5, Eng::Digit5),
-            (Wk::Digit9, Eng::Digit9),
+        use prism_platform::Key as K;
+        for (key, expected) in [
+            (K::KeyW, Eng::KeyW),
+            (K::KeyA, Eng::KeyA),
+            (K::KeyS, Eng::KeyS),
+            (K::KeyD, Eng::KeyD),
+            (K::KeyQ, Eng::KeyQ),
+            (K::KeyE, Eng::KeyE),
+            (K::Space, Eng::Space),
+            (K::ShiftLeft, Eng::ShiftLeft),
+            (K::ShiftRight, Eng::ShiftRight),
+            (K::ControlLeft, Eng::ControlLeft),
+            (K::ControlRight, Eng::ControlRight),
+            (K::AltLeft, Eng::AltLeft),
+            (K::AltRight, Eng::AltRight),
+            (K::Escape, Eng::Escape),
+            (K::Tab, Eng::Tab),
+            (K::Enter, Eng::Enter),
+            (K::ArrowUp, Eng::ArrowUp),
+            (K::ArrowDown, Eng::ArrowDown),
+            (K::ArrowLeft, Eng::ArrowLeft),
+            (K::ArrowRight, Eng::ArrowRight),
+            (K::Digit0, Eng::Digit0),
+            (K::Digit5, Eng::Digit5),
+            (K::Digit9, Eng::Digit9),
         ] {
-            assert_eq!(engine_key_from_winit(winit), expected, "{winit:?}");
+            assert_eq!(engine_key_from_native(key), expected, "{key:?}");
         }
-        // 未列出的键不能丢：退化为 winit 判别值。
-        assert_eq!(engine_key_from_winit(Wk::KeyZ), Eng::Other(Wk::KeyZ as u32));
+        // 未列出的键不能丢：退化为原始码（winit 判别值 / Win32 VK）。
+        assert_eq!(engine_key_from_native(K::Other(0x5A)), Eng::Other(0x5A));
+        // 引擎没有 F 键变体，用虚拟键码承载。
+        assert_eq!(engine_key_from_native(K::F3), Eng::Other(0x72));
     }
 }

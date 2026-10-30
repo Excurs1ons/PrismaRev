@@ -19,7 +19,9 @@ use prism_platform::SendWindowHandles;
 use prism_render::asset_bridge::{AssetResolveRequest, AssetResolveResult};
 use prism_render::SwapchainOverlay;
 use prism_render::{FrameInput, FrameUBOData, GraphRenderer};
-use winit::raw_window_handle::{
+// 直接用 `raw-window-handle` crate（winit 的 `winit::raw_window_handle` 就是它的
+// 重导出）：`win32-native` 构建里不能出现任何 `winit::` 路径。
+use raw_window_handle::{
     DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, RawDisplayHandle,
     RawWindowHandle, WindowHandle,
 };

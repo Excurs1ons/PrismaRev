@@ -71,6 +71,10 @@ RUSTFLAGS="-Zunstable-options -Cpanic=immediate-abort" \
 
 # ---------------------------------------------------------------- 报告
 BIN="${ROOT}/${PROJECT}/target/${TARGET}/${PROFILE}/${PKG}"
+# Windows 目标的可执行文件带 `.exe` 后缀。
+if [ ! -f "${BIN}" ] && [ -f "${BIN}.exe" ]; then
+    BIN="${BIN}.exe"
+fi
 if [ -f "${BIN}" ]; then
     SIZE="$(stat -c%s "${BIN}")"
     printf 'build-dist: %s  %s bytes (%.2f MB)\n' "${BIN}" "${SIZE}" "$(echo "${SIZE}" | awk '{print $1/1048576}')"

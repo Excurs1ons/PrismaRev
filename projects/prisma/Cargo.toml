@@ -20,8 +20,25 @@ crate-type = ["lib", "cdylib"]
 # - `preview-module`：编辑器加载的 cdylib。**不链接引擎**，只依赖跨 ABI 的
 #   `prism-game-api` / `prism-project-api`，否则 .so 里会带第二份引擎。
 [features]
-default = ["player"]
-player = ["dep:prism-app", "dep:prism-engine"]
+default = ["player", "winit-window"]
+# 引擎/渲染能力（`player`）与**窗口后端**分开，这样发布包能只留一个后端。
+player = [
+    "dep:prism-app",
+    "dep:prism-engine",
+    "prism-app/pathtrace",
+    "prism-app/ui",
+    "prism-app/ibl",
+    "prism-app/shadows",
+    "prism-app/gtao",
+    "prism-app/group-3d",
+    "prism-app/group-2d",
+    "prism-app/group-ui",
+]
+# 桌面 / Android 的 winit 后端（默认）。
+winit-window = ["prism-app/winit-backend", "prism-app/x11", "prism-app/wayland"]
+# Windows 发布包：Win32 原生窗口，**不链接 winit**（省 ~300 KB）。
+# 用法：`cargo build --release --no-default-features --features player,win32-window`
+win32-window = ["prism-app/win32-native"]
 preview-module = ["dep:prism-project-api"]
 
 [[bin]]
@@ -31,7 +48,9 @@ path = "src/main.rs"
 required-features = ["player"]
 
 [dependencies]
-prism-app = { path = "../../crates/prism-app", optional = true }
+# `default-features = false`：窗口后端由本 crate 的 `winit-window` /
+# `win32-window` 显式选择（Cargo feature 只能加不能减，所以这里不能走默认值）。
+prism-app = { path = "../../crates/prism-app", optional = true, default-features = false }
 prism-engine = { path = "../../crates/prism-engine", optional = true }
 prism-game-api = { path = "../../crates/prism-game-api" }
 prism-project-api = { path = "../../crates/prism-project-api", optional = true }

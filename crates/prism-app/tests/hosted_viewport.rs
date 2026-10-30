@@ -68,7 +68,9 @@ fn hosted_viewport_renders_a_frame_from_a_loose_scene_json() {
     // 全黑通常意味着 PostPass 没有真正写进离屏目标。
     let lit = frame
         .pixels
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .any(|px| px[0] > 0 || px[1] > 0 || px[2] > 0);
     assert!(lit, "渲染出的帧是全黑");
 

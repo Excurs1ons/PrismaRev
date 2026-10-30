@@ -1434,6 +1434,7 @@ dependencies = [
  "prism-engine",
  "prism-platform",
  "prism-render",
+ "raw-window-handle",
  "serde",
  "serde_json",
  "winit",
@@ -1509,6 +1510,7 @@ dependencies = [
  "ash-window",
  "log",
  "raw-window-handle",
+ "windows-sys 0.61.2",
  "winit",
 ]
 
