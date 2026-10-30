@@ -114,7 +114,7 @@ fix bug                       # 同上
 feat: 改了很多东西             # 范围太大，应该拆
 ```
 
-### 3.3 正文（可选）
+### 3.4 正文（可选）
 
 标题能说清时只写标题。需要补充时，用 1–3 行写清「改了什么 / 为什么」即可；
 **不要照搬 PR 的 Why/How/Verify 三段**，验证细节、截图、自检结果放 PR。
@@ -124,7 +124,7 @@ feat: 改了很多东西             # 范围太大，应该拆
 - 生成物更新单独提交，例如 `chore(render): regenerate shader bindings`。
 - 纯格式化单独提交：`chore: apply rustfmt`，不要混进功能提交。
 
-### 3.4 完整示例
+### 3.5 完整示例
 
 ```text
 fix(render): destroy framebuffers before swapchain recreate
@@ -141,7 +141,7 @@ Fixes #412
 chore: apply rustfmt
 ```
 
-### 3.5 身份与署名
+### 3.6 身份与署名
 
 - 人类维护者始终是 commit author。
 - `Co-Authored-By:` **可选**：只有 agent / 工具有官方 GitHub 账号时才写，格式
