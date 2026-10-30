@@ -1202,9 +1202,10 @@ cp target/release/prisma /tmp/p && strip /tmp/p && ls -l /tmp/p   # strip 后（
 | 3D 全量 | `pathtrace,ui,x11,wayland,group-3d,group-2d,group-ui` | 148 | 4.47 MB |
 | 2D + UI | `pathtrace,ui,x11,wayland,group-2d,group-ui` | 148 | 4.27 MB（−197 KB） |
 | 2D 极简 | `pathtrace,x11,wayland,group-2d` | 141 | 4.14 MB（−331 KB） |
-| 2D 极简 + 仅 X11 | `pathtrace,x11,group-2d` | 130 | **3.02 MB（−1.45 MB，−32%）** |
+| 2D 极简 + 仅 X11 | `pathtrace,x11,group-2d` | 130 | 3.02 MB（−1.45 MB） |
+| **2D 极简 + 仅 X11 + 无光追** | `x11,group-2d` | 128 | **2.89 MB（−1.58 MB，−35%）** |
 
-这四档就是 hub「新建项目」向导的选项组合（2D/3D × UI × 窗口后端）。
+这几档就是 hub「新建项目」向导的选项组合（2D/3D × UI × 路径追踪 × 窗口后端）。
 
 **Wayland 是 Linux 上最大的单项**：`winit` 的 `sctk-adwaita`（客户端装饰）会带进
 `tiny-skia` + `ttf-parser` + `wayland-client` 整条链，共约 1.1 MB。仅 X11 的构建
@@ -1226,3 +1227,14 @@ cp target/release/prisma /tmp/p && strip /tmp/p && ls -l /tmp/p   # strip 后（
 
 组件分组的收益之所以远小于「一个组件 20 KB」的直觉：serde 的反序列化代码在多个类型间
 共享（同一个 `serde_json::from_value` 泛型实例化被 ICF 合并），关掉一组只回收该组独有的部分。
+
+#### 3D pass 级裁剪不值得做（已实测否决）
+
+曾考虑给 `shadow_map` / `gtao` / `skybox` 单独加 feature。符号实测（`dist` 未 strip）：
+shadow_map 4.6 KB、gtao 7.0 KB、skybox 1.9 KB，合计不到 15 KB；`ibl` 65 KB 但 2D 场景
+也可能要环境光。**收益撑不起「引擎里再多三条 cfg 边界」的复杂度**，不做。
+
+剩余的体积大头只有两块，都不是纯工程问题：
+
+- Rust 基线 ~678 KB（core/std/alloc/hashbrown）——要 nightly `build-std`，会抬高贡献门槛；
+- `toml` + `serde_json` ~85 KB——要动 `settings.toml` / 场景清单格式，向后兼容有成本。
