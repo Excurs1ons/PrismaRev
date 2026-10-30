@@ -14,13 +14,16 @@ crate-type = ["lib"]
 # 物理是**可选**能力。`physics_runner` 目前仍是骨架（独立线程 + step/result 通道），
 # 尚未接进 `Engine::update`；不让它默认把 rapier3d / parry3d 拉进玩家二进制。
 # 需要物理时在用户项目里开：`prism-app = { path = "...", features = ["physics"] }`。
-default = ["pathtrace", "ui", "x11", "wayland", "group-3d", "group-2d", "group-ui"]
+default = ["pathtrace", "ui", "ibl", "shadows", "gtao", "x11", "wayland", "group-3d", "group-2d", "group-ui"]
 # 窗口后端（透传 prism-platform）：Linux 体积敏感时只留一个。
 x11 = ["prism-platform/x11"]
 wayland = ["prism-platform/wayland"]
 # Lego 开关：透传到 prism-render / prism-engine（见 docs/DESIGN.md §12）。
 pathtrace = ["prism-render/pathtrace", "prism-engine/pathtrace"]
 ui = ["prism-render/ui", "prism-engine/ui"]
+ibl = ["prism-render/ibl", "prism-engine/ibl"]
+shadows = ["prism-render/shadows", "prism-engine/shadows"]
+gtao = ["prism-render/gtao", "prism-engine/gtao"]
 group-3d = ["prism-engine/group-3d"]
 group-2d = ["prism-engine/group-2d"]
 group-ui = ["prism-engine/group-ui"]

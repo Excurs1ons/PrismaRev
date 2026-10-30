@@ -17,6 +17,34 @@ use crate::descriptor::{
 use crate::external_overlay::{OverlayMessage, SwapchainOverlay};
 use crate::forward_pass::ForwardPass;
 use crate::ibl::IblResources;
+
+/// 构造 IBL 资源。`ibl` feature 关闭时一律返回 1x1 中性灰（descriptor 布局不变，
+/// 前向 pass 照常绑定 set 2），HDR 解码 / 卷积 / 预过滤 / BRDF LUT 全部不参与编译。
+#[cfg(feature = "ibl")]
+fn make_ibl(
+    context: std::sync::Arc<crate::context::VulkanContext>,
+    command_pool: ash::vk::CommandPool,
+    queue: ash::vk::Queue,
+    env: Option<Vec<u8>>,
+    layout: ash::vk::DescriptorSetLayout,
+) -> anyhow::Result<IblResources> {
+    match env {
+        Some(bytes) => IblResources::new(context, command_pool, queue, Some(bytes), layout),
+        None => IblResources::new_empty(context, command_pool, queue, layout),
+    }
+}
+
+#[cfg(not(feature = "ibl"))]
+fn make_ibl(
+    context: std::sync::Arc<crate::context::VulkanContext>,
+    command_pool: ash::vk::CommandPool,
+    queue: ash::vk::Queue,
+    env: Option<Vec<u8>>,
+    layout: ash::vk::DescriptorSetLayout,
+) -> anyhow::Result<IblResources> {
+    let _ = env; // 无 IBL 构建：忽略环境贴图，始终用中性立方体。
+    IblResources::new_empty(context, command_pool, queue, layout)
+}
 use crate::managers::{
     AssetTextureHandle, MaterialHandle, MaterialUploadInput, MeshHandle, MeshUploadInput,
     RenderMaterialManager, RenderMeshManager, RenderTextureManager, TextureUploadInput,
@@ -593,7 +621,7 @@ impl GraphRenderer {
 
         let ibl_ds_layout = crate::ibl::ibl_descriptor_set_layout(&context.device)
             .context("create IBL ds layout (headless)")?;
-        let ibl = IblResources::new(
+        let ibl = make_ibl(
             context.clone(),
             runtime.command_pool,
             context.graphics_queue,
@@ -884,24 +912,14 @@ impl GraphRenderer {
 
         // `None` = 无光照场景（开屏/UI）：走廉价中性空 IBL（new_empty，不卷积，≈0ms）。
         // 共享 set2 描述符 布局 保持稳定。
-        let new_ibl = if let Some(bytes) = env_bytes {
-            IblResources::new(
-                self.runtime.context.clone(),
-                self.runtime.command_pool,
-                self.runtime.context.graphics_queue,
-                Some(bytes),
-                self.ibl.descriptor_set_layout,
-            )
-            .context("rebuild IBL resources for scene")?
-        } else {
-            IblResources::new_empty(
-                self.runtime.context.clone(),
-                self.runtime.command_pool,
-                self.runtime.context.graphics_queue,
-                self.ibl.descriptor_set_layout,
-            )
-            .context("rebuild empty IBL resources for scene")?
-        };
+        let new_ibl = make_ibl(
+            self.runtime.context.clone(),
+            self.runtime.command_pool,
+            self.runtime.context.graphics_queue,
+            env_bytes,
+            self.ibl.descriptor_set_layout,
+        )
+        .context("rebuild IBL resources for scene")?;
         // 覆盖同一 bindless 槽的 BRDF LUT（表不增长）。
         self.texture_manager
             .bindless_mut()

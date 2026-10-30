@@ -6,11 +6,14 @@ license.workspace = true
 description = "Application layer and main loop for PrismaRev"
 
 [features]
-default = ["pathtrace", "ui", "group-3d", "group-2d", "group-ui"]
+default = ["pathtrace", "ui", "ibl", "shadows", "gtao", "group-3d", "group-2d", "group-ui"]
 legacy-disk-scenes = []
 # Lego 开关：透传到 prism-render（见 docs/DESIGN.md §12）。
 pathtrace = ["prism-render/pathtrace"]
 ui = ["prism-render/ui"]
+ibl = ["prism-render/ibl"]
+shadows = ["prism-render/shadows"]
+gtao = ["prism-render/gtao"]
 # 组件分组（透传 prism-scene）：关掉一组 = 该组组件不注册、serde 代码不链接。
 group-3d = ["prism-scene/group-3d"]
 group-2d = ["prism-scene/group-2d"]
