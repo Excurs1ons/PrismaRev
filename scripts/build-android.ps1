@@ -146,7 +146,7 @@ cargo ndk `
     -P $apiLevel `
     -t arm64-v8a `
     -o $JniLibsDir `
-    build --release --manifest-path $GameManifest -p prisma
+    build --profile dist --manifest-path $GameManifest -p prisma
 
 if ($LASTEXITCODE -ne 0) {
     Write-Error "cargo ndk failed"
