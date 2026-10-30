@@ -4,11 +4,16 @@
 #   powershell -File scripts/build-dist.ps1
 #   powershell -File scripts/build-dist.ps1 projects/prisma
 #   powershell -File scripts/build-dist.ps1 projects/prisma x86_64-pc-windows-gnu
+#   powershell -File scripts/build-dist.ps1 -Pack projects/prisma   # 再套 UPX 压缩壳
+#
+# -Pack 只给发布档用，压完必须做代码签名（未签名的自解压壳会被 Windows Defender 等误报）。
+# 找不到 upx 时只提示、不失败。
 param(
     [string]$Project = "projects/prisma",
     [string]$Target = "",
     [string]$Profile = "dist",
-    [string]$Nightly = "nightly"
+    [string]$Nightly = "nightly",
+    [switch]$Pack
 )
 
 $ErrorActionPreference = "Stop"
@@ -55,4 +60,29 @@ if (Test-Path $bin) {
     Write-Host ("build-dist: {0}  {1} bytes ({2:N2} MB)" -f $bin, $size, ($size / 1MB))
 } else {
     Write-Host "build-dist: 构建成功但没找到 $bin（检查包名与 bin 名是否一致）"
+}
+
+# 可选压缩壳（-Pack）。压缩不是构建的正确性前提，任何一步失败都只提示。
+if ($Pack) {
+    if (-not (Test-Path $bin)) {
+        Write-Host "build-dist: -Pack 跳过（没有找到产物）"
+    } elseif ($Target -match 'android') {
+        Write-Host "build-dist: -Pack 跳过：Android 产物不打压缩壳"
+    } elseif (-not (Get-Command upx -ErrorAction SilentlyContinue)) {
+        Write-Host "build-dist: 未找到 upx，跳过压缩（-Pack 是可选项，构建照常成功）"
+        Write-Host "  安装：winget install upx，或从 https://upx.github.io 下载后加进 PATH"
+        Write-Host "  未压缩产物已保留：$bin"
+    } else {
+        $before = (Get-Item $bin).Length
+        Write-Host "build-dist: upx --best --lzma"
+        & upx --best --lzma $bin
+        if ($LASTEXITCODE -eq 0) {
+            $after = (Get-Item $bin).Length
+            $ratio = if ($before -gt 0) { (1 - $after / $before) * 100 } else { 0 }
+            Write-Host ("build-dist: packed  {0} -> {1} bytes ({2:N2} MB, 压缩率 {3:N1}%)" -f $before, $after, ($after / 1MB), $ratio)
+        } else {
+            Write-Host "build-dist: upx 压缩失败，保留未压缩产物（构建本身仍然成功）"
+        }
+    }
+    Write-Host "build-dist: 注意：压缩后请对产物做代码签名，否则 Windows Defender 等会误报（未签名的自解压壳是典型启发式特征）"
 }

@@ -428,6 +428,8 @@ The user project's dependency chain must stay **UI-framework-free and editor-fre
 - 极限体积（竞赛/演示）：加 `--size`，切 `tiny` profile（`opt-level="z"`）并禁内联，
   比 `dist` 再小 ~30%，代价是 CPU 热路径慢 10–30%；关键 crate 可用
   `[profile.tiny.package.<crate>] opt-level = 3` 覆盖回来。
+- `--pack`（Windows：`-Pack`）在构建后套一层 UPX 自解压壳，**仅 dist / 发布档使用，
+  产物必须做代码签名**，否则会被杀软误报；缺 `upx` 时只提示不失败。详见 `docs/DESIGN.md` §12.5。
 - **不要**把 `panic = "immediate-abort"` 或 `cargo-features` 写进任何 `Cargo.toml`：
   stable cargo 会直接拒绝解析清单。参数只留在脚本的 RUSTFLAGS 里。
 - 日常开发/CI 的 PR 流程仍用 stable，只有 master 的 `dist-size` job 走 nightly。
