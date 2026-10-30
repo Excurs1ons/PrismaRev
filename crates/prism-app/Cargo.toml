@@ -10,6 +10,13 @@ description = "Platform application layer — owns the event loop, window, and f
 # user project's cdylib (see `run_android_app`), not here.
 crate-type = ["lib"]
 
+[features]
+# 物理是**可选**能力。`physics_runner` 目前仍是骨架（独立线程 + step/result 通道），
+# 尚未接进 `Engine::update`；不让它默认把 rapier3d / parry3d 拉进玩家二进制。
+# 需要物理时在用户项目里开：`prism-app = { path = "...", features = ["physics"] }`。
+default = []
+physics = ["dep:rapier3d"]
+
 [dependencies]
 prism-engine = { path = "../prism-engine" }
 prism-render = { path = "../prism-render" }
@@ -17,7 +24,7 @@ prism-platform = { path = "../prism-platform" }
 prism-audio = { path = "../prism-audio" }
 prism-asset = { path = "../prism-asset", default-features = false, features = ["core", "runtime"] }
 glam.workspace = true
-rapier3d.workspace = true
+rapier3d = { workspace = true, optional = true }
 flume.workspace = true
 
 winit = { workspace = true }
@@ -32,4 +39,5 @@ android_logger = "0.15"
 ndk = "0.9"
 
 [dev-dependencies]
-image = { workspace = true }
+# `examples/hosted_png.rs` 只写 PNG。
+image = { workspace = true, features = ["png"] }

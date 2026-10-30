@@ -81,7 +81,25 @@ jobs:
           fi
 
   # ---------------------------------------------------------------------------
-  # 1. Formatting + lints. Runs in parallel with the heavier jobs.
+  # 0b. 玩家依赖预算：`prism-app` 是玩家二进制唯一顶层依赖，多一个 crate 就是
+  #     多一份安装包体积。只做依赖解析，不编译、不需要 .spv。
+  # ---------------------------------------------------------------------------
+  deps:
+    name: player dependency budget
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Check player dependency tree
+        run: python3 scripts/check_deps.py
+
+  # ---------------------------------------------------------------------------
+  # 1. Lint gate.
   # ---------------------------------------------------------------------------
   lint:
     name: fmt + clippy

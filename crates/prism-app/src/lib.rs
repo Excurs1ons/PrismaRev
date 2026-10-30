@@ -73,6 +73,7 @@ mod audio_decode_runner;
 mod debug_hud;
 mod hook;
 mod io_runner;
+#[cfg(feature = "physics")]
 mod physics_runner;
 mod render_graph_report;
 mod render_runner;

@@ -947,3 +947,24 @@ id 的语义和编辑器的下标重映射**不能分开落地**：只要 `paren
 
 - `extract_subtree` 重编号后，预制体实例的「差异对比」是否要按结构路径而非 id 匹配 —— 留到
   预制体工作流真正落地时再定。
+
+---
+
+## 11. 依赖预算（玩家树）
+
+「轻量」必须被 CI 强制，否则一定会回涨。玩家二进制唯一的顶层依赖是
+`prism-app`，它多带一个 crate，每个用户项目、每次 Android 打包就多带一个
+（历史峰值：255 个 crate，含 rapier3d/parry3d、tokio、exr、jpeg 解码器）。
+
+规则：
+
+| 规则 | 落地 |
+|------|------|
+| 构建期依赖（`gltf` / `clap` / `rayon` / 图片编解码器）不得进入玩家树 | `scripts/check_deps.py` 黑名单 |
+| 可选能力必须是 feature，默认关闭 | `prism-app/physics`、`prism-asset/async-io` |
+| `image` 的 workspace 依赖零默认 codec，各 crate 只声明自己用到的格式 | 根 `Cargo.toml` |
+| 玩家树 crate 总数 ≤ `MAX_PLAYER_CRATES`（当前 200） | 同上 |
+
+检查在 `cargo check` 之外单独跑，只做依赖解析（不需要 `.spv`、不编译）：
+`python3 scripts/check_deps.py`，已接入 `scripts/pr_ready.py` 与 CI 的 `deps` job。
+超预算时**不要**调高常量：要么把依赖做成 feature，要么在 PR 里说明它为什么必须随玩家发布。

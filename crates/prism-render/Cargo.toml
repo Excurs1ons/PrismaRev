@@ -10,9 +10,10 @@ prism-gfx = { path = "../prism-gfx" }
 ash = { workspace = true }
 ash-window = { workspace = true }
 raw-window-handle = { workspace = true }
-winit = { workspace = true }
 log = { workspace = true }
 anyhow = { workspace = true }
 slotmap = { workspace = true }
-image = { workspace = true, features = ["hdr"] }
+# 只需要 PNG 编码（截图 + 最近邻缩放）。RGBe/HDR 解码是 `hdr.rs::load_rgbe`
+# 自己实现的，不依赖 image 的 `hdr` feature。
+image = { workspace = true, features = ["png"] }
 fontdue = "0.9"
