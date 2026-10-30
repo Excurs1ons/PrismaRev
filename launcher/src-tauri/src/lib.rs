@@ -1,12 +1,9 @@
 //! PrismaRev Android 启动壳的 Tauri 外壳。
 //!
-//! 桌面 Hub 已拆到独立仓库 [`prisma-hub`](https://github.com/Excurs1ons/prisma-hub)；
 //! 这里只保留 APK 的「开始游戏」页：
 //!
 //! - **Android**：通过 Kotlin plugin 启动 `com.prisma.MainActivity`（GameActivity）；
 //! - **桌面**：拉起本地游戏二进制，方便不打包也能验证启动页与参数传递。
-//!
-//! 工程管理、编辑器安装、工程版本识别都不在这里——那些属于桌面 Hub。
 
 #[cfg(not(mobile))]
 mod game_launcher;

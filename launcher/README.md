@@ -1,9 +1,6 @@
 # PrismaRev Android 启动壳
 
-APK 里的「开始游戏」页 + 打包配置。桌面 Hub（工程管理 / 编辑器版本管理）已经拆到
-独立仓库 [Excurs1ons/prisma-hub](https://github.com/Excurs1ons/prisma-hub)。
-
-这个 Tauri 工程只做一件事：拉起游戏。
+APK 里的「开始游戏」页 + 打包配置。这个 Tauri 工程只做一件事：拉起游戏。
 
 - **Android**：`launch_game` 通过 Kotlin plugin 启动 `com.prisma.MainActivity`
   （`GameActivity`，`android.app.lib_name = prisma` → `libprisma.so`）。
